@@ -4,8 +4,24 @@ Date: 2026-08-29
 
 Status: NM0, NM2, NM3, NM4, and NM5 complete; NM6.1–NM6.4, NM6.4P, and NM6.P complete
 per execution records; NM6.5–NM6.9 planned; NM1 status retained below;
-NM7.1–NM7.12RR records retained; NM7.13–NM7.14 and NM8 planned under the
-2026-09-11 Brush-disabled release boundary. NML was cancelled on 2026-08-30.
+NM7 complete per user confirmation on 2026-09-12, with historical execution records retained;
+NM8 planned under the 2026-09-12 pass/buffer decisions and the Brush-disabled release boundary.
+NML was cancelled on 2026-08-30.
+
+2026-09-12 NM8 design approval: each Color Grade uses
+`Basic Tone → Color → Local Tone → Mix`, with Basic Tone and Color fused into one pointwise pass.
+Remove persistent image results between Color Grades. One workspace-owned pair of RGBA32F work
+images carries results between Grades and continues into compatible downstream ping-pong work.
+Only LLF source/result maps remain persistent within a Grade; higher LLF levels and analytic Mask
+coverage are temporary work. Preserve Develop/Geometry reuse and existing frame-role boundaries.
+This supersedes NM6 requirements to retain each Grade output and any proposal to retain selected
+Grade prefixes. Mix must retain the original node input until its last read; final LLF application
+and Mix use an explicitly verified same-pixel read/write pass. The
+[NM8 execution plan](node_mask_editor/phase_nm8_product_qualification_plan.md) defines source audit,
+timing, logging, buffer ownership, tests, and platform qualification. The first work scope is
+NM8.1–NM8.2 performance measurement on the current execution path; no timing or optimization has
+been implemented by this planning update. NM7 completion above records the user's confirmation,
+not additional tests performed during NM8 planning.
 
 2026-08-30 简化修订：每张图片只有一个 live document，领域函数原地修改，后台任务共用
 executor；不以整图 candidate 或独立 snapshot executor 实现原子性。History 仍是已提交状态
@@ -594,8 +610,9 @@ Undo/Redo 通过 owner 操作恢复参数，然后按现有 native evaluator 求
 ### 9.2 当前发布不包含 Brush 项目缓存 UI
 
 NM7.13 删除或排除仅为 Brush R8 服务的当前发布设置、清理入口和 package 资源。Radial 与 Linear
-Gradient 不创建持久 R8；它们根据小型参数在 native Mask pass 中求值。QualityBase、Detail ROI、
-result lifetime 和 invalidation 继续遵守 NM6 的现有规则，并在 NM8 做整体性能优化和资格验证。
+Gradient 不创建持久 R8；它们根据小型参数在 native Mask pass 中求值。NM8 中 coverage/Union
+输出作为帧内临时资源，Grade 仅保留 LLF 图；QualityBase、Detail ROI 的既定表示与保留边界
+继续有效。具体工作图、result lifetime 和 invalidation 按第 17.5 节和 NM8 方案执行。
 
 ### 9.3 Brush 的后续持久化
 
@@ -1367,10 +1384,16 @@ wakeups alone do not establish this producer budget.
 Session result validity uses owner-maintained dependency revisions plus source/document identity
 and representation conditions. Do not serialize or hash whole node parameters on each frame.
 Shared templates own Grade/LLF decisions and dependency propagation; backend specializations own
-individual GPU operations. LLF source/result validity follows actual upstream operations, including
-sensor parameters and active raster changes. Each workspace retains only the current result per
-output. Undo/Redo requests normal Quality base; GPU leases may temporarily retain replaced buffers
-but do not form a history cache. See the NM6 plan for precise ownership, failure and test requirements.
+individual GPU operations. The 2026-09-12 NM8 decision removes persistent Grade RGBA outputs and
+uses a shared workspace pair through Grades and compatible downstream work. Within each Grade,
+only current LLF source/result maps persist under the existing frame-role policy. Their validity
+follows the input after Basic Tone and Color, including upstream Grade Mix/Mask changes. A node's
+own final Mix/analytic Mask does not invalidate its LLF input, but changes downstream dependencies.
+Logical value revisions remain meaningful even when work images are reused. Develop/Geometry and
+final presentation keep their existing ownership boundaries; no reader-held image may be overwritten.
+Undo/Redo requests normal Quality base; GPU leases do not form a history cache. The
+[NM8 plan](node_mask_editor/phase_nm8_product_qualification_plan.md) supersedes earlier NM6 Grade
+image-retention rules while preserving serial ownership, explicit errors and quality requirements.
 
 ---
 
@@ -1647,8 +1670,8 @@ path with a Markdown link when the file exists.
 | NM4 — History, Version, Recovery, and Paste | complete | [node_mask_editor/phase_nm4_history_version_paste_plan.md](node_mask_editor/phase_nm4_history_version_paste_plan.md) | Complete typed history, one DAG per Version, recovery, and Paste-only transfer. |
 | NM5 — QuickQanava Nodes Panel | complete 2026-09-05 | [node_mask_editor/phase_nm5_nodes_panel_plan.md](node_mask_editor/phase_nm5_nodes_panel_plan.md) | Connect the left Nodes panel to the real command, history, and render paths. |
 | NM6 — Node-aware Adjustment Stack | in progress (NM6.1 complete 2026-09-05) | [node_mask_editor/phase_nm6_node_aware_adjustments_plan.md](node_mask_editor/phase_nm6_node_aware_adjustments_plan.md) | Add node-aware panels and EXIF header with serial Interactive input, shared backend execution, and dependency-version caches. |
-| NM7 — Analytic Viewer Masks and Detachable Brush Boundary | planned after retained NM7.12RR history | [NM7 execution plan](node_mask_editor/phase_nm7_viewer_mask_creation_plan.md) | Cut project format `0.7.0`, extract and disable Brush, then finish Radial/Linear Gradient. |
-| NM8 — Whole-DAG Performance and Brush-disabled Product Qualification | planned | `node_mask_editor/phase_nm8_product_qualification_plan.md` | Optimize the whole DAG, then qualify the Node Editor, two analytic Mask sources, three backends, real RAW, reopen, Version, Paste, memory, performance, and package behavior with Brush disabled. |
+| NM7 — Analytic Viewer Masks and Detachable Brush Boundary | complete per user confirmation 2026-09-12; historical evidence retained | [NM7 execution plan](node_mask_editor/phase_nm7_viewer_mask_creation_plan.md) | Project format `0.7.0`, Brush disabled, Radial/Linear Gradient delivery; final product evidence remains in NM8. |
+| NM8 — Whole-DAG Performance and Brush-disabled Product Qualification | planned; NM8.1–NM8.2 measurement is the first work scope | [NM8 execution plan](node_mask_editor/phase_nm8_product_qualification_plan.md) | Measure/log input-to-present and node/pass times, adopt fused Basic Tone/Color and shared work images with LLF-only Grade caching, then qualify all backends and product paths with Brush disabled. |
 
 ### 21.1 Phase NM0 — QuickQanava Integration Baseline
 
@@ -1964,12 +1987,25 @@ features from QuickQanava examples.
 
 ### 21.9 Phase NM8 — Whole-DAG Performance and Brush-disabled Product Qualification
 
+**Execution plan:** [Preview Performance, Pass Scheduling and Product Qualification](node_mask_editor/phase_nm8_product_qualification_plan.md).
+**Status:** planned; plan written 2026-09-12. NM8.1–NM8.2 is the first implementation scope:
+low-overhead structured performance logs, input/producer/presentation timing, native node/pass
+timing, and measurements of the existing implementation. Optimization follows those measurements.
+
 **Reason for a separate phase:** Unit and component tests cannot prove that the packaged
 QuickQanava module, real RAW input, all backends, history recovery, analytic Masks, whole-DAG
 execution, and final frame use one correct product path. Performance work starts only after NM7 has
 fixed the project format, shipped Mask set, and Brush-disabled module boundary.
 
-**Scope:** Measure and optimize the whole path from session/context preparation through static-plan
+**Approved execution model:** Within each Grade, `Basic Tone → Color → Local Tone → Mix`;
+Basic Tone and Color form one pointwise pass. Grades have no persistent RGBA or coverage outputs;
+only LLF source/result maps can persist under the established frame-role rules. A workspace-owned
+pair of RGBA32F work images serves all Grades and compatible later ping-pong tasks. Preserve the
+original Grade input through Mix and verify native same-pixel read/write safety on every backend.
+LLF preparation still contains its required dispatches. Develop/Geometry reuse, algorithm quality,
+logical dependency revisions, and GPU/presentation reader lifetimes remain enforced.
+
+**Scope:** Measure and optimize the whole path from input acceptance and session/context preparation through static-plan
 lookup or justified compilation, dependency invalidation, scheduling, native passes, result
 lifetime, frame sink, and Qt Quick presentation. Cover filmstrip switching, right-panel animation,
 ZoomPan, Detail ROI, parameter input, topology edits, Undo/Redo, Version, Paste, export, and
@@ -2161,14 +2197,21 @@ NM0 一直延伸到 NM8 的长期 stacked PR 链。
 - parameter-only change 不重建全部 QuickQanava graph；
 - history projection 不监听每帧 render/busy 通知；
 - panel resize、连续 ZoomPan 和 node selection 只更新 mapping/projection 并复用当前 frame；
-- Radial/Linear Gradient 参数修改只使 owner node 和下游失效；
+- Radial/Linear Gradient 参数修改只改变 owner 输出和下游依赖版本；本节点 LLF 不因最终 Mix/Mask
+  变化失效。无 Grade 输出缓存后，执行仍从关键阶段的有效输入顺序进入 Grade 链；
 - graph static plan 只在 topology/adjustment structure 改变时重建；
-- 多 Color Grade 会话结果按输出身份、依赖变化版本和表示条件验证；不逐帧序列化或哈希整个节点参数体；
+- Color Grade 使用 Basic Tone → Color → Local Tone → Mix；Basic Tone 和 Color 融合为一个 pass；
+- Grade 间不保留跨帧 RGBA/coverage 结果，共用一对 workspace 工作图并继续复用于兼容的后续任务；
+- Grade 内仅 LLF source/result 图可按 frame role 保留，依赖包括 Color 之后的真实输入；
+  关键阶段缓存与 LLF 按输出身份、依赖版本和表示条件验证，不逐帧序列化或哈希整个节点参数体；
 - UI 滑动只更新局部显示并入队；owner 在帧间消费参数，应用、失效处理与渲染严格串行；
 - Interactive 16 ms 为消费到安全完成的一轮总目标；超时不重叠、不额外等待 16 ms、不降低质量；
 - 三后端共用 Grade/LLF 编排与有效性决策，具体 GPU 操作由 backend 特化；
-- 每个工作区每个输出只保留当前有效结果；不为 Undo 保存旧参数结果，临时 GPU lease 保留单独计量；
-- node deletion/reconnect 允许淘汰不可达 node cache，但必须遵守 GPU submission lease；
+- 允许保留的每个输出只留当前有效版本；Grade 工作图不作为节点结果发布，不为 Undo 保存旧结果；
+  临时 GPU lease、LLF 图、邻域 scratch、关键阶段和最终呈现资源单独计量；
+- node deletion/reconnect 清理不可达 LLF/资源绑定，工作图复用必须遵守 GPU 和呈现 reader lease；
+- 性能日志覆盖 input/request/producer/Qt 呈现和原生节点/pass 时间，默认成本可控、详细采集可开关；
+  stdout 打印不再作为正式性能记录，Off/Summary/Detail 开销和事件丢失必须实测；
 - panel close 后没有残留 Qan delegates 或 QML connection 泄漏；
 - disabled build/link/package manifest 不含 Brush target、symbol、kernel、QML 或 resource；
 - NM8 必须记录同一真实 RAW、同一 viewport、同一 backend 的单节点基线和多节点/多 Mask 数据。
@@ -2257,6 +2300,12 @@ transfer package 显式列出可转移内容。
       unsupported Brush data 在统一格式入口真实失败。
 - [ ] whole-DAG 调度、加载、static plan、invalidation、native passes、resource lifetime 和 Qt
       presentation 已在 NM8 记录并优化。
+- [ ] Color Grade 固定 Basic Tone → Color → Local Tone → Mix，Basic Tone/Color 单 pass，
+      原始节点输入保留到 Mix 完成，三个原生后端验证双工作图读写安全。
+- [ ] Grade 间持久 RGBA/coverage 结果已移除，仅保留既定 LLF 图；工作图对继续用于兼容的
+      DRT/Post 任务，reader 生存期和 Quality/Interactive 表示边界均通过验证。
+- [ ] input E2E、producer cycle、每节点/物理 pass GPU 时间、资源与终态均进入低开销日志，
+      有同场景优化前后数据和 CUDA/Metal 硬件分析，未实测平台不记通过。
 - [ ] CUDA、OpenCL、Metal 不使用 CPU 或其他 backend 替代路径。
 - [ ] 旧项目 metadata 在打开入口拒绝；当前格式坏图真实失败；产品路径不使用 stage 镜像。
 - [ ] Windows/macOS package 可加载 QuickQanava QML module 和全部新 panel。
