@@ -13,6 +13,7 @@
 #include "edit/geometry/render_geometry_resolver.hpp"
 #include "edit/geometry/render_request.hpp"
 #include "edit/geometry/source_geometry.hpp"
+#include "edit/geometry/types.hpp"
 #include "ui/edit_viewer/mask_edit_geometry.hpp"
 #include "ui/edit_viewer/viewport_mapper.hpp"
 #include "ui/editor_rhi/editor_interaction_controller.hpp"
@@ -309,6 +310,54 @@ TEST(MaskEditGeometryTest, CroppedRotatedPhotographUsesResolvedGeometryNotIdenti
   EXPECT_EQ(published.photograph.image_width, static_cast<int>(resolved.edit_extent.width));
   EXPECT_EQ(published.photograph.image_height, static_cast<int>(resolved.edit_extent.height));
   EXPECT_NE(published.geometry.render_to_reference.m[0], identity.render_to_reference.m[0]);
+}
+
+TEST(MaskEditGeometryTest, QualityToInteractiveEquivalentMappingKeepsBrushOpen) {
+  MaskEditViewMapping quality;
+  quality.widget     = {800, 600, 1.0f};
+  quality.photograph = {6000, 4000};
+  quality.zoom       = 1.0f;
+  quality.pan        = QVector2D(0.0f, 0.0f);
+  quality.geometry   = MaskEditGeometry::MakeIdentityPhotographGeometry({6000, 4000});
+  ASSERT_TRUE(MaskEditGeometry::IsValid(quality));
+  const auto before = MaskEditGeometry::Identity(quality);
+
+  auto interactive                         = quality;
+  interactive.photograph                   = {3000, 2000};
+  interactive.geometry.render_extent       = {3000, 2000};
+  interactive.geometry.render_to_reference = Matrix3x3::Scale(2.0f, 2.0f);
+  interactive.geometry.reference_to_render =
+      InvertAffine(interactive.geometry.render_to_reference);
+  ASSERT_TRUE(MaskEditGeometry::IsValid(interactive));
+  const auto after = MaskEditGeometry::Identity(interactive);
+
+  EXPECT_NE(before, after);
+  EXPECT_FALSE(MaskEditGeometry::MappingChanged(before, after));
+
+  auto zoomed = quality;
+  zoomed.zoom = 2.0f;
+  EXPECT_TRUE(MaskEditGeometry::MappingChanged(before, MaskEditGeometry::Identity(zoomed)));
+
+  auto panned = quality;
+  panned.pan  = QVector2D(0.15f, -0.08f);
+  EXPECT_TRUE(MaskEditGeometry::MappingChanged(before, MaskEditGeometry::Identity(panned)));
+}
+
+TEST(MaskEditGeometryTest, SamePhotographInteractiveExtentKeepsItemToReference) {
+  MaskEditViewMapping quality;
+  quality.widget     = {960, 540, 1.25f};
+  quality.photograph = {4000, 3000};
+  quality.zoom       = 1.35f;
+  quality.pan        = QVector2D(0.04f, -0.02f);
+  quality.geometry   = MaskEditGeometry::MakeIdentityPhotographGeometry({4000, 3000});
+  const auto before  = MaskEditGeometry::Identity(quality);
+
+  auto interactive                         = quality;
+  interactive.geometry.render_extent       = {2000, 1500};
+  interactive.geometry.render_to_reference = Matrix3x3::Scale(2.0f, 2.0f);
+  interactive.geometry.reference_to_render =
+      InvertAffine(interactive.geometry.render_to_reference);
+  EXPECT_FALSE(MaskEditGeometry::MappingChanged(before, MaskEditGeometry::Identity(interactive)));
 }
 
 }  // namespace alcedo

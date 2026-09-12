@@ -17,9 +17,12 @@
 #include "edit/geometry/texture_sampling_plan.hpp"
 #include "edit/graph/active_raster_mask_validation.hpp"
 #include "edit/mask/active_raster_mask.hpp"
+#include "edit/mask/brush_coverage_update.hpp"
+#include "edit/mask/brush_raster_encoding.hpp"
 #include "edit/mask/mask_model.hpp"
 #include "edit/runtime/compiled_grade_mask.hpp"
 #include "edit/runtime/compiled_mask_stack.hpp"
+#include "edit/runtime/cuda/cuda_brush_raster.hpp"
 #include "edit/runtime/cuda/cuda_mask_pass.hpp"
 
 namespace alcedo {
@@ -313,22 +316,18 @@ auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
   } else if (const auto* brush = std::get_if<BrushMaskSource>(&mask_model.source)) {
     const auto* active = FindActiveRasterMaskInput(active_raster_masks, compiled_grade.node_id,
                                                    compiled_source.mask_id);
-    ActiveRasterMaskInput parameterized_replay;
-    if (active == nullptr && BrushUsesParameterizedReplay(*brush)) {
-      parameterized_replay = ParameterizedBrushActiveRasterForGrade(
-          document, compiled_grade.node_id, compiled_source.mask_id, *brush,
-          plan.geometry.full_reference_extent, workspace.BrushReplay());
-      active = &parameterized_replay;
-    }
     const auto encode_coverage = [&](auto& source, const MaskAssetDescriptor& raster_descriptor,
-                                     bool raster_bytes_changed) {
+                                     bool raster_bytes_changed, bool generate_mips) {
       result.mip_level_count = static_cast<std::uint32_t>(source.MipLevelCount());
       const auto sampling    = MakeRasterMaskSamplingPlan(
           plan.geometry, raster_descriptor.reference_bounds, raster_descriptor.extent);
       if (brush->feather_radius <= 0.0f) {
-        const auto selected_level = std::min<std::size_t>(
-            static_cast<std::size_t>(std::max(std::floor(sampling.mip_level), 0.0f)),
-            source.MipLevelCount() - 1);
+        const auto selected_level =
+            generate_mips
+                ? std::min<std::size_t>(
+                      static_cast<std::size_t>(std::max(std::floor(sampling.mip_level), 0.0f)),
+                      source.MipLevelCount() - 1)
+                : std::size_t{0};
         auto& sampled_texture = source.Texture(selected_level);
         RasterSampleKernel<<<(render_pixels + block - 1) / block, block, 0, context.Stream()>>>(
             static_cast<const std::uint8_t*>(sampled_texture.DevicePointer()),
@@ -423,10 +422,49 @@ auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
           std::span<const std::byte>(reinterpret_cast<const std::byte*>(pixels.data()),
                                      pixels.size()),
           context);
-      GenerateMipChain(source, context);
+      if (brush->feather_radius <= 0.0f) {
+        GenerateMipChain(source, context);
+      }
     };
 
-    if (active != nullptr) {
+    if (active == nullptr && BrushUsesParameterizedReplay(*brush)) {
+      const auto raster = CanonicalBrushRasterExtent(plan.geometry.full_reference_extent);
+      auto&      cache  = workspace.ActiveRasterTextures();
+      const ActiveRasterTextureKey tex_key{compiled_grade.node_id, compiled_source.mask_id, 1};
+      cache.EraseIdleIf([&](const ActiveRasterTextureKey& key) {
+        return key.owner_node_id == tex_key.owner_node_id && key.mask_id == tex_key.mask_id &&
+               key.session_generation != tex_key.session_generation;
+      });
+      auto source_tex                     = cache.Acquire(tex_key, raster);
+      result.active_texture_resource_id   = source_tex.Texture().ResourceId();
+      MaskAssetDescriptor descriptor;
+      descriptor.extent                   = raster;
+      descriptor.reference_bounds         = CanonicalBrushReferenceBounds();
+      const auto* recorded =
+          workspace.BrushCommands().Find(compiled_grade.node_id, compiled_source.mask_id);
+      const bool uninitialized = !cache.PixelsUploaded(tex_key);
+      const auto update        = DetectBrushCoverageUpdate(
+          recorded == nullptr ? nullptr : &recorded->source,
+          recorded == nullptr ? Extent2D{} : recorded->raster,
+          recorded == nullptr ? Extent2D{} : recorded->full_reference, *brush, raster,
+          plan.geometry.full_reference_extent);
+      const bool raster_bytes_changed =
+          uninitialized || update.kind != BrushCoverageUpdateKind::Unchanged;
+      if (raster_bytes_changed) {
+        ApplyParameterizedBrushCuda(device, source_tex.Texture(), *brush,
+                                    plan.geometry.full_reference_extent, update, uninitialized);
+      }
+      const auto* grade = dynamic_cast<const ColorGradeNodeModel*>(
+          document.Graph().FindNode(compiled_grade.node_id));
+      auto revision = grade == nullptr ? 1 : grade->MaskContentRevision(compiled_source.mask_id);
+      if (revision == 0) {
+        revision = 1;
+      }
+      cache.SetUploadedPixels(tex_key, revision);
+      workspace.BrushCommands().Store(compiled_grade.node_id, compiled_source.mask_id, *brush,
+                                      raster, plan.geometry.full_reference_extent);
+      encode_coverage(source_tex, descriptor, raster_bytes_changed, false);
+    } else if (active != nullptr) {
       auto& cache = workspace.ActiveRasterTextures();
       const ActiveRasterTextureKey tex_key{compiled_grade.node_id, compiled_source.mask_id,
                                            active->session_generation};
@@ -449,11 +487,14 @@ auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
         const auto bytes =
             CopyPackedR8Rectangle(*active->pixels, active->descriptor.extent, dirty);
         workspace.Device().UploadR8TextureRect(source.Texture(), dirty, bytes, context);
-        GenerateMipChain(source, context);
+        if (brush->feather_radius <= 0.0f) {
+          GenerateMipChain(source, context);
+        }
         cache.SetUploadedPixels(tex_key, active->content_revision);
         raster_bytes_changed = true;
       }
-      encode_coverage(source, active->descriptor, raster_bytes_changed);
+      encode_coverage(source, active->descriptor, raster_bytes_changed,
+                      brush->feather_radius <= 0.0f);
     } else {
       if (store == nullptr)
         throw std::invalid_argument("ExecuteCudaMask: raster mask needs MaskStore");
@@ -464,7 +505,7 @@ auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
       if (!cached) {
         upload_full(source, asset->pixels);
       }
-      encode_coverage(source, asset->descriptor, !cached);
+      encode_coverage(source, asset->descriptor, !cached, brush->feather_radius <= 0.0f);
     }
   } else {
     throw std::runtime_error("ExecuteCudaMask: compiled mask does not match document");

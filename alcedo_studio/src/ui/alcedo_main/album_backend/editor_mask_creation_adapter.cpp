@@ -207,8 +207,10 @@ void EditorMaskCreationAdapter::ConnectInteraction(
   }
   view_change_connection_ = connect(
       interaction, &editor_rhi::EditorInteractionController::viewChangeReported, this, [this](int) {
-        if (open_) {
-          cancel();
+        // Pan/zoom must not disarm the Mask tool. Cancel only the open canvas
+        // sequence when the composed item→reference mapping actually changed.
+        if (open_ && !open_via_panel_) {
+          (void)CancelIfMappingChanged();
         }
       });
 }
@@ -693,6 +695,24 @@ void EditorMaskCreationAdapter::cancel() {
   command.mask_id = MaskIdFromQString(selected_mask_id_);
   (void)Enqueue(command);
   ResetLocal();
+}
+
+void EditorMaskCreationAdapter::cancelOpenPointerInput() {
+  if (!open_ || open_via_panel_) {
+    return;
+  }
+  EditorMaskCreationCommand cancel;
+  cancel.kind    = EditorMaskCreationCommandKind::Cancel;
+  cancel.node_id = edit_node_id_;
+  cancel.mask_id = MaskIdFromQString(selected_mask_id_);
+  (void)Enqueue(cancel);
+  open_                   = false;
+  open_via_panel_         = false;
+  active_handle_          = AnalyticMaskHandle::None;
+  press_mapping_identity_ = std::nullopt;
+  brush_item_path_.clear();
+  PublishOverlay();
+  emit maskCreationChanged();
 }
 
 void EditorMaskCreationAdapter::hideBody() { finishBody(); }

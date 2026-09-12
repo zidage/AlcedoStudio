@@ -102,21 +102,21 @@ TEST(ParameterizedBrushReplayCache, AppendedStrokeReplaysOnlyItsSupport) {
   ExpectPixelsMatchOracle(input, source, kFull);
 }
 
-TEST(ParameterizedBrushReplayCache, RegrownDraftStrokeReplaysItsGrownSupport) {
+TEST(ParameterizedBrushReplayCache, RegrownDraftStrokeStampsOnlyNewDabSupport) {
   ParameterizedBrushReplayCache cache;
   const std::vector<BrushCanonicalSample> first_dabs{{20.0f, 16.0f, 6.0f, 1.0f, 1.0f}};
   auto source = MakeBrush({PaintStroke("draft", first_dabs)});
   (void)cache.Replay(kGrade, kMask, source, kFull, 1);
 
-  // A live draft keeps its StrokeId but replaces the shared sample body.
   std::vector<BrushCanonicalSample> grown = first_dabs;
   grown.push_back({70.0f, 50.0f, 5.0f, 1.0f, 1.0f});
   source.strokes.back() =
       MakeBrushStroke(StrokeId{"draft"}, BrushStrokeMode::Paint, std::move(grown));
   const auto input = cache.Replay(kGrade, kMask, source, kFull, 2);
+  const auto raster = CanonicalBrushRasterExtent(kFull);
   EXPECT_EQ(input.dirty_rectangle,
-            StrokeSupport(source.strokes.back(), source.placement_translation,
-                          input.descriptor.extent, kFull));
+            BrushDabOutputTexelSupport(source.strokes.back().samples->back(),
+                                       source.placement_translation, raster, kFull));
   ExpectPixelsMatchOracle(input, source, kFull);
 }
 

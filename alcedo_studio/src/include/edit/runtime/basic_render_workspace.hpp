@@ -10,6 +10,7 @@
 #include <span>
 #include <stdexcept>
 
+#include "edit/mask/brush_coverage_update.hpp"
 #include "edit/mask/parameterized_brush_replay_cache.hpp"
 #include "edit/runtime/graph_image_cache.hpp"
 #include "edit/runtime/mask_texture_cache.hpp"
@@ -74,6 +75,13 @@ class BasicRenderWorkspace {
    * re-rasterization; unchanged entries return shared pixels untouched.
    */
   [[nodiscard]] auto BrushReplay() -> ParameterizedBrushReplayCache& { return brush_replay_; }
+  /**
+   * @brief Last stamped parameterized Brush commands (no pixels).
+   *
+   * CUDA source raster uses this to stamp only new dabs. OpenCL/Metal host replay
+   * does not read it.
+   */
+  [[nodiscard]] auto BrushCommands() -> BrushCoverageCommandJournal& { return brush_commands_; }
   [[nodiscard]] auto Values() -> NodeResultCache<Backend>& { return values_; }
   [[nodiscard]] auto Images() -> GraphImageCache<Backend>& { return images_; }
   [[nodiscard]] auto Images() const -> const GraphImageCache<Backend>& { return images_; }
@@ -272,6 +280,7 @@ class BasicRenderWorkspace {
     mask_textures_.Clear();
     active_raster_textures_.Clear();
     brush_replay_.Clear();
+    brush_commands_.Clear();
     textures_.ReleaseUnleased();
     transients_.ReleaseDeviceMemory();
     parameters_.Clear();
@@ -325,6 +334,7 @@ class BasicRenderWorkspace {
   MaskTextureCache<Backend>         mask_textures_;
   ActiveRasterTextureCache<Backend> active_raster_textures_;
   ParameterizedBrushReplayCache     brush_replay_{};
+  BrushCoverageCommandJournal       brush_commands_{};
   NodeResultCache<Backend>       values_{};
   GraphImageCache<Backend>       images_{};
   RuntimeInvalidationState       invalidation_{};

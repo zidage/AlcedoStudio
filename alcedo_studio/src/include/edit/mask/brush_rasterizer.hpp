@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "edit/geometry/types.hpp"
+#include "edit/mask/brush_coverage_update.hpp"
 #include "edit/mask/brush_spatial_index.hpp"
 #include "edit/mask/mask_model.hpp"
 
@@ -57,6 +58,24 @@ class BrushRasterizer {
    *         does not match @p source.
    */
   void ReplayRegion(const BrushMaskSource& source, const BrushSpatialIndex& index, RectI dirty);
+
+  /**
+   * @brief Stamp @p samples in order onto existing pixels. Does not zero any texel.
+   *
+   * Empty @p samples is a no-op. @p clip limits which texels may change.
+   *
+   * @throws std::runtime_error when geometry is unset.
+   */
+  void StampOrderedSamples(std::span<const BrushCanonicalSample> samples, Vector2 translation,
+                           BrushStrokeMode mode, RectI clip);
+
+  /**
+   * @brief Apply a classified coverage update. @c StampNewSamples does not zero texels.
+   *
+   * @c ReplayDirty uses @p index over @c dirty. @c Unchanged is a no-op.
+   */
+  void ApplyCoverageUpdate(const BrushMaskSource& source, const BrushSpatialIndex& index,
+                           const BrushCoverageUpdate& update);
 
   [[nodiscard]] auto Pixels() const -> std::span<const std::uint8_t> { return *pixels_; }
   /**

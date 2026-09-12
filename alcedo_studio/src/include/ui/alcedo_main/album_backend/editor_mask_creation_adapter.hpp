@@ -132,6 +132,13 @@ class EditorMaskCreationAdapter : public QObject {
   Q_INVOKABLE bool   beginMaskNudge();
   Q_INVOKABLE void   nudgeMaskBy(qreal dx_px, qreal dy_px);
   Q_INVOKABLE void   cancel();
+  /**
+   * @brief Cancel the open canvas pointer sequence and keep the armed tool.
+   *
+   * Use for grab loss / handler cancellation. Does not enqueue CancelMode.
+   * No-op when no pointer sequence is open or the open op is a panel control.
+   */
+  Q_INVOKABLE void   cancelOpenPointerInput();
   Q_INVOKABLE void   hideBody();
   Q_INVOKABLE void   finishBody();
   Q_INVOKABLE void   selectMask(const QString& node_id, const QString& mask_id);

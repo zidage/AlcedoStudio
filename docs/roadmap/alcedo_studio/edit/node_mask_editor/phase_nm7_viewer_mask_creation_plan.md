@@ -4,7 +4,9 @@ Date: 2026-09-08
 
 Status: NM7.1–NM7.12 completion records retained; NM7.12R implemented and partially
 verified (release latency, real-adapter QML harness, and Metal still open);
-NM7.12RR planned as one complete repair phase; NM7.13–NM7.15 planned.
+NM7.12RR partial — CUDA GPU stamp (2026-09-11) plus first-drag pointer routing
+and equivalent-mapping keep-open (2026-09-12); erase persistence, parallel EDT,
+and viewer latency remain; NM7.13–NM7.15 planned.
 This document records the NM7.1 source
 audit, NM7.2 parameterized Brush owner operations, NM7.3 typed stroke history plus the
 project/schema cutover, NM7.4 canonical rasterization with regional Mix replay, NM7.5
@@ -2282,7 +2284,7 @@ against NM7.12R acceptance rather than assumed.
 
 ### NM7.12RR — 一次完成连续绘制、擦除稳定性和真实管线性能修复
 
-**Date / source:** 2026-09-10，调查工作树 HEAD `fb95653f`。**Status:** planned。
+**Date / source:** 2026-09-10，调查工作树 HEAD `fb95653f`。**Status:** partial（2026-09-12 first-drag input + CUDA GPU stamp）。
 本次只研究当前实现、核对 Qt/CUDA 一手资料并制定方案；没有重新运行用户的 RAW 绘制过程，
 没有测得各环节耗时。以下区分源码可确认的执行行为、可以数学证明的判断问题和待复现的因果链。
 
@@ -2560,6 +2562,108 @@ Failed GPU work -> invalidate pending content/base -> retain valid published res
 
 本阶段任一条未满足时保持 partial，列出本阶段剩余工作并继续处理；不能再命名一个补修子阶段
 把这些退出条件移走。其他原有 NM7.13–NM7.15 内容仍按原范围保留。
+
+##### Phase NM7.12RR completion record (2026-09-11)
+
+**Status:** partial — CUDA authoring stamps GPU R8 from stroke commands; only new dabs are
+applied on draft growth. Host full-R8 replay is no longer on the CUDA Mask path.
+
+**Primary success call chain:**
+
+```text
+ReplaceMaskSource / live BrushMaskSource
+  -> ExecuteCudaMask (no injected ActiveRasterMaskInput)
+  -> DetectBrushCoverageUpdate vs BrushCoverageCommandJournal
+  -> ApplyParameterizedBrushCuda StampNewSamples | ReplayDirty
+  -> encode coverage from GPU R8 mip 0 (no unused mip fill on the feather path)
+  -> Union / Grade Mix
+```
+
+**Primary failure call chain:**
+
+```text
+unsupported algorithm, empty destination, or CUDA launch error
+  -> ApplyParameterizedBrushCuda / ExecuteCudaMask throw
+  -> no CPU raster substitute; journal and uploaded flag are not treated as success
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `GpuOrderedBrushRasterMatchesCanonicalR8Bytes` | `GpuDagCudaMaskTest` | PASS |
+| `GrowingBrushStampsNewDabsWithoutHostRasterUpload` | `GpuDagCudaMaskTest` | PASS |
+| `EraseAppendStampsWithoutHostRasterUpload` | `GpuDagCudaMaskTest` | PASS |
+| `PlacementMoveReplaysDirtyAndMatchesCanonicalR8` | `GpuDagCudaMaskTest` | PASS |
+| `ReleasedGpuSourceRestampsFromCommands` | `GpuDagCudaMaskTest` | PASS |
+| `FeatherChangeReusesGpuSourceWithoutHostRasterUpload` | `GpuDagCudaMaskTest` | PASS |
+| `RegrownDraftStrokeStampsOnlyNewDabSupport` | `ParameterizedBrushReplayCacheTest` | PASS |
+| `GrownDraftStampsOnlyNewSamples` | `ParameterizedBrushReplayCacheTest` | PASS |
+| `CurrentGradeCoverageHasOneRetainedResult` (Mix vs host coverage) | `GpuDagCudaMaskTest` | PASS |
+
+Commands: `cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target ParameterizedBrushReplayCacheTest --target GpuDagCudaMaskTest` then `ctest --test-dir build/debug -R "ParameterizedBrushReplayCacheTest|GpuDagCudaMaskTest" --output-on-failure`
+
+Suite totals: `56/56` PASS (19 CPU coverage/replay + 37 CUDA mask, including prior mask cases)
+
+**Checklist / exit condition:** GPU ordered raster is on the production CUDA Mask pass and
+matches the CPU oracle byte-for-byte on the executed cases. Remaining NM7.12RR boxes stay
+unchecked: first-drag QML input, erase persistence across Quality/history, parallel exact
+EDT, DraftStroke prefix copy, event-to-photo latency, OpenCL/Metal GPU stamp.
+
+**LOC note (grill-code-review):** `cuda_mask_pass.cu` 620; `brush_coverage_update.cpp` 203;
+`cuda_brush_raster.cu` 193; `brush_rasterizer.cpp` 172; new types stay under 250 LOC each.
+No file crossed 1000.
+
+**Residual gaps:** `BrushMaskInput::DraftStroke` still allocates a new sample body each
+read. OpenCL/Metal still replay through `ParameterizedBrushReplayCache` on the host.
+Regional Mix is not used: `AcquireTextureForWrite` still allocates a new unpublished
+slot, so a partial Mix would leave uninitialized dest texels. Parallel banding EDT still
+launches one thread per row/column. Viewer latency was not measured on this change.
+
+##### Phase NM7.12RR completion record (2026-09-12)
+
+**Status:** partial — first left-press+drag while Brush owns the left button forwards
+the whole pointer path; Quality/Interactive equivalent item→reference mapping no longer
+cancels the open stroke.
+
+**Primary success call chain:**
+
+```text
+EditorWorkspace PointHandler (Mask owns left; double-tap disabled)
+  -> handlePress / handleMove / handleRelease (last valid item point)
+  -> Enqueue BeginInput + ordered Append + Finish
+  -> ConsumePendingMaskCommands -> BeginBrushStroke / UpdateBrushPaint / FinishBrushStroke
+```
+
+**Primary failure call chain:**
+
+```text
+grab cancel (PointHandler canceled)
+  -> cancelOpenPointerInput -> Cancel (stroke only; tool stays armed)
+viewChangeReported with equivalent Quality/Interactive F
+  -> MappingChanged false -> stroke stays open
+real zoom/pan/widget/full-reference change
+  -> CancelIfMappingChanged -> Cancel open stroke
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `FirstBrushDragWithoutPriorClickPaintsWholePath` | `EditorBrushInteractionQmlTest` | PASS (press + ≥4 moves + one release; no pan; double-tap off) |
+| `QualityToInteractiveEquivalentMappingKeepsBrushOpen` | `MaskEditGeometryTest` | PASS |
+| `SamePhotographInteractiveExtentKeepsItemToReference` | `MaskEditGeometryTest` | PASS |
+| MaskEditGeometryTest suite | `MaskEditGeometryTest` | 7/7 PASS |
+
+Commands: `cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target MaskEditGeometryTest --target EditorBrushInteractionQmlTest --target AlcedoMainQml` then `ctest --test-dir build/debug -R MaskEditGeometryTest --output-on-failure` and `ctest --test-dir build/debug -R EditorBrushInteractionQmlTest --output-on-failure`
+
+Suite totals: `7/7` MaskEditGeometryTest PASS; `1/1` EditorBrushInteractionQmlTest PASS
+
+**Checklist / exit condition:** first-drag pointer routing and equivalent-mapping keep-open are implemented and tested. Remaining NM7.12RR boxes stay unchecked: production Main.qml coverage pixels, erase persistence, parallel exact EDT, DraftStroke prefix copy, event-to-photo latency, OpenCL/Metal GPU stamp.
+
+**LOC note (grill-code-review):** `EditorWorkspace.qml` PointHandler block stayed in-file; `mask_edit_geometry.cpp` MappingChanged + reconstruct helpers; adapter gained `cancelOpenPointerInput`. No file crossed 1000.
+
+**Remaining gaps:** Main.qml + RAW e2e for this drag hung/segfaulted under offscreen RHI in this session, so coverage-at-mid/end on a live Grade is not proven here. Rebuild `alcedo_main` to exercise the production workspace. Erase, EDT, and latency work remain in this phase.
 
 ### NM7.13 — Complete cancellation and project/session lifecycle
 

@@ -12,6 +12,7 @@
 
 #include "edit/mask/brush_raster_encoding.hpp"
 #include "edit/mask/brush_source_geometry.hpp"
+#include "edit/mask/brush_stroke.hpp"
 
 namespace alcedo {
 namespace {
@@ -80,6 +81,46 @@ void BrushRasterizer::StampDab(const BrushCanonicalSample& sample, Vector2 trans
       (*pixels_)[index] = mode == BrushStrokeMode::Erase ? EraseBrushR8((*pixels_)[index], dab)
                                                           : PaintBrushR8((*pixels_)[index], dab);
     }
+  }
+}
+
+void BrushRasterizer::StampOrderedSamples(std::span<const BrushCanonicalSample> samples,
+                                          Vector2 translation, BrushStrokeMode mode, RectI clip) {
+  RequireGeometry();
+  const auto region = ClipTexelRect(clip, raster_);
+  if (RectIEmpty(region)) {
+    return;
+  }
+  for (const auto& sample : samples) {
+    StampDab(sample, translation, mode, region);
+  }
+}
+
+void BrushRasterizer::ApplyCoverageUpdate(const BrushMaskSource& source,
+                                          const BrushSpatialIndex& index,
+                                          const BrushCoverageUpdate& update) {
+  RequireGeometry();
+  RequireAlgorithm(source);
+  if (update.kind == BrushCoverageUpdateKind::Unchanged) {
+    return;
+  }
+  if (update.kind == BrushCoverageUpdateKind::ReplayDirty) {
+    ReplayRegion(source, index, update.dirty);
+    return;
+  }
+  if (update.stroke_index >= source.strokes.size() || update.stroke_end > source.strokes.size() ||
+      update.stroke_index >= update.stroke_end) {
+    FailRaster("coverage stamp stroke range is outside the source");
+  }
+  for (auto stroke_index = update.stroke_index; stroke_index < update.stroke_end; ++stroke_index) {
+    const auto& stroke  = source.strokes[stroke_index];
+    const auto  samples = BrushStrokeSamples(stroke);
+    const auto  begin   = stroke_index == update.stroke_index ? update.sample_begin : 0;
+    if (begin > samples.size()) {
+      FailRaster("coverage stamp sample begin is outside the stroke");
+    }
+    StampOrderedSamples(samples.subspan(begin), source.placement_translation, stroke.mode,
+                        update.dirty);
   }
 }
 
