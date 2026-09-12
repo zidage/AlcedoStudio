@@ -12,7 +12,6 @@
 
 #include "edit/graph/graph_ids.hpp"
 #include "edit/input/prepared_raw_input.hpp"
-#include "edit/mask/active_raster_mask.hpp"
 #include "edit/mask/mask_id.hpp"
 #include "edit/runtime/execution_plan.hpp"
 #include "edit/runtime/local_tone_cache_ids.hpp"
@@ -49,17 +48,16 @@ class RuntimeInvalidationState {
   void BindCompiledPlan(const ExecutionPlan& plan);
 
   /**
-   * @brief Read dirty fields, Mask/mix revisions, topology, and active rasters;
-   *        assign one change version and propagate once.
+   * @brief Read dirty fields, Mask/mix revisions, and topology; assign one
+   *        change version and propagate once.
    *
    * @pre @ref BindCompiledPlan has run for @p plan.
-   * Does not consume operator dirty bits. Mix dirty and last-seen Mask/raster
+   * Does not consume operator dirty bits. Mix dirty and last-seen Mask
    * revisions are updated here so a failed GPU publish still keeps required
    * ahead of completed.
    */
   void CollectAndPropagate(const ExecutionPlan& plan, PipelineDocument& document,
-                           const PreparedRawInput& input,
-                           std::span<const ActiveRasterMaskInput> active_raster_masks = {});
+                           const PreparedRawInput& input);
 
   /**
    * @brief Snapshot source/geometry identities for this frame's bind checks.
@@ -76,7 +74,7 @@ class RuntimeInvalidationState {
    */
   void AdvanceDocumentEpoch();
 
-  /** @brief Drop revisions, adjacency, and last-seen Mask/raster versions. */
+  /** @brief Drop revisions, adjacency, and last-seen Mask versions. */
   void Clear();
 
   [[nodiscard]] auto DocumentEpoch() const -> RuntimeRevision { return document_epoch_; }
@@ -166,7 +164,6 @@ class RuntimeInvalidationState {
   void CollectDevelopChanges(const ExecutionPlan& plan, const PipelineDocument& document,
                              std::vector<GraphValueId>& origins);
   void CollectGradeChanges(const ExecutionPlan& plan, const PipelineDocument& document,
-                           std::span<const ActiveRasterMaskInput> active_raster_masks,
                            std::vector<GraphValueId>& origins);
   void CollectDrtChanges(const ExecutionPlan& plan, const PipelineDocument& document,
                          std::vector<GraphValueId>& origins);
@@ -180,7 +177,6 @@ class RuntimeInvalidationState {
   std::map<GraphValueId, std::vector<GraphValueId>> outgoing_;
   std::map<GraphValueId, Record>                    records_;
   std::map<MaskKey, std::uint64_t>                  last_mask_revision_;
-  std::map<MaskKey, std::uint64_t>                  last_raster_revision_;
   std::map<NodeId, GradeBindState>                  last_grade_bind_;
   GraphValueId                                      last_drt_input_{};
   StaticPlanKey                                     bound_plan_{};

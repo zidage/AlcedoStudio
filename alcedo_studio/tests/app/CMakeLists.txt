@@ -81,7 +81,7 @@ add_executable(PipelineHistoryApplierTest
 target_include_directories(PipelineHistoryApplierTest
     PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
 target_link_libraries(PipelineHistoryApplierTest
-    PRIVATE GTest::gtest_main PipelineHistoryApplier Operators EditMaskStore)
+    PRIVATE GTest::gtest_main PipelineHistoryApplier Operators EditMaskCore)
 gtest_discover_tests(PipelineHistoryApplierTest
     TEST_PREFIX "PipelineHistoryApplierTest."
     PROPERTIES LABELS "ci_core_flow;edit;history")
@@ -124,34 +124,11 @@ target_include_directories(DocumentTransferTest
     PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
 target_link_libraries(DocumentTransferTest
     PRIVATE GTest::gtest_main AdjustmentTransferService PipelineHistoryApplier
-            EditorPipelineCommandService EditGraph EditMaskStore)
+            EditorPipelineCommandService EditGraph EditMaskCore)
 gtest_discover_tests(DocumentTransferTest
     TEST_PREFIX "DocumentTransferTest."
     PROPERTIES LABELS "ci_core_flow;edit;history")
 alcedo_register_test_target(DocumentTransferTest app)
-
-add_executable(ParameterizedBrushHistoryPersistenceTest
-    ${ALCEDO_TEST_ROOT}/app/parameterized_brush_history_persistence_test.cpp)
-target_include_directories(ParameterizedBrushHistoryPersistenceTest
-    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
-target_link_libraries(ParameterizedBrushHistoryPersistenceTest
-    PRIVATE GTest::gtest_main AdjustmentTransferService PipelineHistoryApplier
-            EditorPipelineCommandService EditGraph)
-gtest_discover_tests(ParameterizedBrushHistoryPersistenceTest
-    TEST_PREFIX "ParameterizedBrushHistoryPersistenceTest."
-    PROPERTIES LABELS "ci_core_flow;edit;history")
-alcedo_register_test_target(ParameterizedBrushHistoryPersistenceTest app)
-
-add_executable(MaskAssetReachabilityTest
-    ${ALCEDO_TEST_ROOT}/app/mask_asset_reachability_test.cpp)
-target_include_directories(MaskAssetReachabilityTest
-    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
-target_link_libraries(MaskAssetReachabilityTest
-    PRIVATE GTest::gtest_main PipelineHistoryApplier EditMaskStore EditGraph EditHistory)
-gtest_discover_tests(MaskAssetReachabilityTest
-    TEST_PREFIX "MaskAssetReachabilityTest."
-    PROPERTIES LABELS "ci_core_flow;edit;history")
-alcedo_register_test_target(MaskAssetReachabilityTest app)
 
 # Geometry overlay preview: crop disable + bilinear GPU resize path that the
 # unified scheduler runs when the Geometry panel owns the source-frame overlay.
@@ -424,19 +401,6 @@ gtest_discover_tests(EditorSerialFrameConsumptionTest
     PROPERTIES LABELS "ci_core_flow;editor_session")
 alcedo_register_test_target(EditorSerialFrameConsumptionTest app ci_core)
 
-add_executable(EditorSerialMaskInteractiveTest
-    ${ALCEDO_TEST_ROOT}/app/editor_serial_mask_interactive_test.cpp)
-target_include_directories(EditorSerialMaskInteractiveTest
-    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR}
-    PRIVATE ${ALCEDO_TEST_ROOT}/edit/graph)
-target_link_libraries(EditorSerialMaskInteractiveTest
-    PRIVATE EditorSessionService EditorSessionCommandQueue EditGraph EditHistory xxHash JSON
-            ${ALCEDO_TEST_OPENCV_MIN_DEPS} GTest::gtest_main)
-gtest_discover_tests(EditorSerialMaskInteractiveTest
-    TEST_PREFIX "EditorSerialMaskInteractiveTest."
-    PROPERTIES LABELS "ci_core_flow;editor_session")
-alcedo_register_test_target(EditorSerialMaskInteractiveTest app ci_core)
-
 add_executable(EditorSessionServiceFacadeTest ${ALCEDO_TEST_ROOT}/app/editor_session_service_facade_test.cpp)
 target_include_directories(EditorSessionServiceFacadeTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(EditorSessionServiceFacadeTest
@@ -544,19 +508,6 @@ target_link_libraries(ProjectServiceTest ProjectService GTest::gtest_main)
 gtest_discover_tests(ProjectServiceTest TEST_PREFIX "ProjectServiceTest."
   PROPERTIES LABELS "ci_core_flow")
 alcedo_register_test_target(ProjectServiceTest app ci_core)
-
-add_executable(ProjectMaskCacheServiceTest
-    ${ALCEDO_TEST_ROOT}/app/project_mask_cache_service_test.cpp)
-target_include_directories(ProjectMaskCacheServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(ProjectMaskCacheServiceTest
-    PRIVATE
-      ProjectService
-      GTest::gtest
-      Qt6::Core
-)
-gtest_discover_tests(ProjectMaskCacheServiceTest TEST_PREFIX "ProjectMaskCacheServiceTest."
-  PROPERTIES LABELS "ci_core_flow;edit;mask")
-alcedo_register_test_target(ProjectMaskCacheServiceTest app ci_core)
 
 add_executable(AiSidecarFakeRuntime ${ALCEDO_TEST_ROOT}/app/ai_sidecar_fake_runtime_main.cpp)
 alcedo_register_test_target(AiSidecarFakeRuntime app)

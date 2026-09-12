@@ -156,24 +156,23 @@ TEST(GpuDagGraphCompiler, DefaultPipelineCompilesShadowsAndHighlightsToLocalLapl
   }
 }
 
-TEST(GpuDagGraphCompiler, GraphCompilerEmitsMaskEvaluateWhenRasterMaskConnected) {
+TEST(GpuDagGraphCompiler, GraphCompilerEmitsMaskEvaluateWhenMaskConnected) {
   const auto pattern  = gpu_dag_test::MakeRggbPattern();
   const auto prepared = RawInputLoader::FromUnpackedCfa(
       gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern, gpu_dag_test::DefaultLinearization(),
       gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
   auto document = CreateDefaultPipelineDocument();
-  grade_mask_test::AddBrushMask(document, MaskId{"mask.raster"}, MaskAssetKey{"test.raster"});
+  grade_mask_test::AddRadialMask(document, MaskId{"mask.radial"});
   const auto plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
 
   EXPECT_TRUE(plan.Contains(GpuPassKind::MaskEvaluate));
   EXPECT_TRUE(plan.Contains(GpuPassKind::MaskUnion));
-  EXPECT_FALSE(plan.Contains(GpuPassKind::MaskFeather));
   ASSERT_NE(plan.FirstGrade(), nullptr);
   ASSERT_TRUE(plan.FirstGrade()->mask_stack.has_value());
   EXPECT_EQ(plan.FirstGrade()->mask_stack->owner_node_id, NodeId{"grade.primary"});
   ASSERT_EQ(plan.FirstGrade()->mask_stack->sources.size(), 1U);
-  EXPECT_EQ(plan.FirstGrade()->mask_stack->sources.front().mask_id, MaskId{"mask.raster"});
-  EXPECT_EQ(plan.FirstGrade()->mask_stack->sources.front().source_kind, MaskSourceKind::Brush);
+  EXPECT_EQ(plan.FirstGrade()->mask_stack->sources.front().mask_id, MaskId{"mask.radial"});
+  EXPECT_EQ(plan.FirstGrade()->mask_stack->sources.front().source_kind, MaskSourceKind::Radial);
   EXPECT_EQ(plan.FirstGrade()->mask_stack->sources.front().range_input,
             plan.FirstGrade()->scene_input);
   EXPECT_EQ(plan.FirstGrade()->mask_output, plan.FirstGrade()->mask_stack->union_output);
@@ -235,7 +234,7 @@ TEST(GpuDagGraphCompiler, PeakTransientForXTransDoesNotReserveBayerRcdPlanes) {
   EXPECT_LT(plan.peak_transient_bytes, ExclusiveBayerDevelopBytes(kPixels));
 }
 
-TEST(GpuDagGraphCompiler, RasterMaskDoesNotAddMaskSdfOnTopOfDevelopTransientPeak) {
+TEST(GpuDagGraphCompiler, MaskDoesNotAddTransientOnTopOfDevelopTransientPeak) {
   const auto pattern  = gpu_dag_test::MakeRggbPattern();
   const auto prepared = RawInputLoader::FromUnpackedCfa(
       gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern, gpu_dag_test::DefaultLinearization(),
@@ -243,7 +242,7 @@ TEST(GpuDagGraphCompiler, RasterMaskDoesNotAddMaskSdfOnTopOfDevelopTransientPeak
   auto document = CreateDefaultPipelineDocument();
   const auto without_mask =
       GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
-  grade_mask_test::AddBrushMask(document, MaskId{"mask.raster"}, MaskAssetKey{"test.raster"});
+  grade_mask_test::AddRadialMask(document, MaskId{"mask.radial"});
   const auto with_mask =
       GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
 

@@ -10,7 +10,6 @@
 
 #include "edit/history/pipeline_edit_change.hpp"
 #include "edit/history/pipeline_edit_json.hpp"
-#include "edit/mask/brush_stroke.hpp"
 
 namespace alcedo {
 
@@ -31,11 +30,8 @@ using pipeline_edit_json::RequireNormalizedMix;
 using pipeline_edit_json::RequireObject;
 using pipeline_edit_json::RequirePositiveUint64;
 using pipeline_edit_json::RequireString;
-using pipeline_edit_json::StrokeFromCanonicalJson;
 using pipeline_edit_json::TargetFromJson;
 using pipeline_edit_json::TargetToJson;
-using pipeline_edit_json::TranslationVectorFromJson;
-using pipeline_edit_json::TranslationVectorToJson;
 
 auto PipelineEditChangeKindFromText(std::string_view text) -> PipelineEditChangeKind {
   if (text == "set_parameter") {
@@ -71,23 +67,8 @@ auto PipelineEditChangeKindFromText(std::string_view text) -> PipelineEditChange
   if (text == "replace_mask_source") {
     return PipelineEditChangeKind::ReplaceMaskSource;
   }
-  if (text == "replace_mask_asset") {
-    return PipelineEditChangeKind::ReplaceMaskAsset;
-  }
   if (text == "set_mask_field") {
     return PipelineEditChangeKind::SetMaskField;
-  }
-  if (text == "append_brush_stroke") {
-    return PipelineEditChangeKind::AppendBrushStroke;
-  }
-  if (text == "remove_brush_stroke") {
-    return PipelineEditChangeKind::RemoveBrushStroke;
-  }
-  if (text == "insert_brush_stroke") {
-    return PipelineEditChangeKind::InsertBrushStroke;
-  }
-  if (text == "set_brush_translation") {
-    return PipelineEditChangeKind::SetBrushTranslation;
   }
   Fail("PipelineEditChange: unknown kind '" + std::string{text} + "'");
 }
@@ -118,18 +99,8 @@ auto PipelineEditChangeCompatible(PipelineEditOperationKind operation,
       return change == PipelineEditChangeKind::RemoveMask;
     case PipelineEditOperationKind::ReplaceMaskSource:
       return change == PipelineEditChangeKind::ReplaceMaskSource;
-    case PipelineEditOperationKind::ReplaceMaskAsset:
-      return change == PipelineEditChangeKind::ReplaceMaskAsset;
     case PipelineEditOperationKind::SetMaskField:
       return change == PipelineEditChangeKind::SetMaskField;
-    case PipelineEditOperationKind::AppendBrushStroke:
-      return change == PipelineEditChangeKind::AppendBrushStroke;
-    case PipelineEditOperationKind::RemoveBrushStroke:
-      return change == PipelineEditChangeKind::RemoveBrushStroke;
-    case PipelineEditOperationKind::InsertBrushStroke:
-      return change == PipelineEditChangeKind::InsertBrushStroke;
-    case PipelineEditOperationKind::SetBrushTranslation:
-      return change == PipelineEditChangeKind::SetBrushTranslation;
     case PipelineEditOperationKind::Paste:
       return change != PipelineEditChangeKind::NodeGraphTopologyChange;
     case PipelineEditOperationKind::EditNodeGraph:
@@ -214,41 +185,11 @@ auto EncodePipelineEditChange(const PipelineEditChange& change) -> nlohmann::jso
                   {"kind", "replace_mask_source"},
                   {"mask_id", std::string{typed.mask_id.Value()}},
                   {"node_id", std::string{typed.node_id.Value()}}};
-        } else if constexpr (std::is_same_v<Typed, ReplaceMaskAssetChange>) {
-          return {{"after_source", typed.after_source},
-                  {"before_source", typed.before_source},
-                  {"kind", "replace_mask_asset"},
-                  {"mask_id", std::string{typed.mask_id.Value()}},
-                  {"node_id", std::string{typed.node_id.Value()}}};
         } else if constexpr (std::is_same_v<Typed, SetMaskFieldChange>) {
           return {{"after_value", typed.after_value},
                   {"before_value", typed.before_value},
                   {"field_key", typed.field_key},
                   {"kind", "set_mask_field"},
-                  {"mask_id", std::string{typed.mask_id.Value()}},
-                  {"node_id", std::string{typed.node_id.Value()}}};
-        } else if constexpr (std::is_same_v<Typed, AppendBrushStrokeChange>) {
-          return {{"kind", "append_brush_stroke"},
-                  {"mask_id", std::string{typed.mask_id.Value()}},
-                  {"node_id", std::string{typed.node_id.Value()}},
-                  {"stroke", BrushStrokeToJson(typed.stroke)}};
-        } else if constexpr (std::is_same_v<Typed, RemoveBrushStrokeChange>) {
-          return {{"index", typed.index},
-                  {"kind", "remove_brush_stroke"},
-                  {"mask_id", std::string{typed.mask_id.Value()}},
-                  {"node_id", std::string{typed.node_id.Value()}},
-                  {"stroke", BrushStrokeToJson(typed.stroke)},
-                  {"stroke_id", std::string{typed.stroke_id.Value()}}};
-        } else if constexpr (std::is_same_v<Typed, InsertBrushStrokeChange>) {
-          return {{"index", typed.index},
-                  {"kind", "insert_brush_stroke"},
-                  {"mask_id", std::string{typed.mask_id.Value()}},
-                  {"node_id", std::string{typed.node_id.Value()}},
-                  {"stroke", BrushStrokeToJson(typed.stroke)}};
-        } else if constexpr (std::is_same_v<Typed, SetBrushTranslationChange>) {
-          return {{"after", TranslationVectorToJson(typed.after)},
-                  {"before", TranslationVectorToJson(typed.before)},
-                  {"kind", "set_brush_translation"},
                   {"mask_id", std::string{typed.mask_id.Value()}},
                   {"node_id", std::string{typed.node_id.Value()}}};
         } else if constexpr (std::is_same_v<Typed, NodeGraphTopologyChange>) {
@@ -449,19 +390,6 @@ auto DecodePipelineEditChange(const nlohmann::json& json) -> PipelineEditChange 
       ValidatePipelineEditChange(change);
       return change;
     }
-    case PipelineEditChangeKind::ReplaceMaskAsset: {
-      RequireExactObjectKeys(json, {"after_source", "before_source", "kind", "mask_id", "node_id"},
-                             "ReplaceMaskAsset");
-      ReplaceMaskAssetChange change;
-      change.node_id = NodeId{RequiredIdFromJson(json, "node_id", "ReplaceMaskAsset")};
-      change.mask_id = MaskId{RequiredIdFromJson(json, "mask_id", "ReplaceMaskAsset")};
-      change.before_source =
-          CanonicalMaskSourceJson(json.at("before_source"), "ReplaceMaskAsset before_source");
-      change.after_source =
-          CanonicalMaskSourceJson(json.at("after_source"), "ReplaceMaskAsset after_source");
-      ValidatePipelineEditChange(change);
-      return change;
-    }
     case PipelineEditChangeKind::SetMaskField: {
       RequireExactObjectKeys(
           json, {"after_value", "before_value", "field_key", "kind", "mask_id", "node_id"},
@@ -472,49 +400,6 @@ auto DecodePipelineEditChange(const nlohmann::json& json) -> PipelineEditChange 
       change.field_key    = RequireNonEmptyString(json, "field_key", "SetMaskField");
       change.before_value = json.at("before_value");
       change.after_value  = json.at("after_value");
-      ValidatePipelineEditChange(change);
-      return change;
-    }
-    case PipelineEditChangeKind::AppendBrushStroke: {
-      RequireExactObjectKeys(json, {"kind", "mask_id", "node_id", "stroke"}, "AppendBrushStroke");
-      AppendBrushStrokeChange change;
-      change.node_id = NodeId{RequiredIdFromJson(json, "node_id", "AppendBrushStroke")};
-      change.mask_id = MaskId{RequiredIdFromJson(json, "mask_id", "AppendBrushStroke")};
-      change.stroke  = StrokeFromCanonicalJson(json.at("stroke"), "AppendBrushStroke stroke");
-      ValidatePipelineEditChange(change);
-      return change;
-    }
-    case PipelineEditChangeKind::RemoveBrushStroke: {
-      RequireExactObjectKeys(json, {"index", "kind", "mask_id", "node_id", "stroke", "stroke_id"},
-                             "RemoveBrushStroke");
-      RemoveBrushStrokeChange change;
-      change.node_id   = NodeId{RequiredIdFromJson(json, "node_id", "RemoveBrushStroke")};
-      change.mask_id   = MaskId{RequiredIdFromJson(json, "mask_id", "RemoveBrushStroke")};
-      change.stroke_id = StrokeId{RequiredIdFromJson(json, "stroke_id", "RemoveBrushStroke")};
-      change.index     = RequireNonNegativeUint32(json, "index", "RemoveBrushStroke");
-      change.stroke    = StrokeFromCanonicalJson(json.at("stroke"), "RemoveBrushStroke stroke");
-      ValidatePipelineEditChange(change);
-      return change;
-    }
-    case PipelineEditChangeKind::InsertBrushStroke: {
-      RequireExactObjectKeys(json, {"index", "kind", "mask_id", "node_id", "stroke"},
-                             "InsertBrushStroke");
-      InsertBrushStrokeChange change;
-      change.node_id = NodeId{RequiredIdFromJson(json, "node_id", "InsertBrushStroke")};
-      change.mask_id = MaskId{RequiredIdFromJson(json, "mask_id", "InsertBrushStroke")};
-      change.index   = RequireNonNegativeUint32(json, "index", "InsertBrushStroke");
-      change.stroke  = StrokeFromCanonicalJson(json.at("stroke"), "InsertBrushStroke stroke");
-      ValidatePipelineEditChange(change);
-      return change;
-    }
-    case PipelineEditChangeKind::SetBrushTranslation: {
-      RequireExactObjectKeys(json, {"after", "before", "kind", "mask_id", "node_id"},
-                             "SetBrushTranslation");
-      SetBrushTranslationChange change;
-      change.node_id = NodeId{RequiredIdFromJson(json, "node_id", "SetBrushTranslation")};
-      change.mask_id = MaskId{RequiredIdFromJson(json, "mask_id", "SetBrushTranslation")};
-      change.before  = TranslationVectorFromJson(json.at("before"), "SetBrushTranslation before");
-      change.after   = TranslationVectorFromJson(json.at("after"), "SetBrushTranslation after");
       ValidatePipelineEditChange(change);
       return change;
     }

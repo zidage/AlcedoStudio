@@ -12,7 +12,6 @@
 #include <string_view>
 
 #include "edit/graph/color_grade_node_model.hpp"
-#include "edit/mask/brush_stroke.hpp"
 #include "edit/mask/mask_model.hpp"
 
 namespace alcedo::pipeline_edit_json {
@@ -289,31 +288,6 @@ auto CanonicalMaskSourceJson(const nlohmann::json& source, std::string_view cont
   }
 }
 
-auto AssetKeyFromBrushSource(const nlohmann::json& source, std::string_view context)
-    -> std::string {
-  if (!source.contains("kind") || !source.at("kind").is_string() ||
-      source.at("kind").get<std::string>() != "brush") {
-    Fail(std::string{context} + ": ReplaceMaskAsset requires a brush source");
-  }
-  if (!source.contains("asset_key") || source.at("asset_key").is_null()) {
-    Fail(std::string{context} + ": ReplaceMaskAsset requires a non-null asset_key");
-  }
-  if (!source.at("asset_key").is_string()) {
-    Fail(std::string{context} + ": asset_key must be a string");
-  }
-  const auto key = source.at("asset_key").get<std::string>();
-  if (key.size() != 32) {
-    Fail(std::string{context} + ": asset_key must be 32 lowercase hex digits");
-  }
-  for (char ch : key) {
-    const bool hex = (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f');
-    if (!hex) {
-      Fail(std::string{context} + ": asset_key must be 32 lowercase hex digits");
-    }
-  }
-  return key;
-}
-
 void ValidateParameterTarget(const PipelineParameterTarget& target) {
   if (target.field_key.empty()) {
     Fail("SetParameter: field_key must not be empty");
@@ -406,48 +380,6 @@ auto RequireNonNegativeUint32(const nlohmann::json& json, const char* key, std::
     return static_cast<std::uint32_t>(value.get<std::int64_t>());
   }
   Fail(std::string{context} + ": '" + key + "' must be a non-negative integer");
-}
-
-auto CanonicalBrushStrokeJson(const BrushStroke& stroke, std::string_view context)
-    -> nlohmann::json {
-  try {
-    const auto json      = BrushStrokeToJson(stroke);
-    const auto canonical = BrushStrokeToJson(BrushStrokeFromJson(json));
-    RequireCanonicalDump(json, canonical, context);
-    return canonical;
-  } catch (const std::exception& ex) {
-    Fail(std::string{context} + ": " + ex.what());
-  }
-}
-
-auto StrokeFromCanonicalJson(const nlohmann::json& json, std::string_view context) -> BrushStroke {
-  RequireObject(json, context);
-  RejectNonFiniteNumbers(json, context);
-  try {
-    auto       stroke    = BrushStrokeFromJson(json);
-    const auto canonical = BrushStrokeToJson(stroke);
-    RequireCanonicalDump(json, canonical, context);
-    return stroke;
-  } catch (const std::exception& ex) {
-    Fail(std::string{context} + ": " + ex.what());
-  }
-}
-
-auto TranslationVectorFromJson(const nlohmann::json& json, std::string_view context) -> Vector2 {
-  if (!json.is_array() || json.size() != 2 || !json[0].is_number() || !json[1].is_number()) {
-    Fail(std::string{context} + ": translation must be an array of two numbers");
-  }
-  Vector2 value;
-  value.x = json[0].get<float>();
-  value.y = json[1].get<float>();
-  if (!std::isfinite(value.x) || !std::isfinite(value.y)) {
-    Fail(std::string{context} + ": translation components must be finite");
-  }
-  return value;
-}
-
-auto TranslationVectorToJson(Vector2 value) -> nlohmann::json {
-  return nlohmann::json::array({value.x, value.y});
 }
 
 }  // namespace alcedo::pipeline_edit_json

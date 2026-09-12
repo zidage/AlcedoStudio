@@ -18,12 +18,7 @@
 #include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/geometry/types.hpp"
-#include "edit/mask/brush_mask_commands.hpp"
-#include "edit/mask/brush_stroke.hpp"
 #include "edit/mask/mask_model.hpp"
-#include "edit/mask/mask_store.hpp"
-
-#include <set>
 
 namespace alcedo {
 namespace {
@@ -351,26 +346,6 @@ auto ApplyReplaceMaskSource(PipelineDocument& document, const NodeId& node_id, c
   }
 }
 
-auto AssetKeyFromSource(const nlohmann::json& source) -> MaskAssetKey {
-  return MaskAssetKey{source.at("asset_key").get<std::string>()};
-}
-
-auto ApplyReplaceMaskAsset(PipelineDocument& document, const ReplaceMaskAssetChange& change,
-                           PipelineEditApplyDirection direction, std::string* error,
-                           MaskStore* mask_store) -> bool {
-  if (mask_store == nullptr) {
-    return SetError(error, "ReplaceMaskAsset requires a Mask store");
-  }
-  try {
-    (void)mask_store->Load(AssetKeyFromSource(change.before_source));
-    (void)mask_store->Load(AssetKeyFromSource(change.after_source));
-  } catch (const std::exception& ex) {
-    return SetError(error, std::string{"ReplaceMaskAsset asset load failed: "} + ex.what());
-  }
-  return ApplyReplaceMaskSource(document, change.node_id, change.mask_id, change.before_source,
-                                change.after_source, direction, error);
-}
-
 auto CurrentMaskField(const MaskModel& mask, const std::string& field_key) -> nlohmann::json {
   if (field_key == "enabled") {
     return mask.enabled;
@@ -417,157 +392,6 @@ auto ApplySetMaskField(PipelineDocument& document, const SetMaskFieldChange& cha
   }
 }
 
-auto RequireBrush(ColorGradeNodeModel& grade, const MaskId& mask_id, std::string* error)
-    -> BrushMaskSource* {
-  auto* mask = grade.FindMask(mask_id);
-  if (mask == nullptr) {
-    SetError(error, "Mask is missing: " + std::string{mask_id.Value()});
-    return nullptr;
-  }
-  auto* brush = std::get_if<BrushMaskSource>(&mask->source);
-  if (brush == nullptr) {
-    SetError(error, "Mask is not a Brush source: " + std::string{mask_id.Value()});
-    return nullptr;
-  }
-  return brush;
-}
-
-auto ApplyAppendBrushStroke(PipelineDocument& document, const AppendBrushStrokeChange& change,
-                            PipelineEditApplyDirection direction, std::string* error) -> bool {
-  auto* grade = RequireColorGrade(document, change.node_id, error);
-  if (grade == nullptr) {
-    return false;
-  }
-  try {
-    if (direction == PipelineEditApplyDirection::Forward) {
-      const auto* brush = RequireBrush(*grade, change.mask_id, error);
-      if (brush == nullptr) {
-        return false;
-      }
-      if (FindBrushStrokeIndex(brush->strokes, change.stroke.id) != brush->strokes.size()) {
-        return SetError(error, "AppendBrushStroke expected the stored StrokeId to be absent");
-      }
-      grade->AppendBrushStroke({change.node_id, change.mask_id, change.stroke,
-                                grade->MaskContentRevision(change.mask_id)});
-      return true;
-    }
-    const auto* brush = RequireBrush(*grade, change.mask_id, error);
-    if (brush == nullptr) {
-      return false;
-    }
-    if (FindBrushStrokeIndex(brush->strokes, change.stroke.id) == brush->strokes.size()) {
-      return SetError(error, "AppendBrushStroke inverse expected the stored StrokeId");
-    }
-    grade->RemoveBrushStroke(
-        {change.node_id, change.mask_id, change.stroke.id, grade->MaskContentRevision(change.mask_id)});
-    return true;
-  } catch (const std::exception& ex) {
-    return SetError(error, ex.what());
-  }
-}
-
-auto ApplyRemoveBrushStroke(PipelineDocument& document, const RemoveBrushStrokeChange& change,
-                            PipelineEditApplyDirection direction, std::string* error) -> bool {
-  auto* grade = RequireColorGrade(document, change.node_id, error);
-  if (grade == nullptr) {
-    return false;
-  }
-  try {
-    if (direction == PipelineEditApplyDirection::Forward) {
-      const auto* brush = RequireBrush(*grade, change.mask_id, error);
-      if (brush == nullptr) {
-        return false;
-      }
-      const auto index = FindBrushStrokeIndex(brush->strokes, change.stroke_id);
-      if (index == brush->strokes.size() || index != change.index) {
-        return SetError(error, "RemoveBrushStroke expected the stored StrokeId at index");
-      }
-      if (brush->strokes[index] != change.stroke) {
-        return SetError(error, "RemoveBrushStroke expected current stroke does not match stored values");
-      }
-      grade->RemoveBrushStroke(
-          {change.node_id, change.mask_id, change.stroke_id, grade->MaskContentRevision(change.mask_id)});
-      return true;
-    }
-    const auto* brush = RequireBrush(*grade, change.mask_id, error);
-    if (brush == nullptr) {
-      return false;
-    }
-    if (FindBrushStrokeIndex(brush->strokes, change.stroke_id) != brush->strokes.size()) {
-      return SetError(error, "RemoveBrushStroke inverse expected the stored StrokeId to be absent");
-    }
-    grade->InsertBrushStroke({change.node_id, change.mask_id, change.index, change.stroke,
-                              grade->MaskContentRevision(change.mask_id)});
-    return true;
-  } catch (const std::exception& ex) {
-    return SetError(error, ex.what());
-  }
-}
-
-auto ApplyInsertBrushStroke(PipelineDocument& document, const InsertBrushStrokeChange& change,
-                            PipelineEditApplyDirection direction, std::string* error) -> bool {
-  auto* grade = RequireColorGrade(document, change.node_id, error);
-  if (grade == nullptr) {
-    return false;
-  }
-  try {
-    if (direction == PipelineEditApplyDirection::Forward) {
-      const auto* brush = RequireBrush(*grade, change.mask_id, error);
-      if (brush == nullptr) {
-        return false;
-      }
-      if (FindBrushStrokeIndex(brush->strokes, change.stroke.id) != brush->strokes.size()) {
-        return SetError(error, "InsertBrushStroke expected the stored StrokeId to be absent");
-      }
-      grade->InsertBrushStroke({change.node_id, change.mask_id, change.index, change.stroke,
-                                grade->MaskContentRevision(change.mask_id)});
-      return true;
-    }
-    const auto* brush = RequireBrush(*grade, change.mask_id, error);
-    if (brush == nullptr) {
-      return false;
-    }
-    if (FindBrushStrokeIndex(brush->strokes, change.stroke.id) == brush->strokes.size()) {
-      return SetError(error, "InsertBrushStroke inverse expected the stored StrokeId");
-    }
-    grade->RemoveBrushStroke(
-        {change.node_id, change.mask_id, change.stroke.id, grade->MaskContentRevision(change.mask_id)});
-    return true;
-  } catch (const std::exception& ex) {
-    return SetError(error, ex.what());
-  }
-}
-
-auto ApplySetBrushTranslation(PipelineDocument& document, const SetBrushTranslationChange& change,
-                              PipelineEditApplyDirection direction, std::string* error) -> bool {
-  auto* grade = RequireColorGrade(document, change.node_id, error);
-  if (grade == nullptr) {
-    return false;
-  }
-  const auto* brush = RequireBrush(*grade, change.mask_id, error);
-  if (brush == nullptr) {
-    return false;
-  }
-  const auto expected =
-      direction == PipelineEditApplyDirection::Forward ? change.before : change.after;
-  if (brush->placement_translation != expected) {
-    return SetError(error, "SetBrushTranslation expected current side does not match stored values");
-  }
-  const auto next = direction == PipelineEditApplyDirection::Forward ? change.after : change.before;
-  try {
-    SetBrushTranslationCommand command;
-    command.node_id           = change.node_id;
-    command.mask_id           = change.mask_id;
-    command.before            = expected;
-    command.after             = next;
-    command.expected_revision = grade->MaskContentRevision(change.mask_id);
-    grade->SetBrushTranslation(command);
-    return true;
-  } catch (const std::exception& ex) {
-    return SetError(error, ex.what());
-  }
-}
-
 auto ApplyOneChange(PipelineDocument& document, const PipelineEditChange& change,
                     PipelineEditApplyDirection direction, std::string* error,
                     const PipelineHistoryApplyContext& context) -> bool {
@@ -595,18 +419,8 @@ auto ApplyOneChange(PipelineDocument& document, const PipelineEditChange& change
         } else if constexpr (std::is_same_v<Typed, ReplaceMaskSourceChange>) {
           return ApplyReplaceMaskSource(document, typed.node_id, typed.mask_id, typed.before_source,
                                         typed.after_source, direction, error);
-        } else if constexpr (std::is_same_v<Typed, ReplaceMaskAssetChange>) {
-          return ApplyReplaceMaskAsset(document, typed, direction, error, context.mask_store);
         } else if constexpr (std::is_same_v<Typed, SetMaskFieldChange>) {
           return ApplySetMaskField(document, typed, direction, error);
-        } else if constexpr (std::is_same_v<Typed, AppendBrushStrokeChange>) {
-          return ApplyAppendBrushStroke(document, typed, direction, error);
-        } else if constexpr (std::is_same_v<Typed, RemoveBrushStrokeChange>) {
-          return ApplyRemoveBrushStroke(document, typed, direction, error);
-        } else if constexpr (std::is_same_v<Typed, InsertBrushStrokeChange>) {
-          return ApplyInsertBrushStroke(document, typed, direction, error);
-        } else if constexpr (std::is_same_v<Typed, SetBrushTranslationChange>) {
-          return ApplySetBrushTranslation(document, typed, direction, error);
         } else if constexpr (std::is_same_v<Typed, NodeGraphTopologyChange>) {
           return ApplyGraph(document,
                             ApplyNodeGraphTopologyChange(document, typed, direction,
@@ -631,10 +445,6 @@ auto StructuralBatch(const PipelineEditBatch& batch) -> bool {
     case PipelineEditOperationKind::SetNodeMix:
     case PipelineEditOperationKind::RenameColorGrade:
     case PipelineEditOperationKind::SetMaskField:
-    case PipelineEditOperationKind::AppendBrushStroke:
-    case PipelineEditOperationKind::RemoveBrushStroke:
-    case PipelineEditOperationKind::InsertBrushStroke:
-    case PipelineEditOperationKind::SetBrushTranslation:
       return false;
     default:
       return true;
@@ -752,46 +562,6 @@ auto FirstParentCommitsForHead(const CommitGraph& graph, head_commit_hash_t head
     commits.push_back(graph.GetCommit(hash));
   }
   return commits;
-}
-
-auto CollectPersistentMaskAssetKeys(const PipelineDocument& document) -> std::vector<MaskAssetKey> {
-  std::set<MaskAssetKey> unique;
-  for (const auto& node : document.Graph().Nodes()) {
-    const auto* grade = dynamic_cast<const ColorGradeNodeModel*>(node.get());
-    if (grade == nullptr) {
-      continue;
-    }
-    for (const auto& mask : grade->Masks()) {
-      const auto* brush = std::get_if<BrushMaskSource>(&mask.source);
-      if (brush == nullptr || !brush->asset_key.has_value() || brush->asset_key->Empty()) {
-        continue;
-      }
-      unique.insert(*brush->asset_key);
-    }
-  }
-  return {unique.begin(), unique.end()};
-}
-
-auto VerifyPersistentMaskAssets(const PipelineDocument& document, MaskStore* mask_store,
-                                std::string* error) -> bool {
-  const auto keys = CollectPersistentMaskAssetKeys(document);
-  if (keys.empty()) {
-    return true;
-  }
-  if (mask_store == nullptr) {
-    return SetError(error, "Mask store is required to verify referenced Mask assets");
-  }
-  try {
-    for (const auto& key : keys) {
-      const auto asset = mask_store->Load(key);
-      if (!asset) {
-        return SetError(error, "Mask asset is missing: " + std::string{key.Value()});
-      }
-    }
-    return true;
-  } catch (const std::exception& ex) {
-    return SetError(error, std::string{"Mask asset verification failed: "} + ex.what());
-  }
 }
 
 }  // namespace alcedo

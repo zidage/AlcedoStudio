@@ -62,11 +62,13 @@ auto OccupiedIdentities(const PipelineDocument& document) -> std::set<std::strin
       }
       for (const auto& mask : grade->Masks()) {
         occupied.insert(std::string{mask.id.Value()});
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
         if (const auto* brush = std::get_if<BrushMaskSource>(&mask.source)) {
           for (const auto& stroke : brush->strokes) {
             occupied.insert(std::string{stroke.id.Value()});
           }
         }
+#endif
       }
     }
     if (const auto* drt = dynamic_cast<const DrtNodeModel*>(node.get())) {
@@ -110,55 +112,6 @@ void RejectCollision(const std::string& id, const std::set<std::string>& occupie
   }
 }
 
-auto BrushKeysFromGradeJson(const nlohmann::json& grade) -> std::set<std::string> {
-  std::set<std::string> keys;
-  if (!grade.contains("masks") || !grade.at("masks").is_array()) {
-    return keys;
-  }
-  for (const auto& mask : grade.at("masks")) {
-    if (!mask.is_object() || !mask.contains("source") || !mask.at("source").is_object()) {
-      continue;
-    }
-    const auto& source = mask.at("source");
-    if (!source.contains("asset_key") || source.at("asset_key").is_null() ||
-        !source.at("asset_key").is_string()) {
-      continue;
-    }
-    const auto key = source.at("asset_key").get<std::string>();
-    if (!key.empty()) {
-      keys.insert(key);
-    }
-  }
-  return keys;
-}
-
-auto DescriptorJson(const MaskAssetDescriptor& descriptor) -> nlohmann::json {
-  return {{"height", descriptor.extent.height},
-          {"reference_bounds",
-           nlohmann::json::array({descriptor.reference_bounds.x, descriptor.reference_bounds.y,
-                                  descriptor.reference_bounds.w, descriptor.reference_bounds.h})},
-          {"width", descriptor.extent.width}};
-}
-
-auto DescriptorFromJson(const nlohmann::json& json) -> MaskAssetDescriptor {
-  RequireObject(json, "mask asset descriptor");
-  RejectUnknownKeys(json, {"height", "reference_bounds", "width"}, "mask asset descriptor");
-  if (!json.contains("width") || !json.at("width").is_number_unsigned() ||
-      !json.contains("height") || !json.at("height").is_number_unsigned() ||
-      !json.contains("reference_bounds") || !json.at("reference_bounds").is_array() ||
-      json.at("reference_bounds").size() != 4) {
-    Fail("mask asset descriptor requires width, height, and four reference_bounds");
-  }
-  MaskAssetDescriptor descriptor;
-  descriptor.extent.width             = json.at("width").get<std::uint32_t>();
-  descriptor.extent.height            = json.at("height").get<std::uint32_t>();
-  descriptor.reference_bounds.x       = json.at("reference_bounds").at(0).get<float>();
-  descriptor.reference_bounds.y       = json.at("reference_bounds").at(1).get<float>();
-  descriptor.reference_bounds.w       = json.at("reference_bounds").at(2).get<float>();
-  descriptor.reference_bounds.h       = json.at("reference_bounds").at(3).get<float>();
-  return descriptor;
-}
-
 auto DrtPostJson(const DrtNodeModel& drt) -> nlohmann::json {
   nlohmann::json adjustments = nlohmann::json::array();
   for (std::size_t index = 0; index < drt.AdjustmentCount(); ++index) {
@@ -174,15 +127,9 @@ auto CanonicalBody(const AdjustmentTransferPackage& package) -> nlohmann::json {
   for (const auto& grade : package.color_grades_) {
     grades.push_back(grade);
   }
-  nlohmann::json assets = nlohmann::json::array();
-  for (const auto& asset : package.mask_assets_) {
-    assets.push_back({{"descriptor", DescriptorJson(asset.descriptor)},
-                      {"key", std::string{asset.key.Value()}}});
-  }
   return {{"color_grades", std::move(grades)},
           {"document_format_version", package.document_format_version_},
           {"drt_post", package.drt_post_},
-          {"mask_assets", std::move(assets)},
           {"schema", package.schema_.empty() ? std::string{kAdjustmentTransferSchema}
                                              : package.schema_}};
 }
@@ -190,39 +137,6 @@ auto CanonicalBody(const AdjustmentTransferPackage& package) -> nlohmann::json {
 auto ComputeFingerprint(const AdjustmentTransferPackage& package) -> std::string {
   const auto dumped = CanonicalBody(package).dump();
   return Hash128::Compute(dumped.data(), dumped.size()).ToString();
-}
-
-void CopyReferencedAssets(const AdjustmentTransferPackage& package, MaskStore* source,
-                          MaskStore* target) {
-  if (package.mask_assets_.empty()) {
-    return;
-  }
-  if (source == nullptr) {
-    Fail("Paste requires a source Mask store for referenced Brush assets");
-  }
-  if (target == nullptr) {
-    Fail("Paste requires a target Mask store for referenced Brush assets");
-  }
-  if (source == target) {
-    for (const auto& asset : package.mask_assets_) {
-      try {
-        (void)source->Load(asset.key);
-      } catch (const std::exception&) {
-        Fail("Mask asset is missing: " + std::string{asset.key.Value()});
-      }
-    }
-    return;
-  }
-  for (const auto& asset : package.mask_assets_) {
-    const auto loaded = source->Load(asset.key);
-    if (!loaded) {
-      Fail("Mask asset is missing: " + std::string{asset.key.Value()});
-    }
-    const auto published = target->Put(loaded->descriptor, loaded->pixels);
-    if (published != asset.key) {
-      Fail("Mask asset copy produced a different content key");
-    }
-  }
 }
 
 class DefaultTransferIdentitySource final : public TransferIdentitySource {
@@ -237,7 +151,9 @@ class DefaultTransferIdentitySource final : public TransferIdentitySource {
     return AdjustmentInstanceId{std::string{id.Value()} + "." + Token()};
   }
   auto NextMaskId() -> MaskId override { return MaskId{"mask." + Token()}; }
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
   auto NextStrokeId() -> StrokeId override { return StrokeId{"stroke." + Token()}; }
+#endif
 
  private:
   auto Token() -> std::string {
@@ -278,6 +194,7 @@ auto RemapGrade(nlohmann::json grade, TransferIdentitySource& identity,
     RejectCollision(std::string{new_id.Value()}, *occupied, "MaskId");
     occupied->insert(std::string{new_id.Value()});
     mask["id"] = std::string{new_id.Value()};
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
     if (!mask.contains("source") || !mask.at("source").is_object() ||
         !mask.at("source").contains("strokes") || !mask.at("source").at("strokes").is_array()) {
       continue;
@@ -288,6 +205,7 @@ auto RemapGrade(nlohmann::json grade, TransferIdentitySource& identity,
       occupied->insert(std::string{new_stroke.Value()});
       stroke["id"] = std::string{new_stroke.Value()};
     }
+#endif
   }
   return grade;
 }
@@ -433,9 +351,11 @@ auto CountingTransferIdentitySource::NextMaskId() -> MaskId {
   return MaskId{"mask.t" + std::to_string(next_mask_++)};
 }
 
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
 auto CountingTransferIdentitySource::NextStrokeId() -> StrokeId {
   return StrokeId{"stroke.t" + std::to_string(next_stroke_++)};
 }
+#endif
 
 void SetDocumentTransferIdentitySourceForTesting(TransferIdentitySource* source) {
   g_identity_for_testing = source;
@@ -458,30 +378,13 @@ void ValidateDocumentTransfer(const AdjustmentTransferPackage& package) {
       !package.drt_post_.at("adjustments").is_array()) {
     Fail("drt_post requires object params and an adjustments array");
   }
-  std::set<std::string> referenced;
-  std::set<std::string> listed;
   for (const auto& grade_json : package.color_grades_) {
     RequireObject(grade_json, "color grade");
     (void)ColorGradeNodeModel::FromJson(grade_json);
-    for (const auto& key : BrushKeysFromGradeJson(grade_json)) {
-      referenced.insert(key);
-    }
-  }
-  for (const auto& asset : package.mask_assets_) {
-    if (asset.key.Empty()) {
-      Fail("mask asset key must not be empty");
-    }
-    if (!listed.insert(std::string{asset.key.Value()}).second) {
-      Fail("duplicate mask asset key");
-    }
-  }
-  if (referenced != listed) {
-    Fail("mask_assets must list exactly the Brush keys referenced by Color Grades");
   }
 }
 
-auto CaptureDocumentTransfer(const PipelineDocument& document, MaskStore* mask_store)
-    -> AdjustmentTransferPackage {
+auto CaptureDocumentTransfer(const PipelineDocument& document) -> AdjustmentTransferPackage {
   const auto grades = ColorGradesOnImageBackbone(document);
   if (grades.empty()) {
     Fail("document has no Color Grade on the image backbone");
@@ -493,25 +396,10 @@ auto CaptureDocumentTransfer(const PipelineDocument& document, MaskStore* mask_s
   AdjustmentTransferPackage package;
   package.schema_                   = std::string{kAdjustmentTransferSchema};
   package.document_format_version_  = document.FormatVersion();
-  std::set<MaskAssetKey> keys;
   for (const auto* grade : grades) {
-    const auto json = grade->ToJson();
-    for (const auto& key : BrushKeysFromGradeJson(json)) {
-      keys.insert(MaskAssetKey{key});
-    }
-    package.color_grades_.push_back(json);
+    package.color_grades_.push_back(grade->ToJson());
   }
   package.drt_post_ = DrtPostJson(*drt);
-  for (const auto& key : keys) {
-    if (mask_store == nullptr) {
-      Fail("Mask store is required to capture referenced Brush assets");
-    }
-    const auto asset = mask_store->Load(key);
-    if (!asset) {
-      Fail("Mask asset is missing: " + std::string{key.Value()});
-    }
-    package.mask_assets_.push_back(DocumentTransferMaskAsset{key, asset->descriptor});
-  }
   ValidateDocumentTransfer(package);
   package.fingerprint_ = ComputeFingerprint(package);
   return package;
@@ -533,10 +421,9 @@ auto ImportDocumentTransfer(const nlohmann::json& json) -> AdjustmentTransferPac
   if (json.contains("operators")) {
     Fail("operator-list transfer packages are not accepted");
   }
-  RejectUnknownKeys(json,
-                    {"color_grades", "document_format_version", "drt_post", "fingerprint",
-                     "mask_assets", "schema"},
-                    "transfer package");
+  RejectUnknownKeys(
+      json, {"color_grades", "document_format_version", "drt_post", "fingerprint", "schema"},
+      "transfer package");
   if (!json.contains("schema") || !json.at("schema").is_string() ||
       json.at("schema").get<std::string>() != kAdjustmentTransferSchema) {
     Fail("unsupported adjustment package schema");
@@ -558,19 +445,6 @@ auto ImportDocumentTransfer(const nlohmann::json& json) -> AdjustmentTransferPac
     Fail("transfer package requires drt_post");
   }
   package.drt_post_ = json.at("drt_post");
-  if (json.contains("mask_assets")) {
-    if (!json.at("mask_assets").is_array()) {
-      Fail("mask_assets must be an array");
-    }
-    for (const auto& item : json.at("mask_assets")) {
-      RequireObject(item, "mask asset");
-      RejectUnknownKeys(item, {"descriptor", "key"}, "mask asset");
-      DocumentTransferMaskAsset asset;
-      asset.key        = MaskAssetKey{item.at("key").get<std::string>()};
-      asset.descriptor = DescriptorFromJson(item.at("descriptor"));
-      package.mask_assets_.push_back(std::move(asset));
-    }
-  }
   ValidateDocumentTransfer(package);
   package.fingerprint_ = ComputeFingerprint(package);
   if (json.contains("fingerprint")) {
@@ -595,7 +469,6 @@ auto PrepareDocumentPaste(const AdjustmentTransferPackage&    package,
   if (root_document.Develop() == nullptr || root_document.Drt() == nullptr) {
     Fail("target root must contain Develop and DRT");
   }
-  CopyReferencedAssets(package, options.source_mask_store, options.target_mask_store);
 
   DefaultTransferIdentitySource owned_identity;
   TransferIdentitySource*       identity = options.identity_source;
@@ -615,7 +488,6 @@ auto PrepareDocumentPaste(const AdjustmentTransferPackage&    package,
     prepared.package.color_grades_.push_back(RemapGrade(grade, source, &occupied));
   }
   prepared.package.drt_post_     = package.drt_post_;
-  prepared.package.mask_assets_  = package.mask_assets_;
   prepared.package.fingerprint_  = ComputeFingerprint(prepared.package);
   prepared.batch                 = BuildPasteBatch(root_document, prepared.package.color_grades_,
                                                    prepared.package.drt_post_);

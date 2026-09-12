@@ -516,7 +516,7 @@ TEST_F(AlcedoQanGraph, MaskKindChangeUpdatesOneNodeWithoutReplacingEdges) {
   QPointer<qan::Edge> incoming   = adapter.EdgeFor(before.edges.front());
   QPointer<qan::Edge> outgoing   = adapter.EdgeFor(before.edges.back());
 
-  grade->ReplaceMaskSource(MaskId{"mask.radial"}, BrushMaskSource{});
+  grade->ReplaceMaskSource(MaskId{"mask.radial"}, LinearGradientMaskSource{});
   const auto after  = EditorNodeGraphProjection::Build(document, 2, 6, 1);
   const auto result = adapter.ApplySnapshot(after);
 
@@ -528,7 +528,7 @@ TEST_F(AlcedoQanGraph, MaskKindChangeUpdatesOneNodeWithoutReplacingEdges) {
   ASSERT_NE(adapter.NodeProjection(NodeId{"grade.primary"}), nullptr);
   ASSERT_EQ(adapter.NodeProjection(NodeId{"grade.primary"})->masks.size(), 1u);
   EXPECT_EQ(adapter.NodeProjection(NodeId{"grade.primary"})->masks.front().source_kind,
-            MaskSourceKind::Brush);
+            MaskSourceKind::LinearGradient);
   EXPECT_EQ(harness_->Graph()->getNodeCount(), 3);
 }
 

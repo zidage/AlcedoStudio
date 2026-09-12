@@ -10,10 +10,7 @@
 #include <span>
 #include <stdexcept>
 
-#include "edit/mask/brush_coverage_update.hpp"
-#include "edit/mask/parameterized_brush_replay_cache.hpp"
 #include "edit/runtime/graph_image_cache.hpp"
-#include "edit/runtime/mask_texture_cache.hpp"
 #include "edit/runtime/node_result_cache.hpp"
 #include "edit/runtime/parameter_arena.hpp"
 #include "edit/runtime/result_persistence.hpp"
@@ -42,11 +39,7 @@ class BasicRenderWorkspace {
   using CommandContext = typename Backend::CommandContext;
 
   BasicRenderWorkspace()
-      : parameters_(backend_),
-        transients_(backend_),
-        textures_(backend_),
-        mask_textures_(backend_),
-        active_raster_textures_(backend_) {}
+      : parameters_(backend_), transients_(backend_), textures_(backend_) {}
 
   BasicRenderWorkspace(const BasicRenderWorkspace&)                                  = delete;
   auto               operator=(const BasicRenderWorkspace&) -> BasicRenderWorkspace& = delete;
@@ -61,27 +54,6 @@ class BasicRenderWorkspace {
   }
   [[nodiscard]] auto Textures() -> TexturePool<Backend>& { return textures_; }
   [[nodiscard]] auto Textures() const -> const TexturePool<Backend>& { return textures_; }
-  [[nodiscard]] auto MaskTextures() -> MaskTextureCache<Backend>& { return mask_textures_; }
-  [[nodiscard]] auto ActiveRasterTextures() -> ActiveRasterTextureCache<Backend>& {
-    return active_raster_textures_;
-  }
-  [[nodiscard]] auto ActiveRasterTextures() const -> const ActiveRasterTextureCache<Backend>& {
-    return active_raster_textures_;
-  }
-  /**
-   * @brief Retained canonical Brush rasters replayed regionally per render.
-   *
-   * Native Mask passes feed it the document source instead of a full
-   * re-rasterization; unchanged entries return shared pixels untouched.
-   */
-  [[nodiscard]] auto BrushReplay() -> ParameterizedBrushReplayCache& { return brush_replay_; }
-  /**
-   * @brief Last stamped parameterized Brush commands (no pixels).
-   *
-   * CUDA source raster uses this to stamp only new dabs. OpenCL/Metal host replay
-   * does not read it.
-   */
-  [[nodiscard]] auto BrushCommands() -> BrushCoverageCommandJournal& { return brush_commands_; }
   [[nodiscard]] auto Values() -> NodeResultCache<Backend>& { return values_; }
   [[nodiscard]] auto Images() -> GraphImageCache<Backend>& { return images_; }
   [[nodiscard]] auto Images() const -> const GraphImageCache<Backend>& { return images_; }
@@ -115,12 +87,11 @@ class BasicRenderWorkspace {
    * two change versions. Operator dirty bits are read, not consumed.
    */
   void PrepareResultValidity(const ExecutionPlan& plan, PipelineDocument& document,
-                             const PreparedRawInput& input,
-                             std::span<const ActiveRasterMaskInput> active_raster_masks = {}) {
+                             const PreparedRawInput& input) {
     if (validity_prepared_) {
       return;
     }
-    invalidation_.CollectAndPropagate(plan, document, input, active_raster_masks);
+    invalidation_.CollectAndPropagate(plan, document, input);
     // BeginRender waited for the previous submission. Retire invalid results
     // even when sensor Develop is a cache hit; matching allocations remain reusable.
     DropUnusablePublishedImages();
@@ -165,15 +136,14 @@ class BasicRenderWorkspace {
     std::fprintf(stderr,
                  "[GPU_POOL] %s textures=%.1f MiB n=%zu leased=%.1f unleased=%.1f MiB  "
                  "transient=%.1f/%.1f MiB  "
-                 "images=pub%zu/write%zu  values=%.1f n=%zu  masks=%.1f n=%zu",
+                 "images=pub%zu/write%zu  values=%.1f n=%zu",
                  reason == nullptr ? "" : reason, GpuPoolMiB(textures_.UsedBytes()),
                  textures_.EntryCount(),
                  GpuPoolMiB(textures_.LeasedBytes()),
                  GpuPoolMiB(textures_.UsedBytes() - textures_.LeasedBytes()),
                  GpuPoolMiB(transients_.used_bytes()), GpuPoolMiB(transients_.capacity_bytes()),
                  images_.PublishedCount(), images_.UnpublishedCount(),
-                 GpuPoolMiB(values_.UsedBytes()), values_.Size(),
-                 GpuPoolMiB(mask_textures_.UsedBytes()), mask_textures_.EntryCount());
+                 GpuPoolMiB(values_.UsedBytes()), values_.Size());
     if (device_memory.valid) {
       std::fprintf(stderr, "  device used=%.1f free=%.1f total=%.1f MiB", GpuPoolMiB(device_used),
                    GpuPoolMiB(device_memory.free_bytes), GpuPoolMiB(device_memory.total_bytes));
@@ -183,7 +153,6 @@ class BasicRenderWorkspace {
       textures_.DumpToStderr(reason);
       images_.DumpToStderr(reason, textures_);
       values_.DumpToStderr(reason);
-      mask_textures_.DumpToStderr(reason);
     }
   }
 
@@ -220,8 +189,6 @@ class BasicRenderWorkspace {
     images_.DiscardUnpublished();
     transients_.Reset();
     textures_.BeginFrame();
-    mask_textures_.BeginFrame();
-    active_raster_textures_.BeginFrame();
     command_context.SetSubmissionId(backend_.NextSubmissionId());
     rendering_         = true;
     validity_prepared_ = false;
@@ -238,8 +205,6 @@ class BasicRenderWorkspace {
     }
     textures_.ReleaseUnused();
     textures_.MarkSubmitted(command_context.SubmissionId());
-    mask_textures_.MarkSubmitted(command_context.SubmissionId());
-    active_raster_textures_.MarkSubmitted(command_context.SubmissionId());
     backend_.Submit(command_context);
     rendering_ = false;
   }
@@ -277,10 +242,6 @@ class BasicRenderWorkspace {
     values_.Clear();
     invalidation_.Clear();
     validity_prepared_ = false;
-    mask_textures_.Clear();
-    active_raster_textures_.Clear();
-    brush_replay_.Clear();
-    brush_commands_.Clear();
     textures_.ReleaseUnleased();
     transients_.ReleaseDeviceMemory();
     parameters_.Clear();
@@ -331,10 +292,6 @@ class BasicRenderWorkspace {
   ParameterArena<Backend>       parameters_;
   TransientBufferArena<Backend> transients_;
   TexturePool<Backend>          textures_;
-  MaskTextureCache<Backend>         mask_textures_;
-  ActiveRasterTextureCache<Backend> active_raster_textures_;
-  ParameterizedBrushReplayCache     brush_replay_{};
-  BrushCoverageCommandJournal       brush_commands_{};
   NodeResultCache<Backend>       values_{};
   GraphImageCache<Backend>       images_{};
   RuntimeInvalidationState       invalidation_{};

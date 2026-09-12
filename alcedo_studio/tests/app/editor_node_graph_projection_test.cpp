@@ -62,16 +62,14 @@ TEST(EditorNodeGraphProjection, MaskProjectionPreservesDocumentDisplayOrderAndSo
   auto* grade    = document.PrimaryGrade();
   ASSERT_NE(grade, nullptr);
   grade->AddMask(MakeMask(MaskId{"mask.radial"}, RadialMaskSource{}), 0);
-  grade->AddMask(MakeMask(MaskId{"mask.brush"}, BrushMaskSource{}), 1);
-  grade->AddMask(MakeMask(MaskId{"mask.linear"}, LinearGradientMaskSource{}), 2);
+  grade->AddMask(MakeMask(MaskId{"mask.linear"}, LinearGradientMaskSource{}), 1);
 
   const auto snapshot = EditorNodeGraphProjection::Build(document, 1, 2, 3);
   ASSERT_EQ(snapshot.nodes.size(), 3u);
   const auto& masks = snapshot.nodes[1].masks;
-  ASSERT_EQ(masks.size(), 3u);
+  ASSERT_EQ(masks.size(), 2u);
   EXPECT_EQ(masks[0], (EditorNodeMaskProjection{MaskId{"mask.radial"}, MaskSourceKind::Radial}));
-  EXPECT_EQ(masks[1], (EditorNodeMaskProjection{MaskId{"mask.brush"}, MaskSourceKind::Brush}));
-  EXPECT_EQ(masks[2],
+  EXPECT_EQ(masks[1],
             (EditorNodeMaskProjection{MaskId{"mask.linear"}, MaskSourceKind::LinearGradient}));
 }
 
@@ -116,13 +114,13 @@ TEST(EditorNodeGraphProjection, ProjectNodeCopiesStoredMaskOrderForDetachedGrade
 
   auto extra = CreateCleanColorGradeNode(NodeId{"grade.detached"});
   extra->AddMask(MakeMask(MaskId{"mask.radial"}, RadialMaskSource{}), 0);
-  extra->AddMask(MakeMask(MaskId{"mask.brush"}, BrushMaskSource{}), 1);
+  extra->AddMask(MakeMask(MaskId{"mask.linear"}, LinearGradientMaskSource{}), 1);
   const auto projected = EditorNodeGraphProjection::ProjectNode(*extra);
   EXPECT_EQ(projected.node_id, NodeId{"grade.detached"});
   EXPECT_EQ(projected.node_kind, EditorNodeKind::ColorGrade);
   ASSERT_EQ(projected.masks.size(), 2u);
   EXPECT_EQ(projected.masks[0].mask_id, MaskId{"mask.radial"});
-  EXPECT_EQ(projected.masks[1].mask_id, MaskId{"mask.brush"});
+  EXPECT_EQ(projected.masks[1].mask_id, MaskId{"mask.linear"});
 }
 
 TEST(EditorNodeGraphProjection, InvalidBackboneIsRejected) {

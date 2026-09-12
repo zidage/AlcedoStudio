@@ -1333,8 +1333,10 @@ auto AlcedoQanGraph::NodeKindKey(EditorNodeKind kind) -> QString {
 
 auto AlcedoQanGraph::SourceKindKey(MaskSourceKind kind) -> QString {
   switch (kind) {
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
     case MaskSourceKind::Brush:
       return QStringLiteral("brush");
+#endif
     case MaskSourceKind::Radial:
       return QStringLiteral("radial");
     case MaskSourceKind::LinearGradient:

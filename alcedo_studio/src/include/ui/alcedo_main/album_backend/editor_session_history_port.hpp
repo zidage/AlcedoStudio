@@ -18,7 +18,6 @@
 #include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/mask/mask_id.hpp"
 #include "edit/mask/mask_model.hpp"
-#include "edit/mask/mask_store.hpp"
 #include "json.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_pipeline_port.hpp"
 
@@ -81,9 +80,6 @@ class EditorSessionHistoryPort final : public alcedo::IEditorHistoryPort {
   auto ReplaceMaskSource(const alcedo::EditorHistoryGuardHandle& guard, const alcedo::NodeId& node_id,
                          const alcedo::MaskId& mask_id, nlohmann::json after_source,
                          std::string* error) -> bool;
-  auto ReplaceMaskAsset(const alcedo::EditorHistoryGuardHandle& guard, const alcedo::NodeId& node_id,
-                        const alcedo::MaskId& mask_id, nlohmann::json after_source,
-                        alcedo::MaskStore& mask_store, std::string* error) -> bool;
   auto SetMaskField(const alcedo::EditorHistoryGuardHandle& guard, const alcedo::NodeId& node_id,
                     const alcedo::MaskId& mask_id, std::string field_key, nlohmann::json after_value,
                     std::string* error) -> bool;

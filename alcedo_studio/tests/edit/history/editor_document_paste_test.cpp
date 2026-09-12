@@ -25,9 +25,7 @@
 #include "edit/history/commit_types.hpp"
 #include "edit/history/edit_commit.hpp"
 #include "edit/history/pipeline_edit_batch.hpp"
-#include "edit/mask/mask_asset.hpp"
 #include "edit/mask/mask_id.hpp"
-#include "edit/mask/mask_store.hpp"
 #include "edit/operators/models/operator_type_id.hpp"
 #include "edit/operators/operator_registeration.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
@@ -139,7 +137,9 @@ TEST_F(EditorDocumentPasteTest, FailedPasteCreatesNoVersionCommitHeadMoveOrRende
       return alcedo::MakeAdjustmentInstanceId(node_id, type);
     }
     auto NextMaskId() -> alcedo::MaskId override { return alcedo::MaskId{"mask.t1"}; }
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
     auto NextStrokeId() -> alcedo::StrokeId override { return alcedo::StrokeId{"stroke.t1"}; }
+#endif
   } colliding;
   alcedo::SetDocumentTransferIdentitySourceForTesting(&colliding);
   alcedo::AdjustmentPasteResult collision_result;
@@ -147,15 +147,6 @@ TEST_F(EditorDocumentPasteTest, FailedPasteCreatesNoVersionCommitHeadMoveOrRende
       handle, test::MakeExposureTransferPackage(1.0), "Collision", &collision_result, &error));
   EXPECT_FALSE(collision_result.pasted);
   alcedo::SetDocumentTransferIdentitySourceForTesting(nullptr);
-
-  auto listed_key_package = test::MakeExposureTransferPackage(0.4);
-  listed_key_package.mask_assets_.push_back(
-      alcedo::DocumentTransferMaskAsset{alcedo::MaskAssetKey{"0123456789abcdef0123456789abcdef"},
-                                        {}});
-  alcedo::AdjustmentPasteResult listed_key_result;
-  EXPECT_FALSE(history_.PasteLiveRootRelativeVersion(
-      handle, listed_key_package, "Unreferenced mask asset", &listed_key_result, &error));
-  EXPECT_FALSE(listed_key_result.pasted);
 
   EXPECT_EQ(guard_->commit_graph_->GetActiveVersionId(), prior_version);
   EXPECT_EQ(guard_->commit_graph_->CommitCount(), prior_count);

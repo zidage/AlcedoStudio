@@ -13,21 +13,27 @@
 #include <vector>
 
 #include "edit/geometry/types.hpp"
+#include "edit/mask/mask_id.hpp"
+#include "json.hpp"
+
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
 #include "edit/mask/brush_raster_encoding.hpp"
 #include "edit/mask/brush_stroke.hpp"
 #include "edit/mask/mask_asset.hpp"
-#include "edit/mask/mask_id.hpp"
-#include "json.hpp"
+#endif
 
 namespace alcedo {
 
 /** @brief Discriminator for @ref MaskSource. */
 enum class MaskSourceKind : std::uint8_t {
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
   Brush           = 0,
+#endif
   Radial          = 1,
   LinearGradient  = 2,
 };
 
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
 /**
  * @brief Brush coverage source owned by a Color Grade Mask.
  *
@@ -56,6 +62,7 @@ struct BrushMaskSource {
  * load-only query of in-memory contents.
  */
 [[nodiscard]] auto BrushSourceHasParameterizedPayload(const BrushMaskSource& brush) -> bool;
+#endif
 
 /** @brief Radial ellipse in normalized reference space. */
 struct RadialMaskSource {
@@ -84,7 +91,11 @@ struct LinearGradientMaskSource {
       -> bool = default;
 };
 
-using MaskSource = std::variant<BrushMaskSource, RadialMaskSource, LinearGradientMaskSource>;
+using MaskSource = std::variant<
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
+    BrushMaskSource,
+#endif
+    RadialMaskSource, LinearGradientMaskSource>;
 
 /**
  * @brief Direct Color Range field. Only the disabled placeholder is supported.

@@ -17,8 +17,6 @@
 namespace alcedo {
 namespace {
 
-using pipeline_edit_json::AssetKeyFromBrushSource;
-using pipeline_edit_json::CanonicalBrushStrokeJson;
 using pipeline_edit_json::CanonicalColorGradeNodeJson;
 using pipeline_edit_json::CanonicalMaskJson;
 using pipeline_edit_json::CanonicalMaskSourceJson;
@@ -225,15 +223,6 @@ void ValidateReplaceMaskSource(const ReplaceMaskSourceChange& change) {
   (void)CanonicalMaskSourceJson(change.after_source, "ReplaceMaskSource after_source");
 }
 
-void ValidateReplaceMaskAsset(const ReplaceMaskAssetChange& change) {
-  ValidateMaskOwner(change.node_id, change.mask_id, "ReplaceMaskAsset");
-  const auto before =
-      CanonicalMaskSourceJson(change.before_source, "ReplaceMaskAsset before_source");
-  const auto after = CanonicalMaskSourceJson(change.after_source, "ReplaceMaskAsset after_source");
-  (void)AssetKeyFromBrushSource(before, "ReplaceMaskAsset before_source");
-  (void)AssetKeyFromBrushSource(after, "ReplaceMaskAsset after_source");
-}
-
 void ValidateMaskFieldValue(const nlohmann::json& value, const std::string& field_key,
                             std::string_view context) {
   if (field_key == "enabled" || field_key == "invert") {
@@ -269,38 +258,6 @@ void ValidateSetMaskField(const SetMaskFieldChange& change) {
   ValidateMaskFieldValue(change.after_value, change.field_key, "SetMaskField after_value");
 }
 
-void ValidateAppendBrushStroke(const AppendBrushStrokeChange& change) {
-  ValidateMaskOwner(change.node_id, change.mask_id, "AppendBrushStroke");
-  (void)CanonicalBrushStrokeJson(change.stroke, "AppendBrushStroke stroke");
-}
-
-void ValidateRemoveBrushStroke(const RemoveBrushStrokeChange& change) {
-  ValidateMaskOwner(change.node_id, change.mask_id, "RemoveBrushStroke");
-  if (change.stroke_id.Empty()) {
-    Fail("RemoveBrushStroke: stroke_id must not be empty");
-  }
-  (void)CanonicalBrushStrokeJson(change.stroke, "RemoveBrushStroke stroke");
-  if (change.stroke.id != change.stroke_id) {
-    Fail("RemoveBrushStroke: stroke.id must match stroke_id");
-  }
-}
-
-void ValidateInsertBrushStroke(const InsertBrushStrokeChange& change) {
-  ValidateMaskOwner(change.node_id, change.mask_id, "InsertBrushStroke");
-  (void)CanonicalBrushStrokeJson(change.stroke, "InsertBrushStroke stroke");
-}
-
-void ValidateSetBrushTranslation(const SetBrushTranslationChange& change) {
-  ValidateMaskOwner(change.node_id, change.mask_id, "SetBrushTranslation");
-  if (!std::isfinite(change.before.x) || !std::isfinite(change.before.y) ||
-      !std::isfinite(change.after.x) || !std::isfinite(change.after.y)) {
-    Fail("SetBrushTranslation: before and after must be finite");
-  }
-  if (change.before == change.after) {
-    Fail("SetBrushTranslation: before and after must differ");
-  }
-}
-
 void ValidateChange(const PipelineEditChange& change) {
   std::visit(
       [](const auto& typed) {
@@ -325,18 +282,8 @@ void ValidateChange(const PipelineEditChange& change) {
           ValidateAddOrRemoveMask(typed.node_id, typed.mask_id, typed.mask, "RemoveMask");
         } else if constexpr (std::is_same_v<Typed, ReplaceMaskSourceChange>) {
           ValidateReplaceMaskSource(typed);
-        } else if constexpr (std::is_same_v<Typed, ReplaceMaskAssetChange>) {
-          ValidateReplaceMaskAsset(typed);
         } else if constexpr (std::is_same_v<Typed, SetMaskFieldChange>) {
           ValidateSetMaskField(typed);
-        } else if constexpr (std::is_same_v<Typed, AppendBrushStrokeChange>) {
-          ValidateAppendBrushStroke(typed);
-        } else if constexpr (std::is_same_v<Typed, RemoveBrushStrokeChange>) {
-          ValidateRemoveBrushStroke(typed);
-        } else if constexpr (std::is_same_v<Typed, InsertBrushStrokeChange>) {
-          ValidateInsertBrushStroke(typed);
-        } else if constexpr (std::is_same_v<Typed, SetBrushTranslationChange>) {
-          ValidateSetBrushTranslation(typed);
         } else if constexpr (std::is_same_v<Typed, NodeGraphTopologyChange>) {
           ValidateNodeGraphTopology(typed);
         } else {

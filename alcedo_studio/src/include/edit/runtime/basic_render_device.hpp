@@ -10,7 +10,6 @@
 
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/prepared_raw_input.hpp"
-#include "edit/mask/active_raster_mask.hpp"
 #include "edit/runtime/basic_render_workspace.hpp"
 #include "edit/runtime/execution_plan.hpp"
 #include "edit/runtime/gpu_node_pass_stats.hpp"
@@ -19,8 +18,6 @@
 #include "gpu/transient_allocation_policy.hpp"
 
 namespace alcedo {
-
-class MaskStore;
 
 /**
  * @brief Workspace, command context, pass stats, and plan execution for one backend.
@@ -111,17 +108,14 @@ class BasicRenderDevice {
    * @brief Run the compiled DAG. Skips published content keys. No image-processing substitute.
    */
   [[nodiscard]] auto Execute(const ExecutionPlan& plan, const PreparedRawInput& input,
-                             PipelineDocument& document, MaskStore* mask_store = nullptr,
-                             bool publish_on_success = true,
+                             PipelineDocument& document, bool publish_on_success = true,
                              TransientAllocationPolicy transient_policy =
                                  TransientAllocationPolicy::SessionPacked,
-                             std::span<const ActiveRasterMaskInput> active_raster_masks = {},
                              ResultPersistenceScope persistence =
                                  ResultPersistenceScope::AllCurrentResults)
       -> GraphValueId {
-    return PlanExecutor<Backend>::Execute(*this, plan, input, document, mask_store,
-                                          publish_on_success, transient_policy,
-                                          active_raster_masks, persistence);
+    return PlanExecutor<Backend>::Execute(*this, plan, input, document, publish_on_success,
+                                          transient_policy, persistence);
   }
 
  private:

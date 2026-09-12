@@ -32,28 +32,31 @@ def_library(EditGeometry
         ${ALCEDO_SRC_ROOT}/edit/geometry/texture_sampling_plan.cpp
 )
 
-# GPU-free persistent R8 mask repository and host byte-budget cache.
-def_library(EditMaskStore
+# GPU-free Mask model: analytic sources, common fields, and host Mix coverage.
+def_library(EditMaskCore
     SOURCES
-        ${ALCEDO_SRC_ROOT}/edit/mask/mask_store.cpp
-        ${ALCEDO_SRC_ROOT}/edit/mask/mask_asset.cpp
         ${ALCEDO_SRC_ROOT}/edit/mask/mask_model.cpp
-        ${ALCEDO_SRC_ROOT}/edit/mask/brush_stroke.cpp
-        ${ALCEDO_SRC_ROOT}/edit/mask/brush_raster_encoding.cpp
         ${ALCEDO_SRC_ROOT}/edit/mask/analytic_mask_edit.cpp
-        ${ALCEDO_SRC_ROOT}/edit/mask/brush_source_geometry.cpp
-        ${ALCEDO_SRC_ROOT}/edit/mask/brush_canonical_sampler.cpp
-        ${ALCEDO_SRC_ROOT}/edit/mask/brush_spatial_index.cpp
-        ${ALCEDO_SRC_ROOT}/edit/mask/brush_rasterizer.cpp
-        ${ALCEDO_SRC_ROOT}/edit/mask/brush_signed_distance.cpp
         ${ALCEDO_SRC_ROOT}/edit/mask/grade_mask_coverage.cpp
-        ${ALCEDO_SRC_ROOT}/edit/mask/parameterized_brush_raster.cpp
-        ${ALCEDO_SRC_ROOT}/edit/mask/parameterized_brush_replay_cache.cpp
-        ${ALCEDO_SRC_ROOT}/edit/mask/brush_coverage_update.cpp
-        ${ALCEDO_SRC_ROOT}/edit/mask/active_raster_mask.cpp
     PUBLIC_DEPS EditGeometry JSON
-    PRIVATE_DEPS xxHash
 )
+
+# Detached Brush module: model types, canonical sampling, and spatial/feather
+# algorithms only. No rasterization, history, storage, or UI glue. Not shipped.
+if(ALCEDO_ENABLE_BRUSH_MASK)
+    def_library(EditMaskBrush
+        SOURCES
+            ${ALCEDO_SRC_ROOT}/edit/mask/mask_asset.cpp
+            ${ALCEDO_SRC_ROOT}/edit/mask/brush_stroke.cpp
+            ${ALCEDO_SRC_ROOT}/edit/mask/brush_raster_encoding.cpp
+            ${ALCEDO_SRC_ROOT}/edit/mask/brush_canonical_sampler.cpp
+            ${ALCEDO_SRC_ROOT}/edit/mask/brush_source_geometry.cpp
+            ${ALCEDO_SRC_ROOT}/edit/mask/brush_spatial_index.cpp
+            ${ALCEDO_SRC_ROOT}/edit/mask/brush_signed_distance.cpp
+        PUBLIC_DEPS EditMaskCore EditGeometry JSON
+        PRIVATE_DEPS xxHash
+    )
+endif()
 
 # GPU DAG document/graph/models. No ImageBuffer, Operators, or GPU backends.
 set(EDIT_GRAPH_SRCS
@@ -73,14 +76,16 @@ set(EDIT_GRAPH_SRCS
         ${ALCEDO_SRC_ROOT}/edit/graph/pipeline_document.cpp
         ${ALCEDO_SRC_ROOT}/edit/graph/pipeline_graph.cpp
         ${ALCEDO_SRC_ROOT}/edit/graph/pipeline_graph_commands.cpp
-        ${ALCEDO_SRC_ROOT}/edit/graph/active_raster_mask_validation.cpp
 )
 
 def_library(EditGraph
     SOURCES ${EDIT_GRAPH_SRCS}
-    PUBLIC_DEPS JSON EditGeometry EditMaskStore
+    PUBLIC_DEPS JSON EditGeometry EditMaskCore
     PRIVATE_DEPS ${ALCEDO_OPENCV_CORE_DEPS}
 )
+if(ALCEDO_ENABLE_BRUSH_MASK)
+    target_link_libraries(EditGraph PUBLIC EditMaskBrush)
+endif()
 
 # CPU RAW unpack / downsample. No CUDA, no ImageBuffer.
 def_library(EditInput
@@ -113,6 +118,9 @@ def_library(EditRuntime
     SOURCES ${EDIT_RUNTIME_SRCS}
     PUBLIC_DEPS EditGraph EditGeometry EditInput
 )
+if(ALCEDO_ENABLE_BRUSH_MASK)
+    target_link_libraries(EditRuntime PUBLIC EditMaskBrush)
+endif()
 
 if(ALCEDO_METAL_ENABLED)
     def_library(EditRuntimeMetal
@@ -175,7 +183,6 @@ if(ALCEDO_CUDA_ENABLED)
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_neighbor_grade.cu
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_local_tone_pass.cu
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_mask_pass.cu
-            ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_brush_raster.cu
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_plan_executor.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_product_renderer.cu
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_primary_grade_pass.cu

@@ -16,10 +16,6 @@
 #include "edit/mask/mask_model.hpp"
 #include "json.hpp"
 
-namespace alcedo {
-class MaskStore;
-}
-
 namespace alcedo::ui {
 
 struct HistoryWorkingState;
@@ -73,9 +69,6 @@ class EditorHistoryMutation {
   auto ReplaceMaskSource(const alcedo::EditorHistoryGuardHandle& guard, const alcedo::NodeId& node_id,
                          const alcedo::MaskId& mask_id, nlohmann::json after_source,
                          std::string* error) -> bool;
-  auto ReplaceMaskAsset(const alcedo::EditorHistoryGuardHandle& guard, const alcedo::NodeId& node_id,
-                        const alcedo::MaskId& mask_id, nlohmann::json after_source,
-                        alcedo::MaskStore& mask_store, std::string* error) -> bool;
   auto SetMaskField(const alcedo::EditorHistoryGuardHandle& guard, const alcedo::NodeId& node_id,
                     const alcedo::MaskId& mask_id, std::string field_key, nlohmann::json after_value,
                     std::string* error) -> bool;

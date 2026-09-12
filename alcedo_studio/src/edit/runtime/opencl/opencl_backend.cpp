@@ -814,15 +814,7 @@ void OpenClBackend::WarmUpPlan(const ExecutionPlan& plan) {
         add(OpenCL::GpuDag::kLocalToneProgramName, OpenCL::GpuDag::kLocalToneApplyKernelName);
     }
   }
-  if (plan.Contains(GpuPassKind::MaskEvaluate) || plan.Contains(GpuPassKind::MaskFeather) ||
-      plan.Contains(GpuPassKind::MaskUnion)) {
-    add(OpenCL::GpuDag::kMaskProgramName, OpenCL::GpuDag::kMaskMipKernelName);
-    add(OpenCL::GpuDag::kMaskProgramName, OpenCL::GpuDag::kMaskRasterSampleKernelName);
-    add(OpenCL::GpuDag::kMaskProgramName, OpenCL::GpuDag::kMaskBandHorizontalKernelName);
-    add(OpenCL::GpuDag::kMaskProgramName, OpenCL::GpuDag::kMaskBandVerticalKernelName);
-    add(OpenCL::GpuDag::kMaskProgramName,
-        OpenCL::GpuDag::kMaskComposeSignedDistanceKernelName);
-    add(OpenCL::GpuDag::kMaskProgramName, OpenCL::GpuDag::kMaskFeatherSampleKernelName);
+  if (plan.Contains(GpuPassKind::MaskEvaluate) || plan.Contains(GpuPassKind::MaskUnion)) {
     add(OpenCL::GpuDag::kMaskProgramName, OpenCL::GpuDag::kMaskAnalyticKernelName);
     add(OpenCL::GpuDag::kMaskProgramName, OpenCL::GpuDag::kMaskFillZeroKernelName);
     add(OpenCL::GpuDag::kMaskProgramName, OpenCL::GpuDag::kMaskUnionMaxKernelName);

@@ -30,8 +30,6 @@ Item {
                                               && root.selectedMaskId.length > 0
                                               && root.sourceKind === "linear"
     readonly property bool analyticSelected: root.radialSelected || root.gradientSelected
-    readonly property bool brushSelected: root.controlsEnabled
-                                          && root.sourceKind === "brush"
     readonly property bool maskSelected: root.controlsEnabled
                                           && root.selectedMaskId.length > 0
 
@@ -262,99 +260,6 @@ Item {
                     font.pixelSize: appTheme.fontSizeCaption
                     elide: Text.ElideRight
                 }
-            }
-
-            // Brush tool: Paint/Erase append strokes; Move drags the whole
-            // placement. Move needs an existing committed Brush Mask.
-            ParameterLabel { visible: root.brushSelected; text: qsTr("Tool") }
-            SegmentedCardSwitcher {
-                id: brushToolSegments
-                objectName: "editorMasksBrushToolSegments"
-                Layout.fillWidth: true
-                visible: root.brushSelected
-                enabled: root.brushSelected
-                entries: [
-                    { "label": qsTr("Paint"), "value": "paint" },
-                    { "label": qsTr("Erase"), "value": "erase",
-                      "enabled": root.maskSelected },
-                    { "label": qsTr("Move"), "value": "move",
-                      "enabled": root.maskSelected }
-                ]
-                currentValue: root.maskCreation ? String(root.maskCreation.brushTool) : ""
-                onSelected: function (index, value) {
-                    if (root.maskCreation)
-                        root.maskCreation.setBrushTool(value)
-                }
-            }
-
-            ParameterLabel { visible: root.brushSelected; text: qsTr("Brush size") }
-            EditorMonoSlider {
-                objectName: "editorMasksBrushSizeSlider"
-                Layout.fillWidth: true
-                visible: root.brushSelected
-                enabled: root.brushSelected
-                accessibleName: qsTr("Brush size")
-                from: 0.5; to: 50; stepSize: 0.1; pointerGain: 1
-                rowHeight: 28; handleSize: 18
-                flickable: maskScroll
-                externalValue: root.maskCreation ? root.maskCreation.brushDiameterPercent : 0
-                onUpdate: function (v) { root.maskCreation.setBrushDiameterPercent(v) }
-            }
-            ParameterValue {
-                objectName: "editorMasksBrushSizeValue"
-                visible: root.brushSelected
-                text: qsTr("%1 px").arg(Math.round(root.maskCreation
-                                                   ? root.maskCreation.brushDiameter : 0))
-            }
-
-            ParameterLabel { visible: root.brushSelected; text: qsTr("Brush strength") }
-            EditorMonoSlider {
-                objectName: "editorMasksBrushStrengthSlider"
-                Layout.fillWidth: true
-                visible: root.brushSelected
-                enabled: root.brushSelected
-                accessibleName: qsTr("Brush strength")
-                from: 0; to: 100; stepSize: 1; pointerGain: 1
-                rowHeight: 28; handleSize: 18
-                flickable: maskScroll
-                externalValue: root.maskCreation ? root.maskCreation.brushStrengthPercent : 100
-                onUpdate: function (v) { root.maskCreation.setBrushStrengthPercent(v) }
-            }
-            ParameterValue {
-                objectName: "editorMasksBrushStrengthValue"
-                visible: root.brushSelected
-                text: qsTr("%1 percent").arg(Math.round(root.maskCreation
-                                                        ? root.maskCreation.brushStrengthPercent
-                                                        : 100))
-            }
-
-            ParameterLabel { visible: root.brushSelected && root.maskSelected
-                             ; text: qsTr("Brush feather") }
-            EditorMonoSlider {
-                objectName: "editorMasksBrushFeatherSlider"
-                Layout.fillWidth: true
-                visible: root.brushSelected && root.maskSelected
-                enabled: root.brushSelected && root.maskSelected
-                accessibleName: qsTr("Brush feather")
-                from: 0; to: 20; stepSize: 0.1; pointerGain: 1
-                rowHeight: 28; handleSize: 18
-                flickable: maskScroll
-                externalValue: root.maskCreation ? root.maskCreation.brushFeatherPercent : 0
-                onBegin: function () { root.maskCreation.beginBrushFeather() }
-                onUpdate: function (v) { root.maskCreation.updateBrushFeatherPercent(v) }
-                onFinish: function () { root.maskCreation.finishAnalyticControl() }
-                onReset: function () {
-                    root.maskCreation.beginBrushFeather()
-                    root.maskCreation.updateBrushFeatherPercent(0)
-                    root.maskCreation.finishAnalyticControl()
-                }
-            }
-            ParameterValue {
-                objectName: "editorMasksBrushFeatherValue"
-                visible: root.brushSelected && root.maskSelected
-                text: qsTr("%1 percent").arg(Number(root.maskCreation
-                                                    ? root.maskCreation.brushFeatherPercent : 0)
-                                             .toFixed(1))
             }
 
             ParameterLabel { visible: root.radialSelected; text: qsTr("Horizontal radius") }

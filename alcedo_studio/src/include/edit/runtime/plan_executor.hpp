@@ -12,7 +12,6 @@
 
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/prepared_raw_input.hpp"
-#include "edit/mask/active_raster_mask.hpp"
 #include "edit/runtime/develop_demosaic.hpp"
 #include "edit/runtime/develop_transient.hpp"
 #include "edit/runtime/execution_plan.hpp"
@@ -26,8 +25,6 @@
 #include "gpu/transient_allocation_policy.hpp"
 
 namespace alcedo {
-
-class MaskStore;
 
 /**
  * @brief Shared validity skip, encode, cancel, and publish flow for one plan.
@@ -54,10 +51,9 @@ class PlanExecutor {
    */
   template <class Device>
   static auto Execute(Device& device, const ExecutionPlan& plan, const PreparedRawInput& input,
-                      PipelineDocument& document, MaskStore* mask_store, bool publish_on_success,
+                      PipelineDocument& document, bool publish_on_success,
                       TransientAllocationPolicy transient_policy =
                           TransientAllocationPolicy::SessionPacked,
-                      std::span<const ActiveRasterMaskInput> active_raster_masks = {},
                       ResultPersistenceScope persistence = ResultPersistenceScope::AllCurrentResults)
       -> GraphValueId {
     try {
@@ -74,7 +70,7 @@ class PlanExecutor {
       workspace.SetResultPersistence(persistence, plan.sensor_linear_output);
       workspace.AlignParameterLayout(plan.static_key.topology_hash);
       auto&      invalidation  = workspace.ResultInvalidation();
-      workspace.PrepareResultValidity(plan, document, input, active_raster_masks);
+      workspace.PrepareResultValidity(plan, document, input);
       const ImageExtent sensor_extent{plan.source.develop_output_extent.width,
                                       plan.source.develop_output_extent.height};
       const ImageExtent geometry_extent{plan.geometry.render_extent.width,
@@ -103,11 +99,9 @@ class PlanExecutor {
         workspace.ReleaseStalePublishedImagesAndIdleTextures();
         try {
           if (plan.Contains(GpuPassKind::UploadRgb)) {
-            PassEncoder<Backend, GpuPassKind::UploadRgb>::Encode(device, plan, input, document,
-                                                                 mask_store);
+            PassEncoder<Backend, GpuPassKind::UploadRgb>::Encode(device, plan, input, document);
           } else {
-            PassEncoder<Backend, GpuPassKind::UploadRaw>::Encode(device, plan, input, document,
-                                                                 mask_store);
+            PassEncoder<Backend, GpuPassKind::UploadRaw>::Encode(device, plan, input, document);
           }
         } catch (const std::exception& ex) {
           const std::string_view what = ex.what();
@@ -136,8 +130,8 @@ class PlanExecutor {
                      stats)) {
         ++stats.geometry_skip;
       } else {
-        PassEncoder<Backend, GpuPassKind::GeometryResample>::Encode(device, plan, input, document,
-                                                                    mask_store);
+        PassEncoder<Backend, GpuPassKind::GeometryResample>::Encode(device, plan, input,
+                                                                    document);
         Record(device, invalidation, plan.geometry_output, geometry_extent);
         ++stats.geometry_execute;
       }
@@ -150,8 +144,7 @@ class PlanExecutor {
                      stats)) {
         ++stats.camera_color_skip;
       } else {
-        PassEncoder<Backend, GpuPassKind::CameraToAp1>::Encode(device, plan, input, document,
-                                                               mask_store);
+        PassEncoder<Backend, GpuPassKind::CameraToAp1>::Encode(device, plan, input, document);
         Record(device, invalidation, plan.develop_output, geometry_extent);
         ++stats.camera_color_execute;
       }
@@ -177,9 +170,9 @@ class PlanExecutor {
                            completed, stats, TextureFormat::R8)) {
               ++stats.mask_skip;
             } else {
-              PassEncoder<Backend, GpuPassKind::MaskEvaluate>::Encode(
-                  device, plan, input, document, mask_store, compiled_grade, source,
-                  active_raster_masks);
+              PassEncoder<Backend, GpuPassKind::MaskEvaluate>::Encode(device, plan, input,
+                                                                      document, compiled_grade,
+                                                                      source);
               Record(device, invalidation, source.effective_output, geometry_extent,
                      TextureFormat::R8);
               ++stats.mask_execute;
@@ -190,7 +183,7 @@ class PlanExecutor {
             ++stats.mask_union_skip;
           } else {
             PassEncoder<Backend, GpuPassKind::MaskUnion>::Encode(device, plan, input, document,
-                                                                 mask_store, compiled_grade);
+                                                                 compiled_grade);
             Record(device, invalidation, compiled_grade.mask_output, geometry_extent,
                    TextureFormat::R8);
             ++stats.mask_union_execute;
@@ -203,7 +196,7 @@ class PlanExecutor {
           ++stats.primary_grade_skip;
         } else {
           PassEncoder<Backend, GpuPassKind::PrimaryColorGrade>::Encode(
-              device, plan, input, document, mask_store, compiled_grade);
+              device, plan, input, document, compiled_grade);
           Record(device, invalidation, grade_scene, geometry_extent);
           ++stats.primary_grade_execute;
         }
@@ -229,7 +222,7 @@ class PlanExecutor {
                      stats)) {
         ++stats.drt_skip;
       } else {
-        PassEncoder<Backend, GpuPassKind::Drt>::Encode(device, plan, input, document, mask_store);
+        PassEncoder<Backend, GpuPassKind::Drt>::Encode(device, plan, input, document);
         Record(device, invalidation, plan.display_output, geometry_extent);
         ++stats.drt_execute;
       }

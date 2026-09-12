@@ -94,7 +94,7 @@ struct GpuPassDesc {
  * @param outputs Produced values.
  * @param adjustment Adjustment instance when the pass is one adjustment; empty otherwise.
  * @param parameters Stable parameter slot ids read by this pass; no GPU addresses.
- * @param mask_id Owning Mask for MaskEvaluate/MaskFeather. Empty for other kinds and Union.
+ * @param mask_id Owning Mask for MaskEvaluate. Empty for other kinds and Union.
  */
 [[nodiscard]] inline auto MakeGpuPass(GpuPassKind kind, NodeId owner, std::uint32_t ordinal,
                                       std::vector<CompiledPassInput>            inputs,

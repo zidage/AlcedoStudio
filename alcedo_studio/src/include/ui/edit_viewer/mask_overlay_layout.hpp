@@ -72,6 +72,7 @@ namespace alcedo {
                                                         const RadialMaskSource& source, float rho,
                                                         const QRectF& clip) -> std::vector<QPointF>;
 
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
 /**
  * @brief Existing Brush: Move handle at @p placement_translation. No stroke path.
  */
@@ -100,6 +101,7 @@ namespace alcedo {
  * included; callers expand as needed.
  */
 [[nodiscard]] auto BrushPaintSupportReferenceBounds(const BrushMaskSource& source) -> QRectF;
+#endif
 
 /**
  * @brief Existing Radial: center, axes, rotation, feather handles, and iso-rho lines.
@@ -123,6 +125,7 @@ namespace alcedo {
                                                     const MaskOverlayStyle&         style,
                                                     const QRectF& clip) -> MaskOverlayDisplay;
 
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
 /**
  * @brief Initial Brush drawing: cursor plus a temporary path through @p item_path.
  *
@@ -135,6 +138,7 @@ namespace alcedo {
                                                    const QRectF& clip,
                                                    bool          erase_cursor = false)
     -> MaskOverlayDisplay;
+#endif
 
 /**
  * @brief Initial Radial drawing: selected contours and handles while the drag is open.

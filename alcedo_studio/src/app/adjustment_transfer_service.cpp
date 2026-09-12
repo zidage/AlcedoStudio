@@ -47,9 +47,9 @@ auto UniqueVersionDisplayNameForGraph(const CommitGraph& graph, std::string requ
 
 }  // namespace
 
-auto AdjustmentTransferService::Capture(const PipelineDocument& document, MaskStore* mask_store)
+auto AdjustmentTransferService::Capture(const PipelineDocument& document)
     -> AdjustmentTransferPackage {
-  return CaptureDocumentTransfer(document, mask_store);
+  return CaptureDocumentTransfer(document);
 }
 
 auto AdjustmentTransferService::ImportPackage(const nlohmann::json& package_json)

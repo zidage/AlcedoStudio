@@ -13,9 +13,6 @@
 #include <variant>
 #include <vector>
 
-#include "edit/mask/brush_raster_encoding.hpp"
-#include "edit/mask/brush_source_geometry.hpp"
-
 namespace alcedo {
 namespace {
 
@@ -25,21 +22,58 @@ constexpr float kAnalyticEpsilon = 1.0e-6f;
   throw std::runtime_error(std::string{message});
 }
 
+[[nodiscard]] auto RectEmpty(RectI rect) -> bool {
+  return rect.width <= 0 || rect.height <= 0;
+}
+
+[[nodiscard]] auto PackedIndex(std::uint32_t x, std::uint32_t y, Extent2D extent) -> std::size_t {
+  if (extent.Empty() || x >= extent.width || y >= extent.height) {
+    FailCoverage("R8 index is outside the raster");
+  }
+  return static_cast<std::size_t>(y) * extent.width + x;
+}
+
+[[nodiscard]] auto FullRect(Extent2D extent) -> RectI {
+  if (extent.Empty()) {
+    return {};
+  }
+  return RectI{0, 0, static_cast<std::int32_t>(extent.width),
+               static_cast<std::int32_t>(extent.height)};
+}
+
+[[nodiscard]] auto ClipRect(RectI rect, Extent2D extent) -> RectI {
+  const std::int32_t x0 = std::max<std::int32_t>(rect.x, 0);
+  const std::int32_t y0 = std::max<std::int32_t>(rect.y, 0);
+  const std::int32_t x1 = std::min<std::int32_t>(rect.X1(), static_cast<std::int32_t>(extent.width));
+  const std::int32_t y1 = std::min<std::int32_t>(rect.Y1(), static_cast<std::int32_t>(extent.height));
+  return RectI{x0, y0, std::max<std::int32_t>(0, x1 - x0), std::max<std::int32_t>(0, y1 - y0)};
+}
+
+/// Reference-pixel center of raster texel `@p x, @p y`: `(x + 0.5) * full / raster`.
+[[nodiscard]] auto TexelReferenceCenter(std::uint32_t x, std::uint32_t y, Extent2D raster,
+                                        Extent2D full_reference) -> Vector2 {
+  return Vector2{(static_cast<float>(x) + 0.5f) * static_cast<float>(full_reference.width) /
+                     static_cast<float>(raster.width),
+                 (static_cast<float>(y) + 0.5f) * static_cast<float>(full_reference.height) /
+                     static_cast<float>(raster.height)};
+}
+
+/// Quantize coverage in `[0, 1]` to packed R8 with round-half-up.
+[[nodiscard]] auto QuantizeToR8(float coverage) -> std::uint8_t {
+  return static_cast<std::uint8_t>(
+      std::clamp(coverage * 255.0f + 0.5f, 0.0f, 255.0f));
+}
+
 auto AnyEnabled(std::span<const MaskModel> masks) -> bool {
   return std::any_of(masks.begin(), masks.end(),
                      [](const MaskModel& mask) { return mask.enabled; });
-}
-
-auto NeedsFullFeather(const MaskModel& mask) -> bool {
-  const auto* brush = std::get_if<BrushMaskSource>(&mask.source);
-  return brush != nullptr && mask.enabled && brush->feather_radius > 0.0f;
 }
 
 auto ApplyInvertOpacity(float coverage, bool invert, float opacity) -> std::uint8_t {
   if (invert) {
     coverage = 1.0f - coverage;
   }
-  return QuantizeMaskCoverageToR8(std::clamp(coverage * opacity, 0.0f, 1.0f));
+  return QuantizeToR8(std::clamp(coverage * opacity, 0.0f, 1.0f));
 }
 
 void UnionMaxInto(std::span<std::uint8_t> mix, std::span<const std::uint8_t> scratch, RectI region,
@@ -47,7 +81,7 @@ void UnionMaxInto(std::span<std::uint8_t> mix, std::span<const std::uint8_t> scr
   for (std::int32_t y = region.y; y < region.Y1(); ++y) {
     for (std::int32_t x = region.x; x < region.X1(); ++x) {
       const auto index =
-          PackedR8Index(static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y), raster);
+          PackedIndex(static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y), raster);
       mix[index] = mix[index] > scratch[index] ? mix[index] : scratch[index];
     }
   }
@@ -62,7 +96,7 @@ auto CopyRegion(std::span<const std::uint8_t> pixels, RectI region, Extent2D ras
     for (std::int32_t x = region.x; x < region.X1(); ++x) {
       const auto px = static_cast<std::uint32_t>(x);
       const auto py = static_cast<std::uint32_t>(y);
-      bytes[i++]    = pixels[PackedR8Index(px, py, raster)];
+      bytes[i++]    = pixels[PackedIndex(px, py, raster)];
     }
   }
   return bytes;
@@ -73,7 +107,7 @@ void RestoreRegion(std::span<std::uint8_t> pixels, RectI region, Extent2D raster
   std::size_t i = 0;
   for (std::int32_t y = region.y; y < region.Y1(); ++y) {
     for (std::int32_t x = region.x; x < region.X1(); ++x) {
-      pixels[PackedR8Index(static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y), raster)] =
+      pixels[PackedIndex(static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y), raster)] =
           bytes[i++];
     }
   }
@@ -91,38 +125,19 @@ void GradeMaskCoverage::FillMix(std::uint8_t value) {
   std::fill(mix_.begin(), mix_.end(), value);
 }
 
-void GradeMaskCoverage::SetGeometry(Extent2D raster, Extent2D full_reference,
-                                    std::uint32_t tile_texels) {
-  if (tile_texels == 0) {
-    FailCoverage("spatial index tile size must be positive");
+void GradeMaskCoverage::SetGeometry(Extent2D raster, Extent2D full_reference) {
+  if (raster.Empty() || full_reference.Empty()) {
+    FailCoverage("grade mask coverage requires a nonempty raster and full reference");
   }
-  rasterizer_.SetGeometry(raster, full_reference);
-  raster_          = raster;
-  full_reference_  = full_reference;
-  tile_texels_     = tile_texels;
+  raster_         = raster;
+  full_reference_ = full_reference;
   mix_.assign(static_cast<std::size_t>(raster.width) * raster.height, 0);
   scratch_.assign(mix_.size(), 0);
-  brush_indices_.clear();
-}
-
-void GradeMaskCoverage::BindBrushSource(const MaskId& mask_id, const BrushMaskSource& source) {
-  RequireGeometry();
-  BrushSpatialIndex index(tile_texels_);
-  index.Rebuild(source, raster_, full_reference_);
-  brush_indices_.insert_or_assign(mask_id, std::move(index));
-}
-
-void GradeMaskCoverage::UnbindMask(const MaskId& mask_id) { brush_indices_.erase(mask_id); }
-
-auto GradeMaskCoverage::BrushIndex(const MaskId& mask_id) const -> const BrushSpatialIndex* {
-  const auto found = brush_indices_.find(mask_id);
-  return found == brush_indices_.end() ? nullptr : &found->second;
 }
 
 auto GradeMaskCoverage::AnalyticCoverage(const MaskModel& mask, std::uint32_t x,
                                          std::uint32_t y) const -> float {
-  const auto center =
-      CanonicalBrushTexelReferenceCenter(x, y, raster_, full_reference_);
+  const auto center = TexelReferenceCenter(x, y, raster_, full_reference_);
   const float nx = center.x / static_cast<float>(full_reference_.width);
   const float ny = center.y / static_cast<float>(full_reference_.height);
   if (const auto* radial = std::get_if<RadialMaskSource>(&mask.source)) {
@@ -153,44 +168,10 @@ void GradeMaskCoverage::WriteEffectiveAnalytic(const MaskModel& mask, RectI regi
   for (std::int32_t y = region.y; y < region.Y1(); ++y) {
     for (std::int32_t x = region.x; x < region.X1(); ++x) {
       const auto index =
-          PackedR8Index(static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y), raster_);
+          PackedIndex(static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y), raster_);
       dest[index] = ApplyInvertOpacity(
           AnalyticCoverage(mask, static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y)),
           mask.invert, mask.opacity);
-    }
-  }
-}
-
-void GradeMaskCoverage::WriteEffectiveBrush(const MaskModel& mask, const BrushMaskSource& brush,
-                                            RectI region, std::span<std::uint8_t> dest) {
-  const auto* index = BrushIndex(mask.id);
-  if (index == nullptr) {
-    FailCoverage("brush spatial index is not bound for the Mask");
-  }
-  const bool feathered = brush.feather_radius > 0.0f;
-  if (feathered) {
-    rasterizer_.ClearToZero();
-    rasterizer_.ReplayRegion(brush, *index, FullTexelRect(raster_));
-    const auto radius_texels = BrushFeatherRadiusToSourceTexels(
-        brush.feather_radius, raster_, CanonicalBrushReferenceBounds(), full_reference_);
-    const auto feathered_pixels =
-        feather_.Apply(rasterizer_.Pixels(), raster_, radius_texels, mask.invert, mask.opacity);
-    for (std::int32_t y = region.y; y < region.Y1(); ++y) {
-      for (std::int32_t x = region.x; x < region.X1(); ++x) {
-        const auto i =
-            PackedR8Index(static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y), raster_);
-        dest[i] = feathered_pixels[i];
-      }
-    }
-    return;
-  }
-  rasterizer_.ReplayRegion(brush, *index, region);
-  const auto source = rasterizer_.Pixels();
-  for (std::int32_t y = region.y; y < region.Y1(); ++y) {
-    for (std::int32_t x = region.x; x < region.X1(); ++x) {
-      const auto i =
-          PackedR8Index(static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y), raster_);
-      dest[i] = ApplyInvertOpacity(CoverageFromMaskR8(source[i]), mask.invert, mask.opacity);
     }
   }
 }
@@ -200,7 +181,7 @@ void GradeMaskCoverage::ReplayClippedRegion(std::span<const MaskModel> masks, Re
   try {
     for (std::int32_t y = dirty.y; y < dirty.Y1(); ++y) {
       for (std::int32_t x = dirty.x; x < dirty.X1(); ++x) {
-        mix_[PackedR8Index(static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y), raster_)] =
+        mix_[PackedIndex(static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y), raster_)] =
             0;
       }
     }
@@ -209,11 +190,7 @@ void GradeMaskCoverage::ReplayClippedRegion(std::span<const MaskModel> masks, Re
         continue;
       }
       std::fill(scratch_.begin(), scratch_.end(), 0);
-      if (const auto* brush = std::get_if<BrushMaskSource>(&mask.source)) {
-        WriteEffectiveBrush(mask, *brush, dirty, scratch_);
-      } else {
-        WriteEffectiveAnalytic(mask, dirty, scratch_);
-      }
+      WriteEffectiveAnalytic(mask, dirty, scratch_);
       UnionMaxInto(mix_, scratch_, dirty, raster_);
     }
   } catch (...) {
@@ -224,7 +201,7 @@ void GradeMaskCoverage::ReplayClippedRegion(std::span<const MaskModel> masks, Re
 
 void GradeMaskCoverage::EvaluateFull(std::span<const MaskModel> masks) {
   RequireGeometry();
-  ReplayRegion(masks, FullTexelRect(raster_));
+  ReplayRegion(masks, FullRect(raster_));
 }
 
 void GradeMaskCoverage::ReplayRegion(std::span<const MaskModel> masks, RectI dirty) {
@@ -237,14 +214,8 @@ void GradeMaskCoverage::ReplayRegion(std::span<const MaskModel> masks, RectI dir
     FillMix(0);
     return;
   }
-  auto region = ClipTexelRect(dirty, raster_);
-  for (const auto& mask : masks) {
-    if (NeedsFullFeather(mask)) {
-      region = FullTexelRect(raster_);
-      break;
-    }
-  }
-  if (RectIEmpty(region)) {
+  const auto region = ClipRect(dirty, raster_);
+  if (RectEmpty(region)) {
     return;
   }
   ReplayClippedRegion(masks, region);

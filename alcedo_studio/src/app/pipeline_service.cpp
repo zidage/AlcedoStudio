@@ -22,7 +22,6 @@
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/edit_commit.hpp"
 #include "edit/history/pipeline_document_checkpoint.hpp"
-#include "edit/mask/mask_store.hpp"
 #include "edit/pipeline/default_pipeline_params.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
 #include "image/metadata_extractor.hpp"
@@ -332,15 +331,10 @@ void ImportSerializedPipelineState(CPUPipelineExecutor& exec, const nlohmann::js
 
 auto ReplayLiveDocumentFromRoot(PipelineGuard& guard, const CommitGraph& graph,
                                 const LoadedRootState& root_state, head_commit_hash_t head,
-                                MaskStore* mask_store, std::string* error) -> bool {
+                                std::string* error) -> bool {
   const auto commits = FirstParentCommits(graph, head);
-  PipelineHistoryApplyContext context;
-  context.mask_store = mask_store;
-  auto replayed = ReplayPipelineDocumentFromRoot(root_state.document, commits, error, context);
+  auto replayed = ReplayPipelineDocumentFromRoot(root_state.document, commits, error);
   if (!replayed.has_value()) {
-    return false;
-  }
-  if (!VerifyPersistentMaskAssets(*replayed, mask_store, error)) {
     return false;
   }
   BindLiveDocument(guard, std::move(*replayed), root_state.raw_color_context);
@@ -816,7 +810,7 @@ auto PipelineMgmtService::LoadEditorPipeline(sl_element_id_t id) -> std::shared_
       std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
       std::string                  replay_error;
       if (!ReplayLiveDocumentFromRoot(*pipeline, *graph, *root_state,
-                                      graph->GetActiveVersionRef().head_commit_hash, nullptr,
+                                      graph->GetActiveVersionRef().head_commit_hash,
                                       &replay_error)) {
         throw std::runtime_error(replay_error);
       }
@@ -1000,8 +994,8 @@ auto PipelineMgmtService::PersistEditorHistoryState(
 }
 
 auto PipelineMgmtService::CheckoutVersion(const std::shared_ptr<PipelineGuard>& pipeline,
-                                          const version_ref_id_t& version_id, std::string* error,
-                                          MaskStore* mask_store) -> bool {
+                                          const version_ref_id_t& version_id, std::string* error)
+    -> bool {
   if (!pipeline || !pipeline->pipeline_ || !pipeline->commit_graph_ || !pipeline->document_) {
     if (error != nullptr) {
       *error =
@@ -1050,20 +1044,12 @@ auto PipelineMgmtService::CheckoutVersion(const std::shared_ptr<PipelineGuard>& 
   }
   CacheRootDocument(*pipeline, root_state->document);
 
-  PipelineHistoryApplyContext context;
-  context.mask_store = mask_store;
   std::string replay_error;
   auto        replayed = ReplayPipelineDocumentFromRoot(
-      root_state->document, FirstParentCommits(graph, target_head), &replay_error, context);
+      root_state->document, FirstParentCommits(graph, target_head), &replay_error);
   if (!replayed.has_value()) {
     if (error != nullptr) {
       *error = replay_error.empty() ? "PipelineMgmtService: checkout replay failed" : replay_error;
-    }
-    return false;
-  }
-  if (!VerifyPersistentMaskAssets(*replayed, mask_store, &replay_error)) {
-    if (error != nullptr) {
-      *error = replay_error;
     }
     return false;
   }
@@ -1142,8 +1128,7 @@ auto PipelineMgmtService::CheckoutVersion(const std::shared_ptr<PipelineGuard>& 
 }
 
 auto PipelineMgmtService::RebuildActiveEditorPipeline(
-    const std::shared_ptr<PipelineGuard>& pipeline, std::string* error, MaskStore* mask_store)
-    -> bool {
+    const std::shared_ptr<PipelineGuard>& pipeline, std::string* error) -> bool {
   if (!pipeline || !pipeline->pipeline_ || !pipeline->commit_graph_) {
     if (error != nullptr) {
       *error =
@@ -1199,7 +1184,7 @@ auto PipelineMgmtService::RebuildActiveEditorPipeline(
     std::string                  replay_error;
     ++editor_pipeline_history_rebuild_count_;
     if (!ReplayLiveDocumentFromRoot(*pipeline, graph, *root_state,
-                                    graph.GetActiveVersionRef().head_commit_hash, mask_store,
+                                    graph.GetActiveVersionRef().head_commit_hash,
                                     &replay_error)) {
       throw std::runtime_error(replay_error);
     }

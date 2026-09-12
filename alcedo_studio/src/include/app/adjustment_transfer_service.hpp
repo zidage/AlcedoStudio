@@ -28,10 +28,8 @@ class AdjustmentTransferService final {
    * @brief Capture transferable DAG data from @p document.
    *
    * @param document Source pipeline DAG.
-   * @param mask_store Required when the document references persistent Brush keys.
    */
-  [[nodiscard]] static auto Capture(const PipelineDocument& document,
-                                    MaskStore*              mask_store = nullptr)
+  [[nodiscard]] static auto Capture(const PipelineDocument& document)
       -> AdjustmentTransferPackage;
 
   /**
@@ -59,7 +57,7 @@ class AdjustmentTransferService final {
    * @param root_document Target immutable root. Develop and geometry stay here.
    * @param package Validated transfer document.
    * @param version_display_name Requested Version label; uniquified if needed.
-   * @param options Identity source and Mask stores.
+   * @param options Identity source.
    */
   [[nodiscard]] static auto PasteAsRootRelativeVersion(
       CommitGraph& graph, const PipelineDocument& root_document,

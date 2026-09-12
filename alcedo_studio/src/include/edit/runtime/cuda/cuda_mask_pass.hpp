@@ -5,49 +5,34 @@
 #pragma once
 
 #include <cstdint>
-#include <span>
 
 #include "edit/graph/pipeline_document.hpp"
-#include "edit/mask/active_raster_mask.hpp"
-#include "edit/mask/mask_store.hpp"
 #include "edit/runtime/cuda/cuda_render_device.hpp"
 #include "edit/runtime/execution_plan.hpp"
 
 namespace alcedo {
 
 struct CudaMaskResult {
-  GraphValueId  output;
-  std::uint64_t persistent_texture_resource_id = 0;
-  std::uint64_t active_texture_resource_id     = 0;
-  std::uint64_t signed_distance_resource_id    = 0;
-  std::uint32_t mip_level_count                = 0;
+  GraphValueId output;
 };
 
 /**
  * @brief Evaluate @p compiled_source into its effective GraphValueId (RenderSpace R8).
  *
- * Persistent Brush textures are keyed by MaskAssetKey and are never patched. Parameterized
- * Brushes stamp canonical coverage on the GPU active-raster texture from stroke commands.
- * There is no host R8 replay on this CUDA authoring path. Injected active Brush pixels still
- * upload through the active-raster cache. Changing only feather radius reuses signed distance
- * when the raster bytes are unchanged. Feather (when present), invert, and opacity run in that
- * order. Soft-edge authoring does not fill unused R8 mips. No CPU image processing fallback is
- * used.
+ * Analytic sources evaluate in the native kernel. Invert and opacity apply in
+ * that order. No CPU image processing fallback is used.
  */
 [[nodiscard]] auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
                                    const PipelineDocument& document,
                                    const CompiledGradeNode& compiled_grade,
-                                   const CompiledMaskSource& compiled_source,
-                                   MaskStore* store = nullptr,
-                                   std::span<const ActiveRasterMaskInput> active_raster_masks = {})
-    -> CudaMaskResult;
+                                   const CompiledMaskSource& compiled_source) -> CudaMaskResult;
 
 /**
  * @brief Maximum-Union enabled Mask sources into the Grade Union output.
  *
  * Zero enabled sources fill zeros. One enabled source aliases the source texture.
- * Two or more fold a native R8 maximum over the full render extent so an erasing Brush
- * dirty update can decrease coverage. Failures throw; there is no CPU substitute.
+ * Two or more fold a native R8 maximum over the full render extent so a lowered
+ * source can decrease coverage. Failures throw; there is no CPU substitute.
  */
 [[nodiscard]] auto ExecuteCudaMaskUnion(CudaRenderDevice& device, const ExecutionPlan& plan,
                                         const PipelineDocument& document,
@@ -58,10 +43,7 @@ struct CudaMaskResult {
  */
 [[nodiscard]] auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
                                    const PipelineDocument& document,
-                                   const CompiledGradeNode& compiled_grade,
-                                   MaskStore* store = nullptr,
-                                   std::span<const ActiveRasterMaskInput> active_raster_masks = {})
-    -> CudaMaskResult;
+                                   const CompiledGradeNode& compiled_grade) -> CudaMaskResult;
 
 /**
  * @brief Evaluate every compiled Color Grade mask in backbone order.
@@ -69,8 +51,6 @@ struct CudaMaskResult {
  * @return The last mask result. @throws std::runtime_error when no compiled Grade has a mask.
  */
 [[nodiscard]] auto ExecuteCudaMask(CudaRenderDevice& device, const ExecutionPlan& plan,
-                                   const PipelineDocument& document, MaskStore* store = nullptr,
-                                   std::span<const ActiveRasterMaskInput> active_raster_masks = {})
-    -> CudaMaskResult;
+                                   const PipelineDocument& document) -> CudaMaskResult;
 
 }  // namespace alcedo

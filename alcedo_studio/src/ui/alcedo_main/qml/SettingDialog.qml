@@ -58,7 +58,6 @@ Dialog {
     onCurrentCategoryChanged: {
         if (currentCategory === 2) {
             cachePanel.refreshStats()
-            maskCachePanel.reloadPending()
         } else if (currentCategory === 3) {
             appModules.semanticGeneration.RefreshAlbumSummary()
         } else if (currentCategory === 4) {
@@ -75,7 +74,6 @@ Dialog {
         pendingSemanticImportPreference = appModules.semanticGeneration.importPreference
         pendingAcceleratorBackend = appModules.project.acceleratorBackend
         cachePanel.reloadPending()
-        maskCachePanel.reloadPending()
     }
 
     function acceleratorIndexForValue(value) {
@@ -150,7 +148,6 @@ Dialog {
             languageManager.setLanguage(pendingLanguageCode)
         }
         cachePanel.applyPending()
-        maskCachePanel.applyPending()
         if (appModules.semanticGeneration.importPreference !== pendingSemanticImportPreference) {
             appModules.semanticGeneration.SetImportPreference(pendingSemanticImportPreference)
         }
@@ -558,22 +555,6 @@ Dialog {
                                     dividerColor: dialog.dividerColor
                                     dangerColor: dialog.dangerColor
                                     dataFontFamily: dialog.dataFontFamily
-                                    onMessageRequested: function(message) {
-                                        dialog.messageRequested(message)
-                                    }
-                                }
-
-                                ProjectMaskCacheSettingsPanel {
-                                    id: maskCachePanel
-                                    width: parent.width
-                                    projectModule: appModules.project
-                                    projectReady: appModules.project.serviceReady
-                                    textColor: dialog.textColor
-                                    mutedTextColor: dialog.mutedTextColor
-                                    dividerColor: dialog.dividerColor
-                                    dangerColor: dialog.dangerColor
-                                    dataFontFamily: dialog.dataFontFamily
-                                    Layout.bottomMargin: 26
                                     onMessageRequested: function(message) {
                                         dialog.messageRequested(message)
                                     }

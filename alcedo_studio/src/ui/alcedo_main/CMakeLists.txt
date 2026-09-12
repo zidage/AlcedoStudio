@@ -38,7 +38,7 @@ def_library(EditorViewerLogic
         Qt6::Core
         Qt6::Gui
         opencv_core
-        EditMaskStore
+        EditMaskCore
         EditGeometry
 )
 
@@ -565,7 +565,6 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/UpdateNotice.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/UpdatesSettingsPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/CacheSettingsPanel.qml"
-    "${ALCEDO_UI_SHELL_ROOT}/qml/ProjectMaskCacheSettingsPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/NikonHeRecoveryDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/SemanticGenerationDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AdvancedContentAnalysisDialog.qml"

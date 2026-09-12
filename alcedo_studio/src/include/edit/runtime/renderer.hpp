@@ -6,7 +6,6 @@
 
 #include <cstdint>
 #include <cstdio>
-#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -21,7 +20,6 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/prepared_source_cache.hpp"
 #include "edit/input/raw_input_loader.hpp"
-#include "edit/mask/mask_store.hpp"
 #include "edit/pipeline/pipeline_apply_request.hpp"
 #include "edit/runtime/gpu_node_pass_stats.hpp"
 #include "edit/runtime/render_device_type.hpp"
@@ -107,10 +105,7 @@ class Renderer {
       -> std::shared_ptr<ImageBuffer>;
 
   /**
-   * @brief Render one frame from a task-owned request, including active Brush pixels.
-   *
-   * Active raster inputs are not stored on this renderer. Bypass renders reject them
-   * unless @ref PipelineApplyRequest::allow_active_raster_preview is true.
+   * @brief Render one frame from a task-owned request.
    */
   [[nodiscard]] auto Render(const std::shared_ptr<ImageBuffer>& input,
                             const PipelineApplyRequest& request) -> std::shared_ptr<ImageBuffer>;
@@ -172,7 +167,6 @@ class Renderer {
   [[nodiscard]] auto SourceCache() const -> const PreparedSourceCache& { return source_cache_; }
   [[nodiscard]] auto PlanCache() -> StaticExecutionPlanCache& { return plan_cache_; }
   [[nodiscard]] auto PlanCache() const -> const StaticExecutionPlanCache& { return plan_cache_; }
-  [[nodiscard]] auto MaskAssets() -> MaskStore&;
 
  private:
   void EnsureSessionDevice();
@@ -182,7 +176,6 @@ class Renderer {
   std::shared_ptr<PipelineDocument> document_;
   std::unique_ptr<RenderDevice>     device_;
   std::unique_ptr<RenderDevice>     one_shot_device_;
-  std::unique_ptr<MaskStore>        mask_store_;
   PreparedSourceCache::UnpackFn     unpack_;
   PreparedSourceCache               source_cache_;
   StaticExecutionPlanCache          plan_cache_{Backend::kCapabilityVersion};
@@ -198,8 +191,6 @@ Renderer<Backend>::Renderer(std::shared_ptr<PipelineDocument> document,
     : document_(std::move(document)),
       device_(),
       one_shot_device_(),
-      mask_store_(std::make_unique<MaskStore>(std::filesystem::temp_directory_path() /
-                                              "alcedo_studio" / "product_mask_store")),
       unpack_(unpack ? std::move(unpack)
                      : PreparedSourceCache::UnpackFn{[](std::span<const std::byte> encoded,
                                                         DecodeRes                  decode_res) {
@@ -235,11 +226,6 @@ void Renderer<Backend>::EnsureOneShotDevice() {
   }
   one_shot_device_ = std::make_unique<RenderDevice>();
   ConfigureDevice(*one_shot_device_, "one-shot");
-}
-
-template <class Backend>
-auto Renderer<Backend>::MaskAssets() -> MaskStore& {
-  return *mask_store_;
 }
 
 template <class Backend>

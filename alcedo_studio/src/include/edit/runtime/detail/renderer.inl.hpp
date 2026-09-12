@@ -11,7 +11,6 @@
 #include <stdexcept>
 #include <utility>
 
-#include "edit/graph/active_raster_mask_validation.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/pipeline/pipeline_apply_request.hpp"
 #include "edit/runtime/drt_display.hpp"
@@ -87,12 +86,7 @@ auto Renderer<Backend>::Render(const std::shared_ptr<ImageBuffer>& input,
   if (!input || !input->buffer_valid_) {
     throw std::runtime_error("Renderer: product path requires encoded image bytes");
   }
-  ValidateActiveRasterMaskBindings(*document_, request.active_raster_masks);
   const bool use_session_cache = request.cache_policy == RenderCachePolicy::UseSessionCache;
-  if (!use_session_cache && !request.active_raster_masks.empty() &&
-      !request.allow_active_raster_preview) {
-    throw std::runtime_error("Renderer: bypass renders cannot use active raster inputs");
-  }
 
   auto&      encoded       = input->GetBuffer();
   const auto encoded_bytes = std::span<const std::byte>{
@@ -124,10 +118,10 @@ auto Renderer<Backend>::Render(const std::shared_ptr<ImageBuffer>& input,
       use_session_cache ? ResultPersistenceScopeForRole(request.submission.metadata.frame_role)
                         : ResultPersistenceScope::AllCurrentResults;
   const auto output_id = render_device->Execute(
-      plan, prepared, *document_, mask_store_.get(), false,
+      plan, prepared, *document_, false,
       use_session_cache ? TransientAllocationPolicy::SessionPacked
                         : TransientAllocationPolicy::ExactRelease,
-      request.active_raster_masks, persistence);
+      persistence);
   const auto release_one_shot_resources = [&]() {
     if (use_session_cache) {
       return;

@@ -26,7 +26,6 @@
 namespace alcedo {
 class MiniGitJournal;
 class MiniGitWorkingHistory;
-class MaskStore;
 struct PipelineGuard;
 class PipelineMgmtService;
 }  // namespace alcedo
@@ -62,8 +61,6 @@ struct HistoryWorkingState {
   /// Node last requested for panel projection. Empty means current-panel owners.
   alcedo::NodeId panel_projection_node_id;
   bool recovered_head = false;
-  /// Required for ReplaceMaskAsset undo/redo. Not owned.
-  alcedo::MaskStore* mask_store = nullptr;
 };
 
 /// Owns per-image WorkingState acquisition, release, and service-path
@@ -112,9 +109,9 @@ class EditorHistoryState {
 
   /// Rebuild @p state's live document from the cached immutable root and @p head.
   ///
-  /// Replays onto a clone, verifies Mask assets, then binds the same live guard
-  /// under the render lock. Does not move the Version ref. On failure the live
-  /// document is left unchanged.
+  /// Replays onto a clone, then binds the same live guard under the render lock.
+  /// Does not move the Version ref. On failure the live document is left
+  /// unchanged.
   auto ReplayWorkingDocumentFromImmutableRoot(HistoryWorkingState& state,
                                               const alcedo::head_commit_hash_t& head,
                                               std::string* error) -> bool;

@@ -11,12 +11,15 @@
 
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
 #include "edit/mask/brush_stroke.hpp"
 #include "edit/mask/mask_asset.hpp"
+#endif
 #include "edit/mask/mask_model.hpp"
 
 namespace alcedo::grade_mask_test {
 
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
 inline auto MakePaintStroke(std::string_view id, float local_x = 8.0f, float local_y = 12.0f,
                             float radius = 4.0f) -> BrushStroke {
   return MakeBrushStroke(StrokeId{std::string{id}}, BrushStrokeMode::Paint,
@@ -54,6 +57,7 @@ inline auto MakeBrushMask(MaskId id, const MaskAsset& asset, float feather = 0.0
                           bool invert = false) -> MaskModel {
   return MakeBrushMask(std::move(id), asset.key, asset.descriptor, feather, invert);
 }
+#endif
 
 inline auto MakeRadialMask(MaskId id, RadialMaskSource source = {}, bool invert = false)
     -> MaskModel {
@@ -80,6 +84,7 @@ inline auto AddMask(ColorGradeNodeModel& grade, MaskModel mask) -> MaskModel& {
   return *found;
 }
 
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
 inline auto AddParameterizedBrushMask(PipelineDocument& document, MaskId id,
                                       std::vector<BrushStroke> strokes = {},
                                       Vector2 translation = {}) -> MaskModel& {
@@ -97,6 +102,7 @@ inline auto AddBrushMask(PipelineDocument& document, MaskId id, MaskAssetKey key
   document.MarkTopologyDirty();
   return mask;
 }
+#endif
 
 inline auto AddRadialMask(PipelineDocument& document, MaskId id, RadialMaskSource source = {},
                           bool invert = false) -> MaskModel& {

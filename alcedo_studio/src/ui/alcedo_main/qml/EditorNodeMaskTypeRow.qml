@@ -23,9 +23,6 @@ Item {
         if (root.sourceKind === "radial") {
             return qsTr("Radial")
         }
-        if (root.sourceKind === "brush") {
-            return qsTr("Brush")
-        }
         return ""
     }
 
@@ -35,9 +32,6 @@ Item {
         }
         if (root.sourceKind === "radial") {
             return "qrc:/mask_icons/radial.svg"
-        }
-        if (root.sourceKind === "brush") {
-            return "qrc:/mask_icons/brush.svg"
         }
         return ""
     }

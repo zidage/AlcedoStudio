@@ -14,8 +14,6 @@
 
 namespace alcedo {
 
-class MaskStore;
-
 /**
  * @brief Backend encode entry for one compiled pass kind.
  *
@@ -32,8 +30,7 @@ struct PassEncoder {
    * @throws std::runtime_error when no backend specialization exists.
    */
   template <class Device>
-  static void Encode(Device&, const ExecutionPlan&, const PreparedRawInput&, PipelineDocument&,
-                     MaskStore*) {
+  static void Encode(Device&, const ExecutionPlan&, const PreparedRawInput&, PipelineDocument&) {
     throw std::runtime_error(std::string("PassEncoder: no specialization for ") +
                              GpuPassKindName(Kind));
   }

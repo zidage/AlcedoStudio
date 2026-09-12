@@ -271,7 +271,6 @@ add_executable(GpuDagModelGraphTest
   ${ALCEDO_TEST_ROOT}/edit/graph/dirty_patch_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/json_roundtrip_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/color_grade_mask_model_test.cpp
-  ${ALCEDO_TEST_ROOT}/edit/graph/active_raster_mask_request_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/legacy_import_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/header_hygiene_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/develop_color_transform_test.cpp)
@@ -298,99 +297,59 @@ gtest_discover_tests(GpuDagGeometryTest TEST_PREFIX "GpuDagGeometryTest."
   PROPERTIES LABELS "ci_core_flow;edit;geometry")
 alcedo_register_test_target(GpuDagGeometryTest edit)
 
-# GPU DAG Phase G6: persistent R8 repository and GPU-free host cache.
-add_executable(GpuDagMaskStoreTest
-  ${ALCEDO_TEST_ROOT}/edit/mask/mask_store_test.cpp)
-target_include_directories(GpuDagMaskStoreTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(GpuDagMaskStoreTest PRIVATE GTest::gtest_main EditMaskStore)
-gtest_discover_tests(GpuDagMaskStoreTest TEST_PREFIX "GpuDagMaskStoreTest."
-  PROPERTIES LABELS "ci_core_flow;edit;mask")
-alcedo_register_test_target(GpuDagMaskStoreTest edit)
+if(ALCEDO_ENABLE_BRUSH_MASK)
+  # Current Brush format identities, raster-only rejection, and later test names.
+  add_executable(BrushSourceFormatBoundaryTest
+    ${ALCEDO_TEST_ROOT}/edit/mask/brush_source_format_boundary_test.cpp)
+  target_include_directories(BrushSourceFormatBoundaryTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
+  target_link_libraries(BrushSourceFormatBoundaryTest
+    PRIVATE GTest::gtest_main EditMaskBrush EditGraph)
+  gtest_discover_tests(BrushSourceFormatBoundaryTest
+    TEST_PREFIX "BrushSourceFormatBoundaryTest."
+    PROPERTIES LABELS "ci_core_flow;edit;mask")
+  alcedo_register_test_target(BrushSourceFormatBoundaryTest edit)
 
-# Current Brush format identities, raster-only rejection, and later test names.
-add_executable(BrushSourceFormatBoundaryTest
-  ${ALCEDO_TEST_ROOT}/edit/mask/brush_source_format_boundary_test.cpp)
-target_include_directories(BrushSourceFormatBoundaryTest
-  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
-target_link_libraries(BrushSourceFormatBoundaryTest
-  PRIVATE GTest::gtest_main EditMaskStore EditGraph)
-gtest_discover_tests(BrushSourceFormatBoundaryTest
-  TEST_PREFIX "BrushSourceFormatBoundaryTest."
-  PROPERTIES LABELS "ci_core_flow;edit;mask")
-alcedo_register_test_target(BrushSourceFormatBoundaryTest edit)
+  # Parameterized Brush source, owner operations, and JSON.
+  add_executable(BrushParameterizedSourceTest
+    ${ALCEDO_TEST_ROOT}/edit/mask/brush_parameterized_source_test.cpp)
+  target_include_directories(BrushParameterizedSourceTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
+  target_link_libraries(BrushParameterizedSourceTest
+    PRIVATE GTest::gtest_main EditGraph EditMaskBrush)
+  gtest_discover_tests(BrushParameterizedSourceTest
+    TEST_PREFIX "BrushParameterizedSourceTest."
+    PROPERTIES LABELS "ci_core_flow;edit;mask")
+  alcedo_register_test_target(BrushParameterizedSourceTest edit)
 
-# Parameterized Brush source, owner operations, and JSON without MaskStore.
-add_executable(BrushParameterizedSourceTest
-  ${ALCEDO_TEST_ROOT}/edit/mask/brush_parameterized_source_test.cpp)
-target_include_directories(BrushParameterizedSourceTest
-  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
-target_link_libraries(BrushParameterizedSourceTest
-  PRIVATE GTest::gtest_main EditGraph)
-gtest_discover_tests(BrushParameterizedSourceTest
-  TEST_PREFIX "BrushParameterizedSourceTest."
-  PROPERTIES LABELS "ci_core_flow;edit;mask")
-alcedo_register_test_target(BrushParameterizedSourceTest edit)
+  # Canonical Brush sampling and spatial index.
+  add_executable(BrushCanonicalSamplerTest
+    ${ALCEDO_TEST_ROOT}/edit/mask/brush_canonical_sampler_test.cpp)
+  target_include_directories(BrushCanonicalSamplerTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(BrushCanonicalSamplerTest PRIVATE GTest::gtest_main EditMaskBrush)
+  gtest_discover_tests(BrushCanonicalSamplerTest
+    TEST_PREFIX "BrushCanonicalSamplerTest."
+    PROPERTIES LABELS "ci_core_flow;edit;mask")
+  alcedo_register_test_target(BrushCanonicalSamplerTest edit)
 
-# Canonical Brush sampling, spatial index, and regional Mix replay without raster history.
-add_executable(BrushCanonicalSamplerTest
-  ${ALCEDO_TEST_ROOT}/edit/mask/brush_canonical_sampler_test.cpp)
-target_include_directories(BrushCanonicalSamplerTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(BrushCanonicalSamplerTest PRIVATE GTest::gtest_main EditMaskStore)
-gtest_discover_tests(BrushCanonicalSamplerTest
-  TEST_PREFIX "BrushCanonicalSamplerTest."
-  PROPERTIES LABELS "ci_core_flow;edit;mask")
-alcedo_register_test_target(BrushCanonicalSamplerTest edit)
-
-add_executable(BrushSpatialIndexTest
-  ${ALCEDO_TEST_ROOT}/edit/mask/brush_spatial_index_test.cpp)
-target_include_directories(BrushSpatialIndexTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(BrushSpatialIndexTest PRIVATE GTest::gtest_main EditMaskStore)
-gtest_discover_tests(BrushSpatialIndexTest
-  TEST_PREFIX "BrushSpatialIndexTest."
-  PROPERTIES LABELS "ci_core_flow;edit;mask")
-alcedo_register_test_target(BrushSpatialIndexTest edit)
-
-add_executable(BrushRegionalReplayTest
-  ${ALCEDO_TEST_ROOT}/edit/mask/brush_regional_replay_test.cpp)
-target_include_directories(BrushRegionalReplayTest
-  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_ROOT}/edit/graph ${ALCEDO_TEST_ROOT}/edit/mask)
-target_link_libraries(BrushRegionalReplayTest PRIVATE GTest::gtest_main EditGraph)
-gtest_discover_tests(BrushRegionalReplayTest
-  TEST_PREFIX "BrushRegionalReplayTest."
-  PROPERTIES LABELS "ci_core_flow;edit;mask")
-alcedo_register_test_target(BrushRegionalReplayTest edit)
-
-# Retained canonical Brush rasters: identity diff, regional replay, and eviction.
-add_executable(ParameterizedBrushReplayCacheTest
-  ${ALCEDO_TEST_ROOT}/edit/mask/parameterized_brush_replay_cache_test.cpp
-  ${ALCEDO_TEST_ROOT}/edit/mask/brush_coverage_update_test.cpp)
-target_include_directories(ParameterizedBrushReplayCacheTest
-  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_ROOT}/edit/mask)
-target_link_libraries(ParameterizedBrushReplayCacheTest
-  PRIVATE GTest::gtest_main EditMaskStore)
-gtest_discover_tests(ParameterizedBrushReplayCacheTest
-  TEST_PREFIX "ParameterizedBrushReplayCacheTest."
-  PROPERTIES LABELS "ci_core_flow;edit;mask")
-alcedo_register_test_target(ParameterizedBrushReplayCacheTest edit)
+  add_executable(BrushSpatialIndexTest
+    ${ALCEDO_TEST_ROOT}/edit/mask/brush_spatial_index_test.cpp)
+  target_include_directories(BrushSpatialIndexTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(BrushSpatialIndexTest PRIVATE GTest::gtest_main EditMaskBrush)
+  gtest_discover_tests(BrushSpatialIndexTest
+    TEST_PREFIX "BrushSpatialIndexTest."
+    PROPERTIES LABELS "ci_core_flow;edit;mask")
+  alcedo_register_test_target(BrushSpatialIndexTest edit)
+endif()
 
 add_executable(AnalyticMaskEditTest
   ${ALCEDO_TEST_ROOT}/edit/mask/analytic_mask_edit_test.cpp)
 target_include_directories(AnalyticMaskEditTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(AnalyticMaskEditTest PRIVATE GTest::gtest_main EditMaskStore)
+target_link_libraries(AnalyticMaskEditTest PRIVATE GTest::gtest_main EditMaskCore)
 gtest_discover_tests(AnalyticMaskEditTest
   TEST_PREFIX "AnalyticMaskEditTest."
   PROPERTIES LABELS "ci_core_flow;edit;mask")
 alcedo_register_test_target(AnalyticMaskEditTest edit)
-
-add_executable(BrushPlacementMappingTest
-  ${ALCEDO_TEST_ROOT}/edit/mask/brush_placement_mapping_test.cpp)
-target_include_directories(BrushPlacementMappingTest
-  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_ROOT}/edit/graph ${ALCEDO_TEST_ROOT}/edit/mask)
-target_link_libraries(BrushPlacementMappingTest PRIVATE GTest::gtest_main EditGraph)
-gtest_discover_tests(BrushPlacementMappingTest
-  TEST_PREFIX "BrushPlacementMappingTest."
-  PROPERTIES LABELS "ci_core_flow;edit;mask")
-alcedo_register_test_target(BrushPlacementMappingTest edit)
 
 # Host GraphImageCache retention: LRU budget vs live writes, injected allocation failure.
 add_executable(GraphImageCacheRetentionTest
@@ -483,7 +442,6 @@ if(ALCEDO_CUDA_ENABLED)
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_result_cache_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_product_scope_present_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_nm2_qualification_test.cpp
-    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_multi_mask_qualification_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/develop_camera_profile_import_test.cpp)
   target_include_directories(GpuDagCudaDrtProductTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagCudaDrtProductTest PRIVATE
@@ -493,10 +451,7 @@ if(ALCEDO_CUDA_ENABLED)
   alcedo_register_test_target(GpuDagCudaDrtProductTest gpu)
 
   add_executable(GpuDagCudaMaskTest
-    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_mask_test.cpp
-    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_multi_mask_resource_test.cpp
-    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_parameterized_grade_mix_test.cpp
-    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_parameterized_brush_gpu_test.cpp)
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_mask_test.cpp)
   target_include_directories(GpuDagCudaMaskTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagCudaMaskTest PRIVATE GTest::gtest_main EditRuntimeCuda EditInput)
   gtest_discover_tests(GpuDagCudaMaskTest TEST_PREFIX "GpuDagCudaMaskTest."
@@ -551,8 +506,7 @@ if(ALCEDO_METAL_ENABLED)
     ${ALCEDO_TEST_ROOT}/edit/runtime/metal_grade_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/metal_llf_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/metal_mask_test.cpp
-    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_multi_grade_test.cpp
-    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_multi_mask_resource_test.cpp)
+    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_multi_grade_test.cpp)
   target_include_directories(GpuDagMetalGradeTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagMetalGradeTest PRIVATE
     GTest::gtest_main EditRuntimeMetal EditInput RawProcessorOp MetalDemosaicNetEntry)
@@ -579,8 +533,7 @@ if(ALCEDO_METAL_ENABLED)
 
   add_executable(GpuDagMetalRendererTest
     ${ALCEDO_TEST_ROOT}/edit/runtime/metal_renderer_test.cpp
-    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_nm2_qualification_test.cpp
-    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_multi_mask_qualification_test.cpp)
+    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_nm2_qualification_test.cpp)
   target_include_directories(GpuDagMetalRendererTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagMetalRendererTest PRIVATE
     GTest::gtest_main EditRuntimeMetal EditPipeline EditInput RawProcessorOp Operators MetalDemosaicNetEntry)
@@ -622,8 +575,7 @@ if(ALCEDO_OPENCL_ENABLED)
   add_executable(GpuDagOpenClGradeTest
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_grade_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_mask_test.cpp
-    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_multi_grade_test.cpp
-    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_multi_mask_resource_test.cpp)
+    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_multi_grade_test.cpp)
   target_include_directories(GpuDagOpenClGradeTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagOpenClGradeTest PRIVATE
     GTest::gtest_main EditRuntimeOpenCl EditInput OpenClProgramLibrary)
@@ -635,8 +587,7 @@ if(ALCEDO_OPENCL_ENABLED)
 
   add_executable(GpuDagOpenClDrtProductTest
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_drt_product_test.cpp
-    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_nm2_qualification_test.cpp
-    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_multi_mask_qualification_test.cpp)
+    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_nm2_qualification_test.cpp)
   target_include_directories(GpuDagOpenClDrtProductTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagOpenClDrtProductTest PRIVATE
     GTest::gtest_main EditRuntimeOpenCl EditPipeline EditInput RawProcessorOp

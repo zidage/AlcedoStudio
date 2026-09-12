@@ -33,12 +33,6 @@ auto                  AlignUp(std::size_t value, std::size_t alignment) -> std::
   return (value + alignment - 1) & ~(alignment - 1);
 }
 
-auto EstimateMaskSdfTransientBytes(Extent2D extent) -> std::size_t {
-  const std::size_t pixels =
-      static_cast<std::size_t>(std::max(extent.width, 1u)) * std::max(extent.height, 1u);
-  return 5 * AlignUp(pixels * sizeof(float), kAlign);
-}
-
 auto PlaneBytes(std::size_t pixels, std::size_t bytes_per_pixel) -> std::size_t {
   return AlignUp(pixels * bytes_per_pixel, kAlign);
 }
@@ -271,7 +265,6 @@ auto CompileGradeOwnedMaskStack(const ColorGradeNodeModel& grade, GraphValueId s
     compiled.mask_id          = mask.id;
     compiled.source_kind      = GetMaskSourceKind(mask.source);
     compiled.source_output    = MaskSourceValue(grade.Id(), mask.id);
-    compiled.feather_output   = compiled.source_output;
     compiled.effective_output = compiled.source_output;
     compiled.range_input      = scene_input;
     stack.sources.push_back(std::move(compiled));
@@ -290,13 +283,12 @@ auto CompileGradeOwnedMaskStack(const ColorGradeNodeModel& grade, GraphValueId s
              {{compiled.source_output, CompiledValueKind::Mask}}, {}, {}, compiled.mask_id);
     union_inputs.push_back({PortId{std::string{compiled.mask_id.Value()}}, compiled.effective_output,
                             CompiledValueKind::Mask});
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
     if (compiled.source_kind == MaskSourceKind::Brush) {
-      const Extent2D mask_extent{
-          std::max(source.full_reference_extent.width, source.host_extent.width),
-          std::max(source.full_reference_extent.height, source.host_extent.height)};
-      plan.peak_transient_bytes =
-          (std::max)(plan.peak_transient_bytes, EstimateMaskSdfTransientBytes(mask_extent));
+      throw std::runtime_error(
+          "GraphCompiler: Brush mask rasterization is not available in this build");
     }
+#endif
   }
   PushPass(plan, GpuPassKind::MaskUnion, grade.Id(), std::move(union_inputs),
            {{stack.union_output, CompiledValueKind::Mask}});

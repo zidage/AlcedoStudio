@@ -27,22 +27,18 @@ TEST(GpuDagModelGraph, MultipleMasksBelongToOneColorGrade) {
   ASSERT_NE(grade, nullptr);
   EXPECT_EQ(grade->MaskCount(), 0u);
 
-  grade->AddMask(grade_mask_test::MakeBrushMask(MaskId{"mask.brush"}, MaskAssetKey{}), 0);
-  grade->AddMask(grade_mask_test::MakeRadialMask(MaskId{"mask.radial"}), 1);
-  grade->AddMask(grade_mask_test::MakeLinearGradientMask(MaskId{"mask.linear"}), 2);
+  grade->AddMask(grade_mask_test::MakeRadialMask(MaskId{"mask.radial"}), 0);
+  grade->AddMask(grade_mask_test::MakeLinearGradientMask(MaskId{"mask.linear"}), 1);
 
-  ASSERT_EQ(grade->MaskCount(), 3u);
-  ASSERT_NE(grade->FindMask(MaskId{"mask.brush"}), nullptr);
+  ASSERT_EQ(grade->MaskCount(), 2u);
   ASSERT_NE(grade->FindMask(MaskId{"mask.radial"}), nullptr);
   ASSERT_NE(grade->FindMask(MaskId{"mask.linear"}), nullptr);
-  EXPECT_EQ(GetMaskSourceKind(grade->FindMask(MaskId{"mask.brush"})->source), MaskSourceKind::Brush);
   EXPECT_EQ(GetMaskSourceKind(grade->FindMask(MaskId{"mask.radial"})->source),
             MaskSourceKind::Radial);
   EXPECT_EQ(GetMaskSourceKind(grade->FindMask(MaskId{"mask.linear"})->source),
             MaskSourceKind::LinearGradient);
-  EXPECT_EQ(grade->MaskAt(0).id, MaskId{"mask.brush"});
-  EXPECT_EQ(grade->MaskAt(1).id, MaskId{"mask.radial"});
-  EXPECT_EQ(grade->MaskAt(2).id, MaskId{"mask.linear"});
+  EXPECT_EQ(grade->MaskAt(0).id, MaskId{"mask.radial"});
+  EXPECT_EQ(grade->MaskAt(1).id, MaskId{"mask.linear"});
 }
 
 TEST(GpuDagModelGraph, DuplicateMaskIdLeavesGradeUnchanged) {
@@ -52,7 +48,7 @@ TEST(GpuDagModelGraph, DuplicateMaskIdLeavesGradeUnchanged) {
   grade->AddMask(grade_mask_test::MakeRadialMask(MaskId{"mask.b"}), 1);
   const auto before = std::vector<MaskModel>(grade->Masks().begin(), grade->Masks().end());
 
-  EXPECT_THROW(grade->AddMask(grade_mask_test::MakeBrushMask(MaskId{"mask.a"}, MaskAssetKey{}), 0),
+  EXPECT_THROW(grade->AddMask(grade_mask_test::MakeRadialMask(MaskId{"mask.a"}), 0),
                std::runtime_error);
   const auto after = std::vector<MaskModel>(grade->Masks().begin(), grade->Masks().end());
   EXPECT_EQ(after, before);
@@ -97,14 +93,6 @@ TEST(GpuDagModelGraph, MaskListRoundTripPreservesSourcesOrderAndRangeFields) {
   auto  document = CreateDefaultPipelineDocument();
   auto* grade    = document.PrimaryGrade();
 
-  MaskModel brush = grade_mask_test::MakeParameterizedBrushMask(
-      MaskId{"mask.brush"}, {grade_mask_test::MakePaintStroke("stroke.1")});
-  brush.display_name   = "Brush";
-  brush.opacity        = 0.25f;
-  brush.invert         = true;
-  brush.color_range    = ColorRangeModel{false};
-  brush.luminance_range.reset();
-
   MaskModel radial          = grade_mask_test::MakeRadialMask(MaskId{"mask.radial"});
   radial.display_name       = "Face";
   radial.opacity            = 0.8f;
@@ -121,9 +109,16 @@ TEST(GpuDagModelGraph, MaskListRoundTripPreservesSourcesOrderAndRangeFields) {
   linear.display_name = "Sky";
   linear.enabled      = false;
 
-  grade->AddMask(std::move(brush), 0);
-  grade->AddMask(std::move(radial), 1);
-  grade->AddMask(std::move(linear), 2);
+  MaskModel second            = grade_mask_test::MakeRadialMask(MaskId{"mask.second"});
+  second.display_name         = "Second";
+  second.opacity              = 0.25f;
+  second.invert               = true;
+  second.color_range          = ColorRangeModel{false};
+  second.luminance_range.reset();
+
+  grade->AddMask(std::move(radial), 0);
+  grade->AddMask(std::move(linear), 1);
+  grade->AddMask(std::move(second), 2);
 
   const auto json     = document.ToJson();
   const auto restored = PipelineDocument::FromJson(json);
@@ -133,10 +128,10 @@ TEST(GpuDagModelGraph, MaskListRoundTripPreservesSourcesOrderAndRangeFields) {
   EXPECT_EQ(restored_grade->MaskAt(0), document.PrimaryGrade()->MaskAt(0));
   EXPECT_EQ(restored_grade->MaskAt(1), document.PrimaryGrade()->MaskAt(1));
   EXPECT_EQ(restored_grade->MaskAt(2), document.PrimaryGrade()->MaskAt(2));
-  EXPECT_EQ(restored_grade->MaskAt(0).color_range.has_value(), true);
-  EXPECT_EQ(restored_grade->MaskAt(0).luminance_range.has_value(), false);
-  EXPECT_EQ(restored_grade->MaskAt(1).color_range.has_value(), false);
-  EXPECT_EQ(restored_grade->MaskAt(1).luminance_range.has_value(), true);
+  EXPECT_EQ(restored_grade->MaskAt(0).color_range.has_value(), false);
+  EXPECT_EQ(restored_grade->MaskAt(0).luminance_range.has_value(), true);
+  EXPECT_EQ(restored_grade->MaskAt(2).color_range.has_value(), true);
+  EXPECT_EQ(restored_grade->MaskAt(2).luminance_range.has_value(), false);
   nlohmann::json grade_json;
   for (const auto& node : json["nodes"]) {
     if (node.at("id") == "grade.primary") {
@@ -144,14 +139,11 @@ TEST(GpuDagModelGraph, MaskListRoundTripPreservesSourcesOrderAndRangeFields) {
     }
   }
   ASSERT_FALSE(grade_json.is_null());
-  EXPECT_EQ(grade_json["masks"][0]["source"]["kind"], "brush");
-  EXPECT_FALSE(grade_json["masks"][0]["source"].contains("asset_key"));
-  EXPECT_EQ(grade_json["masks"][0]["source"]["strokes"].size(), 1u);
-  EXPECT_EQ(grade_json["masks"][0]["source"]["strokes"][0]["id"], "stroke.1");
-  EXPECT_EQ(grade_json["masks"][1]["source"]["kind"], "radial");
-  EXPECT_EQ(grade_json["masks"][2]["source"]["kind"], "linear_gradient");
-  EXPECT_TRUE(grade_json["masks"][0]["luminance_range"].is_null());
+  EXPECT_EQ(grade_json["masks"][0]["source"]["kind"], "radial");
+  EXPECT_EQ(grade_json["masks"][1]["source"]["kind"], "linear_gradient");
+  EXPECT_EQ(grade_json["masks"][2]["source"]["kind"], "radial");
   EXPECT_TRUE(grade_json["masks"][1]["color_range"].is_null());
+  EXPECT_TRUE(grade_json["masks"][2]["luminance_range"].is_null());
 }
 
 TEST(GpuDagModelGraph, TopLevelMaskNodesAndEdgesAreRejected) {

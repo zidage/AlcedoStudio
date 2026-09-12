@@ -4,7 +4,7 @@ import QtQuick.Layouts
 
 // Selected-node name, image-owned EXIF tokens, and Mask tool buttons under the
 // scope slot. Node switching does not reread EXIF; the session publishes the
-// four tokens when the open image identity changes. Brush / Radial / Gradient
+// four tokens when the open image identity changes. Radial / Gradient
 // arm creation on the selected Color Grade.
 Item {
     id: root
@@ -127,31 +127,6 @@ Item {
                 objectName: "editorAdjustmentHeaderMaskTools"
                 Layout.alignment: Qt.AlignVCenter
                 spacing: 0
-
-                IconActionButton {
-                    id: brushButton
-                    objectName: "editorAdjustmentHeaderBrushButton"
-                    compact: true
-                    enabled: root.controlsEnabled
-                             && root.selectedNodeKind === "colorGrade"
-                    selected: root.maskCreation
-                              && String(root.maskCreation.toolKind || "") === "brush"
-                    iconSrc: "qrc:/mask_icons/brush.svg"
-                    actionName: qsTr("Brush")
-                    iconColorDefault: root.colIcon
-                    iconColorMuted: root.colIconMuted
-                    fillIdle: appTheme.buttonIdleFillColor
-                    fillHover: appTheme.buttonHoveredFillColor
-                    fillPressed: appTheme.buttonPressedFillColor
-                    fillSelected: appTheme.buttonSelectedFillColor
-                    onClicked: {
-                        if (root.maskCreation && brushButton.selected) {
-                            root.maskCreation.finishBody()
-                        } else if (root.maskCreation) {
-                            root.maskCreation.beginBrush()
-                        }
-                    }
-                }
 
                 IconActionButton {
                     id: radialButton

@@ -12,7 +12,9 @@
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
 #include "edit/mask/brush_stroke.hpp"
+#endif
 #include "edit/operators/models/adjustment_catalog.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
@@ -22,6 +24,7 @@
 
 namespace alcedo {
 
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
 TEST(GpuDagModelGraph, BrushMaskRoundTripPreservesStrokeBodiesWithoutAssetKey) {
   auto document = CreateDefaultPipelineDocument();
   grade_mask_test::AddParameterizedBrushMask(
@@ -39,6 +42,32 @@ TEST(GpuDagModelGraph, BrushMaskRoundTripPreservesStrokeBodiesWithoutAssetKey) {
   EXPECT_EQ(BrushStrokeSamples(brush->strokes[0])[0].local_x, 8.0f);
   EXPECT_EQ(document.ToJson().dump().find("asset_key"), std::string::npos);
 }
+#endif
+
+#ifndef ALCEDO_ENABLE_BRUSH_MASK
+TEST(GpuDagModelGraph, DisabledBuildRejectsBrushMaskSourceAtDocumentBoundary) {
+  auto document = CreateDefaultPipelineDocument();
+  grade_mask_test::AddRadialMask(document, MaskId{"mask.persisted"});
+  auto json = document.ToJson();
+  bool rewrote_source = false;
+  for (auto& node : json["nodes"]) {
+    if (!node.contains("masks") || !node["masks"].is_array()) {
+      continue;
+    }
+    for (auto& mask : node["masks"]) {
+      mask["source"]["kind"] = "brush";
+      rewrote_source        = true;
+    }
+  }
+  ASSERT_TRUE(rewrote_source);
+  try {
+    (void)PipelineDocument::FromJson(json);
+    FAIL() << "Expected versioned decoder to reject a Brush source in the disabled build";
+  } catch (const std::runtime_error& error) {
+    EXPECT_NE(std::string{error.what()}.find("brush"), std::string::npos);
+  }
+}
+#endif
 
 TEST(GpuDagModelGraph, PipelineDocumentRoundTripPreservesNodeIdsEdgesAndAdjustmentOrder) {
   auto  document = CreateDefaultPipelineDocument();
