@@ -212,6 +212,13 @@ class EditorMaskCreationAdapter : public QObject {
   QPointer<editor_rhi::EditorInteractionController> interaction_;
   QPointer<editor_rhi::EditorOverlayItem>           overlay_;
   QMetaObject::Connection                           view_change_connection_;
+  /// overlayGeometryChanged → PublishOverlay. Mask chrome is item-space, so
+  /// view churn (panel fold, window resize, zoom/pan) remaps it through this
+  /// signal instead of relying on backend NotifyChange storms.
+  QMetaObject::Connection                           overlay_geometry_connection_;
+  /// Mapping inputs of the last PublishOverlay; compared against the live
+  /// maskEditMappingIdentity so identical geometry never republishes.
+  MaskEditMappingIdentity                           published_mapping_identity_{};
   QString                                           tool_kind_;
   QString                                           selected_mask_id_;
   NodeId                                            edit_node_id_;

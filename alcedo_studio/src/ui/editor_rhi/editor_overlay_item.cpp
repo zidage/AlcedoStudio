@@ -465,7 +465,10 @@ auto EditorOverlayItem::cropVisible() const -> bool { return last_scene_geometry
 
 void EditorOverlayItem::refreshFromInteraction() {
   rebuildSceneGeometry();
-  rebuildMaskSceneGeometry();
+  // Mask scene geometry is a pure function of (mask_display_, mask_style_);
+  // both owners rebuild it inline in their setters, so interaction signals
+  // alone never change it. Skipping the rebuild here removes one full
+  // contour/handle re-triangulation per interaction-driven refresh.
   ++geometry_revision_;
   ++geometry_rebuild_count_;
   geometry_dirty_ = true;

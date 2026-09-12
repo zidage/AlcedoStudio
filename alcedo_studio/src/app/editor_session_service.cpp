@@ -260,6 +260,10 @@ void EditorSessionService::HandleRenderEvent(const EditorRenderEvent& event) {
     result.identity = lifecycle_.identity();
     BumpHistoryRevision();
   }
+  if (event.kind == EditorRenderEventKind::RenderReused) {
+    EmitQuiet(std::move(result));
+    return;
+  }
   Emit(std::move(result));
 }
 
@@ -346,6 +350,18 @@ auto EditorSessionService::Emit(EditorSessionResult result) -> EditorSessionResu
   } else {
     NotifyChange();
   }
+  return result;
+}
+
+auto EditorSessionService::EmitQuiet(EditorSessionResult result) -> EditorSessionResult {
+  if (result.operation_id == 0) {
+    result.operation_id = current_operation_id_;
+  }
+  {
+    std::scoped_lock lock(results_mutex_);
+    results_.push_back(result);
+  }
+  NotifyResult(result);
   return result;
 }
 
@@ -1915,13 +1931,16 @@ void EditorSessionService::SetPresentationSize(int width, int height) {
       accepted.state    = lifecycle_.state();
       accepted.identity = lifecycle_.identity();
       accepted.message  = "Presentation size updated";
-      NotifyChange();
+      // The presentation size is a render input consumed by the next render
+      // intent; no session-visible field moves, so per-frame resize bursts
+      // (panel fold, window drag) must not publish a change notification.
       return accepted;
     });
     return;
   }
   render_.SetPresentationSize(width, height);
-  NotifyChange();
+  // An enclosing command's own Emit publishes; the size itself is invisible
+  // to change observers.
 }
 
 void EditorSessionService::SetGeometryOverlayActive(bool active) {
@@ -2014,6 +2033,12 @@ auto EditorSessionService::RequestViewChange(EditorRenderReason                 
       result.kind    = EditorSessionResultKind::Rejected;
       result.message = event.message;
       break;
+  }
+  if (event.kind == EditorRenderEventKind::RenderReused) {
+    // A reused frame changes no session-visible state; deliver the result
+    // without a change notification so continuous view churn (panel fold,
+    // window resize, zoom/pan) does not run a full backend refresh per frame.
+    return EmitQuiet(std::move(result));
   }
   return Emit(std::move(result));
 }

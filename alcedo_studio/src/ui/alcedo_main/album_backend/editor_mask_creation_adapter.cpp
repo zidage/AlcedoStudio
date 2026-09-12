@@ -124,6 +124,9 @@ EditorMaskCreationAdapter::~EditorMaskCreationAdapter() {
   if (view_change_connection_) {
     QObject::disconnect(view_change_connection_);
   }
+  if (overlay_geometry_connection_) {
+    QObject::disconnect(overlay_geometry_connection_);
+  }
 }
 
 auto EditorMaskCreationAdapter::owns_left_button() const -> bool {
@@ -190,6 +193,10 @@ void EditorMaskCreationAdapter::bindInteractionItem(QObject* interaction) {
     QObject::disconnect(view_change_connection_);
     view_change_connection_ = {};
   }
+  if (overlay_geometry_connection_) {
+    QObject::disconnect(overlay_geometry_connection_);
+    overlay_geometry_connection_ = {};
+  }
   interaction_ = typed;
   ConnectInteraction(typed);
   PublishOverlay();
@@ -211,6 +218,20 @@ void EditorMaskCreationAdapter::ConnectInteraction(
         // sequence when the composed item→reference mapping actually changed.
         if (open_ && !open_via_panel_) {
           (void)CancelIfMappingChanged();
+        }
+      });
+  overlay_geometry_connection_ = connect(
+      interaction, &editor_rhi::EditorInteractionController::overlayGeometryChanged, this, [this] {
+        // Mask chrome is item-space: a viewport/view change moves it even
+        // though the owner Mask did not. Republish the display so handles and
+        // contours track the letterbox without a backend NotifyChange.
+        if (interaction_ == nullptr ||
+            (edit_mode_ == EditMode::Inactive && !overlay_source_.has_value())) {
+          return;
+        }
+        const auto identity = interaction_->maskEditMappingIdentity();
+        if (identity != published_mapping_identity_) {
+          PublishOverlay();
         }
       });
 }
@@ -681,6 +702,7 @@ void EditorMaskCreationAdapter::BeginTool(MaskSourceKind kind, const QString& to
   overlay_display_ = {};
   hovered_handle_  = MaskOverlayHandleId::None;
   active_handle_   = AnalyticMaskHandle::None;
+  published_mapping_identity_ = {};
   HideOverlay();
   emit maskCreationChanged();
 }
@@ -832,8 +854,18 @@ void EditorMaskCreationAdapter::SyncFromSession() {
   const auto owner_state = session_->mask_creation_state();
   const auto source      = session_->mask_creation_source();
   if (!owner_id.Empty() && source.has_value()) {
-    edit_node_id_ = owner_node;
-    ApplyOwnerSource(owner_id, *source);
+    // Backend change notifications also arrive for events that cannot move
+    // the owner mask. Re-applying an unchanged owner rebuilds the whole
+    // overlay display and emits maskCreationChanged every time, so only
+    // re-apply on a real owner/source change; pure view remapping is driven
+    // by the overlayGeometryChanged connection in ConnectInteraction.
+    const bool owner_changed = owner_node != edit_node_id_ ||
+                               MaskIdToQString(owner_id) != selected_mask_id_ ||
+                               !overlay_source_.has_value() || *overlay_source_ != *source;
+    if (owner_changed) {
+      edit_node_id_ = owner_node;
+      ApplyOwnerSource(owner_id, *source);
+    }
     return;
   }
   if (owner_state == EditorMaskCreationState::Inactive) {
@@ -878,6 +910,7 @@ void EditorMaskCreationAdapter::ResetLocal() {
   brush_tool_              = EditorBrushTool::Idle;
   brush_item_path_.clear();
   press_mapping_identity_  = std::nullopt;
+  published_mapping_identity_ = {};
   hover_valid_             = false;
   HideOverlay();
   if (changed) {
@@ -1000,6 +1033,7 @@ void EditorMaskCreationAdapter::PublishOverlay() {
     return;
   }
   const auto         mapping = interaction_->maskEditViewMapping();
+  published_mapping_identity_ = MaskEditGeometry::Identity(mapping);
   const auto         style   = OverlayStyle();
   const auto         clip    = OverlayClip();
   MaskOverlayDisplay display;

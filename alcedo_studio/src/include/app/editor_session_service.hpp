@@ -599,6 +599,11 @@ class EditorSessionService final : public IEditorSessionBackend {
   /// Publish a result to the observer and change-notifier. The only state the
   /// facade owns is the result history and observer registration.
   auto               Emit(EditorSessionResult result) -> EditorSessionResult;
+  /// Record and deliver a result without marking the publication dirty. Use
+  /// for render outcomes that change no session-visible state (frame reuse on
+  /// continuous view churn): every field OnBackendChanged reads is unchanged,
+  /// so a full change notification per frame is pure cost.
+  auto               EmitQuiet(EditorSessionResult result) -> EditorSessionResult;
   auto               Reject(std::string message) -> EditorSessionResult;
   /// Transition lifecycle to Failed and emit a Failed result. Used when a
   /// navigation or save failure requires the session to enter the Failed state.
