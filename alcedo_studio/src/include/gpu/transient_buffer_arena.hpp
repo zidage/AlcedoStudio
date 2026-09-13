@@ -116,15 +116,7 @@ class TransientBufferArena {
           "TransientBufferArena::Reserve: cannot grow while allocations are live; "
           "Reset() first or Reserve peak size before Allocate");
     }
-    const auto previous = capacity_bytes();
     EnsureCapacity(bytes);
-    if (ShouldTraceGpuPoolAlloc(bytes)) {
-      std::fprintf(stderr, "[GPU_POOL] transient reserve %.1f MiB (was %.1f)\n", GpuPoolMiB(bytes),
-                   GpuPoolMiB(previous));
-      if constexpr (requires(const Backend& backend) { backend.QueryDeviceMemory(); }) {
-        PrintGpuDeviceMemory(backend_->QueryDeviceMemory());
-      }
-    }
   }
 
   /**
@@ -255,16 +247,7 @@ class TransientBufferArena {
    *
    * Develop scratch is released after SensorDevelop, not kept for later frames.
    */
-  void ReleaseDeviceMemory() noexcept {
-    const auto capacity = capacity_bytes();
-    if (capacity > 0 && ShouldTraceGpuPoolAlloc(capacity)) {
-      std::fprintf(stderr, "[GPU_POOL] transient release %.1f MiB\n", GpuPoolMiB(capacity));
-      if constexpr (requires(const Backend& backend) { backend.QueryDeviceMemory(); }) {
-        PrintGpuDeviceMemory(backend_->QueryDeviceMemory());
-      }
-    }
-    ResetSlab();
-  }
+  void ReleaseDeviceMemory() noexcept { ResetSlab(); }
 
   [[nodiscard]] auto CaptureMark() const -> Mark {
     Mark mark;

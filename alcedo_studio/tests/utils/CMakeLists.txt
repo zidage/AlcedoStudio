@@ -21,6 +21,15 @@ gtest_discover_tests(EditorAppLoggingTest TEST_PREFIX "EditorAppLoggingTest."
   PROPERTIES LABELS "ci_core_flow;editor_logging")
 alcedo_register_test_target(EditorAppLoggingTest core)
 
+add_executable(PreviewPerformanceTest
+    ${ALCEDO_TEST_ROOT}/utils/preview_performance_test.cpp)
+target_include_directories(PreviewPerformanceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(PreviewPerformanceTest
+    PRIVATE PreviewPerformance EditorPendingInput GTest::gtest_main)
+gtest_discover_tests(PreviewPerformanceTest TEST_PREFIX "PreviewPerformanceTest."
+  PROPERTIES LABELS "ci_core_flow;preview_performance")
+alcedo_register_test_target(PreviewPerformanceTest core)
+
 if(ALCEDO_CUDA_ENABLED)
   add_executable(SharedToneCurveTest ${ALCEDO_TEST_ROOT}/edit/operators/basic/shared_tone_curve_test.cpp)
   target_include_directories(SharedToneCurveTest PUBLIC ${ALCEDO_INCLUDE_DIR})

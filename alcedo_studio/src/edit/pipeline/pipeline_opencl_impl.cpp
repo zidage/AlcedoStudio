@@ -710,18 +710,16 @@ class OpenCLGPUPipeline final : public GPUPipelineImpl,
     const double total_ms =
         std::chrono::duration<double, std::milli>(ProfileClock::now() - exec_start).count();
 
-    static int           frame_count  = 0;
-    static constexpr int kLogInterval = 30;
-    if (++frame_count % kLogInterval == 1) {
-      std::cout << "[OpenCL Pipeline] frame=" << frame_count << " total=" << std::fixed
-                << std::setprecision(2) << total_ms << " ms"
-                << " | input=" << ensure_input_ms << " abi=" << validate_abi_ms
-                << " kernels=" << ensure_kernels_ms << " fused=" << fused_kernel_ms
-                << " detail=" << detail_ms << " sync=" << sync_ms << " download=" << download_ms
-                << " submit=" << submit_ms
-                << " present=" << (submitted_gpu_frame ? "direct_opengl" : "host_upload")
-                << " | size=" << input.Width() << "x" << input.Height() << std::endl;
-    }
+    (void)total_ms;
+    (void)ensure_input_ms;
+    (void)validate_abi_ms;
+    (void)ensure_kernels_ms;
+    (void)fused_kernel_ms;
+    (void)detail_ms;
+    (void)sync_ms;
+    (void)download_ms;
+    (void)submit_ms;
+    (void)submitted_gpu_frame;
   }
 
   void ReleaseScratchBuffers() override {

@@ -30,30 +30,15 @@ using ProfileClock = std::chrono::steady_clock;
 
 struct DeferredOpenClLog {
   std::vector<std::string> entries;
-
-  void                     Add(std::string entry) { entries.push_back(std::move(entry)); }
-
-  void                     Flush() const {
-    if (entries.empty()) {
-      return;
-    }
-    std::cout << "[LOG] ";
-    for (size_t i = 0; i < entries.size(); ++i) {
-      if (i != 0) {
-        std::cout << " | ";
-      }
-      std::cout << entries[i];
-    }
-    std::cout << '\n';
-  }
+  void Add(std::string entry) { (void)entry; }
+  void Flush() const {}
 };
 
 void PrintProfileMs(DeferredOpenClLog& log, const char* label,
                     const ProfileClock::duration elapsed) {
-  std::ostringstream oss;
-  oss << label << '=' << std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()
-      << " ms";
-  log.Add(oss.str());
+  (void)log;
+  (void)label;
+  (void)elapsed;
 }
 
 void LogProfileStep(DeferredOpenClLog& log, const char* label,

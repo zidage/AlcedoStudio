@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -13,6 +14,7 @@
 #include <vector>
 
 #include "app/editor_adjustment_types.hpp"
+#include "app/editor_monotonic_clock.hpp"
 #include "app/editor_session_types.hpp"
 
 namespace alcedo {
@@ -56,6 +58,10 @@ struct EditorPendingSequence {
   EditorParameterTarget          captured_target{};
   std::vector<EditorPendingFieldChange> fields;
   EditorPendingInputBoundaryKind seal = EditorPendingInputBoundaryKind::None;
+  /// Monotonic time of the first accepted write in this sequence.
+  std::int64_t                   first_accepted_ns = 0;
+  /// Monotonic time of the newest accepted write, including coalesced replacements.
+  std::int64_t                   latest_accepted_ns = 0;
 };
 
 /**
@@ -96,6 +102,14 @@ struct EditorPendingInputAdmitResult {
 class EditorPendingInputQueue {
  public:
   EditorPendingInputQueue() = default;
+
+  /**
+   * @brief Inject the clock used to stamp first/latest accepted times.
+   *
+   * Production uses the steady clock. Tests inject a manual clock so coalesced
+   * first/latest times are proven by timestamp, not wall-clock waits.
+   */
+  void SetClock(std::shared_ptr<IEditorMonotonicClock> clock);
 
   /**
    * @brief Queue one absolute field write.
@@ -158,10 +172,14 @@ class EditorPendingInputQueue {
   auto StartSequenceLocked(EditorSessionIdentity identity, const EditorParameterTarget& target)
       -> EditorPendingSequence&;
   void SealOpenLocked(EditorPendingInputBoundaryKind kind);
+  void StampAcceptedLocked(EditorPendingSequence& sequence);
+  [[nodiscard]] auto NowNs() const -> std::int64_t;
   [[nodiscard]] auto PeekLocked() const -> EditorPendingInputView;
   [[nodiscard]] auto HasConsumableWorkLocked() const -> bool;
 
   mutable std::mutex                                 mutex_;
+  std::shared_ptr<IEditorMonotonicClock>             clock_ =
+      std::make_shared<SteadyEditorMonotonicClock>();
   std::uint64_t                                      next_sequence_id_ = 1;
   std::optional<EditorPendingSequence>               open_;
   std::vector<EditorPendingSequence>                 sealed_;

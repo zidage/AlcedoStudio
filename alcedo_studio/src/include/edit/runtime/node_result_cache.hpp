@@ -41,9 +41,7 @@ class NodeResultCache {
     const auto key   = id;
     values_.insert_or_assign(std::move(id), std::move(buffer));
     metadata_.erase(key);
-    if (ShouldTraceGpuPoolAlloc(bytes) && GpuPoolTraceVerbose()) {
-      DumpToStderr("value-store");
-    }
+    (void)bytes;
   }
 
   /**
@@ -77,20 +75,7 @@ class NodeResultCache {
     return total;
   }
 
-  void DumpToStderr(const char* reason) const {
-    std::fprintf(stderr, "[GPU_POOL] values %s count=%zu total=%.1f MiB\n",
-                 reason == nullptr ? "" : reason, values_.size(), GpuPoolMiB(UsedBytes()));
-    if (!GpuPoolTraceVerbose()) {
-      return;
-    }
-    for (const auto& [id, buffer] : values_) {
-      std::fprintf(stderr, "[GPU_POOL]   value %.*s:%.*s %.1f MiB resource=%llu\n",
-                   static_cast<int>(id.producer.Value().size()), id.producer.Value().data(),
-                   static_cast<int>(id.output_port.Value().size()), id.output_port.Value().data(),
-                   GpuPoolMiB(buffer.Bytes()),
-                   static_cast<unsigned long long>(buffer.ResourceId()));
-    }
-  }
+  void DumpToStderr(const char* reason) const { (void)reason; }
 
   [[nodiscard]] auto Find(const GraphValueId& id) -> typename Backend::Buffer* {
     const auto it = values_.find(id);

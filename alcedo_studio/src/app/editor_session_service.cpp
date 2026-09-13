@@ -17,6 +17,7 @@
 #include "app/editor_session_render_controller.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/history/mini_git_working_history.hpp"
+#include "utils/diagnostics/preview_performance.hpp"
 
 namespace alcedo {
 
@@ -1510,9 +1511,13 @@ void EditorSessionService::TryConsumePendingInput() {
 
 auto EditorSessionService::ConsumeTakenSequence(const EditorPendingSequence& sequence)
     -> EditorSessionResult {
-  const auto guard   = lifecycle_.history_guard();
-  const auto ident   = lifecycle_.identity();
-  auto       outcome = edit_.HandlePendingSequence(sequence, guard, ident);
+  const auto guard = lifecycle_.history_guard();
+  const auto ident = lifecycle_.identity();
+  const bool time_apply = diag::PreviewPerformanceEnabled();
+  const auto apply_start = time_apply ? diag::PreviewPerformance::NowNs() : 0;
+  auto       outcome     = edit_.HandlePendingSequence(sequence, guard, ident);
+  const auto apply_ns =
+      time_apply ? diag::PreviewPerformance::NowNs() - apply_start : 0;
   if (outcome.kind == EditorEditOutcome::Kind::Rejected ||
       outcome.kind == EditorEditOutcome::Kind::Failed) {
     EditorSessionResult result;
@@ -1547,6 +1552,10 @@ auto EditorSessionService::ConsumeTakenSequence(const EditorPendingSequence& seq
     serial_admission_.AbortCycle();
   } else {
     serial_admission_.NoteScheduledRequest(request_id);
+    diag::PreviewPerformance::NoteInputTimes(request_id, sequence.sequence_id,
+                                             sequence.first_accepted_ns,
+                                             sequence.latest_accepted_ns);
+    diag::PreviewPerformance::AddCpuDuration(request_id, diag::PreviewCpuStage::Apply, apply_ns);
   }
   if (commit) {
     BumpHistoryRevision();

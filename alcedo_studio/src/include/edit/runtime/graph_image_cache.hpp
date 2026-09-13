@@ -362,38 +362,11 @@ class GraphImageCache {
    * @p pool is the TexturePool that owns the leases.
    */
   void DumpToStderr(const char* reason, const TexturePool<Backend>& pool) const {
+    (void)reason;
     (void)pool;
-    std::fprintf(stderr, "[GPU_POOL] images %s published=%zu write=%zu\n",
-                 reason == nullptr ? "" : reason, published_.size(), write_slots_.size());
-    if (!GpuPoolTraceVerbose()) {
-      return;
-    }
-    for (const auto& [id, slot] : write_slots_) {
-      PrintSlot("write", id, slot.revision, slot.has_revision, slot.representation.extent,
-                slot.representation.format, slot.texture, slot.last_writer);
-    }
-    for (const auto& [id, entry] : published_) {
-      PrintSlot("published", id, entry.revision, true, entry.representation.extent,
-                entry.representation.format, entry.texture, entry.last_writer);
-    }
   }
 
  private:
-  static void PrintSlot(const char* kind, const GraphValueId& id, RuntimeRevision revision,
-                        bool has_revision, ImageExtent extent, TextureFormat format,
-                        const ResourceLease<Backend>& texture, std::uint64_t last_writer) {
-    const auto handle = texture.Empty() ? 0 : texture.Handle();
-    std::fprintf(stderr,
-                 "[GPU_POOL]   %-9s %.*s:%.*s %ux%u %s handle=%llu rev=%llu writer=%llu "
-                 "has_rev=%d\n",
-                 kind, static_cast<int>(id.producer.Value().size()), id.producer.Value().data(),
-                 static_cast<int>(id.output_port.Value().size()), id.output_port.Value().data(),
-                 extent.width, extent.height, TextureFormatName(format),
-                 static_cast<unsigned long long>(handle),
-                 static_cast<unsigned long long>(has_revision ? revision : 0),
-                 static_cast<unsigned long long>(last_writer), has_revision ? 1 : 0);
-  }
-
   struct WriteSlot {
     ResourceLease<Backend> texture;
     ResultRepresentation   representation{};

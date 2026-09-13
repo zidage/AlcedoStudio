@@ -31,23 +31,8 @@ using ProfileClock = std::chrono::steady_clock;
 
 struct DeferredCpuLog {
   std::vector<std::string> entries;
-
-  void                     Add(std::string entry) { entries.push_back(std::move(entry)); }
-
-  void                     Flush() const {
-    if (entries.empty()) {
-      return;
-    }
-
-    std::cout << "[LOG] ";
-    for (size_t i = 0; i < entries.size(); ++i) {
-      if (i != 0) {
-        std::cout << " | ";
-      }
-      std::cout << entries[i];
-    }
-    std::cout << '\n';
-  }
+  void Add(std::string entry) { (void)entry; }
+  void Flush() const {}
 };
 
 void AppendProfileMs(DeferredCpuLog& log, const char* label, const ProfileClock::duration elapsed) {

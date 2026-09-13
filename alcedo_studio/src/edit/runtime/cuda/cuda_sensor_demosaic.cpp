@@ -25,6 +25,7 @@
 #include "edit/input/prepared_raw_input.hpp"
 #include "edit/runtime/cuda/cuda_render_device.hpp"
 #include "gpu/transient_last_use.hpp"
+#include "utils/diagnostics/preview_performance.hpp"
 
 namespace alcedo {
 namespace {
@@ -305,9 +306,11 @@ void ExecuteCudaSensorDemosaicAndPack(CudaRenderDevice& device, const PreparedRa
   const auto method =
       ResolveDevelopDemosaicMethod(params, input.cfa_pattern.kind, input.downsample_passes);
   if (method == RawDemosaicMethod::NeuralEngine) {
+    diag::PreviewPerformance::NoteDevelopLayout(diag::PreviewDevelopLayout::Tiled);
     DemosaicNeuralEngine(device, input, linear, packed, hlr, stream);
     return;
   }
+  diag::PreviewPerformance::NoteDevelopLayout(diag::PreviewDevelopLayout::FullFrame);
   if (input.cfa_pattern.kind == RawCfaKind::XTrans6x6) {
     DemosaicXTransInterpolator(device, input, linear, packed, hlr, stream);
     return;

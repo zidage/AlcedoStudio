@@ -21,6 +21,8 @@
 #include <QQuickWindow>
 #include <QSGRendererInterface>
 #include <QWindow>
+#include <QDir>
+#include <QFileInfo>
 #include <QSettings>
 #include <QString>
 #include <QtGlobal>
@@ -45,6 +47,7 @@
 #include "ui/editor_rhi/editor_viewport_item.hpp"
 #include "edit/operators/operator_registeration.hpp"
 #include "utils/diagnostics/app_logging.hpp"
+#include "utils/diagnostics/preview_performance.hpp"
 #include "utils/clock/time_provider.hpp"
 
 Q_IMPORT_QML_PLUGIN(QuickQanavaPlugin)
@@ -247,6 +250,14 @@ int main(int argc, char* argv[]) {
 
   QApplication app(argc, argv);
   const QString log_path = alcedo::diag::InitializeApplicationLogging();
+  alcedo::diag::PreviewPerformance::Initialize();
+  if (qEnvironmentVariableIsEmpty("ALCEDO_PREVIEW_PERF_LOG") && !log_path.isEmpty()) {
+    const QFileInfo info(log_path);
+    alcedo::diag::PreviewPerformance::SetOutputPath(
+        QDir(info.absolutePath())
+            .filePath(QStringLiteral("alcedo_preview_perf_%1.log").arg(info.completeBaseName()))
+            .toStdString());
+  }
   qCInfo(alcedo::diag::appLog).noquote()
       << QStringLiteral("app.start log_path=%1").arg(log_path);
 
@@ -256,6 +267,7 @@ int main(int argc, char* argv[]) {
   if (!startup.ok) {
     qCritical("Editor backend startup failed (%s): %s",
               alcedo::editor_rhi::ToString(editor_backend), startup.error.c_str());
+    alcedo::diag::PreviewPerformance::Shutdown();
     alcedo::diag::ShutdownApplicationLogging();
     return 1;
   }
@@ -372,6 +384,7 @@ int main(int argc, char* argv[]) {
 
   const int exit_code = app.exec();
   qCInfo(alcedo::diag::appLog) << "app.exit code=" << exit_code;
+  alcedo::diag::PreviewPerformance::Shutdown();
   alcedo::diag::ShutdownApplicationLogging();
   return exit_code;
 }

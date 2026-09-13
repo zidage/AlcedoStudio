@@ -7,6 +7,24 @@
 #include <utility>
 
 namespace alcedo {
+
+void EditorPendingInputQueue::SetClock(std::shared_ptr<IEditorMonotonicClock> clock) {
+  std::scoped_lock lock(mutex_);
+  clock_ = clock ? std::move(clock) : std::make_shared<SteadyEditorMonotonicClock>();
+}
+
+auto EditorPendingInputQueue::NowNs() const -> std::int64_t {
+  return clock_ ? clock_->NowNs() : 0;
+}
+
+void EditorPendingInputQueue::StampAcceptedLocked(EditorPendingSequence& sequence) {
+  const auto now = NowNs();
+  if (sequence.first_accepted_ns == 0) {
+    sequence.first_accepted_ns = now;
+  }
+  sequence.latest_accepted_ns = now;
+}
+
 namespace {
 
 [[nodiscard]] auto RejectAdmit(std::string error) -> EditorPendingInputAdmitResult {
@@ -76,11 +94,13 @@ auto EditorPendingInputQueue::TakeReadyBatch() -> std::optional<EditorPendingSeq
   }
   if (open_.has_value() && !open_->fields.empty()) {
     EditorPendingSequence batch;
-    batch.sequence_id     = open_->sequence_id;
-    batch.identity        = open_->identity;
-    batch.captured_target = open_->captured_target;
-    batch.seal            = open_->seal;
-    batch.fields          = std::move(open_->fields);
+    batch.sequence_id        = open_->sequence_id;
+    batch.identity           = open_->identity;
+    batch.captured_target    = open_->captured_target;
+    batch.seal               = open_->seal;
+    batch.first_accepted_ns  = open_->first_accepted_ns;
+    batch.latest_accepted_ns = open_->latest_accepted_ns;
+    batch.fields             = std::move(open_->fields);
     open_field_index_.clear();
     return batch;
   }
@@ -159,6 +179,7 @@ auto EditorPendingInputQueue::AdmitFieldChangeLocked(EditorSessionIdentity ident
     open_field_index_.emplace(patch.field_key, open_->fields.size());
     open_->fields.push_back(std::move(change));
   }
+  StampAcceptedLocked(*open_);
 
   const auto sequence_id = open_->sequence_id;
   if (patch.settled) {
