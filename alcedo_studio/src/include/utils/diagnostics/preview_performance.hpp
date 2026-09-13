@@ -49,15 +49,15 @@ namespace detail {
  * ring; a background thread writes structured lines. A full ring drops the diagnostic
  * event, counts the loss, and leaves render unblocked.
  *
- * Configuration: `ALCEDO_PREVIEW_PERF=off|summary|detail` (default off) and optional
- * `ALCEDO_PREVIEW_PERF_LOG` output path.
+ * Process start turns Detail on. Tests call SetMode(Off) or ResetForTesting.
+ * Optional `ALCEDO_PREVIEW_PERF_LOG` sets the output path.
  *
  * @thread_safety Notes may run on the session owner, render worker, and Qt render
  *                thread. Off takes no lock.
  */
 class PreviewPerformance {
  public:
-  static void InitializeFromEnvironment();
+  static void Initialize();
   static void Shutdown();
   static void ResetForTesting();
 

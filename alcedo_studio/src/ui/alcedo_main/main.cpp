@@ -250,9 +250,8 @@ int main(int argc, char* argv[]) {
 
   QApplication app(argc, argv);
   const QString log_path = alcedo::diag::InitializeApplicationLogging();
-  alcedo::diag::PreviewPerformance::InitializeFromEnvironment();
-  if (alcedo::diag::PreviewPerformance::Mode() != alcedo::diag::PreviewPerformanceMode::Off &&
-      qEnvironmentVariableIsEmpty("ALCEDO_PREVIEW_PERF_LOG") && !log_path.isEmpty()) {
+  alcedo::diag::PreviewPerformance::Initialize();
+  if (qEnvironmentVariableIsEmpty("ALCEDO_PREVIEW_PERF_LOG") && !log_path.isEmpty()) {
     const QFileInfo info(log_path);
     alcedo::diag::PreviewPerformance::SetOutputPath(
         QDir(info.absolutePath())

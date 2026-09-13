@@ -10,7 +10,7 @@
 namespace alcedo::diag {
 
 /// Compatibility notes for preview timing. Implementation forwards to
-/// PreviewPerformance. Off/Summary/Detail is `ALCEDO_PREVIEW_PERF` (default off).
+/// PreviewPerformance. Process start turns Detail on.
 /// Qt frame identity is attached only to the request imported in that render().
 
 void NoteRenderE2eSubmit(std::uint64_t request_id, std::string_view reason,

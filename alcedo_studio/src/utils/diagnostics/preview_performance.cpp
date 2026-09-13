@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <deque>
 #include <fstream>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <sstream>
@@ -36,6 +37,7 @@ constexpr std::size_t kMaxSubStagesPerPass     = 12;
 constexpr std::size_t kMaxOpenIntervals        = 16;
 constexpr std::size_t kDefaultPendingCapacity  = 64;
 constexpr std::size_t kDefaultQueueCapacity    = 32;
+constexpr std::size_t kMaxInternId             = std::numeric_limits<std::uint16_t>::max();
 
 enum class OpenKind : std::uint8_t { Cpu, Pass, Sub };
 
@@ -358,20 +360,28 @@ struct State {
     if (name.empty()) {
       return 0;
     }
-    for (std::uint16_t i = 1; i < intern_names.size(); ++i) {
+    const std::size_t intern_count = intern_names.size();
+    for (std::size_t i = 1; i < intern_count; ++i) {
       if (intern_names[i] == name) {
-        return i;
+        return static_cast<std::uint16_t>(i);
       }
+    }
+    if (intern_count > kMaxInternId) {
+      return 0;
     }
     intern_names.emplace_back(name);
     return static_cast<std::uint16_t>(intern_names.size() - 1);
   }
 
   auto InternNameLocked(std::uint16_t id) const -> std::string {
-    if (id == 0 || id >= intern_names.size()) {
+    if (id == 0) {
       return {};
     }
-    return intern_names[id];
+    const auto index = static_cast<std::size_t>(id);
+    if (index >= intern_names.size()) {
+      return {};
+    }
+    return intern_names[index];
   }
 
   auto FindLocked(std::uint64_t request_id) -> PendingSample* {
@@ -453,19 +463,6 @@ auto Global() -> State& {
   return state;
 }
 
-auto ParseMode(std::string_view value) -> PreviewPerformanceMode {
-  if (value.empty() || value == "off" || value == "0") {
-    return PreviewPerformanceMode::Off;
-  }
-  if (value == "summary") {
-    return PreviewPerformanceMode::Summary;
-  }
-  if (value == "detail" || value == "1") {
-    return PreviewPerformanceMode::Detail;
-  }
-  return PreviewPerformanceMode::Off;
-}
-
 }  // namespace
 
 namespace detail {
@@ -476,10 +473,8 @@ auto PreviewPerformanceModeAtomic() -> std::atomic<PreviewPerformanceMode>& {
 
 }  // namespace detail
 
-void PreviewPerformance::InitializeFromEnvironment() {
-  const char* mode_env = std::getenv("ALCEDO_PREVIEW_PERF");
-  const auto  mode     = ParseMode(mode_env == nullptr ? "" : mode_env);
-  SetMode(mode);
+void PreviewPerformance::Initialize() {
+  SetMode(PreviewPerformanceMode::Detail);
   const char* path_env = std::getenv("ALCEDO_PREVIEW_PERF_LOG");
   if (path_env != nullptr && path_env[0] != '\0') {
     SetOutputPath(path_env);

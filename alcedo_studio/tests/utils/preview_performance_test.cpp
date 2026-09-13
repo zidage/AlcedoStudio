@@ -89,6 +89,21 @@ TEST_F(PreviewPerformanceTest, DisabledTimingDoesNotAllocateOrQueueEvents) {
   EXPECT_TRUE(diag::PreviewPerformance::WrittenLog().empty());
 }
 
+TEST_F(PreviewPerformanceTest, InitializeTurnsDetailLoggingOn) {
+  EXPECT_EQ(diag::PreviewPerformance::Mode(), diag::PreviewPerformanceMode::Off);
+  diag::PreviewPerformance::Initialize();
+  EXPECT_EQ(diag::PreviewPerformance::Mode(), diag::PreviewPerformanceMode::Detail);
+
+  clock_->SetNs(100);
+  diag::PreviewPerformance::NoteSubmit(2, diag::PreviewFrameRole::InteractivePrimary,
+                                       diag::PreviewQuality::Interactive, "InteractiveAdjustment",
+                                       true);
+  diag::PreviewPerformance::NoteDisplayed(2);
+  diag::PreviewPerformance::FlushWriter();
+
+  EXPECT_GE(diag::PreviewPerformance::EventsQueued(), 1u);
+}
+
 TEST_F(PreviewPerformanceTest, CoalescedInputsRetainFirstAndLatestAcceptedTimes) {
   auto editor_clock = std::make_shared<ManualEditorClock>();
   EditorPendingInputQueue queue;
