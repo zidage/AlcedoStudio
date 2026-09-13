@@ -122,6 +122,8 @@ struct EditorAdjustmentPatch {
   /// CPU operator JSON for executor remirror, committed snapshots, and history restore.
   /// Live queue entries must not use this as the write payload.
   std::string params_json;
+  /// Monotonic time of the QML/C++ submitWrite call. 0 means the caller did not stamp.
+  std::int64_t qml_write_ns = 0;
 };
 
 /// Full adjustment snapshot stamped onto a render intent.

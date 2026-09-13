@@ -123,6 +123,10 @@ auto Renderer<Backend>::Render(const std::shared_ptr<ImageBuffer>& input,
   }
   GraphCompiler::BindFrameGeometry(plan, *document_, request.geometry);
   plan.output_color_override = request.output_color;
+  if (diag::PreviewPerformanceEnabled()) {
+    diag::PreviewPerformance::NoteRenderExtent(plan.geometry.render_extent.width,
+                                               plan.geometry.render_extent.height);
+  }
   detail::TraceGpuDagGeometry<Backend>(plan, request.geometry, request.submission);
   const auto& prepared = use_session_cache ? prepared_lease->Get() : *one_shot_prepared;
   const auto persistence =

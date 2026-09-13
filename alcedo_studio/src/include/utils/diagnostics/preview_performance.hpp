@@ -83,14 +83,26 @@ class PreviewPerformance {
   static void NoteSubmit(std::uint64_t request_id, PreviewFrameRole role, PreviewQuality quality,
                          std::string_view reason, bool has_user_input);
   static void NoteInputTimes(std::uint64_t request_id, std::uint64_t sequence_id,
-                             std::int64_t first_accepted_ns, std::int64_t latest_accepted_ns);
+                             std::int64_t first_accepted_ns, std::int64_t latest_accepted_ns,
+                             std::int64_t qml_first_write_ns = 0,
+                             std::int64_t qml_latest_write_ns = 0);
   static void NoteScheduled(std::uint64_t request_id);
+  static void NoteWorkerStart(std::uint64_t request_id);
+  static void NoteSinkSubmit(std::uint64_t request_id);
   static void NoteProducerReady(std::uint64_t request_id);
   static void NotePresentWake(std::uint64_t request_id);
   static void NoteGuiUpdate();
   static void NoteRenderEnter();
   static void NoteConsumeBegin(std::uint64_t request_id);
+  static void NoteRenderExtent(std::uint32_t width, std::uint32_t height);
+  /// QRhi import. Does not complete the sample; wait for @ref NoteFrameSwapped.
+  static void NoteImported(std::uint64_t request_id);
+  /// Completes at import. DAG and tests without a Qt window use this helper.
   static void NoteDisplayed(std::uint64_t request_id);
+  /// Completes imported samples from the Qt frame that just swapped.
+  static void NoteFrameSwapped();
+  /// Best-effort compositor-submit stamp; does not complete.
+  static void NoteFrameEnd();
   static void NoteTerminal(std::uint64_t request_id, PreviewTerminalOutcome outcome,
                            std::string_view reason);
 
@@ -114,6 +126,30 @@ class PreviewPerformance {
   static void NoteDevelopDecode(const PreviewDevelopDecodeParams& params);
   static void NoteDevelopLayout(PreviewDevelopLayout layout);
   static void NoteResourceSnapshot(const PreviewResourceSnapshot& snapshot);
+
+  /**
+   * @brief Identity of the innermost open pass or sub-stage on this thread.
+   *
+   * Invalid when timing is Off or no request/pass is bound. Backends record
+   * native timestamps against this target and later call @ref NoteGpuDuration.
+   */
+  [[nodiscard]] static auto CurrentGpuSampleTarget() -> PreviewGpuSampleTarget;
+
+  /**
+   * @brief Attach a resolved native GPU duration to a still-pending request.
+   *
+   * Skipped, aliased, and disabled passes keep @c Unavailable and ignore
+   * @p gpu_ns. Looks up the pending sample by @p request_id, not TLS.
+   */
+  static void NoteGpuDuration(std::uint64_t request_id, std::uint8_t pass_index, bool is_sub,
+                              std::uint8_t sub_index, std::int64_t gpu_ns,
+                              PreviewGpuTimeStatus status);
+
+  /**
+   * @brief Attach a whole-submission GPU duration when per-pass samples are unavailable.
+   */
+  static void NoteGpuRequestDuration(std::uint64_t request_id, std::int64_t gpu_ns,
+                                     PreviewGpuTimeStatus status);
 };
 
 class PreviewCpuInterval {

@@ -15,6 +15,7 @@
 #include "edit/scope/scope_analyzer.hpp"
 #include "image/image_buffer.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
+#include "utils/diagnostics/preview_performance.hpp"
 
 namespace alcedo {
 namespace {
@@ -60,6 +61,7 @@ void FramePresenter<CudaBackend>::Present(CudaRenderDevice& device, const GraphV
   const auto height    = texture.Height();
   const auto row_bytes = static_cast<std::size_t>(width) * sizeof(float4);
 
+  diag::PreviewPerformance::NoteSinkSubmit(submission.metadata.presentation_request_id);
   sink.BindFrameSubmission(submission);
   sink.EnsureSize(static_cast<int>(width), static_cast<int>(height));
   const FrameWriteMapping mapping = sink.MapResourceForWrite(FrameMemoryDomain::CudaDevice);
@@ -101,6 +103,7 @@ void FramePresenter<CudaBackend>::Present(CudaRenderDevice& device, const GraphV
                            display_config);
     cuda::CheckCuda(::cudaStreamSynchronize(device.CommandContext().Stream()),
                     "CudaRenderer: wait for frame sink copy");
+    device.ResolveGpuTimestamps();
   } catch (...) {
     sink.UnmapResource();
     throw;

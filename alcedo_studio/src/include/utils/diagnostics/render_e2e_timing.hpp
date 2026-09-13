@@ -20,6 +20,13 @@ void NoteRenderE2eSubmit(std::uint64_t request_id, std::string_view reason,
 /// slot). Time from Submit to here is coalesce / single-flight queue wait.
 void NoteRenderE2eScheduled(std::uint64_t request_id);
 
+/// Pipeline worker thread started the scheduled task (after pool wait).
+void NoteRenderE2eWorkerStart(std::uint64_t request_id);
+
+/// FramePresenter is about to EnsureSize / MapResourceForWrite / submit the
+/// native texture to the sink.
+void NoteRenderE2eSinkSubmit(std::uint64_t request_id);
+
 /// Producer finished GPU/host write and handed the frame to the present queue
 /// (NotifyFrameReady / SubmitMetalFrame). Covers pipeline + pool wait after
 /// schedule.
@@ -41,9 +48,17 @@ void NoteRenderE2eRenderEnter();
 /// Render thread picked the Ready frame and is about to import it into QRhi.
 void NoteRenderE2eConsumeBegin(std::uint64_t request_id);
 
-/// Viewport renderer imported the frame for the next composition pass.
-/// Prints the e2e line and drops the sample.
+/// Viewport renderer imported the frame into QRhi. Does not complete the sample.
+void NoteRenderE2eImported(std::uint64_t request_id);
+
+/// DAG / no-window helper: complete at import.
 void NoteRenderE2eDisplayed(std::uint64_t request_id);
+
+/// Qt queued the window frame that imported pending requests (`frameSwapped`).
+void NoteRenderE2eFrameSwapped();
+
+/// Qt finished the window frame (`afterFrameEnd`). Does not complete.
+void NoteRenderE2eFrameEnd();
 
 /// Request will never display (replaced, cancelled, failed, present drop).
 void NoteRenderE2eTerminal(std::uint64_t request_id, std::string_view outcome);

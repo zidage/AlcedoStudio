@@ -17,6 +17,7 @@
 #include "edit/pipeline/local_tone_mapping.hpp"
 #include "edit/runtime/local_tone_cache_ids.hpp"
 #include "edit/runtime/local_tone_plan.hpp"
+#include "edit/runtime/gpu_work_sample.hpp"
 #include "utils/diagnostics/preview_performance.hpp"
 
 namespace alcedo {
@@ -92,6 +93,7 @@ class LocalToneExecutor {
     const auto transient_mark = Ops::TransientBytes(device);
     if (decision.action == LocalToneAction::SampleCanonical) {
       diag::PreviewSubStageInterval sample(diag::PreviewSubStageKind::LlfSampleCanonical);
+      GpuWorkSample<Device> gpu(device);
       Ops::ApplyCanonicalSample(device, input, output, source_id, result_id, decision, width,
                                 height);
       tone.sampled_canonical_reference = true;
@@ -123,6 +125,7 @@ class LocalToneExecutor {
 
     if (!decision.reuse_source) {
       diag::PreviewSubStageInterval extract(diag::PreviewSubStageKind::LlfExtract);
+      GpuWorkSample<Device> gpu(device);
       if (decision.write_canonical_reference) {
         Ops::ExtractReference(device, input, source[0], width, height, decision, geometry);
       } else {
@@ -131,6 +134,7 @@ class LocalToneExecutor {
     }
     {
       diag::PreviewSubStageInterval pyramid(diag::PreviewSubStageKind::LlfPyramid);
+      GpuWorkSample<Device> gpu(device);
       for (int level = 1; level < decision.pyramid_level_count; ++level) {
         Ops::PyramidDown(device, source[level - 1], source[level], decision, level);
       }
@@ -152,11 +156,13 @@ class LocalToneExecutor {
     };
     {
       diag::PreviewSubStageInterval remap(diag::PreviewSubStageKind::LlfRemap);
+      GpuWorkSample<Device> gpu(device);
       BuildRemap(samples[0], remap_a);
       BuildRemap(samples[1], remap_b);
     }
     {
       diag::PreviewSubStageInterval select(diag::PreviewSubStageKind::LlfSelect);
+      GpuWorkSample<Device> gpu(device);
       for (std::size_t pair = 0; pair + 1 < samples.size(); ++pair) {
         for (int level = 0; level < decision.pyramid_level_count; ++level) {
           const bool top = level + 1 == decision.pyramid_level_count;
@@ -174,6 +180,7 @@ class LocalToneExecutor {
     }
     {
       diag::PreviewSubStageInterval collapse(diag::PreviewSubStageKind::LlfCollapse);
+      GpuWorkSample<Device> gpu(device);
       for (int level = decision.pyramid_level_count - 2; level >= 0; --level) {
         Ops::Collapse(device, result[level], result[level + 1], remap_a[level], decision, level);
         std::swap(result[level], remap_a[level]);
@@ -182,6 +189,7 @@ class LocalToneExecutor {
 
     {
       diag::PreviewSubStageInterval apply(diag::PreviewSubStageKind::LlfApply);
+      GpuWorkSample<Device> gpu(device);
       Ops::ApplyAdjusted(device, input, output, source[0], result[0], width, height, decision);
     }
     if (decision.persist_canonical) {

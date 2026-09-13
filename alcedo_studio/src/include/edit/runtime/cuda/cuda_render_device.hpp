@@ -50,6 +50,10 @@ class CudaRenderDevice {
   void               WaitIdle() { workspace_.Device().Wait(command_context_); }
   void               CancelRender() noexcept;
 
+  void BeginGpuWorkSample() { workspace_.Device().BeginGpuWorkSample(command_context_); }
+  void EndGpuWorkSample() { workspace_.Device().EndGpuWorkSample(command_context_); }
+  void ResolveGpuTimestamps() { workspace_.Device().ResolveGpuTimestamps(); }
+
   /**
    * @brief Publish unpublished GPU image results for the submission ended by EndRender.
    *

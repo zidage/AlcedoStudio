@@ -324,17 +324,34 @@ void CudaBackend::Submit(CommandContext& command_context) {
 
 void CudaBackend::Wait(CommandContext& command_context) {
   if (in_flight_submission_ == 0) {
+    gpu_timestamps_.ResolveReady();
     return;
   }
   cuda::CheckCuda(::cudaEventSynchronize(command_context.Event()), "CudaBackend::Wait");
+  ++host_wait_count_;
   completed_submission_ = in_flight_submission_;
   in_flight_submission_ = 0;
+  gpu_timestamps_.ResolveReady();
 }
 
 void CudaBackend::SynchronizeRecordedWork(CommandContext& command_context) {
   cuda::CheckCuda(::cudaStreamSynchronize(command_context.Stream()),
                   "CudaBackend::SynchronizeRecordedWork");
+  ++host_wait_count_;
+  gpu_timestamps_.ResolveReady();
 }
+
+void CudaBackend::BeginGpuWorkSample(CommandContext& command_context) {
+  gpu_timestamps_.Begin(command_context.Stream(), command_context.SubmissionId());
+}
+
+void CudaBackend::EndGpuWorkSample(CommandContext& command_context) {
+  gpu_timestamps_.End(command_context.Stream());
+}
+
+void CudaBackend::ResolveGpuTimestamps() { gpu_timestamps_.ResolveReady(); }
+
+void CudaBackend::DiscardGpuTimestamps() { gpu_timestamps_.DiscardAll(); }
 
 auto CudaBackend::AcquireLut(ContentKey key, std::span<const std::byte> packed_rgba,
                              std::uint32_t edge, CommandContext& command_context)
@@ -423,6 +440,7 @@ void CudaBackend::ResetCounters() {
   h2d_copy_count_   = 0;
   h2d_bytes_        = 0;
   lut_upload_bytes_ = 0;
+  host_wait_count_  = 0;
   last_h2d_ranges_.clear();
   last_texture_rectangles_.clear();
 }

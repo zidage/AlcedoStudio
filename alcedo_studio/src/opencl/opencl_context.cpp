@@ -496,7 +496,11 @@ void OpenClContext::Initialize(const OpenClInitializationOptions& options) {
     throw std::runtime_error("[FATAL] OpenClContext: failed to create OpenCL context.");
   }
 
-  queue_ = clCreateCommandQueue(context_, selected.device, 0, &error);
+  queue_ = clCreateCommandQueue(context_, selected.device, CL_QUEUE_PROFILING_ENABLE, &error);
+  if (error != CL_SUCCESS || queue_ == nullptr) {
+    error  = CL_SUCCESS;
+    queue_ = clCreateCommandQueue(context_, selected.device, 0, &error);
+  }
   if (error != CL_SUCCESS || queue_ == nullptr) {
     clReleaseContext(context_);
     context_ = nullptr;

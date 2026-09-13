@@ -78,7 +78,11 @@ enum class PreviewTerminalOutcome : std::uint8_t {
   Dropped,
 };
 
-enum class PreviewGpuTimeStatus : std::uint8_t { Unavailable = 0 };
+enum class PreviewGpuTimeStatus : std::uint8_t {
+  Unavailable = 0,
+  Available   = 1,
+  Failed      = 2,
+};
 
 enum class PreviewFrameRole : std::uint8_t {
   InteractivePrimary = 0,
@@ -143,6 +147,8 @@ struct PreviewSubStageRecord {
   PreviewSubStageKind    kind  = PreviewSubStageKind::Pointwise;
   PreviewExecutionState  state = PreviewExecutionState::Executed;
   std::int64_t           cpu_ns = 0;
+  std::int64_t           gpu_ns = 0;
+  PreviewGpuTimeStatus   gpu_status = PreviewGpuTimeStatus::Unavailable;
 };
 
 struct PreviewPassRecord {
@@ -152,6 +158,7 @@ struct PreviewPassRecord {
   std::uint32_t               ordinal = 0;
   PreviewExecutionState       state   = PreviewExecutionState::Executed;
   std::int64_t                cpu_ns  = 0;
+  std::int64_t                gpu_ns  = 0;
   PreviewGpuTimeStatus        gpu_status = PreviewGpuTimeStatus::Unavailable;
   std::vector<PreviewSubStageRecord> sub_stages;
 };
@@ -171,8 +178,9 @@ struct PreviewCpuStageTimes {
 /**
  * @brief One assembled request after present or a terminal outcome.
  *
- * GPU durations stay unavailable until native pass timing is installed.
- * Incomplete records (lost diagnostic events) must not enter E2E quantiles.
+ * GPU durations come from backend timestamp slots resolved after submission
+ * completion. Incomplete records (lost diagnostic events) must not enter E2E
+ * quantiles.
  */
 struct PreviewRequestRecord {
   std::uint64_t              request_id         = 0;
@@ -184,13 +192,22 @@ struct PreviewRequestRecord {
   bool                       incomplete         = false;
   std::int64_t               first_accepted_ns  = 0;
   std::int64_t               latest_accepted_ns = 0;
+  std::int64_t               qml_first_write_ns = 0;
+  std::int64_t               qml_latest_write_ns = 0;
   std::int64_t               submit_ns          = 0;
   std::int64_t               scheduled_ns       = 0;
+  std::int64_t               worker_start_ns    = 0;
+  std::int64_t               sink_submit_ns     = 0;
   std::int64_t               producer_ready_ns  = 0;
   std::int64_t               present_wake_ns    = 0;
   std::int64_t               consume_begin_ns   = 0;
   std::int64_t               displayed_ns       = 0;
+  std::int64_t               imported_ns        = 0;
+  std::int64_t               frame_swapped_ns   = 0;
+  std::int64_t               frame_end_ns       = 0;
   std::uint64_t              qt_frame           = 0;
+  std::uint32_t              render_width       = 0;
+  std::uint32_t              render_height      = 0;
   PreviewCpuStageTimes       cpu{};
   std::vector<PreviewPassRecord> passes;
   bool                       has_develop_decode = false;
@@ -199,7 +216,19 @@ struct PreviewRequestRecord {
   PreviewResourceSnapshot    resources{};
   PreviewTerminalOutcome     outcome            = PreviewTerminalOutcome::Presented;
   std::string                terminal_reason;
+  std::int64_t               gpu_ns             = 0;
   PreviewGpuTimeStatus       gpu_status         = PreviewGpuTimeStatus::Unavailable;
+};
+
+/**
+ * @brief Open preview pass or sub-stage that a backend timestamp slot should bind to.
+ */
+struct PreviewGpuSampleTarget {
+  std::uint64_t request_id = 0;
+  std::uint8_t  pass_index = 0;
+  std::uint8_t  sub_index  = 0;
+  bool          is_sub     = false;
+  bool          valid      = false;
 };
 
 [[nodiscard]] inline auto PreviewPassKindName(PreviewPassKind kind) -> const char* {
@@ -276,6 +305,18 @@ struct PreviewRequestRecord {
       return "dng_warp";
   }
   return "unknown";
+}
+
+[[nodiscard]] inline auto PreviewGpuTimeStatusName(PreviewGpuTimeStatus status) -> const char* {
+  switch (status) {
+    case PreviewGpuTimeStatus::Unavailable:
+      return "unavailable";
+    case PreviewGpuTimeStatus::Available:
+      return "available";
+    case PreviewGpuTimeStatus::Failed:
+      return "failed";
+  }
+  return "unavailable";
 }
 
 [[nodiscard]] inline auto PreviewExecutionStateName(PreviewExecutionState state) -> const char* {

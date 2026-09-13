@@ -14,6 +14,7 @@
 #include "edit/geometry/types.hpp"
 #include "edit/runtime/byte_range.hpp"
 #include "edit/runtime/content_key.hpp"
+#include "edit/runtime/cuda/cuda_gpu_timestamp_pool.hpp"
 #include "edit/runtime/texture_format.hpp"
 #include "gpu/gpu_pool_trace.hpp"
 
@@ -174,6 +175,31 @@ class CudaBackend {
    */
   void SynchronizeRecordedWork(CommandContext& command_context);
 
+  /**
+   * @brief Record a CUDA timing start event for the current preview pass or sub-stage.
+   *
+   * No host wait. No-op when preview timing is Off or no pass is open.
+   */
+  void BeginGpuWorkSample(CommandContext& command_context);
+  /** @brief Record the matching CUDA timing stop event. No host wait. */
+  void EndGpuWorkSample(CommandContext& command_context);
+  /**
+   * @brief Publish elapsed GPU times for timestamp pairs whose stop events have completed.
+   *
+   * Does not wait. Call after Wait or a present stream sync.
+   */
+  void ResolveGpuTimestamps();
+  /** @brief Recycle timestamp slots without publishing durations. */
+  void DiscardGpuTimestamps();
+
+  [[nodiscard]] auto GpuTimestampInFlightCount() const -> std::size_t {
+    return gpu_timestamps_.InFlightCount();
+  }
+  [[nodiscard]] auto GpuTimestampSlotCount() const -> std::size_t {
+    return gpu_timestamps_.SlotCount();
+  }
+  [[nodiscard]] auto HostWaitCount() const -> std::uint64_t { return host_wait_count_; }
+
   [[nodiscard]] auto AcquireLut(ContentKey key, std::span<const std::byte> packed_rgba,
                                 std::uint32_t edge, CommandContext& command_context)
       -> CudaLutBinding;
@@ -240,6 +266,8 @@ class CudaBackend {
   };
   std::vector<LutCacheEntry> lut_cache_;
   Buffer                     dummy_lut_;
+  CudaGpuTimestampPool       gpu_timestamps_;
+  std::uint64_t              host_wait_count_ = 0;
 };
 
 inline constexpr std::uint32_t kCudaDagBackendCapabilityVersion = CudaBackend::kCapabilityVersion;

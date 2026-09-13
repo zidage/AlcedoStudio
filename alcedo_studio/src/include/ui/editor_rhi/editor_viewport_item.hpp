@@ -220,6 +220,8 @@ class EditorViewportItem : public QQuickRhiItem {
   QMetaObject::Connection    scene_graph_invalidated_connection_;
   QMetaObject::Connection    scene_graph_initialized_connection_;
   QMetaObject::Connection    after_rendering_connection_;
+  QMetaObject::Connection    frame_swapped_connection_;
+  QMetaObject::Connection    after_frame_end_connection_;
   std::atomic<bool>          window_color_space_applied_{false};
   bool                       last_diagnostics_available_      = false;
   qulonglong                 last_diag_target_gen_            = 0;

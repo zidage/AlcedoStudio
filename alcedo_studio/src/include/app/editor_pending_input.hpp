@@ -62,6 +62,10 @@ struct EditorPendingSequence {
   std::int64_t                   first_accepted_ns = 0;
   /// Monotonic time of the newest accepted write, including coalesced replacements.
   std::int64_t                   latest_accepted_ns = 0;
+  /// Monotonic time of the first QML/C++ submitWrite in this sequence. 0 if unset.
+  std::int64_t                   qml_first_write_ns = 0;
+  /// Monotonic time of the newest QML/C++ submitWrite, including coalesced replacements.
+  std::int64_t                   qml_latest_write_ns = 0;
 };
 
 /**
@@ -172,7 +176,7 @@ class EditorPendingInputQueue {
   auto StartSequenceLocked(EditorSessionIdentity identity, const EditorParameterTarget& target)
       -> EditorPendingSequence&;
   void SealOpenLocked(EditorPendingInputBoundaryKind kind);
-  void StampAcceptedLocked(EditorPendingSequence& sequence);
+  void StampAcceptedLocked(EditorPendingSequence& sequence, std::int64_t qml_write_ns);
   [[nodiscard]] auto NowNs() const -> std::int64_t;
   [[nodiscard]] auto PeekLocked() const -> EditorPendingInputView;
   [[nodiscard]] auto HasConsumableWorkLocked() const -> bool;

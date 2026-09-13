@@ -25,6 +25,7 @@
 #include "opencl/opencl_context.hpp"
 #include "opencl/opencl_kernel_cache.hpp"
 #include "opencl/opencl_program_library.hpp"
+#include "utils/diagnostics/preview_performance.hpp"
 
 namespace alcedo {
 namespace {
@@ -717,11 +718,79 @@ void OpenClBackend::Wait(CommandContext& command_context) {
     completed_submission_ = in_flight_submission_;
     in_flight_submission_ = 0;
   }
+  ResolveGpuTimestamps();
   const auto released = command_context.ReleaseTrackedEvents();
   NoteEventRelease(released);
   for (std::size_t i = 0; i < released; ++i) {
     NoteOpenClReleaseEvent();
   }
+}
+
+void OpenClBackend::BeginGpuWorkSample(CommandContext& command_context) {
+  if (!diag::PreviewPerformanceEnabled()) {
+    return;
+  }
+  const auto target = diag::PreviewPerformance::CurrentGpuSampleTarget();
+  if (!target.valid) {
+    return;
+  }
+  cl_event start = EnqueueMarker(command_context);
+  GpuTimestampSlot slot;
+  slot.start      = start;
+  slot.request_id = target.request_id;
+  slot.pass_index = target.pass_index;
+  slot.sub_index  = target.sub_index;
+  slot.is_sub     = target.is_sub;
+  gpu_open_stack_.push_back(gpu_timestamps_.size());
+  gpu_timestamps_.push_back(slot);
+}
+
+void OpenClBackend::EndGpuWorkSample(CommandContext& command_context) {
+  if (gpu_open_stack_.empty()) {
+    return;
+  }
+  const auto index = gpu_open_stack_.back();
+  gpu_open_stack_.pop_back();
+  if (index >= gpu_timestamps_.size()) {
+    return;
+  }
+  gpu_timestamps_[index].stop     = EnqueueMarker(command_context);
+  gpu_timestamps_[index].recorded = true;
+}
+
+void OpenClBackend::ResolveGpuTimestamps() {
+  for (const auto& slot : gpu_timestamps_) {
+    if (!slot.recorded || slot.start == nullptr || slot.stop == nullptr) {
+      continue;
+    }
+    cl_ulong start_ns = 0;
+    cl_ulong stop_ns  = 0;
+    const cl_int start_error =
+        clGetEventProfilingInfo(slot.start, CL_PROFILING_COMMAND_END, sizeof(start_ns), &start_ns,
+                                nullptr);
+    const cl_int stop_error =
+        clGetEventProfilingInfo(slot.stop, CL_PROFILING_COMMAND_END, sizeof(stop_ns), &stop_ns,
+                                nullptr);
+    diag::PreviewGpuTimeStatus status = diag::PreviewGpuTimeStatus::Unavailable;
+    std::int64_t               gpu_ns = 0;
+    if (start_error == CL_PROFILING_INFO_NOT_AVAILABLE ||
+        stop_error == CL_PROFILING_INFO_NOT_AVAILABLE) {
+      status = diag::PreviewGpuTimeStatus::Unavailable;
+    } else if (start_error != CL_SUCCESS || stop_error != CL_SUCCESS || stop_ns < start_ns) {
+      status = diag::PreviewGpuTimeStatus::Failed;
+    } else {
+      status = diag::PreviewGpuTimeStatus::Available;
+      gpu_ns = static_cast<std::int64_t>(stop_ns - start_ns);
+    }
+    diag::PreviewPerformance::NoteGpuDuration(slot.request_id, slot.pass_index, slot.is_sub,
+                                              slot.sub_index, gpu_ns, status);
+  }
+  DiscardGpuTimestamps();
+}
+
+void OpenClBackend::DiscardGpuTimestamps() {
+  gpu_timestamps_.clear();
+  gpu_open_stack_.clear();
 }
 
 void OpenClBackend::SynchronizeRecordedWork(CommandContext& command_context) {
@@ -898,6 +967,7 @@ void OpenClBackend::SetLutByteBudget(std::size_t bytes) {
 }
 
 void OpenClBackend::ReleaseUnsubmittedResourceUses() noexcept {
+  DiscardGpuTimestamps();
   for (auto& entry : lut_cache_) {
     if (entry.last_used_submission > completed_submission_) {
       entry.last_used_submission = 0;

@@ -19,6 +19,7 @@
 #include "edit/runtime/grade_schedule.hpp"
 #include "edit/runtime/neighbor_executor.hpp"
 #include "edit/runtime/parameter_arena.hpp"
+#include "edit/runtime/gpu_work_sample.hpp"
 #include "utils/diagnostics/preview_performance.hpp"
 
 namespace alcedo {
@@ -180,6 +181,7 @@ class GradeExecutor {
       const auto  dest = slots[index];
       if (op.kind == CompiledGradeStageKind::Neighborhood) {
         diag::PreviewSubStageInterval neighborhood(diag::PreviewSubStageKind::Neighborhood);
+        GpuWorkSample<Device> gpu(device);
         NeighborWork work;
         work.params        = op.neighbor;
         work.owner         = grade->Id();
@@ -201,6 +203,7 @@ class GradeExecutor {
         ++result.local_tone_pass_count;
       } else {
         diag::PreviewSubStageInterval pointwise(diag::PreviewSubStageKind::Pointwise);
+        GpuWorkSample<Device> gpu(device);
         auto& src = Resolve(current);
         auto& dst = Resolve(dest);
         Ops::DispatchPointwise(device, src, dst, lut, grade->Id(), fused_starts[index],
@@ -212,6 +215,7 @@ class GradeExecutor {
 
     if (!schedule.skip_final_mix) {
       diag::PreviewSubStageInterval mix_stage(diag::PreviewSubStageKind::Mix);
+      GpuWorkSample<Device> gpu(device);
       const auto dest                    = slots.back();
       auto&      source                  = Resolve(GradeImageSlot::Input);
       auto&      adjusted                = Resolve(current);

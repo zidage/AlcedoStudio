@@ -3,7 +3,12 @@
 Date: 2026-09-12
 
 Status: NM8.1 complete on 2026-09-12 (low-overhead CPU/E2E logging).
-NM8.2–NM8.6 planned. Native GPU timestamps are still unavailable.
+NM8.2 CUDA measurement is complete on 2026-09-13: native pass GPU timestamps,
+Interactive 2560 slider DAG traces, native-sensor slider DAG traces on the same
+Bayer RAW, 8 Color Grade skip paths, and a ~10 s product `submitWrite`→
+`frameSwapped` last-Exposure trajectory. OpenCL and Metal GPU timing remain
+pending.
+NM8.3–NM8.6 planned.
 NM7 已由用户确认完成；其历史测试记录保留在原方案中，本文件不补造执行证据。
 2026-09-12 的首轮工作范围是 NM8.1–NM8.2：建立低开销测量和日志，采集当前实现的数据。
 NM8.3–NM8.6 定义完整优化和最终资格验证，按依赖顺序执行。
@@ -224,7 +229,7 @@ Radial/Linear Gradient 的参数仍由 Mask owner 管理。Grade 不持有跨帧
 | 阶段 | 内容 | 依赖 | 初始状态 |
 | --- | --- | --- | --- |
 | NM8.1 | 低开销日志、输入到呈现时间线、CPU 分段 | 当前产品路径 | complete 2026-09-12 |
-| NM8.2 | 节点/pass 原生 GPU 计时、当前实现基线及硬件采集 | NM8.1 | planned；首轮范围 |
+| NM8.2 | 节点/pass 原生 GPU 计时、当前实现基线及硬件采集 | NM8.1 | CUDA complete 2026-09-13 (2560 slider DAG, native-sensor slider DAG, felt present); OpenCL/Metal pending |
 | NM8.3 | 新顺序、融合 pass 描述、算法版本和画面预期 | NM8.2 当前后端基线 | planned |
 | NM8.4 | 共享工作图、取消 Grade 缓存、LLF/Mix 与下游复用 | NM8.3 | planned |
 | NM8.5 | 根据 CUDA/Metal 数据优化热点和整帧开销 | NM8.4 | planned |
@@ -344,10 +349,10 @@ fields write `gpu=unavailable`. Qt frame is stamped only on the imported request
 writer, notes). Types live in `preview_performance_record.hpp`. RAII notes in
 `preview_performance.hpp`. No file crossed 1000 LOC.
 
-**Residual gaps:** native GPU events/counters are NM8.2. No 10 s Interactive traces
-or P95 tables (NM8.2 measurement list). Metal product binary was not rebuilt on
-this Windows host; Metal develop sub-stage notes are in source. Summary mode writes
-quantile lines from completed presented samples; Detail writes per-request records.
+**Residual gaps:** CUDA native GPU events and 10 s Interactive traces are in
+NM8.2 below. Metal product binary was not rebuilt on this Windows host; Metal
+develop sub-stage notes are in source. Summary mode writes quantile lines from
+completed presented samples; Detail writes per-request records.
 
 ### NM8.2 — 原生 GPU 计时与改动前基线
 
@@ -378,6 +383,217 @@ GPU 时间以原生真实工作负载验证，不用 CPU sleep 代替；计时 A
 采集开销；至少一份当前平台的系统时间线能与日志 request/NodeId 对应。
 CUDA、Metal、OpenCL 分别记状态，缺少设备实测不能把整个三后端阶段标记 complete。
 有已记录的本机基线即可继续本机开发；另一个后端优化前必须先采集它自身的原实现基线。
+
+##### Phase NM8.2 completion record (2026-09-13)
+
+**Status:** partial — CUDA native pass/sub-stage GPU timestamps and current-execution
+Interactive DAG baseline are complete. OpenCL profiling-info and Metal command-buffer
+GPU time are wired in source; they were not measured on this Windows host.
+
+**Primary success call chain:**
+
+```text
+PlanExecutor / GradeExecutor / LocalToneExecutor execute branch
+  -> GpuWorkSample<Device> (BeginGpuWorkSample)
+  -> CudaGpuTimestampPool::Begin (cudaEventRecord start on CommandContext stream)
+  -> native pass / sub-stage encode
+  -> GpuWorkSample destructor (cudaEventRecord stop)
+  -> EndRender Submit (existing disable-timing fence)
+  -> WaitIdle or Present cudaStreamSynchronize
+  -> CudaBackend::ResolveGpuTimestamps (cudaEventQuery + cudaEventElapsedTime)
+  -> PreviewPerformance::NoteGpuDuration on the pending sample
+  -> NoteDisplayed
+  -> Detail window log gpu_ms= next to pass CPU times
+```
+
+**Primary failure call chain:**
+
+```text
+cudaEventElapsedTime / profiling-info failure
+  -> gpu_status=Failed
+  -> render result unchanged
+
+Skipped / Aliased / Disabled pass
+  -> gpu_status=Unavailable
+  -> no published gpu_ns=0 as measured work
+
+encode throw
+  -> CancelRender
+  -> DiscardGpuTimestamps
+  -> no new published results
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `GpuDurationNoteFillsPassRecordBeforeDisplay` | `PreviewPerformanceTest` | PASS (debug) |
+| `GpuPassSamplesKeepRequestAndNodeIdentity` | `GpuDagCudaPrimaryGradeTest` | PASS (debug + win_release_test) |
+| `TimingSlotsAreNotReusedBeforeSubmissionCompletes` | `GpuDagCudaPrimaryGradeTest` | PASS (debug + win_release_test) |
+| `GpuTimingDoesNotAddPerPassHostWaits` | `GpuDagCudaPrimaryGradeTest` | PASS (debug + win_release_test) |
+| `CachedAndDisabledPassesReportExecutionState` | `GpuDagCudaPrimaryGradeTest` | PASS (debug + win_release_test) |
+| `DetailTimingPreservesRenderedPixelsWithinTolerance` | `GpuDagCudaPrimaryGradeTest` | PASS (debug + win_release_test) |
+| `InteractiveThreeNodeGraphReportsPassGpuTimes` | `GpuDagCudaPrimaryGradeTest` | PASS (debug + win_release_test) |
+| `InteractiveFourNodeSecondGradeMasksReportGpuTimes` | `GpuDagCudaPrimaryGradeTest` | PASS (debug + win_release_test) |
+| `InteractiveMultiGradeMaskMixReportsPerNodeGpuTimes` | `GpuDagCudaPrimaryGradeTest` | PASS (debug + win_release_test) |
+| `TwoLutGradesReportIndependentPassGpuTimes` | `GpuDagCudaPrimaryGradeTest` | PASS (debug + win_release_test) |
+| `InteractiveDagBaselinesDumpCurrentExecutionGpuTimes` | `GpuDagCudaPrimaryGradeTest` | PASS (debug 256×192; release 1920×1280 n=11 + Bayer FULL) |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --preset win_debug -DALCEDO_ENABLE_BRUSH_MASK=OFF -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake"
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target PreviewPerformanceTest --target GpuDagCudaPrimaryGradeTest
+ctest --test-dir build/debug -R "GpuDurationNoteFillsPassRecordBeforeDisplay|GpuPassSamplesKeepRequestAndNodeIdentity|TimingSlotsAreNotReused|GpuTimingDoesNotAddPerPassHostWaits|CachedAndDisabledPassesReportExecutionState|DetailTimingPreservesRenderedPixels|InteractiveThreeNodeGraph|InteractiveFourNodeSecondGradeMasks|InteractiveMultiGradeMaskMix|TwoLutGradesReportIndependentPassGpuTimes|InteractiveDagBaselinesDumpCurrentExecutionGpuTimes" --output-on-failure
+cmd /c scripts\msvc_env.cmd --preset win_release_test -DALCEDO_ENABLE_BRUSH_MASK=OFF -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake"
+cmd /c scripts\msvc_env.cmd --build --preset win_release_test --parallel 4 --target GpuDagCudaPrimaryGradeTest
+ctest --test-dir build/release-test -R "GpuPassSamplesKeepRequestAndNodeIdentity|TimingSlotsAreNotReused|GpuTimingDoesNotAddPerPassHostWaits|CachedAndDisabledPassesReportExecutionState|DetailTimingPreservesRenderedPixels|InteractiveThreeNodeGraph|InteractiveFourNodeSecondGradeMasks|InteractiveMultiGradeMaskMix|TwoLutGradesReportIndependentPassGpuTimes" --output-on-failure
+ctest --test-dir build/release-test -R "InteractiveDagBaselinesDumpCurrentExecutionGpuTimes" --output-on-failure --timeout 1200
+```
+
+Suite totals: debug 11/11 PASS; win_release_test 9/9 correctness PASS + dump PASS.
+`build/debug/CMakeCache.txt` and `build/release-test/CMakeCache.txt` have
+`ALCEDO_ENABLE_BRUSH_MASK:BOOL=OFF`.
+Hardware: NVIDIA GeForce RTX 3080 Laptop GPU, 8192 MiB, driver 610.62, CUDA 12.8,
+Windows 10.0.22635, Qt 6.9.3. Branch `feature/preview-gpu-pass-timing`,
+base commit `671a0da1`.
+Nsight Systems `nsys` is not on PATH (Nsight Compute `ncu.bat` is present and was
+not used). The Detail pass records with `request_id` and NodeId are the correlated
+timeline.
+
+**Baseline table:** `build/tmp/preview_performance/cuda_interactive_dag_baseline_table.txt`
+(P50 also in `cuda_dag_baseline_p50.txt`). DirectRgb 1920×1280 Interactive, n=11,
+events_lost=0, texture 187.5 MB. Bayer FULL 3992×5992 3-node Develop UploadRaw
+P50 GPU 103.1 ms (DecodeRes FULL). Top GPU costs on 1920×1280: UploadRgb ~9–11 ms,
+DRT ~2.3–3.2 ms, CameraToAp1 ~2.2–2.4 ms.
+
+**Checklist / exit condition:** CUDA required tests and the four user DAG baselines
+are done. Section 6 items not in that list (8-grade, LLF on/off matrix, 10 s input
+trajectory, Off vs Summary overhead) stay residual. OpenCL/Metal not complete.
+
+**LOC note (grill-code-review):** `preview_performance.cpp` 1185 LOC (writer + notes;
+already large after NM8.1). New CUDA pool ~163/.hpp ~83. `gpu_work_sample.hpp` ~53.
+`cuda_preview_gpu_timing_test.cpp` ~680. No new type exceeds a second owner.
+
+**Residual gaps:** OpenCL Interactive DAG GPU times not run (queue created with
+`CL_QUEUE_PROFILING_ENABLE`; no measured table). Metal command-buffer GPUStart/End
+cannot run on this Windows host; per-pass counters stay Unavailable. No Nsight
+Systems timeline. The 2026-09-13 DirectRgb 1920×1280 / Bayer FULL 3992×5992 table
+is not product Interactive. NM8.3 order fusion and NM8.4 shared work images were
+not started.
+
+##### NM8.2 remaining measurement (2560, felt E2E, RAW slider)
+
+**Status:** complete on CUDA (2026-09-13). OpenCL / Metal present tables are not
+on this host.
+
+Exit conditions and evidence:
+
+1. Interactive working size is `DecodeRes::FULL` + long-edge **2560**. Dump fails
+   if `geometry.render_extent` long edge is not 2560 when the decoded long edge
+   is larger. Do not change Interactive to HALF.
+2. Felt E2E starts at `EditorSessionController::submitWrite` (`qml_write_ns`) and
+   ends at `QQuickWindow::frameSwapped` for the Qt frame that imported that
+   request. Keep submit → import as `e2e_ms`. Stamp worker start, sink submit,
+   import, and `afterFrameEnd`. Do not stamp an unrelated Qt redraw.
+3. Headline CFA is Bayer and X-Trans. DirectRgb is a control row. Report cold
+   first Interactive and **hot slider** separately (session cache kept). Dominant
+   GPU is per table, not mixed.
+4. **Slider simulation is required.** Mutate operator parameters on the live
+   document and produce frames. 8 Color Grades; first / mid / last; Exposure,
+   Contrast, Curve/Color, Shadows/Highlights, Mix, Radial/Linear, DRT Clarity.
+   This is how cache misses and scheduling stalls are caught. Static graphs with
+   `ReleaseSessionResources()` between repeats are not Interactive slider data.
+
+DAG dump: `build/tmp/preview_performance/cuda_interactive_2560_pass_table.txt`
+and `cuda_interactive_native_slider_table.txt`.
+Present dump: `build/tmp/preview_performance/cuda_interactive_2560_present_table.txt`
+and `cuda_interactive_2560_present_frames.csv`. LLF-enabled present dump:
+`cuda_interactive_2560_present_llf_table.txt` and
+`cuda_interactive_2560_present_llf_frames.csv`.
+Tests: `PreviewPerformanceTest` import/present correlation; `GpuDagCudaPrimaryGradeTest`
+`EightGrade*` skip assertions,
+`Interactive2560SliderBaselinesDumpCurrentExecutionGpuTimes`, and
+`InteractiveNativeSliderBaselinesDumpCurrentExecutionGpuTimes`;
+`EditorPreviewPresentTrajectoryTest.SubmitWriteHotExposureCompletesAtFrameSwapped`,
+`Interactive2560PresentTrajectoryDumpSubmitWriteToFrameSwapped`, and
+`Interactive2560PresentTrajectoryDumpLastGradeLlfEnabled`.
+
+**Shared RAW for slider families (win_release_test, 2026-09-13).** Hardware:
+NVIDIA GeForce RTX 3080 Laptop GPU, 8192 MiB, driver 610.62, CUDA 12.8. Brush
+mask cache: `ALCEDO_ENABLE_BRUSH_MASK=OFF`. Bayer file:
+`Tag @ryanbreitkreutz - Free files from @signatureeditscoDSC00830.ARW`. Develop
+plane **4600×3064**, `DecodeRes::FULL`, `downsample_passes=0`. Session cache
+kept on every hot slider frame. DirectRgb 1920×1280 with
+`ReleaseSessionResources()` between repeats is a control row only. It is not
+an Interactive slider.
+
+Times in milliseconds.
+
+**Family A — heavy 8-grade DAG slider** (`PopulateHeavyGrade` on each Color
+Grade, includes LLF). Dump:
+`build/tmp/preview_performance/cuda_interactive_2560_pass_table.txt` and
+`cuda_interactive_native_slider_table.txt`. Hot repeats = 11.
+
+| Slider | Size | Node.field | Value | GPU P50 | P50 executed trace |
+| --- | --- | --- | --- | ---: | --- |
+| Bayer 8-grade cold | 2560×1705 | all grades ev=0.2 | initial | 133.85 | UploadRaw 54.88, then all 8 grades + DRT |
+| last Exposure hot | 2560×1705 | g7.exposure | 0.55 + 0.03×i | 9.75 | Develop skipped; g7 + DRT 1.61 |
+| first Contrast hot | 2560×1705 | grade.primary.contrast | 12 + 1×i | 48.10 | all 8 grades (LLF on each) + DRT |
+| mid Saturation hot | 2560×1705 | g3.saturation | 1.15 + 0.02×i | 26.75 | g3 through g7 + DRT |
+| last Exposure hot | 4600×3064 native | g7.exposure | 0.55 + 0.03×i | 14.96 | Develop skipped; g7 LLF + DRT 5.86 |
+| 8-grade cold | 4600×3064 native | all grades ev=0.2 | initial | 702.41 | UploadRaw + 8 LLF grades; peak 4418 MiB |
+
+X-Trans 2560×1710, `grade.primary.exposure` 0.70 + 0.03×i: cold GPU 361.85
+(UploadRaw 341.29), hot GPU P50 8.91 (Develop skipped).
+
+**Family B — product present last-Exposure slider** (8 clean Color Grades,
+no LLF). Dump:
+`build/tmp/preview_performance/cuda_interactive_2560_present_table.txt` and
+`cuda_interactive_2560_present_frames.csv`. Path: `submitWrite(exposure)` on
+the last Color Grade. Start 0.15, step 0.02, wrap 0.10–1.80, period 8 ms,
+10 s × 3 Detail plus Summary and Off. Interactive render **2560×1705**.
+`events_lost=0`.
+
+| Run | Mode | Writes | Presented | Dropped | qml p50/p95/p99 | gpu p50 | drt gpu p50 | sink p50 | encode p50 |
+| --- | --- | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: |
+| 1 | Detail | 690 | 421 | 35 | 19.91 / 25.07 / 26.04 | 4.31 | 3.11 | 5.23 | 0.05 |
+| 2 | Detail | 650 | 408 | 35 | 21.47 / 24.59 / 25.33 | 5.64 | 3.71 | 6.66 | 0.05 |
+| 3 | Detail | 650 | 420 | 26 | 21.28 / 24.95 / 25.76 | 5.57 | 3.57 | 6.51 | 0.05 |
+| 4 | Summary | 647 | 412 | 34 | 21.48 / 25.00 / 25.91 | 5.54 | 3.59 | 6.48 | 0.05 |
+| 5 | Off | 646 | — | — | no stamps | — | — | — | — |
+
+Median presented frame (run 1): Develop skipped; only the last clean Grade
+(pointwise 2.63) plus DRT 3.15. First presented frame after topology insert
+still executes the seven extra Grades. Felt `qml_ms` P50 is 20–22 ms. DAG
+encode stays 0.05 ms P50. Sink Map/copy is 5–7 ms P50. Off vs Detail does not
+change the 10 s write-loop wall time.
+
+**Family B2 — product present last-Exposure slider with LLF enabled** (8 clean
+Color Grades, then last-grade Shadows=18 and Highlights=-12). Dump:
+`build/tmp/preview_performance/cuda_interactive_2560_present_llf_table.txt` and
+`cuda_interactive_2560_present_llf_frames.csv`. Same `submitWrite(exposure)`
+slider as Family B after a node-switch seal between Shadows and Highlights.
+10 s × 3 Detail. Interactive render **2560×1705**. `events_lost=0`.
+
+| Run | Mode | Writes | Presented | Dropped | qml p50/p95/p99 | gpu p50 | llf gpu p50 | last grade gpu p50 | drt gpu p50 | sink p50 | encode p50 |
+| --- | --- | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | Detail | 678 | 417 | 28 | 20.79 / 25.98 / 31.39 | 8.59 | 3.89 | 2.17 | 1.61 | 7.05 | 0.94 |
+| 2 | Detail | 644 | 429 | 17 | 20.36 / 24.86 / 31.22 | 8.55 | 3.90 | 2.16 | 1.61 | 7.16 | 0.98 |
+| 3 | Detail | 644 | 419 | 22 | 21.33 / 25.31 / 31.68 | 8.47 | 3.89 | 2.15 | 1.61 | 7.18 | 0.97 |
+
+Median presented frame (run 1): Develop skipped; last Color Grade only
+(pointwise, then LLF extract/pyramid/remap/select/collapse/apply) plus DRT 1.61.
+LLF GPU P50 is 3.89 ms. Total GPU P50 is 8.5–8.6 ms versus 4.3–5.6 ms with LLF
+off. Felt `qml_ms` P50 stays 20–21 ms. Sink Map/copy is 7.1–7.2 ms P50. DAG
+encode is 0.94–0.98 ms P50.
+
+Command:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_release_test --parallel 4 --target EditorPreviewPresentTrajectoryTest
+EditorPreviewPresentTrajectoryTest.exe  (ALCEDO_TEST_EDITOR_BACKEND=cuda, windows QPA)
+```
 
 ### NM8.3 — 固定调色顺序与融合 pass 编译
 
@@ -538,7 +754,9 @@ Windows 用 wrapper，配置/编译总预算从 20 分钟开始，健康进程�
 Release 用于性能；Debug 用于诊断正确性。所有临时日志、脚本、原始 trace 和表格放在
 `build/tmp/preview_performance/`，不在仓库根目录创建临时文件，不提交原始机器日志。
 
-以下是实施命令模板，尚未执行。Windows 优化测试构建使用现有 `win_release_test`；
+NM8.2 CUDA used `win_debug` and `win_release_test` with `ALCEDO_ENABLE_BRUSH_MASK=OFF`
+and wrote tables under `build/tmp/preview_performance/`. The templates below remain
+the command pattern for later phases. Windows 优化测试构建使用现有 `win_release_test`；
 实际 app 和测试 target、可执行文件路径在执行时从 CMake/CTest 发现并写入完成记录。
 
 ```powershell
@@ -580,5 +798,7 @@ Numerical tolerance and result:
 Remaining platform or product verification:
 ```
 
-当前执行记录：NM8.1 complete 2026-09-12. See the dated record under the NM8.1 heading.
-NM8.2–NM8.6 have no execution evidence yet.
+当前执行记录：NM8.1 complete 2026-09-12. NM8.2 CUDA complete 2026-09-13
+(GPU timestamps, 2560 slider DAG, native-sensor slider DAG, felt present).
+OpenCL/Metal pending. See the dated records under those headings.
+NM8.3–NM8.6 have no execution evidence yet.

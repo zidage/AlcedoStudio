@@ -17,12 +17,19 @@ auto EditorPendingInputQueue::NowNs() const -> std::int64_t {
   return clock_ ? clock_->NowNs() : 0;
 }
 
-void EditorPendingInputQueue::StampAcceptedLocked(EditorPendingSequence& sequence) {
+void EditorPendingInputQueue::StampAcceptedLocked(EditorPendingSequence& sequence,
+                                                  const std::int64_t qml_write_ns) {
   const auto now = NowNs();
   if (sequence.first_accepted_ns == 0) {
     sequence.first_accepted_ns = now;
   }
   sequence.latest_accepted_ns = now;
+  if (qml_write_ns > 0) {
+    if (sequence.qml_first_write_ns == 0) {
+      sequence.qml_first_write_ns = qml_write_ns;
+    }
+    sequence.qml_latest_write_ns = qml_write_ns;
+  }
 }
 
 namespace {
@@ -98,9 +105,11 @@ auto EditorPendingInputQueue::TakeReadyBatch() -> std::optional<EditorPendingSeq
     batch.identity           = open_->identity;
     batch.captured_target    = open_->captured_target;
     batch.seal               = open_->seal;
-    batch.first_accepted_ns  = open_->first_accepted_ns;
-    batch.latest_accepted_ns = open_->latest_accepted_ns;
-    batch.fields             = std::move(open_->fields);
+    batch.first_accepted_ns   = open_->first_accepted_ns;
+    batch.latest_accepted_ns  = open_->latest_accepted_ns;
+    batch.qml_first_write_ns  = open_->qml_first_write_ns;
+    batch.qml_latest_write_ns = open_->qml_latest_write_ns;
+    batch.fields              = std::move(open_->fields);
     open_field_index_.clear();
     return batch;
   }
@@ -179,7 +188,7 @@ auto EditorPendingInputQueue::AdmitFieldChangeLocked(EditorSessionIdentity ident
     open_field_index_.emplace(patch.field_key, open_->fields.size());
     open_->fields.push_back(std::move(change));
   }
-  StampAcceptedLocked(*open_);
+  StampAcceptedLocked(*open_, patch.qml_write_ns);
 
   const auto sequence_id = open_->sequence_id;
   if (patch.settled) {

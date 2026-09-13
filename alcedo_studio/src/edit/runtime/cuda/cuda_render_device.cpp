@@ -23,6 +23,7 @@ CudaRenderDevice::~CudaRenderDevice() {
 void CudaRenderDevice::CancelRender() noexcept {
   if (!workspace_.IsRendering()) return;
   (void)::cudaStreamSynchronize(command_context_.Stream());
+  workspace_.Device().DiscardGpuTimestamps();
   workspace_.CancelRender();
 }
 

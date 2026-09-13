@@ -18,6 +18,7 @@
 #include "image/image_buffer.hpp"
 #include "io/image/image_loader.hpp"
 #include "renderer/pipeline_task.hpp"
+#include "utils/diagnostics/preview_performance.hpp"
 #include "utils/profiler/profiler.hpp"
 
 namespace alcedo {
@@ -462,6 +463,7 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
     task.options_.render_desc_.frame_metadata_.presentation_request_id = task.request_id_;
   }
   thread_pool_.Submit([this, task = std::move(task)]() mutable {
+    diag::PreviewPerformance::NoteWorkerStart(task.request_id_);
     std::optional<bool> completion_result;
     std::string         completion_message;
     // Some render paths return from inside the render_lock scope. Record the
