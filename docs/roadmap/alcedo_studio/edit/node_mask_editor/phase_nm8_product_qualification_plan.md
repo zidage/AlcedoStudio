@@ -4,9 +4,10 @@ Date: 2026-09-12
 
 Status: NM8.1 complete on 2026-09-12 (low-overhead CPU/E2E logging).
 NM8.2 CUDA measurement is complete on 2026-09-13: native pass GPU timestamps,
-Interactive 2560, Bayer/X-Trans slider DAG, 8 Color Grade skip paths, and a
-~10 s product `submitWrite`→`frameSwapped` trajectory. OpenCL and Metal GPU
-timing remain pending.
+Interactive 2560 slider DAG traces, native-sensor slider DAG traces on the same
+Bayer RAW, 8 Color Grade skip paths, and a ~10 s product `submitWrite`→
+`frameSwapped` last-Exposure trajectory. OpenCL and Metal GPU timing remain
+pending.
 NM8.3–NM8.6 planned.
 NM7 已由用户确认完成；其历史测试记录保留在原方案中，本文件不补造执行证据。
 2026-09-12 的首轮工作范围是 NM8.1–NM8.2：建立低开销测量和日志，采集当前实现的数据。
@@ -228,7 +229,7 @@ Radial/Linear Gradient 的参数仍由 Mask owner 管理。Grade 不持有跨帧
 | 阶段 | 内容 | 依赖 | 初始状态 |
 | --- | --- | --- | --- |
 | NM8.1 | 低开销日志、输入到呈现时间线、CPU 分段 | 当前产品路径 | complete 2026-09-12 |
-| NM8.2 | 节点/pass 原生 GPU 计时、当前实现基线及硬件采集 | NM8.1 | CUDA partial：GPU timestamps 2026-09-13；2560 / felt E2E / RAW slider remaining；OpenCL/Metal pending |
+| NM8.2 | 节点/pass 原生 GPU 计时、当前实现基线及硬件采集 | NM8.1 | CUDA complete 2026-09-13 (2560 slider DAG, native-sensor slider DAG, felt present); OpenCL/Metal pending |
 | NM8.3 | 新顺序、融合 pass 描述、算法版本和画面预期 | NM8.2 当前后端基线 | planned |
 | NM8.4 | 共享工作图、取消 Grade 缓存、LLF/Mix 与下游复用 | NM8.3 | planned |
 | NM8.5 | 根据 CUDA/Metal 数据优化热点和整帧开销 | NM8.4 | planned |
@@ -348,10 +349,10 @@ fields write `gpu=unavailable`. Qt frame is stamped only on the imported request
 writer, notes). Types live in `preview_performance_record.hpp`. RAII notes in
 `preview_performance.hpp`. No file crossed 1000 LOC.
 
-**Residual gaps:** native GPU events/counters are NM8.2. No 10 s Interactive traces
-or P95 tables (NM8.2 measurement list). Metal product binary was not rebuilt on
-this Windows host; Metal develop sub-stage notes are in source. Summary mode writes
-quantile lines from completed presented samples; Detail writes per-request records.
+**Residual gaps:** CUDA native GPU events and 10 s Interactive traces are in
+NM8.2 below. Metal product binary was not rebuilt on this Windows host; Metal
+develop sub-stage notes are in source. Summary mode writes quantile lines from
+completed presented samples; Detail writes per-request records.
 
 ### NM8.2 — 原生 GPU 计时与改动前基线
 
@@ -504,39 +505,66 @@ Exit conditions and evidence:
    This is how cache misses and scheduling stalls are caught. Static graphs with
    `ReleaseSessionResources()` between repeats are not Interactive slider data.
 
-DAG dump: `build/tmp/preview_performance/cuda_interactive_2560_pass_table.txt`.
-Present dump: `build/tmp/preview_performance/cuda_interactive_2560_present_table.txt`.
+DAG dump: `build/tmp/preview_performance/cuda_interactive_2560_pass_table.txt`
+and `cuda_interactive_native_slider_table.txt`.
+Present dump: `build/tmp/preview_performance/cuda_interactive_2560_present_table.txt`
+and `cuda_interactive_2560_present_frames.csv`.
 Tests: `PreviewPerformanceTest` import/present correlation; `GpuDagCudaPrimaryGradeTest`
-`EightGrade*` skip assertions and
-`Interactive2560SliderBaselinesDumpCurrentExecutionGpuTimes`;
+`EightGrade*` skip assertions,
+`Interactive2560SliderBaselinesDumpCurrentExecutionGpuTimes`, and
+`InteractiveNativeSliderBaselinesDumpCurrentExecutionGpuTimes`;
 `EditorPreviewPresentTrajectoryTest.SubmitWriteHotExposureCompletesAtFrameSwapped`
 and `Interactive2560PresentTrajectoryDumpSubmitWriteToFrameSwapped`.
 
-**Product present trajectory (win_release_test, 2026-09-13).** Hardware: NVIDIA
-GeForce RTX 3080 Laptop GPU. Brush mask cache: `ALCEDO_ENABLE_BRUSH_MASK=OFF`.
-Harness: `EditorViewportItem` + `EditorSessionService` + CI Bayer ARW. No
-`Main.qml`. Path: `submitWrite(exposure)` on the last of 8 Color Grades, 8 ms
-write period, session cache kept, Interactive render **2560×1705**. DecodeRes
-stays FULL. `events_lost=0`.
+**Shared RAW for slider families (win_release_test, 2026-09-13).** Hardware:
+NVIDIA GeForce RTX 3080 Laptop GPU, 8192 MiB, driver 610.62, CUDA 12.8. Brush
+mask cache: `ALCEDO_ENABLE_BRUSH_MASK=OFF`. Bayer file:
+`Tag @ryanbreitkreutz - Free files from @signatureeditscoDSC00830.ARW`. Develop
+plane **4600×3064**, `DecodeRes::FULL`, `downsample_passes=0`. Session cache
+kept on every hot slider frame. DirectRgb 1920×1280 with
+`ReleaseSessionResources()` between repeats is a control row only. It is not
+an Interactive slider.
 
 Times in milliseconds.
 
-| Run | Mode | Writes | Viewport frames | Presented | Dropped | qml p50/p95/p99 | e2e p50 | sink p50 | sched p50 | encode p50 | swap p50 |
-| --- | --- | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: |
-| 1 | Detail | 694 | 507 | 437 | 22 | 18.64 / 24.63 / 25.16 | 18.32 | 3.87 | 0.01 | 0.05 | 0.16 |
-| 2 | Detail | 638 | 455 | 396 | 40 | 21.78 / 24.75 / 25.49 | 21.53 | 3.87 | 0.01 | 0.05 | 0.15 |
-| 3 | Detail | 649 | 473 | 416 | 37 | 18.18 / 24.73 / 26.14 | 17.47 | 3.77 | 0.00 | 0.05 | 0.17 |
-| 4 | Summary | 644 | 486 | 417 | 24 | 21.35 / 24.60 / 25.61 | 21.04 | 5.93 | 0.00 | 0.05 | 0.16 |
-| 5 | Off | 638 | 490 | — | — | no stamps | — | — | — | — | — |
+**Family A — heavy 8-grade DAG slider** (`PopulateHeavyGrade` on each Color
+Grade, includes LLF). Dump:
+`build/tmp/preview_performance/cuda_interactive_2560_pass_table.txt` and
+`cuda_interactive_native_slider_table.txt`. Hot repeats = 11.
 
-Hot last-node Exposure skips Develop, GeometryResample, CameraToAp1, and
-upstream Color Grades. Repeat 1 still executes the seven extra Grades on the
-slowest frame (first slider after topology insert). Repeats 2 and 3 execute
-only the last Grade plus DRT. Felt `qml_ms` is about 18–22 ms P50. Pipeline
-encode is 0.05 ms P50. Frame-sink Map/copy is about 4 ms P50. Thread-pool wait
-and `frameSwapped`−import are under 0.2 ms P50. Off vs Detail does not change
-the 10 s write-loop wall time. Viewport frame counts stay in the same band
-(455–507).
+| Slider | Size | Node.field | Value | GPU P50 | P50 executed trace |
+| --- | --- | --- | --- | ---: | --- |
+| Bayer 8-grade cold | 2560×1705 | all grades ev=0.2 | initial | 133.85 | UploadRaw 54.88, then all 8 grades + DRT |
+| last Exposure hot | 2560×1705 | g7.exposure | 0.55 + 0.03×i | 9.75 | Develop skipped; g7 + DRT 1.61 |
+| first Contrast hot | 2560×1705 | grade.primary.contrast | 12 + 1×i | 48.10 | all 8 grades (LLF on each) + DRT |
+| mid Saturation hot | 2560×1705 | g3.saturation | 1.15 + 0.02×i | 26.75 | g3 through g7 + DRT |
+| last Exposure hot | 4600×3064 native | g7.exposure | 0.55 + 0.03×i | 14.96 | Develop skipped; g7 LLF + DRT 5.86 |
+| 8-grade cold | 4600×3064 native | all grades ev=0.2 | initial | 702.41 | UploadRaw + 8 LLF grades; peak 4418 MiB |
+
+X-Trans 2560×1710, `grade.primary.exposure` 0.70 + 0.03×i: cold GPU 361.85
+(UploadRaw 341.29), hot GPU P50 8.91 (Develop skipped).
+
+**Family B — product present last-Exposure slider** (8 clean Color Grades,
+no LLF). Dump:
+`build/tmp/preview_performance/cuda_interactive_2560_present_table.txt` and
+`cuda_interactive_2560_present_frames.csv`. Path: `submitWrite(exposure)` on
+the last Color Grade. Start 0.15, step 0.02, wrap 0.10–1.80, period 8 ms,
+10 s × 3 Detail plus Summary and Off. Interactive render **2560×1705**.
+`events_lost=0`.
+
+| Run | Mode | Writes | Presented | Dropped | qml p50/p95/p99 | gpu p50 | drt gpu p50 | sink p50 | encode p50 |
+| --- | --- | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: |
+| 1 | Detail | 690 | 421 | 35 | 19.91 / 25.07 / 26.04 | 4.31 | 3.11 | 5.23 | 0.05 |
+| 2 | Detail | 650 | 408 | 35 | 21.47 / 24.59 / 25.33 | 5.64 | 3.71 | 6.66 | 0.05 |
+| 3 | Detail | 650 | 420 | 26 | 21.28 / 24.95 / 25.76 | 5.57 | 3.57 | 6.51 | 0.05 |
+| 4 | Summary | 647 | 412 | 34 | 21.48 / 25.00 / 25.91 | 5.54 | 3.59 | 6.48 | 0.05 |
+| 5 | Off | 646 | — | — | no stamps | — | — | — | — |
+
+Median presented frame (run 1): Develop skipped; only the last clean Grade
+(pointwise 2.63) plus DRT 3.15. First presented frame after topology insert
+still executes the seven extra Grades. Felt `qml_ms` P50 is 20–22 ms. DAG
+encode stays 0.05 ms P50. Sink Map/copy is 5–7 ms P50. Off vs Detail does not
+change the 10 s write-loop wall time.
 
 Command:
 
@@ -748,7 +776,7 @@ Numerical tolerance and result:
 Remaining platform or product verification:
 ```
 
-当前执行记录：NM8.1 complete 2026-09-12. NM8.2 CUDA partial (GPU timestamps
-2026-09-13; 2560 / felt E2E / RAW slider remaining). OpenCL/Metal pending.
-See the dated records under those headings. NM8.3–NM8.6 have no execution
-evidence yet.
+当前执行记录：NM8.1 complete 2026-09-12. NM8.2 CUDA complete 2026-09-13
+(GPU timestamps, 2560 slider DAG, native-sensor slider DAG, felt present).
+OpenCL/Metal pending. See the dated records under those headings.
+NM8.3–NM8.6 have no execution evidence yet.

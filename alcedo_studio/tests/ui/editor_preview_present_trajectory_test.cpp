@@ -47,6 +47,10 @@ constexpr std::uint32_t kInteractiveMaxLongEdge = 2560;
 constexpr auto          kSliderPeriod           = std::chrono::milliseconds(8);
 constexpr auto          kTrajectoryLength       = std::chrono::seconds(10);
 constexpr int           kRepeatCount            = 3;
+constexpr float         kExposureWriteStart     = 0.15f;
+constexpr float         kExposureWriteStep      = 0.02f;
+constexpr float         kExposureWrapMax        = 1.80f;
+constexpr float         kExposureWrapMin        = 0.10f;
 
 template <class Predicate>
 auto WaitUntil(Predicate&& predicate, std::chrono::milliseconds timeout) -> bool {
@@ -150,6 +154,9 @@ struct TrajectoryStats {
   std::vector<std::int64_t> sink_ns;
   std::vector<std::int64_t> swap_ns;
   std::vector<std::int64_t> encode_ns;
+  std::vector<std::int64_t> gpu_ns;
+  std::vector<std::int64_t> last_grade_gpu_ns;
+  std::vector<std::int64_t> drt_gpu_ns;
   std::uint64_t             presented        = 0;
   std::uint64_t             cancelled        = 0;
   std::uint64_t             coalesced        = 0;
@@ -158,10 +165,51 @@ struct TrajectoryStats {
   std::uint64_t             stale            = 0;
   std::uint32_t             render_width     = 0;
   std::uint32_t             render_height    = 0;
+  std::uint32_t             develop_width    = 0;
+  std::uint32_t             develop_height   = 0;
   bool                      develop_skipped  = false;
   const diag::PreviewRequestRecord* slowest  = nullptr;
+  const diag::PreviewRequestRecord* median   = nullptr;
+  const diag::PreviewRequestRecord* first    = nullptr;
+  std::vector<const diag::PreviewRequestRecord*> felt;
   std::int64_t                      slowest_qml_ns = -1;
 };
+
+auto LastExecutedGradeGpuNs(const diag::PreviewRequestRecord& record) -> std::int64_t {
+  std::int64_t gpu_ns = 0;
+  bool         found  = false;
+  for (const auto& pass : record.passes) {
+    if (pass.kind == diag::PreviewPassKind::PrimaryColorGrade &&
+        pass.state == diag::PreviewExecutionState::Executed &&
+        pass.gpu_status == diag::PreviewGpuTimeStatus::Available) {
+      gpu_ns = pass.gpu_ns;
+      found  = true;
+    }
+  }
+  return found ? gpu_ns : 0;
+}
+
+auto PassGpuNs(const diag::PreviewRequestRecord& record, diag::PreviewPassKind kind)
+    -> std::int64_t {
+  for (const auto& pass : record.passes) {
+    if (pass.kind == kind && pass.state == diag::PreviewExecutionState::Executed &&
+        pass.gpu_status == diag::PreviewGpuTimeStatus::Available) {
+      return pass.gpu_ns;
+    }
+  }
+  return 0;
+}
+
+auto CountExecutedGrades(const diag::PreviewRequestRecord& record) -> int {
+  int count = 0;
+  for (const auto& pass : record.passes) {
+    if (pass.kind == diag::PreviewPassKind::PrimaryColorGrade &&
+        pass.state == diag::PreviewExecutionState::Executed) {
+      ++count;
+    }
+  }
+  return count;
+}
 
 auto BuildStats(const std::vector<diag::PreviewRequestRecord>& records) -> TrajectoryStats {
   TrajectoryStats stats;
@@ -193,6 +241,10 @@ auto BuildStats(const std::vector<diag::PreviewRequestRecord>& records) -> Traje
       stats.render_width  = record.render_width;
       stats.render_height = record.render_height;
     }
+    if (stats.develop_width == 0 && record.has_develop_decode) {
+      stats.develop_width  = record.develop.develop_width;
+      stats.develop_height = record.develop.develop_height;
+    }
     const auto sample = MakeFeltSample(record);
     stats.qml_ns.push_back(sample.qml_ns);
     stats.e2e_ns.push_back(sample.e2e_ns);
@@ -200,6 +252,13 @@ auto BuildStats(const std::vector<diag::PreviewRequestRecord>& records) -> Traje
     stats.sink_ns.push_back(sample.sink_ns);
     stats.swap_ns.push_back(sample.swap_ns);
     stats.encode_ns.push_back(sample.encode_ns);
+    stats.gpu_ns.push_back(record.gpu_ns);
+    stats.last_grade_gpu_ns.push_back(LastExecutedGradeGpuNs(record));
+    stats.drt_gpu_ns.push_back(PassGpuNs(record, diag::PreviewPassKind::Drt));
+    stats.felt.push_back(&record);
+    if (stats.first == nullptr) {
+      stats.first = &record;
+    }
     if (sample.qml_ns > stats.slowest_qml_ns) {
       stats.slowest_qml_ns = sample.qml_ns;
       stats.slowest        = &record;
@@ -211,6 +270,14 @@ auto BuildStats(const std::vector<diag::PreviewRequestRecord>& records) -> Traje
         stats.develop_skipped = true;
       }
     }
+  }
+  if (!stats.felt.empty()) {
+    auto ordered = stats.felt;
+    std::sort(ordered.begin(), ordered.end(), [](const auto* a, const auto* b) {
+      return diag::PreviewDurationNs(a->frame_swapped_ns, a->qml_latest_write_ns) <
+             diag::PreviewDurationNs(b->frame_swapped_ns, b->qml_latest_write_ns);
+    });
+    stats.median = ordered[ordered.size() / 2];
   }
   return stats;
 }
@@ -226,14 +293,45 @@ void DumpQuantiles(std::ostream& out, std::string_view name, const std::vector<s
 void DumpPassList(std::ostream& out, const diag::PreviewRequestRecord& record) {
   out << "    request=" << record.request_id << " reason=" << record.reason
       << " outcome=" << diag::PreviewTerminalOutcomeName(record.outcome)
-      << " render=" << record.render_width << "x" << record.render_height << "\n";
+      << " render=" << record.render_width << "x" << record.render_height
+      << " gpu_ms=" << diag::FormatPreviewMilliseconds(record.gpu_ns)
+      << " executed_grades=" << CountExecutedGrades(record) << "\n";
+  if (record.has_develop_decode) {
+    out << "      develop_plane=" << record.develop.develop_width << "x"
+        << record.develop.develop_height
+        << " cfa=" << diag::PreviewCfaKindName(record.develop.cfa)
+        << " decode=" << diag::PreviewDecodeResName(record.develop.decode_res)
+        << " demosaic=" << diag::PreviewDemosaicMethodName(record.develop.demosaic) << "\n";
+  }
   for (const auto& pass : record.passes) {
     out << "      " << pass.owner << " " << diag::PreviewPassKindName(pass.kind)
         << " state=" << diag::PreviewExecutionStateName(pass.state)
         << " cpu_ms=" << diag::FormatPreviewMilliseconds(pass.cpu_ns)
         << " gpu=" << diag::PreviewGpuTimeStatusName(pass.gpu_status)
         << " gpu_ms=" << diag::FormatPreviewMilliseconds(pass.gpu_ns) << "\n";
+    for (const auto& sub : pass.sub_stages) {
+      out << "        " << diag::PreviewSubStageKindName(sub.kind)
+          << " cpu_ms=" << diag::FormatPreviewMilliseconds(sub.cpu_ns)
+          << " gpu=" << diag::PreviewGpuTimeStatusName(sub.gpu_status)
+          << " gpu_ms=" << diag::FormatPreviewMilliseconds(sub.gpu_ns) << "\n";
+    }
   }
+}
+
+void DumpFeltFrameCsv(std::ostream& csv, std::string_view run_label,
+                      const diag::PreviewRequestRecord& record) {
+  const auto sample = MakeFeltSample(record);
+  csv << run_label << ',' << record.request_id << ','
+      << diag::FormatPreviewMilliseconds(sample.qml_ns) << ','
+      << diag::FormatPreviewMilliseconds(sample.e2e_ns) << ','
+      << diag::FormatPreviewMilliseconds(record.gpu_ns) << ','
+      << diag::FormatPreviewMilliseconds(sample.encode_ns) << ','
+      << diag::FormatPreviewMilliseconds(sample.sink_ns) << ','
+      << diag::FormatPreviewMilliseconds(sample.swap_ns) << ','
+      << diag::FormatPreviewMilliseconds(LastExecutedGradeGpuNs(record)) << ','
+      << diag::FormatPreviewMilliseconds(PassGpuNs(record, diag::PreviewPassKind::Drt)) << ','
+      << CountExecutedGrades(record) << ',' << record.render_width << 'x' << record.render_height
+      << '\n';
 }
 
 class RecordCollector {
@@ -306,11 +404,11 @@ auto DriveExposureSlider(EditorSessionController* session, std::chrono::millisec
     -> int {
   const auto start = std::chrono::steady_clock::now();
   int        writes = 0;
-  float      ev     = 0.15f;
+  float      ev     = kExposureWriteStart;
   while (std::chrono::steady_clock::now() - start < duration) {
-    ev += 0.02f;
-    if (ev > 1.80f) {
-      ev = 0.10f;
+    ev += kExposureWriteStep;
+    if (ev > kExposureWrapMax) {
+      ev = kExposureWrapMin;
     }
     if (session->submitWrite(QStringLiteral("exposure"), EditorScalarWrite{ev}, false)) {
       ++writes;
@@ -494,11 +592,23 @@ TEST_F(EditorPreviewPresentTrajectoryTest,
   ASSERT_TRUE(WaitUntil([&] { return !session->render_busy(); }, std::chrono::seconds(60)));
 
   const auto dump_path = PreviewDumpDirectory() / "cuda_interactive_2560_present_table.txt";
+  const auto csv_path  = PreviewDumpDirectory() / "cuda_interactive_2560_present_frames.csv";
   std::ofstream out(dump_path, std::ios::trunc);
+  std::ofstream csv(csv_path, std::ios::trunc);
   out << "CUDA Interactive 2560 product present trajectory\n";
+  out << "kind=slider_interactive_frame_trace\n";
   out << "path=submitWrite -> admit -> schedule -> worker -> sink -> import -> frameSwapped\n";
-  out << "cfa=Bayer source=" << raw_files.front().filename().string()
-      << " grades=8 target=last_exposure slider_period_ms=" << kSliderPeriod.count() << "\n";
+  out << "cfa=Bayer source=" << raw_files.front().filename().string() << "\n";
+  out << "decode_res=FULL interactive_max_edge=" << kInteractiveMaxLongEdge << "\n";
+  out << "grades=8 selected_node=last_color_grade field=exposure\n";
+  out << "exposure_start=" << kExposureWriteStart << " step=" << kExposureWriteStep
+      << " wrap_min=" << kExposureWrapMin << " wrap_max=" << kExposureWrapMax << "\n";
+  out << "slider_period_ms=" << kSliderPeriod.count()
+      << " trajectory_s=" << kTrajectoryLength.count()
+      << " session_cache=kept settled_write=true_on_loop_end\n";
+  out << "runs=3x Detail last-exposure slider, 1x Summary same slider, 1x Off same slider\n";
+  csv << "run,request_id,qml_ms,e2e_ms,gpu_ms,encode_ms,sink_ms,swap_ms,last_grade_gpu_ms,"
+         "drt_gpu_ms,executed_grades,render\n";
 
   struct RunResult {
     std::string                       label;
@@ -559,22 +669,47 @@ TEST_F(EditorPreviewPresentTrajectoryTest,
         << " failed=" << run.stats.failed << " dropped=" << run.stats.dropped
         << " stale=" << run.stats.stale << " lost=" << run.events_lost
         << " render=" << run.stats.render_width << "x" << run.stats.render_height
+        << " develop=" << run.stats.develop_width << "x" << run.stats.develop_height
         << " develop_skipped=" << (run.stats.develop_skipped ? "yes" : "no") << "\n";
     DumpQuantiles(out, "qml_ms", run.stats.qml_ns);
     DumpQuantiles(out, "e2e_ms", run.stats.e2e_ns);
+    DumpQuantiles(out, "gpu_ms", run.stats.gpu_ns);
+    DumpQuantiles(out, "last_grade_gpu_ms", run.stats.last_grade_gpu_ns);
+    DumpQuantiles(out, "drt_gpu_ms", run.stats.drt_gpu_ns);
     DumpQuantiles(out, "sched_ms", run.stats.sched_ns);
     DumpQuantiles(out, "sink_ms", run.stats.sink_ns);
     DumpQuantiles(out, "swap_ms", run.stats.swap_ns);
     DumpQuantiles(out, "encode_ms", run.stats.encode_ns);
+    if (run.stats.first != nullptr) {
+      out << "  first_presented_pass_trace:\n";
+      DumpPassList(out, *run.stats.first);
+    }
+    if (run.stats.median != nullptr) {
+      out << "  p50_qml_pass_trace:\n";
+      DumpPassList(out, *run.stats.median);
+    }
     if (run.stats.slowest != nullptr) {
-      out << "  slowest_qml:\n";
+      out << "  slowest_qml_pass_trace:\n";
       DumpPassList(out, *run.stats.slowest);
+    }
+    for (const auto* record : run.stats.felt) {
+      DumpFeltFrameCsv(csv, run.label, *record);
     }
   }
   out.flush();
+  csv.flush();
 
   const auto& first = runs.front();
   ASSERT_FALSE(first.stats.qml_ns.empty());
+  for (const auto& run : runs) {
+    if (run.mode == diag::PreviewPerformanceMode::Off) {
+      continue;
+    }
+    EXPECT_FALSE(run.stats.qml_ns.empty()) << run.label;
+    EXPECT_GT(run.stats.presented, 0u) << run.label;
+    EXPECT_EQ(LongEdge(run.stats.render_width, run.stats.render_height), kInteractiveMaxLongEdge)
+        << run.label;
+  }
   EXPECT_EQ(LongEdge(first.stats.render_width, first.stats.render_height), kInteractiveMaxLongEdge);
   EXPECT_GT(diag::PreviewQuantileNs(first.stats.qml_ns, 0.50),
             diag::PreviewQuantileNs(first.stats.encode_ns, 0.50));
