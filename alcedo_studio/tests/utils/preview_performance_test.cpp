@@ -471,6 +471,64 @@ TEST_F(PreviewPerformanceTest, GradePassRecordsLlfAndMixSubStages) {
   EXPECT_EQ(records[0].gpu_status, diag::PreviewGpuTimeStatus::Unavailable);
 }
 
+TEST_F(PreviewPerformanceTest, GpuDurationNoteFillsPassRecordBeforeDisplay) {
+  EnableDetail();
+  std::vector<diag::PreviewRequestRecord> records;
+  diag::PreviewPerformance::InstallRecordSink(
+      [&](const diag::PreviewRequestRecord& record) { records.push_back(record); });
+
+  clock_->SetNs(1'000'000);
+  diag::PreviewPerformance::NoteSubmit(81, diag::PreviewFrameRole::InteractivePrimary,
+                                       diag::PreviewQuality::Interactive, "InteractiveAdjustment",
+                                       false);
+  diag::PreviewPerformance::BindCurrentRequest(81);
+  diag::PreviewGpuSampleTarget pass_target;
+  diag::PreviewGpuSampleTarget mix_target;
+  {
+    diag::PreviewPassInterval pass("grade.primary", diag::PreviewPassKind::PrimaryColorGrade);
+    pass_target = diag::PreviewPerformance::CurrentGpuSampleTarget();
+    {
+      diag::PreviewSubStageInterval mix(diag::PreviewSubStageKind::Mix);
+      mix_target = diag::PreviewPerformance::CurrentGpuSampleTarget();
+    }
+  }
+  ASSERT_TRUE(pass_target.valid);
+  ASSERT_TRUE(mix_target.valid);
+  EXPECT_EQ(pass_target.request_id, 81u);
+  EXPECT_FALSE(pass_target.is_sub);
+  EXPECT_TRUE(mix_target.is_sub);
+  diag::PreviewPerformance::NoteGpuDuration(pass_target.request_id, pass_target.pass_index, false,
+                                            0, 4'000'000, diag::PreviewGpuTimeStatus::Available);
+  diag::PreviewPerformance::NoteGpuDuration(mix_target.request_id, mix_target.pass_index, true,
+                                            mix_target.sub_index, 1'000'000,
+                                            diag::PreviewGpuTimeStatus::Available);
+  {
+    diag::PreviewPassInterval skipped("grade.look", diag::PreviewPassKind::PrimaryColorGrade);
+    skipped.SetState(diag::PreviewExecutionState::Skipped);
+    const auto skipped_target = diag::PreviewPerformance::CurrentGpuSampleTarget();
+    diag::PreviewPerformance::NoteGpuDuration(skipped_target.request_id, skipped_target.pass_index,
+                                              false, 0, 9'000'000,
+                                              diag::PreviewGpuTimeStatus::Available);
+  }
+  clock_->SetNs(5'000'000);
+  diag::PreviewPerformance::NoteDisplayed(81);
+  diag::PreviewPerformance::FlushWriter();
+
+  ASSERT_EQ(records.size(), 1u);
+  EXPECT_EQ(records[0].gpu_status, diag::PreviewGpuTimeStatus::Available);
+  ASSERT_EQ(records[0].passes.size(), 2u);
+  EXPECT_EQ(records[0].passes[0].gpu_status, diag::PreviewGpuTimeStatus::Available);
+  EXPECT_EQ(records[0].passes[0].gpu_ns, 3'000'000);
+  ASSERT_EQ(records[0].passes[0].sub_stages.size(), 1u);
+  EXPECT_EQ(records[0].passes[0].sub_stages[0].gpu_ns, 1'000'000);
+  EXPECT_EQ(records[0].passes[1].state, diag::PreviewExecutionState::Skipped);
+  EXPECT_EQ(records[0].passes[1].gpu_status, diag::PreviewGpuTimeStatus::Unavailable);
+  EXPECT_EQ(records[0].passes[1].gpu_ns, 0);
+  const auto text = diag::PreviewPerformance::WrittenLog();
+  EXPECT_NE(text.find("gpu_ms="), std::string::npos);
+  EXPECT_EQ(text.find("_ns="), std::string::npos);
+}
+
 TEST_F(PreviewPerformanceTest, ResourceSnapshotReportsAggregatedPoolTotals) {
   EnableDetail();
   std::vector<diag::PreviewRequestRecord> records;

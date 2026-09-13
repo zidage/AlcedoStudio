@@ -65,12 +65,15 @@ struct OpenInterval {
   PreviewCpuStage   cpu   = PreviewCpuStage::Encode;
   std::int64_t      start_ns = 0;
   std::uint8_t      pass_index = 0;
+  std::uint8_t      sub_index  = 0;
 };
 
 struct PendingSub {
   PreviewSubStageKind   kind  = PreviewSubStageKind::Pointwise;
   PreviewExecutionState state = PreviewExecutionState::Executed;
   std::int64_t          cpu_ns = 0;
+  std::int64_t          gpu_ns = 0;
+  PreviewGpuTimeStatus  gpu_status = PreviewGpuTimeStatus::Unavailable;
 };
 
 struct PendingPass {
@@ -80,6 +83,8 @@ struct PendingPass {
   std::uint32_t         ordinal  = 0;
   PreviewExecutionState state    = PreviewExecutionState::Executed;
   std::int64_t          cpu_ns   = 0;
+  std::int64_t          gpu_ns   = 0;
+  PreviewGpuTimeStatus  gpu_status = PreviewGpuTimeStatus::Unavailable;
   std::uint8_t          sub_count = 0;
   PendingSub            subs[kMaxSubStagesPerPass]{};
 };
@@ -110,6 +115,8 @@ struct PendingSample {
   PreviewDevelopDecodeParams develop{};
   bool                       has_resources      = false;
   PreviewResourceSnapshot    resources{};
+  std::int64_t               gpu_ns             = 0;
+  PreviewGpuTimeStatus       gpu_status         = PreviewGpuTimeStatus::Unavailable;
 };
 
 auto CpuField(PreviewCpuStageTimes& times, PreviewCpuStage stage) -> std::int64_t& {
@@ -138,11 +145,21 @@ auto CpuField(PreviewCpuStageTimes& times, PreviewCpuStage stage) -> std::int64_
 
 void SubtractChildren(PendingSample& sample) {
   std::int64_t pass_total = 0;
+  std::int64_t gpu_total  = 0;
+  bool         any_gpu    = false;
+  bool         any_failed = false;
   for (std::uint8_t p = 0; p < sample.pass_count; ++p) {
-    auto&      pass      = sample.passes[p];
+    auto&        pass      = sample.passes[p];
     std::int64_t sub_total = 0;
+    std::int64_t sub_gpu   = 0;
     for (std::uint8_t s = 0; s < pass.sub_count; ++s) {
       sub_total += pass.subs[s].cpu_ns;
+      if (pass.subs[s].gpu_status == PreviewGpuTimeStatus::Available) {
+        sub_gpu += pass.subs[s].gpu_ns;
+        any_gpu = true;
+      } else if (pass.subs[s].gpu_status == PreviewGpuTimeStatus::Failed) {
+        any_failed = true;
+      }
     }
     if (pass.cpu_ns > sub_total) {
       pass.cpu_ns -= sub_total;
@@ -150,11 +167,36 @@ void SubtractChildren(PendingSample& sample) {
       pass.cpu_ns = 0;
     }
     pass_total += pass.cpu_ns + sub_total;
+    if (pass.gpu_status == PreviewGpuTimeStatus::Available) {
+      any_gpu = true;
+      if (pass.gpu_ns > sub_gpu) {
+        pass.gpu_ns -= sub_gpu;
+      } else if (sub_gpu > 0) {
+        pass.gpu_ns = 0;
+      }
+      gpu_total += pass.gpu_ns + sub_gpu;
+    } else if (pass.gpu_status == PreviewGpuTimeStatus::Failed) {
+      any_failed = true;
+    } else {
+      gpu_total += sub_gpu;
+    }
   }
   if (sample.cpu.encode_ns > pass_total) {
     sample.cpu.encode_ns -= pass_total;
   } else if (pass_total > 0 && sample.cpu.encode_ns > 0) {
     sample.cpu.encode_ns = 0;
+  }
+  if (sample.gpu_status == PreviewGpuTimeStatus::Unavailable) {
+    if (any_failed && !any_gpu) {
+      sample.gpu_status = PreviewGpuTimeStatus::Failed;
+    } else if (any_gpu) {
+      sample.gpu_status = PreviewGpuTimeStatus::Available;
+      if (sample.gpu_ns == 0) {
+        sample.gpu_ns = gpu_total;
+      }
+    }
+  } else if (sample.gpu_ns == 0 && gpu_total > 0) {
+    sample.gpu_ns = gpu_total;
   }
 }
 
@@ -258,8 +300,14 @@ auto FormatSlowest(const PreviewRequestRecord& record) -> std::string {
   for (const auto& pass : record.passes) {
     out << " | " << (pass.owner.empty() ? "?" : pass.owner) << " "
         << PreviewPassKindName(pass.kind) << "=" << FormatMilliseconds(pass.cpu_ns);
+    if (pass.gpu_status == PreviewGpuTimeStatus::Available) {
+      out << " gpu_ms=" << FormatMilliseconds(pass.gpu_ns);
+    }
     for (const auto& sub : pass.sub_stages) {
       out << " " << PreviewSubStageKindName(sub.kind) << "=" << FormatMilliseconds(sub.cpu_ns);
+      if (sub.gpu_status == PreviewGpuTimeStatus::Available) {
+        out << " gpu_ms=" << FormatMilliseconds(sub.gpu_ns);
+      }
     }
   }
   if (record.has_resources) {
@@ -551,7 +599,8 @@ struct State {
     record.resources          = sample.resources;
     record.outcome            = outcome;
     record.terminal_reason    = std::string(reason);
-    record.gpu_status         = PreviewGpuTimeStatus::Unavailable;
+    record.gpu_ns             = sample.gpu_ns;
+    record.gpu_status         = sample.gpu_status;
     record.passes.reserve(sample.pass_count);
     for (std::uint8_t p = 0; p < sample.pass_count; ++p) {
       const auto& src = sample.passes[p];
@@ -562,13 +611,16 @@ struct State {
       pass.ordinal    = src.ordinal;
       pass.state      = src.state;
       pass.cpu_ns     = src.cpu_ns;
-      pass.gpu_status = PreviewGpuTimeStatus::Unavailable;
+      pass.gpu_ns     = src.gpu_ns;
+      pass.gpu_status = src.gpu_status;
       pass.sub_stages.reserve(src.sub_count);
       for (std::uint8_t s = 0; s < src.sub_count; ++s) {
         PreviewSubStageRecord sub;
-        sub.kind   = src.subs[s].kind;
-        sub.state  = src.subs[s].state;
-        sub.cpu_ns = src.subs[s].cpu_ns;
+        sub.kind       = src.subs[s].kind;
+        sub.state      = src.subs[s].state;
+        sub.cpu_ns     = src.subs[s].cpu_ns;
+        sub.gpu_ns     = src.subs[s].gpu_ns;
+        sub.gpu_status = src.subs[s].gpu_status;
         pass.sub_stages.push_back(sub);
       }
       record.passes.push_back(std::move(pass));
@@ -993,7 +1045,7 @@ void PreviewPerformance::BeginPass(const std::string_view owner, const PreviewPa
   pass.ordinal    = ordinal;
   pass.state      = PreviewExecutionState::Executed;
   sample->open[sample->open_count++] =
-      OpenInterval{OpenKind::Pass, PreviewCpuStage::Encode, now, sample->pass_count};
+      OpenInterval{OpenKind::Pass, PreviewCpuStage::Encode, now, sample->pass_count, 0};
   ++sample->pass_count;
 }
 
@@ -1055,7 +1107,7 @@ void PreviewPerformance::BeginSubStage(const PreviewSubStageKind kind) {
   sub.state   = PreviewExecutionState::Executed;
   sample->open[sample->open_count++] = OpenInterval{
       OpenKind::Sub, PreviewCpuStage::Encode, now,
-      static_cast<std::uint8_t>(sample->pass_count - 1)};
+      static_cast<std::uint8_t>(sample->pass_count - 1), pass.sub_count};
   ++pass.sub_count;
 }
 
@@ -1142,6 +1194,86 @@ void PreviewPerformance::NoteResourceSnapshot(const PreviewResourceSnapshot& sna
   }
   sample->has_resources = true;
   sample->resources     = snapshot;
+}
+
+auto PreviewPerformance::CurrentGpuSampleTarget() -> PreviewGpuSampleTarget {
+  PreviewGpuSampleTarget target;
+  if (!PreviewPerformanceEnabled()) {
+    return target;
+  }
+  auto&           state = Global();
+  std::lock_guard lock(state.mutex);
+  auto*           sample = state.CurrentSampleLocked();
+  if (sample == nullptr || sample->pass_count == 0) {
+    return target;
+  }
+  for (std::uint8_t i = sample->open_count; i > 0; --i) {
+    const auto& frame = sample->open[i - 1];
+    if (frame.kind == OpenKind::Sub) {
+      target.request_id = State::tls_request;
+      target.pass_index = frame.pass_index;
+      target.sub_index  = frame.sub_index;
+      target.is_sub     = true;
+      target.valid      = true;
+      return target;
+    }
+    if (frame.kind == OpenKind::Pass) {
+      target.request_id = State::tls_request;
+      target.pass_index = frame.pass_index;
+      target.valid      = true;
+      return target;
+    }
+  }
+  return target;
+}
+
+void PreviewPerformance::NoteGpuDuration(const std::uint64_t request_id,
+                                         const std::uint8_t pass_index, const bool is_sub,
+                                         const std::uint8_t sub_index, const std::int64_t gpu_ns,
+                                         const PreviewGpuTimeStatus status) {
+  if (!PreviewPerformanceEnabled() || request_id == 0) {
+    return;
+  }
+  auto&           state = Global();
+  std::lock_guard lock(state.mutex);
+  auto*           sample = state.FindLocked(request_id);
+  if (sample == nullptr || pass_index >= sample->pass_count) {
+    return;
+  }
+  auto& pass = sample->passes[pass_index];
+  if (pass.state != PreviewExecutionState::Executed) {
+    return;
+  }
+  if (is_sub) {
+    if (sub_index >= pass.sub_count) {
+      return;
+    }
+    auto& sub = pass.subs[sub_index];
+    if (sub.state != PreviewExecutionState::Executed) {
+      return;
+    }
+    sub.gpu_ns     = gpu_ns;
+    sub.gpu_status = status;
+    return;
+  }
+  pass.gpu_ns     = gpu_ns;
+  pass.gpu_status = status;
+}
+
+void PreviewPerformance::NoteGpuRequestDuration(const std::uint64_t request_id,
+                                                const std::int64_t gpu_ns,
+                                                const PreviewGpuTimeStatus status) {
+  if (!PreviewPerformanceEnabled() || request_id == 0) {
+    return;
+  }
+  auto&           state = Global();
+  std::lock_guard lock(state.mutex);
+  auto*           sample = state.FindLocked(request_id);
+  if (sample == nullptr) {
+    return;
+  }
+  sample->gpu_ns     = gpu_ns;
+  sample->gpu_status = status;
 }
 
 }  // namespace alcedo::diag

@@ -114,6 +114,30 @@ class PreviewPerformance {
   static void NoteDevelopDecode(const PreviewDevelopDecodeParams& params);
   static void NoteDevelopLayout(PreviewDevelopLayout layout);
   static void NoteResourceSnapshot(const PreviewResourceSnapshot& snapshot);
+
+  /**
+   * @brief Identity of the innermost open pass or sub-stage on this thread.
+   *
+   * Invalid when timing is Off or no request/pass is bound. Backends record
+   * native timestamps against this target and later call @ref NoteGpuDuration.
+   */
+  [[nodiscard]] static auto CurrentGpuSampleTarget() -> PreviewGpuSampleTarget;
+
+  /**
+   * @brief Attach a resolved native GPU duration to a still-pending request.
+   *
+   * Skipped, aliased, and disabled passes keep @c Unavailable and ignore
+   * @p gpu_ns. Looks up the pending sample by @p request_id, not TLS.
+   */
+  static void NoteGpuDuration(std::uint64_t request_id, std::uint8_t pass_index, bool is_sub,
+                              std::uint8_t sub_index, std::int64_t gpu_ns,
+                              PreviewGpuTimeStatus status);
+
+  /**
+   * @brief Attach a whole-submission GPU duration when per-pass samples are unavailable.
+   */
+  static void NoteGpuRequestDuration(std::uint64_t request_id, std::int64_t gpu_ns,
+                                     PreviewGpuTimeStatus status);
 };
 
 class PreviewCpuInterval {

@@ -23,6 +23,7 @@
 #include "edit/runtime/runtime_invalidation.hpp"
 #include "edit/runtime/texture_format.hpp"
 #include "gpu/transient_allocation_policy.hpp"
+#include "edit/runtime/gpu_work_sample.hpp"
 #include "utils/diagnostics/preview_performance.hpp"
 
 namespace alcedo {
@@ -105,20 +106,23 @@ class PlanExecutor {
               develop_node != nullptr && develop_node->Params().Params().highlights_reconstruct;
           const auto h2d_before = workspace.Device().HostToDeviceBytes();
           workspace.ReleaseStalePublishedImagesAndIdleTextures();
-          try {
-            if (plan.Contains(GpuPassKind::UploadRgb)) {
-              PassEncoder<Backend, GpuPassKind::UploadRgb>::Encode(device, plan, input, document);
-            } else {
-              PassEncoder<Backend, GpuPassKind::UploadRaw>::Encode(device, plan, input, document);
+          {
+            GpuWorkSample<Device> gpu(device);
+            try {
+              if (plan.Contains(GpuPassKind::UploadRgb)) {
+                PassEncoder<Backend, GpuPassKind::UploadRgb>::Encode(device, plan, input, document);
+              } else {
+                PassEncoder<Backend, GpuPassKind::UploadRaw>::Encode(device, plan, input, document);
+              }
+            } catch (const std::exception& ex) {
+              const std::string_view what = ex.what();
+              if (what.find("TransientBufferArena") == std::string_view::npos) {
+                throw;
+              }
+              throw std::runtime_error(DescribeDevelopTransientFailure(
+                  plan.source, RawDemosaicMethodToString(develop_method), highlights_reconstruct,
+                  ex.what()));
             }
-          } catch (const std::exception& ex) {
-            const std::string_view what = ex.what();
-            if (what.find("TransientBufferArena") == std::string_view::npos) {
-              throw;
-            }
-            throw std::runtime_error(DescribeDevelopTransientFailure(
-                plan.source, RawDemosaicMethodToString(develop_method), highlights_reconstruct,
-                ex.what()));
           }
           stats.source_h2d_bytes += workspace.Device().HostToDeviceBytes() - h2d_before;
           ++stats.source_h2d_count;
@@ -146,6 +150,7 @@ class PlanExecutor {
           geometry_pass.SetState(diag::PreviewExecutionState::Skipped);
           ++stats.geometry_skip;
         } else {
+          GpuWorkSample<Device> gpu(device);
           PassEncoder<Backend, GpuPassKind::GeometryResample>::Encode(device, plan, input,
                                                                       document);
           Record(device, invalidation, plan.geometry_output, geometry_extent);
@@ -165,6 +170,7 @@ class PlanExecutor {
           camera_pass.SetState(diag::PreviewExecutionState::Skipped);
           ++stats.camera_color_skip;
         } else {
+          GpuWorkSample<Device> gpu(device);
           PassEncoder<Backend, GpuPassKind::CameraToAp1>::Encode(device, plan, input, document);
           Record(device, invalidation, plan.develop_output, geometry_extent);
           ++stats.camera_color_execute;
@@ -197,6 +203,7 @@ class PlanExecutor {
                 mask_pass.SetState(diag::PreviewExecutionState::Skipped);
                 ++stats.mask_skip;
               } else {
+                GpuWorkSample<Device> gpu(device);
                 PassEncoder<Backend, GpuPassKind::MaskEvaluate>::Encode(
                     device, plan, input, document, compiled_grade, source);
                 Record(device, invalidation, source.effective_output, geometry_extent,
@@ -213,6 +220,7 @@ class PlanExecutor {
               union_pass.SetState(diag::PreviewExecutionState::Skipped);
               ++stats.mask_union_skip;
             } else {
+              GpuWorkSample<Device> gpu(device);
               PassEncoder<Backend, GpuPassKind::MaskUnion>::Encode(device, plan, input, document,
                                                                    compiled_grade);
               Record(device, invalidation, compiled_grade.mask_output, geometry_extent,
@@ -231,6 +239,7 @@ class PlanExecutor {
             grade_pass.SetState(diag::PreviewExecutionState::Skipped);
             ++stats.primary_grade_skip;
           } else {
+            GpuWorkSample<Device> gpu(device);
             PassEncoder<Backend, GpuPassKind::PrimaryColorGrade>::Encode(
                 device, plan, input, document, compiled_grade);
             Record(device, invalidation, grade_scene, geometry_extent);
@@ -263,6 +272,7 @@ class PlanExecutor {
           drt_pass.SetState(diag::PreviewExecutionState::Skipped);
           ++stats.drt_skip;
         } else {
+          GpuWorkSample<Device> gpu(device);
           PassEncoder<Backend, GpuPassKind::Drt>::Encode(device, plan, input, document);
           Record(device, invalidation, plan.display_output, geometry_extent);
           ++stats.drt_execute;

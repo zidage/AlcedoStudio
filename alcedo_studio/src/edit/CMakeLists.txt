@@ -176,6 +176,7 @@ if(ALCEDO_CUDA_ENABLED)
     def_cuda_library(EditRuntimeCuda
         SOURCES
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_backend.cpp
+            ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_gpu_timestamp_pool.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_camera_color_pass.cu
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_develop_pass.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_render_device.cpp

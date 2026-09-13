@@ -101,6 +101,7 @@ void FramePresenter<CudaBackend>::Present(CudaRenderDevice& device, const GraphV
                            display_config);
     cuda::CheckCuda(::cudaStreamSynchronize(device.CommandContext().Stream()),
                     "CudaRenderer: wait for frame sink copy");
+    device.ResolveGpuTimestamps();
   } catch (...) {
     sink.UnmapResource();
     throw;

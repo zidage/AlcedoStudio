@@ -16,6 +16,7 @@
 #include "edit/runtime/execution_plan.hpp"
 #include "metal/compute_pipeline_cache.hpp"
 #include "metal/metal_context.hpp"
+#include "utils/diagnostics/preview_performance.hpp"
 
 namespace alcedo {
 void WarmUpMetalDagPlan(MetalBackend& backend, const ExecutionPlan& plan);
@@ -919,6 +920,18 @@ void MetalBackend::Wait(CommandContext& command_context) {
       ReleaseRecordedWorkScratchResources();
       throw std::runtime_error(message);
     }
+    const double gpu_start = command_buffer->GPUStartTime();
+    const double gpu_end   = command_buffer->GPUEndTime();
+    if (gpu_timing_request_id_ != 0 && gpu_end > gpu_start && gpu_start > 0.0) {
+      const auto gpu_ns =
+          static_cast<std::int64_t>((gpu_end - gpu_start) * 1.0e9);
+      diag::PreviewPerformance::NoteGpuRequestDuration(
+          gpu_timing_request_id_, gpu_ns, diag::PreviewGpuTimeStatus::Available);
+    } else if (gpu_timing_request_id_ != 0) {
+      diag::PreviewPerformance::NoteGpuRequestDuration(
+          gpu_timing_request_id_, 0, diag::PreviewGpuTimeStatus::Unavailable);
+    }
+    gpu_timing_request_id_ = 0;
   }
   completed_submission_ = in_flight_submission_;
   in_flight_submission_ = 0;
@@ -928,6 +941,19 @@ void MetalBackend::Wait(CommandContext& command_context) {
   MetalBackendImpl::RecycleStaging(*gpu_);
   ReleaseRecordedWorkScratchResources();
 }
+
+void MetalBackend::BeginGpuWorkSample(CommandContext&) {
+  const auto target = diag::PreviewPerformance::CurrentGpuSampleTarget();
+  if (target.valid) {
+    gpu_timing_request_id_ = target.request_id;
+  }
+}
+
+void MetalBackend::EndGpuWorkSample(CommandContext&) {}
+
+void MetalBackend::ResolveGpuTimestamps() {}
+
+void MetalBackend::DiscardGpuTimestamps() { gpu_timing_request_id_ = 0; }
 
 void MetalBackend::WarmUpPipelines(std::span<const MetalPipelineWarmup> pipelines) {
   MetalBackendImpl::AttachGpu(*gpu_);

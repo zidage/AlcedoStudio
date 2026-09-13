@@ -52,6 +52,26 @@ class BasicRenderDevice {
   void               EndRender() { workspace_.EndRender(command_context_); }
   void               WaitIdle() { workspace_.Device().Wait(command_context_); }
 
+  void BeginGpuWorkSample() {
+    if constexpr (requires(Backend& backend, CommandContextType& context) {
+                    backend.BeginGpuWorkSample(context);
+                  }) {
+      workspace_.Device().BeginGpuWorkSample(command_context_);
+    }
+  }
+  void EndGpuWorkSample() {
+    if constexpr (requires(Backend& backend, CommandContextType& context) {
+                    backend.EndGpuWorkSample(context);
+                  }) {
+      workspace_.Device().EndGpuWorkSample(command_context_);
+    }
+  }
+  void ResolveGpuTimestamps() {
+    if constexpr (requires(Backend& backend) { backend.ResolveGpuTimestamps(); }) {
+      workspace_.Device().ResolveGpuTimestamps();
+    }
+  }
+
   /** @brief Release backend-owned neural activation workspace after GPU completion. */
   void ReleaseNeuralDemosaicWorkspace() {
     if constexpr (requires(Backend& backend) { backend.ReleaseNeuralDemosaicWorkspace(); }) {

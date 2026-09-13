@@ -218,6 +218,16 @@ class OpenClBackend {
   /** @brief Release Neural Engine tile activations after develop scratch is discarded. */
   void ReleaseNeuralDemosaicWorkspace();
   void Wait(CommandContext& command_context);
+
+  /**
+   * @brief Enqueue a profiling marker for the current preview pass or sub-stage.
+   *
+   * No host wait. Elapsed time is read in Wait when the queue supports profiling.
+   */
+  void BeginGpuWorkSample(CommandContext& command_context);
+  void EndGpuWorkSample(CommandContext& command_context);
+  void ResolveGpuTimestamps();
+  void DiscardGpuTimestamps();
   /**
    * @brief Flush and wait for commands already on the product queue.
    *
@@ -351,6 +361,17 @@ class OpenClBackend {
   std::vector<LutCacheEntry> lut_cache_;
   Buffer                     dummy_lut_;
   std::unique_ptr<OpenClNeuralSessionWorkspace> neural_workspace_;
+  struct GpuTimestampSlot {
+    cl_event      start      = nullptr;
+    cl_event      stop       = nullptr;
+    std::uint64_t request_id = 0;
+    std::uint8_t  pass_index = 0;
+    std::uint8_t  sub_index  = 0;
+    bool          is_sub     = false;
+    bool          recorded   = false;
+  };
+  std::vector<GpuTimestampSlot> gpu_timestamps_;
+  std::vector<std::size_t>      gpu_open_stack_;
   std::size_t                max_slab_bytes_device_   = 0;
   std::size_t                max_slab_bytes_override_ = 0;
   std::size_t                max_image_width_         = 0;

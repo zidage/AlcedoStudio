@@ -3,7 +3,9 @@
 Date: 2026-09-12
 
 Status: NM8.1 complete on 2026-09-12 (low-overhead CPU/E2E logging).
-NM8.2–NM8.6 planned. Native GPU timestamps are still unavailable.
+NM8.2 complete on CUDA 2026-09-13 (native pass GPU timestamps and current-execution
+Interactive DAG baseline). OpenCL and Metal GPU timing remain pending.
+NM8.3–NM8.6 planned.
 NM7 已由用户确认完成；其历史测试记录保留在原方案中，本文件不补造执行证据。
 2026-09-12 的首轮工作范围是 NM8.1–NM8.2：建立低开销测量和日志，采集当前实现的数据。
 NM8.3–NM8.6 定义完整优化和最终资格验证，按依赖顺序执行。
@@ -224,7 +226,7 @@ Radial/Linear Gradient 的参数仍由 Mask owner 管理。Grade 不持有跨帧
 | 阶段 | 内容 | 依赖 | 初始状态 |
 | --- | --- | --- | --- |
 | NM8.1 | 低开销日志、输入到呈现时间线、CPU 分段 | 当前产品路径 | complete 2026-09-12 |
-| NM8.2 | 节点/pass 原生 GPU 计时、当前实现基线及硬件采集 | NM8.1 | planned；首轮范围 |
+| NM8.2 | 节点/pass 原生 GPU 计时、当前实现基线及硬件采集 | NM8.1 | complete on CUDA 2026-09-13；OpenCL/Metal pending |
 | NM8.3 | 新顺序、融合 pass 描述、算法版本和画面预期 | NM8.2 当前后端基线 | planned |
 | NM8.4 | 共享工作图、取消 Grade 缓存、LLF/Mix 与下游复用 | NM8.3 | planned |
 | NM8.5 | 根据 CUDA/Metal 数据优化热点和整帧开销 | NM8.4 | planned |
@@ -378,6 +380,103 @@ GPU 时间以原生真实工作负载验证，不用 CPU sleep 代替；计时 A
 采集开销；至少一份当前平台的系统时间线能与日志 request/NodeId 对应。
 CUDA、Metal、OpenCL 分别记状态，缺少设备实测不能把整个三后端阶段标记 complete。
 有已记录的本机基线即可继续本机开发；另一个后端优化前必须先采集它自身的原实现基线。
+
+##### Phase NM8.2 completion record (2026-09-13)
+
+**Status:** partial — CUDA native pass/sub-stage GPU timestamps and current-execution
+Interactive DAG baseline are complete. OpenCL profiling-info and Metal command-buffer
+GPU time are wired in source; they were not measured on this Windows host.
+
+**Primary success call chain:**
+
+```text
+PlanExecutor / GradeExecutor / LocalToneExecutor execute branch
+  -> GpuWorkSample<Device> (BeginGpuWorkSample)
+  -> CudaGpuTimestampPool::Begin (cudaEventRecord start on CommandContext stream)
+  -> native pass / sub-stage encode
+  -> GpuWorkSample destructor (cudaEventRecord stop)
+  -> EndRender Submit (existing disable-timing fence)
+  -> WaitIdle or Present cudaStreamSynchronize
+  -> CudaBackend::ResolveGpuTimestamps (cudaEventQuery + cudaEventElapsedTime)
+  -> PreviewPerformance::NoteGpuDuration on the pending sample
+  -> NoteDisplayed
+  -> Detail window log gpu_ms= next to pass CPU times
+```
+
+**Primary failure call chain:**
+
+```text
+cudaEventElapsedTime / profiling-info failure
+  -> gpu_status=Failed
+  -> render result unchanged
+
+Skipped / Aliased / Disabled pass
+  -> gpu_status=Unavailable
+  -> no published gpu_ns=0 as measured work
+
+encode throw
+  -> CancelRender
+  -> DiscardGpuTimestamps
+  -> no new published results
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `GpuDurationNoteFillsPassRecordBeforeDisplay` | `PreviewPerformanceTest` | PASS (debug) |
+| `GpuPassSamplesKeepRequestAndNodeIdentity` | `GpuDagCudaPrimaryGradeTest` | PASS (debug + win_release_test) |
+| `TimingSlotsAreNotReusedBeforeSubmissionCompletes` | `GpuDagCudaPrimaryGradeTest` | PASS (debug + win_release_test) |
+| `GpuTimingDoesNotAddPerPassHostWaits` | `GpuDagCudaPrimaryGradeTest` | PASS (debug + win_release_test) |
+| `CachedAndDisabledPassesReportExecutionState` | `GpuDagCudaPrimaryGradeTest` | PASS (debug + win_release_test) |
+| `DetailTimingPreservesRenderedPixelsWithinTolerance` | `GpuDagCudaPrimaryGradeTest` | PASS (debug + win_release_test) |
+| `InteractiveThreeNodeGraphReportsPassGpuTimes` | `GpuDagCudaPrimaryGradeTest` | PASS (debug + win_release_test) |
+| `InteractiveFourNodeSecondGradeMasksReportGpuTimes` | `GpuDagCudaPrimaryGradeTest` | PASS (debug + win_release_test) |
+| `InteractiveMultiGradeMaskMixReportsPerNodeGpuTimes` | `GpuDagCudaPrimaryGradeTest` | PASS (debug + win_release_test) |
+| `TwoLutGradesReportIndependentPassGpuTimes` | `GpuDagCudaPrimaryGradeTest` | PASS (debug + win_release_test) |
+| `InteractiveDagBaselinesDumpCurrentExecutionGpuTimes` | `GpuDagCudaPrimaryGradeTest` | PASS (debug 256×192; release 1920×1280 n=11 + Bayer FULL) |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --preset win_debug -DALCEDO_ENABLE_BRUSH_MASK=OFF -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake"
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target PreviewPerformanceTest --target GpuDagCudaPrimaryGradeTest
+ctest --test-dir build/debug -R "GpuDurationNoteFillsPassRecordBeforeDisplay|GpuPassSamplesKeepRequestAndNodeIdentity|TimingSlotsAreNotReused|GpuTimingDoesNotAddPerPassHostWaits|CachedAndDisabledPassesReportExecutionState|DetailTimingPreservesRenderedPixels|InteractiveThreeNodeGraph|InteractiveFourNodeSecondGradeMasks|InteractiveMultiGradeMaskMix|TwoLutGradesReportIndependentPassGpuTimes|InteractiveDagBaselinesDumpCurrentExecutionGpuTimes" --output-on-failure
+cmd /c scripts\msvc_env.cmd --preset win_release_test -DALCEDO_ENABLE_BRUSH_MASK=OFF -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake"
+cmd /c scripts\msvc_env.cmd --build --preset win_release_test --parallel 4 --target GpuDagCudaPrimaryGradeTest
+ctest --test-dir build/release-test -R "GpuPassSamplesKeepRequestAndNodeIdentity|TimingSlotsAreNotReused|GpuTimingDoesNotAddPerPassHostWaits|CachedAndDisabledPassesReportExecutionState|DetailTimingPreservesRenderedPixels|InteractiveThreeNodeGraph|InteractiveFourNodeSecondGradeMasks|InteractiveMultiGradeMaskMix|TwoLutGradesReportIndependentPassGpuTimes" --output-on-failure
+ctest --test-dir build/release-test -R "InteractiveDagBaselinesDumpCurrentExecutionGpuTimes" --output-on-failure --timeout 1200
+```
+
+Suite totals: debug 11/11 PASS; win_release_test 9/9 correctness PASS + dump PASS.
+`build/debug/CMakeCache.txt` and `build/release-test/CMakeCache.txt` have
+`ALCEDO_ENABLE_BRUSH_MASK:BOOL=OFF`.
+Hardware: NVIDIA GeForce RTX 3080 Laptop GPU, 8192 MiB, driver 610.62, CUDA 12.8,
+Windows 10.0.22635, Qt 6.9.3. Branch `feature/preview-gpu-pass-timing`,
+base commit `671a0da1`.
+Nsight Systems `nsys` is not on PATH (Nsight Compute `ncu.bat` is present and was
+not used). The Detail pass records with `request_id` and NodeId are the correlated
+timeline.
+
+**Baseline table:** `build/tmp/preview_performance/cuda_interactive_dag_baseline_table.txt`
+(P50 also in `cuda_dag_baseline_p50.txt`). DirectRgb 1920×1280 Interactive, n=11,
+events_lost=0, texture 187.5 MB. Bayer FULL 3992×5992 3-node Develop UploadRaw
+P50 GPU 103.1 ms (DecodeRes FULL). Top GPU costs on 1920×1280: UploadRgb ~9–11 ms,
+DRT ~2.3–3.2 ms, CameraToAp1 ~2.2–2.4 ms.
+
+**Checklist / exit condition:** CUDA required tests and the four user DAG baselines
+are done. Section 6 items not in that list (8-grade, LLF on/off matrix, 10 s input
+trajectory, Off vs Summary overhead) stay residual. OpenCL/Metal not complete.
+
+**LOC note (grill-code-review):** `preview_performance.cpp` 1185 LOC (writer + notes;
+already large after NM8.1). New CUDA pool ~163/.hpp ~83. `gpu_work_sample.hpp` ~53.
+`cuda_preview_gpu_timing_test.cpp` ~680. No new type exceeds a second owner.
+
+**Residual gaps:** OpenCL Interactive DAG GPU times not run (queue created with
+`CL_QUEUE_PROFILING_ENABLE`; no measured table). Metal command-buffer GPUStart/End
+cannot run on this Windows host; per-pass counters stay Unavailable. No Nsight
+Systems timeline. No 8-grade, LLF matrix, 10 s slider trace, or Off vs Summary
+overhead table. NM8.3 order fusion and NM8.4 shared work images were not started.
 
 ### NM8.3 — 固定调色顺序与融合 pass 编译
 
@@ -538,7 +637,9 @@ Windows 用 wrapper，配置/编译总预算从 20 分钟开始，健康进程�
 Release 用于性能；Debug 用于诊断正确性。所有临时日志、脚本、原始 trace 和表格放在
 `build/tmp/preview_performance/`，不在仓库根目录创建临时文件，不提交原始机器日志。
 
-以下是实施命令模板，尚未执行。Windows 优化测试构建使用现有 `win_release_test`；
+NM8.2 CUDA used `win_debug` and `win_release_test` with `ALCEDO_ENABLE_BRUSH_MASK=OFF`
+and wrote tables under `build/tmp/preview_performance/`. The templates below remain
+the command pattern for later phases. Windows 优化测试构建使用现有 `win_release_test`；
 实际 app 和测试 target、可执行文件路径在执行时从 CMake/CTest 发现并写入完成记录。
 
 ```powershell
@@ -580,5 +681,6 @@ Numerical tolerance and result:
 Remaining platform or product verification:
 ```
 
-当前执行记录：NM8.1 complete 2026-09-12. See the dated record under the NM8.1 heading.
-NM8.2–NM8.6 have no execution evidence yet.
+当前执行记录：NM8.1 complete 2026-09-12. NM8.2 complete on CUDA 2026-09-13
+(OpenCL/Metal pending). See the dated records under those headings.
+NM8.3–NM8.6 have no execution evidence yet.

@@ -193,6 +193,17 @@ class MetalBackend {
 
   void               Submit(CommandContext& command_context);
   void               Wait(CommandContext& command_context);
+
+  /**
+   * @brief Remember the preview request for command-buffer GPU time on Wait.
+   *
+   * Per-pass Metal counter samples stay unavailable. This does not split command
+   * buffers.
+   */
+  void BeginGpuWorkSample(CommandContext& command_context);
+  void EndGpuWorkSample(CommandContext& command_context);
+  void ResolveGpuTimestamps();
+  void DiscardGpuTimestamps();
   /**
    * @brief Commit and wait the current command buffer. Recorded-work scratch stays alive.
    *
@@ -321,6 +332,7 @@ class MetalBackend {
   };
   std::vector<LutCacheEntry> lut_cache_;
   Buffer                     dummy_lut_;
+  std::uint64_t              gpu_timing_request_id_ = 0;
 };
 
 [[nodiscard]] auto BindSystemDefaultMetalPresentationDevice() -> void*;
