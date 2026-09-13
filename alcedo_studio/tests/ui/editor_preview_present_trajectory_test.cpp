@@ -15,14 +15,17 @@
 #include <filesystem>
 #include <fstream>
 #include <mutex>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <thread>
 #include <vector>
 
+#include "app/editor_adjustment_context.hpp"
 #include "app/editor_parameter_write.hpp"
 #include "app/editor_session_types.hpp"
+#include "edit/graph/graph_ids.hpp"
 #include "edit/pipeline/pipeline_accelerator.hpp"
 #include "ui/album_backend_test_fixture.hpp"
 #include "ui/alcedo_main/album_backend/editor_node_controller.hpp"
@@ -51,6 +54,8 @@ constexpr float         kExposureWriteStart     = 0.15f;
 constexpr float         kExposureWriteStep      = 0.02f;
 constexpr float         kExposureWrapMax        = 1.80f;
 constexpr float         kExposureWrapMin        = 0.10f;
+constexpr float         kLlfShadows             = 18.0f;
+constexpr float         kLlfHighlights          = -12.0f;
 
 template <class Predicate>
 auto WaitUntil(Predicate&& predicate, std::chrono::milliseconds timeout) -> bool {
@@ -157,6 +162,7 @@ struct TrajectoryStats {
   std::vector<std::int64_t> gpu_ns;
   std::vector<std::int64_t> last_grade_gpu_ns;
   std::vector<std::int64_t> drt_gpu_ns;
+  std::vector<std::int64_t> llf_gpu_ns;
   std::uint64_t             presented        = 0;
   std::uint64_t             cancelled        = 0;
   std::uint64_t             coalesced        = 0;
@@ -198,6 +204,50 @@ auto PassGpuNs(const diag::PreviewRequestRecord& record, diag::PreviewPassKind k
     }
   }
   return 0;
+}
+
+auto IsLlfSubStage(diag::PreviewSubStageKind kind) -> bool {
+  switch (kind) {
+    case diag::PreviewSubStageKind::LlfExtract:
+    case diag::PreviewSubStageKind::LlfPyramid:
+    case diag::PreviewSubStageKind::LlfRemap:
+    case diag::PreviewSubStageKind::LlfSelect:
+    case diag::PreviewSubStageKind::LlfCollapse:
+    case diag::PreviewSubStageKind::LlfApply:
+    case diag::PreviewSubStageKind::LlfSampleCanonical:
+      return true;
+    default:
+      return false;
+  }
+}
+
+auto LlfGpuNs(const diag::PreviewRequestRecord& record) -> std::int64_t {
+  std::int64_t gpu_ns = 0;
+  for (const auto& pass : record.passes) {
+    if (pass.state != diag::PreviewExecutionState::Executed) {
+      continue;
+    }
+    for (const auto& sub : pass.sub_stages) {
+      if (IsLlfSubStage(sub.kind) && sub.gpu_status == diag::PreviewGpuTimeStatus::Available) {
+        gpu_ns += sub.gpu_ns;
+      }
+    }
+  }
+  return gpu_ns;
+}
+
+auto HasExecutedLlf(const diag::PreviewRequestRecord& record) -> bool {
+  for (const auto& pass : record.passes) {
+    if (pass.state != diag::PreviewExecutionState::Executed) {
+      continue;
+    }
+    for (const auto& sub : pass.sub_stages) {
+      if (IsLlfSubStage(sub.kind) && sub.state == diag::PreviewExecutionState::Executed) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 auto CountExecutedGrades(const diag::PreviewRequestRecord& record) -> int {
@@ -255,6 +305,7 @@ auto BuildStats(const std::vector<diag::PreviewRequestRecord>& records) -> Traje
     stats.gpu_ns.push_back(record.gpu_ns);
     stats.last_grade_gpu_ns.push_back(LastExecutedGradeGpuNs(record));
     stats.drt_gpu_ns.push_back(PassGpuNs(record, diag::PreviewPassKind::Drt));
+    stats.llf_gpu_ns.push_back(LlfGpuNs(record));
     stats.felt.push_back(&record);
     if (stats.first == nullptr) {
       stats.first = &record;
@@ -330,8 +381,8 @@ void DumpFeltFrameCsv(std::ostream& csv, std::string_view run_label,
       << diag::FormatPreviewMilliseconds(sample.swap_ns) << ','
       << diag::FormatPreviewMilliseconds(LastExecutedGradeGpuNs(record)) << ','
       << diag::FormatPreviewMilliseconds(PassGpuNs(record, diag::PreviewPassKind::Drt)) << ','
-      << CountExecutedGrades(record) << ',' << record.render_width << 'x' << record.render_height
-      << '\n';
+      << diag::FormatPreviewMilliseconds(LlfGpuNs(record)) << ',' << CountExecutedGrades(record)
+      << ',' << record.render_width << 'x' << record.render_height << '\n';
 }
 
 class RecordCollector {
@@ -419,6 +470,117 @@ auto DriveExposureSlider(EditorSessionController* session, std::chrono::millisec
   (void)session->submitWrite(QStringLiteral("exposure"), EditorScalarWrite{ev}, true);
   ++writes;
   return writes;
+}
+
+auto ConnectEightCleanColorGrades(EditorNodeController& nodes, QString* last_grade) -> bool {
+  QString predecessor = QStringLiteral("grade.primary");
+  for (int i = 0; i < 7; ++i) {
+    if (!nodes.addCleanColorGrade()) {
+      return false;
+    }
+    *last_grade = nodes.selected_node_id_string();
+    if (!nodes.requestConnect(predecessor, *last_grade)) {
+      return false;
+    }
+    predecessor = *last_grade;
+  }
+  return nodes.requestConnect(*last_grade, QStringLiteral("drt"));
+}
+
+auto EnableLlfOnSelectedGrade(EditorSessionController* session) -> bool {
+  if (!session->submitWrite(QStringLiteral("shadows"), EditorScalarWrite{kLlfShadows}, false)) {
+    return false;
+  }
+  if (!session->enqueueNodeSwitchBoundary()) {
+    return false;
+  }
+  if (!session->submitWrite(QStringLiteral("highlights"), EditorScalarWrite{kLlfHighlights},
+                            false)) {
+    return false;
+  }
+  return session->enqueueNodeSwitchBoundary();
+}
+
+struct TrajectoryRunResult {
+  std::string                           label;
+  diag::PreviewPerformanceMode          mode              = diag::PreviewPerformanceMode::Detail;
+  int                                   writes            = 0;
+  std::int64_t                          wall_ms           = 0;
+  qulonglong                            presented_frames  = 0;
+  std::uint64_t                         events_lost       = 0;
+  TrajectoryStats                       stats;
+  std::vector<diag::PreviewRequestRecord> records;
+};
+
+auto RunExposureTrajectory(Harness& harness, EditorSessionController* session, std::string label,
+                           diag::PreviewPerformanceMode mode)
+    -> std::optional<TrajectoryRunResult> {
+  diag::PreviewPerformance::SetMode(mode);
+  harness.collector.Clear();
+  const auto frames_before = harness.viewport->presentedFrameCount();
+  const auto wall_start    = std::chrono::steady_clock::now();
+  const int  writes        = DriveExposureSlider(session, kTrajectoryLength);
+  const bool idle          = WaitUntil(
+      [&] {
+        return !session->render_busy() && !harness.viewport->interactivePresentLoopActive();
+      },
+      std::chrono::seconds(30));
+  diag::PreviewPerformance::FlushWriter();
+  if (!idle) {
+    return std::nullopt;
+  }
+  TrajectoryRunResult run;
+  run.label            = std::move(label);
+  run.mode             = mode;
+  run.writes           = writes;
+  run.wall_ms          = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - wall_start)
+                    .count();
+  run.presented_frames = harness.viewport->presentedFrameCount() - frames_before;
+  run.events_lost      = diag::PreviewPerformance::EventsLost();
+  run.records          = harness.collector.Snapshot();
+  run.stats            = BuildStats(run.records);
+  return run;
+}
+
+void WriteTrajectoryDump(std::ostream& out, std::ostream& csv,
+                         const std::vector<TrajectoryRunResult>& runs) {
+  for (const auto& run : runs) {
+    out << "\n[" << run.label << "] mode=" << ModeName(run.mode) << " writes=" << run.writes
+        << " wall_ms=" << run.wall_ms << " viewport_frames=" << run.presented_frames
+        << " records=" << run.records.size() << " presented=" << run.stats.presented
+        << " cancelled=" << run.stats.cancelled << " coalesced=" << run.stats.coalesced
+        << " failed=" << run.stats.failed << " dropped=" << run.stats.dropped
+        << " stale=" << run.stats.stale << " lost=" << run.events_lost
+        << " render=" << run.stats.render_width << "x" << run.stats.render_height
+        << " develop=" << run.stats.develop_width << "x" << run.stats.develop_height
+        << " develop_skipped=" << (run.stats.develop_skipped ? "yes" : "no") << "\n";
+    DumpQuantiles(out, "qml_ms", run.stats.qml_ns);
+    DumpQuantiles(out, "e2e_ms", run.stats.e2e_ns);
+    DumpQuantiles(out, "gpu_ms", run.stats.gpu_ns);
+    DumpQuantiles(out, "last_grade_gpu_ms", run.stats.last_grade_gpu_ns);
+    DumpQuantiles(out, "llf_gpu_ms", run.stats.llf_gpu_ns);
+    DumpQuantiles(out, "drt_gpu_ms", run.stats.drt_gpu_ns);
+    DumpQuantiles(out, "sched_ms", run.stats.sched_ns);
+    DumpQuantiles(out, "sink_ms", run.stats.sink_ns);
+    DumpQuantiles(out, "swap_ms", run.stats.swap_ns);
+    DumpQuantiles(out, "encode_ms", run.stats.encode_ns);
+    if (run.stats.first != nullptr) {
+      out << "  first_presented_pass_trace:\n";
+      DumpPassList(out, *run.stats.first);
+    }
+    if (run.stats.median != nullptr) {
+      out << "  p50_qml_pass_trace:\n";
+      DumpPassList(out, *run.stats.median);
+    }
+    if (run.stats.slowest != nullptr) {
+      out << "  slowest_qml_pass_trace:\n";
+      DumpPassList(out, *run.stats.slowest);
+    }
+    for (const auto* record : run.stats.felt) {
+      DumpFeltFrameCsv(csv, run.label, *record);
+    }
+  }
 }
 
 TEST_F(EditorPreviewPresentTrajectoryTest, SubmitWriteHotExposureCompletesAtFrameSwapped) {
@@ -574,16 +736,8 @@ TEST_F(EditorPreviewPresentTrajectoryTest,
   harness.nodes.set_editor_session(session);
   ASSERT_TRUE(harness.nodes.has_snapshot());
   ASSERT_TRUE(harness.nodes.can_add_color_grade()) << harness.nodes.last_error().toStdString();
-  QString predecessor = QStringLiteral("grade.primary");
   QString last_grade;
-  for (int i = 0; i < 7; ++i) {
-    ASSERT_TRUE(harness.nodes.addCleanColorGrade()) << harness.nodes.last_error().toStdString();
-    last_grade = harness.nodes.selected_node_id_string();
-    ASSERT_TRUE(harness.nodes.requestConnect(predecessor, last_grade))
-        << harness.nodes.last_error().toStdString();
-    predecessor = last_grade;
-  }
-  ASSERT_TRUE(harness.nodes.requestConnect(last_grade, QStringLiteral("drt")))
+  ASSERT_TRUE(ConnectEightCleanColorGrades(harness.nodes, &last_grade))
       << harness.nodes.last_error().toStdString();
   EXPECT_FALSE(harness.nodes.incomplete_draft());
   EXPECT_EQ(harness.nodes.backbone_node_ids().size(), 10);
@@ -600,7 +754,7 @@ TEST_F(EditorPreviewPresentTrajectoryTest,
   out << "path=submitWrite -> admit -> schedule -> worker -> sink -> import -> frameSwapped\n";
   out << "cfa=Bayer source=" << raw_files.front().filename().string() << "\n";
   out << "decode_res=FULL interactive_max_edge=" << kInteractiveMaxLongEdge << "\n";
-  out << "grades=8 selected_node=last_color_grade field=exposure\n";
+  out << "grades=8 selected_node=last_color_grade field=exposure llf=off\n";
   out << "exposure_start=" << kExposureWriteStart << " step=" << kExposureWriteStep
       << " wrap_min=" << kExposureWrapMin << " wrap_max=" << kExposureWrapMax << "\n";
   out << "slider_period_ms=" << kSliderPeriod.count()
@@ -608,94 +762,29 @@ TEST_F(EditorPreviewPresentTrajectoryTest,
       << " session_cache=kept settled_write=true_on_loop_end\n";
   out << "runs=3x Detail last-exposure slider, 1x Summary same slider, 1x Off same slider\n";
   csv << "run,request_id,qml_ms,e2e_ms,gpu_ms,encode_ms,sink_ms,swap_ms,last_grade_gpu_ms,"
-         "drt_gpu_ms,executed_grades,render\n";
+         "drt_gpu_ms,llf_gpu_ms,executed_grades,render\n";
 
-  struct RunResult {
-    std::string                       label;
-    diag::PreviewPerformanceMode      mode = diag::PreviewPerformanceMode::Detail;
-    int                               writes = 0;
-    std::int64_t                      wall_ms = 0;
-    qulonglong                        presented_frames = 0;
-    std::uint64_t                     events_lost = 0;
-    TrajectoryStats                   stats;
-    std::vector<diag::PreviewRequestRecord> records;
-  };
-  std::vector<RunResult> runs;
-
-  auto run_once = [&](std::string label, diag::PreviewPerformanceMode mode) -> bool {
-    diag::PreviewPerformance::SetMode(mode);
-    harness.collector.Clear();
-    const auto frames_before = harness.viewport->presentedFrameCount();
-    const auto wall_start    = std::chrono::steady_clock::now();
-    const int  writes        = DriveExposureSlider(session, kTrajectoryLength);
-    const bool idle          = WaitUntil(
-        [&] {
-          return !session->render_busy() && !harness.viewport->interactivePresentLoopActive();
-        },
-        std::chrono::seconds(30));
-    diag::PreviewPerformance::FlushWriter();
-    if (!idle) {
-      return false;
-    }
-    const auto wall_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                             std::chrono::steady_clock::now() - wall_start)
-                             .count();
-    RunResult run;
-    run.label            = std::move(label);
-    run.mode             = mode;
-    run.writes           = writes;
-    run.wall_ms          = wall_ms;
-    run.presented_frames = harness.viewport->presentedFrameCount() - frames_before;
-    run.events_lost      = diag::PreviewPerformance::EventsLost();
-    run.records          = harness.collector.Snapshot();
-    run.stats            = BuildStats(run.records);
-    runs.push_back(std::move(run));
-    return true;
-  };
-
+  std::vector<TrajectoryRunResult> runs;
   for (int i = 0; i < kRepeatCount; ++i) {
-    ASSERT_TRUE(run_once("detail_repeat_" + std::to_string(i + 1),
-                         diag::PreviewPerformanceMode::Detail))
-        << "Detail trajectory " << (i + 1) << " did not become idle";
+    auto run = RunExposureTrajectory(harness, session, "detail_repeat_" + std::to_string(i + 1),
+                                     diag::PreviewPerformanceMode::Detail);
+    ASSERT_TRUE(run.has_value()) << "Detail trajectory " << (i + 1) << " did not become idle";
+    runs.push_back(std::move(*run));
   }
-  ASSERT_TRUE(run_once("summary_once", diag::PreviewPerformanceMode::Summary));
-  ASSERT_TRUE(run_once("off_once", diag::PreviewPerformanceMode::Off));
+  {
+    auto run = RunExposureTrajectory(harness, session, "summary_once",
+                                     diag::PreviewPerformanceMode::Summary);
+    ASSERT_TRUE(run.has_value()) << "Summary trajectory did not become idle";
+    runs.push_back(std::move(*run));
+  }
+  {
+    auto run =
+        RunExposureTrajectory(harness, session, "off_once", diag::PreviewPerformanceMode::Off);
+    ASSERT_TRUE(run.has_value()) << "Off trajectory did not become idle";
+    runs.push_back(std::move(*run));
+  }
 
-  for (const auto& run : runs) {
-    out << "\n[" << run.label << "] mode=" << ModeName(run.mode) << " writes=" << run.writes
-        << " wall_ms=" << run.wall_ms << " viewport_frames=" << run.presented_frames
-        << " records=" << run.records.size() << " presented=" << run.stats.presented
-        << " cancelled=" << run.stats.cancelled << " coalesced=" << run.stats.coalesced
-        << " failed=" << run.stats.failed << " dropped=" << run.stats.dropped
-        << " stale=" << run.stats.stale << " lost=" << run.events_lost
-        << " render=" << run.stats.render_width << "x" << run.stats.render_height
-        << " develop=" << run.stats.develop_width << "x" << run.stats.develop_height
-        << " develop_skipped=" << (run.stats.develop_skipped ? "yes" : "no") << "\n";
-    DumpQuantiles(out, "qml_ms", run.stats.qml_ns);
-    DumpQuantiles(out, "e2e_ms", run.stats.e2e_ns);
-    DumpQuantiles(out, "gpu_ms", run.stats.gpu_ns);
-    DumpQuantiles(out, "last_grade_gpu_ms", run.stats.last_grade_gpu_ns);
-    DumpQuantiles(out, "drt_gpu_ms", run.stats.drt_gpu_ns);
-    DumpQuantiles(out, "sched_ms", run.stats.sched_ns);
-    DumpQuantiles(out, "sink_ms", run.stats.sink_ns);
-    DumpQuantiles(out, "swap_ms", run.stats.swap_ns);
-    DumpQuantiles(out, "encode_ms", run.stats.encode_ns);
-    if (run.stats.first != nullptr) {
-      out << "  first_presented_pass_trace:\n";
-      DumpPassList(out, *run.stats.first);
-    }
-    if (run.stats.median != nullptr) {
-      out << "  p50_qml_pass_trace:\n";
-      DumpPassList(out, *run.stats.median);
-    }
-    if (run.stats.slowest != nullptr) {
-      out << "  slowest_qml_pass_trace:\n";
-      DumpPassList(out, *run.stats.slowest);
-    }
-    for (const auto* record : run.stats.felt) {
-      DumpFeltFrameCsv(csv, run.label, *record);
-    }
-  }
+  WriteTrajectoryDump(out, csv, runs);
   out.flush();
   csv.flush();
 
@@ -709,6 +798,9 @@ TEST_F(EditorPreviewPresentTrajectoryTest,
     EXPECT_GT(run.stats.presented, 0u) << run.label;
     EXPECT_EQ(LongEdge(run.stats.render_width, run.stats.render_height), kInteractiveMaxLongEdge)
         << run.label;
+    if (run.stats.median != nullptr) {
+      EXPECT_FALSE(HasExecutedLlf(*run.stats.median)) << run.label;
+    }
   }
   EXPECT_EQ(LongEdge(first.stats.render_width, first.stats.render_height), kInteractiveMaxLongEdge);
   EXPECT_GT(diag::PreviewQuantileNs(first.stats.qml_ns, 0.50),
@@ -716,6 +808,148 @@ TEST_F(EditorPreviewPresentTrajectoryTest,
   EXPECT_GE(diag::PreviewQuantileNs(first.stats.sink_ns, 0.50), 0);
   EXPECT_GE(diag::PreviewQuantileNs(first.stats.sched_ns, 0.50), 0);
   EXPECT_TRUE(first.stats.develop_skipped);
+  EXPECT_EQ(diag::PreviewPerformance::EventsLost(), 0u);
+}
+
+TEST_F(EditorPreviewPresentTrajectoryTest,
+       Interactive2560PresentTrajectoryDumpLastGradeLlfEnabled) {
+  if (!g_startup.ok) {
+    GTEST_SKIP() << g_startup.error;
+  }
+  if (QGuiApplication::platformName() == QStringLiteral("offscreen")) {
+    GTEST_SKIP() << "Product present needs the native Windows QPA";
+  }
+  if (g_backend != editor_rhi::EditorBackend::Cuda) {
+    GTEST_SKIP() << "CUDA present trajectory only";
+  }
+  const auto raw_files = CollectCiRawFiles(1);
+  if (raw_files.empty()) {
+    GTEST_SKIP() << "CI RAW fixture is required";
+  }
+
+  Harness harness;
+  harness.host.project()->SetRuntimeAcceleratorPreference(AcceleratorBackendPreference::CUDA);
+  ASSERT_TRUE(CreateTestProject(harness.host));
+  harness.host.import_export()->StartImport(PathsToQStringList(raw_files));
+  ASSERT_TRUE(WaitForImportFinished(harness.host));
+  ASSERT_EQ(harness.host.import_export()->ImportFailed(), 0);
+  ASSERT_GE(harness.host.library()->Thumbnails().size(), 1);
+  const QVariantMap item = harness.host.library()->Thumbnails().at(0).toMap();
+  harness.element_id     = item.value("elementId").toUInt();
+  harness.image_id       = item.value("imageId").toUInt();
+
+  editor_rhi::BindEditorGraphicsToWindow(&harness.window, g_startup);
+  harness.window.resize(1280, 720);
+  harness.viewport = new editor_rhi::EditorViewportItem(harness.window.contentItem());
+  harness.viewport->setSize(QSizeF(1280, 720));
+  harness.viewport->setVisible(true);
+  auto* session = harness.host.editor_session();
+  session->bindPresentationViewport(harness.viewport);
+  QObject::connect(harness.viewport, &editor_rhi::EditorViewportItem::targetSizeRequested, session,
+                   [session](int width, int height) {
+                     session->updatePresentationTargetSize(width, height);
+                   });
+  harness.window.show();
+  harness.window.requestActivate();
+  ProcessEvents(200);
+  SyncPresentationSize(session, harness.viewport, harness.window);
+  ASSERT_TRUE(WaitUntil([&] { return harness.viewport->presentationAvailable(); },
+                        std::chrono::seconds(15)))
+      << harness.viewport->statusText().toStdString();
+
+  diag::PreviewPerformance::ResetForTesting();
+  diag::PreviewPerformance::SetMode(diag::PreviewPerformanceMode::Detail);
+  harness.collector.Attach();
+
+  harness.host.workspace_router()->OpenEditor(harness.element_id, harness.image_id);
+  ASSERT_TRUE(WaitUntil(
+      [&] {
+        return harness.host.editor_session_service()->state() == EditorSessionState::Interactive &&
+               session->can_edit() && harness.viewport->presentedFrameCount() > 0;
+      },
+      std::chrono::minutes(2)));
+  ASSERT_TRUE(WaitUntil([&] { return !session->render_busy(); }, std::chrono::seconds(60)));
+
+  harness.nodes.set_editor_session(session);
+  ASSERT_TRUE(harness.nodes.has_snapshot());
+  ASSERT_TRUE(harness.nodes.can_add_color_grade()) << harness.nodes.last_error().toStdString();
+  QString last_grade;
+  ASSERT_TRUE(ConnectEightCleanColorGrades(harness.nodes, &last_grade))
+      << harness.nodes.last_error().toStdString();
+  EXPECT_FALSE(harness.nodes.incomplete_draft());
+  EXPECT_EQ(harness.nodes.backbone_node_ids().size(), 10);
+  harness.nodes.selectNode(last_grade);
+  ProcessEvents(100);
+  ASSERT_TRUE(WaitUntil(
+      [&] {
+        return !session->render_busy() && !harness.viewport->interactivePresentLoopActive();
+      },
+      std::chrono::seconds(60)));
+  harness.nodes.selectNode(last_grade);
+  ProcessEvents(50);
+  ASSERT_TRUE(session->enqueueNodeSwitchBoundary());
+  const auto* document = session->pipeline_document();
+  ASSERT_NE(document, nullptr);
+  std::string target_error;
+  const auto  shadows_target = alcedo::CompleteSelectedNodeParameterTarget(
+      *document, NodeId{last_grade.toStdString()}, "shadows", &target_error);
+  ASSERT_TRUE(shadows_target.has_value()) << target_error;
+  ASSERT_TRUE(EnableLlfOnSelectedGrade(session))
+      << "can_edit=" << session->can_edit()
+      << " selected=" << harness.nodes.selected_node_id_string().toStdString()
+      << " last_grade=" << last_grade.toStdString()
+      << " last_error=" << session->last_error().toStdString()
+      << " status=" << harness.viewport->statusText().toStdString();
+
+  const auto dump_path = PreviewDumpDirectory() / "cuda_interactive_2560_present_llf_table.txt";
+  const auto csv_path  = PreviewDumpDirectory() / "cuda_interactive_2560_present_llf_frames.csv";
+  std::ofstream out(dump_path, std::ios::trunc);
+  std::ofstream csv(csv_path, std::ios::trunc);
+  out << "CUDA Interactive 2560 product present trajectory with LLF enabled\n";
+  out << "kind=slider_interactive_frame_trace\n";
+  out << "path=submitWrite -> admit -> schedule -> worker -> sink -> import -> frameSwapped\n";
+  out << "cfa=Bayer source=" << raw_files.front().filename().string() << "\n";
+  out << "decode_res=FULL interactive_max_edge=" << kInteractiveMaxLongEdge << "\n";
+  out << "grades=8 selected_node=last_color_grade field=exposure llf=enabled\n";
+  out << "llf_shadows=" << kLlfShadows << " llf_highlights=" << kLlfHighlights << "\n";
+  out << "exposure_start=" << kExposureWriteStart << " step=" << kExposureWriteStep
+      << " wrap_min=" << kExposureWrapMin << " wrap_max=" << kExposureWrapMax << "\n";
+  out << "slider_period_ms=" << kSliderPeriod.count()
+      << " trajectory_s=" << kTrajectoryLength.count()
+      << " session_cache=kept settled_write=true_on_loop_end\n";
+  out << "runs=3x Detail last-exposure slider after last-grade Shadows/Highlights\n";
+  csv << "run,request_id,qml_ms,e2e_ms,gpu_ms,encode_ms,sink_ms,swap_ms,last_grade_gpu_ms,"
+         "drt_gpu_ms,llf_gpu_ms,executed_grades,render\n";
+
+  std::vector<TrajectoryRunResult> runs;
+  for (int i = 0; i < kRepeatCount; ++i) {
+    auto run = RunExposureTrajectory(harness, session, "detail_repeat_" + std::to_string(i + 1),
+                                     diag::PreviewPerformanceMode::Detail);
+    ASSERT_TRUE(run.has_value()) << "Detail LLF trajectory " << (i + 1) << " did not become idle";
+    runs.push_back(std::move(*run));
+  }
+
+  WriteTrajectoryDump(out, csv, runs);
+  out.flush();
+  csv.flush();
+
+  const auto& first = runs.front();
+  ASSERT_FALSE(first.stats.qml_ns.empty());
+  ASSERT_NE(first.stats.median, nullptr);
+  EXPECT_TRUE(HasExecutedLlf(*first.stats.median));
+  EXPECT_GT(diag::PreviewQuantileNs(first.stats.llf_gpu_ns, 0.50), 0);
+  for (const auto& run : runs) {
+    EXPECT_FALSE(run.stats.qml_ns.empty()) << run.label;
+    EXPECT_GT(run.stats.presented, 0u) << run.label;
+    EXPECT_EQ(LongEdge(run.stats.render_width, run.stats.render_height), kInteractiveMaxLongEdge)
+        << run.label;
+    ASSERT_NE(run.stats.median, nullptr) << run.label;
+    EXPECT_TRUE(HasExecutedLlf(*run.stats.median)) << run.label;
+    EXPECT_GT(diag::PreviewQuantileNs(run.stats.llf_gpu_ns, 0.50), 0) << run.label;
+    EXPECT_TRUE(run.stats.develop_skipped) << run.label;
+  }
+  EXPECT_GT(diag::PreviewQuantileNs(first.stats.qml_ns, 0.50),
+            diag::PreviewQuantileNs(first.stats.encode_ns, 0.50));
   EXPECT_EQ(diag::PreviewPerformance::EventsLost(), 0u);
 }
 #endif

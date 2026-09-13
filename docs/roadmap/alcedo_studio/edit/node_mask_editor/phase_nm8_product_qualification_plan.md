@@ -508,13 +508,16 @@ Exit conditions and evidence:
 DAG dump: `build/tmp/preview_performance/cuda_interactive_2560_pass_table.txt`
 and `cuda_interactive_native_slider_table.txt`.
 Present dump: `build/tmp/preview_performance/cuda_interactive_2560_present_table.txt`
-and `cuda_interactive_2560_present_frames.csv`.
+and `cuda_interactive_2560_present_frames.csv`. LLF-enabled present dump:
+`cuda_interactive_2560_present_llf_table.txt` and
+`cuda_interactive_2560_present_llf_frames.csv`.
 Tests: `PreviewPerformanceTest` import/present correlation; `GpuDagCudaPrimaryGradeTest`
 `EightGrade*` skip assertions,
 `Interactive2560SliderBaselinesDumpCurrentExecutionGpuTimes`, and
 `InteractiveNativeSliderBaselinesDumpCurrentExecutionGpuTimes`;
-`EditorPreviewPresentTrajectoryTest.SubmitWriteHotExposureCompletesAtFrameSwapped`
-and `Interactive2560PresentTrajectoryDumpSubmitWriteToFrameSwapped`.
+`EditorPreviewPresentTrajectoryTest.SubmitWriteHotExposureCompletesAtFrameSwapped`,
+`Interactive2560PresentTrajectoryDumpSubmitWriteToFrameSwapped`, and
+`Interactive2560PresentTrajectoryDumpLastGradeLlfEnabled`.
 
 **Shared RAW for slider families (win_release_test, 2026-09-13).** Hardware:
 NVIDIA GeForce RTX 3080 Laptop GPU, 8192 MiB, driver 610.62, CUDA 12.8. Brush
@@ -565,6 +568,25 @@ Median presented frame (run 1): Develop skipped; only the last clean Grade
 still executes the seven extra Grades. Felt `qml_ms` P50 is 20–22 ms. DAG
 encode stays 0.05 ms P50. Sink Map/copy is 5–7 ms P50. Off vs Detail does not
 change the 10 s write-loop wall time.
+
+**Family B2 — product present last-Exposure slider with LLF enabled** (8 clean
+Color Grades, then last-grade Shadows=18 and Highlights=-12). Dump:
+`build/tmp/preview_performance/cuda_interactive_2560_present_llf_table.txt` and
+`cuda_interactive_2560_present_llf_frames.csv`. Same `submitWrite(exposure)`
+slider as Family B after a node-switch seal between Shadows and Highlights.
+10 s × 3 Detail. Interactive render **2560×1705**. `events_lost=0`.
+
+| Run | Mode | Writes | Presented | Dropped | qml p50/p95/p99 | gpu p50 | llf gpu p50 | last grade gpu p50 | drt gpu p50 | sink p50 | encode p50 |
+| --- | --- | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | Detail | 678 | 417 | 28 | 20.79 / 25.98 / 31.39 | 8.59 | 3.89 | 2.17 | 1.61 | 7.05 | 0.94 |
+| 2 | Detail | 644 | 429 | 17 | 20.36 / 24.86 / 31.22 | 8.55 | 3.90 | 2.16 | 1.61 | 7.16 | 0.98 |
+| 3 | Detail | 644 | 419 | 22 | 21.33 / 25.31 / 31.68 | 8.47 | 3.89 | 2.15 | 1.61 | 7.18 | 0.97 |
+
+Median presented frame (run 1): Develop skipped; last Color Grade only
+(pointwise, then LLF extract/pyramid/remap/select/collapse/apply) plus DRT 1.61.
+LLF GPU P50 is 3.89 ms. Total GPU P50 is 8.5–8.6 ms versus 4.3–5.6 ms with LLF
+off. Felt `qml_ms` P50 stays 20–21 ms. Sink Map/copy is 7.1–7.2 ms P50. DAG
+encode is 0.94–0.98 ms P50.
 
 Command:
 
