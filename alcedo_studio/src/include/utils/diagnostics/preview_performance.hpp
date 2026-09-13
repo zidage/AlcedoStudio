@@ -46,11 +46,12 @@ namespace detail {
  * @brief Low-overhead preview timing owner. Off creates no samples, strings, or queue slots.
  *
  * Hot-path notes never format text or write files. Completed records go to a bounded
- * ring; a background thread writes structured lines. A full ring drops the diagnostic
- * event, counts the loss, and leaves render unblocked.
+ * ring; a background thread writes one app-log duration line per second. A full ring
+ * drops the diagnostic event, counts the loss, and leaves render unblocked.
  *
  * Process start turns Detail on. Tests call SetMode(Off) or ResetForTesting.
- * Optional `ALCEDO_PREVIEW_PERF_LOG` sets the output path.
+ * Optional `ALCEDO_PREVIEW_PERF_LOG` sets the output path. The log writes durations
+ * in milliseconds. It does not write absolute monotonic clock values.
  *
  * @thread_safety Notes may run on the session owner, render worker, and Qt render
  *                thread. Off takes no lock.

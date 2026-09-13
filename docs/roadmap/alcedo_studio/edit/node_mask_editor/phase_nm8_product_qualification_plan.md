@@ -237,7 +237,10 @@ Radial/Linear Gradient 的参数仍由 Mask owner 管理。Grade 不持有跨帧
 把 E2E stdout 迁到结构化日志；提供 Off/Summary/Detail、有界事件存储和后台写出。
 产品启动即打开 Detail 采集，不读模式环境变量；测试通过 `SetMode(Off)` /
 `ResetForTesting` 关闭。可选 `ALCEDO_PREVIEW_PERF_LOG` 指定文件，缺省写在应用
-日志目录 `alcedo_preview_perf_<log-basename>.log`。
+日志目录 `alcedo_preview_perf_<log-basename>.log`。文件行使用应用日志格式，只写
+时长毫秒（e2e / input / apply / encode / wait），不写单调时钟绝对值；后台每秒
+写一行窗口汇总，不按帧落盘。Windows 上 PreviewPerformance 为共享库，避免 CUDA
+DLL 与主进程各持一份计时状态。
 额外落地：删除产品预览路径上的 legacy `[RENDER_E2E]` / `[GPU_POOL]` / RAW `[LOG]` /
 fused-pipeline FPS 打印；Develop 记录 decode 参数；每个 pass 记录子阶段 CPU 时间
 （LLF / Mix / Linearize / Demosaic 等）；显存只在请求结束写一份汇总快照。
@@ -249,7 +252,8 @@ fused-pipeline FPS 打印；Develop 记录 decode 参数；每个 pass 记录子
 
 **验证：** `DisabledTimingDoesNotAllocateOrQueueEvents`、
 `InitializeTurnsDetailLoggingOn`、
-`StructuredLogWritesTimesInMilliseconds`、
+`StructuredLogWritesDurationMillisecondsInAppLogFormat`、
+`WindowedLogWritesOneLineForMultiplePresentedFrames`、
 `CoalescedInputsRetainFirstAndLatestAcceptedTimes`、
 `PresentedFrameTimingMatchesConsumedRequest`、
 `CancelledAndFailedRequestsReleaseTimingEntries`、
@@ -301,7 +305,8 @@ queue full
 | --- | --- | --- |
 | `DisabledTimingDoesNotAllocateOrQueueEvents` | `PreviewPerformanceTest` | PASS |
 | `InitializeTurnsDetailLoggingOn` | `PreviewPerformanceTest` | PASS |
-| `StructuredLogWritesTimesInMilliseconds` | `PreviewPerformanceTest` | PASS |
+| `StructuredLogWritesDurationMillisecondsInAppLogFormat` | `PreviewPerformanceTest` | PASS |
+| `WindowedLogWritesOneLineForMultiplePresentedFrames` | `PreviewPerformanceTest` | PASS |
 | `CoalescedInputsRetainFirstAndLatestAcceptedTimes` | `PreviewPerformanceTest` | PASS |
 | `PresentedFrameTimingMatchesConsumedRequest` | `PreviewPerformanceTest` | PASS |
 | `CancelledAndFailedRequestsReleaseTimingEntries` | `PreviewPerformanceTest` | PASS |
@@ -328,7 +333,7 @@ ctest --test-dir build/debug -R "EditorPendingInputTest\." --output-on-failure
 ctest --test-dir build/debug -R "ResourceSnapshotReportsAggregated" --output-on-failure
 ```
 
-Suite totals: PreviewPerformanceTest 11/11 PASS; EditorAppLoggingTest 4/4 PASS;
+Suite totals: PreviewPerformanceTest 12/12 PASS; EditorAppLoggingTest 4/4 PASS;
 EditorPendingInputTest 13/13 PASS; GpuDagCudaWorkspaceTest snapshot case PASS.
 `build/debug/CMakeCache.txt` has `ALCEDO_ENABLE_BRUSH_MASK:BOOL=OFF`.
 

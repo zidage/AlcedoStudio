@@ -8,6 +8,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdlib>
+#include <ctime>
 #include <deque>
 #include <fstream>
 #include <iomanip>
@@ -20,6 +21,21 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#elif defined(__APPLE__)
+#include <pthread.h>
+#else
+#include <sys/syscall.h>
+#include <unistd.h>
+#endif
 
 namespace alcedo {
 
@@ -40,6 +56,7 @@ constexpr std::size_t kMaxOpenIntervals        = 16;
 constexpr std::size_t kDefaultPendingCapacity  = 64;
 constexpr std::size_t kDefaultQueueCapacity    = 32;
 constexpr std::size_t kMaxInternId             = std::numeric_limits<std::uint16_t>::max();
+constexpr auto        kLogWindow               = std::chrono::seconds(1);
 
 enum class OpenKind : std::uint8_t { Cpu, Pass, Sub };
 
@@ -151,6 +168,21 @@ auto QuantileNs(std::vector<std::int64_t> values, const double fraction) -> std:
   return values[index];
 }
 
+auto MaxNs(const std::vector<std::int64_t>& values) -> std::int64_t {
+  std::int64_t max_ns = 0;
+  for (const auto value : values) {
+    max_ns = std::max(max_ns, value);
+  }
+  return max_ns;
+}
+
+auto DurationNs(const std::int64_t end_ns, const std::int64_t start_ns) -> std::int64_t {
+  if (end_ns <= 0 || start_ns <= 0 || end_ns < start_ns) {
+    return 0;
+  }
+  return end_ns - start_ns;
+}
+
 auto FormatMilliseconds(const std::int64_t nanoseconds) -> std::string {
   std::ostringstream out;
   out.imbue(std::locale::classic());
@@ -159,103 +191,130 @@ auto FormatMilliseconds(const std::int64_t nanoseconds) -> std::string {
   return out.str();
 }
 
-auto FormatSummary(const std::vector<std::int64_t>& e2e_ns, const std::uint64_t presented,
-                   const std::uint64_t lost) -> std::string {
+auto FormatMegabytes(const std::size_t bytes) -> std::string {
   std::ostringstream out;
-  out << "#preview_perf_summary samples=" << e2e_ns.size() << " presented=" << presented
-      << " lost=" << lost << " p50_e2e_ms=" << FormatMilliseconds(QuantileNs(e2e_ns, 0.50))
-      << " p95_e2e_ms=" << FormatMilliseconds(QuantileNs(e2e_ns, 0.95))
-      << " p99_e2e_ms=" << FormatMilliseconds(QuantileNs(e2e_ns, 0.99));
-  std::int64_t max_ns = 0;
-  for (const auto value : e2e_ns) {
-    max_ns = std::max(max_ns, value);
-  }
-  out << " max_e2e_ms=" << FormatMilliseconds(max_ns) << "\n";
+  out.imbue(std::locale::classic());
+  out << std::fixed << std::setprecision(2) << (static_cast<double>(bytes) / (1024.0 * 1024.0));
   return out.str();
 }
 
-auto FormatRecord(const PreviewRequestRecord& record) -> std::string {
+auto FormatWallTimestamp() -> std::string {
+  const auto now    = std::chrono::system_clock::now();
+  const auto second = std::chrono::time_point_cast<std::chrono::seconds>(now);
+  const auto ms     = std::chrono::duration_cast<std::chrono::milliseconds>(now - second);
+  const auto t      = std::chrono::system_clock::to_time_t(now);
+  std::tm    local{};
+#if defined(_WIN32)
+  localtime_s(&local, &t);
+#else
+  localtime_r(&t, &local);
+#endif
   std::ostringstream out;
-  out << "#preview_perf v2\n";
-  out << "request id=" << record.request_id << " sequence=" << record.input_sequence_id
-      << " role=" << PreviewFrameRoleName(record.frame_role)
-      << " quality=" << PreviewQualityName(record.quality) << " reason="
-      << (record.reason.empty() ? "?" : record.reason)
-      << " has_user_input=" << (record.has_user_input ? 1 : 0)
-      << " incomplete=" << (record.incomplete ? 1 : 0) << "\n";
-  out << "input first_accepted_ms=" << FormatMilliseconds(record.first_accepted_ns)
-      << " latest_accepted_ms=" << FormatMilliseconds(record.latest_accepted_ns) << "\n";
-  out << "cpu apply_ms=" << FormatMilliseconds(record.cpu.apply_ns)
-      << " invalidation_ms=" << FormatMilliseconds(record.cpu.invalidation_ns)
-      << " plan_key_ms=" << FormatMilliseconds(record.cpu.plan_key_ns)
-      << " plan_lookup_ms=" << FormatMilliseconds(record.cpu.plan_lookup_ns)
-      << " plan_compile_ms=" << FormatMilliseconds(record.cpu.plan_compile_ns)
-      << " allocation_ms=" << FormatMilliseconds(record.cpu.allocation_ns)
-      << " encode_ms=" << FormatMilliseconds(record.cpu.encode_ns)
-      << " submit_ms=" << FormatMilliseconds(record.cpu.submit_ns)
-      << " wait_ms=" << FormatMilliseconds(record.cpu.wait_ns) << "\n";
-  for (const auto& pass : record.passes) {
-    out << "pass owner=" << (pass.owner.empty() ? "?" : pass.owner)
-        << " kind=" << PreviewPassKindName(pass.kind) << " ordinal=" << pass.ordinal
-        << " state=" << PreviewExecutionStateName(pass.state)
-        << " cpu_ms=" << FormatMilliseconds(pass.cpu_ns) << " gpu=unavailable";
-    if (!pass.mask_id.empty()) {
-      out << " mask=" << pass.mask_id;
-    }
-    out << "\n";
-    for (const auto& sub : pass.sub_stages) {
-      out << "  sub kind=" << PreviewSubStageKindName(sub.kind)
-          << " state=" << PreviewExecutionStateName(sub.state)
-          << " cpu_ms=" << FormatMilliseconds(sub.cpu_ns) << "\n";
-    }
+  out.imbue(std::locale::classic());
+  out << std::put_time(&local, "%Y-%m-%dT%H:%M:%S") << '.' << std::setfill('0') << std::setw(3)
+      << ms.count();
+  return out.str();
+}
+
+auto FormatThreadId() -> std::string {
+  std::ostringstream out;
+  out.imbue(std::locale::classic());
+#if defined(_WIN32)
+  out << std::hex << GetCurrentThreadId();
+#elif defined(__APPLE__)
+  std::uint64_t thread_id = 0;
+  pthread_threadid_np(nullptr, &thread_id);
+  out << std::hex << thread_id;
+#else
+  out << std::hex << static_cast<unsigned long>(syscall(SYS_gettid));
+#endif
+  return out.str();
+}
+
+auto FormatLogPrefix() -> std::string {
+  return FormatWallTimestamp() + " [INFO] [tid=" + FormatThreadId() +
+         "] [alcedo.preview.perf] ";
+}
+
+auto FormatSlowest(const PreviewRequestRecord& record) -> std::string {
+  const auto e2e_ns = DurationNs(record.displayed_ns, record.submit_ns);
+  std::ostringstream out;
+  out << "slowest id=" << record.request_id << " "
+      << (record.reason.empty() ? "?" : record.reason) << " "
+      << PreviewFrameRoleName(record.frame_role) << " e2e_ms=" << FormatMilliseconds(e2e_ns);
+  if (record.has_user_input && record.latest_accepted_ns > 0) {
+    out << " input_ms="
+        << FormatMilliseconds(DurationNs(record.displayed_ns, record.latest_accepted_ns));
   }
+  out << " apply_ms=" << FormatMilliseconds(record.cpu.apply_ns)
+      << " encode_ms=" << FormatMilliseconds(record.cpu.encode_ns)
+      << " wait_ms=" << FormatMilliseconds(record.cpu.wait_ns);
   if (record.has_develop_decode) {
     const auto& d = record.develop;
-    out << "develop decode_res=" << PreviewDecodeResName(d.decode_res)
-        << " cfa=" << PreviewCfaKindName(d.cfa)
-        << " demosaic=" << PreviewDemosaicMethodName(d.demosaic)
-        << " highlights_reconstruct=" << (d.highlights_reconstruct ? 1 : 0)
-        << " downsample_passes=" << static_cast<unsigned>(d.downsample_passes) << " host="
-        << d.host_width << "x" << d.host_height << " develop=" << d.develop_width << "x"
-        << d.develop_height << " full_ref=" << d.full_ref_width << "x" << d.full_ref_height
-        << " upload_rgb=" << (d.upload_rgb ? 1 : 0)
-        << " layout=" << PreviewDevelopLayoutName(d.layout) << "\n";
+    out << " develop=" << PreviewDecodeResName(d.decode_res) << " " << PreviewCfaKindName(d.cfa)
+        << " " << PreviewDemosaicMethodName(d.demosaic) << " " << d.develop_width << "x"
+        << d.develop_height;
+  }
+  for (const auto& pass : record.passes) {
+    out << " | " << (pass.owner.empty() ? "?" : pass.owner) << " "
+        << PreviewPassKindName(pass.kind) << "=" << FormatMilliseconds(pass.cpu_ns);
+    for (const auto& sub : pass.sub_stages) {
+      out << " " << PreviewSubStageKindName(sub.kind) << "=" << FormatMilliseconds(sub.cpu_ns);
+    }
   }
   if (record.has_resources) {
-    const auto& r = record.resources;
-    out << "resource texture_used_bytes=" << r.texture_used_bytes
-        << " texture_leased_bytes=" << r.texture_leased_bytes
-        << " texture_unleased_bytes=" << r.texture_unleased_bytes
-        << " texture_entry_count=" << r.texture_entry_count
-        << " texture_allocation_count=" << r.texture_allocation_count
-        << " texture_peak_used_bytes=" << r.texture_peak_used_bytes
-        << " transient_used_bytes=" << r.transient_used_bytes
-        << " transient_capacity_bytes=" << r.transient_capacity_bytes
-        << " published_image_count=" << r.published_image_count
-        << " write_image_count=" << r.write_image_count << " value_bytes=" << r.value_bytes
-        << " value_count=" << r.value_count;
-    if (r.device_memory_valid) {
-      out << " device_used_bytes=" << r.device_used_bytes
-          << " device_free_bytes=" << r.device_free_bytes
-          << " device_total_bytes=" << r.device_total_bytes;
-    }
-    out << "\n";
+    out << " | texture_mb=" << FormatMegabytes(record.resources.texture_used_bytes)
+        << " peak_mb=" << FormatMegabytes(record.resources.texture_peak_used_bytes)
+        << " allocs=" << record.resources.texture_allocation_count;
   }
-  out << "present qt_frame=" << record.qt_frame
-      << " displayed_ms=" << FormatMilliseconds(record.displayed_ns)
-      << " submit_ms=" << FormatMilliseconds(record.submit_ns);
-  if (record.has_user_input && record.first_accepted_ns > 0 && record.displayed_ns > 0) {
-    out << " input_to_present_ms="
-        << FormatMilliseconds(record.displayed_ns - record.latest_accepted_ns);
-  } else {
-    out << " input_to_present_ms=n/a";
+  return out.str();
+}
+
+struct WindowAccum {
+  std::vector<std::int64_t> e2e_ns;
+  std::vector<std::int64_t> input_ns;
+  std::vector<std::int64_t> apply_ns;
+  std::vector<std::int64_t> encode_ns;
+  std::vector<std::int64_t> wait_ns;
+  std::uint64_t presented = 0;
+  std::uint64_t dropped   = 0;
+  std::uint64_t cancelled = 0;
+  std::uint64_t failed    = 0;
+  std::uint64_t coalesced = 0;
+  std::uint64_t stale     = 0;
+  std::optional<PreviewRequestRecord> slowest;
+  std::int64_t slowest_e2e_ns = -1;
+  std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+  bool has_samples = false;
+
+  void Reset() {
+    *this = WindowAccum{};
+    start = std::chrono::steady_clock::now();
+  }
+};
+
+auto FormatWindow(const WindowAccum& window, const std::uint64_t lost) -> std::string {
+  const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::steady_clock::now() - window.start)
+                              .count();
+  std::ostringstream out;
+  out << FormatLogPrefix() << "window_ms=" << elapsed_ms << " presented=" << window.presented
+      << " dropped=" << window.dropped << " cancelled=" << window.cancelled
+      << " failed=" << window.failed << " coalesced=" << window.coalesced
+      << " stale=" << window.stale << " lost=" << lost
+      << " e2e_ms p50=" << FormatMilliseconds(QuantileNs(window.e2e_ns, 0.50))
+      << " p95=" << FormatMilliseconds(QuantileNs(window.e2e_ns, 0.95))
+      << " max=" << FormatMilliseconds(MaxNs(window.e2e_ns))
+      << " input_ms p50=" << FormatMilliseconds(QuantileNs(window.input_ns, 0.50))
+      << " p95=" << FormatMilliseconds(QuantileNs(window.input_ns, 0.95))
+      << " max=" << FormatMilliseconds(MaxNs(window.input_ns))
+      << " apply_ms p50=" << FormatMilliseconds(QuantileNs(window.apply_ns, 0.50))
+      << " encode_ms p50=" << FormatMilliseconds(QuantileNs(window.encode_ns, 0.50))
+      << " wait_ms p50=" << FormatMilliseconds(QuantileNs(window.wait_ns, 0.50));
+  if (window.slowest.has_value()) {
+    out << " | " << FormatSlowest(*window.slowest);
   }
   out << "\n";
-  out << "terminal outcome=" << PreviewTerminalOutcomeName(record.outcome);
-  if (!record.terminal_reason.empty()) {
-    out << " reason=" << record.terminal_reason;
-  }
-  out << " gpu=unavailable\n";
   return out.str();
 }
 
@@ -278,13 +337,13 @@ struct State {
   bool writer_busy   = false;
   bool stop_writer   = false;
   bool writer_started = false;
+  bool flush_emit    = false;
   std::thread writer;
   std::function<void(const PreviewRequestRecord&)> sink;
   std::string output_path;
   std::string written_log;
   std::ofstream file;
-  std::vector<std::int64_t> summary_e2e_ns;
-  std::uint64_t summary_presented = 0;
+  WindowAccum window;
 
   ~State() { StopWriter(); }
 
@@ -311,18 +370,85 @@ struct State {
     writer          = std::thread([this] { WriterLoop(); });
   }
 
+  void WriteTextLocked(const std::string& text) {
+    written_log += text;
+    if (!output_path.empty()) {
+      if (!file.is_open()) {
+        file.open(output_path, std::ios::out | std::ios::app);
+      }
+      if (file.is_open()) {
+        file << text << std::flush;
+      }
+    }
+  }
+
+  void AddToWindowLocked(const PreviewRequestRecord& record) {
+    if (!window.has_samples) {
+      window.start = std::chrono::steady_clock::now();
+    }
+    window.has_samples = true;
+    switch (record.outcome) {
+      case PreviewTerminalOutcome::Presented:
+        ++window.presented;
+        break;
+      case PreviewTerminalOutcome::Dropped:
+        ++window.dropped;
+        break;
+      case PreviewTerminalOutcome::Cancelled:
+        ++window.cancelled;
+        break;
+      case PreviewTerminalOutcome::Failed:
+        ++window.failed;
+        break;
+      case PreviewTerminalOutcome::Coalesced:
+        ++window.coalesced;
+        break;
+      case PreviewTerminalOutcome::Stale:
+        ++window.stale;
+        break;
+    }
+    if (record.outcome != PreviewTerminalOutcome::Presented || record.incomplete) {
+      return;
+    }
+    const auto e2e_ns = DurationNs(record.displayed_ns, record.submit_ns);
+    if (e2e_ns <= 0) {
+      return;
+    }
+    window.e2e_ns.push_back(e2e_ns);
+    if (record.has_user_input && record.latest_accepted_ns > 0) {
+      window.input_ns.push_back(DurationNs(record.displayed_ns, record.latest_accepted_ns));
+    }
+    window.apply_ns.push_back(record.cpu.apply_ns);
+    window.encode_ns.push_back(record.cpu.encode_ns);
+    window.wait_ns.push_back(record.cpu.wait_ns);
+    if (e2e_ns > window.slowest_e2e_ns) {
+      window.slowest_e2e_ns = e2e_ns;
+      window.slowest        = record;
+    }
+  }
+
+  void EmitWindowLocked(const bool force) {
+    if (!window.has_samples) {
+      return;
+    }
+    const auto elapsed = std::chrono::steady_clock::now() - window.start;
+    if (!force && elapsed < kLogWindow) {
+      return;
+    }
+    WriteTextLocked(FormatWindow(window, events_lost));
+    window.Reset();
+  }
+
   void WriterLoop() {
     for (;;) {
       std::vector<PreviewRequestRecord> batch;
+      bool force_emit = false;
       {
         std::unique_lock lock(mutex);
         cv.wait(lock, [&] {
-          return stop_writer || (!writer_paused && !queue.empty());
+          return stop_writer || flush_emit || (!writer_paused && !queue.empty());
         });
-        if (stop_writer && queue.empty()) {
-          return;
-        }
-        if (writer_paused) {
+        if (writer_paused && !stop_writer && !flush_emit) {
           continue;
         }
         writer_busy = true;
@@ -330,31 +456,12 @@ struct State {
           batch.push_back(std::move(queue.front()));
           queue.pop_front();
         }
+        force_emit = flush_emit || stop_writer;
       }
       for (const auto& record : batch) {
-        const auto mode_now = mode.load(std::memory_order_relaxed);
-        std::string text;
         {
           std::lock_guard lock(mutex);
-          if (record.outcome == PreviewTerminalOutcome::Presented && !record.incomplete &&
-              record.displayed_ns > record.submit_ns) {
-            ++summary_presented;
-            summary_e2e_ns.push_back(record.displayed_ns - record.submit_ns);
-          }
-          if (mode_now == PreviewPerformanceMode::Summary) {
-            text = FormatSummary(summary_e2e_ns, summary_presented, events_lost);
-          } else {
-            text = FormatRecord(record);
-          }
-          written_log += text;
-          if (!output_path.empty()) {
-            if (!file.is_open()) {
-              file.open(output_path, std::ios::out | std::ios::app);
-            }
-            if (file.is_open()) {
-              file << text << std::flush;
-            }
-          }
+          AddToWindowLocked(record);
         }
         std::function<void(const PreviewRequestRecord&)> local_sink;
         {
@@ -367,7 +474,13 @@ struct State {
       }
       {
         std::lock_guard lock(mutex);
+        EmitWindowLocked(force_emit);
+        flush_emit  = false;
         writer_busy = false;
+        if (stop_writer && queue.empty()) {
+          cv.notify_all();
+          return;
+        }
       }
       cv.notify_all();
     }
@@ -508,8 +621,8 @@ void PreviewPerformance::Shutdown() {
   state.events_queued = 0;
   state.events_lost   = 0;
   state.written_log.clear();
-  state.summary_e2e_ns.clear();
-  state.summary_presented = 0;
+  state.window.Reset();
+  state.flush_emit = false;
   if (state.file.is_open()) {
     state.file.close();
   }
@@ -598,8 +711,11 @@ void PreviewPerformance::FlushWriter() {
     return;
   }
   state.writer_paused = false;
+  state.flush_emit    = true;
   state.cv.notify_all();
-  state.cv.wait(lock, [&] { return state.queue.empty() && !state.writer_busy; });
+  state.cv.wait(lock, [&] {
+    return state.queue.empty() && !state.writer_busy && !state.flush_emit;
+  });
 }
 
 auto PreviewPerformance::EventsQueued() -> std::uint64_t {

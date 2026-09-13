@@ -13,6 +13,7 @@
 #include <fstream>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <vector>
 
@@ -67,6 +68,16 @@ auto MakePatch(std::string field, float value) -> EditorAdjustmentPatch {
   return patch;
 }
 
+auto CountNeedle(const std::string& text, const std::string_view needle) -> std::size_t {
+  std::size_t count = 0;
+  std::size_t pos   = 0;
+  while ((pos = text.find(needle, pos)) != std::string::npos) {
+    ++count;
+    pos += needle.size();
+  }
+  return count;
+}
+
 TEST_F(PreviewPerformanceTest, DisabledTimingDoesNotAllocateOrQueueEvents) {
   clock_->SetNs(100);
   diag::PreviewPerformance::NoteSubmit(1, diag::PreviewFrameRole::InteractivePrimary,
@@ -104,7 +115,7 @@ TEST_F(PreviewPerformanceTest, InitializeTurnsDetailLoggingOn) {
   EXPECT_GE(diag::PreviewPerformance::EventsQueued(), 1u);
 }
 
-TEST_F(PreviewPerformanceTest, StructuredLogWritesTimesInMilliseconds) {
+TEST_F(PreviewPerformanceTest, StructuredLogWritesDurationMillisecondsInAppLogFormat) {
   EnableDetail();
   clock_->SetNs(2'000'000);
   diag::PreviewPerformance::NoteSubmit(3, diag::PreviewFrameRole::InteractivePrimary,
@@ -116,11 +127,34 @@ TEST_F(PreviewPerformanceTest, StructuredLogWritesTimesInMilliseconds) {
   diag::PreviewPerformance::FlushWriter();
 
   const auto text = diag::PreviewPerformance::WrittenLog();
-  EXPECT_NE(text.find("#preview_perf v2"), std::string::npos);
-  EXPECT_NE(text.find("first_accepted_ms=1.00"), std::string::npos);
-  EXPECT_NE(text.find("latest_accepted_ms=1.50"), std::string::npos);
-  EXPECT_NE(text.find("input_to_present_ms=3.50"), std::string::npos);
+  EXPECT_NE(text.find("[INFO]"), std::string::npos);
+  EXPECT_NE(text.find("[alcedo.preview.perf]"), std::string::npos);
+  EXPECT_NE(text.find("e2e_ms p50=3.00"), std::string::npos);
+  EXPECT_NE(text.find("input_ms p50=3.50"), std::string::npos);
+  EXPECT_NE(text.find("slowest id=3"), std::string::npos);
+  EXPECT_EQ(text.find("displayed_ms="), std::string::npos);
+  EXPECT_EQ(text.find("first_accepted_ms="), std::string::npos);
+  EXPECT_EQ(text.find("submit_ms="), std::string::npos);
+  EXPECT_EQ(text.find("#preview_perf"), std::string::npos);
   EXPECT_EQ(text.find("_ns="), std::string::npos);
+}
+
+TEST_F(PreviewPerformanceTest, WindowedLogWritesOneLineForMultiplePresentedFrames) {
+  EnableDetail();
+  for (std::uint64_t id = 1; id <= 3; ++id) {
+    clock_->SetNs(static_cast<std::int64_t>(id) * 2'000'000);
+    diag::PreviewPerformance::NoteSubmit(id, diag::PreviewFrameRole::InteractivePrimary,
+                                         diag::PreviewQuality::Interactive, "InteractiveAdjustment",
+                                         true);
+    clock_->SetNs(static_cast<std::int64_t>(id) * 2'000'000 + 4'000'000);
+    diag::PreviewPerformance::NoteDisplayed(id);
+  }
+  diag::PreviewPerformance::FlushWriter();
+
+  const auto text = diag::PreviewPerformance::WrittenLog();
+  EXPECT_EQ(CountNeedle(text, "[alcedo.preview.perf]"), 1u);
+  EXPECT_NE(text.find("presented=3"), std::string::npos);
+  EXPECT_NE(text.find("e2e_ms p50=4.00"), std::string::npos);
 }
 
 TEST_F(PreviewPerformanceTest, CoalescedInputsRetainFirstAndLatestAcceptedTimes) {
@@ -330,21 +364,21 @@ TEST_F(PreviewPerformanceTest, BackgroundWriterProducesCompleteStructuredRecords
   ASSERT_GE(record.passes[0].sub_stages.size(), 2u);
 
   const auto text = diag::PreviewPerformance::WrittenLog();
-  EXPECT_NE(text.find("#preview_perf v2"), std::string::npos);
-  EXPECT_NE(text.find("request id=41"), std::string::npos);
-  EXPECT_NE(text.find("gpu=unavailable"), std::string::npos);
-  EXPECT_NE(text.find("decode_res=FULL"), std::string::npos);
-  EXPECT_NE(text.find("kind=llf_pyramid"), std::string::npos);
-  EXPECT_NE(text.find("kind=mix"), std::string::npos);
-  EXPECT_NE(text.find("cpu_ms="), std::string::npos);
-  EXPECT_NE(text.find("texture_allocation_count=2"), std::string::npos);
+  EXPECT_NE(text.find("[alcedo.preview.perf]"), std::string::npos);
+  EXPECT_NE(text.find("slowest id=41"), std::string::npos);
+  EXPECT_NE(text.find("llf_pyramid="), std::string::npos);
+  EXPECT_NE(text.find("mix="), std::string::npos);
+  EXPECT_NE(text.find("develop=FULL"), std::string::npos);
+  EXPECT_NE(text.find("allocs=2"), std::string::npos);
+  EXPECT_EQ(text.find("displayed_ms="), std::string::npos);
+  EXPECT_EQ(text.find("#preview_perf"), std::string::npos);
   EXPECT_EQ(text.find("_ns="), std::string::npos);
 
   diag::PreviewPerformance::ResetForTesting();
   std::ifstream file(log_path);
   ASSERT_TRUE(file.is_open());
   std::string file_text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-  EXPECT_NE(file_text.find("request id=41"), std::string::npos);
+  EXPECT_NE(file_text.find("slowest id=41"), std::string::npos);
   file.close();
   std::filesystem::remove(log_path, remove_error);
 }
