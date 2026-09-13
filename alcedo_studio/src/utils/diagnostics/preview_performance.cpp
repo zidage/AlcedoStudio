@@ -10,7 +10,9 @@
 #include <cstdlib>
 #include <deque>
 #include <fstream>
+#include <iomanip>
 #include <limits>
+#include <locale>
 #include <mutex>
 #include <optional>
 #include <sstream>
@@ -149,49 +151,62 @@ auto QuantileNs(std::vector<std::int64_t> values, const double fraction) -> std:
   return values[index];
 }
 
+auto FormatMilliseconds(const std::int64_t nanoseconds) -> std::string {
+  std::ostringstream out;
+  out.imbue(std::locale::classic());
+  out << std::fixed << std::setprecision(2)
+      << (static_cast<double>(nanoseconds) / 1'000'000.0);
+  return out.str();
+}
+
 auto FormatSummary(const std::vector<std::int64_t>& e2e_ns, const std::uint64_t presented,
                    const std::uint64_t lost) -> std::string {
   std::ostringstream out;
   out << "#preview_perf_summary samples=" << e2e_ns.size() << " presented=" << presented
-      << " lost=" << lost << " p50_e2e_ns=" << QuantileNs(e2e_ns, 0.50)
-      << " p95_e2e_ns=" << QuantileNs(e2e_ns, 0.95)
-      << " p99_e2e_ns=" << QuantileNs(e2e_ns, 0.99);
+      << " lost=" << lost << " p50_e2e_ms=" << FormatMilliseconds(QuantileNs(e2e_ns, 0.50))
+      << " p95_e2e_ms=" << FormatMilliseconds(QuantileNs(e2e_ns, 0.95))
+      << " p99_e2e_ms=" << FormatMilliseconds(QuantileNs(e2e_ns, 0.99));
   std::int64_t max_ns = 0;
   for (const auto value : e2e_ns) {
     max_ns = std::max(max_ns, value);
   }
-  out << " max_e2e_ns=" << max_ns << "\n";
+  out << " max_e2e_ms=" << FormatMilliseconds(max_ns) << "\n";
   return out.str();
 }
 
 auto FormatRecord(const PreviewRequestRecord& record) -> std::string {
   std::ostringstream out;
-  out << "#preview_perf v1\n";
+  out << "#preview_perf v2\n";
   out << "request id=" << record.request_id << " sequence=" << record.input_sequence_id
       << " role=" << PreviewFrameRoleName(record.frame_role)
       << " quality=" << PreviewQualityName(record.quality) << " reason="
       << (record.reason.empty() ? "?" : record.reason)
       << " has_user_input=" << (record.has_user_input ? 1 : 0)
       << " incomplete=" << (record.incomplete ? 1 : 0) << "\n";
-  out << "input first_accepted_ns=" << record.first_accepted_ns
-      << " latest_accepted_ns=" << record.latest_accepted_ns << "\n";
-  out << "cpu apply_ns=" << record.cpu.apply_ns << " invalidation_ns=" << record.cpu.invalidation_ns
-      << " plan_key_ns=" << record.cpu.plan_key_ns << " plan_lookup_ns=" << record.cpu.plan_lookup_ns
-      << " plan_compile_ns=" << record.cpu.plan_compile_ns
-      << " allocation_ns=" << record.cpu.allocation_ns << " encode_ns=" << record.cpu.encode_ns
-      << " submit_ns=" << record.cpu.submit_ns << " wait_ns=" << record.cpu.wait_ns << "\n";
+  out << "input first_accepted_ms=" << FormatMilliseconds(record.first_accepted_ns)
+      << " latest_accepted_ms=" << FormatMilliseconds(record.latest_accepted_ns) << "\n";
+  out << "cpu apply_ms=" << FormatMilliseconds(record.cpu.apply_ns)
+      << " invalidation_ms=" << FormatMilliseconds(record.cpu.invalidation_ns)
+      << " plan_key_ms=" << FormatMilliseconds(record.cpu.plan_key_ns)
+      << " plan_lookup_ms=" << FormatMilliseconds(record.cpu.plan_lookup_ns)
+      << " plan_compile_ms=" << FormatMilliseconds(record.cpu.plan_compile_ns)
+      << " allocation_ms=" << FormatMilliseconds(record.cpu.allocation_ns)
+      << " encode_ms=" << FormatMilliseconds(record.cpu.encode_ns)
+      << " submit_ms=" << FormatMilliseconds(record.cpu.submit_ns)
+      << " wait_ms=" << FormatMilliseconds(record.cpu.wait_ns) << "\n";
   for (const auto& pass : record.passes) {
     out << "pass owner=" << (pass.owner.empty() ? "?" : pass.owner)
         << " kind=" << PreviewPassKindName(pass.kind) << " ordinal=" << pass.ordinal
-        << " state=" << PreviewExecutionStateName(pass.state) << " cpu_ns=" << pass.cpu_ns
-        << " gpu=unavailable";
+        << " state=" << PreviewExecutionStateName(pass.state)
+        << " cpu_ms=" << FormatMilliseconds(pass.cpu_ns) << " gpu=unavailable";
     if (!pass.mask_id.empty()) {
       out << " mask=" << pass.mask_id;
     }
     out << "\n";
     for (const auto& sub : pass.sub_stages) {
       out << "  sub kind=" << PreviewSubStageKindName(sub.kind)
-          << " state=" << PreviewExecutionStateName(sub.state) << " cpu_ns=" << sub.cpu_ns << "\n";
+          << " state=" << PreviewExecutionStateName(sub.state)
+          << " cpu_ms=" << FormatMilliseconds(sub.cpu_ns) << "\n";
     }
   }
   if (record.has_develop_decode) {
@@ -226,12 +241,14 @@ auto FormatRecord(const PreviewRequestRecord& record) -> std::string {
     }
     out << "\n";
   }
-  out << "present qt_frame=" << record.qt_frame << " displayed_ns=" << record.displayed_ns
-      << " submit_ns=" << record.submit_ns;
+  out << "present qt_frame=" << record.qt_frame
+      << " displayed_ms=" << FormatMilliseconds(record.displayed_ns)
+      << " submit_ms=" << FormatMilliseconds(record.submit_ns);
   if (record.has_user_input && record.first_accepted_ns > 0 && record.displayed_ns > 0) {
-    out << " input_to_present_ns=" << (record.displayed_ns - record.latest_accepted_ns);
+    out << " input_to_present_ms="
+        << FormatMilliseconds(record.displayed_ns - record.latest_accepted_ns);
   } else {
-    out << " input_to_present_ns=n/a";
+    out << " input_to_present_ms=n/a";
   }
   out << "\n";
   out << "terminal outcome=" << PreviewTerminalOutcomeName(record.outcome);

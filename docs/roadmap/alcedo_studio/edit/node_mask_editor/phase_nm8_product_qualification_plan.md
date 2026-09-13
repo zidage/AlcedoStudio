@@ -249,6 +249,7 @@ fused-pipeline FPS 打印；Develop 记录 decode 参数；每个 pass 记录子
 
 **验证：** `DisabledTimingDoesNotAllocateOrQueueEvents`、
 `InitializeTurnsDetailLoggingOn`、
+`StructuredLogWritesTimesInMilliseconds`、
 `CoalescedInputsRetainFirstAndLatestAcceptedTimes`、
 `PresentedFrameTimingMatchesConsumedRequest`、
 `CancelledAndFailedRequestsReleaseTimingEntries`、
@@ -300,6 +301,7 @@ queue full
 | --- | --- | --- |
 | `DisabledTimingDoesNotAllocateOrQueueEvents` | `PreviewPerformanceTest` | PASS |
 | `InitializeTurnsDetailLoggingOn` | `PreviewPerformanceTest` | PASS |
+| `StructuredLogWritesTimesInMilliseconds` | `PreviewPerformanceTest` | PASS |
 | `CoalescedInputsRetainFirstAndLatestAcceptedTimes` | `PreviewPerformanceTest` | PASS |
 | `PresentedFrameTimingMatchesConsumedRequest` | `PreviewPerformanceTest` | PASS |
 | `CancelledAndFailedRequestsReleaseTimingEntries` | `PreviewPerformanceTest` | PASS |
@@ -326,7 +328,7 @@ ctest --test-dir build/debug -R "EditorPendingInputTest\." --output-on-failure
 ctest --test-dir build/debug -R "ResourceSnapshotReportsAggregated" --output-on-failure
 ```
 
-Suite totals: PreviewPerformanceTest 10/10 PASS; EditorAppLoggingTest 4/4 PASS;
+Suite totals: PreviewPerformanceTest 11/11 PASS; EditorAppLoggingTest 4/4 PASS;
 EditorPendingInputTest 13/13 PASS; GpuDagCudaWorkspaceTest snapshot case PASS.
 `build/debug/CMakeCache.txt` has `ALCEDO_ENABLE_BRUSH_MASK:BOOL=OFF`.
 

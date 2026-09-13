@@ -104,6 +104,25 @@ TEST_F(PreviewPerformanceTest, InitializeTurnsDetailLoggingOn) {
   EXPECT_GE(diag::PreviewPerformance::EventsQueued(), 1u);
 }
 
+TEST_F(PreviewPerformanceTest, StructuredLogWritesTimesInMilliseconds) {
+  EnableDetail();
+  clock_->SetNs(2'000'000);
+  diag::PreviewPerformance::NoteSubmit(3, diag::PreviewFrameRole::InteractivePrimary,
+                                       diag::PreviewQuality::Interactive, "InteractiveAdjustment",
+                                       true);
+  diag::PreviewPerformance::NoteInputTimes(3, 1, 1'000'000, 1'500'000);
+  clock_->SetNs(5'000'000);
+  diag::PreviewPerformance::NoteDisplayed(3);
+  diag::PreviewPerformance::FlushWriter();
+
+  const auto text = diag::PreviewPerformance::WrittenLog();
+  EXPECT_NE(text.find("#preview_perf v2"), std::string::npos);
+  EXPECT_NE(text.find("first_accepted_ms=1.00"), std::string::npos);
+  EXPECT_NE(text.find("latest_accepted_ms=1.50"), std::string::npos);
+  EXPECT_NE(text.find("input_to_present_ms=3.50"), std::string::npos);
+  EXPECT_EQ(text.find("_ns="), std::string::npos);
+}
+
 TEST_F(PreviewPerformanceTest, CoalescedInputsRetainFirstAndLatestAcceptedTimes) {
   auto editor_clock = std::make_shared<ManualEditorClock>();
   EditorPendingInputQueue queue;
@@ -311,13 +330,15 @@ TEST_F(PreviewPerformanceTest, BackgroundWriterProducesCompleteStructuredRecords
   ASSERT_GE(record.passes[0].sub_stages.size(), 2u);
 
   const auto text = diag::PreviewPerformance::WrittenLog();
-  EXPECT_NE(text.find("#preview_perf v1"), std::string::npos);
+  EXPECT_NE(text.find("#preview_perf v2"), std::string::npos);
   EXPECT_NE(text.find("request id=41"), std::string::npos);
   EXPECT_NE(text.find("gpu=unavailable"), std::string::npos);
   EXPECT_NE(text.find("decode_res=FULL"), std::string::npos);
   EXPECT_NE(text.find("kind=llf_pyramid"), std::string::npos);
   EXPECT_NE(text.find("kind=mix"), std::string::npos);
+  EXPECT_NE(text.find("cpu_ms="), std::string::npos);
   EXPECT_NE(text.find("texture_allocation_count=2"), std::string::npos);
+  EXPECT_EQ(text.find("_ns="), std::string::npos);
 
   diag::PreviewPerformance::ResetForTesting();
   std::ifstream file(log_path);
