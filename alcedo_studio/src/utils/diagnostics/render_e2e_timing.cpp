@@ -65,6 +65,14 @@ void NoteRenderE2eScheduled(const std::uint64_t request_id) {
   PreviewPerformance::NoteScheduled(request_id);
 }
 
+void NoteRenderE2eWorkerStart(const std::uint64_t request_id) {
+  PreviewPerformance::NoteWorkerStart(request_id);
+}
+
+void NoteRenderE2eSinkSubmit(const std::uint64_t request_id) {
+  PreviewPerformance::NoteSinkSubmit(request_id);
+}
+
 void NoteRenderE2eProducerReady(const std::uint64_t request_id) {
   PreviewPerformance::NoteProducerReady(request_id);
 }
@@ -81,9 +89,17 @@ void NoteRenderE2eConsumeBegin(const std::uint64_t request_id) {
   PreviewPerformance::NoteConsumeBegin(request_id);
 }
 
+void NoteRenderE2eImported(const std::uint64_t request_id) {
+  PreviewPerformance::NoteImported(request_id);
+}
+
 void NoteRenderE2eDisplayed(const std::uint64_t request_id) {
   PreviewPerformance::NoteDisplayed(request_id);
 }
+
+void NoteRenderE2eFrameSwapped() { PreviewPerformance::NoteFrameSwapped(); }
+
+void NoteRenderE2eFrameEnd() { PreviewPerformance::NoteFrameEnd(); }
 
 void NoteRenderE2eTerminal(const std::uint64_t request_id, const std::string_view outcome) {
   PreviewPerformance::NoteTerminal(request_id, OutcomeFromLabel(outcome), outcome);

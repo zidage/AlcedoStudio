@@ -15,6 +15,7 @@
 #include "edit/scope/scope_analyzer.hpp"
 #include "image/image_buffer.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
+#include "utils/diagnostics/preview_performance.hpp"
 
 namespace alcedo {
 namespace {
@@ -44,6 +45,7 @@ void FramePresenter<MetalBackend>::Present(BasicRenderDevice<MetalBackend>& devi
   if (lease == nullptr || lease->Empty()) {
     throw std::runtime_error("MetalRenderer: DRT output is missing");
   }
+  diag::PreviewPerformance::NoteSinkSubmit(submission.metadata.presentation_request_id);
   auto* native = static_cast<MTL::Texture*>(lease->Texture().Native());
   if (native == nullptr) {
     throw std::runtime_error("MetalRenderer: DRT output texture is null");

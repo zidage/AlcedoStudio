@@ -1554,7 +1554,9 @@ auto EditorSessionService::ConsumeTakenSequence(const EditorPendingSequence& seq
     serial_admission_.NoteScheduledRequest(request_id);
     diag::PreviewPerformance::NoteInputTimes(request_id, sequence.sequence_id,
                                              sequence.first_accepted_ns,
-                                             sequence.latest_accepted_ns);
+                                             sequence.latest_accepted_ns,
+                                             sequence.qml_first_write_ns,
+                                             sequence.qml_latest_write_ns);
     diag::PreviewPerformance::AddCpuDuration(request_id, diag::PreviewCpuStage::Apply, apply_ns);
   }
   if (commit) {

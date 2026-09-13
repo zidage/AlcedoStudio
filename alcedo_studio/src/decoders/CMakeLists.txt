@@ -251,7 +251,8 @@ endif()
 set(RENDERER_SRCS ${ALCEDO_SRC_ROOT}/renderer/pipeline_scheduler.cpp)
 def_library(PipelineScheduler
     SOURCES ${RENDERER_SRCS}
-    PUBLIC_DEPS EditPipeline ThreadPool ImageLoader)
+    PUBLIC_DEPS EditPipeline ThreadPool ImageLoader
+    PRIVATE_DEPS PreviewPerformance)
 
 # --- Raw Processor Wrapper ---
 set(RAW_PROCESSOR_BACKEND_SRCS)

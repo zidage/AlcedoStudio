@@ -83,14 +83,26 @@ class PreviewPerformance {
   static void NoteSubmit(std::uint64_t request_id, PreviewFrameRole role, PreviewQuality quality,
                          std::string_view reason, bool has_user_input);
   static void NoteInputTimes(std::uint64_t request_id, std::uint64_t sequence_id,
-                             std::int64_t first_accepted_ns, std::int64_t latest_accepted_ns);
+                             std::int64_t first_accepted_ns, std::int64_t latest_accepted_ns,
+                             std::int64_t qml_first_write_ns = 0,
+                             std::int64_t qml_latest_write_ns = 0);
   static void NoteScheduled(std::uint64_t request_id);
+  static void NoteWorkerStart(std::uint64_t request_id);
+  static void NoteSinkSubmit(std::uint64_t request_id);
   static void NoteProducerReady(std::uint64_t request_id);
   static void NotePresentWake(std::uint64_t request_id);
   static void NoteGuiUpdate();
   static void NoteRenderEnter();
   static void NoteConsumeBegin(std::uint64_t request_id);
+  static void NoteRenderExtent(std::uint32_t width, std::uint32_t height);
+  /// QRhi import. Does not complete the sample; wait for @ref NoteFrameSwapped.
+  static void NoteImported(std::uint64_t request_id);
+  /// Completes at import. DAG and tests without a Qt window use this helper.
   static void NoteDisplayed(std::uint64_t request_id);
+  /// Completes imported samples from the Qt frame that just swapped.
+  static void NoteFrameSwapped();
+  /// Best-effort compositor-submit stamp; does not complete.
+  static void NoteFrameEnd();
   static void NoteTerminal(std::uint64_t request_id, PreviewTerminalOutcome outcome,
                            std::string_view reason);
 

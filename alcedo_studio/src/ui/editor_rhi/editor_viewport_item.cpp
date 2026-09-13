@@ -377,6 +377,12 @@ void EditorViewportItem::attachWindow(QQuickWindow* window) {
   after_rendering_connection_ = connect(
       attached_window_, &QQuickWindow::afterRendering, this,
       [this] { continueInteractivePresentLoop(); }, Qt::QueuedConnection);
+  frame_swapped_connection_ = connect(
+      attached_window_, &QQuickWindow::frameSwapped, this,
+      [] { diag::NoteRenderE2eFrameSwapped(); }, Qt::DirectConnection);
+  after_frame_end_connection_ = connect(
+      attached_window_, &QQuickWindow::afterFrameEnd, this, [] { diag::NoteRenderE2eFrameEnd(); },
+      Qt::DirectConnection);
   if (interactive_present_loop_.load(std::memory_order_acquire)) {
     requestPresentUpdate();
   }
@@ -392,11 +398,15 @@ void EditorViewportItem::detachWindow(bool reset_display) {
   QObject::disconnect(scene_graph_invalidated_connection_);
   QObject::disconnect(scene_graph_initialized_connection_);
   QObject::disconnect(after_rendering_connection_);
+  QObject::disconnect(frame_swapped_connection_);
+  QObject::disconnect(after_frame_end_connection_);
   window_visibility_connection_       = {};
   window_screen_connection_           = {};
   scene_graph_invalidated_connection_ = {};
   scene_graph_initialized_connection_ = {};
   after_rendering_connection_         = {};
+  frame_swapped_connection_           = {};
+  after_frame_end_connection_         = {};
   attached_window_                    = nullptr;
 }
 

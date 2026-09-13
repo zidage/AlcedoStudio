@@ -3,8 +3,10 @@
 Date: 2026-09-12
 
 Status: NM8.1 complete on 2026-09-12 (low-overhead CPU/E2E logging).
-NM8.2 complete on CUDA 2026-09-13 (native pass GPU timestamps and current-execution
-Interactive DAG baseline). OpenCL and Metal GPU timing remain pending.
+NM8.2 CUDA measurement is complete on 2026-09-13: native pass GPU timestamps,
+Interactive 2560, Bayer/X-Trans slider DAG, 8 Color Grade skip paths, and a
+~10 s product `submitWrite`→`frameSwapped` trajectory. OpenCL and Metal GPU
+timing remain pending.
 NM8.3–NM8.6 planned.
 NM7 已由用户确认完成；其历史测试记录保留在原方案中，本文件不补造执行证据。
 2026-09-12 的首轮工作范围是 NM8.1–NM8.2：建立低开销测量和日志，采集当前实现的数据。
@@ -226,7 +228,7 @@ Radial/Linear Gradient 的参数仍由 Mask owner 管理。Grade 不持有跨帧
 | 阶段 | 内容 | 依赖 | 初始状态 |
 | --- | --- | --- | --- |
 | NM8.1 | 低开销日志、输入到呈现时间线、CPU 分段 | 当前产品路径 | complete 2026-09-12 |
-| NM8.2 | 节点/pass 原生 GPU 计时、当前实现基线及硬件采集 | NM8.1 | complete on CUDA 2026-09-13；OpenCL/Metal pending |
+| NM8.2 | 节点/pass 原生 GPU 计时、当前实现基线及硬件采集 | NM8.1 | CUDA partial：GPU timestamps 2026-09-13；2560 / felt E2E / RAW slider remaining；OpenCL/Metal pending |
 | NM8.3 | 新顺序、融合 pass 描述、算法版本和画面预期 | NM8.2 当前后端基线 | planned |
 | NM8.4 | 共享工作图、取消 Grade 缓存、LLF/Mix 与下游复用 | NM8.3 | planned |
 | NM8.5 | 根据 CUDA/Metal 数据优化热点和整帧开销 | NM8.4 | planned |
@@ -475,8 +477,73 @@ already large after NM8.1). New CUDA pool ~163/.hpp ~83. `gpu_work_sample.hpp` ~
 **Residual gaps:** OpenCL Interactive DAG GPU times not run (queue created with
 `CL_QUEUE_PROFILING_ENABLE`; no measured table). Metal command-buffer GPUStart/End
 cannot run on this Windows host; per-pass counters stay Unavailable. No Nsight
-Systems timeline. No 8-grade, LLF matrix, 10 s slider trace, or Off vs Summary
-overhead table. NM8.3 order fusion and NM8.4 shared work images were not started.
+Systems timeline. The 2026-09-13 DirectRgb 1920×1280 / Bayer FULL 3992×5992 table
+is not product Interactive. NM8.3 order fusion and NM8.4 shared work images were
+not started.
+
+##### NM8.2 remaining measurement (2560, felt E2E, RAW slider)
+
+**Status:** complete on CUDA (2026-09-13). OpenCL / Metal present tables are not
+on this host.
+
+Exit conditions and evidence:
+
+1. Interactive working size is `DecodeRes::FULL` + long-edge **2560**. Dump fails
+   if `geometry.render_extent` long edge is not 2560 when the decoded long edge
+   is larger. Do not change Interactive to HALF.
+2. Felt E2E starts at `EditorSessionController::submitWrite` (`qml_write_ns`) and
+   ends at `QQuickWindow::frameSwapped` for the Qt frame that imported that
+   request. Keep submit → import as `e2e_ms`. Stamp worker start, sink submit,
+   import, and `afterFrameEnd`. Do not stamp an unrelated Qt redraw.
+3. Headline CFA is Bayer and X-Trans. DirectRgb is a control row. Report cold
+   first Interactive and **hot slider** separately (session cache kept). Dominant
+   GPU is per table, not mixed.
+4. **Slider simulation is required.** Mutate operator parameters on the live
+   document and produce frames. 8 Color Grades; first / mid / last; Exposure,
+   Contrast, Curve/Color, Shadows/Highlights, Mix, Radial/Linear, DRT Clarity.
+   This is how cache misses and scheduling stalls are caught. Static graphs with
+   `ReleaseSessionResources()` between repeats are not Interactive slider data.
+
+DAG dump: `build/tmp/preview_performance/cuda_interactive_2560_pass_table.txt`.
+Present dump: `build/tmp/preview_performance/cuda_interactive_2560_present_table.txt`.
+Tests: `PreviewPerformanceTest` import/present correlation; `GpuDagCudaPrimaryGradeTest`
+`EightGrade*` skip assertions and
+`Interactive2560SliderBaselinesDumpCurrentExecutionGpuTimes`;
+`EditorPreviewPresentTrajectoryTest.SubmitWriteHotExposureCompletesAtFrameSwapped`
+and `Interactive2560PresentTrajectoryDumpSubmitWriteToFrameSwapped`.
+
+**Product present trajectory (win_release_test, 2026-09-13).** Hardware: NVIDIA
+GeForce RTX 3080 Laptop GPU. Brush mask cache: `ALCEDO_ENABLE_BRUSH_MASK=OFF`.
+Harness: `EditorViewportItem` + `EditorSessionService` + CI Bayer ARW. No
+`Main.qml`. Path: `submitWrite(exposure)` on the last of 8 Color Grades, 8 ms
+write period, session cache kept, Interactive render **2560×1705**. DecodeRes
+stays FULL. `events_lost=0`.
+
+Times in milliseconds.
+
+| Run | Mode | Writes | Viewport frames | Presented | Dropped | qml p50/p95/p99 | e2e p50 | sink p50 | sched p50 | encode p50 | swap p50 |
+| --- | --- | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: |
+| 1 | Detail | 694 | 507 | 437 | 22 | 18.64 / 24.63 / 25.16 | 18.32 | 3.87 | 0.01 | 0.05 | 0.16 |
+| 2 | Detail | 638 | 455 | 396 | 40 | 21.78 / 24.75 / 25.49 | 21.53 | 3.87 | 0.01 | 0.05 | 0.15 |
+| 3 | Detail | 649 | 473 | 416 | 37 | 18.18 / 24.73 / 26.14 | 17.47 | 3.77 | 0.00 | 0.05 | 0.17 |
+| 4 | Summary | 644 | 486 | 417 | 24 | 21.35 / 24.60 / 25.61 | 21.04 | 5.93 | 0.00 | 0.05 | 0.16 |
+| 5 | Off | 638 | 490 | — | — | no stamps | — | — | — | — | — |
+
+Hot last-node Exposure skips Develop, GeometryResample, CameraToAp1, and
+upstream Color Grades. Repeat 1 still executes the seven extra Grades on the
+slowest frame (first slider after topology insert). Repeats 2 and 3 execute
+only the last Grade plus DRT. Felt `qml_ms` is about 18–22 ms P50. Pipeline
+encode is 0.05 ms P50. Frame-sink Map/copy is about 4 ms P50. Thread-pool wait
+and `frameSwapped`−import are under 0.2 ms P50. Off vs Detail does not change
+the 10 s write-loop wall time. Viewport frame counts stay in the same band
+(455–507).
+
+Command:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_release_test --parallel 4 --target EditorPreviewPresentTrajectoryTest
+EditorPreviewPresentTrajectoryTest.exe  (ALCEDO_TEST_EDITOR_BACKEND=cuda, windows QPA)
+```
 
 ### NM8.3 — 固定调色顺序与融合 pass 编译
 
@@ -681,6 +748,7 @@ Numerical tolerance and result:
 Remaining platform or product verification:
 ```
 
-当前执行记录：NM8.1 complete 2026-09-12. NM8.2 complete on CUDA 2026-09-13
-(OpenCL/Metal pending). See the dated records under those headings.
-NM8.3–NM8.6 have no execution evidence yet.
+当前执行记录：NM8.1 complete 2026-09-12. NM8.2 CUDA partial (GPU timestamps
+2026-09-13; 2560 / felt E2E / RAW slider remaining). OpenCL/Metal pending.
+See the dated records under those headings. NM8.3–NM8.6 have no execution
+evidence yet.

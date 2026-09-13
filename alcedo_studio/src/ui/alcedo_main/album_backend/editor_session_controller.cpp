@@ -29,6 +29,7 @@
 #include "ui/editor_rhi/direct_frame_sink.hpp"
 #include "ui/editor_rhi/editor_interaction_controller.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
+#include "utils/diagnostics/preview_performance.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -1308,6 +1309,9 @@ bool EditorSessionController::submitWrite(QString fieldKey, alcedo::EditorParame
       viewport->beginInteractivePresentLoop();
     }
     viewport->prepareForAdjustmentFrame();
+  }
+  if (alcedo::diag::PreviewPerformanceEnabled()) {
+    patch.qml_write_ns = alcedo::diag::PreviewPerformance::NowNs();
   }
   const auto result = session_backend_->EnqueueAdjustmentInput(std::move(patch));
   return result.kind != alcedo::EditorSessionResultKind::Rejected &&

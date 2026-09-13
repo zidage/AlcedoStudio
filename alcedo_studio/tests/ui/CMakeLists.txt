@@ -1644,6 +1644,42 @@ target_compile_definitions(EditorRealRawGpuE2eTest
 alcedo_register_test_target(EditorRealRawGpuE2eTest ui)
 alcedo_link_quickqanava_qml(EditorRealRawGpuE2eTest)
 
+add_executable(EditorPreviewPresentTrajectoryTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_preview_present_trajectory_test.cpp
+)
+target_include_directories(EditorPreviewPresentTrajectoryTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorPreviewPresentTrajectoryTest
+    PRIVATE
+        AlbumBackendLib
+        PreviewPerformance
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Test
+        Qt6::Quick
+        Qt6::Widgets
+)
+target_compile_definitions(EditorPreviewPresentTrajectoryTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+alcedo_register_test_target(EditorPreviewPresentTrajectoryTest ui)
+
+if(WIN32 AND ALCEDO_CUDA_ENABLED)
+  add_test(NAME EditorPreviewPresentTrajectoryTest.CudaSubmitWriteToFrameSwapped
+    COMMAND ${CMAKE_COMMAND} -E env
+      ALCEDO_TEST_EDITOR_BACKEND=cuda
+      $<TARGET_FILE:EditorPreviewPresentTrajectoryTest>
+  )
+  set_tests_properties(EditorPreviewPresentTrajectoryTest.CudaSubmitWriteToFrameSwapped PROPERTIES
+    LABELS "gpu;cuda;preview_performance"
+    TIMEOUT 1800
+    WORKING_DIRECTORY $<TARGET_FILE_DIR:EditorPreviewPresentTrajectoryTest>
+  )
+endif()
+
 if(WIN32 AND ALCEDO_CUDA_ENABLED)
   add_test(NAME EditorRealRawGpuE2eTest.CudaSustainedImageSwitches
     COMMAND ${CMAKE_COMMAND} -E env

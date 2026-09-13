@@ -529,6 +529,129 @@ TEST_F(PreviewPerformanceTest, GpuDurationNoteFillsPassRecordBeforeDisplay) {
   EXPECT_EQ(text.find("_ns="), std::string::npos);
 }
 
+TEST_F(PreviewPerformanceTest, ImportedFrameDoesNotCompleteUntilWindowQueuesPresent) {
+  EnableDetail();
+  std::vector<diag::PreviewRequestRecord> records;
+  diag::PreviewPerformance::InstallRecordSink(
+      [&](const diag::PreviewRequestRecord& record) { records.push_back(record); });
+
+  clock_->SetNs(10);
+  diag::PreviewPerformance::NoteSubmit(201, diag::PreviewFrameRole::InteractivePrimary,
+                                       diag::PreviewQuality::Interactive, "InteractiveAdjustment",
+                                       true);
+  clock_->SetNs(20);
+  diag::PreviewPerformance::NoteRenderEnter();
+  diag::PreviewPerformance::NoteImported(201);
+  diag::PreviewPerformance::FlushWriter();
+  EXPECT_TRUE(records.empty());
+  EXPECT_EQ(diag::PreviewPerformance::PendingSampleCount(), 1u);
+
+  clock_->SetNs(40);
+  diag::PreviewPerformance::NoteFrameEnd();
+  diag::PreviewPerformance::NoteFrameSwapped();
+  diag::PreviewPerformance::FlushWriter();
+
+  ASSERT_EQ(records.size(), 1u);
+  EXPECT_EQ(records[0].imported_ns, 20);
+  EXPECT_EQ(records[0].displayed_ns, 20);
+  EXPECT_EQ(records[0].frame_end_ns, 40);
+  EXPECT_EQ(records[0].frame_swapped_ns, 40);
+  EXPECT_EQ(records[0].outcome, diag::PreviewTerminalOutcome::Presented);
+  EXPECT_EQ(diag::PreviewPerformance::PendingSampleCount(), 0u);
+}
+
+TEST_F(PreviewPerformanceTest, UnrelatedQtFrameDoesNotStampWaitingRequest) {
+  EnableDetail();
+  std::vector<diag::PreviewRequestRecord> records;
+  diag::PreviewPerformance::InstallRecordSink(
+      [&](const diag::PreviewRequestRecord& record) { records.push_back(record); });
+
+  clock_->SetNs(1);
+  diag::PreviewPerformance::NoteSubmit(211, diag::PreviewFrameRole::InteractivePrimary,
+                                       diag::PreviewQuality::Interactive, "InteractiveAdjustment",
+                                       true);
+  clock_->SetNs(2);
+  diag::PreviewPerformance::NoteSubmit(212, diag::PreviewFrameRole::InteractivePrimary,
+                                       diag::PreviewQuality::Interactive, "InteractiveAdjustment",
+                                       true);
+  diag::PreviewPerformance::NoteRenderEnter();
+  diag::PreviewPerformance::NoteImported(211);
+  clock_->SetNs(3);
+  diag::PreviewPerformance::NoteFrameSwapped();
+  diag::PreviewPerformance::FlushWriter();
+
+  ASSERT_EQ(records.size(), 1u);
+  EXPECT_EQ(records[0].request_id, 211u);
+  EXPECT_EQ(diag::PreviewPerformance::PendingSampleCount(), 1u);
+
+  clock_->SetNs(4);
+  diag::PreviewPerformance::NoteFrameSwapped();
+  diag::PreviewPerformance::FlushWriter();
+  EXPECT_EQ(records.size(), 1u);
+  EXPECT_EQ(diag::PreviewPerformance::PendingSampleCount(), 1u);
+
+  diag::PreviewPerformance::NoteTerminal(212, diag::PreviewTerminalOutcome::Cancelled, "replaced");
+}
+
+TEST_F(PreviewPerformanceTest, CoalescedWritesRetainFirstAndLatestQmlTimes) {
+  auto editor_clock = std::make_shared<ManualEditorClock>();
+  EditorPendingInputQueue queue;
+  queue.SetClock(editor_clock);
+
+  editor_clock->SetNs(1'000);
+  auto first = MakePatch("exposure", 0.10f);
+  first.qml_write_ns = 900;
+  ASSERT_TRUE(queue.AdmitFieldChange(TestIdentity(), first).accepted);
+  editor_clock->SetNs(5'000);
+  auto second = MakePatch("exposure", 0.30f);
+  second.qml_write_ns = 4'800;
+  ASSERT_TRUE(queue.AdmitFieldChange(TestIdentity(), second).accepted);
+
+  const auto batch = queue.TakeReadyBatch();
+  ASSERT_TRUE(batch.has_value());
+  EXPECT_EQ(batch->qml_first_write_ns, 900);
+  EXPECT_EQ(batch->qml_latest_write_ns, 4'800);
+
+  EnableDetail();
+  std::vector<diag::PreviewRequestRecord> records;
+  diag::PreviewPerformance::InstallRecordSink(
+      [&](const diag::PreviewRequestRecord& record) { records.push_back(record); });
+  clock_->SetNs(6'000);
+  diag::PreviewPerformance::NoteSubmit(221, diag::PreviewFrameRole::InteractivePrimary,
+                                       diag::PreviewQuality::Interactive, "InteractiveAdjustment",
+                                       true);
+  diag::PreviewPerformance::NoteInputTimes(221, batch->sequence_id, batch->first_accepted_ns,
+                                           batch->latest_accepted_ns, batch->qml_first_write_ns,
+                                           batch->qml_latest_write_ns);
+  clock_->SetNs(7'000);
+  diag::PreviewPerformance::NoteDisplayed(221);
+  diag::PreviewPerformance::FlushWriter();
+  ASSERT_EQ(records.size(), 1u);
+  EXPECT_EQ(records[0].qml_first_write_ns, 900);
+  EXPECT_EQ(records[0].qml_latest_write_ns, 4'800);
+}
+
+TEST_F(PreviewPerformanceTest, CancelledRequestDoesNotWaitForFrameSwapped) {
+  EnableDetail();
+  std::vector<diag::PreviewRequestRecord> records;
+  diag::PreviewPerformance::InstallRecordSink(
+      [&](const diag::PreviewRequestRecord& record) { records.push_back(record); });
+
+  clock_->SetNs(1);
+  diag::PreviewPerformance::NoteSubmit(231, diag::PreviewFrameRole::InteractivePrimary,
+                                       diag::PreviewQuality::Interactive, "InteractiveAdjustment",
+                                       true);
+  diag::PreviewPerformance::NoteImported(231);
+  EXPECT_EQ(diag::PreviewPerformance::PendingSampleCount(), 1u);
+  diag::PreviewPerformance::NoteTerminal(231, diag::PreviewTerminalOutcome::Cancelled, "replaced");
+  EXPECT_EQ(diag::PreviewPerformance::PendingSampleCount(), 0u);
+  clock_->SetNs(5);
+  diag::PreviewPerformance::NoteFrameSwapped();
+  diag::PreviewPerformance::FlushWriter();
+  ASSERT_EQ(records.size(), 1u);
+  EXPECT_EQ(records[0].outcome, diag::PreviewTerminalOutcome::Cancelled);
+}
+
 TEST_F(PreviewPerformanceTest, ResourceSnapshotReportsAggregatedPoolTotals) {
   EnableDetail();
   std::vector<diag::PreviewRequestRecord> records;

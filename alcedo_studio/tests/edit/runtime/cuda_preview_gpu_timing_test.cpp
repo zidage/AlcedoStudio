@@ -536,6 +536,11 @@ void DumpP50(std::string_view name, const std::vector<diag::PreviewRequestRecord
 }
 
 TEST_F(CudaPreviewGpuTimingFixture, InteractiveDagBaselinesDumpCurrentExecutionGpuTimes) {
+  GTEST_SKIP() << "Replaced by Interactive2560SliderBaselinesDumpCurrentExecutionGpuTimes";
+}
+
+#if 0
+void InteractiveDagBaselinesDumpCurrentExecutionGpuTimesRetiredDead() {
 #if defined(_DEBUG)
   constexpr std::uint32_t kWidth   = 256;
   constexpr std::uint32_t kHeight  = 192;
@@ -675,5 +680,6 @@ TEST_F(CudaPreviewGpuTimingFixture, InteractiveDagBaselinesDumpCurrentExecutionG
   }
 #endif
 }
+#endif
 
 }  // namespace alcedo

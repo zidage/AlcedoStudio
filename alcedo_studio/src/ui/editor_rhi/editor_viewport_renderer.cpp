@@ -570,7 +570,7 @@ void EditorViewportRenderer::consumeDirectFrames() {
     layer.imported_owner.reset();
     layer.imported_native_handle = frame->slot.native.native_handle;
     content_dirty_               = true;
-    diag::NoteRenderE2eDisplayed(layer.preview_metadata.presentation_request_id);
+    diag::NoteRenderE2eImported(layer.preview_metadata.presentation_request_id);
     if (role == FrameRole::DetailPatch) {
       qCDebug(editorPresentLog) << "[ROI_TRACE][renderer-imported] request="
                                 << layer.preview_metadata.presentation_request_id
@@ -633,7 +633,7 @@ void EditorViewportRenderer::consumeImportedGpuFrames() {
       layer.ready_frame.slot.sequence          = frame.sequence;
       layer.texture->setNativeLayout(frame.native_layout);
       content_dirty_ = true;
-      diag::NoteRenderE2eDisplayed(layer.preview_metadata.presentation_request_id);
+      diag::NoteRenderE2eImported(layer.preview_metadata.presentation_request_id);
       if (role == FrameRole::DetailPatch) {
         qCDebug(editorPresentLog) << "[ROI_TRACE][renderer-metal-reused] request="
                                   << layer.preview_metadata.presentation_request_id
@@ -686,7 +686,7 @@ void EditorViewportRenderer::consumeImportedGpuFrames() {
     layer.ready_frame.slot.sequence          = frame.sequence;
     NativeResourceCounters::Instance().OnCreateImportedQRhiTexture();
     content_dirty_ = true;
-    diag::NoteRenderE2eDisplayed(layer.preview_metadata.presentation_request_id);
+    diag::NoteRenderE2eImported(layer.preview_metadata.presentation_request_id);
     if (role == FrameRole::DetailPatch) {
       qCDebug(editorPresentLog) << "[ROI_TRACE][renderer-metal-imported] request="
                                 << layer.preview_metadata.presentation_request_id

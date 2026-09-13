@@ -242,6 +242,7 @@ target_link_libraries(AlbumBackendLib
         ImageLoader
         xxHash
         CudaDriverRequirements
+        PreviewPerformance
 )
 
 # Canonical runtime theme tokens. DESIGN.md is the human VI spec; this library

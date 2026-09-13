@@ -10,8 +10,10 @@ if(WIN32)
     def_library(PreviewPerformance TYPE SHARED
         SOURCES
             ${ALCEDO_SRC_ROOT}/utils/diagnostics/preview_performance.cpp
+            ${ALCEDO_SRC_ROOT}/utils/diagnostics/preview_performance_format.cpp
             ${ALCEDO_SRC_ROOT}/include/utils/diagnostics/preview_performance.hpp
             ${ALCEDO_SRC_ROOT}/include/utils/diagnostics/preview_performance_record.hpp
+            ${ALCEDO_SRC_ROOT}/include/utils/diagnostics/preview_performance_format.hpp
     )
     set_target_properties(PreviewPerformance PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
     target_compile_options(PreviewPerformance PRIVATE
@@ -22,8 +24,10 @@ else()
     def_library(PreviewPerformance
         SOURCES
             ${ALCEDO_SRC_ROOT}/utils/diagnostics/preview_performance.cpp
+            ${ALCEDO_SRC_ROOT}/utils/diagnostics/preview_performance_format.cpp
             ${ALCEDO_SRC_ROOT}/include/utils/diagnostics/preview_performance.hpp
             ${ALCEDO_SRC_ROOT}/include/utils/diagnostics/preview_performance_record.hpp
+            ${ALCEDO_SRC_ROOT}/include/utils/diagnostics/preview_performance_format.hpp
     )
 endif()
 

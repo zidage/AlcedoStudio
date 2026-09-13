@@ -15,6 +15,7 @@
 #include "edit/scope/detail/scope_opencl_shared.hpp"
 #include "edit/scope/scope_analyzer.hpp"
 #include "opencl/opencl_check.hpp"
+#include "utils/diagnostics/preview_performance.hpp"
 
 namespace alcedo {
 
@@ -33,6 +34,7 @@ void FramePresenter<OpenClBackend>::Present(BasicRenderDevice<OpenClBackend>& de
 
   const int width  = static_cast<int>(texture.Width());
   const int height = static_cast<int>(texture.Height());
+  diag::PreviewPerformance::NoteSinkSubmit(submission.metadata.presentation_request_id);
   sink.BindFrameSubmission(submission);
   sink.EnsureSize(width, height);
 
