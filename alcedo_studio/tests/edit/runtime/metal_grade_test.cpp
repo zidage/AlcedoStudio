@@ -19,6 +19,7 @@
 
 #include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
+#include "edit/graph/adjustment_ownership.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/models/cat02_white_balance_model.hpp"
@@ -351,11 +352,11 @@ TEST_F(MetalGradeFixture, MetalPrimaryGradePreservesCompiledAdjustmentOrder) {
   ASSERT_NE(plan_.FirstGrade(), nullptr);
   ASSERT_FALSE(plan_.FirstGrade()->adjustments.empty());
   ASSERT_EQ(plan_.FirstGrade()->adjustments.size(), document_.PrimaryGrade()->AdjustmentCount());
-  for (std::size_t i = 0; i < plan_.FirstGrade()->adjustments.size(); ++i) {
+  const auto compile_order = ColorGradeCompileOrder();
+  for (std::size_t i = 0; i < compile_order.size(); ++i) {
     EXPECT_EQ(plan_.FirstGrade()->adjustments[i].instance_id,
-              document_.PrimaryGrade()->AdjustmentIdAt(i));
-    EXPECT_EQ(plan_.FirstGrade()->adjustments[i].type,
-              document_.PrimaryGrade()->AdjustmentAt(i).Type());
+              MakeAdjustmentInstanceId(document_.PrimaryGrade()->Id(), compile_order[i]));
+    EXPECT_EQ(plan_.FirstGrade()->adjustments[i].type, compile_order[i]);
   }
   ModelByType<ExposureModel>(type_ids::Exposure()).SetValue(1.0f);
   ModelByType<ContrastModel>(type_ids::Contrast()).SetValue(100.0f);

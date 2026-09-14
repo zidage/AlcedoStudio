@@ -18,35 +18,28 @@
 namespace alcedo {
 namespace {
 
-enum class GradeSegment : std::uint8_t { PreLlf, Llf, PostLlf };
-
 auto SensorDirtyMask() -> DirtyFieldMask {
   return DirtyFieldMask{static_cast<std::uint64_t>(DevelopDirty::Demosaic) |
                         static_cast<std::uint64_t>(DevelopDirty::Highlights) |
                         static_cast<std::uint64_t>(DevelopDirty::Lens)};
 }
 
-auto SegmentForIndex(const CompiledGradeNode& grade, std::size_t index) -> GradeSegment {
-  std::optional<std::uint32_t> llf_begin;
-  std::optional<std::uint32_t> llf_end;
-  for (const auto& stage : grade.stages) {
-    if (stage.kind == CompiledGradeStageKind::LocalLaplacian) {
-      llf_begin = stage.begin;
-      llf_end   = stage.begin + stage.count;
-      break;
+/**
+ * @brief True when @p id was compiled into the Local Laplacian stage.
+ *
+ * Compiled order places every non-local-tone adjustment before the LLF stage, so
+ * any other dirty adjustment invalidates the canonical LLF source and result.
+ * An instance missing from the compiled list is treated as non-local-tone and
+ * conservatively invalidates the LLF source chain.
+ */
+auto IsLocalToneCompiled(const CompiledGradeNode& compiled, const AdjustmentInstanceId& id)
+    -> bool {
+  for (const auto& adjustment : compiled.adjustments) {
+    if (adjustment.instance_id == id) {
+      return adjustment.algorithm == CompiledAdjustmentAlgorithm::LocalLaplacian;
     }
   }
-  if (!llf_begin.has_value()) {
-    return GradeSegment::PostLlf;
-  }
-  const auto adj = static_cast<std::uint32_t>(index);
-  if (adj < *llf_begin) {
-    return GradeSegment::PreLlf;
-  }
-  if (adj < *llf_end) {
-    return GradeSegment::Llf;
-  }
-  return GradeSegment::PostLlf;
+  return false;
 }
 
 auto IsLocalTonePort(const GraphValueId& id) -> bool {
@@ -170,14 +163,9 @@ void RuntimeInvalidationState::CollectGradeChanges(const ExecutionPlan&       pl
       if (!grade->AdjustmentAt(index).IsDirty()) {
         continue;
       }
-      const auto segment = SegmentForIndex(compiled, index);
-      if (segment == GradeSegment::PreLlf) {
-        origins.push_back(LocalToneSourceId(compiled.node_id));
-      } else if (segment == GradeSegment::Llf) {
-        origins.push_back(LocalToneResultId(compiled.node_id));
-      } else {
-        origins.push_back(compiled.scene_output);
-      }
+      origins.push_back(IsLocalToneCompiled(compiled, grade->AdjustmentIdAt(index))
+                            ? LocalToneResultId(compiled.node_id)
+                            : LocalToneSourceId(compiled.node_id));
     }
     if (!compiled.mask_stack.has_value()) {
       continue;

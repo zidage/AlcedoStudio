@@ -47,14 +47,17 @@ TEST(GpuDagGraphCompiler, GraphCompilerNeedsRecompileIsFalseForUnchangedTopology
   EXPECT_EQ(plan.static_key, GraphCompiler::MakeStaticPlanKey(document, prepared.CompileSource()));
 }
 
-TEST(GpuDagGraphCompiler, GraphCompilerNeedsRecompileIsTrueWhenAdjustmentOrderChanges) {
+TEST(GpuDagGraphCompiler, GraphCompilerKeepsStaticPlanWhenStoredAdjustmentOrderChanges) {
   auto       document = CreateDefaultPipelineDocument();
   const auto prepared = MakePrepared();
   const auto plan     = GraphCompiler::CompileStatic(document, prepared.CompileSource());
   auto*      grade    = document.PrimaryGrade();
   grade->MoveAdjustment(grade->AdjustmentIdAt(0), grade->AdjustmentCount() - 1);
 
-  EXPECT_TRUE(GraphCompiler::NeedsRecompile(plan, document, prepared.CompileSource()));
+  // The fixed compile order makes stored adjustment order non-semantic: the
+  // compiled stage sequence, parameter layout, and static plan are unchanged.
+  EXPECT_FALSE(GraphCompiler::NeedsRecompile(plan, document, prepared.CompileSource()));
+  EXPECT_EQ(plan.static_key, GraphCompiler::MakeStaticPlanKey(document, prepared.CompileSource()));
 }
 
 TEST(GpuDagGraphCompiler, GraphCompilerNeedsRecompileIsTrueWhenSourceExtentChanges) {

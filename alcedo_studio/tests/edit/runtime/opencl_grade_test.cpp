@@ -20,6 +20,7 @@
 #include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
 #include "edit/geometry/texture_sampling_plan.hpp"
+#include "edit/graph/adjustment_ownership.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/models/cat02_white_balance_model.hpp"
@@ -695,11 +696,11 @@ TEST_F(OpenClGradeFixture, OpenClPrimaryGradePreservesCompiledAdjustmentOrder) {
   ASSERT_NE(plan_.FirstGrade(), nullptr);
   ASSERT_FALSE(plan_.FirstGrade()->adjustments.empty());
   ASSERT_EQ(plan_.FirstGrade()->adjustments.size(), document_.PrimaryGrade()->AdjustmentCount());
-  for (std::size_t i = 0; i < plan_.FirstGrade()->adjustments.size(); ++i) {
+  const auto compile_order = ColorGradeCompileOrder();
+  for (std::size_t i = 0; i < compile_order.size(); ++i) {
     EXPECT_EQ(plan_.FirstGrade()->adjustments[i].instance_id,
-              document_.PrimaryGrade()->AdjustmentIdAt(i));
-    EXPECT_EQ(plan_.FirstGrade()->adjustments[i].type,
-              document_.PrimaryGrade()->AdjustmentAt(i).Type());
+              MakeAdjustmentInstanceId(document_.PrimaryGrade()->Id(), compile_order[i]));
+    EXPECT_EQ(plan_.FirstGrade()->adjustments[i].type, compile_order[i]);
   }
   ModelByType<ExposureModel>(type_ids::Exposure()).SetValue(1.0f);
   ModelByType<ContrastModel>(type_ids::Contrast()).SetValue(100.0f);
@@ -735,13 +736,13 @@ TEST_F(OpenClGradeFixture, OpenClHlsHueAdjustmentChangesGradePixels) {
   EXPECT_TRUE(changed);
 }
 
-TEST_F(OpenClGradeFixture, OpenClPointwiseAdjustmentsUseOneDispatchPerLlfSegment) {
+TEST_F(OpenClGradeFixture, OpenClPointwiseAdjustmentsFuseIntoOnePassBeforeLlf) {
   const auto identity = RenderGrade();
   EXPECT_EQ(identity.pointwise_dispatch_count, 1U);
   ModelByType<ShadowsModel>(type_ids::Shadows()).SetValue(25.0f);
-  const auto split = RenderGrade();
-  EXPECT_EQ(split.pointwise_dispatch_count, 2U);
-  EXPECT_EQ(split.local_tone_pass_count, 1U);
+  const auto with_llf = RenderGrade();
+  EXPECT_EQ(with_llf.pointwise_dispatch_count, 1U);
+  EXPECT_EQ(with_llf.local_tone_pass_count, 1U);
 }
 
 TEST_F(OpenClGradeFixture, OpenClSingleSliderEditUploadsOnlyItsParameterRange) {
@@ -1178,7 +1179,10 @@ TEST_F(OpenClGradeFixture, OpenClLlfFailedSubmissionDoesNotPublishReference) {
   const auto source_resource_id = first.local_tone_reference_resource_id;
 
   auto       failed_plan        = plan_;
-  failed_plan.geometry.full_reference_extent = {};
+  // Corrupting geometry would also change the canonical LLF identity, which
+  // legitimately drops the published planes before the failure. An out-of-range
+  // stage fails submission while leaving every image identity untouched.
+  failed_plan.grade_nodes[0].stages[0].begin = 0xFFFFU;
   device_->BeginRender();
   ExecuteOpenClDevelop(*device_, failed_plan, prepared_, document_);
   ExecuteOpenClGeometryResample(*device_, failed_plan);

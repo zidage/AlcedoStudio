@@ -391,7 +391,7 @@ TEST_F(CudaPrimaryGradeFixture, CudaCat02WhiteBalanceMaskedSampleMatchesFullAdju
   EXPECT_NEAR(full.front().g, source.front().g, 1.0e-6f);
 }
 
-TEST_F(CudaPrimaryGradeFixture, CudaPointAdjustmentsExecuteInSerializedModelOrder) {
+TEST_F(CudaPrimaryGradeFixture, CudaPointAdjustmentsExecuteInFixedCompileOrder) {
   // Exposure before contrast is intentionally non-commutative around the 0.18 pivot.
   ModelByType<ExposureModel>(type_ids::Exposure()).SetValue(1.0f);
   ModelByType<ContrastModel>(type_ids::Contrast()).SetValue(100.0f);
@@ -606,7 +606,10 @@ TEST_F(CudaPrimaryGradeFixture, CudaLlfFailedSubmissionDoesNotPublishCanonicalPl
   const auto source_resource_id = first.local_tone_reference_resource_id;
 
   auto       failed_plan        = plan_;
-  failed_plan.geometry.full_reference_extent = {};
+  // Corrupting geometry would also change the canonical LLF identity, which
+  // legitimately drops the published planes before the failure. An out-of-range
+  // stage fails submission while leaving every image identity untouched.
+  failed_plan.grade_nodes[0].stages[0].begin = 0xFFFFU;
   device_.BeginRender();
   ExecuteCudaDevelop(device_, failed_plan, prepared_, document_);
   ExecuteCudaGeometryResample(device_, failed_plan);
@@ -657,7 +660,7 @@ TEST_F(CudaPrimaryGradeFixture, CudaColorGradeSecondRenderCreatesNoGpuAllocation
 }
 
 TEST_F(CudaPrimaryGradeFixture,
-       MovingAdjustmentChangesExecutionOrderWithoutChangingOtherParameters) {
+       MovingAdjustmentKeepsFixedCompileOrderWithoutChangingOtherParameters) {
   auto& grade = *document_.PrimaryGrade();
   ModelByType<ExposureModel>(type_ids::Exposure()).SetValue(1.0f);
   ModelByType<ContrastModel>(type_ids::Contrast()).SetValue(100.0f);
@@ -676,7 +679,9 @@ TEST_F(CudaPrimaryGradeFixture,
   const auto after = Download(Render().output);
   ASSERT_FALSE(before.empty());
   ASSERT_EQ(before.size(), after.size());
-  EXPECT_GT(std::abs(before.front().r - after.front().r), 0.05f);
+  // Stored order is non-semantic: the compiled fixed order keeps Exposure
+  // before Contrast, so the render is identical.
+  EXPECT_NEAR(before.front().r, after.front().r, 1.0e-6f);
   EXPECT_FLOAT_EQ(ModelByType<ExposureModel>(type_ids::Exposure()).Value(), 1.0f);
   EXPECT_FLOAT_EQ(ModelByType<ContrastModel>(type_ids::Contrast()).Value(), 100.0f);
 }
@@ -873,6 +878,28 @@ TEST_F(CudaPrimaryGradeFixture, CudaLutResourceIsReusedByContentKey) {
   EXPECT_EQ(second.lut_resource_id, first.lut_resource_id);
   EXPECT_EQ(device_.Workspace().Device().LutUploadBytes(), 0U);
   EXPECT_EQ(device_.Workspace().Device().LastLutResourceId(), first.lut_resource_id);
+}
+
+TEST_F(CudaPrimaryGradeFixture, BasicToneAndColorUseOnePointwisePass) {
+  ModelByType<ExposureModel>(type_ids::Exposure()).SetValue(0.75f);
+  ModelByType<SaturationModel>(type_ids::Saturation()).SetValue(1.3f);
+  ModelByType<ShadowsModel>(type_ids::Shadows()).SetValue(60.0f);
+  plan_ = GraphCompiler::Compile(document_, prepared_.CompileSource(), RenderRequest{});
+
+  const auto* grade = plan_.FirstGrade();
+  ASSERT_NE(grade, nullptr);
+  ASSERT_EQ(grade->stages.size(), 2U);
+  EXPECT_EQ(grade->stages[0].kind, CompiledGradeStageKind::Pointwise);
+  EXPECT_EQ(grade->stages[0].begin, 0U);
+  EXPECT_EQ(grade->stages[0].count, 11U);
+  EXPECT_EQ(grade->stages[1].kind, CompiledGradeStageKind::LocalLaplacian);
+  EXPECT_EQ(grade->stages[1].begin, 11U);
+  EXPECT_EQ(grade->stages[1].count, 2U);
+
+  const auto result = Render();
+  EXPECT_EQ(result.pointwise_dispatch_count, 1U);
+  EXPECT_EQ(result.local_tone_pass_count, 1U);
+  EXPECT_EQ(result.detail_pass_count, 0U);
 }
 
 TEST(GpuDagCudaPrimaryGrade, ExecuteCudaCameraColorRejectsMissingCameraMatrices) {

@@ -21,12 +21,12 @@ inline constexpr std::uint32_t kGeometryImplementationVersion      = 1;
 /// Bumped when CameraColorPass math changes. Version 5 applies the ACES 1.3 Reference Gamut
 /// Compression to the profiled linear AP1 value before ACEScc encoding.
 inline constexpr std::uint32_t kCameraColorImplementationVersion   = 5;
-/// Bumped when Primary Grade pixel rules change. Version 5 restores full HLS profile packing,
-/// evaluates hue/lightness/saturation adjustments, and limits pathological ACEScc peak growth from
-/// saturation increases.
-inline constexpr std::uint32_t kPrimaryGradeImplementationVersion  = 5;
+/// Bumped when Primary Grade pixel rules change. Version 6 fixes the compiled Grade
+/// stage order to Basic Tone + Color before the Local Laplacian stage.
+inline constexpr std::uint32_t kPrimaryGradeImplementationVersion  = 6;
 /// Bumped when the canonical LLF reference identity or sampling rules change.
-inline constexpr std::uint32_t kLlfReferenceImplementationVersion  = 1;
+/// Version 2 makes the canonical LLF source the post-Basic Tone + Color image.
+inline constexpr std::uint32_t kLlfReferenceImplementationVersion  = 2;
 /// Bumped when DRT pixel rules change. Version 3 decodes AP1/ACEScc before the DRT.
 inline constexpr std::uint32_t kDrtImplementationVersion           = 4;
 /// Bumped when mask raster sampling or Union key structure changes. Version 3 is per-source Union.

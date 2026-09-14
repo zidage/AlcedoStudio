@@ -231,10 +231,12 @@ TEST_F(OpenClMultiGradeFixture, RepeatedAdjustmentInstancesKeepTheirOrder) {
   Render(document, plan);
   const auto develop = Download(Device(), plan.develop_output);
   const auto output  = Download(Device(), plan.grade_nodes.front().scene_output);
-  const float expected = multi_grade_test::ApplyExposureAcescc(
-      multi_grade_test::ApplyContrastAcescc(
-          multi_grade_test::ApplyExposureAcescc(develop.front().r, 1.0f), 100.0f),
-      2.0f);
+  // The fixed compile order groups same-type instances at their rank, so the
+  // second Exposure applies before Contrast regardless of stored position.
+  const float expected = multi_grade_test::ApplyContrastAcescc(
+      multi_grade_test::ApplyExposureAcescc(
+          multi_grade_test::ApplyExposureAcescc(develop.front().r, 1.0f), 2.0f),
+      100.0f);
   EXPECT_NEAR(output.front().r, expected, 1.0e-5f);
 }
 

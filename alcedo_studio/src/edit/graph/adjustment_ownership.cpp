@@ -4,6 +4,7 @@
 
 #include "edit/graph/adjustment_ownership.hpp"
 
+#include <algorithm>
 #include <stdexcept>
 #include <string>
 
@@ -36,6 +37,36 @@ auto ColorGradeAdjustmentTypes() -> std::array<OperatorTypeId, 13> {
 
 auto DrtPostAdjustmentTypes() -> std::array<OperatorTypeId, 4> {
   return {type_ids::Clarity(), type_ids::Sharpen(), type_ids::Halation(), type_ids::FilmGrain()};
+}
+
+auto ColorGradeCompileOrder() -> std::array<OperatorTypeId, 13> {
+  return {type_ids::Cat02WhiteBalance(), type_ids::Exposure(),   type_ids::Contrast(),
+          type_ids::White(),             type_ids::Black(),      type_ids::Curve(),
+          type_ids::Hls(),               type_ids::Saturation(), type_ids::Vibrance(),
+          type_ids::ColorWheel(),        type_ids::Lmt(),        type_ids::Shadows(),
+          type_ids::Highlights()};
+}
+
+auto ColorGradeCompileRank(const OperatorTypeId& type) -> std::uint32_t {
+  const auto order = ColorGradeCompileOrder();
+  for (std::uint32_t index = 0; index < order.size(); ++index) {
+    if (type == order[index]) {
+      return index;
+    }
+  }
+  return static_cast<std::uint32_t>(order.size());
+}
+
+auto ColorGradeCompileIndexOrder(std::span<const OperatorTypeId> types)
+    -> std::vector<std::size_t> {
+  std::vector<std::size_t> order(types.size());
+  for (std::size_t index = 0; index < order.size(); ++index) {
+    order[index] = index;
+  }
+  std::stable_sort(order.begin(), order.end(), [&types](std::size_t lhs, std::size_t rhs) {
+    return ColorGradeCompileRank(types[lhs]) < ColorGradeCompileRank(types[rhs]);
+  });
+  return order;
 }
 
 auto OwnerOfAdjustment(const OperatorTypeId& type) -> AdjustmentParameterOwner {

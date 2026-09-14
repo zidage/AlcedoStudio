@@ -138,7 +138,12 @@ auto HashGraphTopology(const PipelineDocument& document) -> std::uint64_t {
     const auto* grade = dynamic_cast<const ColorGradeNodeModel*>(node);
     if (grade != nullptr) {
       hash = MixU64(hash, grade->AdjustmentCount());
+      std::vector<OperatorTypeId> grade_types;
+      grade_types.reserve(grade->AdjustmentCount());
       for (std::size_t index = 0; index < grade->AdjustmentCount(); ++index) {
+        grade_types.push_back(grade->AdjustmentAt(index).Type());
+      }
+      for (const auto index : ColorGradeCompileIndexOrder(grade_types)) {
         hash = MixText(hash, grade->AdjustmentIdAt(index).Value());
         hash = MixText(hash, grade->AdjustmentAt(index).Type().Text());
       }
@@ -313,10 +318,19 @@ auto CompileColorGrade(const PipelineDocument& document, const ColorGradeNodeMod
     compiled.mask_output = compiled.mask_stack->union_output;
   }
 
+  // Fixed stage order: Basic Tone + Color pointwise stage, then the Local
+  // Laplacian stage. Stored document order never selects execution order.
+  std::vector<OperatorTypeId> document_types;
+  document_types.reserve(grade.AdjustmentCount());
+  for (std::size_t index = 0; index < grade.AdjustmentCount(); ++index) {
+    document_types.push_back(grade.AdjustmentAt(index).Type());
+  }
+  const auto compile_order = ColorGradeCompileIndexOrder(document_types);
+
   std::vector<AdjustmentInstanceId> parameters;
   parameters.reserve(grade.AdjustmentCount());
   compiled.adjustments.reserve(grade.AdjustmentCount());
-  for (std::size_t index = 0; index < grade.AdjustmentCount(); ++index) {
+  for (const auto index : compile_order) {
     const auto& type = grade.AdjustmentAt(index).Type();
     RequireAdjustmentOwner(type, AdjustmentParameterOwner::ColorGrade, "GraphCompiler Color Grade");
     const auto algorithm = CompileAdjustmentAlgorithm(type);
@@ -412,6 +426,7 @@ auto GraphCompiler::MakeStaticPlanKey(const PipelineDocument&     document,
   key.topology_hash              = HashGraphTopology(document);
   key.source_layout              = source;
   key.backend_capability_version = backend_capability_version;
+  key.compile_algorithm_version  = kGradeCompileAlgorithmVersion;
   return key;
 }
 

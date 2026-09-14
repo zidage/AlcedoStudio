@@ -186,6 +186,16 @@ struct CompiledDrtNode {
 };
 
 /**
+ * @brief Compiled grade stage-order and fusion rules carried by every static plan.
+ *
+ * Bumped when the compiled Color Grade stage order or pass fusion rules change so a
+ * plan compiled under earlier rules never matches a new lookup. Version 1 compiles
+ * Basic Tone + Color as one Pointwise stage before the Local Laplacian stage; Mix
+ * remains the implicit final write.
+ */
+inline constexpr std::uint32_t kGradeCompileAlgorithmVersion = 1;
+
+/**
  * @brief Identity of a static compiled plan. Parameter values and viewport are omitted.
  *
  * Source layout is the decoded host/develop extents, not ResolvedRenderGeometry.
@@ -194,11 +204,13 @@ struct StaticPlanKey {
   std::uint64_t        topology_hash = 0;
   DevelopCompileSource source_layout{};
   std::uint32_t        backend_capability_version = 0;
+  std::uint32_t        compile_algorithm_version  = 0;
 };
 
 inline auto operator==(const StaticPlanKey& a, const StaticPlanKey& b) -> bool {
   return a.topology_hash == b.topology_hash && a.source_layout == b.source_layout &&
-         a.backend_capability_version == b.backend_capability_version;
+         a.backend_capability_version == b.backend_capability_version &&
+         a.compile_algorithm_version == b.compile_algorithm_version;
 }
 
 inline auto operator!=(const StaticPlanKey& a, const StaticPlanKey& b) -> bool { return !(a == b); }
@@ -209,6 +221,9 @@ inline auto operator<(const StaticPlanKey& a, const StaticPlanKey& b) -> bool {
   }
   if (a.backend_capability_version != b.backend_capability_version) {
     return a.backend_capability_version < b.backend_capability_version;
+  }
+  if (a.compile_algorithm_version != b.compile_algorithm_version) {
+    return a.compile_algorithm_version < b.compile_algorithm_version;
   }
   if (a.source_layout.kind != b.source_layout.kind) {
     return a.source_layout.kind < b.source_layout.kind;
