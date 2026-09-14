@@ -23,6 +23,7 @@
 #include <chrono>
 
 #include "app/editor_pending_input.hpp"
+#include "app/editor_session_types.hpp"
 #include "ui/main_qml_test_fixture.hpp"
 
 #ifdef HAVE_CUDA
@@ -907,12 +908,15 @@ TEST_F(WorkspaceShellTests, PresentationViewportBindingSurvivesImageSwitchAToBTo
   EXPECT_GT(viewport_a->sessionEpoch(), gen_b);
   EXPECT_EQ(viewport_a->imageIdentity(), image_a.image_id_);
 
-  // Leaving the editor workspace hides the retained viewport. Its sink remains
-  // bound because route changes no longer destroy or close the editor session.
+  // Leaving the editor workspace hides the retained viewport. PersistCurrentImage
+  // materializes the last edit without closing the session, so the album
+  // thumbnail can update while re-entry stays immediate.
   router->OpenLibrary();
   ProcessEvents(60);
   EXPECT_TRUE(session->presentation_viewport_bound());
   EXPECT_NE(session->presentation_frame_sink(), nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(
+      session->session_state() != alcedo::EditorSessionState::Saving, 10000);
 
   // This test intentionally retains the session across the route change. End
   // it explicitly so fixture teardown does not have to join a quality render.

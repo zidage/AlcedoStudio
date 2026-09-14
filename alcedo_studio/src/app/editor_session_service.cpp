@@ -173,10 +173,8 @@ auto EditorSessionService::SubmitCommand(EditorSessionCommand command, CommandRe
     rejected.kind         = EditorSessionResultKind::Rejected;
     rejected.operation_id = submission.operation.command_id;
     rejected.message      = "Editor session command queue is shutting down";
-    if (command_queue_.IsOwnerThread()) {
-      rejected.state    = lifecycle_.state();
-      rejected.identity = lifecycle_.identity();
-    }
+    rejected.state        = lifecycle_.state();
+    rejected.identity     = lifecycle_.identity();
     return rejected;
   }
   if (reduced_result->has_value()) {
@@ -186,6 +184,8 @@ auto EditorSessionService::SubmitCommand(EditorSessionCommand command, CommandRe
   EditorSessionResult queued_result;
   queued_result.kind         = EditorSessionResultKind::Accepted;
   queued_result.operation_id = submission.operation.command_id;
+  queued_result.state        = lifecycle_.state();
+  queued_result.identity     = lifecycle_.identity();
   queued_result.message      = "Editor session command queued";
   return queued_result;
 }
@@ -876,6 +876,7 @@ void EditorSessionService::HandleSaveCheckpointCompletion(
   // terminal outcome without re-entering a recoverable failure state.
   if (lifecycle_.state() == EditorSessionState::ShuttingDown) {
     pending_history_checkpoint_.reset();
+    pending_close_after_persist_ = false;
     ReleaseLeaseByCommandId(completion.operation.command_id);
     ReleaseLeasesByKind(EditorOperationLeaseKind::SaveCheckpoint);
     ReleaseLeasesByKind(EditorOperationLeaseKind::PasteMaterialization);
@@ -900,6 +901,7 @@ void EditorSessionService::HandleSaveCheckpointCompletion(
 
   if (!completion.success) {
     pending_history_checkpoint_.reset();
+    pending_close_after_persist_ = false;
     ReleaseLeasesByKind(EditorOperationLeaseKind::PasteMaterialization);
     lifecycle_.KeepCurrentAfterCheckpointFailure(
         completion.message.empty() ? "Editor save checkpoint failed" : completion.message);
@@ -934,6 +936,7 @@ void EditorSessionService::HandleSaveCheckpointCompletion(
     if (!dependencies_.history->SyncMaterializedStateAfterCheckpoint(lifecycle_.history_guard(),
                                                                      &sync_error)) {
       pending_history_checkpoint_.reset();
+      pending_close_after_persist_ = false;
       ReleaseLeasesByKind(EditorOperationLeaseKind::PasteMaterialization);
       EditorSessionResult failed;
       failed.kind     = EditorSessionResultKind::Failed;
@@ -949,6 +952,10 @@ void EditorSessionService::HandleSaveCheckpointCompletion(
   }
 
   if (!pending_history_checkpoint_.has_value()) {
+    if (pending_close_after_persist_) {
+      pending_close_after_persist_ = false;
+      (void)Close(true);
+    }
     return;
   }
   const auto marker = std::move(*pending_history_checkpoint_);
@@ -975,6 +982,10 @@ void EditorSessionService::HandleSaveCheckpointCompletion(
   published.identity = lifecycle_.identity();
   published.message  = marker.success_message;
   Emit(std::move(published));
+  if (pending_close_after_persist_) {
+    pending_close_after_persist_ = false;
+    (void)Close(true);
+  }
 }
 
 auto EditorSessionService::Switch(sl_element_id_t element_id, image_id_t image_id)
@@ -1074,6 +1085,15 @@ auto EditorSessionService::Close(bool persist_changes) -> EditorSessionResult {
     });
   }
   AbortMaskCreation();
+  if (persist_changes && pending_history_checkpoint_.has_value()) {
+    pending_close_after_persist_ = true;
+    EditorSessionResult waiting;
+    waiting.kind     = EditorSessionResultKind::SaveStarted;
+    waiting.state    = lifecycle_.state();
+    waiting.identity = lifecycle_.identity();
+    waiting.message  = "Waiting for in-flight persist before closing";
+    return Emit(std::move(waiting));
+  }
   const auto outcome = navigation_.RequestClose(persist_changes);
   if (outcome.rejected) {
     return Reject(outcome.message);
@@ -1097,6 +1117,37 @@ auto EditorSessionService::Close(bool persist_changes) -> EditorSessionResult {
   result.message  = outcome.message;
   BumpHistoryRevision();
   return Emit(std::move(result));
+}
+
+auto EditorSessionService::PersistCurrentImage() -> EditorSessionResult {
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind = EditorSessionCommandKind::PersistCurrent;
+    return SubmitCommand(std::move(command),
+                         [this](const EditorSessionCommand&) { return PersistCurrentImage(); });
+  }
+  if (lifecycle_.state() == EditorSessionState::ShuttingDown) {
+    return Reject("Cannot persist while shutting down");
+  }
+  if (lifecycle_.state() == EditorSessionState::Saving ||
+      lifecycle_.state() == EditorSessionState::Switching || navigation_.has_pending_action() ||
+      save_service_.active()) {
+    EditorSessionResult waiting;
+    waiting.kind     = EditorSessionResultKind::SaveStarted;
+    waiting.state    = lifecycle_.state();
+    waiting.identity = lifecycle_.identity();
+    waiting.message  = "Editor save checkpoint is already in progress";
+    return waiting;
+  }
+  if (!lifecycle_.has_image() || lifecycle_.state() != EditorSessionState::Interactive) {
+    EditorSessionResult accepted;
+    accepted.kind     = EditorSessionResultKind::Accepted;
+    accepted.state    = lifecycle_.state();
+    accepted.identity = lifecycle_.identity();
+    accepted.message  = "No open editor image to persist";
+    return accepted;
+  }
+  return StartHistoryCheckpoint("Editor image persisted", false);
 }
 
 auto EditorSessionService::Patch(EditorAdjustmentPatch patch) -> EditorSessionResult {

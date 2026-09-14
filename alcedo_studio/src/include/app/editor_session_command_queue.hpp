@@ -65,6 +65,7 @@ enum class EditorSessionCommandKind : std::uint8_t {
   SetAdjustmentProjectionNode,
   RenameColorGrade,
   EditNodeGraph,
+  PersistCurrent,
 };
 
 /// Worker messages that are delivered back to the session owner.

@@ -232,7 +232,18 @@ class IEditorSessionBackend {
     return result;
   }
   virtual auto Close(bool persist_changes) -> EditorSessionResult = 0;
-  virtual auto Shutdown() -> EditorSessionResult                  = 0;
+  /// Materialize the open image without leaving Interactive. Used when the
+  /// workspace routes to Library so the album thumbnail matches the last
+  /// settled edit. Default backends accept without saving.
+  virtual auto PersistCurrentImage() -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Accepted;
+    result.state    = state();
+    result.identity = identity();
+    result.message  = "Persist current image ignored";
+    return result;
+  }
+  virtual auto Shutdown() -> EditorSessionResult = 0;
   virtual auto Discard() -> EditorSessionResult                   = 0;
   virtual auto Undo() -> EditorSessionResult                      = 0;
   virtual auto Redo() -> EditorSessionResult                      = 0;
@@ -548,6 +559,7 @@ class EditorSessionService final : public IEditorSessionBackend {
   auto PasteAdjustments(const AdjustmentTransferPackage& package, std::string version_display_name)
       -> EditorSessionResult override;
   auto               Close(bool persist_changes) -> EditorSessionResult override;
+  auto               PersistCurrentImage() -> EditorSessionResult override;
   [[nodiscard]] auto render_busy() const -> bool override { return render_.render_busy(); }
   /// Phase 7A: true when the session is awaiting save-failure recovery. The
   /// value mirrors owner state refreshed on every availability publish, so a
@@ -773,6 +785,7 @@ class EditorSessionService final : public IEditorSessionBackend {
   std::vector<EditorSessionResult>               results_;
   mutable std::mutex                             results_mutex_;
   std::optional<PendingHistoryCheckpoint>        pending_history_checkpoint_;
+  bool                                           pending_close_after_persist_ = false;
   std::vector<EditorOperationLease>              active_leases_;
   /// Guards the GUI-facing published fields below. The owner writes them
   /// during publish; GUI getters take the same lock for a consistent read.

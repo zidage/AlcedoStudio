@@ -654,5 +654,27 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
       << "frame reuse results must still reach the result observer";
 }
 
+TEST_F(EditorSessionCommandQueueBaselineTest,
+     PersistCurrentImageStartsCheckpointAndRefreshesThumbnail) {
+  openInteractive(10, 20);
+
+  history_->dirty_journal              = true;
+  journal_->async_commit               = false;
+  checkpoint_store_->async_materialize = false;
+  const auto result                    = service_->PersistCurrentImage();
+  EXPECT_EQ(result.kind, EditorSessionResultKind::SaveStarted);
+  EXPECT_EQ(service_->state(), EditorSessionState::Saving);
+
+  journal_->CompleteCommit(true);
+  checkpoint_store_->CompleteMaterialization(true);
+  drainQueue();
+  EXPECT_EQ(service_->state(), EditorSessionState::Interactive);
+  EXPECT_EQ(service_->identity().element_id, static_cast<sl_element_id_t>(10));
+  EXPECT_FALSE(history_->dirty_journal);
+  EXPECT_EQ(thumbnails_->refresh_count, 1);
+  ASSERT_EQ(thumbnails_->refreshed_ids.size(), 1u);
+  EXPECT_EQ(thumbnails_->refreshed_ids.front(), static_cast<sl_element_id_t>(10));
+}
+
 }  // namespace
 }  // namespace alcedo

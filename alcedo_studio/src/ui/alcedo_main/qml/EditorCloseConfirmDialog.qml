@@ -4,8 +4,9 @@ import QtQuick.Layouts
 import QtQuick.Effects
 
 // Application-close confirmation while the editor has an open image.
-// Save explicitly finalizes the editor; ordinary Library routing preserves the
-// session. The host waits on sessionState Leaving Saving like the filmstrip.
+// Save explicitly finalizes the editor; Library routing persists the current
+// image and keeps the session for re-entry. The host waits on sessionState,
+// closeInFlight, and persistInFlight leaving Saving like the filmstrip.
 // Discard → Finalize(false). Cancel leaves the editor session alone.
 Popup {
     id: root

@@ -254,6 +254,28 @@ void EditorSessionController::OnBackendChanged() {
   SyncViewportIdentity();
   ApplyActionAvailability();
 
+  const auto state = session_state();
+  if (close_in_flight_) {
+    if (state == alcedo::EditorSessionState::NoImage ||
+        state == alcedo::EditorSessionState::Failed ||
+        state == alcedo::EditorSessionState::RetainedImageFailure ||
+        state == alcedo::EditorSessionState::ShuttingDown) {
+      SetCloseInFlight(false);
+    }
+  }
+  if (persist_in_flight_) {
+    if (state == alcedo::EditorSessionState::Saving ||
+        state == alcedo::EditorSessionState::Switching) {
+      persist_observed_saving_ = true;
+    } else if (persist_observed_saving_ || state == alcedo::EditorSessionState::Failed ||
+               state == alcedo::EditorSessionState::RetainedImageFailure ||
+               state == alcedo::EditorSessionState::NoImage ||
+               state == alcedo::EditorSessionState::ShuttingDown) {
+      persist_observed_saving_ = false;
+      SetPersistInFlight(false);
+    }
+  }
+
   // Interactive FrameReady no longer NotifyChange, so this path does not run
   // on pointer moves. Authoritative snapshot publish still happens here after
   // Release, image/node switch, Undo/Redo, error, and parameter normalization.
@@ -324,6 +346,24 @@ auto EditorSessionController::has_image() const -> bool {
 
 auto EditorSessionController::has_pending_recovery() const -> bool {
   return session_backend_ != nullptr && session_backend_->has_pending_recovery();
+}
+
+auto EditorSessionController::close_in_flight() const -> bool { return close_in_flight_; }
+
+void EditorSessionController::SetCloseInFlight(bool in_flight) {
+  if (close_in_flight_ == in_flight) {
+    return;
+  }
+  close_in_flight_ = in_flight;
+}
+
+auto EditorSessionController::persist_in_flight() const -> bool { return persist_in_flight_; }
+
+void EditorSessionController::SetPersistInFlight(bool in_flight) {
+  if (persist_in_flight_ == in_flight) {
+    return;
+  }
+  persist_in_flight_ = in_flight;
 }
 
 auto EditorSessionController::element_id() const -> uint {
@@ -811,6 +851,22 @@ void EditorSessionController::PublishHistoryInvokableReturn(
 }
 
 void EditorSessionController::OnBackendSessionResult(const alcedo::EditorSessionResult& result) {
+  const bool failed = result.kind == alcedo::EditorSessionResultKind::Rejected ||
+                      result.kind == alcedo::EditorSessionResultKind::Failed;
+  if (failed && (close_in_flight_ || persist_in_flight_)) {
+    if (!result.message.empty()) {
+      if (close_in_flight_) {
+        close_error_ = QString::fromStdString(result.message);
+      }
+      if (persist_in_flight_) {
+        persist_error_ = QString::fromStdString(result.message);
+      }
+    }
+    SetCloseInFlight(false);
+    persist_observed_saving_ = false;
+    SetPersistInFlight(false);
+    emit StateChanged();
+  }
   auto published = history_ops_.CorrelateObservedResult(result);
   if (!published.has_value()) {
     return;
@@ -867,7 +923,8 @@ void EditorSessionController::Shutdown() {
 
 void EditorSessionController::Finalize(bool persistChanges) {
   // Explicit close path for application/project lifecycle and empty-editor
-  // transitions. Ordinary workspace routing deliberately does not call this.
+  // transitions. Ordinary workspace routing keeps the session and calls
+  // PersistCurrentImage so re-entry stays immediate.
   // The navigation layer releases guards only after save and render-idle both
   // complete, so keep presentation available for the in-flight handoff.
   if (!session_backend_) {
@@ -879,6 +936,12 @@ void EditorSessionController::Finalize(bool persistChanges) {
     return;
   }
 
+  if (persistChanges && close_in_flight_) {
+    emit StateChanged();
+    return;
+  }
+
+  close_error_.clear();
   if (persistChanges) {
     SyncAlbumHdrFlagFromSnapshot();
   }
@@ -886,14 +949,24 @@ void EditorSessionController::Finalize(bool persistChanges) {
   const auto result = session_backend_->Close(persistChanges);
   SyncIdentityFromBackend();
 
-  if (result.kind != alcedo::EditorSessionResultKind::Rejected) {
-    active_ = false;
+  if (result.kind == alcedo::EditorSessionResultKind::Rejected) {
+    if (!result.message.empty()) {
+      close_error_ = QString::fromStdString(result.message);
+    }
+    emit StateChanged();
+    return;
   }
 
-  // Synchronous close can drop presentation now. Async SaveStarted keeps the
-  // viewport until the backend publishes NoImage.
-  if (result.kind != alcedo::EditorSessionResultKind::Rejected &&
-      result.kind != alcedo::EditorSessionResultKind::SaveStarted) {
+  active_ = false;
+
+  const bool close_waiting =
+      result.kind == alcedo::EditorSessionResultKind::SaveStarted ||
+      (result.kind == alcedo::EditorSessionResultKind::Accepted && session_backend_->has_image());
+  SetCloseInFlight(close_waiting);
+
+  // Synchronous close can drop presentation now. Async SaveStarted or a queued
+  // owner-thread Close keeps the viewport until the backend publishes NoImage.
+  if (result.kind != alcedo::EditorSessionResultKind::SaveStarted && !close_waiting) {
     if (scope_controller_) {
       scope_controller_->SetImageIdentity(0, 0);
       scope_controller_->Shutdown();
@@ -903,6 +976,50 @@ void EditorSessionController::Finalize(bool persistChanges) {
     }
   }
   emit StateChanged();
+}
+
+void EditorSessionController::PersistCurrentImage() {
+  if (!session_backend_ || close_in_flight_ || persist_in_flight_ || !has_image()) {
+    return;
+  }
+  persist_error_.clear();
+  persist_observed_saving_ = false;
+  const auto result        = session_backend_->PersistCurrentImage();
+  if (result.kind == alcedo::EditorSessionResultKind::Rejected ||
+      result.kind == alcedo::EditorSessionResultKind::Failed) {
+    if (!result.message.empty()) {
+      persist_error_ = QString::fromStdString(result.message);
+    }
+    emit StateChanged();
+    return;
+  }
+  const auto state = session_backend_->state();
+  if (result.kind == alcedo::EditorSessionResultKind::SaveStarted ||
+      state == alcedo::EditorSessionState::Saving ||
+      state == alcedo::EditorSessionState::Switching) {
+    persist_observed_saving_ = true;
+  }
+  const bool persist_waiting =
+      result.kind == alcedo::EditorSessionResultKind::SaveStarted ||
+      state == alcedo::EditorSessionState::Saving ||
+      state == alcedo::EditorSessionState::Switching ||
+      (result.kind == alcedo::EditorSessionResultKind::Accepted &&
+       result.message == "Editor session command queued");
+  SetPersistInFlight(persist_waiting);
+  emit StateChanged();
+}
+
+auto EditorSessionController::last_error() const -> QString {
+  if (!close_error_.isEmpty()) {
+    return close_error_;
+  }
+  if (!persist_error_.isEmpty()) {
+    return persist_error_;
+  }
+  if (!session_backend_) {
+    return {};
+  }
+  return QString::fromUtf8(session_backend_->last_error().c_str());
 }
 
 void EditorSessionController::clearLastEditedImage() {
@@ -1097,13 +1214,6 @@ auto EditorSessionController::presentation_frame_sink() const -> alcedo::IFrameS
 auto EditorSessionController::render_busy() const -> bool {
   // Reflects coordinator diagnostics only — never a pipeline task pointer.
   return session_backend_ && session_backend_->render_busy();
-}
-
-auto EditorSessionController::last_error() const -> QString {
-  if (!session_backend_) {
-    return {};
-  }
-  return QString::fromUtf8(session_backend_->last_error().c_str());
 }
 
 auto EditorSessionController::first_frame_time_ms() const -> double {

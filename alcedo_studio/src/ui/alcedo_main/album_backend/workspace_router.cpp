@@ -19,6 +19,7 @@ void WorkspaceRouter::OpenLibrary() {
     // Parent visibility changes do not reliably notify the retained viewport.
     // Pause producer handshakes before hiding its workspace.
     editor_session_->SetWorkspacePresentationActive(false);
+    editor_session_->PersistCurrentImage();
   }
   workspace_  = QStringLiteral("library");
   element_id_ = 0;

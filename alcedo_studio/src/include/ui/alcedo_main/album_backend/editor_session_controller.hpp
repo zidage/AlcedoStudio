@@ -86,6 +86,14 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   // Composite key for QML viewport session resets (includes load-request generation).
   Q_PROPERTY(QString viewportIdentityKey READ viewport_identity_key NOTIFY StateChanged)
   Q_PROPERTY(QString sessionState READ session_state_name NOTIFY StateChanged)
+  /// True after Close/Finalize has been admitted and before the backend reaches
+  /// NoImage, Failed, or RetainedImageFailure. Quit/save waits on this because
+  /// a queued owner-thread Close still reports Interactive.
+  Q_PROPERTY(bool closeInFlight READ close_in_flight NOTIFY StateChanged)
+  /// True after PersistCurrentImage is admitted and before the backend returns
+  /// to Interactive (or a terminal failure). Library routing and quit wait on
+  /// this because a queued owner-thread persist still reports Interactive.
+  Q_PROPERTY(bool persistInFlight READ persist_in_flight NOTIFY StateChanged)
   Q_PROPERTY(EditorActionAvailabilityModel* actions READ actions CONSTANT)
   Q_PROPERTY(bool filmstripCollapsed READ filmstrip_collapsed WRITE set_filmstrip_collapsed NOTIFY
                  FilmstripUiChanged)
@@ -159,6 +167,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   [[nodiscard]] bool       active() const;
   [[nodiscard]] bool       has_image() const;
   [[nodiscard]] bool       has_pending_recovery() const;
+  [[nodiscard]] bool       close_in_flight() const;
+  [[nodiscard]] bool       persist_in_flight() const;
   [[nodiscard]] uint       element_id() const;
   [[nodiscard]] uint       image_id() const;
   [[nodiscard]] uint       last_element_id() const { return last_element_id_; }
@@ -259,12 +269,16 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   /** Route one net topology delta through the active session backend. */
   auto SubmitNodeGraphTopologyEdit(const alcedo::NodeGraphTopologyChange& change)
       -> alcedo::EditorSessionResult;
-  /// Seal the active image via the same Close path as leaving the editor for
-  /// Library (`WorkspaceRouter::OpenLibrary`). persistChanges=true may leave
-  /// sessionState at Saving until the checkpoint finishes; callers that must
-  /// quit wait on StateChanged / sessionState like the filmstrip does.
-  /// persistChanges=false discards unflushed journal and closes immediately.
+  /// Seal the active image via Close. persistChanges=true may leave
+  /// sessionState at Saving, or closeInFlight while the owner thread still
+  /// holds Interactive, until the checkpoint finishes; callers that must quit
+  /// wait on StateChanged / sessionState / closeInFlight / persistInFlight
+  /// like the filmstrip. persistChanges=false discards unflushed journal and
+  /// closes.
   Q_INVOKABLE void   Finalize(bool persistChanges);
+  /// Materialize the open image and refresh its album thumbnail without
+  /// closing the session. Used when routing from Editor to Library.
+  Q_INVOKABLE void   PersistCurrentImage();
   // Forget the last-edited image so re-entering the editor does not resurrect a
   // deleted image or one from a prior project (Phase 4A-Fix).
   Q_INVOKABLE void   clearLastEditedImage();
@@ -361,6 +375,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void                     ApplyActionAvailability();
   void                     PublishRenderProgressIfChanged();
   void                     SyncBackgroundActionRestrictions();
+  void                     SetCloseInFlight(bool in_flight);
+  void                     SetPersistInFlight(bool in_flight);
   [[nodiscard]] qulonglong SessionEpoch() const;
   /// Apply a publisher event to QML properties and emit HistoryOperationFinished.
   void ApplyPublishedHistory(const EditorHistoryOperationPublisher::Published& published);
@@ -412,6 +428,11 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   std::uint64_t                   last_applied_panel_generation_ = 0;
   bool                            last_published_render_busy_    = false;
   QString                         last_published_inflight_reason_;
+  bool                            close_in_flight_               = false;
+  bool                            persist_in_flight_             = false;
+  bool                            persist_observed_saving_       = false;
+  QString                         close_error_;
+  QString                         persist_error_;
 
   QString                         active_adjustment_panel_       = QStringLiteral("tone");
   QString                         panel_before_mask_edit_        = QStringLiteral("tone");
