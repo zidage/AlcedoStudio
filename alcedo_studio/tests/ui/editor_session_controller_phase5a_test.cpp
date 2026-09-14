@@ -51,8 +51,11 @@ class FakeSessionBackend final : public IEditorSessionBackend {
   int                   open_count               = 0;
   int                   switch_count             = 0;
   int                   close_count              = 0;
+  int                   persist_count            = 0;
   int                   shutdown_count           = 0;
   bool                  last_close_persist       = true;
+  bool                  defer_close_             = false;
+  bool                  defer_persist_           = false;
   int                   presentation_width       = 0;
   int                   presentation_height      = 0;
   std::string           last_error_;
@@ -136,7 +139,15 @@ class FakeSessionBackend final : public IEditorSessionBackend {
 
   auto Close(bool persist_changes) -> EditorSessionResult override {
     ++close_count;
-    last_close_persist   = persist_changes;
+    last_close_persist = persist_changes;
+    if (defer_close_) {
+      EditorSessionResult result;
+      result.kind     = EditorSessionResultKind::Accepted;
+      result.state    = state_;
+      result.identity = identity_;
+      result.message  = "Editor session command queued";
+      return result;
+    }
     state_               = EditorSessionState::NoImage;
     identity_.element_id = 0;
     identity_.image_id   = 0;
@@ -146,6 +157,37 @@ class FakeSessionBackend final : public IEditorSessionBackend {
     result.identity = identity_;
     NotifyChange();
     return result;
+  }
+
+  void CompleteDeferredClose() {
+    defer_close_         = false;
+    state_               = EditorSessionState::NoImage;
+    identity_.element_id = 0;
+    identity_.image_id   = 0;
+    NotifyChange();
+  }
+
+  auto PersistCurrentImage() -> EditorSessionResult override {
+    ++persist_count;
+    EditorSessionResult result;
+    result.state    = state_;
+    result.identity = identity_;
+    if (defer_persist_) {
+      result.kind    = EditorSessionResultKind::Accepted;
+      result.message = "Editor session command queued";
+      return result;
+    }
+    result.kind    = EditorSessionResultKind::SaveStarted;
+    result.message = "Waiting for editor history checkpoint";
+    return result;
+  }
+
+  void CompletePersist() {
+    defer_persist_ = false;
+    state_         = EditorSessionState::Saving;
+    NotifyChange();
+    state_ = EditorSessionState::Interactive;
+    NotifyChange();
   }
 
   auto Shutdown() -> EditorSessionResult override {
@@ -228,6 +270,7 @@ class FakeSessionBackend final : public IEditorSessionBackend {
   }
 
   void NotifyWithoutStateChange() { NotifyChange(); }
+  void SimulateRenderProgress() { NotifyRenderProgress(); }
 
   // Patch/Commit remain owner-consume APIs for tests that call them directly.
   // GUI submitPatch uses EnqueueAdjustmentInput and must not copy live params
@@ -477,10 +520,14 @@ TEST(EditorSessionControllerPhase5ATest, WorkspaceSwitchesImagesWithoutClosingTh
 
   router.OpenLibrary();
   EXPECT_EQ(backend.close_count, 0);
+  EXPECT_EQ(backend.persist_count, 1);
+  EXPECT_TRUE(controller.persist_in_flight());
   EXPECT_TRUE(controller.active());
   EXPECT_EQ(controller.element_id(), 3u);
   EXPECT_EQ(controller.image_id(), 4u);
   EXPECT_EQ(router.workspace(), QStringLiteral("library"));
+  backend.CompletePersist();
+  EXPECT_FALSE(controller.persist_in_flight());
 }
 
 TEST(EditorSessionControllerPhase5ATest,
@@ -537,6 +584,44 @@ TEST(EditorSessionControllerPhase5ATest, FinalizeAndShutdownKeepLifecycleInTheBa
   controller.Shutdown();
   EXPECT_EQ(backend.shutdown_count, 1);
   EXPECT_EQ(controller.session_state(), EditorSessionState::ShuttingDown);
+}
+
+TEST(EditorSessionControllerPhase5ATest,
+     QueuedCloseKeepsCloseInFlightUntilBackendReachesNoImage) {
+  FakeSessionBackend      backend;
+  backend.defer_close_ = true;
+  EditorSessionController controller(&backend);
+
+  controller.Open(1, 2);
+  backend.SimulateFirstFrameReady();
+  controller.Finalize(true);
+  EXPECT_EQ(backend.close_count, 1);
+  EXPECT_TRUE(backend.last_close_persist);
+  EXPECT_TRUE(controller.close_in_flight());
+  EXPECT_EQ(controller.session_state(), EditorSessionState::Interactive);
+  EXPECT_FALSE(controller.has_image());
+
+  backend.CompleteDeferredClose();
+  EXPECT_FALSE(controller.close_in_flight());
+  EXPECT_EQ(controller.session_state(), EditorSessionState::NoImage);
+}
+
+TEST(EditorSessionControllerPhase5ATest,
+     QueuedPersistKeepsPersistInFlightUntilBackendReturnsToInteractive) {
+  FakeSessionBackend      backend;
+  backend.defer_persist_ = true;
+  EditorSessionController controller(&backend);
+
+  controller.Open(1, 2);
+  backend.SimulateFirstFrameReady();
+  controller.PersistCurrentImage();
+  EXPECT_EQ(backend.persist_count, 1);
+  EXPECT_TRUE(controller.persist_in_flight());
+  EXPECT_EQ(controller.session_state(), EditorSessionState::Interactive);
+
+  backend.CompletePersist();
+  EXPECT_FALSE(controller.persist_in_flight());
+  EXPECT_EQ(controller.session_state(), EditorSessionState::Interactive);
 }
 
 TEST(EditorSessionControllerPhase5ATest, PresentationSizeIsForwardedToTheBackend) {
@@ -674,6 +759,45 @@ TEST(EditorSessionControllerPhase5ATest, RenderBusyReflectsBackendDiagnostics) {
   EXPECT_FALSE(controller.render_busy());
   backend.render_busy_ = true;
   EXPECT_TRUE(controller.render_busy());
+}
+
+TEST(EditorSessionControllerPhase5ATest,
+     RenderProgressDoesNotBroadcastStateOrReloadAdjustmentSnapshot) {
+  FakeSessionBackend backend;
+  backend.state_               = EditorSessionState::Interactive;
+  backend.image_load_request_  = ImageLoadRequestId{1};
+  backend.identity_.element_id = 1;
+  backend.identity_.image_id   = 2;
+  EditorSessionController controller(&backend);
+
+  backend.SetPanelProjection(PanelProjection(1, {ScalarPanelField("exposure", 0.25f)}));
+  backend.NotifyWithoutStateChange();
+  const auto snapshot = controller.adjustment_snapshot();
+  ASSERT_TRUE(snapshot.contains(QStringLiteral("exposure")));
+
+  int state_signals    = 0;
+  int snapshot_signals = 0;
+  int busy_signals     = 0;
+  int diag_signals     = 0;
+  QObject::connect(&controller, &EditorSessionController::StateChanged, [&] { ++state_signals; });
+  QObject::connect(&controller, &EditorSessionController::AdjustmentSnapshotChanged,
+                   [&] { ++snapshot_signals; });
+  QObject::connect(&controller, &EditorSessionController::RenderBusyChanged,
+                   [&] { ++busy_signals; });
+  QObject::connect(&controller, &EditorSessionController::RenderDiagnosticsChanged,
+                   [&] { ++diag_signals; });
+
+  backend.render_busy_ = true;
+  backend.SetPanelProjection(PanelProjection(1, {ScalarPanelField("exposure", 9.0f),
+                                                 ScalarPanelField("contrast", 40.0f)}));
+  backend.SimulateRenderProgress();
+
+  EXPECT_EQ(state_signals, 0);
+  EXPECT_EQ(snapshot_signals, 0);
+  EXPECT_EQ(busy_signals, 1);
+  EXPECT_EQ(diag_signals, 1);
+  EXPECT_TRUE(controller.render_busy());
+  EXPECT_EQ(controller.adjustment_snapshot(), snapshot);
 }
 
 TEST(EditorSessionControllerPhase5ATest, WorksWithoutBackendForShellOnlyTests) {
@@ -1110,7 +1234,7 @@ TEST(EditorSessionControllerPhase5ATest, InteractiveSubmitStartsPresentLoopAndSe
 }
 
 TEST(EditorSessionControllerPhase5ATest,
-     PresentLoopTickRequestsUpdateOnlyWhileArmedAndPresentationIsAvailable) {
+     PresentLoopContinueDoesNotTickWhenNoReadyFrameIsWaiting) {
   editor_rhi::EditorViewportItem viewport;
   const auto ticks_idle = viewport.interactivePresentLoopTickCount();
   viewport.continueInteractivePresentLoop();
@@ -1124,14 +1248,15 @@ TEST(EditorSessionControllerPhase5ATest,
 
   viewport.resumePresentation();
   viewport.continueInteractivePresentLoop();
-  EXPECT_EQ(viewport.interactivePresentLoopTickCount(), ticks_idle + 1);
+  EXPECT_EQ(viewport.interactivePresentLoopTickCount(), ticks_idle)
+      << "continue must not pump vsync frames when no Ready slot is waiting";
   viewport.continueInteractivePresentLoop();
-  EXPECT_EQ(viewport.interactivePresentLoopTickCount(), ticks_idle + 2);
+  EXPECT_EQ(viewport.interactivePresentLoopTickCount(), ticks_idle);
 
   viewport.endInteractivePresentLoop();
   EXPECT_FALSE(viewport.interactivePresentLoopActive());
   viewport.continueInteractivePresentLoop();
-  EXPECT_EQ(viewport.interactivePresentLoopTickCount(), ticks_idle + 2);
+  EXPECT_EQ(viewport.interactivePresentLoopTickCount(), ticks_idle);
 }
 
 TEST(EditorSessionControllerPhase5ATest, SessionEpochChangeStopsPresentLoop) {

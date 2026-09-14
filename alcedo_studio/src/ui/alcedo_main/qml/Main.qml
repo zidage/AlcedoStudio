@@ -253,9 +253,14 @@ ApplicationWindow {
     // quitting during Saving aborts the checkpoint.
     property bool allowApplicationClose: false
     property bool waitingEditorCloseSave: false
+    property bool editorCloseAwaitingSeal: false
     property bool updateInstallPending: false
     property string editorCloseSessionState: appModules.editorSession
                                              ? appModules.editorSession.sessionState : ""
+    property bool editorCloseInFlight: appModules.editorSession
+                                       ? appModules.editorSession.closeInFlight === true : false
+    property bool editorClosePersistInFlight: appModules.editorSession
+                                              ? appModules.editorSession.persistInFlight === true : false
 
     Connections {
         target: appModules.updates
@@ -273,16 +278,22 @@ ApplicationWindow {
         if (root.waitingEditorCloseSave) {
             return true
         }
+        const session = appModules.editorSession
+        const persistBusy = !!(session
+                               && (session.closeInFlight === true
+                                   || session.persistInFlight === true
+                                   || String(session.sessionState || "") === "Saving"
+                                   || String(session.sessionState || "") === "Switching"))
         const router = appModules.workspaceRouter
         if (!router || String(router.workspace || "") !== "editor") {
-            return false
+            return persistBusy
         }
-        const session = appModules.editorSession
-        return !!(session && session.hasImage === true)
+        return persistBusy || !!(session && session.hasImage === true)
     }
 
     function cancelEditorCloseConfirm() {
         root.waitingEditorCloseSave = false
+        root.editorCloseAwaitingSeal = false
         if (root.updateInstallPending) {
             root.updateInstallPending = false
             appModules.updates.CancelInstall()
@@ -294,6 +305,7 @@ ApplicationWindow {
 
     function finishApplicationClose() {
         root.waitingEditorCloseSave = false
+        root.editorCloseAwaitingSeal = false
         if (root.updateInstallPending) {
             root.updateInstallPending = false
             if (!appModules.updates.CommitInstall()) {
@@ -311,6 +323,7 @@ ApplicationWindow {
 
     function abortEditorCloseSave(messageText) {
         root.waitingEditorCloseSave = false
+        root.editorCloseAwaitingSeal = false
         if (root.updateInstallPending) {
             root.updateInstallPending = false
             appModules.updates.CancelInstall()
@@ -334,17 +347,30 @@ ApplicationWindow {
                     && session.actions
                     && session.actions.canDiscardAndContinue === true) {
                 session.DiscardAndContinue()
-            } else {
-                session.Finalize(false)
+                root.finishApplicationClose()
+                return
             }
+            root.waitingEditorCloseSave = true
+            root.editorCloseAwaitingSeal = true
+            if (appDialogs.editorCloseConfirmDialog) {
+                appDialogs.editorCloseConfirmDialog.busy = true
+            }
+            session.Finalize(false)
+        } else {
+            root.finishApplicationClose()
+            return
         }
-        root.finishApplicationClose()
+        if (appModules.workspaceRouter) {
+            appModules.workspaceRouter.openLibrary()
+        }
+        Qt.callLater(root.pollEditorCloseSave)
     }
 
     function beginEditorCloseSave() {
         // Application exit explicitly seals the editor session. Ordinary
         // workspace routing keeps it alive for immediate re-entry.
         root.waitingEditorCloseSave = true
+        root.editorCloseAwaitingSeal = true
         if (appDialogs.editorCloseConfirmDialog) {
             appDialogs.editorCloseConfirmDialog.busy = true
         }
@@ -354,6 +380,12 @@ ApplicationWindow {
         if (appModules.workspaceRouter) {
             appModules.workspaceRouter.openLibrary()
         }
+        Qt.callLater(root.pollEditorCloseSave)
+    }
+
+    function beginEditorPersistWaitThenClose() {
+        root.waitingEditorCloseSave = true
+        root.editorCloseAwaitingSeal = false
         Qt.callLater(root.pollEditorCloseSave)
     }
 
@@ -367,14 +399,22 @@ ApplicationWindow {
             return
         }
         const state = String(session.sessionState || "")
-        // Same in-flight seal gate as EditorFilmstrip.
-        if (state === "Saving" || state === "Switching") {
+        // Same in-flight seal gate as EditorFilmstrip. A queued owner-thread
+        // Close or persist still reports Interactive until the reducer runs,
+        // so wait on closeInFlight / persistInFlight as well as Saving/Switching.
+        if (state === "Saving" || state === "Switching"
+                || session.closeInFlight === true
+                || session.persistInFlight === true) {
             return
         }
         if (session.hasPendingRecovery === true
                 || state === "RetainedImageFailure"
                 || state === "Failed") {
             root.abortEditorCloseSave(session.lastError)
+            return
+        }
+        if (!root.editorCloseAwaitingSeal) {
+            root.finishApplicationClose()
             return
         }
         // Close completed (or sync no-op). Do not quit while still Interactive
@@ -387,6 +427,18 @@ ApplicationWindow {
     }
 
     onEditorCloseSessionStateChanged: {
+        if (root.waitingEditorCloseSave) {
+            root.pollEditorCloseSave()
+        }
+    }
+
+    onEditorCloseInFlightChanged: {
+        if (root.waitingEditorCloseSave) {
+            root.pollEditorCloseSave()
+        }
+    }
+
+    onEditorClosePersistInFlightChanged: {
         if (root.waitingEditorCloseSave) {
             root.pollEditorCloseSave()
         }
@@ -409,6 +461,18 @@ ApplicationWindow {
         }
         if (appDialogs.editorCloseConfirmDialog
                 && appDialogs.editorCloseConfirmDialog.opened) {
+            return
+        }
+        const router = appModules.workspaceRouter
+        const inEditor = !!(router && String(router.workspace || "") === "editor")
+        const session = appModules.editorSession
+        const persistBusy = !!(session
+                               && (session.closeInFlight === true
+                                   || session.persistInFlight === true
+                                   || String(session.sessionState || "") === "Saving"
+                                   || String(session.sessionState || "") === "Switching"))
+        if (!inEditor && persistBusy) {
+            root.beginEditorPersistWaitThenClose()
             return
         }
         appDialogs.openEditorCloseConfirmDialog()

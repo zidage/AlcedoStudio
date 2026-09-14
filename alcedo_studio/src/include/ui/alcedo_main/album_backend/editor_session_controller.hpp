@@ -86,6 +86,14 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   // Composite key for QML viewport session resets (includes load-request generation).
   Q_PROPERTY(QString viewportIdentityKey READ viewport_identity_key NOTIFY StateChanged)
   Q_PROPERTY(QString sessionState READ session_state_name NOTIFY StateChanged)
+  /// True after Close/Finalize has been admitted and before the backend reaches
+  /// NoImage, Failed, or RetainedImageFailure. Quit/save waits on this because
+  /// a queued owner-thread Close still reports Interactive.
+  Q_PROPERTY(bool closeInFlight READ close_in_flight NOTIFY StateChanged)
+  /// True after PersistCurrentImage is admitted and before the backend returns
+  /// to Interactive (or a terminal failure). Library routing and quit wait on
+  /// this because a queued owner-thread persist still reports Interactive.
+  Q_PROPERTY(bool persistInFlight READ persist_in_flight NOTIFY StateChanged)
   Q_PROPERTY(EditorActionAvailabilityModel* actions READ actions CONSTANT)
   Q_PROPERTY(bool filmstripCollapsed READ filmstrip_collapsed WRITE set_filmstrip_collapsed NOTIFY
                  FilmstripUiChanged)
@@ -115,16 +123,16 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   Q_PROPERTY(EditorMaskCreationAdapter* maskCreation READ mask_creation CONSTANT)
   // Phase 5D: the render coordinator has in-flight or pending work for this
   // session. QML binds a busy indicator to it. Reflects backend render_busy()
-  // (coordinator diagnostics); transitions fire StateChanged via the backend
-  // notifier so this never exposes pipeline task objects (D6).
-  Q_PROPERTY(bool renderBusy READ render_busy NOTIFY StateChanged)
+  // (coordinator diagnostics). Busy and inflight-reason changes use dedicated
+  // signals so Interactive frames do not broadcast every session property.
+  Q_PROPERTY(bool renderBusy READ render_busy NOTIFY RenderBusyChanged)
   // Phase 5E: last session/backend error and first-frame latency. QML status
   // chrome and tests may observe these without touching pipeline task objects.
   Q_PROPERTY(QString lastError READ last_error NOTIFY StateChanged)
   Q_PROPERTY(double firstFrameTimeMs READ first_frame_time_ms NOTIFY StateChanged)
   // Aggregate coordinator diagnostics (reason, replace/cancel counts, last
   // rejection, last submitted role). Never includes pipeline task pointers.
-  Q_PROPERTY(QVariantMap renderDiagnostics READ render_diagnostics NOTIFY StateChanged)
+  Q_PROPERTY(QVariantMap renderDiagnostics READ render_diagnostics NOTIFY RenderDiagnosticsChanged)
   /// Phase 6C-7: read-only field-value snapshot for panel loading. Keys are
   /// stable field identifiers (e.g. "exposure", "contrast"); values are the
   /// parsed JSON params. Published after open, checkout, undo, redo, recovery,
@@ -153,10 +161,14 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   /// Called when the injected backend reports an async state/identity change
   /// (render presented, save finished, etc.). Mirrors backend into QML properties.
   void                     OnBackendChanged();
+  /// Called when only coordinator busy / inflight reason changed.
+  void                     OnRenderProgressChanged();
 
   [[nodiscard]] bool       active() const;
   [[nodiscard]] bool       has_image() const;
   [[nodiscard]] bool       has_pending_recovery() const;
+  [[nodiscard]] bool       close_in_flight() const;
+  [[nodiscard]] bool       persist_in_flight() const;
   [[nodiscard]] uint       element_id() const;
   [[nodiscard]] uint       image_id() const;
   [[nodiscard]] uint       last_element_id() const { return last_element_id_; }
@@ -177,7 +189,10 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   [[nodiscard]] qulonglong session_generation() const;
   [[nodiscard]] qulonglong history_revision() const;
   [[nodiscard]] QString    active_version_id() const;
-  [[nodiscard]] auto       pipeline_document() const -> const alcedo::PipelineDocument*;
+  /// Immutable document snapshot published by the backend before each change
+  /// notification. Safe for GUI readers; null when no image is loaded.
+  [[nodiscard]] auto       pipeline_document() const
+      -> std::shared_ptr<const alcedo::PipelineDocument>;
   // Phase 6C-7: load panel state from the backend adjustment snapshot.
   [[nodiscard]] auto       adjustment_snapshot() const -> QVariantMap;
   [[nodiscard]] auto       history_snapshot() const -> alcedo::EditorHistorySnapshot;
@@ -254,12 +269,16 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   /** Route one net topology delta through the active session backend. */
   auto SubmitNodeGraphTopologyEdit(const alcedo::NodeGraphTopologyChange& change)
       -> alcedo::EditorSessionResult;
-  /// Seal the active image via the same Close path as leaving the editor for
-  /// Library (`WorkspaceRouter::OpenLibrary`). persistChanges=true may leave
-  /// sessionState at Saving until the checkpoint finishes; callers that must
-  /// quit wait on StateChanged / sessionState like the filmstrip does.
-  /// persistChanges=false discards unflushed journal and closes immediately.
+  /// Seal the active image via Close. persistChanges=true may leave
+  /// sessionState at Saving, or closeInFlight while the owner thread still
+  /// holds Interactive, until the checkpoint finishes; callers that must quit
+  /// wait on StateChanged / sessionState / closeInFlight / persistInFlight
+  /// like the filmstrip. persistChanges=false discards unflushed journal and
+  /// closes.
   Q_INVOKABLE void   Finalize(bool persistChanges);
+  /// Materialize the open image and refresh its album thumbnail without
+  /// closing the session. Used when routing from Editor to Library.
+  Q_INVOKABLE void   PersistCurrentImage();
   // Forget the last-edited image so re-entering the editor does not resurrect a
   // deleted image or one from a prior project (Phase 4A-Fix).
   Q_INVOKABLE void   clearLastEditedImage();
@@ -325,6 +344,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
  signals:
   void StateChanged();
   void HistoryChanged();
+  void RenderBusyChanged();
+  void RenderDiagnosticsChanged();
   // Phase 6C-7: emitted when the backend adjustment snapshot is published.
   void AdjustmentSnapshotChanged();
   void ActionAvailabilityChanged();
@@ -352,7 +373,10 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void                     SyncAlbumHdrFlagFromSnapshot();
   void                     InstallBackendNotifier();
   void                     ApplyActionAvailability();
+  void                     PublishRenderProgressIfChanged();
   void                     SyncBackgroundActionRestrictions();
+  void                     SetCloseInFlight(bool in_flight);
+  void                     SetPersistInFlight(bool in_flight);
   [[nodiscard]] qulonglong SessionEpoch() const;
   /// Apply a publisher event to QML properties and emit HistoryOperationFinished.
   void ApplyPublishedHistory(const EditorHistoryOperationPublisher::Published& published);
@@ -365,7 +389,6 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
                                      const QString&                     selected_id = {});
   /// Correlate an async backend result observer delivery to a pending action.
   void OnBackendSessionResult(const alcedo::EditorSessionResult& result);
-  void BindAdmissionDeadline();
   void SetActiveAdjustmentPanel(const QString& panel, bool request_view);
   void SyncMaskAdjustmentPanel();
   [[nodiscard]] static auto       NormalizeAdjustmentPanel(const QString& panel) -> QString;
@@ -403,6 +426,13 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   /// Last panel projection session_generation applied to adjustment_snapshot_.
   /// A matching generation merges changed fields; a new generation replaces.
   std::uint64_t                   last_applied_panel_generation_ = 0;
+  bool                            last_published_render_busy_    = false;
+  QString                         last_published_inflight_reason_;
+  bool                            close_in_flight_               = false;
+  bool                            persist_in_flight_             = false;
+  bool                            persist_observed_saving_       = false;
+  QString                         close_error_;
+  QString                         persist_error_;
 
   QString                         active_adjustment_panel_       = QStringLiteral("tone");
   QString                         panel_before_mask_edit_        = QStringLiteral("tone");
@@ -424,7 +454,6 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   QMetaObject::Connection presented_geometry_connection_;
   mutable std::unique_ptr<EditorScopeController> scope_controller_;
   std::unique_ptr<EditorMaskCreationAdapter>     mask_creation_;
-  QTimer*                                        admission_deadline_timer_ = nullptr;
 };
 
 }  // namespace alcedo::ui

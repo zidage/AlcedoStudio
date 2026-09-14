@@ -36,37 +36,6 @@
 
 namespace alcedo::ui {
 
-namespace {
-
-class QtEditorSessionCommandExecutor final : public alcedo::IEditorSessionCommandExecutor {
- public:
-  explicit QtEditorSessionCommandExecutor(QObject* target) : target_(target) {}
-
-  void Post(std::function<void()> task) override {
-    const QPointer<QObject> target = target_;
-    if (!target || !task) {
-      return;
-    }
-    QMetaObject::invokeMethod(
-        target,
-        [target, task = std::move(task)]() mutable {
-          if (target) {
-            task();
-          }
-        },
-        Qt::QueuedConnection);
-  }
-
-  [[nodiscard]] auto IsOwnerThread() const -> bool override {
-    return target_ && QThread::currentThread() == target_->thread();
-  }
-
- private:
-  QPointer<QObject> target_;
-};
-
-}  // namespace
-
 // ── ApplicationModuleHost ───────────────────────────────────────────────────
 
 ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver observer)
@@ -234,10 +203,13 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     auto session_thumbnail =
         std::make_shared<EditorSessionThumbnailPort>(std::move(refresh_focused_thumbnail));
 
+    // The session owner runs on a dedicated worker so parameter reduction,
+    // pacing deadlines, and serial frame consumption never wait on the GUI
+    // thread's event loop or window-update waits.
     editor_session_runtime_ = alcedo::EditorSessionRuntime::CreateWithPorts(
         session_pipeline, session_history, session_tasks, session_journal, session_scheduler,
         session_checkpoint, session_thumbnail, save_coordinator,
-        std::make_shared<QtEditorSessionCommandExecutor>(this));
+        std::make_shared<alcedo::EditorSessionThreadedCommandExecutor>());
     // Completion is forward: coordinator installs on_complete at Schedule.
     editor_session_scheduler_ = std::move(session_scheduler);
   }

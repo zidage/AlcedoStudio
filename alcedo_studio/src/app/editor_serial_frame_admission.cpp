@@ -16,7 +16,13 @@ void EditorSerialFrameAdmission::SetClock(std::shared_ptr<IEditorMonotonicClock>
 }
 
 void EditorSerialFrameAdmission::SetDeadlineHandler(DeadlineHandler handler) {
+  std::scoped_lock lock(deadline_handler_mutex_);
   deadline_handler_ = std::move(handler);
+}
+
+auto EditorSerialFrameAdmission::DeadlineHandlerSnapshot() const -> DeadlineHandler {
+  std::scoped_lock lock(deadline_handler_mutex_);
+  return deadline_handler_;
 }
 
 auto EditorSerialFrameAdmission::NowNs() const -> std::int64_t {
@@ -31,8 +37,8 @@ auto EditorSerialFrameAdmission::TryBeginCycle(bool interactive) -> bool {
     const auto wait_ns = pacing_.InteractiveWaitNs(NowNs());
     if (wait_ns > 0) {
       last_deadline_delay_ns_ = wait_ns;
-      if (deadline_handler_) {
-        deadline_handler_(wait_ns);
+      if (const auto handler = DeadlineHandlerSnapshot()) {
+        handler(wait_ns);
       }
       return false;
     }
@@ -100,8 +106,8 @@ void EditorSerialFrameAdmission::RequestInteractiveDeadlineIfNeeded() {
     return;
   }
   last_deadline_delay_ns_ = wait_ns;
-  if (deadline_handler_) {
-    deadline_handler_(wait_ns);
+  if (const auto handler = DeadlineHandlerSnapshot()) {
+    handler(wait_ns);
   }
 }
 

@@ -667,8 +667,8 @@ bool EditorNodeController::refreshFromSession() {
   version_id_                = session_->active_version_id();
   observed_history_revision_ = session_->history_revision();
   SyncLayoutKey();
-  const auto* document = session_->pipeline_document();
-  if (document == nullptr) {
+  const auto document = session_->pipeline_document();
+  if (!document) {
     ClearSnapshot();
     SetLastError({});
     emit SnapshotChanged();
@@ -763,8 +763,8 @@ void EditorNodeController::OnSessionHistoryChanged() {
   }
   submitted_identity_.reset();
   if (session_ != nullptr && draft_ != nullptr) {
-    const auto* document = session_->pipeline_document();
-    if (document != nullptr && draft_->MatchesIdentity(CurrentDraftIdentity()) &&
+    const auto document = session_->pipeline_document();
+    if (document && draft_->MatchesIdentity(CurrentDraftIdentity()) &&
         draft_->MatchesBase(*document)) {
       return;
     }
@@ -1045,8 +1045,8 @@ auto EditorNodeController::EnsureDraft() -> bool {
     SetLastError(tr("No editor session is bound"));
     return false;
   }
-  const auto* document = session_->pipeline_document();
-  if (document == nullptr) {
+  const auto document = session_->pipeline_document();
+  if (!document) {
     SetLastError(tr("No editable node graph is available"));
     return false;
   }
@@ -1123,9 +1123,11 @@ auto EditorNodeController::MaybeSubmitDraft() -> bool {
   }
   DiscardDraft();
   QString projection_error;
-  if (session_ != nullptr && session_->pipeline_document() != nullptr) {
+  const auto committed_document =
+      session_ != nullptr ? session_->pipeline_document() : nullptr;
+  if (committed_document) {
     try {
-      AdoptCommittedDocument(*session_->pipeline_document());
+      AdoptCommittedDocument(*committed_document);
     } catch (const std::exception& ex) {
       projection_error = QString::fromUtf8(ex.what());
       SetLastError(projection_error);

@@ -136,10 +136,13 @@ struct EditorSessionRuntime {
   /// One project-owned global save lock for editor checkpoints and Mini-Git
   /// recovery. Shared with EditorSaveCheckpointService and materializer ports.
   std::shared_ptr<EditorSaveCheckpointCoordinator> save_coordinator;
-  /// Executor for the thread that owns session state. Tests use the manual
-  /// implementation; the desktop host supplies its Qt queued adapter.
-  std::shared_ptr<IEditorSessionCommandExecutor>   command_executor;
+  /// Declared before `command_executor` so destruction drops the executor
+  /// reference first and the service destructor can join the session-owner
+  /// worker while every member it may touch is still alive.
   std::unique_ptr<EditorSessionService>            service;
+  /// Executor for the thread that owns session state. Tests use the manual
+  /// implementation; the desktop host supplies the threaded executor.
+  std::shared_ptr<IEditorSessionCommandExecutor>   command_executor;
 
   /// Create runtime with bootstrap ports (no DuckDB/GPU). Coordinator results
   /// are forwarded into the session service.

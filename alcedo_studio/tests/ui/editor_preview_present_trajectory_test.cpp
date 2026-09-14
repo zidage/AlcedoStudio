@@ -888,7 +888,7 @@ TEST_F(EditorPreviewPresentTrajectoryTest,
   harness.nodes.selectNode(last_grade);
   ProcessEvents(50);
   ASSERT_TRUE(session->enqueueNodeSwitchBoundary());
-  const auto* document = session->pipeline_document();
+  const auto document = session->pipeline_document();
   ASSERT_NE(document, nullptr);
   std::string target_error;
   const auto  shadows_target = alcedo::CompleteSelectedNodeParameterTarget(

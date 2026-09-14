@@ -93,6 +93,13 @@ auto RoleToLeaseLayer(FrameRole role) -> LeaseFrameLayer {
 EditorViewportRenderer::EditorViewportRenderer() = default;
 
 EditorViewportRenderer::~EditorViewportRenderer() {
+  if (consume_arm_slot_) {
+    // Clear the handoff slot only when it still names this renderer; a newer
+    // renderer may already be published for the next scene-graph pass.
+    EditorViewportRenderer* expected = this;
+    consume_arm_slot_->compare_exchange_strong(expected, nullptr,
+                                               std::memory_order_acq_rel);
+  }
   if (present_queue_) {
     // Renderer lifetime, not QWindow exposure, defines whether native target
     // requests can be serviced.
@@ -101,6 +108,18 @@ EditorViewportRenderer::~EditorViewportRenderer() {
   releaseResources();
   releaseQueuedNatives();
   adapter_.reset();
+}
+
+void EditorViewportRenderer::SetConsumeArmSlot(
+    std::shared_ptr<std::atomic<EditorViewportRenderer*>> slot) {
+  consume_arm_slot_ = std::move(slot);
+}
+
+void EditorViewportRenderer::ArmForPresent() {
+  // scheduleUpdate(): set the node's render-pending flag and request one more
+  // window frame. Called on the render thread; QWindow-side update requests
+  // are thread-safe.
+  update();
 }
 
 auto EditorViewportRenderer::layerForRole(FrameRole role) const -> LayerId {

@@ -9,6 +9,7 @@
 
 #include <QQuickRhiItem>
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -31,6 +32,15 @@ class EditorViewportRenderer final : public QQuickRhiItemRenderer {
  public:
   EditorViewportRenderer();
   ~EditorViewportRenderer() override;
+
+  /// Shared slot published by EditorViewportItem so a render-thread
+  /// presentation opportunity can reach this renderer without the GUI thread.
+  /// The destructor clears the slot with CAS when it still points at `this`.
+  void SetConsumeArmSlot(std::shared_ptr<std::atomic<EditorViewportRenderer*>> slot);
+  /// Arm the owning node's render-pending flag so the current render pass
+  /// consumes a Ready frame. Render thread only (inside beforeRendering or
+  /// the node's render path).
+  void ArmForPresent();
 
  protected:
   void initialize(QRhiCommandBuffer* command_buffer) override;
@@ -102,6 +112,7 @@ class EditorViewportRenderer final : public QQuickRhiItemRenderer {
 
   EditorViewportItem*                  item_ = nullptr;
   std::shared_ptr<DirectPresentQueue>  present_queue_;
+  std::shared_ptr<std::atomic<EditorViewportRenderer*>> consume_arm_slot_;
   std::unique_ptr<ILeaseTargetAdapter> adapter_;
   // Maps adapter_cookie (native_handle) -> last WritableTargetLease for destroy.
   std::vector<WritableTargetLease>     owned_natives_;

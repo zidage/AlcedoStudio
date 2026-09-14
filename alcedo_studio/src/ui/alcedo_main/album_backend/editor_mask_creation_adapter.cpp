@@ -233,18 +233,25 @@ void EditorMaskCreationAdapter::beginLinear() {
 
 auto EditorMaskCreationAdapter::SelectedMask() const -> const MaskModel* {
   if (session_ == nullptr || selected_mask_id_.isEmpty()) {
+    selected_mask_document_.reset();
     return nullptr;
   }
-  const auto* document = session_->pipeline_document();
-  if (document == nullptr) {
+  const auto document = session_->pipeline_document();
+  if (!document) {
+    selected_mask_document_.reset();
     return nullptr;
   }
   const auto* grade =
       dynamic_cast<const ColorGradeNodeModel*>(document->Graph().FindNode(edit_node_id_));
   if (grade == nullptr) {
+    selected_mask_document_.reset();
     return nullptr;
   }
-  return grade->FindMask(MaskIdFromQString(selected_mask_id_));
+  const auto* mask = grade->FindMask(MaskIdFromQString(selected_mask_id_));
+  // The returned pointer addresses the published snapshot; pin the snapshot
+  // so callers can dereference the mask until the next SelectedMask() call.
+  selected_mask_document_ = mask != nullptr ? std::move(document) : nullptr;
+  return mask;
 }
 
 auto EditorMaskCreationAdapter::ReferenceShorterEdgePx() const -> float {
@@ -686,8 +693,8 @@ auto EditorMaskCreationAdapter::CanAuthorMasksFor(const NodeId& grade_id) const 
       }
     }
   }
-  const auto* document = session_->pipeline_document();
-  return document != nullptr &&
+  const auto document = session_->pipeline_document();
+  return document &&
          dynamic_cast<const ColorGradeNodeModel*>(document->Graph().FindNode(grade_id)) != nullptr;
 }
 
@@ -695,8 +702,8 @@ auto EditorMaskCreationAdapter::DocumentContainsMask(const MaskId& mask_id) cons
   if (session_ == nullptr || mask_id.Empty()) {
     return false;
   }
-  const auto* document = session_->pipeline_document();
-  if (document == nullptr) {
+  const auto document = session_->pipeline_document();
+  if (!document) {
     return false;
   }
   const auto* node  = document->Graph().FindNode(edit_node_id_);

@@ -114,6 +114,23 @@ auto FormatPreviewSlowest(const PreviewRequestRecord& record) -> std::string {
         << FormatPreviewMilliseconds(
                PreviewDurationNs(record.frame_swapped_ns, record.qml_latest_write_ns));
   }
+  if (record.extra_schedule_wait_ns > 0) {
+    out << " extra_sched_ms=" << FormatPreviewMilliseconds(record.extra_schedule_wait_ns);
+  }
+  if (record.present_wake_ns > 0 && record.gui_update_ns > 0) {
+    out << " ready_to_gui_ms="
+        << FormatPreviewMilliseconds(
+               PreviewDurationNs(record.gui_update_ns, record.present_wake_ns));
+  }
+  if (record.gui_update_ns > 0 && record.imported_ns > 0) {
+    out << " gui_to_import_ms="
+        << FormatPreviewMilliseconds(PreviewDurationNs(record.imported_ns, record.gui_update_ns));
+  }
+  if (record.imported_ns > 0 && record.frame_swapped_ns > 0) {
+    out << " import_to_swap_ms="
+        << FormatPreviewMilliseconds(
+               PreviewDurationNs(record.frame_swapped_ns, record.imported_ns));
+  }
   if (record.worker_start_ns > 0 && record.scheduled_ns > 0) {
     out << " sched_ms="
         << FormatPreviewMilliseconds(PreviewDurationNs(record.worker_start_ns, record.scheduled_ns));
@@ -172,6 +189,21 @@ void PreviewWindowAccum::AddPresentedIntervals(const PreviewRequestRecord& recor
   apply_ns.push_back(record.cpu.apply_ns);
   encode_ns.push_back(record.cpu.encode_ns);
   wait_ns.push_back(record.cpu.wait_ns);
+  if (record.extra_schedule_wait_ns > 0) {
+    extra_schedule_ns.push_back(record.extra_schedule_wait_ns);
+  }
+  const auto ready_to_gui = PreviewDurationNs(record.gui_update_ns, record.present_wake_ns);
+  if (ready_to_gui > 0) {
+    ready_to_gui_ns.push_back(ready_to_gui);
+  }
+  const auto gui_to_import = PreviewDurationNs(record.imported_ns, record.gui_update_ns);
+  if (gui_to_import > 0) {
+    gui_to_import_ns.push_back(gui_to_import);
+  }
+  const auto import_to_swap = PreviewDurationNs(record.frame_swapped_ns, record.imported_ns);
+  if (import_to_swap > 0) {
+    import_to_swap_ns.push_back(import_to_swap);
+  }
   if (interval_ns > slowest_e2e_ns) {
     slowest_e2e_ns = interval_ns;
     slowest        = record;
@@ -201,6 +233,23 @@ auto FormatPreviewWindow(const PreviewWindowAccum& window, const std::uint64_t l
   out << " apply_ms p50=" << FormatPreviewMilliseconds(PreviewQuantileNs(window.apply_ns, 0.50))
       << " encode_ms p50=" << FormatPreviewMilliseconds(PreviewQuantileNs(window.encode_ns, 0.50))
       << " wait_ms p50=" << FormatPreviewMilliseconds(PreviewQuantileNs(window.wait_ns, 0.50));
+  if (!window.extra_schedule_ns.empty()) {
+    out << " extra_sched_ms p50="
+        << FormatPreviewMilliseconds(PreviewQuantileNs(window.extra_schedule_ns, 0.50))
+        << " max=" << FormatPreviewMilliseconds(PreviewMaxNs(window.extra_schedule_ns));
+  }
+  if (!window.ready_to_gui_ns.empty()) {
+    out << " ready_to_gui_ms p50="
+        << FormatPreviewMilliseconds(PreviewQuantileNs(window.ready_to_gui_ns, 0.50));
+  }
+  if (!window.gui_to_import_ns.empty()) {
+    out << " gui_to_import_ms p50="
+        << FormatPreviewMilliseconds(PreviewQuantileNs(window.gui_to_import_ns, 0.50));
+  }
+  if (!window.import_to_swap_ns.empty()) {
+    out << " import_to_swap_ms p50="
+        << FormatPreviewMilliseconds(PreviewQuantileNs(window.import_to_swap_ns, 0.50));
+  }
   if (window.slowest.has_value()) {
     out << " | " << FormatPreviewSlowest(*window.slowest);
   }

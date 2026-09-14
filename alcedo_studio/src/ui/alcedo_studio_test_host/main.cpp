@@ -12,10 +12,13 @@
 #include <QQuickWindow>
 #include <QSGRendererInterface>
 #include <QTimer>
+#include <QuickQanava>
 #include <algorithm>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -31,6 +34,9 @@
 #include "ui/editor_rhi/editor_startup.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
 #include "utils/clock/time_provider.hpp"
+#include "utils/diagnostics/preview_performance.hpp"
+
+Q_IMPORT_QML_PLUGIN(QuickQanavaPlugin)
 
 namespace {
 
@@ -223,6 +229,12 @@ int main(int argc, char* argv[]) {
 
   QApplication app(argc, argv);
   QQuickStyle::setStyle("Basic");
+  if (!qEnvironmentVariableIsEmpty("ALCEDO_PREVIEW_PERF_LOG") ||
+      !qEnvironmentVariableIsEmpty("ALCEDO_TEST_FRAME_TRACE")) {
+    alcedo::diag::PreviewPerformance::Initialize();
+    QObject::connect(&app, &QCoreApplication::aboutToQuit,
+                     [] { alcedo::diag::PreviewPerformance::Shutdown(); });
+  }
 
   const auto startup = alcedo::editor_rhi::ApplyEditorBackendBeforeWindow(*editor_backend);
   if (!startup.ok) {
@@ -243,6 +255,7 @@ int main(int argc, char* argv[]) {
 
   QQmlApplicationEngine engine;
   engine.addImportPath(QStringLiteral("qrc:/"));
+  QuickQanava::initialize(&engine);
   language_manager.AttachEngine(&engine);
   app_modules.AttachQmlEngine(&engine);
   engine.rootContext()->setContextProperty("appModules", &app_modules);
@@ -270,6 +283,68 @@ int main(int argc, char* argv[]) {
     return 1;
   }
   alcedo::editor_rhi::BindEditorGraphicsToWindow(window, startup);
+  // Optional diagnostic capture for the complete UI. Signal timestamps are
+  // confined to the render thread; completed request records use the existing
+  // background diagnostic writer and never write files from the input handler.
+  if (!qEnvironmentVariableIsEmpty("ALCEDO_TEST_FRAME_TRACE")) {
+    auto output = std::make_shared<std::ofstream>(
+        alcedo::ui::album_util::InputToPath(qEnvironmentVariable("ALCEDO_TEST_FRAME_TRACE"))
+            .value());
+    if (!output->is_open()) {
+      qCritical("Could not open ALCEDO_TEST_FRAME_TRACE for writing.");
+      return 1;
+    }
+    *output << "id,input,submit,ready,wake,gui,consume,import,swap\n";
+    alcedo::diag::PreviewPerformance::InstallRecordSink([output](const auto& record) {
+      *output << record.request_id << ',' << record.latest_accepted_ns << ',' << record.submit_ns
+              << ',' << record.producer_ready_ns << ',' << record.present_wake_ns << ','
+              << record.gui_update_ns << ',' << record.consume_begin_ns << ',' << record.imported_ns
+              << ',' << record.frame_swapped_ns << '\n';
+      output->flush();
+    });
+    struct FrameTimes {
+      std::int64_t begin        = 0;
+      std::int64_t sync_begin   = 0;
+      std::int64_t sync_end     = 0;
+      std::int64_t render_begin = 0;
+      std::int64_t render_end   = 0;
+    };
+    const auto times = std::make_shared<FrameTimes>();
+    QObject::connect(
+        window, &QQuickWindow::beforeFrameBegin, window,
+        [times] {
+          *times       = {};
+          times->begin = alcedo::diag::PreviewPerformance::NowNs();
+        },
+        Qt::DirectConnection);
+    QObject::connect(
+        window, &QQuickWindow::beforeSynchronizing, window,
+        [times] { times->sync_begin = alcedo::diag::PreviewPerformance::NowNs(); },
+        Qt::DirectConnection);
+    QObject::connect(
+        window, &QQuickWindow::afterSynchronizing, window,
+        [times] { times->sync_end = alcedo::diag::PreviewPerformance::NowNs(); },
+        Qt::DirectConnection);
+    QObject::connect(
+        window, &QQuickWindow::beforeRendering, window,
+        [times] { times->render_begin = alcedo::diag::PreviewPerformance::NowNs(); },
+        Qt::DirectConnection);
+    QObject::connect(
+        window, &QQuickWindow::afterRendering, window,
+        [times] { times->render_end = alcedo::diag::PreviewPerformance::NowNs(); },
+        Qt::DirectConnection);
+    QObject::connect(
+        window, &QQuickWindow::afterFrameEnd, window,
+        [times] {
+          qInfo().nospace() << "[FrameTrace] begin=" << times->begin
+                            << " sync_begin=" << times->sync_begin
+                            << " sync_end=" << times->sync_end
+                            << " render_begin=" << times->render_begin
+                            << " render_end=" << times->render_end
+                            << " end=" << alcedo::diag::PreviewPerformance::NowNs();
+        },
+        Qt::DirectConnection);
+  }
   window->show();
   window->requestActivate();
 

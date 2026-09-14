@@ -715,6 +715,8 @@ target_include_directories(alcedo_studio_test_host
 target_link_libraries(alcedo_studio_test_host
     PRIVATE
         AlbumBackendLib
+        QuickQanava
+        QuickQanavaplugin
         AlcedoMainQml
         AlcedoMainQmlplugin
         UiLocalization

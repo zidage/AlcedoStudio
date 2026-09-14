@@ -152,6 +152,8 @@ auto EditorActionPolicy::ActionForCommand(EditorSessionCommandKind kind)
       return EditorAction::SelectImage;
     case EditorSessionCommandKind::CloseEditor:
       return EditorAction::CloseEditor;
+    case EditorSessionCommandKind::PersistCurrent:
+      return std::nullopt;
     case EditorSessionCommandKind::Shutdown:
       return EditorAction::Shutdown;
     case EditorSessionCommandKind::PreviewAdjustment:

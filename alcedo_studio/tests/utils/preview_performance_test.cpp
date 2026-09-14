@@ -234,6 +234,7 @@ TEST_F(PreviewPerformanceTest, PresentedFrameTimingMatchesConsumedRequest) {
   EXPECT_EQ(records[0].input_sequence_id, 3u);
   EXPECT_EQ(records[0].qt_frame, 1u);
   EXPECT_EQ(records[0].outcome, diag::PreviewTerminalOutcome::Presented);
+  EXPECT_EQ(records[0].gui_update_ns, 30);
   EXPECT_EQ(records[1].request_id, 22u);
   EXPECT_EQ(records[1].qt_frame, 2u);
   EXPECT_NE(records[0].qt_frame, records[1].qt_frame);
@@ -686,6 +687,27 @@ TEST_F(PreviewPerformanceTest, ResourceSnapshotReportsAggregatedPoolTotals) {
   EXPECT_EQ(records[0].resources.texture_entry_count, 2u);
   EXPECT_EQ(records[0].resources.texture_allocation_count, 2u);
   EXPECT_EQ(records[0].resources.texture_peak_used_bytes, 4096u);
+}
+
+TEST_F(PreviewPerformanceTest, ExtraScheduleWaitIsSubmitMinusStartable) {
+  EnableDetail();
+  std::vector<diag::PreviewRequestRecord> records;
+  diag::PreviewPerformance::InstallRecordSink(
+      [&](const diag::PreviewRequestRecord& record) { records.push_back(record); });
+
+  clock_->SetNs(50'000'000);
+  diag::PreviewPerformance::NoteSubmit(91, diag::PreviewFrameRole::InteractivePrimary,
+                                       diag::PreviewQuality::Interactive, "InteractiveAdjustment",
+                                       true);
+  diag::PreviewPerformance::NoteInputTimes(91, 4, 10'000'000, 12'000'000);
+  diag::PreviewPerformance::NoteScheduleWait(91, 16'000'000);
+  clock_->SetNs(51'000'000);
+  diag::PreviewPerformance::NoteDisplayed(91);
+  diag::PreviewPerformance::FlushWriter();
+
+  ASSERT_EQ(records.size(), 1u);
+  EXPECT_EQ(records[0].startable_ns, 16'000'000);
+  EXPECT_EQ(records[0].extra_schedule_wait_ns, 34'000'000);
 }
 
 }  // namespace
