@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <queue>
 #include <vector>
 
@@ -22,7 +23,9 @@ namespace alcedo {
  * Interactive 16 ms cadence, and owner work deferred until the inflight frame
  * is owner-safe. Does not own the pending-input queue, history, or coordinator.
  *
- * @thread_safety Session owner thread only. Not internally synchronized.
+ * @thread_safety Session owner thread only for cycle/deferred state. The
+ * deadline-handler slot itself is mutex-protected so the facade can rebind it
+ * from the GUI thread while the owner arms deadlines concurrently.
  */
 class EditorSerialFrameAdmission {
  public:
@@ -33,6 +36,10 @@ class EditorSerialFrameAdmission {
 
   void SetClock(std::shared_ptr<IEditorMonotonicClock> clock);
   void SetDeadlineHandler(DeadlineHandler handler);
+
+  /// Copy of the installed handler. Owner-side callers use this so the
+  /// std::function is never invoked while a GUI rebind mutates the slot.
+  [[nodiscard]] auto DeadlineHandlerSnapshot() const -> DeadlineHandler;
 
   [[nodiscard]] auto clock() const -> const std::shared_ptr<IEditorMonotonicClock>& {
     return clock_;
@@ -94,9 +101,14 @@ class EditorSerialFrameAdmission {
   [[nodiscard]] auto last_deadline_delay_ns() const -> std::int64_t {
     return last_deadline_delay_ns_;
   }
+  /// Zero when no Interactive cadence is armed. Same clock as @ref NowNs.
+  [[nodiscard]] auto next_interactive_eligible_ns() const -> std::int64_t {
+    return pacing_.next_interactive_eligible_ns().value_or(0);
+  }
 
  private:
   std::shared_ptr<IEditorMonotonicClock> clock_;
+  mutable std::mutex                     deadline_handler_mutex_;
   DeadlineHandler                        deadline_handler_;
   EditorInteractivePacing                pacing_;
   std::queue<DeferredOwnerWork>          deferred_;

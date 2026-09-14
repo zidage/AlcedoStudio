@@ -7,6 +7,7 @@
 #include <QDebug>
 #include <QMetaObject>
 #include <QThread>
+#include <algorithm>
 #include <chrono>
 #include <utility>
 
@@ -628,6 +629,12 @@ void DirectFrameSink::ClearPendingImportedFrames() {
   for (auto& slot : pending_imported_) {
     slot.reset();
   }
+}
+
+auto DirectFrameSink::HasPendingImportedFrame() const -> bool {
+  std::lock_guard lock(mutex_);
+  return std::any_of(pending_imported_.begin(), pending_imported_.end(),
+                     [](const auto& slot) { return slot.has_value(); });
 }
 
 auto DirectFrameSink::GetWidth() const -> int {

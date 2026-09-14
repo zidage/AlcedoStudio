@@ -72,8 +72,9 @@ class DocumentSessionBackend final : public IEditorSessionBackend {
   [[nodiscard]] auto active() const -> bool override { return true; }
   [[nodiscard]] auto has_image() const -> bool override { return has_image_; }
   [[nodiscard]] auto last_error() const -> std::string override { return {}; }
-  [[nodiscard]] auto pipeline_document() const -> const PipelineDocument* override {
-    return &document_;
+  [[nodiscard]] auto pipeline_document() const
+      -> std::shared_ptr<const PipelineDocument> override {
+    return {&document_, [](const PipelineDocument*) {}};
   }
   [[nodiscard]] auto history_revision() const -> std::uint64_t override {
     return history_revision_;

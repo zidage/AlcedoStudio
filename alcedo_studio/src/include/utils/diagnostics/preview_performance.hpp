@@ -86,6 +86,10 @@ class PreviewPerformance {
                              std::int64_t first_accepted_ns, std::int64_t latest_accepted_ns,
                              std::int64_t qml_first_write_ns = 0,
                              std::int64_t qml_latest_write_ns = 0);
+  /// extra_schedule_wait = submit - max(input receive, prior live-pipeline
+  /// release, Interactive pacing eligibility). Distinguishes required waits
+  /// from owner-queue delay.
+  static void NoteScheduleWait(std::uint64_t request_id, std::int64_t startable_ns);
   static void NoteScheduled(std::uint64_t request_id);
   static void NoteWorkerStart(std::uint64_t request_id);
   static void NoteSinkSubmit(std::uint64_t request_id);

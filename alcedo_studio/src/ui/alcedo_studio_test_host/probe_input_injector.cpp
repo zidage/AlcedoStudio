@@ -25,10 +25,10 @@ namespace {
 
 constexpr int kDefaultDragSteps = 8;
 
-auto NextSyntheticInputTimestamp() -> quint64 {
+auto          NextSyntheticInputTimestamp() -> quint64 {
   static quint64 last_timestamp = 0;
   const auto     wall_timestamp = static_cast<quint64>(QDateTime::currentMSecsSinceEpoch());
-  last_timestamp                = std::max(last_timestamp + 1, wall_timestamp);
+  last_timestamp = std::max(last_timestamp + 1, wall_timestamp);
   return last_timestamp;
 }
 
@@ -36,6 +36,30 @@ auto NextSyntheticInputTimestamp() -> quint64 {
 
 ProbeInputInjector::ProbeInputInjector(ProbeItemTree* tree, QQuickWindow* window)
     : tree_(tree), window_(window) {}
+
+auto ProbeInputInjector::HandlePointer(const QJsonObject& request) -> QJsonObject {
+  const QString phase   = request.value(QStringLiteral("phase")).toString();
+  const bool    press   = phase == QStringLiteral("press");
+  const bool    release = phase == QStringLiteral("release");
+  if (!window_ || (!press && !release && phase != QStringLiteral("move")) ||
+      !request.value(QStringLiteral("x")).isDouble() ||
+      !request.value(QStringLiteral("y")).isDouble()) {
+    return probe_json::ErrorResponse(
+        request, QStringLiteral("invalid_pointer"),
+        QStringLiteral("pointer requires a window, press/move/release, and numeric x/y."));
+  }
+  const QPointF position(request.value(QStringLiteral("x")).toDouble(),
+                         request.value(QStringLiteral("y")).toDouble());
+  QMouseEvent   event(press     ? QEvent::MouseButtonPress
+                      : release ? QEvent::MouseButtonRelease
+                                : QEvent::MouseMove,
+                    position, position, window_->mapToGlobal(position),
+                    press || release ? Qt::LeftButton : Qt::NoButton,
+                    release ? Qt::NoButton : Qt::LeftButton, Qt::NoModifier);
+  event.setTimestamp(NextSyntheticInputTimestamp());
+  QCoreApplication::sendEvent(window_, &event);
+  return probe_json::OkStatusResponse(request);
+}
 
 auto ProbeInputInjector::HandleClick(const QJsonObject& request, ClickKind kind) -> QJsonObject {
   if (window_ == nullptr || tree_ == nullptr) {

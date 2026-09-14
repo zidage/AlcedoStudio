@@ -176,6 +176,9 @@ class DirectPresentQueue final {
   [[nodiscard]] auto SlotAt(int index) const -> std::optional<SlotSnapshot>;
   [[nodiscard]] auto HasWritableSlot(int width, int height, std::uint64_t session_epoch,
                                      std::uint64_t image_identity) const -> bool;
+  /// True when a Ready slot is waiting, or a size request still needs a
+  /// render-thread turn to create the native resource.
+  [[nodiscard]] auto HasReadyFrame() const -> bool;
 
  private:
   struct Slot {

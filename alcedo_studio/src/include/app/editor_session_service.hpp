@@ -57,6 +57,10 @@ class IEditorSessionBackend {
   virtual ~IEditorSessionBackend() = default;
 
   using ChangeNotifier             = std::function<void()>;
+  /// Optional: notified when render-busy or inflight reason changes. Does not
+  /// replace SetChangeNotifier and must not be used for identity, errors, or
+  /// authoritative panel values.
+  using RenderProgressObserver     = std::function<void()>;
   /// Optional: notified for every typed session result that crosses Emit /
   /// NotifyResult. Phase 7A R4 uses this so the controller can publish a
   /// correlated terminal HistoryOperationEvent after an async save checkpoint
@@ -93,21 +97,33 @@ class IEditorSessionBackend {
   /// Lightweight active Version identity for session/layout comparisons.
   [[nodiscard]] virtual auto active_version_id() const -> version_ref_id_t { return {}; }
   [[nodiscard]] virtual auto history_snapshot() -> EditorHistorySnapshot { return {}; }
-  /// Live PipelineDocument for the Nodes-page projection. Null when the backend
-  /// has no loaded image document. Default fakes return nullptr.
-  [[nodiscard]] virtual auto pipeline_document() const -> const PipelineDocument* {
-    return nullptr;
+  /// Immutable PipelineDocument snapshot for GUI projections (Nodes page,
+  /// typed write targets). The owner publishes a fresh clone before every
+  /// change notification so GUI readers never dereference the live document
+  /// while the session thread mutates it. Empty when no image document is
+  /// loaded. Default fakes return null.
+  [[nodiscard]] virtual auto pipeline_document() const
+      -> std::shared_ptr<const PipelineDocument> {
+    return {};
   }
 
   /// Optional: notified after state/identity changes from async results.
   virtual void SetChangeNotifier(ChangeNotifier notifier) {
+    std::scoped_lock lock(observer_mutex_);
     change_notifier_ = std::move(notifier);
+  }
+
+  /// Optional: notified when coordinator busy/inflight reason changes.
+  virtual void SetRenderProgressObserver(RenderProgressObserver observer) {
+    std::scoped_lock lock(observer_mutex_);
+    render_progress_observer_ = std::move(observer);
   }
 
   /// Optional: notified for each typed EditorSessionResult published by the
   /// backend. Production installs this from EditorSessionController. Fakes may
   /// call NotifyResult from CompletePendingVersionOp-style helpers.
   virtual void SetResultObserver(ResultObserver observer) {
+    std::scoped_lock lock(observer_mutex_);
     result_observer_ = std::move(observer);
   }
 
@@ -388,8 +404,13 @@ class IEditorSessionBackend {
 
  protected:
   void NotifyChange() {
-    if (change_notifier_) {
-      change_notifier_();
+    ChangeNotifier notifier;
+    {
+      std::scoped_lock lock(observer_mutex_);
+      notifier = change_notifier_;
+    }
+    if (notifier) {
+      notifier();
     }
   }
 
@@ -397,13 +418,33 @@ class IEditorSessionBackend {
   /// NotifyChange — callers that also mutate visible state should NotifyChange
   /// separately (or go through EditorSessionService::Emit).
   void NotifyResult(const EditorSessionResult& result) {
-    if (result_observer_) {
-      result_observer_(result);
+    ResultObserver observer;
+    {
+      std::scoped_lock lock(observer_mutex_);
+      observer = result_observer_;
+    }
+    if (observer) {
+      observer(result);
     }
   }
 
-  ChangeNotifier change_notifier_;
-  ResultObserver result_observer_;
+  void NotifyRenderProgress() {
+    RenderProgressObserver observer;
+    {
+      std::scoped_lock lock(observer_mutex_);
+      observer = render_progress_observer_;
+    }
+    if (observer) {
+      observer();
+    }
+  }
+
+  // Guards the observer slots below: they are installed from the GUI thread
+  // and invoked from the session owner thread.
+  mutable std::mutex     observer_mutex_;
+  ChangeNotifier         change_notifier_;
+  RenderProgressObserver render_progress_observer_;
+  ResultObserver         result_observer_;
 };
 
 /// Thin facade that owns five focused collaborators and routes typed intents.
@@ -432,6 +473,7 @@ class EditorSessionService final : public IEditorSessionBackend {
 
   void               SetResultObserver(ResultObserver observer) override;
   void               SetChangeNotifier(ChangeNotifier notifier) override;
+  void               SetRenderProgressObserver(RenderProgressObserver observer) override;
   void               SetActionAvailabilityObserver(ActionAvailabilityObserver observer) override;
 
   [[nodiscard]] auto state() const -> EditorSessionState override { return lifecycle_.state(); }
@@ -442,10 +484,12 @@ class EditorSessionService final : public IEditorSessionBackend {
     return lifecycle_.active_image_load_request();
   }
   [[nodiscard]] auto action_availability() const -> EditorActionAvailability override {
+    std::scoped_lock lock(publish_mutex_);
     return published_availability_;
   }
   [[nodiscard]] auto pending_presentation_target() const
       -> std::optional<EditorPendingPresentationTarget> override {
+    std::scoped_lock lock(publish_mutex_);
     return pending_presentation_target_;
   }
   void SetCopiedPackageAvailable(bool available) override;
@@ -468,7 +512,8 @@ class EditorSessionService final : public IEditorSessionBackend {
   }
   [[nodiscard]] auto active_version_id() const -> version_ref_id_t override;
   [[nodiscard]] auto history_snapshot() -> EditorHistorySnapshot override;
-  [[nodiscard]] auto pipeline_document() const -> const PipelineDocument* override;
+  [[nodiscard]] auto pipeline_document() const
+      -> std::shared_ptr<const PipelineDocument> override;
   [[nodiscard]] auto presentation_sink_id() const -> PresentationSinkId {
     return render_.presentation_sink_id();
   }
@@ -504,9 +549,11 @@ class EditorSessionService final : public IEditorSessionBackend {
       -> EditorSessionResult override;
   auto               Close(bool persist_changes) -> EditorSessionResult override;
   [[nodiscard]] auto render_busy() const -> bool override { return render_.render_busy(); }
-  /// Phase 7A: true when the session is awaiting save-failure recovery.
+  /// Phase 7A: true when the session is awaiting save-failure recovery. The
+  /// value mirrors owner state refreshed on every availability publish, so a
+  /// GUI read never dereferences the navigation controller off-thread.
   [[nodiscard]] auto has_pending_recovery() const -> bool override {
-    return navigation_.has_pending_recovery();
+    return pending_recovery_published_.load(std::memory_order_acquire);
   }
   [[nodiscard]] auto has_unmaterialized_changes() -> bool override;
   auto               Patch(EditorAdjustmentPatch patch) -> EditorSessionResult override;
@@ -518,20 +565,28 @@ class EditorSessionService final : public IEditorSessionBackend {
   [[nodiscard]] auto mask_creation_commands_pending() const -> bool override;
   [[nodiscard]] auto PeekPendingMaskCommands() const
       -> std::vector<EditorMaskCreationCommand> override;
+  // Mask-creation reads serve the GUI: they return the last owner-published
+  // read state, never the live controller (whose source accessor dereferences
+  // the bound PipelineDocument).
   [[nodiscard]] auto mask_creation_node_id() const -> NodeId override {
-    return mask_creation_.node_id();
+    std::scoped_lock lock(publish_mutex_);
+    return mask_read_state_.node_id;
   }
   [[nodiscard]] auto mask_creation_mask_id() const -> MaskId override {
-    return mask_creation_.selected_mask_id();
+    std::scoped_lock lock(publish_mutex_);
+    return mask_read_state_.mask_id;
   }
   [[nodiscard]] auto mask_creation_state() const -> EditorMaskCreationState override {
-    return mask_creation_.state();
+    std::scoped_lock lock(publish_mutex_);
+    return mask_read_state_.state;
   }
   [[nodiscard]] auto mask_creation_source() const -> std::optional<MaskSource> override {
-    return mask_creation_.CurrentSource();
+    std::scoped_lock lock(publish_mutex_);
+    return mask_read_state_.source;
   }
   [[nodiscard]] auto mask_creation_last_removed_mask_id() const -> MaskId override {
-    return mask_creation_.last_removed_mask_id();
+    std::scoped_lock lock(publish_mutex_);
+    return mask_read_state_.last_removed_mask_id;
   }
   auto SetAdjustmentProjectionNode(const NodeId& node_id) -> EditorSessionResult override;
   [[nodiscard]] auto PeekPendingInput() const -> EditorPendingInputView override;
@@ -578,6 +633,13 @@ class EditorSessionService final : public IEditorSessionBackend {
   /// result is available immediately for owner-thread callers and is a queued
   /// acknowledgement for callers from other threads.
   auto SubmitCommand(EditorSessionCommand command, CommandReducer reducer) -> EditorSessionResult;
+  /// True only on the session owner thread while a command reduction is in
+  /// flight. Public entry points use this instead of reading `reducing_command_`
+  /// directly so a GUI caller can never take the nested-direct path and run
+  /// reducer bodies off the owner thread.
+  [[nodiscard]] auto InOwnerReduction() const -> bool {
+    return command_queue_.IsOwnerThread() && reducing_command_;
+  }
   void BeginPublication();
   void EndPublication();
   void PostCompletion(EditorSessionCompletion completion);
@@ -641,6 +703,24 @@ class EditorSessionService final : public IEditorSessionBackend {
   auto PublishTypedNodeHistorySuccess(std::string message) -> EditorSessionResult;
 
   void RequestPendingInputConsume();
+  /// Serial consume body: wraps TryConsumePendingInput in the publication
+  /// guard. Runs on the session owner thread only; used by both the immediate
+  /// consume wakeup and the pacing-deadline delivery.
+  void ConsumePendingInputOnOwner();
+  /// Session-owner deadline delivery: schedules ConsumePendingInputOnOwner on
+  /// the command executor after `delay_ns`. Installed as the admission's
+  /// default deadline handler so pacing never waits on a GUI-thread timer.
+  void ScheduleDeadlineConsume(std::int64_t delay_ns);
+  /// Clone the live PipelineDocument into `published_document_` for GUI
+  /// readers. Owner-thread only; called before every change notification so
+  /// the snapshot never lags the NotifyChange that follows it.
+  void PublishDocumentSnapshot();
+  /// Copy the mask-creation controller's observable state into
+  /// `mask_read_state_`. Owner-thread only; called after every mask command
+  /// batch and abort while the controller is still bound to a live document.
+  void RefreshMaskCreationReadState();
+  void PublishRenderProgressIfChanged();
+  void NoteExtraScheduleWait(const EditorPendingSequence& sequence, std::uint64_t request_id);
   void FinishSerialFrameIfNeeded(const EditorRenderResult& render_result);
   auto DeferIfLiveOwnershipHeld(std::function<EditorSessionResult()> retry, std::string message)
       -> std::optional<EditorSessionResult>;
@@ -660,6 +740,16 @@ class EditorSessionService final : public IEditorSessionBackend {
     std::string success_message;
   };
 
+  /// Owner-published mask-creation read state. GUI getters return this copy;
+  /// the live controller is only touched on the session thread.
+  struct MaskCreationReadState {
+    EditorMaskCreationState   state = EditorMaskCreationState::Inactive;
+    NodeId                    node_id;
+    MaskId                    mask_id;
+    std::optional<MaskSource> source;
+    MaskId                    last_removed_mask_id;
+  };
+
   Dependencies                                   dependencies_;
   EditorSessionCommandQueue                      command_queue_;
   EditorSessionNavigationState                   navigation_state_;
@@ -677,15 +767,32 @@ class EditorSessionService final : public IEditorSessionBackend {
   std::uint64_t                                  current_operation_id_ = 0;
   std::size_t                                    publication_depth_    = 0;
   bool                                           publication_dirty_    = false;
+  std::atomic<bool>                              consume_wakeup_posted_{false};
+  bool                                           last_published_render_busy_ = false;
+  std::atomic<std::int64_t>                      last_live_pipeline_release_ns_{0};
   std::vector<EditorSessionResult>               results_;
   mutable std::mutex                             results_mutex_;
   std::optional<PendingHistoryCheckpoint>        pending_history_checkpoint_;
   std::vector<EditorOperationLease>              active_leases_;
+  /// Guards the GUI-facing published fields below. The owner writes them
+  /// during publish; GUI getters take the same lock for a consistent read.
+  mutable std::mutex                             publish_mutex_;
   EditorActionAvailability                       published_availability_{};
   ActionAvailabilityObserver                     action_availability_observer_;
   std::optional<EditorPendingPresentationTarget> pending_presentation_target_;
+  MaskCreationReadState                          mask_read_state_;
   bool                                           package_available_ = false;
   EditorBackgroundActionRestrictions             background_restrictions_{};
+  std::atomic<bool>                              pending_recovery_published_{false};
+  /// Owner-published immutable document snapshot. `pipeline_document()`
+  /// returns this shared snapshot so GUI readers never touch the live
+  /// PipelineDocument while the session thread mutates it under the render
+  /// lock. Replaced before each change notification.
+  mutable std::mutex                             document_snapshot_mutex_;
+  std::shared_ptr<const PipelineDocument>        published_document_;
+  /// Installed on `serial_admission_` so an empty SetAdmissionDeadlineHandler
+  /// restores owner-thread deadline delivery instead of dropping wakeups.
+  EditorSerialFrameAdmission::DeadlineHandler    default_deadline_handler_;
   std::atomic<std::uint64_t>                     history_revision_{0};
 };
 

@@ -36,9 +36,9 @@ void NoteRenderE2eProducerReady(std::uint64_t request_id);
 /// (requestPresentUpdate posted from the producer path).
 void NoteRenderE2ePresentWake(std::uint64_t request_id);
 
-/// GUI thread executed the coalesced update()/window->requestUpdate() for
-/// pending Ready frames. No request id: stamps every sample that already has
-/// present_wake and still lacks gui_update.
+/// GUI thread executed the coalesced QQuickItem::update() for pending Ready
+/// frames. No request id: stamps every sample that already has present_wake
+/// and still lacks gui_update.
 void NoteRenderE2eGuiUpdate();
 
 /// Render-thread QQuickRhiItemRenderer::render() entry. Stamps every sample

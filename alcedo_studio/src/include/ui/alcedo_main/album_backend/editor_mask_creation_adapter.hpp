@@ -10,10 +10,12 @@
 #include <QRectF>
 #include <QString>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <vector>
 
 #include "app/editor_mask_creation_controller.hpp"
+#include "edit/graph/pipeline_document.hpp"
 #include "edit/mask/mask_model.hpp"
 #include "ui/edit_viewer/mask_edit_geometry.hpp"
 #include "ui/edit_viewer/mask_overlay_geometry.hpp"
@@ -185,6 +187,9 @@ class EditorMaskCreationAdapter : public QObject {
   /// Mapping inputs of the last PublishOverlay; compared against the live
   /// maskEditMappingIdentity so identical geometry never republishes.
   MaskEditMappingIdentity                           published_mapping_identity_{};
+  /// Pins the published document snapshot backing the last SelectedMask()
+  /// pointer so the MaskModel address stays valid between adapter calls.
+  mutable std::shared_ptr<const alcedo::PipelineDocument> selected_mask_document_;
   QString                                           tool_kind_;
   QString                                           selected_mask_id_;
   NodeId                                            edit_node_id_;

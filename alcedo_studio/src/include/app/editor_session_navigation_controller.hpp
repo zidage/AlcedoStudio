@@ -181,6 +181,11 @@ class EditorSessionNavigationController final {
   /// Post render-idle completion back onto the session owner thread.
   void               SetOwnerPoster(std::function<void(std::function<void()>)> poster);
 
+  /// Inject the session-owner thread check. When unset, the assert falls back
+  /// to the construction thread (legacy single-thread use).
+  using OwnerCheck = std::function<bool()>;
+  void               SetOwnerCheck(OwnerCheck check) { owner_check_ = std::move(check); }
+
   /// Phase 7A: true when the session is in the RetainedImageFailure state and
   /// a pending recovery target exists (save failure with a pending navigation).
   [[nodiscard]] auto has_pending_recovery() const -> bool;
@@ -236,7 +241,9 @@ class EditorSessionNavigationController final {
   /// checkpoint failure. Callers are already on the session owner thread.
   void RetainPendingFailure(PendingEditorAction pending, std::string message);
 
-  void AssertOwnerThread() const { assert(std::this_thread::get_id() == owner_thread_); }
+  void AssertOwnerThread() const {
+    assert(owner_check_ ? owner_check_() : std::this_thread::get_id() == owner_thread_);
+  }
 
   EditorSessionLifecycle&        lifecycle_;
   EditorSaveCheckpointService&   save_service_;
@@ -246,6 +253,7 @@ class EditorSessionNavigationController final {
   IEditorHistoryPort*            history_;
   EditorSessionNavigationState   owned_state_;
   EditorSessionNavigationState*  state_;
+  OwnerCheck                     owner_check_;
   std::thread::id                owner_thread_;
   std::uint64_t                  operation_id_ = 0;
   NavigationCompletionNotifier   completion_notifier_;

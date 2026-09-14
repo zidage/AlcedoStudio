@@ -79,49 +79,15 @@ EditorSessionController::EditorSessionController(alcedo::IEditorSessionBackend* 
     ApplyActionAvailability();
   }
   InstallBackendNotifier();
-  BindAdmissionDeadline();
 }
 
 EditorSessionController::~EditorSessionController() {
   if (session_backend_) {
     session_backend_->SetChangeNotifier({});
+    session_backend_->SetRenderProgressObserver({});
     session_backend_->SetResultObserver({});
     session_backend_->SetActionAvailabilityObserver({});
-    session_backend_->SetAdmissionDeadlineHandler({});
   }
-}
-
-void EditorSessionController::BindAdmissionDeadline() {
-  if (!session_backend_) {
-    return;
-  }
-  if (admission_deadline_timer_ == nullptr) {
-    admission_deadline_timer_ = new QTimer(this);
-    admission_deadline_timer_->setSingleShot(true);
-    connect(admission_deadline_timer_, &QTimer::timeout, this, [this] {
-      if (session_backend_) {
-        session_backend_->TryConsumePendingInput();
-      }
-    });
-  }
-  QPointer<EditorSessionController> self(this);
-  session_backend_->SetAdmissionDeadlineHandler([self](std::int64_t delay_ns) {
-    if (!self || self->admission_deadline_timer_ == nullptr) {
-      return;
-    }
-    auto* timer = self->admission_deadline_timer_;
-    timer->stop();
-    if (delay_ns <= 0) {
-      QTimer::singleShot(0, self.data(), [self] {
-        if (self && self->session_backend_) {
-          self->session_backend_->TryConsumePendingInput();
-        }
-      });
-      return;
-    }
-    const int delay_ms = static_cast<int>((delay_ns + 999999) / 1000000);
-    timer->start(std::max(1, delay_ms));
-  });
 }
 
 void EditorSessionController::InstallBackendNotifier() {
@@ -142,6 +108,23 @@ void EditorSessionController::InstallBackendNotifier() {
         [self] {
           if (self) {
             self->OnBackendChanged();
+          }
+        },
+        Qt::QueuedConnection);
+  });
+  session_backend_->SetRenderProgressObserver([self] {
+    if (!self) {
+      return;
+    }
+    if (QThread::currentThread() == self->thread()) {
+      self->OnRenderProgressChanged();
+      return;
+    }
+    QMetaObject::invokeMethod(
+        self,
+        [self] {
+          if (self) {
+            self->OnRenderProgressChanged();
           }
         },
         Qt::QueuedConnection);
@@ -193,16 +176,15 @@ void EditorSessionController::SetSessionBackend(alcedo::IEditorSessionBackend* s
   }
   if (session_backend_) {
     session_backend_->SetChangeNotifier({});
+    session_backend_->SetRenderProgressObserver({});
     session_backend_->SetResultObserver({});
     session_backend_->SetActionAvailabilityObserver({});
-    session_backend_->SetAdmissionDeadlineHandler({});
   }
   session_backend_ = session_backend;
   if (session_backend_) {
     session_backend_->SetGeometryOverlayActive(active_adjustment_panel_ ==
                                                QLatin1String("geometry"));
     InstallBackendNotifier();
-    BindAdmissionDeadline();
     SyncIdentityFromBackend();
     ApplyActionAvailability();
   } else {
@@ -272,9 +254,11 @@ void EditorSessionController::OnBackendChanged() {
   SyncViewportIdentity();
   ApplyActionAvailability();
 
-  // Interactive submit suppresses AdjustmentSnapshotChanged so pointer moves do
-  // not re-enter QML loadFromSnapshot. Typed panel values are copied at the
-  // owner boundary; stale session generations are dropped here.
+  // Interactive FrameReady no longer NotifyChange, so this path does not run
+  // on pointer moves. Authoritative snapshot publish still happens here after
+  // Release, image/node switch, Undo/Redo, error, and parameter normalization.
+  // Typed panel values are copied at the owner boundary; stale session
+  // generations are dropped here.
   const auto projection = session_backend_->panel_projection();
   const auto epoch      = static_cast<std::uint64_t>(SessionEpoch());
   if (alcedo::EditorPanelProjectionIsCurrent(projection, epoch)) {
@@ -303,6 +287,7 @@ void EditorSessionController::OnBackendChanged() {
     }
   }
   emit       StateChanged();
+  PublishRenderProgressIfChanged();
   // Phase 7A R2: emit the dedicated history signal only when the backend's
   // monotonic history_revision advances. Render-busy, frame-ready, preview,
   // progress, viewport, and task-detail notifications leave the revision
@@ -315,6 +300,10 @@ void EditorSessionController::OnBackendChanged() {
     last_history_revision_ = history_revision;
     emit HistoryChanged();
   }
+}
+
+void EditorSessionController::OnRenderProgressChanged() {
+  PublishRenderProgressIfChanged();
 }
 
 auto EditorSessionController::active() const -> bool {
@@ -1106,10 +1095,7 @@ auto EditorSessionController::presentation_frame_sink() const -> alcedo::IFrameS
 }
 
 auto EditorSessionController::render_busy() const -> bool {
-  // Reflects coordinator diagnostics only — never a pipeline task pointer. The
-  // backend flips this via NotifyChange (fired on submit and on every render
-  // result), which routes back through OnBackendChanged → StateChanged so QML
-  // bindings re-evaluate (D6).
+  // Reflects coordinator diagnostics only — never a pipeline task pointer.
   return session_backend_ && session_backend_->render_busy();
 }
 
@@ -1174,6 +1160,31 @@ auto FrameRoleName(alcedo::FrameRole role) -> const char* {
 }
 
 }  // namespace
+
+void EditorSessionController::PublishRenderProgressIfChanged() {
+  if (!session_backend_) {
+    if (last_published_render_busy_ || !last_published_inflight_reason_.isEmpty()) {
+      last_published_render_busy_ = false;
+      last_published_inflight_reason_.clear();
+      emit RenderBusyChanged();
+      emit RenderDiagnosticsChanged();
+    }
+    return;
+  }
+  const bool busy = session_backend_->render_busy();
+  const auto diag = session_backend_->render_diagnostics();
+  QString    inflight_reason;
+  if (diag.inflight_reason) {
+    inflight_reason = QString::fromUtf8(ReasonName(*diag.inflight_reason));
+  }
+  if (busy == last_published_render_busy_ && inflight_reason == last_published_inflight_reason_) {
+    return;
+  }
+  last_published_render_busy_        = busy;
+  last_published_inflight_reason_    = std::move(inflight_reason);
+  emit RenderBusyChanged();
+  emit RenderDiagnosticsChanged();
+}
 
 auto EditorSessionController::render_diagnostics() const -> QVariantMap {
   QVariantMap out;
@@ -1284,8 +1295,8 @@ bool EditorSessionController::submitWrite(QString fieldKey, alcedo::EditorParame
   patch.write     = std::move(write);
   patch.settled   = settled;
   if (node_controller_ != nullptr) {
-    const auto* document = pipeline_document();
-    if (document == nullptr) {
+    const auto document = pipeline_document();
+    if (!document) {
       if (settled && viewport) {
         viewport->endInteractivePresentLoop();
       }
@@ -1522,7 +1533,8 @@ auto EditorSessionController::active_version_id() const -> QString {
                           : QString{};
 }
 
-auto EditorSessionController::pipeline_document() const -> const alcedo::PipelineDocument* {
+auto EditorSessionController::pipeline_document() const
+    -> std::shared_ptr<const alcedo::PipelineDocument> {
   return session_backend_ ? session_backend_->pipeline_document() : nullptr;
 }
 

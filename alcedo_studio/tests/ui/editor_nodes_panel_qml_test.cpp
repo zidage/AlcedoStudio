@@ -836,7 +836,9 @@ TEST_F(EditorNodesPanelQmlTest,
 
   backend_.CompleteMaskCommands();
   ProcessEvents();
-  const auto* grade = backend_.pipeline_document()->PrimaryGrade();
+  const auto document = backend_.pipeline_document();
+  ASSERT_NE(document, nullptr);
+  const auto* grade = document->PrimaryGrade();
   ASSERT_NE(grade, nullptr);
   EXPECT_EQ(grade->FindMask(MaskId{"mask.radial"}), nullptr);
 }

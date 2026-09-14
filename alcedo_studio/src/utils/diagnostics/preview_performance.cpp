@@ -83,11 +83,14 @@ struct PendingSample {
   std::int64_t               qml_first_write_ns  = 0;
   std::int64_t               qml_latest_write_ns = 0;
   std::int64_t               submit_ns           = 0;
+  std::int64_t               startable_ns        = 0;
+  std::int64_t               extra_schedule_wait_ns = 0;
   std::int64_t               scheduled_ns        = 0;
   std::int64_t               worker_start_ns     = 0;
   std::int64_t               sink_submit_ns      = 0;
   std::int64_t               producer_ready_ns   = 0;
   std::int64_t               present_wake_ns     = 0;
+  std::int64_t               gui_update_ns       = 0;
   std::int64_t               consume_begin_ns    = 0;
   std::int64_t               displayed_ns        = 0;
   std::int64_t               imported_ns         = 0;
@@ -399,11 +402,14 @@ struct State {
     record.qml_first_write_ns  = sample.qml_first_write_ns;
     record.qml_latest_write_ns = sample.qml_latest_write_ns;
     record.submit_ns           = sample.submit_ns;
+    record.startable_ns        = sample.startable_ns;
+    record.extra_schedule_wait_ns = sample.extra_schedule_wait_ns;
     record.scheduled_ns        = sample.scheduled_ns;
     record.worker_start_ns     = sample.worker_start_ns;
     record.sink_submit_ns      = sample.sink_submit_ns;
     record.producer_ready_ns   = sample.producer_ready_ns;
     record.present_wake_ns     = sample.present_wake_ns;
+    record.gui_update_ns       = sample.gui_update_ns;
     record.consume_begin_ns    = sample.consume_begin_ns;
     record.displayed_ns        = sample.displayed_ns != 0 ? sample.displayed_ns : now_ns;
     record.imported_ns         = sample.imported_ns != 0 ? sample.imported_ns : record.displayed_ns;
@@ -667,6 +673,25 @@ void PreviewPerformance::NoteInputTimes(const std::uint64_t request_id,
   sample->qml_latest_write_ns = qml_latest_write_ns;
 }
 
+void PreviewPerformance::NoteScheduleWait(const std::uint64_t request_id,
+                                          const std::int64_t  startable_ns) {
+  if (!PreviewPerformanceEnabled() || request_id == 0 || startable_ns <= 0) {
+    return;
+  }
+  auto&           state = Global();
+  std::lock_guard lock(state.mutex);
+  auto*           sample = state.FindLocked(request_id);
+  if (sample == nullptr) {
+    return;
+  }
+  sample->startable_ns = startable_ns;
+  if (sample->submit_ns > startable_ns) {
+    sample->extra_schedule_wait_ns = sample->submit_ns - startable_ns;
+  } else {
+    sample->extra_schedule_wait_ns = 0;
+  }
+}
+
 void PreviewPerformance::NoteScheduled(const std::uint64_t request_id) {
   if (!PreviewPerformanceEnabled() || request_id == 0) {
     return;
@@ -754,6 +779,13 @@ void PreviewPerformance::NoteGuiUpdate() {
   const auto      now   = NowNs();
   std::lock_guard lock(state.mutex);
   state.last_gui_update_ns = now;
+  for (auto& [request_id, sample] : state.pending) {
+    (void)request_id;
+    if (sample.present_wake_ns == 0 || sample.gui_update_ns != 0) {
+      continue;
+    }
+    sample.gui_update_ns = now;
+  }
 }
 
 void PreviewPerformance::NoteRenderEnter() {

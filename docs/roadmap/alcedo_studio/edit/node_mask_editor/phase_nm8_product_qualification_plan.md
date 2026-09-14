@@ -8,6 +8,9 @@ Interactive 2560 slider DAG traces, native-sensor slider DAG traces on the same
 Bayer RAW, 8 Color Grade skip paths, and a ~10 s product `submitWrite`→
 `frameSwapped` last-Exposure trajectory. OpenCL and Metal GPU timing remain
 pending.
+NM8.2R scheduling/presentation rework passed complete-UI qualification on
+2026-09-14 under default VSync (session-owner thread + render-thread
+Ready-frame consume).
 NM8.3–NM8.6 planned.
 NM7 已由用户确认完成；其历史测试记录保留在原方案中，本文件不补造执行证据。
 2026-09-12 的首轮工作范围是 NM8.1–NM8.2：建立低开销测量和日志，采集当前实现的数据。
@@ -595,6 +598,189 @@ cmd /c scripts\msvc_env.cmd --build --preset win_release_test --parallel 4 --tar
 EditorPreviewPresentTrajectoryTest.exe  (ALCEDO_TEST_EDITOR_BACKEND=cuda, windows QPA)
 ```
 
+### NM8.2R — 完整 UI 的调度与呈现复核（2026-09-14 调度修复通过性能验收）
+
+**复核背景。** 最小呈现 fixture 的约 16 ms 结果不能外推为产品拖动延迟。
+用户使用 Release、Leica Q3 `L1010776.DNG`，删除 Mask，保留 Develop →
+`grade.primary` → DRT 三节点后仍明显卡顿。RAW 文件位于
+`alcedo_studio/tests/resources/sample_images/raw/camera/leica/q3/L1010776.DNG`；
+Develop 为 FULL 9512×6328，Interactive 为 2560×1703，CUDA + D3D11，
+NVIDIA GeForce RTX 3080 Laptop GPU。没有更换后端、算法或降低图像质量。
+
+本轮检查的是 `bf2b2b7d` 上的未提交改动，包括独立 render-progress 通知、consume
+wakeup 合并、呈现循环只在队列有 Ready 帧时继续，以及新增等待分段。用户生产日志
+`alcedo_preview_perf_alcedo_20260913_221836_40284.log` 的稳定窗口如下；
+完整路径为 `C:/Users/zidage/AppData/Local/Alcedo/Alcedo/logs/` 加该文件名。
+
+| 日志窗口 | Presented / window ms | input P50 | qml P50 | extra_sched P50 | ready_to_gui P50 | gui_to_import P50 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| 22:20:18 | 19 / 1041 | 83.31 | 85.41 | 28.65 | 0.06 | 41.89 |
+| 22:20:19 | 17 / 1028 | 86.69 | 87.25 | 31.09 | 0.08 | 41.13 |
+| 22:20:20 | 20 / 1013 | 84.37 | 85.17 | 30.90 | 0.07 | 39.87 |
+
+单位 ms。`input_ms` 截止于 import，`qml_ms` 截止于 `frameSwapped`；二者终点不同。
+`ready_to_gui` 实际从 present wake 计时，也不能解释为整个 producer-ready 后的等待。
+
+**完整 UI 复现。** 修复 `alcedo_studio_test_host` 的 QuickQanava 链接、插件导入及
+初始化，使它加载实际 `Alcedo.Main`，包括调整面板、节点组件、filmstrip 和 scopes。
+使用隔离项目和上述 RAW；窗口逻辑尺寸 1200×760，DPR 2。外部 Node 进程每 8 ms
+请求一次鼠标移动；本机实际约 65 次/秒。`pointer` 请求只投递一个 QMouseEvent，
+经过 QQuickWindow 和实际 Exposure slider，不在处理函数中调用 `processEvents()`。
+按下、持续移动 10 s、释放后验证画面和数值变化。该输入仍是合成窗口事件，不包含
+物理鼠标到 Windows 分发之前的延迟。
+
+首轮完整 UI 复现约 22 帧/秒，稳定窗口 qml P50 约 85–92 ms、gui_to_import
+约 39–41 ms，与用户日志同量级。随后启用 Qt 窗口分段时间线和 request CSV，
+对照同一完整 UI 的呈现等待；以下为已呈现且有输入、request id > 5 的样本，
+包含最后释放后的结果，排除未呈现记录。P50 独立计算，不能逐列相加为一帧。
+
+| 诊断配置 | 样本数 | input→frameSwapped P50 | input→Submit P50 | GUI update→consume P50 | consume→import P50 | 实际场景图 sync P50 | 新图呈现 / s |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 默认 VSync、默认交换链等待 | 231 | 71.55 | 31.58 | 35.68 | 0.038 | 0.181 | 22.86 |
+| 仅 `QT_D3D_MAX_FRAME_LATENCY=0` | 301 | 72.35 | 25.47 | 25.32 | 0.031 | 0.205 | 30.10 |
+| 仅 `QSG_NO_VSYNC=1` | 566 | 18.29 | 7.34 | 5.37 | 0.035 | 0.142 | 56.60 |
+
+前两行输入延迟 P95 分别 101.84、81.97 ms，第三行为 28.22 ms。
+第二行将主要等待从 `beginFrame` 移到了 Present：前者 P50 从 15.96 ms 降至
+0.031 ms，Present 从 0.25 ms 升至 15.89 ms，并未消除端到端等待。
+第三行是因果对照，非产品优化：测量区间发生约 1.2 万次窗口渲染，不能以取消
+VSync、窗口空转或 `frameSwapped` 回调提前代替真实显示性能验收。
+时间线记录会扰动节奏；上述值是本次诊断样本，不替换原始生产窗口成绩。
+整理测试宿主后的默认 VSync 复跑为 232 个样本，input→frameSwapped P50/P95
+69.73/99.81 ms，实际 sync P50 0.173 ms，consume→import P50 0.039 ms，
+新图呈现 22.86/s。该次还断言了非法 pointer 请求被拒绝、按下后 slider 持有拖动、
+释放后结束拖动，以及 Exposure 从 1.50 变为 3.57；660 个 move，验证通过。
+
+**同一帧证据。** 默认配置 request 250 以 Submit 为 0 ms：输入 -37.353，
+producer ready 9.721，GUI update 10.234，consume 46.148，import 46.188，
+frameSwapped 47.111。期间窗口在约 13 ms 和 30 ms 已完成两轮渲染，但这两轮
+没有场景图同步；新照片到约 46 ms 才被消费。纹理导入本身约 0.040 ms。
+因此“窗口在画”不等于“照片的新 Ready 帧正在被消费”。
+
+**当前改动为什么仍不够。** Qt 6.9.3 的 `QQuickItem::update()` 会进入
+`QSGThreadedRenderLoop::maybeUpdate` → `postUpdateRequest` →
+`QWindow::requestUpdate()`。删除 Alcedo 的显式 requestUpdate 不会绕开这一链。
+Windows 路径先等待 DXGI 的窗口更新通知；GUI 发起 polish/sync 后又可能等待
+render thread 的 `QRhiD3D11::beginFrame()` 交换链等待。Qt 日志中的 `sync=16 ms`
+包含 beginFrame，不能归为面板或节点图执行。依据是本轮信号分段和 Qt 6.9.3 的
+[threaded render loop](https://github.com/qt/qtdeclarative/blob/v6.9.3/src/quick/scenegraph/qsgthreadedrenderloop.cpp)、
+[D3D11 RHI](https://github.com/qt/qtbase/blob/v6.9.3/src/gui/rhi/qrhid3d11.cpp)。
+现有证据不支持继续将剩余几十毫秒主要归因于 `loadFromSnapshot`。
+
+**需要解决的两个调度依赖（尚未实施）。**
+
+1. 参数合并、pacing deadline、live pipeline 的串行完成和下一帧消费，应由独立
+   session owner 执行；GUI 发送最小参数修改并接收通知。保持一个 live pipeline、
+   一个串行 Apply，不引入参数全量副本或并行 Apply。单纯提高 GUI 事件优先级
+   无法抢占 GUI 正在等待 Qt sync 的时间。
+2. Ready 帧的消费应能利用当前 render-thread 呈现机会，不必先经过 GUI 更新和
+   下一次场景图同步。实现需保持 VSync、已有 slot/reader 生存期、图像/epoch
+   校验和隐藏窗口停止行为，并在无输入、无待呈现帧时停止主动刷新。
+   只搬走 producer owner 仍会留下约 40 ms 的呈现等待；只调整呈现仍会留下
+   GUI owner 的 deadline/完成传导延迟。
+
+**验收缺口。** 现有 `RepeatedInteractiveEnqueuePostsOneConsumeWakeup`、
+`InteractiveFrameReadyDoesNotNotifySessionChange`、
+`RenderProgressDoesNotBroadcastStateOrReloadAdjustmentSnapshot` 和
+`PresentLoopContinueDoesNotTickWhenNoReadyFrameIsWaiting` 覆盖的是通知与局部队列行为，
+没有验证上述完整窗口节奏。本轮未将这些单元测试视为性能通过证据，也未重跑全套。
+必须补充 GUI 正处于窗口同步、Ready 在同步后到达、释放、切图、隐藏/恢复、关闭、
+旧帧完成及单一 Apply 的测试；完整 UI 必须与最小 fixture 分别报告正常 VSync 下
+的 request 数、P50/P95/P99 和新图呈现频率。
+`extra_sched` 当前排除了零值且使用未关联 request 的最近 release 时间，
+还需验证旧 completion 交错和零等待分布，不能单独据此精确归因 owner 排队。
+
+**采集入口。** Release 构建命令为
+`cmd /c scripts\msvc_env.cmd --build build/release --target alcedo_studio_test_host --parallel 4`。
+设置 `ALCEDO_PREVIEW_PERF_LOG` 为汇总日志路径、`ALCEDO_TEST_FRAME_TRACE` 为 request
+CSV 路径；后者同时输出带单调时间戳的 `[FrameTrace]` 窗口分段。Windows 下
+`QT_FORCE_STDERR_LOGGING=1` 将 Qt 输出交给进程 stderr；`QSG_RENDER_TIMING=1`
+启用 Qt 自带分段。独立测量保留默认 VSync；对照变量只在对应子进程设置。
+JSON Lines 输入格式为 `{"id":1,"method":"pointer","phase":"press","x":1028,"y":527}`，
+随后发送 `move` 和 `release`；坐标从实际 slider 的 sceneRect 取得。
+原始文件和脚本保存在 `build/tmp/nm82r_latest_review/`，本节已写入必要数据，
+不依赖被 Git 忽略的文件链接。测量宿主加载的实际 UI 已通过截图与渲染记录确认。
+
+##### NM8.2R 调度修复与验收记录（2026-09-14）
+
+**实施。** 按上文两条边界完成正式修复，未关闭 VSync、未改交换链配置、
+未降低画质，保持一个 live pipeline 与一个串行 Apply。
+
+1. **Session owner 线程化。** 新增 Qt-free
+   `EditorSessionThreadedCommandExecutor`（`editor_session_command_queue.hpp/.cpp`）：
+   专用 worker + 单调时钟 deadline 最小堆，`Post`/`PostDelayed`/`IsOwnerThread`/
+   `Shutdown`；`Stop` 丢弃未到期的 delayed 任务，`Shutdown` join worker
+   （自 join 防护）。`ApplicationModuleHost` 生产路径改用它，测试保留
+   `EditorSessionManualCommandExecutor`（`DrainAll` 也排空 delayed bin）。
+   `EditorSessionService` 析构先 join worker 再 `Stop` 队列、
+   `CancelAndWait`——`DeliverCompletion` 纯异步投递，无死锁。
+   `EditorSessionRuntime` 成员序调整使 service 先于 executor 引用析构。
+   `EditorSessionLifecycle`/`EditorSessionNavigationController` 增加
+   `SetOwnerCheck`（默认构造线程，service 注入 `command_queue_.IsOwnerThread`），
+   lifecycle 全方法加互斥锁。admission deadline 经
+   `PostCompletionDelayed` 回到 owner，不再依赖 GUI `QTimer`；
+   `editor_session_controller.cpp` 的 `BindAdmissionDeadline` 与 timer 已删除。
+   GUI 入口的直连判定由裸 `reducing_command_` 改为
+   `InOwnerReduction()`（owner 线程且正在 reduce），GUI 调用方不再可能
+   读到陈旧 true 而在线下执行 reducer。`pipeline_document()` 改为
+   `std::shared_ptr<const PipelineDocument>` 快照（Emit/EndPublication
+   时 `ClonePipelineDocument` 刷新），`EditorSessionHistoryPort` 全部
+   façade 方法加互斥锁，mask-creation 读态由 service 侧镜像发布。
+   Interactive `FrameReady` 不再 `NotifyChange`；render progress 经独立
+   `SetRenderProgressObserver` 通道驱动 `RenderBusyChanged`/
+   `RenderDiagnosticsChanged`，不再广播全量状态。
+
+2. **Ready 帧的 render-thread 消费。** `EditorViewportItem` 在
+   `attachWindow` 时以 `Qt::DirectConnection` 连接
+   `QQuickWindow::beforeRendering`（先于 `QQuickRhiItemNode` 的
+   `beforeRendering→render` 连接注册，故先执行）。lambda 只捕获
+   `shared_ptr` 状态：`DirectPresentQueue::HasReadyFrame()` 或
+   `DirectFrameSink::HasPendingImportedFrame()` 为真时，经
+   `consume_arm_`（`shared_ptr<atomic<EditorViewportRenderer*>>`，
+   `createRenderer` 发布、renderer 析构 CAS 清空）调
+   `renderer->ArmForPresent()` → `QQuickRhiItemRenderer::update()`：
+   置 node 的 `m_renderPending` 并请求下一窗口帧，同一次 render pass
+   的 node `render()` 即消费 Ready 帧——不需要 GUI `update()`，也不需要
+   再一轮场景图同步。`frame_sink_` 改 `shared_ptr` 保活 arm 回调；
+   `continueInteractivePresentLoop` 只在确有 Ready 帧等待时才
+   重新 dirty item，无输入无待呈现帧时停止主动刷新。
+
+**完整 UI 验收（默认 VSync + 默认交换链，非对照组）。** 同一 Release 测试
+宿主、同一张 `L1010776.DNG`、Develop → `grade.primary` → DRT 三节点、
+Interactive 2560×1703、CUDA + D3D11；外部 Node 进程 press/654 次
+move/release，Exposure 1.50 → 3.57，拖动持有与释放断言通过。稳定窗口
+（拖动期间每秒汇总）：
+
+| Presented / s | e2e_ms P50 | e2e_ms P95 | input_ms P50 | input_ms P95 | extra_sched P50 | ready_to_gui P50 | gui_to_import P50 | import_to_swap P50 |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 59–61 | 4.45–5.98 | 6.54–7.90 | 7.60–11.29 | 16.82–21.25 | 0.40–0.78 | 0.10–0.42 | 0.76–3.10 | 0.40–0.49 |
+
+单位 ms；`dropped=0 failed=0 cancelled=0`。对比修复前默认 VSync 基线
+（input→frameSwapped P50 71.55、GUI update→consume P50 35.68、
+新图呈现 22.86/s）：呈现频率达到显示刷新率 60/s，input P50 降至约
+10 ms（P95 ≤ 21.3 ms），优于此前仅关闭 VSync 的对照组（18.29 ms、
+56.60/s），且 VSync 与交换链等待全部保留。帧级 CSV 中 request 563、566
+等样本 `gui=0`——Ready 帧完全经由 `beforeRendering` 呈现机会消费，
+无 GUI update 记录；ready→consume 最坏约一个 vsync 周期。
+原始采集位于 `build/tmp/nm82r_threaded/`（`threaded_default_perf.log`、
+`threaded_default_frames.csv`、宿主 Qt 日志、驱动脚本与截图）。
+
+**测试状态。** `win_debug` 全量构建通过；受影响测试全绿：
+`EditorSessionCommandQueueBaselineTest` 15/16、`EditorSerialFrameAdmissionTest`
+5/5、`EditorPendingInputSessionTest` 6/6、`EditorSessionLifecycleTest` 18/18、
+`EditorSessionRenderControllerTest` 15/15、`EditorSerialFrameConsumptionTest`
+12/12、`EditorSessionControllerPhase5ATest` 54/54（含新增
+`RenderProgressDoesNotBroadcastStateOrReloadAdjustmentSnapshot` 与
+`PresentLoopContinueDoesNotTickWhenNoReadyFrameIsWaiting`）、
+`EditorSessionHistoryPortTest` 77/77、`EditorNodesPanelQmlTest` 41/41、
+`EditorPreviewPresentTrajectoryTest` 1/1、`EditorSerialInputBoundaryTest` 7/7、
+`PipelineFrameSinkTest` 36/36。既有失败与本次改动无关：
+`RapidImageSelectionKeepsRunningTargetAndReplacesOnlyUnstartedSelection`
+（NM4.6 起既有）、`AdjustmentPanelsReloadOnlyWhenCommittedContentChanges`
+（测试 JSON 键 `ev` 应为 `exposure_ev`）、`EditorSessionRenderSchedulerPortTest`
+5 例（路径全为已提交代码，空 ImageBuffer 渲染失败）、
+`SerialMaskInteractiveTest`（Sep 11 陈旧二进制，源码与 CMake 目标已不存在）。
+
 ### NM8.3 — 固定调色顺序与融合 pass 编译
 
 **工作：** 更新调整类别和 GraphCompiler，使所有受支持的 Grade 都按
@@ -800,5 +986,7 @@ Remaining platform or product verification:
 
 当前执行记录：NM8.1 complete 2026-09-12. NM8.2 CUDA complete 2026-09-13
 (GPU timestamps, 2560 slider DAG, native-sensor slider DAG, felt present).
-OpenCL/Metal pending. See the dated records under those headings.
+OpenCL/Metal pending. NM8.2R scheduling/presentation fix complete and passed
+complete-UI qualification on 2026-09-14 (default VSync, 60/s presented,
+input P50 ~10 ms). See the dated records under those headings.
 NM8.3–NM8.6 have no execution evidence yet.

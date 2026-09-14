@@ -5,6 +5,7 @@
 #include "app/editor_monotonic_clock.hpp"
 #include "app/editor_render_coordinator.hpp"
 #include "app/editor_session_bootstrap.hpp"
+#include "app/editor_session_command_queue.hpp"
 #include "app/editor_session_service.hpp"
 #include "support/editor_session_command_queue_test_support.hpp"
 #include "support/editor_parameter_write_test.hpp"
@@ -257,6 +258,52 @@ TEST_F(SerialFrameConsumptionTest, HiddenViewportAbortsCycleWithoutStrandingOwne
   ConsumeQueued();
   EXPECT_FALSE(service_->serial_frame_admission().HoldsOwnership());
   EXPECT_FALSE(runtime_->coordinator->has_inflight());
+}
+
+TEST_F(SerialFrameConsumptionTest, RepeatedInteractiveEnqueuePostsOneConsumeWakeup) {
+  OpenInteractive();
+  EnqueueExposure(0.10f);
+  ConsumeQueued();
+  ASSERT_TRUE(latch_->running());
+  auto manual = std::dynamic_pointer_cast<EditorSessionManualCommandExecutor>(
+      service_->command_executor());
+  ASSERT_NE(manual, nullptr);
+  EXPECT_EQ(manual->pending(), 0u);
+
+  EnqueueExposure(0.20f);
+  EnqueueExposure(0.30f);
+  EnqueueExposure(0.40f);
+  EnqueueExposure(0.50f);
+  EXPECT_EQ(manual->pending(), 1u)
+      << "continuous moves must coalesce consume wakeups while a frame is inflight";
+}
+
+TEST_F(SerialFrameConsumptionTest, InteractiveFrameReadyDoesNotNotifySessionChange) {
+  OpenInteractive();
+  int change_count   = 0;
+  int progress_count = 0;
+  service_->SetChangeNotifier([&] { ++change_count; });
+  service_->SetRenderProgressObserver([&] { ++progress_count; });
+
+  EnqueueExposure(0.10f);
+  ConsumeQueued();
+  ASSERT_TRUE(latch_->running());
+  const int changes_after_submit = change_count;
+  latch_->Complete(true);
+  service_->DrainCommandQueueForTests();
+  EXPECT_EQ(change_count, changes_after_submit)
+      << "Interactive FrameReady must not broadcast session/panel state";
+  EXPECT_GE(progress_count, 1);
+}
+
+TEST_F(SerialFrameConsumptionTest, ReleaseConsumePublishesAuthoritativeSessionChange) {
+  OpenInteractive();
+  int change_count = 0;
+  service_->SetChangeNotifier([&] { ++change_count; });
+  EnqueueExposure(0.80f, true);
+  ConsumeQueued();
+  EXPECT_GE(change_count, 1);
+  EXPECT_EQ(history_->commit_count, 1);
 }
 
 }  // namespace

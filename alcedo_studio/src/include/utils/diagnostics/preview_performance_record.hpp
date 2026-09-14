@@ -195,11 +195,14 @@ struct PreviewRequestRecord {
   std::int64_t               qml_first_write_ns = 0;
   std::int64_t               qml_latest_write_ns = 0;
   std::int64_t               submit_ns          = 0;
+  std::int64_t               startable_ns       = 0;
+  std::int64_t               extra_schedule_wait_ns = 0;
   std::int64_t               scheduled_ns       = 0;
   std::int64_t               worker_start_ns    = 0;
   std::int64_t               sink_submit_ns     = 0;
   std::int64_t               producer_ready_ns  = 0;
   std::int64_t               present_wake_ns    = 0;
+  std::int64_t               gui_update_ns      = 0;
   std::int64_t               consume_begin_ns   = 0;
   std::int64_t               displayed_ns       = 0;
   std::int64_t               imported_ns        = 0;

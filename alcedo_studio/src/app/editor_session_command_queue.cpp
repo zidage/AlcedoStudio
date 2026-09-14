@@ -4,6 +4,7 @@
 
 #include "app/editor_session_command_queue.hpp"
 
+#include <algorithm>
 #include <utility>
 
 namespace alcedo {
@@ -17,6 +18,15 @@ void EditorSessionManualCommandExecutor::Post(std::function<void()> task) {
   }
   std::scoped_lock lock(mutex_);
   pending_.push(std::move(task));
+}
+
+void EditorSessionManualCommandExecutor::PostDelayed(std::function<void()>    task,
+                                                     std::chrono::nanoseconds /*delay*/) {
+  if (!task) {
+    return;
+  }
+  std::scoped_lock lock(mutex_);
+  delayed_.push(std::move(task));
 }
 
 auto EditorSessionManualCommandExecutor::IsOwnerThread() const -> bool {
@@ -40,13 +50,124 @@ auto EditorSessionManualCommandExecutor::DrainOne() -> bool {
 }
 
 void EditorSessionManualCommandExecutor::DrainAll() {
-  while (DrainOne()) {
+  // Drain delayed completions too: tests advance no clock, so a posted pacing
+  // deadline must be runnable through the same explicit drain as immediate work.
+  while (DrainOne() || DrainDelayedOne()) {
+  }
+}
+
+auto EditorSessionManualCommandExecutor::DrainDelayedOne() -> bool {
+  std::function<void()> task;
+  {
+    std::scoped_lock lock(mutex_);
+    if (delayed_.empty()) {
+      return false;
+    }
+    task = std::move(delayed_.front());
+    delayed_.pop();
+  }
+  if (task) {
+    task();
+  }
+  return true;
+}
+
+void EditorSessionManualCommandExecutor::DrainDelayedAll() {
+  while (DrainDelayedOne()) {
   }
 }
 
 auto EditorSessionManualCommandExecutor::pending() const -> std::size_t {
   std::scoped_lock lock(mutex_);
   return pending_.size();
+}
+
+auto EditorSessionManualCommandExecutor::pending_delayed() const -> std::size_t {
+  std::scoped_lock lock(mutex_);
+  return delayed_.size();
+}
+
+EditorSessionThreadedCommandExecutor::EditorSessionThreadedCommandExecutor()
+    : thread_([this] { Run(); }) {}
+
+EditorSessionThreadedCommandExecutor::~EditorSessionThreadedCommandExecutor() { Shutdown(); }
+
+void EditorSessionThreadedCommandExecutor::Shutdown() {
+  Stop();
+  if (thread_.joinable() && thread_.get_id() != std::this_thread::get_id()) {
+    thread_.join();
+  }
+}
+
+void EditorSessionThreadedCommandExecutor::Post(std::function<void()> task) {
+  PostDelayed(std::move(task), std::chrono::nanoseconds::zero());
+}
+
+void EditorSessionThreadedCommandExecutor::PostDelayed(std::function<void()>    task,
+                                                       std::chrono::nanoseconds delay) {
+  if (!task) {
+    return;
+  }
+  ScheduledTask scheduled;
+  scheduled.deadline = std::chrono::steady_clock::now() +
+                       std::max(delay, std::chrono::nanoseconds::zero());
+  scheduled.task = std::move(task);
+  {
+    std::scoped_lock lock(mutex_);
+    ScheduleLocked(std::move(scheduled));
+  }
+  cv_.notify_one();
+}
+
+auto EditorSessionThreadedCommandExecutor::IsOwnerThread() const -> bool {
+  return std::this_thread::get_id() == owner_thread_.load(std::memory_order_acquire);
+}
+
+void EditorSessionThreadedCommandExecutor::Stop() {
+  {
+    std::scoped_lock lock(mutex_);
+    stopping_ = true;
+  }
+  cv_.notify_one();
+}
+
+void EditorSessionThreadedCommandExecutor::ScheduleLocked(ScheduledTask scheduled) {
+  scheduled.sequence = next_sequence_++;
+  scheduled_.push_back(std::move(scheduled));
+  std::push_heap(scheduled_.begin(), scheduled_.end(),
+                 [](const ScheduledTask& a, const ScheduledTask& b) {
+                   return std::tie(a.deadline, a.sequence) > std::tie(b.deadline, b.sequence);
+                 });
+}
+
+void EditorSessionThreadedCommandExecutor::Run() {
+  owner_thread_.store(std::this_thread::get_id(), std::memory_order_release);
+  std::unique_lock lock(mutex_);
+  for (;;) {
+    // Run every task whose deadline has elapsed. New posts arriving while a
+    // task runs are picked up on the next pass of this loop.
+    while (!scheduled_.empty() &&
+           scheduled_.front().deadline <= std::chrono::steady_clock::now()) {
+      std::pop_heap(scheduled_.begin(), scheduled_.end(),
+                    [](const ScheduledTask& a, const ScheduledTask& b) {
+                      return std::tie(a.deadline, a.sequence) >
+                             std::tie(b.deadline, b.sequence);
+                    });
+      auto task = std::move(scheduled_.back().task);
+      scheduled_.pop_back();
+      lock.unlock();
+      task();
+      lock.lock();
+    }
+    if (stopping_) {
+      return;
+    }
+    if (scheduled_.empty()) {
+      cv_.wait(lock);
+    } else {
+      cv_.wait_until(lock, scheduled_.front().deadline);
+    }
+  }
 }
 
 struct EditorSessionCommandQueue::SharedState {
@@ -113,6 +234,18 @@ void EditorSessionCommandQueue::PostCompletion(Task task) {
       [state, task = std::move(task)]() mutable { EnqueueAndDrain(state, std::move(task)); });
 }
 
+void EditorSessionCommandQueue::PostCompletionDelayed(Task task,
+                                                      std::chrono::nanoseconds delay) {
+  if (!task) {
+    return;
+  }
+  const auto state    = state_;
+  const auto executor = executor_;
+  executor->PostDelayed(
+      [state, task = std::move(task)]() mutable { EnqueueAndDrain(state, std::move(task)); },
+      delay);
+}
+
 void EditorSessionCommandQueue::BeginShutdown() {
   std::scoped_lock lock(state_->mutex);
   if (state_->state == EditorSessionQueueState::Accepting) {
@@ -158,6 +291,9 @@ void EditorSessionCommandQueue::EnqueueAndDrain(const std::shared_ptr<SharedStat
     state->draining = true;
   }
 
+  // Drain nested owner-thread Submit work only. Independently posted
+  // completions and consume wakeups enter through the executor, so Qt can
+  // still process pointer and window-update events between those turns.
   for (;;) {
     Task next;
     {

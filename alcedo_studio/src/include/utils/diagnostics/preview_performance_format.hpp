@@ -37,6 +37,10 @@ struct PreviewWindowAccum {
   std::vector<std::int64_t> apply_ns;
   std::vector<std::int64_t> encode_ns;
   std::vector<std::int64_t> wait_ns;
+  std::vector<std::int64_t> extra_schedule_ns;
+  std::vector<std::int64_t> ready_to_gui_ns;
+  std::vector<std::int64_t> gui_to_import_ns;
+  std::vector<std::int64_t> import_to_swap_ns;
   std::uint64_t presented = 0;
   std::uint64_t dropped   = 0;
   std::uint64_t cancelled = 0;

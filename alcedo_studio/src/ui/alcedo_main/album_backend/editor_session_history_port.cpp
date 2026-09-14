@@ -29,6 +29,7 @@ EditorSessionHistoryPort::EditorSessionHistoryPort()
 EditorSessionHistoryPort::~EditorSessionHistoryPort() = default;
 
 void EditorSessionHistoryPort::SetServices(Services services) {
+  std::scoped_lock lock(mutex_);
   EditorHistoryState::Services s;
   s.mini_git_journal_path = std::move(services.mini_git_journal_path);
   state_->SetServices(std::move(s));
@@ -36,11 +37,13 @@ void EditorSessionHistoryPort::SetServices(Services services) {
 
 void EditorSessionHistoryPort::SetPipelinePort(
     std::shared_ptr<EditorSessionPipelinePort> pipeline_port) {
+  std::scoped_lock lock(mutex_);
   state_->SetPipelinePort(std::move(pipeline_port));
 }
 
 auto EditorSessionHistoryPort::Acquire(sl_element_id_t element_id, std::string* error)
     -> alcedo::EditorHistoryGuardHandle {
+  std::scoped_lock lock(mutex_);
   auto journal_path = state_->JournalPathResolver();
   if (journal_path) {
     std::string prepare_error;
@@ -55,6 +58,7 @@ auto EditorSessionHistoryPort::Acquire(sl_element_id_t element_id, std::string* 
 }
 
 void EditorSessionHistoryPort::Release(const alcedo::EditorHistoryGuardHandle& guard) {
+  std::scoped_lock lock(mutex_);
   if (!guard.valid) return;
   state_->ReleaseState(guard.element_id);
 }
@@ -62,30 +66,35 @@ void EditorSessionHistoryPort::Release(const alcedo::EditorHistoryGuardHandle& g
 auto EditorSessionHistoryPort::CaptureAdjustmentBeforePreview(
     const alcedo::EditorHistoryGuardHandle& guard, const alcedo::EditorAdjustmentPatch& patch,
     std::string* error) -> bool {
+  std::scoped_lock lock(mutex_);
   return mutation_->CaptureAdjustmentBeforePreview(guard, patch, error);
 }
 
 auto EditorSessionHistoryPort::RestoreUnsettledPreview(
     const alcedo::EditorHistoryGuardHandle& guard, bool* live_changed, std::string* error)
     -> bool {
+  std::scoped_lock lock(mutex_);
   return mutation_->RestoreUnsettledPreview(guard, live_changed, error);
 }
 
 auto EditorSessionHistoryPort::CommitAdjustment(const alcedo::EditorHistoryGuardHandle& guard,
                                                 const alcedo::EditorAdjustmentPatch& patch,
                                                 std::string* error) -> bool {
+  std::scoped_lock lock(mutex_);
   return mutation_->CommitAdjustment(guard, patch, error);
 }
 
 auto EditorSessionHistoryPort::CommitPipelineEditBatch(const alcedo::EditorHistoryGuardHandle& guard,
                                                        alcedo::PipelineEditBatch batch,
                                                        std::string* error) -> bool {
+  std::scoped_lock lock(mutex_);
   return mutation_->CommitPipelineEditBatch(guard, std::move(batch), error);
 }
 
 auto EditorSessionHistoryPort::EditNodeGraph(const alcedo::EditorHistoryGuardHandle& guard,
                                              alcedo::NodeGraphTopologyChange change,
                                              std::string* error) -> bool {
+  std::scoped_lock lock(mutex_);
   return mutation_->EditNodeGraph(guard, std::move(change), error);
 }
 
@@ -93,24 +102,28 @@ auto EditorSessionHistoryPort::RenameColorGrade(const alcedo::EditorHistoryGuard
                                                 const alcedo::NodeId& node_id,
                                                 std::string display_name, std::string* error)
     -> bool {
+  std::scoped_lock lock(mutex_);
   return mutation_->RenameColorGrade(guard, node_id, std::move(display_name), error);
 }
 
 auto EditorSessionHistoryPort::SetColorGradeEnabled(const alcedo::EditorHistoryGuardHandle& guard,
                                                     const alcedo::NodeId& node_id, bool enabled,
                                                     std::string* error) -> bool {
+  std::scoped_lock lock(mutex_);
   return mutation_->SetColorGradeEnabled(guard, node_id, enabled, error);
 }
 
 auto EditorSessionHistoryPort::SetColorGradeMix(const alcedo::EditorHistoryGuardHandle& guard,
                                                 const alcedo::NodeId& node_id, float mix,
                                                 std::string* error) -> bool {
+  std::scoped_lock lock(mutex_);
   return mutation_->SetColorGradeMix(guard, node_id, mix, error);
 }
 
 auto EditorSessionHistoryPort::AddMask(const alcedo::EditorHistoryGuardHandle& guard,
                                        const alcedo::NodeId& node_id, alcedo::MaskModel mask,
                                        std::uint32_t display_index, std::string* error) -> bool {
+  std::scoped_lock lock(mutex_);
   return mutation_->AddMask(guard, node_id, std::move(mask), display_index, error);
 }
 
@@ -118,6 +131,7 @@ auto EditorSessionHistoryPort::RemoveMask(const alcedo::EditorHistoryGuardHandle
                                           const alcedo::NodeId& node_id,
                                           const alcedo::MaskId& mask_id, std::string* error)
     -> bool {
+  std::scoped_lock lock(mutex_);
   return mutation_->RemoveMask(guard, node_id, mask_id, error);
 }
 
@@ -126,6 +140,7 @@ auto EditorSessionHistoryPort::ReplaceMaskSource(const alcedo::EditorHistoryGuar
                                                  const alcedo::MaskId& mask_id,
                                                  nlohmann::json after_source, std::string* error)
     -> bool {
+  std::scoped_lock lock(mutex_);
   return mutation_->ReplaceMaskSource(guard, node_id, mask_id, std::move(after_source), error);
 }
 
@@ -133,56 +148,66 @@ auto EditorSessionHistoryPort::SetMaskField(const alcedo::EditorHistoryGuardHand
                                             const alcedo::NodeId& node_id,
                                             const alcedo::MaskId& mask_id, std::string field_key,
                                             nlohmann::json after_value, std::string* error) -> bool {
+  std::scoped_lock lock(mutex_);
   return mutation_->SetMaskField(guard, node_id, mask_id, std::move(field_key),
                                  std::move(after_value), error);
 }
 
 auto EditorSessionHistoryPort::Undo(const alcedo::EditorHistoryGuardHandle& guard,
                                     std::string* error) -> bool {
+  std::scoped_lock lock(mutex_);
   return mutation_->Undo(guard, error);
 }
 
 auto EditorSessionHistoryPort::Redo(const alcedo::EditorHistoryGuardHandle& guard,
                                     std::string* error) -> bool {
+  std::scoped_lock lock(mutex_);
   return mutation_->Redo(guard, error);
 }
 
 auto EditorSessionHistoryPort::LastPublishedRenderReason() const
     -> std::optional<alcedo::EditorRenderReason> {
+  std::scoped_lock lock(mutex_);
   return state_->LastPublishedRenderReason();
 }
 
 auto EditorSessionHistoryPort::MoveHeadToCommit(const alcedo::EditorHistoryGuardHandle& guard,
                                                 const alcedo::commit_hash_t& commit_id,
                                                 std::string* error) -> bool {
+  std::scoped_lock lock(mutex_);
   return mutation_->MoveHeadToCommit(guard, commit_id, error);
 }
 
 auto EditorSessionHistoryPort::DiscardUnmaterializedChanges(
     const alcedo::EditorHistoryGuardHandle& guard, std::string* error) -> bool {
+  std::scoped_lock lock(mutex_);
   return mutation_->DiscardUnmaterializedChanges(guard, error);
 }
 
 auto EditorSessionHistoryPort::CheckoutVersion(const alcedo::EditorHistoryGuardHandle& guard,
                                                const alcedo::Hash128& version_id,
                                                std::string* error) -> bool {
+  std::scoped_lock lock(mutex_);
   return mutation_->CheckoutVersion(guard, version_id, error);
 }
 
 auto EditorSessionHistoryPort::ReadActiveVersionId(
     const alcedo::EditorHistoryGuardHandle& guard, alcedo::version_ref_id_t* version_id,
     std::string* error) -> bool {
+  std::scoped_lock lock(mutex_);
   return projection_->ReadActiveVersionId(guard, version_id, error);
 }
 
 auto EditorSessionHistoryPort::ReadHistorySnapshot(const alcedo::EditorHistoryGuardHandle& guard,
                                                    alcedo::EditorHistorySnapshot* snapshot,
                                                    std::string* error) -> bool {
+  std::scoped_lock lock(mutex_);
   return projection_->ReadHistorySnapshot(guard, snapshot, error);
 }
 
 auto EditorSessionHistoryPort::HasUnmaterializedChanges(
     const alcedo::EditorHistoryGuardHandle& guard, std::string* error) -> bool {
+  std::scoped_lock lock(mutex_);
   if (!guard.valid) {
     if (error) *error = "Editor history guard is invalid";
     return false;
@@ -193,6 +218,7 @@ auto EditorSessionHistoryPort::HasUnmaterializedChanges(
 auto EditorSessionHistoryPort::CreateRootVersionAndCheckout(
     const alcedo::EditorHistoryGuardHandle& guard, std::string display_name,
     alcedo::version_ref_id_t* version_id, std::string* error) -> bool {
+  std::scoped_lock lock(mutex_);
   return version_refs_->CreateRootVersionAndCheckout(guard, std::move(display_name), version_id,
                                                      error);
 }
@@ -200,6 +226,7 @@ auto EditorSessionHistoryPort::CreateRootVersionAndCheckout(
 auto EditorSessionHistoryPort::BranchFromCommitAndCheckout(
     const alcedo::EditorHistoryGuardHandle& guard, const alcedo::commit_hash_t& commit_id,
     std::string display_name, alcedo::version_ref_id_t* version_id, std::string* error) -> bool {
+  std::scoped_lock lock(mutex_);
   return version_refs_->BranchFromCommitAndCheckout(guard, commit_id, std::move(display_name),
                                                     version_id, error);
 }
@@ -208,12 +235,14 @@ auto EditorSessionHistoryPort::RenameVersion(const alcedo::EditorHistoryGuardHan
                                              const alcedo::Hash128& version_id,
                                              std::string display_name, std::string* error)
     -> bool {
+  std::scoped_lock lock(mutex_);
   return version_refs_->RenameVersion(guard, version_id, std::move(display_name), error);
 }
 
 auto EditorSessionHistoryPort::RemoveVersion(const alcedo::EditorHistoryGuardHandle& guard,
                                              const alcedo::Hash128& version_id,
                                              std::string* error) -> bool {
+  std::scoped_lock lock(mutex_);
   return version_refs_->RemoveVersion(guard, version_id, error);
 }
 
@@ -221,6 +250,7 @@ auto EditorSessionHistoryPort::PasteLiveRootRelativeVersion(
     const alcedo::EditorHistoryGuardHandle& guard,
     const alcedo::AdjustmentTransferPackage& package, std::string version_display_name,
     alcedo::AdjustmentPasteResult* result, std::string* error) -> bool {
+  std::scoped_lock lock(mutex_);
   return transfer_->PasteLiveRootRelativeVersion(guard, package, std::move(version_display_name),
                                                  result, error);
 }
@@ -229,18 +259,21 @@ auto EditorSessionHistoryPort::CancelLivePaste(const alcedo::EditorHistoryGuardH
                                                const alcedo::version_ref_id_t& prior_version_id,
                                                const alcedo::version_ref_id_t& paste_version_id,
                                                std::string* error) -> bool {
+  std::scoped_lock lock(mutex_);
   return transfer_->CancelLivePaste(guard, prior_version_id, paste_version_id, error);
 }
 
 auto EditorSessionHistoryPort::ReadAdjustmentSnapshot(
     const alcedo::EditorHistoryGuardHandle& guard, alcedo::EditorRenderAdjustmentSnapshot* snapshot,
     std::string* error) -> bool {
+  std::scoped_lock lock(mutex_);
   return projection_->ReadAdjustmentSnapshot(guard, snapshot, error);
 }
 
 auto EditorSessionHistoryPort::ReadPanelProjection(const alcedo::EditorHistoryGuardHandle& guard,
                                                    alcedo::EditorPanelProjection* projection,
                                                    std::string* error) -> bool {
+  std::scoped_lock lock(mutex_);
   return projection_->ReadPanelProjection(guard, projection, error);
 }
 
@@ -248,29 +281,34 @@ auto EditorSessionHistoryPort::SetPanelProjectionNode(const alcedo::EditorHistor
                                                       const alcedo::NodeId& node_id,
                                                       std::uint64_t session_generation,
                                                       std::string* error) -> bool {
+  std::scoped_lock lock(mutex_);
   return mutation_->SetPanelProjectionNode(guard, node_id, session_generation, error);
 }
 
 auto EditorSessionHistoryPort::WithLockedLiveDocument(
     const alcedo::EditorHistoryGuardHandle& guard,
     const alcedo::IEditorHistoryPort::LockedMaskDocumentOp& op, std::string* error) -> bool {
+  std::scoped_lock lock(mutex_);
   return mutation_->WithLockedLiveDocument(guard, op, error);
 }
 
 auto EditorSessionHistoryPort::CaptureSaveCheckpoint(const alcedo::EditorHistoryGuardHandle& guard,
                                                      std::string* error)
     -> std::shared_ptr<const alcedo::EditorMiniGitSaveCapture> {
+  std::scoped_lock lock(mutex_);
   return checkpoint_->CaptureSaveCheckpoint(guard, error);
 }
 
 auto EditorSessionHistoryPort::DiscardMaterializedJournalThrough(
     const alcedo::EditorHistoryGuardHandle& guard, std::uint64_t last_sequence,
     std::string* error) -> bool {
+  std::scoped_lock lock(mutex_);
   return checkpoint_->DiscardMaterializedJournalThrough(guard, last_sequence, error);
 }
 
 auto EditorSessionHistoryPort::SyncMaterializedStateAfterCheckpoint(
     const alcedo::EditorHistoryGuardHandle& guard, std::string* error) -> bool {
+  std::scoped_lock lock(mutex_);
   return checkpoint_->SyncMaterializedStateAfterCheckpoint(guard, error);
 }
 

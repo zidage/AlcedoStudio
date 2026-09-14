@@ -358,8 +358,9 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
   [[nodiscard]] auto active_version_id() const -> version_ref_id_t override {
     return snapshot_.active_version_id;
   }
-  [[nodiscard]] auto pipeline_document() const -> const PipelineDocument* override {
-    return document_.get();
+  [[nodiscard]] auto pipeline_document() const
+      -> std::shared_ptr<const PipelineDocument> override {
+    return document_;
   }
 
   [[nodiscard]] auto last_checkout_id() const -> Hash128 { return last_checkout_id_; }

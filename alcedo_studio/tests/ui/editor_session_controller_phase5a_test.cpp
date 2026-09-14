@@ -228,6 +228,7 @@ class FakeSessionBackend final : public IEditorSessionBackend {
   }
 
   void NotifyWithoutStateChange() { NotifyChange(); }
+  void SimulateRenderProgress() { NotifyRenderProgress(); }
 
   // Patch/Commit remain owner-consume APIs for tests that call them directly.
   // GUI submitPatch uses EnqueueAdjustmentInput and must not copy live params
@@ -676,6 +677,45 @@ TEST(EditorSessionControllerPhase5ATest, RenderBusyReflectsBackendDiagnostics) {
   EXPECT_TRUE(controller.render_busy());
 }
 
+TEST(EditorSessionControllerPhase5ATest,
+     RenderProgressDoesNotBroadcastStateOrReloadAdjustmentSnapshot) {
+  FakeSessionBackend backend;
+  backend.state_               = EditorSessionState::Interactive;
+  backend.image_load_request_  = ImageLoadRequestId{1};
+  backend.identity_.element_id = 1;
+  backend.identity_.image_id   = 2;
+  EditorSessionController controller(&backend);
+
+  backend.SetPanelProjection(PanelProjection(1, {ScalarPanelField("exposure", 0.25f)}));
+  backend.NotifyWithoutStateChange();
+  const auto snapshot = controller.adjustment_snapshot();
+  ASSERT_TRUE(snapshot.contains(QStringLiteral("exposure")));
+
+  int state_signals    = 0;
+  int snapshot_signals = 0;
+  int busy_signals     = 0;
+  int diag_signals     = 0;
+  QObject::connect(&controller, &EditorSessionController::StateChanged, [&] { ++state_signals; });
+  QObject::connect(&controller, &EditorSessionController::AdjustmentSnapshotChanged,
+                   [&] { ++snapshot_signals; });
+  QObject::connect(&controller, &EditorSessionController::RenderBusyChanged,
+                   [&] { ++busy_signals; });
+  QObject::connect(&controller, &EditorSessionController::RenderDiagnosticsChanged,
+                   [&] { ++diag_signals; });
+
+  backend.render_busy_ = true;
+  backend.SetPanelProjection(PanelProjection(1, {ScalarPanelField("exposure", 9.0f),
+                                                 ScalarPanelField("contrast", 40.0f)}));
+  backend.SimulateRenderProgress();
+
+  EXPECT_EQ(state_signals, 0);
+  EXPECT_EQ(snapshot_signals, 0);
+  EXPECT_EQ(busy_signals, 1);
+  EXPECT_EQ(diag_signals, 1);
+  EXPECT_TRUE(controller.render_busy());
+  EXPECT_EQ(controller.adjustment_snapshot(), snapshot);
+}
+
 TEST(EditorSessionControllerPhase5ATest, WorksWithoutBackendForShellOnlyTests) {
   EditorSessionController controller;
   controller.Open(1, 2);
@@ -1110,7 +1150,7 @@ TEST(EditorSessionControllerPhase5ATest, InteractiveSubmitStartsPresentLoopAndSe
 }
 
 TEST(EditorSessionControllerPhase5ATest,
-     PresentLoopTickRequestsUpdateOnlyWhileArmedAndPresentationIsAvailable) {
+     PresentLoopContinueDoesNotTickWhenNoReadyFrameIsWaiting) {
   editor_rhi::EditorViewportItem viewport;
   const auto ticks_idle = viewport.interactivePresentLoopTickCount();
   viewport.continueInteractivePresentLoop();
@@ -1124,14 +1164,15 @@ TEST(EditorSessionControllerPhase5ATest,
 
   viewport.resumePresentation();
   viewport.continueInteractivePresentLoop();
-  EXPECT_EQ(viewport.interactivePresentLoopTickCount(), ticks_idle + 1);
+  EXPECT_EQ(viewport.interactivePresentLoopTickCount(), ticks_idle)
+      << "continue must not pump vsync frames when no Ready slot is waiting";
   viewport.continueInteractivePresentLoop();
-  EXPECT_EQ(viewport.interactivePresentLoopTickCount(), ticks_idle + 2);
+  EXPECT_EQ(viewport.interactivePresentLoopTickCount(), ticks_idle);
 
   viewport.endInteractivePresentLoop();
   EXPECT_FALSE(viewport.interactivePresentLoopActive());
   viewport.continueInteractivePresentLoop();
-  EXPECT_EQ(viewport.interactivePresentLoopTickCount(), ticks_idle + 2);
+  EXPECT_EQ(viewport.interactivePresentLoopTickCount(), ticks_idle);
 }
 
 TEST(EditorSessionControllerPhase5ATest, SessionEpochChangeStopsPresentLoop) {

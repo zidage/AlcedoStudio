@@ -4,13 +4,13 @@
 
 #include "test_probe.hpp"
 
-#include "probe_json.hpp"
-
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QQmlApplicationEngine>
 #include <QQuickWindow>
 #include <QThread>
+
+#include "probe_json.hpp"
 
 namespace alcedo::ui {
 
@@ -140,9 +140,7 @@ void TestProbe::EmitHeartbeat() {
   SendJson(event);
 }
 
-void TestProbe::ForwardWaitReply(const QJsonObject& response) {
-  SendJson(response);
-}
+void TestProbe::ForwardWaitReply(const QJsonObject& response) { SendJson(response); }
 
 void TestProbe::SendJson(const QJsonObject& object) {
   if (client_ == nullptr || client_->state() != QLocalSocket::ConnectedState) {
@@ -192,6 +190,10 @@ auto TestProbe::HandleRequest(const QJsonObject& request) -> QJsonObject {
     result.insert(QStringLiteral("ready"), ready_);
     response.insert(QStringLiteral("result"), result);
     return response;
+  }
+
+  if (method == QStringLiteral("pointer")) {
+    return input_.HandlePointer(request);
   }
 
   if (method == QStringLiteral("snapshot")) {
@@ -285,7 +287,7 @@ auto TestProbe::HandleRequest(const QJsonObject& request) -> QJsonObject {
       request, QStringLiteral("unsupported_method"),
       QStringLiteral(
           "Supported methods are snapshot, find, read, click, doubleClick, rightClick, key, "
-          "typeText, drag, wait, screenshot, and ping."));
+          "typeText, drag, pointer, wait, screenshot, and ping."));
 }
 
 }  // namespace alcedo::ui

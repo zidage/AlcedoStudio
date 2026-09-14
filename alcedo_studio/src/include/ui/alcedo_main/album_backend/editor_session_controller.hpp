@@ -115,16 +115,16 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   Q_PROPERTY(EditorMaskCreationAdapter* maskCreation READ mask_creation CONSTANT)
   // Phase 5D: the render coordinator has in-flight or pending work for this
   // session. QML binds a busy indicator to it. Reflects backend render_busy()
-  // (coordinator diagnostics); transitions fire StateChanged via the backend
-  // notifier so this never exposes pipeline task objects (D6).
-  Q_PROPERTY(bool renderBusy READ render_busy NOTIFY StateChanged)
+  // (coordinator diagnostics). Busy and inflight-reason changes use dedicated
+  // signals so Interactive frames do not broadcast every session property.
+  Q_PROPERTY(bool renderBusy READ render_busy NOTIFY RenderBusyChanged)
   // Phase 5E: last session/backend error and first-frame latency. QML status
   // chrome and tests may observe these without touching pipeline task objects.
   Q_PROPERTY(QString lastError READ last_error NOTIFY StateChanged)
   Q_PROPERTY(double firstFrameTimeMs READ first_frame_time_ms NOTIFY StateChanged)
   // Aggregate coordinator diagnostics (reason, replace/cancel counts, last
   // rejection, last submitted role). Never includes pipeline task pointers.
-  Q_PROPERTY(QVariantMap renderDiagnostics READ render_diagnostics NOTIFY StateChanged)
+  Q_PROPERTY(QVariantMap renderDiagnostics READ render_diagnostics NOTIFY RenderDiagnosticsChanged)
   /// Phase 6C-7: read-only field-value snapshot for panel loading. Keys are
   /// stable field identifiers (e.g. "exposure", "contrast"); values are the
   /// parsed JSON params. Published after open, checkout, undo, redo, recovery,
@@ -153,6 +153,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   /// Called when the injected backend reports an async state/identity change
   /// (render presented, save finished, etc.). Mirrors backend into QML properties.
   void                     OnBackendChanged();
+  /// Called when only coordinator busy / inflight reason changed.
+  void                     OnRenderProgressChanged();
 
   [[nodiscard]] bool       active() const;
   [[nodiscard]] bool       has_image() const;
@@ -177,7 +179,10 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   [[nodiscard]] qulonglong session_generation() const;
   [[nodiscard]] qulonglong history_revision() const;
   [[nodiscard]] QString    active_version_id() const;
-  [[nodiscard]] auto       pipeline_document() const -> const alcedo::PipelineDocument*;
+  /// Immutable document snapshot published by the backend before each change
+  /// notification. Safe for GUI readers; null when no image is loaded.
+  [[nodiscard]] auto       pipeline_document() const
+      -> std::shared_ptr<const alcedo::PipelineDocument>;
   // Phase 6C-7: load panel state from the backend adjustment snapshot.
   [[nodiscard]] auto       adjustment_snapshot() const -> QVariantMap;
   [[nodiscard]] auto       history_snapshot() const -> alcedo::EditorHistorySnapshot;
@@ -325,6 +330,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
  signals:
   void StateChanged();
   void HistoryChanged();
+  void RenderBusyChanged();
+  void RenderDiagnosticsChanged();
   // Phase 6C-7: emitted when the backend adjustment snapshot is published.
   void AdjustmentSnapshotChanged();
   void ActionAvailabilityChanged();
@@ -352,6 +359,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void                     SyncAlbumHdrFlagFromSnapshot();
   void                     InstallBackendNotifier();
   void                     ApplyActionAvailability();
+  void                     PublishRenderProgressIfChanged();
   void                     SyncBackgroundActionRestrictions();
   [[nodiscard]] qulonglong SessionEpoch() const;
   /// Apply a publisher event to QML properties and emit HistoryOperationFinished.
@@ -365,7 +373,6 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
                                      const QString&                     selected_id = {});
   /// Correlate an async backend result observer delivery to a pending action.
   void OnBackendSessionResult(const alcedo::EditorSessionResult& result);
-  void BindAdmissionDeadline();
   void SetActiveAdjustmentPanel(const QString& panel, bool request_view);
   void SyncMaskAdjustmentPanel();
   [[nodiscard]] static auto       NormalizeAdjustmentPanel(const QString& panel) -> QString;
@@ -403,6 +410,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   /// Last panel projection session_generation applied to adjustment_snapshot_.
   /// A matching generation merges changed fields; a new generation replaces.
   std::uint64_t                   last_applied_panel_generation_ = 0;
+  bool                            last_published_render_busy_    = false;
+  QString                         last_published_inflight_reason_;
 
   QString                         active_adjustment_panel_       = QStringLiteral("tone");
   QString                         panel_before_mask_edit_        = QStringLiteral("tone");
@@ -424,7 +433,6 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   QMetaObject::Connection presented_geometry_connection_;
   mutable std::unique_ptr<EditorScopeController> scope_controller_;
   std::unique_ptr<EditorMaskCreationAdapter>     mask_creation_;
-  QTimer*                                        admission_deadline_timer_ = nullptr;
 };
 
 }  // namespace alcedo::ui
