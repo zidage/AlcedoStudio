@@ -130,13 +130,10 @@ void EnqueueGradeMix(MetalRenderDevice& device, const MetalBackend::Texture2D& s
 
 auto LoadMetalGradeLut(MetalRenderDevice& device, ColorGradeNodeModel& grade) -> MetalLutBinding {
   const auto packed = TryPackGradeLut(grade);
-  if (!packed.has_value()) {
+  if (packed == nullptr) {
     return device.Workspace().Device().DummyLut();
   }
-  ContentHash hash;
-  hash.MixBytes(packed->rgba);
-  hash.MixU32(packed->edge);
-  return device.Workspace().Device().AcquireLut(hash.Key(), packed->rgba, packed->edge,
+  return device.Workspace().Device().AcquireLut(packed->key, packed->rgba, packed->edge,
                                                 device.CommandContext());
 }
 

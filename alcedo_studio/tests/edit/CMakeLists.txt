@@ -400,6 +400,7 @@ add_executable(GpuDagRawInputTest
   ${ALCEDO_TEST_ROOT}/edit/runtime/runtime_invalidation_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/cached_versus_fresh_pixel_fixture_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/branch_join_plan_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/runtime/grade_lut_cache_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/static_execution_plan_cache_test.cpp)
 target_include_directories(GpuDagRawInputTest PUBLIC ${ALCEDO_INCLUDE_DIR}
   PRIVATE ${ALCEDO_TEST_ROOT}/edit/runtime ${ALCEDO_TEST_ROOT}/edit)
