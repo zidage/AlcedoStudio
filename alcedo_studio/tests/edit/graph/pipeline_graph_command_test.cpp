@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "edit/graph/adjustment_ownership.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
@@ -291,9 +292,11 @@ TEST(GpuDagModelGraph, GraphCompilerCompilesFirstBackboneGradeWhenPrimaryIdIsAbs
   EXPECT_EQ(plan.FindGrade(NodeId{"grade.b"}), plan.FirstGrade());
   EXPECT_EQ(plan.FirstGrade()->scene_output.producer, NodeId{"grade.b"});
   ASSERT_EQ(plan.FirstGrade()->adjustments.size(), remaining->AdjustmentCount());
-  for (std::size_t i = 0; i < remaining->AdjustmentCount(); ++i) {
-    EXPECT_EQ(plan.FirstGrade()->adjustments[i].instance_id, remaining->AdjustmentIdAt(i));
-    EXPECT_EQ(plan.FirstGrade()->adjustments[i].type, remaining->AdjustmentAt(i).Type());
+  const auto compile_order = ColorGradeCompileOrder();
+  for (std::size_t i = 0; i < compile_order.size(); ++i) {
+    EXPECT_EQ(plan.FirstGrade()->adjustments[i].type, compile_order[i]);
+    EXPECT_EQ(plan.FirstGrade()->adjustments[i].instance_id,
+              MakeAdjustmentInstanceId(remaining->Id(), compile_order[i]));
   }
 }
 

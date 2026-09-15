@@ -194,7 +194,7 @@ TEST(RuntimeInvalidation, LlfSliderKeepsSourceAndInvalidatesResult) {
             harness.Completed(harness.Primary().scene_output));
 }
 
-TEST(RuntimeInvalidation, PostLlfSaturationAndMixKeepLlfAndInvalidateGradeOutput) {
+TEST(RuntimeInvalidation, ColorEditInvalidatesLlfSourceResultAndMixKeepsThem) {
   ValidityHarness harness;
   harness.PublishCurrent();
   const auto source_id = LocalToneSourceId(harness.Primary().node_id);
@@ -204,8 +204,8 @@ TEST(RuntimeInvalidation, PostLlfSaturationAndMixKeepLlfAndInvalidateGradeOutput
   ASSERT_NE(saturation, nullptr);
   saturation->SetValue(1.1f);
   harness.Collect();
-  EXPECT_TRUE(harness.Current(source_id));
-  EXPECT_TRUE(harness.Current(result_id));
+  EXPECT_GT(harness.Required(source_id), harness.Completed(source_id));
+  EXPECT_GT(harness.Required(result_id), harness.Completed(result_id));
   EXPECT_GT(harness.Required(harness.Primary().scene_output),
             harness.Completed(harness.Primary().scene_output));
 

@@ -400,6 +400,55 @@ TEST(GraphImageCacheRetention, CropMismatchesFrameIdentityDropsGeometryAndFreesO
   EXPECT_FALSE(harness.pool.HasReusable(kGeometry));
 }
 
+TEST(GraphImageCacheRetention, AlgorithmRevisionRejectsPreviouslyDerivedImages) {
+  HostRetentionHarness     harness;
+  constexpr TextureRequest kRgba{8, 8, TextureFormat::Rgba32f};
+
+  // The static plan carries the grade compile algorithm revision; a lookup key
+  // built by an earlier revision can never return the current plan.
+  EXPECT_EQ(harness.plan.static_key.compile_algorithm_version, kGradeCompileAlgorithmVersion);
+  auto stale_key = harness.plan.static_key;
+  stale_key.compile_algorithm_version = kGradeCompileAlgorithmVersion - 1;
+  EXPECT_NE(stale_key, harness.plan.static_key);
+  EXPECT_EQ(kPrimaryGradeImplementationVersion, 6U);
+  EXPECT_EQ(kLlfReferenceImplementationVersion, 2U);
+
+  const auto needed = harness.invalidation.MakeImageRepresentation(
+      harness.Grade(), {kRgba.width, kRgba.height}, kRgba.format);
+
+  // A derived grade image written under the previous algorithm revision carries
+  // a different identity and must never satisfy the new requirement.
+  auto stale = needed;
+  stale.identity = ContentHash{}
+                       .MixU64(needed.identity)
+                       .MixU32(kPrimaryGradeImplementationVersion - 1)
+                       .Key()
+                       .hash;
+  ASSERT_FALSE(RepresentationSatisfies(stale, needed));
+
+  PublishWithFrameIdentity(harness, harness.Sensor(), kRgba);
+  (void)harness.cache.AcquireTextureForWrite(harness.pool, harness.Grade(), kRgba);
+  harness.cache.RecordUnpublished(harness.Grade(),
+                                  harness.invalidation.RequiredRevision(harness.Grade()), stale,
+                                  1);
+  harness.cache.PublishSuccessfulSubmission(1, ResultPersistenceScope::AllCurrentResults,
+                                            harness.Sensor());
+  ASSERT_NE(harness.cache.Find(harness.Grade()), nullptr);
+  ASSERT_NE(harness.cache.Find(harness.Sensor()), nullptr);
+
+  harness.cache.DropStalePublished([&](const GraphValueId& id, RuntimeRevision,
+                                       const ResultRepresentation& published) {
+    return KeepPublishedForInteractive(harness, id, 0, published);
+  });
+
+  EXPECT_EQ(harness.cache.Find(harness.Grade()), nullptr);
+  ASSERT_NE(harness.cache.Find(harness.Sensor()), nullptr);
+  EXPECT_TRUE(RepresentationSatisfies(
+      harness.cache.PublishedRepresentation(harness.Sensor()),
+      harness.invalidation.MakeImageRepresentation(harness.Sensor(),
+                                                   {kRgba.width, kRgba.height}, kRgba.format)));
+}
+
 TEST(GraphImageCacheRetention, QualityBaseKeepsInteractiveGeometryWhenCropChangesExtent) {
   HostRetentionHarness     harness;
   constexpr TextureRequest kSensor{16, 16, TextureFormat::Rgba32f};

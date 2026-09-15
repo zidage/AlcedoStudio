@@ -108,6 +108,35 @@ inline auto MakeNeighborhoodRgbaPlane(std::uint32_t width, std::uint32_t height,
   return plane;
 }
 
+/**
+ * @brief Colored plane with a bright warm center on dark surroundings.
+ *
+ * Distinct channel values make chroma operators (Saturation, Vibrance, HLS)
+ * visible, and the center detail gives Local Laplacian real edge contrast.
+ */
+inline auto MakeColoredNeighborhoodRgbaPlane(std::uint32_t width, std::uint32_t height)
+    -> HostImagePlane {
+  HostImagePlane plane;
+  plane.extent       = {width, height};
+  plane.stride_bytes = width * 16U;
+  plane.format       = HostPixelFormat::F32Rgba;
+  auto  storage      = std::shared_ptr<std::byte>(new std::byte[plane.ByteCount()],
+                                                 [](std::byte* p) { delete[] p; });
+  auto* pixels       = reinterpret_cast<float*>(storage.get());
+  for (std::uint32_t y = 0; y < height; ++y) {
+    for (std::uint32_t x = 0; x < width; ++x) {
+      const bool center = x == width / 2 && y == height / 2;
+      const auto index  = (static_cast<std::size_t>(y) * width + x) * 4;
+      pixels[index + 0] = center ? 0.55f : 0.06f;
+      pixels[index + 1] = center ? 0.30f : 0.035f;
+      pixels[index + 2] = center ? 0.08f : 0.02f;
+      pixels[index + 3] = 1.0f;
+    }
+  }
+  plane.bytes = std::const_pointer_cast<const std::byte>(storage);
+  return plane;
+}
+
 inline void WriteConstantRgbCube(const std::filesystem::path& path, float r, float g, float b) {
   std::filesystem::create_directories(path.parent_path());
   std::ofstream out(path);

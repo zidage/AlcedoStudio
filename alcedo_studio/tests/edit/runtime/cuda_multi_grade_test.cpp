@@ -5,6 +5,7 @@
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -233,10 +234,12 @@ TEST_F(CudaMultiGradeFixture, RepeatedAdjustmentInstancesKeepTheirOrder) {
   Render(document, plan);
   const auto develop = Download(device_, plan.develop_output);
   const auto output  = Download(device_, plan.grade_nodes.front().scene_output);
-  const float expected = multi_grade_test::ApplyExposureAcescc(
-      multi_grade_test::ApplyContrastAcescc(
-          multi_grade_test::ApplyExposureAcescc(develop.front().r, 1.0f), 100.0f),
-      2.0f);
+  // The fixed compile order groups same-type instances at their rank, so the
+  // second Exposure applies before Contrast regardless of stored position.
+  const float expected = multi_grade_test::ApplyContrastAcescc(
+      multi_grade_test::ApplyExposureAcescc(
+          multi_grade_test::ApplyExposureAcescc(develop.front().r, 1.0f), 2.0f),
+      100.0f);
   EXPECT_NEAR(output.front().r, expected, 1.0e-5f);
 }
 
@@ -433,6 +436,85 @@ TEST_F(CudaMultiGradeFixture, MiddleGradeEditReusesUpstreamResults) {
           multi_grade_test::ApplyExposureAcescc(develop.front().r, 1.0f), 100.0f),
       0.5f);
   EXPECT_NEAR(output.front().r, expected, 1.0e-5f);
+}
+
+TEST_F(CudaMultiGradeFixture, NewGradeOrderMatchesIndependentExpectedPixelsWithinTolerance) {
+  constexpr std::uint32_t width  = 64;
+  constexpr std::uint32_t height = 64;
+  auto prepared = RawInputLoader::FromDirectRgb(
+      multi_grade_test::MakeColoredNeighborhoodRgbaPlane(width, height),
+      gpu_dag_test::FullSensor(width, height));
+
+  // Single grade with Saturation stored after Local Tone: the compiler must
+  // still emit Basic Tone + Color pointwise before the Local Laplacian stage.
+  auto single = multi_grade_test::MakeIdentityGradeDocument();
+  auto* grade = single.PrimaryGrade();
+  ASSERT_NE(grade, nullptr);
+  grade->MoveAdjustment(AdjustmentInstanceId{"grade.primary.saturation"}, 12);
+  ASSERT_EQ(grade->AdjustmentAt(12).Type(), type_ids::Saturation());
+  multi_grade_test::GradeAdjustment<SaturationModel>(single, NodeId{"grade.primary"},
+                                                     type_ids::Saturation())
+      .SetValue(1.4f);
+  multi_grade_test::GradeAdjustment<ShadowsModel>(single, NodeId{"grade.primary"},
+                                                 type_ids::Shadows())
+      .SetValue(80.0f);
+  const auto single_plan =
+      GraphCompiler::Compile(single, prepared.CompileSource(), RenderRequest{});
+  const auto* compiled = single_plan.FirstGrade();
+  ASSERT_NE(compiled, nullptr);
+  ASSERT_EQ(compiled->stages.size(), 2U);
+  EXPECT_EQ(compiled->stages[0].kind, CompiledGradeStageKind::Pointwise);
+  EXPECT_EQ(compiled->stages[1].kind, CompiledGradeStageKind::LocalLaplacian);
+  (void)device_.Execute(single_plan, prepared, single);
+  device_.WaitIdle();
+  const auto single_pixels = Download(device_, compiled->scene_output);
+
+  // Independent expected: the same adjustment sequence composed as two chained
+  // grades forces the Color result into the Local Laplacian input.
+  auto chained = multi_grade_test::MakeIdentityGradeDocument();
+  multi_grade_test::AddCleanGradesBeforeDrt(chained, {"grade.b"});
+  multi_grade_test::GradeAdjustment<SaturationModel>(chained, NodeId{"grade.primary"},
+                                                     type_ids::Saturation())
+      .SetValue(1.4f);
+  multi_grade_test::GradeAdjustment<ShadowsModel>(chained, NodeId{"grade.b"},
+                                                 type_ids::Shadows())
+      .SetValue(80.0f);
+  const auto chained_plan =
+      GraphCompiler::Compile(chained, prepared.CompileSource(), RenderRequest{});
+  (void)device_.Execute(chained_plan, prepared, chained);
+  device_.WaitIdle();
+  const auto expected_pixels = Download(device_, chained_plan.grade_nodes.back().scene_output);
+
+  // Old-order witness: Local Laplacian first, then Color in a downstream grade.
+  auto reversed = multi_grade_test::MakeIdentityGradeDocument();
+  multi_grade_test::AddCleanGradesBeforeDrt(reversed, {"grade.b"});
+  multi_grade_test::GradeAdjustment<ShadowsModel>(reversed, NodeId{"grade.primary"},
+                                                 type_ids::Shadows())
+      .SetValue(80.0f);
+  multi_grade_test::GradeAdjustment<SaturationModel>(reversed, NodeId{"grade.b"},
+                                                     type_ids::Saturation())
+      .SetValue(1.4f);
+  const auto reversed_plan =
+      GraphCompiler::Compile(reversed, prepared.CompileSource(), RenderRequest{});
+  (void)device_.Execute(reversed_plan, prepared, reversed);
+  device_.WaitIdle();
+  const auto old_order = Download(device_, reversed_plan.grade_nodes.back().scene_output);
+
+  ASSERT_EQ(single_pixels.size(), expected_pixels.size());
+  ASSERT_EQ(single_pixels.size(), old_order.size());
+  float max_expected_delta = 0.0f;
+  float max_old_delta      = 0.0f;
+  for (std::size_t i = 0; i < single_pixels.size(); ++i) {
+    for (const auto channel :
+         {&Rgba::r, &Rgba::g, &Rgba::b}) {
+      max_expected_delta = std::max(
+          max_expected_delta, std::abs(single_pixels[i].*channel - expected_pixels[i].*channel));
+      max_old_delta =
+          std::max(max_old_delta, std::abs(single_pixels[i].*channel - old_order[i].*channel));
+    }
+  }
+  EXPECT_LE(max_expected_delta, 2.0e-5f);
+  EXPECT_GT(max_old_delta, 1.0e-3f);
 }
 
 }  // namespace alcedo

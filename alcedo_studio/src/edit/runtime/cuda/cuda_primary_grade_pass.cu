@@ -457,6 +457,9 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
   result.local_tone_reference_resource_id       = executed.local_tone_reference_resource_id;
   result.local_tone_rebuilt_reference           = executed.local_tone_rebuilt_reference;
   result.local_tone_sampled_canonical_reference = executed.local_tone_sampled_canonical_reference;
+  result.pointwise_dispatch_count               = executed.pointwise_dispatch_count;
+  result.detail_pass_count                      = executed.detail_pass_count;
+  result.local_tone_pass_count                  = executed.local_tone_pass_count;
   return result;
 }
 

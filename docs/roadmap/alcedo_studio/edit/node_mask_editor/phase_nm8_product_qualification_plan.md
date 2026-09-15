@@ -233,7 +233,7 @@ Radial/Linear Gradient 的参数仍由 Mask owner 管理。Grade 不持有跨帧
 | --- | --- | --- | --- |
 | NM8.1 | 低开销日志、输入到呈现时间线、CPU 分段 | 当前产品路径 | complete 2026-09-12 |
 | NM8.2 | 节点/pass 原生 GPU 计时、当前实现基线及硬件采集 | NM8.1 | CUDA complete 2026-09-13 (2560 slider DAG, native-sensor slider DAG, felt present); OpenCL/Metal pending |
-| NM8.3 | 新顺序、融合 pass 描述、算法版本和画面预期 | NM8.2 当前后端基线 | planned |
+| NM8.3 | 新顺序、融合 pass 描述、算法版本和画面预期 | NM8.2 当前后端基线 | complete 2026-09-14 on `feature/nm83-fixed-grade-order` (CUDA + OpenCL measured on this host; Metal covered by shared compiler + macOS-only test targets) |
 | NM8.4 | 共享工作图、取消 Grade 缓存、LLF/Mix 与下游复用 | NM8.3 | planned |
 | NM8.5 | 根据 CUDA/Metal 数据优化热点和整帧开销 | NM8.4 | planned |
 | NM8.6 | 三后端、真实 RAW、交互和安装包最终验证 | NM8.1–NM8.5 | planned |
@@ -807,6 +807,157 @@ Shadows/Highlights 进入一个 LLF 阶段。编译期间不修改 live document
 
 **完成条件：** 三后端共享唯一阶段顺序；有激活 LLF 和非线性 Color 的独立结果证明新顺序，
 不能仅检查命令列表；旧顺序输出差异明确来自已批准的算法顺序变化。
+
+##### Phase NM8.3 completion record (2026-09-14)
+
+**Status:** complete on branch `feature/nm83-fixed-grade-order`. CUDA and OpenCL
+verified on this host (RTX 3080 Laptop, driver 610.62, CUDA 12.8, Qt 6.9.3);
+Metal consumes the same compiler-produced stages and its test file was updated
+in lockstep — Metal test targets are macOS-only and were not run here.
+
+**Implementation.** `ColorGradeCompileOrder()` /
+`ColorGradeCompileRank()` / `ColorGradeCompileIndexOrder()` in
+`edit/graph/adjustment_ownership.{hpp,cpp}` define the fixed rank
+Cat02WhiteBalance → Exposure → Contrast → White → Black → Curve → Hls →
+Saturation → Vibrance → ColorWheel → Lmt → Shadows → Highlights.
+`GraphCompiler::CompileColorGrade` stable-sorts compiled adjustment indices by
+that rank (same-type instances keep stored relative order); stored document
+order, parameter models, instance ids, and history are untouched.
+`AppendGradeStage` merges adjacent same-kind stages, so one grade compiles to
+`Pointwise[0..11)` + `LocalLaplacian[11..13)` (+ optional `Neighborhood`),
+with Mix as the implicit final write — `BasicToneAndColorUseOnePointwisePass`
+asserts one fused pointwise dispatch on CUDA.
+
+**Identities.** `StaticPlanKey.compile_algorithm_version = 1` (new key field,
+in equality/ordering); `kPrimaryGradeImplementationVersion` 5 → 6;
+`kLlfReferenceImplementationVersion` 1 → 2. `HashGraphTopology` and the grade
+content hash in `result_content_key.cpp` hash adjustments in compile order, so
+a stored reorder no longer forces recompilation or a different result key.
+`MixGradeExcludingLocalToneValues` now precisely describes the canonical LLF
+source (all non-LLF parameters execute before LLF).
+`RuntimeInvalidationState::CollectGradeChanges` classifies a dirty adjustment
+as local-tone vs source-side by its compiled instance id, not by document
+index → stage range.
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `ColorGradeCompilesBasicToneAndColorBeforeLocalTone` | `GpuDagModelGraphTest` (`graph_compiler_test.cpp`) | PASS (debug) |
+| `BasicToneAndColorUseOnePointwisePass` | `GpuDagCudaPrimaryGradeTest` | PASS (debug) |
+| `NewGradeOrderMatchesIndependentExpectedPixelsWithinTolerance` | `GpuDagCudaPrimaryGradeTest` (`cuda_multi_grade_test.cpp`) | PASS (debug) — colored plane, Saturation + active Shadows LLF, independently composed chained-grade reference |
+| `AlgorithmRevisionRejectsPreviouslyDerivedImages` | `GraphImageCacheRetentionTest` | PASS (debug) |
+| `ReopenedAndExportedDocumentUseTheSameGradeOrder` | `GpuDagModelGraphTest` | PASS (debug) — JSON round-trip keeps stored order/ids; Interactive, Export-quality, and reopened compiles emit identical order and identical `StaticPlanKey` |
+| Stored reorder keeps compiled order + plan key | `GpuDagModelGraphTest`, `StaticExecutionPlanCacheTest`, `cuda_product_plan_cache_test.cpp` | PASS (debug) |
+| Same-type instances grouped by rank | `cuda_multi_grade_test.cpp`, `opencl_multi_grade_test.cpp`, `metal_multi_grade_test.cpp` | PASS (debug CUDA/OpenCL; Metal updated in lockstep, macOS-only) |
+
+Suite totals (win_debug): `GpuDagModelGraphTest` 61/61,
+`GraphImageCacheRetentionTest` 17/17, `GpuDagCudaPrimaryGradeTest` 58/59
+(1 intentional skip: superseded dump), `GpuDagOpenClGradeTest` 48/48,
+`GpuDagCudaWorkspaceTest` 39/40, `GpuDagCudaDrtProductTest` 73/74,
+`GpuDagCudaMaskTest` 10/10, `GpuDagMaskStoreTest` 8/8, `GpuDagGeometryTest`
+15/15, `GpuDagRawInputTest` 145/145, `GpuDagOpenClWorkspaceTest` 22/22,
+`GpuDagOpenClDrtProductTest` 25/25, `GpuDagCudaDevelopTest` 21/23,
+`GpuDagOpenClDevelopTest` (2 pre-existing + 1 skipped).
+
+**Pre-existing regressions repaired:** `CudaLlfFailedSubmissionDoesNotPublishCanonicalPlanes`
+and `OpenClLlfFailedSubmissionDoesNotPublishReference` were already failing on
+`main` (documented as a pre-existing regression in NM7.14 acceptance evidence).
+Root cause: the tests injected failure via
+`plan.geometry.full_reference_extent = {}`, which legitimately changes the
+canonical LLF identity and drops published planes before the throw. Both tests
+now inject an out-of-range `stages[0].begin`, which fails submission inside
+`MakeGradeSchedule` without touching any image identity; both PASS.
+
+**Remaining failures — verified identical on `main`** (same failing assertions
+reproduced under a stashed baseline build): `GpuAndRuntimeHeadersDoNotIncludeCudaOrImageBuffer`
+(`drt_post_executor.hpp` comment scan), `CudaDefaultPipelineSecondRenderCreatesNoGpuAllocation`
+(FreeCount=1), `CropRotateViewportAndScaleExecuteAsOneCudaResample`,
+`CanonDngProfileRendersAtFullResolutionAndInvalidatesOnlyColorCache` (CUDA +
+OpenCL), `SwitchingHighlightReconstructionDoesNotKeepStalePublishedTextures`,
+`OpenClCameraColorConsumesSharedDualIlluminantTransform`. None traverse the
+grade compile path; none are caused by this phase.
+
+**Primary call chain (as implemented):**
+
+```text
+PipelineDocument adjustment list (stable NodeId/instance ids, stored order)
+  -> GraphCompiler::CompileColorGrade
+       ColorGradeCompileIndexOrder: stable sort by ColorGradeCompileRank
+       compiled.adjustments + parameter bindings in fixed order
+       AppendGradeStage -> Pointwise[0..N) + LocalLaplacian[N..M) (+Neighborhood)
+  -> StaticPlanKey{topology_hash(compile order), compile_algorithm_version=1,...}
+  -> StaticExecutionPlanCache (rejects plans compiled under version 0/old key)
+  -> BindAndScheduleGrade -> GradeSchedule ops: one fused pointwise dispatch
+     -> LLF (shadows/highlights) -> implicit Mix write
+  -> Execute*PrimaryGrade (CUDA/OpenCL/Metal consume schedule verbatim)
+  -> same compile for RenderQuality::Preview and RenderQuality::Export and
+     reopened documents
+```
+
+**Failure chain:** unsupported/invalid adjustment or stage range → compile or
+`MakeGradeSchedule` `std::runtime_error` → `CancelRender` → no unpublished
+revision is published; document and history untouched.
+
+**Interpretation boundary (required disclosure):** every render served by
+`GraphCompiler` — Interactive preview, `RenderQuality::Export`, and reopened
+documents — shares the single fixed order; the static plan key binds it.
+`ExportService::RunExportRenderTask` still schedules the legacy
+`PipelineExecutor` (`PipelineTask`), whose stage sequence is hardcoded
+(Basic: exposure→contrast→white→black→highlights→shadows→curve; Color:
+saturation→vibrance→HLS→colorwheel) and predates the DAG runtime. Unifying
+production export onto the DAG compiler is outside NM8.3 scope and is the
+remaining order-divergence risk for export pixels; no hidden old-order path
+remains inside the DAG runtime.
+
+**NM8.2 measurement round on the new order** (`win_release_test`,
+`ALCEDO_ENABLE_BRUSH_MASK=OFF`, same fixtures/scenarios as NM8.2):
+correctness 9/9 PASS (`GpuPassSamplesKeepRequestAndNodeIdentity`,
+`TimingSlotsAreNotReusedBeforeSubmissionCompletes`,
+`GpuTimingDoesNotAddPerPassHostWaits`,
+`CachedAndDisabledPassesReportExecutionState`,
+`DetailTimingPreservesRenderedPixelsWithinTolerance`,
+`InteractiveThreeNodeGraphReportsPassGpuTimes`,
+`InteractiveFourNodeSecondGradeMasksReportGpuTimes`,
+`InteractiveMultiGradeMaskMixReportsPerNodeGpuTimes`,
+`TwoLutGradesReportIndependentPassGpuTimes`).
+`InteractiveDagBaselinesDumpCurrentExecutionGpuTimes` is intentionally SKIPPED
+(superseded by the 2560 slider dumps). New dumps:
+`build/tmp/preview_performance/cuda_interactive_2560_pass_table.txt`,
+`cuda_interactive_native_slider_table.txt`; NM8.2 originals preserved under
+`build/tmp/preview_performance/nm82_baseline/`.
+
+GPU P50 milliseconds, new fixed order vs NM8.2 baseline:
+
+| Scenario | NM8.2 | NM8.3 | Δ |
+| --- | ---: | ---: | ---: |
+| Bayer 2560×1705 8-grade cold | 133.85 | 106.10 | −20.7% |
+| g7.exposure hot | 9.75 | 8.41 | −13.7% |
+| grade.primary.contrast hot | 48.10 | 43.66 | −9.2% |
+| g3.saturation hot | 26.75 | 29.31 | +9.6% |
+| X-Trans 2560×1710 cold | 361.85 | 363.09 | +0.3% |
+| X-Trans exposure hot | 8.91 | 8.17 | −8.3% |
+| native 3-node cold | 81.55 | 72.72 | −10.8% |
+| native 3-node exposure hot | 7.23 | 6.67 | −7.7% |
+| native 4-node masked cold | 92.09 | 78.08 | −15.2% |
+| native 4-node look exposure hot | 8.77 | 8.30 | −5.4% |
+| native multi-grade mask-mix cold | 98.04 | 84.99 | −13.3% |
+| native multi-grade last exposure hot | 8.85 | 8.24 | −6.9% |
+| native two-LUT cold | 74.10 | 71.93 | −2.9% |
+| native two-LUT look exposure hot | 6.58 | 6.20 | −5.8% |
+| native 8-grade cold | 702.41 | 391.26 | −44.3% |
+| native 8-grade last exposure hot | 14.96 | 12.97 | −13.3% |
+
+Cold-trace sub-stage evidence: the 8-grade cold frame drops from 20 `pointwise`
+sub-stage records to 10 (one fused pointwise pass per grade plus DRT-side
+records) — the fusion is visible in measured GPU work, not just plan shape.
+The `g3.saturation` hot row is the expected trade-off: Saturation now executes
+before LLF, so editing it correctly invalidates the LLF source and rebuilds
+local tone where the old post-LLF placement did not.
+
+**Residual gaps:** Metal measurements not possible on this Windows host.
+OpenCL slider/present GPU tables remain pending from NM8.2. Legacy export
+divergence noted above. NM8.4 shared work images not started.
 
 ### NM8.4 — 共享双工作图与 LLF/Mix 执行
 

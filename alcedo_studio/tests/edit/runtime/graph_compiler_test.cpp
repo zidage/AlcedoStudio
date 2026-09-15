@@ -19,6 +19,7 @@
 
 #include "../graph/grade_owned_mask_support.hpp"
 #include "../input/prepared_raw_test_support.hpp"
+#include "edit/graph/adjustment_ownership.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
@@ -26,6 +27,7 @@
 #include "edit/mask/mask_model.hpp"
 #include "edit/operators/models/adjustment_catalog.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
+#include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/runtime/metal/metal_backend.hpp"
 #include "edit/runtime/pass_kind.hpp"
 #include "edit/runtime/result_content_key.hpp"
@@ -97,7 +99,7 @@ TEST(GpuDagGraphCompiler, HighlightFlagDoesNotChangePassList) {
   EXPECT_TRUE(plan.Contains(GpuPassKind::CfaClamp));
 }
 
-TEST(GpuDagGraphCompiler, DefaultPipelineCompilesShadowsAndHighlightsToLocalLaplacianOnly) {
+TEST(GpuDagGraphCompiler, ColorGradeCompilesBasicToneAndColorBeforeLocalTone) {
   const auto pattern  = gpu_dag_test::MakeRggbPattern();
   const auto prepared = RawInputLoader::FromUnpackedCfa(
       gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern, gpu_dag_test::DefaultLinearization(),
@@ -107,45 +109,22 @@ TEST(GpuDagGraphCompiler, DefaultPipelineCompilesShadowsAndHighlightsToLocalLapl
 
   const auto* grade_plan = plan.FirstGrade();
   ASSERT_NE(grade_plan, nullptr);
-  bool       saw_shadows    = false;
-  bool       saw_highlights = false;
-  bool       saw_curve      = false;
-  bool       saw_lmt        = false;
-  for (const auto& adjustment : grade_plan->adjustments) {
-    if (adjustment.type == type_ids::Shadows()) {
-      saw_shadows = true;
-      EXPECT_EQ(adjustment.algorithm, CompiledAdjustmentAlgorithm::LocalLaplacian);
-    } else if (adjustment.type == type_ids::Highlights()) {
-      saw_highlights = true;
-      EXPECT_EQ(adjustment.algorithm, CompiledAdjustmentAlgorithm::LocalLaplacian);
-    } else if (adjustment.type == type_ids::Curve()) {
-      saw_curve = true;
-      EXPECT_EQ(adjustment.algorithm, CompiledAdjustmentAlgorithm::Pointwise);
-    } else if (adjustment.type == type_ids::Lmt()) {
-      saw_lmt = true;
-      EXPECT_EQ(adjustment.algorithm, CompiledAdjustmentAlgorithm::Pointwise);
-    } else {
-      EXPECT_NE(adjustment.algorithm, CompiledAdjustmentAlgorithm::Neighborhood);
-    }
+  const auto compile_order = ColorGradeCompileOrder();
+  ASSERT_EQ(grade_plan->adjustments.size(), compile_order.size());
+  for (std::size_t index = 0; index < compile_order.size(); ++index) {
+    EXPECT_EQ(grade_plan->adjustments[index].type, compile_order[index]) << "index " << index;
+    const auto expected = index + 2 < compile_order.size()
+                              ? CompiledAdjustmentAlgorithm::Pointwise
+                              : CompiledAdjustmentAlgorithm::LocalLaplacian;
+    EXPECT_EQ(grade_plan->adjustments[index].algorithm, expected) << "index " << index;
   }
-  EXPECT_TRUE(saw_shadows);
-  EXPECT_TRUE(saw_highlights);
-  EXPECT_TRUE(saw_curve);
-  EXPECT_TRUE(saw_lmt);
-  ASSERT_EQ(grade_plan->stages.size(), 3U);
-  EXPECT_EQ(grade_plan->stages.front().kind, CompiledGradeStageKind::Pointwise);
-  EXPECT_EQ(grade_plan->stages[0].begin + grade_plan->stages[0].count, grade_plan->stages[1].begin);
-  EXPECT_EQ(grade_plan->stages[1].begin + grade_plan->stages[1].count, grade_plan->stages[2].begin);
-  EXPECT_EQ(grade_plan->stages[2].kind, CompiledGradeStageKind::Pointwise);
-  bool saw_llf_stage = false;
-  for (const auto& stage : grade_plan->stages) {
-    EXPECT_NE(stage.kind, CompiledGradeStageKind::Neighborhood);
-    if (stage.kind == CompiledGradeStageKind::LocalLaplacian) {
-      saw_llf_stage = true;
-      EXPECT_EQ(stage.count, 2U);
-    }
-  }
-  EXPECT_TRUE(saw_llf_stage);
+  ASSERT_EQ(grade_plan->stages.size(), 2U);
+  EXPECT_EQ(grade_plan->stages[0].kind, CompiledGradeStageKind::Pointwise);
+  EXPECT_EQ(grade_plan->stages[0].begin, 0U);
+  EXPECT_EQ(grade_plan->stages[0].count, 11U);
+  EXPECT_EQ(grade_plan->stages[1].kind, CompiledGradeStageKind::LocalLaplacian);
+  EXPECT_EQ(grade_plan->stages[1].begin, 11U);
+  EXPECT_EQ(grade_plan->stages[1].count, 2U);
   ASSERT_EQ(plan.drt.post_adjustments.size(), 4U);
   EXPECT_EQ(plan.drt.post_adjustments[0].type, type_ids::Clarity());
   EXPECT_EQ(plan.drt.post_adjustments[1].type, type_ids::Sharpen());
@@ -154,6 +133,42 @@ TEST(GpuDagGraphCompiler, DefaultPipelineCompilesShadowsAndHighlightsToLocalLapl
   for (const auto& adjustment : plan.drt.post_adjustments) {
     EXPECT_EQ(adjustment.algorithm, CompiledAdjustmentAlgorithm::Neighborhood);
   }
+}
+
+TEST(GpuDagGraphCompiler, StoredAdjustmentOrderDoesNotChangeCompiledGradeOrder) {
+  const auto pattern  = gpu_dag_test::MakeRggbPattern();
+  const auto prepared = RawInputLoader::FromUnpackedCfa(
+      gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern, gpu_dag_test::DefaultLinearization(),
+      gpu_dag_test::FullSensor(64, 64), DecodeRes::FULL);
+  auto document = CreateDefaultPipelineDocument();
+  auto* grade   = document.PrimaryGrade();
+  ASSERT_NE(grade, nullptr);
+  // Shadows, Saturation, and Exposure stored before/after each other in an order
+  // that differs from the fixed Basic Tone + Color -> Local Tone sequence.
+  grade->MoveAdjustment(AdjustmentInstanceId{"grade.primary.shadows"}, 0);
+  grade->MoveAdjustment(AdjustmentInstanceId{"grade.primary.saturation"}, 0);
+  grade->MoveAdjustment(AdjustmentInstanceId{"grade.primary.exposure"}, 12);
+  ASSERT_EQ(grade->AdjustmentAt(0).Type(), type_ids::Saturation());
+  ASSERT_EQ(grade->AdjustmentAt(1).Type(), type_ids::Shadows());
+  ASSERT_EQ(grade->AdjustmentAt(12).Type(), type_ids::Exposure());
+
+  const auto plan         = GraphCompiler::Compile(document, prepared.CompileSource(),
+                                                   RenderRequest{});
+  const auto* grade_plan  = plan.FirstGrade();
+  ASSERT_NE(grade_plan, nullptr);
+  const auto compile_order = ColorGradeCompileOrder();
+  ASSERT_EQ(grade_plan->adjustments.size(), compile_order.size());
+  for (std::size_t index = 0; index < compile_order.size(); ++index) {
+    EXPECT_EQ(grade_plan->adjustments[index].type, compile_order[index]) << "index " << index;
+  }
+  ASSERT_EQ(grade_plan->stages.size(), 2U);
+  EXPECT_EQ(grade_plan->stages[0].kind, CompiledGradeStageKind::Pointwise);
+  EXPECT_EQ(grade_plan->stages[1].kind, CompiledGradeStageKind::LocalLaplacian);
+  // Parameter identity follows the instance id, not the stored position.
+  EXPECT_EQ(grade_plan->adjustments[11].instance_id,
+            AdjustmentInstanceId{"grade.primary.shadows"});
+  EXPECT_EQ(grade_plan->adjustments[1].instance_id,
+            AdjustmentInstanceId{"grade.primary.exposure"});
 }
 
 TEST(GpuDagGraphCompiler, GraphCompilerEmitsMaskEvaluateWhenMaskConnected) {
@@ -333,9 +348,11 @@ TEST(GpuDagGraphCompiler, GradeWithoutPrimaryIdRendersItsParameters) {
   EXPECT_EQ(plan.FindGrade(NodeId{"grade.b"}), &plan.grade_nodes.front());
   EXPECT_EQ(plan.FindGrade(NodeId{"grade.primary"}), nullptr);
   ASSERT_EQ(plan.grade_nodes.front().adjustments.size(), remaining->AdjustmentCount());
-  for (std::size_t i = 0; i < remaining->AdjustmentCount(); ++i) {
-    EXPECT_EQ(plan.grade_nodes.front().adjustments[i].instance_id, remaining->AdjustmentIdAt(i));
-    EXPECT_EQ(plan.grade_nodes.front().adjustments[i].type, remaining->AdjustmentAt(i).Type());
+  const auto compile_order = ColorGradeCompileOrder();
+  for (std::size_t i = 0; i < compile_order.size(); ++i) {
+    EXPECT_EQ(plan.grade_nodes.front().adjustments[i].type, compile_order[i]);
+    EXPECT_EQ(plan.grade_nodes.front().adjustments[i].instance_id,
+              MakeAdjustmentInstanceId(remaining->Id(), compile_order[i]));
   }
   const auto grades = plan.PassesOfKind(GpuPassKind::PrimaryColorGrade);
   ASSERT_EQ(grades.size(), 1U);
@@ -630,6 +647,60 @@ TEST(GpuDagGraphCompiler, InvalidMaskStackBindingsFailBeforeGpuWork) {
   extra.instance.ordinal = 99;
   duplicate_union.passes.push_back(extra);
   EXPECT_THROW(ValidateExecutionPlan(duplicate_union), std::runtime_error);
+}
+
+TEST(GpuDagGraphCompiler, ReopenedAndExportedDocumentUseTheSameGradeOrder) {
+  auto document = CreateDefaultPipelineDocument();
+  auto* grade   = document.PrimaryGrade();
+  ASSERT_NE(grade, nullptr);
+  // Stored order deliberately differs from the fixed compile order; reopen must
+  // preserve the stored order while compiling the same fixed stage sequence.
+  grade->MoveAdjustment(AdjustmentInstanceId{"grade.primary.shadows"}, 0);
+  grade->MoveAdjustment(AdjustmentInstanceId{"grade.primary.saturation"}, 0);
+  grade->MoveAdjustment(AdjustmentInstanceId{"grade.primary.exposure"}, 12);
+  auto* shadows = dynamic_cast<ShadowsModel*>(grade->FindAdjustmentByType(type_ids::Shadows()));
+  ASSERT_NE(shadows, nullptr);
+  shadows->SetValue(60.0f);
+
+  const auto interactive = GraphCompiler::Compile(document, DirectRgbSource(), RenderRequest{});
+  RenderRequest export_request;
+  export_request.resolution.quality = RenderQuality::Export;
+  auto exported = GraphCompiler::Compile(document, DirectRgbSource(), export_request);
+  const auto restored_doc = PipelineDocument::FromJson(document.ToJson());
+  const auto reopened     = GraphCompiler::Compile(restored_doc, DirectRgbSource(), RenderRequest{});
+
+  // Stored document order and parameter identity survive the round trip.
+  const auto* restored_grade = restored_doc.PrimaryGrade();
+  ASSERT_NE(restored_grade, nullptr);
+  ASSERT_EQ(restored_grade->AdjustmentCount(), grade->AdjustmentCount());
+  for (std::size_t index = 0; index < grade->AdjustmentCount(); ++index) {
+    EXPECT_EQ(restored_grade->AdjustmentIdAt(index), grade->AdjustmentIdAt(index));
+  }
+  EXPECT_EQ(restored_grade->AdjustmentAt(0).Type(), type_ids::Saturation());
+  EXPECT_EQ(restored_grade->AdjustmentAt(1).Type(), type_ids::Shadows());
+
+  const auto compile_order = ColorGradeCompileOrder();
+  auto expect_fixed_order  = [&](const CompiledGradeNode& compiled) {
+    ASSERT_EQ(compiled.adjustments.size(), compile_order.size());
+    for (std::size_t index = 0; index < compile_order.size(); ++index) {
+      EXPECT_EQ(compiled.adjustments[index].type, compile_order[index]) << "index " << index;
+    }
+    ASSERT_EQ(compiled.stages.size(), 2U);
+    EXPECT_EQ(compiled.stages[0].kind, CompiledGradeStageKind::Pointwise);
+    EXPECT_EQ(compiled.stages[0].begin, 0U);
+    EXPECT_EQ(compiled.stages[0].count, 11U);
+    EXPECT_EQ(compiled.stages[1].kind, CompiledGradeStageKind::LocalLaplacian);
+    EXPECT_EQ(compiled.stages[1].begin, 11U);
+    EXPECT_EQ(compiled.stages[1].count, 2U);
+  };
+  ASSERT_NE(interactive.FirstGrade(), nullptr);
+  expect_fixed_order(*interactive.FirstGrade());
+  ASSERT_NE(exported.FirstGrade(), nullptr);
+  expect_fixed_order(*exported.FirstGrade());
+  ASSERT_NE(reopened.FirstGrade(), nullptr);
+  expect_fixed_order(*reopened.FirstGrade());
+  EXPECT_EQ(exported.static_key, interactive.static_key);
+  EXPECT_EQ(reopened.static_key, interactive.static_key);
 }
 
 }  // namespace

@@ -114,20 +114,21 @@ TEST(GpuDagCudaDrtProduct, ProductRendererCompilesStaticPlanOnlyForTopologyOrSou
   auto* grade = document->PrimaryGrade();
   grade->MoveAdjustment(grade->AdjustmentIdAt(0), grade->AdjustmentCount() - 1);
   ASSERT_NE(RenderHost(renderer, image, DecodeRes::FULL, request), nullptr);
-  EXPECT_EQ(renderer.Stats().plan_compile_count, 2U);
+  // Stored adjustment order is non-semantic under the fixed compile order.
+  EXPECT_EQ(renderer.Stats().plan_compile_count, 1U);
   EXPECT_EQ(renderer.Stats().libraw_open_unpack_count, 1U);
 
   grade_mask_test::AddRadialMask(*document, MaskId{"mask.radial"});
   ASSERT_NE(RenderHost(renderer, image, DecodeRes::FULL, request), nullptr);
-  EXPECT_EQ(renderer.Stats().plan_compile_count, 3U);
+  EXPECT_EQ(renderer.Stats().plan_compile_count, 2U);
 
   ASSERT_NE(RenderHost(renderer, image, DecodeRes::HALF, request), nullptr);
   EXPECT_EQ(renderer.Stats().libraw_open_unpack_count, 2U);
-  EXPECT_EQ(renderer.Stats().plan_compile_count, 4U);
+  EXPECT_EQ(renderer.Stats().plan_compile_count, 3U);
 
   ASSERT_NE(RenderHost(renderer, image, DecodeRes::FULL, request), nullptr);
   EXPECT_EQ(renderer.Stats().libraw_open_unpack_count, 2U);
-  EXPECT_EQ(renderer.Stats().plan_compile_count, 4U);
+  EXPECT_EQ(renderer.Stats().plan_compile_count, 3U);
 }
 
 TEST(GpuDagCudaDrtProduct, ProductRendererReusesPreparedSourceAfterSwitchingEncodedBuffers) {

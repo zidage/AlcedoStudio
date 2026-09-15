@@ -11,6 +11,7 @@
 #include <variant>
 #include <vector>
 
+#include "edit/graph/adjustment_ownership.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/drt_node_model.hpp"
@@ -124,11 +125,26 @@ auto MixCameraColorParams(ContentHash& hash, const DevelopPayload& params) -> vo
   hash.MixF64(profile.color_matrix_2_cct);
 }
 
+/**
+ * @brief Adjustment indices of @p grade in the compiled execution order.
+ *
+ * Content keys hash parameters in the order they execute, so a stored document
+ * reorder that does not change execution keeps the same derived-image identity.
+ */
+auto GradeCompileIndices(const ColorGradeNodeModel& grade) -> std::vector<std::size_t> {
+  std::vector<OperatorTypeId> types;
+  types.reserve(grade.AdjustmentCount());
+  for (std::size_t index = 0; index < grade.AdjustmentCount(); ++index) {
+    types.push_back(grade.AdjustmentAt(index).Type());
+  }
+  return ColorGradeCompileIndexOrder(types);
+}
+
 auto MixGrade(ContentHash& hash, const ColorGradeNodeModel& grade) -> void {
   hash.MixBool(grade.Enabled());
   hash.MixF32(grade.Mix());
   hash.MixU64(grade.AdjustmentCount());
-  for (std::size_t index = 0; index < grade.AdjustmentCount(); ++index) {
+  for (const auto index : GradeCompileIndices(grade)) {
     hash.MixText(grade.AdjustmentIdAt(index).Value());
     hash.MixText(grade.AdjustmentAt(index).Type().Text());
     hash.MixText(grade.AdjustmentAt(index).ToJson().dump());
@@ -148,7 +164,7 @@ auto MixGradeExcludingLocalToneValues(ContentHash& hash, const ColorGradeNodeMod
   hash.MixBool(grade.Enabled());
   hash.MixF32(grade.Mix());
   hash.MixU64(grade.AdjustmentCount());
-  for (std::size_t index = 0; index < grade.AdjustmentCount(); ++index) {
+  for (const auto index : GradeCompileIndices(grade)) {
     const auto& type = grade.AdjustmentAt(index).Type();
     hash.MixText(grade.AdjustmentIdAt(index).Value());
     hash.MixText(type.Text());

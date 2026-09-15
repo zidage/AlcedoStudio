@@ -5,11 +5,13 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "edit/graph/graph_ids.hpp"
 #include "edit/operators/models/i_operator_model.hpp"
@@ -41,6 +43,35 @@ enum class AdjustmentParameterOwner : std::uint8_t {
  *        Film Grain.
  */
 [[nodiscard]] auto DrtPostAdjustmentTypes() -> std::array<OperatorTypeId, 4>;
+
+/**
+ * @brief Fixed Color Grade execution order: Basic Tone, Color, then Local Tone.
+ *
+ * Basic Tone keeps CAT02 White Balance, Exposure, Contrast, White, Black order.
+ * Color keeps Curve, HLS, Saturation, Vibrance, ColorWheel, LMT order.
+ * Shadows/Highlights form the Local Tone group compiled into the LLF stage.
+ * The GraphCompiler orders every supported Grade this way; stored document
+ * order selects parameter identity only, never execution order.
+ */
+[[nodiscard]] auto ColorGradeCompileOrder() -> std::array<OperatorTypeId, 13>;
+
+/**
+ * @brief 0-based rank of @p type in @ref ColorGradeCompileOrder.
+ *
+ * @return Position in the compile order, or the order size when @p type is not a
+ *         Color Grade catalog type.
+ */
+[[nodiscard]] auto ColorGradeCompileRank(const OperatorTypeId& type) -> std::uint32_t;
+
+/**
+ * @brief Document indices of @p types in fixed compile order.
+ *
+ * Stable-sorts positions by @ref ColorGradeCompileRank, preserving document order
+ * for repeated instances of one type. This is the single ordering rule shared by
+ * the GraphCompiler and content-key hashing.
+ */
+[[nodiscard]] auto ColorGradeCompileIndexOrder(std::span<const OperatorTypeId> types)
+    -> std::vector<std::size_t>;
 
 [[nodiscard]] auto OwnerOfAdjustment(const OperatorTypeId& type) -> AdjustmentParameterOwner;
 
