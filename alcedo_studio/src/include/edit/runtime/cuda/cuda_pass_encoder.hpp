@@ -10,6 +10,7 @@
 #include "edit/runtime/cuda/cuda_mask_pass.hpp"
 #include "edit/runtime/cuda/cuda_primary_grade_pass.hpp"
 #include "edit/runtime/cuda/cuda_render_device.hpp"
+#include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/pass_encoder.hpp"
 
 namespace alcedo {
@@ -68,18 +69,20 @@ struct PassEncoder<CudaBackend, GpuPassKind::MaskUnion> {
 
 template <>
 struct PassEncoder<CudaBackend, GpuPassKind::PrimaryColorGrade> {
-  static void Encode(CudaRenderDevice& device, const ExecutionPlan& plan,
+  static auto Encode(CudaRenderDevice& device, const ExecutionPlan& plan,
                      const PreparedRawInput& input, PipelineDocument& document,
-                     const CompiledGradeNode& compiled_grade) {
-    (void)ExecuteCudaPrimaryGrade(device, plan, input, document, compiled_grade);
+                     const CompiledGradeNode& compiled_grade, const FrameSceneBinding& scene)
+      -> FrameSceneBinding {
+    return ExecuteCudaPrimaryGrade(device, plan, input, document, compiled_grade, scene)
+        .output_binding;
   }
 };
 
 template <>
 struct PassEncoder<CudaBackend, GpuPassKind::Drt> {
   static void Encode(CudaRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
-                     PipelineDocument& document) {
-    (void)ExecuteCudaDrt(device, plan, document);
+                     PipelineDocument& document, const FrameSceneBinding& scene) {
+    (void)ExecuteCudaDrt(device, plan, document, scene);
   }
 };
 

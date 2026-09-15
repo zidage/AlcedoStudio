@@ -126,6 +126,7 @@ class CudaBackend {
 
   using Slab                                                       = Buffer;
   using CommandContext                                             = CudaCommandContext;
+  using SceneWorkImage                                             = Texture2D;
 
   CudaBackend()                                                    = default;
   ~CudaBackend()                                                   = default;
@@ -137,6 +138,16 @@ class CudaBackend {
   [[nodiscard]] auto CreateSlab(std::size_t bytes) -> Buffer { return CreateBuffer(bytes); }
   [[nodiscard]] auto CreateTexture2D(std::uint32_t width, std::uint32_t height,
                                      TextureFormat format) -> Texture2D;
+  /**
+   * @brief Allocate one RGBA32F scene-work member as a linear CUDA texture.
+   *
+   * Same storage as @ref CreateTexture2D. Owned by SceneWorkImagePair, not
+   * GraphImageCache or TexturePool.
+   */
+  [[nodiscard]] auto CreateSceneWorkImage(std::uint32_t width, std::uint32_t height)
+      -> SceneWorkImage {
+    return CreateTexture2D(width, height, TextureFormat::Rgba32f);
+  }
 
   void UploadBufferRange(Buffer& buffer, std::uint32_t offset, std::span<const std::byte> bytes,
                          CommandContext& command_context);

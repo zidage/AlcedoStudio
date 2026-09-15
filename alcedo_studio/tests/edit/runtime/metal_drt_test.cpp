@@ -21,8 +21,10 @@
 #include "edit/operators/cst/odt_op.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/operators/models/sharpen_model.hpp"
+#include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/metal/metal_drt_pass.hpp"
+#include "edit/runtime/metal/metal_scene_work.hpp"
 #include "edit/runtime/metal/metal_pass_encoder.hpp"
 #include "metal/compute_pipeline_cache.hpp"
 
@@ -190,7 +192,13 @@ class MetalDrtFixture : public ::testing::Test {
 
 TEST_F(MetalDrtFixture, MetalDrtOpenDrtMatchesCudaReferenceWithinTolerance) {
   const auto output = Render();
-  const auto grade  = Download(device_, plan_.FirstGrade()->scene_output);
+  auto& work = device_.Workspace().SceneWork().Member(SceneWorkMember::Member0);
+  std::vector<Rgba> grade(static_cast<std::size_t>(work.Width()) * work.Height());
+  device_.Workspace().Device().DownloadTexture2D(
+      work,
+      std::span<std::byte>(reinterpret_cast<std::byte*>(grade.data()),
+                           grade.size() * sizeof(Rgba)),
+      device_.CommandContext());
   const auto display = Download(device_, output);
   ASSERT_EQ(grade.size(), display.size());
   ASSERT_TRUE(AllFinite(display));
@@ -371,14 +379,13 @@ TEST_F(MetalDrtFixture, DrtPostRunsAfterDisplayTransformAndChangesDisplayPixels)
   EXPECT_TRUE(differ);
 }
 
-TEST_F(MetalDrtFixture, MetalDrtEditRunsOnlyDrtPass) {
+TEST_F(MetalDrtFixture, MetalDrtEditReexecutesGradesAndRunsDisplayTransform) {
   (void)Render();
   auto* develop = device_.Workspace().Images().Find(plan_.develop_output);
-  auto* grade   = device_.Workspace().Images().Find(plan_.FirstGrade()->scene_output);
   ASSERT_NE(develop, nullptr);
-  ASSERT_NE(grade, nullptr);
   const auto develop_id = develop->Texture().ResourceId();
-  const auto grade_id   = grade->Texture().ResourceId();
+  const auto work_id =
+      device_.Workspace().SceneWork().Member(SceneWorkMember::Member0).ResourceId();
   device_.ResetPassStats();
   device_.Workspace().Device().ResetCounters();
 
@@ -390,22 +397,19 @@ TEST_F(MetalDrtFixture, MetalDrtEditRunsOnlyDrtPass) {
   EXPECT_EQ(stats.sensor_develop_execute, 0U);
   EXPECT_EQ(stats.geometry_execute, 0U);
   EXPECT_EQ(stats.camera_color_execute, 0U);
-  EXPECT_EQ(stats.primary_grade_execute, 0U);
+  EXPECT_EQ(stats.primary_grade_execute, 1U);
+  EXPECT_EQ(stats.primary_grade_skip, 0U);
   EXPECT_EQ(stats.drt_execute, 1U);
   EXPECT_EQ(stats.sensor_develop_skip, 1U);
-  EXPECT_EQ(stats.primary_grade_skip, 1U);
   EXPECT_EQ(device_.Workspace()
                 .Images()
                 .Find(plan_.develop_output)
                 ->Texture()
                 .ResourceId(),
             develop_id);
-  EXPECT_EQ(device_.Workspace()
-                .Images()
-                .Find(plan_.FirstGrade()->scene_output)
-                ->Texture()
-                .ResourceId(),
-            grade_id);
+  EXPECT_EQ(device_.Workspace().SceneWork().Member(SceneWorkMember::Member0).ResourceId(),
+            work_id);
+  EXPECT_EQ(device_.Workspace().Images().Find(plan_.FirstGrade()->scene_output), nullptr);
   EXPECT_EQ(device_.Workspace().Device().HeapCreateCount(), 0U);
   EXPECT_EQ(device_.Workspace().Device().PipelineCreateCount(), 0U);
   device_.ResetPassStats();

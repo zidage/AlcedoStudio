@@ -32,7 +32,8 @@ auto CompactGradeOps(std::vector<GradeScheduledOp> ops, bool local_tone_active)
 
 auto CountGradeGpuWrites(const std::vector<GradeScheduledOp>& ops, bool skip_final_mix)
     -> std::size_t {
-  std::size_t count = skip_final_mix ? 0 : 1;
+  (void)skip_final_mix;
+  std::size_t count = 0;
   for (const auto& op : ops) {
     if (op.kind == CompiledGradeStageKind::Pointwise ||
         op.kind == CompiledGradeStageKind::Neighborhood ||

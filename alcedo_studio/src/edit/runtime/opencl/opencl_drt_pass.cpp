@@ -11,6 +11,7 @@
 #include <optional>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "edit/graph/drt_node_model.hpp"
@@ -20,7 +21,9 @@
 #include "edit/runtime/adjustment_runtime.hpp"
 #include "edit/runtime/drt_display.hpp"
 #include "edit/runtime/drt_post_executor.hpp"
+#include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/opencl/opencl_dag_programs.hpp"
+#include "edit/runtime/opencl/opencl_scene_work.hpp"
 #include "edit/runtime/opencl/opencl_drt_params.hpp"
 #include "edit/runtime/opencl/opencl_neighbor_dispatch.hpp"
 #include "edit/runtime/parameter_arena.hpp"
@@ -66,6 +69,36 @@ void DispatchDrt(OpenClRenderDevice& device, const OpenClBackend::Texture2D& sou
   device.Workspace().Device().TrackKernelEvent(device.CommandContext(), event);
 }
 
+void DispatchDrtScene(OpenClRenderDevice& device, const FrameSceneBinding& source,
+                      const FrameSceneBinding& destination, const OpenClBackend::Buffer& parameters,
+                      std::uint32_t parameter_offset, std::uint32_t width, std::uint32_t height) {
+  if (parameters.Empty()) {
+    throw std::runtime_error("ExecuteOpenClDrt: parameter buffer is empty");
+  }
+  auto kernel = OpenClKernelCache::Instance().GetKernel(OpenCL::GpuDag::kDrtProgramName,
+                                                        OpenCL::GpuDag::kDrtSceneKernelName);
+  auto& backend = device.Workspace().Device();
+  BindOpenClSceneView(kernel, 0, OpenClBindScene(device, source), backend, "OpenCL DRT source");
+  BindOpenClSceneView(kernel, 3, OpenClBindScene(device, destination), backend,
+                      "OpenCL DRT destination");
+  cl_mem        parameter_buffer = parameters.Native();
+  const cl_uint offset           = parameter_offset;
+  CheckOpenCl(clSetKernelArg(kernel, 6, sizeof(cl_mem), &parameter_buffer),
+              "ExecuteOpenClDrt: parameters");
+  CheckOpenCl(clSetKernelArg(kernel, 7, sizeof(cl_uint), &offset), "ExecuteOpenClDrt: offset");
+  CheckOpenCl(clSetKernelArg(kernel, 8, sizeof(width), &width), "ExecuteOpenClDrt: width");
+  CheckOpenCl(clSetKernelArg(kernel, 9, sizeof(height), &height), "ExecuteOpenClDrt: height");
+  const std::size_t local[2]  = {16, 16};
+  const std::size_t global[2] = {((static_cast<std::size_t>(width) + 15) / 16) * 16,
+                                 ((static_cast<std::size_t>(height) + 15) / 16) * 16};
+  cl_event          event     = nullptr;
+  CheckOpenCl(clEnqueueNDRangeKernel(device.Workspace().Device().NativeQueue(), kernel, 2, nullptr,
+                                     global, local, 0, nullptr, &event),
+              "ExecuteOpenClDrt: clEnqueueNDRangeKernel");
+  NoteOpenClEnqueueNdRange();
+  device.Workspace().Device().TrackKernelEvent(device.CommandContext(), event);
+}
+
 struct OpenClDrtOps {
   using Device            = OpenClRenderDevice;
   using Texture           = OpenClBackend::Texture2D;
@@ -92,42 +125,38 @@ struct OpenClDrtOps {
     return device.Workspace().Textures().Acquire({width, height, TextureFormat::Rgba32f});
   }
 
-  static auto HorizontalScratchTexture(HorizontalScratch& scratch) -> Texture& {
-    return scratch.Texture();
+  static auto BindingWidth(OpenClRenderDevice& device, const FrameSceneBinding& binding)
+      -> std::uint32_t {
+    return OpenClSceneWidth(device, binding);
   }
 
-  static void DispatchHorizontal(OpenClRenderDevice& device, const Texture& src, Texture& blur,
-                                 const NeighborWork& work, std::uint32_t width,
-                                 std::uint32_t height) {
-    EnqueueOpenClNeighborHorizontal(device, src, blur, work.params, width, height);
+  static auto BindingHeight(OpenClRenderDevice& device, const FrameSceneBinding& binding)
+      -> std::uint32_t {
+    return OpenClSceneHeight(device, binding);
   }
 
-  static void DispatchVerticalApply(OpenClRenderDevice& device, const Texture& src,
-                                    const Texture& blur, Texture& dst, const LutBinding&,
-                                    const NeighborWork& work, std::uint32_t width,
-                                    std::uint32_t height) {
-    EnqueueOpenClNeighborVertical(device, src, blur, dst, work.params, width, height);
+  static void DispatchHorizontal(OpenClRenderDevice& device, const FrameSceneBinding& src,
+                                 HorizontalScratch& scratch, const NeighborWork& work,
+                                 std::uint32_t width, std::uint32_t height) {
+    EnqueueOpenClNeighborHorizontalScene(device, OpenClBindScene(device, src), scratch.Texture(),
+                                         work.params, width, height);
   }
 
-  static auto AcquireOutput(OpenClRenderDevice& device, const GraphValueId& id, std::uint32_t width,
-                            std::uint32_t height) -> Texture& {
-    return device.Workspace()
-        .AcquireImageForWrite(id, {width, height, TextureFormat::Rgba32f})
-        .Texture();
+  static void DispatchVerticalApply(OpenClRenderDevice& device, const FrameSceneBinding& src,
+                                    HorizontalScratch& scratch, const FrameSceneBinding& dst,
+                                    const FrameSceneBinding& original, const LutBinding&,
+                                    const NeighborWork& work, float mix, const GraphValueId* mask_id,
+                                    std::uint32_t width, std::uint32_t height) {
+    const auto src_view  = OpenClBindScene(device, src);
+    const auto dst_view  = OpenClBindScene(device, dst);
+    const auto orig_view = OpenClBindScene(device, original);
+    EnqueueOpenClNeighborVerticalScene(device, src_view, scratch.Texture(), dst_view, &orig_view,
+                                       mask_id, mix, work.params, width, height);
   }
 
-  static auto SceneTexture(OpenClRenderDevice& device, const GraphValueId& id) -> Texture& {
-    auto* image = device.Workspace().Images().Find(id);
-    if (image == nullptr || image->Empty()) {
-      throw std::runtime_error("ExecuteOpenClDrt: scene image is missing");
-    }
-    return image->Texture();
-  }
-
-  static void CopyTexture(OpenClRenderDevice& device, const GraphValueId& src,
-                          const GraphValueId& dst) {
-    device.Workspace().Device().CopyTexture2D(SceneTexture(device, src), SceneTexture(device, dst),
-                                              device.CommandContext());
+  static void AcquireDisplayOutput(OpenClRenderDevice& device, const GraphValueId& id,
+                                   std::uint32_t width, std::uint32_t height) {
+    (void)device.Workspace().AcquireImageForWrite(id, {width, height, TextureFormat::Rgba32f});
   }
 
   static void BindDisplayParams(OpenClRenderDevice& device, const ExecutionPlan& plan,
@@ -151,13 +180,13 @@ struct OpenClDrtOps {
     }
   }
 
-  static void DispatchDisplayTransform(OpenClRenderDevice& device, const Texture& scene,
-                                       Texture& display, const NodeId& drt_id, std::uint32_t,
-                                       std::uint32_t) {
+  static void DispatchDisplayTransform(OpenClRenderDevice& device, const FrameSceneBinding& scene,
+                                       const FrameSceneBinding& display, const NodeId& drt_id,
+                                       std::uint32_t width, std::uint32_t height) {
     auto&                  arena   = device.Workspace().Parameters();
     const ParameterSlotKey key{drt_id, AdjustmentInstanceId{"drt.output"}};
     const auto&            binding = arena.Binding(key);
-    DispatchDrt(device, scene, display, arena.DeviceBuffer(), binding.offset);
+    DispatchDrtScene(device, scene, display, arena.DeviceBuffer(), binding.offset, width, height);
   }
 
   static void CheckAfterEncode(OpenClRenderDevice&) {}
@@ -166,8 +195,9 @@ struct OpenClDrtOps {
 }  // namespace
 
 auto ExecuteOpenClDrt(OpenClRenderDevice& device, const ExecutionPlan& plan,
-                      PipelineDocument& document) -> OpenClDrtResult {
-  const auto executed = DrtPostExecutor<OpenClDrtOps>::Execute(device, plan, document);
+                      PipelineDocument& document, const FrameSceneBinding& scene)
+    -> OpenClDrtResult {
+  const auto executed = DrtPostExecutor<OpenClDrtOps>::Execute(device, plan, document, scene);
   return {executed.output, executed.display_post, executed.post_neighborhood_count};
 }
 

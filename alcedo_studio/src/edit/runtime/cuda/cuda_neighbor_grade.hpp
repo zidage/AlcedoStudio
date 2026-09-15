@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include <cuda_runtime.h>
 
 #include "edit/runtime/adjustment_runtime.hpp"
@@ -13,7 +15,8 @@ namespace alcedo::cuda_neighbor_grade {
 void LaunchBlurHorizontal(cudaStream_t stream, const float4* src, float4* dst, int width,
                           int height, const GradeNeighborParams& params);
 void LaunchApplyVertical(cudaStream_t stream, const float4* original,
-                         const float4* blur_horizontal, float4* dst, int width, int height,
+                         const float4* blur_horizontal, float4* dst, const float4* mix_original,
+                         float mix, const std::uint8_t* mask, int width, int height,
                          const GradeNeighborParams& params);
 
 }  // namespace alcedo::cuda_neighbor_grade

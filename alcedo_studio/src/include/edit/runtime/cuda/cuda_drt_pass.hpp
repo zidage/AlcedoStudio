@@ -10,6 +10,7 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/runtime/cuda/cuda_render_device.hpp"
 #include "edit/runtime/execution_plan.hpp"
+#include "edit/runtime/frame_scene_binding.hpp"
 
 namespace alcedo {
 
@@ -28,6 +29,7 @@ struct CudaDrtResult {
  * dirty bits.
  */
 [[nodiscard]] auto ExecuteCudaDrt(CudaRenderDevice& device, const ExecutionPlan& plan,
-                                  PipelineDocument& document) -> CudaDrtResult;
+                                  PipelineDocument& document, const FrameSceneBinding& scene)
+    -> CudaDrtResult;
 
 }  // namespace alcedo

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include <cuda_runtime.h>
 
 #include <cstddef>
@@ -150,7 +152,20 @@ __global__ void BlurHorizontal(const float4* src, float4* dst, int width, int he
   dst[static_cast<std::size_t>(y) * width + x] = result;
 }
 
+__device__ __forceinline__ auto MixIfNeeded(float4 adjusted, const float4* mix_original, float mix,
+                                            const std::uint8_t* mask, std::size_t index) -> float4 {
+  if (mix == 1.0f && mask == nullptr) {
+    return adjusted;
+  }
+  const float  weight = mix * (mask == nullptr ? 1.0f : mask[index] / 255.0f);
+  const float4 source = mix_original[index];
+  return make_float4(source.x + (adjusted.x - source.x) * weight,
+                     source.y + (adjusted.y - source.y) * weight,
+                     source.z + (adjusted.z - source.z) * weight, source.w);
+}
+
 __global__ void ApplyVertical(const float4* original, const float4* blur_horizontal, float4* dst,
+                              const float4* mix_original, float mix, const std::uint8_t* mask,
                               int width, int height, GradeNeighborParams params) {
   extern __shared__ float4 tile[];
   const int                x            = blockIdx.x * blockDim.x + threadIdx.x;
@@ -192,8 +207,10 @@ __global__ void ApplyVertical(const float4* original, const float4* blur_horizon
     if (params.threshold > 0.0f && fabsf(CUDA::detail_luminance(high)) <= params.threshold) {
       high = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
     }
-    dst[index] = make_float4(source.x + high.x * params.amount, source.y + high.y * params.amount,
-                             source.z + high.z * params.amount, source.w);
+    dst[index] = MixIfNeeded(
+        make_float4(source.x + high.x * params.amount, source.y + high.y * params.amount,
+                    source.z + high.z * params.amount, source.w),
+        mix_original, mix, mask, index);
     return;
   }
 
@@ -214,8 +231,10 @@ __global__ void ApplyVertical(const float4* original, const float4* blur_horizon
     const float luma     = CUDA::detail_luminance(source);
     const float centered = (luma - 0.5f) * 2.0f;
     const float strength = params.amount * protect * fmaxf(1.0f - centered * centered, 0.0f);
-    dst[index] = make_float4(fmaf(diff.x, strength, source.x), fmaf(diff.y, strength, source.y),
-                             fmaf(diff.z, strength, source.z), source.w);
+    dst[index] = MixIfNeeded(
+        make_float4(fmaf(diff.x, strength, source.x), fmaf(diff.y, strength, source.y),
+                    fmaf(diff.z, strength, source.z), source.w),
+        mix_original, mix, mask, index);
     return;
   }
 
@@ -236,9 +255,11 @@ __global__ void ApplyVertical(const float4* original, const float4* blur_horizon
     const float spill_r = fmaxf(blur.x - source.x, 0.0f);
     const float spill_g = fmaxf(blur.y - source.y, 0.0f);
     const float spill_b = fmaxf(blur.z - source.z, 0.0f);
-    dst[index] = make_float4(source.x + spill_r * params.amount * params.redshift[0],
-                             source.y + spill_g * params.amount * params.redshift[1],
-                             source.z + spill_b * params.amount * params.redshift[2], source.w);
+    dst[index] = MixIfNeeded(
+        make_float4(source.x + spill_r * params.amount * params.redshift[0],
+                    source.y + spill_g * params.amount * params.redshift[1],
+                    source.z + spill_b * params.amount * params.redshift[2], source.w),
+        mix_original, mix, mask, index);
     return;
   }
 
@@ -252,8 +273,9 @@ __global__ void ApplyVertical(const float4* original, const float4* blur_horizon
     blur.y += (top.y + bottom.y) * weight;
     blur.z += (top.z + bottom.z) * weight;
   }
-  blur.w       = c0.w;
-  dst[index]   = CUDA::FilmGrainApplyDyeClouds(source, blur, params.amount);
+  blur.w     = c0.w;
+  dst[index] = MixIfNeeded(CUDA::FilmGrainApplyDyeClouds(source, blur, params.amount), mix_original,
+                           mix, mask, index);
 }
 
 }  // namespace alcedo::cuda_neighbor_grade

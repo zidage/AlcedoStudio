@@ -24,6 +24,8 @@
 #include "edit/runtime/cuda/cuda_develop_pass.hpp"
 #include "edit/runtime/cuda/cuda_mask_pass.hpp"
 #include "edit/runtime/cuda/cuda_primary_grade_pass.hpp"
+#include "edit/runtime/cuda/cuda_scene_work.hpp"
+#include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/pass_kind.hpp"
 #include "edit/runtime/result_content_key.hpp"
@@ -87,6 +89,7 @@ class CudaMaskFixture : public ::testing::Test {
     ExecuteCudaCameraColor(device_, plan_, document_);
     (void)ExecuteCudaMask(device_, plan_, document_);
     auto result = ExecuteCudaPrimaryGrade(device_, plan_, prepared_, document_);
+    last_grade_binding_ = result.output_binding;
     device_.EndRender();
     device_.WaitIdle();
     return result;
@@ -136,12 +139,24 @@ class CudaMaskFixture : public ::testing::Test {
     return pixels;
   }
 
+  auto DownloadGrade() -> std::vector<Rgba> {
+    auto& texture = CudaSceneTexture(device_, last_grade_binding_);
+    std::vector<Rgba> pixels(static_cast<std::size_t>(texture.Width()) * texture.Height());
+    device_.Workspace().Device().DownloadTexture2D(
+        texture,
+        std::span<std::byte>(reinterpret_cast<std::byte*>(pixels.data()),
+                             pixels.size() * sizeof(Rgba)),
+        device_.CommandContext());
+    return pixels;
+  }
+
   std::uint32_t    width_  = 0;
   std::uint32_t    height_ = 0;
   PreparedRawInput prepared_;
   PipelineDocument document_;
-  ExecutionPlan    plan_;
-  CudaRenderDevice device_;
+  ExecutionPlan       plan_;
+  CudaRenderDevice    device_;
+  FrameSceneBinding   last_grade_binding_{};
 };
 
 TEST_F(CudaMaskFixture, CudaRadialMaskMatchesReferenceSpaceEllipseAtPreviewScales) {
@@ -190,7 +205,7 @@ TEST_F(CudaMaskFixture, CudaColorGradeMixUsesInputAtMaskZeroAndAdjustedAtMaskOne
   exposure->SetValue(1.0f);
   Compile();
   const auto full_result = RenderGrade();
-  const auto full        = DownloadImage(full_result.output);
+  const auto full        = DownloadGrade();
 
   LinearGradientMaskSource split;
   split.origin_x            = 0.5f;
@@ -203,7 +218,7 @@ TEST_F(CudaMaskFixture, CudaColorGradeMixUsesInputAtMaskZeroAndAdjustedAtMaskOne
   Compile();
   const auto mixed  = RenderGrade();
   const auto source = DownloadImage(plan_.develop_output);
-  const auto output = DownloadImage(mixed.output);
+  const auto output = DownloadGrade();
   ASSERT_EQ(source.size(), output.size());
   const auto left  = 5 * width_ + 2;
   const auto right = 5 * width_ + width_ - 2;
@@ -220,20 +235,23 @@ TEST_F(CudaMaskFixture, EmptyMaskListUsesFullGradeCoverage) {
   EXPECT_FALSE(plan_.Contains(GpuPassKind::MaskEvaluate));
   ASSERT_EQ(device_.Execute(plan_, prepared_, document_), plan_.display_output);
   device_.WaitIdle();
-  const auto empty_grade = DownloadImage(plan_.FirstGrade()->scene_output);
+  last_grade_binding_    = FrameSceneBinding::WorkImage(SceneWorkMember::Member0);
+  const auto empty_grade = DownloadGrade();
   const auto empty_keys  = BuildFrameResultContentKeys(plan_, prepared_, document_);
 
   grade_mask_test::AddRadialMask(document_, MaskId{"mask.radial"});
   Compile();
   ASSERT_EQ(device_.Execute(plan_, prepared_, document_), plan_.display_output);
   device_.WaitIdle();
-  const auto masked_grade = DownloadImage(plan_.FirstGrade()->scene_output);
+  last_grade_binding_     = FrameSceneBinding::WorkImage(SceneWorkMember::Member0);
+  const auto masked_grade = DownloadGrade();
 
   document_.PrimaryGrade()->RemoveMask(MaskId{"mask.radial"});
   Compile();
   ASSERT_EQ(device_.Execute(plan_, prepared_, document_), plan_.display_output);
   device_.WaitIdle();
-  const auto restored_grade = DownloadImage(plan_.FirstGrade()->scene_output);
+  last_grade_binding_       = FrameSceneBinding::WorkImage(SceneWorkMember::Member0);
+  const auto restored_grade = DownloadGrade();
   const auto restored_keys  = BuildFrameResultContentKeys(plan_, prepared_, document_);
   ASSERT_EQ(empty_grade.size(), restored_grade.size());
   EXPECT_NEAR(empty_grade.front().r, restored_grade.front().r, 1.0e-5f);
@@ -254,10 +272,11 @@ TEST_F(CudaMaskFixture, AllDisabledMasksUseZeroGradeCoverage) {
   ASSERT_TRUE(plan_.FirstGrade()->mask_stack.has_value());
   ASSERT_EQ(device_.Execute(plan_, prepared_, document_), plan_.display_output);
   device_.WaitIdle();
+  last_grade_binding_ = FrameSceneBinding::WorkImage(SceneWorkMember::Member0);
   const auto keys = BuildFrameResultContentKeys(plan_, prepared_, document_);
   EXPECT_EQ(keys.Value(plan_.FirstGrade()->mask_output), AllDisabledMaskUnionKey());
   const auto scene = DownloadImage(plan_.FirstGrade()->scene_input);
-  const auto grade = DownloadImage(plan_.FirstGrade()->scene_output);
+  const auto grade = DownloadGrade();
   ASSERT_EQ(scene.size(), grade.size());
   EXPECT_NEAR(grade.front().r, scene.front().r, 1.0e-5f);
   EXPECT_NEAR(grade[grade.size() / 2].r, scene[scene.size() / 2].r, 1.0e-5f);

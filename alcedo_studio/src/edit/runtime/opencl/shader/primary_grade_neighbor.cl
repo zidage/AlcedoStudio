@@ -303,3 +303,165 @@ __kernel void primary_grade_neighbor_apply_v_rgba32f(read_only image2d_t  origin
                                 params.amount));
   }
 }
+
+static inline float4 SceneTap(read_only image2d_t image, __global const float4* buffer,
+                              int is_buffer, int2 coord, int width, int height) {
+  coord.x = clamp(coord.x, 0, width - 1);
+  coord.y = clamp(coord.y, 0, height - 1);
+  if (is_buffer != 0) {
+    return buffer[(uint)coord.y * (uint)width + (uint)coord.x];
+  }
+  return GradeNeighborRead(image, coord);
+}
+
+static inline float SceneFilmSample(read_only image2d_t image, __global const float4* buffer,
+                                    int is_buffer, int2 coord, int channel,
+                                    const GradeNeighborParams* params, int width, int height) {
+  coord.x = clamp(coord.x, 0, width - 1);
+  coord.y = clamp(coord.y, 0, height - 1);
+  const int2  ref       = GradeFilmReferenceCoord(coord, params);
+  const ulong prng_seed = ((ulong)params->seed_hi << 32u) | (ulong)params->seed_lo;
+  const ulong stream    = opencl_prng_pixel_stream_2d(ref.x, ref.y, (uint)channel);
+  const float draw      = opencl_prng_uniform_float01(prng_seed, stream, 0xd1b54a32d192ed03UL);
+  const float signal    = GradeFilmChannel(SceneTap(image, buffer, is_buffer, coord, width, height),
+                                           channel);
+  return draw < clamp(signal, 0.0f, 1.0f) ? 1.0f : 0.0f;
+}
+
+static inline float4 SceneFilmHorizontal(read_only image2d_t image,
+                                         __global const float4* buffer, int is_buffer, int2 coord,
+                                         const GradeNeighborParams* params, int width, int height) {
+  float result[3];
+  for (int channel = 0; channel < 3; ++channel) {
+    float acc = SceneFilmSample(image, buffer, is_buffer, coord, channel, params, width, height) *
+                params->weights[0];
+    for (uint tap = 1u; tap < params->tap_count; ++tap) {
+      const int distance = (int)tap;
+      acc += (SceneFilmSample(image, buffer, is_buffer, coord - (int2)(distance, 0), channel,
+                              params, width, height) +
+              SceneFilmSample(image, buffer, is_buffer, coord + (int2)(distance, 0), channel,
+                              params, width, height)) *
+             params->weights[tap];
+    }
+    result[channel] = acc;
+  }
+  return (float4)(result[0], result[1], result[2],
+                  SceneTap(image, buffer, is_buffer, coord, width, height).w);
+}
+
+static inline float4 SceneMix(float4 adjusted, read_only image2d_t mix_image,
+                              __global const float4* mix_buffer, int mix_is_buffer,
+                              read_only image2d_t mask, int has_mask, float grade_mix, int2 gid,
+                              int width, int height) {
+  if (mix_is_buffer < 0) {
+    return adjusted;
+  }
+  const float4 original = SceneTap(mix_image, mix_buffer, mix_is_buffer, gid, width, height);
+  float mix = grade_mix;
+  if (has_mask != 0) {
+    mix *= read_imagef(mask, kNearestClamp, gid).x;
+  }
+  mix = clamp(mix, 0.0f, 1.0f);
+  return (float4)(original.xyz + (adjusted.xyz - original.xyz) * mix, original.w);
+}
+
+__kernel void primary_grade_neighbor_blur_h_scene_rgba32f(
+    read_only image2d_t src_image, __global const float4* src_buffer, int src_is_buffer,
+    write_only image2d_t dst, GradeNeighborParams params, uint width, uint height) {
+  const int2 gid = (int2)((int)get_global_id(0), (int)get_global_id(1));
+  if (gid.x >= (int)width || gid.y >= (int)height) return;
+  float4 result;
+  if (params.behavior == GRADE_BEHAVIOR_HALATION) {
+    const int radius = GradeHalationRadius(params.sigma_x);
+    const float norm = GradeHalationNormalization(radius, params.sigma_x);
+    result = SceneTap(src_image, src_buffer, src_is_buffer, gid, (int)width, (int)height) * norm;
+    for (int tap = 1; tap <= radius; ++tap) {
+      const float weight = GradeHalationWeight(tap, params.sigma_x) * norm;
+      result += (SceneTap(src_image, src_buffer, src_is_buffer, gid + (int2)(tap, 0), (int)width,
+                          (int)height) +
+                 SceneTap(src_image, src_buffer, src_is_buffer, gid - (int2)(tap, 0), (int)width,
+                          (int)height)) *
+                weight;
+    }
+  } else if (params.behavior == GRADE_BEHAVIOR_FILM_GRAIN) {
+    result = SceneFilmHorizontal(src_image, src_buffer, src_is_buffer, gid, &params, (int)width,
+                                 (int)height);
+  } else {
+    result = SceneTap(src_image, src_buffer, src_is_buffer, gid, (int)width, (int)height) *
+             params.weights[0];
+    for (uint tap = 1u; tap < params.tap_count; ++tap) {
+      const int distance = (int)tap;
+      result += (SceneTap(src_image, src_buffer, src_is_buffer, gid + (int2)(distance, 0),
+                          (int)width, (int)height) +
+                 SceneTap(src_image, src_buffer, src_is_buffer, gid - (int2)(distance, 0),
+                          (int)width, (int)height)) *
+                params.weights[tap];
+    }
+  }
+  write_imagef(dst, gid, result);
+}
+
+__kernel void primary_grade_neighbor_apply_v_scene_rgba32f(
+    read_only image2d_t original_image, __global const float4* original_buffer, int original_is_buffer,
+    read_only image2d_t blur_horizontal, write_only image2d_t dst_image,
+    __global float4* dst_buffer, int dst_is_buffer, read_only image2d_t mix_image,
+    __global const float4* mix_buffer, int mix_is_buffer, read_only image2d_t mask, int has_mask,
+    float grade_mix, GradeNeighborParams params, uint width, uint height,
+    __local float4* vertical_tile) {
+  const int2 gid         = (int2)((int)get_global_id(0), (int)get_global_id(1));
+  const int  radius      = GradeVerticalRadius(&params);
+  const int  tile_width  = (int)get_local_size(0);
+  const int  tile_height = (int)get_local_size(1) + 2 * radius;
+  const int  local_index = (int)get_local_id(1) * tile_width + (int)get_local_id(0);
+  const int  local_count = tile_width * (int)get_local_size(1);
+  for (int tile_index = local_index; tile_index < tile_width * tile_height;
+       tile_index += local_count) {
+    const int tile_x   = tile_index % tile_width;
+    const int tile_y   = tile_index / tile_width;
+    const int source_x = (int)get_group_id(0) * tile_width + tile_x;
+    const int source_y =
+        clamp((int)get_group_id(1) * (int)get_local_size(1) + tile_y - radius, 0, (int)height - 1);
+    vertical_tile[tile_index] =
+        source_x < (int)width ? GradeNeighborRead(blur_horizontal, (int2)(source_x, source_y))
+                              : (float4)(0.0f);
+  }
+  barrier(CLK_LOCAL_MEM_FENCE);
+  if (gid.x >= (int)width || gid.y >= (int)height) return;
+  const float4 source =
+      SceneTap(original_image, original_buffer, original_is_buffer, gid, (int)width, (int)height);
+  const int center = ((int)get_local_id(1) + radius) * tile_width + (int)get_local_id(0);
+  float4 adjusted;
+  if (params.behavior == GRADE_BEHAVIOR_SHARPEN) {
+    const float4 blur = GradeGaussianVertical(vertical_tile, center, tile_width, &params);
+    float4       high = (float4)(source.xyz - blur.xyz, 0.0f);
+    if (params.threshold > 0.0f && fabs(GradeNeighborLuma(high)) <= params.threshold) {
+      high = (float4)(0.0f);
+    }
+    adjusted = (float4)(source.xyz + high.xyz * params.amount, source.w);
+  } else if (params.behavior == GRADE_BEHAVIOR_CLARITY) {
+    const float4 blur = GradeGaussianVertical(vertical_tile, center, tile_width, &params);
+    const float4 diff = (float4)(source.xyz - blur.xyz, 0.0f);
+    const float  protect =
+        1.0f - GradeNeighborSmoothstep(0.0f, 0.18f, fabs(GradeNeighborLuma(diff)));
+    const float centered = (GradeNeighborLuma(source) - 0.5f) * 2.0f;
+    const float strength = params.amount * protect * fmax(1.0f - centered * centered, 0.0f);
+    adjusted = (float4)(fma(diff.xyz, (float3)(strength), source.xyz), source.w);
+  } else if (params.behavior == GRADE_BEHAVIOR_HALATION) {
+    const float4 blur  = GradeHalationVertical(vertical_tile, center, tile_width, &params);
+    const float3 spill = fmax(blur.xyz - source.xyz, (float3)(0.0f));
+    const float3 result =
+        source.xyz + spill * params.amount *
+                         (float3)(params.redshift[0], params.redshift[1], params.redshift[2]);
+    adjusted = (float4)(result, source.w);
+  } else {
+    adjusted = GradeFilmApply(source, GradeFilmVertical(vertical_tile, center, tile_width, &params),
+                              params.amount);
+  }
+  adjusted = SceneMix(adjusted, mix_image, mix_buffer, mix_is_buffer, mask, has_mask, grade_mix, gid,
+                      (int)width, (int)height);
+  if (dst_is_buffer != 0) {
+    dst_buffer[(uint)gid.y * width + (uint)gid.x] = adjusted;
+  } else {
+    write_imagef(dst_image, gid, adjusted);
+  }
+}

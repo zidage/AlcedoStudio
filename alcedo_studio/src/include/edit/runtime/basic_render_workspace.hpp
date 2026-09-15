@@ -17,6 +17,7 @@
 #include "edit/runtime/result_representation.hpp"
 #include "edit/runtime/runtime_invalidation.hpp"
 #include "edit/runtime/runtime_revision.hpp"
+#include "edit/runtime/scene_work_image_pair.hpp"
 #include "edit/runtime/texture_pool.hpp"
 #include "gpu/gpu_pool_trace.hpp"
 #include "gpu/transient_buffer_arena.hpp"
@@ -58,6 +59,8 @@ class BasicRenderWorkspace {
   [[nodiscard]] auto Values() -> NodeResultCache<Backend>& { return values_; }
   [[nodiscard]] auto Images() -> GraphImageCache<Backend>& { return images_; }
   [[nodiscard]] auto Images() const -> const GraphImageCache<Backend>& { return images_; }
+  [[nodiscard]] auto SceneWork() -> SceneWorkImagePair<Backend>& { return scene_work_; }
+  [[nodiscard]] auto SceneWork() const -> const SceneWorkImagePair<Backend>& { return scene_work_; }
   [[nodiscard]] auto ResultInvalidation() -> RuntimeInvalidationState& { return invalidation_; }
   [[nodiscard]] auto ResultInvalidation() const -> const RuntimeInvalidationState& {
     return invalidation_;
@@ -119,6 +122,14 @@ class BasicRenderWorkspace {
   }
 
   /**
+   * @brief Confirm the two scene-work members match @p extent.
+   *
+   * Call at BeginRender after the previous submission has completed. Same extent
+   * keeps the native allocations. Pixel contents stay unpublished and invalid.
+   */
+  void EnsureSceneWorkImages(ImageExtent extent) { scene_work_.Ensure(backend_, extent); }
+
+  /**
    * @brief Aggregated pool and device totals for one request. Does not print.
    */
   [[nodiscard]] auto CaptureResourceSnapshot() const -> diag::PreviewResourceSnapshot {
@@ -131,10 +142,14 @@ class BasicRenderWorkspace {
     snapshot.texture_peak_used_bytes  = textures_.PeakUsedBytes();
     snapshot.transient_used_bytes     = transients_.used_bytes();
     snapshot.transient_capacity_bytes = transients_.capacity_bytes();
-    snapshot.published_image_count    = images_.PublishedCount();
-    snapshot.write_image_count        = images_.UnpublishedCount();
-    snapshot.value_bytes              = values_.UsedBytes();
-    snapshot.value_count              = values_.Size();
+    snapshot.published_image_count      = images_.PublishedCount();
+    snapshot.write_image_count          = images_.UnpublishedCount();
+    snapshot.value_bytes                = values_.UsedBytes();
+    snapshot.value_count                = values_.Size();
+    snapshot.scene_work_member_count    = scene_work_.MemberCount();
+    snapshot.scene_work_used_bytes      = scene_work_.CurrentBytes();
+    snapshot.scene_work_peak_used_bytes = scene_work_.PeakBytes();
+    snapshot.scene_work_allocation_count = scene_work_.AllocationCount();
     GpuDeviceMemorySnapshot device_memory{};
     if constexpr (requires(const Backend& backend) { backend.QueryDeviceMemory(); }) {
       device_memory = backend_.QueryDeviceMemory();
@@ -239,6 +254,7 @@ class BasicRenderWorkspace {
     values_.Clear();
     invalidation_.Clear();
     validity_prepared_ = false;
+    scene_work_.Release();
     textures_.ReleaseUnleased();
     transients_.ReleaseDeviceMemory();
     parameters_.Clear();
@@ -291,6 +307,7 @@ class BasicRenderWorkspace {
   TexturePool<Backend>          textures_;
   NodeResultCache<Backend>       values_{};
   GraphImageCache<Backend>       images_{};
+  SceneWorkImagePair<Backend>    scene_work_{};
   RuntimeInvalidationState       invalidation_{};
   GraphValueId                   persist_sensor_{};
   std::uint64_t                  parameter_layout_hash_ = 0;

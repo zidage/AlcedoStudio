@@ -11,7 +11,9 @@ pending.
 NM8.2R scheduling/presentation rework passed complete-UI qualification on
 2026-09-14 under default VSync (session-owner thread + render-thread
 Ready-frame consume).
-NM8.3–NM8.6 planned.
+NM8.3 complete on 2026-09-14. NM8.4 implementation and Windows CUDA/OpenCL
+qualification are complete on 2026-09-15; macOS Metal true-device qualification
+remains pending, so NM8.4 status is partial. NM8.5–NM8.6 planned.
 NM7 已由用户确认完成；其历史测试记录保留在原方案中，本文件不补造执行证据。
 2026-09-12 的首轮工作范围是 NM8.1–NM8.2：建立低开销测量和日志，采集当前实现的数据。
 NM8.3–NM8.6 定义完整优化和最终资格验证，按依赖顺序执行。
@@ -248,7 +250,7 @@ RGBA32F scene 工作图”，也不能被改造成工作图成员。将解析 co
 | NM8.1 | 低开销日志、输入到呈现时间线、CPU 分段 | 当前产品路径 | complete 2026-09-12 |
 | NM8.2 | 节点/pass 原生 GPU 计时、当前实现基线及硬件采集 | NM8.1 | CUDA complete 2026-09-13 (2560 slider DAG, native-sensor slider DAG, felt present); OpenCL/Metal pending |
 | NM8.3 | 新顺序、融合 pass 描述、算法版本和画面预期 | NM8.2 当前后端基线 | complete 2026-09-14 on `feature/nm83-fixed-grade-order` (CUDA + OpenCL measured on this host; Metal covered by shared compiler + macOS-only test targets) |
-| NM8.4 | 共享工作图、取消 Grade 缓存、LLF/Mix 与下游复用 | NM8.3 | planned |
+| NM8.4 | 共享工作图、取消 Grade 缓存、LLF/Mix 与下游复用 | NM8.3 | partial 2026-09-15: implementation + Windows CUDA/OpenCL passed; macOS Metal true-device run pending |
 | NM8.5 | 根据 CUDA/Metal 数据优化热点和整帧开销 | NM8.4 | planned |
 | NM8.6 | 三后端、真实 RAW、交互和安装包最终验证 | NM8.1–NM8.5 | planned |
 
@@ -1316,6 +1318,81 @@ frame sink/display reader；work-pair 分配保留，像素内容不进入下一
 
 数量断言只约束 `SceneWorkImagePair` 类别，不声称整个 GPU 管线只有两张图。LLF、Mask、
 Neighborhood scratch、关键阶段缓存和 display 都按各自 owner 独立计量。
+
+#### NM8.4 完成记录 — 2026-09-15
+
+**状态：partial。** NM8.4 的共享双工作图实现、Windows CUDA/OpenCL 真设备验证和产品
+生命周期回归已收口。Metal 生产路径和 macOS-only 测试已同步改造，但当前主机是 Windows，
+未产生 macOS Metal 真设备像素、原生资源和失败恢复证据。依据本节完成条件，不能将 NM8.4
+标记为 complete。
+
+**已实现：**
+
+- `BasicRenderWorkspace` 独占一个 `SceneWorkImagePair<Backend>`；首次按 extent 创建恰好两张
+  RGBA32F 工作图，同 extent 保留分配，extent 改变时在前一 GPU submission 完成后成对重建。
+  资源记录新增成员数、当前/峰值字节和累计分配次数；`w*h*16*2` 有独立断言。
+- `FrameSceneBinding` 只描述本帧 scene 所在的关键阶段缓存、工作图成员或 display，不拥有像素，
+  不保存 revision，也不写回 workspace。每个 Grade 读取当前 binding 并写另一成员；disabled/
+  zero-mix 保持输入 binding，Grade scene output 不再进入 persistent lookup/write/publish。
+- Pointwise、LLF、Neighborhood、DRT/Post 已统一到相同双图语义。LLF 和 Neighborhood 的最终
+  Apply/Mix 在工作成员上原地完成；DRT/Post 使用空闲成员并最终写入既有 display owner；frame
+  sink、scope 和 export reader 仍只接收 display。
+- CUDA、OpenCL、Metal 都有独立原生 binding adapter。OpenCL 继续让 Develop、Geometry、
+  Camera Color、Mask 和 display 使用 image-backed `Texture2D`，仅 scene work 使用专用线性
+  buffer；没有 CPU、Legacy 或其他后端替代路径。
+- 资格测试补齐双图分配/复用/尺寸切换/字节统计、1/2/4/8 Grade、跨帧不复用 scene 内容、
+  Mix/Mask/LLF/Neighborhood/DRT/Post、失败发布、frame sink 边界和三后端多 Grade 原生资源
+  断言。OpenCL 8 Grade 真设备验证确认只有两个不同的 scene-work `cl_mem`。
+
+**收口时发现并修复的问题：**
+
+- CUDA 与 OpenCL 的 Quality → Interactive 回归仍把 Grade scene 当作可复用缓存。测试已改为
+  明确验证关键阶段复用、全部 Grade 重新执行、Grade scene 无 published entry、有效 display
+  可继续命中。
+- OpenCL Film Grain 的 scene-buffer horizontal 路径误用了普通 Gaussian，常量输入下 grain
+  energy 为零。现已使用与 image-backed 路径相同的确定性 Film Grain 采样。
+- OpenCL LLF canonical Apply 误读未填充的 pyramid `widths[0]/heights[0]`，向 kernel 传入零
+  尺寸并触发设备执行错误。Apply 现在显式接收实际 plane 尺寸；canonical 路径使用
+  `mask_extent`，pyramid 路径使用该层尺寸。OpenCL working buffer 以单一读写参数表达原地
+  Apply，避免把同一 `cl_mem` 伪装成两个独立资源。
+
+**主成功调用链：**
+
+`Renderer::Render` → `PlanExecutor::Execute` → 关键阶段 cache bind/miss →
+`EnsureSceneWorkImages` → frame-local `FrameSceneBinding` → 每个 Grade 的 Mask/LLF/Pointwise/
+Neighborhood → `DestinationWorkMember`/peer 轮换 → DRT/Post 使用空闲成员 →
+`display_output` publish → frame sink/scope/export reader。
+
+**主失败调用链：**
+
+参数上传、工作资源、kernel encode/execute 或 present 失败 → 后端原错误上报 → submission 不
+publish 新的 LLF/display revision → frame-local binding 丢弃；pair 分配可保留但其像素无有效性，
+下一帧从有效关键阶段输入重新执行全部 Grade。测试覆盖 upload failure、cancelled submission、
+LLF 失败、incompatible sink 和失败后的版本/文档恢复。
+
+**Windows 执行证据：**
+
+| 命令/范围 | 结果 |
+| --- | --- |
+| `cmd /c scripts\msvc_env.cmd --build build\debug --target GpuDagRawInputTest GpuDagCudaPrimaryGradeTest GpuDagOpenClGradeTest GpuDagCudaDrtProductTest GpuDagCudaMaskTest --parallel 4` | 通过；CUDA/OpenCL 运行时及五个测试目标完成编译和链接 |
+| `ctest --test-dir build/debug --output-on-failure -R "^(GpuDagRawInputTest\|GpuDagCudaPrimaryGradeTest\|GpuDagOpenClGradeTest\|GpuDagCudaDrtProductTest\|GpuDagCudaMaskTest)\\."` | 358 passed、1 个只输出性能数据的测试按设计 skipped；359 项中 0 failed |
+| `cmd /c scripts\msvc_env.cmd --build build\debug --target GpuDagOpenClDrtProductTest --parallel 4`，随后运行全部 `GpuDagOpenClDrtProductTest.*` | 25/25 通过；包含 OpenCL DRT、呈现、失败不进入替代路径、Quality 和资源释放 |
+| Version/Paste/Reopen 选择性回归 | 26/26 通过；覆盖 Paste 创建/取消/失败、Version checkout/失败恢复、项目 reopen 和 DAG/mask 保持 |
+| `cmd /c scripts\msvc_env.cmd --build build\debug --target alcedo_main --parallel 4` | 通过；`alcedo_main.exe` 完成链接，PE icon 检查通过 |
+| `git diff --check` | 通过 |
+
+**文件规模与评审切片：** 新增 owner/binding/adapters 分别为
+`scene_work_image_pair.hpp` 111 行、`frame_scene_binding.hpp` 78 行、
+`scene_work_member.hpp` 22 行、CUDA/OpenCL/Metal adapter 37/48/37 行；新增通用和 CUDA 双图
+测试为 109/317 行。既有 `opencl_backend.cpp` 和 `opencl_grade_test.cpp` 当前为 1014/1277 行，
+本阶段只分别增加约 47/77 行，并保持在设备资源 owner 和同一后端资格 fixture 内；把这些少量
+变更另拆文件会割裂资源生命周期或重复大 fixture，因此未做形式化拆分。新增核心文件和测试均
+低于 500 行评审目标。
+
+**剩余唯一完成门槛：** 在 macOS Metal 真设备上构建并运行 Metal Grade/Mask/DRT、多 Grade、
+LLF、失败恢复、Quality、reopen/Version/Paste/图像切换测试，确认两张不同的原生 Metal
+RGBA32Float texture、相同像素容差和无替代路径。该证据通过后才可把 NM8.4 改为 complete；
+当前没有用 mock、Windows host-only instantiate 或 CUDA/OpenCL 结果替代 Metal 证据。
 
 ### NM8.5 — 硬件热点与整帧优化
 

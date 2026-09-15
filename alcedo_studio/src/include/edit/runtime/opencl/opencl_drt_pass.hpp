@@ -12,6 +12,7 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/prepared_raw_input.hpp"
 #include "edit/runtime/execution_plan.hpp"
+#include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/opencl/opencl_backend.hpp"
 
 namespace alcedo {
@@ -29,7 +30,8 @@ struct OpenClDrtResult {
  * then applies neighborhood operations to the workspace RGBA32F display image.
  */
 [[nodiscard]] auto ExecuteOpenClDrt(OpenClRenderDevice& device, const ExecutionPlan& plan,
-                                    PipelineDocument& document) -> OpenClDrtResult;
+                                    PipelineDocument& document, const FrameSceneBinding& scene)
+    -> OpenClDrtResult;
 
 }  // namespace alcedo
 

@@ -32,6 +32,8 @@
 #include "edit/runtime/cuda/cuda_develop_pass.hpp"
 #include "edit/runtime/cuda/cuda_drt_pass.hpp"
 #include "edit/runtime/cuda/cuda_primary_grade_pass.hpp"
+#include "edit/runtime/cuda/cuda_scene_work.hpp"
+#include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/local_tone_cache_ids.hpp"
 
@@ -110,11 +112,10 @@ auto RenderLocalToneCenter(float surroundings, float center, float shadows_value
   const auto result = ExecuteCudaPrimaryGrade(device, plan, prepared, document);
   device.EndRender();
   device.WaitIdle();
-  auto* lease = device.Workspace().Images().Find(result.output);
-  EXPECT_NE(lease, nullptr);
+  auto& texture = CudaSceneTexture(device, result.output_binding);
   std::vector<Rgba> pixels(static_cast<std::size_t>(width) * height);
   device.Workspace().Device().DownloadTexture2D(
-      lease->Texture(),
+      texture,
       std::span<std::byte>(reinterpret_cast<std::byte*>(pixels.data()),
                            pixels.size() * sizeof(Rgba)),
       device.CommandContext());
@@ -163,13 +164,7 @@ class CudaPrimaryGradeFixture : public ::testing::Test {
     plan_ = GraphCompiler::Compile(document_, prepared_.CompileSource(), RenderRequest{});
   }
 
-  auto DownloadLive(const GraphValueId& id) -> std::vector<Rgba> {
-    auto* lease = device_.Workspace().Images().Find(id);
-    EXPECT_NE(lease, nullptr);
-    if (lease == nullptr) {
-      return {};
-    }
-    const auto&       texture = lease->Texture();
+  auto DownloadTexture(CudaBackend::Texture2D& texture) -> std::vector<Rgba> {
     std::vector<Rgba> pixels(static_cast<std::size_t>(texture.Width()) * texture.Height());
     device_.Workspace().Device().DownloadTexture2D(
         texture,
@@ -177,6 +172,36 @@ class CudaPrimaryGradeFixture : public ::testing::Test {
                              pixels.size() * sizeof(Rgba)),
         device_.CommandContext());
     return pixels;
+  }
+
+  auto DownloadLive(const GraphValueId& id) -> std::vector<Rgba> {
+    auto* lease = device_.Workspace().Images().Find(id);
+    EXPECT_NE(lease, nullptr);
+    if (lease == nullptr) {
+      return {};
+    }
+    return DownloadTexture(lease->Texture());
+  }
+
+  auto DownloadBinding(const FrameSceneBinding& binding) -> std::vector<Rgba> {
+    return DownloadTexture(CudaSceneTexture(device_, binding));
+  }
+
+  /**
+   * @brief Pixels of the display transform before Post neighborhood writes.
+   *
+   * An odd Post count writes that result to the free work member, which remains
+   * readable after the last Display write. An even count ends on Display, so the
+   * transform result is the published display output only when Post count is 0.
+   */
+  auto CaptureDisplayBase(const FrameSceneBinding& grade_binding, std::uint32_t post_count)
+      -> std::vector<Rgba> {
+    if (post_count % 2 == 1) {
+      const auto free_member = grade_binding.IsWorkImage() ? PeerOf(grade_binding.member)
+                                                           : SceneWorkMember::Member0;
+      return DownloadTexture(device_.Workspace().SceneWork().Member(free_member));
+    }
+    return last_output_pixels_;
   }
 
   /**
@@ -198,12 +223,11 @@ class CudaPrimaryGradeFixture : public ::testing::Test {
     device_.EndRender();
     device_.WaitIdle();
     last_output_id_      = result.output;
-    last_output_pixels_  = DownloadLive(result.output);
+    last_output_pixels_  = DownloadBinding(result.output_binding);
     last_develop_pixels_ = DownloadLive(plan_.develop_output);
     if (plan_.FirstGrade() != nullptr) {
-      last_grade_id_ = plan_.FirstGrade()->scene_output;
-      last_grade_pixels_ =
-          last_grade_id_ == last_output_id_ ? last_output_pixels_ : DownloadLive(last_grade_id_);
+      last_grade_id_     = plan_.FirstGrade()->scene_output;
+      last_grade_pixels_ = last_output_pixels_;
     }
     device_.PublishResults();
     return result;
@@ -219,16 +243,17 @@ class CudaPrimaryGradeFixture : public ::testing::Test {
     ExecuteCudaCameraColor(device_, plan_, document_);
     auto grade         = ExecuteCudaPrimaryGrade(device_, plan_, prepared_, document_);
     last_grade_id_     = grade.output;
-    last_grade_pixels_ = DownloadLive(grade.output);
-    auto result        = ExecuteCudaDrt(device_, plan_, document_);
+    last_grade_pixels_ = DownloadBinding(grade.output_binding);
+    auto result        = ExecuteCudaDrt(device_, plan_, document_, grade.output_binding);
     device_.EndRender();
     device_.WaitIdle();
-    last_output_id_         = result.output;
-    last_output_pixels_     = DownloadLive(result.output);
-    last_display_base_id_   = plan_.drt.scene_output;
-    last_display_base_pixels_ = DownloadLive(plan_.drt.scene_output);
+    last_output_id_           = result.output;
+    last_output_pixels_       = DownloadLive(result.output);
+    last_display_base_id_     = plan_.drt.scene_output;
     last_display_post_id_     = result.display_post;
     last_display_post_pixels_ = DownloadLive(result.display_post);
+    last_display_base_pixels_ =
+        CaptureDisplayBase(grade.output_binding, result.post_neighborhood_count);
     last_develop_pixels_    = DownloadLive(plan_.develop_output);
     device_.PublishResults();
     return result;
@@ -769,11 +794,9 @@ auto RenderPreparedGrade(CudaRenderDevice& device, PipelineDocument& document,
   return result;
 }
 
-auto DownloadGrade(CudaRenderDevice& device, const GraphValueId& id) -> std::vector<Rgba> {
-  auto* lease = device.Workspace().Images().Find(id);
-  EXPECT_NE(lease, nullptr);
-  if (lease == nullptr) return {};
-  const auto&       texture = lease->Texture();
+auto DownloadBinding(CudaRenderDevice& device, const FrameSceneBinding& binding)
+    -> std::vector<Rgba> {
+  auto& texture = CudaSceneTexture(device, binding);
   std::vector<Rgba> pixels(static_cast<std::size_t>(texture.Width()) * texture.Height());
   device.Workspace().Device().DownloadTexture2D(
       texture,
@@ -801,7 +824,7 @@ TEST(GpuDagCudaPrimaryGrade, RoiFrameSamplesCanonicalLlfReferenceInsteadOfRebuil
   const auto       full_grade = RenderPreparedGrade(device, document, prepared, full_plan);
   EXPECT_TRUE(full_grade.local_tone_rebuilt_reference);
   EXPECT_FALSE(full_grade.local_tone_sampled_canonical_reference);
-  const auto full_pixels = DownloadGrade(device, full_grade.output);
+  const auto full_pixels = DownloadBinding(device, full_grade.output_binding);
   const auto full_mask   = DownloadLocalTonePlane(device, document.PrimaryGrade()->Id());
   ASSERT_FALSE(full_pixels.empty());
   ASSERT_FALSE(full_mask.empty());
@@ -815,7 +838,7 @@ TEST(GpuDagCudaPrimaryGrade, RoiFrameSamplesCanonicalLlfReferenceInsteadOfRebuil
   EXPECT_TRUE(roi_grade.local_tone_sampled_canonical_reference);
   EXPECT_EQ(full_grade.local_tone_reference_resource_id,
             roi_grade.local_tone_reference_resource_id);
-  const auto roi_pixels = DownloadGrade(device, roi_grade.output);
+  const auto roi_pixels = DownloadBinding(device, roi_grade.output_binding);
   const auto roi_mask   = DownloadLocalTonePlane(device, document.PrimaryGrade()->Id());
   ASSERT_FALSE(roi_pixels.empty());
   ASSERT_EQ(full_mask, roi_mask);
@@ -839,7 +862,7 @@ TEST(GpuDagCudaPrimaryGrade, RoiFrameSamplesCanonicalLlfReferenceInsteadOfRebuil
   const auto       isolated_grade = RenderPreparedGrade(isolated, document, prepared, roi_plan);
   EXPECT_TRUE(isolated_grade.local_tone_rebuilt_reference);
   EXPECT_FALSE(isolated_grade.local_tone_sampled_canonical_reference);
-  const auto isolated_pixels = DownloadGrade(isolated, isolated_grade.output);
+  const auto isolated_pixels = DownloadBinding(isolated, isolated_grade.output_binding);
   ASSERT_FALSE(isolated_pixels.empty());
   const float rebuilt = isolated_pixels[static_cast<std::size_t>(roi_y) * roi_w + roi_x].r;
   EXPECT_GT(std::abs(rebuilt - sampled), 1.0e-4f);

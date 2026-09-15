@@ -25,23 +25,17 @@ auto MakeDrtPostDecisionTrace(const DrtPostSchedule& schedule) -> DrtPostDecisio
   return trace;
 }
 
-auto DrtNeighborhoodDestinations(const NodeId& drt_id, const GraphValueId& scene_output,
-                                 std::size_t enabled_count) -> std::vector<GraphValueId> {
-  std::vector<GraphValueId> destinations;
-  destinations.reserve(enabled_count);
-  const GraphValueId ping{drt_id, PortId{"runtime.ping"}};
-  const GraphValueId pong{drt_id, PortId{"runtime.pong"}};
-  GraphValueId       scene_id{};
-  for (std::size_t remaining = enabled_count; remaining > 0;) {
-    --remaining;
-    GraphValueId dest = scene_output;
-    if (remaining != 0) {
-      dest = scene_id == ping ? pong : ping;
-    }
-    destinations.push_back(dest);
-    scene_id = dest;
+auto DrtWriteSequence(std::size_t neighborhood_count) -> std::vector<DrtWriteTarget> {
+  const std::size_t writes = neighborhood_count + 1;
+  std::vector<DrtWriteTarget> sequence;
+  sequence.reserve(writes);
+  auto current = neighborhood_count % 2 == 0 ? DrtWriteTarget::Display : DrtWriteTarget::FreeWorkMember;
+  for (std::size_t index = 0; index < writes; ++index) {
+    sequence.push_back(current);
+    current = current == DrtWriteTarget::Display ? DrtWriteTarget::FreeWorkMember
+                                                 : DrtWriteTarget::Display;
   }
-  return destinations;
+  return sequence;
 }
 
 }  // namespace alcedo

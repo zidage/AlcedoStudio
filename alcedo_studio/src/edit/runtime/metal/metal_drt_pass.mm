@@ -20,7 +20,9 @@
 #include "edit/runtime/adjustment_runtime.hpp"
 #include "edit/runtime/drt_display.hpp"
 #include "edit/runtime/drt_post_executor.hpp"
+#include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/grade_parameter_slot.hpp"
+#include "edit/runtime/metal/metal_scene_work.hpp"
 #include "edit/runtime/metal/metal_drt_gpu_params.hpp"
 #include "edit/runtime/parameter_arena.hpp"
 #include "edit/runtime/parameter_binding.hpp"
@@ -144,43 +146,36 @@ struct MetalDrtOps {
     return device.Workspace().Textures().Acquire({width, height, TextureFormat::Rgba32f});
   }
 
-  static auto HorizontalScratchTexture(HorizontalScratch& scratch) -> Texture& {
-    return scratch.Texture();
+  static auto BindingWidth(MetalRenderDevice& device, const FrameSceneBinding& binding)
+      -> std::uint32_t {
+    return MetalSceneWidth(device, binding);
   }
 
-  static void DispatchHorizontal(MetalRenderDevice& device, const Texture& src, Texture& dst,
-                                 const NeighborWork& work, std::uint32_t width,
-                                 std::uint32_t height) {
-    DispatchNeighborHorizontal(device, src, dst, work.params, width, height);
+  static auto BindingHeight(MetalRenderDevice& device, const FrameSceneBinding& binding)
+      -> std::uint32_t {
+    return MetalSceneHeight(device, binding);
   }
 
-  static void DispatchVerticalApply(MetalRenderDevice& device, const Texture& src,
-                                    const Texture& horizontal,
-                                    Texture& dst, const LutBinding& lut, const NeighborWork& work,
+  static void DispatchHorizontal(MetalRenderDevice& device, const FrameSceneBinding& src,
+                                 HorizontalScratch& scratch, const NeighborWork& work,
+                                 std::uint32_t width, std::uint32_t height) {
+    DispatchNeighborHorizontal(device, MetalSceneTexture(device, src), scratch.Texture(),
+                               work.params, width, height);
+  }
+
+  static void DispatchVerticalApply(MetalRenderDevice& device, const FrameSceneBinding& src,
+                                    HorizontalScratch& scratch, const FrameSceneBinding& dst,
+                                    const FrameSceneBinding&, const LutBinding& lut,
+                                    const NeighborWork& work, float, const GraphValueId*,
                                     std::uint32_t width, std::uint32_t height) {
     (void)lut;
-    DispatchNeighborVertical(device, src, horizontal, dst, work.params, width, height);
+    DispatchNeighborVertical(device, MetalSceneTexture(device, src), scratch.Texture(),
+                             MetalSceneTexture(device, dst), work.params, width, height);
   }
 
-  static auto AcquireOutput(MetalRenderDevice& device, const GraphValueId& id, std::uint32_t width,
-                            std::uint32_t height) -> Texture& {
-    return device.Workspace()
-        .AcquireImageForWrite(id, {width, height, TextureFormat::Rgba32f})
-        .Texture();
-  }
-
-  static auto SceneTexture(MetalRenderDevice& device, const GraphValueId& id) -> Texture& {
-    auto* image = device.Workspace().Images().Find(id);
-    if (image == nullptr || image->Empty()) {
-      throw std::runtime_error("ExecuteMetalDrt: scene image is missing");
-    }
-    return image->Texture();
-  }
-
-  static void CopyTexture(MetalRenderDevice& device, const GraphValueId& src,
-                          const GraphValueId& dst) {
-    device.Workspace().Device().CopyTexture2D(SceneTexture(device, src), SceneTexture(device, dst),
-                                              device.CommandContext());
+  static void AcquireDisplayOutput(MetalRenderDevice& device, const GraphValueId& id,
+                                   std::uint32_t width, std::uint32_t height) {
+    (void)device.Workspace().AcquireImageForWrite(id, {width, height, TextureFormat::Rgba32f});
   }
 
   static void BindDisplayParams(MetalRenderDevice& device, const ExecutionPlan& plan,
@@ -204,13 +199,14 @@ struct MetalDrtOps {
     }
   }
 
-  static void DispatchDisplayTransform(MetalRenderDevice& device, const Texture& scene,
-                                       Texture& display, const NodeId& drt_id, std::uint32_t,
-                                       std::uint32_t) {
+  static void DispatchDisplayTransform(MetalRenderDevice& device, const FrameSceneBinding& scene,
+                                       const FrameSceneBinding& display, const NodeId& drt_id,
+                                       std::uint32_t, std::uint32_t) {
     auto&                  arena   = device.Workspace().Parameters();
     const ParameterSlotKey key{drt_id, AdjustmentInstanceId{"drt.output"}};
     const auto             binding = arena.Binding(key);
-    DispatchDrt(device, scene, display, arena.DeviceBuffer(), binding.offset);
+    DispatchDrt(device, MetalSceneTexture(device, scene), MetalSceneTexture(device, display),
+                arena.DeviceBuffer(), binding.offset);
   }
 
   static void CheckAfterEncode(MetalRenderDevice&) {}
@@ -234,8 +230,8 @@ void AppendMetalDrtWarmup(std::vector<MetalPipelineWarmup>& pipelines) {
 }
 
 auto ExecuteMetalDrt(MetalRenderDevice& device, const ExecutionPlan& plan,
-                     PipelineDocument& document) -> MetalDrtResult {
-  const auto executed = DrtPostExecutor<MetalDrtOps>::Execute(device, plan, document);
+                     PipelineDocument& document, const FrameSceneBinding& scene) -> MetalDrtResult {
+  const auto executed = DrtPostExecutor<MetalDrtOps>::Execute(device, plan, document, scene);
   return {executed.output, executed.display_post, executed.post_neighborhood_count};
 }
 

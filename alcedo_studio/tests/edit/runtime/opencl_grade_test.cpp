@@ -32,10 +32,12 @@
 #include "edit/pipeline/local_tone_mapping.hpp"
 #include "edit/runtime/adjustment_runtime.hpp"
 #include "edit/runtime/graph_compiler.hpp"
+#include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/opencl/opencl_develop_pass.hpp"
 #include "edit/runtime/opencl/opencl_drt_pass.hpp"
 #include "edit/runtime/opencl/opencl_pass_encoder.hpp"
 #include "edit/runtime/opencl/opencl_primary_grade_pass.hpp"
+#include "edit/runtime/opencl/opencl_scene_work.hpp"
 #include "edit/runtime/parameter_binding.hpp"
 #include "edit/runtime/result_content_key.hpp"
 #include "gpu/transient_buffer_arena.hpp"
@@ -72,6 +74,33 @@ auto MakeNeighborhoodPlane(std::uint32_t width, std::uint32_t height, float surr
   }
   plane.bytes = std::const_pointer_cast<const std::byte>(storage);
   return plane;
+}
+
+auto DownloadBinding(OpenClRenderDevice& device, const FrameSceneBinding& binding)
+    -> std::vector<Rgba> {
+  if (binding.IsWorkImage()) {
+    auto& image = device.Workspace().SceneWork().Member(binding.member);
+    std::vector<Rgba> pixels(static_cast<std::size_t>(image.Width()) * image.Height());
+    device.Workspace().Device().DownloadBufferRange(
+        image.Storage(), 0,
+        std::span<std::byte>(reinterpret_cast<std::byte*>(pixels.data()),
+                             pixels.size() * sizeof(Rgba)),
+        device.CommandContext());
+    return pixels;
+  }
+  auto* lease = device.Workspace().Images().Find(binding.graph_id);
+  EXPECT_NE(lease, nullptr);
+  if (lease == nullptr) {
+    return {};
+  }
+  const auto& texture = lease->Texture();
+  std::vector<Rgba> pixels(static_cast<std::size_t>(texture.Width()) * texture.Height());
+  device.Workspace().Device().DownloadTexture2D(
+      texture,
+      std::span<std::byte>(reinterpret_cast<std::byte*>(pixels.data()),
+                           pixels.size() * sizeof(Rgba)),
+      device.CommandContext());
+  return pixels;
 }
 
 auto Download(OpenClRenderDevice& device, const GraphValueId& id) -> std::vector<Rgba> {
@@ -590,7 +619,7 @@ auto RenderPreparedGrade(OpenClRenderDevice& device, const ExecutionPlan& plan,
       *develop_pixels = Download(device, plan.develop_output);
     }
     if (output_pixels != nullptr) {
-      *output_pixels = Download(device, result.output);
+      *output_pixels = DownloadBinding(device, result.output_binding);
     }
     device.PublishResults();
     return result;
@@ -638,7 +667,7 @@ class OpenClGradeFixture : public ::testing::Test {
     device_->EndRender();
     device_->WaitIdle();
     last_develop_pixels_ = Download(*device_, plan_.develop_output);
-    last_output_pixels_  = Download(*device_, result.output);
+    last_output_pixels_  = DownloadBinding(*device_, result.output_binding);
     device_->PublishResults();
     return result;
   }
@@ -652,13 +681,21 @@ class OpenClGradeFixture : public ::testing::Test {
     ExecuteOpenClGeometryResample(*device_, plan_);
     ExecuteOpenClCameraColor(*device_, plan_, document_);
     auto grade  = ExecuteOpenClPrimaryGrade(*device_, plan_, prepared_, document_);
-    auto result = ExecuteOpenClDrt(*device_, plan_, document_);
+    auto result = ExecuteOpenClDrt(*device_, plan_, document_, grade.output_binding);
     device_->EndRender();
     device_->WaitIdle();
     last_develop_pixels_ = Download(*device_, plan_.develop_output);
-    last_grade_pixels_   = Download(*device_, grade.output);
-    last_display_base_pixels_ = Download(*device_, plan_.drt.scene_output);
+    last_grade_pixels_   = DownloadBinding(*device_, grade.output_binding);
     last_output_pixels_  = Download(*device_, result.display_post);
+    if (result.post_neighborhood_count % 2 == 1) {
+      const auto free_member = grade.output_binding.IsWorkImage()
+                                   ? PeerOf(grade.output_binding.member)
+                                   : SceneWorkMember::Member0;
+      last_display_base_pixels_ =
+          DownloadBinding(*device_, FrameSceneBinding::WorkImage(free_member));
+    } else {
+      last_display_base_pixels_ = last_output_pixels_;
+    }
     device_->PublishResults();
     return result;
   }
@@ -1303,6 +1340,36 @@ TEST(GpuDagOpenClGrade, OpenClLlfRoiSamplesCanonicalReferenceWithSharedGeometryP
   EXPECT_FALSE(isolated_result.local_tone_sampled_canonical_reference);
   EXPECT_EQ(isolated_result.local_tone_reference_resource_id, 0U);
   EXPECT_EQ(isolated_device.Workspace().Images().PublishedCount(), 0U);
+}
+
+TEST_F(OpenClGradeFixture, OpenClCachedImagesRemainImageBacked) {
+  const auto display_output = device_->Execute(plan_, prepared_, document_);
+  device_->WaitIdle();
+  auto* develop = device_->Workspace().Images().Find(plan_.develop_output);
+  ASSERT_NE(develop, nullptr);
+  EXPECT_FALSE(develop->Texture().Empty());
+  EXPECT_EQ(develop->Texture().Format(), TextureFormat::Rgba32f);
+  auto* display = device_->Workspace().Images().Find(display_output);
+  ASSERT_NE(display, nullptr);
+  EXPECT_FALSE(display->Texture().Empty());
+  EXPECT_EQ(display->Texture().Format(), TextureFormat::Rgba32f);
+  ASSERT_NE(plan_.FirstGrade(), nullptr);
+  EXPECT_EQ(device_->Workspace().Images().Find(plan_.FirstGrade()->scene_output), nullptr);
+  auto& work = device_->Workspace().SceneWork().Member(SceneWorkMember::Member0);
+  EXPECT_FALSE(work.Empty());
+  EXPECT_NE(work.Storage().Native(), develop->Texture().Native());
+  EXPECT_NE(work.Storage().Native(), display->Texture().Native());
+  EXPECT_EQ(work.Format(), TextureFormat::Rgba32f);
+}
+
+TEST_F(OpenClGradeFixture, GradeOutputsAreNeverPublishedToPersistentCache) {
+  (void)device_->Execute(plan_, prepared_, document_);
+  device_->WaitIdle();
+  ASSERT_NE(plan_.FirstGrade(), nullptr);
+  EXPECT_EQ(device_->Workspace().Images().Find(plan_.FirstGrade()->scene_output), nullptr);
+  EXPECT_NE(device_->Workspace().Images().Find(plan_.develop_output), nullptr);
+  EXPECT_NE(device_->Workspace().Images().Find(plan_.display_output), nullptr);
+  EXPECT_EQ(device_->Workspace().SceneWork().MemberCount(), 2U);
 }
 
 }  // namespace
