@@ -11,6 +11,7 @@
 #include "edit/graph/graph_ids.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/runtime/execution_plan.hpp"
+#include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/metal/metal_backend.hpp"
 
 namespace alcedo {
@@ -28,7 +29,8 @@ struct MetalDrtResult {
  * neighborhood operations consume its display-referred result.
  */
 [[nodiscard]] auto ExecuteMetalDrt(MetalRenderDevice& device, const ExecutionPlan& plan,
-                                   PipelineDocument& document) -> MetalDrtResult;
+                                   PipelineDocument& document, const FrameSceneBinding& scene)
+    -> MetalDrtResult;
 
 void               AppendMetalDrtWarmup(std::vector<MetalPipelineWarmup>& pipelines);
 

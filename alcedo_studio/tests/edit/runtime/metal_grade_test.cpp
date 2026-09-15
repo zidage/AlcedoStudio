@@ -30,11 +30,13 @@
 #include "edit/operators/models/sharpen_model.hpp"
 #include "edit/pipeline/local_tone_mapping.hpp"
 #include "edit/runtime/adjustment_runtime.hpp"
+#include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/metal/metal_develop_pass.hpp"
 #include "edit/runtime/metal/metal_drt_pass.hpp"
 #include "edit/runtime/metal/metal_pass_encoder.hpp"
 #include "edit/runtime/metal/metal_primary_grade_pass.hpp"
+#include "edit/runtime/metal/metal_scene_work.hpp"
 #include "edit/runtime/parameter_binding.hpp"
 #include "metal/compute_pipeline_cache.hpp"
 
@@ -300,6 +302,20 @@ class MetalGradeFixture : public ::testing::Test {
     plan_ = GraphCompiler::Compile(document_, prepared_.CompileSource(), RenderRequest{});
   }
 
+  auto DownloadTexture(MetalBackend::Texture2D& texture) -> std::vector<Rgba> {
+    std::vector<Rgba> pixels(static_cast<std::size_t>(texture.Width()) * texture.Height());
+    device_.Workspace().Device().DownloadTexture2D(
+        texture,
+        std::span<std::byte>(reinterpret_cast<std::byte*>(pixels.data()),
+                             pixels.size() * sizeof(Rgba)),
+        device_.CommandContext());
+    return pixels;
+  }
+
+  auto DownloadBinding(const FrameSceneBinding& binding) -> std::vector<Rgba> {
+    return DownloadTexture(MetalSceneTexture(device_, binding));
+  }
+
   auto RenderGrade() -> MetalPrimaryGradeResult {
     device_.BeginRender();
     ExecuteMetalDevelop(device_, plan_, prepared_, document_);
@@ -308,6 +324,7 @@ class MetalGradeFixture : public ::testing::Test {
     auto result = ExecuteMetalPrimaryGrade(device_, plan_, prepared_, document_);
     device_.EndRender();
     device_.WaitIdle();
+    last_grade_pixels_ = DownloadBinding(result.output_binding);
     return result;
   }
 
@@ -316,10 +333,21 @@ class MetalGradeFixture : public ::testing::Test {
     ExecuteMetalDevelop(device_, plan_, prepared_, document_);
     ExecuteMetalGeometryResample(device_, plan_);
     ExecuteMetalCameraColor(device_, plan_, document_);
-    (void)ExecuteMetalPrimaryGrade(device_, plan_, prepared_, document_);
-    auto result = ExecuteMetalDrt(device_, plan_, document_);
+    auto grade  = ExecuteMetalPrimaryGrade(device_, plan_, prepared_, document_);
+    auto result = ExecuteMetalDrt(device_, plan_, document_, grade.output_binding);
     device_.EndRender();
     device_.WaitIdle();
+    last_grade_pixels_ = DownloadBinding(grade.output_binding);
+    last_display_post_pixels_ = Download(device_, result.display_post);
+    if (result.post_neighborhood_count % 2 == 1) {
+      const auto free_member = grade.output_binding.IsWorkImage()
+                                   ? PeerOf(grade.output_binding.member)
+                                   : SceneWorkMember::Member0;
+      last_display_base_pixels_ =
+          DownloadTexture(device_.Workspace().SceneWork().Member(free_member));
+    } else {
+      last_display_base_pixels_ = last_display_post_pixels_;
+    }
     return result;
   }
 
@@ -346,6 +374,9 @@ class MetalGradeFixture : public ::testing::Test {
   PipelineDocument  document_;
   ExecutionPlan     plan_;
   MetalRenderDevice device_;
+  std::vector<Rgba> last_grade_pixels_;
+  std::vector<Rgba> last_display_base_pixels_;
+  std::vector<Rgba> last_display_post_pixels_;
 };
 
 TEST_F(MetalGradeFixture, MetalPrimaryGradePreservesCompiledAdjustmentOrder) {
@@ -362,14 +393,15 @@ TEST_F(MetalGradeFixture, MetalPrimaryGradePreservesCompiledAdjustmentOrder) {
   ModelByType<ContrastModel>(type_ids::Contrast()).SetValue(100.0f);
   const auto result = RenderGrade();
   const auto input  = Download(device_, plan_.develop_output);
-  const auto output = Download(device_, result.output);
+  const auto output = last_grade_pixels_;
   ASSERT_FALSE(output.empty());
   EXPECT_NEAR(output.front().r, (input.front().r + 1.0f / 17.52f - 0.18f) * 2.0f + 0.18f, 1.0e-5f);
+  (void)result;
 }
 
 TEST_F(MetalGradeFixture, MetalHlsHueAdjustmentChangesGradePixels) {
-  const auto identity_result = RenderGrade();
-  const auto identity        = Download(device_, identity_result.output);
+  (void)RenderGrade();
+  const auto identity = last_grade_pixels_;
   auto&      hls             = ModelByType<HlsModel>(type_ids::Hls());
   auto       table           = hls.AdjustmentTable();
   table[0].h                 = 0.1f;
@@ -377,8 +409,8 @@ TEST_F(MetalGradeFixture, MetalHlsHueAdjustmentChangesGradePixels) {
   update.hls_adj_table = table;
   hls.ApplyUpdate(update);
 
-  const auto adjusted_result = RenderGrade();
-  const auto adjusted        = Download(device_, adjusted_result.output);
+  (void)RenderGrade();
+  const auto adjusted = last_grade_pixels_;
   ASSERT_EQ(identity.size(), adjusted.size());
   bool changed = false;
   for (std::size_t i = 0; i < identity.size(); ++i) {
@@ -489,7 +521,7 @@ TEST_F(MetalGradeFixture, MetalLutRemapChangesGradePixels) {
   lmt.SetCubePath(cube_path.string());
   const auto result = RenderGrade();
   const auto input  = Download(device_, plan_.develop_output);
-  const auto output = Download(device_, result.output);
+  const auto output = last_grade_pixels_;
   ASSERT_FALSE(output.empty());
   ASSERT_EQ(input.size(), output.size());
   EXPECT_NE(result.lut_resource_id, 0U);
@@ -529,7 +561,7 @@ TEST_F(MetalGradeFixture, MetalSharpenUsesSurroundingPixelsForUnsharpMask) {
 
   const auto result         = RenderThroughDrtPost();
   const auto output         = Download(device_, result.display_post);
-  const auto input          = Download(device_, plan_.drt.scene_output);
+  const auto input          = last_display_base_pixels_;
   const auto center         = static_cast<std::size_t>(height / 2) * width + width / 2;
   const auto neighbor_index = center - 1;
   const auto far_index      = static_cast<std::size_t>(height / 2) * width + 2;
@@ -580,7 +612,7 @@ TEST_F(MetalGradeFixture, MetalClarityDarkensDisplaySurroundingsAcrossLargeRadiu
 
   const auto result         = RenderThroughDrtPost();
   const auto output         = Download(device_, result.display_post);
-  const auto input          = Download(device_, plan_.drt.scene_output);
+  const auto input          = last_display_base_pixels_;
   const auto center         = static_cast<std::size_t>(height / 2) * width + width / 2;
   const auto neighbor_index = center - 1;
   const auto far_index      = static_cast<std::size_t>(height / 2) * width + 1;
@@ -599,7 +631,7 @@ TEST_F(MetalGradeFixture, MetalHalationSpreadsRedLightIntoDarkNeighbors) {
 
   const auto result         = RenderThroughDrtPost();
   const auto output         = Download(device_, result.display_post);
-  const auto input          = Download(device_, plan_.drt.scene_output);
+  const auto input          = last_display_base_pixels_;
   const auto neighbor_index = static_cast<std::size_t>(height / 2) * width + width / 2 - 1;
   const auto far_index      = static_cast<std::size_t>(height / 2) * width + 2;
   ASSERT_EQ(input.size(), output.size());
@@ -619,7 +651,7 @@ TEST_F(MetalGradeFixture, MetalFilmGrainStrengthScalesDeterministicDensityVariat
 
   grain.SetValue(0.25f);
   const auto low   = Download(device_, RenderThroughDrtPost().display_post);
-  const auto input = Download(device_, plan_.drt.scene_output);
+  const auto input = last_display_base_pixels_;
   grain.SetValue(0.75f);
   const auto high       = Download(device_, RenderThroughDrtPost().display_post);
   const auto high_again = Download(device_, RenderThroughDrtPost().display_post);
@@ -645,7 +677,7 @@ TEST_F(MetalGradeFixture, MetalPrimaryGradeMatchesCudaReferenceWithinTolerance) 
   ModelByType<SaturationModel>(type_ids::Saturation()).SetValue(1.2f);
   const auto result = RenderGrade();
   const auto input  = Download(device_, plan_.develop_output);
-  const auto output = Download(device_, result.output);
+  const auto output = last_grade_pixels_;
   ASSERT_EQ(input.size(), output.size());
   ASSERT_FALSE(input.empty());
 

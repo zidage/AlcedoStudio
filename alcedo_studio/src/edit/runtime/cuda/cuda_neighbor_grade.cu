@@ -18,7 +18,8 @@ void LaunchBlurHorizontal(cudaStream_t stream, const float4* src, float4* dst, i
 }
 
 void LaunchApplyVertical(cudaStream_t stream, const float4* original,
-                         const float4* blur_horizontal, float4* dst, int width, int height,
+                         const float4* blur_horizontal, float4* dst, const float4* mix_original,
+                         float mix, const std::uint8_t* mask, int width, int height,
                          const GradeNeighborParams& params) {
   const dim3 block{16, 16};
   const dim3 grid{(static_cast<unsigned>(width) + 15U) / 16U,
@@ -26,8 +27,8 @@ void LaunchApplyVertical(cudaStream_t stream, const float4* original,
   const auto radius = NeighborhoodVerticalRadius(params);
   const auto shared =
       static_cast<std::size_t>(block.x) * (block.y + 2U * radius) * sizeof(float4);
-  ApplyVertical<<<grid, block, shared, stream>>>(original, blur_horizontal, dst, width, height,
-                                                 params);
+  ApplyVertical<<<grid, block, shared, stream>>>(original, blur_horizontal, dst, mix_original, mix,
+                                                 mask, width, height, params);
 }
 
 }  // namespace alcedo::cuda_neighbor_grade

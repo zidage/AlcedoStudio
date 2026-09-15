@@ -328,8 +328,8 @@ void MultiGradeResourceBytesAfterGpuCompletion(Renderer& renderer, PipelineDocum
 
   multi_grade_test::AddCleanGradesBeforeDrt(document, {"grade.b"});
   time_render("grades=2");
-  EXPECT_EQ(renderer.Stats().pass.primary_grade_execute, 1U);
-  EXPECT_GE(renderer.Stats().pass.primary_grade_skip, 1U);
+  EXPECT_EQ(renderer.Stats().pass.primary_grade_execute, 2U);
+  EXPECT_EQ(renderer.Stats().pass.primary_grade_skip, 0U);
   EXPECT_GE(renderer.SessionResources().published_result_count, one_published);
   EXPECT_GE(renderer.SessionResources().texture_pool_used_bytes, one_pool);
 
@@ -338,8 +338,8 @@ void MultiGradeResourceBytesAfterGpuCompletion(Renderer& renderer, PipelineDocum
                                                   type_ids::Contrast())
       .SetValue(40.0f);
   time_render("grades=3");
-  EXPECT_EQ(renderer.Stats().pass.primary_grade_execute, 2U);
-  EXPECT_GE(renderer.Stats().pass.primary_grade_skip, 1U);
+  EXPECT_EQ(renderer.Stats().pass.primary_grade_execute, 3U);
+  EXPECT_EQ(renderer.Stats().pass.primary_grade_skip, 0U);
   const auto three_slots = renderer.Device().Workspace().Parameters().SlotCount();
   EXPECT_GT(three_slots, one_slots);
 
@@ -348,12 +348,12 @@ void MultiGradeResourceBytesAfterGpuCompletion(Renderer& renderer, PipelineDocum
                                                   type_ids::Contrast())
       .SetValue(80.0f);
   ASSERT_TRUE(HostIsFinite(RenderSession(renderer, image)));
-  EXPECT_GE(renderer.Stats().pass.primary_grade_skip, 1U);
-  EXPECT_GE(renderer.Stats().pass.primary_grade_execute, 1U);
+  EXPECT_EQ(renderer.Stats().pass.primary_grade_skip, 0U);
+  EXPECT_EQ(renderer.Stats().pass.primary_grade_execute, 3U);
 
   renderer.ResetStats();
   ASSERT_TRUE(HostIsFinite(RenderSession(renderer, image)));
-  EXPECT_EQ(renderer.Stats().pass.primary_grade_execute, 0U);
+  EXPECT_EQ(renderer.Stats().pass.primary_grade_execute, 3U);
   EXPECT_EQ(renderer.Stats().pass.drt_skip, 1U);
 
   const auto session_before_oneshot = renderer.SessionResources();
@@ -367,8 +367,8 @@ void MultiGradeResourceBytesAfterGpuCompletion(Renderer& renderer, PipelineDocum
   ASSERT_TRUE(RemoveColorGradeAndBridge(document, NodeId{"grade.c"}).empty());
   ASSERT_TRUE(RemoveColorGradeAndBridge(document, NodeId{"grade.b"}).empty());
   time_render("grades=1_after_removal");
-  EXPECT_GE(renderer.Stats().pass.primary_grade_skip, 1U);
-  EXPECT_EQ(renderer.Stats().pass.primary_grade_execute, 0U);
+  EXPECT_EQ(renderer.Stats().pass.primary_grade_skip, 0U);
+  EXPECT_EQ(renderer.Stats().pass.primary_grade_execute, 1U);
   EXPECT_LT(renderer.Device().Workspace().Parameters().SlotCount(), three_slots);
 
   renderer.ReleaseSessionCaches();

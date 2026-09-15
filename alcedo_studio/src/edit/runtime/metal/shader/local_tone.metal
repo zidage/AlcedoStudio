@@ -299,9 +299,14 @@ kernel void local_tone_collapse(device const float* lap [[buffer(0)]],
 
 kernel void local_tone_apply(texture2d<float, access::read> src [[texture(0)]],
                              texture2d<float, access::write> dst [[texture(1)]],
+                             texture2d<float, access::read> mix_source [[texture(2)]],
+                             texture2d<float, access::read> mask [[texture(3)]],
                              device const float* reference [[buffer(0)]],
                              device const float* adjusted [[buffer(1)]],
                              constant ApplyParams& params [[buffer(2)]],
+                             constant float& grade_mix [[buffer(3)]],
+                             constant uint& apply_mix [[buffer(4)]],
+                             constant uint& has_mask [[buffer(5)]],
                              uint2 gid [[thread_position_in_grid]]) {
   if (gid.x >= uint(params.width) || gid.y >= uint(params.height)) {
     return;
@@ -335,5 +340,15 @@ kernel void local_tone_apply(texture2d<float, access::read> src [[texture(0)]],
   r           = target_intensity + (r - target_intensity) * gamut_scale;
   g           = target_intensity + (g - target_intensity) * gamut_scale;
   b           = target_intensity + (b - target_intensity) * gamut_scale;
-  dst.write(float4(AcesccEncode(r), AcesccEncode(g), AcesccEncode(b), pixel.w), gid);
+  float4 tone = float4(AcesccEncode(r), AcesccEncode(g), AcesccEncode(b), pixel.w);
+  if (apply_mix != 0u) {
+    const float4 original = mix_source.read(gid);
+    float mix = grade_mix;
+    if (has_mask != 0u) {
+      mix *= mask.read(gid).r;
+    }
+    mix  = clamp(mix, 0.0f, 1.0f);
+    tone = float4(original.xyz + (tone.xyz - original.xyz) * mix, original.w);
+  }
+  dst.write(tone, gid);
 }

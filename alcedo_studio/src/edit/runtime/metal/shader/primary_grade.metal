@@ -227,10 +227,15 @@ static inline device const GradeAdjustmentParams& LoadParams(device const uchar*
 
 kernel void primary_grade_pointwise(texture2d<float, access::read> src [[texture(0)]],
                                     texture2d<float, access::write> dst [[texture(1)]],
+                                    texture2d<float, access::read> mix_source [[texture(2)]],
+                                    texture2d<float, access::read> mask [[texture(3)]],
                                     device const uchar* parameter_base [[buffer(0)]],
                                     device const uint* commands [[buffer(1)]],
                                     constant PrimaryGradeDispatchParams& dispatch [[buffer(2)]],
                                     device const float4* lmt_lut [[buffer(3)]],
+                                    constant float& grade_mix [[buffer(4)]],
+                                    constant uint& apply_mix [[buffer(5)]],
+                                    constant uint& has_mask [[buffer(6)]],
                                     uint2 gid [[thread_position_in_grid]]) {
   if (gid.x >= src.get_width() || gid.y >= src.get_height()) {
     return;
@@ -243,7 +248,17 @@ kernel void primary_grade_pointwise(texture2d<float, access::read> src [[texture
     c = ApplyAdjustment(c, LoadParams(parameter_base, offset), pixel_index, dispatch.local_reference,
                         lmt_lut, dispatch.lut_edge);
   }
-  dst.write(float4(c, source.w), gid);
+  float4 adjusted = float4(c, source.w);
+  if (apply_mix != 0u) {
+    const float4 original = mix_source.read(gid);
+    float mix = grade_mix;
+    if (has_mask != 0u) {
+      mix *= mask.read(gid).r;
+    }
+    mix      = clamp(mix, 0.0f, 1.0f);
+    adjusted = float4(original.xyz + (adjusted.xyz - original.xyz) * mix, original.w);
+  }
+  dst.write(adjusted, gid);
 }
 
 kernel void primary_grade_mix(texture2d<float, access::read> source [[texture(0)]],

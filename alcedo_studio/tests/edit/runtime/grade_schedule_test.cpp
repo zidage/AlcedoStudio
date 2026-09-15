@@ -112,7 +112,7 @@ TEST(GradeSchedule, DisabledCompilerNeighborhoodDoesNotBreakPointwiseConcatenati
   EXPECT_EQ(trace.op_kinds.front(), CompiledGradeStageKind::Pointwise);
   EXPECT_EQ(trace.fused_command_count, 2U);
   EXPECT_FALSE(trace.skip_final_mix);
-  EXPECT_EQ(trace.gpu_write_count, 2U);
+  EXPECT_EQ(trace.gpu_write_count, 1U);
 }
 
 TEST(GradeSchedule, InactiveLocalLaplacianSelectsCompilerPointwiseRangesAsOneLaunch) {

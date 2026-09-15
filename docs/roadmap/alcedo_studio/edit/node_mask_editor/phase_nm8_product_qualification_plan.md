@@ -11,7 +11,9 @@ pending.
 NM8.2R scheduling/presentation rework passed complete-UI qualification on
 2026-09-14 under default VSync (session-owner thread + render-thread
 Ready-frame consume).
-NM8.3–NM8.6 planned.
+NM8.3 complete on 2026-09-14. NM8.4 implementation and Windows CUDA/OpenCL
+qualification are complete on 2026-09-15; macOS Metal true-device qualification
+remains pending, so NM8.4 status is partial. NM8.5–NM8.6 planned.
 NM7 已由用户确认完成；其历史测试记录保留在原方案中，本文件不补造执行证据。
 2026-09-12 的首轮工作范围是 NM8.1–NM8.2：建立低开销测量和日志，采集当前实现的数据。
 NM8.3–NM8.6 定义完整优化和最终资格验证，按依赖顺序执行。
@@ -35,8 +37,10 @@ History / Version / Paste 和当前项目格式。所有执行使用 `ALCEDO_ENA
    Basic Tone / Color 中间图或 Mix 后 RGBA 图，不新增活跃节点前缀缓存。
 4. **节点间共用一对 RGBA32F ping-pong 工作图。** 这对图由现有 render workspace
    管理，继续供后续兼容的 DRT/Post ping-pong 任务使用，不按 NodeId 配置各自一对图。
-5. **Grade 内跨帧图像缓存只用于 LLF 图。** 复用现有 source.0 / result.0 表示；
-   更高层金字塔、remap 和 collapse 工作图仍是算法临时资源。
+5. **本阶段删除的跨帧结果只指 Color Grade scene RGBA。** LLF 继续复用现有
+   source.0 / result.0 表示；更高层金字塔、remap 和 collapse 工作图仍是算法临时资源。
+   Mask source / Union 的 R8 结果属于 Mask owner，不属于这对 RGBA 工作图；NM8.4
+   不改变它们的分配、持久化、失效或量化策略。
 6. Develop、Geometry 等关键阶段继续遵守既定复用规则。LUT、GPU pipeline state、
    参数 arena、静态执行计划属于各自 owner 的资源，不作为待删除的 Grade 图像缓存。
 7. 保留每个节点完整调色后的 Mix：`output = input + weight * (adjusted - input)`。
@@ -182,16 +186,24 @@ Mix 保留该输入引用到最后读取完成，不为进入工作图对做整�
 
 ### 4.2 workspace 拥有工作图，逻辑图仍拥有依赖
 
-改动现有 [workspace](../../../../../alcedo_studio/src/include/edit/runtime/basic_render_workspace.hpp)、
-[GraphImageCache](../../../../../alcedo_studio/src/include/edit/runtime/graph_image_cache.hpp)、
-[texture pool](../../../../../alcedo_studio/src/include/edit/runtime/texture_pool.hpp) 的受控操作，
-由 workspace 取得工作图 lease 并安排读写。ExecutionPlan 只描述数据依赖和读写需求，
-不拥有 GPU 资源，也不持有可变 document 镜像。
+在 workspace 内增加专用 `SceneWorkImagePair` owner。它只拥有两张相同 extent、
+`RGBA32F` 的原生工作资源及其资源统计，不保存 NodeId、GraphValueId、revision、参数、
+document 状态或上一帧内容有效性。CUDA/Metal 可以使用各自普通可读写纹理；OpenCL
+可以使用专用线性 buffer。后端差异封装在 scene-work 创建和绑定接口内，不能把普通
+`Texture2D` 改成时而是 image、时而是 buffer 的联合类型。
+
+`SceneWorkImagePair` 与 `GraphImageCache`、Develop、Geometry、Camera Color、Mask、LLF
+和 display output 是不同资源类别。NM8.4 不修改 `GraphImageCache` 和 `TexturePool` 的
+通用语义，也不把工作图登记成伪 GraphValueId。工作图 owner 必须单独报告当前/峰值字节、
+原生分配次数和固定成员数；总资源快照必须包含这些字节，不能因为绕过 texture pool 而漏报。
+ExecutionPlan 只描述数据依赖和读写需求，不拥有 GPU 资源，也不持有可变 document 镜像。
 
 取消 Grade scene_output 的持久查找/发布，但仍保留 GraphValueId、依赖 revision 和错误定位。
-必要的当前节点绑定是帧内借用，后续覆盖前撤销旧绑定，不留下貌似有效的历史节点输出。
-帧内容发生变化并进入 Grade 区域时，从关键阶段的有效输入顺序执行所需 Grade；
-不再承诺修改末尾 Grade 可以跳过前面的 Grade 计算。纯 pan/selection 等仍按既定规则复用最终帧。
+当前 scene 的物理位置使用 `PlanExecutor` 栈上的 frame-local binding 显式传给 Grade 和
+DRT/Post executor；它不存入 workspace，不跨 `BeginRender`/`EndRender`，也不参与
+Publish/Cancel。帧内容发生变化并进入 Grade 区域时，从关键阶段的有效输入顺序执行所需
+Grade；不再承诺修改末尾 Grade 可以跳过前面的 Grade 计算。纯 pan/selection 等复用最终帧
+由现有请求/呈现 owner 决定，不以保留工作图像素实现。
 
 工作图对继续交给 [DRT/Post](../../../../../alcedo_studio/src/include/edit/runtime/drt_post_executor.hpp)
 及后续兼容任务，不重新分配按节点命名的 ping/pong。不同尺寸、格式、读写用途不兼容时，
@@ -201,9 +213,12 @@ Mix 保留该输入引用到最后读取完成，不为进入工作图对做整�
 
 这对图是同一 render workspace 的主 RGBA 工作集，并非全应用所有内存的上限。
 LLF 单通道图、邻域 scratch、关键阶段有效结果和最终呈现资源分别计量。
-最后输出仍被 GPU、Qt 或其他 reader 持有时，不能开始覆盖它；沿用现有提交、完成和
-lease 释放机制。跨帧占用由已有呈现槽位和在途数量约束，不能随 Grade 数量增长。
-不通过每节点同步换取复用，也不新增全局显存预算调度器。
+最终呈现始终写入现有 display output lease；scene 工作图不能直接交给 frame sink、Qt
+或 export reader。这样 reader 生命周期继续由 display owner 管理，工作图只受单一串行
+render workspace 和上一 submission 完成边界保护。若以后要直接呈现 scene 工作图，必须
+另立方案定义所有权和 reader 释放，不能在 NM8.4 中顺带开放。跨帧占用由已有呈现槽位和
+在途数量约束，不能随 Grade 数量增长。不通过每节点同步换取复用，也不新增全局显存预算
+调度器。
 
 ### 4.3 LLF 缓存与 Mask 工作
 
@@ -222,10 +237,11 @@ Shadows/Highlights 变化可保留未变的 source，但 result 必须重建。
 QualityBase 继续遵守 Develop 之后不写入会话持久结果的规则；不因“只缓存 LLF”
 自动授权 Quality 覆盖 Interactive 的参考图。高层金字塔始终是算法临时存储。
 
-Radial/Linear Gradient 的参数仍由 Mask owner 管理。Grade 不持有跨帧 R8/Union/Mix
-图像结果；既有独立 Mask evaluator 输出只作为帧内临时资源，按最后读取释放。
-将解析 coverage/Union 融入 Mix 属于 NM8.5 的候选优化，必须保持既定量化与 Union 数值；
-本阶段不把修改 Mask 算法或量化精度作为性能手段。
+Radial/Linear Gradient 的参数和 R8/Union 结果继续由现有 Mask owner 管理。NM8.4
+不改变其查找、发布、失效、量化、Union 或最后读取释放规则；这些资源不计入“两张
+RGBA32F scene 工作图”，也不能被改造成工作图成员。将解析 coverage/Union 融入 Mix、
+删除跨帧 Mask 结果或改变 Mask 资源策略属于独立优化，必须先有测量和单独批准；本阶段
+不以修改 Mask 算法、缓存或量化精度缩小主工作集。
 
 ## 5. 子阶段与完成条件
 
@@ -234,7 +250,7 @@ Radial/Linear Gradient 的参数仍由 Mask owner 管理。Grade 不持有跨帧
 | NM8.1 | 低开销日志、输入到呈现时间线、CPU 分段 | 当前产品路径 | complete 2026-09-12 |
 | NM8.2 | 节点/pass 原生 GPU 计时、当前实现基线及硬件采集 | NM8.1 | CUDA complete 2026-09-13 (2560 slider DAG, native-sensor slider DAG, felt present); OpenCL/Metal pending |
 | NM8.3 | 新顺序、融合 pass 描述、算法版本和画面预期 | NM8.2 当前后端基线 | complete 2026-09-14 on `feature/nm83-fixed-grade-order` (CUDA + OpenCL measured on this host; Metal covered by shared compiler + macOS-only test targets) |
-| NM8.4 | 共享工作图、取消 Grade 缓存、LLF/Mix 与下游复用 | NM8.3 | planned |
+| NM8.4 | 共享工作图、取消 Grade 缓存、LLF/Mix 与下游复用 | NM8.3 | partial 2026-09-15: implementation + Windows CUDA/OpenCL passed; macOS Metal true-device run pending |
 | NM8.5 | 根据 CUDA/Metal 数据优化热点和整帧开销 | NM8.4 | planned |
 | NM8.6 | 三后端、真实 RAW、交互和安装包最终验证 | NM8.1–NM8.5 | planned |
 
@@ -961,31 +977,422 @@ divergence noted above. NM8.4 shared work images not started.
 
 ### NM8.4 — 共享双工作图与 LLF/Mix 执行
 
-**工作：** 按第 4 节整体修改 PlanExecutor、GradeExecutor、LocalToneExecutor、
-result persistence/invalidation、workspace、GraphImageCache、DRT/Post 及三个原生后端。
-Grade 工作图改为 workspace pair，移除持久节点 RGBA 和 R8 结果，LLF 只保留既有两类图。
-拆开 LLF 准备和最终应用，最终应用融合 Mix，完成同像素读写的原生实现及资源声明。
-参数变化只更新必要字段；无效节点删除/重连清理 LLF，不逐帧构造整图副本。
+#### NM8.4.1 目标和不可扩张边界
 
-**主链：** 关键阶段有效输入 → shared pair → 每 Grade fused pointwise → LLF maps →
-Local Tone + Mix → 下一个 Grade → DRT/Post 复用 → frame sink → reader 释放。
-**失败链：** 分配/原生编码/执行/呈现失败 → 原 owner 取消和完成处理 → 不发布 LLF 新版本
-→ 不把还在被读的工作图归还为可写；错误保留真实后端信息。
+本阶段只改变 **Camera Color/Develop 有效 scene 输出之后、最终 display output 之前** 的
+RGBA32F 物理工作资源安排。目标是在一个串行 render workspace 中固定复用两张相同 extent
+的 scene 工作资源，不再为每个 Grade 或 DRT/Post 创建各自的 RGBA ping/pong 和持久 Grade
+scene 输出。这里复用的是 **原生分配**，不是上一帧的像素内容。
 
-**验证：** `MultipleGradesReuseTwoRgbaWorkImages`、
-`MaskedLocalTonePreservesOriginalGradeInput`、
-`FinalMixReadsAdjustedPixelBeforeOverwritingIt`、
-`GradeOutputsAreNeverPublishedToPersistentCache`、
-`PostProcessingReusesGradeWorkImagesAfterLastRead`、
-`PresentedImageLeasePreventsWorkImageOverwrite`、
-`ColorChangeInvalidatesLocalToneSourceAndResult`、
-`OwnMaskChangeKeepsLocalToneMapsAndInvalidatesDownstreamMaps`、
-`QualityRenderDoesNotReplaceInteractiveLocalToneMaps`、
-`FailedFrameDoesNotPublishLocalToneResults`。
+以下规则是实现边界，不得以优化便利为理由扩大：
 
-**完成条件：** 真 GPU 像素比较通过；不含 LLF 的多节点主工作 RGBA 数量不随节点数增长；
-有 LLF 时只允许各 owner 的必要 LLF 图增长；Grade 持久结果计数为零；后处理、reader、
-跨帧复用和连续编辑通过验证。数量断言只用于明确的资源类别，不声称总显存只有两张图。
+1. `SceneWorkImagePair` 只拥有两张 RGBA32F 原生资源、extent/format 和资源计数。
+   它不保存 GraphValueId、NodeId、revision、document、参数、当前节点或内容有效性。
+2. 不新增 `pending`/`committed` scene、whole-Grade-chain 内容命中、跨帧 Grade 输出跳过，
+   或任何功能相同但名称不同的 workspace side cache。每次 executor 实际进入 Grade 区域时，
+   都从本帧已解析的关键阶段输入开始顺序执行需要的 Grade。
+3. 不修改 Develop、Geometry、Camera Color 的缓存、失效、发布、别名或质量策略。
+   第一个 Grade 只读它们的现有有效输出，不把它们迁入工作图 owner，也不覆盖其纹理。
+4. 不修改 Mask source / Union R8 的 owner、缓存、失效、量化和 Union 规则。Mask 纹理可被
+   最终 Mix 读取，但不是 scene 工作图成员，也不计入两张 RGBA32F 工作资源。
+5. LLF 继续只按现有 owner 保留 source.0/result.0 R32F canonical 图。高层金字塔、remap、
+   collapse 和 Neighborhood 横向结果继续是算法 scratch；它们不计入 scene 工作图数量，
+   也不能改造成持久 Grade RGBA 结果。
+6. 最终 display output 继续由现有 image/presentation owner 管理。scene 工作图不能直接
+   传给 frame sink、Qt 或 export reader，因此不为工作图新增呈现 lease 或 reader 状态。
+7. 不改变 NM8.3 已固定的算子顺序、融合范围、Mix/Mask 数值、LLF 算法、FP32、render
+   extent、decode 质量、后端选择、串行执行和单一在途 submission 规则。
+8. 不通过第三张 Grade RGBA 图、每节点 RGBA 临时图、整图入口复制、其他后端、CPU、
+   降低分辨率或降低质量解决原地读写问题。某后端不能满足时报告真实阻塞，不提交替代路径。
+
+#### NM8.4.2 资源分类和唯一 owner
+
+| 资源类别 | Owner | 跨帧保留 | NM8.4 行为 |
+| --- | --- | --- | --- |
+| Sensor/Develop/Geometry/Camera Color 图 | 现有 GraphImageCache/阶段 owner | 按既定策略 | 完全不改 |
+| 两张 scene RGBA32F 工作资源 | 新 `SceneWorkImagePair`，由 render workspace 独占 | 只保留分配；内容无效 | 本阶段新增 |
+| Grade scene_output RGBA | 无物理 owner；GraphValueId 只用于逻辑依赖 | 否 | 停止查找、分配、记录和发布 |
+| LLF source.0/result.0 R32F | 现有 LLF/GraphImageCache owner | 按既定 frame role | 保留并校正依赖 |
+| LLF 高层和 remap/collapse | 现有 transient owner | 否 | 不改资源类别 |
+| Mask source/Union R8 | 现有 Mask owner | 按既定策略 | 完全不改 |
+| Neighborhood scratch | 现有 transient/texture scratch owner | 否 | 保留数学必需资源 |
+| LUT、pipeline state、参数 arena、static plan | 各现有 owner | 按既定策略 | 完全不改 |
+| display output 和呈现 lease | 现有 display/presentation owner | 按 reader 生命周期 | 最终写入目标，不能成为工作图成员 |
+
+新增永久类型按领域职责命名，例如 `SceneWorkImagePair`；不得以 NM8.4、迁移编号或临时步骤
+命名。该 owner 负责：
+
+- 在上一 submission 已完成的 `BeginRender` 边界确认两张成员的 extent/format；
+- extent/format 相同则保留原生分配，不重新申请；
+- extent/format 改变时，在 GPU 最后读取完成后一起释放并一起重新创建；
+- 只提供成员 0、成员 1 和 `PeerOf(member)` 的受控访问；
+- 报告成员数、当前/峰值字节和原生分配次数；
+- session teardown 时在设备 idle 后释放两张资源。
+
+工作图可以由专用 owner 直接拥有，不登记为 GraphImageCache entry；但
+`CaptureResourceSnapshot` 及性能日志必须单列并计入它们。不能只统计 TexturePool 后宣称
+工作内存下降。RGBA32F 两张图的预期字节数为 `width * height * 16 * 2`，资源测试同时核对
+分类字节和原生 allocation counter。
+
+#### NM8.4.3 帧内 scene 位置必须显式传递
+
+`PlanExecutor` 在栈上持有一个仅本帧有效的 `FrameSceneBinding`。它只表示以下二选一位置：
+
+```text
+CachedImage(GraphValueId)   // Develop/Camera Color 等现有有效图
+WorkImage(Member0|Member1)  // SceneWorkImagePair 的一个成员
+```
+
+该 binding 不拥有资源，不保存 revision/extent，不写入 workspace，不跨 EndRender，不参与
+Publish/Cancel。其引用有效期由现有 GraphImageCache lease 或 `SceneWorkImagePair` owner 保证。
+逻辑 revision 继续由 ExecutionPlan/RuntimeInvalidationState 管理，不能复制到 binding 中形成
+第二套有效性记录。
+
+调用接口必须显式表达数据流：
+
+```text
+PlanExecutor
+  FrameSceneBinding scene = CachedImage(plan.develop_output)
+  for compiled Grade in order:
+      scene = GradeExecutor::Execute(..., scene)
+  DrtPostExecutor::Execute(..., scene)
+```
+
+不得让 GradeExecutor/DrtPostExecutor 通过 `workspace.ResolveSceneValue(logical_id)`、全局
+current scene、relabel、commit 或类似隐式状态交换当前物理位置。禁用、Mix=0 或没有有效
+调整的 Grade 直接返回输入 binding，不复制像素，也不把 binding 改写成伪 scene_output。
+
+#### NM8.4.4 每个 Grade 的精确读写规则
+
+设 `S` 为当前 Grade 的完整输入 binding，`W` 为另一张可写工作成员。第一个 Grade 的 `S`
+可以是 Camera Color/Develop 的缓存图；后续 Grade 的 `S` 必须是工作成员，`W` 是其 peer。
+
+**没有 LLF/Neighborhood 的普通 Grade：**
+
+```text
+S 保持只读
+  → fused Basic Tone + Color + final Mix：读取 S，写 W
+  → 返回 WorkImage(W)
+```
+
+Mix=1 仍走同一个最终写出语义；Mix=0/禁用/空操作直接返回 S。带 Mask 时最终 kernel 读取
+现有 Mask R8，保持 opacity、invert、Union 和 Grade Mix 的既定计算。
+
+**带 LLF 的 Grade：**
+
+```text
+S 保持只读
+  → fused Basic Tone + Color：读取 S，写 W
+  → LLF Prepare：读取 W，生成或复用 source.0/result.0，并完成所有邻域计算
+  → LLF Apply + final Mix：
+       先读取 S[p]、W[p]、LLF planes、Mask[p]
+       再原地写 W[p]
+  → 返回 WorkImage(W)
+```
+
+LLF apply 只能读取 W 的同一像素和已经独立完成的 LLF planes；它不能在覆盖 W 时读取 W 的
+邻居。Prepare 返回的数据只在本次 Grade encode 内有效；实现不得为了跨调用保存它而把完整
+backend Ops 方法表搬进公共 header。优先保持后端操作在各自实现内部，只暴露准备结果所需的
+最小拥有类型和 Prepare/Apply 入口。
+
+**带 Neighborhood 的 Grade：**
+
+```text
+当前 scene 像素位于 W
+  → horizontal：读取 W 的邻域，写独立 horizontal scratch
+  → vertical apply：读取 W[p] 和 horizontal scratch 邻域，原地写 W[p]
+```
+
+若 Neighborhood 是本 Grade 的最后有效阶段，vertical apply 同时读取 S[p]/Mask[p] 并融合
+final Mix。horizontal 完成前不得覆盖 W。其 scratch 是算法必需资源，不是第三张 Grade
+scene RGBA 图；scratch 的 extent、格式、最后读取和释放继续由 Neighbor owner 管理。
+
+任何新增或已有 stage 若需要在写 W 时读取 W 的邻居，必须先把邻域依赖完整写入其专用
+scratch，再进入原地逐像素 apply。不能默认“看起来是逐像素”就允许别名；每个原生入口都要
+通过对应后端的真实像素测试证明。
+
+#### NM8.4.5 Grade 之间与 DRT/Post 的轮换
+
+节点间只轮换两个成员：
+
+```text
+Camera Color/Develop → Grade 0 写 Member0
+Member0             → Grade 1 写 Member1
+Member1             → Grade 2 写 Member0
+...
+```
+
+每个 Grade 内保留 `S` 直到最终 Mix 已编码；只有同一有序 GPU queue 上的最后读取已经排在
+后续写入之前，peer 才能成为下一节点的目的成员。不新增逐 Grade synchronize、host wait 或
+新 command queue。
+
+DRT/Post 的最终输出必须落到现有 display output：
+
+- 没有启用 Post：DRT transform 从当前 scene 直接写 display output；
+- 有 `N` 个 Post：根据奇偶性，让 DRT transform 和 Post 在 display output 与 scene 的
+  **空闲工作成员**之间轮换，最后一次写入必须是 display output；
+- 当前 scene 在 Member0/1 时，DRT/Post 只能使用其 peer 作为中间成员；
+- 当前 scene 仍是关键阶段缓存图时，默认 Member0 是空闲成员；
+- DRT/Post 不创建自己的 `runtime.ping`/`runtime.pong` GraphValueId；
+- frame sink 只接收 display output lease，不能接收 Member0/1。
+
+display output 不计入“两张 scene 工作图”；它是向 reader 交付最终像素所必需的独立结果。
+
+#### NM8.4.6 缓存和失效边界
+
+Grade scene_output GraphValueId 继续存在于编译计划、依赖传播、诊断和错误信息中，但不得用于：
+
+- `BindValidResult` 或其他跨帧内容查找；
+- `AcquireImageForWrite`；
+- `AliasImageFrom`；
+- `RecordUnpublished`；
+- `PublishSuccessfulSubmission`；
+- workspace 内的 pending/committed scene 映射。
+
+因此，修改末尾 Grade 不能依靠旧的上游 Grade RGBA 图跳过前面节点。若请求 owner 已判定整帧
+可直接复用，它可以沿用现有最终 display frame；一旦进入 PlanExecutor 的 Grade 区域，就从
+本帧关键阶段有效图顺序执行 Grade。
+
+LLF 有效性按语义 revision 判断，不按 Member0/1 地址判断：
+
+- 本节点 Basic Tone/Color 或任何上游完整 Grade 输出语义变化：本节点 LLF source/result 失效；
+- 只改本节点 Shadows/Highlights：source 可保留，result 重建；
+- 只改本节点最终 Mix 或本节点 Mask：本节点 source/result 保留；
+- 上游 Mix/Mask 变化：所有受影响下游 LLF 失效；
+- 删除、重连、reopen、Version、Paste 和图像切换：沿用 RuntimeInvalidationState 的逻辑依赖；
+- QualityBase 不发布 Interactive LLF 的替代版本，保持既定 persistence scope。
+
+Mask R8 继续走现有 Bind/Record/Publish 路径；NM8.4 不为了 Grade scene 去缓存而删除它们，
+也不把 Mask 是否需要执行的产品规则从 Mask/Grade schedule 复制到 PlanExecutor 的新
+`dynamic_cast` 判断中。
+
+#### NM8.4.7 三后端原生边界
+
+共享 executor 只决定 stage 顺序、S/W 成员、最终 Mix 时机和 DRT/Post 奇偶目的位置。
+原生资源表示、参数绑定、kernel/pipeline state 和错误由各后端 owner 负责。
+
+**CUDA：**
+
+- 两个工作成员使用现有 CUDA RGBA32F 线性存储表示；
+- 最终 pointwise、LLF apply 和 Neighborhood vertical apply 必须允许 input/output 在 W 上别名；
+- 不添加与实际别名冲突的 `__restrict__` 或跨线程读取；
+- 每线程先读取本像素所需的 S/W/Mask/LLF 值，再写回 W[p]；
+- 保持现有 stream 顺序，不新增 `cudaDeviceSynchronize`/`cudaEventSynchronize`。
+
+**Metal：**
+
+- 两个工作成员使用明确允许所需 read/write usage 的 RGBA32Float texture；
+- 同一 W 绑定为读取和写入时，shader 只执行同像素 read-before-write；
+- 所有邻域读取在独立 scratch 阶段完成；
+- pipeline state 继续由现有 cache 取得，不能每帧或每 Grade 新建。
+
+**OpenCL：**
+
+- 普通 `OpenClBackend::Texture2D` 继续只表示 image-backed 缓存/输出纹理；
+- 两个 scene 工作成员使用专用 RGBA32F row-major buffer 和明确的 width/height 元数据；
+- 不给通用 Texture2D 增加 `buffer_backed` 分支、伪 device address 或 image/buffer 双重含义；
+- cached image → work buffer、work buffer → work buffer、work buffer → display image 的参数绑定
+  只存在于 Grade/LLF/Neighbor/DRT scene-work adapter 和对应 kernel 入口；
+- 未使用的 image/buffer 参数若因 OpenCL kernel 签名必须绑定，由 adapter 集中管理，不能把
+  dummy resource 逻辑复制到各 executor；
+- 不修改普通纹理 upload/download/copy API 来适配仅由 scene-work 使用的 buffer；
+- 若目标 OpenCL 能力不能安全原地执行，记录具体设备/API 阻塞，不暗中增加第三张 RGBA 图。
+
+三个后端必须使用相同的独立预期公式和容差验证最终像素，但不要求使用相同原生资源类型、
+线程组或 kernel 参数布局。
+
+#### NM8.4.8 失败、取消和生命周期
+
+工作成员的像素内容从不发布，因此失败处理不回滚、复制或恢复其旧内容：
+
+```text
+分配/参数上传/原生编码/执行/呈现失败
+  → 原 render owner 等待或取消已记录工作
+  → 丢弃未发布的 Grade-independent graph writes、LLF writes 和 display write
+  → frame-local binding 随栈销毁
+  → 两张工作分配可以保留，但其内容一律视为无效
+  → 下一次 render 从关键阶段有效输入重新进入 Grade
+```
+
+不得为了“保留上一张正确 Grade 图”增加 committed scene。上一张已呈现画面由 display/
+presentation owner 持有；工作图不承担 last-good frame。失败必须保留真实 CUDA/OpenCL/Metal
+错误，不重试其他后端、其他算法、其他尺寸或旧的 per-Grade 路径。
+
+extent 改变只能在 `BeginRender` 已确认上一 submission 完成后重建 pair。正常同 extent
+连续编辑不得发生新的 pair 原生分配。session teardown 必须先 device idle，再释放 pair；
+析构、取消和重建都不能影响 Develop/Geometry/Camera Color/Mask/LLF/display 的 owner 状态。
+
+#### NM8.4.9 文件范围和评审切片
+
+预期允许修改的职责范围：
+
+- workspace 和新 `SceneWorkImagePair` owner；
+- `PlanExecutor`、`GradeExecutor`、`LocalToneExecutor`、`NeighborExecutor`、`DrtPostExecutor`；
+- CUDA/OpenCL/Metal 的 Primary Grade、Local Tone、Neighbor、DRT scene-work 原生入口和 shader；
+- scene-work 分类所需的资源诊断字段、序列化和专用测试；
+- 新文件的 CMake 注册。
+
+以下文件/职责默认禁止修改；如发现真实阻塞，先在本节写出原因、所需接口和影响，再继续：
+
+- Develop、demosaic、Geometry、Camera Color 实现及其缓存策略；
+- `GraphImageCache`、`TexturePool`、result persistence 的通用规则；
+- Mask evaluator、Mask Union、R8 量化和 Mask 持久策略；
+- GraphCompiler 的 NM8.3 顺序、adjustment ownership 和 static plan key；
+- editor input、scheduler、frame sink、present queue、viewport 和 export 流程；
+- GPU 全局预算器、多帧流水线或新的 executor 并发。
+
+实现按可独立评审的职责切片，但所有切片都属于 NM8.4，不能把完整能力被动推迟：
+
+1. 新增 work-pair owner、frame-local binding、资源统计和纯 host 生命周期测试；
+2. 改共享 Grade/LLF/Neighbor 编排，删除 per-Grade RGBA 获取/发布，不新增后端替代路径；
+3. 完成 CUDA 原地最终写出及真实像素/资源验证；
+4. 完成 OpenCL 专用 work-buffer adapter 及真实像素/资源验证；
+5. 完成 Metal 原地最终写出及 macOS 真实像素/资源验证；
+6. 接入 DRT/Post/display，删除旧 runtime ping/pong 使用，完成连续编辑和失败恢复验证；
+7. 运行三后端及产品相关回归，写 NM8.4 完成记录。
+
+每个切片以约 500 changed LOC 为评审目标，在真实原生边界无法再分时说明原因。不得用把同一
+God class 方法移动到多个 `.cpp`、把完整 backend Ops 暴露到公共 header、或把所有资源塞进
+一个可变 context 的方式伪装拆分。中间 commit 可以尚未完成产品切换，但最终 NM8.4 不能保留
+新旧两套运行路径或运行时 fallback。
+
+#### NM8.4.10 验证矩阵
+
+按以下名字或同等明确的行为测试落实；fake backend 只能证明编排，不能替代真实 GPU 像素、
+别名和原生资源计数。
+
+| 验收行为 | 必需证据 |
+| --- | --- |
+| `SceneWorkPairOwnsExactlyTwoRgba32fImages` | 同 extent 首次创建恰好两张；成员格式/尺寸正确 |
+| `SameExtentRendersReuseSceneWorkAllocations` | 连续多帧 allocation count 不增加；内容不作为命中 |
+| `ExtentChangeRecreatesBothSceneWorkImagesAfterGpuCompletion` | 奇数尺寸和尺寸切换；旧资源最后读取完成后释放 |
+| `SceneWorkBytesAreIncludedInResourceMeasurements` | 分类字节等于 `w*h*16*2`，总资源记录包含该值 |
+| `MultipleGradesAlternateOnlyTwoRgbaWorkImages` | 1/2/4/8 Grade 的成员序列及真实原生 id，数量不随节点增长 |
+| `RepeatedRenderDoesNotUsePreviousSceneWorkPixels` | executor 再次进入 Grade 时重新执行，不存在 whole-chain scene hit |
+| `DisabledAndZeroMixGradesAliasFrameInputWithoutCopy` | binding 不变、无 scene dispatch、像素与输入一致 |
+| `PointwiseGradeMixPreservesOriginalGradeInput` | Mix 0/1/中间值、非线性 Color、HDR/负值独立公式比较 |
+| `MaskedLocalTonePreservesOriginalGradeInput` | Mask 内外/边缘/重叠，LLF + Mix 独立像素比较 |
+| `FinalMixReadsAdjustedPixelBeforeOverwritingIt` | W 原地别名，最大/平均误差和失败坐标可见 |
+| `NeighborhoodApplyReadsScratchBeforeInPlaceWrite` | horizontal/vertical 顺序、邻域像素和边界尺寸比较 |
+| `GradeOutputsAreNeverPublishedToPersistentCache` | 每个 Grade scene_output 无 lookup/write/publish entry |
+| `DevelopGeometryAndCameraColorKeepExistingCacheBehavior` | 改前已有命中/失效/发布测试保持相同计数和结果 |
+| `MaskR8ResultsKeepExistingCacheAndQuantizationBehavior` | Mask/Union 既有命中、失效和最多一个码值误差保持 |
+| `ColorChangeInvalidatesLocalToneSourceAndResult` | 上游/本节点 Color 变化重建正确 LLF owner |
+| `OwnMaskChangeKeepsLocalToneMapsAndInvalidatesDownstreamMaps` | 本节点保留、下游重建，不按 work member 地址判断 |
+| `QualityRenderDoesNotReplaceInteractiveLocalToneMaps` | frame role persistence scope 保持 |
+| `PostProcessingUsesFreeSceneWorkMemberAndEndsOnDisplay` | Post 数量 0/1/2/3 的真实目的序列和最终 display 像素 |
+| `SceneWorkImagesAreNeverPassedToFrameSink` | frame sink 收到 display lease；work member 无 reader/export lease |
+| `FailedFrameDoesNotPublishLocalToneOrDisplayResults` | 各关键失败点注入；下一帧从关键阶段输入恢复 |
+| `FailedFrameDoesNotCreateReusableSceneContent` | pair 可保留分配但不能产生下一帧 Grade skip |
+| `OpenClCachedImagesRemainImageBacked` | Develop/Geometry/Camera/Mask/display 类型和普通 copy API 不变 |
+| `NativeBackendsMatchIndependentTwoImageExpectedPixels` | CUDA/OpenCL/Metal 真设备，多 Grade+LLF+Mask+Post 比较 |
+
+真实像素测试覆盖 Mix 0/1/中间值、Mask opacity/invert/Union、多个 Grade、LLF 开关、
+Neighborhood、LUT、非线性颜色、HDR/负值、奇数尺寸、裁剪旋转后的固定 extent、连续多帧和
+失败后恢复。报告绝对/相对容差、最大/平均误差和失败坐标。资源测试区分 scene pair、LLF、
+Mask、Neighborhood scratch、关键阶段缓存和 display，不以两个 ResourceId 相等代替原生数量。
+
+#### NM8.4.11 主链、失败链和完成条件
+
+**主链：** 关键阶段有效输入 → frame-local binding → 两成员交替执行每个 Grade → 必要的
+LLF/Neighborhood scratch → 最终原地 Apply/Mix → DRT/Post 使用空闲成员 → display output →
+frame sink/display reader；work-pair 分配保留，像素内容不进入下一帧有效性判断。
+
+**失败链：** 分配/参数/原生编码/执行/呈现失败 → 原 owner 等待或取消 → 不发布 LLF/display
+新版本 → 丢弃 frame-local binding → pair 内容标记为不可使用 → 下一帧从关键阶段输入重算；
+真实后端错误原样上报。
+
+**完成条件：**
+
+- 三后端真实 GPU 像素比较通过；Metal 未在 macOS 真机通过时 NM8.4 不标记 complete；
+- 1/2/4/8 Grade 的 scene 工作资源始终恰好两张 RGBA32F，原生数量不随 Grade 数增长；
+- pair 同 extent 连续帧不新增分配，extent 变化只在 GPU 安全边界重建两张；
+- 资源日志明确包含 pair 字节和分配次数，不把它们隐藏在 TexturePool 统计之外；
+- Grade scene_output 的 persistent lookup/write/publish 均为零；
+- 不存在跨帧 scene carrier、committed/pending scene 或 whole-chain Grade 内容命中；
+- Develop、Geometry、Camera Color、Mask R8、LLF canonical 和 display owner 的既定行为通过；
+- DRT/Post 最终写入 display，work member 从不交给 frame sink/export reader；
+- 失败、取消、连续编辑、Quality、reopen、Version、Paste 和图像切换恢复通过；
+- 没有第三张 Grade RGBA、逐节点 RGBA、入口整图复制、每节点 host wait 或替代后端路径；
+- 当前实现和测试的主链、失败链、实际命令及非零用例数写入本文件完成记录。
+
+数量断言只约束 `SceneWorkImagePair` 类别，不声称整个 GPU 管线只有两张图。LLF、Mask、
+Neighborhood scratch、关键阶段缓存和 display 都按各自 owner 独立计量。
+
+#### NM8.4 完成记录 — 2026-09-15
+
+**状态：partial。** NM8.4 的共享双工作图实现、Windows CUDA/OpenCL 真设备验证和产品
+生命周期回归已收口。Metal 生产路径和 macOS-only 测试已同步改造，但当前主机是 Windows，
+未产生 macOS Metal 真设备像素、原生资源和失败恢复证据。依据本节完成条件，不能将 NM8.4
+标记为 complete。
+
+**已实现：**
+
+- `BasicRenderWorkspace` 独占一个 `SceneWorkImagePair<Backend>`；首次按 extent 创建恰好两张
+  RGBA32F 工作图，同 extent 保留分配，extent 改变时在前一 GPU submission 完成后成对重建。
+  资源记录新增成员数、当前/峰值字节和累计分配次数；`w*h*16*2` 有独立断言。
+- `FrameSceneBinding` 只描述本帧 scene 所在的关键阶段缓存、工作图成员或 display，不拥有像素，
+  不保存 revision，也不写回 workspace。每个 Grade 读取当前 binding 并写另一成员；disabled/
+  zero-mix 保持输入 binding，Grade scene output 不再进入 persistent lookup/write/publish。
+- Pointwise、LLF、Neighborhood、DRT/Post 已统一到相同双图语义。LLF 和 Neighborhood 的最终
+  Apply/Mix 在工作成员上原地完成；DRT/Post 使用空闲成员并最终写入既有 display owner；frame
+  sink、scope 和 export reader 仍只接收 display。
+- CUDA、OpenCL、Metal 都有独立原生 binding adapter。OpenCL 继续让 Develop、Geometry、
+  Camera Color、Mask 和 display 使用 image-backed `Texture2D`，仅 scene work 使用专用线性
+  buffer；没有 CPU、Legacy 或其他后端替代路径。
+- 资格测试补齐双图分配/复用/尺寸切换/字节统计、1/2/4/8 Grade、跨帧不复用 scene 内容、
+  Mix/Mask/LLF/Neighborhood/DRT/Post、失败发布、frame sink 边界和三后端多 Grade 原生资源
+  断言。OpenCL 8 Grade 真设备验证确认只有两个不同的 scene-work `cl_mem`。
+
+**收口时发现并修复的问题：**
+
+- CUDA 与 OpenCL 的 Quality → Interactive 回归仍把 Grade scene 当作可复用缓存。测试已改为
+  明确验证关键阶段复用、全部 Grade 重新执行、Grade scene 无 published entry、有效 display
+  可继续命中。
+- OpenCL Film Grain 的 scene-buffer horizontal 路径误用了普通 Gaussian，常量输入下 grain
+  energy 为零。现已使用与 image-backed 路径相同的确定性 Film Grain 采样。
+- OpenCL LLF canonical Apply 误读未填充的 pyramid `widths[0]/heights[0]`，向 kernel 传入零
+  尺寸并触发设备执行错误。Apply 现在显式接收实际 plane 尺寸；canonical 路径使用
+  `mask_extent`，pyramid 路径使用该层尺寸。OpenCL working buffer 以单一读写参数表达原地
+  Apply，避免把同一 `cl_mem` 伪装成两个独立资源。
+
+**主成功调用链：**
+
+`Renderer::Render` → `PlanExecutor::Execute` → 关键阶段 cache bind/miss →
+`EnsureSceneWorkImages` → frame-local `FrameSceneBinding` → 每个 Grade 的 Mask/LLF/Pointwise/
+Neighborhood → `DestinationWorkMember`/peer 轮换 → DRT/Post 使用空闲成员 →
+`display_output` publish → frame sink/scope/export reader。
+
+**主失败调用链：**
+
+参数上传、工作资源、kernel encode/execute 或 present 失败 → 后端原错误上报 → submission 不
+publish 新的 LLF/display revision → frame-local binding 丢弃；pair 分配可保留但其像素无有效性，
+下一帧从有效关键阶段输入重新执行全部 Grade。测试覆盖 upload failure、cancelled submission、
+LLF 失败、incompatible sink 和失败后的版本/文档恢复。
+
+**Windows 执行证据：**
+
+| 命令/范围 | 结果 |
+| --- | --- |
+| `cmd /c scripts\msvc_env.cmd --build build\debug --target GpuDagRawInputTest GpuDagCudaPrimaryGradeTest GpuDagOpenClGradeTest GpuDagCudaDrtProductTest GpuDagCudaMaskTest --parallel 4` | 通过；CUDA/OpenCL 运行时及五个测试目标完成编译和链接 |
+| `ctest --test-dir build/debug --output-on-failure -R "^(GpuDagRawInputTest\|GpuDagCudaPrimaryGradeTest\|GpuDagOpenClGradeTest\|GpuDagCudaDrtProductTest\|GpuDagCudaMaskTest)\\."` | 358 passed、1 个只输出性能数据的测试按设计 skipped；359 项中 0 failed |
+| `cmd /c scripts\msvc_env.cmd --build build\debug --target GpuDagOpenClDrtProductTest --parallel 4`，随后运行全部 `GpuDagOpenClDrtProductTest.*` | 25/25 通过；包含 OpenCL DRT、呈现、失败不进入替代路径、Quality 和资源释放 |
+| Version/Paste/Reopen 选择性回归 | 26/26 通过；覆盖 Paste 创建/取消/失败、Version checkout/失败恢复、项目 reopen 和 DAG/mask 保持 |
+| `cmd /c scripts\msvc_env.cmd --build build\debug --target alcedo_main --parallel 4` | 通过；`alcedo_main.exe` 完成链接，PE icon 检查通过 |
+| `git diff --check` | 通过 |
+
+**文件规模与评审切片：** 新增 owner/binding/adapters 分别为
+`scene_work_image_pair.hpp` 111 行、`frame_scene_binding.hpp` 78 行、
+`scene_work_member.hpp` 22 行、CUDA/OpenCL/Metal adapter 37/48/37 行；新增通用和 CUDA 双图
+测试为 109/317 行。既有 `opencl_backend.cpp` 和 `opencl_grade_test.cpp` 当前为 1014/1277 行，
+本阶段只分别增加约 47/77 行，并保持在设备资源 owner 和同一后端资格 fixture 内；把这些少量
+变更另拆文件会割裂资源生命周期或重复大 fixture，因此未做形式化拆分。新增核心文件和测试均
+低于 500 行评审目标。
+
+**剩余唯一完成门槛：** 在 macOS Metal 真设备上构建并运行 Metal Grade/Mask/DRT、多 Grade、
+LLF、失败恢复、Quality、reopen/Version/Paste/图像切换测试，确认两张不同的原生 Metal
+RGBA32Float texture、相同像素容差和无替代路径。该证据通过后才可把 NM8.4 改为 complete；
+当前没有用 mock、Windows host-only instantiate 或 CUDA/OpenCL 结果替代 Metal 证据。
 
 ### NM8.5 — 硬件热点与整帧优化
 

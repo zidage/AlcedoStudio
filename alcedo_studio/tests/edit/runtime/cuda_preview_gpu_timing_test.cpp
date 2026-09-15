@@ -26,6 +26,8 @@
 #include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/runtime/cuda/cuda_render_device.hpp"
+#include "edit/runtime/cuda/cuda_scene_work.hpp"
+#include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/result_persistence.hpp"
 #include "multi_grade_runtime_test_support.hpp"
@@ -62,6 +64,31 @@ auto Download(CudaRenderDevice& device, const GraphValueId& id) -> std::vector<R
                            pixels.size() * sizeof(Rgba)),
       device.CommandContext());
   return pixels;
+}
+
+auto DownloadWork(CudaRenderDevice& device, SceneWorkMember member) -> std::vector<Rgba> {
+  auto& texture = device.Workspace().SceneWork().Member(member);
+  std::vector<Rgba> pixels(static_cast<std::size_t>(texture.Width()) * texture.Height());
+  device.Workspace().Device().DownloadTexture2D(
+      texture,
+      std::span<std::byte>(reinterpret_cast<std::byte*>(pixels.data()),
+                           pixels.size() * sizeof(Rgba)),
+      device.CommandContext());
+  return pixels;
+}
+
+auto FusedLastWriteHasGpuTime(const diag::PreviewPassRecord& pass) -> bool {
+  bool has_write = false;
+  for (const auto& sub : pass.sub_stages) {
+    EXPECT_NE(sub.kind, diag::PreviewSubStageKind::Mix);
+    if (sub.kind == diag::PreviewSubStageKind::Pointwise ||
+        sub.kind == diag::PreviewSubStageKind::LlfApply ||
+        sub.kind == diag::PreviewSubStageKind::Neighborhood) {
+      has_write = true;
+      EXPECT_EQ(sub.gpu_status, diag::PreviewGpuTimeStatus::Available);
+    }
+  }
+  return has_write;
 }
 
 auto MaxAbsRgbaError(const std::vector<Rgba>& left, const std::vector<Rgba>& right) -> float {
@@ -340,9 +367,12 @@ TEST_F(CudaPreviewGpuTimingFixture, CachedAndDisabledPassesReportExecutionState)
   const auto* second_primary =
       FindPass(second, "grade.primary", diag::PreviewPassKind::PrimaryColorGrade);
   ASSERT_NE(second_primary, nullptr);
-  EXPECT_EQ(second_primary->state, diag::PreviewExecutionState::Skipped);
-  EXPECT_EQ(second_primary->gpu_status, diag::PreviewGpuTimeStatus::Unavailable);
-  EXPECT_EQ(second_primary->gpu_ns, 0);
+  EXPECT_EQ(second_primary->state, diag::PreviewExecutionState::Executed);
+  EXPECT_EQ(second_primary->gpu_status, diag::PreviewGpuTimeStatus::Available);
+  EXPECT_GT(second_primary->gpu_ns, 0);
+  const auto* second_look = FindPass(second, "grade.look", diag::PreviewPassKind::PrimaryColorGrade);
+  ASSERT_NE(second_look, nullptr);
+  EXPECT_EQ(second_look->state, diag::PreviewExecutionState::Aliased);
 }
 
 TEST_F(CudaPreviewGpuTimingFixture, DetailTimingPreservesRenderedPixelsWithinTolerance) {
@@ -417,14 +447,7 @@ TEST_F(CudaPreviewGpuTimingFixture, InteractiveFourNodeSecondGradeMasksReportGpu
   EXPECT_EQ(look_mask->gpu_status, diag::PreviewGpuTimeStatus::Available);
   EXPECT_EQ(look_union->gpu_status, diag::PreviewGpuTimeStatus::Available);
   EXPECT_EQ(look_grade->gpu_status, diag::PreviewGpuTimeStatus::Available);
-  bool has_mix = false;
-  for (const auto& sub : look_grade->sub_stages) {
-    if (sub.kind == diag::PreviewSubStageKind::Mix) {
-      has_mix = true;
-      EXPECT_EQ(sub.gpu_status, diag::PreviewGpuTimeStatus::Available);
-    }
-  }
-  EXPECT_TRUE(has_mix);
+  EXPECT_TRUE(FusedLastWriteHasGpuTime(*look_grade));
 }
 
 TEST_F(CudaPreviewGpuTimingFixture, InteractiveMultiGradeMaskMixReportsPerNodeGpuTimes) {
@@ -458,11 +481,7 @@ TEST_F(CudaPreviewGpuTimingFixture, InteractiveMultiGradeMaskMixReportsPerNodeGp
     EXPECT_FALSE(mask->mask_id.empty());
     EXPECT_EQ(mask->gpu_status, diag::PreviewGpuTimeStatus::Available);
     EXPECT_EQ(grade->gpu_status, diag::PreviewGpuTimeStatus::Available);
-    bool has_mix = false;
-    for (const auto& sub : grade->sub_stages) {
-      has_mix = has_mix || sub.kind == diag::PreviewSubStageKind::Mix;
-    }
-    EXPECT_TRUE(has_mix) << id;
+    EXPECT_TRUE(FusedLastWriteHasGpuTime(*grade)) << id;
   }
 }
 
@@ -489,8 +508,8 @@ TEST_F(CudaPreviewGpuTimingFixture, TwoLutGradesReportIndependentPassGpuTimes) {
   EXPECT_EQ(look->state, diag::PreviewExecutionState::Executed);
   EXPECT_EQ(primary->gpu_status, diag::PreviewGpuTimeStatus::Available);
   EXPECT_EQ(look->gpu_status, diag::PreviewGpuTimeStatus::Available);
-  const auto a = Download(device_, plan.grade_nodes[0].scene_output);
-  const auto b = Download(device_, plan.grade_nodes[1].scene_output);
+  const auto a = DownloadWork(device_, SceneWorkMember::Member0);
+  const auto b = DownloadWork(device_, SceneWorkMember::Member1);
   ASSERT_FALSE(a.empty());
   ASSERT_FALSE(b.empty());
   EXPECT_NEAR(a.front().r, 1.0f, 1.0e-4f);

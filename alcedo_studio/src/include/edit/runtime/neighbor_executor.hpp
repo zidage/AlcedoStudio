@@ -8,6 +8,7 @@
 
 #include "edit/graph/graph_ids.hpp"
 #include "edit/runtime/adjustment_runtime.hpp"
+#include "edit/runtime/frame_scene_binding.hpp"
 
 namespace alcedo {
 
@@ -33,25 +34,25 @@ template <class Ops>
 class NeighborExecutor {
  public:
   using Device     = typename Ops::Device;
-  using Texture    = typename Ops::Texture;
   using LutBinding = typename Ops::LutBinding;
 
   /**
    * @brief Start the horizontal kernel, then the vertical apply kernel, then release scratch.
    *
-   * Scratch is acquired before source/destination lookup so a TexturePool growth cannot
-   * invalidate those textures. @p lut is the Grade LUT or the backend dummy LUT; CUDA and
-   * OpenCL ignore it.
+   * Horizontal writes independent scratch. Vertical reads @p src same-pixel and scratch
+   * neighborhood, then writes @p dst. @p dst may alias @p src when both are the same work
+   * member. When @p mix is not 1 or @p mask_id is set, vertical apply also reads @p original
+   * and fuses Mix. Scratch is acquired before source lookup so a TexturePool growth cannot
+   * invalidate pool textures.
    */
-  static void Execute(Device& device, const GraphValueId& src_id, const GraphValueId& dst_id,
-                      const LutBinding& lut, const NeighborWork& work, std::uint32_t width,
-                      std::uint32_t height) {
-    auto  scratch = Ops::AcquireHorizontalScratch(device, width, height);
-    auto& blur    = Ops::HorizontalScratchTexture(scratch);
-    auto& src     = Ops::SceneTexture(device, src_id);
-    auto& dst     = Ops::SceneTexture(device, dst_id);
-    Ops::DispatchHorizontal(device, src, blur, work, width, height);
-    Ops::DispatchVerticalApply(device, src, blur, dst, lut, work, width, height);
+  static void Execute(Device& device, const FrameSceneBinding& src, const FrameSceneBinding& dst,
+                      const FrameSceneBinding& original, const LutBinding& lut,
+                      const NeighborWork& work, float mix, const GraphValueId* mask_id,
+                      std::uint32_t width, std::uint32_t height) {
+    auto scratch = Ops::AcquireHorizontalScratch(device, width, height);
+    Ops::DispatchHorizontal(device, src, scratch, work, width, height);
+    Ops::DispatchVerticalApply(device, src, scratch, dst, original, lut, work, mix, mask_id, width,
+                               height);
   }
 };
 

@@ -14,6 +14,8 @@
 
 #include "edit/pipeline/local_tone_mapping.hpp"
 #include "edit/runtime/opencl/opencl_dag_programs.hpp"
+#include "edit/runtime/opencl/opencl_scene_work.hpp"
+#include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/local_tone_cache_ids.hpp"
 #include "edit/runtime/local_tone_executor.hpp"
 #include "edit/runtime/local_tone_plan.hpp"
@@ -223,8 +225,14 @@ struct OpenClLocalToneOps {
 
   static constexpr const char* kErrorPrefix = "ExecuteOpenClLocalTone";
 
-  static auto TextureWidth(const Texture& texture) -> std::uint32_t { return texture.Width(); }
-  static auto TextureHeight(const Texture& texture) -> std::uint32_t { return texture.Height(); }
+  static auto BindingWidth(OpenClRenderDevice& device, const FrameSceneBinding& binding)
+      -> std::uint32_t {
+    return OpenClSceneWidth(device, binding);
+  }
+  static auto BindingHeight(OpenClRenderDevice& device, const FrameSceneBinding& binding)
+      -> std::uint32_t {
+    return OpenClSceneHeight(device, binding);
+  }
   static auto TransientBytes(OpenClRenderDevice& device) -> std::size_t {
     return device.Workspace().TransientBuffers().used_bytes();
   }
@@ -249,10 +257,26 @@ struct OpenClLocalToneOps {
     return lookup;
   }
 
-  static void ApplyCanonicalSample(OpenClRenderDevice& device, const Texture& input,
-                                   Texture& output, const GraphValueId& source_id,
-                                   const GraphValueId& result_id, const LocalToneDecision& decision,
-                                   std::uint32_t width, std::uint32_t height) {
+  static void BindScene(cl_kernel kernel, cl_uint start, const OpenClSceneView& view,
+                        OpenClBackend& backend) {
+    cl_mem image  = view.is_buffer ? backend.DummySceneImage() : view.native;
+    cl_mem buffer = view.is_buffer ? view.native : backend.DummySceneBuffer();
+    int    is_buf = view.is_buffer ? 1 : 0;
+    SetMem(kernel, start, image, "local tone scene image");
+    SetMem(kernel, start + 1, buffer, "local tone scene buffer");
+    CheckOpenCl(clSetKernelArg(kernel, start + 2, sizeof(int), &is_buf),
+                "local tone scene storage");
+  }
+
+  static void ApplyCanonicalSampleAndMix(OpenClRenderDevice& device,
+                                         const FrameSceneBinding& original,
+                                         const FrameSceneBinding& working,
+                                         const FrameSceneBinding& adjusted, const NodeId& grade_id,
+                                         float mix, const GraphValueId* mask_id,
+                                         const LocalToneDecision& decision, std::uint32_t width,
+                                         std::uint32_t height) {
+    const auto source_id = LocalToneSourceId(grade_id);
+    const auto result_id = LocalToneResultId(grade_id);
     auto&      invalidation = device.Workspace().ResultInvalidation();
     const auto needed       = invalidation.MakeImageRepresentation(
         source_id, decision.mask_extent, TextureFormat::R32f,
@@ -274,9 +298,9 @@ struct OpenClLocalToneOps {
                                                source_plane.bytes, device.CommandContext());
     workspace.Device().CopyImageToDeviceMemory(result->Texture(), result_plane.ptr,
                                                result_plane.bytes, device.CommandContext());
-    EnqueueLlfApply(device, input, output, source_plane, result_plane, width, height,
-                    static_cast<int>(decision.mask_extent.width),
-                    static_cast<int>(decision.mask_extent.height), decision.apply_uv);
+    ApplyAdjustedAndMix(device, original, working, adjusted, source_plane, result_plane, mix,
+                        mask_id, width, height, static_cast<int>(decision.mask_extent.width),
+                        static_cast<int>(decision.mask_extent.height), decision.apply_uv);
   }
 
   static auto CanonicalResourceId(OpenClRenderDevice& device, const GraphValueId& source_id)
@@ -301,12 +325,13 @@ struct OpenClLocalToneOps {
     return AllocateTransientPlane(device.Workspace(), bytes);
   }
 
-  static void ExtractReference(OpenClRenderDevice& device, const Texture& input, Plane dest,
-                               std::uint32_t width, std::uint32_t height,
+  static void ExtractReference(OpenClRenderDevice& device, const FrameSceneBinding& input,
+                               Plane dest, std::uint32_t width, std::uint32_t height,
                                const LocalToneDecision& decision,
                                const ResolvedRenderGeometry& geometry) {
     auto kernel = OpenClKernelCache::Instance().GetKernel(
-        OpenCL::GpuDag::kLocalToneProgramName, OpenCL::GpuDag::kLocalToneExtractReferenceKernelName);
+        OpenCL::GpuDag::kLocalToneProgramName,
+        OpenCL::GpuDag::kLocalToneExtractReferenceSceneKernelName);
     ExtractReferenceParams params;
     params.input_width   = CheckedInt(width, "input width");
     params.input_height  = CheckedInt(height, "input height");
@@ -315,28 +340,28 @@ struct OpenClLocalToneOps {
     params.full_ref_w    = static_cast<float>(geometry.full_reference_extent.width);
     params.full_ref_h    = static_cast<float>(geometry.full_reference_extent.height);
     CopyMatrix(params.reference_to_render, geometry.reference_to_render);
-    SetMem(kernel, 0, input.Native(), "reference extract input");
-    SetMem(kernel, 1, dest.native, "reference extract output");
-    SetParams(kernel, 2, params, "reference extract parameters");
-    SetPlaneOffset(kernel, 3, dest, "reference extract output offset");
+    BindScene(kernel, 0, OpenClBindScene(device, input), device.Workspace().Device());
+    SetMem(kernel, 3, dest.native, "reference extract output");
+    SetParams(kernel, 4, params, "reference extract parameters");
+    SetPlaneOffset(kernel, 5, dest, "reference extract output offset");
     Dispatch2D(device, kernel, static_cast<std::uint32_t>(decision.widths[0]),
                static_cast<std::uint32_t>(decision.heights[0]));
   }
 
-  static void Extract(OpenClRenderDevice& device, const Texture& input, Plane dest,
+  static void Extract(OpenClRenderDevice& device, const FrameSceneBinding& input, Plane dest,
                       std::uint32_t width, std::uint32_t height,
                       const LocalToneDecision& decision) {
-    auto kernel = OpenClKernelCache::Instance().GetKernel(OpenCL::GpuDag::kLocalToneProgramName,
-                                                        OpenCL::GpuDag::kLocalToneExtractKernelName);
+    auto kernel = OpenClKernelCache::Instance().GetKernel(
+        OpenCL::GpuDag::kLocalToneProgramName, OpenCL::GpuDag::kLocalToneExtractSceneKernelName);
     ExtractParams params;
     params.input_width   = CheckedInt(width, "input width");
     params.input_height  = CheckedInt(height, "input height");
     params.output_width  = decision.widths[0];
     params.output_height = decision.heights[0];
-    SetMem(kernel, 0, input.Native(), "local extract input");
-    SetMem(kernel, 1, dest.native, "local extract output");
-    SetParams(kernel, 2, params, "local extract parameters");
-    SetPlaneOffset(kernel, 3, dest, "local extract output offset");
+    BindScene(kernel, 0, OpenClBindScene(device, input), device.Workspace().Device());
+    SetMem(kernel, 3, dest.native, "local extract output");
+    SetParams(kernel, 4, params, "local extract parameters");
+    SetPlaneOffset(kernel, 5, dest, "local extract output offset");
     Dispatch2D(device, kernel, static_cast<std::uint32_t>(decision.widths[0]),
                static_cast<std::uint32_t>(decision.heights[0]));
   }
@@ -440,11 +465,55 @@ struct OpenClLocalToneOps {
                static_cast<std::uint32_t>(decision.heights[level]));
   }
 
-  static void ApplyAdjusted(OpenClRenderDevice& device, const Texture& input, Texture& output,
-                            Plane reference, Plane adjusted, std::uint32_t width,
-                            std::uint32_t height, const LocalToneDecision& decision) {
-    EnqueueLlfApply(device, input, output, reference, adjusted, width, height, decision.widths[0],
-                    decision.heights[0], decision.apply_uv);
+  static void ApplyAdjustedAndMix(OpenClRenderDevice& device, const FrameSceneBinding& original,
+                                  const FrameSceneBinding& working,
+                                  const FrameSceneBinding& adjusted, Plane reference, Plane tone,
+                                  float mix, const GraphValueId* mask_id, std::uint32_t width,
+                                  std::uint32_t height, int plane_width, int plane_height,
+                                  const Matrix3x3& apply_uv) {
+    if (!working.IsWorkImage() || adjusted != working) {
+      throw std::runtime_error(
+          "ExecuteOpenClLocalTone: apply requires one in-place scene work member");
+    }
+    auto kernel = OpenClKernelCache::Instance().GetKernel(
+        OpenCL::GpuDag::kLocalToneProgramName, OpenCL::GpuDag::kLocalToneApplySceneKernelName);
+    auto& backend = device.Workspace().Device();
+    auto& working_image = device.Workspace().SceneWork().Member(working.member);
+    auto  working_mem   = working_image.Storage().Native();
+    SetMem(kernel, 0, working_mem, "local tone working scene");
+    const bool apply_mix = mix != 1.0f || mask_id != nullptr;
+    if (apply_mix) {
+      BindScene(kernel, 1, OpenClBindScene(device, original), backend);
+    } else {
+      BindScene(kernel, 1, OpenClSceneView{backend.DummySceneImage(), 1, 1, false}, backend);
+      int no_mix = -1;
+      CheckOpenCl(clSetKernelArg(kernel, 3, sizeof(int), &no_mix), "local tone mix flag");
+    }
+    cl_mem mask_mem = backend.DummySceneImage();
+    int    has_mask = 0;
+    if (mask_id != nullptr) {
+      auto* mask = device.Workspace().Images().Find(*mask_id);
+      if (mask == nullptr || mask->Empty()) {
+        throw std::runtime_error("ExecuteOpenClLocalTone: compiled mask output is missing");
+      }
+      mask_mem = mask->Texture().Native();
+      has_mask = 1;
+    }
+    SetMem(kernel, 4, mask_mem, "local tone mask");
+    CheckOpenCl(clSetKernelArg(kernel, 5, sizeof(int), &has_mask), "local tone mask flag");
+    CheckOpenCl(clSetKernelArg(kernel, 6, sizeof(float), &mix), "local tone mix");
+    SetMem(kernel, 7, reference.native, "local tone reference");
+    SetMem(kernel, 8, tone.native, "local tone adjusted plane");
+    ApplyParams params;
+    params.width           = CheckedInt(width, "apply width");
+    params.height          = CheckedInt(height, "apply height");
+    params.adjusted_width  = plane_width;
+    params.adjusted_height = plane_height;
+    CopyMatrix(params.render_to_uv, apply_uv);
+    SetParams(kernel, 9, params, "local tone apply parameters");
+    SetPlaneOffset(kernel, 10, reference, "local tone reference offset");
+    SetPlaneOffset(kernel, 11, tone, "local tone adjusted offset");
+    Dispatch2D(device, kernel, width, height);
   }
 
   static void PersistCanonical(OpenClRenderDevice& device, Plane plane, const GraphValueId& id,
@@ -478,18 +547,14 @@ struct OpenClLocalToneOps {
 
 }  // namespace
 
-auto ExecuteOpenClLocalTone(OpenClRenderDevice& device, const OpenClBackend::Texture2D& input,
-                            OpenClBackend::Texture2D& output, const NodeId& grade_id,
-                            float shadows_slider, float highlights_slider,
-                            const ResolvedRenderGeometry& geometry) -> OpenClLocalToneResult {
-  if (input.Native() == nullptr || output.Native() == nullptr) {
-    throw std::runtime_error("ExecuteOpenClLocalTone: missing input or output texture");
-  }
-  if (output.Format() != TextureFormat::Rgba32f || input.Format() != TextureFormat::Rgba32f) {
-    throw std::runtime_error("ExecuteOpenClLocalTone: input and output must be matching RGBA32F");
-  }
+auto ExecuteOpenClLocalTone(OpenClRenderDevice& device, const FrameSceneBinding& adjusted,
+                            const FrameSceneBinding& working, const FrameSceneBinding& original,
+                            const NodeId& grade_id, float shadows_slider, float highlights_slider,
+                            const ResolvedRenderGeometry& geometry, float mix,
+                            const GraphValueId* mask_id) -> OpenClLocalToneResult {
   const auto executed = LocalToneExecutor<OpenClLocalToneOps>::Execute(
-      device, input, output, grade_id, shadows_slider, highlights_slider, geometry);
+      device, adjusted, working, original, grade_id, shadows_slider, highlights_slider, geometry,
+      mix, mask_id);
   OpenClLocalToneResult tone;
   tone.reference_resource_id       = executed.reference_resource_id;
   tone.rebuilt_reference           = executed.rebuilt_reference;

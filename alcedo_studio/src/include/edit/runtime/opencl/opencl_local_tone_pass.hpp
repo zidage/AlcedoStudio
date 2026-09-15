@@ -10,6 +10,7 @@
 
 #include "edit/geometry/resolved_render_geometry.hpp"
 #include "edit/graph/graph_ids.hpp"
+#include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/opencl/opencl_backend.hpp"
 
 namespace alcedo {
@@ -29,12 +30,12 @@ struct OpenClLocalToneResult {
  * it does not wait, finish the queue, allocate a private cache, or call the legacy OpenCL stage.
  * Failures throw and leave canonical writes unpublished until BasicRenderDevice::PublishResults.
  */
-[[nodiscard]] auto ExecuteOpenClLocalTone(OpenClRenderDevice&             device,
-                                          const OpenClBackend::Texture2D& input,
-                                          OpenClBackend::Texture2D& output, const NodeId& grade_id,
+[[nodiscard]] auto ExecuteOpenClLocalTone(OpenClRenderDevice& device, const FrameSceneBinding& adjusted,
+                                          const FrameSceneBinding& working,
+                                          const FrameSceneBinding& original, const NodeId& grade_id,
                                           float shadows_slider, float highlights_slider,
-                                          const ResolvedRenderGeometry& geometry)
-    -> OpenClLocalToneResult;
+                                          const ResolvedRenderGeometry& geometry, float mix,
+                                          const GraphValueId* mask_id) -> OpenClLocalToneResult;
 
 }  // namespace alcedo
 

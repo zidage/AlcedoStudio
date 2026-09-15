@@ -326,6 +326,14 @@ OpenClBackend::~OpenClBackend() {
   neural_workspace_.reset();
   dummy_lut_.Reset();
   lut_cache_.clear();
+  if (dummy_scene_image_ != nullptr) {
+    clReleaseMemObject(dummy_scene_image_);
+    dummy_scene_image_ = nullptr;
+  }
+  if (dummy_scene_buffer_ != nullptr) {
+    clReleaseMemObject(dummy_scene_buffer_);
+    dummy_scene_buffer_ = nullptr;
+  }
 }
 
 void OpenClBackend::UnregisterBuffer(cl_mem native) noexcept {
@@ -416,6 +424,45 @@ auto OpenClBackend::CreateTexture2D(std::uint32_t width, std::uint32_t height, T
   NoteOpenClCreateImage();
   NoteTextureCreate();
   return Texture2D{this, native, bytes, width, height, format, next_resource_id_++};
+}
+
+auto OpenClBackend::DummySceneImage() -> cl_mem {
+  if (dummy_scene_image_ != nullptr) {
+    return dummy_scene_image_;
+  }
+  const auto    image_format = ImageFormatFor(TextureFormat::Rgba32f);
+  cl_image_desc desc         = MakeImageDesc(1, 1);
+  cl_int        error        = CL_SUCCESS;
+  dummy_scene_image_ =
+      clCreateImage(context_, CL_MEM_READ_WRITE, &image_format, &desc, nullptr, &error);
+  CheckOpenCl(error, "OpenClBackend::DummySceneImage");
+  if (dummy_scene_image_ == nullptr) {
+    throw std::runtime_error("OpenClBackend::DummySceneImage: clCreateImage returned null");
+  }
+  return dummy_scene_image_;
+}
+
+auto OpenClBackend::DummySceneBuffer() -> cl_mem {
+  if (dummy_scene_buffer_ != nullptr) {
+    return dummy_scene_buffer_;
+  }
+  cl_int error        = CL_SUCCESS;
+  dummy_scene_buffer_ = clCreateBuffer(context_, CL_MEM_READ_WRITE, 16, nullptr, &error);
+  CheckOpenCl(error, "OpenClBackend::DummySceneBuffer");
+  if (dummy_scene_buffer_ == nullptr) {
+    throw std::runtime_error("OpenClBackend::DummySceneBuffer: clCreateBuffer returned null");
+  }
+  return dummy_scene_buffer_;
+}
+
+auto OpenClBackend::CreateSceneWorkImage(std::uint32_t width, std::uint32_t height)
+    -> SceneWorkImage {
+  const auto bytes =
+      static_cast<std::size_t>(width) * height * TextureFormatBytesPerPixel(TextureFormat::Rgba32f);
+  if (bytes == 0) {
+    return {};
+  }
+  return SceneWorkImage{CreateBuffer(bytes), width, height};
 }
 
 void OpenClBackend::UploadBufferRange(Buffer& buffer, std::uint32_t offset,

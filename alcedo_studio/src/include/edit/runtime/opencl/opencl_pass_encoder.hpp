@@ -6,6 +6,7 @@
 
 #ifdef HAVE_OPENCL
 
+#include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/opencl/opencl_backend.hpp"
 #include "edit/runtime/opencl/opencl_develop_pass.hpp"
 #include "edit/runtime/opencl/opencl_drt_pass.hpp"
@@ -86,18 +87,20 @@ struct PassEncoder<OpenClBackend, GpuPassKind::MaskUnion> {
 
 template <>
 struct PassEncoder<OpenClBackend, GpuPassKind::PrimaryColorGrade> {
-  static void Encode(OpenClRenderDevice& device, const ExecutionPlan& plan,
+  static auto Encode(OpenClRenderDevice& device, const ExecutionPlan& plan,
                      const PreparedRawInput& prepared, PipelineDocument& document,
-                     const CompiledGradeNode& compiled_grade) {
-    (void)ExecuteOpenClPrimaryGrade(device, plan, prepared, document, compiled_grade);
+                     const CompiledGradeNode& compiled_grade, const FrameSceneBinding& scene)
+      -> FrameSceneBinding {
+    return ExecuteOpenClPrimaryGrade(device, plan, prepared, document, compiled_grade, scene)
+        .output_binding;
   }
 };
 
 template <>
 struct PassEncoder<OpenClBackend, GpuPassKind::Drt> {
   static void Encode(OpenClRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
-                     PipelineDocument& document) {
-    (void)ExecuteOpenClDrt(device, plan, document);
+                     PipelineDocument& document, const FrameSceneBinding& scene) {
+    (void)ExecuteOpenClDrt(device, plan, document, scene);
   }
 };
 

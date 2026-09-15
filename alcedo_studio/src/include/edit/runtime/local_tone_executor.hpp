@@ -15,6 +15,7 @@
 #include "edit/geometry/resolved_render_geometry.hpp"
 #include "edit/graph/graph_ids.hpp"
 #include "edit/pipeline/local_tone_mapping.hpp"
+#include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/local_tone_cache_ids.hpp"
 #include "edit/runtime/local_tone_plan.hpp"
 #include "edit/runtime/gpu_work_sample.hpp"
@@ -26,15 +27,29 @@ namespace alcedo {
  * @brief Shared LLF encode outcome used by CUDA, OpenCL, and Metal wrappers.
  */
 struct LocalToneExecutionResult {
-  std::uint64_t           reference_resource_id       = 0;
-  bool                    rebuilt_reference           = false;
-  bool                    sampled_canonical_reference = false;
-  std::uint32_t           transient_bytes             = 0;
-  LocalToneDecisionTrace  trace;
+  std::uint64_t          reference_resource_id       = 0;
+  bool                   rebuilt_reference           = false;
+  bool                   sampled_canonical_reference = false;
+  std::uint32_t          transient_bytes             = 0;
+  LocalToneDecisionTrace trace;
 };
 
 /**
- * @brief Common LLF source/result reuse, pyramid order, remap/collapse, and persist.
+ * @brief Source/result planes prepared for one Grade encode. Not stored across Grades.
+ *
+ * @tparam Ops Backend plane type. Higher pyramid levels are released before Apply.
+ */
+template <class Ops>
+struct LocalTonePreparedMaps {
+  typename Ops::ScratchPlane source0{};
+  typename Ops::ScratchPlane result0{};
+  LocalToneDecision          decision{};
+  LocalToneExecutionResult   result{};
+  bool                       sample_canonical = false;
+};
+
+/**
+ * @brief Common LLF source/result reuse, pyramid order, remap/collapse, persist, and apply.
  *
  * @tparam Ops Backend plane allocation, dispatch, canonical bind/publish, and copies.
  *         Pyramid levels above source.0/result.0 are scratch on every backend.
@@ -45,18 +60,17 @@ class LocalToneExecutor {
   using Device = typename Ops::Device;
 
   /**
-   * @brief Apply Shadows/Highlights LLF to matching RGBA32F textures.
+   * @brief Build or bind canonical LLF planes from the Grade's post-tone/color pixels.
    *
-   * Canonical sample returns without rebuilding pyramids. Rebuild failures throw
-   * before Ops::PersistCanonical, so a failed write cannot publish reusable metadata.
+   * Does not write scene RGBA. ApplyMix consumes the returned planes in this Grade
+   * encode only. Failures throw before Ops::PersistCanonical.
    *
    * @throws std::runtime_error when BeginRender was not called, extents are empty,
    *         or a backend dispatch fails.
    */
-  static auto Execute(Device& device, const typename Ops::Texture& input,
-                      typename Ops::Texture& output, const NodeId& grade_id, float shadows_slider,
-                      float highlights_slider, const ResolvedRenderGeometry& geometry)
-      -> LocalToneExecutionResult {
+  static auto Prepare(Device& device, const FrameSceneBinding& input, const NodeId& grade_id,
+                      float shadows_slider, float highlights_slider,
+                      const ResolvedRenderGeometry& geometry) -> LocalTonePreparedMaps<Ops> {
     auto& workspace = device.Workspace();
     if (!workspace.IsRendering()) {
       throw std::runtime_error(std::string{Ops::kErrorPrefix} + ": BeginRender has not been called");
@@ -65,12 +79,8 @@ class LocalToneExecutor {
       throw std::runtime_error(std::string{Ops::kErrorPrefix} +
                                ": geometry extents must be positive");
     }
-    const auto width  = Ops::TextureWidth(input);
-    const auto height = Ops::TextureHeight(input);
-    if (Ops::TextureWidth(output) != width || Ops::TextureHeight(output) != height) {
-      throw std::runtime_error(std::string{Ops::kErrorPrefix} +
-                               ": input and output must be matching RGBA32F");
-    }
+    const auto width  = Ops::BindingWidth(device, input);
+    const auto height = Ops::BindingHeight(device, input);
 
     const auto source_id   = LocalToneSourceId(grade_id);
     const auto result_id   = LocalToneResultId(grade_id);
@@ -88,22 +98,20 @@ class LocalToneExecutor {
     const auto decision =
         DecideLocalTone(persist_llf, lookup, full_edit, current_long_edge, width, height, geometry);
 
-    LocalToneExecutionResult tone;
-    tone.trace = MakeLocalToneDecisionTrace(decision);
+    LocalTonePreparedMaps<Ops> maps;
+    maps.decision     = decision;
+    maps.result.trace = MakeLocalToneDecisionTrace(decision);
     const auto transient_mark = Ops::TransientBytes(device);
     if (decision.action == LocalToneAction::SampleCanonical) {
-      diag::PreviewSubStageInterval sample(diag::PreviewSubStageKind::LlfSampleCanonical);
-      GpuWorkSample<Device> gpu(device);
-      Ops::ApplyCanonicalSample(device, input, output, source_id, result_id, decision, width,
-                                height);
-      tone.sampled_canonical_reference = true;
-      tone.reference_resource_id       = Ops::CanonicalResourceId(device, source_id);
-      tone.transient_bytes =
+      maps.sample_canonical                    = true;
+      maps.result.sampled_canonical_reference  = true;
+      maps.result.reference_resource_id        = Ops::CanonicalResourceId(device, source_id);
+      maps.result.transient_bytes =
           static_cast<std::uint32_t>(Ops::TransientBytes(device) - transient_mark);
-      return tone;
+      return maps;
     }
 
-    using Plane                              = typename Ops::ScratchPlane;
+    using Plane = typename Ops::ScratchPlane;
     std::array<Plane, local_tone_mapping::kMaxLevels> source{};
     std::array<Plane, local_tone_mapping::kMaxLevels> remap_a{};
     std::array<Plane, local_tone_mapping::kMaxLevels> remap_b{};
@@ -120,7 +128,7 @@ class LocalToneExecutor {
       remap_b[level] = Ops::AllocateScratchPlane(device, bytes);
       result[level]  = Ops::AllocateScratchPlane(device, bytes);
     }
-    tone.transient_bytes =
+    maps.result.transient_bytes =
         static_cast<std::uint32_t>(Ops::TransientBytes(device) - transient_mark);
 
     if (!decision.reuse_source) {
@@ -187,20 +195,56 @@ class LocalToneExecutor {
       }
     }
 
-    {
-      diag::PreviewSubStageInterval apply(diag::PreviewSubStageKind::LlfApply);
-      GpuWorkSample<Device> gpu(device);
-      Ops::ApplyAdjusted(device, input, output, source[0], result[0], width, height, decision);
-    }
     if (decision.persist_canonical) {
       if (!decision.reuse_source) {
         Ops::PersistCanonicalSource(device, source[0], source_id, decision, current_long_edge);
       }
       Ops::PersistCanonicalResult(device, result[0], result_id, decision, current_long_edge);
-      tone.reference_resource_id = Ops::CanonicalResourceId(device, source_id);
+      maps.result.reference_resource_id = Ops::CanonicalResourceId(device, source_id);
     }
-    tone.rebuilt_reference = true;
-    return tone;
+    maps.source0                 = source[0];
+    maps.result0                 = result[0];
+    maps.result.rebuilt_reference = true;
+    return maps;
+  }
+
+  /**
+   * @brief Apply prepared LLF planes to working pixels and mix with the Grade input.
+   *
+   * Reads original[p] and working[p] before writing working[p]. Neighborhood samples
+   * come only from the independent LLF planes. working may alias the adjusted input
+   * when that input already lives in the destination member.
+   */
+  static void ApplyMix(Device& device, const LocalTonePreparedMaps<Ops>& maps,
+                       const NodeId& grade_id, const FrameSceneBinding& original,
+                       const FrameSceneBinding& working, const FrameSceneBinding& adjusted,
+                       float mix, const GraphValueId* mask_id, std::uint32_t width,
+                       std::uint32_t height) {
+    diag::PreviewSubStageInterval apply(diag::PreviewSubStageKind::LlfApply);
+    GpuWorkSample<Device> gpu(device);
+    if (maps.sample_canonical) {
+      Ops::ApplyCanonicalSampleAndMix(device, original, working, adjusted, grade_id, mix, mask_id,
+                                      maps.decision, width, height);
+      return;
+    }
+    Ops::ApplyAdjustedAndMix(device, original, working, adjusted, maps.source0, maps.result0, mix,
+                             mask_id, width, height, maps.decision.widths[0],
+                             maps.decision.heights[0], maps.decision.apply_uv);
+  }
+
+  /**
+   * @brief Prepare then apply with mix. Used by backend wrappers.
+   */
+  static auto Execute(Device& device, const FrameSceneBinding& adjusted,
+                      const FrameSceneBinding& working, const FrameSceneBinding& original,
+                      const NodeId& grade_id, float shadows_slider, float highlights_slider,
+                      const ResolvedRenderGeometry& geometry, float mix,
+                      const GraphValueId* mask_id) -> LocalToneExecutionResult {
+    auto maps = Prepare(device, adjusted, grade_id, shadows_slider, highlights_slider, geometry);
+    const auto width  = Ops::BindingWidth(device, adjusted);
+    const auto height = Ops::BindingHeight(device, adjusted);
+    ApplyMix(device, maps, grade_id, original, working, adjusted, mix, mask_id, width, height);
+    return maps.result;
   }
 };
 

@@ -6,6 +6,7 @@
 
 #ifdef HAVE_METAL
 
+#include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/metal/metal_develop_pass.hpp"
 #include "edit/runtime/metal/metal_drt_pass.hpp"
 #include "edit/runtime/metal/metal_mask_pass.hpp"
@@ -66,18 +67,20 @@ struct PassEncoder<MetalBackend, GpuPassKind::MaskUnion> {
 
 template <>
 struct PassEncoder<MetalBackend, GpuPassKind::PrimaryColorGrade> {
-  static void Encode(MetalRenderDevice& device, const ExecutionPlan& plan,
+  static auto Encode(MetalRenderDevice& device, const ExecutionPlan& plan,
                      const PreparedRawInput& input, PipelineDocument& document,
-                     const CompiledGradeNode& compiled_grade) {
-    (void)ExecuteMetalPrimaryGrade(device, plan, input, document, compiled_grade);
+                     const CompiledGradeNode& compiled_grade, const FrameSceneBinding& scene)
+      -> FrameSceneBinding {
+    return ExecuteMetalPrimaryGrade(device, plan, input, document, compiled_grade, scene)
+        .output_binding;
   }
 };
 
 template <>
 struct PassEncoder<MetalBackend, GpuPassKind::Drt> {
   static void Encode(MetalRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
-                     PipelineDocument& document) {
-    (void)ExecuteMetalDrt(device, plan, document);
+                     PipelineDocument& document, const FrameSceneBinding& scene) {
+    (void)ExecuteMetalDrt(device, plan, document, scene);
   }
 };
 

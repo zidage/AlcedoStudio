@@ -11,6 +11,7 @@
 
 #include "edit/geometry/resolved_render_geometry.hpp"
 #include "edit/graph/graph_ids.hpp"
+#include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/metal/metal_backend.hpp"
 
 namespace alcedo {
@@ -29,12 +30,12 @@ struct MetalLocalToneResult {
  * source/result planes live in workspace Values() under GraphValueId. Failures throw; there is no
  * CPU or MetalStage substitute.
  */
-[[nodiscard]] auto ExecuteMetalLocalTone(MetalRenderDevice&             device,
-                                         const MetalBackend::Texture2D& input,
-                                         MetalBackend::Texture2D& output, const NodeId& grade_id,
+[[nodiscard]] auto ExecuteMetalLocalTone(MetalRenderDevice& device, const FrameSceneBinding& adjusted,
+                                         const FrameSceneBinding& working,
+                                         const FrameSceneBinding& original, const NodeId& grade_id,
                                          float shadows_slider, float highlights_slider,
-                                         const ResolvedRenderGeometry& geometry)
-    -> MetalLocalToneResult;
+                                         const ResolvedRenderGeometry& geometry, float mix,
+                                         const GraphValueId* mask_id) -> MetalLocalToneResult;
 
 void AppendMetalLocalToneWarmup(std::vector<MetalPipelineWarmup>& pipelines);
 

@@ -186,7 +186,7 @@ class CudaResultCacheProductFixture : public ::testing::Test {
 };
 
 TEST_F(CudaResultCacheProductFixture,
-       SecondUnchangedProductRenderRunsNoLibRawNoSourceUploadAndNoGpuNodePass) {
+       SecondUnchangedProductRenderSkipsKeyStagesAndDisplay) {
   ASSERT_TRUE(OutputIsFinite(Render()));
   renderer_->ResetStats();
   ASSERT_TRUE(OutputIsFinite(Render()));
@@ -198,12 +198,12 @@ TEST_F(CudaResultCacheProductFixture,
   EXPECT_EQ(stats.pass.sensor_develop_execute, 0U);
   EXPECT_EQ(stats.pass.geometry_execute, 0U);
   EXPECT_EQ(stats.pass.camera_color_execute, 0U);
-  EXPECT_EQ(stats.pass.primary_grade_execute, 0U);
+  EXPECT_EQ(stats.pass.primary_grade_execute, 1U);
+  EXPECT_EQ(stats.pass.primary_grade_skip, 0U);
   EXPECT_EQ(stats.pass.drt_execute, 0U);
   EXPECT_EQ(stats.pass.sensor_develop_skip, 1U);
   EXPECT_EQ(stats.pass.geometry_skip, 1U);
   EXPECT_EQ(stats.pass.camera_color_skip, 1U);
-  EXPECT_EQ(stats.pass.primary_grade_skip, 1U);
   EXPECT_EQ(stats.pass.drt_skip, 1U);
 }
 
@@ -228,7 +228,7 @@ TEST_F(CudaResultCacheProductFixture, ExposureEditRunsOnlyPrimaryGradeAndDrtPass
 }
 
 TEST_F(CudaResultCacheProductFixture,
-       MaskSecondUnchangedRenderSkipsSensorGeometryCameraMaskGradeAndDrt) {
+       MaskSecondUnchangedRenderSkipsKeyStagesMaskAndDisplay) {
   ConnectFullCoverageMask(*document_);
   ASSERT_TRUE(OutputIsFinite(Render()));
   renderer_->ResetStats();
@@ -238,13 +238,13 @@ TEST_F(CudaResultCacheProductFixture,
   EXPECT_EQ(stats.pass.geometry_execute, 0U);
   EXPECT_EQ(stats.pass.camera_color_execute, 0U);
   EXPECT_EQ(stats.pass.mask_execute, 0U);
-  EXPECT_EQ(stats.pass.primary_grade_execute, 0U);
+  EXPECT_EQ(stats.pass.primary_grade_execute, 1U);
+  EXPECT_EQ(stats.pass.primary_grade_skip, 0U);
   EXPECT_EQ(stats.pass.drt_execute, 0U);
   EXPECT_EQ(stats.pass.sensor_develop_skip, 1U);
   EXPECT_EQ(stats.pass.geometry_skip, 1U);
   EXPECT_EQ(stats.pass.camera_color_skip, 1U);
   EXPECT_EQ(stats.pass.mask_skip, 1U);
-  EXPECT_EQ(stats.pass.primary_grade_skip, 1U);
   EXPECT_EQ(stats.pass.drt_skip, 1U);
 }
 
@@ -293,7 +293,7 @@ TEST_F(CudaResultCacheProductFixture,
   EXPECT_EQ(stats.pass.geometry_skip, 1U);
 }
 
-TEST_F(CudaResultCacheProductFixture, DrtEditRunsOnlyDrtPass) {
+TEST_F(CudaResultCacheProductFixture, DrtEditReexecutesGradesAndRunsDisplayTransform) {
   ASSERT_TRUE(OutputIsFinite(Render()));
   renderer_->ResetStats();
   auto drt           = document_->Drt()->Params().Params();
@@ -305,10 +305,10 @@ TEST_F(CudaResultCacheProductFixture, DrtEditRunsOnlyDrtPass) {
   EXPECT_EQ(stats.pass.sensor_develop_execute, 0U);
   EXPECT_EQ(stats.pass.geometry_execute, 0U);
   EXPECT_EQ(stats.pass.camera_color_execute, 0U);
-  EXPECT_EQ(stats.pass.primary_grade_execute, 0U);
+  EXPECT_EQ(stats.pass.primary_grade_execute, 1U);
+  EXPECT_EQ(stats.pass.primary_grade_skip, 0U);
   EXPECT_EQ(stats.pass.drt_execute, 1U);
   EXPECT_EQ(stats.pass.drt_skip, 0U);
-  EXPECT_EQ(stats.pass.primary_grade_skip, 1U);
 }
 
 TEST_F(CudaResultCacheProductFixture,
@@ -546,7 +546,7 @@ TEST_F(CudaResultCacheProductFixture, CudaRendererPreservesCurrentPlanAndResultC
   expect_current(plan.sensor_linear_output, keys.sensor_extent);
   expect_current(plan.geometry_output, keys.geometry_extent);
   expect_current(plan.develop_output, keys.geometry_extent);
-  expect_current(plan.FirstGrade()->scene_output, keys.geometry_extent);
+  EXPECT_EQ(images.Find(plan.FirstGrade()->scene_output), nullptr);
   expect_current(plan.display_output, keys.geometry_extent);
 }
 
@@ -793,7 +793,8 @@ TEST_F(CudaResultCacheProductFixture, QualityBaseBypassesEveryResultCacheAfterSe
   ASSERT_EQ(ids.size(), published_before.size());
 }
 
-TEST_F(CudaResultCacheProductFixture, InteractiveQualityBaseInteractiveReuses2560PixelResults) {
+TEST_F(CudaResultCacheProductFixture,
+       InteractiveAfterQualityReusesKeyStagesAndReexecutesUnpublishedGrade) {
   ASSERT_TRUE(OutputIsFinite(RenderRole(FrameRole::InteractivePrimary, 16)));
   auto& images = renderer_->Device().Workspace().Images();
   const auto geometry_handle = images.Find(GeometryId())->Handle();
@@ -811,8 +812,9 @@ TEST_F(CudaResultCacheProductFixture, InteractiveQualityBaseInteractiveReuses256
   EXPECT_EQ(stats.pass.sensor_develop_execute, 0U);
   EXPECT_EQ(stats.pass.geometry_execute, 0U);
   EXPECT_EQ(stats.pass.camera_color_execute, 0U);
-  EXPECT_EQ(stats.pass.primary_grade_execute, 0U);
+  EXPECT_EQ(stats.pass.primary_grade_execute, 1U);
   EXPECT_EQ(stats.pass.drt_execute, 0U);
+  EXPECT_EQ(images.Find(GraphValueId{NodeId{"grade.primary"}, PortId{"image"}}), nullptr);
   EXPECT_EQ(images.PublishedRepresentation(GeometryId()).extent.width, 16U);
 }
 

@@ -18,6 +18,8 @@
 #include "edit/pipeline/local_tone_mapping.hpp"
 #include "edit/runtime/cuda/cuda_local_tone_pass.hpp"
 #include "edit/runtime/cuda/cuda_render_device.hpp"
+#include "edit/runtime/cuda/cuda_scene_work.hpp"
+#include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/local_tone_cache_ids.hpp"
 #include "edit/runtime/local_tone_executor.hpp"
 #include "edit/runtime/local_tone_plan.hpp"
@@ -201,8 +203,9 @@ __device__ auto Bilinear(const float* plane, int width, int height, float x, flo
   return a + (b - a) * ty;
 }
 
-__global__ void ApplyKernel(const float4* input, const float* reference, const float* adjusted,
-                            float4* output, int width, int height, int adjusted_width,
+__global__ void ApplyKernel(const float4* input, const float4* original, const float* reference,
+                            const float* adjusted, float4* output, float grade_mix,
+                            const std::uint8_t* mask, int width, int height, int adjusted_width,
                             int adjusted_height, Matrix3x3 render_to_uv) {
   const int x = blockIdx.x * blockDim.x + threadIdx.x;
   const int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -236,8 +239,17 @@ __global__ void ApplyKernel(const float4* input, const float* reference, const f
   r           = target_intensity + (r - target_intensity) * gamut_scale;
   g           = target_intensity + (g - target_intensity) * gamut_scale;
   b           = target_intensity + (b - target_intensity) * gamut_scale;
-  output[index] =
+  const float4 tone =
       make_float4(cuda_acescc::Encode(r), cuda_acescc::Encode(g), cuda_acescc::Encode(b), pixel.w);
+  if (grade_mix == 1.0f && mask == nullptr) {
+    output[index] = tone;
+    return;
+  }
+  const float  mix = grade_mix * (mask == nullptr ? 1.0f : mask[index] / 255.0f);
+  const float4 s   = original[index];
+  output[index] =
+      make_float4(s.x + (tone.x - s.x) * mix, s.y + (tone.y - s.y) * mix, s.z + (tone.z - s.z) * mix,
+                  s.w);
 }
 
 auto Grid(int width, int height, dim3 block) -> dim3 {
@@ -294,8 +306,14 @@ struct CudaLocalToneOps {
 
   static constexpr const char* kErrorPrefix = "ExecuteCudaLocalTone";
 
-  static auto TextureWidth(const Texture& texture) -> std::uint32_t { return texture.Width(); }
-  static auto TextureHeight(const Texture& texture) -> std::uint32_t { return texture.Height(); }
+  static auto BindingWidth(CudaRenderDevice& device, const FrameSceneBinding& binding)
+      -> std::uint32_t {
+    return CudaSceneWidth(device, binding);
+  }
+  static auto BindingHeight(CudaRenderDevice& device, const FrameSceneBinding& binding)
+      -> std::uint32_t {
+    return CudaSceneHeight(device, binding);
+  }
   static auto TransientBytes(CudaRenderDevice& device) -> std::size_t {
     return device.Workspace().TransientBuffers().used_bytes();
   }
@@ -322,12 +340,46 @@ struct CudaLocalToneOps {
     return lookup;
   }
 
-  static void ApplyCanonicalSample(CudaRenderDevice& device, const Texture& input, Texture& output,
-                                   const GraphValueId& source_id, const GraphValueId& result_id,
-                                   const LocalToneDecision& decision, std::uint32_t width,
-                                   std::uint32_t height) {
-    auto& invalidation = device.Workspace().ResultInvalidation();
-    const auto needed = invalidation.MakeImageRepresentation(
+  static auto MaskPointer(CudaRenderDevice& device, const GraphValueId* mask_id, std::uint32_t width,
+                          std::uint32_t height) -> const std::uint8_t* {
+    if (mask_id == nullptr) {
+      return nullptr;
+    }
+    auto* mask = device.Workspace().Images().Find(*mask_id);
+    if (mask == nullptr || mask->Empty() || mask->Texture().Format() != TextureFormat::R8 ||
+        mask->Texture().Width() != width || mask->Texture().Height() != height) {
+      throw std::runtime_error("ExecuteCudaLocalTone: compiled mask output is missing");
+    }
+    return static_cast<const std::uint8_t*>(mask->Texture().DevicePointer());
+  }
+
+  static void LaunchApply(CudaRenderDevice& device, const FrameSceneBinding& adjusted,
+                          const FrameSceneBinding& working, const FrameSceneBinding& original,
+                          const float* reference, const float* tone, float mix,
+                          const GraphValueId* mask_id, std::uint32_t width, std::uint32_t height,
+                          int plane_width, int plane_height, Matrix3x3 render_to_uv) {
+    auto& in   = CudaSceneTexture(device, adjusted);
+    auto& out  = CudaSceneTexture(device, working);
+    auto& orig = CudaSceneTexture(device, original);
+    const dim3 block{16, 16, 1};
+    ApplyKernel<<<Grid(static_cast<int>(width), static_cast<int>(height), block), block, 0,
+                  device.CommandContext().Stream()>>>(
+        static_cast<const float4*>(in.DevicePointer()),
+        static_cast<const float4*>(orig.DevicePointer()), reference, tone,
+        static_cast<float4*>(out.DevicePointer()), mix, MaskPointer(device, mask_id, width, height),
+        static_cast<int>(width), static_cast<int>(height), plane_width, plane_height, render_to_uv);
+  }
+
+  static void ApplyCanonicalSampleAndMix(CudaRenderDevice& device, const FrameSceneBinding& original,
+                                         const FrameSceneBinding& working,
+                                         const FrameSceneBinding& adjusted, const NodeId& grade_id,
+                                         float mix, const GraphValueId* mask_id,
+                                         const LocalToneDecision& decision, std::uint32_t width,
+                                         std::uint32_t height) {
+    const auto source_id = LocalToneSourceId(grade_id);
+    const auto result_id = LocalToneResultId(grade_id);
+    auto& invalidation   = device.Workspace().ResultInvalidation();
+    const auto needed    = invalidation.MakeImageRepresentation(
         source_id, decision.mask_extent, TextureFormat::R32f,
         static_cast<std::uint32_t>(decision.current_long_edge));
     const auto result_needed = invalidation.MakeImageRepresentation(
@@ -338,15 +390,11 @@ struct CudaLocalToneOps {
     if (source == nullptr || result == nullptr) {
       throw std::runtime_error("ExecuteCudaLocalTone: canonical sample lost published planes");
     }
-    const dim3 block{16, 16, 1};
-    ApplyKernel<<<Grid(static_cast<int>(width), static_cast<int>(height), block), block, 0,
-                  device.CommandContext().Stream()>>>(
-        static_cast<const float4*>(input.DevicePointer()),
-        static_cast<const float*>(source->Texture().DevicePointer()),
-        static_cast<const float*>(result->Texture().DevicePointer()),
-        static_cast<float4*>(output.DevicePointer()), static_cast<int>(width),
-        static_cast<int>(height), static_cast<int>(decision.mask_extent.width),
-        static_cast<int>(decision.mask_extent.height), decision.apply_uv);
+    LaunchApply(device, adjusted, working, original,
+                static_cast<const float*>(source->Texture().DevicePointer()),
+                static_cast<const float*>(result->Texture().DevicePointer()), mix, mask_id, width,
+                height, static_cast<int>(decision.mask_extent.width),
+                static_cast<int>(decision.mask_extent.height), decision.apply_uv);
     CheckLaunch("canonical sample");
   }
 
@@ -375,27 +423,27 @@ struct CudaLocalToneOps {
     return CudaTonePlane{static_cast<float*>(ptr), bytes};
   }
 
-  static void ExtractReference(CudaRenderDevice& device, const Texture& input, CudaTonePlane dest,
-                               std::uint32_t width, std::uint32_t height,
+  static void ExtractReference(CudaRenderDevice& device, const FrameSceneBinding& input,
+                               CudaTonePlane dest, std::uint32_t width, std::uint32_t height,
                                const LocalToneDecision& decision,
                                const ResolvedRenderGeometry& geometry) {
     const dim3 block{16, 16, 1};
     ExtractReferenceKernel<<<Grid(decision.widths[0], decision.heights[0], block), block, 0,
                              device.CommandContext().Stream()>>>(
-        static_cast<const float4*>(input.DevicePointer()), dest.ptr, static_cast<int>(width),
-        static_cast<int>(height), decision.widths[0], decision.heights[0],
+        static_cast<const float4*>(CudaSceneTexture(device, input).DevicePointer()), dest.ptr,
+        static_cast<int>(width), static_cast<int>(height), decision.widths[0], decision.heights[0],
         geometry.reference_to_render, static_cast<float>(geometry.full_reference_extent.width),
         static_cast<float>(geometry.full_reference_extent.height));
     CheckLaunch("extract reference");
   }
 
-  static void Extract(CudaRenderDevice& device, const Texture& input, CudaTonePlane dest,
+  static void Extract(CudaRenderDevice& device, const FrameSceneBinding& input, CudaTonePlane dest,
                       std::uint32_t width, std::uint32_t height, const LocalToneDecision& decision) {
     const dim3 block{16, 16, 1};
     ExtractKernel<<<Grid(decision.widths[0], decision.heights[0], block), block, 0,
                     device.CommandContext().Stream()>>>(
-        static_cast<const float4*>(input.DevicePointer()), dest.ptr, static_cast<int>(width),
-        static_cast<int>(height), decision.widths[0], decision.heights[0]);
+        static_cast<const float4*>(CudaSceneTexture(device, input).DevicePointer()), dest.ptr,
+        static_cast<int>(width), static_cast<int>(height), decision.widths[0], decision.heights[0]);
     CheckLaunch("extract");
   }
 
@@ -452,15 +500,14 @@ struct CudaLocalToneOps {
     CheckLaunch("collapse");
   }
 
-  static void ApplyAdjusted(CudaRenderDevice& device, const Texture& input, Texture& output,
-                            CudaTonePlane reference, CudaTonePlane adjusted, std::uint32_t width,
-                            std::uint32_t height, const LocalToneDecision& decision) {
-    const dim3 block{16, 16, 1};
-    ApplyKernel<<<Grid(static_cast<int>(width), static_cast<int>(height), block), block, 0,
-                  device.CommandContext().Stream()>>>(
-        static_cast<const float4*>(input.DevicePointer()), reference.ptr, adjusted.ptr,
-        static_cast<float4*>(output.DevicePointer()), static_cast<int>(width),
-        static_cast<int>(height), decision.widths[0], decision.heights[0], decision.apply_uv);
+  static void ApplyAdjustedAndMix(CudaRenderDevice& device, const FrameSceneBinding& original,
+                                  const FrameSceneBinding& working,
+                                  const FrameSceneBinding& adjusted, CudaTonePlane reference,
+                                  CudaTonePlane tone, float mix, const GraphValueId* mask_id,
+                                  std::uint32_t width, std::uint32_t height,
+                                  int plane_width, int plane_height, const Matrix3x3& apply_uv) {
+    LaunchApply(device, adjusted, working, original, reference.ptr, tone.ptr, mix, mask_id, width,
+                height, plane_width, plane_height, apply_uv);
     CheckLaunch("apply");
   }
 
@@ -494,12 +541,14 @@ struct CudaLocalToneOps {
 
 }  // namespace
 
-auto ExecuteCudaLocalTone(CudaRenderDevice& device, const CudaBackend::Texture2D& input,
-                          CudaBackend::Texture2D& output, const NodeId& grade_id,
-                          float shadows_slider, float highlights_slider,
-                          const ResolvedRenderGeometry& geometry) -> CudaLocalToneResult {
+auto ExecuteCudaLocalTone(CudaRenderDevice& device, const FrameSceneBinding& adjusted,
+                          const FrameSceneBinding& working, const FrameSceneBinding& original,
+                          const NodeId& grade_id, float shadows_slider, float highlights_slider,
+                          const ResolvedRenderGeometry& geometry, float mix,
+                          const GraphValueId* mask_id) -> CudaLocalToneResult {
   const auto executed = LocalToneExecutor<CudaLocalToneOps>::Execute(
-      device, input, output, grade_id, shadows_slider, highlights_slider, geometry);
+      device, adjusted, working, original, grade_id, shadows_slider, highlights_slider, geometry,
+      mix, mask_id);
   CudaLocalToneResult tone;
   tone.reference_resource_id       = executed.reference_resource_id;
   tone.rebuilt_reference           = executed.rebuilt_reference;

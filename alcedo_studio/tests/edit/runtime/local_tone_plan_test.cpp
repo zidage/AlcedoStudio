@@ -2,6 +2,7 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
+#include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/local_tone_executor.hpp"
 #include "edit/runtime/local_tone_plan.hpp"
 
@@ -156,16 +157,21 @@ struct FakeToneOps {
   static inline bool                     throw_on_remap = false;
   static inline LocalToneCanonicalLookup lookup;
 
-  static auto TextureWidth(const Texture& texture) -> std::uint32_t { return texture.width; }
-  static auto TextureHeight(const Texture& texture) -> std::uint32_t { return texture.height; }
+  static auto BindingWidth(FakeToneDevice&, const FrameSceneBinding&) -> std::uint32_t {
+    return 16;
+  }
+  static auto BindingHeight(FakeToneDevice&, const FrameSceneBinding&) -> std::uint32_t {
+    return 16;
+  }
   static auto TransientBytes(FakeToneDevice&) -> std::size_t { return log.size(); }
   static auto LookupCanonical(FakeToneDevice&, const GraphValueId&, const GraphValueId&, int,
                               const ResolvedRenderGeometry&) -> LocalToneCanonicalLookup {
     return lookup;
   }
-  static void ApplyCanonicalSample(FakeToneDevice&, const Texture&, Texture&, const GraphValueId&,
-                                   const GraphValueId&, const LocalToneDecision&, std::uint32_t,
-                                   std::uint32_t) {
+  static void ApplyCanonicalSampleAndMix(FakeToneDevice&, const FrameSceneBinding&,
+                                         const FrameSceneBinding&, const FrameSceneBinding&,
+                                         const NodeId&, float, const GraphValueId*,
+                                         const LocalToneDecision&, std::uint32_t, std::uint32_t) {
     log.emplace_back("sample");
   }
   static auto CanonicalResourceId(FakeToneDevice&, const GraphValueId&) -> std::uint64_t {
@@ -179,11 +185,12 @@ struct FakeToneOps {
     log.emplace_back("scratch");
     return 2;
   }
-  static void ExtractReference(FakeToneDevice&, const Texture&, int, std::uint32_t, std::uint32_t,
-                               const LocalToneDecision&, const ResolvedRenderGeometry&) {
+  static void ExtractReference(FakeToneDevice&, const FrameSceneBinding&, int, std::uint32_t,
+                               std::uint32_t, const LocalToneDecision&,
+                               const ResolvedRenderGeometry&) {
     log.emplace_back("extract-reference");
   }
-  static void Extract(FakeToneDevice&, const Texture&, int, std::uint32_t, std::uint32_t,
+  static void Extract(FakeToneDevice&, const FrameSceneBinding&, int, std::uint32_t, std::uint32_t,
                       const LocalToneDecision&) {
     log.emplace_back("extract");
   }
@@ -206,8 +213,10 @@ struct FakeToneOps {
   static void Collapse(FakeToneDevice&, int, int, int, const LocalToneDecision&, int) {
     log.emplace_back("collapse");
   }
-  static void ApplyAdjusted(FakeToneDevice&, const Texture&, Texture&, int, int, std::uint32_t,
-                            std::uint32_t, const LocalToneDecision&) {
+  static void ApplyAdjustedAndMix(FakeToneDevice&, const FrameSceneBinding&,
+                                  const FrameSceneBinding&, const FrameSceneBinding&, int, int,
+                                  float, const GraphValueId*, std::uint32_t, std::uint32_t,
+                                  int, int, const Matrix3x3&) {
     log.emplace_back("apply");
   }
   static void PersistCanonicalSource(FakeToneDevice&, int, const GraphValueId&,
@@ -225,10 +234,10 @@ TEST(LocalToneExecutor, RemapFailureDoesNotPersistCanonicalPlanes) {
   FakeToneOps::throw_on_remap = true;
   FakeToneOps::lookup         = {};
   FakeToneDevice device;
-  FakeToneTexture input;
-  FakeToneTexture output;
-  EXPECT_THROW((void)LocalToneExecutor<FakeToneOps>::Execute(device, input, output, NodeId{"grade"},
-                                                             40.0f, 0.0f, MakeFullGeometry(16)),
+  const auto scene = FrameSceneBinding::WorkImage(SceneWorkMember::Member0);
+  EXPECT_THROW((void)LocalToneExecutor<FakeToneOps>::Execute(device, scene, scene, scene,
+                                                             NodeId{"grade"}, 40.0f, 0.0f,
+                                                             MakeFullGeometry(16), 1.0f, nullptr),
                std::runtime_error);
   bool persisted = false;
   for (const auto& entry : FakeToneOps::log) {
@@ -246,10 +255,10 @@ TEST(LocalToneExecutor, SliderEditBindsCanonicalSourceAndPersistsResultOnly) {
   FakeToneOps::lookup.source_long_edge = 16;
   FakeToneOps::lookup.extent           = {8, 8};
   FakeToneDevice device;
-  FakeToneTexture input;
-  FakeToneTexture output;
+  const auto scene = FrameSceneBinding::WorkImage(SceneWorkMember::Member0);
   const auto result = LocalToneExecutor<FakeToneOps>::Execute(
-      device, input, output, NodeId{"grade"}, 70.0f, 0.0f, MakeFullGeometry(16));
+      device, scene, scene, scene, NodeId{"grade"}, 70.0f, 0.0f, MakeFullGeometry(16), 1.0f,
+      nullptr);
   EXPECT_TRUE(result.rebuilt_reference);
   EXPECT_FALSE(result.sampled_canonical_reference);
   bool bound_source   = false;
@@ -276,10 +285,10 @@ TEST(LocalToneExecutor, ValidCanonicalLookupSamplesWithoutExtract) {
   FakeToneOps::lookup.source_long_edge = 16;
   FakeToneOps::lookup.extent          = {8, 8};
   FakeToneDevice device;
-  FakeToneTexture input;
-  FakeToneTexture output;
+  const auto scene = FrameSceneBinding::WorkImage(SceneWorkMember::Member0);
   const auto result = LocalToneExecutor<FakeToneOps>::Execute(
-      device, input, output, NodeId{"grade"}, 25.0f, 0.0f, MakeFullGeometry(16));
+      device, scene, scene, scene, NodeId{"grade"}, 25.0f, 0.0f, MakeFullGeometry(16), 1.0f,
+      nullptr);
   EXPECT_TRUE(result.sampled_canonical_reference);
   EXPECT_FALSE(result.rebuilt_reference);
   ASSERT_EQ(FakeToneOps::log.size(), 1U);

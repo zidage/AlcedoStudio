@@ -22,8 +22,10 @@
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
+#include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/metal/metal_develop_pass.hpp"
+#include "edit/runtime/metal/metal_scene_work.hpp"
 #include "edit/runtime/metal/metal_mask_pass.hpp"
 #include "edit/runtime/metal/metal_pass_encoder.hpp"
 #include "edit/runtime/metal/metal_primary_grade_pass.hpp"
@@ -201,6 +203,17 @@ class MetalMaskFixture : public ::testing::Test {
     return pixels;
   }
 
+  auto DownloadWork(SceneWorkMember member) -> std::vector<Rgba> {
+    auto& texture = device_.Workspace().SceneWork().Member(member);
+    std::vector<Rgba> pixels(static_cast<std::size_t>(texture.Width()) * texture.Height());
+    device_.Workspace().Device().DownloadTexture2D(
+        texture,
+        std::span<std::byte>(reinterpret_cast<std::byte*>(pixels.data()),
+                             pixels.size() * sizeof(Rgba)),
+        device_.CommandContext());
+    return pixels;
+  }
+
   std::uint32_t    width_  = 0;
   std::uint32_t    height_ = 0;
   PreparedRawInput prepared_;
@@ -331,7 +344,7 @@ TEST_F(MetalMaskFixture, EmptyMaskListUsesFullGradeCoverage) {
   EXPECT_FALSE(plan_.Contains(GpuPassKind::MaskEvaluate));
   EXPECT_FALSE(plan_.Contains(GpuPassKind::MaskUnion));
   ExecutePlan();
-  const auto empty_grade = DownloadImage(plan_.FirstGrade()->scene_output);
+  const auto empty_grade = DownloadWork(SceneWorkMember::Member0);
   const auto empty_keys  = BuildFrameResultContentKeys(plan_, prepared_, document_);
   EXPECT_TRUE(empty_keys.mask.Empty());
   EXPECT_EQ(device_.Workspace().Images().Find(plan_.FirstGrade()->mask_output), nullptr);
@@ -339,12 +352,12 @@ TEST_F(MetalMaskFixture, EmptyMaskListUsesFullGradeCoverage) {
   grade_mask_test::AddRadialMask(document_, MaskId{"mask.radial"});
   Compile();
   ExecutePlan();
-  const auto masked_grade = DownloadImage(plan_.FirstGrade()->scene_output);
+  const auto masked_grade = DownloadWork(SceneWorkMember::Member0);
 
   document_.PrimaryGrade()->RemoveMask(MaskId{"mask.radial"});
   Compile();
   ExecutePlan();
-  const auto restored_grade = DownloadImage(plan_.FirstGrade()->scene_output);
+  const auto restored_grade = DownloadWork(SceneWorkMember::Member0);
   const auto restored_keys  = BuildFrameResultContentKeys(plan_, prepared_, document_);
   ASSERT_EQ(empty_grade.size(), restored_grade.size());
   EXPECT_NEAR(empty_grade.front().r, restored_grade.front().r, 1.0e-5f);
@@ -375,7 +388,7 @@ TEST_F(MetalMaskFixture, AllDisabledMasksUseZeroGradeCoverage) {
   EXPECT_TRUE(
       std::all_of(coverage.begin(), coverage.end(), [](std::uint8_t value) { return value == 0; }));
   const auto scene = DownloadImage(plan_.FirstGrade()->scene_input);
-  const auto grade = DownloadImage(plan_.FirstGrade()->scene_output);
+  const auto grade = DownloadWork(SceneWorkMember::Member0);
   ASSERT_EQ(scene.size(), grade.size());
   EXPECT_NEAR(grade.front().r, scene.front().r, 1.0e-5f);
   EXPECT_NEAR(grade[grade.size() / 2].r, scene[scene.size() / 2].r, 1.0e-5f);

@@ -5,10 +5,10 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <span>
 #include <vector>
 
-#include "edit/graph/graph_ids.hpp"
 #include "edit/runtime/adjustment_runtime.hpp"
 #include "edit/runtime/execution_plan.hpp"
 
@@ -49,12 +49,20 @@ struct DrtPostDecisionTrace {
 [[nodiscard]] auto MakeDrtPostDecisionTrace(const DrtPostSchedule& schedule) -> DrtPostDecisionTrace;
 
 /**
- * @brief Ping/pong then final-display destinations for enabled neighborhood writes.
+ * @brief Physical destination of one DRT transform or Post neighborhood write.
  *
- * The first intermediate write is ping. The last write is always @p scene_output.
+ * Display is the existing display output. FreeWorkMember is the scene-work peer
+ * of the current scene. The last write in @ref DrtWriteSequence is always Display.
  */
-[[nodiscard]] auto DrtNeighborhoodDestinations(const NodeId& drt_id, const GraphValueId& scene_output,
-                                               std::size_t enabled_count)
-    -> std::vector<GraphValueId>;
+enum class DrtWriteTarget : std::uint8_t { Display, FreeWorkMember };
+
+/**
+ * @brief Display-transform plus @p neighborhood_count Post writes.
+ *
+ * Length is @p neighborhood_count + 1. The last target is always Display so
+ * frame sink never receives a work member. An even neighborhood count starts
+ * on Display; an odd count starts on the free work member.
+ */
+[[nodiscard]] auto DrtWriteSequence(std::size_t neighborhood_count) -> std::vector<DrtWriteTarget>;
 
 }  // namespace alcedo

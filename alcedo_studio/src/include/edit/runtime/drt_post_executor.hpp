@@ -19,6 +19,7 @@
 #include "edit/runtime/adjustment_runtime.hpp"
 #include "edit/runtime/drt_post_schedule.hpp"
 #include "edit/runtime/execution_plan.hpp"
+#include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/neighbor_executor.hpp"
 #include "edit/runtime/parameter_binding.hpp"
 
@@ -28,17 +29,17 @@ namespace alcedo {
  * @brief Shared DRT/Post encode outcome used by CUDA, OpenCL, and Metal wrappers.
  */
 struct DrtPostExecutionResult {
-  GraphValueId          output{NodeId{"drt"}, PortId{"display"}};
-  GraphValueId          display_post{NodeId{"drt"}, PortId{"display"}};
-  std::uint32_t         post_neighborhood_count = 0;
-  DrtPostDecisionTrace  trace;
+  GraphValueId         output{NodeId{"drt"}, PortId{"display"}};
+  GraphValueId         display_post{NodeId{"drt"}, PortId{"display"}};
+  std::uint32_t        post_neighborhood_count = 0;
+  DrtPostDecisionTrace trace;
 };
 
 /**
  * @brief Common display transform followed by DRT/Post neighborhood processing.
  *
- * @tparam Ops Backend neighborhood starts, display bind/start, copies, and native errors.
- *         Shared code owns skip, copy, destinations, scratch lifetime, and display position.
+ * @tparam Ops Backend neighborhood starts, display bind/start, and native errors.
+ *         Shared code owns skip, destinations, scratch lifetime, and display position.
  */
 template <class Ops>
 class DrtPostExecutor {
@@ -49,12 +50,12 @@ class DrtPostExecutor {
   /**
    * @brief Apply the display transform, then enabled display-referred neighborhood writes.
    *
-   * An empty enabled list copies the display base to the final output. Parameter
-   * slots are uploaded before any GPU start. A failed dispatch throws after
-   * Ops::CheckAfterEncode; pending Model dirty bits restore unless committed.
+   * The last write is always the existing display output. Intermediate Post writes use
+   * the free scene-work member. Parameter slots are uploaded before any GPU start.
+   * A failed dispatch throws after Ops::CheckAfterEncode.
    */
-  static auto Execute(Device& device, const ExecutionPlan& plan, PipelineDocument& document)
-      -> DrtPostExecutionResult {
+  static auto Execute(Device& device, const ExecutionPlan& plan, PipelineDocument& document,
+                      const FrameSceneBinding& scene) -> DrtPostExecutionResult {
     auto& workspace = device.Workspace();
     if (!workspace.IsRendering()) {
       throw std::runtime_error(std::string{Ops::kErrorPrefix} + ": BeginRender has not been called");
@@ -63,12 +64,8 @@ class DrtPostExecutor {
     if (drt == nullptr) {
       throw std::runtime_error(std::string{Ops::kErrorPrefix} + ": missing DRT endpoint");
     }
-    auto* input = workspace.Images().Find(plan.SceneInputForDrt());
-    if (input == nullptr || input->Empty()) {
-      throw std::runtime_error(std::string{Ops::kErrorPrefix} + ": missing DRT scene input");
-    }
-    const auto width  = input->Texture().Width();
-    const auto height = input->Texture().Height();
+    const auto width  = Ops::BindingWidth(device, scene);
+    const auto height = Ops::BindingHeight(device, scene);
 
     std::vector<PendingParameterPatch> pending;
     std::vector<GradeNeighborParams>   compiled_order;
@@ -117,71 +114,36 @@ class DrtPostExecutor {
 
     const auto schedule = MakeDrtPostSchedule(compiled_order);
     DrtPostExecutionResult result;
-    result.output                   = plan.display_output;
-    result.display_post             = plan.display_output;
-    result.post_neighborhood_count  = static_cast<std::uint32_t>(schedule.enabled.size());
-    result.trace                    = MakeDrtPostDecisionTrace(schedule);
+    result.output                  = plan.display_output;
+    result.display_post            = plan.display_output;
+    result.post_neighborhood_count = static_cast<std::uint32_t>(schedule.enabled.size());
+    result.trace                   = MakeDrtPostDecisionTrace(schedule);
 
-    DispatchDisplay(device, plan.SceneInputForDrt(), plan.drt.scene_output, drt->Id(), width,
-                    height);
-    const auto lut = Ops::NeighborLut(device);
-    (void)ApplyNeighborhoods(device, schedule, works, plan.drt.scene_output, plan.display_output,
-                             drt->Id(), lut, width, height);
+    const auto free_member =
+        scene.IsWorkImage() ? PeerOf(scene.member) : SceneWorkMember::Member0;
+    const auto sequence = DrtWriteSequence(works.size());
+    auto MakeDest = [&](DrtWriteTarget target) -> FrameSceneBinding {
+      if (target == DrtWriteTarget::Display) {
+        return FrameSceneBinding::DisplayImage(plan.display_output);
+      }
+      return FrameSceneBinding::WorkImage(free_member);
+    };
+
+    Ops::AcquireDisplayOutput(device, plan.display_output, width, height);
+    FrameSceneBinding current = scene;
+    for (std::size_t index = 0; index < sequence.size(); ++index) {
+      const auto dest = MakeDest(sequence[index]);
+      if (index == 0) {
+        Ops::DispatchDisplayTransform(device, current, dest, drt->Id(), width, height);
+      } else {
+        const auto lut = Ops::NeighborLut(device);
+        NeighborExecutor<Ops>::Execute(device, current, dest, current, lut, works[index - 1], 1.0f,
+                                       nullptr, width, height);
+      }
+      current = dest;
+    }
     Ops::CheckAfterEncode(device);
     return result;
-  }
-
-  /**
-   * @brief Copy or ping/pong neighborhood writes onto @p scene_output.
-   *
-   * @return Graph value that holds the display-referred image after neighborhood work.
-   */
-  static auto ApplyNeighborhoods(Device& device, const DrtPostSchedule& schedule,
-                                 const std::vector<NeighborWork>& works,
-                                 const GraphValueId& scene_input, const GraphValueId& scene_output,
-                                 const NodeId& drt_id, const LutBinding& lut, std::uint32_t width,
-                                 std::uint32_t height) -> GraphValueId {
-    if (schedule.copy_scene_to_post) {
-      (void)Ops::AcquireOutput(device, scene_output, width, height);
-      const auto* input = device.Workspace().Images().Find(scene_input);
-      if (input == nullptr) {
-        throw std::runtime_error(std::string{Ops::kErrorPrefix} +
-                                 ": DRT scene input lost during scene copy");
-      }
-      Ops::CopyTexture(device, scene_input, scene_output);
-      return scene_output;
-    }
-    if (works.size() != schedule.enabled.size()) {
-      throw std::runtime_error(std::string{Ops::kErrorPrefix} +
-                               ": neighborhood destination underflow");
-    }
-    const auto destinations =
-        DrtNeighborhoodDestinations(drt_id, scene_output, works.size());
-    GraphValueId scene_id = scene_input;
-    for (std::size_t index = 0; index < works.size(); ++index) {
-      const auto dest = destinations[index];
-      (void)Ops::AcquireOutput(device, dest, width, height);
-      NeighborExecutor<Ops>::Execute(device, scene_id, dest, lut, works[index], width, height);
-      scene_id = dest;
-    }
-    // Last readers of the neighborhood pair are ordered before the next pass.
-    device.Workspace().ReleaseConsumedImage(GraphValueId{drt_id, PortId{"runtime.ping"}});
-    device.Workspace().ReleaseConsumedImage(GraphValueId{drt_id, PortId{"runtime.pong"}});
-    return scene_id;
-  }
-
-  /**
-   * @brief Acquire the compiled display image and start the display transform.
-   *
-   * Runs before neighborhood writes and converts ACEScc scene values to display-referred values.
-   */
-  static void DispatchDisplay(Device& device, const GraphValueId& scene_id,
-                              const GraphValueId& display_output, const NodeId& drt_id,
-                              std::uint32_t width, std::uint32_t height) {
-    (void)Ops::AcquireOutput(device, display_output, width, height);
-    auto& scene   = Ops::SceneTexture(device, scene_id);
-    auto& display = Ops::SceneTexture(device, display_output);
-    Ops::DispatchDisplayTransform(device, scene, display, drt_id, width, height);
   }
 };
 

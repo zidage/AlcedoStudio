@@ -85,9 +85,10 @@ struct GradeScheduleInput {
     -> std::vector<GradeScheduledOp>;
 
 /**
- * @brief GPU writes for compacted ops plus the optional final mix.
+ * @brief GPU writes for compacted ops. Mix is fused into the last write.
  *
- * Each Point, Neighborhood, and Local Laplacian op writes once. Mix adds one write unless skipped.
+ * Each Point, Neighborhood, and Local Laplacian op writes once. @p skip_final_mix
+ * does not add a write; it only omits mix arithmetic from the last write.
  */
 [[nodiscard]] auto CountGradeGpuWrites(const std::vector<GradeScheduledOp>& ops, bool skip_final_mix)
     -> std::size_t;

@@ -338,7 +338,7 @@ TEST_F(CudaPreviewInteractiveBaselineFixture,
   EXPECT_TRUE(plan.encode_geometry_resample);
 }
 
-TEST_F(CudaPreviewInteractiveBaselineFixture, EightGradeLastExposureSkipsDevelopAndUpstreamGrades) {
+TEST_F(CudaPreviewInteractiveBaselineFixture, EightGradeLastExposureReexecutesGradesAndSkipsDevelop) {
   auto document = multi_grade_test::MakeIdentityGradeDocument();
   multi_grade_test::AddCleanGradesBeforeDrt(
       document, {"g1", "g2", "g3", "g4", "g5", "g6", "g7"});
@@ -364,9 +364,8 @@ TEST_F(CudaPreviewInteractiveBaselineFixture, EightGradeLastExposureSkipsDevelop
   if (develop != nullptr) {
     EXPECT_NE(develop->state, diag::PreviewExecutionState::Executed);
   }
-  if (first != nullptr) {
-    EXPECT_NE(first->state, diag::PreviewExecutionState::Executed);
-  }
+  ASSERT_NE(first, nullptr);
+  EXPECT_EQ(first->state, diag::PreviewExecutionState::Executed);
 }
 
 TEST_F(CudaPreviewInteractiveBaselineFixture, EightGradeMidCurveKeepsOwnLlfAndInvalidatesDownstream) {
@@ -392,9 +391,8 @@ TEST_F(CudaPreviewInteractiveBaselineFixture, EightGradeMidCurveKeepsOwnLlfAndIn
   EXPECT_EQ(mid->state, diag::PreviewExecutionState::Executed);
   EXPECT_EQ(last->state, diag::PreviewExecutionState::Executed);
   const auto* first = FindPass(record, "grade.primary", diag::PreviewPassKind::PrimaryColorGrade);
-  if (first != nullptr) {
-    EXPECT_NE(first->state, diag::PreviewExecutionState::Executed);
-  }
+  ASSERT_NE(first, nullptr);
+  EXPECT_EQ(first->state, diag::PreviewExecutionState::Executed);
 }
 
 TEST_F(CudaPreviewInteractiveBaselineFixture, EightGradeOwnShadowsRebuildsLlfResultOnly) {
@@ -440,7 +438,7 @@ TEST_F(CudaPreviewInteractiveBaselineFixture, EightGradeMaskFeatherKeepsOwnLlfAn
   EXPECT_EQ(evaluate->state, diag::PreviewExecutionState::Executed);
 }
 
-TEST_F(CudaPreviewInteractiveBaselineFixture, EightGradeDrtClaritySkipsGrades) {
+TEST_F(CudaPreviewInteractiveBaselineFixture, EightGradeDrtClarityReexecutesGrades) {
   auto document = multi_grade_test::MakeIdentityGradeDocument();
   multi_grade_test::AddCleanGradesBeforeDrt(
       document, {"g1", "g2", "g3", "g4", "g5", "g6", "g7"});
@@ -459,9 +457,8 @@ TEST_F(CudaPreviewInteractiveBaselineFixture, EightGradeDrtClaritySkipsGrades) {
   ASSERT_NE(drt_pass, nullptr);
   EXPECT_EQ(drt_pass->state, diag::PreviewExecutionState::Executed);
   const auto* grade = FindPass(record, "grade.primary", diag::PreviewPassKind::PrimaryColorGrade);
-  if (grade != nullptr) {
-    EXPECT_NE(grade->state, diag::PreviewExecutionState::Executed);
-  }
+  ASSERT_NE(grade, nullptr);
+  EXPECT_EQ(grade->state, diag::PreviewExecutionState::Executed);
 }
 
 #ifndef _DEBUG
