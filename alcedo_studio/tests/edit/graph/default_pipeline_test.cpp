@@ -170,4 +170,36 @@ TEST(GpuDagModelGraph, BuiltinCatalogTypeIdsAreUnique) {
   }
 }
 
+TEST(GpuDagModelGraph, LockedMaskPreventsOwningGradeDeletion) {
+  auto document = CreateDefaultPipelineDocument();
+  auto* grade = document.PrimaryGrade();
+  ASSERT_NE(grade, nullptr);
+  grade->SetDeletionProtected(false);
+  MaskModel mask;
+  mask.id = MaskId{"mask.protected"};
+  mask.deletion_protected = true;
+  grade->AddMask(mask, 0);
+  document.ClearTopologyDirty();
+  grade->ClearMixDirty();
+  const auto revision = grade->MaskContentRevision(mask.id);
+  const auto before = document.ToJson();
+
+  const auto mask_errors = document.ValidateUserDeletion(grade->Id(), mask.id);
+  ASSERT_EQ(mask_errors.size(), 1u);
+  EXPECT_EQ(mask_errors.front().code, GraphValidationCode::DeletionProtected);
+  EXPECT_EQ(mask_errors.front().node_id, grade->Id());
+  EXPECT_EQ(mask_errors.front().mask_id, mask.id);
+  const auto node_errors = document.ValidateUserDeletion(grade->Id());
+  ASSERT_EQ(node_errors.size(), 1u);
+  EXPECT_EQ(node_errors.front().mask_id, mask.id);
+  EXPECT_EQ(document.ToJson(), before);
+
+  grade->SetMaskDeletionProtected(mask.id, false);
+  EXPECT_TRUE(document.ValidateUserDeletion(grade->Id(), mask.id).empty());
+  EXPECT_TRUE(document.ValidateUserDeletion(grade->Id()).empty());
+  EXPECT_EQ(grade->MaskContentRevision(mask.id), revision);
+  EXPECT_FALSE(grade->MixDirty());
+  EXPECT_FALSE(document.TopologyDirty());
+}
+
 }  // namespace alcedo

@@ -37,6 +37,8 @@ auto StringArg(const nlohmann::json& args, const char* key) -> std::string {
 
 auto PipelineEditOperationKindText(PipelineEditOperationKind kind) -> std::string_view {
   switch (kind) {
+    case PipelineEditOperationKind::SetNodeDeletionProtection:
+      return "set_node_deletion_protection";
     case PipelineEditOperationKind::SetParameter:
       return "set_parameter";
     case PipelineEditOperationKind::SetNodeEnabled:
@@ -68,6 +70,9 @@ auto PipelineEditOperationKindText(PipelineEditOperationKind kind) -> std::strin
 }
 
 auto PipelineEditOperationKindFromText(std::string_view text) -> PipelineEditOperationKind {
+  if (text == "set_node_deletion_protection") {
+    return PipelineEditOperationKind::SetNodeDeletionProtection;
+  }
   if (text == "set_parameter") {
     return PipelineEditOperationKind::SetParameter;
   }
@@ -112,6 +117,8 @@ auto PipelineEditOperationKindFromText(std::string_view text) -> PipelineEditOpe
 
 auto PipelineEditChangeKindText(PipelineEditChangeKind kind) -> std::string_view {
   switch (kind) {
+    case PipelineEditChangeKind::SetNodeDeletionProtection:
+      return "set_node_deletion_protection";
     case PipelineEditChangeKind::SetParameter:
       return "set_parameter";
     case PipelineEditChangeKind::SetNodeEnabled:
@@ -146,6 +153,8 @@ auto PipelineEditChangeKindOf(const PipelineEditChange& change) -> PipelineEditC
         using Typed = std::decay_t<decltype(typed)>;
         if constexpr (std::is_same_v<Typed, SetParameterChange>) {
           return PipelineEditChangeKind::SetParameter;
+        } else if constexpr (std::is_same_v<Typed, SetNodeDeletionProtectionChange>) {
+          return PipelineEditChangeKind::SetNodeDeletionProtection;
         } else if constexpr (std::is_same_v<Typed, SetNodeEnabledChange>) {
           return PipelineEditChangeKind::SetNodeEnabled;
         } else if constexpr (std::is_same_v<Typed, SetNodeMixChange>) {
@@ -292,6 +301,11 @@ auto ProjectPipelineEditHistory(const PipelineEditBatch& batch) -> PipelineEditH
           row.field_key              = typed.target.field_key;
           row.before_display_value   = typed.before_value;
           row.after_display_value    = typed.after_value;
+        } else if constexpr (std::is_same_v<Typed, SetNodeDeletionProtectionChange>) {
+          row.node_id = std::string{typed.node_id.Value()};
+          row.field_key = "deletion_protected";
+          row.before_display_value = typed.before_protected;
+          row.after_display_value = typed.after_protected;
         } else if constexpr (std::is_same_v<Typed, SetNodeEnabledChange>) {
           row.node_id              = std::string{typed.node_id.Value()};
           row.before_display_value = typed.before_enabled;

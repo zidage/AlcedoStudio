@@ -422,6 +422,7 @@ TEST(EditorNodeController, RenameChangesLabelWithoutChangingSelectionIdentity) {
 TEST(EditorNodeController, DeleteOfADraftGradeDoesNotSubmitWhileThePathIsBroken) {
   DocumentSessionBackend backend;
   backend.SetGeneration(17);
+  backend.Document().PrimaryGrade()->SetDeletionProtected(false);
   ASSERT_TRUE(
       alcedo::AddCleanColorGrade(backend.Document(), NodeId{"drt"}, NodeId{"grade.extra"}).empty());
   EditorSessionController session(&backend);

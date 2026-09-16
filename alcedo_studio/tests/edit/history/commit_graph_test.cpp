@@ -549,9 +549,9 @@ TEST(EditCommitHashing, FixedHashVectorsAreStable) {
   EXPECT_EQ(Hash128::Compute(commit_input.data(), commit_input.size()), commit.GetCommitHash());
   EXPECT_EQ(Hash128::Compute(fold_input.data(), fold_input.size()), folded);
 
-  // Frozen golden hex strings for little-endian format version 2.
+  // Explicit little-endian chain format v5 vector; v2 remains incompatible.
   EXPECT_NE(root_chain.ToString(), "b086b9015c867f88aeca8730b1b8d55c");
-  EXPECT_EQ(root_chain.ToString(), "19e34ca4b0d642a1a92384e936e8207c");
+  EXPECT_EQ(root_chain.ToString(), "56f50f13e2c38b23f6100cd9013e69a3");
   EXPECT_NE(commit.GetCommitHash(), Hash128{});
   EXPECT_NE(folded, Hash128{});
 }
@@ -948,7 +948,8 @@ class ProjectSchemaBoundaryTests : public ::testing::Test {
 
 TEST_F(ProjectSchemaBoundaryTests, CurrentProjectFileVersionIsSupported) {
   EXPECT_TRUE(project_pack::ProjectVersionIsSupported(project_pack::kProjectFileVersion));
-  EXPECT_EQ(project_pack::kProjectFileVersion, "0.7.0");
+  EXPECT_EQ(project_pack::kProjectFileVersion, "0.8.0");
+  EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.7.0"));
   EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.5.0"));
 }
 

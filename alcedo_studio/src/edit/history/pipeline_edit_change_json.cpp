@@ -34,6 +34,9 @@ using pipeline_edit_json::TargetFromJson;
 using pipeline_edit_json::TargetToJson;
 
 auto PipelineEditChangeKindFromText(std::string_view text) -> PipelineEditChangeKind {
+  if (text == "set_node_deletion_protection") {
+    return PipelineEditChangeKind::SetNodeDeletionProtection;
+  }
   if (text == "set_parameter") {
     return PipelineEditChangeKind::SetParameter;
   }
@@ -79,6 +82,8 @@ auto PipelineEditChangeCompatible(PipelineEditOperationKind operation,
     return change != PipelineEditChangeKind::NodeGraphTopologyChange;
   }
   switch (operation) {
+    case PipelineEditOperationKind::SetNodeDeletionProtection:
+      return change == PipelineEditChangeKind::SetNodeDeletionProtection;
     case PipelineEditOperationKind::SetParameter:
       return change == PipelineEditChangeKind::SetParameter;
     case PipelineEditOperationKind::SetNodeEnabled:
@@ -126,6 +131,11 @@ auto EncodePipelineEditChange(const PipelineEditChange& change) -> nlohmann::jso
                   {"kind", "set_node_enabled"},
                   {"node_id", std::string{typed.node_id.Value()}},
                   {"node_kind", std::string{NodeKindText(typed.node_kind)}}};
+        } else if constexpr (std::is_same_v<Typed, SetNodeDeletionProtectionChange>) {
+          return {{"after_protected", typed.after_protected},
+                  {"before_protected", typed.before_protected},
+                  {"kind", "set_node_deletion_protection"},
+                  {"node_id", std::string{typed.node_id.Value()}}};
         } else if constexpr (std::is_same_v<Typed, SetNodeMixChange>) {
           return {{"after_mix", typed.after_mix},
                   {"before_mix", typed.before_mix},
@@ -140,6 +150,7 @@ auto EncodePipelineEditChange(const PipelineEditChange& change) -> nlohmann::jso
           return {
               {"after_next_color_grade_name_number", typed.after_next_color_grade_name_number},
               {"before_next_color_grade_name_number", typed.before_next_color_grade_name_number},
+              {"establishes_default_grade", typed.establishes_default_grade},
               {"incoming_edge", EdgeToJson(typed.incoming_edge)},
               {"kind", "add_color_grade"},
               {"node", typed.node},
@@ -150,6 +161,7 @@ auto EncodePipelineEditChange(const PipelineEditChange& change) -> nlohmann::jso
         } else if constexpr (std::is_same_v<Typed, RemoveColorGradeChange>) {
           return {{"bridge_edge", EdgeToJson(typed.bridge_edge)},
                   {"kind", "remove_color_grade"},
+                  {"was_default_grade", typed.was_default_grade},
                   {"node", typed.node},
                   {"node_id", std::string{typed.node_id.Value()}},
                   {"predecessor_id", std::string{typed.predecessor_id.Value()}},
@@ -219,6 +231,7 @@ auto EncodePipelineEditChange(const PipelineEditChange& change) -> nlohmann::jso
               {"disconnected_edges", std::move(disconnected)},
               {"inserted_nodes", std::move(inserted)},
               {"kind", "node_graph_topology_change"},
+              {"removed_default_grade_id", std::string{typed.removed_default_grade_id.Value()}},
               {"removed_nodes", std::move(removed)}};
         } else {
           Fail("PipelineEditChange: unhandled typed change");
@@ -234,6 +247,16 @@ auto DecodePipelineEditChange(const nlohmann::json& json) -> PipelineEditChange 
   }
   const auto kind = PipelineEditChangeKindFromText(json.at("kind").get<std::string>());
   switch (kind) {
+    case PipelineEditChangeKind::SetNodeDeletionProtection: {
+      RequireExactObjectKeys(json, {"after_protected", "before_protected", "kind", "node_id"},
+                             "SetNodeDeletionProtection");
+      SetNodeDeletionProtectionChange change;
+      change.node_id = NodeId{RequiredIdFromJson(json, "node_id", "SetNodeDeletionProtection")};
+      change.before_protected = RequireBool(json, "before_protected", "SetNodeDeletionProtection");
+      change.after_protected = RequireBool(json, "after_protected", "SetNodeDeletionProtection");
+      ValidatePipelineEditChange(change);
+      return change;
+    }
     case PipelineEditChangeKind::SetParameter: {
       RequireExactObjectKeys(
           json,
@@ -285,10 +308,13 @@ auto DecodePipelineEditChange(const nlohmann::json& json) -> PipelineEditChange 
       RequireExactObjectKeys(json,
                              {"after_next_color_grade_name_number",
                               "before_next_color_grade_name_number", "incoming_edge", "kind",
-                              "node", "node_id", "outgoing_edge", "predecessor_id", "successor_id"},
+                              "node", "node_id", "outgoing_edge", "predecessor_id", "successor_id",
+                              "establishes_default_grade"},
                              "AddColorGrade");
       AddColorGradeChange change;
       change.node_id        = NodeId{RequiredIdFromJson(json, "node_id", "AddColorGrade")};
+      change.establishes_default_grade =
+          RequireBool(json, "establishes_default_grade", "AddColorGrade");
       change.predecessor_id = NodeId{RequiredIdFromJson(json, "predecessor_id", "AddColorGrade")};
       change.successor_id   = NodeId{RequiredIdFromJson(json, "successor_id", "AddColorGrade")};
       change.before_next_color_grade_name_number =
@@ -304,10 +330,12 @@ auto DecodePipelineEditChange(const nlohmann::json& json) -> PipelineEditChange 
     case PipelineEditChangeKind::RemoveColorGrade: {
       RequireExactObjectKeys(json,
                              {"bridge_edge", "kind", "node", "node_id", "predecessor_id",
-                              "removed_incoming_edge", "removed_outgoing_edge", "successor_id"},
+                              "removed_incoming_edge", "removed_outgoing_edge", "successor_id",
+                              "was_default_grade"},
                              "RemoveColorGrade");
       RemoveColorGradeChange change;
       change.node_id = NodeId{RequiredIdFromJson(json, "node_id", "RemoveColorGrade")};
+      change.was_default_grade = RequireBool(json, "was_default_grade", "RemoveColorGrade");
       change.predecessor_id =
           NodeId{RequiredIdFromJson(json, "predecessor_id", "RemoveColorGrade")};
       change.successor_id = NodeId{RequiredIdFromJson(json, "successor_id", "RemoveColorGrade")};
@@ -407,13 +435,19 @@ auto DecodePipelineEditChange(const nlohmann::json& json) -> PipelineEditChange 
       RequireExactObjectKeys(
           json,
           {"after_next_color_grade_name_number", "before_next_color_grade_name_number",
-           "connected_edges", "disconnected_edges", "inserted_nodes", "kind", "removed_nodes"},
+           "connected_edges", "disconnected_edges", "inserted_nodes", "kind", "removed_nodes",
+           "removed_default_grade_id"},
           "NodeGraphTopologyChange");
       if (!json.at("inserted_nodes").is_array() || !json.at("removed_nodes").is_array() ||
           !json.at("disconnected_edges").is_array() || !json.at("connected_edges").is_array()) {
         Fail("NodeGraphTopologyChange: node and edge lists must be arrays");
       }
       NodeGraphTopologyChange change;
+      if (!json.at("removed_default_grade_id").is_string()) {
+        Fail("NodeGraphTopologyChange: removed_default_grade_id must be a string");
+      }
+      change.removed_default_grade_id =
+          NodeId{json.at("removed_default_grade_id").get<std::string>()};
       change.before_next_color_grade_name_number = RequirePositiveUint64(
           json, "before_next_color_grade_name_number", "NodeGraphTopologyChange");
       change.after_next_color_grade_name_number = RequirePositiveUint64(

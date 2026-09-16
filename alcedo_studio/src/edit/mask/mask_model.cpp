@@ -377,6 +377,7 @@ auto MaskModelToJson(const MaskModel& mask) -> nlohmann::json {
   return {{"id", std::string{mask.id.Value()}},
           {"display_name", mask.display_name},
           {"enabled", mask.enabled},
+          {"deletion_protected", mask.deletion_protected},
           {"opacity", mask.opacity},
           {"invert", mask.invert},
           {"source", std::move(source)},
@@ -398,6 +399,9 @@ auto MaskModelFromJson(const nlohmann::json& json) -> MaskModel {
   if (!json.contains("luminance_range")) {
     Fail("Mask is missing luminance_range");
   }
+  if (!json.contains("deletion_protected") || !json.at("deletion_protected").is_boolean()) {
+    Fail("Mask deletion_protected must be boolean");
+  }
   const auto& source_json = json["source"];
   if (!source_json.contains("kind") || !source_json["kind"].is_string()) {
     Fail("Mask source is missing kind");
@@ -407,6 +411,7 @@ auto MaskModelFromJson(const nlohmann::json& json) -> MaskModel {
   mask.id           = MaskId{json["id"].get<std::string>()};
   mask.display_name = json.value("display_name", std::string{});
   mask.enabled      = json.value("enabled", true);
+  mask.deletion_protected = json.at("deletion_protected").get<bool>();
   mask.opacity      = json.value("opacity", 1.0f);
   mask.invert       = json.value("invert", false);
 #ifdef ALCEDO_ENABLE_BRUSH_MASK

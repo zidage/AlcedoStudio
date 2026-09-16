@@ -61,6 +61,7 @@ namespace {
                                  {"display_name", ""},
                                  {"enabled", true},
                                  {"opacity", 1.0},
+                                 {"deletion_protected", false},
                                  {"invert", false},
                                  {"source", source},
                                  {"color_range", nullptr},
@@ -82,16 +83,18 @@ namespace {
 [[nodiscard]] auto MaskFieldEditKeyIsValid(std::string_view field_key, MaskSourceKind /*kind*/)
     -> bool {
   return field_key == kMaskFieldEnabled || field_key == kMaskFieldInvert ||
-         field_key == kMaskFieldOpacity || field_key == kMaskFieldDisplayName;
+         field_key == kMaskFieldOpacity || field_key == kMaskFieldDisplayName ||
+         field_key == kMaskFieldDeletionProtected;
 }
 
 [[nodiscard]] auto MaskFieldAffectsPixels(std::string_view field_key) -> bool {
-  return field_key != kMaskFieldDisplayName;
+  return field_key != kMaskFieldDisplayName && field_key != kMaskFieldDeletionProtected;
 }
 
 [[nodiscard]] auto MaskFieldValueIsValid(std::string_view field_key, const nlohmann::json& value)
     -> bool {
-  if (field_key == kMaskFieldEnabled || field_key == kMaskFieldInvert) {
+  if (field_key == kMaskFieldEnabled || field_key == kMaskFieldInvert ||
+      field_key == kMaskFieldDeletionProtected) {
     return value.is_boolean();
   }
   if (field_key == kMaskFieldOpacity) {
@@ -117,6 +120,9 @@ namespace {
   }
   if (field_key == kMaskFieldDisplayName) {
     return mask.display_name;
+  }
+  if (field_key == kMaskFieldDeletionProtected) {
+    return mask.deletion_protected;
   }
   return nullptr;
 }
@@ -206,6 +212,7 @@ auto EditorMaskCreationController::MakeCreationMask(const MaskSource& source) co
   mask.id           = mask_id_;
   mask.display_name = CreationDisplayName(kind_);
   mask.source       = source;
+  mask.deletion_protected = document_->DefaultGradeId() == node_id_;
   return mask;
 }
 
@@ -409,10 +416,15 @@ auto EditorMaskCreationController::RemoveMask(const NodeId& grade_id, const Mask
   if (grade_id.Empty() || mask_id.Empty()) {
     return Reject("RemoveMask requires a Color Grade and Mask identity");
   }
-  if (open_ && mask_id_ == mask_id) {
-    if (inserted_ && creating_) {
-      return CancelMaskInput();
-    }
+  // Cancelling an uncommitted creation is rollback, not a user deletion.
+  if (open_ && node_id_ == grade_id && mask_id_ == mask_id && inserted_ && creating_) {
+    return CancelMaskInput();
+  }
+  const auto errors = document_->ValidateUserDeletion(grade_id, mask_id);
+  if (!errors.empty()) {
+    return Reject(errors.front().message);
+  }
+  if (open_ && node_id_ == grade_id && mask_id_ == mask_id) {
     const auto cancelled = CancelMaskInput();
     if (!cancelled.accepted) {
       return cancelled;
@@ -531,6 +543,8 @@ auto EditorMaskCreationController::ApplyLiveMaskField(const std::string&    fiel
       grade->SetMaskOpacity(mask_id_, value.get<float>());
     } else if (field_key == kMaskFieldDisplayName) {
       mask->display_name = value.get<std::string>();
+    } else if (field_key == kMaskFieldDeletionProtected) {
+      grade->SetMaskDeletionProtected(mask_id_, value.get<bool>());
     } else {
       return false;
     }

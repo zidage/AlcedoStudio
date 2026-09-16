@@ -80,6 +80,13 @@ class ColorGradeNodeModel final : public INodeModel {
   void SetEnabled(bool enabled);
   void SetMix(float mix);
 
+  /// Persistent deletion-only protection. Caller holds the document owner's access lock.
+  [[nodiscard]] auto DeletionProtected() const -> bool { return deletion_protected_; }
+  /// Update metadata without invalidating pixels, execution plans, or Mask coverage.
+  void SetDeletionProtected(bool value) { deletion_protected_ = value; }
+  /// Update one Mask's metadata; throws for a missing ID, without changing content revision.
+  void SetMaskDeletionProtected(const MaskId& mask_id, bool value);
+
   /**
    * @brief True when enabled or mix changed since the last @ref ClearMixDirty.
    *
@@ -236,6 +243,7 @@ class ColorGradeNodeModel final : public INodeModel {
   bool  enabled_ = true;
   float mix_     = 1.0f;
   bool  mix_dirty_ = false;
+  bool  deletion_protected_ = false;
   std::array<PortDescriptor, 1> inputs_;
   std::array<PortDescriptor, 1> outputs_;
 };

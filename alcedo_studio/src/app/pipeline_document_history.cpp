@@ -96,8 +96,20 @@ auto PresentationKeyForOperation(PipelineEditOperationKind kind) -> std::string 
 }
 
 auto RenderReasonForBatch(const PipelineEditBatch& batch) -> std::optional<EditorRenderReason> {
+  bool pixel_change = false;
+  for (const auto& change : batch.changes) {
+    if (std::holds_alternative<RenameColorGradeChange>(change) ||
+        std::holds_alternative<SetNodeDeletionProtectionChange>(change)) continue;
+    if (const auto* field = std::get_if<SetMaskFieldChange>(&change);
+        field && (field->field_key == "deletion_protected" || field->field_key == "display_name")) {
+      continue;
+    }
+    pixel_change = true;
+  }
+  if (!pixel_change) return std::nullopt;
   switch (batch.operation_kind) {
     case PipelineEditOperationKind::RenameColorGrade:
+    case PipelineEditOperationKind::SetNodeDeletionProtection:
       return std::nullopt;
     case PipelineEditOperationKind::AddColorGrade:
     case PipelineEditOperationKind::RemoveColorGrade:
@@ -223,6 +235,7 @@ auto CaptureRemoveColorGradeChange(const PipelineDocument& document, const NodeI
   }
   RemoveColorGradeChange change;
   change.node_id                = node_id;
+  change.was_default_grade      = document.DefaultGradeId() == node_id;
   change.node                   = grade->ToJson();
   change.predecessor_id         = incoming->from_node;
   change.successor_id           = outgoing->to_node;
@@ -454,6 +467,25 @@ auto ApplyNodeGraphTopologyChange(PipelineDocument& document, const NodeGraphTop
   if (document.NextColorGradeNameNumber() != expected_counter) {
     return error("NodeGraphTopologyChange expected the stored name-counter value");
   }
+  const auto& removed_default = change.removed_default_grade_id;
+  if (!removed_default.Empty()) {
+    if (forward ? document.DefaultGradeId() != removed_default
+                : !document.DefaultGradeId().Empty()) {
+      return error("NodeGraphTopologyChange default identity does not match the stored value");
+    }
+    if (std::none_of(change.removed_nodes.begin(), change.removed_nodes.end(),
+                     [&](const auto& item) {
+                       return NodeIdFromStoredJson(item.node) == removed_default;
+                     })) {
+      return error("NodeGraphTopologyChange default identity must name a removed Grade");
+    }
+  } else if (forward && !document.DefaultGradeId().Empty() &&
+             std::any_of(change.removed_nodes.begin(), change.removed_nodes.end(),
+                         [&](const auto& item) {
+                           return NodeIdFromStoredJson(item.node) == document.DefaultGradeId();
+                         })) {
+    return error("NodeGraphTopologyChange must record removal of the default Grade identity");
+  }
 
   std::vector<TopologyNodeRemoval>   removed;
   std::vector<TopologyNodeInsertion> inserted;
@@ -508,6 +540,9 @@ auto ApplyNodeGraphTopologyChange(PipelineDocument& document, const NodeGraphTop
     if (!errors.empty()) {
       document.SetNextColorGradeNameNumber(prior_counter);
       return errors;
+    }
+    if (!removed_default.Empty()) {
+      document.SetDefaultGradeId(forward ? NodeId{} : removed_default);
     }
     document.MarkTopologyDirty();
     return {};

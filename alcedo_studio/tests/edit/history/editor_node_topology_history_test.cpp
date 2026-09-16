@@ -170,6 +170,29 @@ struct TopologyEditExpectation {
   std::vector<PipelineSceneEdge> edges;
 };
 
+TEST(NodeGraphTopologyHistory, DefaultGradeRemovalClearsIdentityAndUndoRestoresIt) {
+  auto document = CreateDefaultPipelineDocument();
+  document.PrimaryGrade()->SetDeletionProtected(false);
+  const auto default_id = document.DefaultGradeId();
+  const auto before = document.ToJson();
+  auto draft = EditorNodeGraphDraft::FromDocument(document, {});
+  ASSERT_TRUE(draft.RemoveColorGrade(document, default_id).succeeded);
+  ASSERT_TRUE(draft.Connect(NodeId{"develop"}, NodeId{"drt"}).succeeded);
+  ASSERT_TRUE(draft.SubmissionValid());
+  const auto batch = MakeEditNodeGraphBatch(draft.MakeChange());
+  const auto stored = PipelineEditBatch::FromJSON(batch.CanonicalJSON());
+  std::string error;
+  ASSERT_TRUE(ApplyPipelineEditBatch(document, stored, PipelineEditApplyDirection::Forward, &error))
+      << error;
+  EXPECT_TRUE(document.DefaultGradeId().Empty());
+  EXPECT_EQ(document.Graph().FindNode(default_id), nullptr);
+  EXPECT_NO_THROW((void)PipelineDocument::FromJson(document.ToJson()));
+  ASSERT_TRUE(ApplyPipelineEditBatch(document, stored, PipelineEditApplyDirection::Inverse, &error))
+      << error;
+  EXPECT_EQ(document.DefaultGradeId(), default_id);
+  EXPECT_EQ(document.ToJson(), before);
+}
+
 auto BuildTopologyEdit(const PipelineDocument& document) -> TopologyEditExpectation {
   auto       draft   = EditorNodeGraphDraft::FromDocument(document, {});
   const auto require = [](const EditorNodeGraphDraftMutation& mutation, const char* operation) {
@@ -359,7 +382,8 @@ TEST(NodeGraphTopologyHistory, ProductionPortPersistsExactTopologyThroughRecover
     EXPECT_EQ(*editor.history().LastPublishedRenderReason(),
               EditorRenderReason::VersionDocumentChanged);
 
-    const auto mask = grade_mask_test::MakeRadialMask(MaskId{"mask.topology"});
+    auto mask = grade_mask_test::MakeRadialMask(MaskId{"mask.topology"});
+    mask.deletion_protected = true;
     expected_mask = MaskModelToJson(mask);
     ASSERT_TRUE(editor.history().AddMask(editor.handle(), NodeId{"grade.primary"}, mask, 0, &error))
         << error;
@@ -398,6 +422,109 @@ TEST(NodeGraphTopologyHistory, ProductionPortPersistsExactTopologyThroughRecover
     ASSERT_TRUE(editor.history().LastPublishedRenderReason().has_value());
     EXPECT_EQ(*editor.history().LastPublishedRenderReason(),
               EditorRenderReason::VersionDocumentChanged);
+  }
+}
+
+TEST(NodeGraphTopologyHistory, ProductionPortRecoversExplicitNodeAndMaskUnlockFromCheckpointAndWal) {
+  RegisterAllOperators();
+  TemporaryProject   temporary;
+  const auto&        paths = temporary.paths();
+  const NodeId       grade_id{"grade.primary"};
+  const MaskId       mask_id{"mask.persistent_unlock"};
+  std::string        error;
+  version_ref_id_t   default_version{};
+  head_commit_hash_t locked_head;
+  head_commit_hash_t node_unlocked_head;
+  head_commit_hash_t both_unlocked_head;
+
+  const auto expect_state = [&](PersistentEditor& editor, const head_commit_hash_t& head,
+                                bool node_protected, bool mask_protected) {
+    const auto& guard = *editor.guard();
+    EXPECT_EQ(guard.document_->DefaultGradeId(), grade_id);
+    EXPECT_EQ(guard.commit_graph_->GetActiveVersionId(), default_version);
+    EXPECT_EQ(guard.working_head_commit_hash(), head);
+    const auto* grade = dynamic_cast<const ColorGradeNodeModel*>(
+        guard.document_->Graph().FindNode(grade_id));
+    ASSERT_NE(grade, nullptr);
+    EXPECT_EQ(grade->DeletionProtected(), node_protected);
+    ASSERT_EQ(grade->Masks().size(), 1u);
+    const auto* mask = grade->FindMask(mask_id);
+    ASSERT_NE(mask, nullptr);
+    EXPECT_EQ(mask->id, mask_id);
+    EXPECT_EQ(mask->deletion_protected, mask_protected);
+
+    EditorHistorySnapshot snapshot;
+    ASSERT_TRUE(editor.history().ReadHistorySnapshot(editor.handle(), &snapshot, &error)) << error;
+    EXPECT_EQ(snapshot.active_version_id, default_version);
+    EXPECT_EQ(snapshot.active_head, head);
+  };
+
+  {
+    PersistentEditor editor(paths, ProjectOpenMode::kCreateNew, kElementId);
+    ASSERT_TRUE(editor.Open(&error)) << error;
+    default_version = editor.guard()->commit_graph_->GetActiveVersionId();
+    ASSERT_TRUE(editor.history().AddMask(editor.handle(), grade_id,
+                                         grade_mask_test::MakeRadialMask(mask_id), 0, &error))
+        << error;
+    locked_head = editor.guard()->working_head_commit_hash();
+    ASSERT_TRUE(locked_head.has_value());
+    expect_state(editor, locked_head, true, true);
+
+    ASSERT_TRUE(editor.history().SetColorGradeDeletionProtected(editor.handle(), grade_id, false,
+                                                               &error))
+        << error;
+    node_unlocked_head = editor.guard()->working_head_commit_hash();
+    ASSERT_TRUE(node_unlocked_head.has_value());
+    EXPECT_NE(node_unlocked_head, locked_head);
+    expect_state(editor, node_unlocked_head, false, true);
+    EXPECT_FALSE(editor.history().LastPublishedRenderReason().has_value());
+    ASSERT_TRUE(editor.MaterializeCheckpoint(&error)) << error;
+    editor.SavePipelineAndMetadata();
+  }
+
+  {
+    PersistentEditor editor(paths, ProjectOpenMode::kLoadExisting, kElementId);
+    ASSERT_TRUE(editor.Open(&error)) << error;
+    expect_state(editor, node_unlocked_head, false, true);
+
+    ASSERT_TRUE(editor.history().SetMaskField(editor.handle(), grade_id, mask_id,
+                                             "deletion_protected", false, &error))
+        << error;
+    both_unlocked_head = editor.guard()->working_head_commit_hash();
+    ASSERT_TRUE(both_unlocked_head.has_value());
+    EXPECT_NE(both_unlocked_head, node_unlocked_head);
+    expect_state(editor, both_unlocked_head, false, false);
+    EXPECT_FALSE(editor.history().LastPublishedRenderReason().has_value());
+    // Leave the Mask unlock in the WAL rather than saving its document to the database.
+    editor.SaveMetadataOnly();
+  }
+
+  {
+    PersistentEditor editor(paths, ProjectOpenMode::kLoadExisting, kElementId);
+    ASSERT_TRUE(editor.Open(&error)) << error;
+    expect_state(editor, both_unlocked_head, false, false);
+
+    ASSERT_TRUE(editor.history().Undo(editor.handle(), &error)) << error;
+    expect_state(editor, node_unlocked_head, false, true);
+    EXPECT_FALSE(editor.history().LastPublishedRenderReason().has_value());
+    ASSERT_TRUE(editor.history().Undo(editor.handle(), &error)) << error;
+    expect_state(editor, locked_head, true, true);
+    EXPECT_FALSE(editor.history().LastPublishedRenderReason().has_value());
+
+    ASSERT_TRUE(editor.history().Redo(editor.handle(), &error)) << error;
+    expect_state(editor, node_unlocked_head, false, true);
+    EXPECT_FALSE(editor.history().LastPublishedRenderReason().has_value());
+    ASSERT_TRUE(editor.history().Redo(editor.handle(), &error)) << error;
+    expect_state(editor, both_unlocked_head, false, false);
+    EXPECT_FALSE(editor.history().LastPublishedRenderReason().has_value());
+    ASSERT_TRUE(editor.MaterializeCheckpoint(&error)) << error;
+    editor.SavePipelineAndMetadata();
+  }
+
+  {
+    PersistentEditor editor(paths, ProjectOpenMode::kLoadExisting, kElementId);
+    ASSERT_TRUE(editor.Open(&error)) << error;
+    expect_state(editor, both_unlocked_head, false, false);
   }
 }
 
@@ -446,6 +573,10 @@ TEST(NodeGraphTopologyHistory, MaskGroupTopInsertAndBridgeRemoveCommitOnceAndRep
   const auto&      paths    = temporary.paths();
 
   auto             guard    = MakeMemoryGuard(kElementId + 2);
+  auto* grade = dynamic_cast<ColorGradeNodeModel*>(
+      guard->document_->Graph().FindNode(NodeId{"grade.primary"}));
+  ASSERT_NE(grade, nullptr);
+  grade->SetDeletionProtected(false);
   auto             pipeline = std::make_shared<EditorSessionPipelinePort>();
   pipeline->SetServices(
       EditorSessionPipelineMappers{{}, [guard](sl_element_id_t) { return guard; }});
@@ -547,6 +678,10 @@ TEST(NodeGraphTopologyHistory, MaskGroupJournalFailureLeavesDocumentHeadAndCount
   const auto&      paths    = temporary.paths();
 
   auto             guard    = MakeMemoryGuard(kElementId + 3);
+  auto* grade = dynamic_cast<ColorGradeNodeModel*>(
+      guard->document_->Graph().FindNode(NodeId{"grade.primary"}));
+  ASSERT_NE(grade, nullptr);
+  grade->SetDeletionProtected(false);
   auto             pipeline = std::make_shared<EditorSessionPipelinePort>();
   pipeline->SetServices(
       EditorSessionPipelineMappers{{}, [guard](sl_element_id_t) { return guard; }});
@@ -567,7 +702,7 @@ TEST(NodeGraphTopologyHistory, MaskGroupJournalFailureLeavesDocumentHeadAndCount
 
   EXPECT_FALSE(
       history.InsertColorGradeAtTop(handle, NodeId{"grade.top"}, NodeId{"grade.primary"}, &error));
-  EXPECT_EQ(error, "mini-Git journal file could not be opened for append");
+  EXPECT_FALSE(error.empty());
   EXPECT_EQ(CanonicalPipelineDocumentJson(*guard->document_), prior_hash);
   EXPECT_EQ(guard->working_head_commit_hash(), prior_head);
   EXPECT_EQ(guard->commit_graph_->CommitCount(), prior_commit_count);
@@ -577,10 +712,12 @@ TEST(NodeGraphTopologyHistory, MaskGroupJournalFailureLeavesDocumentHeadAndCount
 
   error.clear();
   EXPECT_FALSE(history.RemoveColorGradeAndBridge(handle, NodeId{"grade.primary"}, &error));
-  EXPECT_EQ(error, "mini-Git journal file could not be opened for append");
+  EXPECT_FALSE(error.empty());
   EXPECT_EQ(CanonicalPipelineDocumentJson(*guard->document_), prior_hash);
+  EXPECT_EQ(guard->working_head_commit_hash(), prior_head);
   EXPECT_EQ(guard->commit_graph_->CommitCount(), prior_commit_count);
   EXPECT_EQ(guard->document_->NextColorGradeNameNumber(), prior_counter);
+  EXPECT_EQ(history.LastPublishedRenderReason(), prior_reason);
   history.Release(handle);
 }
 

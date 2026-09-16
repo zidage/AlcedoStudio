@@ -112,8 +112,12 @@ class EditorNodeGraphDraft {
 
   /**
    * @brief Remove one Color Grade and its incident edges. Does not bridge neighbors.
+   * @pre @p document is the current live document under owner access for this draft.
+   * Rejects protected live nodes or owned Masks before changing the draft or reversal record.
+   * Newly inserted clean draft nodes have no persisted deletion protection.
    */
-  auto RemoveColorGrade(const NodeId& node_id) -> EditorNodeGraphDraftMutation;
+  auto RemoveColorGrade(const PipelineDocument& document, const NodeId& node_id)
+      -> EditorNodeGraphDraftMutation;
 
   /**
    * @brief Exclusive-port connect from @p source_id image output to @p destination_id image input.
@@ -245,6 +249,8 @@ class EditorNodeGraphDraft {
   [[nodiscard]] static auto ToProjection(const PipelineSceneEdge& edge) -> EditorNodeEdgeProjection;
 
   EditorNodeGraphDraftIdentity          identity_{};
+  // Bound default identity is needed to serialize deletion and its inverse, not a live mirror.
+  NodeId base_default_grade_id_;
   std::vector<EditorNodeProjection>     nodes_;
   std::vector<EditorNodeEdgeProjection> edges_;
   std::map<NodeId, nlohmann::json>      node_json_;

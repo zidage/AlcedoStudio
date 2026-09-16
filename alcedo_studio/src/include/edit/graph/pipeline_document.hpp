@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -36,6 +37,16 @@ class PipelineDocument {
   [[nodiscard]] auto Geometry() const -> const ImageGeometryModel& { return geometry_; }
   [[nodiscard]] auto Graph() -> PipelineGraph& { return graph_; }
   [[nodiscard]] auto Graph() const -> const PipelineGraph& { return graph_; }
+
+  /// Persistent default identity, independent of current-panel routing; empty after deletion.
+  [[nodiscard]] auto DefaultGradeId() const -> const NodeId& { return default_grade_id_; }
+  /// Restore identity on the owner thread; rejects nonempty IDs that are not Color Grades.
+  void SetDefaultGradeId(NodeId id);
+  /// Preflight a user deletion without mutation. Node removal checks every owned Mask.
+  /// Call under owner access before any batch mutation; trusted history replay does not call this.
+  [[nodiscard]] auto ValidateUserDeletion(const NodeId& node_id,
+                                         std::optional<MaskId> mask_id = std::nullopt) const
+      -> std::vector<GraphValidationError>;
 
   /**
    * @brief Return the next automatically assigned Color Grade display-name number.
@@ -87,6 +98,7 @@ class PipelineDocument {
   ImageGeometryModel  geometry_{};
   PipelineGraph       graph_{};
   std::uint64_t       next_color_grade_name_number_ = kInitialNextColorGradeNameNumber;
+  NodeId              default_grade_id_;
   bool                topology_dirty_ = true;
 };
 

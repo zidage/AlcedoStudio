@@ -941,6 +941,29 @@ bool EditorNodeController::renameColorGrade(const QString& node_id, const QStrin
   return true;
 }
 
+bool EditorNodeController::setColorGradeDeletionProtected(const QString& node_id,
+                                                        bool deletion_protected) {
+  if (!ValidateCommandGeneration()) return false;
+  if (draft_ != nullptr) {
+    SetLastError(tr("Finish the node graph before changing deletion protection"));
+    return false;
+  }
+  const auto id = NodeIdFromQString(node_id);
+  if (!IsColorGrade(id)) {
+    SetLastError(tr("Only a Color Grade has editable deletion protection"));
+    return false;
+  }
+  SetCommandActive(true);
+  const auto reset_active = qScopeGuard([this] { SetCommandActive(false); });
+  const auto result = session_->SubmitSetColorGradeDeletionProtected(id, deletion_protected);
+  if (alcedo::EditorSessionResultIsFailure(result.kind)) {
+    SetLastError(QString::fromStdString(result.message));
+    return false;
+  }
+  refreshFromSession();
+  return true;
+}
+
 bool EditorNodeController::deleteColorGrade(const QString& node_id) {
   if (!ValidateCommandGeneration()) {
     return false;
@@ -953,9 +976,14 @@ bool EditorNodeController::deleteColorGrade(const QString& node_id) {
   if (!EnsureDraft()) {
     return false;
   }
+  const auto document = session_->pipeline_document();
+  if (!document) {
+    SetLastError(tr("No editable node graph is available"));
+    return false;
+  }
   SetCommandActive(true);
   const auto reset_active = qScopeGuard([this] { SetCommandActive(false); });
-  auto       mutation     = draft_->RemoveColorGrade(id);
+  auto       mutation     = draft_->RemoveColorGrade(*document, id);
   if (!mutation.succeeded) {
     SetLastError(PresentNodeGraphDraftMutation(mutation));
     return false;

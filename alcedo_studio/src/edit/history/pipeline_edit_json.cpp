@@ -275,9 +275,11 @@ auto CanonicalMaskSourceJson(const nlohmann::json& source, std::string_view cont
     -> nlohmann::json {
   RequireObject(source, context);
   RejectNonFiniteNumbers(source, context);
-  nlohmann::json probe{{"id", "source.probe"},   {"display_name", ""},        {"enabled", true},
-                       {"opacity", 1.0},         {"invert", false},           {"source", source},
-                       {"color_range", nullptr}, {"luminance_range", nullptr}};
+  nlohmann::json probe{{"id", "source.probe"},         {"display_name", ""},
+                       {"deletion_protected", false},  {"enabled", true},
+                       {"opacity", 1.0},               {"invert", false},
+                       {"source", source},
+                       {"color_range", nullptr},       {"luminance_range", nullptr}};
   try {
     const auto parsed           = MaskModelFromJson(probe);
     const auto canonical_source = MaskModelToJson(parsed).at("source");

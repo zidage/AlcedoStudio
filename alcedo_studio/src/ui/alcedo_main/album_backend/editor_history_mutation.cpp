@@ -297,6 +297,26 @@ auto PublishAppliedTypedBatch(HistoryWorkingState& state, EditorHistoryState& hi
   std::optional<PipelineDocument> pre_apply_document;
   const auto                      prior_panel_node = state.panel_projection_node_id;
   if (!document_already_at_after) {
+    // Check every actual removal against the live before-state, before any unlock or mutation.
+    for (const auto& change : batch.changes) {
+      std::vector<GraphValidationError> errors;
+      if (const auto* removed_grade = std::get_if<RemoveColorGradeChange>(&change)) {
+        errors = state.pipeline_guard->document_->ValidateUserDeletion(removed_grade->node_id);
+      } else if (const auto* removed_mask = std::get_if<RemoveMaskChange>(&change)) {
+        errors = state.pipeline_guard->document_->ValidateUserDeletion(removed_mask->node_id,
+                                                                       removed_mask->mask_id);
+      } else if (const auto* topology = std::get_if<NodeGraphTopologyChange>(&change)) {
+        for (const auto& removed_node : topology->removed_nodes) {
+          auto rejected = state.pipeline_guard->document_->ValidateUserDeletion(
+              NodeId{removed_node.node.at("id").get<std::string>()});
+          errors.insert(errors.end(), rejected.begin(), rejected.end());
+        }
+      }
+      if (!errors.empty()) {
+        if (error) *error = errors.front().message;
+        return false;
+      }
+    }
     pre_apply_document = ClonePipelineDocument(*state.pipeline_guard->document_);
     if (!ApplyPipelineEditBatch(*state.pipeline_guard->document_, batch,
                                 PipelineEditApplyDirection::Forward, error,
@@ -687,6 +707,41 @@ auto EditorHistoryMutation::RenameColorGrade(const alcedo::EditorHistoryGuardHan
   return PublishAppliedTypedBatch(*state, state_, batch, false, error);
 }
 
+/// Commit deletion metadata under the render lock; equal values clear stale render intent only.
+auto EditorHistoryMutation::SetColorGradeDeletionProtected(
+    const alcedo::EditorHistoryGuardHandle& guard, const alcedo::NodeId& node_id,
+    bool deletion_protected, std::string* error, bool* changed) -> bool {
+  if (changed) *changed = false;
+  auto state = state_.EnsureWorkingState(guard.element_id, error);
+  if (!state) return false;
+  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_ || !state->history) {
+    if (error) *error = "Editor history graph is unavailable";
+    return false;
+  }
+  if (!state->pipeline_guard->pipeline_ || !state->pipeline_guard->document_) {
+    if (error) *error = "Live pipeline document is unavailable";
+    return false;
+  }
+  auto render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
+  const auto* grade = dynamic_cast<const ColorGradeNodeModel*>(
+      state->pipeline_guard->document_->Graph().FindNode(node_id));
+  if (grade == nullptr) {
+    if (error) *error = "Color Grade node is missing: " + std::string{node_id.Value()};
+    return false;
+  }
+  if (grade->DeletionProtected() == deletion_protected) {
+    state_.RecordPublishedRenderReason(std::nullopt);
+    return true;
+  }
+  auto batch = PipelineEditBatch::Make(
+      PipelineEditOperationKind::SetNodeDeletionProtection,
+      {SetNodeDeletionProtectionChange{node_id, grade->DeletionProtected(), deletion_protected}},
+      PresentationKeyForOperation(PipelineEditOperationKind::SetNodeDeletionProtection));
+  if (!PublishAppliedTypedBatch(*state, state_, batch, false, error)) return false;
+  if (changed) *changed = true;
+  return true;
+}
+
 auto EditorHistoryMutation::InsertColorGradeAtTop(const alcedo::EditorHistoryGuardHandle& guard,
                                                   const alcedo::NodeId& new_id,
                                                   const alcedo::NodeId& expected_successor_id,
@@ -801,6 +856,7 @@ auto EditorHistoryMutation::AddMask(const alcedo::EditorHistoryGuardHandle& guar
   }
   auto render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
   const auto mask_id = mask.id;
+  mask.deletion_protected = state->pipeline_guard->document_->DefaultGradeId() == node_id;
   auto       json    = MaskModelToJson(mask);
   auto batch = MakeAddMaskBatch(node_id, mask_id, std::move(json), display_index);
   return PublishAppliedTypedBatch(*state, state_, batch, false, error);
@@ -907,8 +963,14 @@ auto EditorHistoryMutation::SetMaskField(const alcedo::EditorHistoryGuardHandle&
     before = mask->invert;
   } else if (field_key == "opacity") {
     before = mask->opacity;
+  } else if (field_key == "deletion_protected") {
+    before = mask->deletion_protected;
   } else {
     before = mask->display_name;
+  }
+  if (field_key == "deletion_protected" && before == after_value) {
+    state_.RecordPublishedRenderReason(std::nullopt);
+    return true;
   }
   auto batch = MakeSetMaskFieldBatch(node_id, mask_id, std::move(field_key), std::move(before),
                                      std::move(after_value));

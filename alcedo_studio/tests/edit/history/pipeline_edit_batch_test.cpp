@@ -38,8 +38,8 @@ namespace {
 constexpr char kOldRootChainHash[]      = "b086b9015c867f88aeca8730b1b8d55c";
 constexpr char kOldOrdinaryCommitHash[] = "02c397162017dc758e0c06ed5b9e0529";
 
-auto           LoadGolden(const std::string& name) -> std::string {
-  const std::filesystem::path path = std::filesystem::path(PIPELINE_EDIT_BATCH_GOLDEN_DIR) / name;
+auto           LoadExpectedBytes(const std::string& name) -> std::string {
+  const std::filesystem::path path = std::filesystem::path(PIPELINE_EDIT_BATCH_EXPECTED_SERIALIZED_DIR) / name;
   std::ifstream               input(path, std::ios::binary);
   EXPECT_TRUE(input) << path.string();
   std::string text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
@@ -195,30 +195,111 @@ TEST(PipelineEditChange, EncodeDecodeAndValidateWithoutBatchMake) {
   EXPECT_THROW(ValidatePipelineEditChange(incomplete), std::runtime_error);
 }
 
-TEST(PipelineEditBatch, TypedBatchGoldenBytesAndHashRemainStable) {
-  const auto golden = LoadGolden("set_parameter_batch.json");
-  const auto parsed = nlohmann::json::parse(golden);
+TEST(PipelineEditChange, DeletionProtectionRoundTripPreservesBothBooleanTransitions) {
+  for (const bool before : {false, true}) {
+    SCOPED_TRACE(before);
+    SetNodeDeletionProtectionChange node;
+    node.node_id = NodeId{"grade.primary"};
+    node.before_protected = before;
+    node.after_protected = !before;
+    const auto node_batch = PipelineEditBatch::Make(
+        PipelineEditOperationKind::SetNodeDeletionProtection, {node},
+        "history.operation.set_node_deletion_protection");
+    const auto restored_node_batch = PipelineEditBatch::FromJSON(node_batch.CanonicalJSON());
+    ASSERT_EQ(restored_node_batch.changes.size(), 1u);
+    const auto& restored_node =
+        std::get<SetNodeDeletionProtectionChange>(restored_node_batch.changes.front());
+    EXPECT_EQ(restored_node.node_id, node.node_id);
+    EXPECT_EQ(restored_node.before_protected, before);
+    EXPECT_EQ(restored_node.after_protected, !before);
+
+    SetMaskFieldChange mask;
+    mask.node_id = node.node_id;
+    mask.mask_id = MaskId{"mask.radial"};
+    mask.field_key = "deletion_protected";
+    mask.before_value = before;
+    mask.after_value = !before;
+    const auto mask_batch = PipelineEditBatch::Make(PipelineEditOperationKind::SetMaskField,
+                                                   {mask}, "history.operation.set_mask_field");
+    const auto restored_mask_batch = PipelineEditBatch::FromJSON(mask_batch.CanonicalJSON());
+    ASSERT_EQ(restored_mask_batch.changes.size(), 1u);
+    const auto& restored_mask = std::get<SetMaskFieldChange>(restored_mask_batch.changes.front());
+    EXPECT_EQ(restored_mask.node_id, mask.node_id);
+    EXPECT_EQ(restored_mask.mask_id, mask.mask_id);
+    EXPECT_EQ(restored_mask.field_key, "deletion_protected");
+    ASSERT_TRUE(restored_mask.before_value.is_boolean());
+    ASSERT_TRUE(restored_mask.after_value.is_boolean());
+    EXPECT_EQ(restored_mask.before_value.get<bool>(), before);
+    EXPECT_EQ(restored_mask.after_value.get<bool>(), !before);
+  }
+}
+
+TEST(PipelineEditChange, DeletionProtectionRejectsMissingFieldsAndNonBooleanValues) {
+  SetNodeDeletionProtectionChange node;
+  node.node_id = NodeId{"grade.primary"};
+  node.before_protected = true;
+  node.after_protected = false;
+  SetMaskFieldChange mask;
+  mask.node_id = node.node_id;
+  mask.mask_id = MaskId{"mask.radial"};
+  mask.field_key = "deletion_protected";
+  mask.before_value = true;
+  mask.after_value = false;
+
+  const auto node_json = EncodePipelineEditChange(node);
+  const auto mask_json = EncodePipelineEditChange(mask);
+  const std::vector<nlohmann::json> non_booleans{
+      nullptr, 0, 1, "false", "true", nlohmann::json::array(), nlohmann::json::object()};
+  for (const auto* field : {"before_protected", "after_protected"}) {
+    SCOPED_TRACE(field);
+    auto missing = node_json;
+    missing.erase(field);
+    EXPECT_THROW((void)DecodePipelineEditChange(missing), std::runtime_error);
+    for (const auto& value : non_booleans) {
+      SCOPED_TRACE(value.dump());
+      auto malformed = node_json;
+      malformed[field] = value;
+      EXPECT_THROW((void)DecodePipelineEditChange(malformed), std::runtime_error);
+    }
+  }
+  for (const auto* field : {"before_value", "after_value"}) {
+    SCOPED_TRACE(field);
+    auto missing = mask_json;
+    missing.erase(field);
+    EXPECT_THROW((void)DecodePipelineEditChange(missing), std::runtime_error);
+    for (const auto& value : non_booleans) {
+      SCOPED_TRACE(value.dump());
+      auto malformed = mask_json;
+      malformed[field] = value;
+      EXPECT_THROW((void)DecodePipelineEditChange(malformed), std::runtime_error);
+    }
+  }
+}
+
+TEST(PipelineEditBatch, TypedBatchExpectedBytesAndHashRemainStable) {
+  const auto expected_bytes = LoadExpectedBytes("set_parameter_batch.json");
+  const auto parsed = nlohmann::json::parse(expected_bytes);
   EXPECT_FALSE(parsed.contains("kind"));
   EXPECT_FALSE(parsed.contains("operator_type"));
   EXPECT_FALSE(parsed.contains("stage_name"));
   EXPECT_FALSE(parsed.at("changes").at(0).contains("operator_type"));
   EXPECT_FALSE(parsed.at("changes").at(0).contains("stage_name"));
   const auto batch = PipelineEditBatch::FromJSON(parsed);
-  EXPECT_EQ(batch.CanonicalJSON().dump(), golden);
+  EXPECT_EQ(batch.CanonicalJSON().dump(), expected_bytes);
 
   const root_id_t root{0x1122334455667788ULL, 0x99aabbccddeeff00ULL};
   const auto      commit = edit_history_test::EditCommitAccess::MakePipelineEditAtTimestamp(
       root, std::nullopt, 42, batch);
-  const auto golden_input = IndependentCommitHashInput(root, 42, golden);
-  EXPECT_EQ(commit.CanonicalHashInput(), golden_input);
-  const auto expected_hash = Hash128::Compute(golden_input.data(), golden_input.size());
+  const auto expected_hash_input = IndependentCommitHashInput(root, 42, expected_bytes);
+  EXPECT_EQ(commit.CanonicalHashInput(), expected_hash_input);
+  const auto expected_hash = Hash128::Compute(expected_hash_input.data(), expected_hash_input.size());
   EXPECT_EQ(commit.GetCommitHash(), expected_hash);
-  EXPECT_EQ(expected_hash.ToString(), LoadGolden("set_parameter_commit_hash.txt"));
+  EXPECT_EQ(expected_hash.ToString(), LoadExpectedBytes("set_parameter_commit_hash.txt"));
 
   const auto root_input = IndependentRootChainInput(root);
   const auto root_chain = Hash128::Compute(root_input.data(), root_input.size());
   EXPECT_EQ(ComputeRootChainHash(root), root_chain);
-  EXPECT_EQ(root_chain.ToString(), LoadGolden("root_chain_hash.txt"));
+  EXPECT_EQ(root_chain.ToString(), LoadExpectedBytes("root_chain_hash.txt"));
   EXPECT_NE(root_chain.ToString(), kOldRootChainHash);
 
   const auto fold_input = [&]() {
@@ -229,19 +310,19 @@ TEST(PipelineEditBatch, TypedBatchGoldenBytesAndHashRemainStable) {
   }();
   const auto folded = Hash128::Compute(fold_input.data(), fold_input.size());
   EXPECT_EQ(FoldTransactionChainHash(root_chain, commit.GetCommitHash()), folded);
-  EXPECT_EQ(folded.ToString(), LoadGolden("set_parameter_chain_hash.txt"));
+  EXPECT_EQ(folded.ToString(), LoadExpectedBytes("set_parameter_chain_hash.txt"));
 }
 
-TEST(PipelineEditBatch, TypedCommitAndChainGoldenIdentitySurvivesLegacyRemoval) {
-  const auto golden = LoadGolden("set_parameter_batch.json");
-  const auto parsed = nlohmann::json::parse(golden);
+TEST(PipelineEditBatch, TypedCommitAndChainExpectedSerializedIdentitySurvivesLegacyRemoval) {
+  const auto expected_bytes = LoadExpectedBytes("set_parameter_batch.json");
+  const auto parsed = nlohmann::json::parse(expected_bytes);
   EXPECT_FALSE(parsed.contains("kind"));
   EXPECT_FALSE(parsed.contains("operator_type"));
   EXPECT_FALSE(parsed.contains("stage_name"));
   EXPECT_FALSE(parsed.contains("merge_field_keys"));
   EXPECT_FALSE(parsed.contains("conflicts"));
   const auto batch = PipelineEditBatch::FromJSON(parsed);
-  EXPECT_EQ(batch.CanonicalJSON().dump(), golden);
+  EXPECT_EQ(batch.CanonicalJSON().dump(), expected_bytes);
 
   const root_id_t root{0x1122334455667788ULL, 0x99aabbccddeeff00ULL};
   const auto      commit = edit_history_test::EditCommitAccess::MakePipelineEditAtTimestamp(
@@ -252,38 +333,38 @@ TEST(PipelineEditBatch, TypedCommitAndChainGoldenIdentitySurvivesLegacyRemoval) 
   EXPECT_FALSE(commit_json.contains("merge_field_keys"));
   EXPECT_FALSE(commit_json.contains("operator_type"));
   EXPECT_FALSE(commit_json.contains("stage_name"));
-  EXPECT_EQ(commit_json.at("edit_payload").dump(), golden);
+  EXPECT_EQ(commit_json.at("edit_payload").dump(), expected_bytes);
 
-  const auto golden_input = IndependentCommitHashInput(root, 42, golden);
-  EXPECT_EQ(commit.CanonicalHashInput(), golden_input);
-  const auto expected_hash = Hash128::Compute(golden_input.data(), golden_input.size());
+  const auto expected_hash_input = IndependentCommitHashInput(root, 42, expected_bytes);
+  EXPECT_EQ(commit.CanonicalHashInput(), expected_hash_input);
+  const auto expected_hash = Hash128::Compute(expected_hash_input.data(), expected_hash_input.size());
   EXPECT_EQ(commit.GetCommitHash(), expected_hash);
-  EXPECT_EQ(expected_hash.ToString(), LoadGolden("set_parameter_commit_hash.txt"));
+  EXPECT_EQ(expected_hash.ToString(), LoadExpectedBytes("set_parameter_commit_hash.txt"));
   EXPECT_NE(expected_hash.ToString(), kOldOrdinaryCommitHash);
 
   const auto root_input = IndependentRootChainInput(root);
   const auto root_chain = Hash128::Compute(root_input.data(), root_input.size());
   EXPECT_EQ(ComputeRootChainHash(root), root_chain);
-  EXPECT_EQ(root_chain.ToString(), LoadGolden("root_chain_hash.txt"));
+  EXPECT_EQ(root_chain.ToString(), LoadExpectedBytes("root_chain_hash.txt"));
 
   const auto folded = FoldTransactionChainHash(root_chain, commit.GetCommitHash());
-  EXPECT_EQ(folded.ToString(), LoadGolden("set_parameter_chain_hash.txt"));
+  EXPECT_EQ(folded.ToString(), LoadExpectedBytes("set_parameter_chain_hash.txt"));
 }
 
-TEST(PipelineEditBatch, RemoveColorGradeGoldenBytesRemainStable) {
-  const auto golden = LoadGolden("remove_color_grade_batch.json");
+TEST(PipelineEditBatch, RemoveColorGradeExpectedBytesRemainStable) {
+  const auto expected_bytes = LoadExpectedBytes("remove_color_grade_batch.json");
   const auto batch  = MakeRemoveGradeBatch();
-  EXPECT_EQ(batch.CanonicalJSON().dump(), golden);
-  EXPECT_EQ(PipelineEditBatch::FromJSON(nlohmann::json::parse(golden)).CanonicalJSON().dump(),
-            golden);
+  EXPECT_EQ(batch.CanonicalJSON().dump(), expected_bytes);
+  EXPECT_EQ(PipelineEditBatch::FromJSON(nlohmann::json::parse(expected_bytes)).CanonicalJSON().dump(),
+            expected_bytes);
 }
 
-TEST(PipelineEditBatch, ReconnectGoldenBytesRemainStable) {
-  const auto golden = LoadGolden("reconnect_color_grade_batch.json");
+TEST(PipelineEditBatch, ReconnectExpectedBytesRemainStable) {
+  const auto expected_bytes = LoadExpectedBytes("reconnect_color_grade_batch.json");
   const auto batch  = MakeReconnectBatch();
-  EXPECT_EQ(batch.CanonicalJSON().dump(), golden);
-  EXPECT_EQ(PipelineEditBatch::FromJSON(nlohmann::json::parse(golden)).CanonicalJSON().dump(),
-            golden);
+  EXPECT_EQ(batch.CanonicalJSON().dump(), expected_bytes);
+  EXPECT_EQ(PipelineEditBatch::FromJSON(nlohmann::json::parse(expected_bytes)).CanonicalJSON().dump(),
+            expected_bytes);
 }
 
 TEST(PipelineEditBatch, RoundTripForEveryChangeVariant) {
@@ -595,10 +676,10 @@ TEST(PipelineEditBatch, LocaleIndependentHashEquality) {
 }
 
 TEST(PipelineEditBatch, FuzzParseRejectsNonCanonicalPayloads) {
-  const auto   golden = LoadGolden("set_parameter_batch.json");
+  const auto   expected_bytes = LoadExpectedBytes("set_parameter_batch.json");
   std::mt19937 rng(20260901);
   for (int i = 0; i < 64; ++i) {
-    std::string mutated = golden;
+    std::string mutated = expected_bytes;
     if (mutated.empty()) {
       break;
     }
