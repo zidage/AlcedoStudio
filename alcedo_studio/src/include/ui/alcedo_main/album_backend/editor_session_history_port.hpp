@@ -69,6 +69,10 @@ class EditorSessionHistoryPort final : public alcedo::IEditorHistoryPort {
                      alcedo::NodeGraphTopologyChange change, std::string* error) -> bool override;
   auto RenameColorGrade(const alcedo::EditorHistoryGuardHandle& guard, const alcedo::NodeId& node_id,
                         std::string display_name, std::string* error) -> bool override;
+  /// Serialize a deletion-lock edit; equal values do not create a history commit.
+  auto SetColorGradeDeletionProtected(const alcedo::EditorHistoryGuardHandle& guard,
+                                      const alcedo::NodeId& node_id, bool deletion_protected,
+                                      std::string* error, bool* changed = nullptr) -> bool override;
   auto InsertColorGradeAtTop(const alcedo::EditorHistoryGuardHandle& guard,
                              const alcedo::NodeId& new_id,
                              const alcedo::NodeId& expected_successor_id, std::string* error)

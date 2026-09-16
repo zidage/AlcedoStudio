@@ -205,7 +205,7 @@ target_include_directories(PipelineDocumentCheckpointTest
 target_link_libraries(PipelineDocumentCheckpointTest
   EditHistory EditGraph ProjectService GTest::gtest_main)
 target_compile_definitions(PipelineDocumentCheckpointTest PRIVATE
-  PIPELINE_HISTORY_FORMAT_GOLDEN_DIR="${ALCEDO_TEST_ROOT}/edit/history/goldens")
+  PIPELINE_HISTORY_FORMAT_EXPECTED_SERIALIZED_DIR="${ALCEDO_TEST_ROOT}/edit/history/expected_serialized")
 gtest_discover_tests(PipelineDocumentCheckpointTest
   TEST_PREFIX "PipelineDocumentCheckpointTest."
   PROPERTIES LABELS "ci_core_flow;edit;history")
@@ -228,7 +228,7 @@ target_include_directories(PipelineEditBatchTest PUBLIC ${ALCEDO_INCLUDE_DIR}
   ${ALCEDO_TEST_ROOT}/edit/graph)
 target_link_libraries(PipelineEditBatchTest EditHistory GTest::gtest_main)
 target_compile_definitions(PipelineEditBatchTest PRIVATE
-  PIPELINE_EDIT_BATCH_GOLDEN_DIR="${ALCEDO_TEST_ROOT}/edit/history/goldens")
+  PIPELINE_EDIT_BATCH_EXPECTED_SERIALIZED_DIR="${ALCEDO_TEST_ROOT}/edit/history/expected_serialized")
 gtest_discover_tests(PipelineEditBatchTest TEST_PREFIX "PipelineEditBatchTest."
   PROPERTIES LABELS "ci_core_flow;edit;history")
 alcedo_register_test_target(PipelineEditBatchTest edit)

@@ -793,6 +793,18 @@ auto EditorSessionController::SubmitRenameColorGrade(const alcedo::NodeId& node_
   return session_backend_->RenameColorGrade(node_id, std::move(display_name));
 }
 
+auto EditorSessionController::SubmitSetColorGradeDeletionProtected(
+    const alcedo::NodeId& node_id, bool deletion_protected) -> alcedo::EditorSessionResult {
+  if (!session_backend_) {
+    alcedo::EditorSessionResult result;
+    result.kind    = alcedo::EditorSessionResultKind::Rejected;
+    result.state   = session_state();
+    result.message = "Editor session backend is unavailable";
+    return result;
+  }
+  return session_backend_->SetColorGradeDeletionProtected(node_id, deletion_protected);
+}
+
 auto EditorSessionController::SubmitNodeGraphTopologyEdit(
     const alcedo::NodeGraphTopologyChange& change) -> alcedo::EditorSessionResult {
   if (!session_backend_) {

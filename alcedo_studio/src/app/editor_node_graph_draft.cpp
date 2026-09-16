@@ -96,6 +96,7 @@ auto EditorNodeGraphDraft::FromDocument(const PipelineDocument& document,
     -> EditorNodeGraphDraft {
   EditorNodeGraphDraft draft;
   draft.identity_               = std::move(identity);
+  draft.base_default_grade_id_ = document.DefaultGradeId();
   draft.base_next_name_number_  = document.NextColorGradeNameNumber();
   draft.draft_next_name_number_ = draft.base_next_name_number_;
   const auto& graph             = document.Graph();
@@ -507,7 +508,7 @@ auto EditorNodeGraphDraft::AddColorGrade(NodeId node_id) -> EditorNodeGraphDraft
   return FinishMutation(std::move(result));
 }
 
-auto EditorNodeGraphDraft::RemoveColorGrade(const NodeId& node_id)
+auto EditorNodeGraphDraft::RemoveColorGrade(const PipelineDocument& document, const NodeId& node_id)
     -> EditorNodeGraphDraftMutation {
   EditorNodeGraphDraftMutation result;
   const auto*                  node = FindNode(node_id);
@@ -520,6 +521,13 @@ auto EditorNodeGraphDraft::RemoveColorGrade(const NodeId& node_id)
     result.issue = NodeGraphDraftIssue::OnlyColorGradeCanBeDeleted;
     result.error = "Only a Color Grade can be deleted";
     return result;
+  }
+  if (!inserted_json_.contains(node_id)) {
+    const auto errors = document.ValidateUserDeletion(node_id);
+    if (!errors.empty()) {
+      result.error = errors.front().message;
+      return result;
+    }
   }
   BeginReversal();
   const auto out = outgoing_.at(node_id);
@@ -685,6 +693,9 @@ auto EditorNodeGraphDraft::MakeChange() const -> NodeGraphTopologyChange {
   NodeGraphTopologyChange change;
   change.before_next_color_grade_name_number = base_next_name_number_;
   change.after_next_color_grade_name_number  = draft_next_name_number_;
+  if (removed_.contains(base_default_grade_id_)) {
+    change.removed_default_grade_id = base_default_grade_id_;
+  }
   std::map<NodeId, std::uint32_t> node_order;
   for (std::size_t index = 0; index < nodes_.size(); ++index) {
     node_order[nodes_[index].node_id] = static_cast<std::uint32_t>(index);

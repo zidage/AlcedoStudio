@@ -106,6 +106,13 @@ auto EditorSessionHistoryPort::RenameColorGrade(const alcedo::EditorHistoryGuard
   return mutation_->RenameColorGrade(guard, node_id, std::move(display_name), error);
 }
 
+auto EditorSessionHistoryPort::SetColorGradeDeletionProtected(
+    const alcedo::EditorHistoryGuardHandle& guard, const alcedo::NodeId& node_id,
+    bool deletion_protected, std::string* error, bool* changed) -> bool {
+  std::scoped_lock lock(mutex_);
+  return mutation_->SetColorGradeDeletionProtected(guard, node_id, deletion_protected, error, changed);
+}
+
 auto EditorSessionHistoryPort::InsertColorGradeAtTop(const alcedo::EditorHistoryGuardHandle& guard,
                                                      const alcedo::NodeId&                   new_id,
                                                      const alcedo::NodeId& expected_successor_id,

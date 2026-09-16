@@ -129,6 +129,9 @@ auto CanonicalBody(const AdjustmentTransferPackage& package) -> nlohmann::json {
   }
   return {{"color_grades", std::move(grades)},
           {"document_format_version", package.document_format_version_},
+          {"default_grade_id", package.default_grade_id_.Empty()
+                                   ? nlohmann::json(nullptr)
+                                   : nlohmann::json(package.default_grade_id_.Value())},
           {"drt_post", package.drt_post_},
           {"schema", package.schema_.empty() ? std::string{kAdjustmentTransferSchema}
                                              : package.schema_}};
@@ -286,7 +289,7 @@ void AppendDrtParameterChanges(const PipelineDocument& root, const nlohmann::jso
 }
 
 auto BuildPasteBatch(const PipelineDocument& root, const std::vector<nlohmann::json>& remapped_grades,
-                     const nlohmann::json& drt_post) -> PipelineEditBatch {
+                     const nlohmann::json& drt_post, const NodeId& default_grade_id) -> PipelineEditBatch {
   auto working = ClonePipelineDocument(root);
   std::vector<PipelineEditChange> changes;
   std::vector<NodeId>             existing;
@@ -316,6 +319,7 @@ auto BuildPasteBatch(const PipelineDocument& root, const std::vector<nlohmann::j
     const NodeId new_id{grade.at("id").get<std::string>()};
     AddColorGradeChange change;
     change.node_id        = new_id;
+    change.establishes_default_grade = new_id == default_grade_id;
     change.node           = grade;
     change.predecessor_id = predecessor;
     change.successor_id   = successor;
@@ -328,6 +332,7 @@ auto BuildPasteBatch(const PipelineDocument& root, const std::vector<nlohmann::j
     if (!errors.empty()) {
       Fail(errors.front().message);
     }
+    if (change.establishes_default_grade) working.SetDefaultGradeId(new_id);
     changes.emplace_back(std::move(change));
     predecessor = new_id;
   }
@@ -378,9 +383,16 @@ void ValidateDocumentTransfer(const AdjustmentTransferPackage& package) {
       !package.drt_post_.at("adjustments").is_array()) {
     Fail("drt_post requires object params and an adjustments array");
   }
+  std::size_t default_matches = 0;
   for (const auto& grade_json : package.color_grades_) {
     RequireObject(grade_json, "color grade");
     (void)ColorGradeNodeModel::FromJson(grade_json);
+    if (grade_json.at("id").get<std::string>() == package.default_grade_id_.Value()) {
+      ++default_matches;
+    }
+  }
+  if (!package.default_grade_id_.Empty() && default_matches != 1) {
+    Fail("transfer default_grade_id must identify exactly one Color Grade");
   }
 }
 
@@ -396,6 +408,7 @@ auto CaptureDocumentTransfer(const PipelineDocument& document) -> AdjustmentTran
   AdjustmentTransferPackage package;
   package.schema_                   = std::string{kAdjustmentTransferSchema};
   package.document_format_version_  = document.FormatVersion();
+  package.default_grade_id_ = document.DefaultGradeId();
   for (const auto* grade : grades) {
     package.color_grades_.push_back(grade->ToJson());
   }
@@ -422,7 +435,7 @@ auto ImportDocumentTransfer(const nlohmann::json& json) -> AdjustmentTransferPac
     Fail("operator-list transfer packages are not accepted");
   }
   RejectUnknownKeys(
-      json, {"color_grades", "document_format_version", "drt_post", "fingerprint", "schema"},
+      json, {"color_grades", "default_grade_id", "document_format_version", "drt_post", "fingerprint", "schema"},
       "transfer package");
   if (!json.contains("schema") || !json.at("schema").is_string() ||
       json.at("schema").get<std::string>() != kAdjustmentTransferSchema) {
@@ -435,6 +448,14 @@ auto ImportDocumentTransfer(const nlohmann::json& json) -> AdjustmentTransferPac
     Fail("transfer package requires document_format_version");
   }
   package.document_format_version_ = json.at("document_format_version").get<std::uint32_t>();
+  if (!json.contains("default_grade_id") ||
+      (!json.at("default_grade_id").is_null() &&
+       (!json.at("default_grade_id").is_string() ||
+        json.at("default_grade_id").get<std::string>().empty()))) {
+    Fail("transfer package requires null or nonempty default_grade_id");
+  }
+  package.default_grade_id_ = json.at("default_grade_id").is_null()
+      ? NodeId{} : NodeId{json.at("default_grade_id").get<std::string>()};
   if (!json.contains("color_grades") || !json.at("color_grades").is_array()) {
     Fail("transfer package requires a color_grades array");
   }
@@ -484,13 +505,19 @@ auto PrepareDocumentPaste(const AdjustmentTransferPackage&    package,
   PreparedDocumentPaste prepared;
   prepared.package = package;
   prepared.package.color_grades_.clear();
+  prepared.package.default_grade_id_ = NodeId{};
   for (const auto& grade : package.color_grades_) {
     prepared.package.color_grades_.push_back(RemapGrade(grade, source, &occupied));
+    if (grade.at("id").get<std::string>() == package.default_grade_id_.Value()) {
+      prepared.package.default_grade_id_ =
+          NodeId{prepared.package.color_grades_.back().at("id").get<std::string>()};
+    }
   }
   prepared.package.drt_post_     = package.drt_post_;
   prepared.package.fingerprint_  = ComputeFingerprint(prepared.package);
   prepared.batch                 = BuildPasteBatch(root_document, prepared.package.color_grades_,
-                                                   prepared.package.drt_post_);
+                                                   prepared.package.drt_post_,
+                                                   prepared.package.default_grade_id_);
   return prepared;
 }
 

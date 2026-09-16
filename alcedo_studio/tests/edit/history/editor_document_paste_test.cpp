@@ -87,7 +87,19 @@ TEST_F(EditorDocumentPasteTest, PasteCreatesOneRootRelativeVersionAndOneTypedCom
   const auto prior_version = guard_->commit_graph_->GetActiveVersionId();
   const auto prior_count   = guard_->commit_graph_->CommitCount();
   const auto prior_refs    = guard_->commit_graph_->GetAllVersionRefs().size();
-  const auto package       = test::MakeExposureTransferPackage(0.85);
+  auto source = test::DocumentWithExposureEv(0.85);
+  const auto source_default_id = source.DefaultGradeId();
+  const auto target_default_id = guard_->document_->DefaultGradeId();
+  const auto target_document = alcedo::CanonicalPipelineDocumentJson(*guard_->document_);
+  source.PrimaryGrade()->SetDisplayName("Renamed source default");
+  source.PrimaryGrade()->SetDeletionProtected(false);
+  auto& unlocked = alcedo::grade_mask_test::AddRadialMask(source, alcedo::MaskId{"mask.unlocked"});
+  unlocked.display_name = "Unlocked source Mask";
+  unlocked.deletion_protected = false;
+  auto& locked = alcedo::grade_mask_test::AddLinearGradientMask(source, alcedo::MaskId{"mask.locked"});
+  locked.display_name = "Locked source Mask";
+  locked.deletion_protected = true;
+  const auto package = alcedo::CaptureDocumentTransfer(source);
 
   alcedo::AdjustmentPasteResult paste_result;
   ASSERT_TRUE(history_.PasteLiveRootRelativeVersion(handle, package, "Pasted Typed", &paste_result,
@@ -110,6 +122,62 @@ TEST_F(EditorDocumentPasteTest, PasteCreatesOneRootRelativeVersionAndOneTypedCom
   const auto batch = alcedo::PipelineEditBatch::FromJSON(commit.GetPayloadJSON());
   EXPECT_EQ(batch.operation_kind, alcedo::PipelineEditOperationKind::Paste);
   EXPECT_EQ(history_.LastPublishedRenderReason(), alcedo::EditorRenderReason::PastedPipelineDocument);
+
+  const auto pasted_default_id = guard_->document_->DefaultGradeId();
+  EXPECT_FALSE(pasted_default_id.Empty());
+  EXPECT_NE(pasted_default_id, source_default_id);
+  const auto assert_pasted_state = [&]() {
+    EXPECT_EQ(guard_->document_->DefaultGradeId(), pasted_default_id);
+    const auto* grade = dynamic_cast<const alcedo::ColorGradeNodeModel*>(
+        guard_->document_->Graph().FindNode(pasted_default_id));
+    ASSERT_NE(grade, nullptr);
+    EXPECT_EQ(grade->DisplayName(), "Renamed source default");
+    EXPECT_FALSE(grade->DeletionProtected());
+    ASSERT_EQ(grade->MaskCount(), 2u);
+    EXPECT_EQ(grade->MaskAt(0).display_name, "Unlocked source Mask");
+    EXPECT_FALSE(grade->MaskAt(0).deletion_protected);
+    EXPECT_NE(grade->MaskAt(0).id, alcedo::MaskId{"mask.unlocked"});
+    EXPECT_EQ(grade->MaskAt(1).display_name, "Locked source Mask");
+    EXPECT_TRUE(grade->MaskAt(1).deletion_protected);
+    EXPECT_NE(grade->MaskAt(1).id, alcedo::MaskId{"mask.locked"});
+  };
+  assert_pasted_state();
+  const auto pasted_document = alcedo::CanonicalPipelineDocumentJson(*guard_->document_);
+  alcedo::version_ref_id_t clean_version{};
+  ASSERT_TRUE(history_.CreateRootVersionAndCheckout(handle, "Clean target", &clean_version, &error))
+      << error;
+  EXPECT_EQ(guard_->document_->DefaultGradeId(), target_default_id);
+  EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(*guard_->document_), target_document);
+  ASSERT_TRUE(history_.CheckoutVersion(handle, paste_result.new_version_id, &error)) << error;
+  assert_pasted_state();
+  EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(*guard_->document_), pasted_document);
+}
+
+TEST_F(EditorDocumentPasteTest, PasteWithoutDefaultIdentityDoesNotInheritTargetDefault) {
+  std::string error;
+  const auto handle = history_.Acquire(77, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  const auto target_default_id = guard_->document_->DefaultGradeId();
+  ASSERT_FALSE(target_default_id.Empty());
+  auto source = test::DocumentWithExposureEv(0.5);
+  source.SetDefaultGradeId(alcedo::NodeId{});
+  source.PrimaryGrade()->SetDeletionProtected(false);
+  const auto package = alcedo::CaptureDocumentTransfer(source);
+  alcedo::AdjustmentPasteResult result;
+  ASSERT_TRUE(history_.PasteLiveRootRelativeVersion(handle, package, "No default", &result, &error))
+      << error;
+  ASSERT_TRUE(result.pasted);
+  EXPECT_TRUE(guard_->document_->DefaultGradeId().Empty());
+  ASSERT_NE(guard_->document_->PrimaryGrade(), nullptr);
+  EXPECT_FALSE(guard_->document_->PrimaryGrade()->DeletionProtected());
+  const auto pasted_document = alcedo::CanonicalPipelineDocumentJson(*guard_->document_);
+  alcedo::version_ref_id_t clean_version{};
+  ASSERT_TRUE(history_.CreateRootVersionAndCheckout(handle, "Clean target", &clean_version, &error))
+      << error;
+  EXPECT_EQ(guard_->document_->DefaultGradeId(), target_default_id);
+  ASSERT_TRUE(history_.CheckoutVersion(handle, result.new_version_id, &error)) << error;
+  EXPECT_TRUE(guard_->document_->DefaultGradeId().Empty());
+  EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(*guard_->document_), pasted_document);
 }
 
 TEST_F(EditorDocumentPasteTest, FailedPasteCreatesNoVersionCommitHeadMoveOrRender) {

@@ -160,6 +160,7 @@ auto EditorActionPolicy::ActionForCommand(EditorSessionCommandKind kind)
       return EditorAction::PreviewAdjustment;
     case EditorSessionCommandKind::CommitAdjustment:
     case EditorSessionCommandKind::RenameColorGrade:
+    case EditorSessionCommandKind::SetColorGradeDeletionProtected:
     case EditorSessionCommandKind::EditNodeGraph:
     case EditorSessionCommandKind::InsertColorGradeAtTop:
     case EditorSessionCommandKind::RemoveColorGradeAndBridge:

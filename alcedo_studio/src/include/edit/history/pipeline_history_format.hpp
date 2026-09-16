@@ -18,53 +18,53 @@ namespace alcedo {
  *
  * | Identity | Constant | Value |
  * | --- | --- | --- |
- * | Project metadata | @ref kProjectFileVersion | 0.7.0 |
- * | Packed project header | @ref kPackedProjectFormatVersion | 6 |
- * | Pipeline document JSON | @ref kPipelineDocumentFormatVersion | 6 |
- * | Image edit schema | @ref kImageEditSchemaVersion | 4 |
- * | Commit hash input | @ref kCommitFormatVersion | 4 |
- * | Chain-fold hash input | @ref kChainFormatVersion | 4 |
- * | Typed batch payload | @ref kPipelineEditBatchFormatVersion | 3 |
- * | Immutable root serialized pipeline state | @ref kRootStateFormatVersion | 4 |
- * | Checkpoint serialized pipeline state | @ref kCheckpointStateFormatVersion | 4 |
- * | Mini-Git WAL record | @ref kMiniGitJournalRecordFormatVersion | 5 |
- * | Transfer package schema | @ref kAdjustmentTransferSchema | alcedo.adjustment_transfer.v4 |
+ * | Project metadata | @ref kProjectFileVersion | 0.8.0 |
+ * | Packed project header | @ref kPackedProjectFormatVersion | 7 |
+ * | Pipeline document JSON | @ref kPipelineDocumentFormatVersion | 7 |
+ * | Image edit schema | @ref kImageEditSchemaVersion | 5 |
+ * | Commit hash input | @ref kCommitFormatVersion | 5 |
+ * | Chain-fold hash input | @ref kChainFormatVersion | 5 |
+ * | Typed batch payload | @ref kPipelineEditBatchFormatVersion | 4 |
+ * | Immutable root serialized pipeline state | @ref kRootStateFormatVersion | 5 |
+ * | Checkpoint serialized pipeline state | @ref kCheckpointStateFormatVersion | 5 |
+ * | Mini-Git WAL record | @ref kMiniGitJournalRecordFormatVersion | 6 |
+ * | Transfer package schema | @ref kAdjustmentTransferSchema | alcedo.adjustment_transfer.v5 |
  */
 
 /// Project metadata version written by SaveProject and required on open.
-inline constexpr std::string_view kProjectFileVersion = "0.7.0";
+inline constexpr std::string_view kProjectFileVersion = "0.8.0";
 /// Inclusive lower bound of accepted project metadata. Equals @ref kProjectFileVersion.
-inline constexpr std::string_view kMinSupportedProjectFileVersion = "0.7.0";
+inline constexpr std::string_view kMinSupportedProjectFileVersion = "0.8.0";
 /// Inclusive upper bound of accepted project metadata. Equals @ref kProjectFileVersion.
-inline constexpr std::string_view kMaxSupportedProjectFileVersion = "0.7.0";
+inline constexpr std::string_view kMaxSupportedProjectFileVersion = "0.8.0";
 /// Packed `.alcd` header version. Independent of the metadata string.
-inline constexpr std::uint32_t kPackedProjectFormatVersion = 6;
+inline constexpr std::uint32_t kPackedProjectFormatVersion = 7;
 
 /// `PipelineDocument` JSON `format_version`.
-inline constexpr std::uint32_t kPipelineDocumentFormatVersion = 6;
+inline constexpr std::uint32_t kPipelineDocumentFormatVersion = 7;
 
 /// Per-image history schema stored on `ImageEditState.project_schema_version`.
-inline constexpr std::uint32_t kImageEditSchemaVersion = 4;
+inline constexpr std::uint32_t kImageEditSchemaVersion = 5;
 
 /// Commit object hash-input layout. Typed `PipelineEditBatch` payloads use this value.
-inline constexpr std::uint32_t kCommitFormatVersion = 4;
+inline constexpr std::uint32_t kCommitFormatVersion = 5;
 
 /// First-parent chain-fold hash-input layout.
-inline constexpr std::uint32_t kChainFormatVersion = 4;
+inline constexpr std::uint32_t kChainFormatVersion = 5;
 
 /// Typed batch payload schema stored inside a commit. Independent of @ref kCommitFormatVersion.
-inline constexpr std::uint32_t kPipelineEditBatchFormatVersion = 3;
+inline constexpr std::uint32_t kPipelineEditBatchFormatVersion = 4;
 
 /// Immutable root serialized pipeline state stored in `PipelineRoot.serialized_pipeline_state`.
-inline constexpr std::uint32_t kRootStateFormatVersion = 4;
+inline constexpr std::uint32_t kRootStateFormatVersion = 5;
 
 /// Checkpoint serialized pipeline state stored in `ImageEditState.serialized_pipeline_state`.
-inline constexpr std::uint32_t kCheckpointStateFormatVersion = 4;
+inline constexpr std::uint32_t kCheckpointStateFormatVersion = 5;
 
 /// Mini-Git WAL record JSON `format_version`.
-inline constexpr std::uint32_t kMiniGitJournalRecordFormatVersion = 5;
+inline constexpr std::uint32_t kMiniGitJournalRecordFormatVersion = 6;
 
 /// Adjustment Transfer package `schema` string.
-inline constexpr std::string_view kAdjustmentTransferSchema = "alcedo.adjustment_transfer.v4";
+inline constexpr std::string_view kAdjustmentTransferSchema = "alcedo.adjustment_transfer.v5";
 
 }  // namespace alcedo

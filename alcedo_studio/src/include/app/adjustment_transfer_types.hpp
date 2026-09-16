@@ -12,6 +12,7 @@
 
 #include "app/editor_adjustment_types.hpp"
 #include "edit/history/commit_types.hpp"
+#include "edit/graph/graph_ids.hpp"
 #include "edit/history/pipeline_history_format.hpp"
 #include "edit/operators/op_base.hpp"
 #include "app/editor_session_request_ids.hpp"
@@ -30,6 +31,8 @@ struct AdjustmentTransferPackage {
   std::string                 schema_ = std::string{kAdjustmentTransferSchema};
   std::uint32_t               document_format_version_ = kPipelineDocumentFormatVersion;
   std::vector<nlohmann::json> color_grades_;
+  /// Source default Grade, remapped with the chain; empty when the source has none.
+  NodeId                     default_grade_id_;
   nlohmann::json              drt_post_ = nlohmann::json::object();
   std::string                 fingerprint_;
 

@@ -58,6 +58,10 @@ class EditorHistoryMutation {
                      alcedo::NodeGraphTopologyChange change, std::string* error) -> bool;
   auto RenameColorGrade(const alcedo::EditorHistoryGuardHandle& guard, const alcedo::NodeId& node_id,
                         std::string display_name, std::string* error) -> bool;
+  /// Commit deletion-only metadata; @p changed is false for equal values or failure.
+  auto SetColorGradeDeletionProtected(const alcedo::EditorHistoryGuardHandle& guard,
+                                      const alcedo::NodeId& node_id, bool deletion_protected,
+                                      std::string* error, bool* changed = nullptr) -> bool;
   /// Mask Groups: capture and commit one clean Color Grade inserted at the top
   /// of the live backbone (the node after Develop must equal
   /// @p expected_successor_id). Runs under the live render lock.

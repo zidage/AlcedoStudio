@@ -172,6 +172,10 @@ void ValidateNodeGraphTopology(const NodeGraphTopologyChange& change) {
       Fail("NodeGraphTopologyChange: duplicate removed node index");
     }
   }
+  if (!change.removed_default_grade_id.Empty() &&
+      !removed_ids.contains(std::string{change.removed_default_grade_id.Value()})) {
+    Fail("NodeGraphTopologyChange: removed default identity must name a removed Grade");
+  }
   std::set<std::string>   disconnected_keys;
   std::set<std::uint32_t> disconnected_indexes;
   for (const auto& item : change.disconnected_edges) {
@@ -225,7 +229,7 @@ void ValidateReplaceMaskSource(const ReplaceMaskSourceChange& change) {
 
 void ValidateMaskFieldValue(const nlohmann::json& value, const std::string& field_key,
                             std::string_view context) {
-  if (field_key == "enabled" || field_key == "invert") {
+  if (field_key == "enabled" || field_key == "invert" || field_key == "deletion_protected") {
     if (!value.is_boolean()) {
       Fail(std::string{context} + ": '" + field_key + "' must be a boolean");
     }
@@ -264,6 +268,8 @@ void ValidateChange(const PipelineEditChange& change) {
         using Typed = std::decay_t<decltype(typed)>;
         if constexpr (std::is_same_v<Typed, SetParameterChange>) {
           ValidateSetParameter(typed);
+        } else if constexpr (std::is_same_v<Typed, SetNodeDeletionProtectionChange>) {
+          if (typed.node_id.Empty()) Fail("SetNodeDeletionProtection requires NodeId");
         } else if constexpr (std::is_same_v<Typed, SetNodeEnabledChange>) {
           ValidateSetNodeEnabled(typed);
         } else if constexpr (std::is_same_v<Typed, SetNodeMixChange>) {

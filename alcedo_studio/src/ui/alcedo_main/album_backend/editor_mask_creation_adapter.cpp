@@ -553,22 +553,9 @@ void EditorMaskCreationAdapter::removeMask(const QString& node_id, const QString
   command.kind    = EditorMaskCreationCommandKind::RemoveMask;
   command.node_id = grade;
   command.mask_id = MaskIdFromQString(mask_id);
-  if (!Enqueue(command)) {
-    return;
-  }
-  if (selected_mask_id_ == mask_id) {
-    selected_mask_id_.clear();
-    overlay_source_.reset();
-    overlay_display_ = {};
-    HideOverlay();
-    EditorMaskCreationCommand finish;
-    finish.kind    = EditorMaskCreationCommandKind::FinishMode;
-    finish.node_id = grade;
-    (void)Enqueue(finish);
-    ResetLocal();
-    return;
-  }
-  emit maskCreationChanged();
+  // Enqueue is not deletion admission. The owner publishes the next selection
+  // on success; rejected protection must retain the local selection and edit.
+  (void)Enqueue(command);
 }
 
 void EditorMaskCreationAdapter::removeSelectedMask() {
@@ -598,13 +585,23 @@ void EditorMaskCreationAdapter::SyncFromSession() {
   if (session_ == nullptr) {
     return;
   }
-  if (open_ || session_->mask_creation_commands_pending()) {
+  if (session_->mask_creation_commands_pending()) {
     return;
   }
   const auto owner_node  = session_->mask_creation_node_id();
   const auto owner_id    = session_->mask_creation_mask_id();
   const auto owner_state = session_->mask_creation_state();
   const auto source      = session_->mask_creation_source();
+  if (open_) {
+    if (owner_state == EditorMaskCreationState::Editing) {
+      return;
+    }
+    // A successful deletion may close the owner's current edit. A rejected
+    // deletion leaves it Editing, so the local mask drag remains intact above.
+    open_ = false;
+    open_via_panel_ = false;
+    active_handle_ = AnalyticMaskHandle::None;
+  }
   if (!owner_id.Empty() && source.has_value()) {
     // Backend change notifications also arrive for events that cannot move
     // the owner mask. Re-applying an unchanged owner rebuilds the whole

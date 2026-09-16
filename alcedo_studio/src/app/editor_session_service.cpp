@@ -1841,6 +1841,38 @@ auto EditorSessionService::RenameColorGrade(const NodeId& node_id, std::string d
   return PublishTypedNodeHistorySuccess("Color Grade renamed");
 }
 
+auto EditorSessionService::SetColorGradeDeletionProtected(const NodeId& node_id,
+                                                          bool deletion_protected)
+    -> EditorSessionResult {
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind               = EditorSessionCommandKind::SetColorGradeDeletionProtected;
+    command.node_id            = node_id;
+    command.deletion_protected = deletion_protected;
+    return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
+      return SetColorGradeDeletionProtected(queued.node_id, queued.deletion_protected);
+    });
+  }
+  if (lifecycle_.state() != EditorSessionState::Interactive || !dependencies_.history ||
+      !lifecycle_.has_history_guard()) {
+    return Reject("Color Grade deletion protection requires an interactive history session");
+  }
+  std::string error;
+  bool changed = false;
+  if (!dependencies_.history->SetColorGradeDeletionProtected(
+          lifecycle_.history_guard(), node_id, deletion_protected, &error, &changed)) {
+    return Reject(error.empty() ? "Color Grade deletion protection failed" : std::move(error));
+  }
+  if (!changed) {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Accepted;
+    result.state    = lifecycle_.state();
+    result.identity = lifecycle_.identity();
+    return result;
+  }
+  return PublishTypedNodeHistorySuccess("Color Grade deletion protection updated");
+}
+
 auto EditorSessionService::EditNodeGraph(NodeGraphTopologyChange change) -> EditorSessionResult {
   if (!InOwnerReduction()) {
     EditorSessionCommand command;

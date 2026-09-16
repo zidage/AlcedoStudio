@@ -104,6 +104,7 @@ inline constexpr std::string_view kMaskFieldEnabled      = "enabled";
 inline constexpr std::string_view kMaskFieldInvert       = "invert";
 inline constexpr std::string_view kMaskFieldOpacity      = "opacity";
 inline constexpr std::string_view kMaskFieldDisplayName  = "display_name";
+inline constexpr std::string_view kMaskFieldDeletionProtected = "deletion_protected";
 
 struct EditorMaskCreationCommand {
   EditorMaskCreationCommandKind kind        = EditorMaskCreationCommandKind::BeginCreation;
@@ -117,7 +118,7 @@ struct EditorMaskCreationCommand {
   /**
    * @brief Mask-level value edit target.
    *
-   * `enabled`, `invert`, `opacity`, and `display_name` settle as SetMaskField.
+   * `enabled`, `invert`, `opacity`, `display_name`, and `deletion_protected` settle as SetMaskField.
    */
   std::string                   field_key;
   nlohmann::json                field_value;
@@ -188,7 +189,8 @@ class EditorMaskCreationController {
   /**
    * @brief Remove @p mask_id from @p grade_id with one typed history operation.
    *
-   * Cancels an unfinished operation on that Mask first. Other Masks' open
+   * Checks live deletion protection before cancelling an existing edit or changing selection.
+   * Cancelling a provisional creation is rollback, not deletion. Other Masks' open
    * edits are left alone. Failed publish leaves the committed Mask in place.
    */
   auto RemoveMask(const NodeId& grade_id, const MaskId& mask_id) -> EditorMaskCreationResult;
@@ -196,8 +198,8 @@ class EditorMaskCreationController {
   /**
    * @brief Open a Mask value edit on the selected Mask.
    *
-   * Valid keys: `enabled`, `invert`, `opacity`, and `display_name`. The live
-   * value is captured for Finish/Cancel. Requires a selected existing Mask with
+   * Valid keys: `enabled`, `invert`, `opacity`, `display_name`, and `deletion_protected`.
+   * The live value is captured for Finish/Cancel. Requires a selected existing Mask with
    * no open operation.
    */
   auto BeginMaskFieldEdit(std::string field_key) -> EditorMaskCreationResult;

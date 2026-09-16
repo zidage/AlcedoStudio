@@ -12,6 +12,7 @@
 #include <stdexcept>
 #include <string>
 
+#include <vector>
 #include "app/project_package_backend.hpp"
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
@@ -31,8 +32,8 @@
 namespace alcedo {
 namespace {
 
-auto LoadGolden(const std::string& name) -> std::string {
-  const auto path = std::filesystem::path(PIPELINE_HISTORY_FORMAT_GOLDEN_DIR) / name;
+auto LoadExpectedBytes(const std::string& name) -> std::string {
+  const auto path = std::filesystem::path(PIPELINE_HISTORY_FORMAT_EXPECTED_SERIALIZED_DIR) / name;
   std::ifstream input(path, std::ios::binary);
   EXPECT_TRUE(input) << path.string();
   std::string text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
@@ -52,74 +53,153 @@ auto MultiGradeDocument() -> PipelineDocument {
 }  // namespace
 
 TEST(PipelineHistoryFormatTable, PublishedConstantsIdentifyTheDocumentHistoryCutover) {
-  EXPECT_EQ(kProjectFileVersion, "0.7.0");
+  EXPECT_EQ(kProjectFileVersion, "0.8.0");
   EXPECT_EQ(kMinSupportedProjectFileVersion, kProjectFileVersion);
   EXPECT_EQ(kMaxSupportedProjectFileVersion, kProjectFileVersion);
-  EXPECT_EQ(kPackedProjectFormatVersion, 6u);
-  EXPECT_EQ(kPipelineDocumentFormatVersion, 6u);
-  EXPECT_EQ(kImageEditSchemaVersion, 4u);
-  EXPECT_EQ(kCommitFormatVersion, 4u);
-  EXPECT_EQ(kChainFormatVersion, 4u);
-  EXPECT_EQ(kPipelineEditBatchFormatVersion, 3u);
-  EXPECT_EQ(kRootStateFormatVersion, 4u);
-  EXPECT_EQ(kCheckpointStateFormatVersion, 4u);
-  EXPECT_EQ(kMiniGitJournalRecordFormatVersion, 5u);
-  EXPECT_EQ(kAdjustmentTransferSchema, "alcedo.adjustment_transfer.v4");
+  EXPECT_EQ(kPackedProjectFormatVersion, 7u);
+  EXPECT_EQ(kPipelineDocumentFormatVersion, 7u);
+  EXPECT_EQ(kImageEditSchemaVersion, 5u);
+  EXPECT_EQ(kCommitFormatVersion, 5u);
+  EXPECT_EQ(kChainFormatVersion, 5u);
+  EXPECT_EQ(kPipelineEditBatchFormatVersion, 4u);
+  EXPECT_EQ(kRootStateFormatVersion, 5u);
+  EXPECT_EQ(kCheckpointStateFormatVersion, 5u);
+  EXPECT_EQ(kMiniGitJournalRecordFormatVersion, 6u);
+  EXPECT_EQ(kAdjustmentTransferSchema, "alcedo.adjustment_transfer.v5");
   EXPECT_TRUE(project_pack::ProjectVersionIsSupported(kProjectFileVersion));
+  EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.7.0"));
   EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.5.0"));
   EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.3.0"));
 }
 
-TEST(PipelineHistoryFormatTable, ProjectMetadataGoldenMatchesPublishedVersion) {
-  const auto golden = nlohmann::json::parse(LoadGolden("project_metadata.json"));
-  EXPECT_EQ(golden.at("project_file_version").get<std::string>(),
+TEST(PipelineHistoryFormatTable, ProjectMetadataExpectedSerializedMatchesPublishedVersion) {
+  const auto expected_serialized = nlohmann::json::parse(LoadExpectedBytes("project_metadata.json"));
+  EXPECT_EQ(expected_serialized.at("project_file_version").get<std::string>(),
             std::string(kProjectFileVersion));
-  EXPECT_EQ(golden.at("project_file_min_supported_version").get<std::string>(),
+  EXPECT_EQ(expected_serialized.at("project_file_min_supported_version").get<std::string>(),
             std::string(kMinSupportedProjectFileVersion));
-  EXPECT_EQ(golden.at("project_file_max_supported_version").get<std::string>(),
+  EXPECT_EQ(expected_serialized.at("project_file_max_supported_version").get<std::string>(),
             std::string(kMaxSupportedProjectFileVersion));
 }
 
-TEST(PipelineDocumentCheckpointFormat, FullDocumentGoldenWithGradesAndMasksRemainsStable) {
+TEST(PipelineDocumentCheckpointFormat, FullDocumentExpectedSerializedWithGradesAndMasksRemainsStable) {
   const auto document = MultiGradeDocument();
-  EXPECT_EQ(document.ToJson().dump(), LoadGolden("pipeline_document_multi_grade.json"));
+  EXPECT_EQ(document.ToJson().dump(), LoadExpectedBytes("pipeline_document_multi_grade.json"));
 }
 
-TEST(PipelineDocumentCheckpointFormat, RootGoldenBindsOwnerDocumentAndDevelopIdentity) {
+TEST(PipelineDocumentCheckpointFormat, RootExpectedSerializedBindsOwnerDocumentAndDevelopIdentity) {
   const auto document = MultiGradeDocument();
   const auto encoded =
       EncodePipelineRootState(42, document, nlohmann::json{{"CameraModel", "RootGolden"}});
-  EXPECT_EQ(encoded.dump(), LoadGolden("pipeline_root.json"));
+  EXPECT_EQ(encoded.dump(), LoadExpectedBytes("pipeline_root.json"));
   const auto decoded = DecodePipelineRootState(encoded);
   EXPECT_EQ(decoded.element_id, 42u);
   EXPECT_EQ(ComputeRootId(42, decoded.document, decoded.raw_color_context),
             ComputeRootId(42, document, nlohmann::json{{"CameraModel", "RootGolden"}}));
 }
 
-TEST(PipelineDocumentCheckpointFormat, CheckpointGoldenCarriesRootHeadChainAndDocument) {
+TEST(PipelineDocumentCheckpointFormat, CheckpointExpectedSerializedCarriesRootHeadChainAndDocument) {
   const auto document = MultiGradeDocument();
   const auto root_id  = ComputeRootId(7, document, std::nullopt);
   const auto chain    = ComputeRootChainHash(root_id);
   const auto encoded  = EncodePipelineDocumentCheckpoint(root_id, std::nullopt, chain, document);
-  EXPECT_EQ(encoded.dump(), LoadGolden("pipeline_checkpoint.json"));
+  EXPECT_EQ(encoded.dump(), LoadExpectedBytes("pipeline_checkpoint.json"));
   const auto decoded = DecodePipelineDocumentCheckpoint(encoded);
   EXPECT_EQ(decoded.root_id, root_id);
   EXPECT_FALSE(decoded.head_commit_hash.has_value());
   EXPECT_EQ(decoded.transaction_chain_hash, chain);
 }
 
-TEST(PipelineDocumentCheckpointFormat, TransferPackageGoldenUsesPublishedSchema) {
-  const nlohmann::json package{
-      {"schema", std::string{kAdjustmentTransferSchema}},
-      {"operators",
-       nlohmann::json::array({nlohmann::json{{"enabled", true},
-                                             {"mergeParams", false},
-                                             {"operator", "exposure"},
-                                             {"params", {{"exposure", 0.5}}},
-                                             {"stage", "Basic Adjustment"}}})},
-  };
-  EXPECT_EQ(package.dump(), LoadGolden("adjustment_transfer_package.json"));
+TEST(PipelineDocumentCheckpointFormat, RoundTripPreservesDefaultIdentityAndIndependentUnlocks) {
+  auto document = MultiGradeDocument();
+  const auto default_id = document.DefaultGradeId();
+  auto* grade = document.PrimaryGrade();
+  ASSERT_NE(grade, nullptr);
+  grade->SetDisplayName("Renamed default");
+  grade->SetDeletionProtected(false);
+  grade->SetMaskDeletionProtected(MaskId{"mask.radial"}, false);
+  auto& protected_mask = grade_mask_test::AddLinearGradientMask(document, MaskId{"mask.locked"});
+  protected_mask.deletion_protected = true;
+  auto* ordinary = dynamic_cast<ColorGradeNodeModel*>(
+      document.Graph().FindNode(NodeId{"grade.look"}));
+  ASSERT_NE(ordinary, nullptr);
+  ordinary->SetDisplayName("Color Grade 1");
+  ordinary->SetDeletionProtected(true);
+  const auto root_id = ComputeRootId(7, document, std::nullopt);
+  const auto encoded = EncodePipelineDocumentCheckpoint(
+      root_id, std::nullopt, ComputeRootChainHash(root_id), document);
+  const auto decoded = DecodePipelineDocumentCheckpoint(encoded);
+  EXPECT_EQ(decoded.document.DefaultGradeId(), default_id);
+  const auto* restored = dynamic_cast<const ColorGradeNodeModel*>(
+      decoded.document.Graph().FindNode(default_id));
+  ASSERT_NE(restored, nullptr);
+  EXPECT_EQ(restored->DisplayName(), "Renamed default");
+  EXPECT_FALSE(restored->DeletionProtected());
+  ASSERT_NE(restored->FindMask(MaskId{"mask.radial"}), nullptr);
+  ASSERT_NE(restored->FindMask(MaskId{"mask.locked"}), nullptr);
+  EXPECT_FALSE(restored->FindMask(MaskId{"mask.radial"})->deletion_protected);
+  EXPECT_TRUE(restored->FindMask(MaskId{"mask.locked"})->deletion_protected);
+  const auto* restored_ordinary = dynamic_cast<const ColorGradeNodeModel*>(
+      decoded.document.Graph().FindNode(NodeId{"grade.look"}));
+  ASSERT_NE(restored_ordinary, nullptr);
+  EXPECT_TRUE(restored_ordinary->DeletionProtected());
+  EXPECT_EQ(decoded.document.ToJson(), document.ToJson());
+
+  document.SetDefaultGradeId(NodeId{});
+  const auto without_default = DecodePipelineDocumentCheckpoint(EncodePipelineDocumentCheckpoint(
+      root_id, std::nullopt, ComputeRootChainHash(root_id), document));
+  EXPECT_TRUE(without_default.document.DefaultGradeId().Empty());
+  EXPECT_EQ(without_default.document.ToJson(), document.ToJson());
 }
+
+TEST(PipelineDocumentCheckpointFormat, RejectsMissingOrMalformedGradeAndMaskProtection) {
+  const auto document = MultiGradeDocument();
+  const auto root_id = ComputeRootId(7, document, std::nullopt);
+  const auto encoded = EncodePipelineDocumentCheckpoint(
+      root_id, std::nullopt, ComputeRootChainHash(root_id), document);
+  const std::vector<nlohmann::json> non_booleans{
+      nullptr, 0, 1, "false", nlohmann::json::array(), nlohmann::json::object()};
+  for (const bool mask_field : {false, true}) {
+    SCOPED_TRACE(mask_field ? "Mask protection" : "Grade protection");
+    const auto protection_owner = [&](nlohmann::json& checkpoint) -> nlohmann::json& {
+      for (auto& node : checkpoint.at("pipeline_document").at("nodes")) {
+        if (node.at("id") == std::string{document.DefaultGradeId().Value()}) {
+          return mask_field ? node.at("masks").at(0) : node;
+        }
+      }
+      throw std::runtime_error("Default Grade missing from checkpoint fixture");
+    };
+    auto missing = encoded;
+    protection_owner(missing).erase("deletion_protected");
+    EXPECT_THROW((void)DecodePipelineDocumentCheckpoint(missing), std::runtime_error);
+    for (const auto& value : non_booleans) {
+      SCOPED_TRACE(value.dump());
+      auto malformed = encoded;
+      protection_owner(malformed)["deletion_protected"] = value;
+      EXPECT_THROW((void)DecodePipelineDocumentCheckpoint(malformed), std::runtime_error);
+    }
+  }
+}
+
+TEST(PipelineDocumentCheckpointFormat, RejectsMissingOrInvalidDefaultGradeIdentity) {
+  const auto document = MultiGradeDocument();
+  const auto root_id = ComputeRootId(7, document, std::nullopt);
+  const auto encoded = EncodePipelineDocumentCheckpoint(
+      root_id, std::nullopt, ComputeRootChainHash(root_id), document);
+  auto missing = encoded;
+  missing.at("pipeline_document").erase("default_grade_id");
+  EXPECT_THROW((void)DecodePipelineDocumentCheckpoint(missing), std::runtime_error);
+  const std::vector<nlohmann::json> invalid_ids{
+      "", "grade.missing", "develop", "drt", "mask.radial", false, 1,
+      nlohmann::json::array(), nlohmann::json::object()};
+  for (const auto& id : invalid_ids) {
+    SCOPED_TRACE(id.dump());
+    auto malformed = encoded;
+    malformed.at("pipeline_document")["default_grade_id"] = id;
+    EXPECT_THROW((void)DecodePipelineDocumentCheckpoint(malformed), std::exception);
+  }
+}
+
 
 TEST(PipelineDocumentCheckpointFormat, OldDocumentFormatIsRejectedWithoutConversion) {
   auto json = CreateDefaultPipelineDocument().ToJson();
@@ -246,12 +326,12 @@ TEST(MiniGitJournalFormat, OldWalFormatVersionIsRejected) {
   std::filesystem::remove(path, ignored);
 }
 
-TEST(MiniGitJournalFormat, CurrentWalRecordGoldenRemainsStable) {
-  const auto golden = nlohmann::json::parse(LoadGolden("mini_git_wal_record.json"));
+TEST(MiniGitJournalFormat, CurrentWalRecordExpectedSerializedRemainsStable) {
+  const auto expected_serialized = nlohmann::json::parse(LoadExpectedBytes("mini_git_wal_record.json"));
   MiniGitJournalRecord record;
   record.kind = MiniGitJournalRecordKind::kHeadMove;
   record.expected_source_chain_hash =
-      Hash128::FromString(golden.at("expected_source_chain_hash").get<std::string>());
+      Hash128::FromString(expected_serialized.at("expected_source_chain_hash").get<std::string>());
   record.target_chain_hash = record.expected_source_chain_hash;
   const auto path = std::filesystem::temp_directory_path() / "alcedo-mini-git-current-format.wal";
   std::error_code ignored;
@@ -266,7 +346,7 @@ TEST(MiniGitJournalFormat, CurrentWalRecordGoldenRemainsStable) {
   const auto frame = nlohmann::json::parse(line);
   EXPECT_EQ(frame.at("record").at("format_version").get<std::uint32_t>(),
             kMiniGitJournalRecordFormatVersion);
-  EXPECT_EQ(frame.at("record").dump(), LoadGolden("mini_git_wal_record.json"));
+  EXPECT_EQ(frame.at("record").dump(), LoadExpectedBytes("mini_git_wal_record.json"));
   std::filesystem::remove(path, ignored);
 }
 

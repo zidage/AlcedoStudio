@@ -6,6 +6,8 @@
 
 #include <string>
 
+#include "edit/graph/graph_ids.hpp"
+#include "edit/mask/mask_id.hpp"
 namespace alcedo {
 
 enum class GraphValidationCode {
@@ -28,11 +30,14 @@ enum class GraphValidationCode {
   NotAColorGrade,
   InvalidDisplayName,
   InvalidNodeValue,
+  DeletionProtected,
 };
 
 struct GraphValidationError {
   GraphValidationCode code = GraphValidationCode::Ok;
   std::string         message;
+  NodeId              node_id;
+  MaskId              mask_id;
 };
 
 }  // namespace alcedo

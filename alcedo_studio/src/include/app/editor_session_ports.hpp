@@ -115,6 +115,15 @@ class IEditorHistoryPort {
     if (error != nullptr) *error = "Color Grade rename is not supported by this history port";
     return false;
   }
+  /// Commit deletion-only metadata without rendering. Equal values succeed without a commit.
+  /// @p changed reports an effective commit, or false on no-op/failure. Default rejects.
+  virtual auto SetColorGradeDeletionProtected(const EditorHistoryGuardHandle& /*guard*/,
+                                              const NodeId& /*node_id*/, bool /*deletion_protected*/,
+                                              std::string* error, bool* changed = nullptr) -> bool {
+    if (changed) *changed = false;
+    if (error) *error = "Color Grade deletion protection is not supported by this history port";
+    return false;
+  }
   /// Insert one clean Color Grade at the top of the live scene-image backbone
   /// as one typed history commit. The node that currently follows Develop must
   /// equal @p expected_successor_id; a mismatch rejects the stale request

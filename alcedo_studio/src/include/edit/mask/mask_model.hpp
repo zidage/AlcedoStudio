@@ -128,6 +128,8 @@ struct MaskModel {
   MaskId                             id;
   std::string                        display_name;
   bool                               enabled = true;
+  /// Persistent deletion-only protection; does not affect coverage or parameter editing.
+  bool                               deletion_protected = false;
   float                              opacity = 1.0f;
   bool                               invert  = false;
   MaskSource                         source{RadialMaskSource{}};

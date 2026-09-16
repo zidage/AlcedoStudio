@@ -159,6 +159,9 @@ auto ApplyRename(PipelineDocument& document, const RenameColorGradeChange& chang
 auto ApplyAddColorGrade(PipelineDocument& document, const AddColorGradeChange& change,
                         PipelineEditApplyDirection direction, std::string* error) -> bool {
   if (direction == PipelineEditApplyDirection::Forward) {
+    if (change.establishes_default_grade && !document.DefaultGradeId().Empty()) {
+      return SetError(error, "AddColorGrade requires an empty default identity");
+    }
     if (document.NextColorGradeNameNumber() != change.before_next_color_grade_name_number) {
       return SetError(error, "AddColorGrade expected the before name-counter value");
     }
@@ -178,7 +181,11 @@ auto ApplyAddColorGrade(PipelineDocument& document, const AddColorGradeChange& c
       return false;
     }
     document.SetNextColorGradeNameNumber(change.after_next_color_grade_name_number);
+    if (change.establishes_default_grade) document.SetDefaultGradeId(change.node_id);
     return true;
+  }
+  if (change.establishes_default_grade && document.DefaultGradeId() != change.node_id) {
+    return SetError(error, "AddColorGrade inverse default identity does not match");
   }
   if (document.NextColorGradeNameNumber() != change.after_next_color_grade_name_number) {
     return SetError(error, "AddColorGrade inverse expected the after name-counter value");
@@ -196,6 +203,9 @@ auto ApplyAddColorGrade(PipelineDocument& document, const AddColorGradeChange& c
 auto ApplyRemoveColorGrade(PipelineDocument& document, const RemoveColorGradeChange& change,
                            PipelineEditApplyDirection direction, std::string* error) -> bool {
   if (direction == PipelineEditApplyDirection::Forward) {
+    if ((document.DefaultGradeId() == change.node_id) != change.was_default_grade) {
+      return SetError(error, "RemoveColorGrade default identity does not match stored value");
+    }
     const auto* incoming = FindSceneImagePredecessor(document.Graph(), change.node_id);
     const auto* outgoing = FindSceneImageSuccessor(document.Graph(), change.node_id);
     if (incoming == nullptr || outgoing == nullptr ||
@@ -208,11 +218,19 @@ auto ApplyRemoveColorGrade(PipelineDocument& document, const RemoveColorGradeCha
   if (document.Graph().FindNode(change.node_id) != nullptr) {
     return SetError(error, "RemoveColorGrade inverse expected the stored node to be absent");
   }
-  return ApplyGraph(document,
-                    InsertColorGradeFromJson(document, change.node,
-                                             ToGraphEdge(change.removed_incoming_edge),
-                                             ToGraphEdge(change.removed_outgoing_edge)),
-                    error);
+  if (change.was_default_grade && !document.DefaultGradeId().Empty()) {
+    return SetError(error, "RemoveColorGrade inverse requires an empty default identity");
+  }
+  if (!ApplyGraph(document,
+                  InsertColorGradeFromJson(document, change.node,
+                                           ToGraphEdge(change.removed_incoming_edge),
+                                           ToGraphEdge(change.removed_outgoing_edge)), error)) {
+    return false;
+  }
+  if (change.was_default_grade) {
+    document.SetDefaultGradeId(change.node_id);
+  }
+  return true;
 }
 
 auto ApplyReconnect(PipelineDocument& document, const ReconnectColorGradeChange& change,
@@ -334,6 +352,7 @@ auto ApplyReplaceMaskSource(PipelineDocument& document, const NodeId& node_id, c
     auto parsed = MaskModelFromJson(nlohmann::json{{"id", std::string{mask_id.Value()}},
                                                    {"display_name", ""},
                                                    {"enabled", true},
+                                                   {"deletion_protected", false},
                                                    {"opacity", 1.0},
                                                    {"invert", false},
                                                    {"source", next},
@@ -347,6 +366,7 @@ auto ApplyReplaceMaskSource(PipelineDocument& document, const NodeId& node_id, c
 }
 
 auto CurrentMaskField(const MaskModel& mask, const std::string& field_key) -> nlohmann::json {
+  if (field_key == "deletion_protected") return mask.deletion_protected;
   if (field_key == "enabled") {
     return mask.enabled;
   }
@@ -377,6 +397,10 @@ auto ApplySetMaskField(PipelineDocument& document, const SetMaskFieldChange& cha
   const auto& next =
       direction == PipelineEditApplyDirection::Forward ? change.after_value : change.before_value;
   try {
+    if (change.field_key == "deletion_protected") {
+      grade->SetMaskDeletionProtected(change.mask_id, next.get<bool>());
+      return true;
+    }
     if (change.field_key == "enabled") {
       grade->SetMaskEnabled(change.mask_id, next.get<bool>());
     } else if (change.field_key == "invert") {
@@ -400,6 +424,16 @@ auto ApplyOneChange(PipelineDocument& document, const PipelineEditChange& change
         using Typed = std::decay_t<decltype(typed)>;
         if constexpr (std::is_same_v<Typed, SetParameterChange>) {
           return ApplySetParameter(document, typed, direction, error);
+        } else if constexpr (std::is_same_v<Typed, SetNodeDeletionProtectionChange>) {
+          auto* grade = RequireColorGrade(document, typed.node_id, error);
+          if (grade == nullptr) return false;
+          const bool forward = direction == PipelineEditApplyDirection::Forward;
+          if (grade->DeletionProtected() !=
+              (forward ? typed.before_protected : typed.after_protected)) {
+            return SetError(error, "Deletion protection expected value does not match");
+          }
+          grade->SetDeletionProtected(forward ? typed.after_protected : typed.before_protected);
+          return true;
         } else if constexpr (std::is_same_v<Typed, SetNodeEnabledChange>) {
           return ApplySetNodeEnabled(document, typed, direction, error);
         } else if constexpr (std::is_same_v<Typed, SetNodeMixChange>) {
@@ -441,6 +475,7 @@ auto Opposite(PipelineEditApplyDirection direction) -> PipelineEditApplyDirectio
 auto StructuralBatch(const PipelineEditBatch& batch) -> bool {
   switch (batch.operation_kind) {
     case PipelineEditOperationKind::SetParameter:
+    case PipelineEditOperationKind::SetNodeDeletionProtection:
     case PipelineEditOperationKind::SetNodeEnabled:
     case PipelineEditOperationKind::SetNodeMix:
     case PipelineEditOperationKind::RenameColorGrade:

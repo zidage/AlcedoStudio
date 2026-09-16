@@ -181,6 +181,11 @@ class EditorNodeController : public QObject {
    */
   Q_INVOKABLE bool renameColorGrade(const QString& node_id, const QString& display_name);
   /**
+   * @brief Change deletion-only protection through session history without rendering.
+   * @return false for endpoints, unfinished drafts, stale generations, or history failure.
+   */
+  Q_INVOKABLE bool setColorGradeDeletionProtected(const QString& node_id, bool deletion_protected);
+  /**
    * @brief Remove one Color Grade from the draft. Does not bridge neighbors.
    */
   Q_INVOKABLE bool deleteColorGrade(const QString& node_id);

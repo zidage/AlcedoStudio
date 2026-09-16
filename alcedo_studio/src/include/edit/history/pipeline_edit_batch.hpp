@@ -35,6 +35,7 @@ enum class PipelineEditOperationKind : std::uint8_t {
   SetMaskField,
   Paste,
   EditNodeGraph,
+  SetNodeDeletionProtection,
 };
 
 /// Discriminator for one stored typed change.
@@ -51,6 +52,7 @@ enum class PipelineEditChangeKind : std::uint8_t {
   ReplaceMaskSource,
   SetMaskField,
   NodeGraphTopologyChange,
+  SetNodeDeletionProtection,
 };
 
 /// Owner of one stored parameter write. Unspecified is not a legal stored value.
@@ -142,6 +144,14 @@ struct RenameColorGradeChange {
   auto        operator==(const RenameColorGradeChange&) const -> bool = default;
 };
 
+/// Reversible deletion metadata; neither side changes pixel content.
+struct SetNodeDeletionProtectionChange {
+  NodeId node_id;
+  bool before_protected = false;
+  bool after_protected = false;
+  auto operator==(const SetNodeDeletionProtectionChange&) const -> bool = default;
+};
+
 struct AddColorGradeChange {
   NodeId            node_id;
   nlohmann::json    node = nlohmann::json::object();
@@ -149,6 +159,8 @@ struct AddColorGradeChange {
   NodeId            successor_id;
   PipelineSceneEdge incoming_edge;
   PipelineSceneEdge outgoing_edge;
+  /// Paste insertion establishes the remapped default identity; ordinary creation leaves it false.
+  bool establishes_default_grade = false;
   // Stored-node insertion uses equal values because it restores an existing display name.
   std::uint64_t     before_next_color_grade_name_number = kInitialNextColorGradeNameNumber;
   std::uint64_t     after_next_color_grade_name_number  = kInitialNextColorGradeNameNumber;
@@ -164,6 +176,8 @@ struct RemoveColorGradeChange {
   PipelineSceneEdge removed_incoming_edge;
   PipelineSceneEdge removed_outgoing_edge;
   PipelineSceneEdge bridge_edge;
+  /// True when this removal clears the document identity; inverse restores this NodeId.
+  bool was_default_grade = false;
 
   auto              operator==(const RemoveColorGradeChange&) const -> bool = default;
 };
@@ -228,6 +242,8 @@ struct NodeGraphTopologyChange {
   std::vector<NodeGraphConnectedEdge>    connected_edges;
   std::uint64_t before_next_color_grade_name_number = kInitialNextColorGradeNameNumber;
   std::uint64_t after_next_color_grade_name_number  = kInitialNextColorGradeNameNumber;
+  /// Default identity cleared by this removal; empty if the default Grade remains.
+  NodeId removed_default_grade_id;
 
   auto          operator==(const NodeGraphTopologyChange&) const -> bool = default;
 };
@@ -273,7 +289,7 @@ using PipelineEditChange =
     std::variant<SetParameterChange, SetNodeEnabledChange, SetNodeMixChange, RenameColorGradeChange,
                  AddColorGradeChange, RemoveColorGradeChange, ReconnectColorGradeChange,
                  AddMaskChange, RemoveMaskChange, ReplaceMaskSourceChange,
-                 SetMaskFieldChange, NodeGraphTopologyChange>;
+                 SetMaskFieldChange, NodeGraphTopologyChange, SetNodeDeletionProtectionChange>;
 
 /**
  * @brief Saved identity used by history rows. Never reads a live document.

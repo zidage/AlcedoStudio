@@ -88,6 +88,34 @@ TEST(DocumentTransferTest, ExportImportRoundTripPreservesFingerprint) {
   EXPECT_EQ(ExportDocumentTransfer(imported).dump(), exported.dump());
 }
 
+TEST(DocumentTransferTest, ImportRejectsMissingOrInvalidProtectionAndDefaultIdentity) {
+  auto document = test::DocumentWithExposureEv(0.25);
+  grade_mask_test::AddRadialMask(document, MaskId{"mask.transfer"});
+  auto encoded = ExportDocumentTransfer(CaptureDocumentTransfer(document));
+  encoded.erase("fingerprint");
+  const auto imported = ImportDocumentTransfer(encoded);
+  EXPECT_EQ(imported.default_grade_id_, document.DefaultGradeId());
+  EXPECT_TRUE(imported.color_grades_.front().at("deletion_protected").get<bool>());
+  for (const bool mask_field : {false, true}) {
+    auto missing = encoded;
+    auto& owner = mask_field ? missing.at("color_grades").at(0).at("masks").at(0)
+                             : missing.at("color_grades").at(0);
+    owner.erase("deletion_protected");
+    EXPECT_THROW((void)ImportDocumentTransfer(missing), std::runtime_error);
+    owner["deletion_protected"] = "false";
+    EXPECT_THROW((void)ImportDocumentTransfer(missing), std::runtime_error);
+  }
+  auto missing_identity = encoded;
+  missing_identity.erase("default_grade_id");
+  EXPECT_THROW((void)ImportDocumentTransfer(missing_identity), std::runtime_error);
+  for (const auto& invalid : {nlohmann::json{7}, nlohmann::json("grade.absent"),
+                              nlohmann::json("develop"), nlohmann::json("")}) {
+    auto malformed = encoded;
+    malformed["default_grade_id"] = invalid;
+    EXPECT_THROW((void)ImportDocumentTransfer(malformed), std::runtime_error);
+  }
+}
+
 TEST(DocumentTransferTest, PasteKeepsTargetDevelopRawDataAndGeometry) {
   auto target = CreateDefaultPipelineDocument();
   target.Geometry().SetRotationDegrees(27.0f);

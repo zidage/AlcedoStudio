@@ -2,9 +2,11 @@
 
 Date: 2026-09-16
 
-Status: **NM9.1 complete 2026-09-16**；NM9.2–NM9.6 仍为 planned。本文件记录产品语义和
-实施拆分；NM9.1 的共享组投影、顶部插入、桥接删除与草稿边界已在
-`feature/nm91-mask-group-projection` 实现并通过验证，见 NM9.1 完成记录。
+Status: **NM9.1 complete 2026-09-16**；**NM9.2 complete 2026-09-16**；NM9.3–NM9.6 仍为
+planned。本文件记录产品语义和实施拆分；NM9.1 的共享组投影、顶部插入、桥接删除与草稿
+边界已在 `feature/nm91-mask-group-projection` 实现并通过验证，见 NM9.1 完成记录。
+NM9.2 的删除保护、默认 Grade 身份与格式读写已在 `feature/nm92-deletion-protection`
+实现并通过验证，见 NM9.2 完成记录。
 
 Parent: [Node-aware Pipeline Editing and Mask Creation](../node_mask_editor_master_plan.md)，
 第 7.1、16、18.1、21.10、26 节。
@@ -639,6 +641,113 @@ commit 计数与 head hash 断言。渲染复用既有 `RenderRouted`/Quality in
 `PipelineDocumentCheckpointTest` 以及 `EditorSessionHistoryPortTest` 的文档/Version/Paste
 用例。提交阶段记录必须包含格式兼容表、所有删除入口清单和元数据无渲染证据；不能把
 持久化正确性全部推给 NM9.5，后者负责跨模块组合验证。
+
+##### Phase NM9.2 completion record (2026-09-16)
+
+**Status:** complete — owner 强制删除保护、可撤销锁切换、显式默认 Grade 身份、
+完整格式读写规则已交付;布局与真实缩略图仍属 NM9.3/NM9.4。
+
+**实现事实:**
+
+- **领域字段。** `ColorGradeNodeModel::SetDeletionProtected/DeletionProtected` 与
+  `MaskModel::deletion_protected`(`mask_model.{hpp,cpp}`)是持久领域数据;canonical
+  mask JSON 强制 bool。默认值只在创建时应用:`CreateDefaultPipelineDocument` 给
+  默认 Grade 上锁,新建 Mask 默认上锁(Clean Grade 不锁);读取/投影/重建不重套默认值
+  (`default_pipeline_test.cpp` 断言读取不改锁)。
+- **默认身份。** 新增 `PipelineDocument::DefaultGradeId/SetDefaultGradeId`(类型与
+  唯一性校验,删除后为空),随 document JSON/checkpoint/transfer 持久化;Paste 由
+  identity source 重映射。不按显示名或行号判断,删除后不自动升级其他组。
+- **typed metadata change。** `SetNodeDeletionProtectionChange`(NodeId+before/after)与
+  `SetMaskFieldChange`("deletion_protected")走 JSON/validate/apply/inverse/hash;
+  同值写入 no-op 不提交。锁 change 元数据生效:`RenderReasonForBatch` 不返回 pixel
+  原因,mixed batch 仍产生 render intent。
+- **统一删除 admission。** `PipelineDocument::ValidateUserDeletion` 检查节点自身与
+  全部将被移除 Mask 的锁,一次预检;草稿删除、topology batch、组删除、Mask 行、
+  service 入口共用。失败返回含 stable ID 的可本地化原因,不部分删除。
+- **历史与新命令边界。** 用户删除按当前锁校验;已验证历史 forward/inverse 回放不再
+  当新用户删除。`NodeGraphTopologyChange` 新增 `removed_default_grade_id`:forward
+  清空默认身份,inverse 精确恢复;JSON 要求显式字段并校验指向被移除 Grade。
+  拓扑删除默认 Grade 若未记录身份则拒绝。
+- **格式。** `kPipelineDocumentFormatVersion` 6→7、`kPipelineEditBatchFormatVersion`
+  3→4、root/checkpoint 5、WAL 5、transfer schema v5;缺锁字段/非 bool/非法默认身份
+  在 decode 边界真实失败,无旧格式迁移路径。
+
+**Primary success call chain:**
+
+```text
+锁动作(UI/service) -> EditorSessionController::SubmitSetColorGradeDeletionProtected
+  -> EditorSessionService(会话/交互校验) -> EditorSessionHistoryPort::SetColorGradeDeletionProtected
+  -> EditorHistoryMutation(SetColorGradeDeletionEnabled 等) -> MakeSetNodeDeletionProtectionBatch
+  -> PublishAppliedTypedBatch(apply + WAL append + live mirror)
+  -> document 字段与投影更新 -> 两视图锁与删除可用性刷新;无 render intent
+```
+
+**删除成功链:**
+
+```text
+removeMaskGroup/deleteColorGrade -> draft/topology capture(NodeGraphTopologyChange,
+  removed_default_grade_id 由 draft 基准身份记录)
+  -> ApplyNodeGraphTopologyChange(默认身份清空/恢复) -> history commit -> 投影重建
+```
+
+**Primary failure call chain:**
+
+```text
+受保护删除请求 -> ValidateUserDeletion / topology 默认身份预检
+  -> 返回 "Unlock Color Grade before deletion: <NodeId>" 或
+     "NodeGraphTopologyChange must record removal of the default Grade identity"
+  -> 图、history head、commit 计数、选择全部不变
+```
+
+**What was proven (executed tests, debug build):**
+
+| 覆盖点 | Target / 测试 | 结果 |
+| --- | --- | --- |
+| 拓扑删除默认身份清空、JSON roundtrip、Undo 恢复身份与原文档 | `EditorSessionHistoryPortTest.NodeGraphTopologyHistory.DefaultGradeRemovalClearsIdentityAndUndoRestoresIt` | PASS(修复前失败:身份未清空,decode 抛 invalid_argument) |
+| 显式节点+Mask 解锁经 checkpoint/WAL 真实重开、Undo/Redo 头与锁值精确恢复 | `NodeGraphTopologyHistory.ProductionPortRecoversExplicitNodeAndMaskUnlockFromCheckpointAndWal` | PASS |
+| 新建默认保护 Mask Undo/Redo 恢复原 ID+锁 | `EditorDocumentHistoryTest.ProtectedMaskCreationUndoRedoRestoresExactIdentityAndLock` | PASS |
+| mixed lock+pixel batch apply/Undo/Redo 均有 render intent | `EditorDocumentHistoryTest.MixedLockAndPixelBatchRequestsRenderThroughUndoRedo` | PASS |
+| 多对象移除 batch 预检拒绝,含未尝试解锁,文档/head/计数不变 | `EditorDocumentHistoryTest.MultipleMaskRemovalRejectsBeforeUnlockOrPartialMutation` | PASS |
+| 锁 no-op/有效切换/Undo/Redo、无 render intent、MaskContentRevision 稳定 | `NodeDeletionLockHistoryRoundTripHasNoRenderIntent`、`MaskDeletionLockPreservesCoverageAcrossNoOpUndoAndRedo`、`SameValueNodeLockPreservesHistoryAndClearsStaleRenderReason` | PASS |
+| service 双视图计数与非交互拒绝 | `DeletionLockPublishesOnlyEffectiveChangesWithoutRender`、`EditorSessionNodeCommandTest` 锁用例 | PASS |
+| 四种父/子锁组合删除拒绝、草稿保持 | `EditorNodeGraphDraft.LiveDeletionProtectionPreservesDraftAndPriorReversal` | PASS |
+| 参数/形状在锁下可编辑 | `ProtectedDeletionPreservesOpenEditAndAllowsParameterChanges` 等 | PASS |
+| 默认值按身份而非名称/父锁 | `AnalyticMaskCreationTest.CreationProtectionUsesDefaultIdentityNotNameOrParentLock` 等 | PASS |
+| checkpoint/root/WAL 默认身份+独立锁、缺字段/非法身份拒绝 | `PipelineDocumentCheckpointTest`(RoundTrip/Rejects* 等) | PASS |
+| typed batch 锁 change JSON/validate/hash、兼容性 | `PipelineEditBatchTest`(DeletionProtection* 等) | PASS |
+| transfer 缺失/非 bool 锁字段与非法默认身份 import 拒绝、Paste 重映射 | `DocumentTransferTest.ImportRejectsMissingOrInvalidProtectionAndDefaultIdentity`、`PasteRemapsEveryNodeAdjustmentAndMaskId`、`PasteWithoutDefaultIdentityDoesNotInheritTargetDefault` | PASS |
+| 受保护 batch 拒绝原子性 | `EditorDocumentHistoryTest.ProtectedGradeBatchRemovalKeepsDocumentAndHistoryUnchanged` | PASS |
+| 全套件回归 | 260(历史/会话/投影/draft/transfer/batch/checkpoint/commit)+ 61(EditorNodeSelectionLayoutTest)+ 62(GpuDagModelGraphTest)+ 36(batch/checkpoint) | 全部 PASS |
+
+Commands: `cmd /c scripts\msvc_env.cmd --build --preset win_debug --target ... --parallel 4`;
+`ctest --test-dir build/debug --output-on-failure -R <suite>`(具体清单见上)。
+
+**格式兼容表:**
+
+| 格式 | 新版本 | 旧行为 |
+| --- | --- | --- |
+| pipeline document JSON | 7 | 拒绝,不转换 |
+| typed batch payload | 4 | 拒绝 |
+| root state / checkpoint | 5 | 拒绝 |
+| mini-Git WAL record | 5 | 拒绝 |
+| adjustment transfer schema | `alcedo.adjustment_transfer.v5` | 拒绝 |
+| commit/chain hash | 5 | 拒绝 |
+
+**Checklist / exit condition:** NM9.2.4 表全部覆盖;所有删除入口共用 owner 校验;
+格式边界真实失败;已完成术语整改(goldens→expected_serialized,Expected* 测试名)。
+
+**LOC note (grill-code-review):** 62 files, +1535/-194(含 13 个期望数据文件目录迁移)。
+`analytic_mask_creation_test.cpp` 已超 1000 LOC(1035),拆分点:controller 创建/
+编辑/删除历史 vs overlay geometry/coverage;留待 NM9.3 触碰时执行。
+
+**Residual gaps:** 实际 Viewer 键盘/adapter 删除入口的 e2e 由 NM9.3 面板接线后验证
+(当前 analytic 测试直接调用 app controller);mixed batch 的 GPU 侧渲染证据同 NM9.5。
+
+**删除入口清单:** 节点草稿删除(`EditorNodeController::deleteColorGrade`/
+`EditorNodeGraphDraft::RemoveColorGrade`)、完整 topology batch、组删除
+(`RemoveColorGradeAndBridge`)、Mask 行/抽屉删除(`EditorHistoryMutation::RemoveMask`)、
+Viewer Delete(`EditorNodeController` adapter)、直接 service
+(`EditorSessionService`/`PipelineDocument::ValidateUserDeletion`)。
 
 ### NM9.3 — 面板、创建与选择
 

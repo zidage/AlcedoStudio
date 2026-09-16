@@ -179,11 +179,13 @@ auto RemoveColorGradeAndBridge(PipelineDocument& document, const NodeId& node_id
                       std::string{node_id.Value()})};
   }
 
-  return FinishEdit(
-      document,
-      document.Graph().ApplyBackboneEdit(
-          {}, {{incoming->from_node, incoming->from_port, outgoing->to_node, outgoing->to_port}},
-          nullptr, node_id));
+  auto result = document.Graph().ApplyBackboneEdit(
+      {}, {{incoming->from_node, incoming->from_port, outgoing->to_node, outgoing->to_port}},
+      nullptr, node_id);
+  if (result.empty() && document.DefaultGradeId() == node_id) {
+    document.SetDefaultGradeId(NodeId{});
+  }
+  return FinishEdit(document, std::move(result));
 }
 
 auto ReconnectColorGrade(PipelineDocument& document, const NodeId& node_id,

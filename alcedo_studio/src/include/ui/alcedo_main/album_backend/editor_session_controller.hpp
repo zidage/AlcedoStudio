@@ -266,6 +266,9 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   /** Route a metadata-only Color Grade rename through the active session backend. */
   auto               SubmitRenameColorGrade(const alcedo::NodeId& node_id, std::string display_name)
       -> alcedo::EditorSessionResult;
+  /// Route deletion-only metadata through the backend; rejects when no session is available.
+  auto SubmitSetColorGradeDeletionProtected(const alcedo::NodeId& node_id, bool deletion_protected)
+      -> alcedo::EditorSessionResult;
   /** Route one net topology delta through the active session backend. */
   auto SubmitNodeGraphTopologyEdit(const alcedo::NodeGraphTopologyChange& change)
       -> alcedo::EditorSessionResult;

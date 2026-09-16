@@ -29,10 +29,30 @@ class RecordingNodeCommandScheduler final : public IEditorPipelineSchedulerPort 
   std::uint64_t                    next_job = 0;
 };
 
+/// Stateful history boundary for testing session admission/publication, not document replay.
+class NodeLockHistoryPort final : public test::ControllableEditorHistoryPort {
+ public:
+  auto SetColorGradeDeletionProtected(const EditorHistoryGuardHandle&, const NodeId&,
+                                      bool protected_value, std::string* error,
+                                      bool* changed = nullptr) -> bool override {
+    if (changed) *changed = false;
+    if (fail_node_command) {
+      if (error) *error = "mini-Git journal append failed";
+      return false;
+    }
+    last_render_reason = std::nullopt;
+    if (deletion_protected == protected_value) return true;
+    deletion_protected = protected_value;
+    if (changed) *changed = true;
+    return true;
+  }
+  bool deletion_protected = true;
+};
+
 class EditorSessionNodeCommandTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    history_          = std::make_shared<test::ControllableEditorHistoryPort>();
+    history_          = std::make_shared<NodeLockHistoryPort>();
     pipeline_         = std::make_shared<test::FakeEditorPipelinePort>();
     tasks_            = std::make_shared<test::FakeEditorTaskPort>();
     journal_          = std::make_shared<test::OrderRecordingJournalPort>();
@@ -79,7 +99,7 @@ class EditorSessionNodeCommandTest : public ::testing::Test {
     return change;
   }
 
-  std::shared_ptr<test::ControllableEditorHistoryPort> history_;
+  std::shared_ptr<NodeLockHistoryPort>                 history_;
   std::shared_ptr<test::FakeEditorPipelinePort>        pipeline_;
   std::shared_ptr<test::FakeEditorTaskPort>            tasks_;
   std::shared_ptr<test::OrderRecordingJournalPort>     journal_;
@@ -100,6 +120,51 @@ TEST_F(EditorSessionNodeCommandTest, RenameCreatesOneHistoryChangeWithoutRender)
   EXPECT_EQ(history_->last_node_id, NodeId{"grade.primary"});
   EXPECT_EQ(history_->last_grade_name, "Sky");
   EXPECT_EQ(service_->history_revision(), revision_before + 1);
+  EXPECT_EQ(scheduler_->requests.size(), renders_before);
+}
+
+TEST_F(EditorSessionNodeCommandTest, DeletionLockPublishesOnlyEffectiveChangesWithoutRender) {
+  const auto renders_before  = scheduler_->requests.size();
+  const auto revision_before = service_->history_revision();
+  history_->last_render_reason = EditorRenderReason::GraphTopologyChanged;
+
+  EXPECT_EQ(service_->SetColorGradeDeletionProtected(NodeId{"grade.primary"}, true).kind,
+            EditorSessionResultKind::Accepted);
+  EXPECT_EQ(service_->history_revision(), revision_before);
+  EXPECT_FALSE(history_->LastPublishedRenderReason().has_value());
+  EXPECT_EQ(scheduler_->requests.size(), renders_before);
+
+  EXPECT_EQ(service_->SetColorGradeDeletionProtected(NodeId{"grade.primary"}, false).kind,
+            EditorSessionResultKind::Accepted);
+  EXPECT_EQ(service_->history_revision(), revision_before + 1);
+  EXPECT_EQ(scheduler_->requests.size(), renders_before);
+  EXPECT_EQ(service_->SetColorGradeDeletionProtected(NodeId{"grade.primary"}, false).kind,
+            EditorSessionResultKind::Accepted);
+  EXPECT_EQ(service_->history_revision(), revision_before + 1);
+  EXPECT_EQ(service_->SetColorGradeDeletionProtected(NodeId{"grade.primary"}, true).kind,
+            EditorSessionResultKind::Accepted);
+  EXPECT_EQ(service_->history_revision(), revision_before + 2);
+  EXPECT_EQ(scheduler_->requests.size(), renders_before);
+}
+
+TEST_F(EditorSessionNodeCommandTest, FailedDeletionLockDoesNotPublishHistoryOrRender) {
+  history_->fail_node_command = true;
+  const auto renders_before  = scheduler_->requests.size();
+  const auto revision_before = service_->history_revision();
+  const auto result = service_->SetColorGradeDeletionProtected(NodeId{"grade.primary"}, false);
+  EXPECT_EQ(result.kind, EditorSessionResultKind::Rejected);
+  EXPECT_EQ(service_->history_revision(), revision_before);
+  EXPECT_EQ(scheduler_->requests.size(), renders_before);
+}
+
+TEST_F(EditorSessionNodeCommandTest, DeletionLockRejectsANonInteractiveSession) {
+  (void)service_->Shutdown();
+  service_->DrainCommandQueueForTests();
+  const auto renders_before  = scheduler_->requests.size();
+  const auto revision_before = service_->history_revision();
+  EXPECT_EQ(service_->SetColorGradeDeletionProtected(NodeId{"grade.primary"}, false).kind,
+            EditorSessionResultKind::Rejected);
+  EXPECT_EQ(service_->history_revision(), revision_before);
   EXPECT_EQ(scheduler_->requests.size(), renders_before);
 }
 

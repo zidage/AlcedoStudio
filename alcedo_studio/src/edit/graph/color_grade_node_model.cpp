@@ -75,6 +75,7 @@ auto ColorGradeNodeModel::ToJson() const -> nlohmann::json {
           {"type", std::string{Type().Text()}},
           {"display_name", display_name_},
           {"enabled", enabled_},
+          {"deletion_protected", deletion_protected_},
           {"mix", mix_},
           {"adjustments", std::move(adjustments)},
           {"masks", std::move(masks)}};
@@ -106,6 +107,10 @@ auto ColorGradeNodeModel::FromJson(const nlohmann::json& json)
       json.at("display_name").get<std::string>().empty()) {
     throw std::runtime_error("ColorGrade FromJson: display_name must be non-empty");
   }
+  if (!json.contains("deletion_protected") || !json.at("deletion_protected").is_boolean()) {
+    throw std::runtime_error("ColorGrade FromJson: deletion_protected must be boolean");
+  }
+  node->deletion_protected_ = json.at("deletion_protected").get<bool>();
   node->display_name_ = json.at("display_name").get<std::string>();
   node->enabled_      = json.value("enabled", true);
   node->mix_          = json.value("mix", 1.0f);
@@ -282,6 +287,10 @@ auto RequireMaskIterator(std::vector<MaskModel>& masks, const MaskId& mask_id)
 }
 
 }  // namespace
+
+void ColorGradeNodeModel::SetMaskDeletionProtected(const MaskId& mask_id, bool value) {
+  RequireMaskIterator(masks_, mask_id)->deletion_protected = value;
+}
 
 void ColorGradeNodeModel::TouchMask(const MaskId& mask_id) {
   mask_content_revision_[mask_id] = next_mask_revision_++;

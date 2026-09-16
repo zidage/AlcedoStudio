@@ -176,6 +176,50 @@ void ApplyDefaultPipelineLook(ColorGradeNodeModel& grade) {
 
 }  // namespace
 
+void PipelineDocument::SetDefaultGradeId(NodeId id) {
+  if (!id.Empty() && dynamic_cast<const ColorGradeNodeModel*>(graph_.FindNode(id)) == nullptr) {
+    throw std::invalid_argument("Default Grade identity does not name a Color Grade: " +
+                                std::string{id.Value()});
+  }
+  default_grade_id_ = std::move(id);
+}
+
+auto PipelineDocument::ValidateUserDeletion(const NodeId& node_id,
+                                            std::optional<MaskId> mask_id) const
+    -> std::vector<GraphValidationError> {
+  const auto* node = graph_.FindNode(node_id);
+  const auto* grade = dynamic_cast<const ColorGradeNodeModel*>(node);
+  if (grade == nullptr) {
+    return {{node == nullptr ? GraphValidationCode::UnknownNode
+                             : GraphValidationCode::ProtectedEndpoint,
+             "Cannot delete node: " + std::string{node_id.Value()}, node_id, {}}};
+  }
+  std::vector<GraphValidationError> errors;
+  const auto check_mask = [&](const MaskModel& mask) {
+    if (mask.deletion_protected) {
+      errors.push_back({GraphValidationCode::DeletionProtected,
+                        "Unlock Mask before deletion: " + std::string{node_id.Value()} + "/" +
+                            std::string{mask.id.Value()}, node_id, mask.id});
+    }
+  };
+  if (mask_id.has_value()) {
+    const auto* mask = grade->FindMask(*mask_id);
+    if (mask == nullptr) {
+      return {{GraphValidationCode::InvalidNodeValue,
+               "Unknown Mask: " + std::string{mask_id->Value()}, node_id, *mask_id}};
+    }
+    check_mask(*mask);
+  } else {
+    if (grade->DeletionProtected()) {
+      errors.push_back({GraphValidationCode::DeletionProtected,
+                        "Unlock Color Grade before deletion: " + std::string{node_id.Value()},
+                        node_id, {}});
+    }
+    for (const auto& mask : grade->Masks()) check_mask(mask);
+  }
+  return errors;
+}
+
 void PipelineDocument::SetNextColorGradeNameNumber(std::uint64_t number) {
   if (number == 0) {
     throw std::invalid_argument("PipelineDocument next Color Grade name number must be positive");
@@ -263,6 +307,8 @@ auto PipelineDocument::ToJson() const -> nlohmann::json {
   return {{"format_version", format_version_},
           {"geometry", geometry_.ToJson()},
           {"next_color_grade_name_number", next_color_grade_name_number_},
+          {"default_grade_id", default_grade_id_.Empty() ? nlohmann::json(nullptr)
+                                                        : nlohmann::json(default_grade_id_.Value())},
           {"nodes", std::move(nodes)},
           {"edges", std::move(edges)}};
 }
@@ -283,6 +329,14 @@ auto PipelineDocument::FromJson(const nlohmann::json& json) -> PipelineDocument 
                             PortId{from.at(1).get<std::string>()},
                             NodeId{to.at(0).get<std::string>()}, PortId{to.at(1).get<std::string>()});
   }
+  if (!json.contains("default_grade_id") ||
+      (!json.at("default_grade_id").is_null() &&
+       (!json.at("default_grade_id").is_string() ||
+        json.at("default_grade_id").get<std::string>().empty()))) {
+    throw std::runtime_error("Pipeline document requires null or nonempty default_grade_id");
+  }
+  document.SetDefaultGradeId(json.at("default_grade_id").is_null()
+                                ? NodeId{} : NodeId{json.at("default_grade_id").get<std::string>()});
   document.topology_dirty_ = true;
   return document;
 }
@@ -292,8 +346,10 @@ auto CreateDefaultPipelineDocument() -> PipelineDocument {
   document.Graph().AddNode(std::make_unique<DevelopNodeModel>(NodeId{"develop"}));
   auto grade = ColorGradeNodeModel::MakeDefault(NodeId{"grade.primary"});
   grade->SetDisplayName(DefaultColorGradeDisplayName(1));
+  grade->SetDeletionProtected(true);
   ApplyDefaultPipelineLook(*grade);
   document.Graph().AddNode(std::move(grade));
+  document.SetDefaultGradeId(NodeId{"grade.primary"});
   document.Graph().AddNode(DrtNodeModel::MakeDefault(NodeId{"drt"}));
   document.Graph().Connect(NodeId{"develop"}, PortId{"image"}, NodeId{"grade.primary"},
                            PortId{"image"});

@@ -46,19 +46,19 @@ auto PrimaryGradeJson(nlohmann::json& document_json) -> nlohmann::json& {
 }
 
 TEST(BrushSourceFormatBoundary, CurrentHistoryIdentitiesMatchPublishedConstants) {
-  EXPECT_EQ(kProjectFileVersion, "0.7.0");
-  EXPECT_EQ(kMinSupportedProjectFileVersion, "0.7.0");
-  EXPECT_EQ(kMaxSupportedProjectFileVersion, "0.7.0");
-  EXPECT_EQ(kPackedProjectFormatVersion, 6u);
-  EXPECT_EQ(kPipelineDocumentFormatVersion, 6u);
-  EXPECT_EQ(kImageEditSchemaVersion, 4u);
-  EXPECT_EQ(kCommitFormatVersion, 4u);
-  EXPECT_EQ(kChainFormatVersion, 4u);
-  EXPECT_EQ(kPipelineEditBatchFormatVersion, 3u);
-  EXPECT_EQ(kRootStateFormatVersion, 4u);
-  EXPECT_EQ(kCheckpointStateFormatVersion, 4u);
-  EXPECT_EQ(kMiniGitJournalRecordFormatVersion, 5u);
-  EXPECT_EQ(kAdjustmentTransferSchema, "alcedo.adjustment_transfer.v4");
+  EXPECT_EQ(kProjectFileVersion, "0.8.0");
+  EXPECT_EQ(kMinSupportedProjectFileVersion, "0.8.0");
+  EXPECT_EQ(kMaxSupportedProjectFileVersion, "0.8.0");
+  EXPECT_EQ(kPackedProjectFormatVersion, 7u);
+  EXPECT_EQ(kPipelineDocumentFormatVersion, 7u);
+  EXPECT_EQ(kImageEditSchemaVersion, 5u);
+  EXPECT_EQ(kCommitFormatVersion, 5u);
+  EXPECT_EQ(kChainFormatVersion, 5u);
+  EXPECT_EQ(kPipelineEditBatchFormatVersion, 4u);
+  EXPECT_EQ(kRootStateFormatVersion, 5u);
+  EXPECT_EQ(kCheckpointStateFormatVersion, 5u);
+  EXPECT_EQ(kMiniGitJournalRecordFormatVersion, 6u);
+  EXPECT_EQ(kAdjustmentTransferSchema, "alcedo.adjustment_transfer.v5");
   EXPECT_EQ(kMaskAssetFormatVersion, 1u);
   EXPECT_EQ(kMaskAssetPackedR8FormatId, 1u);
   EXPECT_EQ(kMaximumRasterMaskAxis, 4096u);
