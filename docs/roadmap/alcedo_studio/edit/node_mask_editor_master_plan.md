@@ -5,23 +5,35 @@ Date: 2026-08-29
 Status: NM0, NM2, NM3, NM4, and NM5 complete; NM6.1–NM6.4, NM6.4P, and NM6.P complete
 per execution records; NM6.5–NM6.9 planned; NM1 status retained below;
 NM7 complete per user confirmation on 2026-09-12, with historical execution records retained;
-NM8.1 complete 2026-09-12; NM8.2–NM8.6 planned under the 2026-09-12 pass/buffer
-decisions and the Brush-disabled release boundary.
+NM8 complete per user confirmation on 2026-09-16, closing the current scope at NM8.4;
+NM9 planned: twin Mask Groups panel over the same DAG;
+NM10 reserved: Adjustment Transfer, with scope intentionally blank.
 NML was cancelled on 2026-08-30.
+
+2026-09-16 路线更新：用户确认 NM8.4 已完成，基于 NM8.3 的结果判断当前工作流增加节点
+不会显著增加计算时间，因此暂时将 NM8 标记 complete。原 NM8.5–NM8.6 移出本次收口
+范围；历史未实测平台和场景继续如实记录，不宣称全部产品验证已经通过。
+接续 [NM9 蒙版组孪生面板](node_mask_editor/phase_nm9_mask_group_panel_plan.md)：保留节点
+编辑器，增加传统摄影工作流的 Mask Groups stack；两者读取和操作同一个 DAG、同一组
+NodeId/MaskId、同一份参数与历史。节点与蒙版的锁只保护删除，允许显式解锁，仍可编辑
+参数、形状与强度。默认 Color Grade 1 及其蒙版默认开启删除保护。
+[NM10 Adjustment Transfer](node_mask_editor/phase_nm10_adjustment_transfer_plan.md) 先留空。
 
 2026-09-12 NM8 design approval: each Color Grade uses
 `Basic Tone → Color → Local Tone → Mix`, with Basic Tone and Color fused into one pointwise pass.
 Remove persistent image results between Color Grades. One workspace-owned pair of RGBA32F work
 images carries results between Grades and continues into compatible downstream ping-pong work.
-Only LLF source/result maps remain persistent within a Grade; higher LLF levels and analytic Mask
-coverage are temporary work. Preserve Develop/Geometry reuse and existing frame-role boundaries.
+Only LLF source/result maps remain persistent within Grade scene processing; higher LLF levels
+are temporary work. Mask R8/Union resources keep their existing separate owner and validity rules
+as specified by NM8.4. Preserve Develop/Geometry reuse and existing frame-role boundaries.
 This supersedes NM6 requirements to retain each Grade output and any proposal to retain selected
 Grade prefixes. Mix must retain the original node input until its last read; final LLF application
 and Mix use an explicitly verified same-pixel read/write pass. The
 [NM8 execution plan](node_mask_editor/phase_nm8_product_qualification_plan.md) defines source audit,
-timing, logging, buffer ownership, tests, and platform qualification. NM8.1 low-overhead logging
-is complete; NM8.2 native GPU timing has not started. NM7 completion above records the user's confirmation,
-not additional tests performed during NM8 planning.
+timing, logging, buffer ownership, tests, and platform qualification. NM8.1, CUDA NM8.2,
+NM8.2R, NM8.3, and Windows CUDA/OpenCL NM8.4 have dated execution records there.
+The 2026-09-16 closure does not add evidence for unmeasured platforms. NM7 completion above
+records the user's confirmation, not additional tests performed during NM8 planning.
 
 2026-08-30 简化修订：每张图片只有一个 live document，领域函数原地修改，后台任务共用
 executor；不以整图 candidate 或独立 snapshot executor 实现原子性。History 仍是已提交状态
@@ -45,7 +57,8 @@ cleanup policy. Moving existing Brush/Radial/Gradient masks updates actual Inter
 QSG displays controls without affected-area highlighting. Center-out Radial creation, adjustable
 Brush size/strength with paint/erase remain approved. The 2026-09-09 correction makes Mask a
 seventh Adjustment Stack parameter page that is enabled only during Mask creation or selection;
-the Node drawer remains the sole Mask list.
+the Node drawer was the sole Mask list for NM7. The 2026-09-16 NM9 decision adds the
+twin Mask Groups list; the right-side Mask parameter page still does not repeat those rows.
 This supersedes the earlier immutable-raster-history requirement in Sections 8–12 and NM7.
 NM3/NM4 completion records remain historical evidence. The 2026-09-11 decision below supersedes
 the remaining scope and moves future Brush work out of Node Editor.
@@ -84,7 +97,8 @@ Earlier NM1 status is not re-qualified here.
 调整面板、多蒙版绘制、编辑历史和 Version 工作流。
 
 本文件定义背景、产品语义、目标架构、跨模块边界、一级 Phase 顺序、主要调用链、风险和
-最终验收范围。它固定 `NM0` 到 `NM8` 的阶段门槛，但不预先写每个阶段内部的详细执行步骤。
+最终验收范围。它固定 `NM0` 到 `NM9` 的阶段门槛，另保留空白的 `NM10`，但不预先写每个
+阶段内部的详细执行步骤。NM8 的本次完成范围以 2026-09-16 收口决定为准。
 一级 Phase `NML`（旧 stage 存储升级到默认 DAG）于 2026-08-30 取消。产品不打开 DAG document
 之前的 stage-only 项目，也不迁移旧 mini-git commit。后续 Phase 删除 CPU stage 表，不做旧
 项目升级。最终格式发布时通过项目 metadata 版本统一拒绝旧项目，不设计 v2/stage 迁移。
@@ -131,9 +145,12 @@ DRT and Post Processing
 用户可以：
 
 - 在左侧工具轨中打开 Nodes 面板；
+- 使用 NM9 的 Mask Groups 孪生面板，以同一 DAG 的纵向分组视图管理局部调整；
 - 使用 QuickQanava 选择节点、创建 Color Grade、删除 Color Grade 和重新连接主链；
 - 选择任意 Color Grade 后，在右侧面板调整属于该节点的参数；
 - 为一个 Color Grade 创建多个 Radial 或 Linear Gradient 蒙版；
+- 在节点或蒙版组任一视图中选择蒙版，统一选中其 owner 节点并显示相同调整参数；
+- 为节点和蒙版开启或解除删除保护，默认保护 Color Grade 1 及其蒙版；
 - 在 edit viewer 上直接绘制或修改蒙版，并同时看到实际调色结果预览和 QSG 编辑辅助层；
 - Undo/Redo 节点、参数和蒙版操作；
 - 在历史面板中看清操作目标节点和具体变化；
@@ -466,6 +483,9 @@ auto CreateCleanColorGradeNode(NodeId id) -> std::unique_ptr<ColorGradeNodeModel
 - 新建过程只产生一次 graph mutation、一次历史提交和一次 Quality render。
 
 UI 不得创建默认节点后再用多个参数 Patch 把它改成 Clean。
+NM9 的新建 Mask Group 复用 Clean Grade 语义：接续插入点的真实上游结果，创建时不改变
+画面；不创建透明像素层，也不复制相邻节点的调整参数、蒙版或 RGBA 图像。
+Default Color Grade 及其蒙版按 NM9 默认开启删除保护；保护不依赖显示名称或列表位置。
 
 ### 7.2 DRT/Post 的内部执行顺序
 
@@ -610,9 +630,10 @@ Undo/Redo 通过 owner 操作恢复参数，然后按现有 native evaluator 求
 ### 9.2 当前发布不包含 Brush 项目缓存 UI
 
 NM7.13 删除或排除仅为 Brush R8 服务的当前发布设置、清理入口和 package 资源。Radial 与 Linear
-Gradient 不创建持久 R8；它们根据小型参数在 native Mask pass 中求值。NM8 中 coverage/Union
-输出作为帧内临时资源，Grade 仅保留 LLF 图；QualityBase、Detail ROI 的既定表示与保留边界
-继续有效。具体工作图、result lifetime 和 invalidation 按第 17.5 节和 NM8 方案执行。
+Gradient 根据小型参数在 native Mask pass 中求值，不创建 Brush 项目缓存资产。NM8.4 只取消
+Grade scene RGBA 的跨帧结果；Mask source/Union R8 继续遵守既有 Mask owner 的分配、保留
+和失效规则。QualityBase、Detail ROI 的既定表示与保留边界继续有效。具体工作图、result
+lifetime 和 invalidation 按第 17.5 节和 NM8 方案执行，NM9 缩略图不改变这些边界。
 
 ### 9.3 Brush 的后续持久化
 
@@ -984,7 +1005,8 @@ permanent graph and reports the exact reason.
 
 - A parameter slider change does not rebuild the graph projection.
 - A Rename updates one node label.
-- A Mask Add, Remove, reorder, or source-kind change updates only the owner node drawer.
+- A Mask Add, Remove, reorder, or source-kind change updates the owner node drawer and its NM9
+  Mask Group rows through the shared publication; it does not rebuild unrelated graph items.
 - A topology revision adds, removes, or reconnects projected nodes and edges.
 - A Version checkout replaces the projection and restores that Version's local layout state.
 - Qan object lifetime never defines NodeId lifetime.
@@ -1097,6 +1119,7 @@ Reinsertion of stored node JSON does not allocate another name.
 
 A Color Grade node shows only its display name and Mask stack. It does not show a topology number,
 node kind, status dot, On/Off state, adjustment summary, Mask count, or persistent action row.
+NM9 adds the explicitly requested deletion-lock control to node headers and Mask rows.
 
 The Mask stack is a drawer below the name. The drawer starts open. Its `Masks` header stays visible
 when closed. The full header row opens or closes the drawer. A disclosure chevron shows direction.
@@ -1112,6 +1135,9 @@ Do not show Mask name, opacity, enabled state, invert state, ranges, or identity
 The NM7.8 revision requires stable-ID selection and a compact per-row delete action, with
 parameter controls in the Mask Adjustment Stack page. It supersedes the earlier read-only row rule.
 An empty open drawer has no Mask rows.
+NM9 retains these compact node rows, adds deletion protection to both views, and gives the twin
+Mask Groups rows position/strength previews. The additional twin-panel display is specified in
+[NM9](node_mask_editor/phase_nm9_mask_group_panel_plan.md), not prohibited by the NM7 compact-row rule.
 
 Drawer state is local UI layout state. A fold creates no history and no render. The output port and
 bound edge follow the current node height.
@@ -1176,8 +1202,10 @@ first Color Grade. If no Grade exists, select DRT/Post.
 | `Ctrl++` | Add a clean Color Grade. |
 | `Ctrl+0` | Fit the graph through a pinned, documented navigation API. |
 
-Delete is undoable and needs no confirmation dialog. Endpoints reject Delete. All actions use
-localized text, accessible names, and visible keyboard focus.
+Delete is undoable and needs no confirmation dialog. Endpoints and deletion-locked targets reject
+Delete. A node containing a deletion-locked Mask also rejects node deletion until that Mask is
+explicitly unlocked. The same owner validation applies to keyboard, row actions, and graph commands.
+All actions use localized text, accessible names, and visible keyboard focus.
 
 ### 16.10 Size and Loader lifetime
 
@@ -1386,7 +1414,8 @@ and representation conditions. Do not serialize or hash whole node parameters on
 Shared templates own Grade/LLF decisions and dependency propagation; backend specializations own
 individual GPU operations. The 2026-09-12 NM8 decision removes persistent Grade RGBA outputs and
 uses a shared workspace pair through Grades and compatible downstream work. Within each Grade,
-only current LLF source/result maps persist under the existing frame-role policy. Their validity
+only current LLF source/result maps persist for scene processing under the existing frame-role
+policy; Mask R8/Union retains its separate owner's existing rules. LLF validity
 follows the input after Basic Tone and Color, including upstream Grade Mix/Mask changes. A node's
 own final Mix/analytic Mask does not invalidate its LLF input, but changes downstream dependencies.
 Logical value revisions remain meaningful even when work images are reused. Develop/Geometry and
@@ -1448,7 +1477,8 @@ Use these interruption rules:
 - Settle or cancel creation before image switch, Version checkout, Undo/Redo, or node deletion.
 - Reject an asynchronous render result from a stale session generation.
 - Escape restores the before parameters of the edited Mask.
-- Delete removes the selected Mask by `NodeId` and `MaskId`. It does not use a row index as identity.
+- Delete removes an unlocked selected Mask by `NodeId` and `MaskId`. It does not use a row index as
+  identity. NM9 deletion protection is checked before mutation in both views.
 - Viewer pan/zoom and Mask creation use an explicit mode and focus route. They do not interpret the
   same pointer input.
 - A keyboard user can select a Mask, move a control point, change a value, and leave the mode.
@@ -1466,8 +1496,8 @@ The panel has this structure:
 
 1. A header shows `Masks`.
 2. The existing header actions enter Radial or Linear Gradient creation.
-3. The Node drawer is the sole list and management surface for Masks owned by the selected Color
-   Grade; the Adjustment Stack page does not repeat those rows.
+3. The Node drawer and the NM9 Mask Groups panel are two management views of the same Color Grade
+   Masks; the Adjustment Stack parameter page does not repeat those rows.
 4. The Mask page exposes supported source-specific controls for the selected Mask. Radial creation
    drags from center outward. Linear Gradient uses its origin, direction, and transition controls.
 5. A range area shows only fields that the product implements.
@@ -1478,8 +1508,9 @@ and text label from Section 16 and `DESIGN.md`. Color is not the only selection 
 not add a pill, badge, chip, tag, or status dot unless a later product requirement explicitly asks
 for one.
 
-After Mask add, delete, or reorder, update the owning node's Mask drawer rows. Update row identity,
-order, type, and label only. Do not add a Mask count. Do not rebuild the full graph.
+After Mask add, delete, or reorder, update the owning node's Mask drawer and its NM9 Mask Group.
+Publish row identity, order, type, label, and deletion protection through the shared owner. NM9
+thumbnail invalidation follows Mask content changes. Do not add a Mask count or rebuild the full graph.
 
 ### 18.2 Mask editing state
 
@@ -1671,7 +1702,9 @@ path with a Markdown link when the file exists.
 | NM5 — QuickQanava Nodes Panel | complete 2026-09-05 | [node_mask_editor/phase_nm5_nodes_panel_plan.md](node_mask_editor/phase_nm5_nodes_panel_plan.md) | Connect the left Nodes panel to the real command, history, and render paths. |
 | NM6 — Node-aware Adjustment Stack | in progress (NM6.1 complete 2026-09-05) | [node_mask_editor/phase_nm6_node_aware_adjustments_plan.md](node_mask_editor/phase_nm6_node_aware_adjustments_plan.md) | Add node-aware panels and EXIF header with serial Interactive input, shared backend execution, and dependency-version caches. |
 | NM7 — Analytic Viewer Masks and Detachable Brush Boundary | complete per user confirmation 2026-09-12; historical evidence retained | [NM7 execution plan](node_mask_editor/phase_nm7_viewer_mask_creation_plan.md) | Project format `0.7.0`, Brush disabled, Radial/Linear Gradient delivery; final product evidence remains in NM8. |
-| NM8 — Whole-DAG Performance and Brush-disabled Product Qualification | planned; NM8.1–NM8.2 measurement is the first work scope | [NM8 execution plan](node_mask_editor/phase_nm8_product_qualification_plan.md) | Measure/log input-to-present and node/pass times, adopt fused Basic Tone/Color and shared work images with LLF-only Grade caching, then qualify all backends and product paths with Brush disabled. |
+| NM8 — Whole-DAG Performance and Brush-disabled Product Qualification | complete per user confirmation 2026-09-16; scope closes at NM8.4 | [NM8 execution plan](node_mask_editor/phase_nm8_product_qualification_plan.md) | Recorded timing, fused Basic Tone/Color, and shared work images; NM8.5–NM8.6 excluded from current closure; unmeasured evidence stays explicit. |
+| NM9 — Twin Mask Groups Panel | in progress (NM9.1 complete 2026-09-16) | [NM9 execution plan](node_mask_editor/phase_nm9_mask_group_panel_plan.md) | Keep Nodes and add a traditional photography stack over the same DAG, with shared selection, Mask previews, deletion locks, and history. |
+| NM10 — Adjustment Transfer | reserved; scope blank | [NM10 placeholder](node_mask_editor/phase_nm10_adjustment_transfer_plan.md) | — |
 
 ### 21.1 Phase NM0 — QuickQanava Integration Baseline
 
@@ -1782,6 +1815,7 @@ macOS debug linked `libQuickQanava.a` (Homebrew Qt 6.9.2, clang 21.1.1).
 完整 target、输入锁定与局部失败恢复。后台任务共用该图片的 document/executor，
 获取/释放与保存分离；产品 Load/Apply/Save 无 stage 镜像。旧 stage 类型可留到后续删除。
 JSON 是存储格式，不是反复复制和发布的编辑模型。
+NM9 为删除增加可显式解除的保护；本节保留 NM1 原始能力范围，不绕过后续锁校验。
 
 NM1.4 先修正 NM1.1/NM1.3 的整图复制和访问锁，再移除产品 Apply 覆盖并迁移后台任务；
 **NM1.4R 必须先于 NM1.5 完成**：任务配置直接作为请求输入；后台 scratch 沿用 arena 接口，
@@ -1988,8 +2022,9 @@ features from QuickQanava examples.
 ### 21.9 Phase NM8 — Whole-DAG Performance and Brush-disabled Product Qualification
 
 **Execution plan:** [Preview Performance, Pass Scheduling and Product Qualification](node_mask_editor/phase_nm8_product_qualification_plan.md).
-**Status:** NM8.1 complete 2026-09-12 per the execution record in the NM8 plan.
-NM8.2–NM8.6 planned. Native GPU pass timestamps are not installed yet.
+**Status:** complete per user confirmation on 2026-09-16, including NM8.4. The current scope
+closes at NM8.4; NM8.5–NM8.6 remain unexecuted scope references. Dated NM8.1–NM8.4 records
+and outstanding platform evidence remain in the execution plan.
 
 **Reason for a separate phase:** Unit and component tests cannot prove that the packaged
 QuickQanava module, real RAW input, all backends, history recovery, analytic Masks, whole-DAG
@@ -1997,14 +2032,15 @@ execution, and final frame use one correct product path. Performance work starts
 fixed the project format, shipped Mask set, and Brush-disabled module boundary.
 
 **Approved execution model:** Within each Grade, `Basic Tone → Color → Local Tone → Mix`;
-Basic Tone and Color form one pointwise pass. Grades have no persistent RGBA or coverage outputs;
-only LLF source/result maps can persist under the established frame-role rules. A workspace-owned
+Basic Tone and Color form one pointwise pass. Grades have no persistent scene RGBA outputs;
+LLF source/result maps and the separate Mask R8/Union owner retain their established rules. A workspace-owned
 pair of RGBA32F work images serves all Grades and compatible later ping-pong tasks. Preserve the
 original Grade input through Mix and verify native same-pixel read/write safety on every backend.
 LLF preparation still contains its required dispatches. Develop/Geometry reuse, algorithm quality,
 logical dependency revisions, and GPU/presentation reader lifetimes remain enforced.
 
-**Scope:** Measure and optimize the whole path from input acceptance and session/context preparation through static-plan
+**Original full qualification scope (NM8.5–NM8.6 excluded from current closure):**
+Measure and optimize the whole path from input acceptance and session/context preparation through static-plan
 lookup or justified compilation, dependency invalidation, scheduling, native passes, result
 lifetime, frame sink, and Qt Quick presentation. Cover filmstrip switching, right-panel animation,
 ZoomPan, Detail ROI, parameter input, topology edits, Undo/Redo, Version, Paste, export, and
@@ -2016,7 +2052,11 @@ evidence. Every configure/build/test/install/package/profile command explicitly 
 remove old UI and service paths that an earlier phase explicitly replaced, and append the completion
 record to this document.
 
-**Exit criteria:** All global completion criteria in Section 26 pass. There is no legacy-stage
+**Current closure:** The 2026-09-16 user decision marks NM8 complete based on the delivered
+NM8.4 work and the NM8.3 performance results. It does not mark every Section 26 item as tested.
+
+**Original full qualification exit criteria, retained for evidence tracking:** All global
+completion criteria in Section 26 pass. There is no legacy-stage
 write-back, single-primary-Color-Grade product branch, compiled Brush implementation, new merge UI,
 or substitute backend or CPU path. Whole-DAG scheduling, invalidation, resource lifetime, frame
 reuse, and latency meet Section 24 with reproducible evidence. Brush enablement remains owned by the
@@ -2034,6 +2074,33 @@ next-release Brush Master Plan and cannot be inferred from NM8 success.
 
 ---
 
+### 21.10 Phase NM9 — Twin Mask Groups Panel
+
+**执行方案：** [蒙版组孪生面板与传统摄影工作流](node_mask_editor/phase_nm9_mask_group_panel_plan.md)。
+**状态：planned。** 2026-09-16 产品方向已确定，尚未实施。
+
+保留 QuickQanava Nodes，增加 Mask Groups 面板。图中的顺序
+`Develop → Color Grade 1 → Color Grade 2 → Color Grade 3 → DRT/Post`
+在 stack 中从上到下显示同名三个组，包含无蒙版的空抽屉。
+每个组由真实 NodeId 标识；两种视图共用同一文档、参数、选择和历史，不新增图层文档。
+新建组在 stack 顶部插入 Clean Grade；选中组后使用现有蒙版按钮创建 Radial/Linear
+Gradient。选中任一 Mask 同时定位 owner 节点、右侧参数页和 Viewer 控件。
+
+组头提供合成蒙版的小缩略图，约 256×256 采样、保持照片比例、黑底白蒙版；展开后显示
+各 Mask 的位置/强度示意与删除动作。节点和 Mask 支持删除锁；默认 Color Grade 1 及其
+蒙版默认上锁，可显式解锁，参数编辑保持可用。未来并行混合步骤投影为一个不可添加
+Mask 的组；NM9 不借此引入未定义的分支执行或合成算法。
+
+**完成条件：** 同一操作从两种视图进入得到相同 DAG/参数/历史/像素；新建组即时有效且
+初始画面不变；选中、删除保护、缩略图、Undo/Redo、Version、Paste、reopen 和图像切换
+通过验证。另比较代表性摄影任务的完成时间和操作次数，记录交互收益与实际结果。
+
+### 21.11 Phase NM10 — Adjustment Transfer
+
+**状态：reserved。** [占位文件](node_mask_editor/phase_nm10_adjustment_transfer_plan.md)，内容留空。
+
+---
+
 ## 22. Phase 顺序、执行方案和 PR 粒度
 
 ### 22.1 锁定主序列
@@ -2048,6 +2115,8 @@ NM0 QuickQanava baseline
   -> NM6 Node-aware adjustment stack
   -> NM7 Analytic viewer masks and detachable Brush boundary
   -> NM8 Whole-DAG performance and Brush-disabled product qualification
+  -> NM9 Twin Mask Groups panel
+  -> NM10 Adjustment Transfer (reserved; scope blank)
 ```
 
 NML 已取消。NM2 假定已打开的项目带有可用 DAG 文档。没有图的项目不会进入 NM2。后续
@@ -2056,6 +2125,8 @@ Phase 删除 CPU stage 表。该删除不是旧项目升级。
 上一个 Phase 的退出条件是下一个 Phase 的输入。可以在前一个 Phase 接近完成时做只读审计或
 准备下一份执行方案，但不能提前向 production 暴露依赖尚未完成的操作。若实施证据证明必须
 改变一级顺序，先更新本总体方案并说明原因，不能只在执行分支中悄悄换序。
+2026-09-16 已批准 NM8 在 NM8.4 收口，因此 NM9 不等待原 NM8.5/NM8.6。NM10 仅有序号和
+主题；实现范围、依赖及完成条件待用户定义。
 
 ### 22.2 未来执行方案结构
 
@@ -2094,7 +2165,7 @@ feature/radial-mask-viewer-creation
 
 实施以逐个合入 main 的 PR 为默认方式。只有同一执行方案内部确实无法独立评审的 2–3 个紧密
 子 Phase 才建立短 stack；底层 PR 合入后立即把剩余分支 rebase 到最新 main。不得建立一条从
-NM0 一直延伸到 NM8 的长期 stacked PR 链。
+NM0 一直延伸到 NM9/NM10 的长期 stacked PR 链。
 
 每个 PR 必须：
 
@@ -2200,7 +2271,8 @@ NM0 一直延伸到 NM8 的长期 stacked PR 链。
   变化失效。无 Grade 输出缓存后，执行仍从关键阶段的有效输入顺序进入 Grade 链；
 - graph static plan 只在 topology/adjustment structure 改变时重建；
 - Color Grade 使用 Basic Tone → Color → Local Tone → Mix；Basic Tone 和 Color 融合为一个 pass；
-- Grade 间不保留跨帧 RGBA/coverage 结果，共用一对 workspace 工作图并继续复用于兼容的后续任务；
+- Grade 间不保留跨帧 scene RGBA 结果，共用一对 workspace 工作图并继续复用于兼容的后续任务；
+  Mask R8/Union 保留独立 owner 的既有资源和有效性规则；
 - Grade 内仅 LLF source/result 图可按 frame role 保留，依赖包括 Color 之后的真实输入；
   关键阶段缓存与 LLF 按输出身份、依赖版本和表示条件验证，不逐帧序列化或哈希整个节点参数体；
 - UI 滑动只更新局部显示并入队；owner 在帧间消费参数，应用、失效处理与渲染严格串行；
@@ -2276,6 +2348,9 @@ transfer package 显式列出可转移内容。
 
 ## 26. 全局完成条件
 
+以下保留全产品证据清单；NM8 在 2026-09-16 的阶段收口不等于这些项目全部通过。
+新增 NM9 条目只在其实施和验证后勾选；NM10 尚无完成条件。
+
 - [ ] `PipelineDocument` 是 node、adjustment、history、Version 和 render 的唯一可写编辑状态。
 - [ ] QuickQanava 是唯一 node graph UI 基础，不存在自研 graph canvas/connector。
 - [ ] Develop 与 DRT/Post 唯一且不可删除，全部 Color Grade 构成有效 image backbone。
@@ -2301,14 +2376,19 @@ transfer package 显式列出可转移内容。
       presentation 已在 NM8 记录并优化。
 - [ ] Color Grade 固定 Basic Tone → Color → Local Tone → Mix，Basic Tone/Color 单 pass，
       原始节点输入保留到 Mix 完成，三个原生后端验证双工作图读写安全。
-- [ ] Grade 间持久 RGBA/coverage 结果已移除，仅保留既定 LLF 图；工作图对继续用于兼容的
-      DRT/Post 任务，reader 生存期和 Quality/Interactive 表示边界均通过验证。
+- [ ] Grade 间持久 scene RGBA 结果已移除，既定 LLF 和独立 Mask R8/Union 保留规则不变；
+      工作图对继续用于兼容的 DRT/Post 任务，reader 生存期和 Quality/Interactive 表示边界均通过验证。
 - [ ] input E2E、producer cycle、每节点/物理 pass GPU 时间、资源与终态均进入低开销日志，
       有同场景优化前后数据和 CUDA/Metal 硬件分析，未实测平台不记通过。
 - [ ] CUDA、OpenCL、Metal 不使用 CPU 或其他 backend 替代路径。
 - [ ] 旧项目 metadata 在打开入口拒绝；当前格式坏图真实失败；产品路径不使用 stage 镜像。
 - [ ] Windows/macOS package 可加载 QuickQanava QML module 和全部新 panel。
 - [ ] 真实 RAW E2E、reopen、Version、Paste、性能和资源证据全部记录在最终资格验证记录中。
+- [ ] NM9 Nodes 与 Mask Groups 共用同一 DAG、NodeId/MaskId、参数、历史和选择 owner。
+- [ ] NM9 stack 顺序、空抽屉、顶部新建、选中组添加 Mask 和双向定位通过验证。
+- [ ] NM9 节点/Mask 删除锁默认保护 Color Grade 1 及其蒙版，显式解锁、历史恢复和所有
+      删除入口执行同一校验；参数、形状和强度编辑不受删除锁限制。
+- [ ] NM9 合成及单 Mask 缩略图准确、异步失效正确；两视图最终像素一致，交互效率有实测。
 
 ---
 
@@ -2317,7 +2397,7 @@ transfer package 显式列出可转移内容。
 - 本文件保持为总体设计依据，不在这里追踪每个提交的临时执行步骤；
 - 开始某个 `NMx` Phase 时，在第 21 节预留路径创建执行方案，把代码路径改成可点击链接，并
   根据当时的代码审计定义 `NMx.1` 到 `NMx.n`；
-- 一级 Phase 状态在第 21 节维护为 `planned`、`in progress` 或 `complete`；具体子 Phase
+- 一级 Phase 状态在第 21 节维护为 `reserved`、`planned`、`in progress` 或 `complete`；具体子 Phase
   状态、提交、测试命令和临时发现只写入对应执行方案；
 - 实施中发现需要改变锁定语义时，先更新本文并记录原因，再调整执行方案；
 - 仅实现细节、文件拆分或同一 `NMx` 内部子 Phase 顺序变化，不要求反复修改本文；

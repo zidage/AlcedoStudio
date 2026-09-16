@@ -76,6 +76,58 @@ struct EditorNodeGraphSnapshot {
 };
 
 /**
+ * @brief Immutable Mask sub-row projected inside one Mask Groups row.
+ *
+ * Rows are keyed by (NodeId, MaskId). Only the display fields the Mask Groups
+ * panel needs are copied: source category, display name, enabled, and opacity.
+ * Mask parameter values remain owned by the document and are edited through the
+ * existing Mask page.
+ */
+struct EditorMaskGroupMaskRow {
+  NodeId         node_id;
+  MaskId         mask_id;
+  MaskSourceKind source_kind = MaskSourceKind::Radial;
+  std::string    display_name;
+  bool           enabled                                                 = true;
+  float          opacity                                                 = 1.0F;
+
+  auto           operator==(const EditorMaskGroupMaskRow&) const -> bool = default;
+};
+
+/**
+ * @brief Immutable Mask Groups row projected from one Color Grade backbone node.
+ *
+ * Group identity is the Color Grade NodeId; the display name matches the node
+ * graph exactly. Every backbone Color Grade produces a row, including grades
+ * with no Masks: an empty @ref masks list means "no attached Mask", never a
+ * transparent or black input.
+ */
+struct EditorMaskGroupRow {
+  NodeId                              node_id;
+  std::string                         display_name;
+  bool                                enabled = true;
+  std::vector<EditorMaskGroupMaskRow> masks;
+
+  auto                                operator==(const EditorMaskGroupRow&) const -> bool = default;
+};
+
+/**
+ * @brief Complete Mask Groups value snapshot published across the editor boundary.
+ *
+ * Group order is the real scene-image execution order (Develop to DRT/Post);
+ * it is never derived from creation time, display name, or canvas position.
+ * Develop and DRT/Post are endpoints and never produce group rows.
+ */
+struct EditorMaskGroupSnapshot {
+  std::uint64_t                   session_generation  = 0;
+  std::uint64_t                   projection_revision = 0;
+  std::uint64_t                   topology_revision   = 0;
+  std::vector<EditorMaskGroupRow> groups;
+
+  auto operator==(const EditorMaskGroupSnapshot&) const -> bool = default;
+};
+
+/**
  * @brief Build the immutable Nodes-page projection for one document state.
  *
  * Nodes follow the unique Develop-to-DRT image backbone. Color Grade Masks
@@ -117,11 +169,34 @@ class EditorNodeGraphProjection {
                                   std::uint64_t topology_revision) -> EditorNodeGraphSnapshot;
 
   /**
+   * @brief Build the immutable Mask Groups projection for one document state.
+   *
+   * Walks the same validated Develop-to-DRT image backbone as @ref Build and
+   * emits one row per backbone Color Grade, in execution order. Rows carry the
+   * NodeId, the exact node display name, the grade enabled flag, and ordered
+   * Mask sub-rows. Detached or non-backbone nodes never appear.
+   *
+   * @throws std::invalid_argument when the document has no valid image backbone
+   *         or a backbone Color Grade model cannot be read.
+   */
+  [[nodiscard]] static auto BuildMaskGroups(const PipelineDocument& document,
+                                            std::uint64_t           session_generation,
+                                            std::uint64_t           projection_revision,
+                                            std::uint64_t           topology_revision)
+      -> EditorMaskGroupSnapshot;
+
+  /**
    * @brief Return whether a snapshot belongs to the active editor session.
    * @param snapshot Candidate snapshot.
    * @param session_generation Active session value.
    */
   [[nodiscard]] static auto AcceptsGeneration(const EditorNodeGraphSnapshot& snapshot,
+                                              std::uint64_t session_generation) -> bool;
+
+  /**
+   * @brief Return whether a Mask Groups snapshot belongs to the active session.
+   */
+  [[nodiscard]] static auto AcceptsGeneration(const EditorMaskGroupSnapshot& snapshot,
                                               std::uint64_t session_generation) -> bool;
 };
 

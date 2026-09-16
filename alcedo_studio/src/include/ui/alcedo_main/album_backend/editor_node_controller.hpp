@@ -61,6 +61,15 @@ class EditorNodeController : public QObject {
   Q_PROPERTY(bool incompleteDraft READ incomplete_draft NOTIFY DraftStateChanged)
   Q_PROPERTY(
       QString incompleteDraftInstruction READ incomplete_draft_instruction NOTIFY DraftStateChanged)
+  /// NodeIds outside the draft's Develop-to-DRT path; empty without a draft.
+  Q_PROPERTY(QStringList detachedDraftNodeIds READ detached_draft_node_ids NOTIFY DraftStateChanged)
+  /// Committed Mask Groups rows in backbone execution order. The panel is a
+  /// read-only projection of the same document as the node graph.
+  Q_PROPERTY(QVariantList maskGroups READ mask_groups NOTIFY MaskGroupsChanged)
+  /// False while a node-graph draft exists; structural group commands and Mask
+  /// creation stay disabled until the draft is committed or reverted.
+  Q_PROPERTY(bool canEditMaskGroupStructure READ can_edit_mask_group_structure NOTIFY
+                 ActionAvailabilityChanged)
   Q_PROPERTY(QString selectedNodeName READ selected_node_name NOTIFY SelectionChanged)
   Q_PROPERTY(QString selectedNodeKind READ selected_node_kind NOTIFY SelectionChanged)
   Q_PROPERTY(QStringList supportedAdjustmentPanels READ supported_adjustment_panels NOTIFY
@@ -144,6 +153,29 @@ class EditorNodeController : public QObject {
    */
   Q_INVOKABLE bool addCleanColorGrade();
   /**
+   * @brief Mask Groups: insert one clean Color Grade at the top of the stack.
+   *
+   * Committed-document operation: the new node becomes the scene-image
+   * successor of Develop through one typed history commit. Rejects while a
+   * node-graph draft exists; the draft must be completed or reverted first.
+   * On success the new group is selected.
+   */
+  Q_INVOKABLE bool insertMaskGroupAtTop();
+  /**
+   * @brief Mask Groups: remove one Color Grade and bridge its neighbors.
+   *
+   * Committed-document operation through one typed history commit. Rejects
+   * endpoints, non-Color-Grade ids, stale generations, and any live draft.
+   */
+  Q_INVOKABLE bool removeMaskGroup(const QString& node_id);
+  /**
+   * @brief Switch the tool panel to the Nodes page and select @p node_id.
+   *
+   * The incomplete-draft boundary action: the Mask Groups panel points at a
+   * detached draft node so the user can finish wiring it there.
+   */
+  Q_INVOKABLE bool locateNodeInGraph(const QString& node_id);
+  /**
    * @brief Rename one Color Grade without changing its stable NodeId.
    * @return false for endpoints, blank names, stale generations, or history failure.
    */
@@ -186,6 +218,21 @@ class EditorNodeController : public QObject {
   [[nodiscard]] auto can_delete_selected_color_grade() const -> bool;
   [[nodiscard]] auto incomplete_draft() const -> bool;
   [[nodiscard]] auto incomplete_draft_instruction() const -> QString;
+  /// True while an uncommitted node-graph draft exists (incomplete or failed submit).
+  [[nodiscard]] auto has_draft() const -> bool { return draft_ != nullptr; }
+  /// Draft nodes outside the Develop-to-DRT path; empty without a draft.
+  [[nodiscard]] auto detached_draft_node_ids() const -> QStringList;
+  /// Committed Mask Groups rows as QVariant maps for the panel. Empty without
+  /// a snapshot. Read-only; structural edits go through insertMaskGroupAtTop /
+  /// removeMaskGroup.
+  [[nodiscard]] auto mask_groups() const -> QVariantList;
+  /// Latest committed Mask Groups snapshot for tests and same-thread readers.
+  [[nodiscard]] auto mask_group_snapshot() const -> const alcedo::EditorMaskGroupSnapshot& {
+    return mask_group_snapshot_;
+  }
+  [[nodiscard]] auto has_mask_group_snapshot() const -> bool { return has_mask_group_snapshot_; }
+  /// Structural Mask Groups commands require a committed graph with no draft.
+  [[nodiscard]] auto can_edit_mask_group_structure() const -> bool;
   [[nodiscard]] auto selected_node_name() const -> QString;
   /// Product kind key: develop, colorGrade, or drt. Empty when nothing is selected.
   [[nodiscard]] auto selected_node_kind() const -> QString;
@@ -247,6 +294,7 @@ class EditorNodeController : public QObject {
   void GraphAdapterChanged();
   void LayoutStoreChanged();
   void DraftStateChanged();
+  void MaskGroupsChanged();
 
  private:
   void               DisconnectSession();
@@ -275,6 +323,10 @@ class EditorNodeController : public QObject {
   [[nodiscard]] auto ApplyDraftMutationToAdapter(
       const alcedo::EditorNodeGraphDraftMutation& mutation) -> bool;
   [[nodiscard]] auto MaybeSubmitDraft() -> bool;
+  /// Publish the committed Mask Groups projection beside the node snapshot.
+  /// Rejects stale generations like PublishSnapshot; equal content republishes
+  /// nothing.
+  [[nodiscard]] auto PublishMaskGroupSnapshot(alcedo::EditorMaskGroupSnapshot snapshot) -> bool;
   [[nodiscard]] auto TopologyChanged(const EditorNodeGraphSnapshot& snapshot) const -> bool;
   [[nodiscard]] auto BoundSessionGeneration() const -> std::optional<std::uint64_t>;
   void               SelectByKind(EditorNodeKind kind);
@@ -318,6 +370,8 @@ class EditorNodeController : public QObject {
   QMetaObject::Connection                             layout_store_connection_;
   EditorNodeGraphSnapshot                             snapshot_{};
   bool                                                has_snapshot_ = false;
+  alcedo::EditorMaskGroupSnapshot                     mask_group_snapshot_{};
+  bool                                                has_mask_group_snapshot_ = false;
   NodeId                                              selected_node_id_;
   NodeId                                              last_selected_color_grade_id_;
   NodeId                                              selection_restore_node_id_;

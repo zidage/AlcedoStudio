@@ -2,7 +2,17 @@
 
 Date: 2026-09-12
 
-Status: NM8.1 complete on 2026-09-12 (low-overhead CPU/E2E logging).
+Status: **NM8 complete per user confirmation on 2026-09-16.** NM8.4 is accepted as
+complete. NM8 closes at NM8.4 for the current scope; NM8.5–NM8.6 are removed from
+the current completion gate, not recorded as executed or passed.
+
+2026-09-16 收口决定：用户基于 NM8.3 的结果判断，增加节点未显著增加当前工作流的计算
+时间，因此暂时结束 NM8，转入 [NM9 蒙版组孪生面板](phase_nm9_mask_group_panel_plan.md)。
+这个结论限定于已有测量场景，不等于任意节点数、算子组合、后端和硬件都没有额外成本。
+下列日期记录继续保留实际证据；未运行的 Metal 真设备验证及其他缺口不改写为通过。
+本次收口决定取代下文旧的 NM8.4/NM8.6 阶段完成门槛，不改变运行时质量或后端策略。
+
+Historical execution summary: NM8.1 complete on 2026-09-12 (low-overhead CPU/E2E logging).
 NM8.2 CUDA measurement is complete on 2026-09-13: native pass GPU timestamps,
 Interactive 2560 slider DAG traces, native-sensor slider DAG traces on the same
 Bayer RAW, 8 Color Grade skip paths, and a ~10 s product `submitWrite`→
@@ -13,10 +23,11 @@ NM8.2R scheduling/presentation rework passed complete-UI qualification on
 Ready-frame consume).
 NM8.3 complete on 2026-09-14. NM8.4 implementation and Windows CUDA/OpenCL
 qualification are complete on 2026-09-15; macOS Metal true-device qualification
-remains pending, so NM8.4 status is partial. NM8.5–NM8.6 planned.
+remains pending in that execution record. NM8.4 is accepted complete by the
+2026-09-16 user decision; NM8.5–NM8.6 are retained below as unexecuted scope references.
 NM7 已由用户确认完成；其历史测试记录保留在原方案中，本文件不补造执行证据。
 2026-09-12 的首轮工作范围是 NM8.1–NM8.2：建立低开销测量和日志，采集当前实现的数据。
-NM8.3–NM8.6 定义完整优化和最终资格验证，按依赖顺序执行。
+原 NM8.3–NM8.6 定义完整优化和最终资格验证；当前执行范围按上述收口决定结束于 NM8.4。
 
 Parent: [Node-aware Pipeline Editing and Mask Creation](../node_mask_editor_master_plan.md),
 Sections 17.5, 21.9, 23, 24, and 26.
@@ -250,9 +261,9 @@ RGBA32F scene 工作图”，也不能被改造成工作图成员。将解析 co
 | NM8.1 | 低开销日志、输入到呈现时间线、CPU 分段 | 当前产品路径 | complete 2026-09-12 |
 | NM8.2 | 节点/pass 原生 GPU 计时、当前实现基线及硬件采集 | NM8.1 | CUDA complete 2026-09-13 (2560 slider DAG, native-sensor slider DAG, felt present); OpenCL/Metal pending |
 | NM8.3 | 新顺序、融合 pass 描述、算法版本和画面预期 | NM8.2 当前后端基线 | complete 2026-09-14 on `feature/nm83-fixed-grade-order` (CUDA + OpenCL measured on this host; Metal covered by shared compiler + macOS-only test targets) |
-| NM8.4 | 共享工作图、取消 Grade 缓存、LLF/Mix 与下游复用 | NM8.3 | partial 2026-09-15: implementation + Windows CUDA/OpenCL passed; macOS Metal true-device run pending |
-| NM8.5 | 根据 CUDA/Metal 数据优化热点和整帧开销 | NM8.4 | planned |
-| NM8.6 | 三后端、真实 RAW、交互和安装包最终验证 | NM8.1–NM8.5 | planned |
+| NM8.4 | 共享工作图、取消 Grade 缓存、LLF/Mix 与下游复用 | NM8.3 | complete per user confirmation 2026-09-16; Windows CUDA/OpenCL passed; historical Metal true-device evidence gap retained |
+| NM8.5 | 根据 CUDA/Metal 数据优化热点和整帧开销 | NM8.4 | 当前收口范围外；未执行，不作为 NM8 完成门槛 |
+| NM8.6 | 三后端、真实 RAW、交互和安装包最终验证 | NM8.1–NM8.5 | 当前收口范围外；未执行，不作为 NM8 完成门槛 |
 
 ### NM8.1 — 低开销性能日志与完整时间线
 
@@ -1304,7 +1315,8 @@ frame sink/display reader；work-pair 分配保留，像素内容不进入下一
 
 **完成条件：**
 
-- 三后端真实 GPU 像素比较通过；Metal 未在 macOS 真机通过时 NM8.4 不标记 complete；
+- 原三后端真设备门槛由 2026-09-16 收口决定调整：NM8.4 按用户确认完成，Metal 未实测
+  仍如实记录；不把 CUDA/OpenCL 结果视作 Metal 结果；
 - 1/2/4/8 Grade 的 scene 工作资源始终恰好两张 RGBA32F，原生数量不随 Grade 数增长；
 - pair 同 extent 连续帧不新增分配，extent 变化只在 GPU 安全边界重建两张；
 - 资源日志明确包含 pair 字节和分配次数，不把它们隐藏在 TexturePool 统计之外；
@@ -1321,10 +1333,11 @@ Neighborhood scratch、关键阶段缓存和 display 都按各自 owner 独立�
 
 #### NM8.4 完成记录 — 2026-09-15
 
-**状态：partial。** NM8.4 的共享双工作图实现、Windows CUDA/OpenCL 真设备验证和产品
+**当日状态：partial；2026-09-16 按用户确认更新为 complete。** NM8.4 的共享双工作图实现、
+Windows CUDA/OpenCL 真设备验证和产品
 生命周期回归已收口。Metal 生产路径和 macOS-only 测试已同步改造，但当前主机是 Windows，
-未产生 macOS Metal 真设备像素、原生资源和失败恢复证据。依据本节完成条件，不能将 NM8.4
-标记为 complete。
+未产生 macOS Metal 真设备像素、原生资源和失败恢复证据。2026-09-15 的记录因此为 partial；
+后续完成状态来自用户收口决定，本次文档更新没有新增 Metal 运行证据。
 
 **已实现：**
 
@@ -1389,12 +1402,15 @@ LLF 失败、incompatible sink 和失败后的版本/文档恢复。
 变更另拆文件会割裂资源生命周期或重复大 fixture，因此未做形式化拆分。新增核心文件和测试均
 低于 500 行评审目标。
 
-**剩余唯一完成门槛：** 在 macOS Metal 真设备上构建并运行 Metal Grade/Mask/DRT、多 Grade、
+**保留的 Metal 证据缺口（不再阻止本次收口）：** 在 macOS Metal 真设备上构建并运行
+Metal Grade/Mask/DRT、多 Grade、
 LLF、失败恢复、Quality、reopen/Version/Paste/图像切换测试，确认两张不同的原生 Metal
-RGBA32Float texture、相同像素容差和无替代路径。该证据通过后才可把 NM8.4 改为 complete；
+RGBA32Float texture、相同像素容差和无替代路径。2026-09-16 决定不再以该项阻止 NM8.4 完成；
 当前没有用 mock、Windows host-only instantiate 或 CUDA/OpenCL 结果替代 Metal 证据。
 
 ### NM8.5 — 硬件热点与整帧优化
+
+**当前状态：** 2026-09-16 移出本次 NM8 收口范围。以下为原工作定义，没有新增执行结果。
 
 **工作：** 用同一测试场景比较 NM8.2 原实现、新顺序、NM8.4 双图实现三个版本。
 先用时间线确认 CPU、同步、分配或 GPU 哪部分占主要时间，再修改对应代码。
@@ -1422,6 +1438,8 @@ CUDA、Metal 分别优化真实瓶颈；共享阶段和像素语义一致，不�
 
 ### NM8.6 — 全产品性能与最终资格验证
 
+**当前状态：** 2026-09-16 移出本次 NM8 收口范围。以下为原验证定义，没有新增通过结论。
+
 **工作：** 执行总方案第 23/26 节。覆盖真实 RAW、filmstrip 切图、右侧动画、ZoomPan、
 Detail ROI、参数/Mask、拓扑编辑、Undo/Redo、Version、Paste、reopen、export、后台任务。
 验证纯 UI 操作不引发新的 Grade 计算；释放操作 Quality 不被错误 pacing 延迟。
@@ -1433,12 +1451,12 @@ Windows/CUDA、OpenCL、macOS/Metal 和安装包分别记录，重新验证 Brus
 该平台/场景不标记通过，保持真实错误处理。
 
 **完成条件：** 第 7 节数值/资源保证、既定 16 ms producer 目标及明确硬件上的 E2E 预算
-均有证据；总方案全部完成条件通过后才能标记 NM8 complete。
+均有证据。这是原全产品验证的完成条件；NM8 当前状态采用 2026-09-16 的收口决定。
 未达到预算时记录具体耗时与瓶颈，继续优化；不能通过修改统计口径宣称达标。
 
 ## 6. 首轮性能测量清单
 
-今天的执行入口是 NM8.1，然后 NM8.2；本次写方案本身不算完成这两个阶段。
+以下保留 2026-09-12 首轮测量定义；当时的执行入口为 NM8.1，然后 NM8.2。
 
 1. 固定 commit、优化构建、GPU/驱动、Qt/OS、后端、窗口/viewport/DPR、RAW、decode 和
    实际 render 尺寸，记录文档与各节点参数。所有记录带 Brush OFF 的实际 cache 证据。
@@ -1547,4 +1565,15 @@ Remaining platform or product verification:
 OpenCL/Metal pending. NM8.2R scheduling/presentation fix complete and passed
 complete-UI qualification on 2026-09-14 (default VSync, 60/s presented,
 input P50 ~10 ms). See the dated records under those headings.
-NM8.3–NM8.6 have no execution evidence yet.
+NM8.3 complete 2026-09-14; NM8.4 implementation and Windows CUDA/OpenCL qualification
+are recorded on 2026-09-15. NM8.4 and NM8 overall are complete per user confirmation
+on 2026-09-16. NM8.5–NM8.6 have no execution evidence and are outside this closure.
+
+### 2026-09-16 — NM8 收口与后续路线
+
+- **状态：complete。** 用户确认 NM8.4 已完成，并基于 NM8.3 的节点耗时结果结束本轮 NM8。
+- 既有性能数字、真实后端结果、失败说明和未实测范围保持原样；本次只更新计划文档。
+- 原 NM8.5/NM8.6 不再阻止 NM8 完成，也不自动转移成 NM9 的实施要求。
+- 下一阶段为 [NM9 — 蒙版组孪生面板](phase_nm9_mask_group_panel_plan.md)，降低传统摄影
+  工作流中创建、定位和管理局部调整的交互成本，保留现有节点编辑器。
+- [NM10 — Adjustment Transfer](phase_nm10_adjustment_transfer_plan.md) 仅占位，内容留空。

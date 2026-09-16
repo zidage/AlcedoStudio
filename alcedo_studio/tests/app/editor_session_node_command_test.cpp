@@ -129,5 +129,78 @@ TEST_F(EditorSessionNodeCommandTest,
   EXPECT_EQ(scheduler_->requests.size(), renders_before);
 }
 
+TEST_F(EditorSessionNodeCommandTest,
+       InsertColorGradeAtTopCreatesOneHistoryChangeAndRoutesTopologyRender) {
+  const auto renders_before  = scheduler_->requests.size();
+  const auto revision_before = service_->history_revision();
+  const auto result = service_->InsertColorGradeAtTop(NodeId{"grade.new"}, NodeId{"grade.primary"});
+
+  EXPECT_EQ(result.kind, EditorSessionResultKind::RenderRouted);
+  EXPECT_EQ(history_->insert_grade_top_count, 1);
+  EXPECT_EQ(history_->last_insert_new_id, NodeId{"grade.new"});
+  EXPECT_EQ(history_->last_expected_successor, NodeId{"grade.primary"});
+  EXPECT_EQ(service_->history_revision(), revision_before + 1);
+  ASSERT_EQ(scheduler_->requests.size(), renders_before + 1);
+  EXPECT_EQ(scheduler_->requests.back().intent.reason, EditorRenderReason::GraphTopologyChanged);
+}
+
+TEST_F(EditorSessionNodeCommandTest,
+       RemoveColorGradeAndBridgeCreatesOneHistoryChangeAndRoutesTopologyRender) {
+  const auto renders_before  = scheduler_->requests.size();
+  const auto revision_before = service_->history_revision();
+  const auto result          = service_->RemoveColorGradeAndBridge(NodeId{"grade.primary"});
+
+  EXPECT_EQ(result.kind, EditorSessionResultKind::RenderRouted);
+  EXPECT_EQ(history_->remove_grade_count, 1);
+  EXPECT_EQ(history_->last_node_id, NodeId{"grade.primary"});
+  EXPECT_EQ(service_->history_revision(), revision_before + 1);
+  ASSERT_EQ(scheduler_->requests.size(), renders_before + 1);
+  EXPECT_EQ(scheduler_->requests.back().intent.reason, EditorRenderReason::GraphTopologyChanged);
+}
+
+TEST_F(EditorSessionNodeCommandTest,
+       InsertColorGradeAtTopJournalFailureLeavesHistoryAndRenderUntouched) {
+  history_->fail_node_command = true;
+  const auto renders_before   = scheduler_->requests.size();
+  const auto revision_before  = service_->history_revision();
+  const auto result = service_->InsertColorGradeAtTop(NodeId{"grade.new"}, NodeId{"grade.primary"});
+
+  EXPECT_EQ(result.kind, EditorSessionResultKind::Rejected);
+  EXPECT_EQ(result.message, "mini-Git journal append failed");
+  EXPECT_EQ(history_->insert_grade_top_count, 1);
+  EXPECT_EQ(service_->history_revision(), revision_before);
+  EXPECT_EQ(scheduler_->requests.size(), renders_before);
+}
+
+TEST_F(EditorSessionNodeCommandTest,
+       RemoveColorGradeAndBridgeJournalFailureLeavesHistoryAndRenderUntouched) {
+  history_->fail_node_command = true;
+  const auto renders_before   = scheduler_->requests.size();
+  const auto revision_before  = service_->history_revision();
+  const auto result           = service_->RemoveColorGradeAndBridge(NodeId{"grade.primary"});
+
+  EXPECT_EQ(result.kind, EditorSessionResultKind::Rejected);
+  EXPECT_EQ(result.message, "mini-Git journal append failed");
+  EXPECT_EQ(history_->remove_grade_count, 1);
+  EXPECT_EQ(service_->history_revision(), revision_before);
+  EXPECT_EQ(scheduler_->requests.size(), renders_before);
+}
+
+TEST_F(EditorSessionNodeCommandTest, MaskGroupCommandsRejectANonInteractiveSession) {
+  (void)service_->Shutdown();
+  service_->DrainCommandQueueForTests();
+  const auto renders_before  = scheduler_->requests.size();
+  const auto revision_before = service_->history_revision();
+
+  const auto insert = service_->InsertColorGradeAtTop(NodeId{"grade.new"}, NodeId{"grade.primary"});
+  const auto remove = service_->RemoveColorGradeAndBridge(NodeId{"grade.primary"});
+  EXPECT_EQ(insert.kind, EditorSessionResultKind::Rejected);
+  EXPECT_EQ(remove.kind, EditorSessionResultKind::Rejected);
+  EXPECT_EQ(history_->insert_grade_top_count, 0);
+  EXPECT_EQ(history_->remove_grade_count, 0);
+  EXPECT_EQ(service_->history_revision(), revision_before);
+  EXPECT_EQ(scheduler_->requests.size(), renders_before);
+}
+
 }  // namespace
 }  // namespace alcedo

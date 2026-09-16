@@ -115,6 +115,28 @@ class IEditorHistoryPort {
     if (error != nullptr) *error = "Color Grade rename is not supported by this history port";
     return false;
   }
+  /// Insert one clean Color Grade at the top of the live scene-image backbone
+  /// as one typed history commit. The node that currently follows Develop must
+  /// equal @p expected_successor_id; a mismatch rejects the stale request
+  /// without document, counter, or history changes. Default rejects.
+  virtual auto InsertColorGradeAtTop(const EditorHistoryGuardHandle& /*guard*/,
+                                     const NodeId& /*new_id*/,
+                                     const NodeId& /*expected_successor_id*/, std::string* error)
+      -> bool {
+    if (error != nullptr) {
+      *error = "Color Grade top insertion is not supported by this history port";
+    }
+    return false;
+  }
+  /// Remove one Color Grade and bridge its scene-image neighbors as one typed
+  /// history commit. Develop and DRT/Post are never removable. Default rejects.
+  virtual auto RemoveColorGradeAndBridge(const EditorHistoryGuardHandle& /*guard*/,
+                                         const NodeId& /*node_id*/, std::string* error) -> bool {
+    if (error != nullptr) {
+      *error = "Color Grade bridge removal is not supported by this history port";
+    }
+    return false;
+  }
 
   using LockedMaskSettle =
       std::function<bool(const PipelineEditBatch& batch, std::string* error)>;

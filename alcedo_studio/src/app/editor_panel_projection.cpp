@@ -435,19 +435,19 @@ auto ProjectThroughTable(const PipelineDocument& document,
 auto EditorPanelAdapterTable::Production() -> EditorPanelAdapterTable {
   static const auto kProduction = [] {
     EditorPanelAdapterTable table;
-    table.Add({"exposure", "tone", &ReadExposure});
-    table.Add({"contrast", "tone", &ReadContrast});
-    table.Add({"white", "tone", &ReadWhite});
-    table.Add({"black", "tone", &ReadBlack});
-    table.Add({"shadows", "tone", &ReadShadows});
-    table.Add({"highlights", "tone", &ReadHighlights});
-    table.Add({"curve", "tone", &ReadCurve});
-    table.Add({"saturation", "look", &ReadSaturation});
-    table.Add({"vibrance", "look", &ReadVibrance});
-    table.Add({"tint", "look", &ReadTint});
-    table.Add({"hls", "look", &ReadHls});
-    table.Add({"color_wheel", "look", &ReadColorWheel});
-    table.Add({"lut", "lut", &ReadLut});
+    table.Add({"exposure", "tone", &ReadExposure, true});
+    table.Add({"contrast", "tone", &ReadContrast, true});
+    table.Add({"white", "tone", &ReadWhite, true});
+    table.Add({"black", "tone", &ReadBlack, true});
+    table.Add({"shadows", "tone", &ReadShadows, true});
+    table.Add({"highlights", "tone", &ReadHighlights, true});
+    table.Add({"curve", "tone", &ReadCurve, true});
+    table.Add({"saturation", "look", &ReadSaturation, true});
+    table.Add({"vibrance", "look", &ReadVibrance, true});
+    table.Add({"tint", "look", &ReadTint, true});
+    table.Add({"hls", "look", &ReadHls, true});
+    table.Add({"color_wheel", "look", &ReadColorWheel, true});
+    table.Add({"lut", "lut", &ReadLut, true});
     table.Add({"clarity", "look", &ReadClarity});
     table.Add({"sharpen", "look", &ReadSharpen});
     table.Add({"film_grain", "look", &ReadFilmGrain});
@@ -514,9 +514,13 @@ auto ReadEditorPanelField(const PipelineDocument& document, const EditorParamete
 auto CurrentPanelProjectionTargets(const PipelineDocument& document, std::string* error)
     -> std::optional<std::vector<EditorParameterTarget>> {
   std::vector<EditorParameterTarget> targets;
-  const auto                         table = EditorPanelAdapterTable::Production();
+  const auto                         table     = EditorPanelAdapterTable::Production();
+  const bool                         has_grade = document.PrimaryGrade() != nullptr;
   targets.reserve(table.Adapters().size());
   for (const auto& adapter : table.Adapters()) {
+    if (adapter.requires_color_grade && !has_grade) {
+      continue;
+    }
     std::string field_error;
     auto        target =
         CompleteCurrentPanelParameterTarget(document, std::string{adapter.field_key}, &field_error);

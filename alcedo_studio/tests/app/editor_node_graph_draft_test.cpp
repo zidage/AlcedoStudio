@@ -2,11 +2,12 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
+#include "app/editor_node_graph_draft.hpp"
+
 #include <gtest/gtest.h>
 
 #include <string>
 
-#include "app/editor_node_graph_draft.hpp"
 #include "app/pipeline_document_history.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/graph_validation.hpp"
@@ -340,6 +341,38 @@ TEST(EditorNodeGraphDraft, ThirtyTwoGradeGraphRepeatedConnectStaysBounded) {
   EXPECT_EQ(draft.work_stats().validity_traversals, 101);
   EXPECT_LT(draft.work_stats().node_entry_copies, 8);
   EXPECT_LT(draft.work_stats().edge_entry_copies, 400);
+}
+
+TEST(EditorNodeGraphDraft, DetachedNodeIdsIsEmptyForACompleteDraft) {
+  auto document = DocumentWithGrades(3, 0);
+  auto draft    = EditorNodeGraphDraft::FromDocument(document, BoundIdentity());
+  EXPECT_TRUE(draft.SubmissionValid());
+  EXPECT_TRUE(draft.DetachedNodeIds().empty());
+}
+
+TEST(EditorNodeGraphDraft, DetachedNodeIdsListsNodesOutsideTheImagePath) {
+  auto document = CreateDefaultPipelineDocument();
+  auto draft    = EditorNodeGraphDraft::FromDocument(document, BoundIdentity());
+  ASSERT_TRUE(draft.AddColorGrade(NodeId{"grade.new"}).succeeded);
+
+  auto detached = draft.DetachedNodeIds();
+  ASSERT_EQ(detached.size(), 1u);
+  EXPECT_EQ(detached[0], NodeId{"grade.new"});
+
+  // Wiring the new node between Develop and grade.primary leaves grade.primary
+  // and DRT past the break: both are unconnected in the draft.
+  ASSERT_TRUE(draft.Connect(NodeId{"develop"}, NodeId{"grade.new"}).succeeded);
+  detached = draft.DetachedNodeIds();
+  ASSERT_EQ(detached.size(), 2u);
+  EXPECT_EQ(detached[0], NodeId{"grade.primary"});
+  EXPECT_EQ(detached[1], NodeId{"drt"});
+
+  // Completing the chain reconnects every node; the draft is submittable and
+  // reports no detached nodes.
+  ASSERT_TRUE(draft.Connect(NodeId{"grade.new"}, NodeId{"grade.primary"}).succeeded);
+  ASSERT_TRUE(draft.Connect(NodeId{"grade.primary"}, NodeId{"drt"}).succeeded);
+  EXPECT_TRUE(draft.SubmissionValid());
+  EXPECT_TRUE(draft.DetachedNodeIds().empty());
 }
 
 }  // namespace

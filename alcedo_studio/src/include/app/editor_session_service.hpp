@@ -388,6 +388,31 @@ class IEditorSessionBackend {
     result.message  = "Node graph topology edit is not supported by this backend";
     return result;
   }
+  /// Mask Groups: insert one clean Color Grade at the top of the scene-image
+  /// backbone as one typed history commit. @p expected_successor_id is the
+  /// committed node the caller observed directly after Develop; the owner
+  /// rejects the request when the live backbone no longer matches. Default
+  /// backends reject.
+  virtual auto InsertColorGradeAtTop(const NodeId& /*new_id*/,
+                                     const NodeId& /*expected_successor_id*/)
+      -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Rejected;
+    result.state    = state();
+    result.identity = identity();
+    result.message  = "Color Grade top insertion is not supported by this backend";
+    return result;
+  }
+  /// Mask Groups: remove one Color Grade and bridge its scene-image neighbors
+  /// as one typed history commit. Default backends reject.
+  virtual auto RemoveColorGradeAndBridge(const NodeId& /*node_id*/) -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Rejected;
+    result.state    = state();
+    result.identity = identity();
+    result.message  = "Color Grade bridge removal is not supported by this backend";
+    return result;
+  }
   virtual auto RequestViewChange(EditorRenderReason /*reason*/,
                                  std::optional<ViewportRenderRegion> /*region*/)
       -> EditorSessionResult {
@@ -614,6 +639,9 @@ class EditorSessionService final : public IEditorSessionBackend {
   auto RenameColorGrade(const NodeId& node_id, std::string display_name)
       -> EditorSessionResult override;
   auto EditNodeGraph(NodeGraphTopologyChange change) -> EditorSessionResult override;
+  auto InsertColorGradeAtTop(const NodeId& new_id, const NodeId& expected_successor_id)
+      -> EditorSessionResult override;
+  auto RemoveColorGradeAndBridge(const NodeId& node_id) -> EditorSessionResult override;
   auto Patch(std::string patch_key) -> EditorSessionResult;
   auto CommitAdjustment(std::string patch_key) -> EditorSessionResult;
   auto Undo() -> EditorSessionResult override;

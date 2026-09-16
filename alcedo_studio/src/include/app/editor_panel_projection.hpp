@@ -133,6 +133,9 @@ struct EditorPanelAdapter {
   std::string_view panel_id;
   auto (*read)(const PipelineDocument& document, const EditorParameterTarget& target,
                EditorPanelFieldPresentation* out, std::string* error) -> bool;
+  /// True when the field is owned by a Color Grade node; the current-panel
+  /// projection omits it when the document has no Color Grade.
+  bool requires_color_grade = false;
 };
 
 /**

@@ -60,6 +60,22 @@ auto SameProjectionContent(const EditorNodeGraphSnapshot& lhs, const EditorNodeG
   return lhs.nodes == rhs.nodes && lhs.edges == rhs.edges;
 }
 
+/// QML-facing key for one Mask source category. Shared by the node-card Mask
+/// rows and the Mask Groups sub-rows.
+[[nodiscard]] auto MaskSourceKindKey(alcedo::MaskSourceKind source_kind) -> QString {
+  switch (source_kind) {
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
+    case alcedo::MaskSourceKind::Brush:
+      return QStringLiteral("brush");
+#endif
+    case alcedo::MaskSourceKind::Radial:
+      return QStringLiteral("radial");
+    case alcedo::MaskSourceKind::LinearGradient:
+      return QStringLiteral("linearGradient");
+  }
+  return {};
+}
+
 }  // namespace
 
 EditorNodeController::EditorNodeController(QObject* parent) : QObject(parent) {}
@@ -162,6 +178,9 @@ void EditorNodeController::ClearSnapshot() {
   DiscardDraft();
   snapshot_                     = {};
   has_snapshot_                 = false;
+  const bool had_mask_groups    = has_mask_group_snapshot_;
+  mask_group_snapshot_          = {};
+  has_mask_group_snapshot_      = false;
   selected_node_id_             = {};
   last_selected_color_grade_id_ = {};
   selection_restore_node_id_    = {};
@@ -176,6 +195,9 @@ void EditorNodeController::ClearSnapshot() {
   emit SelectionChanged();
   emit selectionChanged();
   emit ActionAvailabilityChanged();
+  if (had_mask_groups) {
+    emit MaskGroupsChanged();
+  }
 }
 
 auto EditorNodeController::HasActiveGraph() const -> bool {
@@ -350,22 +372,8 @@ auto EditorNodeController::selected_node_masks() const -> QVariantList {
     QVariantMap row;
     row.insert(QStringLiteral("maskId"),
                QString::fromUtf8(mask.mask_id.Value().data(),
-                                  static_cast<int>(mask.mask_id.Value().size())));
-    QString source_kind;
-    switch (mask.source_kind) {
-#ifdef ALCEDO_ENABLE_BRUSH_MASK
-      case MaskSourceKind::Brush:
-        source_kind = QStringLiteral("brush");
-        break;
-#endif
-      case MaskSourceKind::Radial:
-        source_kind = QStringLiteral("radial");
-        break;
-      case MaskSourceKind::LinearGradient:
-        source_kind = QStringLiteral("linearGradient");
-        break;
-    }
-    row.insert(QStringLiteral("sourceKind"), source_kind);
+                                 static_cast<int>(mask.mask_id.Value().size())));
+    row.insert(QStringLiteral("sourceKind"), MaskSourceKindKey(mask.source_kind));
     rows.push_back(row);
   }
   return rows;
@@ -464,12 +472,35 @@ auto EditorNodeController::PublishDocument(const PipelineDocument& document,
     return false;
   }
   try {
-    auto built = EditorNodeGraphProjection::Build(document, session_generation, 0, 0);
-    return PublishSnapshot(std::move(built));
+    auto built  = EditorNodeGraphProjection::Build(document, session_generation, 0, 0);
+    auto groups = EditorNodeGraphProjection::BuildMaskGroups(document, session_generation, 0, 0);
+    if (!PublishSnapshot(std::move(built))) {
+      return false;
+    }
+    return PublishMaskGroupSnapshot(std::move(groups));
   } catch (const std::exception& ex) {
     SetLastError(QString::fromUtf8(ex.what()));
     return false;
   }
+}
+
+auto EditorNodeController::PublishMaskGroupSnapshot(alcedo::EditorMaskGroupSnapshot snapshot)
+    -> bool {
+  const auto bound_generation = BoundSessionGeneration();
+  if (bound_generation.has_value() && snapshot.session_generation != *bound_generation) {
+    SetLastError(tr("The Mask Groups snapshot is from another editor session"));
+    return false;
+  }
+  snapshot.session_generation  = session_generation_;
+  snapshot.topology_revision   = topology_revision_;
+  snapshot.projection_revision = projection_revision_;
+  if (has_mask_group_snapshot_ && snapshot.groups == mask_group_snapshot_.groups) {
+    return true;
+  }
+  mask_group_snapshot_     = std::move(snapshot);
+  has_mask_group_snapshot_ = true;
+  emit MaskGroupsChanged();
+  return true;
 }
 
 bool EditorNodeController::applyToGraph(QObject* adapter) {
@@ -946,6 +977,124 @@ bool EditorNodeController::deleteColorGrade(const QString& node_id) {
   return MaybeSubmitDraft();
 }
 
+bool EditorNodeController::insertMaskGroupAtTop() {
+  if (!ValidateCommandGeneration()) {
+    return false;
+  }
+  if (draft_ != nullptr) {
+    SetLastError(tr("Finish the node graph before changing Mask Groups"));
+    return false;
+  }
+  if (snapshot_.nodes.size() < 2 ||
+      snapshot_.nodes.front().node_kind != alcedo::EditorNodeKind::Develop) {
+    SetLastError(tr("The node graph has no editable Mask Groups"));
+    return false;
+  }
+  const auto   anchor = snapshot_.nodes[1].node_id;
+  const auto   uuid   = QUuid::createUuid().toString(QUuid::WithoutBraces).toLower().toStdString();
+  const NodeId new_id{"grade." + uuid};
+  SetCommandActive(true);
+  const auto reset_active = qScopeGuard([this] { SetCommandActive(false); });
+  const auto result       = session_->SubmitInsertColorGradeAtTop(new_id, anchor);
+  if (alcedo::EditorSessionResultIsFailure(result.kind)) {
+    SetLastError(QString::fromStdString(result.message));
+    return false;
+  }
+  refreshFromSession();
+  selectNode(NodeIdToQString(new_id));
+  return true;
+}
+
+bool EditorNodeController::removeMaskGroup(const QString& node_id) {
+  if (!ValidateCommandGeneration()) {
+    return false;
+  }
+  if (draft_ != nullptr) {
+    SetLastError(tr("Finish the node graph before changing Mask Groups"));
+    return false;
+  }
+  const auto id = NodeIdFromQString(node_id);
+  if (!IsColorGrade(id)) {
+    SetLastError(tr("Only a Color Grade Mask Group can be removed"));
+    return false;
+  }
+  NodeId    successor;
+  const int index = IndexOf(id);
+  if (index >= 0 && index + 1 < static_cast<int>(snapshot_.nodes.size())) {
+    successor = snapshot_.nodes[static_cast<std::size_t>(index + 1)].node_id;
+  }
+  SetCommandActive(true);
+  const auto reset_active = qScopeGuard([this] { SetCommandActive(false); });
+  const auto result       = session_->SubmitRemoveColorGradeAndBridge(id);
+  if (alcedo::EditorSessionResultIsFailure(result.kind)) {
+    SetLastError(QString::fromStdString(result.message));
+    return false;
+  }
+  refreshFromSession();
+  if (!ContainsNode(selected_node_id_) && !successor.Empty()) {
+    selectNode(NodeIdToQString(successor));
+  }
+  return true;
+}
+
+bool EditorNodeController::locateNodeInGraph(const QString& node_id) {
+  if (session_ == nullptr) {
+    SetLastError(tr("No editor session is bound"));
+    return false;
+  }
+  const auto id = NodeIdFromQString(node_id);
+  if (!ContainsNode(id)) {
+    SetLastError(tr("That node is not in the current graph"));
+    return false;
+  }
+  session_->set_editor_tool_panel_page(QStringLiteral("nodes"));
+  selectNode(node_id);
+  return true;
+}
+
+auto EditorNodeController::detached_draft_node_ids() const -> QStringList {
+  QStringList ids;
+  if (draft_ == nullptr) {
+    return ids;
+  }
+  for (const auto& node_id : draft_->DetachedNodeIds()) {
+    ids.push_back(NodeIdToQString(node_id));
+  }
+  return ids;
+}
+
+auto EditorNodeController::can_edit_mask_group_structure() const -> bool {
+  return can_add_color_grade() && draft_ == nullptr;
+}
+
+auto EditorNodeController::mask_groups() const -> QVariantList {
+  QVariantList rows;
+  rows.reserve(static_cast<qsizetype>(mask_group_snapshot_.groups.size()));
+  for (const auto& group : mask_group_snapshot_.groups) {
+    QVariantMap row;
+    row.insert(QStringLiteral("nodeId"), NodeIdToQString(group.node_id));
+    row.insert(QStringLiteral("displayName"), QString::fromStdString(group.display_name));
+    row.insert(QStringLiteral("enabled"), group.enabled);
+    QVariantList masks;
+    masks.reserve(static_cast<qsizetype>(group.masks.size()));
+    for (const auto& mask : group.masks) {
+      QVariantMap mask_row;
+      mask_row.insert(QStringLiteral("nodeId"), NodeIdToQString(mask.node_id));
+      mask_row.insert(QStringLiteral("maskId"),
+                      QString::fromUtf8(mask.mask_id.Value().data(),
+                                        static_cast<int>(mask.mask_id.Value().size())));
+      mask_row.insert(QStringLiteral("sourceKind"), MaskSourceKindKey(mask.source_kind));
+      mask_row.insert(QStringLiteral("displayName"), QString::fromStdString(mask.display_name));
+      mask_row.insert(QStringLiteral("enabled"), mask.enabled);
+      mask_row.insert(QStringLiteral("opacity"), static_cast<double>(mask.opacity));
+      masks.push_back(mask_row);
+    }
+    row.insert(QStringLiteral("masks"), masks);
+    rows.push_back(row);
+  }
+  return rows;
+}
+
 bool EditorNodeController::requestConnect(const QString& source_node_id,
                                           const QString& destination_node_id) {
   return requestConnect(source_node_id, destination_node_id, session_generation_);
@@ -1070,14 +1219,23 @@ void EditorNodeController::DiscardDraft() {
 }
 
 void EditorNodeController::AdoptCommittedDocument(const PipelineDocument& document) {
-  auto built                = EditorNodeGraphProjection::Build(document, session_generation_, 0, 0);
-  topology_revision_        = topology_revision_ + 1;
-  projection_revision_      = projection_revision_ + 1;
-  built.session_generation  = session_generation_;
-  built.topology_revision   = topology_revision_;
-  built.projection_revision = projection_revision_;
-  snapshot_                 = std::move(built);
-  has_snapshot_             = true;
+  auto built  = EditorNodeGraphProjection::Build(document, session_generation_, 0, 0);
+  auto groups = EditorNodeGraphProjection::BuildMaskGroups(document, session_generation_, 0, 0);
+  topology_revision_         = topology_revision_ + 1;
+  projection_revision_       = projection_revision_ + 1;
+  built.session_generation   = session_generation_;
+  built.topology_revision    = topology_revision_;
+  built.projection_revision  = projection_revision_;
+  snapshot_                  = std::move(built);
+  has_snapshot_              = true;
+  groups.session_generation  = session_generation_;
+  groups.topology_revision   = topology_revision_;
+  groups.projection_revision = projection_revision_;
+  if (!has_mask_group_snapshot_ || groups.groups != mask_group_snapshot_.groups) {
+    mask_group_snapshot_     = std::move(groups);
+    has_mask_group_snapshot_ = true;
+    emit MaskGroupsChanged();
+  }
 }
 
 auto EditorNodeController::ApplyDraftMutationToAdapter(

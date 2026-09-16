@@ -175,6 +175,35 @@ class DocumentSessionBackend final : public IEditorSessionBackend {
     result.kind = alcedo::EditorSessionResultKind::RenderRouted;
     return result;
   }
+  auto InsertColorGradeAtTop(const NodeId& new_id, const NodeId& expected_successor_id)
+      -> EditorSessionResult override {
+    ++insert_grade_top_count_;
+    last_insert_new_id_      = new_id;
+    last_expected_successor_ = expected_successor_id;
+    if (fail_commands_) return Rejected("mini-Git journal append failed");
+    const auto backbone = document_.Graph().ImageBackboneNodeIds();
+    if (backbone.size() < 2) return Rejected("The live graph has no valid image backbone");
+    if (backbone[1] != expected_successor_id) {
+      return Rejected("The Mask Groups insertion point changed since the request was issued");
+    }
+    const auto errors = alcedo::AddCleanColorGrade(document_, backbone[1], new_id);
+    if (!errors.empty()) return Rejected(errors.front().message);
+    PublishHistoryChange();
+    auto result = Accepted("Mask Group inserted");
+    result.kind = alcedo::EditorSessionResultKind::RenderRouted;
+    return result;
+  }
+  auto RemoveColorGradeAndBridge(const NodeId& node_id) -> EditorSessionResult override {
+    ++remove_grade_count_;
+    last_removed_node_id_ = node_id;
+    if (fail_commands_) return Rejected("mini-Git journal append failed");
+    const auto errors = alcedo::RemoveColorGradeAndBridge(document_, node_id);
+    if (!errors.empty()) return Rejected(errors.front().message);
+    PublishHistoryChange();
+    auto result = Accepted("Mask Group removed");
+    result.kind = alcedo::EditorSessionResultKind::RenderRouted;
+    return result;
+  }
 
   void SetGeneration(std::uint64_t value) { request_.value = value; }
   void SetState(EditorSessionState state, bool has_image = true) {
@@ -201,6 +230,11 @@ class DocumentSessionBackend final : public IEditorSessionBackend {
   }
   [[nodiscard]] auto rename_count() const -> int { return rename_count_; }
   [[nodiscard]] auto edit_node_graph_count() const -> int { return edit_node_graph_count_; }
+  [[nodiscard]] auto insert_grade_top_count() const -> int { return insert_grade_top_count_; }
+  [[nodiscard]] auto remove_grade_count() const -> int { return remove_grade_count_; }
+  [[nodiscard]] auto last_insert_new_id() const -> NodeId { return last_insert_new_id_; }
+  [[nodiscard]] auto last_expected_successor() const -> NodeId { return last_expected_successor_; }
+  [[nodiscard]] auto last_removed_node_id() const -> NodeId { return last_removed_node_id_; }
   [[nodiscard]] auto active_version_read_count() const -> int { return active_version_read_count_; }
   [[nodiscard]] auto history_snapshot_read_count() const -> int {
     return history_snapshot_read_count_;
@@ -239,6 +273,11 @@ class DocumentSessionBackend final : public IEditorSessionBackend {
   bool                                              fail_commands_               = false;
   int                                               rename_count_                = 0;
   int                                               edit_node_graph_count_       = 0;
+  int                                               insert_grade_top_count_      = 0;
+  int                                               remove_grade_count_          = 0;
+  NodeId                                            last_insert_new_id_;
+  NodeId                                            last_expected_successor_;
+  NodeId                                            last_removed_node_id_;
   std::uint64_t                                     history_revision_            = 0;
   mutable int                                       active_version_read_count_   = 0;
   int                                               history_snapshot_read_count_ = 0;
@@ -1008,6 +1047,154 @@ TEST(EditorNodeController, LeavingDevelopGeometryDoesNotRequestViewChange) {
   nodes.selectNode(NodeIdToQString(NodeId{"grade.primary"}));
   EXPECT_EQ(session.active_adjustment_panel(), QStringLiteral("tone"));
   EXPECT_EQ(backend.view_change_count(), views_after_geometry);
+}
+
+TEST(EditorNodeController, MaskGroupsPublishBackboneOrderWithEmptyDrawers) {
+  DocumentSessionBackend backend;
+  backend.SetGeneration(40);
+  ASSERT_TRUE(
+      alcedo::AddCleanColorGrade(backend.Document(), NodeId{"grade.primary"}, NodeId{"grade.top"})
+          .empty());
+  EditorSessionController session(&backend);
+  EditorNodeController    controller;
+  controller.set_editor_session(&session);
+
+  const auto groups = controller.mask_groups();
+  ASSERT_EQ(groups.size(), 2);
+  const auto first  = groups[0].toMap();
+  const auto second = groups[1].toMap();
+  EXPECT_EQ(first.value(QStringLiteral("nodeId")).toString(), QStringLiteral("grade.top"));
+  EXPECT_EQ(first.value(QStringLiteral("displayName")).toString(), QStringLiteral("Color Grade 2"));
+  EXPECT_TRUE(first.value(QStringLiteral("masks")).toList().empty());
+  EXPECT_EQ(second.value(QStringLiteral("nodeId")).toString(), QStringLiteral("grade.primary"));
+  EXPECT_EQ(second.value(QStringLiteral("displayName")).toString(),
+            QStringLiteral("Color Grade 1"));
+  EXPECT_TRUE(controller.has_mask_group_snapshot());
+  ASSERT_EQ(controller.mask_group_snapshot().groups.size(), 2u);
+  EXPECT_EQ(controller.mask_group_snapshot().groups[0].node_id, NodeId{"grade.top"});
+}
+
+TEST(EditorNodeController, InsertMaskGroupAtTopSubmitsOneCommandAndSelectsTheNewGroup) {
+  DocumentSessionBackend backend;
+  backend.SetGeneration(41);
+  EditorSessionController session(&backend);
+  EditorNodeController    controller;
+  controller.set_editor_session(&session);
+  controller.selectNode(QStringLiteral("grade.primary"));
+
+  ASSERT_TRUE(controller.insertMaskGroupAtTop());
+  EXPECT_EQ(backend.insert_grade_top_count(), 1);
+  EXPECT_EQ(backend.last_expected_successor(), NodeId{"grade.primary"});
+  const auto new_id = backend.last_insert_new_id();
+  EXPECT_NE(backend.Document().Graph().FindNode(new_id), nullptr);
+  EXPECT_EQ(
+      backend.Document().Graph().ImageBackboneNodeIds(),
+      (std::vector<NodeId>{NodeId{"develop"}, new_id, NodeId{"grade.primary"}, NodeId{"drt"}}));
+  EXPECT_EQ(controller.selected_node_id(), new_id);
+  ASSERT_EQ(controller.mask_group_snapshot().groups.size(), 2u);
+  EXPECT_EQ(controller.mask_group_snapshot().groups[0].node_id, new_id);
+  EXPECT_EQ(controller.mask_group_snapshot().groups[0].display_name, "Color Grade 2");
+  EXPECT_TRUE(controller.last_error().isEmpty());
+}
+
+TEST(EditorNodeController, RemoveMaskGroupBridgesAndSelectsTheSuccessor) {
+  DocumentSessionBackend backend;
+  backend.SetGeneration(42);
+  EditorSessionController session(&backend);
+  EditorNodeController    controller;
+  controller.set_editor_session(&session);
+  controller.selectNode(QStringLiteral("grade.primary"));
+
+  ASSERT_TRUE(controller.removeMaskGroup(QStringLiteral("grade.primary")));
+  EXPECT_EQ(backend.remove_grade_count(), 1);
+  EXPECT_EQ(backend.last_removed_node_id(), NodeId{"grade.primary"});
+  EXPECT_EQ(backend.Document().Graph().ImageBackboneNodeIds(),
+            (std::vector<NodeId>{NodeId{"develop"}, NodeId{"drt"}}));
+  EXPECT_EQ(controller.selected_node_id(), NodeId{"drt"});
+  EXPECT_TRUE(controller.mask_group_snapshot().groups.empty());
+}
+
+TEST(EditorNodeController, MaskGroupCommandsRejectDraftEndpointsAndFailures) {
+  DocumentSessionBackend backend;
+  backend.SetGeneration(43);
+  EditorSessionController session(&backend);
+  EditorNodeController    controller;
+  controller.set_editor_session(&session);
+
+  // Draft boundary: structural commands and the panel stay disabled.
+  ASSERT_TRUE(controller.addCleanColorGrade());
+  EXPECT_TRUE(controller.incomplete_draft());
+  EXPECT_FALSE(controller.can_edit_mask_group_structure());
+  EXPECT_FALSE(controller.insertMaskGroupAtTop());
+  EXPECT_FALSE(controller.removeMaskGroup(QStringLiteral("grade.primary")));
+  EXPECT_EQ(backend.insert_grade_top_count(), 0);
+  EXPECT_EQ(backend.remove_grade_count(), 0);
+
+  // Locate switches the tool panel to Nodes and selects the detached node.
+  const auto detached = controller.detached_draft_node_ids();
+  ASSERT_EQ(detached.size(), 1);
+  ASSERT_TRUE(controller.locateNodeInGraph(detached[0]));
+  EXPECT_EQ(session.editor_tool_panel_page(), QStringLiteral("nodes"));
+  EXPECT_EQ(controller.selected_node_id_string(), detached[0]);
+
+  // Completing the path re-enables structural commands. The grade.primary to
+  // drt edge is retained from the committed document, so the second connect
+  // already submits and discards the draft.
+  const auto extra = controller.selected_node_id();
+  ASSERT_TRUE(controller.requestConnect(QStringLiteral("develop"), NodeIdToQString(extra)));
+  ASSERT_TRUE(controller.requestConnect(NodeIdToQString(extra), QStringLiteral("grade.primary")));
+  EXPECT_EQ(backend.edit_node_graph_count(), 1);
+  EXPECT_TRUE(controller.can_edit_mask_group_structure());
+
+  // Endpoints and unknown ids are rejected before submission.
+  EXPECT_FALSE(controller.removeMaskGroup(QStringLiteral("develop")));
+  EXPECT_FALSE(controller.removeMaskGroup(QStringLiteral("drt")));
+  EXPECT_FALSE(controller.removeMaskGroup(QStringLiteral("grade.missing")));
+  EXPECT_EQ(backend.remove_grade_count(), 0);
+
+  // A backend failure surfaces the error and leaves the document unchanged.
+  backend.SetFailCommands(true);
+  const auto hash_before = backend.Document().ToJson().dump();
+  EXPECT_FALSE(controller.insertMaskGroupAtTop());
+  EXPECT_EQ(controller.last_error(), QStringLiteral("mini-Git journal append failed"));
+  EXPECT_EQ(backend.Document().ToJson().dump(), hash_before);
+  EXPECT_EQ(backend.insert_grade_top_count(), 1);
+}
+
+TEST(EditorNodeController, MaskGroupCommandsRejectAStaleSessionGeneration) {
+  DocumentSessionBackend backend;
+  backend.SetGeneration(44);
+  EditorSessionController session(&backend);
+  EditorNodeController    controller;
+  controller.set_editor_session(&session);
+
+  backend.SetGeneration(45);
+  EXPECT_FALSE(controller.insertMaskGroupAtTop());
+  EXPECT_FALSE(controller.removeMaskGroup(QStringLiteral("grade.primary")));
+  EXPECT_EQ(backend.insert_grade_top_count(), 0);
+  EXPECT_EQ(backend.remove_grade_count(), 0);
+}
+
+TEST(EditorNodeController, PanelSwitchKeepsTheIncompleteDraftAndCommittedGroups) {
+  DocumentSessionBackend backend;
+  backend.SetGeneration(46);
+  EditorSessionController session(&backend);
+  EditorNodeController    controller;
+  controller.set_editor_session(&session);
+  const auto committed_groups = controller.mask_groups();
+  ASSERT_EQ(committed_groups.size(), 1);
+
+  ASSERT_TRUE(controller.addCleanColorGrade());
+  EXPECT_TRUE(controller.incomplete_draft());
+
+  // Switching away and back does not discard the draft and does not republish
+  // Mask Groups from the incomplete draft.
+  session.set_editor_tool_panel_page(QStringLiteral("history"));
+  session.set_editor_tool_panel_page(QStringLiteral("nodes"));
+  EXPECT_TRUE(controller.incomplete_draft());
+  EXPECT_EQ(controller.detached_draft_node_ids().size(), 1);
+  EXPECT_EQ(controller.mask_groups(), committed_groups);
+  EXPECT_EQ(backend.edit_node_graph_count(), 0);
 }
 
 }  // namespace

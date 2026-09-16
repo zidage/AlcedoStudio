@@ -23,6 +23,9 @@ Phase 5–6 must consume these tokens; they must not invent a parallel palette.
    same change. Never publish a value here that differs from code.
 4. Prefer shared components over copy-pasted Button/Rectangle chrome.
 5. Run the Phase 4C visual/motion tests after structural QML changes.
+6. Apply the monochrome selection and restrained accent rules below to every
+   new or changed surface. A shared component or existing color token does not
+   exempt a surface from these rules.
 
 Drift checklist: `docs/roadmap/alcedo_studio/ui/qml_visual_literal_review_checklist.md`
 
@@ -102,6 +105,52 @@ them into a new or changed surface without an explicit user request.
 Semantic colors follow the active theme (`currentThemeIndex` 0 Alcedo / 1 Classic)
 and notify via `ThemeChanged`.
 
+### Monochrome selection and restrained theme blue
+
+**Product direction, 2026-09-16:** keep application chrome predominantly
+monochrome. Use neutral surface contrast, text/icon inversion, and clear
+structure to express selection. Theme blue must remain a restrained accent.
+These rules apply to Library thumbnails, filmstrip items, Nodes, Mask Groups,
+Mask rows, History/Versions, navigation, and other selectable controls.
+
+**Hard ban: blue picture-frame selection.** Never surround a selected photo,
+thumbnail, node, group, card, or panel with a blue border, outline, ring, glow,
+or animated frame. This includes `accentColor`, `accentSecondaryColor`,
+hardcoded blue, and the default selection decoration of a framework component.
+Making the blue frame thinner or more transparent does not make it acceptable.
+Do not replace it with a blue selection slab, tinted well, or blue side stripe.
+
+- Dense rows and segments use `editorListSelectedFillColor` with
+  `editorListSelectedInkColor`; text and icons must invert together.
+- Nodes and established outline-based surfaces keep their neutral fill and
+  use the existing text-color outline. Nodes use `graphSelectionOutlineColor`
+  (`textColor`), never a theme-accent alias. A neutral outline is permitted;
+  do not add nested frames around the group and each child thumbnail.
+- A group containing the selected Mask remains identifiable through its
+  header text/weight or a quiet neutral surface. Give the selected Mask row
+  the strongest indication; do not compete with a second bright group frame.
+- Keep hover, persistent selection, and keyboard focus distinct. Selection
+  cannot depend only on hover or on a color hue. Keyboard focus must stay
+  visible using the component's documented treatment; it must not become a
+  persistent blue frame after a pointer selection.
+- New or changed chrome starts with neutral AppTheme roles. Use theme blue
+  only for a specific, documented action or state that needs the accent, keep
+  it to that small element, and avoid repeating it across labels, icons,
+  borders, and fills in the same control. Generic selection, group expansion,
+  deletion locks, and panel activation do not justify blue.
+- Photo pixels, color-editing data, RGB scope channels, and documented
+  error/warning or connection semantics retain their meaningful colors.
+  Their colors must not be reused as selection decoration.
+
+The token table below also inventories existing implementation. In particular,
+the current `selectedTintColor` Library wash is a legacy accent use, not the
+pattern for new or changed selection. This policy update does not claim that
+all existing QML usages have already been replaced. Keep AppTheme values and
+this document synchronized when implementing a visual change; do not create a
+parallel palette to satisfy the policy.
+
+### Semantic tokens
+
 | Role | Token | Use |
 | --- | --- | --- |
 | Canvas | `bgCanvasColor` | Outer gap behind blocks |
@@ -113,14 +162,14 @@ and notify via `ThemeChanged`.
 | Text | `textColor` | Primary copy |
 | Text muted | `textMutedColor` | Secondary / empty hints |
 | Icon | `iconColor` | Default SVG tint |
-| Accent | `accentColor` (`toneGold`) | Workspace thumb, primary accent |
-| Accent secondary | `accentSecondaryColor` | Thumb border, Material primary |
+| Accent | `accentColor` | Restricted theme accent for a documented action/state; never generic selection or workspace thumbs |
+| Accent secondary | `accentSecondaryColor` | Secondary accent only where explicitly specified; never selected borders or a reason to use Material |
 | Danger | `dangerColor` (`toneWine`) | Destructive emphasis |
 | Danger tint | `dangerTintColor` | Soft danger wells |
 | Background task finished | `backgroundTaskFinishedColor` | Green status lamp for completed/canceled work |
 | Background task working | `backgroundTaskWorkingColor` | Yellow status lamp for queued/running/canceling work |
 | Background task failed | `backgroundTaskFailedColor` | Red status lamp for failed work |
-| Selected tint | `selectedTintColor` | Library selected card wash |
+| Selected tint | `selectedTintColor` | Legacy Library card wash; new or changed selection follows the monochrome rules above |
 | Hover | `hoverColor` | Quiet hover wash |
 | Divider | `dividerColor` | Hairlines, card borders |
 | Glass panel | `glassPanelColor` | Translucent shells when needed |
@@ -134,15 +183,15 @@ and notify via `ThemeChanged`.
 | **List selected fill** | **`editorListSelectedFillColor`** | **Monochrome light well for dense catalog rows** (LUT browser, inverted selection) |
 | **List selected ink** | **`editorListSelectedInkColor`** | **Text / icon ink on the light selected well** (= `bgBaseColor`) |
 | **List favorite idle** | **`editorListFavoriteIdleColor`** | **Unstarred glyph on sunken (dark) rows** |
-| **List favorite active** | **`editorListFavoriteActiveColor`** | **Starred glyph on sunken rows** (`accentColor` / toneGold) |
+| **List favorite active** | **`editorListFavoriteActiveColor`** | **Starred glyph on sunken rows** (existing, localized `accentColor` use) |
 | **List favorite idle on selected** | **`editorListFavoriteIdleOnSelectedColor`** | **Unstarred glyph inverted on the light well** |
 | **List favorite active on selected** | **`editorListFavoriteActiveOnSelectedColor`** | **Starred glyph inverted on the light well** (full ink) |
 
 **Monochrome inverted list selection:** dense catalogs (LUT panel first) keep a
 black-and-white row language — sunken `bgBaseColor` track, light
 `editorListSelectedFillColor` bar, `editorListSelectedInkColor` for title and
-secondary copy. Favorite stars **invert with the row**: muted light idle + gold
-active on dark rows; muted ink idle + full ink active on the selected light
+secondary copy. Favorite stars **invert with the row**: muted light idle + the
+documented favorite accent on dark rows; muted ink idle + full ink active on the selected light
 well. Type badges use a white chip (`editorSliderHandleColor`) on dark rows and
 invert to ink-on-bone when the row is selected. Do not reintroduce ad-hoc
 `#D8D4CD` / `Qt.rgba` star or badge colors in feature QML.
@@ -405,7 +454,9 @@ forwarding a dock move — anchor placement after creation or a drawer fold
 changing the host height — leaves edges visually detached from their ports.
 Node selection paints only the card outline: the adapter installs an
 invisible QuickQanava selection delegate, so the default blue animated
-selection item never renders. That delegate is still a full-size `z: 1` child
+selection item never renders. This enforces the global blue-frame ban; do not
+restore the upstream decoration for focus, selection, or animation. That
+delegate is still a full-size `z: 1` child
 of the node; the card uses `z: 2` and the port dock uses `z: 3` so Mask rows
 and ports stay the pointer target. Do not set `selectionDelegate` to null in
 QML; null resets the QuickQanava default instead of disabling it.
@@ -485,7 +536,7 @@ bottom corners that follow the card radius, so the drawer reads as a contained
 section of the card rather than a floating overlay. Selection keeps the same
 surface and swaps the outline to the high-contrast
 `graphSelectionOutlineColor`. Selection does not change the node size. It does
-not add a label, status dot, glow, or large blue fill.
+not add a label, status dot, glow, blue border, or blue fill.
 
 Develop and DRT/Post use compact endpoint delegates. They show their fixed names
 and real ports. They do not show a Mask drawer. Do not add a `Locked` badge.
@@ -604,8 +655,12 @@ Non-Tabler assets are preserved for established Alcedo-specific actions
 ## Borders and focus
 
 - Default chrome borders: 1 px `cardBorderColor` / `dividerColor`.
-- Focus rings on structural icon actions: 1 px accent at ~60% alpha via
-  `IconActionButton.showFocusRing` (default true).
+- The existing structural icon action focus treatment is a 1 px accent at
+  ~60% alpha via `IconActionButton.showFocusRing` (default true). This is a
+  narrow keyboard-focus exception on the focused action, not a selection
+  style. Do not copy it onto thumbnails, nodes, groups, cards, or panels, and
+  do not retain it as a pointer-selected state. Prefer a documented neutral
+  focus treatment for new surfaces while keeping keyboard focus visible.
 - **Collections sidebar toggle exception:** this is an immediate toolbar action,
   not a selected mode. Pointer activation does not retain focus and it draws no
   accent focus border. Hover, press, and keyboard focus use the existing quiet
@@ -672,7 +727,7 @@ cells.
 | Loading | Muted status label (e.g. viewport “Preparing…”) |
 | Error | `dangerColor` / `dangerTintColor` — no ad-hoc reds |
 | Disabled | Muted icon/text tint + `enabled: false`; editor shells keep card surface (no parent opacity, no second shell tone) |
-| Selected | Dense catalogs + segmented capsules: `editorListSelectedFillColor` well + `editorListSelectedInkColor` ink (B&W). Icon actions outside capsules may still use `buttonSelectedFillColor` (fill only). Library cards use `selectedTintColor`. Never use cool blue accent as a selected slab in editor chrome. |
+| Selected | Dense rows + segmented controls: `editorListSelectedFillColor` well + `editorListSelectedInkColor` ink. Icon actions outside capsules may use neutral `buttonSelectedFillColor` (fill only). Nodes and established outline-based surfaces use the text-color outline. New or changed Library selection follows the same monochrome policy. No blue frame, tint, slab, glow, or side stripe. |
 | Hover | Quiet `buttonHoveredFillColor` well unless capsule exception applies (Library/Editor and adjustment nav segments: tooltip only) |
 
 ---
@@ -819,6 +874,13 @@ expanded, hover, and disabled where applicable:
 - Adjustment shell + group fold
 - Editor viewport empty state
 - Filmstrip dock + handle
+- Nodes and Mask Groups, including a selected Mask inside its owner group
+
+For new or changed selection, verify both themes: no blue picture-frame
+decoration or generic accent selection; selected text/icons remain legible;
+hover, selected state, and keyboard focus remain distinguishable. Check
+framework-provided selection items as well as Alcedo-painted chrome. Existing
+accent tokens do not count as an exception to these acceptance checks.
 
 DPR coverage: icon optical/source token equality at logical 1.0; optional
 window grabs under `tests/ui/fixtures/phase4c/` when
