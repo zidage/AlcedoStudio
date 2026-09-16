@@ -257,17 +257,6 @@ struct OpenClLocalToneOps {
     return lookup;
   }
 
-  static void BindScene(cl_kernel kernel, cl_uint start, const OpenClSceneView& view,
-                        OpenClBackend& backend) {
-    cl_mem image  = view.is_buffer ? backend.DummySceneImage() : view.native;
-    cl_mem buffer = view.is_buffer ? view.native : backend.DummySceneBuffer();
-    int    is_buf = view.is_buffer ? 1 : 0;
-    SetMem(kernel, start, image, "local tone scene image");
-    SetMem(kernel, start + 1, buffer, "local tone scene buffer");
-    CheckOpenCl(clSetKernelArg(kernel, start + 2, sizeof(int), &is_buf),
-                "local tone scene storage");
-  }
-
   static void ApplyCanonicalSampleAndMix(OpenClRenderDevice& device,
                                          const FrameSceneBinding& original,
                                          const FrameSceneBinding& working,
@@ -340,7 +329,8 @@ struct OpenClLocalToneOps {
     params.full_ref_w    = static_cast<float>(geometry.full_reference_extent.width);
     params.full_ref_h    = static_cast<float>(geometry.full_reference_extent.height);
     CopyMatrix(params.reference_to_render, geometry.reference_to_render);
-    BindScene(kernel, 0, OpenClBindScene(device, input), device.Workspace().Device());
+    BindOpenClSceneView(kernel, 0, OpenClBindScene(device, input), device.Workspace().Device(),
+                        "reference extract input", OpenClSceneArgAccess::Read);
     SetMem(kernel, 3, dest.native, "reference extract output");
     SetParams(kernel, 4, params, "reference extract parameters");
     SetPlaneOffset(kernel, 5, dest, "reference extract output offset");
@@ -358,7 +348,8 @@ struct OpenClLocalToneOps {
     params.input_height  = CheckedInt(height, "input height");
     params.output_width  = decision.widths[0];
     params.output_height = decision.heights[0];
-    BindScene(kernel, 0, OpenClBindScene(device, input), device.Workspace().Device());
+    BindOpenClSceneView(kernel, 0, OpenClBindScene(device, input), device.Workspace().Device(),
+                        "local extract input", OpenClSceneArgAccess::Read);
     SetMem(kernel, 3, dest.native, "local extract output");
     SetParams(kernel, 4, params, "local extract parameters");
     SetPlaneOffset(kernel, 5, dest, "local extract output offset");
@@ -483,13 +474,15 @@ struct OpenClLocalToneOps {
     SetMem(kernel, 0, working_mem, "local tone working scene");
     const bool apply_mix = mix != 1.0f || mask_id != nullptr;
     if (apply_mix) {
-      BindScene(kernel, 1, OpenClBindScene(device, original), backend);
+      BindOpenClSceneView(kernel, 1, OpenClBindScene(device, original), backend,
+                          "local tone mix source", OpenClSceneArgAccess::Read);
     } else {
-      BindScene(kernel, 1, OpenClSceneView{backend.DummySceneImage(), 1, 1, false}, backend);
+      BindOpenClSceneView(kernel, 1, OpenClUnusedSceneReadView(backend), backend,
+                          "local tone mix dummy", OpenClSceneArgAccess::Read);
       int no_mix = -1;
       CheckOpenCl(clSetKernelArg(kernel, 3, sizeof(int), &no_mix), "local tone mix flag");
     }
-    cl_mem mask_mem = backend.DummySceneImage();
+    cl_mem mask_mem = backend.DummySceneReadImage();
     int    has_mask = 0;
     if (mask_id != nullptr) {
       auto* mask = device.Workspace().Images().Find(*mask_id);

@@ -48,7 +48,8 @@ struct OpenClImageResource {
 };
 
 struct OpenClEventSignalResource {
-  cl_event event = nullptr;
+  cl_event event      = nullptr;
+  int      slot_index = -1;
 
   ~OpenClEventSignalResource() {
     if (event != nullptr) {

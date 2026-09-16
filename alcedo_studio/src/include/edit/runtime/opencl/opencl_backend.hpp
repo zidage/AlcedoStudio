@@ -293,15 +293,27 @@ class OpenClBackend {
       -> OpenClLutBinding;
   [[nodiscard]] auto DummyLut() -> OpenClLutBinding;
   /**
-   * @brief 1x1 RGBA32F image bound when a scene-work kernel does not read an image.
+   * @brief 1x1 RGBA32F image bound to unused @c read_only image2d_t scene arguments.
    *
-   * Owned by this backend. Not a GraphImageCache or TexturePool entry.
+   * Distinct from @ref DummySceneWriteImage. OpenCL 1.2 forbids one image object as
+   * both read_only and write_only in the same kernel. Owned by this backend.
    */
-  [[nodiscard]] auto DummySceneImage() -> cl_mem;
+  [[nodiscard]] auto DummySceneReadImage() -> cl_mem;
   /**
-   * @brief 16-byte buffer bound when a scene-work kernel does not read a work buffer.
+   * @brief 1x1 RGBA32F image bound to unused @c write_only image2d_t scene arguments.
    */
-  [[nodiscard]] auto DummySceneBuffer() -> cl_mem;
+  [[nodiscard]] auto DummySceneWriteImage() -> cl_mem;
+  /**
+   * @brief 16-byte buffer bound to unused const scene-work buffer arguments.
+   *
+   * Distinct from @ref DummySceneWriteBuffer so a dual-storage kernel never binds
+   * one dummy buffer as both const and mutable pointers.
+   */
+  [[nodiscard]] auto DummySceneReadBuffer() -> cl_mem;
+  /**
+   * @brief 16-byte buffer bound to unused mutable scene-work buffer arguments.
+   */
+  [[nodiscard]] auto DummySceneWriteBuffer() -> cl_mem;
   void               SetLutByteBudget(std::size_t bytes);
   /** @brief Release busy markers belonging to an encode cancelled before submission. */
   void               ReleaseUnsubmittedResourceUses() noexcept;
@@ -376,6 +388,8 @@ class OpenClBackend {
   void TrackEnqueueEvent(CommandContext& command_context, cl_event event);
   auto EnqueueMarker(CommandContext& command_context) -> cl_event;
   void FlushQueue();
+  [[nodiscard]] auto MakeDummySceneImage(cl_mem_flags flags, const char* what) -> cl_mem;
+  [[nodiscard]] auto MakeDummySceneBuffer(cl_mem_flags flags, const char* what) -> cl_mem;
 
   cl_device_id           device_  = nullptr;
   cl_context             context_ = nullptr;
@@ -405,8 +419,10 @@ class OpenClBackend {
   std::uint64_t          lut_upload_bytes_     = 0;
   std::uint64_t          last_lut_resource_id_ = 0;
   std::uint64_t          grade_command_topology_hash_ = 0;
-  cl_mem                 dummy_scene_image_           = nullptr;
-  cl_mem                 dummy_scene_buffer_          = nullptr;
+  cl_mem                 dummy_scene_read_image_      = nullptr;
+  cl_mem                 dummy_scene_write_image_     = nullptr;
+  cl_mem                 dummy_scene_read_buffer_     = nullptr;
+  cl_mem                 dummy_scene_write_buffer_    = nullptr;
   std::size_t            lut_byte_budget_      = 64ull << 20;
   std::size_t            lut_cache_bytes_      = 0;
   std::uint64_t          lut_lru_clock_        = 0;

@@ -78,9 +78,10 @@ void DispatchDrtScene(OpenClRenderDevice& device, const FrameSceneBinding& sourc
   auto kernel = OpenClKernelCache::Instance().GetKernel(OpenCL::GpuDag::kDrtProgramName,
                                                         OpenCL::GpuDag::kDrtSceneKernelName);
   auto& backend = device.Workspace().Device();
-  BindOpenClSceneView(kernel, 0, OpenClBindScene(device, source), backend, "OpenCL DRT source");
+  BindOpenClSceneView(kernel, 0, OpenClBindScene(device, source), backend, "OpenCL DRT source",
+                      OpenClSceneArgAccess::Read);
   BindOpenClSceneView(kernel, 3, OpenClBindScene(device, destination), backend,
-                      "OpenCL DRT destination");
+                      "OpenCL DRT destination", OpenClSceneArgAccess::Write);
   cl_mem        parameter_buffer = parameters.Native();
   const cl_uint offset           = parameter_offset;
   CheckOpenCl(clSetKernelArg(kernel, 6, sizeof(cl_mem), &parameter_buffer),

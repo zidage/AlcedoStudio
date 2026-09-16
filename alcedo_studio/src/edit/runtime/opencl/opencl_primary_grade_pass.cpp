@@ -142,19 +142,21 @@ void EnqueueGradePointwiseScene(OpenClRenderDevice& device, const FrameSceneBind
   auto kernel = OpenClKernelCache::Instance().GetKernel(
       OpenCL::GpuDag::kPrimaryGradeProgramName, OpenCL::GpuDag::kPrimaryGradePointwiseSceneKernelName);
   auto& backend = device.Workspace().Device();
-  BindOpenClSceneView(kernel, 0, OpenClBindScene(device, src), backend, "OpenCL grade source");
-  BindOpenClSceneView(kernel, 3, OpenClBindScene(device, dst), backend, "OpenCL grade destination");
+  BindOpenClSceneView(kernel, 0, OpenClBindScene(device, src), backend, "OpenCL grade source",
+                      OpenClSceneArgAccess::Read);
+  BindOpenClSceneView(kernel, 3, OpenClBindScene(device, dst), backend, "OpenCL grade destination",
+                      OpenClSceneArgAccess::Write);
   const bool apply_mix = mix_source != nullptr;
   if (apply_mix) {
     BindOpenClSceneView(kernel, 6, OpenClBindScene(device, *mix_source), backend,
-                        "OpenCL grade mix source");
+                        "OpenCL grade mix source", OpenClSceneArgAccess::Read);
   } else {
-    BindOpenClSceneView(kernel, 6, OpenClSceneView{backend.DummySceneImage(), 1, 1, false}, backend,
-                        "OpenCL grade mix dummy");
+    BindOpenClSceneView(kernel, 6, OpenClUnusedSceneReadView(backend), backend,
+                        "OpenCL grade mix dummy", OpenClSceneArgAccess::Read);
     int no_mix = -1;
     CheckOpenCl(clSetKernelArg(kernel, 8, sizeof(int), &no_mix), "OpenCL grade mix flag");
   }
-  cl_mem mask_mem = backend.DummySceneImage();
+  cl_mem mask_mem = backend.DummySceneReadImage();
   int    has_mask = 0;
   if (mask_id != nullptr) {
     auto* mask = device.Workspace().Images().Find(*mask_id);

@@ -437,6 +437,54 @@ TEST_F(OpenClMultiGradeFixture, TwoLutGradesKeepIndependentCubeState) {
   EXPECT_NEAR(b.front().b, 1.0f, 1.0e-4f);
 }
 
+TEST_F(OpenClMultiGradeFixture, SceneWorkDummyReadAndWriteResourcesAreDistinctObjects) {
+  auto& backend = Device().Workspace().Device();
+  const auto read_image  = backend.DummySceneReadImage();
+  const auto write_image = backend.DummySceneWriteImage();
+  const auto read_buffer = backend.DummySceneReadBuffer();
+  const auto write_buffer = backend.DummySceneWriteBuffer();
+  ASSERT_NE(read_image, nullptr);
+  ASSERT_NE(write_image, nullptr);
+  ASSERT_NE(read_buffer, nullptr);
+  ASSERT_NE(write_buffer, nullptr);
+  EXPECT_NE(read_image, write_image);
+  EXPECT_NE(read_buffer, write_buffer);
+  EXPECT_EQ(read_image, backend.DummySceneReadImage());
+  EXPECT_EQ(write_image, backend.DummySceneWriteImage());
+}
+
+TEST_F(OpenClMultiGradeFixture, FirstGradeEditAfterThreeGradeChainRewritesWorkBuffers) {
+  auto document = multi_grade_test::MakeIdentityGradeDocument();
+  multi_grade_test::AddCleanGradesBeforeDrt(document, {"grade.b", "grade.c"});
+  multi_grade_test::GradeAdjustment<ExposureModel>(document, NodeId{"grade.primary"},
+                                                   type_ids::Exposure())
+      .SetValue(1.0f);
+  multi_grade_test::GradeAdjustment<ContrastModel>(document, NodeId{"grade.b"},
+                                                   type_ids::Contrast())
+      .SetValue(100.0f);
+  multi_grade_test::GradeAdjustment<ExposureModel>(document, NodeId{"grade.c"},
+                                                   type_ids::Exposure())
+      .SetValue(2.0f);
+  auto plan = Compile(document);
+  Render(document, plan);
+  const auto after_third = DownloadWork(Device(), LastGradeMember(plan.grade_nodes.size()));
+  multi_grade_test::GradeAdjustment<ExposureModel>(document, NodeId{"grade.primary"},
+                                                   type_ids::Exposure())
+      .SetValue(0.5f);
+  plan = Compile(document);
+  Render(document, plan);
+  EXPECT_EQ(Device().PassStats().primary_grade_skip, 0U);
+  EXPECT_EQ(Device().PassStats().primary_grade_execute, 3U);
+  const auto  develop  = Download(Device(), plan.develop_output);
+  const auto  output   = DownloadWork(Device(), LastGradeMember(plan.grade_nodes.size()));
+  const float expected = multi_grade_test::ApplyExposureAcescc(
+      multi_grade_test::ApplyContrastAcescc(
+          multi_grade_test::ApplyExposureAcescc(develop.front().r, 0.5f), 100.0f),
+      2.0f);
+  EXPECT_NEAR(output.front().r, expected, 1.0e-5f);
+  EXPECT_GT(std::abs(output.front().r - after_third.front().r), 1.0e-4f);
+}
+
 TEST_F(OpenClMultiGradeFixture, MiddleGradeEditReusesKeyStagesAndReexecutesEveryGrade) {
   auto document = multi_grade_test::MakeIdentityGradeDocument();
   multi_grade_test::AddCleanGradesBeforeDrt(document, {"grade.b", "grade.c"});

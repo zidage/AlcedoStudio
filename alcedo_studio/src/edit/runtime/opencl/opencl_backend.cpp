@@ -11,6 +11,7 @@
 #include <limits>
 #include <sstream>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 #include "decoders/processor/operators/gpu/opencl_raw_programs.hpp"
@@ -326,14 +327,16 @@ OpenClBackend::~OpenClBackend() {
   neural_workspace_.reset();
   dummy_lut_.Reset();
   lut_cache_.clear();
-  if (dummy_scene_image_ != nullptr) {
-    clReleaseMemObject(dummy_scene_image_);
-    dummy_scene_image_ = nullptr;
-  }
-  if (dummy_scene_buffer_ != nullptr) {
-    clReleaseMemObject(dummy_scene_buffer_);
-    dummy_scene_buffer_ = nullptr;
-  }
+  auto release_dummy = [](cl_mem& native) {
+    if (native != nullptr) {
+      clReleaseMemObject(native);
+      native = nullptr;
+    }
+  };
+  release_dummy(dummy_scene_read_image_);
+  release_dummy(dummy_scene_write_image_);
+  release_dummy(dummy_scene_read_buffer_);
+  release_dummy(dummy_scene_write_buffer_);
 }
 
 void OpenClBackend::UnregisterBuffer(cl_mem native) noexcept {
@@ -426,33 +429,58 @@ auto OpenClBackend::CreateTexture2D(std::uint32_t width, std::uint32_t height, T
   return Texture2D{this, native, bytes, width, height, format, next_resource_id_++};
 }
 
-auto OpenClBackend::DummySceneImage() -> cl_mem {
-  if (dummy_scene_image_ != nullptr) {
-    return dummy_scene_image_;
-  }
+auto OpenClBackend::MakeDummySceneImage(cl_mem_flags flags, const char* what) -> cl_mem {
   const auto    image_format = ImageFormatFor(TextureFormat::Rgba32f);
   cl_image_desc desc         = MakeImageDesc(1, 1);
   cl_int        error        = CL_SUCCESS;
-  dummy_scene_image_ =
-      clCreateImage(context_, CL_MEM_READ_WRITE, &image_format, &desc, nullptr, &error);
-  CheckOpenCl(error, "OpenClBackend::DummySceneImage");
-  if (dummy_scene_image_ == nullptr) {
-    throw std::runtime_error("OpenClBackend::DummySceneImage: clCreateImage returned null");
+  cl_mem        native = clCreateImage(context_, flags, &image_format, &desc, nullptr, &error);
+  CheckOpenCl(error, what);
+  if (native == nullptr) {
+    throw std::runtime_error(std::string(what) + ": clCreateImage returned null");
   }
-  return dummy_scene_image_;
+  return native;
 }
 
-auto OpenClBackend::DummySceneBuffer() -> cl_mem {
-  if (dummy_scene_buffer_ != nullptr) {
-    return dummy_scene_buffer_;
+auto OpenClBackend::MakeDummySceneBuffer(cl_mem_flags flags, const char* what) -> cl_mem {
+  cl_int error  = CL_SUCCESS;
+  cl_mem native = clCreateBuffer(context_, flags, 16, nullptr, &error);
+  CheckOpenCl(error, what);
+  if (native == nullptr) {
+    throw std::runtime_error(std::string(what) + ": clCreateBuffer returned null");
   }
-  cl_int error        = CL_SUCCESS;
-  dummy_scene_buffer_ = clCreateBuffer(context_, CL_MEM_READ_WRITE, 16, nullptr, &error);
-  CheckOpenCl(error, "OpenClBackend::DummySceneBuffer");
-  if (dummy_scene_buffer_ == nullptr) {
-    throw std::runtime_error("OpenClBackend::DummySceneBuffer: clCreateBuffer returned null");
+  return native;
+}
+
+auto OpenClBackend::DummySceneReadImage() -> cl_mem {
+  if (dummy_scene_read_image_ == nullptr) {
+    dummy_scene_read_image_ =
+        MakeDummySceneImage(CL_MEM_READ_ONLY, "OpenClBackend::DummySceneReadImage");
   }
-  return dummy_scene_buffer_;
+  return dummy_scene_read_image_;
+}
+
+auto OpenClBackend::DummySceneWriteImage() -> cl_mem {
+  if (dummy_scene_write_image_ == nullptr) {
+    dummy_scene_write_image_ =
+        MakeDummySceneImage(CL_MEM_WRITE_ONLY, "OpenClBackend::DummySceneWriteImage");
+  }
+  return dummy_scene_write_image_;
+}
+
+auto OpenClBackend::DummySceneReadBuffer() -> cl_mem {
+  if (dummy_scene_read_buffer_ == nullptr) {
+    dummy_scene_read_buffer_ =
+        MakeDummySceneBuffer(CL_MEM_READ_ONLY, "OpenClBackend::DummySceneReadBuffer");
+  }
+  return dummy_scene_read_buffer_;
+}
+
+auto OpenClBackend::DummySceneWriteBuffer() -> cl_mem {
+  if (dummy_scene_write_buffer_ == nullptr) {
+    dummy_scene_write_buffer_ =
+        MakeDummySceneBuffer(CL_MEM_WRITE_ONLY, "OpenClBackend::DummySceneWriteBuffer");
+  }
+  return dummy_scene_write_buffer_;
 }
 
 auto OpenClBackend::CreateSceneWorkImage(std::uint32_t width, std::uint32_t height)

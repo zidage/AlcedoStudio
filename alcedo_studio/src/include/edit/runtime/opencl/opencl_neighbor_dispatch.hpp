@@ -82,19 +82,6 @@ inline void EnqueueOpenClNeighborVertical(OpenClRenderDevice& device,
   EnqueueOpenClNeighborRange(device, kernel, width, height, kLocalEdge);
 }
 
-inline void BindOpenClSceneView(cl_kernel kernel, cl_uint start, const OpenClSceneView& view,
-                                OpenClBackend& backend, const char* label) {
-  cl_mem image  = view.is_buffer ? backend.DummySceneImage() : view.native;
-  cl_mem buffer = view.is_buffer ? view.native : backend.DummySceneBuffer();
-  int    is_buf = view.is_buffer ? 1 : 0;
-  CheckOpenCl(clSetKernelArg(kernel, start, sizeof(cl_mem), &image),
-              (std::string(label) + " image").c_str());
-  CheckOpenCl(clSetKernelArg(kernel, start + 1, sizeof(cl_mem), &buffer),
-              (std::string(label) + " buffer").c_str());
-  CheckOpenCl(clSetKernelArg(kernel, start + 2, sizeof(int), &is_buf),
-              (std::string(label) + " storage").c_str());
-}
-
 inline void EnqueueOpenClNeighborHorizontalScene(OpenClRenderDevice& device,
                                                  const OpenClSceneView& src,
                                                  OpenClBackend::Texture2D& blur,
@@ -103,7 +90,8 @@ inline void EnqueueOpenClNeighborHorizontalScene(OpenClRenderDevice& device,
   auto kernel = OpenClKernelCache::Instance().GetKernel(
       OpenCL::GpuDag::kPrimaryGradeProgramName,
       OpenCL::GpuDag::kPrimaryGradeNeighborBlurSceneKernelName);
-  BindOpenClSceneView(kernel, 0, src, device.Workspace().Device(), "OpenCL neighborhood source");
+  BindOpenClSceneView(kernel, 0, src, device.Workspace().Device(), "OpenCL neighborhood source",
+                      OpenClSceneArgAccess::Read);
   auto blur_mem = blur.Native();
   CheckOpenCl(clSetKernelArg(kernel, 3, sizeof(cl_mem), &blur_mem),
               "OpenCL neighborhood blur argument");
@@ -122,21 +110,24 @@ inline void EnqueueOpenClNeighborVerticalScene(
       OpenCL::GpuDag::kPrimaryGradeProgramName,
       OpenCL::GpuDag::kPrimaryGradeNeighborApplySceneKernelName);
   auto& backend = device.Workspace().Device();
-  BindOpenClSceneView(kernel, 0, src, backend, "OpenCL neighborhood apply source");
+  BindOpenClSceneView(kernel, 0, src, backend, "OpenCL neighborhood apply source",
+                      OpenClSceneArgAccess::Read);
   auto blur_mem = blur.Native();
   CheckOpenCl(clSetKernelArg(kernel, 3, sizeof(cl_mem), &blur_mem),
               "OpenCL neighborhood apply blur argument");
-  BindOpenClSceneView(kernel, 4, dst, backend, "OpenCL neighborhood apply destination");
+  BindOpenClSceneView(kernel, 4, dst, backend, "OpenCL neighborhood apply destination",
+                      OpenClSceneArgAccess::Write);
   const bool apply_mix = mix_source != nullptr && (mix != 1.0f || mask_id != nullptr);
   if (apply_mix) {
-    BindOpenClSceneView(kernel, 7, *mix_source, backend, "OpenCL neighborhood mix source");
+    BindOpenClSceneView(kernel, 7, *mix_source, backend, "OpenCL neighborhood mix source",
+                        OpenClSceneArgAccess::Read);
   } else {
-    BindOpenClSceneView(kernel, 7, OpenClSceneView{backend.DummySceneImage(), 1, 1, false}, backend,
-                        "OpenCL neighborhood mix dummy");
+    BindOpenClSceneView(kernel, 7, OpenClUnusedSceneReadView(backend), backend,
+                        "OpenCL neighborhood mix dummy", OpenClSceneArgAccess::Read);
     int no_mix = -1;
     CheckOpenCl(clSetKernelArg(kernel, 9, sizeof(int), &no_mix), "OpenCL neighborhood mix flag");
   }
-  cl_mem mask_mem = backend.DummySceneImage();
+  cl_mem mask_mem = backend.DummySceneReadImage();
   int    has_mask = 0;
   if (mask_id != nullptr) {
     auto* mask = device.Workspace().Images().Find(*mask_id);

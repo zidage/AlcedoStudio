@@ -8,22 +8,23 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 
 namespace alcedo::diag {
 
 /// Stdout scope-path gates. Distinct from [RENDER_E2E] so a flooded present
 /// log still shows whether histogram/waveform staging and polling ran.
-/// Repeats of the same line after the first 16 prints are suppressed.
+/// Each distinct line prints at most 16 times, including when two lines
+/// alternate (poll vs snapshot_reject).
 inline void NoteScope(std::string_view event) {
-  static std::mutex  mutex;
-  static int         count = 0;
-  static std::string last;
-  const std::string  line(event);
-  std::lock_guard    lock(mutex);
-  if (line == last && count >= 16) {
+  static std::mutex                           mutex;
+  static std::unordered_map<std::string, int> counts;
+  const std::string                           line(event);
+  std::lock_guard                             lock(mutex);
+  int&                                    count = counts[line];
+  if (count >= 16) {
     return;
   }
-  last = line;
   ++count;
   std::cout << "[SCOPE] " << line << std::endl;
 }

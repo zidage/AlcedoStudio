@@ -685,18 +685,20 @@ TEST_F(OpenClRendererFixture, OpenClScopeTapUsesTheFinalDisplayImageAndSubmissio
   EXPECT_EQ(scope.image.backend, GpuBackend::OpenCL);
   EXPECT_EQ(display.image.resource_type, FrameWriteTargetType::OpenClImage);
   EXPECT_EQ(scope.image.resource_type, FrameWriteTargetType::OpenClImage);
-  EXPECT_EQ(display.image.resource.get(), scope.image.resource.get());
-  EXPECT_EQ(display.ready_signal.resource.get(), scope.ready_signal.resource.get());
+  EXPECT_NE(display.image.resource.get(), scope.image.resource.get());
+  EXPECT_NE(display.ready_signal.resource.get(), scope.ready_signal.resource.get());
   EXPECT_EQ(display.image_identity, 7U);
   EXPECT_EQ(display.session_epoch, 2U);
   EXPECT_EQ(display.display_generation, 88U);
-  ASSERT_NE(display.ready_signal.resource, nullptr);
+  ASSERT_NE(scope.ready_signal.resource, nullptr);
   const auto* signal = static_cast<const scope::opencl_detail::OpenClEventSignalResource*>(
-      display.ready_signal.resource.get());
+      scope.ready_signal.resource.get());
   ASSERT_NE(signal, nullptr);
   EXPECT_NE(signal->event, nullptr);
+  EXPECT_GE(signal->slot_index, 0);
 
   (void)clFinish(OpenClContext::Instance().ProductQueue());
+  (void)clFinish(OpenClContext::Instance().ScopeQueue());
   const auto output = analyzer->GetLatestOutput();
   EXPECT_GT(output.generation, 0U);
   EXPECT_TRUE(output.histogram_valid);
