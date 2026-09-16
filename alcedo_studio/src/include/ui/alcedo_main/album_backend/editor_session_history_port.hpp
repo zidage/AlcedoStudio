@@ -69,6 +69,13 @@ class EditorSessionHistoryPort final : public alcedo::IEditorHistoryPort {
                      alcedo::NodeGraphTopologyChange change, std::string* error) -> bool override;
   auto RenameColorGrade(const alcedo::EditorHistoryGuardHandle& guard, const alcedo::NodeId& node_id,
                         std::string display_name, std::string* error) -> bool override;
+  auto InsertColorGradeAtTop(const alcedo::EditorHistoryGuardHandle& guard,
+                             const alcedo::NodeId& new_id,
+                             const alcedo::NodeId& expected_successor_id, std::string* error)
+      -> bool override;
+  auto RemoveColorGradeAndBridge(const alcedo::EditorHistoryGuardHandle& guard,
+                                 const alcedo::NodeId& node_id, std::string* error)
+      -> bool override;
   auto SetColorGradeEnabled(const alcedo::EditorHistoryGuardHandle& guard, const alcedo::NodeId& node_id,
                             bool enabled, std::string* error) -> bool;
   auto SetColorGradeMix(const alcedo::EditorHistoryGuardHandle& guard, const alcedo::NodeId& node_id,

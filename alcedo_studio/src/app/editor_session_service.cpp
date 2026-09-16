@@ -1862,6 +1862,63 @@ auto EditorSessionService::EditNodeGraph(NodeGraphTopologyChange change) -> Edit
   return PublishTypedNodeHistorySuccess("Node graph topology updated");
 }
 
+auto EditorSessionService::InsertColorGradeAtTop(const NodeId& new_id,
+                                                 const NodeId& expected_successor_id)
+    -> EditorSessionResult {
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind                  = EditorSessionCommandKind::InsertColorGradeAtTop;
+    command.node_id               = new_id;
+    command.expected_successor_id = expected_successor_id;
+    command.element_id            = lifecycle_.identity().element_id;
+    command.image_id              = lifecycle_.identity().image_id;
+    return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
+      const auto identity = lifecycle_.identity();
+      if (queued.element_id != identity.element_id || queued.image_id != identity.image_id) {
+        return Reject("The Mask Group request is from another editor session");
+      }
+      return InsertColorGradeAtTop(queued.node_id, queued.expected_successor_id);
+    });
+  }
+  if (lifecycle_.state() != EditorSessionState::Interactive || !dependencies_.history ||
+      !lifecycle_.has_history_guard()) {
+    return Reject("Mask Group insertion requires an interactive history session");
+  }
+  std::string error;
+  if (!dependencies_.history->InsertColorGradeAtTop(lifecycle_.history_guard(), new_id,
+                                                    expected_successor_id, &error)) {
+    return Reject(error.empty() ? "Mask Group insertion failed" : std::move(error));
+  }
+  return PublishTypedNodeHistorySuccess("Mask Group inserted");
+}
+
+auto EditorSessionService::RemoveColorGradeAndBridge(const NodeId& node_id) -> EditorSessionResult {
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind       = EditorSessionCommandKind::RemoveColorGradeAndBridge;
+    command.node_id    = node_id;
+    command.element_id = lifecycle_.identity().element_id;
+    command.image_id   = lifecycle_.identity().image_id;
+    return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
+      const auto identity = lifecycle_.identity();
+      if (queued.element_id != identity.element_id || queued.image_id != identity.image_id) {
+        return Reject("The Mask Group request is from another editor session");
+      }
+      return RemoveColorGradeAndBridge(queued.node_id);
+    });
+  }
+  if (lifecycle_.state() != EditorSessionState::Interactive || !dependencies_.history ||
+      !lifecycle_.has_history_guard()) {
+    return Reject("Mask Group removal requires an interactive history session");
+  }
+  std::string error;
+  if (!dependencies_.history->RemoveColorGradeAndBridge(lifecycle_.history_guard(), node_id,
+                                                        &error)) {
+    return Reject(error.empty() ? "Mask Group removal failed" : std::move(error));
+  }
+  return PublishTypedNodeHistorySuccess("Mask Group removed");
+}
+
 auto EditorSessionService::Patch(std::string patch_key) -> EditorSessionResult {
   EditorAdjustmentPatch patch;
   patch.field_key = std::move(patch_key);

@@ -94,4 +94,58 @@ auto EditorNodeGraphProjection::AcceptsGeneration(const EditorNodeGraphSnapshot&
   return snapshot.session_generation == session_generation;
 }
 
+auto EditorNodeGraphProjection::BuildMaskGroups(const PipelineDocument& document,
+                                                std::uint64_t           session_generation,
+                                                std::uint64_t           projection_revision,
+                                                std::uint64_t           topology_revision)
+    -> EditorMaskGroupSnapshot {
+  const auto backbone = document.Graph().ImageBackboneNodeIds();
+  if (backbone.empty()) {
+    throw std::invalid_argument("EditorMaskGroupProjection requires a valid image backbone");
+  }
+
+  EditorMaskGroupSnapshot snapshot;
+  snapshot.session_generation  = session_generation;
+  snapshot.projection_revision = projection_revision;
+  snapshot.topology_revision   = topology_revision;
+  snapshot.groups.reserve(backbone.size());
+
+  for (const auto& node_id : backbone) {
+    const auto* node = document.Graph().FindNode(node_id);
+    if (node == nullptr) {
+      throw std::invalid_argument(
+          "EditorMaskGroupProjection image backbone contains an unknown node");
+    }
+    if (KindOf(*node) != EditorNodeKind::ColorGrade) {
+      continue;
+    }
+    const auto* grade = dynamic_cast<const ColorGradeNodeModel*>(node);
+    if (grade == nullptr) {
+      throw std::invalid_argument("Color Grade type has an invalid model");
+    }
+    EditorMaskGroupRow group;
+    group.node_id      = node_id;
+    group.display_name = std::string{node->DisplayName()};
+    group.enabled      = grade->Enabled();
+    group.masks.reserve(grade->MaskCount());
+    for (const auto& mask : grade->Masks()) {
+      EditorMaskGroupMaskRow row;
+      row.node_id      = node_id;
+      row.mask_id      = mask.id;
+      row.source_kind  = GetMaskSourceKind(mask.source);
+      row.display_name = mask.display_name;
+      row.enabled      = mask.enabled;
+      row.opacity      = mask.opacity;
+      group.masks.push_back(std::move(row));
+    }
+    snapshot.groups.push_back(std::move(group));
+  }
+  return snapshot;
+}
+
+auto EditorNodeGraphProjection::AcceptsGeneration(const EditorMaskGroupSnapshot& snapshot,
+                                                  std::uint64_t session_generation) -> bool {
+  return snapshot.session_generation == session_generation;
+}
+
 }  // namespace alcedo

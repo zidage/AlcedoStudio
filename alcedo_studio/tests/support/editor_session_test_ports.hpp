@@ -94,7 +94,11 @@ class FakeEditorHistoryPort : public IEditorHistoryPort {
   EditorAdjustmentPatch          last_committed_patch{};
   bool                           fail_node_command  = false;
   int                            rename_grade_count = 0;
-  int                            edit_node_graph_count = 0;
+  int                            edit_node_graph_count  = 0;
+  int                            insert_grade_top_count = 0;
+  int                            remove_grade_count     = 0;
+  NodeId                         last_insert_new_id;
+  NodeId                         last_expected_successor;
   NodeGraphTopologyChange        last_topology_change{};
   NodeId                         last_node_id;
   std::string                    last_grade_name;
@@ -167,6 +171,32 @@ class FakeEditorHistoryPort : public IEditorHistoryPort {
     ++edit_node_graph_count;
     last_topology_change = std::move(change);
     last_render_reason   = EditorRenderReason::GraphTopologyChanged;
+    if (fail_node_command) {
+      if (error != nullptr) *error = "mini-Git journal append failed";
+      return false;
+    }
+    return true;
+  }
+
+  auto InsertColorGradeAtTop(const EditorHistoryGuardHandle&, const NodeId& new_id,
+                             const NodeId& expected_successor_id, std::string* error)
+      -> bool override {
+    ++insert_grade_top_count;
+    last_insert_new_id      = new_id;
+    last_expected_successor = expected_successor_id;
+    last_render_reason      = EditorRenderReason::GraphTopologyChanged;
+    if (fail_node_command) {
+      if (error != nullptr) *error = "mini-Git journal append failed";
+      return false;
+    }
+    return true;
+  }
+
+  auto RemoveColorGradeAndBridge(const EditorHistoryGuardHandle&, const NodeId& node_id,
+                                 std::string* error) -> bool override {
+    ++remove_grade_count;
+    last_node_id       = node_id;
+    last_render_reason = EditorRenderReason::GraphTopologyChanged;
     if (fail_node_command) {
       if (error != nullptr) *error = "mini-Git journal append failed";
       return false;

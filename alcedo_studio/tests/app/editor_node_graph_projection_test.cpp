@@ -124,7 +124,134 @@ TEST(EditorNodeGraphProjection, ProjectNodeCopiesStoredMaskOrderForDetachedGrade
 }
 
 TEST(EditorNodeGraphProjection, InvalidBackboneIsRejected) {
-  EXPECT_THROW(EditorNodeGraphProjection::Build(PipelineDocument{}, 1, 1, 1),
+  EXPECT_THROW((void)EditorNodeGraphProjection::Build(PipelineDocument{}, 1, 1, 1),
+               std::invalid_argument);
+}
+
+TEST(EditorNodeGraphProjection, MaskGroupsFollowBackboneExecutionOrder) {
+  auto document = CreateDefaultPipelineDocument();
+  ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.last"}).empty());
+  ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"grade.primary"}, NodeId{"grade.first"}).empty());
+
+  const auto snapshot = EditorNodeGraphProjection::BuildMaskGroups(document, 9, 4, 7);
+  EXPECT_EQ(snapshot.session_generation, 9u);
+  EXPECT_EQ(snapshot.projection_revision, 4u);
+  EXPECT_EQ(snapshot.topology_revision, 7u);
+  ASSERT_EQ(snapshot.groups.size(), 3u);
+  EXPECT_EQ(snapshot.groups[0].node_id, NodeId{"grade.first"});
+  EXPECT_EQ(snapshot.groups[1].node_id, NodeId{"grade.primary"});
+  EXPECT_EQ(snapshot.groups[2].node_id, NodeId{"grade.last"});
+}
+
+TEST(EditorNodeGraphProjection, MaskGroupsIncludeGradesWithoutMasks) {
+  auto document = CreateDefaultPipelineDocument();
+  ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.empty"}).empty());
+  document.PrimaryGrade()->AddMask(MakeMask(MaskId{"mask.one"}, RadialMaskSource{}), 0);
+
+  const auto snapshot = EditorNodeGraphProjection::BuildMaskGroups(document, 1, 1, 1);
+  ASSERT_EQ(snapshot.groups.size(), 2u);
+  EXPECT_EQ(snapshot.groups[0].node_id, NodeId{"grade.primary"});
+  ASSERT_EQ(snapshot.groups[0].masks.size(), 1u);
+  EXPECT_EQ(snapshot.groups[1].node_id, NodeId{"grade.empty"});
+  EXPECT_TRUE(snapshot.groups[1].masks.empty());
+}
+
+TEST(EditorNodeGraphProjection, MaskGroupsCarryExactNodeIdentityAndNames) {
+  auto document = CreateDefaultPipelineDocument();
+  ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.b"}).empty());
+  ASSERT_TRUE(RenameColorGrade(document, NodeId{"grade.primary"}, "Sky").empty());
+  ASSERT_TRUE(RenameColorGrade(document, NodeId{"grade.b"}, "Sky").empty());
+  ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"grade.primary"}, NodeId{"grade.top"}).empty());
+
+  const auto snapshot = EditorNodeGraphProjection::BuildMaskGroups(document, 2, 2, 2);
+  ASSERT_EQ(snapshot.groups.size(), 3u);
+  // Order follows the backbone, not names: the newest grade sits on top and the
+  // two grades sharing the display name keep their distinct NodeIds.
+  EXPECT_EQ(snapshot.groups[0].node_id, NodeId{"grade.top"});
+  EXPECT_EQ(snapshot.groups[0].display_name, "Color Grade 3");
+  EXPECT_EQ(snapshot.groups[1].node_id, NodeId{"grade.primary"});
+  EXPECT_EQ(snapshot.groups[1].display_name, "Sky");
+  EXPECT_EQ(snapshot.groups[2].node_id, NodeId{"grade.b"});
+  EXPECT_EQ(snapshot.groups[2].display_name, "Sky");
+}
+
+TEST(EditorNodeGraphProjection, MaskGroupRowsKeyMasksByNodeAndMaskId) {
+  auto  document = CreateDefaultPipelineDocument();
+  auto* grade    = document.PrimaryGrade();
+  ASSERT_NE(grade, nullptr);
+  auto radial         = MakeMask(MaskId{"mask.radial"}, RadialMaskSource{});
+  radial.display_name = "Vignette";
+  radial.enabled      = false;
+  radial.opacity      = 0.45F;
+  grade->AddMask(std::move(radial), 0);
+  grade->AddMask(MakeMask(MaskId{"mask.linear"}, LinearGradientMaskSource{}), 1);
+  ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.two"}).empty());
+  auto* second = dynamic_cast<ColorGradeNodeModel*>(document.Graph().FindNode(NodeId{"grade.two"}));
+  ASSERT_NE(second, nullptr);
+  auto linear    = MakeMask(MaskId{"mask.other"}, LinearGradientMaskSource{});
+  linear.opacity = 0.8F;
+  second->AddMask(std::move(linear), 0);
+
+  const auto snapshot = EditorNodeGraphProjection::BuildMaskGroups(document, 5, 6, 7);
+  ASSERT_EQ(snapshot.groups.size(), 2u);
+  ASSERT_EQ(snapshot.groups[0].masks.size(), 2u);
+  const auto& first = snapshot.groups[0].masks[0];
+  EXPECT_EQ(first.node_id, NodeId{"grade.primary"});
+  EXPECT_EQ(first.mask_id, MaskId{"mask.radial"});
+  EXPECT_EQ(first.source_kind, MaskSourceKind::Radial);
+  EXPECT_EQ(first.display_name, "Vignette");
+  EXPECT_FALSE(first.enabled);
+  EXPECT_FLOAT_EQ(first.opacity, 0.45F);
+  const auto& second_row = snapshot.groups[0].masks[1];
+  EXPECT_EQ(second_row.mask_id, MaskId{"mask.linear"});
+  EXPECT_EQ(second_row.source_kind, MaskSourceKind::LinearGradient);
+  EXPECT_TRUE(second_row.enabled);
+  EXPECT_FLOAT_EQ(second_row.opacity, 1.0F);
+  ASSERT_EQ(snapshot.groups[1].masks.size(), 1u);
+  EXPECT_EQ(snapshot.groups[1].masks[0].node_id, NodeId{"grade.two"});
+  EXPECT_EQ(snapshot.groups[1].masks[0].mask_id, MaskId{"mask.other"});
+}
+
+TEST(EditorNodeGraphProjection, MaskGroupsReportGradeEnabledState) {
+  auto document = CreateDefaultPipelineDocument();
+  ASSERT_TRUE(SetColorGradeEnabled(document, NodeId{"grade.primary"}, false).empty());
+
+  const auto snapshot = EditorNodeGraphProjection::BuildMaskGroups(document, 1, 1, 1);
+  ASSERT_EQ(snapshot.groups.size(), 1u);
+  EXPECT_FALSE(snapshot.groups[0].enabled);
+}
+
+TEST(EditorNodeGraphProjection, MaskGroupsOmitDetachedGrades) {
+  auto document = CreateDefaultPipelineDocument();
+  document.Graph().AddNode(CreateCleanColorGradeNode(NodeId{"grade.detached"}));
+
+  const auto snapshot = EditorNodeGraphProjection::BuildMaskGroups(document, 1, 1, 1);
+  ASSERT_EQ(snapshot.groups.size(), 1u);
+  EXPECT_EQ(snapshot.groups[0].node_id, NodeId{"grade.primary"});
+}
+
+TEST(EditorNodeGraphProjection, MaskGroupParameterEditsDoNotRebuildGroupRows) {
+  auto       document = CreateDefaultPipelineDocument();
+  const auto before   = EditorNodeGraphProjection::BuildMaskGroups(document, 3, 3, 3);
+  auto*      exposure = dynamic_cast<ExposureModel*>(
+      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+  ASSERT_NE(exposure, nullptr);
+  exposure->SetValue(4.0f);
+
+  const auto after = EditorNodeGraphProjection::BuildMaskGroups(document, 3, 3, 3);
+  EXPECT_EQ(after, before);
+}
+
+TEST(EditorNodeGraphProjection, MaskGroupsGenerationCheckMatchesSession) {
+  const auto snapshot =
+      EditorNodeGraphProjection::BuildMaskGroups(CreateDefaultPipelineDocument(), 15, 1, 1);
+
+  EXPECT_TRUE(EditorNodeGraphProjection::AcceptsGeneration(snapshot, 15));
+  EXPECT_FALSE(EditorNodeGraphProjection::AcceptsGeneration(snapshot, 16));
+}
+
+TEST(EditorNodeGraphProjection, MaskGroupsInvalidBackboneIsRejected) {
+  EXPECT_THROW((void)EditorNodeGraphProjection::BuildMaskGroups(PipelineDocument{}, 1, 1, 1),
                std::invalid_argument);
 }
 

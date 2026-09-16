@@ -105,6 +105,50 @@ TEST(PipelineDocumentDefaultName, TypedAddReplaysExactCounterAndNameAcrossUndoRe
   EXPECT_EQ(replayed->Graph().FindNode(NodeId{"grade.replay"})->DisplayName(), "Color Grade 2");
 }
 
+TEST(PipelineDocumentDefaultName, TopInsertUsesCounterWithoutRenumberingExistingGrades) {
+  auto document = CreateDefaultPipelineDocument();
+  ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.bottom"}).empty());
+  EXPECT_TRUE(RenameColorGrade(document, NodeId{"grade.bottom"}, "Tail").empty());
+
+  const auto change =
+      CaptureAddColorGradeAtTopChange(document, NodeId{"grade.top"}, NodeId{"grade.primary"});
+  EXPECT_EQ(change.before_next_color_grade_name_number, 3u);
+  EXPECT_EQ(change.after_next_color_grade_name_number, 4u);
+  EXPECT_EQ(change.node.at("display_name"), "Color Grade 3");
+  EXPECT_EQ(change.predecessor_id, NodeId{"develop"});
+  EXPECT_EQ(change.successor_id, NodeId{"grade.primary"});
+
+  const auto  batch = MakeAddColorGradeBatch(std::move(change));
+  std::string error;
+  ASSERT_TRUE(ApplyPipelineEditBatch(document, batch, PipelineEditApplyDirection::Forward, &error))
+      << error;
+  // Existing names are untouched: no renumbering on top insertion.
+  EXPECT_EQ(document.Graph().FindNode(NodeId{"grade.primary"})->DisplayName(), "Color Grade 1");
+  EXPECT_EQ(document.Graph().FindNode(NodeId{"grade.bottom"})->DisplayName(), "Tail");
+  EXPECT_EQ(document.Graph().FindNode(NodeId{"grade.top"})->DisplayName(), "Color Grade 3");
+  EXPECT_EQ(document.Graph().ImageBackboneNodeIds(),
+            (std::vector<NodeId>{NodeId{"develop"}, NodeId{"grade.top"}, NodeId{"grade.primary"},
+                                 NodeId{"grade.bottom"}, NodeId{"drt"}}));
+  EXPECT_EQ(document.NextColorGradeNameNumber(), 4u);
+}
+
+TEST(PipelineDocumentDefaultName, StaleTopInsertSuccessorRejectsWithoutConsumingCounter) {
+  auto       document = CreateDefaultPipelineDocument();
+  const auto before   = document.NextColorGradeNameNumber();
+
+  EXPECT_THROW((void)CaptureAddColorGradeAtTopChange(document, NodeId{"grade.new"}, NodeId{"drt"}),
+               std::runtime_error);
+  EXPECT_EQ(document.NextColorGradeNameNumber(), before);
+  EXPECT_EQ(document.Graph().FindNode(NodeId{"grade.new"}), nullptr);
+
+  // A zero-Grade backbone resolves DRT as the expected top successor.
+  ASSERT_TRUE(RemoveColorGradeAndBridge(document, NodeId{"grade.primary"}).empty());
+  const auto change =
+      CaptureAddColorGradeAtTopChange(document, NodeId{"grade.only"}, NodeId{"drt"});
+  EXPECT_EQ(change.successor_id, NodeId{"drt"});
+  EXPECT_EQ(change.predecessor_id, NodeId{"develop"});
+}
+
 TEST(PipelineDocumentDefaultName, StoredNodeInsertionLeavesCounterUnchanged) {
   auto document = CreateDefaultPipelineDocument();
   auto change   = CaptureAddColorGradeChange(document, NodeId{"drt"}, NodeId{"grade.pasted"});

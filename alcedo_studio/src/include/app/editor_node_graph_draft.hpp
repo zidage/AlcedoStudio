@@ -162,6 +162,16 @@ class EditorNodeGraphDraft {
   [[nodiscard]] auto NodeJson(const NodeId& node_id) const -> const nlohmann::json*;
 
   /**
+   * @brief NodeIds not reachable on the draft's Develop-to-DRT image path.
+   *
+   * Walks image-port edges from Develop until DRT or a break; every stored
+   * node outside the walked path is returned in @ref nodes_ order. While the
+   * draft is incomplete this lists the nodes the Mask Groups "locate in Nodes"
+   * action can point at. A complete draft returns an empty list.
+   */
+  [[nodiscard]] auto DetachedNodeIds() const -> std::vector<NodeId>;
+
+  /**
    * @brief Value snapshot of the current draft graph, including detached nodes.
    *
    * Copies the live node and edge vectors. Call only at an explicit projection

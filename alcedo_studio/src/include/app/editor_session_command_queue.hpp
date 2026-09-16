@@ -65,6 +65,10 @@ enum class EditorSessionCommandKind : std::uint8_t {
   SetAdjustmentProjectionNode,
   RenameColorGrade,
   EditNodeGraph,
+  /// Mask Groups: insert one clean Color Grade at the top of the backbone.
+  InsertColorGradeAtTop,
+  /// Mask Groups: remove one Color Grade and bridge its backbone neighbors.
+  RemoveColorGradeAndBridge,
   PersistCurrent,
 };
 
@@ -114,6 +118,10 @@ struct EditorSessionCommand {
   int                                     presentation_height  = 0;
   bool                                    geometry_overlay_active = false;
   NodeId                                  node_id;
+  /// InsertColorGradeAtTop only: the backbone node the caller expects to
+  /// follow Develop. Re-verified on the owner thread so a queued request can
+  /// never insert behind a successor that changed after submission.
+  NodeId                                  expected_successor_id;
   NodeGraphTopologyChange                 topology_change{};
 };
 

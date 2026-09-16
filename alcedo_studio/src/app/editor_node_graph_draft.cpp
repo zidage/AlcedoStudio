@@ -162,6 +162,43 @@ auto EditorNodeGraphDraft::NodeJson(const NodeId& node_id) const -> const nlohma
   return &it->second;
 }
 
+auto EditorNodeGraphDraft::DetachedNodeIds() const -> std::vector<NodeId> {
+  const EditorNodeProjection* develop = nullptr;
+  const EditorNodeProjection* drt     = nullptr;
+  for (const auto& node : nodes_) {
+    if (node.node_kind == EditorNodeKind::Develop) {
+      develop = &node;
+    } else if (node.node_kind == EditorNodeKind::Drt) {
+      drt = &node;
+    }
+  }
+  std::unordered_set<std::string> on_path;
+  if (develop != nullptr && drt != nullptr) {
+    NodeId current = develop->node_id;
+    while (on_path.insert(std::string{current.Value()}).second) {
+      if (current == drt->node_id) {
+        break;
+      }
+      const auto out = outgoing_.find(current);
+      if (out == outgoing_.end() || !out->second.has_value()) {
+        break;
+      }
+      const auto* edge = FindEdgeByKey(*out->second);
+      if (edge == nullptr) {
+        break;
+      }
+      current = edge->destination_node_id;
+    }
+  }
+  std::vector<NodeId> detached;
+  for (const auto& node : nodes_) {
+    if (!on_path.contains(std::string{node.node_id.Value()})) {
+      detached.push_back(node.node_id);
+    }
+  }
+  return detached;
+}
+
 auto EditorNodeGraphDraft::FindEdgeIndex(const std::string& key) const
     -> std::optional<std::size_t> {
   for (std::size_t index = 0; index < edges_.size(); ++index) {

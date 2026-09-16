@@ -687,6 +687,11 @@ auto EditorMaskCreationAdapter::CanAuthorMasksFor(const NodeId& grade_id) const 
     return false;
   }
   if (auto* nodes = session_->node_selection_source()) {
+    // A live node-graph draft is an uncommitted graph: Mask creation targets
+    // only the committed document and stays disabled until the draft completes.
+    if (nodes->has_draft()) {
+      return false;
+    }
     for (const auto& node : nodes->ActiveNodes()) {
       if (node.node_id == grade_id && node.node_kind == EditorNodeKind::ColorGrade) {
         return true;

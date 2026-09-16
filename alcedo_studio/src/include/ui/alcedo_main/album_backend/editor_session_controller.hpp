@@ -269,6 +269,23 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   /** Route one net topology delta through the active session backend. */
   auto SubmitNodeGraphTopologyEdit(const alcedo::NodeGraphTopologyChange& change)
       -> alcedo::EditorSessionResult;
+  /**
+   * @brief Mask Groups: insert one clean Color Grade at the top of the
+   * scene-image backbone as one typed history commit.
+   *
+   * @p expected_successor_id is the committed node the caller observed directly
+   * after Develop; the owner re-checks it against the live backbone so a stale
+   * request never inserts behind a moved insertion point.
+   */
+  auto SubmitInsertColorGradeAtTop(const alcedo::NodeId& new_id,
+                                   const alcedo::NodeId& expected_successor_id)
+      -> alcedo::EditorSessionResult;
+  /**
+   * @brief Mask Groups: remove one Color Grade and bridge its scene-image
+   * neighbors as one typed history commit. Endpoints are never removable.
+   */
+  auto SubmitRemoveColorGradeAndBridge(const alcedo::NodeId& node_id)
+      -> alcedo::EditorSessionResult;
   /// Seal the active image via Close. persistChanges=true may leave
   /// sessionState at Saving, or closeInFlight while the owner thread still
   /// holds Interactive, until the checkpoint finishes; callers that must quit

@@ -25,6 +25,7 @@
 #include "app/project_service.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
+#include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/mask/mask_model.hpp"
 #include "edit/operators/operator_registeration.hpp"
@@ -436,6 +437,150 @@ TEST(NodeGraphTopologyHistory, JournalFailureRestoresTopologyDocumentHeadAndRend
   const std::vector<NodeId> expected_initial_ids = {NodeId{"develop"}, NodeId{"grade.primary"},
                                                     NodeId{"drt"}};
   EXPECT_EQ(GraphNodeIds(*guard->document_), expected_initial_ids);
+  history.Release(handle);
+}
+
+TEST(NodeGraphTopologyHistory, MaskGroupTopInsertAndBridgeRemoveCommitOnceAndReplayThroughUndo) {
+  RegisterAllOperators();
+  TemporaryProject temporary;
+  const auto&      paths    = temporary.paths();
+
+  auto             guard    = MakeMemoryGuard(kElementId + 2);
+  auto             pipeline = std::make_shared<EditorSessionPipelinePort>();
+  pipeline->SetServices(
+      EditorSessionPipelineMappers{{}, [guard](sl_element_id_t) { return guard; }});
+  EditorSessionHistoryPort history;
+  history.SetServices(
+      EditorSessionHistoryPort::Services{[path = paths.journal](sl_element_id_t) { return path; }});
+  history.SetPipelinePort(pipeline);
+
+  std::string error;
+  const auto  handle = history.Acquire(kElementId + 2, &error);
+  ASSERT_TRUE(handle.valid) << error;
+
+  const auto prior_hash         = CanonicalPipelineDocumentJson(*guard->document_);
+  const auto prior_head         = guard->working_head_commit_hash();
+  const auto prior_commit_count = guard->commit_graph_->CommitCount();
+
+  // Stale-successor rejection: the node after Develop is grade.primary, not drt.
+  EXPECT_FALSE(history.InsertColorGradeAtTop(handle, NodeId{"grade.stale"}, NodeId{"drt"}, &error));
+  EXPECT_EQ(error, "The Mask Groups insertion point changed since the request was issued");
+  EXPECT_EQ(CanonicalPipelineDocumentJson(*guard->document_), prior_hash);
+  EXPECT_EQ(guard->working_head_commit_hash(), prior_head);
+  EXPECT_EQ(guard->commit_graph_->CommitCount(), prior_commit_count);
+  EXPECT_EQ(guard->document_->NextColorGradeNameNumber(), 2u);
+  EXPECT_EQ(guard->document_->Graph().FindNode(NodeId{"grade.stale"}), nullptr);
+
+  // One typed commit inserts the clean grade between Develop and grade.primary.
+  error.clear();
+  ASSERT_TRUE(
+      history.InsertColorGradeAtTop(handle, NodeId{"grade.top"}, NodeId{"grade.primary"}, &error))
+      << error;
+  const std::vector<NodeId> inserted_backbone = {NodeId{"develop"}, NodeId{"grade.top"},
+                                                 NodeId{"grade.primary"}, NodeId{"drt"}};
+  EXPECT_EQ(guard->document_->Graph().ImageBackboneNodeIds(), inserted_backbone);
+  EXPECT_EQ(guard->document_->Graph().FindNode(NodeId{"grade.top"})->DisplayName(),
+            "Color Grade 2");
+  EXPECT_EQ(guard->document_->NextColorGradeNameNumber(), 3u);
+  EXPECT_EQ(guard->commit_graph_->CommitCount(), prior_commit_count + 1);
+  ASSERT_TRUE(history.LastPublishedRenderReason().has_value());
+  EXPECT_EQ(*history.LastPublishedRenderReason(), EditorRenderReason::GraphTopologyChanged);
+  const auto inserted_hash = CanonicalPipelineDocumentJson(*guard->document_);
+  const auto inserted_top_json =
+      guard->document_->Graph().FindNode(NodeId{"grade.top"})->ToJson().dump();
+
+  EditorHistorySnapshot snapshot;
+  ASSERT_TRUE(history.ReadHistorySnapshot(handle, &snapshot, &error)) << error;
+  EXPECT_TRUE(std::any_of(snapshot.commits.begin(), snapshot.commits.end(), [](const auto& commit) {
+    return commit.operation_kind == "add_color_grade";
+  }));
+
+  // Undo removes the node; Redo restores the exact stored state.
+  ASSERT_TRUE(history.Undo(handle, &error)) << error;
+  EXPECT_EQ(guard->document_->Graph().ImageBackboneNodeIds(),
+            (std::vector<NodeId>{NodeId{"develop"}, NodeId{"grade.primary"}, NodeId{"drt"}}));
+  EXPECT_EQ(guard->document_->NextColorGradeNameNumber(), 2u);
+  EXPECT_EQ(guard->document_->Graph().FindNode(NodeId{"grade.top"}), nullptr);
+  ASSERT_TRUE(history.Redo(handle, &error)) << error;
+  EXPECT_EQ(CanonicalPipelineDocumentJson(*guard->document_), inserted_hash);
+
+  // Bridge-remove the inserted grade: one commit, predecessor wired to successor.
+  error.clear();
+  ASSERT_TRUE(history.RemoveColorGradeAndBridge(handle, NodeId{"grade.top"}, &error)) << error;
+  EXPECT_EQ(guard->document_->Graph().ImageBackboneNodeIds(),
+            (std::vector<NodeId>{NodeId{"develop"}, NodeId{"grade.primary"}, NodeId{"drt"}}));
+  EXPECT_NE(alcedo::FindSceneImageEdge(guard->document_->Graph(), NodeId{"develop"},
+                                       NodeId{"grade.primary"}),
+            nullptr);
+  EXPECT_EQ(guard->document_->NextColorGradeNameNumber(), 3u);
+  EXPECT_EQ(guard->commit_graph_->CommitCount(), prior_commit_count + 2);
+
+  // Removing the last remaining Color Grade leaves Develop connected to DRT.
+  error.clear();
+  ASSERT_TRUE(history.RemoveColorGradeAndBridge(handle, NodeId{"grade.primary"}, &error)) << error;
+  EXPECT_EQ(guard->document_->Graph().ImageBackboneNodeIds(),
+            (std::vector<NodeId>{NodeId{"develop"}, NodeId{"drt"}}));
+  EXPECT_NE(alcedo::FindSceneImageEdge(guard->document_->Graph(), NodeId{"develop"}, NodeId{"drt"}),
+            nullptr);
+
+  // Endpoints are never removable; failures publish no commit.
+  const auto commits_before_endpoint = guard->commit_graph_->CommitCount();
+  EXPECT_FALSE(history.RemoveColorGradeAndBridge(handle, NodeId{"develop"}, &error));
+  EXPECT_FALSE(history.RemoveColorGradeAndBridge(handle, NodeId{"drt"}, &error));
+  EXPECT_EQ(guard->commit_graph_->CommitCount(), commits_before_endpoint);
+
+  // Both removals undo back to the stored post-insert topology. Node and edge
+  // container positions are not part of the stored typed change, so the check is
+  // semantic: identical backbone order and identical restored node JSON.
+  ASSERT_TRUE(history.Undo(handle, &error)) << error;
+  ASSERT_TRUE(history.Undo(handle, &error)) << error;
+  EXPECT_EQ(guard->document_->Graph().ImageBackboneNodeIds(), inserted_backbone);
+  EXPECT_EQ(guard->document_->NextColorGradeNameNumber(), 3u);
+  EXPECT_EQ(guard->document_->Graph().FindNode(NodeId{"grade.top"})->ToJson().dump(),
+            inserted_top_json);
+  history.Release(handle);
+}
+
+TEST(NodeGraphTopologyHistory, MaskGroupJournalFailureLeavesDocumentHeadAndCounterUntouched) {
+  RegisterAllOperators();
+  TemporaryProject temporary;
+  const auto&      paths    = temporary.paths();
+
+  auto             guard    = MakeMemoryGuard(kElementId + 3);
+  auto             pipeline = std::make_shared<EditorSessionPipelinePort>();
+  pipeline->SetServices(
+      EditorSessionPipelineMappers{{}, [guard](sl_element_id_t) { return guard; }});
+  EditorSessionHistoryPort history;
+  history.SetServices(
+      EditorSessionHistoryPort::Services{[path = paths.journal](sl_element_id_t) { return path; }});
+  history.SetPipelinePort(pipeline);
+
+  std::string error;
+  const auto  handle = history.Acquire(kElementId + 3, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  ASSERT_TRUE(std::filesystem::create_directory(paths.journal));
+  const auto prior_hash         = CanonicalPipelineDocumentJson(*guard->document_);
+  const auto prior_head         = guard->working_head_commit_hash();
+  const auto prior_commit_count = guard->commit_graph_->CommitCount();
+  const auto prior_reason       = history.LastPublishedRenderReason();
+  const auto prior_counter      = guard->document_->NextColorGradeNameNumber();
+
+  EXPECT_FALSE(
+      history.InsertColorGradeAtTop(handle, NodeId{"grade.top"}, NodeId{"grade.primary"}, &error));
+  EXPECT_EQ(error, "mini-Git journal file could not be opened for append");
+  EXPECT_EQ(CanonicalPipelineDocumentJson(*guard->document_), prior_hash);
+  EXPECT_EQ(guard->working_head_commit_hash(), prior_head);
+  EXPECT_EQ(guard->commit_graph_->CommitCount(), prior_commit_count);
+  EXPECT_EQ(guard->document_->NextColorGradeNameNumber(), prior_counter);
+  EXPECT_EQ(history.LastPublishedRenderReason(), prior_reason);
+  EXPECT_EQ(guard->document_->Graph().FindNode(NodeId{"grade.top"}), nullptr);
+
+  error.clear();
+  EXPECT_FALSE(history.RemoveColorGradeAndBridge(handle, NodeId{"grade.primary"}, &error));
+  EXPECT_EQ(error, "mini-Git journal file could not be opened for append");
+  EXPECT_EQ(CanonicalPipelineDocumentJson(*guard->document_), prior_hash);
+  EXPECT_EQ(guard->commit_graph_->CommitCount(), prior_commit_count);
+  EXPECT_EQ(guard->document_->NextColorGradeNameNumber(), prior_counter);
   history.Release(handle);
 }
 

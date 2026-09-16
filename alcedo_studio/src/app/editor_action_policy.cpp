@@ -161,6 +161,8 @@ auto EditorActionPolicy::ActionForCommand(EditorSessionCommandKind kind)
     case EditorSessionCommandKind::CommitAdjustment:
     case EditorSessionCommandKind::RenameColorGrade:
     case EditorSessionCommandKind::EditNodeGraph:
+    case EditorSessionCommandKind::InsertColorGradeAtTop:
+    case EditorSessionCommandKind::RemoveColorGradeAndBridge:
       return EditorAction::CommitAdjustment;
     case EditorSessionCommandKind::Undo:
       return EditorAction::Undo;

@@ -15,6 +15,7 @@
 
 #include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/pipeline_document.hpp"
+#include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/operators/operator_registeration.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
 #include "edit/runtime/cuda/cuda_product_renderer.hpp"
@@ -337,6 +338,20 @@ TEST_F(PipelineDocumentRenderTest, MissingCameraProfileFailsWithoutReadingStageM
   EXPECT_FALSE(input_->cpu_data_valid_);
   EXPECT_EQ(sink_.ready_count, 0);
   EXPECT_GT(executor_->DebugCudaRenderer()->Stats().pass.sensor_develop_execute, 0u);
+}
+
+TEST_F(PipelineDocumentRenderTest, CleanTopInsertedMaskGroupLeavesPixelsUnchanged) {
+  const auto before = Render(true);
+  ASSERT_FALSE(before.empty());
+
+  // Mask Groups top insertion inserts one clean Color Grade directly after
+  // Develop; a clean grade is a full-image identity, so pixels cannot move.
+  ASSERT_TRUE(
+      alcedo::AddCleanColorGrade(*document_, NodeId{"grade.primary"}, NodeId{"grade.top"}).empty());
+  const auto after = Render(true);
+  ASSERT_EQ(after.size(), before.size());
+  EXPECT_LT(cv::norm(before, after, cv::NORM_INF), 2e-5);
+  EXPECT_EQ(executor_->GpuDagDocument().get(), document_.get());
 }
 
 TEST_F(PipelineDocumentRenderTest, CpuPreferenceFailsInsteadOfExecutingLegacyStages) {

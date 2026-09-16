@@ -187,6 +187,19 @@ auto CaptureAddColorGradeChange(const PipelineDocument& document, const NodeId& 
   return change;
 }
 
+auto CaptureAddColorGradeAtTopChange(const PipelineDocument& document, const NodeId& new_id,
+                                     const NodeId& expected_successor_id) -> AddColorGradeChange {
+  const auto backbone = document.Graph().ImageBackboneNodeIds();
+  if (backbone.size() < 2) {
+    Fail("AddColorGrade at top requires a Develop to DRT image backbone");
+  }
+  const NodeId& anchor = backbone[1];
+  if (anchor != expected_successor_id) {
+    Fail("The Mask Groups insertion point changed since the request was issued");
+  }
+  return CaptureAddColorGradeChange(document, anchor, new_id);
+}
+
 auto MakeAddColorGradeBatch(AddColorGradeChange change) -> PipelineEditBatch {
   nlohmann::json args{{"node_id", std::string{change.node_id.Value()}}};
   if (change.node.contains("display_name") && change.node.at("display_name").is_string()) {

@@ -805,6 +805,31 @@ auto EditorSessionController::SubmitNodeGraphTopologyEdit(
   return session_backend_->EditNodeGraph(change);
 }
 
+auto EditorSessionController::SubmitInsertColorGradeAtTop(
+    const alcedo::NodeId& new_id, const alcedo::NodeId& expected_successor_id)
+    -> alcedo::EditorSessionResult {
+  if (!session_backend_) {
+    alcedo::EditorSessionResult result;
+    result.kind    = alcedo::EditorSessionResultKind::Rejected;
+    result.state   = session_state();
+    result.message = "Editor session backend is unavailable";
+    return result;
+  }
+  return session_backend_->InsertColorGradeAtTop(new_id, expected_successor_id);
+}
+
+auto EditorSessionController::SubmitRemoveColorGradeAndBridge(const alcedo::NodeId& node_id)
+    -> alcedo::EditorSessionResult {
+  if (!session_backend_) {
+    alcedo::EditorSessionResult result;
+    result.kind    = alcedo::EditorSessionResultKind::Rejected;
+    result.state   = session_state();
+    result.message = "Editor session backend is unavailable";
+    return result;
+  }
+  return session_backend_->RemoveColorGradeAndBridge(node_id);
+}
+
 void EditorSessionController::MoveHeadToCommit(const QString& commitId) {
   const QString action = QStringLiteral("moveHeadToCommit");
   if (!session_backend_) {

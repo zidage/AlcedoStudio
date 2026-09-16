@@ -58,6 +58,17 @@ class EditorHistoryMutation {
                      alcedo::NodeGraphTopologyChange change, std::string* error) -> bool;
   auto RenameColorGrade(const alcedo::EditorHistoryGuardHandle& guard, const alcedo::NodeId& node_id,
                         std::string display_name, std::string* error) -> bool;
+  /// Mask Groups: capture and commit one clean Color Grade inserted at the top
+  /// of the live backbone (the node after Develop must equal
+  /// @p expected_successor_id). Runs under the live render lock.
+  auto InsertColorGradeAtTop(const alcedo::EditorHistoryGuardHandle& guard,
+                             const alcedo::NodeId& new_id,
+                             const alcedo::NodeId& expected_successor_id, std::string* error)
+      -> bool;
+  /// Mask Groups: capture and commit one bridge-removal of a backbone Color
+  /// Grade. Runs under the live render lock.
+  auto RemoveColorGradeAndBridge(const alcedo::EditorHistoryGuardHandle& guard,
+                                 const alcedo::NodeId& node_id, std::string* error) -> bool;
   auto SetColorGradeEnabled(const alcedo::EditorHistoryGuardHandle& guard, const alcedo::NodeId& node_id,
                             bool enabled, std::string* error) -> bool;
   auto SetColorGradeMix(const alcedo::EditorHistoryGuardHandle& guard, const alcedo::NodeId& node_id,

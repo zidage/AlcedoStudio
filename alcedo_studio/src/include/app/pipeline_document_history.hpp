@@ -89,6 +89,22 @@ namespace alcedo {
                                               const NodeId& before_node_id, const NodeId& new_id)
     -> AddColorGradeChange;
 
+/**
+ * @brief Capture a clean Color Grade insertion at the top of the image backbone.
+ *
+ * Resolves the node that immediately follows Develop on the live backbone: the
+ * first Color Grade, or DRT/Post on a legal zero-Grade backbone. The resolved
+ * node must equal @p expected_successor_id; a mismatch means the caller's
+ * committed view was stale and the request is rejected without capturing.
+ *
+ * @throws std::runtime_error on a missing backbone, a stale successor, a
+ *         duplicate NodeId, or an exhausted display-name counter.
+ */
+[[nodiscard]] auto CaptureAddColorGradeAtTopChange(const PipelineDocument& document,
+                                                   const NodeId&           new_id,
+                                                   const NodeId&           expected_successor_id)
+    -> AddColorGradeChange;
+
 [[nodiscard]] auto MakeAddColorGradeBatch(AddColorGradeChange change) -> PipelineEditBatch;
 
 [[nodiscard]] auto CaptureRemoveColorGradeChange(const PipelineDocument& document,
