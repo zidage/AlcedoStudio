@@ -845,6 +845,28 @@ TEST(EditorNodeController, SubmitWriteStampsSelectedColorGradeInstance) {
             alcedo::AdjustmentInstanceId{"grade.primary.exposure"});
 }
 
+TEST(EditorNodeController, LookPanelClarityWriteQueuesDrtTargetWhileColorGradeSelected) {
+  DocumentSessionBackend backend;
+  EditorSessionController session(&backend);
+  EditorNodeController    nodes;
+  nodes.set_editor_session(&session);
+  nodes.selectNode(QStringLiteral("grade.primary"));
+  session.set_active_adjustment_panel(QStringLiteral("look"));
+  EXPECT_EQ(nodes.selected_node_id(), NodeId{"grade.primary"});
+
+  ASSERT_TRUE(session.submitWrite(QStringLiteral("clarity"), EditorScalarWrite{18.0f}, false));
+  const auto pending = session.PeekPendingInput();
+  ASSERT_EQ(pending.sequences.size(), 1u);
+  EXPECT_EQ(pending.sequences.front().captured_target.owner_kind, EditorParameterOwnerKind::DrtPost);
+  EXPECT_EQ(pending.sequences.front().captured_target.node_id, NodeId{"drt"});
+  const auto* drt = backend.Document().Drt();
+  ASSERT_NE(drt, nullptr);
+  const auto* instance = drt->FindAdjustmentIdByType(alcedo::type_ids::Clarity());
+  ASSERT_NE(instance, nullptr);
+  EXPECT_EQ(pending.sequences.front().captured_target.adjustment_instance_id, *instance);
+  EXPECT_EQ(backend.enqueue_count(), 1);
+}
+
 TEST(EditorNodeController, GeometryWriteRejectedWhenColorGradeIsSelected) {
   DocumentSessionBackend  backend;
   EditorSessionController session(&backend);

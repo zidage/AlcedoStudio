@@ -124,7 +124,12 @@ struct EditorAdjustmentContext {
 
 [[nodiscard]] auto AdjustmentPanelIsSupported(EditorNodeKind kind, std::string_view panel) -> bool;
 
-/// True when @p field_key may be submitted or projected for @p kind.
+/**
+ * @brief True when @p field_key may be submitted or projected for @p kind.
+ *
+ * Color Grade also accepts Clarity, Sharpen, Halation, and Film Grain because
+ * the Look panel hosts those DRT/Post sliders while a Grade remains selected.
+ */
 [[nodiscard]] auto AdjustmentFieldIsSupported(EditorNodeKind kind, std::string_view field_key)
     -> bool;
 
@@ -133,8 +138,10 @@ struct EditorAdjustmentContext {
  *
  * Geometry stays document-owned and is accepted only when @p selected_node_id
  * is Develop. Color Grade fields require that node to be the owning Grade.
- * Missing nodes or instances fail; the first operator of a type on another
- * node is never substituted.
+ * Clarity, Sharpen, Halation, and Film Grain always target the document DRT
+ * node, including when a Color Grade is selected on the Look panel. Missing
+ * nodes or instances fail; the first operator of a type on another Grade is
+ * never substituted.
  *
  * @pre Caller holds the executor render lock when @p document is live.
  */

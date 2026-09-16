@@ -5,8 +5,9 @@ import Alcedo.Main 1.0
 
 // Right-side editor tools: histogram/waveform scope slot, selected-node
 // name/EXIF header, a stable adjustment navbar, and stacked panel bodies.
-// The navbar does not hide pages when the selected node changes; write
-// targeting still rejects fields the current node does not own.
+// The navbar does not hide pages when the selected node changes. Color Grade,
+// Develop, and geometry writes still require the owning node. Look-panel
+// Clarity, Sharpen, Halation, and Film Grain always write the document DRT node.
 //
 // Surfaces use opaque named theme colors. The outer shell always uses the
 // shared card surface so the right column matches History/Versions, the

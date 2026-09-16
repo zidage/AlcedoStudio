@@ -344,7 +344,44 @@ TEST(EditorAdjustmentContextTest, CapabilityRegistryMatchesNodeKind) {
   EXPECT_TRUE(AdjustmentFieldIsSupported(EditorNodeKind::Develop, "crop_rotate"));
   EXPECT_FALSE(AdjustmentFieldIsSupported(EditorNodeKind::ColorGrade, "crop_rotate"));
   EXPECT_TRUE(AdjustmentFieldIsSupported(EditorNodeKind::ColorGrade, "exposure"));
+  EXPECT_TRUE(AdjustmentFieldIsSupported(EditorNodeKind::ColorGrade, "clarity"));
+  EXPECT_TRUE(AdjustmentFieldIsSupported(EditorNodeKind::ColorGrade, "sharpen"));
+  EXPECT_TRUE(AdjustmentFieldIsSupported(EditorNodeKind::ColorGrade, "halation"));
+  EXPECT_TRUE(AdjustmentFieldIsSupported(EditorNodeKind::ColorGrade, "film_grain"));
+  EXPECT_FALSE(AdjustmentFieldIsSupported(EditorNodeKind::Develop, "clarity"));
   EXPECT_TRUE(AdjustmentFieldIsSupported(EditorNodeKind::Drt, "odt"));
+}
+
+TEST(EditorAdjustmentContextTest, ColorGradeLookPanelFieldsTargetDocumentDrtNode) {
+  auto  document = CreateDefaultPipelineDocument();
+  auto* drt      = document.Drt();
+  ASSERT_NE(drt, nullptr);
+  auto* clarity = dynamic_cast<ClarityModel*>(drt->FindAdjustmentByType(type_ids::Clarity()));
+  ASSERT_NE(clarity, nullptr);
+  clarity->SetValue(12.0f);
+
+  std::string error;
+  for (const char* field : {"clarity", "sharpen", "halation", "film_grain"}) {
+    const auto target =
+        CompleteSelectedNodeParameterTarget(document, NodeId{"grade.primary"}, field, &error);
+    ASSERT_TRUE(target.has_value()) << field << ": " << error;
+    EXPECT_EQ(target->owner_kind, EditorParameterOwnerKind::DrtPost) << field;
+    EXPECT_EQ(target->node_id, drt->Id()) << field;
+    EXPECT_FALSE(target->adjustment_instance_id.Empty()) << field;
+  }
+
+  error.clear();
+  EXPECT_FALSE(
+      CompleteSelectedNodeParameterTarget(document, NodeId{"develop"}, "clarity", &error).has_value());
+  EXPECT_FALSE(error.empty());
+
+  EditorPanelProjection projection;
+  ASSERT_TRUE(
+      ProjectSelectedNodePanelFields(document, NodeId{"grade.primary"}, 7, &projection, &error))
+      << error;
+  ASSERT_TRUE(ScalarOf(projection, "clarity").has_value());
+  EXPECT_FLOAT_EQ(*ScalarOf(projection, "clarity"), 12.0f);
+  EXPECT_TRUE(ScalarOf(projection, "exposure").has_value());
 }
 
 }  // namespace alcedo
