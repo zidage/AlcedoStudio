@@ -16,6 +16,7 @@
 #include "edit/runtime/develop_transient.hpp"
 #include "edit/runtime/execution_plan.hpp"
 #include "edit/runtime/compiled_grade_mask.hpp"
+#include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/pass_encoder.hpp"
 #include "edit/runtime/pass_kind.hpp"
 #include "edit/runtime/gpu_node_pass_stats.hpp"
@@ -184,7 +185,12 @@ class PlanExecutor {
         }
       }
 
-      GraphValueId previous_scene = plan.develop_output;
+      if (!plan.grade_nodes.empty() || !plan.drt.post_adjustments.empty()) {
+        workspace.EnsureSceneWorkImages(geometry_extent);
+      }
+
+      FrameSceneBinding scene = FrameSceneBinding::CachedImage(plan.develop_output);
+      bool released_key_stage = false;
       if (plan.grade_nodes.empty()) {
         ++stats.primary_grade_skip;
       }
@@ -231,20 +237,13 @@ class PlanExecutor {
           workspace.TransientBuffers().Reset();
         }
 
-        const GraphValueId grade_scene = compiled_grade.scene_output;
         {
           diag::PreviewPassInterval grade_pass(compiled_grade.node_id.Value(),
                                                diag::PreviewPassKind::PrimaryColorGrade);
-          if (BindOrMiss(workspace, invalidation, grade_scene, geometry_extent, completed, stats)) {
-            grade_pass.SetState(diag::PreviewExecutionState::Skipped);
-            ++stats.primary_grade_skip;
-          } else {
-            GpuWorkSample<Device> gpu(device);
-            PassEncoder<Backend, GpuPassKind::PrimaryColorGrade>::Encode(
-                device, plan, input, document, compiled_grade);
-            Record(device, invalidation, grade_scene, geometry_extent);
-            ++stats.primary_grade_execute;
-          }
+          GpuWorkSample<Device> gpu(device);
+          scene = PassEncoder<Backend, GpuPassKind::PrimaryColorGrade>::Encode(
+              device, plan, input, document, compiled_grade, scene);
+          ++stats.primary_grade_execute;
         }
         if (exact_release) {
           workspace.Device().SynchronizeRecordedWork(device.CommandContext());
@@ -257,10 +256,10 @@ class PlanExecutor {
             }
             workspace.ReleaseConsumedImage(compiled_grade.mask_output);
           }
-          if (grade_scene != previous_scene) {
-            workspace.ReleaseConsumedImage(previous_scene);
+          if (scene.IsWorkImage() && !released_key_stage) {
+            workspace.ReleaseConsumedImage(plan.develop_output);
+            released_key_stage = true;
           }
-          previous_scene = grade_scene;
         }
       }
 
@@ -273,14 +272,14 @@ class PlanExecutor {
           ++stats.drt_skip;
         } else {
           GpuWorkSample<Device> gpu(device);
-          PassEncoder<Backend, GpuPassKind::Drt>::Encode(device, plan, input, document);
+          PassEncoder<Backend, GpuPassKind::Drt>::Encode(device, plan, input, document, scene);
           Record(device, invalidation, plan.display_output, geometry_extent);
           ++stats.drt_execute;
         }
       }
-      if (exact_release && plan.display_output != plan.SceneInputForDrt()) {
+      if (exact_release && scene.IsCachedImage()) {
         workspace.Device().SynchronizeRecordedWork(device.CommandContext());
-        workspace.ReleaseConsumedImage(plan.SceneInputForDrt());
+        workspace.ReleaseConsumedImage(scene.graph_id);
       }
 
       stats.result_content_hits += workspace.Images().ContentHitCount() - hits_before;

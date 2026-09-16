@@ -28,6 +28,9 @@
 #include "edit/runtime/opencl/opencl_dag_programs.hpp"
 #include "edit/runtime/opencl/opencl_local_tone_pass.hpp"
 #include "edit/runtime/opencl/opencl_neighbor_dispatch.hpp"
+#include "edit/runtime/opencl/opencl_scene_work.hpp"
+#include "edit/runtime/frame_scene_binding.hpp"
+#include "edit/runtime/local_tone_executor.hpp"
 #include "edit/runtime/parameter_arena.hpp"
 #include "edit/runtime/parameter_binding.hpp"
 #include "edit/runtime/texture_format.hpp"
@@ -129,6 +132,66 @@ void EnqueueGradePointwise(OpenClRenderDevice& device, const OpenClBackend::Text
   DispatchKernel(device, kernel, width, height);
 }
 
+void EnqueueGradePointwiseScene(OpenClRenderDevice& device, const FrameSceneBinding& src,
+                                const FrameSceneBinding& dst, const FrameSceneBinding* mix_source,
+                                const OpenClBackend::Buffer& params,
+                                const OpenClBackend::Buffer& commands, std::uint32_t command_offset,
+                                std::uint32_t command_count, const OpenClLutBinding& lut, float mix,
+                                const GraphValueId* mask_id, std::uint32_t width,
+                                std::uint32_t height) {
+  auto kernel = OpenClKernelCache::Instance().GetKernel(
+      OpenCL::GpuDag::kPrimaryGradeProgramName, OpenCL::GpuDag::kPrimaryGradePointwiseSceneKernelName);
+  auto& backend = device.Workspace().Device();
+  BindOpenClSceneView(kernel, 0, OpenClBindScene(device, src), backend, "OpenCL grade source",
+                      OpenClSceneArgAccess::Read);
+  BindOpenClSceneView(kernel, 3, OpenClBindScene(device, dst), backend, "OpenCL grade destination",
+                      OpenClSceneArgAccess::Write);
+  const bool apply_mix = mix_source != nullptr;
+  if (apply_mix) {
+    BindOpenClSceneView(kernel, 6, OpenClBindScene(device, *mix_source), backend,
+                        "OpenCL grade mix source", OpenClSceneArgAccess::Read);
+  } else {
+    BindOpenClSceneView(kernel, 6, OpenClUnusedSceneReadView(backend), backend,
+                        "OpenCL grade mix dummy", OpenClSceneArgAccess::Read);
+    int no_mix = -1;
+    CheckOpenCl(clSetKernelArg(kernel, 8, sizeof(int), &no_mix), "OpenCL grade mix flag");
+  }
+  cl_mem mask_mem = backend.DummySceneReadImage();
+  int    has_mask = 0;
+  if (mask_id != nullptr) {
+    auto* mask = device.Workspace().Images().Find(*mask_id);
+    if (mask == nullptr || mask->Empty()) {
+      throw std::runtime_error("ExecuteOpenClPrimaryGrade: compiled mask output is missing");
+    }
+    mask_mem = mask->Texture().Native();
+    has_mask = 1;
+  }
+  CheckOpenCl(clSetKernelArg(kernel, 9, sizeof(cl_mem), &mask_mem), "OpenCL grade mask");
+  CheckOpenCl(clSetKernelArg(kernel, 10, sizeof(int), &has_mask), "OpenCL grade mask flag");
+  CheckOpenCl(clSetKernelArg(kernel, 11, sizeof(float), &mix), "OpenCL grade mix");
+  CheckOpenCl(clSetKernelArg(kernel, 12, sizeof(height), &height), "OpenCL grade height");
+  auto params_mem   = params.Native();
+  auto commands_mem = commands.Native();
+  CheckOpenCl(clSetKernelArg(kernel, 13, sizeof(cl_mem), &params_mem),
+              "OpenCL grade parameter argument");
+  CheckOpenCl(clSetKernelArg(kernel, 14, sizeof(cl_mem), &commands_mem),
+              "OpenCL grade command argument");
+  PrimaryGradeDispatchParams dispatch;
+  dispatch.command_count   = command_count;
+  dispatch.command_offset  = command_offset;
+  dispatch.lut_edge        = lut.edge_size;
+  dispatch.local_reference = local_tone_mapping::kAcesccMiddleGray;
+  dispatch.width           = width;
+  CheckOpenCl(clSetKernelArg(kernel, 15, sizeof(dispatch), &dispatch),
+              "OpenCL grade dispatch argument");
+  auto lut_mem = lut.native;
+  if (lut_mem == nullptr) {
+    throw std::runtime_error("ExecuteOpenClPrimaryGrade: LUT resource is missing");
+  }
+  CheckOpenCl(clSetKernelArg(kernel, 16, sizeof(cl_mem), &lut_mem), "OpenCL grade LUT argument");
+  DispatchKernel(device, kernel, width, height);
+}
+
 void EnqueueGradeMix(OpenClRenderDevice& device, const OpenClBackend::Texture2D& source,
                  const OpenClBackend::Texture2D& adjusted, OpenClBackend::Texture2D& dst, float mix,
                  const OpenClBackend::Texture2D* mask, std::uint32_t width, std::uint32_t height) {
@@ -172,15 +235,19 @@ struct OpenClGradeOps {
   using Device            = OpenClRenderDevice;
   using Backend           = OpenClBackend;
   using Texture           = OpenClBackend::Texture2D;
-  using Scratch           = ResourceLease<OpenClBackend>*;
   using HorizontalScratch = ResourceLease<OpenClBackend>;
   using LutBinding        = OpenClLutBinding;
 
   static constexpr const char* kErrorPrefix = "ExecuteOpenClPrimaryGrade";
 
-  static void AliasOutput(OpenClRenderDevice& device, const GraphValueId& output,
-                          const GraphValueId& input) {
-    device.Workspace().AliasImageFrom(output, input);
+  static auto BindingWidth(OpenClRenderDevice& device, const FrameSceneBinding& binding)
+      -> std::uint32_t {
+    return OpenClSceneWidth(device, binding);
+  }
+
+  static auto BindingHeight(OpenClRenderDevice& device, const FrameSceneBinding& binding)
+      -> std::uint32_t {
+    return OpenClSceneHeight(device, binding);
   }
 
   static auto UploadFusedCommands(OpenClRenderDevice& device, const NodeId& grade_id,
@@ -225,37 +292,36 @@ struct OpenClGradeOps {
     return lut.resource_id;
   }
 
-  static auto AcquireScratch(OpenClRenderDevice& device, std::uint32_t width, std::uint32_t height,
-                             const GraphValueId& id) -> Scratch {
-    return &AcquireRgba(device.Workspace(), id, width, height);
-  }
-
-  static auto ScratchTexture(Scratch scratch) -> Texture& { return scratch->Texture(); }
-
-  static auto AcquireOutput(OpenClRenderDevice& device, const GraphValueId& output,
-                            std::uint32_t width, std::uint32_t height) -> Texture& {
-    return AcquireRgba(device.Workspace(), output, width, height).Texture();
-  }
-
-  static auto SceneTexture(OpenClRenderDevice& device, const GraphValueId& id) -> Texture& {
-    auto* image = device.Workspace().Images().Find(id);
-    if (image == nullptr || image->Empty()) {
-      throw std::runtime_error("ExecuteOpenClPrimaryGrade: stage image is missing");
-    }
-    return image->Texture();
-  }
-
-  static void DispatchPointwise(OpenClRenderDevice& device, const Texture& src, Texture& dst,
-                                const OpenClLutBinding& lut, const NodeId& grade_id,
-                                std::uint32_t command_start, std::uint32_t command_count,
-                                std::uint32_t width, std::uint32_t height) {
+  static void DispatchPointwise(OpenClRenderDevice& device, const FrameSceneBinding& src,
+                                const FrameSceneBinding& dst, const OpenClLutBinding& lut,
+                                const NodeId& grade_id, std::uint32_t command_start,
+                                std::uint32_t command_count, std::uint32_t width,
+                                std::uint32_t height) {
     auto& workspace = device.Workspace();
     auto* commands  = workspace.Values().Find(GraphValueId{grade_id, PortId{"runtime.order"}});
     if (commands == nullptr) {
       throw std::runtime_error("ExecuteOpenClPrimaryGrade: missing fused command buffer");
     }
-    EnqueueGradePointwise(device, src, dst, workspace.Parameters().DeviceBuffer(), *commands,
-                          command_start, command_count, lut, width, height);
+    EnqueueGradePointwiseScene(device, src, dst, nullptr, workspace.Parameters().DeviceBuffer(),
+                               *commands, command_start, command_count, lut, 1.0f, nullptr, width,
+                               height);
+  }
+
+  static void DispatchPointwiseWithMix(OpenClRenderDevice& device, const FrameSceneBinding& src,
+                                       const FrameSceneBinding& dst,
+                                       const FrameSceneBinding& original, const OpenClLutBinding& lut,
+                                       const NodeId& grade_id, std::uint32_t command_start,
+                                       std::uint32_t command_count, float mix,
+                                       const GraphValueId* mask_id, std::uint32_t width,
+                                       std::uint32_t height) {
+    auto& workspace = device.Workspace();
+    auto* commands  = workspace.Values().Find(GraphValueId{grade_id, PortId{"runtime.order"}});
+    if (commands == nullptr) {
+      throw std::runtime_error("ExecuteOpenClPrimaryGrade: missing fused command buffer");
+    }
+    EnqueueGradePointwiseScene(device, src, dst, &original, workspace.Parameters().DeviceBuffer(),
+                               *commands, command_start, command_count, lut, mix, mask_id, width,
+                               height);
   }
 
   static auto AcquireHorizontalScratch(OpenClRenderDevice& device, std::uint32_t width,
@@ -263,46 +329,32 @@ struct OpenClGradeOps {
     return AcquireOpenClScratch(device.Workspace(), width, height);
   }
 
-  static auto HorizontalScratchTexture(HorizontalScratch& scratch) -> Texture& {
-    return scratch.Texture();
+  static void DispatchHorizontal(OpenClRenderDevice& device, const FrameSceneBinding& src,
+                                 HorizontalScratch& scratch, const NeighborWork& work,
+                                 std::uint32_t width, std::uint32_t height) {
+    EnqueueOpenClNeighborHorizontalScene(device, OpenClBindScene(device, src), scratch.Texture(),
+                                         work.params, width, height);
   }
 
-  static void DispatchHorizontal(OpenClRenderDevice& device, const Texture& src, Texture& blur,
-                                 const NeighborWork& work, std::uint32_t width,
-                                 std::uint32_t height) {
-    EnqueueOpenClNeighborHorizontal(device, src, blur, work.params, width, height);
+  static void DispatchVerticalApply(OpenClRenderDevice& device, const FrameSceneBinding& src,
+                                    HorizontalScratch& scratch, const FrameSceneBinding& dst,
+                                    const FrameSceneBinding& original, const LutBinding&,
+                                    const NeighborWork& work, float mix, const GraphValueId* mask_id,
+                                    std::uint32_t width, std::uint32_t height) {
+    const auto src_view  = OpenClBindScene(device, src);
+    const auto dst_view  = OpenClBindScene(device, dst);
+    const auto orig_view = OpenClBindScene(device, original);
+    EnqueueOpenClNeighborVerticalScene(device, src_view, scratch.Texture(), dst_view, &orig_view,
+                                       mask_id, mix, work.params, width, height);
   }
 
-  static void DispatchVerticalApply(OpenClRenderDevice& device, const Texture& src,
-                                    const Texture& blur, Texture& dst, const LutBinding&,
-                                    const NeighborWork& work, std::uint32_t width,
-                                    std::uint32_t height) {
-    EnqueueOpenClNeighborVertical(device, src, blur, dst, work.params, width, height);
-  }
-
-  static void DispatchMix(OpenClRenderDevice& device, const Texture& source, const Texture& adjusted,
-                          Texture& destination, float mix, const Texture* mask, std::uint32_t width,
-                          std::uint32_t height) {
-    EnqueueGradeMix(device, source, adjusted, destination, mix, mask, width, height);
-  }
-
-  static auto ExecuteLocalTone(OpenClRenderDevice& device, const Texture& src, Texture& dst,
+  static auto ExecuteLocalTone(OpenClRenderDevice& device, const FrameSceneBinding& src,
+                               const FrameSceneBinding& dest, const FrameSceneBinding& original,
                                const NodeId& grade_id, float shadows_slider,
-                               float highlights_slider, const ResolvedRenderGeometry& geometry)
-      -> OpenClLocalToneResult {
-    return ExecuteOpenClLocalTone(device, src, dst, grade_id, shadows_slider, highlights_slider,
-                                  geometry);
-  }
-
-  static auto MaskTexture(OpenClRenderDevice& device, const GraphValueId& mask_output,
-                          std::uint32_t width, std::uint32_t height) -> const Texture* {
-    auto* mask = device.Workspace().Images().Find(mask_output);
-    if (mask == nullptr || mask->Texture().Native() == nullptr ||
-        mask->Texture().Format() != TextureFormat::R8 || mask->Texture().Width() != width ||
-        mask->Texture().Height() != height) {
-      throw std::runtime_error("ExecuteOpenClPrimaryGrade: compiled mask output is missing");
-    }
-    return &mask->Texture();
+                               float highlights_slider, const ResolvedRenderGeometry& geometry,
+                               float mix, const GraphValueId* mask_id) -> OpenClLocalToneResult {
+    return ExecuteOpenClLocalTone(device, src, dest, original, grade_id, shadows_slider,
+                                  highlights_slider, geometry, mix, mask_id);
   }
 
   static void CheckAfterEncode(OpenClRenderDevice&) {}
@@ -312,12 +364,13 @@ struct OpenClGradeOps {
 
 auto ExecuteOpenClPrimaryGrade(OpenClRenderDevice& device, const ExecutionPlan& plan,
                                const PreparedRawInput& prepared, PipelineDocument& document,
-                               const CompiledGradeNode& compiled_grade_node)
-    -> OpenClPrimaryGradeResult {
+                               const CompiledGradeNode& compiled_grade_node,
+                               const FrameSceneBinding& scene) -> OpenClPrimaryGradeResult {
   const auto executed = GradeExecutor<OpenClGradeOps>::Execute(device, plan, prepared, document,
-                                                              compiled_grade_node);
+                                                              compiled_grade_node, scene);
   OpenClPrimaryGradeResult result;
   result.output                                 = executed.output;
+  result.output_binding                         = executed.output_binding;
   result.pointwise_dispatch_count               = executed.pointwise_dispatch_count;
   result.detail_pass_count                      = executed.detail_pass_count;
   result.local_tone_pass_count                  = executed.local_tone_pass_count;
@@ -337,9 +390,13 @@ auto ExecuteOpenClPrimaryGrade(OpenClRenderDevice& device, const ExecutionPlan& 
     throw std::runtime_error("ExecuteOpenClPrimaryGrade: plan has no Color Grade");
   }
   device.Workspace().PrepareResultValidity(plan, document, prepared);
+  const ImageExtent extent{plan.geometry.render_extent.width, plan.geometry.render_extent.height};
+  device.Workspace().EnsureSceneWorkImages(extent);
+  FrameSceneBinding scene = FrameSceneBinding::CachedImage(plan.develop_output);
   OpenClPrimaryGradeResult last{};
   for (const auto& compiled_grade : plan.grade_nodes) {
-    last = ExecuteOpenClPrimaryGrade(device, plan, prepared, document, compiled_grade);
+    last  = ExecuteOpenClPrimaryGrade(device, plan, prepared, document, compiled_grade, scene);
+    scene = last.output_binding;
   }
   return last;
 }

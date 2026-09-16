@@ -24,9 +24,12 @@
 #include "edit/runtime/cuda/cuda_adjustment_runtime.hpp"
 #include "edit/runtime/cuda/cuda_local_tone_pass.hpp"
 #include "edit/runtime/cuda/cuda_primary_grade_pass.hpp"
+#include "edit/runtime/cuda/cuda_scene_work.hpp"
+#include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/grade_executor.hpp"
 #include "edit/runtime/grade_lut.hpp"
 #include "edit/runtime/grade_parameter_slot.hpp"
+#include "edit/runtime/local_tone_executor.hpp"
 #include "edit/runtime/neighbor_executor.hpp"
 #include "edit/runtime/parameter_binding.hpp"
 #include "edit/runtime/result_content_key.hpp"
@@ -265,11 +268,20 @@ __device__ auto ApplyAdjustment(float3 c, const CudaAdjustmentParams& p, const f
   return c;
 }
 
+__device__ auto MixGradePixel(const float4& original, const float4& adjusted, float grade_mix,
+                              const std::uint8_t* mask, std::uint32_t index) -> float4 {
+  const float mix = grade_mix * (mask == nullptr ? 1.0f : mask[index] / 255.0f);
+  return make_float4(original.x + (adjusted.x - original.x) * mix,
+                     original.y + (adjusted.y - original.y) * mix,
+                     original.z + (adjusted.z - original.z) * mix, original.w);
+}
+
 __global__ void PrimaryGradeKernel(const float4* input, float4* output, std::uint32_t pixel_count,
                                    const unsigned char*         parameter_base,
                                    const CudaAdjustmentCommand* commands,
                                    std::uint32_t command_count, const float4* lut,
-                                   std::uint32_t lut_edge) {
+                                   std::uint32_t lut_edge, const float4* mix_source, float grade_mix,
+                                   const std::uint8_t* mask) {
   const std::uint32_t index = blockIdx.x * blockDim.x + threadIdx.x;
   if (index >= pixel_count) return;
   const float4 source = input[index];
@@ -279,34 +291,73 @@ __global__ void PrimaryGradeKernel(const float4* input, float4* output, std::uin
         parameter_base + commands[i].parameter_offset);
     c = ApplyAdjustment(c, *params, lut, lut_edge);
   }
-  output[index] = make_float4(c.x, c.y, c.z, source.w);
+  const float4 adjusted = make_float4(c.x, c.y, c.z, source.w);
+  if (mix_source == nullptr) {
+    output[index] = adjusted;
+    return;
+  }
+  output[index] = MixGradePixel(mix_source[index], adjusted, grade_mix, mask, index);
 }
 
-__global__ void FinalMixKernel(const float4* source, const float4* adjusted, float4* destination,
-                               std::uint32_t pixel_count, float grade_mix,
-                               const std::uint8_t* mask) {
-  const std::uint32_t index = blockIdx.x * blockDim.x + threadIdx.x;
-  if (index >= pixel_count) return;
-  const float  mix = grade_mix * (mask == nullptr ? 1.0f : mask[index] / 255.0f);
-  const float4 a   = adjusted[index];
-  const float4 s   = source[index];
-  destination[index] =
-      make_float4(s.x + (a.x - s.x) * mix, s.y + (a.y - s.y) * mix, s.z + (a.z - s.z) * mix, s.w);
+auto MaskPointer(CudaRenderDevice& device, const GraphValueId* mask_id, std::uint32_t width,
+                 std::uint32_t height) -> const std::uint8_t* {
+  if (mask_id == nullptr) {
+    return nullptr;
+  }
+  auto* mask = device.Workspace().Images().Find(*mask_id);
+  if (mask == nullptr || mask->Empty() || mask->Texture().Format() != TextureFormat::R8 ||
+      mask->Texture().Width() != width || mask->Texture().Height() != height) {
+    throw std::runtime_error("ExecuteCudaPrimaryGrade: compiled mask output is missing");
+  }
+  return static_cast<const std::uint8_t*>(mask->Texture().DevicePointer());
+}
+
+void LaunchPointwise(CudaRenderDevice& device, const FrameSceneBinding& src,
+                     const FrameSceneBinding& dst, const FrameSceneBinding* mix_source,
+                     const CudaLutBinding& lut, const NodeId& grade_id, std::uint32_t command_start,
+                     std::uint32_t command_count, float mix, const GraphValueId* mask_id,
+                     std::uint32_t width, std::uint32_t height) {
+  auto& workspace = device.Workspace();
+  auto* commands  = workspace.Values().Find(GraphValueId{grade_id, PortId{"runtime.order"}});
+  if (commands == nullptr || command_count == 0) {
+    throw std::runtime_error("ExecuteCudaPrimaryGrade: missing fused command buffer");
+  }
+  const auto  pixels = width * height;
+  const auto* device_commands =
+      static_cast<const CudaAdjustmentCommand*>(commands->DevicePointer());
+  const auto* parameter_base =
+      static_cast<const unsigned char*>(workspace.Parameters().DeviceBuffer().DevicePointer());
+  auto&       src_tex = CudaSceneTexture(device, src);
+  auto&       dst_tex = CudaSceneTexture(device, dst);
+  const auto* mix_ptr =
+      mix_source == nullptr ? nullptr
+                            : static_cast<const float4*>(CudaSceneTexture(device, *mix_source)
+                                                             .DevicePointer());
+  constexpr std::uint32_t block = 256;
+  PrimaryGradeKernel<<<(pixels + block - 1) / block, block, 0, device.CommandContext().Stream()>>>(
+      static_cast<const float4*>(src_tex.DevicePointer()),
+      static_cast<float4*>(dst_tex.DevicePointer()), pixels, parameter_base,
+      device_commands + command_start, command_count, static_cast<const float4*>(lut.device_pointer),
+      lut.edge_size, mix_ptr, mix, MaskPointer(device, mask_id, width, height));
 }
 
 struct CudaGradeOps {
-  using Device                              = CudaRenderDevice;
-  using Backend                             = CudaBackend;
-  using Texture                             = CudaBackend::Texture2D;
-  using Scratch                             = ResourceLease<CudaBackend>*;
-  using HorizontalScratch                   = ResourceLease<CudaBackend>;
-  using LutBinding                          = CudaLutBinding;
+  using Device            = CudaRenderDevice;
+  using Backend           = CudaBackend;
+  using Texture           = CudaBackend::Texture2D;
+  using HorizontalScratch = ResourceLease<CudaBackend>;
+  using LutBinding        = CudaLutBinding;
 
   static constexpr const char* kErrorPrefix = "ExecuteCudaPrimaryGrade";
 
-  static void                  AliasOutput(CudaRenderDevice& device, const GraphValueId& output,
-                                           const GraphValueId& input) {
-    device.Workspace().AliasImageFrom(output, input);
+  static auto BindingWidth(CudaRenderDevice& device, const FrameSceneBinding& binding)
+      -> std::uint32_t {
+    return CudaSceneWidth(device, binding);
+  }
+
+  static auto BindingHeight(CudaRenderDevice& device, const FrameSceneBinding& binding)
+      -> std::uint32_t {
+    return CudaSceneHeight(device, binding);
   }
 
   static auto UploadFusedCommands(CudaRenderDevice& device, const NodeId& grade_id,
@@ -333,48 +384,24 @@ struct CudaGradeOps {
 
   static auto LutResourceId(const CudaLutBinding& lut) -> std::uint64_t { return lut.resource_id; }
 
-  static auto AcquireScratch(CudaRenderDevice& device, std::uint32_t width, std::uint32_t height,
-                             const GraphValueId& id) -> Scratch {
-    return &device.Workspace().AcquireImageForWrite(id, {width, height, TextureFormat::Rgba32f});
+  static void DispatchPointwise(CudaRenderDevice& device, const FrameSceneBinding& src,
+                                const FrameSceneBinding& dst, const CudaLutBinding& lut,
+                                const NodeId& grade_id, std::uint32_t command_start,
+                                std::uint32_t command_count, std::uint32_t width,
+                                std::uint32_t height) {
+    LaunchPointwise(device, src, dst, nullptr, lut, grade_id, command_start, command_count, 1.0f,
+                    nullptr, width, height);
   }
 
-  static auto ScratchTexture(Scratch scratch) -> Texture& { return scratch->Texture(); }
-
-  static auto AcquireOutput(CudaRenderDevice& device, const GraphValueId& output,
-                            std::uint32_t width, std::uint32_t height) -> Texture& {
-    return device.Workspace()
-        .AcquireImageForWrite(output, {width, height, TextureFormat::Rgba32f})
-        .Texture();
-  }
-
-  static auto SceneTexture(CudaRenderDevice& device, const GraphValueId& id) -> Texture& {
-    auto* image = device.Workspace().Images().Find(id);
-    if (image == nullptr || image->Empty()) {
-      throw std::runtime_error("ExecuteCudaPrimaryGrade: stage image is missing");
-    }
-    return image->Texture();
-  }
-
-  static void DispatchPointwise(CudaRenderDevice& device, const Texture& src, Texture& dst,
-                                const CudaLutBinding& lut, const NodeId& grade_id,
-                                std::uint32_t command_start, std::uint32_t command_count,
-                                std::uint32_t width, std::uint32_t height) {
-    auto& workspace = device.Workspace();
-    auto* commands  = workspace.Values().Find(GraphValueId{grade_id, PortId{"runtime.order"}});
-    if (commands == nullptr || command_count == 0) {
-      throw std::runtime_error("ExecuteCudaPrimaryGrade: missing fused command buffer");
-    }
-    const auto  pixels = width * height;
-    const auto* device_commands =
-        static_cast<const CudaAdjustmentCommand*>(commands->DevicePointer());
-    const auto* parameter_base =
-        static_cast<const unsigned char*>(workspace.Parameters().DeviceBuffer().DevicePointer());
-    constexpr std::uint32_t block = 256;
-    PrimaryGradeKernel<<<(pixels + block - 1) / block, block, 0,
-                         device.CommandContext().Stream()>>>(
-        static_cast<const float4*>(src.DevicePointer()), static_cast<float4*>(dst.DevicePointer()),
-        pixels, parameter_base, device_commands + command_start, command_count,
-        static_cast<const float4*>(lut.device_pointer), lut.edge_size);
+  static void DispatchPointwiseWithMix(CudaRenderDevice& device, const FrameSceneBinding& src,
+                                       const FrameSceneBinding& dst,
+                                       const FrameSceneBinding& original, const CudaLutBinding& lut,
+                                       const NodeId& grade_id, std::uint32_t command_start,
+                                       std::uint32_t command_count, float mix,
+                                       const GraphValueId* mask_id, std::uint32_t width,
+                                       std::uint32_t height) {
+    LaunchPointwise(device, src, dst, &original, lut, grade_id, command_start, command_count, mix,
+                    mask_id, width, height);
   }
 
   static auto AcquireHorizontalScratch(CudaRenderDevice& device, std::uint32_t width,
@@ -382,58 +409,39 @@ struct CudaGradeOps {
     return AcquireCudaScratch(device.Workspace(), width, height);
   }
 
-  static auto HorizontalScratchTexture(HorizontalScratch& scratch) -> Texture& {
-    return scratch.Texture();
-  }
-
-  static void DispatchHorizontal(CudaRenderDevice& device, const Texture& src, Texture& blur,
-                                 const NeighborWork& work, std::uint32_t width,
-                                 std::uint32_t height) {
+  static void DispatchHorizontal(CudaRenderDevice& device, const FrameSceneBinding& src,
+                                 HorizontalScratch& scratch, const NeighborWork& work,
+                                 std::uint32_t width, std::uint32_t height) {
+    auto& src_tex = CudaSceneTexture(device, src);
     cuda_neighbor_grade::LaunchBlurHorizontal(
-        device.CommandContext().Stream(), static_cast<const float4*>(src.DevicePointer()),
-        static_cast<float4*>(blur.DevicePointer()), static_cast<int>(width),
+        device.CommandContext().Stream(), static_cast<const float4*>(src_tex.DevicePointer()),
+        static_cast<float4*>(scratch.Texture().DevicePointer()), static_cast<int>(width),
         static_cast<int>(height), work.params);
   }
 
-  static void DispatchVerticalApply(CudaRenderDevice& device, const Texture& src,
-                                    const Texture& blur, Texture& dst, const LutBinding&,
-                                    const NeighborWork& work, std::uint32_t width,
-                                    std::uint32_t height) {
+  static void DispatchVerticalApply(CudaRenderDevice& device, const FrameSceneBinding& src,
+                                    HorizontalScratch& scratch, const FrameSceneBinding& dst,
+                                    const FrameSceneBinding& original, const LutBinding&,
+                                    const NeighborWork& work, float mix, const GraphValueId* mask_id,
+                                    std::uint32_t width, std::uint32_t height) {
+    auto& src_tex  = CudaSceneTexture(device, src);
+    auto& dst_tex  = CudaSceneTexture(device, dst);
+    auto& orig_tex = CudaSceneTexture(device, original);
     cuda_neighbor_grade::LaunchApplyVertical(
-        device.CommandContext().Stream(), static_cast<const float4*>(src.DevicePointer()),
-        static_cast<const float4*>(blur.DevicePointer()), static_cast<float4*>(dst.DevicePointer()),
-        static_cast<int>(width), static_cast<int>(height), work.params);
+        device.CommandContext().Stream(), static_cast<const float4*>(src_tex.DevicePointer()),
+        static_cast<const float4*>(scratch.Texture().DevicePointer()),
+        static_cast<float4*>(dst_tex.DevicePointer()), static_cast<const float4*>(orig_tex.DevicePointer()),
+        mix, MaskPointer(device, mask_id, width, height), static_cast<int>(width),
+        static_cast<int>(height), work.params);
   }
 
-  static void DispatchMix(CudaRenderDevice& device, const Texture& source, const Texture& adjusted,
-                          Texture& destination, float mix, const Texture* mask, std::uint32_t width,
-                          std::uint32_t height) {
-    const auto              pixels = width * height;
-    constexpr std::uint32_t block  = 256;
-    const auto*             mask_pointer =
-        mask == nullptr ? nullptr : static_cast<const std::uint8_t*>(mask->DevicePointer());
-    FinalMixKernel<<<(pixels + block - 1) / block, block, 0, device.CommandContext().Stream()>>>(
-        static_cast<const float4*>(source.DevicePointer()),
-        static_cast<const float4*>(adjusted.DevicePointer()),
-        static_cast<float4*>(destination.DevicePointer()), pixels, mix, mask_pointer);
-  }
-
-  static auto ExecuteLocalTone(CudaRenderDevice& device, const Texture& src, Texture& dst,
+  static auto ExecuteLocalTone(CudaRenderDevice& device, const FrameSceneBinding& src,
+                               const FrameSceneBinding& dest, const FrameSceneBinding& original,
                                const NodeId& grade_id, float shadows_slider,
-                               float highlights_slider, const ResolvedRenderGeometry& geometry)
-      -> CudaLocalToneResult {
-    return ExecuteCudaLocalTone(device, src, dst, grade_id, shadows_slider, highlights_slider,
-                                geometry);
-  }
-
-  static auto MaskTexture(CudaRenderDevice& device, const GraphValueId& mask_output,
-                          std::uint32_t width, std::uint32_t height) -> const Texture* {
-    auto* mask = device.Workspace().Images().Find(mask_output);
-    if (mask == nullptr || mask->Empty() || mask->Texture().Format() != TextureFormat::R8 ||
-        mask->Texture().Width() != width || mask->Texture().Height() != height) {
-      throw std::runtime_error("ExecuteCudaPrimaryGrade: compiled mask output is missing");
-    }
-    return &mask->Texture();
+                               float highlights_slider, const ResolvedRenderGeometry& geometry,
+                               float mix, const GraphValueId* mask_id) -> CudaLocalToneResult {
+    return ExecuteCudaLocalTone(device, src, dest, original, grade_id, shadows_slider,
+                                highlights_slider, geometry, mix, mask_id);
   }
 
   static void CheckAfterEncode(CudaRenderDevice&) {
@@ -447,12 +455,13 @@ struct CudaGradeOps {
 
 auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan,
                              const PreparedRawInput& prepared, PipelineDocument& document,
-                             const CompiledGradeNode& compiled_grade_node)
-    -> CudaPrimaryGradeResult {
-  const auto executed =
-      GradeExecutor<CudaGradeOps>::Execute(device, plan, prepared, document, compiled_grade_node);
+                             const CompiledGradeNode& compiled_grade_node,
+                             const FrameSceneBinding& scene) -> CudaPrimaryGradeResult {
+  const auto executed = GradeExecutor<CudaGradeOps>::Execute(device, plan, prepared, document,
+                                                             compiled_grade_node, scene);
   CudaPrimaryGradeResult result;
   result.output                                 = executed.output;
+  result.output_binding                         = executed.output_binding;
   result.lut_resource_id                        = executed.lut_resource_id;
   result.local_tone_reference_resource_id       = executed.local_tone_reference_resource_id;
   result.local_tone_rebuilt_reference           = executed.local_tone_rebuilt_reference;
@@ -470,9 +479,13 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
     throw std::runtime_error("ExecuteCudaPrimaryGrade: plan has no Color Grade");
   }
   device.Workspace().PrepareResultValidity(plan, document, prepared);
+  const ImageExtent extent{plan.geometry.render_extent.width, plan.geometry.render_extent.height};
+  device.Workspace().EnsureSceneWorkImages(extent);
+  FrameSceneBinding scene = FrameSceneBinding::CachedImage(plan.develop_output);
   CudaPrimaryGradeResult last{};
   for (const auto& compiled_grade : plan.grade_nodes) {
-    last = ExecuteCudaPrimaryGrade(device, plan, prepared, document, compiled_grade);
+    last  = ExecuteCudaPrimaryGrade(device, plan, prepared, document, compiled_grade, scene);
+    scene = last.output_binding;
   }
   return last;
 }

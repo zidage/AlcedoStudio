@@ -8,10 +8,13 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 
+#include "edit/graph/graph_ids.hpp"
 #include "edit/runtime/adjustment_runtime.hpp"
 #include "edit/runtime/opencl/opencl_backend.hpp"
 #include "edit/runtime/opencl/opencl_dag_programs.hpp"
+#include "edit/runtime/opencl/opencl_scene_work.hpp"
 #include "opencl/opencl_api_counters.hpp"
 #include "opencl/opencl_check.hpp"
 #include "opencl/opencl_kernel_cache.hpp"
@@ -77,6 +80,78 @@ inline void EnqueueOpenClNeighborVertical(OpenClRenderDevice& device,
   CheckOpenCl(clSetKernelArg(kernel, 4, local_bytes, nullptr),
               "OpenCL neighborhood local tile argument");
   EnqueueOpenClNeighborRange(device, kernel, width, height, kLocalEdge);
+}
+
+inline void EnqueueOpenClNeighborHorizontalScene(OpenClRenderDevice& device,
+                                                 const OpenClSceneView& src,
+                                                 OpenClBackend::Texture2D& blur,
+                                                 const GradeNeighborParams& params,
+                                                 std::uint32_t width, std::uint32_t height) {
+  auto kernel = OpenClKernelCache::Instance().GetKernel(
+      OpenCL::GpuDag::kPrimaryGradeProgramName,
+      OpenCL::GpuDag::kPrimaryGradeNeighborBlurSceneKernelName);
+  BindOpenClSceneView(kernel, 0, src, device.Workspace().Device(), "OpenCL neighborhood source",
+                      OpenClSceneArgAccess::Read);
+  auto blur_mem = blur.Native();
+  CheckOpenCl(clSetKernelArg(kernel, 3, sizeof(cl_mem), &blur_mem),
+              "OpenCL neighborhood blur argument");
+  CheckOpenCl(clSetKernelArg(kernel, 4, sizeof(params), &params),
+              "OpenCL neighborhood parameters");
+  CheckOpenCl(clSetKernelArg(kernel, 5, sizeof(width), &width), "OpenCL neighborhood width");
+  CheckOpenCl(clSetKernelArg(kernel, 6, sizeof(height), &height), "OpenCL neighborhood height");
+  EnqueueOpenClNeighborRange(device, kernel, width, height, 8);
+}
+
+inline void EnqueueOpenClNeighborVerticalScene(
+    OpenClRenderDevice& device, const OpenClSceneView& src, const OpenClBackend::Texture2D& blur,
+    const OpenClSceneView& dst, const OpenClSceneView* mix_source, const GraphValueId* mask_id,
+    float mix, const GradeNeighborParams& params, std::uint32_t width, std::uint32_t height) {
+  auto kernel = OpenClKernelCache::Instance().GetKernel(
+      OpenCL::GpuDag::kPrimaryGradeProgramName,
+      OpenCL::GpuDag::kPrimaryGradeNeighborApplySceneKernelName);
+  auto& backend = device.Workspace().Device();
+  BindOpenClSceneView(kernel, 0, src, backend, "OpenCL neighborhood apply source",
+                      OpenClSceneArgAccess::Read);
+  auto blur_mem = blur.Native();
+  CheckOpenCl(clSetKernelArg(kernel, 3, sizeof(cl_mem), &blur_mem),
+              "OpenCL neighborhood apply blur argument");
+  BindOpenClSceneView(kernel, 4, dst, backend, "OpenCL neighborhood apply destination",
+                      OpenClSceneArgAccess::Write);
+  const bool apply_mix = mix_source != nullptr && (mix != 1.0f || mask_id != nullptr);
+  if (apply_mix) {
+    BindOpenClSceneView(kernel, 7, *mix_source, backend, "OpenCL neighborhood mix source",
+                        OpenClSceneArgAccess::Read);
+  } else {
+    BindOpenClSceneView(kernel, 7, OpenClUnusedSceneReadView(backend), backend,
+                        "OpenCL neighborhood mix dummy", OpenClSceneArgAccess::Read);
+    int no_mix = -1;
+    CheckOpenCl(clSetKernelArg(kernel, 9, sizeof(int), &no_mix), "OpenCL neighborhood mix flag");
+  }
+  cl_mem mask_mem = backend.DummySceneReadImage();
+  int    has_mask = 0;
+  if (mask_id != nullptr) {
+    auto* mask = device.Workspace().Images().Find(*mask_id);
+    if (mask == nullptr || mask->Empty()) {
+      throw std::runtime_error("OpenCL neighborhood mask is missing");
+    }
+    mask_mem = mask->Texture().Native();
+    has_mask = 1;
+  }
+  CheckOpenCl(clSetKernelArg(kernel, 10, sizeof(cl_mem), &mask_mem),
+              "OpenCL neighborhood mask argument");
+  CheckOpenCl(clSetKernelArg(kernel, 11, sizeof(int), &has_mask),
+              "OpenCL neighborhood mask flag");
+  CheckOpenCl(clSetKernelArg(kernel, 12, sizeof(float), &mix), "OpenCL neighborhood mix");
+  CheckOpenCl(clSetKernelArg(kernel, 13, sizeof(params), &params),
+              "OpenCL neighborhood apply parameters");
+  CheckOpenCl(clSetKernelArg(kernel, 14, sizeof(width), &width), "OpenCL neighborhood width");
+  CheckOpenCl(clSetKernelArg(kernel, 15, sizeof(height), &height), "OpenCL neighborhood height");
+  const auto radius            = NeighborhoodVerticalRadius(params);
+  constexpr std::size_t kLocal = 8;
+  const auto local_bytes = kLocal * (kLocal + 2U * radius) * 4U * sizeof(float);
+  CheckOpenCl(clSetKernelArg(kernel, 16, local_bytes, nullptr),
+              "OpenCL neighborhood local tile argument");
+  EnqueueOpenClNeighborRange(device, kernel, width, height, kLocal);
 }
 
 }  // namespace alcedo

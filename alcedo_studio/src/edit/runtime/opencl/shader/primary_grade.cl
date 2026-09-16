@@ -256,3 +256,53 @@ __kernel void primary_grade_mix_masked_rgba32f(__read_only image2d_t  source,
   const float  mix = clamp(grade_mix * read_imagef(mask, kNearestClamp, gid).x, 0.0f, 1.0f);
   write_imagef(dst, gid, (float4)(s.xyz + (a.xyz - s.xyz) * mix, s.w));
 }
+
+static inline float4 SceneReadRgba(read_only image2d_t image, __global const float4* buffer,
+                                   int is_buffer, int2 gid, uint width) {
+  if (is_buffer != 0) {
+    return buffer[(uint)gid.y * width + (uint)gid.x];
+  }
+  return read_imagef(image, kNearestClamp, gid);
+}
+
+static inline void SceneWriteRgba(write_only image2d_t image, __global float4* buffer, int is_buffer,
+                                  int2 gid, uint width, float4 value) {
+  if (is_buffer != 0) {
+    buffer[(uint)gid.y * width + (uint)gid.x] = value;
+    return;
+  }
+  write_imagef(image, gid, value);
+}
+
+__kernel void primary_grade_pointwise_scene_rgba32f(
+    __read_only image2d_t src_image, __global const float4* src_buffer, int src_is_buffer,
+    __write_only image2d_t dst_image, __global float4* dst_buffer, int dst_is_buffer,
+    __read_only image2d_t mix_image, __global const float4* mix_buffer, int mix_is_buffer,
+    __read_only image2d_t mask, int has_mask, float grade_mix, uint height,
+    __global const uchar* parameter_base, __global const uint* commands,
+    PrimaryGradeDispatchParams dispatch, __global const float4* lut) {
+  const int2 gid = (int2)((int)get_global_id(0), (int)get_global_id(1));
+  if (gid.x >= (int)dispatch.width || gid.y >= (int)height) {
+    return;
+  }
+  const float4 source = SceneReadRgba(src_image, src_buffer, src_is_buffer, gid, dispatch.width);
+  float3       c      = source.xyz;
+  for (uint i = 0u; i < dispatch.command_count; ++i) {
+    const uint offset = commands[dispatch.command_offset + i];
+    __global const GradeAdjustmentParams* params =
+        (__global const GradeAdjustmentParams*)(parameter_base + offset);
+    c = ApplyAdjustment(c, params, lut, dispatch.lut_edge);
+  }
+  float4 adjusted = (float4)(c.x, c.y, c.z, source.w);
+  if (mix_is_buffer >= 0) {
+    const float4 original =
+        SceneReadRgba(mix_image, mix_buffer, mix_is_buffer, gid, dispatch.width);
+    float mix = grade_mix;
+    if (has_mask != 0) {
+      mix *= read_imagef(mask, kNearestClamp, gid).x;
+    }
+    mix      = clamp(mix, 0.0f, 1.0f);
+    adjusted = (float4)(original.xyz + (adjusted.xyz - original.xyz) * mix, original.w);
+  }
+  SceneWriteRgba(dst_image, dst_buffer, dst_is_buffer, gid, dispatch.width, adjusted);
+}

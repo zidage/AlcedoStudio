@@ -406,6 +406,7 @@ void OpenClOpenGlLeaseAdapter::DestroyTarget(const WritableTargetLease& lease) {
     (void)clFinish(OpenClContext::Instance().ProductQueue());
     target->acquired = false;
   }
+  FinishOpenGlBeforeOpenClSharedTextureReuse();
   if (target->image) {
     clReleaseMemObject(target->image);
     target->image = nullptr;
@@ -501,6 +502,20 @@ auto OpenClOpenGlLeaseAdapter::WaitProducerWriteComplete(const WritableTargetLea
 #else
   (void)lease;
   return false;
+#endif
+}
+
+void FinishOpenGlBeforeOpenClSharedTextureReuse() {
+#if defined(HAVE_OPENCL)
+  QOpenGLContext* context = QOpenGLContext::currentContext();
+  if (context == nullptr) {
+    return;
+  }
+  QOpenGLFunctions* functions = context->functions();
+  if (functions == nullptr) {
+    return;
+  }
+  functions->glFinish();
 #endif
 }
 

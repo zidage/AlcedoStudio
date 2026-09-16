@@ -124,6 +124,7 @@ class MetalBackend {
 
   using Slab           = Buffer;
   using CommandContext = MetalCommandContext;
+  using SceneWorkImage = Texture2D;
 
   MetalBackend();
   ~MetalBackend();
@@ -134,6 +135,16 @@ class MetalBackend {
   [[nodiscard]] auto CreateSlab(std::size_t bytes) -> Buffer;
   [[nodiscard]] auto CreateTexture2D(std::uint32_t width, std::uint32_t height,
                                      TextureFormat format) -> Texture2D;
+  /**
+   * @brief Allocate one RGBA32Float scene-work member with shader read and write usage.
+   *
+   * Same storage as @ref CreateTexture2D. Owned by SceneWorkImagePair, not
+   * GraphImageCache or TexturePool.
+   */
+  [[nodiscard]] auto CreateSceneWorkImage(std::uint32_t width, std::uint32_t height)
+      -> SceneWorkImage {
+    return CreateTexture2D(width, height, TextureFormat::Rgba32f);
+  }
 
   /**
    * @brief Create a scratch buffer owned until the recorded command buffer is finished.

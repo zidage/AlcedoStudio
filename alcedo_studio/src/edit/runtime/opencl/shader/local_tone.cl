@@ -356,3 +356,120 @@ __kernel void local_tone_apply(__read_only image2d_t src, __write_only image2d_t
   write_imagef(dst, (int2)(x, y), (float4)(AcesccEncode(r), AcesccEncode(g), AcesccEncode(b),
                                              pixel.w));
 }
+
+static inline float4 SceneReadRgbaAt(read_only image2d_t image, __global const float4* buffer,
+                                     int is_buffer, int2 coord, int width, int height) {
+  coord.x = clamp(coord.x, 0, width - 1);
+  coord.y = clamp(coord.y, 0, height - 1);
+  if (is_buffer != 0) {
+    return buffer[(uint)coord.y * (uint)width + (uint)coord.x];
+  }
+  return read_imagef(image, kNearestClamp, coord);
+}
+
+static inline float4 SceneReadRgbaBilinear(read_only image2d_t image, __global const float4* buffer,
+                                           int is_buffer, int width, int height, float x, float y) {
+  x = fmin(fmax(x, 0.0f), (float)(width - 1));
+  y = fmin(fmax(y, 0.0f), (float)(height - 1));
+  const int   x0 = (int)floor(x);
+  const int   y0 = (int)floor(y);
+  const int   x1 = min(x0 + 1, width - 1);
+  const int   y1 = min(y0 + 1, height - 1);
+  const float tx = x - (float)x0;
+  const float ty = y - (float)y0;
+  const float4 a = SceneReadRgbaAt(image, buffer, is_buffer, (int2)(x0, y0), width, height);
+  const float4 b = SceneReadRgbaAt(image, buffer, is_buffer, (int2)(x1, y0), width, height);
+  const float4 c = SceneReadRgbaAt(image, buffer, is_buffer, (int2)(x0, y1), width, height);
+  const float4 d = SceneReadRgbaAt(image, buffer, is_buffer, (int2)(x1, y1), width, height);
+  return mix(mix(a, b, tx), mix(c, d, tx), ty);
+}
+
+__kernel void local_tone_extract_scene(__read_only image2d_t src_image,
+                                       __global const float4* src_buffer, int src_is_buffer,
+                                       __global float* dst, ExtractParams params, uint dst_offset) {
+  const int x = (int)get_global_id(0);
+  const int y = (int)get_global_id(1);
+  if (x >= params.output_width || y >= params.output_height) {
+    return;
+  }
+  const float sx = ((float)x + 0.5f) * (float)params.input_width / (float)params.output_width - 0.5f;
+  const float sy =
+      ((float)y + 0.5f) * (float)params.input_height / (float)params.output_height - 0.5f;
+  dst[dst_offset + (uint)y * (uint)params.output_width + (uint)x] = LogIntensity(SceneReadRgbaBilinear(
+      src_image, src_buffer, src_is_buffer, params.input_width, params.input_height, sx, sy));
+}
+
+__kernel void local_tone_extract_reference_scene(__read_only image2d_t src_image,
+                                                 __global const float4* src_buffer, int src_is_buffer,
+                                                 __global float* dst, ExtractReferenceParams params,
+                                                 uint dst_offset) {
+  const int x = (int)get_global_id(0);
+  const int y = (int)get_global_id(1);
+  if (x >= params.output_width || y >= params.output_height) {
+    return;
+  }
+  const float  u      = ((float)x + 0.5f) / (float)params.output_width;
+  const float  v      = ((float)y + 0.5f) / (float)params.output_height;
+  const float2 source = Transform(params.reference_to_render, u * params.full_ref_w,
+                                  v * params.full_ref_h);
+  dst[dst_offset + (uint)y * (uint)params.output_width + (uint)x] =
+      LogIntensity(SceneReadRgbaBilinear(src_image, src_buffer, src_is_buffer, params.input_width,
+                                         params.input_height, source.x - 0.5f, source.y - 0.5f));
+}
+
+__kernel void local_tone_apply_scene(__global float4* working,
+                                     __read_only image2d_t mix_image,
+                                     __global const float4* mix_buffer, int mix_is_buffer,
+                                     __read_only image2d_t mask, int has_mask, float grade_mix,
+                                     __global const float* reference, __global const float* adjusted,
+                                     ApplyParams params, uint reference_offset,
+                                     uint adjusted_offset) {
+  const int x = (int)get_global_id(0);
+  const int y = (int)get_global_id(1);
+  if (x >= params.width || y >= params.height) {
+    return;
+  }
+  const float2 uv = Transform(params.render_to_uv, (float)x + 0.5f, (float)y + 0.5f);
+  const float  ax = uv.x * (float)params.adjusted_width - 0.5f;
+  const float  ay = uv.y * (float)params.adjusted_height - 0.5f;
+  const float  reference_l =
+      Bilinear(reference, reference_offset, params.adjusted_width, params.adjusted_height, ax, ay);
+  const float adjusted_l =
+      Bilinear(adjusted, adjusted_offset, params.adjusted_width, params.adjusted_height, ax, ay);
+  const uint   index = (uint)y * (uint)params.width + (uint)x;
+  const float4 pixel = working[index];
+  const float  source_l = LogIntensity(pixel);
+  const float  source_intensity = fmax(AcesccDecode(source_l), 1.0e-5f);
+  const float  target_intensity = AcesccDecode(source_l + adjusted_l - reference_l);
+  const float  ratio = fmin(fmax(target_intensity / source_intensity, 0.0f), 32.0f);
+  float        r = AcesccDecode(pixel.x) * ratio;
+  float        g = AcesccDecode(pixel.y) * ratio;
+  float        b = AcesccDecode(pixel.z) * ratio;
+  const float  kLower = -1.0e-5f;
+  float        gamut_scale = 1.0f;
+  if (r < kLower && target_intensity > r) {
+    gamut_scale = fmin(gamut_scale, (target_intensity - kLower) / (target_intensity - r));
+  }
+  if (g < kLower && target_intensity > g) {
+    gamut_scale = fmin(gamut_scale, (target_intensity - kLower) / (target_intensity - g));
+  }
+  if (b < kLower && target_intensity > b) {
+    gamut_scale = fmin(gamut_scale, (target_intensity - kLower) / (target_intensity - b));
+  }
+  gamut_scale = fmin(fmax(gamut_scale, 0.0f), 1.0f);
+  r = target_intensity + (r - target_intensity) * gamut_scale;
+  g = target_intensity + (g - target_intensity) * gamut_scale;
+  b = target_intensity + (b - target_intensity) * gamut_scale;
+  float4 tone = (float4)(AcesccEncode(r), AcesccEncode(g), AcesccEncode(b), pixel.w);
+  if (mix_is_buffer >= 0) {
+    const float4 original = SceneReadRgbaAt(mix_image, mix_buffer, mix_is_buffer, (int2)(x, y),
+                                            params.width, params.height);
+    float mix = grade_mix;
+    if (has_mask != 0) {
+      mix *= read_imagef(mask, kNearestClamp, (int2)(x, y)).x;
+    }
+    mix  = clamp(mix, 0.0f, 1.0f);
+    tone = (float4)(original.xyz + (tone.xyz - original.xyz) * mix, original.w);
+  }
+  working[index] = tone;
+}

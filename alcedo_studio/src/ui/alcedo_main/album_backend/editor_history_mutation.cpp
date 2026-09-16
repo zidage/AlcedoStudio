@@ -47,6 +47,14 @@ void SyncUnsettledPreviewFlag(HistoryWorkingState& state) {
     const auto* develop = document.Develop();
     return develop != nullptr && develop->Id() == projection_node;
   }
+  if (target.owner_kind == EditorParameterOwnerKind::DrtPost) {
+    const auto* drt = document.Drt();
+    if (drt != nullptr && projection_node == drt->Id()) {
+      return true;
+    }
+    return dynamic_cast<const ColorGradeNodeModel*>(document.Graph().FindNode(projection_node)) !=
+           nullptr;
+  }
   return target.node_id == projection_node;
 }
 

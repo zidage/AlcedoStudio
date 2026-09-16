@@ -169,7 +169,10 @@ auto FormatPreviewSlowest(const PreviewRequestRecord& record) -> std::string {
   if (record.has_resources) {
     out << " | texture_mb=" << FormatPreviewMegabytes(record.resources.texture_used_bytes)
         << " peak_mb=" << FormatPreviewMegabytes(record.resources.texture_peak_used_bytes)
-        << " allocs=" << record.resources.texture_allocation_count;
+        << " allocs=" << record.resources.texture_allocation_count
+        << " scene_work_mb="
+        << FormatPreviewMegabytes(record.resources.scene_work_used_bytes)
+        << " scene_work_allocs=" << record.resources.scene_work_allocation_count;
   }
   return out.str();
 }

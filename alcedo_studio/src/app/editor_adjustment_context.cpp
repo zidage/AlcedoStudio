@@ -222,7 +222,8 @@ auto AdjustmentFieldIsSupported(EditorNodeKind kind, std::string_view field_key)
     case EditorNodeKind::Develop:
       return IsDevelopField(field_key);
     case EditorNodeKind::ColorGrade:
-      return IsColorGradeField(field_key);
+      // Look panel is Color Grade owned and also hosts the four DRT/Post sliders.
+      return IsColorGradeField(field_key) || IsDrtPostField(field_key);
     case EditorNodeKind::Drt:
       return field_key == "odt" || IsDrtPostField(field_key);
   }
@@ -281,9 +282,9 @@ auto CompleteSelectedNodeParameterTarget(const PipelineDocument& document,
     return std::nullopt;
   }
   if (IsDrtPostField(target.field_key)) {
-    const auto* drt = dynamic_cast<const DrtNodeModel*>(node);
+    const auto* drt = document.Drt();
     if (drt == nullptr) {
-      SetError(error, "DRT node is missing: " + std::string(selected_node_id.Value()));
+      SetError(error, "DRT node is missing");
       return std::nullopt;
     }
     const auto* instance = drt->FindAdjustmentIdByType(*type);
@@ -292,7 +293,7 @@ auto CompleteSelectedNodeParameterTarget(const PipelineDocument& document,
       return std::nullopt;
     }
     target.owner_kind             = EditorParameterOwnerKind::DrtPost;
-    target.node_id                = selected_node_id;
+    target.node_id                = drt->Id();
     target.adjustment_instance_id = *instance;
     return target;
   }

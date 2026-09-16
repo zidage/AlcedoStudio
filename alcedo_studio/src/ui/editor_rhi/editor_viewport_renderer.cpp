@@ -18,6 +18,7 @@
 #include "ui/editor_rhi/direct_frame_sink.hpp"
 #include "ui/editor_rhi/editor_backend.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
+#include "ui/editor_rhi/lease_target_adapters.hpp"
 #include "ui/editor_rhi/native_resource_counters.hpp"
 #include "utils/diagnostics/app_logging.hpp"
 #include "utils/diagnostics/render_e2e_timing.hpp"
@@ -161,6 +162,15 @@ void EditorViewportRenderer::releaseLayer(LayerState& layer) {
     destroyResource(shader_resource_bindings_);
     bound_primary_texture_ = nullptr;
     bound_detail_texture_  = nullptr;
+  }
+  // OpenCL/GL: the three-slot queue recycles this native texture on the next
+  // producer write (second node switch, or Add Mask releasing an auxiliary
+  // layer). CompleteRendererRead only drops the CPU import; glFinish waits for
+  // the previous scene-graph sample before OpenCL may acquire the texture.
+  const bool wait_gl_before_recycle =
+      backend_ == EditorBackend::OpenCl && layer.imported && layer.slot_index >= 0;
+  if (wait_gl_before_recycle) {
+    FinishOpenGlBeforeOpenClSharedTextureReuse();
   }
   destroyResource(layer.texture);
   if (layer.imported) {

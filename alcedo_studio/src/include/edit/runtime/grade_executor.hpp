@@ -16,6 +16,7 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/prepared_raw_input.hpp"
 #include "edit/runtime/execution_plan.hpp"
+#include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/grade_schedule.hpp"
 #include "edit/runtime/neighbor_executor.hpp"
 #include "edit/runtime/parameter_arena.hpp"
@@ -28,10 +29,12 @@ namespace alcedo {
  * @brief Shared Grade encode outcome used by CUDA, OpenCL, and Metal wrappers.
  *
  * Backend result structs copy these fields. Dispatch counts are optional and stay 0
- * when a backend does not track them.
+ * when a backend does not track them. @ref output_binding is the physical scene
+ * location after this Grade; @ref output remains the compiled logical GraphValueId.
  */
 struct GradeExecutionResult {
   GraphValueId         output{NodeId{""}, PortId{"image"}};
+  FrameSceneBinding    output_binding{};
   std::uint64_t        lut_resource_id                        = 0;
   std::uint64_t        local_tone_reference_resource_id       = 0;
   bool                 local_tone_rebuilt_reference           = false;
@@ -47,12 +50,11 @@ struct GradeExecutionResult {
 /**
  * @brief Common Color Grade Point, Neighborhood, mix, and Local Laplacian order.
  *
- * @tparam Ops Backend operations: allocation, fused-command upload, dispatch, and
- *         native error reporting. Shared code owns compiler-stage order, ping-pong,
- *         Neighbor scratch lifetime, and destination choice.
+ * @tparam Ops Backend operations: fused-command upload, dispatch, and native error
+ *         reporting. Shared code owns compiler-stage order, the two scene-work
+ *         members, Neighbor scratch lifetime, and Mix fusion into the last write.
  *
- * @pre Ops::Device exposes Workspace() with IsRendering, Parameters, and Images.
- *      Ops static methods are documented at each call site below.
+ * @pre Ops::Device exposes Workspace() with IsRendering, Parameters, and SceneWork.
  */
 template <class Ops>
 class GradeExecutor {
@@ -62,12 +64,13 @@ class GradeExecutor {
   /**
    * @brief Encode one compiled Color Grade with shared host decisions.
    *
-   * Disabled or zero-mix Grades alias the input. A failed dispatch throws after
-   * Ops::CheckAfterEncode; unpublished canonical LLF writes stay unpublished.
+   * Disabled or zero-mix Grades return @p scene without a pixel copy. A failed
+   * dispatch throws after Ops::CheckAfterEncode; unpublished canonical LLF writes
+   * stay unpublished. Grade scene_output is never acquired or published.
    */
   static auto Execute(Device& device, const ExecutionPlan& plan, const PreparedRawInput& prepared,
-                      PipelineDocument& document, const CompiledGradeNode& compiled_grade)
-      -> GradeExecutionResult {
+                      PipelineDocument& document, const CompiledGradeNode& compiled_grade,
+                      const FrameSceneBinding& scene) -> GradeExecutionResult {
     (void)prepared;
     auto& workspace = device.Workspace();
     if (!workspace.IsRendering()) {
@@ -78,14 +81,11 @@ class GradeExecutor {
     if (grade == nullptr) {
       throw std::runtime_error(std::string{Ops::kErrorPrefix} + ": compiled Color Grade is missing");
     }
-    auto* input = workspace.Images().Find(compiled_grade.scene_input);
-    if (input == nullptr || input->Empty()) {
-      throw std::runtime_error(std::string{Ops::kErrorPrefix} + ": missing Color Grade scene input");
-    }
 
     GradeExecutionResult result;
-    result.output = compiled_grade.scene_output;
-    auto& arena   = workspace.Parameters();
+    result.output          = compiled_grade.scene_output;
+    result.output_binding  = scene;
+    auto& arena            = workspace.Parameters();
     std::size_t slot_count = 0;
     for (const auto& compiled_node : plan.grade_nodes) {
       slot_count += compiled_node.adjustments.size();
@@ -99,7 +99,6 @@ class GradeExecutor {
     result.trace = MakeGradeDecisionTrace(schedule);
     if (schedule.alias_to_input) {
       diag::PreviewPerformance::SetPassState(diag::PreviewExecutionState::Aliased);
-      Ops::AliasOutput(device, compiled_grade.scene_output, compiled_grade.scene_input);
       return result;
     }
 
@@ -116,69 +115,24 @@ class GradeExecutor {
       fused_starts.push_back(static_cast<std::uint32_t>(fused_offsets.size()));
       fused_offsets.insert(fused_offsets.end(), op.fused_offsets.begin(), op.fused_offsets.end());
     }
-    result.command_upload_bytes =
-        Ops::UploadFusedCommands(device, grade->Id(), fused_offsets);
-    auto lut                 = Ops::LoadLut(device, *grade);
-    result.lut_resource_id   = Ops::LutResourceId(lut);
+    result.command_upload_bytes = Ops::UploadFusedCommands(device, grade->Id(), fused_offsets);
+    auto lut                    = Ops::LoadLut(device, *grade);
+    result.lut_resource_id      = Ops::LutResourceId(lut);
 
-    input = workspace.Images().Find(compiled_grade.scene_input);
-    if (input == nullptr) {
-      throw std::runtime_error(std::string{Ops::kErrorPrefix} +
-                               ": Color Grade scene input lost during parameter bind");
-    }
-    const auto width  = input->Texture().Width();
-    const auto height = input->Texture().Height();
-    const auto slots  = GradeWriteSlots(schedule.gpu_write_count);
-    const GraphValueId ping_id{grade->Id(), PortId{"runtime.ping"}};
-    const GraphValueId pong_id{grade->Id(), PortId{"runtime.pong"}};
-    bool need_ping = false;
-    bool need_pong = false;
-    for (const auto slot : slots) {
-      need_ping = need_ping || slot == GradeImageSlot::Ping;
-      need_pong = need_pong || slot == GradeImageSlot::Pong;
-    }
-    if (schedule.gpu_write_count > 0) {
-      (void)Ops::AcquireOutput(device, compiled_grade.scene_output, width, height);
-    }
-    if (need_ping) {
-      (void)Ops::AcquireScratch(device, width, height, ping_id);
-    }
-    if (need_pong) {
-      (void)Ops::AcquireScratch(device, width, height, pong_id);
-    }
+    const auto width  = Ops::BindingWidth(device, scene);
+    const auto height = Ops::BindingHeight(device, scene);
+    const auto dest   = DestinationWorkMember(scene);
+    const auto dest_binding = FrameSceneBinding::WorkImage(dest);
+    const float mix = grade->Enabled() ? grade->Mix() : 0.0f;
+    const bool  needs_mix = !schedule.skip_final_mix;
+    const GraphValueId* mask_id =
+        compiled_grade.mask_stack.has_value() ? &compiled_grade.mask_output : nullptr;
 
-    auto Resolve = [&](GradeImageSlot slot) -> typename Ops::Texture& {
-      switch (slot) {
-        case GradeImageSlot::Input:
-          return Ops::SceneTexture(device, compiled_grade.scene_input);
-        case GradeImageSlot::Output:
-          return Ops::SceneTexture(device, compiled_grade.scene_output);
-        case GradeImageSlot::Ping:
-          return Ops::SceneTexture(device, ping_id);
-        case GradeImageSlot::Pong:
-          return Ops::SceneTexture(device, pong_id);
-      }
-      throw std::runtime_error(std::string{Ops::kErrorPrefix} + ": invalid grade image slot");
-    };
-
-    auto SlotId = [&](GradeImageSlot slot) -> GraphValueId {
-      switch (slot) {
-        case GradeImageSlot::Input:
-          return compiled_grade.scene_input;
-        case GradeImageSlot::Output:
-          return compiled_grade.scene_output;
-        case GradeImageSlot::Ping:
-          return ping_id;
-        case GradeImageSlot::Pong:
-          return pong_id;
-      }
-      throw std::runtime_error(std::string{Ops::kErrorPrefix} + ": invalid grade image slot");
-    };
-
-    GradeImageSlot current = GradeImageSlot::Input;
+    bool wrote_dest = false;
     for (std::size_t index = 0; index < schedule.ops.size(); ++index) {
       const auto& op   = schedule.ops[index];
-      const auto  dest = slots[index];
+      const bool  last = index + 1 == schedule.ops.size();
+      const auto  src  = wrote_dest ? dest_binding : scene;
       if (op.kind == CompiledGradeStageKind::Neighborhood) {
         diag::PreviewSubStageInterval neighborhood(diag::PreviewSubStageKind::Neighborhood);
         GpuWorkSample<Device> gpu(device);
@@ -187,52 +141,45 @@ class GradeExecutor {
         work.owner         = grade->Id();
         work.fused_offset  = op.fused_offsets.empty() ? 0 : op.fused_offsets.front();
         work.command_index = fused_starts[index];
-        NeighborExecutor<Ops>::Execute(device, SlotId(current), SlotId(dest), lut, work, width,
-                                       height);
+        const float stage_mix          = last ? mix : 1.0f;
+        const GraphValueId* stage_mask = last && needs_mix ? mask_id : nullptr;
+        NeighborExecutor<Ops>::Execute(device, src, dest_binding, scene, lut, work, stage_mix,
+                                       stage_mask, width, height);
         ++result.detail_pass_count;
+        wrote_dest = true;
       } else if (op.kind == CompiledGradeStageKind::LocalLaplacian) {
-        auto&      src  = Resolve(current);
-        auto&      dst  = Resolve(dest);
+        const float stage_mix          = last ? mix : 1.0f;
+        const GraphValueId* stage_mask = last && needs_mix ? mask_id : nullptr;
         const auto tone =
-            Ops::ExecuteLocalTone(device, src, dst, grade->Id(), schedule.shadows_slider,
-                                  schedule.highlights_slider, plan.geometry);
+            Ops::ExecuteLocalTone(device, src, dest_binding, scene, grade->Id(),
+                                  schedule.shadows_slider, schedule.highlights_slider,
+                                  plan.geometry, stage_mix, stage_mask);
         result.local_tone_reference_resource_id       = tone.reference_resource_id;
         result.local_tone_rebuilt_reference           = tone.rebuilt_reference;
         result.local_tone_sampled_canonical_reference = tone.sampled_canonical_reference;
         result.local_tone_transient_bytes             = tone.transient_bytes;
         ++result.local_tone_pass_count;
+        wrote_dest = true;
       } else {
         diag::PreviewSubStageInterval pointwise(diag::PreviewSubStageKind::Pointwise);
         GpuWorkSample<Device> gpu(device);
-        auto& src = Resolve(current);
-        auto& dst = Resolve(dest);
-        Ops::DispatchPointwise(device, src, dst, lut, grade->Id(), fused_starts[index],
-                               static_cast<std::uint32_t>(op.fused_offsets.size()), width, height);
+        if (last && needs_mix) {
+          Ops::DispatchPointwiseWithMix(device, src, dest_binding, scene, lut, grade->Id(),
+                                        fused_starts[index],
+                                        static_cast<std::uint32_t>(op.fused_offsets.size()), mix,
+                                        mask_id, width, height);
+        } else {
+          Ops::DispatchPointwise(device, src, dest_binding, lut, grade->Id(), fused_starts[index],
+                                 static_cast<std::uint32_t>(op.fused_offsets.size()), width,
+                                 height);
+        }
         ++result.pointwise_dispatch_count;
+        wrote_dest = true;
       }
-      current = dest;
     }
 
-    if (!schedule.skip_final_mix) {
-      diag::PreviewSubStageInterval mix_stage(diag::PreviewSubStageKind::Mix);
-      GpuWorkSample<Device> gpu(device);
-      const auto dest                    = slots.back();
-      auto&      source                  = Resolve(GradeImageSlot::Input);
-      auto&      adjusted                = Resolve(current);
-      auto&      destination             = Resolve(dest);
-      const typename Ops::Texture* mask = nullptr;
-      if (compiled_grade.mask_stack.has_value()) {
-        mask = Ops::MaskTexture(device, compiled_grade.mask_output, width, height);
-      }
-      const float mix = grade->Enabled() ? grade->Mix() : 0.0f;
-      Ops::DispatchMix(device, source, adjusted, destination, mix, mask, width, height);
-    }
     Ops::CheckAfterEncode(device);
-    // Last readers are now ordered before the next Grade. Release only scratch
-    // leases so later stages can reuse the pair without a device synchronization.
-    // On an encode failure the render owner's cancellation discards all writes.
-    workspace.ReleaseConsumedImage(ping_id);
-    workspace.ReleaseConsumedImage(pong_id);
+    result.output_binding = dest_binding;
     return result;
   }
 };

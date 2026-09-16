@@ -11,6 +11,7 @@
 #include <limits>
 #include <sstream>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 #include "decoders/processor/operators/gpu/opencl_raw_programs.hpp"
@@ -326,6 +327,16 @@ OpenClBackend::~OpenClBackend() {
   neural_workspace_.reset();
   dummy_lut_.Reset();
   lut_cache_.clear();
+  auto release_dummy = [](cl_mem& native) {
+    if (native != nullptr) {
+      clReleaseMemObject(native);
+      native = nullptr;
+    }
+  };
+  release_dummy(dummy_scene_read_image_);
+  release_dummy(dummy_scene_write_image_);
+  release_dummy(dummy_scene_read_buffer_);
+  release_dummy(dummy_scene_write_buffer_);
 }
 
 void OpenClBackend::UnregisterBuffer(cl_mem native) noexcept {
@@ -416,6 +427,70 @@ auto OpenClBackend::CreateTexture2D(std::uint32_t width, std::uint32_t height, T
   NoteOpenClCreateImage();
   NoteTextureCreate();
   return Texture2D{this, native, bytes, width, height, format, next_resource_id_++};
+}
+
+auto OpenClBackend::MakeDummySceneImage(cl_mem_flags flags, const char* what) -> cl_mem {
+  const auto    image_format = ImageFormatFor(TextureFormat::Rgba32f);
+  cl_image_desc desc         = MakeImageDesc(1, 1);
+  cl_int        error        = CL_SUCCESS;
+  cl_mem        native = clCreateImage(context_, flags, &image_format, &desc, nullptr, &error);
+  CheckOpenCl(error, what);
+  if (native == nullptr) {
+    throw std::runtime_error(std::string(what) + ": clCreateImage returned null");
+  }
+  return native;
+}
+
+auto OpenClBackend::MakeDummySceneBuffer(cl_mem_flags flags, const char* what) -> cl_mem {
+  cl_int error  = CL_SUCCESS;
+  cl_mem native = clCreateBuffer(context_, flags, 16, nullptr, &error);
+  CheckOpenCl(error, what);
+  if (native == nullptr) {
+    throw std::runtime_error(std::string(what) + ": clCreateBuffer returned null");
+  }
+  return native;
+}
+
+auto OpenClBackend::DummySceneReadImage() -> cl_mem {
+  if (dummy_scene_read_image_ == nullptr) {
+    dummy_scene_read_image_ =
+        MakeDummySceneImage(CL_MEM_READ_ONLY, "OpenClBackend::DummySceneReadImage");
+  }
+  return dummy_scene_read_image_;
+}
+
+auto OpenClBackend::DummySceneWriteImage() -> cl_mem {
+  if (dummy_scene_write_image_ == nullptr) {
+    dummy_scene_write_image_ =
+        MakeDummySceneImage(CL_MEM_WRITE_ONLY, "OpenClBackend::DummySceneWriteImage");
+  }
+  return dummy_scene_write_image_;
+}
+
+auto OpenClBackend::DummySceneReadBuffer() -> cl_mem {
+  if (dummy_scene_read_buffer_ == nullptr) {
+    dummy_scene_read_buffer_ =
+        MakeDummySceneBuffer(CL_MEM_READ_ONLY, "OpenClBackend::DummySceneReadBuffer");
+  }
+  return dummy_scene_read_buffer_;
+}
+
+auto OpenClBackend::DummySceneWriteBuffer() -> cl_mem {
+  if (dummy_scene_write_buffer_ == nullptr) {
+    dummy_scene_write_buffer_ =
+        MakeDummySceneBuffer(CL_MEM_WRITE_ONLY, "OpenClBackend::DummySceneWriteBuffer");
+  }
+  return dummy_scene_write_buffer_;
+}
+
+auto OpenClBackend::CreateSceneWorkImage(std::uint32_t width, std::uint32_t height)
+    -> SceneWorkImage {
+  const auto bytes =
+      static_cast<std::size_t>(width) * height * TextureFormatBytesPerPixel(TextureFormat::Rgba32f);
+  if (bytes == 0) {
+    return {};
+  }
+  return SceneWorkImage{CreateBuffer(bytes), width, height};
 }
 
 void OpenClBackend::UploadBufferRange(Buffer& buffer, std::uint32_t offset,

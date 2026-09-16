@@ -285,6 +285,55 @@ TEST(DirectPresentQueueRequestIdTest, ConsumeNewestReadyPrefersHigherRequestId) 
   EXPECT_EQ(frame->slot.preview_metadata.presentation_request_id, 2u);
 }
 
+TEST(DirectPresentQueueRequestIdTest, ThirdInteractivePresentReusesFirstDisplayedSlot) {
+  using editor_rhi::DirectPresentQueue;
+  using editor_rhi::EditorBackend;
+  using editor_rhi::LeaseNativeHandleKind;
+  using editor_rhi::LeaseWritableResourceKind;
+
+  DirectPresentQueue queue(EditorBackend::OpenCl);
+  queue.SetConsumerAvailable(true);
+  queue.InvalidateSessionEpoch(1, 42);
+
+  const auto present_interactive = [&](std::uintptr_t handle) {
+    constexpr int width    = 1600;
+    constexpr int height   = 900;
+    const auto    prepared = queue.PrepareWrite(width, height, 1, 42);
+    EXPECT_TRUE(prepared.ok);
+    if (prepared.need_create) {
+      DirectPresentQueue::SlotNative native{};
+      native.backend           = EditorBackend::OpenCl;
+      native.handle_kind       = LeaseNativeHandleKind::OpenGLTexture2D;
+      native.writable_kind     = LeaseWritableResourceKind::OpenClImage;
+      native.native_handle     = handle;
+      native.writable_resource = handle + 100;
+      EXPECT_TRUE(queue.PublishCreatedSlot(prepared.slot_index, width, height, native, 1, 42));
+    }
+    EXPECT_TRUE(queue.BeginWrite(prepared.slot_index).has_value());
+    queue.EndWrite(prepared.slot_index);
+    FramePreviewMetadata metadata{};
+    metadata.frame_role = FrameRole::InteractivePrimary;
+    queue.NotifyReady(prepared.slot_index, FramePresentationMode::FullFrame, metadata);
+    return prepared.slot_index;
+  };
+
+  const int  first_slot      = present_interactive(1);
+  const auto first_displayed = queue.ConsumeNewestReady(FrameRole::InteractivePrimary, 1, 42);
+  ASSERT_TRUE(first_displayed.has_value());
+  EXPECT_EQ(first_displayed->slot.index, first_slot);
+
+  const int second_slot = present_interactive(2);
+  EXPECT_NE(second_slot, first_slot);
+  queue.CompleteRendererRead(first_slot);
+  const auto second_displayed = queue.ConsumeNewestReady(FrameRole::InteractivePrimary, 1, 42);
+  ASSERT_TRUE(second_displayed.has_value());
+  EXPECT_EQ(second_displayed->slot.index, second_slot);
+
+  const int third_slot = present_interactive(1);
+  EXPECT_EQ(third_slot, first_slot);
+  queue.CompleteRendererRead(second_slot);
+}
+
 TEST(PipelineSchedulerRequestIdTest, EditorRenderFailureForwardsExceptionMessageInsteadOfEmptyResult) {
   RegisterAllOperators();
   auto exec = std::make_shared<CPUPipelineExecutor>();

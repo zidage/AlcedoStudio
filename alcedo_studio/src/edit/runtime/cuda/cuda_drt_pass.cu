@@ -26,8 +26,10 @@
 #include "edit/runtime/adjustment_runtime.hpp"
 #include "edit/runtime/aces_reference_gamut_compression.h"
 #include "edit/runtime/cuda/cuda_drt_pass.hpp"
+#include "edit/runtime/cuda/cuda_scene_work.hpp"
 #include "edit/runtime/drt_display.hpp"
 #include "edit/runtime/drt_post_executor.hpp"
+#include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/parameter_arena.hpp"
 #include "edit/runtime/parameter_binding.hpp"
 #include "edit/runtime/texture_format.hpp"
@@ -86,52 +88,50 @@ struct CudaDrtOps {
     return device.Workspace().Device().DummyLut();
   }
 
+  static auto BindingWidth(CudaRenderDevice& device, const FrameSceneBinding& binding)
+      -> std::uint32_t {
+    return CudaSceneWidth(device, binding);
+  }
+
+  static auto BindingHeight(CudaRenderDevice& device, const FrameSceneBinding& binding)
+      -> std::uint32_t {
+    return CudaSceneHeight(device, binding);
+  }
+
   static auto AcquireHorizontalScratch(CudaRenderDevice& device, std::uint32_t width,
                                        std::uint32_t height) -> HorizontalScratch {
     return device.Workspace().Textures().Acquire({width, height, TextureFormat::Rgba32f});
   }
 
-  static auto HorizontalScratchTexture(HorizontalScratch& scratch) -> Texture& {
-    return scratch.Texture();
-  }
-
-  static void DispatchHorizontal(CudaRenderDevice& device, const Texture& src, Texture& blur,
-                                 const NeighborWork& work, std::uint32_t width,
-                                 std::uint32_t height) {
+  static void DispatchHorizontal(CudaRenderDevice& device, const FrameSceneBinding& src,
+                                 HorizontalScratch& scratch, const NeighborWork& work,
+                                 std::uint32_t width, std::uint32_t height) {
+    auto& src_tex = CudaSceneTexture(device, src);
     cuda_neighbor_grade::LaunchBlurHorizontal(
-        device.CommandContext().Stream(), static_cast<const float4*>(src.DevicePointer()),
-        static_cast<float4*>(blur.DevicePointer()), static_cast<int>(width),
+        device.CommandContext().Stream(), static_cast<const float4*>(src_tex.DevicePointer()),
+        static_cast<float4*>(scratch.Texture().DevicePointer()), static_cast<int>(width),
         static_cast<int>(height), work.params);
   }
 
-  static void DispatchVerticalApply(CudaRenderDevice& device, const Texture& src, const Texture& blur,
-                                    Texture& dst, const LutBinding&, const NeighborWork& work,
+  static void DispatchVerticalApply(CudaRenderDevice& device, const FrameSceneBinding& src,
+                                    HorizontalScratch& scratch, const FrameSceneBinding& dst,
+                                    const FrameSceneBinding& original, const LutBinding&,
+                                    const NeighborWork& work, float mix, const GraphValueId*,
                                     std::uint32_t width, std::uint32_t height) {
+    auto& src_tex  = CudaSceneTexture(device, src);
+    auto& dst_tex  = CudaSceneTexture(device, dst);
+    auto& orig_tex = CudaSceneTexture(device, original);
     cuda_neighbor_grade::LaunchApplyVertical(
-        device.CommandContext().Stream(), static_cast<const float4*>(src.DevicePointer()),
-        static_cast<const float4*>(blur.DevicePointer()), static_cast<float4*>(dst.DevicePointer()),
-        static_cast<int>(width), static_cast<int>(height), work.params);
+        device.CommandContext().Stream(), static_cast<const float4*>(src_tex.DevicePointer()),
+        static_cast<const float4*>(scratch.Texture().DevicePointer()),
+        static_cast<float4*>(dst_tex.DevicePointer()),
+        static_cast<const float4*>(orig_tex.DevicePointer()), mix, nullptr, static_cast<int>(width),
+        static_cast<int>(height), work.params);
   }
 
-  static auto AcquireOutput(CudaRenderDevice& device, const GraphValueId& id, std::uint32_t width,
-                            std::uint32_t height) -> Texture& {
-    return device.Workspace()
-        .AcquireImageForWrite(id, {width, height, TextureFormat::Rgba32f})
-        .Texture();
-  }
-
-  static auto SceneTexture(CudaRenderDevice& device, const GraphValueId& id) -> Texture& {
-    auto* image = device.Workspace().Images().Find(id);
-    if (image == nullptr || image->Empty()) {
-      throw std::runtime_error("ExecuteCudaDrt: scene image is missing");
-    }
-    return image->Texture();
-  }
-
-  static void CopyTexture(CudaRenderDevice& device, const GraphValueId& src,
-                          const GraphValueId& dst) {
-    device.Workspace().Device().CopyTexture2D(SceneTexture(device, src), SceneTexture(device, dst),
-                                              device.CommandContext());
+  static void AcquireDisplayOutput(CudaRenderDevice& device, const GraphValueId& id,
+                                   std::uint32_t width, std::uint32_t height) {
+    (void)device.Workspace().AcquireImageForWrite(id, {width, height, TextureFormat::Rgba32f});
   }
 
   static void BindDisplayParams(CudaRenderDevice& device, const ExecutionPlan& plan,
@@ -156,9 +156,9 @@ struct CudaDrtOps {
     }
   }
 
-  static void DispatchDisplayTransform(CudaRenderDevice& device, const Texture& scene,
-                                       Texture& display, const NodeId& drt_id, std::uint32_t width,
-                                       std::uint32_t height) {
+  static void DispatchDisplayTransform(CudaRenderDevice& device, const FrameSceneBinding& scene,
+                                       const FrameSceneBinding& display, const NodeId& drt_id,
+                                       std::uint32_t width, std::uint32_t height) {
     auto&                  arena   = device.Workspace().Parameters();
     const ParameterSlotKey key{drt_id, AdjustmentInstanceId{"drt.output"}};
     const auto&            binding = arena.Binding(key);
@@ -166,9 +166,11 @@ struct CudaDrtOps {
         static_cast<const std::byte*>(arena.DeviceBuffer().DevicePointer()) + binding.offset);
     const std::uint32_t     pixels = width * height;
     constexpr std::uint32_t block  = 256;
+    auto& scene_tex   = CudaSceneTexture(device, scene);
+    auto& display_tex = CudaSceneTexture(device, display);
     DrtKernel<<<(pixels + block - 1) / block, block, 0, device.CommandContext().Stream()>>>(
-        static_cast<const float4*>(scene.DevicePointer()),
-        static_cast<float4*>(display.DevicePointer()), pixels, params);
+        static_cast<const float4*>(scene_tex.DevicePointer()),
+        static_cast<float4*>(display_tex.DevicePointer()), pixels, params);
   }
 
   static void CheckAfterEncode(CudaRenderDevice&) {
@@ -178,9 +180,9 @@ struct CudaDrtOps {
 
 }  // namespace
 
-auto ExecuteCudaDrt(CudaRenderDevice& device, const ExecutionPlan& plan, PipelineDocument& document)
-    -> CudaDrtResult {
-  const auto executed = DrtPostExecutor<CudaDrtOps>::Execute(device, plan, document);
+auto ExecuteCudaDrt(CudaRenderDevice& device, const ExecutionPlan& plan, PipelineDocument& document,
+                    const FrameSceneBinding& scene) -> CudaDrtResult {
+  const auto executed = DrtPostExecutor<CudaDrtOps>::Execute(device, plan, document, scene);
   return {executed.output, executed.display_post, executed.post_neighborhood_count};
 }
 

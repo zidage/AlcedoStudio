@@ -14,8 +14,10 @@
 #include <alcedo/metal/Metal.hpp>
 
 #include "edit/pipeline/local_tone_mapping.hpp"
+#include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/local_tone_cache_ids.hpp"
 #include "edit/runtime/local_tone_executor.hpp"
+#include "edit/runtime/metal/metal_scene_work.hpp"
 #include "edit/runtime/local_tone_plan.hpp"
 #include "edit/runtime/runtime_invalidation.hpp"
 #include "edit/runtime/texture_format.hpp"
@@ -202,9 +204,11 @@ void CopyMatrix(float* dst, const Matrix3x3& matrix) {
 }
 
 void EnqueueLlfApply(MetalRenderDevice& device, const MetalBackend::Texture2D& input,
-                   MetalBackend::Texture2D& output, const Plane& reference, const Plane& adjusted,
-                   std::uint32_t width, std::uint32_t height, int adjusted_width,
-                   int adjusted_height, const Matrix3x3& render_to_uv) {
+                   MetalBackend::Texture2D& output, const MetalBackend::Texture2D& original,
+                   const MetalBackend::Texture2D* mask, const Plane& reference,
+                   const Plane& adjusted, std::uint32_t width, std::uint32_t height,
+                   int adjusted_width, int adjusted_height, const Matrix3x3& render_to_uv,
+                   float mix) {
   auto*       encoder  = Encoder(device);
   auto        pipeline = Pipeline("local_tone_apply", "Metal LLF apply");
   ApplyParams params;
@@ -213,12 +217,19 @@ void EnqueueLlfApply(MetalRenderDevice& device, const MetalBackend::Texture2D& i
   params.adjusted_width  = adjusted_width;
   params.adjusted_height = adjusted_height;
   CopyMatrix(params.render_to_uv, render_to_uv);
+  const std::uint32_t apply_mix = (mix != 1.0f || mask != nullptr) ? 1u : 0u;
+  const std::uint32_t has_mask  = mask == nullptr ? 0u : 1u;
   encoder->setComputePipelineState(pipeline.get());
   encoder->setTexture(static_cast<MTL::Texture*>(input.Native()), 0);
   encoder->setTexture(static_cast<MTL::Texture*>(output.Native()), 1);
+  encoder->setTexture(static_cast<MTL::Texture*>(original.Native()), 2);
+  encoder->setTexture(static_cast<MTL::Texture*>((mask == nullptr ? input : *mask).Native()), 3);
   BindPlane(encoder, reference, 0);
   BindPlane(encoder, adjusted, 1);
   encoder->setBytes(&params, sizeof(params), 2);
+  encoder->setBytes(&mix, sizeof(mix), 3);
+  encoder->setBytes(&apply_mix, sizeof(apply_mix), 4);
+  encoder->setBytes(&has_mask, sizeof(has_mask), 5);
   DispatchThreads(encoder, pipeline.get(), static_cast<int>(width), static_cast<int>(height));
   device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
 }
@@ -230,8 +241,14 @@ struct MetalLocalToneOps {
 
   static constexpr const char* kErrorPrefix = "ExecuteMetalLocalTone";
 
-  static auto TextureWidth(const Texture& texture) -> std::uint32_t { return texture.Width(); }
-  static auto TextureHeight(const Texture& texture) -> std::uint32_t { return texture.Height(); }
+  static auto BindingWidth(MetalRenderDevice& device, const FrameSceneBinding& binding)
+      -> std::uint32_t {
+    return MetalSceneWidth(device, binding);
+  }
+  static auto BindingHeight(MetalRenderDevice& device, const FrameSceneBinding& binding)
+      -> std::uint32_t {
+    return MetalSceneHeight(device, binding);
+  }
   static auto TransientBytes(MetalRenderDevice& device) -> std::size_t {
     return device.Workspace().Device().RecordedWorkScratchBufferBytes();
   }
@@ -274,18 +291,32 @@ struct MetalLocalToneOps {
     return lookup;
   }
 
-  static void ApplyCanonicalSample(MetalRenderDevice& device, const Texture& input, Texture& output,
-                                   const GraphValueId& source_id, const GraphValueId& result_id,
-                                   const LocalToneDecision& decision, std::uint32_t width,
-                                   std::uint32_t height) {
+  static void ApplyCanonicalSampleAndMix(MetalRenderDevice& device,
+                                         const FrameSceneBinding& original,
+                                         const FrameSceneBinding& working,
+                                         const FrameSceneBinding& adjusted, const NodeId& grade_id,
+                                         float mix, const GraphValueId* mask_id,
+                                         const LocalToneDecision& decision, std::uint32_t width,
+                                         std::uint32_t height) {
+    const auto source_id = LocalToneSourceId(grade_id);
+    const auto result_id = LocalToneResultId(grade_id);
     auto* source = device.Workspace().Values().Find(source_id);
     auto* result = device.Workspace().Values().Find(result_id);
     if (source == nullptr || result == nullptr) {
       throw std::runtime_error("ExecuteMetalLocalTone: canonical sample lost published planes");
     }
-    EnqueueLlfApply(device, input, output, PlaneFromBuffer(*source), PlaneFromBuffer(*result), width,
-                    height, static_cast<int>(decision.mask_extent.width),
-                    static_cast<int>(decision.mask_extent.height), decision.apply_uv);
+    const Texture* mask = nullptr;
+    if (mask_id != nullptr) {
+      auto* lease = device.Workspace().Images().Find(*mask_id);
+      if (lease != nullptr) {
+        mask = &lease->Texture();
+      }
+    }
+    EnqueueLlfApply(device, MetalSceneTexture(device, adjusted), MetalSceneTexture(device, working),
+                    MetalSceneTexture(device, original), mask, PlaneFromBuffer(*source),
+                    PlaneFromBuffer(*result), width, height,
+                    static_cast<int>(decision.mask_extent.width),
+                    static_cast<int>(decision.mask_extent.height), decision.apply_uv, mix);
   }
 
   static auto CanonicalResourceId(MetalRenderDevice& device, const GraphValueId& source_id)
@@ -307,7 +338,7 @@ struct MetalLocalToneOps {
     return AllocateTransientPlane(device.Workspace(), bytes);
   }
 
-  static void ExtractReference(MetalRenderDevice& device, const Texture& input, Plane dest,
+  static void ExtractReference(MetalRenderDevice& device, const FrameSceneBinding& input, Plane dest,
                                std::uint32_t width, std::uint32_t height,
                                const LocalToneDecision& decision,
                                const ResolvedRenderGeometry& geometry) {
@@ -322,14 +353,14 @@ struct MetalLocalToneOps {
     params.full_ref_h    = static_cast<float>(geometry.full_reference_extent.height);
     CopyMatrix(params.reference_to_render, geometry.reference_to_render);
     encoder->setComputePipelineState(pipeline.get());
-    encoder->setTexture(static_cast<MTL::Texture*>(input.Native()), 0);
+    encoder->setTexture(static_cast<MTL::Texture*>(MetalSceneTexture(device, input).Native()), 0);
     BindPlane(encoder, dest, 0);
     encoder->setBytes(&params, sizeof(params), 1);
     DispatchThreads(encoder, pipeline.get(), decision.widths[0], decision.heights[0]);
     device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
   }
 
-  static void Extract(MetalRenderDevice& device, const Texture& input, Plane dest,
+  static void Extract(MetalRenderDevice& device, const FrameSceneBinding& input, Plane dest,
                       std::uint32_t width, std::uint32_t height, const LocalToneDecision& decision) {
     auto* encoder  = Encoder(device);
     auto  pipeline = Pipeline("local_tone_extract", "Metal LLF extract");
@@ -339,7 +370,7 @@ struct MetalLocalToneOps {
     params.output_width  = decision.widths[0];
     params.output_height = decision.heights[0];
     encoder->setComputePipelineState(pipeline.get());
-    encoder->setTexture(static_cast<MTL::Texture*>(input.Native()), 0);
+    encoder->setTexture(static_cast<MTL::Texture*>(MetalSceneTexture(device, input).Native()), 0);
     BindPlane(encoder, dest, 0);
     encoder->setBytes(&params, sizeof(params), 1);
     DispatchThreads(encoder, pipeline.get(), decision.widths[0], decision.heights[0]);
@@ -436,11 +467,22 @@ struct MetalLocalToneOps {
     device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
   }
 
-  static void ApplyAdjusted(MetalRenderDevice& device, const Texture& input, Texture& output,
-                            Plane reference, Plane adjusted, std::uint32_t width,
-                            std::uint32_t height, const LocalToneDecision& decision) {
-    EnqueueLlfApply(device, input, output, reference, adjusted, width, height, decision.widths[0],
-                    decision.heights[0], decision.apply_uv);
+  static void ApplyAdjustedAndMix(MetalRenderDevice& device, const FrameSceneBinding& original,
+                                  const FrameSceneBinding& working,
+                                  const FrameSceneBinding& adjusted, Plane reference, Plane tone,
+                                  float mix, const GraphValueId* mask_id, std::uint32_t width,
+                                  std::uint32_t height, int plane_width, int plane_height,
+                                  const Matrix3x3& apply_uv) {
+    const Texture* mask = nullptr;
+    if (mask_id != nullptr) {
+      auto* lease = device.Workspace().Images().Find(*mask_id);
+      if (lease != nullptr) {
+        mask = &lease->Texture();
+      }
+    }
+    EnqueueLlfApply(device, MetalSceneTexture(device, adjusted), MetalSceneTexture(device, working),
+                    MetalSceneTexture(device, original), mask, reference, tone, width, height,
+                    plane_width, plane_height, apply_uv, mix);
   }
 
   static void PersistCanonicalSource(MetalRenderDevice& device, Plane plane,
@@ -507,15 +549,14 @@ void AppendMetalLocalToneWarmup(std::vector<MetalPipelineWarmup>& pipelines) {
 #endif
 }
 
-auto ExecuteMetalLocalTone(MetalRenderDevice& device, const MetalBackend::Texture2D& input,
-                           MetalBackend::Texture2D& output, const NodeId& grade_id,
-                           float shadows_slider, float highlights_slider,
-                           const ResolvedRenderGeometry& geometry) -> MetalLocalToneResult {
-  if (input.Native() == nullptr || output.Native() == nullptr) {
-    throw std::runtime_error("ExecuteMetalLocalTone: missing input or output texture");
-  }
+auto ExecuteMetalLocalTone(MetalRenderDevice& device, const FrameSceneBinding& adjusted,
+                           const FrameSceneBinding& working, const FrameSceneBinding& original,
+                           const NodeId& grade_id, float shadows_slider, float highlights_slider,
+                           const ResolvedRenderGeometry& geometry, float mix,
+                           const GraphValueId* mask_id) -> MetalLocalToneResult {
   const auto executed = LocalToneExecutor<MetalLocalToneOps>::Execute(
-      device, input, output, grade_id, shadows_slider, highlights_slider, geometry);
+      device, adjusted, working, original, grade_id, shadows_slider, highlights_slider, geometry,
+      mix, mask_id);
   MetalLocalToneResult tone;
   tone.reference_resource_id       = executed.reference_resource_id;
   tone.rebuilt_reference           = executed.rebuilt_reference;

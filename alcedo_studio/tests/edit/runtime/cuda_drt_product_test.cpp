@@ -320,34 +320,35 @@ TEST_F(CudaDrtProductFixture, CudaDrtAces20ProducesFiniteDisplayReferredOutput) 
   EXPECT_TRUE(AllFiniteDisplayValues(Render(document)));
 }
 
-TEST_F(CudaDrtProductFixture, ChangingDrtPeakLuminanceKeepsDevelopAndGradeCacheValid) {
+TEST_F(CudaDrtProductFixture, ChangingDrtPeakLuminanceKeepsDevelopCacheAndReexecutesGrade) {
   auto document = CreateDefaultPipelineDocument();
   Render(document);
   auto* develop =
       device_.Workspace().Images().Find(GraphValueId{NodeId{"develop"}, PortId{"image"}});
-  auto* grade =
-      device_.Workspace().Images().Find(GraphValueId{NodeId{"grade.primary"}, PortId{"image"}});
   ASSERT_NE(develop, nullptr);
-  ASSERT_NE(grade, nullptr);
   const auto develop_id = develop->Texture().ResourceId();
-  const auto grade_id   = grade->Texture().ResourceId();
+  EXPECT_EQ(device_.Workspace().Images().Find(
+                GraphValueId{NodeId{"grade.primary"}, PortId{"image"}}),
+            nullptr);
 
   auto       params     = document.Drt()->Params().Params();
   params.peak_luminance = 200.0f;
   document.Drt()->Params().ReplaceParams(params);
+  device_.ResetPassStats();
   EXPECT_TRUE(AllFiniteDisplayValues(Render(document)));
+  EXPECT_EQ(device_.PassStats().sensor_develop_execute, 0U);
+  EXPECT_EQ(device_.PassStats().camera_color_execute, 0U);
+  EXPECT_EQ(device_.PassStats().primary_grade_execute, 1U);
+  EXPECT_EQ(device_.PassStats().drt_execute, 1U);
   EXPECT_EQ(device_.Workspace()
                 .Images()
                 .Find(GraphValueId{NodeId{"develop"}, PortId{"image"}})
                 ->Texture()
                 .ResourceId(),
             develop_id);
-  EXPECT_EQ(device_.Workspace()
-                .Images()
-                .Find(GraphValueId{NodeId{"grade.primary"}, PortId{"image"}})
-                ->Texture()
-                .ResourceId(),
-            grade_id);
+  EXPECT_EQ(device_.Workspace().Images().Find(
+                GraphValueId{NodeId{"grade.primary"}, PortId{"image"}}),
+            nullptr);
 }
 
 TEST_F(CudaDrtProductFixture, LegacyPipelineImportRendersSameCudaReferenceWithinTolerance) {

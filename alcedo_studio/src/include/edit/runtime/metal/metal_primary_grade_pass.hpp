@@ -12,12 +12,14 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/prepared_raw_input.hpp"
 #include "edit/runtime/execution_plan.hpp"
+#include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/metal/metal_backend.hpp"
 
 namespace alcedo {
 
 struct MetalPrimaryGradeResult {
-  GraphValueId  output{NodeId{""}, PortId{"image"}};
+  GraphValueId      output{NodeId{""}, PortId{"image"}};
+  FrameSceneBinding output_binding{};
   std::uint32_t pointwise_dispatch_count               = 0;
   std::uint32_t detail_pass_count                      = 0;
   std::uint32_t command_upload_bytes                   = 0;
@@ -39,7 +41,8 @@ struct MetalPrimaryGradeResult {
 [[nodiscard]] auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& plan,
                                             const PreparedRawInput& prepared,
                                             PipelineDocument& document,
-                                            const CompiledGradeNode& compiled_grade)
+                                            const CompiledGradeNode& compiled_grade,
+                                            const FrameSceneBinding& scene)
     -> MetalPrimaryGradeResult;
 
 /**

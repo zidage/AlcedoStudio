@@ -135,8 +135,12 @@ struct PreviewResourceSnapshot {
   std::size_t   transient_capacity_bytes = 0;
   std::size_t   published_image_count    = 0;
   std::size_t   write_image_count        = 0;
-  std::size_t   value_bytes              = 0;
-  std::size_t   value_count              = 0;
+  std::size_t   value_bytes               = 0;
+  std::size_t   value_count               = 0;
+  std::size_t   scene_work_member_count   = 0;
+  std::size_t   scene_work_used_bytes     = 0;
+  std::size_t   scene_work_peak_used_bytes = 0;
+  std::uint64_t scene_work_allocation_count = 0;
   std::size_t   device_used_bytes        = 0;
   std::size_t   device_free_bytes        = 0;
   std::size_t   device_total_bytes       = 0;

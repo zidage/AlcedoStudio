@@ -149,6 +149,47 @@ class OpenClBackend {
     std::uint64_t  resource_id_ = 0;
   };
 
+  /**
+   * @brief RGBA32F row-major buffer used only as a scene-work member.
+   *
+   * Not an image-backed Texture2D. Cached Develop/Geometry/Camera Color/Mask/
+   * display textures stay on Texture2D. Width and height are stored here because
+   * a generic Buffer has no image geometry.
+   */
+  class SceneWorkImage {
+   public:
+    SceneWorkImage() = default;
+    SceneWorkImage(Buffer buffer, std::uint32_t width, std::uint32_t height)
+        : buffer_(std::move(buffer)), width_(width), height_(height) {}
+
+    SceneWorkImage(const SceneWorkImage&)                    = delete;
+    auto operator=(const SceneWorkImage&) -> SceneWorkImage& = delete;
+    SceneWorkImage(SceneWorkImage&&)                         = default;
+    auto operator=(SceneWorkImage&&) -> SceneWorkImage&      = default;
+
+    [[nodiscard]] auto Native() const -> cl_mem { return buffer_.Native(); }
+    [[nodiscard]] auto DevicePointer() const -> void* { return buffer_.DevicePointer(); }
+    [[nodiscard]] auto Bytes() const -> std::size_t { return buffer_.Bytes(); }
+    [[nodiscard]] auto Width() const -> std::uint32_t { return width_; }
+    [[nodiscard]] auto Height() const -> std::uint32_t { return height_; }
+    [[nodiscard]] auto Format() const -> TextureFormat { return TextureFormat::Rgba32f; }
+    [[nodiscard]] auto ResourceId() const -> std::uint64_t { return buffer_.ResourceId(); }
+    [[nodiscard]] auto Empty() const -> bool { return buffer_.Empty(); }
+    [[nodiscard]] auto Storage() -> Buffer& { return buffer_; }
+    [[nodiscard]] auto Storage() const -> const Buffer& { return buffer_; }
+
+    void Reset() noexcept {
+      buffer_.Reset();
+      width_  = 0;
+      height_ = 0;
+    }
+
+   private:
+    Buffer        buffer_{};
+    std::uint32_t width_  = 0;
+    std::uint32_t height_ = 0;
+  };
+
   using Slab           = Buffer;
   using CommandContext = OpenClCommandContext;
 
@@ -175,6 +216,13 @@ class OpenClBackend {
   void SetMaxSlabBytes(std::size_t bytes);
   [[nodiscard]] auto CreateTexture2D(std::uint32_t width, std::uint32_t height,
                                      TextureFormat format) -> Texture2D;
+  /**
+   * @brief Allocate one RGBA32F scene-work member as a row-major OpenCL buffer.
+   *
+   * Does not call @ref CreateTexture2D. Owned by SceneWorkImagePair.
+   */
+  [[nodiscard]] auto CreateSceneWorkImage(std::uint32_t width, std::uint32_t height)
+      -> SceneWorkImage;
 
   void UploadBufferRange(Buffer& buffer, std::uint32_t offset, std::span<const std::byte> bytes,
                          CommandContext& command_context);
@@ -244,6 +292,28 @@ class OpenClBackend {
                                 std::uint32_t edge, CommandContext& command_context)
       -> OpenClLutBinding;
   [[nodiscard]] auto DummyLut() -> OpenClLutBinding;
+  /**
+   * @brief 1x1 RGBA32F image bound to unused @c read_only image2d_t scene arguments.
+   *
+   * Distinct from @ref DummySceneWriteImage. OpenCL 1.2 forbids one image object as
+   * both read_only and write_only in the same kernel. Owned by this backend.
+   */
+  [[nodiscard]] auto DummySceneReadImage() -> cl_mem;
+  /**
+   * @brief 1x1 RGBA32F image bound to unused @c write_only image2d_t scene arguments.
+   */
+  [[nodiscard]] auto DummySceneWriteImage() -> cl_mem;
+  /**
+   * @brief 16-byte buffer bound to unused const scene-work buffer arguments.
+   *
+   * Distinct from @ref DummySceneWriteBuffer so a dual-storage kernel never binds
+   * one dummy buffer as both const and mutable pointers.
+   */
+  [[nodiscard]] auto DummySceneReadBuffer() -> cl_mem;
+  /**
+   * @brief 16-byte buffer bound to unused mutable scene-work buffer arguments.
+   */
+  [[nodiscard]] auto DummySceneWriteBuffer() -> cl_mem;
   void               SetLutByteBudget(std::size_t bytes);
   /** @brief Release busy markers belonging to an encode cancelled before submission. */
   void               ReleaseUnsubmittedResourceUses() noexcept;
@@ -318,6 +388,8 @@ class OpenClBackend {
   void TrackEnqueueEvent(CommandContext& command_context, cl_event event);
   auto EnqueueMarker(CommandContext& command_context) -> cl_event;
   void FlushQueue();
+  [[nodiscard]] auto MakeDummySceneImage(cl_mem_flags flags, const char* what) -> cl_mem;
+  [[nodiscard]] auto MakeDummySceneBuffer(cl_mem_flags flags, const char* what) -> cl_mem;
 
   cl_device_id           device_  = nullptr;
   cl_context             context_ = nullptr;
@@ -347,6 +419,10 @@ class OpenClBackend {
   std::uint64_t          lut_upload_bytes_     = 0;
   std::uint64_t          last_lut_resource_id_ = 0;
   std::uint64_t          grade_command_topology_hash_ = 0;
+  cl_mem                 dummy_scene_read_image_      = nullptr;
+  cl_mem                 dummy_scene_write_image_     = nullptr;
+  cl_mem                 dummy_scene_read_buffer_     = nullptr;
+  cl_mem                 dummy_scene_write_buffer_    = nullptr;
   std::size_t            lut_byte_budget_      = 64ull << 20;
   std::size_t            lut_cache_bytes_      = 0;
   std::uint64_t          lut_lru_clock_        = 0;

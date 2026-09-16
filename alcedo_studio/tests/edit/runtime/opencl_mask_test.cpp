@@ -22,10 +22,12 @@
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/runtime/compiled_mask_stack.hpp"
 #include "edit/runtime/graph_compiler.hpp"
+#include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/opencl/opencl_develop_pass.hpp"
 #include "edit/runtime/opencl/opencl_mask_pass.hpp"
 #include "edit/runtime/opencl/opencl_pass_encoder.hpp"
 #include "edit/runtime/opencl/opencl_primary_grade_pass.hpp"
+#include "edit/runtime/opencl/opencl_scene_work.hpp"
 #include "edit/runtime/pass_kind.hpp"
 #include "gpu/transient_allocation_policy.hpp"
 #include "multi_grade_runtime_test_support.hpp"
@@ -114,6 +116,22 @@ class OpenClMaskFixture : public ::testing::Test {
     return pixels;
   }
 
+  auto DownloadBinding(const FrameSceneBinding& binding) -> std::vector<Rgba> {
+    if (binding.IsWorkImage()) {
+      auto& image = device_->Workspace().SceneWork().Member(binding.member);
+      std::vector<Rgba> pixels(static_cast<std::size_t>(image.Width()) * image.Height());
+      device_->Workspace().Device().DownloadBufferRange(
+          image.Storage(), 0,
+          std::span<std::byte>(reinterpret_cast<std::byte*>(pixels.data()),
+                               pixels.size() * sizeof(Rgba)),
+          device_->CommandContext());
+      return pixels;
+    }
+    return DownloadImage(binding.graph_id);
+  }
+
+  auto DownloadGrade() -> std::vector<Rgba> { return DownloadBinding(last_grade_binding_); }
+
   auto DownloadR8(const GraphValueId& id) -> std::vector<std::uint8_t> {
     auto* lease = device_->Workspace().Images().Find(id);
     EXPECT_NE(lease, nullptr);
@@ -157,12 +175,13 @@ class OpenClMaskFixture : public ::testing::Test {
         device_->Workspace().TransientBuffers().Reset();
       }
       auto result = ExecuteOpenClPrimaryGrade(*device_, plan_, prepared_, document_);
+      last_grade_binding_ = result.output_binding;
       device_->EndRender();
       device_->WaitIdle();
       GradeFrame frame;
       frame.result = result;
       frame.source = DownloadImage(plan_.develop_output);
-      frame.output = DownloadImage(result.output);
+      frame.output = DownloadBinding(result.output_binding);
       device_->PublishResults();
       return frame;
     } catch (...) {
@@ -177,6 +196,7 @@ class OpenClMaskFixture : public ::testing::Test {
   PipelineDocument                    document_;
   ExecutionPlan                       plan_;
   std::unique_ptr<OpenClRenderDevice> device_;
+  FrameSceneBinding                   last_grade_binding_{};
 };
 
 TEST_F(OpenClMaskFixture, OpenClAnalyticMaskMatchesReferenceAtCropRotationAndDynamicResolution) {
@@ -310,7 +330,8 @@ TEST_F(OpenClMaskFixture, OpenClPlanExecutorRunsMaskBeforePrimaryGrade) {
   EXPECT_TRUE(
       std::all_of(mask.begin(), mask.end(), [](std::uint8_t value) { return value == 255; }));
   ASSERT_NE(plan_.FirstGrade(), nullptr);
-  const auto output = DownloadImage(plan_.FirstGrade()->scene_output);
+  last_grade_binding_ = FrameSceneBinding::WorkImage(SceneWorkMember::Member0);
+  const auto output   = DownloadGrade();
   EXPECT_FALSE(output.empty());
 }
 

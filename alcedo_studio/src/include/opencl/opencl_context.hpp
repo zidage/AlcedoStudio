@@ -66,6 +66,9 @@ class OpenClContext {
   cl_device_id             device_   = nullptr;
   cl_context               context_  = nullptr;
   cl_command_queue         queue_    = nullptr;
+  // In-order queue for histogram/waveform. Distinct from the product queue so
+  // scope analysis never enqueues on the DAG/present queue from another thread.
+  mutable cl_command_queue scope_queue_ = nullptr;
   // Development-only second in-order queue with CL_QUEUE_PROFILING_ENABLE.
   cl_command_queue         profiling_queue_ = nullptr;
   // When set, Queue() returns this instead of the product queue.
@@ -109,6 +112,8 @@ class OpenClContext {
   auto        Queue() const -> cl_command_queue;
   // Product queue only (never the profiling override).
   auto        ProductQueue() const -> cl_command_queue;
+  // Scope analysis queue. Histogram/waveform and host readback run here.
+  auto        ScopeQueue() const -> cl_command_queue;
   auto        D3D11SharingEnabled() const -> bool;
   auto        GLSharingEnabled() const -> bool;
   auto        Capabilities() const -> const OpenClDeviceCapabilities&;

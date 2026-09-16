@@ -102,9 +102,7 @@ auto IsolatedBrightCount(const std::vector<Rgba>& pixels, std::uint32_t width, s
   auto        at       = [&](std::uint32_t x, std::uint32_t y) -> const Rgba& {
     return pixels[static_cast<std::size_t>(y) * width + x];
   };
-  auto peak = [&](const Rgba& pixel) {
-    return std::max(pixel.r, std::max(pixel.g, pixel.b));
-  };
+  auto peak = [&](const Rgba& pixel) { return std::max(pixel.r, std::max(pixel.g, pixel.b)); };
   for (std::uint32_t y = 0; y < height; ++y) {
     for (std::uint32_t x = 0; x < width; ++x) {
       if (!(peak(at(x, y)) > bright_floor)) continue;
@@ -232,7 +230,7 @@ class OpenClDrtFixture : public ::testing::Test {
     device_ = std::make_unique<OpenClRenderDevice>();
   }
 
-  auto             Render() -> GraphValueId { return device_->Execute(plan_, input_, document_); }
+  auto Render() -> GraphValueId { return device_->Execute(plan_, input_, document_); }
 
   auto RenderDarkChromaticNoise(DrtMethod method, float saturation, float sharpen_amount)
       -> std::vector<Rgba> {
@@ -280,9 +278,9 @@ class OpenClDrtFixture : public ::testing::Test {
         document_.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
     ASSERT_NE(exposure, nullptr);
     exposure->SetValue(exposure_ev);
-    input_  = RawInputLoader::FromDirectRgb(std::move(plane),
-                                            gpu_dag_test::FullSensor(width, height));
-    plan_   = GraphCompiler::Compile(document_, input_.CompileSource(), RenderRequest{});
+    input_ =
+        RawInputLoader::FromDirectRgb(std::move(plane), gpu_dag_test::FullSensor(width, height));
+    plan_             = GraphCompiler::Compile(document_, input_.CompileSource(), RenderRequest{});
     const auto pixels = Download(*device_, Render());
     ASSERT_EQ(pixels.size(), static_cast<std::size_t>(width) * height);
     ASSERT_TRUE(AllFinite(pixels));
@@ -291,9 +289,9 @@ class OpenClDrtFixture : public ::testing::Test {
     EXPECT_LT(MaxRgb(pixels), max_rgb_ceiling);
   }
 
-  PipelineDocument document_;
-  PreparedRawInput input_;
-  ExecutionPlan    plan_;
+  PipelineDocument                    document_;
+  PreparedRawInput                    input_;
+  ExecutionPlan                       plan_;
   std::unique_ptr<OpenClRenderDevice> device_;
 };
 
@@ -303,7 +301,8 @@ TEST_F(OpenClDrtFixture, BothDrtMethodsKeepHighSaturationDarkNoiseBelowWhite) {
     const auto pixels = RenderDarkChromaticNoise(method, 2.0f, 0.0f);
     ASSERT_TRUE(AllFinite(pixels));
     float maximum = 0.0f;
-    for (const auto& pixel : pixels) maximum = std::max(maximum, std::max({pixel.r, pixel.g, pixel.b}));
+    for (const auto& pixel : pixels)
+      maximum = std::max(maximum, std::max({pixel.r, pixel.g, pixel.b}));
     EXPECT_LT(maximum, 0.45f);
   }
 }
@@ -314,7 +313,8 @@ TEST_F(OpenClDrtFixture, BothDrtMethodsApplySharpenAfterDisplayTransformWithoutW
     const auto pixels = RenderDarkChromaticNoise(method, 1.0f, 100.0f);
     ASSERT_TRUE(AllFinite(pixels));
     float maximum = 0.0f;
-    for (const auto& pixel : pixels) maximum = std::max(maximum, std::max({pixel.r, pixel.g, pixel.b}));
+    for (const auto& pixel : pixels)
+      maximum = std::max(maximum, std::max({pixel.r, pixel.g, pixel.b}));
     EXPECT_LT(maximum, 0.98f);
   }
 }
@@ -402,8 +402,8 @@ TEST_F(OpenClDrtFixture, OpenClDrtOpenDrtMatchesCudaReferenceWithinTolerance) {
 
 TEST_F(OpenClDrtFixture, Aces20HueSweepStaysFiniteWithoutIsolatedBlackPixels) {
   constexpr std::uint32_t kHues = 360;
-  auto aces   = document_.Drt()->Params().Params();
-  aces.method = DrtMethod::Aces20;
+  auto                    aces  = document_.Drt()->Params().Params();
+  aces.method                   = DrtMethod::Aces20;
   document_.Drt()->Params().ReplaceParams(aces);
   input_ = RawInputLoader::FromDirectRgb(gpu_dag_test::MakeSaturatedHueWheelPlane(kHues, 4.0f),
                                          gpu_dag_test::FullSensor(kHues, 1));
@@ -412,12 +412,12 @@ TEST_F(OpenClDrtFixture, Aces20HueSweepStaysFiniteWithoutIsolatedBlackPixels) {
   ASSERT_EQ(pixels.size(), static_cast<std::size_t>(kHues));
   ASSERT_TRUE(AllFinite(pixels));
 
-  auto luma = [](const Rgba& p) { return 0.2126f * p.r + 0.7152f * p.g + 0.0722f * p.b; };
+  auto        luma = [](const Rgba& p) { return 0.2126f * p.r + 0.7152f * p.g + 0.0722f * p.b; };
   std::size_t isolated_black = 0;
   for (std::uint32_t i = 0; i < kHues; ++i) {
-    const float prev = luma(pixels[(i + kHues - 1) % kHues]);
-    const float curr = luma(pixels[i]);
-    const float next = luma(pixels[(i + 1) % kHues]);
+    const float prev           = luma(pixels[(i + kHues - 1) % kHues]);
+    const float curr           = luma(pixels[i]);
+    const float next           = luma(pixels[(i + 1) % kHues]);
     const float neighbor_floor = std::min(prev, next);
     if (neighbor_floor > 0.08f && curr < 0.25f * neighbor_floor) {
       ++isolated_black;
@@ -432,7 +432,7 @@ TEST_F(OpenClDrtFixture, OpenClDrtPackedWriteDoesNotCopyFullDto) {
   EXPECT_EQ(OperatorModelFullDtoCopyCount::Peek(), 0);
 }
 
-TEST_F(OpenClDrtFixture, OpenClDrtEditRunsOnlyDrtPass) {
+TEST_F(OpenClDrtFixture, OpenClDrtEditReexecutesGradesAndRunsDisplayTransform) {
   (void)Download(*device_, Render());
   device_->ResetPassStats();
   device_->Workspace().Device().ResetCounters();
@@ -446,7 +446,7 @@ TEST_F(OpenClDrtFixture, OpenClDrtEditRunsOnlyDrtPass) {
   EXPECT_EQ(stats.sensor_develop_execute, 0U);
   EXPECT_EQ(stats.geometry_execute, 0U);
   EXPECT_EQ(stats.camera_color_execute, 0U);
-  EXPECT_EQ(stats.primary_grade_execute, 0U);
+  EXPECT_EQ(stats.primary_grade_execute, 1U);
   EXPECT_EQ(stats.drt_execute, 1U);
   EXPECT_EQ(stats.drt_skip, 0U);
 
@@ -594,12 +594,8 @@ class OpenClRendererFixture : public ::testing::Test {
     return renderer_->Render(image_, DecodeRes::FULL, request, nullptr, submission, true);
   }
 
-  auto GeometryId() const -> GraphValueId {
-    return {NodeId{"geometry"}, PortId{"scene_source"}};
-  }
-  auto SensorId() const -> GraphValueId {
-    return {NodeId{"develop"}, PortId{"sensor_linear"}};
-  }
+  auto GeometryId() const -> GraphValueId { return {NodeId{"geometry"}, PortId{"scene_source"}}; }
+  auto SensorId() const -> GraphValueId { return {NodeId{"develop"}, PortId{"sensor_linear"}}; }
 
   auto Exposure() -> ExposureModel* {
     return dynamic_cast<ExposureModel*>(
@@ -689,18 +685,20 @@ TEST_F(OpenClRendererFixture, OpenClScopeTapUsesTheFinalDisplayImageAndSubmissio
   EXPECT_EQ(scope.image.backend, GpuBackend::OpenCL);
   EXPECT_EQ(display.image.resource_type, FrameWriteTargetType::OpenClImage);
   EXPECT_EQ(scope.image.resource_type, FrameWriteTargetType::OpenClImage);
-  EXPECT_EQ(display.image.resource.get(), scope.image.resource.get());
-  EXPECT_EQ(display.ready_signal.resource.get(), scope.ready_signal.resource.get());
+  EXPECT_NE(display.image.resource.get(), scope.image.resource.get());
+  EXPECT_NE(display.ready_signal.resource.get(), scope.ready_signal.resource.get());
   EXPECT_EQ(display.image_identity, 7U);
   EXPECT_EQ(display.session_epoch, 2U);
   EXPECT_EQ(display.display_generation, 88U);
-  ASSERT_NE(display.ready_signal.resource, nullptr);
+  ASSERT_NE(scope.ready_signal.resource, nullptr);
   const auto* signal = static_cast<const scope::opencl_detail::OpenClEventSignalResource*>(
-      display.ready_signal.resource.get());
+      scope.ready_signal.resource.get());
   ASSERT_NE(signal, nullptr);
   EXPECT_NE(signal->event, nullptr);
+  EXPECT_GE(signal->slot_index, 0);
 
   (void)clFinish(OpenClContext::Instance().ProductQueue());
+  (void)clFinish(OpenClContext::Instance().ScopeQueue());
   const auto output = analyzer->GetLatestOutput();
   EXPECT_GT(output.generation, 0U);
   EXPECT_TRUE(output.histogram_valid);
@@ -783,7 +781,7 @@ TEST_F(OpenClRendererFixture, QualityBaseBypassesEveryResultCacheAfterSensorDeve
   ASSERT_NE(shadows, nullptr);
   shadows->SetValue(40.0f);
   ASSERT_TRUE(HostRgbaIsFinite(RenderRole(FrameRole::InteractivePrimary, 16)));
-  auto& images = renderer_->Device().Workspace().Images();
+  auto&      images           = renderer_->Device().Workspace().Images();
   const auto geometry_handle  = images.Find(GeometryId())->Handle();
   const auto geometry_rev     = images.PublishedRevision(GeometryId());
   const auto publishes_before = images.PersistentPublishCount();
@@ -808,9 +806,9 @@ TEST_F(OpenClRendererFixture, QualityBaseBypassesEveryResultCacheAfterSensorDeve
   EXPECT_EQ(renderer_->Device().Workspace().Values().Size(), values_before);
 }
 
-TEST_F(OpenClRendererFixture, InteractiveQualityBaseInteractiveReuses2560PixelResults) {
+TEST_F(OpenClRendererFixture, InteractiveAfterQualityReusesKeyStagesAndReexecutesUnpublishedGrade) {
   ASSERT_TRUE(HostRgbaIsFinite(RenderRole(FrameRole::InteractivePrimary, 16)));
-  auto& images = renderer_->Device().Workspace().Images();
+  auto&      images          = renderer_->Device().Workspace().Images();
   const auto geometry_handle = images.Find(GeometryId())->Handle();
   const auto geometry_rev    = images.PublishedRevision(GeometryId());
   const auto geometry_repr   = images.PublishedRepresentation(GeometryId());
@@ -824,8 +822,10 @@ TEST_F(OpenClRendererFixture, InteractiveQualityBaseInteractiveReuses2560PixelRe
   EXPECT_EQ(stats.pass.sensor_develop_execute, 0U);
   EXPECT_EQ(stats.pass.geometry_execute, 0U);
   EXPECT_EQ(stats.pass.camera_color_execute, 0U);
-  EXPECT_EQ(stats.pass.primary_grade_execute, 0U);
+  EXPECT_EQ(stats.pass.primary_grade_execute, 1U);
   EXPECT_EQ(stats.pass.drt_execute, 0U);
+  EXPECT_EQ(images.Find(GraphValueId{NodeId{"grade.primary"}, PortId{"image"}}), nullptr);
+  EXPECT_EQ(images.PublishedRepresentation(GeometryId()).extent.width, 16U);
 }
 
 TEST_F(OpenClRendererFixture, QualityBasePixelsMatchFreshExecutionWithinDeclaredTolerance) {

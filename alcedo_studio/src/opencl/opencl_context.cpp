@@ -410,6 +410,10 @@ auto SelectCandidate(const std::vector<OpenClDeviceCandidate>& candidates,
 
 OpenClContext::~OpenClContext() {
   queue_override_ = nullptr;
+  if (scope_queue_ != nullptr) {
+    clReleaseCommandQueue(scope_queue_);
+    scope_queue_ = nullptr;
+  }
   if (profiling_queue_ != nullptr) {
     clReleaseCommandQueue(profiling_queue_);
     profiling_queue_ = nullptr;
@@ -507,6 +511,16 @@ void OpenClContext::Initialize(const OpenClInitializationOptions& options) {
     throw std::runtime_error("[FATAL] OpenClContext: failed to create OpenCL command queue.");
   }
 
+  error        = CL_SUCCESS;
+  scope_queue_ = clCreateCommandQueue(context_, selected.device, 0, &error);
+  if (error != CL_SUCCESS || scope_queue_ == nullptr) {
+    clReleaseCommandQueue(queue_);
+    queue_ = nullptr;
+    clReleaseContext(context_);
+    context_ = nullptr;
+    throw std::runtime_error("[FATAL] OpenClContext: failed to create OpenCL scope queue.");
+  }
+
   platform_     = selected.platform;
   device_       = selected.device;
   capabilities_ = selected.capabilities;
@@ -581,6 +595,22 @@ auto OpenClContext::Queue() const -> cl_command_queue {
 auto OpenClContext::ProductQueue() const -> cl_command_queue {
   std::lock_guard<std::mutex> lock(mutex_);
   return queue_;
+}
+
+auto OpenClContext::ScopeQueue() const -> cl_command_queue {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (scope_queue_ != nullptr) {
+    return scope_queue_;
+  }
+  if (!initialized_ || context_ == nullptr || device_ == nullptr) {
+    throw std::runtime_error("[FATAL] OpenClContext: ScopeQueue requires an initialized context.");
+  }
+  cl_int error = CL_SUCCESS;
+  scope_queue_ = clCreateCommandQueue(context_, device_, 0, &error);
+  if (error != CL_SUCCESS || scope_queue_ == nullptr) {
+    throw std::runtime_error("[FATAL] OpenClContext: failed to create OpenCL scope queue.");
+  }
+  return scope_queue_;
 }
 
 auto OpenClContext::D3D11SharingEnabled() const -> bool {

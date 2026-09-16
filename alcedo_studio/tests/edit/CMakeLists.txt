@@ -392,6 +392,7 @@ add_executable(GpuDagRawInputTest
   ${ALCEDO_TEST_ROOT}/edit/input/prepared_source_cache_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/adjustment_runtime_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/grade_schedule_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/runtime/scene_work_image_pair_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/drt_post_executor_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/local_tone_plan_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/graph_compiler_test.cpp
@@ -431,6 +432,7 @@ if(ALCEDO_CUDA_ENABLED)
   add_executable(GpuDagCudaPrimaryGradeTest
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_primary_grade_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_multi_grade_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_scene_work_pair_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_preview_gpu_timing_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_preview_interactive_baseline_test.cpp)
   target_include_directories(GpuDagCudaPrimaryGradeTest PUBLIC ${ALCEDO_INCLUDE_DIR})
