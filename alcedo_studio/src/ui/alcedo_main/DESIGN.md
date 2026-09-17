@@ -10,6 +10,9 @@ Shared components: `IconActionButton.qml`, `CollapsibleSection.qml`,
 `DialogActionButton.qml`, `IconButton.qml`, `SegmentedCardSwitcher.qml`,
 `AdjustmentSlider.qml`, `ThemedProgressBar.qml`, `ThemeCheckBox.qml`
 
+Per-file decisions: `docs/VI/README.md`. That catalog specializes this global
+system for individual QML files and is updated with each approved visual change.
+
 This document freezes the visual system for the unified QML workspace (Phase 4C).
 Phase 5–6 must consume these tokens; they must not invent a parallel palette.
 
@@ -22,7 +25,9 @@ Phase 5–6 must consume these tokens; they must not invent a parallel palette.
 3. If a new value is required, add it to `AppTheme` **and** this document in the
    same change. Never publish a value here that differs from code.
 4. Prefer shared components over copy-pasted Button/Rectangle chrome.
-5. Run the Phase 4C visual/motion tests after structural QML changes.
+5. Verify visual changes manually in every state listed by the applicable
+   `docs/VI/README.md` entry. Automated tests cover behavior and accessibility,
+   not exact colors, fills, borders, icon tint, or screenshots.
 6. Apply the monochrome selection and restrained accent rules below to every
    new or changed surface. A shared component or existing color token does not
    exempt a surface from these rules.
@@ -98,6 +103,20 @@ does not give this permission. Do not use a dot for decorative balance.
 Existing approved indicators can remain in an unchanged surface. Do not copy
 them into a new or changed surface without an explicit user request.
 
+### Hard ban: self-drawn SVG assets
+
+Do not invent, trace, or generate SVG path data for Alcedo UI icons. When work
+requires adding, replacing, or newly assigning an SVG, report the exact need
+and intended source to the user before editing. Continue only after the user
+provides the SVG or explicitly approves an existing repository or external
+asset. Reuse an approved repository asset when it already expresses the same
+meaning.
+
+Record the source icon name, source URL, and license in every newly added SVG.
+Normalization may change the source stroke color, viewBox formatting, and an
+explicitly approved stroke width, but it must not redesign the approved path
+geometry. The pipeline icon added on 2026-09-17 is user-provided and approved.
+
 ---
 
 ## Color and surface hierarchy
@@ -121,7 +140,9 @@ Making the blue frame thinner or more transparent does not make it acceptable.
 Do not replace it with a blue selection slab, tinted well, or blue side stripe.
 
 - Dense rows and segments use `editorListSelectedFillColor` with
-  `editorListSelectedInkColor`; text and icons must invert together.
+  `editorListSelectedInkColor` by default. A per-file VI entry can instead
+  require a neutral outline with unchanged text and icon colors. Mask Groups
+  use that outline treatment.
 - Nodes and established outline-based surfaces keep their neutral fill and
   use the existing text-color outline. Nodes use `graphSelectionOutlineColor`
   (`textColor`), never a theme-accent alias. A neutral outline is permitted;
@@ -365,20 +386,27 @@ The Nodes page is the third expandable page in `EditorWorkspaceRail`. It shares
 the rail shell, width limits, fold motion, and Loader lifetime with History and
 Versions. Only one tool page can be open.
 
-### Nodes rail icon
+### Nodes and Mask Groups rail icons
 
-Use `panel_icons/nodes.svg` for the Nodes toggle. The icon uses the approved
-Tabler `stack-2` paths:
+Use `panel_icons/pipeline.svg` for the Nodes toggle. It uses the user-provided
+Tabler `pipeline` paths:
 
 ```svg
-<path d="M12 4l-8 4l8 4l8 -4l-8 -4" />
-<path d="M4 12l8 4l8 -4" />
-<path d="M4 16l8 4l8 -4" />
+<path d="M3 4h8" />
+<path d="M4 4v5a6 6 0 0 0 6 6h3a1 1 0 0 1 1 1v4" />
+<path d="M10 4v4a1 1 0 0 0 1 1h3a6 6 0 0 1 6 6v5" />
+<path d="M13 20h8" />
+<path d="M12 9v6" />
 ```
 
-Normalize the asset to the shared 24×24 viewBox and white source stroke. Keep
-the user-approved 2 px stroke width. Tint it with `ColorImage`. Do not add a count, badge, or status
-dot to this icon.
+Use the existing `panel_icons/nodes.svg` Tabler `stack-2` layer icon for the
+Mask Groups rail toggle and Mask Group creation action. Do not use
+`panel_icons/masks.svg` as the Mask Groups rail icon; that asset represents an
+individual Mask or Mask preview.
+
+Both rail assets use the shared 24×24 viewBox, white source stroke, and their
+user-approved 2 px stroke width. Tint them with `ColorImage`. Do not add a
+count, badge, or status dot to either icon.
 
 ### Graph canvas
 
@@ -633,8 +661,9 @@ geometry tests (token equality + optional grab fixtures).
 on a 24×24 viewBox. At the compact 18 px optical size this resolves to roughly
 1.125 logical pixels before antialiasing, keeping dense navigation crisp rather
 than visually bold. Do not mix the upstream Tabler 2 px default with locally
-normalized icons in the same navigation group. The user-approved Nodes rail
-icon and the Gradient and Radial Mask icons are documented 2 px exceptions.
+normalized icons in the same navigation group. The user-approved Nodes pipeline
+icon, Mask Groups layer icon, and Gradient and Radial Mask icons are documented
+2 px exceptions.
 
 **Every SVG action must:**
 
@@ -863,10 +892,10 @@ row delegate and arrow affordance automatically.
 
 ---
 
-## Screenshot / theme matrix (acceptance)
+## Manual visual review matrix
 
-Capture or property-assert these surfaces for empty, selected, collapsed,
-expanded, hover, and disabled where applicable:
+Inspect these surfaces for empty, selected, collapsed, expanded, hover, and
+disabled states where applicable:
 
 - Library/Editor capsule + thumb
 - Library thumbnail cards
@@ -882,6 +911,4 @@ hover, selected state, and keyboard focus remain distinguishable. Check
 framework-provided selection items as well as Alcedo-painted chrome. Existing
 accent tokens do not count as an exception to these acceptance checks.
 
-DPR coverage: icon optical/source token equality at logical 1.0; optional
-window grabs under `tests/ui/fixtures/phase4c/` when
-`ALCEDO_PHASE4C_WRITE_FIXTURES=1`.
+DPR coverage: inspect icon optical/source sizing at logical 1.0, 1.5, and 2.0.

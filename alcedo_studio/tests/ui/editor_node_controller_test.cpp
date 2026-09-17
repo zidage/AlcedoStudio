@@ -175,18 +175,18 @@ class DocumentSessionBackend final : public IEditorSessionBackend {
     result.kind = alcedo::EditorSessionResultKind::RenderRouted;
     return result;
   }
-  auto InsertColorGradeAtTop(const NodeId& new_id, const NodeId& expected_successor_id)
+  auto InsertColorGradeAtTop(const NodeId& new_id, const NodeId& expected_predecessor_id)
       -> EditorSessionResult override {
     ++insert_grade_top_count_;
-    last_insert_new_id_      = new_id;
-    last_expected_successor_ = expected_successor_id;
+    last_insert_new_id_        = new_id;
+    last_expected_predecessor_ = expected_predecessor_id;
     if (fail_commands_) return Rejected("mini-Git journal append failed");
     const auto backbone = document_.Graph().ImageBackboneNodeIds();
     if (backbone.size() < 2) return Rejected("The live graph has no valid image backbone");
-    if (backbone[1] != expected_successor_id) {
+    if (backbone[backbone.size() - 2] != expected_predecessor_id) {
       return Rejected("The Mask Groups insertion point changed since the request was issued");
     }
-    const auto errors = alcedo::AddCleanColorGrade(document_, backbone[1], new_id);
+    const auto errors = alcedo::AddCleanColorGrade(document_, backbone.back(), new_id);
     if (!errors.empty()) return Rejected(errors.front().message);
     PublishHistoryChange();
     auto result = Accepted("Mask Group inserted");
@@ -233,7 +233,9 @@ class DocumentSessionBackend final : public IEditorSessionBackend {
   [[nodiscard]] auto insert_grade_top_count() const -> int { return insert_grade_top_count_; }
   [[nodiscard]] auto remove_grade_count() const -> int { return remove_grade_count_; }
   [[nodiscard]] auto last_insert_new_id() const -> NodeId { return last_insert_new_id_; }
-  [[nodiscard]] auto last_expected_successor() const -> NodeId { return last_expected_successor_; }
+  [[nodiscard]] auto last_expected_predecessor() const -> NodeId {
+    return last_expected_predecessor_;
+  }
   [[nodiscard]] auto last_removed_node_id() const -> NodeId { return last_removed_node_id_; }
   [[nodiscard]] auto active_version_read_count() const -> int { return active_version_read_count_; }
   [[nodiscard]] auto history_snapshot_read_count() const -> int {
@@ -276,7 +278,7 @@ class DocumentSessionBackend final : public IEditorSessionBackend {
   int                                               insert_grade_top_count_      = 0;
   int                                               remove_grade_count_          = 0;
   NodeId                                            last_insert_new_id_;
-  NodeId                                            last_expected_successor_;
+  NodeId                                            last_expected_predecessor_;
   NodeId                                            last_removed_node_id_;
   std::uint64_t                                     history_revision_            = 0;
   mutable int                                       active_version_read_count_   = 0;
@@ -1050,7 +1052,7 @@ TEST(EditorNodeController, LeavingDevelopGeometryDoesNotRequestViewChange) {
   EXPECT_EQ(backend.view_change_count(), views_after_geometry);
 }
 
-TEST(EditorNodeController, MaskGroupsPublishBackboneOrderWithEmptyDrawers) {
+TEST(EditorNodeController, MaskGroupsPublishDownstreamFirstWithEmptyDrawers) {
   DocumentSessionBackend backend;
   backend.SetGeneration(40);
   ASSERT_TRUE(
@@ -1064,15 +1066,15 @@ TEST(EditorNodeController, MaskGroupsPublishBackboneOrderWithEmptyDrawers) {
   ASSERT_EQ(groups.size(), 2);
   const auto first  = groups[0].toMap();
   const auto second = groups[1].toMap();
-  EXPECT_EQ(first.value(QStringLiteral("nodeId")).toString(), QStringLiteral("grade.top"));
-  EXPECT_EQ(first.value(QStringLiteral("displayName")).toString(), QStringLiteral("Color Grade 2"));
+  EXPECT_EQ(first.value(QStringLiteral("nodeId")).toString(), QStringLiteral("grade.primary"));
+  EXPECT_EQ(first.value(QStringLiteral("displayName")).toString(), QStringLiteral("Color Grade 1"));
   EXPECT_TRUE(first.value(QStringLiteral("masks")).toList().empty());
-  EXPECT_EQ(second.value(QStringLiteral("nodeId")).toString(), QStringLiteral("grade.primary"));
+  EXPECT_EQ(second.value(QStringLiteral("nodeId")).toString(), QStringLiteral("grade.top"));
   EXPECT_EQ(second.value(QStringLiteral("displayName")).toString(),
-            QStringLiteral("Color Grade 1"));
+            QStringLiteral("Color Grade 2"));
   EXPECT_TRUE(controller.has_mask_group_snapshot());
   ASSERT_EQ(controller.mask_group_snapshot().groups.size(), 2u);
-  EXPECT_EQ(controller.mask_group_snapshot().groups[0].node_id, NodeId{"grade.top"});
+  EXPECT_EQ(controller.mask_group_snapshot().groups[0].node_id, NodeId{"grade.primary"});
 }
 
 TEST(EditorNodeController, InsertMaskGroupAtTopSubmitsOneCommandAndSelectsTheNewGroup) {
@@ -1085,12 +1087,12 @@ TEST(EditorNodeController, InsertMaskGroupAtTopSubmitsOneCommandAndSelectsTheNew
 
   ASSERT_TRUE(controller.insertMaskGroupAtTop());
   EXPECT_EQ(backend.insert_grade_top_count(), 1);
-  EXPECT_EQ(backend.last_expected_successor(), NodeId{"grade.primary"});
+  EXPECT_EQ(backend.last_expected_predecessor(), NodeId{"grade.primary"});
   const auto new_id = backend.last_insert_new_id();
   EXPECT_NE(backend.Document().Graph().FindNode(new_id), nullptr);
   EXPECT_EQ(
       backend.Document().Graph().ImageBackboneNodeIds(),
-      (std::vector<NodeId>{NodeId{"develop"}, new_id, NodeId{"grade.primary"}, NodeId{"drt"}}));
+      (std::vector<NodeId>{NodeId{"develop"}, NodeId{"grade.primary"}, new_id, NodeId{"drt"}}));
   EXPECT_EQ(controller.selected_node_id(), new_id);
   ASSERT_EQ(controller.mask_group_snapshot().groups.size(), 2u);
   EXPECT_EQ(controller.mask_group_snapshot().groups[0].node_id, new_id);

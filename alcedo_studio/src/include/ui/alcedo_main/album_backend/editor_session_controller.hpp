@@ -276,12 +276,12 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
    * @brief Mask Groups: insert one clean Color Grade at the top of the
    * scene-image backbone as one typed history commit.
    *
-   * @p expected_successor_id is the committed node the caller observed directly
-   * after Develop; the owner re-checks it against the live backbone so a stale
-   * request never inserts behind a moved insertion point.
+   * @p expected_predecessor_id is the committed node the caller observed
+   * directly before DRT/Post; the owner re-checks it against the live backbone
+   * so a stale request never inserts above a moved insertion point.
    */
   auto SubmitInsertColorGradeAtTop(const alcedo::NodeId& new_id,
-                                   const alcedo::NodeId& expected_successor_id)
+                                   const alcedo::NodeId& expected_predecessor_id)
       -> alcedo::EditorSessionResult;
   /**
    * @brief Mask Groups: remove one Color Grade and bridge its scene-image

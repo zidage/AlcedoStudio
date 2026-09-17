@@ -3,7 +3,8 @@
   License: MIT
   Category: Design / Development
   Tabler icon name: stack-2
-  Nodes rail toggle. User-approved 2 px stroke exception (DESIGN.md).
+  Mask Groups rail toggle and creation action. User-approved 2 px stroke
+  exception (DESIGN.md). The legacy filename is retained for resource stability.
 -->
 <svg
   xmlns="http://www.w3.org/2000/svg"

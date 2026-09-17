@@ -1896,21 +1896,21 @@ auto EditorSessionService::EditNodeGraph(NodeGraphTopologyChange change) -> Edit
 }
 
 auto EditorSessionService::InsertColorGradeAtTop(const NodeId& new_id,
-                                                 const NodeId& expected_successor_id)
+                                                 const NodeId& expected_predecessor_id)
     -> EditorSessionResult {
   if (!InOwnerReduction()) {
     EditorSessionCommand command;
-    command.kind                  = EditorSessionCommandKind::InsertColorGradeAtTop;
-    command.node_id               = new_id;
-    command.expected_successor_id = expected_successor_id;
-    command.element_id            = lifecycle_.identity().element_id;
-    command.image_id              = lifecycle_.identity().image_id;
+    command.kind                    = EditorSessionCommandKind::InsertColorGradeAtTop;
+    command.node_id                 = new_id;
+    command.expected_predecessor_id = expected_predecessor_id;
+    command.element_id              = lifecycle_.identity().element_id;
+    command.image_id                = lifecycle_.identity().image_id;
     return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
       const auto identity = lifecycle_.identity();
       if (queued.element_id != identity.element_id || queued.image_id != identity.image_id) {
         return Reject("The Mask Group request is from another editor session");
       }
-      return InsertColorGradeAtTop(queued.node_id, queued.expected_successor_id);
+      return InsertColorGradeAtTop(queued.node_id, queued.expected_predecessor_id);
     });
   }
   if (lifecycle_.state() != EditorSessionState::Interactive || !dependencies_.history ||
@@ -1919,7 +1919,7 @@ auto EditorSessionService::InsertColorGradeAtTop(const NodeId& new_id,
   }
   std::string error;
   if (!dependencies_.history->InsertColorGradeAtTop(lifecycle_.history_guard(), new_id,
-                                                    expected_successor_id, &error)) {
+                                                    expected_predecessor_id, &error)) {
     return Reject(error.empty() ? "Mask Group insertion failed" : std::move(error));
   }
   return PublishTypedNodeHistorySuccess("Mask Group inserted");

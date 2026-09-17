@@ -1014,16 +1014,17 @@ bool EditorNodeController::insertMaskGroupAtTop() {
     return false;
   }
   if (snapshot_.nodes.size() < 2 ||
-      snapshot_.nodes.front().node_kind != alcedo::EditorNodeKind::Develop) {
+      snapshot_.nodes.front().node_kind != alcedo::EditorNodeKind::Develop ||
+      snapshot_.nodes.back().node_kind != alcedo::EditorNodeKind::Drt) {
     SetLastError(tr("The node graph has no editable Mask Groups"));
     return false;
   }
-  const auto   anchor = snapshot_.nodes[1].node_id;
-  const auto   uuid   = QUuid::createUuid().toString(QUuid::WithoutBraces).toLower().toStdString();
+  const auto   predecessor = snapshot_.nodes[snapshot_.nodes.size() - 2].node_id;
+  const auto   uuid = QUuid::createUuid().toString(QUuid::WithoutBraces).toLower().toStdString();
   const NodeId new_id{"grade." + uuid};
   SetCommandActive(true);
   const auto reset_active = qScopeGuard([this] { SetCommandActive(false); });
-  const auto result       = session_->SubmitInsertColorGradeAtTop(new_id, anchor);
+  const auto result       = session_->SubmitInsertColorGradeAtTop(new_id, predecessor);
   if (alcedo::EditorSessionResultIsFailure(result.kind)) {
     SetLastError(QString::fromStdString(result.message));
     return false;

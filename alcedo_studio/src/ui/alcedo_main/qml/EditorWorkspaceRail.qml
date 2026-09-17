@@ -262,7 +262,7 @@ Item {
                 selected: root.activePage === "nodes"
                 selectedOutline: true
                 selectedOutlineColor: root.colText
-                iconSrc: "qrc:/panel_icons/nodes.svg"
+                iconSrc: "qrc:/panel_icons/pipeline.svg"
                 iconColorDefault: selected ? root.colText : root.colMuted
                 iconColorMuted: root.colMuted
                 fillIdle: root.colCardSurface
@@ -282,7 +282,7 @@ Item {
                 selected: root.activePage === "maskgroups"
                 selectedOutline: true
                 selectedOutlineColor: root.colText
-                iconSrc: "qrc:/panel_icons/masks.svg"
+                iconSrc: "qrc:/panel_icons/nodes.svg"
                 iconColorDefault: selected ? root.colText : root.colMuted
                 iconColorMuted: root.colMuted
                 fillIdle: root.colCardSurface

@@ -110,7 +110,8 @@ auto EditorNodeGraphProjection::BuildMaskGroups(const PipelineDocument& document
   snapshot.topology_revision   = topology_revision;
   snapshot.groups.reserve(backbone.size());
 
-  for (const auto& node_id : backbone) {
+  for (auto it = backbone.rbegin(); it != backbone.rend(); ++it) {
+    const auto& node_id = *it;
     const auto* node = document.Graph().FindNode(node_id);
     if (node == nullptr) {
       throw std::invalid_argument(

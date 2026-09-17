@@ -203,7 +203,7 @@ TEST_F(EditorSessionNodeCommandTest,
   EXPECT_EQ(result.kind, EditorSessionResultKind::RenderRouted);
   EXPECT_EQ(history_->insert_grade_top_count, 1);
   EXPECT_EQ(history_->last_insert_new_id, NodeId{"grade.new"});
-  EXPECT_EQ(history_->last_expected_successor, NodeId{"grade.primary"});
+  EXPECT_EQ(history_->last_expected_predecessor, NodeId{"grade.primary"});
   EXPECT_EQ(service_->history_revision(), revision_before + 1);
   ASSERT_EQ(scheduler_->requests.size(), renders_before + 1);
   EXPECT_EQ(scheduler_->requests.back().intent.reason, EditorRenderReason::GraphTopologyChanged);

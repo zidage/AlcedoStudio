@@ -75,7 +75,7 @@ class EditorSessionHistoryPort final : public alcedo::IEditorHistoryPort {
                                       std::string* error, bool* changed = nullptr) -> bool override;
   auto InsertColorGradeAtTop(const alcedo::EditorHistoryGuardHandle& guard,
                              const alcedo::NodeId& new_id,
-                             const alcedo::NodeId& expected_successor_id, std::string* error)
+                             const alcedo::NodeId& expected_predecessor_id, std::string* error)
       -> bool override;
   auto RemoveColorGradeAndBridge(const alcedo::EditorHistoryGuardHandle& guard,
                                  const alcedo::NodeId& node_id, std::string* error)

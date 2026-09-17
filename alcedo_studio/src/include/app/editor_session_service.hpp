@@ -398,13 +398,13 @@ class IEditorSessionBackend {
     result.message  = "Node graph topology edit is not supported by this backend";
     return result;
   }
-  /// Mask Groups: insert one clean Color Grade at the top of the scene-image
-  /// backbone as one typed history commit. @p expected_successor_id is the
-  /// committed node the caller observed directly after Develop; the owner
-  /// rejects the request when the live backbone no longer matches. Default
-  /// backends reject.
+  /// Mask Groups: insert one clean Color Grade at the top of the stack,
+  /// directly before DRT/Post, as one typed history commit.
+  /// @p expected_predecessor_id is the committed node the caller observed
+  /// directly before DRT/Post; the owner rejects the request when the live
+  /// backbone no longer matches. Default backends reject.
   virtual auto InsertColorGradeAtTop(const NodeId& /*new_id*/,
-                                     const NodeId& /*expected_successor_id*/)
+                                     const NodeId& /*expected_predecessor_id*/)
       -> EditorSessionResult {
     EditorSessionResult result;
     result.kind     = EditorSessionResultKind::Rejected;
@@ -652,7 +652,7 @@ class EditorSessionService final : public IEditorSessionBackend {
   auto SetColorGradeDeletionProtected(const NodeId& node_id, bool deletion_protected)
       -> EditorSessionResult override;
   auto EditNodeGraph(NodeGraphTopologyChange change) -> EditorSessionResult override;
-  auto InsertColorGradeAtTop(const NodeId& new_id, const NodeId& expected_successor_id)
+  auto InsertColorGradeAtTop(const NodeId& new_id, const NodeId& expected_predecessor_id)
       -> EditorSessionResult override;
   auto RemoveColorGradeAndBridge(const NodeId& node_id) -> EditorSessionResult override;
   auto Patch(std::string patch_key) -> EditorSessionResult;

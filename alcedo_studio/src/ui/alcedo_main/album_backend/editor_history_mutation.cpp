@@ -744,7 +744,7 @@ auto EditorHistoryMutation::SetColorGradeDeletionProtected(
 
 auto EditorHistoryMutation::InsertColorGradeAtTop(const alcedo::EditorHistoryGuardHandle& guard,
                                                   const alcedo::NodeId& new_id,
-                                                  const alcedo::NodeId& expected_successor_id,
+                                                  const alcedo::NodeId& expected_predecessor_id,
                                                   std::string*          error) -> bool {
   auto state = state_.EnsureWorkingState(guard.element_id, error);
   if (!state) return false;
@@ -759,7 +759,7 @@ auto EditorHistoryMutation::InsertColorGradeAtTop(const alcedo::EditorHistoryGua
   auto render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
   try {
     auto change = alcedo::CaptureAddColorGradeAtTopChange(*state->pipeline_guard->document_,
-                                                          new_id, expected_successor_id);
+                                                          new_id, expected_predecessor_id);
     return PublishAppliedTypedBatch(
         *state, state_, alcedo::MakeAddColorGradeBatch(std::move(change)), false, error);
   } catch (const std::exception& ex) {

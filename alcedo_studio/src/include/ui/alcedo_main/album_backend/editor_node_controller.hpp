@@ -155,8 +155,8 @@ class EditorNodeController : public QObject {
   /**
    * @brief Mask Groups: insert one clean Color Grade at the top of the stack.
    *
-   * Committed-document operation: the new node becomes the scene-image
-   * successor of Develop through one typed history commit. Rejects while a
+   * Committed-document operation: the new node becomes the final Color Grade
+   * before DRT/Post through one typed history commit. Rejects while a
    * node-graph draft exists; the draft must be completed or reverted first.
    * On success the new group is selected.
    */

@@ -8,12 +8,10 @@ import QtQuick.Layouts
 // from EditorNodeLayoutStore.drawerOpen(nodeId) — the same "Masks expanded"
 // bit the Nodes drawer reads, so both projections agree.
 //
-// Selection semantics (section 3 of the phase plan):
-//   - header full selection (light well + dark ink) when the group's Color
-//     Grade is selected and no Mask inside it owns the Mask selection;
-//   - quiet owner emphasis (hover wash + strong name) when a Mask inside this
-//     group is selected — the selected Mask row carries the real inversion;
-//   - no accent/blue decoration in either state.
+// Selection follows docs/VI/README.md: a selected group keeps its surface and
+// SVG colors and changes only the outer card outline. A group that owns the
+// selected Mask receives quiet header emphasis; the Mask row owns the stronger
+// outline.
 //
 // Fold motion matches EditorNodeMaskDrawer (DESIGN.md): logical expanded flips
 // immediately; foldProgress drives height and opacity; the body clips;
@@ -42,8 +40,8 @@ Item {
     property color hoverColor: appTheme.hoverColor
     property color cardSurfaceColor: appTheme.cardSurfaceColor
     property color cardBorderColor: appTheme.cardBorderColor
-    property color selectedFillColor: appTheme.editorListSelectedFillColor
-    property color selectedInkColor: appTheme.editorListSelectedInkColor
+    property color selectionOutlineColor: appTheme.graphSelectionOutlineColor
+    property real selectionOutlineWidth: appTheme.graphSelectionOutlineWidth
 
     property real foldProgress: expanded ? 1 : 0
     property bool foldManualDrive: false
@@ -85,8 +83,7 @@ Item {
         return root.maskCount * root.maskRowHeight + appTheme.spaceXs
     }
     readonly property real bodyHeight: Math.max(0, bodyContentHeight) * foldProgress
-    readonly property color headerInkColor: root.selected ? root.selectedInkColor
-                                                          : root.textColor
+    readonly property color headerInkColor: root.textColor
     readonly property string deleteDisabledReason: {
         if (!root.actionsEnabled) {
             return root.actionsDisabledReason
@@ -118,6 +115,11 @@ Item {
 
     function toggle() {
         root.expansionToggled(!root.expanded)
+    }
+
+    function activateHeader() {
+        root.headerClicked()
+        root.toggle()
     }
 
     function maskRowAt(maskIndex) {
@@ -168,8 +170,8 @@ Item {
         anchors.bottomMargin: appTheme.spaceXs
         radius: appTheme.controlRadiusSmall
         color: root.cardSurfaceColor
-        border.width: 1
-        border.color: root.cardBorderColor
+        border.width: root.selected ? root.selectionOutlineWidth : 1
+        border.color: root.selected ? root.selectionOutlineColor : root.cardBorderColor
     }
 
     Column {
@@ -212,13 +214,13 @@ Item {
                 return root.expanded ? qsTr("Press Left to collapse")
                                      : qsTr("Press Right to expand")
             }
-            Accessible.onPressAction: root.headerClicked()
+            Accessible.onPressAction: root.activateHeader()
             Keys.priority: Keys.BeforeItem
 
             Keys.onPressed: function (event) {
                 if (event.key === Qt.Key_Space || event.key === Qt.Key_Return
                         || event.key === Qt.Key_Enter) {
-                    root.headerClicked()
+                    root.activateHeader()
                     event.accepted = true
                 } else if (event.key === Qt.Key_Right && !root.expanded) {
                     root.toggle()
@@ -245,11 +247,9 @@ Item {
                 anchors.fill: parent
                 anchors.margins: appTheme.graphSelectionOutlineWidth
                 radius: appTheme.controlRadiusSmall - appTheme.graphSelectionOutlineWidth
-                color: root.selected ? root.selectedFillColor
-                                     : (root.ownerActive || headerMouse.containsMouse
-                                        || header.activeFocus ? root.hoverColor
-                                                              : "transparent")
-                border.width: header.activeFocus ? 1 : 0
+                color: root.ownerActive || headerMouse.containsMouse || header.activeFocus
+                       ? root.hoverColor : "transparent"
+                border.width: header.activeFocus && !root.selected ? 1 : 0
                 border.color: root.headerInkColor
             }
 
@@ -332,7 +332,7 @@ Item {
                         radius: appTheme.controlRadiusSmall
                         color: appTheme.bgBaseColor
                         border.width: 1
-                        border.color: root.selected ? root.selectedInkColor : "transparent"
+                        border.color: "transparent"
 
                         ColorImage {
                             anchors.centerIn: parent
@@ -343,7 +343,7 @@ Item {
                             sourceSize.height: appTheme.iconSourceSize
                             fillMode: Image.PreserveAspectFit
                             smooth: true
-                            color: root.selected ? root.selectedInkColor : root.mutedColor
+                            color: root.mutedColor
                         }
                     }
                 }
@@ -382,9 +382,8 @@ Item {
                         selected: root.deletionProtected
                         iconSrc: root.deletionProtected ? "qrc:/panel_icons/lock.svg"
                                                         : "qrc:/panel_icons/lock-open.svg"
-                        iconColorDefault: root.selected ? root.selectedInkColor
-                                                        : (root.deletionProtected
-                                                           ? root.textColor : root.mutedColor)
+                        iconColorDefault: root.deletionProtected ? root.textColor
+                                                                 : root.mutedColor
                         iconColorMuted: root.mutedColor
                         fillIdle: "transparent"
                         fillHover: root.hoverColor
@@ -412,8 +411,7 @@ Item {
                         stretchInLayout: true
                         enabled: root.deleteDisabledReason.length === 0
                         iconSrc: "qrc:/panel_icons/trash.svg"
-                        iconColorDefault: root.selected ? root.selectedInkColor
-                                                        : root.mutedColor
+                        iconColorDefault: root.mutedColor
                         iconColorMuted: root.mutedColor
                         fillIdle: "transparent"
                         fillHover: root.hoverColor
@@ -440,10 +438,10 @@ Item {
                 hoverEnabled: true
                 preventStealing: true
                 cursorShape: Qt.PointingHandCursor
-                onPressed: function (mouse) {
+                onClicked: function (mouse) {
                     mouse.accepted = true
                     header.forceActiveFocus(Qt.MouseFocusReason)
-                    root.headerClicked()
+                    root.activateHeader()
                 }
             }
         }
@@ -490,8 +488,8 @@ Item {
                         textColor: root.textColor
                         mutedColor: root.mutedColor
                         hoverColor: root.hoverColor
-                        selectedFillColor: root.selectedFillColor
-                        selectedInkColor: root.selectedInkColor
+                        selectionOutlineColor: root.selectionOutlineColor
+                        selectionOutlineWidth: root.selectionOutlineWidth
                         onClicked: root.maskClicked(index)
                         onLockClicked: root.maskLockClicked(index)
                         onDeleteClicked: root.maskDeleteClicked(index)

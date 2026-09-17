@@ -318,14 +318,14 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     return result;
   }
 
-  auto InsertColorGradeAtTop(const NodeId& new_id, const NodeId& expected_successor_id)
+  auto InsertColorGradeAtTop(const NodeId& new_id, const NodeId& expected_predecessor_id)
       -> EditorSessionResult override {
     if (fail_node_commands_) return Rejected("mini-Git journal append failed");
     const auto backbone = document_->Graph().ImageBackboneNodeIds();
-    if (backbone.size() < 2 || backbone[1] != expected_successor_id) {
+    if (backbone.size() < 2 || backbone[backbone.size() - 2] != expected_predecessor_id) {
       return Rejected("Mask Group anchor no longer matches the backbone");
     }
-    const auto errors = alcedo::AddCleanColorGrade(*document_, backbone[1], new_id);
+    const auto errors = alcedo::AddCleanColorGrade(*document_, backbone.back(), new_id);
     if (!errors.empty()) return Rejected(errors.front().message.c_str());
     last_inserted_node_id_ = new_id;
     ++insert_grade_count_;

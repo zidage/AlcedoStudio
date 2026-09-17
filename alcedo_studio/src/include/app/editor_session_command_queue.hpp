@@ -121,10 +121,10 @@ struct EditorSessionCommand {
   NodeId                                  node_id;
   /// Desired deletion-only protection for SetColorGradeDeletionProtected.
   bool                                    deletion_protected = false;
-  /// InsertColorGradeAtTop only: the backbone node the caller expects to
-  /// follow Develop. Re-verified on the owner thread so a queued request can
-  /// never insert behind a successor that changed after submission.
-  NodeId                                  expected_successor_id;
+  /// InsertColorGradeAtTop only: the backbone node the caller expects directly
+  /// before DRT/Post. Re-verified on the owner thread so a queued request can
+  /// never insert above a predecessor that changed after submission.
+  NodeId                                  expected_predecessor_id;
   NodeGraphTopologyChange                 topology_change{};
 };
 

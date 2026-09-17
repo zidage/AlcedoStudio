@@ -1400,6 +1400,7 @@ TEST_F(EditorNodesPanelQmlTest, MaskGroupsPageRendersEveryBackboneGradeIncluding
   auto* empty_label =
       secondary->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupEmpty"));
   ASSERT_NE(empty_label, nullptr);
+  EXPECT_LT(secondary->y(), primary->y());
   EXPECT_TRUE(empty_label->isVisible());
   EXPECT_EQ(empty_label->property("text").toString(), QStringLiteral("No masks"));
 }
@@ -1751,33 +1752,26 @@ TEST_F(EditorNodesPanelQmlTest, MaskGroupsRestoreScrollAndExpansionAcrossLoaderT
   EXPECT_FALSE(primary->property("expanded").toBool());
 }
 
-TEST_F(EditorNodesPanelQmlTest, MaskGroupsSelectionPaintIsMonochromeNotAccent) {
+TEST_F(EditorNodesPanelQmlTest, MaskGroupHeaderClickTogglesDrawerInBothDirections) {
   ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  backend_.AddMaskToPrimaryGrade(MakeMask(MaskId{"mask.one"}, RadialMaskSource{}));
   OpenMaskGroupsPage();
-  auto* nodes = Controller();
-  ASSERT_NE(nodes, nullptr);
   QTRY_VERIFY_WITH_TIMEOUT(MaskGroupDelegates().size() == 1, 2000);
-  nodes->selectNode(QStringLiteral("grade.primary"));
-  ProcessEvents();
-
   auto* primary = MaskGroupDelegateFor(QStringLiteral("grade.primary"));
   ASSERT_NE(primary, nullptr);
-  QTRY_VERIFY_WITH_TIMEOUT(primary->property("selected").toBool(), 2000);
-  auto* wash =
-      primary->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupHeaderWash"));
-  auto* name =
-      primary->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupName"));
-  ASSERT_NE(wash, nullptr);
-  ASSERT_NE(name, nullptr);
-  const auto& theme     = AppTheme::Instance();
-  const auto  fill      = wash->property("color").value<QColor>();
-  const auto  ink       = name->property("color").value<QColor>();
-  EXPECT_EQ(fill, theme.editorListSelectedFillColor());
-  EXPECT_EQ(ink, theme.editorListSelectedInkColor());
-  // The selected well is a neutral blend, never the accent/blue family.
-  EXPECT_NE(fill, theme.accentColor());
-  EXPECT_LT(std::abs(fill.redF() - fill.greenF()), 0.06);
-  EXPECT_LT(std::abs(fill.greenF() - fill.blueF()), 0.06);
+  auto* header = primary->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupHeader"));
+  auto* layout = LayoutStore();
+  ASSERT_NE(header, nullptr);
+  ASSERT_NE(layout, nullptr);
+  ASSERT_TRUE(primary->property("expanded").toBool());
+
+  Click(window_, header);
+  QTRY_VERIFY_WITH_TIMEOUT(!layout->drawerOpen(QStringLiteral("grade.primary")), 2000);
+  QTRY_VERIFY_WITH_TIMEOUT(!primary->property("expanded").toBool(), 2000);
+
+  Click(window_, header);
+  QTRY_VERIFY_WITH_TIMEOUT(layout->drawerOpen(QStringLiteral("grade.primary")), 2000);
+  QTRY_VERIFY_WITH_TIMEOUT(primary->property("expanded").toBool(), 2000);
 }
 
 TEST_F(EditorNodesPanelQmlTest, MaskGroupsAccessiblePhrasesCoverRowsActionsAndReasons) {

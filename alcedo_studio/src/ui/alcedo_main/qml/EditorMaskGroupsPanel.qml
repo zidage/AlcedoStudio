@@ -550,8 +550,8 @@ Item {
                     hoverColor: appTheme.hoverColor
                     cardSurfaceColor: root.colCardSurface
                     cardBorderColor: root.colCardBorder
-                    selectedFillColor: appTheme.editorListSelectedFillColor
-                    selectedInkColor: appTheme.editorListSelectedInkColor
+                    selectionOutlineColor: appTheme.graphSelectionOutlineColor
+                    selectionOutlineWidth: appTheme.graphSelectionOutlineWidth
                     width: groupsList.width
 
                     onHeaderClicked: root.selectGroup(nodeId)

@@ -6,8 +6,8 @@ import QtQuick.Layouts
 // One Mask row inside an EditorMaskGroupDelegate body. The row carries its own
 // (NodeId, MaskId): selection, lock, and delete commands target this Mask even
 // when another Mask is currently selected for editing.
-// Selection paint is the shared monochrome well (editorListSelectedFill +
-// editorListSelectedInk); no accent frame or side bar (DESIGN.md).
+// Selection follows docs/VI/README.md: the row keeps its fill, text, and SVG
+// colors and changes only its neutral outer outline.
 Item {
     id: root
     objectName: "editorMaskGroupMaskRow"
@@ -28,8 +28,8 @@ Item {
     property color textColor: appTheme.textColor
     property color mutedColor: appTheme.textMutedColor
     property color hoverColor: appTheme.hoverColor
-    property color selectedFillColor: appTheme.editorListSelectedFillColor
-    property color selectedInkColor: appTheme.editorListSelectedInkColor
+    property color selectionOutlineColor: appTheme.graphSelectionOutlineColor
+    property real selectionOutlineWidth: appTheme.graphSelectionOutlineWidth
 
     signal clicked()
     signal lockClicked()
@@ -59,10 +59,8 @@ Item {
         return ""
     }
     readonly property int opacityPercent: Math.round(root.opacityValue * 100)
-    readonly property color inkColor: root.selected ? root.selectedInkColor
-                                                    : (root.maskEnabled ? root.textColor
-                                                                        : root.mutedColor)
-    readonly property color iconTint: root.selected ? root.selectedInkColor : root.mutedColor
+    readonly property color inkColor: root.maskEnabled ? root.textColor : root.mutedColor
+    readonly property color iconTint: root.mutedColor
 
     implicitWidth: 240
     implicitHeight: Math.max(appTheme.iconButtonHitSizeCompact,
@@ -118,12 +116,10 @@ Item {
         objectName: "editorMaskGroupMaskRowWash"
         anchors.fill: parent
         radius: appTheme.controlRadiusSmall
-        color: root.selected ? root.selectedFillColor
-                             : (rowMouse.containsMouse || root.activeFocus
-                                ? root.hoverColor
-                                : "transparent")
-        border.width: root.activeFocus ? 1 : 0
-        border.color: root.inkColor
+        color: rowMouse.containsMouse || root.activeFocus ? root.hoverColor : "transparent"
+        border.width: root.selected ? root.selectionOutlineWidth
+                                    : (root.activeFocus ? 1 : 0)
+        border.color: root.selected ? root.selectionOutlineColor : root.inkColor
     }
 
     RowLayout {
@@ -142,7 +138,7 @@ Item {
             radius: appTheme.controlRadiusSmall
             color: appTheme.bgBaseColor
             border.width: 1
-            border.color: root.selected ? root.selectedInkColor : "transparent"
+            border.color: "transparent"
             Accessible.ignored: true
 
             ColorImage {
@@ -184,7 +180,7 @@ Item {
                 text: root.maskEnabled
                       ? qsTr("%1% opacity").arg(root.opacityPercent)
                       : qsTr("Off") + "  " + qsTr("%1% opacity").arg(root.opacityPercent)
-                color: root.selected ? root.selectedInkColor : root.mutedColor
+                color: root.mutedColor
                 font.family: appTheme.uiFontFamily
                 font.pixelSize: appTheme.fontSizeCaption
                 elide: Text.ElideRight
@@ -208,9 +204,7 @@ Item {
                 selected: root.deletionProtected
                 iconSrc: root.deletionProtected ? "qrc:/panel_icons/lock.svg"
                                                 : "qrc:/panel_icons/lock-open.svg"
-                iconColorDefault: root.selected ? root.selectedInkColor
-                                                : (root.deletionProtected ? root.textColor
-                                                                          : root.mutedColor)
+                iconColorDefault: root.deletionProtected ? root.textColor : root.mutedColor
                 iconColorMuted: root.mutedColor
                 fillIdle: "transparent"
                 fillHover: root.hoverColor
@@ -237,7 +231,7 @@ Item {
                 stretchInLayout: true
                 enabled: root.actionsEnabled && !root.deletionProtected
                 iconSrc: "qrc:/panel_icons/trash.svg"
-                iconColorDefault: root.selected ? root.selectedInkColor : root.mutedColor
+                iconColorDefault: root.mutedColor
                 iconColorMuted: root.mutedColor
                 fillIdle: "transparent"
                 fillHover: root.hoverColor
