@@ -133,6 +133,62 @@ class EditorNodesPanelQmlTest : public RailQmlFixture {
     return window_ == nullptr ? nullptr : window_->findChild<AlcedoQanGraph*>();
   }
 
+  auto MaskAdapter() -> EditorMaskCreationAdapter* { return controller_.mask_creation(); }
+
+  auto MaskGroupDelegates() -> QList<QQuickItem*> {
+    auto* body = Find(QStringLiteral("editorMaskGroupsPageBody"));
+    if (body == nullptr) {
+      return {};
+    }
+    return body->findChildren<QQuickItem*>(QStringLiteral("editorMaskGroupDelegate"));
+  }
+
+  auto MaskGroupDelegateFor(const QString& node_id) -> QQuickItem* {
+    const auto delegates = MaskGroupDelegates();
+    for (auto* delegate : delegates) {
+      if (delegate->property("nodeId").toString() == node_id) {
+        return delegate;
+      }
+    }
+    return nullptr;
+  }
+
+  auto MaskRowIn(QQuickItem* delegate, const QString& mask_id) -> QQuickItem* {
+    if (delegate == nullptr) {
+      return nullptr;
+    }
+    const auto rows =
+        delegate->findChildren<QQuickItem*>(QStringLiteral("editorMaskGroupMaskRow"));
+    for (auto* row : rows) {
+      if (row->property("maskId").toString() == mask_id) {
+        return row;
+      }
+    }
+    return nullptr;
+  }
+
+  auto LastMaskCommand() -> const EditorMaskCreationCommand* {
+    const auto& commands = backend_.mask_commands();
+    return commands.empty() ? nullptr : &commands.back();
+  }
+
+  // Re-fetch delegates inside QTRY waits: a groupsModel rebuild destroys and
+  // recreates ListView delegates, so a pointer saved across it can dangle.
+  auto MaskGroupChild(QQuickItem* delegate, const QString& object_name) -> QQuickItem* {
+    return delegate == nullptr ? nullptr
+                               : delegate->findChild<QQuickItem*>(object_name);
+  }
+
+  auto GroupDeleteButton(const QString& node_id) -> QQuickItem* {
+    return MaskGroupChild(MaskGroupDelegateFor(node_id),
+                          QStringLiteral("editorMaskGroupDeleteButton"));
+  }
+
+  auto MaskRowProtected(const QString& node_id, const QString& mask_id) -> bool {
+    auto* row = MaskRowIn(MaskGroupDelegateFor(node_id), mask_id);
+    return row != nullptr && row->property("deletionProtected").toBool();
+  }
+
   auto LiveQanNodeItemCount() const -> int {
     if (window_ == nullptr) {
       return 0;
@@ -1313,6 +1369,525 @@ TEST_F(EditorNodesPanelQmlTest, AddColorGradeShowsPendingWithoutReplacingQanTopo
   EXPECT_EQ(adapter->topology_replace_count(), replace_count);
   EXPECT_TRUE(nodes->incomplete_draft());
   EXPECT_LT(add_ms, 100);
+}
+
+// ── Mask Groups page: a second, flat projection of the same PipelineDocument
+// DAG. These tests open only the Mask Groups page — the Nodes page is never
+// loaded, proving the shared node controller drives both projections.
+
+TEST_F(EditorNodesPanelQmlTest, MaskGroupsPageRendersEveryBackboneGradeIncludingEmpty) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenMaskGroupsPage();
+  EXPECT_EQ(controller_.editor_tool_panel_page(), QStringLiteral("maskgroups"));
+  auto* body        = Find(QStringLiteral("editorMaskGroupsPageBody"));
+  auto* list        = Find(QStringLiteral("editorMaskGroupsList"));
+  auto* rail_button = Find(QStringLiteral("editorMaskGroupsRailButton"));
+  ASSERT_NE(body, nullptr);
+  ASSERT_NE(list, nullptr);
+  ASSERT_NE(rail_button, nullptr);
+  EXPECT_TRUE(body->isVisible());
+  EXPECT_TRUE(rail_button->property("selected").toBool());
+  EXPECT_EQ(Find(QStringLiteral("editorNodesPageBody")), nullptr);
+  EXPECT_EQ(Find(QStringLiteral("editorHistoryPageBody")), nullptr);
+
+  backend_.AddColorGradeBefore(NodeId{"drt"}, NodeId{"grade.secondary"});
+  ProcessEvents();
+  QTRY_VERIFY_WITH_TIMEOUT(MaskGroupDelegates().size() == 2, 2000);
+  auto* primary   = MaskGroupDelegateFor(QStringLiteral("grade.primary"));
+  auto* secondary = MaskGroupDelegateFor(QStringLiteral("grade.secondary"));
+  ASSERT_NE(primary, nullptr);
+  ASSERT_NE(secondary, nullptr);
+  auto* empty_label =
+      secondary->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupEmpty"));
+  ASSERT_NE(empty_label, nullptr);
+  EXPECT_TRUE(empty_label->isVisible());
+  EXPECT_EQ(empty_label->property("text").toString(), QStringLiteral("No masks"));
+}
+
+TEST_F(EditorNodesPanelQmlTest, MaskGroupInsertAtTopSelectsNewGroupWithoutOpeningNodes) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenMaskGroupsPage();
+  auto* nodes = Controller();
+  ASSERT_NE(nodes, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(nodes->has_snapshot(), 2000);
+  auto* add = Find(QStringLiteral("editorMaskGroupsAddButton"));
+  ASSERT_NE(add, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(add->isEnabled(), 2000);
+
+  Click(window_, add);
+  EXPECT_EQ(backend_.insert_grade_count(), 1);
+  const auto new_id = backend_.last_inserted_node_id();
+  ASSERT_FALSE(new_id.Empty());
+  QTRY_VERIFY_WITH_TIMEOUT(MaskGroupDelegates().size() == 2, 2000);
+  EXPECT_EQ(MaskGroupDelegates().constFirst()->property("nodeId").toString(),
+            nodes->selected_node_id_string());
+  EXPECT_EQ(nodes->selected_node_id(), new_id);
+}
+
+TEST_F(EditorNodesPanelQmlTest, MaskRowClickQueuesSelectMaskWithExplicitIdentity) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  backend_.AddMaskToPrimaryGrade(MakeMask(MaskId{"mask.one"}, RadialMaskSource{}));
+  OpenMaskGroupsPage();
+  auto* nodes = Controller();
+  ASSERT_NE(nodes, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(nodes->has_snapshot(), 2000);
+  QTRY_VERIFY_WITH_TIMEOUT(MaskGroupDelegates().size() == 1, 2000);
+  auto* row = MaskRowIn(MaskGroupDelegateFor(QStringLiteral("grade.primary")),
+                        QStringLiteral("mask.one"));
+  ASSERT_NE(row, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(row->isVisible(), 2000);
+
+  Click(window_, row);
+  const auto* command = LastMaskCommand();
+  ASSERT_NE(command, nullptr);
+  EXPECT_EQ(command->kind, EditorMaskCreationCommandKind::SelectMask);
+  EXPECT_EQ(command->node_id, NodeId{"grade.primary"});
+  EXPECT_EQ(command->mask_id, MaskId{"mask.one"});
+  EXPECT_EQ(nodes->selected_node_id(), NodeId{"grade.primary"});
+}
+
+TEST_F(EditorNodesPanelQmlTest, MaskLockOnNonSelectedRowTargetsThatMaskIdentity) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  backend_.AddMaskToPrimaryGrade(MakeMask(MaskId{"mask.one"}, RadialMaskSource{}));
+  backend_.AddMaskToPrimaryGrade(MakeMask(MaskId{"mask.two"}, LinearGradientMaskSource{}));
+  auto* mask_adapter = MaskAdapter();
+  ASSERT_NE(mask_adapter, nullptr);
+  auto* nodes = Controller();
+  ASSERT_NE(nodes, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(nodes->has_snapshot(), 2000);
+
+  // Select mask.one for editing before touching mask.two's lock. The owning
+  // Grade must be selected first: the session finishes Mask edits whose owner
+  // is not the selected adjustment node on the next projection refresh.
+  nodes->selectNode(QStringLiteral("grade.primary"));
+  mask_adapter->selectMask(QStringLiteral("grade.primary"), QStringLiteral("mask.one"));
+  backend_.CompleteMaskCommands();
+  ProcessEvents();
+  EXPECT_EQ(mask_adapter->selected_mask_id(), QStringLiteral("mask.one"));
+
+  OpenMaskGroupsPage();
+  QTRY_VERIFY_WITH_TIMEOUT(MaskGroupDelegates().size() == 1, 2000);
+  auto* delegate = MaskGroupDelegateFor(QStringLiteral("grade.primary"));
+  ASSERT_NE(delegate, nullptr);
+  auto* row_two  = MaskRowIn(delegate, QStringLiteral("mask.two"));
+  ASSERT_NE(row_two, nullptr);
+  auto* lock_two =
+      row_two->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupMaskLockButton"));
+  ASSERT_NE(lock_two, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(lock_two->isEnabled(), 2000);
+
+  Click(window_, lock_two);
+  const auto* command = LastMaskCommand();
+  ASSERT_NE(command, nullptr);
+  EXPECT_EQ(command->kind, EditorMaskCreationCommandKind::SetMaskField);
+  EXPECT_EQ(command->node_id, NodeId{"grade.primary"});
+  EXPECT_EQ(command->mask_id, MaskId{"mask.two"});
+  EXPECT_EQ(command->field_key, "deletion_protected");
+  ASSERT_TRUE(command->field_value.is_boolean());
+  EXPECT_TRUE(command->field_value.get<bool>());
+
+  backend_.CompleteMaskCommands();
+  ProcessEvents();
+  QTRY_VERIFY_WITH_TIMEOUT(
+      MaskRowProtected(QStringLiteral("grade.primary"), QStringLiteral("mask.two")), 2000);
+  // The selection stays on mask.one: the lock row never hijacked the edit.
+  EXPECT_EQ(mask_adapter->selected_mask_id(), QStringLiteral("mask.one"));
+}
+
+TEST_F(EditorNodesPanelQmlTest, GroupHeaderSelectsGradeAndFinishesOpenMaskEdit) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  backend_.AddMaskToPrimaryGrade(MakeMask(MaskId{"mask.one"}, RadialMaskSource{}));
+  backend_.AddColorGradeBefore(NodeId{"drt"}, NodeId{"grade.secondary"});
+  auto* mask_adapter = MaskAdapter();
+  ASSERT_NE(mask_adapter, nullptr);
+  auto* nodes = Controller();
+  ASSERT_NE(nodes, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(nodes->has_snapshot(), 2000);
+  nodes->selectNode(QStringLiteral("grade.primary"));
+  mask_adapter->selectMask(QStringLiteral("grade.primary"), QStringLiteral("mask.one"));
+  backend_.CompleteMaskCommands();
+  ProcessEvents();
+  ASSERT_TRUE(mask_adapter->mask_controls_active());
+
+  OpenMaskGroupsPage();
+  QTRY_VERIFY_WITH_TIMEOUT(MaskGroupDelegates().size() == 2, 2000);
+  auto* secondary = MaskGroupDelegateFor(QStringLiteral("grade.secondary"));
+  ASSERT_NE(secondary, nullptr);
+  auto* header = secondary->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupHeader"));
+  ASSERT_NE(header, nullptr);
+
+  Click(window_, header);
+  EXPECT_EQ(nodes->selected_node_id(), NodeId{"grade.secondary"});
+  EXPECT_TRUE(mask_adapter->selected_mask_id().isEmpty());
+  EXPECT_FALSE(mask_adapter->mask_controls_active());
+  const auto* command = LastMaskCommand();
+  ASSERT_NE(command, nullptr);
+  EXPECT_EQ(command->kind, EditorMaskCreationCommandKind::FinishMode);
+}
+
+TEST_F(EditorNodesPanelQmlTest, MaskGroupDeleteRoutesOwnerAndSelectsSuccessor) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  backend_.AddColorGradeBefore(NodeId{"drt"}, NodeId{"grade.secondary"});
+  OpenMaskGroupsPage();
+  auto* nodes = Controller();
+  ASSERT_NE(nodes, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(MaskGroupDelegates().size() == 2, 2000);
+  auto* primary = MaskGroupDelegateFor(QStringLiteral("grade.primary"));
+  ASSERT_NE(primary, nullptr);
+  auto* remove =
+      primary->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupDeleteButton"));
+  ASSERT_NE(remove, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(remove->isEnabled(), 2000);
+
+  Click(window_, remove);
+  EXPECT_EQ(backend_.remove_grade_count(), 1);
+  EXPECT_EQ(backend_.last_removed_group_node_id(), NodeId{"grade.primary"});
+  QTRY_VERIFY_WITH_TIMEOUT(MaskGroupDelegates().size() == 1, 2000);
+  EXPECT_EQ(MaskGroupDelegateFor(QStringLiteral("grade.primary")), nullptr);
+  EXPECT_EQ(nodes->selected_node_id(), NodeId{"grade.secondary"});
+}
+
+TEST_F(EditorNodesPanelQmlTest, MaskGroupDeleteFailureKeepsRowAndSelectionUntilRetry) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenMaskGroupsPage();
+  auto* nodes = Controller();
+  ASSERT_NE(nodes, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(MaskGroupDelegates().size() == 1, 2000);
+  nodes->selectNode(QStringLiteral("grade.primary"));
+  ProcessEvents();
+
+  backend_.SetFailNodeCommands(true);
+  auto* primary = MaskGroupDelegateFor(QStringLiteral("grade.primary"));
+  ASSERT_NE(primary, nullptr);
+  auto* remove =
+      primary->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupDeleteButton"));
+  ASSERT_NE(remove, nullptr);
+  Click(window_, remove);
+  EXPECT_EQ(backend_.remove_grade_count(), 0);
+  ProcessEvents();
+  EXPECT_NE(MaskGroupDelegateFor(QStringLiteral("grade.primary")), nullptr);
+  EXPECT_EQ(nodes->selected_node_id(), NodeId{"grade.primary"});
+  auto* error = Find(QStringLiteral("editorMaskGroupsCommandError"));
+  ASSERT_NE(error, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(error->isVisible(), 2000);
+  EXPECT_FALSE(error->property("text").toString().isEmpty());
+
+  backend_.SetFailNodeCommands(false);
+  Click(window_, remove);
+  EXPECT_EQ(backend_.remove_grade_count(), 1);
+  QTRY_VERIFY_WITH_TIMEOUT(MaskGroupDelegateFor(QStringLiteral("grade.primary")) == nullptr,
+                           2000);
+}
+
+TEST_F(EditorNodesPanelQmlTest, LockedGroupDisablesDeleteWithReasonWithoutFiring) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  auto* nodes_probe = Controller();
+  ASSERT_NE(nodes_probe, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(nodes_probe->has_snapshot(), 2000);
+  ASSERT_TRUE(
+      nodes_probe->setColorGradeDeletionProtected(QStringLiteral("grade.primary"), true));
+  ProcessEvents();
+
+  OpenMaskGroupsPage();
+  QTRY_VERIFY_WITH_TIMEOUT(MaskGroupDelegates().size() == 1, 2000);
+  auto* primary = MaskGroupDelegateFor(QStringLiteral("grade.primary"));
+  ASSERT_NE(primary, nullptr);
+  auto* remove =
+      primary->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupDeleteButton"));
+  ASSERT_NE(remove, nullptr);
+  EXPECT_FALSE(remove->isEnabled());
+  const auto reason = remove->property("toolTipText").toString();
+  EXPECT_TRUE(reason.contains(QStringLiteral("Unlock"), Qt::CaseInsensitive))
+      << reason.toStdString();
+  Click(window_, remove);
+  EXPECT_EQ(backend_.remove_grade_count(), 0);
+
+  // Reversible: unlocking re-enables the delete control (delegate may be
+  // rebuilt by the model refresh, so re-fetch inside the wait).
+  ASSERT_TRUE(
+      nodes_probe->setColorGradeDeletionProtected(QStringLiteral("grade.primary"), false));
+  ProcessEvents();
+  QTRY_VERIFY_WITH_TIMEOUT(
+      [&] {
+        auto* fresh = GroupDeleteButton(QStringLiteral("grade.primary"));
+        return fresh != nullptr && fresh->isEnabled();
+      }(),
+      2000);
+}
+
+TEST_F(EditorNodesPanelQmlTest, LockedChildMaskDisablesGroupDeleteWithReason) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  backend_.AddMaskToPrimaryGrade(MakeMask(MaskId{"mask.one"}, RadialMaskSource{}));
+  auto* mask_adapter = MaskAdapter();
+  ASSERT_NE(mask_adapter, nullptr);
+  mask_adapter->setMaskDeletionProtected(QStringLiteral("grade.primary"),
+                                         QStringLiteral("mask.one"), true);
+  backend_.CompleteMaskCommands();
+  ProcessEvents();
+
+  OpenMaskGroupsPage();
+  QTRY_VERIFY_WITH_TIMEOUT(MaskGroupDelegates().size() == 1, 2000);
+  auto* primary = MaskGroupDelegateFor(QStringLiteral("grade.primary"));
+  ASSERT_NE(primary, nullptr);
+  auto* remove =
+      primary->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupDeleteButton"));
+  ASSERT_NE(remove, nullptr);
+  EXPECT_FALSE(remove->isEnabled());
+  const auto reason = remove->property("toolTipText").toString();
+  EXPECT_TRUE(reason.contains(QStringLiteral("Masks"), Qt::CaseInsensitive))
+      << reason.toStdString();
+  Click(window_, remove);
+  EXPECT_EQ(backend_.remove_grade_count(), 0);
+}
+
+TEST_F(EditorNodesPanelQmlTest, LockedMaskKeepsRowWhenOwnerRejectsQueuedDelete) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  backend_.AddMaskToPrimaryGrade(MakeMask(MaskId{"mask.one"}, RadialMaskSource{}));
+  auto* mask_adapter = MaskAdapter();
+  ASSERT_NE(mask_adapter, nullptr);
+  mask_adapter->setMaskDeletionProtected(QStringLiteral("grade.primary"),
+                                         QStringLiteral("mask.one"), true);
+  backend_.CompleteMaskCommands();
+  ProcessEvents();
+
+  OpenMaskGroupsPage();
+  QTRY_VERIFY_WITH_TIMEOUT(MaskGroupDelegates().size() == 1, 2000);
+  auto* delegate = MaskGroupDelegateFor(QStringLiteral("grade.primary"));
+  ASSERT_NE(delegate, nullptr);
+  auto* row = MaskRowIn(delegate, QStringLiteral("mask.one"));
+  ASSERT_NE(row, nullptr);
+  auto* remove =
+      row->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupMaskDeleteButton"));
+  ASSERT_NE(remove, nullptr);
+  EXPECT_FALSE(remove->isEnabled());
+
+  // Even if a delete is queued directly (stale UI), the owner's
+  // ValidateUserDeletion keeps the locked Mask and its row.
+  mask_adapter->removeMask(QStringLiteral("grade.primary"), QStringLiteral("mask.one"));
+  backend_.CompleteMaskCommands();
+  ProcessEvents();
+  EXPECT_NE(MaskRowIn(MaskGroupDelegateFor(QStringLiteral("grade.primary")),
+                      QStringLiteral("mask.one")),
+            nullptr);
+}
+
+TEST_F(EditorNodesPanelQmlTest, MaskRowDeleteQueuesRemoveMaskWithExplicitIdentity) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  backend_.AddMaskToPrimaryGrade(MakeMask(MaskId{"mask.one"}, RadialMaskSource{}));
+  OpenMaskGroupsPage();
+  QTRY_VERIFY_WITH_TIMEOUT(MaskGroupDelegates().size() == 1, 2000);
+  auto* delegate = MaskGroupDelegateFor(QStringLiteral("grade.primary"));
+  ASSERT_NE(delegate, nullptr);
+  auto* row = MaskRowIn(delegate, QStringLiteral("mask.one"));
+  ASSERT_NE(row, nullptr);
+  auto* remove =
+      row->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupMaskDeleteButton"));
+  ASSERT_NE(remove, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(remove->isEnabled(), 2000);
+
+  Click(window_, remove);
+  const auto* command = LastMaskCommand();
+  ASSERT_NE(command, nullptr);
+  EXPECT_EQ(command->kind, EditorMaskCreationCommandKind::RemoveMask);
+  EXPECT_EQ(command->node_id, NodeId{"grade.primary"});
+  EXPECT_EQ(command->mask_id, MaskId{"mask.one"});
+}
+
+TEST_F(EditorNodesPanelQmlTest, MaskGroupsDisableStructureActionsDuringIncompleteDraft) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenMaskGroupsPage();
+  auto* nodes = Controller();
+  ASSERT_NE(nodes, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(nodes->has_snapshot(), 2000);
+  ASSERT_TRUE(nodes->addCleanColorGrade());
+  ASSERT_TRUE(nodes->incomplete_draft());
+  ProcessEvents();
+
+  auto* add = Find(QStringLiteral("editorMaskGroupsAddButton"));
+  ASSERT_NE(add, nullptr);
+  EXPECT_FALSE(add->isEnabled());
+  auto* notice = Find(QStringLiteral("editorMaskGroupsDraftNotice"));
+  ASSERT_NE(notice, nullptr);
+  EXPECT_TRUE(notice->isVisible());
+  QTRY_VERIFY_WITH_TIMEOUT(MaskGroupDelegates().size() >= 1, 2000);
+  auto* primary = MaskGroupDelegateFor(QStringLiteral("grade.primary"));
+  ASSERT_NE(primary, nullptr);
+  auto* remove =
+      primary->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupDeleteButton"));
+  ASSERT_NE(remove, nullptr);
+  EXPECT_FALSE(remove->isEnabled());
+}
+
+TEST_F(EditorNodesPanelQmlTest, MaskGroupsRestoreScrollAndExpansionAcrossLoaderTeardown) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  backend_.AddColorGradeBefore(NodeId{"drt"}, NodeId{"grade.b"});
+  backend_.AddColorGradeBefore(NodeId{"drt"}, NodeId{"grade.c"});
+  backend_.AddColorGradeBefore(NodeId{"drt"}, NodeId{"grade.d"});
+  OpenMaskGroupsPage();
+  auto* layout = LayoutStore();
+  ASSERT_NE(layout, nullptr);
+  layout->setDrawerOpen(QStringLiteral("grade.primary"), false);
+  ProcessEvents();
+
+  auto* list = Find(QStringLiteral("editorMaskGroupsList"));
+  ASSERT_NE(list, nullptr);
+  const qreal target_y = 60.0;
+  ASSERT_TRUE(list->setProperty("contentY", target_y));
+  ProcessEvents();
+  ASSERT_GT(list->property("contentY").toReal(), 0.0);
+
+  controller_.set_editor_tool_panel_page(QString());
+  ProcessEvents();
+  QTRY_VERIFY_WITH_TIMEOUT(Find(QStringLiteral("editorMaskGroupsPageBody")) == nullptr,
+                           2000);
+
+  OpenMaskGroupsPage();
+  auto* restored = Find(QStringLiteral("editorMaskGroupsList"));
+  ASSERT_NE(restored, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(restored->property("contentY").toReal() > 0.0, 2000);
+  EXPECT_FALSE(layout->drawerOpen(QStringLiteral("grade.primary")));
+  auto* primary = MaskGroupDelegateFor(QStringLiteral("grade.primary"));
+  ASSERT_NE(primary, nullptr);
+  EXPECT_FALSE(primary->property("expanded").toBool());
+}
+
+TEST_F(EditorNodesPanelQmlTest, MaskGroupsSelectionPaintIsMonochromeNotAccent) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenMaskGroupsPage();
+  auto* nodes = Controller();
+  ASSERT_NE(nodes, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(MaskGroupDelegates().size() == 1, 2000);
+  nodes->selectNode(QStringLiteral("grade.primary"));
+  ProcessEvents();
+
+  auto* primary = MaskGroupDelegateFor(QStringLiteral("grade.primary"));
+  ASSERT_NE(primary, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(primary->property("selected").toBool(), 2000);
+  auto* wash =
+      primary->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupHeaderWash"));
+  auto* name =
+      primary->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupName"));
+  ASSERT_NE(wash, nullptr);
+  ASSERT_NE(name, nullptr);
+  const auto& theme     = AppTheme::Instance();
+  const auto  fill      = wash->property("color").value<QColor>();
+  const auto  ink       = name->property("color").value<QColor>();
+  EXPECT_EQ(fill, theme.editorListSelectedFillColor());
+  EXPECT_EQ(ink, theme.editorListSelectedInkColor());
+  // The selected well is a neutral blend, never the accent/blue family.
+  EXPECT_NE(fill, theme.accentColor());
+  EXPECT_LT(std::abs(fill.redF() - fill.greenF()), 0.06);
+  EXPECT_LT(std::abs(fill.greenF() - fill.blueF()), 0.06);
+}
+
+TEST_F(EditorNodesPanelQmlTest, MaskGroupsAccessiblePhrasesCoverRowsActionsAndReasons) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  backend_.AddMaskToPrimaryGrade(MakeMask(MaskId{"mask.one"}, RadialMaskSource{}));
+  OpenMaskGroupsPage();
+  QTRY_VERIFY_WITH_TIMEOUT(MaskGroupDelegates().size() == 1, 2000);
+  auto* primary = MaskGroupDelegateFor(QStringLiteral("grade.primary"));
+  ASSERT_NE(primary, nullptr);
+  auto* header = primary->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupHeader"));
+  ASSERT_NE(header, nullptr);
+  const auto header_name = AttachedName(header);
+  EXPECT_TRUE(header_name.contains(QStringLiteral("Mask"), Qt::CaseInsensitive))
+      << header_name.toStdString();
+  EXPECT_TRUE(header_name.contains(QStringLiteral("expanded"), Qt::CaseInsensitive))
+      << header_name.toStdString();
+
+  auto* remove =
+      primary->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupDeleteButton"));
+  ASSERT_NE(remove, nullptr);
+  EXPECT_EQ(AttachedName(remove), QStringLiteral("Delete Color Grade 1"));
+
+  QStringList phrases;
+  CollectAccessiblePhrases(Find(QStringLiteral("editorMaskGroupsPageBody")), &phrases);
+  for (const auto& phrase : phrases) {
+    EXPECT_FALSE(phrase.contains(QStringLiteral(" · ")));
+    EXPECT_FALSE(phrase.contains(QStringLiteral(" | ")));
+    EXPECT_NE(phrase, QStringLiteral("On"));
+    EXPECT_NE(phrase, QStringLiteral("Off"));
+  }
+}
+
+TEST_F(EditorNodesPanelQmlTest, MaskGroupsNarrowPanelKeepsActionsInsideRows) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  backend_.AddMaskToPrimaryGrade(MakeMask(MaskId{"mask.one"}, RadialMaskSource{}));
+  auto* layout = LayoutStore();
+  ASSERT_NE(layout, nullptr);
+  layout->set_preferred_panel_width(260);
+  OpenMaskGroupsPage();
+  QTRY_VERIFY_WITH_TIMEOUT(MaskGroupDelegates().size() == 1, 2000);
+  auto* delegate = MaskGroupDelegateFor(QStringLiteral("grade.primary"));
+  ASSERT_NE(delegate, nullptr);
+  auto* list = Find(QStringLiteral("editorMaskGroupsList"));
+  ASSERT_NE(list, nullptr);
+  EXPECT_LE(delegate->width(), list->width() + 1.0);
+
+  auto* group_remove =
+      delegate->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupDeleteButton"));
+  ASSERT_NE(group_remove, nullptr);
+  const QPointF button_right =
+      delegate->mapFromItem(group_remove, QPointF(group_remove->width(), 0.0));
+  EXPECT_LE(button_right.x(), delegate->width());
+  auto* name =
+      delegate->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupName"));
+  ASSERT_NE(name, nullptr);
+  EXPECT_GT(name->width(), 0.0);
+
+  auto* row = MaskRowIn(delegate, QStringLiteral("mask.one"));
+  ASSERT_NE(row, nullptr);
+  auto* mask_remove =
+      row->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupMaskDeleteButton"));
+  ASSERT_NE(mask_remove, nullptr);
+  const QPointF row_button_right =
+      row->mapFromItem(mask_remove, QPointF(mask_remove->width(), 0.0));
+  EXPECT_LE(row_button_right.x(), row->width());
+}
+
+TEST_F(EditorNodesPanelQmlTest, MaskGroupsKeyboardNavigatesHeadersAndMaskRows) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  backend_.AddMaskToPrimaryGrade(MakeMask(MaskId{"mask.one"}, RadialMaskSource{}));
+  backend_.AddColorGradeBefore(NodeId{"drt"}, NodeId{"grade.secondary"});
+  OpenMaskGroupsPage();
+  auto* nodes = Controller();
+  ASSERT_NE(nodes, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(MaskGroupDelegates().size() == 2, 2000);
+  auto* primary = MaskGroupDelegateFor(QStringLiteral("grade.primary"));
+  ASSERT_NE(primary, nullptr);
+  auto* header = primary->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupHeader"));
+  ASSERT_NE(header, nullptr);
+
+  header->forceActiveFocus();
+  ProcessEvents();
+  ASSERT_TRUE(header->hasActiveFocus());
+  QTest::keyClick(window_, Qt::Key_Down);
+  ProcessEvents();
+  auto* row = MaskRowIn(primary, QStringLiteral("mask.one"));
+  ASSERT_NE(row, nullptr);
+  EXPECT_TRUE(row->hasActiveFocus());
+
+  QTest::keyClick(window_, Qt::Key_Return);
+  ProcessEvents();
+  const auto* command = LastMaskCommand();
+  ASSERT_NE(command, nullptr);
+  EXPECT_EQ(command->kind, EditorMaskCreationCommandKind::SelectMask);
+  EXPECT_EQ(command->mask_id, MaskId{"mask.one"});
+
+  auto* secondary = MaskGroupDelegateFor(QStringLiteral("grade.secondary"));
+  ASSERT_NE(secondary, nullptr);
+  auto* secondary_header =
+      secondary->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupHeader"));
+  ASSERT_NE(secondary_header, nullptr);
+  secondary_header->forceActiveFocus();
+  ProcessEvents();
+  ASSERT_TRUE(secondary_header->hasActiveFocus());
+  QTest::keyClick(window_, Qt::Key_Left);
+  ProcessEvents();
+  EXPECT_FALSE(secondary->property("expanded").toBool());
+  QTest::keyClick(window_, Qt::Key_Right);
+  ProcessEvents();
+  EXPECT_TRUE(secondary->property("expanded").toBool());
 }
 
 }  // namespace

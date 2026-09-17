@@ -1445,7 +1445,8 @@ auto EditorSessionService::ApplyMaskCreationCommand(const EditorMaskCreationComm
     case EditorMaskCreationCommandKind::BeginMaskField:
       return mask_creation_.BeginMaskFieldEdit(command.field_key);
     case EditorMaskCreationCommandKind::SetMaskField:
-      return mask_creation_.ApplyMaskFieldValue(command.field_key, command.field_value);
+      return mask_creation_.ApplyMaskFieldValue(command.node_id, command.mask_id,
+                                              command.field_key, command.field_value);
   }
   EditorMaskCreationResult rejected;
   rejected.error = "unknown Mask creation command";

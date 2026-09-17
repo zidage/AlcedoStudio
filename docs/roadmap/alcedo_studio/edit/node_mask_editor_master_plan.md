@@ -1703,7 +1703,7 @@ path with a Markdown link when the file exists.
 | NM6 — Node-aware Adjustment Stack | in progress (NM6.1 complete 2026-09-05) | [node_mask_editor/phase_nm6_node_aware_adjustments_plan.md](node_mask_editor/phase_nm6_node_aware_adjustments_plan.md) | Add node-aware panels and EXIF header with serial Interactive input, shared backend execution, and dependency-version caches. |
 | NM7 — Analytic Viewer Masks and Detachable Brush Boundary | complete per user confirmation 2026-09-12; historical evidence retained | [NM7 execution plan](node_mask_editor/phase_nm7_viewer_mask_creation_plan.md) | Project format `0.7.0`, Brush disabled, Radial/Linear Gradient delivery; final product evidence remains in NM8. |
 | NM8 — Whole-DAG Performance and Brush-disabled Product Qualification | complete per user confirmation 2026-09-16; scope closes at NM8.4 | [NM8 execution plan](node_mask_editor/phase_nm8_product_qualification_plan.md) | Recorded timing, fused Basic Tone/Color, and shared work images; NM8.5–NM8.6 excluded from current closure; unmeasured evidence stays explicit. |
-| NM9 — Twin Mask Groups Panel | in progress (NM9.1 complete 2026-09-16) | [NM9 execution plan](node_mask_editor/phase_nm9_mask_group_panel_plan.md) | Keep Nodes and add a traditional photography stack over the same DAG, with shared selection, Mask previews, deletion locks, and history. |
+| NM9 — Twin Mask Groups Panel | in progress (NM9.1–NM9.2 complete 2026-09-16) | [NM9 execution plan](node_mask_editor/phase_nm9_mask_group_panel_plan.md) | Layout C over the same DAG, shared selection and deletion locks; project-scoped memory LRU for committed Mask thumbnails, progressive display, and deletion independent of thumbnail work. |
 | NM10 — Adjustment Transfer | reserved; scope blank | [NM10 placeholder](node_mask_editor/phase_nm10_adjustment_transfer_plan.md) | — |
 
 ### 21.1 Phase NM0 — QuickQanava Integration Baseline
@@ -2077,7 +2077,8 @@ next-release Brush Master Plan and cannot be inferred from NM8 success.
 ### 21.10 Phase NM9 — Twin Mask Groups Panel
 
 **执行方案：** [蒙版组孪生面板与传统摄影工作流](node_mask_editor/phase_nm9_mask_group_panel_plan.md)。
-**状态：planned。** 2026-09-16 产品方向已确定，尚未实施。
+**状态：in progress。** NM9.1/NM9.2 已于 2026-09-16 完成。用户已选择方案 C（缩略图
+优先），缩略图 service 规格已写入执行方案第 5 节和 NM9.4；NM9.3 细分另行整理。
 
 保留 QuickQanava Nodes，增加 Mask Groups 面板。图中的顺序
 `Develop → Color Grade 1 → Color Grade 2 → Color Grade 3 → DRT/Post`
@@ -2086,10 +2087,19 @@ next-release Brush Master Plan and cannot be inferred from NM8 success.
 新建组在 stack 顶部插入 Clean Grade；选中组后使用现有蒙版按钮创建 Radial/Linear
 Gradient。选中任一 Mask 同时定位 owner 节点、右侧参数页和 Viewer 控件。
 
-组头提供合成蒙版的小缩略图，约 256×256 采样、保持照片比例、黑底白蒙版；展开后显示
-各 Mask 的位置/强度示意与删除动作。节点和 Mask 支持删除锁；默认 Color Grade 1 及其
-蒙版默认上锁，可显式解锁，参数编辑保持可用。未来并行混合步骤投影为一个不可添加
+组头提供合成蒙版的小缩略图，固定 128×128 R8，保持照片比例、黑底白蒙版。展开后
+显示各 Mask 的位置/强度示意。当前合成仅显示 Add，内部
+保持逐像素 max 的 Union；每个 Mask 和 Group 都有独立删除按钮。节点和 Mask 支持
+删除锁；默认 Color Grade 1 及其蒙版默认上锁，可显式解锁，参数编辑保持可用。
+未来并行混合步骤投影为一个不可添加
 Mask 的组；NM9 不借此引入未定义的分支执行或合成算法。
+
+项目级常驻 Mask thumbnail service 使用 element ID 加实际蒙版/geometry 输入作为
+内容键，默认 1000 项固定容量内存 LRU；跨图、单图会话和 Version 保留，不读写磁盘。
+编辑 preview 不更新，成功 commit 后按变化项请求；首次可见和历史恢复可命中旧内容。
+面板先显示结构和按钮，缩略图逐项完成。删除先撤销 UI 订阅，再由 owner 异步提交；
+不等待生成、取消确认或显示资源销毁。晚到输出可缓存，只有当前请求身份匹配且目标
+仍存在时才更新 UI；Undo 同 ID 必须使用新订阅。完整 Key、生命周期与竞态矩阵见执行方案。
 
 **完成条件：** 同一操作从两种视图进入得到相同 DAG/参数/历史/像素；新建组即时有效且
 初始画面不变；选中、删除保护、缩略图、Undo/Redo、Version、Paste、reopen 和图像切换

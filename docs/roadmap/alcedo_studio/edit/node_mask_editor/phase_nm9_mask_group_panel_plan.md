@@ -2,11 +2,18 @@
 
 Date: 2026-09-16
 
-Status: **NM9.1 complete 2026-09-16**；**NM9.2 complete 2026-09-16**；NM9.3–NM9.6 仍为
-planned。本文件记录产品语义和实施拆分；NM9.1 的共享组投影、顶部插入、桥接删除与草稿
+Status: **NM9.1 complete 2026-09-16**；**NM9.2 complete 2026-09-16**；**NM9.3 partial
+2026-09-16 on `feature/mask-groups-workspace`**；NM9.4–NM9.6 仍为 planned。本文件记录产品
+语义和实施拆分；NM9.1 的共享组投影、顶部插入、桥接删除与草稿
 边界已在 `feature/nm91-mask-group-projection` 实现并通过验证，见 NM9.1 完成记录。
 NM9.2 的删除保护、默认 Grade 身份与格式读写已在 `feature/nm92-deletion-protection`
-实现并通过验证，见 NM9.2 完成记录。
+实现并通过验证，见 NM9.2 完成记录；NM9.3 见其完成记录。
+
+Design update 2026-09-16：用户已选择方案 C（缩略图优先）。当前 Mask 合成在 UI 中只称
+`Add`，内部保持 Union；每个 Mask 和 Group 均有独立删除按钮。缩略图采用项目级内存
+KV/LRU service，固定 128×128 灰度、默认 1000 项、跨图复用、仅成功 commit 后更新、
+逐项异步显示且不阻塞删除；完整规格见第 5 节与 NM9.4。NM9.3 的约 2–3 阶段拆分留待
+单独整理，本次保留阶段编号和依赖，先写清已确定的行为。
 
 Parent: [Node-aware Pipeline Editing and Mask Creation](../node_mask_editor_master_plan.md)，
 第 7.1、16、18.1、21.10、26 节。
@@ -32,7 +39,7 @@ NM8.4 收口。原 NM8.5/NM8.6 不作为 NM9 前置工作；已有平台证据�
 
 本阶段遵守 [DESIGN.md 的 monochrome 选择规则](../../../../../alcedo_studio/src/ui/alcedo_main/DESIGN.md#monochrome-selection-and-restrained-theme-blue)：
 禁止蓝色相框式选中态，组、Mask row 和缩略图都不使用蓝框、蓝底或蓝色侧边条表达选择。
-第 2.6 节保留多个 ASCII 布局候选，目前不选定任何一个，也不将候选写成已批准的 UI。
+第 2.6 节采用已选定的方案 C；A、B、D 仅保留为设计比较记录。
 
 ### 2.1 DAG 与 stack 的对应
 
@@ -74,8 +81,13 @@ Mask 页编辑；组列表承担查找和管理，不复制完整参数表。
 Grade 的全图作用；非空集合但全部关闭时 coverage 为零。组头对前者不显示虚构缩略图，
 对后者显示真实全黑 coverage 并保留各关闭 row，不能把这两种状态合并成“没有 Mask”。
 
-采样图约为 256×256 级别，最长边不超过 256；保持照片比例，可置于黑色方形底内。
-UI 按 AppTheme 的紧凑尺寸显示，不把整个 256 px 图直接占满组头。裁剪、旋转和纵横比
+当前 Mask 合成只开放 **Add**，这是内部 Union 的用户可见名称。Union 保持逐像素
+`max`，不改为数值相加、饱和加法或普通 alpha 叠加；两个 50% coverage 的相交区域
+仍为 50%。此名称描述组内 Mask 合成，不新增 Grade 之间的照片混合操作。每个 Mask
+row 与每个 Group 组头都有独立删除按钮，沿 NM9.2 的删除保护与原子校验执行。
+
+输出固定为 128×128 的 R8 灰度图；照片比例保留在黑色方形画布内，取样定义见第 5.3 节。
+UI 按 AppTheme 的紧凑尺寸显示，DPR 不改变缓存尺寸。裁剪、旋转和纵横比
 使用与 Viewer 一致的坐标映射；不能把椭圆拉圆或把照片外区域算进 Mask。
 
 ### 2.3 两个创建入口
@@ -122,11 +134,12 @@ enabled=true、mix=1、Mask 为空。这和默认 Color Grade 1 的产品初始�
 NM9 只固定这条表示和能力规则，不实现新的并行混合执行器。当前单主链继续由既有图
 验证器保证；未来新增混合类型时必须补充明确的分组边界、输入/输出和测试后才能开放。
 
-### 2.6 ASCII 布局候选（未选定）
+### 2.6 ASCII 布局方案（已选择 C）
 
-2026-09-16：用户要求先保留多个候选，**现在不决定布局**。A–D 不设推荐顺序，不代表
-实施承诺；NM9.3 开始布局实施前再确定采用哪一种。以下只比较信息组织，均遵守第 2.1–2.5
-节的数据和操作语义，不通过线稿改变顶部插入顺序、Mask 所有权或删除锁规则。
+2026-09-16：用户在 NM9.2 完成后选择 **C — 缩略图优先**。A、B、D 保留为比较记录，
+不再是待选择的生产布局。方案 C 保留多组同时展开；缩略图采用第 5 节的跨图内存缓存、
+固定采样与 commit 后逐项加载。以下均遵守第 2.1–2.5 节的数据和操作语义，不改变顶部插入
+顺序、Mask 所有权或删除锁规则。
 
 线稿使用英文短标签保证等宽对齐；产品使用本地化文案。字符宽度不代表实际像素，最终
 使用现有 260–460 px 侧栏范围与 AppTheme 尺寸，不因线稿紧凑而缩小按钮点击区域。
@@ -217,11 +230,11 @@ Color Grade 2，不增加虚构的黑色缩略图或默认 Mask。
 组头缩略图和操作列对齐，子 row 的类型、强度与操作列保持稳定。折叠只隐藏该组子项，
 不移动组的主链顺序；删除和锁点击不传播成组选择。
 
-#### 候选 C — 缩略图优先
+#### 方案 C — 缩略图优先（已选定）
 
 把组的合成蒙版放在标题左侧，给位置/形状更高的视觉优先级；子 row 也使用稍大的预览。
-适合凭“蒙版画在哪里”寻找调整，代价是同屏组数更少。预览只是更大的显示窗口，采样
-上限仍为第 2.2 节约 256×256 级别，不增加照片渲染尺寸。
+适合凭“蒙版画在哪里”寻找调整，代价是同屏组数更少。显示尺寸由 AppTheme 控制，
+输出仍为第 2.2 节的 128×128，不增加照片渲染尺寸，也不等待全部小图完成再显示面板。
 
 ```text
 +--------------------------------------------------+
@@ -232,10 +245,10 @@ Color Grade 2，不增加虚构的黑色缩略图或默认 Mask。
 |   |.####.|                                       |
 |   +------+                                       |
 |=    +------+  Radial                  [L]  [--] =|
-|=    |..##..|  100%                              =|
+|=    |..##..|  Add       100%                    =|
 |=    +------+                                    =|
 |     +------+  Gradient                [L]  [--]  |
-|     |..::##|  45%                                |
+|     |..::##|  Add        45%                      |
 |     +------+                                     |
 |--------------------------------------------------|
 | v            Color Grade 2             [U]  [X]  |
@@ -370,42 +383,242 @@ revision 和生存期，禁止新建 parallel layer state。
 完整主链的组插入/删除和 Mask 创建；完成连接后，随同一个有效提交恢复 stack。复用
 现有草稿的读取接口，不新增一份草稿。
 
-## 5. 缩略图资源、失效与持久化
+## 5. 缩略图 service、跨图缓存与异步显示规格
 
-缩略图是 UI 展示所需的独立算法输出，由现有 Mask/render 资源 owner 生成，经过 app
-边界交给 UI；不持有或复制 live document，也不保留 Grade 的 RGBA 结果。复用实际 Mask
-求值/Union 语义，不能另外写一个看起来相近的 QML 椭圆或渐变代替实际 coverage。
+**当前设计（2026-09-16）：** 采用项目级常驻 `MaskThumbnailService`，为当前 Radial /
+Linear Gradient 生成 CPU 灰度小图。内存 KV 缓存默认最多 **1000 项**，严格 LRU 淘汰，
+跨图片、跨编辑会话和 Version 复用；不读写磁盘。编辑过程中保持最近一次已提交结果，
+只在成功 commit 后检查新的内容键；首次显示、缓存未命中和历史恢复按下文请求。
+本节取代原先的原生后端小图限定、拖动定时刷新和切图清空缓存建议。照片的原生渲染
+后端、Interactive/Quality/export 的质量策略保持既有定义。
 
-- owner 以会话、NodeId、可选 MaskId、Mask 内容 revision 和 geometry revision 标识结果。
-  只允许匹配当前身份与版本的结果发布；取消/失败不发布旧图冒充新图。
-- 仅更新受影响的 Mask 和所属组；改 Exposure 等非 Mask 参数、选择、折叠、移动节点、
-  切换删除锁不触发 coverage 重算。纯 Mask row 重排不改变 Union 结果。
-- 生成和上传异步完成，不能每次 QML paint 都求值、同步等待 GPU 或读回全尺寸 Mask。
-  使用所选原生后端已有结果或同语义的原生求值；失败显示真实状态，不改用其他后端。
-- 256 级采样仅服务缩略图，不改变 Interactive/Quality/export 的分辨率、算法或数值精度。
-  不另起一条照片渲染管线，不恢复 NM8 已取消的逐 Grade RGBA 缓存。
-- 由 owner 限定缩略图数量和字节；面板不可见时停止新请求，切图/Version/关闭会话时释放
-  过期资源。排队结果在 UI 销毁后仍可安全丢弃。
-- 锁进入 document、typed history、checkpoint 和 Version/Paste 数据；缩略图不进入照片
-  历史或项目序列化，展开/滚动等只进入既有 UI 状态 owner。
+### 5.1 service 的所有者、值与容量
 
-新增持久字段必须审计项目格式版本与现有解码规则，并在实施时写明缺字段的处理方式。
-旧数据若需要转换，只能沿已批准的格式策略显式处理；不能偷偷补字段改变历史重放，也
-不能在没有版本规则时宣称可以直接打开所有旧项目。NM9 验收必须记录实际版本及支持边界。
+- service 由项目级服务容器持有，生命周期覆盖该项目内的全部照片编辑会话；不由
+  panel、delegate 或单张图片的 EditorSession 创建/销毁。切 A→B→A、关闭重开面板、
+  关闭单图编辑会话和切 Version 都保留 LRU。项目关闭时释放；另一个项目使用独立
+  service 实例，element 数字 ID 不跨项目混用。本阶段不做跨项目或进程重启后的缓存。
+- 一个缓存 Value 是不可变的 **128×128、R8 灰度输出**，占 16,384 bytes（16 KiB）。
+  Qt 边界可用 `QImage::Format_Grayscale8` 包装；不保存 RGB32/RGBA32F 的长期副本。
+  单 Mask 图和 Group 图共用 1000 项额度，历史参数对应的旧图也占额度。
+- 成功查询和新结果插入提升为 MRU；第 1001 项插入前淘汰 LRU，使 ready 项数始终
+  不超过配置值。容量是可配置的正整数，默认 1000；本阶段不增加用户设置页。
+  不因 pin、命中率、面板数量或临时内存压力而自动增加容量。
+- 1000 项的灰度像素为 16,384,000 bytes（15.625 MiB）。键、LRU 节点、在途计算、
+  当前可见项的共享引用和 Qt 上传纹理另外计量，不能宣称整个功能只占 16 MB。
+- 淘汰只移除 KV 的强引用，不使正在显示或上传的图像失效。接收方以共享只读句柄
+  持有输出，行隐藏、删除、替换 source 或 Loader 销毁时释放；不为离屏行保留句柄。
+  service 是唯一长期缓存，provider 不再建立一份永久保留所有历史 URL 的图像表。
+- 不创建文件、SQLite/DuckDB 表或 `ThumbnailDiskCacheService`；不调用 Library 的
+  磁盘缩略图读写、解码/照片渲染 scheduler 或 JPEG/WebP 编码。缩略图不进 history、
+  checkpoint、项目包、Version 或 Paste 数据，错误也不触发写回文档。
+
+### 5.2 内容键：element ID 加实际求值输入
+
+项目由 service 实例隔离。实例内的键定义如下，`input` 同时作为异步求值所需的不可变
+最小输入；不得另外复制整份 MaskModel、Grade、PipelineDocument 或照片像素：
+
+```text
+Key = (element_id, input)
+input = (sampling_version = 1, kind = Single | Group, geometry, mask_parameters)
+```
+
+| 字段 | 必须包含的内容 | 必须排除的内容 |
+| --- | --- | --- |
+| `element_id` | 当前项目内的实际 element ID | 列表下标、文件名或缩略图 URL |
+| `geometry` | full reference 尺寸、决定 reference 坐标基准的源方向值、已提交照片 crop/rotation/expand_to_fit；复用现有值类型的必要字段。worker 从这些字段推导完整照片取样映射与有效区域，不在键中重复保存派生矩阵 | 当前照片 decode/render 分辨率、Viewer 临时 pan/zoom/ROI、窗口大小、DPR、geometry revision 计数 |
+| 单 Mask 参数 | source kind；Radial 的 center_x/y、major/minor_radius、rotation、inner/outer_feather，或 Gradient 的 origin_x/y、normal_x/y、transition_distance、start/end_value；两者的 enabled、invert、opacity | NodeId、MaskId、display_name、删除保护、选中/展开状态、Grade enabled/Mix/曝光等调整、会话 ID、Version ID、history/document revision |
+| Group 参数 | 当前启用成员的单 Mask 参数编码，按编码排序后组成数组；复用同一 geometry；Group 类型标签使全关闭的非空组能生成全黑图 | 成员 ID、显示顺序、名称、锁；无 Mask 的组根本不请求图 |
+
+Group 参数只取启用成员，因此添加/删除已关闭成员而仍保持非空组时可复用相同 Group
+图。单 Mask 行关闭时显示有效全黑 coverage，并由行的文字/控件表示关闭状态。无 Mask
+与全关闭必须区分：前者无缩略图，后者有全黑结果。Group 图取 Grade Mix 之前的 coverage。
+
+键对语义输入做逐字段稳定编码。浮点按实际存储精度保持值，`-0` 规范为 `+0`，拒绝
+非有限/非法输入；不读 struct padding、不按地址编码、不把参数四舍五入成显示文本。
+哈希仅用于查表，命中还必须比较完整规范键，不能把哈希碰撞当成同图。序列化整个
+`MaskModelToJson` 不符合此定义，因为它包含身份和无关元数据。
+
+同一 element 的相同参数在 A→B→A、Undo、Redo、Version 恢复或新 Mask 身份下应命中
+同一内容；不同 element 不共用键。普通编辑产生新键，旧项留待 LRU 淘汰，不执行
+`InvalidateElement` 或清空整个项目。固定 128 规格不因 DPR 变化生成第二套缓存。
+
+**最小独立输入的必要性：** 异步生成必须能在 live Mask 已被删除后安全完成，不能
+持有 document 引用或在整个计算期间阻塞 owner。缓存键本身已经需要这些参数，故从
+成功提交后的 owner scoped read 一次构造该不可变键，并直接用它求值；不再增加平行
+状态对象。复用既有 Radial/Gradient 参数和 geometry 值类型，去掉名称、ID、锁和全部
+无关字段。请求、KV 与共享任务按需持有键，取消/淘汰/结束时释放；绝不写回 live 数据。
+
+### 5.3 固定取样与生成职责
+
+1. 每个输出画布固定 128×128，先填黑。使用完整 EditSpace 的 ViewRequest，分辨率
+   请求固定 render_scale=1、max_edge=128，经现有 geometry resolver 取得不超过 128
+   的内容尺寸与映射，小于上限的原图不扩大求值。保持照片比例，内容居中；整数尺寸
+   使用 resolver 的舍入结果，不按 UI 宽高再算一遍，左/上黑边取差值的一半向下取整。
+2. 只使用完整照片视图；临时 Viewer 缩放和平移不改变缩略图。内容区像素中心经
+   thumbnail-to-reference 映射求值；照片有效区域外保持黑色，反相也不得把黑边变白。
+   裁剪、旋转和源方向使用与照片相同的 geometry 规则。无效尺寸/映射报告失败。
+3. 当前 Radial/Gradient 复用既有解析公式，顺序为 source → invert → opacity → clamp
+   → R8 round-half-up。Group 逐像素取 max，UI 仍称 Add；不使用 alpha 叠加或数值相加。
+   不应用照片 DRT、LUT、曝光或 gamma 转换。当前 range 字段只能是已支持的 identity。
+4. 一个后台 CPU worker 即可。Group 工作按成员键查同一 LRU，未命中时逐个生成并
+   插入，再取 max；每次只需当前成员和组累积输出，不一次持有全部成员像素副本。
+   Group 作业不递归提交子任务后等待同一个 worker，避免单线程自锁。成员图即使不
+   在展开行中显示也可因 Group 求值进入同一 1000 项缓存。
+5. 删除、关闭、降低 opacity 或成员移动后必须从当前成员集合重新合成 Group；不得
+   仅在旧组图上继续 max。首次载入和 geometry 提交需要的成员可逐步生成，均不阻塞 UI。
+6. CPU 小图是本功能选定的生成方式，失败显示真实错误，不再尝试其他后端。它不读取
+   全尺寸 GPU Mask、不另起照片 executor、不改变现有照片渲染资源或计算质量。
+
+### 5.4 请求时机与逐项显示
+
+“只在 commit 更新”约束的是编辑内容变化；打开面板或缓存缺失时仍必须能加载当前
+已提交内容。成功入队、pointer release、通用参数通知或 render completion 都不能代替
+history/document owner 的成功提交通知。`pipeline_document()` 是现有发布接口，执行者
+须核对其 committed/preview 边界，不能直接监听每次发布就发请求。
+
+| 事件 | 规定行为 |
+| --- | --- |
+| 打开面板、展开组、行进入可见区域 | 立即显示组名、Mask 行与操作按钮；请求各可见目标当前已提交键。命中也走统一的异步完成通知，不等其他行 |
+| 创建中的未提交 Mask | 允许显示既有创建状态；不生成缩略图、不把临时参数写入 KV。确认提交成功才请求 |
+| 拖动、滑条输入及其 preview | 不变更缩略图 source，不构造新内容键、不调 service、不定时刷新；已有图代表最近一次提交 |
+| Mask 创建/参数/enabled/invert/opacity 成功 commit | 为受影响可见 Mask 和所属 Group 求键；键未变则 no-op；变了只更新相应目标 |
+| 编辑取消、no-op commit、提交失败 | 保留上次提交的小图；不为未成功提交的试改参数求值或留下新缓存项 |
+| Mask/Group 删除 | 按第 5.6 节即时撤销订阅；文档删除成功后移除行、更新仍存在的 Group；不删除旧 KV 项 |
+| 裁剪、旋转等 geometry 成功 commit | 为受影响可见目标请求新键；旧 geometry 键保留，Undo 时可复用 |
+| Undo/Redo、Version checkout、切图/重新打开单图 | 当前已提交文档就绪后按内容请求；新订阅使用新请求身份，KV 可命中历史值 |
+| 曝光、Saturation、Grade Mix、名称、锁、row 顺序、选择 | 不调用重新生成；Group 的参数排序使纯显示重排保持同键 |
+| 折叠/离屏/关闭面板/切图 | 撤销相应 UI 订阅，释放显示句柄；移除没有订阅的排队工作，保留 ready KV |
+
+每个可见目标独立拥有 `Empty / Loading / Ready / Error / PendingDelete` 显示状态。
+commit 后键变化时先清除旧 source，显示固定尺寸占位；Ready 单项到达就更新该项。
+拖动中原图不是过期图，因为目标仍是上次提交的键。新键失败则显示准确错误，不能拿
+旧图标成新键的 Ready。纯取消不显示错误。无 Mask 的 Group 使用 Empty，不发请求。
+
+QML 不以“所有 thumbnail Ready”作为列表 visible、Loader active、行创建或操作可用的
+条件。生成完成只通知对应项的 source/status/error，不 reset model、不重建全列表、
+不改变 contentY/选择。缓存命中或单项失败都不影响其余行显示和按钮操作。
+
+### 5.5 请求身份与回调接收规则
+
+**缓存键表示像素内容，请求身份表示谁仍在等待。两者不可混用。** controller 为每次
+订阅分配单调递增的 `request_id`，并保存以下接收条件；它们不进入 KV 键：
+
+```text
+receiver = weak controller
+binding = 当前项目 service 实例、图片/Version/面板绑定代次
+target = NodeId + optional MaskId          // 不使用 row index 或 delegate 地址
+expected = request_id + Key
+```
+
+- 同一 Key 的未完成请求合并为一次生成，各订阅各有 request_id。取消一个订阅不影响
+  其他目标。service 只保存弱接收方/取消标记，worker 不持有 QML Item 或 model index。
+  作业真正开始时再查一次 KV，以复用先前 Group 作业顺带生成的成员图；命中后直接完成。
+- 同一目标同一键已有 Ready/Loading 时不重复请求；目标更换键、销毁或进入删除流程时
+  立即撤销旧 request_id。Undo 恢复同 NodeId/MaskId 也分配新 request_id，不能复活旧订阅。
+- service 在短临界区查 KV / 注册任务 / 插入完成值；像素生成、Qt 转换、回调派发及
+  删除命令都不在缓存锁内运行。队列只保留仍有可见订阅的不同 Key，不对全部离屏图预取。
+  每个可见目标最多一个当前订阅；取消后移除无订阅的未启动任务和回调记录，防止滚动
+  或连续 commit 堆积旧工作。在途只有一个作业；取消不等待该作业完成。
+- 成功输出可以先进入项目 LRU，再将每个仍有效订阅的完成通知投递 GUI 线程。即使
+  最后一个订阅已取消，已运行作业的有效结果仍可缓存，以便切回照片或 Undo；项目已
+  关闭的结果丢弃。Ready cache fill 不具有创建 UI 行或恢复文档对象的权限。
+- **GUI 队列实际执行回调时再次检查**：弱 controller 仍存在；binding 仍相同；target
+  在当前投影存在且未 PendingDelete；当前 request_id 与 Key 均匹配。全部满足才更新
+  对应行。失败/错误通知也必须做相同检查。不能仅在 worker 发出回调前检查一次。
+- Qt provider 只提供已完成输出，用本次接收句柄精确寻址；旧 URL 不得返回“这个
+  element 最新的一张图”。从取结果到 provider/QSG 读取完毕，共享句柄保证像素寿命。
+  QML 使用异步 Image 加载，并关闭历史 URL 的默认长期缓存，由 service 控制保留；
+  provider 的临时句柄随可见消费者/实际 reader 结束释放。provider 不访问 live document，
+  不在图片查找中生成 Mask，也不让任意 Image 请求重新激活已取消的 UI 订阅。
+  若 Image 加载完成/失败还需回写 model，必须带同一 request_id/Key 再校验；不能把
+  旧 source 的 Qt 加载完成信号用到已复用的 delegate 当前目标。
+
+### 5.6 删除的异步顺序：撤销订阅，不等待像素销毁
+
+删除入口包括 Mask 行按钮、Group 按钮、快捷键以及 Nodes 发起的同一对象删除。共享
+controller 必须统一处理；不能只在新面板按钮里加保护。明确区分“删除文档对象”和
+“释放该行显示句柄”：前者由既有 owner/history 操作完成，后者无权阻止前者。
+
+1. **本地删除意图通过基本校验后**，GUI controller 先将目标置 PendingDelete，立即
+   使其 request_id 失效并撤销接收资格，再向 owner 异步提交既有删除命令。Group 删除
+   同时撤销组及子行订阅；Mask 删除同时撤销受影响 Group 的旧合成图订阅。已经 ready
+   的旧图可留在 PendingDelete 行内直到领域结果返回，期间不得接收新的缩略图回调。
+2. `CancelRequest` 只标记订阅失效并安排队列清理，立即返回。删除路径不得调用
+   future.get/wait、join、GPU fence，或等待 thumbnail cancel acknowledgment、LRU
+   erase、provider release、QSG texture 销毁。CPU worker 不占文档锁、session admission
+   或 photo render lock；即使它被测试闩锁暂停，删除仍必须能提交并收到领域完成结果。
+3. 入队仅表示提交请求，不表示删除成功。领域成功前保留行、原选择与对象身份，禁用
+   该目标重复删除；不乐观修改文档。普通删除锁、草稿、history/WAL 规则仍由 owner 检查。
+   删除成功的同一次投影更新才真正移除行/更新选择；缩略图状态不能延后这次更新。
+4. 删除被拒绝、同步入队失败或领域提交失败时，撤销 PendingDelete，保留原选择与行；
+   若图/Version 已切换则不向新绑定恢复旧行。仍在原绑定时，从 owner 的当前已提交
+   内容重新订阅，使用新 request_id；通常命中原有缓存，不复用被撤销的旧回调。
+5. 删除成功后不遍历或清除这个 Mask 的历史参数 KV 项。正在计算的旧内容可以完成并
+   进入 LRU，但不回填已删除行、不 upsert target、不发出新选择或参数写入。Undo
+   恢复对象后通过新订阅命中旧内容属于正常复用，旧订阅本身始终无效。
+6. 若外部 owner/历史操作直接移除目标，处理新的投影时先撤销消失目标的订阅再移除行。
+   已排入 GUI 队列的回调仍执行第 5.5 节检查。panel 销毁、delegate 复用、切图、checkout
+   和项目关闭遵循同样原则；项目关闭标记 service 停止接收并异步释放在途资源，不在 GUI
+   析构中 join 工作线程，也不以无所有者的 detached thread 延长资源寿命。
+
+```text
+开始生成 K1，订阅 R1
+  → 用户 Delete：R1 立即失效，行 PendingDelete，领域删除异步入队
+  → 任意先后：K1 生成完成可入 LRU；R1 回调在 GUI 检查失败，直接丢弃
+  → 删除成功：投影移除行                     // 不等待 K1
+  → 若 Undo：新行/新订阅 R2 请求 K1，可命中  // R1 仍不能更新任何行
+```
+
+### 5.7 最小接口与失败边界
+
+以下为行为接口建议，实施时用实际名称替换，不因此增加一套文档或通用任务框架：
+
+| 操作 | 必须保证的行为 |
+| --- | --- |
+| `Request(Key, subscription)` | 非阻塞；命中和生成统一投递完成事件，同 Key 合并工作；成功事件携带 Key、request_id、只读输出句柄 |
+| `CancelRequest(request_id)` | 仅撤销该订阅，幂等、立即返回；不删 ready KV、不影响其他订阅、不等待作业 |
+| `SetCapacity(count)` | 正整数配置；缩小时按 LRU 去除多余 cache 引用，reader 安全，默认 1000，不自动扩容 |
+| 项目关闭 | 拒绝新请求，撤销订阅，清空项目 KV；在后台安全收尾 worker，禁止旧结果写新项目 |
+
+求值/分配失败不缓存空图，清除对应 pending 记录，对仍有效订阅报告一次 Error。
+之后显式重试、离屏再进入或新内容请求可再次生成；不在每个 paint 自动重试。无接收方的
+错误仅走既有诊断，不弹出已删除对象的错误。缓存插入失败也按真实失败完成，不能卡住
+订阅或删除。取消和 Key 过期不是领域错误，不更改 history 或照片渲染。
+
+### 5.8 已核对源码与测量的使用边界
+
+- [ThumbnailManager](../../../../../alcedo_studio/src/ui/alcedo_main/album_backend/thumbnail_manager.cpp)
+  的活动标记、弱 QObject 接收方和 GUI queued callback 可作参考；不照搬每图 detached
+  thread、磁盘行为、pin 扩容或释放时删除缓存的策略。
+- [ThumbnailImageStore](../../../../../alcedo_studio/src/ui/alcedo_main/album_backend/thumbnail_image_provider.cpp)
+  目前忽略旧 URL revision 并返回 element/size 的当前值。Mask 不能使用该规则；须以
+  精确输出句柄读取，也不能在图切换时调用其 `Clear` 代替跨图 LRU。
+- [LRUCache](../../../../../alcedo_studio/src/include/utils/cache/lru_cache.hpp) 的 `Evict`
+  含自动 Resize 逻辑。执行者须明确关闭该行为后才能复用；若现有接口不支持，service
+  内用标准 unordered_map + list 做固定容量 LRU 即可，不重构 Library 缓存。
+- [GradeMaskCoverage](../../../../../alcedo_studio/src/edit/mask/grade_mask_coverage.cpp)
+  已提供 R8 解析求值，但当前缺少 render-to-reference 映射，不能原样宣称满足裁剪/旋转。
+  映射复用 [RenderGeometryResolver](../../../../../alcedo_studio/src/include/edit/geometry/render_geometry_resolver.hpp)。
+- 前次 HEAD `88a034c2` 的独立测量：i7-12700H、MSVC 19.44 Release `/O2 /arch:AVX2`、
+  Qt 6.9.3；预热后 9 批平均耗时的中位数，128×128 单 Radial 约 0.299 ms、8 Mask
+  全部求值并合成约 2.005 ms、8 张已缓存 R8 图取 max 约 0.069 ms。未含 owner 排队、
+  geometry、Qt 上传和真实窗口；不是本 service 的实现或性能验收。复现资料在
+  `build/tmp/nm93_thumbnail_research/`，不提交临时文件。
 
 ## 6. 子阶段与完成条件
 
 各阶段按“目标 → 前置/文件 → 实施步骤 → 成功/失败链 → 验证与交付证据”执行。
 步骤是待实现要求，不是完成记录；新增 API/文件建议名在真正落地后替换为实际名称。
-后续阶段的集成验证不能代替前一阶段的基本正确性测试。用户尚未选择的布局保持未定，
-其他已确定语义与不依赖布局的工作可继续按各阶段推进。
+后续阶段的集成验证不能代替前一阶段的基本正确性测试。布局已选择 C，缩略图以第 5 节
+的明确规格执行；NM9.3 的细分另行整理，本表暂保留现有编号和依赖。
 
 | 阶段 | 工作 | 依赖 | 状态 |
 | --- | --- | --- | --- |
 | NM9.1 | 共享组投影、顶部插入/桥接删除的 app 操作、草稿边界 | NM8 收口 | complete 2026-09-16 on `feature/nm91-mask-group-projection` |
-| NM9.2 | 删除锁、默认保护、typed history 和格式规则 | NM9.1 | planned |
-| NM9.3 | Mask Groups 面板、空抽屉、创建入口与双向选择 | NM9.1–NM9.2 | planned |
-| NM9.4 | 组和单 Mask 缩略图、位置/强度显示、资源失效 | NM9.3 | planned |
+| NM9.2 | 删除锁、默认保护、typed history 和格式规则 | NM9.1 | complete 2026-09-16 on `feature/nm92-deletion-protection` |
+| NM9.3 | Mask Groups 面板、空抽屉、创建入口与双向选择 | NM9.1–NM9.2 | partial — implementation present; acceptance failures under investigation |
+| NM9.4 | 项目级内存 LRU、跨图复用、commit 后逐项小图、非阻塞删除与回调校验 | NM9.3 | planned |
 | NM9.5 | Undo/Redo、Version、Paste、reopen 和失败恢复验证 | NM9.2–NM9.4 | planned |
 | NM9.6 | 真实摄影任务的 UI/UX、像素一致性与性能验收 | NM9.1–NM9.5 | planned |
 
@@ -734,7 +947,7 @@ Commands: `cmd /c scripts\msvc_env.cmd --build --preset win_debug --target ... -
 | commit/chain hash | 5 | 拒绝 |
 
 **Checklist / exit condition:** NM9.2.4 表全部覆盖;所有删除入口共用 owner 校验;
-格式边界真实失败;已完成术语整改(goldens→expected_serialized,Expected* 测试名)。
+格式边界真实失败；序列化期望数据使用 expected_serialized，测试使用 Expected* 名称。
 
 **LOC note (grill-code-review):** 62 files, +1535/-194(含 13 个期望数据文件目录迁移)。
 `analytic_mask_creation_test.cpp` 已超 1000 LOC(1035),拆分点:controller 创建/
@@ -756,9 +969,9 @@ Viewer Delete(`EditorNodeController` adapter)、直接 service
 
 #### NM9.3.1 布局输入与文件入口
 
-第 2.6 节 A–D 仍未选定。模型、命令和选择接线可依据已锁定语义推进；把某个候选实现
-为生产布局前，需要用户确定采用哪一种，不能在本次细化计划时代选。最终文件记录所选
-候选及获准改动，不把所有候选实现为四套可切换产品 UI。
+第 2.6 节已经选择 C，Mask 合成仅显示 Add，Mask 与 Group 均有删除按钮。缩略图行为
+以第 5 节为准；本阶段的细分另行整理。此处保留原步骤作为拆分依据，不把其他候选
+实现为可切换 UI。面板结构不得以 NM9.4 的全部图像完成作为可见/可操作的前提。
 
 主要入口为 [EditorWorkspaceRail.qml](../../../../../alcedo_studio/src/ui/alcedo_main/qml/EditorWorkspaceRail.qml)、
 [EditorWorkspace.qml](../../../../../alcedo_studio/src/ui/alcedo_main/qml/EditorWorkspace.qml)、
@@ -776,7 +989,7 @@ Viewer Delete(`EditorNodeController` adapter)、直接 service
    和 session。控制器生命周期不得依赖某个面板 Loader；新组操作在 Nodes 从未打开时
    也能执行。新列表适配器只能转发同一 owner 的读取和命令，不能拥有另一份 DAG。
 3. **实现组与 row。** 组头显示名称、合成预览区域、独立锁/删除操作；空组保留抽屉。
-   子行显示 Mask 类型、单 Mask 预览区域、opacity 和锁/删除。折叠按选定候选执行；
+   子行显示 Mask 类型、单 Mask 预览区域、Add、opacity 和锁/删除。按方案 C 多组展开；
    长名称省略并提供完整 accessible name/tooltip。NM9.4 尚未完成时不伪造 coverage 图。
 4. **接入两个创建入口。** 新建组调用 NM9.1 的完整插入命令，成功后选中新组。现有
    Radial/Gradient 工具优先使用明确选择的可编辑 Grade；仅真正没有目标时按第 2.3 节
@@ -792,7 +1005,8 @@ Viewer Delete(`EditorNodeController` adapter)、直接 service
    一次选择/参数命令；controller 不把两个面板的镜像通知当成两个用户操作。
 8. **隔离按钮事件。** 锁、删除、展开与 row 主选择拥有明确 hit area；点击删除不再
    触发选中或父组删除。禁用删除仍能从可访问描述得知原因；Delete 快捷键按当前焦点
-   和有效对象路由，文本输入中不删除组或 Mask。
+   和有效对象路由，文本输入中不删除组或 Mask。为第 5.6 节的 PendingDelete 与领域
+   完成通知保留明确入口；删除入队不等于成功，不得等待 thumbnail 生成/取消/释放。
 9. **保持滚动和 UI 状态。** 在已有 UI owner 中按图片/Version/NodeId 保存必要的展开
    与滚动状态，Loader 销毁后可恢复。只在目标不在可见区域时做最小定位；不在每次
    SelectionChanged 后重置 model 或强制 `ListView.Contain`。
@@ -831,103 +1045,165 @@ NodeId/MaskId → 节点高亮、参数页、Viewer 控件 → 两视图显示�
   增加职责明确的 QML fixture 并记录真实 CTest 名称。布局和共享交互全部通过后，本阶段
   才 complete；缩略图求值的剩余工作明确归 NM9.4，不把空框称为已完成预览。
 
-### NM9.4 — 实际 coverage 的微型预览
 
-**目标与交付物：** 为组头和各 Mask row 提供实际 coverage 的小图，准确表达位置、
-形状与强度；交付原生求值/缩采样、异步发布、缓存上限、失效规则和像素比较证据。
+##### Phase NM9.3 completion record (2026-09-16)
+
+**Status:** partial — implementation present on `feature/mask-groups-workspace`;
+required workspace and visual acceptance are not yet complete.
+
+**Primary success call chain:**
+
+```text
+Mask Groups [+]/row/delete (EditorMaskGroupsPanel.qml / EditorMaskGroupDelegate.qml)
+  -> EditorNodeController::insertMaskGroupAtTop / removeMaskGroup / selectNode
+  -> EditorSessionController::SubmitInsertColorGradeAtTop / SubmitRemoveColorGradeAndBridge
+  -> EditorSessionService::InsertColorGradeAtTop / RemoveColorGradeAndBridge (owner atomicity)
+  -> PipelineGraphCommands AddCleanColorGrade / RemoveColorGradeAndBridge + typed history commit
+  -> projection refresh -> both panel and Nodes update; selection restored per successor rule
+```
+
+**Primary failure call chain:**
+
+```text
+stale generation / draft / endpoint / backend rejection
+  -> EditorNodeController SetLastError, command generation guard, no partial mutation
+  -> row and selection retained; exact reason surfaced via panel statusMessage
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `MaskGroupsPageCreatesThenRemovesGroupWithoutOpeningNodes` | `EditorNodesPanelQmlTest` | PASS |
+| `MaskGroupDeleteFailureKeepsRowAndSelectionUntilSuccessfulRetry` | `EditorNodesPanelQmlTest` | PASS |
+| `MaskGroupsRestoreScrollAndDrawersAcrossImagesVersionsAndLoader` | `EditorNodesPanelQmlTest` | PASS |
+| `MaskGroupsKeepSelectedTextAndActionsVisibleAtAllPanelWidths` | `EditorNodesPanelQmlTest` | PASS |
+| Full panel regression | `EditorNodesPanelQmlTest` | 45/45 PASS |
+| Layout/controller/delegate/mask suites | `EditorNodeSelectionLayoutTest`, `EditorNodeDelegateQmlTest`, `AnalyticMaskCreationTest` | 112/112 PASS |
+
+Commands:
+`cmd /c scripts\msvc_env.cmd --build --preset win_debug --target EditorNodesPanelQmlTest --parallel 4`
+then gtest filter on the four new tests, then full binary run;
+`ctest --test-dir build/debug -R "^(EditorNodeSelectionLayoutTest|EditorNodeDelegateQmlTest|AnalyticMaskCreationTest)\." -C Debug`
+(100% tests passed, 0 failed out of 112).
+
+**Checklist / exit condition:** not yet satisfied. The required `WorkspaceShellTest` run
+reported 48 passed, 6 failed and 1 skipped out of 55. Serial failure isolation is in progress.
+Thumbnail evaluation remains NM9.4 scope; empty preview areas do not prove coverage rendering.
+
+**LOC note (grill-code-review):** the earlier claim that all changed files were below 1000
+lines was incorrect. In particular, `workspace_shell_test.cpp` has 2844 lines. A complete
+changed-file count and responsibility assessment remain outstanding.
+
+**Residual gaps:** DPR 1.5/2 visual verification and the complete NM9.3 interaction matrix
+remain unproven. These are NM9.3 acceptance requirements, not work transferred to NM9.5.
+
+### NM9.4 — 跨图内存 LRU 与提交后异步缩略图
+
+**目标与交付物：** 完整实现第 5 节：项目级 CPU 小图 service、精确内容键、1000 项
+固定容量 LRU、commit 后更新、面板逐项加载，以及不等待生成任务的删除与安全回调。
+第 5 节为行为规格；不得沿用旧计划的 GPU 小图依赖、拖动刷新或切图清缓存实现。
 
 #### NM9.4.1 前置检查与文件入口
 
-1. NM9.3 已确定显示位置和生命周期；确认组图与单 Mask 图均取 Grade Mix 之前的
-   coverage，`opacity` 是 Mask 参数，不能把它混成 Grade Mix 或卡片透明度。
-2. 读取 [CompiledMaskStack](../../../../../alcedo_studio/src/include/edit/runtime/compiled_mask_stack.hpp)
-   的 source/effective/union 输出及 [GradeMaskCoverage](../../../../../alcedo_studio/src/include/edit/mask/grade_mask_coverage.hpp)
-   的空集合、全关闭和 Union 定义。后者可用于理解现有语义，不授权把产品缩略图改走
-   CPU 求值；测试期望也不能只调用被测生产求值器再与自身比较。
-3. 跟踪 [CUDA Mask pass](../../../../../alcedo_studio/src/edit/runtime/cuda/cuda_mask_pass.cu)、
-   [OpenCL Mask pass](../../../../../alcedo_studio/src/edit/runtime/opencl/opencl_mask_pass.cpp)、
-   [Metal Mask pass](../../../../../alcedo_studio/src/edit/runtime/metal/metal_mask_pass.mm)
-   和已有 geometry/reference-space 映射，确认纹理格式、边界采样、completion 和最后
-   reader 的资源释放位置。只改 Mask 展示所需路径，不重构 RAW 解码或 Grade 算法。
+1. NM9.3 已提供方案 C、稳定 NodeId/MaskId 与共享选择。确认创建、删除、Undo/Redo、
+   checkout 的领域完成通知；记录哪个通知表示成功 commit，哪些仅代表 preview/入队。
+   现有 `EditorMaskCreationAdapter::removeMask` 已注明 Enqueue 不是 deletion admission，
+   接线必须尊重这条边界；Group controller 的返回值也须追踪到真实完成语义。
+2. 核对 [ProjectHandler](../../../../../alcedo_studio/src/ui/alcedo_main/album_backend/project_handler.cpp)
+   的项目服务创建/替换/关闭位置，将 service 生命周期放在同一层。执行前验证是否已有
+   合适的后台执行器可复用，但不得与 photo render/session 串行任务共用阻塞工作队列。
+3. 核对第 5.8 节的 Library manager/provider/LRU 和解析求值文件，以及
+   [EditorSessionService](../../../../../alcedo_studio/src/include/app/editor_session_service.hpp)、
+   [Mask adapter](../../../../../alcedo_studio/src/ui/alcedo_main/album_backend/editor_mask_creation_adapter.cpp)、
+   [Node controller](../../../../../alcedo_studio/src/ui/alcedo_main/album_backend/editor_node_controller.cpp)。
+   UI 经 app service/controller 请求，不直接访问 live document 或在 QML 中计算键。
+4. 拟新增文件为 `include/app/mask_thumbnail_service.hpp`、
+   `app/mask_thumbnail_service.cpp` 及必要的 Qt 显示适配器；名称在实施后换成实际入口。
+   只为明确职责拆分；不引入通用后台任务框架、第二个文档 owner 或照片 pipeline。
 
-#### NM9.4.2 实施步骤
+#### NM9.4.2 实施顺序与必要结果
 
-1. **固定采样定义。** 写明缩略图宽高、最长边上限 256、照片比例、黑色留边、像素中心
-   与 reference-space 的映射、旋转/裁剪顺序及灰度编码。缩略图表示线性 coverage，
-   不对它应用照片的 DRT/LUT，也不随所选 Grade 的曝光变化。小照片不得被无谓放大求值。
-2. **选择原生生成入口。** 有匹配内容与 geometry revision 的现成 effective/union
-   结果时，经 Mask owner 的安全读取产生小图；需要新求值时，使用同一选定后端和既有
-   Mask 语义，在 session 允许的串行访问边界执行。分别写明复用与新求值的条件，
-   不能读取已经复用给下一帧的工作纹理，不能创建独立 document/executor。
-3. **定义结果身份。** 单 Mask 图包含会话/图片/Version、NodeId、MaskId、该 Mask
-   内容 revision、geometry revision 和采样规格；组图使用能覆盖成员增删和所有有效
-   Mask 参数的组合 revision。不要用每次都变化的整份 document revision 作为唯一
-   缓存键，否则曝光、锁和改名也会错误触发 coverage 重算。
-4. **明确独立输出的用途。** 小图是 UI 所需的派生输出，可以拥有独立像素存储；在其
-   定义处写明由谁创建、是否只读、有效尺寸、输入版本和释放点。它不携带 document
-   镜像、不写回 Mask 参数，也不构成逐 Grade RGBA 跨帧缓存。
-5. **接入有界调度。** 根据可见组头和展开的可见 rows 请求图像，同一会话只在既有串行
-   owner 边界启动一个求值批次；相同目标的待处理请求保留最新 revision，已运行批次
-   按真实 completion 安全结束。列表快速滚动或连续拖动不能积累无界任务。
-6. **实现精准失效。** 按下表处理 source、opacity、invert、enabled、成员关系和 geometry；
-   失效只改变对应显示资源。没有像素变化的 UI 操作不触发照片渲染，也不重新编译图。
-   显示订单与求值集合分开，Mask row 重排不使 Union 内容失效。
-7. **安全送到 Qt。** 复用现有支持的图像/texture provider 边界，GUI/渲染线程只消费已
-   完成的小图。所有权覆盖 QSG 的读取期；替换图后，旧资源等实际 reader 释放再回收。
-   若传 CPU 展示图，只读回缩略图尺寸，不能同步下载全尺寸 Mask 再缩小。
-8. **防止过期发布。** completion 回来后再次检查目标、revision 和面板/会话状态。
-   切图、checkout、删除、关闭及新编辑都可能让结果过期；过期图不覆盖新目标、不通过
-   相同 row index 发布给别的 Mask。删除后 Undo 恢复相同 ID 时仍须检查新的有效版本。
-9. **定义 UI 终态。** 区分无 Mask、请求中、ready、过期和失败。没有 Mask 不请求合成图；
-   全部关闭显示有效全黑图并保留关闭状态。请求失败时清除“当前有效”标记并显示真实
-   原因，不用空图或先前版本伪装 ready，也不自动改后端或降低照片质量。
-10. **界定内存与释放。** 在实现记录中给出实际缓存项数/字节、在途小图数及对应上限，
-    至少区分 owner 像素、上传/下载暂存和 QSG reader。隐藏面板停止新请求并取消未启动
-    工作；切图/Version/关闭按安全边界清除过期项。大列表不能为所有离屏 Mask 永久留图。
-11. **补充低开销观测。** 记录请求、合并、命中、求值、过期丢弃、失败、发布、读回字节
-    和当前/峰值内存，沿现有 diagnostics 汇总。不要在每个 paint 或 GPU pass 同步打印。
+1. **内容键和求值。** 按 5.2/5.3 逐字段实现 Single/Group 键、完整相等比较和 128×128
+   R8 输出。补齐 committed geometry 的取样映射；在键定义处说明最小不可变输入的
+   必要性、字段、owner、捕获时机、释放点和不写回规则。
+2. **项目级 KV/LRU。** ready map 与 LRU 同步修改，默认严格 1000 项；读写短锁保护。
+   成功命中提升 MRU，旧参数、旧图片、旧 Version 的图自然保留。构造 service 不依赖
+   disk cache、Storage 或照片解码；项目切换创建隔离实例，单图切换不 Clear。
+3. **有界异步请求。** 一个独立 worker，按 Key 合并 pending；队列限于仍有可见订阅的
+   请求，同一目标最多一个。取消的未启动任务及时移除；在途任务不持文档/渲染锁，
+   可完成并缓存。Group 按成员键串行查/算/合成，不递归排队等待自身。
+4. **提交驱动的协调。** 只在明确成功 commit 或已提交文档恢复后计算受影响键；初次
+   进入可见区域加载当前键。preview 不触发任何 service 请求。隐藏后保留 KV，重新
+   显示时再请求；非 Mask 元数据和 Grade 调整不触发无关请求。
+5. **逐项展示。** 面板结构与按钮先呈现；每行独立 Empty/Loading/Ready/Error。Image
+   异步读取精确输出句柄；收到一张显示一张，不设置全列表完成门槛。仅通知目标角色，
+   不 reset model、重置 contentY 或借完成通知重复提交编辑。
+6. **两次回调资格核对。** 工作完成时过滤取消订阅，GUI 真正执行时再核对弱接收方、
+   binding、target 存在性、PendingDelete、request_id、Key。成功与错误都做相同校验；
+   cache fill 与 UI 发布分开，旧内容允许缓存，旧订阅不能更新新行。
+7. **非阻塞删除。** 按 5.6 的顺序接入所有删除入口。提交前撤销受影响订阅，成功前
+   保留行和选择，失败后新建订阅；成功后通过领域投影移除。使用已有异步命令/完成
+   通道，必要时补齐适配器的完成接线，不把排队成功当删除成功。不能让 thumbnail
+   cancel、像素释放或 GPU/QSG 生命周期成为删除操作的等待条件。
+8. **资源与失败收口。** provider 暂时持有的输出与 reader 共用只读存储；KV 淘汰后
+   reader 仍安全，最后一个引用释放才回收。失败不缓存伪造空图、不自动切生成方式。
+   项目关闭异步收尾旧 worker，旧完成不能进入新项目或复活面板。
+9. **诊断与记录。** 记录 ready 数量/字节、hit/miss/evict、pending/running 数、取消、
+   过期 UI 回调、失败和单项发布数。分别统计 cache、可见句柄、worker scratch 和 Qt
+   上传内存；不逐像素/paint 打日志，不把 1000 项额度误写成所有内存的总上限。
 
-#### NM9.4.3 失效与重用表
+#### NM9.4.3 必须实现的受控验收
 
-| 变化 | 单 Mask 小图 | 组的合成小图 | 照片渲染 |
-| --- | --- | --- | --- |
-| Mask 形状、位置、feather、opacity、invert | 该 Mask 更新 | 所属组更新 | 原编辑流程决定 |
-| Mask enabled | 该 row 有效状态更新，按既定关闭表示处理 | 所属组更新 | 原编辑流程决定 |
-| 增加/删除 Mask | 新建/释放对应项，其他 Mask 可复用 | 所属组更新 | 结构编辑原有请求 |
-| 改名、锁、row display order、组折叠或选择 | 内容复用；必要时按可见性请求尚无的小图 | 内容复用 | 无额外请求 |
-| Exposure、Saturation、Grade Mix | 内容复用 | 内容复用，因为取 Mix 前 coverage | 原参数编辑流程决定 |
-| 裁剪、旋转、参考尺寸/采样规格改变 | 所有受影响可见项更新 | 受影响组更新 | 原 geometry 流程决定 |
-| 切图/Version、session 重建 | 拒绝旧结果，按新身份读取 | 同左 | 原会话流程决定 |
+下面的暂停点使用可控 executor、promise/latch 或事件队列推进；不得用随机 sleep
+制造先后顺序。每项记录生成次数、请求/发布次数及 owner 提交结果，不能只验证无崩溃。
 
-此表仅描述当前 Radial/Gradient。未来内容相关 Mask 不自动沿用“曝光不失效”的规则，
-必须由那项功能定义真实输入依赖；NM9 不开放未实现的 Mask 类型。
+| 用例 | 明确断言 |
+| --- | --- |
+| 固定输入 Radial/Gradient/反相/羽化/opacity | 128×128 R8、线性灰度、独立解析期望；黑边反相后仍黑，记录边界点与量化容差 |
+| Group 相离、相交、重复与半强度 | max 正确；两个 50% 的交集仍为 50%；关闭/删除成员后旧 coverage 消失 |
+| 无 Mask / 全关闭 | 前者没有请求与图片，后者 Ready 全黑且关闭 rows 保留 |
+| 横/竖/方/奇数尺寸、裁剪旋转、边缘外 Mask | 统一 resolver 映射、保持比例；Viewer pan/zoom 与 DPR 改变不换键、不生成 |
+| element 与全部内容参数的键测试 | 每个有效求值字段变化造成正确 miss；名称、锁、ID、会话/Version/revision 不改变同内容键；强制哈希碰撞不返回错图 |
+| 单图相同参数不同 MaskId、Group 显示重排 | 相同内容复用，纯成员显示顺序变化命中；NodeId/MaskId 仍用于 UI 精确路由 |
+| A→B→A、离开重开单图编辑器 | A 的条目仍在，回到 A 的生成计数不增加；容量内的其他图片不被清空 |
+| 参数 P1→commit P2→Undo→Redo | P1/P2 各生成一次；之后命中；历史恢复使用新 request_id，旧请求不重新有效 |
+| 连续 preview、取消、提交失败、no-op commit | preview/取消/失败新增请求和生成均为零；已缓存图不变；成功且键变化才提交请求 |
+| 容量=3，插 A/B/C、读 A、插 D；默认容量=1000 | 首例只淘汰 B；1001 项后仍为 1000，键/像素一致；不因 pin 或淘汰频繁自动扩容 |
+| LRU 淘汰时 provider/QSG 仍读旧图 | KV 项数遵守容量，已获取句柄的像素仍有效；reader 释放后内存回收 |
+| service 完成后暂停 Qt 图片加载，再删除/复用行 | Qt 晚到的 ready/error 也不能更新新目标；已取到的旧像素句柄安全释放 |
+| 多个目标同时请求相同 Key | 一个生成任务、各有效订阅分别完成；取消其中一个不影响其余目标 |
+| 暂停全部生成，打开面板 | 组/Mask 行与删除等按钮已可用；不等待任何 thumbnail Ready |
+| 分别完成行 C、A、B | 每次只更新对应 source/status；无全列表 reset、选择变化或滚动跳动 |
+| 暂停正在生成的 Mask，提交删除 | 生成闩锁仍未释放时，领域删除已完成、行已移除；随后完成仅可入 KV，UI 发布为零 |
+| callback 已排入 GUI 队列后再 Delete，领域尚未完成 | PendingDelete 已使 request_id 无效；推进旧 callback 不更新仍存在的行 |
+| 同上但 owner 因锁/history 失败拒绝删除 | 原行/选择保留，PendingDelete 清除；新订阅可加载，旧 callback 仍不能发布 |
+| 删除 Group，多个子行请求未完成 | Group 与所有子行订阅均失效，删除不等待任何请求；每个晚到结果都不能恢复 UI |
+| 删除→Undo 恢复同 ID/同参数，旧回调最后执行 | 新订阅可命中缓存或加入仍在运行的同 Key 作业；旧 request_id 即使 Key 相同也不能发布 |
+| K1 慢完成、K2 先绑定；旧失败最后到达 | 只更新当前 K2；旧成功/失败均不能覆盖当前图或错误状态 |
+| 切图/checkout/Loader 销毁/delegate 复用/离屏 | 撤销旧接收资格，队列清理，缓存保留；回调不按 row index 写到其他对象 |
+| 项目关闭后旧结果到达，新项目使用相同 element 数字 ID | 不串项目，不重建旧 UI；旧 service 安全释放且 GUI 未 join worker |
+| 注入分配/求值/缓存插入失败，再显式重试 | 正确 Error、pending 清理；不缓存空图、不修改文档，之后合法请求可成功 |
+| 大量切图/滚动/commit 与面板关闭 | ready 严格有界；pending 不留取消目标，running≤1；显示句柄随可见项释放，无离屏永久表 |
+| 禁止磁盘 I/O 的 service fixture | 请求、命中、淘汰、关闭均不访问文件/DB/编码器；应用重启后从空内存缓存开始 |
 
-#### NM9.4.4 成功链与失败链
+#### NM9.4.4 成功链、失败链与交付证据
 
-**成功链：** 可见目标/内容变化 → 读取 owner 的身份与 revision → 合并排队 → 安全读取
-已有原生结果或原生求值 → 小尺寸输出完成 → 再验身份/revision → Qt 发布 → reader 完成
-后回收旧输出。请求中不阻塞 GUI，不增加逐 pass host wait。
+**成功链：** committed owner 数据 → 可见目标求 Key → service 命中/合并/排队 →
+后台解析求值或 Group max → LRU 插入 → GUI 核对当前订阅 → 单项角色更新 → Image
+读取共享输出 → reader 结束释放。每个环节均不要求其他缩略图先完成。
 
-**失败链：** 分配、原生求值、缩采样、传输或 Qt 发布失败 → 标记该目标失败并归还资源 →
-输出真实错误；过期 completion 仅安全丢弃。展示资源失败不伪造一次文档编辑，仍需证明
-主照片资源、下一次合法请求及会话关闭可继续遵守既有生命周期规则。
+**删除链：** 同一共享 controller 撤销订阅 → 领域异步删除 → 成功投影移除/失败新订阅；
+thumbnail worker 可以独立完成。取消结果回调不能反向触发删除、复原或选择命令。
 
-#### NM9.4.5 验证与完成条件
+**失败链：** 原因返回有效订阅的 Error；已撤销订阅不发布。cache miss 是正常请求，
+取消是无显示结果，均不修改 history。项目关闭时旧任务仅释放自己持有的资源。
 
-- 用独立解析期望验证黑/白内部点、外部点、边缘、feather 和反相；Union 覆盖相离、
-  相交、完全重叠及不同 opacity。空集合不显示假图，全关闭集合明确为零 coverage。
-- 覆盖横图、竖图、方图、奇数尺寸、裁剪、旋转、边缘外 Mask、极小有效 Mask 和多个
-  强度值。先固定采样规则，再根据量化/过滤推导绝对容差；报告最大/平均误差、失败
-  坐标和输入，不能在失败后单纯扩大容差。相同采样定义下与真实原生 coverage 比较。
-- 用受控 completion 顺序测试旧图后返回、删除后 Undo、切图/checkout 后返回、Loader
-  已销毁、关闭会话和失败后重试。不靠任意 sleep 制造竞争窗口。
-- 在多组、多 Mask、持续拖动和滚动中验证排队与内存上限；停止输入后完成最新 revision，
-  关闭/重开后没有重复连接、无界缓存或仍占用会话的任务。记录真实 request/byte 计数。
-- 修改涉及的 CUDA/OpenCL/Metal 路径分别使用对应原生测试和真设备，不能以某后端通过
-  代替其他后端。现有测试入口为 `GpuDagCudaMaskTest`、`GpuDagOpenClGradeTest` 与
-  `GpuDagMetalGradeTest`；增加小图发布/失效用例并记录实际 fixture 和平台结果。
-- 完成记录必须包含取样定义、资源 owner 图、失效表、原生像素结果及受控竞争测试。
-  未验证的平台明确列为未验证，不能把未完成的小图能力混入 NM8 已关闭的历史范围。
+交付实际 service/key/provider/controller 调用链、上述矩阵、生成/发布计数和内存上限。
+拟新增 `MaskThumbnailServiceTest` 与面板 thumbnail QML fixture（实施后填写实际目标），
+并沿已有 CUDA/OpenCL/Metal Mask 测试做解析像素对照；独立解析期望必须存在，不能只
+与生产函数自身比较。只修改 CPU/Qt 小图不要求重写三套 GPU 生成器；涉及的原生路径
+分别验证，Windows/macOS 的 QML 图像消费与生命周期分别记录实测或缺口。
 
 ### NM9.5 — 持久化与失败行为
 
@@ -971,7 +1247,7 @@ NodeId/MaskId → 节点高亮、参数页、Viewer 控件 → 两视图显示�
    Version、关闭面板并打开 Nodes。使用测试端 completion latch/显式推进队列安排
    先后顺序，验证旧 target 不写入新图，原图应提交的收尾仍归属于原图。
 8. **注入真实失败边界。** 至少覆盖写入/提交失败、无效 target、保护拒绝、失效 revision、
-   格式错误和 native thumbnail failure。断言 document/head/selection 的前后状态及
+   格式错误和 thumbnail service 求值/分配失败。断言 document/head/selection 的前后状态及
    资源释放；沿既有恢复机制执行，不能新增 catch-and-continue 或替代算法来让测试通过。
 9. **检查完整草稿生命周期。** 同一图片内只切换 Nodes/Groups 不改变草稿；离开图片或
    checkout 时按已落地的草稿生命周期规则处理，记录具体结果。不得把“切面板保留”
@@ -986,8 +1262,8 @@ NodeId/MaskId → 节点高亮、参数页、Viewer 控件 → 两视图显示�
 | --- | --- | --- |
 | 修改 Mask 形状 | 选择另一组 / 切换面板 | 旧编辑按状态机收尾，新目标准确，无重复提交 |
 | 插入或删除组 | 第二次结构意图 / 切图 | admission 有序；旧意图不按新图下标执行 |
-| 原生小图求值 | 删除 Mask → Undo | 只允许匹配恢复后有效版本的输出发布 |
-| 小图传输/上传 | checkout / 图像切换 / Loader 销毁 | 无越界访问、无串图、无旧回调重新创建 UI |
+| CPU 小图求值 | 删除 Mask → Undo | 删除不等待求值；旧结果可进 LRU，新订阅可命中，旧回调不得发布 |
+| 小图回调/Qt 上传 | checkout / 图像切换 / Loader 销毁 | KV 保留，旧订阅失效；无越界访问、无串图、无旧回调重新创建 UI |
 | 锁切换 | 保存 / Undo / Redo | 持久值与当前 head 一致，无额外 GPU 工作 |
 | Paste | 失败 / 取消 / 后续源图修改 | 原目标完整、无半成品 Version；成功内容独立 |
 | WAL 中存在新编辑 | 关闭并重新打开项目 | 沿现有恢复规则重建相同图、参数和锁 |
@@ -1053,8 +1329,9 @@ Radial/Gradient 的几何参数在执行记录中用实际归一化值列出，�
    顺序，练习轮不混入结果。报告每轮值、样本数、中位数和范围；小样本不虚报可靠
    P95/P99。若仅开发者执行，明确标为工程自测，不写成用户研究。
 4. **比较缩略图开销。** 在固定照片、viewport 和相同输入序列下控制展示请求的有无，
-   仅在验证工具中隔离这一变量；记录照片 input-to-present、producer、GPU 求值时间、
-   dispatch、读回字节、请求合并数和内存。不要在产品中增加降低质量的“快速模式”。
+   仅在验证工具中隔离这一变量；记录照片 input-to-present、producer、独立 CPU 小图
+   求值/排队/Qt 上传时间、命中率、取消/丢弃数和分类内存。持续 preview 的小图请求数
+   必须为零，另测 commit 后显示延迟。不要在产品中增加降低质量的“快速模式”。
 5. **做资源稳定性验证。** 连续多轮切组、滚动、改 Mask、切图、checkout、关闭/重开面板，
    观察资源回到 owner 规定的空闲/保留范围。报告轮数、当前/峰值字节、在途请求及回收
    后状态，不能只凭一次内存截图声称无增长。
@@ -1109,7 +1386,7 @@ ctest --test-dir build/debug --output-on-failure -R "^(EditorNodeGraphProjection
 | NM9.1 | `EditorNodeGraphProjectionTest`、`EditorNodeGraphDraftTest`、`EditorSessionNodeCommandTest`、`PipelineDocumentDefaultNameTest` | 结构、计数器与 history 提交次数；补对应 native 像素不变验证 |
 | NM9.2 | `GpuDagModelGraphTest`、`PipelineEditBatchTest`、`PipelineDocumentCheckpointTest`、`EditorSessionHistoryPortTest` | 全删除入口、格式、回放和 metadata 无渲染 |
 | NM9.3 | `EditorNodeSelectionLayoutTest`、`EditorNodesPanelQmlTest`、`EditorNodeDelegateQmlTest`、`AnalyticMaskCreationTest`、`WorkspaceShellTest` | 新面板生产 QML fixture、应用构建与真实交互 |
-| NM9.4 | `GpuDagCudaMaskTest`、`GpuDagOpenClGradeTest`、`GpuDagMetalGradeTest` | 新小图/失效测试、真实设备和 QSG reader 生命周期 |
+| NM9.4 | 原生像素对照可用 `GpuDagCudaMaskTest`、`GpuDagOpenClGradeTest`、`GpuDagMetalGradeTest`；新增 service/QML 目标实施后登记 | 第 NM9.4.3 节完整矩阵、固定容量跨图 LRU、无磁盘、commit 触发、逐项显示与删除先于生成完成 |
 | NM9.5 | `EditorSessionHistoryPortTest`、`PipelineDocumentCheckpointTest` 及实际发现的 journal/recovery 用例 | 真实项目保存/reopen、受控异步交错和失败注入 |
 | NM9.6 | 相关回归集合与 `alcedo_main` 产品路径 | 优化构建、任务脚本、像素、UI、资源及打包加载 |
 
@@ -1143,13 +1420,18 @@ Windows configure/build/link 每次至少预留 10 分钟，CUDA 或较多目标
 | `UndoCreationRestoresPriorDocumentDespiteDefaultDeletionProtection` | 受信任历史撤销按记录恢复，普通 Delete 仍受保护 |
 | `ExplicitUnlockSurvivesUndoVersionPasteAndReopen` | 锁值、默认身份和重映射稳定，不被投影重建覆盖 |
 | `MaskThumbnailMatchesEffectiveCoverageWithinTolerance` | 单 Mask/Union 图与真实 coverage 的采样值比较，记录容差 |
-| `StaleMaskThumbnailCannotReplaceCurrentImagePreview` | 过期会话、图片、Version 或 revision 的结果不发布 |
+| `StaleMaskThumbnailCannotReplaceCurrentImagePreview` | 旧订阅不能发布到新绑定；同内容缓存可由新订阅复用 |
+| `MaskThumbnailCacheRetainsOtherImagesUntilLruEviction` | A→B→A 命中，固定容量淘汰，不因切图清空 |
+| `MaskEditsRequestThumbnailsOnlyAfterSuccessfulCommit` | 编辑 preview/取消/失败请求数为零，成功且键变化才更新；首次可见加载单独验证 |
+| `MaskDeletionCompletesWhileThumbnailWorkerIsPaused` | 暂停生成时删除照常完成，晚到回调不能恢复行 |
+| `MaskPanelShowsRowsBeforeAnyThumbnailCompletes` | 全部生成暂停时行和操作已显示，完成逐项更新 |
 | `PanelSwitchPreservesIncompleteNodeConnections` | 未连接节点可定位，无隐式提交或丢弃 |
 | `EquivalentEditsFromBothViewsProduceMatchingPixels` | 同一任务从两入口执行后 DAG、参数和最终像素一致 |
 
 ## 8. 完成记录
 
-尚无实施记录；NM9.1–NM9.6 均为 planned。本次增加执行指示不改变阶段状态。
+NM9.1/NM9.2 已完成，记录见对应阶段；NM9.3–NM9.6 仍为 planned。本次完善规格不代表
+service 或新面板已实现。
 在各阶段对应小节后追加有日期的记录，并在本节维护简短索引，不删掉早期失败或平台
 缺证记录来使完成结果看起来更完整。
 
@@ -1184,7 +1466,7 @@ Remaining defects or unverified platforms, and effect on completion:
 | NM9.1 | 谁拥有图和组序？顶部插入/删除从哪个 app 入口到哪个领域操作？一次用户操作如何只提交一次？不完整草稿如何保留？ |
 | NM9.2 | 锁与默认身份存在哪里？哪些删除入口执行同一校验？格式如何变化？Undo 元数据如何不渲染？ |
 | NM9.3 | 最终选了哪个布局？真实 QML 如何取得同一选择？新面板从未打开 Nodes 时能否工作？窄面板、键盘和 monochrome 有何证据？ |
-| NM9.4 | 小图表示哪一层 coverage？采样/容差如何定义？谁拥有原生输出和 QSG reader？请求与内存上限是多少？哪些平台真正运行？ |
+| NM9.4 | Key 精确包含哪些输入？如何跨图命中并严格限制 1000 项？哪些事件触发请求？暂停 worker 时删除是否完成？旧回调、Undo 同 ID、逐项展示与 QSG reader 如何验证？有无磁盘 I/O？ |
 | NM9.5 | 哪些磁盘 reopen、WAL、Version/Paste 和异步交错真正执行？故障发生后文档、head、选择和资源分别是什么状态？ |
 | NM9.6 | 六项任务最终图/像素是否一致？每轮时间和操作数是多少？缩略图成本是多少？有哪些仍未解决的交互或平台问题？ |
 

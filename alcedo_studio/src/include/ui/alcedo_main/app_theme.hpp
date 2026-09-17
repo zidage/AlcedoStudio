@@ -167,6 +167,8 @@ class AppTheme final : public QObject {
   Q_PROPERTY(int graphNameRowDividerHeight READ graphNameRowDividerHeight CONSTANT)
   Q_PROPERTY(int graphMaskDrawerHeaderHeight READ graphMaskDrawerHeaderHeight CONSTANT)
   Q_PROPERTY(int graphMaskRowHeight READ graphMaskRowHeight CONSTANT)
+  Q_PROPERTY(int maskGroupPreviewSize READ maskGroupPreviewSize CONSTANT)
+  Q_PROPERTY(int maskGroupMaskPreviewSize READ maskGroupMaskPreviewSize CONSTANT)
   Q_PROPERTY(int graphPortSize READ graphPortSize CONSTANT)
   Q_PROPERTY(int graphPortHitSize READ graphPortHitSize CONSTANT)
   Q_PROPERTY(int graphEdgeWidth READ graphEdgeWidth CONSTANT)
@@ -357,6 +359,8 @@ class AppTheme final : public QObject {
   auto graphNameRowDividerHeight() const -> int;
   auto graphMaskDrawerHeaderHeight() const -> int;
   auto graphMaskRowHeight() const -> int;
+  auto maskGroupPreviewSize() const -> int;
+  auto maskGroupMaskPreviewSize() const -> int;
   auto graphPortSize() const -> int;
   auto graphPortHitSize() const -> int;
   auto graphEdgeWidth() const -> int;

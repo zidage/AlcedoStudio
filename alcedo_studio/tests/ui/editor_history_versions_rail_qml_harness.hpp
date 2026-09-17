@@ -279,6 +279,11 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
 
   [[nodiscard]] auto mask_creation_mask_id() const -> MaskId override { return selected_mask_id_; }
 
+  [[nodiscard]] auto mask_creation_state() const -> EditorMaskCreationState override {
+    return selected_mask_id_.Empty() ? EditorMaskCreationState::Inactive
+                                    : EditorMaskCreationState::Editing;
+  }
+
   [[nodiscard]] auto mask_creation_source() const -> std::optional<MaskSource> override {
     if (selected_mask_node_id_.Empty() || selected_mask_id_.Empty()) {
       return std::nullopt;
@@ -311,6 +316,51 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     EditorSessionResult result = Accepted("Node graph topology updated");
     result.kind                = EditorSessionResultKind::RenderRouted;
     return result;
+  }
+
+  auto InsertColorGradeAtTop(const NodeId& new_id, const NodeId& expected_successor_id)
+      -> EditorSessionResult override {
+    if (fail_node_commands_) return Rejected("mini-Git journal append failed");
+    const auto backbone = document_->Graph().ImageBackboneNodeIds();
+    if (backbone.size() < 2 || backbone[1] != expected_successor_id) {
+      return Rejected("Mask Group anchor no longer matches the backbone");
+    }
+    const auto errors = alcedo::AddCleanColorGrade(*document_, backbone[1], new_id);
+    if (!errors.empty()) return Rejected(errors.front().message.c_str());
+    last_inserted_node_id_ = new_id;
+    ++insert_grade_count_;
+    NotifyHistoryChange();
+    EditorSessionResult result = Accepted("Mask Group inserted");
+    result.kind                = EditorSessionResultKind::RenderRouted;
+    return result;
+  }
+
+  auto RemoveColorGradeAndBridge(const NodeId& node_id) -> EditorSessionResult override {
+    if (fail_node_commands_) return Rejected("mini-Git journal append failed");
+    const auto errors = document_->ValidateUserDeletion(node_id);
+    if (!errors.empty()) return Rejected(errors.front().message.c_str());
+    const auto remove_errors = alcedo::RemoveColorGradeAndBridge(*document_, node_id);
+    if (!remove_errors.empty()) return Rejected(remove_errors.front().message.c_str());
+    last_removed_group_node_id_ = node_id;
+    ++remove_grade_count_;
+    NotifyHistoryChange();
+    EditorSessionResult result = Accepted("Mask Group removed");
+    result.kind                = EditorSessionResultKind::RenderRouted;
+    return result;
+  }
+
+  auto SetColorGradeDeletionProtected(const NodeId& node_id, bool deletion_protected)
+      -> EditorSessionResult override {
+    if (fail_node_commands_) return Rejected("mini-Git journal append failed");
+    auto* node  = document_->Graph().FindNode(node_id);
+    auto* grade = dynamic_cast<ColorGradeNodeModel*>(node);
+    if (grade == nullptr) return Rejected("Only a Color Grade has editable deletion protection");
+    grade->SetDeletionProtected(deletion_protected);
+    last_locked_node_id_ = node_id;
+    last_lock_value_     = deletion_protected;
+    ++lock_grade_count_;
+    NotifyHistoryChange();
+    return Accepted("Color Grade deletion protection updated");
   }
 
   auto Close(bool) -> EditorSessionResult override {
@@ -388,12 +438,24 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
   [[nodiscard]] auto view_change_count() const -> int { return view_change_count_; }
   [[nodiscard]] auto rename_grade_count() const -> int { return rename_grade_count_; }
   [[nodiscard]] auto edit_node_graph_count() const -> int { return edit_node_graph_count_; }
+  [[nodiscard]] auto insert_grade_count() const -> int { return insert_grade_count_; }
+  [[nodiscard]] auto remove_grade_count() const -> int { return remove_grade_count_; }
+  [[nodiscard]] auto lock_grade_count() const -> int { return lock_grade_count_; }
+  [[nodiscard]] auto last_inserted_node_id() const -> NodeId { return last_inserted_node_id_; }
+  [[nodiscard]] auto last_removed_group_node_id() const -> NodeId {
+    return last_removed_group_node_id_;
+  }
+  [[nodiscard]] auto last_locked_node_id() const -> NodeId { return last_locked_node_id_; }
+  [[nodiscard]] auto last_lock_value() const -> bool { return last_lock_value_; }
   [[nodiscard]] auto last_topology_change() const -> const NodeGraphTopologyChange& {
     return last_topology_change_;
   }
   [[nodiscard]] auto last_renamed_node_id() const -> NodeId { return last_renamed_node_id_; }
   [[nodiscard]] auto mask_commands() const -> const std::vector<EditorMaskCreationCommand>& {
     return mask_commands_;
+  }
+  [[nodiscard]] auto document() const -> const std::shared_ptr<PipelineDocument>& {
+    return document_;
   }
 
   void SetRecovery(bool pending, std::string error = {}) {
@@ -419,12 +481,39 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     NotifyHistoryChange();
   }
 
+  void AddMaskToGrade(const NodeId& node_id, MaskModel mask) {
+    auto* node  = document_->Graph().FindNode(node_id);
+    auto* grade = dynamic_cast<ColorGradeNodeModel*>(node);
+    if (grade == nullptr) {
+      return;
+    }
+    grade->AddMask(std::move(mask), grade->Masks().size());
+    NotifyHistoryChange();
+  }
+
+  /// Insert one clean Color Grade immediately before @p before_node_id on the
+  /// backbone; mirrors the committed InsertColorGradeAtTop history effect.
+  void AddColorGradeBefore(const NodeId& before_node_id, const NodeId& new_id) {
+    const auto errors = alcedo::AddCleanColorGrade(*document_, before_node_id, new_id);
+    if (!errors.empty()) {
+      return;
+    }
+    NotifyHistoryChange();
+  }
+
   void CompleteMaskCommands() {
     for (const auto& command : mask_commands_) {
       if (command.kind == EditorMaskCreationCommandKind::SelectMask) {
         selected_mask_node_id_ = command.node_id;
         selected_mask_id_      = command.mask_id;
       } else if (command.kind == EditorMaskCreationCommandKind::RemoveMask) {
+        // Mirror the owner: ValidateUserDeletion runs before any mutation so a
+        // locked Mask keeps the document and selection unchanged.
+        const auto errors =
+            document_->ValidateUserDeletion(command.node_id, command.mask_id);
+        if (!errors.empty()) {
+          continue;
+        }
         auto* node  = document_->Graph().FindNode(command.node_id);
         auto* grade = dynamic_cast<ColorGradeNodeModel*>(node);
         if (grade != nullptr && grade->FindMask(command.mask_id) != nullptr) {
@@ -433,6 +522,28 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
         if (selected_mask_id_ == command.mask_id) {
           selected_mask_node_id_ = {};
           selected_mask_id_      = {};
+        }
+      } else if (command.kind == EditorMaskCreationCommandKind::SetMaskField) {
+        auto* node  = document_->Graph().FindNode(command.node_id);
+        auto* grade = dynamic_cast<ColorGradeNodeModel*>(node);
+        auto* mask  = grade == nullptr ? nullptr : grade->FindMask(command.mask_id);
+        if (mask == nullptr) {
+          continue;
+        }
+        try {
+          if (command.field_key == "enabled") {
+            grade->SetMaskEnabled(command.mask_id, command.field_value.get<bool>());
+          } else if (command.field_key == "invert") {
+            grade->SetMaskInvert(command.mask_id, command.field_value.get<bool>());
+          } else if (command.field_key == "opacity") {
+            grade->SetMaskOpacity(command.mask_id, command.field_value.get<float>());
+          } else if (command.field_key == "display_name") {
+            mask->display_name = command.field_value.get<std::string>();
+          } else if (command.field_key == "deletion_protected") {
+            grade->SetMaskDeletionProtected(command.mask_id,
+                                            command.field_value.get<bool>());
+          }
+        } catch (const std::exception&) {
         }
       } else if (command.kind == EditorMaskCreationCommandKind::FinishMode ||
                  command.kind == EditorMaskCreationCommandKind::CancelMode) {
@@ -512,8 +623,15 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
   int                                    view_change_count_     = 0;
   int                                    rename_grade_count_    = 0;
   int                                    edit_node_graph_count_ = 0;
+  int                                    insert_grade_count_    = 0;
+  int                                    remove_grade_count_    = 0;
+  int                                    lock_grade_count_      = 0;
   NodeGraphTopologyChange                last_topology_change_{};
   NodeId                                 last_renamed_node_id_;
+  NodeId                                 last_inserted_node_id_;
+  NodeId                                 last_removed_group_node_id_;
+  NodeId                                 last_locked_node_id_;
+  bool                                   last_lock_value_ = false;
 };
 
 class RecordingInteractionPolicy final : public QObject {
@@ -696,6 +814,12 @@ class RailQmlFixture : public ::testing::Test {
         !warnings_.isEmpty()) {
       ADD_FAILURE() << warnings_.join('\n').toStdString();
     }
+    // The fake reports an open Interactive session; route it through Open so
+    // the controller's active_ flag matches and has_image() is true. Without
+    // this, every backend notification takes the OnImageClosed path and resets
+    // Mask edit state that the real session keeps while the editor is open.
+    controller_.Open(1, 2);
+    ProcessEvents();
   }
 
   auto Find(const QString& object_name) -> QQuickItem* {
@@ -760,6 +884,13 @@ class RailQmlFixture : public ::testing::Test {
     controller_.set_editor_tool_panel_page(QStringLiteral("nodes"));
     ProcessEvents();
     WaitForName(QStringLiteral("editorNodesPageBody"));
+  }
+
+  void OpenMaskGroupsPage() {
+    controller_.set_editor_tool_panel_page(QStringLiteral("maskgroups"));
+    ProcessEvents();
+    WaitForName(QStringLiteral("editorMaskGroupsPageBody"));
+    WaitForName(QStringLiteral("editorMaskGroupsList"));
   }
 
   RecordingEditorSessionBackend backend_;

@@ -215,6 +215,20 @@ class EditorMaskCreationController {
       -> EditorMaskCreationResult;
 
   /**
+   * @brief Apply @p after_value for @p field_key on an explicit (NodeId, MaskId).
+   *
+   * Same commit semantics as the selected-Mask overload: a matching open field
+   * edit updates live, otherwise one atomic live apply plus settle commit runs.
+   * The explicit overload targets any stored Mask — the Mask Groups lock button
+   * uses it so a row lock edit cannot land on a different selected Mask.
+   * Detached writes require the Mask tool to be idle or merely Selected; an
+   * open operation on another Mask is rejected.
+   */
+  auto ApplyMaskFieldValue(const NodeId& grade_id, const MaskId& mask_id,
+                           std::string field_key, nlohmann::json after_value)
+      -> EditorMaskCreationResult;
+
+  /**
    * @brief Start a creation drag at @p sample.
    *
    * Press outside the photograph is rejected. Degenerate zero-area input stays
@@ -303,6 +317,8 @@ class EditorMaskCreationController {
   auto UpdateExisting(const MaskCreationSample& sample) -> EditorMaskCreationResult;
   auto PublishMaskFieldEdit() -> EditorMaskCreationResult;
   auto ApplyLiveMaskField(const std::string& field_key, const nlohmann::json& value) -> bool;
+  auto ApplyLiveMaskField(ColorGradeNodeModel* grade, const MaskId& mask_id,
+                          const std::string& field_key, const nlohmann::json& value) -> bool;
 
   PipelineDocument*      document_ = nullptr;
   MiniGitWorkingHistory* history_  = nullptr;

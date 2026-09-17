@@ -17,6 +17,7 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/mask/analytic_mask_edit.hpp"
 #include "ui/alcedo_main/album_backend/editor_node_controller.hpp"
+#include "ui/alcedo_main/album_backend/editor_node_layout_store.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
 #include "ui/edit_viewer/mask_edit_geometry.hpp"
 #include "ui/edit_viewer/mask_overlay_geometry.hpp"
@@ -426,7 +427,22 @@ void EditorMaskCreationAdapter::nudgeMaskBy(qreal dx_px, qreal dy_px) {
 }
 
 void EditorMaskCreationAdapter::BeginTool(MaskSourceKind kind, const QString& tool_kind) {
-  const NodeId grade = CurrentGradeId();
+  NodeId grade = CurrentGradeId();
+  if (grade.Empty()) {
+    // With no selected Color Grade the tool targets the top editable group.
+    if (auto* nodes = session_ != nullptr ? session_->node_selection_source() : nullptr;
+        nodes != nullptr && !nodes->has_draft()) {
+      for (const auto& node : nodes->ActiveNodes()) {
+        if (node.node_kind == EditorNodeKind::ColorGrade) {
+          grade = node.node_id;
+          break;
+        }
+      }
+      if (!grade.Empty()) {
+        nodes->selectNode(NodeIdToQString(grade));
+      }
+    }
+  }
   if (!CanAuthorMasksFor(grade)) {
     return;
   }
@@ -555,6 +571,28 @@ void EditorMaskCreationAdapter::removeMask(const QString& node_id, const QString
   command.mask_id = MaskIdFromQString(mask_id);
   // Enqueue is not deletion admission. The owner publishes the next selection
   // on success; rejected protection must retain the local selection and edit.
+  (void)Enqueue(command);
+}
+
+void EditorMaskCreationAdapter::setMaskDeletionProtected(const QString& node_id,
+                                                         const QString& mask_id,
+                                                         bool           deletion_protected) {
+  if (mask_id.isEmpty()) {
+    return;
+  }
+  NodeId grade{node_id.toStdString()};
+  if (grade.Empty()) {
+    grade = active() ? edit_node_id_ : CurrentGradeId();
+  }
+  if (!CanAuthorMasksFor(grade)) {
+    return;
+  }
+  EditorMaskCreationCommand command;
+  command.kind        = EditorMaskCreationCommandKind::SetMaskField;
+  command.node_id     = grade;
+  command.mask_id     = MaskIdFromQString(mask_id);
+  command.field_key   = std::string{kMaskFieldDeletionProtected};
+  command.field_value = deletion_protected;
   (void)Enqueue(command);
 }
 

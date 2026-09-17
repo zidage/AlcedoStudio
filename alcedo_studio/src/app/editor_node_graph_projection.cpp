@@ -124,18 +124,20 @@ auto EditorNodeGraphProjection::BuildMaskGroups(const PipelineDocument& document
       throw std::invalid_argument("Color Grade type has an invalid model");
     }
     EditorMaskGroupRow group;
-    group.node_id      = node_id;
-    group.display_name = std::string{node->DisplayName()};
-    group.enabled      = grade->Enabled();
+    group.node_id            = node_id;
+    group.display_name       = std::string{node->DisplayName()};
+    group.enabled            = grade->Enabled();
+    group.deletion_protected = grade->DeletionProtected();
     group.masks.reserve(grade->MaskCount());
     for (const auto& mask : grade->Masks()) {
       EditorMaskGroupMaskRow row;
-      row.node_id      = node_id;
-      row.mask_id      = mask.id;
-      row.source_kind  = GetMaskSourceKind(mask.source);
-      row.display_name = mask.display_name;
-      row.enabled      = mask.enabled;
-      row.opacity      = mask.opacity;
+      row.node_id            = node_id;
+      row.mask_id            = mask.id;
+      row.source_kind        = GetMaskSourceKind(mask.source);
+      row.display_name       = mask.display_name;
+      row.enabled            = mask.enabled;
+      row.deletion_protected = mask.deletion_protected;
+      row.opacity            = mask.opacity;
       group.masks.push_back(std::move(row));
     }
     snapshot.groups.push_back(std::move(group));

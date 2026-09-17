@@ -1103,6 +1103,7 @@ auto EditorNodeController::mask_groups() const -> QVariantList {
     row.insert(QStringLiteral("nodeId"), NodeIdToQString(group.node_id));
     row.insert(QStringLiteral("displayName"), QString::fromStdString(group.display_name));
     row.insert(QStringLiteral("enabled"), group.enabled);
+    row.insert(QStringLiteral("deletionProtected"), group.deletion_protected);
     QVariantList masks;
     masks.reserve(static_cast<qsizetype>(group.masks.size()));
     for (const auto& mask : group.masks) {
@@ -1114,6 +1115,7 @@ auto EditorNodeController::mask_groups() const -> QVariantList {
       mask_row.insert(QStringLiteral("sourceKind"), MaskSourceKindKey(mask.source_kind));
       mask_row.insert(QStringLiteral("displayName"), QString::fromStdString(mask.display_name));
       mask_row.insert(QStringLiteral("enabled"), mask.enabled);
+      mask_row.insert(QStringLiteral("deletionProtected"), mask.deletion_protected);
       mask_row.insert(QStringLiteral("opacity"), static_cast<double>(mask.opacity));
       masks.push_back(mask_row);
     }
