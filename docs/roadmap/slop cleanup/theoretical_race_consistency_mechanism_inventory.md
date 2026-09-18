@@ -29,7 +29,7 @@ the Nodes controller below concern the pre-existing projection, draft, adapter, 
 
 | ID | Area | Observed mechanism | Executable interleaving found |
 | --- | --- | --- | --- |
-| SC-01 | Nodes projection publication | Session generation plus projection and topology revisions reject older snapshots | No production producer or delivery path for an older snapshot was found |
+| SC-01 | Nodes projection publication | Session generation plus projection and topology revisions reject older snapshots (**removed 2026-09-18**; see completion record) | No production producer or delivery path for an older snapshot was found |
 | SC-02 | QuickQanava adapter | The same three values reject older applies; reverse pointer entries also carry a generation | No out-of-order adapter snapshot delivery was found; old reverse entries are erased or cleared |
 | SC-03 | Nodes commands and draft | QML request generation plus a six-field draft identity guard GUI-only edits | No production command carries an older GUI generation to the controller; the explicit stale overload is test-only |
 | SC-04 | Adjustment-panel projection | A session generation is stamped on a pulled value and immediately compared with the same backend's current request | No old projection payload is delivered; the production stamp is assigned at read time |
@@ -103,6 +103,89 @@ The stale-generation tests construct states that the production call chain does 
 
 No test cited by this family runs two production snapshot producers, queues two snapshot deliveries,
 or demonstrates the later projection arriving before the earlier projection.
+
+##### SC-01 completion record (2026-09-18)
+
+**Status:** complete — the publish-time stale checks are removed; snapshot fields stay for the SC-02
+adapter checks and the SC-03 draft identity.
+
+**Primary success call chain:**
+
+```text
+EditorSessionController::StateChanged / HistoryChanged / set_editor_session
+  -> EditorNodeController::OnSessionStateChanged / OnSessionHistoryChanged / set_editor_session
+  -> EditorNodeController::refreshFromSession
+  -> session_->pipeline_document() + session_->session_generation()  (synchronous GUI-thread read)
+  -> EditorNodeController::PublishDocument
+  -> EditorNodeGraphProjection::Build / BuildMaskGroups
+  -> EditorNodeController::PublishSnapshot / PublishMaskGroupSnapshot
+  -> SnapshotChanged / MaskGroupsChanged + QueueProjectionApply
+```
+
+**Primary failure call chain:**
+
+```text
+EditorNodeGraphProjection::Build throws std::invalid_argument (no valid image backbone)
+  -> PublishDocument catch -> SetLastError; previous snapshot and Mask Groups rows are retained
+
+PublishSnapshot with zero nodes
+  -> "The graph snapshot has no nodes" -> live snapshot, selection, and revisions unchanged
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| Publish replaces snapshot, keeps selection, bumps revisions | `EditorNodeSelectionLayoutTest` (65 tests) | PASS 65/65 |
+| Empty snapshot rejected without touching live projection | `EditorNodeSelectionLayoutTest.EmptySnapshotIsRejectedAndKeepsTheLiveProjection` | PASS |
+| Projection builds carry stamped session/revision values | `EditorNodeGraphProjectionTest` (14 tests) | PASS 14/14 |
+| Version checkout projection assertions without AcceptsGeneration | `EditorSessionHistoryPortTest` (89 tests) | PASS 89/89 |
+| Adapter apply unchanged (revision checks still fed by snapshot fields) | `AlcedoQanGraphTest` (31 tests) | PASS 31/31 |
+| Draft identity unchanged (six-field identity still consumed) | `EditorNodeGraphDraftTest` (17 tests) | PASS 17/17 |
+| QML node delegate unchanged | `EditorNodeDelegateQmlTest` (24 tests) | PASS 24/24 |
+
+Commands: `cmd /c scripts\msvc_env.cmd --build --preset win_debug --target
+EditorNodeGraphProjectionTest EditorNodeSelectionLayoutTest EditorSessionHistoryPortTest
+AlcedoQanGraphTest EditorNodeGraphDraftTest EditorNodeDelegateQmlTest --parallel 4`; each test exe
+run directly from `build/debug/alcedo_studio/tests/<dir>/<target>_runtime/`.
+Suite totals: 240/240 passed.
+
+**Removed:**
+
+- `EditorNodeController::PublishSnapshot` bound-generation rejection and numerically-older
+  topology/projection revision rejection.
+- `EditorNodeController::PublishDocument` bound-generation rejection of its argument.
+- `EditorNodeController::PublishMaskGroupSnapshot` bound-generation rejection.
+- `EditorNodeGraphProjection::AcceptsGeneration` (both overloads; test-only entry points).
+- Tests `GenerationCheckRejectsSnapshotFromAnotherSession`,
+  `MaskGroupsGenerationCheckMatchesSession`, and `StaleGenerationSnapshotIsRejected`, plus the
+  `AcceptsGeneration` assertion in `editor_version_checkout_test.cpp`. The removed controller test
+  was replaced by `EmptySnapshotIsRejectedAndKeepsTheLiveProjection` covering the remaining
+  input validation.
+
+**Kept (belongs to SC-02 / SC-03, not this phase):**
+
+- `EditorNodeGraphSnapshot` / `EditorMaskGroupSnapshot` `session_generation`,
+  `projection_revision`, `topology_revision` fields — still stamped by the publish path and read by
+  the adapter (SC-02) and the draft identity (SC-03).
+- `ApplyBoundGraph`'s bound-generation skip and `AdapterShowsCurrentCommittedProjection` — the same
+  three values gate adapter *applies*, which is the SC-02 surface.
+- `ValidateCommandGeneration`, the three-argument `requestConnect`, `EditorNodeGraphDraftIdentity`,
+  and `submitted_identity_` — command/draft path, SC-03.
+- Revision bookkeeping in `PublishSnapshot` (`std::max` monotonic counters) and identical-content
+  republish dedup — these feed the adapter checks and are not stale rejections.
+- `adapter_attach_generation_` — documented executable ordering, not part of this mechanism.
+
+**Checklist / exit condition:** the publish path no longer rejects a generation mismatch or a
+numerically older revision; production refresh remains a synchronous read-build-publish; no test
+injects a state the production call chain cannot produce.
+
+**LOC note (grill-code-review):** `editor_node_controller.cpp` −25, `editor_node_controller.hpp`
+−2 net, `editor_node_graph_projection.hpp` −15 net, `editor_node_graph_projection.cpp` −10,
+tests −31 net. No file exceeds size thresholds.
+
+**Residual gaps:** none for the publication mechanism itself. The snapshot identity fields and the
+apply-side gates remain until SC-02 and SC-03 remove their own ungrounded checks.
 
 ## SC-02 — QuickQanava repeats stale checks on a serialized GUI-only apply path
 

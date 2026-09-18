@@ -247,7 +247,6 @@ TEST_F(EditorVersionCheckoutTest, BranchVersionSharesCommitsAndKeepsIndependentH
   ASSERT_EQ(branch_projection.nodes.size(), 4u);
   EXPECT_EQ(branch_projection.nodes[2].node_id, alcedo::NodeId{"grade.look"});
   EXPECT_EQ(branch_projection.nodes[2].display_name, "Color Grade 2");
-  EXPECT_TRUE(alcedo::EditorNodeGraphProjection::AcceptsGeneration(branch_projection, 8));
 }
 
 TEST_F(EditorVersionCheckoutTest, VersionCheckoutReplacesTheDagOnTheSameLiveGuard) {

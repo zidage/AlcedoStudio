@@ -92,12 +92,11 @@ class EditorNodeController : public QObject {
   [[nodiscard]] auto session() const -> EditorSessionController*;
 
   /**
-   * @brief Replace the published snapshot after generation and revision checks.
+   * @brief Replace the published snapshot.
    *
-   * @param snapshot Immutable projection. Rejected when a session is bound and
-   *        the generation does not match, or when a bound session already has a
-   *        newer projection/topology revision.
-   * @return false when the snapshot is rejected; lastError holds the reason.
+   * @param snapshot Immutable projection. The caller stamps the session and
+   *        revision values carried to the graph adapter and draft identity.
+   * @return false when the snapshot has no nodes; lastError holds the reason.
    * @post On success, missing selection is restored to the first Color Grade or
    *       the first backbone node.
    */
@@ -107,9 +106,8 @@ class EditorNodeController : public QObject {
    * @brief Build and publish a snapshot from @p document.
    *
    * @param document Live PipelineDocument under the read boundary.
-   * @param session_generation Session value copied into the snapshot. Must match
-   *        the bound session when one is set.
-   * @return false when build or generation checks fail.
+   * @param session_generation Session value stamped onto the snapshot.
+   * @return false when the projection build fails or the snapshot has no nodes.
    */
   auto PublishDocument(const PipelineDocument& document, std::uint64_t session_generation) -> bool;
 
@@ -343,8 +341,8 @@ class EditorNodeController : public QObject {
       const alcedo::EditorNodeGraphDraftMutation& mutation) -> bool;
   [[nodiscard]] auto MaybeSubmitDraft() -> bool;
   /// Publish the committed Mask Groups projection beside the node snapshot.
-  /// Rejects stale generations like PublishSnapshot; equal content republishes
-  /// nothing.
+  /// Stamps the controller's session and revision values; equal content
+  /// republishes nothing.
   [[nodiscard]] auto PublishMaskGroupSnapshot(alcedo::EditorMaskGroupSnapshot snapshot) -> bool;
   [[nodiscard]] auto TopologyChanged(const EditorNodeGraphSnapshot& snapshot) const -> bool;
   [[nodiscard]] auto BoundSessionGeneration() const -> std::optional<std::uint64_t>;

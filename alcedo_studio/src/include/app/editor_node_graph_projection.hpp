@@ -62,8 +62,9 @@ struct EditorNodeEdgeProjection {
 /**
  * @brief Complete value snapshot published across the editor boundary.
  *
- * No Qan objects or document-owned pointers are stored here. The caller owns
- * the session and revision values used to reject stale publications.
+ * No Qan objects or document-owned pointers are stored here. The session and
+ * revision values are stamped by the publisher and carried to the graph
+ * adapter and draft identity.
  */
 struct EditorNodeGraphSnapshot {
   std::uint64_t                         session_generation  = 0;
@@ -189,19 +190,6 @@ class EditorNodeGraphProjection {
                                             std::uint64_t           topology_revision)
       -> EditorMaskGroupSnapshot;
 
-  /**
-   * @brief Return whether a snapshot belongs to the active editor session.
-   * @param snapshot Candidate snapshot.
-   * @param session_generation Active session value.
-   */
-  [[nodiscard]] static auto AcceptsGeneration(const EditorNodeGraphSnapshot& snapshot,
-                                              std::uint64_t session_generation) -> bool;
-
-  /**
-   * @brief Return whether a Mask Groups snapshot belongs to the active session.
-   */
-  [[nodiscard]] static auto AcceptsGeneration(const EditorMaskGroupSnapshot& snapshot,
-                                              std::uint64_t session_generation) -> bool;
 };
 
 }  // namespace alcedo

@@ -426,21 +426,6 @@ auto EditorNodeController::incomplete_draft_instruction() const -> QString {
 }
 
 auto EditorNodeController::PublishSnapshot(EditorNodeGraphSnapshot snapshot) -> bool {
-  const auto bound_generation = BoundSessionGeneration();
-  if (bound_generation.has_value() && snapshot.session_generation != *bound_generation) {
-    SetLastError(tr("The graph snapshot is from another editor session"));
-    return false;
-  }
-  const bool assign_revisions =
-      snapshot.topology_revision == 0 && snapshot.projection_revision == 0;
-  if (!assign_revisions && has_snapshot_ && snapshot.session_generation == session_generation_) {
-    if (snapshot.topology_revision < topology_revision_ ||
-        (snapshot.topology_revision == topology_revision_ &&
-         snapshot.projection_revision < projection_revision_)) {
-      SetLastError(tr("The graph snapshot is older than the live projection"));
-      return false;
-    }
-  }
   if (snapshot.nodes.empty()) {
     SetLastError(tr("The graph snapshot has no nodes"));
     return false;
@@ -489,11 +474,6 @@ auto EditorNodeController::PublishSnapshot(EditorNodeGraphSnapshot snapshot) -> 
 
 auto EditorNodeController::PublishDocument(const PipelineDocument& document,
                                            std::uint64_t           session_generation) -> bool {
-  const auto bound_generation = BoundSessionGeneration();
-  if (bound_generation.has_value() && session_generation != *bound_generation) {
-    SetLastError(tr("The graph snapshot is from another editor session"));
-    return false;
-  }
   try {
     auto built  = EditorNodeGraphProjection::Build(document, session_generation, 0, 0);
     auto groups = EditorNodeGraphProjection::BuildMaskGroups(document, session_generation, 0, 0);
@@ -511,11 +491,6 @@ auto EditorNodeController::PublishDocument(const PipelineDocument& document,
 
 auto EditorNodeController::PublishMaskGroupSnapshot(alcedo::EditorMaskGroupSnapshot snapshot)
     -> bool {
-  const auto bound_generation = BoundSessionGeneration();
-  if (bound_generation.has_value() && snapshot.session_generation != *bound_generation) {
-    SetLastError(tr("The Mask Groups snapshot is from another editor session"));
-    return false;
-  }
   snapshot.session_generation  = session_generation_;
   snapshot.topology_revision   = topology_revision_;
   snapshot.projection_revision = projection_revision_;

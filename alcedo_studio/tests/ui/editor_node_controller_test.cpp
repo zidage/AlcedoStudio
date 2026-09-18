@@ -357,18 +357,18 @@ TEST(EditorNodeController, BackboneKeysMoveSelectionAlongTheImageBackbone) {
   EXPECT_EQ(controller.selected_node_id(), NodeId{"drt"});
 }
 
-TEST(EditorNodeController, StaleGenerationSnapshotIsRejected) {
+TEST(EditorNodeController, EmptySnapshotIsRejectedAndKeepsTheLiveProjection) {
   DocumentSessionBackend backend;
   backend.SetGeneration(12);
   EditorSessionController session(&backend);
   EditorNodeController    controller;
   controller.set_editor_session(&session);
   ASSERT_TRUE(controller.has_snapshot());
-  EXPECT_EQ(controller.session_generation(), 12u);
+  const auto nodes_before = controller.snapshot().nodes.size();
 
-  auto stale = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 11, 1, 1);
-  EXPECT_FALSE(controller.PublishSnapshot(stale));
-  EXPECT_EQ(controller.session_generation(), 12u);
+  EXPECT_FALSE(controller.PublishSnapshot(alcedo::EditorNodeGraphSnapshot{}));
+  EXPECT_TRUE(controller.has_snapshot());
+  EXPECT_EQ(controller.snapshot().nodes.size(), nodes_before);
   EXPECT_FALSE(controller.last_error().isEmpty());
 }
 

@@ -89,11 +89,6 @@ auto EditorNodeGraphProjection::Build(const PipelineDocument& document,
   return snapshot;
 }
 
-auto EditorNodeGraphProjection::AcceptsGeneration(const EditorNodeGraphSnapshot& snapshot,
-                                                  std::uint64_t session_generation) -> bool {
-  return snapshot.session_generation == session_generation;
-}
-
 auto EditorNodeGraphProjection::BuildMaskGroups(const PipelineDocument& document,
                                                 std::uint64_t           session_generation,
                                                 std::uint64_t           projection_revision,
@@ -144,11 +139,6 @@ auto EditorNodeGraphProjection::BuildMaskGroups(const PipelineDocument& document
     snapshot.groups.push_back(std::move(group));
   }
   return snapshot;
-}
-
-auto EditorNodeGraphProjection::AcceptsGeneration(const EditorMaskGroupSnapshot& snapshot,
-                                                  std::uint64_t session_generation) -> bool {
-  return snapshot.session_generation == session_generation;
 }
 
 }  // namespace alcedo

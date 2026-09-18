@@ -85,13 +85,6 @@ TEST(EditorNodeGraphProjection, ParameterChangeDoesNotChangeSnapshotValues) {
   EXPECT_EQ(after, before);
 }
 
-TEST(EditorNodeGraphProjection, GenerationCheckRejectsSnapshotFromAnotherSession) {
-  const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 15, 1, 1);
-
-  EXPECT_TRUE(EditorNodeGraphProjection::AcceptsGeneration(snapshot, 15));
-  EXPECT_FALSE(EditorNodeGraphProjection::AcceptsGeneration(snapshot, 16));
-}
-
 TEST(EditorNodeGraphProjection, TopologyChangeAppearsInNodeAndRevisionValues) {
   auto document = CreateDefaultPipelineDocument();
   ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.second"}).empty());
@@ -240,14 +233,6 @@ TEST(EditorNodeGraphProjection, MaskGroupParameterEditsDoNotRebuildGroupRows) {
 
   const auto after = EditorNodeGraphProjection::BuildMaskGroups(document, 3, 3, 3);
   EXPECT_EQ(after, before);
-}
-
-TEST(EditorNodeGraphProjection, MaskGroupsGenerationCheckMatchesSession) {
-  const auto snapshot =
-      EditorNodeGraphProjection::BuildMaskGroups(CreateDefaultPipelineDocument(), 15, 1, 1);
-
-  EXPECT_TRUE(EditorNodeGraphProjection::AcceptsGeneration(snapshot, 15));
-  EXPECT_FALSE(EditorNodeGraphProjection::AcceptsGeneration(snapshot, 16));
 }
 
 TEST(EditorNodeGraphProjection, MaskGroupsInvalidBackboneIsRejected) {
