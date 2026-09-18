@@ -323,7 +323,7 @@ class EditorNodeDelegateQml : public ::testing::Test {
   auto ApplyDocument(ui::AlcedoQanGraph* adapter, PipelineDocument document)
       -> EditorNodeGraphSnapshot {
     AttachAlcedoDelegates(*adapter, harness_->Graph());
-    const auto snapshot = EditorNodeGraphProjection::Build(document, 1, 1, 1);
+    const auto snapshot = EditorNodeGraphProjection::Build(document, 1);
     const auto result   = adapter->ApplySnapshot(snapshot);
     EXPECT_TRUE(result.succeeded) << result.error.toStdString();
     QCoreApplication::processEvents(QEventLoop::AllEvents);
@@ -497,7 +497,7 @@ TEST_F(EditorNodeDelegateQml, EdgeEndpointsStayGluedToPortsThroughFirstOpenBurst
   auto document = CreateDefaultPipelineDocument();
   document.PrimaryGrade()->AddMask(MakeMask(MaskId{"mask.linear"}, LinearGradientMaskSource{}), 0);
   document.PrimaryGrade()->AddMask(MakeMask(MaskId{"mask.radial"}, RadialMaskSource{}), 1);
-  const auto snapshot = EditorNodeGraphProjection::Build(document, 1, 1, 1);
+  const auto snapshot = EditorNodeGraphProjection::Build(document, 1);
   ASSERT_TRUE(adapter.ApplySnapshot(snapshot).succeeded);
 
   // First-open burst: EditorNodeController applies stored layout in the same

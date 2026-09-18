@@ -91,11 +91,9 @@ void EditorNodeGraphDraft::RestoreMap(
   }
 }
 
-auto EditorNodeGraphDraft::FromDocument(const PipelineDocument& document,
-                                        EditorNodeGraphDraftIdentity identity)
+auto EditorNodeGraphDraft::FromDocument(const PipelineDocument& document)
     -> EditorNodeGraphDraft {
   EditorNodeGraphDraft draft;
-  draft.identity_               = std::move(identity);
   draft.base_default_grade_id_ = document.DefaultGradeId();
   draft.base_next_name_number_  = document.NextColorGradeNameNumber();
   draft.draft_next_name_number_ = draft.base_next_name_number_;
@@ -731,16 +729,10 @@ auto EditorNodeGraphDraft::MakeChange() const -> NodeGraphTopologyChange {
   return change;
 }
 
-auto EditorNodeGraphDraft::CurrentSnapshot(std::uint64_t session_generation,
-                                           std::uint64_t projection_revision,
-                                           std::uint64_t topology_revision) const
-    -> EditorNodeGraphSnapshot {
+auto EditorNodeGraphDraft::CurrentSnapshot() const -> EditorNodeGraphSnapshot {
   EditorNodeGraphSnapshot snapshot;
-  snapshot.session_generation  = session_generation;
-  snapshot.projection_revision = projection_revision;
-  snapshot.topology_revision   = topology_revision;
-  snapshot.nodes               = nodes_;
-  snapshot.edges               = edges_;
+  snapshot.nodes = nodes_;
+  snapshot.edges = edges_;
   return snapshot;
 }
 

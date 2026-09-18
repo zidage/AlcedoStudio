@@ -82,7 +82,7 @@ TEST(EditorNodeLayoutStore, RemovedNodeIdKeepsPriorPositionAndDrawerState) {
   store.SetNodePosition(NodeId{"grade.extra"}, QPointF(40, 50));
   store.SetDrawerOpen(NodeId{"grade.extra"}, false);
 
-  const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 1, 1, 1);
+  const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 1);
   store.EnsureDefaultPositions(snapshot);
 
   EXPECT_EQ(store.NodePosition(NodeId{"grade.extra"}), QPointF(40, 50));
@@ -93,7 +93,7 @@ TEST(EditorNodeLayoutStore, EnsureDefaultPositionsDoNotOverwriteStoredValues) {
   EditorNodeLayoutStore store(MakeMetrics());
   store.activate("p", 1, 2, "v");
   store.SetNodePosition(NodeId{"develop"}, QPointF(5, 6));
-  const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 1, 1, 1);
+  const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 1);
   store.EnsureDefaultPositions(snapshot);
   EXPECT_EQ(store.NodePosition(NodeId{"develop"}), QPointF(5, 6));
   EXPECT_TRUE(store.hasNodePosition(QStringLiteral("grade.primary")));
@@ -113,7 +113,7 @@ TEST(EditorNodeLayoutStore, AssignStagingPositionPlacesNewNodeBelowTheBackbone) 
   const auto            metrics = MakeMetrics();
   EditorNodeLayoutStore store(metrics);
   store.activate("p", 1, 2, "v");
-  const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 1, 1, 1);
+  const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 1);
   store.EnsureDefaultPositions(snapshot);
 
   const auto develop = store.NodePosition(NodeId{"develop"});
@@ -138,7 +138,7 @@ TEST(EditorNodeLayoutStore, AssignStagingPositionStacksLaterDraftsDownwardOnTheS
   const auto            metrics = MakeMetrics();
   EditorNodeLayoutStore store(metrics);
   store.activate("p", 1, 2, "v");
-  const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 1, 1, 1);
+  const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 1);
 
   const NodeId first{"grade.draft-a"};
   const NodeId second{"grade.draft-b"};
@@ -157,7 +157,7 @@ TEST(EditorNodeLayoutStore, AssignStagingPositionStacksLaterDraftsDownwardOnTheS
 TEST(EditorNodeLayoutStore, ResolveVerticalOverlapsKeepsInitialLayoutUntouched) {
   EditorNodeLayoutStore store(MakeMetrics());
   store.activate("p", 1, 2, "v");
-  const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 1, 1, 1);
+  const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 1);
   store.EnsureDefaultPositions(snapshot);
   const auto develop = store.NodePosition(NodeId{"develop"});
   const auto primary = store.NodePosition(NodeId{"grade.primary"});
@@ -175,7 +175,7 @@ TEST(EditorNodeLayoutStore, ResolveVerticalOverlapsPushesNodesBelowGrownPredeces
   EditorNodeLayoutStore store(metrics);
   store.activate("p", 1, 2, "v");
   auto document = CreateDefaultPipelineDocument();
-  store.EnsureDefaultPositions(EditorNodeGraphProjection::Build(document, 1, 1, 1));
+  store.EnsureDefaultPositions(EditorNodeGraphProjection::Build(document, 1));
   const auto drt_before = store.NodePosition(NodeId{"drt"});
   ASSERT_TRUE(drt_before.has_value());
 
@@ -188,7 +188,7 @@ TEST(EditorNodeLayoutStore, ResolveVerticalOverlapsPushesNodesBelowGrownPredeces
     mask.source       = RadialMaskSource{};
     grade->AddMask(std::move(mask), grade->Masks().size());
   }
-  const auto grown = EditorNodeGraphProjection::Build(document, 1, 2, 1);
+  const auto grown = EditorNodeGraphProjection::Build(document, 1);
 
   store.ResolveVerticalOverlaps(grown);
 
@@ -206,7 +206,7 @@ TEST(EditorNodeLayoutStore, ResolveVerticalOverlapsLeavesSpacedAndOffsetNodesAlo
   EditorNodeLayoutStore store(metrics);
   store.activate("p", 1, 2, "v");
   auto document = CreateDefaultPipelineDocument();
-  store.EnsureDefaultPositions(EditorNodeGraphProjection::Build(document, 1, 1, 1));
+  store.EnsureDefaultPositions(EditorNodeGraphProjection::Build(document, 1));
 
   auto* grade = document.PrimaryGrade();
   ASSERT_NE(grade, nullptr);
@@ -215,7 +215,7 @@ TEST(EditorNodeLayoutStore, ResolveVerticalOverlapsLeavesSpacedAndOffsetNodesAlo
   mask.display_name = "mask.one";
   mask.source       = RadialMaskSource{};
   grade->AddMask(std::move(mask), 0);
-  const auto grown = EditorNodeGraphProjection::Build(document, 1, 2, 1);
+  const auto grown = EditorNodeGraphProjection::Build(document, 1);
 
   // A node dragged to another column never overlaps the drawer rows, so the
   // reflow must not move it even when its predecessor grows past its y.
@@ -245,7 +245,7 @@ TEST(EditorNodeLayoutStore, ResolveVerticalOverlapsUsesClosedDrawerHeight) {
     mask.source       = RadialMaskSource{};
     grade->AddMask(std::move(mask), grade->Masks().size());
   }
-  const auto grown = EditorNodeGraphProjection::Build(document, 1, 2, 1);
+  const auto grown = EditorNodeGraphProjection::Build(document, 1);
   store.EnsureDefaultPositions(grown);
   store.SetDrawerOpen(NodeId{"grade.primary"}, false);
   const auto drt_before = store.NodePosition(NodeId{"drt"});

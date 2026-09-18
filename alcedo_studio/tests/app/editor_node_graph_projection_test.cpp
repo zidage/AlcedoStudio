@@ -31,11 +31,9 @@ auto MakeMask(MaskId id, MaskSource source) -> MaskModel {
 
 TEST(EditorNodeGraphProjection, DefaultSnapshotContainsBackboneValuesAndEdges) {
   const auto document = CreateDefaultPipelineDocument();
-  const auto snapshot = EditorNodeGraphProjection::Build(document, 7, 12, 4);
+  const auto snapshot = EditorNodeGraphProjection::Build(document, 7);
 
   EXPECT_EQ(snapshot.session_generation, 7u);
-  EXPECT_EQ(snapshot.projection_revision, 12u);
-  EXPECT_EQ(snapshot.topology_revision, 4u);
   ASSERT_EQ(snapshot.nodes.size(), 3u);
   EXPECT_EQ(snapshot.nodes[0].node_id, NodeId{"develop"});
   EXPECT_EQ(snapshot.nodes[0].node_kind, EditorNodeKind::Develop);
@@ -64,7 +62,7 @@ TEST(EditorNodeGraphProjection, MaskProjectionPreservesDocumentDisplayOrderAndSo
   grade->AddMask(MakeMask(MaskId{"mask.radial"}, RadialMaskSource{}), 0);
   grade->AddMask(MakeMask(MaskId{"mask.linear"}, LinearGradientMaskSource{}), 1);
 
-  const auto snapshot = EditorNodeGraphProjection::Build(document, 1, 2, 3);
+  const auto snapshot = EditorNodeGraphProjection::Build(document, 1);
   ASSERT_EQ(snapshot.nodes.size(), 3u);
   const auto& masks = snapshot.nodes[1].masks;
   ASSERT_EQ(masks.size(), 2u);
@@ -75,25 +73,24 @@ TEST(EditorNodeGraphProjection, MaskProjectionPreservesDocumentDisplayOrderAndSo
 
 TEST(EditorNodeGraphProjection, ParameterChangeDoesNotChangeSnapshotValues) {
   auto       document = CreateDefaultPipelineDocument();
-  const auto before   = EditorNodeGraphProjection::Build(document, 3, 8, 9);
+  const auto before   = EditorNodeGraphProjection::Build(document, 3);
   auto*      exposure = dynamic_cast<ExposureModel*>(
       document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
   ASSERT_NE(exposure, nullptr);
   exposure->SetValue(4.0f);
 
-  const auto after = EditorNodeGraphProjection::Build(document, 3, 8, 9);
+  const auto after = EditorNodeGraphProjection::Build(document, 3);
   EXPECT_EQ(after, before);
 }
 
-TEST(EditorNodeGraphProjection, TopologyChangeAppearsInNodeAndRevisionValues) {
+TEST(EditorNodeGraphProjection, TopologyChangeAppearsInNodeAndEdgeValues) {
   auto document = CreateDefaultPipelineDocument();
   ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.second"}).empty());
 
-  const auto snapshot = EditorNodeGraphProjection::Build(document, 2, 5, 6);
+  const auto snapshot = EditorNodeGraphProjection::Build(document, 2);
   ASSERT_EQ(snapshot.nodes.size(), 4u);
   EXPECT_EQ(snapshot.nodes[2].node_id, NodeId{"grade.second"});
   EXPECT_EQ(snapshot.nodes[2].display_name, "Color Grade 2");
-  EXPECT_EQ(snapshot.topology_revision, 6u);
   EXPECT_EQ(snapshot.edges.size(), 3u);
 }
 
@@ -101,8 +98,8 @@ TEST(EditorNodeGraphProjection, ProjectNodeCopiesStoredMaskOrderForDetachedGrade
   const auto  document = CreateDefaultPipelineDocument();
   const auto* primary  = document.PrimaryGrade();
   ASSERT_NE(primary, nullptr);
-  const auto  from_build = EditorNodeGraphProjection::Build(document, 1, 1, 1).nodes[1];
-  const auto  from_node  = EditorNodeGraphProjection::ProjectNode(*primary);
+  const auto from_build = EditorNodeGraphProjection::Build(document, 1).nodes[1];
+  const auto from_node  = EditorNodeGraphProjection::ProjectNode(*primary);
   EXPECT_EQ(from_node, from_build);
 
   auto extra = CreateCleanColorGradeNode(NodeId{"grade.detached"});
@@ -117,7 +114,7 @@ TEST(EditorNodeGraphProjection, ProjectNodeCopiesStoredMaskOrderForDetachedGrade
 }
 
 TEST(EditorNodeGraphProjection, InvalidBackboneIsRejected) {
-  EXPECT_THROW((void)EditorNodeGraphProjection::Build(PipelineDocument{}, 1, 1, 1),
+  EXPECT_THROW((void)EditorNodeGraphProjection::Build(PipelineDocument{}, 1),
                std::invalid_argument);
 }
 
@@ -126,10 +123,7 @@ TEST(EditorNodeGraphProjection, MaskGroupsFollowBackboneDownstreamToUpstream) {
   ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.last"}).empty());
   ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"grade.primary"}, NodeId{"grade.first"}).empty());
 
-  const auto snapshot = EditorNodeGraphProjection::BuildMaskGroups(document, 9, 4, 7);
-  EXPECT_EQ(snapshot.session_generation, 9u);
-  EXPECT_EQ(snapshot.projection_revision, 4u);
-  EXPECT_EQ(snapshot.topology_revision, 7u);
+  const auto snapshot = EditorNodeGraphProjection::BuildMaskGroups(document);
   ASSERT_EQ(snapshot.groups.size(), 3u);
   EXPECT_EQ(snapshot.groups[0].node_id, NodeId{"grade.last"});
   EXPECT_EQ(snapshot.groups[1].node_id, NodeId{"grade.primary"});
@@ -141,7 +135,7 @@ TEST(EditorNodeGraphProjection, MaskGroupsIncludeGradesWithoutMasks) {
   ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.empty"}).empty());
   document.PrimaryGrade()->AddMask(MakeMask(MaskId{"mask.one"}, RadialMaskSource{}), 0);
 
-  const auto snapshot = EditorNodeGraphProjection::BuildMaskGroups(document, 1, 1, 1);
+  const auto snapshot = EditorNodeGraphProjection::BuildMaskGroups(document);
   ASSERT_EQ(snapshot.groups.size(), 2u);
   EXPECT_EQ(snapshot.groups[0].node_id, NodeId{"grade.empty"});
   EXPECT_TRUE(snapshot.groups[0].masks.empty());
@@ -156,7 +150,7 @@ TEST(EditorNodeGraphProjection, MaskGroupsCarryExactNodeIdentityAndNames) {
   ASSERT_TRUE(RenameColorGrade(document, NodeId{"grade.b"}, "Sky").empty());
   ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"grade.primary"}, NodeId{"grade.top"}).empty());
 
-  const auto snapshot = EditorNodeGraphProjection::BuildMaskGroups(document, 2, 2, 2);
+  const auto snapshot = EditorNodeGraphProjection::BuildMaskGroups(document);
   ASSERT_EQ(snapshot.groups.size(), 3u);
   // Order reverses the backbone, not names: the downstream grade sits on top
   // and the two grades sharing the display name keep their distinct NodeIds.
@@ -185,7 +179,7 @@ TEST(EditorNodeGraphProjection, MaskGroupRowsKeyMasksByNodeAndMaskId) {
   linear.opacity = 0.8F;
   second->AddMask(std::move(linear), 0);
 
-  const auto snapshot = EditorNodeGraphProjection::BuildMaskGroups(document, 5, 6, 7);
+  const auto snapshot = EditorNodeGraphProjection::BuildMaskGroups(document);
   ASSERT_EQ(snapshot.groups.size(), 2u);
   ASSERT_EQ(snapshot.groups[0].masks.size(), 1u);
   EXPECT_EQ(snapshot.groups[0].masks[0].node_id, NodeId{"grade.two"});
@@ -209,7 +203,7 @@ TEST(EditorNodeGraphProjection, MaskGroupsReportGradeEnabledState) {
   auto document = CreateDefaultPipelineDocument();
   ASSERT_TRUE(SetColorGradeEnabled(document, NodeId{"grade.primary"}, false).empty());
 
-  const auto snapshot = EditorNodeGraphProjection::BuildMaskGroups(document, 1, 1, 1);
+  const auto snapshot = EditorNodeGraphProjection::BuildMaskGroups(document);
   ASSERT_EQ(snapshot.groups.size(), 1u);
   EXPECT_FALSE(snapshot.groups[0].enabled);
 }
@@ -218,25 +212,25 @@ TEST(EditorNodeGraphProjection, MaskGroupsOmitDetachedGrades) {
   auto document = CreateDefaultPipelineDocument();
   document.Graph().AddNode(CreateCleanColorGradeNode(NodeId{"grade.detached"}));
 
-  const auto snapshot = EditorNodeGraphProjection::BuildMaskGroups(document, 1, 1, 1);
+  const auto snapshot = EditorNodeGraphProjection::BuildMaskGroups(document);
   ASSERT_EQ(snapshot.groups.size(), 1u);
   EXPECT_EQ(snapshot.groups[0].node_id, NodeId{"grade.primary"});
 }
 
 TEST(EditorNodeGraphProjection, MaskGroupParameterEditsDoNotRebuildGroupRows) {
   auto       document = CreateDefaultPipelineDocument();
-  const auto before   = EditorNodeGraphProjection::BuildMaskGroups(document, 3, 3, 3);
+  const auto before   = EditorNodeGraphProjection::BuildMaskGroups(document);
   auto*      exposure = dynamic_cast<ExposureModel*>(
       document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
   ASSERT_NE(exposure, nullptr);
   exposure->SetValue(4.0f);
 
-  const auto after = EditorNodeGraphProjection::BuildMaskGroups(document, 3, 3, 3);
+  const auto after = EditorNodeGraphProjection::BuildMaskGroups(document);
   EXPECT_EQ(after, before);
 }
 
 TEST(EditorNodeGraphProjection, MaskGroupsInvalidBackboneIsRejected) {
-  EXPECT_THROW((void)EditorNodeGraphProjection::BuildMaskGroups(PipelineDocument{}, 1, 1, 1),
+  EXPECT_THROW((void)EditorNodeGraphProjection::BuildMaskGroups(PipelineDocument{}),
                std::invalid_argument);
 }
 

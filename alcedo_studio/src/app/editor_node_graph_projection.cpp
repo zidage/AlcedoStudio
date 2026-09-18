@@ -55,18 +55,14 @@ auto EditorNodeGraphProjection::ProjectNode(const INodeModel& node) -> EditorNod
 }
 
 auto EditorNodeGraphProjection::Build(const PipelineDocument& document,
-                                      std::uint64_t           session_generation,
-                                      std::uint64_t           projection_revision,
-                                      std::uint64_t topology_revision) -> EditorNodeGraphSnapshot {
+                                      std::uint64_t session_generation) -> EditorNodeGraphSnapshot {
   const auto backbone = document.Graph().ImageBackboneNodeIds();
   if (backbone.empty()) {
     throw std::invalid_argument("EditorNodeGraphProjection requires a valid image backbone");
   }
 
   EditorNodeGraphSnapshot snapshot;
-  snapshot.session_generation  = session_generation;
-  snapshot.projection_revision = projection_revision;
-  snapshot.topology_revision   = topology_revision;
+  snapshot.session_generation = session_generation;
   snapshot.nodes.reserve(backbone.size());
 
   for (const auto& node_id : backbone) {
@@ -89,10 +85,7 @@ auto EditorNodeGraphProjection::Build(const PipelineDocument& document,
   return snapshot;
 }
 
-auto EditorNodeGraphProjection::BuildMaskGroups(const PipelineDocument& document,
-                                                std::uint64_t           session_generation,
-                                                std::uint64_t           projection_revision,
-                                                std::uint64_t           topology_revision)
+auto EditorNodeGraphProjection::BuildMaskGroups(const PipelineDocument& document)
     -> EditorMaskGroupSnapshot {
   const auto backbone = document.Graph().ImageBackboneNodeIds();
   if (backbone.empty()) {
@@ -100,14 +93,11 @@ auto EditorNodeGraphProjection::BuildMaskGroups(const PipelineDocument& document
   }
 
   EditorMaskGroupSnapshot snapshot;
-  snapshot.session_generation  = session_generation;
-  snapshot.projection_revision = projection_revision;
-  snapshot.topology_revision   = topology_revision;
   snapshot.groups.reserve(backbone.size());
 
   for (auto it = backbone.rbegin(); it != backbone.rend(); ++it) {
     const auto& node_id = *it;
-    const auto* node = document.Graph().FindNode(node_id);
+    const auto* node    = document.Graph().FindNode(node_id);
     if (node == nullptr) {
       throw std::invalid_argument(
           "EditorMaskGroupProjection image backbone contains an unknown node");

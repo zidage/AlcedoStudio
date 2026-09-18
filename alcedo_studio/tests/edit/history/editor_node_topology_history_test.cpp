@@ -175,7 +175,7 @@ TEST(NodeGraphTopologyHistory, DefaultGradeRemovalClearsIdentityAndUndoRestoresI
   document.PrimaryGrade()->SetDeletionProtected(false);
   const auto default_id = document.DefaultGradeId();
   const auto before = document.ToJson();
-  auto draft = EditorNodeGraphDraft::FromDocument(document, {});
+  auto draft = EditorNodeGraphDraft::FromDocument(document);
   ASSERT_TRUE(draft.RemoveColorGrade(document, default_id).succeeded);
   ASSERT_TRUE(draft.Connect(NodeId{"develop"}, NodeId{"drt"}).succeeded);
   ASSERT_TRUE(draft.SubmissionValid());
@@ -194,7 +194,7 @@ TEST(NodeGraphTopologyHistory, DefaultGradeRemovalClearsIdentityAndUndoRestoresI
 }
 
 auto BuildTopologyEdit(const PipelineDocument& document) -> TopologyEditExpectation {
-  auto       draft   = EditorNodeGraphDraft::FromDocument(document, {});
+  auto       draft   = EditorNodeGraphDraft::FromDocument(document);
   const auto require = [](const EditorNodeGraphDraftMutation& mutation, const char* operation) {
     if (!mutation.succeeded) {
       throw std::runtime_error(std::string{operation} + ": " + mutation.error);

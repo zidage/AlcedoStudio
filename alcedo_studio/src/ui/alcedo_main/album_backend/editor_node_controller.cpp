@@ -149,7 +149,6 @@ void EditorNodeController::set_editor_session(QObject* session) {
     BindThumbnailGeometry();
   }
   emit EditorSessionChanged();
-  submitted_identity_.reset();
   DiscardDraft();
   if (session_ != nullptr) {
     if (SessionHidesGraph()) {
@@ -179,13 +178,6 @@ void EditorNodeController::SetLayoutIdentity(quint64 element_id, quint64 image_i
   emit snapshotChanged();
 }
 
-auto EditorNodeController::BoundSessionGeneration() const -> std::optional<std::uint64_t> {
-  if (session_ == nullptr) {
-    return std::nullopt;
-  }
-  return static_cast<std::uint64_t>(session_->session_generation());
-}
-
 void EditorNodeController::SetLastError(QString error) {
   if (last_error_ == error) {
     return;
@@ -204,11 +196,12 @@ void EditorNodeController::ClearSnapshot() {
   selected_node_id_             = {};
   last_selected_color_grade_id_ = {};
   selection_restore_node_id_    = {};
-  session_generation_           = BoundSessionGeneration().value_or(0);
-  projection_revision_          = 0;
-  topology_revision_            = 0;
-  snapshot_element_id_          = 0;
-  snapshot_image_id_            = 0;
+  session_generation_ =
+      session_ != nullptr ? static_cast<quint64>(session_->session_generation()) : 0;
+  projection_revision_ = 0;
+  topology_revision_   = 0;
+  snapshot_element_id_ = 0;
+  snapshot_image_id_   = 0;
   snapshot_version_id_.clear();
   emit SnapshotChanged();
   emit snapshotChanged();
@@ -443,22 +436,20 @@ auto EditorNodeController::PublishSnapshot(EditorNodeGraphSnapshot snapshot) -> 
     last_selected_color_grade_id_ = {};
     selection_restore_node_id_    = {};
     session_generation_           = snapshot.session_generation;
-    topology_revision_   = snapshot.topology_revision == 0 ? 1 : snapshot.topology_revision;
-    projection_revision_ = snapshot.projection_revision == 0 ? 1 : snapshot.projection_revision;
+    topology_revision_            = 1;
+    projection_revision_          = 1;
   } else if (TopologyChanged(snapshot)) {
-    topology_revision_   = std::max(topology_revision_ + 1, snapshot.topology_revision);
-    projection_revision_ = std::max(projection_revision_ + 1, snapshot.projection_revision);
+    ++topology_revision_;
+    ++projection_revision_;
   } else {
-    projection_revision_ = std::max(projection_revision_ + 1, snapshot.projection_revision);
+    ++projection_revision_;
   }
-  snapshot.session_generation  = session_generation_;
-  snapshot.topology_revision   = topology_revision_;
-  snapshot.projection_revision = projection_revision_;
-  snapshot_                    = std::move(snapshot);
-  has_snapshot_                = true;
-  snapshot_element_id_         = element_id_;
-  snapshot_image_id_           = image_id_;
-  snapshot_version_id_         = version_id_;
+  snapshot.session_generation = session_generation_;
+  snapshot_                   = std::move(snapshot);
+  has_snapshot_               = true;
+  snapshot_element_id_        = element_id_;
+  snapshot_image_id_          = image_id_;
+  snapshot_version_id_        = version_id_;
   SyncLayoutKey();
   RestoreSelectionAfterSnapshot(generation_changed);
   SyncSessionAdjustmentNode(false);
@@ -475,8 +466,8 @@ auto EditorNodeController::PublishSnapshot(EditorNodeGraphSnapshot snapshot) -> 
 auto EditorNodeController::PublishDocument(const PipelineDocument& document,
                                            std::uint64_t           session_generation) -> bool {
   try {
-    auto built  = EditorNodeGraphProjection::Build(document, session_generation, 0, 0);
-    auto groups = EditorNodeGraphProjection::BuildMaskGroups(document, session_generation, 0, 0);
+    auto built  = EditorNodeGraphProjection::Build(document, session_generation);
+    auto groups = EditorNodeGraphProjection::BuildMaskGroups(document);
     if (!PublishSnapshot(std::move(built))) {
       return false;
     }
@@ -491,9 +482,6 @@ auto EditorNodeController::PublishDocument(const PipelineDocument& document,
 
 auto EditorNodeController::PublishMaskGroupSnapshot(alcedo::EditorMaskGroupSnapshot snapshot)
     -> bool {
-  snapshot.session_generation  = session_generation_;
-  snapshot.topology_revision   = topology_revision_;
-  snapshot.projection_revision = projection_revision_;
   if (has_mask_group_snapshot_ && snapshot.groups == mask_group_snapshot_.groups) {
     return true;
   }
@@ -516,7 +504,7 @@ bool EditorNodeController::applyToGraph(QObject* adapter) {
   EditorNodeGraphSnapshot        view;
   const EditorNodeGraphSnapshot* projected = &snapshot_;
   if (draft_ != nullptr) {
-    view = draft_->CurrentSnapshot(session_generation_, projection_revision_, topology_revision_);
+    view      = draft_->CurrentSnapshot();
     projected = &view;
   } else if (!has_snapshot_) {
     SetLastError(tr("The node graph has no snapshot"));
@@ -544,8 +532,7 @@ void EditorNodeController::ApplyLayoutToAdapter() {
   applying_layout_  = true;
   const auto finish = qScopeGuard([this] { applying_layout_ = false; });
   if (draft_ != nullptr) {
-    const auto view =
-        draft_->CurrentSnapshot(session_generation_, projection_revision_, topology_revision_);
+    const auto view = draft_->CurrentSnapshot();
     layout->EnsureDefaultPositions(view);
     layout->ResolveVerticalOverlaps(view);
   } else {
@@ -746,17 +733,6 @@ bool EditorNodeController::refreshFromSession() {
   return PublishDocument(*document, static_cast<std::uint64_t>(session_->session_generation()));
 }
 
-auto EditorNodeController::SessionMatchesSubmittedIdentity() const -> bool {
-  if (!submitted_identity_.has_value() || session_ == nullptr) {
-    return false;
-  }
-  const auto& submitted = *submitted_identity_;
-  return submitted.element_id == static_cast<std::uint64_t>(session_->element_id()) &&
-         submitted.image_id == static_cast<std::uint64_t>(session_->image_id()) &&
-         QString::fromStdString(submitted.version_id) == session_->active_version_id() &&
-         submitted.session_generation == static_cast<std::uint64_t>(session_->session_generation());
-}
-
 [[nodiscard]] auto EditorNodeController::SessionIdentityChanged() const -> bool {
   return SessionLocationChanged() ||
          (session_ != nullptr && session_->active_version_id() != version_id_);
@@ -793,19 +769,16 @@ auto EditorNodeController::SessionHidesGraph() const -> bool {
 
 void EditorNodeController::OnSessionStateChanged() {
   if (session_ == nullptr) {
-    submitted_identity_.reset();
     DiscardDraft();
     ClearSnapshot();
     return;
   }
   if (SessionHidesGraph()) {
-    submitted_identity_.reset();
     DiscardDraft();
     ClearSnapshot();
     return;
   }
   if (SessionLocationChanged() || !has_snapshot_) {
-    submitted_identity_.reset();
     DiscardDraft();
     refreshFromSession();
   }
@@ -821,19 +794,13 @@ void EditorNodeController::OnSessionHistoryChanged() {
   }
   observed_history_revision_ = history_revision;
   if (SessionIdentityChanged()) {
-    submitted_identity_.reset();
     DiscardDraft();
     refreshFromSession();
     return;
   }
-  if (submitted_identity_.has_value() && SessionMatchesSubmittedIdentity()) {
-    return;
-  }
-  submitted_identity_.reset();
-  if (session_ != nullptr && draft_ != nullptr) {
+  if (draft_ != nullptr) {
     const auto document = session_->pipeline_document();
-    if (document && draft_->MatchesIdentity(CurrentDraftIdentity()) &&
-        draft_->MatchesBase(*document)) {
+    if (document && draft_->MatchesBase(*document)) {
       return;
     }
     DiscardDraft();
@@ -894,18 +861,13 @@ void EditorNodeController::SetCommandActive(bool active) {
   emit ActionAvailabilityChanged();
 }
 
-auto EditorNodeController::ValidateCommandGeneration() -> bool {
+auto EditorNodeController::ValidateCommandState() -> bool {
   if (command_active_) {
     SetLastError(tr("Another node command is active"));
     return false;
   }
   if (session_ == nullptr || !has_snapshot_) {
     SetLastError(tr("No editable node graph is available"));
-    return false;
-  }
-  const auto bound_generation = BoundSessionGeneration();
-  if (!bound_generation.has_value() || session_generation_ != *bound_generation) {
-    SetLastError(tr("The node command is from another editor session"));
     return false;
   }
   if (!session_->can_edit()) {
@@ -916,7 +878,7 @@ auto EditorNodeController::ValidateCommandGeneration() -> bool {
 }
 
 bool EditorNodeController::addCleanColorGrade() {
-  if (!ValidateCommandGeneration()) {
+  if (!ValidateCommandState()) {
     return false;
   }
   if (!EnsureDraft()) {
@@ -948,7 +910,7 @@ bool EditorNodeController::addCleanColorGrade() {
 }
 
 bool EditorNodeController::renameColorGrade(const QString& node_id, const QString& display_name) {
-  if (!ValidateCommandGeneration()) {
+  if (!ValidateCommandState()) {
     return false;
   }
   if (draft_ != nullptr) {
@@ -980,7 +942,7 @@ bool EditorNodeController::renameColorGrade(const QString& node_id, const QStrin
 
 bool EditorNodeController::setColorGradeDeletionProtected(const QString& node_id,
                                                           bool           deletion_protected) {
-  if (!ValidateCommandGeneration()) return false;
+  if (!ValidateCommandState()) return false;
   if (draft_ != nullptr) {
     SetLastError(tr("Finish the node graph before changing deletion protection"));
     return false;
@@ -1002,7 +964,7 @@ bool EditorNodeController::setColorGradeDeletionProtected(const QString& node_id
 }
 
 bool EditorNodeController::deleteColorGrade(const QString& node_id) {
-  if (!ValidateCommandGeneration()) {
+  if (!ValidateCommandState()) {
     return false;
   }
   const auto id = NodeIdFromQString(node_id);
@@ -1043,7 +1005,7 @@ bool EditorNodeController::deleteColorGrade(const QString& node_id) {
 }
 
 bool EditorNodeController::insertMaskGroupAtTop() {
-  if (!ValidateCommandGeneration()) {
+  if (!ValidateCommandState()) {
     return false;
   }
   if (draft_ != nullptr) {
@@ -1072,7 +1034,7 @@ bool EditorNodeController::insertMaskGroupAtTop() {
 }
 
 bool EditorNodeController::removeMaskGroup(const QString& node_id) {
-  if (!ValidateCommandGeneration()) {
+  if (!ValidateCommandState()) {
     return false;
   }
   if (draft_ != nullptr) {
@@ -1094,7 +1056,7 @@ bool EditorNodeController::removeMaskGroup(const QString& node_id) {
   if (mask_thumbnails_ != nullptr) {
     mask_thumbnails_->invalidateNode(node_id);
   }
-  const auto result       = session_->SubmitRemoveColorGradeAndBridge(id);
+  const auto result = session_->SubmitRemoveColorGradeAndBridge(id);
   if (alcedo::EditorSessionResultIsFailure(result.kind)) {
     SetLastError(QString::fromStdString(result.message));
     const auto document = session_->pipeline_document();
@@ -1111,7 +1073,7 @@ bool EditorNodeController::removeMaskGroup(const QString& node_id) {
 }
 
 bool EditorNodeController::moveMaskGroupToIndex(const QString& node_id, int target_index) {
-  if (!ValidateCommandGeneration()) {
+  if (!ValidateCommandState()) {
     return false;
   }
   if (draft_ != nullptr) {
@@ -1172,7 +1134,7 @@ bool EditorNodeController::moveMaskGroupToIndex(const QString& node_id, int targ
   reordered_backbone.insert(reordered_backbone.end(), groups.rbegin(), groups.rend());
   reordered_backbone.push_back(snapshot_.nodes.back().node_id);
 
-  auto move_draft = alcedo::EditorNodeGraphDraft::FromDocument(*document, CurrentDraftIdentity());
+  auto move_draft = alcedo::EditorNodeGraphDraft::FromDocument(*document);
   for (std::size_t i = 1; i < reordered_backbone.size(); ++i) {
     const auto mutation = move_draft.Connect(reordered_backbone[i - 1], reordered_backbone[i]);
     if (!mutation.succeeded) {
@@ -1258,20 +1220,7 @@ auto EditorNodeController::mask_groups() const -> QVariantList {
 
 bool EditorNodeController::requestConnect(const QString& source_node_id,
                                           const QString& destination_node_id) {
-  return requestConnect(source_node_id, destination_node_id, session_generation_);
-}
-
-bool EditorNodeController::requestConnect(const QString& source_node_id,
-                                          const QString& destination_node_id,
-                                          quint64        request_generation) {
-  if (!ValidateCommandGeneration()) {
-    if (graph_adapter_ != nullptr) {
-      graph_adapter_->hideConnectorPreview();
-    }
-    return false;
-  }
-  if (request_generation != session_generation_) {
-    SetLastError(tr("The node command is from another editor session"));
+  if (!ValidateCommandState()) {
     if (graph_adapter_ != nullptr) {
       graph_adapter_->hideConnectorPreview();
     }
@@ -1316,7 +1265,7 @@ bool EditorNodeController::requestConnectorMove(const QString& source_node_id,
     }
     return false;
   }
-  return requestConnect(source_node_id, destination_node_id, session_generation_);
+  return requestConnect(source_node_id, destination_node_id);
 }
 
 void EditorNodeController::OnConnectorMoveRequested(const QString& source_node_id,
@@ -1332,23 +1281,8 @@ void EditorNodeController::OnConnectorRequestRejected(const QString& error) {
   SetLastError(error);
 }
 
-auto EditorNodeController::CurrentDraftIdentity() const -> alcedo::EditorNodeGraphDraftIdentity {
-  alcedo::EditorNodeGraphDraftIdentity identity;
-  identity.element_id          = element_id_;
-  identity.image_id            = image_id_;
-  identity.version_id          = version_id_.toStdString();
-  identity.session_generation  = session_generation_;
-  identity.projection_revision = projection_revision_;
-  identity.topology_revision   = topology_revision_;
-  return identity;
-}
-
 auto EditorNodeController::EnsureDraft() -> bool {
   if (draft_ != nullptr) {
-    if (!draft_->MatchesIdentity(CurrentDraftIdentity())) {
-      SetLastError(tr("The node command is from another editor session"));
-      return false;
-    }
     return true;
   }
   if (session_ == nullptr) {
@@ -1362,7 +1296,7 @@ auto EditorNodeController::EnsureDraft() -> bool {
   }
   try {
     draft_ = std::make_unique<alcedo::EditorNodeGraphDraft>(
-        alcedo::EditorNodeGraphDraft::FromDocument(*document, CurrentDraftIdentity()));
+        alcedo::EditorNodeGraphDraft::FromDocument(*document));
   } catch (const std::exception& ex) {
     SetLastError(QString::fromUtf8(ex.what()));
     return false;
@@ -1380,18 +1314,12 @@ void EditorNodeController::DiscardDraft() {
 }
 
 void EditorNodeController::AdoptCommittedDocument(const PipelineDocument& document) {
-  auto built  = EditorNodeGraphProjection::Build(document, session_generation_, 0, 0);
-  auto groups = EditorNodeGraphProjection::BuildMaskGroups(document, session_generation_, 0, 0);
-  topology_revision_         = topology_revision_ + 1;
-  projection_revision_       = projection_revision_ + 1;
-  built.session_generation   = session_generation_;
-  built.topology_revision    = topology_revision_;
-  built.projection_revision  = projection_revision_;
-  snapshot_                  = std::move(built);
-  has_snapshot_              = true;
-  groups.session_generation  = session_generation_;
-  groups.topology_revision   = topology_revision_;
-  groups.projection_revision = projection_revision_;
+  auto built           = EditorNodeGraphProjection::Build(document, session_generation_);
+  auto groups          = EditorNodeGraphProjection::BuildMaskGroups(document);
+  topology_revision_   = topology_revision_ + 1;
+  projection_revision_ = projection_revision_ + 1;
+  snapshot_            = std::move(built);
+  has_snapshot_        = true;
   if (!has_mask_group_snapshot_ || groups.groups != mask_group_snapshot_.groups) {
     mask_group_snapshot_     = std::move(groups);
     has_mask_group_snapshot_ = true;
@@ -1434,11 +1362,9 @@ auto EditorNodeController::MaybeSubmitDraft() -> bool {
     emit ActionAvailabilityChanged();
     return true;
   }
-  auto change         = draft_->MakeChange();
-  submitted_identity_ = CurrentDraftIdentity();
-  const auto result   = session_->SubmitNodeGraphTopologyEdit(change);
+  auto       change = draft_->MakeChange();
+  const auto result = session_->SubmitNodeGraphTopologyEdit(change);
   if (alcedo::EditorSessionResultIsFailure(result.kind)) {
-    submitted_identity_.reset();
     SetLastError(QString::fromStdString(result.message));
     emit DraftStateChanged();
     return false;
@@ -1466,7 +1392,6 @@ auto EditorNodeController::MaybeSubmitDraft() -> bool {
       ApplyLiveSelectionToAdapter();
     }
   }
-  submitted_identity_.reset();
   if (projection_error.isEmpty()) {
     SetLastError({});
   }
