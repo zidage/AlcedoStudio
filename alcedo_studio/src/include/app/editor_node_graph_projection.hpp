@@ -62,13 +62,12 @@ struct EditorNodeEdgeProjection {
 /**
  * @brief Complete value snapshot published across the editor boundary.
  *
- * No Qan objects or document-owned pointers are stored here. The caller owns
- * the session and revision values used to reject stale publications.
+ * No Qan objects or document-owned pointers are stored here. The session
+ * value is stamped by the publisher and identifies the producing
+ * image-load session.
  */
 struct EditorNodeGraphSnapshot {
-  std::uint64_t                         session_generation  = 0;
-  std::uint64_t                         projection_revision = 0;
-  std::uint64_t                         topology_revision   = 0;
+  std::uint64_t                         session_generation = 0;
   std::vector<EditorNodeProjection>     nodes;
   std::vector<EditorNodeEdgeProjection> edges;
 
@@ -106,7 +105,7 @@ struct EditorMaskGroupMaskRow {
 struct EditorMaskGroupRow {
   NodeId                              node_id;
   std::string                         display_name;
-  bool                                enabled = true;
+  bool                                enabled            = true;
   bool                                deletion_protected = false;
   std::vector<EditorMaskGroupMaskRow> masks;
 
@@ -122,9 +121,6 @@ struct EditorMaskGroupRow {
  * position. Develop and DRT/Post are endpoints and never produce group rows.
  */
 struct EditorMaskGroupSnapshot {
-  std::uint64_t                   session_generation  = 0;
-  std::uint64_t                   projection_revision = 0;
-  std::uint64_t                   topology_revision   = 0;
   std::vector<EditorMaskGroupRow> groups;
 
   auto operator==(const EditorMaskGroupSnapshot&) const -> bool = default;
@@ -160,16 +156,12 @@ class EditorNodeGraphProjection {
   /**
    * @param document Valid PipelineDocument whose image backbone is projected.
    * @param session_generation Session value copied into the snapshot.
-   * @param projection_revision Value revision copied into the snapshot.
-   * @param topology_revision Topology revision copied into the snapshot.
    * @return A snapshot containing copied node, Mask, and edge values.
    * @throws std::invalid_argument when the document has no valid image backbone
    *         or contains an unsupported backbone node.
    */
   [[nodiscard]] static auto Build(const PipelineDocument& document,
-                                  std::uint64_t           session_generation,
-                                  std::uint64_t           projection_revision,
-                                  std::uint64_t topology_revision) -> EditorNodeGraphSnapshot;
+                                  std::uint64_t session_generation) -> EditorNodeGraphSnapshot;
 
   /**
    * @brief Build the immutable Mask Groups projection for one document state.
@@ -183,25 +175,8 @@ class EditorNodeGraphProjection {
    * @throws std::invalid_argument when the document has no valid image backbone
    *         or a backbone Color Grade model cannot be read.
    */
-  [[nodiscard]] static auto BuildMaskGroups(const PipelineDocument& document,
-                                            std::uint64_t           session_generation,
-                                            std::uint64_t           projection_revision,
-                                            std::uint64_t           topology_revision)
+  [[nodiscard]] static auto BuildMaskGroups(const PipelineDocument& document)
       -> EditorMaskGroupSnapshot;
-
-  /**
-   * @brief Return whether a snapshot belongs to the active editor session.
-   * @param snapshot Candidate snapshot.
-   * @param session_generation Active session value.
-   */
-  [[nodiscard]] static auto AcceptsGeneration(const EditorNodeGraphSnapshot& snapshot,
-                                              std::uint64_t session_generation) -> bool;
-
-  /**
-   * @brief Return whether a Mask Groups snapshot belongs to the active session.
-   */
-  [[nodiscard]] static auto AcceptsGeneration(const EditorMaskGroupSnapshot& snapshot,
-                                              std::uint64_t session_generation) -> bool;
 };
 
 }  // namespace alcedo

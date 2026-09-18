@@ -230,7 +230,7 @@ TEST_F(EditorVersionCheckoutTest, BranchVersionSharesCommitsAndKeepsIndependentH
   EXPECT_EQ(guard_->document_->PrimaryGrade()->DisplayName(), "Color Grade 1");
   EXPECT_EQ(guard_->document_->NextColorGradeNameNumber(), 2u);
   const auto default_projection =
-      alcedo::EditorNodeGraphProjection::Build(*guard_->document_, 8, 11, 1);
+      alcedo::EditorNodeGraphProjection::Build(*guard_->document_, 8);
   ASSERT_EQ(default_projection.nodes.size(), 3u);
   EXPECT_EQ(default_projection.nodes[1].node_id, alcedo::NodeId{"grade.primary"});
   EXPECT_EQ(default_projection.nodes[1].display_name, "Color Grade 1");
@@ -243,11 +243,10 @@ TEST_F(EditorVersionCheckoutTest, BranchVersionSharesCommitsAndKeepsIndependentH
   EXPECT_EQ(checked_out_grade->DisplayName(), "Color Grade 2");
   EXPECT_EQ(guard_->document_->NextColorGradeNameNumber(), 3u);
   const auto branch_projection =
-      alcedo::EditorNodeGraphProjection::Build(*guard_->document_, 8, 12, 2);
+      alcedo::EditorNodeGraphProjection::Build(*guard_->document_, 8);
   ASSERT_EQ(branch_projection.nodes.size(), 4u);
   EXPECT_EQ(branch_projection.nodes[2].node_id, alcedo::NodeId{"grade.look"});
   EXPECT_EQ(branch_projection.nodes[2].display_name, "Color Grade 2");
-  EXPECT_TRUE(alcedo::EditorNodeGraphProjection::AcceptsGeneration(branch_projection, 8));
 }
 
 TEST_F(EditorVersionCheckoutTest, VersionCheckoutReplacesTheDagOnTheSameLiveGuard) {

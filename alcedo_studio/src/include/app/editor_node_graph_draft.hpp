@@ -17,18 +17,6 @@
 
 namespace alcedo {
 
-/// Bound product identity copied when a node-graph draft is created.
-struct EditorNodeGraphDraftIdentity {
-  std::uint64_t element_id          = 0;
-  std::uint64_t image_id            = 0;
-  std::string   version_id;
-  std::uint64_t session_generation  = 0;
-  std::uint64_t projection_revision = 0;
-  std::uint64_t topology_revision   = 0;
-
-  auto operator==(const EditorNodeGraphDraftIdentity&) const -> bool = default;
-};
-
 /// Domain admission result for one draft Add, Delete, or Connect attempt.
 /// The UI translates known values at the presentation boundary; unknown
 /// adapter and persistence failures keep their exact technical text.
@@ -89,16 +77,10 @@ struct EditorNodeGraphDraftWorkStats {
 class EditorNodeGraphDraft {
  public:
   /**
-   * @brief Copy the complete live document into a new draft bound to @p identity.
-   * @pre @p document is the product graph for @p identity.
+   * @brief Copy the complete live document into a new draft.
+   * @pre @p document is the product graph this draft edits.
    */
-  static auto FromDocument(const PipelineDocument& document, EditorNodeGraphDraftIdentity identity)
-      -> EditorNodeGraphDraft;
-
-  [[nodiscard]] auto identity() const -> const EditorNodeGraphDraftIdentity& { return identity_; }
-  [[nodiscard]] auto MatchesIdentity(const EditorNodeGraphDraftIdentity& identity) const -> bool {
-    return identity_ == identity;
-  }
+  static auto FromDocument(const PipelineDocument& document) -> EditorNodeGraphDraft;
 
   /**
    * @brief True when the live graph still matches the bound base topology.
@@ -181,10 +163,7 @@ class EditorNodeGraphDraft {
    * Copies the live node and edge vectors. Call only at an explicit projection
    * boundary such as page recreation.
    */
-  [[nodiscard]] auto CurrentSnapshot(std::uint64_t session_generation,
-                                     std::uint64_t projection_revision,
-                                     std::uint64_t topology_revision) const
-      -> EditorNodeGraphSnapshot;
+  [[nodiscard]] auto CurrentSnapshot() const -> EditorNodeGraphSnapshot;
 
  private:
   struct RemovedNodeDelta {
@@ -248,7 +227,6 @@ class EditorNodeGraphDraft {
   [[nodiscard]] static auto ToSceneEdge(const EditorNodeEdgeProjection& edge) -> PipelineSceneEdge;
   [[nodiscard]] static auto ToProjection(const PipelineSceneEdge& edge) -> EditorNodeEdgeProjection;
 
-  EditorNodeGraphDraftIdentity          identity_{};
   // Bound default identity is needed to serialize deletion and its inverse, not a live mirror.
   NodeId base_default_grade_id_;
   std::vector<EditorNodeProjection>     nodes_;

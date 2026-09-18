@@ -39,7 +39,7 @@ auto DocumentWithMasks(std::vector<MaskModel> masks) -> PipelineDocument {
 }
 
 auto GroupsOf(const PipelineDocument& document) -> EditorMaskGroupSnapshot {
-  return EditorNodeGraphProjection::BuildMaskGroups(document, 1, 1, 1);
+  return EditorNodeGraphProjection::BuildMaskGroups(document);
 }
 
 }  // namespace

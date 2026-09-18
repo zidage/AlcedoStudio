@@ -323,7 +323,7 @@ class EditorNodeDelegateQml : public ::testing::Test {
   auto ApplyDocument(ui::AlcedoQanGraph* adapter, PipelineDocument document)
       -> EditorNodeGraphSnapshot {
     AttachAlcedoDelegates(*adapter, harness_->Graph());
-    const auto snapshot = EditorNodeGraphProjection::Build(document, 1, 1, 1);
+    const auto snapshot = EditorNodeGraphProjection::Build(document, 1);
     const auto result   = adapter->ApplySnapshot(snapshot);
     EXPECT_TRUE(result.succeeded) << result.error.toStdString();
     QCoreApplication::processEvents(QEventLoop::AllEvents);
@@ -439,17 +439,13 @@ TEST_F(EditorNodeDelegateQml, MaskDrawerStartsOpenAndUserCanCloseAndReopenWithou
   ASSERT_TRUE(WaitFor([&] { return MaskRows(item).size() == 1; }));
   EXPECT_EQ(MaskRows(item).size(), 1);
 
-  const auto open_height         = item->height();
-  const auto projection_revision = adapter.projection_revision();
-  const auto topology_revision   = adapter.topology_revision();
+  const auto open_height = item->height();
   ASSERT_TRUE(QMetaObject::invokeMethod(drawer, "toggle", Qt::DirectConnection));
   ASSERT_TRUE(WaitFor([&] { return !drawer->property("expanded").toBool(); }));
 
   EXPECT_FALSE(item->property("drawerOpen").toBool());
   EXPECT_NEAR(drawer->height(), ui::AppTheme::Instance().graphMaskDrawerHeaderHeight(), 0.5);
   EXPECT_LT(item->height(), open_height);
-  EXPECT_EQ(adapter.projection_revision(), projection_revision);
-  EXPECT_EQ(adapter.topology_revision(), topology_revision);
   EXPECT_EQ(adapter.NodeProjection(NodeId{"grade.primary"})->display_name,
             snapshot.nodes[1].display_name);
 
@@ -501,7 +497,7 @@ TEST_F(EditorNodeDelegateQml, EdgeEndpointsStayGluedToPortsThroughFirstOpenBurst
   auto document = CreateDefaultPipelineDocument();
   document.PrimaryGrade()->AddMask(MakeMask(MaskId{"mask.linear"}, LinearGradientMaskSource{}), 0);
   document.PrimaryGrade()->AddMask(MakeMask(MaskId{"mask.radial"}, RadialMaskSource{}), 1);
-  const auto snapshot = EditorNodeGraphProjection::Build(document, 1, 1, 1);
+  const auto snapshot = EditorNodeGraphProjection::Build(document, 1);
   ASSERT_TRUE(adapter.ApplySnapshot(snapshot).succeeded);
 
   // First-open burst: EditorNodeController applies stored layout in the same

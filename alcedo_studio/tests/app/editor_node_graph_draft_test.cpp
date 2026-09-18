@@ -23,7 +23,6 @@ using alcedo::ClonePipelineDocument;
 using alcedo::ColorGradeNodeModel;
 using alcedo::CreateDefaultPipelineDocument;
 using alcedo::EditorNodeGraphDraft;
-using alcedo::EditorNodeGraphDraftIdentity;
 using alcedo::MaskId;
 using alcedo::MaskModel;
 using alcedo::NodeGraphDraftIssue;
@@ -31,17 +30,6 @@ using alcedo::NodeId;
 using alcedo::PipelineDocument;
 using alcedo::PipelineEditApplyDirection;
 using alcedo::RadialMaskSource;
-
-auto BoundIdentity() -> EditorNodeGraphDraftIdentity {
-  EditorNodeGraphDraftIdentity identity;
-  identity.element_id          = 8;
-  identity.image_id            = 9;
-  identity.version_id          = "v1";
-  identity.session_generation  = 4;
-  identity.projection_revision = 1;
-  identity.topology_revision   = 1;
-  return identity;
-}
 
 auto MakeMask(const std::string& id, float center) -> MaskModel {
   MaskModel mask;
@@ -81,8 +69,7 @@ void ExpectNoWholeDraftCopy(const EditorNodeGraphDraft& draft) {
 
 TEST(EditorNodeGraphDraft, FirstConstructionCopiesTheCompleteProjectionOnce) {
   const auto document = CreateDefaultPipelineDocument();
-  auto       draft    = EditorNodeGraphDraft::FromDocument(document, BoundIdentity());
-  EXPECT_TRUE(draft.MatchesIdentity(BoundIdentity()));
+  auto       draft    = EditorNodeGraphDraft::FromDocument(document);
   EXPECT_TRUE(draft.MatchesBase(document));
   EXPECT_EQ(draft.Nodes().size(), 3u);
   EXPECT_EQ(draft.Edges().size(), 2u);
@@ -92,7 +79,7 @@ TEST(EditorNodeGraphDraft, FirstConstructionCopiesTheCompleteProjectionOnce) {
 
 TEST(EditorNodeGraphDraft, AddInsertsOneDisconnectedGradeWithoutConsumingTheProductCounter) {
   auto document = CreateDefaultPipelineDocument();
-  auto draft    = EditorNodeGraphDraft::FromDocument(document, BoundIdentity());
+  auto draft    = EditorNodeGraphDraft::FromDocument(document);
   const auto* ptr = &draft;
   auto        add = draft.AddColorGrade(NodeId{"grade.extra"});
   ASSERT_TRUE(add.succeeded);
@@ -108,7 +95,7 @@ TEST(EditorNodeGraphDraft, AddInsertsOneDisconnectedGradeWithoutConsumingTheProd
 
 TEST(EditorNodeGraphDraft, ExclusivePortConnectReplacesOnlyTheRequestedPorts) {
   auto document = CreateDefaultPipelineDocument();
-  auto draft    = EditorNodeGraphDraft::FromDocument(document, BoundIdentity());
+  auto draft    = EditorNodeGraphDraft::FromDocument(document);
   ASSERT_TRUE(draft.AddColorGrade(NodeId{"grade.d"}).succeeded);
 
   auto first = draft.Connect(NodeId{"develop"}, NodeId{"grade.d"});
@@ -137,7 +124,7 @@ TEST(EditorNodeGraphDraft, ExclusivePortConnectReplacesOnlyTheRequestedPorts) {
 
 TEST(EditorNodeGraphDraft, ReconnectingTheDetachedGradeMakesTheDraftSubmittable) {
   auto document = CreateDefaultPipelineDocument();
-  auto draft    = EditorNodeGraphDraft::FromDocument(document, BoundIdentity());
+  auto draft    = EditorNodeGraphDraft::FromDocument(document);
   ASSERT_TRUE(draft.AddColorGrade(NodeId{"grade.d"}).succeeded);
   ASSERT_TRUE(draft.Connect(NodeId{"develop"}, NodeId{"grade.d"}).succeeded);
   ASSERT_TRUE(draft.Connect(NodeId{"grade.d"}, NodeId{"drt"}).succeeded);
@@ -157,7 +144,7 @@ TEST(EditorNodeGraphDraft, ReconnectingTheDetachedGradeMakesTheDraftSubmittable)
 TEST(EditorNodeGraphDraft, DeletingTheDetachedGradeMakesThePathValid) {
   auto document = CreateDefaultPipelineDocument();
   document.PrimaryGrade()->SetDeletionProtected(false);
-  auto draft    = EditorNodeGraphDraft::FromDocument(document, BoundIdentity());
+  auto draft    = EditorNodeGraphDraft::FromDocument(document);
   ASSERT_TRUE(draft.AddColorGrade(NodeId{"grade.d"}).succeeded);
   ASSERT_TRUE(draft.Connect(NodeId{"develop"}, NodeId{"grade.d"}).succeeded);
   ASSERT_TRUE(draft.Connect(NodeId{"grade.d"}, NodeId{"drt"}).succeeded);
@@ -170,7 +157,7 @@ TEST(EditorNodeGraphDraft, DeletingTheDetachedGradeMakesThePathValid) {
 
 TEST(EditorNodeGraphDraft, ReturningToTheBaseEmptiesTheDelta) {
   auto document = CreateDefaultPipelineDocument();
-  auto draft    = EditorNodeGraphDraft::FromDocument(document, BoundIdentity());
+  auto draft    = EditorNodeGraphDraft::FromDocument(document);
   ASSERT_TRUE(draft.AddColorGrade(NodeId{"grade.d"}).succeeded);
   auto remove = draft.RemoveColorGrade(document, NodeId{"grade.d"});
   ASSERT_TRUE(remove.succeeded);
@@ -182,7 +169,7 @@ TEST(EditorNodeGraphDraft, ReturningToTheBaseEmptiesTheDelta) {
 
 TEST(EditorNodeGraphDraft, UnsupportedConnectLeavesValuesIndexesAndDeltaUnchanged) {
   auto document = CreateDefaultPipelineDocument();
-  auto draft    = EditorNodeGraphDraft::FromDocument(document, BoundIdentity());
+  auto draft    = EditorNodeGraphDraft::FromDocument(document);
   ASSERT_TRUE(draft.AddColorGrade(NodeId{"grade.d"}).succeeded);
   const auto before_nodes = draft.Nodes();
   const auto before_edges = draft.Edges();
@@ -210,7 +197,7 @@ TEST(EditorNodeGraphDraft, UnsupportedConnectLeavesValuesIndexesAndDeltaUnchange
 
 TEST(EditorNodeGraphDraft, RestoreLastMutationReversesAnAdmittedConnect) {
   auto document = CreateDefaultPipelineDocument();
-  auto draft    = EditorNodeGraphDraft::FromDocument(document, BoundIdentity());
+  auto draft    = EditorNodeGraphDraft::FromDocument(document);
   ASSERT_TRUE(draft.AddColorGrade(NodeId{"grade.d"}).succeeded);
   ASSERT_TRUE(draft.Connect(NodeId{"develop"}, NodeId{"grade.d"}).succeeded);
   EXPECT_TRUE(draft.HasLastMutation());
@@ -226,7 +213,7 @@ TEST(EditorNodeGraphDraft, AddDeleteConnectReversalRestoresExactCounterOrderAndJ
   ASSERT_NE(grade, nullptr);
   grade->SetDeletionProtected(false);
   grade->AddMask(MakeMask("mask.keep", 0.4f), 0);
-  auto       draft       = EditorNodeGraphDraft::FromDocument(document, BoundIdentity());
+  auto       draft       = EditorNodeGraphDraft::FromDocument(document);
   const auto json_before = *draft.NodeJson(NodeId{"grade.primary"});
   const auto nodes_before = draft.Nodes();
   const auto edges_before = draft.Edges();
@@ -260,7 +247,7 @@ TEST(EditorNodeGraphDraft, AddDeleteConnectReversalRestoresExactCounterOrderAndJ
 
 TEST(EditorNodeGraphDraft, NetCancellationRestoresBaseWithoutWholeDraftCopy) {
   auto document = CreateDefaultPipelineDocument();
-  auto draft    = EditorNodeGraphDraft::FromDocument(document, BoundIdentity());
+  auto draft    = EditorNodeGraphDraft::FromDocument(document);
   draft.ResetWorkStats();
   ASSERT_TRUE(draft.AddColorGrade(NodeId{"grade.d"}).succeeded);
   auto remove = draft.RemoveColorGrade(document, NodeId{"grade.d"});
@@ -274,7 +261,7 @@ TEST(EditorNodeGraphDraft, NetCancellationRestoresBaseWithoutWholeDraftCopy) {
 
 TEST(EditorNodeGraphDraft, MultipleDetachedGradesKeepIndependentNodesAndEdges) {
   auto document = CreateDefaultPipelineDocument();
-  auto draft    = EditorNodeGraphDraft::FromDocument(document, BoundIdentity());
+  auto draft    = EditorNodeGraphDraft::FromDocument(document);
   draft.ResetWorkStats();
   ASSERT_TRUE(draft.AddColorGrade(NodeId{"grade.a"}).succeeded);
   ASSERT_TRUE(draft.AddColorGrade(NodeId{"grade.b"}).succeeded);
@@ -293,7 +280,7 @@ TEST(EditorNodeGraphDraft, MultipleDetachedGradesKeepIndependentNodesAndEdges) {
 
 TEST(EditorNodeGraphDraft, RejectedConnectRetainsCachedSubmissionValidity) {
   auto document = CreateDefaultPipelineDocument();
-  auto draft    = EditorNodeGraphDraft::FromDocument(document, BoundIdentity());
+  auto draft    = EditorNodeGraphDraft::FromDocument(document);
   draft.ResetWorkStats();
   ASSERT_TRUE(draft.AddColorGrade(NodeId{"grade.d"}).succeeded);
   EXPECT_FALSE(draft.SubmissionValid());
@@ -307,7 +294,7 @@ TEST(EditorNodeGraphDraft, RejectedConnectRetainsCachedSubmissionValidity) {
 
 TEST(EditorNodeGraphDraft, SerializedDraftChangeMatchesInPlaceForwardAndInverse) {
   auto document = CreateDefaultPipelineDocument();
-  auto draft    = EditorNodeGraphDraft::FromDocument(document, BoundIdentity());
+  auto draft    = EditorNodeGraphDraft::FromDocument(document);
   ASSERT_TRUE(draft.AddColorGrade(NodeId{"grade.d"}).succeeded);
   ASSERT_TRUE(draft.Connect(NodeId{"develop"}, NodeId{"grade.d"}).succeeded);
   ASSERT_TRUE(draft.Connect(NodeId{"grade.d"}, NodeId{"grade.primary"}).succeeded);
@@ -328,7 +315,7 @@ TEST(EditorNodeGraphDraft, SerializedDraftChangeMatchesInPlaceForwardAndInverse)
 TEST(EditorNodeGraphDraft, ThirtyTwoGradeGraphRepeatedConnectStaysBounded) {
   auto document = DocumentWithGrades(32, 8);
   EXPECT_EQ(document.Graph().NodeCount(), 34u);
-  auto draft = EditorNodeGraphDraft::FromDocument(document, BoundIdentity());
+  auto draft = EditorNodeGraphDraft::FromDocument(document);
   EXPECT_TRUE(draft.SubmissionValid());
   draft.ResetWorkStats();
   ASSERT_TRUE(draft.AddColorGrade(NodeId{"grade.extra"}).succeeded);
@@ -347,14 +334,14 @@ TEST(EditorNodeGraphDraft, ThirtyTwoGradeGraphRepeatedConnectStaysBounded) {
 
 TEST(EditorNodeGraphDraft, DetachedNodeIdsIsEmptyForACompleteDraft) {
   auto document = DocumentWithGrades(3, 0);
-  auto draft    = EditorNodeGraphDraft::FromDocument(document, BoundIdentity());
+  auto draft    = EditorNodeGraphDraft::FromDocument(document);
   EXPECT_TRUE(draft.SubmissionValid());
   EXPECT_TRUE(draft.DetachedNodeIds().empty());
 }
 
 TEST(EditorNodeGraphDraft, DetachedNodeIdsListsNodesOutsideTheImagePath) {
   auto document = CreateDefaultPipelineDocument();
-  auto draft    = EditorNodeGraphDraft::FromDocument(document, BoundIdentity());
+  auto draft    = EditorNodeGraphDraft::FromDocument(document);
   ASSERT_TRUE(draft.AddColorGrade(NodeId{"grade.new"}).succeeded);
 
   auto detached = draft.DetachedNodeIds();
@@ -384,7 +371,7 @@ TEST(EditorNodeGraphDraft, LiveDeletionProtectionPreservesDraftAndPriorReversal)
       auto* grade = document.PrimaryGrade();
       grade->SetDeletionProtected(false);
       grade->AddMask(MakeMask("mask.protected", 0.4f), 0);
-      auto draft = EditorNodeGraphDraft::FromDocument(document, BoundIdentity());
+      auto draft = EditorNodeGraphDraft::FromDocument(document);
       ASSERT_TRUE(draft.AddColorGrade(NodeId{"grade.transient"}).succeeded);
       // Change locks after construction: admission must read the live owner, not draft JSON.
       grade->SetDeletionProtected(protect_grade);

@@ -192,17 +192,6 @@ auto DocumentWithGrades(int grade_count, int masks_per_grade) -> alcedo::Pipelin
   return document;
 }
 
-auto BoundIdentity() -> alcedo::EditorNodeGraphDraftIdentity {
-  alcedo::EditorNodeGraphDraftIdentity identity;
-  identity.element_id          = 8;
-  identity.image_id            = 9;
-  identity.version_id          = "v1";
-  identity.session_generation  = 4;
-  identity.projection_revision = 1;
-  identity.topology_revision   = 1;
-  return identity;
-}
-
 auto LiveNodeDelegateCount(const alcedo::ui::AlcedoQanGraph&        adapter,
                            const alcedo::EditorNodeGraphSnapshot& snapshot) -> int {
   int count = 0;
@@ -261,7 +250,7 @@ TEST_F(AlcedoQanGraphPerformance, DefaultGraphApplyCreatesThreeNodeDelegatesAndT
   AttachAlcedoDelegates(adapter, harness_->Graph());
   QElapsedTimer timer;
   timer.start();
-  const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 1, 1, 1);
+  const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 1);
   const auto result   = adapter.ApplySnapshot(snapshot);
   ASSERT_TRUE(result.succeeded) << result.error.toStdString();
   ASSERT_TRUE(WaitFor([&] { return LiveNodeDelegateCount(adapter, snapshot) == 3; }));
@@ -282,7 +271,7 @@ TEST_F(AlcedoQanGraphPerformance, ThirtyTwoGradeGraphApplyRecordsDelegateCountsA
   AttachAlcedoDelegates(adapter, harness_->Graph());
   auto document = DocumentWithGrades(32, 8);
   EXPECT_EQ(document.Graph().NodeCount(), 34u);
-  const auto snapshot = EditorNodeGraphProjection::Build(document, 2, 1, 1);
+  const auto snapshot = EditorNodeGraphProjection::Build(document, 2);
   QElapsedTimer timer;
   timer.start();
   const auto result = adapter.ApplySnapshot(snapshot);
@@ -303,7 +292,7 @@ TEST_F(AlcedoQanGraphPerformance, ThirtyTwoGradeGraphApplyRecordsDelegateCountsA
 TEST_F(AlcedoQanGraphPerformance, OneHundredSelectionsStayWithinOneHundredMillisecondsEach) {
   ui::AlcedoQanGraph adapter;
   AttachAlcedoDelegates(adapter, harness_->Graph());
-  const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 3, 1, 1);
+  const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 3);
   ASSERT_TRUE(adapter.ApplySnapshot(snapshot).succeeded);
   ASSERT_TRUE(WaitFor([&] { return adapter.NodeFor(NodeId{"grade.primary"}) != nullptr; }));
   const NodeId ids[] = {NodeId{"develop"}, NodeId{"grade.primary"}, NodeId{"drt"}};
@@ -327,7 +316,7 @@ TEST_F(AlcedoQanGraphPerformance, OpeningAndClosingAManyMaskNodeKeepsOwnerIdenti
   ui::AlcedoQanGraph adapter;
   AttachAlcedoDelegates(adapter, harness_->Graph());
   auto document = DocumentWithGrades(1, 16);
-  const auto snapshot = EditorNodeGraphProjection::Build(document, 4, 1, 1);
+  const auto snapshot = EditorNodeGraphProjection::Build(document, 4);
   ASSERT_TRUE(adapter.ApplySnapshot(snapshot).succeeded);
   ASSERT_TRUE(WaitFor([&] { return adapter.NodeFor(NodeId{"grade.primary"}) != nullptr; }));
   QPointer<qan::Node> grade = adapter.NodeFor(NodeId{"grade.primary"});
@@ -356,8 +345,8 @@ TEST_F(AlcedoQanGraphPerformance, OneHundredAcceptedDraftConnectsRetainQanIdenti
   ui::AlcedoQanGraph adapter;
   AttachAlcedoDelegates(adapter, harness_->Graph());
   auto document = CreateDefaultPipelineDocument();
-  auto draft    = EditorNodeGraphDraft::FromDocument(document, BoundIdentity());
-  const auto snapshot = EditorNodeGraphProjection::Build(document, 4, 1, 1);
+  auto draft    = EditorNodeGraphDraft::FromDocument(document);
+  const auto snapshot = EditorNodeGraphProjection::Build(document, 4);
   ASSERT_TRUE(adapter.ApplySnapshot(snapshot).succeeded);
   ASSERT_TRUE(WaitFor([&] { return adapter.NodeFor(NodeId{"grade.primary"}) != nullptr; }));
   QPointer<qan::Node> develop = adapter.NodeFor(NodeId{"develop"});

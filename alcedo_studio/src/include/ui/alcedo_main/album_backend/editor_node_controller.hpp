@@ -12,7 +12,6 @@
 #include <QVariantList>
 #include <cstdint>
 #include <memory>
-#include <optional>
 
 #include "app/editor_node_graph_draft.hpp"
 #include "app/editor_node_graph_projection.hpp"
@@ -36,8 +35,8 @@ class EditorSessionController;
  * NodeGraphTopologyChange. Visual connectors report exclusive-port requests.
  *
  * Threading: GUI thread only. Side effects: snapshot and selection signals.
- * Failure: stale generations and unknown NodeIds leave the live snapshot and
- * selection unchanged and set lastError.
+ * Failure: unavailable sessions and unknown NodeIds leave the live snapshot
+ * and selection unchanged and set lastError.
  */
 class EditorNodeController : public QObject {
   Q_OBJECT
@@ -92,12 +91,11 @@ class EditorNodeController : public QObject {
   [[nodiscard]] auto session() const -> EditorSessionController*;
 
   /**
-   * @brief Replace the published snapshot after generation and revision checks.
+   * @brief Replace the published snapshot.
    *
-   * @param snapshot Immutable projection. Rejected when a session is bound and
-   *        the generation does not match, or when a bound session already has a
-   *        newer projection/topology revision.
-   * @return false when the snapshot is rejected; lastError holds the reason.
+   * @param snapshot Immutable projection. The caller stamps the session value
+   *        that identifies the producing image-load session.
+   * @return false when the snapshot has no nodes; lastError holds the reason.
    * @post On success, missing selection is restored to the first Color Grade or
    *       the first backbone node.
    */
@@ -107,9 +105,8 @@ class EditorNodeController : public QObject {
    * @brief Build and publish a snapshot from @p document.
    *
    * @param document Live PipelineDocument under the read boundary.
-   * @param session_generation Session value copied into the snapshot. Must match
-   *        the bound session when one is set.
-   * @return false when build or generation checks fail.
+   * @param session_generation Session value stamped onto the snapshot.
+   * @return false when the projection build fails or the snapshot has no nodes.
    */
   auto PublishDocument(const PipelineDocument& document, std::uint64_t session_generation) -> bool;
 
@@ -167,7 +164,7 @@ class EditorNodeController : public QObject {
    * @brief Mask Groups: remove one Color Grade and bridge its neighbors.
    *
    * Committed-document operation through one typed history commit. Rejects
-   * endpoints, non-Color-Grade ids, stale generations, and any live draft.
+   * endpoints, non-Color-Grade ids, and any live draft.
    */
   Q_INVOKABLE bool removeMaskGroup(const QString& node_id);
   /**
@@ -178,7 +175,7 @@ class EditorNodeController : public QObject {
    * by the Nodes page, then submits one history commit and one topology render
    * request. Out-of-range indices clamp to the list ends; targeting the current
    * index is an accepted no-op that submits nothing. Rejects endpoints,
-   * non-Color-Grade ids, stale generations, and any live draft.
+   * non-Color-Grade ids, and any live draft.
    */
   Q_INVOKABLE bool moveMaskGroupToIndex(const QString& node_id, int target_index);
   /**
@@ -190,12 +187,12 @@ class EditorNodeController : public QObject {
   Q_INVOKABLE bool locateNodeInGraph(const QString& node_id);
   /**
    * @brief Rename one Color Grade without changing its stable NodeId.
-   * @return false for endpoints, blank names, stale generations, or history failure.
+   * @return false for endpoints, blank names, or history failure.
    */
   Q_INVOKABLE bool renameColorGrade(const QString& node_id, const QString& display_name);
   /**
    * @brief Change deletion-only protection through session history without rendering.
-   * @return false for endpoints, unfinished drafts, stale generations, or history failure.
+   * @return false for endpoints, unfinished drafts, or history failure.
    */
   Q_INVOKABLE bool setColorGradeDeletionProtected(const QString& node_id, bool deletion_protected);
   /**
@@ -207,8 +204,6 @@ class EditorNodeController : public QObject {
    */
   Q_INVOKABLE bool requestConnect(const QString& source_node_id,
                                   const QString& destination_node_id);
-  Q_INVOKABLE bool requestConnect(const QString& source_node_id, const QString& destination_node_id,
-                                  quint64 request_generation);
   /**
    * @brief Resolve a visual-connector drop as exclusive-port Connect.
    *
@@ -222,7 +217,6 @@ class EditorNodeController : public QObject {
   [[nodiscard]] auto selected_node_id() const -> NodeId { return selected_node_id_; }
   [[nodiscard]] auto selected_node_id_string() const -> QString;
   [[nodiscard]] auto backbone_node_ids() const -> QStringList;
-  [[nodiscard]] auto session_generation() const -> quint64 { return session_generation_; }
   [[nodiscard]] auto projection_revision() const -> quint64 { return projection_revision_; }
   [[nodiscard]] auto topology_revision() const -> quint64 { return topology_revision_; }
   [[nodiscard]] auto element_id() const -> quint64 { return element_id_; }
@@ -271,12 +265,12 @@ class EditorNodeController : public QObject {
   [[nodiscard]] auto queued_projection_apply_count() const -> int {
     return queued_projection_apply_count_;
   }
-  /// Successful adapter projection applies. Duplicate applies of the same
-  /// committed revision are not counted.
+  /// Successful adapter projection applies.
   [[nodiscard]] auto completed_projection_apply_count() const -> int {
     return completed_projection_apply_count_;
   }
-  /// Queued applies dropped because the adapter, generation, or attach identity was stale.
+  /// Queued applies dropped because no adapter was bound or the bound adapter
+  /// changed before the queued apply ran.
   [[nodiscard]] auto skipped_stale_projection_apply_count() const -> int {
     return skipped_stale_projection_apply_count_;
   }
@@ -330,24 +324,23 @@ class EditorNodeController : public QObject {
   [[nodiscard]] auto DefaultSelectedNodeId() const -> NodeId;
   [[nodiscard]] auto IndexOf(const NodeId& node_id) const -> int;
   [[nodiscard]] auto NodeFor(const NodeId& node_id) const -> const EditorNodeProjection*;
-  [[nodiscard]] auto ValidateCommandGeneration() -> bool;
+  /// Rejects the command and sets lastError when a command is already active,
+  /// no editable graph is bound, or the session is not editable.
+  [[nodiscard]] auto ValidateCommandState() -> bool;
   [[nodiscard]] auto IsColorGrade(const NodeId& node_id) const -> bool;
   void               SetCommandActive(bool active);
   void OnConnectorMoveRequested(const QString& source_node_id, const QString& destination_node_id,
                                 bool destination_is_output);
   void OnConnectorRequestRejected(const QString& error);
-  [[nodiscard]] auto CurrentDraftIdentity() const -> alcedo::EditorNodeGraphDraftIdentity;
   [[nodiscard]] auto EnsureDraft() -> bool;
   void               DiscardDraft();
   [[nodiscard]] auto ApplyDraftMutationToAdapter(
       const alcedo::EditorNodeGraphDraftMutation& mutation) -> bool;
   [[nodiscard]] auto MaybeSubmitDraft() -> bool;
   /// Publish the committed Mask Groups projection beside the node snapshot.
-  /// Rejects stale generations like PublishSnapshot; equal content republishes
-  /// nothing.
+  /// Equal content republishes nothing.
   [[nodiscard]] auto PublishMaskGroupSnapshot(alcedo::EditorMaskGroupSnapshot snapshot) -> bool;
   [[nodiscard]] auto TopologyChanged(const EditorNodeGraphSnapshot& snapshot) const -> bool;
-  [[nodiscard]] auto BoundSessionGeneration() const -> std::optional<std::uint64_t>;
   void               SelectByKind(EditorNodeKind kind);
   void               SelectAt(int index);
   /**
@@ -370,58 +363,55 @@ class EditorNodeController : public QObject {
   void               SyncLayoutKey();
   void               PersistSavedSelection();
   void               ApplyLiveSelectionToAdapter();
-  [[nodiscard]] auto SessionMatchesSubmittedIdentity() const -> bool;
   [[nodiscard]] auto SessionLocationChanged() const -> bool;
   [[nodiscard]] auto SessionIdentityChanged() const -> bool;
   /// True when the bound session must not show a node graph (empty, loading, switch, or failed).
   [[nodiscard]] auto SessionHidesGraph() const -> bool;
-  [[nodiscard]] auto AdapterShowsCurrentCommittedProjection() const -> bool;
   void               AdoptCommittedDocument(const PipelineDocument& document);
   [[nodiscard]] auto HasActiveGraph() const -> bool;
   void               SyncMaskThumbnails(const PipelineDocument& document);
   void               BindThumbnailGeometry();
   void               NotePhotographGeometry();
 
-  QPointer<EditorSessionController>                   session_;
-  QPointer<AlcedoQanGraph>                            graph_adapter_;
-  QPointer<EditorNodeLayoutStore>                     layout_store_;
-  QMetaObject::Connection                             state_connection_;
-  QMetaObject::Connection                             history_connection_;
-  QMetaObject::Connection                             availability_connection_;
-  QMetaObject::Connection                             graph_adapter_connection_;
-  QMetaObject::Connection                             layout_store_connection_;
-  QMetaObject::Connection                             presentation_binding_connection_;
-  QMetaObject::Connection                             presented_geometry_connection_;
-  EditorNodeGraphSnapshot                             snapshot_{};
-  bool                                                has_snapshot_ = false;
-  alcedo::EditorMaskGroupSnapshot                     mask_group_snapshot_{};
-  bool                                                has_mask_group_snapshot_ = false;
-  NodeId                                              selected_node_id_;
-  NodeId                                              last_selected_color_grade_id_;
-  NodeId                                              selection_restore_node_id_;
-  bool                                                command_active_            = false;
-  bool                                                projection_apply_queued_   = false;
-  bool                                                applying_layout_           = false;
-  quint64                                             session_generation_        = 0;
-  quint64                                             observed_history_revision_ = 0;
-  quint64                                             projection_revision_       = 0;
-  quint64                                             topology_revision_         = 0;
-  quint64                                             element_id_                = 0;
-  quint64                                             image_id_                  = 0;
-  QString                                             version_id_;
-  quint64                                             snapshot_element_id_ = 0;
-  quint64                                             snapshot_image_id_   = 0;
-  QString                                             snapshot_version_id_;
-  QString                                             last_error_;
-  std::unique_ptr<alcedo::EditorNodeGraphDraft>       draft_;
-  std::optional<alcedo::EditorNodeGraphDraftIdentity> submitted_identity_;
-  EditorNodeLayoutKey                                 last_layout_key_{};
-  quint64                                             adapter_attach_generation_            = 0;
-  quint64                                             pending_apply_attach_generation_      = 0;
-  int                                                 queued_projection_apply_count_        = 0;
-  int                                                 completed_projection_apply_count_     = 0;
-  int                                                 skipped_stale_projection_apply_count_ = 0;
-  MaskThumbnailCoordinator*                           mask_thumbnails_ = nullptr;
+  QPointer<EditorSessionController>             session_;
+  QPointer<AlcedoQanGraph>                      graph_adapter_;
+  QPointer<EditorNodeLayoutStore>               layout_store_;
+  QMetaObject::Connection                       state_connection_;
+  QMetaObject::Connection                       history_connection_;
+  QMetaObject::Connection                       availability_connection_;
+  QMetaObject::Connection                       graph_adapter_connection_;
+  QMetaObject::Connection                       layout_store_connection_;
+  QMetaObject::Connection                       presentation_binding_connection_;
+  QMetaObject::Connection                       presented_geometry_connection_;
+  EditorNodeGraphSnapshot                       snapshot_{};
+  bool                                          has_snapshot_ = false;
+  alcedo::EditorMaskGroupSnapshot               mask_group_snapshot_{};
+  bool                                          has_mask_group_snapshot_ = false;
+  NodeId                                        selected_node_id_;
+  NodeId                                        last_selected_color_grade_id_;
+  NodeId                                        selection_restore_node_id_;
+  bool                                          command_active_            = false;
+  bool                                          projection_apply_queued_   = false;
+  bool                                          applying_layout_           = false;
+  quint64                                       session_generation_        = 0;
+  quint64                                       observed_history_revision_ = 0;
+  quint64                                       projection_revision_       = 0;
+  quint64                                       topology_revision_         = 0;
+  quint64                                       element_id_                = 0;
+  quint64                                       image_id_                  = 0;
+  QString                                       version_id_;
+  quint64                                       snapshot_element_id_ = 0;
+  quint64                                       snapshot_image_id_   = 0;
+  QString                                       snapshot_version_id_;
+  QString                                       last_error_;
+  std::unique_ptr<alcedo::EditorNodeGraphDraft> draft_;
+  EditorNodeLayoutKey                           last_layout_key_{};
+  quint64                                       adapter_attach_generation_            = 0;
+  quint64                                       pending_apply_attach_generation_      = 0;
+  int                                           queued_projection_apply_count_        = 0;
+  int                                           completed_projection_apply_count_     = 0;
+  int                                           skipped_stale_projection_apply_count_ = 0;
+  MaskThumbnailCoordinator*                     mask_thumbnails_                      = nullptr;
 };
 
 void RegisterEditorNodeQmlTypes();

@@ -357,18 +357,18 @@ TEST(EditorNodeController, BackboneKeysMoveSelectionAlongTheImageBackbone) {
   EXPECT_EQ(controller.selected_node_id(), NodeId{"drt"});
 }
 
-TEST(EditorNodeController, StaleGenerationSnapshotIsRejected) {
+TEST(EditorNodeController, EmptySnapshotIsRejectedAndKeepsTheLiveProjection) {
   DocumentSessionBackend backend;
   backend.SetGeneration(12);
   EditorSessionController session(&backend);
   EditorNodeController    controller;
   controller.set_editor_session(&session);
   ASSERT_TRUE(controller.has_snapshot());
-  EXPECT_EQ(controller.session_generation(), 12u);
+  const auto nodes_before = controller.snapshot().nodes.size();
 
-  auto stale = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 11, 1, 1);
-  EXPECT_FALSE(controller.PublishSnapshot(stale));
-  EXPECT_EQ(controller.session_generation(), 12u);
+  EXPECT_FALSE(controller.PublishSnapshot(alcedo::EditorNodeGraphSnapshot{}));
+  EXPECT_TRUE(controller.has_snapshot());
+  EXPECT_EQ(controller.snapshot().nodes.size(), nodes_before);
   EXPECT_FALSE(controller.last_error().isEmpty());
 }
 
@@ -441,7 +441,7 @@ TEST(EditorNodeController, DeleteOfADraftGradeDoesNotSubmitWhileThePathIsBroken)
   EXPECT_TRUE(controller.selected_node_id().Empty());
 }
 
-TEST(EditorNodeController, EndpointsAndStaleGenerationRejectCommandsBeforeBackendMutation) {
+TEST(EditorNodeController, EndpointsAndUnknownNodesRejectCommandsBeforeBackendMutation) {
   DocumentSessionBackend backend;
   backend.SetGeneration(18);
   EditorSessionController session(&backend);
@@ -453,8 +453,6 @@ TEST(EditorNodeController, EndpointsAndStaleGenerationRejectCommandsBeforeBacken
   EXPECT_FALSE(
       controller.renameColorGrade(QStringLiteral("grade.missing"), QStringLiteral("Missing")));
   EXPECT_FALSE(controller.deleteColorGrade(QStringLiteral("grade.missing")));
-  backend.SetGeneration(19);
-  EXPECT_FALSE(controller.addCleanColorGrade());
   EXPECT_EQ(backend.edit_node_graph_count(), 0);
   EXPECT_EQ(backend.rename_count(), 0);
 }
@@ -481,7 +479,7 @@ TEST(EditorNodeController, MissingDefaultColorGradeAfterRefreshClearsSelection) 
   auto                 document = CreateDefaultPipelineDocument();
   ASSERT_TRUE(controller.PublishDocument(document, 2));
   controller.selectNode(QStringLiteral("grade.primary"));
-  auto next = EditorNodeGraphProjection::Build(document, 2, 0, 0);
+  auto next = EditorNodeGraphProjection::Build(document, 2);
   next.nodes.erase(
       std::remove_if(next.nodes.begin(), next.nodes.end(),
                      [](const auto& node) { return node.node_id == NodeId{"grade.primary"}; }),
@@ -598,7 +596,7 @@ TEST(EditorNodeController, DevelopAndDrtRejectUnsupportedPortRoles) {
   EXPECT_EQ(backend.edit_node_graph_count(), 0);
 }
 
-TEST(EditorNodeController, SelfConnectAndStaleGenerationLeaveTheDraftUnchanged) {
+TEST(EditorNodeController, SelfConnectLeavesTheDraftUnchanged) {
   DocumentSessionBackend backend;
   backend.SetGeneration(34);
   EditorSessionController session(&backend);
@@ -610,9 +608,6 @@ TEST(EditorNodeController, SelfConnectAndStaleGenerationLeaveTheDraftUnchanged) 
 
   EXPECT_FALSE(controller.requestConnect(extra, extra));
   EXPECT_EQ(controller.last_error(), QStringLiteral("A node cannot connect to itself"));
-  EXPECT_FALSE(controller.requestConnect(QStringLiteral("develop"), extra, 1));
-  EXPECT_EQ(controller.last_error(),
-            QStringLiteral("The node command is from another editor session"));
   EXPECT_EQ(controller.ActiveEdges().size(), before);
   EXPECT_EQ(backend.edit_node_graph_count(), 0);
 }
@@ -1167,20 +1162,6 @@ TEST(EditorNodeController, MaskGroupCommandsRejectDraftEndpointsAndFailures) {
   EXPECT_EQ(backend.insert_grade_top_count(), 1);
 }
 
-TEST(EditorNodeController, MaskGroupCommandsRejectAStaleSessionGeneration) {
-  DocumentSessionBackend backend;
-  backend.SetGeneration(44);
-  EditorSessionController session(&backend);
-  EditorNodeController    controller;
-  controller.set_editor_session(&session);
-
-  backend.SetGeneration(45);
-  EXPECT_FALSE(controller.insertMaskGroupAtTop());
-  EXPECT_FALSE(controller.removeMaskGroup(QStringLiteral("grade.primary")));
-  EXPECT_EQ(backend.insert_grade_top_count(), 0);
-  EXPECT_EQ(backend.remove_grade_count(), 0);
-}
-
 TEST(EditorNodeController, PanelSwitchKeepsTheIncompleteDraftAndCommittedGroups) {
   DocumentSessionBackend backend;
   backend.SetGeneration(46);
@@ -1305,7 +1286,7 @@ TEST(EditorNodeController, MoveMaskGroupToIndexSameSlotIsAnAcceptedNoOp) {
   EXPECT_EQ(single.edit_node_graph_count(), 0);
 }
 
-TEST(EditorNodeController, MoveMaskGroupToIndexRejectsEndpointsUnknownDraftStaleAndFailure) {
+TEST(EditorNodeController, MoveMaskGroupToIndexRejectsEndpointsUnknownDraftAndFailure) {
   DocumentSessionBackend backend;
   backend.SetGeneration(54);
   // Backbone: develop -> grade.top -> grade.primary -> drt.
@@ -1342,12 +1323,6 @@ TEST(EditorNodeController, MoveMaskGroupToIndexRejectsEndpointsUnknownDraftStale
   EXPECT_EQ(backend.edit_node_graph_count(), 1);
   EXPECT_TRUE(controller.can_edit_mask_group_structure());
   ASSERT_EQ(backend.Document().Graph().ImageBackboneNodeIds().size(), backbone_before.size() + 1);
-
-  // A stale image-load generation is rejected before submission.
-  backend.SetGeneration(55);
-  EXPECT_FALSE(controller.moveMaskGroupToIndex(QStringLiteral("grade.top"), 0));
-  EXPECT_EQ(backend.edit_node_graph_count(), 1);
-  backend.SetGeneration(54);
 
   // A backend failure surfaces the error and leaves the document unchanged.
   backend.SetFailCommands(true);

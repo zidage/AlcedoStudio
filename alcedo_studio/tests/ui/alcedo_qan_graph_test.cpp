@@ -341,7 +341,7 @@ auto ExpectLiveBackbone(const ui::AlcedoQanGraph& adapter, const EditorNodeGraph
 
 auto MakeAddedColorGradeMutation() -> EditorNodeGraphDraftMutation {
   auto document = CreateDefaultPipelineDocument();
-  auto draft    = EditorNodeGraphDraft::FromDocument(document, {});
+  auto draft    = EditorNodeGraphDraft::FromDocument(document);
   return draft.AddColorGrade(NodeId{"grade.extra"});
 }
 
@@ -412,15 +412,14 @@ class AlcedoQanGraph : public ::testing::Test {
 
 std::unique_ptr<QanHarness> AlcedoQanGraph::harness_;
 
-TEST_F(AlcedoQanGraph, MapsEachProjectedNodeIdToOneLiveQanNodeInTheCurrentGeneration) {
+TEST_F(AlcedoQanGraph, MapsEachProjectedNodeIdToOneLiveQanNode) {
   ui::AlcedoQanGraph adapter;
   AttachAlcedoDelegates(adapter, harness_->Graph());
-  const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 4, 2, 1);
+  const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 4);
   const auto result   = adapter.ApplySnapshot(snapshot);
 
   ASSERT_TRUE(result.succeeded) << result.error.toStdString();
   EXPECT_TRUE(result.rebuilt_topology);
-  EXPECT_EQ(adapter.session_generation(), 4u);
   ExpectLiveBackbone(adapter, snapshot);
   EXPECT_EQ(adapter.LiveNodeId(nullptr), std::nullopt);
 }
@@ -430,7 +429,7 @@ TEST_F(AlcedoQanGraph, BindsEachBackboneEdgeToTheMatchingTopAndBottomPorts) {
   AttachAlcedoDelegates(adapter, harness_->Graph());
   auto document = CreateDefaultPipelineDocument();
   ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.second"}).empty());
-  const auto snapshot = EditorNodeGraphProjection::Build(document, 1, 3, 2);
+  const auto snapshot = EditorNodeGraphProjection::Build(document, 1);
   const auto result   = adapter.ApplySnapshot(snapshot);
 
   ASSERT_TRUE(result.succeeded) << result.error.toStdString();
@@ -445,7 +444,7 @@ TEST_F(AlcedoQanGraph, BindsEachBackboneEdgeToTheMatchingTopAndBottomPorts) {
 TEST_F(AlcedoQanGraph, InstallsFlushPortDockAndInvisibleSelectionDelegate) {
   ui::AlcedoQanGraph adapter;
   AttachAlcedoDelegates(adapter, harness_->Graph());
-  const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 4, 2, 1);
+  const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 4);
   const auto result   = adapter.ApplySnapshot(snapshot);
   ASSERT_TRUE(result.succeeded) << result.error.toStdString();
 
@@ -480,7 +479,7 @@ TEST_F(AlcedoQanGraph, RenameUpdatesOneNodeLabelWithoutReplacingQanPrimitives) {
   ui::AlcedoQanGraph adapter;
   AttachAlcedoDelegates(adapter, harness_->Graph());
   auto       document = CreateDefaultPipelineDocument();
-  const auto before   = EditorNodeGraphProjection::Build(document, 6, 10, 4);
+  const auto before   = EditorNodeGraphProjection::Build(document, 6);
   ASSERT_TRUE(adapter.ApplySnapshot(before).succeeded) << "initial apply";
 
   QPointer<qan::Node> grade = adapter.NodeFor(NodeId{"grade.primary"});
@@ -489,7 +488,7 @@ TEST_F(AlcedoQanGraph, RenameUpdatesOneNodeLabelWithoutReplacingQanPrimitives) {
   ASSERT_FALSE(grade.isNull());
 
   ASSERT_TRUE(RenameColorGrade(document, NodeId{"grade.primary"}, "Look A").empty());
-  const auto after  = EditorNodeGraphProjection::Build(document, 6, 11, 4);
+  const auto after  = EditorNodeGraphProjection::Build(document, 6);
   const auto result = adapter.ApplySnapshot(after);
 
   ASSERT_TRUE(result.succeeded) << result.error.toStdString();
@@ -510,14 +509,14 @@ TEST_F(AlcedoQanGraph, MaskKindChangeUpdatesOneNodeWithoutReplacingEdges) {
   ASSERT_NE(grade, nullptr);
   grade->AddMask(MakeMask(MaskId{"mask.radial"}, RadialMaskSource{}), 0);
 
-  const auto before = EditorNodeGraphProjection::Build(document, 2, 5, 1);
+  const auto before = EditorNodeGraphProjection::Build(document, 2);
   ASSERT_TRUE(adapter.ApplySnapshot(before).succeeded) << "initial apply";
   QPointer<qan::Node> grade_node = adapter.NodeFor(NodeId{"grade.primary"});
   QPointer<qan::Edge> incoming   = adapter.EdgeFor(before.edges.front());
   QPointer<qan::Edge> outgoing   = adapter.EdgeFor(before.edges.back());
 
   grade->ReplaceMaskSource(MaskId{"mask.radial"}, LinearGradientMaskSource{});
-  const auto after  = EditorNodeGraphProjection::Build(document, 2, 6, 1);
+  const auto after  = EditorNodeGraphProjection::Build(document, 2);
   const auto result = adapter.ApplySnapshot(after);
 
   ASSERT_TRUE(result.succeeded) << result.error.toStdString();
@@ -537,7 +536,7 @@ TEST_F(AlcedoQanGraph, RemovingAColorGradeReplacesQanPrimitivesAndHidesTheRemove
   AttachAlcedoDelegates(adapter, harness_->Graph());
   auto document = CreateDefaultPipelineDocument();
   ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.extra"}).empty());
-  const auto first = EditorNodeGraphProjection::Build(document, 9, 1, 1);
+  const auto first = EditorNodeGraphProjection::Build(document, 9);
   ASSERT_TRUE(adapter.ApplySnapshot(first).succeeded) << "initial apply";
 
   QPointer<qan::Node> removed_node = adapter.NodeFor(NodeId{"grade.primary"});
@@ -547,7 +546,7 @@ TEST_F(AlcedoQanGraph, RemovingAColorGradeReplacesQanPrimitivesAndHidesTheRemove
   EXPECT_TRUE(removed_item->isVisible());
 
   ASSERT_TRUE(RemoveColorGradeAndBridge(document, NodeId{"grade.primary"}).empty());
-  const auto second = EditorNodeGraphProjection::Build(document, 9, 2, 2);
+  const auto second = EditorNodeGraphProjection::Build(document, 9);
   const auto result = adapter.ApplySnapshot(second);
 
   ASSERT_TRUE(result.succeeded) << result.error.toStdString();
@@ -564,7 +563,7 @@ TEST_F(AlcedoQanGraph, RemovingAColorGradeReplacesQanPrimitivesAndHidesTheRemove
 TEST_F(AlcedoQanGraph, VersionReplacementRemovesOldPrimitivesAndReverseMapEntries) {
   ui::AlcedoQanGraph adapter;
   AttachAlcedoDelegates(adapter, harness_->Graph());
-  const auto first = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 8, 1, 1);
+  const auto first = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 8);
   ASSERT_TRUE(adapter.ApplySnapshot(first).succeeded) << "initial apply";
 
   QPointer<qan::Node> old_develop = adapter.NodeFor(NodeId{"develop"});
@@ -578,7 +577,7 @@ TEST_F(AlcedoQanGraph, VersionReplacementRemovesOldPrimitivesAndReverseMapEntrie
 
   auto next_document = CreateDefaultPipelineDocument();
   ASSERT_TRUE(AddCleanColorGrade(next_document, NodeId{"drt"}, NodeId{"grade.second"}).empty());
-  const auto second = EditorNodeGraphProjection::Build(next_document, 8, 4, 2);
+  const auto second = EditorNodeGraphProjection::Build(next_document, 8);
   const auto result = adapter.ApplySnapshot(second);
 
   ASSERT_TRUE(result.succeeded) << result.error.toStdString();
@@ -592,52 +591,64 @@ TEST_F(AlcedoQanGraph, VersionReplacementRemovesOldPrimitivesAndReverseMapEntrie
   EXPECT_NE(adapter.NodeFor(NodeId{"develop"}), old_develop.data());
 }
 
-TEST_F(AlcedoQanGraph, StalePrimitiveCannotSelectOrEditTheNewDocument) {
+TEST_F(AlcedoQanGraph, StampedIdentityValuesDoNotDecideTheApplyPath) {
   ui::AlcedoQanGraph adapter;
   AttachAlcedoDelegates(adapter, harness_->Graph());
-  const auto current = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 12, 3, 2);
+  const auto current = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 12);
   ASSERT_TRUE(adapter.ApplySnapshot(current).succeeded) << "initial apply";
   QPointer<qan::Node> live_grade = adapter.NodeFor(NodeId{"grade.primary"});
   ASSERT_FALSE(live_grade.isNull());
 
-  const auto stale = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 11, 9, 9);
-  const auto stale_result = adapter.ApplySnapshot(stale);
-  EXPECT_FALSE(stale_result.succeeded);
-  EXPECT_EQ(stale_result.error, QStringLiteral("snapshot session generation is stale"));
-  EXPECT_EQ(adapter.session_generation(), 12u);
+  // Identical content stamped with a lower generation still applies; only
+  // node and edge identities choose between update and rebuild.
+  const auto restamped = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 11);
+  const auto restamped_result = adapter.ApplySnapshot(restamped);
+  EXPECT_TRUE(restamped_result.succeeded) << restamped_result.error.toStdString();
+  EXPECT_FALSE(restamped_result.rebuilt_topology);
   EXPECT_EQ(adapter.NodeFor(NodeId{"grade.primary"}), live_grade.data());
   EXPECT_EQ(adapter.LiveNodeId(live_grade.data()), NodeId{"grade.primary"});
   EXPECT_EQ(harness_->Graph()->getNodeCount(), 3);
 
+  // A new generation with the same node and edge identities also updates in
+  // place instead of replacing live primitives.
+  auto renamed_document = CreateDefaultPipelineDocument();
+  ASSERT_TRUE(RenameColorGrade(renamed_document, NodeId{"grade.primary"}, "Version B").empty());
+  const auto renamed        = EditorNodeGraphProjection::Build(renamed_document, 13);
+  const auto renamed_result = adapter.ApplySnapshot(renamed);
+  EXPECT_TRUE(renamed_result.succeeded) << renamed_result.error.toStdString();
+  EXPECT_FALSE(renamed_result.rebuilt_topology);
+  EXPECT_EQ(adapter.NodeFor(NodeId{"grade.primary"}), live_grade.data());
+  EXPECT_EQ(live_grade->getLabel(), QStringLiteral("Version B"));
+
+  // A topology change under a later generation replaces primitives, and a dead
+  // pointer no longer resolves to a product NodeId.
   auto next_document = CreateDefaultPipelineDocument();
-  ASSERT_TRUE(RenameColorGrade(next_document, NodeId{"grade.primary"}, "Version B").empty());
-  const auto next = EditorNodeGraphProjection::Build(next_document, 13, 1, 1);
-  ASSERT_TRUE(adapter.ApplySnapshot(next).succeeded) << "generation replacement";
+  ASSERT_TRUE(AddCleanColorGrade(next_document, NodeId{"drt"}, NodeId{"grade.second"}).empty());
+  const auto next        = EditorNodeGraphProjection::Build(next_document, 14);
+  const auto next_result = adapter.ApplySnapshot(next);
+  EXPECT_TRUE(next_result.succeeded) << next_result.error.toStdString();
+  EXPECT_TRUE(next_result.rebuilt_topology);
   EXPECT_TRUE(live_grade.isNull());
   EXPECT_EQ(adapter.LiveNodeId(live_grade.data()), std::nullopt);
-  ASSERT_NE(adapter.NodeFor(NodeId{"grade.primary"}), nullptr);
-  EXPECT_EQ(adapter.NodeFor(NodeId{"grade.primary"})->getLabel(), QStringLiteral("Version B"));
+  ExpectLiveBackbone(adapter, next);
 }
 
 TEST_F(AlcedoQanGraph, AdapterInsertFailureRestoresThePriorCompleteQanProjection) {
   FailAfterInsertsGraph adapter;
   AttachAlcedoDelegates(adapter, harness_->Graph());
-  const auto prior = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 3, 7, 1);
+  const auto prior = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 3);
   ASSERT_TRUE(adapter.ApplySnapshot(prior).succeeded) << "initial apply";
   ExpectLiveBackbone(adapter, prior);
 
   auto next_document = CreateDefaultPipelineDocument();
   ASSERT_TRUE(AddCleanColorGrade(next_document, NodeId{"drt"}, NodeId{"grade.second"}).empty());
-  const auto next = EditorNodeGraphProjection::Build(next_document, 3, 8, 2);
+  const auto next = EditorNodeGraphProjection::Build(next_document, 3);
   adapter.FailAfterSuccessfulInserts(1);
   const auto result = adapter.ApplySnapshot(next);
 
   EXPECT_FALSE(result.succeeded);
   EXPECT_TRUE(result.rebuilt_topology);
   EXPECT_NE(result.error.indexOf(QStringLiteral("Qan node creation failed")), -1);
-  EXPECT_EQ(adapter.session_generation(), 3u);
-  EXPECT_EQ(adapter.topology_revision(), 1u);
-  EXPECT_EQ(adapter.projection_revision(), 7u);
   ExpectLiveBackbone(adapter, prior);
   EXPECT_EQ(adapter.NodeFor(NodeId{"grade.second"}), nullptr);
 }
@@ -645,7 +656,7 @@ TEST_F(AlcedoQanGraph, AdapterInsertFailureRestoresThePriorCompleteQanProjection
 TEST_F(AlcedoQanGraph, FailedNodeInsertionPreservesUnrelatedIdentitySelectionAndLayout) {
   FailureInjectingQanGraph adapter;
   AttachAlcedoDelegates(adapter, harness_->Graph());
-  const auto prior = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 20, 1, 1);
+  const auto prior = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 20);
   ASSERT_TRUE(adapter.ApplySnapshot(prior).succeeded) << "initial apply";
 
   auto* develop = adapter.NodeFor(NodeId{"develop"});
@@ -681,7 +692,7 @@ TEST_F(AlcedoQanGraph, FailedNodeInsertionPreservesUnrelatedIdentitySelectionAnd
 TEST_F(AlcedoQanGraph, FailedPortInsertionRemovesThePartialNodeAndRestoresSelection) {
   FailureInjectingQanGraph adapter;
   AttachAlcedoDelegates(adapter, harness_->Graph());
-  const auto prior = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 21, 1, 1);
+  const auto prior = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 21);
   ASSERT_TRUE(adapter.ApplySnapshot(prior).succeeded) << "initial apply";
 
   auto* primary = adapter.NodeFor(NodeId{"grade.primary"});
@@ -710,7 +721,7 @@ TEST_F(AlcedoQanGraph, FailedPortInsertionRemovesThePartialNodeAndRestoresSelect
 TEST_F(AlcedoQanGraph, FailedEdgeInsertionRestoresRemovedEdgesAndPreservesNodeIdentity) {
   FailureInjectingQanGraph adapter;
   AttachAlcedoDelegates(adapter, harness_->Graph());
-  const auto prior = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 22, 1, 1);
+  const auto prior = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 22);
   ASSERT_TRUE(adapter.ApplySnapshot(prior).succeeded) << "initial apply";
   ASSERT_TRUE(adapter.InsertProjectedNode(MakeExtraNode("grade.extra.a")).succeeded);
   ASSERT_TRUE(adapter.InsertProjectedNode(MakeExtraNode("grade.extra.b")).succeeded);
@@ -752,7 +763,7 @@ TEST_F(AlcedoQanGraph, FailedEdgeInsertionRestoresRemovedEdgesAndPreservesNodeId
 TEST_F(AlcedoQanGraph, FailedEdgeBindingRemovesTheIncompleteEdgeAndRestoresTopology) {
   FailureInjectingQanGraph adapter;
   AttachAlcedoDelegates(adapter, harness_->Graph());
-  const auto prior = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 23, 1, 1);
+  const auto prior = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 23);
   ASSERT_TRUE(adapter.ApplySnapshot(prior).succeeded) << "initial apply";
   ASSERT_TRUE(adapter.InsertProjectedNode(MakeExtraNode("grade.extra.a")).succeeded);
   ASSERT_TRUE(adapter.InsertProjectedNode(MakeExtraNode("grade.extra.b")).succeeded);
@@ -781,7 +792,7 @@ TEST_F(AlcedoQanGraph, FailedEdgeBindingRemovesTheIncompleteEdgeAndRestoresTopol
 TEST_F(AlcedoQanGraph, FailedEdgeRemovalRestoresPortListsAndPreservesVisualIdentity) {
   FailureInjectingQanGraph adapter;
   AttachAlcedoDelegates(adapter, harness_->Graph());
-  const auto prior = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 24, 1, 1);
+  const auto prior = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 24);
   ASSERT_TRUE(adapter.ApplySnapshot(prior).succeeded) << "initial apply";
 
   auto* primary = adapter.NodeFor(NodeId{"grade.primary"});
@@ -808,7 +819,7 @@ TEST_F(AlcedoQanGraph, FailedEdgeRemovalRestoresPortListsAndPreservesVisualIdent
 TEST_F(AlcedoQanGraph, FailedPortRemovalRestoresTheNodeWithoutChangingOtherIdentities) {
   FailureInjectingQanGraph adapter;
   AttachAlcedoDelegates(adapter, harness_->Graph());
-  const auto prior = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 25, 1, 1);
+  const auto prior = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 25);
   ASSERT_TRUE(adapter.ApplySnapshot(prior).succeeded) << "initial apply";
   ASSERT_TRUE(adapter.InsertProjectedNode(MakeExtraNode("grade.extra")).succeeded);
 
@@ -838,7 +849,7 @@ TEST_F(AlcedoQanGraph, FailedPortRemovalRestoresTheNodeWithoutChangingOtherIdent
 TEST_F(AlcedoQanGraph, FailedNodeRemovalRestoresItsPortsAndKeepsTheProjectionUsable) {
   FailureInjectingQanGraph adapter;
   AttachAlcedoDelegates(adapter, harness_->Graph());
-  const auto prior = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 26, 1, 1);
+  const auto prior = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 26);
   ASSERT_TRUE(adapter.ApplySnapshot(prior).succeeded) << "initial apply";
   ASSERT_TRUE(adapter.InsertProjectedNode(MakeExtraNode("grade.extra")).succeeded);
 
@@ -868,7 +879,7 @@ TEST_F(AlcedoQanGraph, FailedNodeRemovalRestoresItsPortsAndKeepsTheProjectionUsa
 TEST_F(AlcedoQanGraph, VisualReversalFailureReportsBothTheOriginalAndReversalErrors) {
   FailureInjectingQanGraph adapter;
   AttachAlcedoDelegates(adapter, harness_->Graph());
-  const auto prior = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 27, 1, 1);
+  const auto prior = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 27);
   ASSERT_TRUE(adapter.ApplySnapshot(prior).succeeded) << "initial apply";
   ASSERT_TRUE(adapter.InsertProjectedNode(MakeExtraNode("grade.extra.a")).succeeded);
   ASSERT_TRUE(adapter.InsertProjectedNode(MakeExtraNode("grade.extra.b")).succeeded);
@@ -897,7 +908,7 @@ TEST_F(AlcedoQanGraph, VisualReversalFailureReportsBothTheOriginalAndReversalErr
 
 TEST_F(AlcedoQanGraph, FailedVisualMutationLeavesTheProductDocumentUntouched) {
   PipelineDocument document = CreateDefaultPipelineDocument();
-  auto             draft    = EditorNodeGraphDraft::FromDocument(document, {});
+  auto             draft    = EditorNodeGraphDraft::FromDocument(document);
   const auto       mutation = draft.AddColorGrade(NodeId{"grade.extra"});
   ASSERT_TRUE(mutation.succeeded);
   ASSERT_NE(draft.FindNode(NodeId{"grade.extra"}), nullptr);
@@ -905,7 +916,7 @@ TEST_F(AlcedoQanGraph, FailedVisualMutationLeavesTheProductDocumentUntouched) {
 
   FailureInjectingQanGraph adapter;
   AttachAlcedoDelegates(adapter, harness_->Graph());
-  const auto prior = EditorNodeGraphProjection::Build(document, 28, 1, 1);
+  const auto prior = EditorNodeGraphProjection::Build(document, 28);
   ASSERT_TRUE(adapter.ApplySnapshot(prior).succeeded) << "initial apply";
   adapter.FailOnNext(QanOperation::InsertNode);
   const auto result = adapter.ApplyMutation(mutation);
@@ -922,7 +933,7 @@ TEST_F(AlcedoQanGraph, FailedVisualMutationLeavesTheProductDocumentUntouched) {
 TEST_F(AlcedoQanGraph, GraphDestructionClearsIdentityMaps) {
   ui::AlcedoQanGraph adapter;
   AttachAlcedoDelegates(adapter, harness_->Graph());
-  const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 1, 1, 1);
+  const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 1);
   ASSERT_TRUE(adapter.ApplySnapshot(snapshot).succeeded) << "initial apply";
   QPointer<qan::Graph> old_graph = harness_->Graph();
   QPointer<qan::Node>  old_node  = adapter.NodeFor(NodeId{"develop"});
@@ -941,7 +952,7 @@ TEST_F(AlcedoQanGraph, EnablesRequestOnlyConnectorWithThemeColorsAndRoleConnecta
   AttachAlcedoDelegates(adapter, harness_->Graph());
   auto document = CreateDefaultPipelineDocument();
   ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.second"}).empty());
-  const auto snapshot = EditorNodeGraphProjection::Build(document, 4, 2, 1);
+  const auto snapshot = EditorNodeGraphProjection::Build(document, 4);
   ASSERT_TRUE(adapter.ApplySnapshot(snapshot).succeeded) << "initial apply";
   adapter.ApplyProductSelection(NodeId{"grade.primary"});
 
@@ -971,7 +982,7 @@ TEST_F(AlcedoQanGraph, ConnectorDropResolvesLiveIdsWithoutInsertingAPermanentEdg
   AttachAlcedoDelegates(adapter, harness_->Graph());
   auto document = CreateDefaultPipelineDocument();
   ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.second"}).empty());
-  const auto snapshot = EditorNodeGraphProjection::Build(document, 5, 2, 1);
+  const auto snapshot = EditorNodeGraphProjection::Build(document, 5);
   ASSERT_TRUE(adapter.ApplySnapshot(snapshot).succeeded) << "initial apply";
   adapter.ApplyProductSelection(NodeId{"grade.primary"});
   auto* graph = harness_->Graph();
@@ -996,7 +1007,7 @@ TEST_F(AlcedoQanGraph, ConnectorDropResolvesLiveIdsWithoutInsertingAPermanentEdg
 TEST_F(AlcedoQanGraph, ConnectorDropOnUnknownPrimitiveRejectsWithoutCreatingAnEdge) {
   ui::AlcedoQanGraph adapter;
   AttachAlcedoDelegates(adapter, harness_->Graph());
-  const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 6, 2, 1);
+  const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 6);
   ASSERT_TRUE(adapter.ApplySnapshot(snapshot).succeeded) << "initial apply";
   adapter.ApplyProductSelection(NodeId{"grade.primary"});
   auto* graph = harness_->Graph();
@@ -1021,7 +1032,7 @@ TEST_F(AlcedoQanGraph, ConnectorDropOnUnknownPrimitiveRejectsWithoutCreatingAnEd
 TEST_F(AlcedoQanGraph, DrawerFoldKeepsPortIdentityForReconnect) {
   ui::AlcedoQanGraph adapter;
   AttachAlcedoDelegates(adapter, harness_->Graph());
-  const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 7, 2, 1);
+  const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 7);
   ASSERT_TRUE(adapter.ApplySnapshot(snapshot).succeeded) << "initial apply";
   auto* output = adapter.OutputPortFor(NodeId{"grade.primary"}, kImagePort());
   auto* input  = adapter.InputPortFor(NodeId{"grade.primary"}, kImagePort());
@@ -1041,7 +1052,7 @@ TEST_F(AlcedoQanGraph, DrawerFoldKeepsPortIdentityForReconnect) {
 TEST_F(AlcedoQanGraph, IncrementalInsertAndRemovePreserveUnaffectedIdentities) {
   ui::AlcedoQanGraph adapter;
   AttachAlcedoDelegates(adapter, harness_->Graph());
-  const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 8, 2, 1);
+  const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 8);
   ASSERT_TRUE(adapter.ApplySnapshot(snapshot).succeeded);
   const auto replace_count = adapter.topology_replace_count();
   auto*      develop       = adapter.NodeFor(NodeId{"develop"});
@@ -1082,7 +1093,7 @@ TEST_F(AlcedoQanGraph, IncrementalInsertAndRemovePreserveUnaffectedIdentities) {
 TEST_F(AlcedoQanGraph, ApplySnapshotFailsWhenColorGradeDelegateUrlIsEmpty) {
   ui::AlcedoQanGraph adapter;
   adapter.set_graph(harness_->Graph());
-  const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 1, 1, 1);
+  const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 1);
   const auto result   = adapter.ApplySnapshot(snapshot);
 
   EXPECT_FALSE(result.succeeded);
@@ -1094,7 +1105,7 @@ TEST_F(AlcedoQanGraph, ApplySnapshotFailsWhenColorGradeDelegateUrlIsEmpty) {
 TEST_F(AlcedoQanGraph, KeyboardConnectPinsTheSourceWhileSelectionMoves) {
   ui::AlcedoQanGraph adapter;
   AttachAlcedoDelegates(adapter, harness_->Graph());
-  const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 7, 2, 1);
+  const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 7);
   ASSERT_TRUE(adapter.ApplySnapshot(snapshot).succeeded);
   adapter.ApplyProductSelection(NodeId{"grade.primary"});
   auto* graph = harness_->Graph();
