@@ -1004,6 +1004,10 @@ auto AppTheme::graphMaskDrawerHeaderHeight() const -> int { return 28; }
 
 auto AppTheme::graphMaskRowHeight() const -> int { return 28; }
 
+auto AppTheme::maskGroupPreviewSize() const -> int { return 40; }
+
+auto AppTheme::maskGroupMaskPreviewSize() const -> int { return 32; }
+
 auto AppTheme::graphPortSize() const -> int { return 8; }
 
 auto AppTheme::graphPortHitSize() const -> int { return 16; }

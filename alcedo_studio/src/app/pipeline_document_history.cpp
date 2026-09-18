@@ -200,16 +200,16 @@ auto CaptureAddColorGradeChange(const PipelineDocument& document, const NodeId& 
 }
 
 auto CaptureAddColorGradeAtTopChange(const PipelineDocument& document, const NodeId& new_id,
-                                     const NodeId& expected_successor_id) -> AddColorGradeChange {
+                                     const NodeId& expected_predecessor_id) -> AddColorGradeChange {
   const auto backbone = document.Graph().ImageBackboneNodeIds();
   if (backbone.size() < 2) {
     Fail("AddColorGrade at top requires a Develop to DRT image backbone");
   }
-  const NodeId& anchor = backbone[1];
-  if (anchor != expected_successor_id) {
+  const NodeId& predecessor = backbone[backbone.size() - 2];
+  if (predecessor != expected_predecessor_id) {
     Fail("The Mask Groups insertion point changed since the request was issued");
   }
-  return CaptureAddColorGradeChange(document, anchor, new_id);
+  return CaptureAddColorGradeChange(document, backbone.back(), new_id);
 }
 
 auto MakeAddColorGradeBatch(AddColorGradeChange change) -> PipelineEditBatch {

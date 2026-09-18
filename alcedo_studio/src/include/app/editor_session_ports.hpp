@@ -124,13 +124,14 @@ class IEditorHistoryPort {
     if (error) *error = "Color Grade deletion protection is not supported by this history port";
     return false;
   }
-  /// Insert one clean Color Grade at the top of the live scene-image backbone
-  /// as one typed history commit. The node that currently follows Develop must
-  /// equal @p expected_successor_id; a mismatch rejects the stale request
-  /// without document, counter, or history changes. Default rejects.
+  /// Insert one clean Color Grade at the top of the Mask Groups stack,
+  /// directly before DRT/Post, as one typed history commit. The current
+  /// predecessor of DRT/Post must equal @p expected_predecessor_id; a mismatch
+  /// rejects the stale request without document, counter, or history changes.
+  /// Default rejects.
   virtual auto InsertColorGradeAtTop(const EditorHistoryGuardHandle& /*guard*/,
                                      const NodeId& /*new_id*/,
-                                     const NodeId& /*expected_successor_id*/, std::string* error)
+                                     const NodeId& /*expected_predecessor_id*/, std::string* error)
       -> bool {
     if (error != nullptr) {
       *error = "Color Grade top insertion is not supported by this history port";

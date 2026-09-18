@@ -89,6 +89,7 @@ struct EditorMaskGroupMaskRow {
   MaskSourceKind source_kind = MaskSourceKind::Radial;
   std::string    display_name;
   bool           enabled                                                 = true;
+  bool           deletion_protected                                      = false;
   float          opacity                                                 = 1.0F;
 
   auto           operator==(const EditorMaskGroupMaskRow&) const -> bool = default;
@@ -106,6 +107,7 @@ struct EditorMaskGroupRow {
   NodeId                              node_id;
   std::string                         display_name;
   bool                                enabled = true;
+  bool                                deletion_protected = false;
   std::vector<EditorMaskGroupMaskRow> masks;
 
   auto                                operator==(const EditorMaskGroupRow&) const -> bool = default;
@@ -114,9 +116,10 @@ struct EditorMaskGroupRow {
 /**
  * @brief Complete Mask Groups value snapshot published across the editor boundary.
  *
- * Group order is the real scene-image execution order (Develop to DRT/Post);
- * it is never derived from creation time, display name, or canvas position.
- * Develop and DRT/Post are endpoints and never produce group rows.
+ * Group order is the reverse of scene-image execution: the downstream Color
+ * Grade nearest DRT/Post is first and the upstream Color Grade nearest Develop
+ * is last. It is never derived from creation time, display name, or canvas
+ * position. Develop and DRT/Post are endpoints and never produce group rows.
  */
 struct EditorMaskGroupSnapshot {
   std::uint64_t                   session_generation  = 0;
@@ -172,9 +175,10 @@ class EditorNodeGraphProjection {
    * @brief Build the immutable Mask Groups projection for one document state.
    *
    * Walks the same validated Develop-to-DRT image backbone as @ref Build and
-   * emits one row per backbone Color Grade, in execution order. Rows carry the
-   * NodeId, the exact node display name, the grade enabled flag, and ordered
-   * Mask sub-rows. Detached or non-backbone nodes never appear.
+   * emits one row per backbone Color Grade in downstream-to-upstream display
+   * order. Rows carry the NodeId, the exact node display name, the grade
+   * enabled flag, and ordered Mask sub-rows. Detached or non-backbone nodes
+   * never appear.
    *
    * @throws std::invalid_argument when the document has no valid image backbone
    *         or a backbone Color Grade model cannot be read.

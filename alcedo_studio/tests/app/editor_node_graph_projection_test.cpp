@@ -128,7 +128,7 @@ TEST(EditorNodeGraphProjection, InvalidBackboneIsRejected) {
                std::invalid_argument);
 }
 
-TEST(EditorNodeGraphProjection, MaskGroupsFollowBackboneExecutionOrder) {
+TEST(EditorNodeGraphProjection, MaskGroupsFollowBackboneDownstreamToUpstream) {
   auto document = CreateDefaultPipelineDocument();
   ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.last"}).empty());
   ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"grade.primary"}, NodeId{"grade.first"}).empty());
@@ -138,9 +138,9 @@ TEST(EditorNodeGraphProjection, MaskGroupsFollowBackboneExecutionOrder) {
   EXPECT_EQ(snapshot.projection_revision, 4u);
   EXPECT_EQ(snapshot.topology_revision, 7u);
   ASSERT_EQ(snapshot.groups.size(), 3u);
-  EXPECT_EQ(snapshot.groups[0].node_id, NodeId{"grade.first"});
+  EXPECT_EQ(snapshot.groups[0].node_id, NodeId{"grade.last"});
   EXPECT_EQ(snapshot.groups[1].node_id, NodeId{"grade.primary"});
-  EXPECT_EQ(snapshot.groups[2].node_id, NodeId{"grade.last"});
+  EXPECT_EQ(snapshot.groups[2].node_id, NodeId{"grade.first"});
 }
 
 TEST(EditorNodeGraphProjection, MaskGroupsIncludeGradesWithoutMasks) {
@@ -150,10 +150,10 @@ TEST(EditorNodeGraphProjection, MaskGroupsIncludeGradesWithoutMasks) {
 
   const auto snapshot = EditorNodeGraphProjection::BuildMaskGroups(document, 1, 1, 1);
   ASSERT_EQ(snapshot.groups.size(), 2u);
-  EXPECT_EQ(snapshot.groups[0].node_id, NodeId{"grade.primary"});
-  ASSERT_EQ(snapshot.groups[0].masks.size(), 1u);
-  EXPECT_EQ(snapshot.groups[1].node_id, NodeId{"grade.empty"});
-  EXPECT_TRUE(snapshot.groups[1].masks.empty());
+  EXPECT_EQ(snapshot.groups[0].node_id, NodeId{"grade.empty"});
+  EXPECT_TRUE(snapshot.groups[0].masks.empty());
+  EXPECT_EQ(snapshot.groups[1].node_id, NodeId{"grade.primary"});
+  ASSERT_EQ(snapshot.groups[1].masks.size(), 1u);
 }
 
 TEST(EditorNodeGraphProjection, MaskGroupsCarryExactNodeIdentityAndNames) {
@@ -165,14 +165,14 @@ TEST(EditorNodeGraphProjection, MaskGroupsCarryExactNodeIdentityAndNames) {
 
   const auto snapshot = EditorNodeGraphProjection::BuildMaskGroups(document, 2, 2, 2);
   ASSERT_EQ(snapshot.groups.size(), 3u);
-  // Order follows the backbone, not names: the newest grade sits on top and the
-  // two grades sharing the display name keep their distinct NodeIds.
-  EXPECT_EQ(snapshot.groups[0].node_id, NodeId{"grade.top"});
-  EXPECT_EQ(snapshot.groups[0].display_name, "Color Grade 3");
+  // Order reverses the backbone, not names: the downstream grade sits on top
+  // and the two grades sharing the display name keep their distinct NodeIds.
+  EXPECT_EQ(snapshot.groups[0].node_id, NodeId{"grade.b"});
+  EXPECT_EQ(snapshot.groups[0].display_name, "Sky");
   EXPECT_EQ(snapshot.groups[1].node_id, NodeId{"grade.primary"});
   EXPECT_EQ(snapshot.groups[1].display_name, "Sky");
-  EXPECT_EQ(snapshot.groups[2].node_id, NodeId{"grade.b"});
-  EXPECT_EQ(snapshot.groups[2].display_name, "Sky");
+  EXPECT_EQ(snapshot.groups[2].node_id, NodeId{"grade.top"});
+  EXPECT_EQ(snapshot.groups[2].display_name, "Color Grade 3");
 }
 
 TEST(EditorNodeGraphProjection, MaskGroupRowsKeyMasksByNodeAndMaskId) {
@@ -194,22 +194,22 @@ TEST(EditorNodeGraphProjection, MaskGroupRowsKeyMasksByNodeAndMaskId) {
 
   const auto snapshot = EditorNodeGraphProjection::BuildMaskGroups(document, 5, 6, 7);
   ASSERT_EQ(snapshot.groups.size(), 2u);
-  ASSERT_EQ(snapshot.groups[0].masks.size(), 2u);
-  const auto& first = snapshot.groups[0].masks[0];
+  ASSERT_EQ(snapshot.groups[0].masks.size(), 1u);
+  EXPECT_EQ(snapshot.groups[0].masks[0].node_id, NodeId{"grade.two"});
+  EXPECT_EQ(snapshot.groups[0].masks[0].mask_id, MaskId{"mask.other"});
+  ASSERT_EQ(snapshot.groups[1].masks.size(), 2u);
+  const auto& first = snapshot.groups[1].masks[0];
   EXPECT_EQ(first.node_id, NodeId{"grade.primary"});
   EXPECT_EQ(first.mask_id, MaskId{"mask.radial"});
   EXPECT_EQ(first.source_kind, MaskSourceKind::Radial);
   EXPECT_EQ(first.display_name, "Vignette");
   EXPECT_FALSE(first.enabled);
   EXPECT_FLOAT_EQ(first.opacity, 0.45F);
-  const auto& second_row = snapshot.groups[0].masks[1];
+  const auto& second_row = snapshot.groups[1].masks[1];
   EXPECT_EQ(second_row.mask_id, MaskId{"mask.linear"});
   EXPECT_EQ(second_row.source_kind, MaskSourceKind::LinearGradient);
   EXPECT_TRUE(second_row.enabled);
   EXPECT_FLOAT_EQ(second_row.opacity, 1.0F);
-  ASSERT_EQ(snapshot.groups[1].masks.size(), 1u);
-  EXPECT_EQ(snapshot.groups[1].masks[0].node_id, NodeId{"grade.two"});
-  EXPECT_EQ(snapshot.groups[1].masks[0].mask_id, MaskId{"mask.other"});
 }
 
 TEST(EditorNodeGraphProjection, MaskGroupsReportGradeEnabledState) {

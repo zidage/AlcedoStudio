@@ -1977,6 +1977,51 @@ TEST_F(WorkspaceShellTests, NodesPageKeepsViewerAtLeast360LogicalPixelsAt960x640
   EXPECT_EQ(session->editor_tool_panel_page(), QStringLiteral("nodes"));
 }
 
+TEST_F(WorkspaceShellTests, MaskGroupsPageRoutesFromRailAndKeepsViewerAtLeast360) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  auto loaded = LoadMainWindow();
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+
+  loaded->host.workspace_router()->OpenEditor(0, 0);
+  ProcessEvents(80);
+  loaded->window->resize(960, 640);
+  ProcessEvents(40);
+
+  auto* session = loaded->host.editor_session();
+  ASSERT_NE(session, nullptr);
+  auto* rail_button =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupsRailButton"));
+  ASSERT_NE(rail_button, nullptr);
+  QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier,
+                    CenterOfItem(rail_button));
+  ProcessEvents(60);
+  EXPECT_EQ(session->editor_tool_panel_page(), QStringLiteral("maskgroups"));
+
+  auto* workspace  = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorWorkspace"));
+  auto* center_col =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorCenterColumn"));
+  auto* groups_body =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupsPageBody"));
+  ASSERT_NE(workspace, nullptr);
+  ASSERT_NE(center_col, nullptr);
+  ASSERT_NE(groups_body, nullptr);
+  EXPECT_TRUE(groups_body->isVisible());
+  EXPECT_EQ(workspace->property("minimumViewportWidth").toInt(), 360);
+  EXPECT_GE(center_col->width(), 360.0 - 1.0);
+  // The Nodes body stays unloaded while the shared controller feeds Mask Groups.
+  EXPECT_EQ(loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNodesPageBody")),
+            nullptr);
+
+  // Selecting the active rail action again folds the panel and unloads the body.
+  QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier,
+                    CenterOfItem(rail_button));
+  ProcessEvents(60);
+  EXPECT_TRUE(session->editor_tool_panel_page().isEmpty());
+  EXPECT_EQ(loaded->window->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupsPageBody")),
+            nullptr);
+}
+
 TEST_F(WorkspaceShellTests, AdjustmentPanelsSwitchAndSurviveWorkspaceRoundTrip) {
   ASSERT_TRUE(QCoreApplication::instance());
   ScopedIniSettings settings_scope(temp_dir_ / "qml_settings_adj", QStringLiteral("AlcedoTestOrg"),

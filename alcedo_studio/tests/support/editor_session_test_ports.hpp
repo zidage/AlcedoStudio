@@ -98,7 +98,7 @@ class FakeEditorHistoryPort : public IEditorHistoryPort {
   int                            insert_grade_top_count = 0;
   int                            remove_grade_count     = 0;
   NodeId                         last_insert_new_id;
-  NodeId                         last_expected_successor;
+  NodeId                         last_expected_predecessor;
   NodeGraphTopologyChange        last_topology_change{};
   NodeId                         last_node_id;
   std::string                    last_grade_name;
@@ -179,11 +179,11 @@ class FakeEditorHistoryPort : public IEditorHistoryPort {
   }
 
   auto InsertColorGradeAtTop(const EditorHistoryGuardHandle&, const NodeId& new_id,
-                             const NodeId& expected_successor_id, std::string* error)
+                             const NodeId& expected_predecessor_id, std::string* error)
       -> bool override {
     ++insert_grade_top_count;
-    last_insert_new_id      = new_id;
-    last_expected_successor = expected_successor_id;
+    last_insert_new_id        = new_id;
+    last_expected_predecessor = expected_predecessor_id;
     last_render_reason      = EditorRenderReason::GraphTopologyChanged;
     if (fail_node_command) {
       if (error != nullptr) *error = "mini-Git journal append failed";

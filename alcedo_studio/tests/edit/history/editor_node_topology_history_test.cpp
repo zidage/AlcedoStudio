@@ -593,7 +593,7 @@ TEST(NodeGraphTopologyHistory, MaskGroupTopInsertAndBridgeRemoveCommitOnceAndRep
   const auto prior_head         = guard->working_head_commit_hash();
   const auto prior_commit_count = guard->commit_graph_->CommitCount();
 
-  // Stale-successor rejection: the node after Develop is grade.primary, not drt.
+  // Stale-predecessor rejection: the node before DRT is grade.primary, not DRT.
   EXPECT_FALSE(history.InsertColorGradeAtTop(handle, NodeId{"grade.stale"}, NodeId{"drt"}, &error));
   EXPECT_EQ(error, "The Mask Groups insertion point changed since the request was issued");
   EXPECT_EQ(CanonicalPipelineDocumentJson(*guard->document_), prior_hash);
@@ -602,13 +602,13 @@ TEST(NodeGraphTopologyHistory, MaskGroupTopInsertAndBridgeRemoveCommitOnceAndRep
   EXPECT_EQ(guard->document_->NextColorGradeNameNumber(), 2u);
   EXPECT_EQ(guard->document_->Graph().FindNode(NodeId{"grade.stale"}), nullptr);
 
-  // One typed commit inserts the clean grade between Develop and grade.primary.
+  // One typed commit inserts the clean grade between grade.primary and DRT.
   error.clear();
   ASSERT_TRUE(
       history.InsertColorGradeAtTop(handle, NodeId{"grade.top"}, NodeId{"grade.primary"}, &error))
       << error;
-  const std::vector<NodeId> inserted_backbone = {NodeId{"develop"}, NodeId{"grade.top"},
-                                                 NodeId{"grade.primary"}, NodeId{"drt"}};
+  const std::vector<NodeId> inserted_backbone = {NodeId{"develop"}, NodeId{"grade.primary"},
+                                                 NodeId{"grade.top"}, NodeId{"drt"}};
   EXPECT_EQ(guard->document_->Graph().ImageBackboneNodeIds(), inserted_backbone);
   EXPECT_EQ(guard->document_->Graph().FindNode(NodeId{"grade.top"})->DisplayName(),
             "Color Grade 2");

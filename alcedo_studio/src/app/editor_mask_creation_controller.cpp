@@ -526,25 +526,31 @@ auto EditorMaskCreationController::BeginMaskFieldEdit(std::string field_key)
 
 auto EditorMaskCreationController::ApplyLiveMaskField(const std::string&    field_key,
                                                       const nlohmann::json& value) -> bool {
-  auto* grade = Grade();
+  return ApplyLiveMaskField(Grade(), mask_id_, field_key, value);
+}
+
+auto EditorMaskCreationController::ApplyLiveMaskField(ColorGradeNodeModel*  grade,
+                                                      const MaskId&         mask_id,
+                                                      const std::string&    field_key,
+                                                      const nlohmann::json& value) -> bool {
   if (grade == nullptr) {
     return false;
   }
-  auto* mask = grade->FindMask(mask_id_);
+  auto* mask = grade->FindMask(mask_id);
   if (mask == nullptr) {
     return false;
   }
   try {
     if (field_key == kMaskFieldEnabled) {
-      grade->SetMaskEnabled(mask_id_, value.get<bool>());
+      grade->SetMaskEnabled(mask_id, value.get<bool>());
     } else if (field_key == kMaskFieldInvert) {
-      grade->SetMaskInvert(mask_id_, value.get<bool>());
+      grade->SetMaskInvert(mask_id, value.get<bool>());
     } else if (field_key == kMaskFieldOpacity) {
-      grade->SetMaskOpacity(mask_id_, value.get<float>());
+      grade->SetMaskOpacity(mask_id, value.get<float>());
     } else if (field_key == kMaskFieldDisplayName) {
       mask->display_name = value.get<std::string>();
     } else if (field_key == kMaskFieldDeletionProtected) {
-      grade->SetMaskDeletionProtected(mask_id_, value.get<bool>());
+      grade->SetMaskDeletionProtected(mask_id, value.get<bool>());
     } else {
       return false;
     }
@@ -557,8 +563,17 @@ auto EditorMaskCreationController::ApplyLiveMaskField(const std::string&    fiel
 auto EditorMaskCreationController::ApplyMaskFieldValue(std::string    field_key,
                                                        nlohmann::json after_value)
     -> EditorMaskCreationResult {
+  return ApplyMaskFieldValue(node_id_, mask_id_, std::move(field_key), std::move(after_value));
+}
+
+auto EditorMaskCreationController::ApplyMaskFieldValue(const NodeId&  grade_id,
+                                                       const MaskId&  mask_id,
+                                                       std::string    field_key,
+                                                       nlohmann::json after_value)
+    -> EditorMaskCreationResult {
   if (open_) {
-    if (field_edit_key_.empty() || field_edit_key_ != field_key) {
+    if (field_edit_key_.empty() || field_edit_key_ != field_key || grade_id != node_id_ ||
+        mask_id != mask_id_) {
       return Reject("Mask value does not match the open Mask edit");
     }
     if (!MaskFieldValueIsValid(field_key, after_value)) {
@@ -577,8 +592,12 @@ auto EditorMaskCreationController::ApplyMaskFieldValue(std::string    field_key,
   if (state_ == EditorMaskCreationState::Settling) {
     return Reject("Mask tool is unavailable until settle is acknowledged");
   }
-  if (state_ != EditorMaskCreationState::Selected || mask_id_.Empty()) {
-    return Reject("Mask value edits require a selected existing Mask");
+  if (grade_id.Empty() || mask_id.Empty()) {
+    return Reject("Mask value edits require a Mask identity");
+  }
+  if (state_ != EditorMaskCreationState::Selected &&
+      state_ != EditorMaskCreationState::Inactive) {
+    return Reject("Mask value edits require a settled Mask tool state");
   }
   if (!MaskFieldEditKeyIsValid(field_key, kind_)) {
     return Reject("Mask value key is not editable: " + field_key);
@@ -586,37 +605,42 @@ auto EditorMaskCreationController::ApplyMaskFieldValue(std::string    field_key,
   if (!MaskFieldValueIsValid(field_key, after_value)) {
     return Reject("Mask value is invalid for '" + field_key + "'");
   }
-  auto* grade = Grade();
-  if (grade == nullptr) {
-    return Reject("selection target is not a Color Grade");
+  if (document_ == nullptr) {
+    return Reject("Mask creation controller is not bound to a document");
   }
-  const auto* mask = grade->FindMask(mask_id_);
+  auto* grade = dynamic_cast<ColorGradeNodeModel*>(document_->Graph().FindNode(grade_id));
+  if (grade == nullptr) {
+    return Reject("Mask value target is not a Color Grade");
+  }
+  const auto* mask = grade->FindMask(mask_id);
   if (mask == nullptr) {
     return Reject("Mask is missing");
   }
   const auto before = MaskFieldValueJson(*mask, field_key);
   if (before == after_value) {
     auto result    = Ok();
-    result.mask_id = mask_id_;
+    result.mask_id = mask_id;
     return result;
   }
-  if (!ApplyLiveMaskField(field_key, after_value)) {
+  if (!ApplyLiveMaskField(grade, mask_id, field_key, after_value)) {
     return Reject("Mask value apply was rejected");
   }
-  const auto  batch = MakeSetMaskFieldBatch(node_id_, mask_id_, field_key, before, after_value);
+  const auto  batch = MakeSetMaskFieldBatch(grade_id, mask_id, field_key, before, after_value);
   std::string settle_error;
   if (!PublishSettledBatch(batch, &settle_error)) {
-    (void)ApplyLiveMaskField(field_key, before);
+    (void)ApplyLiveMaskField(grade, mask_id, field_key, before);
     state_ = EditorMaskCreationState::Failed;
     return Reject(settle_error.empty() ? std::string{"Mask value history publish failed"}
                                        : settle_error);
   }
-  if (const auto* updated = grade->FindMask(mask_id_)) {
-    before_source_ = MaskModelToJson(*updated).at("source");
-    draft_source_  = updated->source;
+  if (grade_id == node_id_ && mask_id == mask_id_) {
+    if (const auto* updated = grade->FindMask(mask_id_)) {
+      before_source_ = MaskModelToJson(*updated).at("source");
+      draft_source_  = updated->source;
+    }
   }
   auto result              = Ok();
-  result.mask_id           = mask_id_;
+  result.mask_id           = mask_id;
   result.committed         = true;
   result.quality_requested = MaskFieldAffectsPixels(field_key);
   return result;

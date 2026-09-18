@@ -63,11 +63,11 @@ class EditorHistoryMutation {
                                       const alcedo::NodeId& node_id, bool deletion_protected,
                                       std::string* error, bool* changed = nullptr) -> bool;
   /// Mask Groups: capture and commit one clean Color Grade inserted at the top
-  /// of the live backbone (the node after Develop must equal
-  /// @p expected_successor_id). Runs under the live render lock.
+  /// of the Mask Groups stack (the node before DRT/Post must equal
+  /// @p expected_predecessor_id). Runs under the live render lock.
   auto InsertColorGradeAtTop(const alcedo::EditorHistoryGuardHandle& guard,
                              const alcedo::NodeId& new_id,
-                             const alcedo::NodeId& expected_successor_id, std::string* error)
+                             const alcedo::NodeId& expected_predecessor_id, std::string* error)
       -> bool;
   /// Mask Groups: capture and commit one bridge-removal of a backbone Color
   /// Grade. Runs under the live render lock.

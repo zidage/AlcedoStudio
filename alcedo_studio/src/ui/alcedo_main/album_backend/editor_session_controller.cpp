@@ -818,7 +818,7 @@ auto EditorSessionController::SubmitNodeGraphTopologyEdit(
 }
 
 auto EditorSessionController::SubmitInsertColorGradeAtTop(
-    const alcedo::NodeId& new_id, const alcedo::NodeId& expected_successor_id)
+    const alcedo::NodeId& new_id, const alcedo::NodeId& expected_predecessor_id)
     -> alcedo::EditorSessionResult {
   if (!session_backend_) {
     alcedo::EditorSessionResult result;
@@ -827,7 +827,7 @@ auto EditorSessionController::SubmitInsertColorGradeAtTop(
     result.message = "Editor session backend is unavailable";
     return result;
   }
-  return session_backend_->InsertColorGradeAtTop(new_id, expected_successor_id);
+  return session_backend_->InsertColorGradeAtTop(new_id, expected_predecessor_id);
 }
 
 auto EditorSessionController::SubmitRemoveColorGradeAndBridge(const alcedo::NodeId& node_id)
@@ -1665,6 +1665,10 @@ auto EditorSessionController::NormalizeToolPanelPage(const QString& page) -> QSt
   }
   if (key == QLatin1String("nodes")) {
     return QStringLiteral("nodes");
+  }
+  if (key == QLatin1String("maskgroups") || key == QLatin1String("groups") ||
+      key == QLatin1String("mask_groups") || key == QLatin1String("mask-groups")) {
+    return QStringLiteral("maskgroups");
   }
   return {};
 }

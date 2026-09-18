@@ -115,10 +115,10 @@ auto EditorSessionHistoryPort::SetColorGradeDeletionProtected(
 
 auto EditorSessionHistoryPort::InsertColorGradeAtTop(const alcedo::EditorHistoryGuardHandle& guard,
                                                      const alcedo::NodeId&                   new_id,
-                                                     const alcedo::NodeId& expected_successor_id,
+                                                     const alcedo::NodeId& expected_predecessor_id,
                                                      std::string*          error) -> bool {
   std::scoped_lock lock(mutex_);
-  return mutation_->InsertColorGradeAtTop(guard, new_id, expected_successor_id, error);
+  return mutation_->InsertColorGradeAtTop(guard, new_id, expected_predecessor_id, error);
 }
 
 auto EditorSessionHistoryPort::RemoveColorGradeAndBridge(

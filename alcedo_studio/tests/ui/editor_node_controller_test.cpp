@@ -13,19 +13,19 @@
 #include <vector>
 
 #include "app/editor_action_policy.hpp"
+#include "app/editor_adjustment_context.hpp"
 #include "app/editor_node_graph_projection.hpp"
-#include "app/editor_pending_input.hpp"
 #include "app/editor_parameter_write.hpp"
+#include "app/editor_pending_input.hpp"
+#include "app/editor_render_intent.hpp"
 #include "app/editor_session_request_ids.hpp"
 #include "app/editor_session_service.hpp"
 #include "app/pipeline_document_history.hpp"
 #include "edit/frame_presentation_types.hpp"
-#include "app/editor_adjustment_context.hpp"
-#include "app/editor_render_intent.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
-#include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
+#include "edit/operators/models/builtin_type_ids.hpp"
 #include "grade_owned_mask_support.hpp"
 #include "type/type.hpp"
 #include "ui/alcedo_main/album_backend/alcedo_qan_graph.hpp"
@@ -38,15 +38,15 @@ namespace {
 using alcedo::AddCleanColorGrade;
 using alcedo::CreateDefaultPipelineDocument;
 using alcedo::EditorNodeGraphProjection;
+using alcedo::EditorParameterOwnerKind;
 using alcedo::EditorPendingInputBoundaryKind;
 using alcedo::EditorPendingInputView;
-using alcedo::EditorParameterOwnerKind;
 using alcedo::EditorScalarWrite;
-using alcedo::ImageGeometryUpdate;
 using alcedo::EditorSessionIdentity;
 using alcedo::EditorSessionResult;
 using alcedo::EditorSessionState;
 using alcedo::IEditorSessionBackend;
+using alcedo::ImageGeometryUpdate;
 using alcedo::NodeId;
 using alcedo::PipelineDocument;
 using alcedo::ui::EditorNodeController;
@@ -72,8 +72,7 @@ class DocumentSessionBackend final : public IEditorSessionBackend {
   [[nodiscard]] auto active() const -> bool override { return true; }
   [[nodiscard]] auto has_image() const -> bool override { return has_image_; }
   [[nodiscard]] auto last_error() const -> std::string override { return {}; }
-  [[nodiscard]] auto pipeline_document() const
-      -> std::shared_ptr<const PipelineDocument> override {
+  [[nodiscard]] auto pipeline_document() const -> std::shared_ptr<const PipelineDocument> override {
     return {&document_, [](const PipelineDocument*) {}};
   }
   [[nodiscard]] auto history_revision() const -> std::uint64_t override {
@@ -130,8 +129,8 @@ class DocumentSessionBackend final : public IEditorSessionBackend {
   auto RequestViewChange(alcedo::EditorRenderReason, std::optional<alcedo::ViewportRenderRegion>)
       -> EditorSessionResult override {
     ++view_change_count_;
-    auto result  = Accepted("View change recorded");
-    result.kind  = alcedo::EditorSessionResultKind::RenderRouted;
+    auto result = Accepted("View change recorded");
+    result.kind = alcedo::EditorSessionResultKind::RenderRouted;
     return result;
   }
   auto Open(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult override {
@@ -175,18 +174,18 @@ class DocumentSessionBackend final : public IEditorSessionBackend {
     result.kind = alcedo::EditorSessionResultKind::RenderRouted;
     return result;
   }
-  auto InsertColorGradeAtTop(const NodeId& new_id, const NodeId& expected_successor_id)
+  auto InsertColorGradeAtTop(const NodeId& new_id, const NodeId& expected_predecessor_id)
       -> EditorSessionResult override {
     ++insert_grade_top_count_;
-    last_insert_new_id_      = new_id;
-    last_expected_successor_ = expected_successor_id;
+    last_insert_new_id_        = new_id;
+    last_expected_predecessor_ = expected_predecessor_id;
     if (fail_commands_) return Rejected("mini-Git journal append failed");
     const auto backbone = document_.Graph().ImageBackboneNodeIds();
     if (backbone.size() < 2) return Rejected("The live graph has no valid image backbone");
-    if (backbone[1] != expected_successor_id) {
+    if (backbone[backbone.size() - 2] != expected_predecessor_id) {
       return Rejected("The Mask Groups insertion point changed since the request was issued");
     }
-    const auto errors = alcedo::AddCleanColorGrade(document_, backbone[1], new_id);
+    const auto errors = alcedo::AddCleanColorGrade(document_, backbone.back(), new_id);
     if (!errors.empty()) return Rejected(errors.front().message);
     PublishHistoryChange();
     auto result = Accepted("Mask Group inserted");
@@ -233,8 +232,13 @@ class DocumentSessionBackend final : public IEditorSessionBackend {
   [[nodiscard]] auto insert_grade_top_count() const -> int { return insert_grade_top_count_; }
   [[nodiscard]] auto remove_grade_count() const -> int { return remove_grade_count_; }
   [[nodiscard]] auto last_insert_new_id() const -> NodeId { return last_insert_new_id_; }
-  [[nodiscard]] auto last_expected_successor() const -> NodeId { return last_expected_successor_; }
+  [[nodiscard]] auto last_expected_predecessor() const -> NodeId {
+    return last_expected_predecessor_;
+  }
   [[nodiscard]] auto last_removed_node_id() const -> NodeId { return last_removed_node_id_; }
+  [[nodiscard]] auto last_topology_change() const -> const alcedo::NodeGraphTopologyChange& {
+    return last_topology_change_;
+  }
   [[nodiscard]] auto active_version_read_count() const -> int { return active_version_read_count_; }
   [[nodiscard]] auto history_snapshot_read_count() const -> int {
     return history_snapshot_read_count_;
@@ -268,15 +272,15 @@ class DocumentSessionBackend final : public IEditorSessionBackend {
   alcedo::ImageLoadRequestId                        request_{};
   alcedo::EditorActionAvailability                  availability_{};
   IEditorSessionBackend::ActionAvailabilityObserver availability_observer_;
-  EditorSessionState                                state_                       = EditorSessionState::Interactive;
-  bool                                              has_image_                   = true;
-  bool                                              fail_commands_               = false;
-  int                                               rename_count_                = 0;
-  int                                               edit_node_graph_count_       = 0;
-  int                                               insert_grade_top_count_      = 0;
-  int                                               remove_grade_count_          = 0;
+  EditorSessionState                                state_     = EditorSessionState::Interactive;
+  bool                                              has_image_ = true;
+  bool                                              fail_commands_          = false;
+  int                                               rename_count_           = 0;
+  int                                               edit_node_graph_count_  = 0;
+  int                                               insert_grade_top_count_ = 0;
+  int                                               remove_grade_count_     = 0;
   NodeId                                            last_insert_new_id_;
-  NodeId                                            last_expected_successor_;
+  NodeId                                            last_expected_predecessor_;
   NodeId                                            last_removed_node_id_;
   std::uint64_t                                     history_revision_            = 0;
   mutable int                                       active_version_read_count_   = 0;
@@ -286,9 +290,9 @@ class DocumentSessionBackend final : public IEditorSessionBackend {
   int                                               boundary_count_              = 0;
   int                                               view_change_count_           = 0;
   NodeId                                            last_projection_node_;
-  EditorPendingInputBoundaryKind                    last_boundary_ = EditorPendingInputBoundaryKind::None;
-  alcedo::EditorPendingInputQueue                   pending_input_;
-  alcedo::NodeGraphTopologyChange                   last_topology_change_{};
+  EditorPendingInputBoundaryKind  last_boundary_ = EditorPendingInputBoundaryKind::None;
+  alcedo::EditorPendingInputQueue pending_input_;
+  alcedo::NodeGraphTopologyChange last_topology_change_{};
 };
 
 TEST(EditorNodeController, LayoutStoreBindingDoesNotPublishASnapshot) {
@@ -806,7 +810,7 @@ TEST(EditorNodeController, LoadingSessionClearsThePriorGraphAndInteractiveRepubl
 TEST(EditorNodeController, KnownDraftIssuesArePresentedAndUnknownFailuresKeepExactText) {
   class SelfConnectTranslator final : public QTranslator {
    public:
-    bool isEmpty() const override { return false; }
+    bool    isEmpty() const override { return false; }
 
     QString translate(const char* context, const char* source, const char*, int) const override {
       if (QLatin1String(context) != QLatin1String("EditorNodeGraphPresentation")) {
@@ -861,7 +865,7 @@ TEST(EditorSessionToolPanelPage, AcceptsOnlyEmptyHistoryVersionsAndNodes) {
 }
 
 TEST(EditorNodeController, SubmitWriteStampsSelectedColorGradeInstance) {
-  DocumentSessionBackend  backend;
+  DocumentSessionBackend backend;
   ASSERT_TRUE(AddCleanColorGrade(backend.Document(), NodeId{"drt"}, NodeId{"grade.b"}).empty());
   EditorSessionController session(&backend);
   EditorNodeController    nodes;
@@ -875,8 +879,8 @@ TEST(EditorNodeController, SubmitWriteStampsSelectedColorGradeInstance) {
   EXPECT_EQ(pending.sequences.front().captured_target.owner_kind,
             EditorParameterOwnerKind::ColorGrade);
   EXPECT_EQ(pending.sequences.front().captured_target.node_id, NodeId{"grade.b"});
-  const auto* extra =
-      dynamic_cast<alcedo::ColorGradeNodeModel*>(backend.Document().Graph().FindNode(NodeId{"grade.b"}));
+  const auto* extra = dynamic_cast<alcedo::ColorGradeNodeModel*>(
+      backend.Document().Graph().FindNode(NodeId{"grade.b"}));
   ASSERT_NE(extra, nullptr);
   const auto* instance = extra->FindAdjustmentIdByType(alcedo::type_ids::Exposure());
   ASSERT_NE(instance, nullptr);
@@ -886,7 +890,7 @@ TEST(EditorNodeController, SubmitWriteStampsSelectedColorGradeInstance) {
 }
 
 TEST(EditorNodeController, LookPanelClarityWriteQueuesDrtTargetWhileColorGradeSelected) {
-  DocumentSessionBackend backend;
+  DocumentSessionBackend  backend;
   EditorSessionController session(&backend);
   EditorNodeController    nodes;
   nodes.set_editor_session(&session);
@@ -897,7 +901,8 @@ TEST(EditorNodeController, LookPanelClarityWriteQueuesDrtTargetWhileColorGradeSe
   ASSERT_TRUE(session.submitWrite(QStringLiteral("clarity"), EditorScalarWrite{18.0f}, false));
   const auto pending = session.PeekPendingInput();
   ASSERT_EQ(pending.sequences.size(), 1u);
-  EXPECT_EQ(pending.sequences.front().captured_target.owner_kind, EditorParameterOwnerKind::DrtPost);
+  EXPECT_EQ(pending.sequences.front().captured_target.owner_kind,
+            EditorParameterOwnerKind::DrtPost);
   EXPECT_EQ(pending.sequences.front().captured_target.node_id, NodeId{"drt"});
   const auto* drt = backend.Document().Drt();
   ASSERT_NE(drt, nullptr);
@@ -921,15 +926,15 @@ TEST(EditorNodeController, GeometryWriteRejectedWhenColorGradeIsSelected) {
 }
 
 TEST(EditorNodeController, EmptySelectionDoesNotQueueBoundaryOrRender) {
-  DocumentSessionBackend  backend;
+  DocumentSessionBackend backend;
   ASSERT_TRUE(AddCleanColorGrade(backend.Document(), NodeId{"drt"}, NodeId{"grade.b"}).empty());
   EditorSessionController session(&backend);
   EditorNodeController    nodes;
   nodes.set_editor_session(&session);
-  const int views_before      = backend.view_change_count();
-  const int boundaries_before = backend.boundary_count();
-  const int enqueue_before    = backend.enqueue_count();
-  const auto revision_before  = backend.history_revision();
+  const int  views_before      = backend.view_change_count();
+  const int  boundaries_before = backend.boundary_count();
+  const int  enqueue_before    = backend.enqueue_count();
+  const auto revision_before   = backend.history_revision();
   nodes.selectNode(NodeIdToQString(NodeId{"grade.b"}));
   EXPECT_EQ(backend.boundary_count(), boundaries_before);
   EXPECT_EQ(backend.enqueue_count(), enqueue_before);
@@ -940,7 +945,7 @@ TEST(EditorNodeController, EmptySelectionDoesNotQueueBoundaryOrRender) {
 }
 
 TEST(EditorNodeController, NodeSwitchSealsOpenSequenceAndLaterWriteTargetsNewGrade) {
-  DocumentSessionBackend  backend;
+  DocumentSessionBackend backend;
   ASSERT_TRUE(AddCleanColorGrade(backend.Document(), NodeId{"drt"}, NodeId{"grade.b"}).empty());
   EditorSessionController session(&backend);
   EditorNodeController    nodes;
@@ -1050,7 +1055,7 @@ TEST(EditorNodeController, LeavingDevelopGeometryDoesNotRequestViewChange) {
   EXPECT_EQ(backend.view_change_count(), views_after_geometry);
 }
 
-TEST(EditorNodeController, MaskGroupsPublishBackboneOrderWithEmptyDrawers) {
+TEST(EditorNodeController, MaskGroupsPublishDownstreamFirstWithEmptyDrawers) {
   DocumentSessionBackend backend;
   backend.SetGeneration(40);
   ASSERT_TRUE(
@@ -1064,15 +1069,15 @@ TEST(EditorNodeController, MaskGroupsPublishBackboneOrderWithEmptyDrawers) {
   ASSERT_EQ(groups.size(), 2);
   const auto first  = groups[0].toMap();
   const auto second = groups[1].toMap();
-  EXPECT_EQ(first.value(QStringLiteral("nodeId")).toString(), QStringLiteral("grade.top"));
-  EXPECT_EQ(first.value(QStringLiteral("displayName")).toString(), QStringLiteral("Color Grade 2"));
+  EXPECT_EQ(first.value(QStringLiteral("nodeId")).toString(), QStringLiteral("grade.primary"));
+  EXPECT_EQ(first.value(QStringLiteral("displayName")).toString(), QStringLiteral("Color Grade 1"));
   EXPECT_TRUE(first.value(QStringLiteral("masks")).toList().empty());
-  EXPECT_EQ(second.value(QStringLiteral("nodeId")).toString(), QStringLiteral("grade.primary"));
+  EXPECT_EQ(second.value(QStringLiteral("nodeId")).toString(), QStringLiteral("grade.top"));
   EXPECT_EQ(second.value(QStringLiteral("displayName")).toString(),
-            QStringLiteral("Color Grade 1"));
+            QStringLiteral("Color Grade 2"));
   EXPECT_TRUE(controller.has_mask_group_snapshot());
   ASSERT_EQ(controller.mask_group_snapshot().groups.size(), 2u);
-  EXPECT_EQ(controller.mask_group_snapshot().groups[0].node_id, NodeId{"grade.top"});
+  EXPECT_EQ(controller.mask_group_snapshot().groups[0].node_id, NodeId{"grade.primary"});
 }
 
 TEST(EditorNodeController, InsertMaskGroupAtTopSubmitsOneCommandAndSelectsTheNewGroup) {
@@ -1085,12 +1090,12 @@ TEST(EditorNodeController, InsertMaskGroupAtTopSubmitsOneCommandAndSelectsTheNew
 
   ASSERT_TRUE(controller.insertMaskGroupAtTop());
   EXPECT_EQ(backend.insert_grade_top_count(), 1);
-  EXPECT_EQ(backend.last_expected_successor(), NodeId{"grade.primary"});
+  EXPECT_EQ(backend.last_expected_predecessor(), NodeId{"grade.primary"});
   const auto new_id = backend.last_insert_new_id();
   EXPECT_NE(backend.Document().Graph().FindNode(new_id), nullptr);
   EXPECT_EQ(
       backend.Document().Graph().ImageBackboneNodeIds(),
-      (std::vector<NodeId>{NodeId{"develop"}, new_id, NodeId{"grade.primary"}, NodeId{"drt"}}));
+      (std::vector<NodeId>{NodeId{"develop"}, NodeId{"grade.primary"}, new_id, NodeId{"drt"}}));
   EXPECT_EQ(controller.selected_node_id(), new_id);
   ASSERT_EQ(controller.mask_group_snapshot().groups.size(), 2u);
   EXPECT_EQ(controller.mask_group_snapshot().groups[0].node_id, new_id);
@@ -1196,6 +1201,161 @@ TEST(EditorNodeController, PanelSwitchKeepsTheIncompleteDraftAndCommittedGroups)
   EXPECT_EQ(controller.detached_draft_node_ids().size(), 1);
   EXPECT_EQ(controller.mask_groups(), committed_groups);
   EXPECT_EQ(backend.edit_node_graph_count(), 0);
+}
+
+TEST(EditorNodeController, MoveMaskGroupToIndexMovesAcrossMultiplePositionsAndKeepsSelection) {
+  DocumentSessionBackend backend;
+  backend.SetGeneration(50);
+  // Backbone: develop -> grade.primary -> grade.a -> grade.b -> drt; the Mask
+  // Groups view lists them downstream-first as [grade.b, grade.a, grade.primary].
+  ASSERT_TRUE(
+      alcedo::AddCleanColorGrade(backend.Document(), NodeId{"drt"}, NodeId{"grade.a"}).empty());
+  ASSERT_TRUE(
+      alcedo::AddCleanColorGrade(backend.Document(), NodeId{"drt"}, NodeId{"grade.b"}).empty());
+  EditorSessionController session(&backend);
+  EditorNodeController    controller;
+  controller.set_editor_session(&session);
+  controller.selectNode(QStringLiteral("grade.b"));
+
+  // Drag the top row to the bottom slot in one drop: the shortcut becomes one
+  // Nodes-page topology delta and one owner command.
+  ASSERT_TRUE(controller.moveMaskGroupToIndex(QStringLiteral("grade.b"), 2));
+  EXPECT_EQ(backend.edit_node_graph_count(), 1);
+  const auto& change = backend.last_topology_change();
+  EXPECT_TRUE(change.inserted_nodes.empty());
+  EXPECT_TRUE(change.removed_nodes.empty());
+  EXPECT_EQ(change.disconnected_edges.size(), 3u);
+  EXPECT_EQ(change.connected_edges.size(), 3u);
+  EXPECT_EQ(backend.Document().Graph().ImageBackboneNodeIds(),
+            (std::vector<NodeId>{NodeId{"develop"}, NodeId{"grade.b"}, NodeId{"grade.primary"},
+                                 NodeId{"grade.a"}, NodeId{"drt"}}));
+  EXPECT_EQ(controller.selected_node_id(), NodeId{"grade.b"});
+  ASSERT_EQ(controller.mask_group_snapshot().groups.size(), 3u);
+  EXPECT_EQ(controller.mask_group_snapshot().groups[0].node_id, NodeId{"grade.a"});
+  EXPECT_EQ(controller.mask_group_snapshot().groups[1].node_id, NodeId{"grade.primary"});
+  EXPECT_EQ(controller.mask_group_snapshot().groups[2].node_id, NodeId{"grade.b"});
+
+  // And back to the top in one drop: the neighbors bracket the move between
+  // grade.a and DRT.
+  ASSERT_TRUE(controller.moveMaskGroupToIndex(QStringLiteral("grade.b"), 0));
+  EXPECT_EQ(backend.edit_node_graph_count(), 2);
+  EXPECT_EQ(backend.Document().Graph().ImageBackboneNodeIds(),
+            (std::vector<NodeId>{NodeId{"develop"}, NodeId{"grade.primary"}, NodeId{"grade.a"},
+                                 NodeId{"grade.b"}, NodeId{"drt"}}));
+  const auto rows = controller.mask_groups();
+  ASSERT_EQ(rows.size(), 3);
+  EXPECT_EQ(rows[0].toMap().value(QStringLiteral("nodeId")).toString(), QStringLiteral("grade.b"));
+  EXPECT_EQ(controller.selected_node_id(), NodeId{"grade.b"});
+  EXPECT_TRUE(controller.last_error().isEmpty());
+}
+
+TEST(EditorNodeController, MoveMaskGroupToIndexClampsOutOfRangeIndices) {
+  DocumentSessionBackend backend;
+  backend.SetGeneration(51);
+  // Backbone: develop -> grade.top -> grade.primary -> drt.
+  ASSERT_TRUE(
+      alcedo::AddCleanColorGrade(backend.Document(), NodeId{"grade.primary"}, NodeId{"grade.top"})
+          .empty());
+  EditorSessionController session(&backend);
+  EditorNodeController    controller;
+  controller.set_editor_session(&session);
+
+  // A drop past the top clamps to index 0 (nearest DRT); a drop past the
+  // bottom clamps to the last slot (nearest Develop).
+  ASSERT_TRUE(controller.moveMaskGroupToIndex(QStringLiteral("grade.top"), -4));
+  EXPECT_EQ(backend.Document().Graph().ImageBackboneNodeIds(),
+            (std::vector<NodeId>{NodeId{"develop"}, NodeId{"grade.primary"}, NodeId{"grade.top"},
+                                 NodeId{"drt"}}));
+
+  ASSERT_TRUE(controller.moveMaskGroupToIndex(QStringLiteral("grade.top"), 99));
+  EXPECT_EQ(backend.Document().Graph().ImageBackboneNodeIds(),
+            (std::vector<NodeId>{NodeId{"develop"}, NodeId{"grade.top"}, NodeId{"grade.primary"},
+                                 NodeId{"drt"}}));
+  EXPECT_EQ(backend.edit_node_graph_count(), 2);
+}
+
+TEST(EditorNodeController, MoveMaskGroupToIndexSameSlotIsAnAcceptedNoOp) {
+  DocumentSessionBackend backend;
+  backend.SetGeneration(52);
+  // Backbone: develop -> grade.top -> grade.primary -> drt.
+  ASSERT_TRUE(
+      alcedo::AddCleanColorGrade(backend.Document(), NodeId{"grade.primary"}, NodeId{"grade.top"})
+          .empty());
+  EditorSessionController session(&backend);
+  EditorNodeController    controller;
+  controller.set_editor_session(&session);
+  const auto hash_before = backend.Document().ToJson().dump();
+
+  // Dropping back onto the current slot submits nothing: no command, no
+  // history revision, no render request.
+  EXPECT_TRUE(controller.moveMaskGroupToIndex(QStringLiteral("grade.primary"), 0));
+  EXPECT_TRUE(controller.moveMaskGroupToIndex(QStringLiteral("grade.top"), 1));
+  EXPECT_EQ(backend.edit_node_graph_count(), 0);
+  EXPECT_EQ(backend.Document().ToJson().dump(), hash_before);
+  EXPECT_TRUE(controller.last_error().isEmpty());
+
+  // A single-group backbone accepts any target — every index clamps onto the
+  // only slot and stays a no-op.
+  DocumentSessionBackend single;
+  single.SetGeneration(53);
+  EditorSessionController single_session(&single);
+  EditorNodeController    single_controller;
+  single_controller.set_editor_session(&single_session);
+  EXPECT_TRUE(single_controller.moveMaskGroupToIndex(QStringLiteral("grade.primary"), 7));
+  EXPECT_EQ(single.edit_node_graph_count(), 0);
+}
+
+TEST(EditorNodeController, MoveMaskGroupToIndexRejectsEndpointsUnknownDraftStaleAndFailure) {
+  DocumentSessionBackend backend;
+  backend.SetGeneration(54);
+  // Backbone: develop -> grade.top -> grade.primary -> drt.
+  ASSERT_TRUE(
+      alcedo::AddCleanColorGrade(backend.Document(), NodeId{"grade.primary"}, NodeId{"grade.top"})
+          .empty());
+  EditorSessionController session(&backend);
+  EditorNodeController    controller;
+  controller.set_editor_session(&session);
+  const auto backbone_before = backend.Document().Graph().ImageBackboneNodeIds();
+
+  // Endpoints and unknown ids are rejected before submission.
+  EXPECT_FALSE(controller.moveMaskGroupToIndex(QStringLiteral("develop"), 0));
+  EXPECT_EQ(controller.last_error(), QStringLiteral("Only a Color Grade Mask Group can be moved"));
+  EXPECT_FALSE(controller.moveMaskGroupToIndex(QStringLiteral("drt"), 1));
+  EXPECT_FALSE(controller.moveMaskGroupToIndex(QStringLiteral("grade.missing"), 0));
+  EXPECT_EQ(backend.edit_node_graph_count(), 0);
+
+  // An uncommitted node-graph draft blocks reordering.
+  ASSERT_TRUE(controller.addCleanColorGrade());
+  EXPECT_TRUE(controller.incomplete_draft());
+  EXPECT_FALSE(controller.moveMaskGroupToIndex(QStringLiteral("grade.top"), 0));
+  EXPECT_EQ(controller.last_error(),
+            QStringLiteral("Finish the node graph before changing Mask Groups"));
+  EXPECT_EQ(backend.edit_node_graph_count(), 0);
+
+  // Completing the draft re-enables reordering.
+  const auto detached = controller.detached_draft_node_ids();
+  ASSERT_EQ(detached.size(), 1);
+  ASSERT_TRUE(controller.locateNodeInGraph(detached[0]));
+  const auto extra = controller.selected_node_id();
+  ASSERT_TRUE(controller.requestConnect(QStringLiteral("develop"), NodeIdToQString(extra)));
+  ASSERT_TRUE(controller.requestConnect(NodeIdToQString(extra), QStringLiteral("grade.top")));
+  EXPECT_EQ(backend.edit_node_graph_count(), 1);
+  EXPECT_TRUE(controller.can_edit_mask_group_structure());
+  ASSERT_EQ(backend.Document().Graph().ImageBackboneNodeIds().size(), backbone_before.size() + 1);
+
+  // A stale image-load generation is rejected before submission.
+  backend.SetGeneration(55);
+  EXPECT_FALSE(controller.moveMaskGroupToIndex(QStringLiteral("grade.top"), 0));
+  EXPECT_EQ(backend.edit_node_graph_count(), 1);
+  backend.SetGeneration(54);
+
+  // A backend failure surfaces the error and leaves the document unchanged.
+  backend.SetFailCommands(true);
+  const auto hash_before = backend.Document().ToJson().dump();
+  EXPECT_FALSE(controller.moveMaskGroupToIndex(QStringLiteral("grade.top"), 0));
+  EXPECT_EQ(controller.last_error(), QStringLiteral("mini-Git journal append failed"));
+  EXPECT_EQ(backend.Document().ToJson().dump(), hash_before);
+  EXPECT_EQ(backend.edit_node_graph_count(), 2);
 }
 
 }  // namespace

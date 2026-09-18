@@ -541,7 +541,7 @@ void EditorNodeController::ApplyLayoutToAdapter() {
   if (layout == nullptr || graph_adapter_ == nullptr || !HasActiveGraph() || applying_layout_) {
     return;
   }
-  applying_layout_ = true;
+  applying_layout_  = true;
   const auto finish = qScopeGuard([this] { applying_layout_ = false; });
   if (draft_ != nullptr) {
     const auto view =
@@ -805,7 +805,7 @@ void EditorNodeController::OnSessionHistoryChanged() {
 }
 
 void EditorNodeController::SelectNodeForAdjustmentPanel(const QString& panel) {
-  const auto key = panel.toStdString();
+  const auto  key      = panel.toStdString();
   const auto* selected = NodeFor(selected_node_id_);
   if (selected != nullptr && AdjustmentPanelIsSupported(selected->node_kind, key)) {
     return;
@@ -942,7 +942,7 @@ bool EditorNodeController::renameColorGrade(const QString& node_id, const QStrin
 }
 
 bool EditorNodeController::setColorGradeDeletionProtected(const QString& node_id,
-                                                        bool deletion_protected) {
+                                                          bool           deletion_protected) {
   if (!ValidateCommandGeneration()) return false;
   if (draft_ != nullptr) {
     SetLastError(tr("Finish the node graph before changing deletion protection"));
@@ -955,7 +955,7 @@ bool EditorNodeController::setColorGradeDeletionProtected(const QString& node_id
   }
   SetCommandActive(true);
   const auto reset_active = qScopeGuard([this] { SetCommandActive(false); });
-  const auto result = session_->SubmitSetColorGradeDeletionProtected(id, deletion_protected);
+  const auto result       = session_->SubmitSetColorGradeDeletionProtected(id, deletion_protected);
   if (alcedo::EditorSessionResultIsFailure(result.kind)) {
     SetLastError(QString::fromStdString(result.message));
     return false;
@@ -1014,16 +1014,17 @@ bool EditorNodeController::insertMaskGroupAtTop() {
     return false;
   }
   if (snapshot_.nodes.size() < 2 ||
-      snapshot_.nodes.front().node_kind != alcedo::EditorNodeKind::Develop) {
+      snapshot_.nodes.front().node_kind != alcedo::EditorNodeKind::Develop ||
+      snapshot_.nodes.back().node_kind != alcedo::EditorNodeKind::Drt) {
     SetLastError(tr("The node graph has no editable Mask Groups"));
     return false;
   }
-  const auto   anchor = snapshot_.nodes[1].node_id;
-  const auto   uuid   = QUuid::createUuid().toString(QUuid::WithoutBraces).toLower().toStdString();
+  const auto   predecessor = snapshot_.nodes[snapshot_.nodes.size() - 2].node_id;
+  const auto   uuid = QUuid::createUuid().toString(QUuid::WithoutBraces).toLower().toStdString();
   const NodeId new_id{"grade." + uuid};
   SetCommandActive(true);
   const auto reset_active = qScopeGuard([this] { SetCommandActive(false); });
-  const auto result       = session_->SubmitInsertColorGradeAtTop(new_id, anchor);
+  const auto result       = session_->SubmitInsertColorGradeAtTop(new_id, predecessor);
   if (alcedo::EditorSessionResultIsFailure(result.kind)) {
     SetLastError(QString::fromStdString(result.message));
     return false;
@@ -1065,6 +1066,92 @@ bool EditorNodeController::removeMaskGroup(const QString& node_id) {
   return true;
 }
 
+bool EditorNodeController::moveMaskGroupToIndex(const QString& node_id, int target_index) {
+  if (!ValidateCommandGeneration()) {
+    return false;
+  }
+  if (draft_ != nullptr) {
+    SetLastError(tr("Finish the node graph before changing Mask Groups"));
+    return false;
+  }
+  const auto id = NodeIdFromQString(node_id);
+  if (!IsColorGrade(id)) {
+    SetLastError(tr("Only a Color Grade Mask Group can be moved"));
+    return false;
+  }
+  if (snapshot_.nodes.size() < 2 ||
+      snapshot_.nodes.front().node_kind != alcedo::EditorNodeKind::Develop ||
+      snapshot_.nodes.back().node_kind != alcedo::EditorNodeKind::Drt) {
+    SetLastError(tr("The node graph has no editable Mask Groups"));
+    return false;
+  }
+  // Color Grades in downstream-first order — the same order the Mask Groups
+  // panel displays, so the drop index maps directly onto this list.
+  std::vector<NodeId> groups;
+  groups.reserve(snapshot_.nodes.size());
+  int source = -1;
+  for (auto it = snapshot_.nodes.rbegin(); it != snapshot_.nodes.rend(); ++it) {
+    if (it->node_kind != alcedo::EditorNodeKind::ColorGrade) {
+      continue;
+    }
+    if (it->node_id == id) {
+      source = static_cast<int>(groups.size());
+    }
+    groups.push_back(it->node_id);
+  }
+  if (source < 0) {
+    SetLastError(tr("That Mask Group is not in the committed node graph"));
+    return false;
+  }
+  const int count       = static_cast<int>(groups.size());
+  const int destination = std::clamp(target_index, 0, count - 1);
+  if (destination == source) {
+    // Already in place: accepted without a command, history commit, or render.
+    return true;
+  }
+  groups.erase(groups.begin() + source);
+  groups.insert(groups.begin() + destination, id);
+
+  const auto document = session_ != nullptr ? session_->pipeline_document() : nullptr;
+  if (!document) {
+    SetLastError(tr("No editable node graph is available"));
+    return false;
+  }
+
+  // The Mask Groups list is downstream-first while the Nodes graph and its
+  // topology draft are Develop-to-DRT. Rebuild only the desired identity order,
+  // then let the existing draft produce the minimal stored edge delta. This is
+  // the same edit representation and owner path used by connector edits.
+  std::vector<NodeId> reordered_backbone;
+  reordered_backbone.reserve(groups.size() + 2);
+  reordered_backbone.push_back(snapshot_.nodes.front().node_id);
+  reordered_backbone.insert(reordered_backbone.end(), groups.rbegin(), groups.rend());
+  reordered_backbone.push_back(snapshot_.nodes.back().node_id);
+
+  auto move_draft = alcedo::EditorNodeGraphDraft::FromDocument(*document, CurrentDraftIdentity());
+  for (std::size_t i = 1; i < reordered_backbone.size(); ++i) {
+    const auto mutation = move_draft.Connect(reordered_backbone[i - 1], reordered_backbone[i]);
+    if (!mutation.succeeded) {
+      SetLastError(PresentNodeGraphDraftMutation(mutation));
+      return false;
+    }
+  }
+  if (!move_draft.SubmissionValid() || move_draft.DeltaEmpty()) {
+    SetLastError(tr("The Mask Group move did not produce a valid node graph"));
+    return false;
+  }
+
+  SetCommandActive(true);
+  const auto reset_active = qScopeGuard([this] { SetCommandActive(false); });
+  const auto result       = session_->SubmitNodeGraphTopologyEdit(move_draft.MakeChange());
+  if (alcedo::EditorSessionResultIsFailure(result.kind)) {
+    SetLastError(QString::fromStdString(result.message));
+    return false;
+  }
+  refreshFromSession();
+  return true;
+}
+
 bool EditorNodeController::locateNodeInGraph(const QString& node_id) {
   if (session_ == nullptr) {
     SetLastError(tr("No editor session is bound"));
@@ -1103,6 +1190,7 @@ auto EditorNodeController::mask_groups() const -> QVariantList {
     row.insert(QStringLiteral("nodeId"), NodeIdToQString(group.node_id));
     row.insert(QStringLiteral("displayName"), QString::fromStdString(group.display_name));
     row.insert(QStringLiteral("enabled"), group.enabled);
+    row.insert(QStringLiteral("deletionProtected"), group.deletion_protected);
     QVariantList masks;
     masks.reserve(static_cast<qsizetype>(group.masks.size()));
     for (const auto& mask : group.masks) {
@@ -1114,6 +1202,7 @@ auto EditorNodeController::mask_groups() const -> QVariantList {
       mask_row.insert(QStringLiteral("sourceKind"), MaskSourceKindKey(mask.source_kind));
       mask_row.insert(QStringLiteral("displayName"), QString::fromStdString(mask.display_name));
       mask_row.insert(QStringLiteral("enabled"), mask.enabled);
+      mask_row.insert(QStringLiteral("deletionProtected"), mask.deletion_protected);
       mask_row.insert(QStringLiteral("opacity"), static_cast<double>(mask.opacity));
       masks.push_back(mask_row);
     }
@@ -1308,9 +1397,8 @@ auto EditorNodeController::MaybeSubmitDraft() -> bool {
     return false;
   }
   DiscardDraft();
-  QString projection_error;
-  const auto committed_document =
-      session_ != nullptr ? session_->pipeline_document() : nullptr;
+  QString    projection_error;
+  const auto committed_document = session_ != nullptr ? session_->pipeline_document() : nullptr;
   if (committed_document) {
     try {
       AdoptCommittedDocument(*committed_document);
