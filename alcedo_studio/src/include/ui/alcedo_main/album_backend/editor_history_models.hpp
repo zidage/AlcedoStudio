@@ -75,13 +75,11 @@ class EditorHistoryModel : public QAbstractListModel {
   enum Role {
     CommitIdRole = Qt::UserRole + 1,
     FirstParentIdRole,
-    SecondParentIdRole,
-    CommitKindRole,
     CreatedAtNsRole,
     LabelRole,
     FieldKeyRole,
     CurrentRole,
-    // Phase 7A P1: presentation roles derived from the semantic payload by the
+    // Presentation roles derived from the semantic payload by the
     // pure PresentEditorHistoryCommit helper. QML renders these strings and
     // never parses commit JSON.
     DisplayNameRole,
@@ -90,8 +88,6 @@ class EditorHistoryModel : public QAbstractListModel {
     DeltaTextRole,
     IconKeyRole,
     TimelinePositionRole,
-    IsMergeRole,
-    MergeSummaryRole,
   };
 
   explicit EditorHistoryModel(QObject* parent = nullptr);

@@ -28,6 +28,10 @@ struct MetalTextureImageResource {
   std::uintptr_t              native_object = 0;
 };
 
+struct MetalCommandBufferSignalResource {
+  NS::SharedPtr<MTL::CommandBuffer> command_buffer = nullptr;
+};
+
 struct MetalBufferResource {
   NS::SharedPtr<MTL::Buffer> buffer      = nullptr;
   size_t                    size_bytes  = 0;

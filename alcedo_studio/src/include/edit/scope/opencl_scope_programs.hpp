@@ -13,8 +13,10 @@ inline constexpr const char* kManifestName        = "scope_analyzer";
 inline constexpr const char* kScopeProgramName    = "scope_analyzer";
 
 inline constexpr const char* kHistogramKernelName = "scope_accumulate_histogram";
+inline constexpr const char* kHistogramImageKernelName = "scope_accumulate_histogram_image";
 
 inline constexpr const char* kWaveformKernelName  = "scope_accumulate_waveform";
+inline constexpr const char* kWaveformImageKernelName = "scope_accumulate_waveform_image";
 
 }  // namespace alcedo::OpenCL::Scope
 

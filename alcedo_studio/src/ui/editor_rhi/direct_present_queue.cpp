@@ -701,4 +701,14 @@ auto DirectPresentQueue::HasWritableSlot(int width, int height, std::uint64_t se
   return false;
 }
 
+auto DirectPresentQueue::HasReadyFrame() const -> bool {
+  std::lock_guard lock(mutex_);
+  for (const auto& slot : slots_) {
+    if (slot.state == SlotState::Ready) {
+      return true;
+    }
+  }
+  return !pending_requests_.empty();
+}
+
 }  // namespace alcedo::editor_rhi

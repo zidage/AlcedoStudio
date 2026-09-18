@@ -10,6 +10,7 @@
 #include <QVariantMap>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace alcedo::ui {
@@ -310,9 +311,36 @@ void EditorHlsModel::finishDrag() {
   emit settledCommitted();
 }
 
-void EditorHlsModel::submitInteractive() { submitNow(buildParamsJson(), false); }
+void EditorHlsModel::submitInteractive() { submitNow(currentHlsWrite(), false); }
 
-void EditorHlsModel::submitSettled() { submitNow(buildParamsJson(), true); }
+void EditorHlsModel::submitSettled() { submitNow(currentHlsWrite(), true); }
+
+auto EditorHlsModel::currentHlsWrite() const -> alcedo::HlsUpdate {
+  alcedo::HlsUpdate update;
+  std::array<float, alcedo::kHlsHueBinCount> hue_bins{};
+  std::array<alcedo::HlsVec3, alcedo::kHlsHueBinCount> adj_table{};
+  std::array<float, alcedo::kHlsHueBinCount> hue_range{};
+  for (size_t i = 0; i < hls::kCandidateHues.size(); ++i) {
+    hue_bins[i]     = hls::kCandidateHues[i];
+    adj_table[i]    = {ClampHueShift(hueShiftTable_[i]),
+                       ClampAdj(lightnessTable_[i]) / hls::kAdjUiToParamScale,
+                       ClampAdj(chromaTable_[i]) / hls::kAdjUiToParamScale};
+    hue_range[i]    = ClampHueRange(hueRangeTable_[i]);
+  }
+  const size_t active = static_cast<size_t>(activeHueIndex_);
+  update.hue_bins       = hue_bins;
+  update.hls_adj_table  = adj_table;
+  update.h_range_table  = hue_range;
+  update.target_hls     = {hls::WrapHueDegrees(hls::kCandidateHues[active]),
+                           hls::kFixedTargetLightness, hls::kFixedTargetSaturation};
+  update.hls_adj        = {ClampHueShift(hueShiftTable_[active]),
+                           ClampAdj(lightnessTable_[active]) / hls::kAdjUiToParamScale,
+                           ClampAdj(chromaTable_[active]) / hls::kAdjUiToParamScale};
+  update.h_range        = ClampHueRange(hueRangeTable_[active]);
+  update.l_range        = hls::kFixedLightnessRange;
+  update.s_range        = hls::kFixedSaturationRange;
+  return update;
+}
 
 auto EditorHlsModel::buildParamsJson() const -> QString {
   QJsonArray hue_bins;

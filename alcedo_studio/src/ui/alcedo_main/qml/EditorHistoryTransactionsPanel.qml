@@ -47,49 +47,10 @@ Item {
         })
     }
 
-    EditorMergeDialog {
-        id: mergeDialog
-        textColor: root.colText
-        mutedColor: root.colMuted
-        surfaceColor: root.colCardSurface
-        borderColor: root.colCardBorder
-        blurSource: root.blurSource
-        onMergeRequested: function(resolutions) {
-            if (!root.adjustmentTransfer) {
-                root.statusMessage = qsTr("Adjustment transfer is unavailable")
-                return
-            }
-            var result = root.adjustmentTransfer.CompleteMergeIntoEditor(root.editorSession,
-                                                                          resolutions)
-            root.statusMessage = result.message || qsTr("Merge completed")
-        }
-        onCancelled: {
-            if (root.adjustmentTransfer) {
-                var result = root.adjustmentTransfer.CancelMergeIntoEditor(root.editorSession)
-                root.statusMessage = result.message || qsTr("Merge cancelled")
-            }
-        }
-    }
-
     function applyPaste() {
         if (!root.adjustmentTransfer || !root.editorSession) return
         var result = root.adjustmentTransfer.PasteIntoEditor(root.editorSession)
         root.statusMessage = result.message || qsTr("Adjustments pasted")
-    }
-
-    function beginMerge() {
-        if (!root.adjustmentTransfer || !root.editorSession) return
-        var result = root.adjustmentTransfer.BeginMergeIntoEditor(root.editorSession)
-        if (!result.success) {
-            root.statusMessage = result.message || qsTr("Merge could not start")
-            return
-        }
-        if (result.hasConflicts) {
-            mergeDialog.openPreview(result)
-            return
-        }
-        var completed = root.adjustmentTransfer.CompleteMergeIntoEditor(root.editorSession, [])
-        root.statusMessage = completed.message || qsTr("Merge completed")
     }
 
     ColumnLayout {
@@ -188,22 +149,6 @@ Item {
                 focusRingColor: root.colText
                 actionName: qsTr("Paste adjustments as a new Version")
                 onClicked: root.applyPaste()
-            }
-
-            IconActionButton {
-                objectName: "editorHistoryMergeButton"
-                compact: true
-                enabled: root.editorSession && root.editorSession.actions.canBeginMerge
-                iconSrc: "qrc:/panel_icons/git-branch.svg"
-                iconColorDefault: root.colMuted
-                iconColorMuted: root.colMuted
-                fillIdle: root.colCardSurface
-                fillHover: appTheme.buttonHoveredFillColor
-                fillPressed: appTheme.buttonPressedFillColor
-                fillSelected: appTheme.buttonSelectedFillColor
-                focusRingColor: root.colText
-                actionName: qsTr("Merge adjustments into this Version")
-                onClicked: root.beginMerge()
             }
         }
 

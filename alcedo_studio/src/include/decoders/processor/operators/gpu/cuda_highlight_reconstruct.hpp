@@ -38,6 +38,13 @@ class HighlightWorkspace {
   HighlightWorkspace(HighlightWorkspace&& other) noexcept;
   auto operator=(HighlightWorkspace&& other) noexcept -> HighlightWorkspace&;
 
+  /**
+   * @brief Use caller-owned device pointers. Subsequent @ref Reserve calls will not cudaMalloc.
+   * @p result_rgb may be null when only stats buffers are required.
+   */
+  void BindExternal(int* anyclipped, float* sums, float* cnts, void* result_rgb, int width,
+                    int height);
+
  private:
   friend auto BuildHighlightCorrection(LibRaw& raw_processor) -> HighlightCorrection;
   friend void Clamp01(cv::cuda::GpuMat& img, cv::cuda::Stream* stream);
@@ -95,9 +102,11 @@ class HighlightWorkspace {
   float*           cnts_          = nullptr;
   size_t           mask_capacity_ = 0;
   cv::cuda::GpuMat result_;
+  bool             owns_device_   = true;
 };
 
 auto BuildHighlightCorrection(LibRaw& raw_processor) -> HighlightCorrection;
+auto BuildHighlightCorrection(const float* cam_mul) -> HighlightCorrection;
 void FinalizeHighlightCorrection(const HighlightAccumulation& accumulation,
                                  HighlightCorrection& correction);
 void AccumulateHighlightStats(const cv::cuda::GpuMat& img, const HighlightCorrection& correction,

@@ -77,6 +77,10 @@ class DirectFrameSink final : public alcedo::IFrameSink {
       -> std::vector<ImportedGpuFrame>;
   // Drop all pending imports (image switch / renderer teardown).
   void ClearPendingImportedFrames();
+  /// True while at least one zero-copy import waits for render-thread consume.
+  /// Cheap check for the presentation-opportunity arm; stale entries are still
+  /// reported and are discarded on drain.
+  [[nodiscard]] auto HasPendingImportedFrame() const -> bool;
   [[nodiscard]] auto HasWritableTargetForNextFrame() const -> bool;
   [[nodiscard]] auto submitted_frame_count() const -> std::uint64_t;
   [[nodiscard]] auto latest_accepted_request_id() const -> std::uint64_t;

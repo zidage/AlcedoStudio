@@ -61,6 +61,10 @@ if(APPLE)
         "${ALCEDO_SRC_ROOT}/ui/edit_viewer/color_manager.mm"
     )
     set_source_files_properties(
+        "${ALCEDO_EDITOR_RHI_ROOT}/editor_startup.cpp"
+        PROPERTIES LANGUAGE OBJCXX
+    )
+    set_source_files_properties(
         "${ALCEDO_SRC_ROOT}/ui/edit_viewer/color_manager.mm"
         PROPERTIES LANGUAGE OBJCXX
     )
@@ -99,12 +103,14 @@ if(ALCEDO_OPENCL_ENABLED)
 endif()
 if(ALCEDO_METAL_ENABLED)
     target_compile_definitions(EditorRhiViewport PUBLIC HAVE_METAL)
+    target_link_libraries(EditorRhiViewport PUBLIC MetalContext alcedo::metal_cpp)
 endif()
 if(APPLE)
     target_link_libraries(EditorRhiViewport PRIVATE
         "-framework AppKit"
         "-framework QuartzCore"
         "-framework CoreGraphics"
+        "-framework Metal"
     )
 endif()
 if(WIN32)
@@ -143,6 +149,10 @@ def_library(EditorRhiHarnessLib
 )
 if(APPLE)
     set_source_files_properties(
+        "${ALCEDO_EDITOR_RHI_ROOT}/editor_startup.cpp"
+        PROPERTIES LANGUAGE OBJCXX
+    )
+    set_source_files_properties(
         "${ALCEDO_EDITOR_RHI_ROOT}/harness_viewport_renderer.cpp"
         PROPERTIES LANGUAGE OBJCXX
     )
@@ -161,6 +171,7 @@ if(ALCEDO_OPENCL_ENABLED)
 endif()
 if(ALCEDO_METAL_ENABLED)
     target_compile_definitions(EditorRhiHarnessLib PUBLIC HAVE_METAL)
+    target_link_libraries(EditorRhiHarnessLib PUBLIC MetalContext alcedo::metal_cpp)
 endif()
 if(WIN32)
     target_link_libraries(EditorRhiHarnessLib PRIVATE d3d11 dxgi opengl32)

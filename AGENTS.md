@@ -4,15 +4,185 @@ This file provides guidance to AI agents (Kimi, Claude, Codex, etc.) when workin
 
 ## Project Overview
 
-**Alcedo Studio** is a RAW photo editor and digital asset management (DAM) system written in C++20. It features CUDA-accelerated (Windows) and Metal-accelerated (macOS) image processing, a DuckDB-backed asset management system ("Sleeve"), and a Qt 6 UI combining QML (album browser) and Qt Widgets (editor).
+**Alcedo Studio** is a RAW photo editor and digital asset management (DAM) system written in C++20. It features CUDA-accelerated (Windows) and Metal-accelerated (macOS) image processing and a DuckDB-backed asset management system ("Sleeve"). The entire UI uses Qt 6 QML / Qt Quick, including the album browser, editor workspace, adjustment panels, and dialogs, with C++ backends and rendering integration.
 
-## Agent Execution Posture
+## Execution and Product Rules
+
+### Complete the requested capability
 
 Agents working in this repository must be decisive and implementation-driven. Do not respond to product or engineering direction with passive staged deferrals such as "first avoid this", "later maybe add this", "medium term", "long term", or similar framing that delays the requested capability after the user has made the product goal clear.
 
 When the user names a concrete integration or capability, treat it as the target and work out the implementation path, constraints, tests, and risks directly. If there are real blockers, state them as concrete engineering facts and propose the closest viable implementation, not a soft retreat to a weaker product.
 
-## Temporary files and local workspace
+### No fallback without explicit authorization
+
+Do **not** add, restore, or "temporarily" use any fallback, degraded path, silent substitute, or weaker stand-in unless the user has **explicitly** allowed that specific fallback in this conversation (or in an existing, already-landed product rule they pointed at).
+
+This includes, and is not limited to:
+
+- Lowering decode / render / quality settings to hide slowness (for example changing Interactive `DecodeRes::FULL` to `HALF` so Neural Engine or a slow GPU path does not run)
+- Falling back from Neural Engine / GPU / CUDA to Legacy, CPU, another backend, or a cheaper operator when the requested path fails or looks expensive
+- Catch-and-continue that swallows the real error and proceeds on a substitute implementation
+- Preview-only, downsample-only, or "good enough for now" substitutes for a requested full-quality path
+- Retrying a different algorithm, resolution, or backend after a failure without being told to
+
+If the requested path cannot be implemented, **fail with the real error** and state the engineering blocker. Do not ship a weaker product and call it a fix. Performance of a CUDA **debug** build is not a reason to change product decode or quality policy.
+
+## Code Style and Data Updates
+
+These rules apply to all project-authored code, including tests and tooling. They are project-wide
+requirements and do not depend on a task-specific skill being activated.
+
+### Language, formatting, and member names
+
+- Use C++20 and the repository's clang-format configuration (Google style, 100-column limit).
+- Follow the repository's clang-tidy rules. Private members use a trailing `_`; public and
+  protected members do not.
+- Name types, functions, variables, and tests after the data they represent or the operation they
+  perform. Apply the terminology rules below to identifiers as well as prose.
+
+### Include the defining header; do not forward-declare by default
+
+Do **not** add a `class` / `struct` / `enum` forward declaration to skip an include. Include the
+header that defines the type.
+
+A forward declaration is allowed only when every condition below is true:
+
+- The type is used solely as a pointer or reference in that header (no members, `sizeof`,
+  `std::optional`/`std::vector`/`std::unique_ptr` destruction, or inline method bodies that need
+  a complete type).
+- Including the defining header would create a real include cycle, or the header is a PIMPL / ABI
+  boundary that must keep the type incomplete.
+- The corresponding `.cpp` includes the defining header.
+
+Compile-time savings, shorter includes, or "it only appears in a signature" is not enough. Qt and
+other framework headers may already forward-declare their own types; do not copy that pattern into
+Alcedo-owned headers.
+
+### Update existing data through its owner
+
+**Do not create snapshots, mirror structs, or temporary copies of existing data structures just
+to read, pass, or update their state.** Renaming a copy to `State`, `Context`, or `Payload` does not
+make it acceptable. The rule concerns duplicated state, not the spelling of `snapshot`.
+
+Use this order when implementing a read or update:
+
+1. Identify the existing data structure and the service or component that owns it.
+2. Read through the owner's API or a const reference/view with a valid lifetime and appropriate
+   synchronization. Do not expose mutable internals or retain references beyond their safe lifetime.
+3. Apply changes through a focused operation on that owner. Pass the fields or change description
+   needed for the operation instead of copying the entire object, editing the copy, and writing it back.
+4. Validate inputs before mutation and preserve the owner's invariants. Publish notifications only
+   after the complete update is visible.
+
+An **atomic operation** here means one logically indivisible update: observers cannot see partial
+state, and concurrent changes cannot be silently overwritten. Use the existing transaction, lock,
+or owning-thread mechanism as appropriate. This does not require `std::atomic` for every field and
+does not authorize unsynchronized in-place writes. Keep failure behavior explicit; a failed update
+must not leave partially applied state.
+
+### Require an executable interleaving before adding consistency mechanisms
+
+Do not add a version, generation, epoch, token, cancellation protocol, stale-result guard, or
+similar consistency mechanism for a race that is only theoretically possible. Before adding one,
+identify all of the following in the current production call chain:
+
+1. The exact two operations that can execute concurrently, including their owners, threads, or
+   executors.
+2. The exact two events that can be observed out of order, including the queue or callback boundary
+   that permits the reordering.
+3. An executable interleaving that reaches an incorrect state, together with a reproduction or test
+   that drives that real path.
+
+If no such interleaving exists, do not add the mechanism. Sequential state changes, possible future
+parallelism, defensive programming, and tests that inject values production cannot produce are not
+evidence of a race. This rule does not prohibit external-protocol identifiers, persisted format
+versions, user-requested cancellation, or mechanisms backed by a documented executable
+interleaving.
+
+### Necessary copies and snapshots
+
+A snapshot is allowed only when a concrete requirement needs independent state, such as a
+consistent point-in-time package export. Before introducing one:
+
+- Explain why an owner operation, scoped read, or minimal change description cannot satisfy the
+  requirement. Convenience, avoiding an API change, or a generic claim of thread safety is insufficient.
+- Document the purpose, captured fields, owner, lifetime, and consistency mechanism at the defining
+  type or creation site. Copy only the data the requirement needs.
+- Define whether the captured state is immutable or independently editable, and how it is released.
+  Do not write an old copy back over live state without explicit conflict handling.
+- Reuse an existing representation that meets the requirement rather than adding another parallel
+  representation. An existing snapshot API is not permission to introduce more snapshots.
+
+Ordinary scalar/value parameters and results are not prohibited. Review copies that duplicate an
+existing object's state, especially whole objects, containers, and image buffers. Required algorithm
+output buffers are not snapshots merely because they use separate storage.
+
+## Naming and Terminology
+
+### Scope and exceptions
+
+The table below defines the scope of each restriction. Matching is case-insensitive and includes
+compound identifiers and derived forms where applicable. Use names that state the actual operation,
+artifact, comparison, or guarantee; replacing one vague label with another does not satisfy the rule.
+
+Exact external API/framework/model identifiers are allowed where interoperability requires their
+spelling. Keep that spelling at the integration site; do not propagate it into Alcedo-owned names or
+surrounding prose. These rules may quote prohibited terms to define or explain the prohibition.
+
+### Prohibited terms and concrete replacements
+
+| Term | Scope | Required wording or behavior |
+| --- | --- | --- |
+| `hydration`, `hydrate`, and derived forms | Project-authored identifiers, tests, comments, documentation, plans, and user-facing text | Name the operation: read, load, populate, restore, or apply. |
+| `gesture` and derived forms | Project-authored identifiers, tests, comments, documentation, plans, and user-facing text | Name the actual input: drag, pinch, input sequence, pointer release, or settled edit. |
+| `golden` | Project-authored identifiers, test/target names, filenames, comments, documentation, plans, and user-facing text | State what is stored or verified: expected pixel values, serialized output, a reference image comparison with a stated tolerance, or a specific rendering result. |
+| `smoke` | Test names, targets, files, and documentation | State the behavior and expected result. A name that only means "something ran" is insufficient. |
+| `contract`, `contracts` | Everything under `docs/roadmap/`, including prose, headings, link labels, and filenames | Name the exact artifact or guarantee: interface, API, schema, protocol, invariant, behavior specification, acceptance criterion, compatibility requirement, or performance target. |
+| `seed` used as a verb for a non-random operation | Project-authored code identifiers, tests, and comments | Use populate, insert, initialize, restore, copy, or apply. Conventional inputs to random-number generators, cryptographic primitives, and deterministic fuzz runs remain allowed. |
+| `envelope`, `envelop`, and derived forms | Project-authored identifiers, tests, comments, documentation, plans, and user-facing text | Name the object or operation: `PipelineEditBatch::Make`/`Validate`/`CanonicalJSON`/`FromJSON`, `EncodePipelineRootState`/`DecodePipelineRootState`, `EncodePipelineDocumentCheckpoint`/`DecodePipelineDocumentCheckpoint`, queued `EditorSessionCommand`, worker `EditorSessionCompletion`, peak or sustained FP32/Tensor Core throughput, or the provider JSON fields actually parsed. |
+
+### Test and reference-data names
+
+Every test must state the behavior, regression, invariant, or property it verifies. Unit,
+integration, regression, property, and benchmark are useful categories, but each still needs an
+explicit assertion goal.
+
+Examples of concrete names:
+
+- `NeuralEngineDemosaicsRealBayerRawPatchToValidRgb`
+- `LoadFailureReportsErrorAndKeepsCacheCold`
+- `RenderedPixelsMatchReferenceWithinTolerance`
+- `SerializedEditHistoryMatchesExpectedJson`
+
+For stored expected results, name the actual contents and purpose, such as
+`expected_edit_history.json` or `exposure_plus_one_expected_pixels.exr`. A file comparison alone
+does not explain the behavior being checked: the test must identify the output, comparison rule,
+and tolerance where relevant. Do not mechanically replace `golden` with `baseline` or `reference`
+without making those details clear.
+
+### Checks before completing relevant edits
+
+- Search first-party source, tests, docs, and plans for prohibited project-wide terminology. Review
+  matches against the scope and external-identifier exception above.
+- Replace prohibited names in touched code and update their callers, test registrations, and links
+  together. When touching a non-conventional `seed` verb, rename it in the same change.
+- For roadmap edits, search the entire `docs/roadmap/` tree, including filenames. Rename violating
+  linked files and update their references.
+- Review added copies and snapshot types against the data-update rules above; verify that each
+  exception has a concrete need and a defined consistency mechanism.
+- Review new `class` / `struct` / `enum` forward declarations in touched first-party headers.
+  Replace them with the defining include unless the cycle / PIMPL exception above applies.
+
+## Workspace and Branches
+
+### Branch names
+
+Branch names must describe the feature, fix, refactor, or other engineering purpose of the work.
+Do not include `codex` in a branch name. Use a functional name such as
+`fix/neighbor-operator-ping-pong` or `feature/opencl-program-cache`.
+
+### Temporary files and local state
 
 Do **not** create temporary directories or ad-hoc dump files at the repository root
 (for example `/tmp`, `tmp/`, root-level `*.log`, harness dumps, one-off scripts, or
@@ -29,13 +199,22 @@ phase review JSON/CSV dumps).
 do not overwrite each other. Do not commit contents of `build/tmp/`.
 
 Agent tool local state (`.uv-cache/`, `.uv-python/`, `.scratch/`, `skills-lock.json`)
-is also gitignored. Skills under `.claude/skills/`, `.codex/skills/`, and
-`.agents/skills/` remain trackable; other files in those tool directories stay local
-via nested `.gitignore` files.
+is also gitignored. Shared repository skills are canonical under `.agents/skills/` and remain
+trackable. Do not copy them into `.claude/skills/` or `.codex/skills/`; those tool directories are
+reserved for local state and ignored through their nested `.gitignore` files.
 
 ## Build Commands
 
 ### Windows (MSVC + CUDA)
+
+**Build time allowance:** Start Windows configure/build/link timeout budgets at **10–20 minutes**
+per invocation (at least 10 minutes; prefer 20 minutes for CUDA builds, broad target sets, or
+relinking the application). Increase the budget for a clean build or when compiler/linker progress
+continues; 20 minutes is a starting allowance, not a hard upper limit. Do not terminate or restart
+a healthy build merely because a short tool wait returned no output. Keep the same process/session
+and poll it in short intervals so progress updates remain possible. Tool polling/yield intervals
+are separate from the build's total timeout. Treat a build as failed only on an actual error,
+process exit, or evidence of a stalled process, and put its logs under `build/tmp/`.
 
 ```bash
 # Configure (debug)
@@ -85,28 +264,7 @@ ctest --test-dir build/debug --output-on-failure
 ./build/debug/tests/test_exposure_op
 ```
 
-**Test naming ban — no "smoke" tests.** Do not name tests, targets, files, or
-docs with `smoke` / `Smoke` / `SMOKE` (e.g. `*SmokeTest`, `FooSmokeOnBar`).
-Every test must state a concrete purpose: what behavior, contract, regression,
-or property it verifies (examples: `NeuralEngineDemosaicsRealBayerRawPatchToValidRgb`,
-`LoadFailureFallsBackToLegacyAndKeepsCacheCold`). Vague names that only mean
-"something ran" are not allowed. Prefer: unit / integration / regression /
-property / golden / benchmark, each with an explicit assertion goal.
-
-**Roadmap terminology ban.** Files under `docs/roadmap/` must not use `contract`,
-`contracts`, or casing variants in prose, headings, link labels, or filenames. Name the exact
-artifact or guarantee instead: interface, API, schema, protocol, invariant, behavior specification,
-acceptance criterion, compatibility requirement, or performance target. Before completing roadmap
-edits, search the entire roadmap tree and rename any linked file that violates this rule.
-
-**Project terminology ban.** Project-authored code identifiers, tests, comments, documentation,
-plans, and user-facing text must not use `hydration`, `hydrate`, `gesture`, or casing/derived
-variants. These words hide the concrete operation being performed. Use exact terms such as read,
-load, populate, apply, drag, pinch, input sequence, pointer release, or settled edit. External
-framework identifiers that require an exact spelling, such as Qt types, enum values, signals, or
-QML properties, are the only exception. Keep the exception at the call site and do not repeat the
-external wording in Alcedo-owned API names or surrounding prose. Before completing relevant edits,
-search first-party source, tests, docs, and plans for violations.
+Test names and reference-data files must follow **Naming and Terminology** above.
 
 WebGPU RAW tests must heap-allocate `LibRaw` raw processors (for example with
 `std::make_unique<LibRaw>()`). Do not stack-allocate `LibRaw` in WebGPU-related tests; Dawn +
@@ -138,24 +296,32 @@ These façade services are the **only** API surface the UI layer may call. They 
 - **Storage**: DuckDB ORM layer with mappers and controllers (`storage/`)
 
 ### Layer 5 — UI (`ui/`)
-- **AlbumBackendLib**: Reusable QML/C++ backend module for the album browser
-- **EditViewer**: Real-time editor viewport using Qt RHI (D3D11 / Metal / OpenGL fallback)
-- **editor_dialog**: Editor UI panels (tone, color, geometry, versioning, scope/histogram)
-- **alcedo_main**: Application entry point (QML + C++ shell)
+
+- **alcedo_main**: Application entry point and unified QML / Qt Quick shell
+- **alcedo_main/qml/**: Album browser, editor workspace, adjustment panels, version/history views, scopes, and dialogs
+- **alcedo_main/album_backend/**: C++ models and controllers exposed to QML for library and editor operations
+- **editor_rhi/**: `EditorViewportItem` and rendering integration for the Qt Quick editor viewport
 
 ## Key Technical Notes
 
 - **Qt path is hardcoded** in `CMakeLists.txt` (~line 142) to `D:/misc/Qt/6.9.3/msvc2022_64`. Override with `-DCMAKE_PREFIX_PATH`.
-- **Submodules** (`third_party/lensfun`, `third_party/libultrahdr`) must be initialized before configuring: `git submodule update --init --recursive`.
+- **Submodules** (`third_party/lensfun`, `third_party/libultrahdr`, `third_party/QuickQanava`) must be initialized before configuring: `git submodule update --init --recursive` for lensfun/libultrahdr, and `git submodule update --init alcedo_studio/src/third_party/QuickQanava` (no nested checkout).
 - **Windows packages** are resolved via vcpkg; macOS via Homebrew.
 - **CUDA** requires Toolkit 12.8 and compute capability ≥ 6.0. CUDA files have their own compile database entry.
-- **C++ standard**: C++20 with AVX/AVX2 SIMD flags.
-- **Naming convention** (clang-tidy enforced): private members use a trailing `_` suffix; public/protected members do not.
+- **SIMD**: The C++ build uses AVX/AVX2 SIMD flags.
 - **32-bit float pipeline**: All internal image processing operates in 32-bit float; output rendering uses ACES 2.0 with optional CUBE LUT.
 
 ## Skills
 
 Skills are reusable, composable capabilities that enhance agent abilities. Each skill is a self-contained directory with a `SKILL.md` file.
+The canonical, complete catalog is `.agents/skills/`; the summaries below are highlights and are not
+an exhaustive list. Agents should read the matching canonical `SKILL.md` before using a skill.
+
+### alcedo-create-pr
+Use when opening an Alcedo Studio GitHub pull request, or when the user runs
+`/alcedo-create-pr`. Canonical path: `.agents/skills/alcedo-create-pr/SKILL.md`.
+Write the title and body in English with ASD-STE100 wording. Use Why, Changes,
+and Verification. Do not put a phase id in the title.
 
 ### alcedo-msvc-cmake
 Use when working on alcedo with CMake on Windows/MSVC, especially when the user mentions MSVC, Windows, presets, Ninja, CUDA, or `scripts/msvc_env.cmd`, or when an agent would otherwise run bare cmake commands in this repository.
@@ -179,7 +345,7 @@ Use when working on alcedo with CMake on Windows/MSVC, especially when the user 
 - If the user asks for a `cmake --build build/...` style command, translate it to the wrapper form instead of changing the build intent.
 
 ### alcedo-qml-ui
-Use when adding or editing Alcedo QML under `alcedo_main` (workspace, editor adjustment panels, LUT/Tone/Look, AppTheme / DESIGN.md VI, toolbar SVGs, snapshot restore). Canonical path: `.agents/skills/alcedo-qml-ui/SKILL.md` (junctions under `.claude/skills/` and `.codex/skills/`).
+Use when adding or editing Alcedo QML under `alcedo_main` (workspace, editor adjustment panels, LUT/Tone/Look, AppTheme / DESIGN.md VI, toolbar SVGs, snapshot restore). Canonical path: `.agents/skills/alcedo-qml-ui/SKILL.md`.
 
 **Rules (summary — full skill is authoritative):**
 - Production style is **Basic**, never Material for dense editor chrome.
@@ -194,11 +360,11 @@ Use when adding or editing Alcedo QML under `alcedo_main` (workspace, editor adj
 Use when modifying the RAW Processor module in alcedo, shared Metal GPU utilities, or Metal RAW shaders and their CMake wiring.
 
 **Workflow:**
-- Keep RAW pipeline entrypoint changes in `alcedo/src/decoders/processor/raw_processor.cpp`.
-- Keep RAW GPU operator code under `alcedo/src/decoders/processor/operators/gpu/`.
-- For Metal implementations in the RAW Processor module, place shader sources in `alcedo/src/decoders/processor/operators/gpu/metal_shader/`.
-- When adding or renaming a RAW Processor Metal shader, update `alcedo/src/CMakeLists.txt` so the `.metal` file is compiled to `.air`, linked to `.metallib`, added to `RawProcessorOpMetalShaders`, and exposed to the matching C++ source via `target_compile_definitions(...)`.
-- Keep shared Metal image geometry helpers such as crop, resize, and warp outside `edit/operators/`; place them under `alcedo/src/metal/metal_utils/` with a dedicated utility name such as `geometry_utils`, and keep operators focused on orchestration.
+- Keep RAW pipeline entrypoint changes in `alcedo_studio/src/decoders/processor/raw_processor.cpp`.
+- Keep RAW GPU operator code under `alcedo_studio/src/decoders/processor/operators/gpu/`.
+- For Metal implementations in the RAW Processor module, place shader sources in `alcedo_studio/src/decoders/processor/operators/gpu/metal_shader/`.
+- When adding or renaming a RAW Processor Metal shader, update `alcedo_studio/src/CMakeLists.txt` so the `.metal` file is compiled to `.air`, linked to `.metallib`, added to `RawProcessorOpMetalShaders`, and exposed to the matching C++ source via `target_compile_definitions(...)`.
+- Keep shared Metal image geometry helpers such as crop, resize, and warp outside `edit/operators/`; place them under `alcedo_studio/src/metal/metal_utils/` with a dedicated utility name such as `geometry_utils`, and keep operators focused on orchestration.
 
 **Rules:**
 - Match RAW Metal operator behavior to the corresponding CPU or CUDA implementation before changing pipeline flow.

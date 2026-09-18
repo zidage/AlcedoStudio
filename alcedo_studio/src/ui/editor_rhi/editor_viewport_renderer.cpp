@@ -18,6 +18,7 @@
 #include "ui/editor_rhi/direct_frame_sink.hpp"
 #include "ui/editor_rhi/editor_backend.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
+#include "ui/editor_rhi/lease_target_adapters.hpp"
 #include "ui/editor_rhi/native_resource_counters.hpp"
 #include "utils/diagnostics/app_logging.hpp"
 #include "utils/diagnostics/render_e2e_timing.hpp"
@@ -93,6 +94,13 @@ auto RoleToLeaseLayer(FrameRole role) -> LeaseFrameLayer {
 EditorViewportRenderer::EditorViewportRenderer() = default;
 
 EditorViewportRenderer::~EditorViewportRenderer() {
+  if (consume_arm_slot_) {
+    // Clear the handoff slot only when it still names this renderer; a newer
+    // renderer may already be published for the next scene-graph pass.
+    EditorViewportRenderer* expected = this;
+    consume_arm_slot_->compare_exchange_strong(expected, nullptr,
+                                               std::memory_order_acq_rel);
+  }
   if (present_queue_) {
     // Renderer lifetime, not QWindow exposure, defines whether native target
     // requests can be serviced.
@@ -101,6 +109,18 @@ EditorViewportRenderer::~EditorViewportRenderer() {
   releaseResources();
   releaseQueuedNatives();
   adapter_.reset();
+}
+
+void EditorViewportRenderer::SetConsumeArmSlot(
+    std::shared_ptr<std::atomic<EditorViewportRenderer*>> slot) {
+  consume_arm_slot_ = std::move(slot);
+}
+
+void EditorViewportRenderer::ArmForPresent() {
+  // scheduleUpdate(): set the node's render-pending flag and request one more
+  // window frame. Called on the render thread; QWindow-side update requests
+  // are thread-safe.
+  update();
 }
 
 auto EditorViewportRenderer::layerForRole(FrameRole role) const -> LayerId {
@@ -142,6 +162,15 @@ void EditorViewportRenderer::releaseLayer(LayerState& layer) {
     destroyResource(shader_resource_bindings_);
     bound_primary_texture_ = nullptr;
     bound_detail_texture_  = nullptr;
+  }
+  // OpenCL/GL: the three-slot queue recycles this native texture on the next
+  // producer write (second node switch, or Add Mask releasing an auxiliary
+  // layer). CompleteRendererRead only drops the CPU import; glFinish waits for
+  // the previous scene-graph sample before OpenCL may acquire the texture.
+  const bool wait_gl_before_recycle =
+      backend_ == EditorBackend::OpenCl && layer.imported && layer.slot_index >= 0;
+  if (wait_gl_before_recycle) {
+    FinishOpenGlBeforeOpenClSharedTextureReuse();
   }
   destroyResource(layer.texture);
   if (layer.imported) {
@@ -570,7 +599,7 @@ void EditorViewportRenderer::consumeDirectFrames() {
     layer.imported_owner.reset();
     layer.imported_native_handle = frame->slot.native.native_handle;
     content_dirty_               = true;
-    diag::NoteRenderE2eDisplayed(layer.preview_metadata.presentation_request_id);
+    diag::NoteRenderE2eImported(layer.preview_metadata.presentation_request_id);
     if (role == FrameRole::DetailPatch) {
       qCDebug(editorPresentLog) << "[ROI_TRACE][renderer-imported] request="
                                 << layer.preview_metadata.presentation_request_id
@@ -599,10 +628,14 @@ void EditorViewportRenderer::consumeImportedGpuFrames() {
     diag::NoteRenderE2eConsumeBegin(request_id);
     qCDebug(editorPresentLog,
             "[EditorPresent] consuming Metal import request=%llu image=%llu epoch=%llu "
-            "size=%dx%d handle=%llu",
+            "role=%d mode=%d size=%dx%d roi=%.6f,%.6f,%.6f,%.6f handle=%llu",
             static_cast<unsigned long long>(request_id),
             static_cast<unsigned long long>(frame.image_identity),
-            static_cast<unsigned long long>(frame.session_epoch), frame.width, frame.height,
+            static_cast<unsigned long long>(frame.session_epoch), static_cast<int>(role),
+            static_cast<int>(frame.presentation_mode), frame.width, frame.height,
+            frame.preview_metadata.source_roi_norm.x, frame.preview_metadata.source_roi_norm.y,
+            frame.preview_metadata.source_roi_norm.width,
+            frame.preview_metadata.source_roi_norm.height,
             static_cast<unsigned long long>(frame.texture_handle));
     if (role == FrameRole::DetailPatch) {
       qCDebug(editorPresentLog) << "[ROI_TRACE][renderer-metal-import-begin] request="
@@ -629,7 +662,7 @@ void EditorViewportRenderer::consumeImportedGpuFrames() {
       layer.ready_frame.slot.sequence          = frame.sequence;
       layer.texture->setNativeLayout(frame.native_layout);
       content_dirty_ = true;
-      diag::NoteRenderE2eDisplayed(layer.preview_metadata.presentation_request_id);
+      diag::NoteRenderE2eImported(layer.preview_metadata.presentation_request_id);
       if (role == FrameRole::DetailPatch) {
         qCDebug(editorPresentLog) << "[ROI_TRACE][renderer-metal-reused] request="
                                   << layer.preview_metadata.presentation_request_id
@@ -682,7 +715,7 @@ void EditorViewportRenderer::consumeImportedGpuFrames() {
     layer.ready_frame.slot.sequence          = frame.sequence;
     NativeResourceCounters::Instance().OnCreateImportedQRhiTexture();
     content_dirty_ = true;
-    diag::NoteRenderE2eDisplayed(layer.preview_metadata.presentation_request_id);
+    diag::NoteRenderE2eImported(layer.preview_metadata.presentation_request_id);
     if (role == FrameRole::DetailPatch) {
       qCDebug(editorPresentLog) << "[ROI_TRACE][renderer-metal-imported] request="
                                 << layer.preview_metadata.presentation_request_id
@@ -745,13 +778,20 @@ void EditorViewportRenderer::traceDetailDecision(
   const bool          has_roi     = detail && current_roi.has_value();
   const bool          roi_changed = has_roi != last_detail_trace_has_roi_ ||
                            (has_roi && !SameRoi(*current_roi, last_detail_trace_roi_));
+  const auto& transform    = view_state_.snapshot.view_transform;
+  const bool  view_changed = std::abs(transform.zoom - last_detail_trace_zoom_) > 1.0e-5f ||
+                            std::abs(transform.pan.x() - last_detail_trace_pan_x_) > 1.0e-5f ||
+                            std::abs(transform.pan.y() - last_detail_trace_pan_y_) > 1.0e-5f;
   if (last_detail_trace_decision_ == decision && last_detail_trace_request_id_ == request_id &&
-      !roi_changed) {
+      !roi_changed && !view_changed) {
     return;
   }
   last_detail_trace_decision_   = decision;
   last_detail_trace_request_id_ = request_id;
   last_detail_trace_has_roi_    = has_roi;
+  last_detail_trace_zoom_       = transform.zoom;
+  last_detail_trace_pan_x_      = transform.pan.x();
+  last_detail_trace_pan_y_      = transform.pan.y();
   if (has_roi) last_detail_trace_roi_ = *current_roi;
 
   if (!editorPresentLog().isDebugEnabled()) {
@@ -762,7 +802,8 @@ void EditorViewportRenderer::traceDetailDecision(
   QString     msg =
       QStringLiteral(
           "[ROI_TRACE][renderer-decision] decision=%1 detail_request=%2 detail_valid=%3 "
-          "quality_request=%4 interactive_request=%5 base_request=%6 image=%7 session_epoch=%8")
+          "quality_request=%4 interactive_request=%5 base_request=%6 image=%7 session_epoch=%8 "
+          "view_zoom=%9 view_pan=%10,%11 ref=%12x%13")
           .arg(QLatin1String(decision))
           .arg(request_id)
           .arg((detail && detail->valid) ? 1 : 0)
@@ -770,7 +811,12 @@ void EditorViewportRenderer::traceDetailDecision(
           .arg(interactive.valid ? interactive.preview_metadata.presentation_request_id : 0)
           .arg(base ? base->preview_metadata.presentation_request_id : 0)
           .arg(image_identity_)
-          .arg(session_epoch_);
+          .arg(session_epoch_)
+          .arg(transform.zoom)
+          .arg(transform.pan.x())
+          .arg(transform.pan.y())
+          .arg(view_state_.snapshot.render_reference_width)
+          .arg(view_state_.snapshot.render_reference_height);
   const auto* selected_primary = selectedPrimaryLayer();
   if (selected_primary) {
     msg += QStringLiteral(" selected_primary_size=%1x%2 selected_primary_mode=%3")
@@ -802,6 +848,15 @@ void EditorViewportRenderer::traceDetailDecision(
                .arg(current_roi->height);
   } else {
     msg += QStringLiteral(" current_roi=none");
+  }
+  if (const auto& region = view_state_.snapshot.viewport_render_region_cache; region.has_value()) {
+    msg += QStringLiteral(" viewport_target=%1x%2 viewport_ref=%3x%4")
+               .arg(region->target_width_)
+               .arg(region->target_height_)
+               .arg(region->reference_width_)
+               .arg(region->reference_height_);
+  } else {
+    msg += QStringLiteral(" viewport_target=none");
   }
   qCDebug(editorPresentLog).noquote() << msg;
 }

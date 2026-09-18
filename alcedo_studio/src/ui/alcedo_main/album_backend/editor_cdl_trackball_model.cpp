@@ -22,6 +22,17 @@ void UpdateDerived(CdlWheelState& wheel, bool add_unity, bool invert_delta) {
   wheel.color_offset_  = {base + sign * delta[0], base + sign * delta[1], base + sign * delta[2]};
 }
 
+auto WheelWrite(const CdlWheelState& wheel) -> alcedo::ColorWheelControlUpdate {
+  alcedo::ColorWheelControlUpdate update;
+  update.disc = alcedo::Vec2f{static_cast<float>(wheel.disc_position_.x()),
+                              static_cast<float>(wheel.disc_position_.y())};
+  update.strength = wheel.strength_;
+  update.color_offset =
+      alcedo::Vec3f{wheel.color_offset_[0], wheel.color_offset_[1], wheel.color_offset_[2]};
+  update.luminance_offset = std::clamp(wheel.master_offset_, -1.0f, 1.0f);
+  return update;
+}
+
 auto WheelJson(const CdlWheelState& wheel) -> QJsonObject {
   QJsonObject disc;
   disc.insert(QStringLiteral("x"), static_cast<double>(wheel.disc_position_.x()));
@@ -358,9 +369,23 @@ void EditorCdlTrackballModel::applyMasterUi(WheelId id, int ui_value) {
   emitWheel(id);
 }
 
-void EditorCdlTrackballModel::submitInteractive() { submitNow(buildParamsJson(), false); }
+void EditorCdlTrackballModel::submitInteractive() { submitNow(currentColorWheelWrite(), false); }
 
-void EditorCdlTrackballModel::submitSettled() { submitNow(buildParamsJson(), true); }
+void EditorCdlTrackballModel::submitSettled() { submitNow(currentColorWheelWrite(), true); }
+
+auto EditorCdlTrackballModel::currentColorWheelWrite() const -> alcedo::ColorWheelUpdate {
+  CdlWheelState lift  = lift_;
+  CdlWheelState gamma = gamma_;
+  CdlWheelState gain  = gain_;
+  UpdateDerived(lift, false, false);
+  UpdateDerived(gamma, true, true);
+  UpdateDerived(gain, true, false);
+  alcedo::ColorWheelUpdate update;
+  update.lift  = WheelWrite(lift);
+  update.gamma = WheelWrite(gamma);
+  update.gain  = WheelWrite(gain);
+  return update;
+}
 
 auto EditorCdlTrackballModel::buildParamsJson() const -> QString {
   CdlWheelState lift  = lift_;

@@ -1,0 +1,274 @@
+//  Copyright 2026 Yurun Zi
+//  SPDX-License-Identifier: GPL-3.0-only
+//  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
+
+#pragma once
+
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <optional>
+#include <span>
+#include <stdexcept>
+#include <utility>
+
+#include "edit/graph/pipeline_document.hpp"
+#include "edit/pipeline/pipeline_apply_request.hpp"
+#include "edit/runtime/drt_display.hpp"
+#include "edit/runtime/frame_presenter.hpp"
+#include "edit/runtime/develop_demosaic.hpp"
+#include "edit/runtime/graph_compiler.hpp"
+#include "edit/runtime/renderer.hpp"
+#include "edit/runtime/result_persistence.hpp"
+#include "gpu/transient_allocation_policy.hpp"
+#include "image/image_buffer.hpp"
+#include "utils/diagnostics/preview_performance.hpp"
+
+namespace alcedo {
+namespace detail {
+
+template <class Backend>
+void TraceGpuDagGeometry(const ExecutionPlan& plan, const RenderRequest& request,
+                         const FrameCompletionSubmission& submission) {
+  const char* enabled = std::getenv("ALCEDO_ROI_TRACE");
+  if (enabled == nullptr || enabled[0] == '\0' || enabled[0] == '0') {
+    return;
+  }
+  const auto& view                  = request.view.visible_rect_in_edit_space;
+  const auto& geometry              = plan.geometry;
+  const auto  native_visible_width  = static_cast<float>(geometry.edit_extent.width) * view.w;
+  const auto  native_visible_height = static_cast<float>(geometry.edit_extent.height) * view.h;
+  const bool  nearest_viewer_expansion =
+      !view.IsFullFrame() && (request.view.viewport_extent.width > geometry.render_extent.width ||
+                              request.view.viewport_extent.height > geometry.render_extent.height);
+  std::fprintf(
+      stderr,
+      "[ROI_TRACE][gpu-dag-geometry] backend=%s request=%llu role=%d mode=%d "
+      "decoded=%ux%u full_ref=%ux%u edit=%ux%u roi=%.6f,%.6f,%.6f,%.6f "
+      "native_roi=%.2fx%.2f viewport_target=%ux%u max_edge=%u render=%ux%u filter=%d "
+      "viewer_nearest_expand=%d required_decoded=%d,%d,%d,%d\n",
+      Backend::kName, static_cast<unsigned long long>(submission.metadata.presentation_request_id),
+      static_cast<int>(submission.metadata.frame_role), static_cast<int>(submission.mode),
+      geometry.decoded_extent.width, geometry.decoded_extent.height,
+      geometry.full_reference_extent.width, geometry.full_reference_extent.height,
+      geometry.edit_extent.width, geometry.edit_extent.height, view.x, view.y, view.w, view.h,
+      native_visible_width, native_visible_height, request.view.viewport_extent.width,
+      request.view.viewport_extent.height, request.resolution.max_edge,
+      geometry.render_extent.width, geometry.render_extent.height,
+      static_cast<int>(geometry.filter), nearest_viewer_expansion ? 1 : 0,
+      geometry.required_decoded_region.x, geometry.required_decoded_region.y,
+      geometry.required_decoded_region.width, geometry.required_decoded_region.height);
+}
+
+}  // namespace detail
+
+template <class Backend>
+auto Renderer<Backend>::Render(const std::shared_ptr<ImageBuffer>& input, DecodeRes decode_res,
+                               const RenderRequest& request, IFrameSink* sink,
+                               const FrameCompletionSubmission& submission,
+                               bool require_host_output, RenderCachePolicy cache_policy,
+                               const std::optional<ExportColorProfileConfig>& output_color)
+    -> std::shared_ptr<ImageBuffer> {
+  PipelineApplyRequest apply;
+  apply.geometry            = request;
+  apply.decode_res          = decode_res;
+  apply.cache_policy        = cache_policy;
+  apply.require_host_output = require_host_output;
+  apply.sink                = sink;
+  apply.submission          = submission;
+  apply.output_color        = output_color;
+  return Render(input, apply);
+}
+
+template <class Backend>
+auto Renderer<Backend>::Render(const std::shared_ptr<ImageBuffer>& input,
+                               const PipelineApplyRequest& request) -> std::shared_ptr<ImageBuffer> {
+  if (!document_) {
+    throw std::runtime_error("Renderer: PipelineDocument is not configured");
+  }
+  if (!input || !input->buffer_valid_) {
+    throw std::runtime_error("Renderer: product path requires encoded image bytes");
+  }
+  const bool use_session_cache = request.cache_policy == RenderCachePolicy::UseSessionCache;
+
+  auto&      encoded       = input->GetBuffer();
+  const auto encoded_bytes = std::span<const std::byte>{
+      reinterpret_cast<const std::byte*>(encoded.data()), encoded.size()};
+  if (use_session_cache) {
+    EnsureSessionDevice();
+  } else {
+    EnsureOneShotDevice();
+  }
+
+  std::optional<PreparedSourceCache::Lease> prepared_lease;
+  std::optional<PreparedRawInput>           one_shot_prepared;
+  ExecutionPlan                             plan;
+  RenderDevice*                             render_device = device_.get();
+  struct BoundPreviewRequest {
+    explicit BoundPreviewRequest(std::uint64_t request_id) {
+      diag::PreviewPerformance::BindCurrentRequest(request_id);
+    }
+    ~BoundPreviewRequest() { diag::PreviewPerformance::ClearCurrentRequest(); }
+  };
+  BoundPreviewRequest bound_request(request.submission.metadata.presentation_request_id);
+  if (use_session_cache) {
+    prepared_lease.emplace(source_cache_.AcquireEncoded(encoded_bytes, request.decode_res));
+    plan = plan_cache_.GetOrCompile(*document_, prepared_lease->Get().CompileSource());
+  } else {
+    one_shot_prepared.emplace(unpack_(encoded_bytes, request.decode_res));
+    diag::PreviewCpuInterval compile(diag::PreviewCpuStage::PlanCompile);
+    plan          = GraphCompiler::CompileStatic(*document_, one_shot_prepared->CompileSource(),
+                                                 Backend::kCapabilityVersion);
+    render_device = one_shot_device_.get();
+  }
+  GraphCompiler::BindFrameGeometry(plan, *document_, request.geometry);
+  plan.output_color_override = request.output_color;
+  if (diag::PreviewPerformanceEnabled()) {
+    diag::PreviewPerformance::NoteRenderExtent(plan.geometry.render_extent.width,
+                                               plan.geometry.render_extent.height);
+  }
+  detail::TraceGpuDagGeometry<Backend>(plan, request.geometry, request.submission);
+  const auto& prepared = use_session_cache ? prepared_lease->Get() : *one_shot_prepared;
+  const auto persistence =
+      use_session_cache ? ResultPersistenceScopeForRole(request.submission.metadata.frame_role)
+                        : ResultPersistenceScope::AllCurrentResults;
+  if (diag::PreviewPerformanceEnabled()) {
+    diag::PreviewDevelopDecodeParams develop;
+    switch (request.decode_res) {
+      case DecodeRes::HALF:
+        develop.decode_res = diag::PreviewDecodeRes::Half;
+        break;
+      case DecodeRes::QUARTER:
+        develop.decode_res = diag::PreviewDecodeRes::Quarter;
+        break;
+      case DecodeRes::EIGHTH:
+        develop.decode_res = diag::PreviewDecodeRes::Eighth;
+        break;
+      case DecodeRes::FULL:
+      default:
+        develop.decode_res = diag::PreviewDecodeRes::Full;
+        break;
+    }
+    switch (prepared.CompileSource().kind) {
+      case DevelopInputKind::XTransCfa:
+        develop.cfa = diag::PreviewCfaKind::XTrans;
+        break;
+      case DevelopInputKind::DirectRgb:
+        develop.cfa = diag::PreviewCfaKind::DirectRgb;
+        develop.upload_rgb = true;
+        develop.layout = diag::PreviewDevelopLayout::UploadRgb;
+        break;
+      case DevelopInputKind::BayerCfa:
+      default:
+        develop.cfa = diag::PreviewCfaKind::Bayer;
+        break;
+    }
+    const auto* develop_node = document_->Develop();
+    const auto method =
+        develop_node == nullptr
+            ? RawDemosaicMethod::Legacy
+            : ResolveDevelopDemosaicMethod(develop_node->Params().Params(), prepared.CompileSource());
+    develop.demosaic = method == RawDemosaicMethod::NeuralEngine
+                           ? diag::PreviewDemosaicMethod::NeuralEngine
+                           : diag::PreviewDemosaicMethod::Legacy;
+    develop.highlights_reconstruct =
+        develop_node != nullptr && develop_node->Params().Params().highlights_reconstruct;
+    develop.downsample_passes = prepared.downsample_passes;
+    develop.host_width        = prepared.host_extent.width;
+    develop.host_height       = prepared.host_extent.height;
+    develop.develop_width     = prepared.develop_output_extent.width;
+    develop.develop_height    = prepared.develop_output_extent.height;
+    develop.full_ref_width    = prepared.full_reference_extent.width;
+    develop.full_ref_height   = prepared.full_reference_extent.height;
+    diag::PreviewPerformance::NoteDevelopDecode(develop);
+  }
+  GraphValueId output_id;
+  {
+    diag::PreviewCpuInterval encode(diag::PreviewCpuStage::Encode);
+    output_id = render_device->Execute(
+        plan, prepared, *document_, false,
+        use_session_cache ? TransientAllocationPolicy::SessionPacked
+                          : TransientAllocationPolicy::ExactRelease,
+        persistence);
+  }
+  if (diag::PreviewPerformanceEnabled()) {
+    diag::PreviewPerformance::NoteResourceSnapshot(
+        render_device->Workspace().CaptureResourceSnapshot());
+  }
+  const auto release_one_shot_resources = [&]() {
+    if (use_session_cache) {
+      return;
+    }
+    render_device->Workspace().Images().DiscardUnpublished();
+    render_device->WaitIdle();
+    render_device->Workspace().ReleaseSessionResources();
+    render_device->ReleaseNeuralDemosaicWorkspace();
+  };
+
+  ViewerDisplayConfig display_config{};
+  if (request.output_color.has_value()) {
+    display_config.encoding_space = request.output_color->encoding_space;
+    display_config.encoding_eotf  = request.output_color->encoding_eotf;
+    display_config.peak_luminance = request.output_color->peak_luminance;
+  } else if (const auto* drt = document_->Drt()) {
+    display_config = ViewerDisplayConfigFromDrt(drt->Params().Params());
+  }
+
+  const auto finish_successful_session = [&]() {
+    if (!use_session_cache) {
+      release_one_shot_resources();
+      return;
+    }
+    render_device->PublishResults();
+    render_device->Workspace().ResultInvalidation().CompleteMatchingImages(
+        render_device->Workspace().Images());
+    if (persistence != ResultPersistenceScope::SensorDevelopOnly) {
+      return;
+    }
+    render_device->WaitIdle();
+    if (request.sink == nullptr) {
+      render_device->Workspace().Images().DiscardUnpublished();
+    } else {
+      render_device->Workspace().Images().ReleaseUnpublishedExcept(output_id);
+    }
+  };
+
+  try {
+    if (request.sink != nullptr) {
+      // Attach the exact resolved geometry so viewer-side Mask mapping uses the
+      // frame being presented instead of a separately derived document mapping.
+      FrameCompletionSubmission presented = request.submission;
+      presented.geometry                  = plan.geometry;
+      FramePresenter<Backend>::Present(*render_device, output_id, *request.sink, presented,
+                                       display_config);
+    }
+    if (request.require_host_output) {
+      auto host = FramePresenter<Backend>::Download(*render_device, output_id);
+      finish_successful_session();
+      return host;
+    }
+    finish_successful_session();
+  } catch (const std::exception& ex) {
+    try {
+      if (render_device->Workspace().IsRendering()) {
+        render_device->CancelRender();
+      } else {
+        render_device->WaitIdle();
+      }
+      render_device->Workspace().Images().DiscardUnpublished();
+      if (!use_session_cache) {
+        render_device->WaitIdle();
+        render_device->Workspace().ReleaseSessionResources();
+        render_device->ReleaseNeuralDemosaicWorkspace();
+      }
+    } catch (...) {
+      // Preserve the original presentation/download error. The device destructor or
+      // session teardown still owns the last-resort wait and resource release.
+    }
+    render_device->ReportError(ex.what());
+    throw;
+  }
+  return std::make_shared<ImageBuffer>();
+}
+
+}  // namespace alcedo

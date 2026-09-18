@@ -31,7 +31,8 @@ EditorViewportItem::EditorViewportItem(QQuickItem* parent)
   setColorBufferFormat(QQuickRhiItem::TextureFormat::RGBA32F);
   setMirrorVertically(false);
   setAlphaBlending(false);
-  frame_sink_ = std::make_unique<DirectFrameSink>(this);
+  frame_sink_  = std::make_shared<DirectFrameSink>(this);
+  consume_arm_ = std::make_shared<std::atomic<EditorViewportRenderer*>>(nullptr);
   connect(this, &QQuickItem::windowChanged, this, [this](QQuickWindow* window) {
     attachWindow(window);
     if (window && isVisible() && window->visibility() != QWindow::Hidden &&
@@ -158,7 +159,19 @@ void EditorViewportItem::setImageIdentity(qulonglong identity) {
   if (previous == identity) {
     return;
   }
+  presented_mask_geometry_   = {};
+  presented_mask_request_id_ = 0;
   emit ImageIdentityChanged();
+}
+
+void EditorViewportItem::NotePresentedMaskGeometry(const ResolvedRenderGeometry& geometry,
+                                                   qulonglong                    request_id) {
+  if (request_id != 0 && request_id <= presented_mask_request_id_) {
+    return;
+  }
+  presented_mask_geometry_   = geometry;
+  presented_mask_request_id_ = request_id;
+  emit PresentedMaskGeometryChanged();
 }
 
 void EditorViewportItem::setSessionEpoch(qulonglong epoch) {
@@ -274,6 +287,9 @@ void EditorViewportItem::continueInteractivePresentLoop() {
   if (!presentation_requested_.load(std::memory_order_acquire)) {
     return;
   }
+  if (present_queue_ == nullptr || !present_queue_->HasReadyFrame()) {
+    return;
+  }
   requestPresentUpdateOnGuiThread();
   interactive_present_loop_tick_count_.fetch_add(1, std::memory_order_acq_rel);
 }
@@ -294,14 +310,10 @@ void EditorViewportItem::refreshPresentationAvailability() {
 void EditorViewportItem::requestPresentUpdateOnGuiThread() {
   // Worker threads must not call QQuickItem::update() directly.
   auto request = [this] {
-    // QQuickItem already coalesces update requests. A separate sticky flag
-    // can remain set while the item is hidden and suppress the first update
-    // after exposure, stranding a producer waiting for its native target.
+    // QQuickItem already coalesces update requests and schedules the window
+    // frame. Do not also call QWindow::requestUpdate(): that path waits for
+    // vsync and can add a full display period after a Ready frame arrives.
     update();
-    if (QQuickWindow* w = window()) {
-      w->requestUpdate();
-    }
-    // Stamp every Ready frame waiting on this GUI wake (P0 present split).
     diag::NoteRenderE2eGuiUpdate();
   };
   if (thread() == QThread::currentThread()) {
@@ -318,7 +330,10 @@ auto EditorViewportItem::createRenderer() -> QQuickRhiItemRenderer* {
           "[EditorPresent] creating QQuickRhiItem renderer image=%llu epoch=%llu",
           static_cast<unsigned long long>(imageIdentity()),
           static_cast<unsigned long long>(sessionEpoch()));
-  return new EditorViewportRenderer();
+  auto* renderer = new EditorViewportRenderer();
+  renderer->SetConsumeArmSlot(consume_arm_);
+  consume_arm_->store(renderer, std::memory_order_release);
+  return renderer;
 }
 
 void EditorViewportItem::attachWindow(QQuickWindow* window) {
@@ -359,12 +374,38 @@ void EditorViewportItem::attachWindow(QQuickWindow* window) {
         applyDisplayConfig();
       },
       Qt::QueuedConnection);
+  // Arm prompt Ready-frame consumption at a render-thread presentation
+  // opportunity. This connection is registered while no QQuickRhiItemNode
+  // exists yet, so it runs before the node's own beforeRendering→render
+  // slot: when a Ready frame waits, update() arms the node's pending flag
+  // and the same render pass consumes it — no GUI update() or scene-graph
+  // synchronization required. Captures shared state only, so an emission
+  // racing item destruction touches no item members.
+  before_rendering_connection_ = connect(
+      attached_window_, &QQuickWindow::beforeRendering, this,
+      [queue = present_queue_, sink = frame_sink_, arm = consume_arm_] {
+        const bool ready = (queue && queue->HasReadyFrame()) ||
+                           (sink && sink->HasPendingImportedFrame());
+        if (!ready) {
+          return;
+        }
+        if (auto* renderer = arm->load(std::memory_order_acquire)) {
+          renderer->ArmForPresent();
+        }
+      },
+      Qt::DirectConnection);
   // afterRendering runs on the render thread (threaded loop). Queue the
   // continue onto the GUI thread so QQuickItem::update() stays thread-safe.
   // Present can wait for vsync while that queued request is processed.
   after_rendering_connection_ = connect(
       attached_window_, &QQuickWindow::afterRendering, this,
       [this] { continueInteractivePresentLoop(); }, Qt::QueuedConnection);
+  frame_swapped_connection_ = connect(
+      attached_window_, &QQuickWindow::frameSwapped, this,
+      [] { diag::NoteRenderE2eFrameSwapped(); }, Qt::DirectConnection);
+  after_frame_end_connection_ = connect(
+      attached_window_, &QQuickWindow::afterFrameEnd, this, [] { diag::NoteRenderE2eFrameEnd(); },
+      Qt::DirectConnection);
   if (interactive_present_loop_.load(std::memory_order_acquire)) {
     requestPresentUpdate();
   }
@@ -379,12 +420,18 @@ void EditorViewportItem::detachWindow(bool reset_display) {
   QObject::disconnect(window_screen_connection_);
   QObject::disconnect(scene_graph_invalidated_connection_);
   QObject::disconnect(scene_graph_initialized_connection_);
+  QObject::disconnect(before_rendering_connection_);
   QObject::disconnect(after_rendering_connection_);
+  QObject::disconnect(frame_swapped_connection_);
+  QObject::disconnect(after_frame_end_connection_);
   window_visibility_connection_       = {};
   window_screen_connection_           = {};
   scene_graph_invalidated_connection_ = {};
   scene_graph_initialized_connection_ = {};
+  before_rendering_connection_        = {};
   after_rendering_connection_         = {};
+  frame_swapped_connection_           = {};
+  after_frame_end_connection_         = {};
   attached_window_                    = nullptr;
 }
 

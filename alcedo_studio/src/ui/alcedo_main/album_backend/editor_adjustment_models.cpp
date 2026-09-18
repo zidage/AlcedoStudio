@@ -12,7 +12,9 @@
 #include <QTimer>
 #include <algorithm>
 #include <cmath>
+#include <exception>
 
+#include "app/editor_parameter_write.hpp"
 #include "ui/alcedo_main/album_backend/editor_cdl_trackball_item.hpp"
 #include "ui/alcedo_main/album_backend/editor_cdl_trackball_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_color_temp_model.hpp"
@@ -25,6 +27,20 @@
 #include "ui/alcedo_main/album_backend/editor_tone_curve_model.hpp"
 
 namespace alcedo::ui {
+
+namespace {
+
+auto UiValueToModelValue(const QString& field_key, double value) -> float {
+  if (field_key == QLatin1String("saturation")) {
+    return static_cast<float>(std::max(0.0, 1.0 + value / 100.0));
+  }
+  if (field_key == QLatin1String("film_grain") || field_key == QLatin1String("halation")) {
+    return static_cast<float>(std::clamp(value / 100.0, 0.0, 1.0));
+  }
+  return static_cast<float>(value);
+}
+
+}  // namespace
 
 // ── EditorAdjustmentModelBase ───────────────────────────────────────────────
 
@@ -98,11 +114,29 @@ auto EditorAdjustmentModelBase::resolveParams(const QJSValue& arg, const QString
   return defaultJson;
 }
 
-auto EditorAdjustmentModelBase::submitNow(const QString& paramsJson, bool settled) -> bool {
+auto EditorAdjustmentModelBase::submitNow(alcedo::EditorParameterWrite write, bool settled)
+    -> bool {
   if (submitter_ == nullptr || !submitter_->canEdit()) {
     return false;
   }
-  return submitter_->submitPatch(fieldKey_, paramsJson, settled);
+  return submitter_->submitWrite(fieldKey_, std::move(write), settled);
+}
+
+auto EditorAdjustmentModelBase::submitJsonBoundary(const QString& paramsJson, bool settled)
+    -> bool {
+  nlohmann::json parsed;
+  try {
+    parsed = paramsJson.isEmpty() ? nlohmann::json::object()
+                                  : nlohmann::json::parse(paramsJson.toStdString());
+  } catch (const std::exception&) {
+    return false;
+  }
+  std::string error;
+  auto        write = alcedo::ParseEditorParameterWrite(fieldKey_.toStdString(), parsed, &error);
+  if (!write.has_value()) {
+    return false;
+  }
+  return submitNow(std::move(*write), settled);
 }
 
 // ── EditorAdjustmentValueModel ───────────────────────────────────────────────
@@ -278,11 +312,27 @@ auto EditorAdjustmentValueModel::applyValue(double v) -> bool {
 }
 
 void EditorAdjustmentValueModel::submitInteractive(double v) {
-  submitNow(resolveParams(QJSValue(v), numericParamsJson(v)), false);
+  if (paramsBuilder().isCallable()) {
+    submitJsonBoundary(resolveParams(QJSValue(v), numericParamsJson(v)), false);
+    return;
+  }
+  if (fieldKey() == QLatin1String("sharpen")) {
+    submitNow(alcedo::SharpenUpdate{static_cast<float>(v), std::nullopt, std::nullopt}, false);
+    return;
+  }
+  submitNow(alcedo::EditorScalarWrite{UiValueToModelValue(fieldKey(), v)}, false);
 }
 
 void EditorAdjustmentValueModel::submitSettled(double v) {
-  submitNow(resolveParams(QJSValue(v), numericParamsJson(v)), true);
+  if (paramsBuilder().isCallable()) {
+    submitJsonBoundary(resolveParams(QJSValue(v), numericParamsJson(v)), true);
+    return;
+  }
+  if (fieldKey() == QLatin1String("sharpen")) {
+    submitNow(alcedo::SharpenUpdate{static_cast<float>(v), std::nullopt, std::nullopt}, true);
+    return;
+  }
+  submitNow(alcedo::EditorScalarWrite{UiValueToModelValue(fieldKey(), v)}, true);
 }
 
 void EditorAdjustmentValueModel::onDebounceTimeout() {
@@ -342,8 +392,13 @@ void EditorAdjustmentEnumModel::selectIndex(int i) {
   }
   currentIndex_ = i;
   emit currentIndexChanged();
-  submitNow(resolveParams(QJSValue(currentValue()), enumParamsJson(currentIndex_, currentValue())),
-            true);
+  if (paramsBuilder().isCallable()) {
+    submitJsonBoundary(
+        resolveParams(QJSValue(currentValue()), enumParamsJson(currentIndex_, currentValue())),
+        true);
+    return;
+  }
+  submitNow(alcedo::EditorEnumWrite{currentValue().toStdString()}, true);
 }
 
 void EditorAdjustmentEnumModel::reset() {
@@ -353,8 +408,13 @@ void EditorAdjustmentEnumModel::reset() {
   }
   currentIndex_ = defaultIndex_;
   emit currentIndexChanged();
-  submitNow(resolveParams(QJSValue(currentValue()), enumParamsJson(currentIndex_, currentValue())),
-            true);
+  if (paramsBuilder().isCallable()) {
+    submitJsonBoundary(
+        resolveParams(QJSValue(currentValue()), enumParamsJson(currentIndex_, currentValue())),
+        true);
+    return;
+  }
+  submitNow(alcedo::EditorEnumWrite{currentValue().toStdString()}, true);
 }
 
 // ── EditorAdjustmentToggleModel ──────────────────────────────────────────────
@@ -384,7 +444,11 @@ void EditorAdjustmentToggleModel::commitValue(bool v) {
   }
   value_ = v;
   emit valueChanged();
-  submitNow(resolveParams(QJSValue(v), toggleParamsJson(v)), true);
+  if (paramsBuilder().isCallable()) {
+    submitJsonBoundary(resolveParams(QJSValue(v), toggleParamsJson(v)), true);
+    return;
+  }
+  submitNow(alcedo::EditorToggleWrite{v}, true);
 }
 
 void EditorAdjustmentToggleModel::toggle() { commitValue(!value_); }

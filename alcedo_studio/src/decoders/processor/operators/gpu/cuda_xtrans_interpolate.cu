@@ -180,6 +180,47 @@ __global__ void XTransRgbKernel(const cv::cuda::PtrStep<float> raw,
 
 }  // namespace
 
+void XTransToRGB_Ref(const cv::cuda::GpuMat& raw, cv::cuda::GpuMat& green, cv::cuda::GpuMat& output,
+                     const XTransPattern6x6& pattern, int passes, cv::cuda::Stream* stream) {
+  if (raw.empty()) {
+    throw std::runtime_error("CUDA::XTransToRGB_Ref: input image is empty");
+  }
+  if (raw.type() != CV_32FC1) {
+    throw std::runtime_error("CUDA::XTransToRGB_Ref: expected CV_32FC1 raw input");
+  }
+  if (green.type() != CV_32FC1 || green.size() != raw.size() || green.empty()) {
+    throw std::runtime_error("CUDA::XTransToRGB_Ref: green must be a preallocated CV_32FC1 of raw size");
+  }
+  if (output.type() != CV_32FC3 || output.size() != raw.size() || output.empty()) {
+    throw std::runtime_error("CUDA::XTransToRGB_Ref: output must be a preallocated CV_32FC3 of raw size");
+  }
+
+  const int width  = raw.cols;
+  const int height = raw.rows;
+  if (width <= 0 || height <= 0) {
+    return;
+  }
+
+  cv::cuda::Stream  local_stream;
+  cv::cuda::Stream& active_stream = stream == nullptr ? local_stream : *stream;
+  cudaStream_t      cuda_stream   = cv::cuda::StreamAccessor::getStream(active_stream);
+
+  const dim3 threads(32, 8);
+  const dim3 blocks((width + threads.x - 1) / threads.x, (height + threads.y - 1) / threads.y);
+  const int  green_radius = 3;
+  const int  rb_radius    = std::max(passes, 1) > 1 ? 4 : 3;
+
+  XTransGreenKernel<<<blocks, threads, 0, cuda_stream>>>(raw, green, width, height, pattern,
+                                                         green_radius);
+  CUDA_CHECK(cudaGetLastError());
+  XTransRgbKernel<<<blocks, threads, 0, cuda_stream>>>(raw, green, output, width, height, pattern,
+                                                       rb_radius);
+  CUDA_CHECK(cudaGetLastError());
+  if (stream == nullptr) {
+    active_stream.waitForCompletion();
+  }
+}
+
 void XTransToRGB_Ref(cv::cuda::GpuMat& image, const XTransPattern6x6& pattern, int passes) {
   if (image.empty()) {
     throw std::runtime_error("CUDA::XTransToRGB_Ref: input image is empty");
@@ -196,25 +237,7 @@ void XTransToRGB_Ref(cv::cuda::GpuMat& image, const XTransPattern6x6& pattern, i
 
   cv::cuda::GpuMat green(height, width, CV_32FC1);
   cv::cuda::GpuMat output(height, width, CV_32FC3);
-
-  cv::cuda::Stream stream;
-  cudaStream_t     cuda_stream = cv::cuda::StreamAccessor::getStream(stream);
-
-  const dim3       threads(32, 8);
-  const dim3 blocks((width + threads.x - 1) / threads.x, (height + threads.y - 1) / threads.y);
-
-  const int  green_radius = 3;
-  const int  rb_radius    = std::max(passes, 1) > 1 ? 4 : 3;
-
-  XTransGreenKernel<<<blocks, threads, 0, cuda_stream>>>(image, green, width, height, pattern,
-                                                         green_radius);
-  CUDA_CHECK(cudaGetLastError());
-
-  XTransRgbKernel<<<blocks, threads, 0, cuda_stream>>>(image, green, output, width, height, pattern,
-                                                       rb_radius);
-  CUDA_CHECK(cudaGetLastError());
-
-  stream.waitForCompletion();
+  XTransToRGB_Ref(image, green, output, pattern, passes, nullptr);
   image = output;
 }
 

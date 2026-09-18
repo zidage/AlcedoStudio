@@ -77,6 +77,15 @@ class OpenClDemosaicNetModelCache {
   std::string                               last_error_;
 };
 
+/**
+ * @brief Serializes one in-flight OpenCL Neural forward (DAG SensorDevelop or RAW).
+ *
+ * Cached module kernels mutate `clSetKernelArg` on shared `cl_kernel` objects.
+ * The DAG tile executor scratch is per-backend, but two forwards still cannot
+ * overlap on those kernels.
+ */
+[[nodiscard]] auto OpenClNeuralDecodeMutex() -> std::mutex&;
+
 }  // namespace alcedo
 
 #endif  // HAVE_OPENCL

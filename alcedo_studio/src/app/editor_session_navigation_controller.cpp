@@ -569,9 +569,13 @@ auto EditorSessionNavigationController::ContinueCheckoutVersion(const version_re
 
   std::string local_error;
   if (!history_->CheckoutVersion(lifecycle_.history_guard(), version_id, &local_error)) {
-    // Phase 7A repair: do NOT call lifecycle_.Fail(). The history port fails
-    // closed, so the prior Version and pipeline remain published. The caller
-    // decides whether to keep the image Interactive or enter recovery.
+    // Phase 7A repair: do NOT call lifecycle_.Fail() unless restore of the prior
+    // Version also failed. The history port fails closed, so the prior Version
+    // and pipeline remain published. The caller decides whether to keep the
+    // image Interactive or enter recovery.
+    if (local_error.rfind("fatal editor session", 0) == 0) {
+      lifecycle_.Fail(local_error);
+    }
     if (error) *error = local_error.empty() ? "Version checkout failed" : local_error;
     return false;
   }
@@ -583,7 +587,7 @@ auto EditorSessionNavigationController::ContinueCheckoutVersion(const version_re
 
   EditorRenderCommand command;
   command.operation_id = operation_id_;
-  command.reason       = EditorRenderReason::InitialFrame;
+  command.reason       = EditorRenderReason::VersionDocumentChanged;
   render_.RouteInitialRender(command, lifecycle_.identity(), lifecycle_.active_image_load_request());
   return true;
 }
@@ -599,6 +603,9 @@ auto EditorSessionNavigationController::ContinueCreateRootVersion(std::string  d
   std::string      local_error;
   if (!history_->CreateRootVersionAndCheckout(lifecycle_.history_guard(), std::move(display_name),
                                               &new_version_id, &local_error)) {
+    if (local_error.rfind("fatal editor session", 0) == 0) {
+      lifecycle_.Fail(local_error);
+    }
     if (error) *error = local_error.empty() ? "Failed to create root Version" : local_error;
     return false;
   }
@@ -609,7 +616,7 @@ auto EditorSessionNavigationController::ContinueCreateRootVersion(std::string  d
 
   EditorRenderCommand command;
   command.operation_id = operation_id_;
-  command.reason       = EditorRenderReason::InitialFrame;
+  command.reason       = EditorRenderReason::VersionDocumentChanged;
   render_.RouteInitialRender(command, lifecycle_.identity(), lifecycle_.active_image_load_request());
   return true;
 }
@@ -627,6 +634,9 @@ auto EditorSessionNavigationController::ContinueBranchFromCommit(const commit_ha
   if (!history_->BranchFromCommitAndCheckout(lifecycle_.history_guard(), commit_id,
                                              std::move(display_name), &new_version_id,
                                              &local_error)) {
+    if (local_error.rfind("fatal editor session", 0) == 0) {
+      lifecycle_.Fail(local_error);
+    }
     if (error) *error = local_error.empty() ? "Failed to branch from commit" : local_error;
     return false;
   }
@@ -637,7 +647,7 @@ auto EditorSessionNavigationController::ContinueBranchFromCommit(const commit_ha
 
   EditorRenderCommand command;
   command.operation_id = operation_id_;
-  command.reason       = EditorRenderReason::InitialFrame;
+  command.reason       = EditorRenderReason::VersionDocumentChanged;
   render_.RouteInitialRender(command, lifecycle_.identity(), lifecycle_.active_image_load_request());
   return true;
 }

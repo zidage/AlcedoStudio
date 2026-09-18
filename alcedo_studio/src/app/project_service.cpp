@@ -654,4 +654,5 @@ auto ProjectService::GetAiSidecarRuntimeService() const
   }
   return ai_sidecar_runtime_service_;
 }
+
 };  // namespace alcedo

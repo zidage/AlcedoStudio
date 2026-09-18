@@ -12,6 +12,10 @@
 
 #include "app/adjustment_transfer_service.hpp"
 
+namespace alcedo {
+class PipelineMgmtService;
+}
+
 namespace alcedo::ui {
 
 class ImportExportHandler;
@@ -39,28 +43,18 @@ class AdjustmentTransferController final : public QObject {
                                       const QVariantList& selectedKeys);
   Q_INVOKABLE QVariantMap Paste(const QVariantList& targetEntries, const QString& strategy);
   Q_INVOKABLE QVariantMap PasteIntoEditor(QObject* editorSession);
-  Q_INVOKABLE QVariantMap BeginMergeIntoEditor(QObject* editorSession);
-  Q_INVOKABLE QVariantMap CompleteMergeIntoEditor(QObject*            editorSession,
-                                                  const QVariantList& resolutions);
-  Q_INVOKABLE QVariantMap CancelMergeIntoEditor(QObject* editorSession);
   Q_INVOKABLE void        Discard();
 
-  // --- Phase 6C-8 private helpers ---
+  // --- Private helpers ---
 
   /// Paste adjustments to every target using the Mini-Git commit graph path.
   /// Each target gets a new root-relative Version.
   auto                    PasteViaMiniGit(const std::vector<sl_element_id_t>& ids,
                                           PipelineMgmtService&                pipeline_service) -> QVariantMap;
 
-  /// Merge adjustments into every target using the Mini-Git commit graph path.
-  /// Each target's active Version head advances to a two-parent merge commit
-  /// with every conflict resolved as "use all incoming".
-  auto MergeViaMiniGit(const std::vector<sl_element_id_t>& ids,
-                       PipelineMgmtService&                pipeline_service) -> QVariantMap;
-
   /// Shared post-apply processing: thumbnail invalidation, HDR metadata refresh,
   /// and project persistence.
-  void PostProcessApplyResult(const AdjustmentApplyResult& result, bool merge_strategy);
+  void PostProcessApplyResult(const AdjustmentApplyResult& result);
 
  signals:
   void PackageChanged();

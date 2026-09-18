@@ -4,16 +4,17 @@
 
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
 
-#include <QJsonArray>
-#include <QJsonDocument>
-#include <QJsonObject>
 #include <QSettings>
 #include <QThread>
+#include <QTimer>
 #include <QtGlobal>
 #include <algorithm>
-#include <cmath>
 #include <cstdint>
+#include <exception>
 
+#include "app/editor_adjustment_context.hpp"
+#include "app/editor_panel_projection.hpp"
+#include "app/editor_parameter_write.hpp"
 #include "app/editor_render_intent.hpp"
 #include "app/editor_session_ports.hpp"
 #include "app/editor_session_service.hpp"
@@ -21,11 +22,14 @@
 #include "edit/operators/utils/color_utils.hpp"
 #include "type/hash_type.hpp"
 #include "ui/alcedo_main/album_backend/album_catalog.hpp"
+#include "ui/alcedo_main/album_backend/editor_node_controller.hpp"
+#include "ui/alcedo_main/album_backend/editor_panel_presentation.hpp"
 #include "ui/alcedo_main/album_backend/interaction_policy_controller.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 #include "ui/editor_rhi/direct_frame_sink.hpp"
 #include "ui/editor_rhi/editor_interaction_controller.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
+#include "utils/diagnostics/preview_performance.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -50,6 +54,9 @@ EditorSessionController::EditorSessionController(alcedo::IEditorSessionBackend* 
   connect(&actions_, &EditorActionAvailabilityModel::AvailabilityChanged, this,
           &EditorSessionController::ActionAvailabilityChanged);
   scope_controller_ = std::make_unique<EditorScopeController>(this);
+  mask_creation_    = std::make_unique<EditorMaskCreationAdapter>(this);
+  connect(mask_creation_.get(), &EditorMaskCreationAdapter::maskCreationChanged, this,
+          &EditorSessionController::SyncMaskAdjustmentPanel);
   connect(scope_controller_.get(), &EditorScopeController::FrameRequested, this, [this]() {
     if (!session_backend_ || !has_image() ||
         session_backend_->state() != alcedo::EditorSessionState::Interactive) {
@@ -77,6 +84,7 @@ EditorSessionController::EditorSessionController(alcedo::IEditorSessionBackend* 
 EditorSessionController::~EditorSessionController() {
   if (session_backend_) {
     session_backend_->SetChangeNotifier({});
+    session_backend_->SetRenderProgressObserver({});
     session_backend_->SetResultObserver({});
     session_backend_->SetActionAvailabilityObserver({});
   }
@@ -100,6 +108,23 @@ void EditorSessionController::InstallBackendNotifier() {
         [self] {
           if (self) {
             self->OnBackendChanged();
+          }
+        },
+        Qt::QueuedConnection);
+  });
+  session_backend_->SetRenderProgressObserver([self] {
+    if (!self) {
+      return;
+    }
+    if (QThread::currentThread() == self->thread()) {
+      self->OnRenderProgressChanged();
+      return;
+    }
+    QMetaObject::invokeMethod(
+        self,
+        [self] {
+          if (self) {
+            self->OnRenderProgressChanged();
           }
         },
         Qt::QueuedConnection);
@@ -151,6 +176,7 @@ void EditorSessionController::SetSessionBackend(alcedo::IEditorSessionBackend* s
   }
   if (session_backend_) {
     session_backend_->SetChangeNotifier({});
+    session_backend_->SetRenderProgressObserver({});
     session_backend_->SetResultObserver({});
     session_backend_->SetActionAvailabilityObserver({});
   }
@@ -199,6 +225,16 @@ void EditorSessionController::SetAlbumCatalog(IAlbumCatalog* album_catalog) {
   album_catalog_ = album_catalog;
 }
 
+void EditorSessionController::SetMaskThumbnailService(
+    std::shared_ptr<alcedo::MaskThumbnailService> service) {
+  mask_thumbnail_service_ = std::move(service);
+}
+
+auto EditorSessionController::mask_thumbnail_service() const
+    -> std::shared_ptr<alcedo::MaskThumbnailService> {
+  return mask_thumbnail_service_;
+}
+
 void EditorSessionController::SyncBackgroundActionRestrictions() {
   if (!session_backend_ || !interaction_policy_) {
     return;
@@ -206,7 +242,6 @@ void EditorSessionController::SyncBackgroundActionRestrictions() {
   alcedo::EditorBackgroundActionRestrictions restrictions;
   restrictions.blocks_select_image = !interaction_policy_->CanSelectEditorImage();
   restrictions.blocks_paste        = !interaction_policy_->CanPasteAdjustments();
-  restrictions.blocks_merge        = !interaction_policy_->CanMergeAdjustments();
   restrictions.blocks_checkout     = !interaction_policy_->CanCheckoutVersion();
   restrictions.blocks_workspace    = !interaction_policy_->CanSwitchWorkspace();
   session_backend_->SetBackgroundActionRestrictions(restrictions);
@@ -229,22 +264,62 @@ void EditorSessionController::OnBackendChanged() {
   SyncViewportIdentity();
   ApplyActionAvailability();
 
-  // Phase 6C-7: keep the cached snapshot map warm on every backend change, but
-  // only emit AdjustmentSnapshotChanged when not suppressed. Interactive
-  // submitPatch suppresses the emit so each pointer move does not re-enter
-  // EditorAdjustmentStack.loadFromSnapshot (QML signal storm → GUI stall when
-  // switching sliders rapidly while history/render also touch the pipeline).
-  const auto render_snapshot = session_backend_->adjustment_snapshot();
-  auto       panel_snapshot  = BuildSnapshotMap(render_snapshot);
-  if (panel_snapshot != adjustment_snapshot_) {
-    adjustment_snapshot_ = std::move(panel_snapshot);
-    if (!suppress_snapshot_publish_) {
-      emit AdjustmentSnapshotChanged();
-      SyncAlbumHdrFlagFromSnapshot();
+  const auto state = session_state();
+  if (close_in_flight_) {
+    if (state == alcedo::EditorSessionState::NoImage ||
+        state == alcedo::EditorSessionState::Failed ||
+        state == alcedo::EditorSessionState::RetainedImageFailure ||
+        state == alcedo::EditorSessionState::ShuttingDown) {
+      SetCloseInFlight(false);
+    }
+  }
+  if (persist_in_flight_) {
+    if (state == alcedo::EditorSessionState::Saving ||
+        state == alcedo::EditorSessionState::Switching) {
+      persist_observed_saving_ = true;
+    } else if (persist_observed_saving_ || state == alcedo::EditorSessionState::Failed ||
+               state == alcedo::EditorSessionState::RetainedImageFailure ||
+               state == alcedo::EditorSessionState::NoImage ||
+               state == alcedo::EditorSessionState::ShuttingDown) {
+      persist_observed_saving_ = false;
+      SetPersistInFlight(false);
+    }
+  }
+
+  // Interactive FrameReady no longer NotifyChange, so this path does not run
+  // on pointer moves. Authoritative snapshot publish still happens here after
+  // Release, image/node switch, Undo/Redo, error, and parameter normalization.
+  // Typed panel values are copied at the owner boundary; stale session
+  // generations are dropped here.
+  const auto projection = session_backend_->panel_projection();
+  const auto epoch      = static_cast<std::uint64_t>(SessionEpoch());
+  if (alcedo::EditorPanelProjectionIsCurrent(projection, epoch)) {
+    QVariantMap panel_snapshot;
+    if (projection.session_generation != last_applied_panel_generation_) {
+      panel_snapshot = PanelProjectionToVariantMap(projection);
+    } else {
+      panel_snapshot = adjustment_snapshot_;
+      (void)ApplyPanelProjectionToSnapshotMap(projection, epoch, &panel_snapshot);
+    }
+    last_applied_panel_generation_ = projection.session_generation;
+    if (panel_snapshot != adjustment_snapshot_) {
+      adjustment_snapshot_ = std::move(panel_snapshot);
+      if (!suppress_snapshot_publish_) {
+        emit AdjustmentSnapshotChanged();
+        SyncAlbumHdrFlagFromSnapshot();
+      }
     }
   }
   SyncViewportDisplayConfig();
+  if (mask_creation_) {
+    if (!has_image()) {
+      mask_creation_->OnImageClosed();
+    } else {
+      mask_creation_->SyncFromSession();
+    }
+  }
   emit       StateChanged();
+  PublishRenderProgressIfChanged();
   // Phase 7A R2: emit the dedicated history signal only when the backend's
   // monotonic history_revision advances. Render-busy, frame-ready, preview,
   // progress, viewport, and task-detail notifications leave the revision
@@ -257,6 +332,10 @@ void EditorSessionController::OnBackendChanged() {
     last_history_revision_ = history_revision;
     emit HistoryChanged();
   }
+}
+
+void EditorSessionController::OnRenderProgressChanged() {
+  PublishRenderProgressIfChanged();
 }
 
 auto EditorSessionController::active() const -> bool {
@@ -277,6 +356,24 @@ auto EditorSessionController::has_image() const -> bool {
 
 auto EditorSessionController::has_pending_recovery() const -> bool {
   return session_backend_ != nullptr && session_backend_->has_pending_recovery();
+}
+
+auto EditorSessionController::close_in_flight() const -> bool { return close_in_flight_; }
+
+void EditorSessionController::SetCloseInFlight(bool in_flight) {
+  if (close_in_flight_ == in_flight) {
+    return;
+  }
+  close_in_flight_ = in_flight;
+}
+
+auto EditorSessionController::persist_in_flight() const -> bool { return persist_in_flight_; }
+
+void EditorSessionController::SetPersistInFlight(bool in_flight) {
+  if (persist_in_flight_ == in_flight) {
+    return;
+  }
+  persist_in_flight_ = in_flight;
 }
 
 auto EditorSessionController::element_id() const -> uint {
@@ -327,6 +424,45 @@ void EditorSessionController::SyncIdentityFromBackend() {
   session_state_ = session_backend_->state();
   // active_ is workspace membership owned by Open/Close/Finalize, not by
   // backend NoImage vs Loading (empty editor remains active).
+  RefreshImageExifDisplay();
+}
+
+void EditorSessionController::RefreshImageExifDisplay() {
+  if (image_id_ == exif_image_id_ && session_generation_ == exif_session_generation_) {
+    return;
+  }
+  exif_image_id_           = image_id_;
+  exif_session_generation_ = session_generation_;
+  alcedo::EditorImageExifDisplay display;
+  if (image_id_ != 0 && image_exif_reader_) {
+    try {
+      display = image_exif_reader_(image_id_);
+    } catch (...) {
+      display = {};
+    }
+  }
+  ApplyExifRowText(alcedo::FormatEditorImageExifDisplay(display));
+}
+
+void EditorSessionController::ApplyExifRowText(const alcedo::EditorExifRowText& text) {
+  const auto shutter =
+      QString::fromUtf8(text.shutter.data(), static_cast<int>(text.shutter.size()));
+  const auto iso = QString::fromUtf8(text.iso.data(), static_cast<int>(text.iso.size()));
+  const auto aperture =
+      QString::fromUtf8(text.aperture.data(), static_cast<int>(text.aperture.size()));
+  const auto focal     = QString::fromUtf8(text.focal.data(), static_cast<int>(text.focal.size()));
+  const auto line_utf8 = alcedo::FormatEditorImageExifLine(text);
+  const auto line      = QString::fromUtf8(line_utf8.data(), static_cast<int>(line_utf8.size()));
+  if (exif_line_text_ == line && exif_shutter_text_ == shutter && exif_iso_text_ == iso &&
+      exif_aperture_text_ == aperture && exif_focal_text_ == focal) {
+    return;
+  }
+  exif_line_text_     = line;
+  exif_shutter_text_  = shutter;
+  exif_iso_text_      = iso;
+  exif_aperture_text_ = aperture;
+  exif_focal_text_    = focal;
+  emit ImageExifChanged();
 }
 
 void EditorSessionController::ApplyOpenLocal(uint elementId, uint imageId) {
@@ -342,6 +478,7 @@ void EditorSessionController::ApplyOpenLocal(uint elementId, uint imageId) {
     emit LastEditedImageChanged();
   }
   ++session_generation_;
+  RefreshImageExifDisplay();
 }
 
 void EditorSessionController::ApplyCloseLocal() {
@@ -353,6 +490,7 @@ void EditorSessionController::ApplyCloseLocal() {
   element_id_    = 0;
   image_id_      = 0;
   session_state_ = alcedo::EditorSessionState::NoImage;
+  RefreshImageExifDisplay();
 }
 
 void EditorSessionController::SyncViewportIdentity() {
@@ -652,6 +790,68 @@ void EditorSessionController::Redo() {
   PublishHistoryInvokableReturn(action, result);
 }
 
+auto EditorSessionController::SubmitRenameColorGrade(const alcedo::NodeId& node_id,
+                                                     std::string           display_name)
+    -> alcedo::EditorSessionResult {
+  if (!session_backend_) {
+    alcedo::EditorSessionResult result;
+    result.kind    = alcedo::EditorSessionResultKind::Rejected;
+    result.state   = session_state();
+    result.message = "Editor session backend is unavailable";
+    return result;
+  }
+  return session_backend_->RenameColorGrade(node_id, std::move(display_name));
+}
+
+auto EditorSessionController::SubmitSetColorGradeDeletionProtected(
+    const alcedo::NodeId& node_id, bool deletion_protected) -> alcedo::EditorSessionResult {
+  if (!session_backend_) {
+    alcedo::EditorSessionResult result;
+    result.kind    = alcedo::EditorSessionResultKind::Rejected;
+    result.state   = session_state();
+    result.message = "Editor session backend is unavailable";
+    return result;
+  }
+  return session_backend_->SetColorGradeDeletionProtected(node_id, deletion_protected);
+}
+
+auto EditorSessionController::SubmitNodeGraphTopologyEdit(
+    const alcedo::NodeGraphTopologyChange& change) -> alcedo::EditorSessionResult {
+  if (!session_backend_) {
+    alcedo::EditorSessionResult result;
+    result.kind    = alcedo::EditorSessionResultKind::Rejected;
+    result.state   = session_state();
+    result.message = "Editor session backend is unavailable";
+    return result;
+  }
+  return session_backend_->EditNodeGraph(change);
+}
+
+auto EditorSessionController::SubmitInsertColorGradeAtTop(
+    const alcedo::NodeId& new_id, const alcedo::NodeId& expected_predecessor_id)
+    -> alcedo::EditorSessionResult {
+  if (!session_backend_) {
+    alcedo::EditorSessionResult result;
+    result.kind    = alcedo::EditorSessionResultKind::Rejected;
+    result.state   = session_state();
+    result.message = "Editor session backend is unavailable";
+    return result;
+  }
+  return session_backend_->InsertColorGradeAtTop(new_id, expected_predecessor_id);
+}
+
+auto EditorSessionController::SubmitRemoveColorGradeAndBridge(const alcedo::NodeId& node_id)
+    -> alcedo::EditorSessionResult {
+  if (!session_backend_) {
+    alcedo::EditorSessionResult result;
+    result.kind    = alcedo::EditorSessionResultKind::Rejected;
+    result.state   = session_state();
+    result.message = "Editor session backend is unavailable";
+    return result;
+  }
+  return session_backend_->RemoveColorGradeAndBridge(node_id);
+}
+
 void EditorSessionController::MoveHeadToCommit(const QString& commitId) {
   const QString action = QStringLiteral("moveHeadToCommit");
   if (!session_backend_) {
@@ -698,6 +898,22 @@ void EditorSessionController::PublishHistoryInvokableReturn(
 }
 
 void EditorSessionController::OnBackendSessionResult(const alcedo::EditorSessionResult& result) {
+  const bool failed = result.kind == alcedo::EditorSessionResultKind::Rejected ||
+                      result.kind == alcedo::EditorSessionResultKind::Failed;
+  if (failed && (close_in_flight_ || persist_in_flight_)) {
+    if (!result.message.empty()) {
+      if (close_in_flight_) {
+        close_error_ = QString::fromStdString(result.message);
+      }
+      if (persist_in_flight_) {
+        persist_error_ = QString::fromStdString(result.message);
+      }
+    }
+    SetCloseInFlight(false);
+    persist_observed_saving_ = false;
+    SetPersistInFlight(false);
+    emit StateChanged();
+  }
   auto published = history_ops_.CorrelateObservedResult(result);
   if (!published.has_value()) {
     return;
@@ -754,7 +970,8 @@ void EditorSessionController::Shutdown() {
 
 void EditorSessionController::Finalize(bool persistChanges) {
   // Explicit close path for application/project lifecycle and empty-editor
-  // transitions. Ordinary workspace routing deliberately does not call this.
+  // transitions. Ordinary workspace routing keeps the session and calls
+  // PersistCurrentImage so re-entry stays immediate.
   // The navigation layer releases guards only after save and render-idle both
   // complete, so keep presentation available for the in-flight handoff.
   if (!session_backend_) {
@@ -766,6 +983,12 @@ void EditorSessionController::Finalize(bool persistChanges) {
     return;
   }
 
+  if (persistChanges && close_in_flight_) {
+    emit StateChanged();
+    return;
+  }
+
+  close_error_.clear();
   if (persistChanges) {
     SyncAlbumHdrFlagFromSnapshot();
   }
@@ -773,14 +996,24 @@ void EditorSessionController::Finalize(bool persistChanges) {
   const auto result = session_backend_->Close(persistChanges);
   SyncIdentityFromBackend();
 
-  if (result.kind != alcedo::EditorSessionResultKind::Rejected) {
-    active_ = false;
+  if (result.kind == alcedo::EditorSessionResultKind::Rejected) {
+    if (!result.message.empty()) {
+      close_error_ = QString::fromStdString(result.message);
+    }
+    emit StateChanged();
+    return;
   }
 
-  // Synchronous close can drop presentation now. Async SaveStarted keeps the
-  // viewport until the backend publishes NoImage.
-  if (result.kind != alcedo::EditorSessionResultKind::Rejected &&
-      result.kind != alcedo::EditorSessionResultKind::SaveStarted) {
+  active_ = false;
+
+  const bool close_waiting =
+      result.kind == alcedo::EditorSessionResultKind::SaveStarted ||
+      (result.kind == alcedo::EditorSessionResultKind::Accepted && session_backend_->has_image());
+  SetCloseInFlight(close_waiting);
+
+  // Synchronous close can drop presentation now. Async SaveStarted or a queued
+  // owner-thread Close keeps the viewport until the backend publishes NoImage.
+  if (result.kind != alcedo::EditorSessionResultKind::SaveStarted && !close_waiting) {
     if (scope_controller_) {
       scope_controller_->SetImageIdentity(0, 0);
       scope_controller_->Shutdown();
@@ -790,6 +1023,50 @@ void EditorSessionController::Finalize(bool persistChanges) {
     }
   }
   emit StateChanged();
+}
+
+void EditorSessionController::PersistCurrentImage() {
+  if (!session_backend_ || close_in_flight_ || persist_in_flight_ || !has_image()) {
+    return;
+  }
+  persist_error_.clear();
+  persist_observed_saving_ = false;
+  const auto result        = session_backend_->PersistCurrentImage();
+  if (result.kind == alcedo::EditorSessionResultKind::Rejected ||
+      result.kind == alcedo::EditorSessionResultKind::Failed) {
+    if (!result.message.empty()) {
+      persist_error_ = QString::fromStdString(result.message);
+    }
+    emit StateChanged();
+    return;
+  }
+  const auto state = session_backend_->state();
+  if (result.kind == alcedo::EditorSessionResultKind::SaveStarted ||
+      state == alcedo::EditorSessionState::Saving ||
+      state == alcedo::EditorSessionState::Switching) {
+    persist_observed_saving_ = true;
+  }
+  const bool persist_waiting =
+      result.kind == alcedo::EditorSessionResultKind::SaveStarted ||
+      state == alcedo::EditorSessionState::Saving ||
+      state == alcedo::EditorSessionState::Switching ||
+      (result.kind == alcedo::EditorSessionResultKind::Accepted &&
+       result.message == "Editor session command queued");
+  SetPersistInFlight(persist_waiting);
+  emit StateChanged();
+}
+
+auto EditorSessionController::last_error() const -> QString {
+  if (!close_error_.isEmpty()) {
+    return close_error_;
+  }
+  if (!persist_error_.isEmpty()) {
+    return persist_error_;
+  }
+  if (!session_backend_) {
+    return {};
+  }
+  return QString::fromUtf8(session_backend_->last_error().c_str());
 }
 
 void EditorSessionController::clearLastEditedImage() {
@@ -805,6 +1082,10 @@ void EditorSessionController::bindPresentationViewport(QObject* viewportItem) {
   if (presentation_viewport_ == viewportItem) {
     return;
   }
+  if (presented_geometry_connection_) {
+    QObject::disconnect(presented_geometry_connection_);
+    presented_geometry_connection_ = {};
+  }
   presentation_viewport_ = viewportItem;
   if (auto* item = qobject_cast<editor_rhi::EditorViewportItem*>(viewportItem)) {
     if (scope_controller_) {
@@ -812,6 +1093,20 @@ void EditorSessionController::bindPresentationViewport(QObject* viewportItem) {
     }
     SyncViewportIdentity();
     SyncViewportDisplayConfig();
+    // Forward the presented frame's resolved geometry to the interaction
+    // controller so Mask pointer mapping shares the displayed frame's
+    // reference space. The connection resolves the interaction controller at
+    // fire time; an unbound interaction simply skips the update.
+    presented_geometry_connection_ =
+        connect(item, &editor_rhi::EditorViewportItem::PresentedMaskGeometryChanged, this,
+                [this, item] {
+                  auto* interaction =
+                      qobject_cast<editor_rhi::EditorInteractionController*>(
+                          interaction_controller_.data());
+                  if (interaction != nullptr) {
+                    interaction->setDisplayedMaskGeometry(item->presentedMaskGeometry());
+                  }
+                });
     // Stamp a stable presentation sink identity for render intents (Phase 5A).
     // DirectFrameSink owns the short scene-graph startup wait when this binding
     // precedes QQuickRhiItem::synchronize().
@@ -891,8 +1186,19 @@ void EditorSessionController::bindInteractionController(QObject* interactionCont
   interaction_controller_ = interactionController;
 
   auto* interaction = qobject_cast<editor_rhi::EditorInteractionController*>(interactionController);
+  if (mask_creation_) {
+    mask_creation_->bindInteractionItem(interaction);
+  }
   if (!interaction) {
     return;
+  }
+  // A frame may have been presented before this binding; push the stored
+  // presented-frame geometry so Mask mapping does not wait for the next frame.
+  if (auto* item = qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
+    const auto& geometry = item->presentedMaskGeometry();
+    if (!geometry.full_reference_extent.Empty()) {
+      interaction->setDisplayedMaskGeometry(geometry);
+    }
   }
   // viewChangeReported follows viewStateChanged. QML has therefore already
   // updated DirectFrameSink with the matching ROI when this route reads it.
@@ -904,6 +1210,10 @@ void EditorSessionController::bindInteractionController(QObject* interactionCont
 void EditorSessionController::unbindPresentationViewport() {
   if (!presentation_viewport_) {
     return;
+  }
+  if (presented_geometry_connection_) {
+    QObject::disconnect(presented_geometry_connection_);
+    presented_geometry_connection_ = {};
   }
   if (auto* item = qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
     item->suspendPresentation();
@@ -949,18 +1259,8 @@ auto EditorSessionController::presentation_frame_sink() const -> alcedo::IFrameS
 }
 
 auto EditorSessionController::render_busy() const -> bool {
-  // Reflects coordinator diagnostics only — never a pipeline task pointer. The
-  // backend flips this via NotifyChange (fired on submit and on every render
-  // result), which routes back through OnBackendChanged → StateChanged so QML
-  // bindings re-evaluate (D6).
+  // Reflects coordinator diagnostics only — never a pipeline task pointer.
   return session_backend_ && session_backend_->render_busy();
-}
-
-auto EditorSessionController::last_error() const -> QString {
-  if (!session_backend_) {
-    return {};
-  }
-  return QString::fromUtf8(session_backend_->last_error().c_str());
 }
 
 auto EditorSessionController::first_frame_time_ms() const -> double {
@@ -994,6 +1294,12 @@ auto ReasonName(alcedo::EditorRenderReason reason) -> const char* {
       return "CropRotate";
     case R::ScopeRefresh:
       return "ScopeRefresh";
+    case R::GraphTopologyChanged:
+      return "GraphTopologyChanged";
+    case R::SettledMaskEdit:
+      return "SettledMaskEdit";
+    case R::VersionDocumentChanged:
+      return "VersionDocumentChanged";
   }
   return "Unknown";
 }
@@ -1011,6 +1317,31 @@ auto FrameRoleName(alcedo::FrameRole role) -> const char* {
 }
 
 }  // namespace
+
+void EditorSessionController::PublishRenderProgressIfChanged() {
+  if (!session_backend_) {
+    if (last_published_render_busy_ || !last_published_inflight_reason_.isEmpty()) {
+      last_published_render_busy_ = false;
+      last_published_inflight_reason_.clear();
+      emit RenderBusyChanged();
+      emit RenderDiagnosticsChanged();
+    }
+    return;
+  }
+  const bool busy = session_backend_->render_busy();
+  const auto diag = session_backend_->render_diagnostics();
+  QString    inflight_reason;
+  if (diag.inflight_reason) {
+    inflight_reason = QString::fromUtf8(ReasonName(*diag.inflight_reason));
+  }
+  if (busy == last_published_render_busy_ && inflight_reason == last_published_inflight_reason_) {
+    return;
+  }
+  last_published_render_busy_        = busy;
+  last_published_inflight_reason_    = std::move(inflight_reason);
+  emit RenderBusyChanged();
+  emit RenderDiagnosticsChanged();
+}
 
 auto EditorSessionController::render_diagnostics() const -> QVariantMap {
   QVariantMap out;
@@ -1104,22 +1435,41 @@ auto EditorSessionController::can_discard_current_commit() const -> bool {
   return false;
 }
 
-bool EditorSessionController::submitPatch(QString fieldKey, QString paramsJson, bool settled) {
+bool EditorSessionController::submitWrite(QString fieldKey, alcedo::EditorParameterWrite write,
+                                          bool settled) {
   auto* viewport = qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data());
   if (!can_edit()) {
-    // Pointer release must still stop the vsync consume if edit was lost
-    // mid-drag (image switch / session teardown).
     if (settled && viewport) {
       viewport->endInteractivePresentLoop();
     }
     return false;
   }
-  // QQuickRhiItem::synchronize only runs after the item is marked dirty. Do
-  // this on the GUI thread while handling the pointer move, before the worker
-  // can block waiting for a recyclable direct-present slot. Unsettled patches
-  // also arm a vsync-sampled consume so a Ready frame does not wait for the
-  // next pointer event or a missed requestUpdate. The worker's NotifyFrameReady
-  // update remains the completion-side wakeup when the loop is not armed.
+  if (session_backend_ == nullptr) {
+    return false;
+  }
+  alcedo::EditorAdjustmentPatch patch;
+  patch.field_key = fieldKey.toStdString();
+  patch.write     = std::move(write);
+  patch.settled   = settled;
+  if (node_controller_ != nullptr) {
+    const auto document = pipeline_document();
+    if (!document) {
+      if (settled && viewport) {
+        viewport->endInteractivePresentLoop();
+      }
+      return false;
+    }
+    std::string error;
+    auto        target = alcedo::CompleteSelectedNodeParameterTarget(
+        *document, node_controller_->selected_node_id(), patch.field_key, &error);
+    if (!target.has_value()) {
+      if (settled && viewport) {
+        viewport->endInteractivePresentLoop();
+      }
+      return false;
+    }
+    patch.target = std::move(*target);
+  }
   if (viewport) {
     if (settled) {
       viewport->endInteractivePresentLoop();
@@ -1128,23 +1478,118 @@ bool EditorSessionController::submitPatch(QString fieldKey, QString paramsJson, 
     }
     viewport->prepareForAdjustmentFrame();
   }
-  alcedo::EditorAdjustmentPatch patch;
-  patch.field_key              = fieldKey.toStdString();
-  patch.params_json            = paramsJson.toStdString();
-  patch.settled                = settled;
-  // Typed models already own the live value during a pointer drag. Echoing the
-  // full adjustment snapshot into QML on every interactive patch forces
-  // loadFromSnapshot across Tone+Look while the mouse handler is still on the
-  // stack. Rapid handoff (finish slider A → drag slider B) multiplies that with
-  // history capture/commit under the pipeline render lock and freezes the GUI.
-  const bool previous_suppress = suppress_snapshot_publish_;
-  if (!settled) {
-    suppress_snapshot_publish_ = true;
+  if (alcedo::diag::PreviewPerformanceEnabled()) {
+    patch.qml_write_ns = alcedo::diag::PreviewPerformance::NowNs();
   }
-  const auto result =
-      settled ? session_backend_->CommitAdjustment(patch) : session_backend_->Patch(patch);
-  suppress_snapshot_publish_ = previous_suppress;
-  return result.kind != alcedo::EditorSessionResultKind::Rejected;
+  const auto result = session_backend_->EnqueueAdjustmentInput(std::move(patch));
+  return result.kind != alcedo::EditorSessionResultKind::Rejected &&
+         result.kind != alcedo::EditorSessionResultKind::Failed;
+}
+
+bool EditorSessionController::submitPatch(QString fieldKey, QString paramsJson, bool settled) {
+  nlohmann::json parsed;
+  try {
+    parsed = paramsJson.isEmpty() ? nlohmann::json::object()
+                                  : nlohmann::json::parse(paramsJson.toStdString());
+  } catch (const std::exception&) {
+    return false;
+  }
+  std::string error;
+  auto        write = alcedo::ParseEditorParameterWrite(fieldKey.toStdString(), parsed, &error);
+  if (!write.has_value()) {
+    return false;
+  }
+  return submitWrite(std::move(fieldKey), std::move(*write), settled);
+}
+
+bool EditorSessionController::enqueueNodeSwitchBoundary() {
+  if (session_backend_ == nullptr || !can_edit()) {
+    return false;
+  }
+  const auto result = session_backend_->EnqueuePendingInputBoundary(
+      alcedo::EditorPendingInputBoundaryKind::NodeSwitch);
+  return result.kind != alcedo::EditorSessionResultKind::Rejected &&
+         result.kind != alcedo::EditorSessionResultKind::Failed;
+}
+
+void EditorSessionController::BindNodeSelectionSource(EditorNodeController* nodes) {
+  node_controller_ = nodes;
+}
+
+auto EditorSessionController::EnqueueMaskCreation(alcedo::EditorMaskCreationCommand command)
+    -> bool {
+  if (session_backend_ == nullptr || !can_edit()) {
+    return false;
+  }
+  const auto result = session_backend_->EnqueueMaskCreation(std::move(command));
+  return result.kind != alcedo::EditorSessionResultKind::Rejected &&
+         result.kind != alcedo::EditorSessionResultKind::Failed;
+}
+
+auto EditorSessionController::mask_creation_mask_id() const -> alcedo::MaskId {
+  return session_backend_ ? session_backend_->mask_creation_mask_id() : alcedo::MaskId{};
+}
+
+auto EditorSessionController::mask_creation_node_id() const -> alcedo::NodeId {
+  return session_backend_ ? session_backend_->mask_creation_node_id() : alcedo::NodeId{};
+}
+
+auto EditorSessionController::mask_creation_state() const -> alcedo::EditorMaskCreationState {
+  return session_backend_ ? session_backend_->mask_creation_state()
+                          : alcedo::EditorMaskCreationState::Inactive;
+}
+
+auto EditorSessionController::mask_creation_source() const -> std::optional<alcedo::MaskSource> {
+  return session_backend_ ? session_backend_->mask_creation_source() : std::nullopt;
+}
+
+auto EditorSessionController::mask_creation_last_removed_mask_id() const -> alcedo::MaskId {
+  return session_backend_ ? session_backend_->mask_creation_last_removed_mask_id()
+                          : alcedo::MaskId{};
+}
+
+auto EditorSessionController::mask_creation_commands_pending() const -> bool {
+  return session_backend_ && session_backend_->mask_creation_commands_pending();
+}
+
+void EditorSessionController::SetImageExifReader(
+    std::function<alcedo::EditorImageExifDisplay(uint)> reader) {
+  image_exif_reader_       = std::move(reader);
+  exif_image_id_           = 0;
+  exif_session_generation_ = 0;
+  RefreshImageExifDisplay();
+}
+
+void EditorSessionController::ApplySelectedAdjustmentNode(const alcedo::NodeId&  node_id,
+                                                          alcedo::EditorNodeKind kind) {
+  if (mask_creation_ && mask_creation_->mask_controls_active() &&
+      node_id != mask_creation_->edit_node_id()) {
+    mask_panel_transition_ = true;
+    mask_creation_->finishBody();
+    mask_panel_transition_ = false;
+    SetActiveAdjustmentPanel(panel_before_mask_edit_, true);
+  }
+  if (session_backend_ != nullptr) {
+    (void)session_backend_->SetAdjustmentProjectionNode(node_id);
+  }
+  if (node_id.Empty()) {
+    return;
+  }
+  const auto current = active_adjustment_panel_.toStdString();
+  if (!alcedo::AdjustmentPanelIsSupported(kind, current)) {
+    const auto fallback = alcedo::DefaultAdjustmentPanel(kind);
+    SetActiveAdjustmentPanel(
+        QString::fromLatin1(fallback.data(), static_cast<int>(fallback.size())), false);
+    return;
+  }
+  if (session_backend_ != nullptr) {
+    session_backend_->SetGeometryOverlayActive(active_adjustment_panel_ ==
+                                               QLatin1String("geometry"));
+  }
+}
+
+auto EditorSessionController::PeekPendingInput() const -> alcedo::EditorPendingInputView {
+  return session_backend_ ? session_backend_->PeekPendingInput() : alcedo::EditorPendingInputView{};
 }
 
 void EditorSessionController::set_filmstrip_collapsed(bool collapsed) {
@@ -1211,10 +1656,16 @@ auto EditorSessionController::NormalizeAdjustmentPanel(const QString& panel) -> 
   if (key == QLatin1String("raw") || key == QLatin1String("rawdecode")) {
     return QStringLiteral("raw");
   }
+  if (key == QLatin1String("masks") || key == QLatin1String("mask")) {
+    return QStringLiteral("masks");
+  }
+  if (key == QLatin1String("detail")) {
+    return QStringLiteral("detail");
+  }
   return QStringLiteral("tone");
 }
 
-auto EditorSessionController::NormalizeHistoryPanelPage(const QString& page) -> QString {
+auto EditorSessionController::NormalizeToolPanelPage(const QString& page) -> QString {
   const QString key = page.trimmed().toLower();
   if (key == QLatin1String("history")) {
     return QStringLiteral("history");
@@ -1222,19 +1673,84 @@ auto EditorSessionController::NormalizeHistoryPanelPage(const QString& page) -> 
   if (key == QLatin1String("versions")) {
     return QStringLiteral("versions");
   }
+  if (key == QLatin1String("nodes")) {
+    return QStringLiteral("nodes");
+  }
+  if (key == QLatin1String("maskgroups") || key == QLatin1String("groups") ||
+      key == QLatin1String("mask_groups") || key == QLatin1String("mask-groups")) {
+    return QStringLiteral("maskgroups");
+  }
   return {};
+}
+
+auto EditorSessionController::session_generation() const -> qulonglong { return SessionEpoch(); }
+
+auto EditorSessionController::history_revision() const -> qulonglong {
+  return session_backend_ ? session_backend_->history_revision() : 0;
+}
+
+auto EditorSessionController::active_version_id() const -> QString {
+  return session_backend_ ? QString::fromStdString(session_backend_->active_version_id().ToString())
+                          : QString{};
+}
+
+auto EditorSessionController::pipeline_document() const
+    -> std::shared_ptr<const alcedo::PipelineDocument> {
+  return session_backend_ ? session_backend_->pipeline_document() : nullptr;
 }
 
 void EditorSessionController::set_active_adjustment_panel(const QString& panel) {
   const QString normalized = NormalizeAdjustmentPanel(panel);
+  if (normalized == QLatin1String("masks") &&
+      (!mask_creation_ || !mask_creation_->mask_controls_active())) {
+    return;
+  }
+  if (normalized != QLatin1String("masks") && mask_creation_ &&
+      mask_creation_->mask_controls_active()) {
+    mask_panel_transition_ = true;
+    mask_creation_->finishBody();
+    mask_panel_transition_ = false;
+  }
+  // Publish Geometry exit while Develop still owns any pending crop submission.
+  SetActiveAdjustmentPanel(normalized, true);
+  if (node_controller_) {
+    node_controller_->SelectNodeForAdjustmentPanel(active_adjustment_panel_);
+  }
+}
+
+void EditorSessionController::SyncMaskAdjustmentPanel() {
+  const bool mask_active = mask_creation_ && mask_creation_->mask_controls_active();
+  if (mask_active == mask_edit_was_active_) {
+    return;
+  }
+  mask_edit_was_active_ = mask_active;
+  if (mask_active) {
+    if (active_adjustment_panel_ != QLatin1String("masks")) {
+      panel_before_mask_edit_ = active_adjustment_panel_;
+      SetActiveAdjustmentPanel(QStringLiteral("masks"), true);
+    }
+    return;
+  }
+  if (!mask_panel_transition_ && active_adjustment_panel_ == QLatin1String("masks")) {
+    SetActiveAdjustmentPanel(panel_before_mask_edit_, true);
+    if (node_controller_) {
+      node_controller_->SelectNodeForAdjustmentPanel(active_adjustment_panel_);
+    }
+  }
+}
+
+void EditorSessionController::SetActiveAdjustmentPanel(const QString& panel, bool request_view) {
+  const QString normalized = NormalizeAdjustmentPanel(panel);
   if (active_adjustment_panel_ == normalized) {
     return;
   }
+  const bool geometry_changed = active_adjustment_panel_ == QLatin1String("geometry") ||
+                                normalized == QLatin1String("geometry");
   active_adjustment_panel_ = normalized;
   SaveDesktopUiPrefs();
   if (session_backend_) {
     session_backend_->SetGeometryOverlayActive(normalized == QLatin1String("geometry"));
-    if (session_backend_->has_image() &&
+    if (request_view && geometry_changed && session_backend_->has_image() &&
         session_backend_->state() == alcedo::EditorSessionState::Interactive) {
       session_backend_->RequestViewChange(alcedo::EditorRenderReason::CropRotate, std::nullopt);
     }
@@ -1242,12 +1758,12 @@ void EditorSessionController::set_active_adjustment_panel(const QString& panel) 
   emit DesktopUiChanged();
 }
 
-void EditorSessionController::set_history_panel_page(const QString& page) {
-  const QString normalized = NormalizeHistoryPanelPage(page);
-  if (history_panel_page_ == normalized) {
+void EditorSessionController::set_editor_tool_panel_page(const QString& page) {
+  const QString normalized = NormalizeToolPanelPage(page);
+  if (editor_tool_panel_page_ == normalized) {
     return;
   }
-  history_panel_page_ = normalized;
+  editor_tool_panel_page_ = normalized;
   emit DesktopUiChanged();
 }
 
@@ -1255,11 +1771,14 @@ void EditorSessionController::LoadDesktopUiPrefs() {
   QSettings settings;
   active_adjustment_panel_ = NormalizeAdjustmentPanel(
       settings.value(QLatin1String(kActiveAdjustmentPanelKey), QStringLiteral("tone")).toString());
-  // historyPanelPage is intentionally not restored from disk: collapsed on
+  // editorToolPanelPage is intentionally not restored from disk: collapsed on
   // cold start, but kept in memory across library/editor workspace switches.
 }
 
 void EditorSessionController::SaveDesktopUiPrefs() const {
+  if (active_adjustment_panel_ == QLatin1String("masks")) {
+    return;
+  }
   QSettings settings;
   settings.setValue(QLatin1String(kActiveAdjustmentPanelKey), active_adjustment_panel_);
   settings.sync();
@@ -1278,44 +1797,6 @@ auto EditorSessionController::PasteAdjustmentPackage(
     -> alcedo::EditorSessionResult {
   if (!session_backend_) return {};
   return session_backend_->PasteAdjustments(package, versionDisplayName.toStdString());
-}
-
-auto EditorSessionController::BeginMergeAdjustmentPackage(
-    const alcedo::AdjustmentTransferPackage& package, alcedo::AdjustmentMergePreview* preview)
-    -> alcedo::EditorSessionResult {
-  if (!session_backend_) return {};
-  return session_backend_->BeginMerge(package, preview);
-}
-
-auto EditorSessionController::CompleteMergeAdjustments(
-    const std::vector<alcedo::AdjustmentMergeResolution>& resolutions)
-    -> alcedo::EditorSessionResult {
-  if (!session_backend_) return {};
-  return session_backend_->CompleteMerge(resolutions);
-}
-
-auto EditorSessionController::CancelMergeAdjustments() -> alcedo::EditorSessionResult {
-  if (!session_backend_) return {};
-  return session_backend_->CancelMerge();
-}
-
-auto EditorSessionController::BuildSnapshotMap(
-    const alcedo::EditorRenderAdjustmentSnapshot& snapshot) -> QVariantMap {
-  QVariantMap map;
-  for (const auto& patch : snapshot.patches) {
-    QJsonParseError error;
-    const auto      json_bytes = QByteArray::fromStdString(patch.params_json);
-    auto            doc        = QJsonDocument::fromJson(json_bytes, &error);
-    if (error.error != QJsonParseError::NoError || !doc.isObject()) {
-      continue;
-    }
-    const auto obj = doc.object();
-    if (obj.isEmpty()) {
-      continue;
-    }
-    map.insert(QString::fromStdString(patch.field_key), obj.toVariantMap());
-  }
-  return map;
 }
 
 }  // namespace alcedo::ui

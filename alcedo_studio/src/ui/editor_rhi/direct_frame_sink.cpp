@@ -7,6 +7,7 @@
 #include <QDebug>
 #include <QMetaObject>
 #include <QThread>
+#include <algorithm>
 #include <chrono>
 #include <utility>
 
@@ -201,10 +202,11 @@ void DirectFrameSink::EnsureSize(int width, int height) {
     // snaps / ROI thrash when a real frame arrives. Publish render-reference
     // geometry from SubmitMetalFrame with the real texture size instead.
     emit_target_size = geometry_changed && is_render_reference && !metal_present;
-    // CUDA/OpenCL always track the requested write size. On Metal, only track
-    // full-frame requests so Detail/Roi sizes cannot poison later change
-    // detection (actual ref size is set when the MTLTexture is submitted).
-    if (!metal_present || is_render_reference) {
+    // CUDA/OpenCL track the requested write size here. Metal must wait for
+    // SubmitMetalFrame: updating width_/height_ before the actual MTLTexture arrives makes that
+    // submission look unchanged and suppresses the render-reference notification needed by
+    // zoom, pan, and ROI routing.
+    if (!metal_present) {
       width_  = width;
       height_ = height;
     }
@@ -411,7 +413,30 @@ void DirectFrameSink::NotifyFrameReady(const FrameCompletionSubmission& submissi
   FramePresentationMode mode       = submission.mode;
   FramePreviewMetadata  metadata   = submission.metadata;
   {
+    // Publish the presented frame's resolved geometry before the slot gate so
+    // zero-copy paths (Metal SubmitMetalFrame) and accepted full frames both
+    // refresh the viewer's Mask mapping reference. RoiFrame/DetailPatch
+    // submissions render a subrect of the same reference space and must not
+    // replace it. Stale request ids never publish.
+    const bool publish_geometry =
+        IsRenderReferenceFrame(mode, metadata.frame_role) &&
+        !submission.geometry.full_reference_extent.Empty() &&
+        !submission.geometry.render_extent.Empty();
     std::lock_guard lock(mutex_);
+    if (publish_geometry &&
+        AcceptSubmissionRequestId(metadata.presentation_request_id) && item_) {
+      const auto connection =
+          (item_->thread() == QThread::currentThread()) ? Qt::DirectConnection
+                                                       : Qt::QueuedConnection;
+      const auto geometry   = submission.geometry;
+      const auto request_id = metadata.presentation_request_id;
+      QMetaObject::invokeMethod(
+          item_,
+          [item = item_, geometry, request_id] {
+            item->NotePresentedMaskGeometry(geometry, request_id);
+          },
+          connection);
+    }
     if (!has_mapped_slot_ || !unmapped_pending_submit_) {
       if (metadata.frame_role == FrameRole::DetailPatch) {
         qCDebug(editorPresentLog) << "[ROI_TRACE][sink-drop] request="
@@ -543,11 +568,16 @@ void DirectFrameSink::SubmitMetalFrame(const ViewerMetalFrame& frame) {
 
   diag::NoteRenderE2eProducerReady(request_id);
   qCDebug(editorPresentLog,
-          "[EditorPresent] queued Metal import request=%llu image=%llu epoch=%llu size=%dx%d "
-          "handle=%llu (zero-copy)",
+          "[EditorPresent] queued Metal import request=%llu image=%llu epoch=%llu role=%d mode=%d "
+          "size=%dx%d roi=%.6f,%.6f,%.6f,%.6f handle=%llu (zero-copy)",
           static_cast<unsigned long long>(request_id),
           static_cast<unsigned long long>(item_->imageIdentity()),
-          static_cast<unsigned long long>(item_->sessionEpoch()), frame.width, frame.height,
+          static_cast<unsigned long long>(item_->sessionEpoch()),
+          static_cast<int>(frame.preview_metadata.frame_role),
+          static_cast<int>(frame.presentation_mode), frame.width, frame.height,
+          frame.preview_metadata.source_roi_norm.x, frame.preview_metadata.source_roi_norm.y,
+          frame.preview_metadata.source_roi_norm.width,
+          frame.preview_metadata.source_roi_norm.height,
           static_cast<unsigned long long>(frame.texture_handle));
 
   if (emit_render_reference) {
@@ -599,6 +629,12 @@ void DirectFrameSink::ClearPendingImportedFrames() {
   for (auto& slot : pending_imported_) {
     slot.reset();
   }
+}
+
+auto DirectFrameSink::HasPendingImportedFrame() const -> bool {
+  std::lock_guard lock(mutex_);
+  return std::any_of(pending_imported_.begin(), pending_imported_.end(),
+                     [](const auto& slot) { return slot.has_value(); });
 }
 
 auto DirectFrameSink::GetWidth() const -> int {

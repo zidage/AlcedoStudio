@@ -939,7 +939,7 @@ Implementation closeout:
 | 不存在的 `devicePixelRatioChanged` | 删除窗口假信号；跟踪 `QScreen` 并用其 `devicePixelRatio`（NOTIFY=`physicalDotsPerInchChanged`）+ `screenChanged` |
 | 暗色遮罩外角重叠 | 用互斥半平面划分 `R0 ∪ (R1∩H0) ∪ …` 三角化；多旋转角下外角采样 coverage==1 |
 | 圆头半圆朝内 | `AppendRoundCap` 从 `-n` 扫过 `dir`；端点外向 extent 测试 |
-| 一次变化重复 `setViewState` | QML 只监听 `viewStateChanged`；metrics 不再二次 push；`viewStatePushCount` + 手势次数测试 |
+| 一次变化重复 `setViewState` | QML 只监听 `viewStateChanged`；metrics 不再二次 push；`viewStatePushCount` + 输入序列次数测试 |
 | 原有测试中的空断言和宽松断言 | 接收端会检查完整视图状态；目标编号先变成非零再比较；遮罩刷新次数严格检查为 1 |
 
 本次复审仍发现的问题：

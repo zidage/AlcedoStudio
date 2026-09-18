@@ -9,13 +9,19 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 
 #include "app/editor_adjustment_pipeline.hpp"
+#include "app/editor_adjustment_types.hpp"
+#include "app/editor_panel_projection.hpp"
+#include "app/editor_render_intent.hpp"
 #include "app/editor_session_ports.hpp"
 #include "app/editor_session_types.hpp"
 #include "edit/history/commit_graph.hpp"
+#include "json.hpp"
+#include "type/hash_type.hpp"
 
 namespace alcedo {
 class MiniGitJournal;
@@ -30,15 +36,30 @@ class EditorSessionPipelinePort;
 
 /// Per-image history state owned by the queue-thread history unit. The command
 /// queue is the sole mutation owner for graph, redo, pending-before, and
-/// committed-snapshot fields. The pipeline guard is only a worker hand-off
-/// identity here; no history reducer accesses its live executor.
+/// committed-snapshot fields. Live parameter writes go to pipeline_guard->document_.
+/// Parameter writes, Version ops, and rendering share the executor render lock.
+/// Load-only selected-node panel projection reads Models without that lock.
 struct HistoryWorkingState {
   std::shared_ptr<alcedo::PipelineGuard> pipeline_guard;
   std::shared_ptr<alcedo::MiniGitJournal> journal;
   std::unique_ptr<alcedo::MiniGitWorkingHistory> history;
   std::unordered_map<std::string, alcedo::EditorAdjustmentOperatorState> pending_before;
+  /// First complete target of the current input sequence, keyed by field_key.
+  struct DocumentFieldEdit {
+    alcedo::EditorParameterTarget target;
+    nlohmann::json                before_model_json;
+    nlohmann::json                after_model_json;
+  };
+  std::unordered_map<std::string, DocumentFieldEdit> pending_document_sequence;
+  std::unordered_map<alcedo::Hash128, DocumentFieldEdit> document_edit_by_commit;
   alcedo::EditorRenderAdjustmentSnapshot root_snapshot;
   alcedo::EditorRenderAdjustmentSnapshot committed_snapshot;
+  /// Load-only panel values copied from live Models. Not a live Model pointer
+  /// and not a writable parameter mirror. Selected-node copies do not take the
+  /// render lock.
+  alcedo::EditorPanelProjection panel_projection;
+  /// Node last requested for panel projection. Empty means current-panel owners.
+  alcedo::NodeId panel_projection_node_id;
   bool recovered_head = false;
 };
 
@@ -80,11 +101,28 @@ class EditorHistoryState {
   [[nodiscard]] auto JournalPathResolver() const
       -> std::function<std::filesystem::path(sl_element_id_t)>;
 
+  /// Record the render reason of the last successful mutation on this port.
+  void RecordPublishedRenderReason(std::optional<alcedo::EditorRenderReason> reason);
+
+  /// Last successful mutation's render reason. Nullopt means no pipeline render.
+  [[nodiscard]] auto LastPublishedRenderReason() const -> std::optional<alcedo::EditorRenderReason>;
+
+  /// Rebuild @p state's live document from the cached immutable root and @p head.
+  ///
+  /// Replays onto a clone, then binds the same live guard under the render lock.
+  /// Does not move the Version ref. On failure the live document is left
+  /// unchanged.
+  auto ReplayWorkingDocumentFromImmutableRoot(HistoryWorkingState& state,
+                                              const alcedo::head_commit_hash_t& head,
+                                              std::string* error) -> bool;
+
  private:
   Services services_{};
   mutable std::mutex mutex_;
   std::weak_ptr<EditorSessionPipelinePort> pipeline_port_;
   std::unordered_map<sl_element_id_t, std::shared_ptr<HistoryWorkingState>> working_states_;
+  std::optional<alcedo::EditorRenderReason> last_published_render_reason_ =
+      alcedo::EditorRenderReason::UndoRedo;
 };
 
 }  // namespace alcedo::ui

@@ -9,6 +9,7 @@
 #include <memory>
 
 #include "edit/pipeline/pipeline_cpu.hpp"
+#include "json.hpp"
 #include "storage/mapper/duckorm/duckdb_types.hpp"
 #include "storage/mapper/mapper.hpp"
 #include "type/type.hpp"
@@ -23,10 +24,9 @@ struct PipelineMapperParams {
 /**
  * @brief Single-table mapper for PipelineParam rows and CPUPipelineExecutor snapshots.
  */
-class PipelineMapper
-    : public Mapper<PipelineMapper, std::shared_ptr<CPUPipelineExecutor>, PipelineMapperParams,
-                    sl_element_id_t>,
-      public FieldReflectable<PipelineMapper> {
+class PipelineMapper : public Mapper<PipelineMapper, std::shared_ptr<CPUPipelineExecutor>,
+                                     PipelineMapperParams, sl_element_id_t>,
+                       public FieldReflectable<PipelineMapper> {
  private:
   static constexpr uint32_t    field_count_                                      = 2;
   static constexpr const char* table_name_                                       = "PipelineParam";
@@ -40,10 +40,16 @@ class PipelineMapper
   static auto ToParams(const std::shared_ptr<CPUPipelineExecutor> source) -> PipelineMapperParams;
   static auto FromParams(PipelineMapperParams&& param) -> std::shared_ptr<CPUPipelineExecutor>;
 
-  auto GetPipelineParamByFileId(const sl_element_id_t file_id)
+  auto        GetPipelineParamByFileId(const sl_element_id_t file_id)
       -> std::shared_ptr<CPUPipelineExecutor>;
-  void UpdatePipelineParamByFileId(const sl_element_id_t                      file_id,
-                                   const std::shared_ptr<CPUPipelineExecutor> pipeline);
+  void               UpdatePipelineParamByFileId(const sl_element_id_t                      file_id,
+                                                 const std::shared_ptr<CPUPipelineExecutor> pipeline);
+
+  /** @brief Read the stored pipeline JSON without constructing a legacy executor. */
+  [[nodiscard]] auto GetPipelineJsonByFileId(sl_element_id_t file_id)
+      -> std::optional<nlohmann::json>;
+  /** @brief Persist the authoritative format-version-2 pipeline document JSON. */
+  void UpdatePipelineJsonByFileId(sl_element_id_t file_id, const nlohmann::json& document);
 
   friend struct FieldReflectable<PipelineMapper>;
   using Mapper::Mapper;

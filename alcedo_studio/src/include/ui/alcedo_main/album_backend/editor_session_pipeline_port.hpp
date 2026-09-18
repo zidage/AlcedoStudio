@@ -46,6 +46,9 @@ class EditorSessionPipelinePort final : public alcedo::IEditorPipelinePort {
   /// Return the currently loaded guard without creating a new one.
   [[nodiscard]] auto CurrentGuard(sl_element_id_t element_id) const
       -> std::shared_ptr<alcedo::PipelineGuard>;
+  /// Live document for the loaded guard, or nullptr when the image is unloaded.
+  [[nodiscard]] auto CurrentDocument(sl_element_id_t element_id) const
+      -> const alcedo::PipelineDocument* override;
   /// Resolve the application pipeline service for history operations that
   /// rebuild the already-loaded editor guard.
   [[nodiscard]] auto PipelineMapper() const -> std::shared_ptr<alcedo::PipelineMgmtService>;

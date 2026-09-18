@@ -28,6 +28,8 @@ If `glib` is not installed there yet, install it first:
 .\vcpkg\vcpkg.exe install glib:x64-windows
 ```
 
+Do not install the vcpkg `lensfun` port. Alcedo builds Lensfun from `alcedo_studio/src/third_party/lensfun`. The vcpkg overlay at `vcpkg-overlays/lensfun` keeps that port from installing a competing `lensfun.dll`.
+
 If you want to use a non-vcpkg GLib2 package, pass `ALCEDO_LENSFUN_GLIB2_BASE_DIR` explicitly when configuring Alcedo Studio.
 
 ## Example Top-Level Configure

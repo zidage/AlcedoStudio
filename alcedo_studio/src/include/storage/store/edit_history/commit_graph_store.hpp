@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "edit/graph/pipeline_document.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/edit_commit.hpp"
 #include "edit/history/version_ref.hpp"
@@ -53,7 +54,8 @@ class CommitGraphStore {
   /// List every element_id that has an ImageEditState row.
   auto ListImageElementIds() -> std::vector<sl_element_id_t>;
 
-  /// Mark all Version heads (both parents), delete unreachable EditCommit rows for one image.
+  /// Mark all Version heads along first-parent reachability, then delete unreachable EditCommit
+  /// rows for one image.
   /// Safe on abnormal restart only when called during a clean project exit after the final save.
   /// @return number of commit rows deleted.
   auto DeleteUnreachableCommits(sl_element_id_t element_id) -> std::size_t;
@@ -72,11 +74,11 @@ class CommitGraphStore {
   auto CreateEmptyPersisted(sl_element_id_t element_id,
                             std::string default_display_name = "Default") -> CommitGraph;
 
-  /// Create an empty graph and its immutable base pipeline in one DuckDB transaction.
-  /// The supplied params are the image state after import metadata resolution and are never
-  /// overwritten by this store.
-  auto CreateRootPipelinePersisted(sl_element_id_t element_id,
-                                   const nlohmann::json& root_pipeline_params,
+  /// Create an empty graph and persist the immutable root document in one DuckDB transaction.
+  ///
+  /// `root_id` is computed from @p element_id, @p root_document, and @p raw_color_context.
+  /// The stored root is never overwritten. A later call for the same image is rejected.
+  auto CreateRootPipelinePersisted(sl_element_id_t element_id, const PipelineDocument& root_document,
                                    std::optional<nlohmann::json> raw_color_context = std::nullopt,
                                    std::string default_display_name = "Default") -> CommitGraph;
 

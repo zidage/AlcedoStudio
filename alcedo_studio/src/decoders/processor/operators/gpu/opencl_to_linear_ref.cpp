@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <stdexcept>
 
+#include "decoders/processor/operators/gpu/opencl_encode.hpp"
 #include "decoders/processor/raw_normalization.hpp"
 #include "opencl/opencl_context.hpp"
 #include "opencl/opencl_program_library.hpp"
@@ -74,7 +75,7 @@ void ToLinearRef(opencl::OpenClImage& img, LibRaw& raw_processor, const RawCfaPa
     wb_params.wb_multipliers[c] = wb[c];
   }
   wb_params.apply_white_balance =
-      raw_processor.imgdata.color.as_shot_wb_applied != 1 ? 1 : 0;
+      (raw_processor.imgdata.color.as_shot_wb_applied & LIBRAW_ASWB_APPLIED) == 0 ? 1 : 0;
 
   const int tile_width  = raw_processor.imgdata.rawdata.color.cblack[4];
   const int tile_height = raw_processor.imgdata.rawdata.color.cblack[5];
@@ -128,6 +129,11 @@ void ToLinearRef(opencl::OpenClImage& img, LibRaw& raw_processor, const RawCfaPa
   CheckOpenCl(err, "clSetKernelArg(2)");
   err = clSetKernelArg(kernel, 3, sizeof(PatternParams), &pattern_params);
   CheckOpenCl(err, "clSetKernelArg(3)");
+  const cl_uint zero = 0;
+  err = clSetKernelArg(kernel, 4, sizeof(cl_uint), &zero);
+  CheckOpenCl(err, "clSetKernelArg(4)");
+  err = clSetKernelArg(kernel, 5, sizeof(cl_uint), &zero);
+  CheckOpenCl(err, "clSetKernelArg(5)");
 
   const size_t local_size[2]  = {16, 16};
   const size_t global_size[2] = {
@@ -143,6 +149,13 @@ void ToLinearRef(opencl::OpenClImage& img, LibRaw& raw_processor, const RawCfaPa
   clReleaseKernel(kernel);
 
   img = std::move(float_img);
+}
+
+void LinearizeRgb(opencl::OpenClImage& img, const RawRgbLinearizationParams& params) {
+  if (img.Type() != CV_32FC4) throw std::runtime_error("OpenCL RGB: expected F32 RGBA");
+  opencl::OpenClEncodeQueue stream{.queue = OpenClContext::Instance().Queue()};
+  EncodeLinearizeRgb(stream, {img.Buffer(), 0}, img.Width(), img.Height(), params);
+  CheckOpenCl(clFinish(stream.queue), "RGB linearization");
 }
 
 }  // namespace OpenCL

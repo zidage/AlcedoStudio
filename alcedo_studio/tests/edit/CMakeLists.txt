@@ -113,7 +113,9 @@ gtest_discover_tests(ToneMappingFacadeTest TEST_PREFIX "ToneMappingFacadeTest.")
 alcedo_register_test_target(ToneMappingFacadeTest edit)
 
 # ODT (Output Device Transform) operator test.
-add_executable(ODTOpTest ${ALCEDO_TEST_ROOT}/edit/operators/cst/odt_op_test.cpp)
+add_executable(ODTOpTest
+  ${ALCEDO_TEST_ROOT}/edit/operators/cst/odt_op_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/operators/cst/aces_odt_numeric_stability_test.cpp)
 target_include_directories(ODTOpTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(ODTOpTest PRIVATE GTest::gtest_main Operators)
 gtest_discover_tests(ODTOpTest TEST_PREFIX "ODTOpTest.")
@@ -195,6 +197,42 @@ gtest_discover_tests(CommitGraphTest TEST_PREFIX "CommitGraphTest."
   PROPERTIES LABELS "ci_core_flow;edit;history;commit_graph")
 alcedo_register_test_target(CommitGraphTest edit)
 
+# Document root/checkpoint serialized pipeline state, format table, and open-boundary rejection.
+add_executable(PipelineDocumentCheckpointTest
+  ${ALCEDO_TEST_ROOT}/edit/history/pipeline_document_checkpoint_test.cpp)
+target_include_directories(PipelineDocumentCheckpointTest
+  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
+target_link_libraries(PipelineDocumentCheckpointTest
+  EditHistory EditGraph ProjectService GTest::gtest_main)
+target_compile_definitions(PipelineDocumentCheckpointTest PRIVATE
+  PIPELINE_HISTORY_FORMAT_EXPECTED_SERIALIZED_DIR="${ALCEDO_TEST_ROOT}/edit/history/expected_serialized")
+gtest_discover_tests(PipelineDocumentCheckpointTest
+  TEST_PREFIX "PipelineDocumentCheckpointTest."
+  PROPERTIES LABELS "ci_core_flow;edit;history")
+alcedo_register_test_target(PipelineDocumentCheckpointTest edit)
+
+# Default Color Grade naming, serialized counter, typed replay, and exact restoration.
+add_executable(PipelineDocumentDefaultNameTest
+  ${ALCEDO_TEST_ROOT}/edit/history/pipeline_document_default_name_test.cpp)
+target_include_directories(PipelineDocumentDefaultNameTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(PipelineDocumentDefaultNameTest
+  PipelineHistoryApplier EditHistory EditGraph GTest::gtest_main)
+gtest_discover_tests(PipelineDocumentDefaultNameTest
+  TEST_PREFIX "PipelineDocumentDefaultNameTest."
+  PROPERTIES LABELS "ci_core_flow;edit;history")
+alcedo_register_test_target(PipelineDocumentDefaultNameTest edit)
+
+# Typed pipeline-edit batch schema, canonical JSON, and commit identity.
+add_executable(PipelineEditBatchTest ${ALCEDO_TEST_ROOT}/edit/history/pipeline_edit_batch_test.cpp)
+target_include_directories(PipelineEditBatchTest PUBLIC ${ALCEDO_INCLUDE_DIR}
+  ${ALCEDO_TEST_ROOT}/edit/graph)
+target_link_libraries(PipelineEditBatchTest EditHistory GTest::gtest_main)
+target_compile_definitions(PipelineEditBatchTest PRIVATE
+  PIPELINE_EDIT_BATCH_EXPECTED_SERIALIZED_DIR="${ALCEDO_TEST_ROOT}/edit/history/expected_serialized")
+gtest_discover_tests(PipelineEditBatchTest TEST_PREFIX "PipelineEditBatchTest."
+  PROPERTIES LABELS "ci_core_flow;edit;history")
+alcedo_register_test_target(PipelineEditBatchTest edit)
+
 # Redo-only journal record format, RewriteTimeline, independent timeline simulator.
 add_executable(EditorTransactionJournalTest ${ALCEDO_TEST_ROOT}/edit/history/editor_transaction_journal_test.cpp)
 target_include_directories(EditorTransactionJournalTest PUBLIC ${ALCEDO_INCLUDE_DIR})
@@ -223,3 +261,353 @@ target_compile_definitions(EditorJournalFuzzFrameworkTest PRIVATE
 gtest_discover_tests(EditorJournalFuzzFrameworkTest TEST_PREFIX "EditorJournalFuzzFrameworkTest."
   PROPERTIES LABELS "ci_core_flow")
 alcedo_register_test_target(EditorJournalFuzzFrameworkTest edit)
+
+# GPU DAG Phase G1: Model, DTO, PipelineGraph, format v2 JSON, legacy import.
+add_executable(GpuDagModelGraphTest
+  ${ALCEDO_TEST_ROOT}/edit/graph/default_pipeline_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/graph/adjustment_ownership_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/graph/graph_validation_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/graph/pipeline_graph_command_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/graph/dirty_patch_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/graph/json_roundtrip_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/graph/color_grade_mask_model_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/graph/legacy_import_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/graph/header_hygiene_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/graph/develop_color_transform_test.cpp)
+target_include_directories(GpuDagModelGraphTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(GpuDagModelGraphTest PRIVATE GTest::gtest_main EditGraph EditRuntime)
+target_compile_definitions(GpuDagModelGraphTest PRIVATE
+  ALCEDO_MODEL_HEADER_ROOT="${ALCEDO_INCLUDE_DIR}/edit/operators/models"
+  ALCEDO_GRAPH_HEADER_ROOT="${ALCEDO_INCLUDE_DIR}/edit/graph"
+  ALCEDO_MASK_HEADER_ROOT="${ALCEDO_INCLUDE_DIR}/edit/mask")
+gtest_discover_tests(GpuDagModelGraphTest TEST_PREFIX "GpuDagModelGraphTest."
+  PROPERTIES LABELS "ci_core_flow;edit;graph")
+alcedo_register_test_target(GpuDagModelGraphTest edit)
+
+# GPU DAG Phase G3: RenderGeometryResolver (CPU).
+add_executable(GpuDagGeometryTest
+  ${ALCEDO_TEST_ROOT}/edit/geometry/render_geometry_resolver_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/geometry/sampling_and_document_test.cpp)
+target_include_directories(GpuDagGeometryTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(GpuDagGeometryTest PRIVATE GTest::gtest_main EditGeometry EditGraph)
+target_compile_definitions(GpuDagGeometryTest PRIVATE
+  ALCEDO_MODEL_HEADER_ROOT="${ALCEDO_INCLUDE_DIR}/edit/operators/models"
+  ALCEDO_GEOMETRY_HEADER_ROOT="${ALCEDO_INCLUDE_DIR}/edit/geometry")
+gtest_discover_tests(GpuDagGeometryTest TEST_PREFIX "GpuDagGeometryTest."
+  PROPERTIES LABELS "ci_core_flow;edit;geometry")
+alcedo_register_test_target(GpuDagGeometryTest edit)
+
+if(ALCEDO_ENABLE_BRUSH_MASK)
+  # Current Brush format identities, raster-only rejection, and later test names.
+  add_executable(BrushSourceFormatBoundaryTest
+    ${ALCEDO_TEST_ROOT}/edit/mask/brush_source_format_boundary_test.cpp)
+  target_include_directories(BrushSourceFormatBoundaryTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
+  target_link_libraries(BrushSourceFormatBoundaryTest
+    PRIVATE GTest::gtest_main EditMaskBrush EditGraph)
+  gtest_discover_tests(BrushSourceFormatBoundaryTest
+    TEST_PREFIX "BrushSourceFormatBoundaryTest."
+    PROPERTIES LABELS "ci_core_flow;edit;mask")
+  alcedo_register_test_target(BrushSourceFormatBoundaryTest edit)
+
+  # Parameterized Brush source, owner operations, and JSON.
+  add_executable(BrushParameterizedSourceTest
+    ${ALCEDO_TEST_ROOT}/edit/mask/brush_parameterized_source_test.cpp)
+  target_include_directories(BrushParameterizedSourceTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
+  target_link_libraries(BrushParameterizedSourceTest
+    PRIVATE GTest::gtest_main EditGraph EditMaskBrush)
+  gtest_discover_tests(BrushParameterizedSourceTest
+    TEST_PREFIX "BrushParameterizedSourceTest."
+    PROPERTIES LABELS "ci_core_flow;edit;mask")
+  alcedo_register_test_target(BrushParameterizedSourceTest edit)
+
+  # Canonical Brush sampling and spatial index.
+  add_executable(BrushCanonicalSamplerTest
+    ${ALCEDO_TEST_ROOT}/edit/mask/brush_canonical_sampler_test.cpp)
+  target_include_directories(BrushCanonicalSamplerTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(BrushCanonicalSamplerTest PRIVATE GTest::gtest_main EditMaskBrush)
+  gtest_discover_tests(BrushCanonicalSamplerTest
+    TEST_PREFIX "BrushCanonicalSamplerTest."
+    PROPERTIES LABELS "ci_core_flow;edit;mask")
+  alcedo_register_test_target(BrushCanonicalSamplerTest edit)
+
+  add_executable(BrushSpatialIndexTest
+    ${ALCEDO_TEST_ROOT}/edit/mask/brush_spatial_index_test.cpp)
+  target_include_directories(BrushSpatialIndexTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(BrushSpatialIndexTest PRIVATE GTest::gtest_main EditMaskBrush)
+  gtest_discover_tests(BrushSpatialIndexTest
+    TEST_PREFIX "BrushSpatialIndexTest."
+    PROPERTIES LABELS "ci_core_flow;edit;mask")
+  alcedo_register_test_target(BrushSpatialIndexTest edit)
+endif()
+
+add_executable(AnalyticMaskEditTest
+  ${ALCEDO_TEST_ROOT}/edit/mask/analytic_mask_edit_test.cpp)
+target_include_directories(AnalyticMaskEditTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(AnalyticMaskEditTest PRIVATE GTest::gtest_main EditMaskCore)
+gtest_discover_tests(AnalyticMaskEditTest
+  TEST_PREFIX "AnalyticMaskEditTest."
+  PROPERTIES LABELS "ci_core_flow;edit;mask")
+alcedo_register_test_target(AnalyticMaskEditTest edit)
+
+# Host GraphImageCache retention: LRU budget vs live writes, injected allocation failure.
+add_executable(GraphImageCacheRetentionTest
+  ${ALCEDO_TEST_ROOT}/edit/runtime/graph_image_cache_retention_test.cpp)
+target_include_directories(GraphImageCacheRetentionTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(GraphImageCacheRetentionTest PRIVATE GTest::gtest_main EditRuntime)
+gtest_discover_tests(GraphImageCacheRetentionTest TEST_PREFIX "GraphImageCacheRetentionTest."
+  PROPERTIES LABELS "ci_core_flow;edit;runtime")
+alcedo_register_test_target(GraphImageCacheRetentionTest edit ci_core)
+
+# GPU DAG Phase G3: CUDA GeometryResamplePass.
+if(ALCEDO_CUDA_ENABLED)
+  qt_add_executable(PipelineDocumentRenderTest
+    ${ALCEDO_TEST_ROOT}/edit/pipeline/pipeline_document_render_test.cpp)
+  target_include_directories(PipelineDocumentRenderTest PRIVATE ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(PipelineDocumentRenderTest PRIVATE
+    GTest::gtest_main EditPipeline EditRuntimeCuda Image ThreadPool)
+  gtest_discover_tests(PipelineDocumentRenderTest TEST_PREFIX "PipelineDocumentRenderTest."
+    PROPERTIES LABELS "gpu;edit;pipeline;product")
+  alcedo_register_test_target(PipelineDocumentRenderTest gpu)
+
+  add_executable(GpuDagCudaGeometryTest
+    ${ALCEDO_TEST_ROOT}/edit/geometry/cuda_geometry_resample_test.cpp)
+  target_include_directories(GpuDagCudaGeometryTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(GpuDagCudaGeometryTest PRIVATE GTest::gtest_main EditRuntimeCuda)
+  gtest_discover_tests(GpuDagCudaGeometryTest TEST_PREFIX "GpuDagCudaGeometryTest."
+    PROPERTIES LABELS "gpu;edit;geometry")
+  alcedo_register_test_target(GpuDagCudaGeometryTest gpu)
+endif()
+
+# GPU DAG Phase G4: CPU RawInputLoader / GraphCompiler (no CUDA required).
+add_executable(DngColorProfileTest ${ALCEDO_TEST_ROOT}/edit/runtime/dng_color_profile_test.cpp)
+target_include_directories(DngColorProfileTest PRIVATE ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(DngColorProfileTest PRIVATE GTest::gtest_main EditRuntime Image)
+gtest_discover_tests(DngColorProfileTest TEST_PREFIX "DngColorProfileTest.")
+alcedo_register_test_target(DngColorProfileTest edit)
+
+add_executable(GpuDagRawInputTest
+  ${ALCEDO_TEST_ROOT}/edit/input/raw_input_loader_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/input/prepared_source_cache_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/runtime/adjustment_runtime_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/runtime/grade_schedule_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/runtime/scene_work_image_pair_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/runtime/drt_post_executor_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/runtime/local_tone_plan_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/runtime/graph_compiler_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/runtime/renderer_metal_instantiate_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/runtime/result_content_key_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/runtime/runtime_invalidation_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/runtime/cached_versus_fresh_pixel_fixture_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/runtime/branch_join_plan_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/runtime/grade_lut_cache_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/runtime/static_execution_plan_cache_test.cpp)
+target_include_directories(GpuDagRawInputTest PUBLIC ${ALCEDO_INCLUDE_DIR}
+  PRIVATE ${ALCEDO_TEST_ROOT}/edit/runtime ${ALCEDO_TEST_ROOT}/edit)
+target_link_libraries(GpuDagRawInputTest PRIVATE GTest::gtest_main EditInput EditRuntime)
+if(ALCEDO_METAL_ENABLED)
+  target_link_libraries(GpuDagRawInputTest PRIVATE EditRuntimeMetal)
+endif()
+target_compile_definitions(GpuDagRawInputTest PRIVATE
+  ALCEDO_RUNTIME_HEADER_ROOT="${ALCEDO_INCLUDE_DIR}/edit/runtime"
+  ALCEDO_INPUT_HEADER_ROOT="${ALCEDO_INCLUDE_DIR}/edit/input"
+  ALCEDO_CI_RAW_FIXTURE_ROOT="${ALCEDO_TEST_ROOT}/resources/sample_images/ci_rawfiles")
+gtest_discover_tests(GpuDagRawInputTest TEST_PREFIX "GpuDagRawInputTest."
+  PROPERTIES LABELS "ci_core_flow;edit;input")
+alcedo_register_test_target(GpuDagRawInputTest edit)
+
+# GPU DAG Phase G4: CUDA Develop Endpoint.
+if(ALCEDO_CUDA_ENABLED)
+  add_executable(GpuDagCudaDevelopTest
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_develop_test.cpp)
+  target_include_directories(GpuDagCudaDevelopTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(GpuDagCudaDevelopTest PRIVATE GTest::gtest_main EditRuntimeCuda EditInput
+    DemosaicNet Image RawProcessor opencv_imgproc Qt6::Gui)
+  gtest_discover_tests(GpuDagCudaDevelopTest TEST_PREFIX "GpuDagCudaDevelopTest."
+    PROPERTIES LABELS "gpu;edit;runtime")
+  alcedo_register_test_target(GpuDagCudaDevelopTest gpu)
+endif()
+if(ALCEDO_CUDA_ENABLED)
+  add_executable(GpuDagCudaPrimaryGradeTest
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_primary_grade_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_multi_grade_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_scene_work_pair_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_preview_gpu_timing_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_preview_interactive_baseline_test.cpp)
+  target_include_directories(GpuDagCudaPrimaryGradeTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(GpuDagCudaPrimaryGradeTest PRIVATE GTest::gtest_main EditRuntimeCuda EditInput
+    PreviewPerformance)
+  target_compile_definitions(GpuDagCudaPrimaryGradeTest PRIVATE
+    ALCEDO_CI_RAW_FIXTURE_ROOT="${ALCEDO_TEST_ROOT}/resources/sample_images/ci_rawfiles"
+    ALCEDO_XTRANS_RAW_FIXTURE="${ALCEDO_TEST_ROOT}/resources/sample_images/raw/xtrans_edge/DSCF0019.RAF")
+  gtest_discover_tests(GpuDagCudaPrimaryGradeTest TEST_PREFIX "GpuDagCudaPrimaryGradeTest."
+    PROPERTIES LABELS "gpu;edit;runtime")
+  alcedo_register_test_target(GpuDagCudaPrimaryGradeTest gpu)
+
+  add_executable(GpuDagCudaDrtProductTest
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_drt_product_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_product_plan_cache_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_result_cache_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_product_scope_present_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_nm2_qualification_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/develop_camera_profile_import_test.cpp)
+  target_include_directories(GpuDagCudaDrtProductTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(GpuDagCudaDrtProductTest PRIVATE
+    GTest::gtest_main EditRuntimeCuda EditInput Image EditPipeline)
+  gtest_discover_tests(GpuDagCudaDrtProductTest TEST_PREFIX "GpuDagCudaDrtProductTest."
+    PROPERTIES LABELS "gpu;edit;runtime;product")
+  alcedo_register_test_target(GpuDagCudaDrtProductTest gpu)
+
+  add_executable(GpuDagCudaMaskTest
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_mask_test.cpp)
+  target_include_directories(GpuDagCudaMaskTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(GpuDagCudaMaskTest PRIVATE GTest::gtest_main EditRuntimeCuda EditInput)
+  gtest_discover_tests(GpuDagCudaMaskTest TEST_PREFIX "GpuDagCudaMaskTest."
+    PROPERTIES LABELS "gpu;edit;runtime;mask")
+  alcedo_register_test_target(GpuDagCudaMaskTest gpu)
+
+  add_executable(GpuDagCudaWorkspaceTest
+    ${ALCEDO_TEST_ROOT}/edit/runtime/parameter_arena_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/transient_and_cache_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/transient_buffer_arena_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/texture_lease_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/graph_image_cache_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/header_hygiene_test.cpp)
+  target_include_directories(GpuDagCudaWorkspaceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(GpuDagCudaWorkspaceTest PRIVATE GTest::gtest_main EditRuntimeCuda)
+  target_compile_definitions(GpuDagCudaWorkspaceTest PRIVATE
+    ALCEDO_GPU_HEADER_ROOT="${ALCEDO_INCLUDE_DIR}/gpu"
+    ALCEDO_RUNTIME_HEADER_ROOT="${ALCEDO_INCLUDE_DIR}/edit/runtime")
+  gtest_discover_tests(GpuDagCudaWorkspaceTest TEST_PREFIX "GpuDagCudaWorkspaceTest."
+    PROPERTIES LABELS "gpu;edit;runtime")
+  alcedo_register_test_target(GpuDagCudaWorkspaceTest gpu)
+endif()
+
+if(ALCEDO_METAL_ENABLED)
+  add_executable(GpuDagMetalWorkspaceTest
+    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_workspace_test.cpp)
+  target_include_directories(GpuDagMetalWorkspaceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(GpuDagMetalWorkspaceTest PRIVATE GTest::gtest_main EditRuntimeMetal)
+  target_compile_definitions(GpuDagMetalWorkspaceTest PRIVATE
+    ALCEDO_METAL_UTILS_METALLIB_PATH="${METAL_UTILS_METALLIB}")
+  add_dependencies(GpuDagMetalWorkspaceTest MetalUtilsShaders)
+  gtest_discover_tests(GpuDagMetalWorkspaceTest TEST_PREFIX "GpuDagMetalWorkspaceTest."
+    PROPERTIES LABELS "gpu;edit;runtime;metal")
+  alcedo_register_test_target(GpuDagMetalWorkspaceTest gpu ci_metal)
+
+  add_executable(GpuDagMetalDevelopTest
+    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_develop_test.cpp)
+  target_include_directories(GpuDagMetalDevelopTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(GpuDagMetalDevelopTest PRIVATE
+    GTest::gtest_main EditRuntimeMetal EditInput RawProcessorOp MetalDemosaicNetEntry Image
+    RawProcessor opencv_imgproc Qt6::Gui)
+  target_compile_definitions(GpuDagMetalDevelopTest PRIVATE
+    ALCEDO_METAL_TO_LINEAR_REF_METALLIB_PATH="${METAL_TO_LINEAR_REF_METALLIB}"
+    ALCEDO_METAL_GEOMETRY_RESAMPLE_METALLIB_PATH="${METAL_GEOMETRY_RESAMPLE_METALLIB}"
+    ALCEDO_METAL_CAMERA_COLOR_METALLIB_PATH="${METAL_CAMERA_COLOR_METALLIB}")
+  add_dependencies(GpuDagMetalDevelopTest GpuDagMetalShaders RawProcessorOpMetalShaders)
+  gtest_discover_tests(GpuDagMetalDevelopTest TEST_PREFIX "GpuDagMetalDevelopTest."
+    PROPERTIES LABELS "gpu;edit;runtime;metal")
+  alcedo_register_test_target(GpuDagMetalDevelopTest gpu ci_metal)
+
+  add_executable(GpuDagMetalGradeTest
+    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_grade_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_llf_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_mask_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_multi_grade_test.cpp)
+  target_include_directories(GpuDagMetalGradeTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(GpuDagMetalGradeTest PRIVATE
+    GTest::gtest_main EditRuntimeMetal EditInput RawProcessorOp MetalDemosaicNetEntry)
+  target_compile_definitions(GpuDagMetalGradeTest PRIVATE
+    ALCEDO_METAL_PRIMARY_GRADE_METALLIB_PATH="${METAL_PRIMARY_GRADE_METALLIB}"
+    ALCEDO_METAL_LOCAL_TONE_METALLIB_PATH="${METAL_LOCAL_TONE_METALLIB}"
+    ALCEDO_METAL_MASK_METALLIB_PATH="${METAL_MASK_METALLIB}")
+  add_dependencies(GpuDagMetalGradeTest GpuDagMetalShaders)
+  gtest_discover_tests(GpuDagMetalGradeTest TEST_PREFIX "GpuDagMetalGradeTest."
+    PROPERTIES LABELS "gpu;edit;runtime;metal")
+  alcedo_register_test_target(GpuDagMetalGradeTest gpu ci_metal)
+
+  add_executable(GpuDagMetalDrtTest
+    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_drt_test.cpp)
+  target_include_directories(GpuDagMetalDrtTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(GpuDagMetalDrtTest PRIVATE
+    GTest::gtest_main EditRuntimeMetal EditInput RawProcessorOp Operators MetalDemosaicNetEntry)
+  target_compile_definitions(GpuDagMetalDrtTest PRIVATE
+    ALCEDO_METAL_DRT_METALLIB_PATH="${METAL_DRT_METALLIB}")
+  add_dependencies(GpuDagMetalDrtTest GpuDagMetalShaders)
+  gtest_discover_tests(GpuDagMetalDrtTest TEST_PREFIX "GpuDagMetalDrtTest."
+    PROPERTIES LABELS "gpu;edit;runtime;metal")
+  alcedo_register_test_target(GpuDagMetalDrtTest gpu ci_metal)
+
+  add_executable(GpuDagMetalRendererTest
+    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_renderer_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_nm2_qualification_test.cpp)
+  target_include_directories(GpuDagMetalRendererTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(GpuDagMetalRendererTest PRIVATE
+    GTest::gtest_main EditRuntimeMetal EditPipeline EditInput RawProcessorOp Operators MetalDemosaicNetEntry)
+  target_compile_definitions(GpuDagMetalRendererTest PRIVATE
+    ALCEDO_METAL_DRT_METALLIB_PATH="${METAL_DRT_METALLIB}")
+  add_dependencies(GpuDagMetalRendererTest GpuDagMetalShaders)
+  gtest_discover_tests(GpuDagMetalRendererTest TEST_PREFIX "GpuDagMetalRendererTest."
+    PROPERTIES LABELS "gpu;edit;runtime;metal")
+  alcedo_register_test_target(GpuDagMetalRendererTest gpu ci_metal)
+endif()
+
+if(ALCEDO_OPENCL_ENABLED)
+  add_executable(GpuDagOpenClWorkspaceTest
+    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_workspace_test.cpp)
+  target_include_directories(GpuDagOpenClWorkspaceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(GpuDagOpenClWorkspaceTest PRIVATE
+    GTest::gtest_main EditRuntimeOpenCl OpenClProgramLibrary)
+  target_compile_definitions(GpuDagOpenClWorkspaceTest PRIVATE
+    ALCEDO_RUNTIME_HEADER_ROOT="${ALCEDO_INCLUDE_DIR}/edit/runtime"
+    ALCEDO_OPENCL_SHADER_SOURCE_ROOT="${ALCEDO_SRC_DIR}")
+  gtest_discover_tests(GpuDagOpenClWorkspaceTest TEST_PREFIX "GpuDagOpenClWorkspaceTest."
+    PROPERTIES LABELS "gpu;edit;runtime;opencl")
+  alcedo_register_test_target(GpuDagOpenClWorkspaceTest gpu)
+
+  add_executable(GpuDagOpenClDevelopTest
+    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_develop_test.cpp)
+  target_include_directories(GpuDagOpenClDevelopTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(GpuDagOpenClDevelopTest PRIVATE
+    GTest::gtest_main EditRuntimeOpenCl EditInput RawProcessorOp OpenClDemosaicNetEntry
+    OpenClProgramLibrary Image RawProcessor opencv_imgproc Qt6::Gui)
+  target_compile_definitions(GpuDagOpenClDevelopTest PRIVATE
+    ALCEDO_OPENCL_SHADER_SOURCE_ROOT="${ALCEDO_SRC_DIR}"
+    ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/models"
+    ALCEDO_TEST_IMAGE_ROOT="${ALCEDO_TEST_ROOT}/resources/sample_images")
+  gtest_discover_tests(GpuDagOpenClDevelopTest TEST_PREFIX "GpuDagOpenClDevelopTest."
+    PROPERTIES LABELS "gpu;edit;runtime;opencl")
+  alcedo_register_test_target(GpuDagOpenClDevelopTest gpu)
+
+  add_executable(GpuDagOpenClGradeTest
+    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_grade_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_mask_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_multi_grade_test.cpp)
+  target_include_directories(GpuDagOpenClGradeTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(GpuDagOpenClGradeTest PRIVATE
+    GTest::gtest_main EditRuntimeOpenCl EditInput OpenClProgramLibrary)
+  target_compile_definitions(GpuDagOpenClGradeTest PRIVATE
+    ALCEDO_OPENCL_SHADER_SOURCE_ROOT="${ALCEDO_SRC_DIR}")
+  gtest_discover_tests(GpuDagOpenClGradeTest TEST_PREFIX "GpuDagOpenClGradeTest."
+    PROPERTIES LABELS "gpu;edit;runtime;opencl")
+  alcedo_register_test_target(GpuDagOpenClGradeTest gpu)
+
+  add_executable(GpuDagOpenClDrtProductTest
+    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_drt_product_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_nm2_qualification_test.cpp)
+  target_include_directories(GpuDagOpenClDrtProductTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(GpuDagOpenClDrtProductTest PRIVATE
+    GTest::gtest_main EditRuntimeOpenCl EditPipeline EditInput RawProcessorOp
+    OpenClDemosaicNetEntry OpenClProgramLibrary Image)
+  target_compile_definitions(GpuDagOpenClDrtProductTest PRIVATE
+    ALCEDO_OPENCL_SHADER_SOURCE_ROOT="${ALCEDO_SRC_DIR}")
+  if(ALCEDO_CUDA_ENABLED)
+    target_link_libraries(GpuDagOpenClDrtProductTest PRIVATE EditRuntimeCuda)
+    target_compile_definitions(GpuDagOpenClDrtProductTest PRIVATE HAVE_CUDA)
+  endif()
+  gtest_discover_tests(GpuDagOpenClDrtProductTest TEST_PREFIX "GpuDagOpenClDrtProductTest."
+    PROPERTIES LABELS "gpu;edit;runtime;opencl;product")
+  alcedo_register_test_target(GpuDagOpenClDrtProductTest gpu)
+endif()

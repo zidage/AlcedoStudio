@@ -25,8 +25,8 @@ Near-term candidates include:
 
 The exchange format should therefore be unified only at the control plane. Each task still owns
 its task-specific protobuf payload, because embeddings, captioning, scoring, and editor recipes
-do not share a meaningful request schema. What should be common is the envelope around those
-payloads: request identity, task name, timeout, cancellation, priority, trace metadata, capability
+do not share a meaningful request schema. What should be common is the shared control fields
+around those payloads: request identity, task name, timeout, cancellation, priority, trace metadata, capability
 description, and credential handles.
 
 ## Current C++ Integration Points
@@ -59,7 +59,7 @@ description, and credential handles.
   own typed payload and response.
 - Move direct sidecar protocol code into a real `sidecar_client` module under
   `alcedo_studio/src/sidecar_client` and `alcedo_studio/src/include/sidecar_client`. The runtime
-  service owns the process; the client owns gRPC, request envelopes, stubs, and protobuf mapping.
+  service owns the process; the client owns gRPC, `AiRequestHeader` filling, stubs, and protobuf mapping.
 - Make DTO/protobuf conversion explicit on the DTO types through a shared CRTP-style mapper helper.
   Call sites should read as `Dto::FromProto(proto)` or `dto.ToProto(&proto)`, not as anonymous
   helper functions hidden in `ai_sidecar_runtime_service.cpp`.
@@ -1093,7 +1093,7 @@ Goal: stop growing `app/ai_sidecar_runtime_service.cpp` as the place where every
 lands. Phase 6d proved the product flow can call the sidecar from album code; the next phase is a
 structural cutover before persistence/search work adds more permanent call sites. The runtime
 service should manage the sidecar process lifecycle. A new `sidecar_client` module should own every
-direct gRPC API, protobuf DTO conversion, request envelope, and task-specific client.
+direct gRPC API, protobuf DTO conversion, request-header filling, and task-specific client.
 
 Reflection on the current shape:
 
@@ -1161,7 +1161,7 @@ DTO/protobuf conversion rules:
 
 - Request DTOs own `ToProto(...)`; response DTOs own `FromProto(...)`; bidirectional DTOs own both.
   The implementation lives in `src/sidecar_client/dto/*.cpp` beside generated protobuf includes.
-- Shared envelope fields (`AiRequestHeader`, `AiResponseHeader`, deadlines, credential refs,
+- Shared control fields (`AiRequestHeader`, `AiResponseHeader`, deadlines, credential refs,
   request ids, task ids) move into `sidecar_client`, not `AiSidecarRuntimeService`.
 - No anonymous `ToRuntimeModelInfo`, `ToEmbeddingResult`, `ToImageRatingResult`, or equivalent mapper
   helpers remain in `ai_sidecar_runtime_service.cpp`.
@@ -1263,7 +1263,7 @@ live `sidecar_client::Client` session's narrow modules (`runtime`, `credentials`
 What changed:
 
 - Added the `SidecarClient` CMake target and `sidecar_client` public interfaces/DTO headers.
-- Moved gRPC stub creation, request-envelope filling, protobuf-to-DTO mapping, credential calls,
+- Moved gRPC stub creation, request-header filling, protobuf-to-DTO mapping, credential calls,
   model-manager calls, semantic v2 embedding calls, runtime control, and image-analysis calls out of
   `app/ai_sidecar_runtime_service.cpp`.
 - Deleted the app-layer `IAiSidecarRuntimeClient` / `GrpcAiSidecarRuntimeClient` boundary and the
@@ -2300,7 +2300,7 @@ Test results:
   `bearer_required_without_credential_errors`, `no_secret_image_prompt_or_body_in_logs_or_error_strings`,
   `client_4xx_is_not_retried_and_maps_to_provider_error`) and the Volcengine equivalents
   (`sends_bearer_authorization`, `request_body_uses_responses_shape_with_structured_output`,
-  `extracts_output_text_from_responses_envelope`, `parses_rating_response_and_captures_usage`,
+  `extracts_output_text_from_responses_output_text`, `parses_rating_response_and_captures_usage`,
   `ark_error_body_maps_to_provider_error_without_leaking_text`,
   `missing_output_text_maps_to_schema_validation`, `schema_failure_does_not_produce_active_result`,
   `rate_limit_maps_to_transient`, `server_500_is_retried_then_succeeds`,
@@ -2412,7 +2412,7 @@ Test results:
   filtered (the 3 live smokes). vs 169 mock tests at 5c close (+16 `anthropic_messages` driver tests; the
   `http_util` image-encode test was a 1:1 replacement, not a net add). The 16 new driver tests:
   `sends_authorization_and_anthropic_version_headers`, `request_body_uses_messages_shape_with_tool_use`,
-  `extracts_tool_use_input_from_messages_envelope`, `parses_understanding_response_and_captures_usage`,
+  `extracts_tool_use_input_from_messages_tool_use_input`, `parses_understanding_response_and_captures_usage`,
   `parses_rating_response_and_captures_usage`, `rate_limit_maps_to_transient`, `server_500_is_retried_then_succeeds`,
   `client_4xx_is_not_retried_and_maps_to_provider_error`, `schema_failure_does_not_produce_active_result`,
   `missing_tool_use_maps_to_schema_validation`, `wrong_tool_name_maps_to_schema_validation`,

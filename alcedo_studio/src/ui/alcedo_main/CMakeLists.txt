@@ -18,12 +18,18 @@ def_library(EditorViewerLogic
     SOURCES
         "${ALCEDO_UI_ROOT}/edit_viewer/edit_viewer_overlay_geometry.cpp"
         "${ALCEDO_UI_ROOT}/edit_viewer/viewport_mapper.cpp"
+        "${ALCEDO_UI_ROOT}/edit_viewer/mask_edit_geometry.cpp"
+        "${ALCEDO_UI_ROOT}/edit_viewer/mask_overlay_geometry.cpp"
+        "${ALCEDO_UI_ROOT}/edit_viewer/mask_overlay_layout.cpp"
         "${ALCEDO_UI_ROOT}/edit_viewer/crop_geometry.cpp"
         "${ALCEDO_UI_ROOT}/edit_viewer/view_transform_controller.cpp"
         "${ALCEDO_UI_ROOT}/edit_viewer/crop_interaction_controller.cpp"
         "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/edit_viewer_overlay_geometry.hpp"
         "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/viewer_state.hpp"
         "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/viewport_mapper.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/mask_edit_geometry.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/mask_overlay_geometry.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/mask_overlay_layout.hpp"
         "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/crop_geometry.hpp"
         "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/view_transform_controller.hpp"
         "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/crop_interaction_controller.hpp"
@@ -32,6 +38,8 @@ def_library(EditorViewerLogic
         Qt6::Core
         Qt6::Gui
         opencv_core
+        EditMaskCore
+        EditGeometry
 )
 
 def_library(BackgroundTaskController
@@ -59,6 +67,8 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/project_handler.cpp"
         "${ALCEDO_UI_SHELL_ROOT}/album_backend/thumbnail_manager.cpp"
         "${ALCEDO_UI_SHELL_ROOT}/album_backend/thumbnail_image_provider.cpp"
+        "${ALCEDO_UI_SHELL_ROOT}/album_backend/mask_thumbnail_coordinator.cpp"
+        "${ALCEDO_UI_SHELL_ROOT}/album_backend/mask_thumbnail_image_provider.cpp"
         "${ALCEDO_UI_SHELL_ROOT}/album_backend/folder_controller.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/image_controller.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/image_analysis_environment.cpp"
@@ -70,12 +80,19 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/import_export.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/nikon_he_recovery_controller.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_session_controller.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_mask_creation_adapter.cpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_mask_creation_adapter.hpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_panel_presentation.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_scope_controller.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_scope_item.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_history_operation_publisher.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_adjustment_models.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_history_models.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_node_controller.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_node_layout_store.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_history_commit_presentation.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_node_graph_presentation.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/shortcut_registry.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_geometry_math.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_lens_catalog_model.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_tone_curve_model.cpp"
@@ -123,6 +140,8 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/project_handler.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/thumbnail_manager.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/thumbnail_image_provider.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/mask_thumbnail_coordinator.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/mask_thumbnail_image_provider.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/folder_controller.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/image_controller.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/stats_engine.hpp"
@@ -133,6 +152,7 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/nikon_he_recovery_controller.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/nikon_he_recovery_types.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_session_controller.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_panel_presentation.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_action_availability_model.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_scope_controller.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_scope_item.hpp"
@@ -140,7 +160,11 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_history_models.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_node_controller.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_node_layout_store.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_history_commit_presentation.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_node_graph_presentation.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/shortcut_registry.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_geometry_math.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_lens_catalog_model.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_tone_curve_model.hpp"
@@ -200,9 +224,15 @@ target_link_libraries(AlbumBackendLib
         PipelineMgmtService
         AdjustmentTransferService
         EditorSessionService
+        EditorMaskCreationController
         EditorAdjustmentPipeline
+        EditorPipelineCommandService
+        EditorPanelProjection
+        EditorNodeGraphDraft
+        PipelineHistoryApplier
         EditorMiniGitMaterializer
         ThumbnailService
+        MaskThumbnailService
         SemanticGenerationService
         ImageAnalysisService
         ImageAnalysisController
@@ -217,22 +247,61 @@ target_link_libraries(AlbumBackendLib
         ImageLoader
         xxHash
         CudaDriverRequirements
+        PreviewPerformance
+)
+
+# Canonical runtime theme tokens. DESIGN.md is the human VI spec; this library
+# is the only linkable source for colors, type, and graph metrics. Bundled
+# fonts/icons live here so RegisterFonts() and Q_INIT_RESOURCE share one owner.
+# Do not compile app_theme.cpp into executables that already link AppTheme.
+def_library(AppTheme
+    SOURCES
+        "${ALCEDO_UI_SHELL_ROOT}/app_theme.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/app_theme.hpp"
+        "${ALCEDO_SRC_ROOT}/config/resource.qrc"
+    PUBLIC_DEPS
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Widgets
+)
+target_compile_definitions(AppTheme PRIVATE
+    ALCEDO_APP_VERSION="${PROJECT_VERSION}"
+)
+
+# Maps PipelineDocument snapshots onto pinned QuickQanava primitives. The QML
+# GraphView owns the qan::Graph; this adapter owns only identity maps.
+add_library(AlcedoQanGraph STATIC
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/alcedo_qan_graph.cpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/alcedo_qan_graph.hpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/qan_delegate_library.cpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/qan_delegate_library.hpp"
+)
+target_include_directories(AlcedoQanGraph
+    PUBLIC
+        "${ALCEDO_INCLUDE_ROOT}"
+)
+target_link_libraries(AlcedoQanGraph
+    PUBLIC
+        AppTheme
+        EditorNodeGraphProjection
+        QuickQanava
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Qml
+        Qt6::Quick
 )
 
 # The editor shell is QML-only. Widgets remains private to the album backend for
 # the native project and Nikon recovery file dialogs.
 target_link_libraries(AlbumBackendLib PRIVATE Qt6::Widgets)
+target_link_libraries(AlbumBackendLib PUBLIC AlcedoQanGraph)
 
 set(ALCEDO_MAIN_SOURCES
     "${ALCEDO_UI_SHELL_ROOT}/main.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/application_module_qml_types.cpp"
-    "${ALCEDO_UI_SHELL_ROOT}/app_theme.cpp"
-    "${ALCEDO_UI_SHELL_ROOT}/shortcut_registry.cpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/application_module_qml_types.hpp"
-    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/app_theme.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/i18n.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/language_manager.hpp"
-    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/shortcut_registry.hpp"
     "${ALCEDO_INCLUDE_ROOT}/utils/cuda/cuda_driver_requirements.hpp"
 )
 if(WIN32)
@@ -440,6 +509,8 @@ target_link_libraries(alcedo_main
         AlbumBackendLib
         AppDiagnostics
         UiLocalization
+        QuickQanava
+        QuickQanavaplugin
         Qt6::Quick
         Qt6::Qml
         Qt6::QuickControls2
@@ -545,11 +616,12 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorHistoryTransactionEntry.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorHistoryCommitGraphNode.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorVersionsPanel.qml"
-    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMergeDialog.qml"
-    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMergeChoiceButton.qml"
-    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMergeConflictCard.qml"
-    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMergeJsonValue.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorAdjustmentStack.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorAdjustmentHeader.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMonoSlider.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorWhiteBalanceSection.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorDetailPanel.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMasksContextPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorScopePanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorTonePanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorLookPanel.qml"
@@ -557,6 +629,17 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorDisplayTransformPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorGeometryPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorRawDecodePanel.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorNodeDelegate.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorEndpointNodeDelegate.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorNodeMaskDrawer.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorNodeMaskTypeRow.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorNodePortDelegate.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorNodePortDock.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorNodeEdgeDelegate.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorNodesPanel.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMaskGroupsPanel.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMaskGroupDelegate.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMaskGroupMaskRow.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AdjustmentSlider.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AdjustmentField.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AdjustmentToggle.qml"
@@ -574,8 +657,9 @@ foreach(ALCEDO_MAIN_QML_FILE IN LISTS ALCEDO_MAIN_QML_FILES ALCEDO_MAIN_QML_RESO
     )
 endforeach()
 
+# QML module only. Fonts/icons are owned by AppTheme (resource.qrc).
 add_library(AlcedoMainQml STATIC
-    "${ALCEDO_SRC_ROOT}/config/resource.qrc"
+    "${ALCEDO_UI_SHELL_ROOT}/alcedo_main_qml_module.cpp"
 )
 target_include_directories(AlcedoMainQml PUBLIC "${ALCEDO_INCLUDE_ROOT}")
 target_link_libraries(AlcedoMainQml
@@ -623,8 +707,6 @@ set(ALCEDO_TEST_HOST_SOURCES
     "${ALCEDO_UI_ROOT}/alcedo_studio_test_host/test_probe.hpp"
     "${ALCEDO_UI_SHELL_ROOT}/application_module_qml_types.cpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/application_module_qml_types.hpp"
-    "${ALCEDO_UI_SHELL_ROOT}/app_theme.cpp"
-    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/app_theme.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/i18n.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/language_manager.hpp"
     "${ALCEDO_INCLUDE_ROOT}/utils/cuda/cuda_driver_requirements.hpp"
@@ -643,6 +725,8 @@ target_include_directories(alcedo_studio_test_host
 target_link_libraries(alcedo_studio_test_host
     PRIVATE
         AlbumBackendLib
+        QuickQanava
+        QuickQanavaplugin
         AlcedoMainQml
         AlcedoMainQmlplugin
         UiLocalization
@@ -868,10 +952,10 @@ add_custom_command(TARGET alcedo_main POST_BUILD
     VERBATIM
 )
 
-if(WIN32 AND TARGET alcedo_lensfun)
+if(WIN32 AND TARGET puerhlab_lensfun)
     add_custom_command(TARGET alcedo_main POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "$<TARGET_FILE:alcedo_lensfun>"
+            "$<TARGET_FILE:puerhlab_lensfun>"
             "$<TARGET_FILE_DIR:alcedo_main>/lensfun.dll"
         VERBATIM
     )
@@ -965,3 +1049,14 @@ if(APPLE AND ALCEDO_MACOS_BUNDLE AND
         VERBATIM
     )
 endif()
+
+add_test(NAME ProductionBinaryLoadsQuickQanavaModule
+    COMMAND alcedo_main --verify-qml-imports
+)
+set_tests_properties(ProductionBinaryLoadsQuickQanavaModule PROPERTIES
+    PASS_REGULAR_EXPRESSION "qml.imports.ok=QuickQanava"
+    FAIL_REGULAR_EXPRESSION "module .*QuickQanava"
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:alcedo_main>"
+    LABELS "quickqanava;package"
+    TIMEOUT 60
+)

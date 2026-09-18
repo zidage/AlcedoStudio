@@ -21,12 +21,10 @@
 
 #include "alcedo_version.hpp"
 
-// resource.qrc lives in the AlcedoMainQml static library. MSVC drops that
-// object unless something in the final executable references
-// qInitResources_resource(). Q_INIT_RESOURCE must sit outside any namespace.
-static void InitAlcedoBundledResources() {
-  Q_INIT_RESOURCE(resource);
-}
+// resource.qrc is compiled into the AppTheme library. MSVC still drops that
+// object unless the final executable references qInitResources_resource().
+// Q_INIT_RESOURCE must sit outside any namespace.
+static void InitAlcedoBundledResources() { Q_INIT_RESOURCE(resource); }
 
 namespace alcedo::ui {
 namespace {
@@ -61,10 +59,6 @@ struct ThemeColors {
   QColor button_pressed_fill;
   QColor button_selected_fill;
   QColor disabled_surface;  // bg_panel blended toward bg_canvas (simulates 0.55 opacity)
-  QColor merge_current_color;
-  QColor merge_current_fill_color;
-  QColor merge_incoming_color;
-  QColor merge_incoming_fill_color;
 };
 
 auto BrandBlueBase() -> QColor { return QColor(104, 146, 185); }
@@ -108,10 +102,6 @@ auto MakePuerhTheme() -> ThemeColors {
       .button_pressed_fill  = QColor(0x1A, 0x1A, 0x1A),  // = hover / bg_deep
       .button_selected_fill = QColor(0x1A, 0x1A, 0x1A),  // = pressed / hover
       .disabled_surface     = QColor(0x0E, 0x0E, 0x0E),  // between panel and canvas
-      .merge_current_color      = QColor(0xF8, 0x51, 0x49),  // Git red
-      .merge_current_fill_color = QColor(0x2A, 0x14, 0x16),  // deeper red well
-      .merge_incoming_color      = QColor(0x3F, 0xB9, 0x50),  // Git green
-      .merge_incoming_fill_color = QColor(0x14, 0x28, 0x1A),  // deeper green well
   };
 }
 
@@ -147,10 +137,6 @@ auto MakeClassicTheme() -> ThemeColors {
       .button_pressed_fill  = QColor(0x1A, 0x1A, 0x1A),  // = hover
       .button_selected_fill = QColor(0x1A, 0x1A, 0x1A),  // = pressed / hover
       .disabled_surface     = QColor(0x0E, 0x0E, 0x0E),  // between panel and canvas
-      .merge_current_color      = QColor(0xF8, 0x51, 0x49),  // Git red
-      .merge_current_fill_color = QColor(0x2A, 0x14, 0x16),  // deeper red well
-      .merge_incoming_color      = QColor(0x3F, 0xB9, 0x50),  // Git green
-      .merge_incoming_fill_color = QColor(0x14, 0x28, 0x1A),  // deeper green well
   };
 }
 
@@ -367,8 +353,8 @@ void AppTheme::RegisterFonts() {
   // Minigit / diagnostic monospace only (Versions commit ids, transaction
   // timeline hashes and before/after lines). Do not use for general metrics —
   // those stay on dataFontFamily (IBM Plex Sans).
-  families.mono = RegisterFontResource(QStringLiteral(":/fonts/data_DMMono.ttf"),
-                                       QStringLiteral("DM Mono"));
+  families.mono =
+      RegisterFontResource(QStringLiteral(":/fonts/data_DMMono.ttf"), QStringLiteral("DM Mono"));
   // Chinese fallback for the Manrope headline font. The struct default is
   // "Noto Sans SC" (same family used for the rest of the UI's Chinese text);
   // we intentionally do NOT override it with the decorative Dinglie Song
@@ -980,6 +966,86 @@ auto AppTheme::scopeGridColor() const -> QColor {
   return Blend(bgDeepColor(), textMutedColor(), 0.32);
 }
 
+auto AppTheme::graphCanvasColor() const -> QColor { return bgDeepColor(); }
+
+auto AppTheme::graphEdgeColor() const -> QColor { return textMutedColor(); }
+
+auto AppTheme::graphCandidateEdgeColor() const -> QColor {
+  return Blend(textMutedColor(), textColor(), 0.35);
+}
+
+auto AppTheme::graphPortFillColor() const -> QColor { return QColor(0, 0, 0, 0); }
+
+auto AppTheme::graphPortBorderColor() const -> QColor { return QColor(0x3F, 0xB9, 0x50); }
+
+auto AppTheme::graphNodeBorderColor() const -> QColor {
+  return Blend(cardSurfaceColor(), textMutedColor(), 0.5);
+}
+
+auto AppTheme::graphMaskDrawerSurfaceColor() const -> QColor { return bgBaseColor(); }
+
+auto AppTheme::graphSelectionOutlineColor() const -> QColor { return textColor(); }
+
+auto AppTheme::graphNodeWidth() const -> int { return 220; }
+
+auto AppTheme::graphNodeVerticalGap() const -> int { return 48; }
+
+auto AppTheme::graphNodeOriginX() const -> int { return 48; }
+
+auto AppTheme::graphNodeOriginY() const -> int { return 48; }
+
+auto AppTheme::graphEndpointHeight() const -> int { return 40; }
+
+auto AppTheme::graphNameRowHeight() const -> int { return 32; }
+
+auto AppTheme::graphNameRowDividerHeight() const -> int { return 1; }
+
+auto AppTheme::graphMaskDrawerHeaderHeight() const -> int { return 28; }
+
+auto AppTheme::graphMaskRowHeight() const -> int { return 28; }
+
+auto AppTheme::maskGroupPreviewSize() const -> int { return 40; }
+
+auto AppTheme::maskGroupMaskPreviewSize() const -> int { return 32; }
+
+auto AppTheme::graphPortSize() const -> int { return 8; }
+
+auto AppTheme::graphPortHitSize() const -> int { return 16; }
+
+auto AppTheme::graphEdgeWidth() const -> int { return 2; }
+
+auto AppTheme::graphSelectionOutlineWidth() const -> int { return 1; }
+
+auto AppTheme::maskOverlayControlColor() const -> QColor { return textColor(); }
+
+auto AppTheme::maskOverlayControlOutlineColor() const -> QColor { return bgCanvasColor(); }
+
+auto AppTheme::maskOverlayInactiveColor() const -> QColor { return textMutedColor(); }
+
+auto AppTheme::maskOverlayHandleRadius() const -> int { return 5; }
+
+auto AppTheme::maskOverlayHandleOutlineWidth() const -> qreal { return 1.2; }
+
+auto AppTheme::maskOverlayStrokeWidth() const -> qreal { return 1.5; }
+
+auto AppTheme::maskOverlayAntialiasWidth() const -> qreal { return 1.0; }
+
+auto AppTheme::maskOverlayHandleHitRadius() const -> int { return 12; }
+
+auto AppTheme::maskOverlayRotateHandleOffset() const -> int { return 24; }
+
+auto AppTheme::maskOverlayGuideOuterWidth() const -> qreal { return 3.0; }
+
+auto AppTheme::maskOverlayGuideInnerWidth() const -> qreal { return 1.2; }
+
+auto AppTheme::maskOverlayGripOuterWidth() const -> qreal { return 5.0; }
+
+auto AppTheme::maskOverlayGripInnerWidth() const -> qreal { return 2.4; }
+
+auto AppTheme::maskOverlayGripSpanT0() const -> qreal { return 0.38; }
+
+auto AppTheme::maskOverlayGripSpanT1() const -> qreal { return 0.62; }
+
 auto AppTheme::scopePlotBorderColor() const -> QColor {
   return Blend(bgBaseColor(), textMutedColor(), 0.42);
 }
@@ -1032,9 +1098,7 @@ auto AppTheme::monoFontFamily() const -> QString {
   RegisterFonts();
   return FontState().mono;
 }
-auto AppTheme::appVersion() const -> QString {
-  return QStringLiteral(ALCEDO_APP_VERSION);
-}
+auto AppTheme::appVersion() const -> QString { return QStringLiteral(ALCEDO_APP_VERSION); }
 
 auto AppTheme::toneGold() const -> QColor { return GetTheme(current_theme_index_).tone_gold; }
 auto AppTheme::toneWine() const -> QColor { return GetTheme(current_theme_index_).tone_wine; }
@@ -1096,9 +1160,10 @@ auto AppTheme::iconButtonHitSizeCompact() const -> int { return 40; }
 auto AppTheme::editorSidePanelWidth() const -> int { return 320; }
 auto AppTheme::editorSidePanelWidthMin() const -> int { return 260; }
 auto AppTheme::editorSidePanelWidthMax() const -> int { return 460; }
-auto AppTheme::editorMergeDialogWidth() const -> int { return 960; }
 auto AppTheme::editorScopeHeight() const -> int { return 192; }
 auto AppTheme::editorScopeHeightMin() const -> int { return 160; }
+// EXIF caption line + spaceXs + compact Mask-tool hit row (DESIGN.md).
+auto AppTheme::editorAdjustmentHeaderMinHeight() const -> int { return 58; }
 auto AppTheme::collectionsSidebarWidth() const -> int { return 276; }
 auto AppTheme::lineHeightCaption() const -> int { return 14; }
 auto AppTheme::lineHeightBody() const -> int { return 16; }
@@ -1116,9 +1181,7 @@ auto AppTheme::dateGraphCellRadius() const -> int { return 2; }
 auto AppTheme::motionFoldOpenMs() const -> int { return 200; }
 auto AppTheme::motionFoldCloseMs() const -> int { return 160; }
 auto AppTheme::motionFadeMs() const -> int { return 120; }
-auto AppTheme::motionEasing() const -> int {
-  return static_cast<int>(QEasingCurve::OutCubic);
-}
+auto AppTheme::motionEasing() const -> int { return static_cast<int>(QEasingCurve::OutCubic); }
 auto AppTheme::backgroundTaskAutoCollapseMs() const -> int { return 3000; }
 
 auto AppTheme::reduceMotion() const -> bool {
@@ -1167,18 +1230,6 @@ auto AppTheme::buttonSelectedFillColor() const -> QColor {
 }
 auto AppTheme::disabledSurfaceColor() const -> QColor {
   return GetTheme(current_theme_index_).disabled_surface;
-}
-auto AppTheme::mergeCurrentColor() const -> QColor {
-  return GetTheme(current_theme_index_).merge_current_color;
-}
-auto AppTheme::mergeCurrentFillColor() const -> QColor {
-  return GetTheme(current_theme_index_).merge_current_fill_color;
-}
-auto AppTheme::mergeIncomingColor() const -> QColor {
-  return GetTheme(current_theme_index_).merge_incoming_color;
-}
-auto AppTheme::mergeIncomingFillColor() const -> QColor {
-  return GetTheme(current_theme_index_).merge_incoming_fill_color;
 }
 
 auto AppTheme::currentThemeIndex() const -> int { return current_theme_index_; }

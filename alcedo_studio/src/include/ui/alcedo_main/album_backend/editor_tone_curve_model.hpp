@@ -81,6 +81,7 @@ class EditorToneCurveModel : public EditorAdjustmentModelBase {
   void setActiveIndex(int index);
   void submitInteractive();
   void submitSettled();
+  [[nodiscard]] auto currentCurveWrite() const -> alcedo::EditorCurveWrite;
   [[nodiscard]] auto buildParamsJson() const -> QString;
   auto moveActivePoint(double x, double y) -> bool;
 

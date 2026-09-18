@@ -21,8 +21,8 @@
 /// - `ControllableEditorHistoryPort`: a `FakeEditorHistoryPort` subclass that
 ///   (a) exposes a shared worker gate that command operations deliberately do
 ///   not acquire, and (b) records the
-///   durable-publication order (save-started vs. version-created/merge-
-///   committed) and models a dirty journal for the Paste/Merge ordering tests.
+///   durable-publication order (save-started vs. version-created)
+///   and models a dirty journal for the Paste ordering tests.
 ///
 /// These types are test-only. They do not change production behavior. CQ1
 /// added the real `EditorSessionCommandQueue`; `SessionResultRecorder` and the
@@ -161,8 +161,8 @@ class SessionResultRecorder {
 ///   operations intentionally do not acquire it; a test that holds the lock
 ///   verifies the command path remains available.
 /// - `event_log` / `dirty_journal`: record the durable-publication order so
-///   the Paste/Merge tests can assert save-before-create. Paste and Merge
-///   succeed (the fake base rejects them) so the facade proceeds through the
+///   the Paste tests can assert save-before-create. Paste succeeds (the fake
+///   base rejects it) so the facade proceeds through the
 ///   real StartHistoryCheckpoint save path.
 class ControllableEditorHistoryPort : public FakeEditorHistoryPort {
  public:
@@ -193,7 +193,7 @@ class ControllableEditorHistoryPort : public FakeEditorHistoryPort {
   }
 
   /// Report the dirty journal through the same query the facade uses to gate
-  /// Paste/Merge and the discard action.
+  /// Paste and the discard action.
   auto HasUnmaterializedChanges(const EditorHistoryGuardHandle& /*guard*/, std::string* /*error*/)
       -> bool override {
     return dirty_journal;
@@ -248,34 +248,6 @@ class ControllableEditorHistoryPort : public FakeEditorHistoryPort {
                        const version_ref_id_t& /*paste_version_id*/, std::string* /*error*/)
       -> bool override {
     record("paste_cancelled");
-    return true;
-  }
-
-  auto BeginLiveMerge(const EditorHistoryGuardHandle& /*guard*/,
-                      const AdjustmentTransferPackage& package, AdjustmentMergePreview* preview,
-                      std::string* error) -> bool override {
-    if (package.Empty()) {
-      if (error != nullptr) *error = "Adjustment transfer package is empty";
-      return false;
-    }
-    if (preview != nullptr) {
-      *preview               = {};
-      preview->has_conflicts = false;
-    }
-    return true;
-  }
-
-  auto CompleteLiveMerge(const EditorHistoryGuardHandle& /*guard*/,
-                         const AdjustmentTransferPackage& /*package*/,
-                         const AdjustmentMergePreview& /*preview*/,
-                         const std::vector<AdjustmentMergeResolution>& /*resolutions*/,
-                         AdjustmentMergeResult* result, std::string* error) -> bool override {
-    (void)error;
-    record("merge_committed");
-    dirty_journal = true;
-    if (result != nullptr) {
-      result->merged = true;
-    }
     return true;
   }
 

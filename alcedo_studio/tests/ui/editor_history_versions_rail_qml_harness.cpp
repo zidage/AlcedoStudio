@@ -7,6 +7,11 @@
 
 #include "editor_history_versions_rail_qml_harness.hpp"
 
+#include <QQmlExtensionPlugin>
+#include <QuickQanava>
+
+Q_IMPORT_QML_PLUGIN(QuickQanavaPlugin)
+
 // Q_OBJECT types are defined in the header. CMake AUTOMOC generates
 // moc_editor_history_versions_rail_qml_harness.cpp for this target when the
 // header is a dependency of a compiled source.

@@ -81,9 +81,12 @@ auto QueryDuckDbInt64(const std::filesystem::path& db_path, const std::string& s
 }
 
 auto ReadExposure(const std::shared_ptr<PipelineGuard>& pipeline_guard) -> float {
-  const auto exported = pipeline_guard->pipeline_->ExportPipelineParams();
-  return exported["Basic Adjustment"]["Basic Adjustment"]["exposure"]["params"]["exposure"]
-      .get<float>();
+  const auto* exposure = pipeline_guard->document_->PrimaryGrade()->FindAdjustmentByType(
+      type_ids::Exposure());
+  if (exposure == nullptr) {
+    throw std::runtime_error("Pipeline document has no exposure adjustment");
+  }
+  return exposure->ToJson().at("exposure_ev").get<float>();
 }
 
 }  // namespace
@@ -481,9 +484,10 @@ TEST_F(SleeveServiceTests, ExplicitDuplicateClonesStateAndKeepsHistoryAndPipelin
   {
     PipelineMgmtService pipeline_service(project.GetStorage());
     auto                source_pipeline = pipeline_service.LoadPipeline(source_id);
-    auto&               stage = source_pipeline->pipeline_->GetStage(PipelineStageName::Basic_Adjustment);
-    stage.SetOperator(OperatorType::EXPOSURE, nlohmann::json{{"exposure", 2.5f}},
-                      source_pipeline->pipeline_->GetGlobalParams());
+    auto* exposure = source_pipeline->document_->PrimaryGrade()->FindAdjustmentByType(
+        type_ids::Exposure());
+    ASSERT_NE(exposure, nullptr);
+    exposure->LoadJson({{"exposure_ev", 2.5f}});
     source_pipeline->dirty_ = true;
     pipeline_service.SavePipeline(source_pipeline);
     pipeline_service.Sync();
@@ -532,10 +536,10 @@ TEST_F(SleeveServiceTests, ExplicitDuplicateClonesStateAndKeepsHistoryAndPipelin
   {
     PipelineMgmtService pipeline_service(project.GetStorage());
     auto                duplicate_pipeline = pipeline_service.LoadPipeline(duplicate_id);
-    auto&               stage =
-        duplicate_pipeline->pipeline_->GetStage(PipelineStageName::Basic_Adjustment);
-    stage.SetOperator(OperatorType::EXPOSURE, nlohmann::json{{"exposure", 4.0f}},
-                      duplicate_pipeline->pipeline_->GetGlobalParams());
+    auto* exposure = duplicate_pipeline->document_->PrimaryGrade()->FindAdjustmentByType(
+        type_ids::Exposure());
+    ASSERT_NE(exposure, nullptr);
+    exposure->LoadJson({{"exposure_ev", 4.0f}});
     duplicate_pipeline->dirty_ = true;
     pipeline_service.SavePipeline(duplicate_pipeline);
     pipeline_service.Sync();
@@ -580,9 +584,10 @@ TEST_F(SleeveServiceTests, DuplicateUsesLatestPipelineSnapshotBeforePipelineSync
   {
     PipelineMgmtService pipeline_service(project.GetStorage());
     auto                source_pipeline = pipeline_service.LoadPipeline(source_id);
-    auto&               stage = source_pipeline->pipeline_->GetStage(PipelineStageName::Basic_Adjustment);
-    stage.SetOperator(OperatorType::EXPOSURE, nlohmann::json{{"exposure", 2.5f}},
-                      source_pipeline->pipeline_->GetGlobalParams());
+    auto* exposure = source_pipeline->document_->PrimaryGrade()->FindAdjustmentByType(
+        type_ids::Exposure());
+    ASSERT_NE(exposure, nullptr);
+    exposure->LoadJson({{"exposure_ev", 2.5f}});
     source_pipeline->dirty_ = true;
     pipeline_service.SavePipeline(source_pipeline);
   }

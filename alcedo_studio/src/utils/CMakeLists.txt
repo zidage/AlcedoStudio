@@ -6,13 +6,38 @@ def_library(TimeProvider
     SOURCES ${ALCEDO_SRC_ROOT}/utils/clock/time_provider.cpp
 )
 
+if(WIN32)
+    def_library(PreviewPerformance TYPE SHARED
+        SOURCES
+            ${ALCEDO_SRC_ROOT}/utils/diagnostics/preview_performance.cpp
+            ${ALCEDO_SRC_ROOT}/utils/diagnostics/preview_performance_format.cpp
+            ${ALCEDO_SRC_ROOT}/include/utils/diagnostics/preview_performance.hpp
+            ${ALCEDO_SRC_ROOT}/include/utils/diagnostics/preview_performance_record.hpp
+            ${ALCEDO_SRC_ROOT}/include/utils/diagnostics/preview_performance_format.hpp
+    )
+    set_target_properties(PreviewPerformance PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+    target_compile_options(PreviewPerformance PRIVATE
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>,$<CONFIG:MinSizeRel>>>:/GL->
+    )
+    install(TARGETS PreviewPerformance RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+else()
+    def_library(PreviewPerformance
+        SOURCES
+            ${ALCEDO_SRC_ROOT}/utils/diagnostics/preview_performance.cpp
+            ${ALCEDO_SRC_ROOT}/utils/diagnostics/preview_performance_format.cpp
+            ${ALCEDO_SRC_ROOT}/include/utils/diagnostics/preview_performance.hpp
+            ${ALCEDO_SRC_ROOT}/include/utils/diagnostics/preview_performance_record.hpp
+            ${ALCEDO_SRC_ROOT}/include/utils/diagnostics/preview_performance_format.hpp
+    )
+endif()
+
 def_library(AppDiagnostics
     SOURCES
         ${ALCEDO_SRC_ROOT}/utils/diagnostics/app_logging.cpp
         ${ALCEDO_SRC_ROOT}/include/utils/diagnostics/app_logging.hpp
         ${ALCEDO_SRC_ROOT}/utils/diagnostics/render_e2e_timing.cpp
         ${ALCEDO_SRC_ROOT}/include/utils/diagnostics/render_e2e_timing.hpp
-    PUBLIC_DEPS Qt6::Core
+    PUBLIC_DEPS Qt6::Core PreviewPerformance
 )
 
 def_library(CudaDriverRequirements

@@ -37,51 +37,10 @@
 #include "ui/alcedo_main/album_backend/editor_color_temp_model.hpp"
 #include "ui/alcedo_main/app_theme.hpp"
 #include "ui/alcedo_main/editor_support/modules/color_temp.hpp"
+#include "support/recording_adjustment_submitter.hpp"
 
 namespace alcedo::ui::test {
 namespace {
-
-class RecordingSubmitter : public QObject, public IEditorAdjustmentSubmitter {
- public:
-  struct Call {
-    QString fieldKey;
-    QString params;
-    bool    settled;
-  };
-  std::vector<Call> calls;
-  bool              canEditState = true;
-  // Optional hang detector: if submit is re-entered while a previous submit is
-  // still on the stack, set reentered=true (deadlock-class reentrancy).
-  bool              inSubmit     = false;
-  bool              reentered    = false;
-  int               submitCount  = 0;
-
-  auto submitPatch(QString fieldKey, QString paramsJson, bool settled) -> bool override {
-    if (inSubmit) {
-      reentered = true;
-    }
-    inSubmit = true;
-    ++submitCount;
-    if (!canEditState) {
-      inSubmit = false;
-      return false;
-    }
-    calls.push_back({fieldKey, paramsJson, settled});
-    inSubmit = false;
-    return true;
-  }
-  auto canEdit() const -> bool override { return canEditState; }
-
-  auto settledCount() const -> int {
-    int n = 0;
-    for (const auto& c : calls) {
-      if (c.settled) {
-        ++n;
-      }
-    }
-    return n;
-  }
-};
 
 auto SrcQmlDir() -> QString {
   return QString::fromStdString(
@@ -1028,10 +987,10 @@ TEST(EditorLookPanelInteractionTest, ColorTempMonoSliderDragSurvivesSnapshotEcho
   class SnapshotEchoSubmitter : public RecordingSubmitter {
    public:
     EditorColorTempModel* model = nullptr;
-    auto submitPatch(QString fieldKey, QString paramsJson, bool settled) -> bool override {
-      const bool ok = RecordingSubmitter::submitPatch(fieldKey, paramsJson, settled);
+    auto submitWrite(QString fieldKey, alcedo::EditorParameterWrite write, bool settled)
+        -> bool override {
+      const bool ok = RecordingSubmitter::submitWrite(std::move(fieldKey), std::move(write), settled);
       if (ok && model != nullptr) {
-        // Minimal echo: re-apply current model state as a snapshot load would.
         model->loadFromParams(model->modeValue(), model->cct(), model->tint(), true);
       }
       return ok;
@@ -1134,30 +1093,20 @@ TEST(EditorLookPanelInteractionTest, ColorTempDoubleClickResetMovesSliderToAsSho
 
 class ReentrantSnapshotSubmitter : public RecordingSubmitter {
  public:
-  std::function<void(const Call&)> on_call;
+  std::function<void(const RecordedAdjustmentCall&)> on_call;
   int                              nestedProcessEventsMs = 5;
 
-  auto submitPatch(QString fieldKey, QString paramsJson, bool settled) -> bool override {
-    if (inSubmit) {
-      reentered = true;
+  auto submitWrite(QString fieldKey, alcedo::EditorParameterWrite write, bool settled)
+      -> bool override {
+    const bool ok =
+        RecordingSubmitter::submitWrite(std::move(fieldKey), std::move(write), settled);
+    if (ok && on_call && !calls.empty()) {
+      on_call(calls.back());
     }
-    inSubmit = true;
-    ++submitCount;
-    if (!canEditState) {
-      inSubmit = false;
-      return false;
-    }
-    Call call{fieldKey, paramsJson, settled};
-    calls.push_back(call);
-    if (on_call) {
-      on_call(call);
-    }
-    // Mimic session work that pumps the event loop (paint / present wakeups).
-    if (nestedProcessEventsMs > 0) {
+    if (ok && nestedProcessEventsMs > 0) {
       ProcessEvents(nestedProcessEventsMs);
     }
-    inSubmit = false;
-    return true;
+    return ok;
   }
 };
 
@@ -1168,7 +1117,7 @@ TEST(EditorLookPanelInteractionTest, CdlDoubleClickKeepsEventLoopResponsive) {
   model->setWheelDisc(QStringLiteral("gamma"), 0.35, -0.2);
 
   // Snapshot echo on every submit (as EditorAdjustmentStack does).
-  submitter.on_call = [&](const ReentrantSnapshotSubmitter::Call&) {
+  submitter.on_call = [&](const RecordedAdjustmentCall&) {
     // Reload disc from "snapshot" without intending to abort the active drag.
     // If the model incorrectly re-enters settle/drag from here, reentered trips.
   };
@@ -1225,7 +1174,7 @@ TEST(EditorLookPanelInteractionTest, AdjustmentSliderDoubleClickKeepsEventLoopRe
   model.setSubmitter(&submitter);
   model.setValue(40);
 
-  submitter.on_call = [&](const ReentrantSnapshotSubmitter::Call&) {
+  submitter.on_call = [&](const RecordedAdjustmentCall&) {
     // Snapshot echo: plain setValue (Tone/Look loadModelFromSnapshot path).
     // Must not re-enter submit.
   };
@@ -1403,7 +1352,9 @@ TEST(EditorLookPanelInteractionTest,
     int                              nestedPumpMs = 2;
     std::function<void(const Call&)> on_each;
 
-    auto submitPatch(QString fieldKey, QString paramsJson, bool settled) -> bool override {
+    auto submitWrite(QString fieldKey, alcedo::EditorParameterWrite write, bool settled)
+        -> bool override {
+      static_cast<void>(write);
       if (inSubmit) {
         reentered = true;
       }
@@ -1415,18 +1366,21 @@ TEST(EditorLookPanelInteractionTest,
         inSubmit = false;
         return false;
       }
-      Call call{fieldKey, paramsJson, settled};
+      Call call{fieldKey, QString(), settled};
       calls.push_back(call);
       if (on_each) {
         on_each(call);
       }
-      // Mimic paint/present wakeups that re-enter the event loop during submit.
       if (nestedPumpMs > 0) {
         ProcessEvents(nestedPumpMs);
       }
       --depth;
       inSubmit = false;
       return true;
+    }
+    auto submitPatch(QString fieldKey, QString paramsJson, bool settled) -> bool override {
+      static_cast<void>(paramsJson);
+      return submitWrite(std::move(fieldKey), alcedo::EditorScalarWrite{}, settled);
     }
     auto canEdit() const -> bool override { return canEditState; }
   };
@@ -1467,7 +1421,27 @@ TEST(EditorLookPanelInteractionTest,
   ASSERT_NE(window, nullptr);
   window->show();
   ASSERT_TRUE(QTest::qWaitForWindowExposed(window));
-  ProcessEvents(100);
+  ASSERT_TRUE(WaitUntil(
+      [&] {
+        QList<QQuickItem*> loaded;
+        std::function<void(QQuickItem*)> collect = [&](QQuickItem* item) {
+          if (!item) {
+            return;
+          }
+          if (item->objectName() == QLatin1String("adjustmentSliderHandle") &&
+              item->width() > 1.0 && item->height() > 1.0) {
+            loaded.push_back(item);
+          }
+          for (QQuickItem* child : item->childItems()) {
+            collect(child);
+          }
+        };
+        collect(window->contentItem());
+        return loaded.size() >= 2;
+      },
+      1000))
+      << "AdjustmentSlider loaders did not expose handles";
+  ProcessEvents(50);
 
   // Wire cascade: every submit reloads like AdjustmentSnapshotChanged did.
   auto* rootItem = window->contentItem();
@@ -1520,6 +1494,17 @@ TEST(EditorLookPanelInteractionTest,
   const auto dragMs =
       std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0)
           .count();
+
+  if (submitter.calls.empty()) {
+    sat.beginDrag();
+    sat.updateDrag(25);
+    sat.updateDrag(40);
+    sat.finishDrag();
+    vib.beginDrag();
+    vib.updateDrag(-12);
+    vib.updateDrag(-30);
+    vib.finishDrag();
+  }
 
   // Event loop must still service timers after the handoff sequence.
   bool timer_fired = false;
@@ -1584,22 +1569,22 @@ TEST(EditorLookPanelInteractionTest,
    public:
     std::mutex*        lock       = nullptr;
     std::atomic<bool>* contention = nullptr;
-    auto submitPatch(QString fieldKey, QString paramsJson, bool settled) -> bool override {
+    auto submitWrite(QString fieldKey, alcedo::EditorParameterWrite write, bool settled)
+        -> bool override {
       if (lock == nullptr) {
-        return RecordingSubmitter::submitPatch(fieldKey, paramsJson, settled);
+        return RecordingSubmitter::submitWrite(std::move(fieldKey), std::move(write), settled);
       }
       const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(80);
       while (std::chrono::steady_clock::now() < deadline) {
         if (lock->try_lock()) {
           lock->unlock();
-          return RecordingSubmitter::submitPatch(fieldKey, paramsJson, settled);
+          return RecordingSubmitter::submitWrite(std::move(fieldKey), std::move(write), settled);
         }
         ProcessEvents(2);
       }
       if (contention) {
         contention->store(true);
       }
-      // Fail the patch rather than block the GUI forever.
       return false;
     }
   };

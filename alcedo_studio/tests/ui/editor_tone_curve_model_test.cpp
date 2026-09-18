@@ -8,6 +8,7 @@
 // pipeline ParamsForField(Curve). No QML or GPU.
 
 #include "ui/alcedo_main/album_backend/editor_tone_curve_model.hpp"
+#include "support/recording_adjustment_submitter.hpp"
 
 #include <gtest/gtest.h>
 
@@ -19,71 +20,19 @@
 #include <QString>
 #include <QVariantList>
 #include <QVariantMap>
-#include <algorithm>
 #include <memory>
 #include <vector>
+#include <variant>
 
-#include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
 #include "ui/alcedo_main/editor_support/modules/curve.hpp"
 
 namespace alcedo::ui::test {
 namespace {
 
-class RecordingSubmitter : public QObject, public IEditorAdjustmentSubmitter {
- public:
-  struct Call {
-    QString fieldKey;
-    QString params;
-    bool    settled;
-  };
-  std::vector<Call> calls;
-  bool              canEditState = true;
-
-  auto submitPatch(QString fieldKey, QString paramsJson, bool settled) -> bool override {
-    if (!canEditState) {
-      return false;
-    }
-    calls.push_back({fieldKey, paramsJson, settled});
-    return true;
-  }
-  auto canEdit() const -> bool override { return canEditState; }
-
-  auto settledCount() const -> int {
-    return static_cast<int>(
-        std::count_if(calls.begin(), calls.end(), [](const Call& c) { return c.settled; }));
-  }
-  auto interactiveCount() const -> int {
-    return static_cast<int>(
-        std::count_if(calls.begin(), calls.end(), [](const Call& c) { return !c.settled; }));
-  }
-  auto lastSettledParams() const -> QString {
-    for (auto it = calls.rbegin(); it != calls.rend(); ++it) {
-      if (it->settled) {
-        return it->params;
-      }
-    }
-    return {};
-  }
-};
-
 auto MakeCurveModel(RecordingSubmitter& sub) -> std::unique_ptr<EditorToneCurveModel> {
   auto m = std::make_unique<EditorToneCurveModel>();
   m->setSubmitter(&sub);
   return m;
-}
-
-auto ParsePoints(const QString& params) -> std::vector<QPointF> {
-  const auto           doc   = QJsonDocument::fromJson(params.toUtf8());
-  const auto           root  = doc.object();
-  const auto           curve = root.value(QStringLiteral("curve")).toObject();
-  const auto           arr   = curve.value(QStringLiteral("points")).toArray();
-  std::vector<QPointF> points;
-  for (const auto& v : arr) {
-    const auto o = v.toObject();
-    points.emplace_back(o.value(QStringLiteral("x")).toDouble(),
-                        o.value(QStringLiteral("y")).toDouble());
-  }
-  return points;
 }
 
 }  // namespace
@@ -128,9 +77,11 @@ TEST(EditorToneCurveModelTest, PointerDragSubmitsInteractiveThenOneSettled) {
   EXPECT_EQ(sub.calls.back().fieldKey, QStringLiteral("curve"));
   EXPECT_TRUE(sub.calls.back().settled);
 
-  const auto points = ParsePoints(sub.lastSettledParams());
-  ASSERT_GE(points.size(), 2u);
-  EXPECT_NEAR(points.front().y(), 0.40, 1e-3);
+  ASSERT_NE(sub.lastSettledWrite(), nullptr);
+  const auto* write = std::get_if<alcedo::EditorCurveWrite>(sub.lastSettledWrite());
+  ASSERT_NE(write, nullptr);
+  ASSERT_GE(write->points.size(), 2u);
+  EXPECT_NEAR(write->points.front().y, 0.40, 1e-3);
 }
 
 TEST(EditorToneCurveModelTest, InsertInteriorPointThenDragCommitsOnce) {
@@ -148,10 +99,12 @@ TEST(EditorToneCurveModelTest, InsertInteriorPointThenDragCommitsOnce) {
   model->finishDrag();
   EXPECT_EQ(sub.settledCount(), 1);
 
-  const auto points = ParsePoints(sub.lastSettledParams());
-  ASSERT_EQ(points.size(), 3u);
-  EXPECT_NEAR(points[1].x(), 0.5, 1e-2);
-  EXPECT_NEAR(points[1].y(), 0.55, 1e-2);
+  ASSERT_NE(sub.lastSettledWrite(), nullptr);
+  const auto* write = std::get_if<alcedo::EditorCurveWrite>(sub.lastSettledWrite());
+  ASSERT_NE(write, nullptr);
+  ASSERT_EQ(write->points.size(), 3u);
+  EXPECT_NEAR(write->points[1].x, 0.5, 1e-2);
+  EXPECT_NEAR(write->points[1].y, 0.55, 1e-2);
 }
 
 TEST(EditorToneCurveModelTest, RemoveInteriorPointCommitsSettled) {

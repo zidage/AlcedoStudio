@@ -18,8 +18,10 @@
 #include <QQuickWindow>
 #include <QRectF>
 #include <QVariantMap>
+#include <exception>
 #include <filesystem>
 #include <memory>
+#include <variant>
 #include <vector>
 
 #include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
@@ -43,6 +45,7 @@ class GeometrySession final : public QObject, public IEditorAdjustmentSubmitter 
     QString field_key;
     QString params;
     bool    settled = false;
+    alcedo::EditorParameterWrite write = alcedo::EditorScalarWrite{};
   };
 
   explicit GeometrySession(QVariantMap snapshot = {}, quint64 revision = 0)
@@ -61,10 +64,31 @@ class GeometrySession final : public QObject, public IEditorAdjustmentSubmitter 
   }
   [[nodiscard]] auto canEdit() const -> bool override { return can_edit_; }
 
-  Q_INVOKABLE bool   submitPatch(QString fieldKey, QString paramsJson, bool settled) override {
+  auto submitWrite(QString fieldKey, alcedo::EditorParameterWrite write, bool settled)
+      -> bool override {
     actions.push_back(QStringLiteral("submit:") + fieldKey);
-    calls.push_back({std::move(fieldKey), std::move(paramsJson), settled});
+    calls.push_back({fieldKey, QString(), settled, std::move(write)});
     return can_edit_;
+  }
+
+  Q_INVOKABLE bool submitPatch(QString fieldKey, QString paramsJson, bool settled) override {
+    nlohmann::json parsed;
+    try {
+      parsed = paramsJson.isEmpty() ? nlohmann::json::object()
+                                    : nlohmann::json::parse(paramsJson.toStdString());
+    } catch (const std::exception&) {
+      return false;
+    }
+    std::string error;
+    auto        write = alcedo::ParseEditorParameterWrite(fieldKey.toStdString(), parsed, &error);
+    if (!write.has_value()) {
+      return false;
+    }
+    const auto ok = submitWrite(fieldKey, std::move(*write), settled);
+    if (ok && !calls.empty()) {
+      calls.back().params = std::move(paramsJson);
+    }
+    return ok;
   }
 
   std::vector<Call> calls;
@@ -418,6 +442,11 @@ TEST(EditorGeometryPanelQmlTest, SliderEditIsDraftOnlyUntilConfirmPendingCrop) {
   const auto source_size = crop.value(QStringLiteral("source_size")).toObject();
   EXPECT_EQ(source_size.value(QStringLiteral("width")).toInt(), 2731);
   EXPECT_EQ(source_size.value(QStringLiteral("height")).toInt(), 4096);
+  const auto* geometry =
+      std::get_if<alcedo::ImageGeometryUpdate>(&session.calls.back().write);
+  ASSERT_NE(geometry, nullptr);
+  ASSERT_TRUE(geometry->crop_rect.has_value());
+  EXPECT_NEAR(geometry->crop_rect->x, 0.25f, 1e-5f);
 }
 
 TEST(EditorGeometryPanelQmlTest, OverlayDragIsDraftOnlyAndConfirmSubmitsOneSettledPatch) {
@@ -561,12 +590,12 @@ TEST(EditorGeometryPanelQmlTest, LensSelectionKeepsLegacyDefaultsAndIsAvailableW
 
   ASSERT_TRUE(QMetaObject::invokeMethod(brand, "selectIndex", Q_ARG(int, 1)));
   ASSERT_EQ(session.calls.size(), 1u);
-  const auto lens =
-      ParseParams(session.calls.back()).value(QStringLiteral("lens_calib")).toObject();
-  EXPECT_EQ(lens.value(QStringLiteral("lens_maker")).toString(),
-            brand_entries.at(1).toMap().value(QStringLiteral("value")).toString());
-  EXPECT_TRUE(lens.contains(QStringLiteral("apply_distortion")));
-  EXPECT_TRUE(lens.contains(QStringLiteral("lens_profile_db_path")));
+  const auto* lens =
+      std::get_if<alcedo::DevelopLensCalibrationUpdate>(&session.calls.back().write);
+  ASSERT_NE(lens, nullptr);
+  EXPECT_TRUE(lens->apply_distortion.has_value());
+  EXPECT_TRUE(lens->lens_profile_db_path.has_value());
+  EXPECT_FALSE(lens->lens_profile_db_path->empty());
   EXPECT_TRUE(model->property("enabled").toBool());
   EXPECT_FALSE(model->property("currentValue").toString().isEmpty());
 }

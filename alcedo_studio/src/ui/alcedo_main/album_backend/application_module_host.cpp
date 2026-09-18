@@ -13,14 +13,18 @@
 #include <QThread>
 #include <chrono>
 #include <cstdint>
+#include <exception>
 #include <filesystem>
 #include <functional>
 #include <string>
 
-#include "app/editor_save_checkpoint_coordinator.hpp"
+#include "app/editor_adjustment_context.hpp"
+#include "app/image_pool_service.hpp"
+#include "image/image.hpp"
 #include "app/editor_session_bootstrap.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_models.hpp"
+#include "ui/alcedo_main/album_backend/editor_node_controller.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_checkpoint_store.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_history_port.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_journal_writer_port.hpp"
@@ -28,40 +32,10 @@
 #include "ui/alcedo_main/album_backend/editor_session_thumbnail_port.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
 #include "ui/alcedo_main/album_backend/thumbnail_image_provider.hpp"
+#include "ui/alcedo_main/album_backend/mask_thumbnail_image_provider.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
 
 namespace alcedo::ui {
-
-namespace {
-
-class QtEditorSessionCommandExecutor final : public alcedo::IEditorSessionCommandExecutor {
- public:
-  explicit QtEditorSessionCommandExecutor(QObject* target) : target_(target) {}
-
-  void Post(std::function<void()> task) override {
-    const QPointer<QObject> target = target_;
-    if (!target || !task) {
-      return;
-    }
-    QMetaObject::invokeMethod(
-        target,
-        [target, task = std::move(task)]() mutable {
-          if (target) {
-            task();
-          }
-        },
-        Qt::QueuedConnection);
-  }
-
-  [[nodiscard]] auto IsOwnerThread() const -> bool override {
-    return target_ && QThread::currentThread() == target_->thread();
-  }
-
- private:
-  QPointer<QObject> target_;
-};
-
-}  // namespace
 
 // ── ApplicationModuleHost ───────────────────────────────────────────────────
 
@@ -70,6 +44,7 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   alcedo::editor_rhi::RegisterEditorViewportQmlTypes();
   alcedo::ui::RegisterEditorAdjustmentQmlTypes();
   alcedo::ui::RegisterEditorHistoryQmlTypes();
+  alcedo::ui::RegisterEditorNodeQmlTypes();
   background_tasks_ = std::make_unique<BackgroundTaskController>();
   RecordConstruction("BackgroundTaskController", background_tasks_.get());
   interaction_policy_ =
@@ -229,10 +204,13 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     auto session_thumbnail =
         std::make_shared<EditorSessionThumbnailPort>(std::move(refresh_focused_thumbnail));
 
+    // The session owner runs on a dedicated worker so parameter reduction,
+    // pacing deadlines, and serial frame consumption never wait on the GUI
+    // thread's event loop or window-update waits.
     editor_session_runtime_ = alcedo::EditorSessionRuntime::CreateWithPorts(
         session_pipeline, session_history, session_tasks, session_journal, session_scheduler,
         session_checkpoint, session_thumbnail, save_coordinator,
-        std::make_shared<QtEditorSessionCommandExecutor>(this));
+        std::make_shared<alcedo::EditorSessionThreadedCommandExecutor>());
     // Completion is forward: coordinator installs on_complete at Schedule.
     editor_session_scheduler_ = std::move(session_scheduler);
   }
@@ -247,6 +225,27 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   RecordConstruction("EditorSessionController", editor_session_.get());
   editor_session_->SetInteractionPolicy(interaction_policy_.get());
   editor_session_->SetAlbumCatalog(library_.get());
+  editor_session_->SetImageExifReader([this](uint image_id) -> alcedo::EditorImageExifDisplay {
+    if (image_id == 0 || project_ == nullptr || project_->handler().project() == nullptr) {
+      return {};
+    }
+    auto pool = project_->handler().project()->GetImagePoolService();
+    if (!pool) {
+      return {};
+    }
+    try {
+      return pool->Read<alcedo::EditorImageExifDisplay>(
+          static_cast<std::uint32_t>(image_id),
+          [](const std::shared_ptr<alcedo::Image>& image) {
+            if (!image) {
+              return alcedo::EditorImageExifDisplay{};
+            }
+            return alcedo::ReadEditorImageExifDisplay(*image);
+          });
+    } catch (const std::exception&) {
+      return {};
+    }
+  });
   connect(adjustment_transfer_.get(), &AdjustmentTransferController::PackageChanged,
           editor_session_.get(), [this]() {
             if (editor_session_) {
@@ -327,7 +326,9 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   };
   lifecycle_hooks.project_opened = [library = library_.get(), folders = folders_.get(),
                                     stats = stats_.get(), import_export = import_export_.get(),
-                                    semantic = semantic_generation_.get()] {
+                                    semantic = semantic_generation_.get(),
+                                    editor_session = editor_session_.get(),
+                                    project = project_.get()] {
     const auto preferred_folder_path =
         folders ? folders->current_folder_path() : std::filesystem::path{};
     if (import_export) {
@@ -350,6 +351,9 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     }
     if (library) {
       library->ApplyThumbnailDiskCacheSettingsToService();
+    }
+    if (editor_session && project) {
+      editor_session->SetMaskThumbnailService(project->handler().mask_thumbnail_service());
     }
   };
   lifecycle_hooks.should_keep_semantic_model_data =
@@ -516,7 +520,14 @@ ApplicationModuleHost::~ApplicationModuleHost() {
 void ApplicationModuleHost::Shutdown() { ShutdownModules(); }
 
 void ApplicationModuleHost::AttachQmlEngine(QQmlEngine* engine) {
-  if (engine == nullptr || library_ == nullptr) {
+  if (engine == nullptr) {
+    return;
+  }
+
+  engine->addImageProvider(QString::fromUtf8(kMaskThumbnailImageProviderId),
+                           new MaskThumbnailImageProvider(SharedMaskThumbnailImageStore()));
+
+  if (library_ == nullptr) {
     return;
   }
 

@@ -13,8 +13,11 @@
 
 #include <optional>
 
+#include "edit/geometry/resolved_render_geometry.hpp"
+#include "edit/geometry/types.hpp"
 #include "ui/edit_viewer/crop_interaction_controller.hpp"
 #include "ui/edit_viewer/edit_viewer_overlay_geometry.hpp"
+#include "ui/edit_viewer/mask_edit_geometry.hpp"
 #include "ui/edit_viewer/view_transform_controller.hpp"
 #include "ui/edit_viewer/viewer_state.hpp"
 #include "ui/edit_viewer/viewport_mapper.hpp"
@@ -194,6 +197,39 @@ class EditorInteractionController : public QObject {
   Q_INVOKABLE QPointF imageUvToItemPoint(qreal u, qreal v) const;
   Q_INVOKABLE bool isItemPointInsideImage(qreal x, qreal y) const;
 
+  /**
+   * @brief Set the displayed photograph's resolved geometry for Mask mapping.
+   *
+   * Must be the full-frame Interactive photograph, never a DetailPatch extent.
+   * Crop overlay drafts are not applied. Empty extents keep Mask mapping invalid.
+   *
+   * Thread: GUI. Does not submit pipeline work.
+   */
+  void setDisplayedMaskGeometry(const ResolvedRenderGeometry& geometry);
+  [[nodiscard]] auto displayedMaskGeometry() const -> const ResolvedRenderGeometry& {
+    return displayed_mask_geometry_;
+  }
+  /**
+   * @brief Current Mask mapping inputs: item/logical, zoom/pan, and photograph geometry.
+   *
+   * RoiFrame zeros zoom/pan and uses the detail ROI as the displayed patch. FullFrame
+   * ignores that ROI so a DetailPatch overlay does not redefine ReferenceSpace.
+   */
+  [[nodiscard]] auto maskEditViewMapping() const -> MaskEditViewMapping;
+  /**
+   * @brief Map an item point to Mask ReferenceSpace. Empty on invalid geometry or outside press.
+   *
+   * @param allow_outside When true, an open drag may leave the photograph.
+   */
+  [[nodiscard]] auto MapItemToMaskReference(qreal x, qreal y, bool allow_outside) const
+      -> std::optional<MaskReferenceSample>;
+  /**
+   * @brief Inverse mapping for Mask handle placement. Off-image points are not clamped.
+   */
+  [[nodiscard]] auto MapMaskReferenceToItem(Vector2 reference_pixels) const
+      -> std::optional<QPointF>;
+  [[nodiscard]] auto maskEditMappingIdentity() const -> MaskEditMappingIdentity;
+
   [[nodiscard]] auto overlaySnapshot() const -> EditViewerOverlaySnapshot;
   [[nodiscard]] auto overlayGeometry() const -> CropOverlayWidgetGeometry;
   [[nodiscard]] auto viewerViewState() const -> ViewerViewState;
@@ -276,6 +312,7 @@ class EditorInteractionController : public QObject {
   CropInteractionController crop_interaction_controller_{};
   ViewportWidgetInfo             widget_info_{1, 1, 1.0f};
   ViewportImageInfo              image_info_{0, 0};
+  ResolvedRenderGeometry         displayed_mask_geometry_{};
   FramePresentationMode          presentation_mode_            = FramePresentationMode::FullFrame;
   // While a zoom animation is in progress, this also covers the synchronous
   // initial tick where zoom is still at fit. All zoomed view transforms use the

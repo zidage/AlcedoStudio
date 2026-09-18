@@ -133,58 +133,37 @@ class AdjustmentTransferDialogQmlHarness {
   }
 };
 
-TEST(AdjustmentTransferDialogQmlTest, LoadsInPasteModeAndExposesStrategySwitcher) {
+TEST(AdjustmentTransferDialogQmlTest, LoadsInPasteModeWithPasteAcceptLabel) {
   AdjustmentTransferDialogQmlHarness harness;
   ASSERT_NE(harness.window, nullptr) << harness.warnings.join('\n').toStdString();
   ASSERT_TRUE(harness.warnings.isEmpty()) << harness.warnings.join('\n').toStdString();
 
   auto* dialog = harness.dialog();
-  ASSERT_NE(dialog, nullptr) << harness.warnings.join("\n").toStdString() << "| createError=" << harness.createError().toStdString();
+  ASSERT_NE(dialog, nullptr) << harness.warnings.join("\n").toStdString()
+                            << "| createError=" << harness.createError().toStdString();
   EXPECT_EQ(dialog->property("mode").toString(), QStringLiteral("paste"));
+  EXPECT_EQ(harness.findChildByName(QStringLiteral("adjustmentTransferStrategySwitcher")),
+            nullptr);
+  EXPECT_EQ(harness.findChildByName(QStringLiteral("adjustmentTransferMergeNotice")), nullptr);
 
-  // The SegmentedCardSwitcher strategy switcher is present and visible in paste mode.
-  auto* switcher = harness.findChildByName(QStringLiteral("adjustmentTransferStrategySwitcher"));
-  ASSERT_NE(switcher, nullptr);
-  EXPECT_TRUE(switcher->property("visible").toBool());
-  // The notification starts hidden because the default strategy is "paste".
-  auto* notice = harness.findChildByName(QStringLiteral("adjustmentTransferMergeNotice"));
-  ASSERT_NE(notice, nullptr);
-  EXPECT_FALSE(notice->property("visible").toBool());
-}
-
-TEST(AdjustmentTransferDialogQmlTest, MergeNoticeVisibilityFollowsPasteStrategy) {
-  AdjustmentTransferDialogQmlHarness harness;
-  ASSERT_NE(harness.dialog(), nullptr) << harness.warnings.join("\n").toStdString() << "| createError=" << harness.createError().toStdString();
-  auto* dialog   = harness.dialog();
-  auto* notice   = harness.findChildByName(QStringLiteral("adjustmentTransferMergeNotice"));
-  ASSERT_NE(notice, nullptr);
-
-  dialog->setProperty("pasteStrategy", QStringLiteral("merge"));
-  ProcessEvents(40);
-  EXPECT_EQ(dialog->property("pasteStrategy").toString(), QStringLiteral("merge"));
-  EXPECT_TRUE(notice->property("visible").toBool());
-
-  dialog->setProperty("pasteStrategy", QStringLiteral("paste"));
-  ProcessEvents(40);
-  EXPECT_FALSE(notice->property("visible").toBool());
-}
-
-TEST(AdjustmentTransferDialogQmlTest, AcceptButtonLabelReflectsSelectedStrategy) {
-  AdjustmentTransferDialogQmlHarness harness;
-  ASSERT_NE(harness.dialog(), nullptr) << harness.warnings.join("\n").toStdString() << "| createError=" << harness.createError().toStdString();
-  auto* dialog  = harness.dialog();
   auto* accept = harness.findChildByName(QStringLiteral("adjustmentTransferAcceptButton"));
   ASSERT_NE(accept, nullptr);
-
-  // Paste strategy → "Paste Adjustments".
-  ASSERT_EQ(dialog->property("pasteStrategy").toString(), QStringLiteral("paste"));
-  ProcessEvents(40);
   EXPECT_TRUE(accept->property("text").toString().contains(QStringLiteral("Paste")));
+  EXPECT_FALSE(accept->property("text").toString().contains(QStringLiteral("Merge")));
+}
 
-  // Merge strategy → "Merge Adjustments".
+TEST(AdjustmentTransferDialogQmlTest, TransferSurfaceHasNoPipelineMergeOperation) {
+  AdjustmentTransferDialogQmlHarness harness;
+  ASSERT_NE(harness.dialog(), nullptr)
+      << harness.warnings.join("\n").toStdString()
+      << "| createError=" << harness.createError().toStdString();
+  auto* dialog = harness.dialog();
   dialog->setProperty("pasteStrategy", QStringLiteral("merge"));
   ProcessEvents(40);
-  EXPECT_TRUE(accept->property("text").toString().contains(QStringLiteral("Merge")));
+  auto* accept = harness.findChildByName(QStringLiteral("adjustmentTransferAcceptButton"));
+  ASSERT_NE(accept, nullptr);
+  EXPECT_TRUE(accept->property("text").toString().contains(QStringLiteral("Paste")));
+  EXPECT_FALSE(accept->property("text").toString().contains(QStringLiteral("Merge")));
 }
 
 }  // namespace

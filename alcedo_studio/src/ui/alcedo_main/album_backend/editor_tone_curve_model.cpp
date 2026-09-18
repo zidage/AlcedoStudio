@@ -238,9 +238,22 @@ void EditorToneCurveModel::setActiveIndex(int index) {
   emit activeIndexChanged();
 }
 
-void EditorToneCurveModel::submitInteractive() { submitNow(buildParamsJson(), false); }
+void EditorToneCurveModel::submitInteractive() {
+  submitNow(currentCurveWrite(), false);
+}
 
-void EditorToneCurveModel::submitSettled() { submitNow(buildParamsJson(), true); }
+void EditorToneCurveModel::submitSettled() { submitNow(currentCurveWrite(), true); }
+
+auto EditorToneCurveModel::currentCurveWrite() const -> alcedo::EditorCurveWrite {
+  const auto              normalized = curve::NormalizeCurveControlPoints(points_);
+  alcedo::EditorCurveWrite write;
+  write.points.reserve(normalized.size());
+  for (const auto& point : normalized) {
+    write.points.push_back(
+        alcedo::CurvePoint{static_cast<float>(point.x()), static_cast<float>(point.y())});
+  }
+  return write;
+}
 
 auto EditorToneCurveModel::buildParamsJson() const -> QString {
   // Match curve::CurveControlPointsToParams / pipeline ParamsForField(Curve).

@@ -152,7 +152,11 @@ class DirectPresentQueue final {
   // older undisplayed ready frames for that layer are superseded and recycled.
   [[nodiscard]] auto ConsumeNewestReady(FrameRole layer, std::uint64_t session_epoch,
                                         std::uint64_t image_identity) -> std::optional<ReadyFrame>;
-  // After QRhi no longer samples the slot (layer replaced or renderer teardown).
+  // Marks a RendererReading slot Available. The render thread must finish GPU
+  // sampling first: OpenCL acquires the same GL texture on the next write, and
+  // destroying the QRhi wrapper is not a GPU wait. CUDA/D3D11 serialize in the
+  // graphics/compute runtime; OpenCL needs an explicit glFinish (see
+  // FinishOpenGlBeforeOpenClSharedTextureReuse).
   void               CompleteRendererRead(int slot_index);
 
   // Diagnostic: every composed primary frame increments composed_frame_count
@@ -176,6 +180,9 @@ class DirectPresentQueue final {
   [[nodiscard]] auto SlotAt(int index) const -> std::optional<SlotSnapshot>;
   [[nodiscard]] auto HasWritableSlot(int width, int height, std::uint64_t session_epoch,
                                      std::uint64_t image_identity) const -> bool;
+  /// True when a Ready slot is waiting, or a size request still needs a
+  /// render-thread turn to create the native resource.
+  [[nodiscard]] auto HasReadyFrame() const -> bool;
 
  private:
   struct Slot {

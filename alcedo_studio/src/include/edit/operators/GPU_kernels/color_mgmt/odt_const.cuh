@@ -60,6 +60,15 @@ __constant__ float focus_distance_scaling = 1.75f;
 
 __constant__ float compression_threshold  = 0.75f;
 
+// Near-black CAM16/Hellwig guards (deviate from Academy CTL).
+// hunt_nJ: Hunt colorfulness fade; 50% at J = hunt_nJ * limit_J_max (~1.2 J).
+// chroma_j_floor: minimum |J| used when rescaling M through the tonescale.
+// rgb_mapping_failure_ratio: chroma-preserving peak clamp is only valid near the
+// tonescale peak; larger RGB is a JMh mapping failure and must not become white.
+__constant__ float hunt_nJ                     = 0.012f;
+__constant__ float chroma_j_floor              = 0.25f;
+__constant__ float rgb_mapping_failure_ratio   = 8.0f;
+
 __constant__ float AP0_to_XYZ[9]     = {0.986519f,  0.023971f,  -0.010490f, 0.359689f, 0.714586f,
                                         -0.074275f, -0.000386f, 0.000029f,  1.000356f};
 

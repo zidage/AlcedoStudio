@@ -71,15 +71,15 @@ class AppTheme final : public QObject {
   Q_PROPERTY(int iconButtonHitSize READ iconButtonHitSize CONSTANT)
   Q_PROPERTY(int iconButtonHitSizeCompact READ iconButtonHitSizeCompact CONSTANT)
   // Editor side-panel + scope geometry (Phase 4C comfort sizing). The preferred
-  // width unifies the adjustment stack and the History/Versions expanded panel;
+  // width unifies the adjustment stack and the History/Versions/Nodes expanded panel;
   // min/max bound only the adjustment stack. Scope height covers the
   // histogram/waveform slot. See src/ui/alcedo_main/DESIGN.md.
   Q_PROPERTY(int editorSidePanelWidth READ editorSidePanelWidth CONSTANT)
   Q_PROPERTY(int editorSidePanelWidthMin READ editorSidePanelWidthMin CONSTANT)
   Q_PROPERTY(int editorSidePanelWidthMax READ editorSidePanelWidthMax CONSTANT)
-  Q_PROPERTY(int editorMergeDialogWidth READ editorMergeDialogWidth CONSTANT)
   Q_PROPERTY(int editorScopeHeight READ editorScopeHeight CONSTANT)
   Q_PROPERTY(int editorScopeHeightMin READ editorScopeHeightMin CONSTANT)
+  Q_PROPERTY(int editorAdjustmentHeaderMinHeight READ editorAdjustmentHeaderMinHeight CONSTANT)
   // Persistent left collections column in the application shell (see DESIGN.md).
   Q_PROPERTY(int collectionsSidebarWidth READ collectionsSidebarWidth CONSTANT)
   // Line heights (px) for QML Label lineHeight when using fixed pixel sizes.
@@ -126,12 +126,6 @@ class AppTheme final : public QObject {
   // Opaque disabled surface: cardSurfaceColor blended with bgCanvasColor so a
   // disabled panel shell reads as a single concrete fill rather than 0.55 opacity.
   Q_PROPERTY(QColor disabledSurfaceColor READ disabledSurfaceColor NOTIFY ThemeChanged)
-  // Git-style merge colors. The fills are opaque dark wells so the resolver
-  // does not need ad-hoc alpha colors in QML.
-  Q_PROPERTY(QColor mergeCurrentColor READ mergeCurrentColor NOTIFY ThemeChanged)
-  Q_PROPERTY(QColor mergeCurrentFillColor READ mergeCurrentFillColor NOTIFY ThemeChanged)
-  Q_PROPERTY(QColor mergeIncomingColor READ mergeIncomingColor NOTIFY ThemeChanged)
-  Q_PROPERTY(QColor mergeIncomingFillColor READ mergeIncomingFillColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor editorSliderTrackColor READ editorSliderTrackColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor editorSliderPositiveColor READ editorSliderPositiveColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor editorSliderNegativeColor READ editorSliderNegativeColor NOTIFY ThemeChanged)
@@ -157,6 +151,50 @@ class AppTheme final : public QObject {
   Q_PROPERTY(QColor scopeHistogramRedColor READ scopeHistogramRedColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor scopeHistogramGreenColor READ scopeHistogramGreenColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor scopeHistogramBlueColor READ scopeHistogramBlueColor NOTIFY ThemeChanged)
+  // Nodes graph canvas and node-card geometry. Colors follow the active theme;
+  // sizes are logical px. See DESIGN.md "Nodes panel and graph nodes".
+  Q_PROPERTY(QColor graphCanvasColor READ graphCanvasColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor graphEdgeColor READ graphEdgeColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor graphCandidateEdgeColor READ graphCandidateEdgeColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor graphPortFillColor READ graphPortFillColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor graphPortBorderColor READ graphPortBorderColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor graphNodeBorderColor READ graphNodeBorderColor NOTIFY ThemeChanged)
+  Q_PROPERTY(
+      QColor graphMaskDrawerSurfaceColor READ graphMaskDrawerSurfaceColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor graphSelectionOutlineColor READ graphSelectionOutlineColor NOTIFY ThemeChanged)
+  Q_PROPERTY(int graphNodeWidth READ graphNodeWidth CONSTANT)
+  Q_PROPERTY(int graphNodeVerticalGap READ graphNodeVerticalGap CONSTANT)
+  Q_PROPERTY(int graphNodeOriginX READ graphNodeOriginX CONSTANT)
+  Q_PROPERTY(int graphNodeOriginY READ graphNodeOriginY CONSTANT)
+  Q_PROPERTY(int graphEndpointHeight READ graphEndpointHeight CONSTANT)
+  Q_PROPERTY(int graphNameRowHeight READ graphNameRowHeight CONSTANT)
+  Q_PROPERTY(int graphNameRowDividerHeight READ graphNameRowDividerHeight CONSTANT)
+  Q_PROPERTY(int graphMaskDrawerHeaderHeight READ graphMaskDrawerHeaderHeight CONSTANT)
+  Q_PROPERTY(int graphMaskRowHeight READ graphMaskRowHeight CONSTANT)
+  Q_PROPERTY(int maskGroupPreviewSize READ maskGroupPreviewSize CONSTANT)
+  Q_PROPERTY(int maskGroupMaskPreviewSize READ maskGroupMaskPreviewSize CONSTANT)
+  Q_PROPERTY(int graphPortSize READ graphPortSize CONSTANT)
+  Q_PROPERTY(int graphPortHitSize READ graphPortHitSize CONSTANT)
+  Q_PROPERTY(int graphEdgeWidth READ graphEdgeWidth CONSTANT)
+  Q_PROPERTY(int graphSelectionOutlineWidth READ graphSelectionOutlineWidth CONSTANT)
+  // Mask overlay: two-layer control stroke, no coverage-area color. Sizes are
+  // logical pixels and stay constant at any zoom or DPR.
+  Q_PROPERTY(QColor maskOverlayControlColor READ maskOverlayControlColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor maskOverlayControlOutlineColor READ maskOverlayControlOutlineColor NOTIFY
+                 ThemeChanged)
+  Q_PROPERTY(QColor maskOverlayInactiveColor READ maskOverlayInactiveColor NOTIFY ThemeChanged)
+  Q_PROPERTY(int maskOverlayHandleRadius READ maskOverlayHandleRadius CONSTANT)
+  Q_PROPERTY(qreal maskOverlayHandleOutlineWidth READ maskOverlayHandleOutlineWidth CONSTANT)
+  Q_PROPERTY(qreal maskOverlayStrokeWidth READ maskOverlayStrokeWidth CONSTANT)
+  Q_PROPERTY(qreal maskOverlayAntialiasWidth READ maskOverlayAntialiasWidth CONSTANT)
+  Q_PROPERTY(int maskOverlayHandleHitRadius READ maskOverlayHandleHitRadius CONSTANT)
+  Q_PROPERTY(int maskOverlayRotateHandleOffset READ maskOverlayRotateHandleOffset CONSTANT)
+  Q_PROPERTY(qreal maskOverlayGuideOuterWidth READ maskOverlayGuideOuterWidth CONSTANT)
+  Q_PROPERTY(qreal maskOverlayGuideInnerWidth READ maskOverlayGuideInnerWidth CONSTANT)
+  Q_PROPERTY(qreal maskOverlayGripOuterWidth READ maskOverlayGripOuterWidth CONSTANT)
+  Q_PROPERTY(qreal maskOverlayGripInnerWidth READ maskOverlayGripInnerWidth CONSTANT)
+  Q_PROPERTY(qreal maskOverlayGripSpanT0 READ maskOverlayGripSpanT0 CONSTANT)
+  Q_PROPERTY(qreal maskOverlayGripSpanT1 READ maskOverlayGripSpanT1 CONSTANT)
   Q_PROPERTY(QColor dateGraphLevel0Color READ dateGraphLevel0Color NOTIFY ThemeChanged)
   Q_PROPERTY(QColor dateGraphLevel1Color READ dateGraphLevel1Color NOTIFY ThemeChanged)
   Q_PROPERTY(QColor dateGraphLevel2Color READ dateGraphLevel2Color NOTIFY ThemeChanged)
@@ -261,9 +299,9 @@ class AppTheme final : public QObject {
   auto        editorSidePanelWidth() const -> int;
   auto        editorSidePanelWidthMin() const -> int;
   auto        editorSidePanelWidthMax() const -> int;
-  auto        editorMergeDialogWidth() const -> int;
   auto        editorScopeHeight() const -> int;
   auto        editorScopeHeightMin() const -> int;
+  auto        editorAdjustmentHeaderMinHeight() const -> int;
   auto        collectionsSidebarWidth() const -> int;
   auto        lineHeightCaption() const -> int;
   auto        lineHeightBody() const -> int;
@@ -300,10 +338,6 @@ class AppTheme final : public QObject {
   auto        buttonPressedFillColor() const -> QColor;
   auto        buttonSelectedFillColor() const -> QColor;
   auto        disabledSurfaceColor() const -> QColor;
-  auto        mergeCurrentColor() const -> QColor;
-  auto        mergeCurrentFillColor() const -> QColor;
-  auto        mergeIncomingColor() const -> QColor;
-  auto        mergeIncomingFillColor() const -> QColor;
   auto        editorSliderTrackColor() const -> QColor { return EditorSliderTrackColor(); }
   auto        editorSliderPositiveColor() const -> QColor { return EditorSliderAccentColor(true); }
   auto        editorSliderNegativeColor() const -> QColor { return EditorSliderAccentColor(false); }
@@ -320,6 +354,44 @@ class AppTheme final : public QObject {
   auto scopeHistogramRedColor() const -> QColor;
   auto scopeHistogramGreenColor() const -> QColor;
   auto scopeHistogramBlueColor() const -> QColor;
+  auto graphCanvasColor() const -> QColor;
+  auto graphEdgeColor() const -> QColor;
+  auto graphCandidateEdgeColor() const -> QColor;
+  auto graphPortFillColor() const -> QColor;
+  auto graphPortBorderColor() const -> QColor;
+  auto graphNodeBorderColor() const -> QColor;
+  auto graphMaskDrawerSurfaceColor() const -> QColor;
+  auto graphSelectionOutlineColor() const -> QColor;
+  auto graphNodeWidth() const -> int;
+  auto graphNodeVerticalGap() const -> int;
+  auto graphNodeOriginX() const -> int;
+  auto graphNodeOriginY() const -> int;
+  auto graphEndpointHeight() const -> int;
+  auto graphNameRowHeight() const -> int;
+  auto graphNameRowDividerHeight() const -> int;
+  auto graphMaskDrawerHeaderHeight() const -> int;
+  auto graphMaskRowHeight() const -> int;
+  auto maskGroupPreviewSize() const -> int;
+  auto maskGroupMaskPreviewSize() const -> int;
+  auto graphPortSize() const -> int;
+  auto graphPortHitSize() const -> int;
+  auto graphEdgeWidth() const -> int;
+  auto graphSelectionOutlineWidth() const -> int;
+  auto maskOverlayControlColor() const -> QColor;
+  auto maskOverlayControlOutlineColor() const -> QColor;
+  auto maskOverlayInactiveColor() const -> QColor;
+  auto maskOverlayHandleRadius() const -> int;
+  auto maskOverlayHandleOutlineWidth() const -> qreal;
+  auto maskOverlayStrokeWidth() const -> qreal;
+  auto maskOverlayAntialiasWidth() const -> qreal;
+  auto maskOverlayHandleHitRadius() const -> int;
+  auto maskOverlayRotateHandleOffset() const -> int;
+  auto maskOverlayGuideOuterWidth() const -> qreal;
+  auto maskOverlayGuideInnerWidth() const -> qreal;
+  auto maskOverlayGripOuterWidth() const -> qreal;
+  auto maskOverlayGripInnerWidth() const -> qreal;
+  auto maskOverlayGripSpanT0() const -> qreal;
+  auto maskOverlayGripSpanT1() const -> qreal;
   auto dateGraphLevel0Color() const -> QColor;
   auto dateGraphLevel1Color() const -> QColor;
   auto dateGraphLevel2Color() const -> QColor;

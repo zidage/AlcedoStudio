@@ -15,13 +15,18 @@
 
 #include "app/adjustment_transfer_types.hpp"
 #include "app/editor_history_types.hpp"
+#include "app/editor_panel_projection.hpp"
 #include "app/editor_render_intent.hpp"
 #include "app/editor_session_types.hpp"
+#include "edit/graph/graph_ids.hpp"
+#include "edit/history/pipeline_edit_batch.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
 
 class Hash128;
+class MiniGitWorkingHistory;
+class PipelineDocument;
 struct EditorMiniGitSaveCapture;
 struct EditorAdjustmentPatch;
 struct AdjustmentTransferPackage;
@@ -50,6 +55,12 @@ class IEditorPipelinePort {
   virtual auto Acquire(sl_element_id_t element_id, std::string* error)
       -> EditorPipelineGuardHandle                             = 0;
   virtual void Release(const EditorPipelineGuardHandle& guard) = 0;
+  /// Live PipelineDocument for the Nodes-page projection. Null when the image
+  /// has no loaded guard. Default fakes return nullptr.
+  [[nodiscard]] virtual auto CurrentDocument(sl_element_id_t /*element_id*/) const
+      -> const PipelineDocument* {
+    return nullptr;
+  }
 };
 
 class IEditorHistoryPort {
@@ -66,6 +77,23 @@ class IEditorHistoryPort {
                                               std::string* /*error*/) -> bool {
     return true;
   }
+  /**
+   * @brief Restore applied provisional fields without committing history.
+   *
+   * Clears the current input-sequence before-values and writes them back to the
+   * live document and executor. Does not move the working head. Default is a
+   * no-op success so fakes can opt in.
+   *
+   * @return false on restore failure. @p live_changed is true when any
+   *         provisional field was present before the restore.
+   */
+  virtual auto RestoreUnsettledPreview(const EditorHistoryGuardHandle& /*guard*/,
+                                       bool* live_changed, std::string* /*error*/) -> bool {
+    if (live_changed != nullptr) {
+      *live_changed = false;
+    }
+    return true;
+  }
   /// Finalize one settled adjustment into the checked-out Version's working
   /// history. Production appends the mini-Git journal record before advancing
   /// the working head and transaction-chain hash.
@@ -74,8 +102,84 @@ class IEditorHistoryPort {
       -> bool {
     return true;
   }
+  /// Apply one net node-graph topology delta in place. Default rejects.
+  virtual auto EditNodeGraph(const EditorHistoryGuardHandle& /*guard*/,
+                             NodeGraphTopologyChange /*change*/, std::string* error) -> bool {
+    if (error != nullptr) *error = "Node graph topology edit is not supported by this history port";
+    return false;
+  }
+  /// Rename one Color Grade without requesting a pixel render.
+  virtual auto RenameColorGrade(const EditorHistoryGuardHandle& /*guard*/,
+                                const NodeId& /*node_id*/, std::string /*display_name*/,
+                                std::string* error) -> bool {
+    if (error != nullptr) *error = "Color Grade rename is not supported by this history port";
+    return false;
+  }
+  /// Commit deletion-only metadata without rendering. Equal values succeed without a commit.
+  /// @p changed reports an effective commit, or false on no-op/failure. Default rejects.
+  virtual auto SetColorGradeDeletionProtected(const EditorHistoryGuardHandle& /*guard*/,
+                                              const NodeId& /*node_id*/, bool /*deletion_protected*/,
+                                              std::string* error, bool* changed = nullptr) -> bool {
+    if (changed) *changed = false;
+    if (error) *error = "Color Grade deletion protection is not supported by this history port";
+    return false;
+  }
+  /// Insert one clean Color Grade at the top of the Mask Groups stack,
+  /// directly before DRT/Post, as one typed history commit. The current
+  /// predecessor of DRT/Post must equal @p expected_predecessor_id; a mismatch
+  /// rejects the stale request without document, counter, or history changes.
+  /// Default rejects.
+  virtual auto InsertColorGradeAtTop(const EditorHistoryGuardHandle& /*guard*/,
+                                     const NodeId& /*new_id*/,
+                                     const NodeId& /*expected_predecessor_id*/, std::string* error)
+      -> bool {
+    if (error != nullptr) {
+      *error = "Color Grade top insertion is not supported by this history port";
+    }
+    return false;
+  }
+  /// Remove one Color Grade and bridge its scene-image neighbors as one typed
+  /// history commit. Develop and DRT/Post are never removable. Default rejects.
+  virtual auto RemoveColorGradeAndBridge(const EditorHistoryGuardHandle& /*guard*/,
+                                         const NodeId& /*node_id*/, std::string* error) -> bool {
+    if (error != nullptr) {
+      *error = "Color Grade bridge removal is not supported by this history port";
+    }
+    return false;
+  }
+
+  using LockedMaskSettle =
+      std::function<bool(const PipelineEditBatch& batch, std::string* error)>;
+  using LockedMaskDocumentOp =
+      std::function<bool(PipelineDocument& document, MiniGitWorkingHistory& history,
+                         const LockedMaskSettle& settle, std::string* error)>;
+
+  /**
+   * @brief Run @p op while holding the live pipeline render lock.
+   *
+   * @p settle publishes a typed batch whose live document already holds after
+   * values. Default fakes reject. Must not be called from a GUI pointer callback
+   * that still needs the GUI thread for present.
+   */
+  virtual auto WithLockedLiveDocument(const EditorHistoryGuardHandle& /*guard*/,
+                                      const LockedMaskDocumentOp& /*op*/, std::string* error)
+      -> bool {
+    if (error != nullptr) {
+      *error = "Locked live document access is not supported by this history port";
+    }
+    return false;
+  }
+
   virtual auto Undo(const EditorHistoryGuardHandle& guard, std::string* error) -> bool = 0;
   virtual auto Redo(const EditorHistoryGuardHandle& guard, std::string* error) -> bool = 0;
+  /// Render reason published by the last successful history mutation. Default
+  /// UndoRedo keeps fakes rendering. Production returns nullopt for rename-only
+  /// batches so the session can skip a pipeline render while still bumping the
+  /// history revision.
+  [[nodiscard]] virtual auto LastPublishedRenderReason() const
+      -> std::optional<EditorRenderReason> {
+    return EditorRenderReason::UndoRedo;
+  }
   /// Move the working head to an explicit commit in one operation. The target
   /// must be an ancestor of the working head (backward) or a member of the
   /// in-memory redo suffix (forward); otherwise the call fails without moving.
@@ -94,6 +198,35 @@ class IEditorHistoryPort {
                                       EditorRenderAdjustmentSnapshot* snapshot, std::string* error)
       -> bool = 0;
 
+  /**
+   * @brief Copy load-only panel values for the GUI.
+   *
+   * Default is an empty projection so fakes that do not own a document can skip
+   * this path. Production reads the owner-copied fields, not Model JSON.
+   */
+  virtual auto ReadPanelProjection(const EditorHistoryGuardHandle& /*guard*/,
+                                   EditorPanelProjection* projection, std::string* /*error*/)
+      -> bool {
+    if (projection != nullptr) {
+      *projection = {};
+    }
+    return true;
+  }
+
+  /**
+   * @brief Replace load-only panel values with the selected node's fields.
+   *
+   * Does not mutate parameters, commit history, or request a photo render.
+   * Must not wait on the live render lock or an inflight present handshake.
+   * Default fakes succeed without storing a node.
+   */
+  virtual auto SetPanelProjectionNode(const EditorHistoryGuardHandle& /*guard*/,
+                                      const NodeId& /*node_id*/,
+                                      std::uint64_t /*session_generation*/,
+                                      std::string* /*error*/) -> bool {
+    return true;
+  }
+
   /// Switch the checked-out Version after a successful save checkpoint. Rebuilds
   /// the live pipeline from root + first-parent chain and refreshes the
   /// adjustment snapshot. Default rejects so fakes must opt in.
@@ -103,6 +236,17 @@ class IEditorHistoryPort {
                                const Hash128& /*version_id*/, std::string* error) -> bool {
     if (error != nullptr) {
       *error = "Version checkout is not supported by this history port";
+    }
+    return false;
+  }
+
+  /// Read only the active Version identity. This avoids constructing the
+  /// Versions/commits projection when a consumer only needs a layout key or
+  /// stale-session check.
+  virtual auto ReadActiveVersionId(const EditorHistoryGuardHandle& /*guard*/,
+                                   version_ref_id_t* /*version_id*/, std::string* error) -> bool {
+    if (error != nullptr) {
+      *error = "Active Version identity is not supported by this history port";
     }
     return false;
   }
@@ -169,12 +313,6 @@ class IEditorHistoryPort {
     return false;
   }
 
-  virtual auto CancelMerge(const EditorHistoryGuardHandle& /*guard*/,
-                           const AdjustmentMergePreview& /*preview*/, std::string* error) -> bool {
-    if (error != nullptr)
-      *error = "Editor Merge cancellation is not supported by this history port";
-    return false;
-  }
 
   /// Paste onto the live CommitGraph and WAL, then apply package operators to
   /// the live pipeline. Default fake records success without mutating state.
@@ -206,35 +344,6 @@ class IEditorHistoryPort {
     return true;
   }
 
-  /// Detect merge conflicts from the live pipeline without mutating the graph.
-  virtual auto BeginLiveMerge(const EditorHistoryGuardHandle& /*guard*/,
-                              const AdjustmentTransferPackage& package,
-                              AdjustmentMergePreview* preview, std::string* error) -> bool {
-    if (preview == nullptr) {
-      if (error != nullptr) *error = "Merge preview storage is required";
-      return false;
-    }
-    if (package.Empty()) {
-      if (error != nullptr) *error = "Adjustment transfer package is empty";
-      return false;
-    }
-    *preview = {};
-    return true;
-  }
-
-  /// Apply merge resolutions to the live pipeline and append one merge commit + WAL.
-  virtual auto CompleteLiveMerge(
-      const EditorHistoryGuardHandle& /*guard*/, const AdjustmentTransferPackage& /*package*/,
-      const AdjustmentMergePreview& /*preview*/,
-      const std::vector<AdjustmentMergeResolution>& /*resolutions*/, AdjustmentMergeResult* result,
-      std::string* error) -> bool {
-    if (result == nullptr) {
-      if (error != nullptr) *error = "Merge result storage is required";
-      return false;
-    }
-    result->merged = true;
-    return true;
-  }
 
   /// Capture the immutable live history prefix that a save checkpoint must
   /// persist. Production copies journal records and their inclusive sequence
@@ -439,6 +548,9 @@ struct EditorRenderCommand {
   std::uint64_t                       operation_id = 0;
   EditorRenderAdjustmentSnapshot      adjustment{};
   std::optional<ViewportRenderRegion> view_region;
+  /// True when live document/executor already hold this batch. Configure skips
+  /// snapshot application.
+  bool                                live_parameters_applied = false;
 };
 
 /// Sole path from the session service into pipeline work. Production wraps

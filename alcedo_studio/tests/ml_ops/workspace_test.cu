@@ -79,13 +79,14 @@ TEST_F(MlOpsWorkspaceTest, EmptyPoolGrowsOnFirstAllocate) {
   EXPECT_GE(pool.used_bytes(), 1000U * sizeof(float));
 }
 
-TEST_F(MlOpsWorkspaceTest, AllocateWithLiveDataDoesNotGrowSilently) {
+TEST_F(MlOpsWorkspaceTest, AllocateWithLiveDataAppendsAnotherSlab) {
   cuda::nn::WorkspacePool pool;
   pool.Reserve(256);
   void* live = pool.Allocate(128);
   ASSERT_NE(live, nullptr);
-  // Request more than remaining capacity while offset_ != 0.
-  EXPECT_THROW((void)pool.Allocate(pool.capacity_bytes()), std::runtime_error);
+  void* extra = pool.Allocate(pool.capacity_bytes());
+  ASSERT_NE(extra, nullptr);
+  EXPECT_NE(extra, live);
 }
 
 TEST_F(MlOpsWorkspaceTest, ReserveWhileLiveThrows) {

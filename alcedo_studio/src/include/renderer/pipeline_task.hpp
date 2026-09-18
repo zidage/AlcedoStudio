@@ -9,9 +9,11 @@
 #include <future>
 #include <memory>
 #include <optional>
+#include <string>
 
 #include "edit/operators/op_kernel.hpp"
 #include "edit/pipeline/pipeline.hpp"
+#include "edit/pipeline/pipeline_apply_request.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
 #include "image/image.hpp"
 #include "image/image_buffer.hpp"
@@ -45,12 +47,13 @@ struct RenderDesc {
 };
 
 struct TaskOptions {
-  RenderDesc    render_desc_;
+  RenderDesc                                render_desc_;
 
-  bool          is_blocking_;      // if true, wait for the task to finish
-  bool          is_callback_;      // if true, use callback to return result
-  bool          is_seq_callback_;  // if true, use sequential callback to return result
-  PriorityLevel task_priority_;    // task priority level, not used yet
+  bool                                      is_blocking_;      // if true, wait for the task to finish
+  bool                                      is_callback_;      // if true, use callback to return result
+  bool                                      is_seq_callback_;  // if true, use sequential callback to return result
+  PriorityLevel                             task_priority_;    // task priority level, not used yet
+  std::optional<ExportColorProfileConfig>   export_output_color_;
 };
 struct PipelineTask {
   uint32_t                                                    task_id_;
@@ -69,15 +72,16 @@ struct PipelineTask {
   std::function<bool()>                             cancel_requested_;
   // Optional control-plane completion (preview + export). Invoked once on every
   // terminal path so callers do not need a dedicated blocking worker thread.
-  std::function<void(bool success)>                 on_complete_;
+  std::function<void(bool success, std::string message)> on_complete_;
 
   TaskOptions                                       options_;
 
   // Monotonic render request identity. Immutable after ScheduleTask stamps it.
   std::uint64_t                                     request_id_ = 0;
 
-  void                                              SetExecutorRenderParams();
-  void                                              ResetPreviewRenderParams();
-  void                                              ResetThumbnailRenderParams();
+  [[nodiscard]] auto MakeApplyRequest() const -> PipelineApplyRequest;
+  void               SetExecutorRenderParams();
+  void               ResetPreviewRenderParams();
+  void               ResetThumbnailRenderParams();
 };
 };  // namespace alcedo

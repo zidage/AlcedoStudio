@@ -74,7 +74,8 @@ endfunction()
 #      appended after vcpkg applocal.
 #   4. Per-target ${name}_runtime/ output dir so parallel Ninja builds cannot
 #      re-applocal a sibling EXE's shared folder.
-#   5. Force-copy third_party lensfun + vendored duckdb (never leave vcpkg's).
+#   5. Force-copy submodule lensfun.dll after applocal. Never leave a
+#      package-manager lensfun.dll next to a test EXE.
 #
 # Domain CMakeLists must NOT hand-roll lensfun/duckdb POST_BUILD copies.
 
@@ -111,8 +112,8 @@ function(alcedo_copy_windows_test_runtime_dlls target_name)
   alcedo_copy_linked_runtime_dlls(${target_name})
 
   set(_lensfun_dll "")
-  if(TARGET alcedo_lensfun)
-    set(_lensfun_dll "$<TARGET_FILE:alcedo_lensfun>")
+  if(TARGET puerhlab_lensfun)
+    set(_lensfun_dll "$<TARGET_FILE:puerhlab_lensfun>")
   elseif(EXISTS "${CMAKE_BINARY_DIR}/third_party/lensfun/install/bin/lensfun.dll")
     set(_lensfun_dll "${CMAKE_BINARY_DIR}/third_party/lensfun/install/bin/lensfun.dll")
   endif()
@@ -122,7 +123,7 @@ function(alcedo_copy_windows_test_runtime_dlls target_name)
       COMMAND ${CMAKE_COMMAND} -E copy
               "${_lensfun_dll}"
               "$<TARGET_FILE_DIR:${target_name}>/lensfun.dll"
-      COMMENT "Alcedo: overwrite vcpkg applocal lensfun.dll with third_party for ${target_name}"
+      COMMENT "Alcedo: install submodule lensfun.dll next to ${target_name}"
       VERBATIM)
   else()
     message(WARNING

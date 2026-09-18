@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <unordered_set>
 
+#include "edit/graph/pipeline_document.hpp"
 #include "utils/string/convert.hpp"
 
 namespace alcedo {
@@ -56,21 +57,18 @@ void LogSyncElement(const char* bucket, const std::shared_ptr<SleeveElement>& el
 
 void ClonePipelineForDuplicate(Storage& storage_service, sl_element_id_t source_file_id,
                                sl_element_id_t duplicate_file_id) {
-  auto source_pipeline = storage_service.GetLivePipeline(source_file_id);
-  if (!source_pipeline) {
-    source_pipeline = storage_service.GetElementStore().GetPipelineByElementId(source_file_id);
-  }
-  if (!source_pipeline) {
+  const auto source_document =
+      storage_service.GetElementStore().GetPipelineJsonByElementId(source_file_id);
+  if (!source_document.has_value()) {
     return;
   }
 
-  auto duplicate_pipeline = std::make_shared<CPUPipelineExecutor>();
-  duplicate_pipeline->SetBoundFile(duplicate_file_id);
-  duplicate_pipeline->ImportPipelineParams(source_pipeline->ExportPipelineParams());
-  duplicate_pipeline->SetExecutionStages();
-  storage_service.GetElementStore().UpdatePipelineByElementId(duplicate_file_id,
-                                                                   duplicate_pipeline);
-  storage_service.RememberLivePipeline(duplicate_file_id, duplicate_pipeline);
+  const auto document = PipelineDocument::FromJson(*source_document);
+  if (!document.Graph().Validate().empty() || !document.Graph().ValidateImageBackbone().empty()) {
+    throw std::runtime_error("SleeveService: cannot duplicate an invalid pipeline document");
+  }
+  storage_service.GetElementStore().UpdatePipelineJsonByElementId(duplicate_file_id,
+                                                                    document.ToJson());
 }
 
 }  // namespace

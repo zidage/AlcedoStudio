@@ -11,6 +11,7 @@
 
 #include <QColor>
 #include <QCoreApplication>
+#include <QDeadlineTimer>
 #include <QEventLoop>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
@@ -21,15 +22,22 @@
 #include <QUrl>
 #include <QVariantList>
 #include <QVariantMap>
+#include <QuickQanava>
 #include <algorithm>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
+#include "app/editor_render_intent.hpp"
 #include "app/editor_session_service.hpp"
+#include "app/pipeline_document_history.hpp"
+#include "edit/graph/pipeline_document.hpp"
+#include "edit/graph/pipeline_graph_commands.hpp"
 #include "type/hash_type.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_models.hpp"
+#include "ui/alcedo_main/album_backend/editor_node_controller.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
 #include "ui/alcedo_main/app_theme.hpp"
 
@@ -50,50 +58,41 @@ inline auto MakeVersion(const Hash128& id, std::string name, const head_commit_h
   return version;
 }
 
-inline auto MakeCommit(const Hash128& id, std::string field_key, std::string before_value_json,
-                       std::string after_value_json,
-                       const head_commit_hash_t&     first_parent  = std::nullopt,
-                       const std::optional<Hash128>& second_parent = std::nullopt,
-                       EditCommitKind                kind = EditCommitKind::kEdit,
-                       EditorHistoryTimelinePosition position =
-                           EditorHistoryTimelinePosition::Applied) -> EditorHistoryCommit {
+inline auto MakeCommit(
+    const Hash128& id, std::string field_key, std::string before_value_json,
+    std::string after_value_json, const head_commit_hash_t& first_parent = std::nullopt,
+    EditorHistoryTimelinePosition position = EditorHistoryTimelinePosition::Applied)
+    -> EditorHistoryCommit {
   EditorHistoryCommit commit;
-  commit.commit_hash        = id;
-  commit.first_parent_hash  = first_parent;
-  commit.second_parent_hash = second_parent;
-  commit.kind               = kind;
-  commit.created_at_ns      = id.low64();
-  commit.field_key          = std::move(field_key);
-  commit.before_value_json  = std::move(before_value_json);
-  commit.after_value_json   = std::move(after_value_json);
-  commit.before_enabled     = true;
-  commit.after_enabled      = true;
-  commit.position           = position;
+  commit.commit_hash       = id;
+  commit.first_parent_hash = first_parent;
+  commit.created_at_ns     = id.low64();
+  commit.field_key         = std::move(field_key);
+  commit.before_value_json = std::move(before_value_json);
+  commit.after_value_json  = std::move(after_value_json);
+  commit.before_enabled    = true;
+  commit.after_enabled     = true;
+  commit.position          = position;
   return commit;
 }
 
 class RecordingEditorSessionBackend final : public IEditorSessionBackend {
  public:
   RecordingEditorSessionBackend() {
-    const auto first_version   = StableId(1);
-    const auto second_version  = StableId(2);
-    const auto first_commit    = StableId(11);
-    const auto second_commit   = StableId(12);
-    const auto merge_commit    = StableId(13);
-    const auto incoming_commit = StableId(14);
+    const auto first_version    = StableId(1);
+    const auto second_version   = StableId(2);
+    const auto first_commit     = StableId(11);
+    const auto second_commit    = StableId(12);
 
     snapshot_.active_version_id = first_version;
-    snapshot_.active_head       = merge_commit;
+    snapshot_.active_head       = second_commit;
     snapshot_.versions          = {
-        MakeVersion(first_version, "Base Look", merge_commit, true),
+        MakeVersion(first_version, "Base Look", second_commit, true),
         MakeVersion(second_version, "Alternate Look", first_commit, false),
     };
     snapshot_.commits = {
-        MakeCommit(merge_commit, "merge", std::string{}, std::string{}, second_commit,
-                   incoming_commit, EditCommitKind::kMerge,
-                   EditorHistoryTimelinePosition::Current),
         MakeCommit(second_commit, "contrast", R"({"contrast":0.0})", R"({"contrast":12.0})",
-                   first_commit),
+                   first_commit, EditorHistoryTimelinePosition::Current),
         MakeCommit(first_commit, "exposure", R"({"exposure":0.0})", R"({"exposure":0.35})"),
     };
     snapshot_.recovered_head = true;
@@ -108,6 +107,24 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
   [[nodiscard]] auto has_image() const -> bool override { return has_image_; }
   [[nodiscard]] auto has_pending_recovery() const -> bool override { return recovery_pending_; }
   [[nodiscard]] auto last_error() const -> std::string override { return last_error_; }
+  [[nodiscard]] auto action_availability() const -> alcedo::EditorActionAvailability override {
+    alcedo::EditorActionAvailability availability;
+    auto                             allow = [&](alcedo::EditorAction action, bool enabled) {
+      availability.decisions[static_cast<std::size_t>(action)].allowed = enabled;
+    };
+    allow(alcedo::EditorAction::Undo, snapshot_.can_undo);
+    allow(alcedo::EditorAction::Redo, snapshot_.can_redo);
+    allow(alcedo::EditorAction::PreviewAdjustment,
+          state_ == EditorSessionState::Interactive && has_image_);
+    allow(alcedo::EditorAction::CommitAdjustment,
+          state_ == EditorSessionState::Interactive && has_image_);
+    allow(alcedo::EditorAction::MoveHead, true);
+    allow(alcedo::EditorAction::ApplyPaste, true);
+    allow(alcedo::EditorAction::RetrySave, recovery_pending_);
+    allow(alcedo::EditorAction::DiscardAndContinue, recovery_pending_);
+    allow(alcedo::EditorAction::CancelPendingNavigation, recovery_pending_);
+    return availability;
+  }
 
   void SetPresentationSinkId(PresentationSinkId) override {}
   void SetPresentationSize(int, int) override {}
@@ -162,7 +179,7 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
   auto BranchFromCommit(const commit_hash_t& commit_id, std::string display_name)
       -> EditorSessionResult override {
     last_branch_name_ = display_name;
-    const auto id = StableId(next_version_id_++);
+    const auto id     = StableId(next_version_id_++);
     for (auto& version : snapshot_.versions) version.active = false;
     snapshot_.versions.push_back(MakeVersion(id, std::move(display_name), commit_id, true));
     snapshot_.active_version_id = id;
@@ -211,25 +228,6 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     return Accepted("Adjustments pasted");
   }
 
-  auto BeginMerge(const AdjustmentTransferPackage&, AdjustmentMergePreview*)
-      -> EditorSessionResult override {
-    ++begin_merge_count_;
-    return Accepted("Merge started");
-  }
-
-  auto CompleteMerge(const std::vector<AdjustmentMergeResolution>& resolutions)
-      -> EditorSessionResult override {
-    last_merge_resolution_count_ = resolutions.size();
-    ++complete_merge_count_;
-    NotifyHistoryChange();
-    return Accepted("Merge completed");
-  }
-
-  auto CancelMerge() -> EditorSessionResult override {
-    NotifyHistoryChange();
-    return Accepted("Merge cancelled");
-  }
-
   auto RetrySave() -> EditorSessionResult override {
     ++retry_save_count_;
     recovery_pending_ = false;
@@ -252,6 +250,117 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     last_error_.clear();
     NotifyHistoryChange();
     return Accepted("Pending navigation cancelled");
+  }
+
+  auto Patch(EditorAdjustmentPatch) -> EditorSessionResult override {
+    ++patch_count_;
+    return Accepted("Patched");
+  }
+
+  auto RequestViewChange(EditorRenderReason, std::optional<ViewportRenderRegion>)
+      -> EditorSessionResult override {
+    ++view_change_count_;
+    return Accepted("View changed");
+  }
+
+  auto EnqueueMaskCreation(EditorMaskCreationCommand command) -> EditorSessionResult override {
+    mask_commands_pending_ = true;
+    mask_commands_.push_back(std::move(command));
+    return Accepted("Mask command queued");
+  }
+
+  [[nodiscard]] auto mask_creation_commands_pending() const -> bool override {
+    return mask_commands_pending_;
+  }
+
+  [[nodiscard]] auto mask_creation_node_id() const -> NodeId override {
+    return selected_mask_node_id_;
+  }
+
+  [[nodiscard]] auto mask_creation_mask_id() const -> MaskId override { return selected_mask_id_; }
+
+  [[nodiscard]] auto mask_creation_state() const -> EditorMaskCreationState override {
+    return selected_mask_id_.Empty() ? EditorMaskCreationState::Inactive
+                                    : EditorMaskCreationState::Editing;
+  }
+
+  [[nodiscard]] auto mask_creation_source() const -> std::optional<MaskSource> override {
+    if (selected_mask_node_id_.Empty() || selected_mask_id_.Empty()) {
+      return std::nullopt;
+    }
+    const auto* node  = document_->Graph().FindNode(selected_mask_node_id_);
+    const auto* grade = dynamic_cast<const ColorGradeNodeModel*>(node);
+    const auto* mask  = grade == nullptr ? nullptr : grade->FindMask(selected_mask_id_);
+    return mask == nullptr ? std::nullopt : std::optional<MaskSource>{mask->source};
+  }
+
+  auto RenameColorGrade(const NodeId& node_id, std::string display_name)
+      -> EditorSessionResult override {
+    if (fail_node_commands_) return Rejected("mini-Git journal append failed");
+    const auto errors = alcedo::RenameColorGrade(*document_, node_id, std::move(display_name));
+    if (!errors.empty()) return Rejected(errors.front().message.c_str());
+    last_renamed_node_id_ = node_id;
+    ++rename_grade_count_;
+    NotifyHistoryChange();
+    return Accepted("Color Grade renamed");
+  }
+
+  auto EditNodeGraph(NodeGraphTopologyChange change) -> EditorSessionResult override {
+    if (fail_node_commands_) return Rejected("mini-Git journal append failed");
+    const auto errors =
+        ApplyNodeGraphTopologyChange(*document_, change, PipelineEditApplyDirection::Forward);
+    if (!errors.empty()) return Rejected(errors.front().message.c_str());
+    last_topology_change_ = std::move(change);
+    ++edit_node_graph_count_;
+    NotifyHistoryChange();
+    EditorSessionResult result = Accepted("Node graph topology updated");
+    result.kind                = EditorSessionResultKind::RenderRouted;
+    return result;
+  }
+
+  auto InsertColorGradeAtTop(const NodeId& new_id, const NodeId& expected_predecessor_id)
+      -> EditorSessionResult override {
+    if (fail_node_commands_) return Rejected("mini-Git journal append failed");
+    const auto backbone = document_->Graph().ImageBackboneNodeIds();
+    if (backbone.size() < 2 || backbone[backbone.size() - 2] != expected_predecessor_id) {
+      return Rejected("Mask Group anchor no longer matches the backbone");
+    }
+    const auto errors = alcedo::AddCleanColorGrade(*document_, backbone.back(), new_id);
+    if (!errors.empty()) return Rejected(errors.front().message.c_str());
+    last_inserted_node_id_ = new_id;
+    ++insert_grade_count_;
+    NotifyHistoryChange();
+    EditorSessionResult result = Accepted("Mask Group inserted");
+    result.kind                = EditorSessionResultKind::RenderRouted;
+    return result;
+  }
+
+  auto RemoveColorGradeAndBridge(const NodeId& node_id) -> EditorSessionResult override {
+    if (fail_node_commands_) return Rejected("mini-Git journal append failed");
+    const auto errors = document_->ValidateUserDeletion(node_id);
+    if (!errors.empty()) return Rejected(errors.front().message.c_str());
+    const auto remove_errors = alcedo::RemoveColorGradeAndBridge(*document_, node_id);
+    if (!remove_errors.empty()) return Rejected(remove_errors.front().message.c_str());
+    last_removed_group_node_id_ = node_id;
+    ++remove_grade_count_;
+    NotifyHistoryChange();
+    EditorSessionResult result = Accepted("Mask Group removed");
+    result.kind                = EditorSessionResultKind::RenderRouted;
+    return result;
+  }
+
+  auto SetColorGradeDeletionProtected(const NodeId& node_id, bool deletion_protected)
+      -> EditorSessionResult override {
+    if (fail_node_commands_) return Rejected("mini-Git journal append failed");
+    auto* node  = document_->Graph().FindNode(node_id);
+    auto* grade = dynamic_cast<ColorGradeNodeModel*>(node);
+    if (grade == nullptr) return Rejected("Only a Color Grade has editable deletion protection");
+    grade->SetDeletionProtected(deletion_protected);
+    last_locked_node_id_ = node_id;
+    last_lock_value_     = deletion_protected;
+    ++lock_grade_count_;
+    NotifyHistoryChange();
+    return Accepted("Color Grade deletion protection updated");
   }
 
   auto Close(bool) -> EditorSessionResult override {
@@ -285,16 +394,24 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     last_move_head_commit_ = commit_id;
     snapshot_.active_head  = commit_id;
     for (auto& commit : snapshot_.commits) {
-      commit.position = (commit.commit_hash == commit_id)
-                            ? EditorHistoryTimelinePosition::Current
-                            : EditorHistoryTimelinePosition::Applied;
+      commit.position = (commit.commit_hash == commit_id) ? EditorHistoryTimelinePosition::Current
+                                                          : EditorHistoryTimelinePosition::Applied;
     }
     NotifyHistoryChange();
     return Accepted("Head moved");
   }
 
   [[nodiscard]] auto history_snapshot() -> EditorHistorySnapshot override { return snapshot_; }
-  [[nodiscard]] auto history_revision() const -> std::uint64_t override { return history_revision_; }
+  [[nodiscard]] auto history_revision() const -> std::uint64_t override {
+    return history_revision_;
+  }
+  [[nodiscard]] auto active_version_id() const -> version_ref_id_t override {
+    return snapshot_.active_version_id;
+  }
+  [[nodiscard]] auto pipeline_document() const
+      -> std::shared_ptr<const PipelineDocument> override {
+    return document_;
+  }
 
   [[nodiscard]] auto last_checkout_id() const -> Hash128 { return last_checkout_id_; }
   [[nodiscard]] auto last_created_id() const -> Hash128 { return last_created_id_; }
@@ -307,11 +424,6 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
   [[nodiscard]] auto undo_count() const -> int { return undo_count_; }
   [[nodiscard]] auto redo_count() const -> int { return redo_count_; }
   [[nodiscard]] auto paste_count() const -> int { return paste_count_; }
-  [[nodiscard]] auto begin_merge_count() const -> int { return begin_merge_count_; }
-  [[nodiscard]] auto complete_merge_count() const -> int { return complete_merge_count_; }
-  [[nodiscard]] auto last_merge_resolution_count() const -> std::size_t {
-    return last_merge_resolution_count_;
-  }
   [[nodiscard]] auto retry_save_count() const -> int { return retry_save_count_; }
   [[nodiscard]] auto discard_count() const -> int { return discard_count_; }
   [[nodiscard]] auto cancel_recovery_count() const -> int { return cancel_recovery_count_; }
@@ -322,6 +434,29 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
   [[nodiscard]] auto last_branch_name() const -> const std::string& { return last_branch_name_; }
   [[nodiscard]] auto blocked_create_count() const -> int { return blocked_create_count_; }
   [[nodiscard]] auto blocked_rename_count() const -> int { return blocked_rename_count_; }
+  [[nodiscard]] auto patch_count() const -> int { return patch_count_; }
+  [[nodiscard]] auto view_change_count() const -> int { return view_change_count_; }
+  [[nodiscard]] auto rename_grade_count() const -> int { return rename_grade_count_; }
+  [[nodiscard]] auto edit_node_graph_count() const -> int { return edit_node_graph_count_; }
+  [[nodiscard]] auto insert_grade_count() const -> int { return insert_grade_count_; }
+  [[nodiscard]] auto remove_grade_count() const -> int { return remove_grade_count_; }
+  [[nodiscard]] auto lock_grade_count() const -> int { return lock_grade_count_; }
+  [[nodiscard]] auto last_inserted_node_id() const -> NodeId { return last_inserted_node_id_; }
+  [[nodiscard]] auto last_removed_group_node_id() const -> NodeId {
+    return last_removed_group_node_id_;
+  }
+  [[nodiscard]] auto last_locked_node_id() const -> NodeId { return last_locked_node_id_; }
+  [[nodiscard]] auto last_lock_value() const -> bool { return last_lock_value_; }
+  [[nodiscard]] auto last_topology_change() const -> const NodeGraphTopologyChange& {
+    return last_topology_change_;
+  }
+  [[nodiscard]] auto last_renamed_node_id() const -> NodeId { return last_renamed_node_id_; }
+  [[nodiscard]] auto mask_commands() const -> const std::vector<EditorMaskCreationCommand>& {
+    return mask_commands_;
+  }
+  [[nodiscard]] auto document() const -> const std::shared_ptr<PipelineDocument>& {
+    return document_;
+  }
 
   void SetRecovery(bool pending, std::string error = {}) {
     recovery_pending_ = pending;
@@ -329,7 +464,97 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     NotifyHistoryChange();
   }
 
+  void SetSessionState(EditorSessionState state, bool has_image) {
+    state_     = state;
+    has_image_ = has_image;
+    NotifyChange();
+  }
+
   void SetBlockVersionOps(bool block) { block_version_ops_ = block; }
+  void SetFailNodeCommands(bool fail) { fail_node_commands_ = fail; }
+  void AddMaskToPrimaryGrade(MaskModel mask) {
+    auto* grade = document_->PrimaryGrade();
+    if (grade == nullptr) {
+      return;
+    }
+    grade->AddMask(std::move(mask), grade->Masks().size());
+    NotifyHistoryChange();
+  }
+
+  void AddMaskToGrade(const NodeId& node_id, MaskModel mask) {
+    auto* node  = document_->Graph().FindNode(node_id);
+    auto* grade = dynamic_cast<ColorGradeNodeModel*>(node);
+    if (grade == nullptr) {
+      return;
+    }
+    grade->AddMask(std::move(mask), grade->Masks().size());
+    NotifyHistoryChange();
+  }
+
+  /// Insert one clean Color Grade immediately before @p before_node_id on the
+  /// backbone; mirrors the committed InsertColorGradeAtTop history effect.
+  void AddColorGradeBefore(const NodeId& before_node_id, const NodeId& new_id) {
+    const auto errors = alcedo::AddCleanColorGrade(*document_, before_node_id, new_id);
+    if (!errors.empty()) {
+      return;
+    }
+    NotifyHistoryChange();
+  }
+
+  void CompleteMaskCommands() {
+    for (const auto& command : mask_commands_) {
+      if (command.kind == EditorMaskCreationCommandKind::SelectMask) {
+        selected_mask_node_id_ = command.node_id;
+        selected_mask_id_      = command.mask_id;
+      } else if (command.kind == EditorMaskCreationCommandKind::RemoveMask) {
+        // Mirror the owner: ValidateUserDeletion runs before any mutation so a
+        // locked Mask keeps the document and selection unchanged.
+        const auto errors =
+            document_->ValidateUserDeletion(command.node_id, command.mask_id);
+        if (!errors.empty()) {
+          continue;
+        }
+        auto* node  = document_->Graph().FindNode(command.node_id);
+        auto* grade = dynamic_cast<ColorGradeNodeModel*>(node);
+        if (grade != nullptr && grade->FindMask(command.mask_id) != nullptr) {
+          grade->RemoveMask(command.mask_id);
+        }
+        if (selected_mask_id_ == command.mask_id) {
+          selected_mask_node_id_ = {};
+          selected_mask_id_      = {};
+        }
+      } else if (command.kind == EditorMaskCreationCommandKind::SetMaskField) {
+        auto* node  = document_->Graph().FindNode(command.node_id);
+        auto* grade = dynamic_cast<ColorGradeNodeModel*>(node);
+        auto* mask  = grade == nullptr ? nullptr : grade->FindMask(command.mask_id);
+        if (mask == nullptr) {
+          continue;
+        }
+        try {
+          if (command.field_key == "enabled") {
+            grade->SetMaskEnabled(command.mask_id, command.field_value.get<bool>());
+          } else if (command.field_key == "invert") {
+            grade->SetMaskInvert(command.mask_id, command.field_value.get<bool>());
+          } else if (command.field_key == "opacity") {
+            grade->SetMaskOpacity(command.mask_id, command.field_value.get<float>());
+          } else if (command.field_key == "display_name") {
+            mask->display_name = command.field_value.get<std::string>();
+          } else if (command.field_key == "deletion_protected") {
+            grade->SetMaskDeletionProtected(command.mask_id,
+                                            command.field_value.get<bool>());
+          }
+        } catch (const std::exception&) {
+        }
+      } else if (command.kind == EditorMaskCreationCommandKind::FinishMode ||
+                 command.kind == EditorMaskCreationCommandKind::CancelMode) {
+        selected_mask_node_id_ = {};
+        selected_mask_id_      = {};
+      }
+    }
+    mask_commands_.clear();
+    mask_commands_pending_ = false;
+    NotifyHistoryChange();
+  }
 
  private:
   auto Accepted(const char* message) const -> EditorSessionResult {
@@ -356,40 +581,57 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     NotifyChange();
   }
 
-  std::uint64_t         history_revision_            = 0;
+  std::uint64_t                     history_revision_ = 0;
 
-  EditorSessionState    state_     = EditorSessionState::Interactive;
-  bool                  has_image_ = true;
-  EditorSessionIdentity identity_{1, 2};
-  EditorHistorySnapshot snapshot_;
-  std::uint64_t         next_version_id_ = 20;
-  Hash128               last_checkout_id_;
-  Hash128               last_created_id_;
-  Hash128               last_rename_id_;
-  Hash128               last_removed_id_;
-  Hash128               last_move_head_commit_;
-  Hash128               last_branch_commit_;
-  std::string           last_branch_name_;
-  int                   checkout_count_              = 0;
-  int                   create_count_                = 0;
-  int                   rename_count_                = 0;
-  int                   remove_count_                = 0;
-  int                   move_head_count_             = 0;
-  int                   branch_count_                = 0;
-  int                   undo_count_                  = 0;
-  int                   redo_count_                  = 0;
-  int                   paste_count_                 = 0;
-  int                   begin_merge_count_           = 0;
-  int                   complete_merge_count_        = 0;
-  std::size_t           last_merge_resolution_count_ = 0;
-  bool                  recovery_pending_            = false;
-  std::string           last_error_;
-  int                   retry_save_count_      = 0;
-  int                   discard_count_         = 0;
-  int                   cancel_recovery_count_ = 0;
-  bool                  block_version_ops_     = false;
-  int                   blocked_create_count_  = 0;
-  int                   blocked_rename_count_  = 0;
+  EditorSessionState                state_            = EditorSessionState::Interactive;
+  bool                              has_image_        = true;
+  EditorSessionIdentity             identity_{1, 2};
+  EditorHistorySnapshot             snapshot_;
+  std::shared_ptr<PipelineDocument> document_ =
+      std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
+  std::uint64_t                          next_version_id_ = 20;
+  Hash128                                last_checkout_id_;
+  Hash128                                last_created_id_;
+  Hash128                                last_rename_id_;
+  Hash128                                last_removed_id_;
+  Hash128                                last_move_head_commit_;
+  std::vector<EditorMaskCreationCommand> mask_commands_;
+  NodeId                                 selected_mask_node_id_;
+  MaskId                                 selected_mask_id_;
+  bool                                   mask_commands_pending_ = false;
+  Hash128                                last_branch_commit_;
+  std::string                            last_branch_name_;
+  int                                    checkout_count_   = 0;
+  int                                    create_count_     = 0;
+  int                                    rename_count_     = 0;
+  int                                    remove_count_     = 0;
+  int                                    move_head_count_  = 0;
+  int                                    branch_count_     = 0;
+  int                                    undo_count_       = 0;
+  int                                    redo_count_       = 0;
+  int                                    paste_count_      = 0;
+  bool                                   recovery_pending_ = false;
+  std::string                            last_error_;
+  int                                    retry_save_count_      = 0;
+  int                                    discard_count_         = 0;
+  int                                    cancel_recovery_count_ = 0;
+  bool                                   block_version_ops_     = false;
+  bool                                   fail_node_commands_    = false;
+  int                                    blocked_create_count_  = 0;
+  int                                    blocked_rename_count_  = 0;
+  int                                    patch_count_           = 0;
+  int                                    view_change_count_     = 0;
+  int                                    rename_grade_count_    = 0;
+  int                                    edit_node_graph_count_ = 0;
+  int                                    insert_grade_count_    = 0;
+  int                                    remove_grade_count_    = 0;
+  int                                    lock_grade_count_      = 0;
+  NodeGraphTopologyChange                last_topology_change_{};
+  NodeId                                 last_renamed_node_id_;
+  NodeId                                 last_inserted_node_id_;
+  NodeId                                 last_removed_group_node_id_;
+  NodeId                                 last_locked_node_id_;
+  bool                                   last_lock_value_ = false;
 };
 
 class RecordingInteractionPolicy final : public QObject {
@@ -407,7 +649,7 @@ class RecordingAdjustmentTransfer final : public QObject {
   Q_PROPERTY(bool packageAvailable READ packageAvailable CONSTANT)
 
  public:
-  [[nodiscard]] auto packageAvailable() const -> bool { return true; }
+  [[nodiscard]] auto      packageAvailable() const -> bool { return true; }
 
   Q_INVOKABLE QVariantMap PasteIntoEditor(QObject*) {
     ++paste_count_;
@@ -415,51 +657,13 @@ class RecordingAdjustmentTransfer final : public QObject {
             {QStringLiteral("message"), QStringLiteral("Adjustments pasted")}};
   }
 
-  Q_INVOKABLE QVariantMap BeginMergeIntoEditor(QObject*) {
-    ++begin_merge_count_;
-    const QVariantMap conflict{
-        {QStringLiteral("fieldKey"), QStringLiteral("exposure")},
-        {QStringLiteral("currentValue"), 0.0},
-        {QStringLiteral("incomingValue"), 1.0},
-        {QStringLiteral("currentEnabled"), true},
-        {QStringLiteral("incomingEnabled"), true},
-    };
-    return {{QStringLiteral("success"), true},
-            {QStringLiteral("hasConflicts"), true},
-            {QStringLiteral("conflicts"), QVariantList{conflict}},
-            {QStringLiteral("message"), QStringLiteral("Choose every changed field")}};
-  }
-
-  Q_INVOKABLE QVariantMap CompleteMergeIntoEditor(QObject*, const QVariant& resolutions) {
-    ++complete_merge_count_;
-    last_resolution_count_ = resolutions.toList().size();
-    if (!resolutions.toList().isEmpty()) {
-      last_resolution_ = resolutions.toList().front().toMap();
-    }
-    return {{QStringLiteral("success"), true},
-            {QStringLiteral("message"), QStringLiteral("Merge completed")}};
-  }
-
-  Q_INVOKABLE QVariantMap CancelMergeIntoEditor(QObject*) {
-    return {{QStringLiteral("success"), true},
-            {QStringLiteral("message"), QStringLiteral("Merge cancelled")}};
-  }
-
   [[nodiscard]] auto paste_count() const -> int { return paste_count_; }
-  [[nodiscard]] auto begin_merge_count() const -> int { return begin_merge_count_; }
-  [[nodiscard]] auto complete_merge_count() const -> int { return complete_merge_count_; }
-  [[nodiscard]] auto last_resolution_count() const -> int { return last_resolution_count_; }
-  [[nodiscard]] auto last_resolution() const -> QVariantMap { return last_resolution_; }
 
  private:
-  int         paste_count_           = 0;
-  int         begin_merge_count_     = 0;
-  int         complete_merge_count_  = 0;
-  int         last_resolution_count_ = 0;
-  QVariantMap last_resolution_;
+  int paste_count_ = 0;
 };
 
-inline constexpr char kHarnessQml[] = R"(
+inline constexpr char kHarnessQml[]         = R"(
 import QtQuick
 import QtQuick.Controls
 
@@ -514,7 +718,7 @@ ApplicationWindow {
 }
 )";
 
-inline auto QmlDirectory() -> QString {
+inline auto           QmlDirectory() -> QString {
   return QString::fromStdString(
       (std::filesystem::path(ALCEDO_TEST_SRC_DIR) / "ui" / "alcedo_main" / "qml").string());
 }
@@ -574,15 +778,18 @@ class RailQmlFixture : public ::testing::Test {
     AppTheme::RegisterFonts();
     AppTheme::Instance().setReduceMotion(true);
     RegisterEditorHistoryQmlTypes();
+    RegisterEditorNodeQmlTypes();
 
     engine_.addImportPath(QStringLiteral("qrc:/"));
     engine_.addImportPath(QmlDirectory());
+    QuickQanava::initialize(&engine_);
     engine_.rootContext()->setContextProperty(QStringLiteral("appTheme"), &AppTheme::Instance());
     engine_.rootContext()->setContextProperty(QStringLiteral("editorSessionFake"), &controller_);
     engine_.rootContext()->setContextProperty(QStringLiteral("interactionPolicyFake"), &policy_);
     engine_.rootContext()->setContextProperty(QStringLiteral("adjustmentTransferFake"), &transfer_);
     engine_.rootContext()->setContextProperty(QStringLiteral("railSourceUrl"), RailUrl());
-    engine_.rootContext()->setContextProperty(QStringLiteral("recoverySourceUrl"), RecoveryBarUrl());
+    engine_.rootContext()->setContextProperty(QStringLiteral("recoverySourceUrl"),
+                                              RecoveryBarUrl());
     QObject::connect(&engine_, &QQmlEngine::warnings, [this](const QList<QQmlError>& warnings) {
       for (const auto& warning : warnings) warnings_.push_back(warning.toString());
     });
@@ -597,10 +804,22 @@ class RailQmlFixture : public ::testing::Test {
       }
     }
     ProcessEvents();
-    if (window_ != nullptr && Find(QStringLiteral("editorHistoryVersionsRail")) == nullptr &&
+    if (window_ != nullptr) {
+      QDeadlineTimer deadline{5000};
+      while (Find(QStringLiteral("editorWorkspaceRail")) == nullptr && !deadline.hasExpired()) {
+        ProcessEvents();
+      }
+    }
+    if (window_ != nullptr && Find(QStringLiteral("editorWorkspaceRail")) == nullptr &&
         !warnings_.isEmpty()) {
       ADD_FAILURE() << warnings_.join('\n').toStdString();
     }
+    // The fake reports an open Interactive session; route it through Open so
+    // the controller's active_ flag matches and has_image() is true. Without
+    // this, every backend notification takes the OnImageClosed path and resets
+    // Mask edit state that the real session keeps while the editor is open.
+    controller_.Open(1, 2);
+    ProcessEvents();
   }
 
   auto Find(const QString& object_name) -> QQuickItem* {
@@ -637,9 +856,42 @@ class RailQmlFixture : public ::testing::Test {
     return delegates;
   }
 
-  void OpenVersionsPage() { Click(window_, Find(QStringLiteral("editorVersionsRailButton"))); }
+  void WaitForName(const QString& object_name, int timeout_ms = 8000) {
+    QDeadlineTimer deadline{timeout_ms};
+    while (Find(object_name) == nullptr && !deadline.hasExpired()) {
+      ProcessEvents();
+    }
+  }
 
-  void OpenHistoryPage() { Click(window_, Find(QStringLiteral("editorHistoryRailButton"))); }
+  void OpenVersionsPage() {
+    controller_.set_editor_tool_panel_page(QStringLiteral("versions"));
+    ProcessEvents();
+    WaitForName(QStringLiteral("editorVersionsPageBody"));
+    WaitForName(QStringLiteral("editorVersionsList"));
+    QDeadlineTimer deadline{2000};
+    while (Cards().isEmpty() && !deadline.hasExpired()) {
+      ProcessEvents();
+    }
+  }
+
+  void OpenHistoryPage() {
+    controller_.set_editor_tool_panel_page(QStringLiteral("history"));
+    ProcessEvents();
+    WaitForName(QStringLiteral("editorHistoryPageBody"));
+  }
+
+  void OpenNodesPage() {
+    controller_.set_editor_tool_panel_page(QStringLiteral("nodes"));
+    ProcessEvents();
+    WaitForName(QStringLiteral("editorNodesPageBody"));
+  }
+
+  void OpenMaskGroupsPage() {
+    controller_.set_editor_tool_panel_page(QStringLiteral("maskgroups"));
+    ProcessEvents();
+    WaitForName(QStringLiteral("editorMaskGroupsPageBody"));
+    WaitForName(QStringLiteral("editorMaskGroupsList"));
+  }
 
   RecordingEditorSessionBackend backend_;
   EditorSessionController       controller_{&backend_};

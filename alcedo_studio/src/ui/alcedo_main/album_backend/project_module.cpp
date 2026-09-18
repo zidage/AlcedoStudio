@@ -209,10 +209,7 @@ auto BuildRecentProjectEntry(const QString& normalizedPath, qint64 lastOpenedMs)
 
 }  // namespace
 
-
-
-ProjectModule::ProjectModule(QObject* parent)
-    : QObject(parent), handler_(*this) {
+ProjectModule::ProjectModule(QObject* parent) : QObject(parent), handler_(*this) {
   LoadRecentProjectsFromSettings();
   QObject::connect(&i18n::TranslationNotifier::Instance(),
                    &i18n::TranslationNotifier::LanguageChanged, this,
@@ -227,8 +224,7 @@ void ProjectModule::SetLifecycleHooks(ProjectLifecycleHooks hooks) {
   lifecycle_hooks_ = std::move(hooks);
 }
 
-void ProjectModule::SetRuntimeAcceleratorPreference(
-    const AcceleratorBackendPreference preference) {
+void ProjectModule::SetRuntimeAcceleratorPreference(const AcceleratorBackendPreference preference) {
   // The RHI backend selected by main.cpp is the process-wide source of truth.
   // QSettings is only the next-launch request and may differ when a command-line
   // override is active or when settings changed during the previous process.
@@ -249,12 +245,11 @@ void ProjectModule::SetServiceMessage(const i18n::LocalizedText& message) {
 void ProjectModule::NotifyProjectLoadStateChanged() { emit ProjectLoadStateChanged(); }
 
 void ProjectModule::SetAcceleratorPreparationState(bool                       preparing,
-                                                  const i18n::LocalizedText& status) {
+                                                   const i18n::LocalizedText& status) {
   accelerator_preparing_               = preparing;
   accelerator_preparation_status_text_ = status;
   emit AcceleratorPreparationStateChanged();
 }
-
 
 void ProjectModule::StartOpenClPreparationIfNeeded() {
   if (accelerator_prepare_started_ || accelerator_preparing_ ||
@@ -306,9 +301,7 @@ void ProjectModule::StartOpenClPreparationIfNeeded() {
 #endif
 }
 
-
 void ProjectModule::StartAcceleratorPreparation() { StartOpenClPreparationIfNeeded(); }
-
 
 void ProjectModule::InitializeAcceleratorSettings() {
   const QString stored_key = QSettings{}.value(QLatin1String(kAcceleratorBackendKey)).toString();
@@ -406,7 +399,6 @@ void ProjectModule::InitializeAcceleratorSettings() {
   QSettings{}.setValue(QLatin1String(kAcceleratorBackendKey), accelerator_backend_key_);
 }
 
-
 void ProjectModule::RebuildAcceleratorOptions() {
   QVariantList options;
 #if defined(__APPLE__)
@@ -430,7 +422,6 @@ void ProjectModule::RebuildAcceleratorOptions() {
   }
   accelerator_options_ = options;
 }
-
 
 bool ProjectModule::SetAcceleratorBackend(const QString& backendKey) {
   const auto preference = AcceleratorPreferenceFromKey(backendKey);
@@ -462,7 +453,6 @@ bool ProjectModule::SetAcceleratorBackend(const QString& backendKey) {
   return true;
 }
 
-
 void ProjectModule::AcknowledgeAcceleratorWarning() {
   if (accelerator_warning_id_.isEmpty()) {
     return;
@@ -471,13 +461,11 @@ void ProjectModule::AcknowledgeAcceleratorWarning() {
   emit AcceleratorStateChanged();
 }
 
-
 bool ProjectModule::IsAcceleratorWarningAcknowledged() const {
   return !accelerator_warning_id_.isEmpty() &&
          QSettings{}.value(QLatin1String(kAcceleratorWarningAcknowledgedKey)).toString() ==
              accelerator_warning_id_;
 }
-
 
 void ProjectModule::PersistAcceleratorWarningAcknowledgement() const {
   if (!accelerator_warning_id_.isEmpty()) {
@@ -485,7 +473,6 @@ void ProjectModule::PersistAcceleratorWarningAcknowledgement() const {
                          accelerator_warning_id_);
   }
 }
-
 
 bool ProjectModule::PromptAndLoadProject() {
   const QString start_dir = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
@@ -497,7 +484,6 @@ bool ProjectModule::PromptAndLoadProject() {
   }
   return LoadProject(QUrl::fromLocalFile(selected_path).toString());
 }
-
 
 bool ProjectModule::PromptAndCreateProject() {
   const QString start_dir    = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
@@ -524,7 +510,6 @@ bool ProjectModule::PromptAndCreateProject() {
 
   return CreateProjectInFolderNamed(QUrl::fromLocalFile(selected_dir).toString(), project_name);
 }
-
 
 bool ProjectModule::LoadProject(const QString& metaFileUrlOrPath) {
   if (handler_.project_loading()) {
@@ -579,22 +564,20 @@ bool ProjectModule::LoadProject(const QString& metaFileUrlOrPath) {
     }
 
     return handler_.InitializeServices(unpacked_db_path, unpacked_meta_path,
-                                               ProjectOpenMode::kLoadExisting, project_path,
-                                               workspace_dir, project_path);
+                                       ProjectOpenMode::kLoadExisting, project_path, workspace_dir,
+                                       project_path);
   }
 
   SetServiceMessageForCurrentProject(PL_TEXT("Unsupported project format. Choose a .alcd file."));
   return false;
 }
 
-
 bool ProjectModule::CreateProjectInFolder(const QString& folderUrlOrPath) {
   return CreateProjectInFolderNamed(folderUrlOrPath, "album_editor_project");
 }
 
-
 bool ProjectModule::CreateProjectInFolderNamed(const QString& folderUrlOrPath,
-                                              const QString& projectName) {
+                                               const QString& projectName) {
   if (handler_.project_loading()) {
     SetServiceMessageForCurrentProject(PL_TEXT("A project load is already in progress."));
     return false;
@@ -638,7 +621,6 @@ bool ProjectModule::CreateProjectInFolderNamed(const QString& folderUrlOrPath,
   return started;
 }
 
-
 bool ProjectModule::SaveProject() {
   if (handler_.project_loading()) {
     SetServiceMessageForCurrentProject(PL_TEXT("Please wait until project loading finishes."));
@@ -679,17 +661,15 @@ bool ProjectModule::SaveProject() {
   SetServiceMessageForCurrentProject(
       handler_.package_path().empty()
           ? PL_TEXT("Project saved to %1", PathToQString(handler_.meta_path()))
-          : PL_TEXT("Project saved and packed to %1",
-                    PathToQString(handler_.package_path())));
+          : PL_TEXT("Project saved and packed to %1", PathToQString(handler_.package_path())));
   SetTaskState(handler_.package_path().empty() ? PL_TEXT("Project saved.")
-                                                       : PL_TEXT("Project saved and packed."),
+                                               : PL_TEXT("Project saved and packed."),
                100, false);
   ScheduleIdleTaskStateReset(1200);
   return true;
 }
 
 // ── Shared internal methods ─────────────────────────────────────────────────
-
 
 void ProjectModule::SetServiceState(bool ready, const i18n::LocalizedText& message) {
   if (service_ready_ == ready && service_message_text_.source_ == message.source_ &&
@@ -701,11 +681,9 @@ void ProjectModule::SetServiceState(bool ready, const i18n::LocalizedText& messa
   emit ServiceStateChanged();
 }
 
-
 void ProjectModule::SetServiceMessageForCurrentProject(const i18n::LocalizedText& message) {
   SetServiceState(handler_.project() != nullptr, message);
 }
-
 
 void ProjectModule::ScheduleIdleTaskStateReset(int delayMs) {
   QTimer::singleShot(std::max(delayMs, 0), this, [this]() {
@@ -716,15 +694,13 @@ void ProjectModule::ScheduleIdleTaskStateReset(int delayMs) {
   });
 }
 
-
 void ProjectModule::SetTaskState(const i18n::LocalizedText& status, int progress,
-                                bool cancelVisible) {
+                                 bool cancelVisible) {
   task_status_text_    = status;
   task_progress_       = std::clamp(progress, 0, 100);
   task_cancel_visible_ = cancelVisible;
   emit TaskStateChanged();
 }
-
 
 void ProjectModule::RefreshTranslations() {
   if (lifecycle_hooks_.refresh_translations) {
@@ -766,7 +742,6 @@ bool ProjectModule::ShouldKeepSemanticModelData(const QString& profileId) const 
   return !lifecycle_hooks_.should_keep_semantic_model_data ||
          lifecycle_hooks_.should_keep_semantic_model_data(profileId);
 }
-
 
 void ProjectModule::LoadRecentProjectsFromSettings() {
   const QVariantList stored_entries = QSettings{}.value(QLatin1String(kRecentProjectsKey)).toList();
@@ -821,11 +796,9 @@ void ProjectModule::LoadRecentProjectsFromSettings() {
   }
 }
 
-
 void ProjectModule::PersistRecentProjects() const {
   QSettings{}.setValue(QLatin1String(kRecentProjectsKey), recent_projects_);
 }
-
 
 void ProjectModule::RegisterRecentProject(const std::filesystem::path& projectPath) {
   const QString normalized_path = NormalizeRecentProjectPath(projectPath);
@@ -858,7 +831,6 @@ void ProjectModule::RegisterRecentProject(const std::filesystem::path& projectPa
   emit RecentProjectsChanged();
 }
 
-
 void ProjectModule::RemoveRecentProject(const std::filesystem::path& projectPath) {
   const QString normalized_path = NormalizeRecentProjectPath(projectPath);
   if (normalized_path.isEmpty()) {
@@ -883,7 +855,6 @@ void ProjectModule::RemoveRecentProject(const std::filesystem::path& projectPath
   PersistRecentProjects();
   emit RecentProjectsChanged();
 }
-
 
 }  // namespace alcedo::ui
 

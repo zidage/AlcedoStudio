@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <chrono>
+#include <condition_variable>
+#include <exception>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -14,6 +17,7 @@
 
 #include "app/image_pool_service.hpp"
 #include "decoders/processor/raw_color_context.hpp"
+#include "edit/graph/pipeline_document.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/commit_types.hpp"
 #include "edit/pipeline/pipeline.hpp"
@@ -26,6 +30,7 @@
 
 namespace alcedo {
 
+
 /// Live editor handle: one pipeline executor (parameter table + run state) plus a
 /// pointer to the image's CommitGraph.
 ///
@@ -36,24 +41,36 @@ namespace alcedo {
 /// - working_head_commit_hash() / transaction_chain_hash() are convenience reads of
 ///   the active Version tip and its first-parent chain fold. They are not independent
 ///   caches; never write a parallel head field onto this guard.
-/// - On commit (including merge), history advances head once and folds chain hash once.
+/// - On commit, history advances head once and folds chain hash once.
 ///   Applying that commit to the table may call SetOperator many times; those calls are
 ///   not separate chain-hash steps.
-/// - Serialized checkpoint identity is (head, chain, params). Load compares that label
-///   to the history tip; match skips first-parent replay.
+/// - Serialized checkpoint identity is (root, head, chain, document). Load compares
+///   that label to the history tip; match loads the document and skips first-parent replay.
 struct PipelineGuard {
   std::shared_ptr<CPUPipelineExecutor> pipeline_;
+  /// Authoritative pipeline DAG used by the CUDA product renderer.
+  std::shared_ptr<PipelineDocument>    document_;
   sl_element_id_t                      id_;
   bool                                 dirty_     = false;
-  /// Cache pin only: LoadPipeline / SavePipeline refcount so LRU eviction and
-  /// "unpinned → re-init stages" do not drop a live editor/export guard.
-  /// Live-pipeline *mutation* ownership is CPUPipelineExecutor::render_lock_
+  /// Cache pin only: LoadPipeline / ReleasePipelineUse / SavePipeline refcount so
+  /// LRU eviction and "unpinned → re-init stages" do not drop a live editor/export
+  /// guard. Live-pipeline *mutation* ownership is CPUPipelineExecutor::render_lock_
   /// (held for the full render task including present); pin_count_ is not that.
   bool                                 pinned_    = false;
   size_t                               pin_count_ = 0;
+  /// False until construct/reinit finished. Cache hits wait; never treat an unready live as usable.
+  bool                                 live_ready_ = false;
+  bool                                 initializing_ = false;
+  std::exception_ptr                   load_error_;
+  /// True while an editor input sequence has live values that are not a history HEAD.
+  /// Thumbnail/export disk caches must not store pixels under the committed label.
+  bool                                 unsettled_preview_ = false;
 
   /// Immutable root id for this image's edit graph (history identity, not a tip).
   root_id_t                            root_id_{};
+  /// Immutable replay start for Version checkout and recovery. Loaded with the
+  /// stored root document; never mutated after the image enters history.
+  std::shared_ptr<const PipelineDocument> root_document_;
   bool                                 serialized_state_needs_writeback_ = false;
 
   /// Sole live CommitGraph for this element. Active Version head is the only logical
@@ -61,7 +78,7 @@ struct PipelineGuard {
   std::shared_ptr<CommitGraph>         commit_graph_;
 
   /// Active Version tip on commit_graph_ (history-owned). Empty graph → nullopt.
-  [[nodiscard]] auto working_head_commit_hash() const -> head_commit_hash_t {
+  [[nodiscard]] auto                   working_head_commit_hash() const -> head_commit_hash_t {
     if (!commit_graph_) {
       return std::nullopt;
     }
@@ -69,7 +86,7 @@ struct PipelineGuard {
   }
 
   /// First-parent chain fold for the active tip. Same algorithm history uses when
-  /// recording commits; used as the checkpoint label next to exported params.
+  /// recording commits; used as the checkpoint label next to the saved document.
   [[nodiscard]] auto transaction_chain_hash() const -> transaction_chain_hash_t {
     if (!commit_graph_) {
       return {};
@@ -78,58 +95,90 @@ struct PipelineGuard {
   }
 };
 
-// Phase 3: a read-only clone of a pipeline's params captured into an independent
-// executor, used for background analysis rendering. The snapshot never pins the
-// live PipelineGuard, never writes storage, and never clears the live guard's
-// dirty state. Rendering on `executor_` does not affect the live pipeline.
-struct PipelineSnapshot {
-  sl_element_id_t                      element_id_ = 0;
-  image_id_t                           image_id_   = 0;
-  nlohmann::json                       pipeline_params_;
-  std::shared_ptr<CPUPipelineExecutor> executor_;
-};
-
 class PipelineMgmtService final {
  private:
-  std::shared_ptr<Storage>                                     storage_;
+  std::shared_ptr<Storage>                                            storage_;
 
   LRUCache<sl_element_id_t, sl_element_id_t>                          pipeline_cache_;
 
   std::unordered_map<sl_element_id_t, std::shared_ptr<PipelineGuard>> loaded_pipelines_;
 
   std::mutex                                                          lock_;
+  std::condition_variable                                             cache_cv_;
+
+  std::uint64_t                pipeline_construct_count_ = 0;
+  std::uint64_t                pipeline_load_count_      = 0;
 
   static constexpr size_t                                             default_cache_capacity_ = 16;
 
   AcceleratorBackendPreference accelerator_preference_ = AcceleratorBackendPreference::Auto;
 
-  std::uint64_t editor_pipeline_history_rebuild_count_ = 0;
+  std::uint64_t                editor_pipeline_history_rebuild_count_ = 0;
 
   void                         HandleEviction(sl_element_id_t evicted_id);
+  void                         SyncDirtyPipelineDocument(
+      const std::shared_ptr<PipelineGuard>& pipeline);
+  void                         CleanupIdlePipelineResources(const std::shared_ptr<PipelineGuard>& pipeline);
 
  public:
   PipelineMgmtService() = delete;
   explicit PipelineMgmtService(std::shared_ptr<Storage> storage_service)
-      : storage_(storage_service),
-        pipeline_cache_(default_cache_capacity_),
-        loaded_pipelines_() {}
+      : storage_(storage_service), pipeline_cache_(default_cache_capacity_), loaded_pipelines_() {}
 
   void               SavePipeline(std::shared_ptr<PipelineGuard> pipeline);
+
+  /**
+   * @brief Unpin a live pipeline without writing storage or clearing dirty.
+   *
+   * Thumbnail, analysis, and export must call this instead of @ref SavePipeline.
+   * When other pins remain (the editor), GPU session caches stay. When this is
+   * the last pin, intermediate GPU caches and the one-shot device are released
+   * so unused LRU entries do not keep VRAM. Must not be called while holding
+   * @c CPUPipelineExecutor::GetRenderLock().
+   *
+   * @param pipeline Guard returned by @ref LoadPipeline; no-op if null.
+   */
+  void               ReleasePipelineUse(std::shared_ptr<PipelineGuard> pipeline);
+
+  /// Load image-local RAW color data, including DNG profiles absent from older projects.
+  static void InjectImageRawMetadata(CPUPipelineExecutor& executor, const Image& image);
 
   /// Persist the current editor graph and serialized pipeline state while the
   /// caller keeps its editor guard pinned. `expected_materialized_state` is
   /// the state observed before the in-memory history mutation and prevents a
   /// concurrent writer from being overwritten.
-  auto PersistEditorHistoryState(const std::shared_ptr<PipelineGuard>& pipeline,
-                                 const ImageEditState&                 expected_materialized_state,
-                                 std::string* error = nullptr) -> bool;
+  auto               PersistEditorHistoryState(const std::shared_ptr<PipelineGuard>& pipeline,
+                                               const ImageEditState&                 expected_materialized_state,
+                                               std::string*                          error = nullptr) -> bool;
 
   auto               LoadPipeline(sl_element_id_t id) -> std::shared_ptr<PipelineGuard>;
 
-  /// Load editor params for `id` using history tip as authority.
-  /// If checkpoint (params + head/chain label) matches active Version tip, import params
-  /// (skip first-parent replay). Otherwise rebuild from root + first-parent chain and mark
-  /// write-back. Thumbnail/export must use LoadPipeline (no editor history validation).
+  /**
+   * @brief Wait until @p pipeline pin_count_ equals @p expected.
+   * @pre Must not hold the cache lock or the pipeline render lock.
+   * @return true if the count matched before @p timeout.
+   */
+  auto WaitUntilPinCount(const std::shared_ptr<PipelineGuard>& pipeline, size_t expected,
+                         std::chrono::milliseconds timeout) -> bool;
+
+  /// Test/instrumentation: executor+document constructions for cache misses.
+  [[nodiscard]] auto PipelineConstructCount() const -> std::uint64_t {
+    return pipeline_construct_count_;
+  }
+  /// Test/instrumentation: LoadPipeline returns, including cache hits and waiters.
+  [[nodiscard]] auto PipelineLoadCount() const -> std::uint64_t { return pipeline_load_count_; }
+  void               ResetPipelineAcquireCountsForTesting() {
+    pipeline_construct_count_ = 0;
+    pipeline_load_count_      = 0;
+  }
+
+  /** @brief Save the guard's authoritative GPU DAG document. */
+  void               SyncPipelineDocument(const std::shared_ptr<PipelineGuard>& pipeline);
+
+  /// Load editor document for `id` using history tip as authority.
+  /// If checkpoint (document + root/head/chain labels) matches active Version tip, load the
+  /// document (skip first-parent replay). Otherwise rebuild from root + first-parent typed
+  /// batches and mark write-back. Thumbnail/export must use LoadPipeline.
   auto               LoadEditorPipeline(sl_element_id_t id) -> std::shared_ptr<PipelineGuard>;
 
   /// Test/instrumentation counter: increments each time LoadEditorPipeline rebuilds from
@@ -141,37 +190,39 @@ class PipelineMgmtService final {
     editor_pipeline_history_rebuild_count_ = 0;
   }
 
-  /// Persist the current metadata-resolved pipeline as the immutable root for a newly imported
-  /// image. Calling this again for an image that already has a root verifies and loads that root;
-  /// it never replaces the stored root state.
+  /// Persist the current metadata-resolved document as the immutable root for a newly imported
+  /// image. When @p raw_color_context is null (non-RAW RGB files), Rec.709 XYZ→camera matrices
+  /// are bound onto the Develop node before the root is written. Calling this again for an image
+  /// that already has a root verifies and loads that root; it never replaces the stored root state.
   void               InitializeImageRoot(const std::shared_ptr<PipelineGuard>& pipeline,
                                          const RawRuntimeColorContext*         raw_color_context = nullptr);
 
-  /// Switch the live editor parameter table to another Version on the same image.
+  /// Switch the live editor document to another Version on the same image.
   ///
   /// Preconditions: `pipeline` is a loaded editor guard with a commit graph. The caller has already
   /// completed a save checkpoint so the working journal is empty for this image.
   ///
-  /// Behavior: sets the active Version on the CommitGraph (history-owned head moves here), then
-  /// rebuilds the executor params from the immutable root plus the first-parent chain under the
-  /// render lock (or imports a matching checkpoint if present). On any failure the prior Version
-  /// remains active and the prior pipeline is restored — never publishes a partially reconstructed
-  /// pipeline. Does not invent a second head on the guard.
+  /// Behavior: resolves the target first-parent chain, then rebuilds the same live
+  /// document from the immutable root plus typed batches under the render lock. On any failure the
+  /// prior Version remains active and the prior document is restored. Does not invent a second head
+  /// on the guard.
   ///
-  /// @return true when the Version tip and pipeline params both match the checked-out head.
-  auto CheckoutVersion(const std::shared_ptr<PipelineGuard>& pipeline,
-                       const version_ref_id_t& version_id, std::string* error = nullptr) -> bool;
+  /// @return true when the Version tip and live document both match the checked-out head.
+  auto               CheckoutVersion(const std::shared_ptr<PipelineGuard>& pipeline,
+                                     const version_ref_id_t& version_id, std::string* error = nullptr)
+      -> bool;
 
-  /// Rebuild the executor params from the immutable root and the first-parent chain of the
+  /// Rebuild the live document from the immutable root and the first-parent chain of the
   /// currently active Version tip. Used when the checkpoint label does not match history.
-  auto RebuildActiveEditorPipeline(const std::shared_ptr<PipelineGuard>& pipeline,
-                                   std::string* error = nullptr) -> bool;
+  auto               RebuildActiveEditorPipeline(const std::shared_ptr<PipelineGuard>& pipeline,
+                                                 std::string*                          error = nullptr)
+      -> bool;
 
-  /// Clean project-exit garbage collection: mark from every Version head through both parents and
-  /// delete unreachable EditCommit rows. Must run only after the final successful save; abnormal
-  /// shutdown must not call this.
+  /// Clean project-exit garbage collection: mark from every Version head through first-parent
+  /// reachability and delete unreachable EditCommit rows. Must run only after the final
+  /// successful save; abnormal shutdown must not call this.
   /// @return number of deleted commit rows.
-  auto CollectUnreachableEditCommits() -> std::size_t;
+  auto               CollectUnreachableEditCommits() -> std::size_t;
 
   void               DeletePipeline(sl_element_id_t id);
   void               DeletePipelines(std::span<const sl_element_id_t> ids);
@@ -185,34 +236,31 @@ class PipelineMgmtService final {
 
   /// Persist only the requested live pipeline. This avoids saving unrelated dirty editor state.
   void SyncPipeline(sl_element_id_t id);
-
-  // Phase 3: capture a read-only snapshot of the current pipeline state without
-  // pinning the live guard, forcing it to disk, or touching dirty state. The
-  // returned executor is an independent clone; rendering on it does not affect the
-  // live pipeline. May briefly block on the live executor's render lock
-  // (serializes with an in-flight editor render on the same executor). Returns
-  // nullptr and writes *error on failure.
-  auto LoadPipelineSnapshot(sl_element_id_t id, image_id_t image_id, std::string* error)
-      -> std::shared_ptr<PipelineSnapshot>;
-
-  // Release the snapshot executor's intermediate buffers (mirrors SavePipeline's
-  // last-pin cleanup). Safe to call from the snapshot's task callback; the
-  // shared_ptr then drops naturally. Not a storage write. No-op if null.
-  void ReleasePipelineSnapshot(std::shared_ptr<PipelineSnapshot> snapshot);
 };
 
-/// Checkpoint label: which history tip the serialized params claim to match.
-/// Not a pipeline-owned head — only a tag stored next to the parameter table blob.
+/// Checkpoint label: which history tip the serialized document claims to match.
+/// Not a pipeline-owned head — only a tag stored next to the document blob.
 struct PipelineCheckpointIdentity {
-  head_commit_hash_t       head  = std::nullopt;
+  head_commit_hash_t       head = std::nullopt;
   transaction_chain_hash_t chain{};
 };
 
 /// True when the checkpoint label on `state` matches the history tip after WAL attach.
 /// Match ⇒ safe to import params without first-parent SetOperator replay.
-[[nodiscard]] auto CheckpointMatchesLogicalHead(const ImageEditState& state,
-                                                head_commit_hash_t logical_head,
+[[nodiscard]] auto CheckpointMatchesLogicalHead(const ImageEditState&           state,
+                                                head_commit_hash_t              logical_head,
                                                 const transaction_chain_hash_t& logical_chain)
     -> bool;
+
+/**
+ * @brief Replace the guard's writable document and bind it to the existing executor.
+ *
+ * Does not clone @p document again. Does not take the render lock.
+ *
+ * @pre Caller holds the executor render lock when @p guard is live.
+ * @param guard Loaded editor guard that already owns an executor.
+ * @param document Complete DAG that becomes the only writable document.
+ */
+void BindLivePipelineDocument(PipelineGuard& guard, PipelineDocument document);
 
 }  // namespace alcedo

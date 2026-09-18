@@ -26,13 +26,6 @@ Item {
     readonly property color colBase: appTheme.bgBaseColor
     readonly property color colHover: appTheme.hoverColor
 
-    // Operator-shaped params builders (Phase 6A default is {"value": v}).
-    function numericParams(key, v) {
-        var o = {}
-        o[key] = v
-        return JSON.stringify(o)
-    }
-
     function wireEnabled() {
         const on = root.controlsEnabled
         exposureModel.enabled = on
@@ -141,7 +134,6 @@ Item {
         step: 0.01
         precision: 2
         submitter: root.editorSession
-        paramsBuilder: function (v) { return root.numericParams("exposure", v) }
     }
     EditorAdjustmentValueModel {
         id: contrastModel
@@ -154,7 +146,6 @@ Item {
         step: 1
         precision: 0
         submitter: root.editorSession
-        paramsBuilder: function (v) { return root.numericParams("contrast", v) }
     }
     EditorAdjustmentValueModel {
         id: highlightsModel
@@ -167,7 +158,6 @@ Item {
         step: 1
         precision: 0
         submitter: root.editorSession
-        paramsBuilder: function (v) { return root.numericParams("highlights", v) }
     }
     EditorAdjustmentValueModel {
         id: shadowsModel
@@ -180,7 +170,6 @@ Item {
         step: 1
         precision: 0
         submitter: root.editorSession
-        paramsBuilder: function (v) { return root.numericParams("shadows", v) }
     }
     EditorAdjustmentValueModel {
         id: whitesModel
@@ -193,7 +182,6 @@ Item {
         step: 1
         precision: 0
         submitter: root.editorSession
-        paramsBuilder: function (v) { return root.numericParams("white", v) }
     }
     EditorAdjustmentValueModel {
         id: blacksModel
@@ -206,7 +194,6 @@ Item {
         step: 1
         precision: 0
         submitter: root.editorSession
-        paramsBuilder: function (v) { return root.numericParams("black", v) }
     }
     EditorToneCurveModel {
         id: curveModel

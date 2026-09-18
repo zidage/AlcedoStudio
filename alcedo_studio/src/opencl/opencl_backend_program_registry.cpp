@@ -18,6 +18,7 @@ void RegisterOpenClEditPipelinePrograms();
 void RegisterOpenClGeometryPrograms();
 void RegisterOpenClScopePrograms();
 void RegisterOpenClDemosaicNetPrograms();
+void RegisterOpenClGpuDagPrograms();
 
 namespace {
 
@@ -33,6 +34,7 @@ void RegisterBuiltinOpenClProgramManifests() {
     RegisterOpenClGeometryPrograms();
     RegisterOpenClScopePrograms();
     RegisterOpenClDemosaicNetPrograms();
+    RegisterOpenClGpuDagPrograms();
   });
 }
 

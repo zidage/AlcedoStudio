@@ -31,6 +31,7 @@ namespace alcedo::ui {
 /// Acquire sole live-pipeline ownership (`render_lock_`). History waits for
 /// render to finish the current frame. The GUI must not block on this: session
 /// code defers Version ops until render is idle, then takes the lock (free).
+/// Selection / panel projection must never call this.
 auto LockLivePipeline(alcedo::CPUPipelineExecutor& executor) -> std::unique_lock<std::mutex>;
 
 /// Stable field names shared by the editor models and the adjustment-transfer /
@@ -46,14 +47,15 @@ void UpsertCommittedSnapshot(alcedo::EditorRenderAdjustmentSnapshot* snapshot,
 /// parameter objects are explicit defaults; a missing supported field is never inferred later.
 auto MakeEmptyCompleteAdjustmentSnapshot() -> alcedo::EditorRenderAdjustmentSnapshot;
 
-/// Decode the pipeline parameter document stored by a save checkpoint into the complete editor
-/// snapshot used by queue reductions. This parser is pure and never touches an executor.
+/// Decode a CPU-parameter JSON object into the complete editor snapshot.
+/// Not used by the product checkpoint path; retained for ordinary-payload tests.
 auto MakeAdjustmentSnapshotFromPipelineParams(
     const nlohmann::json& pipeline_params, alcedo::EditorRenderAdjustmentSnapshot* snapshot,
     std::string* error) -> bool;
 
 /// Build the committed adjustment snapshot by reading each field through live
-/// GetOperator / GetParams (not by re-parsing ExportPipelineParams stage JSON).
+/// GetOperator / GetParams. Does not dump the full stage document into
+/// @c params_json; that field stays empty on the live path.
 /// Caller must hold the executor render lock.
 auto MakeAdjustmentSnapshotFromLivePipeline(alcedo::CPUPipelineExecutor& executor,
                                             alcedo::EditorRenderAdjustmentSnapshot* snapshot,
@@ -96,14 +98,7 @@ auto VersionNameExists(const alcedo::CommitGraph& graph, const std::string& name
 auto UniqueVersionName(const alcedo::CommitGraph& graph, std::string requested,
                        const alcedo::version_ref_id_t* ignored = nullptr) -> std::string;
 
-/// Apply one ordinary commit to an immutable adjustment snapshot. No journal, graph, or executor
-/// state is changed by this function.
-auto ApplyCommittedPayloadToSnapshot(alcedo::EditorRenderAdjustmentSnapshot* snapshot,
-                                     const alcedo::OrdinaryEditPayload& payload,
-                                     bool use_after_value, std::string* error) -> bool;
-
-/// Apply one history commit to an immutable adjustment snapshot. Merge before-values are resolved
-/// against the commit's first-parent chain, so the live executor is not consulted.
+/// Apply one history commit to an immutable adjustment snapshot.
 auto ApplyHistoryCommitToSnapshot(alcedo::EditorRenderAdjustmentSnapshot* snapshot,
                                   const alcedo::CommitGraph& graph,
                                   const alcedo::EditCommit& commit, bool use_after_value,

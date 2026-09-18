@@ -10,6 +10,7 @@
 #include <QThread>
 #include <chrono>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 #include "app/editor_adjustment_pipeline.hpp"
@@ -449,15 +450,17 @@ void EditorSessionRenderSchedulerPort::DispatchPipelineFrame(Job job, alcedo::IF
     task.options_.is_blocking_                                         = false;
     const bool apply_adjustment =
         alcedo::ReasonAppliesAdjustmentSnapshot(job.request.intent.reason);
+    const bool live_parameters_applied = job.request.intent.live_parameters_applied;
     task.configure_under_render_lock_ = [snapshot = job.request.intent.adjustment, sink,
                                          geometry_overlay_only =
                                              job.request.intent.geometry_overlay_only,
-                                         apply_adjustment](alcedo::PipelineTask& locked_task) {
+                                         apply_adjustment,
+                                         live_parameters_applied](alcedo::PipelineTask& locked_task) {
       auto locked_exec = locked_task.pipeline_executor_;
       if (!locked_exec) {
         return false;
       }
-      if (apply_adjustment) {
+      if (apply_adjustment && !live_parameters_applied) {
         std::string apply_error;
         if (!alcedo::ApplyEditorAdjustmentSnapshot(*locked_exec, snapshot, &apply_error)) {
           throw std::runtime_error(apply_error.empty() ? "Failed to apply editor adjustment"
@@ -479,13 +482,18 @@ void EditorSessionRenderSchedulerPort::DispatchPipelineFrame(Job job, alcedo::IF
       };
     }
     const auto request_for_trace = job.request;
-    task.on_complete_            = [this, job, request_for_trace](bool success) mutable {
+    task.on_complete_            = [this, job, request_for_trace](bool success,
+                                                       std::string message) mutable {
       TraceDetailRequest("pipeline-return", request_for_trace, success ? "success" : "failed");
       if (JobIsCancelled(job)) {
         FinishJob(job, false, "Cancelled during execution");
         return;
       }
-      FinishJob(job, success, success ? "Frame ready" : "Pipeline returned an empty result");
+      if (success) {
+        FinishJob(job, true, "Frame ready");
+        return;
+      }
+      FinishJob(job, false, message.empty() ? "Pipeline returned an empty result" : std::move(message));
     };
     scheduler->ScheduleTask(std::move(task));
   } catch (const std::exception& ex) {

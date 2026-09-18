@@ -12,7 +12,7 @@ import Alcedo.Main 1.0
 // icon column stays put; the panel host clips a full-width body.
 Item {
     id: root
-    objectName: "editorHistoryVersionsRail"
+    objectName: "editorWorkspaceRail"
 
     property var theme: null
     property var host: null
@@ -27,6 +27,7 @@ Item {
     // Scroll offsets stored outside Loader-owned panel bodies.
     property real historyListContentY: 0
     property real versionsListContentY: 0
+    property real maskGroupsListContentY: 0
     property string _lastBodyPage: ""
 
     readonly property bool versionCheckoutEnabled: editorSession
@@ -46,11 +47,18 @@ Item {
     readonly property int panelRadius: theme ? theme.panelRadius : appTheme.panelRadius
 
     readonly property string activePage: editorSession
-                                         ? String(editorSession.historyPanelPage || "")
+                                         ? String(editorSession.editorToolPanelPage || "")
                                          : ""
-    readonly property bool panelExpanded: activePage === "history" || activePage === "versions"
+    readonly property bool panelExpanded: activePage === "history"
+                                          || activePage === "versions"
+                                          || activePage === "nodes"
+                                          || activePage === "maskgroups"
     readonly property int railWidth: 48
-    readonly property int expandedPanelWidth: appTheme.editorSidePanelWidth
+    readonly property int expandedPanelWidth: {
+        if (activePage === "nodes" || activePage === "maskgroups")
+            return nodesLayoutStore.preferredPanelWidth
+        return appTheme.editorSidePanelWidth
+    }
     readonly property int panelGap: appTheme.spaceSm
 
     // Visual fold progress (0 closed → 1 open). Drives layout width + body
@@ -64,7 +72,8 @@ Item {
     readonly property real panelRevealWidth: (panelGap + expandedPanelWidth) * panelOpenProgress
     readonly property real totalWidth: railWidth + panelRevealWidth
     readonly property string bodyPage: {
-        if (activePage === "history" || activePage === "versions")
+        if (activePage === "history" || activePage === "versions" || activePage === "nodes"
+                || activePage === "maskgroups")
             return activePage
         return _lastBodyPage
     }
@@ -96,6 +105,19 @@ Item {
         editorSession: root.editorSession
     }
 
+    EditorNodeLayoutStore {
+        id: nodesLayoutStore
+    }
+
+    EditorNodeController {
+        id: nodesController
+        objectName: "editorNodeController"
+        editorSession: root.editorSession
+        layoutStore: nodesLayoutStore
+    }
+
+    readonly property alias nodeController: nodesController
+
     function driveFoldProgress(value) {
         foldManualDrive = true
         panelOpenProgress = Math.max(0, Math.min(1, value))
@@ -108,10 +130,10 @@ Item {
 
     function selectPage(page) {
         if (!editorSession) return
-        if (String(editorSession.historyPanelPage || "") === page) {
-            editorSession.historyPanelPage = ""
+        if (String(editorSession.editorToolPanelPage || "") === page) {
+            editorSession.editorToolPanelPage = ""
         } else {
-            editorSession.historyPanelPage = page
+            editorSession.editorToolPanelPage = page
         }
     }
 
@@ -126,6 +148,8 @@ Item {
             historyListContentY = y
         else if (_lastBodyPage === "versions")
             versionsListContentY = y
+        else if (_lastBodyPage === "maskgroups")
+            maskGroupsListContentY = y
     }
 
     function applyBodyScrollRestore() {
@@ -137,6 +161,8 @@ Item {
             y = historyListContentY
         else if (bodyPage === "versions")
             y = versionsListContentY
+        else if (bodyPage === "maskgroups")
+            y = maskGroupsListContentY
         body.restoreListContentY(y)
     }
 
@@ -145,7 +171,8 @@ Item {
         // Keep the last non-empty page so a closing fold can clip that body
         // until panelOpenProgress reaches 0.
         captureBodyScroll()
-        if (activePage === "history" || activePage === "versions")
+        if (activePage === "history" || activePage === "versions" || activePage === "nodes"
+                || activePage === "maskgroups")
             _lastBodyPage = activePage
     }
 
@@ -171,7 +198,7 @@ Item {
 
     Rectangle {
         id: rail
-        objectName: "editorHistoryRail"
+        objectName: "editorToolRail"
         anchors.left: parent.left
         anchors.top: parent.top
         anchors.bottom: parent.bottom
@@ -228,6 +255,46 @@ Item {
             }
 
             IconActionButton {
+                id: nodesRailButton
+                objectName: "editorNodesRailButton"
+                compact: true
+                enabled: true
+                selected: root.activePage === "nodes"
+                selectedOutline: true
+                selectedOutlineColor: root.colText
+                iconSrc: "qrc:/panel_icons/pipeline.svg"
+                iconColorDefault: selected ? root.colText : root.colMuted
+                iconColorMuted: root.colMuted
+                fillIdle: root.colCardSurface
+                fillHover: appTheme.buttonHoveredFillColor
+                fillPressed: appTheme.buttonPressedFillColor
+                fillSelected: root.colCardSurface
+                focusRingColor: root.colText
+                actionName: selected ? qsTr("Hide Nodes") : qsTr("Show Nodes")
+                onClicked: root.selectPage("nodes")
+            }
+
+            IconActionButton {
+                id: maskGroupsRailButton
+                objectName: "editorMaskGroupsRailButton"
+                compact: true
+                enabled: true
+                selected: root.activePage === "maskgroups"
+                selectedOutline: true
+                selectedOutlineColor: root.colText
+                iconSrc: "qrc:/panel_icons/nodes.svg"
+                iconColorDefault: selected ? root.colText : root.colMuted
+                iconColorMuted: root.colMuted
+                fillIdle: root.colCardSurface
+                fillHover: appTheme.buttonHoveredFillColor
+                fillPressed: appTheme.buttonPressedFillColor
+                fillSelected: root.colCardSurface
+                focusRingColor: root.colText
+                actionName: selected ? qsTr("Hide Mask Groups") : qsTr("Show Mask Groups")
+                onClicked: root.selectPage("maskgroups")
+            }
+
+            IconActionButton {
                 id: backgroundTasksRailButton
                 objectName: "editorBackgroundTasksRailButton"
                 compact: true
@@ -249,7 +316,7 @@ Item {
     // so the viewport reflows with the fold (filmstrip mode).
     Item {
         id: historyPanelHost
-        objectName: "editorHistoryVersionsPanelHost"
+        objectName: "editorToolPanelHost"
         anchors.left: rail.right
         anchors.leftMargin: root.panelGap * root.panelOpenProgress
         anchors.top: parent.top
@@ -261,7 +328,7 @@ Item {
 
         Rectangle {
             id: historyPanel
-            objectName: "editorHistoryVersionsPanel"
+            objectName: "editorToolPanel"
             width: root.expandedPanelWidth
             height: parent.height
             x: 0
@@ -272,16 +339,25 @@ Item {
 
             Loader {
                 id: panelBodyLoader
-                objectName: "editorHistoryVersionsBodyLoader"
+                objectName: "editorToolBodyLoader"
                 anchors.fill: parent
                 // Keep the last body mounted while a close fold is in flight.
-                // A fully closed rail (progress ≈ 0) owns no list delegates.
+                // A fully closed rail (progress ≈ 0) owns no list or graph delegates.
                 active: root.layoutExpanded
-                        && (root.bodyPage === "history" || root.bodyPage === "versions")
+                        && (root.bodyPage === "history" || root.bodyPage === "versions"
+                            || root.bodyPage === "nodes" || root.bodyPage === "maskgroups")
                 asynchronous: false
-                sourceComponent: root.bodyPage === "history" ? historyBodyComponent
-                                 : (root.bodyPage === "versions" ? versionsBodyComponent
-                                                                   : null)
+                sourceComponent: {
+                    if (root.bodyPage === "history")
+                        return historyBodyComponent
+                    if (root.bodyPage === "versions")
+                        return versionsBodyComponent
+                    if (root.bodyPage === "nodes")
+                        return nodesBodyComponent
+                    if (root.bodyPage === "maskgroups")
+                        return maskGroupsBodyComponent
+                    return null
+                }
 
                 onLoaded: {
                     root._panelBodyCreateCount += 1
@@ -319,6 +395,36 @@ Item {
             Component.onDestruction: {
                 if (root._lastBodyPage === "versions" && listContentY !== undefined)
                     root.versionsListContentY = Number(listContentY || 0)
+                root._panelBodyDestroyCount += 1
+            }
+        }
+    }
+
+    Component {
+        id: nodesBodyComponent
+        EditorNodesPanel {
+            theme: root.theme
+            editorSession: root.editorSession
+            nodeController: nodesController
+            nodeLayoutStore: nodesLayoutStore
+            Component.onDestruction: {
+                root._panelBodyDestroyCount += 1
+            }
+        }
+    }
+
+    Component {
+        id: maskGroupsBodyComponent
+        // Shares nodesController / nodesLayoutStore with the Nodes page: one
+        // owner, two projections of the same PipelineDocument DAG.
+        EditorMaskGroupsPanel {
+            theme: root.theme
+            editorSession: root.editorSession
+            nodeController: nodesController
+            nodeLayoutStore: nodesLayoutStore
+            Component.onDestruction: {
+                if (root._lastBodyPage === "maskgroups" && listContentY !== undefined)
+                    root.maskGroupsListContentY = Number(listContentY || 0)
                 root._panelBodyDestroyCount += 1
             }
         }

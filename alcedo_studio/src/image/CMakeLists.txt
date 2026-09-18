@@ -85,6 +85,7 @@ endif()
 def_library(Image
     SOURCES ${ALCEDO_SRC_ROOT}/image/image.cpp 
     ${ALCEDO_SRC_ROOT}/image/metadata_extractor.cpp
+    ${ALCEDO_SRC_ROOT}/image/dng_color_profile_import.cpp
     PUBLIC_DEPS ImageBuffer
 )
 target_link_libraries(Image PRIVATE OpenImageIO::OpenImageIO)

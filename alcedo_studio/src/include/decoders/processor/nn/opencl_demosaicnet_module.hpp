@@ -75,6 +75,17 @@ class OpenClBayerDemosaicNet {
                                cl_command_queue queue              = nullptr,
                                bool             apply_gamma_decode = true) const;
 
+  // CUDA student-tile pack: read the original mono CFA (full-frame or cropped
+  // lattice via crop_x/crop_y), reflect-101 in the aligned lattice, and sparse-pack
+  // into the first NHWC4 activation. rgb_fc is the training-origin period table.
+  void ForwardReflectMonoCfaToHwc(cl_mem input_mono_cfa, int src_width, int src_height, int crop_x,
+                                  int crop_y, int aligned_width, int aligned_height, int origin_y,
+                                  int origin_x, int tile_height, int tile_width,
+                                  int mono_offset_floats, cl_mem rgb_fc, int period,
+                                  cl_mem output_rgb_hwc, opencl::nn::ActivationSlots& activation_slots,
+                                  cl_command_queue queue              = nullptr,
+                                  bool             apply_gamma_decode = true) const;
+
   [[nodiscard]] static auto NaturalOutputHeight(int input_h) -> int {
     return Spec::NaturalOutputHeight(input_h);
   }
@@ -159,6 +170,14 @@ class OpenClXTransDemosaicNet {
                                cl_mem output_rgb_hwc, opencl::nn::ActivationSlots& activation_slots,
                                cl_command_queue queue              = nullptr,
                                bool             apply_gamma_decode = true) const;
+
+  void ForwardReflectMonoCfaToHwc(cl_mem input_mono_cfa, int src_width, int src_height, int crop_x,
+                                  int crop_y, int aligned_width, int aligned_height, int origin_y,
+                                  int origin_x, int tile_height, int tile_width,
+                                  int mono_offset_floats, cl_mem rgb_fc, int period,
+                                  cl_mem output_rgb_hwc, opencl::nn::ActivationSlots& activation_slots,
+                                  cl_command_queue queue              = nullptr,
+                                  bool             apply_gamma_decode = true) const;
 
   [[nodiscard]] static auto NaturalOutputHeight(int input_h) -> int {
     return Spec::NaturalOutputHeight(input_h);

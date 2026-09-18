@@ -10,11 +10,14 @@
 #include <QSettings>
 #include <QStandardPaths>
 #include <algorithm>
+#include <mutex>
 #include <optional>
 #include <thread>
 #include <tuple>
 #include <unordered_set>
 #include <utility>
+
+#include "edit/runtime/drt_display.hpp"
 
 #include "ui/alcedo_main/album_backend/folder_controller.hpp"
 #include "ui/alcedo_main/album_backend/import_export.hpp"
@@ -973,6 +976,24 @@ auto ImportExportHandler::BuildExportQueue(
         task.recipe_->resize_.mode_ = ExportResizeMode::ORIGINAL_PIXELS;
       }
       if (is_hdr_export) task.recipe_->resize_.maximum_edge_pixels_ = 8192;
+
+      auto pipes = project_->handler().pipeline_service();
+      if (!pipes) {
+        throw std::runtime_error("Export pipeline service is unavailable");
+      }
+      auto live = pipes->LoadPipeline(elementId);
+      if (!live || !live->document_ || !live->document_->Drt() || !live->pipeline_) {
+        if (live) {
+          pipes->ReleasePipelineUse(live);
+        }
+        throw std::runtime_error("Export: document DRT is missing");
+      }
+      {
+        std::lock_guard<std::mutex> render_lock(live->pipeline_->GetRenderLock());
+        task.recipe_->output_color_ =
+            ExportColorProfileFromDrt(live->document_->Drt()->Params().Params());
+      }
+      pipes->ReleasePipelineUse(live);
 
       esvc->EnqueueExportTask(task);
       ++summary.queued_count_;

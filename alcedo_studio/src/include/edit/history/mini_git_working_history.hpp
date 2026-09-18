@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 
+#include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/history/commit_graph.hpp"
 
 namespace alcedo {
@@ -218,11 +219,8 @@ class MiniGitWorkingHistory final {
   /// a captured selection after a rejected named-ref path.
   void               PublishWorkingSelection(MiniGitWorkingSelection selection);
 
-  /// Plan a settled edit without mutating journal/graph/redo.
-  [[nodiscard]] auto PrepareAppendEdit(OrdinaryEditPayload payload) const -> MiniGitPreparedEdit;
-  /// Plan a merge commit without mutating journal/graph/redo.
-  [[nodiscard]] auto PrepareAppendMerge(commit_hash_t second_parent,
-                                        MergeEditPayload payload) const -> MiniGitPreparedEdit;
+  /// Plan a settled typed-batch edit without mutating journal/graph/redo.
+  [[nodiscard]] auto PrepareAppendEdit(PipelineEditBatch payload) const -> MiniGitPreparedEdit;
   /// Append one journal record, insert the commit, advance the head, and clear redo.
   auto               PublishPreparedEdit(const MiniGitPreparedEdit& prepared)
       -> MiniGitEditAppendResult;
@@ -235,13 +233,7 @@ class MiniGitWorkingHistory final {
                                           MiniGitWorkingSelection prior_selection,
                                           std::string* error) -> bool;
 
-  auto               AppendEdit(OrdinaryEditPayload payload) -> MiniGitEditAppendResult;
-  /// Create a merge commit whose first parent is the current working head and whose second
-  /// parent is the incoming branch head. The merge commit stores the resolved field delta
-  /// and folds into the first-parent chain hash. Journal append and head advance follows
-  /// the same pattern as AppendEdit.
-  auto               AppendMerge(commit_hash_t second_parent, MergeEditPayload payload)
-      -> MiniGitEditAppendResult;
+  auto               AppendEdit(PipelineEditBatch payload) -> MiniGitEditAppendResult;
 
   /// Plan Undo without mutating journal/graph/redo. `traversed_commits` holds the
   /// abandoned head commit for before-value application.

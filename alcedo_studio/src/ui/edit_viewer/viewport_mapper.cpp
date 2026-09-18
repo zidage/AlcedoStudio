@@ -60,7 +60,8 @@ auto ViewportMapper::WidgetPointToImageUv(const QPointF& widget_pos,
 
 auto ViewportMapper::ImageUvToWidgetPoint(const QPointF& uv, const ViewportWidgetInfo& widget_info,
                                           const ViewportImageInfo& image_info, float zoom,
-                                          const QVector2D& pan) -> std::optional<QPointF> {
+                                          const QVector2D& pan, bool clamp_uv)
+    -> std::optional<QPointF> {
   if (image_info.image_width <= 0 || image_info.image_height <= 0 || widget_info.widget_width <= 0 ||
       widget_info.widget_height <= 0) {
     return std::nullopt;
@@ -71,8 +72,10 @@ auto ViewportMapper::ImageUvToWidgetPoint(const QPointF& uv, const ViewportWidge
   const float vh = std::max(1.0f, static_cast<float>(widget_info.widget_height) * dpr);
   const auto  scale = ComputeLetterboxScale(widget_info, image_info);
 
-  const float u = Clamp01(static_cast<float>(uv.x()));
-  const float v = Clamp01(static_cast<float>(uv.y()));
+  const float u =
+      clamp_uv ? Clamp01(static_cast<float>(uv.x())) : static_cast<float>(uv.x());
+  const float v =
+      clamp_uv ? Clamp01(static_cast<float>(uv.y())) : static_cast<float>(uv.y());
   const float img_x = (2.0f * u) - 1.0f;
   const float img_y = 1.0f - (2.0f * v);
   const float ndc_x = (img_x * scale.x * std::max(zoom, 1e-4f)) + pan.x();

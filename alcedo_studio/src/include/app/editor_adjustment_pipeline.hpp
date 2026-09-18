@@ -17,6 +17,7 @@ namespace alcedo {
 class CommitGraph;
 class CPUPipelineExecutor;
 class EditCommit;
+class PipelineDocument;
 
 struct EditorAdjustmentFieldSpec {
   PipelineStageName stage_name    = PipelineStageName::Stage_Count;
@@ -31,6 +32,24 @@ struct EditorAdjustmentOperatorState {
 /// Resolve the stable QML field key to the pipeline operator it controls.
 auto ResolveEditorAdjustmentField(const std::string& field_key)
     -> std::optional<EditorAdjustmentFieldSpec>;
+
+/**
+ * @brief Map a field write payload onto PipelineDocument Model JSON keys.
+ *
+ * Panel writes use field keys (`exposure`) or a scalar `value`. Document Models
+ * use `exposure_ev` / `cube_path`. Unknown keys are left unchanged.
+ */
+auto EditorAdjustmentDocumentParamsFromWrite(const std::string& field_key, nlohmann::json params)
+    -> nlohmann::json;
+
+/**
+ * @brief Map a field write or document Model JSON onto CPU operator keys.
+ *
+ * CPU operators use `exposure` / `ocio_lmt`. Document `exposure_ev` / `cube_path`
+ * and scalar `value` writes are rewritten. Unknown keys are left unchanged.
+ */
+auto EditorAdjustmentExecutorParamsFromWrite(const std::string& field_key, nlohmann::json params)
+    -> nlohmann::json;
 
 /// Return the canonical QML field key for a committed operator payload.
 auto EditorAdjustmentFieldKey(PipelineStageName stage_name, OperatorType operator_type)
@@ -91,8 +110,10 @@ auto ResetEditableOperatorsToDefaultsPreservingImageLocal(CPUPipelineExecutor& e
  * 1. Capture prior ExportPipelineParams for failure rollback.
  * 2. Reset editable operators to defaults (preserve image-local keys).
  * 3. Apply first-parent chain commit after-values via SetOperator.
- * 4. SetExecutionStages once.
- * 5. On any failure, ImportPipelineParams(prior) and return false.
+ * 4. Remirror current-panel CPU operators from the bound PipelineDocument when
+ *    present, so Paste InsertNode values reach panel snapshots.
+ * 5. SetExecutionStages once.
+ * 6. On any failure, ImportPipelineParams(prior) and return false.
  *
  * Caller must hold the executor render lock. Does not touch Version refs, WAL,
  * or DuckDB.
@@ -106,7 +127,32 @@ auto ApplyVersionHeadToLivePipeline(CPUPipelineExecutor&      executor, const Co
                                     const head_commit_hash_t& head, std::string* error) -> bool;
 
 /**
- * @brief Apply one ordinary or merge commit's after (or before) values to the live pipeline.
+ * @brief Copy current-panel Model JSON from @p document onto CPU stage operators.
+ *
+ * Grade fields use the Default Grade (`grade.primary`, else the first backbone
+ * Grade). DRT/Post, Develop, and geometry fields use their document owners.
+ * CPU aliases (`exposure` / `ocio_lmt`) are applied so panel snapshots match
+ * the live document after Paste InsertNode or document replay.
+ *
+ * Missing owners are skipped. Caller holds the executor render lock.
+ */
+auto RemirrorCurrentPanelFromDocument(CPUPipelineExecutor& executor,
+                                      const PipelineDocument& document, std::string* error)
+    -> bool;
+
+/**
+ * @brief Copy one Model field onto the matching CPU stage operator.
+ *
+ * Used after a typed live write so the executor tracks the document owner.
+ * Caller holds the executor render lock.
+ */
+auto RemirrorEditorParameterToExecutor(CPUPipelineExecutor& executor,
+                                       const PipelineDocument& document,
+                                       const EditorParameterTarget& target, std::string* error)
+    -> bool;
+
+/**
+ * @brief Remirror CPU stages from one typed-batch commit's after (or before) values.
  *
  * Used by undo (before) and redo (after). Caller holds the render lock.
  */

@@ -1,0 +1,217 @@
+//  Copyright 2026 Yurun Zi
+//  SPDX-License-Identifier: GPL-3.0-only
+//  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
+
+#pragma once
+
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <memory>
+#include <vector>
+
+#include "decoders/processor/raw_processor_pattern.hpp"
+#include "edit/input/prepared_raw_input.hpp"
+
+namespace alcedo {
+namespace gpu_dag_test {
+
+inline auto MakeRggbPattern() -> RawCfaPattern {
+  RawCfaPattern pattern;
+  pattern.kind = RawCfaKind::Bayer2x2;
+  return pattern;
+}
+
+inline auto MakeXTransPattern() -> RawCfaPattern {
+  static constexpr int kRawFc[36] = {
+      1, 2, 1, 1, 0, 1, 1, 0, 1, 2, 1, 2, 0, 1, 0, 1, 2, 1,
+      1, 2, 1, 1, 0, 1, 1, 0, 1, 2, 1, 2, 2, 1, 2, 0, 1, 0,
+  };
+  RawCfaPattern pattern;
+  pattern.kind = RawCfaKind::XTrans6x6;
+  for (int i = 0; i < 36; ++i) {
+    pattern.xtrans_pattern.raw_fc[i] = kRawFc[i];
+    pattern.xtrans_pattern.rgb_fc[i] = FoldRawColorToRgb(kRawFc[i]);
+  }
+  return pattern;
+}
+
+inline auto DefaultLinearization() -> RawLinearizationParams {
+  RawLinearizationParams params;
+  for (int c = 0; c < 4; ++c) {
+    params.black_level[c] = 0.0f;
+    params.white_level[c] = 16383.0f;
+  }
+  params.cam_mul[0]       = 2.0f;
+  params.cam_mul[1]       = 1.0f;
+  params.cam_mul[2]       = 1.5f;
+  params.cam_mul[3]       = 1.0f;
+  params.apply_as_shot_wb = 1;
+  return params;
+}
+
+inline auto NearBlackLinearization() -> RawLinearizationParams {
+  auto params = DefaultLinearization();
+  for (int c = 0; c < 4; ++c) {
+    params.black_level[c] = 512.0f;
+  }
+  return params;
+}
+
+inline auto MakeDarkU16CfaPlane(std::uint32_t width, std::uint32_t height,
+                                const RawCfaPattern& pattern) -> HostImagePlane {
+  HostImagePlane plane;
+  plane.extent            = Extent2D{width, height};
+  plane.stride_bytes      = width * static_cast<std::uint32_t>(sizeof(std::uint16_t));
+  plane.format            = HostPixelFormat::U16Cfa;
+  const std::size_t bytes = plane.ByteCount();
+  auto storage = std::shared_ptr<std::byte>(new std::byte[bytes], [](std::byte* p) { delete[] p; });
+  auto* samples = reinterpret_cast<std::uint16_t*>(storage.get());
+  for (std::uint32_t y = 0; y < height; ++y) {
+    for (std::uint32_t x = 0; x < width; ++x) {
+      const std::uint32_t i     = y * width + x;
+      const int           color = RgbColorAt(pattern, static_cast<int>(y), static_cast<int>(x));
+      std::uint16_t value = static_cast<std::uint16_t>(520 + ((11 * y + 7 * x + 3 * color) % 40));
+      if (i % 17U == 0U) {
+        value = static_cast<std::uint16_t>(480);
+      }
+      if (i % 41U == 0U) {
+        value = static_cast<std::uint16_t>(900);
+      }
+      samples[i] = value;
+    }
+  }
+  plane.bytes = std::const_pointer_cast<const std::byte>(storage);
+  return plane;
+}
+
+inline auto MakeU16CfaPlane(std::uint32_t width, std::uint32_t height, const RawCfaPattern& pattern)
+    -> HostImagePlane {
+  HostImagePlane plane;
+  plane.extent            = Extent2D{width, height};
+  plane.stride_bytes      = width * static_cast<std::uint32_t>(sizeof(std::uint16_t));
+  plane.format            = HostPixelFormat::U16Cfa;
+  const std::size_t bytes = plane.ByteCount();
+  auto storage = std::shared_ptr<std::byte>(new std::byte[bytes], [](std::byte* p) { delete[] p; });
+  auto* samples = reinterpret_cast<std::uint16_t*>(storage.get());
+  for (std::uint32_t y = 0; y < height; ++y) {
+    for (std::uint32_t x = 0; x < width; ++x) {
+      const int           color   = RgbColorAt(pattern, static_cast<int>(y), static_cast<int>(x));
+      const std::uint16_t base[3] = {4000, 5000, 3000};
+      samples[y * width + x] =
+          static_cast<std::uint16_t>(base[color] + ((7 * y + 3 * x) % 17) * 10);
+    }
+  }
+  plane.bytes = std::const_pointer_cast<const std::byte>(storage);
+  return plane;
+}
+
+inline auto MakeF32RgbaPlane(std::uint32_t width, std::uint32_t height) -> HostImagePlane {
+  HostImagePlane plane;
+  plane.extent            = Extent2D{width, height};
+  plane.stride_bytes      = width * 16U;
+  plane.format            = HostPixelFormat::F32Rgba;
+  const std::size_t bytes = plane.ByteCount();
+  auto storage = std::shared_ptr<std::byte>(new std::byte[bytes], [](std::byte* p) { delete[] p; });
+  auto* px     = reinterpret_cast<float*>(storage.get());
+  for (std::uint32_t y = 0; y < height; ++y) {
+    for (std::uint32_t x = 0; x < width; ++x) {
+      const std::size_t i = (static_cast<std::size_t>(y) * width + x) * 4;
+      px[i + 0]           = (static_cast<float>(x) + 0.5f) / static_cast<float>(width);
+      px[i + 1]           = (static_cast<float>(y) + 0.5f) / static_cast<float>(height);
+      px[i + 2]           = 0.25f;
+      px[i + 3]           = 1.0f;
+    }
+  }
+  plane.bytes = std::const_pointer_cast<const std::byte>(storage);
+  return plane;
+}
+
+inline auto MakeDarkChromaticNoisePlane(std::uint32_t width, std::uint32_t height, float base)
+    -> HostImagePlane {
+  auto  plane = MakeF32RgbaPlane(width, height);
+  auto* px    = const_cast<float*>(reinterpret_cast<const float*>(plane.bytes.get()));
+  for (std::uint32_t i = 0; i < width * height; ++i) {
+    const auto u32 = [](std::uint32_t x) {
+      x ^= x << 13;
+      x ^= x >> 17;
+      x ^= x << 5;
+      return x;
+    };
+    const float n0 = static_cast<float>(u32(i * 3U + 1U) % 1000U) / 1000.0f;
+    const float n1 = static_cast<float>(u32(i * 5U + 7U) % 1000U) / 1000.0f;
+    const float n2 = static_cast<float>(u32(i * 7U + 13U) % 1000U) / 1000.0f;
+    float       r  = base * (0.35f + 1.3f * n0);
+    float       g  = base * (0.35f + 1.3f * n1);
+    float       b  = base * (0.35f + 1.3f * n2);
+    if (i % 19U == 0U) r = 0.0f;
+    if (i % 23U == 0U) g = 0.0f;
+    if (i % 29U == 0U) b = 0.0f;
+    if (i % 31U == 0U) {
+      r = 0.0f;
+      g = 0.0f;
+      b = 0.0f;
+    }
+    px[i * 4U + 0U] = r;
+    px[i * 4U + 1U] = g;
+    px[i * 4U + 2U] = b;
+    px[i * 4U + 3U] = 1.0f;
+  }
+  return plane;
+}
+
+inline auto MakeDarkSingleChannelSpikePlane(std::uint32_t width, std::uint32_t height, float base,
+                                            float spike) -> HostImagePlane {
+  auto  plane = MakeF32RgbaPlane(width, height);
+  auto* px    = const_cast<float*>(reinterpret_cast<const float*>(plane.bytes.get()));
+  for (std::uint32_t i = 0; i < width * height; ++i) {
+    float r = base;
+    float g = base;
+    float b = base;
+    if (i % 37U == 0U) {
+      const int channel = static_cast<int>(i / 37U) % 3;
+      r                 = channel == 0 ? spike : 0.0f;
+      g                 = channel == 1 ? spike : 0.0f;
+      b                 = channel == 2 ? spike : 0.0f;
+    }
+    px[i * 4U + 0U] = r;
+    px[i * 4U + 1U] = g;
+    px[i * 4U + 2U] = b;
+    px[i * 4U + 3U] = 1.0f;
+  }
+  return plane;
+}
+
+inline auto MakeSaturatedHueWheelPlane(std::uint32_t hues, float amplitude) -> HostImagePlane {
+  HostImagePlane plane;
+  plane.extent            = Extent2D{hues, 1};
+  plane.stride_bytes      = hues * 16U;
+  plane.format            = HostPixelFormat::F32Rgba;
+  const std::size_t bytes = plane.ByteCount();
+  auto storage = std::shared_ptr<std::byte>(new std::byte[bytes], [](std::byte* p) { delete[] p; });
+  auto*           px     = reinterpret_cast<float*>(storage.get());
+  constexpr float kTwoPi = 6.28318530718f;
+  const float     step   = kTwoPi / static_cast<float>(hues);
+  for (std::uint32_t i = 0; i < hues; ++i) {
+    const float h = static_cast<float>(i) * step;
+    px[i * 4 + 0] = amplitude * std::max(0.0f, std::cos(h));
+    px[i * 4 + 1] = amplitude * std::max(0.0f, std::cos(h - kTwoPi / 3.0f));
+    px[i * 4 + 2] = amplitude * std::max(0.0f, std::cos(h + kTwoPi / 3.0f));
+    px[i * 4 + 3] = 1.0f;
+  }
+  plane.bytes = std::const_pointer_cast<const std::byte>(storage);
+  return plane;
+}
+
+inline auto FullSensor(std::uint32_t width, std::uint32_t height) -> RawSensorGeometry {
+  RawSensorGeometry sensor;
+  sensor.raw_width  = static_cast<std::int32_t>(width);
+  sensor.raw_height = static_cast<std::int32_t>(height);
+  sensor.width      = sensor.raw_width;
+  sensor.height     = sensor.raw_height;
+  return sensor;
+}
+
+}  // namespace gpu_dag_test
+}  // namespace alcedo

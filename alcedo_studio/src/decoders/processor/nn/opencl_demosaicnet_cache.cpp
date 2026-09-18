@@ -83,6 +83,11 @@ auto OpenClDemosaicNetModelCache::Instance() -> OpenClDemosaicNetModelCache& {
   return instance;
 }
 
+auto OpenClNeuralDecodeMutex() -> std::mutex& {
+  static std::mutex mutex;
+  return mutex;
+}
+
 auto OpenClDemosaicNetModelCache::ResolveModelDir(const OpenClDemosaicNetLoadOptions& options)
     -> fs::path {
   if (!options.model_dir.empty()) {

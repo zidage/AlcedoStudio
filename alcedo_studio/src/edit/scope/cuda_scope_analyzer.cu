@@ -6,12 +6,16 @@
 
 #include "edit/scope/scope_analyzer.hpp"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdint>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
+#include <string>
+
+#include "utils/diagnostics/scope_diag.hpp"
 
 #include "edit/scope/detail/scope_cuda_shared.cuh"
 
@@ -192,6 +196,7 @@ class CudaScopeAnalyzerImpl final : public IScopeAnalyzer {
         frame.ready_signal.resource.get());
     if (!image_resource || !signal_resource || !image_resource->device_ptr ||
         !signal_resource->stream) {
+      diag::NoteScope("stage_skip missing_cuda_buffer_or_stream");
       return {};
     }
 
@@ -216,6 +221,7 @@ class CudaScopeAnalyzerImpl final : public IScopeAnalyzer {
     ReclaimCompletedSlots();
     ScopeSlot* slot = AcquireIdleSlot();
     if (!slot) {
+      diag::NoteScope("stage_skip no_idle_slot");
       return {};
     }
 
@@ -230,6 +236,7 @@ class CudaScopeAnalyzerImpl final : public IScopeAnalyzer {
         cudaMemcpyDeviceToDevice, signal_resource->stream);
     if (copy_status != cudaSuccess) {
       slot->phase = ScopeSlot::Phase::Idle;
+      diag::NoteScope(std::string("stage_skip memcpy=") + cudaGetErrorString(copy_status));
       return {};
     }
     cudaEventRecord(slot->input_ready->event, signal_resource->stream);
@@ -263,6 +270,7 @@ class CudaScopeAnalyzerImpl final : public IScopeAnalyzer {
         static_cast<scope::cuda_detail::CudaLinearImageResource*>(frame.image.resource.get());
     if (!event_resource || event_resource->slot_index < 0 || !image_resource ||
         !image_resource->device_ptr) {
+      diag::NoteScope("submit_skip missing_staged_event");
       return;
     }
 
@@ -320,6 +328,7 @@ class CudaScopeAnalyzerImpl final : public IScopeAnalyzer {
 
   auto GetLatestOutput() -> ScopeOutputSet override {
     std::lock_guard<std::mutex> lock(mutex_);
+    ReclaimCompletedSlots();
 
     ScopeSlot* latest_slot = nullptr;
     for (auto& slot : slots_) {
@@ -337,6 +346,7 @@ class CudaScopeAnalyzerImpl final : public IScopeAnalyzer {
     if (!latest_slot) {
       return {};
     }
+    consumed_generation_ = std::max(consumed_generation_, latest_slot->generation);
 
     ScopeOutputSet output;
     output.generation      = latest_slot->generation;
@@ -394,11 +404,19 @@ class CudaScopeAnalyzerImpl final : public IScopeAnalyzer {
 
  private:
   void ReclaimCompletedSlots() {
-    // Caller holds mutex_.
+    // Caller holds mutex_. Keep the newest completed Dispatched slot until
+    // GetLatestOutput has returned it. Reclaiming on complete used to idle the
+    // only live histogram buffer before the deferred poll could copy it, which
+    // left the editor stuck on "Reading display scope" during continuous presents.
     for (auto& slot : slots_) {
       slot.EnsureAnalysisDoneEvent();
-      if (slot.phase == ScopeSlot::Phase::Dispatched && slot.analysis_done &&
-          cudaEventQuery(slot.analysis_done) == cudaSuccess) {
+      if (slot.phase != ScopeSlot::Phase::Dispatched || !slot.analysis_done) {
+        continue;
+      }
+      if (cudaEventQuery(slot.analysis_done) != cudaSuccess) {
+        continue;
+      }
+      if (slot.generation < consumed_generation_) {
         slot.phase = ScopeSlot::Phase::Idle;
       }
     }
@@ -474,7 +492,8 @@ class CudaScopeAnalyzerImpl final : public IScopeAnalyzer {
   cudaStream_t                                  analysis_stream_ = nullptr;
   ScopeRequest                                  current_request_{};
   std::chrono::steady_clock::time_point         last_stage_time_{};
-  uint64_t                                      next_generation_ = 1;
+  uint64_t                                      next_generation_      = 1;
+  uint64_t                                      consumed_generation_  = 0;
   std::mutex                                    mutex_{};
 };
 

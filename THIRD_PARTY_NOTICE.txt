@@ -129,6 +129,16 @@ Pinned revision: b1f19fab4aebe607805620d25a5e42566ce46a0e
 License: Zlib
 License text file: third_party_licenses/ed25519-LICENSE.txt
 
+20b) QuickQanava
+Upstream: https://github.com/cneben/QuickQanava
+Git submodule: alcedo_studio/src/third_party/QuickQanava
+Pinned tag: 2.50
+Pinned revision: 56bdf78d5b1d41fb60ae3b8ea2292df45787ecff
+License: BSD-3-Clause (upstream file labelled "BSD License 2.0"; text is the three-clause BSD license)
+License text file: third_party_licenses/QuickQanava-licence.txt
+Bundled bezier (https://github.com/oysteinmyrmo/bezier, MIT):
+- third_party_licenses/QuickQanava-bezier-LICENSE.txt
+
 21) CUDAToolkit / OpenMP / OpenGL
 Status: Referenced by CMake as system/runtime/toolchain components. They are not mirrored here from GitHub in this folder.
 Note: Distribution must comply with the respective vendor/runtime licenses used in the actual build environment.

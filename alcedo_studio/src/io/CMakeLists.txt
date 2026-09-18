@@ -6,6 +6,7 @@ def_library(ExportRecipe
     SOURCES
         "${ALCEDO_INCLUDE_ROOT}/io/image/export_recipe.hpp"
         "${ALCEDO_SRC_ROOT}/io/image/export_recipe.cpp"
+    PUBLIC_DEPS ExportIccProfileResolver
 )
 
 def_library(ExportIccProfileResolver

@@ -11,8 +11,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Do not put temporary directories, build logs, harness dumps, one-off scripts, or review
 evidence at the repository root. Use **`build/tmp/`** only (create if needed). See
 `AGENTS.md` for the full rule. Agent tool caches (`.uv-cache/`, `.uv-python/`,
-`.scratch/`, `skills-lock.json`) are gitignored; skills under `.claude/skills/`,
-`.codex/skills/`, and `.agents/skills/` remain trackable.
+`.scratch/`, `skills-lock.json`) are gitignored. Shared repository skills are canonical and
+trackable under `.agents/skills/`; do not copy them into `.claude/skills/` or `.codex/skills/`.
 
 ## Build Commands
 
@@ -101,7 +101,7 @@ These façade services are the **only** API surface the UI layer may call. They 
 ## Key Technical Notes
 
 - **Qt path is hardcoded** in `CMakeLists.txt` (~line 142) to `D:/misc/Qt/6.9.3/msvc2022_64`. Override with `-DCMAKE_PREFIX_PATH`.
-- **Submodules** (`third_party/lensfun`, `third_party/libultrahdr`) must be initialized before configuring: `git submodule update --init --recursive`.
+- **Submodules** (`third_party/lensfun`, `third_party/libultrahdr`, `third_party/QuickQanava`) must be initialized before configuring: `git submodule update --init --recursive` for lensfun/libultrahdr, and `git submodule update --init alcedo_studio/src/third_party/QuickQanava` (no nested checkout).
 - **Windows packages** are resolved via vcpkg; macOS via Homebrew.
 - **CUDA** requires Toolkit 12.8 and compute capability ≥ 6.0. CUDA files have their own compile database entry.
 - **C++ standard**: C++20 with AVX/AVX2 SIMD flags.

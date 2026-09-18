@@ -14,6 +14,7 @@
 #include <utility>
 #include <vector>
 
+#include "decoders/processor/operators/gpu/metal_encode.hpp"
 #include "decoders/processor/raw_normalization.hpp"
 #include "image/metal_image.hpp"
 #include "metal/compute_pipeline_cache.hpp"
@@ -169,11 +170,28 @@ void ToLinearRef(MetalImage& img, LibRaw& raw_processor, const RawCfaPattern& pa
     wb_params.white_level[c]    = raw_curve.white_level[c];
     wb_params.wb_multipliers[c] = wb[c];
   }
-  wb_params.apply_white_balance = raw_processor.imgdata.color.as_shot_wb_applied != 1 ? 1u : 0u;
+  wb_params.apply_white_balance =
+      (raw_processor.imgdata.color.as_shot_wb_applied & LIBRAW_ASWB_APPLIED) == 0 ? 1u : 0u;
 
   DispatchToLinearRef(img, linearized, wb_params, pattern, black_pattern, black_tile_width,
                       black_tile_height);
   img = std::move(linearized);
+}
+
+void LinearizeRgb(metal::MetalImage& img, const RawRgbLinearizationParams& params) {
+  if (img.Format() != PixelFormat::RGBA32FLOAT) {
+    throw std::runtime_error("Metal RGB: expected F32 RGBA");
+  }
+  auto* queue = MetalContext::Instance().Queue();
+  if (queue == nullptr) throw std::runtime_error("Metal RGB: queue is unavailable");
+  auto buffer = NS::RetainPtr(queue->commandBuffer());
+  if (!buffer) throw std::runtime_error("Metal RGB: command buffer creation failed");
+  EncodeLinearizeRgb(buffer.get(), img.Texture(), params);
+  buffer->commit();
+  buffer->waitUntilCompleted();
+  if (buffer->status() == MTL::CommandBufferStatusError) {
+    throw std::runtime_error("Metal RGB: GPU linearization failed");
+  }
 }
 
 };  // namespace metal

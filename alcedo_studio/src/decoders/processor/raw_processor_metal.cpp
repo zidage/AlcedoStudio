@@ -3,6 +3,7 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 #include "decoders/processor/raw_processor.hpp"
+#include "decoders/processor/raw_rgb_normalization.hpp"
 
 #ifdef HAVE_METAL
 
@@ -33,28 +34,14 @@ using ProfileClock = std::chrono::steady_clock;
 
 struct DeferredMetalLog {
   std::vector<std::string> entries;
-
-  void Add(std::string entry) { entries.push_back(std::move(entry)); }
-
-  void Flush() const {
-    if (entries.empty()) {
-      return;
-    }
-    std::cout << "[LOG] ";
-    for (size_t i = 0; i < entries.size(); ++i) {
-      if (i != 0) {
-        std::cout << " | ";
-      }
-      std::cout << entries[i];
-    }
-    std::cout << '\n';
-  }
+  void Add(std::string entry) { (void)entry; }
+  void Flush() const {}
 };
 
 void PrintProfileMs(DeferredMetalLog& log, const char* label, const ProfileClock::duration elapsed) {
-  std::ostringstream oss;
-  oss << label << '=' << std::chrono::duration<double, std::milli>(elapsed).count() << " ms";
-  log.Add(oss.str());
+  (void)log;
+  (void)label;
+  (void)elapsed;
 }
 
 void LogProfileStep(DeferredMetalLog& log, const char* label, const ProfileClock::time_point start) {
@@ -153,7 +140,13 @@ auto RawProcessor::ProcessDirectRgbMetal() -> ImageBuffer {
   process_buffer_.SyncToGPU();
   process_buffer_.ReleaseCPUData();
   auto& gpu_img = process_buffer_.GetMetalImage();
-  ApplyMetalGeometricCorrections(gpu_img, raw_data_.sizes.flip);
+  const auto linearization = raw_norm::BuildRgbLinearization(
+      raw_data_.color, raw_data_.color3_image != nullptr || raw_data_.color4_image != nullptr);
+  metal::LinearizeRgb(gpu_img, linearization);
+  if (params_.highlights_reconstruct_) metal::HighlightReconstruct(gpu_img, raw_processor_);
+  DeferredMetalLog deferred_log;
+  FinishMetalCameraRgb(gpu_img, raw_data_.color.cam_mul, dng_warp_rectilinear_,
+                       runtime_color_context_, raw_data_.sizes.flip, deferred_log);
   return {std::move(process_buffer_)};
 }
 

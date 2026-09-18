@@ -61,7 +61,7 @@ void RawDecoder::Decode(std::vector<char>&& buffer, std::shared_ptr<Image> sourc
   // Build a pre-populated context from the Image or extract from LibRaw.
   RawRuntimeColorContext ctx;
   if (source_img && source_img->HasRawColorContext()) {
-    ctx = source_img->GetRawColorContext();
+    ctx = MetadataExtractor::ReadRawColorContextForRender(*source_img);
   } else {
     MetadataExtractor::PopulateRuntimeContextFromOpenLibRaw(*raw_processor, ctx);
     if (source_img) {

@@ -27,11 +27,9 @@ namespace alcedo {
 namespace {
 using namespace alcedo::test;
 
-auto MakeExposureTransferPackage(double exposure) -> AdjustmentTransferPackage {
+auto MakeExposureTransferPackage(double /*exposure*/) -> AdjustmentTransferPackage {
   AdjustmentTransferPackage package;
-  package.operators_.push_back(AdjustmentTransferEntry{
-      PipelineStageName::Basic_Adjustment, OperatorType::EXPOSURE, true, false,
-      nlohmann::json{{"exposure", exposure}}});
+  package.color_grades_.push_back(nlohmann::json{{"id", "grade.primary"}});
   return package;
 }
 
@@ -248,11 +246,30 @@ TEST(EditorSessionCq5StaticApiBan, HistoryTransferOmitsOneShotPasteMergeWrappers
   EXPECT_EQ(contents.find("auto BeginMerge("), std::string::npos);
   EXPECT_EQ(contents.find("auto CompleteMerge("), std::string::npos);
   EXPECT_NE(contents.find("PasteLiveRootRelativeVersion("), std::string::npos);
-  EXPECT_NE(contents.find("BeginLiveMerge("), std::string::npos);
-  EXPECT_NE(contents.find("CompleteLiveMerge("), std::string::npos);
+  EXPECT_EQ(contents.find("BeginLiveMerge("), std::string::npos);
+  EXPECT_EQ(contents.find("CompleteLiveMerge("), std::string::npos);
   EXPECT_EQ(contents.find("PreparePaste("), std::string::npos);
   EXPECT_EQ(contents.find("PublishTransferCandidate("), std::string::npos);
   EXPECT_EQ(contents.find("HistoryTransferCandidate"), std::string::npos);
+}
+
+TEST(EditorSessionCq5StaticApiBan, EditorMergeQmlFilesAreAbsent) {
+  namespace fs = std::filesystem;
+  const fs::path alcedo_root = fs::path(__FILE__).parent_path().parent_path().parent_path();
+  const fs::path qml_dir     = alcedo_root / "src/ui/alcedo_main/qml";
+  ASSERT_TRUE(fs::exists(qml_dir));
+  const char* names[] = {"EditorMergeChoiceButton.qml", "EditorMergeConflictCard.qml",
+                         "EditorMergeDialog.qml", "EditorMergeJsonValue.qml"};
+  for (const char* name : names) {
+    EXPECT_FALSE(fs::exists(qml_dir / name)) << name;
+  }
+  for (const auto& entry : fs::directory_iterator(qml_dir)) {
+    if (!entry.is_regular_file()) {
+      continue;
+    }
+    const auto filename = entry.path().filename().string();
+    EXPECT_EQ(filename.rfind("EditorMerge", 0), std::string::npos) << filename;
+  }
 }
 
 }  // namespace

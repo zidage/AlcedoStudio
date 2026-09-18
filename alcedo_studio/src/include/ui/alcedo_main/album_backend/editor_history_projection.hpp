@@ -22,6 +22,10 @@ class EditorHistoryProjection {
  public:
   explicit EditorHistoryProjection(EditorHistoryState& state);
 
+  /// Read the active Version identity without walking refs or commits.
+  auto ReadActiveVersionId(const alcedo::EditorHistoryGuardHandle& guard,
+                           alcedo::version_ref_id_t* version_id, std::string* error) -> bool;
+
   /// Project the named refs and active first-parent path for the QML model.
   auto ReadHistorySnapshot(const alcedo::EditorHistoryGuardHandle& guard,
                            alcedo::EditorHistorySnapshot* snapshot, std::string* error) -> bool;
@@ -30,6 +34,9 @@ class EditorHistoryProjection {
   auto ReadAdjustmentSnapshot(const alcedo::EditorHistoryGuardHandle& guard,
                               alcedo::EditorRenderAdjustmentSnapshot* snapshot, std::string* error)
       -> bool;
+
+  auto ReadPanelProjection(const alcedo::EditorHistoryGuardHandle& guard,
+                           alcedo::EditorPanelProjection* projection, std::string* error) -> bool;
 
  private:
   EditorHistoryState& state_;

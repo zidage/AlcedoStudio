@@ -33,9 +33,6 @@ enum class EditorAction : std::uint8_t {
   RenameVersion,
   RemoveVersion,
   ApplyPaste,
-  BeginMerge,
-  CompleteMerge,
-  CancelMerge,
   RetrySave,
   DiscardAndContinue,
   CancelPendingNavigation,
@@ -65,8 +62,6 @@ enum class EditorOperationLeaseKind : std::uint8_t {
   ImageSwitch,
   SaveCheckpoint,
   PasteMaterialization,
-  MergeMaterialization,
-  MergePreview,
   FailureRecovery,
 };
 
@@ -78,7 +73,6 @@ struct EditorOperationLease {
   image_id_t               target_image_id   = 0;
   ImageLoadRequestId       image_load_request{};
   EditorSaveTaskId         save_task{};
-  MergePreviewId           merge_preview{};
   std::vector<EditorAction> blocked_actions;
   std::string               blocking_reason;
 };
@@ -92,11 +86,8 @@ struct EditorActionInputs {
   bool               can_redo      = false;
   bool               has_unmaterialized_changes = false;
   bool               package_available          = false;
-  bool               merge_preview_active       = false;
-  MergePreviewId     active_merge_preview{};
   bool               background_blocks_select_image = false;
   bool               background_blocks_paste        = false;
-  bool               background_blocks_merge        = false;
   bool               background_blocks_checkout     = false;
   bool               background_blocks_workspace    = false;
   bool               can_replace_unstarted_selection = false;

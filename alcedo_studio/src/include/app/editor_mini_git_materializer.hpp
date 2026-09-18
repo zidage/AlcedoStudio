@@ -13,6 +13,7 @@
 
 #include "app/editor_mini_git_commit_writer.hpp"
 #include "app/editor_mini_git_journal_recovery.hpp"
+#include "edit/graph/pipeline_document.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/mini_git_working_history.hpp"
 #include "json.hpp"
@@ -166,9 +167,9 @@ class EditorMiniGitMaterializer final {
   IJournalTruncationHook*                          truncation_hook_ = nullptr;
 };
 
-/// Build a serialized pipeline state document from live guard fields (no second executor).
+/// Build a labeled document checkpoint from one materialization and the live DAG.
 auto MakeEditorSerializedPipelineState(const root_id_t& root_id, head_commit_hash_t head,
                                        const transaction_chain_hash_t& chain,
-                                       const nlohmann::json& pipeline_params) -> nlohmann::json;
+                                       const PipelineDocument& document) -> nlohmann::json;
 
 }  // namespace alcedo

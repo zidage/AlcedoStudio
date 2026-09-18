@@ -2101,7 +2101,7 @@ CI.
       post_conv — measured full-frame p50 wins vs pre-dispatch baseline.
       **Deferred / rejected for default path:** CUDA Graph (no ≥5% proof yet;
       primary gap is kernel rate not launch overhead); multi-lane (gated until
-      single-stream kernel util rises); mixed precision (FP32 envelope still
+      single-stream kernel util rises); mixed precision (peak/sustained FP32 throughput still
       sufficient in principle for Legacy parity).)
 - [x] Full benchmark command, device metadata, commit, and JSON summary are
       recorded and reproducible.

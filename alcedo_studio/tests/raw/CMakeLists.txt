@@ -55,6 +55,24 @@ if(ALCEDO_CUDA_ENABLED)
   alcedo_register_test_target(CudaRawOpsTest raw gpu)
 endif()
 
+# --- OpenCL raw Neural product routing ---
+
+if(ALCEDO_OPENCL_ENABLED)
+  add_executable(OpenClRawNeuralTest ${ALCEDO_TEST_ROOT}/raw/opencl_raw_neural_test.cpp)
+  target_include_directories(OpenClRawNeuralTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(OpenClRawNeuralTest PRIVATE
+    GTest::gtest_main
+    RawProcessor
+    OpenClDemosaicNetEntry
+    ${ALCEDO_TEST_OPENCV_MIN_DEPS}
+  )
+  target_compile_definitions(OpenClRawNeuralTest PRIVATE
+    ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/models"
+  )
+  gtest_discover_tests(OpenClRawNeuralTest TEST_PREFIX "OpenClRawNeuralTest.")
+  alcedo_register_test_target(OpenClRawNeuralTest raw gpu)
+endif()
+
 # --- OpenCL + CUDA guarded raw targets ---
 
 if(ALCEDO_CUDA_ENABLED AND ALCEDO_OPENCL_ENABLED)

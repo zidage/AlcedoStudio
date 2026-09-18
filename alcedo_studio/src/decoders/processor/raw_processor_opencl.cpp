@@ -3,6 +3,7 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 #include "decoders/processor/raw_processor.hpp"
+#include "decoders/processor/raw_rgb_normalization.hpp"
 
 #ifdef HAVE_OPENCL
 
@@ -29,30 +30,15 @@ using ProfileClock = std::chrono::steady_clock;
 
 struct DeferredOpenClLog {
   std::vector<std::string> entries;
-
-  void                     Add(std::string entry) { entries.push_back(std::move(entry)); }
-
-  void                     Flush() const {
-    if (entries.empty()) {
-      return;
-    }
-    std::cout << "[LOG] ";
-    for (size_t i = 0; i < entries.size(); ++i) {
-      if (i != 0) {
-        std::cout << " | ";
-      }
-      std::cout << entries[i];
-    }
-    std::cout << '\n';
-  }
+  void Add(std::string entry) { (void)entry; }
+  void Flush() const {}
 };
 
 void PrintProfileMs(DeferredOpenClLog& log, const char* label,
                     const ProfileClock::duration elapsed) {
-  std::ostringstream oss;
-  oss << label << '=' << std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()
-      << " ms";
-  log.Add(oss.str());
+  (void)log;
+  (void)label;
+  (void)elapsed;
 }
 
 void LogProfileStep(DeferredOpenClLog& log, const char* label,
@@ -160,7 +146,13 @@ auto RawProcessor::ProcessDirectRgbOpenCL() -> ImageBuffer {
   process_buffer_.SyncToGPU(GpuBackendKind::OpenCL);
   process_buffer_.ReleaseCPUData();
   auto& gpu_img = process_buffer_.GetOpenClImage();
-  ApplyOpenClGeometricCorrections(gpu_img, raw_data_.sizes.flip);
+  const auto linearization = raw_norm::BuildRgbLinearization(
+      raw_data_.color, raw_data_.color3_image != nullptr || raw_data_.color4_image != nullptr);
+  OpenCL::LinearizeRgb(gpu_img, linearization);
+  if (params_.highlights_reconstruct_) OpenCL::HighlightReconstruct(gpu_img, raw_processor_);
+  DeferredOpenClLog deferred_log;
+  FinishOpenClCameraRgb(gpu_img, raw_data_.color.cam_mul, dng_warp_rectilinear_,
+                        runtime_color_context_, raw_data_.sizes.flip, deferred_log);
   return {std::move(process_buffer_)};
 }
 

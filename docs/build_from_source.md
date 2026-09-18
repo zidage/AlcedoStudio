@@ -26,12 +26,24 @@ These submodules are required by the current CMake layout:
 - `alcedo_studio/src/third_party/lensfun`
 - `alcedo_studio/src/third_party/libultrahdr`
 - `alcedo_studio/src/third_party/metal-cpp`
+- `alcedo_studio/src/third_party/QuickQanava`
 
 ```powershell
 git submodule update --init --recursive `
   alcedo_studio/src/third_party/lensfun `
   alcedo_studio/src/third_party/libultrahdr `
   alcedo_studio/src/third_party/metal-cpp
+git submodule update --init alcedo_studio/src/third_party/QuickQanava
+```
+
+macOS / Unix:
+
+```bash
+git submodule update --init --recursive \
+  alcedo_studio/src/third_party/lensfun \
+  alcedo_studio/src/third_party/libultrahdr \
+  alcedo_studio/src/third_party/metal-cpp
+git submodule update --init alcedo_studio/src/third_party/QuickQanava
 ```
 
 Note / 说明:

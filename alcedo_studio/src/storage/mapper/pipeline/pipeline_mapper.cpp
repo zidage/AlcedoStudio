@@ -38,10 +38,33 @@ auto PipelineMapper::FromParams(PipelineMapperParams&& param)
   auto pipeline = std::make_shared<CPUPipelineExecutor>();
   pipeline->SetBoundFile(param.file_id);
   if (param.param_json) {
-    pipeline->ImportPipelineParams(nlohmann::json::parse(std::move(*param.param_json)));
+    const auto json = nlohmann::json::parse(std::move(*param.param_json));
+    // Format 2+ is a document owned by PipelineMgmtService. The mapper must not unpack a stage
+    // representation from that document. Non-document rows remain readable by the existing
+    // executor mapper for callers that explicitly operate on that older table shape.
+    if (json.value("format_version", 0) < 2) {
+      pipeline->ImportPipelineParams(json);
+    }
     pipeline->SetExecutionStages();
   }
   return pipeline;
+}
+
+auto PipelineMapper::GetPipelineJsonByFileId(sl_element_id_t file_id)
+    -> std::optional<nlohmann::json> {
+  auto rows = GetParams(std::format(PipelineMapper::PrimeKeyClause(), file_id).c_str());
+  if (rows.size() > 1) {
+    throw std::runtime_error("PipelineMapper: multiple pipeline JSON rows for file_id " +
+                             std::to_string(file_id));
+  }
+  if (rows.empty() || !rows.front().param_json) return std::nullopt;
+  return nlohmann::json::parse(*rows.front().param_json);
+}
+
+void PipelineMapper::UpdatePipelineJsonByFileId(sl_element_id_t       file_id,
+                                                const nlohmann::json& document) {
+  PipelineMapperParams params{file_id, std::make_unique<std::string>(document.dump())};
+  UpdateParams(file_id, params);
 }
 
 auto PipelineMapper::GetPipelineParamByFileId(const sl_element_id_t file_id)

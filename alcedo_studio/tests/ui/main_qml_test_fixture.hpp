@@ -45,14 +45,14 @@ struct LoadedMainWindow {
   LoadedMainWindow& operator=(const LoadedMainWindow&) = delete;
 };
 
-/// Handles for the five Phase 6 interaction-policy guarded QML entry surfaces.
+/// Handles for the four Phase 6 interaction-policy guarded QML entry surfaces.
 struct GuardedQmlEntrypoints {
   QQuickItem* switch_workspace_nav = nullptr;  ///< libraryNavButton / editorNavButton host
   QQuickItem* library_nav_button   = nullptr;
   QQuickItem* editor_nav_button    = nullptr;
   QQuickItem* filmstrip            = nullptr;  ///< canSelectEditorImage surface
   QQuickItem* versions_rail_button = nullptr;  ///< canCheckoutVersion surface
-  QObject*    transfer_actions     = nullptr;  ///< canPaste / canMerge surface
+  QObject*    transfer_actions     = nullptr;  ///< canPaste surface
 };
 
 /// Returns the filesystem URL for production Main.qml under ALCEDO_TEST_SRC_DIR.
@@ -76,7 +76,7 @@ class MainQmlTestFixture : public ApplicationModuleHostTestFixture {
   auto LoadMainWindowWithPackedProject(const std::filesystem::path& packed_path)
       -> std::unique_ptr<LoadedMainWindow>;
 
-  /// Resolve the five guarded editor entry surfaces under the loaded window.
+  /// Resolve the four guarded editor entry surfaces under the loaded window.
   ///
   /// @param loaded  Window returned by LoadMainWindow*.
   /// @return Handles that may be null when the editor workspace is not mounted.

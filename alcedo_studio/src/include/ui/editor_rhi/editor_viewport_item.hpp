@@ -12,6 +12,7 @@
 #include <memory>
 #include <mutex>
 
+#include "edit/geometry/resolved_render_geometry.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 #include "ui/editor_rhi/direct_present_queue.hpp"
 #include "ui/viewer/viewer_view_state.hpp"
@@ -120,9 +121,9 @@ class EditorViewportItem : public QQuickRhiItem {
   // frame can recycle stale presentation slots even if a worker-thread ready
   // notification is still queued behind continuous input events.
   void               prepareForAdjustmentFrame();
-  // Arm a vsync-sampled consume: every window present re-dirties this item so
-  // ConsumeNewestReady runs on the next scene-graph tick. Used while a slider
-  // or trackball drag submits unsettled patches.
+  // Arm a consume loop: afterRendering re-dirties this item only when a Ready
+  // frame is waiting, so the scene graph can import without pumping empty
+  // vsync frames. Used while a slider or trackball drag submits unsettled patches.
   void               beginInteractivePresentLoop();
   // Stop the vsync consume and request one more pass for the last Ready frame.
   void               endInteractivePresentLoop();
@@ -142,6 +143,19 @@ class EditorViewportItem : public QQuickRhiItem {
     return adjustment_frame_request_count_.load(std::memory_order_acquire);
   }
 
+  /**
+   * @brief Resolved geometry of the latest presented render-reference frame.
+   *
+   * Written by @c DirectFrameSink on the GUI thread after a submission is
+   * accepted. Mask pointer mapping must use this instead of a separately
+   * derived document geometry so the mask always tracks the displayed pixels.
+   */
+  void               NotePresentedMaskGeometry(const ResolvedRenderGeometry& geometry,
+                                               qulonglong                    request_id);
+  [[nodiscard]] auto presentedMaskGeometry() const -> const ResolvedRenderGeometry& {
+    return presented_mask_geometry_;
+  }
+
   // Called by the application composition root before loading QML. The
   // registration is idempotent and also makes visible-window QML tests use the
   // same real type.
@@ -155,6 +169,8 @@ class EditorViewportItem : public QQuickRhiItem {
   void DisplayConfigChanged();
   // camelCase for QML handler onTargetSizeRequested.
   void targetSizeRequested(int width, int height);
+  /// Emitted after @ref NotePresentedMaskGeometry stores a newer frame geometry.
+  void PresentedMaskGeometryChanged();
 
  protected:
   auto createRenderer() -> QQuickRhiItemRenderer* override;
@@ -181,7 +197,15 @@ class EditorViewportItem : public QQuickRhiItem {
   void                                resetWindowDisplayConfig();
 
   std::shared_ptr<DirectPresentQueue> present_queue_;
-  std::unique_ptr<DirectFrameSink>    frame_sink_;
+  // Shared so the render-thread presentation-opportunity arm can hold the sink
+  // alive for the duration of one emission; `frameSink()` still returns the
+  // raw pointer to pipeline code.
+  std::shared_ptr<DirectFrameSink>    frame_sink_;
+  /// Render-thread handoff for prompt Ready-frame consumption. createRenderer
+  /// publishes the active renderer; its destructor clears the slot with CAS so
+  /// a stale arm never dereferences a dead renderer. Read on the render thread
+  /// inside QQuickWindow::beforeRendering.
+  std::shared_ptr<std::atomic<EditorViewportRenderer*>> consume_arm_;
   mutable std::mutex                  mutex_;
   ViewerViewState                     view_state_{};
   ViewerDisplayConfig                 display_config_{};
@@ -195,12 +219,18 @@ class EditorViewportItem : public QQuickRhiItem {
   std::atomic<std::uint64_t> adjustment_frame_request_count_{0};
   std::atomic<bool>          interactive_present_loop_{false};
   std::atomic<std::uint64_t> interactive_present_loop_tick_count_{0};
+  // GUI-thread only: geometry of the last accepted render-reference frame.
+  ResolvedRenderGeometry     presented_mask_geometry_{};
+  qulonglong                 presented_mask_request_id_ = 0;
   QQuickWindow*              attached_window_ = nullptr;
   QMetaObject::Connection    window_visibility_connection_;
   QMetaObject::Connection    window_screen_connection_;
   QMetaObject::Connection    scene_graph_invalidated_connection_;
   QMetaObject::Connection    scene_graph_initialized_connection_;
+  QMetaObject::Connection    before_rendering_connection_;
   QMetaObject::Connection    after_rendering_connection_;
+  QMetaObject::Connection    frame_swapped_connection_;
+  QMetaObject::Connection    after_frame_end_connection_;
   std::atomic<bool>          window_color_space_applied_{false};
   bool                       last_diagnostics_available_      = false;
   qulonglong                 last_diag_target_gen_            = 0;

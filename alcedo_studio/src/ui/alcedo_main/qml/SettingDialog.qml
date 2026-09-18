@@ -540,19 +540,24 @@ Dialog {
                             contentWidth: availableWidth
                             clip: true
 
-                            CacheSettingsPanel {
-                                id: cachePanel
+                            ColumnLayout {
                                 width: cacheScroll.availableWidth
-                                libraryModule: appModules.library
-                                projectReady: appModules.project.serviceReady
-                                textColor: dialog.textColor
-                                mutedTextColor: dialog.mutedTextColor
-                                canvasColor: dialog.canvasColor
-                                dividerColor: dialog.dividerColor
-                                dangerColor: dialog.dangerColor
-                                dataFontFamily: dialog.dataFontFamily
-                                onMessageRequested: function(message) {
-                                    dialog.messageRequested(message)
+                                spacing: 0
+
+                                CacheSettingsPanel {
+                                    id: cachePanel
+                                    width: parent.width
+                                    libraryModule: appModules.library
+                                    projectReady: appModules.project.serviceReady
+                                    textColor: dialog.textColor
+                                    mutedTextColor: dialog.mutedTextColor
+                                    canvasColor: dialog.canvasColor
+                                    dividerColor: dialog.dividerColor
+                                    dangerColor: dialog.dangerColor
+                                    dataFontFamily: dialog.dataFontFamily
+                                    onMessageRequested: function(message) {
+                                        dialog.messageRequested(message)
+                                    }
                                 }
                             }
                         }

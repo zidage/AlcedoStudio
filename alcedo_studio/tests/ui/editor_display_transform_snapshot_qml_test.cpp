@@ -20,9 +20,13 @@
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QVariantMap>
+#include <exception>
 #include <filesystem>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <variant>
+#include <vector>
 
 #include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
@@ -51,12 +55,33 @@ class DisplayTransformSession final : public QObject, public IEditorAdjustmentSu
       emit activeAdjustmentPanelChanged();
     }
   }
-  auto submitPatch(QString, QString, bool) -> bool override {
+  auto submitWrite(QString fieldKey, alcedo::EditorParameterWrite write, bool settled)
+      -> bool override {
+    static_cast<void>(fieldKey);
+    static_cast<void>(settled);
+    writes_.push_back(std::move(write));
     ++submit_count_;
     return true;
   }
+
+  auto submitPatch(QString fieldKey, QString paramsJson, bool settled) -> bool override {
+    nlohmann::json parsed;
+    try {
+      parsed = paramsJson.isEmpty() ? nlohmann::json::object()
+                                    : nlohmann::json::parse(paramsJson.toStdString());
+    } catch (const std::exception&) {
+      return false;
+    }
+    std::string error;
+    auto        write = alcedo::ParseEditorParameterWrite(fieldKey.toStdString(), parsed, &error);
+    if (!write.has_value()) {
+      return false;
+    }
+    return submitWrite(std::move(fieldKey), std::move(*write), settled);
+  }
   auto canEdit() const -> bool override { return true; }
   auto submitCount() const -> int { return submit_count_; }
+  auto writes() const -> const std::vector<alcedo::EditorParameterWrite>& { return writes_; }
 
  signals:
   void AdjustmentSnapshotChanged();
@@ -67,6 +92,7 @@ class DisplayTransformSession final : public QObject, public IEditorAdjustmentSu
   quint64     revision_     = 0;
   int         submit_count_ = 0;
   QString     active_panel_ = QStringLiteral("display");
+  std::vector<alcedo::EditorParameterWrite> writes_;
 };
 
 auto QmlDirectory() -> QString {
@@ -365,6 +391,27 @@ TEST(EditorDisplayTransformSnapshotQmlTest, DeclaredDefaultsPreferOpenDrtWhenSna
   EXPECT_EQ(methodModel->property("currentIndex").toInt(), 1);
   EXPECT_EQ(eotfModel->property("currentValue").toString().toStdString(), "gamma_2_2");
   EXPECT_DOUBLE_EQ(peakModel->property("value").toDouble(), 100.0);
+}
+
+TEST(EditorDisplayTransformSnapshotQmlTest, MethodChangeEnqueuesDrtParameterUpdate) {
+  auto                   snapshot = MakeOpenDrtSnapshot();
+  DisplayTransformSession session(snapshot, 0);
+  AdjustmentStackHarness  harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+
+  auto* method_model =
+      harness.findModel<EditorAdjustmentEnumModel>(QStringLiteral("displayMethodModel"));
+  ASSERT_NE(method_model, nullptr);
+  EXPECT_EQ(session.submitCount(), 0);
+
+  method_model->selectIndex(0);
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+
+  ASSERT_GE(session.submitCount(), 1);
+  const auto* drt = std::get_if<alcedo::DrtParameterUpdate>(&session.writes().back());
+  ASSERT_NE(drt, nullptr);
+  ASSERT_TRUE(drt->method.has_value());
+  EXPECT_EQ(*drt->method, alcedo::DrtMethod::Aces20);
 }
 
 }  // namespace alcedo::ui::test

@@ -49,17 +49,15 @@ QtObject {
         adjustmentTransferDialog.open()
     }
 
-    // Applies the selected transfer strategy while its current policy gate
-    // allows it. "paste" creates a root-relative Version per target; "merge"
-    // creates a two-parent merge commit per target with every conflict resolved
-    // as "use all incoming" (no per-field conflict UI in a batch context).
+    // Applies Paste while its current policy gate allows it. Paste creates a
+    // root-relative Version per target. Merge is not a product action.
     function applyPaste(strategy) {
         if (!adjustmentTransfer || !hasTargets) {
             return false
         }
 
         const selectedStrategy = String(strategy || "")
-        if (selectedStrategy !== "paste" && selectedStrategy !== "merge") {
+        if (selectedStrategy !== "paste") {
             return false
         }
         if (!pasteEnabled) {

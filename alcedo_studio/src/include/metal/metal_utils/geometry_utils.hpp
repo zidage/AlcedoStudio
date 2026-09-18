@@ -29,6 +29,9 @@ void WarpAffineLinearTexture(const MetalImage& src, MetalImage& dst, const cv::M
 void WarpRectilinearTexture(const MetalImage& src, MetalImage& dst,
                             const dng::WarpRectilinear& warp);
 
+void EncodeWarpRectilinearTexture(void* command_buffer, void* src_texture, void* dst_texture,
+                                  const dng::WarpRectilinear& warp);
+
 }  // namespace alcedo::metal::utils
 
 #endif

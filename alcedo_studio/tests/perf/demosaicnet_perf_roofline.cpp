@@ -488,8 +488,8 @@ auto EstimateFullFrameWork(const DemosaicNetTopologyKind kind, const int cover_w
                                /*tile_count_override=*/-1);
 }
 
-auto EstimateDeviceComputeEnvelope(const DeviceInfo& info) -> DeviceComputeEnvelope {
-  DeviceComputeEnvelope env;
+auto EstimateDeviceComputeLimits(const DeviceInfo& info) -> DeviceComputeLimits {
+  DeviceComputeLimits env;
   env.name                   = info.name;
   env.compute_major          = info.compute_major;
   env.compute_minor          = info.compute_minor;
@@ -549,7 +549,7 @@ auto EstimateDeviceComputeEnvelope(const DeviceInfo& info) -> DeviceComputeEnvel
   return env;
 }
 
-auto BuildRooflineReport(const FullFrameWorkEstimate& work, const DeviceComputeEnvelope& device,
+auto BuildRooflineReport(const FullFrameWorkEstimate& work, const DeviceComputeLimits& device,
                          const double neural_median_ms, const double legacy_median_ms,
                          const double stretch_target_ms) -> RooflineReport {
   RooflineReport r;
@@ -632,12 +632,12 @@ auto BuildRooflineReport(const FullFrameWorkEstimate& work, const DeviceComputeE
   if (required <= fp32_budget) {
     r.decision = RooflineTrackDecision::ContinueFp32DirectKernels;
     rationale << " Decision: continue FP32 direct-kernel track — required rate is within "
-                 "sustained FP32 envelope (slack "
+                 "sustained FP32 throughput (slack "
               << kFp32Slack << ").";
   } else if (tc_budget > 0.0 && required <= tc_budget * 1.10) {
     r.decision = RooflineTrackDecision::EvaluateMixedPrecision;
     rationale << " Decision: evaluate FP16/BF16/TF32 Tensor Core with FP32 accumulate — "
-                 "FP32 sustained cannot cover required rate; TC envelope can.";
+                 "FP32 sustained cannot cover required rate; Tensor Core sustained throughput can.";
   } else {
     r.decision = RooflineTrackDecision::TopologyOrDistillRequired;
     rationale << " Decision: topology reduction / distillation required for Legacy-parity "
@@ -731,7 +731,7 @@ void AppendJsonRooflineReport(std::string& out, const std::string_view key,
   }
   out += "],";
 
-  out += "\"device_envelope\":{";
+  out += "\"device_compute_limits\":{";
   AppendJsonKeyString(out, "name", report.device.name);
   AppendJsonKeyString(out, "compute_capability",
                       std::to_string(report.device.compute_major) + "." +

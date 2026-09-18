@@ -970,19 +970,21 @@ TEST(OpenClFusedEditPipelineTest, ScopeAnalyzerProcessesOpenClFrame) {
   request.target_fps          = 0;
 
   const auto analyzer         = CreateOpenClScopeAnalyzer();
-  analyzer->SubmitFrame(
-      FinalDisplayFrameView{
-          SharedGpuImageHandle{GpuBackend::OpenCL, std::shared_ptr<void>(resource, resource.get()),
-                               gpu_image.Width(), gpu_image.Height(), gpu_image.RowBytes(),
-                               FramePixelFormat::RGBA32F},
-          gpu_image.Width(),
-          gpu_image.Height(),
-          FramePixelFormat::RGBA32F,
-          ViewerDisplayConfig{},
-          AnalysisDomain::DisplayEncoded,
-          {},
-          1},
-      request);
+  const auto display_frame    = FinalDisplayFrameView{
+      SharedGpuImageHandle{GpuBackend::OpenCL, std::shared_ptr<void>(resource, resource.get()),
+                           gpu_image.Width(), gpu_image.Height(), gpu_image.RowBytes(),
+                           FramePixelFormat::RGBA32F},
+      gpu_image.Width(),
+      gpu_image.Height(),
+      FramePixelFormat::RGBA32F,
+      ViewerDisplayConfig{},
+      AnalysisDomain::DisplayEncoded,
+      {},
+      1};
+  const auto staged = analyzer->StageFrame(display_frame, request);
+  ASSERT_TRUE(static_cast<bool>(staged));
+  analyzer->SubmitFrame(staged, request);
+  (void)clFinish(OpenClContext::Instance().ScopeQueue());
 
   const ScopeOutputSet output = analyzer->GetLatestOutput();
   EXPECT_TRUE(output.histogram_valid);

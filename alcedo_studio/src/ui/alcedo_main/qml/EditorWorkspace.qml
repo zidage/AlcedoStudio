@@ -47,6 +47,15 @@ Item {
                                                      && editorSession
                                                      && editorSession.actions
                                                      && editorSession.actions.canEdit)
+    readonly property var maskCreation: editorSession ? editorSession.maskCreation : null
+    readonly property bool maskOwnsLeftButton: !!(maskCreation && maskCreation.ownsLeftButton)
+
+    function bindMaskOverlay() {
+        if (maskCreation && editorOverlayItem)
+            maskCreation.bindOverlayItem(editorOverlayItem)
+    }
+
+    onMaskCreationChanged: bindMaskOverlay()
     readonly property var renderDiagnostics: editorSession ? editorSession.renderDiagnostics : ({})
     readonly property string inflightRenderReason: renderDiagnostics.inflightReason || ""
     readonly property bool adjustmentRenderBusy: editorSession
@@ -76,7 +85,7 @@ Item {
         spacing: appTheme.spaceMd
 
         // ── Main editor body ────────────────────────────────────────────
-        // Desktop order (non-negotiable): History/Versions left, viewport
+        // Desktop order (non-negotiable): tool rail left, viewport
         // center, scopes + adjustment stack right.
         RowLayout {
             id: editorDesktopRow
@@ -85,8 +94,8 @@ Item {
             Layout.fillHeight: true
             spacing: appTheme.spaceMd
 
-            // Left: editor tool rail (+ expandable History / Versions panel).
-            // objectName is set inside the component (editorHistoryVersionsRail).
+            // Left: editor tool rail (+ expandable History / Versions / Nodes panel).
+            // objectName is set inside the component (editorWorkspaceRail).
             EditorWorkspaceRail {
                 id: historyVersionsRail
                 Layout.fillHeight: true
@@ -218,9 +227,21 @@ Item {
                         anchors.fill: parent
                         visible: root.hasImage
                         interaction: editorInteraction
+                        maskOverlayControlColor: appTheme.maskOverlayControlColor
+                        maskOverlayControlOutlineColor: appTheme.maskOverlayControlOutlineColor
+                        maskOverlayInactiveColor: appTheme.maskOverlayInactiveColor
+                        maskOverlayHandleRadius: appTheme.maskOverlayHandleRadius
+                        maskOverlayHandleOutlineWidth: appTheme.maskOverlayHandleOutlineWidth
+                        maskOverlayStrokeWidth: appTheme.maskOverlayStrokeWidth
+                        maskOverlayAntialiasWidth: appTheme.maskOverlayAntialiasWidth
+                        maskOverlayGuideOuterWidth: appTheme.maskOverlayGuideOuterWidth
+                        maskOverlayGuideInnerWidth: appTheme.maskOverlayGuideInnerWidth
+                        maskOverlayGripOuterWidth: appTheme.maskOverlayGripOuterWidth
+                        maskOverlayGripInnerWidth: appTheme.maskOverlayGripInnerWidth
                         // Overlay must sit above the photograph and receive no
                         // exclusive mouse grab — handlers below own input.
                         z: 2
+                        Component.onCompleted: root.bindMaskOverlay()
                     }
 
                     // Spinner / status remain ordinary QML (not baked into the RHI pass).
@@ -325,6 +346,8 @@ Item {
                         onPointChanged: {
                             if (viewportHover.hovered) {
                                 editorInteraction.handleHoverMove(point.position.x, point.position.y)
+                                if (root.maskCreation)
+                                    root.maskCreation.handleHover(point.position.x, point.position.y)
                             }
                         }
                     }
@@ -332,28 +355,110 @@ Item {
                     // PointHandler records the true press position (no drag-distance
                     // threshold). DragHandler would only activate after the system
                     // drag distance, which lost crop-corner hit tests and click-zoom.
+                    // Mask left-button drawing stays on this handler: a second
+                    // DragHandler must not also write samples. Double-tap is
+                    // disabled while Mask owns the left button so its grab cannot
+                    // end the stream on the first press.
                     PointHandler {
                         id: viewportPointer
+                        objectName: "editorViewportPointer"
                         enabled: root.editorControlsEnabled
                         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.TouchScreen | PointerDevice.Stylus
                         acceptedButtons: Qt.LeftButton | Qt.MiddleButton
                         property int _activeButton: Qt.LeftButton
                         property bool _pressed: false
+                        property bool _maskStream: false
+                        property bool _canceled: false
+                        property real _lastX: 0
+                        property real _lastY: 0
+                        property bool _haveLastItemPos: false
+
+                        function rememberItemPos(x, y) {
+                            _lastX = x
+                            _lastY = y
+                            _haveLastItemPos = true
+                        }
+
+                        function finishX() {
+                            if (_haveLastItemPos && Math.abs(point.position.x) < 1e-6
+                                    && Math.abs(point.position.y) < 1e-6)
+                                return _lastX
+                            return point.position.x
+                        }
+
+                        function finishY() {
+                            if (_haveLastItemPos && Math.abs(point.position.x) < 1e-6
+                                    && Math.abs(point.position.y) < 1e-6)
+                                return _lastY
+                            return point.position.y
+                        }
+
+                        function beginMaskOrPan() {
+                            _activeButton = (point.pressedButtons & Qt.MiddleButton)
+                                    ? Qt.MiddleButton : Qt.LeftButton
+                            rememberItemPos(point.position.x, point.position.y)
+                            if (_activeButton === Qt.LeftButton
+                                    && root.maskOwnsLeftButton
+                                    && root.maskCreation
+                                    && root.maskCreation.handlePress(
+                                           point.position.x, point.position.y, _activeButton)) {
+                                _maskStream = true
+                            } else {
+                                _maskStream = false
+                                editorInteraction.handlePress(
+                                            point.position.x, point.position.y, _activeButton)
+                            }
+                        }
+
+                        function finishMaskOrPan() {
+                            var x = finishX()
+                            var y = finishY()
+                            if (_canceled && _maskStream && root.maskCreation
+                                    && typeof root.maskCreation.cancelOpenPointerInput === "function") {
+                                root.maskCreation.cancelOpenPointerInput()
+                            } else if (_maskStream && root.maskCreation) {
+                                root.maskCreation.handleRelease(x, y, _activeButton)
+                            } else {
+                                editorInteraction.handleRelease(x, y, _activeButton)
+                            }
+                            _pressed = false
+                            _maskStream = false
+                            _canceled = false
+                            _haveLastItemPos = false
+                        }
+
+                        onCanceled: {
+                            _canceled = true
+                        }
                         onActiveChanged: {
                             if (active) {
                                 _pressed = true
-                                _activeButton = (point.pressedButtons & Qt.MiddleButton)
-                                        ? Qt.MiddleButton : Qt.LeftButton
-                                editorInteraction.handlePress(
-                                            point.position.x, point.position.y, _activeButton)
+                                _canceled = false
+                                beginMaskOrPan()
                             } else if (_pressed) {
-                                editorInteraction.handleRelease(
-                                            point.position.x, point.position.y, _activeButton)
-                                _pressed = false
+                                finishMaskOrPan()
                             }
                         }
                         onPointChanged: {
-                            if (active) {
+                            if (!active) {
+                                return
+                            }
+                            // pointChanged can run before activeChanged; start the
+                            // Mask stream here so the first move is not sent to pan.
+                            if (!_pressed) {
+                                _pressed = true
+                                _canceled = false
+                                beginMaskOrPan()
+                            }
+                            if (point.pressedButtons !== 0) {
+                                rememberItemPos(point.position.x, point.position.y)
+                            }
+                            if (_maskStream && root.maskCreation) {
+                                root.maskCreation.handleMove(
+                                            _haveLastItemPos ? _lastX : point.position.x,
+                                            _haveLastItemPos ? _lastY : point.position.y,
+                                            point.pressedButtons)
+                            } else {
                                 editorInteraction.handleMove(
                                             point.position.x, point.position.y,
                                             point.pressedButtons)
@@ -382,8 +487,35 @@ Item {
                         id: viewportPanDrag
                         enabled: root.editorControlsEnabled
                         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.TouchScreen | PointerDevice.Stylus
-                        acceptedButtons: Qt.LeftButton | Qt.MiddleButton
+                        acceptedButtons: root.maskOwnsLeftButton
+                                         ? Qt.MiddleButton
+                                         : (Qt.LeftButton | Qt.MiddleButton)
                         target: null
+                        property bool _forwardingDrag: false
+                        property int _activeButton: Qt.LeftButton
+                        onActiveChanged: {
+                            if (active) {
+                                _forwardingDrag = true
+                                _activeButton = (centroid.pressedButtons & Qt.MiddleButton)
+                                        ? Qt.MiddleButton : Qt.LeftButton
+                                // DragHandler can take the exclusive grab before PointHandler
+                                // forwards its press. Start a complete controller sequence from
+                                // the original press position so pan never depends on handler
+                                // activation order.
+                                editorInteraction.handlePress(
+                                            centroid.pressPosition.x,
+                                            centroid.pressPosition.y,
+                                            _activeButton)
+                                editorInteraction.handleMove(
+                                            centroid.position.x, centroid.position.y,
+                                            centroid.pressedButtons)
+                            } else if (_forwardingDrag) {
+                                editorInteraction.handleRelease(
+                                            centroid.position.x, centroid.position.y,
+                                            _activeButton)
+                                _forwardingDrag = false
+                            }
+                        }
                         onTranslationChanged: {
                             if (active) {
                                 editorInteraction.handleMove(
@@ -467,10 +599,13 @@ Item {
                     // of being held as a would-be double-tap. A clean double-click
                     // (two clicks without a drag) still fires onDoubleTapped and
                     // toggles the zoom; only drags are excluded, which is what
-                    // separates pan from double-click-zoom.
+                    // separates pan from double-click-zoom. Mask left-button
+                    // drawing disables this handler so it cannot take the grab
+                    // on the first press of a stroke.
                     TapHandler {
                         id: viewportDoubleTap
-                        enabled: root.editorControlsEnabled
+                        objectName: "editorViewportDoubleTap"
+                        enabled: root.editorControlsEnabled && !root.maskOwnsLeftButton
                         acceptedButtons: Qt.LeftButton
                         gesturePolicy: TapHandler.DragThreshold
                         onDoubleTapped: function (eventPoint) {
@@ -681,6 +816,7 @@ Item {
                 theme: root.theme
                 editorSession: root.editorSession
                 interaction: editorInteraction
+                nodeController: historyVersionsRail.nodeController
                 controlsEnabled: root.editorControlsEnabled
                 expanded: !root.host || root.host.editorAdjustmentStackExpanded !== false
             }
@@ -690,6 +826,33 @@ Item {
             id: editorSaveRecoveryBar
             objectName: "editorSaveRecoveryBar"
             editorSession: root.editorSession
+        }
+    }
+
+    Shortcut {
+        sequences: [ "Escape" ]
+        enabled: root.editorControlsEnabled && root.maskCreation
+                 && root.maskCreation.maskControlsActive
+        onActivated: root.maskCreation.finishBody()
+    }
+
+    // Mask editing shortcuts live at workspace scope so the viewport, Nodes
+    // graph, and right-side controls all produce the same outcome. They are
+    // disabled immediately after the transient Mask mode finishes.
+    Shortcut {
+        sequences: [ "Delete" ]
+        enabled: root.editorControlsEnabled && root.maskCreation
+                 && root.maskCreation.maskControlsActive
+        onActivated: root.maskCreation.deleteActiveMask()
+    }
+
+    Shortcut {
+        sequences: [ "Return", "Enter" ]
+        enabled: root.editorControlsEnabled && root.maskCreation
+                 && root.maskCreation.maskControlsActive
+        onActivated: {
+            if (typeof adjustmentStack.confirmMaskEditAndReturn === "function")
+                adjustmentStack.confirmMaskEditAndReturn()
         }
     }
 

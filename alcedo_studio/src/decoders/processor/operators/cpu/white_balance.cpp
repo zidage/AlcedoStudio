@@ -20,7 +20,7 @@ static auto GetWBCoeff(const libraw_rawdata_t& raw_data) -> const float* {
 void ToLinearRef(cv::Mat& img, LibRaw& raw_processor) {
   const auto raw_curve = raw_norm::BuildLinearizationCurve(raw_processor.imgdata.rawdata);
   const auto wb        = GetWBCoeff(raw_processor.imgdata.rawdata);
-  const bool apply_wb  = raw_processor.imgdata.color.as_shot_wb_applied != 1;
+  const bool apply_wb = (raw_processor.imgdata.color.as_shot_wb_applied & LIBRAW_ASWB_APPLIED) == 0;
   const bool is_u16    = img.type() == CV_16UC1;
   const int  w         = img.cols;
   const int  h         = img.rows;

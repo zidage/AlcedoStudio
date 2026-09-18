@@ -9,18 +9,29 @@
 #include <QFontDatabase>
 #include <QGuiApplication>
 #include <QIcon>
+#include <QObject>
 #include <QQmlApplicationEngine>
+#include <QQmlComponent>
 #include <QQmlContext>
+#include <QQmlEngine>
+#include <QQmlError>
+#include <QQmlExtensionPlugin>
 #include <qqml.h>
 #include <QQuickStyle>
 #include <QQuickWindow>
 #include <QSGRendererInterface>
 #include <QWindow>
+#include <QDir>
+#include <QFileInfo>
 #include <QSettings>
 #include <QString>
 #include <QtGlobal>
 
+#include <QuickQanava>
+
 #include <exiv2/error.hpp>
+#include <cstdio>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -36,7 +47,10 @@
 #include "ui/editor_rhi/editor_viewport_item.hpp"
 #include "edit/operators/operator_registeration.hpp"
 #include "utils/diagnostics/app_logging.hpp"
+#include "utils/diagnostics/preview_performance.hpp"
 #include "utils/clock/time_provider.hpp"
+
+Q_IMPORT_QML_PLUGIN(QuickQanavaPlugin)
 
 #ifdef Q_OS_WIN
 #include "windows_frameless_window.hpp"
@@ -52,6 +66,15 @@ constexpr auto kAcceleratorBackendSettingsKey = "gpu/acceleratorBackend";
 // writes after QApplication exists. Do not rely on QSettings{} alone before QApp.
 constexpr auto kSettingsOrganization = "Alcedo";
 constexpr auto kSettingsApplication  = "Alcedo";
+
+[[nodiscard]] auto HasFlag(int argc, char** argv, std::string_view flag) -> bool {
+  for (int i = 1; i < argc; ++i) {
+    if (std::string_view(argv[i] ? argv[i] : "") == flag) {
+      return true;
+    }
+  }
+  return false;
+}
 
 auto FindArgValue(int argc, char** argv, std::string_view option_name)
     -> std::optional<std::string_view> {
@@ -119,6 +142,45 @@ auto ToAcceleratorPreference(alcedo::editor_rhi::EditorBackend backend)
   return alcedo::AcceleratorBackendPreference::CPU;
 }
 
+constexpr char kQuickQanavaImportProbeQml[] = R"qml(
+import QtQuick
+import QuickQanava 2.0 as Qan
+Item { objectName: "quickQanavaImportProbe" }
+)qml";
+
+/**
+ * @brief Load the pinned QuickQanava module and exit without opening the app.
+ *
+ * Used by install/package verification. Does not initialize an editor backend,
+ * create a window, or start a photo render. Failure prints the real QML error
+ * and returns a non-zero status; there is no substitute canvas.
+ *
+ * @pre A QApplication exists. QuickQanava is linked and the QML plugin is
+ *      imported. @p engine has `qrc:/` on its import path.
+ * @return 0 when the probe object is created; 1 when the import or create fails.
+ */
+auto VerifyQuickQanavaQmlImport(QQmlEngine& engine) -> int {
+  QuickQanava::initialize(&engine);
+  QQmlComponent component(&engine);
+  component.setData(QByteArray(kQuickQanavaImportProbeQml),
+                    QUrl(QStringLiteral("qrc:/QuickQanavaImportProbe.qml")));
+  if (component.isError()) {
+    const auto errors = component.errors();
+    for (const auto& error : errors) {
+      std::fprintf(stderr, "%s\n", qPrintable(error.toString()));
+    }
+    return 1;
+  }
+  std::unique_ptr<QObject> probe{component.create()};
+  if (probe == nullptr || probe->objectName() != QLatin1String("quickQanavaImportProbe")) {
+    std::fprintf(stderr, "QuickQanava import probe failed to create an Item\n");
+    return 1;
+  }
+  std::fprintf(stdout, "qml.imports.ok=QuickQanava\n");
+  std::fflush(stdout);
+  return 0;
+}
+
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -135,6 +197,14 @@ int main(int argc, char* argv[]) {
   QCoreApplication::setOrganizationDomain(QStringLiteral("alcedo.app"));
   QCoreApplication::setApplicationName(QStringLiteral("Alcedo"));
   QCoreApplication::setApplicationVersion(QStringLiteral(ALCEDO_APP_VERSION));
+
+  if (HasFlag(argc, argv, "--verify-qml-imports")) {
+    QApplication app(argc, argv);
+    QQuickStyle::setStyle("Basic");
+    QQmlEngine engine;
+    engine.addImportPath("qrc:/");
+    return VerifyQuickQanavaQmlImport(engine);
+  }
 
   // Priority matches the old manual override model:
   //   1) --editor-backend (debug/force, same as before)
@@ -180,6 +250,14 @@ int main(int argc, char* argv[]) {
 
   QApplication app(argc, argv);
   const QString log_path = alcedo::diag::InitializeApplicationLogging();
+  alcedo::diag::PreviewPerformance::Initialize();
+  if (qEnvironmentVariableIsEmpty("ALCEDO_PREVIEW_PERF_LOG") && !log_path.isEmpty()) {
+    const QFileInfo info(log_path);
+    alcedo::diag::PreviewPerformance::SetOutputPath(
+        QDir(info.absolutePath())
+            .filePath(QStringLiteral("alcedo_preview_perf_%1.log").arg(info.completeBaseName()))
+            .toStdString());
+  }
   qCInfo(alcedo::diag::appLog).noquote()
       << QStringLiteral("app.start log_path=%1").arg(log_path);
 
@@ -189,6 +267,7 @@ int main(int argc, char* argv[]) {
   if (!startup.ok) {
     qCritical("Editor backend startup failed (%s): %s",
               alcedo::editor_rhi::ToString(editor_backend), startup.error.c_str());
+    alcedo::diag::PreviewPerformance::Shutdown();
     alcedo::diag::ShutdownApplicationLogging();
     return 1;
   }
@@ -255,6 +334,7 @@ int main(int argc, char* argv[]) {
 
   QQmlApplicationEngine engine;
   engine.addImportPath("qrc:/");
+  QuickQanava::initialize(&engine);
   language_manager.AttachEngine(&engine);
   app_modules.AttachQmlEngine(&engine);
   engine.rootContext()->setContextProperty("appModules", &app_modules);
@@ -304,6 +384,7 @@ int main(int argc, char* argv[]) {
 
   const int exit_code = app.exec();
   qCInfo(alcedo::diag::appLog) << "app.exit code=" << exit_code;
+  alcedo::diag::PreviewPerformance::Shutdown();
   alcedo::diag::ShutdownApplicationLogging();
   return exit_code;
 }

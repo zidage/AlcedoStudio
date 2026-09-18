@@ -10,9 +10,31 @@
 #include "ui/alcedo_main/album_backend/editor_history_shared_helpers.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_state_detail.hpp"
 
+#include "app/editor_panel_projection.hpp"
+
 namespace alcedo::ui {
 
 EditorHistoryProjection::EditorHistoryProjection(EditorHistoryState& state) : state_(state) {}
+
+auto EditorHistoryProjection::ReadActiveVersionId(
+    const alcedo::EditorHistoryGuardHandle& guard, alcedo::version_ref_id_t* version_id,
+    std::string* error) -> bool {
+  if (version_id == nullptr) {
+    if (error != nullptr) *error = "Active Version identity output is null";
+    return false;
+  }
+  auto state = state_.PeekWorkingState(guard.element_id);
+  if (!state) {
+    *version_id = {};
+    return true;
+  }
+  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_) {
+    if (error != nullptr) *error = "Editor history graph is unavailable";
+    return false;
+  }
+  *version_id = state->pipeline_guard->commit_graph_->GetActiveVersionId();
+  return true;
+}
 
 auto EditorHistoryProjection::ReadHistorySnapshot(
     const alcedo::EditorHistoryGuardHandle& guard, alcedo::EditorHistorySnapshot* snapshot,
@@ -105,6 +127,22 @@ auto EditorHistoryProjection::ReadAdjustmentSnapshot(
     return false;
   }
   *snapshot = state->committed_snapshot;
+  return true;
+}
+
+auto EditorHistoryProjection::ReadPanelProjection(const alcedo::EditorHistoryGuardHandle& guard,
+                                                  alcedo::EditorPanelProjection* projection,
+                                                  std::string* error) -> bool {
+  auto state = state_.PeekWorkingState(guard.element_id);
+  if (!state) {
+    if (projection) *projection = {};
+    return true;
+  }
+  if (projection == nullptr) {
+    if (error) *error = "Panel projection output is null";
+    return false;
+  }
+  *projection = state->panel_projection;
   return true;
 }
 

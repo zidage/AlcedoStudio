@@ -40,17 +40,101 @@ if(WIN32)
 endif()
 
 add_executable(EditorAdjustmentPipelineTest ${ALCEDO_TEST_ROOT}/app/editor_adjustment_pipeline_test.cpp)
-target_include_directories(EditorAdjustmentPipelineTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_include_directories(EditorAdjustmentPipelineTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(EditorAdjustmentPipelineTest
     PRIVATE GTest::gtest_main EditorAdjustmentPipeline Operators EditPipeline JSON ThreadPool)
 gtest_discover_tests(EditorAdjustmentPipelineTest TEST_PREFIX "EditorAdjustmentPipelineTest.")
 alcedo_register_test_target(EditorAdjustmentPipelineTest app)
 
+add_executable(EditorPipelineCommandServiceTest
+    ${ALCEDO_TEST_ROOT}/app/editor_pipeline_command_service_test.cpp)
+target_include_directories(EditorPipelineCommandServiceTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(EditorPipelineCommandServiceTest
+    PRIVATE GTest::gtest_main EditorPipelineCommandService EditGraph EditRuntime JSON)
+gtest_discover_tests(EditorPipelineCommandServiceTest
+    TEST_PREFIX "EditorPipelineCommandServiceTest.")
+alcedo_register_test_target(EditorPipelineCommandServiceTest app)
+
+add_executable(EditorPanelProjectionTest
+    ${ALCEDO_TEST_ROOT}/app/editor_panel_projection_test.cpp)
+target_include_directories(EditorPanelProjectionTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(EditorPanelProjectionTest
+    PRIVATE GTest::gtest_main EditorPanelProjection EditorParameterWrite EditGraph JSON)
+gtest_discover_tests(EditorPanelProjectionTest
+    TEST_PREFIX "EditorPanelProjectionTest.")
+alcedo_register_test_target(EditorPanelProjectionTest app)
+
+add_executable(EditorAdjustmentContextTest
+    ${ALCEDO_TEST_ROOT}/app/editor_adjustment_context_test.cpp)
+target_include_directories(EditorAdjustmentContextTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(EditorAdjustmentContextTest
+    PRIVATE GTest::gtest_main EditorPanelProjection EditGraph Image)
+gtest_discover_tests(EditorAdjustmentContextTest
+    TEST_PREFIX "EditorAdjustmentContextTest.")
+alcedo_register_test_target(EditorAdjustmentContextTest app)
+
+add_executable(PipelineHistoryApplierTest
+    ${ALCEDO_TEST_ROOT}/app/pipeline_history_applier_test.cpp)
+target_include_directories(PipelineHistoryApplierTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
+target_link_libraries(PipelineHistoryApplierTest
+    PRIVATE GTest::gtest_main PipelineHistoryApplier Operators EditMaskCore)
+gtest_discover_tests(PipelineHistoryApplierTest
+    TEST_PREFIX "PipelineHistoryApplierTest."
+    PROPERTIES LABELS "ci_core_flow;edit;history")
+alcedo_register_test_target(PipelineHistoryApplierTest app)
+
+add_executable(EditorNodeGraphProjectionTest
+    ${ALCEDO_TEST_ROOT}/app/editor_node_graph_projection_test.cpp)
+target_include_directories(EditorNodeGraphProjectionTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(EditorNodeGraphProjectionTest
+    PRIVATE GTest::gtest_main EditorNodeGraphProjection EditGraph)
+gtest_discover_tests(EditorNodeGraphProjectionTest
+    TEST_PREFIX "EditorNodeGraphProjectionTest."
+    PROPERTIES LABELS "ci_core_flow;edit;nodes")
+alcedo_register_test_target(EditorNodeGraphProjectionTest app)
+
+add_executable(EditorNodeGraphDraftTest
+    ${ALCEDO_TEST_ROOT}/app/editor_node_graph_draft_test.cpp)
+target_include_directories(EditorNodeGraphDraftTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(EditorNodeGraphDraftTest
+    PRIVATE GTest::gtest_main EditorNodeGraphDraft EditGraph PipelineHistoryApplier)
+gtest_discover_tests(EditorNodeGraphDraftTest
+    TEST_PREFIX "EditorNodeGraphDraftTest."
+    PROPERTIES LABELS "ci_core_flow;edit;nodes")
+alcedo_register_test_target(EditorNodeGraphDraftTest app)
+
+add_executable(PipelineGraphTopologyDeltaTest
+    ${ALCEDO_TEST_ROOT}/edit/graph/pipeline_graph_topology_delta_test.cpp)
+target_include_directories(PipelineGraphTopologyDeltaTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(PipelineGraphTopologyDeltaTest
+    PRIVATE GTest::gtest_main PipelineHistoryApplier EditGraph)
+gtest_discover_tests(PipelineGraphTopologyDeltaTest
+    TEST_PREFIX "PipelineGraphTopologyDeltaTest."
+    PROPERTIES LABELS "ci_core_flow;edit;graph")
+alcedo_register_test_target(PipelineGraphTopologyDeltaTest app)
+
+add_executable(DocumentTransferTest
+    ${ALCEDO_TEST_ROOT}/app/document_transfer_test.cpp)
+target_include_directories(DocumentTransferTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
+target_link_libraries(DocumentTransferTest
+    PRIVATE GTest::gtest_main AdjustmentTransferService PipelineHistoryApplier
+            EditorPipelineCommandService EditGraph EditMaskCore)
+gtest_discover_tests(DocumentTransferTest
+    TEST_PREFIX "DocumentTransferTest."
+    PROPERTIES LABELS "ci_core_flow;edit;history")
+alcedo_register_test_target(DocumentTransferTest app)
+
 # Geometry overlay preview: crop disable + bilinear GPU resize path that the
 # unified scheduler runs when the Geometry panel owns the source-frame overlay.
 add_executable(EditorGeometryOverlayPipelineTest
     ${ALCEDO_TEST_ROOT}/app/editor_geometry_overlay_pipeline_test.cpp)
-target_include_directories(EditorGeometryOverlayPipelineTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_include_directories(EditorGeometryOverlayPipelineTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(EditorGeometryOverlayPipelineTest
     PRIVATE GTest::gtest_main EditorAdjustmentPipeline Operators EditPipeline JSON ThreadPool
             ${ALCEDO_TEST_OPENCV_MIN_DEPS})
@@ -64,6 +148,17 @@ target_include_directories(ImportServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(ImportServiceTest ImportService ProjectService GTest::gtest_main)
 
 alcedo_register_test_target(ImportServiceTest app)
+
+if(ALCEDO_CUDA_ENABLED)
+  qt_add_executable(ImportPipelineDocumentTest
+    ${ALCEDO_TEST_ROOT}/app/import_pipeline_document_test.cpp)
+  target_include_directories(ImportPipelineDocumentTest PRIVATE ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(ImportPipelineDocumentTest PRIVATE
+    ImportService ProjectService PipelineMgmtService GTest::gtest_main)
+  gtest_discover_tests(ImportPipelineDocumentTest TEST_PREFIX "ImportPipelineDocumentTest."
+    PROPERTIES LABELS "gpu;app;import;pipeline")
+  alcedo_register_test_target(ImportPipelineDocumentTest app)
+endif()
 
 add_executable(SleeveServiceTest ${ALCEDO_TEST_ROOT}/app/sleeve_service_test.cpp)
 target_include_directories(SleeveServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
@@ -91,8 +186,9 @@ gtest_discover_tests(SearchQueryClassifierTest TEST_PREFIX "SearchQueryClassifie
 alcedo_register_test_target(SearchQueryClassifierTest app)
 
 add_executable(PipelineMapperTest ${ALCEDO_TEST_ROOT}/app/pipeline_service_test.cpp)
-target_include_directories(PipelineMapperTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(PipelineMapperTest ProjectService PipelineMgmtService GTest::gtest_main)
+target_include_directories(PipelineMapperTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(PipelineMapperTest
+  ProjectService PipelineMgmtService PipelineHistoryApplier GTest::gtest_main)
 gtest_discover_tests(PipelineMapperTest TEST_PREFIX "PipelineMapperTest."
   PROPERTIES LABELS "ci_core_flow")
 
@@ -105,17 +201,36 @@ target_include_directories(AdjustmentTransferServiceMiniGitTest
   PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(AdjustmentTransferServiceMiniGitTest
   AdjustmentTransferService
+  EditorPipelineCommandService
   EditorSessionTestSupport
   ProjectService
   PipelineMgmtService
   EditHistoryMgmtService
   EditHistory
+  EditGraph
   GTest::gtest_main
 )
 gtest_discover_tests(AdjustmentTransferServiceMiniGitTest
   TEST_PREFIX "AdjustmentTransferServiceMiniGitTest."
   PROPERTIES LABELS "ci_core_flow;editor_session")
 alcedo_register_test_target(AdjustmentTransferServiceMiniGitTest app ci_core)
+
+add_executable(AdjustmentTransferServiceTest
+  ${ALCEDO_TEST_ROOT}/app/adjustment_transfer_service_test.cpp)
+target_include_directories(AdjustmentTransferServiceTest
+  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(AdjustmentTransferServiceTest
+  AdjustmentTransferService
+  EditorPipelineCommandService
+  EditorSessionTestSupport
+  EditGraph
+  EditHistory
+  GTest::gtest_main
+)
+gtest_discover_tests(AdjustmentTransferServiceTest
+  TEST_PREFIX "AdjustmentTransferServiceTest."
+  PROPERTIES LABELS "ci_core_flow;edit;history")
+alcedo_register_test_target(AdjustmentTransferServiceTest app ci_core)
 
 add_executable(EditHistoryMgmtServiceTest ${ALCEDO_TEST_ROOT}/app/history_mgmt_service_test.cpp)
 target_include_directories(EditHistoryMgmtServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
@@ -128,7 +243,7 @@ alcedo_register_test_target(EditHistoryMgmtServiceTest app ci_core)
 # EditorSessionCommandQueue is linked explicitly because the service's public
 # header exposes the queue types while linking the queue library privately.
 add_executable(EditorRenderCoordinatorTest ${ALCEDO_TEST_ROOT}/app/editor_render_coordinator_test.cpp)
-target_include_directories(EditorRenderCoordinatorTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_include_directories(EditorRenderCoordinatorTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(EditorRenderCoordinatorTest
   EditorSessionService EditorSessionCommandQueue GTest::gtest_main)
 gtest_discover_tests(EditorRenderCoordinatorTest TEST_PREFIX "EditorRenderCoordinatorTest."
@@ -153,6 +268,7 @@ target_link_libraries(EditorSessionTestSupport
     EditorMiniGitMaterializer
     ProjectService
     EditHistory
+    EditGraph
     Storage
     GTest::gtest
 )
@@ -210,7 +326,7 @@ alcedo_register_test_target(EditorSessionNavigationControllerTest app ci_core)
 # EditorSessionRenderController owns render/first-frame
 # state. Focused unit tests with a real coordinator and bootstrap scheduler.
 add_executable(EditorSessionRenderControllerTest ${ALCEDO_TEST_ROOT}/app/editor_session_render_controller_test.cpp)
-target_include_directories(EditorSessionRenderControllerTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_include_directories(EditorSessionRenderControllerTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(EditorSessionRenderControllerTest
     EditorSessionRenderController EditorSessionLifecycle EditorSessionService
     EditorSessionCommandQueue GTest::gtest_main)
@@ -225,7 +341,7 @@ add_executable(EditorSessionEditControllerTest ${ALCEDO_TEST_ROOT}/app/editor_se
 target_include_directories(EditorSessionEditControllerTest
   PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(EditorSessionEditControllerTest
-    EditorSessionEditController EditorSessionLifecycle EditHistory
+    EditorSessionEditController EditorSessionLifecycle EditHistory EditorAdjustmentPipeline
     GTest::gtest_main)
 gtest_discover_tests(EditorSessionEditControllerTest
     TEST_PREFIX "EditorSessionEditControllerTest."
@@ -235,6 +351,56 @@ alcedo_register_test_target(EditorSessionEditControllerTest app ci_core)
 # EditorSessionService facade routing tests. Limited to
 # routing and externally visible result ordering; component behavior belongs in
 # the five module test targets above.
+add_executable(EditorPendingInputTest ${ALCEDO_TEST_ROOT}/app/editor_pending_input_test.cpp)
+target_include_directories(EditorPendingInputTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(EditorPendingInputTest PRIVATE EditorPendingInput GTest::gtest_main)
+gtest_discover_tests(EditorPendingInputTest TEST_PREFIX "EditorPendingInputTest."
+    PROPERTIES LABELS "ci_core_flow;editor_session")
+alcedo_register_test_target(EditorPendingInputTest app ci_core)
+
+add_executable(EditorPendingInputSessionTest
+    ${ALCEDO_TEST_ROOT}/app/editor_pending_input_session_test.cpp)
+target_include_directories(EditorPendingInputSessionTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(EditorPendingInputSessionTest
+    PRIVATE EditorSessionService EditorSessionCommandQueue xxHash JSON
+            ${ALCEDO_TEST_OPENCV_MIN_DEPS} GTest::gtest_main)
+gtest_discover_tests(EditorPendingInputSessionTest
+    TEST_PREFIX "EditorPendingInputSessionTest."
+    PROPERTIES LABELS "ci_core_flow;editor_session")
+alcedo_register_test_target(EditorPendingInputSessionTest app ci_core)
+
+add_executable(EditorInteractivePacingTest
+    ${ALCEDO_TEST_ROOT}/app/editor_interactive_pacing_test.cpp)
+target_include_directories(EditorInteractivePacingTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(EditorInteractivePacingTest PRIVATE GTest::gtest_main)
+gtest_discover_tests(EditorInteractivePacingTest TEST_PREFIX "EditorInteractivePacingTest."
+    PROPERTIES LABELS "ci_core_flow;editor_session")
+alcedo_register_test_target(EditorInteractivePacingTest app ci_core)
+
+add_executable(EditorSerialFrameAdmissionTest
+    ${ALCEDO_TEST_ROOT}/app/editor_serial_frame_admission_test.cpp)
+target_include_directories(EditorSerialFrameAdmissionTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(EditorSerialFrameAdmissionTest
+    PRIVATE EditorSerialFrameAdmission GTest::gtest_main)
+gtest_discover_tests(EditorSerialFrameAdmissionTest
+    TEST_PREFIX "EditorSerialFrameAdmissionTest."
+    PROPERTIES LABELS "ci_core_flow;editor_session")
+alcedo_register_test_target(EditorSerialFrameAdmissionTest app ci_core)
+
+add_executable(EditorSerialFrameConsumptionTest
+    ${ALCEDO_TEST_ROOT}/app/editor_serial_frame_consumption_test.cpp)
+target_include_directories(EditorSerialFrameConsumptionTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(EditorSerialFrameConsumptionTest
+    PRIVATE EditorSessionService EditorSessionCommandQueue xxHash JSON
+            ${ALCEDO_TEST_OPENCV_MIN_DEPS} GTest::gtest_main)
+gtest_discover_tests(EditorSerialFrameConsumptionTest
+    TEST_PREFIX "EditorSerialFrameConsumptionTest."
+    PROPERTIES LABELS "ci_core_flow;editor_session")
+alcedo_register_test_target(EditorSerialFrameConsumptionTest app ci_core)
+
 add_executable(EditorSessionServiceFacadeTest ${ALCEDO_TEST_ROOT}/app/editor_session_service_facade_test.cpp)
 target_include_directories(EditorSessionServiceFacadeTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(EditorSessionServiceFacadeTest
@@ -257,6 +423,17 @@ gtest_discover_tests(EditorSessionCommandQueueBaselineTest
     TEST_PREFIX "EditorSessionCommandQueueBaselineTest."
     PROPERTIES LABELS "editor_session")
 alcedo_register_test_target(EditorSessionCommandQueueBaselineTest app)
+
+add_executable(EditorSessionNodeCommandTest
+    ${ALCEDO_TEST_ROOT}/app/editor_session_node_command_test.cpp)
+target_include_directories(EditorSessionNodeCommandTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(EditorSessionNodeCommandTest
+    EditorSessionService xxHash JSON ${ALCEDO_TEST_OPENCV_MIN_DEPS} GTest::gtest_main)
+gtest_discover_tests(EditorSessionNodeCommandTest
+    TEST_PREFIX "EditorSessionNodeCommandTest."
+    PROPERTIES LABELS "editor_session;quickqanava")
+alcedo_register_test_target(EditorSessionNodeCommandTest app)
 
 # CQ3: action-admission policy, operation leases, scoped request-id correlation.
 add_executable(EditorSessionActionPolicyCq3Test
@@ -288,7 +465,8 @@ add_executable(EditorSessionControllerPhase5ATest
     ${ALCEDO_TEST_ROOT}/ui/editor_session_controller_phase5a_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp
 )
-target_include_directories(EditorSessionControllerPhase5ATest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_include_directories(EditorSessionControllerPhase5ATest
+  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_compile_definitions(EditorSessionControllerPhase5ATest PRIVATE
   ALCEDO_REPO_ROOT="${CMAKE_SOURCE_DIR}")
 target_link_libraries(EditorSessionControllerPhase5ATest
@@ -426,8 +604,24 @@ alcedo_register_test_target(ImageAnalysisLiveSmokeTest app ci_raw)
 add_executable(ThumbnailServiceTest ${ALCEDO_TEST_ROOT}/app/thumbnail_service_test.cpp)
 target_include_directories(ThumbnailServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(ThumbnailServiceTest ThumbnailService ProjectService ImportService GTest::gtest_main)
+gtest_discover_tests(ThumbnailServiceTest TEST_PREFIX "ThumbnailServiceTest.")
 
 alcedo_register_test_target(ThumbnailServiceTest app)
+
+add_executable(MaskThumbnailServiceTest ${ALCEDO_TEST_ROOT}/app/mask_thumbnail_service_test.cpp)
+target_include_directories(MaskThumbnailServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(MaskThumbnailServiceTest PRIVATE MaskThumbnailService GTest::gtest_main
+    Qt6::Gui)
+gtest_discover_tests(MaskThumbnailServiceTest TEST_PREFIX "MaskThumbnailServiceTest."
+    PROPERTIES LABELS "ci_core_flow")
+alcedo_register_test_target(MaskThumbnailServiceTest app ci_core)
+
+add_executable(PipelineSharedUseTest ${ALCEDO_TEST_ROOT}/app/pipeline_shared_use_test.cpp)
+target_include_directories(PipelineSharedUseTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(PipelineSharedUseTest ThumbnailService ExportService ProjectService
+  ImportService GTest::gtest_main ImageWriter ${ALCEDO_TEST_OPENCV_MIN_DEPS})
+gtest_discover_tests(PipelineSharedUseTest TEST_PREFIX "PipelineSharedUseTest.")
+alcedo_register_test_target(PipelineSharedUseTest app)
 
 add_executable(ThumbnailDiskCacheServiceTest ${ALCEDO_TEST_ROOT}/app/thumbnail_disk_cache_service_test.cpp)
 target_include_directories(ThumbnailDiskCacheServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})

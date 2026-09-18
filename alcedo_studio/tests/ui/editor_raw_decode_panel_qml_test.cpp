@@ -22,6 +22,7 @@
 #include <filesystem>
 #include <memory>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
@@ -44,6 +45,7 @@ class RawDecodeSession final : public QObject, public IEditorAdjustmentSubmitter
     QString field_key;
     QString params_json;
     bool    settled = false;
+    alcedo::EditorParameterWrite write = alcedo::EditorScalarWrite{};
   };
 
   explicit RawDecodeSession(QVariantMap snapshot, QObject* parent = nullptr)
@@ -60,6 +62,35 @@ class RawDecodeSession final : public QObject, public IEditorAdjustmentSubmitter
     emit activeAdjustmentPanelChanged();
   }
   [[nodiscard]] auto canEdit() const -> bool override { return true; }
+
+  auto submitWrite(QString fieldKey, alcedo::EditorParameterWrite write, bool settled)
+      -> bool override {
+    calls.push_back({fieldKey, QString(), settled, write});
+    if (settled) {
+      if (const auto* raw = std::get_if<alcedo::DevelopRawDecodeUpdate>(&write)) {
+        QVariantMap raw_map;
+        if (raw->demosaic_method.has_value()) {
+          raw_map.insert(QStringLiteral("method"),
+                         QString::fromStdString(*raw->demosaic_method));
+        }
+        if (raw->highlights_reconstruct.has_value()) {
+          raw_map.insert(QStringLiteral("highlights_reconstruct"), *raw->highlights_reconstruct);
+        }
+        if (raw->use_camera_wb.has_value()) {
+          raw_map.insert(QStringLiteral("use_camera_wb"), *raw->use_camera_wb);
+        }
+        if (raw->user_wb.has_value()) {
+          raw_map.insert(QStringLiteral("user_wb"), *raw->user_wb);
+        }
+        QVariantMap wrapper;
+        wrapper.insert(QStringLiteral("raw"), raw_map);
+        snapshot_.insert(QStringLiteral("raw_decode"), wrapper);
+        ++snapshot_revision_;
+        emit adjustmentSnapshotChanged();
+      }
+    }
+    return true;
+  }
 
   bool               submitPatch(QString fieldKey, QString paramsJson, bool settled) override {
     calls.push_back({std::move(fieldKey), std::move(paramsJson), settled});
@@ -264,19 +295,15 @@ TEST(EditorRawDecodePanelQmlTest, UserChangesSubmitCompleteRawOperatorParams) {
   ASSERT_EQ(session.calls.size(), 1u);
   EXPECT_EQ(session.calls.back().field_key, QStringLiteral("raw_decode"));
   EXPECT_TRUE(session.calls.back().settled);
-  const auto raw_after_method = QJsonDocument::fromJson(session.calls.back().params_json.toUtf8())
-                                    .object()
-                                    .value(QStringLiteral("raw"))
-                                    .toObject();
-  EXPECT_EQ(raw_after_method.value(QStringLiteral("method")).toString(),
-            QStringLiteral("neural_engine"));
-  // The accelerator backend is never part of the edit params.
-  EXPECT_FALSE(raw_after_method.contains(QStringLiteral("gpu_backend")));
-  EXPECT_FALSE(raw_after_method.contains(QStringLiteral("cuda")));
-  EXPECT_FALSE(raw_after_method.contains(QStringLiteral("opencl")));
-  EXPECT_TRUE(raw_after_method.contains(QStringLiteral("decode_res")));
-  EXPECT_FALSE(raw_after_method.value(QStringLiteral("use_camera_wb")).toBool());
-  EXPECT_DOUBLE_EQ(raw_after_method.value(QStringLiteral("user_wb")).toDouble(), 5120.0);
+  const auto* raw_after_method =
+      std::get_if<alcedo::DevelopRawDecodeUpdate>(&session.calls.back().write);
+  ASSERT_NE(raw_after_method, nullptr);
+  ASSERT_TRUE(raw_after_method->demosaic_method.has_value());
+  EXPECT_EQ(*raw_after_method->demosaic_method, "neural_engine");
+  ASSERT_TRUE(raw_after_method->use_camera_wb.has_value());
+  EXPECT_FALSE(*raw_after_method->use_camera_wb);
+  ASSERT_TRUE(raw_after_method->user_wb.has_value());
+  EXPECT_DOUBLE_EQ(*raw_after_method->user_wb, 5120.0);
 
   auto* highlights = harness.findObject<QQuickItem>(QStringLiteral("rawHighlightsControl"));
   ASSERT_NE(highlights, nullptr);
@@ -286,13 +313,13 @@ TEST(EditorRawDecodePanelQmlTest, UserChangesSubmitCompleteRawOperatorParams) {
   QTest::mouseClick(harness.window(), Qt::LeftButton, {}, CenterInWindow(highlight_switch));
   ProcessEvents(80);
   ASSERT_EQ(session.calls.size(), 2u);
-  const auto raw_after_toggle = QJsonDocument::fromJson(session.calls.back().params_json.toUtf8())
-                                    .object()
-                                    .value(QStringLiteral("raw"))
-                                    .toObject();
-  EXPECT_EQ(raw_after_toggle.value(QStringLiteral("method")).toString(),
-            QStringLiteral("neural_engine"));
-  EXPECT_FALSE(raw_after_toggle.value(QStringLiteral("highlights_reconstruct")).toBool());
+  const auto* raw_after_toggle =
+      std::get_if<alcedo::DevelopRawDecodeUpdate>(&session.calls.back().write);
+  ASSERT_NE(raw_after_toggle, nullptr);
+  ASSERT_TRUE(raw_after_toggle->demosaic_method.has_value());
+  EXPECT_EQ(*raw_after_toggle->demosaic_method, "neural_engine");
+  ASSERT_TRUE(raw_after_toggle->highlights_reconstruct.has_value());
+  EXPECT_FALSE(*raw_after_toggle->highlights_reconstruct);
 }
 
 TEST(EditorRawDecodePanelQmlTest,

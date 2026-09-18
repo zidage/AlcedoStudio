@@ -1,0 +1,4 @@
+interface:
+  display_name: "Grill Code Review"
+  short_description: "Test-evidence review for correctness and maintainability"
+  default_prompt: "Use $grill-code-review to audit this change through aggressive test evidence and maintainability checks."

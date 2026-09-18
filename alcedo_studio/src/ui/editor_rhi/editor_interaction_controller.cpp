@@ -264,9 +264,10 @@ void EditorInteractionController::resetPresentationStateForNewImage() {
   crop.aspect_locked    = false;
   viewer_state_.SetCropOverlayState(crop);
 
-  presentation_mode_  = FramePresentationMode::FullFrame;
-  detail_roi_visible_ = false;
-  detail_roi_uv_      = QRectF(0.0, 0.0, 1.0, 1.0);
+  presentation_mode_         = FramePresentationMode::FullFrame;
+  detail_roi_visible_        = false;
+  detail_roi_uv_             = QRectF(0.0, 0.0, 1.0, 1.0);
+  displayed_mask_geometry_  = {};
 
   viewer_state_.SetViewTransform(ViewTransformController::kMinInteractiveZoom,
                                  QVector2D(0.0f, 0.0f));
@@ -655,6 +656,66 @@ bool EditorInteractionController::isItemPointInsideImage(qreal x, qreal y) const
   }
   return ViewportMapper::WidgetPointToImageUv(QPointF(x, y), widgetInfo(), imageInfo(), zoom, pan)
       .has_value();
+}
+
+void EditorInteractionController::setDisplayedMaskGeometry(const ResolvedRenderGeometry& geometry) {
+  const auto& current = displayed_mask_geometry_;
+  const bool  same =
+      current.full_reference_extent == geometry.full_reference_extent &&
+      current.render_extent == geometry.render_extent &&
+      current.edit_extent == geometry.edit_extent &&
+      current.decoded_extent == geometry.decoded_extent &&
+      MatrixApproxEqual(current.render_to_reference, geometry.render_to_reference) &&
+      MatrixApproxEqual(current.reference_to_render, geometry.reference_to_render) &&
+      MatrixApproxEqual(current.reference_to_edit, geometry.reference_to_edit) &&
+      MatrixApproxEqual(current.edit_to_render, geometry.edit_to_render) &&
+      MatrixApproxEqual(current.decoded_to_reference, geometry.decoded_to_reference);
+  if (same) {
+    return;
+  }
+  displayed_mask_geometry_ = geometry;
+  // The Mask mapping basis changed with the presented frame; overlays holding
+  // mapped handles must rebuild even before the next pointer event.
+  emit overlayGeometryChanged();
+}
+
+auto EditorInteractionController::maskEditViewMapping() const -> MaskEditViewMapping {
+  MaskEditViewMapping mapping;
+  mapping.widget = widgetInfo();
+  // Crop overlay keeps uncropped source in image_info_. Mask mapping uses the
+  // displayed photograph (render-reference size when the viewport has one).
+  mapping.photograph = interactionImageInfo();
+  mapping.geometry   = displayed_mask_geometry_;
+  mapping.presentation = presentation_mode_;
+  const auto view     = viewer_state_.GetViewTransform();
+  mapping.zoom        = view.zoom;
+  mapping.pan         = view.pan;
+  if (presentation_mode_ == FramePresentationMode::RoiFrame) {
+    mapping.zoom = 1.0f;
+    mapping.pan  = QVector2D(0.0f, 0.0f);
+    mapping.displayed_roi = FrameRoiRect{
+        static_cast<float>(detail_roi_uv_.x()),
+        static_cast<float>(detail_roi_uv_.y()),
+        static_cast<float>(detail_roi_uv_.width()),
+        static_cast<float>(detail_roi_uv_.height()),
+    };
+  }
+  return mapping;
+}
+
+auto EditorInteractionController::MapItemToMaskReference(qreal x, qreal y, bool allow_outside) const
+    -> std::optional<MaskReferenceSample> {
+  return MaskEditGeometry::MapItemToReference(maskEditViewMapping(), QPointF(x, y),
+                                               allow_outside);
+}
+
+auto EditorInteractionController::MapMaskReferenceToItem(Vector2 reference_pixels) const
+    -> std::optional<QPointF> {
+  return MaskEditGeometry::MapReferenceToItem(maskEditViewMapping(), reference_pixels);
+}
+
+auto EditorInteractionController::maskEditMappingIdentity() const -> MaskEditMappingIdentity {
+  return MaskEditGeometry::Identity(maskEditViewMapping());
 }
 
 auto EditorInteractionController::overlaySnapshot() const -> EditViewerOverlaySnapshot {

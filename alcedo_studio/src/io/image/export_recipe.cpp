@@ -10,6 +10,7 @@
 #include <iomanip>
 #include <limits>
 #include <sstream>
+#include <stdexcept>
 #include <unordered_set>
 
 namespace alcedo {
@@ -268,6 +269,19 @@ auto ExportRecipe::FromLegacyOptions(const ExportFormatOptions& options) -> Expo
     recipe.resize_.long_edge_pixels_ = options.max_length_side_;
   }
   return recipe;
+}
+
+auto ExportRecipeHasResolvedOutputColor(const ExportRecipe& recipe) -> bool {
+  return recipe.output_color_.has_value() &&
+         std::isfinite(recipe.output_color_->peak_luminance) &&
+         recipe.output_color_->peak_luminance > 0.0f;
+}
+
+void RequireResolvedExportOutputColor(const ExportRecipe& recipe) {
+  if (!ExportRecipeHasResolvedOutputColor(recipe)) {
+    throw std::runtime_error(
+        "ExportRecipe: encoding space, EOTF, and peak luminance must be resolved before scheduling");
+  }
 }
 
 auto ResolveExportResolution(const ExportResizeSpec& spec, ExportPixelSize source)

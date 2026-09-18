@@ -106,76 +106,128 @@ Item {
         root.setEnumValue(rawMethodModel, method, rawMethodModel.defaultIndex)
         rawHighlightsModel.value = rawEntry && rawEntry.highlights_reconstruct !== undefined
                 ? Boolean(rawEntry.highlights_reconstruct) : rawHighlightsModel.defaultValue
+        if (typeof whiteBalanceSection.loadFromSnapshot === "function")
+            whiteBalanceSection.loadFromSnapshot(snapshot)
         root.restoring = false
     }
 
-    ColumnLayout {
+    Flickable {
+        id: rawScroll
+        objectName: "editorRawDecodePanelScroll"
         anchors.fill: parent
-        spacing: appTheme.spaceSm
+        contentWidth: width
+        contentHeight: rawColumn.implicitHeight
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+        flickableDirection: Flickable.VerticalFlick
+        pressDelay: 0
 
-        Label {
-            objectName: "rawDecodeTitle"
-            Layout.fillWidth: true
-            text: qsTr("RAW Decode")
-            color: root.colText
-            font.pixelSize: appTheme.fontSizeTitle
-            font.weight: appTheme.fontWeightHeading
+        property int inputLockCount: 0
+        function beginInputLock() {
+            if (inputLockCount === 0)
+                interactive = false
+            inputLockCount += 1
         }
-
-        CollapsibleSection {
-            id: rawSection
-            objectName: "editorAdjustmentGroupShell_raw_decode"
-            Layout.fillWidth: true
-            title: qsTr("RAW Decode")
-            expanded: true
-            controlsEnabled: root.controlsEnabled
-            surfaceColor: root.colCardSurface
-            disabledSurfaceColor: root.colCardSurface
-            borderColor: root.colCardBorder
-            textColor: root.colText
-            mutedColor: root.colMuted
-            hoverColor: root.colHover
-            accentColor: root.colAccent
-            bodyContentHeight: rawBody.implicitHeight + appTheme.spaceSm
-
-            ColumnLayout {
-                id: rawBody
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.top: parent.top
-                anchors.margins: appTheme.spaceXs
-                spacing: appTheme.spaceSm
-
-                Label {
-                    Layout.fillWidth: true
-                    text: qsTr("Method")
-                    color: root.colMuted
-                    font.pixelSize: appTheme.fontSizeCaption
-                    font.weight: appTheme.fontWeightStrong
-                }
-
-                SegmentedCardSwitcher {
-                    objectName: "rawDemosaicMethodControl"
-                    Layout.fillWidth: true
-                    entries: rawMethodModel.entries
-                    currentIndex: root.selectedMethodIndex
-                    currentValue: root.selectedMethodValue
-                    enabled: root.controlsEnabled
-                    trackColor: root.colBase
-                    trackBorderColor: root.colCardBorder
-                    textColor: root.colText
-                    hoverColor: root.colHover
-                    onSelected: function(index, value) { rawMethodModel.selectIndex(index) }
-                }
-
-                AdjustmentToggle {
-                    objectName: "rawHighlightsControl"
-                    model: rawHighlightsModel
-                }
+        function endInputLock() {
+            if (inputLockCount > 0)
+                inputLockCount -= 1
+            if (inputLockCount <= 0) {
+                inputLockCount = 0
+                interactive = true
             }
         }
 
-        Item { Layout.fillHeight: true }
+        WheelHandler {
+            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+            grabPermissions: PointerHandler.CanTakeOverFromItems
+                             | PointerHandler.CanTakeOverFromHandlersOfDifferentType
+                             | PointerHandler.ApprovesTakeOverByAnything
+            onWheel: function (event) {
+                var step = event.pixelDelta.y !== 0
+                           ? event.pixelDelta.y
+                           : event.angleDelta.y / 120 * 48
+                var maxY = Math.max(0, rawScroll.contentHeight - rawScroll.height)
+                rawScroll.contentY = Math.max(0, Math.min(maxY, rawScroll.contentY - step))
+                event.accepted = true
+            }
+        }
+
+        ColumnLayout {
+            id: rawColumn
+            width: rawScroll.width
+            spacing: appTheme.spaceSm
+
+            Label {
+                objectName: "rawDecodeTitle"
+                Layout.fillWidth: true
+                text: qsTr("RAW Decode")
+                color: root.colText
+                font.pixelSize: appTheme.fontSizeTitle
+                font.weight: appTheme.fontWeightHeading
+            }
+
+            CollapsibleSection {
+                id: rawSection
+                objectName: "editorAdjustmentGroupShell_raw_decode"
+                Layout.fillWidth: true
+                title: qsTr("RAW Decode")
+                expanded: true
+                controlsEnabled: root.controlsEnabled
+                surfaceColor: root.colCardSurface
+                disabledSurfaceColor: root.colCardSurface
+                borderColor: root.colCardBorder
+                textColor: root.colText
+                mutedColor: root.colMuted
+                hoverColor: root.colHover
+                accentColor: root.colAccent
+                bodyContentHeight: rawBody.implicitHeight + appTheme.spaceSm
+
+                ColumnLayout {
+                    id: rawBody
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.margins: appTheme.spaceXs
+                    spacing: appTheme.spaceSm
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: qsTr("Method")
+                        color: root.colMuted
+                        font.pixelSize: appTheme.fontSizeCaption
+                        font.weight: appTheme.fontWeightStrong
+                    }
+
+                    SegmentedCardSwitcher {
+                        objectName: "rawDemosaicMethodControl"
+                        Layout.fillWidth: true
+                        entries: rawMethodModel.entries
+                        currentIndex: root.selectedMethodIndex
+                        currentValue: root.selectedMethodValue
+                        enabled: root.controlsEnabled
+                        trackColor: root.colBase
+                        trackBorderColor: root.colCardBorder
+                        textColor: root.colText
+                        hoverColor: root.colHover
+                        onSelected: function(index, value) { rawMethodModel.selectIndex(index) }
+                    }
+
+                    AdjustmentToggle {
+                        objectName: "rawHighlightsControl"
+                        model: rawHighlightsModel
+                    }
+                }
+            }
+
+            EditorWhiteBalanceSection {
+                id: whiteBalanceSection
+                Layout.fillWidth: true
+                theme: root.theme
+                editorSession: root.editorSession
+                flickable: rawScroll
+                controlsEnabled: root.controlsEnabled
+            }
+        }
     }
 
     EditorAdjustmentEnumModel {

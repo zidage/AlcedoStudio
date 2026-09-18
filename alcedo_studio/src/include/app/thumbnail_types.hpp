@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <string_view>
 
 #include "type/type.hpp"
 
@@ -28,6 +29,31 @@ struct ThumbnailCacheKey {
 
   bool                operator==(const ThumbnailCacheKey& other) const = default;
 };
+
+/**
+ * @brief Whether a thumbnail/analysis disk write may use the queued commit label.
+ *
+ * Thumbnail and export pixels come from the live document at render-lock time.
+ * The disk index is keyed by the commit label captured when the request was
+ * queued. Skip the write when those labels differ, when an editor preview is
+ * still unsettled, or when the live document is dirty. Still deliver the pixels.
+ * Empty labels never write.
+ */
+[[nodiscard]] inline auto ThumbnailDiskCacheWriteAllowed(std::string_view queued_commit_label,
+                                                          std::string_view rendered_commit_label,
+                                                          bool live_has_unsettled_preview,
+                                                          bool live_is_dirty) -> bool {
+  if (queued_commit_label.empty() || rendered_commit_label.empty()) {
+    return false;
+  }
+  if (queued_commit_label != rendered_commit_label) {
+    return false;
+  }
+  if (live_has_unsettled_preview || live_is_dirty) {
+    return false;
+  }
+  return true;
+}
 
 }  // namespace alcedo
 

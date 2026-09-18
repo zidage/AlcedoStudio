@@ -11,6 +11,9 @@ Shared components: `IconActionButton.qml`, `CollapsibleSection.qml`,
 `SlidingIconNav.qml`, `DateFilterSection.qml`, `DateCommitGraph.qml`,
 `AdjustmentSlider.qml`, `ThemedProgressBar.qml`, `ThemeCheckBox.qml`
 
+Per-file decisions: `docs/VI/README.md`. That catalog specializes this global
+system for individual QML files and is updated with each approved visual change.
+
 This document freezes the visual system for the unified QML workspace (Phase 4C).
 Phase 5–6 must consume these tokens; they must not invent a parallel palette.
 
@@ -23,7 +26,12 @@ Phase 5–6 must consume these tokens; they must not invent a parallel palette.
 3. If a new value is required, add it to `AppTheme` **and** this document in the
    same change. Never publish a value here that differs from code.
 4. Prefer shared components over copy-pasted Button/Rectangle chrome.
-5. Run the Phase 4C visual/motion tests after structural QML changes.
+5. Verify visual changes manually in every state listed by the applicable
+   `docs/VI/README.md` entry. Automated tests cover behavior and accessibility,
+   not exact colors, fills, borders, icon tint, or screenshots.
+6. Apply the monochrome selection and restrained accent rules below to every
+   new or changed surface. A shared component or existing color token does not
+   exempt a surface from these rules.
 
 Drift checklist: `docs/roadmap/alcedo_studio/ui/qml_visual_literal_review_checklist.md`
 
@@ -40,25 +48,75 @@ Drift checklist: `docs/roadmap/alcedo_studio/ui/qml_visual_literal_review_checkl
 | UI caption | `uiFontFamily` | `fontSizeCaption` (11) | `fontWeightRegular` | `lineHeightCaption` (14) | Secondary chrome |
 | Headline | `headlineFontFamily` | `fontSizeHeadline` (22) | `fontWeightHeading` | `lineHeightHeadline` (28) | Empty-state titles |
 | Data / numeric | `dataFontFamily` | body/caption | regular/strong | matching | Tabular metrics, zoom, crop degrees (IBM Plex Sans) |
-| Mono (minigit) | `monoFontFamily` | body/caption | regular | matching | **Only** minigit history/Versions data: commit hashes, before/after delta lines. Family is **DM Mono** (`data_DMMono.ttf`). Do **not** use for general metrics, filmstrip counts, zoom, or crop degrees — those stay on `dataFontFamily`. |
+| Mono | `monoFontFamily` | body/caption | regular | matching | Minigit history/Versions data (commit hashes, before/after delta lines) and the adjustment-header EXIF tokens. Family is **DM Mono** (`data_DMMono.ttf`). Do **not** use for general metrics, filmstrip counts, zoom, crop degrees, or the selected node display name. |
 
 Families resolve at runtime from registered Alcedo fonts (`AppTheme::RegisterFonts`).
 Do not hardcode Inter, Roboto, Arial, or system UI fonts in feature QML.
 
-### Minigit typography
+### Monospace typography
 
-The editor history / Versions rail (mini-Git) is the only product surface that
-uses monospace:
+Monospace (`monoFontFamily`, DM Mono) is limited to these surfaces:
 
 | Surface | Token | What |
 | --- | --- | --- |
 | Version card commit line | `monoFontFamily` + `fontSizeCaption` | `Commit <8-hex>` or `Commit image root` |
 | Transaction card hash | `monoFontFamily` + `fontSizeCaption` | `Commit <8-hex>` per row |
 | Transaction before/after | `monoFontFamily` + `fontSizeBody` | Delta value line (`0 → +0.35`) |
+| Adjustment header EXIF tokens | `monoFontFamily` + `fontSizeCaption` | Four equal-width cells: `100mm`, `f2.8`, `1/500s`, `ISO 100` |
 
 Version and transaction **titles**, times, and section chrome stay on
-`uiFontFamily`. Active Version is outline-only (1 px text-color border); no
+`uiFontFamily`. The selected node display name in the adjustment header also stays
+on `uiFontFamily`. Active Version is outline-only (1 px text-color border); no
 `CURRENT HEAD` pill and no separate "Checked out" / dual Head+Commit labels.
+
+---
+
+## UI copy composition
+
+### Hard ban: `xx · xx` labels
+
+Do not join independent names, values, counts, modes, or states with a centered
+dot in Alcedo-owned UI copy. This ban applies to panel titles, node chrome,
+metadata, badges, toolbars, list rows, and status text.
+
+Forbidden examples include `On · 2 masks`, `RAW · Active`, and
+`Tone Curve · Enabled`. Give each item a separate visual role: a dedicated
+label, value, icon with an accessible name, column, or row. Use spacing,
+alignment, or a structural divider when the relationship needs visual grouping.
+Do not reproduce the same compound-label pattern with a bullet, slash, vertical
+bar, or dash.
+
+### Hard ban: unrequested pills and badges
+
+Do not add a new pill, badge, chip, tag, lozenge, or similar rounded text
+container unless the user explicitly requests that element for the current UI.
+A reference image, an existing component, or a data type does not give this
+permission. Use plain text, an icon, a standard action, or layout structure by
+default. Do not copy an existing approved pill or badge into a new surface
+without an explicit user request.
+
+### Hard ban: unrequested status dots
+
+Do not add a new status dot, presence dot, activity dot, notification dot, or
+other colored circular indicator unless the user explicitly requests it for the
+current UI. A reference image, an existing component, or a semantic color token
+does not give this permission. Do not use a dot for decorative balance.
+Existing approved indicators can remain in an unchanged surface. Do not copy
+them into a new or changed surface without an explicit user request.
+
+### Hard ban: self-drawn SVG assets
+
+Do not invent, trace, or generate SVG path data for Alcedo UI icons. When work
+requires adding, replacing, or newly assigning an SVG, report the exact need
+and intended source to the user before editing. Continue only after the user
+provides the SVG or explicitly approves an existing repository or external
+asset. Reuse an approved repository asset when it already expresses the same
+meaning.
+
+Record the source icon name, source URL, and license in every newly added SVG.
+Normalization may change the source stroke color, viewBox formatting, and an
+explicitly approved stroke width, but it must not redesign the approved path
+geometry. The pipeline icon added on 2026-09-17 is user-provided and approved.
 
 ---
 
@@ -66,6 +124,54 @@ Version and transaction **titles**, times, and section chrome stay on
 
 Semantic colors follow the active theme (`currentThemeIndex` 0 Alcedo / 1 Classic)
 and notify via `ThemeChanged`.
+
+### Monochrome selection and restrained theme blue
+
+**Product direction, 2026-09-16:** keep application chrome predominantly
+monochrome. Use neutral surface contrast, text/icon inversion, and clear
+structure to express selection. Theme blue must remain a restrained accent.
+These rules apply to Library thumbnails, filmstrip items, Nodes, Mask Groups,
+Mask rows, History/Versions, navigation, and other selectable controls.
+
+**Hard ban: blue picture-frame selection.** Never surround a selected photo,
+thumbnail, node, group, card, or panel with a blue border, outline, ring, glow,
+or animated frame. This includes `accentColor`, `accentSecondaryColor`,
+hardcoded blue, and the default selection decoration of a framework component.
+Making the blue frame thinner or more transparent does not make it acceptable.
+Do not replace it with a blue selection slab, tinted well, or blue side stripe.
+
+- Dense rows and segments use `editorListSelectedFillColor` with
+  `editorListSelectedInkColor` by default. A per-file VI entry can instead
+  require a neutral outline with unchanged text and icon colors. Mask Groups
+  use that outline treatment.
+- Nodes and established outline-based surfaces keep their neutral fill and
+  use the existing text-color outline. Nodes use `graphSelectionOutlineColor`
+  (`textColor`), never a theme-accent alias. A neutral outline is permitted;
+  do not add nested frames around the group and each child thumbnail.
+- A group containing the selected Mask remains identifiable through its
+  header text/weight or a quiet neutral surface. Give the selected Mask row
+  the strongest indication; do not compete with a second bright group frame.
+- Keep hover, persistent selection, and keyboard focus distinct. Selection
+  cannot depend only on hover or on a color hue. Keyboard focus must stay
+  visible using the component's documented treatment; it must not become a
+  persistent blue frame after a pointer selection.
+- New or changed chrome starts with neutral AppTheme roles. Use theme blue
+  only for a specific, documented action or state that needs the accent, keep
+  it to that small element, and avoid repeating it across labels, icons,
+  borders, and fills in the same control. Generic selection, group expansion,
+  deletion locks, and panel activation do not justify blue.
+- Photo pixels, color-editing data, RGB scope channels, and documented
+  error/warning or connection semantics retain their meaningful colors.
+  Their colors must not be reused as selection decoration.
+
+The token table below also inventories existing implementation. In particular,
+the current `selectedTintColor` Library wash is a legacy accent use, not the
+pattern for new or changed selection. This policy update does not claim that
+all existing QML usages have already been replaced. Keep AppTheme values and
+this document synchronized when implementing a visual change; do not create a
+parallel palette to satisfy the policy.
+
+### Semantic tokens
 
 | Role | Token | Use |
 | --- | --- | --- |
@@ -78,14 +184,14 @@ and notify via `ThemeChanged`.
 | Text | `textColor` | Primary copy |
 | Text muted | `textMutedColor` | Secondary / empty hints |
 | Icon | `iconColor` | Default SVG tint |
-| Accent | `accentColor` (`toneGold`) | Workspace thumb, primary accent |
-| Accent secondary | `accentSecondaryColor` | Thumb border, Material primary |
+| Accent | `accentColor` | Restricted theme accent for a documented action/state; never generic selection or workspace thumbs |
+| Accent secondary | `accentSecondaryColor` | Secondary accent only where explicitly specified; never selected borders or a reason to use Material |
 | Danger | `dangerColor` (`toneWine`) | Destructive emphasis |
 | Danger tint | `dangerTintColor` | Soft danger wells |
 | Background task finished | `backgroundTaskFinishedColor` | Green status lamp for completed/canceled work |
 | Background task working | `backgroundTaskWorkingColor` | Yellow status lamp for queued/running/canceling work |
 | Background task failed | `backgroundTaskFailedColor` | Red status lamp for failed work |
-| Selected tint | `selectedTintColor` | Library selected card wash |
+| Selected tint | `selectedTintColor` | Legacy Library card wash; new or changed selection follows the monochrome rules above |
 | Hover | `hoverColor` | Quiet hover wash |
 | Divider | `dividerColor` | Hairlines, card borders |
 | Glass panel | `glassPanelColor` | Translucent shells when needed |
@@ -96,20 +202,18 @@ and notify via `ThemeChanged`.
 | **Button pressed fill** | **`buttonPressedFillColor`** | **Opaque pressed-state fill** (= hover well) |
 | **Button selected fill** | **`buttonSelectedFillColor`** | **Opaque selected-state fill** (= pressed / hover well) |
 | **Disabled surface** | **`disabledSurfaceColor`** | **Reserved muted shell token** (not used for editor side-panel shells) |
-| **Merge current** | **`mergeCurrentColor` / `mergeCurrentFillColor`** | **Git red for Current labels, value ink, borders, and selected wells** |
-| **Merge incoming** | **`mergeIncomingColor` / `mergeIncomingFillColor`** | **Git green for Incoming labels, value ink, borders, and selected wells** |
 | **List selected fill** | **`editorListSelectedFillColor`** | **Monochrome light well for dense catalog rows** (LUT browser, inverted selection) |
 | **List selected ink** | **`editorListSelectedInkColor`** | **Text / icon ink on the light selected well** (= `bgBaseColor`) |
 | **List favorite idle** | **`editorListFavoriteIdleColor`** | **Unstarred glyph on sunken (dark) rows** |
-| **List favorite active** | **`editorListFavoriteActiveColor`** | **Starred glyph on sunken rows** (`accentColor` / toneGold) |
+| **List favorite active** | **`editorListFavoriteActiveColor`** | **Starred glyph on sunken rows** (existing, localized `accentColor` use) |
 | **List favorite idle on selected** | **`editorListFavoriteIdleOnSelectedColor`** | **Unstarred glyph inverted on the light well** |
 | **List favorite active on selected** | **`editorListFavoriteActiveOnSelectedColor`** | **Starred glyph inverted on the light well** (full ink) |
 
 **Monochrome inverted list selection:** dense catalogs (LUT panel first) keep a
 black-and-white row language — sunken `bgBaseColor` track, light
 `editorListSelectedFillColor` bar, `editorListSelectedInkColor` for title and
-secondary copy. Favorite stars **invert with the row**: muted light idle + gold
-active on dark rows; muted ink idle + full ink active on the selected light
+secondary copy. Favorite stars **invert with the row**: muted light idle + the
+documented favorite accent on dark rows; muted ink idle + full ink active on the selected light
 well. Type badges use a white chip (`editorSliderHandleColor`) on dark rows and
 invert to ink-on-bone when the row is selected. Do not reintroduce ad-hoc
 `#D8D4CD` / `Qt.rgba` star or badge colors in feature QML.
@@ -118,7 +222,7 @@ invert to ink-on-bone when the row is selected. Do not reintroduce ad-hoc
 graph: flat rows sit directly on the sunken `bgBaseColor` well while a
 continuous 1 px `cardBorderColor` rail links state-driven node glyphs down the
 left gutter — small solid disc for applied edits, small hollow ring for undone
-(redo) rows, large hollow ring for the graph root and merge commits, and a
+(redo) rows, large hollow ring for the graph root, and a
 large double ring (text-ink outline + inner dot) for the checked-out commit.
 Only the checked-out row carries a `cardSurfaceColor` fill with the quiet 1 px
 text-token outline; all other rows stay flat, showing at most a quiet
@@ -264,27 +368,18 @@ beside it so workspace routing remains available while the sidebar is folded.
 
 Side-panel and scope sizing for the editor desktop. Values are logical px; Qt
 scales by DPR so they stay comfortable at 1.0 / 1.25 / 1.5 / 2.0. The preferred
-width unifies the adjustment stack and the History/Versions expanded panel so
+width unifies the adjustment stack and the History/Versions/Nodes expanded panel so
 the two side columns read as one family.
 
 | Token | px | Use |
 | --- | --- | --- |
-| `editorSidePanelWidth` | 320 | Preferred width: adjustment stack + History/Versions expanded panel |
+| `editorSidePanelWidth` | 320 | Preferred width: adjustment stack + History/Versions/Nodes expanded panel |
 | `editorSidePanelWidthMin` | 260 | Adjustment stack minimum (narrow-window floor) |
 | `editorSidePanelWidthMax` | 460 | Adjustment stack maximum |
-| `editorMergeDialogWidth` | 960 | Merge conflict resolution dialog — top action bar + three-column Current / Incoming / Merged cards |
 | `editorScopeHeight` | 192 | Histogram / waveform slot preferred height |
 | `editorScopeHeightMin` | 160 | Histogram / waveform slot minimum height |
+| `editorAdjustmentHeaderMinHeight` | 58 | Node-name / EXIF header under the scope: EXIF caption line, `spaceXs` gap, compact Mask-tool row |
 | `collectionsSidebarWidth` | 276 | Persistent left collections column |
-
-**Merge dialog layout:** `EditorMergeDialog` is centered on `Overlay.overlay`
-with the shared MultiEffect blur + `overlayColor` dim used by other modal
-dialogs. Header is one row: `Merge Conflicts` title with Cancel / Complete on
-the same vertical center. Conflict rows scroll in the middle; sticky
-Use All Current / Incoming sit below the list, horizontally centered. Conflict
-rows have no outer card chrome — only the three comparison panes are cards
-(`bgBaseColor`, quiet border; selected sides use merge-tint borders). Complete
-uses the monochrome selected fill.
 
 **Editor close confirm:** `EditorCloseConfirmDialog` uses the same blur +
 `overlayColor` modal shell and `DialogActionButton` actions (Cancel / Discard /
@@ -311,6 +406,256 @@ QPainter-backed waveform density image.
 | `scopeHistogramRedColor` | Red channel |
 | `scopeHistogramGreenColor` | Green channel |
 | `scopeHistogramBlueColor` | Blue channel |
+
+---
+
+## Nodes panel and graph nodes
+
+The Nodes page is the third expandable page in `EditorWorkspaceRail`. It shares
+the rail shell, width limits, fold motion, and Loader lifetime with History and
+Versions. Only one tool page can be open.
+
+### Nodes and Mask Groups rail icons
+
+Use `panel_icons/pipeline.svg` for the Nodes toggle. It uses the user-provided
+Tabler `pipeline` paths:
+
+```svg
+<path d="M3 4h8" />
+<path d="M4 4v5a6 6 0 0 0 6 6h3a1 1 0 0 1 1 1v4" />
+<path d="M10 4v4a1 1 0 0 0 1 1h3a6 6 0 0 1 6 6v5" />
+<path d="M13 20h8" />
+<path d="M12 9v6" />
+```
+
+Use the existing `panel_icons/nodes.svg` Tabler `stack-2` layer icon for the
+Mask Groups rail toggle and Mask Group creation action. Do not use
+`panel_icons/masks.svg` as the Mask Groups rail icon; that asset represents an
+individual Mask or Mask preview.
+
+Both rail assets use the shared 24×24 viewBox, white source stroke, and their
+user-approved 2 px stroke width. Tint them with `ColorImage`. Do not add a
+count, badge, or status dot to either icon.
+
+### Graph canvas
+
+The graph uses a vertical Develop-to-DRT/Post backbone. With no image, the canvas
+shows the localized empty copy and no previous graph. While the session is
+Loading, Acquiring, or Switching, it shows the loading copy and still hides the
+previous image graph. A pending topology command shows muted plain text, not a
+pill, badge, or status dot.
+
+Keyboard input is scoped by focus. Nodes command ids and default sequences live
+in `ShortcutRegistry` (`RegisterNodesPanelShortcuts`). The graph matches a key
+through `commandIdForKey` in `EditorNodesPanel.handleGraphKey` with
+`Keys.priority: Keys.BeforeItem` so the navigable canvas does not swallow Home,
+arrows, or `C`. Masks disclosure keys stay on `EditorNodeMaskDrawer`. Add
+confirm stays on `IconActionButton`.
+
+| Input | Focus | Result |
+| --- | --- | --- |
+| `Tab` / `Shift+Tab` | Add, graph, Masks headers | Move between those targets |
+| `Up` / `Down` | Graph | Previous / next backbone node |
+| `Home` / `End` | Graph | Select Develop / DRT/Post |
+| `Enter` / `Space` | Masks header | Open or close that drawer |
+| `Enter` / `Space` | Add | Add a Color Grade |
+| `F2` | Graph | Rename the selected Color Grade |
+| `Delete` | Graph | Delete the selected Color Grade |
+| `Ctrl++` | Graph | Add a Color Grade |
+| `Ctrl+0` | Graph | Fit the graph |
+| `C` | Graph | Pin Connect from the selected Develop or Color Grade |
+| `Enter` | Graph, Connect active | Request the exclusive-port connection |
+| `Escape` | Graph | Cancel rename or Connect; otherwise keep graph focus |
+
+The canvas is a uniform
+deep AppTheme surface with no grid: the panel assigns `grid: null` on the
+`Qan.GraphView`, which swaps in QuickQanava's empty default grid. Do not add a
+line or point grid, a nested card, minimap, gradient, shadow, glow, or glass
+effect.
+
+Use AppTheme roles for the canvas, edge, port, candidate edge, and node
+selection. Add each missing role to `AppTheme` and this file in the same change.
+Do not put raw graph colors in QML.
+
+| Token | Value | Use |
+| --- | --- | --- |
+| `graphCanvasColor` | `bgDeepColor` | Graph view surface |
+| `graphEdgeColor` | `textMutedColor` | Permanent backbone edge |
+| `graphCandidateEdgeColor` | blend of `textMutedColor` toward `textColor` (0.35) | Connector request preview |
+| `graphPortFillColor` | transparent | Hollow square port fill (canvas shows through) |
+| `graphPortBorderColor` | `#3FB950` | Hollow square port outline |
+| `graphNodeBorderColor` | blend of `cardSurfaceColor` toward `textMutedColor` (0.5) | Visible node card outline |
+| `graphMaskDrawerSurfaceColor` | `bgBaseColor` | Sunken Mask drawer well inside the card |
+| `graphSelectionOutlineColor` | `textColor` | Selected node outline |
+| `graphNodeWidth` | 220 | Color Grade and endpoint width |
+| `graphNodeVerticalGap` | 48 | Vertical space between backbone nodes |
+| `graphNodeOriginX` | 48 | First-layout left origin |
+| `graphNodeOriginY` | 48 | First-layout top origin |
+| `graphEndpointHeight` | 40 | Develop / DRT/Post height |
+| `graphNameRowHeight` | 32 | Color Grade name row |
+| `graphNameRowDividerHeight` | 1 | Hairline between name row and Masks drawer |
+| `graphMaskDrawerHeaderHeight` | 28 | `Masks` disclosure header |
+| `graphMaskRowHeight` | 28 | One Mask type row |
+| `graphPortSize` | 8 | Visible square port |
+| `graphPortHitSize` | 16 | Port pointer target |
+| `graphEdgeWidth` | 2 | Backbone stroke |
+| `graphSelectionOutlineWidth` | 1 | Selected outline (inside the card; does not change node size) |
+
+Ports are hollow green-outlined squares. The Alcedo horizontal dock delegate
+(`EditorNodePortDock.qml`) uses zero outer margin, so port squares sit directly
+against the node card edge; do not reintroduce the QuickQanava default dock
+margin. The dock forwards its own position changes to
+`hostNodeItem.updatePortsEdges()` (the upstream VerticalDock #145 pattern):
+edge endpoints only recompute on port-local geometry changes, so without that
+forwarding a dock move — anchor placement after creation or a drawer fold
+changing the host height — leaves edges visually detached from their ports.
+Node selection paints only the card outline: the adapter installs an
+invisible QuickQanava selection delegate, so the default blue animated
+selection item never renders. This enforces the global blue-frame ban; do not
+restore the upstream decoration for focus, selection, or animation. That
+delegate is still a full-size `z: 1` child
+of the node; the card uses `z: 2` and the port dock uses `z: 3` so Mask rows
+and ports stay the pointer target. Do not set `selectionDelegate` to null in
+QML; null resets the QuickQanava default instead of disabling it.
+
+### Editor viewport Mask overlay
+
+Retained QSG Mask controls sit on `EditorOverlayItem` above the photograph. They
+use a two-layer high-contrast stroke. Existing-mask editing never paints a
+coverage fill, heatmap, or completed Brush path; the Interactive photograph
+supplies coverage feedback. Temporary Brush cursor/path guides are allowed during initial
+drawing. Selected Radial shows the base ellipse and inner/outer feather boundary
+lines during creation and later editing. Selected Gradient uses three parallel
+lines with Geometry crop-style dual high-contrast strokes and short edge grips, without a kite,
+closed polygon or crop dimming. Radius/feather and direction controls must be independently
+reachable. Unselected analytic masks do not retain editing guides.
+
+Mask editing has three mutually exclusive states: inactive, creating, and
+editing an existing Mask. The header creation buttons and a Mask row selection
+both enter this state machine and immediately open the transient Mask page.
+`Enter` and `Escape` finish the edit, hide the overlay, and return to the prior
+adjustment page. Selecting any node-parameter adjustment page also finishes the
+Mask edit before opening that page. `Delete` removes the selected Mask and exits;
+before a new Mask exists it exits the armed creation tool. These shortcuts are
+disabled when Mask editing ends, so the Nodes graph resumes ownership of
+`Delete` for Color Grade removal.
+
+Handle and stroke widths are logical pixels and stay constant at any zoom or
+DPR. Image-space Brush cursor radius is transformed through the shared
+ReferenceSpace mapping. Do not add a coverage-area color. Do not use Material
+controls, badges, pills, or status dots on this overlay.
+
+Selected Radial shows the base ellipse plus inner and outer feather boundary
+lines from the evaluator inverse. Coincident rhos are drawn once. A collapsed
+inner contour is omitted rather than producing invalid geometry. Feather
+handles are rings; radius handles are discs. Selected Gradient uses three
+photograph-clipped parallel loci with Geometry crop-style dual strokes and
+short edge grips. Ends are not joined into a kite, diamond, or closed
+polygon. Crop overlay dimming is not reused.
+
+| Token | Value | Use |
+| --- | --- | --- |
+| `maskOverlayControlColor` | `textColor` | Selected handle fill and connector stroke |
+| `maskOverlayControlOutlineColor` | `bgCanvasColor` | Handle outline |
+| `maskOverlayInactiveColor` | `textMutedColor` | Temporary initial-creation guides |
+| `maskOverlayHandleRadius` | 5 | Handle disc radius (logical px) |
+| `maskOverlayHandleOutlineWidth` | 1.2 | Handle outline width (logical px) |
+| `maskOverlayStrokeWidth` | 1.5 | Connector and cursor stroke (logical px) |
+| `maskOverlayAntialiasWidth` | 1.0 | Premultiplied edge-alpha fringe (logical px) |
+| `maskOverlayHandleHitRadius` | 12 | Pointer hit radius (logical px) |
+| `maskOverlayRotateHandleOffset` | 24 | Rotation/direction handle offset (logical px) |
+| `maskOverlayGuideOuterWidth` | 3.0 | Geometry-crop outer guide stroke (logical px) |
+| `maskOverlayGuideInnerWidth` | 1.2 | Geometry-crop inner guide stroke (logical px) |
+| `maskOverlayGripOuterWidth` | 5.0 | Geometry-crop outer edge-grip width (logical px) |
+| `maskOverlayGripInnerWidth` | 2.4 | Geometry-crop inner edge-grip width (logical px) |
+| `maskOverlayGripSpanT0` | 0.38 | Start of the short edge grip along a visible guide |
+| `maskOverlayGripSpanT1` | 0.62 | End of the short edge grip along a visible guide |
+
+### Color Grade node content
+
+A Color Grade node shows only:
+
+1. Its display name.
+2. A `Masks` drawer header.
+3. Its Mask source types when the drawer is open.
+
+Do not show a topology number. The default name can contain a creation number,
+such as `Color Grade 3`. Topology changes do not change this name.
+
+Do not show node-kind text, a status dot, On/Off content, an adjustment summary,
+a Mask count, or a persistent action row. Do not add a pill or badge. Do not use
+an `xx · xx` compound label or an equivalent separator pattern.
+
+The node uses `cardSurfaceColor` with a 1 px `graphNodeBorderColor` outline that
+stays visible against the canvas. The Mask drawer sits in a sunken
+`graphMaskDrawerSurfaceColor` well inset inside that outline, with rounded
+bottom corners that follow the card radius, so the drawer reads as a contained
+section of the card rather than a floating overlay. Selection keeps the same
+surface and swaps the outline to the high-contrast
+`graphSelectionOutlineColor`. Selection does not change the node size. It does
+not add a label, status dot, glow, blue border, or blue fill.
+
+Develop and DRT/Post use compact endpoint delegates. They show their fixed names
+and real ports. They do not show a Mask drawer. Do not add a `Locked` badge.
+
+### Mask drawer
+
+Each Color Grade Mask drawer starts open. The user can open or close it from the
+full `Masks` header row. A disclosure chevron shows the fold direction. It is
+not a status indicator.
+
+The header stays visible when the drawer is closed. It does not show a Mask
+count. The body clips during the fold and uses `motionFoldOpenMs`,
+`motionFoldCloseMs`, and `motionEasing`. `reduceMotion` sets the duration to
+zero.
+
+Header hover and keyboard focus paint the `hoverColor` wash inside the well
+only: the wash is inset by `graphSelectionOutlineWidth` on every side so the
+card outline stays visible, and when the drawer is fully closed (the header
+then spans the whole drawer) its bottom corners follow the well radius instead
+of painting square corners over the card.
+
+The open state is UI layout state. A drawer change does not modify the pipeline,
+create history, or start photo rendering. An empty open drawer has no Mask rows.
+
+Each Mask row is flat. It shows the approved source-type icon, localized type
+name, and a compact per-row delete `IconActionButton`. Do not show the Mask
+name, opacity, enabled value, invert value, ranges, or identity. Selection
+uses stable NodeId/MaskId and loads the existing Mask into the temporary Masks
+body and viewer without creating a mask or history. Bind highlight to session
+selection with existing monochrome selection tokens and preserve scroll. Do
+not rebuild the list on click. Delete must not propagate into row selection or
+graph Grade deletion. Parameter editors stay in the Masks body.
+
+| Model kind | UI label | Icon |
+| --- | --- | --- |
+| `MaskSourceKind::LinearGradient` | `Gradient` | `mask_icons/gradient.svg` |
+| `MaskSourceKind::Radial` | `Radial` | `mask_icons/radial.svg` |
+
+Use these approved paths:
+
+```svg
+<!-- Gradient: Tabler wash-dry -->
+<path d="M3 6a3 3 0 0 1 3 -3h12a3 3 0 0 1 3 3v12a3 3 0 0 1 -3 3h-12a3 3 0 0 1 -3 -3v-12" />
+
+<!-- Radial: Tabler wash-dryclean -->
+<path d="M3 12a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" />
+```
+
+Normalize both files to the shared 24×24 viewBox and white source stroke.
+Keep the user-approved 2 px stroke width. Use one optical size and one source
+size for the group. The Radial circle is an approved type icon. Do not reuse it
+as a status dot.
+
+### Ports and variable height
+
+Use one small square input port at the top and one small square output port at
+the bottom of a Color Grade. The visible square has a larger input area. A port
+is a connection control, not a status dot.
+
+The output port follows the bottom of the node when the Mask drawer changes
+height. Bound edges must update to the new port position. The user cannot resize
+the node directly.
 
 ---
 
@@ -345,7 +690,9 @@ geometry tests (token equality + optional grab fixtures).
 on a 24×24 viewBox. At the compact 18 px optical size this resolves to roughly
 1.125 logical pixels before antialiasing, keeping dense navigation crisp rather
 than visually bold. Do not mix the upstream Tabler 2 px default with locally
-normalized icons in the same navigation group.
+normalized icons in the same navigation group. The user-approved Nodes pipeline
+icon, Mask Groups layer icon, and Gradient and Radial Mask icons are documented
+2 px exceptions.
 
 **Every SVG action must:**
 
@@ -366,8 +713,12 @@ Non-Tabler assets are preserved for established Alcedo-specific actions
 ## Borders and focus
 
 - Default chrome borders: 1 px `cardBorderColor` / `dividerColor`.
-- Focus rings on structural icon actions: 1 px accent at ~60% alpha via
-  `IconActionButton.showFocusRing` (default true).
+- The existing structural icon action focus treatment is a 1 px accent at
+  ~60% alpha via `IconActionButton.showFocusRing` (default true). This is a
+  narrow keyboard-focus exception on the focused action, not a selection
+  style. Do not copy it onto thumbnails, nodes, groups, cards, or panels, and
+  do not retain it as a pointer-selected state. Prefer a documented neutral
+  focus treatment for new surfaces while keeping keyboard focus visible.
 - **Collections sidebar toggle exception:** this is an immediate toolbar action,
   not a selected mode. Pointer activation does not retain focus and it draws no
   accent focus border. Hover, press, and keyboard focus use the existing quiet
@@ -380,8 +731,10 @@ Non-Tabler assets are preserved for established Alcedo-specific actions
   (light bone well); active segment icon ink = `editorListSelectedInkColor`;
   idle icons = `iconColor` / hover `textColor`. Do **not** paint the thumb with
   `accentColor` (no blue slab).
-- **Adjustment navbar sliding window:** Tone/Look/LUT/Display/Geometry/RAW track
-  uses the **same monochrome thumb** (`editorAdjustmentNavThumb` =
+- **Adjustment navbar sliding window:** Tone / Look / LUT / Display /
+  Geometry / RAW Decode stay on one stable track. The selected node does not
+  hide pages. Write targeting still rejects fields the current node does not own.
+  Uses the **same monochrome thumb** (`editorAdjustmentNavThumb` =
   `editorListSelectedFillColor`, no accent border). Active segment icon ink =
   `editorListSelectedInkColor`; idle = `textMutedColor`. Segment buttons:
   transparent wells, **no** hover fill, **no** focus ring (capsule family).
@@ -390,6 +743,37 @@ Non-Tabler assets are preserved for established Alcedo-specific actions
   with the sunken track edge.
 - **Display method segments:** shared sunk track + monochrome inverted wells
   (see Display Transform panel); title-only, medium height, always expanded.
+
+### Adjustment header (node name, EXIF, and Mask tools)
+
+Place the header between the scope slot and the adjustment navbar. Surfaces use
+`cardSurfaceColor` with `dividerColor` hairlines. Do not add a second panel fill,
+badge, or status dot.
+
+The header is one vertical stack. Both rows fill the same header width:
+
+1. Top: four EXIF tokens in one `RowLayout`. Order is focal length, aperture,
+   shutter, ISO. Each cell uses `Layout.fillWidth` with `preferredWidth` 0 so
+   the four cells share the row equally and span the same width as the name and
+   Mask-tool row. `monoFontFamily`, `fontSizeCaption`, `fontWeightRegular`,
+   `lineHeightCaption`. Single line per cell, elided. Present tokens look like
+   `100mm`, `f2.8`, `1/500s`, `ISO 100`. Missing or invalid values keep their cell
+   and show an em dash. Focal length is actual mm, never 35 mm equivalent. Each
+   token is its own label; do not join them with a centered dot or other
+   compound separator.
+2. Bottom row, horizontal:
+   - Left: selected node display name only. `uiFontFamily`, `fontSizeTitle`,
+     `fontWeightStrong`, `lineHeightTitle`. Vertically centered. Up to two lines,
+     elided. Full name is the accessible name and tooltip. No node-kind subtitle.
+     Do not use `monoFontFamily`.
+   - Right: Radial, then Gradient `IconActionButton` compact actions using
+     `qrc:/mask_icons/radial.svg` and
+     `qrc:/mask_icons/gradient.svg`. Idle fill is `buttonIdleFillColor`. Viewer
+     Mask authoring is NM7; the buttons currently have no product command.
+     Do not insert a vertical rule between the name and the tools.
+
+Node switching does not reread EXIF. Image identity change updates the four EXIF
+cells.
 
 ---
 
@@ -401,7 +785,7 @@ Non-Tabler assets are preserved for established Alcedo-specific actions
 | Loading | Muted status label (e.g. viewport “Preparing…”) |
 | Error | `dangerColor` / `dangerTintColor` — no ad-hoc reds |
 | Disabled | Muted icon/text tint + `enabled: false`; editor shells keep card surface (no parent opacity, no second shell tone) |
-| Selected | Dense catalogs + segmented capsules: `editorListSelectedFillColor` well + `editorListSelectedInkColor` ink (B&W). Icon actions outside capsules may still use `buttonSelectedFillColor` (fill only). Library cards use `selectedTintColor`. Never use cool blue accent as a selected slab in editor chrome. |
+| Selected | Dense rows + segmented controls: `editorListSelectedFillColor` well + `editorListSelectedInkColor` ink. Icon actions outside capsules may use neutral `buttonSelectedFillColor` (fill only). Nodes and established outline-based surfaces use the text-color outline. New or changed Library selection follows the same monochrome policy. No blue frame, tint, slab, glow, or side stripe. |
 | Hover | Quiet `buttonHoveredFillColor` well unless capsule exception applies (Library/Editor and adjustment nav segments: tooltip only) |
 
 ---
@@ -418,6 +802,9 @@ Visible strings are product language only. Ban developer placeholders such as
 | Filmstrip empty | “No images” |
 | History empty | “No edit history yet” |
 | Versions empty | “No versions yet” |
+| Nodes empty | “Select an image to edit nodes” |
+| Nodes loading | “Loading node graph” |
+| Nodes pending command | “Updating node graph” |
 | Adjustment empty (no image) | “Select an image to enable adjustments” |
 | Adjustment empty (has image) | “No adjustments yet” |
 
@@ -448,7 +835,7 @@ blocking. Session identity is never recreated by a fold.
 | Library first reveal | Grid Loader fades in `motionFoldOpenMs` with `spaceMd` translateY | Prepared hidden while the overlay is up; plays as the overlay starts to fade; skipped under `reduceMotion` |
 | Window maximize / restore / minimize | Native `QWindow` state transition (`showMaximized`, `showNormal`, `showMinimized`) | Windows keeps the standard resizable HWND styles and extends the client area through `WindowsFramelessWindow`. macOS keeps the system traffic lights over the leading side of the full-width toolbar and hides the title-bar surface with `Qt.ExpandedClientAreaHint` + `Qt.NoTitleBarBackgroundHint`; toolbar content reserves that leading region. Other platforms use Qt frameless behavior plus drawn caption buttons. The platform owns animation and geometry; QML never fades, snapshots, or interpolates the top-level window |
 
-**Fold rules (History/Versions, adjustment stack, filmstrip, collapsible section):**
+**Fold rules (History/Versions/Nodes, adjustment stack, filmstrip, collapsible section):**
 
 1. Logical expanded/collapsed (or session page) flips immediately.
 2. Persistent rail / handle / section header stays stationary.
@@ -530,14 +917,15 @@ row delegate and arrow affordance automatically.
 | Location | Exception | Why |
 | --- | --- | --- |
 | History / Versions rail | compact 40 px hit, 32 px well, 18 px SVG | Quiet tools inside a 48 px persistent rail |
+| Mask Group drag reorder | whole card lifts under the header name area (dims to 94%), 2 px accent hairline marks the insertion slot; no reorder buttons on the row | Reordering is a drag-and-drop interaction; Ctrl+Up/Ctrl+Down on the focused header covers keyboard and accessibility, so no compact hit areas are needed |
 | Window caption buttons | custom canvas 16 px glyphs on Windows/Linux; hidden on macOS | OS-chrome parity, not content SVG set. macOS uses the system traffic lights in the expanded client area |
 
 ---
 
-## Screenshot / theme matrix (acceptance)
+## Manual visual review matrix
 
-Capture or property-assert these surfaces for empty, selected, collapsed,
-expanded, hover, and disabled where applicable:
+Inspect these surfaces for empty, selected, collapsed, expanded, hover, and
+disabled states where applicable:
 
 - Library/Editor capsule + thumb
 - Library thumbnail cards
@@ -545,7 +933,12 @@ expanded, hover, and disabled where applicable:
 - Adjustment shell + group fold
 - Editor viewport empty state
 - Filmstrip dock + handle
+- Nodes and Mask Groups, including a selected Mask inside its owner group
 
-DPR coverage: icon optical/source token equality at logical 1.0; optional
-window grabs under `tests/ui/fixtures/phase4c/` when
-`ALCEDO_PHASE4C_WRITE_FIXTURES=1`.
+For new or changed selection, verify both themes: no blue picture-frame
+decoration or generic accent selection; selected text/icons remain legible;
+hover, selected state, and keyboard focus remain distinguishable. Check
+framework-provided selection items as well as Alcedo-painted chrome. Existing
+accent tokens do not count as an exception to these acceptance checks.
+
+DPR coverage: inspect icon optical/source sizing at logical 1.0, 1.5, and 2.0.

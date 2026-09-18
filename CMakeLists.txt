@@ -106,6 +106,9 @@ endif()
 option(ALCEDO_ENABLE_CUDA "Enable CUDA-accelerated pipeline backends when CUDA is available." ${ALCEDO_ENABLE_CUDA_DEFAULT})
 option(ALCEDO_ENABLE_METAL "Enable Metal-accelerated pipeline backends when building on Apple platforms." ${ALCEDO_ENABLE_METAL_DEFAULT})
 option(ALCEDO_ENABLE_OPENCL "Enable OpenCL support when the OpenCL SDK/ICD loader is available." ${ALCEDO_ENABLE_OPENCL_DEFAULT})
+option(ALCEDO_ENABLE_BRUSH_MASK
+       "Compile the detached Brush mask module (model, overlay geometry, sampling); not part of the shipped product."
+       OFF)
 option(ALCEDO_BUILD_CUDA_DLLS
        "Build first-party CUDA implementation targets as DLLs to reduce incremental link time."
        ${WIN32})
@@ -501,6 +504,9 @@ if (TARGET Exiv2::Exiv2 AND NOT TARGET Exiv2)
 elseif(WIN32)
     add_library(Exiv2 SHARED IMPORTED)
     set_target_properties(Exiv2 PROPERTIES
+        # Exiv2 exposes STL containers: Debug consumers need the matching MSVC iterator ABI.
+        IMPORTED_LOCATION_DEBUG "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/exiv2_x64-windows/debug/bin/exiv2.dll"
+        IMPORTED_IMPLIB_DEBUG "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/exiv2_x64-windows/debug/lib/exiv2.lib"
         IMPORTED_LOCATION "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/exiv2_x64-windows/bin/exiv2.dll"
         IMPORTED_IMPLIB "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/exiv2_x64-windows/lib/exiv2.lib"
         INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/exiv2_x64-windows/include"
@@ -745,6 +751,9 @@ add_compile_definitions(
     TEST_PROFILER_OUTPUT_PATH=\"${TEST_RES_DIR}/temp_folder/test_profile.prof\"
     CONFIG_PATH=\"${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/\"
 )
+if(ALCEDO_ENABLE_BRUSH_MASK)
+    add_compile_definitions(ALCEDO_ENABLE_BRUSH_MASK)
+endif()
 
 include(GNUInstallDirs)
 
@@ -830,6 +839,39 @@ function(alcedo_install_metal_runtime_libs destination)
     install(FILES ${ALCEDO_METAL_RUNTIME_LIBS} DESTINATION "${destination}")
 endfunction()
 
+# Ship Alcedo LICENSE/NOTICE plus gathered third-party texts, including the
+# QuickQanava BSD-3-Clause and vendored bezier MIT notices required for binary
+# redistribution. @p destination is next to the Windows executable or inside
+# the macOS bundle Resources directory so THIRD_PARTY_NOTICE.txt relative paths
+# to third_party_licenses/ remain valid.
+function(alcedo_install_legal_notices destination)
+    set(_alcedo_notice_root "${CMAKE_SOURCE_DIR}")
+    set(_alcedo_required_notices
+        "${_alcedo_notice_root}/LICENSE"
+        "${_alcedo_notice_root}/NOTICE"
+        "${_alcedo_notice_root}/THIRD_PARTY_NOTICE.txt"
+        "${_alcedo_notice_root}/third_party_licenses/QuickQanava-licence.txt"
+        "${_alcedo_notice_root}/third_party_licenses/QuickQanava-bezier-LICENSE.txt"
+    )
+    foreach(_alcedo_notice IN LISTS _alcedo_required_notices)
+        if(NOT EXISTS "${_alcedo_notice}")
+            message(FATAL_ERROR
+                "[alcedo] Required legal notice is missing: ${_alcedo_notice}")
+        endif()
+    endforeach()
+    install(FILES
+        "${_alcedo_notice_root}/LICENSE"
+        "${_alcedo_notice_root}/NOTICE"
+        "${_alcedo_notice_root}/THIRD_PARTY_NOTICE.txt"
+        DESTINATION "${destination}"
+    )
+    install(DIRECTORY "${_alcedo_notice_root}/third_party_licenses/"
+        DESTINATION "${destination}/third_party_licenses"
+        FILES_MATCHING
+            PATTERN "*"
+    )
+endfunction()
+
 add_subdirectory(${CMAKE_SOURCE_DIR}/alcedo_studio/src/third_party)
 if(DEFINED ALCEDO_LENSFUN_LIBRARY_DIR AND NOT "${ALCEDO_LENSFUN_LIBRARY_DIR}" STREQUAL "")
     list(APPEND CMAKE_BUILD_RPATH "${ALCEDO_LENSFUN_LIBRARY_DIR}")
@@ -876,6 +918,7 @@ if(TARGET ${ALCEDO_MAIN_BIN})
         install(DIRECTORY "${_config_dir}/icc/" DESTINATION "${_bundle_macos_dest}/config/icc")
         install(DIRECTORY "${_config_dir}/lens_calib/" DESTINATION "${_bundle_macos_dest}/config/lens_calib")
         install(DIRECTORY "${_config_dir}/nikon_lens/" DESTINATION "${_bundle_macos_dest}/config/nikon_lens")
+        alcedo_install_legal_notices("${_bundle_resources_dest}")
         alcedo_install_demosaicnet_models("${_config_dir}" "${_bundle_macos_dest}")
         alcedo_install_packaged_luts("${_config_dir}" "${_bundle_macos_dest}/LUTs")
         if(ALCEDO_OPENCL_ENABLED)
@@ -889,6 +932,10 @@ if(TARGET ${ALCEDO_MAIN_BIN})
                 DESTINATION "${_bundle_macos_dest}/opencl/edit/scope/opencl_shader")
             install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/opencl/opencl_shader/"
                 DESTINATION "${_bundle_macos_dest}/opencl/opencl/opencl_shader")
+            install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/edit/runtime/opencl/shader/"
+                DESTINATION "${_bundle_macos_dest}/opencl/edit/runtime/opencl/shader")
+            install(FILES "${CMAKE_SOURCE_DIR}/alcedo_studio/src/include/edit/runtime/dng_profile_gpu_math.h"
+                DESTINATION "${_bundle_macos_dest}/opencl/include/edit/runtime")
         endif()
         alcedo_install_metal_runtime_libs("${_bundle_resources_dest}/metallib")
         alcedo_install_duckdb_extensions("${_bundle_resources_dest}")
@@ -989,6 +1036,7 @@ if(TARGET ${ALCEDO_MAIN_BIN})
         install(DIRECTORY "${_config_dir}/icc/" DESTINATION "${CMAKE_INSTALL_BINDIR}/config/icc")
         install(DIRECTORY "${_config_dir}/lens_calib/" DESTINATION "${CMAKE_INSTALL_BINDIR}/config/lens_calib")
         install(DIRECTORY "${_config_dir}/nikon_lens/" DESTINATION "${CMAKE_INSTALL_BINDIR}/config/nikon_lens")
+        alcedo_install_legal_notices("${CMAKE_INSTALL_BINDIR}")
         alcedo_install_demosaicnet_models("${_config_dir}" "${CMAKE_INSTALL_BINDIR}")
 
         alcedo_install_packaged_luts("${_config_dir}" "${CMAKE_INSTALL_BINDIR}/LUTs")
@@ -1003,6 +1051,10 @@ if(TARGET ${ALCEDO_MAIN_BIN})
                 DESTINATION "${CMAKE_INSTALL_BINDIR}/opencl/edit/scope/opencl_shader")
             install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/opencl/opencl_shader/"
                 DESTINATION "${CMAKE_INSTALL_BINDIR}/opencl/opencl/opencl_shader")
+            install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/edit/runtime/opencl/shader/"
+                DESTINATION "${CMAKE_INSTALL_BINDIR}/opencl/edit/runtime/opencl/shader")
+            install(FILES "${CMAKE_SOURCE_DIR}/alcedo_studio/src/include/edit/runtime/dng_profile_gpu_math.h"
+                DESTINATION "${CMAKE_INSTALL_BINDIR}/opencl/include/edit/runtime")
         endif()
         alcedo_install_duckdb_extensions("${CMAKE_INSTALL_BINDIR}")
 

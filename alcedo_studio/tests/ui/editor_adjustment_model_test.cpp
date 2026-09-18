@@ -10,84 +10,22 @@
 // or GPU is involved. QSignalSpy drives the debounce timer deterministically
 // through the event loop (interval 0 fires on the next loop iteration).
 
-#include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
-#include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
+#include <gtest/gtest.h>
 
-#include <QJsonDocument>
-#include <QJsonObject>
 #include <QSignalSpy>
 #include <QString>
 #include <QVariantList>
 #include <QVariantMap>
-
-#include <gtest/gtest.h>
-
-#include <algorithm>
 #include <memory>
+#include <variant>
 #include <vector>
+
+#include "support/recording_adjustment_submitter.hpp"
+#include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
+#include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
 
 namespace alcedo::ui::test {
 namespace {
-
-// Recording IEditorAdjustmentSubmitter fake. Derives from QObject so the model's
-// setSubmitter(QObject*) dynamic_cast resolves it. No Q_OBJECT: it exposes no
-// signals/slots/properties.
-class RecordingSubmitter : public QObject, public IEditorAdjustmentSubmitter {
- public:
-  struct Call {
-    QString fieldKey;
-    QString params;
-    bool    settled;
-  };
-
-  std::vector<Call> calls;
-  bool              canEditState = true;
-
-  auto submitPatch(QString fieldKey, QString paramsJson, bool settled) -> bool override {
-    if (!canEditState) {
-      return false;
-    }
-    calls.push_back({fieldKey, paramsJson, settled});
-    return true;
-  }
-
-  auto canEdit() const -> bool override { return canEditState; }
-
-  auto settledCount() const -> int {
-    return static_cast<int>(std::count_if(calls.begin(), calls.end(),
-                                           [](const Call& c) { return c.settled; }));
-  }
-  auto interactiveCount() const -> int {
-    return static_cast<int>(std::count_if(calls.begin(), calls.end(),
-                                          [](const Call& c) { return !c.settled; }));
-  }
-  auto lastSettledParams() const -> QString {
-    for (auto it = calls.rbegin(); it != calls.rend(); ++it) {
-      if (it->settled) {
-        return it->params;
-      }
-    }
-    return {};
-  }
-  // Parse {"value": v} (numeric/toggle) or {"index": i, "value": s} (enum).
-  static auto numericValue(const QString& params) -> double {
-    const auto  doc = QJsonDocument::fromJson(params.toUtf8());
-    const auto& obj = doc.object();
-    if (obj.contains("value") && obj.value("value").isDouble()) {
-      return obj.value("value").toDouble();
-    }
-    return 0.0;
-  }
-  static auto boolValue(const QString& params) -> bool {
-    return QJsonDocument::fromJson(params.toUtf8()).object().value("value").toBool();
-  }
-  static auto enumIndex(const QString& params) -> int {
-    return QJsonDocument::fromJson(params.toUtf8()).object().value("index").toInt();
-  }
-  static auto enumValue(const QString& params) -> QString {
-    return QJsonDocument::fromJson(params.toUtf8()).object().value("value").toString();
-  }
-};
 
 auto makeValueModel(RecordingSubmitter& sub) -> std::unique_ptr<EditorAdjustmentValueModel> {
   auto m = std::make_unique<EditorAdjustmentValueModel>();
@@ -139,7 +77,7 @@ auto makeToggleModel(RecordingSubmitter& sub) -> std::unique_ptr<EditorAdjustmen
 // settled patch on release.
 TEST(EditorAdjustmentModelTest, PointerDragSubmitsInteractivePerUpdateAndOneSettledOnRelease) {
   RecordingSubmitter sub;
-  auto m = makeValueModel(sub);
+  auto               m = makeValueModel(sub);
   m->beginDrag();
   m->updateDrag(0.1);
   m->updateDrag(0.2);
@@ -148,14 +86,32 @@ TEST(EditorAdjustmentModelTest, PointerDragSubmitsInteractivePerUpdateAndOneSett
   EXPECT_EQ(sub.interactiveCount(), 3);
   EXPECT_EQ(sub.settledCount(), 1);
   EXPECT_FALSE(m->dragActive());
-  EXPECT_DOUBLE_EQ(RecordingSubmitter::numericValue(sub.lastSettledParams()), 0.3);
+  ASSERT_NE(sub.lastSettledWrite(), nullptr);
+  EXPECT_FLOAT_EQ(RecordingSubmitter::scalarValue(*sub.lastSettledWrite()), 0.3f);
+  EXPECT_TRUE(std::holds_alternative<alcedo::EditorScalarWrite>(*sub.lastSettledWrite()));
+}
+
+// Control value is written and submitPatch is called before updateDrag returns.
+// The submitter records the enqueue; live document mutation is a later owner
+// consume step and is not part of this model seam.
+TEST(EditorAdjustmentModelTest, PointerDragWritesControlValueAndEnqueuesPatchBeforeReturn) {
+  RecordingSubmitter sub;
+  auto               m = makeValueModel(sub);
+  m->beginDrag();
+  m->updateDrag(0.4);
+  ASSERT_EQ(sub.calls.size(), 1u);
+  EXPECT_FALSE(sub.calls.front().settled);
+  EXPECT_DOUBLE_EQ(m->value(), 0.4);
+  EXPECT_FLOAT_EQ(RecordingSubmitter::scalarValue(sub.calls.front().write),
+                  static_cast<float>(m->value()));
+  m->finishDrag();
 }
 
 // 2. A wheel/keyboard burst submits one interactive patch per value and one
 // settled patch after the debounce stabilizes.
 TEST(EditorAdjustmentModelTest, WheelBurstSubmitsInteractivePerValueAndOneSettledAfterDebounce) {
   RecordingSubmitter sub;
-  auto m = makeValueModel(sub);
+  auto               m = makeValueModel(sub);
   m->setDebounceIntervalMs(0);
   m->editValue(0.1);
   m->editValue(0.2);
@@ -167,14 +123,16 @@ TEST(EditorAdjustmentModelTest, WheelBurstSubmitsInteractivePerValueAndOneSettle
   ASSERT_TRUE(spy.wait(1000));
   EXPECT_EQ(sub.settledCount(), 1);
   EXPECT_FALSE(m->hasPendingSettled());
-  EXPECT_DOUBLE_EQ(RecordingSubmitter::numericValue(sub.lastSettledParams()), 0.3);
+  ASSERT_NE(sub.lastSettledWrite(), nullptr);
+  EXPECT_FLOAT_EQ(RecordingSubmitter::scalarValue(*sub.lastSettledWrite()), 0.3f);
+  EXPECT_TRUE(std::holds_alternative<alcedo::EditorScalarWrite>(*sub.lastSettledWrite()));
 }
 
 // 3. Keyboard Enter (commitImmediately) forces the debounced settled commit at
 // once: one interactive, one settled.
 TEST(EditorAdjustmentModelTest, KeyboardEnterCommitImmediatelySubmitsOneSettled) {
   RecordingSubmitter sub;
-  auto m = makeValueModel(sub);
+  auto               m = makeValueModel(sub);
   m->setDebounceIntervalMs(0);
   m->editValue(0.5);
   EXPECT_EQ(sub.interactiveCount(), 1);
@@ -182,40 +140,43 @@ TEST(EditorAdjustmentModelTest, KeyboardEnterCommitImmediatelySubmitsOneSettled)
   m->commitImmediately();
   EXPECT_EQ(sub.settledCount(), 1);
   EXPECT_FALSE(m->hasPendingSettled());
-  EXPECT_DOUBLE_EQ(RecordingSubmitter::numericValue(sub.lastSettledParams()), 0.5);
+  ASSERT_NE(sub.lastSettledWrite(), nullptr);
+  EXPECT_FLOAT_EQ(RecordingSubmitter::scalarValue(*sub.lastSettledWrite()), 0.5f);
 }
 
 // 4. Reset restores the default and commits exactly one settled transaction.
 TEST(EditorAdjustmentModelTest, ResetSubmitsOneSettledWithDefaultValue) {
   RecordingSubmitter sub;
-  auto m = makeValueModel(sub);
+  auto               m = makeValueModel(sub);
   m->setValue(0.7);  // programmatic load: no submit
   ASSERT_EQ(sub.calls.size(), 0u);
   m->reset();
   EXPECT_EQ(sub.settledCount(), 1);
   EXPECT_EQ(sub.interactiveCount(), 0);
   EXPECT_DOUBLE_EQ(m->value(), 0.0);
-  EXPECT_DOUBLE_EQ(RecordingSubmitter::numericValue(sub.lastSettledParams()), 0.0);
+  ASSERT_NE(sub.lastSettledWrite(), nullptr);
+  EXPECT_FLOAT_EQ(RecordingSubmitter::scalarValue(*sub.lastSettledWrite()), 0.0f);
 }
 
 // 5. An out-of-range value is clamped to [minimum, maximum] before any submit.
 TEST(EditorAdjustmentModelTest, OutOfRangeValueIsClampedBeforeSubmit) {
   RecordingSubmitter sub;
-  auto m = makeValueModel(sub);
+  auto               m = makeValueModel(sub);
   m->setDebounceIntervalMs(0);
   m->editValue(100.0);  // above maximum 5.0
   EXPECT_DOUBLE_EQ(m->value(), 5.0);
   EXPECT_EQ(sub.interactiveCount(), 1);
-  EXPECT_DOUBLE_EQ(RecordingSubmitter::numericValue(sub.calls.back().params), 5.0);
+  EXPECT_FLOAT_EQ(RecordingSubmitter::scalarValue(sub.calls.back().write), 5.0f);
   m->commitImmediately();
-  EXPECT_DOUBLE_EQ(RecordingSubmitter::numericValue(sub.lastSettledParams()), 5.0);
+  ASSERT_NE(sub.lastSettledWrite(), nullptr);
+  EXPECT_FLOAT_EQ(RecordingSubmitter::scalarValue(*sub.lastSettledWrite()), 5.0f);
 }
 
 // 6. A reported invalid field entry sets valid=false and does not submit; a
 // subsequent valid edit clears the invalid state and submits.
 TEST(EditorAdjustmentModelTest, InvalidValueSetsValidFalseAndDoesNotSubmit) {
   RecordingSubmitter sub;
-  auto m = makeValueModel(sub);
+  auto               m = makeValueModel(sub);
   ASSERT_TRUE(m->valid());
   m->setInvalid(QStringLiteral("not a number"));
   EXPECT_FALSE(m->valid());
@@ -231,24 +192,27 @@ TEST(EditorAdjustmentModelTest, InvalidValueSetsValidFalseAndDoesNotSubmit) {
 // index and value.
 TEST(EditorAdjustmentModelTest, EnumChangeSubmitsExactlyOneSettledTransaction) {
   RecordingSubmitter sub;
-  auto m = makeEnumModel(sub);
+  auto               m = makeEnumModel(sub);
   m->selectIndex(1);
   EXPECT_EQ(sub.settledCount(), 1);
   EXPECT_EQ(sub.interactiveCount(), 0);
   EXPECT_EQ(m->currentIndex(), 1);
-  EXPECT_EQ(RecordingSubmitter::enumIndex(sub.lastSettledParams()), 1);
-  EXPECT_EQ(RecordingSubmitter::enumValue(sub.lastSettledParams()).toStdString(), "custom");
+  ASSERT_NE(sub.lastSettledWrite(), nullptr);
+  EXPECT_TRUE(std::holds_alternative<alcedo::EditorEnumWrite>(*sub.lastSettledWrite()));
+  EXPECT_EQ(RecordingSubmitter::enumValue(*sub.lastSettledWrite()).toStdString(), "custom");
 }
 
 // 8. A toggle change commits exactly one settled transaction with the new bool.
 TEST(EditorAdjustmentModelTest, ToggleChangeSubmitsExactlyOneSettledTransaction) {
   RecordingSubmitter sub;
-  auto m = makeToggleModel(sub);
+  auto               m = makeToggleModel(sub);
   m->commitValue(true);
   EXPECT_EQ(sub.settledCount(), 1);
   EXPECT_EQ(sub.interactiveCount(), 0);
   EXPECT_TRUE(m->value());
-  EXPECT_TRUE(RecordingSubmitter::boolValue(sub.lastSettledParams()));
+  ASSERT_NE(sub.lastSettledWrite(), nullptr);
+  EXPECT_TRUE(std::holds_alternative<alcedo::EditorToggleWrite>(*sub.lastSettledWrite()));
+  EXPECT_TRUE(RecordingSubmitter::toggleValue(*sub.lastSettledWrite()));
 }
 
 // 9. When the submitter reports canEdit() false (no image / not Interactive),
@@ -256,7 +220,7 @@ TEST(EditorAdjustmentModelTest, ToggleChangeSubmitsExactlyOneSettledTransaction)
 TEST(EditorAdjustmentModelTest, NoSubmitWhenSubmitterCanEditFalse) {
   RecordingSubmitter sub;
   sub.canEditState = false;
-  auto m = makeValueModel(sub);
+  auto m           = makeValueModel(sub);
   m->beginDrag();
   m->updateDrag(0.5);
   m->finishDrag();
@@ -269,14 +233,15 @@ TEST(EditorAdjustmentModelTest, NoSubmitWhenSubmitterCanEditFalse) {
 // before the debounce fires.
 TEST(EditorAdjustmentModelTest, LatestValueWinsWhenMultipleUpdatesBeforeSettled) {
   RecordingSubmitter sub;
-  auto m = makeValueModel(sub);
+  auto               m = makeValueModel(sub);
   m->setDebounceIntervalMs(0);
   m->editValue(0.4);
   m->editValue(0.8);
   QSignalSpy spy(m.get(), &EditorAdjustmentValueModel::settledCommitted);
   ASSERT_TRUE(spy.wait(1000));
   EXPECT_EQ(sub.settledCount(), 1);
-  EXPECT_DOUBLE_EQ(RecordingSubmitter::numericValue(sub.lastSettledParams()), 0.8);
+  ASSERT_NE(sub.lastSettledWrite(), nullptr);
+  EXPECT_FLOAT_EQ(RecordingSubmitter::scalarValue(*sub.lastSettledWrite()), 0.8f);
   EXPECT_DOUBLE_EQ(m->value(), 0.8);
 }
 
@@ -284,7 +249,7 @@ TEST(EditorAdjustmentModelTest, LatestValueWinsWhenMultipleUpdatesBeforeSettled)
 // release is dropped silently (documented limitation); the drag still ends.
 TEST(EditorAdjustmentModelTest, FinishDragAfterSessionLostDropsSettledSilently) {
   RecordingSubmitter sub;
-  auto m = makeValueModel(sub);
+  auto               m = makeValueModel(sub);
   m->beginDrag();
   m->updateDrag(0.5);
   EXPECT_EQ(sub.interactiveCount(), 1);
@@ -298,13 +263,56 @@ TEST(EditorAdjustmentModelTest, FinishDragAfterSessionLostDropsSettledSilently) 
 // editValue, false again after the settled commit lands.
 TEST(EditorAdjustmentModelTest, HasPendingSettledTrueAfterValueFalseAfterCommit) {
   RecordingSubmitter sub;
-  auto m = makeValueModel(sub);
+  auto               m = makeValueModel(sub);
   m->setDebounceIntervalMs(0);
   EXPECT_FALSE(m->hasPendingSettled());
   m->editValue(0.3);
   EXPECT_TRUE(m->hasPendingSettled());
   m->commitImmediately();
   EXPECT_FALSE(m->hasPendingSettled());
+}
+
+TEST(EditorAdjustmentModelTest, LookPercentSlidersSubmitModelUnits) {
+  struct Case {
+    const char* field;
+    double      ui_value;
+    float       model_value;
+  };
+  const Case cases[] = {{"saturation", 40.0, 1.4f},
+                        {"saturation", -100.0, 0.0f},
+                        {"film_grain", 35.0, 0.35f},
+                        {"halation", 80.0, 0.8f}};
+
+  for (const auto& test_case : cases) {
+    RecordingSubmitter         sub;
+    EditorAdjustmentValueModel model;
+    model.setSubmitter(&sub);
+    model.setFieldKey(QString::fromLatin1(test_case.field));
+    model.setMinimum(test_case.ui_value < 0.0 ? -100.0 : 0.0);
+    model.setMaximum(100.0);
+    model.editValue(test_case.ui_value);
+    ASSERT_EQ(sub.interactiveCount(), 1) << test_case.field;
+    EXPECT_FLOAT_EQ(RecordingSubmitter::scalarValue(sub.calls.back().write), test_case.model_value)
+        << test_case.field;
+    model.commitImmediately();
+  }
+}
+
+TEST(EditorAdjustmentModelTest, SharpenSliderKeepsPercentAmountForNeighborPacking) {
+  RecordingSubmitter         sub;
+  EditorAdjustmentValueModel model;
+  model.setSubmitter(&sub);
+  model.setFieldKey(QStringLiteral("sharpen"));
+  model.setMinimum(0.0);
+  model.setMaximum(100.0);
+  model.editValue(65.0);
+
+  ASSERT_EQ(sub.interactiveCount(), 1);
+  const auto* update = std::get_if<alcedo::SharpenUpdate>(&sub.calls.back().write);
+  ASSERT_NE(update, nullptr);
+  ASSERT_TRUE(update->amount.has_value());
+  EXPECT_FLOAT_EQ(*update->amount, 65.0f);
+  model.commitImmediately();
 }
 
 }  // namespace

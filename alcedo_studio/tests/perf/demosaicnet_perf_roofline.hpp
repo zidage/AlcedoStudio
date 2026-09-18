@@ -106,8 +106,8 @@ struct FullFrameWorkEstimate {
   double             halo_work_factor = 1.0;  // paid / cover ( >= 1 )
 };
 
-// Device capability envelope used as the Phase 8.2 decision reference.
-struct DeviceComputeEnvelope {
+// Peak and sustained device TFLOP/s used as the Phase 8.2 decision reference.
+struct DeviceComputeLimits {
   std::string name;
   int         compute_major = 0;
   int         compute_minor = 0;
@@ -127,7 +127,7 @@ struct DeviceComputeEnvelope {
 
 struct RooflineReport {
   FullFrameWorkEstimate work;
-  DeviceComputeEnvelope device;
+  DeviceComputeLimits device;
 
   // Measured intervals (ms); 0 means unavailable.
   double neural_median_ms = 0.0;
@@ -204,11 +204,11 @@ struct RooflineReport {
                                          int owned_w, int owned_h, int tile_count_override)
     -> FullFrameWorkEstimate;
 
-[[nodiscard]] auto EstimateDeviceComputeEnvelope(const DeviceInfo& info) -> DeviceComputeEnvelope;
+[[nodiscard]] auto EstimateDeviceComputeLimits(const DeviceInfo& info) -> DeviceComputeLimits;
 
 // Build the Phase 8.2 gate report. Pass 0 for unknown timings.
 [[nodiscard]] auto BuildRooflineReport(const FullFrameWorkEstimate& work,
-                                       const DeviceComputeEnvelope& device,
+                                       const DeviceComputeLimits& device,
                                        double neural_median_ms, double legacy_median_ms,
                                        double stretch_target_ms = 100.0) -> RooflineReport;
 

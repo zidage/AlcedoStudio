@@ -3,6 +3,7 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 #include "decoders/processor/raw_processor.hpp"
+#include "decoders/processor/raw_rgb_normalization.hpp"
 
 #ifdef HAVE_CUDA
 
@@ -41,22 +42,8 @@ constexpr int kRcdOutputCropRadius = 4;
 struct DeferredCudaLog {
   std::vector<std::string> entries;
 
-  void                     Add(std::string entry) { entries.push_back(std::move(entry)); }
-
-  void                     Flush() const {
-    if (entries.empty()) {
-      return;
-    }
-
-    std::cout << "[LOG] ";
-    for (size_t i = 0; i < entries.size(); ++i) {
-      if (i != 0) {
-        std::cout << " | ";
-      }
-      std::cout << entries[i];
-    }
-    std::cout << '\n';
-  }
+  void Add(std::string entry) { (void)entry; }
+  void Flush() const {}
 };
 
 thread_local DeferredCudaLog* g_deferred_cuda_log = nullptr;
@@ -73,48 +60,26 @@ class ScopedDeferredCudaLog {
   DeferredCudaLog* prev_ = nullptr;
 };
 
-void AppendDeferredLog(std::string entry) {
-  if (g_deferred_cuda_log != nullptr) {
-    g_deferred_cuda_log->Add(std::move(entry));
-    return;
-  }
-
-  std::cout << "[LOG] " << entry << '\n';
-}
+void AppendDeferredLog(std::string entry) { (void)entry; }
 
 void PrintProfileMs(const char* label, const ProfileClock::duration elapsed) {
-  std::ostringstream oss;
-  oss << label << '=' << std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()
-      << " ms";
-  AppendDeferredLog(oss.str());
+  (void)label;
+  (void)elapsed;
 }
 
 void LogCpuProfileStep(const char* label, const ProfileClock::time_point start) {
-  PrintProfileMs(label, ProfileClock::now() - start);
+  (void)label;
+  (void)start;
 }
 
 void LogCudaProfileStep(cv::cuda::Stream& stream, const char* label,
                         const ProfileClock::time_point start) {
-  stream.waitForCompletion();
-  PrintProfileMs(label, ProfileClock::now() - start);
+  (void)stream;
+  (void)label;
+  (void)start;
 }
 
-void LogVramUsage(const char* tag) {
-  size_t            free_bytes  = 0;
-  size_t            total_bytes = 0;
-  const cudaError_t err         = cudaMemGetInfo(&free_bytes, &total_bytes);
-  if (err != cudaSuccess) {
-    std::ostringstream oss;
-    oss << "VRAM " << tag << ": cudaMemGetInfo failed: " << cudaGetErrorString(err);
-    AppendDeferredLog(oss.str());
-    return;
-  }
-  const size_t       used_bytes = total_bytes - free_bytes;
-  std::ostringstream oss;
-  oss << "VRAM " << tag << ": free=" << (free_bytes >> 20) << " MB, total=" << (total_bytes >> 20)
-      << " MB, used=" << (used_bytes >> 20) << " MB";
-  AppendDeferredLog(oss.str());
-}
+void LogVramUsage(const char* tag) { (void)tag; }
 
 auto DecodeResToDownsamplePasses(const DecodeRes decode_res) -> int {
   switch (decode_res) {
@@ -715,6 +680,25 @@ auto RawProcessor::ProcessDirectRgbCuda() -> ImageBuffer {
   process_buffer_.SyncToGPU();
   process_buffer_.ReleaseCPUData();
   auto& gpu_img = process_buffer_.GetCUDAImage();
+  cv::cuda::GpuMat rgb(gpu_img.size(), CV_32FC3);
+  const auto       linearization = raw_norm::BuildRgbLinearization(
+      raw_data_.color, raw_data_.color3_image != nullptr || raw_data_.color4_image != nullptr);
+  CUDA::LinearizeRgb(gpu_img, rgb, linearization, &stream);
+  if (params_.highlights_reconstruct_) {
+    CUDA::HighlightWorkspace workspace;
+    auto                     correction = CUDA::BuildHighlightCorrection(raw_data_.color.cam_mul);
+    CUDA::HighlightAccumulation accumulation;
+    CUDA::AccumulateHighlightStats(rgb, correction, cv::Rect{}, workspace, accumulation, &stream);
+    CUDA::FinalizeHighlightCorrection(accumulation, correction);
+    CUDA::ApplyHighlightCorrectionAndPackRGBA(rgb, gpu_img, correction, raw_data_.color.cam_mul,
+                                              &workspace, &stream);
+  } else {
+    CUDA::ApplyInverseCamMulAndPackRGBA(rgb, gpu_img, raw_data_.color.cam_mul, &stream);
+  }
+  if (dng_warp_rectilinear_) {
+    CUDA::ApplyDngWarpRectilinear(gpu_img, *dng_warp_rectilinear_, &stream);
+    runtime_color_context_.dng_warp_rectilinear_applied_ = true;
+  }
   ApplyCudaGeometricCorrections(gpu_img, raw_data_.sizes.flip, &stream);
   stream.waitForCompletion();
   return {std::move(process_buffer_)};

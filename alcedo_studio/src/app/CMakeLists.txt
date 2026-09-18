@@ -263,7 +263,7 @@ def_library(ProjectService
         "${ALCEDO_SRC_ROOT}/ui/alcedo_main/album_backend/path_utils.cpp"
     PUBLIC_DEPS FSService Storage ImagePoolService AlbumBrowseService SleeveFilterService
                 AiSidecarRuntimeService ModelDownloadService
-                StrConv JSON xxHash stduuid
+                StrConv JSON xxHash stduuid EditMaskCore
     PRIVATE_DEPS
         AppDiagnostics
         Qt6::Core
@@ -273,13 +273,16 @@ def_library(ProjectService
 
 def_library(PipelineMgmtService
     SOURCES "${ALCEDO_APP_ROOT}/pipeline_service.cpp"
-    PUBLIC_DEPS ProjectService EditPipeline
+    PUBLIC_DEPS ProjectService EditPipeline EditGraph
 )
 
 def_library(AdjustmentTransferService
-    SOURCES "${ALCEDO_APP_ROOT}/adjustment_transfer_service.cpp"
-    PUBLIC_DEPS PipelineMgmtService EditPipeline
-    PRIVATE_DEPS EditorAdjustmentPipeline
+    SOURCES
+        "${ALCEDO_APP_ROOT}/adjustment_transfer_service.cpp"
+        "${ALCEDO_APP_ROOT}/document_transfer.cpp"
+    PUBLIC_DEPS PipelineMgmtService EditPipeline EditGraph EditMaskCore EditHistory
+                PipelineHistoryApplier
+    PRIVATE_DEPS EditorAdjustmentPipeline EditorPipelineCommandService
 )
 
 def_library(EditHistoryMgmtService
@@ -353,8 +356,8 @@ def_library(EditorSessionEditController
     SOURCES
         "${ALCEDO_APP_ROOT}/editor_session_edit_controller.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_session_edit_controller.hpp"
-    PUBLIC_DEPS xxHash JSON ${ALCEDO_OPENCV_CORE_DEPS}
-    PRIVATE_DEPS EditHistory
+    PUBLIC_DEPS xxHash JSON ${ALCEDO_OPENCV_CORE_DEPS} EditorPendingInput
+    PRIVATE_DEPS EditHistory EditorAdjustmentPipeline
 )
 
 def_library(EditorMiniGitJournalFold
@@ -383,7 +386,82 @@ def_library(EditorAdjustmentPipeline
     SOURCES
         "${ALCEDO_APP_ROOT}/editor_adjustment_pipeline.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_adjustment_pipeline.hpp"
-    PUBLIC_DEPS EditPipeline EditHistory JSON
+    PUBLIC_DEPS EditPipeline EditHistory JSON EditorPipelineCommandService
+)
+
+def_library(EditorParameterWrite
+    SOURCES
+        "${ALCEDO_APP_ROOT}/editor_parameter_write.cpp"
+        "${ALCEDO_APP_ROOT}/editor_parameter_write_parse.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_parameter_write.hpp"
+    PUBLIC_DEPS EditGraph JSON
+)
+
+def_library(EditorPipelineCommandService
+    SOURCES
+        "${ALCEDO_APP_ROOT}/editor_pipeline_command_service.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_pipeline_command_service.hpp"
+    PUBLIC_DEPS EditGraph JSON EditorParameterWrite
+)
+
+def_library(EditorPanelProjection
+    SOURCES
+        "${ALCEDO_APP_ROOT}/editor_panel_projection.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_panel_projection.hpp"
+        "${ALCEDO_APP_ROOT}/editor_adjustment_context.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_adjustment_context.hpp"
+    PUBLIC_DEPS EditorPipelineCommandService EditGraph Image
+)
+
+def_library(EditorNodeGraphProjection
+    SOURCES
+        "${ALCEDO_APP_ROOT}/editor_node_graph_projection.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_node_graph_projection.hpp"
+    PUBLIC_DEPS EditGraph
+)
+
+def_library(EditorNodeGraphDraft
+    SOURCES
+        "${ALCEDO_APP_ROOT}/editor_node_graph_draft.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_node_graph_draft.hpp"
+    PUBLIC_DEPS EditorNodeGraphProjection EditHistory EditGraph
+)
+
+def_library(PipelineHistoryApplier
+    SOURCES
+        "${ALCEDO_APP_ROOT}/pipeline_history_applier.cpp"
+        "${ALCEDO_APP_ROOT}/pipeline_document_history.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/pipeline_history_applier.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/pipeline_document_history.hpp"
+    PUBLIC_DEPS EditorPipelineCommandService EditorAdjustmentPipeline EditHistory EditGraph
+                EditMaskCore
+)
+
+target_link_libraries(PipelineMgmtService PRIVATE PipelineHistoryApplier EditorAdjustmentPipeline)
+
+def_library(EditorMaskCreationController
+    SOURCES
+        "${ALCEDO_APP_ROOT}/editor_mask_creation_controller.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_mask_creation_controller.hpp"
+    PUBLIC_DEPS EditGraph PipelineHistoryApplier
+)
+
+def_library(EditorPendingInput
+    SOURCES
+        "${ALCEDO_APP_ROOT}/editor_pending_input.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_pending_input.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_adjustment_types.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_parameter_write.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_session_types.hpp"
+    PUBLIC_DEPS EditGraph JSON
+)
+
+def_library(EditorSerialFrameAdmission
+    SOURCES
+        "${ALCEDO_APP_ROOT}/editor_serial_frame_admission.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_serial_frame_admission.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_interactive_pacing.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_monotonic_clock.hpp"
 )
 
 def_library(EditorSessionService
@@ -392,6 +470,7 @@ def_library(EditorSessionService
         "${ALCEDO_APP_ROOT}/editor_render_coordinator.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_session_types.hpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_adjustment_types.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_pending_input.hpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_render_intent.hpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_session_ports.hpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_session_service.hpp"
@@ -400,10 +479,11 @@ def_library(EditorSessionService
         "${ALCEDO_INCLUDE_ROOT}/edit/frame_presentation_types.hpp"
     # The session facade is application-only; no Widgets dependency belongs
     # on this target or on its public link interface.
-    PRIVATE_DEPS xxHash JSON ${ALCEDO_OPENCV_CORE_DEPS} AppDiagnostics
+    PRIVATE_DEPS EditorPendingInput xxHash JSON ${ALCEDO_OPENCV_CORE_DEPS} AppDiagnostics
                  EditHistory EditorMiniGitMaterializer EditorSaveCheckpointService EditorSessionLifecycle
                  EditorSessionNavigationController EditorSessionRenderController
                  EditorSessionEditController EditorSessionCommandQueue EditorActionPolicy
+                 EditorSerialFrameAdmission EditorMaskCreationController
 )
 
 # Facade consumers (tests/UI) include session headers that pull metal_image.hpp
@@ -424,6 +504,17 @@ def_library(ThumbnailService
     SOURCES "${ALCEDO_APP_ROOT}/thumbnail_service.cpp"
     PUBLIC_DEPS EditPipeline ThreadPool StrConv ImagePoolService PipelineMgmtService
                 ThumbnailDiskCacheService Storage
+)
+
+def_library(MaskThumbnailService
+    SOURCES
+        "${ALCEDO_APP_ROOT}/mask_thumbnail_spec.cpp"
+        "${ALCEDO_APP_ROOT}/mask_thumbnail_evaluate.cpp"
+        "${ALCEDO_APP_ROOT}/mask_thumbnail_service.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/mask_thumbnail_spec.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/mask_thumbnail_evaluate.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/mask_thumbnail_service.hpp"
+    PUBLIC_DEPS Qt6::Core Qt6::Gui EditGeometry EditMaskCore
 )
 
 def_library(SemanticGenerationService

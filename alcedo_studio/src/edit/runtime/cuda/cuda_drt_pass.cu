@@ -1,0 +1,189 @@
+//  Copyright 2026 Yurun Zi
+//  SPDX-License-Identifier: GPL-3.0-only
+//  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
+
+#include <cuda_runtime.h>
+
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+#include <span>
+#include <stdexcept>
+#include <vector>
+
+#include "cuda/cuda_check.hpp"
+#include "cuda_acescc.cuh"
+#include "cuda_drt_runtime_state.cuh"
+#include "cuda_neighbor_grade.hpp"
+#include "edit/graph/drt_node_model.hpp"
+#include "edit/graph/pipeline_document.hpp"
+#include "edit/operators/GPU_kernels/color_mgmt/disp_enc_funcs.cuh"
+#include "edit/operators/GPU_kernels/color_mgmt/odt_funcs.cuh"
+#include "edit/operators/GPU_kernels/color_mgmt/open_drt_funcs.cuh"
+#include "edit/operators/cst/odt_op.hpp"
+#include "edit/operators/models/i_operator_model.hpp"
+#include "edit/operators/models/pending_parameter_patch.hpp"
+#include "edit/runtime/adjustment_runtime.hpp"
+#include "edit/runtime/aces_reference_gamut_compression.h"
+#include "edit/runtime/cuda/cuda_drt_pass.hpp"
+#include "edit/runtime/cuda/cuda_scene_work.hpp"
+#include "edit/runtime/drt_display.hpp"
+#include "edit/runtime/drt_post_executor.hpp"
+#include "edit/runtime/frame_scene_binding.hpp"
+#include "edit/runtime/parameter_arena.hpp"
+#include "edit/runtime/parameter_binding.hpp"
+#include "edit/runtime/texture_format.hpp"
+
+namespace alcedo {
+namespace {
+
+constexpr std::uint32_t kDrtDirtyBits = static_cast<std::uint32_t>(DrtDirty::All);
+
+void ResolveRuntime(CudaDrtRuntimeState& state, const nlohmann::json& drt_json) {
+  ODT_Op descriptor(nlohmann::json{{"odt", drt_json}});
+  descriptor.SetGlobalParams(state.cpu_params);
+  state.gpu_params = GPUParamsConverter::ConvertFromCPU(state.cpu_params, state.gpu_params);
+}
+
+__global__ void DrtKernel(const float4* input, float4* output, std::uint32_t pixel_count,
+                          const GPU_TO_OUTPUT_Params* params) {
+  const std::uint32_t index = blockIdx.x * blockDim.x + threadIdx.x;
+  if (index >= pixel_count) return;
+  auto         runtime = *params;
+  const float4 source  = input[index];
+  const AcesRgcRgb compressed =
+      AcesReferenceGamutCompress(cuda_acescc::Decode(source.x), cuda_acescc::Decode(source.y),
+                                 cuda_acescc::Decode(source.z));
+  const float3 scene = make_float3(compressed.r, compressed.g, compressed.b);
+  float3       display_linear;
+  if (runtime.method_ == GPU_ODTMethod::ACES_2_0) {
+    auto aces      = runtime.aces_params_;
+    display_linear = CUDA::OutputTransform_fwd(scene, aces);
+  } else {
+    display_linear = CUDA::OpenDRTTransform_fwd(scene, runtime.open_drt_params_);
+  }
+  const float3 encoded = CUDA::DisplayEncoding(display_linear, runtime.limit_to_display_matx,
+                                               runtime.eotf, runtime.display_linear_scale_);
+  output[index]        = make_float4(encoded.x, encoded.y, encoded.z, source.w);
+}
+
+struct CudaDrtOps {
+  using Device            = CudaRenderDevice;
+  using Texture           = CudaBackend::Texture2D;
+  using HorizontalScratch = ResourceLease<CudaBackend>;
+  using LutBinding        = CudaLutBinding;
+
+  static constexpr const char* kErrorPrefix = "ExecuteCudaDrt";
+
+  static auto RefreshNeighborhoodAdjustment(CudaRenderDevice&, IOperatorModel& model,
+                                            const ParameterSlotKey&, AdjustmentBehavior)
+      -> std::optional<PendingParameterPatch> {
+    return TakePendingDirtyFields(model);
+  }
+
+  static void PrepareNeighborCommands(CudaRenderDevice&, const NodeId&,
+                                      std::span<const std::uint32_t>) {}
+
+  static auto NeighborLut(CudaRenderDevice& device) -> LutBinding {
+    return device.Workspace().Device().DummyLut();
+  }
+
+  static auto BindingWidth(CudaRenderDevice& device, const FrameSceneBinding& binding)
+      -> std::uint32_t {
+    return CudaSceneWidth(device, binding);
+  }
+
+  static auto BindingHeight(CudaRenderDevice& device, const FrameSceneBinding& binding)
+      -> std::uint32_t {
+    return CudaSceneHeight(device, binding);
+  }
+
+  static auto AcquireHorizontalScratch(CudaRenderDevice& device, std::uint32_t width,
+                                       std::uint32_t height) -> HorizontalScratch {
+    return device.Workspace().Textures().Acquire({width, height, TextureFormat::Rgba32f});
+  }
+
+  static void DispatchHorizontal(CudaRenderDevice& device, const FrameSceneBinding& src,
+                                 HorizontalScratch& scratch, const NeighborWork& work,
+                                 std::uint32_t width, std::uint32_t height) {
+    auto& src_tex = CudaSceneTexture(device, src);
+    cuda_neighbor_grade::LaunchBlurHorizontal(
+        device.CommandContext().Stream(), static_cast<const float4*>(src_tex.DevicePointer()),
+        static_cast<float4*>(scratch.Texture().DevicePointer()), static_cast<int>(width),
+        static_cast<int>(height), work.params);
+  }
+
+  static void DispatchVerticalApply(CudaRenderDevice& device, const FrameSceneBinding& src,
+                                    HorizontalScratch& scratch, const FrameSceneBinding& dst,
+                                    const FrameSceneBinding& original, const LutBinding&,
+                                    const NeighborWork& work, float mix, const GraphValueId*,
+                                    std::uint32_t width, std::uint32_t height) {
+    auto& src_tex  = CudaSceneTexture(device, src);
+    auto& dst_tex  = CudaSceneTexture(device, dst);
+    auto& orig_tex = CudaSceneTexture(device, original);
+    cuda_neighbor_grade::LaunchApplyVertical(
+        device.CommandContext().Stream(), static_cast<const float4*>(src_tex.DevicePointer()),
+        static_cast<const float4*>(scratch.Texture().DevicePointer()),
+        static_cast<float4*>(dst_tex.DevicePointer()),
+        static_cast<const float4*>(orig_tex.DevicePointer()), mix, nullptr, static_cast<int>(width),
+        static_cast<int>(height), work.params);
+  }
+
+  static void AcquireDisplayOutput(CudaRenderDevice& device, const GraphValueId& id,
+                                   std::uint32_t width, std::uint32_t height) {
+    (void)device.Workspace().AcquireImageForWrite(id, {width, height, TextureFormat::Rgba32f});
+  }
+
+  static void BindDisplayParams(CudaRenderDevice& device, const ExecutionPlan& plan,
+                                DrtNodeModel& drt, std::vector<PendingParameterPatch>& pending) {
+    auto&                  arena = device.Workspace().Parameters();
+    const ParameterSlotKey key{drt.Id(), AdjustmentInstanceId{"drt.output"}};
+    auto                   display_pending = plan.output_color_override.has_value()
+                                                 ? decltype(TakePendingDirtyFields(drt.Params())){}
+                                                 : TakePendingDirtyFields(drt.Params());
+    const bool             needs_initialize = !arena.Contains(key);
+    if (needs_initialize || display_pending.has_value() || plan.output_color_override.has_value()) {
+      auto drt_json = drt.Params().ToJson();
+      if (plan.output_color_override.has_value()) {
+        OverlayExportColorOnDrtJson(drt_json, *plan.output_color_override);
+      }
+      ResolveRuntime(device.DrtRuntime(), drt_json);
+      const auto runtime = device.DrtRuntime().gpu_params.to_output_params_;
+      arena.BindOrWritePackedSlot(key, DirtyFieldMask{kDrtDirtyBits}, runtime);
+    }
+    if (display_pending) {
+      pending.push_back(std::move(*display_pending));
+    }
+  }
+
+  static void DispatchDisplayTransform(CudaRenderDevice& device, const FrameSceneBinding& scene,
+                                       const FrameSceneBinding& display, const NodeId& drt_id,
+                                       std::uint32_t width, std::uint32_t height) {
+    auto&                  arena   = device.Workspace().Parameters();
+    const ParameterSlotKey key{drt_id, AdjustmentInstanceId{"drt.output"}};
+    const auto&            binding = arena.Binding(key);
+    const auto*            params  = reinterpret_cast<const GPU_TO_OUTPUT_Params*>(
+        static_cast<const std::byte*>(arena.DeviceBuffer().DevicePointer()) + binding.offset);
+    const std::uint32_t     pixels = width * height;
+    constexpr std::uint32_t block  = 256;
+    auto& scene_tex   = CudaSceneTexture(device, scene);
+    auto& display_tex = CudaSceneTexture(device, display);
+    DrtKernel<<<(pixels + block - 1) / block, block, 0, device.CommandContext().Stream()>>>(
+        static_cast<const float4*>(scene_tex.DevicePointer()),
+        static_cast<float4*>(display_tex.DevicePointer()), pixels, params);
+  }
+
+  static void CheckAfterEncode(CudaRenderDevice&) {
+    cuda::CheckCuda(::cudaGetLastError(), "ExecuteCudaDrt: kernel launch");
+  }
+};
+
+}  // namespace
+
+auto ExecuteCudaDrt(CudaRenderDevice& device, const ExecutionPlan& plan, PipelineDocument& document,
+                    const FrameSceneBinding& scene) -> CudaDrtResult {
+  const auto executed = DrtPostExecutor<CudaDrtOps>::Execute(device, plan, document, scene);
+  return {executed.output, executed.display_post, executed.post_neighborhood_count};
+}
+
+}  // namespace alcedo

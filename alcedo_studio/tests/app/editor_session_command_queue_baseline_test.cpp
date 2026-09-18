@@ -33,6 +33,7 @@
 #include <mutex>
 #include <set>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -41,22 +42,33 @@
 #include "app/editor_session_service.hpp"
 #include "app/editor_session_types.hpp"
 #include "support/editor_session_command_queue_test_support.hpp"
+#include "support/editor_parameter_write_test.hpp"
 
 namespace alcedo {
 namespace {
 using namespace alcedo::test;  // controllable ports + recorder live in alcedo::test
 
-auto MakeExposureTransferPackage(double exposure) -> AdjustmentTransferPackage {
+auto MakeExposureTransferPackage(double /*exposure*/) -> AdjustmentTransferPackage {
   AdjustmentTransferPackage package;
-  package.operators_.push_back(AdjustmentTransferEntry{
-      PipelineStageName::Basic_Adjustment, OperatorType::EXPOSURE, true, false,
-      nlohmann::json{{"exposure", exposure}}});
+  package.color_grades_.push_back(nlohmann::json{{"id", "grade.primary"}});
   return package;
 }
 
-/// Recording scheduler: accepts every render request and returns a non-zero
-/// job id so the coordinator marks it in-flight. Completion is driven manually
-/// by the test through `EditorRenderCoordinator::Notify*`.
+class LockingEditorHistoryPort final : public ControllableEditorHistoryPort {
+ public:
+  std::promise<void> about_to_lock;
+
+  auto CaptureAdjustmentBeforePreview(const EditorHistoryGuardHandle& guard,
+                                      const EditorAdjustmentPatch& patch, std::string* error)
+      -> bool override {
+    about_to_lock.set_value();
+    std::unique_lock<std::mutex> held;
+    if (render_lock != nullptr) {
+      held = std::unique_lock<std::mutex>(*render_lock);
+    }
+    return FakeEditorHistoryPort::CaptureAdjustmentBeforePreview(guard, patch, error);
+  }
+};
 class RecordingScheduler final : public IEditorPipelineSchedulerPort {
  public:
   auto Schedule(const EditorRenderRequest& request,
@@ -81,8 +93,9 @@ class EditorSessionCommandQueueBaselineTest : public ::testing::Test {
 
   /// Rebuild the full session runtime with fresh ports and recorder. Tests
   /// that compare two runs of the same scenario call this between runs.
-  void RebuildSession() {
-    history_          = std::make_shared<ControllableEditorHistoryPort>();
+  void RebuildSession(std::shared_ptr<ControllableEditorHistoryPort> history = nullptr) {
+    history_          = history ? std::move(history)
+                                : std::make_shared<ControllableEditorHistoryPort>();
     pipeline_         = std::make_shared<FakeEditorPipelinePort>();
     tasks_            = std::make_shared<FakeEditorTaskPort>();
     journal_          = std::make_shared<OrderRecordingJournalPort>();
@@ -348,37 +361,6 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
   EXPECT_EQ(returned.load(), 1);
 }
 
-/// Invariant: Merge completion on the command thread never waits on the
-/// executor render mutex while the worker owns it.
-TEST_F(EditorSessionCommandQueueBaselineTest,
-       MergeWhileRenderWorkerOwnsExecutorDoesNotBlockCommandThread) {
-  openInteractive(10, 20);  // image A, interactive
-  service_->SetCopiedPackageAvailable(true);
-
-  AdjustmentMergePreview preview;
-  ASSERT_EQ(service_->BeginMerge(MakeExposureTransferPackage(1.0), &preview).kind,
-            EditorSessionResultKind::Accepted);
-
-  std::mutex render_lock;
-  history_->render_lock = &render_lock;
-  std::unique_lock<std::mutex> worker_holds(render_lock);
-
-  std::atomic<int>             returned{0};
-  auto                         fut     = std::async(std::launch::async, [&] {
-    (void)service_->CompleteMerge({});
-    returned.store(1);
-  });
-  const auto                   status  = fut.wait_for(std::chrono::milliseconds(200));
-
-  const bool                   blocked = (status != std::future_status::ready);
-  EXPECT_FALSE(blocked)
-      << "CompleteMerge blocked on the executor render lock (unfinished op: Merge)";
-
-  worker_holds.unlock();
-  (void)fut.get();
-  EXPECT_EQ(returned.load(), 1);
-}
-
 /// Invariant: live paste mutates the Version immediately, then queues one
 /// ordinary history checkpoint for WAL materialization. Prior CQ4 retained a
 /// shadow candidate until after save; the single-live-pipeline path creates the
@@ -435,76 +417,6 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
   EXPECT_FALSE(history_->dirty_journal);
   ASSERT_EQ(events.size(), 2u);
   EXPECT_EQ(events[0], "version_created");
-  EXPECT_EQ(events[1], "save_started");
-}
-
-/// Invariant: live merge mutates the Version immediately (CompleteLiveMerge), then
-/// queues one ordinary history checkpoint for WAL materialization — same ordering
-/// as live paste (mutate first, then StartHistoryCheckpoint).
-TEST_F(EditorSessionCommandQueueBaselineTest,
-       DirtyJournalMergeCompletesLiveThenQueuesHistoryCheckpoint) {
-  openInteractive(10, 20);  // image A, interactive
-  service_->SetCopiedPackageAvailable(true);
-
-  AdjustmentMergePreview preview;
-  ASSERT_EQ(service_->BeginMerge(MakeExposureTransferPackage(1.0), &preview).kind,
-            EditorSessionResultKind::Accepted);
-
-  std::vector<std::string> events;
-  history_->event_log                  = &events;
-  journal_->event_log                  = &events;
-  history_->dirty_journal              = true;
-  journal_->async_commit               = false;
-  checkpoint_store_->async_materialize = false;
-
-  const auto result                    = service_->CompleteMerge({});
-  EXPECT_EQ(result.kind, EditorSessionResultKind::SaveStarted)
-      << "live Merge must start the history checkpoint after CompleteLiveMerge";
-  drainQueue();
-
-  ASSERT_GE(events.size(), 2u) << "Merge must produce a merge commit and a save";
-  EXPECT_EQ(events[0], "merge_committed")
-      << "CompleteLiveMerge must run before the ordinary history checkpoint";
-  EXPECT_EQ(events[1], "save_started");
-}
-
-/// Live merge: CompleteLiveMerge then one ordinary save capture/materialization
-/// and one final render route. No shadow PublishTransferCandidate.
-TEST_F(EditorSessionCommandQueueBaselineTest,
-       LiveMergeMaterializesOneCheckpointAndOneFinalRender) {
-  openInteractive(10, 20);  // image A, interactive
-  service_->SetCopiedPackageAvailable(true);
-
-  AdjustmentMergePreview preview;
-  ASSERT_EQ(service_->BeginMerge(MakeExposureTransferPackage(1.25), &preview).kind,
-            EditorSessionResultKind::Accepted);
-
-  std::vector<std::string> events;
-  history_->event_log                  = &events;
-  journal_->event_log                  = &events;
-  history_->dirty_journal              = true;
-  journal_->async_commit               = false;
-  checkpoint_store_->async_materialize = false;
-
-  const auto accepted_render_count_before =
-      runtime_->coordinator->diagnostics().accepted_count;
-  const auto capture_count_before     = history_->checkpoint_capture_count;
-  const auto materialize_count_before = checkpoint_store_->materialize_count;
-  const auto terminal_count_before    = recorder_->terminal_count();
-  const auto result = service_->CompleteMerge({});
-  EXPECT_EQ(result.kind, EditorSessionResultKind::SaveStarted);
-
-  drainQueue();
-
-  EXPECT_EQ(history_->checkpoint_capture_count, capture_count_before + 1);
-  EXPECT_EQ(checkpoint_store_->materialize_count, materialize_count_before + 1);
-  EXPECT_EQ(history_->transfer_publication_count, 0);
-  EXPECT_EQ(runtime_->coordinator->diagnostics().accepted_count,
-            accepted_render_count_before + 1);
-  EXPECT_EQ(recorder_->terminal_count(), terminal_count_before + 1);
-  EXPECT_FALSE(history_->dirty_journal);
-  ASSERT_EQ(events.size(), 2u);
-  EXPECT_EQ(events[0], "merge_committed");
   EXPECT_EQ(events[1], "save_started");
 }
 
@@ -667,6 +579,101 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
   const auto late = service_->Open(50, 60);
   EXPECT_EQ(late.kind, EditorSessionResultKind::Rejected);
   EXPECT_EQ(service_->state(), EditorSessionState::ShuttingDown);
+}
+
+TEST_F(EditorSessionCommandQueueBaselineTest,
+       OwnerThreadPatchCapturesHistoryAndRoutesRenderBeforeReturn) {
+  openInteractive(10, 20);
+  const auto captures_before = history_->capture_count;
+  const auto scheduled_before = scheduler_->scheduled_.size();
+
+  EditorAdjustmentPatch patch = test::ScalarPatch("exposure", 0.5f, false);
+  const auto result = service_->Patch(patch);
+
+  EXPECT_EQ(result.kind, EditorSessionResultKind::RenderRouted);
+  EXPECT_EQ(history_->capture_count, captures_before + 1);
+  EXPECT_EQ(history_->last_captured_patch.field_key, "exposure");
+  EXPECT_GT(scheduler_->scheduled_.size(), scheduled_before);
+  EXPECT_TRUE(runtime_->coordinator->has_inflight());
+}
+
+TEST_F(EditorSessionCommandQueueBaselineTest,
+       PatchWaitsWhenHistoryCaptureHoldsRenderLock) {
+  auto locking = std::make_shared<LockingEditorHistoryPort>();
+  RebuildSession(locking);
+  openInteractive(10, 20);
+
+  std::mutex           render_lock;
+  locking->render_lock = &render_lock;
+  std::promise<void>   renderer_holds;
+  std::promise<void>   release_renderer;
+  std::thread          renderer([&] {
+    std::unique_lock<std::mutex> held(render_lock);
+    renderer_holds.set_value();
+    release_renderer.get_future().wait();
+  });
+  renderer_holds.get_future().wait();
+
+  std::thread releaser([&] {
+    locking->about_to_lock.get_future().wait();
+    EXPECT_EQ(locking->capture_count, 0);
+    release_renderer.set_value();
+  });
+
+  EditorAdjustmentPatch patch = test::ScalarPatch("exposure", 0.25f);
+  const auto result = service_->Patch(patch);
+  releaser.join();
+  renderer.join();
+
+  EXPECT_EQ(result.kind, EditorSessionResultKind::RenderRouted);
+  EXPECT_EQ(locking->capture_count, 1);
+}
+
+/// Regression: continuous view churn (panel fold, window resize, zoom/pan
+/// drags) submits one RequestViewChange plus one SetPresentationSize per
+/// frame. Frame reuse changes no session-visible state, so these commands
+/// must record results without publishing change notifications — otherwise
+/// every animation frame runs a full backend-changed refresh.
+TEST_F(EditorSessionCommandQueueBaselineTest,
+       FrameReuseAndPresentationSizeDoNotPublishChangeNotifications) {
+  openInteractive(10, 20);
+
+  const auto notifications_before = recorder_->change_notifications;
+  const auto results_before       = recorder_->results.size();
+
+  service_->SetPresentationSize(800, 600);
+  const auto resize_result = service_->RequestViewChange(EditorRenderReason::Resize, std::nullopt);
+  const auto pan_result    = service_->RequestViewChange(EditorRenderReason::ZoomPan, std::nullopt);
+  drainQueue();
+
+  EXPECT_EQ(resize_result.kind, EditorSessionResultKind::Accepted);
+  EXPECT_EQ(pan_result.kind, EditorSessionResultKind::Accepted);
+  EXPECT_EQ(recorder_->change_notifications, notifications_before)
+      << "frame reuse must not publish change notifications";
+  EXPECT_GT(recorder_->results.size(), results_before)
+      << "frame reuse results must still reach the result observer";
+}
+
+TEST_F(EditorSessionCommandQueueBaselineTest,
+     PersistCurrentImageStartsCheckpointAndRefreshesThumbnail) {
+  openInteractive(10, 20);
+
+  history_->dirty_journal              = true;
+  journal_->async_commit               = false;
+  checkpoint_store_->async_materialize = false;
+  const auto result                    = service_->PersistCurrentImage();
+  EXPECT_EQ(result.kind, EditorSessionResultKind::SaveStarted);
+  EXPECT_EQ(service_->state(), EditorSessionState::Saving);
+
+  journal_->CompleteCommit(true);
+  checkpoint_store_->CompleteMaterialization(true);
+  drainQueue();
+  EXPECT_EQ(service_->state(), EditorSessionState::Interactive);
+  EXPECT_EQ(service_->identity().element_id, static_cast<sl_element_id_t>(10));
+  EXPECT_FALSE(history_->dirty_journal);
+  EXPECT_EQ(thumbnails_->refresh_count, 1);
+  ASSERT_EQ(thumbnails_->refreshed_ids.size(), 1u);
+  EXPECT_EQ(thumbnails_->refreshed_ids.front(), static_cast<sl_element_id_t>(10));
 }
 
 }  // namespace

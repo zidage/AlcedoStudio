@@ -266,12 +266,21 @@ if(WIN32)
 endif()
 add_dependencies(puerhlab_lensfun puerhlab_lensfun_build)
 
+# Product code links the bundled submodule. A package-manager lensfun target
+# (vcpkg 0.3.4 exports C++ names only) must not win this name.
+if(TARGET lensfun::lensfun)
+    get_target_property(_alcedo_lensfun_alias lensfun::lensfun ALIASED_TARGET)
+    if(NOT _alcedo_lensfun_alias STREQUAL "puerhlab_lensfun")
+        message(FATAL_ERROR
+            "lensfun::lensfun is already defined and is not the bundled submodule. "
+            "Remove the vcpkg lensfun package (`vcpkg remove lensfun`) and reconfigure. "
+            "Alcedo builds Lensfun from alcedo_studio/src/third_party/lensfun.")
+    endif()
+else()
+    add_library(lensfun::lensfun ALIAS puerhlab_lensfun)
+endif()
 if(NOT TARGET alcedo_lensfun)
     add_library(alcedo_lensfun ALIAS puerhlab_lensfun)
-endif()
-
-if(NOT TARGET lensfun::lensfun)
-    add_library(lensfun::lensfun ALIAS puerhlab_lensfun)
 endif()
 
 set(PUERHLAB_LENSFUN_INCLUDE_DIR "${PUERHLAB_LENSFUN_INSTALL_DIR}/include" CACHE INTERNAL
@@ -604,3 +613,19 @@ endif()
 
 set(PUERHLAB_METALCPP_INCLUDE_DIR "${PUERHLAB_METALCPP_SOURCE_DIR}" CACHE INTERNAL
     "Header directory for the bundled metal-cpp checkout.")
+
+set(ALCEDO_QUICKQANAVA_SOURCE_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/QuickQanava"
+    CACHE PATH
+    "Path to the bundled QuickQanava source checkout.")
+
+if(NOT EXISTS "${ALCEDO_QUICKQANAVA_SOURCE_DIR}/src/CMakeLists.txt"
+   OR NOT EXISTS "${ALCEDO_QUICKQANAVA_SOURCE_DIR}/licence.txt")
+    message(FATAL_ERROR
+        "Bundled QuickQanava source was not found at ${ALCEDO_QUICKQANAVA_SOURCE_DIR}. "
+        "Run `git submodule update --init alcedo_studio/src/third_party/QuickQanava` "
+        "and re-configure.")
+endif()
+
+# Do not add_subdirectory() upstream CMake. Qt 6.9.3 rejects its qt_wrap_cpp call.
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/AlcedoQuickQanava.cmake")

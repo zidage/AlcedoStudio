@@ -6,6 +6,8 @@
 
 #include <utility>
 
+#include "app/editor_adjustment_pipeline.hpp"
+#include "app/editor_pending_input.hpp"
 #include "edit/history/edit_transaction.hpp"
 
 namespace alcedo {
@@ -24,6 +26,25 @@ auto EditorSessionEditController::HandlePatch(EditorAdjustmentPatch patch, bool 
   if (patch.field_key.empty()) {
     outcome.kind    = EditorEditOutcome::Kind::Rejected;
     outcome.message = "Adjustment patch requires a field key";
+    return outcome;
+  }
+  if (!patch.write.has_value()) {
+    outcome.kind    = EditorEditOutcome::Kind::Rejected;
+    outcome.message = "Typed field write is required";
+    return outcome;
+  }
+  if (patch.target.owner_kind != EditorParameterOwnerKind::Unspecified) {
+    const auto target_error =
+        DescribeEditorParameterTargetError(patch.target, patch.field_key);
+    if (!target_error.empty()) {
+      outcome.kind    = EditorEditOutcome::Kind::Rejected;
+      outcome.message = target_error;
+      return outcome;
+    }
+  }
+  if (!ResolveEditorAdjustmentField(patch.field_key).has_value()) {
+    outcome.kind    = EditorEditOutcome::Kind::Rejected;
+    outcome.message = "Unknown editor adjustment field: " + patch.field_key;
     return outcome;
   }
   if (!deps_.history || !guard.valid) {
@@ -46,7 +67,6 @@ auto EditorSessionEditController::HandlePatch(EditorAdjustmentPatch patch, bool 
 
   EditorRenderAdjustmentSnapshot render_delta;
   render_delta.fingerprint = patch.field_key;
-  render_delta.params_json = patch.params_json;
   render_delta.patches     = {patch};
 
   outcome.kind                      = EditorEditOutcome::Kind::RenderRouted;
@@ -54,6 +74,130 @@ auto EditorSessionEditController::HandlePatch(EditorAdjustmentPatch patch, bool 
                                               : EditorRenderReason::InteractiveAdjustment;
   outcome.render_command.reason     = outcome.reason;
   outcome.render_command.adjustment = std::move(render_delta);
+  outcome.render_command.live_parameters_applied = true;
+  return outcome;
+}
+
+namespace {
+
+[[nodiscard]] auto PatchFromPendingField(const EditorPendingFieldChange& field)
+    -> EditorAdjustmentPatch {
+  EditorAdjustmentPatch patch;
+  patch.field_key = field.target.field_key;
+  patch.write     = field.write;
+  patch.enabled   = field.enabled;
+  patch.target    = field.target;
+  return patch;
+}
+
+}  // namespace
+
+auto EditorSessionEditController::HandlePendingSequence(const EditorPendingSequence& sequence,
+                                                        const EditorHistoryGuardHandle& guard,
+                                                        const EditorSessionIdentity& identity)
+    -> EditorEditOutcome {
+  EditorEditOutcome outcome;
+  outcome.identity = identity;
+
+  if (!deps_.history || !guard.valid) {
+    outcome.kind    = EditorEditOutcome::Kind::Rejected;
+    outcome.message = "Adjustment history is unavailable";
+    return outcome;
+  }
+
+  if (sequence.seal == EditorPendingInputBoundaryKind::Cancel) {
+    bool        live_changed = false;
+    std::string history_error;
+    if (!deps_.history->RestoreUnsettledPreview(guard, &live_changed, &history_error)) {
+      outcome.kind    = EditorEditOutcome::Kind::Failed;
+      outcome.message = history_error.empty() ? "Failed to restore cancelled adjustment"
+                                              : history_error;
+      return outcome;
+    }
+    if (!live_changed) {
+      outcome.kind    = EditorEditOutcome::Kind::Accepted;
+      outcome.schedule_render = false;
+      outcome.message = "Cancelled unapplied adjustment input";
+      return outcome;
+    }
+    outcome.kind                                 = EditorEditOutcome::Kind::RenderRouted;
+    outcome.reason                               = EditorRenderReason::InteractiveAdjustment;
+    outcome.render_command.reason                = outcome.reason;
+    outcome.render_command.live_parameters_applied = true;
+    outcome.message                              = "Cancelled applied adjustment preview";
+    return outcome;
+  }
+
+  if (sequence.fields.empty()) {
+    outcome.kind            = EditorEditOutcome::Kind::Accepted;
+    outcome.schedule_render = false;
+    outcome.message         = "Pending adjustment sequence had no field writes";
+    return outcome;
+  }
+
+  const bool commit = sequence.seal == EditorPendingInputBoundaryKind::Release ||
+                      sequence.seal == EditorPendingInputBoundaryKind::NodeSwitch;
+  EditorRenderAdjustmentSnapshot render_delta;
+  for (const auto& field : sequence.fields) {
+    auto        patch = PatchFromPendingField(field);
+    patch.settled     = commit;
+    if (patch.field_key.empty()) {
+      outcome.kind    = EditorEditOutcome::Kind::Rejected;
+      outcome.message = "Adjustment patch requires a field key";
+      return outcome;
+    }
+    if (patch.target.owner_kind != EditorParameterOwnerKind::Unspecified) {
+      const auto target_error =
+          DescribeEditorParameterTargetError(patch.target, patch.field_key);
+      if (!target_error.empty()) {
+        bool        live_changed = false;
+        std::string restore_error;
+        (void)deps_.history->RestoreUnsettledPreview(guard, &live_changed, &restore_error);
+        outcome.kind    = EditorEditOutcome::Kind::Rejected;
+        outcome.message = target_error;
+        return outcome;
+      }
+    }
+    if (!ResolveEditorAdjustmentField(patch.field_key).has_value()) {
+      bool        live_changed = false;
+      std::string restore_error;
+      (void)deps_.history->RestoreUnsettledPreview(guard, &live_changed, &restore_error);
+      outcome.kind    = EditorEditOutcome::Kind::Rejected;
+      outcome.message = "Unknown editor adjustment field: " + patch.field_key;
+      return outcome;
+    }
+    std::string history_error;
+    if (!deps_.history->CaptureAdjustmentBeforePreview(guard, patch, &history_error)) {
+      bool        live_changed = false;
+      std::string restore_error;
+      (void)deps_.history->RestoreUnsettledPreview(guard, &live_changed, &restore_error);
+      outcome.kind    = EditorEditOutcome::Kind::Rejected;
+      outcome.message = history_error.empty() ? "Failed to capture committed adjustment state"
+                                              : history_error;
+      return outcome;
+    }
+    if (commit && !deps_.history->CommitAdjustment(guard, patch, &history_error)) {
+      bool        live_changed = false;
+      std::string restore_error;
+      (void)deps_.history->RestoreUnsettledPreview(guard, &live_changed, &restore_error);
+      outcome.kind    = EditorEditOutcome::Kind::Rejected;
+      outcome.message = history_error.empty() ? "Failed to commit settled adjustment"
+                                              : history_error;
+      return outcome;
+    }
+    if (!render_delta.fingerprint.empty()) {
+      render_delta.fingerprint += "|";
+    }
+    render_delta.fingerprint += patch.field_key;
+    render_delta.patches.push_back(std::move(patch));
+  }
+
+  outcome.kind                                 = EditorEditOutcome::Kind::RenderRouted;
+  outcome.reason                               = commit ? EditorRenderReason::SettledAdjustment
+                                                        : EditorRenderReason::InteractiveAdjustment;
+  outcome.render_command.reason                = outcome.reason;
+  outcome.render_command.adjustment            = std::move(render_delta);
+  outcome.render_command.live_parameters_applied = true;
   return outcome;
 }
 
@@ -78,10 +222,12 @@ auto EditorSessionEditController::HandleUndoRedo(bool undo,
     return outcome;
   }
 
-  outcome.kind                  = EditorEditOutcome::Kind::Accepted;
-  outcome.reason                = EditorRenderReason::UndoRedo;
-  outcome.message               = undo ? "Undo applied" : "Redo applied";
-  outcome.render_command.reason = EditorRenderReason::UndoRedo;
+  const auto published            = deps_.history->LastPublishedRenderReason();
+  outcome.kind                    = EditorEditOutcome::Kind::Accepted;
+  outcome.schedule_render         = published.has_value();
+  outcome.reason                  = published.value_or(EditorRenderReason::UndoRedo);
+  outcome.message                 = undo ? "Undo applied" : "Redo applied";
+  outcome.render_command.reason   = outcome.reason;
   return outcome;
 }
 
@@ -104,10 +250,12 @@ auto EditorSessionEditController::HandleMoveHeadToCommit(const commit_hash_t& ta
     return outcome;
   }
 
+  const auto published          = deps_.history->LastPublishedRenderReason();
   outcome.kind                  = EditorEditOutcome::Kind::Accepted;
-  outcome.reason                = EditorRenderReason::UndoRedo;
+  outcome.schedule_render       = published.has_value();
+  outcome.reason                = published.value_or(EditorRenderReason::UndoRedo);
   outcome.message               = "Editor head moved";
-  outcome.render_command.reason = EditorRenderReason::UndoRedo;
+  outcome.render_command.reason = outcome.reason;
   return outcome;
 }
 

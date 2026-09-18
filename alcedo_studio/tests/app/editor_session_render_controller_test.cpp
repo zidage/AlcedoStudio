@@ -3,6 +3,7 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 #include "app/editor_session_render_controller.hpp"
+#include "support/editor_parameter_write_test.hpp"
 
 #include <gtest/gtest.h>
 

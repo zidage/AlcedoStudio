@@ -4,7 +4,10 @@
 
 #include "edit/scope/final_display_frame_tap.hpp"
 
+#include <sstream>
 #include <utility>
+
+#include "utils/diagnostics/scope_diag.hpp"
 
 namespace alcedo {
 namespace {
@@ -229,7 +232,13 @@ void FinalDisplayFrameTapSink::SubmitFinalDisplayFrame(const FinalDisplayFrameVi
   // pipeline source (result_ptr / stream) is still valid. The deferred poll
   // later analyzes this staged frame instead of the pipeline's reused scratch.
   FinalDisplayFrameView staged_frame;
-  if (scope_analyzer_ && scope_update_allowed && stamped_frame) {
+  if (!scope_analyzer_) {
+    diag::NoteScope("present analyzer_missing");
+  } else if (!scope_update_allowed) {
+    diag::NoteScope("present skip scope_update_disallowed");
+  } else if (!stamped_frame) {
+    diag::NoteScope("present skip empty_display_frame");
+  } else {
     staged_frame = scope_analyzer_->StageFrame(stamped_frame, request);
   }
 
@@ -240,6 +249,17 @@ void FinalDisplayFrameTapSink::SubmitFinalDisplayFrame(const FinalDisplayFrameVi
     }
     // Staging only failed (no idle slot / throttle / non-owning backend): keep
     // the previous staged frame rather than the pipeline's reused source.
+  }
+
+  {
+    std::ostringstream line;
+    line << "present allowed=" << (scope_update_allowed ? 1 : 0) << " active=" << (active ? 1 : 0)
+         << " deferred=" << (deferred ? 1 : 0) << " staged=" << (staged_frame ? 1 : 0)
+         << " backend=" << static_cast<unsigned>(stamped_frame.image.backend)
+         << " size=" << stamped_frame.width << "x" << stamped_frame.height
+         << " identity=" << stamped_frame.image_identity << " epoch=" << stamped_frame.session_epoch
+         << " gen=" << stamped_frame.display_generation;
+    diag::NoteScope(line.str());
   }
 
   if (scope_analyzer_ && active && !deferred && scope_update_allowed) {

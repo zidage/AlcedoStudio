@@ -3,6 +3,10 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 #include "app/editor_render_coordinator.hpp"
+#include "support/editor_parameter_write_test.hpp"
+
+#include "support/latch_blocked_pipeline_scheduler_port.hpp"
+#include "support/manual_monotonic_clock.hpp"
 
 #include <gtest/gtest.h>
 
@@ -493,7 +497,7 @@ TEST_F(EditorRenderCoordinatorTest, SubmitDoesNotMutateStoredIntentAfterAccept) 
       MakeIntent(EditorRenderQuality::Quality, EditorRenderPriority::Normal);
   intent.adjustment.fingerprint = "tone:v1";
   intent.adjustment.params_json = R"({"exposure":0.5})";
-  intent.adjustment.patches.push_back(EditorAdjustmentPatch{"exposure", R"({"v":0.5})", false});
+  intent.adjustment.patches.push_back(alcedo::test::SnapshotPatch({"exposure", R"({"v":0.5})", false}));
 
   const auto accepted = coordinator_->Submit(intent);
   EXPECT_EQ(accepted.kind, EditorRenderResultKind::RequestAccepted);
@@ -505,7 +509,8 @@ TEST_F(EditorRenderCoordinatorTest, SubmitDoesNotMutateStoredIntentAfterAccept) 
 
   ASSERT_FALSE(scheduler_->scheduled_.empty());
   const auto& scheduled_intent = scheduler_->scheduled_.front().intent;
-  EXPECT_EQ(scheduled_intent.adjustment, accepted.intent.adjustment);
+  EXPECT_TRUE(alcedo::test::SameSnapshotProjection(scheduled_intent.adjustment,
+                                                  accepted.intent.adjustment));
   EXPECT_EQ(scheduled_intent.frame_role, accepted.intent.frame_role);
 }
 
@@ -555,6 +560,10 @@ TEST(EditorRenderIntentPolicyTest, ViewDependentReasonsDoNotReplayAdjustmentSnap
   EXPECT_TRUE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::ImageSwitch));
   EXPECT_TRUE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::Retry));
   EXPECT_TRUE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::CropRotate));
+  EXPECT_TRUE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::GraphTopologyChanged));
+  EXPECT_TRUE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::SettledMaskEdit));
+  EXPECT_TRUE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::VersionDocumentChanged));
+  EXPECT_TRUE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::PastedPipelineDocument));
 }
 
 TEST_F(EditorRenderCoordinatorTest, ZoomPanIntentIsReusedWithoutScheduling) {
@@ -813,6 +822,38 @@ TEST_F(EditorRenderCoordinatorTest, DiagnosticsTrackRejectReplaceCancelAndReadyF
     EXPECT_EQ(diag.pending_count, 0u);
     EXPECT_GE(diag.cancelled_count, 1u);
   }
+}
+
+TEST_F(EditorRenderCoordinatorTest,
+       BlockedRendererKeepsOneInflightUntilCompletionLatchReleases) {
+  auto latch = std::make_shared<test::LatchBlockedPipelineSchedulerPort>();
+  coordinator_->SetPipelineSchedulerPort(latch);
+  test::ManualMonotonicClock clock;
+
+  const auto first = coordinator_->Submit(
+      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal));
+  EXPECT_EQ(first.kind, EditorRenderResultKind::RequestAccepted);
+  EXPECT_TRUE(coordinator_->has_inflight());
+  EXPECT_TRUE(latch->running());
+  EXPECT_EQ(latch->scheduled().size(), 1u);
+
+  const auto second = coordinator_->Submit(
+      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::High));
+  EXPECT_EQ(second.kind, EditorRenderResultKind::RequestAccepted);
+  EXPECT_EQ(coordinator_->pending_count(), 1u);
+  EXPECT_EQ(latch->scheduled().size(), 1u);
+  EXPECT_EQ(latch->rejected_while_running(), 0);
+
+  clock.advance_ns(16'000'000);
+  EXPECT_TRUE(latch->running());
+  EXPECT_EQ(latch->scheduled().size(), 1u);
+
+  latch->Complete(true, "first");
+  EXPECT_EQ(latch->scheduled().size(), 2u);
+  EXPECT_TRUE(latch->running());
+  latch->Complete(true, "second");
+  EXPECT_FALSE(coordinator_->has_inflight());
+  EXPECT_EQ(coordinator_->pending_count(), 0u);
 }
 
 }  // namespace

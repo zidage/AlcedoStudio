@@ -7,6 +7,7 @@
 /// and build-check that EditorSessionService does not link Qt Widgets.
 
 #include <gtest/gtest.h>
+#include "support/editor_parameter_write_test.hpp"
 
 #include <QCoreApplication>
 #include <QEvent>
@@ -19,11 +20,16 @@
 #include <fstream>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "app/editor_session_bootstrap.hpp"
 #include "app/editor_session_service.hpp"
+#include "app/editor_pending_input.hpp"
+#include "app/editor_panel_projection.hpp"
 #include "app/editor_session_types.hpp"
+#include "app/pipeline_document_history.hpp"
+#include "type/hash_type.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_models.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
 #include "ui/alcedo_main/album_backend/workspace_router.hpp"
@@ -45,8 +51,11 @@ class FakeSessionBackend final : public IEditorSessionBackend {
   int                   open_count               = 0;
   int                   switch_count             = 0;
   int                   close_count              = 0;
+  int                   persist_count            = 0;
   int                   shutdown_count           = 0;
   bool                  last_close_persist       = true;
+  bool                  defer_close_             = false;
+  bool                  defer_persist_           = false;
   int                   presentation_width       = 0;
   int                   presentation_height      = 0;
   std::string           last_error_;
@@ -130,7 +139,15 @@ class FakeSessionBackend final : public IEditorSessionBackend {
 
   auto Close(bool persist_changes) -> EditorSessionResult override {
     ++close_count;
-    last_close_persist   = persist_changes;
+    last_close_persist = persist_changes;
+    if (defer_close_) {
+      EditorSessionResult result;
+      result.kind     = EditorSessionResultKind::Accepted;
+      result.state    = state_;
+      result.identity = identity_;
+      result.message  = "Editor session command queued";
+      return result;
+    }
     state_               = EditorSessionState::NoImage;
     identity_.element_id = 0;
     identity_.image_id   = 0;
@@ -140,6 +157,37 @@ class FakeSessionBackend final : public IEditorSessionBackend {
     result.identity = identity_;
     NotifyChange();
     return result;
+  }
+
+  void CompleteDeferredClose() {
+    defer_close_         = false;
+    state_               = EditorSessionState::NoImage;
+    identity_.element_id = 0;
+    identity_.image_id   = 0;
+    NotifyChange();
+  }
+
+  auto PersistCurrentImage() -> EditorSessionResult override {
+    ++persist_count;
+    EditorSessionResult result;
+    result.state    = state_;
+    result.identity = identity_;
+    if (defer_persist_) {
+      result.kind    = EditorSessionResultKind::Accepted;
+      result.message = "Editor session command queued";
+      return result;
+    }
+    result.kind    = EditorSessionResultKind::SaveStarted;
+    result.message = "Waiting for editor history checkpoint";
+    return result;
+  }
+
+  void CompletePersist() {
+    defer_persist_ = false;
+    state_         = EditorSessionState::Saving;
+    NotifyChange();
+    state_ = EditorSessionState::Interactive;
+    NotifyChange();
   }
 
   auto Shutdown() -> EditorSessionResult override {
@@ -164,11 +212,20 @@ class FakeSessionBackend final : public IEditorSessionBackend {
 
   // Phase 6C-7: snapshot publication for panel state loading.
   EditorRenderAdjustmentSnapshot current_snapshot_;
+  // Load-only typed panel values. JSON patches on adjustment_snapshot are not
+  // converted for QML.
+  alcedo::EditorPanelProjection current_panel_projection_{};
   auto adjustment_snapshot() const -> EditorRenderAdjustmentSnapshot override {
     return current_snapshot_;
   }
+  auto panel_projection() const -> alcedo::EditorPanelProjection override {
+    return current_panel_projection_;
+  }
   void SetAdjustmentSnapshot(EditorRenderAdjustmentSnapshot snapshot) {
     current_snapshot_ = std::move(snapshot);
+  }
+  void SetPanelProjection(alcedo::EditorPanelProjection projection) {
+    current_panel_projection_ = std::move(projection);
   }
 
   auto                                Redo() -> EditorSessionResult override { return Discard(); }
@@ -213,11 +270,15 @@ class FakeSessionBackend final : public IEditorSessionBackend {
   }
 
   void NotifyWithoutStateChange() { NotifyChange(); }
+  void SimulateRenderProgress() { NotifyRenderProgress(); }
 
-  // Phase 6D multi-slider: Patch/Commit update the live snapshot and NotifyChange
-  // the same way EditorSessionService::Emit does after HandlePatch.
-  int  patch_count  = 0;
-  int  commit_count = 0;
+  // Patch/Commit remain owner-consume APIs for tests that call them directly.
+  // GUI submitPatch uses EnqueueAdjustmentInput and must not copy live params
+  // into the panel snapshot.
+  int  patch_count   = 0;
+  int  commit_count  = 0;
+  int  enqueue_count = 0;
+  EditorPendingInputQueue pending_input_;
 
   auto Patch(EditorAdjustmentPatch patch) -> EditorSessionResult override {
     ++patch_count;
@@ -233,9 +294,8 @@ class FakeSessionBackend final : public IEditorSessionBackend {
   auto CommitAdjustment(EditorAdjustmentPatch patch) -> EditorSessionResult override {
     ++commit_count;
     UpsertSnapshotPatch(std::move(patch));
-    // Phase 7A R2: a settled commit mutates history, so bump the revision the
-    // same way EditorSessionService::CommitAdjustment does. Interactive Patch
-    // below does not bump, so previews stay off the history projection path.
+    // A settled consume mutates history, so bump the revision the same way
+    // EditorSessionService::CommitAdjustment does. Enqueue below does not.
     ++history_revision_;
     EditorSessionResult result;
     result.kind     = EditorSessionResultKind::RenderRouted;
@@ -243,6 +303,42 @@ class FakeSessionBackend final : public IEditorSessionBackend {
     result.identity = identity_;
     NotifyChange();
     return result;
+  }
+
+  auto EnqueueAdjustmentInput(EditorAdjustmentPatch patch) -> EditorSessionResult override {
+    ++enqueue_count;
+    const auto admitted = pending_input_.AdmitFieldChange(identity_, patch);
+    EditorSessionResult result;
+    result.state    = state_;
+    result.identity = identity_;
+    if (!admitted.accepted) {
+      result.kind    = EditorSessionResultKind::Rejected;
+      result.message = admitted.error;
+      return result;
+    }
+    result.kind    = EditorSessionResultKind::Accepted;
+    result.message = "Adjustment input queued";
+    return result;
+  }
+
+  auto EnqueuePendingInputBoundary(EditorPendingInputBoundaryKind kind)
+      -> EditorSessionResult override {
+    const auto admitted = pending_input_.AdmitBoundary(identity_, kind);
+    EditorSessionResult result;
+    result.state    = state_;
+    result.identity = identity_;
+    if (!admitted.accepted) {
+      result.kind    = EditorSessionResultKind::Rejected;
+      result.message = admitted.error;
+      return result;
+    }
+    result.kind    = EditorSessionResultKind::Accepted;
+    result.message = "Adjustment input boundary queued";
+    return result;
+  }
+
+  [[nodiscard]] auto PeekPendingInput() const -> EditorPendingInputView override {
+    return pending_input_.Peek();
   }
 
   // Phase 7A R0: deterministic counters + async Version-operation modeling for
@@ -351,6 +447,34 @@ class FakeSessionBackend final : public IEditorSessionBackend {
   }
 };
 
+auto ScalarPanelField(std::string key, float value) -> alcedo::EditorPanelFieldPresentation {
+  alcedo::EditorPanelFieldPresentation field;
+  field.field_key = std::move(key);
+  field.value     = alcedo::EditorPanelScalarValue{field.field_key, value};
+  return field;
+}
+
+auto PanelProjection(std::uint64_t generation,
+                     std::vector<alcedo::EditorPanelFieldPresentation> fields)
+    -> alcedo::EditorPanelProjection {
+  alcedo::EditorPanelProjection projection;
+  projection.session_generation = generation;
+  projection.fields             = std::move(fields);
+  return projection;
+}
+
+auto OdtPanelProjection(std::uint64_t generation, std::string space, std::string eotf, float peak)
+    -> alcedo::EditorPanelProjection {
+  alcedo::EditorPanelOdtValue odt;
+  odt.encoding_space = std::move(space);
+  odt.encoding_eotf  = std::move(eotf);
+  odt.peak_luminance = peak;
+  alcedo::EditorPanelFieldPresentation field;
+  field.field_key = "odt";
+  field.value     = std::move(odt);
+  return PanelProjection(generation, {std::move(field)});
+}
+
 TEST(EditorSessionControllerPhase5ATest, RoutesOpenThroughInjectedFakeBackend) {
   FakeSessionBackend      backend;
   EditorSessionController controller(&backend);
@@ -396,10 +520,14 @@ TEST(EditorSessionControllerPhase5ATest, WorkspaceSwitchesImagesWithoutClosingTh
 
   router.OpenLibrary();
   EXPECT_EQ(backend.close_count, 0);
+  EXPECT_EQ(backend.persist_count, 1);
+  EXPECT_TRUE(controller.persist_in_flight());
   EXPECT_TRUE(controller.active());
   EXPECT_EQ(controller.element_id(), 3u);
   EXPECT_EQ(controller.image_id(), 4u);
   EXPECT_EQ(router.workspace(), QStringLiteral("library"));
+  backend.CompletePersist();
+  EXPECT_FALSE(controller.persist_in_flight());
 }
 
 TEST(EditorSessionControllerPhase5ATest,
@@ -456,6 +584,44 @@ TEST(EditorSessionControllerPhase5ATest, FinalizeAndShutdownKeepLifecycleInTheBa
   controller.Shutdown();
   EXPECT_EQ(backend.shutdown_count, 1);
   EXPECT_EQ(controller.session_state(), EditorSessionState::ShuttingDown);
+}
+
+TEST(EditorSessionControllerPhase5ATest,
+     QueuedCloseKeepsCloseInFlightUntilBackendReachesNoImage) {
+  FakeSessionBackend      backend;
+  backend.defer_close_ = true;
+  EditorSessionController controller(&backend);
+
+  controller.Open(1, 2);
+  backend.SimulateFirstFrameReady();
+  controller.Finalize(true);
+  EXPECT_EQ(backend.close_count, 1);
+  EXPECT_TRUE(backend.last_close_persist);
+  EXPECT_TRUE(controller.close_in_flight());
+  EXPECT_EQ(controller.session_state(), EditorSessionState::Interactive);
+  EXPECT_FALSE(controller.has_image());
+
+  backend.CompleteDeferredClose();
+  EXPECT_FALSE(controller.close_in_flight());
+  EXPECT_EQ(controller.session_state(), EditorSessionState::NoImage);
+}
+
+TEST(EditorSessionControllerPhase5ATest,
+     QueuedPersistKeepsPersistInFlightUntilBackendReturnsToInteractive) {
+  FakeSessionBackend      backend;
+  backend.defer_persist_ = true;
+  EditorSessionController controller(&backend);
+
+  controller.Open(1, 2);
+  backend.SimulateFirstFrameReady();
+  controller.PersistCurrentImage();
+  EXPECT_EQ(backend.persist_count, 1);
+  EXPECT_TRUE(controller.persist_in_flight());
+  EXPECT_EQ(controller.session_state(), EditorSessionState::Interactive);
+
+  backend.CompletePersist();
+  EXPECT_FALSE(controller.persist_in_flight());
+  EXPECT_EQ(controller.session_state(), EditorSessionState::Interactive);
 }
 
 TEST(EditorSessionControllerPhase5ATest, PresentationSizeIsForwardedToTheBackend) {
@@ -593,6 +759,45 @@ TEST(EditorSessionControllerPhase5ATest, RenderBusyReflectsBackendDiagnostics) {
   EXPECT_FALSE(controller.render_busy());
   backend.render_busy_ = true;
   EXPECT_TRUE(controller.render_busy());
+}
+
+TEST(EditorSessionControllerPhase5ATest,
+     RenderProgressDoesNotBroadcastStateOrReloadAdjustmentSnapshot) {
+  FakeSessionBackend backend;
+  backend.state_               = EditorSessionState::Interactive;
+  backend.image_load_request_  = ImageLoadRequestId{1};
+  backend.identity_.element_id = 1;
+  backend.identity_.image_id   = 2;
+  EditorSessionController controller(&backend);
+
+  backend.SetPanelProjection(PanelProjection(1, {ScalarPanelField("exposure", 0.25f)}));
+  backend.NotifyWithoutStateChange();
+  const auto snapshot = controller.adjustment_snapshot();
+  ASSERT_TRUE(snapshot.contains(QStringLiteral("exposure")));
+
+  int state_signals    = 0;
+  int snapshot_signals = 0;
+  int busy_signals     = 0;
+  int diag_signals     = 0;
+  QObject::connect(&controller, &EditorSessionController::StateChanged, [&] { ++state_signals; });
+  QObject::connect(&controller, &EditorSessionController::AdjustmentSnapshotChanged,
+                   [&] { ++snapshot_signals; });
+  QObject::connect(&controller, &EditorSessionController::RenderBusyChanged,
+                   [&] { ++busy_signals; });
+  QObject::connect(&controller, &EditorSessionController::RenderDiagnosticsChanged,
+                   [&] { ++diag_signals; });
+
+  backend.render_busy_ = true;
+  backend.SetPanelProjection(PanelProjection(1, {ScalarPanelField("exposure", 9.0f),
+                                                 ScalarPanelField("contrast", 40.0f)}));
+  backend.SimulateRenderProgress();
+
+  EXPECT_EQ(state_signals, 0);
+  EXPECT_EQ(snapshot_signals, 0);
+  EXPECT_EQ(busy_signals, 1);
+  EXPECT_EQ(diag_signals, 1);
+  EXPECT_TRUE(controller.render_busy());
+  EXPECT_EQ(controller.adjustment_snapshot(), snapshot);
 }
 
 TEST(EditorSessionControllerPhase5ATest, WorksWithoutBackendForShellOnlyTests) {
@@ -826,8 +1031,8 @@ TEST(EditorSessionControllerPhase5ATest, EditorSessionServiceCMakeDoesNotLinkQtW
       text.substr(start, next == std::string::npos ? std::string::npos : next - start);
   // Match real link dependency tokens, not comments that mention Widgets.
   // The facade may declare PRIVATE_DEPS on internal module libraries
-  // (EditorSaveCheckpointService, EditorSessionLifecycle, etc.) as part of
-  // Fix-1B; it must never link Qt Widgets or expose PUBLIC_DEPS.
+  // (EditorPendingInput, EditorSaveCheckpointService, EditorSessionLifecycle,
+  // etc.). It must never link Qt Widgets or expose PUBLIC_DEPS.
   EXPECT_EQ(block.find("PUBLIC_DEPS"), std::string::npos)
       << "EditorSessionService must not declare PUBLIC_DEPS";
   EXPECT_EQ(block.find("Qt6::Widgets"), std::string::npos)
@@ -844,17 +1049,11 @@ TEST(EditorSessionControllerPhase5ATest, SnapshotStartsEmpty) {
 }
 
 TEST(EditorSessionControllerPhase5ATest, BackendSnapshotIsPublishedToController) {
-  FakeSessionBackend             backend;
-  EditorSessionController        controller(&backend);
+  FakeSessionBackend      backend;
+  EditorSessionController controller(&backend);
 
-  EditorRenderAdjustmentSnapshot snap;
-  snap.patches = {
-      EditorAdjustmentPatch{"exposure", R"({"exposure":1.5})", true},
-      EditorAdjustmentPatch{"contrast", R"({"contrast":18.0})", true},
-  };
-  snap.snapshot_generation = 1;
-  backend.SetAdjustmentSnapshot(snap);
-
+  backend.SetPanelProjection(
+      PanelProjection(0, {ScalarPanelField("exposure", 1.5f), ScalarPanelField("contrast", 18.0f)}));
   backend.NotifyWithoutStateChange();
 
   const auto map = controller.adjustment_snapshot();
@@ -869,12 +1068,7 @@ TEST(EditorSessionControllerPhase5ATest,
   editor_rhi::EditorViewportItem viewport;
   controller.bindPresentationViewport(&viewport);
 
-  EditorRenderAdjustmentSnapshot snap;
-  snap.patches = {EditorAdjustmentPatch{
-      "odt",
-      R"({"odt":{"encoding_space":"rec2020","encoding_eotf":"st2084","peak_luminance":1600.0}})",
-      true}};
-  backend.SetAdjustmentSnapshot(snap);
+  backend.SetPanelProjection(OdtPanelProjection(0, "rec2020", "st2084", 1600.0f));
   backend.NotifyWithoutStateChange();
 
   const auto config = viewport.displayConfig();
@@ -885,19 +1079,15 @@ TEST(EditorSessionControllerPhase5ATest,
 }
 
 TEST(EditorSessionControllerPhase5ATest, SnapshotContentUpdatesOnChange) {
-  FakeSessionBackend             backend;
-  EditorSessionController        controller(&backend);
+  FakeSessionBackend      backend;
+  EditorSessionController controller(&backend);
 
-  EditorRenderAdjustmentSnapshot snap1;
-  snap1.patches = {EditorAdjustmentPatch{"exposure", R"({"exposure":0.0})", true}};
-  backend.SetAdjustmentSnapshot(snap1);
+  backend.SetPanelProjection(PanelProjection(0, {ScalarPanelField("exposure", 0.0f)}));
   backend.NotifyWithoutStateChange();
   const auto map1 = controller.adjustment_snapshot();
   EXPECT_TRUE(map1.contains(QStringLiteral("exposure")));
 
-  EditorRenderAdjustmentSnapshot snap2;
-  snap2.patches = {EditorAdjustmentPatch{"exposure", R"({"exposure":1.5})", true}};
-  backend.SetAdjustmentSnapshot(snap2);
+  backend.SetPanelProjection(PanelProjection(0, {ScalarPanelField("exposure", 1.5f)}));
   backend.NotifyWithoutStateChange();
 
   const auto map2 = controller.adjustment_snapshot();
@@ -912,9 +1102,7 @@ TEST(EditorSessionControllerPhase5ATest, SameSnapshotDoesNotReemitSignal) {
   QObject::connect(&controller, &EditorSessionController::AdjustmentSnapshotChanged,
                    [&] { ++signal_count; });
 
-  EditorRenderAdjustmentSnapshot snap;
-  snap.patches = {EditorAdjustmentPatch{"exposure", R"({"exposure":0.75})", true}};
-  backend.SetAdjustmentSnapshot(snap);
+  backend.SetPanelProjection(PanelProjection(0, {ScalarPanelField("exposure", 0.75f)}));
   backend.NotifyWithoutStateChange();
   const auto map1 = controller.adjustment_snapshot();
   EXPECT_GE(signal_count, 1);
@@ -939,9 +1127,7 @@ TEST(EditorSessionControllerPhase5ATest, SnapshotSignalFiresOnChange) {
   QObject::connect(&controller, &EditorSessionController::AdjustmentSnapshotChanged,
                    [&] { ++signal_count; });
 
-  EditorRenderAdjustmentSnapshot snap;
-  snap.patches = {EditorAdjustmentPatch{"contrast", R"({"contrast":10.0})", true}};
-  backend.SetAdjustmentSnapshot(snap);
+  backend.SetPanelProjection(PanelProjection(0, {ScalarPanelField("contrast", 10.0f)}));
   backend.NotifyWithoutStateChange();
   EXPECT_GE(signal_count, 1);
 }
@@ -973,18 +1159,27 @@ TEST(EditorSessionControllerPhase5ATest,
                                        QStringLiteral("{\"vibrance\":%1}").arg(i * 3), false));
   }
 
-  EXPECT_EQ(backend.patch_count, 16);
+  EXPECT_EQ(backend.patch_count, 0);
+  EXPECT_EQ(backend.commit_count, 0);
+  EXPECT_EQ(backend.enqueue_count, 16);
+  const auto pending = backend.PeekPendingInput();
+  ASSERT_EQ(pending.sequences.size(), 1u);
+  EXPECT_EQ(pending.sequences.front().seal, EditorPendingInputBoundaryKind::None);
+  const auto* saturation = FindPendingField(pending, "saturation");
+  const auto* vibrance   = FindPendingField(pending, "vibrance");
+  ASSERT_NE(saturation, nullptr);
+  ASSERT_NE(vibrance, nullptr);
+  EXPECT_EQ(PendingScalarValue(*saturation), 40.0f);
+  EXPECT_EQ(PendingScalarValue(*vibrance), 24.0f);
   EXPECT_EQ(snapshot_signals, 0)
       << "interactive submitPatch must not flood AdjustmentSnapshotChanged "
          "(each emit re-enters QML loadFromSnapshot during pointer moves)";
-  EXPECT_GE(state_signals, 1) << "StateChanged must still fire for renderBusy bindings";
-  // Cache stays warm so a later external NotifyChange does not look brand-new
-  // unless params actually change again.
-  EXPECT_TRUE(controller.adjustment_snapshot().contains(QStringLiteral("saturation")));
-  EXPECT_TRUE(controller.adjustment_snapshot().contains(QStringLiteral("vibrance")));
+  EXPECT_EQ(state_signals, 0) << "enqueue must not NotifyChange or apply live parameters";
+  EXPECT_FALSE(controller.adjustment_snapshot().contains(QStringLiteral("saturation")));
+  EXPECT_FALSE(controller.adjustment_snapshot().contains(QStringLiteral("vibrance")));
 }
 
-TEST(EditorSessionControllerPhase5ATest, SettledSubmitPatchEmitsAdjustmentSnapshotChanged) {
+TEST(EditorSessionControllerPhase5ATest, SettledSubmitPatchDoesNotCommitOrPublishAdjustmentSnapshot) {
   FakeSessionBackend backend;
   backend.state_               = EditorSessionState::Interactive;
   backend.image_load_request_  = ImageLoadRequestId{1};
@@ -996,15 +1191,22 @@ TEST(EditorSessionControllerPhase5ATest, SettledSubmitPatchEmitsAdjustmentSnapsh
   QObject::connect(&controller, &EditorSessionController::AdjustmentSnapshotChanged,
                    [&] { ++snapshot_signals; });
 
-  // Interactive first (no signal), then settled (must signal for panel sync).
   ASSERT_TRUE(controller.submitPatch(QStringLiteral("exposure"),
                                      QStringLiteral("{\"exposure\":0.5}"), false));
   EXPECT_EQ(snapshot_signals, 0);
 
   ASSERT_TRUE(controller.submitPatch(QStringLiteral("exposure"),
                                      QStringLiteral("{\"exposure\":0.8}"), true));
-  EXPECT_GE(snapshot_signals, 1) << "settled submitPatch must publish AdjustmentSnapshotChanged";
-  EXPECT_EQ(backend.commit_count, 1);
+  EXPECT_EQ(snapshot_signals, 0) << "settled enqueue is accepted, not history-committed";
+  EXPECT_EQ(backend.commit_count, 0);
+  EXPECT_EQ(backend.patch_count, 0);
+  EXPECT_EQ(backend.enqueue_count, 2);
+  const auto pending = backend.PeekPendingInput();
+  ASSERT_EQ(pending.sequences.size(), 1u);
+  EXPECT_EQ(pending.sequences.front().seal, EditorPendingInputBoundaryKind::Release);
+  const auto* exposure = FindPendingField(pending, "exposure");
+  ASSERT_NE(exposure, nullptr);
+  EXPECT_EQ(PendingScalarValue(*exposure), 0.8f);
 }
 
 TEST(EditorSessionControllerPhase5ATest, InteractiveSubmitStartsPresentLoopAndSettledStopsIt) {
@@ -1032,7 +1234,7 @@ TEST(EditorSessionControllerPhase5ATest, InteractiveSubmitStartsPresentLoopAndSe
 }
 
 TEST(EditorSessionControllerPhase5ATest,
-     PresentLoopTickRequestsUpdateOnlyWhileArmedAndPresentationIsAvailable) {
+     PresentLoopContinueDoesNotTickWhenNoReadyFrameIsWaiting) {
   editor_rhi::EditorViewportItem viewport;
   const auto ticks_idle = viewport.interactivePresentLoopTickCount();
   viewport.continueInteractivePresentLoop();
@@ -1046,14 +1248,15 @@ TEST(EditorSessionControllerPhase5ATest,
 
   viewport.resumePresentation();
   viewport.continueInteractivePresentLoop();
-  EXPECT_EQ(viewport.interactivePresentLoopTickCount(), ticks_idle + 1);
+  EXPECT_EQ(viewport.interactivePresentLoopTickCount(), ticks_idle)
+      << "continue must not pump vsync frames when no Ready slot is waiting";
   viewport.continueInteractivePresentLoop();
-  EXPECT_EQ(viewport.interactivePresentLoopTickCount(), ticks_idle + 2);
+  EXPECT_EQ(viewport.interactivePresentLoopTickCount(), ticks_idle);
 
   viewport.endInteractivePresentLoop();
   EXPECT_FALSE(viewport.interactivePresentLoopActive());
   viewport.continueInteractivePresentLoop();
-  EXPECT_EQ(viewport.interactivePresentLoopTickCount(), ticks_idle + 2);
+  EXPECT_EQ(viewport.interactivePresentLoopTickCount(), ticks_idle);
 }
 
 TEST(EditorSessionControllerPhase5ATest, SessionEpochChangeStopsPresentLoop) {
@@ -1108,9 +1311,7 @@ TEST(EditorSessionControllerPhase5ATest, SnapshotSignalDoesNotRetriggerOnSameNot
   QObject::connect(&controller, &EditorSessionController::AdjustmentSnapshotChanged,
                    [&] { ++signal_count; });
 
-  EditorRenderAdjustmentSnapshot snap;
-  snap.patches = {EditorAdjustmentPatch{"contrast", R"({"contrast":10.0})", true}};
-  backend.SetAdjustmentSnapshot(snap);
+  backend.SetPanelProjection(PanelProjection(0, {ScalarPanelField("contrast", 10.0f)}));
   backend.NotifyWithoutStateChange();
   EXPECT_GE(signal_count, 1);
 
@@ -1118,19 +1319,16 @@ TEST(EditorSessionControllerPhase5ATest, SnapshotSignalDoesNotRetriggerOnSameNot
   backend.NotifyWithoutStateChange();
   EXPECT_EQ(signal_count, before);
 
-  snap.patches = {EditorAdjustmentPatch{"contrast", R"({"contrast":42.0})", true}};
-  backend.SetAdjustmentSnapshot(snap);
+  backend.SetPanelProjection(PanelProjection(0, {ScalarPanelField("contrast", 42.0f)}));
   backend.NotifyWithoutStateChange();
   EXPECT_GT(signal_count, before);
 }
 
-TEST(EditorSessionControllerPhase5ATest, SnapshotIncludesParsedJsonValues) {
-  FakeSessionBackend             backend;
-  EditorSessionController        controller(&backend);
+TEST(EditorSessionControllerPhase5ATest, SnapshotIncludesTypedPanelValues) {
+  FakeSessionBackend      backend;
+  EditorSessionController controller(&backend);
 
-  EditorRenderAdjustmentSnapshot snap;
-  snap.patches = {EditorAdjustmentPatch{"exposure", R"({"exposure":-1.75})", true}};
-  backend.SetAdjustmentSnapshot(snap);
+  backend.SetPanelProjection(PanelProjection(0, {ScalarPanelField("exposure", -1.75f)}));
   backend.NotifyWithoutStateChange();
 
   const auto map = controller.adjustment_snapshot();
@@ -1138,6 +1336,63 @@ TEST(EditorSessionControllerPhase5ATest, SnapshotIncludesParsedJsonValues) {
   const auto entry = map[QStringLiteral("exposure")].toMap();
   ASSERT_TRUE(entry.contains(QStringLiteral("exposure")));
   EXPECT_DOUBLE_EQ(entry[QStringLiteral("exposure")].toDouble(), -1.75);
+}
+
+TEST(EditorSessionControllerPhase5ATest, StaleSessionGenerationLeavesPanelSnapshotUnchanged) {
+  FakeSessionBackend backend;
+  backend.image_load_request_ = ImageLoadRequestId{7};
+  EditorSessionController controller(&backend);
+
+  backend.SetPanelProjection(PanelProjection(7, {ScalarPanelField("exposure", 1.25f)}));
+  backend.NotifyWithoutStateChange();
+  const auto live = controller.adjustment_snapshot();
+  ASSERT_TRUE(live.contains(QStringLiteral("exposure")));
+
+  int signal_count = 0;
+  QObject::connect(&controller, &EditorSessionController::AdjustmentSnapshotChanged,
+                   [&] { ++signal_count; });
+  backend.SetPanelProjection(PanelProjection(6, {ScalarPanelField("exposure", 9.0f),
+                                                 ScalarPanelField("contrast", 40.0f)}));
+  backend.NotifyWithoutStateChange();
+  EXPECT_EQ(signal_count, 0);
+  EXPECT_EQ(controller.adjustment_snapshot(), live);
+  EXPECT_FALSE(controller.adjustment_snapshot().contains(QStringLiteral("contrast")));
+}
+
+TEST(EditorSessionControllerPhase5ATest, SameSessionProjectionMergesChangedFieldsOnly) {
+  FakeSessionBackend      backend;
+  EditorSessionController controller(&backend);
+
+  backend.SetPanelProjection(
+      PanelProjection(0, {ScalarPanelField("exposure", 0.5f), ScalarPanelField("contrast", 12.0f)}));
+  backend.NotifyWithoutStateChange();
+  ASSERT_TRUE(controller.adjustment_snapshot().contains(QStringLiteral("contrast")));
+
+  backend.SetPanelProjection(PanelProjection(0, {ScalarPanelField("exposure", 1.5f)}));
+  backend.NotifyWithoutStateChange();
+  const auto map = controller.adjustment_snapshot();
+  EXPECT_DOUBLE_EQ(map.value(QStringLiteral("exposure")).toMap().value(QStringLiteral("exposure"))
+                       .toDouble(),
+                   1.5);
+  EXPECT_TRUE(map.contains(QStringLiteral("contrast")));
+}
+
+TEST(EditorSessionControllerPhase5ATest, NewSessionGenerationReplacesPanelSnapshot) {
+  FakeSessionBackend backend;
+  backend.image_load_request_ = ImageLoadRequestId{1};
+  EditorSessionController controller(&backend);
+
+  backend.SetPanelProjection(
+      PanelProjection(1, {ScalarPanelField("exposure", 0.5f), ScalarPanelField("contrast", 12.0f)}));
+  backend.NotifyWithoutStateChange();
+  ASSERT_TRUE(controller.adjustment_snapshot().contains(QStringLiteral("contrast")));
+
+  backend.image_load_request_ = ImageLoadRequestId{2};
+  backend.SetPanelProjection(PanelProjection(2, {ScalarPanelField("exposure", 1.5f)}));
+  backend.NotifyWithoutStateChange();
+  const auto map = controller.adjustment_snapshot();
+  EXPECT_TRUE(map.contains(QStringLiteral("exposure")));
+  EXPECT_FALSE(map.contains(QStringLiteral("contrast")));
 }
 
 // ---------------------------------------------------------------------------
@@ -1196,12 +1451,62 @@ TEST(EditorSessionControllerPhase5ATest, SettledCommitPublishesOneHistoryRevisio
   QObject::connect(&model, &EditorHistoryModel::StateChanged, [&] { ++model_refreshes; });
   backend.history_snapshot_count_ = 0;
 
-  ASSERT_TRUE(controller.submitPatch(QStringLiteral("exposure"),
-                                     QStringLiteral(R"({"exposure":0.8})"), true));
+  EditorAdjustmentPatch patch;
+  patch.field_key   = "exposure";
+  patch.params_json = R"({"exposure":0.8})";
+  patch.settled     = true;
+  const auto result = backend.CommitAdjustment(std::move(patch));
+  EXPECT_EQ(result.kind, EditorSessionResultKind::RenderRouted);
+  controller.OnBackendChanged();
 
   EXPECT_EQ(history_signals, 1) << "one settled commit publishes one history revision";
   EXPECT_EQ(model_refreshes, 1) << "one settled commit performs one projection";
   EXPECT_EQ(backend.history_snapshot_count_, 1) << "one settled commit reads one history snapshot";
+}
+
+TEST(EditorSessionControllerPhase5ATest, SubmitPatchSettledDoesNotPublishHistoryRevision) {
+  FakeSessionBackend backend;
+  backend.state_    = EditorSessionState::Interactive;
+  backend.identity_ = {42, 84};
+  EditorSessionController controller(&backend);
+  EditorHistoryModel      model;
+  model.setEditorSession(&controller);
+
+  int history_signals = 0;
+  QObject::connect(&controller, &EditorSessionController::HistoryChanged,
+                   [&] { ++history_signals; });
+  backend.history_snapshot_count_ = 0;
+
+  ASSERT_TRUE(controller.submitPatch(QStringLiteral("exposure"),
+                                     QStringLiteral(R"({"exposure":0.8})"), true));
+
+  EXPECT_EQ(history_signals, 0);
+  EXPECT_EQ(backend.history_snapshot_count_, 0);
+  EXPECT_EQ(backend.commit_count, 0);
+  EXPECT_EQ(backend.history_revision(), 0u);
+}
+
+TEST(EditorSessionControllerPhase5ATest, NodeSwitchBoundaryStartsANewQueuedSequence) {
+  FakeSessionBackend backend;
+  backend.state_    = EditorSessionState::Interactive;
+  backend.identity_ = {42, 84};
+  EditorSessionController controller(&backend);
+
+  ASSERT_TRUE(controller.submitPatch(QStringLiteral("exposure"),
+                                     QStringLiteral(R"({"value":0.4})"), false));
+  ASSERT_TRUE(controller.enqueueNodeSwitchBoundary());
+  ASSERT_TRUE(controller.submitPatch(QStringLiteral("exposure"),
+                                     QStringLiteral(R"({"value":0.9})"), false));
+
+  EXPECT_EQ(backend.patch_count, 0);
+  EXPECT_EQ(backend.commit_count, 0);
+  const auto pending = backend.PeekPendingInput();
+  ASSERT_EQ(pending.sequences.size(), 2u);
+  EXPECT_EQ(pending.sequences[0].seal, EditorPendingInputBoundaryKind::NodeSwitch);
+  ASSERT_EQ(pending.sequences[0].fields.size(), 1u);
+  EXPECT_EQ(alcedo::PendingScalarValue(pending.sequences[0].fields.front()), 0.4f);
+  ASSERT_FALSE(pending.sequences[1].fields.empty());
+  EXPECT_EQ(alcedo::PendingScalarValue(pending.sequences[1].fields.front()), 0.9f);
 }
 
 TEST(EditorSessionControllerPhase5ATest, RenderBusyAndFrameCompletionDoNotRefreshHistoryModels) {
@@ -1357,5 +1662,30 @@ TEST(EditorSessionControllerPhase5ATest, InvalidVersionOrCommitIdPublishesReject
   EXPECT_EQ(controller.last_history_result().value("action").toString(),
             QStringLiteral("moveHeadToCommit"));
 }
+
+TEST(EditorSessionControllerPhase5ATest, HistoryModelPresentsTypedAddColorGradeTitleAndName) {
+  FakeSessionBackend backend;
+  backend.state_    = EditorSessionState::Interactive;
+  backend.identity_ = {42, 84};
+
+  alcedo::EditorHistoryCommit add;
+  add.commit_hash       = alcedo::Hash128(1, 0);
+  add.presentation_key  = alcedo::PresentationKeyForOperation(
+      alcedo::PipelineEditOperationKind::AddColorGrade);
+  add.node_display_name = "Color Grade 2";
+  add.after_value_json  = R"({"display_name":"Color Grade 2"})";
+  add.position          = alcedo::EditorHistoryTimelinePosition::Current;
+  backend.history_projection_.commits.push_back(std::move(add));
+
+  EditorSessionController controller(&backend);
+  EditorHistoryModel      model;
+  model.setEditorSession(&controller);
+  ASSERT_EQ(model.count(), 1);
+  EXPECT_EQ(model.data(model.index(0), EditorHistoryModel::DisplayNameRole).toString(),
+            QStringLiteral("Add Color Grade"));
+  EXPECT_EQ(model.data(model.index(0), EditorHistoryModel::DeltaTextRole).toString(),
+            QStringLiteral("Color Grade 2"));
+}
+
 }  // namespace
 }  // namespace alcedo::ui

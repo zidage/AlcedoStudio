@@ -18,6 +18,7 @@ Selected attribution highlights:
 - DuckDB (MIT)
 - Lensfun library/database (LGPL-3.0 and CC BY-SA 3.0)
 - Qt runtime components (LGPL family)
+- QuickQanava (BSD-3-Clause; vendored bezier is MIT)
 - Exiv2 (GPL-2.0-or-later)
 - LibRaw (CDDL-1.0 OR LGPL-2.1-or-later)
 - darktable and RCD-Demosaicing derived algorithm implementations in source files

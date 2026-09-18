@@ -1,0 +1,20 @@
+<!--
+  Source: Tabler Icons (https://tabler.io/icons/icon/wash-dryclean)
+  License: MIT
+  Tabler icon name: wash-dryclean
+  Radial Mask type icon. User-approved 2 px stroke exception (DESIGN.md).
+  This circle is a type icon, not a status dot.
+-->
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="white"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <path d="M3 12a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" />
+</svg>

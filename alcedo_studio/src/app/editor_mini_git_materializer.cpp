@@ -11,6 +11,7 @@
 #include "app/editor_mini_git_journal_recovery.hpp"
 #include "app/editor_save_checkpoint_coordinator.hpp"
 #include "edit/history/mini_git_working_history.hpp"
+#include "edit/history/pipeline_document_checkpoint.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
 
 namespace alcedo {
@@ -103,12 +104,8 @@ auto ClearEntireJournal(const EditorMiniGitSaveCapture& capture, std::string* er
 
 auto MakeEditorSerializedPipelineState(const root_id_t& root_id, head_commit_hash_t head,
                                        const transaction_chain_hash_t& chain,
-                                       const nlohmann::json& pipeline_params) -> nlohmann::json {
-  return nlohmann::json{{"state_format_version", 1},
-                        {"root_id", root_id.ToString()},
-                        {"head_commit_hash", HeadCommitHashToStorage(head)},
-                        {"transaction_chain_hash", chain.ToString()},
-                        {"pipeline_params", pipeline_params}};
+                                       const PipelineDocument& document) -> nlohmann::json {
+  return EncodePipelineDocumentCheckpoint(root_id, head, chain, document);
 }
 
 // ── Materializer ────────────────────────────────────────────────────────────

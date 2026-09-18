@@ -15,6 +15,65 @@
 namespace alcedo::detail {
 namespace {
 
+TEST(RawProcessorRgbTest, UnmarkedDecodedRgbNormalizesBeforeCpuOutput) {
+  auto    raw  = std::make_unique<LibRaw>();
+  auto&   data = raw->imgdata.rawdata;
+  cv::Mat pixels(2, 3, CV_16UC4, cv::Scalar(1024, 9280, 17536, 0));
+  data.color4_image    = reinterpret_cast<ushort(*)[4]>(pixels.data);
+  data.sizes.raw_width = data.sizes.width = 3;
+  data.sizes.raw_height = data.sizes.height = 2;
+  data.sizes.raw_pitch                      = static_cast<unsigned>(pixels.step);
+  data.color.black                          = 1024;
+  data.color.maximum                        = 17536;
+  data.color.as_shot_wb_applied             = 0;
+  raw->imgdata.idata.colors                 = 3;
+  raw->imgdata.idata.filters                = 0;
+  RawParams params;
+  params.gpu_backend_  = RawGpuBackend::CPU;
+  const ushort crop[4] = {};
+  RawProcessor processor(params, data, *raw, RawRuntimeColorContext{}, crop);
+  auto         result = processor.Process();
+  const auto&  rgb    = result.GetCPUData();
+  ASSERT_EQ(rgb.type(), CV_32FC4);
+  ASSERT_EQ(rgb.size(), pixels.size());
+  for (int y = 0; y < rgb.rows; ++y) {
+    for (int x = 0; x < rgb.cols; ++x) {
+      const auto pixel = rgb.at<cv::Vec4f>(y, x);
+      EXPECT_FLOAT_EQ(pixel[0], 0.0f);
+      EXPECT_NEAR(pixel[1], 0.5f, 1e-6f);
+      EXPECT_NEAR(pixel[2], 1.0f, 1e-6f);
+      EXPECT_FLOAT_EQ(pixel[3], 1.0f);
+    }
+  }
+}
+
+TEST(RawProcessorRgbTest, FloatingRgbKeepsItsExistingRangeAndHighlightHeadroom) {
+  auto    raw  = std::make_unique<LibRaw>();
+  auto&   data = raw->imgdata.rawdata;
+  cv::Mat pixels(2, 3, CV_32FC3, cv::Scalar(0.0f, 0.5f, 2.0f));
+  data.float3_image    = reinterpret_cast<float(*)[3]>(pixels.data);
+  data.sizes.raw_width = data.sizes.width = 3;
+  data.sizes.raw_height = data.sizes.height = 2;
+  data.sizes.raw_pitch                      = static_cast<unsigned>(pixels.step);
+  data.color.black                          = 1024;
+  data.color.maximum                        = 17536;
+  raw->imgdata.idata.colors                 = 3;
+  raw->imgdata.idata.filters                = 0;
+  RawParams params;
+  params.gpu_backend_  = RawGpuBackend::CPU;
+  const ushort crop[4] = {};
+  RawProcessor processor(params, data, *raw, RawRuntimeColorContext{}, crop);
+  auto         result = processor.Process();
+  const auto&  rgb    = result.GetCPUData();
+  ASSERT_EQ(rgb.type(), CV_32FC4);
+  ASSERT_EQ(rgb.size(), pixels.size());
+  const auto pixel = rgb.at<cv::Vec4f>(0, 0);
+  EXPECT_FLOAT_EQ(pixel[0], 0.0f);
+  EXPECT_FLOAT_EQ(pixel[1], 0.5f);
+  EXPECT_FLOAT_EQ(pixel[2], 2.0f);
+  EXPECT_FLOAT_EQ(pixel[3], 1.0f);
+}
+
 auto MakeD800eSizes() -> libraw_image_sizes_t {
   libraw_image_sizes_t sizes{};
   sizes.raw_width   = 7424;

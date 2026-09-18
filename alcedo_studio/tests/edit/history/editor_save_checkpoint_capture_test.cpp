@@ -85,10 +85,8 @@ TEST_F(EditorSaveCheckpointCaptureTest, CaptureContainsElementVersionRootHeadHas
   EXPECT_EQ(capture.journal_records.front().kind, MiniGitJournalRecordKind::kEditCommit);
   EXPECT_EQ(capture.journal_records.back().kind, MiniGitJournalRecordKind::kEditCommit);
   ASSERT_TRUE(capture.materialization.image_state.serialized_pipeline_state.has_value());
-  EXPECT_FLOAT_EQ(capture.materialization.image_state.serialized_pipeline_state
-                      ->at("pipeline_params")
-                      .at("exposure")
-                      .get<float>(),
+  EXPECT_FLOAT_EQ(test::EditorMiniGitProjectFixture::CheckpointDocumentExposure(
+                      *capture.materialization.image_state.serialized_pipeline_state),
                   0.9f);
 }
 

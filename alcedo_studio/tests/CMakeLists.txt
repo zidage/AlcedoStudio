@@ -84,3 +84,12 @@ add_subdirectory(app)
 # alcedo_register_test_target). Do not hand-roll POST_BUILD DLL copies in domain
 # manifests — that opt-in pattern is why 0xC0000139 kept returning for new tests.
 
+
+add_test(NAME PackagedNoticeSourcesContainQuickQanavaAndBezierClauses
+    COMMAND ${CMAKE_COMMAND}
+        -DALCEDO_SOURCE_DIR=${CMAKE_SOURCE_DIR}
+        -P ${CMAKE_SOURCE_DIR}/scripts/cmake/check_quickqanava_legal_notices.cmake
+)
+set_tests_properties(PackagedNoticeSourcesContainQuickQanavaAndBezierClauses PROPERTIES
+    LABELS "quickqanava;legal_notices"
+)

@@ -11,7 +11,9 @@
 #include <memory>
 #include <mutex>
 #include <opencv2/core.hpp>
+#include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "edit/operators/operator_registeration.hpp"
@@ -194,7 +196,7 @@ TEST(PipelineSchedulerRequestIdTest, CompletionRunsAfterLivePipelineRenderLockIs
   task.options_.render_desc_.render_type_ = RenderType::FAST_PREVIEW;
   auto lock_released = std::make_shared<std::promise<bool>>();
   auto completed     = lock_released->get_future();
-  task.on_complete_  = [exec, lock_released](bool) {
+  task.on_complete_  = [exec, lock_released](bool, std::string) {
     const bool acquired = exec->GetRenderLock().try_lock();
     if (acquired) {
       exec->GetRenderLock().unlock();
@@ -209,7 +211,7 @@ TEST(PipelineSchedulerRequestIdTest, CompletionRunsAfterLivePipelineRenderLockIs
 }
 
 TEST(PipelineSchedulerRequestIdTest,
-     ConsecutiveInteractiveAdjustmentsReuseGeometryStageOutput) {
+     MissingDocumentRequestsReportFailureWithoutUsingStageCache) {
   RegisterAllOperators();
 
   auto exec = std::make_shared<CPUPipelineExecutor>();
@@ -234,17 +236,15 @@ TEST(PipelineSchedulerRequestIdTest,
     return future.get();
   };
 
-  ASSERT_NE(run_interactive(101), nullptr);
+  EXPECT_THROW((void)run_interactive(101), std::runtime_error);
   auto& geometry = exec->GetStage(PipelineStageName::Geometry_Adjustment);
-  ASSERT_TRUE(geometry.CacheValid());
+  EXPECT_FALSE(geometry.CacheValid());
 
   auto& basic = exec->GetStage(PipelineStageName::Basic_Adjustment);
   basic.SetOperator(OperatorType::EXPOSURE, {{"exposure", 0.5f}}, exec->GetGlobalParams());
 
-  ASSERT_NE(run_interactive(102), nullptr);
-  EXPECT_TRUE(geometry.CacheValid());
-  EXPECT_NE(geometry.GetLastProfileSummary().find("cache=hit"), std::string::npos)
-      << geometry.GetLastProfileSummary();
+  EXPECT_THROW((void)run_interactive(102), std::runtime_error);
+  EXPECT_FALSE(geometry.CacheValid());
 }
 
 TEST(DirectPresentQueueRequestIdTest, ConsumeNewestReadyPrefersHigherRequestId) {
@@ -283,6 +283,82 @@ TEST(DirectPresentQueueRequestIdTest, ConsumeNewestReadyPrefersHigherRequestId) 
   const auto frame = queue.ConsumeNewestReady(FrameRole::InteractivePrimary, 1, 10);
   ASSERT_TRUE(frame.has_value());
   EXPECT_EQ(frame->slot.preview_metadata.presentation_request_id, 2u);
+}
+
+TEST(DirectPresentQueueRequestIdTest, ThirdInteractivePresentReusesFirstDisplayedSlot) {
+  using editor_rhi::DirectPresentQueue;
+  using editor_rhi::EditorBackend;
+  using editor_rhi::LeaseNativeHandleKind;
+  using editor_rhi::LeaseWritableResourceKind;
+
+  DirectPresentQueue queue(EditorBackend::OpenCl);
+  queue.SetConsumerAvailable(true);
+  queue.InvalidateSessionEpoch(1, 42);
+
+  const auto present_interactive = [&](std::uintptr_t handle) {
+    constexpr int width    = 1600;
+    constexpr int height   = 900;
+    const auto    prepared = queue.PrepareWrite(width, height, 1, 42);
+    EXPECT_TRUE(prepared.ok);
+    if (prepared.need_create) {
+      DirectPresentQueue::SlotNative native{};
+      native.backend           = EditorBackend::OpenCl;
+      native.handle_kind       = LeaseNativeHandleKind::OpenGLTexture2D;
+      native.writable_kind     = LeaseWritableResourceKind::OpenClImage;
+      native.native_handle     = handle;
+      native.writable_resource = handle + 100;
+      EXPECT_TRUE(queue.PublishCreatedSlot(prepared.slot_index, width, height, native, 1, 42));
+    }
+    EXPECT_TRUE(queue.BeginWrite(prepared.slot_index).has_value());
+    queue.EndWrite(prepared.slot_index);
+    FramePreviewMetadata metadata{};
+    metadata.frame_role = FrameRole::InteractivePrimary;
+    queue.NotifyReady(prepared.slot_index, FramePresentationMode::FullFrame, metadata);
+    return prepared.slot_index;
+  };
+
+  const int  first_slot      = present_interactive(1);
+  const auto first_displayed = queue.ConsumeNewestReady(FrameRole::InteractivePrimary, 1, 42);
+  ASSERT_TRUE(first_displayed.has_value());
+  EXPECT_EQ(first_displayed->slot.index, first_slot);
+
+  const int second_slot = present_interactive(2);
+  EXPECT_NE(second_slot, first_slot);
+  queue.CompleteRendererRead(first_slot);
+  const auto second_displayed = queue.ConsumeNewestReady(FrameRole::InteractivePrimary, 1, 42);
+  ASSERT_TRUE(second_displayed.has_value());
+  EXPECT_EQ(second_displayed->slot.index, second_slot);
+
+  const int third_slot = present_interactive(1);
+  EXPECT_EQ(third_slot, first_slot);
+  queue.CompleteRendererRead(second_slot);
+}
+
+TEST(PipelineSchedulerRequestIdTest, EditorRenderFailureForwardsExceptionMessageInsteadOfEmptyResult) {
+  RegisterAllOperators();
+  auto exec = std::make_shared<CPUPipelineExecutor>();
+  exec->SetAcceleratorBackendPreference(AcceleratorBackendPreference::CPU);
+  exec->SetExecutionStages();
+
+  PipelineScheduler scheduler(1);
+  PipelineTask      task;
+  task.input_                             = MakeSolidImage(8, 8);
+  task.pipeline_executor_                 = exec;
+  task.options_.render_desc_.render_type_ = RenderType::FAST_PREVIEW;
+  auto done                               = std::make_shared<std::promise<std::pair<bool, std::string>>>();
+  auto future                             = done->get_future();
+  task.configure_under_render_lock_       = [](PipelineTask&) -> bool {
+    throw std::runtime_error("Neural Engine unavailable: missing weights");
+  };
+  task.on_complete_ = [done](bool success, std::string message) {
+    done->set_value({success, std::move(message)});
+  };
+
+  scheduler.ScheduleTask(std::move(task));
+  ASSERT_EQ(future.wait_for(std::chrono::seconds(30)), std::future_status::ready);
+  const auto result = future.get();
+  EXPECT_FALSE(result.first);
+  EXPECT_EQ(result.second, "Neural Engine unavailable: missing weights");
 }
 
 }  // namespace

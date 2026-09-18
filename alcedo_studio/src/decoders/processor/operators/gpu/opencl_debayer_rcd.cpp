@@ -115,7 +115,6 @@ void Bayer2x2ToRGB_RCD(opencl::OpenClImage& image, const BayerPattern2x2& patter
   cl_program program = OpenClProgramLibrary::Instance().GetProgram("raw_processor_debayer_rcd");
   cl_int     err     = CL_SUCCESS;
 
-  // Helper lambdas to get stable l-values for buffer handles.
   cl_mem raw_buf  = image.Buffer();
   cl_mem r_buf    = r_img.Buffer();
   cl_mem g_buf    = g_img.Buffer();
@@ -123,113 +122,104 @@ void Bayer2x2ToRGB_RCD(opencl::OpenClImage& image, const BayerPattern2x2& patter
   cl_mem vh_buf   = vh_img.Buffer();
   cl_mem pq_buf   = pq_img.Buffer();
   cl_mem out_buf  = out_img.Buffer();
+  const cl_uint zero = 0;
 
-  // Upload params through small cl_mem buffers to avoid struct-layout mismatches.
-  cl_mem plane_params_buf =
-      clCreateBuffer(context.Context(), CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
-                     sizeof(plane_params), const_cast<SinglePlaneParams*>(&plane_params), &err);
-  CheckOpenCl(err, "clCreateBuffer(plane_params)");
-  cl_mem merge_params_buf =
-      clCreateBuffer(context.Context(), CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
-                     sizeof(merge_params), const_cast<MergeParams*>(&merge_params), &err);
-  CheckOpenCl(err, "clCreateBuffer(merge_params)");
+  auto set_mem = [&](cl_kernel kernel, cl_uint index, cl_mem buffer, const char* what) {
+    err = clSetKernelArg(kernel, index, sizeof(cl_mem), &buffer);
+    CheckOpenCl(err, what);
+  };
+  auto set_off = [&](cl_kernel kernel, cl_uint index, const char* what) {
+    err = clSetKernelArg(kernel, index, sizeof(cl_uint), &zero);
+    CheckOpenCl(err, what);
+  };
 
-  // --- rcd_init_and_vh ---
   cl_kernel k0 = clCreateKernel(program, "rcd_init_and_vh", &err);
   CheckOpenCl(err, "clCreateKernel(init_and_vh)");
-  err = clSetKernelArg(k0, 0, sizeof(cl_mem), &raw_buf);
-  CheckOpenCl(err, "clSetKernelArg(k0,0)");
-  err = clSetKernelArg(k0, 1, sizeof(cl_mem), &r_buf);
-  CheckOpenCl(err, "clSetKernelArg(k0,1)");
-  err = clSetKernelArg(k0, 2, sizeof(cl_mem), &g_buf);
-  CheckOpenCl(err, "clSetKernelArg(k0,2)");
-  err = clSetKernelArg(k0, 3, sizeof(cl_mem), &b_buf);
-  CheckOpenCl(err, "clSetKernelArg(k0,3)");
-  err = clSetKernelArg(k0, 4, sizeof(cl_mem), &vh_buf);
-  CheckOpenCl(err, "clSetKernelArg(k0,4)");
-  err = clSetKernelArg(k0, 5, sizeof(cl_mem), &plane_params_buf);
+  set_mem(k0, 0, raw_buf, "clSetKernelArg(k0,0)");
+  set_mem(k0, 1, r_buf, "clSetKernelArg(k0,1)");
+  set_mem(k0, 2, g_buf, "clSetKernelArg(k0,2)");
+  set_mem(k0, 3, b_buf, "clSetKernelArg(k0,3)");
+  set_mem(k0, 4, vh_buf, "clSetKernelArg(k0,4)");
+  err = clSetKernelArg(k0, 5, sizeof(plane_params), &plane_params);
   CheckOpenCl(err, "clSetKernelArg(k0,5)");
+  set_off(k0, 6, "clSetKernelArg(k0,6)");
+  set_off(k0, 7, "clSetKernelArg(k0,7)");
+  set_off(k0, 8, "clSetKernelArg(k0,8)");
+  set_off(k0, 9, "clSetKernelArg(k0,9)");
+  set_off(k0, 10, "clSetKernelArg(k0,10)");
   DispatchKernel(k0, in_width, in_height);
   clReleaseKernel(k0);
 
-  // --- rcd_green_at_rb ---
   cl_kernel k1 = clCreateKernel(program, "rcd_green_at_rb", &err);
   CheckOpenCl(err, "clCreateKernel(green_at_rb)");
-  err = clSetKernelArg(k1, 0, sizeof(cl_mem), &raw_buf);
-  CheckOpenCl(err, "clSetKernelArg(k1,0)");
-  err = clSetKernelArg(k1, 1, sizeof(cl_mem), &vh_buf);
-  CheckOpenCl(err, "clSetKernelArg(k1,1)");
-  err = clSetKernelArg(k1, 2, sizeof(cl_mem), &g_buf);
-  CheckOpenCl(err, "clSetKernelArg(k1,2)");
-  err = clSetKernelArg(k1, 3, sizeof(cl_mem), &plane_params_buf);
+  set_mem(k1, 0, raw_buf, "clSetKernelArg(k1,0)");
+  set_mem(k1, 1, vh_buf, "clSetKernelArg(k1,1)");
+  set_mem(k1, 2, g_buf, "clSetKernelArg(k1,2)");
+  err = clSetKernelArg(k1, 3, sizeof(plane_params), &plane_params);
   CheckOpenCl(err, "clSetKernelArg(k1,3)");
+  set_off(k1, 4, "clSetKernelArg(k1,4)");
+  set_off(k1, 5, "clSetKernelArg(k1,5)");
+  set_off(k1, 6, "clSetKernelArg(k1,6)");
   DispatchKernel(k1, in_width, in_height);
   clReleaseKernel(k1);
 
-  // --- rcd_pq_dir ---
   cl_kernel k2 = clCreateKernel(program, "rcd_pq_dir", &err);
   CheckOpenCl(err, "clCreateKernel(pq_dir)");
-  err = clSetKernelArg(k2, 0, sizeof(cl_mem), &raw_buf);
-  CheckOpenCl(err, "clSetKernelArg(k2,0)");
-  err = clSetKernelArg(k2, 1, sizeof(cl_mem), &pq_buf);
-  CheckOpenCl(err, "clSetKernelArg(k2,1)");
-  err = clSetKernelArg(k2, 2, sizeof(cl_mem), &plane_params_buf);
+  set_mem(k2, 0, raw_buf, "clSetKernelArg(k2,0)");
+  set_mem(k2, 1, pq_buf, "clSetKernelArg(k2,1)");
+  err = clSetKernelArg(k2, 2, sizeof(plane_params), &plane_params);
   CheckOpenCl(err, "clSetKernelArg(k2,2)");
+  set_off(k2, 3, "clSetKernelArg(k2,3)");
+  set_off(k2, 4, "clSetKernelArg(k2,4)");
   DispatchKernel(k2, in_width, in_height);
   clReleaseKernel(k2);
 
-  // --- rcd_rb_at_rb ---
   cl_kernel k3 = clCreateKernel(program, "rcd_rb_at_rb", &err);
   CheckOpenCl(err, "clCreateKernel(rb_at_rb)");
-  err = clSetKernelArg(k3, 0, sizeof(cl_mem), &pq_buf);
-  CheckOpenCl(err, "clSetKernelArg(k3,0)");
-  err = clSetKernelArg(k3, 1, sizeof(cl_mem), &g_buf);
-  CheckOpenCl(err, "clSetKernelArg(k3,1)");
-  err = clSetKernelArg(k3, 2, sizeof(cl_mem), &r_buf);
-  CheckOpenCl(err, "clSetKernelArg(k3,2)");
-  err = clSetKernelArg(k3, 3, sizeof(cl_mem), &b_buf);
-  CheckOpenCl(err, "clSetKernelArg(k3,3)");
-  err = clSetKernelArg(k3, 4, sizeof(cl_mem), &plane_params_buf);
+  set_mem(k3, 0, pq_buf, "clSetKernelArg(k3,0)");
+  set_mem(k3, 1, g_buf, "clSetKernelArg(k3,1)");
+  set_mem(k3, 2, r_buf, "clSetKernelArg(k3,2)");
+  set_mem(k3, 3, b_buf, "clSetKernelArg(k3,3)");
+  err = clSetKernelArg(k3, 4, sizeof(plane_params), &plane_params);
   CheckOpenCl(err, "clSetKernelArg(k3,4)");
+  set_off(k3, 5, "clSetKernelArg(k3,5)");
+  set_off(k3, 6, "clSetKernelArg(k3,6)");
+  set_off(k3, 7, "clSetKernelArg(k3,7)");
+  set_off(k3, 8, "clSetKernelArg(k3,8)");
   DispatchKernel(k3, in_width, in_height);
   clReleaseKernel(k3);
 
-  // --- rcd_rb_at_g ---
   cl_kernel k4 = clCreateKernel(program, "rcd_rb_at_g", &err);
   CheckOpenCl(err, "clCreateKernel(rb_at_g)");
-  err = clSetKernelArg(k4, 0, sizeof(cl_mem), &vh_buf);
-  CheckOpenCl(err, "clSetKernelArg(k4,0)");
-  err = clSetKernelArg(k4, 1, sizeof(cl_mem), &g_buf);
-  CheckOpenCl(err, "clSetKernelArg(k4,1)");
-  err = clSetKernelArg(k4, 2, sizeof(cl_mem), &r_buf);
-  CheckOpenCl(err, "clSetKernelArg(k4,2)");
-  err = clSetKernelArg(k4, 3, sizeof(cl_mem), &b_buf);
-  CheckOpenCl(err, "clSetKernelArg(k4,3)");
-  err = clSetKernelArg(k4, 4, sizeof(cl_mem), &plane_params_buf);
+  set_mem(k4, 0, vh_buf, "clSetKernelArg(k4,0)");
+  set_mem(k4, 1, g_buf, "clSetKernelArg(k4,1)");
+  set_mem(k4, 2, r_buf, "clSetKernelArg(k4,2)");
+  set_mem(k4, 3, b_buf, "clSetKernelArg(k4,3)");
+  err = clSetKernelArg(k4, 4, sizeof(plane_params), &plane_params);
   CheckOpenCl(err, "clSetKernelArg(k4,4)");
+  set_off(k4, 5, "clSetKernelArg(k4,5)");
+  set_off(k4, 6, "clSetKernelArg(k4,6)");
+  set_off(k4, 7, "clSetKernelArg(k4,7)");
+  set_off(k4, 8, "clSetKernelArg(k4,8)");
   DispatchKernel(k4, in_width, in_height);
   clReleaseKernel(k4);
 
-  // --- rcd_merge_rgba ---
   cl_kernel k5 = clCreateKernel(program, "rcd_merge_rgba", &err);
   CheckOpenCl(err, "clCreateKernel(merge_rgba)");
-  err = clSetKernelArg(k5, 0, sizeof(cl_mem), &r_buf);
-  CheckOpenCl(err, "clSetKernelArg(k5,0)");
-  err = clSetKernelArg(k5, 1, sizeof(cl_mem), &g_buf);
-  CheckOpenCl(err, "clSetKernelArg(k5,1)");
-  err = clSetKernelArg(k5, 2, sizeof(cl_mem), &b_buf);
-  CheckOpenCl(err, "clSetKernelArg(k5,2)");
-  err = clSetKernelArg(k5, 3, sizeof(cl_mem), &out_buf);
-  CheckOpenCl(err, "clSetKernelArg(k5,3)");
-  err = clSetKernelArg(k5, 4, sizeof(cl_mem), &plane_params_buf);
+  set_mem(k5, 0, r_buf, "clSetKernelArg(k5,0)");
+  set_mem(k5, 1, g_buf, "clSetKernelArg(k5,1)");
+  set_mem(k5, 2, b_buf, "clSetKernelArg(k5,2)");
+  set_mem(k5, 3, out_buf, "clSetKernelArg(k5,3)");
+  err = clSetKernelArg(k5, 4, sizeof(plane_params), &plane_params);
   CheckOpenCl(err, "clSetKernelArg(k5,4)");
-  err = clSetKernelArg(k5, 5, sizeof(cl_mem), &merge_params_buf);
+  err = clSetKernelArg(k5, 5, sizeof(merge_params), &merge_params);
   CheckOpenCl(err, "clSetKernelArg(k5,5)");
+  set_off(k5, 6, "clSetKernelArg(k5,6)");
+  set_off(k5, 7, "clSetKernelArg(k5,7)");
+  set_off(k5, 8, "clSetKernelArg(k5,8)");
+  set_off(k5, 9, "clSetKernelArg(k5,9)");
   DispatchKernel(k5, in_width, in_height);
   clReleaseKernel(k5);
-
-  clReleaseMemObject(plane_params_buf);
-  clReleaseMemObject(merge_params_buf);
 
   err = clFinish(context.Queue());
   CheckOpenCl(err, "clFinish");

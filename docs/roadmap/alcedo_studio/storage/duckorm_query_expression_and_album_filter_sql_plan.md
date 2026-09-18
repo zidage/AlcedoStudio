@@ -79,7 +79,7 @@ Do not use the banned forms below in:
 | `residual` / `residuals` / any casing | an **Open work** item, a later named phase, or a **Deferred checks** item |
 | the noun spelled `c` + `ontract` / plural / any casing | interface, API, schema, protocol, invariant, behavior specification, acceptance criterion, compatibility requirement, or performance target |
 | `smoke` / `Smoke` / `SMOKE` in test, target, file, or doc names | a concrete behavior, regression, or property name |
-| `hydration` / `hydrate` / `gesture` and derived forms | read, load, populate, apply, drag, pinch, input sequence, pointer release, or settled edit |
+| Project action-term restrictions from `AGENTS.md` | use the exact read, load, populate, apply, drag, pinch, input sequence, pointer release, or settled-edit term |
 
 Rules for unfinished work:
 

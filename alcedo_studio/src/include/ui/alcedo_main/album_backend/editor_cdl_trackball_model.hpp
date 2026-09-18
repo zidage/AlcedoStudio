@@ -110,6 +110,7 @@ class EditorCdlTrackballModel : public EditorAdjustmentModelBase {
   void                      applyMasterUi(WheelId id, int ui_value);
   void                      submitInteractive();
   void                      submitSettled();
+  [[nodiscard]] auto        currentColorWheelWrite() const -> alcedo::ColorWheelUpdate;
   [[nodiscard]] auto        buildParamsJson() const -> QString;
   [[nodiscard]] static auto addUnity(WheelId id) -> bool;
   [[nodiscard]] static auto invertDelta(WheelId id) -> bool;
