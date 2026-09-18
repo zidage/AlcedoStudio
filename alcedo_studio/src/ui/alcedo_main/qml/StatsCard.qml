@@ -14,6 +14,7 @@ Item {
     readonly property int chipPreviewLimit: 3
     property string selectedLabel: ""
     property string displayMode: "bars"
+    property bool showHeader: true
     property var yearExpansion: ({})
     signal barClicked(string label)
 
@@ -164,6 +165,7 @@ Item {
 
         RowLayout {
             Layout.fillWidth: true
+            visible: card.showHeader
 
             Label {
                 text: card.title.toUpperCase()
