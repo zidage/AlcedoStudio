@@ -14,6 +14,7 @@
 #include "app/export_service.hpp"
 #include "app/history_mgmt_service.hpp"
 #include "app/import_service.hpp"
+#include "app/mask_thumbnail_service.hpp"
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
 #include "app/thumbnail_service.hpp"
@@ -52,6 +53,10 @@ class ProjectHandler {
   [[nodiscard]] auto thumbnail_service() const -> const std::shared_ptr<ThumbnailService>& {
     return thumbnail_service_;
   }
+  [[nodiscard]] auto mask_thumbnail_service() const
+      -> const std::shared_ptr<MaskThumbnailService>& {
+    return mask_thumbnail_service_;
+  }
   [[nodiscard]] auto import_service() const -> ImportServiceImpl* { return import_service_.get(); }
   [[nodiscard]] auto export_service() const -> const std::shared_ptr<ExportService>& {
     return export_service_;
@@ -79,6 +84,7 @@ class ProjectHandler {
   std::shared_ptr<ProjectService>         project_{};
   std::shared_ptr<PipelineMgmtService>    pipeline_service_{};
   std::shared_ptr<ThumbnailService>       thumbnail_service_{};
+  std::shared_ptr<MaskThumbnailService>   mask_thumbnail_service_{};
   std::unique_ptr<ImportServiceImpl>      import_service_{};
   std::shared_ptr<ExportService>          export_service_{};
 

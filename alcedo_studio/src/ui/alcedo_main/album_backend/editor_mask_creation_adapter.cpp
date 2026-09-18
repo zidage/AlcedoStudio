@@ -19,6 +19,7 @@
 #include "ui/alcedo_main/album_backend/editor_node_controller.hpp"
 #include "ui/alcedo_main/album_backend/editor_node_layout_store.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
+#include "ui/alcedo_main/album_backend/mask_thumbnail_coordinator.hpp"
 #include "ui/edit_viewer/mask_edit_geometry.hpp"
 #include "ui/edit_viewer/mask_overlay_geometry.hpp"
 #include "ui/edit_viewer/mask_overlay_layout.hpp"
@@ -565,13 +566,27 @@ void EditorMaskCreationAdapter::removeMask(const QString& node_id, const QString
   if (!CanAuthorMasksFor(grade)) {
     return;
   }
+  MaskThumbnailCoordinator* thumbs = nullptr;
+  const QString             node_q = QString::fromStdString(std::string(grade.Value()));
+  if (session_ != nullptr) {
+    if (auto* nodes = session_->node_selection_source()) {
+      thumbs = qobject_cast<MaskThumbnailCoordinator*>(nodes->mask_thumbnails_object());
+    }
+  }
+  if (thumbs != nullptr) {
+    thumbs->invalidateTarget(node_q, mask_id);
+    thumbs->invalidateTarget(node_q, QString());
+  }
   EditorMaskCreationCommand command;
   command.kind    = EditorMaskCreationCommandKind::RemoveMask;
   command.node_id = grade;
   command.mask_id = MaskIdFromQString(mask_id);
   // Enqueue is not deletion admission. The owner publishes the next selection
   // on success; rejected protection must retain the local selection and edit.
-  (void)Enqueue(command);
+  if (!Enqueue(command) && thumbs != nullptr) {
+    thumbs->requestCurrent(node_q, mask_id);
+    thumbs->requestCurrent(node_q, QString());
+  }
 }
 
 void EditorMaskCreationAdapter::setMaskDeletionProtected(const QString& node_id,

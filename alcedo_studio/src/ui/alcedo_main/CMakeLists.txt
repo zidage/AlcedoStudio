@@ -67,6 +67,8 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/project_handler.cpp"
         "${ALCEDO_UI_SHELL_ROOT}/album_backend/thumbnail_manager.cpp"
         "${ALCEDO_UI_SHELL_ROOT}/album_backend/thumbnail_image_provider.cpp"
+        "${ALCEDO_UI_SHELL_ROOT}/album_backend/mask_thumbnail_coordinator.cpp"
+        "${ALCEDO_UI_SHELL_ROOT}/album_backend/mask_thumbnail_image_provider.cpp"
         "${ALCEDO_UI_SHELL_ROOT}/album_backend/folder_controller.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/image_controller.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/image_analysis_environment.cpp"
@@ -138,6 +140,8 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/project_handler.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/thumbnail_manager.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/thumbnail_image_provider.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/mask_thumbnail_coordinator.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/mask_thumbnail_image_provider.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/folder_controller.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/image_controller.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/stats_engine.hpp"
@@ -228,6 +232,7 @@ target_link_libraries(AlbumBackendLib
         PipelineHistoryApplier
         EditorMiniGitMaterializer
         ThumbnailService
+        MaskThumbnailService
         SemanticGenerationService
         ImageAnalysisService
         ImageAnalysisController

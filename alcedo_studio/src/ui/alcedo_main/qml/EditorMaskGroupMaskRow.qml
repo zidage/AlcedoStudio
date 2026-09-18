@@ -30,6 +30,8 @@ Item {
     property color hoverColor: appTheme.hoverColor
     property color selectionOutlineColor: appTheme.graphSelectionOutlineColor
     property real selectionOutlineWidth: appTheme.graphSelectionOutlineWidth
+    property var maskThumbnails: null
+    property string maskThumbUrl: ""
 
     signal clicked()
     signal lockClicked()
@@ -94,6 +96,25 @@ Item {
     }
     Accessible.onPressAction: root.clicked()
 
+    function refreshMaskThumb() {
+        maskThumbUrl = (root.maskThumbnails && root.nodeId.length > 0 && root.maskId.length > 0)
+                ? String(root.maskThumbnails.thumbnailUrl(root.nodeId, root.maskId) || "")
+                : ""
+    }
+
+    onNodeIdChanged: refreshMaskThumb()
+    onMaskIdChanged: refreshMaskThumb()
+    onMaskThumbnailsChanged: refreshMaskThumb()
+
+    Connections {
+        target: root.maskThumbnails
+        function onThumbnailUrlChanged(changedNodeId, changedMaskId) {
+            if (changedNodeId === root.nodeId && changedMaskId === root.maskId) {
+                root.refreshMaskThumb()
+            }
+        }
+    }
+
     Keys.onPressed: function (event) {
         if (event.key === Qt.Key_Space || event.key === Qt.Key_Return
                 || event.key === Qt.Key_Enter) {
@@ -152,6 +173,19 @@ Item {
                 smooth: true
                 color: root.iconTint
                 visible: root.typeIconSrc.toString().length > 0
+                         && maskThumb.source.toString().length === 0
+            }
+
+            Image {
+                id: maskThumb
+                objectName: "editorMaskGroupMaskPreviewImage"
+                anchors.fill: parent
+                source: root.maskThumbUrl
+                cache: false
+                asynchronous: true
+                fillMode: Image.PreserveAspectFit
+                smooth: true
+                visible: source.toString().length > 0
             }
         }
 

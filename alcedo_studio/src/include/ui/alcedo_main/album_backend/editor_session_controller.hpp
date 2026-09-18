@@ -23,6 +23,7 @@
 #include "app/editor_node_graph_projection.hpp"
 #include "app/editor_pending_input.hpp"
 #include "app/editor_session_types.hpp"
+#include "app/mask_thumbnail_service.hpp"
 #include "edit/graph/graph_ids.hpp"
 #include "edit/mask/mask_id.hpp"
 #include "edit/mask/mask_model.hpp"
@@ -157,6 +158,9 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void                     SetCopiedPackageAvailable(bool available);
   /// Album catalog used to mirror ODT HDR EOTF into the library HDR badge.
   void                     SetAlbumCatalog(IAlbumCatalog* album_catalog);
+  void SetMaskThumbnailService(std::shared_ptr<alcedo::MaskThumbnailService> service);
+  [[nodiscard]] auto mask_thumbnail_service() const
+      -> std::shared_ptr<alcedo::MaskThumbnailService>;
 
   /// Called when the injected backend reports an async state/identity change
   /// (render presented, save finished, etc.). Mirrors backend into QML properties.
@@ -474,6 +478,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   QMetaObject::Connection presented_geometry_connection_;
   mutable std::unique_ptr<EditorScopeController> scope_controller_;
   std::unique_ptr<EditorMaskCreationAdapter>     mask_creation_;
+  std::shared_ptr<alcedo::MaskThumbnailService>  mask_thumbnail_service_;
 };
 
 }  // namespace alcedo::ui

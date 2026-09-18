@@ -50,6 +50,8 @@ Item {
     // than one group on the committed backbone.
     property bool reorderEnabled: false
     property string selectedMaskId: ""
+    property var maskThumbnails: null
+    property string groupThumbUrl: ""
     property color textColor: appTheme.textColor
     property color mutedColor: appTheme.textMutedColor
     property color hoverColor: appTheme.hoverColor
@@ -172,6 +174,24 @@ Item {
             return null
         }
         return maskRepeater.itemAt(maskIndex)
+    }
+
+    function refreshGroupThumb() {
+        groupThumbUrl = (root.maskThumbnails && root.nodeId.length > 0)
+                ? String(root.maskThumbnails.thumbnailUrl(root.nodeId, "") || "")
+                : ""
+    }
+
+    onNodeIdChanged: refreshGroupThumb()
+    onMaskThumbnailsChanged: refreshGroupThumb()
+
+    Connections {
+        target: root.maskThumbnails
+        function onThumbnailUrlChanged(changedNodeId, changedMaskId) {
+            if (changedNodeId === root.nodeId && changedMaskId === "") {
+                root.refreshGroupThumb()
+            }
+        }
     }
 
     function focusHeader() {
@@ -475,6 +495,19 @@ Item {
                                 fillMode: Image.PreserveAspectFit
                                 smooth: true
                                 color: root.mutedColor
+                                visible: groupThumb.source.toString().length === 0
+                            }
+
+                            Image {
+                                id: groupThumb
+                                objectName: "editorMaskGroupPreviewImage"
+                                anchors.fill: parent
+                                source: root.groupThumbUrl
+                                cache: false
+                                asynchronous: true
+                                fillMode: Image.PreserveAspectFit
+                                smooth: true
+                                visible: source.toString().length > 0
                             }
                         }
                     }
@@ -603,6 +636,7 @@ Item {
                             hoverColor: root.hoverColor
                             selectionOutlineColor: root.selectionOutlineColor
                             selectionOutlineWidth: root.selectionOutlineWidth
+                            maskThumbnails: root.maskThumbnails
                             onClicked: root.maskClicked(index)
                             onLockClicked: root.maskLockClicked(index)
                             onDeleteClicked: root.maskDeleteClicked(index)
@@ -636,5 +670,6 @@ Item {
     ListView.onReused: {
         dragBody.y = 0
         root._dragMoved = false
+        root.refreshGroupThumb()
     }
 }

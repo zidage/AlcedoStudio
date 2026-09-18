@@ -225,6 +225,16 @@ void EditorSessionController::SetAlbumCatalog(IAlbumCatalog* album_catalog) {
   album_catalog_ = album_catalog;
 }
 
+void EditorSessionController::SetMaskThumbnailService(
+    std::shared_ptr<alcedo::MaskThumbnailService> service) {
+  mask_thumbnail_service_ = std::move(service);
+}
+
+auto EditorSessionController::mask_thumbnail_service() const
+    -> std::shared_ptr<alcedo::MaskThumbnailService> {
+  return mask_thumbnail_service_;
+}
+
 void EditorSessionController::SyncBackgroundActionRestrictions() {
   if (!session_backend_ || !interaction_policy_) {
     return;
