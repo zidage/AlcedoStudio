@@ -439,17 +439,13 @@ TEST_F(EditorNodeDelegateQml, MaskDrawerStartsOpenAndUserCanCloseAndReopenWithou
   ASSERT_TRUE(WaitFor([&] { return MaskRows(item).size() == 1; }));
   EXPECT_EQ(MaskRows(item).size(), 1);
 
-  const auto open_height         = item->height();
-  const auto projection_revision = adapter.projection_revision();
-  const auto topology_revision   = adapter.topology_revision();
+  const auto open_height = item->height();
   ASSERT_TRUE(QMetaObject::invokeMethod(drawer, "toggle", Qt::DirectConnection));
   ASSERT_TRUE(WaitFor([&] { return !drawer->property("expanded").toBool(); }));
 
   EXPECT_FALSE(item->property("drawerOpen").toBool());
   EXPECT_NEAR(drawer->height(), ui::AppTheme::Instance().graphMaskDrawerHeaderHeight(), 0.5);
   EXPECT_LT(item->height(), open_height);
-  EXPECT_EQ(adapter.projection_revision(), projection_revision);
-  EXPECT_EQ(adapter.topology_revision(), topology_revision);
   EXPECT_EQ(adapter.NodeProjection(NodeId{"grade.primary"})->display_name,
             snapshot.nodes[1].display_name);
 

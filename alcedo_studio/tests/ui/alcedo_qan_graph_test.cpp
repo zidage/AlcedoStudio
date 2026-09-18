@@ -412,7 +412,7 @@ class AlcedoQanGraph : public ::testing::Test {
 
 std::unique_ptr<QanHarness> AlcedoQanGraph::harness_;
 
-TEST_F(AlcedoQanGraph, MapsEachProjectedNodeIdToOneLiveQanNodeInTheCurrentGeneration) {
+TEST_F(AlcedoQanGraph, MapsEachProjectedNodeIdToOneLiveQanNode) {
   ui::AlcedoQanGraph adapter;
   AttachAlcedoDelegates(adapter, harness_->Graph());
   const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 4, 2, 1);
@@ -420,7 +420,6 @@ TEST_F(AlcedoQanGraph, MapsEachProjectedNodeIdToOneLiveQanNodeInTheCurrentGenera
 
   ASSERT_TRUE(result.succeeded) << result.error.toStdString();
   EXPECT_TRUE(result.rebuilt_topology);
-  EXPECT_EQ(adapter.session_generation(), 4u);
   ExpectLiveBackbone(adapter, snapshot);
   EXPECT_EQ(adapter.LiveNodeId(nullptr), std::nullopt);
 }
@@ -592,7 +591,7 @@ TEST_F(AlcedoQanGraph, VersionReplacementRemovesOldPrimitivesAndReverseMapEntrie
   EXPECT_NE(adapter.NodeFor(NodeId{"develop"}), old_develop.data());
 }
 
-TEST_F(AlcedoQanGraph, StalePrimitiveCannotSelectOrEditTheNewDocument) {
+TEST_F(AlcedoQanGraph, StampedIdentityValuesDoNotDecideTheApplyPath) {
   ui::AlcedoQanGraph adapter;
   AttachAlcedoDelegates(adapter, harness_->Graph());
   const auto current = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 12, 3, 2);
@@ -600,23 +599,39 @@ TEST_F(AlcedoQanGraph, StalePrimitiveCannotSelectOrEditTheNewDocument) {
   QPointer<qan::Node> live_grade = adapter.NodeFor(NodeId{"grade.primary"});
   ASSERT_FALSE(live_grade.isNull());
 
-  const auto stale = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 11, 9, 9);
-  const auto stale_result = adapter.ApplySnapshot(stale);
-  EXPECT_FALSE(stale_result.succeeded);
-  EXPECT_EQ(stale_result.error, QStringLiteral("snapshot session generation is stale"));
-  EXPECT_EQ(adapter.session_generation(), 12u);
+  // Identical content stamped with lower generation and revision values still
+  // applies; only node and edge identities choose between update and rebuild.
+  const auto restamped =
+      EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 11, 9, 9);
+  const auto restamped_result = adapter.ApplySnapshot(restamped);
+  EXPECT_TRUE(restamped_result.succeeded) << restamped_result.error.toStdString();
+  EXPECT_FALSE(restamped_result.rebuilt_topology);
   EXPECT_EQ(adapter.NodeFor(NodeId{"grade.primary"}), live_grade.data());
   EXPECT_EQ(adapter.LiveNodeId(live_grade.data()), NodeId{"grade.primary"});
   EXPECT_EQ(harness_->Graph()->getNodeCount(), 3);
 
+  // A new generation with the same node and edge identities also updates in
+  // place instead of replacing live primitives.
+  auto renamed_document = CreateDefaultPipelineDocument();
+  ASSERT_TRUE(RenameColorGrade(renamed_document, NodeId{"grade.primary"}, "Version B").empty());
+  const auto renamed        = EditorNodeGraphProjection::Build(renamed_document, 13, 1, 1);
+  const auto renamed_result = adapter.ApplySnapshot(renamed);
+  EXPECT_TRUE(renamed_result.succeeded) << renamed_result.error.toStdString();
+  EXPECT_FALSE(renamed_result.rebuilt_topology);
+  EXPECT_EQ(adapter.NodeFor(NodeId{"grade.primary"}), live_grade.data());
+  EXPECT_EQ(live_grade->getLabel(), QStringLiteral("Version B"));
+
+  // A topology change under a later generation replaces primitives, and a dead
+  // pointer no longer resolves to a product NodeId.
   auto next_document = CreateDefaultPipelineDocument();
-  ASSERT_TRUE(RenameColorGrade(next_document, NodeId{"grade.primary"}, "Version B").empty());
-  const auto next = EditorNodeGraphProjection::Build(next_document, 13, 1, 1);
-  ASSERT_TRUE(adapter.ApplySnapshot(next).succeeded) << "generation replacement";
+  ASSERT_TRUE(AddCleanColorGrade(next_document, NodeId{"drt"}, NodeId{"grade.second"}).empty());
+  const auto next        = EditorNodeGraphProjection::Build(next_document, 14, 1, 1);
+  const auto next_result = adapter.ApplySnapshot(next);
+  EXPECT_TRUE(next_result.succeeded) << next_result.error.toStdString();
+  EXPECT_TRUE(next_result.rebuilt_topology);
   EXPECT_TRUE(live_grade.isNull());
   EXPECT_EQ(adapter.LiveNodeId(live_grade.data()), std::nullopt);
-  ASSERT_NE(adapter.NodeFor(NodeId{"grade.primary"}), nullptr);
-  EXPECT_EQ(adapter.NodeFor(NodeId{"grade.primary"})->getLabel(), QStringLiteral("Version B"));
+  ExpectLiveBackbone(adapter, next);
 }
 
 TEST_F(AlcedoQanGraph, AdapterInsertFailureRestoresThePriorCompleteQanProjection) {
@@ -635,9 +650,6 @@ TEST_F(AlcedoQanGraph, AdapterInsertFailureRestoresThePriorCompleteQanProjection
   EXPECT_FALSE(result.succeeded);
   EXPECT_TRUE(result.rebuilt_topology);
   EXPECT_NE(result.error.indexOf(QStringLiteral("Qan node creation failed")), -1);
-  EXPECT_EQ(adapter.session_generation(), 3u);
-  EXPECT_EQ(adapter.topology_revision(), 1u);
-  EXPECT_EQ(adapter.projection_revision(), 7u);
   ExpectLiveBackbone(adapter, prior);
   EXPECT_EQ(adapter.NodeFor(NodeId{"grade.second"}), nullptr);
 }

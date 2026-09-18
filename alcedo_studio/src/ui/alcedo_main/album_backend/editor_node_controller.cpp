@@ -688,29 +688,11 @@ void EditorNodeController::ApplyLiveSelectionToAdapter() {
   graph_adapter_->ApplyProductSelection(selected_node_id_);
 }
 
-auto EditorNodeController::AdapterShowsCurrentCommittedProjection() const -> bool {
-  if (draft_ != nullptr || graph_adapter_.isNull() || !graph_adapter_->has_projection()) {
-    return false;
-  }
-  return graph_adapter_->session_generation() == session_generation_ &&
-         graph_adapter_->topology_revision() == topology_revision_ &&
-         graph_adapter_->projection_revision() == projection_revision_;
-}
-
 void EditorNodeController::ApplyBoundGraph() {
   if (graph_adapter_.isNull() || graph_adapter_->graph() == nullptr || !HasActiveGraph()) {
     return;
   }
-  const auto bound = BoundSessionGeneration();
-  if (bound.has_value() && session_generation_ != *bound) {
-    ++skipped_stale_projection_apply_count_;
-    return;
-  }
   SyncLayoutKey();
-  if (AdapterShowsCurrentCommittedProjection()) {
-    ApplyLiveSelectionToAdapter();
-    return;
-  }
   if (!applyToGraph(graph_adapter_.data())) {
     return;
   }

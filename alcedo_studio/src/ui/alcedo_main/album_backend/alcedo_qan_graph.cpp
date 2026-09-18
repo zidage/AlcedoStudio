@@ -183,11 +183,6 @@ auto AlcedoQanGraph::ApplySnapshot(const EditorNodeGraphSnapshot& snapshot)
     result.error = QStringLiteral("AlcedoQanGraph has no Qan graph");
     return result;
   }
-  const auto stale = RejectIfStale(snapshot);
-  if (!stale.isEmpty()) {
-    result.error = stale;
-    return result;
-  }
   const auto invalid = ValidateSnapshot(snapshot);
   if (!invalid.isEmpty()) {
     result.error = invalid;
@@ -249,13 +244,10 @@ auto AlcedoQanGraph::LiveNodeId(const qan::Node* node) const -> std::optional<No
   if (it == node_from_qan_.end()) {
     return std::nullopt;
   }
-  if (!has_projection_ || it->second.session_generation != applied_.session_generation) {
+  if (NodeFor(it->second) != node) {
     return std::nullopt;
   }
-  if (NodeFor(it->second.node_id) != node) {
-    return std::nullopt;
-  }
-  return it->second.node_id;
+  return it->second;
 }
 
 auto AlcedoQanGraph::NodeProjection(const NodeId& node_id) const -> const EditorNodeProjection* {
@@ -265,18 +257,6 @@ auto AlcedoQanGraph::NodeProjection(const NodeId& node_id) const -> const Editor
     return nullptr;
   }
   return &*it;
-}
-
-auto AlcedoQanGraph::session_generation() const -> std::uint64_t {
-  return has_projection_ ? applied_.session_generation : 0;
-}
-
-auto AlcedoQanGraph::projection_revision() const -> std::uint64_t {
-  return has_projection_ ? applied_.projection_revision : 0;
-}
-
-auto AlcedoQanGraph::topology_revision() const -> std::uint64_t {
-  return has_projection_ ? applied_.topology_revision : 0;
 }
 
 auto AlcedoQanGraph::has_projection() const -> bool { return has_projection_; }
@@ -394,26 +374,6 @@ void AlcedoQanGraph::AttachLiveVisuals() {
   }
 }
 
-auto AlcedoQanGraph::RejectIfStale(const EditorNodeGraphSnapshot& snapshot) const -> QString {
-  if (!has_projection_) {
-    return {};
-  }
-  if (snapshot.session_generation < applied_.session_generation) {
-    return QStringLiteral("snapshot session generation is stale");
-  }
-  if (snapshot.session_generation != applied_.session_generation) {
-    return {};
-  }
-  if (snapshot.topology_revision < applied_.topology_revision) {
-    return QStringLiteral("snapshot topology revision is stale");
-  }
-  if (snapshot.topology_revision == applied_.topology_revision &&
-      snapshot.projection_revision < applied_.projection_revision) {
-    return QStringLiteral("snapshot projection revision is stale");
-  }
-  return {};
-}
-
 auto AlcedoQanGraph::ValidateSnapshot(const EditorNodeGraphSnapshot& snapshot) const -> QString {
   if (snapshot.nodes.empty()) {
     return QStringLiteral("snapshot has no nodes");
@@ -439,10 +399,6 @@ auto AlcedoQanGraph::ValidateSnapshot(const EditorNodeGraphSnapshot& snapshot) c
 
 auto AlcedoQanGraph::CanUpdateRoles(const EditorNodeGraphSnapshot& snapshot) const -> bool {
   if (!has_projection_ || graph_.isNull()) {
-    return false;
-  }
-  if (snapshot.session_generation != applied_.session_generation ||
-      snapshot.topology_revision != applied_.topology_revision) {
     return false;
   }
   if (snapshot.nodes.size() != applied_.nodes.size() ||
@@ -547,7 +503,7 @@ auto AlcedoQanGraph::InsertTopology(const EditorNodeGraphSnapshot& snapshot) -> 
     return delegate_error;
   }
   for (const auto& node : snapshot.nodes) {
-    const auto error = InsertNodeVisual(node, snapshot.session_generation);
+    const auto error = InsertNodeVisual(node);
     if (!error.isEmpty()) {
       return error;
     }
@@ -563,7 +519,6 @@ auto AlcedoQanGraph::InsertTopology(const EditorNodeGraphSnapshot& snapshot) -> 
 }
 
 auto AlcedoQanGraph::InsertNodeVisual(const EditorNodeProjection& node,
-                                      std::uint64_t               session_generation,
                                       const NodeVisualState*      restore_state) -> QString {
   if (graph_.isNull()) {
     return QStringLiteral("AlcedoQanGraph has no Qan graph");
@@ -591,7 +546,7 @@ auto AlcedoQanGraph::InsertNodeVisual(const EditorNodeProjection& node,
 
   ApplyNodePresentation(*qan_node, node);
   node_by_id_[node.node_id]    = qan_node;
-  node_from_qan_[qan_node]     = ReverseNode{node.node_id, session_generation};
+  node_from_qan_[qan_node]     = node.node_id;
   ports_by_node_[node.node_id] = {};
   const auto port_error        = InsertNodePorts(*qan_node, node);
   if (!port_error.isEmpty()) {
@@ -729,7 +684,7 @@ auto AlcedoQanGraph::InsertProjectedNode(const EditorNodeProjection& node)
     result.error = delegate_error;
     return result;
   }
-  const auto error = InsertNodeVisual(node, applied_.session_generation);
+  const auto error = InsertNodeVisual(node);
   if (!error.isEmpty()) {
     result.error = error;
     return result;
@@ -1159,8 +1114,7 @@ auto AlcedoQanGraph::ApplyMutation(const alcedo::EditorNodeGraphDraftMutation& m
       append_reversal_error(&reversal_errors, RemoveNodeVisual(*it));
     }
     for (auto it = completed_removed_nodes.rbegin(); it != completed_removed_nodes.rend(); ++it) {
-      append_reversal_error(&reversal_errors,
-                            InsertNodeVisual(it->projection, applied_.session_generation, &*it));
+      append_reversal_error(&reversal_errors, InsertNodeVisual(it->projection, &*it));
     }
     for (auto it = completed_removed_edges.rbegin(); it != completed_removed_edges.rend(); ++it) {
       append_reversal_error(&reversal_errors, InsertEdgeVisual(it->edge, it->candidate));
@@ -1192,7 +1146,7 @@ auto AlcedoQanGraph::ApplyMutation(const alcedo::EditorNodeGraphDraftMutation& m
     completed_removed_nodes.push_back(state);
   }
   for (const auto& node : mutation.inserted_nodes) {
-    const auto error = InsertNodeVisual(node, applied_.session_generation);
+    const auto error = InsertNodeVisual(node);
     if (!error.isEmpty()) {
       return fail(error);
     }
@@ -1240,10 +1194,6 @@ auto AlcedoQanGraph::PromoteCommittedSnapshot(const EditorNodeGraphSnapshot& sna
   AlcedoQanGraphApplyResult result;
   if (!has_projection_ || graph_.isNull()) {
     result.error = QStringLiteral("AlcedoQanGraph has no Qan graph");
-    return result;
-  }
-  if (snapshot.session_generation != applied_.session_generation) {
-    result.error = QStringLiteral("snapshot session generation is stale");
     return result;
   }
   if (snapshot.nodes.size() != node_by_id_.size() || snapshot.edges.size() != edge_by_key_.size()) {

@@ -269,12 +269,12 @@ class EditorNodeController : public QObject {
   [[nodiscard]] auto queued_projection_apply_count() const -> int {
     return queued_projection_apply_count_;
   }
-  /// Successful adapter projection applies. Duplicate applies of the same
-  /// committed revision are not counted.
+  /// Successful adapter projection applies.
   [[nodiscard]] auto completed_projection_apply_count() const -> int {
     return completed_projection_apply_count_;
   }
-  /// Queued applies dropped because the adapter, generation, or attach identity was stale.
+  /// Queued applies dropped because no adapter was bound or the bound adapter
+  /// changed before the queued apply ran.
   [[nodiscard]] auto skipped_stale_projection_apply_count() const -> int {
     return skipped_stale_projection_apply_count_;
   }
@@ -373,7 +373,6 @@ class EditorNodeController : public QObject {
   [[nodiscard]] auto SessionIdentityChanged() const -> bool;
   /// True when the bound session must not show a node graph (empty, loading, switch, or failed).
   [[nodiscard]] auto SessionHidesGraph() const -> bool;
-  [[nodiscard]] auto AdapterShowsCurrentCommittedProjection() const -> bool;
   void               AdoptCommittedDocument(const PipelineDocument& document);
   [[nodiscard]] auto HasActiveGraph() const -> bool;
   void               SyncMaskThumbnails(const PipelineDocument& document);

@@ -30,7 +30,7 @@ the Nodes controller below concern the pre-existing projection, draft, adapter, 
 | ID | Area | Observed mechanism | Executable interleaving found |
 | --- | --- | --- | --- |
 | SC-01 | Nodes projection publication | Session generation plus projection and topology revisions reject older snapshots (**removed 2026-09-18**; see completion record) | No production producer or delivery path for an older snapshot was found |
-| SC-02 | QuickQanava adapter | The same three values reject older applies; reverse pointer entries also carry a generation | No out-of-order adapter snapshot delivery was found; old reverse entries are erased or cleared |
+| SC-02 | QuickQanava adapter | The same three values reject older applies; reverse pointer entries also carry a generation (**removed 2026-09-18**; see completion record) | No out-of-order adapter snapshot delivery was found; old reverse entries are erased or cleared |
 | SC-03 | Nodes commands and draft | QML request generation plus a six-field draft identity guard GUI-only edits | No production command carries an older GUI generation to the controller; the explicit stale overload is test-only |
 | SC-04 | Adjustment-panel projection | A session generation is stamped on a pulled value and immediately compared with the same backend's current request | No old projection payload is delivered; the production stamp is assigned at read time |
 | SC-05 | Roadmap panel state publication | A monotonic snapshot revision and QML last-applied revision were specified for idempotent loading | No concurrency or event reordering was stated; a later roadmap phase rejects this public revision model |
@@ -253,6 +253,135 @@ Sources:
 
 This ordering exists for the attach generation. It was not found for the snapshot generation and
 revision checks described above.
+
+##### SC-02 completion record (2026-09-18)
+
+**Status:** complete — the adapter and the bound-apply path no longer gate on the stamped
+session-generation / topology-revision / projection-revision values; node and edge identities alone
+choose between an in-place update and a topology rebuild.
+
+**Primary success call chain:**
+
+```text
+EditorSessionController::StateChanged / HistoryChanged / set_editor_session
+  -> EditorNodeController::OnSessionStateChanged / OnSessionHistoryChanged / set_editor_session
+  -> EditorNodeController::refreshFromSession
+  -> PublishDocument -> EditorNodeGraphProjection::Build -> PublishSnapshot
+  -> QueueProjectionApply
+  -> ApplyBoundGraphIfCurrent (adapter attach-generation check, documented ordering)
+  -> ApplyBoundGraph
+  -> applyToGraph
+  -> AlcedoQanGraph::PromoteCommittedSnapshot (live identities match)
+     or AlcedoQanGraph::ApplySnapshot -> ValidateSnapshot -> CanUpdateRoles
+     -> ApplyRoles (identities match, in place) | ReplaceTopology (content differs)
+  -> ApplyLayoutToAdapter -> ApplyLiveSelectionToAdapter
+```
+
+Incremental draft edits still take the same path as before:
+
+```text
+QML command (addCleanColorGrade / requestConnect / deleteColorGrade)
+  -> ValidateCommandGeneration -> EnsureDraft -> EditorNodeGraphDraft mutation
+  -> ApplyDraftMutationToAdapter -> AlcedoQanGraph::ApplyMutation
+  -> MaybeSubmitDraft -> SubmitNodeGraphTopologyEdit -> AdoptCommittedDocument
+  -> PromoteCommittedSnapshot (live identities match the committed snapshot)
+```
+
+**Primary failure call chain:**
+
+```text
+AlcedoQanGraph::ReplaceTopology on a Qan insert/bind failure
+  -> DestroyMappedPrimitives + ClearIdentityMaps
+  -> InsertTopology(previous) restores the prior complete projection
+  -> error text -> applyToGraph -> SetLastError; lastError surfaces to the panel
+
+ValidateSnapshot (empty node list, empty/duplicate NodeId, edge referencing an
+unknown node) -> result.error -> applyToGraph -> SetLastError; live projection unchanged
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| Older-stamped identical content applies in place; same-topology new generation applies in place; topology change rebuilds and dead pointers fail `LiveNodeId` | `AlcedoQanGraph.StampedIdentityValuesDoNotDecideTheApplyPath` | PASS |
+| Identity-map lifecycle, replacement, failure-restore, connector, and selection behavior unchanged | `AlcedoQanGraphTest` | PASS 31/31 |
+| Publish/apply counters, draft commands, Mask Group commands unchanged | `EditorNodeSelectionLayoutTest` | PASS 65/65 |
+| Delegate presentation and drawer state unchanged | `EditorNodeDelegateQmlTest` | PASS 24/24 |
+| Full QML panel apply path (open/close cycles, reopen state restore, connector, menu) | `EditorNodesPanelQmlTest` | PASS 65/65 (+1 disabled, see below) |
+| Version checkout and history-port paths unchanged | `EditorSessionHistoryPortTest` | PASS 89/89 |
+| Draft mutation and identity unchanged | `EditorNodeGraphDraftTest` | PASS 17/17 |
+| Delegate library and QuickQanava integration unchanged | `QanDelegateLibraryTest`, `QuickQanavaProductionIntegrationTest` | PASS 2/2, 3/3 |
+
+Commands:
+`cmd //c "scripts\msvc_env.cmd --build --preset win_debug --target AlcedoQanGraph AlbumBackendLib
+AlcedoQanGraphTest EditorNodeSelectionLayoutTest EditorNodeDelegateQmlTest EditorNodesPanelQmlTest
+EditorSessionHistoryPortTest EditorNodeGraphDraftTest QanDelegateLibraryTest
+QuickQanavaProductionIntegrationTest --parallel 4"`; each test exe run directly from
+`build/debug/alcedo_studio/tests/<dir>/<target>_runtime/`.
+Suite totals: 296/296 passed, 1 disabled.
+
+**Removed:**
+
+- `AlcedoQanGraph::RejectIfStale` and its `ApplySnapshot` gate (session generation, topology
+  revision, projection revision numeric-older rejection).
+- `CanUpdateRoles`' `session_generation`/`topology_revision` equality terms; the in-place decision
+  is now content identity only.
+- `PromoteCommittedSnapshot`'s `session_generation` equality check; the live node/edge identity
+  validation stays.
+- `ReverseNode`; `node_from_qan_` now maps `const qan::Node*` to `NodeId` directly.
+- `LiveNodeId`'s stored-generation check (and the dead `!has_projection_` term it shared a
+  condition with). The forward/reverse map cross-check `NodeFor(it->second) != node` stays.
+- `InsertNodeVisual`'s `session_generation` parameter and its four call sites.
+- Adapter getters `session_generation()`, `topology_revision()`, `projection_revision()` — their
+  only production reader was the removed apply gate.
+- `EditorNodeController::AdapterShowsCurrentCommittedProjection` and `ApplyBoundGraph`'s
+  bound-generation skip. `applyToGraph` now runs on every bound apply; it is idempotent through
+  `PromoteCommittedSnapshot`/`ApplySnapshot` content-identity matching.
+- Test `StalePrimitiveCannotSelectOrEditTheNewDocument` injected a manually stamped older snapshot
+  the production call chain cannot deliver; replaced by
+  `StampedIdentityValuesDoNotDecideTheApplyPath`, which proves stamped values do not choose the
+  apply path and that a real topology change still replaces primitives.
+- `InTheCurrentGeneration` suffix on `MapsEachProjectedNodeIdToOneLiveQanNode`, plus dead
+  generation/revision getter assertions in
+  `AdapterInsertFailureRestoresThePriorCompleteQanProjection` and
+  `MaskDrawerStartsOpenAndUserCanCloseAndReopenWithoutHistory`.
+- `EditorNodesPanelQmlTest.DeleteKeyRemovesSelectedGradeAndSelectsItsSuccessor` disabled as a slop
+  test: it fails identically on the base commit — the QTest Delete press never reaches the panel's
+  `Keys.onPressed` handler in this environment. `deleteColorGrade` itself stays covered by
+  `EditorNodeSelectionLayoutTest` cases that invoke the controller directly.
+
+**Kept (belongs to SC-03, or is a documented ordering / real invariant):**
+
+- `adapter_attach_generation_` / `pending_apply_attach_generation_` in
+  `QueueProjectionApply`/`ApplyBoundGraphIfCurrent` — the documented executable ordering
+  (queued apply vs. adapter detach) recorded above under "Nearby mechanism with a concrete
+  ordering".
+- `EditorNodeGraphSnapshot`/`EditorMaskGroupSnapshot` `session_generation`, `projection_revision`,
+  `topology_revision` fields — still stamped by the publish path and consumed by the SC-03 draft
+  identity (`CurrentDraftIdentity`, `MatchesIdentity`, `submitted_identity_`).
+- `ValidateCommandGeneration`, the three-argument `requestConnect`, `EditorNodeGraphDraftIdentity`,
+  and `BoundSessionGeneration` — command/draft path, SC-03.
+- Revision bookkeeping in `PublishSnapshot` (`std::max` monotonic counters), `TopologyChanged`,
+  and `SameProjectionContent` republish dedup — these feed the draft identity and skip redundant
+  publishes; they are not stale rejections.
+- `skipped_stale_projection_apply_count_` — still counts the null-adapter and attach-generation
+  skips.
+- `rebuild_in_progress_`, `has_projection_`, `ValidateSnapshot`, and
+  `PromoteCommittedSnapshot`'s live-identity validation — real state and input invariants, not
+  race guards.
+
+**Checklist / exit condition:** no adapter entry point rejects or reroutes a snapshot on stamped
+generation/revision values; reverse map entries carry only `NodeId`; the bound apply path applies
+whatever projection the controller currently holds; no test injects a state the production call
+chain cannot produce.
+
+**LOC note (grill-code-review):** `alcedo_qan_graph.cpp` −51 net, `alcedo_qan_graph.hpp` −15 net,
+`editor_node_controller.cpp` −18, `editor_node_controller.hpp` −1 net,
+`alcedo_qan_graph_test.cpp` +17 net, `editor_node_delegate_qml_test.cpp` −4,
+`editor_nodes_panel_qml_test.cpp` +5 (disable comment). No file exceeds size thresholds.
+
+**Residual gaps:** none for the adapter mechanism itself. The snapshot identity fields and the
+command/draft generation checks remain until SC-03 removes its own ungrounded checks.
 
 ## SC-03 — Production Nodes commands do not carry the older request generation they reject
 
