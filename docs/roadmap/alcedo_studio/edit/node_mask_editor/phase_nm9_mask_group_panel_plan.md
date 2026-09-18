@@ -3,7 +3,7 @@
 Date: 2026-09-16
 
 Status: **NM9.1 complete 2026-09-16**；**NM9.2 complete 2026-09-16**；**NM9.3 partial
-2026-09-16 on `feature/mask-groups-workspace`**；NM9.4–NM9.6 仍为 planned。本文件记录产品
+2026-09-16 on `feature/mask-groups-workspace`**；**NM9.4 complete 2026-09-17 on `feature/mask-thumbnail-lru`**；NM9.5–NM9.6 仍为 planned。本文件记录产品
 语义和实施拆分；NM9.1 的共享组投影、顶部插入、桥接删除与草稿
 边界已在 `feature/nm91-mask-group-projection` 实现并通过验证，见 NM9.1 完成记录。
 NM9.2 的删除保护、默认 Grade 身份与格式读写已在 `feature/nm92-deletion-protection`
@@ -14,7 +14,7 @@ NM9.2 的删除保护、默认 Grade 身份与格式读写已在 `feature/nm92-d
 Design update 2026-09-16：用户已选择方案 C（缩略图优先）。当前 Mask 合成在 UI 中只称
 `Add`，内部保持 Union；每个 Mask 和 Group 均有独立删除按钮。缩略图采用项目级内存
 KV/LRU service，固定 128×128 灰度、默认 1000 项、跨图复用、仅成功 commit 后更新、
-逐项异步显示且不阻塞删除；完整规格见第 5 节与 NM9.4。NM9.3 的约 2–3 阶段拆分留待
+逐项异步显示且不阻塞删除；完整规格见第 5 节与 NM9.4（2026-09-17：Spec/Target 分离，fire-and-forget LRU，无 subscriber 图）。NM9.3 的约 2–3 阶段拆分留待
 单独整理，本次保留阶段编号和依赖，先写清已确定的行为。
 
 Parent: [Node-aware Pipeline Editing and Mask Creation](../node_mask_editor_master_plan.md)，
@@ -385,228 +385,184 @@ revision 和生存期，禁止新建 parallel layer state。
 完整主链的组插入/删除和 Mask 创建；完成连接后，随同一个有效提交恢复 stack。复用
 现有草稿的读取接口，不新增一份草稿。
 
-## 5. 缩略图 service、跨图缓存与异步显示规格
+## 5. 缩略图 service：内容键、LRU 与 GUI 请求令牌
 
-**当前设计（2026-09-16）：** 采用项目级常驻 `MaskThumbnailService`，为当前 Radial /
-Linear Gradient 生成 CPU 灰度小图。内存 KV 缓存默认最多 **1000 项**，严格 LRU 淘汰，
-跨图片、跨编辑会话和 Version 复用；不读写磁盘。编辑过程中保持最近一次已提交结果，
-只在成功 commit 后检查新的内容键；首次显示、缓存未命中和历史恢复按下文请求。
-本节取代原先的原生后端小图限定、拖动定时刷新和切图清空缓存建议。照片的原生渲染
-后端、Interactive/Quality/export 的质量策略保持既有定义。
+**当前设计（2026-09-17）：** Mask 缩略图是廉价派生数据，不是文档事务状态。系统拆成两个
+完全不同的概念：
+
+- `ThumbnailSpec` / `ThumbnailKey`：128×128 像素是什么（只含影响像素的字段）
+- `ThumbnailTarget`：这些像素要发给谁（NodeId、MaskId、request_id、QObject 接收方）
+
+`MaskThumbnailService` 只做 `spec → pixels → LRU`。Worker 不关心 target 是否还活着。
+GUI 在回调里用单调 `request_id`（以及当前 spec，用于防程序错误）决定是否写入行。
+旧作业可以完成并填入缓存；旧结果绝不能覆盖当前 UI。缓存允许留下 16 KiB 级“垃圾”
+条目，Undo/切回照片时可以命中。
+
+```text
+committed Mask state
+        │
+        ▼
+ ThumbnailSpec          // pixels only
+        │
+        ▼
+┌───────────────────────────────────┐
+│ MaskThumbnailService              │
+│ LRU<Key, QImage>   capacity=1000  │
+│ miss → fire-and-forget executor   │
+└──────────────┬────────────────────┘
+               │
+               ▼
+             QImage
+               │
+               ▼
+        queued GUI callback
+               │
+               ▼
+    receiver still exists?
+    request_id still current?
+    spec still current?
+               │
+          yes ─┴─ no
+           │       │
+         update   drop
+```
+
+删除：Invalidate `request_id`，然后走普通领域删除。成功则行消失；失败则对新
+`request_id` 再 `request(currentSpec)`。Worker 不出现在这张图里。
+
+第一版没有 pending map、subscriber 列表、cancel handle 或 Group 子任务图。
+in-flight 去重是优化，不是正确性不变量。Group 在一个 worker 里同步渲染/读取
+子层并做 per-pixel max；Group key 对启用成员的内容键排序，纯显示重排命中。
 
 ### 5.1 service 的所有者、值与容量
 
-- service 由项目级服务容器持有，生命周期覆盖该项目内的全部照片编辑会话；不由
-  panel、delegate 或单张图片的 EditorSession 创建/销毁。切 A→B→A、关闭重开面板、
-  关闭单图编辑会话和切 Version 都保留 LRU。项目关闭时释放；另一个项目使用独立
-  service 实例，element 数字 ID 不跨项目混用。本阶段不做跨项目或进程重启后的缓存。
-- 一个缓存 Value 是不可变的 **128×128、R8 灰度输出**，占 16,384 bytes（16 KiB）。
-  Qt 边界可用 `QImage::Format_Grayscale8` 包装；不保存 RGB32/RGBA32F 的长期副本。
-  单 Mask 图和 Group 图共用 1000 项额度，历史参数对应的旧图也占额度。
-- 成功查询和新结果插入提升为 MRU；第 1001 项插入前淘汰 LRU，使 ready 项数始终
-  不超过配置值。容量是可配置的正整数，默认 1000；本阶段不增加用户设置页。
-  不因 pin、命中率、面板数量或临时内存压力而自动增加容量。
-- 1000 项的灰度像素为 16,384,000 bytes（15.625 MiB）。键、LRU 节点、在途计算、
-  当前可见项的共享引用和 Qt 上传纹理另外计量，不能宣称整个功能只占 16 MB。
-- 淘汰只移除 KV 的强引用，不使正在显示或上传的图像失效。接收方以共享只读句柄
-  持有输出，行隐藏、删除、替换 source 或 Loader 销毁时释放；不为离屏行保留句柄。
-  service 是唯一长期缓存，provider 不再建立一份永久保留所有历史 URL 的图像表。
-- 不创建文件、SQLite/DuckDB 表或 `ThumbnailDiskCacheService`；不调用 Library 的
-  磁盘缩略图读写、解码/照片渲染 scheduler 或 JPEG/WebP 编码。缩略图不进 history、
-  checkpoint、项目包、Version 或 Paste 数据，错误也不触发写回文档。
+- service 由 `ProjectHandler` 在项目打开的 GUI 线程创建，生命周期覆盖该项目内的
+  全部编辑会话；不由 panel、delegate 或单张图片的 EditorSession 创建/销毁。
+  切 A→B→A、关闭重开面板、关闭单图会话和切 Version 都保留 LRU。项目关闭时释放
+  shared_ptr（析构 join 内部 worker）。另一个项目使用独立实例。
+- 一个缓存值是不可变的 **128×128、R8 灰度** `QImage::Format_Grayscale8`，16,384
+  bytes。QImage 隐式共享：LRU 持有一份，provider 再取一份，淘汰 LRU 后 provider
+  手里的副本仍然有效。不另造像素所有权协议。
+- 成功查询和新插入提升为 MRU；第 1001 项插入前淘汰 LRU。容量固定，默认 1000，
+  不因 pin 或命中率自动扩容。实现用 `unordered_map` + `list`，不使用会自动扩容
+  的 `LRUCache`。
+- 1000 项灰度像素为 15.625 MiB。键、LRU 节点、在途计算和 Qt 纹理另外计量。
+- 不创建文件、DuckDB 表或 `ThumbnailDiskCacheService`。缩略图不进 history、
+  checkpoint、项目包、Version 或 Paste。
 
-### 5.2 内容键：element ID 加实际求值输入
-
-项目由 service 实例隔离。实例内的键定义如下，`input` 同时作为异步求值所需的不可变
-最小输入；不得另外复制整份 MaskModel、Grade、PipelineDocument 或照片像素：
+### 5.2 ThumbnailSpec：只含影响像素的字段
 
 ```text
-Key = (element_id, input)
-input = (sampling_version = 1, kind = Single | Group, geometry, mask_parameters)
+ThumbnailSpec = {
+  sampling_version = 1,
+  kind = Single | Group,
+  geometry,          // full_reference 尺寸、crop/rotation/expand_to_fit
+  layers[]           // Radial/Linear：位置、半径/法线、羽化、enabled、invert、opacity
+}
+ThumbnailKey = hash(canonical ThumbnailSpec)
 ```
 
-| 字段 | 必须包含的内容 | 必须排除的内容 |
-| --- | --- | --- |
-| `element_id` | 当前项目内的实际 element ID | 列表下标、文件名或缩略图 URL |
-| `geometry` | full reference 尺寸、决定 reference 坐标基准的源方向值、已提交照片 crop/rotation/expand_to_fit；复用现有值类型的必要字段。worker 从这些字段推导完整照片取样映射与有效区域，不在键中重复保存派生矩阵 | 当前照片 decode/render 分辨率、Viewer 临时 pan/zoom/ROI、窗口大小、DPR、geometry revision 计数 |
-| 单 Mask 参数 | source kind；Radial 的 center_x/y、major/minor_radius、rotation、inner/outer_feather，或 Gradient 的 origin_x/y、normal_x/y、transition_distance、start/end_value；两者的 enabled、invert、opacity | NodeId、MaskId、display_name、删除保护、选中/展开状态、Grade enabled/Mix/曝光等调整、会话 ID、Version ID、history/document revision |
-| Group 参数 | 当前启用成员的单 Mask 参数编码，按编码排序后组成数组；复用同一 geometry；Group 类型标签使全关闭的非空组能生成全黑图 | 成员 ID、显示顺序、名称、锁；无 Mask 的组根本不请求图 |
+命中必须比较完整 spec，哈希碰撞不能返回错图。下列内容**不属于** spec：
 
-Group 参数只取启用成员，因此添加/删除已关闭成员而仍保持非空组时可复用相同 Group
-图。单 Mask 行关闭时显示有效全黑 coverage，并由行的文字/控件表示关闭状态。无 Mask
-与全关闭必须区分：前者无缩略图，后者有全黑结果。Group 图取 Grade Mix 之前的 coverage。
+MaskId、NodeId、element id、row index、display name、删除保护、选中/展开、
+Grade Mix/曝光、会话 ID、Version ID、history/document revision、request_id、
+Viewer pan/zoom/DPR/decode 尺寸。
 
-键对语义输入做逐字段稳定编码。浮点按实际存储精度保持值，`-0` 规范为 `+0`，拒绝
-非有限/非法输入；不读 struct padding、不按地址编码、不把参数四舍五入成显示文本。
-哈希仅用于查表，命中还必须比较完整规范键，不能把哈希碰撞当成同图。序列化整个
-`MaskModelToJson` 不符合此定义，因为它包含身份和无关元数据。
+若输出受照片纵横比、裁剪、旋转影响，放入 canonical geometry descriptor，而不是
+泛泛的 image id。相同参数、不同 MaskId 必须得到相同 spec，从而复用同一张图。
 
-同一 element 的相同参数在 A→B→A、Undo、Redo、Version 恢复或新 Mask 身份下应命中
-同一内容；不同 element 不共用键。普通编辑产生新键，旧项留待 LRU 淘汰，不执行
-`InvalidateElement` 或清空整个项目。固定 128 规格不因 DPR 变化生成第二套缓存。
+Group 只收录启用成员并按内容排序；`max(A,B) == max(B,A)`。无 Mask 的组不请求图。
+非空组但全部关闭：`kind = Group`、空 layer 列表，渲染全黑，关闭 rows 仍在。
 
-**最小独立输入的必要性：** 异步生成必须能在 live Mask 已被删除后安全完成，不能
-持有 document 引用或在整个计算期间阻塞 owner。缓存键本身已经需要这些参数，故从
-成功提交后的 owner scoped read 一次构造该不可变键，并直接用它求值；不再增加平行
-状态对象。复用既有 Radial/Gradient 参数和 geometry 值类型，去掉名称、ID、锁和全部
-无关字段。请求、KV 与共享任务按需持有键，取消/淘汰/结束时释放；绝不写回 live 数据。
+浮点：`-0` 规范为 `+0`，拒绝非有限值。从 committed owner 一次读取构造不可变 spec；
+worker 不持有 document 引用。
 
-### 5.3 固定取样与生成职责
+### 5.3 固定取样与生成
 
-1. 每个输出画布固定 128×128，先填黑。使用完整 EditSpace 的 ViewRequest，分辨率
-   请求固定 render_scale=1、max_edge=128，经现有 geometry resolver 取得不超过 128
-   的内容尺寸与映射，小于上限的原图不扩大求值。保持照片比例，内容居中；整数尺寸
-   使用 resolver 的舍入结果，不按 UI 宽高再算一遍，左/上黑边取差值的一半向下取整。
-2. 只使用完整照片视图；临时 Viewer 缩放和平移不改变缩略图。内容区像素中心经
-   thumbnail-to-reference 映射求值；照片有效区域外保持黑色，反相也不得把黑边变白。
-   裁剪、旋转和源方向使用与照片相同的 geometry 规则。无效尺寸/映射报告失败。
-3. 当前 Radial/Gradient 复用既有解析公式，顺序为 source → invert → opacity → clamp
-   → R8 round-half-up。Group 逐像素取 max，UI 仍称 Add；不使用 alpha 叠加或数值相加。
-   不应用照片 DRT、LUT、曝光或 gamma 转换。当前 range 字段只能是已支持的 identity。
-4. 一个后台 CPU worker 即可。Group 工作按成员键查同一 LRU，未命中时逐个生成并
-   插入，再取 max；每次只需当前成员和组累积输出，不一次持有全部成员像素副本。
-   Group 作业不递归提交子任务后等待同一个 worker，避免单线程自锁。成员图即使不
-   在展开行中显示也可因 Group 求值进入同一 1000 项缓存。
-5. 删除、关闭、降低 opacity 或成员移动后必须从当前成员集合重新合成 Group；不得
-   仅在旧组图上继续 max。首次载入和 geometry 提交需要的成员可逐步生成，均不阻塞 UI。
-6. CPU 小图是本功能选定的生成方式，失败显示真实错误，不再尝试其他后端。它不读取
-   全尺寸 GPU Mask、不另起照片 executor、不改变现有照片渲染资源或计算质量。
+1. 画布 128×128 先填黑。完整 EditSpace ViewRequest，`render_scale=1`、`max_edge=128`，
+   经现有 geometry resolver 取得内容尺寸与 `render_to_reference`。小于上限的原图
+   不扩大。整数黑边取差值一半向下取整。
+2. 只使用完整照片视图。内容区像素中心映射到 reference；照片外保持 0。反相不得把
+   黑边变白。
+3. Radial/Gradient：source → invert → opacity → clamp → R8 round-half-up。
+   Group 逐像素 max。不应用 DRT、LUT、曝光。
+4. 一个后台 CPU worker。Group **一个作业**内循环子层：命中子缓存则用，否则直接
+   渲染 128×128，再 max。不把子请求排进同一 worker 再等待。第一版允许重复计算。
+5. 失败报告真实错误，不切换后端，不缓存空图。
 
 ### 5.4 请求时机与逐项显示
 
-“只在 commit 更新”约束的是编辑内容变化；打开面板或缓存缺失时仍必须能加载当前
-已提交内容。成功入队、pointer release、通用参数通知或 render completion 都不能代替
-history/document owner 的成功提交通知。`pipeline_document()` 是现有发布接口，执行者
-须核对其 committed/preview 边界，不能直接监听每次发布就发请求。
+只在成功 commit 或已提交文档恢复后构造 spec。`EditorNodeController` 在
+`HistoryChanged` → `refreshFromSession` → `PublishDocument` 后 `Sync`。
+`pipeline_document()` 的 preview 发布若未改变 `history_revision`，不得发请求。
+未提交的创建中 Mask、拖动/滑条 preview 不构造 spec、不调 service。
 
-| 事件 | 规定行为 |
-| --- | --- |
-| 打开面板、展开组、行进入可见区域 | 立即显示组名、Mask 行与操作按钮；请求各可见目标当前已提交键。命中也走统一的异步完成通知，不等其他行 |
-| 创建中的未提交 Mask | 允许显示既有创建状态；不生成缩略图、不把临时参数写入 KV。确认提交成功才请求 |
-| 拖动、滑条输入及其 preview | 不变更缩略图 source，不构造新内容键、不调 service、不定时刷新；已有图代表最近一次提交 |
-| Mask 创建/参数/enabled/invert/opacity 成功 commit | 为受影响可见 Mask 和所属 Group 求键；键未变则 no-op；变了只更新相应目标 |
-| 编辑取消、no-op commit、提交失败 | 保留上次提交的小图；不为未成功提交的试改参数求值或留下新缓存项 |
-| Mask/Group 删除 | 按第 5.6 节即时撤销订阅；文档删除成功后移除行、更新仍存在的 Group；不删除旧 KV 项 |
-| 裁剪、旋转等 geometry 成功 commit | 为受影响可见目标请求新键；旧 geometry 键保留，Undo 时可复用 |
-| Undo/Redo、Version checkout、切图/重新打开单图 | 当前已提交文档就绪后按内容请求；新订阅使用新请求身份，KV 可命中历史值 |
-| 曝光、Saturation、Grade Mix、名称、锁、row 顺序、选择 | 不调用重新生成；Group 的参数排序使纯显示重排保持同键 |
-| 折叠/离屏/关闭面板/切图 | 撤销相应 UI 订阅，释放显示句柄；移除没有订阅的排队工作，保留 ready KV |
+面板结构立刻生成所有 rows，每行独立 Empty → Loading → Ready。QML Image
+`cache: false`，source 为 `image://alcedo-mask-thumb/<request_id>`。
+收到一张显示一张。不以全部 Ready 作为列表可见、Loader 或按钮可用的条件。
+不 reset model、不重建列表、不改 contentY/选择。
 
-每个可见目标独立拥有 `Empty / Loading / Ready / Error / PendingDelete` 显示状态。
-commit 后键变化时先清除旧 source，显示固定尺寸占位；Ready 单项到达就更新该项。
-拖动中原图不是过期图，因为目标仍是上次提交的键。新键失败则显示准确错误，不能拿
-旧图标成新键的 Ready。纯取消不显示错误。无 Mask 的 Group 使用 Empty，不发请求。
+名称、锁、纯显示重排不触发重新生成。
 
-QML 不以“所有 thumbnail Ready”作为列表 visible、Loader active、行创建或操作可用的
-条件。生成完成只通知对应项的 source/status/error，不 reset model、不重建全列表、
-不改变 contentY/选择。缓存命中或单项失败都不影响其余行显示和按钮操作。
+### 5.5 唯一权威有效性令牌
 
-### 5.5 请求身份与回调接收规则
+缓存键表示像素。`request_id` 表示这个 binding 现在是否还要这张图。不要再叠加
+PendingDelete、binding 代次、项目 id、target 存在性等多套部分重叠的 validity。
 
-**缓存键表示像素内容，请求身份表示谁仍在等待。两者不可混用。** controller 为每次
-订阅分配单调递增的 `request_id`，并保存以下接收条件；它们不进入 KV 键：
+GUI 回调只检查：
+
+1. receiver（QObject）仍存在（通过投递到 service 内部 poster + `QPointer`）
+2. `request_id` 仍是该 target 的当前值
+3. spec 仍是该 target 的当前 spec（防程序错误）
+
+Worker 完成时不核对 target。没有 `CancelRequest`。没有 subscriber 列表。
+
+Qt provider 用 request_id 寻址已接受的 `QImage`。旧 URL 不得返回“这个 Mask 最新
+的一张图”。
+
+### 5.6 删除、Undo、失败：只失效 binding
 
 ```text
-receiver = weak controller
-binding = 当前项目 service 实例、图片/Version/面板绑定代次
-target = NodeId + optional MaskId          // 不使用 row index 或 delegate 地址
-expected = request_id + Key
+Delete clicked
+     ├── bump request_id（或清空 binding）
+     └── 普通领域删除
+            ├── 成功：投影移除行；晚到 callback 因 request_id/target 丢弃
+            └── 失败：对新 request_id 再 request(currentSpec)；通常 cache hit
 ```
 
-- 同一 Key 的未完成请求合并为一次生成，各订阅各有 request_id。取消一个订阅不影响
-  其他目标。service 只保存弱接收方/取消标记，worker 不持有 QML Item 或 model index。
-  作业真正开始时再查一次 KV，以复用先前 Group 作业顺带生成的成员图；命中后直接完成。
-- 同一目标同一键已有 Ready/Loading 时不重复请求；目标更换键、销毁或进入删除流程时
-  立即撤销旧 request_id。Undo 恢复同 NodeId/MaskId 也分配新 request_id，不能复活旧订阅。
-- service 在短临界区查 KV / 注册任务 / 插入完成值；像素生成、Qt 转换、回调派发及
-  删除命令都不在缓存锁内运行。队列只保留仍有可见订阅的不同 Key，不对全部离屏图预取。
-  每个可见目标最多一个当前订阅；取消后移除无订阅的未启动任务和回调记录，防止滚动
-  或连续 commit 堆积旧工作。在途只有一个作业；取消不等待该作业完成。
-- 成功输出可以先进入项目 LRU，再将每个仍有效订阅的完成通知投递 GUI 线程。即使
-  最后一个订阅已取消，已运行作业的有效结果仍可缓存，以便切回照片或 Undo；项目已
-  关闭的结果丢弃。Ready cache fill 不具有创建 UI 行或恢复文档对象的权限。
-- **GUI 队列实际执行回调时再次检查**：弱 controller 仍存在；binding 仍相同；target
-  在当前投影存在且未 PendingDelete；当前 request_id 与 Key 均匹配。全部满足才更新
-  对应行。失败/错误通知也必须做相同检查。不能仅在 worker 发出回调前检查一次。
-- Qt provider 只提供已完成输出，用本次接收句柄精确寻址；旧 URL 不得返回“这个
-  element 最新的一张图”。从取结果到 provider/QSG 读取完毕，共享句柄保证像素寿命。
-  QML 使用异步 Image 加载，并关闭历史 URL 的默认长期缓存，由 service 控制保留；
-  provider 的临时句柄随可见消费者/实际 reader 结束释放。provider 不访问 live document，
-  不在图片查找中生成 Mask，也不让任意 Image 请求重新激活已取消的 UI 订阅。
-  若 Image 加载完成/失败还需回写 model，必须带同一 request_id/Key 再校验；不能把
-  旧 source 的 Qt 加载完成信号用到已复用的 delegate 当前目标。
+不等待 worker、cache、provider、QSG。正在生成的图可以进 LRU。16 KiB 垃圾可留。
 
-### 5.6 删除的异步顺序：撤销订阅，不等待像素销毁
+Undo/Redo 同样只发新 request_id。P1→P2→Undo→Redo 对缓存是 miss/miss/hit/hit。
+Cache 不理解编辑器语义。
 
-删除入口包括 Mask 行按钮、Group 按钮、快捷键以及 Nodes 发起的同一对象删除。共享
-controller 必须统一处理；不能只在新面板按钮里加保护。明确区分“删除文档对象”和
-“释放该行显示句柄”：前者由既有 owner/history 操作完成，后者无权阻止前者。
+PendingDelete 可以是 UI 状态（按钮 disable），**不是** thumbnail 正确性条件。
 
-1. **本地删除意图通过基本校验后**，GUI controller 先将目标置 PendingDelete，立即
-   使其 request_id 失效并撤销接收资格，再向 owner 异步提交既有删除命令。Group 删除
-   同时撤销组及子行订阅；Mask 删除同时撤销受影响 Group 的旧合成图订阅。已经 ready
-   的旧图可留在 PendingDelete 行内直到领域结果返回，期间不得接收新的缩略图回调。
-2. `CancelRequest` 只标记订阅失效并安排队列清理，立即返回。删除路径不得调用
-   future.get/wait、join、GPU fence，或等待 thumbnail cancel acknowledgment、LRU
-   erase、provider release、QSG texture 销毁。CPU worker 不占文档锁、session admission
-   或 photo render lock；即使它被测试闩锁暂停，删除仍必须能提交并收到领域完成结果。
-3. 入队仅表示提交请求，不表示删除成功。领域成功前保留行、原选择与对象身份，禁用
-   该目标重复删除；不乐观修改文档。普通删除锁、草稿、history/WAL 规则仍由 owner 检查。
-   删除成功的同一次投影更新才真正移除行/更新选择；缩略图状态不能延后这次更新。
-4. 删除被拒绝、同步入队失败或领域提交失败时，撤销 PendingDelete，保留原选择与行；
-   若图/Version 已切换则不向新绑定恢复旧行。仍在原绑定时，从 owner 的当前已提交
-   内容重新订阅，使用新 request_id；通常命中原有缓存，不复用被撤销的旧回调。
-5. 删除成功后不遍历或清除这个 Mask 的历史参数 KV 项。正在计算的旧内容可以完成并
-   进入 LRU，但不回填已删除行、不 upsert target、不发出新选择或参数写入。Undo
-   恢复对象后通过新订阅命中旧内容属于正常复用，旧订阅本身始终无效。
-6. 若外部 owner/历史操作直接移除目标，处理新的投影时先撤销消失目标的订阅再移除行。
-   已排入 GUI 队列的回调仍执行第 5.5 节检查。panel 销毁、delegate 复用、切图、checkout
-   和项目关闭遵循同样原则；项目关闭标记 service 停止接收并异步释放在途资源，不在 GUI
-   析构中 join 工作线程，也不以无所有者的 detached thread 延长资源寿命。
+### 5.7 最小接口
 
-```text
-开始生成 K1，订阅 R1
-  → 用户 Delete：R1 立即失效，行 PendingDelete，领域删除异步入队
-  → 任意先后：K1 生成完成可入 LRU；R1 回调在 GUI 检查失败，直接丢弃
-  → 删除成功：投影移除行                     // 不等待 K1
-  → 若 Undo：新行/新订阅 R2 请求 K1，可命中  // R1 仍不能更新任何行
-```
-
-### 5.7 最小接口与失败边界
-
-以下为行为接口建议，实施时用实际名称替换，不因此增加一套文档或通用任务框架：
-
-| 操作 | 必须保证的行为 |
+| 操作 | 行为 |
 | --- | --- |
-| `Request(Key, subscription)` | 非阻塞；命中和生成统一投递完成事件，同 Key 合并工作；成功事件携带 Key、request_id、只读输出句柄 |
-| `CancelRequest(request_id)` | 仅撤销该订阅，幂等、立即返回；不删 ready KV、不影响其他订阅、不等待作业 |
-| `SetCapacity(count)` | 正整数配置；缩小时按 LRU 去除多余 cache 引用，reader 安全，默认 1000，不自动扩容 |
-| 项目关闭 | 拒绝新请求，撤销订阅，清空项目 KV；在后台安全收尾 worker，禁止旧结果写新项目 |
+| `Request(spec, receiver, request_id, callback)` | 非阻塞；命中和生成都投递 GUI。允许同一 spec 偶尔重复生成 |
+| 项目关闭 | 停止接新作业，析构 join worker；已排队到已销毁 receiver 的回调丢弃 |
+| 固定容量 LRU | 默认 1000，淘汰只丢 KV 强引用 |
 
-求值/分配失败不缓存空图，清除对应 pending 记录，对仍有效订阅报告一次 Error。
-之后显式重试、离屏再进入或新内容请求可再次生成；不在每个 paint 自动重试。无接收方的
-错误仅走既有诊断，不弹出已删除对象的错误。缓存插入失败也按真实失败完成，不能卡住
-订阅或删除。取消和 Key 过期不是领域错误，不更改 history 或照片渲染。
+没有 `CancelRequest`、pending subscribers、`SetCapacity` UI。求值失败不缓存空图。
+取消和过期 request_id 不是领域错误。
 
 ### 5.8 已核对源码与测量的使用边界
 
 - [ThumbnailManager](../../../../../alcedo_studio/src/ui/alcedo_main/album_backend/thumbnail_manager.cpp)
-  的活动标记、弱 QObject 接收方和 GUI queued callback 可作参考；不照搬每图 detached
-  thread、磁盘行为、pin 扩容或释放时删除缓存的策略。
+  的弱 QObject 与 queued callback 可作参考；不照搬 detached thread、磁盘、pin 扩容。
 - [ThumbnailImageStore](../../../../../alcedo_studio/src/ui/alcedo_main/album_backend/thumbnail_image_provider.cpp)
-  目前忽略旧 URL revision 并返回 element/size 的当前值。Mask 不能使用该规则；须以
-  精确输出句柄读取，也不能在图切换时调用其 `Clear` 代替跨图 LRU。
+  忽略旧 URL revision 并返回 element 当前值。Mask provider 必须按 request_id 精确读取。
 - [LRUCache](../../../../../alcedo_studio/src/include/utils/cache/lru_cache.hpp) 的 `Evict`
-  含自动 Resize 逻辑。执行者须明确关闭该行为后才能复用；若现有接口不支持，service
-  内用标准 unordered_map + list 做固定容量 LRU 即可，不重构 Library 缓存。
+  含自动 Resize。本 service 自建固定容量 LRU。
 - [GradeMaskCoverage](../../../../../alcedo_studio/src/edit/mask/grade_mask_coverage.cpp)
-  已提供 R8 解析求值，但当前缺少 render-to-reference 映射，不能原样宣称满足裁剪/旋转。
-  映射复用 [RenderGeometryResolver](../../../../../alcedo_studio/src/include/edit/geometry/render_geometry_resolver.hpp)。
+  缺少 render-to-reference 映射。取样使用
+  [RenderGeometryResolver](../../../../../alcedo_studio/src/include/edit/geometry/render_geometry_resolver.hpp)。
 - 前次 HEAD `88a034c2` 的独立测量：i7-12700H、MSVC 19.44 Release `/O2 /arch:AVX2`、
   Qt 6.9.3；预热后 9 批平均耗时的中位数，128×128 单 Radial 约 0.299 ms、8 Mask
   全部求值并合成约 2.005 ms、8 张已缓存 R8 图取 max 约 0.069 ms。未含 owner 排队、
-  geometry、Qt 上传和真实窗口；不是本 service 的实现或性能验收。复现资料在
-  `build/tmp/nm93_thumbnail_research/`，不提交临时文件。
+  geometry、Qt 上传和真实窗口。复现资料在 `build/tmp/nm93_thumbnail_research/`。
 
 ## 6. 子阶段与完成条件
 
@@ -620,7 +576,7 @@ controller 必须统一处理；不能只在新面板按钮里加保护。明确
 | NM9.1 | 共享组投影、顶部插入/桥接删除的 app 操作、草稿边界 | NM8 收口 | complete 2026-09-16 on `feature/nm91-mask-group-projection` |
 | NM9.2 | 删除锁、默认保护、typed history 和格式规则 | NM9.1 | complete 2026-09-16 on `feature/nm92-deletion-protection` |
 | NM9.3 | Mask Groups 面板、空抽屉、创建入口与双向选择 | NM9.1–NM9.2 | partial — implementation present; acceptance failures under investigation |
-| NM9.4 | 项目级内存 LRU、跨图复用、commit 后逐项小图、非阻塞删除与回调校验 | NM9.3 | planned |
+| NM9.4 | 项目级内存 LRU、跨图复用、commit 后逐项小图、非阻塞删除与回调校验 | NM9.3 | complete 2026-09-17 on `feature/mask-thumbnail-lru` |
 | NM9.5 | Undo/Redo、Version、Paste、reopen 和失败恢复验证 | NM9.2–NM9.4 | planned |
 | NM9.6 | 真实摄影任务的 UI/UX、像素一致性与性能验收 | NM9.1–NM9.5 | planned |
 
@@ -1183,110 +1139,179 @@ reading the shared `mask_group_snapshot` projection after each committed move.
 
 ### NM9.4 — 跨图内存 LRU 与提交后异步缩略图
 
-**目标与交付物：** 完整实现第 5 节：项目级 CPU 小图 service、精确内容键、1000 项
-固定容量 LRU、commit 后更新、面板逐项加载，以及不等待生成任务的删除与安全回调。
-第 5 节为行为规格；不得沿用旧计划的 GPU 小图依赖、拖动刷新或切图清缓存实现。
+**目标与交付物：** 实现第 5 节的朴素系统：不可变内容键、1000 项内存 LRU、
+fire-and-forget 生成作业、单调 UI `request_id`。不实现 subscriber 生命周期、
+worker 侧资格核对、PendingDelete 作为 thumbnail 正确性条件、Group 异步子图、
+自定义像素所有权。第 5 节为行为规格；不得沿用 GPU 小图、拖动刷新或切图清缓存。
 
 #### NM9.4.1 前置检查与文件入口
 
-1. NM9.3 已提供方案 C、稳定 NodeId/MaskId 与共享选择。确认创建、删除、Undo/Redo、
-   checkout 的领域完成通知；记录哪个通知表示成功 commit，哪些仅代表 preview/入队。
-   现有 `EditorMaskCreationAdapter::removeMask` 已注明 Enqueue 不是 deletion admission，
-   接线必须尊重这条边界；Group controller 的返回值也须追踪到真实完成语义。
-2. 核对 [ProjectHandler](../../../../../alcedo_studio/src/ui/alcedo_main/album_backend/project_handler.cpp)
-   的项目服务创建/替换/关闭位置，将 service 生命周期放在同一层。执行前验证是否已有
-   合适的后台执行器可复用，但不得与 photo render/session 串行任务共用阻塞工作队列。
-3. 核对第 5.8 节的 Library manager/provider/LRU 和解析求值文件，以及
-   [EditorSessionService](../../../../../alcedo_studio/src/include/app/editor_session_service.hpp)、
-   [Mask adapter](../../../../../alcedo_studio/src/ui/alcedo_main/album_backend/editor_mask_creation_adapter.cpp)、
-   [Node controller](../../../../../alcedo_studio/src/ui/alcedo_main/album_backend/editor_node_controller.cpp)。
-   UI 经 app service/controller 请求，不直接访问 live document 或在 QML 中计算键。
-4. 拟新增文件为 `include/app/mask_thumbnail_service.hpp`、
-   `app/mask_thumbnail_service.cpp` 及必要的 Qt 显示适配器；名称在实施后换成实际入口。
-   只为明确职责拆分；不引入通用后台任务框架、第二个文档 owner 或照片 pipeline。
+1. NM9.3 已提供方案 C、稳定 NodeId/MaskId 与共享选择。Commit 通知是
+   `EditorSessionController::HistoryChanged` 加上 `history_revision` 前进；
+   preview/`pipeline_document()` 的其它发布不得发缩略图请求。
+   `EditorMaskCreationAdapter::removeMask` 已注明 Enqueue 不是 deletion admission。
+2. `ProjectHandler` 在项目打开成功回调里构造 `MaskThumbnailService`；
+   `project_opened` 把它交给 `EditorSessionController`；`EditorNodeController`
+   在 Sync 时从 session 取 service。
+3. UI 经 coordinator 请求，不在 QML 中计算键，不把 MaskId 放进 spec。
+4. 实际文件：
+   `include/app/mask_thumbnail_spec.hpp`、`mask_thumbnail_evaluate.hpp`、
+   `mask_thumbnail_service.hpp`，以及
+   `mask_thumbnail_coordinator.hpp`、`mask_thumbnail_image_provider.hpp`。
 
 #### NM9.4.2 实施顺序与必要结果
 
-1. **内容键和求值。** 按 5.2/5.3 逐字段实现 Single/Group 键、完整相等比较和 128×128
-   R8 输出。补齐 committed geometry 的取样映射；在键定义处说明最小不可变输入的
-   必要性、字段、owner、捕获时机、释放点和不写回规则。
-2. **项目级 KV/LRU。** ready map 与 LRU 同步修改，默认严格 1000 项；读写短锁保护。
-   成功命中提升 MRU，旧参数、旧图片、旧 Version 的图自然保留。构造 service 不依赖
-   disk cache、Storage 或照片解码；项目切换创建隔离实例，单图切换不 Clear。
-3. **有界异步请求。** 一个独立 worker，按 Key 合并 pending；队列限于仍有可见订阅的
-   请求，同一目标最多一个。取消的未启动任务及时移除；在途任务不持文档/渲染锁，
-   可完成并缓存。Group 按成员键串行查/算/合成，不递归排队等待自身。
-4. **提交驱动的协调。** 只在明确成功 commit 或已提交文档恢复后计算受影响键；初次
-   进入可见区域加载当前键。preview 不触发任何 service 请求。隐藏后保留 KV，重新
-   显示时再请求；非 Mask 元数据和 Grade 调整不触发无关请求。
-5. **逐项展示。** 面板结构与按钮先呈现；每行独立 Empty/Loading/Ready/Error。Image
-   异步读取精确输出句柄；收到一张显示一张，不设置全列表完成门槛。仅通知目标角色，
-   不 reset model、重置 contentY 或借完成通知重复提交编辑。
-6. **两次回调资格核对。** 工作完成时过滤取消订阅，GUI 真正执行时再核对弱接收方、
-   binding、target 存在性、PendingDelete、request_id、Key。成功与错误都做相同校验；
-   cache fill 与 UI 发布分开，旧内容允许缓存，旧订阅不能更新新行。
-7. **非阻塞删除。** 按 5.6 的顺序接入所有删除入口。提交前撤销受影响订阅，成功前
-   保留行和选择，失败后新建订阅；成功后通过领域投影移除。使用已有异步命令/完成
-   通道，必要时补齐适配器的完成接线，不把排队成功当删除成功。不能让 thumbnail
-   cancel、像素释放或 GPU/QSG 生命周期成为删除操作的等待条件。
-8. **资源与失败收口。** provider 暂时持有的输出与 reader 共用只读存储；KV 淘汰后
-   reader 仍安全，最后一个引用释放才回收。失败不缓存伪造空图、不自动切生成方式。
-   项目关闭异步收尾旧 worker，旧完成不能进入新项目或复活面板。
-9. **诊断与记录。** 记录 ready 数量/字节、hit/miss/evict、pending/running 数、取消、
-   过期 UI 回调、失败和单项发布数。分别统计 cache、可见句柄、worker scratch 和 Qt
-   上传内存；不逐像素/paint 打日志，不把 1000 项额度误写成所有内存的总上限。
+1. **Spec 与求值。** Single/Group spec、完整相等比较、128×128 R8。Group 排序启用成员。
+2. **项目级 LRU。** 默认 1000；读写短锁；命中提升 MRU。构造不依赖磁盘或照片解码。
+3. **Fire-and-forget Request。** `Request(spec, receiver, request_id, callback)`。
+   一个内部 worker。不合并 pending subscribers。Group 一个作业内循环子层。
+4. **提交驱动。** `PublishDocument` 之后 Sync。preview 不请求。无 Mask 不请求。
+5. **逐项展示。** 行先出现；Image 异步读 `image://alcedo-mask-thumb/<request_id>`，
+   `cache: false`。不 reset model。
+6. **一次 GUI 资格核对。** receiver + request_id + spec。Worker 只写 cache。
+7. **删除只失效 binding。** `invalidateTarget` / `invalidateNode` 只 bump
+   `request_id`。不等待像素。领域失败后下一次 Sync 或显式 request 用新令牌。
+8. **资源。** QImage 隐式共享。失败不缓存空图。项目关闭 join worker。
 
 #### NM9.4.3 必须实现的受控验收
 
-下面的暂停点使用可控 executor、promise/latch 或事件队列推进；不得用随机 sleep
-制造先后顺序。每项记录生成次数、请求/发布次数及 owner 提交结果，不能只验证无崩溃。
+使用可控 executor / latch 推进，不用随机 sleep。不验证“为优化而引入的状态机”。
 
 | 用例 | 明确断言 |
 | --- | --- |
-| 固定输入 Radial/Gradient/反相/羽化/opacity | 128×128 R8、线性灰度、独立解析期望；黑边反相后仍黑，记录边界点与量化容差 |
-| Group 相离、相交、重复与半强度 | max 正确；两个 50% 的交集仍为 50%；关闭/删除成员后旧 coverage 消失 |
-| 无 Mask / 全关闭 | 前者没有请求与图片，后者 Ready 全黑且关闭 rows 保留 |
-| 横/竖/方/奇数尺寸、裁剪旋转、边缘外 Mask | 统一 resolver 映射、保持比例；Viewer pan/zoom 与 DPR 改变不换键、不生成 |
-| element 与全部内容参数的键测试 | 每个有效求值字段变化造成正确 miss；名称、锁、ID、会话/Version/revision 不改变同内容键；强制哈希碰撞不返回错图 |
-| 单图相同参数不同 MaskId、Group 显示重排 | 相同内容复用，纯成员显示顺序变化命中；NodeId/MaskId 仍用于 UI 精确路由 |
-| A→B→A、离开重开单图编辑器 | A 的条目仍在，回到 A 的生成计数不增加；容量内的其他图片不被清空 |
-| 参数 P1→commit P2→Undo→Redo | P1/P2 各生成一次；之后命中；历史恢复使用新 request_id，旧请求不重新有效 |
-| 连续 preview、取消、提交失败、no-op commit | preview/取消/失败新增请求和生成均为零；已缓存图不变；成功且键变化才提交请求 |
-| 容量=3，插 A/B/C、读 A、插 D；默认容量=1000 | 首例只淘汰 B；1001 项后仍为 1000，键/像素一致；不因 pin 或淘汰频繁自动扩容 |
-| LRU 淘汰时 provider/QSG 仍读旧图 | KV 项数遵守容量，已获取句柄的像素仍有效；reader 释放后内存回收 |
-| service 完成后暂停 Qt 图片加载，再删除/复用行 | Qt 晚到的 ready/error 也不能更新新目标；已取到的旧像素句柄安全释放 |
-| 多个目标同时请求相同 Key | 一个生成任务、各有效订阅分别完成；取消其中一个不影响其余目标 |
-| 暂停全部生成，打开面板 | 组/Mask 行与删除等按钮已可用；不等待任何 thumbnail Ready |
-| 分别完成行 C、A、B | 每次只更新对应 source/status；无全列表 reset、选择变化或滚动跳动 |
-| 暂停正在生成的 Mask，提交删除 | 生成闩锁仍未释放时，领域删除已完成、行已移除；随后完成仅可入 KV，UI 发布为零 |
-| callback 已排入 GUI 队列后再 Delete，领域尚未完成 | PendingDelete 已使 request_id 无效；推进旧 callback 不更新仍存在的行 |
-| 同上但 owner 因锁/history 失败拒绝删除 | 原行/选择保留，PendingDelete 清除；新订阅可加载，旧 callback 仍不能发布 |
-| 删除 Group，多个子行请求未完成 | Group 与所有子行订阅均失效，删除不等待任何请求；每个晚到结果都不能恢复 UI |
-| 删除→Undo 恢复同 ID/同参数，旧回调最后执行 | 新订阅可命中缓存或加入仍在运行的同 Key 作业；旧 request_id 即使 Key 相同也不能发布 |
-| K1 慢完成、K2 先绑定；旧失败最后到达 | 只更新当前 K2；旧成功/失败均不能覆盖当前图或错误状态 |
-| 切图/checkout/Loader 销毁/delegate 复用/离屏 | 撤销旧接收资格，队列清理，缓存保留；回调不按 row index 写到其他对象 |
-| 项目关闭后旧结果到达，新项目使用相同 element 数字 ID | 不串项目，不重建旧 UI；旧 service 安全释放且 GUI 未 join worker |
-| 注入分配/求值/缓存插入失败，再显式重试 | 正确 Error、pending 清理；不缓存空图、不修改文档，之后合法请求可成功 |
-| 大量切图/滚动/commit 与面板关闭 | ready 严格有界；pending 不留取消目标，running≤1；显示句柄随可见项释放，无离屏永久表 |
-| 禁止磁盘 I/O 的 service fixture | 请求、命中、淘汰、关闭均不访问文件/DB/编码器；应用重启后从空内存缓存开始 |
+| Radial/Gradient/反相/羽化/opacity | 128×128 R8；独立解析期望；letterbox 反相后仍黑 |
+| Group 相交与半强度 | max 正确；两个 50% 的交集仍为 50% |
+| 无 Mask / 全关闭 | 前者没有请求；后者 Ready 全黑且关闭 rows 保留 |
+| 内容键 | 求值字段变化 miss；名称、锁、MaskId、revision 不改变同内容键；哈希碰撞比较完整 spec |
+| 相同参数不同 MaskId、Group 显示重排 | 相同内容复用；纯成员顺序变化命中 |
+| LRU 容量=3 与默认 1000 | 淘汰 LRU；`capacity()` 为 1000；淘汰后已取到的 QImage 句柄仍可读 |
+| commit 改变产生新 spec | 新 key miss；preview 路径不调用 Request |
+| 过期 request_id | 不能覆盖新 request；删除后晚到结果不能写 UI |
+| 删除失败后仍在的 Loading 行 | invalidate 后 url 为空；同 spec 的下一次 Sync 从 LRU 发布，不再 generate |
+| 只失效一个 Mask | 同组其它 row 的 request_id 与 url 不变 |
+| 销毁 receiver / 项目关闭 | 晚到 callback 无效；cache 仍可填充 |
+| 面板逐项 ready | Sync 不阻塞；url 在作业完成前为空，完成后只更新对应 target |
+
+不要求：subscriber 取消不影响其它 subscriber、pending 只保留 visible、
+running≤1、Group child request graph、PendingDelete 重建订阅。
 
 #### NM9.4.4 成功链、失败链与交付证据
 
-**成功链：** committed owner 数据 → 可见目标求 Key → service 命中/合并/排队 →
-后台解析求值或 Group max → LRU 插入 → GUI 核对当前订阅 → 单项角色更新 → Image
-读取共享输出 → reader 结束释放。每个环节均不要求其他缩略图先完成。
+**成功链：**
 
-**删除链：** 同一共享 controller 撤销订阅 → 领域异步删除 → 成功投影移除/失败新订阅；
-thumbnail worker 可以独立完成。取消结果回调不能反向触发删除、复原或选择命令。
+```text
+HistoryChanged / 已提交文档
+  -> EditorNodeController::PublishDocument
+  -> MaskThumbnailCoordinator::Sync
+  -> MaskThumbnailSpec (pixels only)
+  -> MaskThumbnailService::Request
+  -> LRU hit or worker RenderMaskThumbnail
+  -> queued GUI callback
+  -> request_id + spec 仍匹配 -> Image source
+```
 
-**失败链：** 原因返回有效订阅的 Error；已撤销订阅不发布。cache miss 是正常请求，
-取消是无显示结果，均不修改 history。项目关闭时旧任务仅释放自己持有的资源。
+**删除链：**
 
-交付实际 service/key/provider/controller 调用链、上述矩阵、生成/发布计数和内存上限。
-拟新增 `MaskThumbnailServiceTest` 与面板 thumbnail QML fixture（实施后填写实际目标），
-并沿已有 CUDA/OpenCL/Metal Mask 测试做解析像素对照；独立解析期望必须存在，不能只
-与生产函数自身比较。只修改 CPU/Qt 小图不要求重写三套 GPU 生成器；涉及的原生路径
-分别验证，Windows/macOS 的 QML 图像消费与生命周期分别记录实测或缺口。
+```text
+Delete
+  -> invalidate request_id
+  -> 领域删除
+       -> 成功：Sync 去掉 target；晚到 callback 丢弃
+       -> 失败：新 request_id + 当前 spec（常为 cache hit）
+```
+
+**失败链：** 求值错误不缓存空图；过期 request_id 丢弃。项目关闭时旧任务只释放自己
+持有的资源。
+
+交付 `MaskThumbnailServiceTest` 与 `MaskThumbnailCoordinatorTest`。不新增 Qt Quick
+Test harness。独立解析期望必须存在，不能只与生产 `RenderMaskThumbnail` 自身比较。
+
+##### Phase NM9.4 completion record (2026-09-17)
+
+**Status:** complete on `feature/mask-thumbnail-lru` — immutable `MaskThumbnailSpec` /
+content key, 1000-entry in-memory LRU, fire-and-forget CPU jobs, monotonic GUI
+`request_id`. No subscriber list, no `CancelRequest`, no PendingDelete thumbnail
+gate, no Group child request graph.
+
+**Primary success call chain:**
+
+```text
+HistoryChanged (history_revision advanced)
+  -> EditorNodeController::refreshFromSession / PublishDocument
+  -> MaskThumbnailCoordinator::Sync
+  -> MakeSingleMaskThumbnailSpec / MakeGroupMaskThumbnailSpec
+     (pixels only: geometry + layers; MaskId/NodeId omitted)
+  -> MaskThumbnailService::Request(spec, receiver, request_id, callback)
+  -> LRU hit posts GUI callback without a worker job
+     or one worker RenderMaskThumbnail(128×128 Grayscale8)
+  -> queued callback
+  -> OnResult: target exists, request_id matches, spec matches
+  -> MaskThumbnailImageStore::Put(request_id)
+  -> QML Image source = image://alcedo-mask-thumb/<request_id>
+```
+
+**Primary failure call chain:**
+
+```text
+Delete clicked
+  -> invalidateTarget / invalidateNode (bump request_id, keep shown URL)
+  -> domain delete (Enqueue RemoveMask / SubmitRemoveColorGradeAndBridge)
+       -> success: next Sync drops the target; late callback discarded;
+          cache may keep the 16 KiB image
+       -> failure: Sync or requestCurrent; empty URL re-requests current spec
+          (usually LRU hit); Ready URL stays until a new image is accepted
+Evaluate throw
+  -> error string, null QImage, no LRU insert
+Destroyed coordinator
+  -> QPointer captured at Request; queued callback no-ops; cache may fill
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| Spec omits identity; Group layers sort | `MaskThumbnailServiceTest.MaskThumbnailSpec.OmitsIdentityFieldsAndSortsGroupLayers` | PASS |
+| Parameter change produces a new key | `MaskThumbnailServiceTest.MaskThumbnailSpec.ParameterChangeProducesNewKey` | PASS |
+| Radial center white, corners black | `MaskThumbnailServiceTest.MaskThumbnailEvaluate.RadialCenterIsWhiteAndCornersStayBlack` | PASS |
+| Invert keeps letterbox black | `MaskThumbnailServiceTest.MaskThumbnailEvaluate.InvertKeepsLetterboxBlack` | PASS |
+| Group max keeps 50% at intersection | `MaskThumbnailServiceTest.MaskThumbnailEvaluate.GroupMaxKeepsHalfCoverageAtIntersection` | PASS |
+| Disabled single/group render black | `MaskThumbnailServiceTest.MaskThumbnailEvaluate.DisabledSingleRendersBlackAndAllDisabledGroupRendersBlack` | PASS |
+| Same spec different callers share pixels; hit skips worker | `MaskThumbnailServiceTest.MaskThumbnailService.CacheHitReusesPixelsForSameSpecDifferentCallers` | PASS |
+| Held job fills cache; late callback still runs | `MaskThumbnailServiceTest.MaskThumbnailService.HeldJobFillsCacheAndLateCallbackStillRuns` | PASS |
+| LRU evicts least-recent; Peek does not promote | `MaskThumbnailServiceTest.MaskThumbnailService.LruEvictsLeastRecentlyUsedAndPeekDoesNotPromote` | PASS |
+| Default capacity is 1000 | `MaskThumbnailServiceTest.MaskThumbnailService.DefaultCapacityIsOneThousand` | PASS |
+| Hash collision still compares full spec | `MaskThumbnailServiceTest.MaskThumbnailService.HashCollisionStillComparesFullSpec` | PASS |
+| Crop change misses; evicted QImage handle stays valid | `MaskThumbnailServiceTest.MaskThumbnailService.CropChangeMissesAndEvictedQImageHandleStaysValid` | PASS |
+| Empty Grade does not request; disabled members stay black | `MaskThumbnailCoordinatorTest.MaskThumbnailCoordinator.EmptyGradeDoesNotRequestAndDisabledMembersStayBlack` | PASS |
+| Same content different MaskIds share generated pixels | `MaskThumbnailCoordinatorTest.MaskThumbnailCoordinator.SameContentDifferentMaskIdsShareGeneratedPixels` | PASS |
+| Stale request_id does not publish | `MaskThumbnailCoordinatorTest.MaskThumbnailCoordinator.StaleRequestIdDoesNotPublish` | PASS |
+| Removed row drops late result; cache stays filled | `MaskThumbnailCoordinatorTest.MaskThumbnailCoordinator.RemovedRowDropsLateResultAndLeavesCacheFilled` | PASS |
+| Unchanged spec second Sync does not generate | `MaskThumbnailCoordinatorTest.MaskThumbnailCoordinator.SecondSyncOfUnchangedSpecDoesNotGenerateAgain` | PASS |
+| Destroyed receiver drops queued callback | `MaskThumbnailCoordinatorTest.MaskThumbnailCoordinator.DestroyedReceiverDropsQueuedCallback` | PASS |
+| Invalidate then Sync publishes from cache | `MaskThumbnailCoordinatorTest.MaskThumbnailCoordinator.InvalidateThenSyncSameDocumentPublishesFromCache` | PASS |
+| Invalidate one Mask leaves sibling request_id | `MaskThumbnailCoordinatorTest.MaskThumbnailCoordinator.InvalidateOneMaskLeavesSiblingRequestId` | PASS |
+| Missing geometry clears bindings | `MaskThumbnailCoordinatorTest.MaskThumbnailCoordinator.MissingGeometryClearsBindings` | PASS |
+
+Commands:
+
+```powershell
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target MaskThumbnailServiceTest --target MaskThumbnailCoordinatorTest
+ctest --test-dir build/debug -R MaskThumbnail --output-on-failure
+```
+
+Suite totals: `21/21` PASS (Windows debug, 2026-09-17 re-run after cache-hit / delete-rebind edits).
+
+**Checklist / exit condition:** NM9.4.1–NM9.4.3 implemented. QML Image is wired with `cache: false`. No new Qt Quick Test harness (explicit `wire_no_qmltest`). Preview skip is the `HistoryChanged` + `history_revision` gate in `OnSessionHistoryChanged`; PublishDocument always Syncs committed session documents.
+
+**LOC note (grill-code-review):** production files stay well under 1000 lines (`mask_thumbnail_spec.cpp` 263, `mask_thumbnail_evaluate.cpp` 122, `mask_thumbnail_service.cpp` 261, `mask_thumbnail_coordinator.cpp` 223, `mask_thumbnail_image_provider.cpp` 68). Tests: service 324, coordinator 226.
+
+**Remaining gaps:**
+
+- No panel QML / WorkspaceShellTest image-provider run in this phase.
+- Preview-not-requesting is not a dedicated `HistoryChanged` test; it follows the existing revision gate.
+- Async `RemoveMask` consume rejection after a successful Enqueue, while the row is still Loading, is not covered. Immediate Enqueue failure calls `requestCurrent`. Ready rows keep the shown URL.
+- Undo/Redo cache hit/miss is implied by spec keys, not a history-port test (NM9.5).
+- No disk I/O by construction; not proven by a filesystem spy.
 
 ### NM9.5 — 持久化与失败行为
 
@@ -1469,7 +1494,7 @@ ctest --test-dir build/debug --output-on-failure -R "^(EditorNodeGraphProjection
 | NM9.1 | `EditorNodeGraphProjectionTest`、`EditorNodeGraphDraftTest`、`EditorSessionNodeCommandTest`、`PipelineDocumentDefaultNameTest` | 结构、计数器与 history 提交次数；补对应 native 像素不变验证 |
 | NM9.2 | `GpuDagModelGraphTest`、`PipelineEditBatchTest`、`PipelineDocumentCheckpointTest`、`EditorSessionHistoryPortTest` | 全删除入口、格式、回放和 metadata 无渲染 |
 | NM9.3 | `EditorNodeSelectionLayoutTest`、`EditorNodesPanelQmlTest`、`EditorNodeDelegateQmlTest`、`AnalyticMaskCreationTest`、`WorkspaceShellTest` | 新面板生产 QML fixture、应用构建与真实交互 |
-| NM9.4 | 原生像素对照可用 `GpuDagCudaMaskTest`、`GpuDagOpenClGradeTest`、`GpuDagMetalGradeTest`；新增 service/QML 目标实施后登记 | 第 NM9.4.3 节完整矩阵、固定容量跨图 LRU、无磁盘、commit 触发、逐项显示与删除先于生成完成 |
+| NM9.4 | `MaskThumbnailServiceTest`、`MaskThumbnailCoordinatorTest`（Windows debug CTest）；原生像素对照仍可用既有 GPU DAG 目标 | 第 NM9.4.3 节矩阵、固定容量跨图 LRU、无磁盘、commit 触发、逐项显示与删除先于生成完成 |
 | NM9.5 | `EditorSessionHistoryPortTest`、`PipelineDocumentCheckpointTest` 及实际发现的 journal/recovery 用例 | 真实项目保存/reopen、受控异步交错和失败注入 |
 | NM9.6 | 相关回归集合与 `alcedo_main` 产品路径 | 优化构建、任务脚本、像素、UI、资源及打包加载 |
 
@@ -1513,8 +1538,8 @@ Windows configure/build/link 每次至少预留 10 分钟，CUDA 或较多目标
 
 ## 8. 完成记录
 
-NM9.1/NM9.2 已完成，记录见对应阶段；NM9.3–NM9.6 仍为 planned。本次完善规格不代表
-service 或新面板已实现。
+NM9.1/NM9.2 已完成；NM9.3 为 partial；**NM9.4 complete 2026-09-17** on
+`feature/mask-thumbnail-lru`；NM9.5–NM9.6 仍为 planned。记录见对应阶段。
 在各阶段对应小节后追加有日期的记录，并在本节维护简短索引，不删掉早期失败或平台
 缺证记录来使完成结果看起来更完整。
 

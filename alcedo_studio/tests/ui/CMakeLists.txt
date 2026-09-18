@@ -934,6 +934,32 @@ alcedo_ui_gtest_discover_tests(EditorNodeSelectionLayoutTest
     PROPERTIES LABELS "editor_nodes;workspace_qml")
 alcedo_register_test_target(EditorNodeSelectionLayoutTest ui)
 
+add_executable(MaskThumbnailCoordinatorTest
+    ${ALCEDO_TEST_ROOT}/ui/mask_thumbnail_coordinator_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(MaskThumbnailCoordinatorTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+    PRIVATE ${ALCEDO_TEST_ROOT}/edit/graph
+)
+target_link_libraries(MaskThumbnailCoordinatorTest
+    PRIVATE
+        AlbumBackendLib
+        EditorNodeGraphProjection
+        MaskThumbnailService
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Widgets
+        Qt6::Test
+)
+set_target_properties(MaskThumbnailCoordinatorTest PROPERTIES AUTOMOC ON)
+alcedo_ui_gtest_discover_tests(MaskThumbnailCoordinatorTest
+    TEST_PREFIX "MaskThumbnailCoordinatorTest."
+    PROPERTIES LABELS "editor_nodes")
+alcedo_register_test_target(MaskThumbnailCoordinatorTest ui)
+
 add_executable(ShortcutRegistryTest
     ${ALCEDO_TEST_ROOT}/ui/shortcut_registry_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp

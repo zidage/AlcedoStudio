@@ -608,6 +608,14 @@ gtest_discover_tests(ThumbnailServiceTest TEST_PREFIX "ThumbnailServiceTest.")
 
 alcedo_register_test_target(ThumbnailServiceTest app)
 
+add_executable(MaskThumbnailServiceTest ${ALCEDO_TEST_ROOT}/app/mask_thumbnail_service_test.cpp)
+target_include_directories(MaskThumbnailServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(MaskThumbnailServiceTest PRIVATE MaskThumbnailService GTest::gtest_main
+    Qt6::Gui)
+gtest_discover_tests(MaskThumbnailServiceTest TEST_PREFIX "MaskThumbnailServiceTest."
+    PROPERTIES LABELS "ci_core_flow")
+alcedo_register_test_target(MaskThumbnailServiceTest app ci_core)
+
 add_executable(PipelineSharedUseTest ${ALCEDO_TEST_ROOT}/app/pipeline_shared_use_test.cpp)
 target_include_directories(PipelineSharedUseTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(PipelineSharedUseTest ThumbnailService ExportService ProjectService

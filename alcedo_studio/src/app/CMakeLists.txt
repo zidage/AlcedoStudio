@@ -506,6 +506,17 @@ def_library(ThumbnailService
                 ThumbnailDiskCacheService Storage
 )
 
+def_library(MaskThumbnailService
+    SOURCES
+        "${ALCEDO_APP_ROOT}/mask_thumbnail_spec.cpp"
+        "${ALCEDO_APP_ROOT}/mask_thumbnail_evaluate.cpp"
+        "${ALCEDO_APP_ROOT}/mask_thumbnail_service.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/mask_thumbnail_spec.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/mask_thumbnail_evaluate.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/mask_thumbnail_service.hpp"
+    PUBLIC_DEPS Qt6::Core Qt6::Gui EditGeometry EditMaskCore
+)
+
 def_library(SemanticGenerationService
     SOURCES
         "${ALCEDO_APP_ROOT}/semantic_generation_service.cpp"

@@ -23,6 +23,8 @@ Item {
     property var nodeLayoutStore: null
 
     readonly property var maskCreation: root.editorSession ? root.editorSession.maskCreation : null
+    readonly property var maskThumbnails: root.nodeController ? root.nodeController.maskThumbnails
+                                                              : null
 
     property var groupsModel: []
     property int expansionRevision: 0
@@ -651,6 +653,7 @@ Item {
                     cardBorderColor: root.colCardBorder
                     selectionOutlineColor: appTheme.graphSelectionOutlineColor
                     selectionOutlineWidth: appTheme.graphSelectionOutlineWidth
+                    maskThumbnails: root.maskThumbnails
                     width: groupsList.width
 
                     onHeaderClicked: root.selectGroup(nodeId)

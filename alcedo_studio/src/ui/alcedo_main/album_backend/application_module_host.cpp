@@ -32,6 +32,7 @@
 #include "ui/alcedo_main/album_backend/editor_session_thumbnail_port.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
 #include "ui/alcedo_main/album_backend/thumbnail_image_provider.hpp"
+#include "ui/alcedo_main/album_backend/mask_thumbnail_image_provider.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
 
 namespace alcedo::ui {
@@ -325,7 +326,9 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   };
   lifecycle_hooks.project_opened = [library = library_.get(), folders = folders_.get(),
                                     stats = stats_.get(), import_export = import_export_.get(),
-                                    semantic = semantic_generation_.get()] {
+                                    semantic = semantic_generation_.get(),
+                                    editor_session = editor_session_.get(),
+                                    project = project_.get()] {
     const auto preferred_folder_path =
         folders ? folders->current_folder_path() : std::filesystem::path{};
     if (import_export) {
@@ -348,6 +351,9 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     }
     if (library) {
       library->ApplyThumbnailDiskCacheSettingsToService();
+    }
+    if (editor_session && project) {
+      editor_session->SetMaskThumbnailService(project->handler().mask_thumbnail_service());
     }
   };
   lifecycle_hooks.should_keep_semantic_model_data =
@@ -514,7 +520,14 @@ ApplicationModuleHost::~ApplicationModuleHost() {
 void ApplicationModuleHost::Shutdown() { ShutdownModules(); }
 
 void ApplicationModuleHost::AttachQmlEngine(QQmlEngine* engine) {
-  if (engine == nullptr || library_ == nullptr) {
+  if (engine == nullptr) {
+    return;
+  }
+
+  engine->addImageProvider(QString::fromUtf8(kMaskThumbnailImageProviderId),
+                           new MaskThumbnailImageProvider(SharedMaskThumbnailImageStore()));
+
+  if (library_ == nullptr) {
     return;
   }
 

@@ -12,6 +12,7 @@
 #include <thread>
 
 #include "app/project_package_service.hpp"
+#include "app/mask_thumbnail_service.hpp"
 #include "image/image.hpp"
 #include "ui/alcedo_main/album_backend/project_module.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
@@ -203,6 +204,7 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
           ph.meta_path_             = std::move(result->meta_path_);
           ph.project_package_path_  = std::move(result->package_path_);
           ph.project_workspace_dir_ = std::move(result->workspace_dir_);
+          ph.mask_thumbnail_service_ = std::make_shared<alcedo::MaskThumbnailService>();
 
           if (ph.project_) {
             (void)ph.project_->GetAiSidecarRuntimeService();

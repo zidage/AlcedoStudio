@@ -81,6 +81,25 @@ or owning-thread mechanism as appropriate. This does not require `std::atomic` f
 does not authorize unsynchronized in-place writes. Keep failure behavior explicit; a failed update
 must not leave partially applied state.
 
+### Require an executable interleaving before adding consistency mechanisms
+
+Do not add a version, generation, epoch, token, cancellation protocol, stale-result guard, or
+similar consistency mechanism for a race that is only theoretically possible. Before adding one,
+identify all of the following in the current production call chain:
+
+1. The exact two operations that can execute concurrently, including their owners, threads, or
+   executors.
+2. The exact two events that can be observed out of order, including the queue or callback boundary
+   that permits the reordering.
+3. An executable interleaving that reaches an incorrect state, together with a reproduction or test
+   that drives that real path.
+
+If no such interleaving exists, do not add the mechanism. Sequential state changes, possible future
+parallelism, defensive programming, and tests that inject values production cannot produce are not
+evidence of a race. This rule does not prohibit external-protocol identifiers, persisted format
+versions, user-requested cancellation, or mechanisms backed by a documented executable
+interleaving.
+
 ### Necessary copies and snapshots
 
 A snapshot is allowed only when a concrete requirement needs independent state, such as a

@@ -19,6 +19,7 @@
 #include "edit/graph/graph_ids.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "ui/alcedo_main/album_backend/editor_node_layout_store.hpp"
+#include "ui/alcedo_main/album_backend/mask_thumbnail_coordinator.hpp"
 
 namespace alcedo::ui {
 
@@ -79,6 +80,7 @@ class EditorNodeController : public QObject {
                  GraphAdapterChanged)
   Q_PROPERTY(QObject* layoutStore READ layout_store_object WRITE set_layout_store NOTIFY
                  LayoutStoreChanged)
+  Q_PROPERTY(QObject* maskThumbnails READ mask_thumbnails_object CONSTANT)
 
  public:
   explicit EditorNodeController(QObject* parent = nullptr);
@@ -292,6 +294,7 @@ class EditorNodeController : public QObject {
    */
   [[nodiscard]] auto layout_store_object() const -> QObject*;
   void               set_layout_store(QObject* store);
+  [[nodiscard]] auto mask_thumbnails_object() const -> QObject*;
 
   /**
    * @brief Set image/Version identity used by layout keys when no session is bound.
@@ -375,6 +378,9 @@ class EditorNodeController : public QObject {
   [[nodiscard]] auto AdapterShowsCurrentCommittedProjection() const -> bool;
   void               AdoptCommittedDocument(const PipelineDocument& document);
   [[nodiscard]] auto HasActiveGraph() const -> bool;
+  void               SyncMaskThumbnails(const PipelineDocument& document);
+  void               BindThumbnailGeometry();
+  void               NotePhotographGeometry();
 
   QPointer<EditorSessionController>                   session_;
   QPointer<AlcedoQanGraph>                            graph_adapter_;
@@ -384,6 +390,8 @@ class EditorNodeController : public QObject {
   QMetaObject::Connection                             availability_connection_;
   QMetaObject::Connection                             graph_adapter_connection_;
   QMetaObject::Connection                             layout_store_connection_;
+  QMetaObject::Connection                             presentation_binding_connection_;
+  QMetaObject::Connection                             presented_geometry_connection_;
   EditorNodeGraphSnapshot                             snapshot_{};
   bool                                                has_snapshot_ = false;
   alcedo::EditorMaskGroupSnapshot                     mask_group_snapshot_{};
@@ -413,6 +421,7 @@ class EditorNodeController : public QObject {
   int                                                 queued_projection_apply_count_        = 0;
   int                                                 completed_projection_apply_count_     = 0;
   int                                                 skipped_stale_projection_apply_count_ = 0;
+  MaskThumbnailCoordinator*                           mask_thumbnails_ = nullptr;
 };
 
 void RegisterEditorNodeQmlTypes();

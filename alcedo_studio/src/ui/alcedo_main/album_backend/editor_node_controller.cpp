@@ -21,6 +21,7 @@
 #include "ui/alcedo_main/album_backend/editor_node_layout_store.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
 #include "ui/alcedo_main/shortcut_registry.hpp"
+#include "ui/editor_rhi/editor_viewport_item.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -78,7 +79,8 @@ auto SameProjectionContent(const EditorNodeGraphSnapshot& lhs, const EditorNodeG
 
 }  // namespace
 
-EditorNodeController::EditorNodeController(QObject* parent) : QObject(parent) {}
+EditorNodeController::EditorNodeController(QObject* parent)
+    : QObject(parent), mask_thumbnails_(new MaskThumbnailCoordinator(this)) {}
 
 EditorNodeController::~EditorNodeController() {
   if (graph_adapter_ != nullptr) {
@@ -108,6 +110,17 @@ void EditorNodeController::DisconnectSession() {
     QObject::disconnect(availability_connection_);
     availability_connection_ = {};
   }
+  if (presentation_binding_connection_) {
+    QObject::disconnect(presentation_binding_connection_);
+    presentation_binding_connection_ = {};
+  }
+  if (presented_geometry_connection_) {
+    QObject::disconnect(presented_geometry_connection_);
+    presented_geometry_connection_ = {};
+  }
+  if (mask_thumbnails_ != nullptr) {
+    mask_thumbnails_->SetService(nullptr);
+  }
   session_.clear();
 }
 
@@ -127,6 +140,13 @@ void EditorNodeController::set_editor_session(QObject* session) {
     availability_connection_ =
         connect(session_.data(), &EditorSessionController::ActionAvailabilityChanged, this,
                 &EditorNodeController::ActionAvailabilityChanged);
+    presentation_binding_connection_ =
+        connect(session_.data(), &EditorSessionController::PresentationBindingChanged, this,
+                &EditorNodeController::BindThumbnailGeometry);
+    if (mask_thumbnails_ != nullptr) {
+      mask_thumbnails_->SetService(session_->mask_thumbnail_service());
+    }
+    BindThumbnailGeometry();
   }
   emit EditorSessionChanged();
   submitted_identity_.reset();
@@ -197,6 +217,9 @@ void EditorNodeController::ClearSnapshot() {
   emit ActionAvailabilityChanged();
   if (had_mask_groups) {
     emit MaskGroupsChanged();
+  }
+  if (mask_thumbnails_ != nullptr) {
+    mask_thumbnails_->Clear();
   }
 }
 
@@ -477,7 +500,9 @@ auto EditorNodeController::PublishDocument(const PipelineDocument& document,
     if (!PublishSnapshot(std::move(built))) {
       return false;
     }
-    return PublishMaskGroupSnapshot(std::move(groups));
+    const auto groups_ok = PublishMaskGroupSnapshot(std::move(groups));
+    SyncMaskThumbnails(document);
+    return groups_ok;
   } catch (const std::exception& ex) {
     SetLastError(QString::fromUtf8(ex.what()));
     return false;
@@ -592,6 +617,61 @@ void EditorNodeController::set_graph_adapter(QObject* adapter) {
 }
 
 auto EditorNodeController::layout_store_object() const -> QObject* { return layout_store_.data(); }
+
+auto EditorNodeController::mask_thumbnails_object() const -> QObject* { return mask_thumbnails_; }
+
+void EditorNodeController::SyncMaskThumbnails(const PipelineDocument& document) {
+  if (mask_thumbnails_ == nullptr) {
+    return;
+  }
+  if (session_ != nullptr) {
+    mask_thumbnails_->SetService(session_->mask_thumbnail_service());
+  } else {
+    mask_thumbnails_->SetService(nullptr);
+  }
+  if (!has_mask_group_snapshot_) {
+    return;
+  }
+  mask_thumbnails_->Sync(document, mask_group_snapshot_);
+}
+
+void EditorNodeController::BindThumbnailGeometry() {
+  if (presented_geometry_connection_) {
+    QObject::disconnect(presented_geometry_connection_);
+    presented_geometry_connection_ = {};
+  }
+  if (session_ == nullptr) {
+    return;
+  }
+  auto* viewport =
+      qobject_cast<alcedo::editor_rhi::EditorViewportItem*>(session_->presentation_viewport());
+  if (viewport == nullptr) {
+    return;
+  }
+  presented_geometry_connection_ =
+      connect(viewport, &alcedo::editor_rhi::EditorViewportItem::PresentedMaskGeometryChanged, this,
+              &EditorNodeController::NotePhotographGeometry);
+  NotePhotographGeometry();
+}
+
+void EditorNodeController::NotePhotographGeometry() {
+  if (session_ == nullptr || mask_thumbnails_ == nullptr) {
+    return;
+  }
+  auto* viewport =
+      qobject_cast<alcedo::editor_rhi::EditorViewportItem*>(session_->presentation_viewport());
+  if (viewport == nullptr) {
+    return;
+  }
+  const auto extent = viewport->presentedMaskGeometry().full_reference_extent;
+  if (!mask_thumbnails_->SetFullReference(extent)) {
+    return;
+  }
+  const auto document = session_->pipeline_document();
+  if (document) {
+    SyncMaskThumbnails(*document);
+  }
+}
 
 void EditorNodeController::set_layout_store(QObject* store) {
   auto* layout = qobject_cast<EditorNodeLayoutStore*>(store);
@@ -1054,9 +1134,16 @@ bool EditorNodeController::removeMaskGroup(const QString& node_id) {
   }
   SetCommandActive(true);
   const auto reset_active = qScopeGuard([this] { SetCommandActive(false); });
+  if (mask_thumbnails_ != nullptr) {
+    mask_thumbnails_->invalidateNode(node_id);
+  }
   const auto result       = session_->SubmitRemoveColorGradeAndBridge(id);
   if (alcedo::EditorSessionResultIsFailure(result.kind)) {
     SetLastError(QString::fromStdString(result.message));
+    const auto document = session_->pipeline_document();
+    if (document) {
+      SyncMaskThumbnails(*document);
+    }
     return false;
   }
   refreshFromSession();
@@ -1352,7 +1439,10 @@ void EditorNodeController::AdoptCommittedDocument(const PipelineDocument& docume
     mask_group_snapshot_     = std::move(groups);
     has_mask_group_snapshot_ = true;
     emit MaskGroupsChanged();
+  } else {
+    mask_group_snapshot_ = std::move(groups);
   }
+  SyncMaskThumbnails(document);
 }
 
 auto EditorNodeController::ApplyDraftMutationToAdapter(
