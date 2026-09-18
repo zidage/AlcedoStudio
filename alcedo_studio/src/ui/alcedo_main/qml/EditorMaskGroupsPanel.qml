@@ -324,6 +324,17 @@ Item {
         root.nodeController.removeMaskGroup(nodeId)
     }
 
+    // Drag-and-drop reorder entry point: targetIndex is the final position in
+    // the downstream-first list (0 = nearest DRT/Post). One drop becomes one
+    // Nodes-page topology delta and follows the same owner path as connector
+    // edits.
+    function moveGroupToIndex(nodeId, targetIndex) {
+        if (!root.nodeController || !root.structureEditable) {
+            return
+        }
+        root.nodeController.moveMaskGroupToIndex(nodeId, targetIndex)
+    }
+
     function addMaskGroup() {
         if (!root.structureEditable) {
             return
@@ -498,6 +509,93 @@ Item {
                 property real preservedContentY: 0
                 property bool restoringContentY: false
 
+                // Drag reorder state. groupPointerIndex is the row currently
+                // holding the pointer (disables flick immediately on press).
+                // groupDragSourceIndex / groupDragSlot are only set once the
+                // card actually moves; -1 means no drag is in progress.
+                property int groupPointerIndex: -1
+                property int groupDragSourceIndex: -1
+                property int groupDragSlot: -1
+                interactive: groupPointerIndex < 0
+
+                // Nearest insertion boundary for a card position in content
+                // coordinates: the first row whose midpoint sits below the
+                // dragged card. Off-screen (non-instantiated) rows are skipped,
+                // so the slot can never jump beyond the visible range.
+                function groupDropSlot(contentY) {
+                    var count = root.groupsModel.length
+                    var slot = count
+                    for (var i = 0; i < count; ++i) {
+                        var item = itemAtIndex(i)
+                        if (!item) {
+                            continue
+                        }
+                        if (contentY < item.y + item.height / 2) {
+                            slot = i
+                            break
+                        }
+                        slot = i + 1
+                    }
+                    return Math.min(slot, count)
+                }
+
+                function beginGroupDrag(index) {
+                    groupDragSourceIndex = index
+                    groupDragSlot = index
+                }
+
+                function updateGroupDrag(contentY) {
+                    groupDragSlot = groupDropSlot(contentY)
+                }
+
+                function noteGroupPointer(index, pressed) {
+                    groupPointerIndex = pressed ? index : -1
+                }
+
+                function cancelGroupDrag() {
+                    groupPointerIndex = -1
+                    groupDragSourceIndex = -1
+                    groupDragSlot = -1
+                }
+
+                // Removing the source row shifts every boundary after it down
+                // by one, so a slot past the source maps to slot - 1.
+                function finishGroupDrag(nodeId, index, contentY) {
+                    var source = groupDragSourceIndex >= 0 ? groupDragSourceIndex
+                                                         : index
+                    var slot = groupDropSlot(contentY)
+                    groupPointerIndex = -1
+                    groupDragSourceIndex = -1
+                    groupDragSlot = -1
+                    var count = root.groupsModel.length
+                    var target = slot > source ? slot - 1 : slot
+                    target = Math.max(0, Math.min(count - 1, target))
+                    if (target !== source && String(nodeId).length > 0) {
+                        root.moveGroupToIndex(nodeId, target)
+                    }
+                }
+
+                // Hairline position for the current insertion boundary: the gap
+                // between rows slot-1 and slot, centered on the list spacing.
+                // Boundary slots clamp into the content rect — the ideal gap
+                // position sits half a spacing outside the first/last card,
+                // which the ListView clip would hide entirely.
+                function groupDropIndicatorY() {
+                    var maxY = Math.max(0, contentHeight - 2)
+                    var slot = groupDragSlot
+                    if (slot <= 0) {
+                        var first = itemAtIndex(0)
+                        return Math.max(0, Math.min(maxY,
+                            first ? first.y - spacing / 2 - 1 : 0))
+                    }
+                    var previous = itemAtIndex(slot - 1)
+                    if (previous) {
+                        return Math.max(0, Math.min(maxY,
+                            previous.y + previous.height + spacing / 2 - 1))
+                    }
+                    return maxY
+                }
+
                 onContentYChanged: {
                     if (!restoringContentY) {
                         preservedContentY = contentY
@@ -545,6 +643,7 @@ Item {
                     }
                     actionsEnabled: root.structureEditable
                     actionsDisabledReason: root.structureDisabledReason
+                    reorderEnabled: root.structureEditable && root.groupsModel.length > 1
                     textColor: root.colText
                     mutedColor: root.colMuted
                     hoverColor: appTheme.hoverColor
@@ -562,6 +661,20 @@ Item {
                     }
                     onLockClicked: root.toggleGroupLock(nodeId, !deletionProtected)
                     onDeleteClicked: root.removeGroup(nodeId)
+                    onReorderDragStarted: groupsList.beginGroupDrag(index)
+                    onReorderDragMoved: function (contentY) {
+                        groupsList.updateGroupDrag(contentY)
+                    }
+                    onReorderDropped: function (contentY) {
+                        groupsList.finishGroupDrag(nodeId, index, contentY)
+                    }
+                    onReorderPressChanged: function (pressed) {
+                        groupsList.noteGroupPointer(index, pressed)
+                    }
+                    onReorderCanceled: groupsList.cancelGroupDrag()
+                    onReorderStepRequested: function (delta) {
+                        root.moveGroupToIndex(nodeId, index + delta)
+                    }
                     onMaskClicked: function (maskIndex) {
                         root.selectMaskFromGroup(nodeId, root.maskIdAt(index, maskIndex))
                     }
@@ -581,6 +694,20 @@ Item {
                     onHeaderNavigate: function (delta) {
                         root.navigateRow(index, -1, delta)
                     }
+                }
+
+                // Drop-slot hairline: tracks groupDragSlot while a card is
+                // dragged. Lives in the content item so it scrolls with rows.
+                Rectangle {
+                    id: dropIndicator
+                    objectName: "editorMaskGroupDropIndicator"
+                    z: 3
+                    width: groupsList.width
+                    height: 2
+                    radius: 1
+                    color: appTheme.accentColor
+                    visible: groupsList.groupDragSlot >= 0
+                    y: groupsList.groupDropIndicatorY()
                 }
             }
 

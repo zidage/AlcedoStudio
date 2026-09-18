@@ -7,7 +7,9 @@ Status: **NM9.1 complete 2026-09-16**；**NM9.2 complete 2026-09-16**；**NM9.3 
 语义和实施拆分；NM9.1 的共享组投影、顶部插入、桥接删除与草稿
 边界已在 `feature/nm91-mask-group-projection` 实现并通过验证，见 NM9.1 完成记录。
 NM9.2 的删除保护、默认 Grade 身份与格式读写已在 `feature/nm92-deletion-protection`
-实现并通过验证，见 NM9.2 完成记录；NM9.3 见其完成记录。
+实现并通过验证，见 NM9.2 完成记录；NM9.3 见其完成记录，组顺序调整（每次移动即一次
+主链重连 + 一条 typed history commit + 一次渲染请求）已在 `feature/mask-groups-panel`
+实现并通过验证，见 2026-09-17 ordering increment 记录。
 
 Design update 2026-09-16：用户已选择方案 C（缩略图优先）。当前 Mask 合成在 UI 中只称
 `Add`，内部保持 Union；每个 Mask 和 Group 均有独立删除按钮。缩略图采用项目级内存
@@ -1097,6 +1099,87 @@ changed-file count and responsibility assessment remain outstanding.
 
 **Residual gaps:** DPR 1.5/2 visual verification and the complete NM9.3 interaction matrix
 remain unproven. These are NM9.3 acceptance requirements, not work transferred to NM9.5.
+
+##### Phase NM9.3 ordering increment record (2026-09-17)
+
+**Status:** Mask Group ordering implemented and revised to reuse the Nodes topology-edit
+path. One drop produces one `NodeGraphTopologyChange`, one typed history commit, and one
+`GraphTopologyChanged` render request; the wider NM9.3 acceptance gaps above are unchanged
+by this increment.
+
+**Primary success call chain (drag-and-drop reorder, revised 2026-09-17):**
+
+```text
+whole-header / drawer-body MouseArea drag (EditorMaskGroupDelegate dragBody,
+  Y axis; action buttons and mask rows keep their own handling)
+  -> reorderDragStarted/Moved/Dropped(contentY)
+  -> EditorMaskGroupsPanel groupDropSlot: nearest insertion boundary from
+     sibling midpoints -> accent hairline indicator clamped inside the
+     content rect so the top/bottom slots stay visible during drag
+  -> finishGroupDrag maps boundary -> final downstream-first index
+  -> EditorNodeController::moveMaskGroupToIndex(nodeId, targetIndex)
+     maps the downstream-first row order back to Develop-to-DRT identity order
+     (index 0 = nearest DRT; last = nearest Develop; out-of-range clamps;
+      same index = accepted no-op with no command)
+  -> short-lived EditorNodeGraphDraft connects each adjacent identity in final order
+     and materializes the minimal NodeGraphTopologyChange (no node copies inserted/removed)
+  -> EditorSessionController::SubmitNodeGraphTopologyEdit
+  -> EditorSessionService::EditNodeGraph (queued off-owner; session/generation checks)
+  -> IEditorHistoryPort::EditNodeGraph
+  -> EditorSessionHistoryPort -> EditorHistoryMutation::EditNodeGraph
+  -> MakeEditNodeGraphBatch -> typed NodeGraphTopologyChange commit
+  -> RenderReasonForBatch -> EditorRenderReason::GraphTopologyChanged
+  -> projection refresh -> Nodes and Mask Groups rows agree; selection preserved
+
+Keyboard parity: Ctrl+Up / Ctrl+Down on the focused header calls the same
+moveMaskGroupToIndex with index -1/+1.
+```
+
+**Primary failure call chain:**
+
+```text
+endpoint, unknown id, non-grade, draft, stale generation
+  -> rejected before submission, no backend call
+drop on the same slot / clamped to current index -> accepted no-op:
+  no command, no commit, no render; card snaps back
+invalid generated topology -> local draft rejects before submission
+journal append failure -> batch rollback restores document, head, and render
+  reason; the card snaps back to its row and the exact error surfaces
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `MoveMaskGroupToIndexMovesAcrossMultiplePositionsAndKeepsSelection` (multi-slot drop = one topology command; delta has no inserted/removed nodes and exactly the changed edges), `MoveMaskGroupToIndexClampsOutOfRangeIndices`, `MoveMaskGroupToIndexSameSlotIsAnAcceptedNoOp` (including a single-group backbone), `MoveMaskGroupToIndexRejectsEndpointsUnknownDraftStaleAndFailure` | `EditorNodeSelectionLayoutTest` filtered run | 4/4 PASS |
+| `MaskGroupDragReordersCardAndRewiresBackbone`, `MaskGroupDragToBottomSlotRewiresBackboneTowardDevelop`, `MaskGroupDragFromCardEdgeShowsEdgeSlotIndicators`, `MaskGroupDragWithinOwnSlotDoesNotSubmitCommand`, `MaskGroupDragDoesNotStartWhileStructureLocked`, `MaskGroupCtrlArrowMovesGroupOneStep`, `MaskGroupDragFailureKeepsRowUntilRetry` | `EditorNodesPanelQmlTest` filtered run | 7/7 PASS |
+
+Commands:
+`cmd /c scripts\msvc_env.cmd --build build\debug --target EditorNodeSelectionLayoutTest EditorNodesPanelQmlTest --parallel 4`, followed by the two filtered runs above.
+
+**UI notes (revised 2026-09-17 — replaces the earlier chevron-pair design):**
+reordering is drag-and-drop on the card itself. The drag surface is the
+whole header minus the lock/delete buttons plus the drawer body around the
+mask rows — grabbing the fold-arrow zone, preview, name, or empty card space
+all lift the same `dragBody` (card + open drawer) on the Y axis while the
+delegate slot stays fixed, so sibling midpoints — and thus the drop-slot
+resolution — stay stable. A 2 px `appTheme.accentColor` hairline inside the
+ListView content item marks the live insertion boundary (`groupDragSlot`);
+its y is clamped into the content rect so the first/top and last/bottom
+slots stay visible instead of clipping outside the list bounds. The dragged
+card dims to 94% and the list flick is disabled while a drag is active. A
+drop is mapped boundary→index accounting for the source-row shift
+(`slot > source ? slot - 1 : slot`), then goes through the same
+`structureEditable` gate as every other structure command; a rejected or
+same-slot drop animates the card back via the `y` Behavior and submits
+nothing. Keyboard parity is Ctrl+Up / Ctrl+Down on the focused header
+(reorderEnabled rows also advertise it in `Accessible.description`). The
+compact-button exception was removed with the chevrons; DESIGN.md documents
+the drag affordance instead.
+
+**Residual gaps:** same as the 2026-09-16 record (DPR/visual matrix, WorkspaceShellTest
+serial isolation). Ordering adds no new snapshot or parallel model: rows keep
+reading the shared `mask_group_snapshot` projection after each committed move.
 
 ### NM9.4 — 跨图内存 LRU 与提交后异步缩略图
 

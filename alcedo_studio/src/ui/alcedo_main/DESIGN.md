@@ -888,6 +888,7 @@ row delegate and arrow affordance automatically.
 | Location | Exception | Why |
 | --- | --- | --- |
 | History / Versions rail | compact 40 px hit, 32 px well, 18 px SVG | Quiet tools inside a 48 px persistent rail |
+| Mask Group drag reorder | whole card lifts under the header name area (dims to 94%), 2 px accent hairline marks the insertion slot; no reorder buttons on the row | Reordering is a drag-and-drop interaction; Ctrl+Up/Ctrl+Down on the focused header covers keyboard and accessibility, so no compact hit areas are needed |
 | Window caption buttons | custom canvas 16 px glyphs on Windows/Linux; hidden on macOS | OS-chrome parity, not content SVG set. macOS uses the system traffic lights in the expanded client area |
 
 ---

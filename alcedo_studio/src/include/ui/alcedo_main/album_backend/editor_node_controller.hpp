@@ -141,7 +141,7 @@ class EditorNodeController : public QObject {
    */
   Q_INVOKABLE void selectNode(const QString& node_id);
   /// Select the panel owner, returning to the last live Color Grade when possible.
-  void SelectNodeForAdjustmentPanel(const QString& panel);
+  void             SelectNodeForAdjustmentPanel(const QString& panel);
   Q_INVOKABLE void selectPreviousBackboneNode();
   Q_INVOKABLE void selectNextBackboneNode();
   Q_INVOKABLE void selectDevelop();
@@ -168,6 +168,17 @@ class EditorNodeController : public QObject {
    * endpoints, non-Color-Grade ids, stale generations, and any live draft.
    */
   Q_INVOKABLE bool removeMaskGroup(const QString& node_id);
+  /**
+   * @brief Mask Groups: move one Color Grade to @p target_index in the
+   * downstream-first group order the panel displays (0 = nearest DRT/Post).
+   *
+   * Converts the reordered backbone into the same NodeGraphTopologyChange used
+   * by the Nodes page, then submits one history commit and one topology render
+   * request. Out-of-range indices clamp to the list ends; targeting the current
+   * index is an accepted no-op that submits nothing. Rejects endpoints,
+   * non-Color-Grade ids, stale generations, and any live draft.
+   */
+  Q_INVOKABLE bool moveMaskGroupToIndex(const QString& node_id, int target_index);
   /**
    * @brief Switch the tool panel to the Nodes page and select @p node_id.
    *
@@ -380,15 +391,15 @@ class EditorNodeController : public QObject {
   NodeId                                              selected_node_id_;
   NodeId                                              last_selected_color_grade_id_;
   NodeId                                              selection_restore_node_id_;
-  bool                                                command_active_          = false;
-  bool                                                projection_apply_queued_ = false;
-  bool                                                applying_layout_         = false;
-  quint64                                             session_generation_      = 0;
+  bool                                                command_active_            = false;
+  bool                                                projection_apply_queued_   = false;
+  bool                                                applying_layout_           = false;
+  quint64                                             session_generation_        = 0;
   quint64                                             observed_history_revision_ = 0;
-  quint64                                             projection_revision_     = 0;
-  quint64                                             topology_revision_       = 0;
-  quint64                                             element_id_              = 0;
-  quint64                                             image_id_                = 0;
+  quint64                                             projection_revision_       = 0;
+  quint64                                             topology_revision_         = 0;
+  quint64                                             element_id_                = 0;
+  quint64                                             image_id_                  = 0;
   QString                                             version_id_;
   quint64                                             snapshot_element_id_ = 0;
   quint64                                             snapshot_image_id_   = 0;
