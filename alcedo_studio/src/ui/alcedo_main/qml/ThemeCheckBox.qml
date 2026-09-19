@@ -10,7 +10,14 @@ Item {
     objectName: "themeCheckBox"
 
     property bool checked: false
+    // Optional tri-state marker for bulk controls whose children may be partly
+    // selected. Toggling a partial row selects everything (checked -> true).
+    property bool partiallyChecked: false
     property string text: ""
+    // Optional trailing value text (e.g. the item's display value).
+    property string valueText: ""
+    // Accessible name override; falls back to text when empty.
+    property string accessibleText: ""
     property bool enabled: true
     /// When true, label stays textColor even while unchecked (static captions).
     property bool alwaysPrimaryText: false
@@ -23,9 +30,10 @@ Item {
     Layout.fillWidth: true
     activeFocusOnTab: enabled
     Accessible.role: Accessible.CheckBox
-    Accessible.name: text
+    Accessible.name: root.accessibleText.length > 0 ? root.accessibleText : root.text
     Accessible.checkable: true
     Accessible.checked: checked
+    Accessible.checkStateMixed: root.partiallyChecked
     Accessible.onToggleAction: toggle()
 
     function toggle() {
@@ -65,18 +73,28 @@ Item {
             Layout.preferredHeight: appTheme.iconOpticalSizeCompact
             Layout.alignment: Qt.AlignVCenter
             radius: appTheme.badgeRadius
-            color: root.checked
+            color: (root.checked || root.partiallyChecked)
                    ? appTheme.editorListSelectedFillColor
                    : "transparent"
             border.width: 1
-            border.color: root.checked
+            border.color: (root.checked || root.partiallyChecked)
                           ? appTheme.editorListSelectedFillColor
                           : appTheme.cardBorderColor
 
             Label {
                 anchors.centerIn: parent
-                visible: root.checked
+                visible: root.checked && !root.partiallyChecked
                 text: "✓"
+                color: appTheme.editorListSelectedInkColor
+                font.family: appTheme.uiFontFamily
+                font.pixelSize: appTheme.fontSizeCaption
+                font.weight: appTheme.fontWeightHeading
+            }
+
+            Label {
+                anchors.centerIn: parent
+                visible: root.partiallyChecked
+                text: "–"
                 color: appTheme.editorListSelectedInkColor
                 font.family: appTheme.uiFontFamily
                 font.pixelSize: appTheme.fontSizeCaption
@@ -87,13 +105,28 @@ Item {
         Label {
             Layout.fillWidth: true
             Layout.alignment: Qt.AlignVCenter
+            visible: root.text.length > 0
             text: root.text
-            color: (root.checked || root.alwaysPrimaryText)
+            color: (root.checked || root.partiallyChecked || root.alwaysPrimaryText)
                    ? appTheme.textColor
                    : appTheme.textMutedColor
             font.family: appTheme.uiFontFamily
             font.pixelSize: appTheme.fontSizeBody
             elide: Text.ElideRight
+        }
+
+        Label {
+            Layout.maximumWidth: root.width / 3
+            Layout.alignment: Qt.AlignVCenter
+            visible: root.valueText.length > 0
+            text: root.valueText
+            color: root.enabled && (root.checked || root.partiallyChecked)
+                   ? appTheme.textColor
+                   : appTheme.textMutedColor
+            font.family: appTheme.dataFontFamily
+            font.pixelSize: appTheme.fontSizeCaption
+            horizontalAlignment: Text.AlignRight
+            elide: Text.ElideMiddle
         }
     }
 

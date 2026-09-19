@@ -38,8 +38,8 @@ Button {
     padding: 0
     hoverEnabled: true
     font.family: appTheme.uiFontFamily
-    font.pixelSize: 14
-    font.weight: 800
+    font.pixelSize: appTheme.fontSizeSection
+    font.weight: appTheme.fontWeightHeading
 
     contentItem: Label {
         text: control.text

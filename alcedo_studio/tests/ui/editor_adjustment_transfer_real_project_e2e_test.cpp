@@ -4,24 +4,26 @@
 /// @file editor_adjustment_transfer_real_project_e2e_test.cpp
 /// @brief Replays Copy/Paste through production Main.qml on a packed project.
 
-#include "support/harness_completing_pipeline_scheduler_port.hpp"
-#include "ui/main_qml_test_fixture.hpp"
-
 #include <gtest/gtest.h>
 
+#include <QAbstractItemModel>
 #include <QPoint>
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QTest>
 #include <QVariantList>
 #include <QVariantMap>
-
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <functional>
 #include <string>
+
+#include "support/harness_completing_pipeline_scheduler_port.hpp"
+#include "ui/alcedo_main/album_backend/adjustment_transfer_dialog_model.hpp"
+#include "ui/alcedo_main/album_backend/adjustment_transfer_list_models.hpp"
+#include "ui/main_qml_test_fixture.hpp"
 
 namespace alcedo::ui::test {
 namespace {
@@ -66,14 +68,32 @@ auto RowForKey(const QVariantList& rows, const QString& key) -> QVariantMap {
   return {};
 }
 
+/// Project the focused node's item list model into the same row-map shape the
+/// summary helpers consume: {key, label, value, checked, enabled}.
+auto ItemRowsAsMaps(const QAbstractItemModel* model) -> QVariantList {
+  QVariantList rows;
+  if (model == nullptr) {
+    return rows;
+  }
+  for (int row = 0; row < model->rowCount(); ++row) {
+    const auto index = model->index(row, 0);
+    rows.push_back(QVariantMap{
+        {"key", model->data(index, AdjustmentTransferItemListModel::ItemKeyRole)},
+        {"label", model->data(index, AdjustmentTransferItemListModel::DisplayNameRole)},
+        {"value", model->data(index, AdjustmentTransferItemListModel::DisplayValueRole)},
+        {"checked", model->data(index, AdjustmentTransferItemListModel::CheckedRole)},
+        {"enabled", model->data(index, AdjustmentTransferItemListModel::EnabledRole)},
+    });
+  }
+  return rows;
+}
+
 auto ThumbnailPoint(const QQuickItem& thumbnail_grid, int index) -> QPoint {
-  const auto columns = std::max(1, thumbnail_grid.property("columns").toInt());
+  const auto columns    = std::max(1, thumbnail_grid.property("columns").toInt());
   const auto cell_width = std::max(72, static_cast<int>(thumbnail_grid.width() / columns));
-  const auto column = index % columns;
-  const auto row = index / columns;
-  return thumbnail_grid
-      .mapToScene(QPointF(cell_width * column + 48, 48 + row * 96))
-      .toPoint();
+  const auto column     = index % columns;
+  const auto row        = index / columns;
+  return thumbnail_grid.mapToScene(QPointF(cell_width * column + 48, 48 + row * 96)).toPoint();
 }
 
 auto CenterOfItem(const QQuickItem& item) -> QPoint {
@@ -82,10 +102,9 @@ auto CenterOfItem(const QQuickItem& item) -> QPoint {
 
 auto FindVisibleThumbnailGrid(QQuickWindow* window, int timeout_ms) -> QQuickItem* {
   QQuickItem* thumbnail_grid = nullptr;
-  const auto found = WaitUntil(
+  const auto  found          = WaitUntil(
       [&] {
-        thumbnail_grid =
-            window->findChild<QQuickItem*>(QStringLiteral("libraryThumbnailGridView"));
+        thumbnail_grid = window->findChild<QQuickItem*>(QStringLiteral("libraryThumbnailGridView"));
         return thumbnail_grid != nullptr && thumbnail_grid->isVisible() &&
                thumbnail_grid->width() > 0 && thumbnail_grid->height() > 0;
       },
@@ -138,8 +157,8 @@ TEST_F(MainQmlTestFixture, RealPackedProjectCopyPasteReloadsToneSnapshot) {
   // Forward completion: coordinator installs on_complete at Schedule.
   coordinator->SetPipelineSchedulerPort(std::move(harness));
 
-  const auto first  = loaded->host.library()->Thumbnails().at(0).toMap();
-  const auto second = loaded->host.library()->Thumbnails().at(1).toMap();
+  const auto first          = loaded->host.library()->Thumbnails().at(0).toMap();
+  const auto second         = loaded->host.library()->Thumbnails().at(1).toMap();
   const uint source_element = first.value(QStringLiteral("elementId")).toUInt();
   const uint source_image   = first.value(QStringLiteral("imageId")).toUInt();
   const uint target_element = second.value(QStringLiteral("elementId")).toUInt();
@@ -150,8 +169,8 @@ TEST_F(MainQmlTestFixture, RealPackedProjectCopyPasteReloadsToneSnapshot) {
   ASSERT_GT(target_image, 0u);
   ASSERT_NE(source_element, target_element);
 
-  auto* window  = loaded->window;
-  auto* session = loaded->host.editor_session();
+  auto* window       = loaded->window;
+  auto* session      = loaded->host.editor_session();
   auto* context_menu = window->findChild<QObject*>(QStringLiteral("imageContextMenu"));
   ASSERT_NE(session, nullptr);
   ASSERT_NE(context_menu, nullptr);
@@ -161,28 +180,28 @@ TEST_F(MainQmlTestFixture, RealPackedProjectCopyPasteReloadsToneSnapshot) {
   ASSERT_NE(source_grid, nullptr);
   ProcessEvents(100);  // Let GridView lay out the first two real project delegates.
   QTest::mouseDClick(window, Qt::LeftButton, Qt::NoModifier, ThumbnailPoint(*source_grid, 0));
-  ASSERT_TRUE(WaitUntil([&] {
-    return session->has_image() && session->element_id() == source_element;
-  }, 30000));
-  QObject* source_exposure_model = nullptr;
-  QObject* source_shadows_model = nullptr;
+  ASSERT_TRUE(WaitUntil(
+      [&] { return session->has_image() && session->element_id() == source_element; }, 30000));
+  QObject* source_exposure_model   = nullptr;
+  QObject* source_shadows_model    = nullptr;
   QObject* source_highlights_model = nullptr;
-  ASSERT_TRUE(WaitUntil([&] {
-    source_exposure_model = window->findChild<QObject*>(QStringLiteral("toneExposureModel"));
-    source_shadows_model = window->findChild<QObject*>(QStringLiteral("toneShadowsModel"));
-    source_highlights_model =
-        window->findChild<QObject*>(QStringLiteral("toneHighlightsModel"));
-    return !session->adjustment_snapshot().isEmpty() &&
-           source_exposure_model != nullptr && source_shadows_model != nullptr &&
-           source_highlights_model != nullptr;
-  }, 30000));
-  const double source_panel_exposure = source_exposure_model->property("value").toDouble();
-  const double source_panel_shadows = source_shadows_model->property("value").toDouble();
+  ASSERT_TRUE(WaitUntil(
+      [&] {
+        source_exposure_model = window->findChild<QObject*>(QStringLiteral("toneExposureModel"));
+        source_shadows_model  = window->findChild<QObject*>(QStringLiteral("toneShadowsModel"));
+        source_highlights_model =
+            window->findChild<QObject*>(QStringLiteral("toneHighlightsModel"));
+        return !session->adjustment_snapshot().isEmpty() && source_exposure_model != nullptr &&
+               source_shadows_model != nullptr && source_highlights_model != nullptr;
+      },
+      30000));
+  const double source_panel_exposure   = source_exposure_model->property("value").toDouble();
+  const double source_panel_shadows    = source_shadows_model->property("value").toDouble();
   const double source_panel_highlights = source_highlights_model->property("value").toDouble();
 
   // The transfer menu is owned by the library grid. Finish the source editor
   // session before replaying the grid's Copy/Paste context-menu workflow.
-  auto* library_nav = window->findChild<QQuickItem*>(QStringLiteral("libraryNavButton"));
+  auto*        library_nav = window->findChild<QQuickItem*>(QStringLiteral("libraryNavButton"));
   ASSERT_NE(library_nav, nullptr);
   QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(*library_nav));
   ASSERT_TRUE(WaitUntil([&] { return !session->has_image(); }, 30000));
@@ -191,93 +210,101 @@ TEST_F(MainQmlTestFixture, RealPackedProjectCopyPasteReloadsToneSnapshot) {
   auto* thumbnail_grid = FindVisibleThumbnailGrid(window, 30000);
   ASSERT_NE(thumbnail_grid, nullptr);
   QTest::mouseClick(window, Qt::RightButton, Qt::NoModifier, ThumbnailPoint(*thumbnail_grid, 0));
-  ASSERT_TRUE(WaitUntil([&] {
-    return window->property("pendingAdjustmentSource").toMap().value("elementId").toUInt() ==
-           source_element;
-  }, 5000));
+  ASSERT_TRUE(WaitUntil(
+      [&] {
+        return window->property("pendingAdjustmentSource").toMap().value("elementId").toUInt() ==
+               source_element;
+      },
+      5000));
   ASSERT_TRUE(ClickEnabledItem(window, QStringLiteral("imageContextAction_copy-adjustments")));
 
   auto* dialog = window->findChild<QObject*>(QStringLiteral("adjustmentTransferDialog"));
   ASSERT_NE(dialog, nullptr);
   ASSERT_TRUE(dialog->property("visible").toBool() || dialog->property("opened").toBool());
-  const auto source_versions = dialog->property("sourceVersions").toList();
-  ASSERT_FALSE(source_versions.isEmpty());
+  auto* dialog_model = qobject_cast<AdjustmentTransferDialogModel*>(
+      dialog->property("dialogModel").value<QObject*>());
+  ASSERT_NE(dialog_model, nullptr);
+  ASSERT_GT(dialog_model->versions()->rowCount(), 0);
   EXPECT_FALSE(dialog->property("selectedSourceVersionId").toString().isEmpty());
 
-  const auto source_rows = dialog->property("adjustmentRows").toList();
-  const auto source_exposure = RowForKey(source_rows, QStringLiteral("exposure"));
-  const auto source_shadows = RowForKey(source_rows, QStringLiteral("shadows"));
-  const auto source_highlights = RowForKey(source_rows, QStringLiteral("highlights"));
+  const auto source_rows     = ItemRowsAsMaps(dialog_model->items());
+  const auto source_exposure = RowForKey(source_rows, QStringLiteral("adj:grade.primary.exposure"));
+  const auto source_shadows  = RowForKey(source_rows, QStringLiteral("adj:grade.primary.shadows"));
+  const auto source_highlights =
+      RowForKey(source_rows, QStringLiteral("adj:grade.primary.highlights"));
   ASSERT_FALSE(source_exposure.isEmpty());
   ASSERT_FALSE(source_shadows.isEmpty());
   ASSERT_FALSE(source_highlights.isEmpty());
-  EXPECT_NE(source_exposure.value(QStringLiteral("value")).toString(),
-            QStringLiteral("0.00"));
-  EXPECT_NEAR(source_panel_exposure,
-              source_exposure.value(QStringLiteral("value")).toDouble(), 0.02);
-  EXPECT_DOUBLE_EQ(source_panel_shadows,
-                   source_shadows.value(QStringLiteral("value")).toDouble());
+  EXPECT_NE(source_exposure.value(QStringLiteral("value")).toString(), QStringLiteral("0.00"));
+  EXPECT_NEAR(source_panel_exposure, source_exposure.value(QStringLiteral("value")).toDouble(),
+              0.02);
+  EXPECT_DOUBLE_EQ(source_panel_shadows, source_shadows.value(QStringLiteral("value")).toDouble());
   EXPECT_DOUBLE_EQ(source_panel_highlights,
                    source_highlights.value(QStringLiteral("value")).toDouble());
 
   ASSERT_FALSE(FindCheckedKeys(source_rows).isEmpty());
   ASSERT_TRUE(ClickEnabledItem(window, QStringLiteral("adjustmentTransferAcceptButton")));
-  ASSERT_TRUE(WaitUntil([&] {
-    return !dialog->property("visible").toBool() && !dialog->property("opened").toBool();
-  }, 5000));
+  ASSERT_TRUE(WaitUntil(
+      [&] { return !dialog->property("visible").toBool() && !dialog->property("opened").toBool(); },
+      5000));
 
   auto* transfer = loaded->host.adjustment_transfer();
   ASSERT_NE(transfer, nullptr);
   ASSERT_TRUE(transfer->package_available());
-  const auto copied_rows = transfer->package_summary();
-  const auto copied_exposure = RowForKey(copied_rows, QStringLiteral("exposure"));
+  const auto copied_rows     = transfer->package_summary();
+  const auto copied_exposure = RowForKey(copied_rows, QStringLiteral("adj:grade.primary.exposure"));
   ASSERT_FALSE(copied_exposure.isEmpty());
   EXPECT_EQ(copied_exposure.value(QStringLiteral("value")),
             source_exposure.value(QStringLiteral("value")));
 
   // Use the second image's actual context-menu path for Paste as well.
   QTest::mouseClick(window, Qt::RightButton, Qt::NoModifier, ThumbnailPoint(*thumbnail_grid, 1));
-  ASSERT_TRUE(WaitUntil([&] {
-    return window->property("pendingAdjustmentSource").toMap().value("elementId").toUInt() ==
-           target_element;
-  }, 5000));
+  ASSERT_TRUE(WaitUntil(
+      [&] {
+        return window->property("pendingAdjustmentSource").toMap().value("elementId").toUInt() ==
+               target_element;
+      },
+      5000));
   ASSERT_TRUE(ClickEnabledItem(window, QStringLiteral("imageContextAction_paste-adjustments")));
   ASSERT_TRUE(dialog->property("visible").toBool() || dialog->property("opened").toBool());
   EXPECT_EQ(dialog->property("mode").toString(), QStringLiteral("paste"));
   EXPECT_EQ(dialog->property("adjustmentRows").toList(), copied_rows);
   ASSERT_TRUE(ClickEnabledItem(window, QStringLiteral("adjustmentTransferAcceptButton")));
-  ASSERT_TRUE(WaitUntil([&] {
-    return !dialog->property("visible").toBool() && !dialog->property("opened").toBool();
-  }, 5000));
+  ASSERT_TRUE(WaitUntil(
+      [&] { return !dialog->property("visible").toBool() && !dialog->property("opened").toBool(); },
+      5000));
 
   // Open the pasted target, then close it so the next open reads the persisted
   // target pipeline through the same history/session path as a user reopening it.
   ProcessEvents(100);
   QTest::mouseDClick(window, Qt::LeftButton, Qt::NoModifier, ThumbnailPoint(*thumbnail_grid, 1));
-  ASSERT_TRUE(WaitUntil([&] {
-    return session->has_image() && session->element_id() == target_element;
-  }, 30000));
-  ASSERT_TRUE(WaitUntil([&] {
-    const auto history = session->history_snapshot();
-    return std::ranges::any_of(history.versions, [](const auto& version) {
-      return version.active && version.display_name == "Pasted Adjustments";
-    });
-  }, 5000))
+  ASSERT_TRUE(WaitUntil(
+      [&] { return session->has_image() && session->element_id() == target_element; }, 30000));
+  ASSERT_TRUE(WaitUntil(
+      [&] {
+        const auto history = session->history_snapshot();
+        return std::ranges::any_of(history.versions, [](const auto& version) {
+          return version.active && version.display_name == "Pasted Adjustments";
+        });
+      },
+      5000))
       << "Library Paste did not publish its root-relative Version to the reopened editor";
 
   auto* target_exposure_model = window->findChild<QObject*>(QStringLiteral("toneExposureModel"));
-  auto* target_shadows_model = window->findChild<QObject*>(QStringLiteral("toneShadowsModel"));
+  auto* target_shadows_model  = window->findChild<QObject*>(QStringLiteral("toneShadowsModel"));
   auto* target_highlights_model =
       window->findChild<QObject*>(QStringLiteral("toneHighlightsModel"));
   ASSERT_NE(target_exposure_model, nullptr);
   ASSERT_NE(target_shadows_model, nullptr);
   ASSERT_NE(target_highlights_model, nullptr);
-  ASSERT_TRUE(WaitUntil([&] {
-    return std::abs(target_exposure_model->property("value").toDouble() - source_panel_exposure) <
-               0.02 &&
-           target_shadows_model->property("value").toDouble() == source_panel_shadows &&
-           target_highlights_model->property("value").toDouble() == source_panel_highlights;
-  }, 30000));
+  ASSERT_TRUE(WaitUntil(
+      [&] {
+        return std::abs(target_exposure_model->property("value").toDouble() -
+                        source_panel_exposure) < 0.02 &&
+               target_shadows_model->property("value").toDouble() == source_panel_shadows &&
+               target_highlights_model->property("value").toDouble() == source_panel_highlights;
+      },
+      30000));
   library_nav = window->findChild<QQuickItem*>(QStringLiteral("libraryNavButton"));
   ASSERT_NE(library_nav, nullptr);
   QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(*library_nav));
@@ -286,12 +313,11 @@ TEST_F(MainQmlTestFixture, RealPackedProjectCopyPasteReloadsToneSnapshot) {
   ASSERT_NE(reopened_grid, nullptr);
   ProcessEvents(100);
   QTest::mouseDClick(window, Qt::LeftButton, Qt::NoModifier, ThumbnailPoint(*reopened_grid, 1));
-  ASSERT_TRUE(WaitUntil([&] {
-    return session->has_image() && session->element_id() == target_element;
-  }, 30000));
+  ASSERT_TRUE(WaitUntil(
+      [&] { return session->has_image() && session->element_id() == target_element; }, 30000));
 
-  auto* exposure_model = window->findChild<QObject*>(QStringLiteral("toneExposureModel"));
-  auto* shadows_model = window->findChild<QObject*>(QStringLiteral("toneShadowsModel"));
+  auto* exposure_model   = window->findChild<QObject*>(QStringLiteral("toneExposureModel"));
+  auto* shadows_model    = window->findChild<QObject*>(QStringLiteral("toneShadowsModel"));
   auto* highlights_model = window->findChild<QObject*>(QStringLiteral("toneHighlightsModel"));
   ASSERT_NE(exposure_model, nullptr);
   ASSERT_NE(shadows_model, nullptr);
@@ -306,10 +332,10 @@ TEST_F(MainQmlTestFixture, RealPackedProjectCopyPasteReloadsToneSnapshot) {
   ASSERT_TRUE(reopened_snapshot.contains(QStringLiteral("highlights")));
   EXPECT_DOUBLE_EQ(
       reopened_snapshot.value(QStringLiteral("exposure")).toMap().value("exposure").toDouble(),
-                   exposure_model->property("value").toDouble());
+      exposure_model->property("value").toDouble());
   EXPECT_DOUBLE_EQ(
       reopened_snapshot.value(QStringLiteral("shadows")).toMap().value("shadows").toDouble(),
-                   shadows_model->property("value").toDouble());
+      shadows_model->property("value").toDouble());
   EXPECT_DOUBLE_EQ(
       reopened_snapshot.value(QStringLiteral("highlights")).toMap().value("highlights").toDouble(),
       highlights_model->property("value").toDouble());
@@ -321,18 +347,18 @@ TEST_F(MainQmlTestFixture, RealPackedProjectCopyPasteReloadsToneSnapshot) {
                    source_highlights.value(QStringLiteral("value")).toDouble());
 
   const auto version_count_before_editor_paste = session->history_snapshot().versions.size();
-  const auto editor_paste = transfer->PasteIntoEditor(session);
+  const auto editor_paste                      = transfer->PasteIntoEditor(session);
   ASSERT_TRUE(editor_paste.value(QStringLiteral("success")).toBool())
       << editor_paste.value(QStringLiteral("message")).toString().toStdString();
-  ASSERT_TRUE(WaitUntil([&] {
-    return session->can_edit() &&
-           session->history_snapshot().versions.size() ==
-               version_count_before_editor_paste + 1;
-  }, 30000));
-  EXPECT_FALSE(session->last_history_failed())
-      << session->last_history_message().toStdString();
-  EXPECT_FALSE(session->last_error().contains(
-      QStringLiteral("mini-Git journal fold does not match")));
+  ASSERT_TRUE(WaitUntil(
+      [&] {
+        return session->can_edit() &&
+               session->history_snapshot().versions.size() == version_count_before_editor_paste + 1;
+      },
+      30000));
+  EXPECT_FALSE(session->last_history_failed()) << session->last_history_message().toStdString();
+  EXPECT_FALSE(
+      session->last_error().contains(QStringLiteral("mini-Git journal fold does not match")));
 }
 
 }  // namespace

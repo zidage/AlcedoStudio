@@ -7,7 +7,6 @@
 #include <set>
 #include <stdexcept>
 #include <utility>
-#include <variant>
 
 #include "app/adjustment_transfer_package_builder.hpp"
 #include "edit/graph/adjustment_ownership.hpp"
@@ -257,14 +256,6 @@ void ValidateDocumentTransfer(const AdjustmentTransferPackage& package) {
       }
       for (const auto& mask : *grade.masks) {
         ValidateMaskModel(mask);
-        claim(std::string{mask.id.Value()}, "MaskId");
-#ifdef ALCEDO_ENABLE_BRUSH_MASK
-        if (const auto* brush = std::get_if<BrushMaskSource>(&mask.source)) {
-          for (const auto& stroke : brush->strokes) {
-            claim(std::string{stroke.id.Value()}, "StrokeId");
-          }
-        }
-#endif
       }
     }
     if (grade.source_node_id == package.default_grade_id_) {

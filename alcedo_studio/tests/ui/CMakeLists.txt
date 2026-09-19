@@ -353,6 +353,12 @@ alcedo_register_test_target(ApplicationModuleHostLifecycleTest ui)
 def_ui_test(ApplicationModuleHostShutdownTest application_module_host_shutdown_test.cpp)
 alcedo_register_test_target(ApplicationModuleHostShutdownTest ui)
 
+def_ui_test(AdjustmentTransferDialogModelTest adjustment_transfer_dialog_model_test.cpp)
+alcedo_register_test_target(AdjustmentTransferDialogModelTest ui)
+
+def_ui_test(AdjustmentTransferControllerTest adjustment_transfer_controller_test.cpp)
+alcedo_register_test_target(AdjustmentTransferControllerTest ui)
+
 # Phase 0: deterministic editor RHI contracts (backend parse, fixtures, lease schema).
 add_executable(EditorRhiContractsTest
     ${ALCEDO_TEST_ROOT}/ui/editor_rhi_contracts_test.cpp
@@ -1393,8 +1399,9 @@ alcedo_ui_gtest_discover_tests(EditorAdjustmentTransferActionsQmlTest
 )
 alcedo_register_test_target(EditorAdjustmentTransferActionsQmlTest ui)
 
-# Paste-only transfer dialog: verifies the real AdjustmentTransferDialog loads
-# in paste mode without a merge strategy switcher or merge accept label.
+# Transfer dialog: verifies the real AdjustmentTransferDialog three-pane copy
+# surface and the read-only paste node/item summary, without a merge strategy
+# switcher or merge accept label.
 add_executable(AdjustmentTransferDialogQmlTest
     ${ALCEDO_TEST_ROOT}/ui/editor_adjustment_transfer_dialog_qml_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
@@ -1405,6 +1412,7 @@ target_include_directories(AdjustmentTransferDialogQmlTest
 )
 target_link_libraries(AdjustmentTransferDialogQmlTest
     PRIVATE
+        AlbumBackendLib
         AppTheme
         GTest::gtest
         Qt6::Core

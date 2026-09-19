@@ -125,6 +125,9 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_session_render_scheduler_port.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/workspace_router.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/adjustment_transfer_controller.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/adjustment_transfer_dialog_model.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/adjustment_transfer_list_models.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/adjustment_transfer_apply_coordinator.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/editor_support/controllers/image_controller.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/editor_support/controllers/pipeline_controller.cpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/application_module_host.hpp"
@@ -198,6 +201,9 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_session_render_scheduler_port.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/workspace_router.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/adjustment_transfer_controller.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/adjustment_transfer_dialog_model.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/adjustment_transfer_list_models.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/adjustment_transfer_apply_coordinator.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_support/controllers/image_controller.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/editor_support/controllers/pipeline_controller.hpp"
 )
@@ -223,6 +229,7 @@ target_link_libraries(AlbumBackendLib
         ExportService
         PipelineMgmtService
         AdjustmentTransferService
+        AdjustmentTransferCatalog
         EditorSessionService
         EditorMaskCreationController
         EditorAdjustmentPipeline
@@ -566,6 +573,9 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/ExportNamingEditor.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/ThemedProgressBar.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AdjustmentTransferDialog.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/AdjustmentTransferVersionPane.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/AdjustmentTransferNodePane.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/AdjustmentTransferItemPane.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/SettingDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/WelcomeDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/UpdateNotice.qml"

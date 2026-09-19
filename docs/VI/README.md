@@ -101,3 +101,75 @@ Review the panel at 260 px, 320 px, and 460 px widths in both themes:
 4. Click the main group header once in each drawer state. Confirm that it
    closes when open and opens when closed. Confirm that lock and delete clicks
    do not toggle it.
+
+## Adjustment Transfer dialog
+
+### `AdjustmentTransferDialog.qml`
+
+- Own only the modal shell: header, backdrop, footer actions, and the pane
+  `RowLayout`. Pane visuals live in the three pane files below.
+- The footer holds only the fixed `Cancel` and mode action
+  (`Copy Adjustments` / `Paste Adjustments`) `DialogActionButton`s. No numeric
+  summaries, counts, or dynamic action labels.
+- All enabled action-button text stays white; the primary action keeps the
+  documented accent CTA fill. Never pair a blue or accent fill with dark text.
+
+### `AdjustmentTransferVersionPane.qml`
+
+- Read-only Version catalog rows: initial-letter tile, display name, timestamp,
+  and a separate trailing `Active` caption. Do not use compound-dot labels such
+  as `Active · time`.
+- Selected Version row uses `editorListSelectedFillColor` with
+  `editorListSelectedInkColor` for every glyph and label. Hover stays the quiet
+  `buttonHoveredFillColor` wash; keyboard focus is a 1 px `textColor` outline
+  owned by the list, independent from selection.
+
+### `AdjustmentTransferNodePane.qml`
+
+- Copy mode shows a `Select All` three-state `ThemeCheckBox` and a `Clear`
+  `DialogActionButton` in the pane header; paste mode hides that row and every
+  row checkbox (`readOnly`).
+- The focused node uses the monochrome selected well + ink. Row checkboxes are
+  box-only `ThemeCheckBox` instances; the row body still owns node focus, so
+  the checkbox must not fill the row.
+- Focus and inclusion stay independent: clicking a row body focuses the node;
+  clicking its checkbox toggles the derived node check state.
+
+### `AdjustmentTransferItemPane.qml`
+
+- Same `Select All` / `Clear` header language as the node pane, scoped to the
+  focused node only. Paste mode hides the header and renders read-only rows
+  with no checkbox.
+- Each Color Grade exposes exactly one all-or-none `Masks` row; it is disabled
+  when the grade owns no Masks. Never render one checkbox per Mask.
+- Item rows group under caption section headers (`Tone`, `Look`, `LUT`,
+  `Display Transform`, `Masks`) separated by `dividerColor` hairlines.
+- Replay errors surface as a `dangerColor` caption above the item well; an
+  empty item list shows `No transferable adjustments.` in muted text.
+
+### Shared state language
+
+| State | Required treatment |
+| --- | --- |
+| Selected / focused row | `editorListSelectedFillColor` well + `editorListSelectedInkColor` ink; no accent fill, border, or stripe. |
+| Checked / partial checkbox | Bone well + ink mark via `ThemeCheckBox`; partial uses the ink dash mark. |
+| Hover | `buttonHoveredFillColor` wash; never replaces selection. |
+| Keyboard focus | 1 px `textColor` outline on the focused list row; visible independently from selection. |
+| Disabled row | Muted text and disabled checkbox state; the Masks row dims rather than disappearing. |
+
+### Manual review
+
+Review the dialog at 260 px / 320 px / 460 px pane widths, in both Alcedo and
+Classic themes, and at DPR 1.0, 1.5, and 2.0:
+
+1. Copy mode: confirm the Version, node, and item panes render with stable
+   widths and that `Select All` / `Clear` act on their own scope only.
+2. Confirm focus and inclusion are independent: a focused node keeps its
+   checkbox state; a checked node stays checked when focus moves.
+3. Confirm the Masks row is a single all-or-none checkbox.
+4. Confirm scroll positions in all three lists survive checkbox and focus
+   changes.
+5. Confirm Tab reaches the Version, node, and item lists and then the footer
+   actions, and that Space / Enter behave as documented.
+6. Paste mode: confirm read-only node and item panes with no selection
+   controls and no numeric footer.
