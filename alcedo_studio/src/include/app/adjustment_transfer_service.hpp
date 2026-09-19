@@ -7,7 +7,7 @@
 #include <string>
 
 #include "app/adjustment_transfer_types.hpp"
-#include "app/document_transfer.hpp"
+#include "app/document_transfer_planner.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "json.hpp"

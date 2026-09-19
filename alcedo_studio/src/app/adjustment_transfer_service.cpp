@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <utility>
 
+#include "app/document_transfer.hpp"
 #include "edit/history/edit_commit.hpp"
 
 namespace alcedo {
@@ -75,7 +76,7 @@ auto AdjustmentTransferService::PasteAsRootRelativeVersion(
   result.prior_version_id = graph.GetActiveVersionId();
   PreparedDocumentPaste prepared;
   try {
-    prepared = PrepareDocumentPaste(package, root_document, options);
+    prepared = DocumentTransferPlanner::Plan(package, root_document, options);
   } catch (const std::exception& ex) {
     result.error = ex.what();
     return result;

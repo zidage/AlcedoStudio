@@ -15,6 +15,7 @@
 
 #include "app/adjustment_transfer_service.hpp"
 #include "app/document_transfer.hpp"
+#include "app/document_transfer_planner.hpp"
 #include "edit/operators/utils/color_utils.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
 #include "ui/alcedo_main/album_backend/adjustment_transfer_controller.hpp"
