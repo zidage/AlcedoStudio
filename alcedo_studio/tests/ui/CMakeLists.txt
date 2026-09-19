@@ -981,11 +981,12 @@ target_link_libraries(ShortcutRegistryTest
         Qt6::Core
         Qt6::Gui
         Qt6::Qml
+        Qt6::Test
 )
 set_target_properties(ShortcutRegistryTest PROPERTIES AUTOMOC ON)
 alcedo_ui_gtest_discover_tests(ShortcutRegistryTest
     TEST_PREFIX "ShortcutRegistryTest."
-    PROPERTIES LABELS "editor_nodes")
+    PROPERTIES LABELS "keyboard_shortcuts;workspace_qml")
 alcedo_register_test_target(ShortcutRegistryTest ui)
 
 # Nodes rail page: Loader lifetime, selection, layout restore, Fit, no render.

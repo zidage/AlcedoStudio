@@ -280,14 +280,15 @@ Item {
         if (!root.nodeController || !root.graphReady) {
             return
         }
-        const id = ShortcutRegistry.commandIdForKey(event.key, event.modifiers)
+        const id = ShortcutRegistry.commandIdForKey("editor.nodes", event.key,
+                                                  event.modifiers)
         if (id === "nodes.addColorGrade") {
             root.addColorGrade()
         } else if (id === "nodes.fitGraph") {
             root.fitGraph()
         } else if (id === "nodes.renameColorGrade") {
             root.beginRename()
-        } else if (id === "nodes.deleteColorGrade") {
+        } else if (id === "nodes.deleteSelection") {
             if (root.renameVisible) {
                 return
             }
