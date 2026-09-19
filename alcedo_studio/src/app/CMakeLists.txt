@@ -287,6 +287,16 @@ def_library(AdjustmentTransferService
     PRIVATE_DEPS EditorAdjustmentPipeline EditorPipelineCommandService
 )
 
+# Read-only Version catalog for the Adjustment Transfer source column. Replays
+# one selected Version from the immutable root into an independent document and
+# builds stable node/item descriptors. Qt-free application layer.
+def_library(AdjustmentTransferCatalog
+    SOURCES
+        "${ALCEDO_APP_ROOT}/adjustment_transfer_catalog.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/adjustment_transfer_catalog.hpp"
+    PUBLIC_DEPS PipelineHistoryApplier EditGraph EditHistory
+)
+
 def_library(EditHistoryMgmtService
     SOURCES "${ALCEDO_APP_ROOT}/history_mgmt_service.cpp"
     PUBLIC_DEPS ProjectService EditHistory
