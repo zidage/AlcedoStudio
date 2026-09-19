@@ -339,6 +339,30 @@ TEST(DocumentTransferTest, MasksSelectionCopiesEveryOwnedMaskOrNoMask) {
                std::runtime_error);
 }
 
+TEST(DocumentTransferTest, PackageAllowsSameMaskIdAcrossDifferentGrades) {
+  auto document = CreateDefaultPipelineDocument();
+  ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.b"}).empty());
+  const auto backbone = ColorGradesOnImageBackbone(document);
+  ASSERT_EQ(backbone.size(), 2u);
+  auto* second = dynamic_cast<ColorGradeNodeModel*>(document.Graph().FindNode(NodeId{"grade.b"}));
+  ASSERT_NE(second, nullptr);
+  grade_mask_test::AddMask(*document.PrimaryGrade(),
+                          grade_mask_test::MakeRadialMask(MaskId{"mask.radial.1"}));
+  grade_mask_test::AddMask(*second, grade_mask_test::MakeRadialMask(MaskId{"mask.radial.1"}));
+
+  const auto package =
+      AdjustmentTransferPackageBuilder::Build(document, SelectAllTransferableItems(document));
+  ASSERT_EQ(package.color_grades_.size(), 2u);
+  for (const auto& grade : package.color_grades_) {
+    ASSERT_TRUE(grade.masks.has_value());
+    ASSERT_EQ(grade.masks->size(), 1u);
+    EXPECT_EQ(grade.masks->front().id, MaskId{"mask.radial.1"});
+  }
+
+  const auto round_tripped = ImportDocumentTransfer(ExportDocumentTransfer(package));
+  EXPECT_EQ(round_tripped.fingerprint_, package.fingerprint_);
+}
+
 TEST(DocumentTransferTest, DrtOnlySelectionCreatesNonEmptyTransferPackage) {
   auto        document = CreateDefaultPipelineDocument();
   const auto* drt      = document.Drt();
