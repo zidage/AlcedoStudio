@@ -264,7 +264,8 @@ Item {
                 delegate: Rectangle {
                     id: resultRow
                     width: ListView.view.width
-                    height: modelSubtitle.length > 0 ? 56 : 44
+                    height: Math.max(modelSubtitle.length > 0 ? 56 : 44,
+                                     resultColumn.implicitHeight + appTheme.spaceMd)
                     radius: 7
                     color: rowHit.pressed
                            ? combo.pressedItemColor
@@ -275,6 +276,7 @@ Item {
                     readonly property string modelSubtitle: combo.optionSubtitle(modelData)
 
                     ColumnLayout {
+                        id: resultColumn
                         anchors.fill: parent
                         anchors.leftMargin: 10
                         anchors.rightMargin: 10
@@ -288,7 +290,7 @@ Item {
                             color: combo.textColor
                             font.pixelSize: 13
                             font.weight: 700
-                            elide: Text.ElideRight
+                            wrapMode: Text.Wrap
                         }
 
                         Label {
@@ -298,7 +300,7 @@ Item {
                             color: combo.mutedTextColor
                             font.family: combo.dataFontFamily
                             font.pixelSize: 11
-                            elide: Text.ElideMiddle
+                            wrapMode: Text.Wrap
                         }
 
                         Item { Layout.fillHeight: true }
@@ -331,7 +333,7 @@ Item {
                 color: combo.mutedTextColor
                 font.pixelSize: 12
                 verticalAlignment: Text.AlignVCenter
-                elide: Text.ElideRight
+                wrapMode: Text.Wrap
             }
         }
     }

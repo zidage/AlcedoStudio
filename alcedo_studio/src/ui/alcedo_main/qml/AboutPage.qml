@@ -440,13 +440,15 @@ ColumnLayout {
                         required property string license
 
                         Layout.fillWidth: true
-                        Layout.preferredHeight: 40
+                        Layout.preferredHeight: Math.max(40, licenseRow.implicitHeight
+                                                         + appTheme.spaceSm)
                         radius: 8
                         color: appTheme.bgBaseColor
                         border.width: 1
                         border.color: appTheme.cardBorderColor
 
                         RowLayout {
+                            id: licenseRow
                             anchors.fill: parent
                             anchors.leftMargin: 14
                             anchors.rightMargin: 14
@@ -458,7 +460,7 @@ ColumnLayout {
                                 color: page.textColor
                                 font.pixelSize: 13
                                 font.weight: 600
-                                elide: Text.ElideRight
+                                wrapMode: Text.Wrap
                             }
 
                             Label {
@@ -576,7 +578,6 @@ ColumnLayout {
                     color: linkMouse.containsMouse ? row.accent : row.textColor
                     font.pixelSize: 14
                     font.weight: 600
-                    elide: Text.ElideRight
                     wrapMode: Text.WordWrap
                     lineHeight: 1.25
                 }
@@ -589,7 +590,7 @@ ColumnLayout {
                     font.family: row.dataFontFamily
                     font.pixelSize: 12
                     font.weight: 500
-                    elide: Text.ElideMiddle
+                    wrapMode: Text.Wrap
                 }
             }
 

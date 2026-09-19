@@ -180,14 +180,16 @@ Item {
 
         RowLayout {
             Layout.fillWidth: true
-            Layout.preferredHeight: appTheme.lineHeightCaption
+            Layout.preferredHeight: Math.max(appTheme.lineHeightCaption,
+                                             wbRowTitle.implicitHeight)
             spacing: appTheme.spaceSm
             Text {
+                id: wbRowTitle
                 Layout.fillWidth: true
                 text: row.title
                 color: root.colText
                 font.pixelSize: appTheme.fontSizeCaption
-                elide: Text.ElideRight
+                wrapMode: Text.Wrap
             }
             Text {
                 text: row.valueText

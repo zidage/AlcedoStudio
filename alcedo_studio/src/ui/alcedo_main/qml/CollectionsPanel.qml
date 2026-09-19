@@ -215,7 +215,8 @@ ColumnLayout {
                         required property var modelData
 
                         Layout.fillWidth: true
-                        Layout.preferredHeight: 32
+                        Layout.preferredHeight: Math.max(32, utilityTabRow.implicitHeight
+                                                         + appTheme.spaceXs)
                         radius: 8
                         opacity: actionEnabled ? 1.0 : 0.48
                         readonly property bool actionEnabled: modelData.tabId !== "advanced-analysis"
@@ -227,6 +228,7 @@ ColumnLayout {
                                   : "transparent")
 
                         RowLayout {
+                            id: utilityTabRow
                             anchors.fill: parent
                             anchors.leftMargin: 2
                             anchors.rightMargin: 8
@@ -251,7 +253,7 @@ ColumnLayout {
                                 font.family: appTheme.uiFontFamily
                                 font.pixelSize: 13
                                 font.weight: 600
-                                elide: Text.ElideRight
+                                wrapMode: Text.Wrap
                                 verticalAlignment: Text.AlignVCenter
                             }
                         }
@@ -484,7 +486,7 @@ ColumnLayout {
                     required property var modelData
 
                     width: ListView.view.width
-                    height: 52
+                    height: Math.max(52, folderRowLayout.implicitHeight + appTheme.spaceMd)
 
                     readonly property bool selected: modelData.folderId === Number(panel.foldersModule.currentFolderId)
 
@@ -514,6 +516,7 @@ ColumnLayout {
                         }
 
                         RowLayout {
+                            id: folderRowLayout
                             anchors.fill: parent
                             anchors.leftMargin: 10 + modelData.depth * 14
                             anchors.rightMargin: 10
@@ -536,7 +539,7 @@ ColumnLayout {
                                 color: selected ? theme.colText : panel.withAlpha(theme.colText, 0.92)
                                 font.pixelSize: 15
                                 font.weight: selected ? 600 : 400
-                                elide: Text.ElideRight
+                                wrapMode: Text.Wrap
                             }
                         }
 

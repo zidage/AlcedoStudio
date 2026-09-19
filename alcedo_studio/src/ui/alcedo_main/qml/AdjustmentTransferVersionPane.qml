@@ -80,7 +80,8 @@ Item {
                     required property bool active
                     required property bool selected
                     width: ListView.view ? ListView.view.width : 0
-                    height: appTheme.iconButtonHitSize + appTheme.spaceSm
+                    height: Math.max(appTheme.iconButtonHitSize + appTheme.spaceSm,
+                                     versionTextColumn.implicitHeight + appTheme.spaceMd)
                     Accessible.role: Accessible.ListItem
                     Accessible.name: versionDelegate.displayName
                     Accessible.description: versionDelegate.active
@@ -142,6 +143,7 @@ Item {
                         }
 
                         ColumnLayout {
+                            id: versionTextColumn
                             Layout.fillWidth: true
                             spacing: 0
 
@@ -154,7 +156,7 @@ Item {
                                 font.family: appTheme.uiFontFamily
                                 font.pixelSize: appTheme.fontSizeBody
                                 font.weight: appTheme.fontWeightStrong
-                                elide: Text.ElideRight
+                                wrapMode: Text.Wrap
                             }
 
                             RowLayout {
@@ -169,7 +171,7 @@ Item {
                                            : appTheme.textMutedColor
                                     font.family: appTheme.dataFontFamily
                                     font.pixelSize: appTheme.fontSizeCaption
-                                    elide: Text.ElideRight
+                                    wrapMode: Text.Wrap
                                 }
 
                                 Label {

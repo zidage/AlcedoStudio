@@ -297,7 +297,7 @@ Dialog {
                             font.family: dialog.headlineFontFamily
                             font.pixelSize: 26
                             font.weight: 800
-                            elide: Text.ElideRight
+                            wrapMode: Text.Wrap
                         }
 
                         ColumnLayout {
@@ -321,13 +321,15 @@ Dialog {
                                     required property var modelData
 
                                     Layout.fillWidth: true
-                                    Layout.preferredHeight: 48
+                                    Layout.preferredHeight: Math.max(48, categoryNavRow.implicitHeight
+                                                                     + appTheme.spaceMd)
                                     radius: 6
                                     color: dialog.currentCategory === index
                                            ? Qt.rgba(dialog.primaryAccent.r, dialog.primaryAccent.g, dialog.primaryAccent.b, 0.22)
                                            : (categoryMouse.containsMouse ? dialog.hoverColor : "transparent")
 
                                     RowLayout {
+                                        id: categoryNavRow
                                         anchors.fill: parent
                                         anchors.leftMargin: 12
                                         anchors.rightMargin: 12
@@ -349,7 +351,7 @@ Dialog {
                                             color: dialog.currentCategory === index ? dialog.textColor : dialog.mutedTextColor
                                             font.pixelSize: 15
                                             font.weight: dialog.currentCategory === index ? 700 : 500
-                                            elide: Text.ElideRight
+                                            wrapMode: Text.Wrap
                                         }
 
                                         Rectangle {
@@ -391,9 +393,11 @@ Dialog {
 
                     Item {
                         Layout.fillWidth: true
-                        Layout.preferredHeight: 96
+                        Layout.preferredHeight: Math.max(96, pageHeaderColumn.implicitHeight
+                                                         + appTheme.spaceMd)
 
                         ColumnLayout {
+                            id: pageHeaderColumn
                             anchors.left: parent.left
                             anchors.right: parent.right
                             anchors.verticalCenter: parent.verticalCenter
@@ -406,12 +410,13 @@ Dialog {
                                 spacing: 10
 
                                 Label {
+                                    Layout.fillWidth: true
                                     text: dialog.currentPageTitle()
                                     color: dialog.textColor
                                     font.family: dialog.headlineFontFamily
                                     font.pixelSize: 34
                                     font.weight: 800
-                                    elide: Text.ElideRight
+                                    wrapMode: Text.Wrap
                                 }
 
                                 InfoBadge {

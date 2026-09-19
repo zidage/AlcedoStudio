@@ -116,7 +116,8 @@ Item {
                     required property int checkState
                     required property bool focused
                     width: ListView.view ? ListView.view.width : 0
-                    height: appTheme.iconButtonHitSizeCompact
+                    height: Math.max(appTheme.iconButtonHitSizeCompact,
+                                     nodeRowLayout.implicitHeight + appTheme.spaceXs)
                     Accessible.role: Accessible.ListItem
                     Accessible.name: nodeDelegate.displayName
                     Accessible.onPressAction: nodeDelegate.focusRow()
@@ -170,6 +171,7 @@ Item {
                     }
 
                     RowLayout {
+                        id: nodeRowLayout
                         anchors.fill: parent
                         anchors.leftMargin: appTheme.spaceSm
                         anchors.rightMargin: appTheme.spaceSm
@@ -201,7 +203,7 @@ Item {
                             font.weight: nodeDelegate.defaultGrade
                                          ? appTheme.fontWeightStrong
                                          : appTheme.fontWeightRegular
-                            elide: Text.ElideRight
+                            wrapMode: Text.Wrap
                         }
                     }
                 }

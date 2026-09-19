@@ -921,7 +921,7 @@ Dialog {
 
                     RowLayout {
                         Layout.fillWidth: true
-                        Layout.preferredHeight: 32
+                        Layout.preferredHeight: Math.max(32, activeQueryLabel.implicitHeight)
                         spacing: 14
 
                         Label {
@@ -953,13 +953,14 @@ Dialog {
                         }
 
                         Label {
+                            id: activeQueryLabel
                             visible: dialog.searchController !== null && dialog.searchController !== undefined
                                      && dialog.searchController.activeSearchQuery.length > 0
                             text: qsTr("Active: %1").arg(dialog.searchController
                                                         ? dialog.searchController.activeSearchQuery : "")
                             color: dialog.withAlpha(dialog.textColor, 0.46)
                             font.pixelSize: 12
-                            elide: Text.ElideRight
+                            wrapMode: Text.Wrap
                             Layout.maximumWidth: 320
                         }
                     }
@@ -1253,7 +1254,7 @@ Dialog {
         onPreviewMaxEdgeChanged: bindPreviewThumbnailLifetime(false)
         Component.onDestruction: releasePreviewThumbnail()
 
-        height: rowHeight
+        height: Math.max(rowHeight, searchRowLayout.implicitHeight + appTheme.spaceSm)
         radius: 9
         color: rowMouse.pressed
                ? dialog.withAlpha(dialog.textColor, 0.075)
@@ -1283,6 +1284,7 @@ Dialog {
         }
 
         RowLayout {
+            id: searchRowLayout
             anchors.fill: parent
             anchors.leftMargin: 2
             anchors.rightMargin: 12
@@ -1394,7 +1396,7 @@ Dialog {
                     font.family: dialog.dataFontFamily
                     font.pixelSize: row.titlePixelSize
                     font.weight: row.titleWeight
-                    elide: Text.ElideRight
+                    wrapMode: Text.Wrap
                 }
 
                 Label {
@@ -1407,7 +1409,7 @@ Dialog {
                     font.family: dialog.dataFontFamily
                     font.pixelSize: row.subtitlePixelSize
                     font.weight: 560
-                    elide: Text.ElideRight
+                    wrapMode: Text.Wrap
                 }
             }
 

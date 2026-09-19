@@ -223,7 +223,7 @@ Dialog {
                             font.family: appTheme.uiFontFamily
                             font.pixelSize: appTheme.fontSizeTitle
                             font.weight: appTheme.fontWeightHeading
-                            elide: Text.ElideRight
+                            wrapMode: Text.Wrap
                         }
 
                         Label {
@@ -233,7 +233,7 @@ Dialog {
                             color: appTheme.textMutedColor
                             font.family: appTheme.uiFontFamily
                             font.pixelSize: appTheme.fontSizeCaption
-                            elide: Text.ElideMiddle
+                            wrapMode: Text.Wrap
                         }
                     }
 

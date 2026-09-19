@@ -25,15 +25,15 @@ Item {
     property bool _motionArmed: false
     property int _foldDuration: appTheme.motionFoldOpenMs
 
-    readonly property real headerHeight: appTheme.graphMaskDrawerHeaderHeight
+    readonly property real headerHeight: Math.max(appTheme.graphMaskDrawerHeaderHeight,
+                                                  drawerHeaderRow.implicitHeight
+                                                  + appTheme.spaceXs)
     readonly property real bodyContentHeight: {
         if (root.masks === undefined || root.masks === null) {
             return 0
         }
         const count = root.masks.length !== undefined ? root.masks.length : 0
-        return count > 0
-                ? count * appTheme.graphMaskRowHeight + appTheme.spaceXs
-                : 0
+        return count > 0 ? maskList.implicitHeight + appTheme.spaceXs : 0
     }
     readonly property real bodyHeight: Math.max(0, bodyContentHeight) * foldProgress
 
@@ -146,6 +146,7 @@ Item {
             }
 
             RowLayout {
+                id: drawerHeaderRow
                 anchors.fill: parent
                 anchors.leftMargin: appTheme.spaceSm
                 anchors.rightMargin: appTheme.spaceSm
@@ -159,8 +160,7 @@ Item {
                     color: root.textColor
                     font.pixelSize: appTheme.fontSizeBody
                     font.weight: appTheme.fontWeightStrong
-                    elide: Text.ElideRight
-                    wrapMode: Text.NoWrap
+                    wrapMode: Text.Wrap
                     Accessible.ignored: true
                 }
 

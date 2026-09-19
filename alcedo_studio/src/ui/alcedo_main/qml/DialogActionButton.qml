@@ -28,9 +28,10 @@ Button {
     }
 
     implicitWidth: buttonWidth
-    implicitHeight: buttonHeight
+    implicitHeight: Math.max(buttonHeight,
+                             buttonLabel.implicitHeight + appTheme.spaceMd)
     Layout.preferredWidth: buttonWidth
-    Layout.preferredHeight: buttonHeight
+    Layout.preferredHeight: implicitHeight
     topInset: 0
     bottomInset: 0
     leftInset: 0
@@ -42,12 +43,13 @@ Button {
     font.weight: appTheme.fontWeightHeading
 
     contentItem: Label {
+        id: buttonLabel
         text: control.text
         color: control.enabled ? "#FFFFFF" : appTheme.textMutedColor
         font: control.font
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter
-        elide: Text.ElideRight
+        wrapMode: Text.Wrap
     }
 
     background: Rectangle {

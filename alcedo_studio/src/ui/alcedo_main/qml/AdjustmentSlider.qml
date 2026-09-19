@@ -206,15 +206,16 @@ Item {
 
         RowLayout {
             Layout.fillWidth: true
-            Layout.preferredHeight: 18
+            Layout.preferredHeight: Math.max(18, sliderLabel.implicitHeight)
             spacing: appTheme.spaceSm
 
             Label {
+                id: sliderLabel
                 Layout.fillWidth: true
                 text: root.model ? root.model.label : ""
                 color: root.colText
                 font.pixelSize: appTheme.fontSizeCaption
-                elide: Text.ElideRight
+                wrapMode: Text.Wrap
                 visible: root.model && root.model.label && root.model.label.length > 0
                 Accessible.name: root.model ? root.model.label : ""
             }

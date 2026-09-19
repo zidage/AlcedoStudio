@@ -43,7 +43,7 @@ Item {
             text: root.model ? root.model.label : ""
             color: root.colText
             font.pixelSize: appTheme.fontSizeBody
-            elide: Text.ElideRight
+            wrapMode: Text.Wrap
             visible: root.model && root.model.label && root.model.label.length > 0
             Accessible.name: root.model ? root.model.label : ""
         }
@@ -52,7 +52,7 @@ Item {
             id: combo
             objectName: root.controlObjectName
             Layout.fillWidth: true
-            Layout.preferredHeight: root.controlHeight
+            Layout.preferredHeight: Math.max(root.controlHeight, combo.implicitHeight)
             enabled: root.model && root.model.enabled
             model: root.model ? root.model.entries : []
             textRole: "label"
@@ -97,7 +97,7 @@ Item {
                 font.pixelSize: appTheme.fontSizeBody
                 color: combo.enabled ? root.colText : root.colMuted
                 verticalAlignment: Text.AlignVCenter
-                elide: Text.ElideRight
+                wrapMode: Text.Wrap
             }
 
             indicator: Item {
@@ -139,7 +139,8 @@ Item {
             delegate: ItemDelegate {
                 id: del
                 width: combo.width
-                height: root.controlHeight
+                height: Math.max(root.controlHeight,
+                                 delContent.implicitHeight + appTheme.spaceXs)
                 // ComboBox list models of maps expose role data via modelData.
                 text: {
                     if (typeof modelData === "undefined" || modelData === null)
@@ -163,10 +164,11 @@ Item {
                 }
 
                 contentItem: Text {
+                    id: delContent
                     text: del.text
                     color: del.highlighted ? root.colSelectedInk : root.colText
                     font.pixelSize: appTheme.fontSizeBody
-                    elide: Text.ElideRight
+                    wrapMode: Text.Wrap
                     verticalAlignment: Text.AlignVCenter
                     leftPadding: appTheme.spaceSm
                 }

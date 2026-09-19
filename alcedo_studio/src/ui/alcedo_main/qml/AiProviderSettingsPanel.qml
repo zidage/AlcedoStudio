@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Controls.Material
+import QtQuick.Controls.impl
 import QtQuick.Layouts
 import QtQuick.Effects
 import "util"
@@ -175,7 +176,7 @@ SwipeView {
         property int iconSize: 16
         property string iconSrc: ""
 
-        Layout.preferredHeight: 40
+        Layout.preferredHeight: Math.max(40, implicitHeight)
         font.pixelSize: 14
         font.weight: 700
         Material.foreground: panel.textColor
@@ -190,6 +191,30 @@ SwipeView {
         icon.color: panel.textColor
         icon.width: aiBtn.iconSize
         icon.height: aiBtn.iconSize
+        contentItem: RowLayout {
+            spacing: aiBtn.spacing
+
+            ColorImage {
+                visible: aiBtn.icon.source.toString().length > 0
+                Layout.preferredWidth: aiBtn.icon.width
+                Layout.preferredHeight: aiBtn.icon.height
+                Layout.alignment: Qt.AlignVCenter
+                source: aiBtn.icon.source
+                color: aiBtn.icon.color
+                fillMode: Image.PreserveAspectFit
+            }
+
+            Label {
+                visible: !aiBtn.iconOnly && aiBtn.text.length > 0
+                Layout.fillWidth: true
+                text: aiBtn.text
+                font: aiBtn.font
+                color: aiBtn.icon.color
+                wrapMode: Text.Wrap
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+            }
+        }
         ToolTip.visible: aiBtn.hovered && aiBtn.iconOnly && aiBtn.text.length > 0
         ToolTip.delay: 400
         ToolTip.text: aiBtn.text
@@ -344,7 +369,8 @@ SwipeView {
 
                         delegate: Rectangle {
                             width: ListView.view.width
-                            height: 92
+                            height: Math.max(92, providerCardColumn.implicitHeight
+                                             + appTheme.spaceMd)
                             radius: 8
                             color: modelData.active
                                    ? Qt.rgba(panel.primaryAccent.r, panel.primaryAccent.g, panel.primaryAccent.b, 0.14)
@@ -361,6 +387,7 @@ SwipeView {
                                 spacing: 14
 
                                 ColumnLayout {
+                                    id: providerCardColumn
                                     Layout.fillWidth: true
                                     spacing: 5
 
@@ -370,7 +397,7 @@ SwipeView {
                                         color: panel.textColor
                                         font.pixelSize: 16
                                         font.weight: 800
-                                        elide: Text.ElideRight
+                                        wrapMode: Text.Wrap
                                     }
 
                                     Label {
@@ -381,7 +408,7 @@ SwipeView {
                                         color: panel.mutedTextColor
                                         font.family: panel.dataFontFamily
                                         font.pixelSize: 12
-                                        elide: Text.ElideMiddle
+                                        wrapMode: Text.Wrap
                                     }
 
                                     Label {
@@ -391,7 +418,7 @@ SwipeView {
                                         color: panel.secondaryAccent
                                         font.family: panel.dataFontFamily
                                         font.pixelSize: 11
-                                        elide: Text.ElideRight
+                                        wrapMode: Text.Wrap
                                     }
                                 }
 
@@ -514,7 +541,7 @@ SwipeView {
                             readonly property string templateId: modelData.templateId
                             readonly property string chipLabel: modelData.label
 
-                            height: 40
+                            height: Math.max(40, chipLbl.implicitHeight + appTheme.spaceMd)
                             radius: 20
                             implicitWidth: Math.min(chipLbl.implicitWidth + 36, 280)
                             color: chipHit.containsMouse
@@ -553,7 +580,7 @@ SwipeView {
                                 font.family: appTheme.uiFontFamily
                                 font.pixelSize: 13
                                 font.weight: 600
-                                elide: Text.ElideRight
+                                wrapMode: Text.Wrap
                                 horizontalAlignment: Text.AlignHCenter
                             }
                         }
@@ -574,7 +601,8 @@ SwipeView {
 
             RowLayout {
                 Layout.fillWidth: true
-                Layout.preferredHeight: 74
+                Layout.preferredHeight: Math.max(74, providerTitleLabel.implicitHeight
+                                                 + appTheme.spaceLg)
                 Layout.leftMargin: 24
                 Layout.rightMargin: 28
                 spacing: 14
@@ -590,12 +618,13 @@ SwipeView {
                 }
 
                 Label {
+                    id: providerTitleLabel
                     Layout.fillWidth: true
                     text: panel.editProfile.displayName || qsTr("Provider")
                     color: panel.textColor
                     font.pixelSize: 22
                     font.weight: 800
-                    elide: Text.ElideRight
+                    wrapMode: Text.Wrap
                 }
             }
 
@@ -631,7 +660,6 @@ SwipeView {
                             spacing: 12
 
                             AiButton {
-                                Layout.preferredHeight: 38
                                 primary: true
                                 text: qsTr("Use Codex Login")
                                 enabled: panel.hasProfilesController && panel.canChangeProvider
@@ -641,7 +669,6 @@ SwipeView {
                             }
 
                             AiButton {
-                                Layout.preferredHeight: 38
                                 text: qsTr("Open Login")
                                 enabled: panel.canChangeProvider
                                 onClicked: {
@@ -663,7 +690,6 @@ SwipeView {
                             }
 
                             AiButton {
-                                Layout.preferredHeight: 38
                                 danger: true
                                 text: qsTr("Disconnect")
                                 enabled: panel.editProfile.credentialAvailable === true
@@ -720,7 +746,6 @@ SwipeView {
                             spacing: 12
 
                             AiButton {
-                                Layout.preferredHeight: 38
                                 primary: true
                                 text: qsTr("Save Key")
                                 enabled: panel.hasProfilesController && panel.canChangeProvider
@@ -733,7 +758,6 @@ SwipeView {
                             }
 
                             AiButton {
-                                Layout.preferredHeight: 38
                                 danger: true
                                 text: qsTr("Delete Key")
                                 enabled: panel.editProfile.credentialAvailable === true
@@ -753,7 +777,7 @@ SwipeView {
                                 color: panel.editProfile.credentialAvailable ? panel.secondaryAccent : panel.mutedTextColor
                                 font.family: panel.dataFontFamily
                                 font.pixelSize: 12
-                                elide: Text.ElideRight
+                                wrapMode: Text.Wrap
                             }
                         }
                     }
@@ -864,7 +888,6 @@ SwipeView {
                         spacing: 12
 
                         AiButton {
-                            Layout.preferredHeight: 40
                             text: qsTr("Duplicate")
                             enabled: panel.hasProfilesController && panel.canChangeProvider
                                      && panel.editingProfileId.length > 0
@@ -877,7 +900,6 @@ SwipeView {
                         }
 
                         AiButton {
-                            Layout.preferredHeight: 40
                             danger: true
                             text: qsTr("Delete")
                             enabled: panel.hasProfilesController && panel.canChangeProvider

@@ -68,7 +68,7 @@ Item {
             text: root.model ? root.model.label : ""
             color: root.colText
             font.pixelSize: appTheme.fontSizeBody
-            elide: Text.ElideRight
+            wrapMode: Text.Wrap
             visible: root.model && root.model.label && root.model.label.length > 0
             Accessible.name: root.model ? root.model.label : ""
         }

@@ -18,7 +18,8 @@ Item {
                                    ? controller.primaryTask : ({})
     readonly property int runningCount: controller ? controller.runningCount : 0
     readonly property bool hasTasks: controller && controller.tasks.length > 0
-    readonly property int barHeight: appTheme.iconButtonHitSizeCompact
+    readonly property real barHeight: Math.max(appTheme.iconButtonHitSizeCompact,
+                                               taskBarRow.implicitHeight + appTheme.spaceXs)
 
     property real foldProgress: 0
     property bool layoutActive: false
@@ -141,6 +142,7 @@ Item {
             border.color: appTheme.cardBorderColor
 
             RowLayout {
+                id: taskBarRow
                 anchors.fill: parent
                 anchors.leftMargin: appTheme.spaceMd
                 anchors.rightMargin: appTheme.spaceSm
@@ -158,7 +160,7 @@ Item {
                     Layout.fillWidth: true
                     text: root.primaryLabel()
                     color: appTheme.textColor
-                    elide: Text.ElideRight
+                    wrapMode: Text.Wrap
                     font.family: appTheme.uiFontFamily
                     font.pixelSize: appTheme.fontSizeBody
                     font.weight: appTheme.fontWeightStrong

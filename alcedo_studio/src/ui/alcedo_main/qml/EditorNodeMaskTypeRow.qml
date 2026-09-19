@@ -37,7 +37,8 @@ Item {
     }
 
     implicitWidth: appTheme.graphNodeWidth
-    implicitHeight: appTheme.graphMaskRowHeight
+    implicitHeight: Math.max(appTheme.graphMaskRowHeight,
+                             typeName.implicitHeight + appTheme.spaceXs * 2)
     height: implicitHeight
     activeFocusOnTab: true
 
@@ -99,8 +100,7 @@ Item {
             color: appTheme.textColor
             font.pixelSize: appTheme.fontSizeBody
             font.weight: appTheme.fontWeightRegular
-            elide: Text.ElideRight
-            wrapMode: Text.NoWrap
+            wrapMode: Text.Wrap
             Accessible.ignored: true
         }
 

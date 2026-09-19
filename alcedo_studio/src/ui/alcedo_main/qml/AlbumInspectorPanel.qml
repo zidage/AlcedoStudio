@@ -163,7 +163,8 @@ ScrollView {
 
                     Rectangle {
                         Layout.fillWidth: true
-                        Layout.preferredHeight: 58
+                        Layout.preferredHeight: Math.max(58, searchFilterColumn.implicitHeight
+                                                         + appTheme.spaceMd)
                         radius: 6
                         color: root.withAlpha(appTheme.bgBaseColor, 0.62)
                         border.width: 1
@@ -184,6 +185,7 @@ ScrollView {
                             }
 
                             ColumnLayout {
+                                id: searchFilterColumn
                                 Layout.fillWidth: true
                                 spacing: 2
                                 Layout.alignment: Qt.AlignVCenter
@@ -195,7 +197,7 @@ ScrollView {
                                     font.family: appTheme.uiFontFamily
                                     font.pixelSize: 12
                                     font.weight: 700
-                                    elide: Text.ElideRight
+                                    wrapMode: Text.Wrap
                                 }
 
                                 Label {
@@ -205,7 +207,7 @@ ScrollView {
                                     font.family: appTheme.dataFontFamily
                                     font.pixelSize: 11
                                     font.weight: 500
-                                    elide: Text.ElideRight
+                                    wrapMode: Text.Wrap
                                 }
                             }
 

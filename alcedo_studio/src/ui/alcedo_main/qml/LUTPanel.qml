@@ -944,7 +944,8 @@ Item {
 
         RowLayout {
             Layout.fillWidth: true
-            Layout.preferredHeight: appTheme.lineHeightCaption
+            Layout.preferredHeight: Math.max(appTheme.lineHeightCaption,
+                                             lutStatusLabel.implicitHeight)
             spacing: appTheme.spaceXs
 
             Text {
@@ -958,13 +959,15 @@ Item {
             }
 
             Text {
+                id: lutStatusLabel
                 objectName: "editorLutStatusText"
+                Layout.maximumWidth: 240
                 text: root.lutModel ? root.lutModel.statusText : ""
                 color: root.colMuted
                 font.family: appTheme.uiFontFamily
                 font.pixelSize: appTheme.fontSizeCaption
                 font.weight: appTheme.fontWeightRegular
-                elide: Text.ElideRight
+                wrapMode: Text.Wrap
                 visible: text.length > 0
             }
         }

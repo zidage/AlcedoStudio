@@ -429,7 +429,7 @@ ColumnLayout {
                 color: root.patternValid ? appTheme.textColor : appTheme.dangerColor
                 font.family: appTheme.dataFontFamily
                 font.pixelSize: appTheme.fontSizeCaption
-                elide: Text.ElideMiddle
+                wrapMode: Text.Wrap
             }
         }
     }

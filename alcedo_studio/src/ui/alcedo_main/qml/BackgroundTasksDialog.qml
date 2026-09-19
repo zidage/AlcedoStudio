@@ -204,7 +204,7 @@ Dialog {
                     Layout.fillWidth: true
                     text: qsTr("Background Tasks")
                     color: appTheme.textColor
-                    elide: Text.ElideRight
+                    wrapMode: Text.Wrap
                     font.family: appTheme.uiFontFamily
                     font.pixelSize: appTheme.fontSizeHeadline
                     font.weight: appTheme.fontWeightHeading
@@ -214,7 +214,7 @@ Dialog {
                     Layout.fillWidth: true
                     text: root.summaryText()
                     color: appTheme.textMutedColor
-                    elide: Text.ElideRight
+                    wrapMode: Text.Wrap
                     font.family: appTheme.uiFontFamily
                     font.pixelSize: appTheme.fontSizeCaption
                     font.weight: appTheme.fontWeightRegular
@@ -325,7 +325,7 @@ Dialog {
                                     text: (taskRow.task && taskRow.task.title)
                                           || root.kindLabel(taskRow.task ? taskRow.task.kind : "")
                                     color: appTheme.textColor
-                                    elide: Text.ElideRight
+                                    wrapMode: Text.Wrap
                                     font.family: appTheme.uiFontFamily
                                     font.pixelSize: appTheme.fontSizeTitle
                                     font.weight: appTheme.fontWeightStrong
@@ -355,7 +355,7 @@ Dialog {
                                 Layout.fillWidth: true
                                 text: root.kindLabel(taskRow.task ? taskRow.task.kind : "")
                                 color: appTheme.textMutedColor
-                                elide: Text.ElideRight
+                                wrapMode: Text.Wrap
                                 font.family: appTheme.uiFontFamily
                                 font.pixelSize: appTheme.fontSizeCaption
                                 font.weight: appTheme.fontWeightRegular
@@ -368,8 +368,7 @@ Dialog {
                                 color: taskRow.rowFailed
                                        ? appTheme.backgroundTaskFailedColor
                                        : appTheme.textMutedColor
-                                elide: Text.ElideRight
-                                wrapMode: Text.NoWrap
+                                wrapMode: Text.Wrap
                                 font.family: appTheme.uiFontFamily
                                 font.pixelSize: appTheme.fontSizeCaption
                                 font.weight: appTheme.fontWeightRegular

@@ -1161,7 +1161,7 @@ Item {
                                 delegate: RowLayout {
                                     required property var modelData
                                     width: ListView.view ? ListView.view.width : 0
-                                    height: appTheme.iconButtonHitSize
+                                    height: Math.max(appTheme.iconButtonHitSize, implicitHeight)
                                     spacing: appTheme.spaceSm
 
                                     readonly property bool summaryRow: modelData.summaryRow === true
@@ -1206,7 +1206,7 @@ Item {
                                             Label {
                                                 Layout.fillWidth: true
                                                 text: modelData.label
-                                                elide: Text.ElideRight
+                                                wrapMode: Text.Wrap
                                                 color: appTheme.textColor
                                                 font.family: appTheme.dataFontFamily
                                                 font.pixelSize: appTheme.fontSizeCaption
