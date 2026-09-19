@@ -266,6 +266,13 @@ ctest --test-dir build/debug --output-on-failure
 
 Test names and reference-data files must follow **Naming and Terminology** above.
 
+**Qt UI/QML tests:** do not burn effort chasing failures in `WorkspaceShellTest` and similar
+offscreen QML/synthetic-input harnesses. These suites are unreliable — offscreen key, focus, and
+pointer delivery often does not reach QML handlers, which can trap an agent in test-only puzzles
+rather than product bugs. `WorkspaceShellTest` in particular may be disabled entirely for now;
+its contents are suspect. Verify behavior through the C++ owner/service tests instead, and report
+the skipped UI coverage honestly instead of weakening tests to make them pass.
+
 WebGPU RAW tests must heap-allocate `LibRaw` raw processors (for example with
 `std::make_unique<LibRaw>()`). Do not stack-allocate `LibRaw` in WebGPU-related tests; Dawn +
 LibRaw test paths have hit stack overflows in this repository.

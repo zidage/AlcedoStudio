@@ -36,6 +36,8 @@
 ## Still Planned
 
 - [ ] Add JSON serialization for pipeline configurations.
+- [ ] Add configurable, focus-scoped keyboard bindings for basic Library and Editor actions; see the
+      [Configurable Keyboard Shortcut Registry Plan](alcedo_studio/ui/configurable_keyboard_shortcut_registry_plan.md).
 - [ ] Replace the editor image-processing path with the
       [GPU DAG pipeline](alcedo_studio/edit/gpu_dag_pipeline_rebuild_phase_plan.md), delivered as
       a Stacked PR series across CUDA, OpenCL, and Metal.
