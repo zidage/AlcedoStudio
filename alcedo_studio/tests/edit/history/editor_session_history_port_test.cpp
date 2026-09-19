@@ -149,8 +149,9 @@ auto LutPathFromSnapshot(const alcedo::EditorRenderAdjustmentSnapshot& snapshot)
   return {};
 }
 
-/// Mirrors AdjustmentTransferController::PasteViaMiniGit: root-relative Version,
-/// rebuild live pipeline, persist graph, optionally request checkpoint writeback.
+/// Mirrors AdjustmentTransferApplyCoordinator::ApplyToTargets: root-relative
+/// Version, rebuild live pipeline, persist graph, optionally request checkpoint
+/// writeback.
 auto LibraryPasteThenRelease(alcedo::PipelineMgmtService& pipeline_service,
                              sl_element_id_t element_id,
                              const alcedo::AdjustmentTransferPackage& package,

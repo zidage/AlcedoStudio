@@ -27,84 +27,27 @@ Dialog {
     property string mode: "copy"
     property string pasteStrategy: "paste"
     property string sourceTitle: ""
-    property string selectedSourceVersionId: ""
     property int targetCount: 0
-    property var sourceVersions: []
+    // Read-only package summary rows for Paste mode. Never edited in QML.
     property var adjustmentRows: []
+    // AdjustmentTransferDialogModel owned by AdjustmentTransferController.
+    // C++ owns every checked state; QML sends commands with stable identities.
+    property var dialogModel: null
     property Item blurSource: null
     property real cornerRadius: 0
     property var expandedSections: ({})
     property int expandedSectionsRevision: 0
 
-    signal copyAccepted(var selectedKeys, string versionId)
+    signal copyAccepted()
     signal pasteAccepted(string strategy)
     signal pasteDiscarded()
 
     readonly property bool copyMode: mode === "copy"
-    readonly property int selectedCount: {
-        let count = 0
-        for (let index = 0; index < adjustmentRows.length; ++index) {
-            if (adjustmentRows[index] && adjustmentRows[index].checked === true) {
-                ++count
-            }
-        }
-        return count
-    }
+    readonly property string selectedSourceVersionId:
+        dialogModel ? String(dialogModel.selectedVersionId || "") : ""
     readonly property var displayRows: {
         const revision = expandedSectionsRevision
         return buildDisplayRows()
-    }
-
-    function selectedKeys() {
-        const keys = []
-        for (let index = 0; index < adjustmentRows.length; ++index) {
-            const row = adjustmentRows[index]
-            if (row && row.checked === true) {
-                keys.push(String(row.key))
-            }
-        }
-        return keys
-    }
-
-    function restoreListScroll(contentY) {
-        Qt.callLater(function() {
-            const minY = parameterList.originY
-            const maxY = Math.max(minY, parameterList.contentHeight - parameterList.height)
-            parameterList.contentY = Math.max(minY, Math.min(contentY, maxY))
-        })
-    }
-
-    function setRowsPreservingScroll(rows) {
-        const contentY = parameterList.contentY
-        adjustmentRows = rows
-        restoreListScroll(contentY)
-    }
-
-    function setRowChecked(index, checked) {
-        if (index < 0 || index >= adjustmentRows.length) {
-            return
-        }
-        const next = adjustmentRows.slice()
-        const row = Object.assign({}, next[index])
-        row.checked = checked
-        next[index] = row
-        setRowsPreservingScroll(next)
-    }
-
-    function setAllRowsChecked(checked) {
-        const next = []
-        let changed = false
-        for (let index = 0; index < adjustmentRows.length; ++index) {
-            const row = Object.assign({}, adjustmentRows[index])
-            if (row.checked !== checked) {
-                row.checked = checked
-                changed = true
-            }
-            next.push(row)
-        }
-        if (changed) {
-            setRowsPreservingScroll(next)
-        }
     }
 
     function sectionExpanded(section, ordinal) {
@@ -115,12 +58,10 @@ Dialog {
     }
 
     function toggleSection(section, ordinal) {
-        const contentY = parameterList.contentY
         const next = Object.assign({}, expandedSections)
         next[section] = !sectionExpanded(section, ordinal)
         expandedSections = next
         ++expandedSectionsRevision
-        restoreListScroll(contentY)
     }
 
     function buildDisplayRows() {
@@ -136,11 +77,8 @@ Dialog {
             }
             grouped[section].push({
                 kind: "parameter",
-                sourceIndex: index,
-                key: row.key,
                 label: row.label,
-                value: row.value,
-                checked: row.checked === true
+                value: row.value
             })
         }
         for (let sectionIndex = 0; sectionIndex < sections.length; ++sectionIndex) {
@@ -159,17 +97,6 @@ Dialog {
         return result
     }
 
-    function selectSourceVersion(versionRow) {
-        if (!versionRow) {
-            return
-        }
-        selectedSourceVersionId = String(versionRow.versionId || "")
-        expandedSections = ({})
-        ++expandedSectionsRevision
-        adjustmentRows = versionRow.items || []
-        parameterList.positionViewAtBeginning()
-    }
-
     function versionTimeText(seconds) {
         if (!seconds || Number(seconds) <= 0) {
             return qsTr("Imported")
@@ -182,10 +109,7 @@ Dialog {
     }
 
     function acceptText() {
-        if (!copyMode) {
-            return qsTr("Paste Adjustments")
-        }
-        return qsTr("Copy %1 Settings").arg(selectedCount)
+        return copyMode ? qsTr("Copy Adjustments") : qsTr("Paste Adjustments")
     }
 
     onOpened: {
@@ -345,7 +269,7 @@ Dialog {
                 Layout.fillHeight: true
                 spacing: 0
 
-                // Left pane: source versions (copy mode only).
+                // Copy pane 1: source Versions.
                 Rectangle {
                     Layout.preferredWidth: dialog.copyMode ? appTheme.editorSidePanelWidth : 0
                     Layout.fillHeight: true
@@ -383,32 +307,40 @@ Dialog {
 
                             ListView {
                                 id: versionList
+                                objectName: "adjustmentTransferVersionList"
                                 anchors.fill: parent
                                 anchors.margins: appTheme.spaceXs
-                                model: dialog.sourceVersions
+                                model: dialog.dialogModel ? dialog.dialogModel.versions : null
                                 spacing: appTheme.spaceXs
                                 boundsBehavior: Flickable.StopAtBounds
                                 reuseItems: true
+                                keyNavigationEnabled: true
                                 currentIndex: -1
 
                                 delegate: Item {
                                     id: versionDelegate
                                     required property int index
-                                    required property var modelData
+                                    required property string versionId
+                                    required property string displayName
+                                    required property var updatedAt
+                                    required property bool active
+                                    required property bool selected
                                     width: ListView.view ? ListView.view.width : 0
                                     height: appTheme.iconButtonHitSize + appTheme.spaceSm
                                     activeFocusOnTab: true
                                     Accessible.role: Accessible.ListItem
-                                    Accessible.name: String(modelData.displayName || "")
+                                    Accessible.name: versionDelegate.displayName
 
-                                    readonly property bool selected:
-                                        String(modelData.versionId || "")
-                                        === dialog.selectedSourceVersionId
+                                    function pick() {
+                                        if (dialog.dialogModel) {
+                                            dialog.dialogModel.SelectVersion(versionDelegate.versionId)
+                                        }
+                                    }
 
                                     Keys.onPressed: function(event) {
                                         if (event.key === Qt.Key_Space || event.key === Qt.Key_Return
                                                 || event.key === Qt.Key_Enter) {
-                                            dialog.selectSourceVersion(versionDelegate.modelData)
+                                            versionDelegate.pick()
                                             event.accepted = true
                                         }
                                     }
@@ -441,8 +373,7 @@ Dialog {
 
                                             Label {
                                                 anchors.centerIn: parent
-                                                text: String(versionDelegate.modelData.displayName
-                                                             || "V").slice(0, 1).toUpperCase()
+                                                text: versionDelegate.displayName.slice(0, 1).toUpperCase()
                                                 color: versionDelegate.selected
                                                        ? appTheme.textColor
                                                        : appTheme.textMutedColor
@@ -458,7 +389,7 @@ Dialog {
 
                                             Label {
                                                 Layout.fillWidth: true
-                                                text: String(versionDelegate.modelData.displayName || "")
+                                                text: versionDelegate.displayName
                                                 color: appTheme.textColor
                                                 font.family: appTheme.uiFontFamily
                                                 font.pixelSize: appTheme.fontSizeBody
@@ -468,12 +399,12 @@ Dialog {
 
                                             Label {
                                                 Layout.fillWidth: true
-                                                text: versionDelegate.modelData.active
+                                                text: versionDelegate.active
                                                       ? qsTr("Active · %1").arg(dialog.versionTimeText(
-                                                              versionDelegate.modelData.updatedAt))
+                                                              versionDelegate.updatedAt))
                                                       : dialog.versionTimeText(
-                                                            versionDelegate.modelData.updatedAt)
-                                                color: versionDelegate.modelData.active
+                                                            versionDelegate.updatedAt)
+                                                color: versionDelegate.active
                                                        ? appTheme.accentColor
                                                        : appTheme.textMutedColor
                                                 font.family: appTheme.dataFontFamily
@@ -488,7 +419,7 @@ Dialog {
                                         anchors.fill: parent
                                         hoverEnabled: true
                                         cursorShape: Qt.PointingHandCursor
-                                        onClicked: dialog.selectSourceVersion(versionDelegate.modelData)
+                                        onClicked: versionDelegate.pick()
                                     }
                                 }
                             }
@@ -496,7 +427,171 @@ Dialog {
                     }
                 }
 
-                // Right pane: parameters.
+                // Copy pane 2: transferable nodes.
+                Rectangle {
+                    Layout.preferredWidth: dialog.copyMode ? appTheme.editorSidePanelWidth : 0
+                    Layout.fillHeight: true
+                    visible: dialog.copyMode
+                    color: "transparent"
+
+                    ColumnLayout {
+                        anchors.fill: parent
+                        spacing: 0
+
+                        Label {
+                            Layout.fillWidth: true
+                            Layout.leftMargin: appTheme.spaceMd
+                            Layout.rightMargin: appTheme.spaceMd
+                            Layout.topMargin: appTheme.spaceSm
+                            Layout.bottomMargin: appTheme.spaceSm
+                            text: qsTr("Transferable Nodes")
+                            color: appTheme.textMutedColor
+                            font.family: appTheme.uiFontFamily
+                            font.pixelSize: appTheme.fontSizeCaption
+                            font.weight: appTheme.fontWeightStrong
+                        }
+
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            Layout.leftMargin: appTheme.spaceSm
+                            Layout.rightMargin: appTheme.spaceSm
+                            Layout.bottomMargin: appTheme.spaceSm
+                            radius: appTheme.controlRadiusSmall
+                            color: appTheme.bgBaseColor
+                            border.width: 1
+                            border.color: appTheme.cardBorderColor
+                            clip: true
+
+                            ListView {
+                                id: nodeList
+                                objectName: "adjustmentTransferNodeList"
+                                anchors.fill: parent
+                                anchors.margins: appTheme.spaceXs
+                                model: dialog.dialogModel ? dialog.dialogModel.nodes : null
+                                spacing: appTheme.spaceXs
+                                boundsBehavior: Flickable.StopAtBounds
+                                reuseItems: true
+                                keyNavigationEnabled: true
+                                currentIndex: -1
+
+                                delegate: Item {
+                                    id: nodeDelegate
+                                    required property int index
+                                    required property string nodeId
+                                    required property string displayName
+                                    required property int nodeKind
+                                    required property bool defaultGrade
+                                    required property int checkState
+                                    required property bool focused
+                                    width: ListView.view ? ListView.view.width : 0
+                                    height: appTheme.iconButtonHitSizeCompact
+                                    activeFocusOnTab: true
+                                    Accessible.role: Accessible.ListItem
+                                    Accessible.name: nodeDelegate.displayName
+
+                                    function focus() {
+                                        if (dialog.dialogModel) {
+                                            dialog.dialogModel.FocusNode(nodeDelegate.nodeId)
+                                        }
+                                    }
+
+                                    function toggleCheck() {
+                                        if (dialog.dialogModel) {
+                                            dialog.dialogModel.SetNodeChecked(
+                                                nodeDelegate.nodeId,
+                                                nodeDelegate.checkState !== Qt.Checked)
+                                        }
+                                    }
+
+                                    Keys.onPressed: function(event) {
+                                        if (event.key === Qt.Key_Space) {
+                                            nodeDelegate.toggleCheck()
+                                            event.accepted = true
+                                        } else if (event.key === Qt.Key_Return
+                                                   || event.key === Qt.Key_Enter) {
+                                            nodeDelegate.focus()
+                                            event.accepted = true
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        anchors.fill: parent
+                                        radius: appTheme.badgeRadius
+                                        color: nodeDelegate.focused
+                                               ? appTheme.editorListSelectedFillColor
+                                               : (nodeMouse.containsMouse
+                                                  ? appTheme.buttonHoveredFillColor
+                                                  : "transparent")
+                                        border.width: nodeDelegate.activeFocus ? 1 : 0
+                                        border.color: appTheme.accentColor
+                                    }
+
+                                    MouseArea {
+                                        id: nodeMouse
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: nodeDelegate.focus()
+                                    }
+
+                                    RowLayout {
+                                        anchors.fill: parent
+                                        anchors.leftMargin: appTheme.spaceSm
+                                        anchors.rightMargin: appTheme.spaceSm
+                                        spacing: appTheme.spaceSm
+
+                                        Rectangle {
+                                            Layout.preferredWidth: appTheme.iconOpticalSizeCompact
+                                            Layout.preferredHeight: appTheme.iconOpticalSizeCompact
+                                            radius: appTheme.badgeRadius
+                                            color: nodeDelegate.checkState !== Qt.Unchecked
+                                                   ? appTheme.accentColor
+                                                   : "transparent"
+                                            border.width: 1
+                                            border.color: nodeDelegate.checkState !== Qt.Unchecked
+                                                          ? appTheme.accentColor
+                                                          : appTheme.cardBorderColor
+
+                                            Label {
+                                                anchors.centerIn: parent
+                                                visible: nodeDelegate.checkState !== Qt.Unchecked
+                                                text: nodeDelegate.checkState === Qt.PartiallyChecked
+                                                      ? "–" : "✓"
+                                                color: "#FFFFFF"
+                                                font.family: appTheme.uiFontFamily
+                                                font.pixelSize: appTheme.fontSizeCaption
+                                                font.weight: appTheme.fontWeightHeading
+                                            }
+
+                                            MouseArea {
+                                                anchors.fill: parent
+                                                cursorShape: Qt.PointingHandCursor
+                                                onClicked: nodeDelegate.toggleCheck()
+                                            }
+                                        }
+
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: nodeDelegate.displayName
+                                            color: nodeDelegate.focused
+                                                   ? appTheme.editorListSelectedInkColor
+                                                   : appTheme.textColor
+                                            font.family: appTheme.uiFontFamily
+                                            font.pixelSize: appTheme.fontSizeBody
+                                            font.weight: nodeDelegate.defaultGrade
+                                                         ? appTheme.fontWeightStrong
+                                                         : appTheme.fontWeightRegular
+                                            elide: Text.ElideRight
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Copy pane 3 / Paste summary pane.
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
@@ -505,8 +600,6 @@ Dialog {
                     ColumnLayout {
                         anchors.fill: parent
                         spacing: 0
-
-                        // Paste always creates a new root-relative Version. Merge is not offered.
 
                         Rectangle {
                             Layout.fillWidth: true
@@ -521,63 +614,29 @@ Dialog {
 
                                 Label {
                                     Layout.fillWidth: true
-                                    text: dialog.copyMode ? qsTr("Parameters to Copy")
+                                    text: dialog.copyMode ? qsTr("Transferable Items")
                                                           : qsTr("Parameters to Paste")
                                     color: appTheme.textMutedColor
                                     font.family: appTheme.uiFontFamily
                                     font.pixelSize: appTheme.fontSizeCaption
                                     font.weight: appTheme.fontWeightStrong
                                 }
-
-                                Label {
-                                    visible: dialog.copyMode
-                                    text: qsTr("Select All")
-                                    color: selectAllMouse.containsMouse
-                                           ? appTheme.textColor : appTheme.textMutedColor
-                                    font.family: appTheme.uiFontFamily
-                                    font.pixelSize: appTheme.fontSizeCaption
-                                    font.weight: appTheme.fontWeightStrong
-                                    opacity: selectAllMouse.enabled ? 1.0 : 0.4
-
-                                    MouseArea {
-                                        id: selectAllMouse
-                                        anchors.fill: parent
-                                        hoverEnabled: true
-                                        cursorShape: Qt.PointingHandCursor
-                                        enabled: dialog.adjustmentRows.length > 0
-                                                 && dialog.selectedCount < dialog.adjustmentRows.length
-                                        onClicked: dialog.setAllRowsChecked(true)
-                                    }
-                                }
-
-                                Label {
-                                    visible: dialog.copyMode
-                                    text: "·"
-                                    color: appTheme.dividerColor
-                                    font.family: appTheme.uiFontFamily
-                                    font.pixelSize: appTheme.fontSizeCaption
-                                }
-
-                                Label {
-                                    visible: dialog.copyMode
-                                    text: qsTr("None")
-                                    color: noneMouse.containsMouse
-                                           ? appTheme.textColor : appTheme.textMutedColor
-                                    font.family: appTheme.uiFontFamily
-                                    font.pixelSize: appTheme.fontSizeCaption
-                                    font.weight: appTheme.fontWeightStrong
-                                    opacity: noneMouse.enabled ? 1.0 : 0.4
-
-                                    MouseArea {
-                                        id: noneMouse
-                                        anchors.fill: parent
-                                        hoverEnabled: true
-                                        cursorShape: Qt.PointingHandCursor
-                                        enabled: dialog.selectedCount > 0
-                                        onClicked: dialog.setAllRowsChecked(false)
-                                    }
-                                }
                             }
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            Layout.leftMargin: appTheme.spaceLg
+                            Layout.rightMargin: appTheme.spaceLg
+                            Layout.bottomMargin: appTheme.spaceXs
+                            visible: dialog.copyMode && dialog.dialogModel
+                                     && String(dialog.dialogModel.errorText || "").length > 0
+                            text: dialog.dialogModel ? String(dialog.dialogModel.errorText || "")
+                                                     : ""
+                            color: appTheme.dangerColor
+                            font.family: appTheme.uiFontFamily
+                            font.pixelSize: appTheme.fontSizeCaption
+                            wrapMode: Text.WordWrap
                         }
 
                         Rectangle {
@@ -593,11 +652,140 @@ Dialog {
                             border.color: appTheme.cardBorderColor
                             clip: true
 
+                            // Copy mode: focused-node item rows with C++-owned checked state.
                             ListView {
-                                id: parameterList
+                                id: itemList
+                                objectName: "adjustmentTransferItemList"
                                 anchors.fill: parent
                                 anchors.margins: appTheme.spaceXs
-                                model: dialog.displayRows
+                                visible: dialog.copyMode
+                                model: dialog.copyMode && dialog.dialogModel
+                                       ? dialog.dialogModel.items : null
+                                boundsBehavior: Flickable.StopAtBounds
+                                reuseItems: true
+                                keyNavigationEnabled: true
+                                currentIndex: -1
+
+                                delegate: Item {
+                                    id: itemDelegate
+                                    required property int index
+                                    required property string itemKey
+                                    required property string displayName
+                                    required property string displayValue
+                                    required property int itemSection
+                                    required property int itemKind
+                                    required property bool checked
+                                    required property bool enabled
+                                    width: ListView.view ? ListView.view.width : 0
+                                    height: appTheme.iconButtonHitSizeCompact
+                                    activeFocusOnTab: itemDelegate.enabled
+                                    Accessible.role: Accessible.CheckBox
+                                    Accessible.name: itemDelegate.itemKind === 3
+                                                     ? qsTr("Transfer all masks in this node")
+                                                     : itemDelegate.displayName
+                                    Accessible.checkable: itemDelegate.enabled
+                                    Accessible.checked: itemDelegate.checked
+
+                                    function toggle() {
+                                        if (dialog.dialogModel && itemDelegate.enabled) {
+                                            dialog.dialogModel.SetItemChecked(
+                                                dialog.dialogModel.focusedNodeId,
+                                                itemDelegate.itemKey,
+                                                !itemDelegate.checked)
+                                        }
+                                    }
+
+                                    Accessible.onToggleAction: toggle()
+                                    Keys.onPressed: function(event) {
+                                        if (event.key === Qt.Key_Space || event.key === Qt.Key_Return
+                                                || event.key === Qt.Key_Enter) {
+                                            itemDelegate.toggle()
+                                            event.accepted = true
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        anchors.fill: parent
+                                        radius: appTheme.badgeRadius
+                                        color: itemMouse.containsMouse && itemDelegate.enabled
+                                               ? appTheme.buttonHoveredFillColor
+                                               : "transparent"
+                                        border.width: itemDelegate.activeFocus ? 1 : 0
+                                        border.color: appTheme.accentColor
+                                    }
+
+                                    RowLayout {
+                                        anchors.fill: parent
+                                        anchors.leftMargin: appTheme.spaceSm
+                                        anchors.rightMargin: appTheme.spaceSm
+                                        spacing: appTheme.spaceSm
+
+                                        Rectangle {
+                                            Layout.preferredWidth: appTheme.iconOpticalSizeCompact
+                                            Layout.preferredHeight: appTheme.iconOpticalSizeCompact
+                                            radius: appTheme.badgeRadius
+                                            opacity: itemDelegate.enabled ? 1.0 : 0.4
+                                            color: itemDelegate.checked
+                                                   ? appTheme.accentColor
+                                                   : "transparent"
+                                            border.width: 1
+                                            border.color: itemDelegate.checked
+                                                          ? appTheme.accentColor
+                                                          : appTheme.cardBorderColor
+
+                                            Label {
+                                                anchors.centerIn: parent
+                                                visible: itemDelegate.checked
+                                                text: "✓"
+                                                color: "#FFFFFF"
+                                                font.family: appTheme.uiFontFamily
+                                                font.pixelSize: appTheme.fontSizeCaption
+                                                font.weight: appTheme.fontWeightHeading
+                                            }
+                                        }
+
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: itemDelegate.displayName
+                                            color: itemDelegate.enabled
+                                                   ? appTheme.textColor : appTheme.textMutedColor
+                                            font.family: appTheme.uiFontFamily
+                                            font.pixelSize: appTheme.fontSizeBody
+                                            elide: Text.ElideRight
+                                        }
+
+                                        Label {
+                                            Layout.maximumWidth: itemDelegate.width / 3
+                                            text: itemDelegate.displayValue
+                                            color: itemDelegate.enabled && itemDelegate.checked
+                                                   ? appTheme.textColor : appTheme.textMutedColor
+                                            font.family: appTheme.dataFontFamily
+                                            font.pixelSize: appTheme.fontSizeCaption
+                                            horizontalAlignment: Text.AlignRight
+                                            elide: Text.ElideMiddle
+                                        }
+                                    }
+
+                                    MouseArea {
+                                        id: itemMouse
+                                        anchors.fill: parent
+                                        enabled: itemDelegate.enabled
+                                        hoverEnabled: true
+                                        cursorShape: itemDelegate.enabled
+                                                     ? Qt.PointingHandCursor : Qt.ArrowCursor
+                                        onClicked: itemDelegate.toggle()
+                                    }
+                                }
+                            }
+
+                            // Paste mode: read-only grouped package summary.
+                            ListView {
+                                id: pasteList
+                                objectName: "adjustmentTransferPasteList"
+                                anchors.fill: parent
+                                anchors.margins: appTheme.spaceXs
+                                visible: !dialog.copyMode
+                                model: dialog.copyMode ? null : dialog.displayRows
                                 boundsBehavior: Flickable.StopAtBounds
                                 reuseItems: true
 
@@ -611,7 +799,7 @@ Dialog {
                                             : appTheme.iconButtonHitSizeCompact
                                     sourceComponent: modelData.kind === "section"
                                                      ? sectionDelegate
-                                                     : parameterDelegate
+                                                     : pasteParameterDelegate
                                     onLoaded: item.rowData = modelData
                                     onModelDataChanged: if (item) item.rowData = modelData
                                 }
@@ -633,17 +821,8 @@ Dialog {
                     anchors.rightMargin: appTheme.spaceLg
                     spacing: appTheme.spaceSm
 
-                    Label {
+                    Item {
                         Layout.fillWidth: true
-                        text: dialog.copyMode
-                              ? qsTr("%1 of %2 settings selected")
-                                    .arg(dialog.selectedCount).arg(dialog.adjustmentRows.length)
-                              : qsTr("%1 settings · %2 target images")
-                                    .arg(dialog.adjustmentRows.length).arg(dialog.targetCount)
-                        color: appTheme.textMutedColor
-                        font.family: appTheme.uiFontFamily
-                        font.pixelSize: appTheme.fontSizeCaption
-                        elide: Text.ElideRight
                     }
 
                     DialogActionButton {
@@ -669,11 +848,12 @@ Dialog {
                         buttonRadius: appTheme.controlRadiusSmall
                         font.weight: appTheme.fontWeightRegular
                         text: dialog.acceptText()
-                        enabled: !dialog.copyMode || dialog.selectedCount > 0
+                        enabled: dialog.copyMode
+                                 ? (dialog.dialogModel && dialog.dialogModel.canCopy === true)
+                                 : true
                         onClicked: {
                             if (dialog.copyMode) {
-                                dialog.copyAccepted(dialog.selectedKeys(),
-                                                    dialog.selectedSourceVersionId)
+                                dialog.copyAccepted()
                             } else {
                                 dialog.pasteAccepted(dialog.pasteStrategy)
                             }
@@ -768,42 +948,13 @@ Dialog {
     }
 
     Component {
-        id: parameterDelegate
+        id: pasteParameterDelegate
 
         Item {
             id: parameterRoot
             property var rowData: ({})
-            activeFocusOnTab: dialog.copyMode
-            Accessible.role: Accessible.CheckBox
+            Accessible.role: Accessible.ListItem
             Accessible.name: String(rowData.label || "")
-            Accessible.checkable: dialog.copyMode
-            Accessible.checked: rowData.checked === true
-
-            function toggle() {
-                if (dialog.copyMode) {
-                    dialog.setRowChecked(Number(rowData.sourceIndex),
-                                         !(rowData.checked === true))
-                }
-            }
-
-            Accessible.onToggleAction: toggle()
-            Keys.onPressed: function(event) {
-                if (event.key === Qt.Key_Space || event.key === Qt.Key_Return
-                        || event.key === Qt.Key_Enter) {
-                    toggle()
-                    event.accepted = true
-                }
-            }
-
-            Rectangle {
-                anchors.fill: parent
-                radius: appTheme.badgeRadius
-                color: parameterMouse.containsMouse && dialog.copyMode
-                       ? appTheme.buttonHoveredFillColor
-                       : "transparent"
-                border.width: parameterRoot.activeFocus ? 1 : 0
-                border.color: appTheme.accentColor
-            }
 
             RowLayout {
                 anchors.fill: parent
@@ -811,36 +962,10 @@ Dialog {
                 anchors.rightMargin: appTheme.spaceSm
                 spacing: appTheme.spaceSm
 
-                Rectangle {
-                    visible: dialog.copyMode
-                    Layout.preferredWidth: appTheme.iconOpticalSizeCompact
-                    Layout.preferredHeight: appTheme.iconOpticalSizeCompact
-                    radius: appTheme.badgeRadius
-                    color: parameterRoot.rowData.checked
-                           ? appTheme.editorListSelectedFillColor
-                           : "transparent"
-                    border.width: 1
-                    border.color: parameterRoot.rowData.checked
-                                  ? appTheme.editorListSelectedFillColor
-                                  : appTheme.cardBorderColor
-
-                    Label {
-                        anchors.centerIn: parent
-                        visible: parameterRoot.rowData.checked
-                        text: "✓"
-                        color: appTheme.editorListSelectedInkColor
-                        font.family: appTheme.uiFontFamily
-                        font.pixelSize: appTheme.fontSizeCaption
-                        font.weight: appTheme.fontWeightHeading
-                    }
-                }
-
                 Label {
                     Layout.fillWidth: true
                     text: String(parameterRoot.rowData.label || "")
-                    color: parameterRoot.rowData.checked || !dialog.copyMode
-                           ? appTheme.textColor
-                           : appTheme.textMutedColor
+                    color: appTheme.textColor
                     font.family: appTheme.uiFontFamily
                     font.pixelSize: appTheme.fontSizeBody
                     elide: Text.ElideRight
@@ -849,22 +974,12 @@ Dialog {
                 Label {
                     Layout.maximumWidth: parameterRoot.width / 3
                     text: String(parameterRoot.rowData.value || "")
-                    color: parameterRoot.rowData.checked
-                           ? appTheme.textColor : appTheme.textMutedColor
+                    color: appTheme.textMutedColor
                     font.family: appTheme.dataFontFamily
                     font.pixelSize: appTheme.fontSizeCaption
                     horizontalAlignment: Text.AlignRight
                     elide: Text.ElideMiddle
                 }
-            }
-
-            MouseArea {
-                id: parameterMouse
-                anchors.fill: parent
-                enabled: dialog.copyMode
-                hoverEnabled: true
-                cursorShape: dialog.copyMode ? Qt.PointingHandCursor : Qt.ArrowCursor
-                onClicked: parameterRoot.toggle()
             }
         }
     }

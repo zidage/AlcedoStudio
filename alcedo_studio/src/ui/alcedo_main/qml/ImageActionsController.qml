@@ -548,11 +548,7 @@ Item {
         }
         adjustmentTransferDialog.mode = "copy"
         adjustmentTransferDialog.sourceTitle = result.sourceTitle ? String(result.sourceTitle) : ""
-        adjustmentTransferDialog.sourceVersions = result.versions ? result.versions : []
-        adjustmentTransferDialog.selectedSourceVersionId =
-            result.activeVersionId ? String(result.activeVersionId) : ""
         adjustmentTransferDialog.targetCount = 0
-        adjustmentTransferDialog.adjustmentRows = result.items ? result.items : []
         adjustmentTransferDialog.open()
     }
 }

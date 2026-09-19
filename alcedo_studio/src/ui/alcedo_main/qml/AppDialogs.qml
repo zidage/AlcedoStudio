@@ -104,11 +104,9 @@ Item {
         id: adjustmentTransferDialogObj
         blurSource: root.blurSource
         cornerRadius: host.windowCornerRadius
-        onCopyAccepted: function(selectedKeys, versionId) {
-            const result = appModules.adjustmentTransfer.CopyVersion(
-                Number(host.pendingAdjustmentSource.elementId),
-                versionId,
-                selectedKeys)
+        dialogModel: appModules.adjustmentTransfer.dialogModel
+        onCopyAccepted: {
+            const result = appModules.adjustmentTransfer.CommitCopy()
             if (result && result.message) {
                 host.showSnackbar(result.message)
             }

@@ -3,8 +3,8 @@
 Date: 2026-09-18
 
 Status: **in progress**. The user approved the product design on 2026-09-18. NM10.1,
-NM10.2, and NM10.3 are implemented and verified (see sections 10.1.12, 11.12, and
-12.12); NM10.4 onward remain planned.
+NM10.2, NM10.3, and NM10.4 are implemented and verified (see sections 10.1.12,
+11.12, 12.12, and 13.12); NM10.5 onward remain planned.
 
 Parent: [Node-aware Pipeline Editing and Mask Creation](../node_mask_editor_master_plan.md),
 Sections 14, 20.6, 21.11, and 26.
@@ -875,8 +875,8 @@ It excludes generated files and temporary evidence.
 | --- | --- | --- | --- | ---: | --- |
 | NM10.1 | Stable selection and sparse v6 package | transfer types, package builder, JSON | NM9 complete | 1,200–1,700 lines | done |
 | NM10.2 | Selective root-relative paste planner | planner, service, history tests | NM10.1 | 900–1,400 lines | done |
-| NM10.3 | Read-only Version catalog | replay service, catalog tests | NM10.1 | 800–1,300 lines | planned |
-| NM10.4 | Qt models and controller split | list models, dialog model, apply coordinator | NM10.2–NM10.3 | 1,300–1,800 lines | planned |
+| NM10.3 | Read-only Version catalog | replay service, catalog tests | NM10.1 | 800–1,300 lines | done |
+| NM10.4 | Qt models and controller split | list models, dialog model, apply coordinator | NM10.2–NM10.3 | 1,300–1,800 lines | done |
 | NM10.5 | Three-column QML and button rules | dialog panes, shared controls, QML tests | NM10.4 | 1,100–1,700 lines | planned |
 | NM10.6 | Product integration and reopen evidence | real project tests, docs, cleanup | NM10.5 | 700–1,200 lines | planned |
 
@@ -1719,15 +1719,151 @@ Split the apply coordinator from the dialog model phase if the upper estimate pa
 
 ```text
 Phase / date / status:
+NM10.4 / 2026-09-30 / implemented and verified.
+
 Source revision and branch:
+dfa0a846e1b50fcdba3acfff28af4a9044ab5a7a base on main; work landed on
+feature/nm10-4-5-transfer-dialog-models.
+
 Actual Qt model and coordinator owners:
+AdjustmentTransferVersionListModel / AdjustmentTransferNodeListModel /
+AdjustmentTransferItemListModel (QAbstractListModel subclasses) in
+alcedo_studio/src/ui/alcedo_main/album_backend/adjustment_transfer_list_models.cpp
+with headers under
+alcedo_studio/src/include/ui/alcedo_main/album_backend/. Version rows expose
+versionId/displayName/createdAt/updatedAt/active/selected; node rows expose
+nodeId/displayName/nodeKind/defaultGrade/checkState/focused; item rows expose
+itemKey/displayName/displayValue/itemSection/itemKind/checked/enabled.
+Stable identity roles (versionId, nodeId, itemKey) are the only selection
+identity; row index and display text are never used as identity.
+
+AdjustmentTransferDialogModel (adjustment_transfer_dialog_model.cpp) owns the
+whole checked/focused state: OpenSource(commit_graph, root_document) lists
+Versions through AdjustmentTransferCatalogService, replays the chosen source
+into its own AdjustmentTransferCatalogRead, and builds node/item rows from
+the read. SelectVersion/FocusNode/SetNodeChecked/SetItemChecked/
+SetAllNodesChecked/SetAllFocusedNodeItemsChecked/ClearAll/ClearFocusedNode are
+the complete command surface. Node checkState derives from owned item states
+(Qt::PartiallyChecked when mixed); focused and global bulk check states derive
+the same way. All transferable items start selected on source open; disabled
+items (maskless Masks) never enter selection. BuildPackage() produces the v6
+sparse package through AdjustmentTransferPackageBuilder without mutating the
+prior copied package.
+
+AdjustmentTransferApplyCoordinator
+(adjustment_transfer_apply_coordinator.cpp) owns multi-target apply:
+ApplyToTargets(package, target element ids) runs
+AdjustmentTransferService::PasteAsRootRelativeVersion per target, continues
+after individual failures, accumulates
+applied/unchanged/failure counts plus per-target failure rows, and performs
+HDR metadata + thumbnail refresh only for successfully persisted targets
+(TargetRefreshed(elementId) emitted per success).
+
 Controller line count and remaining responsibilities:
+adjustment_transfer_controller.cpp is 175 lines (was ~730). Remaining
+responsibilities: command routing and single package ownership only.
+PrepareCopy(elementId) loads the editor pipeline through
+PipelineMgmtService::LoadEditorPipeline and hands the commit graph + root
+document to dialogModel.OpenSource. CommitCopy() calls
+dialogModel.BuildPackage() and replaces copied_package_ only on success.
+Paste(targetEntries, strategy) collects export targets through
+ImportExportHandler and delegates to ApplyCoordinator::ApplyToTargets.
+PasteIntoEditor(editorSession) applies to the live editor. Discard() clears
+the copied package. The controller publishes packageAvailable,
+packageSummary, packageSourceTitle, packageSourceVersion, and dialogModel to
+QML. It no longer inspects pipeline operators, no longer formats transfer
+rows, no longer switches or restores the live active Version, and performs
+no per-target persistence work itself.
+
 Primary success call chain:
+QML version delegate activated
+  -> AdjustmentTransferDialogModel::SelectVersion(versionId)
+  -> AdjustmentTransferCatalogService::ReadVersion
+       -> CommitGraph::GetVersionRef
+       -> FirstParentCommitsForHead
+       -> ReplayPipelineDocumentFromRoot onto caller's immutable root
+       -> BuildNodeDescriptors (grades in backbone order + DRT/Post last)
+  -> nodes/items models reset; every enabled item checked
+QML node/item check commands
+  -> SetNodeChecked / SetItemChecked / bulk commands
+  -> child item states updated; node checkState + global/focused bulk
+     checkState re-derived; canCopyChanged emitted
+Copy accepted
+  -> AdjustmentTransferController::CommitCopy
+  -> dialogModel.BuildPackage
+       -> checked enabled items -> AdjustmentTransferSelection
+       -> AdjustmentTransferPackageBuilder::Build -> v6 sparse package
+  -> copied_package_ replaced only after BuildPackage returns a package
+Paste accepted
+  -> AdjustmentTransferController::Paste(targets, "paste")
+  -> ImportExportHandler::CollectExportTargets
+  -> AdjustmentTransferApplyCoordinator::ApplyToTargets
+       -> per target: AdjustmentTransferService::PasteAsRootRelativeVersion
+          -> DocumentTransferPlanner -> paste commits -> persist pipeline
+       -> success: HDR metadata refresh + thumbnail refresh +
+          TargetRefreshed(elementId)
+
 Primary failure and restore call chain:
+unknown Version id / replay failure inside SelectVersion
+  -> catalog error captured -> errorText set -> prior valid read and its
+     selection kept (dialog model returns early; models not reset)
+empty selection or missing node on CommitCopy
+  -> BuildPackage returns nullopt -> copied_package_ untouched ->
+     packageAvailable stays true for the previous package
+per-target planner/persistence failure inside ApplyToTargets
+  -> result recorded in failures with elementId + error; remaining targets
+     still processed; no refresh emitted for the failed target
+
 Build and test commands with exit codes:
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4
+    --target AdjustmentTransferDialogModelTest AdjustmentTransferControllerTest
+                                                          -> exit 0
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4
+    --target AdjustmentTransferDialogQmlTest
+             EditorAdjustmentTransferActionsQmlTest
+             EditorAdjustmentTransferRealProjectE2eTest   -> exit 0
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4
+    --target AdjustmentTransferCatalogTest AdjustmentTransferServiceTest
+             AdjustmentTransferServiceMiniGitTest DocumentTransferTest
+                                                          -> exit 0
+ctest --test-dir build/debug -N -R "^(AdjustmentTransferDialogModelTest|
+    AdjustmentTransferControllerTest|AdjustmentTransferDialogQmlTest|
+    EditorAdjustmentTransferActionsQmlTest)\."             -> exit 0 (25
+    discovered)
+
 Discovered / passed / failed / skipped counts:
+AdjustmentTransferDialogModelTest:    14/14 passed
+AdjustmentTransferControllerTest:      4/4 passed
+AdjustmentTransferDialogQmlTest:       2/2 passed
+EditorAdjustmentTransferActionsQmlTest: 5/5 passed
+EditorAdjustmentTransferRealProjectE2eTest: skipped
+    (ALCEDO_REAL_ADJUSTMENT_PROJECT not set)
+Regression (unchanged app-layer targets):
+AdjustmentTransferCatalogTest 6/6, AdjustmentTransferServiceTest 3/3,
+AdjustmentTransferServiceMiniGitTest 17/17, DocumentTransferTest 26/26.
+
 Source no-mutation and target refresh evidence:
+CopyDoesNotSaveOrRenderSourceImage runs PrepareCopy + CommitCopy against a
+seeded project and compares canonical live/root document JSON plus project
+dirty state before and after Copy; exact equality required.
+CopyFailureKeepsPriorPackage commits a valid package, forces a failed
+CommitCopy (selection cleared), then verifies the prior package identity,
+summary, and provenance strings are unchanged.
+MultiTargetCoordinatorRefreshesOnlySuccessfulTargets applies one package to
+two targets where one path fails planner validation; TargetRefreshed is
+asserted only for the successful element id and the result reports
+applied=1 / failed=1 with a failure row for the failed target.
+ControllerNoLongerOwnsTransferRowFormatting guards against controller-owned
+row formatting/pipeline inspection (grep-style assertion on the controller
+surface, per the plan's test table).
+
 Remaining defects or unavailable platforms:
+None known. The real-project e2e path compiles and skips without
+ALCEDO_REAL_ADJUSTMENT_PROJECT; hardware-backed pixel verification remains
+environment-gated. Deadlock-prone broader history suites were not exercised
+per the phase instruction. The dialog doc
+(qml/doc/AdjustmentTransferDialog.md) was updated to the model-driven
+boundary; NM10.5 visual polish remains planned on this same branch.
 ```
 
 ---

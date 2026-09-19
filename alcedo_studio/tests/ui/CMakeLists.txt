@@ -353,6 +353,12 @@ alcedo_register_test_target(ApplicationModuleHostLifecycleTest ui)
 def_ui_test(ApplicationModuleHostShutdownTest application_module_host_shutdown_test.cpp)
 alcedo_register_test_target(ApplicationModuleHostShutdownTest ui)
 
+def_ui_test(AdjustmentTransferDialogModelTest adjustment_transfer_dialog_model_test.cpp)
+alcedo_register_test_target(AdjustmentTransferDialogModelTest ui)
+
+def_ui_test(AdjustmentTransferControllerTest adjustment_transfer_controller_test.cpp)
+alcedo_register_test_target(AdjustmentTransferControllerTest ui)
+
 # Phase 0: deterministic editor RHI contracts (backend parse, fixtures, lease schema).
 add_executable(EditorRhiContractsTest
     ${ALCEDO_TEST_ROOT}/ui/editor_rhi_contracts_test.cpp
