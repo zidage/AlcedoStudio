@@ -93,6 +93,7 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_history_commit_presentation.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_node_graph_presentation.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/shortcut_registry.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/shortcut_registration.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_geometry_math.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_lens_catalog_model.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_tone_curve_model.cpp"
