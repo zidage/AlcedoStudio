@@ -58,7 +58,7 @@ TEST(BrushSourceFormatBoundary, CurrentHistoryIdentitiesMatchPublishedConstants)
   EXPECT_EQ(kRootStateFormatVersion, 5u);
   EXPECT_EQ(kCheckpointStateFormatVersion, 5u);
   EXPECT_EQ(kMiniGitJournalRecordFormatVersion, 6u);
-  EXPECT_EQ(kAdjustmentTransferSchema, "alcedo.adjustment_transfer.v5");
+  EXPECT_EQ(kAdjustmentTransferSchema, "alcedo.adjustment_transfer.v6");
   EXPECT_EQ(kMaskAssetFormatVersion, 1u);
   EXPECT_EQ(kMaskAssetPackedR8FormatId, 1u);
   EXPECT_EQ(kMaximumRasterMaskAxis, 4096u);
