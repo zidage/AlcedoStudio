@@ -823,6 +823,77 @@ When complete, add:
 - exact test commands and counts;
 - remaining risks or `None`.
 
+#### Completion record - 2026-09-19
+
+**Status:** complete on branch `feature/configurable-shortcut-registry-a1`.
+
+**Commits:**
+
+- `0eb4f88b` docs(roadmap): add configurable keyboard shortcut registry plan
+- `9e51a19f` feat(shortcuts): registry model with scopes, modifiers, and persistence (A1)
+- `e4b79036` refactor(shortcuts): split built-in command table out of registry
+
+**Changed public APIs** (`alcedo_studio/src/include/ui/alcedo_main/shortcut_registry.hpp`):
+
+- `ShortcutRegistry` now inherits `QAbstractListModel` (was `QObject`) with roles `commandId`,
+  `groupText`, `descriptionText`, `bindingText`, `defaultBindingText`, `assigned`, `usesDefault`,
+  `inputKind`, `scopeText`, `autoRepeat`, `settingsVisible`, `validationError`.
+- New value types: `ShortcutInputKind` (`KeyChord`, `Modifier`), `ShortcutInput`,
+  `ShortcutBindingSpec`; new `shortcut_scope` and `shortcut_id` constant namespaces.
+- New C++ API: `Register(ShortcutBindingSpec)`, `FinalizeRegistration()`, `RegistrationErrors()`,
+  `RowForCommand`, `Action`, `DecorateTooltip`, `RefreshEnabledStates()`.
+- New QML API: `matches`, `modifierMatches`, `commandIdForKey(scope, key, modifiers)` (scope
+  argument added), `keySequenceTexts`, `validateCandidate`, `saveCandidate`, `clearBinding`,
+  `restoreDefault`, `shortcutText`, `decorateTooltip`.
+- New free functions: `RegisterLibraryShortcuts`, `RegisterEditorShortcuts`,
+  `RegisterFilmstripShortcuts`, `RegisterVersionsShortcuts`, `RegisterLutShortcuts`,
+  `RegisterMaskShortcuts`, `RegisterNodesPanelShortcuts`, `RegisterBuiltinShortcuts`,
+  `RegisterShortcutRegistryQmlType`.
+- `commandIdForKey` signature change propagated to `EditorNodesPanel.qml`; old Nodes delete id
+  `nodes.deleteColorGrade` migrates to `nodes.deleteSelection` on load.
+
+**Success call-chain evidence** (from `ShortcutRegistryTest` run below):
+
+```text
+QML Keys.onPressed
+  -> ShortcutRegistry.commandIdForKey(scope, key, modifiers)      [shortcut_registry.cpp]
+  -> FindEntry + binding match inside declared scope
+  -> command id returned; QML owner invokes its action
+ShortcutRegistry.saveCandidate
+  -> ValidateCandidate (reserved keys, kind, cross-scope conflicts)
+  -> ApplyBindings + UpdateActionShortcuts + NotifyRowChanged
+  -> QSettings sync write; bindingChanged emitted
+```
+
+**Failure call-chain evidence:**
+
+```text
+Malformed saved value
+  -> LoadOverrides -> parse failure -> row_error set, entry stays inactive
+  -> validationError role exposes message; binding never matches input
+Settings write failure
+  -> saveCandidate -> QSettings::sync status != NoError
+  -> Result(false, kErrPersistence); prior in-memory binding retained
+  -> SettingsWriteFailureKeepsPriorEffectiveBinding verifies
+Duplicate/conflicting registration
+  -> FinalizeRegistration -> registration_errors_ + inactive entry
+  -> DuplicateCommandIdFailsRegistrationFinalization verifies
+```
+
+**Test commands and counts:**
+
+```powershell
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target ShortcutRegistryTest
+ctest --test-dir build/debug -R "^ShortcutRegistryTest\." --output-on-failure
+```
+
+Result: **17/17 passed** (label `keyboard_shortcuts`), including all 15 required A1 tests plus the
+two retained Nodes regression tests. Build logs kept under
+`build/tmp/configurable_keyboard_shortcuts/a1/`.
+
+**Remaining risks:** None for A1 scope. QML runtime routes for non-Nodes surfaces remain unbound by
+design until A2; `WorkspaceShellTest` remains disabled per `AGENTS.md` guidance.
+
 ## 9. Phase A2 - Basic UI Command Routing
 
 ### Objective
