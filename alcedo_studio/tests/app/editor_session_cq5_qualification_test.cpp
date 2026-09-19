@@ -29,7 +29,10 @@ using namespace alcedo::test;
 
 auto MakeExposureTransferPackage(double /*exposure*/) -> AdjustmentTransferPackage {
   AdjustmentTransferPackage package;
-  package.color_grades_.push_back(nlohmann::json{{"id", "grade.primary"}});
+  TransferColorGradeValue   grade;
+  grade.source_node_id = NodeId{"grade.primary"};
+  grade.display_name   = "Color Grade";
+  package.color_grades_.push_back(std::move(grade));
   return package;
 }
 

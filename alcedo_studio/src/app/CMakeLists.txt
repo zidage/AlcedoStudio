@@ -278,6 +278,7 @@ def_library(PipelineMgmtService
 
 def_library(AdjustmentTransferService
     SOURCES
+        "${ALCEDO_APP_ROOT}/adjustment_transfer_package_builder.cpp"
         "${ALCEDO_APP_ROOT}/adjustment_transfer_service.cpp"
         "${ALCEDO_APP_ROOT}/document_transfer.cpp"
     PUBLIC_DEPS PipelineMgmtService EditPipeline EditGraph EditMaskCore EditHistory
