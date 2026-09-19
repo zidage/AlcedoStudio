@@ -8,8 +8,11 @@
 #include <mutex>
 #include <string>
 
+#include "app/adjustment_transfer_package_builder.hpp"
 #include "app/adjustment_transfer_service.hpp"
 #include "app/pipeline_service.hpp"
+#include "edit/graph/adjustment_ownership.hpp"
+#include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/commit_types.hpp"
@@ -17,6 +20,7 @@
 #include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/history/version_ref.hpp"
 #include "edit/operators/basic/color_temp_op.hpp"
+#include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/geometry/lens_calib_op.hpp"
 #include "edit/operators/op_base.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
@@ -207,6 +211,85 @@ TEST_F(AdjustmentTransferPasteMergeTest, PasteDoesNotAffectOtherVersions) {
   const auto& second_ref = graph->GetVersionRef(second_version_id);
   EXPECT_EQ(second_ref.head_commit_hash, std::nullopt);
   EXPECT_EQ(second_ref.version_id, second_version_id);
+}
+
+/// One selective Paste creates exactly one root-relative Version with exactly one
+/// typed Paste commit whose first parent is the image root.
+TEST_F(AdjustmentTransferPasteMergeTest, SelectivePasteCreatesOneRootRelativeVersionAndCommit) {
+  const auto element_id = test::EditorMiniGitProjectFixture::kElementA;
+  auto*      graph      = project_.graph(element_id).get();
+  ASSERT_NE(graph, nullptr);
+
+  const auto version_count_before = graph->GetAllVersionRefs().size();
+  const auto commit_count_before  = graph->CommitCount();
+  const auto prior_version_id     = graph->GetActiveVersionId();
+
+  // A sparse package that selects only the exposure adjustment.
+  auto       document     = test::DocumentWithExposureEv(1.5);
+  const auto* grade       = document.PrimaryGrade();
+  ASSERT_NE(grade, nullptr);
+  const auto* exposure_id = grade->FindAdjustmentIdByType(type_ids::Exposure());
+  ASSERT_NE(exposure_id, nullptr);
+  AdjustmentTransferSelection selection;
+  selection.nodes.push_back(
+      {grade->Id(), {{AdjustmentTransferItemKind::Adjustment, *exposure_id}}});
+  const auto package = AdjustmentTransferPackageBuilder::Build(document, selection);
+
+  const auto result = AdjustmentTransferService::PasteAsRootRelativeVersion(
+      *graph, CreateDefaultPipelineDocument(), package, "Selective Paste");
+  ASSERT_TRUE(result.pasted) << result.error;
+
+  EXPECT_EQ(graph->GetAllVersionRefs().size(), version_count_before + 1u);
+  EXPECT_EQ(graph->CommitCount(), commit_count_before + 1u);
+  EXPECT_EQ(graph->GetActiveVersionId(), result.new_version_id);
+  EXPECT_NE(result.new_version_id, prior_version_id);
+
+  const auto chain = graph->FirstParentChain(result.new_head);
+  ASSERT_EQ(chain.size(), 1u);
+  const auto& commit = graph->GetCommit(chain.front());
+  EXPECT_EQ(commit.GetFirstParentHash(), std::nullopt);
+  ASSERT_TRUE(IsPipelineEditBatchJson(commit.GetPayloadJSON()));
+  EXPECT_EQ(PipelineEditBatch::FromJSON(commit.GetPayloadJSON()).operation_kind,
+            PipelineEditOperationKind::Paste);
+}
+
+/// A planner failure creates no Version ref, no commit, and no active-Version change.
+TEST_F(AdjustmentTransferPasteMergeTest, SelectivePasteFailureCreatesNoVersionOrCommit) {
+  const auto element_id = test::EditorMiniGitProjectFixture::kElementA;
+  auto*      graph      = project_.graph(element_id).get();
+  ASSERT_NE(graph, nullptr);
+  ASSERT_TRUE(project_.AppendExposureEdit(element_id, 0.0f, 1.0f));
+
+  const auto version_count_before = graph->GetAllVersionRefs().size();
+  const auto commit_count_before  = graph->CommitCount();
+  const auto prior_version_id     = graph->GetActiveVersionId();
+  const auto prior_head           = graph->GetActiveVersionRef().head_commit_hash;
+
+  class CollidingIdentity final : public TransferIdentitySource {
+   public:
+    auto NextNodeId() -> NodeId override { return NodeId{"grade.primary"}; }
+    auto NextAdjustmentInstanceId(const NodeId& node_id, const OperatorTypeId& type)
+        -> AdjustmentInstanceId override {
+      return MakeAdjustmentInstanceId(node_id, type);
+    }
+    auto NextMaskId() -> MaskId override { return MaskId{"mask.t1"}; }
+#ifdef ALCEDO_ENABLE_BRUSH_MASK
+    auto NextStrokeId() -> StrokeId override { return StrokeId{"stroke.t1"}; }
+#endif
+  } colliding;
+  DocumentTransferPasteOptions options;
+  options.identity_source = &colliding;
+
+  const auto result = AdjustmentTransferService::PasteAsRootRelativeVersion(
+      *graph, CreateDefaultPipelineDocument(), test::MakeExposureTransferPackage(2.0),
+      "Rejected Paste", options);
+  EXPECT_FALSE(result.pasted);
+  EXPECT_FALSE(result.error.empty());
+
+  EXPECT_EQ(graph->GetAllVersionRefs().size(), version_count_before);
+  EXPECT_EQ(graph->CommitCount(), commit_count_before);
+  EXPECT_EQ(graph->GetActiveVersionId(), prior_version_id);
+  EXPECT_EQ(graph->GetActiveVersionRef().head_commit_hash, prior_head);
 }
 
 // ============================================================================

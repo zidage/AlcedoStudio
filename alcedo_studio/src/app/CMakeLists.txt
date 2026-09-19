@@ -281,6 +281,7 @@ def_library(AdjustmentTransferService
         "${ALCEDO_APP_ROOT}/adjustment_transfer_package_builder.cpp"
         "${ALCEDO_APP_ROOT}/adjustment_transfer_service.cpp"
         "${ALCEDO_APP_ROOT}/document_transfer.cpp"
+        "${ALCEDO_APP_ROOT}/document_transfer_planner.cpp"
     PUBLIC_DEPS PipelineMgmtService EditPipeline EditGraph EditMaskCore EditHistory
                 PipelineHistoryApplier
     PRIVATE_DEPS EditorAdjustmentPipeline EditorPipelineCommandService

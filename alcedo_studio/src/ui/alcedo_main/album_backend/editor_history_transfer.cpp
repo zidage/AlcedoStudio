@@ -11,6 +11,7 @@
 #include <utility>
 
 #include "app/document_transfer.hpp"
+#include "app/document_transfer_planner.hpp"
 #include "app/editor_adjustment_pipeline.hpp"
 #include "app/editor_pipeline_command_service.hpp"
 #include "app/pipeline_document_history.hpp"
@@ -122,8 +123,8 @@ auto EditorHistoryTransfer::PasteLiveRootRelativeVersion(
 
   alcedo::PreparedDocumentPaste prepared;
   try {
-    prepared = alcedo::PrepareDocumentPaste(package, *state->pipeline_guard->root_document_,
-                                            options);
+    prepared = alcedo::DocumentTransferPlanner::Plan(
+        package, *state->pipeline_guard->root_document_, options);
   } catch (const std::exception& ex) {
     return SetError(error, ex.what());
   }

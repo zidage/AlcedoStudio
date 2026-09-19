@@ -2,8 +2,9 @@
 
 Date: 2026-09-18
 
-Status: **in progress**. The user approved the product design on 2026-09-18. NM10.1 is
-implemented and verified (see section 10.1.12); NM10.2 onward remain planned.
+Status: **in progress**. The user approved the product design on 2026-09-18. NM10.1 and
+NM10.2 are implemented and verified (see sections 10.1.12 and 11.12); NM10.3 onward
+remain planned.
 
 Parent: [Node-aware Pipeline Editing and Mask Creation](../node_mask_editor_master_plan.md),
 Sections 14, 20.6, 21.11, and 26.
@@ -873,7 +874,7 @@ It excludes generated files and temporary evidence.
 | Phase | Result | Main modules | Dependency | Expected diff | Status |
 | --- | --- | --- | --- | ---: | --- |
 | NM10.1 | Stable selection and sparse v6 package | transfer types, package builder, JSON | NM9 complete | 1,200–1,700 lines | done |
-| NM10.2 | Selective root-relative paste planner | planner, service, history tests | NM10.1 | 900–1,400 lines | planned |
+| NM10.2 | Selective root-relative paste planner | planner, service, history tests | NM10.1 | 900–1,400 lines | done |
 | NM10.3 | Read-only Version catalog | replay service, catalog tests | NM10.1 | 800–1,300 lines | planned |
 | NM10.4 | Qt models and controller split | list models, dialog model, apply coordinator | NM10.2–NM10.3 | 1,300–1,800 lines | planned |
 | NM10.5 | Three-column QML and button rules | dialog panes, shared controls, QML tests | NM10.4 | 1,100–1,700 lines | planned |
@@ -1246,31 +1247,143 @@ Confirm actual target names first.
 
 ### 11.10 Exit criteria
 
-- [ ] Partial Grade selection produces clean unselected values.
-- [ ] Mask transfer is all or none per Grade.
-- [ ] DRT-only transfer keeps target root Grades.
-- [ ] Target image-specific data remains unchanged.
-- [ ] Identity remap has no collision.
-- [ ] One Paste creates one Version and one commit.
-- [ ] Failure creates no partial Version.
+- [x] Partial Grade selection produces clean unselected values.
+- [x] Mask transfer is all or none per Grade.
+- [x] DRT-only transfer keeps target root Grades.
+- [x] Target image-specific data remains unchanged.
+- [x] Identity remap has no collision.
+- [x] One Paste creates one Version and one commit.
+- [x] Failure creates no partial Version.
 
 ### 11.11 Expected diff
 
 Expected diff: 900–1,400 lines.
 
+Actual diff: ~1,660 lines (1,090 changed + 570 new planner files). The excess over
+the planned size is focused test coverage (~310 lines of planner tests plus two
+service tests), not production surface.
+
 ### 11.12 Completion record
 
 ```text
 Phase / date / status:
+  NM10.2 / 2026-09-19 / implemented and verified on Windows (MSVC debug).
+
 Source revision and branch:
+  42d325ea on main ancestry; work on branch
+  feature/nm10-2-selective-paste-planner.
+
 Actual planner and history owners:
+  - alcedo_studio/src/include/app/document_transfer_planner.hpp (new) and
+    alcedo_studio/src/app/document_transfer_planner.cpp (new) own
+    TransferIdentitySource, CountingTransferIdentitySource,
+    DocumentTransferPasteOptions, PreparedDocumentPaste,
+    SetDocumentTransferIdentitySourceForTesting, and
+    DocumentTransferPlanner::Plan — identity remap, clean-default Grade
+    materialization, sparse DRT/Post changes, and typed Paste batch building.
+  - alcedo_studio/src/include/app/document_transfer.hpp and
+    alcedo_studio/src/app/document_transfer.cpp keep only the boundary:
+    capture, v6 import/export, schema validation, and canonical fingerprint.
+  - CommitGraph / Version creation stays in AdjustmentTransferService
+    (PasteAsRootRelativeVersion -> DocumentTransferPlanner::Plan) and in
+    EditorHistoryTransfer::PasteLiveRootRelativeVersion; the planner mutates
+    no live document.
+
 Implemented selection semantics:
+  - Each selected Color Grade starts from ColorGradeNodeModel::MakeClean and
+    receives only the selected enabled / mix / adjustment values; an unchecked
+    Mask set adds no Mask, a checked set adds every source Mask in source order
+    (Section 3.2).
+  - Backbone order decides package order and therefore remap order; a selected
+    subset keeps source order on the pasted chain (Section 3.1/3.2).
+  - DRT/Post applies to the existing target root DRT node; unselected DRT/Post
+    items keep the target root values; a DRT-only package leaves the target
+    Grade chain untouched (Section 3.4/3.5).
+  - Section 3.3 default identity: the remapped source default stays default;
+    when the package omits the source default, the first included Grade becomes
+    the target default. The target default protection rule is applied after
+    remap — the default Grade and its transferred Masks are deletion-protected;
+    other protection values keep their source values.
+  - Every transferred NodeId / AdjustmentInstanceId / MaskId / StrokeId is
+    remapped through TransferIdentitySource with collision rejection against
+    source IDs, target root IDs, and generated IDs.
+  - A package that produces no target change fails planning; an invalid
+    package, collision, malformed value, or missing endpoint fails before any
+    Version or commit is created.
+
 Primary success call chain:
+  v6 package + target immutable root
+    -> DocumentTransferPlanner::Plan
+    -> ValidateDocumentTransfer + Develop/DRT endpoint check
+    -> OccupiedIdentities + CollectSourceIdentities
+    -> RemapGradeEntry (MakeClean + selected values + Section 3.3 default)
+    -> AppendDrtParameterChanges (sparse DRT/Post SetParameter changes)
+    -> BuildPasteBatch (remove/insert Grade changes + default wiring)
+    -> MakePasteBatch (one validated PipelineEditBatch)
+    -> AdjustmentTransferService::PasteAsRootRelativeVersion or
+       EditorHistoryTransfer::PasteLiveRootRelativeVersion
+    -> one root-relative VersionRef + one typed Paste commit (first parent root).
+
 Primary failure and restore call chain:
+  validation, collision, missing endpoint, malformed value, or empty-change
+  failure -> std::runtime_error from the planner before graph mutation ->
+  service returns AdjustmentPasteResult{error} -> no Version ref, no commit,
+  no active Version change, no render or persistence request. Partial Version
+  creation after planning is rolled back by restoring the prior active Version
+  and removing the created ref (existing service behavior, unchanged).
+
 Build and test commands with exit codes:
+  cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4
+      --target DocumentTransferTest AdjustmentTransferServiceMiniGitTest
+              EditorSessionHistoryPortTest AlbumBackendLib                 -> 0
+  ctest --test-dir build/debug --output-on-failure
+      -R "^(DocumentTransferTest|AdjustmentTransferServiceMiniGitTest)\."  -> 43/43 pass
+  ctest --test-dir build/debug --output-on-failure
+      -R "^EditorSessionHistoryPortTest\."                               -> 89/89 pass
+  ctest --test-dir build/debug --output-on-failure
+      -R "^(DocumentTransferTest|AdjustmentTransferServiceMiniGitTest|
+          EditorSessionHistoryPortTest)\."                               -> 132/132 pass
+
 Discovered / passed / failed / skipped counts:
-Identity and persistence evidence:
+  DocumentTransferTest: 26/26 (10 new NM10.2 planner tests:
+    PartialGradePasteUsesCleanValuesForUnselectedAdjustments,
+    SelectedGradeSubsetKeepsSourceOrder, MaskSetPasteRemapsAllMasksAsOneSelection,
+    UncheckedMaskSetAddsNoMask, DrtOnlyPasteKeepsTargetRootGrades,
+    PartialDrtPasteKeepsUnselectedTargetRootValues,
+    RemappedSourceDefaultGradeStaysDefault, FirstIncludedGradeBecomesTargetDefault,
+    PlannerDoesNotMutatePackageOrTargetRoot,
+    DrtOnlyPackageIdenticalToTargetFailsWithoutChanges;
+    PasteKeepsTargetDevelopRawDataAndGeometry renamed to
+    PasteKeepsTargetDevelopRawLensAndGeometry and extended with lens/camera fields).
+  AdjustmentTransferServiceMiniGitTest: 17/17 (2 new:
+    SelectivePasteCreatesOneRootRelativeVersionAndCommit,
+    SelectivePasteFailureCreatesNoVersionOrCommit).
+  EditorSessionHistoryPortTest: 89/89. Two paste tests updated to the Section
+    3.3 contract (plan step 14): PasteCreatesOneRootRelativeVersionAndOneTypedCommit
+    now expects default protection on the pasted default Grade and its Masks;
+    PasteWithoutDefaultIdentityDoesNotInheritTargetDefault renamed to
+    PasteWithoutSourceDefaultEstablishesFirstGradeAsDefault and asserts the
+    first-included-Grade default.
+
+Source no-mutation evidence:
+  PlannerDoesNotMutatePackageOrTargetRoot compares the canonical package export
+  and canonical target-root JSON before and after Plan; identical.
+  IdentityCollisionIsRejectedBeforeDocumentMutation and
+  SelectivePasteFailureCreatesNoVersionOrCommit verify target/graph invariance
+  on planner failure.
+
+Target preservation evidence:
+  PasteKeepsTargetDevelopRawLensAndGeometry asserts Develop params (RAW,
+  camera, lens fields) and Geometry JSON are unchanged after applying the
+  batch. DrtOnlyPasteKeepsTargetRootGrades asserts Grade identities, values,
+  and default identity equal the target root.
+
 Remaining defects or unavailable platforms:
+  - ALCEDO_ENABLE_BRUSH_MASK=OFF build; StrokeId remap code paths are compiled
+    out by design and not verified here.
+  - AdjustmentTransferController Copy still captures the full document via
+    SelectAllTransferableItems; per-item UI selection arrives with the NM10.4
+    dialog. No UI/QML work is in scope for NM10.2.
 ```
 
 ---
