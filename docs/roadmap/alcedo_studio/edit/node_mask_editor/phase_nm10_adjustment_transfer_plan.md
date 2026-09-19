@@ -877,7 +877,7 @@ It excludes generated files and temporary evidence.
 | NM10.2 | Selective root-relative paste planner | planner, service, history tests | NM10.1 | 900–1,400 lines | done |
 | NM10.3 | Read-only Version catalog | replay service, catalog tests | NM10.1 | 800–1,300 lines | done |
 | NM10.4 | Qt models and controller split | list models, dialog model, apply coordinator | NM10.2–NM10.3 | 1,300–1,800 lines | done |
-| NM10.5 | Three-column QML and button rules | dialog panes, shared controls, QML tests | NM10.4 | 1,100–1,700 lines | planned |
+| NM10.5 | Three-column QML and button rules | dialog panes, shared controls, QML tests | NM10.4 | 1,100–1,700 lines | done |
 | NM10.6 | Product integration and reopen evidence | real project tests, docs, cleanup | NM10.5 | 700–1,200 lines | planned |
 
 No phase has an expected diff above 2000 lines.
@@ -1863,7 +1863,7 @@ ALCEDO_REAL_ADJUSTMENT_PROJECT; hardware-backed pixel verification remains
 environment-gated. Deadlock-prone broader history suites were not exercised
 per the phase instruction. The dialog doc
 (qml/doc/AdjustmentTransferDialog.md) was updated to the model-driven
-boundary; NM10.5 visual polish remains planned on this same branch.
+boundary; NM10.5 visual polish was later completed on this same branch.
 ```
 
 ---
@@ -2016,15 +2016,16 @@ Keep the same healthy build process across short polling intervals.
 
 ### 14.11 Exit criteria
 
-- [ ] Copy mode has Version, node, and item panes.
-- [ ] The last two panes have `Select All` checkboxes and `Clear` buttons.
-- [ ] Masks use one all-or-none checkbox.
-- [ ] Footer numeric reports are absent.
-- [ ] All enabled action-button text is white.
-- [ ] No blue fill with black button text exists.
-- [ ] Focus and inclusion remain independent.
-- [ ] Keyboard and accessibility behavior passes.
-- [ ] Both themes and required DPR values pass manual review.
+- [x] Copy mode has Version, node, and item panes.
+- [x] The last two panes have `Select All` checkboxes and `Clear` buttons.
+- [x] Masks use one all-or-none checkbox.
+- [x] Footer numeric reports are absent.
+- [x] All enabled action-button text is white.
+- [x] No blue fill with black button text exists.
+- [x] Focus and inclusion remain independent.
+- [x] Keyboard and accessibility behavior passes.
+- [ ] Both themes and required DPR values pass manual review. (human run owed;
+      harness asserts the tokens the review checks)
 
 ### 14.12 Expected diff
 
@@ -2035,16 +2036,119 @@ Split shared control work into a small prerequisite commit when this phase can p
 
 ```text
 Phase / date / status:
+NM10.5 / 2026-09-19 / implemented and verified.
+
 Source revision and branch:
+43f2d9408dff096d7f2e6f7d02ab5ca54407f51f on
+feature/nm10-4-5-transfer-dialog-models; all NM10.5 work landed as
+uncommitted changes on that branch on top of the NM10.4 commit.
+
 Actual QML files and shared control changes:
+Added three production panes beside the dialog:
+- AdjustmentTransferVersionPane.qml — read-only Version catalog rows; `Active`
+  is a separate caption, never a centered-dot compound; row activation issues
+  versionActivated(versionId) only.
+- AdjustmentTransferNodePane.qml — Color Grade + DRT/Post rows with derived
+  three-state checkboxes (Qt::CheckState role), header `Select All` +
+  `Clear`, row-body activation routed to focus only, checkbox activation
+  routed to model commands only.
+- AdjustmentTransferItemPane.qml — focused node's items grouped by
+  AdjustmentTransferItemSection headers (Node/Tone/Look/LUT/Display
+  Transform/Masks), header `Select All` + `Clear` scoped to the focused node,
+  one all-or-none `Masks` row per Color Grade (disabled when the Grade has
+  no Masks), paste mode renders the same list as read-only summary rows.
+AdjustmentTransferDialog.qml rewritten as the shell: modal/backdrop, header,
+three-pane RowLayout with dividerColor hairlines, footer with fixed `Cancel`
++ `Copy Adjustments`/`Paste Adjustments` DialogActionButtons, and the paste
+node/item ListModels rebuilt from `adjustmentRows` (grouped by the new
+`node` group index). Footer numeric counts, dynamic action labels, and
+centered-dot metadata strings are gone.
+ThemeCheckBox.qml gained optional `partiallyChecked` (dash glyph),
+`valueText` trailing value, and `accessibleText` override while keeping the
+existing checked/toggled behavior for prior callers; `Accessible.
+checkStateMixed` is reported. DialogActionButton.qml now uses
+appTheme.fontSizeSection/fontWeightHeading instead of literal 14/800.
+SelectionSummary() gained `node` (group index), `itemSection`, and
+`itemKind` fields so the paste pane can rebuild read-only columns;
+AdjustmentTransferDialogModel gained the `focusedNodeName` property for the
+item pane title. EditorAdjustmentTransferActions.qml and
+ImageActionsController.qml dropped the removed `targetCount` property.
+
 Final pane widths and token mapping:
+Version pane `editorSidePanelWidthMin`, node pane `editorSidePanelWidth`,
+item pane fills the remainder (widest). Dialog width derives from the three
+panel tokens clamped to window margins; no literal widths. Wells use
+bgBaseColor + cardBorderColor; selected rows use editorListSelectedFillColor
++ editorListSelectedInkColor; hover uses buttonHoveredFillColor; keyboard
+focus is a 1 px textColor outline independent of selection.
+
 Primary interaction call chain:
+Row-body activation -> pane signal -> dialogModel.FocusNode / SelectVersion
+Checkbox activation -> SetNodeChecked / SetItemChecked /
+SetAllNodesChecked / SetAllFocusedNodeItemsChecked / ClearAll /
+ClearFocusedNode -> C++ state updated -> node/item/bulk checkState roles
+re-derived -> views keep scroll offsets (verified by
+CheckboxChangesPreserveAllListScrollPositions) -> Copy button follows
+canCopy.
+
 Failure presentation behavior:
+Model command failures surface through `errorText` in the item pane; roles
+keep their prior valid state; no JavaScript state repair exists; Copy stays
+enabled only while canCopy is true (node Clear disables it in the test).
+
 Build and test commands with exit codes:
+cmd /c scripts\msvc_env.cmd --preset win_debug
+    -DALCEDO_ENABLE_BRUSH_MASK=OFF
+    -DCMAKE_PREFIX_PATH=D:/Qt/6.9.3/msvc2022_64/lib/cmake   -> exit 0
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4
+    --target AdjustmentTransferDialogQmlTest
+             EditorAdjustmentTransferActionsQmlTest
+             alcedo_main                                   -> exit 0
+ctest --test-dir build/debug -N
+    -R "^(AdjustmentTransferDialogQmlTest|
+        EditorAdjustmentTransferActionsQmlTest)\."          -> exit 0 (18
+        discovered)
+ctest --test-dir build/debug --output-on-failure
+    -R "^(AdjustmentTransferDialogQmlTest|
+        EditorAdjustmentTransferActionsQmlTest)\."          -> exit 0
+
 Discovered / passed / failed / skipped counts:
+18 discovered / 18 passed / 0 failed / 0 skipped.
+AdjustmentTransferDialogQmlTest 13/13 — including the eleven required
+behaviors: CopyDialogShowsVersionNodeAndItemPanes,
+NodeRowFocusDoesNotToggleItsCheckbox,
+NodeAndItemSelectAllUseThreeStateCheckboxes,
+ClearButtonsUseWhiteTextAndClearTheirOwnedScope,
+TransferDialogActionButtonsAlwaysUseWhiteEnabledText,
+TransferDialogHasNoNumericFooterSummary,
+MasksAppearAsOneAllOrNoneCheckbox,
+CheckboxChangesPreserveAllListScrollPositions,
+PasteDialogShowsReadOnlyNodeAndItemSummary,
+TransferDialogUsesThemeTypographyAndSelectionTokens,
+TransferDialogKeyboardOrderReachesAllThreePanesAndActions.
+EditorAdjustmentTransferActionsQmlTest 5/5.
+
 Theme, width, DPR, keyboard, and accessibility evidence:
+Harness asserts the monochrome selected fill/ink pair on the focused node
+row, bgBaseColor wells, accent CTA with white text, and white text on every
+enabled action button; keyboard traversal reaches all three panes and both
+footer actions, Space/Return toggle/focus per pane behavior, and Escape
+closes. Accessible roles/names are set on delegates and the Masks row
+carries an explicit accessible override; checkStateMixed is reported for
+partial bulk checkboxes. Delegate lookup in tests walks the visual item tree
+because Bound-mode required-property delegates are not QObject children.
+Manual theme/DPR/width review remains a human step; the harness enforces the
+token sources that review checks.
+
 Screenshots or evidence path:
+build/tmp/nm10_5/ contains configure.log, build logs, and ctest.log output
+captures for the recorded commands.
+
 Remaining defects or unavailable platforms:
+None known for this phase. Manual dual-theme, DPR 1.0/1.5/2.0, and
+narrow/wide window review is still owed by a human run; product reopen
+evidence stays with NM10.6. Deadlock-prone broader suites were not exercised
+per the phase instruction.
 ```
 
 ---

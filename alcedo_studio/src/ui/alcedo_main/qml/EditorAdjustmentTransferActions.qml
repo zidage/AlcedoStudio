@@ -44,7 +44,6 @@ QtObject {
         adjustmentTransferDialog.mode = "paste"
         adjustmentTransferDialog.pasteStrategy = "paste"
         adjustmentTransferDialog.sourceTitle = adjustmentTransfer.packageSourceTitle
-        adjustmentTransferDialog.targetCount = pendingTargets.length
         adjustmentTransferDialog.adjustmentRows = adjustmentTransfer.packageSummary
         adjustmentTransferDialog.open()
     }

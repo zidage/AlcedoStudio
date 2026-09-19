@@ -39,6 +39,7 @@ class AdjustmentTransferDialogModel final : public QObject {
   Q_PROPERTY(QString selectedVersionId READ selected_version_id NOTIFY StateChanged)
   Q_PROPERTY(QString selectedVersionName READ selected_version_name NOTIFY StateChanged)
   Q_PROPERTY(QString focusedNodeId READ focused_node_id NOTIFY StateChanged)
+  Q_PROPERTY(QString focusedNodeName READ focused_node_name NOTIFY StateChanged)
   Q_PROPERTY(bool canCopy READ can_copy NOTIFY StateChanged)
   Q_PROPERTY(int allNodesCheckState READ all_nodes_check_state NOTIFY StateChanged)
   Q_PROPERTY(int focusedItemsCheckState READ focused_items_check_state NOTIFY StateChanged)
@@ -83,6 +84,7 @@ class AdjustmentTransferDialogModel final : public QObject {
   [[nodiscard]] auto selected_version_id() const -> QString;
   [[nodiscard]] auto selected_version_name() const -> QString;
   [[nodiscard]] auto focused_node_id() const -> QString;
+  [[nodiscard]] auto focused_node_name() const -> QString;
   [[nodiscard]] auto can_copy() const -> bool;
   [[nodiscard]] auto all_nodes_check_state() const -> int;
   [[nodiscard]] auto focused_items_check_state() const -> int;
@@ -95,8 +97,10 @@ class AdjustmentTransferDialogModel final : public QObject {
   /// caller's prior package untouched; @p error receives the exact reason.
   [[nodiscard]] auto BuildPackage(std::string* error) const
       -> std::optional<alcedo::AdjustmentTransferPackage>;
-  /// Read-only paste-summary rows: one row per selected item, grouped under
-  /// its node's display name. Used by the existing flat paste list.
+  /// Read-only paste-summary rows: one row per selected item, tagged with its
+  /// node's display name (`section`), node group index (`node`), item section
+  /// (`itemSection`), and item kind (`itemKind`) so the paste pane can rebuild
+  /// read-only node and item columns.
   [[nodiscard]] auto SelectionSummary() const -> QVariantList;
 
   /// Test-only read of one node's derived Qt::CheckState value.

@@ -207,6 +207,13 @@ auto AdjustmentTransferDialogModel::focused_node_id() const -> QString {
       std::string{node_states_[focused_node_].descriptor.node_id.Value()});
 }
 
+auto AdjustmentTransferDialogModel::focused_node_name() const -> QString {
+  if (!read_.has_value() || focused_node_ >= node_states_.size()) {
+    return {};
+  }
+  return QString::fromStdString(node_states_[focused_node_].descriptor.display_name);
+}
+
 auto AdjustmentTransferDialogModel::can_copy() const -> bool {
   if (!read_.has_value()) {
     return false;
@@ -309,6 +316,7 @@ auto AdjustmentTransferDialogModel::SelectionSummary() const -> QVariantList {
   if (!read_.has_value()) {
     return rows;
   }
+  int node_index = 0;
   for (const auto& node : node_states_) {
     const auto node_name = QString::fromStdString(node.descriptor.display_name);
     for (const auto& item : node.items) {
@@ -317,12 +325,16 @@ auto AdjustmentTransferDialogModel::SelectionSummary() const -> QVariantList {
       }
       rows.push_back(QVariantMap{
           {"key", item.key},
+          {"node", node_index},
           {"section", node_name},
           {"label", QString::fromStdString(item.descriptor.display_name)},
           {"value", QString::fromStdString(item.descriptor.display_value)},
+          {"itemSection", static_cast<int>(item.descriptor.section)},
+          {"itemKind", static_cast<int>(item.descriptor.kind)},
           {"checked", true},
       });
     }
+    ++node_index;
   }
   return rows;
 }

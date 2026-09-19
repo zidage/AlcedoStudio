@@ -548,7 +548,6 @@ Item {
         }
         adjustmentTransferDialog.mode = "copy"
         adjustmentTransferDialog.sourceTitle = result.sourceTitle ? String(result.sourceTitle) : ""
-        adjustmentTransferDialog.targetCount = 0
         adjustmentTransferDialog.open()
     }
 }

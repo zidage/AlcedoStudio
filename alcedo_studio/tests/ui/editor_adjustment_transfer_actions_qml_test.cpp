@@ -82,7 +82,6 @@ ApplicationWindow {
         property string mode: "copy"
         property string pasteStrategy: "paste"
         property string sourceTitle: ""
-        property int targetCount: 0
         property var adjustmentRows: []
         property int openCount: 0
 
@@ -223,7 +222,6 @@ TEST(EditorAdjustmentTransferActionsQmlTest,
   EXPECT_EQ(dialog->property("mode").toString(), QStringLiteral("paste"));
   EXPECT_EQ(dialog->property("pasteStrategy").toString(), QStringLiteral("paste"));
   EXPECT_EQ(dialog->property("sourceTitle").toString(), QStringLiteral("Copied source"));
-  EXPECT_EQ(dialog->property("targetCount").toInt(), 2);
   EXPECT_EQ(dialog->property("openCount").toInt(), 1);
 
   InvokeStrategy(actions, QStringLiteral("paste"));
@@ -283,8 +281,7 @@ TEST(EditorAdjustmentTransferActionsQmlTest, PolicyBlocksPasteAtOpenAndRecoversA
   EXPECT_EQ(dialog->property("openCount").toInt(), 1);
 }
 
-TEST(EditorAdjustmentTransferActionsQmlTest,
-     TransferSurfaceHasNoPipelineMergeOperation) {
+TEST(EditorAdjustmentTransferActionsQmlTest, TransferSurfaceHasNoPipelineMergeOperation) {
   EditorAdjustmentTransferActionsQmlHarness harness;
   ASSERT_NE(harness.window, nullptr) << harness.warnings.join('\n').toStdString();
   ASSERT_TRUE(harness.warnings.isEmpty()) << harness.warnings.join('\n').toStdString();
