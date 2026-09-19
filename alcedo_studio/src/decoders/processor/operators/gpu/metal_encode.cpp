@@ -82,9 +82,11 @@ struct PackOrientParams {
   float    scale_b;
 };
 
-constexpr float kHilightMagic = 0.987f;
-constexpr float kChromaRingLo = 0.2f;
-constexpr float kMinGain      = 1e-6f;
+constexpr float    kHilightMagic    = 0.987f;
+constexpr float    kChromaRingLo    = 0.2f;
+constexpr float    kMinGain         = 1e-6f;
+constexpr uint32_t kHighlightBlockX = 16;
+constexpr uint32_t kHighlightBlockY = 16;
 
 auto CommandBuffer(void* command_buffer) -> MTL::CommandBuffer* {
   auto* buffer = static_cast<MTL::CommandBuffer*>(command_buffer);
@@ -117,6 +119,16 @@ void Dispatch(MTL::ComputeCommandEncoder* encoder, MTL::ComputePipelineState* pi
       std::max<NS::UInteger>(1, pipeline->maxTotalThreadsPerThreadgroup() / thread_width);
   encoder->dispatchThreads(MTL::Size{width, height, 1},
                            MTL::Size{thread_width, thread_height, 1});
+}
+
+void DispatchHighlightReconstruct(MTL::ComputeCommandEncoder* encoder, uint32_t width,
+                                  uint32_t height) {
+  // The statistics kernel uses fixed 16x16 lane indices for its halo load and reduction.
+  // Full threadgroups initialize all 256 reduction slots at partial image edges.
+  const MTL::Size threads_per_group{kHighlightBlockX, kHighlightBlockY, 1};
+  const MTL::Size threadgroups_per_grid{(width + kHighlightBlockX - 1) / kHighlightBlockX,
+                                        (height + kHighlightBlockY - 1) / kHighlightBlockY, 1};
+  encoder->dispatchThreadgroups(threadgroups_per_grid, threads_per_group);
 }
 
 auto Encoder(MTL::CommandBuffer* buffer) -> NS::SharedPtr<MTL::ComputeCommandEncoder> {
@@ -372,7 +384,7 @@ void EncodeHighlightReconstruct(void* command_buffer, void* src_rgba, void* dst_
     compute->setTexture(src, 0);
     compute->setBuffer(stats, stats_offset, 0);
     compute->setBytes(&params, sizeof(params), 1);
-    Dispatch(compute.get(), pipeline.get(), width, height);
+    DispatchHighlightReconstruct(compute.get(), width, height);
     compute->endEncoding();
   }
   {
@@ -383,7 +395,7 @@ void EncodeHighlightReconstruct(void* command_buffer, void* src_rgba, void* dst_
     compute->setTexture(dst, 1);
     compute->setBuffer(stats, stats_offset, 0);
     compute->setBytes(&params, sizeof(params), 1);
-    Dispatch(compute.get(), pipeline.get(), width, height);
+    DispatchHighlightReconstruct(compute.get(), width, height);
     compute->endEncoding();
   }
 }
