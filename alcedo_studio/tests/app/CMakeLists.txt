@@ -130,6 +130,21 @@ gtest_discover_tests(DocumentTransferTest
     PROPERTIES LABELS "ci_core_flow;edit;history")
 alcedo_register_test_target(DocumentTransferTest app)
 
+# NM10.3 read-only Version catalog: inactive-Version replay with no live-state
+# mutation, backbone ordering, instance identity, aggregate Masks row, DRT/Post
+# ownership, and fail-closed replay errors.
+add_executable(AdjustmentTransferCatalogTest
+    ${ALCEDO_TEST_ROOT}/app/adjustment_transfer_catalog_test.cpp)
+target_include_directories(AdjustmentTransferCatalogTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
+target_link_libraries(AdjustmentTransferCatalogTest
+    PRIVATE GTest::gtest_main AdjustmentTransferCatalog PipelineHistoryApplier
+            EditorPipelineCommandService EditGraph EditMaskCore EditHistory)
+gtest_discover_tests(AdjustmentTransferCatalogTest
+    TEST_PREFIX "AdjustmentTransferCatalogTest."
+    PROPERTIES LABELS "ci_core_flow;edit;history")
+alcedo_register_test_target(AdjustmentTransferCatalogTest app ci_core)
+
 # Geometry overlay preview: crop disable + bilinear GPU resize path that the
 # unified scheduler runs when the Geometry panel owns the source-frame overlay.
 add_executable(EditorGeometryOverlayPipelineTest

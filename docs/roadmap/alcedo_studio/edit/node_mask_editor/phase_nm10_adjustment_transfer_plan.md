@@ -2,9 +2,9 @@
 
 Date: 2026-09-18
 
-Status: **in progress**. The user approved the product design on 2026-09-18. NM10.1 and
-NM10.2 are implemented and verified (see sections 10.1.12 and 11.12); NM10.3 onward
-remain planned.
+Status: **in progress**. The user approved the product design on 2026-09-18. NM10.1,
+NM10.2, and NM10.3 are implemented and verified (see sections 10.1.12, 11.12, and
+12.12); NM10.4 onward remain planned.
 
 Parent: [Node-aware Pipeline Editing and Mask Creation](../node_mask_editor_master_plan.md),
 Sections 14, 20.6, 21.11, and 26.
@@ -1485,12 +1485,12 @@ Update this plan if implementation uses another existing target.
 
 ### 12.10 Exit criteria
 
-- [ ] Inactive Version inspection changes no live source state.
-- [ ] Catalog rows use stable identities.
-- [ ] Node order follows the backbone.
-- [ ] One Mask row represents all Masks.
-- [ ] DRT/Post ownership matches the current document model.
-- [ ] Replay errors fail closed.
+- [x] Inactive Version inspection changes no live source state.
+- [x] Catalog rows use stable identities.
+- [x] Node order follows the backbone.
+- [x] One Mask row represents all Masks.
+- [x] DRT/Post ownership matches the current document model.
+- [x] Replay errors fail closed.
 
 ### 12.11 Expected diff
 
@@ -1500,15 +1500,91 @@ Expected diff: 800–1,300 lines.
 
 ```text
 Phase / date / status:
+NM10.3 / 2026-09-25 / implemented and verified.
+
 Source revision and branch:
+9dbba2c1 on main; work landed on
+feature/nm10-3-readonly-version-catalog.
+
 Actual read owner and replay API:
+AdjustmentTransferCatalogService (Qt-free application layer) in
+alcedo_studio/src/app/adjustment_transfer_catalog.cpp with public
+descriptors in alcedo_studio/src/include/app/adjustment_transfer_catalog.hpp.
+The service is a static-operation owner: ListVersions reads VersionRef
+metadata from a const CommitGraph in the existing owner order (created_at,
+then version_id — the same order adjustment_transfer_controller.cpp uses);
+ReadVersion validates the Version id through CommitGraph::GetVersionRef,
+collects first-parent commits through FirstParentCommitsForHead, and replays
+them through ReplayPipelineDocumentFromRoot onto the caller's immutable root
+document. BuildNodeDescriptors enumerates ColorGradesOnImageBackbone plus the
+DRT/Post endpoint. The service never calls SetActiveVersionId, never calls
+RebuildActiveEditorPipeline, and never touches a live guard, WAL, render
+state, or project storage.
+
 Independent replayed document lifetime:
+AdjustmentTransferCatalogRead owns the replayed PipelineDocument by value.
+The document is built from ClonePipelineDocument(root) inside the replay
+helper, validated, moved into the read result, and destroyed when the result
+is replaced or released. It is never written back to the live guard or to
+project storage. The session test shows three distinct exposure values (root
+1.5, replayed inactive tip 2.0, live tip -0.5), proving independent storage.
+
 Primary success call chain:
+const CommitGraph + const root document + version_ref_id_t
+  -> CommitGraph::GetVersionRef (unknown id throws -> caught -> exact error)
+  -> FirstParentCommitsForHead(graph, ref.head_commit_hash)
+  -> ReplayPipelineDocumentFromRoot(root, commits, error)
+  -> BuildNodeDescriptors(replayed)
+       -> ColorGradesOnImageBackbone (source backbone order)
+       -> per Grade: Enabled, Mix, owned adjustments in document order,
+          one all-or-none Masks row (disabled when MaskCount()==0)
+       -> DRT endpoint: RequireCompleteDrtPostTypes, Display Transform item
+          plus Clarity/Sharpen/Halation/Film Grain in document order
+  -> AdjustmentTransferCatalogRead {version, document, nodes}
+
 Primary failure call chain:
+unknown Version id, missing commit on the first-parent path, replay failure,
+missing DRT endpoint, or invalid adjustment ownership
+  -> exception or nullopt captured at the boundary -> exact error string
+  -> incomplete replay value destroyed inside the optional/exception path
+  -> caller keeps its prior valid read result (test holds good_read and
+     re-compares its canonical document JSON after the failed read)
+  -> no graph field, guard field, WAL record, redo state, render, or save
+     changes (SessionState snapshot compared before and after each call)
+
 Build and test commands with exit codes:
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4
+    --target AdjustmentTransferCatalogTest                      -> exit 0
+ctest --test-dir build/debug -N -R "^AdjustmentTransferCatalogTest\."
+                                                              -> exit 0 (6 discovered)
+ctest --test-dir build/debug --output-on-failure
+    -R "^AdjustmentTransferCatalogTest\."                       -> exit 0 (6/6 passed)
+
 Discovered / passed / failed / skipped counts:
+6 discovered / 6 passed / 0 failed / 0 skipped.
+CatalogReadsInactiveVersionWithoutChangingActiveVersion,
+CatalogReplayFailureKeepsSourceSessionUnchanged (TEST_F on
+AdjustmentTransferCatalogHistoryTest), CatalogOrdersGradesBySourceBackbone,
+CatalogUsesAdjustmentInstanceIdentity, CatalogShowsOneMasksItemForAnyMaskCount,
+CatalogBuildsDrtPostItemsFromCurrentOwners (TEST on
+AdjustmentTransferCatalogTest, new target in tests/app).
+
 No-mutation evidence:
+SessionState in the test captures ImageEditState JSON, active VersionRef JSON,
+active version id, working head, first-parent chain fold, commit and Version
+counts, canonical live and root document JSON, live topology_dirty flag,
+journal record count and sequence range, WAL file bytes, and redo count.
+CatalogReadsInactiveVersionWithoutChangingActiveVersion and
+CatalogReplayFailureKeepsSourceSessionUnchanged compare the complete snapshot
+before and after ListVersions/ReadVersion and require exact equality,
+including after a deliberately broken replay and an unknown Version id.
+
 Remaining defects or unavailable platforms:
+None known. Deadlock-prone broader history tests were not exercised per the
+phase instruction; only the focused catalog target was built and run.
+Source inspection through active-Version mutation is deleted in NM10.4 after
+the Qt models/controller move to this catalog (implementation step 11 stays
+open until then).
 ```
 
 ---
