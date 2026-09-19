@@ -65,9 +65,12 @@ auto GetPipelineState(Kernel kernel) -> NS::SharedPtr<MTL::ComputePipelineState>
 }
 
 void DispatchImage(MTL::ComputeCommandEncoder* encoder, uint32_t width, uint32_t height) {
+  // The statistics kernel uses fixed 16x16 lane indices for its halo load and reduction.
+  // Full threadgroups initialize all 256 reduction slots at partial image edges.
   const MTL::Size threads_per_group{kBlockX, kBlockY, 1};
-  const MTL::Size threads_per_grid{width, height, 1};
-  encoder->dispatchThreads(threads_per_grid, threads_per_group);
+  const MTL::Size threadgroups_per_grid{(width + kBlockX - 1) / kBlockX,
+                                        (height + kBlockY - 1) / kBlockY, 1};
+  encoder->dispatchThreadgroups(threadgroups_per_grid, threads_per_group);
 }
 
 auto ScratchOutput() -> MetalImage& {

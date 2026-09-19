@@ -6,10 +6,13 @@
 
 #include <algorithm>
 #include <array>
+#include <cstring>
+#include <limits>
 #include <opencv2/core.hpp>
 #include <stdexcept>
 
 #include "decoders/processor/operators/gpu/metal_debayer_rcd.hpp"
+#include "decoders/processor/operators/gpu/metal_encode.hpp"
 #include "decoders/processor/operators/gpu/metal_highlight_reconstruct.hpp"
 #include "decoders/processor/operators/gpu/metal_to_linear_ref.hpp"
 #include "decoders/processor/operators/gpu/metal_xtrans_interpolate.hpp"
@@ -347,6 +350,83 @@ TEST(MetalRawOpsTest, HighlightReconstructLeavesUnclippedRgbaInputValid) {
   ASSERT_EQ(gpu_result.type(), CV_32FC4);
   ASSERT_EQ(gpu_result.size(), input.size());
   EXPECT_LE(cv::norm(gpu_result, input, cv::NORM_INF), 1e-6);
+#endif
+}
+
+TEST(MetalRawOpsTest, HighlightReconstructPartialGroupsRaiseClippedChannelAndMatchEncodedPath) {
+#ifndef HAVE_METAL
+  GTEST_SKIP() << "Metal is not enabled in this build.";
+#else
+  if (!MetalRuntimeAvailable()) {
+    GTEST_SKIP() << "Metal device is unavailable in this environment.";
+  }
+  LibRaw raw_processor;
+  InitHighlightRawProcessor(raw_processor);
+
+  constexpr int  rows = 43;
+  constexpr int  cols = 45;
+  const cv::Rect core(12, 11, 20, 18);
+  cv::Mat        input(rows, cols, CV_32FC4, cv::Scalar(1.2f, 0.95f, 1.0f, 1.0f));
+  for (int y = core.y; y < core.y + core.height; ++y) {
+    auto* row = input.ptr<cv::Vec4f>(y);
+    for (int x = core.x; x < core.x + core.width; ++x) {
+      row[x] = cv::Vec4f(2.0f, 1.0f, 1.3f, 1.0f);
+    }
+  }
+
+  metal::MetalImage image;
+  image.Upload(input);
+  ASSERT_NO_THROW(metal::HighlightReconstruct(image, raw_processor));
+
+  cv::Mat output;
+  image.Download(output);
+  ASSERT_EQ(output.type(), CV_32FC4);
+  ASSERT_EQ(output.size(), input.size());
+
+  const cv::Vec4f before = input.at<cv::Vec4f>(core.y + core.height / 2, core.x + core.width / 2);
+  const cv::Vec4f after  = output.at<cv::Vec4f>(core.y + core.height / 2, core.x + core.width / 2);
+  EXPECT_NEAR(after[0], before[0], 1e-5f);
+  EXPECT_GT(after[1], before[1] + 0.1f);
+  EXPECT_NEAR(after[2], before[2], 1e-5f);
+  EXPECT_NEAR(after[3], before[3], 1e-6f);
+
+  float reconstructed_green_min = std::numeric_limits<float>::max();
+  float reconstructed_green_max = std::numeric_limits<float>::lowest();
+  for (int y = core.y + 2; y < core.y + core.height - 2; ++y) {
+    const auto* row = output.ptr<cv::Vec4f>(y);
+    for (int x = core.x + 2; x < core.x + core.width - 2; ++x) {
+      reconstructed_green_min = std::min(reconstructed_green_min, row[x][1]);
+      reconstructed_green_max = std::max(reconstructed_green_max, row[x][1]);
+    }
+  }
+  EXPECT_LT(reconstructed_green_max - reconstructed_green_min, 1e-4f);
+
+  metal::MetalImage encoded_source;
+  encoded_source.Upload(input);
+  metal::MetalImage encoded_output;
+  encoded_output.Create(cols, rows, metal::PixelFormat::RGBA32FLOAT, true, true, false);
+
+  auto* device = MetalContext::Instance().Device();
+  auto* queue  = MetalContext::Instance().Queue();
+  ASSERT_NE(device, nullptr);
+  ASSERT_NE(queue, nullptr);
+  auto stats =
+      NS::TransferPtr(device->newBuffer(6 * sizeof(float), MTL::ResourceStorageModeShared));
+  ASSERT_TRUE(stats);
+  std::memset(stats->contents(), 0, stats->length());
+  auto command_buffer = NS::RetainPtr(queue->commandBuffer());
+  ASSERT_TRUE(command_buffer);
+  ASSERT_NO_THROW(metal::EncodeHighlightReconstruct(
+      command_buffer.get(), encoded_source.Texture(), encoded_output.Texture(), stats.get(), 0,
+      raw_processor.imgdata.color.cam_mul, cols, rows));
+  command_buffer->commit();
+  command_buffer->waitUntilCompleted();
+
+  cv::Mat encoded_result;
+  encoded_output.Download(encoded_result);
+  ASSERT_EQ(encoded_result.type(), CV_32FC4);
+  ASSERT_EQ(encoded_result.size(), input.size());
+  EXPECT_LE(cv::norm(encoded_result, output, cv::NORM_INF), 1e-4);
 #endif
 }
 
