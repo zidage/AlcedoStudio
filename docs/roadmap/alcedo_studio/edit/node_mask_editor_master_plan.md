@@ -6,8 +6,8 @@ Status: NM0, NM2, NM3, NM4, and NM5 complete; NM6.1–NM6.4, NM6.4P, and NM6.P c
 per execution records; NM6.5–NM6.9 planned; NM1 status retained below;
 NM7 complete per user confirmation on 2026-09-12, with historical execution records retained;
 NM8 complete per user confirmation on 2026-09-16, closing the current scope at NM8.4;
-NM9 planned: twin Mask Groups panel over the same DAG;
-NM10 reserved: Adjustment Transfer, with scope intentionally blank.
+NM9 complete per user confirmation on 2026-09-18; NM9.5 and later checks used manual verification;
+NM10 planned: node-aware Adjustment Transfer.
 NML was cancelled on 2026-08-30.
 
 2026-09-16 路线更新：用户确认 NM8.4 已完成，基于 NM8.3 的结果判断当前工作流增加节点
@@ -17,7 +17,15 @@ NML was cancelled on 2026-08-30.
 编辑器，增加传统摄影工作流的 Mask Groups stack；两者读取和操作同一个 DAG、同一组
 NodeId/MaskId、同一份参数与历史。节点与蒙版的锁只保护删除，允许显式解锁，仍可编辑
 参数、形状与强度。默认 Color Grade 1 及其蒙版默认开启删除保护。
-[NM10 Adjustment Transfer](node_mask_editor/phase_nm10_adjustment_transfer_plan.md) 先留空。
+[NM10 Node-aware Adjustment Transfer](node_mask_editor/phase_nm10_adjustment_transfer_plan.md)
+was approved on 2026-09-18. It replaces stage/operator selection with
+Version → node → item selection. Each Color Grade has one all-or-none Masks checkbox.
+The last two columns use `Select All` checkboxes and `Clear` buttons. Dialog action buttons use
+white text. The footer does not report numeric selection or target totals.
+
+The user confirmed on 2026-09-18 that the three earlier History and Version defects no longer
+reproduce after the prior cleanup pull request. NM10 does not reopen those defects. NM9 is complete
+per user confirmation. NM9.5 and later checks are manual evidence, not automated test evidence.
 
 2026-09-12 NM8 design approval: each Color Grade uses
 `Basic Tone → Color → Local Tone → Mix`, with Basic Tone and Color fused into one pointwise pass.
@@ -96,9 +104,10 @@ Earlier NM1 status is not re-qualified here.
 和默认三节点文档；本方案负责把这些底层能力提升为可被用户直接操作的节点编辑、节点感知
 调整面板、多蒙版绘制、编辑历史和 Version 工作流。
 
-本文件定义背景、产品语义、目标架构、跨模块边界、一级 Phase 顺序、主要调用链、风险和
-最终验收范围。它固定 `NM0` 到 `NM9` 的阶段门槛，另保留空白的 `NM10`，但不预先写每个
-阶段内部的详细执行步骤。NM8 的本次完成范围以 2026-09-16 收口决定为准。
+This master plan defines the background, product behavior, target architecture, module boundaries,
+phase order, primary call chains, risks, and final acceptance scope. It fixes the gates from `NM0`
+through `NM10`. NM10 now has a separate execution plan. This master plan does not duplicate each
+phase's detailed steps. The 2026-09-16 closure decision defines the completed NM8 scope.
 一级 Phase `NML`（旧 stage 存储升级到默认 DAG）于 2026-08-30 取消。产品不打开 DAG document
 之前的 stage-only 项目，也不迁移旧 mini-git commit。后续 Phase 删除 CPU stage 表，不做旧
 项目升级。最终格式发布时通过项目 metadata 版本统一拒绝旧项目，不设计 v2/stage 迁移。
@@ -1703,8 +1712,8 @@ path with a Markdown link when the file exists.
 | NM6 — Node-aware Adjustment Stack | in progress (NM6.1 complete 2026-09-05) | [node_mask_editor/phase_nm6_node_aware_adjustments_plan.md](node_mask_editor/phase_nm6_node_aware_adjustments_plan.md) | Add node-aware panels and EXIF header with serial Interactive input, shared backend execution, and dependency-version caches. |
 | NM7 — Analytic Viewer Masks and Detachable Brush Boundary | complete per user confirmation 2026-09-12; historical evidence retained | [NM7 execution plan](node_mask_editor/phase_nm7_viewer_mask_creation_plan.md) | Project format `0.7.0`, Brush disabled, Radial/Linear Gradient delivery; final product evidence remains in NM8. |
 | NM8 — Whole-DAG Performance and Brush-disabled Product Qualification | complete per user confirmation 2026-09-16; scope closes at NM8.4 | [NM8 execution plan](node_mask_editor/phase_nm8_product_qualification_plan.md) | Recorded timing, fused Basic Tone/Color, and shared work images; NM8.5–NM8.6 excluded from current closure; unmeasured evidence stays explicit. |
-| NM9 — Twin Mask Groups Panel | in progress (NM9.1–NM9.2 complete 2026-09-16) | [NM9 execution plan](node_mask_editor/phase_nm9_mask_group_panel_plan.md) | Layout C over the same DAG, shared selection and deletion locks; project-scoped memory LRU for committed Mask thumbnails, progressive display, and deletion independent of thumbnail work. |
-| NM10 — Adjustment Transfer | reserved; scope blank | [NM10 placeholder](node_mask_editor/phase_nm10_adjustment_transfer_plan.md) | — |
+| NM9 — Twin Mask Groups Panel | complete per user confirmation 2026-09-18; NM9.5 and later checks manually verified | [NM9 execution plan](node_mask_editor/phase_nm9_mask_group_panel_plan.md) | Layout C over the same DAG, shared selection and deletion locks; project-scoped memory LRU for committed Mask thumbnails, progressive display, and deletion independent of thumbnail work. |
+| NM10 — Node-aware Adjustment Transfer | planned 2026-09-18 | [NM10 execution plan](node_mask_editor/phase_nm10_adjustment_transfer_plan.md) | Copy one source Version through node and item selection, transfer each Mask set as all or none, and create one root-relative Paste Version. |
 
 ### 21.1 Phase NM0 — QuickQanava Integration Baseline
 
@@ -2076,9 +2085,10 @@ next-release Brush Master Plan and cannot be inferred from NM8 success.
 
 ### 21.10 Phase NM9 — Twin Mask Groups Panel
 
-**执行方案：** [蒙版组孪生面板与传统摄影工作流](node_mask_editor/phase_nm9_mask_group_panel_plan.md)。
-**状态：in progress。** NM9.1/NM9.2 已于 2026-09-16 完成。用户已选择方案 C（缩略图
-优先），缩略图 service 规格已写入执行方案第 5 节和 NM9.4；NM9.3 细分另行整理。
+**Execution plan:** [Twin Mask Groups Panel and Traditional Photography Workflow](node_mask_editor/phase_nm9_mask_group_panel_plan.md).
+**Status: complete per user confirmation on 2026-09-18.** NM9.5 and later checks used manual
+verification. Historical phase records remain in the execution plan. They do not claim additional
+automated evidence.
 
 保留 QuickQanava Nodes，增加 Mask Groups 面板。图中的顺序
 `Develop → Color Grade 1 → Color Grade 2 → Color Grade 3 → DRT/Post`
@@ -2105,9 +2115,23 @@ Mask 的组；NM9 不借此引入未定义的分支执行或合成算法。
 初始画面不变；选中、删除保护、缩略图、Undo/Redo、Version、Paste、reopen 和图像切换
 通过验证。另比较代表性摄影任务的完成时间和操作次数，记录交互收益与实际结果。
 
-### 21.11 Phase NM10 — Adjustment Transfer
+### 21.11 Phase NM10 — Node-aware Adjustment Transfer
 
-**状态：reserved。** [占位文件](node_mask_editor/phase_nm10_adjustment_transfer_plan.md)，内容留空。
+**Status: planned.** See the
+[NM10 execution plan](node_mask_editor/phase_nm10_adjustment_transfer_plan.md).
+
+Copy uses a three-column Version → node → item workflow. Node and item columns use three-state
+`Select All` checkboxes and white-text `Clear` buttons. Each Color Grade uses one all-or-none Masks
+checkbox. The footer has no numeric summary. QML selection uses stable domain identities through
+C++ models. It does not use legacy stage/operator keys.
+
+The package stores only selected values. Paste creates clean selected Color Grades and applies
+selected DRT/Post values to the target immutable root. It preserves target Develop, RAW, camera,
+lens, geometry, and root identity. It creates one new root-relative Version. The source Version
+catalog uses a read-only replay and never changes the live active Version.
+
+The implementation uses six sub-phases. Every expected diff stays below 2000 lines. The execution
+plan defines owner boundaries, success and failure call chains, tests, build commands, and evidence.
 
 ---
 
@@ -2126,7 +2150,7 @@ NM0 QuickQanava baseline
   -> NM7 Analytic viewer masks and detachable Brush boundary
   -> NM8 Whole-DAG performance and Brush-disabled product qualification
   -> NM9 Twin Mask Groups panel
-  -> NM10 Adjustment Transfer (reserved; scope blank)
+  -> NM10 Node-aware Adjustment Transfer (planned)
 ```
 
 NML 已取消。NM2 假定已打开的项目带有可用 DAG 文档。没有图的项目不会进入 NM2。后续
@@ -2135,8 +2159,9 @@ Phase 删除 CPU stage 表。该删除不是旧项目升级。
 上一个 Phase 的退出条件是下一个 Phase 的输入。可以在前一个 Phase 接近完成时做只读审计或
 准备下一份执行方案，但不能提前向 production 暴露依赖尚未完成的操作。若实施证据证明必须
 改变一级顺序，先更新本总体方案并说明原因，不能只在执行分支中悄悄换序。
-2026-09-16 已批准 NM8 在 NM8.4 收口，因此 NM9 不等待原 NM8.5/NM8.6。NM10 仅有序号和
-主题；实现范围、依赖及完成条件待用户定义。
+The 2026-09-16 decision closed NM8 at NM8.4. NM9 did not wait for the former NM8.5 or NM8.6.
+The user confirmed NM9 completion and approved the node-aware NM10 design on 2026-09-18.
+The NM10 execution plan defines the exact scope, dependencies, phase split, and completion criteria.
 
 ### 22.2 未来执行方案结构
 
@@ -2358,8 +2383,9 @@ transfer package 显式列出可转移内容。
 
 ## 26. 全局完成条件
 
-以下保留全产品证据清单；NM8 在 2026-09-16 的阶段收口不等于这些项目全部通过。
-新增 NM9 条目只在其实施和验证后勾选；NM10 尚无完成条件。
+The list below keeps the complete product evidence scope. The 2026-09-16 NM8 closure does not mean
+that every item passed. NM9 completion comes from user confirmation. NM9.5 and later checks used
+manual verification. The NM10 execution plan defines its detailed completion criteria.
 
 - [ ] `PipelineDocument` 是 node、adjustment、history、Version 和 render 的唯一可写编辑状态。
 - [ ] QuickQanava 是唯一 node graph UI 基础，不存在自研 graph canvas/connector。
@@ -2375,6 +2401,12 @@ transfer package 显式列出可转移内容。
 - [ ] node、Mask 和参数操作都能生成准确 history row 并 Undo/Redo。
 - [ ] 每个 Version 对应自己的 DAG，root/new default Version 对应三节点文档。
 - [ ] Adjustment Transfer 只创建 Paste Version，不再创建新的 pipeline merge commit。
+- [ ] Adjustment Transfer uses source Version, node, and item selections for actual package
+      content. It does not use legacy stage/operator keys.
+- [ ] Each Color Grade uses one all-or-none Masks checkbox. The dialog does not show individual
+      Mask selection.
+- [ ] The last two Adjustment Transfer columns use `Select All` checkboxes and white-text `Clear`
+      buttons. The footer shows no counts.
 - [ ] 当前产品只交付 Radial 和 Linear Gradient；两者的创建、编辑、History、Version、Paste、
       reopen、export 和 native pixels 均已验收。
 - [ ] 项目 metadata、最低支持版本和最高支持版本都从 `0.6.0` 切到 `0.7.0`；`0.6.0` 在读取
