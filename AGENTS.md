@@ -323,6 +323,17 @@ Use when opening an Alcedo Studio GitHub pull request, or when the user runs
 Write the title and body in English with ASD-STE100 wording. Use Why, Changes,
 and Verification. Do not put a phase id in the title.
 
+### alcedo-create-plan
+Use when creating or revising an Alcedo Studio roadmap, implementation plan,
+design specification, or phase plan. Canonical path:
+`.agents/skills/alcedo-create-plan/SKILL.md`.
+
+Write the plan in English with ASD-STE100 wording. Do not include an STE wording
+change record. Read the current `AGENTS.md`, source, tests, design rules, parent
+plan, and relevant prior plans before writing. Include the complete product
+specification, exact module scope, owner boundaries, call chains, tests, and
+completion evidence. Split any phase whose expected diff can exceed 2000 lines.
+
 ### alcedo-msvc-cmake
 Use when working on alcedo with CMake on Windows/MSVC, especially when the user mentions MSVC, Windows, presets, Ninja, CUDA, or `scripts/msvc_env.cmd`, or when an agent would otherwise run bare cmake commands in this repository.
 
