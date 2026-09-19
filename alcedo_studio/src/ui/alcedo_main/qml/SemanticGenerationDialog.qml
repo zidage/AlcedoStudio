@@ -325,7 +325,7 @@ Popup {
     component AiButton: Button {
         property bool primary: false
 
-        Layout.preferredHeight: 48
+        Layout.preferredHeight: Math.max(48, implicitHeight)
         topInset: 0
         bottomInset: 0
         leftInset: 0
@@ -340,7 +340,7 @@ Popup {
             color: root.textColor
             font.pixelSize: parent.font.pixelSize
             font.weight: parent.font.weight
-            elide: Text.ElideRight
+            wrapMode: Text.Wrap
         }
         background: Rectangle {
             radius: 10

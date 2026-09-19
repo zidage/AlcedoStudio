@@ -532,18 +532,20 @@ ColumnLayout {
 
                 Rectangle {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 50
+                    Layout.preferredHeight: Math.max(50, downloadDirLabel.implicitHeight
+                                                     + appTheme.spaceMd)
                     radius: 8
                     color: Qt.rgba(1, 1, 1, 0.10)
                     border.width: 1
                     border.color: Qt.rgba(panel.textColor.r, panel.textColor.g, panel.textColor.b, 0.12)
 
                     Label {
+                        id: downloadDirLabel
                         anchors.fill: parent
                         anchors.leftMargin: 14
                         anchors.rightMargin: 14
                         text: panel.hasDownloadController ? panel.downloadController.modelDownloadDirectory : ""
-                        elide: Text.ElideMiddle
+                        wrapMode: Text.Wrap
                         verticalAlignment: Text.AlignVCenter
                         color: panel.textColor
                         font.family: panel.dataFontFamily
@@ -753,11 +755,12 @@ ColumnLayout {
         property string label: ""
         property string value: ""
 
-        implicitHeight: 84
+        implicitHeight: Math.max(84, metricCardColumn.implicitHeight + 28)
         radius: 8
         color: Qt.rgba(panel.canvasColor.r, panel.canvasColor.g, panel.canvasColor.b, 0.62)
 
         ColumnLayout {
+            id: metricCardColumn
             anchors.fill: parent
             anchors.margins: 14
             spacing: 6
@@ -768,7 +771,7 @@ ColumnLayout {
                 color: panel.mutedTextColor
                 font.pixelSize: 12
                 font.weight: 700
-                elide: Text.ElideRight
+                wrapMode: Text.Wrap
             }
 
             Label {
@@ -778,7 +781,7 @@ ColumnLayout {
                 font.family: panel.dataFontFamily
                 font.pixelSize: 18
                 font.weight: 700
-                elide: Text.ElideRight
+                wrapMode: Text.Wrap
             }
         }
     }
@@ -881,7 +884,7 @@ ColumnLayout {
                 color: panel.textColor
                 font.pixelSize: 15
                 font.weight: 800
-                elide: Text.ElideRight
+                wrapMode: Text.Wrap
             }
 
             // Live progress: bar + byte count + current file. Shown only while
@@ -911,7 +914,7 @@ ColumnLayout {
                     font.family: panel.dataFontFamily
                     font.pixelSize: 12
                     font.weight: 500
-                    elide: Text.ElideMiddle
+                    wrapMode: Text.Wrap
                 }
             }
 
@@ -927,7 +930,6 @@ ColumnLayout {
                 font.weight: 500
                 wrapMode: Text.WordWrap
                 lineHeight: 1.25
-                elide: Text.ElideRight
             }
         }
 

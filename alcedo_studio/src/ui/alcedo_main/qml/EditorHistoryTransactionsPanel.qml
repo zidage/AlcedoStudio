@@ -89,7 +89,7 @@ Item {
                                                : qsTr("Version: —")
                     }
                     color: root.colMuted
-                    elide: Text.ElideRight
+                    wrapMode: Text.Wrap
                     font.family: appTheme.uiFontFamily
                     font.pixelSize: appTheme.fontSizeCaption
                 }
@@ -177,7 +177,7 @@ Item {
             }
             color: (root.editorSession && root.editorSession.lastHistoryFailed)
                    ? appTheme.dangerColor : root.colMuted
-            elide: Text.ElideRight
+            wrapMode: Text.Wrap
             font.family: appTheme.uiFontFamily
             font.pixelSize: appTheme.fontSizeCaption
         }

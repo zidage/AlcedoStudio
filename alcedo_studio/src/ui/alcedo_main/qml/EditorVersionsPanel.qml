@@ -522,7 +522,7 @@ Item {
                   ? root.versionCheckoutDisabledReason
                   : qsTr("Version checkout is unavailable")
             color: root.colMuted
-            elide: Text.ElideRight
+            wrapMode: Text.Wrap
             font.family: appTheme.uiFontFamily
             font.pixelSize: appTheme.fontSizeCaption
         }
@@ -577,7 +577,8 @@ Item {
                     property color selectionOutlineColor: versionActive
                                                           ? root.colText : root.colCardBorder
                     width: ListView.view ? ListView.view.width : 0
-                    height: appTheme.spaceXl * 4
+                    height: Math.max(appTheme.spaceXl * 4,
+                                     versionCardColumn.implicitHeight + appTheme.spaceMd)
                     radius: appTheme.controlRadiusSmall
                     color: root.colCardSurface
                     border.width: 1
@@ -602,6 +603,7 @@ Item {
                     }
 
                     ColumnLayout {
+                        id: versionCardColumn
                         anchors.left: parent.left
                         anchors.right: actionRow.left
                         anchors.verticalCenter: parent.verticalCenter
@@ -614,7 +616,7 @@ Item {
                             Layout.fillWidth: true
                             text: displayName
                             color: root.colText
-                            elide: Text.ElideRight
+                            wrapMode: Text.Wrap
                             font.family: appTheme.uiFontFamily
                             font.pixelSize: appTheme.fontSizeTitle
                             font.weight: appTheme.fontWeightStrong
@@ -629,7 +631,7 @@ Item {
                                   ? qsTr("Commit %1").arg(versionHead.slice(0, 8))
                                   : qsTr("Commit image root")
                             color: root.colMuted
-                            elide: Text.ElideRight
+                            wrapMode: Text.Wrap
                             font.family: appTheme.monoFontFamily
                             font.pixelSize: appTheme.fontSizeCaption
                         }

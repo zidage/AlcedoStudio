@@ -66,7 +66,8 @@ Item {
 
     implicitWidth: 240
     implicitHeight: Math.max(appTheme.iconButtonHitSizeCompact,
-                             appTheme.maskGroupMaskPreviewSize + appTheme.spaceXs * 2)
+                             appTheme.maskGroupMaskPreviewSize + appTheme.spaceXs * 2,
+                             maskTextColumn.implicitHeight + appTheme.spaceXs * 2)
     height: implicitHeight
     activeFocusOnTab: true
 
@@ -190,6 +191,7 @@ Item {
         }
 
         Column {
+            id: maskTextColumn
             Layout.fillWidth: true
             Layout.alignment: Qt.AlignVCenter
             spacing: 0
@@ -203,8 +205,7 @@ Item {
                 font.pixelSize: appTheme.fontSizeBody
                 font.weight: root.selected ? appTheme.fontWeightStrong
                                            : appTheme.fontWeightRegular
-                elide: Text.ElideRight
-                wrapMode: Text.NoWrap
+                wrapMode: Text.Wrap
                 Accessible.ignored: true
             }
 
@@ -217,8 +218,7 @@ Item {
                 color: root.mutedColor
                 font.family: appTheme.uiFontFamily
                 font.pixelSize: appTheme.fontSizeCaption
-                elide: Text.ElideRight
-                wrapMode: Text.NoWrap
+                wrapMode: Text.Wrap
                 Accessible.ignored: true
             }
         }

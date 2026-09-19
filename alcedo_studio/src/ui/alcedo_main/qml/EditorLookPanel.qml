@@ -502,14 +502,15 @@ Item {
 
         RowLayout {
             Layout.fillWidth: true
-            Layout.preferredHeight: 16
+            Layout.preferredHeight: Math.max(16, lookRowTitle.implicitHeight)
             spacing: 8
             Text {
+                id: lookRowTitle
                 Layout.fillWidth: true
                 text: row.title
                 color: root.colText
                 font.pixelSize: appTheme.fontSizeCaption
-                elide: Text.ElideRight
+                wrapMode: Text.Wrap
             }
             Text {
                 text: row.valueText

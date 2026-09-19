@@ -33,8 +33,10 @@ Item {
     readonly property int rowTopPadding: appTheme.spaceXs
     readonly property int rowLineGap: appTheme.spaceXs
     readonly property int rowBottomPadding: appTheme.spaceSm
-    readonly property int titleRowHeight: appTheme.lineHeightTitle
-    readonly property int metaRowHeight: appTheme.lineHeightCaption + appTheme.spaceXs
+    readonly property real titleRowHeight: Math.max(appTheme.lineHeightTitle,
+                                                    titleLabel.implicitHeight)
+    readonly property real metaRowHeight: Math.max(appTheme.lineHeightCaption + appTheme.spaceXs,
+                                                   deltaLabel.implicitHeight + appTheme.spaceXs)
     readonly property int listRowGap: ListView.view ? ListView.view.spacing : 0
     readonly property int rowCount: ListView.view ? ListView.view.count : 0
 
@@ -153,12 +155,13 @@ Item {
             spacing: appTheme.spaceSm
 
             Label {
+                id: titleLabel
                 objectName: "editorHistoryCommitTitle"
                 Layout.fillWidth: true
                 text: root.transactionDisplayName.length > 0
                       ? root.transactionDisplayName : qsTr("Adjustment")
                 color: root.futureRow ? root.colMuted : root.colText
-                elide: Text.ElideRight
+                wrapMode: Text.Wrap
                 verticalAlignment: Text.AlignVCenter
                 font.family: appTheme.uiFontFamily
                 font.pixelSize: appTheme.fontSizeBody
@@ -169,7 +172,7 @@ Item {
                 Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
                 text: root.transactionTime
                 color: root.colMuted
-                elide: Text.ElideRight
+                wrapMode: Text.Wrap
                 horizontalAlignment: Text.AlignRight
                 font.family: appTheme.uiFontFamily
                 font.pixelSize: appTheme.fontSizeCaption
@@ -209,11 +212,12 @@ Item {
             }
 
             Label {
+                id: deltaLabel
                 objectName: "editorHistoryCommitValue"
                 Layout.fillWidth: true
                 text: root.transactionDelta
                 color: root.colMuted
-                elide: Text.ElideRight
+                wrapMode: Text.Wrap
                 verticalAlignment: Text.AlignVCenter
                 font.family: appTheme.monoFontFamily
                 font.pixelSize: appTheme.fontSizeCaption

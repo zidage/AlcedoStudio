@@ -575,6 +575,7 @@ Dialog {
                                             }
 
                                             Label {
+                                                Layout.fillWidth: true
                                                 text: qsTr("Projects you open or create here will appear in this list.")
                                                 color: dialog.mutedTextColor
                                                 font.family: dialog.font.family
@@ -605,7 +606,8 @@ Dialog {
                                         required property double lastOpenedMs
 
                                         width: ListView.view.width
-                                        height: 72
+                                        height: Math.max(72, projectCardColumn.implicitHeight
+                                                         + appTheme.spaceLg)
                                         readonly property bool hovered: rowMouse.containsMouse
 
                                         Rectangle {
@@ -636,13 +638,14 @@ Dialog {
                                                 }
 
                                                 ColumnLayout {
+                                                    id: projectCardColumn
                                                     Layout.fillWidth: true
                                                     spacing: 2
 
                                                     Label {
                                                         Layout.fillWidth: true
                                                         text: name
-                                                        elide: Text.ElideRight
+                                                        wrapMode: Text.Wrap
                                                         color: dialog.textColor
                                                         font.family: dialog.dataFontFamily
                                                         font.pixelSize: 17
@@ -655,7 +658,7 @@ Dialog {
                                                         color: dialog.mutedTextColor
                                                         font.family: dialog.dataFontFamily
                                                         font.pixelSize: 12
-                                                        elide: Text.ElideRight
+                                                        wrapMode: Text.Wrap
                                                     }
 
                                                     Label {
@@ -664,7 +667,7 @@ Dialog {
                                                         color: Qt.rgba(dialog.mutedTextColor.r, dialog.mutedTextColor.g, dialog.mutedTextColor.b, 0.74)
                                                         font.family: dialog.dataFontFamily
                                                         font.pixelSize: 11
-                                                        elide: Text.ElideMiddle
+                                                        wrapMode: Text.Wrap
                                                     }
                                                 }
                                             }
@@ -802,20 +805,22 @@ Dialog {
                                     Rectangle {
                                         id: storageLocationField
                                         Layout.fillWidth: true
-                                        Layout.preferredHeight: 56
+                                        Layout.preferredHeight: Math.max(56, storageLocationLabel.implicitHeight
+                                                                         + appTheme.spaceMd)
                                         radius: 10
                                         color: Qt.rgba(1, 1, 1, 0.10)
                                         border.width: 1
                                         border.color: Qt.rgba(dialog.textColor.r, dialog.textColor.g, dialog.textColor.b, 0.12)
 
                                         Label {
+                                            id: storageLocationLabel
                                             anchors.fill: parent
                                             anchors.leftMargin: 16
                                             anchors.rightMargin: 16
                                             text: dialog.storageLocation.length > 0
                                                   ? dialog.storageLocation
                                                   : qsTr("Select a parent folder...")
-                                            elide: Text.ElideMiddle
+                                            wrapMode: Text.Wrap
                                             verticalAlignment: Text.AlignVCenter
                                             color: dialog.storageLocation.length > 0
                                                    ? dialog.textColor

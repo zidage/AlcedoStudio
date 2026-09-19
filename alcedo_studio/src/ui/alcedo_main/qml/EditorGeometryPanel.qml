@@ -828,7 +828,7 @@ Item {
                 text: qsTr("Source aspect %1").arg(root.imageAspect.toFixed(3))
                 color: root.colMuted
                 font.pixelSize: appTheme.fontSizeCaption
-                elide: Text.ElideRight
+                wrapMode: Text.Wrap
             }
 
             Label {

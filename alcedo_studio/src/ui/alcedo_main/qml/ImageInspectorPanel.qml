@@ -192,7 +192,7 @@ Item {
             font.weight: 700
             font.letterSpacing: 1.8
             font.capitalization: Font.AllUppercase
-            elide: Text.ElideRight
+            wrapMode: Text.Wrap
         }
     }
 
@@ -288,7 +288,7 @@ Item {
             font.family: appTheme.dataFontFamily
             font.pixelSize: 22
             font.weight: 700
-            elide: Text.ElideRight
+            wrapMode: Text.Wrap
             Layout.fillWidth: true
         }
 
@@ -472,9 +472,10 @@ Item {
 
             Item {
                 Layout.fillWidth: true
-                Layout.preferredHeight: 116
+                Layout.preferredHeight: Math.max(116, inspectorHeaderColumn.implicitHeight + 34)
 
                 ColumnLayout {
+                    id: inspectorHeaderColumn
                     anchors.left: parent.left
                     anchors.right: menuButton.left
                     anchors.top: parent.top
@@ -492,7 +493,7 @@ Item {
                         font.family: appTheme.headlineFontFamily
                         font.pixelSize: 20
                         font.weight: 800
-                        elide: Text.ElideMiddle
+                        wrapMode: Text.Wrap
                     }
 
                     RowLayout {
@@ -516,7 +517,7 @@ Item {
                             font.family: appTheme.dataFontFamily
                             font.pixelSize: 13
                             font.weight: 500
-                            elide: Text.ElideRight
+                            wrapMode: Text.Wrap
                         }
                     }
                 }

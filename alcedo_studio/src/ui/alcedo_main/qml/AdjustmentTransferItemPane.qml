@@ -57,7 +57,7 @@ Item {
             font.family: appTheme.uiFontFamily
             font.pixelSize: appTheme.fontSizeCaption
             font.weight: appTheme.fontWeightStrong
-            elide: Text.ElideRight
+            wrapMode: Text.Wrap
         }
 
         RowLayout {
@@ -196,7 +196,7 @@ Item {
             required property bool checked
             required property bool enabled
             width: ListView.view ? ListView.view.width : 0
-            height: appTheme.iconButtonHitSizeCompact
+            height: Math.max(appTheme.iconButtonHitSizeCompact, innerCheck.implicitHeight)
             Accessible.role: Accessible.CheckBox
             Accessible.name: checkRowRoot.itemKind === 3
                              ? qsTr("Transfer all masks in this node")
@@ -270,13 +270,15 @@ Item {
             required property bool checked
             required property bool enabled
             width: ListView.view ? ListView.view.width : 0
-            height: appTheme.iconButtonHitSizeCompact
+            height: Math.max(appTheme.iconButtonHitSizeCompact,
+                             readOnlyRowLayout.implicitHeight + appTheme.spaceXs)
             Accessible.role: Accessible.ListItem
             Accessible.name: readOnlyRoot.itemKind === 3
                              ? qsTr("Transfer all masks in this node")
                              : readOnlyRoot.displayName
 
             RowLayout {
+                id: readOnlyRowLayout
                 anchors.fill: parent
                 anchors.leftMargin: appTheme.spaceSm
                 anchors.rightMargin: appTheme.spaceSm
@@ -288,7 +290,7 @@ Item {
                     color: appTheme.textColor
                     font.family: appTheme.uiFontFamily
                     font.pixelSize: appTheme.fontSizeBody
-                    elide: Text.ElideRight
+                    wrapMode: Text.Wrap
                 }
 
                 Label {
@@ -298,7 +300,7 @@ Item {
                     font.family: appTheme.dataFontFamily
                     font.pixelSize: appTheme.fontSizeCaption
                     horizontalAlignment: Text.AlignRight
-                    elide: Text.ElideMiddle
+                    wrapMode: Text.Wrap
                 }
             }
         }

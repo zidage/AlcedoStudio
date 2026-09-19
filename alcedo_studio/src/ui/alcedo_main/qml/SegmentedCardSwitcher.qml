@@ -42,7 +42,7 @@ Rectangle {
 
     signal selected(int index, string value)
 
-    implicitHeight: segmentHeight + 2 * trackInset
+    implicitHeight: Math.max(segmentHeight, cardRow.implicitHeight) + 2 * trackInset
     implicitWidth: 200
     radius: trackRadius
     color: trackColor
@@ -89,6 +89,7 @@ Rectangle {
 
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                implicitHeight: segmentLabel.implicitHeight + appTheme.spaceSm
                 activeFocusOnTab: segmentEnabled
                 Accessible.role: Accessible.RadioButton
                 Accessible.name: modelData ? String(modelData.label || "") : ""
@@ -112,6 +113,7 @@ Rectangle {
                 }
 
                 Label {
+                    id: segmentLabel
                     anchors.centerIn: parent
                     width: parent.width - appTheme.spaceSm
                     horizontalAlignment: Text.AlignHCenter
@@ -121,7 +123,7 @@ Rectangle {
                     font.pixelSize: appTheme.fontSizeBody
                     font.weight: sel ? appTheme.fontWeightStrong
                                       : appTheme.fontWeightRegular
-                    elide: Text.ElideRight
+                    wrapMode: Text.Wrap
                 }
 
                 MouseArea {

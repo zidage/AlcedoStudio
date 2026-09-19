@@ -118,6 +118,17 @@ Normalization may change the source stroke color, viewBox formatting, and an
 explicitly approved stroke width, but it must not redesign the approved path
 geometry. The pipeline icon added on 2026-09-17 is user-provided and approved.
 
+### Text truncation policy
+
+Labels in content-driven layouts wrap (`wrapMode: Text.Wrap`); the parent
+height follows `implicitHeight` (`Math.max(original floor, content height)`), so
+narrow windows reflow instead of hiding copy. `elide` stays only where geometry
+is genuinely fixed: thumbnail cards, uniform list rows positioned by
+`index * rowHeight`, graph axes and slider tick labels, single-line field
+placeholders, EXIF spec cells, and bounded banners that already wrap to a line
+cap before eliding. Do not wrap text inside a fixed-height item without
+updating its height binding.
+
 ---
 
 ## Color and surface hierarchy
@@ -900,14 +911,14 @@ row delegate and arrow affordance automatically.
 | --- | --- |
 | `IconActionButton.qml` | Structural SVG action (Item root, true square chrome): hit/optical/source, tooltip, a11y, hover, focus, selected fill; SVG tint via `ColorImage` (same as `Button.icon.color`) |
 | `CollapsibleSection.qml` | Folding group shell with shared motion driver |
-| `DialogActionButton.qml` | Text dialog actions (height 46 reference) |
+| `DialogActionButton.qml` | Text dialog actions (46 px floor; wrapped labels grow the button) |
 | `IconButton.qml` | Legacy square icon control; defaults now follow tokens |
 | `SegmentedCardSwitcher.qml` | Monochrome segmented track; per-entry `enabled: false` keeps unsupported choices visible but non-interactive |
 | `AdjustmentSlider.qml` | Shared numeric slider + field bound to `EditorAdjustmentValueModel` |
 | `ThemedProgressBar.qml` | Shared determinate / indeterminate progress track (Background Tasks + Export) |
 | `ThemeCheckBox.qml` | Monochrome check row (Adjustment Transfer / Export): selected well + check, muted label when off |
 | `AppContextMenu.qml` | Shared dark popup menu shell (`Menu` + `AppMenuItem` delegate, fade transition, `openAt`) |
-| `AppMenuItem.qml` | Shared dark menu row (state gutter, elided label, sub-menu arrow, hover wash) |
+| `AppMenuItem.qml` | Shared dark menu row (state gutter, wrapping label, sub-menu arrow, hover wash) |
 | `AppMenuSeparator.qml` | Shared 1 px menu group divider |
 
 ---

@@ -75,7 +75,8 @@ Item {
                                                         : "")
     property bool hasImage: editorSession ? editorSession.hasImage : false
 
-    readonly property real handleHeight: 28
+    readonly property real handleHeight: Math.max(28, handleRow.implicitHeight
+                                                  + appTheme.spaceXs)
     // dockExpandProgress drives the downward fold (0 collapsed -> 1 expanded).
     // collapsed flips immediately (persisted session state); only the visual
     // height animates so the handle stays stationary and state assertions hold.
@@ -720,6 +721,7 @@ Item {
             }
 
             RowLayout {
+                id: handleRow
                 anchors.fill: parent
                 anchors.leftMargin: appTheme.spaceMd
                 anchors.rightMargin: appTheme.spaceMd
@@ -770,7 +772,7 @@ Item {
                     color: root.colText
                     font.pixelSize: appTheme.fontSizeBody
                     font.weight: appTheme.fontWeightStrong
-                    elide: Text.ElideRight
+                    wrapMode: Text.Wrap
                 }
 
                 Label {
@@ -781,7 +783,7 @@ Item {
                     text: root.selectionDisabledReason
                     color: root.colMuted
                     font.pixelSize: appTheme.fontSizeCaption
-                    elide: Text.ElideRight
+                    wrapMode: Text.Wrap
                 }
             }
 

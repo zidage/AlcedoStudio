@@ -35,8 +35,10 @@ Item {
     property int _foldDuration: appTheme.motionFoldOpenMs
 
     readonly property real headerHeight: appTheme.iconButtonHitSizeCompact
+    readonly property real headerBlockHeight: Math.max(
+        headerHeight, headerRow.implicitHeight + appTheme.spaceXs)
     readonly property real bodyHeight: Math.max(0, bodyContentHeight) * foldProgress
-    readonly property real sectionHeight: headerHeight + bodyHeight
+    readonly property real sectionHeight: headerBlockHeight + bodyHeight
 
     // Children of CollapsibleSection { ... } must land in the body slot, not as
     // siblings of the chrome Rectangle (that stacked content on top of the title).
@@ -107,7 +109,7 @@ Item {
                 id: header
                 objectName: "collapsibleSectionHeader"
                 Layout.fillWidth: true
-                Layout.preferredHeight: root.headerHeight
+                Layout.preferredHeight: root.headerBlockHeight
                 activeFocusOnTab: true
                 Accessible.role: Accessible.Button
                 Accessible.name: root.expanded
@@ -133,6 +135,7 @@ Item {
                 }
 
                 RowLayout {
+                    id: headerRow
                     anchors.fill: parent
                     anchors.leftMargin: appTheme.spaceSm
                     anchors.rightMargin: appTheme.spaceSm
@@ -177,7 +180,7 @@ Item {
                         color: root.textColor
                         font.pixelSize: appTheme.fontSizeTitle
                         font.weight: appTheme.fontWeightStrong
-                        elide: Text.ElideRight
+                        wrapMode: Text.Wrap
                     }
                 }
 

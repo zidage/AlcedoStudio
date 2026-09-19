@@ -607,7 +607,7 @@ Dialog {
                                 font.family: root.headlineFontFamily
                                 font.pixelSize: 28
                                 font.weight: 800
-                                elide: Text.ElideRight
+                                wrapMode: Text.Wrap
                             }
 
                             Label {
@@ -617,7 +617,7 @@ Dialog {
                                 font.family: root.dataFontFamily
                                 font.pixelSize: 13
                                 font.weight: 600
-                                elide: Text.ElideRight
+                                wrapMode: Text.Wrap
                             }
                         }
 
@@ -851,7 +851,7 @@ Dialog {
                                         color: root.textColor
                                         font.pixelSize: 20
                                         font.weight: 800
-                                        elide: Text.ElideRight
+                                        wrapMode: Text.Wrap
                                     }
 
                                     Label {
@@ -860,7 +860,7 @@ Dialog {
                                         color: root.mutedTextColor
                                         font.family: root.dataFontFamily
                                         font.pixelSize: 14
-                                        elide: Text.ElideRight
+                                        wrapMode: Text.Wrap
                                     }
 
                                     Label {
@@ -914,7 +914,7 @@ Dialog {
                                     color: root.dangerColor
                                     font.pixelSize: 13
                                     font.weight: 800
-                                    elide: Text.ElideRight
+                                    wrapMode: Text.Wrap
                                 }
 
                                 ScrollView {
@@ -962,11 +962,13 @@ Dialog {
 
                 Rectangle {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 82
+                    Layout.preferredHeight: Math.max(82, analysisFooterRow.implicitHeight
+                                                     + appTheme.spaceLg)
                     color: root.withAlpha(root.canvasColor, 0.34)
                     border.width: 0
 
                     RowLayout {
+                        id: analysisFooterRow
                         anchors.fill: parent
                         anchors.leftMargin: 28
                         anchors.rightMargin: 28
@@ -982,7 +984,7 @@ Dialog {
                                        ? root.interactionPolicy.runAnalysisReason : "")
                             color: root.mutedTextColor
                             font.pixelSize: 12
-                            elide: Text.ElideRight
+                            wrapMode: Text.Wrap
                         }
 
                         IconButton {
@@ -1033,12 +1035,13 @@ Dialog {
         property string value: ""
 
         Layout.fillWidth: true
-        Layout.preferredHeight: 76
+        Layout.preferredHeight: Math.max(76, summaryTileColumn.implicitHeight + 24)
         radius: 8
         color: root.summaryCardColor
         border.width: 0
 
         ColumnLayout {
+            id: summaryTileColumn
             anchors.fill: parent
             anchors.margins: 12
             spacing: 6
@@ -1049,7 +1052,7 @@ Dialog {
                 color: root.mutedTextColor
                 font.pixelSize: 11
                 font.weight: 700
-                elide: Text.ElideRight
+                wrapMode: Text.Wrap
             }
 
             Label {
@@ -1058,7 +1061,7 @@ Dialog {
                 color: root.textColor
                 font.pixelSize: 15
                 font.weight: 700
-                elide: Text.ElideRight
+                wrapMode: Text.Wrap
             }
         }
     }

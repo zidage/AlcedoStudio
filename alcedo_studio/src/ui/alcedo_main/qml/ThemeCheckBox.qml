@@ -112,7 +112,7 @@ Item {
                    : appTheme.textMutedColor
             font.family: appTheme.uiFontFamily
             font.pixelSize: appTheme.fontSizeBody
-            elide: Text.ElideRight
+            wrapMode: Text.Wrap
         }
 
         Label {
@@ -126,7 +126,7 @@ Item {
             font.family: appTheme.dataFontFamily
             font.pixelSize: appTheme.fontSizeCaption
             horizontalAlignment: Text.AlignRight
-            elide: Text.ElideMiddle
+            wrapMode: Text.Wrap
         }
     }
 

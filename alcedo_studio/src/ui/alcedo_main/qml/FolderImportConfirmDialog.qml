@@ -119,7 +119,7 @@ Popup {
                     topPadding: appTheme.spaceXs
                     bottomPadding: appTheme.spaceXs
                     verticalAlignment: Text.AlignVCenter
-                    elide: Text.ElideRight
+                    wrapMode: Text.Wrap
                     text: root.fileNameOf(modelData)
                     color: root.theme ? root.theme.colText : appTheme.textColor
                     font.pixelSize: appTheme.fontSizeCaption

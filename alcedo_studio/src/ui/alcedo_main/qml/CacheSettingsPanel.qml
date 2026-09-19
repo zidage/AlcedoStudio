@@ -153,20 +153,22 @@ ColumnLayout {
 
                 Rectangle {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 36
+                    Layout.preferredHeight: Math.max(36, cacheRootLabel.implicitHeight
+                                                     + appTheme.spaceSm)
                     radius: appTheme.controlRadiusSmall
                     color: appTheme.bgBaseColor
                     border.width: 1
                     border.color: appTheme.cardBorderColor
 
                     Label {
+                        id: cacheRootLabel
                         anchors.fill: parent
                         anchors.leftMargin: appTheme.spaceSm
                         anchors.rightMargin: appTheme.spaceSm
                         text: panel.pendingRoot.length > 0
                               ? panel.pendingRoot
                               : panel.statLineValue("Root")
-                        elide: Text.ElideMiddle
+                        wrapMode: Text.Wrap
                         verticalAlignment: Text.AlignVCenter
                         color: panel.textColor
                         font.family: panel.dataFontFamily
@@ -473,11 +475,12 @@ ColumnLayout {
         property string label: ""
         property string value: ""
 
-        implicitHeight: 84
+        implicitHeight: Math.max(84, cacheMetricColumn.implicitHeight + 28)
         radius: 8
         color: Qt.rgba(panel.canvasColor.r, panel.canvasColor.g, panel.canvasColor.b, 0.62)
 
         ColumnLayout {
+            id: cacheMetricColumn
             anchors.fill: parent
             anchors.margins: 14
             spacing: 6
@@ -488,7 +491,7 @@ ColumnLayout {
                 color: panel.mutedTextColor
                 font.pixelSize: 12
                 font.weight: 700
-                elide: Text.ElideRight
+                wrapMode: Text.Wrap
             }
 
             Label {
@@ -498,7 +501,7 @@ ColumnLayout {
                 font.family: panel.dataFontFamily
                 font.pixelSize: 18
                 font.weight: 700
-                elide: Text.ElideRight
+                wrapMode: Text.Wrap
             }
         }
     }

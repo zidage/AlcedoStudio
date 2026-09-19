@@ -86,19 +86,10 @@ Item {
     readonly property real headerHeight: Math.max(
                                              appTheme.iconButtonHitSizeCompact,
                                              appTheme.maskGroupPreviewSize
+                                             + appTheme.spaceXs * 2,
+                                             groupName.implicitHeight
                                              + appTheme.spaceXs * 2)
-    readonly property real maskRowHeight: Math.max(
-                                              appTheme.iconButtonHitSizeCompact,
-                                              appTheme.maskGroupMaskPreviewSize
-                                              + appTheme.spaceXs * 2)
-    readonly property real bodyContentHeight: {
-        if (root.maskCount === 0) {
-            // Empty groups keep their drawer: one caption row stands in for
-            // the Mask list so expansion is still meaningful.
-            return appTheme.graphMaskRowHeight + appTheme.spaceXs
-        }
-        return root.maskCount * root.maskRowHeight + appTheme.spaceXs
-    }
+    readonly property real bodyContentHeight: maskList.implicitHeight + appTheme.spaceXs
     readonly property real bodyHeight: Math.max(0, bodyContentHeight) * foldProgress
     readonly property color headerInkColor: root.textColor
     readonly property string deleteDisabledReason: {
@@ -524,8 +515,7 @@ Item {
                         font.weight: root.selected || root.ownerActive
                                      ? appTheme.fontWeightStrong
                                      : appTheme.fontWeightRegular
-                        elide: Text.ElideRight
-                        wrapMode: Text.NoWrap
+                        wrapMode: Text.Wrap
                         Accessible.ignored: true
                         ToolTip.visible: root.headerHovered && truncated
                         ToolTip.text: root.displayName

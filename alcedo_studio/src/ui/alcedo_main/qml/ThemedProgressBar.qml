@@ -26,7 +26,7 @@ Item {
 
     Layout.fillWidth: true
     Layout.preferredHeight: implicitHeight
-    implicitHeight: trackHeight + (showDetails ? appTheme.lineHeightCaption + appTheme.spaceXs : 0)
+    implicitHeight: trackHeight + (showDetails ? detailsRow.implicitHeight + appTheme.spaceXs : 0)
     implicitWidth: 120
     Accessible.role: Accessible.ProgressBar
     Accessible.name: qsTr("Progress")
@@ -69,6 +69,7 @@ Item {
     }
 
     RowLayout {
+        id: detailsRow
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
@@ -89,7 +90,7 @@ Item {
             color: appTheme.textMutedColor
             font.family: appTheme.dataFontFamily
             font.pixelSize: appTheme.fontSizeCaption
-            elide: Text.ElideRight
+            wrapMode: Text.Wrap
         }
 
         Label {

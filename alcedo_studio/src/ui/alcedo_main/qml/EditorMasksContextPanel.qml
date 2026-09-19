@@ -198,7 +198,7 @@ Item {
                 id: nudgeArea
                 objectName: "editorMasksNudgeArea"
                 Layout.fillWidth: true
-                implicitHeight: 28
+                implicitHeight: Math.max(28, nudgeLabel.implicitHeight + appTheme.spaceXs)
                 visible: root.maskCreation
                          ? root.maskCreation.maskNudgeAvailable : false
                 activeFocusOnTab: visible
@@ -252,13 +252,14 @@ Item {
                                                         : appTheme.cardBorderColor
                 }
                 Label {
+                    id: nudgeLabel
                     anchors.centerIn: parent
                     width: parent.width - appTheme.spaceSm * 2
                     horizontalAlignment: Text.AlignHCenter
                     text: qsTr("Arrow keys move · Shift ×10")
                     color: root.colMuted
                     font.pixelSize: appTheme.fontSizeCaption
-                    elide: Text.ElideRight
+                    wrapMode: Text.Wrap
                 }
             }
 

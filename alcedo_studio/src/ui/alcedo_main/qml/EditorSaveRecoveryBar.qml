@@ -51,7 +51,7 @@ Item {
                     font.family: appTheme.uiFontFamily
                     font.pixelSize: appTheme.fontSizeTitle
                     font.weight: appTheme.fontWeightHeading
-                    elide: Text.ElideRight
+                    wrapMode: Text.Wrap
                 }
 
                 Label {

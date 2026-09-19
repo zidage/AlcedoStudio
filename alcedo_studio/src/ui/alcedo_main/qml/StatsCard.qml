@@ -198,7 +198,7 @@ Item {
                 delegate: Item {
                     required property int index
                     Layout.fillWidth: true
-                    implicitHeight: 24
+                    implicitHeight: Math.max(24, statsBarRow.implicitHeight)
 
                     readonly property var entry: card.visibleItems[index]
                     readonly property string entryLabel: entry ? String(entry.label) : ""
@@ -242,6 +242,7 @@ Item {
                     }
 
                     RowLayout {
+                        id: statsBarRow
                         anchors.fill: parent
                         anchors.leftMargin: 6
                         anchors.rightMargin: 6
@@ -253,7 +254,7 @@ Item {
                             font.family: appTheme.dataFontFamily
                             font.pixelSize: 11
                             font.weight: 400
-                            elide: Text.ElideRight
+                            wrapMode: Text.Wrap
                         }
 
                         Label {
@@ -299,7 +300,7 @@ Item {
                                                           && card.selectedLabel !== ""
 
                         id: chip
-                        height: 38
+                        height: Math.max(38, chipLabel.implicitHeight + appTheme.spaceMd)
                         radius: 19
                         implicitWidth: Math.min(chipLabel.implicitWidth + 28, 170)
                         color: isSelected
@@ -325,7 +326,7 @@ Item {
                             anchors.centerIn: parent
                             width: Math.min(implicitWidth, 142)
                             horizontalAlignment: Text.AlignHCenter
-                            elide: Text.ElideRight
+                            wrapMode: Text.Wrap
                             text: entryLabel
                             color: isSelected ? card.accentColor : appTheme.textColor
                             font.family: appTheme.uiFontFamily
@@ -410,7 +411,7 @@ Item {
                 delegate: Item {
                     required property int index
                     Layout.fillWidth: true
-                    implicitHeight: 42
+                    implicitHeight: Math.max(42, statsDotRow.implicitHeight)
 
                     readonly property var entry: card.visibleItems[index]
                     readonly property string entryLabel: entry ? String(entry.label) : ""
@@ -439,6 +440,7 @@ Item {
                     }
 
                     RowLayout {
+                        id: statsDotRow
                         anchors.fill: parent
                         anchors.leftMargin: 12
                         anchors.rightMargin: 12
@@ -460,7 +462,7 @@ Item {
                             font.family: appTheme.dataFontFamily
                             font.pixelSize: 12
                             font.weight: isSelected ? 600 : 500
-                            elide: Text.ElideRight
+                            wrapMode: Text.Wrap
                         }
 
                         Label {
