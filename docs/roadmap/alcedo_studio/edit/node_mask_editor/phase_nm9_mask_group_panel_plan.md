@@ -2,9 +2,10 @@
 
 Date: 2026-09-16
 
-Status: **NM9.1 complete 2026-09-16**；**NM9.2 complete 2026-09-16**；**NM9.3 partial
-2026-09-16 on `feature/mask-groups-workspace`**；**NM9.4 complete 2026-09-17 on `feature/mask-thumbnail-lru`**；NM9.5–NM9.6 仍为 planned。本文件记录产品
-语义和实施拆分；NM9.1 的共享组投影、顶部插入、桥接删除与草稿
+Status: **complete per user confirmation on 2026-09-18**. NM9.5 and later checks used manual
+verification. Existing phase records remain as historical implementation and automated evidence.
+The earlier NM9.3 partial record remains below and does not become automated completion evidence.
+本文件记录产品语义和实施拆分；NM9.1 的共享组投影、顶部插入、桥接删除与草稿
 边界已在 `feature/nm91-mask-group-projection` 实现并通过验证，见 NM9.1 完成记录。
 NM9.2 的删除保护、默认 Grade 身份与格式读写已在 `feature/nm92-deletion-protection`
 实现并通过验证，见 NM9.2 完成记录；NM9.3 见其完成记录，组顺序调整（每次移动即一次
@@ -575,10 +576,10 @@ PendingDelete 可以是 UI 状态（按钮 disable），**不是** thumbnail 正
 | --- | --- | --- | --- |
 | NM9.1 | 共享组投影、顶部插入/桥接删除的 app 操作、草稿边界 | NM8 收口 | complete 2026-09-16 on `feature/nm91-mask-group-projection` |
 | NM9.2 | 删除锁、默认保护、typed history 和格式规则 | NM9.1 | complete 2026-09-16 on `feature/nm92-deletion-protection` |
-| NM9.3 | Mask Groups 面板、空抽屉、创建入口与双向选择 | NM9.1–NM9.2 | partial — implementation present; acceptance failures under investigation |
+| NM9.3 | Mask Groups 面板、空抽屉、创建入口与双向选择 | NM9.1–NM9.2 | complete per user confirmation 2026-09-18; historical partial record retained |
 | NM9.4 | 项目级内存 LRU、跨图复用、commit 后逐项小图、非阻塞删除与回调校验 | NM9.3 | complete 2026-09-17 on `feature/mask-thumbnail-lru` |
-| NM9.5 | Undo/Redo、Version、Paste、reopen 和失败恢复验证 | NM9.2–NM9.4 | planned |
-| NM9.6 | 真实摄影任务的 UI/UX、像素一致性与性能验收 | NM9.1–NM9.5 | planned |
+| NM9.5 | Undo/Redo、Version、Paste、reopen 和失败恢复验证 | NM9.2–NM9.4 | complete by user manual verification 2026-09-18 |
+| NM9.6 | 真实摄影任务的 UI/UX、像素一致性与性能验收 | NM9.1–NM9.5 | complete by user manual verification 2026-09-18 |
 
 ### NM9.1 — 一份 DAG 的两种投影
 
@@ -1538,8 +1539,9 @@ Windows configure/build/link 每次至少预留 10 分钟，CUDA 或较多目标
 
 ## 8. 完成记录
 
-NM9.1/NM9.2 已完成；NM9.3 为 partial；**NM9.4 complete 2026-09-17** on
-`feature/mask-thumbnail-lru`；NM9.5–NM9.6 仍为 planned。记录见对应阶段。
+NM9 is complete per user confirmation on 2026-09-18. NM9.5 and NM9.6 used manual verification.
+NM9.1, NM9.2, and NM9.4 keep their recorded automated evidence. The earlier NM9.3 partial record
+remains historical evidence. It is not rewritten as an automated pass.
 在各阶段对应小节后追加有日期的记录，并在本节维护简短索引，不删掉早期失败或平台
 缺证记录来使完成结果看起来更完整。
 
@@ -1580,6 +1582,15 @@ Remaining defects or unverified platforms, and effect on completion:
 
 临时日志、截图和原始测量表放在 `build/tmp/mask_group_panel/nm9_N/`，不提交到仓库。
 文档保留必要的结果表、命令、输入定义和路径，避免结论只能依赖后来可能被清理的临时文件。
-NM9 完成时同步总方案第 21.10 节与第 26 节的实际状态；NM10 不因这次验收增加内容。
+The master plan now records the user-confirmed NM9 status. NM10 has its own approved execution plan.
 
-下一阶段：[NM10 — Adjustment Transfer](phase_nm10_adjustment_transfer_plan.md)，仅保留占位。
+### 8.3 NM9 phase closure record (2026-09-18)
+
+**Status:** complete per user confirmation.
+
+The user confirmed that NM9 is complete after the prior cleanup pull request.
+The user completed NM9.5 and later checks with manual verification.
+This closure adds no automated test count, build command, or platform result.
+The detailed historical records above remain the source for automated evidence.
+
+Next phase: [NM10 — Node-aware Adjustment Transfer](phase_nm10_adjustment_transfer_plan.md).
