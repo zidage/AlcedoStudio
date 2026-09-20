@@ -587,6 +587,40 @@ alcedo_ui_gtest_discover_tests(RegisteredShortcutQmlTest
 )
 alcedo_register_test_target(RegisteredShortcutQmlTest ui)
 
+# Phase B1: Settings > Keyboard grouped registry rows plus capture, conflict,
+# clear/restore, persistence-failure, and live-rebind interaction. The panel
+# harness loads KeyboardSettingsPanel/ShortcutCaptureField from source; the
+# dialog harness hosts the production SettingDialog on ApplicationModuleHost.
+add_executable(ShortcutSettingsQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/shortcut_settings_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(ShortcutSettingsQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(ShortcutSettingsQmlTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(ShortcutSettingsQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+alcedo_ui_gtest_discover_tests(ShortcutSettingsQmlTest
+    TEST_PREFIX "ShortcutSettingsQmlTest."
+    PROPERTIES LABELS "workspace_qml;shortcut_settings"
+)
+alcedo_register_test_target(ShortcutSettingsQmlTest ui)
+
 # Phase 6A: typed adjustment models (no GPU/QML rendering; QSignalSpy drives the
 # debounce timer deterministically via the event loop).
 add_executable(EditorAdjustmentModelTest

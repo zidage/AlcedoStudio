@@ -208,6 +208,11 @@ class ShortcutRegistry final : public QAbstractListModel {
   Q_INVOKABLE QVariantMap restoreDefault(const QString& command_id);
   Q_INVOKABLE QString     shortcutText(const QString& command_id) const;
   Q_INVOKABLE QString decorateTooltip(const QString& base_text, const QString& command_id) const;
+  /// Native-text rendering of a captured-but-not-yet-saved candidate for the
+  /// settings capture field: a modifier mask without a key renders as modifier
+  /// text ("Ctrl+Shift"), a key chord renders as "Ctrl+K". Returns empty for
+  /// empty input. Display-only; saving still runs through saveCandidate().
+  Q_INVOKABLE QString candidateText(int key, int modifiers, int input_kind) const;
 
  signals:
   /// Emitted after a successful save, clear, or restore so QML input wrappers

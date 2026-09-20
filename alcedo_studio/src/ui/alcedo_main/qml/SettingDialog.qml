@@ -1,4 +1,5 @@
 import QtQuick
+import QtQml.Models
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import QtQuick.Effects
@@ -126,6 +127,9 @@ Dialog {
         }
         if (currentCategory === 6) {
             return qsTr("Updates")
+        }
+        if (currentCategory === 7) {
+            return qsTr("Keyboard")
         }
         return qsTr("About")
     }
@@ -301,10 +305,17 @@ Dialog {
                         }
 
                         ColumnLayout {
+                            id: categoryNavColumn
                             Layout.fillWidth: true
                             spacing: 8
 
-                            Repeater {
+                            // Instantiator, not Repeater: the Repeater's
+                            // delegate-model never completes under an
+                            // offscreen test window, so nav items would never
+                            // materialize for QML tests (and this list is
+                            // fixed at nine entries, so eager creation is
+                            // equivalent in production).
+                            Instantiator {
                                 model: [
                                     { label: qsTr("Language"), icon: "qrc:/panel_icons/language.svg" },
                                     { label: qsTr("Theme and color"), icon: "qrc:/panel_icons/palette.svg" },
@@ -313,13 +324,19 @@ Dialog {
                                     { label: qsTr("Advanced Content Analysis"), icon: "qrc:/panel_icons/flask.svg" },
                                     { label: qsTr("Acceleration"), icon: "qrc:/panel_icons/cpu.svg" },
                                     { label: qsTr("Updates"), icon: "qrc:/panel_icons/update.svg" },
+                                    { label: qsTr("Keyboard"), icon: "qrc:/panel_icons/keyboard.svg" },
                                     { label: qsTr("About"), icon: "qrc:/panel_icons/aperture.svg" }
                                 ]
+
+                                onObjectAdded: function(index, object) {
+                                    object.parent = categoryNavColumn
+                                }
 
                                 delegate: Rectangle {
                                     required property int index
                                     required property var modelData
 
+                                    objectName: "settingsNavItem:" + index
                                     Layout.fillWidth: true
                                     Layout.preferredHeight: Math.max(48, categoryNavRow.implicitHeight
                                                                      + appTheme.spaceMd)
@@ -410,6 +427,7 @@ Dialog {
                                 spacing: 10
 
                                 Label {
+                                    objectName: "settingsPageTitle"
                                     Layout.fillWidth: true
                                     text: dialog.currentPageTitle()
                                     color: dialog.textColor
@@ -720,7 +738,30 @@ Dialog {
                         }
 
                         ScrollView {
+                            id: keyboardScroll
+                            objectName: "keyboardSettingsScroll"
+                            contentWidth: availableWidth
+                            clip: true
+
+                            KeyboardSettingsPanel {
+                                id: keyboardPanel
+                                objectName: "keyboardSettingsPanel"
+                                width: keyboardScroll.availableWidth
+                                textColor: dialog.textColor
+                                mutedTextColor: dialog.mutedTextColor
+                                accentColor: dialog.primaryAccent
+                                canvasColor: dialog.canvasColor
+                                dividerColor: dialog.dividerColor
+                                panelBorderColor: dialog.panelBorderColor
+                                hoverColor: dialog.hoverColor
+                                dangerColor: dialog.dangerColor
+                                dataFontFamily: dialog.dataFontFamily
+                            }
+                        }
+
+                        ScrollView {
                             id: aboutScroll
+                            objectName: "aboutScroll"
                             contentWidth: availableWidth
                             clip: true
 

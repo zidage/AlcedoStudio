@@ -739,6 +739,19 @@ QString ShortcutRegistry::decorateTooltip(const QString& base_text,
   return DecorateTooltip(base_text, command_id);
 }
 
+QString ShortcutRegistry::candidateText(int key, int modifiers, int input_kind) const {
+  const auto modifiers_masked = MaskedModifiers(modifiers);
+  const auto qt_key           = static_cast<Qt::Key>(key);
+  // QML passes 0 for "no key captured"; that is not Qt::Key_unknown.
+  if (static_cast<ShortcutInputKind>(input_kind) == ShortcutInputKind::Modifier || key <= 0 ||
+      qt_key == Qt::Key_unknown || IsModifierKey(qt_key)) {
+    return modifiers_masked == Qt::NoModifier
+               ? QString{}
+               : ModifierText(modifiers_masked, QKeySequence::NativeText);
+  }
+  return SequenceText(qt_key, modifiers_masked, QKeySequence::NativeText);
+}
+
 auto ShortcutRegistry::FindEntry(const ShortcutCommandId& id) -> Entry* {
   const auto it = row_for_id_.constFind(id);
   if (it == row_for_id_.constEnd()) {

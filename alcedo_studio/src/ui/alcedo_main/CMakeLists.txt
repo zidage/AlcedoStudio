@@ -578,6 +578,8 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/AdjustmentTransferNodePane.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AdjustmentTransferItemPane.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/SettingDialog.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/KeyboardSettingsPanel.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/ShortcutCaptureField.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/WelcomeDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/UpdateNotice.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/UpdatesSettingsPanel.qml"

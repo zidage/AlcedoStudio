@@ -1402,14 +1402,91 @@ settings persistence after application restart. Store notes under
 
 ### Completion record
 
-When complete, add:
+**Status:** complete on branch `feature/configurable-shortcut-registry-b1`.
 
-- commit id;
-- screenshots or rendered captures for both themes and both languages;
-- capture success, conflict, clear, restore, and write-failure evidence;
-- exact test commands and counts;
-- accessibility and keyboard-only notes;
-- remaining risks or `None`.
+- commit id: `ce7c78b2` (`feat(shortcuts): Settings Keyboard page with capture
+  interaction (B1)`).
+- New production files:
+  - `qml/KeyboardSettingsPanel.qml`: grouped, scrollable `Instantiator` over the
+    `ShortcutRegistry` model; renders only `settingsVisible` rows, emits a group
+    header when the preceding visible row's `groupText` differs, and enforces
+    one active capture via `requestCapture`/`releaseCapture`.
+  - `qml/ShortcutCaptureField.qml`: capture session owner. Click or
+    Enter/Space begins; key chords validate through
+    `ShortcutRegistry.validateCandidate`; Enter/Escape commit through
+    `saveCandidate`; plain Delete stages the unassigned state for
+    `clearBinding`; modifier-only commands capture the released modifier bit;
+    Tab cancels the unsaved candidate and propagates focus; focus loss cancels.
+    Conflicts keep the session and surface the conflicting action name plus
+    `scopeForCommand` scope text; persistence failures end the session with
+    `persistenceError` state and leave the displayed binding untouched.
+    Exposes `capturing`, `captureState`, `displayText`, `errorText`,
+    `conflictScope`, `accessibleName`, `accessibleDescription`, `usesDefault`.
+  - `panel_icons/keyboard.svg` + `resource.qrc` entry (Tabler outline,
+    `stroke="white"`, `stroke-width="1.5"`, matching existing panel icons).
+- Registry addition: `candidateText(key, modifiers, inputKind)` renders the
+  in-progress input in `NativeText` — `key <= 0` or a modifier key yields
+  modifier text without a trailing separator ("Ctrl", "Shift"); a real key
+  yields the chord ("Ctrl+K"). Display-only; commits still go through
+  `saveCandidate`/`clearBinding`/`restoreDefault`.
+- `SettingDialog.qml`: Keyboard nav entry at index 7 (About moves to 8), a
+  `keyboardSettingsScroll` page hosting `KeyboardSettingsPanel` inside the
+  existing `StackLayout`, `settingsNavItem:<i>` and `settingsPageTitle`
+  object names, `aboutScroll` object name, and an `Instantiator` for the nav
+  list — `QQuickRepeater` delegates never materialize under the offscreen QML
+  test window, so both fixed lists instantiate eagerly with explicit
+  reparenting into their `ColumnLayout` containers.
+- `GlobalSearchDialog.qml`: `globalSearchField` object name for the
+  input-priority workflow test.
+- Successful capture call chain: `ShortcutCaptureField.Keys.onPressed` →
+  `ShortcutRegistry.validateCandidate` → `commitCandidate` →
+  `saveCandidate`/`clearBinding` → `QSettings` write + `dataChanged` +
+  `commandBindingChanged` → open `RegisteredShortcut` wrappers re-resolve
+  sequences live (verified by `SuccessfulChangeUpdatesAnOpenRegisteredShortcut`
+  and `SettingsDoneDoesNotOverwriteCommittedShortcutChanges`).
+- Conflict call chain: `validateCandidate` returns `conflict` +
+  `conflictingCommandId` → field keeps `_capturing`, shows the translated
+  action name, and maps the command to its scope via `scopeForCommand` —
+  nothing is written (verified by
+  `ConflictKeepsCaptureActiveAndNamesTheOtherAction`).
+- Persistence-failure call chain: `saveCandidate` returns `persistence` →
+  `applyResult` ends the session, sets `persistenceError`, and the row keeps
+  displaying the prior effective binding (verified by
+  `PersistenceFailureKeepsThePriorDisplayedBinding` using the same blocked-
+  directory injection as `ShortcutRegistryTest`).
+- Test commands and counts:
+
+  ```powershell
+  cmd /c scripts\msvc_env.cmd --build build\debug --target ShortcutRegistryTest ShortcutSettingsQmlTest MainQmlWorkflowTest EditorFilmstripQmlTest EditorVersionsPanelQmlTest EditorLutPanelQmlTest EditorNodeGraphDraftTest EditorNodeSelectionLayoutTest AlcedoQanGraphTest EditorNodesPanelQmlTest EditorCheckpointQmlIntegrationTest alcedo_main_lrelease --parallel 4
+  ctest --test-dir build/debug -R "^(ShortcutRegistryTest|ShortcutSettingsQmlTest|MainQmlWorkflowTest|EditorFilmstripQmlTest|EditorVersionsPanelQmlTest|EditorLutPanelQmlTest|EditorNodeGraphDraftTest|EditorNodeSelectionLayoutTest|AlcedoQanGraphTest|EditorNodesPanelQmlTest|EditorCheckpointQmlIntegrationTest)\." --output-on-failure
+  ```
+
+  Result: 285 tests passed, 0 failed; the legacy `DISABLED_` multi-delete case
+  stays skipped. `ShortcutSettingsQmlTest` contributes 17 tests,
+  `MainQmlWorkflowTest` gains 2 (`SettingsDoneDoesNotOverwriteCommittedShortcutChanges`,
+  `TextInputAndCapturePriorityPreventProductCommandActivation`) and its stale
+  About-index assert now points at 8. Evidence log:
+  `build/tmp/configurable_keyboard_shortcuts/b1/focused_b1_ctest.log`.
+- Translations: `alcedo_main_lupdate` regenerated both `.ts` files; all 20 new
+  B1 strings carry Simplified Chinese translations in `alcedo_main_zh_CN.ts`
+  (English remains the source language and stays unfinished per convention);
+  `alcedo_main_lrelease` produces both `.qm` outputs.
+- Accessibility/keyboard-only evidence:
+  `CaptureFieldExposesAccessibleNameDescriptionAndFocus` verifies
+  `Accessible.name`/`description`, `activeFocusOnTab`, and focus+Enter capture
+  entry; `TabCancelsUnsavedCandidateAndMovesFocus` verifies focus traversal.
+  Capture rows carry a visible recording hint; the capture field suppresses
+  `Shortcut` activation (including dialog Escape) via `Keys.onShortcutOverride`
+  while recording.
+- Screenshots/manual checks: not captured — the dialog is driven entirely by
+  the offscreen harnesses; manual theme/language/DPI sweeps remain open for a
+  human pass before release.
+- `WorkspaceShellTest` remains retired (source kept, no target); B1 coverage
+  landed in the focused `ShortcutSettingsQmlTest` suite per the test-layout
+  requirement.
+- Remaining risks: modifier-only capture preview relies on `keyPress`/
+  `keyRelease` delivery, which synthetic offscreen input provides; a grab-heavy
+  platform could skip the release edge — watch for reports. None blocking.
 
 ## 12. Cross-phase Acceptance Matrix
 
