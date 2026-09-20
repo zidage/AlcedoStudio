@@ -195,27 +195,17 @@ auto PipelineDocument::ValidateUserDeletion(const NodeId& node_id,
              "Cannot delete node: " + std::string{node_id.Value()}, node_id, {}}};
   }
   std::vector<GraphValidationError> errors;
-  const auto check_mask = [&](const MaskModel& mask) {
-    if (mask.deletion_protected) {
-      errors.push_back({GraphValidationCode::DeletionProtected,
-                        "Unlock Mask before deletion: " + std::string{node_id.Value()} + "/" +
-                            std::string{mask.id.Value()}, node_id, mask.id});
-    }
-  };
   if (mask_id.has_value()) {
-    const auto* mask = grade->FindMask(*mask_id);
-    if (mask == nullptr) {
+    if (grade->FindMask(*mask_id) == nullptr) {
       return {{GraphValidationCode::InvalidNodeValue,
                "Unknown Mask: " + std::string{mask_id->Value()}, node_id, *mask_id}};
     }
-    check_mask(*mask);
-  } else {
-    if (grade->DeletionProtected()) {
-      errors.push_back({GraphValidationCode::DeletionProtected,
-                        "Unlock Color Grade before deletion: " + std::string{node_id.Value()},
-                        node_id, {}});
-    }
-    for (const auto& mask : grade->Masks()) check_mask(mask);
+    return errors;
+  }
+  if (grade->DeletionProtected()) {
+    errors.push_back({GraphValidationCode::DeletionProtected,
+                      "Unlock Color Grade before deletion: " + std::string{node_id.Value()},
+                      node_id, {}});
   }
   return errors;
 }

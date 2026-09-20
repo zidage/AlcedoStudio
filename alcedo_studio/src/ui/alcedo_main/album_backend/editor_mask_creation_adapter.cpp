@@ -589,28 +589,6 @@ void EditorMaskCreationAdapter::removeMask(const QString& node_id, const QString
   }
 }
 
-void EditorMaskCreationAdapter::setMaskDeletionProtected(const QString& node_id,
-                                                         const QString& mask_id,
-                                                         bool           deletion_protected) {
-  if (mask_id.isEmpty()) {
-    return;
-  }
-  NodeId grade{node_id.toStdString()};
-  if (grade.Empty()) {
-    grade = active() ? edit_node_id_ : CurrentGradeId();
-  }
-  if (!CanAuthorMasksFor(grade)) {
-    return;
-  }
-  EditorMaskCreationCommand command;
-  command.kind        = EditorMaskCreationCommandKind::SetMaskField;
-  command.node_id     = grade;
-  command.mask_id     = MaskIdFromQString(mask_id);
-  command.field_key   = std::string{kMaskFieldDeletionProtected};
-  command.field_value = deletion_protected;
-  (void)Enqueue(command);
-}
-
 void EditorMaskCreationAdapter::removeSelectedMask() {
   if (selected_mask_id_.isEmpty()) {
     return;

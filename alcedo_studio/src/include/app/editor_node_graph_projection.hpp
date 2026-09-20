@@ -42,6 +42,7 @@ struct EditorNodeProjection {
   NodeId                                node_id;
   EditorNodeKind                        node_kind = EditorNodeKind::ColorGrade;
   std::string                           display_name;
+  bool                                  deletion_protected = false;
   std::vector<EditorNodeMaskProjection> masks;
 
   auto operator==(const EditorNodeProjection&) const -> bool = default;
@@ -88,7 +89,6 @@ struct EditorMaskGroupMaskRow {
   MaskSourceKind source_kind = MaskSourceKind::Radial;
   std::string    display_name;
   bool           enabled                                                 = true;
-  bool           deletion_protected                                      = false;
   float          opacity                                                 = 1.0F;
 
   auto           operator==(const EditorMaskGroupMaskRow&) const -> bool = default;

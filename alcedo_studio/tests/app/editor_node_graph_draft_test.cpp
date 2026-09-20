@@ -366,44 +366,186 @@ TEST(EditorNodeGraphDraft, DetachedNodeIdsListsNodesOutsideTheImagePath) {
 
 TEST(EditorNodeGraphDraft, LiveDeletionProtectionPreservesDraftAndPriorReversal) {
   for (const bool protect_grade : {false, true}) {
-    for (const bool protect_mask : {false, true}) {
-      auto document = CreateDefaultPipelineDocument();
-      auto* grade = document.PrimaryGrade();
-      grade->SetDeletionProtected(false);
-      grade->AddMask(MakeMask("mask.protected", 0.4f), 0);
-      auto draft = EditorNodeGraphDraft::FromDocument(document);
-      ASSERT_TRUE(draft.AddColorGrade(NodeId{"grade.transient"}).succeeded);
-      // Change locks after construction: admission must read the live owner, not draft JSON.
-      grade->SetDeletionProtected(protect_grade);
-      grade->SetMaskDeletionProtected(MaskId{"mask.protected"}, protect_mask);
-      const auto document_before = document.ToJson();
-      const auto nodes_before = draft.Nodes();
-      const auto edges_before = draft.Edges();
-      const auto counter_before = draft.NextColorGradeNameNumber();
-      const auto removed = draft.RemoveColorGrade(document, grade->Id());
-      EXPECT_EQ(document.ToJson(), document_before);
-      if (!protect_grade && !protect_mask) {
-        EXPECT_TRUE(removed.succeeded);
-        EXPECT_EQ(draft.FindNode(grade->Id()), nullptr);
-        continue;
-      }
-      EXPECT_FALSE(removed.succeeded);
-      EXPECT_NE(removed.error.find(std::string{grade->Id().Value()}), std::string::npos);
-      if (!protect_grade) {
-        EXPECT_NE(removed.error.find("mask.protected"), std::string::npos);
-      }
-      EXPECT_EQ(draft.Nodes(), nodes_before);
-      EXPECT_EQ(draft.Edges(), edges_before);
-      EXPECT_EQ(draft.NextColorGradeNameNumber(), counter_before);
-      EXPECT_FALSE(draft.SubmissionValid());
-      EXPECT_TRUE(draft.MakeChange().removed_nodes.empty());
-      // Rejection must not overwrite the previous successful operation's reversal.
-      draft.RestoreLastMutation();
-      EXPECT_TRUE(draft.DeltaEmpty());
-      EXPECT_TRUE(draft.SubmissionValid());
-      EXPECT_EQ(draft.FindNode(NodeId{"grade.transient"}), nullptr);
+    auto document = CreateDefaultPipelineDocument();
+    auto* grade = document.PrimaryGrade();
+    grade->SetDeletionProtected(false);
+    grade->AddMask(MakeMask("mask.attached", 0.4f), 0);
+    auto draft = EditorNodeGraphDraft::FromDocument(document);
+    ASSERT_TRUE(draft.AddColorGrade(NodeId{"grade.transient"}).succeeded);
+    // Change the lock after construction: admission must read the live owner,
+    // not draft JSON. Only the Grade itself can be locked; a Mask never blocks
+    // its owner's deletion.
+    grade->SetDeletionProtected(protect_grade);
+    const auto document_before = document.ToJson();
+    const auto nodes_before = draft.Nodes();
+    const auto edges_before = draft.Edges();
+    const auto counter_before = draft.NextColorGradeNameNumber();
+    const auto removed = draft.RemoveColorGrade(document, grade->Id());
+    EXPECT_EQ(document.ToJson(), document_before);
+    if (!protect_grade) {
+      EXPECT_TRUE(removed.succeeded);
+      EXPECT_EQ(draft.FindNode(grade->Id()), nullptr);
+      continue;
     }
+    EXPECT_FALSE(removed.succeeded);
+    EXPECT_NE(removed.error.find(std::string{grade->Id().Value()}), std::string::npos);
+    EXPECT_EQ(draft.Nodes(), nodes_before);
+    EXPECT_EQ(draft.Edges(), edges_before);
+    EXPECT_EQ(draft.NextColorGradeNameNumber(), counter_before);
+    EXPECT_FALSE(draft.SubmissionValid());
+    EXPECT_TRUE(draft.MakeChange().removed_nodes.empty());
+    // Rejection must not overwrite the previous successful operation's reversal.
+    draft.RestoreLastMutation();
+    EXPECT_TRUE(draft.DeltaEmpty());
+    EXPECT_TRUE(draft.SubmissionValid());
+    EXPECT_EQ(draft.FindNode(NodeId{"grade.transient"}), nullptr);
   }
+}
+
+TEST(EditorNodeGraphDraft, RemoveColorGradesUsesOneReversalAndReturnsOneMutation) {
+  auto document = DocumentWithGrades(3, 0);
+  auto draft    = EditorNodeGraphDraft::FromDocument(document);
+  const auto nodes_before = draft.Nodes();
+  const auto edges_before = draft.Edges();
+
+  auto mutation =
+      draft.RemoveColorGrades(document, {NodeId{"grade.g0"}, NodeId{"grade.g1"}});
+  ASSERT_TRUE(mutation.succeeded);
+  ASSERT_EQ(mutation.removed_node_ids.size(), 2u);
+  EXPECT_EQ(mutation.removed_node_ids[0], NodeId{"grade.g0"});
+  EXPECT_EQ(mutation.removed_node_ids[1], NodeId{"grade.g1"});
+  // g0->g1, g1->drt, and primary->g0 all leave with the two nodes.
+  EXPECT_EQ(mutation.removed_edges.size(), 3u);
+  EXPECT_EQ(draft.Nodes().size(), 3u);
+  EXPECT_EQ(draft.Edges().size(), 1u);
+  EXPECT_EQ(draft.FindNode(NodeId{"grade.g0"}), nullptr);
+  EXPECT_EQ(draft.FindNode(NodeId{"grade.g1"}), nullptr);
+  EXPECT_FALSE(mutation.submission_valid);
+  EXPECT_FALSE(draft.SubmissionValid());
+
+  // The whole batch replays through exactly one reversal record.
+  ASSERT_TRUE(draft.HasLastMutation());
+  draft.RestoreLastMutation();
+  EXPECT_EQ(draft.Nodes(), nodes_before);
+  EXPECT_EQ(draft.Edges(), edges_before);
+  EXPECT_TRUE(draft.DeltaEmpty());
+  EXPECT_TRUE(draft.SubmissionValid());
+  EXPECT_FALSE(draft.HasLastMutation());
+}
+
+TEST(EditorNodeGraphDraft, ProtectedNodeInMultiDeleteLeavesDraftUnchanged) {
+  auto document = DocumentWithGrades(2, 0);
+  auto draft    = EditorNodeGraphDraft::FromDocument(document);
+  const auto nodes_before = draft.Nodes();
+  const auto edges_before = draft.Edges();
+
+  // grade.primary is deletion-protected by the default document.
+  auto mutation =
+      draft.RemoveColorGrades(document, {NodeId{"grade.primary"}, NodeId{"grade.g0"}});
+  EXPECT_FALSE(mutation.succeeded);
+  EXPECT_FALSE(mutation.error.empty());
+  EXPECT_EQ(draft.Nodes(), nodes_before);
+  EXPECT_EQ(draft.Edges(), edges_before);
+  EXPECT_TRUE(draft.DeltaEmpty());
+  EXPECT_TRUE(draft.SubmissionValid());
+  EXPECT_FALSE(draft.HasLastMutation());
+}
+
+TEST(EditorNodeGraphDraft, MaskProtectionFlagDoesNotBlockMultiDelete) {
+  // Masks can no longer be locked: a persisted legacy flag on a Mask is inert
+  // and must not reject the owning Grade's deletion.
+  auto  document = DocumentWithGrades(3, 0);
+  auto* grade =
+      dynamic_cast<ColorGradeNodeModel*>(document.Graph().FindNode(NodeId{"grade.g0"}));
+  ASSERT_NE(grade, nullptr);
+  grade->AddMask(MakeMask("mask.legacy_locked", 0.4f), 0);
+  grade->SetMaskDeletionProtected(MaskId{"mask.legacy_locked"}, true);
+  auto draft = EditorNodeGraphDraft::FromDocument(document);
+
+  auto mutation =
+      draft.RemoveColorGrades(document, {NodeId{"grade.g0"}, NodeId{"grade.g1"}});
+  ASSERT_TRUE(mutation.succeeded);
+  EXPECT_EQ(mutation.removed_node_ids.size(), 2u);
+  EXPECT_EQ(draft.FindNode(NodeId{"grade.g0"}), nullptr);
+  EXPECT_EQ(draft.FindNode(NodeId{"grade.g1"}), nullptr);
+}
+
+TEST(EditorNodeGraphDraft, OrdinaryMaskOwnerDeletesThroughMultiDelete) {
+  auto  document = DocumentWithGrades(3, 0);
+  auto* grade =
+      dynamic_cast<ColorGradeNodeModel*>(document.Graph().FindNode(NodeId{"grade.g0"}));
+  ASSERT_NE(grade, nullptr);
+  grade->AddMask(MakeMask("mask.plain", 0.4f), 0);
+  auto draft = EditorNodeGraphDraft::FromDocument(document);
+
+  auto mutation =
+      draft.RemoveColorGrades(document, {NodeId{"grade.g0"}, NodeId{"grade.g1"}});
+  ASSERT_TRUE(mutation.succeeded);
+  EXPECT_EQ(mutation.removed_node_ids.size(), 2u);
+  EXPECT_EQ(draft.FindNode(NodeId{"grade.g0"}), nullptr);
+  EXPECT_EQ(draft.FindNode(NodeId{"grade.g1"}), nullptr);
+}
+
+TEST(EditorNodeGraphDraft, DevelopOrDrtInMultiDeleteLeavesDraftUnchanged) {
+  auto document = DocumentWithGrades(3, 0);
+  auto draft    = EditorNodeGraphDraft::FromDocument(document);
+  const auto nodes_before = draft.Nodes();
+  const auto edges_before = draft.Edges();
+
+  auto mixed =
+      draft.RemoveColorGrades(document, {NodeId{"grade.g0"}, NodeId{"develop"}});
+  EXPECT_FALSE(mixed.succeeded);
+  EXPECT_EQ(mixed.issue, NodeGraphDraftIssue::OnlyColorGradeCanBeDeleted);
+
+  auto endpoint = draft.RemoveColorGrades(document, {NodeId{"drt"}});
+  EXPECT_FALSE(endpoint.succeeded);
+  EXPECT_EQ(endpoint.issue, NodeGraphDraftIssue::OnlyColorGradeCanBeDeleted);
+
+  EXPECT_EQ(draft.Nodes(), nodes_before);
+  EXPECT_EQ(draft.Edges(), edges_before);
+  EXPECT_TRUE(draft.DeltaEmpty());
+  EXPECT_TRUE(draft.SubmissionValid());
+  EXPECT_FALSE(draft.HasLastMutation());
+}
+
+TEST(EditorNodeGraphDraft, RestoreLastMutationRestoresEveryNodeAndEdgeFromMultiDelete) {
+  auto document = DocumentWithGrades(5, 0);
+  auto draft    = EditorNodeGraphDraft::FromDocument(document);
+  const auto nodes_before = draft.Nodes();
+  const auto edges_before = draft.Edges();
+
+  // A non-monotonic removal order proves indexes captured mid-batch replay on
+  // the same intermediate state they were recorded against.
+  auto mutation = draft.RemoveColorGrades(
+      document, {NodeId{"grade.g3"}, NodeId{"grade.g0"}, NodeId{"grade.g2"}});
+  ASSERT_TRUE(mutation.succeeded);
+  EXPECT_EQ(mutation.removed_node_ids.size(), 3u);
+  EXPECT_EQ(mutation.removed_edges.size(), 5u);
+  EXPECT_EQ(draft.Nodes().size(), 4u);
+
+  draft.RestoreLastMutation();
+  EXPECT_EQ(draft.Nodes(), nodes_before);
+  EXPECT_EQ(draft.Edges(), edges_before);
+  EXPECT_TRUE(draft.DeltaEmpty());
+  EXPECT_TRUE(draft.SubmissionValid());
+}
+
+TEST(EditorNodeGraphDraft, MultiDeleteMayRemainIncompleteUntilOneReconnectMakesItValid) {
+  auto document = DocumentWithGrades(3, 0);
+  auto draft    = EditorNodeGraphDraft::FromDocument(document);
+
+  auto mutation =
+      draft.RemoveColorGrades(document, {NodeId{"grade.g0"}, NodeId{"grade.g1"}});
+  ASSERT_TRUE(mutation.succeeded);
+  EXPECT_FALSE(draft.SubmissionValid());
+  // Surviving neighbors are not auto-connected: DRT stays detached until the
+  // user wires the remaining chain.
+  EXPECT_EQ(draft.Edges().size(), 1u);
+
+  ASSERT_TRUE(draft.Connect(NodeId{"grade.primary"}, NodeId{"drt"}).succeeded);
+  EXPECT_TRUE(draft.SubmissionValid());
+  const auto change = draft.MakeChange();
+  EXPECT_EQ(change.removed_nodes.size(), 2u);
 }
 
 }  // namespace

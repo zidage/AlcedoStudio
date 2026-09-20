@@ -7,6 +7,7 @@
 #include <qqml.h>
 
 #include <QCoreApplication>
+#include <QGuiApplication>
 #include <QKeyCombination>
 #include <QQmlEngine>
 
@@ -578,6 +579,25 @@ bool ShortcutRegistry::modifierMatches(const QString& command_id, int modifiers)
     }
   }
   return false;
+}
+
+int ShortcutRegistry::currentKeyboardModifiers() const {
+  return static_cast<int>(MaskedModifiers(
+      static_cast<int>(QGuiApplication::keyboardModifiers())));
+}
+
+int ShortcutRegistry::modifierBitsForCommand(const QString& command_id) const {
+  const auto* entry = FindEntry(command_id);
+  if (entry == nullptr) {
+    return 0;
+  }
+  int bits = 0;
+  for (const auto& input : entry->bindings) {
+    if (input.kind == ShortcutInputKind::Modifier) {
+      bits |= static_cast<int>(input.modifiers);
+    }
+  }
+  return bits;
 }
 
 QString ShortcutRegistry::commandIdForKey(const QString& scope, int key, int modifiers) const {

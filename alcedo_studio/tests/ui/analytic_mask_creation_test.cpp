@@ -654,7 +654,6 @@ TEST(AnalyticMaskCreationTest, NodeDrawerDeleteRemovesExactMaskAndUndoRestoresSo
   second.minor_radius = 0.12f;
   grade_mask_test::AddRadialMask(harness.document, MaskId{"mask.first"}, first);
   grade_mask_test::AddRadialMask(harness.document, MaskId{"mask.second"}, second);
-  harness.document.PrimaryGrade()->SetMaskDeletionProtected(MaskId{"mask.first"}, false);
   ASSERT_TRUE(
       harness.controller
           .SelectMask(harness.document.PrimaryGrade()->Id(), MaskId{"mask.first"}, harness.session)
@@ -691,7 +690,6 @@ TEST(AnalyticMaskCreationTest, DeletingLastMaskRestoresFullGradeCoverage) {
   radial.minor_radius = 0.14f;
   auto& mask   = grade_mask_test::AddRadialMask(harness.document, MaskId{"mask.last"}, radial);
   mask.enabled = false;
-  harness.document.PrimaryGrade()->SetMaskDeletionProtected(MaskId{"mask.last"}, false);
   harness.mix.EvaluateFull(harness.document.PrimaryGrade()->Masks());
   EXPECT_EQ(MixAt(harness.mix, 1, 1), 0);
   ASSERT_TRUE(
@@ -709,7 +707,6 @@ TEST(AnalyticMaskCreationTest, DeletingUnselectedMaskPreservesSelection) {
   radial.minor_radius = 0.14f;
   grade_mask_test::AddRadialMask(harness.document, MaskId{"mask.keep"}, radial);
   grade_mask_test::AddRadialMask(harness.document, MaskId{"mask.other"}, radial);
-  harness.document.PrimaryGrade()->SetMaskDeletionProtected(MaskId{"mask.other"}, false);
   ASSERT_TRUE(
       harness.controller
           .SelectMask(harness.document.PrimaryGrade()->Id(), MaskId{"mask.keep"}, harness.session)
@@ -735,7 +732,6 @@ TEST(AnalyticMaskCreationTest, DeletingMaskRejectsQueuedEditsAndDelayedFrames) {
   keep.minor_radius = 0.10f;
   grade_mask_test::AddRadialMask(harness.document, MaskId{"mask.moving"}, moving);
   grade_mask_test::AddRadialMask(harness.document, MaskId{"mask.keep"}, keep);
-  harness.document.PrimaryGrade()->SetMaskDeletionProtected(MaskId{"mask.moving"}, false);
   ASSERT_TRUE(
       harness.controller
           .SelectMask(harness.document.PrimaryGrade()->Id(), MaskId{"mask.moving"}, harness.session)
@@ -767,7 +763,6 @@ TEST(AnalyticMaskCreationTest, MaskDeleteWithViewerFocusDoesNotDeleteGrade) {
   radial.major_radius = 0.18f;
   radial.minor_radius = 0.12f;
   grade_mask_test::AddRadialMask(harness.document, MaskId{"mask.radial"}, radial);
-  harness.document.PrimaryGrade()->SetMaskDeletionProtected(MaskId{"mask.radial"}, false);
   const auto grade_id = harness.document.PrimaryGrade()->Id();
   ASSERT_TRUE(harness.controller.RemoveMask(grade_id, MaskId{"mask.radial"}).accepted);
   EXPECT_NE(harness.document.PrimaryGrade(), nullptr);
@@ -891,69 +886,7 @@ TEST(AnalyticMaskCreationTest, MaskListDeletionChoosesNextThenPrevious) {
   EXPECT_EQ(MaskIdAfterUndoRestore(first, second), second);
 }
 
-TEST(AnalyticMaskCreationTest, CreationProtectionUsesDefaultIdentityNotNameOrParentLock) {
-  for (const auto kind : {MaskSourceKind::Radial, MaskSourceKind::LinearGradient}) {
-    for (const bool default_target : {false, true}) {
-      for (const bool parent_locked : {false, true}) {
-        AnalyticCreationHarness harness;
-        ASSERT_TRUE(AddCleanColorGrade(harness.document, NodeId{"drt"}, NodeId{"grade.other"})
-                        .empty());
-        auto* target = default_target
-                           ? harness.document.PrimaryGrade()
-                           : dynamic_cast<ColorGradeNodeModel*>(
-                                 harness.document.Graph().FindNode(NodeId{"grade.other"}));
-        ASSERT_NE(target, nullptr);
-        target->SetDisplayName(default_target ? "Renamed default" : "Color Grade 1");
-        target->SetDeletionProtected(parent_locked);
-        ASSERT_TRUE(harness.controller.BeginCreation(kind, target->Id(), harness.session).accepted);
-        const MaskCreationSample press{{0.4f, 0.4f}, {25.6f, 12.8f}, true};
-        const MaskCreationSample drag{{0.65f, 0.6f}, {41.6f, 19.2f}, true};
-        ASSERT_TRUE(harness.controller.BeginMaskInput(press, harness.pointer, kind).accepted);
-        const auto preview = harness.controller.AppendMaskInput(drag, harness.pointer);
-        ASSERT_TRUE(preview.accepted);
-        ASSERT_NE(target->FindMask(preview.mask_id), nullptr);
-        EXPECT_EQ(target->FindMask(preview.mask_id)->deletion_protected, default_target);
-        ASSERT_TRUE(harness.controller.FinishMaskInput().committed);
-        EXPECT_EQ(target->FindMask(preview.mask_id)->deletion_protected, default_target);
-        EXPECT_EQ(target->DeletionProtected(), parent_locked);
-      }
-    }
-  }
-}
-
-TEST(AnalyticMaskCreationTest, ProtectedDeletionPreservesOpenEditAndAllowsParameterChanges) {
-  AnalyticCreationHarness harness;
-  const MaskId mask_id{"mask.protected"};
-  grade_mask_test::AddRadialMask(harness.document, mask_id, RadialMaskSource{});
-  auto* grade = harness.document.PrimaryGrade();
-  grade->SetMaskDeletionProtected(mask_id, true);
-  ASSERT_TRUE(harness.controller.SelectMask(grade->Id(), mask_id, harness.session).accepted);
-  ASSERT_TRUE(harness.controller.ApplyMaskFieldValue("invert", true).committed);
-  ASSERT_TRUE(harness.controller.ApplyMaskFieldValue("enabled", false).committed);
-  ASSERT_TRUE(harness.controller.BeginMaskFieldEdit("opacity").accepted);
-  ASSERT_TRUE(harness.controller.ApplyMaskFieldValue("opacity", 0.35f).accepted);
-  const auto document_before = harness.document.ToJson();
-  const auto head_before = harness.history.working_head();
-  const auto preview_before = harness.preview_count;
-  const auto removed = harness.controller.RemoveMask(grade->Id(), mask_id);
-  EXPECT_FALSE(removed.accepted);
-  EXPECT_FALSE(removed.committed);
-  EXPECT_FALSE(removed.quality_requested);
-  EXPECT_NE(removed.error.find("mask.protected"), std::string::npos);
-  EXPECT_EQ(harness.document.ToJson(), document_before);
-  EXPECT_EQ(harness.history.working_head(), head_before);
-  EXPECT_EQ(harness.preview_count, preview_before);
-  EXPECT_EQ(harness.controller.selected_mask_id(), mask_id);
-  EXPECT_TRUE(harness.controller.last_removed_mask_id().Empty());
-  // The rejected delete must not cancel the in-flight opacity edit.
-  ASSERT_TRUE(harness.controller.FinishMaskInput().committed);
-  EXPECT_FLOAT_EQ(grade->FindMask(mask_id)->opacity, 0.35f);
-  EXPECT_TRUE(grade->FindMask(mask_id)->invert);
-  EXPECT_FALSE(grade->FindMask(mask_id)->enabled);
-  EXPECT_TRUE(grade->FindMask(mask_id)->deletion_protected);
-}
-
-TEST(AnalyticMaskCreationTest, ProtectedMaskInAnotherGradeDoesNotChangeSelectedOwner) {
+TEST(AnalyticMaskCreationTest, MaskRemovalInAnotherGradeMovesEditContextToThatGrade) {
   AnalyticCreationHarness harness;
   const MaskId mask_id{"mask.shared"};
   grade_mask_test::AddRadialMask(harness.document, mask_id, RadialMaskSource{});
@@ -964,23 +897,19 @@ TEST(AnalyticMaskCreationTest, ProtectedMaskInAnotherGradeDoesNotChangeSelectedO
   MaskModel mask;
   mask.id = mask_id;
   mask.source = RadialMaskSource{};
-  mask.deletion_protected = true;
   other->AddMask(std::move(mask), 0);
   auto* selected = harness.document.PrimaryGrade();
   ASSERT_TRUE(harness.controller.SelectMask(selected->Id(), mask_id, harness.session).accepted);
-  ASSERT_TRUE(harness.controller.BeginMaskFieldEdit("opacity").accepted);
-  ASSERT_TRUE(harness.controller.ApplyMaskFieldValue("opacity", 0.4f).accepted);
-  const auto before = harness.document.ToJson();
-  EXPECT_FALSE(harness.controller.RemoveMask(other->Id(), mask_id).accepted);
-  EXPECT_EQ(harness.document.ToJson(), before);
-  EXPECT_EQ(harness.controller.selected_mask_id(), mask_id);
-  ASSERT_TRUE(harness.controller.ApplyMaskFieldValue("opacity", 0.6f).accepted);
-  ASSERT_TRUE(harness.controller.FinishMaskInput().committed);
-  EXPECT_FLOAT_EQ(selected->FindMask(mask_id)->opacity, 0.6f);
-  EXPECT_FLOAT_EQ(other->FindMask(mask_id)->opacity, 1.0f);
+  // Removing a Mask on a different Grade commits and rebinds the controller to
+  // the removed Mask's owner; with no next Mask there, the selection clears.
+  ASSERT_TRUE(harness.controller.RemoveMask(other->Id(), mask_id).committed);
+  EXPECT_EQ(other->FindMask(mask_id), nullptr);
+  EXPECT_NE(selected->FindMask(mask_id), nullptr);
+  EXPECT_TRUE(harness.controller.selected_mask_id().Empty());
+  EXPECT_EQ(harness.controller.last_removed_mask_id(), mask_id);
 }
 
-TEST(AnalyticMaskCreationTest, CancellingProtectedProvisionalCreationDoesNotPublishDeletion) {
+TEST(AnalyticMaskCreationTest, CancellingProvisionalCreationDoesNotPublishDeletion) {
   AnalyticCreationHarness harness;
   auto* grade = harness.document.PrimaryGrade();
   const auto head_before = harness.history.working_head();
@@ -993,43 +922,12 @@ TEST(AnalyticMaskCreationTest, CancellingProtectedProvisionalCreationDoesNotPubl
   const auto preview = harness.controller.AppendMaskInput(drag, harness.pointer);
   ASSERT_TRUE(preview.accepted);
   ASSERT_NE(grade->FindMask(preview.mask_id), nullptr);
-  ASSERT_TRUE(grade->FindMask(preview.mask_id)->deletion_protected);
   const auto cancelled = harness.controller.RemoveMask(grade->Id(), preview.mask_id);
   EXPECT_TRUE(cancelled.accepted);
   EXPECT_FALSE(cancelled.committed);
   EXPECT_EQ(grade->FindMask(preview.mask_id), nullptr);
   EXPECT_EQ(harness.history.working_head(), head_before);
   EXPECT_TRUE(harness.controller.selected_mask_id().Empty());
-}
-
-TEST(AnalyticMaskCreationTest, ProtectionFieldCommitsMetadataWithoutPreviewAndUnlocksDeletion) {
-  AnalyticCreationHarness harness;
-  const MaskId mask_id{"mask.lock"};
-  grade_mask_test::AddRadialMask(harness.document, mask_id, RadialMaskSource{});
-  auto* grade = harness.document.PrimaryGrade();
-  ASSERT_TRUE(harness.controller.SelectMask(grade->Id(), mask_id, harness.session).accepted);
-  const auto content_revision = grade->MaskContentRevision(mask_id);
-  const auto head_before = harness.history.working_head();
-  EXPECT_FALSE(harness.controller.ApplyMaskFieldValue("deletion_protected", 1).accepted);
-  EXPECT_EQ(harness.history.working_head(), head_before);
-  const auto locked = harness.controller.ApplyMaskFieldValue("deletion_protected", true);
-  ASSERT_TRUE(locked.accepted);
-  EXPECT_TRUE(locked.committed);
-  EXPECT_FALSE(locked.quality_requested);
-  EXPECT_FALSE(locked.interactive_preview);
-  EXPECT_TRUE(grade->FindMask(mask_id)->deletion_protected);
-  const auto locked_head = harness.history.working_head();
-  EXPECT_FALSE(harness.controller.ApplyMaskFieldValue("deletion_protected", true).committed);
-  EXPECT_EQ(harness.history.working_head(), locked_head);
-  EXPECT_FALSE(harness.controller.RemoveMask(grade->Id(), mask_id).accepted);
-  const auto unlocked = harness.controller.ApplyMaskFieldValue("deletion_protected", false);
-  ASSERT_TRUE(unlocked.committed);
-  EXPECT_FALSE(unlocked.quality_requested);
-  EXPECT_FALSE(unlocked.interactive_preview);
-  EXPECT_EQ(grade->MaskContentRevision(mask_id), content_revision);
-  EXPECT_EQ(harness.preview_count, 0);
-  ASSERT_TRUE(harness.controller.RemoveMask(grade->Id(), mask_id).committed);
-  EXPECT_EQ(grade->FindMask(mask_id), nullptr);
 }
 
 }  // namespace alcedo

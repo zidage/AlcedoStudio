@@ -135,11 +135,12 @@ TEST_F(EditorDocumentPasteTest, PasteCreatesOneRootRelativeVersionAndOneTypedCom
     ASSERT_NE(grade, nullptr);
     EXPECT_EQ(grade->DisplayName(), "Renamed source default");
     // The remapped source default stays the target default, so the target
-    // default protection rule applies to the Grade and every Mask it owns.
+    // default protection rule applies to the Grade. Masks keep their source
+    // flags verbatim: Mask-level locks no longer exist.
     EXPECT_TRUE(grade->DeletionProtected());
     ASSERT_EQ(grade->MaskCount(), 2u);
     EXPECT_EQ(grade->MaskAt(0).display_name, "Unlocked source Mask");
-    EXPECT_TRUE(grade->MaskAt(0).deletion_protected);
+    EXPECT_FALSE(grade->MaskAt(0).deletion_protected);
     EXPECT_NE(grade->MaskAt(0).id, alcedo::MaskId{"mask.unlocked"});
     EXPECT_EQ(grade->MaskAt(1).display_name, "Locked source Mask");
     EXPECT_TRUE(grade->MaskAt(1).deletion_protected);

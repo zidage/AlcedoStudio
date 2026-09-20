@@ -71,18 +71,6 @@ Item {
         }
         return root.masks.length !== undefined ? root.masks.length : 0
     }
-    readonly property bool containsProtectedMask: {
-        if (root.maskCount === 0) {
-            return false
-        }
-        for (var i = 0; i < root.masks.length; ++i) {
-            const mask = root.masks[i]
-            if (mask && mask.deletionProtected === true) {
-                return true
-            }
-        }
-        return false
-    }
     readonly property real headerHeight: Math.max(
                                              appTheme.iconButtonHitSizeCompact,
                                              appTheme.maskGroupPreviewSize
@@ -98,9 +86,6 @@ Item {
         }
         if (root.deletionProtected) {
             return qsTr("Unlock %1 before deleting").arg(root.displayName)
-        }
-        if (root.containsProtectedMask) {
-            return qsTr("Unlock the Masks inside %1 before deleting").arg(root.displayName)
         }
         return ""
     }
@@ -133,7 +118,6 @@ Item {
     signal reorderCanceled()
     signal reorderStepRequested(int delta)
     signal maskClicked(int maskIndex)
-    signal maskLockClicked(int maskIndex)
     signal maskDeleteClicked(int maskIndex)
     signal maskNavigateUp(int maskIndex)
     signal maskNavigateDown(int maskIndex)
@@ -616,7 +600,6 @@ Item {
                                                                          : true
                             opacityValue: modelData.opacity !== undefined
                                           ? Number(modelData.opacity) : 1.0
-                            deletionProtected: modelData.deletionProtected === true
                             selected: root.selectedMaskId.length > 0
                                       && maskRow.maskId === root.selectedMaskId
                             actionsEnabled: root.actionsEnabled
@@ -628,7 +611,6 @@ Item {
                             selectionOutlineWidth: root.selectionOutlineWidth
                             maskThumbnails: root.maskThumbnails
                             onClicked: root.maskClicked(index)
-                            onLockClicked: root.maskLockClicked(index)
                             onDeleteClicked: root.maskDeleteClicked(index)
                             onNavigateUp: root.maskNavigateUp(index)
                             onNavigateDown: root.maskNavigateDown(index)

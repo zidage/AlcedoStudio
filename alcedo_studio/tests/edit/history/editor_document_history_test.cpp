@@ -664,7 +664,7 @@ TEST_F(EditorDocumentHistoryTest, SameValueNodeLockPreservesHistoryAndClearsStal
   EXPECT_FALSE(history_.LastPublishedRenderReason().has_value());
 }
 
-TEST_F(EditorDocumentHistoryTest, ProtectedMaskCreationUndoRedoRestoresExactIdentityAndLock) {
+TEST_F(EditorDocumentHistoryTest, MaskCreationUndoRedoRestoresExactIdentity) {
   std::string error;
   const auto handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
@@ -672,7 +672,8 @@ TEST_F(EditorDocumentHistoryTest, ProtectedMaskCreationUndoRedoRestoresExactIden
   const MaskId mask_id{"mask.created"};
   ASSERT_TRUE(history_.AddMask(handle, grade_id,
                                grade_mask_test::MakeRadialMask(mask_id), 0, &error)) << error;
-  ASSERT_TRUE(guard_->document_->PrimaryGrade()->FindMask(mask_id)->deletion_protected);
+  // Masks are never deletion-protected; only the owning Color Grade can lock.
+  EXPECT_FALSE(guard_->document_->PrimaryGrade()->FindMask(mask_id)->deletion_protected);
   const auto created = guard_->document_->ToJson();
   ASSERT_TRUE(history_.Undo(handle, &error)) << error;
   EXPECT_EQ(guard_->document_->PrimaryGrade()->FindMask(mask_id), nullptr);
@@ -702,36 +703,39 @@ TEST_F(EditorDocumentHistoryTest, MixedLockAndPixelBatchRequestsRenderThroughUnd
   EXPECT_TRUE(history_.LastPublishedRenderReason().has_value());
 }
 
-TEST_F(EditorDocumentHistoryTest, MultipleMaskRemovalRejectsBeforeUnlockOrPartialMutation) {
+TEST_F(EditorDocumentHistoryTest, MultipleMaskRemovalRejectsBeforePartialMutation) {
   std::string error;
   const auto handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
   const auto grade_id = guard_->document_->DefaultGradeId();
-  const MaskId first{"mask.unlocked"};
-  const MaskId second{"mask.protected"};
+  const MaskId first{"mask.first"};
+  const MaskId second{"mask.second"};
   ASSERT_TRUE(history_.AddMask(handle, grade_id,
                                grade_mask_test::MakeRadialMask(first), 0, &error)) << error;
   ASSERT_TRUE(history_.AddMask(handle, grade_id,
                                grade_mask_test::MakeRadialMask(second), 1, &error)) << error;
-  ASSERT_TRUE(history_.SetMaskField(handle, grade_id, first,
-                                    "deletion_protected", false, &error)) << error;
   const auto* grade = guard_->document_->PrimaryGrade();
   const auto before = guard_->document_->ToJson();
   const auto head = guard_->working_head_commit_hash();
   const auto count = guard_->commit_graph_->CommitCount();
+  // A batch that removes an unknown Mask must reject atomically before any
+  // mutation is applied.
+  const auto missing_json =
+      MaskModelToJson(grade_mask_test::MakeRadialMask(MaskId{"mask.missing"}));
   auto batch = PipelineEditBatch::Make(PipelineEditOperationKind::Paste,
-      {SetMaskFieldChange{grade_id, second, "deletion_protected", true, false},
-       RemoveMaskChange{grade_id, first, MaskModelToJson(*grade->FindMask(first)), 0},
-       RemoveMaskChange{grade_id, second, MaskModelToJson(*grade->FindMask(second)), 0}},
+      {RemoveMaskChange{grade_id, first, MaskModelToJson(*grade->FindMask(first)), 0},
+       RemoveMaskChange{grade_id, MaskId{"mask.missing"}, missing_json, 0}},
       "history.operation.paste");
   EXPECT_FALSE(history_.CommitPipelineEditBatch(handle, std::move(batch), &error));
-  EXPECT_NE(error.find(std::string{second.Value()}), std::string::npos);
+  EXPECT_NE(error.find("mask.missing"), std::string::npos);
   EXPECT_EQ(guard_->document_->ToJson(), before);
   EXPECT_EQ(guard_->working_head_commit_hash(), head);
   EXPECT_EQ(guard_->commit_graph_->CommitCount(), count);
 }
 
-TEST_F(EditorDocumentHistoryTest, MaskDeletionLockPreservesCoverageAcrossNoOpUndoAndRedo) {
+TEST_F(EditorDocumentHistoryTest, MaskProtectionFlagRoundTripsAcrossUndoAndRedo) {
+  // The persisted Mask flag is inert for deletion, but documents and history
+  // keep round-tripping it so older projects replay faithfully.
   std::string error;
   const auto handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
@@ -744,26 +748,29 @@ TEST_F(EditorDocumentHistoryTest, MaskDeletionLockPreservesCoverageAcrossNoOpUnd
   ASSERT_NE(grade, nullptr);
   const auto revision = grade->MaskContentRevision(mask_id);
   const auto count = guard_->commit_graph_->CommitCount();
-  const auto before_head = guard_->working_head_commit_hash();
   ASSERT_TRUE(history_.LastPublishedRenderReason().has_value());
+  EXPECT_FALSE(grade->FindMask(mask_id)->deletion_protected);
+
   ASSERT_TRUE(history_.SetMaskField(handle, grade_id, mask_id,
                                     "deletion_protected", true, &error)) << error;
-  EXPECT_EQ(guard_->commit_graph_->CommitCount(), count);
-  EXPECT_EQ(guard_->working_head_commit_hash(), before_head);
-  EXPECT_FALSE(history_.LastPublishedRenderReason().has_value());
+  EXPECT_TRUE(grade->FindMask(mask_id)->deletion_protected);
   EXPECT_EQ(grade->MaskContentRevision(mask_id), revision);
+  EXPECT_EQ(guard_->commit_graph_->CommitCount(), count + 1);
+  EXPECT_FALSE(history_.LastPublishedRenderReason().has_value());
+  const auto flagged_head = guard_->working_head_commit_hash();
+  // A same-value write is a no-op: no commit, no render reason.
+  ASSERT_TRUE(history_.SetMaskField(handle, grade_id, mask_id,
+                                    "deletion_protected", true, &error)) << error;
+  EXPECT_EQ(guard_->commit_graph_->CommitCount(), count + 1);
+  EXPECT_EQ(guard_->working_head_commit_hash(), flagged_head);
+  EXPECT_FALSE(history_.LastPublishedRenderReason().has_value());
 
   ASSERT_TRUE(history_.SetMaskField(handle, grade_id, mask_id,
                                     "deletion_protected", false, &error)) << error;
   EXPECT_FALSE(grade->FindMask(mask_id)->deletion_protected);
   EXPECT_EQ(grade->MaskContentRevision(mask_id), revision);
-  EXPECT_EQ(guard_->commit_graph_->CommitCount(), count + 1);
+  EXPECT_EQ(guard_->commit_graph_->CommitCount(), count + 2);
   EXPECT_FALSE(history_.LastPublishedRenderReason().has_value());
-  const auto unlocked_head = guard_->working_head_commit_hash();
-  ASSERT_TRUE(history_.SetMaskField(handle, grade_id, mask_id,
-                                    "deletion_protected", false, &error)) << error;
-  EXPECT_EQ(guard_->commit_graph_->CommitCount(), count + 1);
-  EXPECT_EQ(guard_->working_head_commit_hash(), unlocked_head);
 
   ASSERT_TRUE(history_.Undo(handle, &error)) << error;
   grade = dynamic_cast<const alcedo::ColorGradeNodeModel*>(
@@ -771,7 +778,7 @@ TEST_F(EditorDocumentHistoryTest, MaskDeletionLockPreservesCoverageAcrossNoOpUnd
   ASSERT_NE(grade, nullptr);
   EXPECT_TRUE(grade->FindMask(mask_id)->deletion_protected);
   EXPECT_EQ(grade->MaskContentRevision(mask_id), revision);
-  EXPECT_EQ(guard_->commit_graph_->CommitCount(), count + 1);
+  EXPECT_EQ(guard_->commit_graph_->CommitCount(), count + 2);
   EXPECT_FALSE(history_.LastPublishedRenderReason().has_value());
   ASSERT_TRUE(history_.Redo(handle, &error)) << error;
   grade = dynamic_cast<const alcedo::ColorGradeNodeModel*>(
@@ -779,7 +786,7 @@ TEST_F(EditorDocumentHistoryTest, MaskDeletionLockPreservesCoverageAcrossNoOpUnd
   ASSERT_NE(grade, nullptr);
   EXPECT_FALSE(grade->FindMask(mask_id)->deletion_protected);
   EXPECT_EQ(grade->MaskContentRevision(mask_id), revision);
-  EXPECT_EQ(guard_->commit_graph_->CommitCount(), count + 1);
+  EXPECT_EQ(guard_->commit_graph_->CommitCount(), count + 2);
   EXPECT_FALSE(history_.LastPublishedRenderReason().has_value());
 }
 
@@ -863,9 +870,6 @@ TEST_F(EditorDocumentHistoryTest, MaskAddRemoveUndoRestoresValueAndDisplayIndex)
       handle, grade_id, alcedo::grade_mask_test::MakeLinearGradientMask(alcedo::MaskId{"mask.linear"}),
       2, &error))
       << error;
-  ASSERT_TRUE(history_.SetMaskField(handle, grade_id, alcedo::MaskId{"mask.radial"},
-                                    "deletion_protected", false, &error))
-      << error;
   const auto* grade = dynamic_cast<const alcedo::ColorGradeNodeModel*>(
       guard_->document_->Graph().FindNode(grade_id));
   ASSERT_NE(grade, nullptr);
@@ -903,7 +907,6 @@ TEST_F(EditorDocumentHistoryTest, MaskSourceUndoRestoresExactVariantValues) {
   linear.transition_distance = 0.35f;
   auto linear_mask = alcedo::grade_mask_test::MakeLinearGradientMask(
       alcedo::MaskId{"mask.geo"}, linear);
-  linear_mask.deletion_protected = true;
   const auto after_source = alcedo::MaskModelToJson(linear_mask).at("source");
   ASSERT_TRUE(history_.ReplaceMaskSource(handle, grade_id, alcedo::MaskId{"mask.geo"}, after_source,
                                          &error))

@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Controls.impl
 
 import QuickQanava 2.0 as Qan
 
@@ -12,6 +13,7 @@ Qan.NodeItem {
 
     property string nodeKind: "colorGrade"
     property string nodeId: ""
+    property bool deletionProtected: false
     property var masks: []
     property string selectedMaskId: ""
     property bool drawerOpen: true
@@ -36,7 +38,8 @@ Qan.NodeItem {
 
     Accessible.role: Accessible.Grouping
     Accessible.name: root.displayName
-    Accessible.description: root.drawerOpen ? qsTr("Masks expanded") : qsTr("Masks collapsed")
+    Accessible.description: (root.deletionProtected ? qsTr("Locked against deletion") + ", " : "")
+                            + (root.drawerOpen ? qsTr("Masks expanded") : qsTr("Masks collapsed"))
 
     onWidthChanged: setDefaultBoundingShape()
     onHeightChanged: setDefaultBoundingShape()
@@ -76,7 +79,9 @@ Qan.NodeItem {
                     anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
                     anchors.leftMargin: appTheme.spaceSm
-                    anchors.rightMargin: appTheme.spaceSm
+                    anchors.rightMargin: lockIcon.visible
+                                         ? lockIcon.width + appTheme.spaceMd
+                                         : appTheme.spaceSm
                     text: root.displayName
                     color: appTheme.textColor
                     font.pixelSize: appTheme.fontSizeTitle
@@ -85,6 +90,26 @@ Qan.NodeItem {
                     wrapMode: Text.NoWrap
                     verticalAlignment: Text.AlignVCenter
                     Accessible.ignored: true
+                }
+
+                // Passive lock indicator — lock toggling stays on the Mask
+                // Groups panel; the card only mirrors the committed state.
+                ColorImage {
+                    id: lockIcon
+                    objectName: "editorNodeLockIcon"
+                    anchors.right: parent.right
+                    anchors.rightMargin: appTheme.spaceSm
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: appTheme.fontSizeTitle
+                    height: appTheme.fontSizeTitle
+                    source: "qrc:/panel_icons/lock.svg"
+                    sourceSize.width: width
+                    sourceSize.height: height
+                    fillMode: Image.Pad
+                    smooth: true
+                    visible: root.deletionProtected
+                    color: appTheme.textMutedColor
+                    Accessible.ignored: !root.deletionProtected
                 }
             }
 

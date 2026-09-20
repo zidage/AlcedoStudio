@@ -145,17 +145,6 @@ Item {
         return String(masks[maskIndex].maskId || "")
     }
 
-    function maskDeletionProtectedAt(groupIndex, maskIndex) {
-        if (groupIndex < 0 || groupIndex >= root.groupsModel.length) {
-            return false
-        }
-        var masks = root.groupsModel[groupIndex].masks
-        if (!masks || maskIndex < 0 || maskIndex >= masks.length) {
-            return false
-        }
-        return masks[maskIndex].deletionProtected === true
-    }
-
     function focusRow(groupIndex, maskIndex) {
         if (!groupsList) {
             return false
@@ -303,13 +292,6 @@ Item {
         }
         root.selectGroup(nodeId)
         root.maskCreation.removeMask(nodeId, maskId)
-    }
-
-    function toggleMaskLock(nodeId, maskId, locked) {
-        if (!root.maskCreation || String(maskId).length === 0) {
-            return
-        }
-        root.maskCreation.setMaskDeletionProtected(nodeId, maskId, locked)
     }
 
     function toggleGroupLock(nodeId, locked) {
@@ -680,10 +662,6 @@ Item {
                     }
                     onMaskClicked: function (maskIndex) {
                         root.selectMaskFromGroup(nodeId, root.maskIdAt(index, maskIndex))
-                    }
-                    onMaskLockClicked: function (maskIndex) {
-                        root.toggleMaskLock(nodeId, root.maskIdAt(index, maskIndex),
-                                            !root.maskDeletionProtectedAt(index, maskIndex))
                     }
                     onMaskDeleteClicked: function (maskIndex) {
                         root.removeMaskFromGroup(nodeId, root.maskIdAt(index, maskIndex))

@@ -856,7 +856,6 @@ auto EditorHistoryMutation::AddMask(const alcedo::EditorHistoryGuardHandle& guar
   }
   auto render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
   const auto mask_id = mask.id;
-  mask.deletion_protected = state->pipeline_guard->document_->DefaultGradeId() == node_id;
   auto       json    = MaskModelToJson(mask);
   auto batch = MakeAddMaskBatch(node_id, mask_id, std::move(json), display_index);
   return PublishAppliedTypedBatch(*state, state_, batch, false, error);

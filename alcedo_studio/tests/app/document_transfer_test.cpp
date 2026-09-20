@@ -708,7 +708,6 @@ TEST(DocumentTransferTest, FirstIncludedGradeBecomesTargetDefault) {
   ASSERT_NE(grade_b, nullptr);
   ASSERT_FALSE(grade_b->DeletionProtected());
   auto mask = grade_mask_test::MakeRadialMask(MaskId{"mask.b"}, RadialMaskSource{}, false);
-  mask.deletion_protected = false;
   grade_b->AddMask(mask, 0);
 
   // Only the non-default grade.b is selected; the package omits the source default.
@@ -727,7 +726,9 @@ TEST(DocumentTransferTest, FirstIncludedGradeBecomesTargetDefault) {
   EXPECT_EQ(prepared.package.default_grade_id_, NodeId{"grade.t1"});
   EXPECT_TRUE(prepared.package.color_grades_.front().deletion_protected);
   ASSERT_TRUE(prepared.package.color_grades_.front().masks.has_value());
-  EXPECT_TRUE(prepared.package.color_grades_.front().masks->front().deletion_protected);
+  // Mask-level locks no longer exist: masks keep their source flag (false here)
+  // and never gain protection from the default-Grade assignment.
+  EXPECT_FALSE(prepared.package.color_grades_.front().masks->front().deletion_protected);
 
   const auto working = ApplyPasteToClone(prepared, CreateDefaultPipelineDocument());
   EXPECT_EQ(working.DefaultGradeId(), NodeId{"grade.t1"});
@@ -737,7 +738,7 @@ TEST(DocumentTransferTest, FirstIncludedGradeBecomesTargetDefault) {
   EXPECT_TRUE(pasted->DeletionProtected());
   const auto* pasted_mask = pasted->FindMask(MaskId{"mask.t1"});
   ASSERT_NE(pasted_mask, nullptr);
-  EXPECT_TRUE(pasted_mask->deletion_protected);
+  EXPECT_FALSE(pasted_mask->deletion_protected);
 }
 
 TEST(DocumentTransferTest, PlannerDoesNotMutatePackageOrTargetRoot) {

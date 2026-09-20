@@ -83,18 +83,16 @@ namespace {
 [[nodiscard]] auto MaskFieldEditKeyIsValid(std::string_view field_key, MaskSourceKind /*kind*/)
     -> bool {
   return field_key == kMaskFieldEnabled || field_key == kMaskFieldInvert ||
-         field_key == kMaskFieldOpacity || field_key == kMaskFieldDisplayName ||
-         field_key == kMaskFieldDeletionProtected;
+         field_key == kMaskFieldOpacity || field_key == kMaskFieldDisplayName;
 }
 
 [[nodiscard]] auto MaskFieldAffectsPixels(std::string_view field_key) -> bool {
-  return field_key != kMaskFieldDisplayName && field_key != kMaskFieldDeletionProtected;
+  return field_key != kMaskFieldDisplayName;
 }
 
 [[nodiscard]] auto MaskFieldValueIsValid(std::string_view field_key, const nlohmann::json& value)
     -> bool {
-  if (field_key == kMaskFieldEnabled || field_key == kMaskFieldInvert ||
-      field_key == kMaskFieldDeletionProtected) {
+  if (field_key == kMaskFieldEnabled || field_key == kMaskFieldInvert) {
     return value.is_boolean();
   }
   if (field_key == kMaskFieldOpacity) {
@@ -120,9 +118,6 @@ namespace {
   }
   if (field_key == kMaskFieldDisplayName) {
     return mask.display_name;
-  }
-  if (field_key == kMaskFieldDeletionProtected) {
-    return mask.deletion_protected;
   }
   return nullptr;
 }
@@ -212,7 +207,6 @@ auto EditorMaskCreationController::MakeCreationMask(const MaskSource& source) co
   mask.id           = mask_id_;
   mask.display_name = CreationDisplayName(kind_);
   mask.source       = source;
-  mask.deletion_protected = document_->DefaultGradeId() == node_id_;
   return mask;
 }
 
@@ -549,8 +543,6 @@ auto EditorMaskCreationController::ApplyLiveMaskField(ColorGradeNodeModel*  grad
       grade->SetMaskOpacity(mask_id, value.get<float>());
     } else if (field_key == kMaskFieldDisplayName) {
       mask->display_name = value.get<std::string>();
-    } else if (field_key == kMaskFieldDeletionProtected) {
-      grade->SetMaskDeletionProtected(mask_id, value.get<bool>());
     } else {
       return false;
     }

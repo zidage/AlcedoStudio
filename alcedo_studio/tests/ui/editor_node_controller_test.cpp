@@ -10,6 +10,7 @@
 #include <QTranslator>
 #include <algorithm>
 #include <optional>
+#include <set>
 #include <vector>
 
 #include "app/editor_action_policy.hpp"
@@ -314,7 +315,7 @@ TEST(EditorNodeController, PublishDocumentSelectsPrimaryColorGrade) {
   EXPECT_FALSE(controller.can_add_color_grade());
 }
 
-TEST(EditorNodeController, TopologyEditDoesNotSelectASubstituteGrade) {
+TEST(EditorNodeController, TopologyEditSelectsTheSurvivingDownstreamNode) {
   DocumentSessionBackend backend;
   backend.SetGeneration(17);
   ASSERT_TRUE(
@@ -326,8 +327,8 @@ TEST(EditorNodeController, TopologyEditDoesNotSelectASubstituteGrade) {
   ASSERT_EQ(controller.selected_node_id(), NodeId{"grade.extra"});
 
   ASSERT_TRUE(controller.deleteColorGrade(QStringLiteral("grade.extra")));
-  EXPECT_TRUE(controller.selected_node_id().Empty());
-  EXPECT_TRUE(backend.last_projection_node().Empty());
+  EXPECT_EQ(controller.selected_node_id(), NodeId{"drt"});
+  EXPECT_EQ(backend.last_projection_node(), NodeId{"drt"});
   EXPECT_FALSE(session.submitWrite(QStringLiteral("exposure"), EditorScalarWrite{0.3f}, false));
 }
 
@@ -438,7 +439,7 @@ TEST(EditorNodeController, DeleteOfADraftGradeDoesNotSubmitWhileThePathIsBroken)
   EXPECT_EQ(backend.edit_node_graph_count(), 0);
   EXPECT_TRUE(controller.incomplete_draft());
   EXPECT_EQ(controller.ActiveNodes().size(), 3u);
-  EXPECT_TRUE(controller.selected_node_id().Empty());
+  EXPECT_EQ(controller.selected_node_id(), NodeId{"grade.extra"});
 }
 
 TEST(EditorNodeController, EndpointsAndUnknownNodesRejectCommandsBeforeBackendMutation) {
@@ -1331,6 +1332,243 @@ TEST(EditorNodeController, MoveMaskGroupToIndexRejectsEndpointsUnknownDraftAndFa
   EXPECT_EQ(controller.last_error(), QStringLiteral("mini-Git journal append failed"));
   EXPECT_EQ(backend.Document().ToJson().dump(), hash_before);
   EXPECT_EQ(backend.edit_node_graph_count(), 2);
+}
+
+TEST(EditorNodeController, PlainNodeSelectionReplacesTheCurrentSelection) {
+  EditorNodeController controller;
+  ASSERT_TRUE(controller.PublishDocument(CreateDefaultPipelineDocument(), 1));
+  ASSERT_EQ(controller.selected_node_ids(), QStringList{QStringLiteral("grade.primary")});
+
+  controller.toggleNodeSelection(QStringLiteral("develop"));
+  ASSERT_EQ(controller.selected_node_ids(),
+            (QStringList{QStringLiteral("grade.primary"), QStringLiteral("develop")}));
+
+  controller.selectNode(QStringLiteral("drt"));
+  EXPECT_EQ(controller.selected_node_ids(), QStringList{QStringLiteral("drt")});
+  EXPECT_EQ(controller.selected_node_id(), NodeId{"drt"});
+  EXPECT_EQ(controller.selected_node_count(), 1);
+  EXPECT_TRUE(controller.isNodeSelected(QStringLiteral("drt")));
+  EXPECT_FALSE(controller.isNodeSelected(QStringLiteral("grade.primary")));
+}
+
+TEST(EditorNodeController, ShiftSelectionTogglesOneNodeAndMakesAddedNodePrimary) {
+  EditorNodeController controller;
+  ASSERT_TRUE(controller.PublishDocument(CreateDefaultPipelineDocument(), 1));
+
+  controller.toggleNodeSelection(QStringLiteral("drt"));
+  EXPECT_EQ(controller.selected_node_ids(),
+            (QStringList{QStringLiteral("grade.primary"), QStringLiteral("drt")}));
+  EXPECT_EQ(controller.selected_node_id(), NodeId{"drt"});
+
+  controller.toggleNodeSelection(QStringLiteral("drt"));
+  EXPECT_EQ(controller.selected_node_ids(), QStringList{QStringLiteral("grade.primary")});
+  EXPECT_EQ(controller.selected_node_id(), NodeId{"grade.primary"});
+}
+
+TEST(EditorNodeController, RemovingPrimarySelectionChoosesMostRecentRemainingNode) {
+  EditorNodeController controller;
+  ASSERT_TRUE(controller.PublishDocument(CreateDefaultPipelineDocument(), 1));
+
+  controller.toggleNodeSelection(QStringLiteral("develop"));
+  controller.toggleNodeSelection(QStringLiteral("drt"));
+  ASSERT_EQ(controller.selected_node_id(), NodeId{"drt"});
+
+  controller.toggleNodeSelection(QStringLiteral("drt"));
+  EXPECT_EQ(controller.selected_node_ids(),
+            (QStringList{QStringLiteral("grade.primary"), QStringLiteral("develop")}));
+  EXPECT_EQ(controller.selected_node_id(), NodeId{"develop"});
+}
+
+TEST(EditorNodeController, SessionRefreshPrunesMissingSelectedIdsAndPreservesRemainingOrder) {
+  DocumentSessionBackend backend;
+  backend.SetGeneration(60);
+  ASSERT_TRUE(
+      alcedo::AddCleanColorGrade(backend.Document(), NodeId{"drt"}, NodeId{"grade.extra"}).empty());
+  ASSERT_TRUE(
+      alcedo::AddCleanColorGrade(backend.Document(), NodeId{"drt"}, NodeId{"grade.other"}).empty());
+  EditorSessionController session(&backend);
+  EditorNodeController    controller;
+  controller.set_editor_session(&session);
+  controller.selectNode(QStringLiteral("grade.primary"));
+  controller.toggleNodeSelection(QStringLiteral("grade.extra"));
+  controller.toggleNodeSelection(QStringLiteral("grade.other"));
+  ASSERT_EQ(controller.selected_node_ids(),
+            (QStringList{QStringLiteral("grade.primary"), QStringLiteral("grade.extra"),
+                         QStringLiteral("grade.other")}));
+  ASSERT_EQ(controller.selected_node_id(), NodeId{"grade.other"});
+
+  // A history refresh that drops one member keeps the surviving order and the
+  // live primary; dropping the primary promotes the most recent survivor.
+  ASSERT_TRUE(
+      alcedo::RemoveColorGradeAndBridge(backend.Document(), NodeId{"grade.extra"}).empty());
+  backend.PublishHistoryChange();
+  EXPECT_EQ(controller.selected_node_ids(),
+            (QStringList{QStringLiteral("grade.primary"), QStringLiteral("grade.other")}));
+  EXPECT_EQ(controller.selected_node_id(), NodeId{"grade.other"});
+
+  ASSERT_TRUE(
+      alcedo::RemoveColorGradeAndBridge(backend.Document(), NodeId{"grade.other"}).empty());
+  backend.PublishHistoryChange();
+  EXPECT_EQ(controller.selected_node_ids(), QStringList{QStringLiteral("grade.primary")});
+  EXPECT_EQ(controller.selected_node_id(), NodeId{"grade.primary"});
+}
+
+TEST(EditorNodeController, ShiftArrowExtendsSelectionOutsideConnectMode) {
+  EditorNodeController controller;
+  ASSERT_TRUE(controller.PublishDocument(CreateDefaultPipelineDocument(), 1));
+
+  controller.extendNodeSelectionByStep(1);
+  EXPECT_EQ(controller.selected_node_ids(),
+            (QStringList{QStringLiteral("grade.primary"), QStringLiteral("drt")}));
+  EXPECT_EQ(controller.selected_node_id(), NodeId{"drt"});
+
+  controller.extendNodeSelectionByStep(-1);
+  EXPECT_EQ(controller.selected_node_ids(),
+            (QStringList{QStringLiteral("drt"), QStringLiteral("grade.primary")}));
+  EXPECT_EQ(controller.selected_node_id(), NodeId{"grade.primary"});
+
+  controller.extendNodeSelectionByStep(-1);
+  EXPECT_EQ(controller.selected_node_ids(),
+            (QStringList{QStringLiteral("drt"), QStringLiteral("grade.primary"),
+                         QStringLiteral("develop")}));
+  EXPECT_EQ(controller.selected_node_id(), NodeId{"develop"});
+
+  // The anchor stays put when the step reaches the backbone end.
+  controller.extendNodeSelectionByStep(-1);
+  EXPECT_EQ(controller.selected_node_count(), 3);
+  EXPECT_EQ(controller.selected_node_id(), NodeId{"develop"});
+}
+
+TEST(EditorNodeController, ConnectModeArrowNavigationDoesNotExtendSelection) {
+  EditorNodeController controller;
+  ASSERT_TRUE(controller.PublishDocument(CreateDefaultPipelineDocument(), 1));
+  controller.toggleNodeSelection(QStringLiteral("drt"));
+  ASSERT_EQ(controller.selected_node_count(), 2);
+
+  controller.selectPreviousBackboneNode();
+  EXPECT_EQ(controller.selected_node_ids(), QStringList{QStringLiteral("grade.primary")});
+  EXPECT_EQ(controller.selected_node_id(), NodeId{"grade.primary"});
+}
+
+TEST(EditorNodeController, PrimaryNodeAloneDrivesAdjustmentAndRenameActions) {
+  DocumentSessionBackend backend;
+  backend.SetGeneration(61);
+  ASSERT_TRUE(
+      alcedo::AddCleanColorGrade(backend.Document(), NodeId{"drt"}, NodeId{"grade.b"}).empty());
+  backend.Document().PrimaryGrade()->SetDeletionProtected(false);
+  EditorSessionController session(&backend);
+  EditorNodeController    controller;
+  controller.set_editor_session(&session);
+  controller.selectNode(QStringLiteral("grade.primary"));
+  controller.toggleNodeSelection(QStringLiteral("grade.b"));
+  ASSERT_EQ(controller.selected_node_count(), 2);
+  ASSERT_EQ(controller.selected_node_id(), NodeId{"grade.b"});
+
+  // Adjustment projection and pending writes follow the primary node only.
+  EXPECT_EQ(backend.last_projection_node(), NodeId{"grade.b"});
+  ASSERT_TRUE(session.submitWrite(QStringLiteral("exposure"), EditorScalarWrite{0.4f}, false));
+  const auto pending = session.PeekPendingInput();
+  ASSERT_EQ(pending.sequences.size(), 1u);
+  EXPECT_EQ(pending.sequences.front().captured_target.node_id, NodeId{"grade.b"});
+
+  // Rename stays a single-node action; delete covers the whole selection.
+  EXPECT_FALSE(controller.can_rename_selected_color_grade());
+  EXPECT_TRUE(controller.can_delete_selected_nodes());
+}
+
+TEST(EditorNodeController, MultiDeleteStaysAnIncompleteDraftUntilOneReconnectSubmits) {
+  DocumentSessionBackend backend;
+  backend.SetGeneration(62);
+  ASSERT_TRUE(
+      alcedo::AddCleanColorGrade(backend.Document(), NodeId{"drt"}, NodeId{"grade.extra"}).empty());
+  backend.Document().PrimaryGrade()->SetDeletionProtected(false);
+  EditorSessionController session(&backend);
+  EditorNodeController    controller;
+  controller.set_editor_session(&session);
+  controller.selectNode(QStringLiteral("grade.primary"));
+  controller.toggleNodeSelection(QStringLiteral("grade.extra"));
+
+  ASSERT_TRUE(controller.deleteSelectedNodes());
+  EXPECT_EQ(backend.edit_node_graph_count(), 0);
+  EXPECT_TRUE(controller.incomplete_draft());
+  ASSERT_EQ(controller.ActiveNodes().size(), 2u);
+  EXPECT_EQ(controller.selected_node_id(), NodeId{"drt"});
+  EXPECT_EQ(controller.selected_node_ids(), QStringList{QStringLiteral("drt")});
+
+  ASSERT_TRUE(controller.requestConnect(QStringLiteral("develop"), QStringLiteral("drt")));
+  EXPECT_EQ(backend.edit_node_graph_count(), 1);
+  EXPECT_FALSE(controller.incomplete_draft());
+  const auto&          change = backend.last_topology_change();
+  std::set<std::string> removed_ids;
+  for (const auto& item : change.removed_nodes) {
+    removed_ids.insert(item.node.at("id").get<std::string>());
+  }
+  EXPECT_EQ(removed_ids, (std::set<std::string>{"grade.primary", "grade.extra"}));
+  EXPECT_EQ(backend.Document().Graph().ImageBackboneNodeIds(),
+            (std::vector<NodeId>{NodeId{"develop"}, NodeId{"drt"}}));
+}
+
+TEST(EditorNodeController, RejectedMultiDeleteLeavesSelectionDraftAndHistoryUntouched) {
+  DocumentSessionBackend backend;
+  backend.SetGeneration(63);
+  ASSERT_TRUE(
+      alcedo::AddCleanColorGrade(backend.Document(), NodeId{"drt"}, NodeId{"grade.extra"}).empty());
+  EditorSessionController session(&backend);
+  EditorNodeController    controller;
+  controller.set_editor_session(&session);
+  const auto revision_before = backend.history_revision();
+
+  // An endpoint inside the selection fails before any draft mutation.
+  controller.selectNode(QStringLiteral("grade.primary"));
+  controller.toggleNodeSelection(QStringLiteral("develop"));
+  EXPECT_FALSE(controller.deleteSelectedNodes());
+  EXPECT_EQ(controller.last_error(), QStringLiteral("Only a Color Grade can be deleted"));
+  EXPECT_EQ(controller.selected_node_ids(),
+            (QStringList{QStringLiteral("grade.primary"), QStringLiteral("develop")}));
+  EXPECT_EQ(backend.edit_node_graph_count(), 0);
+  EXPECT_FALSE(controller.incomplete_draft());
+
+  // A protected Color Grade inside the selection disables the affordance and
+  // still fails inside the draft when invoked directly.
+  controller.selectNode(QStringLiteral("grade.primary"));
+  controller.toggleNodeSelection(QStringLiteral("grade.extra"));
+  EXPECT_FALSE(controller.can_delete_selected_nodes());
+  EXPECT_FALSE(controller.deleteSelectedNodes());
+  EXPECT_EQ(controller.last_error(),
+            QStringLiteral("Unlock Color Grade before deletion: grade.primary"));
+  EXPECT_EQ(controller.selected_node_ids(),
+            (QStringList{QStringLiteral("grade.primary"), QStringLiteral("grade.extra")}));
+  EXPECT_EQ(backend.edit_node_graph_count(), 0);
+  EXPECT_EQ(backend.history_revision(), revision_before);
+  EXPECT_FALSE(controller.incomplete_draft());
+}
+
+TEST(EditorNodeController, DeleteSelectedNodesLeavesUnselectedGradesUntilReconnectSubmits) {
+  DocumentSessionBackend backend;
+  backend.SetGeneration(64);
+  ASSERT_TRUE(
+      alcedo::AddCleanColorGrade(backend.Document(), NodeId{"drt"}, NodeId{"grade.extra"}).empty());
+  EditorSessionController session(&backend);
+  EditorNodeController    controller;
+  controller.set_editor_session(&session);
+
+  // Removing one selected middle grade does not bridge the path: the draft
+  // stays incomplete until the neighbors are reconnected, then submits once.
+  controller.selectNode(QStringLiteral("grade.extra"));
+  ASSERT_TRUE(controller.deleteSelectedNodes());
+  EXPECT_EQ(backend.edit_node_graph_count(), 0);
+  EXPECT_TRUE(controller.incomplete_draft());
+  ASSERT_EQ(controller.ActiveNodes().size(), 3u);
+  EXPECT_EQ(controller.selected_node_id(), NodeId{"drt"});
+
+  ASSERT_TRUE(
+      controller.requestConnect(QStringLiteral("grade.primary"), QStringLiteral("drt")));
+  EXPECT_EQ(backend.edit_node_graph_count(), 1);
+  ASSERT_EQ(backend.last_topology_change().removed_nodes.size(), 1u);
+  EXPECT_EQ(backend.last_topology_change().removed_nodes.front().node.at("id"),
+            "grade.extra");
+  EXPECT_EQ(backend.Document().Graph().ImageBackboneNodeIds(),
+            (std::vector<NodeId>{NodeId{"develop"}, NodeId{"grade.primary"}, NodeId{"drt"}}));
 }
 
 }  // namespace

@@ -116,15 +116,6 @@ class EditorMaskCreationAdapter : public QObject {
   Q_INVOKABLE void   finishBody();
   Q_INVOKABLE void   selectMask(const QString& node_id, const QString& mask_id);
   Q_INVOKABLE void   removeMask(const QString& node_id, const QString& mask_id);
-  /**
-   * @brief Toggle the deletion-protection field on an explicit (NodeId, MaskId).
-   *
-   * Row locks in Mask Groups target the row's own Mask even when it is not the
-   * selected Mask, so the command carries the identity instead of relying on
-   * the selected-Mask field path.
-   */
-  Q_INVOKABLE void   setMaskDeletionProtected(const QString& node_id, const QString& mask_id,
-                                              bool deletion_protected);
   Q_INVOKABLE void   removeSelectedMask();
   Q_INVOKABLE void   deleteActiveMask();
   Q_INVOKABLE void   handleHover(qreal x, qreal y);

@@ -80,12 +80,16 @@ operating-system shortcuts, or user-authored automation.
 - Connect mode keeps its current destination navigation. It does not extend node selection.
 - Delete removes every selected Color Grade through one admitted draft mutation.
 - Develop and DRT/Post remain selectable, but they are not deletable.
-- If the selected set contains a non-deletable node, a protected node, or a node that owns Masks,
-  the full Delete request fails before the draft or Qan view changes.
+- If the selected set contains a non-deletable node or a protected node, the full Delete request
+  fails before the draft or Qan view changes. Only the Color Grade (Mask Group) itself can be
+  locked; Masks do not carry deletion locks, and a Color Grade that owns Masks deletes through the
+  same rule the Mask Groups panel already applies.
 - Nodes Delete does not auto-connect the surviving neighbors. It keeps the current Nodes draft
   model. The user must complete a valid graph before Alcedo submits one topology edit.
 - The Nodes selection set belongs to `EditorNodeController`. QuickQanava renders that state but does
   not become the product selection owner.
+- The node context menu follows selection cardinality: a single selection offers Rename and Delete
+  where applicable; a multi-selection offers one Delete for every selected node and disables Rename.
 - Multi-selection does not add batch adjustment, batch rename, or batch mask editing.
 
 ### 2.3 Explicit exclusions
@@ -631,7 +635,7 @@ editor.saveCurrentImage
 ```text
 deleteSelectedNodes()
   -> validate every selected id
-  -> one id is protected, owns Masks, or is not a Color Grade
+  -> one id is protected or is not a Color Grade
   -> return the owner error
   -> selection, draft, Qan items, and history stay unchanged
 ```
@@ -1172,7 +1176,8 @@ the registry Delete command to remove the selected Color Grades through one draf
 
 - `RemoveColorGradesUsesOneReversalAndReturnsOneMutation`
 - `ProtectedNodeInMultiDeleteLeavesDraftUnchanged`
-- `NodeWithMasksInMultiDeleteLeavesDraftUnchanged`
+- `MaskProtectionFlagDoesNotBlockMultiDelete`
+- `OrdinaryMaskOwnerDeletesThroughMultiDelete`
 - `DevelopOrDrtInMultiDeleteLeavesDraftUnchanged`
 - `RestoreLastMutationRestoresEveryNodeAndEdgeFromMultiDelete`
 - `MultiDeleteMayRemainIncompleteUntilOneReconnectMakesItValid`
@@ -1215,14 +1220,69 @@ that owns a Mask. Store notes under `build/tmp/configurable_keyboard_shortcuts/a
 
 ### Completion record
 
-When complete, add:
+- commit id: `ef56f88c` (`feat(nodes): controller-owned multi-selection with atomic
+  multi-delete (A3)`), branch `feature/configurable-shortcut-registry-a3`.
+- Controller and draft API changes:
+  - `EditorNodeController`: `selectedNodeIds`/`selectedNodeCount` properties,
+    `toggleNodeSelection`, `extendNodeSelectionByStep`, `clearNodeSelection`,
+    `isNodeSelected`, `canDeleteSelectedNodes`, `deleteSelectedNodes`. Ordered
+    `selected_node_ids_` with `selected_node_id_` as the most-recently-added
+    primary; `RestoreSelectionAfterSnapshot` prunes dead ids;
+    `UpdateSelectionAfterRemoval` walks graph edges to the nearest downstream
+    survivor, then upstream.
+  - `EditorNodeGraphDraft::RemoveColorGrades(document, ids)`: deduplicates,
+    validates every id (`ValidateUserDeletion`, so a protected Color Grade
+    rejects the set while attached Masks never block), removes in descending
+    node-index order under one reversal record, returns one mutation.
+    `RemoveColorGrade` delegates to it. `RestoreLastMutation` restores
+    nodes/edges in reverse removal order.
+  - `AlcedoQanGraph::ApplyProductSelection(ids, primary)`: projects every
+    selected id plus the primary onto a `multipleSelectionEnabled` +
+    `NoSelection` graph; raw Qan selection cannot drive product state.
+  - `ShortcutRegistry`: `currentKeyboardModifiers()` and
+    `modifierBitsForCommand()` invokables so QML can test the
+    `nodes.extendSelection` modifier and strip it for command lookup.
+- Successful multi-delete call chain:
+  `dispatchGraphKey(Key_Delete)` → `nodes.deleteSelection` →
+  `root.deleteSelectedNodes()` → `EditorNodeController::deleteSelectedNodes()`
+  → draft `RemoveColorGrades(ids)` (prevalidate all, one reversal, one
+  mutation) → adapter `ApplyMutation` once → `MaybeSubmitDraft()` submits one
+  `EditNodeGraph` only when the draft is complete (reconnect may be required
+  first).
+- Rejected multi-delete call chain: same entry; `RemoveColorGrades` fails
+  `ValidateUserDeletion` on the first offending member (protected Color Grade,
+  Develop, or DRT) and returns before any mutation, leaving selection, draft,
+  view, and history unchanged. A protected member also disables the Delete
+  affordance through `canDeleteSelectedNodes`.
+- Test commands and counts:
 
-- commit id;
-- controller and draft API changes;
-- successful and rejected multi-delete call chains;
-- exact test commands and counts;
-- manual protected-node and Mask-owner evidence;
-- remaining risks or `None`.
+  ```powershell
+  cmd /c scripts\msvc_env.cmd --build build\debug --target EditorNodeGraphDraftTest EditorNodeSelectionLayoutTest AlcedoQanGraphTest EditorNodesPanelQmlTest --parallel 4
+  ctest --test-dir build/debug -R "^(EditorNodeGraphDraftTest|EditorNodeSelectionLayoutTest|AlcedoQanGraphTest|EditorNodesPanelQmlTest)\." --output-on-failure
+  ```
+
+  Result: 205 tests passed, 0 failed; the legacy disabled
+  `DeleteKeyRemovesSelectedGradeAndSelectsItsSuccessor` QML case stays
+  `DISABLED_` (offscreen key delivery). Evidence log:
+  `build/tmp/configurable_keyboard_shortcuts/a3/focused_a3_ctest.log`.
+- Protected-node and Mask-owner evidence:
+  `ProtectedNodeInMultiDeleteLeavesDraftUnchanged`,
+  `MaskProtectionFlagDoesNotBlockMultiDelete`,
+  `OrdinaryMaskOwnerDeletesThroughMultiDelete`,
+  `RejectedMultiDeleteKeepsSelectionDraftViewAndHistoryUnchanged`,
+  `RightClickOnMaskRowOpensNodeMenuWithoutSelectingMask`,
+  `MultiSelectionNodeMenuDisablesRenameAndLabelsBatchDelete`,
+  `LockedNodeDisablesContextMenuDeleteAndMixedMultiDelete`.
+- Follow-up: Mask-level deletion locks were removed. Only a Color Grade (Mask
+  Group) can be deletion-protected; the Mask row lock button, the
+  `setMaskDeletionProtected` adapter command, the `deletion_protected`
+  SetMaskField key, and `ValidateUserDeletion` Mask checks are gone. Persisted
+  Mask flags remain inert for compatibility.
+- `WorkspaceShellTest` is no longer built or registered (retired; source kept
+  for later redesign).
+- Remaining risks: none blocking. A multi-delete that breaks the backbone is
+  intentionally held as an incomplete draft until the user reconnects; the
+  panel surfaces this through `incompleteDraft`/`incompleteDraftInstruction`.
 
 ## 11. Phase B1 - Keyboard Settings Page and Capture Interaction
 
@@ -1315,9 +1375,12 @@ ctest --test-dir build/debug -R "^(ShortcutSettingsQmlTest|MainQmlWorkflowTest)\
 Then run the complete focused suite:
 
 ```powershell
-cmd /c scripts\msvc_env.cmd --build build\debug --target ShortcutRegistryTest ShortcutSettingsQmlTest MainQmlWorkflowTest WorkspaceShellTest EditorFilmstripQmlTest EditorVersionsPanelQmlTest EditorLutPanelQmlTest EditorNodeGraphDraftTest EditorNodeSelectionLayoutTest AlcedoQanGraphTest EditorNodesPanelQmlTest EditorCheckpointQmlIntegrationTest --parallel 4
-ctest --test-dir build/debug -R "^(ShortcutRegistryTest|ShortcutSettingsQmlTest|MainQmlWorkflowTest|WorkspaceShellTest|EditorFilmstripQmlTest|EditorVersionsPanelQmlTest|EditorLutPanelQmlTest|EditorNodeGraphDraftTest|EditorNodeSelectionLayoutTest|AlcedoQanGraphTest|EditorNodesPanelQmlTest|EditorCheckpointQmlIntegrationTest)\." --output-on-failure
+cmd /c scripts\msvc_env.cmd --build build\debug --target ShortcutRegistryTest ShortcutSettingsQmlTest MainQmlWorkflowTest EditorFilmstripQmlTest EditorVersionsPanelQmlTest EditorLutPanelQmlTest EditorNodeGraphDraftTest EditorNodeSelectionLayoutTest AlcedoQanGraphTest EditorNodesPanelQmlTest EditorCheckpointQmlIntegrationTest --parallel 4
+ctest --test-dir build/debug -R "^(ShortcutRegistryTest|ShortcutSettingsQmlTest|MainQmlWorkflowTest|EditorFilmstripQmlTest|EditorVersionsPanelQmlTest|EditorLutPanelQmlTest|EditorNodeGraphDraftTest|EditorNodeSelectionLayoutTest|AlcedoQanGraphTest|EditorNodesPanelQmlTest|EditorCheckpointQmlIntegrationTest)\." --output-on-failure
 ```
+
+`WorkspaceShellTest` was retired in Phase A3 and no longer exists as a target; its former coverage
+is being redesigned as focused suites.
 
 Run manual checks in English and Simplified Chinese. Check Light and Dark themes, high DPI, 125%
 text scaling, a short settings window, keyboard-only navigation, a screen reader name query, and
@@ -1354,7 +1417,7 @@ When complete, add:
 | --- | --- | --- | --- |
 | Filmstrip Left and Right switch images | A2 | `EditorFilmstripQmlTest` | Bounds and repeated input |
 | Ctrl+Z and Ctrl+R Undo and Redo | A2 | history and workflow tests | Toolbar state matches command state |
-| Library Ctrl+A | A2 | `WorkspaceShellTest` | Album with many images |
+| Library Ctrl+A | A2 | `WorkspaceShellTest` (retired in A3; redesign pending) | Album with many images |
 | Library Shift multi-selection | A1, A2 | registry and workspace tests | Pointer range and rubber-band |
 | Versions Ctrl+A creates a default root version | A2 | `EditorVersionsPanelQmlTest` | Focus and inline-name field |
 | Library Ctrl+S saves project | A2 | workflow test | Project save feedback |

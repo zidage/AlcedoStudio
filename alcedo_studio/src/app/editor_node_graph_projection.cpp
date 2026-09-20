@@ -47,6 +47,7 @@ auto EditorNodeGraphProjection::ProjectNode(const INodeModel& node) -> EditorNod
   if (grade == nullptr) {
     throw std::invalid_argument("Color Grade type has an invalid model");
   }
+  projected.deletion_protected = grade->DeletionProtected();
   projected.masks.reserve(grade->MaskCount());
   for (const auto& mask : grade->Masks()) {
     projected.masks.push_back({mask.id, GetMaskSourceKind(mask.source)});
@@ -122,7 +123,6 @@ auto EditorNodeGraphProjection::BuildMaskGroups(const PipelineDocument& document
       row.source_kind        = GetMaskSourceKind(mask.source);
       row.display_name       = mask.display_name;
       row.enabled            = mask.enabled;
-      row.deletion_protected = mask.deletion_protected;
       row.opacity            = mask.opacity;
       group.masks.push_back(std::move(row));
     }

@@ -34,6 +34,7 @@
 #include <optional>
 #include <string>
 
+#include "app/editor_node_graph_draft.hpp"
 #include "app/editor_node_graph_projection.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
@@ -1132,6 +1133,106 @@ TEST_F(AlcedoQanGraph, KeyboardConnectPinsTheSourceWhileSelectionMoves) {
   adapter.cancelKeyboardConnect();
   EXPECT_FALSE(adapter.keyboard_connect_active());
   EXPECT_TRUE(adapter.keyboard_connect_source_id_string().isEmpty());
+}
+
+TEST_F(AlcedoQanGraph, ProductMultiSelectionAppliesAllSelectedVisualsAndOnePrimaryNode) {
+  ui::AlcedoQanGraph adapter;
+  AttachAlcedoDelegates(adapter, harness_->Graph());
+  auto       document = CreateDefaultPipelineDocument();
+  ASSERT_TRUE(
+      AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.extra"}).empty());
+  const auto snapshot = EditorNodeGraphProjection::Build(document, 9);
+  ASSERT_TRUE(adapter.ApplySnapshot(snapshot).succeeded);
+  auto* graph = harness_->Graph();
+  ASSERT_TRUE(WaitFor([&] { return graph->getConnector() != nullptr; }));
+
+  adapter.ApplyProductSelection(
+      std::vector<NodeId>{NodeId{"grade.primary"}, NodeId{"grade.extra"}},
+      NodeId{"grade.extra"});
+
+  const auto selected_contains = [&](const NodeId& node_id) {
+    const auto& selected = graph->getSelectedNodes();
+    auto*       node     = adapter.NodeFor(node_id);
+    return std::any_of(selected.begin(), selected.end(),
+                       [node](const auto& entry) { return entry.data() == node; });
+  };
+  EXPECT_TRUE(selected_contains(NodeId{"grade.primary"}));
+  EXPECT_TRUE(selected_contains(NodeId{"grade.extra"}));
+  EXPECT_FALSE(selected_contains(NodeId{"develop"}));
+  EXPECT_EQ(graph->getSelectedNodes().size(), 2u);
+
+  // The primary node alone pins the connector source port.
+  EXPECT_EQ(graph->getConnector()->getSourcePort(),
+            adapter.OutputPortFor(NodeId{"grade.extra"}, kImagePort()));
+
+  // A single-node projection replaces the whole multi-selection.
+  adapter.ApplyProductSelection(std::vector<NodeId>{NodeId{"grade.primary"}},
+                                NodeId{"grade.primary"});
+  EXPECT_EQ(graph->getSelectedNodes().size(), 1u);
+  EXPECT_TRUE(selected_contains(NodeId{"grade.primary"}));
+  EXPECT_EQ(graph->getConnector()->getSourcePort(),
+            adapter.OutputPortFor(NodeId{"grade.primary"}, kImagePort()));
+}
+
+TEST_F(AlcedoQanGraph, RawQanSelectionDoesNotReplaceControllerOwnedSelection) {
+  ui::AlcedoQanGraph adapter;
+  AttachAlcedoDelegates(adapter, harness_->Graph());
+  const auto snapshot = EditorNodeGraphProjection::Build(CreateDefaultPipelineDocument(), 10);
+  ASSERT_TRUE(adapter.ApplySnapshot(snapshot).succeeded);
+  auto* graph = harness_->Graph();
+  ASSERT_NE(graph, nullptr);
+  EXPECT_EQ(graph->getSelectionPolicy(), qan::Graph::SelectionPolicy::NoSelection);
+
+  adapter.ApplyProductSelection(
+      std::vector<NodeId>{NodeId{"grade.primary"}, NodeId{"drt"}},
+      NodeId{"grade.primary"});
+  ASSERT_EQ(graph->getSelectedNodes().size(), 2u);
+
+  // Raw Qan selection calls are gated by the NoSelection policy: they cannot
+  // move the controller-owned visual selection in either direction.
+  auto* develop = adapter.NodeFor(NodeId{"develop"});
+  ASSERT_NE(develop, nullptr);
+  EXPECT_FALSE(graph->selectNode(develop));
+  EXPECT_FALSE(graph->selectNode(adapter.NodeFor(NodeId{"grade.primary"})));
+  const auto& selected = graph->getSelectedNodes();
+  ASSERT_EQ(selected.size(), 2u);
+  EXPECT_TRUE(std::any_of(selected.begin(), selected.end(), [&](const auto& entry) {
+    return entry.data() == adapter.NodeFor(NodeId{"grade.primary"});
+  }));
+  EXPECT_TRUE(std::any_of(selected.begin(), selected.end(), [&](const auto& entry) {
+    return entry.data() == adapter.NodeFor(NodeId{"drt"});
+  }));
+}
+
+TEST_F(AlcedoQanGraph, OneBatchMutationRemovesAllRequestedQanNodes) {
+  ui::AlcedoQanGraph adapter;
+  AttachAlcedoDelegates(adapter, harness_->Graph());
+  auto document = CreateDefaultPipelineDocument();
+  ASSERT_TRUE(
+      AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.extra"}).empty());
+  document.PrimaryGrade()->SetDeletionProtected(false);
+  const auto snapshot = EditorNodeGraphProjection::Build(document, 11);
+  ASSERT_TRUE(adapter.ApplySnapshot(snapshot).succeeded);
+  adapter.ApplyProductSelection(
+      std::vector<NodeId>{NodeId{"grade.primary"}, NodeId{"grade.extra"}},
+      NodeId{"grade.extra"});
+
+  auto draft = EditorNodeGraphDraft::FromDocument(document);
+  auto mutation =
+      draft.RemoveColorGrades(document, {NodeId{"grade.primary"}, NodeId{"grade.extra"}});
+  ASSERT_TRUE(mutation.succeeded);
+  ASSERT_EQ(mutation.removed_node_ids.size(), 2u);
+  ASSERT_EQ(mutation.removed_edges.size(), 3u);
+
+  const auto result = adapter.ApplyMutation(mutation);
+  ASSERT_TRUE(result.succeeded) << result.error.toStdString();
+  EXPECT_EQ(adapter.NodeFor(NodeId{"grade.primary"}), nullptr);
+  EXPECT_EQ(adapter.NodeFor(NodeId{"grade.extra"}), nullptr);
+  EXPECT_NE(adapter.NodeFor(NodeId{"develop"}), nullptr);
+  EXPECT_NE(adapter.NodeFor(NodeId{"drt"}), nullptr);
+  EXPECT_EQ(harness_->Graph()->getNodeCount(), 2);
+  EXPECT_EQ(harness_->Graph()->get_edge_count(), 0);
+  EXPECT_EQ(harness_->Graph()->getSelectedNodes().size(), 0u);
 }
 
 }  // namespace alcedo

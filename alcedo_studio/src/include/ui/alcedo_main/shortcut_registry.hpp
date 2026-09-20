@@ -173,6 +173,13 @@ class ShortcutRegistry final : public QAbstractListModel {
   /// True when the pressed modifier bits contain all bits of one effective
   /// Modifier binding of the command. Pointer and selection handlers use this.
   Q_INVOKABLE bool        modifierMatches(const QString& command_id, int modifiers) const;
+  /// Modifier bits currently held on the keyboard, masked to
+  /// Shift/Ctrl/Alt/Meta. Pointer handlers read modifiers here because Qan
+  /// node press signals do not carry them.
+  Q_INVOKABLE int         currentKeyboardModifiers() const;
+  /// Union of every effective Modifier-kind binding of the command, as
+  /// Qt::KeyboardModifier bits. Zero when the command binds no modifier.
+  Q_INVOKABLE int         modifierBitsForCommand(const QString& command_id) const;
   /// Resolves a key event to a command id inside one scope only. Returns an
   /// empty string when no command in that scope binds the key.
   Q_INVOKABLE QString     commandIdForKey(const QString& scope, int key, int modifiers) const;
