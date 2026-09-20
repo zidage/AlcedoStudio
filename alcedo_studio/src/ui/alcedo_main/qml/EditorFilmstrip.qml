@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Window
+import Alcedo.Main 1.0
 
 // Bottom filmstrip dock for EditorWorkspace.
 // Phase 7C: the editor filmstrip reuses the library thumbnail model while
@@ -433,6 +434,11 @@ Item {
         }
         const nextIndex = Math.max(0, Math.min(totalCount - 1, focusIndex + delta))
         root.handleIndexSelection(nextIndex, modifiers || 0, false)
+    }
+
+    function activateAdjacentImage(delta) {
+        // activateImage no-ops on out-of-range indices, so bounds are inert.
+        root.activateImage(focusIndex + delta)
     }
 
     function activateFocused() {
@@ -911,15 +917,22 @@ Item {
                 }
 
                 Keys.onPressed: function(event) {
-                    if (event.key === Qt.Key_A
-                            && (event.modifiers & Qt.ControlModifier)) {
+                    const commandId = ShortcutRegistry.commandIdForKey(
+                        "editor.filmstrip", event.key, event.modifiers)
+                    if (commandId === "filmstrip.selectAll") {
                         root.selectAllImages()
                         event.accepted = true
-                    } else if (event.key === Qt.Key_Left) {
-                        root.moveFocus(-1, event.modifiers)
+                    } else if (commandId === "filmstrip.previousImage") {
+                        root.activateAdjacentImage(-1)
                         event.accepted = true
-                    } else if (event.key === Qt.Key_Right) {
-                        root.moveFocus(1, event.modifiers)
+                    } else if (commandId === "filmstrip.nextImage") {
+                        root.activateAdjacentImage(1)
+                        event.accepted = true
+                    } else if ((event.key === Qt.Key_Left || event.key === Qt.Key_Right)
+                               && event.modifiers !== Qt.NoModifier) {
+                        // Shift/Ctrl arrows keep the pre-registry range move;
+                        // only the unmodified keys are registered commands.
+                        root.moveFocus(event.key === Qt.Key_Left ? -1 : 1, event.modifiers)
                         event.accepted = true
                     } else if (event.key === Qt.Key_Home) {
                         root.handleIndexSelection(0, event.modifiers, false)

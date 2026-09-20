@@ -55,7 +55,25 @@ Item {
     readonly property bool canMutateVersions: root.versionCheckoutEnabled && root.editorSession
                                               && root.editorSession.actions.canCheckoutVersion
                                               && !root.draftSubmitPending
+    // Same gate as editorForkFromRootButton: the Ctrl+A command shares the
+    // fork-from-root action's availability so a disabled action never consumes
+    // the key.
+    readonly property bool canCreateDefaultRootVersion:
+        root.canMutateVersions && root.editorSession
+        && root.editorSession.actions.canCreateRootVersion
     readonly property real listContentY: versionList ? versionList.contentY : 0
+
+    focus: true
+
+    Keys.onPressed: function(event) {
+        if (ShortcutRegistry.commandIdForKey("editor.versions", event.key,
+                                             event.modifiers)
+                === "versions.createDefaultFromRoot"
+                && root.canCreateDefaultRootVersion) {
+            root.createDefaultRootVersion()
+            event.accepted = true
+        }
+    }
 
     // Freeze scroll capture BEFORE any model mutation. ListView modelReset can
     // jump contentY to 0 synchronously; if _restoringContentY is still false,
@@ -279,6 +297,18 @@ Item {
         root.restoreListScroll()
     }
 
+    // Direct create with the same default-name calculation as the inline
+    // forkRoot draft; skips the naming row. Caller gates on
+    // canCreateDefaultRootVersion.
+    function createDefaultRootVersion() {
+        if (!root.historyModel)
+            return
+        root.captureListScroll()
+        root.historyModel.createRootVersion(
+            qsTr("Version %1").arg(root.historyModel.versions.count + 1))
+        root.restoreListScroll()
+    }
+
     function checkoutVersionPreservingScroll(versionId) {
         if (!root.historyModel)
             return
@@ -396,6 +426,8 @@ Item {
                 fillSelected: appTheme.buttonSelectedFillColor
                 focusRingColor: root.colText
                 actionName: qsTr("Fork new version from root")
+                toolTipText: ShortcutRegistry.decorateTooltip(
+                    qsTr("Fork new version from root"), "versions.createDefaultFromRoot")
                 onClicked: root.openCreateVersion("forkRoot")
             }
         }

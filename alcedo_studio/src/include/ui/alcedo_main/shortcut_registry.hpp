@@ -176,8 +176,14 @@ class ShortcutRegistry final : public QAbstractListModel {
   /// Resolves a key event to a command id inside one scope only. Returns an
   /// empty string when no command in that scope binds the key.
   Q_INVOKABLE QString     commandIdForKey(const QString& scope, int key, int modifiers) const;
-  /// Native text of every effective binding, in binding order.
+  /// Portable text of every effective binding, in binding order. Suitable for
+  /// feeding Qt Quick Shortcut.sequences; use shortcutText()/decorateTooltip()
+  /// for user-facing native text.
   Q_INVOKABLE QStringList keySequenceTexts(const QString& command_id) const;
+  /// Registered scope string of a command, or empty when the id is unknown.
+  Q_INVOKABLE QString     scopeForCommand(const QString& command_id) const;
+  /// True when the command's bindings auto-repeat while the key is held.
+  Q_INVOKABLE bool        commandAutoRepeat(const QString& command_id) const;
 
   /// Validates a capture candidate without changing state. The result map
   /// carries succeeded, errorCode, message, and conflictingCommandId.

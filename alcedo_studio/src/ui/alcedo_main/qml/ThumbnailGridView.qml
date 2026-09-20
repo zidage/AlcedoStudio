@@ -3,6 +3,7 @@ import QtQuick.Controls
 import QtQuick.Controls.impl
 import QtQuick.Layouts
 import QtQuick.Effects
+import Alcedo.Main 1.0
 
 Item {
     id: root
@@ -678,7 +679,8 @@ Item {
     }
 
     function hasMultiSelectModifier(modifiers) {
-        return (modifiers & Qt.ShiftModifier) || (modifiers & Qt.ControlModifier)
+        return ShortcutRegistry.modifierMatches("library.extendSelection", modifiers)
+               || ShortcutRegistry.modifierMatches("library.toggleSelection", modifiers)
     }
 
     function selectionItemForIndex(index) {
@@ -1365,9 +1367,13 @@ Item {
                     const item = root.selectionItemForIndex(idx)
                     if (item) {
                         root.imageFocused(item, idx)
-                        if (mouse.modifiers & Qt.ShiftModifier) {
-                            root.selectRangeToIndex(idx, mouse.modifiers & Qt.ControlModifier)
-                        } else if (mouse.modifiers & Qt.ControlModifier) {
+                        if (ShortcutRegistry.modifierMatches("library.extendSelection",
+                                                             mouse.modifiers)) {
+                            root.selectRangeToIndex(
+                                idx, ShortcutRegistry.modifierMatches("library.toggleSelection",
+                                                                      mouse.modifiers))
+                        } else if (ShortcutRegistry.modifierMatches("library.toggleSelection",
+                                                                    mouse.modifiers)) {
                             const next = !root.isImageSelected(item.elementId)
                             root.imageSelectionChanged(item.elementId, item.imageId, item.fileName,
                                                        item.isHdr === true, next)

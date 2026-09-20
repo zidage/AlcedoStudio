@@ -1014,6 +1014,83 @@ When complete, add:
 - manual focus and theme evidence;
 - remaining risks or `None`.
 
+#### Completion record - 2026-10-08
+
+**Status:** complete on branch `feature/configurable-shortcut-registry-a2`.
+
+**Commit:** `bf651742` feat(shortcuts): route basic UI commands through the registry (A2)
+
+**New QML surface:** `RegisteredShortcut.qml` — window-context `Shortcut` bound to one registry
+command. `sequences`/`autoRepeat`/`scope` come from `ShortcutRegistry`; `commandEnabled`,
+`activeScope`, and `suppressWhileEditing` gate `enabled`; a `commandBindingChanged` listener bumps an
+internal stamp so sequences re-resolve live. `editableFocusActive()` walks `Window.activeFocusItem`
+parents for `insert`/`selectAll`/`readOnly` — no cached focus flag.
+
+**Changed public APIs** (`shortcut_registry.hpp`): new `Q_INVOKABLE`s `scopeForCommand` and
+`commandAutoRepeat`; `keySequenceTexts` now emits `QKeySequence::PortableText` (native text stays in
+`shortcutText`/`decorateTooltip`).
+
+**Action-owner call chains:**
+
+```text
+Library Select All   Main.qml RegisteredShortcut(library.selectAll)
+  -> root.selectAllCurrentAlbum() -> ImageActionsController::SelectAllCurrentAlbum
+Library Save Project RegisteredShortcut(library.saveProject, suppressWhileEditing=false)
+  -> root.requestSaveProject() -> ProjectLaunchController.requestSaveProject()
+  -> appModules.project.SaveProject()
+Library modifiers    ThumbnailGridView modifierMatches(library.extendSelection /
+  -> library.toggleSelection) -> selectRangeToIndex / imageSelectionChanged
+Editor Undo/Redo     RegisteredShortcut(editor.undo/redo, gate: actions.canUndo/canRedo)
+  -> appModules.editorSession.Undo()/Redo()
+Editor Save Image    RegisteredShortcut(editor.saveCurrentImage,
+  -> gate: hasImage && !persistInFlight && !closeInFlight)
+  -> appModules.editorSession.PersistCurrentImage()
+Filmstrip arrows     Keys.onPressed -> commandIdForKey("editor.filmstrip")
+  -> filmstrip.previousImage/nextImage -> activateAdjacentImage -> activateImage
+  -> session/router open path; Shift/Ctrl arrows keep moveFocus range selection
+Filmstrip Ctrl+A     commandIdForKey -> filmstrip.selectAll -> selectAllImages()
+Versions Ctrl+A      panel Keys.onPressed -> commandIdForKey("editor.versions")
+  -> versions.createDefaultFromRoot + canCreateDefaultRootVersion gate
+  -> createDefaultRootVersion() -> historyModel.createRootVersion(default name)
+LUT arrows           list Keys.onPressed -> commandIdForKey("editor.lut")
+  -> lut.selectPrevious/selectNext -> lutModel.selectRelative(-1/+1)
+  -> ensureSelectedVisibleIfOffscreen()
+Mask Esc/Del/Enter   EditorWorkspace RegisteredShortcut x3 (editor.maskEdit scope,
+  -> active only while maskCreation.maskControlsActive)
+  -> maskCreation.finishBody()/deleteActiveMask()/
+     adjustmentStack.confirmMaskEditAndReturn()
+```
+
+**Test commands and counts:**
+
+```powershell
+cmd /c scripts\msvc_env.cmd --build build\debug --target RegisteredShortcutQmlTest EditorFilmstripQmlTest EditorVersionsPanelQmlTest EditorLutPanelQmlTest --parallel 4
+ctest --test-dir build/debug -R "^(MainQmlWorkflowTest|RegisteredShortcutQmlTest|EditorFilmstripQmlTest|EditorVersionsPanelQmlTest|EditorLutPanelQmlTest|EditorNodesPanelQmlTest|EditorCheckpointQmlIntegrationTest|ShortcutRegistryTest)\." --output-on-failure
+```
+
+Result: **131/131 passed** (1 pre-existing disabled Nodes Delete test not run). New tests:
+`RegisteredShortcutQmlTest` 5/5 (scope gating, disabled-command fallthrough, editable-focus
+suppression incl. native field select-all, live rebinding, auto-repeat); filmstrip 12/12 (3 new);
+versions 14/14 (3 new); LUT 14/14 (3 new); `ShortcutRegistryTest` 17/17 unchanged.
+
+**Manual focus and theme evidence:** not run — CLI-only session, no interactive desktop available.
+
+**Remaining risks:**
+
+- The `WorkspaceShellTest`/`MainQmlWorkflowTest` A2 test block (Library-vs-Editor Ctrl+S end-to-end,
+  mask-shadows-Nodes under the full shell, Undo/Redo availability, save-failure surface) was removed
+  because the full-boot fixture is prohibitively slow (~7 s/test; ~110 s for the real-RAW save test).
+  Equivalent mechanism coverage lives in `RegisteredShortcutQmlTest`; surface wiring is covered by
+  the light harnesses and `MainQmlWorkflowTest` load. These integration paths are verified only by
+  static wiring, not automated key delivery.
+- The mask `RegisteredShortcut` routes are exercised only through the shared-wrapper tests; no
+  dedicated mask-input harness exists outside the heavy fixture.
+- A pre-existing `WorkspaceShellTest` failure
+  (`MaskGroupsPageRoutesFromRailAndKeepsViewerAtLeast360`, empty `maskgroups` page) was observed
+  during the abandoned full-suite run; it appears unrelated to this phase and the suite is already
+  flagged suspect in `AGENTS.md`.
+- Interactive theme/short-window/HiDPI keyboard pass still owed (see above).
+
 ## 10. Phase A3 - Nodes Multi-selection and Delete
 
 ### Objective

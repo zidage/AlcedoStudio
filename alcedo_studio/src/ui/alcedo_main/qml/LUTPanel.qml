@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Controls.impl
 import QtQuick.Layouts
+import Alcedo.Main 1.0
 
 // Standalone LUT browser panel (first-class adjustment navbar page).
 // Visual identity: DESIGN.md — only appTheme tokens and shared IconActionButton.
@@ -338,6 +339,22 @@ Item {
             return
         root._ensureSelectedIfOffscreen = false
         root.ensureSelectedVisibleIfOffscreen()
+    }
+
+    // Registry-routed arrow selection: selectRelative skips unusable rows and
+    // wraps through the model's own entry order; visibility scroll stays here.
+    function selectPreviousLut() {
+        if (!root.lutModel || typeof root.lutModel.selectRelative !== "function")
+            return
+        if (root.lutModel.selectRelative(-1))
+            root.ensureSelectedVisibleIfOffscreen()
+    }
+
+    function selectNextLut() {
+        if (!root.lutModel || typeof root.lutModel.selectRelative !== "function")
+            return
+        if (root.lutModel.selectRelative(1))
+            root.ensureSelectedVisibleIfOffscreen()
     }
 
     /// Scroll only when the selected row is fully outside the viewport.
@@ -685,8 +702,23 @@ Item {
                 boundsBehavior: Flickable.StopAtBounds
                 flickableDirection: Flickable.VerticalFlick
                 pressDelay: 0
+                focus: true
                 // height is 0 before Layout settles — never assign a negative buffer.
                 cacheBuffer: Math.max(0, Math.ceil(height)) * 2
+
+                // Focus-owned registry dispatch: arrows fire only while the
+                // list holds focus; the filter TextInput keeps native arrows.
+                Keys.onPressed: function(event) {
+                    const commandId = ShortcutRegistry.commandIdForKey(
+                        "editor.lut", event.key, event.modifiers)
+                    if (commandId === "lut.selectPrevious") {
+                        root.selectPreviousLut()
+                        event.accepted = true
+                    } else if (commandId === "lut.selectNext") {
+                        root.selectNextLut()
+                        event.accepted = true
+                    }
+                }
                 ScrollBar.vertical: ScrollBar {
                     policy: ScrollBar.AsNeeded
                     padding: 0
@@ -806,6 +838,7 @@ Item {
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
                             onClicked: {
+                                lutView.forceActiveFocus()
                                 if (root.lutModel)
                                     root.lutModel.selectPath(entryPath)
                             }

@@ -26,7 +26,6 @@
 #include <QUrl>
 #include <QVariantList>
 #include <QVariantMap>
-
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
@@ -34,6 +33,7 @@
 #include <string>
 
 #include "ui/alcedo_main/app_theme.hpp"
+#include "ui/alcedo_main/shortcut_registry.hpp"
 
 namespace alcedo::ui::test {
 namespace {
@@ -41,7 +41,8 @@ namespace {
 class FakeLutCatalogModel final : public QObject {
   Q_OBJECT
   Q_PROPERTY(QVariantList entries READ entries NOTIFY entriesChanged)
-  Q_PROPERTY(QString selectedPath READ selectedPath WRITE setSelectedPath NOTIFY selectedPathChanged)
+  Q_PROPERTY(
+      QString selectedPath READ selectedPath WRITE setSelectedPath NOTIFY selectedPathChanged)
   Q_PROPERTY(int selectedIndex READ selectedIndex NOTIFY selectedPathChanged)
   Q_PROPERTY(QString directoryText READ directoryText NOTIFY catalogChanged)
   Q_PROPERTY(QString statusText READ statusText NOTIFY catalogChanged)
@@ -53,7 +54,8 @@ class FakeLutCatalogModel final : public QObject {
   explicit FakeLutCatalogModel(QObject* parent = nullptr) : QObject(parent) {
     // Long enough list that the viewport can scroll and keep mid rows visible.
     QVariantList rows;
-    rows.push_back(MakeEntry(QStringLiteral("none"), QString(), QStringLiteral("None"), true, true));
+    rows.push_back(
+        MakeEntry(QStringLiteral("none"), QString(), QStringLiteral("None"), true, true));
     for (int i = 0; i < 40; ++i) {
       const QString path = QStringLiteral("D:/fake/lut_%1.cube").arg(i, 2, 10, QChar('0'));
       const QString name = QStringLiteral("LUT %1").arg(i, 2, 10, QChar('0'));
@@ -65,7 +67,7 @@ class FakeLutCatalogModel final : public QObject {
 
   [[nodiscard]] auto entries() const -> QVariantList { return visible_entries_; }
   [[nodiscard]] auto selectedPath() const -> QString { return selected_path_; }
-  void setSelectedPath(const QString& path) {
+  void               setSelectedPath(const QString& path) {
     if (selected_path_ == path) {
       return;
     }
@@ -80,13 +82,11 @@ class FakeLutCatalogModel final : public QObject {
     }
     return selected_path_.isEmpty() ? 0 : -1;
   }
-  [[nodiscard]] auto directoryText() const -> QString {
-    return QStringLiteral("D:/fake/LUTs");
-  }
+  [[nodiscard]] auto directoryText() const -> QString { return QStringLiteral("D:/fake/LUTs"); }
   [[nodiscard]] auto statusText() const -> QString { return status_text_; }
   [[nodiscard]] auto canOpenDirectory() const -> bool { return true; }
   [[nodiscard]] auto filterText() const -> QString { return filter_text_; }
-  void setFilterText(const QString& text) {
+  void               setFilterText(const QString& text) {
     if (filter_text_ == text) {
       return;
     }
@@ -96,7 +96,7 @@ class FakeLutCatalogModel final : public QObject {
   }
   [[nodiscard]] auto favoritePaths() const -> QStringList { return favorite_paths_; }
 
-  Q_INVOKABLE void refresh(bool /*force*/ = false) {
+  Q_INVOKABLE void   refresh(bool /*force*/ = false) {
     ++refresh_count_;
     RebuildVisible();
     emit catalogChanged();
@@ -110,6 +110,47 @@ class FakeLutCatalogModel final : public QObject {
     last_selected_path_ = path;
     emit selectedPathChanged();
     // Intentionally no entriesChanged — mirrors production selection contract.
+  }
+  // Mirrors EditorLutCatalogModel::selectRelative: wrap around selectable rows.
+  Q_INVOKABLE bool selectRelative(int step) {
+    if (step == 0 || visible_entries_.isEmpty()) {
+      return false;
+    }
+    QList<int> selectable;
+    for (int i = 0; i < visible_entries_.size(); ++i) {
+      if (visible_entries_[i].toMap().value(QStringLiteral("selectable")).toBool()) {
+        selectable.push_back(i);
+      }
+    }
+    if (selectable.isEmpty()) {
+      return false;
+    }
+    const int current = selectedIndex();
+    int       pos     = 0;
+    for (int i = 0; i < selectable.size(); ++i) {
+      if (selectable[i] == current) {
+        pos = i;
+        break;
+      }
+    }
+    const int  next    = (pos + step) % selectable.size();
+    const int  wrapped = next < 0 ? next + selectable.size() : next;
+    const auto path =
+        visible_entries_[selectable[wrapped]].toMap().value(QStringLiteral("path")).toString();
+    if (path == selected_path_) {
+      return false;
+    }
+    selectPath(path);
+    return true;
+  }
+  // Test helper: rebuild the full catalog so gaps can be injected mid-list.
+  void ResetEntries(QVariantList rows) {
+    all_entries_ = std::move(rows);
+    RebuildVisible();
+  }
+  static auto Entry(const QString& kind, const QString& path, const QString& name, bool valid,
+                    bool selectable) -> QVariantMap {
+    return MakeEntry(kind, path, name, valid, selectable);
   }
   Q_INVOKABLE void clearSelection() { selectPath(QString()); }
   Q_INVOKABLE void toggleFavoritePath(const QString& path) {
@@ -133,8 +174,8 @@ class FakeLutCatalogModel final : public QObject {
     return QStringLiteral("{\"ocio_lmt\":\"%1\"}").arg(selected_path_);
   }
 
-  int  select_count_       = 0;
-  int  refresh_count_      = 0;
+  int     select_count_  = 0;
+  int     refresh_count_ = 0;
   QString last_selected_path_;
 
  signals:
@@ -270,6 +311,9 @@ struct LutPanelHarness {
       }
     });
     AppTheme::Instance().setReduceMotion(true);
+    // LUTPanel.qml imports Alcedo.Main for the ShortcutRegistry singleton;
+    // file-URL loads resolve it through C++ type registration.
+    RegisterShortcutRegistryQmlType();
     engine.addImportPath(QStringLiteral("qrc:/"));
     engine.addImportPath(SrcQmlDir());
     engine.rootContext()->setContextProperty(QStringLiteral("appTheme"), &AppTheme::Instance());
@@ -282,10 +326,12 @@ struct LutPanelHarness {
       window->show();
       (void)QTest::qWaitForWindowExposed(window);
       ProcessEvents(80);
-      (void)WaitUntil([this] {
-        panel = window->findChild<QQuickItem*>(QStringLiteral("editorLutPanel"));
-        return panel != nullptr && panel->property("entryCount").toInt() > 0;
-      }, 2000);
+      (void)WaitUntil(
+          [this] {
+            panel = window->findChild<QQuickItem*>(QStringLiteral("editorLutPanel"));
+            return panel != nullptr && panel->property("entryCount").toInt() > 0;
+          },
+          2000);
       panel = window->findChild<QQuickItem*>(QStringLiteral("editorLutPanel"));
     }
   }
@@ -375,12 +421,11 @@ TEST(EditorLutPanelQmlTest, PointerClickOnVisibleRowDoesNotChangeContentY) {
   ASSERT_GT(count, 10);
   const qreal content_h = list->property("contentHeight").toReal();
   ASSERT_GT(content_h, list->height());
-  const qreal row_h = content_h / static_cast<qreal>(count);
+  const qreal row_h        = content_h / static_cast<qreal>(count);
 
   // Scroll so file index 12 is inside the viewport, then click its center.
-  const int target_index = 12;  // lut_11 is index 12 if 0=None, 1=lut_00, ...
-  const qreal target_y =
-      std::max(0.0, target_index * row_h - list->height() * 0.35);
+  const int   target_index = 12;  // lut_11 is index 12 if 0=None, 1=lut_00, ...
+  const qreal target_y     = std::max(0.0, target_index * row_h - list->height() * 0.35);
   list->setProperty("contentY", target_y);
   ProcessEvents(100);
   ASSERT_GT(h.contentY(), 20.0);
@@ -389,16 +434,15 @@ TEST(EditorLutPanelQmlTest, PointerClickOnVisibleRowDoesNotChangeContentY) {
   ASSERT_GE(local_y, 0.0);
   ASSERT_LE(local_y, list->height());
 
-  const qreal y_before = h.contentY();
-  const int selects_before = h.model.select_count_;
-  const QPoint click = list->mapToScene(QPointF(list->width() * 0.55, local_y)).toPoint();
+  const qreal  y_before       = h.contentY();
+  const int    selects_before = h.model.select_count_;
+  const QPoint click          = list->mapToScene(QPointF(list->width() * 0.55, local_y)).toPoint();
   QTest::mouseClick(h.window, Qt::LeftButton, Qt::NoModifier, click);
   ProcessEvents(150);
 
   EXPECT_GT(h.model.select_count_, selects_before) << "pointer click missed LUT row";
   EXPECT_FALSE(h.model.last_selected_path_.isEmpty());
-  EXPECT_NEAR(h.contentY(), y_before, 1.5)
-      << "contentY jumped after pointer selection";
+  EXPECT_NEAR(h.contentY(), y_before, 1.5) << "contentY jumped after pointer selection";
 }
 
 TEST(EditorLutPanelQmlTest, SelectingEntryDoesNotEmitModelEntriesChanged) {
@@ -420,11 +464,11 @@ TEST(EditorLutPanelQmlTest, SelectingEntryDoesNotEmitModelEntriesChanged) {
 TEST(EditorLutPanelQmlTest, FavoriteStarToggleUpdatesFavoritePathsWithoutListReset) {
   LutPanelHarness h;
   ASSERT_NE(h.panel, nullptr);
-  const int count_before = h.panel->property("entryCount").toInt();
-  const qreal y_before   = h.contentY();
+  const int   count_before = h.panel->property("entryCount").toInt();
+  const qreal y_before     = h.contentY();
 
   // Toggle favorite on a known path via the model (star MouseArea is dense).
-  QSignalSpy fav_spy(&h.model, &FakeLutCatalogModel::favoritePathsChanged);
+  QSignalSpy  fav_spy(&h.model, &FakeLutCatalogModel::favoritePathsChanged);
   h.model.toggleFavoritePath(QStringLiteral("D:/fake/lut_03.cube"));
   ProcessEvents(60);
   EXPECT_EQ(fav_spy.count(), 1);
@@ -480,10 +524,8 @@ TEST(EditorLutPanelQmlTest, SelectedFillAndFavoriteStarsUseListViTokens) {
             theme.editorListFavoriteActiveOnSelectedColor());
   EXPECT_EQ(h.panel->property("colInvalid").value<QColor>(), theme.dangerColor());
   // Invert pair must differ from the dark-row pair so selected stars flip.
-  EXPECT_NE(theme.editorListFavoriteIdleColor(),
-            theme.editorListFavoriteIdleOnSelectedColor());
-  EXPECT_NE(theme.editorListFavoriteActiveColor(),
-            theme.editorListFavoriteActiveOnSelectedColor());
+  EXPECT_NE(theme.editorListFavoriteIdleColor(), theme.editorListFavoriteIdleOnSelectedColor());
+  EXPECT_NE(theme.editorListFavoriteActiveColor(), theme.editorListFavoriteActiveOnSelectedColor());
 }
 
 TEST(EditorLutPanelQmlTest, LoadFromSnapshotRestoresSelectedPathWithoutSubmit) {
@@ -520,9 +562,9 @@ TEST(EditorLutPanelQmlTest, LoadFromSnapshotRestoresSelectedPathWithoutSubmit) {
 
   // Empty / missing lut field must select None (do not keep a stale path).
   {
-    QJSValue snap      = engine->newObject();
-    QJSValue panel_js  = engine->newQObject(h.panel);
-    QJSValue fn        = panel_js.property(QStringLiteral("loadFromSnapshot"));
+    QJSValue snap     = engine->newObject();
+    QJSValue panel_js = engine->newQObject(h.panel);
+    QJSValue fn       = panel_js.property(QStringLiteral("loadFromSnapshot"));
     ASSERT_TRUE(fn.isCallable());
     const QJSValue result = fn.callWithInstance(panel_js, QJSValueList{snap});
     EXPECT_FALSE(result.isError()) << result.toString().toStdString();
@@ -538,8 +580,111 @@ TEST(EditorLutPanelQmlTest, EntryRowHeightIsUniformForNoneAndFile) {
   const int row_h = h.panel->property("entryRowHeight").toInt();
   EXPECT_GT(row_h, 0);
   // Token composition: body + caption + spaceSm line band.
-  EXPECT_EQ(row_h, AppTheme::Instance().lineHeightBody() + AppTheme::Instance().lineHeightCaption()
-                        + AppTheme::Instance().spaceSm());
+  EXPECT_EQ(row_h, AppTheme::Instance().lineHeightBody() +
+                       AppTheme::Instance().lineHeightCaption() + AppTheme::Instance().spaceSm());
+}
+
+TEST(EditorLutPanelQmlTest, UpAndDownSelectUsableLutsWithoutRebuildingTheCatalog) {
+  LutPanelHarness h;
+  ASSERT_NE(h.panel, nullptr) << h.warnings.join(QLatin1Char('\n')).toStdString();
+  auto* list = h.listView();
+  ASSERT_NE(list, nullptr);
+  ASSERT_TRUE(WaitUntil([&] { return list->width() > 10 && list->height() > 10; }, 2000));
+
+  // Start on a known row: None sits at index 0 with an empty path.
+  h.model.selectPath(QStringLiteral("D:/fake/lut_00.cube"));
+  ProcessEvents(40);
+  const int  selects_before = h.model.select_count_;
+
+  QSignalSpy entries_spy(&h.model, &FakeLutCatalogModel::entriesChanged);
+  ASSERT_TRUE(entries_spy.isValid());
+  const int entries_before = entries_spy.count();
+
+  list->forceActiveFocus();
+  ProcessEvents(40);
+  QTest::keyClick(h.window, Qt::Key_Down);
+  ProcessEvents(80);
+  EXPECT_EQ(h.model.selectedPath(), QStringLiteral("D:/fake/lut_01.cube"));
+  QTest::keyClick(h.window, Qt::Key_Down);
+  ProcessEvents(80);
+  EXPECT_EQ(h.model.selectedPath(), QStringLiteral("D:/fake/lut_02.cube"));
+  QTest::keyClick(h.window, Qt::Key_Up);
+  ProcessEvents(80);
+  EXPECT_EQ(h.model.selectedPath(), QStringLiteral("D:/fake/lut_01.cube"));
+
+  // Selection moved through selectPath only — the catalog model never
+  // re-emitted entriesChanged, so no list rebuild happened.
+  EXPECT_EQ(h.model.select_count_, selects_before + 3);
+  EXPECT_EQ(entries_spy.count(), entries_before);
+  EXPECT_GT(h.panel->property("entryCount").toInt(), 40);
+}
+
+TEST(EditorLutPanelQmlTest, LutArrowSelectionSkipsMissingAndDisabledRows) {
+  LutPanelHarness h;
+  ASSERT_NE(h.panel, nullptr) << h.warnings.join(QLatin1Char('\n')).toStdString();
+  auto* list = h.listView();
+  ASSERT_NE(list, nullptr);
+  ASSERT_TRUE(WaitUntil([&] { return list->width() > 10 && list->height() > 10; }, 2000));
+
+  // Catalog with an unusable row (missing file) and a disabled row wedged
+  // between two usable files.
+  QVariantList rows;
+  rows.push_back(FakeLutCatalogModel::Entry(QStringLiteral("none"), QString(),
+                                            QStringLiteral("None"), true, true));
+  rows.push_back(FakeLutCatalogModel::Entry(
+      QStringLiteral("file"), QStringLiteral("D:/fake/a.cube"), QStringLiteral("A"), true, true));
+  rows.push_back(FakeLutCatalogModel::Entry(QStringLiteral("missing"),
+                                            QStringLiteral("D:/fake/missing.cube"),
+                                            QStringLiteral("Missing"), false, false));
+  rows.push_back(FakeLutCatalogModel::Entry(QStringLiteral("file"),
+                                            QStringLiteral("D:/fake/disabled.cube"),
+                                            QStringLiteral("Disabled"), true, false));
+  rows.push_back(FakeLutCatalogModel::Entry(
+      QStringLiteral("file"), QStringLiteral("D:/fake/b.cube"), QStringLiteral("B"), true, true));
+  h.model.ResetEntries(std::move(rows));
+  ProcessEvents(80);
+
+  h.model.selectPath(QStringLiteral("D:/fake/a.cube"));
+  ProcessEvents(40);
+
+  list->forceActiveFocus();
+  ProcessEvents(40);
+  QTest::keyClick(h.window, Qt::Key_Down);
+  ProcessEvents(80);
+  // Down must skip both the missing and the disabled rows and land on B.
+  EXPECT_EQ(h.model.selectedPath(), QStringLiteral("D:/fake/b.cube"));
+  QTest::keyClick(h.window, Qt::Key_Up);
+  ProcessEvents(80);
+  EXPECT_EQ(h.model.selectedPath(), QStringLiteral("D:/fake/a.cube"));
+  QTest::keyClick(h.window, Qt::Key_Up);
+  ProcessEvents(80);
+  // Up past A wraps within selectable rows (None is selectable).
+  EXPECT_EQ(h.model.selectedPath(), QString());
+}
+
+TEST(EditorLutPanelQmlTest, LutSearchFieldKeepsNativeArrowInput) {
+  LutPanelHarness h;
+  ASSERT_NE(h.panel, nullptr) << h.warnings.join(QLatin1Char('\n')).toStdString();
+  auto* list   = h.listView();
+  auto* filter = h.find(QStringLiteral("editorLutFilterInput"));
+  ASSERT_NE(list, nullptr);
+  ASSERT_NE(filter, nullptr);
+
+  h.model.selectPath(QStringLiteral("D:/fake/lut_00.cube"));
+  ProcessEvents(40);
+  const int selects_before = h.model.select_count_;
+
+  // While the filter TextInput owns focus, arrows stay inside the field and
+  // never drive LUT selection.
+  filter->forceActiveFocus();
+  ProcessEvents(40);
+  ASSERT_TRUE(filter->hasActiveFocus());
+  QTest::keyClick(h.window, Qt::Key_Down);
+  ProcessEvents(80);
+  QTest::keyClick(h.window, Qt::Key_Up);
+  ProcessEvents(80);
+  EXPECT_EQ(h.model.select_count_, selects_before);
+  EXPECT_EQ(h.model.selectedPath(), QStringLiteral("D:/fake/lut_00.cube"));
 }
 
 }  // namespace
