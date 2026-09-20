@@ -189,7 +189,7 @@
 <context>
     <name>AdjustmentSlider</name>
     <message>
-        <location filename="../qml/AdjustmentSlider.qml" line="+266"/>
+        <location filename="../qml/AdjustmentSlider.qml" line="+267"/>
         <source>Out of range</source>
         <translation>超出范围</translation>
     </message>
@@ -207,120 +207,152 @@
 <context>
     <name>AdjustmentTransferDialog</name>
     <message>
-        <location filename="../qml/AdjustmentTransferDialog.qml" line="+132"/>
+        <location filename="../qml/AdjustmentTransferDialog.qml" line="+70"/>
         <source>Other</source>
         <translation>其他</translation>
     </message>
     <message>
-        <location line="+43"/>
-        <source>Imported</source>
-        <translation>已导入</translation>
-    </message>
-    <message>
-        <location line="+6"/>
+        <location line="+64"/>
+        <location line="+4"/>
         <source>Copy Adjustments</source>
         <translation>复制调整</translation>
     </message>
     <message>
-        <location line="+0"/>
-        <location line="+6"/>
+        <location line="-4"/>
+        <location line="+4"/>
         <source>Paste Adjustments</source>
         <translation>粘贴调整</translation>
     </message>
     <message>
-        <location line="+2"/>
-        <source>Copy %1 Settings</source>
-        <translation>复制 %1 设置</translation>
+        <location line="+236"/>
+        <source>Items</source>
+        <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+107"/>
+        <location line="-127"/>
         <source>Close</source>
         <translation>关闭</translation>
     </message>
     <message>
-        <location line="+177"/>
-        <source>Active · %1</source>
-        <translation>当前 · %1</translation>
-    </message>
-    <message>
-        <location line="-107"/>
-        <source>Source Versions</source>
-        <translation>源版本</translation>
-    </message>
-    <message>
-        <location line="-180"/>
-        <source>Merge Adjustments</source>
-        <translation>合并调整</translation>
-    </message>
-    <message>
-        <location line="+341"/>
-        <source>Transfer Strategy</source>
-        <translation>传输策略</translation>
-    </message>
-    <message>
-        <location line="+11"/>
-        <source>Paste</source>
-        <translation>粘贴</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Merge</source>
-        <translation>合并</translation>
-    </message>
-    <message>
-        <location line="+12"/>
-        <source>Merge resolves every conflict by using the incoming values only. Per-field conflict resolution isn&apos;t available when transferring to multiple images.</source>
-        <translation>合并时一律以传入值解决所有冲突。批量传输到多张图像时不提供逐项冲突解决。</translation>
-    </message>
-    <message>
-        <location line="+21"/>
-        <source>Parameters to Copy</source>
-        <translation>要复制的参数</translation>
-    </message>
-    <message>
-        <location line="+1"/>
+        <location line="+133"/>
         <source>Parameters to Paste</source>
         <translation>要粘贴的参数</translation>
     </message>
     <message>
-        <location line="+9"/>
-        <source>Select All</source>
-        <translation>全选</translation>
+        <location line="+50"/>
+        <source>Cancel</source>
+        <translation>取消</translation>
+    </message>
+</context>
+<context>
+    <name>AdjustmentTransferItemPane</name>
+    <message>
+        <location filename="../qml/AdjustmentTransferItemPane.qml" line="+19"/>
+        <source>Items</source>
+        <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+29"/>
-        <source>None</source>
-        <translation>无</translation>
-    </message>
-    <message>
-        <location line="+76"/>
-        <source>%1 of %2 settings selected</source>
-        <translation>已选择 %2 项设置中的 %1 项</translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source>%1 settings · %2 target images</source>
-        <translation>%1 项设置 · %2 张目标图像</translation>
-    </message>
-    <message>
-        <location line="+55"/>
-        <source>%1 section</source>
-        <translation>%1 分区</translation>
+        <location line="+16"/>
+        <source>Node</source>
+        <translation type="unfinished"></translation>
     </message>
     <message>
         <location line="+1"/>
-        <source>Expanded</source>
-        <translation>已展开</translation>
+        <source>Tone</source>
+        <translation type="unfinished">色调</translation>
     </message>
     <message>
-        <location line="+0"/>
-        <source>Collapsed</source>
-        <translation>已收起</translation>
+        <location line="+1"/>
+        <source>Look</source>
+        <translation type="unfinished">外观</translation>
     </message>
     <message>
-        <location line="-42"/>
-        <source>Cancel</source>
-        <translation>取消</translation>
+        <location line="+1"/>
+        <source>LUT</source>
+        <translation type="unfinished">LUT</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Display Transform</source>
+        <translation type="unfinished">显示变换</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Masks</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Other</source>
+        <translation type="unfinished">其他</translation>
+    </message>
+    <message>
+        <location line="+33"/>
+        <source>Select All</source>
+        <translation type="unfinished">全选</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>Clear</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+36"/>
+        <source>No transferable adjustments.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+75"/>
+        <location line="+32"/>
+        <location line="+43"/>
+        <source>Transfer all masks in this node</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>AdjustmentTransferNodePane</name>
+    <message>
+        <location filename="../qml/AdjustmentTransferNodePane.qml" line="+18"/>
+        <source>Nodes</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+43"/>
+        <source>Select All</source>
+        <translation type="unfinished">全选</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>Clear</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+113"/>
+        <source>Select all items in %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>AdjustmentTransferVersionPane</name>
+    <message>
+        <location filename="../qml/AdjustmentTransferVersionPane.qml" line="+17"/>
+        <source>Source Versions</source>
+        <translation type="unfinished">源版本</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Imported</source>
+        <translation type="unfinished">已导入</translation>
+    </message>
+    <message>
+        <location line="+65"/>
+        <source>Active Version</source>
+        <translation type="unfinished">当前版本</translation>
+    </message>
+    <message>
+        <location line="+91"/>
+        <source>Active</source>
+        <translation type="unfinished">已激活</translation>
     </message>
 </context>
 <context>
@@ -351,12 +383,12 @@
         <translation>跟随应用语言</translation>
     </message>
     <message>
-        <location line="+910"/>
+        <location line="+912"/>
         <source>Move task to background</source>
         <translation>将任务移至后台</translation>
     </message>
     <message>
-        <location line="-893"/>
+        <location line="-895"/>
         <source>评价严苛程度</source>
         <translation>评价严苛程度</translation>
     </message>
@@ -553,7 +585,7 @@
         <translation>结果会刷新焦点照片的图像检查器。打开图像页面可查看并编辑描述、评分和理由。</translation>
     </message>
     <message>
-        <location line="+27"/>
+        <location line="+29"/>
         <source>Protected by interaction locks; safe to continue in the background.</source>
         <translation>受交互锁保护，可以安全地在后台继续。</translation>
     </message>
@@ -581,12 +613,12 @@
 <context>
     <name>AiProviderSettingsPanel</name>
     <message>
-        <location filename="../qml/AiProviderSettingsPanel.qml" line="+159"/>
+        <location filename="../qml/AiProviderSettingsPanel.qml" line="+160"/>
         <source>The field value could not be saved.</source>
         <translation>字段值无法保存。</translation>
     </message>
     <message>
-        <location line="+96"/>
+        <location line="+120"/>
         <source>Follow app language</source>
         <translation>跟随应用语言</translation>
     </message>
@@ -611,7 +643,7 @@
         <translation>提供商设置</translation>
     </message>
     <message>
-        <location line="+107"/>
+        <location line="+109"/>
         <source>In use</source>
         <translation>使用中</translation>
     </message>
@@ -636,13 +668,13 @@
         <translation>点击上方的“+”按钮创建一个。</translation>
     </message>
     <message>
-        <location line="-135"/>
-        <location line="+169"/>
+        <location line="-137"/>
+        <location line="+171"/>
         <source>Add provider</source>
         <translation>添加提供商</translation>
     </message>
     <message>
-        <location line="-421"/>
+        <location line="-447"/>
         <source>Codex login did not finish yet. Complete `codex login`, then use Codex Login again.</source>
         <translation>Codex 登录尚未完成。请先完成 `codex login`，然后再次使用 Codex 登录。</translation>
     </message>
@@ -674,7 +706,7 @@
     </message>
     <message>
         <location line="+21"/>
-        <location line="+378"/>
+        <location line="+404"/>
         <source>Finish the current AI task before changing provider settings.</source>
         <translation>完成当前 AI 任务后再更改提供商设置。</translation>
     </message>
@@ -689,7 +721,7 @@
         <translation>选择一个模板以创建配置。</translation>
     </message>
     <message>
-        <location line="+95"/>
+        <location line="+97"/>
         <source>Provider</source>
         <translation>提供商</translation>
     </message>
@@ -699,12 +731,12 @@
         <translation>OpenAI OAuth</translation>
     </message>
     <message>
-        <location line="+12"/>
+        <location line="+11"/>
         <source>Use Codex Login</source>
         <translation>使用 Codex 登录</translation>
     </message>
     <message>
-        <location line="+9"/>
+        <location line="+8"/>
         <source>Open Login</source>
         <translation>打开登录</translation>
     </message>
@@ -719,7 +751,7 @@
         <translation>Codex 登录已启动。请完成浏览器流程；登录完成后将加载模型。</translation>
     </message>
     <message>
-        <location line="+10"/>
+        <location line="+9"/>
         <source>Disconnect</source>
         <translation>断开连接</translation>
     </message>
@@ -749,7 +781,7 @@
         <translation>粘贴 API 密钥</translation>
     </message>
     <message>
-        <location line="+14"/>
+        <location line="+13"/>
         <source>Save Key</source>
         <translation>保存密钥</translation>
     </message>
@@ -759,7 +791,7 @@
         <translation>API 密钥已保存</translation>
     </message>
     <message>
-        <location line="+7"/>
+        <location line="+6"/>
         <source>Delete Key</source>
         <translation>删除密钥</translation>
     </message>
@@ -869,12 +901,12 @@
         <translation>推荐渲染版本</translation>
     </message>
     <message>
-        <location line="+13"/>
+        <location line="+12"/>
         <source>Duplicate</source>
         <translation>复制</translation>
     </message>
     <message>
-        <location line="+14"/>
+        <location line="+13"/>
         <location line="+71"/>
         <source>Delete</source>
         <translation>删除</translation>
@@ -938,55 +970,9 @@
         <translation>搜索筛选</translation>
     </message>
     <message>
-        <location line="+36"/>
+        <location line="+38"/>
         <source>Filtered by search</source>
         <translation>按搜索筛选</translation>
-    </message>
-</context>
-<context>
-    <name>DateCommitGraph</name>
-    <message>
-        <source>Last year</source>
-        <translation>近一年</translation>
-    </message>
-    <message>
-        <source>Capture activity</source>
-        <translation>拍摄活跃度</translation>
-    </message>
-    <message>
-        <source>No photos on %1</source>
-        <translation>%1 没有照片</translation>
-    </message>
-    <message>
-        <source>%1 photo on %2</source>
-        <translation>%2 有 %1 张照片</translation>
-    </message>
-    <message>
-        <source>%1 photos on %2</source>
-        <translation>%2 有 %1 张照片</translation>
-    </message>
-    <message>
-        <source>Less</source>
-        <translation>少</translation>
-    </message>
-    <message>
-        <source>More</source>
-        <translation>多</translation>
-    </message>
-    <message>
-        <source>No capture dates</source>
-        <translation>没有拍摄日期</translation>
-    </message>
-</context>
-<context>
-    <name>DateFilterSection</name>
-    <message>
-        <source>Calendar</source>
-        <translation>日历</translation>
-    </message>
-    <message>
-        <source>Activity</source>
-        <translation>热力图</translation>
     </message>
 </context>
 <context>
@@ -1287,7 +1273,7 @@ Alcedo 将改用 %1。</translation>
         <translation>所选文件夹中未找到文件。</translation>
     </message>
     <message>
-        <location line="+95"/>
+        <location line="+93"/>
         <source>Discard</source>
         <translation type="unfinished">放弃</translation>
     </message>
@@ -1320,7 +1306,7 @@ Alcedo 将改用 %1。</translation>
 <context>
     <name>BackgroundTaskBar</name>
     <message>
-        <location filename="../qml/BackgroundTaskBar.qml" line="+64"/>
+        <location filename="../qml/BackgroundTaskBar.qml" line="+65"/>
         <source>AI Analysis</source>
         <translation>AI 分析</translation>
     </message>
@@ -1367,7 +1353,7 @@ Alcedo 将改用 %1。</translation>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+102"/>
+        <location line="+103"/>
         <source>+%1</source>
         <translation type="unfinished"></translation>
     </message>
@@ -1460,7 +1446,7 @@ Alcedo 将改用 %1。</translation>
         <translation>关闭</translation>
     </message>
     <message>
-        <location line="+171"/>
+        <location line="+170"/>
         <source>Details</source>
         <translation>详细信息</translation>
     </message>
@@ -1494,12 +1480,12 @@ Alcedo 将改用 %1。</translation>
     </message>
     <message>
         <location line="+6"/>
-        <location line="+97"/>
+        <location line="+99"/>
         <source>Select Thumbnail Cache Folder</source>
         <translation>选择缩略图缓存文件夹</translation>
     </message>
     <message>
-        <location line="-88"/>
+        <location line="-90"/>
         <source>Thumbnail cache</source>
         <translation>缩略图缓存</translation>
     </message>
@@ -1529,7 +1515,7 @@ Alcedo 将改用 %1。</translation>
         <translation>缓存目录</translation>
     </message>
     <message>
-        <location line="+50"/>
+        <location line="+52"/>
         <source>Limits</source>
         <translation>限制</translation>
     </message>
@@ -1593,7 +1579,7 @@ Alcedo 将改用 %1。</translation>
 <context>
     <name>CollapsibleSection</name>
     <message>
-        <location filename="../qml/CollapsibleSection.qml" line="+114"/>
+        <location filename="../qml/CollapsibleSection.qml" line="+116"/>
         <source>Collapse %1</source>
         <translation>收起 %1</translation>
     </message>
@@ -1606,7 +1592,7 @@ Alcedo 将改用 %1。</translation>
 <context>
     <name>CollectionsPanel</name>
     <message>
-        <location filename="../qml/CollectionsPanel.qml" line="+20"/>
+        <location filename="../qml/CollectionsPanel.qml" line="+22"/>
         <source>Search</source>
         <translation>搜索</translation>
     </message>
@@ -1616,7 +1602,17 @@ Alcedo 将改用 %1。</translation>
         <translation>后台任务</translation>
     </message>
     <message>
-        <location line="+231"/>
+        <location line="+153"/>
+        <source>Alcedo</source>
+        <translation type="unfinished">Alcedo</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Studio</source>
+        <translation type="unfinished">Studio</translation>
+    </message>
+    <message>
+        <location line="+98"/>
         <source>LOCAL FOLDERS</source>
         <translation>本地文件夹</translation>
     </message>
@@ -1641,7 +1637,7 @@ Alcedo 将改用 %1。</translation>
         <translation>收藏夹名称</translation>
     </message>
     <message>
-        <location line="+127"/>
+        <location line="+128"/>
         <source>No collections yet</source>
         <translation>还没有影集</translation>
     </message>
@@ -1661,7 +1657,7 @@ Alcedo 将改用 %1。</translation>
         <translation>导入图像</translation>
     </message>
     <message>
-        <location line="-591"/>
+        <location line="-625"/>
         <source>Advanced Content Analysis</source>
         <translation>高级内容分析</translation>
     </message>
@@ -1671,7 +1667,7 @@ Alcedo 将改用 %1。</translation>
         <translation>全部图片</translation>
     </message>
     <message>
-        <location line="+186"/>
+        <location line="+219"/>
         <source>Open a project before running remote analysis.</source>
         <translation>运行远程分析前请先打开项目。</translation>
     </message>
@@ -1679,6 +1675,62 @@ Alcedo 将改用 %1。</translation>
         <location line="+1"/>
         <source>Select one or more images for remote analysis.</source>
         <translation>请选择一张或多张图像进行远程分析。</translation>
+    </message>
+</context>
+<context>
+    <name>DateCommitGraph</name>
+    <message>
+        <location filename="../qml/DateCommitGraph.qml" line="+54"/>
+        <source>Last year</source>
+        <translation>近一年</translation>
+    </message>
+    <message>
+        <location line="+63"/>
+        <source>Capture activity</source>
+        <translation>拍摄活跃度</translation>
+    </message>
+    <message>
+        <location line="+300"/>
+        <source>No photos on %1</source>
+        <translation>%1 没有照片</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>%1 photo on %2</source>
+        <translation>%2 有 %1 张照片</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>%1 photos on %2</source>
+        <translation>%2 有 %1 张照片</translation>
+    </message>
+    <message>
+        <location line="+197"/>
+        <source>Less</source>
+        <translation>少</translation>
+    </message>
+    <message>
+        <location line="+18"/>
+        <source>More</source>
+        <translation>多</translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>No capture dates</source>
+        <translation>没有拍摄日期</translation>
+    </message>
+</context>
+<context>
+    <name>DateFilterSection</name>
+    <message>
+        <location filename="../qml/DateFilterSection.qml" line="+26"/>
+        <source>Calendar</source>
+        <translation>日历</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Activity</source>
+        <translation>热力图</translation>
     </message>
 </context>
 <context>
@@ -1707,50 +1759,69 @@ Original source files on disk will be kept.</source>
     </message>
 </context>
 <context>
+    <name>EditorAdjustmentHeader</name>
+    <message>
+        <location filename="../qml/EditorAdjustmentHeader.qml" line="+140"/>
+        <source>Radial</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+25"/>
+        <source>Gradient</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
     <name>EditorAdjustmentStack</name>
     <message>
-        <location filename="../qml/EditorAdjustmentStack.qml" line="+134"/>
-        <location line="+61"/>
+        <location filename="../qml/EditorAdjustmentStack.qml" line="+51"/>
+        <location line="+126"/>
         <source>Look</source>
         <translation>外观</translation>
     </message>
     <message>
-        <location line="-60"/>
-        <location line="+62"/>
+        <location line="-124"/>
+        <location line="+125"/>
         <source>LUT</source>
         <translation>LUT</translation>
     </message>
     <message>
-        <location line="-61"/>
-        <location line="+63"/>
+        <location line="-123"/>
+        <location line="+124"/>
         <source>Display Transform</source>
         <translation>显示变换</translation>
     </message>
     <message>
-        <location line="-62"/>
-        <location line="+65"/>
+        <location line="-121"/>
+        <location line="+122"/>
         <source>Geometry</source>
         <translation>几何</translation>
     </message>
     <message>
-        <location line="-64"/>
-        <location line="+67"/>
+        <location line="-120"/>
+        <location line="+121"/>
         <source>RAW Decode</source>
         <translation>RAW 解码</translation>
     </message>
     <message>
-        <location line="-66"/>
-        <location line="+54"/>
+        <location line="-132"/>
+        <location line="+134"/>
         <source>Tone</source>
         <translation>色调</translation>
     </message>
     <message>
-        <location line="-48"/>
+        <location line="-121"/>
+        <location line="+120"/>
+        <source>Mask</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+7"/>
         <source>Select an image to enable adjustments</source>
         <translation>选择图像以启用调整</translation>
     </message>
     <message>
-        <location line="+3"/>
+        <location line="+2"/>
         <source>No adjustments yet</source>
         <translation>尚无调整</translation>
     </message>
@@ -1758,7 +1829,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>EditorCloseConfirmDialog</name>
     <message>
-        <location filename="../qml/EditorCloseConfirmDialog.qml" line="+85"/>
+        <location filename="../qml/EditorCloseConfirmDialog.qml" line="+86"/>
         <source>Unsaved Edits</source>
         <translation>未保存的编辑</translation>
     </message>
@@ -1786,6 +1857,40 @@ Original source files on disk will be kept.</source>
         <location line="+17"/>
         <source>Save</source>
         <translation>保存</translation>
+    </message>
+</context>
+<context>
+    <name>EditorDetailPanel</name>
+    <message>
+        <location filename="../qml/EditorDetailPanel.qml" line="+109"/>
+        <source>Clarity</source>
+        <translation type="unfinished">清晰度</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Sharpen</source>
+        <translation type="unfinished">锐化</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Film Grain</source>
+        <translation type="unfinished">胶片颗粒</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Halation</source>
+        <translation type="unfinished">光晕</translation>
+    </message>
+    <message>
+        <location line="+57"/>
+        <location line="+9"/>
+        <source>Detail</source>
+        <translation type="unfinished">细节</translation>
+    </message>
+    <message>
+        <location line="+37"/>
+        <source>Texture</source>
+        <translation type="unfinished">纹理</translation>
     </message>
 </context>
 <context>
@@ -2064,11 +2169,24 @@ Original source files on disk will be kept.</source>
     </message>
 </context>
 <context>
+    <name>EditorEndpointNodeDelegate</name>
+    <message>
+        <location filename="../qml/EditorEndpointNodeDelegate.qml" line="+27"/>
+        <source>Develop cannot be renamed or deleted</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>DRT/Post cannot be renamed or deleted</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
     <name>EditorFilmstrip</name>
     <message>
-        <location filename="../qml/EditorFilmstrip.qml" line="+241"/>
+        <location filename="../qml/EditorFilmstrip.qml" line="+296"/>
         <location line="+32"/>
-        <location line="+264"/>
+        <location line="+302"/>
         <source>(unnamed)</source>
         <translation type="unfinished">（未命名）</translation>
     </message>
@@ -2098,12 +2216,12 @@ Original source files on disk will be kept.</source>
         <translation>收起胶片带</translation>
     </message>
     <message>
-        <location line="+283"/>
+        <location line="+300"/>
         <source> | Rating %1/5</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-211"/>
+        <location line="-227"/>
         <source>No images in filmstrip</source>
         <translation>胶片带中没有图像</translation>
     </message>
@@ -2113,18 +2231,18 @@ Original source files on disk will be kept.</source>
         <translation>没有图像</translation>
     </message>
     <message>
-        <location line="+108"/>
+        <location line="+124"/>
         <source>Source file was moved or deleted</source>
         <translation>源文件已被移动或删除</translation>
     </message>
     <message>
-        <location line="-193"/>
-        <location line="+202"/>
+        <location line="-209"/>
+        <location line="+218"/>
         <source>Image %1</source>
         <translation>图像 %1</translation>
     </message>
     <message>
-        <location line="-276"/>
+        <location line="-293"/>
         <source>Editing %1</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2134,7 +2252,7 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+277"/>
+        <location line="+294"/>
         <source>Current image</source>
         <translation>当前图像</translation>
     </message>
@@ -2240,7 +2358,12 @@ Original source files on disk will be kept.</source>
         <translation>几何</translation>
     </message>
     <message>
-        <location line="+8"/>
+        <location line="+10"/>
+        <source>Geometry applies to the whole image.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+7"/>
         <source>Source aspect %1</source>
         <translation>源宽高比 %1</translation>
     </message>
@@ -2273,7 +2396,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>EditorHistoryTransactionEntry</name>
     <message>
-        <location filename="../qml/EditorHistoryTransactionEntry.qml" line="+65"/>
+        <location filename="../qml/EditorHistoryTransactionEntry.qml" line="+61"/>
         <source>Earlier</source>
         <translation type="unfinished">较早</translation>
     </message>
@@ -2298,61 +2421,25 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished">%1 天前</translation>
     </message>
     <message>
-        <location line="+55"/>
+        <location line="+54"/>
         <source>Commit %1</source>
         <translation type="unfinished">提交 %1</translation>
     </message>
     <message>
-        <location line="+40"/>
-        <source>Merge</source>
-        <translation type="unfinished">合并</translation>
-    </message>
-    <message>
-        <location line="+2"/>
+        <location line="+41"/>
         <source>Adjustment</source>
         <translation type="unfinished">调整</translation>
-    </message>
-    <message>
-        <location line="+47"/>
-        <source>2nd %1</source>
-        <translation type="unfinished">第 2 个 %1</translation>
-    </message>
-    <message>
-        <location line="+16"/>
-        <source>Resolved adjustments</source>
-        <translation type="unfinished">已解决的调整</translation>
     </message>
 </context>
 <context>
     <name>EditorHistoryTransactionsPanel</name>
     <message>
-        <location filename="../qml/EditorHistoryTransactionsPanel.qml" line="+59"/>
-        <source>Adjustment transfer is unavailable</source>
-        <translation>调整传递不可用</translation>
-    </message>
-    <message>
-        <location line="+5"/>
-        <location line="+28"/>
-        <source>Merge completed</source>
-        <translation>合并完成</translation>
-    </message>
-    <message>
-        <location line="-23"/>
-        <source>Merge cancelled</source>
-        <translation>合并已取消</translation>
-    </message>
-    <message>
-        <location line="+8"/>
+        <location filename="../qml/EditorHistoryTransactionsPanel.qml" line="+53"/>
         <source>Adjustments pasted</source>
         <translation>已粘贴调整</translation>
     </message>
     <message>
-        <location line="+7"/>
-        <source>Merge could not start</source>
-        <translation>无法开始合并</translation>
-    </message>
-    <message>
-        <location line="+28"/>
+        <location line="+20"/>
         <source>Edit History</source>
         <translation>编辑历史</translation>
     </message>
@@ -2368,23 +2455,20 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <location line="+27"/>
+        <location line="+1"/>
         <source>Undo edit</source>
         <translation>撤销编辑</translation>
     </message>
     <message>
-        <location line="+16"/>
+        <location line="+17"/>
+        <location line="+1"/>
         <source>Redo edit</source>
         <translation>重做编辑</translation>
     </message>
     <message>
-        <location line="+18"/>
+        <location line="+19"/>
         <source>Paste adjustments as a new Version</source>
         <translation>将调整作为新版本粘贴</translation>
-    </message>
-    <message>
-        <location line="+16"/>
-        <source>Merge adjustments into this Version</source>
-        <translation>将调整合并到此版本</translation>
     </message>
     <message>
         <location line="+9"/>
@@ -2400,37 +2484,37 @@ Original source files on disk will be kept.</source>
 <context>
     <name>EditorLookPanel</name>
     <message>
-        <location filename="../qml/EditorLookPanel.qml" line="+212"/>
+        <location filename="../qml/EditorLookPanel.qml" line="+186"/>
         <source>Saturation</source>
         <translation>饱和度</translation>
     </message>
     <message>
-        <location line="+13"/>
+        <location line="+12"/>
         <source>Vibrance</source>
         <translation>自然饱和度</translation>
     </message>
     <message>
-        <location line="+23"/>
+        <location line="+22"/>
         <source>Clarity</source>
         <translation>清晰度</translation>
     </message>
     <message>
-        <location line="+13"/>
+        <location line="+12"/>
         <source>Sharpen</source>
         <translation>锐化</translation>
     </message>
     <message>
-        <location line="+15"/>
+        <location line="+12"/>
         <source>Film Grain</source>
         <translation>胶片颗粒</translation>
     </message>
     <message>
-        <location line="+15"/>
+        <location line="+12"/>
         <source>Halation</source>
         <translation>光晕</translation>
     </message>
     <message>
-        <location line="+320"/>
+        <location line="+287"/>
         <source>Master</source>
         <translation>主控</translation>
     </message>
@@ -2441,36 +2525,6 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <location line="+9"/>
-        <source>White Balance</source>
-        <translation>白平衡</translation>
-    </message>
-    <message>
-        <location line="+16"/>
-        <source>As Shot</source>
-        <translation>按拍摄参数</translation>
-    </message>
-    <message>
-        <location line="+6"/>
-        <source>Custom</source>
-        <translation>自定义</translation>
-    </message>
-    <message>
-        <location line="+12"/>
-        <source>White balance is unavailable for this image.</source>
-        <translation>此图像无法使用白平衡。</translation>
-    </message>
-    <message>
-        <location line="+7"/>
-        <source>Temperature</source>
-        <translation>色温</translation>
-    </message>
-    <message>
-        <location line="+20"/>
-        <source>Tint</source>
-        <translation>色调</translation>
-    </message>
-    <message>
-        <location line="+23"/>
         <source>Color</source>
         <translation>颜色</translation>
     </message>
@@ -2530,14 +2584,487 @@ Original source files on disk will be kept.</source>
         <translation>重置色轮</translation>
     </message>
     <message>
-        <location line="+10"/>
+        <location line="+9"/>
         <source>Detail</source>
         <translation>细节</translation>
     </message>
     <message>
-        <location line="+29"/>
+        <location line="+28"/>
         <source>Texture</source>
         <translation>纹理</translation>
+    </message>
+</context>
+<context>
+    <name>EditorMaskGroupDelegate</name>
+    <message>
+        <location filename="../qml/EditorMaskGroupDelegate.qml" line="+88"/>
+        <source>Unlock %1 before deleting</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+223"/>
+        <source>Mask Group</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>expanded</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>collapsed</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Mask</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Masks</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>deletion locked</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>disabled</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>selected</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Press Left to collapse</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Press Right to expand</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Drag to reorder or press Ctrl+Up or Ctrl+Down</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+194"/>
+        <source>Unlock %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Lock %1 against deletion</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+26"/>
+        <source>Delete %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+70"/>
+        <source>No masks</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>EditorMaskGroupMaskRow</name>
+    <message>
+        <location filename="../qml/EditorMaskGroupMaskRow.qml" line="+42"/>
+        <source>Gradient</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Radial</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+29"/>
+        <source>Mask</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <location line="+133"/>
+        <location line="+1"/>
+        <source>%1% opacity</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-132"/>
+        <source>disabled</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>selected</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+129"/>
+        <source>Off</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+28"/>
+        <source>Delete %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>EditorMaskGroupsPanel</name>
+    <message>
+        <location filename="../qml/EditorMaskGroupsPanel.qml" line="+55"/>
+        <source>Open an image to edit Mask Groups</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Finish the node graph first</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Updating node graph</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>The session is not editable</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+314"/>
+        <location line="+7"/>
+        <source>Mask Groups</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>Add Mask Group</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+38"/>
+        <source>Locate unfinished node %1 in Nodes</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+259"/>
+        <location line="+8"/>
+        <source>Select an image to edit Mask Groups</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <location line="+8"/>
+        <source>Loading Mask Groups</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <location line="+8"/>
+        <source>No Mask Groups</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>EditorMasksContextPanel</name>
+    <message>
+        <location filename="../qml/EditorMasksContextPanel.qml" line="+79"/>
+        <source>Mask</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Draw on the photograph to create the Mask.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Select a Mask in the Node drawer or choose a Mask tool.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Name</source>
+        <translation type="unfinished">名称</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Mask name</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+35"/>
+        <source>Enabled</source>
+        <translation type="unfinished">已启用</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Invert</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Opacity</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Mask opacity</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+17"/>
+        <location line="+100"/>
+        <location line="+28"/>
+        <location line="+56"/>
+        <location line="+28"/>
+        <location line="+27"/>
+        <source>%1 percent</source>
+        <translation type="unfinished">%1%</translation>
+    </message>
+    <message>
+        <location line="-232"/>
+        <source>Position</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Mask position. Arrow keys move; Shift steps faster.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+53"/>
+        <source>Arrow keys move · Shift ×10</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Horizontal radius</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Mask horizontal radius</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>Vertical radius</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Mask vertical radius</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>Rotation</source>
+        <translation type="unfinished">旋转</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Mask rotation</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+17"/>
+        <source>%1 degrees</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Inner feather</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Mask inner feather</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+21"/>
+        <source>Outer feather</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Mask outer feather</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>Transition width</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Mask transition width</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>EditorNodeDelegate</name>
+    <message>
+        <location filename="../qml/EditorNodeDelegate.qml" line="+41"/>
+        <source>Locked against deletion</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Masks expanded</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Masks collapsed</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>EditorNodeMaskDrawer</name>
+    <message>
+        <location filename="../qml/EditorNodeMaskDrawer.qml" line="+114"/>
+        <source>Collapse Masks</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Expand Masks</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <location line="+44"/>
+        <source>Masks</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>EditorNodeMaskTypeRow</name>
+    <message>
+        <location filename="../qml/EditorNodeMaskTypeRow.qml" line="+21"/>
+        <source>Gradient</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Radial</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+95"/>
+        <source>Delete %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>EditorNodePortDelegate</name>
+    <message>
+        <location filename="../qml/EditorNodePortDelegate.qml" line="+19"/>
+        <source>Output</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Input</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>EditorNodesPanel</name>
+    <message>
+        <location filename="../qml/EditorNodesPanel.qml" line="+434"/>
+        <location line="+7"/>
+        <source>Nodes</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+17"/>
+        <location line="+1"/>
+        <source>Add Color Grade</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+24"/>
+        <source>Color Grade name</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <location line="+241"/>
+        <location line="+1"/>
+        <source>Rename Color Grade</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-214"/>
+        <source>Accept Rename</source>
+        <translation type="unfinished">接受重命名</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <location line="+6"/>
+        <location line="+98"/>
+        <source>Updating node graph</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-88"/>
+        <source>Select a destination node and press Enter</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+41"/>
+        <location line="+8"/>
+        <source>Select an image to edit nodes</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <location line="+8"/>
+        <source>Loading node graph</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>Nodes graph, connecting</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Nodes graph</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+90"/>
+        <location line="+1"/>
+        <source>Fit</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+23"/>
+        <source>Delete Selected Nodes</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Delete Color Grade</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
@@ -2558,13 +3085,14 @@ Original source files on disk will be kept.</source>
         <translation>默认</translation>
     </message>
     <message>
-        <location line="+89"/>
+        <location line="+142"/>
         <location line="+10"/>
         <source>RAW Decode</source>
         <translation>RAW 解码</translation>
     </message>
     <message>
-        <location line="+41"/>
+        <location line="+22"/>
+        <location line="+42"/>
         <source>Method</source>
         <translation>方法</translation>
     </message>
@@ -2628,37 +3156,37 @@ Original source files on disk will be kept.</source>
 <context>
     <name>EditorTonePanel</name>
     <message>
-        <location filename="../qml/EditorTonePanel.qml" line="+137"/>
+        <location filename="../qml/EditorTonePanel.qml" line="+130"/>
         <source>Exposure</source>
         <translation>曝光</translation>
     </message>
     <message>
-        <location line="+13"/>
+        <location line="+12"/>
         <source>Contrast</source>
         <translation>对比度</translation>
     </message>
     <message>
-        <location line="+13"/>
+        <location line="+12"/>
         <source>Highlights</source>
         <translation>高光</translation>
     </message>
     <message>
-        <location line="+13"/>
+        <location line="+12"/>
         <source>Shadows</source>
         <translation>阴影</translation>
     </message>
     <message>
-        <location line="+13"/>
+        <location line="+12"/>
         <source>Whites</source>
         <translation>白色色阶</translation>
     </message>
     <message>
-        <location line="+13"/>
+        <location line="+12"/>
         <source>Blacks</source>
         <translation>黑色色阶</translation>
     </message>
     <message>
-        <location line="+13"/>
+        <location line="+12"/>
         <location line="+148"/>
         <source>Tone Curve</source>
         <translation>色调曲线</translation>
@@ -2678,12 +3206,13 @@ Original source files on disk will be kept.</source>
 <context>
     <name>EditorVersionsPanel</name>
     <message>
-        <location filename="../qml/EditorVersionsPanel.qml" line="+114"/>
+        <location filename="../qml/EditorVersionsPanel.qml" line="+132"/>
+        <location line="+176"/>
         <source>Version %1</source>
         <translation>版本 %1</translation>
     </message>
     <message>
-        <location line="+38"/>
+        <location line="-138"/>
         <source>Version operation failed</source>
         <translation>版本操作失败</translation>
     </message>
@@ -2693,7 +3222,7 @@ Original source files on disk will be kept.</source>
         <translation>当前版本没有可用于创建分支的提交</translation>
     </message>
     <message>
-        <location line="+106"/>
+        <location line="+118"/>
         <source>Versions</source>
         <translation>版本</translation>
     </message>
@@ -2704,18 +3233,19 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <location line="+16"/>
+        <location line="+2"/>
         <source>Fork new version from root</source>
         <translation>从根节点创建新版本</translation>
     </message>
     <message>
         <location line="+25"/>
         <location line="+28"/>
-        <location line="+207"/>
+        <location line="+209"/>
         <source>Rename Version</source>
         <translation>重命名版本</translation>
     </message>
     <message>
-        <location line="-234"/>
+        <location line="-236"/>
         <location line="+29"/>
         <source>Branch from current</source>
         <translation>从当前版本创建分支</translation>
@@ -2748,12 +3278,12 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <location line="+24"/>
-        <location line="+169"/>
+        <location line="+171"/>
         <source>Version checkout is unavailable</source>
         <translation>无法进行版本检出</translation>
     </message>
     <message>
-        <location line="-104"/>
+        <location line="-105"/>
         <source>Active Version</source>
         <translation>当前版本</translation>
     </message>
@@ -2763,7 +3293,7 @@ Original source files on disk will be kept.</source>
         <translation>已命名版本</translation>
     </message>
     <message>
-        <location line="+40"/>
+        <location line="+41"/>
         <source>Commit %1</source>
         <translation>提交 %1</translation>
     </message>
@@ -2784,9 +3314,42 @@ Original source files on disk will be kept.</source>
     </message>
 </context>
 <context>
+    <name>EditorWhiteBalanceSection</name>
+    <message>
+        <location filename="../qml/EditorWhiteBalanceSection.qml" line="+45"/>
+        <source>White Balance</source>
+        <translation type="unfinished">白平衡</translation>
+    </message>
+    <message>
+        <location line="+24"/>
+        <source>As Shot</source>
+        <translation type="unfinished">按拍摄参数</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Custom</source>
+        <translation type="unfinished">自定义</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>White balance is unavailable for this image.</source>
+        <translation type="unfinished">此图像无法使用白平衡。</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Temperature</source>
+        <translation type="unfinished">色温</translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>Tint</source>
+        <translation type="unfinished">色调</translation>
+    </message>
+</context>
+<context>
     <name>EditorWorkspace</name>
     <message>
-        <location filename="../qml/EditorWorkspace.qml" line="+124"/>
+        <location filename="../qml/EditorWorkspace.qml" line="+133"/>
         <source>Editor viewport</source>
         <translation>编辑器视口</translation>
     </message>
@@ -2813,7 +3376,7 @@ Original source files on disk will be kept.</source>
         <translation>从图库打开图像，或让此工作区保持就绪以接收搜索结果。</translation>
     </message>
     <message>
-        <location line="+77"/>
+        <location line="+89"/>
         <source>Preparing image viewport</source>
         <translation>正在准备图像视口</translation>
     </message>
@@ -2836,7 +3399,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>EditorWorkspaceNavigation</name>
     <message>
-        <location filename="../qml/EditorWorkspaceNavigation.qml" line="+142"/>
+        <location filename="../qml/EditorWorkspaceNavigation.qml" line="+148"/>
         <source>Library</source>
         <translation>图库</translation>
     </message>
@@ -2849,12 +3412,12 @@ Original source files on disk will be kept.</source>
 <context>
     <name>EditorWorkspaceRail</name>
     <message>
-        <location filename="../qml/EditorWorkspaceRail.qml" line="+37"/>
+        <location filename="../qml/EditorWorkspaceRail.qml" line="+38"/>
         <source>Resolve the editor save first</source>
         <translation type="unfinished">请先处理编辑器保存</translation>
     </message>
     <message>
-        <location line="+164"/>
+        <location line="+195"/>
         <source>Hide Edit History</source>
         <translation type="unfinished">隐藏编辑历史</translation>
     </message>
@@ -2872,6 +3435,26 @@ Original source files on disk will be kept.</source>
         <location line="+0"/>
         <source>Show Versions</source>
         <translation type="unfinished">显示版本</translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>Hide Nodes</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Show Nodes</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>Hide Mask Groups</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Show Mask Groups</source>
+        <translation type="unfinished"></translation>
     </message>
     <message>
         <location line="+16"/>
@@ -3352,7 +3935,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>GlobalSearchDialog</name>
     <message>
-        <location filename="../qml/GlobalSearchDialog.qml" line="+928"/>
+        <location filename="../qml/GlobalSearchDialog.qml" line="+929"/>
         <source>Suggestion</source>
         <translation>建议</translation>
     </message>
@@ -3362,7 +3945,7 @@ Original source files on disk will be kept.</source>
         <translation>搜索设置 ▾</translation>
     </message>
     <message>
-        <location line="-468"/>
+        <location line="-469"/>
         <source>%1 matches</source>
         <translation>%1 个匹配项</translation>
     </message>
@@ -3382,7 +3965,7 @@ Original source files on disk will be kept.</source>
         <translation>搜索照片、相机、镜头、日期...</translation>
     </message>
     <message>
-        <location line="+66"/>
+        <location line="+67"/>
         <source>Search settings — choose which fields the search scans, or enable natural-language search</source>
         <translation>搜索设置 — 选择搜索扫描的字段，或启用自然语言搜索</translation>
     </message>
@@ -3432,7 +4015,7 @@ Original source files on disk will be kept.</source>
         <translation>结果</translation>
     </message>
     <message>
-        <location line="+29"/>
+        <location line="+30"/>
         <source>Active: %1</source>
         <translation>当前：%1</translation>
     </message>
@@ -3477,7 +4060,7 @@ Original source files on disk will be kept.</source>
         <translation>源文件不可用</translation>
     </message>
     <message>
-        <location line="+140"/>
+        <location line="+141"/>
         <source>Preview image failed to load</source>
         <translation>预览图像加载失败</translation>
     </message>
@@ -3487,7 +4070,7 @@ Original source files on disk will be kept.</source>
         <translation>%1  -  %2</translation>
     </message>
     <message>
-        <location line="-985"/>
+        <location line="-988"/>
         <source>Query is too long for natural language search</source>
         <translation>自然语言搜索的查询过长</translation>
     </message>
@@ -3506,7 +4089,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>ImageActionsController</name>
     <message>
-        <location filename="../qml/ImageActionsController.qml" line="+61"/>
+        <location filename="../qml/ImageActionsController.qml" line="+62"/>
         <location line="+18"/>
         <location line="+88"/>
         <location line="+58"/>
@@ -3602,7 +4185,7 @@ Original source files on disk will be kept.</source>
         <translation>未评分</translation>
     </message>
     <message>
-        <location line="+162"/>
+        <location line="+163"/>
         <source>Image actions</source>
         <translation>图像操作</translation>
     </message>
@@ -3691,20 +4274,88 @@ Original source files on disk will be kept.</source>
 <context>
     <name>InspectorToggleButton</name>
     <message>
-        <location filename="../qml/InspectorToggleButton.qml" line="+29"/>
+        <location filename="../qml/InspectorToggleButton.qml" line="+26"/>
+        <source>Hide editor panels</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Show editor panels</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
         <source>Collapse Inspector</source>
         <translation>收起检查器</translation>
     </message>
     <message>
-        <location line="+0"/>
+        <location line="+1"/>
         <source>Expand Inspector</source>
         <translation>展开检查器</translation>
     </message>
 </context>
 <context>
+    <name>KeyboardSettingsPanel</name>
+    <message>
+        <location filename="../qml/KeyboardSettingsPanel.qml" line="+56"/>
+        <source>Select a shortcut field, then type the new input. Enter or Escape saves, Tab cancels, plain Delete clears the binding.</source>
+        <translation>选中一个快捷键输入框，然后按下新的按键。Enter 或 Escape 保存，Tab 取消，单独按 Delete 清除绑定。</translation>
+    </message>
+    <message>
+        <location line="+113"/>
+        <source>Presses and releases a single modifier key</source>
+        <translation>按下并松开单个修饰键</translation>
+    </message>
+    <message>
+        <location line="+35"/>
+        <source>Clear shortcut for %1</source>
+        <translation>清除 %1 的快捷键</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Clear shortcut</source>
+        <translation>清除快捷键</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Restore Default</source>
+        <translation>恢复默认</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Restore default shortcut for %1</source>
+        <translation>恢复 %1 的默认快捷键</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Restores %1</source>
+        <translation>恢复为 %1</translation>
+    </message>
+    <message>
+        <location line="+26"/>
+        <source>Restore default: %1</source>
+        <translation>恢复默认：%1</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Press and release Shift, Ctrl, Alt, or Meta to choose it.</source>
+        <translation>按下并松开 Shift、Ctrl、Alt 或 Meta 以选择该键。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Type the new shortcut keys.</source>
+        <translation>按下新的快捷键。</translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>Conflicting scope: %1</source>
+        <translation>冲突作用域：%1</translation>
+    </message>
+</context>
+<context>
     <name>LUTPanel</name>
     <message>
-        <location filename="../qml/LUTPanel.qml" line="+114"/>
+        <location filename="../qml/LUTPanel.qml" line="+115"/>
         <source>No LUTs found</source>
         <translation>未找到 LUT</translation>
     </message>
@@ -3719,7 +4370,7 @@ Original source files on disk will be kept.</source>
         <translation> 个 LUT</translation>
     </message>
     <message>
-        <location line="+305"/>
+        <location line="+328"/>
         <source>LUT</source>
         <translation>LUT</translation>
     </message>
@@ -3790,12 +4441,12 @@ Original source files on disk will be kept.</source>
 <context>
     <name>LibraryWorkspace</name>
     <message>
-        <location filename="../qml/LibraryWorkspace.qml" line="+250"/>
+        <location filename="../qml/LibraryWorkspace.qml" line="+255"/>
         <source>Browser</source>
         <translation>浏览</translation>
     </message>
     <message>
-        <location line="+105"/>
+        <location line="+132"/>
         <source>No Photos Yet</source>
         <translation>暂无照片</translation>
     </message>
@@ -3843,12 +4494,12 @@ Original source files on disk will be kept.</source>
 <context>
     <name>Main</name>
     <message>
-        <location filename="../qml/Main.qml" line="+22"/>
+        <location filename="../qml/Main.qml" line="+48"/>
         <source>Alcedo Studio</source>
         <translation>Alcedo Studio</translation>
     </message>
     <message>
-        <location line="+225"/>
+        <location line="+292"/>
         <source>Could not save edits. Resolve the save error, then quit again.</source>
         <translation>无法保存编辑。请先解决保存错误，然后再退出。</translation>
     </message>
@@ -3876,7 +4527,7 @@ Original source files on disk will be kept.</source>
         <translation>Adobe DNG Converter 可执行文件</translation>
     </message>
     <message>
-        <location line="+30"/>
+        <location line="+32"/>
         <source>No converter selected</source>
         <translation>尚未选择转换器</translation>
     </message>
@@ -3911,7 +4562,7 @@ Original source files on disk will be kept.</source>
         <translation>目录</translation>
     </message>
     <message>
-        <location line="+91"/>
+        <location line="+93"/>
         <source>%1 / %2 converted files reimported, %3 failed</source>
         <translation>已重新导入 %1 / %2 个已转换文件，失败 %3 个</translation>
     </message>
@@ -3932,7 +4583,7 @@ Original source files on disk will be kept.</source>
         <translation>选择转换器并继续</translation>
     </message>
     <message>
-        <location line="-295"/>
+        <location line="-297"/>
         <source>Adobe DNG Converter is not installed at /Applications/Adobe DNG Converter.app.</source>
         <translation>未在 /Applications/Adobe DNG Converter.app 安装 Adobe DNG Converter。</translation>
     </message>
@@ -3940,7 +4591,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>ProjectLoadingOverlay</name>
     <message>
-        <location filename="../qml/ProjectLoadingOverlay.qml" line="+35"/>
+        <location filename="../qml/ProjectLoadingOverlay.qml" line="+80"/>
         <source>Loading Project</source>
         <translation>正在加载项目</translation>
     </message>
@@ -4144,12 +4795,12 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <location line="+16"/>
-        <location line="+258"/>
+        <location line="+260"/>
         <source>Cancel</source>
         <translation>取消</translation>
     </message>
     <message>
-        <location line="-258"/>
+        <location line="-260"/>
         <source>Generate</source>
         <translation>生成</translation>
     </message>
@@ -4175,12 +4826,12 @@ Original source files on disk will be kept.</source>
         <translation>下载目录</translation>
     </message>
     <message>
-        <location line="+71"/>
+        <location line="+73"/>
         <source>Source</source>
         <translation>来源</translation>
     </message>
     <message>
-        <location line="-352"/>
+        <location line="-354"/>
         <source>HF Mirror</source>
         <translation>HF 镜像</translation>
     </message>
@@ -4200,7 +4851,7 @@ Original source files on disk will be kept.</source>
         <translation>自定义</translation>
     </message>
     <message>
-        <location line="+374"/>
+        <location line="+376"/>
         <source>https://example.com</source>
         <translation>https://example.com</translation>
     </message>
@@ -4235,7 +4886,7 @@ Original source files on disk will be kept.</source>
         <translation>是否生成标签</translation>
     </message>
     <message>
-        <location line="-443"/>
+        <location line="-445"/>
         <source>Always</source>
         <translation>总是生成</translation>
     </message>
@@ -4250,7 +4901,7 @@ Original source files on disk will be kept.</source>
         <translation>总是跳过</translation>
     </message>
     <message>
-        <location line="+537"/>
+        <location line="+540"/>
         <source>Activating…</source>
         <translation>激活中…</translation>
     </message>
@@ -4288,7 +4939,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>SettingDialog</name>
     <message>
-        <location filename="../qml/SettingDialog.qml" line="+160"/>
+        <location filename="../qml/SettingDialog.qml" line="+164"/>
         <source>Settings applied</source>
         <translation>设置已应用</translation>
     </message>
@@ -4298,26 +4949,32 @@ Original source files on disk will be kept.</source>
         <translation>设置</translation>
     </message>
     <message>
-        <location line="-185"/>
-        <location line="+199"/>
-        <location line="+166"/>
+        <location line="-188"/>
+        <location line="+209"/>
+        <location line="+178"/>
         <source>Language</source>
         <translation>语言</translation>
     </message>
     <message>
-        <location line="-362"/>
-        <location line="+197"/>
+        <location line="-384"/>
+        <location line="+207"/>
         <source>Theme and color</source>
         <translation>主题与颜色</translation>
     </message>
     <message>
-        <location line="-194"/>
-        <location line="+195"/>
+        <location line="-204"/>
+        <location line="+205"/>
         <source>Cache</source>
         <translation>缓存</translation>
     </message>
     <message>
-        <location line="-176"/>
+        <location line="-190"/>
+        <location line="+195"/>
+        <source>Keyboard</source>
+        <translation>键盘</translation>
+    </message>
+    <message>
+        <location line="-188"/>
         <source>本地 AI 功能运行在本机 AI 模型上，图片内容不会上传至云端。识别速度和可处理规模取决于你的 CPU、GPU、内存与磁盘性能。
 
 默认推荐使用 SigLIP2 模型：它是当前最均衡的选择，多语言语义理解更稳，适合大多数相册标注和自然语言搜索。
@@ -4351,12 +5008,12 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 这个设置界面的灵感来自 ccswitch，使用方式也类似。</translation>
     </message>
     <message>
-        <location line="+227"/>
+        <location line="+242"/>
         <source>Update available</source>
         <translation>有可用更新</translation>
     </message>
     <message>
-        <location line="+99"/>
+        <location line="+103"/>
         <source>Application language</source>
         <translation>应用语言</translation>
     </message>
@@ -4371,42 +5028,42 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>主题</translation>
     </message>
     <message>
-        <location line="+235"/>
+        <location line="+263"/>
         <source>Done</source>
         <translation>完成</translation>
     </message>
     <message>
-        <location line="-624"/>
-        <location line="+186"/>
+        <location line="-671"/>
+        <location line="+194"/>
         <source>About</source>
         <translation>关于</translation>
     </message>
     <message>
-        <location line="-197"/>
-        <location line="+193"/>
+        <location line="-208"/>
+        <location line="+203"/>
         <source>Local Content Recognition</source>
         <translation>本地内容识别</translation>
     </message>
     <message>
-        <location line="-190"/>
-        <location line="+191"/>
+        <location line="-200"/>
+        <location line="+201"/>
         <source>Advanced Content Analysis</source>
         <translation>高级内容分析</translation>
     </message>
     <message>
-        <location line="-188"/>
-        <location line="+189"/>
+        <location line="-198"/>
+        <location line="+199"/>
         <source>Acceleration</source>
         <translation>加速</translation>
     </message>
     <message>
-        <location line="-186"/>
-        <location line="+187"/>
+        <location line="-196"/>
+        <location line="+197"/>
         <source>Updates</source>
         <translation>更新</translation>
     </message>
     <message>
-        <location line="+322"/>
+        <location line="+339"/>
         <source>Image processing backend</source>
         <translation>图像处理后端</translation>
     </message>
@@ -4424,7 +5081,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 <context>
     <name>ShellSignals</name>
     <message>
-        <location filename="../qml/ShellSignals.qml" line="+136"/>
+        <location filename="../qml/ShellSignals.qml" line="+160"/>
         <source>Imported %1 image(s).</source>
         <translation>已导入 %1 张图像。</translation>
     </message>
@@ -4432,6 +5089,49 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <location line="+23"/>
         <source>Exported %1 image(s).</source>
         <translation>已导出 %1 张图像。</translation>
+    </message>
+</context>
+<context>
+    <name>ShortcutCaptureField</name>
+    <message>
+        <location filename="../qml/ShortcutCaptureField.qml" line="+82"/>
+        <source>Unassigned</source>
+        <translation>未分配</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Press and release a modifier</source>
+        <translation>按下并松开一个修饰键</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Press shortcut</source>
+        <translation>按下快捷键</translation>
+    </message>
+    <message>
+        <location line="+104"/>
+        <source>%1 shortcut</source>
+        <translation>%1 快捷键</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Shortcut</source>
+        <translation>快捷键</translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Recording. Press and release Shift, Ctrl, Alt, or Meta to choose it. Enter or Escape saves, Tab cancels, plain Delete clears the binding.</source>
+        <translation>正在录制。按下并松开 Shift、Ctrl、Alt 或 Meta 以选择该键。Enter 或 Escape 保存，Tab 取消，单独按 Delete 清除绑定。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Recording. Type the new keys. Enter or Escape saves, Tab cancels, plain Delete clears the binding.</source>
+        <translation>正在录制。按下新的按键。Enter 或 Escape 保存，Tab 取消，单独按 Delete 清除绑定。</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Current shortcut: %1. Press Enter or click to record a new shortcut.</source>
+        <translation>当前快捷键：%1。按 Enter 或点击以录制新快捷键。</translation>
     </message>
 </context>
 <context>
@@ -4445,7 +5145,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 <context>
     <name>StatsCard</name>
     <message>
-        <location filename="../qml/StatsCard.qml" line="+355"/>
+        <location filename="../qml/StatsCard.qml" line="+358"/>
         <source> more</source>
         <translation> 更多</translation>
     </message>
@@ -4455,7 +5155,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>收起</translation>
     </message>
     <message>
-        <location line="+274"/>
+        <location line="+275"/>
         <source>Show less ▲</source>
         <translation>收起 ▲</translation>
     </message>
@@ -4465,9 +5165,9 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>显示全部 %1 项 ▼</translation>
     </message>
     <message>
-        <location line="-387"/>
+        <location line="-388"/>
         <location line="+122"/>
-        <location line="+87"/>
+        <location line="+88"/>
         <location line="+163"/>
         <source>No data available</source>
         <translation>没有可用数据</translation>
@@ -4499,7 +5199,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 <context>
     <name>ThumbnailGridView</name>
     <message>
-        <location filename="../qml/ThumbnailGridView.qml" line="+82"/>
+        <location filename="../qml/ThumbnailGridView.qml" line="+83"/>
         <source>Black &amp; White</source>
         <translation>黑白</translation>
     </message>
@@ -4509,7 +5209,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>美食与饮品</translation>
     </message>
     <message>
-        <location line="+617"/>
+        <location line="+618"/>
         <location line="+24"/>
         <source>(unnamed)</source>
         <translation>（未命名）</translation>
@@ -4538,17 +5238,17 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 <context>
     <name>TopToolbar</name>
     <message>
-        <location filename="../qml/TopToolbar.qml" line="+42"/>
-        <source>Alcedo</source>
-        <translation>Alcedo</translation>
+        <location filename="../qml/TopToolbar.qml" line="+63"/>
+        <source>Hide collections sidebar</source>
+        <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+2"/>
-        <source>Studio</source>
-        <translation>Studio</translation>
+        <location line="+1"/>
+        <source>Show collections sidebar</source>
+        <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+27"/>
+        <location line="+24"/>
         <source>File</source>
         <translation>文件</translation>
     </message>
@@ -4828,7 +5528,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>CUDA 不可用</translation>
     </message>
     <message>
-        <location line="+209"/>
+        <location line="+204"/>
         <source>Alcedo</source>
         <translation>Alcedo</translation>
     </message>
@@ -4844,12 +5544,12 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     </message>
     <message>
         <location line="+66"/>
-        <location line="+518"/>
+        <location line="+523"/>
         <source>Create Project</source>
         <translation>创建项目</translation>
     </message>
     <message>
-        <location line="-415"/>
+        <location line="-420"/>
         <source>Exit Application</source>
         <translation>退出应用</translation>
     </message>
@@ -4874,12 +5574,12 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>暂无最近项目</translation>
     </message>
     <message>
-        <location line="+8"/>
+        <location line="+9"/>
         <source>Projects you open or create here will appear in this list.</source>
         <translation>你在这里打开或创建的项目会显示在此列表中。</translation>
     </message>
     <message>
-        <location line="+142"/>
+        <location line="+144"/>
         <source>New Project</source>
         <translation>新建项目</translation>
     </message>
@@ -4899,7 +5599,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>存储位置</translation>
     </message>
     <message>
-        <location line="+26"/>
+        <location line="+28"/>
         <source>Select a parent folder...</source>
         <translation>选择父文件夹...</translation>
     </message>
@@ -4907,7 +5607,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 <context>
     <name>alcedo::UpdateService</name>
     <message>
-        <location filename="../../../app/update_service.cpp" line="+66"/>
+        <location filename="../../../app/update_service.cpp" line="+67"/>
         <source>%1 (build %2)</source>
         <translation>%1（构建 %2）</translation>
     </message>
@@ -5050,19 +5750,6 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     </message>
 </context>
 <context>
-    <name>alcedo::ui::AppTheme</name>
-    <message>
-        <location filename="../app_theme.cpp" line="+1171"/>
-        <source>Alcedo</source>
-        <translation>Alcedo</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Classic</source>
-        <translation>经典</translation>
-    </message>
-</context>
-<context>
     <name>alcedo::ui::EditorLensCatalogModel</name>
     <message>
         <location filename="../album_backend/editor_lens_catalog_model.cpp" line="+23"/>
@@ -5076,9 +5763,145 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     </message>
 </context>
 <context>
+    <name>alcedo::ui::EditorNodeController</name>
+    <message>
+        <location filename="../album_backend/editor_node_controller.cpp" line="+461"/>
+        <source>Connect Color Grades into one Develop to DRT path.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>The graph snapshot has no nodes</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+74"/>
+        <source>The graph adapter is missing</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <location line="+9"/>
+        <source>The node graph has no snapshot</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+207"/>
+        <location line="+670"/>
+        <location line="+125"/>
+        <source>No editor session is bound</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-684"/>
+        <source>No node supports the selected adjustment panel</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <location line="+27"/>
+        <location line="+531"/>
+        <source>That node is not in the current graph</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-435"/>
+        <source>Another node command is active</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <location line="+110"/>
+        <location line="+45"/>
+        <location line="+231"/>
+        <location line="+170"/>
+        <source>No editable node graph is available</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-552"/>
+        <source>The node graph is not editable in the current session state</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+43"/>
+        <source>Finish the node graph before renaming</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Only a Color Grade can be renamed</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Color Grade name cannot be empty</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>Finish the node graph before changing deletion protection</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Only a Color Grade has editable deletion protection</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <location line="+44"/>
+        <source>Only a Color Grade can be deleted</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-7"/>
+        <source>No node is selected</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+136"/>
+        <location line="+29"/>
+        <location line="+39"/>
+        <source>Finish the node graph before changing Mask Groups</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-62"/>
+        <location line="+73"/>
+        <source>The node graph has no editable Mask Groups</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-45"/>
+        <source>Only a Color Grade Mask Group can be removed</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+39"/>
+        <source>Only a Color Grade Mask Group can be moved</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+24"/>
+        <source>That Mask Group is not in the committed node graph</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+37"/>
+        <source>The Mask Group move did not produce a valid node graph</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+115"/>
+        <source>Connections must go from an output port to an input port</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
     <name>alcedo::ui::ProjectModule</name>
     <message>
-        <location filename="../album_backend/project_module.cpp" line="+390"/>
+        <location filename="../album_backend/project_module.cpp" line="+377"/>
         <source>Select Project Package</source>
         <translation>选择项目包</translation>
     </message>
@@ -5088,7 +5911,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>打包项目 (*.alcd);;所有文件 (*)</translation>
     </message>
     <message>
-        <location line="+11"/>
+        <location line="+10"/>
         <source>Select Parent Folder for New Project</source>
         <translation>为新项目选择父文件夹</translation>
     </message>

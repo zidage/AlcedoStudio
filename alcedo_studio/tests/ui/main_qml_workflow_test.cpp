@@ -10,8 +10,11 @@
 #include <QQmlContext>
 #include <QQmlError>
 #include <QQmlExtensionPlugin>
+#include <QQuickItem>
 #include <QQuickStyle>
 #include <QQuickWindow>
+#include <QSettings>
+#include <QTest>
 #include <QUrl>
 #include <QuickQanava>
 #include <filesystem>
@@ -21,6 +24,7 @@
 #include "ui/album_backend_test_fixture.hpp"
 #include "ui/alcedo_main/app_theme.hpp"
 #include "ui/alcedo_main/language_manager.hpp"
+#include "ui/alcedo_main/shortcut_registry.hpp"
 
 Q_IMPORT_QML_PLUGIN(QuickQanavaPlugin)
 
@@ -148,7 +152,7 @@ TEST_F(MainQmlWorkflowTests, ProductionWindowLoadsAndRoutesCoreWorkspaceActions)
   ASSERT_NE(update_status, nullptr);
   EXPECT_TRUE(update_status->property("visible").toBool());
   EXPECT_FALSE(update_status->property("text").toString().trimmed().isEmpty());
-  settings->setProperty("currentCategory", 7);
+  settings->setProperty("currentCategory", 8);
   ProcessEvents(50);
   auto* version_label = settings->findChild<QObject*>(QStringLiteral("aboutVersionLabel"));
   ASSERT_NE(version_label, nullptr);
@@ -219,6 +223,177 @@ TEST_F(MainQmlWorkflowTests, ProductionWindowLoadsAndRoutesCoreWorkspaceActions)
 
   ASSERT_TRUE(QMetaObject::invokeMethod(background_tasks_dialog, "close"));
   EXPECT_TRUE(qml_warnings.empty()) << qml_warnings.front().toString().toStdString();
+}
+
+// Shared boot path for the B1 workflow cases: isolated QSettings (shortcut
+// commits must not touch real settings), real module host, and production
+// Main.qml. Mirrors the wiring in the load test above.
+auto LoadMainQml(ApplicationModuleHost& host, LanguageManager& language_manager,
+                 QQmlApplicationEngine& engine, std::vector<QQmlError>& warnings) -> QObject* {
+  engine.addImportPath(QStringLiteral("qrc:/"));
+  QuickQanava::initialize(&engine);
+  language_manager.AttachEngine(&engine);
+  host.AttachQmlEngine(&engine);
+  engine.rootContext()->setContextProperty(QStringLiteral("appModules"), &host);
+  engine.rootContext()->setContextProperty(QStringLiteral("appTheme"),
+                                           &alcedo::ui::AppTheme::Instance());
+  engine.rootContext()->setContextProperty(QStringLiteral("languageManager"), &language_manager);
+  QObject::connect(&engine, &QQmlEngine::warnings,
+                   [&warnings](const QList<QQmlError>& emitted) {
+                     warnings.insert(warnings.end(), emitted.begin(), emitted.end());
+                   });
+  engine.load(MainQmlUrl());
+  return engine.rootObjects().empty() ? nullptr : engine.rootObjects().front();
+}
+
+TEST_F(MainQmlWorkflowTests, SettingsDoneDoesNotOverwriteCommittedShortcutChanges) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  // The capture field writes through the registry into QSettings; isolate the
+  // store before any module touches it.
+  QSettings::setDefaultFormat(QSettings::IniFormat);
+  QSettings::setPath(QSettings::IniFormat, QSettings::UserScope,
+                     PathToQString(temp_dir_ / "settings"));
+  QCoreApplication::setOrganizationName(QStringLiteral("AlcedoTests"));
+  QCoreApplication::setApplicationName(QStringLiteral("MainQmlWorkflowTest"));
+  alcedo::ui::AppTheme::RegisterFonts();
+
+  ApplicationModuleHost host;
+  ASSERT_TRUE(CreateTestProject(host));
+  alcedo::ui::LanguageManager language_manager(QCoreApplication::instance());
+  alcedo::ui::AppTheme::SetEffectiveLanguageCode(language_manager.EffectiveLanguageCode());
+  QQuickStyle::setStyle(QStringLiteral("Material"));
+
+  QQmlApplicationEngine  engine;
+  std::vector<QQmlError> qml_warnings;
+  QObject*               root = LoadMainQml(host, language_manager, engine, qml_warnings);
+  ASSERT_NE(root, nullptr) << (qml_warnings.empty()
+                                   ? std::string{}
+                                   : qml_warnings.front().toString().toStdString());
+  auto* window = qobject_cast<QQuickWindow*>(root);
+  ASSERT_NE(window, nullptr);
+
+  auto* registry =
+      engine.singletonInstance<ShortcutRegistry*>(QStringLiteral("Alcedo.Main"),
+                                                  QStringLiteral("ShortcutRegistry"));
+  ASSERT_NE(registry, nullptr);
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(root, "openSettingsDialog", Q_ARG(QVariant, QVariant(7))));
+  ProcessEvents(100);
+  auto* settings = root->findChild<QObject*>(QStringLiteral("settingsDialog"));
+  ASSERT_NE(settings, nullptr);
+  ASSERT_TRUE(settings->property("visible").toBool());
+  EXPECT_EQ(settings->property("currentCategory").toInt(), 7);
+
+  // Commit a real capture through the production field.
+  auto* field =
+      settings->findChild<QQuickItem*>(QStringLiteral("shortcutCaptureField:library.selectAll"));
+  ASSERT_NE(field, nullptr);
+  QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
+                    field->mapToScene(QPointF(field->width() * 0.5, field->height() * 0.5))
+                        .toPoint());
+  ProcessEvents(50);
+  ASSERT_TRUE(field->property("capturing").toBool());
+  QTest::keyClick(window, Qt::Key_K, Qt::ControlModifier);
+  QTest::keyClick(window, Qt::Key_Return);
+  ProcessEvents(50);
+  ASSERT_EQ(registry->keySequenceTexts(QStringLiteral("library.selectAll")),
+            QStringList{QStringLiteral("Ctrl+K")});
+
+  // Done applies the dialog's own pending values and closes; the committed
+  // binding is untouched — the dialog never staged a second shortcut set.
+  ASSERT_TRUE(QMetaObject::invokeMethod(settings, "applySettings"));
+  ProcessEvents(100);
+  EXPECT_FALSE(settings->property("visible").toBool());
+  EXPECT_EQ(registry->keySequenceTexts(QStringLiteral("library.selectAll")),
+            QStringList{QStringLiteral("Ctrl+K")});
+  EXPECT_EQ(field->property("displayText").toString(),
+            registry->shortcutText(QStringLiteral("library.selectAll")));
+
+  const auto restored = registry->restoreDefault(QStringLiteral("library.selectAll"));
+  EXPECT_TRUE(restored.value(QStringLiteral("succeeded")).toBool());
+}
+
+TEST_F(MainQmlWorkflowTests, TextInputAndCapturePriorityPreventProductCommandActivation) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  QSettings::setDefaultFormat(QSettings::IniFormat);
+  QSettings::setPath(QSettings::IniFormat, QSettings::UserScope,
+                     PathToQString(temp_dir_ / "settings"));
+  QCoreApplication::setOrganizationName(QStringLiteral("AlcedoTests"));
+  QCoreApplication::setApplicationName(QStringLiteral("MainQmlWorkflowTest"));
+  alcedo::ui::AppTheme::RegisterFonts();
+
+  ApplicationModuleHost host;
+  ASSERT_TRUE(CreateTestProject(host));
+  alcedo::ui::LanguageManager language_manager(QCoreApplication::instance());
+  alcedo::ui::AppTheme::SetEffectiveLanguageCode(language_manager.EffectiveLanguageCode());
+  QQuickStyle::setStyle(QStringLiteral("Material"));
+
+  QQmlApplicationEngine  engine;
+  std::vector<QQmlError> qml_warnings;
+  QObject*               root = LoadMainQml(host, language_manager, engine, qml_warnings);
+  ASSERT_NE(root, nullptr) << (qml_warnings.empty()
+                                   ? std::string{}
+                                   : qml_warnings.front().toString().toStdString());
+  auto* window = qobject_cast<QQuickWindow*>(root);
+  ASSERT_NE(window, nullptr);
+
+  auto* select_all =
+      root->findChild<QQuickItem*>(QStringLiteral("librarySelectAllShortcut"));
+  ASSERT_NE(select_all, nullptr);
+  QSignalSpy activated_spy(select_all, SIGNAL(activated()));
+  ASSERT_TRUE(activated_spy.isValid());
+
+  // Editable text input keeps its native Ctrl+A while the product shortcut
+  // stays suppressed — no select-all fires on the library surface.
+  auto* search_dialog = root->findChild<QObject*>(QStringLiteral("globalSearchDialog"));
+  ASSERT_NE(search_dialog, nullptr);
+  ASSERT_TRUE(QMetaObject::invokeMethod(search_dialog, "open"));
+  ProcessEvents(100);
+  auto* search_field = root->findChild<QQuickItem*>(QStringLiteral("globalSearchField"));
+  ASSERT_NE(search_field, nullptr);
+  search_field->setProperty("text", QStringLiteral("album cover"));
+  search_field->forceActiveFocus();
+  ProcessEvents(50);
+  EXPECT_FALSE(select_all->property("shortcutEnabled").toBool());
+  QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
+  ProcessEvents(50);
+  EXPECT_EQ(activated_spy.count(), 0);
+  EXPECT_EQ(search_field->property("selectedText").toString(),
+            QStringLiteral("album cover"));
+  ASSERT_TRUE(QMetaObject::invokeMethod(search_dialog, "close"));
+  ProcessEvents(100);
+
+  // An active capture row owns the same chord: Ctrl+A becomes the pending
+  // candidate instead of activating the library command.
+  ASSERT_TRUE(QMetaObject::invokeMethod(root, "openSettingsDialog", Q_ARG(QVariant, QVariant(7))));
+  ProcessEvents(100);
+  auto* settings = root->findChild<QObject*>(QStringLiteral("settingsDialog"));
+  ASSERT_NE(settings, nullptr);
+  auto* field =
+      settings->findChild<QQuickItem*>(QStringLiteral("shortcutCaptureField:library.selectAll"));
+  ASSERT_NE(field, nullptr);
+  QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
+                    field->mapToScene(QPointF(field->width() * 0.5, field->height() * 0.5))
+                        .toPoint());
+  ProcessEvents(50);
+  ASSERT_TRUE(field->property("capturing").toBool());
+  QTest::keyClick(window, Qt::Key_A, Qt::ControlModifier);
+  ProcessEvents(50);
+  EXPECT_EQ(activated_spy.count(), 0);
+  EXPECT_EQ(field->property("captureState").toString(), QStringLiteral("candidate"));
+  EXPECT_EQ(field->property("displayText").toString(),
+            QStringLiteral("Ctrl+A"));
+
+  // Tab cancels the candidate; the live binding is unchanged.
+  QTest::keyClick(window, Qt::Key_Tab);
+  ProcessEvents(50);
+  auto* registry =
+      engine.singletonInstance<ShortcutRegistry*>(QStringLiteral("Alcedo.Main"),
+                                                  QStringLiteral("ShortcutRegistry"));
+  ASSERT_NE(registry, nullptr);
+  EXPECT_EQ(registry->keySequenceTexts(QStringLiteral("library.selectAll")),
+            QStringList{QStringLiteral("Ctrl+A")});
+  ASSERT_TRUE(QMetaObject::invokeMethod(settings, "close"));
 }
 
 }  // namespace
