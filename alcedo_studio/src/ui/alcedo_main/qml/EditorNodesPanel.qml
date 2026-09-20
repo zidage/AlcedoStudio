@@ -98,15 +98,15 @@ Item {
         }
     }
 
-    function deleteSelectedColorGrade() {
+    function deleteSelectedNodes() {
         if (!root.nodeController
-                || !root.nodeController.canDeleteSelectedColorGrade) {
+                || !root.nodeController.canDeleteSelectedNodes) {
             return
         }
         if (root.renameVisible) {
             cancelRename()
         }
-        root.nodeController.deleteColorGrade(root.nodeController.selectedNodeId)
+        root.nodeController.deleteSelectedNodes()
         graphView.forceActiveFocus()
     }
 
@@ -187,9 +187,12 @@ Item {
         root.maskCreation.removeMask(nodeId, maskId)
     }
 
-    // NodeItem owns the press for the whole card. GraphView.nodeClicked is the
-    // same path as a working right-click skip, and the same style of call as
-    // beginRadial: a QML handler invoking maskCreation directly.
+    // NodeItem owns the press for the whole card. Left presses on a Mask row
+    // select the mask; other left presses replace the selection, or toggle one
+    // node while the nodes.extendSelection modifier (Shift) is held. A right
+    // press only maintains the selection so the context menu can open on it:
+    // it collapses onto an unselected node and leaves a selected member in
+    // place, which keeps a multi-selection alive for Delete.
     function handleGraphNodePress(node, position, rightButton) {
         if (!root.nodeController || !qanAdapter || !node) {
             if (qanAdapter) {
@@ -198,29 +201,41 @@ Item {
             return false
         }
         const id = qanAdapter.liveNodeId(node)
-        if (id.length > 0) {
+        if (id.length === 0) {
+            return false
+        }
+        if (rightButton) {
+            if (!root.nodeController.isNodeSelected(id)) {
+                root.nodeController.selectNode(id)
+            }
+            return false
+        }
+        if (node.item && position !== undefined && position !== null) {
+            const maskId = String(qanAdapter.maskIdAtItemPosition(
+                                      node.item, position.x, position.y) || "")
+            const onDelete = qanAdapter.maskDeleteContainsItemPosition(
+                    node.item, position.x, position.y)
+            qanAdapter.logMaskRow(onDelete ? "graph-press-delete" : "graph-press",
+                                  id, maskId, rightButton)
+            if (maskId.length > 0) {
+                if (onDelete) {
+                    root.removeMaskFromDrawer(id, maskId)
+                } else {
+                    root.selectMaskFromDrawer(id, maskId)
+                }
+                return true
+            }
+        } else {
+            qanAdapter.logMaskRow("graph-press-no-pos", id, "", rightButton)
+        }
+        const extend = ShortcutRegistry.modifierMatches(
+                "nodes.extendSelection", ShortcutRegistry.currentKeyboardModifiers())
+        if (extend) {
+            root.nodeController.toggleNodeSelection(id)
+        } else {
             root.nodeController.selectNode(id)
         }
-        if (!node.item || position === undefined || position === null) {
-            qanAdapter.logMaskRow("graph-press-no-pos", id, "", rightButton)
-            return false
-        }
-        const maskId = String(qanAdapter.maskIdAtItemPosition(
-                                  node.item, position.x, position.y) || "")
-        const onDelete = !rightButton
-                && qanAdapter.maskDeleteContainsItemPosition(
-                       node.item, position.x, position.y)
-        qanAdapter.logMaskRow(onDelete ? "graph-press-delete" : "graph-press",
-                              id, maskId, rightButton)
-        if (maskId.length === 0) {
-            return false
-        }
-        if (onDelete) {
-            root.removeMaskFromDrawer(id, maskId)
-        } else {
-            root.selectMaskFromDrawer(id, maskId)
-        }
-        return true
+        return false
     }
 
     function detachAdapter() {
@@ -276,12 +291,22 @@ Item {
     // Graph-scoped product keys. Command ids live on ShortcutRegistry.
     // Masks header Enter/Space stay on EditorNodeMaskDrawer. Add Enter/Space
     // stay on IconActionButton. Tab order is KeyNavigation on Add and GraphView.
-    function handleGraphKey(event) {
+    // dispatchGraphKey takes plain ints so tests can invoke it directly;
+    // handleGraphKey only adapts the key event and marks it accepted.
+    function dispatchGraphKey(key, modifiers) {
         if (!root.nodeController || !root.graphReady) {
-            return
+            return false
         }
-        const id = ShortcutRegistry.commandIdForKey("editor.nodes", event.key,
-                                                  event.modifiers)
+        const extending = !root.keyboardConnectActive
+                && ShortcutRegistry.modifierMatches(
+                       "nodes.extendSelection", modifiers)
+        let id = ShortcutRegistry.commandIdForKey("editor.nodes", key, modifiers)
+        if (id.length === 0 && extending) {
+            const commandModifiers = modifiers
+                    & ~ShortcutRegistry.modifierBitsForCommand("nodes.extendSelection")
+            id = ShortcutRegistry.commandIdForKey("editor.nodes", key,
+                                                  commandModifiers)
+        }
         if (id === "nodes.addColorGrade") {
             root.addColorGrade()
         } else if (id === "nodes.fitGraph") {
@@ -290,25 +315,33 @@ Item {
             root.beginRename()
         } else if (id === "nodes.deleteSelection") {
             if (root.renameVisible) {
-                return
+                return false
             }
             // Leave the event unaccepted while transient Mask editing owns
             // Delete; EditorWorkspace's scoped Shortcut handles it exactly once.
             if (root.maskCreation && root.maskCreation.maskControlsActive) {
-                return
+                return false
             }
-            root.deleteSelectedColorGrade()
+            root.deleteSelectedNodes()
         } else if (id === "nodes.beginConnect") {
             root.startKeyboardConnect()
         } else if (id === "nodes.completeConnect") {
             if (!root.keyboardConnectActive) {
-                return
+                return false
             }
             root.completeKeyboardConnect()
         } else if (id === "nodes.selectPrevious") {
-            root.nodeController.selectPreviousBackboneNode()
+            if (extending) {
+                root.nodeController.extendNodeSelectionByStep(-1)
+            } else {
+                root.nodeController.selectPreviousBackboneNode()
+            }
         } else if (id === "nodes.selectNext") {
-            root.nodeController.selectNextBackboneNode()
+            if (extending) {
+                root.nodeController.extendNodeSelectionByStep(1)
+            } else {
+                root.nodeController.selectNextBackboneNode()
+            }
         } else if (id === "nodes.selectDevelop") {
             root.nodeController.selectDevelop()
         } else if (id === "nodes.selectDrt") {
@@ -316,9 +349,15 @@ Item {
         } else if (id === "nodes.cancel") {
             root.cancelConnectorOrRename()
         } else {
-            return
+            return false
         }
-        event.accepted = true
+        return true
+    }
+
+    function handleGraphKey(event) {
+        if (root.dispatchGraphKey(event.key, event.modifiers)) {
+            event.accepted = true
+        }
     }
 
     onLayoutIdentityKeyChanged: restoreGraphView()
@@ -595,7 +634,11 @@ Item {
                 graph: Qan.Graph {
                     id: graphTopology
                     objectName: "editorNodesQanGraph"
-                    multipleSelectionEnabled: false
+                    // Product selection is owned by EditorNodeController and
+                    // projected through AlcedoQanGraph; pointer input never
+                    // mutates Qan selection itself.
+                    multipleSelectionEnabled: true
+                    selectionPolicy: Qan.Graph.NoSelection
                     connectorEnabled: true
                     connectorCreateDefaultEdge: false
                     connectorEdgeColor: appTheme.graphCandidateEdgeColor
@@ -621,10 +664,9 @@ Item {
                                               node ? qanAdapter.liveNodeId(node) : "",
                                               "", true)
                     }
-                    const onMaskRow = root.handleGraphNodePress(node, pos, true)
-                    if (onMaskRow) {
-                        return
-                    }
+                    // Right presses never route to a Mask row; they only
+                    // maintain the selection the menu will act on.
+                    root.handleGraphNodePress(node, pos, true)
                     if (!root.nodeController || !qanAdapter || !node || !node.item) {
                         return
                     }
@@ -685,6 +727,8 @@ Item {
                     objectName: "editorNodesRenameMenuItem"
                     text: qsTr("Rename Color Grade")
                     Accessible.name: qsTr("Rename Color Grade")
+                    // Rename stays single-node: a multi-selection disables it
+                    // through canRenameSelectedColorGrade.
                     enabled: root.nodeController
                              ? root.nodeController.canRenameSelectedColorGrade : false
                     onTriggered: root.beginRename()
@@ -692,11 +736,12 @@ Item {
 
                 AppMenuItem {
                     objectName: "editorNodesDeleteMenuItem"
-                    text: qsTr("Delete Color Grade")
-                    Accessible.name: qsTr("Delete Color Grade")
+                    text: root.nodeController && root.nodeController.selectedNodeCount > 1
+                          ? qsTr("Delete Selected Nodes") : qsTr("Delete Color Grade")
+                    Accessible.name: text
                     enabled: root.nodeController
-                             ? root.nodeController.canDeleteSelectedColorGrade : false
-                    onTriggered: root.deleteSelectedColorGrade()
+                             ? root.nodeController.canDeleteSelectedNodes : false
+                    onTriggered: root.deleteSelectedNodes()
                 }
             }
         }

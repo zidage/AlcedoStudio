@@ -205,6 +205,9 @@ Item {
                 hoverEnabled: true
                 preventStealing: true
                 focus: false
+                // Left button only: a right press falls through to the owning
+                // NodeItem so the Color Grade context menu opens over the drawer.
+                acceptedButtons: Qt.LeftButton
                 cursorShape: Qt.PointingHandCursor
                 onClicked: root.toggle()
             }

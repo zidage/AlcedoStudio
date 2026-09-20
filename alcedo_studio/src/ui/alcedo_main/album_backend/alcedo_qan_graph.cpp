@@ -465,7 +465,7 @@ auto AlcedoQanGraph::ReplaceTopology(const EditorNodeGraphSnapshot& snapshot)
     has_projection_      = true;
     rebuild_in_progress_ = false;
     BindDrawerSignals();
-    ApplyConnectablePolicy();
+    ApplyProductSelection(product_selected_node_ids_, product_selected_node_id_);
     result.succeeded = true;
     return result;
   }
@@ -485,7 +485,7 @@ auto AlcedoQanGraph::ReplaceTopology(const EditorNodeGraphSnapshot& snapshot)
     }
   }
   rebuild_in_progress_ = false;
-  ApplyConnectablePolicy();
+  ApplyProductSelection(product_selected_node_ids_, product_selected_node_id_);
   result.error = error;
   return result;
 }
@@ -747,7 +747,9 @@ auto AlcedoQanGraph::RemoveProjectedNode(const NodeId& node_id) -> AlcedoQanGrap
     }
     removed_edges.push_back(item);
   }
-  const bool selection_removed = product_selected_node_id_ == node_id;
+  const auto selected_it =
+      std::find(product_selected_node_ids_.begin(), product_selected_node_ids_.end(), node_id);
+  const bool selection_removed = selected_it != product_selected_node_ids_.end();
   const auto node_error        = RemoveNodeVisual(node_id);
   if (!node_error.isEmpty()) {
     QString reversal_error;
@@ -771,7 +773,11 @@ auto AlcedoQanGraph::RemoveProjectedNode(const NodeId& node_id) -> AlcedoQanGrap
   ClearDrawerConnections();
   BindDrawerSignals();
   if (selection_removed) {
-    ApplyProductSelection(std::nullopt);
+    product_selected_node_ids_.erase(selected_it);
+    if (product_selected_node_id_ == node_id) {
+      product_selected_node_id_ = {};
+    }
+    ApplyProductSelection(product_selected_node_ids_, product_selected_node_id_);
   } else {
     ApplyConnectablePolicy();
   }
@@ -1083,7 +1089,8 @@ auto AlcedoQanGraph::ApplyMutation(const alcedo::EditorNodeGraphDraftMutation& m
     }
   }
 
-  const NodeId                          prior_selection = product_selected_node_id_;
+  const std::vector<NodeId>             prior_selection_ids = product_selected_node_ids_;
+  const NodeId                          prior_primary       = product_selected_node_id_;
   std::vector<RemovedEdgeState>         completed_removed_edges;
   std::vector<NodeVisualState>          completed_removed_nodes;
   std::vector<NodeId>                   completed_inserted_nodes;
@@ -1099,11 +1106,18 @@ auto AlcedoQanGraph::ApplyMutation(const alcedo::EditorNodeGraphDraftMutation& m
     *all_errors += error;
   };
   auto apply_prior_selection = [&]() {
-    if (prior_selection.Empty() || NodeFor(prior_selection) == nullptr) {
-      ApplyProductSelection(std::nullopt);
-      return;
+    std::vector<NodeId> surviving;
+    surviving.reserve(prior_selection_ids.size());
+    for (const auto& node_id : prior_selection_ids) {
+      if (!node_id.Empty() && NodeFor(node_id) != nullptr) {
+        surviving.push_back(node_id);
+      }
     }
-    ApplyProductSelection(prior_selection);
+    const NodeId primary =
+        !prior_primary.Empty() && NodeFor(prior_primary) != nullptr
+            ? prior_primary
+            : (surviving.empty() ? NodeId{} : surviving.back());
+    ApplyProductSelection(surviving, primary);
   };
   auto fail = [&](QString original_error) {
     QString reversal_errors;
@@ -1312,7 +1326,11 @@ void AlcedoQanGraph::ConfigureGraphPolicy() {
   if (graph_.isNull()) {
     return;
   }
-  graph_->setMultipleSelectionEnabled(false);
+  // The controller owns product selection; Qan pointer input never selects.
+  // Multiple selection stays enabled so the projected set can mark several
+  // node visuals selected at once.
+  graph_->setMultipleSelectionEnabled(true);
+  graph_->setSelectionPolicy(qan::Graph::SelectionPolicy::NoSelection);
   graph_->setConnectorCreateDefaultEdge(false);
   graph_->setConnectorEnabled(true);
   connect(graph_.data(), &qan::Graph::connectorChanged, this, &AlcedoQanGraph::ConfigureConnector,
@@ -1570,6 +1588,11 @@ void AlcedoQanGraph::logMaskRow(const QString& where, const QString& node_id, co
 }
 
 void AlcedoQanGraph::HandleNodeItemPress(qan::Node* node, QPointF local_pos, bool right_button) {
+  if (right_button) {
+    // A right press is the node context-menu request; Mask rows do not own a
+    // right-button action, so the owning node keeps the event.
+    return;
+  }
   if (node == nullptr || node->getItem() == nullptr) {
     qWarning()
         << "[MaskRow] HandleNodeItemPress abort no node/item right=" << right_button;
@@ -1682,19 +1705,29 @@ void AlcedoQanGraph::BindDrawerSignals() {
   }
 }
 
-void AlcedoQanGraph::ApplyProductSelection(const std::optional<NodeId>& node_id) {
+void AlcedoQanGraph::ApplyProductSelection(const std::vector<NodeId>& node_ids,
+                                           const NodeId&              primary_id) {
   if (graph_.isNull() || rebuild_in_progress_) {
     return;
   }
-  product_selected_node_id_ = node_id.value_or(NodeId{});
+  product_selected_node_ids_ = node_ids;
+  product_selected_node_id_  = primary_id;
   graph_->clearSelection();
-  if (node_id.has_value() && !node_id->Empty()) {
-    auto* node = NodeFor(*node_id);
+  for (const auto& node_id : node_ids) {
+    if (node_id.Empty()) {
+      continue;
+    }
+    auto* node = NodeFor(node_id);
     if (node != nullptr) {
       graph_->setNodeSelected(node, true);
     }
   }
   ApplyConnectablePolicy();
+}
+
+void AlcedoQanGraph::ApplyProductSelection(const std::optional<NodeId>& node_id) {
+  const auto id = node_id.value_or(NodeId{});
+  ApplyProductSelection(id.Empty() ? std::vector<NodeId>{} : std::vector<NodeId>{id}, id);
 }
 
 void AlcedoQanGraph::SetNodeItemPosition(const NodeId& node_id, QPointF position) {
@@ -1757,12 +1790,16 @@ auto AlcedoQanGraph::drawerOpen(const QString& node_id) const -> bool {
   return DrawerOpen(NodeId{node_id.toStdString()});
 }
 
-void AlcedoQanGraph::applyProductSelection(const QString& node_id) {
-  if (node_id.isEmpty()) {
-    ApplyProductSelection(std::nullopt);
-    return;
+void AlcedoQanGraph::applyProductSelection(const QStringList& node_ids,
+                                           const QString&     primary_id) {
+  std::vector<NodeId> ids;
+  ids.reserve(static_cast<std::size_t>(node_ids.size()));
+  for (const auto& node_id : node_ids) {
+    if (!node_id.isEmpty()) {
+      ids.push_back(NodeId{node_id.toStdString()});
+    }
   }
-  ApplyProductSelection(NodeId{node_id.toStdString()});
+  ApplyProductSelection(ids, NodeId{primary_id.toStdString()});
 }
 
 }  // namespace alcedo::ui

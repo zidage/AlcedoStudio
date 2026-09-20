@@ -356,26 +356,14 @@ void EditorNodeGraphDraft::RestoreLastMutation() {
     EraseNodeAt(index);
   }
 
-  std::vector<std::size_t> node_order(reversal_.removed_node_indexes.size());
-  for (std::size_t i = 0; i < node_order.size(); ++i) {
-    node_order[i] = i;
+  // Each removed index was captured on the list as it stood at the moment of
+  // that removal, so reversing the removal order replays every insertion on
+  // the same intermediate state it was captured against.
+  for (std::size_t i = reversal_.removed_node_indexes.size(); i > 0; --i) {
+    InsertNodeAt(reversal_.removed_node_indexes[i - 1], reversal_.removed_nodes[i - 1]);
   }
-  std::sort(node_order.begin(), node_order.end(), [&](std::size_t lhs, std::size_t rhs) {
-    return reversal_.removed_node_indexes[lhs] < reversal_.removed_node_indexes[rhs];
-  });
-  for (const auto i : node_order) {
-    InsertNodeAt(reversal_.removed_node_indexes[i], reversal_.removed_nodes[i]);
-  }
-
-  std::vector<std::size_t> edge_order(reversal_.removed_edge_indexes.size());
-  for (std::size_t i = 0; i < edge_order.size(); ++i) {
-    edge_order[i] = i;
-  }
-  std::sort(edge_order.begin(), edge_order.end(), [&](std::size_t lhs, std::size_t rhs) {
-    return reversal_.removed_edge_indexes[lhs] < reversal_.removed_edge_indexes[rhs];
-  });
-  for (const auto i : edge_order) {
-    InsertEdgeAt(reversal_.removed_edge_indexes[i], reversal_.removed_edges[i]);
+  for (std::size_t i = reversal_.removed_edge_indexes.size(); i > 0; --i) {
+    InsertEdgeAt(reversal_.removed_edge_indexes[i - 1], reversal_.removed_edges[i - 1]);
   }
 
   RestoreMap(&node_json_, reversal_.prior_node_json);
@@ -508,56 +496,78 @@ auto EditorNodeGraphDraft::AddColorGrade(NodeId node_id) -> EditorNodeGraphDraft
 
 auto EditorNodeGraphDraft::RemoveColorGrade(const PipelineDocument& document, const NodeId& node_id)
     -> EditorNodeGraphDraftMutation {
+  return RemoveColorGrades(document, std::vector<NodeId>{node_id});
+}
+
+auto EditorNodeGraphDraft::RemoveColorGrades(const PipelineDocument&    document,
+                                             const std::vector<NodeId>& node_ids)
+    -> EditorNodeGraphDraftMutation {
   EditorNodeGraphDraftMutation result;
-  const auto*                  node = FindNode(node_id);
-  if (node == nullptr) {
-    result.issue = NodeGraphDraftIssue::NodeNotInGraph;
-    result.error = "That node is not in the current graph";
+  std::vector<NodeId>          ids;
+  ids.reserve(node_ids.size());
+  for (const auto& node_id : node_ids) {
+    if (std::find(ids.begin(), ids.end(), node_id) == ids.end()) {
+      ids.push_back(node_id);
+    }
+  }
+  if (ids.empty()) {
+    result.error = "No Color Grade is selected for deletion";
     return result;
   }
-  if (node->node_kind != EditorNodeKind::ColorGrade) {
-    result.issue = NodeGraphDraftIssue::OnlyColorGradeCanBeDeleted;
-    result.error = "Only a Color Grade can be deleted";
-    return result;
-  }
-  if (!inserted_json_.contains(node_id)) {
-    const auto errors = document.ValidateUserDeletion(node_id);
-    if (!errors.empty()) {
-      result.error = errors.front().message;
+  for (const auto& node_id : ids) {
+    const auto* node = FindNode(node_id);
+    if (node == nullptr) {
+      result.issue = NodeGraphDraftIssue::NodeNotInGraph;
+      result.error = "That node is not in the current graph";
       return result;
+    }
+    if (node->node_kind != EditorNodeKind::ColorGrade) {
+      result.issue = NodeGraphDraftIssue::OnlyColorGradeCanBeDeleted;
+      result.error = "Only a Color Grade can be deleted";
+      return result;
+    }
+    if (!inserted_json_.contains(node_id)) {
+      const auto errors = document.ValidateUserDeletion(node_id);
+      if (!errors.empty()) {
+        result.error = errors.front().message;
+        return result;
+      }
     }
   }
   BeginReversal();
-  const auto out = outgoing_.at(node_id);
-  const auto in  = incoming_.at(node_id);
-  std::vector<std::string> remove_keys;
-  if (out.has_value()) {
-    remove_keys.push_back(*out);
-  }
-  if (in.has_value() && (!out.has_value() || *in != *out)) {
-    remove_keys.push_back(*in);
-  }
-  DisconnectDraftKeys(remove_keys, &result);
+  for (const auto& node_id : ids) {
+    const auto* node = FindNode(node_id);
+    const auto  out  = outgoing_.at(node_id);
+    const auto  in   = incoming_.at(node_id);
+    std::vector<std::string> remove_keys;
+    if (out.has_value()) {
+      remove_keys.push_back(*out);
+    }
+    if (in.has_value() && (!out.has_value() || *in != *out)) {
+      remove_keys.push_back(*in);
+    }
+    DisconnectDraftKeys(remove_keys, &result);
 
-  const auto node_pos = node_index_.at(node_id);
-  const auto json     = node_json_.at(node_id);
-  reversal_.removed_node_indexes.push_back(node_pos);
-  reversal_.removed_nodes.push_back(*node);
-  Remember(&reversal_.prior_node_json, node_json_, node_id);
-  Remember(&reversal_.prior_inserted_json, inserted_json_, node_id);
-  Remember(&reversal_.prior_removed, removed_, node_id);
-  EraseNodeAt(node_pos);
-  node_json_.erase(node_id);
-  result.removed_node_ids.push_back(node_id);
-  const auto inserted = inserted_json_.find(node_id);
-  if (inserted != inserted_json_.end()) {
-    inserted_json_.erase(inserted);
-    draft_next_name_number_ =
-        inserted_json_.empty() ? base_next_name_number_
-                               : MaxInsertedNameNumber(inserted_json_, base_next_name_number_);
-  } else {
-    removed_[node_id] = RemovedNodeDelta{base_node_index_.at(node_id), json};
-    ++work_stats_.json_entry_copies;
+    const auto node_pos = node_index_.at(node_id);
+    const auto json     = node_json_.at(node_id);
+    reversal_.removed_node_indexes.push_back(node_pos);
+    reversal_.removed_nodes.push_back(*node);
+    Remember(&reversal_.prior_node_json, node_json_, node_id);
+    Remember(&reversal_.prior_inserted_json, inserted_json_, node_id);
+    Remember(&reversal_.prior_removed, removed_, node_id);
+    EraseNodeAt(node_pos);
+    node_json_.erase(node_id);
+    result.removed_node_ids.push_back(node_id);
+    const auto inserted = inserted_json_.find(node_id);
+    if (inserted != inserted_json_.end()) {
+      inserted_json_.erase(inserted);
+      draft_next_name_number_ =
+          inserted_json_.empty() ? base_next_name_number_
+                                 : MaxInsertedNameNumber(inserted_json_, base_next_name_number_);
+    } else {
+      removed_[node_id] = RemovedNodeDelta{base_node_index_.at(node_id), json};
+      ++work_stats_.json_entry_copies;
+    }
   }
   return FinishMutation(std::move(result));
 }

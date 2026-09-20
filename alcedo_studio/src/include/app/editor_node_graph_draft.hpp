@@ -102,6 +102,18 @@ class EditorNodeGraphDraft {
       -> EditorNodeGraphDraftMutation;
 
   /**
+   * @brief Remove every listed Color Grade and incident edge under one reversal record.
+   *
+   * Validates every id before any mutation: each must exist in the draft, be a
+   * Color Grade, and — for committed nodes — pass @c document.ValidateUserDeletion.
+   * Draft-local inserted nodes skip document validation. A rejected id fails the
+   * whole request and leaves the draft, delta maps, and reversal record untouched.
+   * Duplicate ids collapse; caller order is preserved for the mutation result.
+   */
+  auto RemoveColorGrades(const PipelineDocument& document, const std::vector<NodeId>& node_ids)
+      -> EditorNodeGraphDraftMutation;
+
+  /**
    * @brief Exclusive-port connect from @p source_id image output to @p destination_id image input.
    *
    * Replaces the current outgoing edge of the source and the current incoming

@@ -12,6 +12,7 @@
 #include <QVariantList>
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 #include "app/editor_node_graph_draft.hpp"
 #include "app/editor_node_graph_projection.hpp"
@@ -44,6 +45,10 @@ class EditorNodeController : public QObject {
                  EditorSessionChanged)
   Q_PROPERTY(
       QString selectedNodeId READ selected_node_id_string WRITE selectNode NOTIFY SelectionChanged)
+  /// All selected product NodeIds in recency order; the last entry is the
+  /// primary node that drives single-node actions.
+  Q_PROPERTY(QStringList selectedNodeIds READ selected_node_ids NOTIFY SelectionChanged)
+  Q_PROPERTY(int selectedNodeCount READ selected_node_count NOTIFY SelectionChanged)
   Q_PROPERTY(QStringList backboneNodeIds READ backbone_node_ids NOTIFY SnapshotChanged)
   Q_PROPERTY(quint64 projectionRevision READ projection_revision NOTIFY SnapshotChanged)
   Q_PROPERTY(quint64 topologyRevision READ topology_revision NOTIFY SnapshotChanged)
@@ -57,6 +62,10 @@ class EditorNodeController : public QObject {
   Q_PROPERTY(bool canRenameSelectedColorGrade READ can_rename_selected_color_grade NOTIFY
                  ActionAvailabilityChanged)
   Q_PROPERTY(bool canDeleteSelectedColorGrade READ can_delete_selected_color_grade NOTIFY
+                 ActionAvailabilityChanged)
+  /// True when every selected node is a deletable Color Grade and the graph is
+  /// editable. Drives the multi-selection Delete action.
+  Q_PROPERTY(bool canDeleteSelectedNodes READ can_delete_selected_nodes NOTIFY
                  ActionAvailabilityChanged)
   Q_PROPERTY(bool incompleteDraft READ incomplete_draft NOTIFY DraftStateChanged)
   Q_PROPERTY(
@@ -139,6 +148,26 @@ class EditorNodeController : public QObject {
    * @param node_id Product NodeId string.
    */
   Q_INVOKABLE void selectNode(const QString& node_id);
+  /**
+   * @brief Toggle @p node_id in the controller-owned selection.
+   *
+   * An unselected node joins the selection and becomes the primary node. An
+   * already-selected node leaves; when it was primary the most recently
+   * selected remaining node becomes primary. Unknown or empty ids fail closed.
+   */
+  Q_INVOKABLE void toggleNodeSelection(const QString& node_id);
+  /**
+   * @brief Extend the selection one backbone step without collapsing it.
+   *
+   * Moves the primary node one position (@p direction < 0 toward Develop,
+   * otherwise toward DRT/Post) and keeps every currently selected node
+   * selected. With no selection it behaves like the plain arrow commands.
+   */
+  Q_INVOKABLE void extendNodeSelectionByStep(int direction);
+  /// Clear the controller-owned selection.
+  Q_INVOKABLE void clearNodeSelection();
+  /// True when @p node_id is part of the current selection.
+  Q_INVOKABLE bool isNodeSelected(const QString& node_id) const;
   /// Select the panel owner, returning to the last live Color Grade when possible.
   void             SelectNodeForAdjustmentPanel(const QString& panel);
   Q_INVOKABLE void selectPreviousBackboneNode();
@@ -200,6 +229,16 @@ class EditorNodeController : public QObject {
    */
   Q_INVOKABLE bool deleteColorGrade(const QString& node_id);
   /**
+   * @brief Remove every selected Color Grade through one draft mutation.
+   *
+   * Validates the whole selection first: any non-Color-Grade, protected, or
+   * unknown member rejects the request and leaves the selection, the draft,
+   * Qan visuals, and history untouched. On success all selected nodes and
+   * their incident edges leave the draft together; neighbors are not bridged.
+   * Selection falls to the surviving node at the first removed position.
+   */
+  Q_INVOKABLE bool deleteSelectedNodes();
+  /**
    * @brief Exclusive-port connect from @p source output to @p destination input.
    */
   Q_INVOKABLE bool requestConnect(const QString& source_node_id,
@@ -216,6 +255,11 @@ class EditorNodeController : public QObject {
 
   [[nodiscard]] auto selected_node_id() const -> NodeId { return selected_node_id_; }
   [[nodiscard]] auto selected_node_id_string() const -> QString;
+  /// Selected ids in recency order; the last entry equals selected_node_id().
+  [[nodiscard]] auto selected_node_ids() const -> QStringList;
+  [[nodiscard]] auto selected_node_count() const -> int {
+    return static_cast<int>(selected_node_ids_.size());
+  }
   [[nodiscard]] auto backbone_node_ids() const -> QStringList;
   [[nodiscard]] auto projection_revision() const -> quint64 { return projection_revision_; }
   [[nodiscard]] auto topology_revision() const -> quint64 { return topology_revision_; }
@@ -228,6 +272,8 @@ class EditorNodeController : public QObject {
   [[nodiscard]] auto can_add_color_grade() const -> bool;
   [[nodiscard]] auto can_rename_selected_color_grade() const -> bool;
   [[nodiscard]] auto can_delete_selected_color_grade() const -> bool;
+  /// True when the selection is non-empty and every member is a Color Grade.
+  [[nodiscard]] auto can_delete_selected_nodes() const -> bool;
   [[nodiscard]] auto incomplete_draft() const -> bool;
   [[nodiscard]] auto incomplete_draft_instruction() const -> QString;
   /// True while an uncommitted node-graph draft exists (incomplete or failed submit).
@@ -363,6 +409,20 @@ class EditorNodeController : public QObject {
   void               SyncLayoutKey();
   void               PersistSavedSelection();
   void               ApplyLiveSelectionToAdapter();
+  /**
+   * @brief Reselect after draft removal removed @p removed_ids.
+   *
+   * Removes dead members, keeps the most recently selected survivor as primary,
+   * and — when nothing survives — walks @p pre_removal_edges from
+   * @p path_start_id (the topmost removed node) to the nearest surviving
+   * downstream neighbor, then upstream, then the node at
+   * @p first_removed_index in the post-removal list.
+   */
+  void               UpdateSelectionAfterRemoval(
+                      const std::vector<NodeId>&                   removed_ids,
+                      const std::vector<EditorNodeEdgeProjection>& pre_removal_edges,
+                      const NodeId&                                path_start_id,
+                      int                                          first_removed_index);
   [[nodiscard]] auto SessionLocationChanged() const -> bool;
   [[nodiscard]] auto SessionIdentityChanged() const -> bool;
   /// True when the bound session must not show a node graph (empty, loading, switch, or failed).
@@ -388,6 +448,9 @@ class EditorNodeController : public QObject {
   alcedo::EditorMaskGroupSnapshot               mask_group_snapshot_{};
   bool                                          has_mask_group_snapshot_ = false;
   NodeId                                        selected_node_id_;
+  /// Controller-owned selection in recency order. Invariant: empty iff
+  /// selected_node_id_ is empty; otherwise it contains the primary node.
+  std::vector<NodeId>                           selected_node_ids_;
   NodeId                                        last_selected_color_grade_id_;
   NodeId                                        selection_restore_node_id_;
   bool                                          command_active_            = false;

@@ -194,6 +194,7 @@ void EditorNodeController::ClearSnapshot() {
   mask_group_snapshot_          = {};
   has_mask_group_snapshot_      = false;
   selected_node_id_             = {};
+  selected_node_ids_.clear();
   last_selected_color_grade_id_ = {};
   selection_restore_node_id_    = {};
   session_generation_ =
@@ -289,23 +290,47 @@ void EditorNodeController::RestoreSelectionAfterSnapshot(bool select_default_col
       const auto stored = layout_store_->selected_node_id();
       if (ContainsNode(stored)) {
         selected_node_id_          = stored;
+        selected_node_ids_         = {stored};
         selection_restore_node_id_ = {};
         return;
       }
     }
   }
+  // The controller-owned selection survives a snapshot refresh; dead members
+  // are pruned and the most recently selected survivor stays primary.
+  std::vector<NodeId> surviving;
+  surviving.reserve(selected_node_ids_.size());
+  for (const auto& node_id : selected_node_ids_) {
+    if (ContainsNode(node_id)) {
+      surviving.push_back(node_id);
+    }
+  }
+  selected_node_ids_ = std::move(surviving);
+  if (!selected_node_ids_.empty()) {
+    if (std::find(selected_node_ids_.begin(), selected_node_ids_.end(), selected_node_id_) ==
+        selected_node_ids_.end()) {
+      selected_node_id_          = selected_node_ids_.back();
+      selection_restore_node_id_ = {};
+    }
+    return;
+  }
   if (ContainsNode(selection_restore_node_id_)) {
     selected_node_id_          = selection_restore_node_id_;
+    selected_node_ids_         = {selected_node_id_};
     selection_restore_node_id_ = {};
     return;
   }
   if (ContainsNode(selected_node_id_)) {
+    selected_node_ids_ = {selected_node_id_};
     return;
   }
   if (!selected_node_id_.Empty()) {
     selection_restore_node_id_ = selected_node_id_;
   }
   selected_node_id_ = select_default_color_grade ? DefaultSelectedNodeId() : NodeId{};
+  if (!selected_node_id_.Empty()) {
+    selected_node_ids_.push_back(selected_node_id_);
+  }
 }
 
 void EditorNodeController::SyncSessionAdjustmentNode(bool seal_open_sequence) {
@@ -329,6 +354,15 @@ void EditorNodeController::SyncSessionAdjustmentNode(bool seal_open_sequence) {
 
 auto EditorNodeController::selected_node_id_string() const -> QString {
   return NodeIdToQString(selected_node_id_);
+}
+
+auto EditorNodeController::selected_node_ids() const -> QStringList {
+  QStringList ids;
+  ids.reserve(static_cast<qsizetype>(selected_node_ids_.size()));
+  for (const auto& node_id : selected_node_ids_) {
+    ids.push_back(NodeIdToQString(node_id));
+  }
+  return ids;
 }
 
 auto EditorNodeController::backbone_node_ids() const -> QStringList {
@@ -400,11 +434,20 @@ auto EditorNodeController::can_add_color_grade() const -> bool {
 }
 
 auto EditorNodeController::can_rename_selected_color_grade() const -> bool {
-  return can_add_color_grade() && IsColorGrade(selected_node_id_) && draft_ == nullptr;
+  return can_add_color_grade() && selected_node_ids_.size() <= 1 &&
+         IsColorGrade(selected_node_id_) && draft_ == nullptr;
 }
 
 auto EditorNodeController::can_delete_selected_color_grade() const -> bool {
   return can_add_color_grade() && IsColorGrade(selected_node_id_);
+}
+
+auto EditorNodeController::can_delete_selected_nodes() const -> bool {
+  if (!can_add_color_grade() || selected_node_ids_.empty()) {
+    return false;
+  }
+  return std::all_of(selected_node_ids_.begin(), selected_node_ids_.end(),
+                     [this](const NodeId& node_id) { return IsColorGrade(node_id); });
 }
 
 auto EditorNodeController::incomplete_draft() const -> bool {
@@ -672,7 +715,7 @@ void EditorNodeController::ApplyLiveSelectionToAdapter() {
   if (graph_adapter_ == nullptr) {
     return;
   }
-  graph_adapter_->ApplyProductSelection(selected_node_id_);
+  graph_adapter_->ApplyProductSelection(selected_node_ids_, selected_node_id_);
 }
 
 void EditorNodeController::ApplyBoundGraph() {
@@ -834,13 +877,84 @@ void EditorNodeController::selectNode(const QString& node_id) {
     SetLastError(tr("That node is not in the current graph"));
     return;
   }
-  if (selected_node_id_ == id) {
-    selection_restore_node_id_ = {};
+  selection_restore_node_id_ = {};
+  if (selected_node_id_ == id && selected_node_ids_.size() == 1) {
     SetLastError({});
     PersistSavedSelection();
     ApplyLiveSelectionToAdapter();
     return;
   }
+  const bool primary_unchanged = selected_node_id_ == id;
+  selected_node_ids_           = {id};
+  selected_node_id_            = id;
+  SetLastError({});
+  PersistSavedSelection();
+  ApplyLiveSelectionToAdapter();
+  if (!primary_unchanged) {
+    SyncSessionAdjustmentNode(true);
+  }
+  emit SelectionChanged();
+  emit selectionChanged();
+  emit ActionAvailabilityChanged();
+}
+
+void EditorNodeController::toggleNodeSelection(const QString& node_id) {
+  const auto id = NodeIdFromQString(node_id);
+  if (!ContainsNode(id)) {
+    SetLastError(tr("That node is not in the current graph"));
+    return;
+  }
+  selection_restore_node_id_ = {};
+  const auto it =
+      std::find(selected_node_ids_.begin(), selected_node_ids_.end(), id);
+  if (it != selected_node_ids_.end()) {
+    selected_node_ids_.erase(it);
+    if (selected_node_id_ == id) {
+      selected_node_id_ =
+          selected_node_ids_.empty() ? NodeId{} : selected_node_ids_.back();
+    }
+  } else {
+    selected_node_ids_.push_back(id);
+    selected_node_id_ = id;
+  }
+  SetLastError({});
+  PersistSavedSelection();
+  ApplyLiveSelectionToAdapter();
+  SyncSessionAdjustmentNode(true);
+  emit SelectionChanged();
+  emit selectionChanged();
+  emit ActionAvailabilityChanged();
+}
+
+void EditorNodeController::extendNodeSelectionByStep(int direction) {
+  if (!HasActiveGraph()) {
+    return;
+  }
+  const auto& nodes = ActiveNodes();
+  if (nodes.empty()) {
+    return;
+  }
+  const int index = IndexOf(selected_node_id_);
+  if (index < 0) {
+    if (direction < 0) {
+      SelectAt(0);
+    } else {
+      SelectAt(static_cast<int>(nodes.size()) - 1);
+    }
+    return;
+  }
+  const int last   = static_cast<int>(nodes.size()) - 1;
+  const int target = direction < 0 ? std::max(0, index - 1) : std::min(last, index + 1);
+  if (target == index) {
+    return;
+  }
+  const auto id = nodes[static_cast<std::size_t>(target)].node_id;
+  const auto it =
+      std::find(selected_node_ids_.begin(), selected_node_ids_.end(), id);
+  if (it != selected_node_ids_.end()) {
+    selected_node_ids_.erase(it);
+  }
+  selected_node_ids_.push_back(id);
   selected_node_id_          = id;
   selection_restore_node_id_ = {};
   SetLastError({});
@@ -850,6 +964,26 @@ void EditorNodeController::selectNode(const QString& node_id) {
   emit SelectionChanged();
   emit selectionChanged();
   emit ActionAvailabilityChanged();
+}
+
+void EditorNodeController::clearNodeSelection() {
+  if (selected_node_ids_.empty() && selected_node_id_.Empty()) {
+    return;
+  }
+  selected_node_ids_.clear();
+  selected_node_id_ = {};
+  PersistSavedSelection();
+  ApplyLiveSelectionToAdapter();
+  SyncSessionAdjustmentNode(false);
+  emit SelectionChanged();
+  emit selectionChanged();
+  emit ActionAvailabilityChanged();
+}
+
+bool EditorNodeController::isNodeSelected(const QString& node_id) const {
+  const auto id = NodeIdFromQString(node_id);
+  return std::find(selected_node_ids_.begin(), selected_node_ids_.end(), id) !=
+         selected_node_ids_.end();
 }
 
 void EditorNodeController::SetCommandActive(bool active) {
@@ -980,11 +1114,16 @@ bool EditorNodeController::deleteColorGrade(const QString& node_id) {
     SetLastError(tr("No editable node graph is available"));
     return false;
   }
+  const int  deleted_index = IndexOf(id);
+  const auto pre_edges     = ActiveEdges();
   SetCommandActive(true);
   const auto reset_active = qScopeGuard([this] { SetCommandActive(false); });
-  auto       mutation     = draft_->RemoveColorGrade(*document, id);
+  auto       mutation     = draft_->RemoveColorGrades(*document, {id});
   if (!mutation.succeeded) {
     SetLastError(PresentNodeGraphDraftMutation(mutation));
+    if (draft_->DeltaEmpty()) {
+      DiscardDraft();
+    }
     return false;
   }
   if (!ApplyDraftMutationToAdapter(mutation)) {
@@ -992,16 +1131,144 @@ bool EditorNodeController::deleteColorGrade(const QString& node_id) {
   }
   emit DraftStateChanged();
   emit ActionAvailabilityChanged();
-  if (!ContainsNode(selected_node_id_)) {
-    selected_node_id_ = {};
-    PersistSavedSelection();
-    ApplyLiveSelectionToAdapter();
-    SyncSessionAdjustmentNode(false);
-    emit SelectionChanged();
-    emit selectionChanged();
-    emit ActionAvailabilityChanged();
-  }
+  UpdateSelectionAfterRemoval({id}, pre_edges, id, deleted_index);
   return MaybeSubmitDraft();
+}
+
+bool EditorNodeController::deleteSelectedNodes() {
+  if (!ValidateCommandState()) {
+    return false;
+  }
+  if (selected_node_ids_.empty()) {
+    SetLastError(tr("No node is selected"));
+    return false;
+  }
+  // Validate the whole selection before touching the draft so a rejected set
+  // leaves selection, draft, visuals, and history unchanged.
+  for (const auto& node_id : selected_node_ids_) {
+    if (!IsColorGrade(node_id)) {
+      SetLastError(tr("Only a Color Grade can be deleted"));
+      return false;
+    }
+  }
+  if (!EnsureDraft()) {
+    return false;
+  }
+  const auto document = session_->pipeline_document();
+  if (!document) {
+    SetLastError(tr("No editable node graph is available"));
+    return false;
+  }
+  const auto removed_ids = selected_node_ids_;
+  int        first_removed_index = -1;
+  for (const auto& node_id : removed_ids) {
+    const int index = IndexOf(node_id);
+    if (index >= 0 && (first_removed_index < 0 || index < first_removed_index)) {
+      first_removed_index = index;
+    }
+  }
+  const NodeId path_start =
+      first_removed_index >= 0
+          ? ActiveNodes()[static_cast<std::size_t>(first_removed_index)].node_id
+          : NodeId{};
+  const auto pre_edges = ActiveEdges();
+  SetCommandActive(true);
+  const auto reset_active = qScopeGuard([this] { SetCommandActive(false); });
+  auto       mutation     = draft_->RemoveColorGrades(*document, removed_ids);
+  if (!mutation.succeeded) {
+    SetLastError(PresentNodeGraphDraftMutation(mutation));
+    if (draft_->DeltaEmpty()) {
+      DiscardDraft();
+    }
+    return false;
+  }
+  if (!ApplyDraftMutationToAdapter(mutation)) {
+    return false;
+  }
+  emit DraftStateChanged();
+  emit ActionAvailabilityChanged();
+  UpdateSelectionAfterRemoval(removed_ids, pre_edges, path_start, first_removed_index);
+  return MaybeSubmitDraft();
+}
+
+void EditorNodeController::UpdateSelectionAfterRemoval(
+    const std::vector<NodeId>&                   removed_ids,
+    const std::vector<EditorNodeEdgeProjection>& pre_removal_edges,
+    const NodeId&                                path_start_id,
+    int                                          first_removed_index) {
+  bool changed = false;
+  for (const auto& node_id : removed_ids) {
+    const auto it =
+        std::find(selected_node_ids_.begin(), selected_node_ids_.end(), node_id);
+    if (it != selected_node_ids_.end()) {
+      selected_node_ids_.erase(it);
+      changed = true;
+    }
+  }
+  if (ContainsNode(selected_node_id_)) {
+    if (!changed) {
+      return;
+    }
+  } else if (!selected_node_ids_.empty()) {
+    selected_node_id_ = selected_node_ids_.back();
+    changed           = true;
+  } else {
+    // Every selected node was removed: prefer the nearest surviving neighbor
+    // downstream of the removed run along the pre-removal path, then upstream.
+    const auto is_removed = [&removed_ids](const NodeId& id) {
+      return std::find(removed_ids.begin(), removed_ids.end(), id) != removed_ids.end();
+    };
+    const auto walk_path = [&](bool downstream) -> NodeId {
+      std::vector<NodeId> visited;
+      NodeId              cursor = path_start_id;
+      while (!cursor.Empty() &&
+             std::find(visited.begin(), visited.end(), cursor) == visited.end()) {
+        visited.push_back(cursor);
+        NodeId next;
+        for (const auto& edge : pre_removal_edges) {
+          const auto& adjacent =
+              downstream ? edge.source_node_id : edge.destination_node_id;
+          if (adjacent == cursor) {
+            next = downstream ? edge.destination_node_id : edge.source_node_id;
+            break;
+          }
+        }
+        if (next.Empty()) {
+          return {};
+        }
+        if (is_removed(next)) {
+          cursor = next;
+          continue;
+        }
+        return ContainsNode(next) ? next : NodeId{};
+      }
+      return {};
+    };
+    selected_node_id_ = walk_path(true);
+    if (selected_node_id_.Empty()) {
+      selected_node_id_ = walk_path(false);
+    }
+    if (selected_node_id_.Empty()) {
+      const auto& nodes = ActiveNodes();
+      if (!nodes.empty() && first_removed_index >= 0) {
+        selected_node_id_ =
+            nodes[std::min(first_removed_index, static_cast<int>(nodes.size()) - 1)].node_id;
+      }
+    }
+    if (!selected_node_id_.Empty()) {
+      selected_node_ids_.push_back(selected_node_id_);
+    }
+    changed = true;
+  }
+  if (!changed) {
+    return;
+  }
+  PersistSavedSelection();
+  ApplyLiveSelectionToAdapter();
+  SyncSessionAdjustmentNode(false);
+  emit SelectionChanged();
+  emit selectionChanged();
+  emit ActionAvailabilityChanged();
 }
 
 bool EditorNodeController::insertMaskGroupAtTop() {

@@ -129,12 +129,11 @@ Item {
         anchors.rightMargin: appTheme.graphMaskRowHeight + appTheme.spaceXs
         hoverEnabled: true
         preventStealing: true
-        acceptedButtons: Qt.LeftButton | Qt.RightButton
+        // Left button only: a right press falls through to the owning
+        // NodeItem so the Color Grade context menu opens over a Mask row.
+        acceptedButtons: Qt.LeftButton
         cursorShape: Qt.PointingHandCursor
-        // NodeItem::mousePressEvent accepts the whole card and emits
-        // nodeClicked / nodeRightClicked. When this MouseArea is the pick
-        // target, consume both buttons so the Color Grade menu does not open
-        // on a Mask row. Select on press; the graph also hit-tests rows.
+        // Select on press; the graph also hit-tests rows.
         onPressed: function (mouse) {
             mouse.accepted = true
             root.clicked()

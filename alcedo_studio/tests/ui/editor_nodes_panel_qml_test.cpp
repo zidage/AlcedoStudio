@@ -421,7 +421,10 @@ TEST_F(EditorNodesPanelQmlTest, CtrlClickCannotCreateASecondProductSelection) {
                     grade->getItem()->mapToScene(QPointF(8, 8)).toPoint());
   ProcessEvents();
 
+  // Ctrl is not the nodes.extendSelection modifier: the click replaces the
+  // selection instead of adding a second member.
   EXPECT_EQ(nodes->selected_node_id(), NodeId{"grade.primary"});
+  EXPECT_EQ(nodes->selected_node_ids(), QStringList{QStringLiteral("grade.primary")});
   ASSERT_NE(adapter->graph(), nullptr);
   EXPECT_FALSE(adapter->graph()->hasMultipleSelection());
 }
@@ -870,7 +873,7 @@ TEST_F(EditorNodesPanelQmlTest, MaskRowPressQueuesSelectMaskWhenNodeIdPropertyIs
   EXPECT_EQ(backend_.mask_commands().back().mask_id, MaskId{"mask.radial"});
 }
 
-TEST_F(EditorNodesPanelQmlTest, RightClickOnMaskRowSelectsMaskAndDoesNotOpenNodeMenu) {
+TEST_F(EditorNodesPanelQmlTest, RightClickOnMaskRowOpensNodeMenuWithoutSelectingMask) {
   ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
   backend_.AddMaskToPrimaryGrade(MakeMask(MaskId{"mask.radial"}, RadialMaskSource{}));
   OpenNodesPage();
@@ -885,15 +888,19 @@ TEST_F(EditorNodesPanelQmlTest, RightClickOnMaskRowSelectsMaskAndDoesNotOpenNode
   auto* menu = Find(QStringLiteral("editorNodesNodeMenu"));
   ASSERT_NE(menu, nullptr);
 
+  // The Mask row only owns left presses: a right click over it reaches the
+  // NodeItem, maintains the node selection, and opens the node context menu —
+  // the same Delete/Rename surface a mask-free node gets.
   QTest::mouseClick(window_, Qt::RightButton, Qt::NoModifier,
                     row->mapToScene(QPointF(row->width() / 4.0, row->height() / 2.0)).toPoint());
   ProcessEvents();
 
   ASSERT_NE(controller_.mask_creation(), nullptr);
-  EXPECT_EQ(controller_.mask_creation()->selected_mask_id(), QStringLiteral("mask.radial"));
-  EXPECT_EQ(controller_.active_adjustment_panel(), QStringLiteral("masks"));
-  EXPECT_FALSE(menu->property("opened").toBool());
-  EXPECT_FALSE(menu->isVisible());
+  EXPECT_TRUE(controller_.mask_creation()->selected_mask_id().isEmpty());
+  EXPECT_TRUE(menu->property("opened").toBool() || menu->isVisible());
+  auto* nodes = Controller();
+  ASSERT_NE(nodes, nullptr);
+  EXPECT_EQ(nodes->selected_node_id(), NodeId{"grade.primary"});
 }
 
 TEST_F(EditorNodesPanelQmlTest,
@@ -2189,6 +2196,311 @@ TEST_F(EditorNodesPanelQmlTest, MaskGroupDragFailureKeepsRowUntilRetry) {
                                             QStringLiteral("grade.primary");
       }(),
       2000);
+}
+
+// A3 multi-selection coverage. dispatchGraphKey takes plain ints so these
+// tests drive the panel's key routing directly instead of relying on
+// offscreen key/focus delivery.
+
+TEST_F(EditorNodesPanelQmlTest, ShiftClickTogglesNodeSelectionThroughTheRegistryModifier) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  backend_.AddColorGradeBefore(NodeId{"drt"}, NodeId{"grade.extra"});
+  OpenNodesPage();
+  auto* nodes   = Controller();
+  auto* adapter = Adapter();
+  ASSERT_NE(nodes, nullptr);
+  ASSERT_NE(adapter, nullptr);
+  WaitUntilGraphReady();
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(NodeId{"grade.extra"}) != nullptr, 2000);
+  ASSERT_EQ(nodes->selected_node_ids(), QStringList{QStringLiteral("grade.primary")});
+
+  auto* extra_item = adapter->NodeFor(NodeId{"grade.extra"})->getItem();
+  ASSERT_NE(extra_item, nullptr);
+  QTest::mouseClick(window_, Qt::LeftButton, Qt::ShiftModifier,
+                    extra_item->mapToScene(QPointF(8, 8)).toPoint());
+  ProcessEvents();
+
+  EXPECT_EQ(nodes->selected_node_ids(),
+            (QStringList{QStringLiteral("grade.primary"), QStringLiteral("grade.extra")}));
+  EXPECT_EQ(nodes->selected_node_id(), NodeId{"grade.extra"});
+
+  QTest::mouseClick(window_, Qt::LeftButton, Qt::ShiftModifier,
+                    extra_item->mapToScene(QPointF(8, 8)).toPoint());
+  ProcessEvents();
+
+  EXPECT_EQ(nodes->selected_node_ids(), QStringList{QStringLiteral("grade.primary")});
+  EXPECT_EQ(nodes->selected_node_id(), NodeId{"grade.primary"});
+}
+
+TEST_F(EditorNodesPanelQmlTest, PlainClickReplacesNodeMultiSelection) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  backend_.AddColorGradeBefore(NodeId{"drt"}, NodeId{"grade.extra"});
+  OpenNodesPage();
+  auto* nodes   = Controller();
+  auto* adapter = Adapter();
+  ASSERT_NE(nodes, nullptr);
+  ASSERT_NE(adapter, nullptr);
+  WaitUntilGraphReady();
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(NodeId{"grade.extra"}) != nullptr, 2000);
+
+  nodes->toggleNodeSelection(QStringLiteral("grade.extra"));
+  ProcessEvents();
+  ASSERT_EQ(nodes->selected_node_ids(),
+            (QStringList{QStringLiteral("grade.primary"), QStringLiteral("grade.extra")}));
+
+  auto* develop_item = adapter->NodeFor(NodeId{"develop"})->getItem();
+  ASSERT_NE(develop_item, nullptr);
+  QTest::mouseClick(window_, Qt::LeftButton, Qt::NoModifier,
+                    develop_item->mapToScene(QPointF(8, 8)).toPoint());
+  ProcessEvents();
+
+  EXPECT_EQ(nodes->selected_node_ids(), QStringList{QStringLiteral("develop")});
+  EXPECT_EQ(nodes->selected_node_id(), NodeId{"develop"});
+}
+
+TEST_F(EditorNodesPanelQmlTest, DeleteRunsOneSelectedNodesRequest) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  backend_.AddColorGradeBefore(NodeId{"drt"}, NodeId{"grade.extra"});
+  OpenNodesPage();
+  auto* nodes   = Controller();
+  auto* adapter = Adapter();
+  auto* body    = Find(QStringLiteral("editorNodesPageBody"));
+  ASSERT_NE(nodes, nullptr);
+  ASSERT_NE(adapter, nullptr);
+  ASSERT_NE(body, nullptr);
+  WaitUntilGraphReady();
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(NodeId{"grade.extra"}) != nullptr, 2000);
+  ASSERT_TRUE(nodes->setColorGradeDeletionProtected(QStringLiteral("grade.primary"), false));
+  nodes->toggleNodeSelection(QStringLiteral("grade.extra"));
+  ProcessEvents();
+  ASSERT_EQ(nodes->selected_node_ids().size(), 2);
+
+  QVariant returned;
+  ASSERT_TRUE(QMetaObject::invokeMethod(
+      body, "dispatchGraphKey", Q_RETURN_ARG(QVariant, returned),
+      Q_ARG(QVariant, QVariant::fromValue(static_cast<int>(Qt::Key_Delete))),
+      Q_ARG(QVariant, QVariant::fromValue(0))));
+  const bool handled = returned.toBool();
+  ProcessEvents();
+
+  EXPECT_TRUE(handled);
+  // One Delete input removed both grades in one draft mutation; the broken
+  // backbone path is not submitted to the backend.
+  EXPECT_EQ(backend_.edit_node_graph_count(), 0);
+  EXPECT_TRUE(nodes->incomplete_draft());
+  EXPECT_EQ(nodes->backbone_node_ids(),
+            (QStringList{QStringLiteral("develop"), QStringLiteral("drt")}));
+  EXPECT_EQ(nodes->selected_node_id(), NodeId{"drt"});
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->graph() != nullptr && adapter->graph()->getNodeCount() == 2,
+                           2000);
+}
+
+TEST_F(EditorNodesPanelQmlTest, MaskRowPressDoesNotExtendNodeSelection) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  backend_.AddColorGradeBefore(NodeId{"drt"}, NodeId{"grade.extra"});
+  backend_.AddMaskToGrade(NodeId{"grade.extra"},
+                          MakeMask(MaskId{"mask.extra"}, RadialMaskSource{}));
+  OpenNodesPage();
+  auto* nodes   = Controller();
+  auto* adapter = Adapter();
+  ASSERT_NE(nodes, nullptr);
+  ASSERT_NE(adapter, nullptr);
+  WaitUntilGraphReady();
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(NodeId{"grade.extra"}) != nullptr, 2000);
+  ASSERT_EQ(nodes->selected_node_ids(), QStringList{QStringLiteral("grade.primary")});
+
+  auto* extra_item = adapter->NodeFor(NodeId{"grade.extra"})->getItem();
+  ASSERT_NE(extra_item, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(
+      extra_item->findChild<QQuickItem*>(QStringLiteral("editorNodeMaskTypeRow")) != nullptr,
+      2000);
+  auto* row = extra_item->findChild<QQuickItem*>(QStringLiteral("editorNodeMaskTypeRow"));
+  // A Mask row owns its left presses even under Shift: mask authoring stays
+  // scoped to one owning node instead of growing a node multi-selection.
+  QTest::mouseClick(window_, Qt::LeftButton, Qt::ShiftModifier,
+                    row->mapToScene(QPointF(row->width() / 4.0, row->height() / 2.0)).toPoint());
+  ProcessEvents();
+
+  EXPECT_EQ(nodes->selected_node_ids(), QStringList{QStringLiteral("grade.extra")});
+  EXPECT_EQ(nodes->selected_node_id(), NodeId{"grade.extra"});
+  ASSERT_TRUE(backend_.mask_creation_commands_pending());
+  EXPECT_EQ(backend_.mask_commands().back().kind, EditorMaskCreationCommandKind::SelectMask);
+  EXPECT_EQ(backend_.mask_commands().back().mask_id, MaskId{"mask.extra"});
+}
+
+TEST_F(EditorNodesPanelQmlTest, MaskDeleteShadowsNodesDeleteWhileMaskEditIsActive) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  backend_.AddMaskToPrimaryGrade(MakeMask(MaskId{"mask.radial"}, RadialMaskSource{}));
+  OpenNodesPage();
+  auto* nodes   = Controller();
+  auto* adapter = Adapter();
+  auto* body    = Find(QStringLiteral("editorNodesPageBody"));
+  ASSERT_NE(nodes, nullptr);
+  ASSERT_NE(adapter, nullptr);
+  ASSERT_NE(body, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(NodeId{"grade.primary"}) != nullptr, 2000);
+  auto* grade_item = adapter->NodeFor(NodeId{"grade.primary"})->getItem();
+  ASSERT_NE(grade_item, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(
+      grade_item->findChild<QQuickItem*>(QStringLiteral("editorNodeMaskTypeRow")) != nullptr,
+      2000);
+  auto* row = grade_item->findChild<QQuickItem*>(QStringLiteral("editorNodeMaskTypeRow"));
+  Click(window_, row, QPointF(row->width() / 4.0, row->height() / 2.0));
+  backend_.CompleteMaskCommands();
+  ProcessEvents();
+  ASSERT_TRUE(controller_.mask_creation()->mask_controls_active());
+
+  QVariant returned;
+  ASSERT_TRUE(QMetaObject::invokeMethod(
+      body, "dispatchGraphKey", Q_RETURN_ARG(QVariant, returned),
+      Q_ARG(QVariant, QVariant::fromValue(static_cast<int>(Qt::Key_Delete))),
+      Q_ARG(QVariant, QVariant::fromValue(0))));
+  const bool handled = returned.toBool();
+  ProcessEvents();
+
+  // Transient Mask editing owns Delete; the node graph keeps everything.
+  EXPECT_FALSE(handled);
+  EXPECT_EQ(backend_.edit_node_graph_count(), 0);
+  EXPECT_FALSE(nodes->incomplete_draft());
+  EXPECT_EQ(nodes->selected_node_id(), NodeId{"grade.primary"});
+  EXPECT_TRUE(adapter->NodeFor(NodeId{"grade.primary"}) != nullptr);
+  EXPECT_EQ(controller_.mask_creation()->selected_mask_id(), QStringLiteral("mask.radial"));
+}
+
+TEST_F(EditorNodesPanelQmlTest, SubmittedMultiDeleteAndReconnectUndoesAsOneHistoryStep) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  backend_.AddColorGradeBefore(NodeId{"drt"}, NodeId{"grade.extra"});
+  OpenNodesPage();
+  auto* nodes   = Controller();
+  auto* adapter = Adapter();
+  auto* body    = Find(QStringLiteral("editorNodesPageBody"));
+  ASSERT_NE(nodes, nullptr);
+  ASSERT_NE(adapter, nullptr);
+  ASSERT_NE(body, nullptr);
+  WaitUntilGraphReady();
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(NodeId{"grade.extra"}) != nullptr, 2000);
+  ASSERT_TRUE(nodes->setColorGradeDeletionProtected(QStringLiteral("grade.primary"), false));
+  nodes->toggleNodeSelection(QStringLiteral("grade.extra"));
+  ProcessEvents();
+
+  QVariant returned;
+  ASSERT_TRUE(QMetaObject::invokeMethod(
+      body, "dispatchGraphKey", Q_RETURN_ARG(QVariant, returned),
+      Q_ARG(QVariant, QVariant::fromValue(static_cast<int>(Qt::Key_Delete))),
+      Q_ARG(QVariant, QVariant::fromValue(0))));
+  const bool handled = returned.toBool();
+  ProcessEvents();
+  ASSERT_TRUE(handled);
+  ASSERT_TRUE(nodes->incomplete_draft());
+  ASSERT_EQ(backend_.edit_node_graph_count(), 0);
+
+  ASSERT_TRUE(nodes->requestConnect(QStringLiteral("develop"), QStringLiteral("drt")));
+  ProcessEvents();
+
+  // The completed draft submits once: both removed nodes ride one history
+  // step. Removals are recorded in descending node-index order so the
+  // reversal record restores the original topology.
+  ASSERT_EQ(backend_.edit_node_graph_count(), 1);
+  EXPECT_FALSE(nodes->incomplete_draft());
+  ASSERT_EQ(backend_.last_topology_change().removed_nodes.size(), 2U);
+  EXPECT_EQ(backend_.last_topology_change().removed_nodes.front().node.at("id").get<std::string>(),
+            "grade.extra");
+  EXPECT_EQ(backend_.last_topology_change().removed_nodes.back().node.at("id").get<std::string>(),
+            "grade.primary");
+
+  // The harness Undo is a counter stub; the single count here is the
+  // assertion that the whole delete-and-reconnect is one history step.
+  backend_.Undo();
+  ProcessEvents();
+  EXPECT_EQ(backend_.undo_count(), 1);
+}
+
+TEST_F(EditorNodesPanelQmlTest, RejectedMultiDeleteKeepsSelectionDraftViewAndHistoryUnchanged) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  backend_.AddColorGradeBefore(NodeId{"drt"}, NodeId{"grade.extra"});
+  OpenNodesPage();
+  auto* nodes   = Controller();
+  auto* adapter = Adapter();
+  auto* body    = Find(QStringLiteral("editorNodesPageBody"));
+  ASSERT_NE(nodes, nullptr);
+  ASSERT_NE(adapter, nullptr);
+  ASSERT_NE(body, nullptr);
+  WaitUntilGraphReady();
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(NodeId{"grade.extra"}) != nullptr, 2000);
+  // grade.primary keeps its committed deletion protection: one protected
+  // member rejects the whole multi-delete before any mutation.
+  nodes->toggleNodeSelection(QStringLiteral("grade.extra"));
+  ProcessEvents();
+  ASSERT_EQ(nodes->selected_node_ids(),
+            (QStringList{QStringLiteral("grade.primary"), QStringLiteral("grade.extra")}));
+  // The admission check is structural (all members are Color Grades); the
+  // committed deletion protection rejects the set inside the draft mutation.
+  EXPECT_TRUE(nodes->can_delete_selected_nodes());
+
+  QVariant returned;
+  ASSERT_TRUE(QMetaObject::invokeMethod(
+      body, "dispatchGraphKey", Q_RETURN_ARG(QVariant, returned),
+      Q_ARG(QVariant, QVariant::fromValue(static_cast<int>(Qt::Key_Delete))),
+      Q_ARG(QVariant, QVariant::fromValue(0))));
+  const bool handled = returned.toBool();
+  ProcessEvents();
+
+  EXPECT_TRUE(handled);
+  EXPECT_EQ(backend_.edit_node_graph_count(), 0);
+  EXPECT_FALSE(nodes->incomplete_draft());
+  EXPECT_EQ(nodes->selected_node_ids(),
+            (QStringList{QStringLiteral("grade.primary"), QStringLiteral("grade.extra")}));
+  EXPECT_EQ(nodes->backbone_node_ids().size(), 4);
+  EXPECT_EQ(adapter->graph()->getNodeCount(), 4);
+}
+
+TEST_F(EditorNodesPanelQmlTest, MultiSelectionNodeMenuDisablesRenameAndLabelsBatchDelete) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  backend_.AddColorGradeBefore(NodeId{"drt"}, NodeId{"grade.extra"});
+  OpenNodesPage();
+  auto* nodes   = Controller();
+  auto* adapter = Adapter();
+  ASSERT_NE(nodes, nullptr);
+  ASSERT_NE(adapter, nullptr);
+  WaitUntilGraphReady();
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(NodeId{"grade.extra"}) != nullptr, 2000);
+  ASSERT_TRUE(nodes->setColorGradeDeletionProtected(QStringLiteral("grade.primary"), false));
+  nodes->toggleNodeSelection(QStringLiteral("grade.extra"));
+  ProcessEvents();
+  ASSERT_EQ(nodes->selected_node_ids().size(), 2);
+
+  // A right press on an already-selected member keeps the multi-selection the
+  // menu will act on.
+  auto* extra_item = adapter->NodeFor(NodeId{"grade.extra"})->getItem();
+  ASSERT_NE(extra_item, nullptr);
+  QTest::mouseClick(window_, Qt::RightButton, Qt::NoModifier,
+                    extra_item->mapToScene(QPointF(8, 8)).toPoint());
+  ProcessEvents();
+
+  // The menu is a Popup, not a QQuickItem: look it up as a QObject.
+  auto* menu = window_->findChild<QObject*>(QStringLiteral("editorNodesNodeMenu"));
+  ASSERT_NE(menu, nullptr);
+  EXPECT_TRUE(menu->property("visible").toBool());
+  EXPECT_EQ(nodes->selected_node_ids().size(), 2);
+  auto* rename = Find(QStringLiteral("editorNodesRenameMenuItem"));
+  auto* remove = Find(QStringLiteral("editorNodesDeleteMenuItem"));
+  ASSERT_NE(rename, nullptr);
+  ASSERT_NE(remove, nullptr);
+  EXPECT_FALSE(rename->property("enabled").toBool());
+  EXPECT_TRUE(remove->property("enabled").toBool());
+  EXPECT_EQ(remove->property("text").toString(), QStringLiteral("Delete Selected Nodes"));
+  ASSERT_TRUE(QMetaObject::invokeMethod(menu, "close"));
+  ProcessEvents();
+
+  // Collapsing back to one node restores both single-node actions.
+  nodes->selectNode(QStringLiteral("grade.extra"));
+  ProcessEvents();
+  QTest::mouseClick(window_, Qt::RightButton, Qt::NoModifier,
+                    extra_item->mapToScene(QPointF(8, 8)).toPoint());
+  ProcessEvents();
+  EXPECT_TRUE(rename->property("enabled").toBool());
+  EXPECT_TRUE(remove->property("enabled").toBool());
+  EXPECT_EQ(remove->property("text").toString(), QStringLiteral("Delete Color Grade"));
 }
 
 }  // namespace

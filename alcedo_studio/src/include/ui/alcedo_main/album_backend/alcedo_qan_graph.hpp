@@ -12,6 +12,7 @@
 #include <QQmlEngine>
 #include <QQuickItem>
 #include <QString>
+#include <QStringList>
 #include <QUrl>
 #include <QVariantList>
 #include <cstddef>
@@ -239,11 +240,16 @@ class AlcedoQanGraph : public QObject {
   [[nodiscard]] auto  has_projection() const -> bool;
 
   /**
-   * @brief Apply the one-node product selection to live Qan visuals.
+   * @brief Apply the controller-owned product selection to live Qan visuals.
    *
-   * Clears the Qan selected-node list, then selects at most one mapped node.
-   * A Qan selected-node list is never treated as a product selection source.
+   * Clears the Qan selected-node list, then marks every mapped id in
+   * @p node_ids selected. @p primary_id drives the connector source policy;
+   * it must be a member of @p node_ids or empty. A Qan selected-node list is
+   * never treated as a product selection source.
    */
+  void                ApplyProductSelection(const std::vector<NodeId>& node_ids,
+                                            const NodeId&              primary_id);
+  /// Single-selection convenience overload of the vector form.
   void                ApplyProductSelection(const std::optional<NodeId>& node_id);
 
   /**
@@ -265,7 +271,9 @@ class AlcedoQanGraph : public QObject {
   Q_INVOKABLE QPointF nodePosition(const QString& node_id) const;
   Q_INVOKABLE void    setDrawerOpen(const QString& node_id, bool open);
   Q_INVOKABLE bool    drawerOpen(const QString& node_id) const;
-  Q_INVOKABLE void    applyProductSelection(const QString& node_id);
+  /// Project the controller-owned selection; the last-listed id is primary.
+  Q_INVOKABLE void    applyProductSelection(const QStringList& node_ids,
+                                            const QString&     primary_id);
   /**
    * @brief Hide the official visual connector preview without inserting an edge.
    *
@@ -524,7 +532,12 @@ class AlcedoQanGraph : public QObject {
   std::map<NodeId, NodePorts>                  ports_by_node_;
   std::unordered_map<const qan::Node*, NodeId> node_from_qan_;
   std::vector<QMetaObject::Connection>         drawer_connections_;
+  /// Primary node inside @c product_selected_node_ids_; drives the connector
+  /// source policy and equals the controller's primary selection.
   NodeId                                       product_selected_node_id_;
+  /// Controller-owned selection projected onto Qan visuals. Never fed back
+  /// into product state.
+  std::vector<NodeId>                          product_selected_node_ids_;
   NodeId                                       keyboard_connect_source_id_;
   QString                                      selected_mask_id_;
 };
