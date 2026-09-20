@@ -1274,6 +1274,7 @@ void AlcedoQanGraph::ApplyNodePresentation(qan::Node& qan_node, const EditorNode
   item->setResizable(false);
   item->setProperty("nodeKind", NodeKindKey(node.node_kind));
   item->setProperty("nodeId", ToQString(node.node_id.Value()));
+  item->setProperty("deletionProtected", node.deletion_protected);
   item->setProperty("selectedMaskId", selected_mask_id_);
   item->setProperty("masks", MasksToVariant(node.masks));
   item->setProperty("graphAdapter", QVariant::fromValue(this));

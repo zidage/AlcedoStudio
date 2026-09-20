@@ -2503,5 +2503,41 @@ TEST_F(EditorNodesPanelQmlTest, MultiSelectionNodeMenuDisablesRenameAndLabelsBat
   EXPECT_EQ(remove->property("text").toString(), QStringLiteral("Delete Color Grade"));
 }
 
+TEST_F(EditorNodesPanelQmlTest, NodeCardMirrorsDeletionProtectedStateWithLockIcon) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  backend_.AddColorGradeBefore(NodeId{"drt"}, NodeId{"grade.extra"});
+  OpenNodesPage();
+  auto* nodes   = Controller();
+  auto* adapter = Adapter();
+  ASSERT_NE(nodes, nullptr);
+  ASSERT_NE(adapter, nullptr);
+  WaitUntilGraphReady();
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(NodeId{"grade.primary"}) != nullptr, 2000);
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(NodeId{"grade.extra"}) != nullptr, 2000);
+
+  auto* primary_item = adapter->NodeFor(NodeId{"grade.primary"})->getItem();
+  auto* extra_item   = adapter->NodeFor(NodeId{"grade.extra"})->getItem();
+  ASSERT_NE(primary_item, nullptr);
+  ASSERT_NE(extra_item, nullptr);
+
+  // grade.primary is deletion-protected by default: its card shows the lock
+  // icon while the unprotected grade.extra card does not.
+  QTRY_VERIFY_WITH_TIMEOUT(
+      primary_item->property("deletionProtected").toBool() == true, 2000);
+  EXPECT_FALSE(extra_item->property("deletionProtected").toBool());
+  auto* lock_icon = primary_item->findChild<QQuickItem*>(QStringLiteral("editorNodeLockIcon"));
+  ASSERT_NE(lock_icon, nullptr);
+  EXPECT_TRUE(lock_icon->isVisible());
+  auto* extra_lock = extra_item->findChild<QQuickItem*>(QStringLiteral("editorNodeLockIcon"));
+  ASSERT_NE(extra_lock, nullptr);
+  EXPECT_FALSE(extra_lock->isVisible());
+
+  // Unlocking through the controller commits and refreshes the card.
+  ASSERT_TRUE(nodes->setColorGradeDeletionProtected(QStringLiteral("grade.primary"), false));
+  QTRY_VERIFY_WITH_TIMEOUT(
+      primary_item->property("deletionProtected").toBool() == false, 5000);
+  QTRY_VERIFY_WITH_TIMEOUT(!lock_icon->isVisible(), 5000);
+}
+
 }  // namespace
 }  // namespace alcedo::ui::test

@@ -42,6 +42,7 @@ struct EditorNodeProjection {
   NodeId                                node_id;
   EditorNodeKind                        node_kind = EditorNodeKind::ColorGrade;
   std::string                           display_name;
+  bool                                  deletion_protected = false;
   std::vector<EditorNodeMaskProjection> masks;
 
   auto operator==(const EditorNodeProjection&) const -> bool = default;
