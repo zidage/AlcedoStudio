@@ -570,7 +570,7 @@ Item {
             radius: appTheme.controlRadiusSmall
             color: appTheme.graphCanvasColor
             border.width: 1
-            border.color: graphView.activeFocus ? root.colText : root.colCardBorder
+            border.color: root.colCardBorder
             clip: true
 
             Label {

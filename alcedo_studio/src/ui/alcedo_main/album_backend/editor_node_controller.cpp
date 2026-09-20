@@ -438,16 +438,16 @@ auto EditorNodeController::can_rename_selected_color_grade() const -> bool {
          IsColorGrade(selected_node_id_) && draft_ == nullptr;
 }
 
-auto EditorNodeController::can_delete_selected_color_grade() const -> bool {
-  return can_add_color_grade() && IsColorGrade(selected_node_id_);
-}
-
 auto EditorNodeController::can_delete_selected_nodes() const -> bool {
   if (!can_add_color_grade() || selected_node_ids_.empty()) {
     return false;
   }
   return std::all_of(selected_node_ids_.begin(), selected_node_ids_.end(),
-                     [this](const NodeId& node_id) { return IsColorGrade(node_id); });
+                     [this](const NodeId& node_id) {
+                       const auto* node = NodeFor(node_id);
+                       return node != nullptr && node->node_kind == EditorNodeKind::ColorGrade &&
+                              !node->deletion_protected;
+                     });
 }
 
 auto EditorNodeController::incomplete_draft() const -> bool {
@@ -1475,7 +1475,6 @@ auto EditorNodeController::mask_groups() const -> QVariantList {
       mask_row.insert(QStringLiteral("sourceKind"), MaskSourceKindKey(mask.source_kind));
       mask_row.insert(QStringLiteral("displayName"), QString::fromStdString(mask.display_name));
       mask_row.insert(QStringLiteral("enabled"), mask.enabled);
-      mask_row.insert(QStringLiteral("deletionProtected"), mask.deletion_protected);
       mask_row.insert(QStringLiteral("opacity"), static_cast<double>(mask.opacity));
       masks.push_back(mask_row);
     }

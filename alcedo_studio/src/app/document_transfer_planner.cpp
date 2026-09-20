@@ -186,10 +186,7 @@ auto RemapGradeEntry(const TransferColorGradeValue& grade, TransferIdentitySourc
       const auto new_mask = identity.NextMaskId();
       RejectCollision(std::string{new_mask.Value()}, *occupied, "MaskId");
       occupied->insert(std::string{new_mask.Value()});
-      mask.id                 = new_mask;
-      // Masks added to the target default Grade take the required default
-      // protection, matching mask creation on the default Grade.
-      mask.deletion_protected = becomes_default || mask.deletion_protected;
+      mask.id = new_mask;
 #ifdef ALCEDO_ENABLE_BRUSH_MASK
       if (auto* brush = std::get_if<BrushMaskSource>(&mask.source)) {
         for (auto& stroke : brush->strokes) {

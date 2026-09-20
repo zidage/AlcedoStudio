@@ -170,13 +170,15 @@ TEST(GpuDagModelGraph, BuiltinCatalogTypeIdsAreUnique) {
   }
 }
 
-TEST(GpuDagModelGraph, LockedMaskPreventsOwningGradeDeletion) {
+TEST(GpuDagModelGraph, MaskProtectionFlagDoesNotBlockOwningGradeDeletion) {
+  // Masks cannot be locked anymore: a persisted legacy flag on a Mask is inert
+  // for ValidateUserDeletion. Only the Color Grade's own lock blocks deletion.
   auto document = CreateDefaultPipelineDocument();
   auto* grade = document.PrimaryGrade();
   ASSERT_NE(grade, nullptr);
   grade->SetDeletionProtected(false);
   MaskModel mask;
-  mask.id = MaskId{"mask.protected"};
+  mask.id = MaskId{"mask.legacy_locked"};
   mask.deletion_protected = true;
   grade->AddMask(mask, 0);
   document.ClearTopologyDirty();
@@ -184,18 +186,20 @@ TEST(GpuDagModelGraph, LockedMaskPreventsOwningGradeDeletion) {
   const auto revision = grade->MaskContentRevision(mask.id);
   const auto before = document.ToJson();
 
-  const auto mask_errors = document.ValidateUserDeletion(grade->Id(), mask.id);
-  ASSERT_EQ(mask_errors.size(), 1u);
-  EXPECT_EQ(mask_errors.front().code, GraphValidationCode::DeletionProtected);
-  EXPECT_EQ(mask_errors.front().node_id, grade->Id());
-  EXPECT_EQ(mask_errors.front().mask_id, mask.id);
-  const auto node_errors = document.ValidateUserDeletion(grade->Id());
-  ASSERT_EQ(node_errors.size(), 1u);
-  EXPECT_EQ(node_errors.front().mask_id, mask.id);
+  EXPECT_TRUE(document.ValidateUserDeletion(grade->Id(), mask.id).empty());
+  EXPECT_TRUE(document.ValidateUserDeletion(grade->Id()).empty());
+  const auto unknown = document.ValidateUserDeletion(grade->Id(), MaskId{"mask.missing"});
+  ASSERT_EQ(unknown.size(), 1u);
+  EXPECT_EQ(unknown.front().code, GraphValidationCode::InvalidNodeValue);
+  EXPECT_EQ(unknown.front().mask_id, MaskId{"mask.missing"});
   EXPECT_EQ(document.ToJson(), before);
 
-  grade->SetMaskDeletionProtected(mask.id, false);
-  EXPECT_TRUE(document.ValidateUserDeletion(grade->Id(), mask.id).empty());
+  grade->SetDeletionProtected(true);
+  const auto node_errors = document.ValidateUserDeletion(grade->Id());
+  ASSERT_EQ(node_errors.size(), 1u);
+  EXPECT_EQ(node_errors.front().code, GraphValidationCode::DeletionProtected);
+  EXPECT_EQ(node_errors.front().node_id, grade->Id());
+  grade->SetDeletionProtected(false);
   EXPECT_TRUE(document.ValidateUserDeletion(grade->Id()).empty());
   EXPECT_EQ(grade->MaskContentRevision(mask.id), revision);
   EXPECT_FALSE(grade->MixDirty());

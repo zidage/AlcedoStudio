@@ -466,6 +466,11 @@ TEST(NodeGraphTopologyHistory, ProductionPortRecoversExplicitNodeAndMaskUnlockFr
     ASSERT_TRUE(editor.history().AddMask(editor.handle(), grade_id,
                                          grade_mask_test::MakeRadialMask(mask_id), 0, &error))
         << error;
+    // Masks are created unlocked; the persisted flag is still writable through
+    // the history port so the checkpoint/WAL round-trip keeps covering it.
+    ASSERT_TRUE(editor.history().SetMaskField(editor.handle(), grade_id, mask_id,
+                                             "deletion_protected", true, &error))
+        << error;
     locked_head = editor.guard()->working_head_commit_hash();
     ASSERT_TRUE(locked_head.has_value());
     expect_state(editor, locked_head, true, true);

@@ -80,10 +80,10 @@ operating-system shortcuts, or user-authored automation.
 - Connect mode keeps its current destination navigation. It does not extend node selection.
 - Delete removes every selected Color Grade through one admitted draft mutation.
 - Develop and DRT/Post remain selectable, but they are not deletable.
-- If the selected set contains a non-deletable node, a protected node, or a node that owns a
-  deletion-protected Mask, the full Delete request fails before the draft or Qan view changes. A
-  Color Grade that owns only ordinary Masks deletes through the same rule the Mask Groups panel
-  already applies; ordinary Masks never block node deletion.
+- If the selected set contains a non-deletable node or a protected node, the full Delete request
+  fails before the draft or Qan view changes. Only the Color Grade (Mask Group) itself can be
+  locked; Masks do not carry deletion locks, and a Color Grade that owns Masks deletes through the
+  same rule the Mask Groups panel already applies.
 - Nodes Delete does not auto-connect the surviving neighbors. It keeps the current Nodes draft
   model. The user must complete a valid graph before Alcedo submits one topology edit.
 - The Nodes selection set belongs to `EditorNodeController`. QuickQanava renders that state but does
@@ -635,7 +635,7 @@ editor.saveCurrentImage
 ```text
 deleteSelectedNodes()
   -> validate every selected id
-  -> one id is protected, owns a protected Mask, or is not a Color Grade
+  -> one id is protected or is not a Color Grade
   -> return the owner error
   -> selection, draft, Qan items, and history stay unchanged
 ```
@@ -1176,7 +1176,7 @@ the registry Delete command to remove the selected Color Grades through one draf
 
 - `RemoveColorGradesUsesOneReversalAndReturnsOneMutation`
 - `ProtectedNodeInMultiDeleteLeavesDraftUnchanged`
-- `ProtectedMaskOwnerInMultiDeleteLeavesDraftUnchanged`
+- `MaskProtectionFlagDoesNotBlockMultiDelete`
 - `OrdinaryMaskOwnerDeletesThroughMultiDelete`
 - `DevelopOrDrtInMultiDeleteLeavesDraftUnchanged`
 - `RestoreLastMutationRestoresEveryNodeAndEdgeFromMultiDelete`
@@ -1231,11 +1231,11 @@ that owns a Mask. Store notes under `build/tmp/configurable_keyboard_shortcuts/a
     `UpdateSelectionAfterRemoval` walks graph edges to the nearest downstream
     survivor, then upstream.
   - `EditorNodeGraphDraft::RemoveColorGrades(document, ids)`: deduplicates,
-    validates every id (`ValidateUserDeletion`, so protected nodes and
-    protected Masks reject the set while ordinary Masks do not block), removes
-    in descending node-index order under one reversal record, returns one
-    mutation. `RemoveColorGrade` delegates to it. `RestoreLastMutation`
-    restores nodes/edges in reverse removal order.
+    validates every id (`ValidateUserDeletion`, so a protected Color Grade
+    rejects the set while attached Masks never block), removes in descending
+    node-index order under one reversal record, returns one mutation.
+    `RemoveColorGrade` delegates to it. `RestoreLastMutation` restores
+    nodes/edges in reverse removal order.
   - `AlcedoQanGraph::ApplyProductSelection(ids, primary)`: projects every
     selected id plus the primary onto a `multipleSelectionEnabled` +
     `NoSelection` graph; raw Qan selection cannot drive product state.
@@ -1250,9 +1250,10 @@ that owns a Mask. Store notes under `build/tmp/configurable_keyboard_shortcuts/a
   `EditNodeGraph` only when the draft is complete (reconnect may be required
   first).
 - Rejected multi-delete call chain: same entry; `RemoveColorGrades` fails
-  `ValidateUserDeletion` on the first offending member (protected node,
-  protected Mask, Develop, or DRT) and returns before any mutation, leaving
-  selection, draft, view, and history unchanged.
+  `ValidateUserDeletion` on the first offending member (protected Color Grade,
+  Develop, or DRT) and returns before any mutation, leaving selection, draft,
+  view, and history unchanged. A protected member also disables the Delete
+  affordance through `canDeleteSelectedNodes`.
 - Test commands and counts:
 
   ```powershell
@@ -1266,11 +1267,17 @@ that owns a Mask. Store notes under `build/tmp/configurable_keyboard_shortcuts/a
   `build/tmp/configurable_keyboard_shortcuts/a3/focused_a3_ctest.log`.
 - Protected-node and Mask-owner evidence:
   `ProtectedNodeInMultiDeleteLeavesDraftUnchanged`,
-  `ProtectedMaskOwnerInMultiDeleteLeavesDraftUnchanged`,
+  `MaskProtectionFlagDoesNotBlockMultiDelete`,
   `OrdinaryMaskOwnerDeletesThroughMultiDelete`,
   `RejectedMultiDeleteKeepsSelectionDraftViewAndHistoryUnchanged`,
   `RightClickOnMaskRowOpensNodeMenuWithoutSelectingMask`,
-  `MultiSelectionNodeMenuDisablesRenameAndLabelsBatchDelete`.
+  `MultiSelectionNodeMenuDisablesRenameAndLabelsBatchDelete`,
+  `LockedNodeDisablesContextMenuDeleteAndMixedMultiDelete`.
+- Follow-up: Mask-level deletion locks were removed. Only a Color Grade (Mask
+  Group) can be deletion-protected; the Mask row lock button, the
+  `setMaskDeletionProtected` adapter command, the `deletion_protected`
+  SetMaskField key, and `ValidateUserDeletion` Mask checks are gone. Persisted
+  Mask flags remain inert for compatibility.
 - `WorkspaceShellTest` is no longer built or registered (retired; source kept
   for later redesign).
 - Remaining risks: none blocking. A multi-delete that breaks the backbone is

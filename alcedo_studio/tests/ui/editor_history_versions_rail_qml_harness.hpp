@@ -539,9 +539,6 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
             grade->SetMaskOpacity(command.mask_id, command.field_value.get<float>());
           } else if (command.field_key == "display_name") {
             mask->display_name = command.field_value.get<std::string>();
-          } else if (command.field_key == "deletion_protected") {
-            grade->SetMaskDeletionProtected(command.mask_id,
-                                            command.field_value.get<bool>());
           }
         } catch (const std::exception&) {
         }

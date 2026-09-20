@@ -61,10 +61,8 @@ class EditorNodeController : public QObject {
   Q_PROPERTY(bool canAddColorGrade READ can_add_color_grade NOTIFY ActionAvailabilityChanged)
   Q_PROPERTY(bool canRenameSelectedColorGrade READ can_rename_selected_color_grade NOTIFY
                  ActionAvailabilityChanged)
-  Q_PROPERTY(bool canDeleteSelectedColorGrade READ can_delete_selected_color_grade NOTIFY
-                 ActionAvailabilityChanged)
-  /// True when every selected node is a deletable Color Grade and the graph is
-  /// editable. Drives the multi-selection Delete action.
+  /// True when every selected node is an unlocked deletable Color Grade and the
+  /// graph is editable. Drives the multi-selection Delete action.
   Q_PROPERTY(bool canDeleteSelectedNodes READ can_delete_selected_nodes NOTIFY
                  ActionAvailabilityChanged)
   Q_PROPERTY(bool incompleteDraft READ incomplete_draft NOTIFY DraftStateChanged)
@@ -271,8 +269,8 @@ class EditorNodeController : public QObject {
   [[nodiscard]] auto command_active() const -> bool { return command_active_; }
   [[nodiscard]] auto can_add_color_grade() const -> bool;
   [[nodiscard]] auto can_rename_selected_color_grade() const -> bool;
-  [[nodiscard]] auto can_delete_selected_color_grade() const -> bool;
-  /// True when the selection is non-empty and every member is a Color Grade.
+  /// True when the selection is non-empty and every member is an unlocked
+  /// Color Grade.
   [[nodiscard]] auto can_delete_selected_nodes() const -> bool;
   [[nodiscard]] auto incomplete_draft() const -> bool;
   [[nodiscard]] auto incomplete_draft_instruction() const -> QString;

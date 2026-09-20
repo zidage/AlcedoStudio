@@ -4,8 +4,8 @@ import QtQuick.Controls.impl
 import QtQuick.Layouts
 
 // One Mask row inside an EditorMaskGroupDelegate body. The row carries its own
-// (NodeId, MaskId): selection, lock, and delete commands target this Mask even
-// when another Mask is currently selected for editing.
+// (NodeId, MaskId): selection and delete commands target this Mask even when
+// another Mask is currently selected for editing.
 // Selection follows docs/VI/README.md: the row keeps its fill, text, and SVG
 // colors and changes only its neutral outer outline.
 Item {
@@ -18,9 +18,8 @@ Item {
     property string displayName: ""
     property bool maskEnabled: true
     property real opacityValue: 1.0
-    property bool deletionProtected: false
     property bool selected: false
-    // Structure commands (lock/delete) share the group action gate: the session
+    // Structure commands (delete) share the group action gate: the session
     // must be editable, no node command may be in flight, and no incomplete
     // draft may own the graph.
     property bool actionsEnabled: true
@@ -34,7 +33,6 @@ Item {
     property string maskThumbUrl: ""
 
     signal clicked()
-    signal lockClicked()
     signal deleteClicked()
     signal navigateUp()
     signal navigateDown()
@@ -75,9 +73,6 @@ Item {
     Accessible.name: {
         var name = root.rowName.length > 0 ? root.rowName : qsTr("Mask")
         var parts = [name, qsTr("%1% opacity").arg(root.opacityPercent)]
-        if (root.deletionProtected) {
-            parts.push(qsTr("deletion locked"))
-        }
         if (!root.maskEnabled) {
             parts.push(qsTr("disabled"))
         }
@@ -89,9 +84,6 @@ Item {
     Accessible.description: {
         if (!root.actionsEnabled) {
             return root.actionsDisabledReason
-        }
-        if (root.deletionProtected) {
-            return qsTr("Unlock this Mask before deleting it")
         }
         return ""
     }
@@ -128,7 +120,7 @@ Item {
             root.navigateDown()
             event.accepted = true
         } else if ((event.key === Qt.Key_Delete || event.key === Qt.Key_Backspace)
-                   && root.actionsEnabled && !root.deletionProtected) {
+                   && root.actionsEnabled) {
             root.deleteClicked()
             event.accepted = true
         }
@@ -229,41 +221,12 @@ Item {
             Layout.alignment: Qt.AlignVCenter
 
             IconActionButton {
-                id: lockButton
-                objectName: "editorMaskGroupMaskLockButton"
-                anchors.fill: parent
-                compact: true
-                stretchInLayout: true
-                enabled: root.actionsEnabled
-                selected: root.deletionProtected
-                iconSrc: root.deletionProtected ? "qrc:/panel_icons/lock.svg"
-                                                : "qrc:/panel_icons/lock-open.svg"
-                iconColorDefault: root.deletionProtected ? root.textColor : root.mutedColor
-                iconColorMuted: root.mutedColor
-                fillIdle: "transparent"
-                fillHover: root.hoverColor
-                fillPressed: appTheme.buttonPressedFillColor
-                focusRingColor: root.inkColor
-                actionName: root.deletionProtected ? qsTr("Unlock %1").arg(root.rowName)
-                                                   : qsTr("Lock %1 against deletion").arg(root.rowName)
-                toolTipText: enabled ? actionName : root.actionsDisabledReason
-                focusOnPointerPress: false
-                onClicked: root.lockClicked()
-            }
-        }
-
-        Item {
-            Layout.preferredWidth: appTheme.iconButtonHitSizeCompact
-            Layout.preferredHeight: appTheme.iconButtonHitSizeCompact
-            Layout.alignment: Qt.AlignVCenter
-
-            IconActionButton {
                 id: deleteButton
                 objectName: "editorMaskGroupMaskDeleteButton"
                 anchors.fill: parent
                 compact: true
                 stretchInLayout: true
-                enabled: root.actionsEnabled && !root.deletionProtected
+                enabled: root.actionsEnabled
                 iconSrc: "qrc:/panel_icons/trash.svg"
                 iconColorDefault: root.mutedColor
                 iconColorMuted: root.mutedColor
@@ -272,15 +235,7 @@ Item {
                 fillPressed: appTheme.buttonPressedFillColor
                 focusRingColor: root.inkColor
                 actionName: qsTr("Delete %1").arg(root.rowName)
-                toolTipText: {
-                    if (!root.actionsEnabled) {
-                        return root.actionsDisabledReason
-                    }
-                    if (root.deletionProtected) {
-                        return qsTr("Unlock %1 before deleting").arg(root.rowName)
-                    }
-                    return actionName
-                }
+                toolTipText: enabled ? actionName : root.actionsDisabledReason
                 focusOnPointerPress: false
                 onClicked: root.deleteClicked()
             }
@@ -290,9 +245,9 @@ Item {
     MouseArea {
         id: rowMouse
         anchors.fill: parent
-        // Keep the two action buttons' hit targets exclusive: a press on lock
-        // or delete must not also select the row.
-        anchors.rightMargin: (appTheme.iconButtonHitSizeCompact * 2) + appTheme.spaceXs
+        // Keep the delete button's hit target exclusive: a press on it must
+        // not also select the row.
+        anchors.rightMargin: appTheme.iconButtonHitSizeCompact + appTheme.spaceXs
                              + appTheme.spaceSm
         hoverEnabled: true
         preventStealing: true

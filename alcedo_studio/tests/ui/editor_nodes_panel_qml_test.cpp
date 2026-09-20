@@ -224,11 +224,6 @@ class EditorNodesPanelQmlTest : public RailQmlFixture {
     ProcessEvents();
   }
 
-  auto MaskRowProtected(const QString& node_id, const QString& mask_id) -> bool {
-    auto* row = MaskRowIn(MaskGroupDelegateFor(node_id), mask_id);
-    return row != nullptr && row->property("deletionProtected").toBool();
-  }
-
   auto LiveQanNodeItemCount() const -> int {
     if (window_ == nullptr) {
       return 0;
@@ -565,8 +560,15 @@ TEST_F(EditorNodesPanelQmlTest, NodeContextMenuOffersRenameAndDeleteOnlyForColor
   OpenNodesPage();
   auto* adapter = Adapter();
   ASSERT_NE(adapter, nullptr);
+  auto* nodes_probe = Controller();
+  ASSERT_NE(nodes_probe, nullptr);
   WaitUntilGraphReady();
   QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(NodeId{"grade.primary"}) != nullptr, 2000);
+  // grade.primary ships deletion-protected: unlock it so the Color Grade
+  // branch of the menu offers both actions.
+  ASSERT_TRUE(
+      nodes_probe->setColorGradeDeletionProtected(QStringLiteral("grade.primary"), false));
+  ProcessEvents();
   auto* grade_item = adapter->NodeFor(NodeId{"grade.primary"})->getItem();
   ASSERT_NE(grade_item, nullptr);
   QTest::mouseClick(window_, Qt::RightButton, Qt::NoModifier,
@@ -1497,53 +1499,6 @@ TEST_F(EditorNodesPanelQmlTest, MaskRowClickQueuesSelectMaskWithExplicitIdentity
   EXPECT_EQ(nodes->selected_node_id(), NodeId{"grade.primary"});
 }
 
-TEST_F(EditorNodesPanelQmlTest, MaskLockOnNonSelectedRowTargetsThatMaskIdentity) {
-  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
-  backend_.AddMaskToPrimaryGrade(MakeMask(MaskId{"mask.one"}, RadialMaskSource{}));
-  backend_.AddMaskToPrimaryGrade(MakeMask(MaskId{"mask.two"}, LinearGradientMaskSource{}));
-  auto* mask_adapter = MaskAdapter();
-  ASSERT_NE(mask_adapter, nullptr);
-  auto* nodes = Controller();
-  ASSERT_NE(nodes, nullptr);
-  QTRY_VERIFY_WITH_TIMEOUT(nodes->has_snapshot(), 2000);
-
-  // Select mask.one for editing before touching mask.two's lock. The owning
-  // Grade must be selected first: the session finishes Mask edits whose owner
-  // is not the selected adjustment node on the next projection refresh.
-  nodes->selectNode(QStringLiteral("grade.primary"));
-  mask_adapter->selectMask(QStringLiteral("grade.primary"), QStringLiteral("mask.one"));
-  backend_.CompleteMaskCommands();
-  ProcessEvents();
-  EXPECT_EQ(mask_adapter->selected_mask_id(), QStringLiteral("mask.one"));
-
-  OpenMaskGroupsPage();
-  QTRY_VERIFY_WITH_TIMEOUT(MaskGroupDelegates().size() == 1, 2000);
-  auto* delegate = MaskGroupDelegateFor(QStringLiteral("grade.primary"));
-  ASSERT_NE(delegate, nullptr);
-  auto* row_two = MaskRowIn(delegate, QStringLiteral("mask.two"));
-  ASSERT_NE(row_two, nullptr);
-  auto* lock_two = row_two->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupMaskLockButton"));
-  ASSERT_NE(lock_two, nullptr);
-  QTRY_VERIFY_WITH_TIMEOUT(lock_two->isEnabled(), 2000);
-
-  Click(window_, lock_two);
-  const auto* command = LastMaskCommand();
-  ASSERT_NE(command, nullptr);
-  EXPECT_EQ(command->kind, EditorMaskCreationCommandKind::SetMaskField);
-  EXPECT_EQ(command->node_id, NodeId{"grade.primary"});
-  EXPECT_EQ(command->mask_id, MaskId{"mask.two"});
-  EXPECT_EQ(command->field_key, "deletion_protected");
-  ASSERT_TRUE(command->field_value.is_boolean());
-  EXPECT_TRUE(command->field_value.get<bool>());
-
-  backend_.CompleteMaskCommands();
-  ProcessEvents();
-  QTRY_VERIFY_WITH_TIMEOUT(
-      MaskRowProtected(QStringLiteral("grade.primary"), QStringLiteral("mask.two")), 2000);
-  // The selection stays on mask.one: the lock row never hijacked the edit.
-  EXPECT_EQ(mask_adapter->selected_mask_id(), QStringLiteral("mask.one"));
-}
-
 TEST_F(EditorNodesPanelQmlTest, GroupHeaderSelectsGradeAndFinishesOpenMaskEdit) {
   ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
   backend_.AddMaskToPrimaryGrade(MakeMask(MaskId{"mask.one"}, RadialMaskSource{}));
@@ -1657,60 +1612,6 @@ TEST_F(EditorNodesPanelQmlTest, LockedGroupDisablesDeleteWithReasonWithoutFiring
         return fresh != nullptr && fresh->isEnabled();
       }(),
       2000);
-}
-
-TEST_F(EditorNodesPanelQmlTest, LockedChildMaskDisablesGroupDeleteWithReason) {
-  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
-  backend_.AddMaskToPrimaryGrade(MakeMask(MaskId{"mask.one"}, RadialMaskSource{}));
-  auto* mask_adapter = MaskAdapter();
-  ASSERT_NE(mask_adapter, nullptr);
-  mask_adapter->setMaskDeletionProtected(QStringLiteral("grade.primary"),
-                                         QStringLiteral("mask.one"), true);
-  backend_.CompleteMaskCommands();
-  ProcessEvents();
-
-  OpenMaskGroupsPage();
-  QTRY_VERIFY_WITH_TIMEOUT(MaskGroupDelegates().size() == 1, 2000);
-  auto* primary = MaskGroupDelegateFor(QStringLiteral("grade.primary"));
-  ASSERT_NE(primary, nullptr);
-  auto* remove = primary->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupDeleteButton"));
-  ASSERT_NE(remove, nullptr);
-  EXPECT_FALSE(remove->isEnabled());
-  const auto reason = remove->property("toolTipText").toString();
-  EXPECT_TRUE(reason.contains(QStringLiteral("Masks"), Qt::CaseInsensitive))
-      << reason.toStdString();
-  Click(window_, remove);
-  EXPECT_EQ(backend_.remove_grade_count(), 0);
-}
-
-TEST_F(EditorNodesPanelQmlTest, LockedMaskKeepsRowWhenOwnerRejectsQueuedDelete) {
-  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
-  backend_.AddMaskToPrimaryGrade(MakeMask(MaskId{"mask.one"}, RadialMaskSource{}));
-  auto* mask_adapter = MaskAdapter();
-  ASSERT_NE(mask_adapter, nullptr);
-  mask_adapter->setMaskDeletionProtected(QStringLiteral("grade.primary"),
-                                         QStringLiteral("mask.one"), true);
-  backend_.CompleteMaskCommands();
-  ProcessEvents();
-
-  OpenMaskGroupsPage();
-  QTRY_VERIFY_WITH_TIMEOUT(MaskGroupDelegates().size() == 1, 2000);
-  auto* delegate = MaskGroupDelegateFor(QStringLiteral("grade.primary"));
-  ASSERT_NE(delegate, nullptr);
-  auto* row = MaskRowIn(delegate, QStringLiteral("mask.one"));
-  ASSERT_NE(row, nullptr);
-  auto* remove = row->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupMaskDeleteButton"));
-  ASSERT_NE(remove, nullptr);
-  EXPECT_FALSE(remove->isEnabled());
-
-  // Even if a delete is queued directly (stale UI), the owner's
-  // ValidateUserDeletion keeps the locked Mask and its row.
-  mask_adapter->removeMask(QStringLiteral("grade.primary"), QStringLiteral("mask.one"));
-  backend_.CompleteMaskCommands();
-  ProcessEvents();
-  EXPECT_NE(
-      MaskRowIn(MaskGroupDelegateFor(QStringLiteral("grade.primary")), QStringLiteral("mask.one")),
-      nullptr);
 }
 
 TEST_F(EditorNodesPanelQmlTest, MaskRowDeleteQueuesRemoveMaskWithExplicitIdentity) {
@@ -2433,9 +2334,9 @@ TEST_F(EditorNodesPanelQmlTest, RejectedMultiDeleteKeepsSelectionDraftViewAndHis
   ProcessEvents();
   ASSERT_EQ(nodes->selected_node_ids(),
             (QStringList{QStringLiteral("grade.primary"), QStringLiteral("grade.extra")}));
-  // The admission check is structural (all members are Color Grades); the
-  // committed deletion protection rejects the set inside the draft mutation.
-  EXPECT_TRUE(nodes->can_delete_selected_nodes());
+  // Admission covers both shape and lock state: a protected member disables
+  // the Delete affordance, and the draft mutation would reject the set anyway.
+  EXPECT_FALSE(nodes->can_delete_selected_nodes());
 
   QVariant returned;
   ASSERT_TRUE(QMetaObject::invokeMethod(
@@ -2537,6 +2438,83 @@ TEST_F(EditorNodesPanelQmlTest, NodeCardMirrorsDeletionProtectedStateWithLockIco
   QTRY_VERIFY_WITH_TIMEOUT(
       primary_item->property("deletionProtected").toBool() == false, 5000);
   QTRY_VERIFY_WITH_TIMEOUT(!lock_icon->isVisible(), 5000);
+}
+
+TEST_F(EditorNodesPanelQmlTest, LockedNodeDisablesContextMenuDeleteAndMixedMultiDelete) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  backend_.AddColorGradeBefore(NodeId{"drt"}, NodeId{"grade.extra"});
+  OpenNodesPage();
+  auto* nodes   = Controller();
+  auto* adapter = Adapter();
+  ASSERT_NE(nodes, nullptr);
+  ASSERT_NE(adapter, nullptr);
+  WaitUntilGraphReady();
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(NodeId{"grade.extra"}) != nullptr, 2000);
+
+  // Single locked Color Grade: Rename stays available, Delete is disabled.
+  nodes->selectNode(QStringLiteral("grade.primary"));
+  ProcessEvents();
+  auto* primary_item = adapter->NodeFor(NodeId{"grade.primary"})->getItem();
+  ASSERT_NE(primary_item, nullptr);
+  QTest::mouseClick(window_, Qt::RightButton, Qt::NoModifier,
+                    primary_item->mapToScene(QPointF(8, 8)).toPoint());
+  ProcessEvents();
+  auto* menu = window_->findChild<QObject*>(QStringLiteral("editorNodesNodeMenu"));
+  ASSERT_NE(menu, nullptr);
+  EXPECT_TRUE(menu->property("visible").toBool());
+  auto* rename = Find(QStringLiteral("editorNodesRenameMenuItem"));
+  auto* remove = Find(QStringLiteral("editorNodesDeleteMenuItem"));
+  ASSERT_NE(rename, nullptr);
+  ASSERT_NE(remove, nullptr);
+  EXPECT_TRUE(rename->property("enabled").toBool());
+  EXPECT_FALSE(remove->property("enabled").toBool());
+  ASSERT_TRUE(QMetaObject::invokeMethod(menu, "close"));
+  ProcessEvents();
+
+  // Multi-selection with one protected member disables the batch Delete too.
+  nodes->toggleNodeSelection(QStringLiteral("grade.extra"));
+  ProcessEvents();
+  ASSERT_EQ(nodes->selected_node_ids().size(), 2);
+  auto* extra_item = adapter->NodeFor(NodeId{"grade.extra"})->getItem();
+  ASSERT_NE(extra_item, nullptr);
+  QTest::mouseClick(window_, Qt::RightButton, Qt::NoModifier,
+                    extra_item->mapToScene(QPointF(8, 8)).toPoint());
+  ProcessEvents();
+  EXPECT_TRUE(menu->property("visible").toBool());
+  EXPECT_FALSE(remove->property("enabled").toBool());
+  EXPECT_EQ(remove->property("text").toString(), QStringLiteral("Delete Selected Nodes"));
+  ASSERT_TRUE(QMetaObject::invokeMethod(menu, "close"));
+  ProcessEvents();
+
+  // Unlocking the protected member re-enables Delete for the same selection.
+  ASSERT_TRUE(nodes->setColorGradeDeletionProtected(QStringLiteral("grade.primary"), false));
+  ProcessEvents();
+  QTest::mouseClick(window_, Qt::RightButton, Qt::NoModifier,
+                    extra_item->mapToScene(QPointF(8, 8)).toPoint());
+  ProcessEvents();
+  EXPECT_TRUE(remove->property("enabled").toBool());
+}
+
+TEST_F(EditorNodesPanelQmlTest, CanvasBorderStaysConstantWhenGraphViewGainsFocus) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenNodesPage();
+  auto* canvas = Find(QStringLiteral("editorNodesCanvasHost"));
+  auto* view   = Find(QStringLiteral("editorNodesGraphView"));
+  ASSERT_NE(canvas, nullptr);
+  ASSERT_NE(view, nullptr);
+  WaitUntilGraphReady();
+
+  const QColor resting =
+      QQmlProperty::read(canvas, QStringLiteral("border.color"), qmlContext(canvas))
+          .value<QColor>();
+  ASSERT_TRUE(resting.isValid());
+  view->forceActiveFocus();
+  ProcessEvents();
+  ASSERT_TRUE(view->hasActiveFocus());
+  // The canvas keeps its resting border while focused: no highlight pass.
+  EXPECT_EQ(QQmlProperty::read(canvas, QStringLiteral("border.color"), qmlContext(canvas))
+                .value<QColor>(),
+            resting);
 }
 
 }  // namespace

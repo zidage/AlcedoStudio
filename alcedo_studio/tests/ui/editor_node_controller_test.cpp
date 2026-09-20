@@ -1455,6 +1455,7 @@ TEST(EditorNodeController, PrimaryNodeAloneDrivesAdjustmentAndRenameActions) {
   backend.SetGeneration(61);
   ASSERT_TRUE(
       alcedo::AddCleanColorGrade(backend.Document(), NodeId{"drt"}, NodeId{"grade.b"}).empty());
+  backend.Document().PrimaryGrade()->SetDeletionProtected(false);
   EditorSessionController session(&backend);
   EditorNodeController    controller;
   controller.set_editor_session(&session);
@@ -1527,10 +1528,11 @@ TEST(EditorNodeController, RejectedMultiDeleteLeavesSelectionDraftAndHistoryUnto
   EXPECT_EQ(backend.edit_node_graph_count(), 0);
   EXPECT_FALSE(controller.incomplete_draft());
 
-  // A protected Color Grade inside the selection fails inside the draft.
+  // A protected Color Grade inside the selection disables the affordance and
+  // still fails inside the draft when invoked directly.
   controller.selectNode(QStringLiteral("grade.primary"));
   controller.toggleNodeSelection(QStringLiteral("grade.extra"));
-  ASSERT_TRUE(controller.can_delete_selected_nodes());
+  EXPECT_FALSE(controller.can_delete_selected_nodes());
   EXPECT_FALSE(controller.deleteSelectedNodes());
   EXPECT_EQ(controller.last_error(),
             QStringLiteral("Unlock Color Grade before deletion: grade.primary"));
