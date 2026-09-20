@@ -114,6 +114,8 @@ Item {
                 fillSelected: appTheme.buttonSelectedFillColor
                 focusRingColor: root.colText
                 actionName: qsTr("Undo edit")
+                toolTipText: ShortcutRegistry.decorateTooltip(qsTr("Undo edit"),
+                                                              "editor.undo")
                 onClicked: root.historyModel.undo()
             }
 
@@ -130,6 +132,8 @@ Item {
                 fillSelected: appTheme.buttonSelectedFillColor
                 focusRingColor: root.colText
                 actionName: qsTr("Redo edit")
+                toolTipText: ShortcutRegistry.decorateTooltip(qsTr("Redo edit"),
+                                                              "editor.redo")
                 onClicked: root.historyModel.redo()
             }
 

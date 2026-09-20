@@ -780,10 +780,61 @@ ApplicationWindow {
         host: root
         active: root.visibility === Window.Windowed && !root.nativeTrafficLightsEnabled
     }
-    Shortcut {
-        sequence: StandardKey.SelectAll
-        enabled: root.backendInteractive && !appDialogs.anyDialogOpened()
+
+    // Workspace-scoped commands: the registry scope string tracks the router's
+    // active workspace, so Ctrl+A / Ctrl+S resolve to exactly one owner.
+    readonly property string activeShortcutScope: "workspace." + root.activeWorkspace
+
+    RegisteredShortcut {
+        objectName: "librarySelectAllShortcut"
+        commandId: "library.selectAll"
+        activeScope: root.activeShortcutScope
+        commandEnabled: root.backendInteractive && !appDialogs.anyDialogOpened()
         onActivated: root.selectAllCurrentAlbum()
+    }
+
+    RegisteredShortcut {
+        objectName: "librarySaveProjectShortcut"
+        commandId: "library.saveProject"
+        activeScope: root.activeShortcutScope
+        commandEnabled: root.backendInteractive && !appDialogs.anyDialogOpened()
+        suppressWhileEditing: false
+        onActivated: root.requestSaveProject()
+    }
+
+    RegisteredShortcut {
+        objectName: "editorUndoShortcut"
+        commandId: "editor.undo"
+        activeScope: root.activeShortcutScope
+        commandEnabled: !appDialogs.anyDialogOpened()
+                        && appModules.editorSession
+                        && appModules.editorSession.actions
+                        && appModules.editorSession.actions.canUndo === true
+        onActivated: appModules.editorSession.Undo()
+    }
+
+    RegisteredShortcut {
+        objectName: "editorRedoShortcut"
+        commandId: "editor.redo"
+        activeScope: root.activeShortcutScope
+        commandEnabled: !appDialogs.anyDialogOpened()
+                        && appModules.editorSession
+                        && appModules.editorSession.actions
+                        && appModules.editorSession.actions.canRedo === true
+        onActivated: appModules.editorSession.Redo()
+    }
+
+    RegisteredShortcut {
+        objectName: "editorSaveImageShortcut"
+        commandId: "editor.saveCurrentImage"
+        activeScope: root.activeShortcutScope
+        commandEnabled: !appDialogs.anyDialogOpened()
+                        && appModules.editorSession
+                        && appModules.editorSession.hasImage === true
+                        && appModules.editorSession.persistInFlight !== true
+                        && appModules.editorSession.closeInFlight !== true
+        suppressWhileEditing: false
+        onActivated: appModules.editorSession.PersistCurrentImage()
     }
 
     // ── Accelerator preparation overlay ───────────────────────────────

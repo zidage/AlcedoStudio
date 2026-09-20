@@ -829,27 +829,35 @@ Item {
         }
     }
 
-    Shortcut {
-        sequences: [ "Escape" ]
-        enabled: root.editorControlsEnabled && root.maskCreation
-                 && root.maskCreation.maskControlsActive
+    // Mask editing commands live at workspace scope so the viewport, Nodes
+    // graph, and right-side controls all produce the same outcome. The
+    // editor.maskEdit scope is active only while maskControlsActive holds, so
+    // these stay inert (and never shadow Nodes/editor-local keys) once the
+    // transient Mask mode finishes.
+    readonly property bool maskEditScopeActive: !!(root.maskCreation
+                                                 && root.maskCreation.maskControlsActive)
+
+    RegisteredShortcut {
+        objectName: "maskFinishEditShortcut"
+        commandId: "mask.finishEdit"
+        activeScope: root.maskEditScopeActive ? "editor.maskEdit" : ""
+        commandEnabled: root.editorControlsEnabled
         onActivated: root.maskCreation.finishBody()
     }
 
-    // Mask editing shortcuts live at workspace scope so the viewport, Nodes
-    // graph, and right-side controls all produce the same outcome. They are
-    // disabled immediately after the transient Mask mode finishes.
-    Shortcut {
-        sequences: [ "Delete" ]
-        enabled: root.editorControlsEnabled && root.maskCreation
-                 && root.maskCreation.maskControlsActive
+    RegisteredShortcut {
+        objectName: "maskDeleteSelectionShortcut"
+        commandId: "mask.deleteSelection"
+        activeScope: root.maskEditScopeActive ? "editor.maskEdit" : ""
+        commandEnabled: root.editorControlsEnabled
         onActivated: root.maskCreation.deleteActiveMask()
     }
 
-    Shortcut {
-        sequences: [ "Return", "Enter" ]
-        enabled: root.editorControlsEnabled && root.maskCreation
-                 && root.maskCreation.maskControlsActive
+    RegisteredShortcut {
+        objectName: "maskConfirmEditShortcut"
+        commandId: "mask.confirmEdit"
+        activeScope: root.maskEditScopeActive ? "editor.maskEdit" : ""
+        commandEnabled: root.editorControlsEnabled
         onActivated: {
             if (typeof adjustmentStack.confirmMaskEditAndReturn === "function")
                 adjustmentStack.confirmMaskEditAndReturn()

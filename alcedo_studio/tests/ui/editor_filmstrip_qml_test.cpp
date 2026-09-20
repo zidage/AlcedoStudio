@@ -20,20 +20,20 @@
 #include <QTimer>
 #include <QUrl>
 #include <QVariantMap>
-
 #include <filesystem>
 #include <vector>
 
 #include "ui/alcedo_main/app_theme.hpp"
+#include "ui/alcedo_main/shortcut_registry.hpp"
 
 namespace alcedo::ui::test {
 namespace {
 
 struct FilmstripRow {
-  int element_id = 0;
-  int image_id   = 0;
+  int     element_id = 0;
+  int     image_id   = 0;
   QString file_name;
-  int rating = 0;
+  int     rating = 0;
 };
 
 class FilmstripModel final : public QAbstractListModel {
@@ -57,16 +57,15 @@ class FilmstripModel final : public QAbstractListModel {
 
   FilmstripModel() {
     for (int i = 0; i < 8; ++i) {
-      rows_.push_back(
-          {1000 + i, 2000 + i, QStringLiteral("film_%1.arw").arg(i), i == 0 ? 3 : 0});
+      rows_.push_back({1000 + i, 2000 + i, QStringLiteral("film_%1.arw").arg(i), i == 0 ? 3 : 0});
     }
   }
 
-  [[nodiscard]] int count() const { return static_cast<int>(rows_.size()); }
+  [[nodiscard]] int  count() const { return static_cast<int>(rows_.size()); }
   [[nodiscard]] bool hasMore() const { return false; }
   [[nodiscard]] bool loading() const { return false; }
 
-  [[nodiscard]] int rowCount(const QModelIndex& parent = {}) const override {
+  [[nodiscard]] int  rowCount(const QModelIndex& parent = {}) const override {
     return parent.isValid() ? 0 : count();
   }
 
@@ -152,12 +151,12 @@ class FilmstripLibrary final : public QObject {
 
   [[nodiscard]] FilmstripModel* thumbnailModel() { return &model_; }
 
-  void resetRows(std::vector<FilmstripRow> rows) { model_.resetRows(std::move(rows)); }
+  void             resetRows(std::vector<FilmstripRow> rows) { model_.resetRows(std::move(rows)); }
 
   Q_INVOKABLE void SetThumbnailVisible(int element_id, int image_id, bool visible, int max_edge) {
     Q_UNUSED(image_id);
     calls_.push_back({element_id, visible, max_edge});
-    last_max_edge_ = max_edge;
+    last_max_edge_    = max_edge;
     const QString key = QStringLiteral("%1").arg(element_id);
     if (visible) {
       pinned_.insert(key);
@@ -180,7 +179,7 @@ class FilmstripLibrary final : public QObject {
     return count;
   }
 
-  [[nodiscard]] int lastMaxEdge() const { return last_max_edge_; }
+  [[nodiscard]] int  lastMaxEdge() const { return last_max_edge_; }
 
   [[nodiscard]] bool allVisibleCallsUseMaxEdge(int expected_max_edge) const {
     for (const auto& call : calls_) {
@@ -219,28 +218,27 @@ class FilmstripSession final : public QObject {
   Q_PROPERTY(int elementId READ elementId WRITE setElementId NOTIFY elementIdChanged)
   Q_PROPERTY(int imageId READ imageId WRITE setImageId NOTIFY imageIdChanged)
   Q_PROPERTY(bool hasImage READ hasImage CONSTANT)
-  Q_PROPERTY(QString sessionState READ sessionState WRITE setSessionState NOTIFY sessionStateChanged)
+  Q_PROPERTY(
+      QString sessionState READ sessionState WRITE setSessionState NOTIFY sessionStateChanged)
   Q_PROPERTY(bool renderBusy READ renderBusy WRITE setRenderBusy NOTIFY renderBusyChanged)
   Q_PROPERTY(bool canDiscardCurrentCommit READ canDiscardCurrentCommit WRITE
                  setCanDiscardCurrentCommit NOTIFY canDiscardCurrentCommitChanged)
   Q_PROPERTY(QVariantMap actions READ actions CONSTANT)
 
  public:
-  [[nodiscard]] bool filmstripCollapsed() const { return filmstrip_collapsed_; }
-  [[nodiscard]] double filmstripExpandedHeight() const { return filmstrip_expanded_height_; }
-  [[nodiscard]] double filmstripScrollPosition() const { return filmstrip_scroll_position_; }
-  [[nodiscard]] int elementId() const { return element_id_; }
-  [[nodiscard]] int imageId() const { return image_id_; }
-  [[nodiscard]] bool hasImage() const { return true; }
-  [[nodiscard]] QString sessionState() const { return session_state_; }
-  [[nodiscard]] bool renderBusy() const { return render_busy_; }
-  [[nodiscard]] bool canDiscardCurrentCommit() const { return can_discard_; }
-  [[nodiscard]] int discardCount() const { return discard_count_; }
-  [[nodiscard]] QVariantMap actions() const {
-    return {{QStringLiteral("canSelectImage"), true}};
-  }
+  [[nodiscard]] bool        filmstripCollapsed() const { return filmstrip_collapsed_; }
+  [[nodiscard]] double      filmstripExpandedHeight() const { return filmstrip_expanded_height_; }
+  [[nodiscard]] double      filmstripScrollPosition() const { return filmstrip_scroll_position_; }
+  [[nodiscard]] int         elementId() const { return element_id_; }
+  [[nodiscard]] int         imageId() const { return image_id_; }
+  [[nodiscard]] bool        hasImage() const { return true; }
+  [[nodiscard]] QString     sessionState() const { return session_state_; }
+  [[nodiscard]] bool        renderBusy() const { return render_busy_; }
+  [[nodiscard]] bool        canDiscardCurrentCommit() const { return can_discard_; }
+  [[nodiscard]] int         discardCount() const { return discard_count_; }
+  [[nodiscard]] QVariantMap actions() const { return {{QStringLiteral("canSelectImage"), true}}; }
 
-  void setFilmstripCollapsed(bool collapsed) {
+  void                      setFilmstripCollapsed(bool collapsed) {
     if (filmstrip_collapsed_ == collapsed) return;
     filmstrip_collapsed_ = collapsed;
     emit filmstripCollapsedChanged();
@@ -316,9 +314,9 @@ class FilmstripPolicy final : public QObject {
   Q_PROPERTY(QString selectEditorImageReason READ selectEditorImageReason CONSTANT)
 
  public:
-  [[nodiscard]] bool canSelectEditorImage() const { return can_select_; }
+  [[nodiscard]] bool    canSelectEditorImage() const { return can_select_; }
   [[nodiscard]] QString selectEditorImageReason() const { return QStringLiteral("Saving"); }
-  void setCanSelectEditorImage(bool can_select) {
+  void                  setCanSelectEditorImage(bool can_select) {
     if (can_select_ == can_select) return;
     can_select_ = can_select;
     emit canSelectEditorImageChanged();
@@ -339,7 +337,7 @@ class FilmstripRouter final : public QObject {
       : QObject(parent), session_(session) {}
 
   [[nodiscard]] int openCount() const { return open_count_; }
-  Q_INVOKABLE void openEditor(int element_id, int image_id) {
+  Q_INVOKABLE void  openEditor(int element_id, int image_id) {
     ++open_count_;
     last_element_id_ = element_id;
     last_image_id_   = image_id;
@@ -353,8 +351,8 @@ class FilmstripRouter final : public QObject {
   [[nodiscard]] int lastImageId() const { return last_image_id_; }
 
  private:
-  FilmstripSession* session_        = nullptr;
-  int               open_count_     = 0;
+  FilmstripSession* session_         = nullptr;
+  int               open_count_      = 0;
   int               last_element_id_ = 0;
   int               last_image_id_   = 0;
 };
@@ -372,9 +370,9 @@ class FilmstripModules final : public QObject {
       : QObject(parent), library_(library), router_(router), session_(session), policy_(policy) {}
 
   [[nodiscard]] FilmstripLibrary* library() const { return library_; }
-  [[nodiscard]] FilmstripRouter* workspaceRouter() const { return router_; }
+  [[nodiscard]] FilmstripRouter*  workspaceRouter() const { return router_; }
   [[nodiscard]] FilmstripSession* editorSession() const { return session_; }
-  [[nodiscard]] FilmstripPolicy* interactionPolicy() const { return policy_; }
+  [[nodiscard]] FilmstripPolicy*  interactionPolicy() const { return policy_; }
 
  private:
   FilmstripLibrary* library_ = nullptr;
@@ -421,7 +419,7 @@ ApplicationWindow {
 }
 )";
 
-auto QmlDirectory() -> QString {
+auto           QmlDirectory() -> QString {
   return QString::fromStdString(
       (std::filesystem::path(ALCEDO_TEST_SRC_DIR) / "ui" / "alcedo_main" / "qml").string());
 }
@@ -434,14 +432,15 @@ void ProcessEvents(int milliseconds = 30) {
 
 class FilmstripQmlHarness {
  public:
-  FilmstripQmlHarness()
-      : router_(&session_), modules_(&library_, &router_, &session_, &policy_) {
+  FilmstripQmlHarness() : router_(&session_), modules_(&library_, &router_, &session_, &policy_) {
     AppTheme::RegisterFonts();
     AppTheme::Instance().setReduceMotion(true);
     QQuickStyle::setStyle(QStringLiteral("Material"));
-    QObject::connect(&engine_, &QQmlEngine::warnings,
-                     [this](const QList<QQmlError>& emitted) {
-                       for (const auto& warning : emitted) warnings_.push_back(warning.toString());
+    // EditorFilmstrip.qml imports Alcedo.Main for the ShortcutRegistry
+    // singleton; file-URL loads resolve it through C++ type registration.
+    RegisterShortcutRegistryQmlType();
+    QObject::connect(&engine_, &QQmlEngine::warnings, [this](const QList<QQmlError>& emitted) {
+      for (const auto& warning : emitted) warnings_.push_back(warning.toString());
     });
     engine_.addImportPath(QStringLiteral("qrc:/"));
     engine_.addImportPath(QStringLiteral(ALCEDO_QT_QML_IMPORT_PATH));
@@ -474,14 +473,14 @@ class FilmstripQmlHarness {
     return window_ ? window_->property("menuRequests").toList() : QVariantList{};
   }
 
-  FilmstripLibrary  library_;
-  FilmstripSession  session_;
-  FilmstripPolicy   policy_;
-  FilmstripRouter   router_;
-  FilmstripModules  modules_;
+  FilmstripLibrary      library_;
+  FilmstripSession      session_;
+  FilmstripPolicy       policy_;
+  FilmstripRouter       router_;
+  FilmstripModules      modules_;
   QQmlApplicationEngine engine_;
-  QQuickWindow*      window_ = nullptr;
-  QStringList        warnings_;
+  QQuickWindow*         window_ = nullptr;
+  QStringList           warnings_;
 };
 
 TEST(EditorFilmstripQmlTest, SharedModelRoutesKeyboardSelectionAndUpdatesCurrentRow) {
@@ -499,16 +498,114 @@ TEST(EditorFilmstripQmlTest, SharedModelRoutesKeyboardSelectionAndUpdatesCurrent
   EXPECT_EQ(filmstrip->property("currentFileName").toString(), QStringLiteral("film_0.arw"));
 
   list->forceActiveFocus();
+  // Right is a registered navigation command: it activates the adjacent image
+  // through the session router and moves filmstrip focus with it.
   QTest::keyClick(harness.window_, Qt::Key_Right);
-  ProcessEvents();
-  EXPECT_EQ(filmstrip->property("focusIndex").toInt(), 1);
-  QTest::keyClick(harness.window_, Qt::Key_Return);
   ProcessEvents();
   EXPECT_EQ(harness.router_.openCount(), 1);
   EXPECT_EQ(harness.router_.lastElementId(), 1001);
   EXPECT_EQ(harness.router_.lastImageId(), 2001);
+  EXPECT_EQ(filmstrip->property("focusIndex").toInt(), 1);
   EXPECT_EQ(filmstrip->property("selectedIndex").toInt(), 1);
   EXPECT_EQ(filmstrip->property("currentFileName").toString(), QStringLiteral("film_1.arw"));
+  // Return still activates the focused row through the same session path.
+  QTest::keyClick(harness.window_, Qt::Key_Return);
+  ProcessEvents();
+  EXPECT_EQ(harness.router_.openCount(), 2);
+  EXPECT_EQ(harness.router_.lastElementId(), 1001);
+  EXPECT_EQ(filmstrip->property("selectedIndex").toInt(), 1);
+}
+
+TEST(EditorFilmstripQmlTest, LeftAndRightSwitchToAdjacentImagesAndMoveFilmstripFocus) {
+  FilmstripQmlHarness harness;
+  ASSERT_NE(harness.window_, nullptr) << harness.warnings_.join('\n').toStdString();
+  ASSERT_TRUE(harness.warnings_.isEmpty()) << harness.warnings_.join('\n').toStdString();
+
+  auto* filmstrip = harness.filmstrip();
+  auto* list      = harness.list();
+  ASSERT_NE(filmstrip, nullptr);
+  ASSERT_NE(list, nullptr);
+  QTRY_COMPARE_WITH_TIMEOUT(list->property("count").toInt(), 8, 2000);
+  EXPECT_EQ(filmstrip->property("selectedIndex").toInt(), 0);
+
+  list->forceActiveFocus();
+  QTest::keyClick(harness.window_, Qt::Key_Right);
+  ProcessEvents();
+  EXPECT_EQ(harness.router_.openCount(), 1);
+  EXPECT_EQ(harness.router_.lastElementId(), 1001);
+  EXPECT_EQ(filmstrip->property("focusIndex").toInt(), 1);
+  EXPECT_EQ(filmstrip->property("selectedIndex").toInt(), 1);
+
+  QTest::keyClick(harness.window_, Qt::Key_Right);
+  ProcessEvents();
+  EXPECT_EQ(harness.router_.openCount(), 2);
+  EXPECT_EQ(harness.router_.lastElementId(), 1002);
+  EXPECT_EQ(filmstrip->property("focusIndex").toInt(), 2);
+  EXPECT_EQ(filmstrip->property("selectedIndex").toInt(), 2);
+
+  QTest::keyClick(harness.window_, Qt::Key_Left);
+  ProcessEvents();
+  EXPECT_EQ(harness.router_.openCount(), 3);
+  EXPECT_EQ(harness.router_.lastElementId(), 1001);
+  EXPECT_EQ(filmstrip->property("focusIndex").toInt(), 1);
+  EXPECT_EQ(filmstrip->property("selectedIndex").toInt(), 1);
+}
+
+TEST(EditorFilmstripQmlTest, ArrowNavigationStopsAtFilmstripBounds) {
+  FilmstripQmlHarness harness;
+  ASSERT_NE(harness.window_, nullptr) << harness.warnings_.join('\n').toStdString();
+  ASSERT_TRUE(harness.warnings_.isEmpty()) << harness.warnings_.join('\n').toStdString();
+
+  auto* filmstrip = harness.filmstrip();
+  auto* list      = harness.list();
+  ASSERT_NE(filmstrip, nullptr);
+  ASSERT_NE(list, nullptr);
+  QTRY_COMPARE_WITH_TIMEOUT(list->property("count").toInt(), 8, 2000);
+
+  list->forceActiveFocus();
+  // Already at index 0: Left is a no-op — no activation, no focus move.
+  QTest::keyClick(harness.window_, Qt::Key_Left);
+  ProcessEvents();
+  EXPECT_EQ(harness.router_.openCount(), 0);
+  EXPECT_EQ(filmstrip->property("focusIndex").toInt(), 0);
+  EXPECT_EQ(filmstrip->property("selectedIndex").toInt(), 0);
+
+  // Walk to the last row, then Right must also stay inert at the bound.
+  for (int i = 0; i < 7; ++i) {
+    QTest::keyClick(harness.window_, Qt::Key_Right);
+    ProcessEvents();
+  }
+  EXPECT_EQ(harness.router_.openCount(), 7);
+  EXPECT_EQ(filmstrip->property("focusIndex").toInt(), 7);
+  EXPECT_EQ(filmstrip->property("selectedIndex").toInt(), 7);
+
+  QTest::keyClick(harness.window_, Qt::Key_Right);
+  ProcessEvents();
+  EXPECT_EQ(harness.router_.openCount(), 7);
+  EXPECT_EQ(filmstrip->property("focusIndex").toInt(), 7);
+  EXPECT_EQ(filmstrip->property("selectedIndex").toInt(), 7);
+}
+
+TEST(EditorFilmstripQmlTest, FilmstripSelectAllAndVersionsCreateMayShareCtrlAByFocus) {
+  FilmstripQmlHarness harness;
+  ASSERT_NE(harness.window_, nullptr) << harness.warnings_.join('\n').toStdString();
+  ASSERT_TRUE(harness.warnings_.isEmpty()) << harness.warnings_.join('\n').toStdString();
+
+  auto* filmstrip = harness.filmstrip();
+  auto* list      = harness.list();
+  ASSERT_NE(filmstrip, nullptr);
+  ASSERT_NE(list, nullptr);
+  QTRY_COMPARE_WITH_TIMEOUT(list->property("count").toInt(), 8, 2000);
+
+  list->forceActiveFocus();
+  // Ctrl+A resolves through the editor.filmstrip scope while the strip owns
+  // focus; the Versions binding on the same key stays out of the path here.
+  QTest::keyClick(harness.window_, Qt::Key_A, Qt::ControlModifier);
+  ProcessEvents();
+  EXPECT_EQ(filmstrip->property("selectionAnchorIndex").toInt(), 0);
+  // Select All must not activate another image.
+  EXPECT_EQ(harness.router_.openCount(), 0);
+  EXPECT_EQ(filmstrip->property("selectedIndex").toInt(), 0);
 }
 
 TEST(EditorFilmstripQmlTest, ModelResetRebindsToNewFilteredRows) {
@@ -522,9 +619,8 @@ TEST(EditorFilmstripQmlTest, ModelResetRebindsToNewFilteredRows) {
   ASSERT_NE(list, nullptr);
   QTRY_COMPARE_WITH_TIMEOUT(list->property("count").toInt(), 8, 2000);
 
-  harness.library_.resetRows(
-      {{5001, 6001, QStringLiteral("album_only.arw"), 0},
-       {5002, 6002, QStringLiteral("album_two.arw"), 0}});
+  harness.library_.resetRows({{5001, 6001, QStringLiteral("album_only.arw"), 0},
+                              {5002, 6002, QStringLiteral("album_two.arw"), 0}});
   ProcessEvents();
   QTRY_COMPARE_WITH_TIMEOUT(list->property("count").toInt(), 2, 2000);
   EXPECT_EQ(filmstrip->property("totalCount").toInt(), 2);
@@ -547,21 +643,20 @@ TEST(EditorFilmstripQmlTest, FileNameSitsBelowThumbnailWithMonochromeSelectedTil
   QTRY_COMPARE_WITH_TIMEOUT(list->property("count").toInt(), 8, 2000);
 
   QQuickItem* selected_tile = nullptr;
-  ASSERT_TRUE(QMetaObject::invokeMethod(
-      list, "itemAtIndex", Qt::DirectConnection, Q_RETURN_ARG(QQuickItem*, selected_tile),
-      Q_ARG(int, 0)));
+  ASSERT_TRUE(QMetaObject::invokeMethod(list, "itemAtIndex", Qt::DirectConnection,
+                                        Q_RETURN_ARG(QQuickItem*, selected_tile), Q_ARG(int, 0)));
   ASSERT_NE(selected_tile, nullptr);
 
-  const auto surfaces = selected_tile->findChildren<QObject*>(
-      QStringLiteral("editorFilmstripTileSurface"));
-  const auto frames = selected_tile->findChildren<QObject*>(
-      QStringLiteral("editorFilmstripThumbnailFrame"));
-  const auto labels = selected_tile->findChildren<QObject*>(
-      QStringLiteral("editorFilmstripFileNameLabel"));
-  const auto rating_overlays = selected_tile->findChildren<QObject*>(
-      QStringLiteral("editorFilmstripRatingOverlay"));
-  const auto rating_labels = selected_tile->findChildren<QObject*>(
-      QStringLiteral("editorFilmstripRatingLabel"));
+  const auto surfaces =
+      selected_tile->findChildren<QObject*>(QStringLiteral("editorFilmstripTileSurface"));
+  const auto frames =
+      selected_tile->findChildren<QObject*>(QStringLiteral("editorFilmstripThumbnailFrame"));
+  const auto labels =
+      selected_tile->findChildren<QObject*>(QStringLiteral("editorFilmstripFileNameLabel"));
+  const auto rating_overlays =
+      selected_tile->findChildren<QObject*>(QStringLiteral("editorFilmstripRatingOverlay"));
+  const auto rating_labels =
+      selected_tile->findChildren<QObject*>(QStringLiteral("editorFilmstripRatingLabel"));
   ASSERT_EQ(surfaces.size(), 1);
   ASSERT_EQ(frames.size(), 1);
   ASSERT_EQ(labels.size(), 1);
@@ -647,12 +742,16 @@ TEST(EditorFilmstripQmlTest, LocalSelectionKeepsHorizontalScrollUnchanged) {
 
   list->forceActiveFocus();
   ProcessEvents();
+  // Right now activates the adjacent image through the router; Return
+  // re-activates the focused row. Neither may disturb the strip's contentX.
   QTest::keyClick(harness.window_, Qt::Key_Right);
   ProcessEvents();
+  EXPECT_EQ(harness.router_.openCount(), 1);
+  EXPECT_EQ(filmstrip->property("selectedIndex").toInt(), 1);
   QTest::keyClick(harness.window_, Qt::Key_Return);
   ProcessEvents();
 
-  EXPECT_EQ(harness.router_.openCount(), 1);
+  EXPECT_EQ(harness.router_.openCount(), 2);
   EXPECT_EQ(filmstrip->property("selectedIndex").toInt(), 1);
   EXPECT_NEAR(list->property("contentX").toReal(), content_x_before, 2.0);
 
@@ -680,15 +779,13 @@ TEST(EditorFilmstripQmlTest, ContextMenuRequestCarriesClickedRowAndScenePoint) {
   QTRY_VERIFY_WITH_TIMEOUT(harness.list() != nullptr, 2000);
   QTRY_VERIFY_WITH_TIMEOUT(harness.library_.isPinned(1000), 2000);
 
-  ASSERT_TRUE(QMetaObject::invokeMethod(filmstrip, "requestContextMenuForIndex",
-                                        Q_ARG(QVariant, QVariant(1)),
-                                        Q_ARG(QVariant, QVariant(96.0)),
-                                        Q_ARG(QVariant, QVariant(24.0))));
+  ASSERT_TRUE(QMetaObject::invokeMethod(
+      filmstrip, "requestContextMenuForIndex", Q_ARG(QVariant, QVariant(1)),
+      Q_ARG(QVariant, QVariant(96.0)), Q_ARG(QVariant, QVariant(24.0))));
   // Out-of-range rows must not emit a request.
-  ASSERT_TRUE(QMetaObject::invokeMethod(filmstrip, "requestContextMenuForIndex",
-                                        Q_ARG(QVariant, QVariant(99)),
-                                        Q_ARG(QVariant, QVariant(1.0)),
-                                        Q_ARG(QVariant, QVariant(1.0))));
+  ASSERT_TRUE(QMetaObject::invokeMethod(
+      filmstrip, "requestContextMenuForIndex", Q_ARG(QVariant, QVariant(99)),
+      Q_ARG(QVariant, QVariant(1.0)), Q_ARG(QVariant, QVariant(1.0))));
   ProcessEvents();
 
   const QVariantList requests = harness.menuRequests();
@@ -717,14 +814,13 @@ TEST(EditorFilmstripQmlTest, SelectedTileShowsSavingAndRenderBadgesWhileSessionB
   auto* list = harness.list();
   ASSERT_NE(list, nullptr);
   QQuickItem* selected_tile = nullptr;
-  ASSERT_TRUE(QMetaObject::invokeMethod(
-      list, "itemAtIndex", Qt::DirectConnection, Q_RETURN_ARG(QQuickItem*, selected_tile),
-      Q_ARG(int, 0)));
+  ASSERT_TRUE(QMetaObject::invokeMethod(list, "itemAtIndex", Qt::DirectConnection,
+                                        Q_RETURN_ARG(QQuickItem*, selected_tile), Q_ARG(int, 0)));
   ASSERT_NE(selected_tile, nullptr);
-  const auto saving_badges = selected_tile->findChildren<QObject*>(
-      QStringLiteral("editorFilmstripSavingBadge"));
-  const auto render_badges = selected_tile->findChildren<QObject*>(
-      QStringLiteral("editorFilmstripRenderBadge"));
+  const auto saving_badges =
+      selected_tile->findChildren<QObject*>(QStringLiteral("editorFilmstripSavingBadge"));
+  const auto render_badges =
+      selected_tile->findChildren<QObject*>(QStringLiteral("editorFilmstripRenderBadge"));
   ASSERT_FALSE(saving_badges.isEmpty());
   ASSERT_FALSE(render_badges.isEmpty());
   int visible_saving = 0;
@@ -753,9 +849,8 @@ TEST(EditorFilmstripQmlTest, HeightResizeGrowsTilesWithoutChangingThumbnailMaxEd
   EXPECT_NEAR(filmstrip->property("expandedHeight").toReal(), 128.0, 0.5);
 
   QQuickItem* tile_before = nullptr;
-  ASSERT_TRUE(QMetaObject::invokeMethod(
-      list, "itemAtIndex", Qt::DirectConnection, Q_RETURN_ARG(QQuickItem*, tile_before),
-      Q_ARG(int, 0)));
+  ASSERT_TRUE(QMetaObject::invokeMethod(list, "itemAtIndex", Qt::DirectConnection,
+                                        Q_RETURN_ARG(QQuickItem*, tile_before), Q_ARG(int, 0)));
   ASSERT_NE(tile_before, nullptr);
   const qreal tile_height_before = tile_before->height();
   const qreal tile_width_before  = tile_before->width();
@@ -770,9 +865,8 @@ TEST(EditorFilmstripQmlTest, HeightResizeGrowsTilesWithoutChangingThumbnailMaxEd
   EXPECT_NEAR(harness.session_.filmstripExpandedHeight(), 128.0, 0.5);
 
   QQuickItem* tile_during = nullptr;
-  ASSERT_TRUE(QMetaObject::invokeMethod(
-      list, "itemAtIndex", Qt::DirectConnection, Q_RETURN_ARG(QQuickItem*, tile_during),
-      Q_ARG(int, 0)));
+  ASSERT_TRUE(QMetaObject::invokeMethod(list, "itemAtIndex", Qt::DirectConnection,
+                                        Q_RETURN_ARG(QQuickItem*, tile_during), Q_ARG(int, 0)));
   ASSERT_NE(tile_during, nullptr);
   EXPECT_GT(tile_during->height(), tile_height_before);
   EXPECT_GT(tile_during->width(), tile_width_before);
@@ -820,14 +914,14 @@ TEST(EditorFilmstripQmlTest, ShellKeepsStablePanelRadiusIndependentOfWindowFocus
   auto* shell = harness.window_->findChild<QQuickItem*>(QStringLiteral("editorFilmstripShell"));
   ASSERT_NE(shell, nullptr);
   EXPECT_NEAR(shell->property("radius").toReal(), AppTheme::Instance().panelRadius(), 0.5);
-  auto* handle_focus_fill = harness.window_->findChild<QQuickItem*>(
-      QStringLiteral("editorFilmstripHandleFocusFill"));
+  auto* handle_focus_fill =
+      harness.window_->findChild<QQuickItem*>(QStringLiteral("editorFilmstripHandleFocusFill"));
   ASSERT_NE(handle_focus_fill, nullptr);
-  EXPECT_NEAR(handle_focus_fill->property("radius").toReal(),
-              AppTheme::Instance().panelRadius(), 0.5);
-  EXPECT_EQ(harness.window_->findChild<QQuickItem*>(
-                QStringLiteral("editorFilmstripActiveTopSquareOff")),
-            nullptr);
+  EXPECT_NEAR(handle_focus_fill->property("radius").toReal(), AppTheme::Instance().panelRadius(),
+              0.5);
+  EXPECT_EQ(
+      harness.window_->findChild<QQuickItem*>(QStringLiteral("editorFilmstripActiveTopSquareOff")),
+      nullptr);
 }
 
 }  // namespace

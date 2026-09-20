@@ -5,10 +5,10 @@
 /// @file editor_versions_panel_qml_test.cpp
 /// @brief Production Versions panel: inline draft, outline selection, trash remove.
 
-#include "editor_history_versions_rail_qml_harness.hpp"
-
 #include <QMetaObject>
 #include <QtGlobal>
+
+#include "editor_history_versions_rail_qml_harness.hpp"
 
 namespace alcedo::ui::test {
 namespace {
@@ -189,8 +189,8 @@ TEST_F(EditorVersionsPanelQmlTest, ActiveVersionUsesOutlineWithoutStopPlaybackAc
 
   auto cards = Cards();
   ASSERT_GE(cards.size(), 2);
-  QQuickItem* active_card     = nullptr;
-  QQuickItem* inactive_card   = nullptr;
+  QQuickItem* active_card   = nullptr;
+  QQuickItem* inactive_card = nullptr;
   for (auto* card : cards) {
     if (card->property("versionActive").toBool()) {
       active_card = card;
@@ -202,7 +202,8 @@ TEST_F(EditorVersionsPanelQmlTest, ActiveVersionUsesOutlineWithoutStopPlaybackAc
   ASSERT_NE(inactive_card, nullptr);
 
   // Outline-only: card surface stays cardSurface; border/selectionOutline is text color.
-  EXPECT_EQ(active_card->property("color").value<QColor>(), AppTheme::Instance().cardSurfaceColor());
+  EXPECT_EQ(active_card->property("color").value<QColor>(),
+            AppTheme::Instance().cardSurfaceColor());
   EXPECT_EQ(active_card->property("selectionOutlineColor").value<QColor>(),
             AppTheme::Instance().textColor());
   // Inactive uses the quieter card border, not a filled invert well.
@@ -310,8 +311,7 @@ TEST_F(EditorVersionsPanelQmlTest, RenameUsesSameInlineDraftField) {
             QStringLiteral("renameVersion"));
 }
 
-TEST_F(EditorVersionsPanelQmlTest,
-       VersionListPreservesContentYAcrossCreateRenameAndCheckout) {
+TEST_F(EditorVersionsPanelQmlTest, VersionListPreservesContentYAcrossCreateRenameAndCheckout) {
   ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
   OpenVersionsPage();
 
@@ -326,8 +326,7 @@ TEST_F(EditorVersionsPanelQmlTest,
 
   auto* list = Find(QStringLiteral("editorVersionsList"));
   ASSERT_NE(list, nullptr);
-  QTRY_VERIFY_WITH_TIMEOUT(
-      list->property("contentHeight").toReal() > list->height() + 48.0, 2000);
+  QTRY_VERIFY_WITH_TIMEOUT(list->property("contentHeight").toReal() > list->height() + 48.0, 2000);
 
   const qreal target_y = 96.0;
   ASSERT_TRUE(list->setProperty("contentY", target_y));
@@ -336,7 +335,7 @@ TEST_F(EditorVersionsPanelQmlTest,
   const qreal y_after_scroll = list->property("contentY").toReal();
 
   // Create via the production inline draft — grows the model (full reset path).
-  const int create_before = backend_.create_count();
+  const int   create_before  = backend_.create_count();
   Click(window_, Find(QStringLiteral("editorForkFromRootButton")));
   auto* field = Find(QStringLiteral("editorVersionNameField"));
   ASSERT_NE(field, nullptr);
@@ -347,12 +346,11 @@ TEST_F(EditorVersionsPanelQmlTest,
   list = Find(QStringLiteral("editorVersionsList"));
   ASSERT_NE(list, nullptr);
   // Allow the panel's Qt.callLater restore to run.
-  QTRY_VERIFY_WITH_TIMEOUT(
-      qAbs(list->property("contentY").toReal() - y_after_scroll) <= 2.0, 2000);
+  QTRY_VERIFY_WITH_TIMEOUT(qAbs(list->property("contentY").toReal() - y_after_scroll) <= 2.0, 2000);
 
   // Rename active Version — same-count path may use dataChanged; still preserve Y.
   const qreal y_before_rename = list->property("contentY").toReal();
-  QQuickItem* active_card = nullptr;
+  QQuickItem* active_card     = nullptr;
   for (auto* card : Cards()) {
     if (card->property("versionActive").toBool()) active_card = card;
   }
@@ -366,12 +364,12 @@ TEST_F(EditorVersionsPanelQmlTest,
   QTRY_VERIFY_WITH_TIMEOUT(backend_.rename_count() == 1, 2000);
   list = Find(QStringLiteral("editorVersionsList"));
   ASSERT_NE(list, nullptr);
-  QTRY_VERIFY_WITH_TIMEOUT(
-      qAbs(list->property("contentY").toReal() - y_before_rename) <= 2.0, 2000);
+  QTRY_VERIFY_WITH_TIMEOUT(qAbs(list->property("contentY").toReal() - y_before_rename) <= 2.0,
+                           2000);
 
   // Checkout a non-active card — data-only active flag update.
   const qreal y_before_checkout = list->property("contentY").toReal();
-  QQuickItem* inactive_card = nullptr;
+  QQuickItem* inactive_card     = nullptr;
   for (auto* card : Cards()) {
     if (!card->property("versionActive").toBool()) {
       inactive_card = card;
@@ -385,12 +383,11 @@ TEST_F(EditorVersionsPanelQmlTest,
   QTRY_VERIFY_WITH_TIMEOUT(backend_.checkout_count() == checkout_before + 1, 2000);
   list = Find(QStringLiteral("editorVersionsList"));
   ASSERT_NE(list, nullptr);
-  QTRY_VERIFY_WITH_TIMEOUT(
-      qAbs(list->property("contentY").toReal() - y_before_checkout) <= 2.0, 2000);
+  QTRY_VERIFY_WITH_TIMEOUT(qAbs(list->property("contentY").toReal() - y_before_checkout) <= 2.0,
+                           2000);
 }
 
-TEST_F(EditorVersionsPanelQmlTest,
-       InlineDraftFocusLossCommitsChangedTextAndCancelsUnchanged) {
+TEST_F(EditorVersionsPanelQmlTest, InlineDraftFocusLossCommitsChangedTextAndCancelsUnchanged) {
   ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
   OpenVersionsPage();
   auto* page = Find(QStringLiteral("editorVersionsPageBody"));
@@ -429,7 +426,7 @@ TEST_F(EditorVersionsPanelQmlTest,
   QTRY_VERIFY_WITH_TIMEOUT(!page->property("draftVisible").toBool(), 2000);
 
   const QString created_id = QString::fromStdString(backend_.last_created_id().ToString());
-  QQuickItem* created = nullptr;
+  QQuickItem*   created    = nullptr;
   for (auto* card : Cards()) {
     if (card->property("versionId").toString() == created_id) created = card;
   }
@@ -457,15 +454,13 @@ TEST_F(EditorVersionsPanelQmlTest, BranchFromCurrentButtonBranchesFromActiveHead
   Click(window_, accept);
   QTRY_VERIFY_WITH_TIMEOUT(backend_.branch_count() == 1, 2000);
   EXPECT_EQ(backend_.last_branch_commit(), StableId(13));
-  EXPECT_EQ(QString::fromStdString(backend_.last_branch_name()),
-            QStringLiteral("currentbranch"));
+  EXPECT_EQ(QString::fromStdString(backend_.last_branch_name()), QStringLiteral("currentbranch"));
   EXPECT_EQ(controller_.last_history_result().value(QStringLiteral("action")).toString(),
             QStringLiteral("branchFromCommit"));
   EXPECT_FALSE(controller_.last_history_failed());
 }
 
-TEST_F(EditorVersionsPanelQmlTest,
-       PendingCreateDraftClosesWhenHistoryModelProjectsSubmittedName) {
+TEST_F(EditorVersionsPanelQmlTest, PendingCreateDraftClosesWhenHistoryModelProjectsSubmittedName) {
   ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
   OpenVersionsPage();
   QTRY_VERIFY_WITH_TIMEOUT(Find(QStringLiteral("editorVersionsPageBody")) != nullptr, 2000);
@@ -525,6 +520,83 @@ TEST_F(EditorVersionsPanelQmlTest, CheckoutWorksWhileDraftSubmitPending) {
   ProcessEvents();
   QTRY_VERIFY_WITH_TIMEOUT(backend_.checkout_count() == 1, 2000);
   EXPECT_EQ(QString::fromStdString(backend_.last_checkout_id().ToString()), alternate_id);
+}
+
+TEST_F(EditorVersionsPanelQmlTest, CtrlACreatesDefaultRootVersionWhenVersionsOwnsFocus) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenVersionsPage();
+
+  auto* page = Find(QStringLiteral("editorVersionsPageBody"));
+  ASSERT_NE(page, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(Cards().size() == 2, 2000);
+  const int cards_before = Cards().size();
+
+  // The panel surface owns focus: Ctrl+A resolves through the
+  // editor.versions scope and creates a default-named root Version.
+  page->forceActiveFocus();
+  ProcessEvents();
+  QTest::keyClick(window_, Qt::Key_A, Qt::ControlModifier);
+  QTRY_VERIFY_WITH_TIMEOUT(backend_.create_count() == 1, 2000);
+  EXPECT_EQ(controller_.last_history_result().value(QStringLiteral("action")).toString(),
+            QStringLiteral("createRootVersion"));
+  EXPECT_FALSE(controller_.last_history_failed());
+
+  const QString created_id = QString::fromStdString(backend_.last_created_id().ToString());
+  QQuickItem*   created    = nullptr;
+  const auto    cards      = Cards();
+  EXPECT_EQ(cards.size(), cards_before + 1);
+  for (auto* card : cards) {
+    if (card->property("versionId").toString() == created_id) created = card;
+  }
+  ASSERT_NE(created, nullptr);
+  EXPECT_EQ(created->property("displayName").toString(),
+            QStringLiteral("Version %1").arg(cards_before + 1));
+  EXPECT_TRUE(created->property("versionActive").toBool());
+}
+
+TEST_F(EditorVersionsPanelQmlTest, VersionNameFieldKeepsNativeCtrlA) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenVersionsPage();
+
+  Click(window_, Find(QStringLiteral("editorForkFromRootButton")));
+  auto* field = Find(QStringLiteral("editorVersionNameField"));
+  ASSERT_NE(field, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(field->property("visible").toBool(), 1000);
+  QTRY_VERIFY_WITH_TIMEOUT(field->hasActiveFocus() || field->property("activeFocus").toBool(),
+                           1000);
+
+  // Ctrl+A inside the naming field is native select-all, never a version
+  // create: the field consumes the key before the panel scope sees it.
+  const QString before = field->property("text").toString();
+  ASSERT_FALSE(before.trimmed().isEmpty());
+  QTest::keyClick(window_, Qt::Key_A, Qt::ControlModifier);
+  ProcessEvents();
+  EXPECT_EQ(backend_.create_count(), 0);
+  EXPECT_EQ(field->property("selectedText").toString(), before);
+}
+
+TEST_F(EditorVersionsPanelQmlTest, DisabledRootVersionActionDoesNotConsumeCtrlA) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenVersionsPage();
+
+  auto* page = Find(QStringLiteral("editorVersionsPageBody"));
+  ASSERT_NE(page, nullptr);
+  auto* fork_button = Find(QStringLiteral("editorForkFromRootButton"));
+  ASSERT_NE(fork_button, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(fork_button->isEnabled(), 1000);
+
+  // The command shares the fork-from-root gate; disable checkout so the
+  // action is unavailable and the key must not be consumed into an action.
+  ASSERT_TRUE(page->setProperty("versionCheckoutEnabled", false));
+  ProcessEvents();
+  EXPECT_FALSE(fork_button->isEnabled());
+
+  page->forceActiveFocus();
+  ProcessEvents();
+  QTest::keyClick(window_, Qt::Key_A, Qt::ControlModifier);
+  ProcessEvents();
+  EXPECT_EQ(backend_.create_count(), 0);
+  EXPECT_TRUE(Cards().size() == 2);
 }
 }  // namespace
 }  // namespace alcedo::ui::test

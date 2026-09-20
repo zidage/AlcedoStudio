@@ -580,6 +580,36 @@ alcedo_ui_gtest_discover_tests(EditorFilmstripQmlTest
 )
 alcedo_register_test_target(EditorFilmstripQmlTest ui)
 
+# Phase A2: RegisteredShortcut wrapper behavior (scope gating, editable-focus
+# suppression, live rebinding, auto-repeat) without booting the full shell.
+add_executable(RegisteredShortcutQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/registered_shortcut_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(RegisteredShortcutQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(RegisteredShortcutQmlTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::Widgets
+)
+target_compile_definitions(RegisteredShortcutQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+alcedo_ui_gtest_discover_tests(RegisteredShortcutQmlTest
+    TEST_PREFIX "RegisteredShortcutQmlTest."
+    PROPERTIES LABELS "workspace_qml;registered_shortcut"
+)
+alcedo_register_test_target(RegisteredShortcutQmlTest ui)
+
 # Phase 6A: typed adjustment models (no GPU/QML rendering; QSignalSpy drives the
 # debounce timer deterministically via the event loop).
 add_executable(EditorAdjustmentModelTest
@@ -1563,6 +1593,7 @@ target_include_directories(EditorLutPanelQmlTest
 )
 target_link_libraries(EditorLutPanelQmlTest
     PRIVATE
+        AlbumBackendLib
         AppTheme
         GTest::gtest
         Qt6::Core

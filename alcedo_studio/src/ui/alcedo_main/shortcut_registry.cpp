@@ -605,12 +605,24 @@ QStringList ShortcutRegistry::keySequenceTexts(const QString& command_id) const 
   if (entry == nullptr) {
     return {};
   }
+  // PortableText so QML consumers (Shortcut.sequences) can re-parse the
+  // strings on every platform; native text is display-only on macOS.
   QStringList texts;
   texts.reserve(entry->bindings.size());
   for (const auto& input : entry->bindings) {
-    texts.push_back(InputText(input, QKeySequence::NativeText));
+    texts.push_back(InputText(input, QKeySequence::PortableText));
   }
   return texts;
+}
+
+QString ShortcutRegistry::scopeForCommand(const QString& command_id) const {
+  const auto* entry = FindEntry(command_id);
+  return entry == nullptr ? QString{} : entry->spec.scope;
+}
+
+bool ShortcutRegistry::commandAutoRepeat(const QString& command_id) const {
+  const auto* entry = FindEntry(command_id);
+  return entry != nullptr && entry->spec.auto_repeat;
 }
 
 QVariantMap ShortcutRegistry::validateCandidate(const QString& command_id, int key, int modifiers,
