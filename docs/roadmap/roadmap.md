@@ -36,6 +36,8 @@
 ## Still Planned
 
 - [ ] Add JSON serialization for pipeline configurations.
+- [ ] Complete the Simplified Chinese UI translations added from PR #93 through PR #176; see the
+      [PR 93-176 Simplified Chinese UI Translation Plan](alcedo_studio/ui/pr_93_176_simplified_chinese_ui_translation_plan.md).
 - [ ] Add configurable, focus-scoped keyboard bindings for basic Library and Editor actions; see the
       [Configurable Keyboard Shortcut Registry Plan](alcedo_studio/ui/configurable_keyboard_shortcut_registry_plan.md).
 - [ ] Replace the editor image-processing path with the

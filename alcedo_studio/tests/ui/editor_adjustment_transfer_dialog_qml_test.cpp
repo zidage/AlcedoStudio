@@ -17,12 +17,14 @@
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQmlError>
+#include <QQmlProperty>
 #include <QQuickItem>
 #include <QQuickStyle>
 #include <QQuickWindow>
 #include <QRegularExpression>
 #include <QTest>
 #include <QTimer>
+#include <QTranslator>
 #include <QVariantMap>
 #include <filesystem>
 #include <memory>
@@ -800,6 +802,217 @@ TEST(AdjustmentTransferDialogQmlTest, TransferDialogKeyboardOrderReachesAllThree
   QTest::keyClick(window, Qt::Key_Escape);
   ProcessEvents(60);
   EXPECT_FALSE(harness.dialog()->property("opened").toBool());
+}
+
+// ============================================================================
+// zh_CN catalog: compiled QM drives the real production dialog in both modes.
+// ============================================================================
+
+auto AccessibleNameOf(QObject* object) -> QString {
+  if (object == nullptr) {
+    return {};
+  }
+  QQmlProperty property(object, QStringLiteral("Accessible.name"), qmlContext(object));
+  const auto   name = property.read().toString();
+  if (!name.isEmpty()) {
+    return name;
+  }
+  return object->property("Accessible.name").toString();
+}
+
+TEST(AdjustmentTransferDialogQmlTest,
+     SimplifiedChineseCatalogRetranslatesAdjustmentTransferPanesInPlace) {
+  QTranslator zh;
+  ASSERT_TRUE(zh.load(QStringLiteral(ALCEDO_ZH_CN_QM_FILE)))
+      << "compiled zh_CN catalog missing at " << ALCEDO_ZH_CN_QM_FILE;
+  ASSERT_TRUE(QCoreApplication::installTranslator(&zh));
+
+  DialogQmlHistoryFixture fixture;
+  auto                    document = CreateDefaultPipelineDocument();
+  grade_mask_test::AddRadialMask(document, MaskId{"mask.a"});
+  fixture.ReplaceRootDocument(std::move(document));
+  auto model = OpenModel(fixture);
+  ASSERT_NE(model, nullptr);
+
+  AdjustmentTransferDialogQmlHarness harness(QStringLiteral("copy"), model.get(), QVariantList{});
+  ASSERT_NE(harness.dialog(), nullptr) << harness.warnings.join("\n").toStdString()
+                                       << "| createError=" << harness.createError().toStdString();
+  ASSERT_TRUE(harness.warnings.isEmpty()) << harness.warnings.join('\n').toStdString();
+
+  auto* dialog       = harness.dialog();
+
+  // Pane titles, bulk actions, and footer resolve through the compiled catalog.
+  auto* version_pane = harness.find(QStringLiteral("adjustmentTransferVersionPane"));
+  auto* node_pane    = harness.find(QStringLiteral("adjustmentTransferNodePane"));
+  ASSERT_NE(version_pane, nullptr);
+  ASSERT_NE(node_pane, nullptr);
+  EXPECT_EQ(version_pane->property("title").toString(), QStringLiteral("源版本"));
+  EXPECT_EQ(node_pane->property("title").toString(), QStringLiteral("节点"));
+
+  auto* node_select_all = harness.find(QStringLiteral("transferNodeSelectAll"));
+  auto* item_select_all = harness.find(QStringLiteral("transferItemSelectAll"));
+  auto* node_clear      = harness.find(QStringLiteral("transferNodeClearButton"));
+  auto* item_clear      = harness.find(QStringLiteral("transferItemClearButton"));
+  auto* cancel          = harness.find(QStringLiteral("adjustmentTransferCancelButton"));
+  auto* accept          = harness.find(QStringLiteral("adjustmentTransferAcceptButton"));
+  auto* close           = harness.find(QStringLiteral("adjustmentTransferCloseButton"));
+  ASSERT_NE(node_select_all, nullptr);
+  ASSERT_NE(item_select_all, nullptr);
+  ASSERT_NE(node_clear, nullptr);
+  ASSERT_NE(item_clear, nullptr);
+  ASSERT_NE(cancel, nullptr);
+  ASSERT_NE(accept, nullptr);
+  ASSERT_NE(close, nullptr);
+  EXPECT_EQ(node_select_all->property("text").toString(), QStringLiteral("全选"));
+  EXPECT_EQ(item_select_all->property("text").toString(), QStringLiteral("全选"));
+  EXPECT_EQ(node_clear->property("text").toString(), QStringLiteral("清除"));
+  EXPECT_EQ(item_clear->property("text").toString(), QStringLiteral("清除"));
+  EXPECT_EQ(cancel->property("text").toString(), QStringLiteral("取消"));
+  EXPECT_EQ(accept->property("text").toString(), QStringLiteral("复制调整"));
+  EXPECT_EQ(AccessibleNameOf(close), QStringLiteral("关闭"));
+
+  // Section vocabulary mirrors the Adjustment Stack terms.
+  auto* item_pane = harness.find(QStringLiteral("adjustmentTransferItemPane"));
+  ASSERT_NE(item_pane, nullptr);
+  // QML functions surface as QVariant methods; the return arg must be a
+  // QVariant, not QString, for invokeMethod to match the signature.
+  const auto section_name = [item_pane](int value) {
+    QVariant name;
+    EXPECT_TRUE(QMetaObject::invokeMethod(item_pane, "sectionName", Q_RETURN_ARG(QVariant, name),
+                                          Q_ARG(QVariant, value)));
+    return name.toString();
+  };
+  EXPECT_EQ(section_name(0), QStringLiteral("节点"));
+  EXPECT_EQ(section_name(1), QStringLiteral("色调"));
+  EXPECT_EQ(section_name(2), QStringLiteral("外观"));
+  EXPECT_EQ(section_name(3), QStringLiteral("LUT"));
+  EXPECT_EQ(section_name(4), QStringLiteral("显示变换"));
+  EXPECT_EQ(section_name(5), QStringLiteral("蒙版"));
+  EXPECT_EQ(section_name(99), QStringLiteral("其他"));
+
+  // Node-row and mask-row accessibility text translate; the %1 argument is
+  // backend data and stays untouched.
+  auto* drt_row =
+      FindDelegateByRole(harness, QStringLiteral("transferNodeDelegate"), "nodeId", "drt");
+  ASSERT_NE(drt_row, nullptr);
+  auto* drt_check = drt_row->findChild<QObject*>(QStringLiteral("transferNodeRowCheck"));
+  ASSERT_NE(drt_check, nullptr);
+  const auto node_check_text = drt_check->property("accessibleText").toString();
+  EXPECT_TRUE(node_check_text.contains(QStringLiteral("选择"))) << node_check_text.toStdString();
+  EXPECT_TRUE(node_check_text.contains(QStringLiteral("中的所有项目")))
+      << node_check_text.toStdString();
+
+  auto* item_list = harness.find(QStringLiteral("adjustmentTransferItemList"));
+  ASSERT_NE(item_list, nullptr);
+  item_list->setProperty("contentY", item_list->property("contentHeight").toDouble() -
+                                         item_list->property("height").toDouble());
+  ProcessEvents(60);
+  QQuickItem* masks_row = nullptr;
+  for (auto* item : harness.findAll(QStringLiteral("transferItemDelegate"))) {
+    if (item->property("itemKey").toString() == QStringLiteral("masks")) {
+      masks_row = qobject_cast<QQuickItem*>(item);
+    }
+  }
+  ASSERT_NE(masks_row, nullptr);
+  auto* masks_check = masks_row->findChild<QObject*>(QStringLiteral("transferItemCheckRow"));
+  ASSERT_NE(masks_check, nullptr);
+  EXPECT_EQ(masks_check->property("accessibleText").toString(),
+            QStringLiteral("转移此节点中的所有蒙版"));
+
+  // Retranslation flips the same loaded dialog back to English in place.
+  QCoreApplication::removeTranslator(&zh);
+  harness.engine.retranslate();
+  ProcessEvents(60);
+  EXPECT_EQ(harness.dialog(), dialog);
+  EXPECT_EQ(accept->property("text").toString(), QStringLiteral("Copy Adjustments"));
+  EXPECT_EQ(cancel->property("text").toString(), QStringLiteral("Cancel"));
+  EXPECT_EQ(node_pane->property("title").toString(), QStringLiteral("Nodes"));
+
+  ASSERT_TRUE(QCoreApplication::installTranslator(&zh));
+  harness.engine.retranslate();
+  ProcessEvents(60);
+  EXPECT_EQ(harness.dialog(), dialog);
+  EXPECT_EQ(accept->property("text").toString(), QStringLiteral("复制调整"));
+  EXPECT_EQ(node_pane->property("title").toString(), QStringLiteral("节点"));
+
+  QCoreApplication::removeTranslator(&zh);
+}
+
+TEST(AdjustmentTransferDialogQmlTest,
+     SimplifiedChineseAdjustmentTransferLabelsRemainVisibleAtSupportedWidths) {
+  QTranslator zh;
+  ASSERT_TRUE(zh.load(QStringLiteral(ALCEDO_ZH_CN_QM_FILE)))
+      << "compiled zh_CN catalog missing at " << ALCEDO_ZH_CN_QM_FILE;
+  ASSERT_TRUE(QCoreApplication::installTranslator(&zh));
+
+  // Empty paste package: read-only panes show the Chinese empty hint and the
+  // generic item-pane title.
+  {
+    AdjustmentTransferDialogQmlHarness empty_harness(QStringLiteral("paste"), nullptr,
+                                                     QVariantList{});
+    ASSERT_NE(empty_harness.dialog(), nullptr) << empty_harness.warnings.join("\n").toStdString();
+    auto* empty_hint = empty_harness.find(QStringLiteral("adjustmentTransferEmptyHint"));
+    ASSERT_NE(empty_hint, nullptr);
+    EXPECT_TRUE(empty_hint->property("visible").toBool());
+    EXPECT_EQ(empty_hint->property("text").toString(), QStringLiteral("没有可转移的调整。"));
+    auto* item_pane = empty_harness.find(QStringLiteral("adjustmentTransferItemPane"));
+    ASSERT_NE(item_pane, nullptr);
+    EXPECT_EQ(item_pane->property("title").toString(), QStringLiteral("要粘贴的参数"));
+  }
+
+  DialogQmlHistoryFixture fixture;
+  auto                    model = OpenModel(fixture);
+  ASSERT_NE(model, nullptr);
+  const QVariantList rows = model->SelectionSummary();
+  ASSERT_GT(rows.size(), 0);
+
+  AdjustmentTransferDialogQmlHarness harness(QStringLiteral("paste"), nullptr, rows);
+  ASSERT_NE(harness.dialog(), nullptr) << harness.warnings.join("\n").toStdString()
+                                       << "| createError=" << harness.createError().toStdString();
+  ASSERT_TRUE(harness.warnings.isEmpty()) << harness.warnings.join('\n').toStdString();
+
+  auto* accept = harness.find(QStringLiteral("adjustmentTransferAcceptButton"));
+  auto* cancel = harness.find(QStringLiteral("adjustmentTransferCancelButton"));
+  auto* close  = harness.find(QStringLiteral("adjustmentTransferCloseButton"));
+  ASSERT_NE(accept, nullptr);
+  ASSERT_NE(cancel, nullptr);
+  ASSERT_NE(close, nullptr);
+  EXPECT_EQ(accept->property("text").toString(), QStringLiteral("粘贴调整"));
+  EXPECT_EQ(cancel->property("text").toString(), QStringLiteral("取消"));
+  EXPECT_EQ(AccessibleNameOf(close), QStringLiteral("关闭"));
+
+  // Read-only panes keep the Chinese pane title and hide selection controls.
+  auto* node_pane = harness.find(QStringLiteral("adjustmentTransferNodePane"));
+  ASSERT_NE(node_pane, nullptr);
+  EXPECT_EQ(node_pane->property("title").toString(), QStringLiteral("节点"));
+  auto* node_controls = harness.find(QStringLiteral("transferNodeHeaderControls"));
+  auto* item_controls = harness.find(QStringLiteral("transferItemHeaderControls"));
+  ASSERT_NE(node_controls, nullptr);
+  ASSERT_NE(item_controls, nullptr);
+  EXPECT_FALSE(node_controls->property("visible").toBool());
+  EXPECT_FALSE(item_controls->property("visible").toBool());
+
+  // Paste item rows expose the translated section vocabulary.
+  auto* item_pane = harness.find(QStringLiteral("adjustmentTransferItemPane"));
+  ASSERT_NE(item_pane, nullptr);
+  QVariant section;
+  ASSERT_TRUE(QMetaObject::invokeMethod(item_pane, "sectionName", Q_RETURN_ARG(QVariant, section),
+                                        Q_ARG(QVariant, 5)));
+  EXPECT_EQ(section.toString(), QStringLiteral("蒙版"));
+
+  // The dialog stays inside the harness window at a reduced supported width
+  // and the Chinese pane titles remain visible.
+  auto* dialog = harness.dialog();
+  harness.window->resize(760, 600);
+  ProcessEvents(80);
+  EXPECT_LE(dialog->property("width").toReal(), harness.window->width());
+  EXPECT_GE(dialog->property("x").toReal(), 0.0);
+  EXPECT_TRUE(node_pane->property("visible").toBool());
+  EXPECT_TRUE(item_pane->property("visible").toBool());
+  EXPECT_EQ(node_pane->property("title").toString(), QStringLiteral("节点"));
+  EXPECT_EQ(accept->property("text").toString(), QStringLiteral("粘贴调整"));
+
+  QCoreApplication::removeTranslator(&zh);
 }
 
 }  // namespace
