@@ -2495,6 +2495,191 @@ TEST_F(EditorNodesPanelQmlTest, LockedNodeDisablesContextMenuDeleteAndMixedMulti
   EXPECT_TRUE(remove->property("enabled").toBool());
 }
 
+// Installs the compiled zh_CN catalog for the lifetime of the test and flips
+// already-loaded QML through QQmlEngine::retranslate(). This is the same
+// mechanism LanguageManager uses at runtime.
+class ScopedZhCnCatalog {
+ public:
+  explicit ScopedZhCnCatalog(QQmlEngine& engine) : engine_(engine) {
+    installed_ = translator_.load(QStringLiteral(ALCEDO_ZH_CN_QM_FILE)) &&
+                 QCoreApplication::installTranslator(&translator_);
+    if (installed_) {
+      engine_.retranslate();
+    }
+  }
+  ~ScopedZhCnCatalog() {
+    if (installed_) {
+      QCoreApplication::removeTranslator(&translator_);
+      engine_.retranslate();
+    }
+  }
+  [[nodiscard]] auto installed() const -> bool { return installed_; }
+
+  void               FlipToEnglish() {
+    if (installed_) {
+      QCoreApplication::removeTranslator(&translator_);
+    }
+    engine_.retranslate();
+  }
+  void FlipToChinese() {
+    if (installed_) {
+      QCoreApplication::installTranslator(&translator_);
+    }
+    engine_.retranslate();
+  }
+
+ private:
+  QQmlEngine& engine_;
+  QTranslator translator_;
+  bool        installed_ = false;
+};
+
+TEST_F(EditorNodesPanelQmlTest, SimplifiedChineseCatalogRetranslatesNodesAndMaskGroupsInPlace) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  ScopedZhCnCatalog zh(engine_);
+  ASSERT_TRUE(zh.installed()) << "compiled zh_CN catalog missing at " << ALCEDO_ZH_CN_QM_FILE;
+
+  OpenMaskGroupsPage();
+  QTRY_VERIFY_WITH_TIMEOUT(MaskGroupDelegates().size() == 1, 2000);
+  auto* body  = Find(QStringLiteral("editorMaskGroupsPageBody"));
+  auto* title = Find(QStringLiteral("editorMaskGroupsPanelTitle"));
+  auto* add   = Find(QStringLiteral("editorMaskGroupsAddButton"));
+  ASSERT_NE(body, nullptr);
+  ASSERT_NE(title, nullptr);
+  ASSERT_NE(add, nullptr);
+  EXPECT_EQ(title->property("text").toString(), QStringLiteral("图层（蒙版组）"));
+  EXPECT_EQ(AttachedName(title), QStringLiteral("图层（蒙版组）"));
+  EXPECT_EQ(add->property("actionName").toString(), QStringLiteral("添加图层（蒙版组）"));
+  auto* primary = MaskGroupDelegateFor(QStringLiteral("grade.primary"));
+  ASSERT_NE(primary, nullptr);
+  auto* empty = primary->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupEmpty"));
+  ASSERT_NE(empty, nullptr);
+  EXPECT_EQ(empty->property("text").toString(), QStringLiteral("暂无蒙版"));
+
+  // Retranslation updates the same loaded objects: no Loader teardown.
+  zh.FlipToEnglish();
+  ProcessEvents();
+  EXPECT_EQ(Find(QStringLiteral("editorMaskGroupsPageBody")), body);
+  EXPECT_EQ(title->property("text").toString(), QStringLiteral("Mask Groups"));
+  EXPECT_EQ(add->property("actionName").toString(), QStringLiteral("Add Mask Group"));
+  EXPECT_EQ(empty->property("text").toString(), QStringLiteral("No masks"));
+
+  zh.FlipToChinese();
+  ProcessEvents();
+  EXPECT_EQ(Find(QStringLiteral("editorMaskGroupsPageBody")), body);
+  EXPECT_EQ(title->property("text").toString(), QStringLiteral("图层（蒙版组）"));
+  EXPECT_EQ(add->property("actionName").toString(), QStringLiteral("添加图层（蒙版组）"));
+  EXPECT_EQ(empty->property("text").toString(), QStringLiteral("暂无蒙版"));
+}
+
+TEST_F(EditorNodesPanelQmlTest,
+       SimplifiedChineseMaskGroupActionsAndAccessibilityUseApprovedTerminology) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  backend_.AddMaskToPrimaryGrade(MakeMask(MaskId{"mask.one"}, RadialMaskSource{}));
+  ScopedZhCnCatalog zh(engine_);
+  ASSERT_TRUE(zh.installed()) << "compiled zh_CN catalog missing at " << ALCEDO_ZH_CN_QM_FILE;
+
+  auto* nodes_probe = Controller();
+  ASSERT_NE(nodes_probe, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(nodes_probe->has_snapshot(), 2000);
+  ASSERT_TRUE(nodes_probe->setColorGradeDeletionProtected(QStringLiteral("grade.primary"), true));
+  ProcessEvents();
+
+  OpenMaskGroupsPage();
+  QTRY_VERIFY_WITH_TIMEOUT(MaskGroupDelegates().size() == 1, 2000);
+  auto* primary = MaskGroupDelegateFor(QStringLiteral("grade.primary"));
+  ASSERT_NE(primary, nullptr);
+
+  auto* lock = primary->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupLockButton"));
+  ASSERT_NE(lock, nullptr);
+  EXPECT_EQ(AttachedName(lock), QStringLiteral("解锁Color Grade 1"));
+
+  auto* remove = primary->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupDeleteButton"));
+  ASSERT_NE(remove, nullptr);
+  EXPECT_FALSE(remove->isEnabled());
+  EXPECT_EQ(remove->property("toolTipText").toString(),
+            QStringLiteral("删除前请先解锁Color Grade 1"));
+  EXPECT_EQ(AttachedName(remove), QStringLiteral("删除Color Grade 1"));
+
+  auto* header = primary->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupHeader"));
+  ASSERT_NE(header, nullptr);
+  const auto header_name = AttachedName(header);
+  EXPECT_TRUE(header_name.contains(QStringLiteral("蒙版"))) << header_name.toStdString();
+  EXPECT_TRUE(header_name.contains(QStringLiteral("已展开"))) << header_name.toStdString();
+  EXPECT_TRUE(header_name.contains(QStringLiteral("删除已锁定"))) << header_name.toStdString();
+
+  auto* row = MaskRowIn(primary, QStringLiteral("mask.one"));
+  ASSERT_NE(row, nullptr);
+  // rowName comes from backend mask data ("Mask"); only the qsTr-owned
+  // fragments of the composed name translate.
+  const auto row_name = AttachedName(row);
+  EXPECT_TRUE(row_name.contains(QStringLiteral("不透明度"))) << row_name.toStdString();
+  auto* row_delete = row->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupMaskDeleteButton"));
+  ASSERT_NE(row_delete, nullptr);
+  EXPECT_EQ(AttachedName(row_delete), QStringLiteral("删除Mask"));
+
+  // No accessible phrase may carry banned separators or the unapproved
+  // Mask Group wording anywhere on the page.
+  QStringList phrases;
+  CollectAccessiblePhrases(Find(QStringLiteral("editorMaskGroupsPageBody")), &phrases);
+  for (const auto& phrase : phrases) {
+    EXPECT_FALSE(phrase.contains(QStringLiteral(" · "))) << phrase.toStdString();
+    EXPECT_FALSE(phrase.contains(QStringLiteral(" | "))) << phrase.toStdString();
+    const QString residue = QString(phrase).replace(QStringLiteral("图层（蒙版组）"), QString());
+    EXPECT_FALSE(residue.contains(QStringLiteral("蒙版组"))) << phrase.toStdString();
+    EXPECT_FALSE(residue.contains(QStringLiteral("遮罩"))) << phrase.toStdString();
+  }
+}
+
+TEST_F(EditorNodesPanelQmlTest,
+       SimplifiedChineseNodeAndAdjustmentLabelsRemainVisibleAtSupportedWidths) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  backend_.AddMaskToPrimaryGrade(MakeMask(MaskId{"mask.one"}, RadialMaskSource{}));
+  ScopedZhCnCatalog zh(engine_);
+  ASSERT_TRUE(zh.installed()) << "compiled zh_CN catalog missing at " << ALCEDO_ZH_CN_QM_FILE;
+
+  auto* layout = LayoutStore();
+  ASSERT_NE(layout, nullptr);
+  OpenNodesPage();
+  WaitUntilGraphReady();
+  auto* adapter = Adapter();
+  ASSERT_NE(adapter, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(adapter->NodeFor(NodeId{"grade.primary"}) != nullptr, 2000);
+
+  auto* panel = Find(QStringLiteral("editorNodesPageBody"));
+  auto* title = Find(QStringLiteral("editorNodesPanelTitle"));
+  auto* add   = Find(QStringLiteral("editorNodesAddButton"));
+  ASSERT_NE(panel, nullptr);
+  ASSERT_NE(title, nullptr);
+  ASSERT_NE(add, nullptr);
+  EXPECT_EQ(title->property("text").toString(), QStringLiteral("节点"));
+  EXPECT_EQ(add->property("actionName").toString(), QStringLiteral("添加色彩分级"));
+
+  for (const int width : {260, 320, 460}) {
+    layout->set_preferred_panel_width(width);
+    ProcessEvents();
+    EXPECT_TRUE(title->isVisible()) << "width " << width;
+    EXPECT_TRUE(add->isVisible()) << "width " << width;
+    EXPECT_GT(title->width(), 0.0) << "width " << width;
+    EXPECT_LE(title->width() + add->width(), panel->width() + 1.0) << "width " << width;
+  }
+
+  // Mask drawer (adjustment surface on the node card) shows the Chinese label.
+  auto* grade = adapter->NodeFor(NodeId{"grade.primary"})->getItem();
+  ASSERT_NE(grade, nullptr);
+  auto* drawer_title = grade->findChild<QQuickItem*>(QStringLiteral("editorNodeMaskDrawerTitle"));
+  auto* drawer_head  = grade->findChild<QQuickItem*>(QStringLiteral("editorNodeMaskDrawerHeader"));
+  ASSERT_NE(drawer_title, nullptr);
+  ASSERT_NE(drawer_head, nullptr);
+  EXPECT_EQ(drawer_title->property("text").toString(), QStringLiteral("蒙版"));
+  EXPECT_EQ(AttachedName(drawer_head), QStringLiteral("折叠蒙版"));
+  QTRY_VERIFY_WITH_TIMEOUT(
+      grade->findChild<QQuickItem*>(QStringLiteral("editorNodeMaskTypeRow")) != nullptr, 2000);
+  auto* type_row = grade->findChild<QQuickItem*>(QStringLiteral("editorNodeMaskTypeRow"));
+  ASSERT_NE(type_row, nullptr);
+  EXPECT_EQ(type_row->property("typeLabel").toString(), QStringLiteral("径向"));
+}
+
 TEST_F(EditorNodesPanelQmlTest, CanvasBorderStaysConstantWhenGraphViewGainsFocus) {
   ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
   OpenNodesPage();

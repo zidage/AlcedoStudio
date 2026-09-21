@@ -2292,12 +2292,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>EditorGeometryPanel</name>
     <message>
-        <location filename="../qml/EditorGeometryPanel.qml" line="+71"/>
-        <source>Auto (metadata)</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+463"/>
+        <location filename="../qml/EditorGeometryPanel.qml" line="+409"/>
         <source>Crop X</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2337,22 +2332,7 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+11"/>
-        <source>Enable Lens Calibration</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+10"/>
-        <source>Lens Brand</source>
-        <translation type="unfinished">Lens Brand</translation>
-    </message>
-    <message>
-        <location line="+9"/>
-        <source>Lens Model</source>
-        <translation type="unfinished">Lens Model</translation>
-    </message>
-    <message>
-        <location line="+172"/>
+        <location line="+160"/>
         <source>Geometry</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2379,16 +2359,6 @@ Original source files on disk will be kept.</source>
     <message>
         <location line="+78"/>
         <source>Reset crop and rotation</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+11"/>
-        <source>Lens Calibration</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+51"/>
-        <source>Reset lens calibration</source>
         <translation type="unfinished"></translation>
     </message>
 </context>
@@ -3069,7 +3039,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>EditorRawDecodePanel</name>
     <message>
-        <location filename="../qml/EditorRawDecodePanel.qml" line="+22"/>
+        <location filename="../qml/EditorRawDecodePanel.qml" line="+35"/>
         <source>Legacy</source>
         <translation type="unfinished"></translation>
     </message>
@@ -3084,14 +3054,14 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+142"/>
-        <location line="+10"/>
+        <location line="+321"/>
+        <location line="+107"/>
         <source>RAW Decode</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
         <location line="+22"/>
-        <location line="+42"/>
+        <location line="+33"/>
         <source>Method</source>
         <translation type="unfinished"></translation>
     </message>
@@ -3101,12 +3071,12 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-123"/>
+        <location line="-403"/>
         <source>Auto (metadata)</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+293"/>
+        <location line="+248"/>
         <source>Lens Calibration</source>
         <translation type="unfinished"></translation>
     </message>
@@ -3121,24 +3091,24 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+42"/>
+        <location line="+45"/>
         <source>Reset lens calibration</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+37"/>
+        <location line="+90"/>
         <source>Enable Lens Calibration</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
         <location line="+10"/>
         <source>Lens Brand</source>
-        <translation type="unfinished"></translation>
+        <translation type="unfinished">Lens Brand</translation>
     </message>
     <message>
         <location line="+9"/>
         <source>Lens Model</source>
-        <translation type="unfinished"></translation>
+        <translation type="unfinished">Lens Model</translation>
     </message>
 </context>
 <context>
@@ -4480,43 +4450,43 @@ Original source files on disk will be kept.</source>
 <context>
     <name>LensCatalogPicker</name>
     <message>
-        <location filename="../qml/LensCatalogPicker.qml" line="+84"/>
+        <location filename="../qml/LensCatalogPicker.qml" line="+81"/>
         <source>Lens</source>
-        <translation type="unfinished"></translation>
+        <translation type="unfinished">Lens</translation>
     </message>
     <message>
-        <location line="+278"/>
+        <location line="+301"/>
         <source>Select lens</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
         <location line="+12"/>
         <source>Auto</source>
-        <translation type="unfinished"></translation>
+        <translation type="unfinished">Auto</translation>
     </message>
     <message>
-        <location line="+116"/>
+        <location line="+106"/>
         <source>Brand</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
         <location line="+10"/>
-        <location line="+104"/>
+        <location line="+122"/>
         <source>All brands</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+74"/>
+        <location line="-48"/>
         <source>Search brands</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+159"/>
+        <location line="+177"/>
         <source>Search lenses</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+127"/>
+        <location line="+144"/>
         <source>No lenses match</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4687,7 +4657,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>QObject</name>
     <message>
-        <location filename="../album_backend/thumbnail_manager.cpp" line="+155"/>
+        <location filename="../album_backend/thumbnail_manager.cpp" line="+153"/>
         <location line="+106"/>
         <source>Source file was moved or deleted: %1</source>
         <translation type="unfinished"></translation>

@@ -1058,7 +1058,9 @@ target_link_libraries(EditorNodesPanelQmlTest
 )
 target_compile_definitions(EditorNodesPanelQmlTest
     PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+    PRIVATE ALCEDO_ZH_CN_QM_FILE="${CMAKE_BINARY_DIR}/alcedo_studio/src/alcedo_main_zh_CN.qm"
 )
+add_dependencies(EditorNodesPanelQmlTest alcedo_main_lrelease)
 set_target_properties(EditorNodesPanelQmlTest PROPERTIES AUTOMOC ON)
 alcedo_ui_gtest_discover_tests(EditorNodesPanelQmlTest
     TEST_PREFIX "EditorNodesPanelQmlTest."
@@ -1468,7 +1470,9 @@ target_link_libraries(AdjustmentTransferDialogQmlTest
 )
 target_compile_definitions(AdjustmentTransferDialogQmlTest
     PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+    PRIVATE ALCEDO_ZH_CN_QM_FILE="${CMAKE_BINARY_DIR}/alcedo_studio/src/alcedo_main_zh_CN.qm"
 )
+add_dependencies(AdjustmentTransferDialogQmlTest alcedo_main_lrelease)
 alcedo_ui_gtest_discover_tests(AdjustmentTransferDialogQmlTest
     TEST_PREFIX "AdjustmentTransferDialogQmlTest."
     PROPERTIES LABELS "workspace_qml"
@@ -1878,6 +1882,32 @@ target_link_libraries(LanguageManagerTest
 )
 alcedo_ui_gtest_discover_tests(LanguageManagerTest TEST_PREFIX "LanguageManagerTest.")
 alcedo_register_test_target(LanguageManagerTest ui)
+
+# PR93-176 zh_CN plan: focused catalog audit. Parses the TS source of truth,
+# then loads the compiled QM produced by alcedo_main_lrelease to prove the
+# packaged catalog translates one QML and one C++ context.
+add_executable(SimplifiedChineseCatalogTest
+    ${ALCEDO_TEST_ROOT}/ui/simplified_chinese_catalog_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp
+)
+target_include_directories(SimplifiedChineseCatalogTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(SimplifiedChineseCatalogTest
+    PRIVATE
+        GTest::gtest
+        Qt6::Core
+)
+target_compile_definitions(SimplifiedChineseCatalogTest
+    PRIVATE ALCEDO_ZH_CN_TS_FILE="${ALCEDO_SRC_DIR}/ui/alcedo_main/i18n/alcedo_main_zh_CN.ts"
+    PRIVATE ALCEDO_ZH_CN_QM_FILE="${CMAKE_BINARY_DIR}/alcedo_studio/src/alcedo_main_zh_CN.qm"
+)
+add_dependencies(SimplifiedChineseCatalogTest alcedo_main_lrelease)
+alcedo_ui_gtest_discover_tests(SimplifiedChineseCatalogTest
+    TEST_PREFIX "SimplifiedChineseCatalogTest."
+    PROPERTIES LABELS "workspace_qml;i18n")
+alcedo_register_test_target(SimplifiedChineseCatalogTest ui)
 
 # Phase 6C-5 Phase 6C: production-style A-to-B integration test.
 add_executable(EditorCheckpointNavigationTest
