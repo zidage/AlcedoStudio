@@ -5,13 +5,17 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <future>
 #include <memory>
 #include <opencv2/core.hpp>
 #include <span>
 #include <stdexcept>
+#include <string>
+#include <thread>
 #include <vector>
 
 #ifdef HAVE_CUDA
@@ -74,6 +78,16 @@ auto MakeUnpacker() -> PreparedSourceCache::UnpackFn {
     return RawInputLoader::FromUnpackedCfa(gpu_dag_test::MakeU16CfaPlane(32, 32, pattern), pattern,
                                            gpu_dag_test::DefaultLinearization(),
                                            gpu_dag_test::FullSensor(32, 32), decode_res);
+  };
+}
+
+auto MakeUnpackerFor(std::uint32_t width, std::uint32_t height)
+    -> PreparedSourceCache::UnpackFn {
+  return [width, height](std::span<const std::byte>, DecodeRes decode_res) {
+    const auto pattern = gpu_dag_test::MakeRggbPattern();
+    return RawInputLoader::FromUnpackedCfa(gpu_dag_test::MakeU16CfaPlane(width, height, pattern),
+                                           pattern, gpu_dag_test::DefaultLinearization(),
+                                           gpu_dag_test::FullSensor(width, height), decode_res);
   };
 }
 
@@ -721,6 +735,97 @@ TEST_F(OpenClRendererFixture, OpenClOneShotRenderDoesNotPublishIntoSessionCache)
   EXPECT_EQ(renderer_->Stats().prepared_source_hits, 0U);
   EXPECT_EQ(renderer_->Stats().plan_cache_hits, 0U);
   EXPECT_EQ(renderer_->Stats().pass.sensor_develop_execute, 0U);
+}
+
+TEST_F(OpenClRendererFixture, OpenClParallelOneShotRendersCompleteAndReleaseWorkspaces) {
+  // Regression: parallel thumbnail renders each own a one-shot render device.
+  // Shared command-queue submission and shared cl_kernel argument state used to
+  // fail with OpenCL error -5 (CL_OUT_OF_RESOURCES) on
+  // OpenClBackend::UploadDeviceMemory.
+  constexpr int kWorkers = 4;
+  struct Worker {
+    std::unique_ptr<OpenClRenderer> renderer;
+    std::shared_ptr<ImageBuffer>    image;
+    bool                            finite          = false;
+    std::uintptr_t                  device_identity = 0;
+    std::uintptr_t                  queue_identity  = 0;
+    std::size_t                     published       = 1;
+    std::size_t                     pool_bytes      = 1;
+    std::size_t                     pool_entries    = 1;
+    std::uint64_t                   source_hits     = 1;
+    std::uint64_t                   source_misses   = 1;
+    std::string                     error;
+  };
+
+  std::vector<Worker> workers(static_cast<std::size_t>(kWorkers));
+  for (int i = 0; i < kWorkers; ++i) {
+    auto document = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
+    gpu_dag_test::EnsureTestCameraProfile(*document);
+    workers[static_cast<std::size_t>(i)].renderer =
+        std::make_unique<OpenClRenderer>(document, MakeUnpackerFor(1024, 768));
+    workers[static_cast<std::size_t>(i)].image =
+        MakeEncodedImage(static_cast<std::uint8_t>(90 + i));
+  }
+
+  std::promise<void> start;
+  const auto         go = start.get_future().share();
+  std::atomic<int>   ready{0};
+  std::vector<std::thread> threads;
+  threads.reserve(static_cast<std::size_t>(kWorkers));
+  for (int i = 0; i < kWorkers; ++i) {
+    threads.emplace_back([&, i] {
+      auto& worker = workers[static_cast<std::size_t>(i)];
+      ready.fetch_add(1, std::memory_order_relaxed);
+      go.wait();
+      try {
+        const auto output = worker.renderer->Render(worker.image, DecodeRes::FULL, RenderRequest{},
+                                                    nullptr, {}, true,
+                                                    RenderCachePolicy::BypassSessionCache);
+        worker.finite          = HostRgbaIsFinite(output);
+        worker.device_identity = worker.renderer->DebugOneShotDeviceIdentity();
+        worker.queue_identity  = worker.renderer->DebugOneShotQueueIdentity();
+        worker.published       = worker.renderer->OneShotPublishedResultCount();
+        const auto one_shot    = worker.renderer->OneShotResources();
+        worker.pool_bytes      = one_shot.texture_pool_used_bytes;
+        worker.pool_entries    = one_shot.texture_pool_entry_count;
+        worker.source_hits     = worker.renderer->Stats().prepared_source_hits;
+        worker.source_misses   = worker.renderer->Stats().prepared_source_misses;
+      } catch (const std::exception& ex) {
+        worker.error = ex.what();
+      } catch (...) {
+        worker.error = "unknown parallel one-shot failure";
+      }
+    });
+  }
+
+  while (ready.load(std::memory_order_relaxed) < kWorkers) {
+    std::this_thread::yield();
+  }
+  start.set_value();
+  for (auto& thread : threads) {
+    thread.join();
+  }
+
+  const auto product_queue =
+      reinterpret_cast<std::uintptr_t>(OpenClContext::Instance().ProductQueue());
+  for (int i = 0; i < kWorkers; ++i) {
+    SCOPED_TRACE(i);
+    const auto& worker = workers[static_cast<std::size_t>(i)];
+    EXPECT_TRUE(worker.error.empty()) << worker.error;
+    EXPECT_TRUE(worker.finite);
+    EXPECT_NE(worker.device_identity, 0U);
+    EXPECT_NE(worker.queue_identity, 0U);
+    EXPECT_NE(worker.queue_identity, product_queue);
+    EXPECT_EQ(worker.published, 0U);
+    EXPECT_EQ(worker.pool_bytes, 0U);
+    EXPECT_EQ(worker.pool_entries, 0U);
+    EXPECT_EQ(worker.source_hits, 0U);
+    EXPECT_EQ(worker.source_misses, 0U);
+    for (int j = i + 1; j < kWorkers; ++j) {
+      EXPECT_NE(worker.device_identity, workers[static_cast<std::size_t>(j)].device_identity);
+      EXPECT_NE(worker.queue_identity, workers[static_cast<std::size_t>(j)].queue_identity);
+    }
+  }
 }
 
 TEST_F(OpenClRendererFixture, OpenClPipelineReturnReleasesSessionResourcesAfterGpuCompletion) {

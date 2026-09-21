@@ -33,6 +33,10 @@ struct OpenClDeviceCandidate {
   OpenClDeviceCapabilities capabilities;
 };
 
+// Render-local queue bound to the calling thread by EnterThreadQueueScope.
+// Only one-shot render threads bind; product/editor threads leave it null.
+thread_local cl_command_queue t_thread_queue_override = nullptr;
+
 auto ToLower(std::string value) -> std::string {
   std::transform(value.begin(), value.end(), value.begin(),
                  [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
@@ -588,6 +592,9 @@ auto OpenClContext::Context() const -> cl_context {
 }
 
 auto OpenClContext::Queue() const -> cl_command_queue {
+  if (t_thread_queue_override != nullptr) {
+    return t_thread_queue_override;
+  }
   std::lock_guard<std::mutex> lock(mutex_);
   return queue_override_ != nullptr ? queue_override_ : queue_;
 }
@@ -663,6 +670,40 @@ auto OpenClContext::ProfilingQueueInstalled() const -> bool {
 auto OpenClContext::HasProfilingQueue() const -> bool {
   std::lock_guard<std::mutex> lock(mutex_);
   return profiling_queue_ != nullptr;
+}
+
+auto OpenClContext::EnterThreadQueueScope(cl_command_queue queue) -> OpenClThreadQueueScope {
+  if (queue == nullptr) {
+    throw std::invalid_argument(
+        "OpenClContext::EnterThreadQueueScope: queue must not be null.");
+  }
+  OpenClThreadQueueScope scope(t_thread_queue_override);
+  t_thread_queue_override = queue;
+  return scope;
+}
+
+OpenClThreadQueueScope::~OpenClThreadQueueScope() {
+  if (active_) {
+    t_thread_queue_override = previous_;
+  }
+}
+
+OpenClThreadQueueScope::OpenClThreadQueueScope(OpenClThreadQueueScope&& other) noexcept
+    : previous_(other.previous_), active_(other.active_) {
+  other.active_ = false;
+}
+
+auto OpenClThreadQueueScope::operator=(OpenClThreadQueueScope&& other) noexcept
+    -> OpenClThreadQueueScope& {
+  if (this != &other) {
+    if (active_) {
+      t_thread_queue_override = previous_;
+    }
+    previous_     = other.previous_;
+    active_       = other.active_;
+    other.active_ = false;
+  }
+  return *this;
 }
 
 }  // namespace alcedo

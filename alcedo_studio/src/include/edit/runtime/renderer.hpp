@@ -152,6 +152,14 @@ class Renderer {
    */
   [[nodiscard]] auto DebugOneShotDeviceIdentity() const -> std::uintptr_t;
 
+  /**
+   * @brief Native queue/stream identity of the one-shot device, or 0 if none exists.
+   *
+   * Tests use this to verify that one-shot renders do not share the backend's
+   * session submission stream.
+   */
+  [[nodiscard]] auto DebugOneShotQueueIdentity() const -> std::uintptr_t;
+
   [[nodiscard]] auto Device() -> RenderDevice& {
     EnsureSessionDevice();
     return *device_;
@@ -225,6 +233,14 @@ void Renderer<Backend>::EnsureOneShotDevice() {
     return;
   }
   one_shot_device_ = std::make_unique<RenderDevice>();
+  if constexpr (requires {
+                  { one_shot_device_->Workspace().Device().UseDedicatedQueue() };
+                }) {
+    // One-shot devices get an isolated submission stream (CUDA uses a stream
+    // per command context; OpenCL a dedicated command queue) so parallel
+    // thumbnail/export renders never share one queue object.
+    one_shot_device_->Workspace().Device().UseDedicatedQueue();
+  }
   ConfigureDevice(*one_shot_device_, "one-shot");
 }
 
@@ -329,6 +345,20 @@ auto Renderer<Backend>::OneShotResources() const -> RenderSessionResources {
 template <class Backend>
 auto Renderer<Backend>::DebugOneShotDeviceIdentity() const -> std::uintptr_t {
   return reinterpret_cast<std::uintptr_t>(one_shot_device_.get());
+}
+
+template <class Backend>
+auto Renderer<Backend>::DebugOneShotQueueIdentity() const -> std::uintptr_t {
+  std::uintptr_t identity = 0;
+  if (one_shot_device_) {
+    if constexpr (requires {
+                    { one_shot_device_->Workspace().Device().NativeQueue() };
+                  }) {
+      identity =
+          reinterpret_cast<std::uintptr_t>(one_shot_device_->Workspace().Device().NativeQueue());
+    }
+  }
+  return identity;
 }
 
 }  // namespace alcedo

@@ -42,6 +42,33 @@ struct OpenClDeviceCapabilities {
   [[nodiscard]] auto SupportsExtension(std::string_view extension) const -> bool;
 };
 
+/**
+ * @brief RAII binding that makes OpenClContext::Queue() return a render-local
+ * queue on the calling thread.
+ *
+ * One-shot render devices install their dedicated queue for the duration of a
+ * DAG encode so helper code that asks the context for "the queue" submits on
+ * the render-local queue instead of the shared product queue. Destruction
+ * restores the previous binding; nested scopes restore in order. Move-only.
+ */
+class OpenClThreadQueueScope {
+ public:
+  OpenClThreadQueueScope() = default;
+  ~OpenClThreadQueueScope();
+  OpenClThreadQueueScope(const OpenClThreadQueueScope&)                    = delete;
+  auto operator=(const OpenClThreadQueueScope&) -> OpenClThreadQueueScope& = delete;
+  OpenClThreadQueueScope(OpenClThreadQueueScope&& other) noexcept;
+  auto operator=(OpenClThreadQueueScope&& other) noexcept -> OpenClThreadQueueScope&;
+
+ private:
+  friend class OpenClContext;
+  explicit OpenClThreadQueueScope(cl_command_queue previous)
+      : previous_(previous), active_(true) {}
+
+  cl_command_queue previous_ = nullptr;
+  bool             active_   = false;
+};
+
 struct OpenClInitializationOptions {
   // Case-insensitive substring matched against "<vendor> <device name>".
   // Useful for user preferences such as "nvidia" or "intel arc". If omitted,
@@ -109,6 +136,8 @@ class OpenClContext {
   auto        Device() const -> cl_device_id;
   auto        Context() const -> cl_context;
   // Product command queue, or the installed development override when active.
+  // A render thread that entered EnterThreadQueueScope gets its render-local
+  // queue instead so in-DAG helpers stay off the shared product queue.
   auto        Queue() const -> cl_command_queue;
   // Product queue only (never the profiling override).
   auto        ProductQueue() const -> cl_command_queue;
@@ -125,6 +154,16 @@ class OpenClContext {
   void        ClearQueueOverride();
   [[nodiscard]] auto ProfilingQueueInstalled() const -> bool;
   [[nodiscard]] auto HasProfilingQueue() const -> bool;
+
+  /**
+   * @brief Bind a render-local queue as Queue() for the calling thread.
+   *
+   * Render devices running parallel one-shot work bind their dedicated queue
+   * for the encode so every helper resolving the submission queue through
+   * this context lands on the render-local queue. The returned scope restores
+   * the previous binding; keep it alive for the whole encode.
+   */
+  [[nodiscard]] auto EnterThreadQueueScope(cl_command_queue queue) -> OpenClThreadQueueScope;
 };
 
 }  // namespace alcedo
