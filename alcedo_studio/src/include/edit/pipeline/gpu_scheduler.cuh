@@ -10,6 +10,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <iostream>
 #include <memory>
 #include <opencv2/core/cuda.hpp>
 #include <stdexcept>

@@ -14,6 +14,7 @@
 #include <exiv2/types.hpp>
 #include <filesystem>
 #include <functional>
+#include <iostream>
 #include <optional>
 #include <stdexcept>
 

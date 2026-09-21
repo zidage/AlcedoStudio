@@ -5,6 +5,7 @@
 #include "app/album_browse_service.hpp"
 
 #include <algorithm>
+#include <iostream>
 #include <unordered_set>
 
 #include "utils/string/convert.hpp"

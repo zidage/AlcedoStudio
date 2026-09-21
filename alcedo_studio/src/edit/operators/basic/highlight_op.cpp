@@ -6,9 +6,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <opencv2/core/types.hpp>
-#include <opencv2/highgui.hpp>
-#include <opencv2/opencv.hpp>
 #include <string>
 
 #include "edit/operators/basic/shadows_highlights_shared_curve.hpp"

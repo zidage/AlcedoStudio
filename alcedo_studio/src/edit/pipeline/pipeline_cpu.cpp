@@ -9,9 +9,6 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <opencv2/core.hpp>
-#include <opencv2/core/mat.hpp>
-#include <opencv2/opencv.hpp>
 #include <stdexcept>
 #include <vector>
 

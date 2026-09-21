@@ -40,7 +40,7 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
-#include <opencv2/opencv.hpp>
+#include <opencv2/core/mat.hpp>
 #include <optional>
 #include <string>
 #include <thread>

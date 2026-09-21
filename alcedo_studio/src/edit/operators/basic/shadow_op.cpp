@@ -4,13 +4,8 @@
 
 #include "edit/operators/basic/shadow_op.hpp"
 
-#include <opencv2/core/hal/interface.h>
-
 #include <algorithm>
 #include <cmath>
-#include <opencv2/core.hpp>
-#include <opencv2/core/types.hpp>
-#include <opencv2/opencv.hpp>
 #include <string>
 
 #include "edit/operators/basic/shadows_highlights_shared_curve.hpp"

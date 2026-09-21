@@ -8,11 +8,6 @@
 #include <OpenColorIO/OpenColorTransforms.h>
 #include <OpenColorIO/OpenColorTypes.h>
 
-#include <opencv2/core.hpp>
-#include <opencv2/core/matx.hpp>
-#include <opencv2/core/types.hpp>
-#include <opencv2/highgui.hpp>
-#include <opencv2/opencv.hpp>
 #include <stdexcept>
 #include <string>
 #include <vector>

@@ -59,6 +59,17 @@ Compile-time savings, shorter includes, or "it only appears in a signature" is n
 other framework headers may already forward-declare their own types; do not copy that pattern into
 Alcedo-owned headers.
 
+### Include only the required OpenCV modules
+
+Do **not** include the OpenCV umbrella header `<opencv2/opencv.hpp>` in project-authored code.
+Include the header that defines each used API, such as `<opencv2/core/mat.hpp>`,
+`<opencv2/imgproc.hpp>`, or `<opencv2/imgcodecs.hpp>`.
+
+The umbrella header loads unrelated modules, including stitching headers whose `NO` enumerators
+conflict with the Apple Objective-C `NO` macro in macOS Metal and Objective-C++ builds. When you
+remove an umbrella include, add any required C++ standard-library headers and OpenCV module headers
+at their direct use sites. Do not depend on transitive includes.
+
 ### Update existing data through its owner
 
 **Do not create snapshots, mirror structs, or temporary copies of existing data structures just

@@ -11,7 +11,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
-#include <opencv2/opencv.hpp>
+#include <opencv2/core.hpp>
 #include <string>
 #include <thread>
 #include <vector>
