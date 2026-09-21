@@ -19,6 +19,7 @@
 #include <QTimer>
 #include <QUrl>
 #include <QVariantMap>
+#include <algorithm>
 #include <exception>
 #include <filesystem>
 #include <memory>
@@ -243,6 +244,29 @@ class AdjustmentStackHarness {
   QList<QQmlError>            errors_;
 };
 
+// Sections can sit below the 760px viewport fold; a mouseClick at clipped
+// scene coordinates misses. Scroll the panel Flickable until the item's
+// bounds are inside the viewport before clicking it.
+auto ScrollItemIntoView(AdjustmentStackHarness& harness, QQuickItem* item) -> bool {
+  auto* flick = harness.findObject<QQuickItem>(QStringLiteral("editorRawDecodePanelScroll"));
+  if (flick == nullptr || item == nullptr) {
+    return false;
+  }
+  const QPointF view_pos   = item->mapToItem(flick, QPointF(0, 0));
+  const qreal   bottom     = view_pos.y() + item->height();
+  qreal         content_y  = flick->property("contentY").toReal();
+  if (view_pos.y() < 0) {
+    content_y += view_pos.y() - 8;
+  } else if (bottom > flick->height()) {
+    content_y += bottom - flick->height() + 8;
+  }
+  const qreal max_y =
+      std::max<qreal>(0.0, flick->property("contentHeight").toReal() - flick->height());
+  flick->setProperty("contentY", std::clamp(content_y, 0.0, max_y));
+  ProcessEvents(50);
+  return true;
+}
+
 auto SelectSegmentedEntry(AdjustmentStackHarness& harness, const QString& objectName,
                           qsizetype index) -> bool {
   auto* switcher = harness.findObject<QQuickItem>(objectName);
@@ -261,6 +285,7 @@ auto SelectSegmentedEntry(AdjustmentStackHarness& harness, const QString& object
   if (segment == nullptr || !segment->isEnabled()) {
     return false;
   }
+  ScrollItemIntoView(harness, segment);
   QTest::mouseClick(harness.window(), Qt::LeftButton, {}, CenterInWindow(segment));
   ProcessEvents(80);
   return true;
@@ -319,6 +344,7 @@ TEST(EditorRawDecodePanelQmlTest, UserChangesSubmitCompleteRawOperatorParams) {
   auto* highlight_switch =
       highlights->findChild<QQuickItem*>(QStringLiteral("adjustmentToggleSwitch"));
   ASSERT_NE(highlight_switch, nullptr);
+  ScrollItemIntoView(harness, highlight_switch);
   QTest::mouseClick(harness.window(), Qt::LeftButton, {}, CenterInWindow(highlight_switch));
   ProcessEvents(80);
   ASSERT_EQ(session.calls.size(), 2u);

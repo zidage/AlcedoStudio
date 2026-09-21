@@ -3100,6 +3100,46 @@ Original source files on disk will be kept.</source>
         <source>Enable Highlight Reconstruction</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <location line="-123"/>
+        <source>Auto (metadata)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+293"/>
+        <source>Lens Calibration</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+31"/>
+        <source>Auto-detect lens</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Manual selection required</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+42"/>
+        <source>Reset lens calibration</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+37"/>
+        <source>Enable Lens Calibration</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Lens Brand</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Lens Model</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>EditorSaveRecoveryBar</name>
@@ -4434,6 +4474,50 @@ Original source files on disk will be kept.</source>
     <message>
         <location line="+2"/>
         <source>English</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>LensCatalogPicker</name>
+    <message>
+        <location filename="../qml/LensCatalogPicker.qml" line="+84"/>
+        <source>Lens</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+278"/>
+        <source>Select lens</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Auto</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+116"/>
+        <source>Brand</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <location line="+104"/>
+        <source>All brands</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+74"/>
+        <source>Search brands</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+159"/>
+        <source>Search lenses</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+127"/>
+        <source>No lenses match</source>
         <translation type="unfinished"></translation>
     </message>
 </context>

@@ -3101,6 +3101,46 @@ Original source files on disk will be kept.</source>
         <source>Enable Highlight Reconstruction</source>
         <translation>启用高光重建</translation>
     </message>
+    <message>
+        <location line="-123"/>
+        <source>Auto (metadata)</source>
+        <translation>自动（元数据）</translation>
+    </message>
+    <message>
+        <location line="+293"/>
+        <source>Lens Calibration</source>
+        <translation>镜头校正</translation>
+    </message>
+    <message>
+        <location line="+31"/>
+        <source>Auto-detect lens</source>
+        <translation>自动识别镜头</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Manual selection required</source>
+        <translation>需手动选择</translation>
+    </message>
+    <message>
+        <location line="+42"/>
+        <source>Reset lens calibration</source>
+        <translation>重置镜头校准</translation>
+    </message>
+    <message>
+        <location line="+37"/>
+        <source>Enable Lens Calibration</source>
+        <translation>启用镜头校正</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Lens Brand</source>
+        <translation>镜头品牌</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Lens Model</source>
+        <translation>镜头型号</translation>
+    </message>
 </context>
 <context>
     <name>EditorSaveRecoveryBar</name>
@@ -4436,6 +4476,50 @@ Original source files on disk will be kept.</source>
         <location line="-2"/>
         <source>Simplified Chinese</source>
         <translation>简体中文</translation>
+    </message>
+</context>
+<context>
+    <name>LensCatalogPicker</name>
+    <message>
+        <location filename="../qml/LensCatalogPicker.qml" line="+84"/>
+        <source>Lens</source>
+        <translation>镜头</translation>
+    </message>
+    <message>
+        <location line="+278"/>
+        <source>Select lens</source>
+        <translation>选择镜头</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Auto</source>
+        <translation>自动</translation>
+    </message>
+    <message>
+        <location line="+116"/>
+        <source>Brand</source>
+        <translation>品牌</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <location line="+104"/>
+        <source>All brands</source>
+        <translation>所有品牌</translation>
+    </message>
+    <message>
+        <location line="+74"/>
+        <source>Search brands</source>
+        <translation>搜索品牌</translation>
+    </message>
+    <message>
+        <location line="+159"/>
+        <source>Search lenses</source>
+        <translation>搜索镜头</translation>
+    </message>
+    <message>
+        <location line="+127"/>
+        <source>No lenses match</source>
+        <translation>无匹配镜头</translation>
     </message>
 </context>
 <context>

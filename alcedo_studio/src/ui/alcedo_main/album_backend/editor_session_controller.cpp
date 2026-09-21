@@ -441,7 +441,22 @@ void EditorSessionController::RefreshImageExifDisplay() {
       display = {};
     }
   }
+  ApplyExifLensIdentity(display);
   ApplyExifRowText(alcedo::FormatEditorImageExifDisplay(display));
+}
+
+void EditorSessionController::ApplyExifLensIdentity(
+    const alcedo::EditorImageExifDisplay& display) {
+  const auto lens_make =
+      QString::fromUtf8(display.lens_make.data(), static_cast<int>(display.lens_make.size()));
+  const auto lens_model =
+      QString::fromUtf8(display.lens_model.data(), static_cast<int>(display.lens_model.size()));
+  if (exif_lens_make_ == lens_make && exif_lens_model_ == lens_model) {
+    return;
+  }
+  exif_lens_make_  = lens_make;
+  exif_lens_model_ = lens_model;
+  emit ImageExifChanged();
 }
 
 void EditorSessionController::ApplyExifRowText(const alcedo::EditorExifRowText& text) {

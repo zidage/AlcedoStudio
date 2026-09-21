@@ -1729,6 +1729,47 @@ set_tests_properties(EditorMultiSliderQuickTest PROPERTIES
 )
 alcedo_register_test_target(EditorMultiSliderQuickTest ui)
 
+# Qt Quick Test: lens catalog picker (collapsible two-tier searchable menu,
+# normalized fuzzy matching, detection mapping) plus the RAW Decode
+# auto-recognition contract against a scripted-EXIF recording session.
+# QML under tests/ui/qml_lens_picker/.
+add_executable(EditorLensPickerQuickTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_lens_picker_quicktest.cpp
+    ${ALCEDO_SRC_DIR}/config/resource.qrc
+)
+target_include_directories(EditorLensPickerQuickTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorLensPickerQuickTest
+    PRIVATE
+        AlbumBackendLib
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::QuickTest
+        Qt6::Svg
+        Qt6::Test
+        Qt6::Widgets
+)
+target_compile_definitions(EditorLensPickerQuickTest
+    PRIVATE
+        ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+        QUICK_TEST_SOURCE_DIR="${ALCEDO_TEST_ROOT}/ui/qml_lens_picker"
+)
+add_test(NAME EditorLensPickerQuickTest
+    COMMAND EditorLensPickerQuickTest
+    WORKING_DIRECTORY $<TARGET_FILE_DIR:EditorLensPickerQuickTest>
+)
+set_tests_properties(EditorLensPickerQuickTest PROPERTIES
+    LABELS "workspace_qml;raw_decode_panel;quicktest"
+    TIMEOUT 300
+)
+alcedo_register_test_target(EditorLensPickerQuickTest ui)
+
 add_executable(EditorRealRawGpuE2eTest
     ${ALCEDO_TEST_ROOT}/ui/editor_real_raw_gpu_e2e_test.cpp
 )

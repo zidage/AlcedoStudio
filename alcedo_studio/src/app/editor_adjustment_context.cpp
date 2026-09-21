@@ -101,6 +101,8 @@ auto ReadEditorImageExifDisplay(const ExifDisplayMetaData& metadata) -> EditorIm
   if (metadata.focal_ > 0.0f) {
     display.focal_mm = metadata.focal_;
   }
+  display.lens_make  = metadata.lens_make_;
+  display.lens_model = metadata.lens_;
   return display;
 }
 

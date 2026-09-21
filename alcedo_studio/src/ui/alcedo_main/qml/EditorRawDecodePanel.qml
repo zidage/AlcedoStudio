@@ -17,6 +17,17 @@ Item {
     property var rawParams: ({})
     property var lensBrandEntries: []
     property var lensModelEntries: []
+    // Auto-recognition checkbox state. Checked = submit the detected catalog
+    // pair; cleared by manual picks. Derived on snapshot load: detection
+    // available AND (empty maker/model OR pair equals the detected entry).
+    property bool lensAutoDetect: true
+    // Image EXIF lens identity published by the session (empty when missing).
+    readonly property string exifLensMake: editorSession
+            && editorSession.exifLensMake !== undefined
+            ? String(editorSession.exifLensMake) : ""
+    readonly property string exifLensModel: editorSession
+            && editorSession.exifLensModel !== undefined
+            ? String(editorSession.exifLensModel) : ""
 
     // ponytail: fixed method list; no per-image capability map.
     readonly property var rawMethodEntries: [
@@ -175,10 +186,50 @@ Item {
         return root.editorSession.submitPatch("lens_calib", root.buildLensParams(), settled)
     }
 
+    // Programmatic maker/model write without submitting. The enable-toggle
+    // path uses this inside onValueChanged: commitValue emits valueChanged
+    // before its own settled submit, so updating the models here lets that
+    // submit carry the detected pair without a duplicate commit.
+    function applyLensEntry(brand, value) {
+        root.setEnumValue(lensBrandModel, brand, 0)
+        root.refreshLensModelEntries(brand, value)
+        root.setEnumValue(lensModelModel, value, 0)
+    }
+
+    // applyLensEntry + one settled submit. Snapshot restore must keep using
+    // loadLensSnapshot instead — this is the user-edit path.
+    function submitLensEntry(brand, value) {
+        root.applyLensEntry(brand, value)
+        root.submitLens(true)
+    }
+
+    // User pick from the picker list: selecting an entry is a manual choice,
+    // so the auto-recognition box unchecks (spec).
+    function applyLensPick(brand, value) {
+        root.lensAutoDetect = false
+        root.submitLensEntry(brand, value)
+        lensPicker.expanded = false
+    }
+
+    // Derive the auto-recognition checkbox from the current params and the
+    // detection result. Detection failure forces unchecked (disabled state).
+    function syncLensAutoDetect() {
+        if (!lensPicker.detectionAvailable) {
+            root.lensAutoDetect = false
+            return
+        }
+        const maker = String(lensBrandModel.currentValue || "")
+        const model = String(lensModelModel.currentValue || "")
+        const detected = lensPicker.detectedEntry
+        root.lensAutoDetect = maker.length === 0
+                || (detected && maker === detected.brand && model === detected.value)
+    }
+
     function resetLensModels() {
         lensEnabledModel.value = lensEnabledModel.defaultValue
         root.setEnumValue(lensBrandModel, "", 0)
         root.refreshLensModelEntries("", "")
+        root.syncLensAutoDetect()
     }
 
     function resetLens() {
@@ -227,6 +278,7 @@ Item {
         }
         root.setEnumValue(lensBrandModel, brand, 0)
         root.refreshLensModelEntries(brand, model)
+        root.syncLensAutoDetect()
         root.restoring = false
         root.wireLensEnabled()
     }
@@ -306,6 +358,103 @@ Item {
                 font.weight: appTheme.fontWeightHeading
             }
 
+            EditorWhiteBalanceSection {
+                id: whiteBalanceSection
+                Layout.fillWidth: true
+                theme: root.theme
+                editorSession: root.editorSession
+                flickable: rawScroll
+                controlsEnabled: root.controlsEnabled
+            }
+
+            CollapsibleSection {
+                id: lensSection
+                objectName: "editorAdjustmentGroupShell_raw_lens"
+                Layout.fillWidth: true
+                title: qsTr("Lens Calibration")
+                expanded: true
+                controlsEnabled: root.controlsEnabled
+                surfaceColor: root.colCardSurface
+                disabledSurfaceColor: root.colCardSurface
+                borderColor: root.colCardBorder
+                textColor: root.colText
+                mutedColor: root.colMuted
+                hoverColor: root.colHover
+                accentColor: root.colAccent
+                bodyContentHeight: lensControls.implicitHeight + appTheme.spaceSm
+
+                ColumnLayout {
+                    id: lensControls
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.margins: appTheme.spaceXs
+                    spacing: appTheme.spaceSm
+
+                    AdjustmentToggle {
+                        objectName: "rawLensEnabledToggle"
+                        Layout.fillWidth: true
+                        model: lensEnabledModel
+                    }
+                    ThemeCheckBox {
+                        objectName: "rawLensAutoDetectCheck"
+                        Layout.fillWidth: true
+                        enabled: root.controlsEnabled && lensPicker.detectionAvailable
+                        checked: root.lensAutoDetect
+                        text: lensPicker.detectionAvailable
+                              ? qsTr("Auto-detect lens")
+                              : qsTr("Manual selection required")
+                        onToggled: function(checked) {
+                            root.lensAutoDetect = checked
+                            if (checked && lensPicker.detectedEntry) {
+                                lensPicker.revealDetected()
+                                root.submitLensEntry(lensPicker.detectedEntry.brand,
+                                                     lensPicker.detectedEntry.value)
+                            }
+                        }
+                    }
+                    LensCatalogPicker {
+                        id: lensPicker
+                        objectName: "rawLensCatalogPicker"
+                        Layout.fillWidth: true
+                        enabled: root.controlsEnabled
+                        controlsEnabled: root.controlsEnabled
+                        catalog: lensCatalog
+                        exifLensMake: root.exifLensMake
+                        exifLensModel: root.exifLensModel
+                        selectedBrand: root.selectedLensBrandValue
+                        selectedValue: root.selectedLensModelValue
+                        autoEngaged: root.lensAutoDetect
+                        onLensPicked: function(brand, value) {
+                            root.applyLensPick(brand, value)
+                        }
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        // Only surfaces the catalog-unavailable state; the
+                        // "N brands available" count is redundant noise.
+                        visible: !lensCatalog.brands || lensCatalog.brands.length === 0
+                        text: lensCatalog.statusText
+                        color: root.colMuted
+                        font.pixelSize: appTheme.fontSizeCaption
+                        wrapMode: Text.WordWrap
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: appTheme.spaceSm
+                        Item { Layout.fillWidth: true }
+                        IconActionButton {
+                            objectName: "rawLensResetButton"
+                            compact: true
+                            enabled: root.controlsEnabled
+                            iconSrc: "qrc:/panel_icons/reset.svg"
+                            actionName: qsTr("Reset lens calibration")
+                            onClicked: root.resetLens()
+                        }
+                    }
+                }
+            }
+
             CollapsibleSection {
                 id: rawSection
                 objectName: "editorAdjustmentGroupShell_raw_decode"
@@ -355,77 +504,6 @@ Item {
                     AdjustmentToggle {
                         objectName: "rawHighlightsControl"
                         model: rawHighlightsModel
-                    }
-                }
-            }
-
-            EditorWhiteBalanceSection {
-                id: whiteBalanceSection
-                Layout.fillWidth: true
-                theme: root.theme
-                editorSession: root.editorSession
-                flickable: rawScroll
-                controlsEnabled: root.controlsEnabled
-            }
-
-            CollapsibleSection {
-                id: lensSection
-                objectName: "editorAdjustmentGroupShell_raw_lens"
-                Layout.fillWidth: true
-                title: qsTr("Lens Calibration")
-                expanded: true
-                controlsEnabled: root.controlsEnabled
-                surfaceColor: root.colCardSurface
-                disabledSurfaceColor: root.colCardSurface
-                borderColor: root.colCardBorder
-                textColor: root.colText
-                mutedColor: root.colMuted
-                hoverColor: root.colHover
-                accentColor: root.colAccent
-                bodyContentHeight: lensControls.implicitHeight + appTheme.spaceSm
-
-                ColumnLayout {
-                    id: lensControls
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.top: parent.top
-                    anchors.margins: appTheme.spaceXs
-                    spacing: appTheme.spaceSm
-
-                    AdjustmentToggle {
-                        objectName: "rawLensEnabledToggle"
-                        Layout.fillWidth: true
-                        model: lensEnabledModel
-                    }
-                    AdjustmentCombo {
-                        objectName: "rawLensBrandCombo"
-                        Layout.fillWidth: true
-                        model: lensBrandModel
-                    }
-                    AdjustmentCombo {
-                        objectName: "rawLensModelCombo"
-                        Layout.fillWidth: true
-                        model: lensModelModel
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        text: lensCatalog.statusText
-                        color: root.colMuted
-                        font.pixelSize: appTheme.fontSizeCaption
-                        wrapMode: Text.WordWrap
-                    }
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: appTheme.spaceSm
-                        Item { Layout.fillWidth: true }
-                        IconActionButton {
-                            objectName: "rawLensResetButton"
-                            compact: true
-                            enabled: root.controlsEnabled
-                            iconSrc: "qrc:/panel_icons/reset.svg"
-                            actionName: qsTr("Reset lens calibration")
-                            onClicked: root.resetLens()
-                        }
                     }
                 }
             }
@@ -489,6 +567,17 @@ Item {
         target: lensEnabledModel
         function onValueChanged() {
             root.wireLensEnabled()
+            // User-driven enable while auto-recognition is engaged writes the
+            // detected pair into the models; the toggle's own settled submit
+            // (paramsBuilder runs after valueChanged) then carries it — no
+            // duplicate patch needed.
+            if (!root.restoring && lensEnabledModel.value && root.lensAutoDetect
+                    && lensPicker.detectionAvailable) {
+                const detected = lensPicker.detectedEntry
+                if (String(lensBrandModel.currentValue || "") !== detected.brand
+                        || String(lensModelModel.currentValue || "") !== detected.value)
+                    root.applyLensEntry(detected.brand, detected.value)
+            }
         }
     }
     Connections {
@@ -497,6 +586,15 @@ Item {
             const requested = root.restoring ? lensModelModel.currentValue : ""
             root.refreshLensModelEntries(lensBrandModel.currentValue, requested)
             root.wireLensEnabled()
+        }
+    }
+    Connections {
+        target: lensPicker
+        function onDetectionAvailableChanged() {
+            // Image switches / EXIF updates re-derive the box: detection loss
+            // unchecks it; detection arriving re-checks it when params are
+            // empty or already equal the detected pair.
+            root.syncLensAutoDetect()
         }
     }
 
