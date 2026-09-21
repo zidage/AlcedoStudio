@@ -7,6 +7,7 @@
 #include <functional>
 #include <span>
 #include <string_view>
+#include <variant>
 
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/prepared_raw_input.hpp"
@@ -134,11 +135,23 @@ class BasicRenderDevice {
                              ResultPersistenceScope persistence =
                                  ResultPersistenceScope::AllCurrentResults)
       -> GraphValueId {
+    // Backends with an isolated submission stream (OpenCL dedicated queue)
+    // bind it to this thread for the encode so shared helpers that resolve a
+    // queue through the global context land on the render-local stream.
+    auto queue_scope = EnterThreadQueueScope();
     return PlanExecutor<Backend>::Execute(*this, plan, input, document, publish_on_success,
                                           transient_policy, persistence);
   }
 
  private:
+  auto EnterThreadQueueScope() {
+    if constexpr (requires(Backend& backend) { backend.BindThreadQueue(); }) {
+      return workspace_.Device().BindThreadQueue();
+    } else {
+      return std::monostate{};
+    }
+  }
+
   WorkspaceType                         workspace_;
   CommandContextType                    command_context_;
   GpuNodePassStats                      pass_stats_{};

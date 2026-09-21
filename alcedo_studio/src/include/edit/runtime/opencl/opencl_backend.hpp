@@ -25,6 +25,7 @@
 #include "edit/runtime/content_key.hpp"
 #include "edit/runtime/texture_format.hpp"
 #include "gpu/gpu_pool_trace.hpp"
+#include "opencl/opencl_context.hpp"
 
 namespace alcedo {
 
@@ -84,8 +85,11 @@ class OpenClCommandContext {
 /**
  * @brief OpenCL 1.2 resource factory for the DAG workspace.
  *
- * Uses OpenClContext::Instance() device, context, and product queue. Move-only
- * Buffer and Texture2D wrappers own cl_mem. One in-flight submission. Not thread-safe.
+ * Uses OpenClContext::Instance() device and context. Session devices submit on
+ * the shared product queue; one-shot devices call @ref UseDedicatedQueue so
+ * parallel thumbnail/export renders never enqueue onto one shared queue object.
+ * Move-only Buffer and Texture2D wrappers own cl_mem. One in-flight submission.
+ * Not thread-safe.
  */
 class OpenClBackend {
  public:
@@ -197,6 +201,33 @@ class OpenClBackend {
   ~OpenClBackend();
   OpenClBackend(const OpenClBackend&)                                  = delete;
   auto               operator=(const OpenClBackend&) -> OpenClBackend& = delete;
+
+  /**
+   * @brief Switch this device to its own in-order command queue.
+   *
+   * Parallel one-shot renders must not share the product queue object: host
+   * threads enqueueing onto one cl_command_queue exhaust driver staging
+   * resources (OpenCL error -5 on UploadDeviceMemory) and serialize unrelated
+   * submissions. The session device keeps the product queue because OpenCL/GL
+   * interop acquires, copies, and releases on that queue in order; a
+   * dedicated-queue device must only produce host output (Download), never
+   * present into GL-backed sinks.
+   * Idempotent. Not valid after work has been submitted.
+   */
+  void               UseDedicatedQueue();
+  [[nodiscard]] auto HasDedicatedQueue() const -> bool { return owned_queue_ != nullptr; }
+
+  /**
+   * @brief Bind this device's queue as OpenClContext::Queue() on the calling thread.
+   *
+   * The returned scope keeps the binding for its lifetime; keep it alive for
+   * the whole DAG encode so helpers that resolve the submission queue through
+   * the context (lens calibration, geometry resize/crop) submit on this
+   * device's queue instead of the shared product queue. Only installs when
+   * this device owns a dedicated queue — the session device returns an
+   * inactive scope so the profiling queue override keeps working.
+   */
+  [[nodiscard]] auto BindThreadQueue() const -> OpenClThreadQueueScope;
 
   [[nodiscard]] auto CreateBuffer(std::size_t bytes) -> Buffer;
   [[nodiscard]] auto CreateSlab(std::size_t bytes) -> Buffer { return CreateBuffer(bytes); }
@@ -394,6 +425,7 @@ class OpenClBackend {
   cl_device_id           device_  = nullptr;
   cl_context             context_ = nullptr;
   cl_command_queue       queue_   = nullptr;
+  cl_command_queue       owned_queue_ = nullptr;
   std::vector<LiveBuffer> live_buffers_;
   std::uint64_t          next_virtual_address_     = 0x100000000ull;
   std::uint64_t          malloc_count_             = 0;

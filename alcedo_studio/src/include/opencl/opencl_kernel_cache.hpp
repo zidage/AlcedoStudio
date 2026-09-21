@@ -11,8 +11,8 @@
 #endif
 #include <CL/cl.h>
 
+#include <atomic>
 #include <cstdint>
-#include <mutex>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -20,11 +20,13 @@
 namespace alcedo {
 
 /**
- * @brief Process-wide cache of OpenCL kernels keyed by program name plus kernel name.
+ * @brief Process-wide registry handing out per-thread OpenCL kernel objects.
  *
- * Owns kernel lifetime. Does not register programs; callers must use
- * OpenClProgramLibrary. Not safe to destroy while kernels are bound to in-flight
- * commands. GetKernel may compile the named program on first use.
+ * clSetKernelArg mutates kernel state and is the one OpenCL call that is not
+ * thread-safe, so parallel render threads must never share one cl_kernel
+ * object. GetKernel therefore caches one kernel per calling thread per
+ * (program, kernel) pair and releases it at thread exit. Programs stay shared
+ * through OpenClProgramLibrary; registration is not performed here.
  */
 class OpenClKernelCache {
  public:
@@ -34,16 +36,20 @@ class OpenClKernelCache {
   static auto Instance() -> OpenClKernelCache&;
 
   /**
-   * @brief Return a cached kernel, creating it on miss.
+   * @brief Return the calling thread's cached kernel, creating it on miss.
    * @param program_name Registered OpenClProgramLibrary program name.
    * @param kernel_name Kernel name inside that program.
-   * @return Borrowed cl_kernel owned by this cache until process teardown.
+   * @return Borrowed cl_kernel owned by the calling thread's store until
+   *         thread exit. Only the owning thread may bind arguments on it.
    * @throws std::runtime_error if the program is missing, build fails, or the kernel
    *         name is absent. The message includes program name, kernel name, and
    *         the OpenCL status or build log.
    */
   auto GetKernel(std::string_view program_name, std::string_view kernel_name) -> cl_kernel;
 
+  /**
+   * @brief Whether the calling thread already owns this kernel object.
+   */
   [[nodiscard]] auto IsCached(std::string_view program_name, std::string_view kernel_name) const
       -> bool;
 
@@ -52,7 +58,6 @@ class OpenClKernelCache {
 
  private:
   OpenClKernelCache() = default;
-  ~OpenClKernelCache();
 
   struct Key {
     std::string program_name;
@@ -70,10 +75,17 @@ class OpenClKernelCache {
     }
   };
 
-  mutable std::mutex                        mutex_;
-  std::unordered_map<Key, cl_kernel, KeyHash> kernels_;
-  std::uint64_t                             create_count_ = 0;
-  std::uint64_t                             hit_count_    = 0;
+  /** @brief Per-thread kernel store; destructor releases all owned kernels. */
+  struct KernelStore {
+    std::unordered_map<Key, cl_kernel, KeyHash> kernels;
+    ~KernelStore();
+  };
+
+  /** @brief The calling thread's kernel store (constructed lazily). */
+  static auto ThreadKernels() -> KernelStore&;
+
+  std::atomic<std::uint64_t> create_count_{0};
+  std::atomic<std::uint64_t> hit_count_{0};
 };
 
 }  // namespace alcedo

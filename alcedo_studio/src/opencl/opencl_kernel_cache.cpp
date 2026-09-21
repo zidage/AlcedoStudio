@@ -14,13 +14,18 @@
 
 namespace alcedo {
 
-OpenClKernelCache::~OpenClKernelCache() {
-  for (auto& [_, kernel] : kernels_) {
+OpenClKernelCache::KernelStore::~KernelStore() {
+  for (auto& [_, kernel] : kernels) {
     if (kernel != nullptr) {
       clReleaseKernel(kernel);
       NoteOpenClReleaseKernel();
     }
   }
+}
+
+auto OpenClKernelCache::ThreadKernels() -> KernelStore& {
+  thread_local KernelStore store;
+  return store;
 }
 
 auto OpenClKernelCache::Instance() -> OpenClKernelCache& {
@@ -30,14 +35,11 @@ auto OpenClKernelCache::Instance() -> OpenClKernelCache& {
 
 auto OpenClKernelCache::GetKernel(std::string_view program_name, std::string_view kernel_name)
     -> cl_kernel {
-  Key key{std::string(program_name), std::string(kernel_name)};
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    const auto                  it = kernels_.find(key);
-    if (it != kernels_.end()) {
-      ++hit_count_;
-      return it->second;
-    }
+  auto& kernels = ThreadKernels().kernels;
+  Key   key{std::string(program_name), std::string(kernel_name)};
+  if (const auto it = kernels.find(key); it != kernels.end()) {
+    hit_count_.fetch_add(1, std::memory_order_relaxed);
+    return it->second;
   }
 
   cl_program program = OpenClProgramLibrary::Instance().GetProgram(key.program_name);
@@ -49,34 +51,23 @@ auto OpenClKernelCache::GetKernel(std::string_view program_name, std::string_vie
                              std::to_string(error));
   }
   NoteOpenClCreateKernel();
-
-  std::lock_guard<std::mutex> lock(mutex_);
-  const auto                  it = kernels_.find(key);
-  if (it != kernels_.end()) {
-    clReleaseKernel(kernel);
-    NoteOpenClReleaseKernel();
-    ++hit_count_;
-    return it->second;
-  }
-  kernels_.emplace(std::move(key), kernel);
-  ++create_count_;
+  kernels.emplace(std::move(key), kernel);
+  create_count_.fetch_add(1, std::memory_order_relaxed);
   return kernel;
 }
 
 auto OpenClKernelCache::IsCached(std::string_view program_name, std::string_view kernel_name) const
     -> bool {
-  std::lock_guard<std::mutex> lock(mutex_);
-  return kernels_.contains(Key{std::string(program_name), std::string(kernel_name)});
+  return ThreadKernels().kernels.contains(
+      Key{std::string(program_name), std::string(kernel_name)});
 }
 
 auto OpenClKernelCache::CreateCount() const -> std::uint64_t {
-  std::lock_guard<std::mutex> lock(mutex_);
-  return create_count_;
+  return create_count_.load(std::memory_order_relaxed);
 }
 
 auto OpenClKernelCache::HitCount() const -> std::uint64_t {
-  std::lock_guard<std::mutex> lock(mutex_);
-  return hit_count_;
+  return hit_count_.load(std::memory_order_relaxed);
 }
 
 }  // namespace alcedo

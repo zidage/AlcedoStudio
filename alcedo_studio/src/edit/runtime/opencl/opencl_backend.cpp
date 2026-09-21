@@ -327,6 +327,14 @@ OpenClBackend::~OpenClBackend() {
   neural_workspace_.reset();
   dummy_lut_.Reset();
   lut_cache_.clear();
+  if (owned_queue_ != nullptr) {
+    // Drain whatever the one-shot device left in flight before dropping the
+    // queue object; WaitIdle normally already emptied it.
+    (void)clFinish(owned_queue_);
+    clReleaseCommandQueue(owned_queue_);
+    owned_queue_ = nullptr;
+    queue_       = nullptr;
+  }
   auto release_dummy = [](cl_mem& native) {
     if (native != nullptr) {
       clReleaseMemObject(native);
@@ -337,6 +345,26 @@ OpenClBackend::~OpenClBackend() {
   release_dummy(dummy_scene_write_image_);
   release_dummy(dummy_scene_read_buffer_);
   release_dummy(dummy_scene_write_buffer_);
+}
+
+void OpenClBackend::UseDedicatedQueue() {
+  if (owned_queue_ != nullptr) {
+    return;
+  }
+  cl_int error      = CL_SUCCESS;
+  owned_queue_      = clCreateCommandQueue(context_, device_, 0, &error);
+  CheckOpenCl(error, "OpenClBackend::UseDedicatedQueue");
+  if (owned_queue_ == nullptr) {
+    throw std::runtime_error("OpenClBackend::UseDedicatedQueue: clCreateCommandQueue returned null");
+  }
+  queue_ = owned_queue_;
+}
+
+auto OpenClBackend::BindThreadQueue() const -> OpenClThreadQueueScope {
+  if (owned_queue_ == nullptr) {
+    return {};
+  }
+  return OpenClContext::Instance().EnterThreadQueueScope(owned_queue_);
 }
 
 void OpenClBackend::UnregisterBuffer(cl_mem native) noexcept {
