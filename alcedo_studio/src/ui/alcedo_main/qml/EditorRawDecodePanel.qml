@@ -15,6 +15,8 @@ Item {
     property bool controlsEnabled: true
     property bool restoring: false
     property var rawParams: ({})
+    property var lensBrandEntries: []
+    property var lensModelEntries: []
 
     // ponytail: fixed method list; no per-image capability map.
     readonly property var rawMethodEntries: [
@@ -37,6 +39,21 @@ Item {
     readonly property string selectedMethodValue: {
         var _dep = rawMethodModel.currentIndex
         return rawMethodModel.currentValue ? String(rawMethodModel.currentValue) : ""
+    }
+    readonly property int selectedLensBrandIndex: lensBrandModel.currentIndex
+    readonly property string selectedLensBrandValue: {
+        var _dep = lensBrandModel.currentIndex
+        return lensBrandModel.currentValue ? String(lensBrandModel.currentValue) : ""
+    }
+    readonly property int selectedLensModelIndex: lensModelModel.currentIndex
+    readonly property string selectedLensModelValue: {
+        var _dep = lensModelModel.currentIndex
+        return lensModelModel.currentValue ? String(lensModelModel.currentValue) : ""
+    }
+
+    EditorLensCatalogModel {
+        id: lensCatalog
+        objectName: "rawLensCatalog"
     }
 
     function buildDefaultRawParams() {
@@ -94,6 +111,126 @@ Item {
         return JSON.stringify({ raw: raw })
     }
 
+    function buildLensEntries(values) {
+        var result = [{ value: "", label: qsTr("Auto (metadata)") }]
+        for (var i = 0; i < values.length; ++i) {
+            result.push({ value: String(values[i].value), label: String(values[i].label) })
+        }
+        return result
+    }
+
+    function buildLensModelEntries(values) {
+        var result = []
+        for (var i = 0; i < values.length; ++i) {
+            result.push({ value: String(values[i].value), label: String(values[i].label) })
+        }
+        return result
+    }
+
+    function refreshLensBrandEntries() {
+        root.lensBrandEntries = root.buildLensEntries(lensCatalog.brands)
+        lensBrandModel.entries = root.lensBrandEntries
+    }
+
+    function refreshLensModelEntries(brand, requestedModel) {
+        const catalogValues = lensCatalog.modelsForBrand(brand)
+        var entries = brand && brand.length > 0
+                      ? root.buildLensModelEntries(catalogValues)
+                      : root.buildLensEntries([])
+        if (requestedModel && requestedModel.length > 0) {
+            var found = false
+            for (var i = 0; i < entries.length; ++i) {
+                if (entries[i].value === requestedModel) {
+                    found = true
+                    break
+                }
+            }
+            if (!found)
+                entries.push({ value: requestedModel, label: requestedModel })
+        }
+        root.lensModelEntries = entries
+        lensModelModel.entries = entries
+        root.setEnumValue(lensModelModel, requestedModel, 0)
+    }
+
+    function buildLensParams() {
+        var payload = {}
+        try {
+            payload = JSON.parse(lensCatalog.defaultParamsJson)
+        } catch (error) {
+            payload = { lens_calib: {} }
+        }
+        if (!payload.lens_calib)
+            payload.lens_calib = {}
+        const brand = String(lensBrandModel.currentValue)
+        payload.lens_calib.enabled = Boolean(lensEnabledModel.value)
+        payload.lens_calib.lens_maker = brand
+        payload.lens_calib.lens_model = brand.length > 0 ? String(lensModelModel.currentValue) : ""
+        return JSON.stringify(payload)
+    }
+
+    function submitLens(settled) {
+        if (!root.editorSession || typeof root.editorSession.submitPatch !== "function")
+            return false
+        return root.editorSession.submitPatch("lens_calib", root.buildLensParams(), settled)
+    }
+
+    function resetLensModels() {
+        lensEnabledModel.value = lensEnabledModel.defaultValue
+        root.setEnumValue(lensBrandModel, "", 0)
+        root.refreshLensModelEntries("", "")
+    }
+
+    function resetLens() {
+        root.restoring = true
+        root.resetLensModels()
+        root.restoring = false
+        root.submitLens(true)
+    }
+
+    function wireLensEnabled() {
+        const enabled = root.controlsEnabled
+        lensEnabledModel.enabled = enabled
+        lensBrandModel.enabled = enabled
+        lensModelModel.enabled = enabled && lensBrandModel.currentValue.length > 0
+                                 && lensModelModel.entries.length > 0
+    }
+
+    function loadLensSnapshot(snapshot) {
+        const raw = snapshot ? snapshot["lens_calib"] : undefined
+        const entry = raw && raw["lens_calib"] !== undefined ? raw["lens_calib"] : raw
+        root.restoring = true
+        if (!entry) {
+            root.resetLensModels()
+            root.restoring = false
+            root.wireLensEnabled()
+            return
+        }
+        lensEnabledModel.value = entry["enabled"] !== undefined
+                                 ? Boolean(entry["enabled"]) : lensEnabledModel.defaultValue
+        const brand = entry["lens_maker"] !== undefined ? String(entry["lens_maker"]) : ""
+        const model = entry["lens_model"] !== undefined ? String(entry["lens_model"]) : ""
+        if (brand.length > 0) {
+            var brandKnown = false
+            for (var brandIndex = 0; brandIndex < lensBrandModel.entries.length; ++brandIndex) {
+                if (String(lensBrandModel.entries[brandIndex].value) === brand) {
+                    brandKnown = true
+                    break
+                }
+            }
+            if (!brandKnown) {
+                var entries = lensBrandModel.entries.slice(0)
+                entries.push({ value: brand, label: brand })
+                root.lensBrandEntries = entries
+                lensBrandModel.entries = entries
+            }
+        }
+        root.setEnumValue(lensBrandModel, brand, 0)
+        root.refreshLensModelEntries(brand, model)
+        root.restoring = false
+        root.wireLensEnabled()
+    }
+
     function loadFromSnapshot(snapshot) {
         root.restoring = true
         var rawWrapper = snapshot ? snapshot["raw_decode"] : undefined
@@ -108,6 +245,9 @@ Item {
                 ? Boolean(rawEntry.highlights_reconstruct) : rawHighlightsModel.defaultValue
         if (typeof whiteBalanceSection.loadFromSnapshot === "function")
             whiteBalanceSection.loadFromSnapshot(snapshot)
+        if (!root.lensBrandEntries.length)
+            root.refreshLensBrandEntries()
+        root.loadLensSnapshot(snapshot)
         root.restoring = false
     }
 
@@ -227,6 +367,68 @@ Item {
                 flickable: rawScroll
                 controlsEnabled: root.controlsEnabled
             }
+
+            CollapsibleSection {
+                id: lensSection
+                objectName: "editorAdjustmentGroupShell_raw_lens"
+                Layout.fillWidth: true
+                title: qsTr("Lens Calibration")
+                expanded: true
+                controlsEnabled: root.controlsEnabled
+                surfaceColor: root.colCardSurface
+                disabledSurfaceColor: root.colCardSurface
+                borderColor: root.colCardBorder
+                textColor: root.colText
+                mutedColor: root.colMuted
+                hoverColor: root.colHover
+                accentColor: root.colAccent
+                bodyContentHeight: lensControls.implicitHeight + appTheme.spaceSm
+
+                ColumnLayout {
+                    id: lensControls
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.margins: appTheme.spaceXs
+                    spacing: appTheme.spaceSm
+
+                    AdjustmentToggle {
+                        objectName: "rawLensEnabledToggle"
+                        Layout.fillWidth: true
+                        model: lensEnabledModel
+                    }
+                    AdjustmentCombo {
+                        objectName: "rawLensBrandCombo"
+                        Layout.fillWidth: true
+                        model: lensBrandModel
+                    }
+                    AdjustmentCombo {
+                        objectName: "rawLensModelCombo"
+                        Layout.fillWidth: true
+                        model: lensModelModel
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        text: lensCatalog.statusText
+                        color: root.colMuted
+                        font.pixelSize: appTheme.fontSizeCaption
+                        wrapMode: Text.WordWrap
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: appTheme.spaceSm
+                        Item { Layout.fillWidth: true }
+                        IconActionButton {
+                            objectName: "rawLensResetButton"
+                            compact: true
+                            enabled: root.controlsEnabled
+                            iconSrc: "qrc:/panel_icons/reset.svg"
+                            actionName: qsTr("Reset lens calibration")
+                            onClicked: root.resetLens()
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -254,11 +456,60 @@ Item {
         paramsBuilder: root.buildRawParams
     }
 
+    EditorAdjustmentToggleModel {
+        id: lensEnabledModel
+        objectName: "rawLensEnabledModel"
+        fieldKey: "lens_calib"
+        label: qsTr("Enable Lens Calibration")
+        defaultValue: false
+        value: false
+        submitter: root.editorSession
+        paramsBuilder: function (value) { return root.buildLensParams() }
+    }
+    EditorAdjustmentEnumModel {
+        id: lensBrandModel
+        objectName: "rawLensBrandModel"
+        fieldKey: "lens_calib"
+        label: qsTr("Lens Brand")
+        entries: root.lensBrandEntries
+        submitter: root.editorSession
+        paramsBuilder: function (value) { return root.buildLensParams() }
+    }
+    EditorAdjustmentEnumModel {
+        id: lensModelModel
+        objectName: "rawLensModelModel"
+        fieldKey: "lens_calib"
+        label: qsTr("Lens Model")
+        entries: root.lensModelEntries
+        submitter: root.editorSession
+        paramsBuilder: function (value) { return root.buildLensParams() }
+    }
+
+    Connections {
+        target: lensEnabledModel
+        function onValueChanged() {
+            root.wireLensEnabled()
+        }
+    }
+    Connections {
+        target: lensBrandModel
+        function onCurrentIndexChanged() {
+            const requested = root.restoring ? lensModelModel.currentValue : ""
+            root.refreshLensModelEntries(lensBrandModel.currentValue, requested)
+            root.wireLensEnabled()
+        }
+    }
+
+    onControlsEnabledChanged: root.wireLensEnabled()
+
     onEditorSessionChanged: {
         root.loadFromSnapshot(root.editorSession ? root.editorSession.adjustmentSnapshot : null)
     }
 
     Component.onCompleted: {
+        root.refreshLensBrandEntries()
+        root.refreshLensModelEntries("", "")
+        root.wireLensEnabled()
         root.loadFromSnapshot(root.editorSession ? root.editorSession.adjustmentSnapshot : null)
     }
 }

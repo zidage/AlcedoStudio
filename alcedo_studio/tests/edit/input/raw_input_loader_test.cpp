@@ -15,6 +15,7 @@
 #include <iterator>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -22,11 +23,14 @@
 #include <pthread.h>
 #endif
 
+#include "decoders/libraw_unpack_guard.hpp"
 #include "decoders/processor/raw_normalization.hpp"
 #include "decoders/processor/raw_rgb_normalization.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 #include "prepared_raw_test_support.hpp"
+
+#include <libraw/libraw.h>
 
 namespace alcedo {
 namespace {
@@ -39,6 +43,51 @@ auto ReadBytes(const std::filesystem::path& path) -> std::vector<std::byte> {
   std::vector<std::byte>  bytes(chars.size());
   std::memcpy(bytes.data(), chars.data(), chars.size());
   return bytes;
+}
+
+auto LibRawLensFocalMm(const LibRaw& raw) -> float {
+  if (std::isfinite(raw.imgdata.other.focal_len) && raw.imgdata.other.focal_len > 0.0f) {
+    return raw.imgdata.other.focal_len;
+  }
+  return raw.imgdata.lens.makernotes.CurFocal;
+}
+
+auto LibRawLensAperture(const LibRaw& raw) -> float {
+  if (std::isfinite(raw.imgdata.other.aperture) && raw.imgdata.other.aperture > 0.0f) {
+    return raw.imgdata.other.aperture;
+  }
+  return raw.imgdata.lens.makernotes.CurAp;
+}
+
+enum class LensExifCopyCheck {
+  Copied,
+  Unusable,
+};
+
+auto TryExpectPreparedCopiesLibRawLensExif(const std::filesystem::path& path)
+    -> LensExifCopyCheck {
+  const auto encoded = ReadBytes(path);
+  if (encoded.empty()) {
+    return LensExifCopyCheck::Unusable;
+  }
+  auto raw = std::make_unique<LibRaw>();
+  if (raw->open_buffer(const_cast<std::byte*>(encoded.data()), encoded.size()) != LIBRAW_SUCCESS ||
+      libraw_guard::Unpack(*raw) != LIBRAW_SUCCESS) {
+    return LensExifCopyCheck::Unusable;
+  }
+
+  const float focal    = LibRawLensFocalMm(*raw);
+  const float aperture = LibRawLensAperture(*raw);
+  if (!(std::isfinite(focal) && focal > 0.0f)) {
+    return LensExifCopyCheck::Unusable;
+  }
+
+  const auto prepared = RawInputLoader::LoadEncoded(encoded, DecodeRes::FULL);
+  EXPECT_FLOAT_EQ(prepared.color_context.focal_length_mm_, focal);
+  if (std::isfinite(aperture) && aperture > 0.0f) {
+    EXPECT_FLOAT_EQ(prepared.color_context.aperture_f_number_, aperture);
+  }
+  return LensExifCopyCheck::Copied;
 }
 
 #if defined(__APPLE__)
@@ -424,6 +473,28 @@ TEST(GpuDagRawInput, EncodedDngCarriesOpcodeList3WarpIntoPreparedInput) {
   EXPECT_GT(prepared.dng_warp_rectilinear->coefficient_set_count, 0U);
   EXPECT_TRUE(prepared.color_context.dng_warp_rectilinear_present_);
   EXPECT_NE(prepared.source_key.dng_warp_hash, 0U);
+}
+
+TEST(GpuDagRawInput, LoadEncodedCopiesLibRawLensExifIntoColorContext) {
+  std::vector<std::filesystem::path> candidates = {
+      std::filesystem::path{ALCEDO_CI_RAW_FIXTURE_ROOT} /
+      "tag @ryanbreitkreutz - free raws from @signatureeditsco - DSC06683.dng",
+  };
+#if defined(TEST_IMG_PATH)
+  candidates.emplace_back(std::filesystem::path(TEST_IMG_PATH) / "raw" / "camera" / "sony" /
+                          "a7cii" / "ycbcr_compressed" / "DSC04739.ARW");
+  candidates.emplace_back(std::filesystem::path(TEST_IMG_PATH) / "raw" / "linear_dng" /
+                          "mfzoty.dng");
+#endif
+  for (const auto& path : candidates) {
+    if (!std::filesystem::exists(path)) {
+      continue;
+    }
+    if (TryExpectPreparedCopiesLibRawLensExif(path) == LensExifCopyCheck::Copied) {
+      return;
+    }
+  }
+  GTEST_SKIP() << "No RAW fixture with LibRaw lens EXIF is available";
 }
 
 #if defined(TEST_IMG_PATH)

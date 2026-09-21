@@ -103,6 +103,8 @@ auto FieldMap(const alcedo::EditorPanelFieldPresentation& field) -> QVariantMap 
         } else if constexpr (std::is_same_v<T, alcedo::EditorPanelLensValue>) {
           QVariantMap lens;
           lens.insert(QStringLiteral("enabled"), value.enabled);
+          lens.insert(QStringLiteral("lens_maker"), String(value.lens_maker));
+          lens.insert(QStringLiteral("lens_model"), String(value.lens_model));
           map.insert(QStringLiteral("lens_calib"), lens);
         } else if constexpr (std::is_same_v<T, alcedo::EditorPanelGeometryValue>) {
           QVariantMap rect;

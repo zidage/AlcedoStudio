@@ -95,6 +95,14 @@ auto DevelopParamsModel::LensProfileDbPath() const -> std::string {
   return Read([](const DevelopPayload& payload) { return payload.lens_profile_db_path; });
 }
 
+auto DevelopParamsModel::LensMaker() const -> std::string {
+  return Read([](const DevelopPayload& payload) { return payload.lens_maker; });
+}
+
+auto DevelopParamsModel::LensModel() const -> std::string {
+  return Read([](const DevelopPayload& payload) { return payload.lens_model; });
+}
+
 void DevelopParamsModel::ApplyRawDecodeUpdate(DevelopRawDecodeUpdate update) {
   MutateWithDirtyFields([update = std::move(update)](DevelopPayload& payload) mutable {
     DirtyFieldMask changed;
@@ -198,6 +206,14 @@ void DevelopParamsModel::ApplyLensCalibrationUpdate(DevelopLensCalibrationUpdate
       payload.lens_profile_db_path = std::move(*update.lens_profile_db_path);
       changed                      = true;
     }
+    if (update.lens_maker.has_value() && payload.lens_maker != *update.lens_maker) {
+      payload.lens_maker = std::move(*update.lens_maker);
+      changed            = true;
+    }
+    if (update.lens_model.has_value() && payload.lens_model != *update.lens_model) {
+      payload.lens_model = std::move(*update.lens_model);
+      changed            = true;
+    }
     return changed ? DirtyFieldMask{DevelopDirty::Lens} : DirtyFieldMask{};
   });
 }
@@ -238,7 +254,9 @@ auto DevelopParamsModel::ToJson() const -> nlohmann::json {
           {"user_scale", payload.user_scale},
           {"projection_enabled", payload.projection_enabled},
           {"target_projection", payload.target_projection},
-          {"lens_profile_db_path", payload.lens_profile_db_path}};
+          {"lens_profile_db_path", payload.lens_profile_db_path},
+          {"lens_maker", payload.lens_maker},
+          {"lens_model", payload.lens_model}};
 }
 
 void DevelopParamsModel::LoadJson(const nlohmann::json& json) {
@@ -297,6 +315,8 @@ void DevelopParamsModel::LoadJson(const nlohmann::json& json) {
         json_util::ReadString(json, "target_projection", payload.target_projection);
     payload.lens_profile_db_path =
         json_util::ReadString(json, "lens_profile_db_path", payload.lens_profile_db_path);
+    payload.lens_maker = json_util::ReadString(json, "lens_maker", payload.lens_maker);
+    payload.lens_model = json_util::ReadString(json, "lens_model", payload.lens_model);
   });
 }
 
@@ -320,7 +340,8 @@ void DevelopParamsModel::ReplaceParams(DevelopPayload payload) {
         payload.user_scale != dest.user_scale ||
         payload.projection_enabled != dest.projection_enabled ||
         payload.target_projection != dest.target_projection ||
-        payload.lens_profile_db_path != dest.lens_profile_db_path) {
+        payload.lens_profile_db_path != dest.lens_profile_db_path ||
+        payload.lens_maker != dest.lens_maker || payload.lens_model != dest.lens_model) {
       changed |= DirtyFieldMask{DevelopDirty::Lens};
     }
     if (payload.use_camera_wb != dest.use_camera_wb || payload.user_wb != dest.user_wb ||

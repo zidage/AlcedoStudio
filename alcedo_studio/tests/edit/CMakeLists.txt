@@ -143,6 +143,22 @@ gtest_discover_tests(CropRotateOpTest TEST_PREFIX "CropRotateOpTest."
   PROPERTIES LABELS "ci_core_flow")
 alcedo_register_test_target(CropRotateOpTest edit)
 
+# Develop lens identity: catalog maker/model resolve against Lensfun without RAW lens name.
+add_executable(LensCalibDevelopResolveTest
+  ${ALCEDO_TEST_ROOT}/edit/operators/geometry/lens_calib_develop_resolve_test.cpp)
+target_include_directories(LensCalibDevelopResolveTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(LensCalibDevelopResolveTest PRIVATE GTest::gtest_main Operators
+  ${ALCEDO_TEST_OPENCV_MIN_DEPS})
+if(ALCEDO_CUDA_ENABLED)
+  target_link_libraries(LensCalibDevelopResolveTest PRIVATE CudaUtils)
+endif()
+if(ALCEDO_OPENCL_ENABLED)
+  target_link_libraries(LensCalibDevelopResolveTest PRIVATE OpenClGeometryUtils)
+endif()
+gtest_discover_tests(LensCalibDevelopResolveTest TEST_PREFIX "LensCalibDevelopResolveTest."
+  PROPERTIES LABELS "ci_core_flow;edit;operators")
+alcedo_register_test_target(LensCalibDevelopResolveTest edit)
+
 # RAW decode durable params: inherent RawColorContext round-trip, omit decode_res.
 add_executable(RawDecodeOpParamsTest
   ${ALCEDO_TEST_ROOT}/edit/operators/raw/raw_decode_op_params_test.cpp)

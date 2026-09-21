@@ -371,7 +371,11 @@ auto ReadLens(const PipelineDocument& document, const EditorParameterTarget& tar
   if (params == nullptr) {
     return false;
   }
-  return FinishField(target, EditorPanelLensValue{params->LensEnabled()}, out);
+  EditorPanelLensValue value;
+  value.enabled    = params->LensEnabled();
+  value.lens_maker = params->LensMaker();
+  value.lens_model = params->LensModel();
+  return FinishField(target, std::move(value), out);
 }
 
 auto ReadGeometry(const PipelineDocument& document, const EditorParameterTarget& target,
@@ -455,7 +459,7 @@ auto EditorPanelAdapterTable::Production() -> EditorPanelAdapterTable {
     table.Add({"odt", "display", &ReadOdt});
     table.Add({"raw_decode", "raw", &ReadRawDecode});
     table.Add({"color_temp", "look", &ReadColorTemp});
-    table.Add({"lens_calib", "geometry", &ReadLens});
+    table.Add({"lens_calib", "raw", &ReadLens});
     table.Add({"crop_rotate", "geometry", &ReadGeometry});
     return table;
   }();

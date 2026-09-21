@@ -428,7 +428,6 @@ auto ParseColorTemperatureUpdate(const nlohmann::json& params) -> DevelopColorTe
 
 auto ParseLensCalibrationUpdate(const nlohmann::json& params) -> DevelopLensCalibrationUpdate {
   const auto& object = UnwrapObject(params, {"lens_calib"}, "lens_calib");
-  // Camera metadata and other Develop fields are persistence context, not lens update inputs.
   RejectUnknownKeys(object,
                     {"enabled",
                      "lens_enabled",
@@ -474,6 +473,8 @@ auto ParseLensCalibrationUpdate(const nlohmann::json& params) -> DevelopLensCali
   update.projection_enabled   = ReadOptionalBool(object, {"projection_enabled"}, "lens_calib");
   update.target_projection    = ReadOptionalString(object, {"target_projection"}, "lens_calib");
   update.lens_profile_db_path = ReadOptionalString(object, {"lens_profile_db_path"}, "lens_calib");
+  update.lens_maker           = ReadOptionalString(object, {"lens_maker"}, "lens_calib");
+  update.lens_model           = ReadOptionalString(object, {"lens_model"}, "lens_calib");
   return update;
 }
 

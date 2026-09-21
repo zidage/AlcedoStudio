@@ -83,6 +83,8 @@ struct DevelopPayload {
   bool                 projection_enabled   = false;
   std::string          target_projection    = "unknown";
   std::string          lens_profile_db_path = "src/config/lens_calib";
+  std::string          lens_maker;
+  std::string          lens_model;
 };
 
 inline auto operator==(const DevelopPayload& a, const DevelopPayload& b) -> bool {
@@ -97,7 +99,8 @@ inline auto operator==(const DevelopPayload& a, const DevelopPayload& b) -> bool
          a.auto_scale == b.auto_scale && a.use_user_scale == b.use_user_scale &&
          a.user_scale == b.user_scale && a.projection_enabled == b.projection_enabled &&
          a.target_projection == b.target_projection &&
-         a.lens_profile_db_path == b.lens_profile_db_path;
+         a.lens_profile_db_path == b.lens_profile_db_path && a.lens_maker == b.lens_maker &&
+         a.lens_model == b.lens_model;
 }
 
 inline auto operator!=(const DevelopPayload& a, const DevelopPayload& b) -> bool {
@@ -136,6 +139,9 @@ struct DevelopColorTemperatureUpdate {
 
 /**
  * @brief Focused lens and projection update. Omitted fields retain their values.
+ *
+ * Empty @p lens_maker / @p lens_model mean Auto: Develop uses the prepared RAW
+ * lens identity. A non-empty pair is a user catalog selection.
  */
 struct DevelopLensCalibrationUpdate {
   std::optional<bool>        lens_enabled;
@@ -149,6 +155,8 @@ struct DevelopLensCalibrationUpdate {
   std::optional<bool>        projection_enabled;
   std::optional<std::string> target_projection;
   std::optional<std::string> lens_profile_db_path;
+  std::optional<std::string> lens_maker;
+  std::optional<std::string> lens_model;
 };
 
 /**
@@ -184,6 +192,8 @@ class DevelopParamsModel final
   [[nodiscard]] auto ProjectionEnabled() const -> bool;
   [[nodiscard]] auto TargetProjection() const -> std::string;
   [[nodiscard]] auto LensProfileDbPath() const -> std::string;
+  [[nodiscard]] auto LensMaker() const -> std::string;
+  [[nodiscard]] auto LensModel() const -> std::string;
 
   /**
    * @brief Apply RAW decode fields atomically and mark only changed field groups dirty.

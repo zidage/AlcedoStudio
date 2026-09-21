@@ -19,8 +19,6 @@ Item {
     // overlay until confirm (panel leave or Enter). Pipeline submit is deferred.
     property bool draftDirty: false
     property var aspectEntries: []
-    property var lensBrandEntries: []
-    property var lensModelEntries: []
     property int sourceImageWidth: 0
     property int sourceImageHeight: 0
 
@@ -53,32 +51,11 @@ Item {
         objectName: "geometryMath"
     }
 
-    EditorLensCatalogModel {
-        id: lensCatalog
-        objectName: "geometryLensCatalog"
-    }
-
     function buildAspectEntries() {
         var result = []
         const presets = geometryMath.aspectPresets
         for (var i = 0; i < presets.length; ++i) {
             result.push({ value: String(presets[i].value), label: qsTr(String(presets[i].label)) })
-        }
-        return result
-    }
-
-    function buildLensEntries(values) {
-        var result = [{ value: "", label: qsTr("Auto (metadata)") }]
-        for (var i = 0; i < values.length; ++i) {
-            result.push({ value: String(values[i].value), label: String(values[i].label) })
-        }
-        return result
-    }
-
-    function buildLensModelEntries(values) {
-        var result = []
-        for (var i = 0; i < values.length; ++i) {
-            result.push({ value: String(values[i].value), label: String(values[i].label) })
         }
         return result
     }
@@ -94,32 +71,6 @@ Item {
             }
         }
         model.currentIndex = index
-    }
-
-    function refreshLensBrandEntries() {
-        root.lensBrandEntries = root.buildLensEntries(lensCatalog.brands)
-        lensBrandModel.entries = root.lensBrandEntries
-    }
-
-    function refreshLensModelEntries(brand, requestedModel) {
-        const catalogValues = lensCatalog.modelsForBrand(brand)
-        var entries = brand && brand.length > 0
-                      ? root.buildLensModelEntries(catalogValues)
-                      : root.buildLensEntries([])
-        if (requestedModel && requestedModel.length > 0) {
-            var found = false
-            for (var i = 0; i < entries.length; ++i) {
-                if (entries[i].value === requestedModel) {
-                    found = true
-                    break
-                }
-            }
-            if (!found)
-                entries.push({ value: requestedModel, label: requestedModel })
-        }
-        root.lensModelEntries = entries
-        lensModelModel.entries = entries
-        root.setEnumValue(lensModelModel, requestedModel, 0)
     }
 
     function currentAspectRatio() {
@@ -256,28 +207,6 @@ Item {
         return JSON.stringify(payload)
     }
 
-    function buildLensParams() {
-        var payload = {}
-        try {
-            payload = JSON.parse(lensCatalog.defaultParamsJson)
-        } catch (error) {
-            payload = { lens_calib: {} }
-        }
-        if (!payload.lens_calib)
-            payload.lens_calib = {}
-        const brand = String(lensBrandModel.currentValue)
-        payload.lens_calib.enabled = Boolean(lensEnabledModel.value)
-        payload.lens_calib.lens_maker = brand
-        payload.lens_calib.lens_model = brand.length > 0 ? String(lensModelModel.currentValue) : ""
-        return JSON.stringify(payload)
-    }
-
-    function submitLens(settled) {
-        if (!root.editorSession || typeof root.editorSession.submitPatch !== "function")
-            return false
-        return root.editorSession.submitPatch("lens_calib", root.buildLensParams(), settled)
-    }
-
     function applyAspectSelection() {
         const wasSyncing = root.syncingToInteraction
         root.syncingToInteraction = true
@@ -324,12 +253,6 @@ Item {
         aspectHeightModel.value = aspectHeightModel.defaultValue
     }
 
-    function resetLensModels() {
-        lensEnabledModel.value = lensEnabledModel.defaultValue
-        root.setEnumValue(lensBrandModel, "", 0)
-        root.refreshLensModelEntries("", "")
-    }
-
     function resetGeometry() {
         root.restoring = true
         root.resetCropModels()
@@ -340,17 +263,9 @@ Item {
         root.draftDirty = true
     }
 
-    function resetLens() {
-        root.restoring = true
-        root.resetLensModels()
-        root.restoring = false
-        root.submitLens(true)
-    }
-
     function restoreDefaults() {
         root.restoring = true
         root.resetCropModels()
-        root.resetLensModels()
         root.restoring = false
     }
 
@@ -406,55 +321,19 @@ Item {
         root.restoring = false
     }
 
-    function loadLensSnapshot(snapshot) {
-        const raw = snapshot ? snapshot["lens_calib"] : undefined
-        const entry = raw && raw["lens_calib"] !== undefined ? raw["lens_calib"] : raw
-        root.restoring = true
-        if (!entry) {
-            root.resetLensModels()
-            root.restoring = false
-            return
-        }
-        lensEnabledModel.value = entry["enabled"] !== undefined
-                                 ? Boolean(entry["enabled"]) : lensEnabledModel.defaultValue
-        const brand = entry["lens_maker"] !== undefined ? String(entry["lens_maker"]) : ""
-        const model = entry["lens_model"] !== undefined ? String(entry["lens_model"]) : ""
-        if (brand.length > 0) {
-            var brandKnown = false
-            for (var brandIndex = 0; brandIndex < lensBrandModel.entries.length; ++brandIndex) {
-                if (String(lensBrandModel.entries[brandIndex].value) === brand) {
-                    brandKnown = true
-                    break
-                }
-            }
-            if (!brandKnown) {
-                var entries = lensBrandModel.entries.slice(0)
-                entries.push({ value: brand, label: brand })
-                root.lensBrandEntries = entries
-                lensBrandModel.entries = entries
-            }
-        }
-        root.setEnumValue(lensBrandModel, brand, 0)
-        root.refreshLensModelEntries(brand, model)
-        root.restoring = false
-    }
-
     function loadFromSnapshot(snapshot) {
         if (snapshot === undefined || snapshot === null)
             return
         if (root.inputActive)
             return
-        // Read-only projection of crop/lens entries — do not deep-clone the full
+        // Read-only projection of crop entries — do not deep-clone the full
         // adjustment map (settled tone/look echo used to JSON.stringify the whole
         // snapshot on every fan-out). Nested loaders only read their field keys.
         if (!root.aspectEntries.length) {
             root.aspectEntries = root.buildAspectEntries()
             aspectModel.entries = root.aspectEntries
         }
-        if (!root.lensBrandEntries.length)
-            root.refreshLensBrandEntries()
         root.loadCropSnapshot(snapshot)
-        root.loadLensSnapshot(snapshot)
         root.draftDirty = false
         if (root.panelActive)
             root.syncToInteraction()
@@ -496,10 +375,6 @@ Item {
         aspectModel.enabled = enabled
         aspectWidthModel.enabled = enabled && aspectModel.currentValue === "custom"
         aspectHeightModel.enabled = enabled && aspectModel.currentValue === "custom"
-        lensEnabledModel.enabled = enabled
-        lensBrandModel.enabled = enabled
-        lensModelModel.enabled = enabled && lensBrandModel.currentValue.length > 0
-                                 && lensModelModel.entries.length > 0
     }
 
     onControlsEnabledChanged: {
@@ -613,34 +488,6 @@ Item {
         step: 0.01
         precision: 2
     }
-    EditorAdjustmentToggleModel {
-        id: lensEnabledModel
-        objectName: "geometryLensEnabledModel"
-        fieldKey: "lens_calib"
-        label: qsTr("Enable Lens Calibration")
-        defaultValue: false
-        value: false
-        submitter: root.editorSession
-        paramsBuilder: function (value) { return root.buildLensParams() }
-    }
-    EditorAdjustmentEnumModel {
-        id: lensBrandModel
-        objectName: "geometryLensBrandModel"
-        fieldKey: "lens_calib"
-        label: qsTr("Lens Brand")
-        entries: root.lensBrandEntries
-        submitter: root.editorSession
-        paramsBuilder: function (value) { return root.buildLensParams() }
-    }
-    EditorAdjustmentEnumModel {
-        id: lensModelModel
-        objectName: "geometryLensModelModel"
-        fieldKey: "lens_calib"
-        label: qsTr("Lens Model")
-        entries: root.lensModelEntries
-        submitter: root.editorSession
-        paramsBuilder: function (value) { return root.buildLensParams() }
-    }
 
     Connections {
         target: cropXModel
@@ -715,20 +562,6 @@ Item {
                 root.setEnumValue(aspectModel, "custom", 1)
                 root.resizeLockedRect(false)
             }
-        }
-    }
-    Connections {
-        target: lensEnabledModel
-        function onValueChanged() {
-            root.wireEnabled()
-        }
-    }
-    Connections {
-        target: lensBrandModel
-        function onCurrentIndexChanged() {
-            const requested = root.restoring ? lensModelModel.currentValue : ""
-            root.refreshLensModelEntries(lensBrandModel.currentValue, requested)
-            root.wireEnabled()
         }
     }
 
@@ -928,68 +761,6 @@ Item {
                 }
             }
 
-            CollapsibleSection {
-                id: lensSection
-                objectName: "editorAdjustmentGroupShell_geometry_lens"
-                Layout.fillWidth: true
-                title: qsTr("Lens Calibration")
-                expanded: true
-                controlsEnabled: root.controlsEnabled
-                surfaceColor: root.colCardSurface
-                disabledSurfaceColor: root.colCardSurface
-                borderColor: root.colCardBorder
-                textColor: root.colText
-                mutedColor: root.colMuted
-                hoverColor: root.colHover
-                accentColor: root.colAccent
-                bodyContentHeight: lensControls.implicitHeight + appTheme.spaceSm
-
-                ColumnLayout {
-                    id: lensControls
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.top: parent.top
-                    anchors.margins: appTheme.spaceXs
-                    spacing: appTheme.spaceSm
-
-                    AdjustmentToggle {
-                        objectName: "geometryLensEnabledToggle"
-                        Layout.fillWidth: true
-                        model: lensEnabledModel
-                    }
-                    AdjustmentCombo {
-                        objectName: "geometryLensBrandCombo"
-                        Layout.fillWidth: true
-                        model: lensBrandModel
-                    }
-                    AdjustmentCombo {
-                        objectName: "geometryLensModelCombo"
-                        Layout.fillWidth: true
-                        model: lensModelModel
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        text: lensCatalog.statusText
-                        color: root.colMuted
-                        font.pixelSize: appTheme.fontSizeCaption
-                        wrapMode: Text.WordWrap
-                    }
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: appTheme.spaceSm
-                        Item { Layout.fillWidth: true }
-                        IconActionButton {
-                            objectName: "geometryLensResetButton"
-                            compact: true
-                            enabled: root.controlsEnabled
-                            iconSrc: "qrc:/panel_icons/reset.svg"
-                            actionName: qsTr("Reset lens calibration")
-                            onClicked: root.resetLens()
-                        }
-                    }
-                }
-            }
-
             Item { Layout.fillHeight: true }
         }
 
@@ -999,8 +770,6 @@ Item {
     Component.onCompleted: {
         root.aspectEntries = root.buildAspectEntries()
         aspectModel.entries = root.aspectEntries
-        root.refreshLensBrandEntries()
-        root.refreshLensModelEntries("", "")
         root.restoreDefaults()
         root.wireEnabled()
         root.loadFromSnapshot(root.editorSession ? root.editorSession.adjustmentSnapshot : null)

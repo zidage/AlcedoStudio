@@ -6,6 +6,7 @@
 
 #include <cuda_runtime.h>
 #include <opencv2/core.hpp>
+#include <opencv2/core/cuda_stream_accessor.hpp>
 #include <opencv2/core/cuda_types.hpp>
 
 #include <algorithm>
@@ -39,6 +40,19 @@ __host__ __device__ void SwapValues(SwapT& a, SwapT& b) {
   const SwapT tmp = a;
   a               = b;
   b               = tmp;
+}
+
+auto GetCudaStream(cv::cuda::Stream* stream) -> cudaStream_t {
+  if (stream == nullptr) {
+    return nullptr;
+  }
+  return cv::cuda::StreamAccessor::getStream(*stream);
+}
+
+void SyncIfDefaultStream(cv::cuda::Stream* stream) {
+  if (stream == nullptr) {
+    CUDA_CHECK(cudaDeviceSynchronize());
+  }
 }
 
 auto ResolveCropRectPxHost(const LensCalibGpuParams& params) -> CropRectPx {
@@ -641,7 +655,8 @@ auto ComputeRectCropRoi(const LensCalibGpuParams& params) -> cv::Rect {
 
 }  // namespace
 
-void ApplyLensCalibration(cv::cuda::GpuMat& image, const LensCalibGpuParams& params) {
+void ApplyLensCalibration(cv::cuda::GpuMat& image, const LensCalibGpuParams& params,
+                          cv::cuda::Stream* stream) {
   if (image.empty()) {
     return;
   }
@@ -671,18 +686,19 @@ void ApplyLensCalibration(cv::cuda::GpuMat& image, const LensCalibGpuParams& par
 
   const dim3 block(16, 16);
   const dim3 grid((image.cols + block.x - 1) / block.x, (image.rows + block.y - 1) / block.y);
+  const cudaStream_t cuda_stream = GetCudaStream(stream);
 
   if (has_vignetting) {
-    LensVignettingKernel<<<grid, block>>>(image, launch);
+    LensVignettingKernel<<<grid, block, 0, cuda_stream>>>(image, launch);
     CUDA_CHECK(cudaGetLastError());
-    CUDA_CHECK(cudaDeviceSynchronize());
+    SyncIfDefaultStream(stream);
   }
 
   if (has_warp) {
     cv::cuda::GpuMat warped(image.rows, image.cols, image.type());
-    LensWarpGeometryTcaKernel<<<grid, block>>>(image, warped, launch);
+    LensWarpGeometryTcaKernel<<<grid, block, 0, cuda_stream>>>(image, warped, launch);
     CUDA_CHECK(cudaGetLastError());
-    CUDA_CHECK(cudaDeviceSynchronize());
+    SyncIfDefaultStream(stream);
     image = std::move(warped);
   }
 
@@ -692,7 +708,13 @@ void ApplyLensCalibration(cv::cuda::GpuMat& image, const LensCalibGpuParams& par
               << " roi=(" << roi.x << ", " << roi.y << ", " << roi.width << ", " << roi.height
               << ")" << std::endl;
     if (roi.width > 0 && roi.height > 0) {
-      image = image(roi).clone();
+      if (stream != nullptr) {
+        cv::cuda::GpuMat cropped;
+        image(roi).copyTo(cropped, *stream);
+        image = std::move(cropped);
+      } else {
+        image = image(roi).clone();
+      }
       std::cout << "LensCalib CUDA rect crop result: " << image.cols << "x" << image.rows
                 << std::endl;
     }

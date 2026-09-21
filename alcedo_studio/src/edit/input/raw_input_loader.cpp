@@ -7,11 +7,14 @@
 #include <libraw/libraw.h>
 
 #include <algorithm>
+#include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <memory>
 #include <opencv2/core.hpp>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 #include "decoders/libraw_unpack_guard.hpp"
@@ -451,6 +454,20 @@ auto SensorFromLibRaw(const LibRaw& raw) -> RawSensorGeometry {
   return sensor;
 }
 
+auto IsFinitePositive(float value) -> bool { return std::isfinite(value) && value > 0.0f; }
+
+auto TrimLibRawField(const char* text) -> std::string {
+  if (text == nullptr) {
+    return {};
+  }
+  std::size_t length = std::min(std::strlen(text), static_cast<std::size_t>(256));
+  while (length > 0 && (text[length - 1] == '\0' ||
+                        std::isspace(static_cast<unsigned char>(text[length - 1])))) {
+    --length;
+  }
+  return {text, length};
+}
+
 void FillColorContext(LibRaw& raw, RawRuntimeColorContext& ctx) {
   ctx.valid_                  = true;
   ctx.output_in_camera_space_ = true;
@@ -460,6 +477,37 @@ void FillColorContext(LibRaw& raw, RawRuntimeColorContext& ctx) {
   }
   ctx.camera_make_  = raw.imgdata.idata.make;
   ctx.camera_model_ = raw.imgdata.idata.model;
+
+  // Develop lens calibration reads these fields from PreparedRawInput. The CPU path
+  // received them through InjectRawMetadata; LoadEncoded must copy them from LibRaw.
+  ctx.lens_make_  = TrimLibRawField(raw.imgdata.lens.LensMake);
+  ctx.lens_model_ = TrimLibRawField(raw.imgdata.lens.Lens);
+  if (ctx.lens_model_.empty()) {
+    ctx.lens_model_ = TrimLibRawField(raw.imgdata.lens.makernotes.Lens);
+  }
+
+  ctx.focal_length_mm_ = raw.imgdata.other.focal_len;
+  if (!IsFinitePositive(ctx.focal_length_mm_)) {
+    ctx.focal_length_mm_ = raw.imgdata.lens.makernotes.CurFocal;
+  }
+  ctx.aperture_f_number_ = raw.imgdata.other.aperture;
+  if (!IsFinitePositive(ctx.aperture_f_number_)) {
+    ctx.aperture_f_number_ = raw.imgdata.lens.makernotes.CurAp;
+  }
+  if (std::isfinite(raw.imgdata.lens.makernotes.FocusRangeIndex) &&
+      raw.imgdata.lens.makernotes.FocusRangeIndex > 0.0f) {
+    ctx.focus_distance_m_ = raw.imgdata.lens.makernotes.FocusRangeIndex;
+  }
+  if (raw.imgdata.lens.FocalLengthIn35mmFormat > 0) {
+    ctx.focal_35mm_mm_ = static_cast<float>(raw.imgdata.lens.FocalLengthIn35mmFormat);
+  } else if (raw.imgdata.lens.makernotes.FocalLengthIn35mmFormat > 0) {
+    ctx.focal_35mm_mm_ =
+        static_cast<float>(raw.imgdata.lens.makernotes.FocalLengthIn35mmFormat);
+  }
+  if (IsFinitePositive(ctx.focal_length_mm_) && IsFinitePositive(ctx.focal_35mm_mm_)) {
+    ctx.crop_factor_hint_ = ctx.focal_35mm_mm_ / ctx.focal_length_mm_;
+  }
+  ctx.lens_metadata_valid_ = !ctx.lens_model_.empty() && IsFinitePositive(ctx.focal_length_mm_);
 }
 
 auto FinishPrepared(PreparedRawInput input, DecodeRes decode_res, std::uint64_t encoded_hash,

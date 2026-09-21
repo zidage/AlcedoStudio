@@ -87,6 +87,8 @@ auto MixSensorDevelopParams(ContentHash& hash, const DevelopPayload& params) -> 
   hash.MixBool(params.projection_enabled);
   hash.MixText(params.target_projection);
   hash.MixText(params.lens_profile_db_path);
+  hash.MixText(params.lens_maker);
+  hash.MixText(params.lens_model);
 }
 
 auto MixCameraColorParams(ContentHash& hash, const DevelopPayload& params) -> void {

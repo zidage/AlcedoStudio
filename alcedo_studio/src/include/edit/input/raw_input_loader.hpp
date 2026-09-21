@@ -23,6 +23,10 @@ class RawInputLoader {
   /**
    * @brief Open encoded bytes, unpack CFA or already-demosaiced RGB, downsample, then recycle
    *        LibRaw.
+   *
+   * Copies camera and lens EXIF into @ref PreparedRawInput::color_context so Develop lens
+   * calibration can resolve a Lensfun profile. White-balance multipliers stay on the
+   * unpack color fields, not the lens EXIF fields.
    * @throws std::runtime_error on LibRaw failure or unsupported CFA.
    */
   [[nodiscard]] static auto LoadEncoded(std::span<const std::byte> encoded, DecodeRes decode_res)

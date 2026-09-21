@@ -19,12 +19,14 @@
 #include <QTimer>
 #include <QUrl>
 #include <QVariantMap>
+#include <exception>
 #include <filesystem>
 #include <memory>
 #include <utility>
 #include <variant>
 #include <vector>
 
+#include "json.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
 #include "ui/alcedo_main/app_theme.hpp"
@@ -93,17 +95,23 @@ class RawDecodeSession final : public QObject, public IEditorAdjustmentSubmitter
   }
 
   bool               submitPatch(QString fieldKey, QString paramsJson, bool settled) override {
-    calls.push_back({std::move(fieldKey), std::move(paramsJson), settled});
-    if (settled) {
-      const auto& call     = calls.back();
-      const auto  document = QJsonDocument::fromJson(call.params_json.toUtf8());
-      if (document.isObject()) {
-        snapshot_.insert(call.field_key, document.object().toVariantMap());
-        ++snapshot_revision_;
-        emit adjustmentSnapshotChanged();
-      }
+    nlohmann::json parsed;
+    try {
+      parsed = paramsJson.isEmpty() ? nlohmann::json::object()
+                                    : nlohmann::json::parse(paramsJson.toStdString());
+    } catch (const std::exception&) {
+      return false;
     }
-    return true;
+    std::string error;
+    auto        write = alcedo::ParseEditorParameterWrite(fieldKey.toStdString(), parsed, &error);
+    if (!write.has_value()) {
+      return false;
+    }
+    const auto ok = submitWrite(fieldKey, std::move(*write), settled);
+    if (ok && !calls.empty()) {
+      calls.back().params_json = std::move(paramsJson);
+    }
+    return ok;
   }
 
   void SaveReplayAndReopen() { Publish(snapshot_); }
@@ -268,20 +276,21 @@ TEST(EditorRawDecodePanelQmlTest, ControlsEnabledWhenImageSelected) {
   auto* method_model = harness.findObject<QObject>(QStringLiteral("rawDemosaicMethodModel"));
   auto* highlights   = harness.findObject<QQuickItem>(QStringLiteral("rawHighlightsControl"));
   auto* status       = harness.findObject<QObject>(QStringLiteral("rawDecodeStatus"));
-  auto* geometry_lens =
-      harness.findObject<QObject>(QStringLiteral("editorAdjustmentGroupShell_geometry_lens"));
+  auto* raw_lens =
+      harness.findObject<QObject>(QStringLiteral("editorAdjustmentGroupShell_raw_lens"));
   ASSERT_NE(method_model, nullptr);
   ASSERT_NE(highlights, nullptr);
-  ASSERT_NE(geometry_lens, nullptr);
+  ASSERT_NE(raw_lens, nullptr);
 
   EXPECT_TRUE(method_model->property("enabled").toBool());
   EXPECT_TRUE(
       highlights->findChild<QQuickItem*>(QStringLiteral("adjustmentToggleSwitch"))->isEnabled());
   EXPECT_EQ(status, nullptr);
-  EXPECT_EQ(harness.findObject<QObject>(QStringLiteral("editorAdjustmentGroupShell_raw_lens")),
+  EXPECT_EQ(harness.findObject<QObject>(QStringLiteral("editorAdjustmentGroupShell_geometry_lens")),
             nullptr);
-  EXPECT_EQ(harness.findObject<QObject>(QStringLiteral("rawLensEnabledModel")), nullptr);
-  EXPECT_TRUE(geometry_lens->property("expanded").toBool());
+  EXPECT_EQ(harness.findObject<QObject>(QStringLiteral("geometryLensEnabledModel")), nullptr);
+  EXPECT_NE(harness.findObject<QObject>(QStringLiteral("rawLensEnabledModel")), nullptr);
+  EXPECT_TRUE(raw_lens->property("expanded").toBool());
 }
 
 TEST(EditorRawDecodePanelQmlTest, UserChangesSubmitCompleteRawOperatorParams) {
@@ -363,6 +372,81 @@ TEST(EditorRawDecodePanelQmlTest,
   EXPECT_EQ(method->property("currentValue").toString(), QStringLiteral("legacy"));
   EXPECT_FALSE(highlights->property("value").toBool());
   EXPECT_EQ(session.calls.size(), calls_after_replay);
+}
+
+TEST(EditorRawDecodePanelQmlTest, EnablingLensCalibrationSubmitsEnabledUpdate) {
+  RawDecodeSession       session(Snapshot(QStringLiteral("default"), true));
+  AdjustmentStackHarness harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+
+  auto* enabled = harness.findObject<QObject>(QStringLiteral("rawLensEnabledModel"));
+  ASSERT_NE(enabled, nullptr);
+  ASSERT_TRUE(QMetaObject::invokeMethod(enabled, "toggle"));
+  ASSERT_EQ(session.calls.size(), 1u);
+  const auto* lens =
+      std::get_if<alcedo::DevelopLensCalibrationUpdate>(&session.calls.back().write);
+  ASSERT_NE(lens, nullptr);
+  ASSERT_TRUE(lens->lens_enabled.has_value());
+  EXPECT_TRUE(*lens->lens_enabled);
+}
+
+TEST(EditorRawDecodePanelQmlTest, LensSelectionKeepsLegacyDefaultsAndIsAvailableWhenDisabled) {
+  RawDecodeSession       session(Snapshot(QStringLiteral("default"), true));
+  AdjustmentStackHarness harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+
+  auto* enabled = harness.findObject<QObject>(QStringLiteral("rawLensEnabledModel"));
+  auto* brand   = harness.findObject<QObject>(QStringLiteral("rawLensBrandModel"));
+  auto* model   = harness.findObject<QObject>(QStringLiteral("rawLensModelModel"));
+  ASSERT_NE(enabled, nullptr);
+  ASSERT_NE(brand, nullptr);
+  ASSERT_NE(model, nullptr);
+
+  EXPECT_FALSE(enabled->property("value").toBool());
+  EXPECT_TRUE(brand->property("enabled").toBool());
+  const auto brand_entries = brand->property("entries").toList();
+  ASSERT_GT(brand_entries.size(), 1);
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(brand, "selectIndex", Q_ARG(int, 1)));
+  ASSERT_EQ(session.calls.size(), 1u);
+  const auto* lens =
+      std::get_if<alcedo::DevelopLensCalibrationUpdate>(&session.calls.back().write);
+  ASSERT_NE(lens, nullptr);
+  EXPECT_TRUE(lens->apply_distortion.has_value());
+  EXPECT_TRUE(lens->lens_profile_db_path.has_value());
+  EXPECT_FALSE(lens->lens_profile_db_path->empty());
+  ASSERT_TRUE(lens->lens_maker.has_value());
+  EXPECT_FALSE(lens->lens_maker->empty());
+  ASSERT_TRUE(lens->lens_model.has_value());
+  EXPECT_FALSE(lens->lens_model->empty());
+  EXPECT_TRUE(model->property("enabled").toBool());
+  EXPECT_FALSE(model->property("currentValue").toString().isEmpty());
+}
+
+TEST(EditorRawDecodePanelQmlTest, LensSnapshotRestoresMakerModelWithoutSubmitting) {
+  QVariantMap lens;
+  lens.insert(QStringLiteral("enabled"), true);
+  lens.insert(QStringLiteral("lens_maker"), QStringLiteral("Unknown Maker"));
+  lens.insert(QStringLiteral("lens_model"), QStringLiteral("Unknown Model"));
+  QVariantMap lens_wrapper;
+  lens_wrapper.insert(QStringLiteral("lens_calib"), lens);
+  auto snapshot = Snapshot(QStringLiteral("default"), true);
+  snapshot.insert(QStringLiteral("lens_calib"), lens_wrapper);
+
+  RawDecodeSession       session(snapshot);
+  AdjustmentStackHarness harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+
+  auto* enabled = harness.findObject<QObject>(QStringLiteral("rawLensEnabledModel"));
+  auto* brand   = harness.findObject<QObject>(QStringLiteral("rawLensBrandModel"));
+  auto* model   = harness.findObject<QObject>(QStringLiteral("rawLensModelModel"));
+  ASSERT_NE(enabled, nullptr);
+  ASSERT_NE(brand, nullptr);
+  ASSERT_NE(model, nullptr);
+  EXPECT_TRUE(enabled->property("value").toBool());
+  EXPECT_EQ(brand->property("currentValue").toString(), QStringLiteral("Unknown Maker"));
+  EXPECT_EQ(model->property("currentValue").toString(), QStringLiteral("Unknown Model"));
+  EXPECT_TRUE(session.calls.empty());
 }
 
 }  // namespace alcedo::ui::test

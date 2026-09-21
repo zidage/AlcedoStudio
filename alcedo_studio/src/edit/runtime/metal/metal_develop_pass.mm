@@ -27,6 +27,8 @@
 #include "edit/geometry/types.hpp"
 #include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/graph_ids.hpp"
+#include "edit/operators/geometry/lens_calib_op.hpp"
+#include "edit/operators/geometry/metal_lens_calib.hpp"
 #include "edit/operators/models/pending_parameter_patch.hpp"
 #include "edit/runtime/camera_color_gpu_params.hpp"
 #include "edit/runtime/develop_demosaic.hpp"
@@ -36,12 +38,47 @@
 #include "edit/runtime/texture_format.hpp"
 #include "image/metal_image.hpp"
 #include "metal/compute_pipeline_cache.hpp"
+#include "metal/metal_utils/geometry_utils.hpp"
 #include "utils/diagnostics/preview_performance.hpp"
 
 namespace alcedo {
 namespace {
 
 MetalDemosaicNetModelCache* g_metal_neural_cache_for_test = nullptr;
+
+void ExecuteMetalLensCalibration(MetalRenderDevice& device, const ExecutionPlan& plan,
+                                 const PreparedRawInput& input,
+                                 const DevelopPayload&   develop_params) {
+  LensCalibOp resolver(develop_params);
+  const auto  runtime =
+      resolver.ResolveRuntimeForImage(input.color_context, plan.source.develop_output_extent,
+                                      input.dng_warp_rectilinear.has_value());
+  if (!runtime.has_value()) {
+    return;
+  }
+
+  auto& workspace = device.Workspace();
+  auto* sensor    = workspace.Images().Find(plan.sensor_linear_output);
+  if (sensor == nullptr || sensor->Empty()) {
+    throw std::runtime_error("ExecuteMetalLensCalibration: missing develop.sensor_linear");
+  }
+
+  // The retained lens implementation owns a command buffer. Finish the DAG Develop command
+  // buffer before both paths access the same texture.
+  workspace.Device().SynchronizeRecordedWork(device.CommandContext());
+  auto corrected = metal::MetalImage::Wrap(static_cast<MTL::Texture*>(sensor->Texture().Native()));
+  metal::ApplyLensCalibration(corrected, *runtime);
+  if (corrected.Texture() != static_cast<MTL::Texture*>(sensor->Texture().Native()) ||
+      corrected.Width() != sensor->Texture().Width() ||
+      corrected.Height() != sensor->Texture().Height()) {
+    auto destination =
+        metal::MetalImage::Wrap(static_cast<MTL::Texture*>(sensor->Texture().Native()));
+    metal::utils::ResizeTexture(corrected, destination,
+                                cv::Size(static_cast<int>(sensor->Texture().Width()),
+                                         static_cast<int>(sensor->Texture().Height())),
+                                ResizeDownsampleAlgorithm::Bilinear);
+  }
+}
 
 struct GeometryResampleParams {
   float         m00;
@@ -454,6 +491,11 @@ void ExecuteMetalDevelop(MetalRenderDevice& device, const ExecutionPlan& plan,
     metal::EncodeWarpRectilinear(command_buffer, Native(source->Texture()),
                                  Native(warped.Texture()), *input.dng_warp_rectilinear, out_w,
                                  out_h);
+  }
+
+  if (plan.Contains(GpuPassKind::Lens)) {
+    diag::PreviewSubStageInterval lens(diag::PreviewSubStageKind::Lens);
+    ExecuteMetalLensCalibration(device, plan, input, flags);
   }
 
   if (pending.has_value()) {

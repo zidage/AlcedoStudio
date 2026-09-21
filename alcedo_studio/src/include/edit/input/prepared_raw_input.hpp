@@ -161,6 +161,7 @@ struct PreparedRawInput {
   // Present for unpacked RGB; absent for already scene-linear FromDirectRgb inputs.
   std::optional<RawRgbLinearizationParams> rgb_linearization;
   RawSensorGeometry                   sensor{};
+  /// Camera multipliers plus lens EXIF copied at unpack. Develop lens calibration reads this.
   RawRuntimeColorContext              color_context{};
   std::optional<dng::WarpRectilinear> dng_warp_rectilinear;
   SourceContentKey                    content_key{};

@@ -163,6 +163,8 @@ void SetOwnedScalars(PipelineDocument& document) {
 
   DevelopLensCalibrationUpdate lens;
   lens.lens_enabled = true;
+  lens.lens_maker   = "Zeiss";
+  lens.lens_model   = "Touit 1.8/32";
   document.Develop()->Params().ApplyLensCalibrationUpdate(lens);
 }
 
@@ -242,6 +244,12 @@ TEST(EditorPanelProjectionTest, ProjectsToneLookLutRawOdtAndGeometryFromExplicit
   const auto* lens_value = std::get_if<EditorPanelLensValue>(&lens->value);
   ASSERT_NE(lens_value, nullptr);
   EXPECT_TRUE(lens_value->enabled);
+  EXPECT_EQ(lens_value->lens_maker, "Zeiss");
+  EXPECT_EQ(lens_value->lens_model, "Touit 1.8/32");
+  const auto  adapters     = EditorPanelAdapterTable::Production();
+  const auto* lens_adapter = adapters.Find("lens_calib");
+  ASSERT_NE(lens_adapter, nullptr);
+  EXPECT_EQ(lens_adapter->panel_id, "raw");
 }
 
 TEST(EditorPanelProjectionTest, ReadsNamedInstanceNotFirstOperatorOfType) {
@@ -379,6 +387,33 @@ TEST(EditorPanelProjectionTest, AdditionalPanelAdapterDoesNotChangeParameterWrit
   EXPECT_TRUE(ParseEditorParameterWrite("exposure", nlohmann::json{{"exposure", 0.5}}, &parse_error)
                   .has_value())
       << parse_error;
+}
+
+TEST(EditorPanelProjectionTest, ParseApplyProjectsLensCatalogIdentityOntoRawPanel) {
+  auto document = CreateDefaultPipelineDocument();
+  const nlohmann::json params = {
+      {"lens_calib",
+       {{"enabled", true}, {"lens_maker", "Zeiss"}, {"lens_model", "Touit 1.8/32"}}}};
+  std::string error;
+  auto        write = ParseEditorParameterWrite("lens_calib", params, &error);
+  ASSERT_TRUE(write.has_value()) << error;
+  auto target = CompleteCurrentPanelParameterTarget(document, "lens_calib", &error);
+  ASSERT_TRUE(target.has_value()) << error;
+  ASSERT_TRUE(ApplyEditorParameterWrite(document, *target, *write, &error)) << error;
+
+  EditorPanelProjection projection;
+  ASSERT_TRUE(ProjectCurrentPanelFields(document, 7, &projection, &error)) << error;
+  const auto* lens = FindField(projection, "lens_calib");
+  ASSERT_NE(lens, nullptr);
+  const auto* lens_value = std::get_if<EditorPanelLensValue>(&lens->value);
+  ASSERT_NE(lens_value, nullptr);
+  EXPECT_TRUE(lens_value->enabled);
+  EXPECT_EQ(lens_value->lens_maker, "Zeiss");
+  EXPECT_EQ(lens_value->lens_model, "Touit 1.8/32");
+  const auto  adapters = EditorPanelAdapterTable::Production();
+  const auto* adapter  = adapters.Find("lens_calib");
+  ASSERT_NE(adapter, nullptr);
+  EXPECT_EQ(adapter->panel_id, "raw");
 }
 
 }  // namespace alcedo
