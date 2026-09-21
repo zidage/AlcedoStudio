@@ -12,7 +12,6 @@
 #include <memory>
 #include <opencv2/core/mat.hpp>
 #include <opencv2/core/matx.hpp>
-#include <opencv2/opencv.hpp>
 #include <stdexcept>
 
 #include "decoders/libraw_unpack_guard.hpp"

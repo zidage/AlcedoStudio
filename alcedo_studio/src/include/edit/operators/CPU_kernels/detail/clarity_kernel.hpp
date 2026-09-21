@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
+
 #include "edit/operators/op_base.hpp"
 #include "image/image_buffer.hpp"
 

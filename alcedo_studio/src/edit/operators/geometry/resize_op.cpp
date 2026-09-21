@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <opencv2/imgproc.hpp>
 #include <stdexcept>
 #include <utility>
 

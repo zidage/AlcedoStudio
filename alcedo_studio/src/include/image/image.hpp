@@ -9,7 +9,6 @@
 #include <filesystem>
 #include <json.hpp>
 #include <memory>
-#include <opencv2/opencv.hpp>
 #include <ostream>
 #include <string>
 #include <type/type.hpp>

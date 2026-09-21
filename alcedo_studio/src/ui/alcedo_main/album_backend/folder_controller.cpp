@@ -5,6 +5,7 @@
 #include "ui/alcedo_main/album_backend/folder_controller.hpp"
 
 #include <algorithm>
+#include <iostream>
 
 #include "ui/alcedo_main/album_backend/folder_controller.hpp"
 #include "ui/alcedo_main/album_backend/project_module.hpp"

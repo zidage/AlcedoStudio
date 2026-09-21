@@ -22,8 +22,6 @@
 #include <thread>
 #include <vector>
 
-#include <opencv2/opencv.hpp>
-
 #include "app/thumbnail_service.hpp"
 #include "image/image.hpp"
 #include "image/image_buffer.hpp"

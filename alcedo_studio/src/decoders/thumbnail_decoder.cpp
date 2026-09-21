@@ -9,7 +9,6 @@
 #include <future>
 #include <memory>
 #include <opencv2/imgcodecs.hpp>
-#include <opencv2/opencv.hpp>
 #include <utility>
 
 #include "image/image.hpp"

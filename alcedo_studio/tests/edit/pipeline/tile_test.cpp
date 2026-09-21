@@ -3,7 +3,10 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 #include <opencv2/highgui.hpp>
-#include <opencv2/opencv.hpp>
+#include <opencv2/core/mat.hpp>
+#include <opencv2/highgui.hpp>
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
 
 #include "edit/operators/basic/black_op.hpp"
 #include "edit/operators/basic/exposure_op.hpp"

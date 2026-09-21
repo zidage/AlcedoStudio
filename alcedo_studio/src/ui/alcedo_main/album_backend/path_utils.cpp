@@ -14,7 +14,8 @@
 #include <cmath>
 #include <cwctype>
 
-#include <opencv2/opencv.hpp>
+#include <opencv2/core/mat.hpp>
+#include <opencv2/imgproc.hpp>
 
 #include "ui/alcedo_main/i18n.hpp"
 
