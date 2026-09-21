@@ -11,7 +11,8 @@
 namespace alcedo {
 namespace CUDA {
 
-void ApplyLensCalibration(cv::cuda::GpuMat& image, const LensCalibGpuParams& params);
+void ApplyLensCalibration(cv::cuda::GpuMat& image, const LensCalibGpuParams& params,
+                          cv::cuda::Stream* stream = nullptr);
 
 }  // namespace CUDA
 }  // namespace alcedo

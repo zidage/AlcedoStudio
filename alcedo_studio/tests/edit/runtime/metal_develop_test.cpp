@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -223,6 +224,20 @@ auto MakeSrcImage(std::uint32_t width, std::uint32_t height) -> std::vector<Rgba
   return pixels;
 }
 
+auto RenderDevelop(PipelineDocument& document, const PreparedRawInput& prepared)
+    -> std::vector<Rgba> {
+  const auto plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  MetalRenderDevice device;
+  if (plan.peak_transient_bytes > 0) {
+    device.Workspace().TransientBuffers().Reserve(plan.peak_transient_bytes);
+  }
+  device.BeginRender();
+  ExecuteMetalDevelop(device, plan, prepared, document);
+  device.EndRender();
+  device.WaitIdle();
+  return Download(device, plan.sensor_linear_output);
+}
+
 }  // namespace
 
 TEST_F(MetalDevelopFixture, CanonDngProfileRendersAtFullResolutionAndInvalidatesOnlyColorCache) {
@@ -235,6 +250,40 @@ TEST_F(MetalDevelopFixture, UnpackedRgbLevelsAndAppliedWhiteBalanceProduceEquiva
 
 TEST_F(MetalDevelopFixture, RgbDngWarpProducesFinalSensorImageAndReusesPublishedCache) {
   gpu_dag_test::VerifyRgbWarpPublishes<MetalRenderDevice>();
+}
+
+TEST_F(MetalDevelopFixture, EnabledLensVignettingChangesDevelopSensorPixels) {
+  auto prepared = RawInputLoader::FromDirectRgb(gpu_dag_test::MakeF32RgbaPlane(96, 64),
+                                                gpu_dag_test::FullSensor(96, 64));
+  prepared.color_context.valid_               = true;
+  prepared.color_context.lens_metadata_valid_ = false;
+  prepared.color_context.focal_length_mm_     = 32.0f;
+  prepared.color_context.aperture_f_number_   = 1.8f;
+  prepared.color_context.focus_distance_m_    = 10.0f;
+  prepared.color_context.crop_factor_hint_    = 1.534f;
+
+  auto       disabled_document = CreateDefaultPipelineDocument();
+  const auto disabled          = RenderDevelop(disabled_document, prepared);
+
+  auto enabled_document = CreateDefaultPipelineDocument();
+  auto payload          = enabled_document.Develop()->Params().Params();
+  payload.lens_enabled  = true;
+  payload.apply_vignetting = true;
+  payload.apply_distortion = false;
+  payload.apply_tca        = false;
+  payload.apply_crop       = false;
+  payload.projection_enabled = false;
+  payload.lens_maker         = "Zeiss";
+  payload.lens_model         = "Touit 1.8/32";
+  payload.lens_profile_db_path = (std::filesystem::path(CONFIG_PATH) / "lens_calib").string();
+  enabled_document.Develop()->Params().ReplaceParams(std::move(payload));
+  const auto enabled = RenderDevelop(enabled_document, prepared);
+
+  ASSERT_EQ(enabled.size(), disabled.size());
+  EXPECT_TRUE(PixelsDiffer(enabled, disabled));
+  const auto corner = enabled.front();
+  EXPECT_GT(corner.r, disabled.front().r);
+  EXPECT_GT(corner.g, disabled.front().g);
 }
 
 TEST_F(MetalDevelopFixture, LegacyRgbEntryNormalizesAndRemovesAppliedWhiteBalanceOnGpu) {

@@ -318,11 +318,9 @@ TEST(EditorGeometryPanelQmlTest, GeometryPanelExposesTypedModelsAndEnablesOverla
   ASSERT_NE(harness.findObject<QObject>(QStringLiteral("editorAdjustmentPanel_geometry")), nullptr);
   ASSERT_NE(harness.findObject<QObject>(QStringLiteral("geometryAspectModel")), nullptr);
   ASSERT_NE(harness.findObject<QObject>(QStringLiteral("geometryRotationModel")), nullptr);
-  ASSERT_NE(harness.findObject<QObject>(QStringLiteral("geometryLensEnabledModel")), nullptr);
-  auto* lens_section =
-      harness.findObject<QObject>(QStringLiteral("editorAdjustmentGroupShell_geometry_lens"));
-  ASSERT_NE(lens_section, nullptr);
-  EXPECT_TRUE(lens_section->property("expanded").toBool());
+  EXPECT_EQ(harness.findObject<QObject>(QStringLiteral("geometryLensEnabledModel")), nullptr);
+  EXPECT_EQ(harness.findObject<QObject>(QStringLiteral("editorAdjustmentGroupShell_geometry_lens")),
+            nullptr);
   EXPECT_TRUE(interaction.cropToolEnabled());
   EXPECT_TRUE(interaction.cropOverlayVisible());
 }
@@ -354,7 +352,7 @@ TEST(EditorGeometryPanelQmlTest, PanelEnterSyncDoesNotRouteDuplicateCropViewChan
   EXPECT_TRUE(interaction.viewChangeRoutingEnabled());
 }
 
-TEST(EditorGeometryPanelQmlTest, SnapshotProjectsCropLensAndDoesNotSubmit) {
+TEST(EditorGeometryPanelQmlTest, SnapshotProjectsCropAndDoesNotSubmit) {
   GeometrySession session(
       MakeSnapshot(QStringLiteral("ratio_16_9"), 0.1, 0.2, 0.7, 0.6, 12.5,
                    QStringLiteral("Unknown Maker"), QStringLiteral("Unknown Model")),
@@ -377,16 +375,10 @@ TEST(EditorGeometryPanelQmlTest, SnapshotProjectsCropLensAndDoesNotSubmit) {
   auto* wModel   = harness.findObject<QObject>(QStringLiteral("geometryCropWidthModel"));
   auto* rotation = harness.findObject<QObject>(QStringLiteral("geometryRotationModel"));
   auto* aspect   = harness.findObject<QObject>(QStringLiteral("geometryAspectModel"));
-  auto* lens     = harness.findObject<QObject>(QStringLiteral("geometryLensEnabledModel"));
-  auto* brand    = harness.findObject<QObject>(QStringLiteral("geometryLensBrandModel"));
-  auto* model    = harness.findObject<QObject>(QStringLiteral("geometryLensModelModel"));
   ASSERT_NE(xModel, nullptr);
   ASSERT_NE(wModel, nullptr);
   ASSERT_NE(rotation, nullptr);
   ASSERT_NE(aspect, nullptr);
-  ASSERT_NE(lens, nullptr);
-  ASSERT_NE(brand, nullptr);
-  ASSERT_NE(model, nullptr);
 
   EXPECT_NEAR(xModel->property("value").toDouble(), 0.1, 1e-6);
   EXPECT_NEAR(wModel->property("value").toDouble(), 0.7, 1e-6);
@@ -396,9 +388,6 @@ TEST(EditorGeometryPanelQmlTest, SnapshotProjectsCropLensAndDoesNotSubmit) {
   EXPECT_EQ(geometryPanel->property("sourceImageHeight").toInt(), 4000);
   EXPECT_EQ(interaction.imageWidth(), 6000);
   EXPECT_EQ(interaction.imageHeight(), 4000);
-  EXPECT_FALSE(lens->property("value").toBool());
-  EXPECT_EQ(brand->property("currentValue").toString(), QStringLiteral("Unknown Maker"));
-  EXPECT_EQ(model->property("currentValue").toString(), QStringLiteral("Unknown Model"));
   EXPECT_TRUE(session.calls.empty());
   EXPECT_NEAR(interaction.cropRectNormalized().x(), 0.1, 1e-6);
 }
@@ -568,36 +557,6 @@ TEST(EditorGeometryPanelQmlTest, LeavingGeometryQueuesPanelRefreshBeforeFinalCro
   EXPECT_EQ(session.actions.at(0), QStringLiteral("panel:look"));
   EXPECT_EQ(session.actions.at(1), QStringLiteral("submit:crop_rotate"));
   EXPECT_FALSE(interaction.cropOverlayVisible());
-}
-
-TEST(EditorGeometryPanelQmlTest, LensSelectionKeepsLegacyDefaultsAndIsAvailableWhenDisabled) {
-  GeometrySession         session;
-  FakeGeometryInteraction interaction;
-  AdjustmentStackHarness  harness(&session, &interaction);
-  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
-
-  auto* enabled = harness.findObject<QObject>(QStringLiteral("geometryLensEnabledModel"));
-  auto* brand   = harness.findObject<QObject>(QStringLiteral("geometryLensBrandModel"));
-  auto* model   = harness.findObject<QObject>(QStringLiteral("geometryLensModelModel"));
-  ASSERT_NE(enabled, nullptr);
-  ASSERT_NE(brand, nullptr);
-  ASSERT_NE(model, nullptr);
-
-  EXPECT_FALSE(enabled->property("value").toBool());
-  EXPECT_TRUE(brand->property("enabled").toBool());
-  const auto brand_entries = brand->property("entries").toList();
-  ASSERT_GT(brand_entries.size(), 1);
-
-  ASSERT_TRUE(QMetaObject::invokeMethod(brand, "selectIndex", Q_ARG(int, 1)));
-  ASSERT_EQ(session.calls.size(), 1u);
-  const auto* lens =
-      std::get_if<alcedo::DevelopLensCalibrationUpdate>(&session.calls.back().write);
-  ASSERT_NE(lens, nullptr);
-  EXPECT_TRUE(lens->apply_distortion.has_value());
-  EXPECT_TRUE(lens->lens_profile_db_path.has_value());
-  EXPECT_FALSE(lens->lens_profile_db_path->empty());
-  EXPECT_TRUE(model->property("enabled").toBool());
-  EXPECT_FALSE(model->property("currentValue").toString().isEmpty());
 }
 
 }  // namespace alcedo::ui::test

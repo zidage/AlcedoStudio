@@ -26,6 +26,8 @@
 #include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/graph_ids.hpp"
+#include "edit/operators/geometry/lens_calib_op.hpp"
+#include "edit/operators/geometry/opencl_lens_calib_ops.hpp"
 #include "edit/operators/models/pending_parameter_patch.hpp"
 #include "edit/runtime/camera_color_gpu_params.hpp"
 #include "edit/runtime/develop_demosaic.hpp"
@@ -39,8 +41,10 @@
 #include "gpu/transient_allocation_policy.hpp"
 #include "gpu/transient_buffer_scope.hpp"
 #include "gpu/transient_last_use.hpp"
+#include "image/opencl_image.hpp"
 #include "opencl/opencl_api_counters.hpp"
 #include "opencl/opencl_check.hpp"
+#include "opencl/opencl_geometry_utils.hpp"
 #include "opencl/opencl_kernel_cache.hpp"
 #include "utils/diagnostics/preview_performance.hpp"
 
@@ -78,6 +82,43 @@ struct ImageWarpParams {
 auto AcquireRgba(OpenClRenderWorkspace& workspace, const GraphValueId& id, std::uint32_t width,
                  std::uint32_t height) -> ResourceLease<OpenClBackend>& {
   return workspace.AcquireImageForWrite(id, {width, height, TextureFormat::Rgba32f});
+}
+
+void ExecuteOpenClLensCalibration(OpenClRenderDevice& device, const ExecutionPlan& plan,
+                                  const PreparedRawInput& input,
+                                  const DevelopPayload&   develop_params) {
+  LensCalibOp resolver(develop_params);
+  const auto  runtime =
+      resolver.ResolveRuntimeForImage(input.color_context, plan.source.develop_output_extent,
+                                      input.dng_warp_rectilinear.has_value());
+  if (!runtime.has_value()) {
+    return;
+  }
+
+  auto& workspace = device.Workspace();
+  auto* sensor    = workspace.Images().Find(plan.sensor_linear_output);
+  if (sensor == nullptr || sensor->Empty()) {
+    throw std::runtime_error("ExecuteOpenClLensCalibration: missing develop.sensor_linear");
+  }
+
+  workspace.Device().SynchronizeRecordedWork(device.CommandContext());
+  const int width  = static_cast<int>(sensor->Texture().Width());
+  const int height = static_cast<int>(sensor->Texture().Height());
+  const auto bytes = static_cast<std::size_t>(width) * height * sizeof(float) * 4U;
+  auto       staging = workspace.Device().CreateBuffer(bytes);
+  workspace.Device().CopyImageToBuffer(sensor->Texture(), staging, 0, device.CommandContext());
+  // Copy is on the DAG product queue. The retained lens kernels use OpenClContext::Queue(),
+  // which is a different object when a profiling override is installed.
+  workspace.Device().SynchronizeRecordedWork(device.CommandContext());
+  auto corrected = opencl::OpenClImage::Wrap(staging.Native(), width, height, CV_32FC4);
+  OpenCL::Geometry::ApplyLensCalibration(corrected, *runtime);
+  if (corrected.Buffer() != staging.Native() || corrected.Width() != width ||
+      corrected.Height() != height) {
+    auto destination = opencl::OpenClImage::Wrap(staging.Native(), width, height, CV_32FC4);
+    OpenCL::Geometry::ResizeLinear(corrected, destination, cv::Size(width, height));
+    CheckOpenCl(clFinish(workspace.Device().NativeQueue()), "lens calibration resize");
+  }
+  workspace.Device().CopyBufferToImage(staging, 0, sensor->Texture(), device.CommandContext());
 }
 
 auto MakeEncodeQueue(OpenClRenderDevice& device) -> opencl::OpenClEncodeQueue {
@@ -576,6 +617,11 @@ void ExecuteOpenClDevelop(OpenClRenderDevice& device, const ExecutionPlan& plan,
     diag::PreviewSubStageInterval warp(diag::PreviewSubStageKind::DngWarp);
     EncodeWarp(device, source->Texture().Native(), warped.Texture().Native(),
                *input.dng_warp_rectilinear, out_w, out_h);
+  }
+
+  if (plan.Contains(GpuPassKind::Lens)) {
+    diag::PreviewSubStageInterval lens(diag::PreviewSubStageKind::Lens);
+    ExecuteOpenClLensCalibration(device, plan, input, flags);
   }
 
   if (pending.has_value()) {

@@ -197,6 +197,8 @@ void ApplyDevelop(DevelopParamsModel& develop, const std::vector<LegacyOperator>
     payload.target_projection      = json_util::ReadString(lens_params, "target_projection", "unknown");
     payload.lens_profile_db_path =
         json_util::ReadString(lens_params, "lens_profile_db_path", payload.lens_profile_db_path);
+    payload.lens_maker = json_util::ReadString(lens_params, "lens_maker", payload.lens_maker);
+    payload.lens_model = json_util::ReadString(lens_params, "lens_model", payload.lens_model);
   }
   if (const auto* temp = FindOp(operators, kLegacyColorTemp)) {
     const auto color_temp   = NestedOrSelf(temp->params, "color_temp");

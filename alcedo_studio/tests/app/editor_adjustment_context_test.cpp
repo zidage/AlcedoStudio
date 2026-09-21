@@ -236,6 +236,26 @@ TEST(EditorAdjustmentContextTest, ImageExifDisplayCopiesOwnerFieldsAndRejectsInv
   EXPECT_EQ(*from_image.iso, 200u);
 }
 
+TEST(EditorAdjustmentContextTest, ImageExifDisplayCopiesLensMakeAndModel) {
+  ExifDisplayMetaData metadata;
+  metadata.lens_make_ = "Canon";
+  metadata.lens_      = "Canon EF 70-200mm f/2.8L IS II USM";
+  const auto display  = ReadEditorImageExifDisplay(metadata);
+  EXPECT_EQ(display.lens_make, "Canon");
+  EXPECT_EQ(display.lens_model, "Canon EF 70-200mm f/2.8L IS II USM");
+
+  const auto blank = ReadEditorImageExifDisplay(ExifDisplayMetaData{});
+  EXPECT_TRUE(blank.lens_make.empty());
+  EXPECT_TRUE(blank.lens_model.empty());
+
+  Image image;
+  image.exif_display_ = metadata;
+  image.has_exif_display_.store(true);
+  const auto from_image = ReadEditorImageExifDisplay(image);
+  EXPECT_EQ(from_image.lens_make, "Canon");
+  EXPECT_EQ(from_image.lens_model, "Canon EF 70-200mm f/2.8L IS II USM");
+}
+
 TEST(EditorAdjustmentContextTest, ContextCopiesCallerExifAndDoesNotRereadOnNodeChange) {
   auto document = CreateDefaultPipelineDocument();
   ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.b"}).empty());

@@ -533,6 +533,82 @@ auto HashFloatBits(float value) -> std::uint64_t {
 
 LensCalibOp::LensCalibOp(const nlohmann::json& params) { SetParams(params); }
 
+LensCalibOp::LensCalibOp(const DevelopPayload& params)
+    : lens_profile_db_path_(params.lens_profile_db_path),
+      enabled_(params.lens_enabled),
+      apply_vignetting_(params.apply_vignetting),
+      apply_distortion_(params.apply_distortion),
+      apply_tca_(params.apply_tca),
+      apply_crop_(params.apply_crop),
+      auto_scale_(params.auto_scale),
+      use_user_scale_(params.use_user_scale),
+      user_scale_(params.user_scale),
+      projection_enabled_(params.projection_enabled),
+      target_projection_(params.target_projection) {
+  input_meta_.lens_maker_ = params.lens_maker;
+  input_meta_.lens_model_ = params.lens_model;
+}
+
+auto LensCalibOp::ResolveRuntimeForImage(const RawRuntimeColorContext& context, Extent2D extent,
+                                         bool dng_geometry_applied) const
+    -> std::optional<LensCalibGpuParams> {
+  if (!enabled_) {
+    return std::nullopt;
+  }
+  if (extent.Empty()) {
+    throw std::runtime_error("LensCalibOp: cannot resolve an empty Develop image");
+  }
+
+  InputMeta meta;
+  meta.cam_maker_         = context.camera_make_;
+  meta.cam_model_         = context.camera_model_;
+  meta.lens_maker_        = context.lens_make_;
+  meta.lens_model_        = context.lens_model_;
+  meta.focal_length_mm_   = context.focal_length_mm_;
+  meta.aperture_f_number_ = context.aperture_f_number_;
+  meta.distance_m_        = context.focus_distance_m_;
+  meta.focal_35mm_mm_     = context.focal_35mm_mm_;
+  meta.crop_factor_hint_  = context.crop_factor_hint_;
+  if (!input_meta_.lens_maker_.empty()) {
+    meta.lens_maker_ = input_meta_.lens_maker_;
+  }
+  if (!input_meta_.lens_model_.empty()) {
+    meta.lens_model_ = input_meta_.lens_model_;
+  }
+  ResolveRuntimeForMeta(meta, dng_geometry_applied, nullptr);
+  if (!has_resolved_params_) {
+    return std::nullopt;
+  }
+
+  LensCalibGpuParams runtime = resolved_params_;
+  runtime.src_width          = static_cast<std::int32_t>(extent.width);
+  runtime.src_height         = static_cast<std::int32_t>(extent.height);
+  runtime.dst_width          = static_cast<std::int32_t>(extent.width);
+  runtime.dst_height         = static_cast<std::int32_t>(extent.height);
+  if (runtime.use_auto_scale != 0 && runtime.use_user_scale == 0) {
+    runtime.resolved_scale =
+        ResolveScaleForImageSize(resolved_input_meta_, lens_profile_db_path_, runtime,
+                                 static_cast<int>(extent.width), static_cast<int>(extent.height));
+  }
+
+  const double width  = extent.width >= 2U ? static_cast<double>(extent.width - 1U) : 1.0;
+  const double height = extent.height >= 2U ? static_cast<double>(extent.height - 1U) : 1.0;
+  const double crop_factor =
+      IsFinitePositive(runtime.camera_crop_factor) ? runtime.camera_crop_factor : 1.0;
+  const double real_focal = IsFinitePositive(runtime.real_focal_mm) ? runtime.real_focal_mm : 1.0;
+  const double norm_scale = static_cast<double>(kFullFrameDiagonalMm) / crop_factor /
+                            std::hypot(width + 1.0, height + 1.0) / real_focal;
+  runtime.norm_scale = static_cast<float>(norm_scale);
+  runtime.norm_unscale =
+      std::fabs(norm_scale) > kEpsilon ? static_cast<float>(1.0 / norm_scale) : 1.0f;
+  const double min_size = std::min(width, height);
+  runtime.center_x =
+      static_cast<float>((width * 0.5 + min_size * 0.5 * runtime.lens_center_x) * norm_scale);
+  runtime.center_y =
+      static_cast<float>((height * 0.5 + min_size * 0.5 * runtime.lens_center_y) * norm_scale);
+  return runtime;
+}
+
 auto LensCalibOp::ProjectionFromString(const std::string& text) -> LensCalibProjectionType {
   const std::string token = CanonicalizeProjectionToken(text);
   if (token == "rectilinear") {
@@ -975,31 +1051,42 @@ void LensCalibOp::ResolveRuntime(OperatorParams& params) const {
   // Keep input_meta_ as user overrides only. Do not persist auto-resolved metadata back into
   // operator params; otherwise UI-side param patching can churn every frame.
 
+  ResolveRuntimeForMeta(meta, params.raw_dng_warp_rectilinear_present_, &params);
+}
+
+void LensCalibOp::ResolveRuntimeForMeta(const InputMeta& meta, bool dng_geometry_applied,
+                                        OperatorParams* owner) const {
   if (meta.lens_model_.empty() || !IsFinitePositive(meta.focal_length_mm_)) {
-    params.lens_calib_runtime_valid_  = false;
-    params.lens_calib_runtime_failed_ = true;
-    params.lens_calib_runtime_dirty_  = false;
-    has_resolved_params_              = false;
+    if (owner != nullptr) {
+      owner->lens_calib_runtime_valid_  = false;
+      owner->lens_calib_runtime_failed_ = true;
+      owner->lens_calib_runtime_dirty_  = false;
+    }
+    has_resolved_params_ = false;
     return;
   }
 
   const auto  db_root = ResolveDbRootPath(lens_profile_db_path_);
   lfDatabase* db      = GetLensfunDb(db_root);
   if (!db) {
-    params.lens_calib_runtime_valid_  = false;
-    params.lens_calib_runtime_failed_ = true;
-    params.lens_calib_runtime_dirty_  = false;
-    has_resolved_params_              = false;
+    if (owner != nullptr) {
+      owner->lens_calib_runtime_valid_  = false;
+      owner->lens_calib_runtime_failed_ = true;
+      owner->lens_calib_runtime_dirty_  = false;
+    }
+    has_resolved_params_ = false;
     return;
   }
 
   const lfCamera* camera = FindBestCamera(db, meta.cam_maker_, meta.cam_model_);
   const lfLens*   lens   = FindBestLens(db, camera, meta);
   if (!lens) {
-    params.lens_calib_runtime_valid_  = false;
-    params.lens_calib_runtime_failed_ = true;
-    params.lens_calib_runtime_dirty_  = false;
-    has_resolved_params_              = false;
+    if (owner != nullptr) {
+      owner->lens_calib_runtime_valid_  = false;
+      owner->lens_calib_runtime_failed_ = true;
+      owner->lens_calib_runtime_dirty_  = false;
+    }
+    has_resolved_params_ = false;
     return;
   }
 
@@ -1044,7 +1131,7 @@ void LensCalibOp::ResolveRuntime(OperatorParams& params) const {
   lfLensCalibCrop crop{};
   const bool      crop_ok =
       lf_lens_interpolate_crop(lens, crop_factor, meta.focal_length_mm_, &crop) != 0;
-  const bool         dng_geometry_wins = params.raw_dng_warp_rectilinear_present_;
+  const bool         dng_geometry_wins = dng_geometry_applied;
 
   LensCalibGpuParams runtime{};
   resolved_input_meta_          = meta;
@@ -1167,20 +1254,25 @@ void LensCalibOp::ResolveRuntime(OperatorParams& params) const {
 
   if (runtime.apply_vignetting == 0 && runtime.apply_distortion == 0 && runtime.apply_tca == 0 &&
       runtime.apply_projection == 0 && runtime.apply_crop == 0) {
-    params.lens_calib_runtime_valid_  = false;
-    params.lens_calib_runtime_failed_ = false;
-    params.lens_calib_runtime_dirty_  = false;
-    has_resolved_params_              = false;
-    params.lens_calib_runtime_params_ = runtime;
+    if (owner != nullptr) {
+      owner->lens_calib_runtime_valid_  = false;
+      owner->lens_calib_runtime_failed_ = false;
+      owner->lens_calib_runtime_dirty_  = false;
+      owner->lens_calib_runtime_params_ = runtime;
+    }
+    resolved_params_     = runtime;
+    has_resolved_params_ = false;
     return;
   }
 
-  params.lens_calib_runtime_valid_  = true;
-  params.lens_calib_runtime_failed_ = false;
-  params.lens_calib_runtime_dirty_  = false;
-  params.lens_calib_runtime_params_ = runtime;
-  resolved_params_                  = runtime;
-  has_resolved_params_              = true;
+  if (owner != nullptr) {
+    owner->lens_calib_runtime_valid_  = true;
+    owner->lens_calib_runtime_failed_ = false;
+    owner->lens_calib_runtime_dirty_  = false;
+    owner->lens_calib_runtime_params_ = runtime;
+  }
+  resolved_params_     = runtime;
+  has_resolved_params_ = true;
 }
 
 void LensCalibOp::SetGlobalParams(OperatorParams& params) const {

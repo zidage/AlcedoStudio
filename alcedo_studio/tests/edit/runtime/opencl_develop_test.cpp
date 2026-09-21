@@ -296,6 +296,41 @@ TEST_F(OpenClDevelopFixture, RgbDngWarpProducesFinalSensorImageAndReusesPublishe
   gpu_dag_test::VerifyRgbWarpPublishes<OpenClRenderDevice>();
 }
 
+TEST_F(OpenClDevelopFixture, EnabledLensVignettingChangesDevelopSensorPixels) {
+  auto prepared = RawInputLoader::FromDirectRgb(gpu_dag_test::MakeF32RgbaPlane(96, 64),
+                                                gpu_dag_test::FullSensor(96, 64));
+  prepared.color_context.valid_               = true;
+  prepared.color_context.lens_metadata_valid_ = false;
+  prepared.color_context.focal_length_mm_     = 32.0f;
+  prepared.color_context.aperture_f_number_   = 1.8f;
+  prepared.color_context.focus_distance_m_    = 10.0f;
+  prepared.color_context.crop_factor_hint_    = 1.534f;
+
+  auto       disabled_document                = CreateDefaultPipelineDocument();
+  const auto disabled                         = RenderDevelop(disabled_document, prepared);
+
+  auto       enabled_document                 = CreateDefaultPipelineDocument();
+  auto       payload                          = enabled_document.Develop()->Params().Params();
+  payload.lens_enabled                        = true;
+  payload.apply_vignetting                    = true;
+  payload.apply_distortion                    = false;
+  payload.apply_tca                           = false;
+  payload.apply_crop                          = false;
+  payload.projection_enabled                  = false;
+  payload.lens_maker                          = "Zeiss";
+  payload.lens_model                          = "Touit 1.8/32";
+  payload.lens_profile_db_path =
+      (std::filesystem::path(ALCEDO_OPENCL_SHADER_SOURCE_ROOT) / "config/lens_calib").string();
+  enabled_document.Develop()->Params().ReplaceParams(std::move(payload));
+  const auto enabled = RenderDevelop(enabled_document, prepared);
+
+  ASSERT_EQ(enabled.size(), disabled.size());
+  EXPECT_TRUE(PixelsDiffer(enabled, disabled));
+  const auto corner = enabled.front();
+  EXPECT_GT(corner.r, disabled.front().r);
+  EXPECT_GT(corner.g, disabled.front().g);
+}
+
 TEST_F(OpenClDevelopFixture, LegacyRgbEntryNormalizesAndRemovesAppliedWhiteBalanceOnGpu) {
   gpu_dag_test::VerifyLegacyRgbGpu(RawGpuBackend::OpenCL);
 }

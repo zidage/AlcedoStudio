@@ -50,6 +50,25 @@ TEST(GpuDagResultContentKey, GraphCompilerAssignsDistinctSensorGeometryAndDevelo
               plan.develop_output < plan.sensor_linear_output);
 }
 
+TEST(GpuDagResultContentKey, SensorLinearKeyIncludesLensCatalogIdentity) {
+  auto       prepared = MakePrepared();
+  auto       document = CreateDefaultPipelineDocument();
+  auto       plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  auto       payload  = document.Develop()->Params().Params();
+  payload.lens_enabled = true;
+  payload.lens_maker   = "Zeiss";
+  payload.lens_model   = "Touit 1.8/32";
+  document.Develop()->Params().ReplaceParams(payload);
+  const auto base = BuildFrameResultContentKeys(plan, prepared, document);
+
+  payload.lens_model = "Touit 2.8/50";
+  document.Develop()->Params().ReplaceParams(payload);
+  const auto edited = BuildFrameResultContentKeys(plan, prepared, document);
+  EXPECT_NE(edited.sensor_linear, base.sensor_linear);
+  EXPECT_NE(edited.geometry_scene_source, base.geometry_scene_source);
+  EXPECT_NE(edited.develop_image, base.develop_image);
+}
+
 TEST(GpuDagResultContentKey, SensorLinearKeyIgnoresCctTintGradeAndDrt) {
   auto       prepared = MakePrepared();
   auto       document = CreateDefaultPipelineDocument();

@@ -5,14 +5,19 @@
 #include "edit/runtime/cuda/cuda_develop_pass.hpp"
 
 #include <cstdint>
+#include <cuda_runtime.h>
 #include <opencv2/core/cuda.hpp>
 #include <opencv2/core/cuda_stream_accessor.hpp>
 #include <stdexcept>
+#include <string>
 
 #include "decoders/processor/operators/gpu/cuda_color_space_conv.hpp"
 #include "decoders/processor/operators/gpu/cuda_dng_warp.hpp"
 #include "decoders/processor/operators/gpu/cuda_highlight_reconstruct.hpp"
 #include "decoders/processor/operators/gpu/cuda_white_balance.hpp"
+#include "edit/operators/geometry/cuda_geometry_ops.hpp"
+#include "edit/operators/geometry/cuda_lens_calib_ops.hpp"
+#include "edit/operators/geometry/lens_calib_op.hpp"
 #include "edit/operators/models/pending_parameter_patch.hpp"
 #include "edit/runtime/cuda/cuda_sensor_demosaic.hpp"
 #include "edit/runtime/cuda/geometry_resample_pass.hpp"
@@ -51,6 +56,44 @@ auto AllocateTransient(CudaRenderWorkspace& workspace, std::size_t bytes) -> voi
 auto AcquireRgba(CudaRenderWorkspace& workspace, const GraphValueId& id, std::uint32_t width,
                  std::uint32_t height) -> ResourceLease<CudaBackend>& {
   return workspace.AcquireImageForWrite(id, {width, height, TextureFormat::Rgba32f});
+}
+
+void ExecuteCudaLensCalibration(CudaRenderDevice& device, const ExecutionPlan& plan,
+                                const PreparedRawInput& input,
+                                const DevelopPayload&   develop_params) {
+  LensCalibOp resolver(develop_params);
+  const auto  runtime =
+      resolver.ResolveRuntimeForImage(input.color_context, plan.source.develop_output_extent,
+                                      input.dng_warp_rectilinear.has_value());
+  if (!runtime.has_value()) {
+    return;
+  }
+
+  auto& workspace = device.Workspace();
+  auto* sensor    = workspace.Images().Find(plan.sensor_linear_output);
+  if (sensor == nullptr || sensor->Empty()) {
+    throw std::runtime_error("ExecuteCudaLensCalibration: missing develop.sensor_linear");
+  }
+
+  auto stream = WrapStream(device.CommandContext().Stream());
+  auto sensor_image =
+      WrapF32C4(sensor->Texture().DevicePointer(), static_cast<int>(sensor->Texture().Width()),
+                static_cast<int>(sensor->Texture().Height()));
+  auto corrected = sensor_image;
+  CUDA::ApplyLensCalibration(corrected, *runtime, &stream);
+  if (corrected.data != sensor_image.data || corrected.cols != sensor_image.cols ||
+      corrected.rows != sensor_image.rows) {
+    if (corrected.size() == sensor_image.size() && corrected.type() == sensor_image.type()) {
+      corrected.copyTo(sensor_image, stream);
+    } else {
+      CUDA::ResizeLinear(corrected, sensor_image, sensor_image.size());
+      const auto error = cudaDeviceSynchronize();
+      if (error != cudaSuccess) {
+        throw std::runtime_error(std::string("ExecuteCudaLensCalibration: resize failed: ") +
+                                 cudaGetErrorString(error));
+      }
+    }
+  }
 }
 
 }  // namespace
@@ -155,6 +198,11 @@ void ExecuteCudaDevelop(CudaRenderDevice& device, const ExecutionPlan& plan,
                             static_cast<int>(out_h));
     diag::PreviewSubStageInterval warp(diag::PreviewSubStageKind::DngWarp);
     CUDA::WarpDngRectilinear(source, warped, *input.dng_warp_rectilinear, &stream);
+  }
+
+  if (plan.Contains(GpuPassKind::Lens)) {
+    diag::PreviewSubStageInterval lens(diag::PreviewSubStageKind::Lens);
+    ExecuteCudaLensCalibration(device, plan, input, flags);
   }
 
   if (pending.has_value()) {

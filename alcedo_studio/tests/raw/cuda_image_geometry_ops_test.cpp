@@ -492,6 +492,33 @@ TEST(CudaLensCalibOpsTest, VignettingPaMatchesCpuReference) {
   EXPECT_LT(MeanAbsError(gpu_out, cpu_ref), 3e-5);
 }
 
+TEST(CudaLensCalibOpsTest, VignettingOnCommandStreamMatchesCpuAfterWaitingThatStream) {
+  if (!EnsureCudaDevice()) {
+    GTEST_SKIP() << "No CUDA device available.";
+  }
+
+  const cv::Mat src = MakeGradientMat(96, 120, CV_32FC4);
+
+  LensCalibGpuParams params = MakeIdentityLensParams(src.rows, src.cols);
+  params.apply_vignetting   = 1;
+  params.vignetting_model   = static_cast<std::int32_t>(LensCalibVignettingModel::PA);
+  params.vignetting_terms[0] = -0.12f;
+  params.vignetting_terms[1] = 0.08f;
+  params.vignetting_terms[2] = -0.02f;
+
+  cv::cuda::Stream stream;
+  cv::cuda::GpuMat d_img;
+  d_img.upload(src, stream);
+  CUDA::ApplyLensCalibration(d_img, params, &stream);
+
+  cv::Mat gpu_out;
+  d_img.download(gpu_out, stream);
+  stream.waitForCompletion();
+
+  const cv::Mat cpu_ref = ApplyLensCalibCpuReference(src, params);
+  EXPECT_LT(MeanAbsError(gpu_out, cpu_ref), 3e-5);
+}
+
 TEST(CudaLensCalibOpsTest, DistortionModelsMatchCpuReference) {
   if (!EnsureCudaDevice()) {
     GTEST_SKIP() << "No CUDA device available.";

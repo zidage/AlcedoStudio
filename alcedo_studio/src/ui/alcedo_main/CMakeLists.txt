@@ -643,6 +643,7 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorDisplayTransformPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorGeometryPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorRawDecodePanel.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/LensCatalogPicker.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorNodeDelegate.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorEndpointNodeDelegate.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorNodeMaskDrawer.qml"

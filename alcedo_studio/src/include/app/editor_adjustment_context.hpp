@@ -44,6 +44,10 @@ struct EditorImageExifDisplay {
   std::optional<std::uint64_t>       iso;
   std::optional<float>               aperture;
   std::optional<float>               focal_mm;
+  /// RAW lens identity used by the Lens Calibration auto-detect control.
+  /// These are not header tokens; empty means the EXIF field is missing.
+  std::string                        lens_make;
+  std::string                        lens_model;
 };
 
 /// UTF-8 em dash used when a header EXIF field is missing or invalid.

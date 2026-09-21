@@ -81,7 +81,9 @@ struct EditorPanelOdtValue {
 };
 
 struct EditorPanelLensValue {
-  bool enabled = false;
+  bool        enabled = false;
+  std::string lens_maker;
+  std::string lens_model;
 };
 
 struct EditorPanelGeometryValue {

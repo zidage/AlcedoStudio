@@ -462,6 +462,8 @@ auto ParseLensCalibrationUpdate(const nlohmann::json& params) -> DevelopLensCali
   update.projection_enabled   = ReadOptionalBool(object, {"projection_enabled"}, "lens_calib");
   update.target_projection    = ReadOptionalString(object, {"target_projection"}, "lens_calib");
   update.lens_profile_db_path = ReadOptionalString(object, {"lens_profile_db_path"}, "lens_calib");
+  update.lens_maker           = ReadOptionalString(object, {"lens_maker"}, "lens_calib");
+  update.lens_model           = ReadOptionalString(object, {"lens_model"}, "lens_calib");
   return update;
 }
 

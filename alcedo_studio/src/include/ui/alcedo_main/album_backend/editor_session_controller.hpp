@@ -113,6 +113,10 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   Q_PROPERTY(QString exifIsoText READ exif_iso_text NOTIFY ImageExifChanged)
   Q_PROPERTY(QString exifApertureText READ exif_aperture_text NOTIFY ImageExifChanged)
   Q_PROPERTY(QString exifFocalText READ exif_focal_text NOTIFY ImageExifChanged)
+  /// RAW lens identity for the Lens Calibration auto-detect control. Empty when
+  /// the image EXIF carries no lens maker/model. Same lifetime as exifLineText.
+  Q_PROPERTY(QString exifLensMake READ exif_lens_make NOTIFY ImageExifChanged)
+  Q_PROPERTY(QString exifLensModel READ exif_lens_model NOTIFY ImageExifChanged)
   // Left tool rail page: empty string = collapsed; "history", "versions", or
   // "nodes" = expanded. Survives workspace round-trips within the process
   // (not persisted across application restart).
@@ -189,6 +193,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   [[nodiscard]] QString    exif_iso_text() const { return exif_iso_text_; }
   [[nodiscard]] QString    exif_aperture_text() const { return exif_aperture_text_; }
   [[nodiscard]] QString    exif_focal_text() const { return exif_focal_text_; }
+  [[nodiscard]] QString    exif_lens_make() const { return exif_lens_make_; }
+  [[nodiscard]] QString    exif_lens_model() const { return exif_lens_model_; }
   [[nodiscard]] QString    editor_tool_panel_page() const { return editor_tool_panel_page_; }
   [[nodiscard]] qulonglong session_generation() const;
   [[nodiscard]] qulonglong history_revision() const;
@@ -390,6 +396,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void                     SyncIdentityFromBackend();
   void                     RefreshImageExifDisplay();
   void                     ApplyExifRowText(const alcedo::EditorExifRowText& text);
+  void                     ApplyExifLensIdentity(const alcedo::EditorImageExifDisplay& display);
   void                     ApplyOpenLocal(uint elementId, uint imageId);
   void                     ApplyCloseLocal();
   void                     SyncViewportIdentity();
@@ -471,6 +478,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   QString                 exif_iso_text_      = QString::fromUtf8("\xE2\x80\x94");
   QString                 exif_aperture_text_ = QString::fromUtf8("\xE2\x80\x94");
   QString                 exif_focal_text_    = QString::fromUtf8("\xE2\x80\x94");
+  QString                 exif_lens_make_;
+  QString                 exif_lens_model_;
   QPointer<QObject>       presentation_viewport_;
   QPointer<QObject>       interaction_controller_;
   QMetaObject::Connection interaction_view_change_connection_;

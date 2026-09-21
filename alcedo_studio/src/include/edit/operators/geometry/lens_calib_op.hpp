@@ -5,8 +5,12 @@
 #pragma once
 
 #include <filesystem>
+#include <optional>
 #include <string>
 
+#include "decoders/processor/raw_color_context.hpp"
+#include "edit/geometry/types.hpp"
+#include "edit/graph/develop_node_model.hpp"
 #include "edit/operators/op_base.hpp"
 
 namespace alcedo {
@@ -46,6 +50,8 @@ class LensCalibOp : public OperatorBase<LensCalibOp> {
   static auto           ProjectionToString(LensCalibProjectionType projection) -> std::string;
 
   void                  ResolveRuntime(OperatorParams& params) const;
+  void                  ResolveRuntimeForMeta(const InputMeta& meta, bool dng_geometry_applied,
+                                              OperatorParams* owner) const;
   auto                  BuildRuntimeCacheKey(const OperatorParams& params) const -> uint64_t;
 
  public:
@@ -57,6 +63,20 @@ class LensCalibOp : public OperatorBase<LensCalibOp> {
 
   LensCalibOp()                                         = default;
   LensCalibOp(const nlohmann::json& params);
+  explicit LensCalibOp(const DevelopPayload& params);
+
+  /**
+   * @brief Resolve Lensfun coefficients for one DAG Develop output.
+   *
+   * Uses prepared RAW focal/aperture metadata, then any non-empty user lens maker/model
+   * from the Develop payload. The returned uniforms are sized for the actual Develop
+   * texture and are ready for a CUDA, OpenCL, or Metal lens kernel.
+   * A disabled setting, missing profile, or profile with no requested correction returns
+   * @c std::nullopt; it does not select another backend or algorithm.
+   */
+  [[nodiscard]] auto ResolveRuntimeForImage(const RawRuntimeColorContext& context, Extent2D extent,
+                                            bool dng_geometry_applied) const
+      -> std::optional<LensCalibGpuParams>;
 
   void Apply(std::shared_ptr<ImageBuffer> input) override;
   void ApplyGPU(std::shared_ptr<ImageBuffer> input) override;
