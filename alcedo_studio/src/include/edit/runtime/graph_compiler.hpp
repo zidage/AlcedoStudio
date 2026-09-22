@@ -24,8 +24,10 @@ namespace alcedo {
  * recorded on the compiled DRT node.
  *
  * The static plan key covers graph topology, adjustment types and order, source layout,
- * and backend capability version. Viewport, crop, CCT, Grade values, and DRT values are
- * bound per frame and do not recompile the static pass list.
+ * and backend capability version. Selecting Neural Engine replaces the develop output
+ * extent with the student-tiled neural rectangle, so that selection is part of the key.
+ * Viewport, crop, CCT, Grade values, and DRT values are bound per frame and do not
+ * recompile the static pass list.
  */
 class GraphCompiler {
  public:
@@ -44,8 +46,8 @@ class GraphCompiler {
    *
    * Does not change @p plan.static_key or the pass list. Must run before execute.
    */
-  static void BindFrameGeometry(ExecutionPlan& plan, const PipelineDocument& document,
-                                const RenderRequest& request);
+  static void               BindFrameGeometry(ExecutionPlan& plan, const PipelineDocument& document,
+                                              const RenderRequest& request);
 
   /**
    * @brief CompileStatic plus BindFrameGeometry. Existing tests and one-shot callers use this.

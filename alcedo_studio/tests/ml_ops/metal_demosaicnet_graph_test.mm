@@ -22,10 +22,8 @@
 namespace alcedo {
 namespace {
 
-constexpr std::size_t kConvInputElements    = 3U * 3U;
-constexpr std::size_t kConvOutputElements   = 2U * 2U;
-constexpr std::size_t kUnpackInputElements  = 12U * 12U;
-constexpr std::size_t kUnpackOutputElements = 12U * 2U * 2U * 3U;
+constexpr std::size_t kConvInputElements  = 3U * 3U;
+constexpr std::size_t kConvOutputElements = 2U * 2U;
 
 struct BoundaryParams {
   std::uint32_t element_count;
@@ -320,7 +318,12 @@ TEST(MetalDemosaicNetGraphTest, ValidOihwConvolutionUsesPrivateBuffersAndOrdered
   });
 }
 
-TEST(MetalDemosaicNetGraphTest, NativeDepthToSpaceMapsAllTwelveOneHotChannels) {
+// Verifies the residual unpack construction used by MetalDemosaicNetModule:
+// [B,H,W,12] -> [B,H,W,3,2,2] -> [B,H,2,W,2,3] -> [B,2H,2W,3] maps channel
+// g*4+py*2+px of source pixel (y,x) to output pixel (2y+py, 2x+px) channel g.
+// Uses multi-pixel distinct values on all 12 channels; a single-pixel one-hot
+// probe cannot catch cross-pixel or cross-channel-group mapping errors.
+TEST(MetalDemosaicNetGraphTest, ResidualUnpackExpandMapsAllChannelGroupsToRgbSubpixels) {
   RunObjcBoundary([&] {
     @autoreleasepool {
       auto&              context = MetalContext::Instance();
@@ -329,32 +332,41 @@ TEST(MetalDemosaicNetGraphTest, NativeDepthToSpaceMapsAllTwelveOneHotChannels) {
       ASSERT_NE(device, nullptr);
       ASSERT_NE(queue, nullptr);
 
+      constexpr int batch = 2, in_hw = 3, in_c = 12, out_hw = in_hw * 2, out_c = 3;
+      const std::size_t in_elems =
+          static_cast<std::size_t>(batch) * in_hw * in_hw * in_c;
+      const std::size_t out_elems =
+          static_cast<std::size_t>(batch) * out_hw * out_hw * out_c;
+
       id<MTLDevice> objc_device   = ToObjcDevice(device);
-      auto          input_buffer  = MakeBuffer(device, kUnpackInputElements * sizeof(float),
+      auto          input_buffer  = MakeBuffer(device, in_elems * sizeof(float),
                                                MTL::ResourceStorageModeShared, "unpack input");
-      auto          output_buffer = MakeBuffer(device, kUnpackOutputElements * sizeof(float),
+      auto          output_buffer = MakeBuffer(device, out_elems * sizeof(float),
                                                MTL::ResourceStorageModeShared, "unpack output");
 
-      float*        input_values  = static_cast<float*>(ToObjcBuffer(input_buffer.get()).contents);
-      std::fill_n(input_values, kUnpackInputElements, 0.0f);
-      for (std::size_t one_hot = 0; one_hot < 12U; ++one_hot) {
-        input_values[one_hot * 12U + one_hot] = 1.0f;
+      float* input_values = static_cast<float*>(ToObjcBuffer(input_buffer.get()).contents);
+      for (std::size_t i = 0; i < in_elems; ++i) {
+        input_values[i] = static_cast<float>(i) * 0.25f - 40.0f;
       }
 
       MPSGraph* graph                  = [MPSGraph new];
       graph.options                    = MPSGraphOptionsNone;
-      MPSShape*       input_shape      = @[ @12, @1, @1, @12 ];
-      MPSShape*       output_shape     = @[ @12, @2, @2, @3 ];
+      MPSShape*       input_shape      = @[ @(batch), @(in_hw), @(in_hw), @(in_c) ];
+      MPSShape*       output_shape     = @[ @(batch), @(out_hw), @(out_hw), @(out_c) ];
       MPSGraphTensor* input            = [graph placeholderWithShape:input_shape
                                                  dataType:MPSDataTypeFloat32
                                                      name:@"input"];
-      MPSGraphTensor* output = [graph depthToSpace2DTensor:input
-                                                 widthAxis:2
-                                                heightAxis:1
-                                                 depthAxis:3
-                                                 blockSize:2
-                                      usePixelShuffleOrder:YES
-                                                        name:@"unpack"];
+      MPSGraphTensor* packed = [graph reshapeTensor:input
+                                        withShape:@[
+                                          @(batch), @(in_hw), @(in_hw), @3, @2, @2
+                                        ]
+                                             name:@"unpack_pack"];
+      MPSGraphTensor* transposed = [graph transposeTensor:packed
+                                            permutation:@[ @0, @1, @4, @2, @5, @3 ]
+                                                   name:@"unpack_transpose"];
+      MPSGraphTensor* output = [graph reshapeTensor:transposed
+                                        withShape:output_shape
+                                             name:@"unpack"];
       ASSERT_NE(output, nil);
       ASSERT_TRUE([output.shape isEqual:output_shape]);
 
@@ -399,18 +411,18 @@ TEST(MetalDemosaicNetGraphTest, NativeDepthToSpaceMapsAllTwelveOneHotChannels) {
       CommitAndWait(command_buffer, graph_error);
 
       const float* actual = static_cast<const float*>(ToObjcBuffer(output_buffer.get()).contents);
-      for (std::size_t one_hot = 0; one_hot < 12U; ++one_hot) {
-        const std::size_t expected_rgb = one_hot / 4U;
-        const std::size_t expected_y   = (one_hot % 4U) / 2U;
-        const std::size_t expected_x   = one_hot % 2U;
-        for (std::size_t y = 0; y < 2U; ++y) {
-          for (std::size_t x = 0; x < 2U; ++x) {
-            for (std::size_t rgb = 0; rgb < 3U; ++rgb) {
-              const std::size_t index = (((one_hot * 2U + y) * 2U + x) * 3U) + rgb;
-              const float       expected =
-                  (y == expected_y && x == expected_x && rgb == expected_rgb) ? 1.0f : 0.0f;
-              EXPECT_NEAR(actual[index], expected, 1.0e-4f)
-                  << "one-hot channel " << one_hot << " at [" << y << "," << x << "," << rgb << "]";
+      for (int b = 0; b < batch; ++b) {
+        for (int y = 0; y < in_hw; ++y) {
+          for (int x = 0; x < in_hw; ++x) {
+            for (int c = 0; c < in_c; ++c) {
+              const int   g = c / 4, py = (c % 4) / 2, px = c % 2;
+              const float expected = input_values
+                  [(((b * in_hw + y) * in_hw + x) * in_c) + c];
+              const float out = actual
+                  [((((b * out_hw) + (y * 2 + py)) * out_hw) + (x * 2 + px)) * out_c + g];
+              EXPECT_EQ(out, expected)
+                  << "src (b=" << b << " y=" << y << " x=" << x << " c=" << c
+                  << ") -> dst (y=" << y * 2 + py << " x=" << x * 2 + px << " rgb=" << g << ")";
             }
           }
         }

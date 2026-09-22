@@ -568,6 +568,15 @@ if(ALCEDO_METAL_ENABLED)
   gtest_discover_tests(GpuDagMetalRendererTest TEST_PREFIX "GpuDagMetalRendererTest."
     PROPERTIES LABELS "gpu;edit;runtime;metal")
   alcedo_register_test_target(GpuDagMetalRendererTest gpu ci_metal)
+
+  # Local bisection tool: render one RAW through the Metal DAG and dump PNG/PFM.
+  add_executable(DagRawDump
+    ${ALCEDO_TEST_ROOT}/edit/runtime/dag_raw_dump_main.cpp)
+  target_include_directories(DagRawDump PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(DagRawDump PRIVATE
+    EditRuntimeMetal EditPipeline EditInput RawProcessorOp MetalDemosaicNetEntry
+    Image RawProcessor opencv_imgproc opencv_imgcodecs Qt6::Gui)
+  add_dependencies(DagRawDump GpuDagMetalShaders RawProcessorOpMetalShaders)
 endif()
 
 if(ALCEDO_OPENCL_ENABLED)

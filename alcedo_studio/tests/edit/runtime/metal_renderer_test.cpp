@@ -14,10 +14,12 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
+#include "decoders/processor/nn/metal_demosaicnet_cache.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
@@ -52,6 +54,13 @@ auto MakeUnpacker() -> PreparedSourceCache::UnpackFn {
                                            gpu_dag_test::DefaultLinearization(),
                                            gpu_dag_test::FullSensor(32, 32), decode_res);
   };
+}
+
+void SetDevelopMethod(PipelineDocument& document, std::string method, bool highlights) {
+  auto payload                   = document.Develop()->Params().Params();
+  payload.demosaic_method        = std::move(method);
+  payload.highlights_reconstruct = highlights;
+  document.Develop()->Params().ReplaceParams(std::move(payload));
 }
 
 enum class PresentEvent {
@@ -357,6 +366,45 @@ TEST_F(MetalRendererFixture, MetalRealRawEditorUsesTheThreeNodeDag) {
   ASSERT_NE(host, nullptr);
   EXPECT_EQ(renderer_->Stats().pass.drt_execute, 1U);
   EXPECT_EQ(document_->Graph().Nodes().size(), 3U);
+}
+
+TEST_F(MetalRendererFixture, MetalRendererRecompilesGeometryWhenBayerSwitchesToNeural) {
+  auto& cache = MetalDemosaicNetModelCache::Instance();
+  if (!cache.EnsureLoaded(MetalDemosaicNetVariant::Bayer)) {
+    GTEST_SKIP() << "Bayer Neural Engine weights are not available: " << cache.LastError();
+  }
+
+  auto large_document = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
+  gpu_dag_test::EnsureTestCameraProfile(*large_document);
+  MetalRenderer large_renderer(
+      large_document, [](std::span<const std::byte>, DecodeRes decode_res) {
+        const auto pattern = gpu_dag_test::MakeRggbPattern();
+        return RawInputLoader::FromUnpackedCfa(
+            gpu_dag_test::MakeU16CfaPlane(128, 128, pattern), pattern,
+            gpu_dag_test::DefaultLinearization(), gpu_dag_test::FullSensor(128, 128), decode_res);
+      });
+  const auto render = [&] {
+    return large_renderer.Render(image_, DecodeRes::FULL, RenderRequest{}, nullptr, {}, true,
+                                 RenderCachePolicy::UseSessionCache);
+  };
+
+  SetDevelopMethod(*large_document, "legacy", false);
+  const auto legacy = render();
+  ASSERT_TRUE(HostRgbaIsFinite(legacy));
+
+  large_renderer.ResetStats();
+  SetDevelopMethod(*large_document, "neural_engine", false);
+  const auto neural = render();
+  ASSERT_TRUE(HostRgbaIsFinite(neural));
+  EXPECT_NE(neural->GetCPUData().size(), legacy->GetCPUData().size());
+  EXPECT_EQ(large_renderer.Stats().pass.sensor_develop_execute, 1U);
+
+  large_renderer.ResetStats();
+  SetDevelopMethod(*large_document, "legacy", false);
+  const auto restored = render();
+  ASSERT_TRUE(HostRgbaIsFinite(restored));
+  EXPECT_EQ(restored->GetCPUData().size(), legacy->GetCPUData().size());
+  EXPECT_EQ(large_renderer.Stats().pass.sensor_develop_execute, 1U);
 }
 
 TEST_F(MetalRendererFixture, QualityBaseBypassesEveryResultCacheAfterSensorDevelop) {

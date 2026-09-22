@@ -3,11 +3,17 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 #include <gtest/gtest.h>
+#include <libraw/libraw.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <memory>
+#include <opencv2/core.hpp>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -19,6 +25,7 @@
 #include "decoders/processor/nn/metal_demosaicnet_cache.hpp"
 #include "decoders/processor/operators/gpu/metal_encode.hpp"
 #include "decoders/processor/raw_normalization.hpp"
+#include "decoders/processor/raw_processor.hpp"
 #include "decoders/processor/raw_processor_pattern.hpp"
 #include "dng_profile_test_support.hpp"
 #include "edit/geometry/render_geometry_resolver.hpp"
@@ -35,6 +42,7 @@
 #include "edit/runtime/pass_kind.hpp"
 #include "edit/runtime/result_content_key.hpp"
 #include "edit/runtime/texture_format.hpp"
+#include "image/metal_image.hpp"
 #include "metal/compute_pipeline_cache.hpp"
 
 namespace alcedo {
@@ -75,7 +83,8 @@ auto Download(MetalRenderDevice& device, const GraphValueId& id) -> std::vector<
   std::vector<Rgba> pixels(static_cast<std::size_t>(tex.Width()) * tex.Height());
   device.Workspace().Device().DownloadTexture2D(
       tex,
-      std::span<std::byte>(reinterpret_cast<std::byte*>(pixels.data()), pixels.size() * sizeof(Rgba)),
+      std::span<std::byte>(reinterpret_cast<std::byte*>(pixels.data()),
+                           pixels.size() * sizeof(Rgba)),
       device.CommandContext());
   return pixels;
 }
@@ -118,7 +127,10 @@ auto MaxChannel(const std::vector<Rgba>& pixels) -> float {
 }
 
 auto PixelsDiffer(const std::vector<Rgba>& a, const std::vector<Rgba>& b) -> bool {
-  if (a.size() != b.size() || a.empty()) {
+  if (a.size() != b.size()) {
+    return true;
+  }
+  if (a.empty()) {
     return false;
   }
   for (std::size_t i = 0; i < a.size(); ++i) {
@@ -131,24 +143,23 @@ auto PixelsDiffer(const std::vector<Rgba>& a, const std::vector<Rgba>& b) -> boo
 }
 
 auto CpuLinearize(const PreparedRawInput& input) -> std::vector<float> {
-  const auto  w = input.host_extent.width;
-  const auto  h = input.host_extent.height;
-  const auto* samples = reinterpret_cast<const std::uint16_t*>(input.pixels.bytes.get());
+  const auto         w       = input.host_extent.width;
+  const auto         h       = input.host_extent.height;
+  const auto*        samples = reinterpret_cast<const std::uint16_t*>(input.pixels.bytes.get());
   std::vector<float> out(static_cast<std::size_t>(w) * h);
   for (std::uint32_t y = 0; y < h; ++y) {
     for (std::uint32_t x = 0; x < w; ++x) {
-      const int   color = RawColorAt(input.cfa_pattern, static_cast<int>(y), static_cast<int>(x));
-      float       pattern_black = 0.0f;
+      const int color = RawColorAt(input.cfa_pattern, static_cast<int>(y), static_cast<int>(x));
+      float     pattern_black = 0.0f;
       if (input.linearization.black_tile_width > 0 && input.linearization.black_tile_height > 0) {
         const int tile_y = static_cast<int>(y) % input.linearization.black_tile_height;
         const int tile_x = static_cast<int>(x) % input.linearization.black_tile_width;
-        pattern_black =
-            input.linearization.pattern_black[tile_y * input.linearization.black_tile_width + tile_x];
+        pattern_black    = input.linearization
+                            .pattern_black[tile_y * input.linearization.black_tile_width + tile_x];
       }
       const float black = input.linearization.black_level[color] + pattern_black;
-      float       value =
-          raw_norm::NormalizeSample(static_cast<float>(samples[y * w + x]), black,
-                                    input.linearization.white_level[color]);
+      float       value = raw_norm::NormalizeSample(static_cast<float>(samples[y * w + x]), black,
+                                                    input.linearization.white_level[color]);
       value *= raw_norm::RelativeWhiteBalanceMultiplier(input.linearization.cam_mul, color,
                                                         input.linearization.apply_as_shot_wb != 0);
       out[y * w + x] = value;
@@ -238,6 +249,217 @@ auto RenderDevelop(PipelineDocument& document, const PreparedRawInput& prepared)
   return Download(device, plan.sensor_linear_output);
 }
 
+auto LoadEncodedFixture(const std::filesystem::path& path) -> std::vector<std::byte> {
+  std::ifstream input(path, std::ios::binary);
+  if (!input) {
+    throw std::runtime_error("Unable to open RAW fixture: " + path.string());
+  }
+  const std::vector<char> chars((std::istreambuf_iterator<char>(input)),
+                                std::istreambuf_iterator<char>());
+  std::vector<std::byte>  bytes(chars.size());
+  std::transform(chars.begin(), chars.end(), bytes.begin(),
+                 [](char value) { return static_cast<std::byte>(value); });
+  return bytes;
+}
+
+auto ResolveXTransFixture() -> std::filesystem::path {
+  const std::filesystem::path candidates[] = {
+      std::filesystem::path(TEST_IMG_PATH) / "local" / "metal_neural_xtrans_xt5.RAF",
+      std::filesystem::path(TEST_IMG_PATH) / "raw" / "camera" / "fuji" / "xt5" / "DSCF2074.RAF",
+  };
+  for (const auto& path : candidates) {
+    if (std::filesystem::exists(path)) {
+      return path;
+    }
+  }
+  return {};
+}
+
+auto ExpectNeuralPatchMatchesPreviousMetalPath(const std::filesystem::path& path, int patch,
+                                               MetalDemosaicNetVariant variant, RawCfaKind kind)
+    -> void {
+  if (!std::filesystem::exists(path)) {
+    GTEST_SKIP() << "RAW fixture is unavailable: " << path;
+  }
+  auto& cache = MetalDemosaicNetModelCache::Instance();
+  if (!cache.EnsureLoaded(variant)) {
+    GTEST_SKIP() << "Neural Engine weights are not available: " << cache.LastError();
+  }
+
+  const auto encoded = LoadEncodedFixture(path);
+  const auto full    = RawInputLoader::LoadEncoded(encoded, DecodeRes::FULL);
+  ASSERT_EQ(full.cfa_pattern.kind, kind);
+  ASSERT_GT(full.neural_output_crop.width, 0);
+  ASSERT_GT(full.neural_output_crop.height, 0);
+
+  auto neural_doc = CreateDefaultPipelineDocument();
+  SetDevelopMethod(neural_doc, "neural_engine", true);
+  const auto neural_plan =
+      GraphCompiler::Compile(neural_doc, full.CompileSource(), RenderRequest{});
+  EXPECT_EQ(neural_plan.source.develop_output_extent, full.neural_output_extent);
+
+  auto legacy_doc = CreateDefaultPipelineDocument();
+  SetDevelopMethod(legacy_doc, "legacy", true);
+  const auto legacy_plan =
+      GraphCompiler::Compile(legacy_doc, full.CompileSource(), RenderRequest{});
+  EXPECT_EQ(legacy_plan.source.develop_output_extent, full.develop_output_extent);
+  auto default_doc = CreateDefaultPipelineDocument();
+  SetDevelopMethod(default_doc, "default", true);
+  const auto default_plan =
+      GraphCompiler::Compile(default_doc, full.CompileSource(), RenderRequest{});
+  const auto& default_extent =
+      kind == RawCfaKind::XTrans6x6 ? full.neural_output_extent : full.develop_output_extent;
+  EXPECT_EQ(default_plan.source.develop_output_extent, default_extent);
+
+  ASSERT_GE(static_cast<int>(full.host_extent.width), patch);
+  ASSERT_GE(static_cast<int>(full.host_extent.height), patch);
+  cv::Mat        full_view(static_cast<int>(full.host_extent.height),
+                           static_cast<int>(full.host_extent.width), CV_16UC1,
+                           const_cast<std::byte*>(full.pixels.bytes.get()), full.pixels.stride_bytes);
+  cv::Mat        patch_mat = full_view(cv::Rect(0, 0, patch, patch)).clone();
+
+  HostImagePlane plane;
+  plane.extent = Extent2D{static_cast<std::uint32_t>(patch), static_cast<std::uint32_t>(patch)};
+  plane.stride_bytes = static_cast<std::uint32_t>(patch * sizeof(std::uint16_t));
+  plane.format       = HostPixelFormat::U16Cfa;
+  auto storage       = std::shared_ptr<std::byte>(new std::byte[plane.ByteCount()],
+                                                  std::default_delete<std::byte[]>());
+  std::memcpy(storage.get(), patch_mat.data, plane.ByteCount());
+  plane.bytes = std::const_pointer_cast<const std::byte>(storage);
+
+  RawSensorGeometry sensor;
+  sensor.raw_width    = patch;
+  sensor.raw_height   = patch;
+  sensor.width        = patch;
+  sensor.height       = patch;
+  const auto prepared = RawInputLoader::FromUnpackedCfa(plane, full.cfa_pattern, full.linearization,
+                                                        sensor, DecodeRes::FULL);
+  auto       document = CreateDefaultPipelineDocument();
+  SetDevelopMethod(document, "neural_engine", true);
+  const auto plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+  EXPECT_EQ(plan.source.develop_output_extent, prepared.neural_output_extent);
+  MetalRenderDevice device;
+  device.BeginRender();
+  ExecuteMetalDevelop(device, plan, prepared, document);
+  device.EndRender();
+  device.WaitIdle();
+  const auto dag_pixels = Download(device, plan.sensor_linear_output);
+  const int  dag_w      = static_cast<int>(plan.source.develop_output_extent.width);
+  const int  dag_h      = static_cast<int>(plan.source.develop_output_extent.height);
+  ASSERT_EQ(dag_pixels.size(), static_cast<std::size_t>(dag_w) * static_cast<std::size_t>(dag_h));
+
+  auto raw = std::make_unique<LibRaw>();
+  ASSERT_EQ(raw->open_file(path.string().c_str()), LIBRAW_SUCCESS);
+  ASSERT_EQ(raw->unpack(), LIBRAW_SUCCESS);
+  libraw_rawdata_t patch_data  = raw->imgdata.rawdata;
+  patch_data.raw_image         = patch_mat.ptr<std::uint16_t>();
+  patch_data.sizes.raw_width   = static_cast<ushort>(patch);
+  patch_data.sizes.raw_height  = static_cast<ushort>(patch);
+  patch_data.sizes.width       = static_cast<ushort>(patch);
+  patch_data.sizes.height      = static_cast<ushort>(patch);
+  patch_data.sizes.iwidth      = static_cast<ushort>(patch);
+  patch_data.sizes.iheight     = static_cast<ushort>(patch);
+  patch_data.sizes.left_margin = 0;
+  patch_data.sizes.top_margin  = 0;
+  patch_data.sizes.flip        = 0;
+  patch_data.sizes.raw_pitch   = static_cast<unsigned>(patch * sizeof(std::uint16_t));
+  RawParams params;
+  params.gpu_backend_            = RawGpuBackend::Metal;
+  params.demosaic_method_        = RawDemosaicMethod::NeuralEngine;
+  params.highlights_reconstruct_ = true;
+  params.decode_res_             = DecodeRes::FULL;
+  RawRuntimeColorContext context;
+  const ushort           no_crop[4] = {};
+  RawProcessor           processor(params, patch_data, *raw, context, no_crop);
+  ImageBuffer            previous = processor.Process();
+  ASSERT_TRUE(previous.gpu_data_valid_);
+  cv::Mat previous_host;
+  previous.GetMetalImage().Download(previous_host);
+  raw->recycle();
+
+  ASSERT_EQ(previous_host.type(), CV_32FC4);
+  ASSERT_EQ(previous_host.cols, dag_w);
+  ASSERT_EQ(previous_host.rows, dag_h);
+  float max_err = 0.0f;
+  for (int y = 0; y < dag_h; ++y) {
+    for (int x = 0; x < dag_w; ++x) {
+      const auto& dag = dag_pixels[static_cast<std::size_t>(y) * dag_w + x];
+      const auto& old = previous_host.at<cv::Vec4f>(y, x);
+      max_err         = std::max(max_err, std::fabs(dag.r - old[0]));
+      max_err         = std::max(max_err, std::fabs(dag.g - old[1]));
+      max_err         = std::max(max_err, std::fabs(dag.b - old[2]));
+    }
+  }
+  EXPECT_LT(max_err, 1.0e-4f);
+}
+
+auto ExpectFullNeuralMatchesPreviousMetalPath(const std::filesystem::path& path,
+                                              MetalDemosaicNetVariant variant, RawCfaKind kind)
+    -> void {
+  if (!std::filesystem::exists(path)) {
+    GTEST_SKIP() << "RAW fixture is unavailable: " << path;
+  }
+  auto& cache = MetalDemosaicNetModelCache::Instance();
+  if (!cache.EnsureLoaded(variant)) {
+    GTEST_SKIP() << "Neural Engine weights are not available: " << cache.LastError();
+  }
+
+  const auto encoded  = LoadEncodedFixture(path);
+  const auto prepared = RawInputLoader::LoadEncoded(encoded, DecodeRes::FULL);
+  ASSERT_EQ(prepared.cfa_pattern.kind, kind);
+  auto document = CreateDefaultPipelineDocument();
+  gpu_dag_test::EnsureTestCameraProfile(document);
+  SetDevelopMethod(document, "neural_engine", true);
+  const auto plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
+
+  MetalRenderDevice device;
+  (void)device.Execute(plan, prepared, document);
+  device.WaitIdle();
+  auto* dag_output = device.Workspace().Images().Find(plan.sensor_linear_output);
+  ASSERT_NE(dag_output, nullptr);
+
+  auto raw = std::make_unique<LibRaw>();
+  ASSERT_EQ(
+      raw->open_buffer(const_cast<void*>(static_cast<const void*>(encoded.data())), encoded.size()),
+      LIBRAW_SUCCESS);
+  ASSERT_EQ(raw->unpack(), LIBRAW_SUCCESS);
+  RawParams params;
+  params.gpu_backend_            = RawGpuBackend::Metal;
+  params.demosaic_method_        = RawDemosaicMethod::NeuralEngine;
+  params.highlights_reconstruct_ = true;
+  params.decode_res_             = DecodeRes::FULL;
+  RawRuntimeColorContext context;
+  const ushort           no_crop[4] = {};
+  RawProcessor           processor(params, raw->imgdata.rawdata, *raw, context, no_crop);
+  ImageBuffer            previous = processor.Process();
+  ASSERT_TRUE(previous.gpu_data_valid_);
+  auto& previous_metal = previous.GetMetalImage();
+
+  ASSERT_EQ(dag_output->Texture().Width(), previous_metal.Width());
+  ASSERT_EQ(dag_output->Texture().Height(), previous_metal.Height());
+  constexpr int kPatchSize = 64;
+  auto dag_metal =
+      metal::MetalImage::Wrap(static_cast<MTL::Texture*>(dag_output->Texture().Native()));
+  const int max_x = static_cast<int>(dag_output->Texture().Width()) - kPatchSize;
+  const int max_y = static_cast<int>(dag_output->Texture().Height()) - kPatchSize;
+  const int sample_x[] = {0, max_x / 2, max_x};
+  const int sample_y[] = {0, max_y / 2, max_y};
+  for (const int y : sample_y) {
+    for (const int x : sample_x) {
+      metal::MetalImage dag_patch;
+      metal::MetalImage previous_patch;
+      dag_metal.CropTo(dag_patch, cv::Rect(x, y, kPatchSize, kPatchSize));
+      previous_metal.CropTo(previous_patch, cv::Rect(x, y, kPatchSize, kPatchSize));
+      cv::Mat dag_host;
+      cv::Mat previous_host;
+      dag_patch.Download(dag_host);
+      previous_patch.Download(previous_host);
+      EXPECT_LT(cv::norm(dag_host, previous_host, cv::NORM_INF), 1.0e-4)
+          << "patch origin (" << x << ", " << y << ")";
+    }
+  }
+}
+
 }  // namespace
 
 TEST_F(MetalDevelopFixture, CanonDngProfileRendersAtFullResolutionAndInvalidatesOnlyColorCache) {
@@ -262,19 +484,19 @@ TEST_F(MetalDevelopFixture, EnabledLensVignettingChangesDevelopSensorPixels) {
   prepared.color_context.focus_distance_m_    = 10.0f;
   prepared.color_context.crop_factor_hint_    = 1.534f;
 
-  auto       disabled_document = CreateDefaultPipelineDocument();
-  const auto disabled          = RenderDevelop(disabled_document, prepared);
+  auto       disabled_document                = CreateDefaultPipelineDocument();
+  const auto disabled                         = RenderDevelop(disabled_document, prepared);
 
-  auto enabled_document = CreateDefaultPipelineDocument();
-  auto payload          = enabled_document.Develop()->Params().Params();
-  payload.lens_enabled  = true;
-  payload.apply_vignetting = true;
-  payload.apply_distortion = false;
-  payload.apply_tca        = false;
-  payload.apply_crop       = false;
-  payload.projection_enabled = false;
-  payload.lens_maker         = "Zeiss";
-  payload.lens_model         = "Touit 1.8/32";
+  auto       enabled_document                 = CreateDefaultPipelineDocument();
+  auto       payload                          = enabled_document.Develop()->Params().Params();
+  payload.lens_enabled                        = true;
+  payload.apply_vignetting                    = true;
+  payload.apply_distortion                    = false;
+  payload.apply_tca                           = false;
+  payload.apply_crop                          = false;
+  payload.projection_enabled                  = false;
+  payload.lens_maker                          = "Zeiss";
+  payload.lens_model                          = "Touit 1.8/32";
   payload.lens_profile_db_path = (std::filesystem::path(CONFIG_PATH) / "lens_calib").string();
   enabled_document.Develop()->Params().ReplaceParams(std::move(payload));
   const auto enabled = RenderDevelop(enabled_document, prepared);
@@ -303,7 +525,7 @@ TEST_F(MetalDevelopFixture, MetalDevelopLinearizeMatchesCudaReferenceWithinToler
   const auto prepared = RawInputLoader::FromUnpackedCfa(
       gpu_dag_test::MakeU16CfaPlane(32, 24, pattern), pattern, gpu_dag_test::DefaultLinearization(),
       gpu_dag_test::FullSensor(32, 24), DecodeRes::FULL);
-  const auto cpu = CpuLinearize(prepared);
+  const auto        cpu = CpuLinearize(prepared);
 
   MetalRenderDevice device;
   auto&             textures = device.Workspace().Textures();
@@ -426,9 +648,9 @@ TEST_F(MetalDevelopFixture, MetalDevelopXTransMatchesCudaReferenceWithinToleranc
   const auto pixels = Download(device, plan.sensor_linear_output);
   const auto linear = CpuLinearize(prepared);
   ASSERT_FALSE(pixels.empty());
-  const auto crop = prepared.demosaic_output_crop;
-  float      max_green_err = 0.0f;
-  std::size_t green_count  = 0;
+  const auto  crop          = prepared.demosaic_output_crop;
+  float       max_green_err = 0.0f;
+  std::size_t green_count   = 0;
   for (int y = 0; y < crop.height; ++y) {
     for (int x = 0; x < crop.width; ++x) {
       const int src_x = crop.x + x;
@@ -436,11 +658,10 @@ TEST_F(MetalDevelopFixture, MetalDevelopXTransMatchesCudaReferenceWithinToleranc
       if (RgbColorAt(pattern, src_y, src_x) != 1) {
         continue;
       }
-      const float expected =
-          linear[static_cast<std::size_t>(src_y) * prepared.host_extent.width +
-                 static_cast<std::size_t>(src_x)];
-      const auto& gpu = pixels[static_cast<std::size_t>(y) * crop.width + x];
-      max_green_err   = std::max(max_green_err, std::fabs(gpu.g - expected));
+      const float expected = linear[static_cast<std::size_t>(src_y) * prepared.host_extent.width +
+                                    static_cast<std::size_t>(src_x)];
+      const auto& gpu      = pixels[static_cast<std::size_t>(y) * crop.width + x];
+      max_green_err        = std::max(max_green_err, std::fabs(gpu.g - expected));
       ++green_count;
     }
   }
@@ -448,8 +669,7 @@ TEST_F(MetalDevelopFixture, MetalDevelopXTransMatchesCudaReferenceWithinToleranc
   EXPECT_LT(max_green_err, 2.0e-3f);
 }
 
-TEST_F(MetalDevelopFixture,
-       MetalDevelopNeuralEngineFinishesWithoutReusingACommittedCommandBuffer) {
+TEST_F(MetalDevelopFixture, MetalDevelopNeuralEngineFinishesWithoutReusingACommittedCommandBuffer) {
   auto& cache = MetalDemosaicNetModelCache::Instance();
   if (!cache.EnsureLoaded(MetalDemosaicNetVariant::Bayer)) {
     GTEST_SKIP() << "Bayer Neural Engine weights are not available: " << cache.LastError();
@@ -486,6 +706,46 @@ TEST_F(MetalDevelopFixture,
   (void)legacy_device.Execute(legacy_plan, prepared, legacy_doc);
   legacy_device.WaitIdle();
   EXPECT_TRUE(PixelsDiffer(Download(legacy_device, legacy_plan.sensor_linear_output), pixels));
+}
+
+TEST_F(MetalDevelopFixture, MetalDevelopNeuralBayerPatchMatchesPreviousMetalPath) {
+  const std::filesystem::path candidates[] = {
+      std::filesystem::path(TEST_IMG_PATH) / "local" / "metal_neural_bayer_s5m2.RW2",
+      std::filesystem::path(TEST_IMG_PATH) / "raw" / "camera" / "nikon" / "d800e" /
+          "Nikon-D800e-raw-00002.nef",
+  };
+  std::filesystem::path path;
+  for (const auto& candidate : candidates) {
+    if (std::filesystem::exists(candidate)) {
+      path = candidate;
+      break;
+    }
+  }
+  if (path.empty()) {
+    GTEST_SKIP() << "Bayer RAW fixture is unavailable.";
+  }
+  ExpectNeuralPatchMatchesPreviousMetalPath(path, 512, MetalDemosaicNetVariant::Bayer,
+                                            RawCfaKind::Bayer2x2);
+}
+
+TEST_F(MetalDevelopFixture, MetalDevelopNeuralXTransPatchMatchesPreviousMetalPath) {
+  const auto path = ResolveXTransFixture();
+  if (path.empty()) {
+    GTEST_SKIP() << "X-Trans RAW fixture is unavailable.";
+  }
+  ExpectNeuralPatchMatchesPreviousMetalPath(path, 1100, MetalDemosaicNetVariant::XTrans,
+                                            RawCfaKind::XTrans6x6);
+}
+
+TEST_F(MetalDevelopFixture, MetalDevelopNeuralBayerFullRawMatchesPreviousMetalPath) {
+  ExpectFullNeuralMatchesPreviousMetalPath(
+      std::filesystem::path(TEST_IMG_PATH) / "local" / "metal_neural_bayer_s5m2.RW2",
+      MetalDemosaicNetVariant::Bayer, RawCfaKind::Bayer2x2);
+}
+
+TEST_F(MetalDevelopFixture, MetalDevelopNeuralXTransFullRawMatchesPreviousMetalPath) {
+  ExpectFullNeuralMatchesPreviousMetalPath(ResolveXTransFixture(), MetalDemosaicNetVariant::XTrans,
+                                           RawCfaKind::XTrans6x6);
 }
 
 TEST_F(MetalDevelopFixture, MetalDevelopNeuralUsesSessionWorkspaceAndDoesNotSelectLegacyOnFailure) {
@@ -536,15 +796,15 @@ TEST_F(MetalDevelopFixture, MetalGeometryUsesOneResampleForCropRotationViewportA
 
   auto document = CreateDefaultPipelineDocument();
   gpu_dag_test::EnsureTestCameraProfile(document);
-  auto prepared = RawInputLoader::FromDirectRgb(gpu_dag_test::MakeF32RgbaPlane(64, 48),
-                                                gpu_dag_test::FullSensor(64, 48));
+  auto          prepared = RawInputLoader::FromDirectRgb(gpu_dag_test::MakeF32RgbaPlane(64, 48),
+                                                         gpu_dag_test::FullSensor(64, 48));
   RenderRequest request;
-  request.view = view;
-  auto plan    = GraphCompiler::Compile(document, prepared.CompileSource(), request);
+  request.view  = view;
+  auto plan     = GraphCompiler::Compile(document, prepared.CompileSource(), request);
   plan.geometry = geometry;
   plan.encode_geometry_resample = true;
 
-  const auto host_src = MakeSrcImage(64, 48);
+  const auto        host_src    = MakeSrcImage(64, 48);
   MetalRenderDevice device;
   device.BeginRender();
   ExecuteMetalDevelop(device, plan, prepared, document);
@@ -565,9 +825,9 @@ TEST_F(MetalDevelopFixture, MetalGeometryUsesOneResampleForCropRotationViewportA
       const auto  src_xy = TransformPoint(geometry.render_to_decoded, PixelCenter(x, y));
       const auto  cpu    = BilinearSample(host_src, 64, 48, src_xy.x, src_xy.y, border);
       const auto& gpu    = host_dst[static_cast<std::size_t>(y) * 40u + x];
-      max_err = std::max(max_err, std::fabs(cpu.r - gpu.r));
-      max_err = std::max(max_err, std::fabs(cpu.g - gpu.g));
-      max_err = std::max(max_err, std::fabs(cpu.b - gpu.b));
+      max_err            = std::max(max_err, std::fabs(cpu.r - gpu.r));
+      max_err            = std::max(max_err, std::fabs(cpu.g - gpu.g));
+      max_err            = std::max(max_err, std::fabs(cpu.b - gpu.b));
     }
   }
   EXPECT_LT(max_err, 1.5e-4f);
@@ -727,11 +987,10 @@ TEST_F(MetalDevelopFixture, MetalDevelopPassesUseOneCommandBuffer) {
 }
 
 TEST_F(MetalDevelopFixture, MetalGeometryResampleMissingMetallibThrowsExplicitError) {
-  EXPECT_THROW(
-      (void)metal::ComputePipelineCache::Instance().GetPipelineState(
-          "/alcedo/missing/geometry_resample.metallib", "geometry_resample_rgba32f",
-          "Metal GeometryResample"),
-      std::runtime_error);
+  EXPECT_THROW((void)metal::ComputePipelineCache::Instance().GetPipelineState(
+                   "/alcedo/missing/geometry_resample.metallib", "geometry_resample_rgba32f",
+                   "Metal GeometryResample"),
+               std::runtime_error);
 }
 
 }  // namespace alcedo

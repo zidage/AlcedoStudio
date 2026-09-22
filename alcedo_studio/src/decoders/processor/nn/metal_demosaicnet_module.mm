@@ -433,18 +433,27 @@ auto ConvBiasRelu(MPSGraph* graph, MPSGraphTensor* source, const nn::Safetensors
   return [graph reLUWithTensor:added name:[name_prefix stringByAppendingString:@"_relu"]];
 }
 
-auto NativeResidualUnpack(MPSGraph* graph, MPSGraphTensor* residual_nhwc12,
-                          NSString* name_prefix) -> MPSGraphTensor* {
-  // The safetensors unpack order is [rgb, subpixel_y, subpixel_x]. MPSGraph's
-  // pixel-shuffle order stores each spatial block contiguously in depth, which
-  // matches that [rgb, y, x] channel order for this model.
-  return [graph depthToSpace2DTensor:residual_nhwc12
-                           widthAxis:2
-                          heightAxis:1
-                           depthAxis:3
-                           blockSize:2
-                usePixelShuffleOrder:YES
-                                  name:name_prefix];
+auto NativeResidualUnpack(MPSGraph* graph, MPSGraphTensor* residual_nhwc12, int residual_h,
+                          int batch_size, NSString* name_prefix) -> MPSGraphTensor* {
+  // The safetensors unpack order is [rgb, subpixel_y, subpixel_x]. Expand it with an
+  // explicit reshape/transpose/reshape chain: MPSGraph's depthToSpace2DTensor with
+  // usePixelShuffleOrder=YES is semantically equivalent in isolation but miscompiles
+  // when fused after the residual conv inside this graph (channel groups 1..2 are
+  // dropped), so the unpack stays spelled out.
+  // [B, H, W, 12] -> [B, H, W, 3, 2, 2] -> [B, H, 2, W, 2, 3] -> [B, 2H, 2W, 3]
+  MPSGraphTensor* packed = [graph reshapeTensor:residual_nhwc12
+                                      withShape:@[
+                                        @(batch_size), @(residual_h), @(residual_h), @3, @2, @2
+                                      ]
+                                         name:[name_prefix stringByAppendingString:@"_pack"]];
+  MPSGraphTensor* transposed = [graph transposeTensor:packed
+                                        permutation:@[ @0, @1, @4, @2, @5, @3 ]
+                                               name:[name_prefix
+                                                        stringByAppendingString:@"_tr"]];
+  const int up = residual_h * 2;
+  return [graph reshapeTensor:transposed
+                    withShape:@[ @(batch_size), @(up), @(up), @3 ]
+                         name:name_prefix];
 }
 
 auto CenterSliceNHWC(MPSGraph* graph, MPSGraphTensor* source, int source_h, int out_h, int top,
@@ -535,8 +544,10 @@ void BuildGraph(GraphModule& module, const nn::SafetensorsTensorMap& tensors, bo
                      @"residual");
   }
 
-  // Native depth-to-space replaces the materialized reshape / transpose / reshape sequence.
-  MPSGraphTensor* residual_rgb = NativeResidualUnpack(graph, x, @"unpack");
+  // Explicit depth-to-space: MPSGraph's native depthToSpace2DTensor miscompiles in
+  // this graph context, so the [rgb, sub_y, sub_x] channel order is expanded by hand.
+  MPSGraphTensor* residual_rgb =
+      NativeResidualUnpack(graph, x, module.geometry.residual_h, batch_size, @"unpack");
 
   // Center-crop the original graph input and concatenate on the channel axis.
   // Graph ends here: the post/output/gamma tail is a fixed Metal kernel (CUDA P4-A style)

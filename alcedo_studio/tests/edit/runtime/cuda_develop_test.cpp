@@ -95,7 +95,10 @@ auto MaxChannel(const std::vector<Rgba>& pixels) -> float {
 }
 
 auto PixelsDiffer(const std::vector<Rgba>& a, const std::vector<Rgba>& b) -> bool {
-  if (a.size() != b.size() || a.empty()) {
+  if (a.size() != b.size()) {
+    return true;
+  }
+  if (a.empty()) {
     return false;
   }
   for (std::size_t i = 0; i < a.size(); ++i) {
