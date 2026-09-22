@@ -96,72 +96,6 @@ auto FieldSpec(const std::string& field_key) -> std::optional<EditorAdjustmentFi
   return std::nullopt;
 }
 
-auto EmbeddedEnabled(const nlohmann::json& params) -> bool {
-  if (params.is_object() && params.contains("enabled") && params["enabled"].is_boolean()) {
-    return params["enabled"].get<bool>();
-  }
-  if (params.is_object() && params.size() == 1 && params.begin().value().is_object()) {
-    const auto& nested = params.begin().value();
-    if (nested.contains("enabled") && nested["enabled"].is_boolean()) {
-      return nested["enabled"].get<bool>();
-    }
-  }
-  return true;
-}
-
-void MergeJsonPatch(nlohmann::json& target, const nlohmann::json& patch) {
-  if (!target.is_object() || !patch.is_object()) {
-    target = patch;
-    return;
-  }
-
-  for (const auto& [key, value] : patch.items()) {
-    if (target.contains(key) && target[key].is_object() && value.is_object()) {
-      MergeJsonPatch(target[key], value);
-    } else {
-      target[key] = value;
-    }
-  }
-}
-
-auto ApplyPatch(CPUPipelineExecutor& executor, const EditorAdjustmentPatch& patch,
-                std::string* error) -> bool {
-  const auto spec = FieldSpec(patch.field_key);
-  if (!spec.has_value()) {
-    if (error) {
-      *error = "Unknown editor adjustment field: " + patch.field_key;
-    }
-    return false;
-  }
-  const auto patch_params = patch.params_json.empty() ? nlohmann::json::object()
-                                                      : nlohmann::json::parse(patch.params_json);
-  if (!patch_params.is_object()) {
-    if (error) {
-      *error = "Editor adjustment params must be a JSON object";
-    }
-    return false;
-  }
-  auto  params  = patch_params;
-  auto& stage   = executor.GetStage(spec->stage_name);
-  auto& globals = executor.GetGlobalParams();
-  if (const auto current = stage.GetOperator(spec->operator_type);
-      current.has_value() && current.value() != nullptr && current.value()->op_) {
-    // Partial operator JSON is completed with canonical parameters before
-    // PipelineStage compares values, so omitted runtime/input fields do not
-    // turn an unchanged operator into a cache invalidation.
-    auto canonical_params = current.value()->op_->GetParams();
-    MergeJsonPatch(canonical_params, params);
-    params = std::move(canonical_params);
-  }
-  stage.SetOperator(spec->operator_type, params, globals);
-  const bool has_embedded_enabled =
-      patch_params.contains("enabled") ||
-      (patch_params.size() == 1 && patch_params.begin().value().is_object());
-  const bool enabled = has_embedded_enabled ? EmbeddedEnabled(patch_params) : patch.enabled;
-  stage.EnableOperator(spec->operator_type, enabled, globals);
-  return true;
-}
-
 }  // namespace
 
 auto ResolveEditorAdjustmentField(const std::string& field_key)
@@ -200,78 +134,6 @@ auto EditorAdjustmentFieldKey(PipelineStageName stage_name, OperatorType operato
     return "lens_calib";
   if (matches(PipelineStageName::To_WorkingSpace, OperatorType::COLOR_TEMP)) return "color_temp";
   return std::nullopt;
-}
-
-auto ReadEditorAdjustmentOperatorState(CPUPipelineExecutor& executor, const std::string& field_key,
-                                       EditorAdjustmentOperatorState* state, std::string* error)
-    -> bool {
-  try {
-    const auto spec = FieldSpec(field_key);
-    if (!spec.has_value()) {
-      if (error) *error = "Unknown editor adjustment field: " + field_key;
-      return false;
-    }
-    if (state == nullptr) {
-      if (error) *error = "Editor adjustment state output is null";
-      return false;
-    }
-    const auto entry = executor.GetStage(spec->stage_name).GetOperator(spec->operator_type);
-    if (!entry.has_value() || *entry == nullptr || !(*entry)->op_) {
-      *state = {};
-      return true;
-    }
-    state->params  = (*entry)->op_->GetParams();
-    state->enabled = (*entry)->enable_;
-    return true;
-  } catch (const std::exception& ex) {
-    if (error) *error = ex.what();
-    return false;
-  }
-}
-
-auto ApplyEditorAdjustmentOperatorState(CPUPipelineExecutor&                 executor,
-                                        const EditorAdjustmentFieldSpec&     spec,
-                                        const EditorAdjustmentOperatorState& state,
-                                        std::string*                         error) -> bool {
-  try {
-    auto& stage   = executor.GetStage(spec.stage_name);
-    auto& globals = executor.GetGlobalParams();
-    if (state.params.is_object()) {
-      stage.SetOperator(spec.operator_type, state.params, globals);
-    }
-    stage.EnableOperator(spec.operator_type, state.enabled, globals);
-    return true;
-  } catch (const std::exception& ex) {
-    if (error) *error = ex.what();
-    return false;
-  }
-}
-
-auto SnapshotTouchesImageLoading(const EditorRenderAdjustmentSnapshot& snapshot) -> bool {
-  for (const auto& patch : snapshot.patches) {
-    if (patch.field_key == "raw_decode" || patch.field_key == "lens_calib") {
-      return true;
-    }
-  }
-  return false;
-}
-
-auto ApplyEditorAdjustmentSnapshot(CPUPipelineExecutor&                  executor,
-                                   const EditorRenderAdjustmentSnapshot& snapshot,
-                                   std::string*                          error) -> bool {
-  try {
-    for (const auto& patch : snapshot.patches) {
-      if (!ApplyPatch(executor, patch, error)) {
-        return false;
-      }
-    }
-    return true;
-  } catch (const std::exception& ex) {
-    if (error) {
-      *error = ex.what();
-    }
-    return false;
-  }
 }
 
 namespace {
@@ -409,6 +271,57 @@ auto CpuParamsFromModelJson(const std::string& field_key, nlohmann::json params)
   return params;
 }
 
+// Stage-table helpers used only by ApplyVersionHeadToLivePipeline and
+// RemirrorCurrentPanelFromDocument until G10.3 removes Version replay into stages.
+struct StageOperatorState {
+  nlohmann::json params  = nullptr;
+  bool           enabled = false;
+};
+
+auto ReadStageOperatorState(CPUPipelineExecutor& executor, const EditorAdjustmentFieldSpec& spec)
+    -> StageOperatorState {
+  const auto entry = executor.GetStage(spec.stage_name).GetOperator(spec.operator_type);
+  if (!entry.has_value() || *entry == nullptr || !(*entry)->op_) {
+    return {};
+  }
+  return {(*entry)->op_->GetParams(), (*entry)->enable_};
+}
+
+void ApplyStageOperatorState(CPUPipelineExecutor& executor, const EditorAdjustmentFieldSpec& spec,
+                             const StageOperatorState& state) {
+  auto& stage   = executor.GetStage(spec.stage_name);
+  auto& globals = executor.GetGlobalParams();
+  if (state.params.is_object()) {
+    stage.SetOperator(spec.operator_type, state.params, globals);
+  }
+  stage.EnableOperator(spec.operator_type, state.enabled, globals);
+}
+
+/// Writes the after-values of one typed-batch commit into the stage table.
+auto ApplyCommitAfterValuesToStages(CPUPipelineExecutor& executor, const EditCommit& commit,
+                                    std::string* error) -> bool {
+  if (!IsPipelineEditBatchJson(commit.GetPayloadJSON())) {
+    if (error) *error = "Commit payload is not a typed batch";
+    return false;
+  }
+  const auto batch = PipelineEditBatch::FromJSON(commit.GetPayloadJSON());
+  for (const auto& change : batch.changes) {
+    const auto* parameter = std::get_if<SetParameterChange>(&change);
+    if (parameter == nullptr) {
+      continue;
+    }
+    const auto spec = FieldSpec(parameter->target.field_key);
+    if (!spec.has_value()) {
+      continue;
+    }
+    ApplyStageOperatorState(
+        executor, *spec,
+        {CpuParamsFromModelJson(parameter->target.field_key, parameter->after_value),
+         parameter->after_enabled});
+  }
+  return true;
+}
+
 }  // namespace
 
 auto EditorAdjustmentDocumentParamsFromWrite(const std::string& field_key, nlohmann::json params)
@@ -421,11 +334,6 @@ auto EditorAdjustmentDocumentParamsFromWrite(const std::string& field_key, nlohm
     RenameJsonKeyIfAbsent(params, "ocio_lmt", "cube_path");
   }
   return params;
-}
-
-auto EditorAdjustmentExecutorParamsFromWrite(const std::string& field_key, nlohmann::json params)
-    -> nlohmann::json {
-  return CpuParamsFromModelJson(field_key, std::move(params));
 }
 
 auto ResetEditableOperatorsToDefaultsPreservingImageLocal(CPUPipelineExecutor& executor,
@@ -442,82 +350,17 @@ auto ResetEditableOperatorsToDefaultsPreservingImageLocal(CPUPipelineExecutor& e
       const auto        spec = FieldSpec(field_key);
       if (!spec.has_value()) continue;
 
-      EditorAdjustmentOperatorState current;
-      if (!ReadEditorAdjustmentOperatorState(executor, field_key, &current, error)) {
-        return false;
-      }
-      EditorAdjustmentOperatorState next;
-      next.params  = MergePreservingImageLocal(current.params, DefaultParamsForField(field_key),
-                                               field_key);
-      next.enabled = DefaultEnabledForField(field_key);
-      if (!ApplyEditorAdjustmentOperatorState(executor, *spec, next, error)) {
-        return false;
-      }
+      const auto current = ReadStageOperatorState(executor, *spec);
+      ApplyStageOperatorState(
+          executor, *spec,
+          {MergePreservingImageLocal(current.params, DefaultParamsForField(field_key), field_key),
+           DefaultEnabledForField(field_key)});
     }
     return true;
   } catch (const std::exception& ex) {
     if (error) *error = ex.what();
     return false;
   }
-}
-
-auto ApplyHistoryCommitToLivePipeline(CPUPipelineExecutor& executor, const CommitGraph& graph,
-                                      const EditCommit& commit, bool use_after_value,
-                                      std::string* error) -> bool {
-  (void)graph;
-  try {
-    if (!IsPipelineEditBatchJson(commit.GetPayloadJSON())) {
-      if (error) *error = "Commit payload is not a typed batch";
-      return false;
-    }
-    const auto batch = PipelineEditBatch::FromJSON(commit.GetPayloadJSON());
-    for (const auto& change : batch.changes) {
-      const auto* parameter = std::get_if<SetParameterChange>(&change);
-      if (parameter == nullptr) {
-        continue;
-      }
-      const auto spec = FieldSpec(parameter->target.field_key);
-      if (!spec.has_value()) {
-        continue;
-      }
-      EditorAdjustmentOperatorState state;
-      auto params = use_after_value ? parameter->after_value : parameter->before_value;
-      if (parameter->target.field_key == "exposure" && params.contains("exposure_ev")) {
-        params["exposure"] = params.at("exposure_ev");
-        params.erase("exposure_ev");
-      }
-      state.params  = std::move(params);
-      state.enabled = use_after_value ? parameter->after_enabled : parameter->before_enabled;
-      if (!ApplyEditorAdjustmentOperatorState(executor, *spec, state, error)) {
-        return false;
-      }
-    }
-    return true;
-  } catch (const std::exception& ex) {
-    if (error) *error = ex.what();
-    return false;
-  }
-}
-
-auto RemirrorEditorParameterToExecutor(CPUPipelineExecutor& executor,
-                                       const PipelineDocument& document,
-                                       const EditorParameterTarget& target, std::string* error)
-    -> bool {
-  nlohmann::json json;
-  if (!ReadEditorParameterJson(document, target, &json, error)) {
-    return false;
-  }
-  const auto spec = FieldSpec(target.field_key);
-  if (!spec.has_value()) {
-    if (error) {
-      *error = "Unknown editor adjustment field: " + target.field_key;
-    }
-    return false;
-  }
-  EditorAdjustmentOperatorState state;
-  state.params  = EditorAdjustmentExecutorParamsFromWrite(target.field_key, std::move(json));
-  state.enabled = true;
-  return ApplyEditorAdjustmentOperatorState(executor, *spec, state, error);
 }
 
 auto RemirrorCurrentPanelFromDocument(CPUPipelineExecutor& executor,
@@ -537,10 +380,10 @@ auto RemirrorCurrentPanelFromDocument(CPUPipelineExecutor& executor,
     if (!spec.has_value()) {
       continue;
     }
-    EditorAdjustmentOperatorState state;
-    state.params  = CpuParamsFromModelJson(field, std::move(json));
-    state.enabled = true;
-    if (!ApplyEditorAdjustmentOperatorState(executor, *spec, state, error)) {
+    try {
+      ApplyStageOperatorState(executor, *spec, {CpuParamsFromModelJson(field, std::move(json)), true});
+    } catch (const std::exception& ex) {
+      if (error) *error = ex.what();
       return false;
     }
   }
@@ -572,7 +415,7 @@ auto ApplyVersionHeadToLivePipeline(CPUPipelineExecutor&      executor, const Co
       return false;
     }
     for (const auto& hash : graph.FirstParentChain(head)) {
-      if (!ApplyHistoryCommitToLivePipeline(executor, graph, graph.GetCommit(hash), true, error)) {
+      if (!ApplyCommitAfterValuesToStages(executor, graph.GetCommit(hash), error)) {
         restore();
         return false;
       }

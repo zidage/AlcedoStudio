@@ -24,20 +24,12 @@ class EditorHistoryTransfer {
   /// Validate a transfer document, remap identities, apply one typed Paste batch
   /// to the live document from the immutable root, and publish one WAL commit.
   ///
-  /// @param result On success carries new Version / head and `prior_version_id`
-  ///   for CancelLivePaste.
+  /// @param result On success carries the new Version, its head, and `prior_version_id`.
   /// @pre Caller owns the editor session command queue for this element.
   auto PasteLiveRootRelativeVersion(const alcedo::EditorHistoryGuardHandle& guard,
                                     const alcedo::AdjustmentTransferPackage& package,
                                     std::string version_display_name,
                                     alcedo::AdjustmentPasteResult* result, std::string* error)
-      -> bool;
-
-  /// Restore `prior_version_id`, remove the unused paste Version, and reinstall
-  /// prior operator params on the live executor.
-  auto CancelLivePaste(const alcedo::EditorHistoryGuardHandle& guard,
-                       const alcedo::version_ref_id_t& prior_version_id,
-                       const alcedo::version_ref_id_t& paste_version_id, std::string* error)
       -> bool;
 
  private:

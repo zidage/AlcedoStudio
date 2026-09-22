@@ -3,7 +3,8 @@
 Date: 2026-09-22
 
 Status: **in progress**. G10.1: automated criteria complete; manual Geometry panel check pending
-(Section 10.12). G10.2–G10.11 planned.
+(Section 10.12). G10.2: automated criteria complete; manual Exposure/Undo/Redo check pending; landed
+as two commits because the diff passed the 2000-line limit (Section 11.12). G10.3–G10.11 planned.
 
 Parent: [GPU DAG Pipeline Rebuild Phase Plan](gpu_dag_pipeline_rebuild_phase_plan.md),
 Section 44 (G10) and Section 47 (global completion criteria).
@@ -380,7 +381,7 @@ operator header. It stays.
 | Stage JSON | `PipelineMapperTest` (pipeline service cases), `ThumbnailServiceTest`, `PipelineDocumentRenderTest` | Rewrite in G10.3 and G10.7. |
 | Legacy history | `EditHistoryMgmtServiceTest`, `SleeveServiceTest` history cases, `version_hash_test`, `EditorHistoryMaterializerTest`, `EditorTransactionJournalTest`, `EditorJournalWriterTest`, `EditorJournalFuzzFrameworkTest`, `EditorSessionJournalWriterPortTest` | Archive in G10.4. |
 | Legacy operator and kernel | `ODTOpTest`, `CropRotateOpTest`, `FilmGrainOpTest`, `HalationOpTest`, `ToneMappingFacadeTest`, `ToneMappingOwnershipTest`, `SharedToneCurveTest`, the local-tone constant test (`tests/edit/CMakeLists.txt:100`), the CUDA ODT stage test (`tests/cuda/CMakeLists.txt:48`), `FilmGrainCudaStageTest`, `HalationCudaStageTest`, `CudaPreviewVramReclamationTest` | Archive in G10.9. Replace coverage with G10.5 and G10.6 resolver tests. |
-| Legacy RAW and OpenCL | `OpenClRuntimeTest` legacy program cases, `OpenClCudaPipelineCompareTest`, `OpenClCudaFullPipelineBenchmark`, `ColorTempCudaSanityTest`, `RawProcessorCropTest`, `CudaRawOpsTest`, `MetalRawOpsTest`, `OpenClRawNeuralTest`, `OpenClCudaToLinearRefCompareTest`, `OpenClCudaRcdCompareTest`, `DagRawDump --sequential` | G10.10 archives RawProcessor-only cases and replaces parity references (Section 6.6). |
+| Legacy RAW and OpenCL | `OpenClRuntimeTest` legacy program cases, `OpenClCudaPipelineCompareTest`, `OpenClCudaFullPipelineBenchmark`, `ColorTempCudaSanityTest`, `RawProcessorCropTest`, `CudaRawOpsTest`, `MetalRawOpsTest`, `OpenClRawNeuralTest`, `OpenClCudaToLinearRefCompareTest`, `OpenClCudaRcdCompareTest` (archived in G10.2), `DagRawDump --sequential` | G10.10 archives RawProcessor-only cases and replaces parity references (Section 6.6). |
 | RawProcessor as a parity reference | `GpuDagMetalDevelopTest` and `decoded_rgb_test_support.hpp` users | G10.10 replaces the reference with stored expected pixel files. |
 | Unregistered test sources | `tests/opencl/opencl_fused_edit_pipeline_test.cpp`, `tests/edit/pipeline/{cpu_pipeline,pipeline_serial,pipeline_scheduler,tile}_test.cpp`, `tests/edit/operators/**/*_op_test.cpp`, `tests/edit/history/{transaction,version,history}_test.cpp`, `tests/raw/metal_*` preview tests, `tests/raw/opencl_raw_ops_test.cpp` | Archive in the phase that archives their subject. |
 
@@ -617,7 +618,7 @@ lines. Generated expected-pixel files and temporary evidence do not count.
 | Phase | Result | Main modules | Dependency | Expected diff | Status |
 | --- | --- | --- | --- | ---: | --- |
 | G10.1 | No product code reads stage-table values except the mirror itself; Geometry panel shows the uncropped source | scheduler, import, transfer, lens catalog, executor, render request | — | 1200–1700 | partial (manual check pending) |
-| G10.2 | Live edit, commit, Undo, Redo use the document only | history mutation, edit controller, render port | G10.1 | 1200–1800 | planned |
+| G10.2 | Live edit, commit, Undo, Redo use the document only | history mutation, edit controller, render port | G10.1 | 1200–1800 | partial (manual check pending; split into two commits) |
 | G10.3 | Open, checkout, rebuild, Version refs, Paste use build-then-swap without stage JSON | pipeline service, history state, transfer | G10.2 | 1200–1800 | planned |
 | G10.4 | Legacy history store removed; project format `0.9.0` | sleeve, storage, history, journal, CI | G10.3 | 900–1500 | planned |
 | G10.5 | DRT resolution moved out of `ODT_Op` and `OperatorParams` on three backends | runtime DRT | G10.1 | 1300–1900 | planned |
@@ -1080,9 +1081,9 @@ ctest --test-dir build/debug --output-on-failure -R "EditorSession|EditorMiniGit
 
 ### 11.10 Exit criteria
 
-- [ ] All listed tests pass and are discovered.
-- [ ] Recorded hashes are unchanged.
-- [ ] The allowed list of `NoProductCodeReadsStageTableOutsideMirror` no longer contains
+- [x] All listed tests pass and are discovered.
+- [x] Recorded hashes are unchanged.
+- [x] The allowed list of `NoProductCodeReadsStageTableOutsideMirror` no longer contains
       `editor_history_shared_helpers.cpp`.
 - [ ] Manual check on Windows CUDA: drag Exposure, release, Undo, Redo; the viewer and the
       history panel match. Record it as manual evidence.
@@ -1094,6 +1095,231 @@ ctest --test-dir build/debug --output-on-failure -R "EditorSession|EditorMiniGit
 ### 11.12 Completion record
 
 Use the template in Section 10.12.
+
+#### Phase G10.2 completion record (2026-09-22)
+
+**Status:** partial. All automated exit criteria are met. The manual Windows CUDA check (Section
+11.10, fourth item) has not run yet and needs the user. The diff is above the 2000-line limit of
+Section 24 (see "Diff size" below).
+
+- **Source revision and branch:** based on `fd7dae19` (G10.1) on `feature/gpu-dag-final-removal`.
+  Landed as two commits in PR #180 (see "Diff size").
+- **Actual changed modules:** `app/` (`editor_adjustment_pipeline`, `editor_session_edit_controller`,
+  `editor_session_render_controller`, `editor_session_service`, `editor_adjustment_types.hpp`,
+  `editor_render_intent.hpp`, `editor_session_ports.hpp`, `editor_session_bootstrap.hpp`,
+  `editor_pending_input.hpp` comment), `ui/alcedo_main/album_backend/` (history mutation, shared
+  helpers, state detail, projection, transfer, Version refs, history port, render scheduler port),
+  tests, test CMake, the source check, and `native_parameter_access.md`.
+
+**Implemented behavior**
+
+- Live preview write (`EditorHistoryMutation::CaptureAdjustmentBeforePreview`): the only write is
+  `ApplyEditorParameterWrite` on the document. `MirrorTargetToExecutor` and the mirror-failure
+  rollback are deleted. `RestoreUnsettledPreview` restores the document only.
+- Commit (`PublishAppliedTypedBatch`): `ApplyHistoryCommitToLivePipeline` and
+  `RefreshCommittedSnapshotFromLive` are deleted. After `PublishPreparedEdit` the panel projection
+  is re-read from the document (`RefreshPanelProjectionFromDocument`).
+- Undo, Redo, direct head move (`ApplyCommitToLiveDocument`): the batch is applied to the document
+  only. The stage step and its document restore lambda are deleted. A failed traversal still
+  inverse-applies the earlier commits and abandons the published head move.
+- Checkout (`EditorHistoryMutation::CheckoutVersion`): the committed-snapshot copy and refresh are
+  replaced by a panel projection refresh under the render lock. The stage-JSON rollback stays for
+  G10.3.
+- `HistoryWorkingState::committed_snapshot`, `root_snapshot`, and the write-only `pending_before`
+  map are deleted, with every capture and restore of them in mutation, transfer, Version refs, and
+  state detail.
+- `editor_history_shared_helpers` keeps only `LockLivePipeline`, `CommitFieldKey`,
+  `CommitRowFromEdit`, `VersionNameExists`, and `UniqueVersionName` (99 lines, was 514). All
+  snapshot builders and reducers are deleted (`MakeAdjustmentSnapshotFromLivePipeline`,
+  `MakePipelineParamsFromSnapshot`, `MakeAdjustmentSnapshotFromPipelineParams`,
+  `SnapshotAtHead`, `RootSnapshotFromMaterialized`, `ApplyHistoryCommitToSnapshot`, and the rest).
+- `editor_adjustment_pipeline`: `RemirrorEditorParameterToExecutor`,
+  `ApplyHistoryCommitToLivePipeline`, `ApplyEditorAdjustmentSnapshot`,
+  `ReadEditorAdjustmentOperatorState`, `ApplyEditorAdjustmentOperatorState`,
+  `SnapshotTouchesImageLoading`, `EditorAdjustmentExecutorParamsFromWrite`, and
+  `EditorAdjustmentOperatorState` are deleted from the API. `ApplyVersionHeadToLivePipeline`,
+  `RemirrorCurrentPanelFromDocument`, and `ResetEditableOperatorsToDefaultsPreservingImageLocal`
+  remain for G10.3 and use private stage helpers in the `.cpp`.
+- `EditorSessionService::adjustment_snapshot()` and `IEditorHistoryPort::ReadAdjustmentSnapshot`
+  are deleted. Source search: no production code, QML file, or Q_PROPERTY read the service
+  accessor. The QML property `EditorSessionController::adjustmentSnapshot` is built from
+  `panel_projection()`, not from this accessor, so it stays unchanged.
+- Render intent: `EditorRenderAdjustmentSnapshot`, `EditorRenderIntent::adjustment`,
+  `EditorRenderCommand::adjustment`, `live_parameters_applied` (intent and command),
+  `pending_initial_adjustment_`, and `ReasonAppliesAdjustmentSnapshot` are deleted. No producer
+  ever filled `adjustment` for a render that did not also set `live_parameters_applied`, so the
+  removed configure branch never ran with content.
+- Render port configure (`EditorSessionRenderSchedulerPort::DispatchPipelineFrame`): attaches the
+  frame sink under the render lock and does nothing else.
+- Source check: `ui/alcedo_main/album_backend/editor_history_shared_helpers.cpp` is removed from the
+  allowed list of `NoProductCodeReadsStageTableOutsideMirror`. No `album_backend` file is on the
+  list.
+- `native_parameter_access.md`: the remirror step and the "CPU executor remirror" and
+  "Committed snapshot" serialization boundaries are removed.
+- Prohibited terms in touched files: nine `gate`/`gating` comments were reworded (AGENTS.md rule).
+
+**Deviations from Sections 11.3–11.8**
+
+- `CancelLivePaste` (listed for G10.3) is deleted in this phase, from the port interface, the port,
+  the transfer unit, and the test fakes. It read `root_snapshot` and called
+  `ApplyEditorAdjustmentSnapshot`, which this phase deletes. It had no production caller, and it
+  restored only the stage table, not the document.
+- The Paste rollback flag `wal_published` became dead after the snapshot refresh was deleted (every
+  rollback now runs before the WAL append), so the flag and its truncate branch are deleted.
+- The expected hashes were recorded at `fd7dae19`, not `92085ffe`. G10.1 did not touch the history
+  path. The recording test pins the root id (`CreateEmptyWithRootId`) and `CommitClock`
+  (`CommitClockAccess::ResetGlobal`), because commit hashes fold `created_at_ns`. It ran twice on
+  the unchanged code with the same values before any production edit.
+- `RejectedWriteKeepsDocumentAndCreatesNoCommit` and `WalAppendFailureRestoresBeforeValue` are in
+  `EditorSessionHistoryPortTest`, not in `EditorSessionEditControllerTest` and
+  `EditorMiniGitJournalRecoveryTest`. Those two targets use fake ports and have no document, and the
+  WAL-failure restore is owned by `EditorHistoryMutation`. The rejected-write test still drives
+  `EditorSessionEditController::HandlePatch` against the real history port (the target now links
+  `EditorSessionEditController`).
+- The rejected write is a scalar write on the `curve` field. `CurveModel::SetPoints` accepts any
+  point list, so no out-of-range curve write exists to reject.
+- `LivePreviewWriteChangesOnlyDocument` proves "no stage use" by asserting that
+  `ExportPipelineParams()` is equal before and after the preview write and the commit. The test
+  file still includes `pipeline_cpu.hpp`, because the guard needs an executor for the render lock.
+- `EditorAdjustmentPatch::params_json` stays. No production code reads it; test helpers parse it
+  into `write`. Its comment now says so.
+
+**Primary success call chain:**
+
+```text
+QML submitWrite
+  -> EditorSessionController::submitWrite
+  -> EditorSessionService::EnqueueAdjustmentInput
+  -> EditorSessionEditController::HandlePendingSequence
+  -> EditorHistoryMutation::CaptureAdjustmentBeforePreview   (render lock)
+       ReadEditorParameterJson(document)                      (before value)
+       ApplyEditorParameterWrite(document)                    (only write)
+       UpsertEditorPanelField(panel_projection)
+  -> EditorRenderCommand{reason}                              (no parameter values)
+  -> EditorSessionRenderSchedulerPort::DispatchPipelineFrame
+       configure_under_render_lock_: AttachExecutionStages(sink) only
+  -> CPUPipelineExecutor::Apply -> Renderer<Backend> reads the bound document
+  -> EditorHistoryMutation::CommitAdjustment
+       MakeSetParameterBatch -> PrepareAppendEdit -> PublishPreparedEdit
+       RefreshPanelProjectionFromDocument
+
+Undo / Redo / MoveHeadToCommit
+  -> PrepareUndo | PrepareRedo | PrepareMoveHeadToCommit
+  -> PublishPreparedHeadMove
+  -> ApplyCommitToLiveDocument per traversed commit (ApplyPipelineEditBatch on the document)
+  -> ProjectDocumentEdit + RefreshPanelProjectionFromDocument
+```
+
+**Primary failure and restore call chain:**
+
+```text
+ApplyEditorParameterWrite rejects the value (for example a scalar write on the curve field)
+  -> CaptureAdjustmentBeforePreview returns false with the Model error; the document is unchanged
+  -> EditorSessionEditController returns Rejected; no render command, no commit
+
+PublishPreparedEdit fails (WAL append error)
+  -> CommitAdjustment: restore_before -> ApplyEditorParameterPatch(before JSON) on the document
+  -> head and chain stay at the previous commit; the caller receives the WAL error
+
+A traversed commit fails during a head move
+  -> earlier commits are inverse-applied to the document
+  -> AbandonPublishedHeadMove restores the prior working selection
+```
+
+**What was proven (executed tests)**
+
+| Required name | Target | Result |
+| --- | --- | --- |
+| `ExposureEditSequenceProducesUnchangedCommitAndChainHashes` | `EditorSessionHistoryPortTest` | PASS (head `b6cf9394…`/`fbdfc141…`, chain `e89bc194…`/`c2f464c6…`, same as recorded) |
+| `LivePreviewWriteChangesOnlyDocument` | `EditorSessionHistoryPortTest` | PASS |
+| `UndoRedoRestoresDocumentValuesAndHead` | `EditorSessionHistoryPortTest` | PASS |
+| `RejectedWriteKeepsDocumentAndCreatesNoCommit` | `EditorSessionHistoryPortTest` (see deviations) | PASS |
+| `WalAppendFailureRestoresBeforeValue` | `EditorSessionHistoryPortTest` (see deviations) | PASS |
+| `DeferredInitialRenderPresentsBoundDocument` | `EditorSessionRenderControllerTest` | PASS |
+| `RenderPortConfiguresOnlyFrameSinkUnderRenderLock` | `EditorSessionRenderSchedulerPortTest` | PASS |
+| `NoProductCodeReadsStageTableOutsideMirror` | ctest script | PASS (allowed list no longer has `editor_history_shared_helpers.cpp`) |
+| `StageTableReadCheckRejectsProductFileOutsideMirror` | ctest script | PASS |
+
+Test rewrites and removals caused by deleted APIs:
+
+- `EditorSessionHistoryPortTest`: snapshot reads became document reads (`DocumentFieldNumber`,
+  `DocumentLutPath`) or panel projection reads (`PanelScalarValue`). Renamed:
+  `PasteCreatesNewVersionAndLiveDocumentReceivesPastedValue`,
+  `SettledEditPublishesDocumentValueToPanelProjection`,
+  `MoveHeadToAncestorThenRedoDescendantPublishesFinalDocumentValues`,
+  `UnmappedHeadMovePreservesHeadDocumentProjectionAndJournal`,
+  `LibraryPasteOfLutRestoresLutFieldInLiveDocumentOnEditorReopen`,
+  `LibraryPasteWithoutSerializedCheckpointStillRestoresLutFieldInLiveDocument`. Deleted with their
+  subjects: `EditorHistoryPureReducerTest.ReplaysHeadWithoutConstructingRenderExecutor`,
+  `PasteCancelRestoresPriorActiveVersionAndPipelineParams`,
+  `InitialAdjustmentSnapshotContainsEverySupportedFieldBeforeAnyRender`.
+- `EditorAdjustmentPipelineTest`: the five stage-apply cases are deleted. Kept:
+  `WritePayloadMapsOntoDocumentModelKeys`, `UnknownFieldKeyHasNoAdjustmentField`.
+- `EditorSessionEditControllerTest`: render-delta assertions became assertions on the write that
+  reached history and on the render reason.
+- `EditorSessionRenderControllerTest`: the two snapshot-carrying cases became
+  `DeferredInitialRenderPresentsBoundDocument` and `QualityBaseAfterFirstFrameTargetsSameImage`.
+- `EditorRenderCoordinatorTest`: `SubmitDoesNotMutateStoredIntentAfterAccept` checks other intent
+  fields; `EditorRenderIntentPolicyTest.ViewDependentReasonsDoNotReplayAdjustmentSnapshot` is
+  deleted with `ReasonAppliesAdjustmentSnapshot`.
+- Fakes and fixtures lost their `ReadAdjustmentSnapshot`, `CancelLivePaste`, and
+  `adjustment_snapshot()` overrides.
+
+**Build and test commands with exit codes**
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorSessionHistoryPortTest EditorSessionEditControllerTest EditorMiniGitJournalRecoveryTest EditorSessionRenderControllerTest EditorSessionRenderSchedulerPortTest EditorAdjustmentPipelineTest EditorRenderCoordinatorTest PipelineEditBatchTest CommitGraphTest alcedo_main   -> exit 0
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 -- -k 0   -> exit 1 (only OpenClCudaRcdCompareTest, see below)
+ctest --test-dir build/debug -j 4 -R "EditorSession|EditorMiniGit|EditorAdjustmentPipelineTest|EditorRenderCoordinatorTest|PipelineEditBatchTest|CommitGraphTest|NoProductCodeReadsStageTableOutsideMirror|StageTableReadCheck"   -> exit 8 (7 failures from before this phase)
+```
+
+**Discovered / passed / failed / skipped counts**
+
+- Baseline on the unchanged branch (`fd7dae19`, Section 11.9 set): 443 discovered, 436 passed,
+  7 failed.
+- After the change (same set, after a full tree build): 438 discovered, 431 passed, 7 failed,
+  0 skipped. Reconciliation: the baseline listed 3 `EditorSessionNodeCommandTest.MoveColorGrade*`
+  cases from a stale binary (they are not in the source at `fd7dae19`). Of the other names, 22
+  left the set and 20 entered it: renames count on both sides, plus the deletions and new cases
+  listed above (443 - 3 - 22 + 20 = 438).
+- The 7 failures are the same tests as the baseline: the 5 `EditorSessionRenderSchedulerPortTest`
+  sink-bind cases recorded in G10.1, plus
+  `EditorSessionCommandQueueBaselineTest.RapidImageSelectionKeepsRunningTargetAndReplacesOnlyUnstartedSelection`
+  and `EditorSessionActionPolicyCq3Test.AdjustmentPanelsReloadOnlyWhenCommittedContentChanges`. The
+  last two also fail on clean `fd7dae19` with freshly built binaries (stash, rebuild, rerun).
+- Wider regression (`Editor|AdjustmentTransfer|Pipeline*|ThumbnailService|WorkspaceShell|MainQml`,
+  795 discovered, `-j 4`): 37 failed. The 8 failing targets were rebuilt and run on clean
+  `fd7dae19`: 32 of the 37 also fail there (UI QML delegate, tone curve geometry, multi-slider,
+  RHI harness CUDA/OpenCL presentation, UI fuzz, most `ThumbnailServiceTest` cases). The other 5
+  (`PipelineMapperTests.EditorLoadUsesMatchingSerializedStateWithoutReconstruction` and 4
+  `ThumbnailServiceTests` cancel cases) pass when run serially with the change. The clean-HEAD
+  `-j 4` run itself had 58 failures in these targets, so these suites are not stable under
+  parallel ctest.
+
+**Other evidence**
+
+- Manual verification: not run.
+- Evidence path: `build/tmp/g10_2/` (`baseline_build.log`, `baseline_ctest.log`,
+  `recorded_hashes.txt`, `build_2.log`, `build_all_k.log`, `ctest_final.log`, `ctest_wide.log`,
+  `head_two_ctest.log`, `head_wide_ctest.log`, `five_serial_after.log`).
+- Diff size: 2435 lines (506 added, 1929 removed), 47 files, before this completion
+  record. This is above the 1200–1800 estimate
+  and above the 2000-line limit of Section 24. 1929 lines are deletions: snapshot helpers (~415),
+  the stage-apply test file (~150), and test rewrites. The phase was not split before it passed the
+  limit. On 2026-09-22 the user decided to split it into two commits: `60d11dc0` render requests
+  carry no parameter values (14 files, 116 added, 195 removed), and the following commit makes the
+  history and edit path document-only (includes this record).
+- Build failure that predates this phase: `tests/raw/opencl_cuda_rcd_compare_test.cpp:164` calls
+  `cv::cvtColor` without including `<opencv2/imgproc.hpp>`. It compared the RawProcessor RCD
+  demosaic on CUDA and OpenCL. On 2026-09-22 the user approved removing it: the
+  `OpenClCudaRcdCompareTest` target is deleted from `tests/raw/CMakeLists.txt`, and the source moved
+  unchanged (`git mv`) to
+  `alcedo_studio/deprecated/legacy_pipeline/tests/raw/opencl_cuda_rcd_compare_test.cpp`. This
+  item is taken from the G10.10 list (Section 5.8) ahead of time.
+- Remaining defects or unavailable platforms: the manual check above. Metal and OpenCL builds did
+  not run; the changed code is backend-neutral. The stage table still receives writes from Version
+  replay, Paste, open, and import (`ApplyVersionHeadToLivePipeline`,
+  `RemirrorCurrentPanelFromDocument`, `InjectRawMetadata`), which G10.3 and G10.7 remove.
 
 ---
 

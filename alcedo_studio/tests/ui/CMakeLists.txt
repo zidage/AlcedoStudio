@@ -199,6 +199,7 @@ target_include_directories(EditorSessionHistoryPortTest
   PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
 target_link_libraries(EditorSessionHistoryPortTest
   AdjustmentTransferService
+  EditorSessionEditController
   EditorNodeGraphDraft
   EditorNodeGraphProjection
   EditorAdjustmentPipeline
@@ -557,7 +558,7 @@ alcedo_ui_gtest_discover_tests(EditorFilmstripQmlTest
 )
 alcedo_register_test_target(EditorFilmstripQmlTest ui)
 
-# Phase A2: RegisteredShortcut wrapper behavior (scope gating, editable-focus
+# Phase A2: RegisteredShortcut wrapper behavior (scope checks, editable-focus
 # suppression, live rebinding, auto-repeat) without booting the full shell.
 add_executable(RegisteredShortcutQmlTest
     ${ALCEDO_TEST_ROOT}/ui/registered_shortcut_qml_test.cpp
@@ -1229,7 +1230,7 @@ alcedo_ui_gtest_discover_tests(EditorGeometryPanelQmlTest
     PROPERTIES LABELS "workspace_qml;geometry_panel")
 alcedo_register_test_target(EditorGeometryPanelQmlTest ui)
 
-# Phase 6G: RAW Decode capability gating, user input, complete operator params,
+# Phase 6G: RAW Decode capability checks, user input, complete operator params,
 # and session snapshot replay through the production QML panel.
 add_executable(EditorRawDecodePanelQmlTest
     ${ALCEDO_TEST_ROOT}/ui/editor_raw_decode_panel_qml_test.cpp

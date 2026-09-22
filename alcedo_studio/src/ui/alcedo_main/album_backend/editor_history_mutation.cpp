@@ -76,40 +76,15 @@ auto ProjectPanelFieldsForState(HistoryWorkingState& state, std::string* error) 
   return alcedo::ProjectCurrentPanelFields(document, 0, &state.panel_projection, error);
 }
 
-/// Prefer live GetOperator/GetParams over root_snapshot + SnapshotAtHead (plan §4.7).
-auto RefreshCommittedSnapshotFromLive(HistoryWorkingState& state, std::string* error,
-                                      bool holds_render_lock) -> bool {
-  if (!state.pipeline_guard || !state.pipeline_guard->pipeline_) {
-    if (error) *error = "Live pipeline unavailable while refreshing committed snapshot";
-    return false;
-  }
+/// Re-read every panel field from the live document after the document changed as a whole
+/// (head move, typed batch, Version checkout). Caller holds the render lock.
+auto RefreshPanelProjectionFromDocument(HistoryWorkingState& state, std::string* error) -> bool {
   try {
-    std::unique_lock<std::mutex> render_lock;
-    if (!holds_render_lock) {
-      render_lock = LockLivePipeline(*state.pipeline_guard->pipeline_);
-    }
-    if (!MakeAdjustmentSnapshotFromLivePipeline(*state.pipeline_guard->pipeline_,
-                                                &state.committed_snapshot, error)) {
-      return false;
-    }
-    if (state.pipeline_guard->document_ == nullptr) {
-      state.panel_projection = {};
-      return true;
-    }
     return ProjectPanelFieldsForState(state, error);
   } catch (const std::exception& ex) {
     if (error) *error = ex.what();
     return false;
   }
-}
-
-/// Read-only UI/log representation of actual normalized Model values. No stage is read or written.
-auto HistoryParams(const EditorParameterTarget& target, nlohmann::json params) -> nlohmann::json {
-  if (target.field_key == "exposure" && params.contains("exposure_ev")) {
-    params["exposure"] = params.at("exposure_ev");
-    params.erase("exposure_ev");
-  }
-  return params;
 }
 
 auto NodeDisplayName(const PipelineDocument& document, const NodeId& node_id) -> std::string {
@@ -121,12 +96,9 @@ auto NodeDisplayName(const PipelineDocument& document, const NodeId& node_id) ->
 }
 
 /// Update only the affected panel projection; it never becomes the source of an edit.
+/// The projection reads the live document, which already holds the edited value.
 void ProjectDocumentEdit(HistoryWorkingState&                          state,
-                         const HistoryWorkingState::DocumentFieldEdit& edit, bool backward) {
-  const auto& params = backward ? edit.before_model_json : edit.after_model_json;
-  UpsertCommittedSnapshot(&state.committed_snapshot, edit.target.field_key,
-                          HistoryParams(edit.target, params), true);
-  state.committed_snapshot.params_json.clear();
+                         const HistoryWorkingState::DocumentFieldEdit& edit) {
   if (state.pipeline_guard != nullptr && state.pipeline_guard->document_ != nullptr) {
     if (!PanelFieldMatchesProjectionNode(*state.pipeline_guard->document_,
                                          state.panel_projection_node_id, edit.target)) {
@@ -157,35 +129,10 @@ auto RestoreDocumentFields(HistoryWorkingState&                                 
   return true;
 }
 
-auto MirrorTargetToExecutor(CPUPipelineExecutor& executor, const PipelineDocument& document,
-                            const EditorParameterTarget& target, std::string* error) -> bool {
-  return RemirrorEditorParameterToExecutor(executor, document, target, error);
-}
-
+/// Apply one traversed commit to the live document only. The caller restores earlier commits
+/// of the same head move when a later one fails.
 auto ApplyCommitToLiveDocument(HistoryWorkingState& state, const EditCommit& commit, bool backward,
                                std::string* error) -> bool {
-  const auto use_after        = !backward;
-  auto       restore_document = [&]() -> bool {
-    if (IsPipelineEditBatchJson(commit.GetPayloadJSON())) {
-      try {
-        const auto batch = PipelineEditBatch::FromJSON(commit.GetPayloadJSON());
-        const auto direction =
-            backward ? PipelineEditApplyDirection::Forward : PipelineEditApplyDirection::Inverse;
-        return ApplyPipelineEditBatch(*state.pipeline_guard->document_, batch, direction, error,
-                                      {});
-      } catch (const std::exception& ex) {
-        if (error) *error = ex.what();
-        return false;
-      }
-    }
-    const auto found = state.document_edit_by_commit.find(commit.GetCommitHash());
-    if (found == state.document_edit_by_commit.end()) {
-      return true;
-    }
-    const auto& json = backward ? found->second.after_model_json : found->second.before_model_json;
-    return ApplyEditorParameterPatch(*state.pipeline_guard->document_, found->second.target, json,
-                                     error);
-  };
   if (IsPipelineEditBatchJson(commit.GetPayloadJSON())) {
     try {
       const auto batch = PipelineEditBatch::FromJSON(commit.GetPayloadJSON());
@@ -212,12 +159,6 @@ auto ApplyCommitToLiveDocument(HistoryWorkingState& state, const EditCommit& com
                                    error)) {
       return false;
     }
-  }
-  if (!ApplyHistoryCommitToLivePipeline(*state.pipeline_guard->pipeline_,
-                                        *state.pipeline_guard->commit_graph_, commit, use_after,
-                                        error)) {
-    (void)restore_document();
-    return false;
   }
   return true;
 }
@@ -267,10 +208,10 @@ auto ApplyPreparedHeadMoveOnLivePipeline(HistoryWorkingState&           state,
   for (const auto& commit : prepared.traversed_commits) {
     const auto found = state.document_edit_by_commit.find(commit.GetCommitHash());
     if (found != state.document_edit_by_commit.end()) {
-      ProjectDocumentEdit(state, found->second, prepared.backward);
+      ProjectDocumentEdit(state, found->second);
     }
   }
-  if (!RefreshCommittedSnapshotFromLive(state, error, true)) {
+  if (!RefreshPanelProjectionFromDocument(state, error)) {
     std::string restore_error;
     for (auto it = applied.rbegin(); it != applied.rend(); ++it) {
       (void)InverseApplyCommitToLiveDocument(state, *it, prepared.backward,
@@ -282,7 +223,6 @@ auto ApplyPreparedHeadMoveOnLivePipeline(HistoryWorkingState&           state,
   }
   history_state.RecordPublishedRenderReason(RenderReasonForHeadMove(prepared.traversed_commits));
   state.pipeline_guard->dirty_ = true;
-  state.pending_before.clear();
   state.pending_document_sequence.clear();
   state.recovered_head = false;
   SyncUnsettledPreviewFlag(state);
@@ -351,15 +291,7 @@ auto PublishAppliedTypedBatch(HistoryWorkingState& state, EditorHistoryState& hi
     restore_document();
     return false;
   }
-  if (!ApplyHistoryCommitToLivePipeline(*state.pipeline_guard->pipeline_,
-                                        *state.pipeline_guard->commit_graph_, *append.commit, true,
-                                        error)) {
-    std::string abandon_error;
-    (void)state.history->AbandonPublishedEdit(prepared, prior_selection, &abandon_error);
-    restore_document();
-    return false;
-  }
-  if (!RefreshCommittedSnapshotFromLive(state, error, true)) {
+  if (!RefreshPanelProjectionFromDocument(state, error)) {
     std::string abandon_error;
     (void)state.history->AbandonPublishedEdit(prepared, prior_selection, &abandon_error);
     restore_document();
@@ -430,14 +362,9 @@ auto EditorHistoryMutation::CaptureAdjustmentBeforePreview(
   } else {
     edit = sequence->second;
   }
+  // The document is the only parameter store. A rejected write leaves it unchanged.
   if (!ApplyEditorParameterWrite(*state->pipeline_guard->document_, edit.target, *patch.write,
                                  error)) {
-    return false;
-  }
-  if (!MirrorTargetToExecutor(*state->pipeline_guard->pipeline_, *state->pipeline_guard->document_,
-                              edit.target, error)) {
-    (void)ApplyEditorParameterPatch(*state->pipeline_guard->document_, edit.target,
-                                    edit.before_model_json, error);
     return false;
   }
   {
@@ -489,11 +416,7 @@ auto EditorHistoryMutation::RestoreUnsettledPreview(const alcedo::EditorHistoryG
     return false;
   }
   for (const auto& edit : fields) {
-    if (!MirrorTargetToExecutor(*state->pipeline_guard->pipeline_, *state->pipeline_guard->document_,
-                                edit.target, error)) {
-      return false;
-    }
-    ProjectDocumentEdit(*state, edit, true);
+    ProjectDocumentEdit(*state, edit);
   }
   state->pending_document_sequence.clear();
   SyncUnsettledPreviewFlag(*state);
@@ -548,7 +471,7 @@ auto EditorHistoryMutation::CommitAdjustment(const alcedo::EditorHistoryGuardHan
     return false;
 
   if (recorded.before_model_json == recorded.after_model_json) {
-    ProjectDocumentEdit(*state, recorded, false);
+    ProjectDocumentEdit(*state, recorded);
     state->pending_document_sequence.erase(sequence);
     SyncUnsettledPreviewFlag(*state);
     return true;
@@ -569,7 +492,7 @@ auto EditorHistoryMutation::CommitAdjustment(const alcedo::EditorHistoryGuardHan
     (void)restore_before();
     return false;
   }
-  ProjectDocumentEdit(*state, recorded, false);
+  ProjectDocumentEdit(*state, recorded);
   state->pending_document_sequence.erase(patch.field_key);
   SyncUnsettledPreviewFlag(*state);
   return true;
@@ -995,7 +918,7 @@ auto EditorHistoryMutation::DiscardUnmaterializedChanges(
       if (!ApplyEditorParameterPatch(*state->pipeline_guard->document_, edit.target,
                                      edit.before_model_json, error))
         return false;
-      ProjectDocumentEdit(*state, edit, true);
+      ProjectDocumentEdit(*state, edit);
     }
     state->pending_document_sequence.clear();
   }
@@ -1019,7 +942,6 @@ auto EditorHistoryMutation::DiscardUnmaterializedChanges(
   state->history->PublishWorkingSelection({});
   state->pipeline_guard->dirty_ = false;
   state->pipeline_guard->serialized_state_needs_writeback_ = false;
-  state->pending_before.clear();
   state->pending_document_sequence.clear();
   state->recovered_head = false;
   SyncUnsettledPreviewFlag(*state);
@@ -1053,8 +975,6 @@ auto EditorHistoryMutation::CheckoutVersion(const alcedo::EditorHistoryGuardHand
   const auto prior_select     = state->history->WorkingSelection();
   const bool prior_dirty      = state->pipeline_guard->dirty_;
   const bool prior_serialized = state->pipeline_guard->serialized_state_needs_writeback_;
-  const auto prior_snapshot   = state->committed_snapshot;
-  const auto prior_pending    = state->pending_before;
   const bool prior_recovered  = state->recovered_head;
   std::optional<alcedo::PipelineDocument> prior_document;
   nlohmann::json                          prior_params;
@@ -1074,8 +994,6 @@ auto EditorHistoryMutation::CheckoutVersion(const alcedo::EditorHistoryGuardHand
     state->history->PublishWorkingSelection(prior_select);
     state->pipeline_guard->dirty_ = prior_dirty;
     state->pipeline_guard->serialized_state_needs_writeback_ = prior_serialized;
-    state->committed_snapshot = prior_snapshot;
-    state->pending_before = prior_pending;
     state->recovered_head = prior_recovered;
     if (!prior_document.has_value() || !state->pipeline_guard->pipeline_) {
       return;
@@ -1119,9 +1037,14 @@ auto EditorHistoryMutation::CheckoutVersion(const alcedo::EditorHistoryGuardHand
       return false;
     }
 
-    if (!RefreshCommittedSnapshotFromLive(*state, error, false)) {
-      const auto snapshot_error = error ? *error : std::string{"Committed snapshot refresh failed"};
-      restore_or_report(snapshot_error);
+    bool projected = false;
+    {
+      auto render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
+      projected        = RefreshPanelProjectionFromDocument(*state, error);
+    }
+    if (!projected) {
+      const auto projection_error = error ? *error : std::string{"Panel projection refresh failed"};
+      restore_or_report(projection_error);
       return false;
     }
 
@@ -1142,7 +1065,6 @@ auto EditorHistoryMutation::CheckoutVersion(const alcedo::EditorHistoryGuardHand
   state_.RecordPublishedRenderReason(alcedo::EditorRenderReason::VersionDocumentChanged);
   state->pipeline_guard->dirty_ = false;
   state->pipeline_guard->serialized_state_needs_writeback_ = false;
-  state->pending_before.clear();
   state->recovered_head = false;
   return true;
 }

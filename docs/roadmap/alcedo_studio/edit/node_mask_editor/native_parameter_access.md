@@ -15,11 +15,13 @@ QML / EditorAdjustmentValueModel local value
   -> TakeReadyBatch (move the field write)
   -> EditorSessionEditController::HandlePendingSequence
   -> EditorHistoryMutation::CaptureAdjustmentBeforePreview
-  -> ApplyEditorParameterWrite -> ExposureModel::SetValue
-  -> RemirrorEditorParameterToExecutor (CPU operator JSON at this boundary)
-  -> serial render with live_parameters_applied
+  -> ApplyEditorParameterWrite -> ExposureModel::SetValue   (the only parameter write)
+  -> serial render (the renderer reads the bound PipelineDocument)
   -> CommitAdjustment (history before/after JSON)
 ```
+
+No step writes or reads a CPU stage operator. The render command carries only the
+render reason; it holds no parameter values.
 
 `submitPatch` exists only for QML collection objects (RAW, ODT, lens, Geometry).
 It parses JSON once on the GUI thread into the same `submitWrite` payload.
@@ -65,11 +67,8 @@ These JSON surfaces stay. They are not live Model writes.
 
 - History / WAL / project / import-export (`ToJson` / `LoadJson`,
   `ApplyEditorParameterPatch` as JSON → typed parse)
-- CPU executor remirror (`ReadEditorParameterJson` → `SetOperator` / `GetParams`)
-- Committed snapshot per-field `params_json` (history restore)
 - QML `submitPatch` collection parse
 - DRT GPU table prep (`ToJson` → `ODT_Op`)
 
-Live `EditorRenderAdjustmentSnapshot::params_json` stays empty.
 `MakeFullDto` remains on `IOperatorModel` for persistence and device recovery.
 Live packing and panel projection must not call it.

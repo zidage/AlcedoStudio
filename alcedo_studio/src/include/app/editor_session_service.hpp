@@ -76,12 +76,6 @@ class IEditorSessionBackend {
   [[nodiscard]] virtual auto has_pending_recovery() const -> bool { return false; }
   [[nodiscard]] virtual auto has_unmaterialized_changes() -> bool { return false; }
   [[nodiscard]] virtual auto last_error() const -> std::string = 0;
-  /// Read-only snapshot of the committed editor adjustment state (panel values,
-  /// not runtime pipeline handles). Returns the default-constructed empty
-  /// snapshot when the backend has no image or the history port is unavailable.
-  [[nodiscard]] virtual auto adjustment_snapshot() const -> EditorRenderAdjustmentSnapshot {
-    return {};
-  }
   /// Load-only panel values copied from Graph Node Models. Empty when the
   /// backend has no image. GUI delivery is discarded when session_generation
   /// does not match the live session.
@@ -551,7 +545,6 @@ class EditorSessionService final : public IEditorSessionBackend {
   [[nodiscard]] auto first_frame_request_id() const -> std::uint64_t {
     return render_.first_frame_request_id();
   }
-  [[nodiscard]] auto adjustment_snapshot() const -> EditorRenderAdjustmentSnapshot override;
   [[nodiscard]] auto panel_projection() const -> EditorPanelProjection override;
   [[nodiscard]] auto history_revision() const -> std::uint64_t override {
     return history_revision_.load(std::memory_order_acquire);

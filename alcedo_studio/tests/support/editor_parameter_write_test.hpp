@@ -79,24 +79,5 @@ inline auto SnapshotPatch(EditorPatchJsonInit init) -> EditorAdjustmentPatch {
   return scalar == nullptr ? 0.0f : scalar->value;
 }
 
-/// Snapshot projection equality. Live queue writes are not part of this
-/// comparison; those use typed @c write payloads.
-[[nodiscard]] inline auto SameSnapshotProjection(const EditorRenderAdjustmentSnapshot& lhs,
-                                                 const EditorRenderAdjustmentSnapshot& rhs)
-    -> bool {
-  if (lhs.snapshot_generation != rhs.snapshot_generation || lhs.fingerprint != rhs.fingerprint ||
-      lhs.params_json != rhs.params_json || lhs.patches.size() != rhs.patches.size()) {
-    return false;
-  }
-  for (std::size_t i = 0; i < lhs.patches.size(); ++i) {
-    const auto& a = lhs.patches[i];
-    const auto& b = rhs.patches[i];
-    if (a.field_key != b.field_key || a.params_json != b.params_json || a.settled != b.settled ||
-        a.enabled != b.enabled || a.target != b.target) {
-      return false;
-    }
-  }
-  return true;
-}
 
 }  // namespace alcedo::test

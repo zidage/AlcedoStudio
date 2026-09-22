@@ -82,12 +82,6 @@ if(ALCEDO_CUDA_ENABLED AND ALCEDO_OPENCL_ENABLED)
   gtest_discover_tests(OpenClCudaToLinearRefCompareTest TEST_PREFIX "OpenClCudaCompare.")
   alcedo_register_test_target(OpenClCudaToLinearRefCompareTest raw gpu)
 
-  add_executable(OpenClCudaRcdCompareTest ${ALCEDO_TEST_ROOT}/raw/opencl_cuda_rcd_compare_test.cpp)
-  target_include_directories(OpenClCudaRcdCompareTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-  target_link_libraries(OpenClCudaRcdCompareTest PRIVATE GTest::gtest_main RawProcessorOp ${ALCEDO_TEST_OPENCV_MIN_DEPS})
-  gtest_discover_tests(OpenClCudaRcdCompareTest TEST_PREFIX "OpenClCudaCompare.")
-  alcedo_register_test_target(OpenClCudaRcdCompareTest raw gpu)
-
   add_executable(OpenClCudaPipelineCompareTest ${ALCEDO_TEST_ROOT}/raw/opencl_cuda_pipeline_compare_test.cpp)
   target_include_directories(OpenClCudaPipelineCompareTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(OpenClCudaPipelineCompareTest PRIVATE GTest::gtest_main Operators RawProcessor OpenClGeometryUtils OpenClProgramLibrary ${ALCEDO_TEST_OPENCV_MIN_DEPS})

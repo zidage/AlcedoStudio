@@ -44,21 +44,6 @@ class EditorSessionBootstrapHistoryPort final : public IEditorHistoryPort {
   auto Redo(const EditorHistoryGuardHandle& /*guard*/, std::string* /*error*/) -> bool override {
     return true;
   }
-  auto ReadAdjustmentSnapshot(const EditorHistoryGuardHandle& /*guard*/,
-                              EditorRenderAdjustmentSnapshot* snapshot, std::string* /*error*/)
-      -> bool override {
-    if (snapshot) {
-      *snapshot = current_snapshot_;
-    }
-    return true;
-  }
-
-  void SetCurrentSnapshot(EditorRenderAdjustmentSnapshot snapshot) {
-    current_snapshot_ = std::move(snapshot);
-  }
-
- private:
-  EditorRenderAdjustmentSnapshot current_snapshot_{};
 };
 
 class EditorSessionBootstrapTaskPort final : public IEditorTaskPort {

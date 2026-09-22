@@ -125,17 +125,6 @@ class ProductionSessionBackend final : public alcedo::IEditorSessionBackend {
   auto active() const -> bool override { return true; }
   auto has_image() const -> bool override { return true; }
   auto last_error() const -> std::string override { return last_error_; }
-  auto adjustment_snapshot() const -> alcedo::EditorRenderAdjustmentSnapshot override {
-    alcedo::EditorRenderAdjustmentSnapshot snap;
-    std::string                            error;
-    if (handle_.valid) {
-      // ReadAdjustmentSnapshot is non-const on the port; snapshot is still
-      // logically const for the backend API.
-      const_cast<EditorSessionHistoryPort&>(history_).ReadAdjustmentSnapshot(handle_, &snap,
-                                                                             &error);
-    }
-    return snap;
-  }
   auto render_busy() const -> bool override { return render_busy_.load(); }
 
   void SetPresentationSinkId(alcedo::PresentationSinkId) override {}

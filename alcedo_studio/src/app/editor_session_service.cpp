@@ -610,20 +610,6 @@ void EditorSessionService::PublishDocumentSnapshot() {
   published_document_ = std::move(snapshot);
 }
 
-auto EditorSessionService::adjustment_snapshot() const -> EditorRenderAdjustmentSnapshot {
-  if (!dependencies_.history || !lifecycle_.has_history_guard()) {
-    return {};
-  }
-  EditorRenderAdjustmentSnapshot snapshot;
-  std::string                    error;
-  auto&                          history = *dependencies_.history;
-  if (!const_cast<IEditorHistoryPort&>(history).ReadAdjustmentSnapshot(lifecycle_.history_guard(),
-                                                                       &snapshot, &error)) {
-    return {};
-  }
-  return snapshot;
-}
-
 auto EditorSessionService::panel_projection() const -> EditorPanelProjection {
   if (!dependencies_.history || !lifecycle_.has_history_guard()) {
     return {};

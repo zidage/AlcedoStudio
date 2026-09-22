@@ -23,7 +23,6 @@ set(_stage_mirror_hosts
   "^app/import_service\\.cpp$"
   "^edit/pipeline/pipeline_cpu\\.cpp$"
   "^ui/alcedo_main/editor_support/controllers/pipeline_controller\\.cpp$"
-  "^ui/alcedo_main/album_backend/editor_history_shared_helpers\\.cpp$"
   "^edit/pipeline/pipeline_stage\\.cpp$"
   "^edit/history/edit_transaction\\.cpp$"
   "^edit/operators/"

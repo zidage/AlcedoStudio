@@ -210,19 +210,10 @@ class FakeSessionBackend final : public IEditorSessionBackend {
 
   auto                           Undo() -> EditorSessionResult override { return Discard(); }
 
-  // Phase 6C-7: snapshot publication for panel state loading.
-  EditorRenderAdjustmentSnapshot current_snapshot_;
-  // Load-only typed panel values. JSON patches on adjustment_snapshot are not
-  // converted for QML.
+  // Load-only typed panel values published to QML.
   alcedo::EditorPanelProjection current_panel_projection_{};
-  auto adjustment_snapshot() const -> EditorRenderAdjustmentSnapshot override {
-    return current_snapshot_;
-  }
   auto panel_projection() const -> alcedo::EditorPanelProjection override {
     return current_panel_projection_;
-  }
-  void SetAdjustmentSnapshot(EditorRenderAdjustmentSnapshot snapshot) {
-    current_snapshot_ = std::move(snapshot);
   }
   void SetPanelProjection(alcedo::EditorPanelProjection projection) {
     current_panel_projection_ = std::move(projection);
@@ -282,7 +273,7 @@ class FakeSessionBackend final : public IEditorSessionBackend {
 
   auto Patch(EditorAdjustmentPatch patch) -> EditorSessionResult override {
     ++patch_count;
-    UpsertSnapshotPatch(std::move(patch));
+    (void)patch;
     EditorSessionResult result;
     result.kind     = EditorSessionResultKind::RenderRouted;
     result.state    = state_;
@@ -293,7 +284,7 @@ class FakeSessionBackend final : public IEditorSessionBackend {
 
   auto CommitAdjustment(EditorAdjustmentPatch patch) -> EditorSessionResult override {
     ++commit_count;
-    UpsertSnapshotPatch(std::move(patch));
+    (void)patch;
     // A settled consume mutates history, so bump the revision the same way
     // EditorSessionService::CommitAdjustment does. Enqueue below does not.
     ++history_revision_;
@@ -431,20 +422,6 @@ class FakeSessionBackend final : public IEditorSessionBackend {
 
   std::uint64_t next_task_id_    = 100;
   std::uint64_t pending_task_id_ = 0;
-
- private:
-  void UpsertSnapshotPatch(EditorAdjustmentPatch patch) {
-    auto&      patches = current_snapshot_.patches;
-    const auto it      = std::find_if(
-        patches.begin(), patches.end(),
-        [&](const EditorAdjustmentPatch& p) { return p.field_key == patch.field_key; });
-    if (it == patches.end()) {
-      patches.push_back(std::move(patch));
-    } else {
-      *it = std::move(patch);
-    }
-    ++current_snapshot_.snapshot_generation;
-  }
 };
 
 auto ScalarPanelField(std::string key, float value) -> alcedo::EditorPanelFieldPresentation {
@@ -875,7 +852,7 @@ TEST(EditorSessionControllerPhase5ATest, RuntimeCoordinatorPresentationUpdatesCo
   EXPECT_EQ(controller.session_state(), EditorSessionState::Loading);
 
   // Render completions arrive as posted messages on the session command
-  // queue; drain between stages so the complete->submit->present gate
+  // queue; drain between stages so the complete->submit->present handshake
   // advances in order.
   runtime->coordinator->NotifySchedulerCompleted(request_id, true);
   runtime->service->DrainCommandQueueForTests();

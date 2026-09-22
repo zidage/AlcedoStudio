@@ -3,176 +3,35 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 #include "app/editor_adjustment_pipeline.hpp"
-#include "support/editor_parameter_write_test.hpp"
 
 #include <gtest/gtest.h>
 
 #include <string>
 
-#include "edit/operators/operator_registeration.hpp"
-#include "edit/pipeline/default_pipeline_params.hpp"
-#include "edit/pipeline/pipeline_cpu.hpp"
-
 namespace alcedo {
 namespace {
 
-class EditorAdjustmentPipelineTest : public ::testing::Test {
- protected:
-  static void SetUpTestSuite() { RegisterAllOperators(); }
-};
-
-TEST_F(EditorAdjustmentPipelineTest, AppliesTonePatchesToMatchingOperators) {
-  CPUPipelineExecutor executor;
-  executor.ResetToCleanBaselineAdjustments();
-
-  EditorRenderAdjustmentSnapshot snapshot;
-  snapshot.patches = {
-      alcedo::test::SnapshotPatch({"exposure", R"({"exposure":-0.75})", false}),
-      alcedo::test::SnapshotPatch({"contrast", R"({"contrast":18.0})", false}),
-  };
-
-  std::string error;
-  ASSERT_TRUE(ApplyEditorAdjustmentSnapshot(executor, snapshot, &error)) << error;
-
-  const auto exposure =
-      executor.GetStage(PipelineStageName::Basic_Adjustment).GetOperator(OperatorType::EXPOSURE);
-  const auto contrast =
-      executor.GetStage(PipelineStageName::Basic_Adjustment).GetOperator(OperatorType::CONTRAST);
-  ASSERT_TRUE(exposure.has_value());
-  ASSERT_TRUE(contrast.has_value());
-  EXPECT_FLOAT_EQ(exposure.value()->ExportOperatorParams()["params"]["exposure"].get<float>(),
-                  -0.75f);
-  EXPECT_FLOAT_EQ(contrast.value()->ExportOperatorParams()["params"]["contrast"].get<float>(),
-                  18.0f);
-}
-
-TEST_F(EditorAdjustmentPipelineTest, LatestSnapshotCanUpdateExistingFieldAgain) {
-  CPUPipelineExecutor executor;
-  executor.ResetToCleanBaselineAdjustments();
-
-  EditorRenderAdjustmentSnapshot first;
-  first.patches = {alcedo::test::SnapshotPatch({"exposure", R"({"exposure":0.25})", false})};
-  EditorRenderAdjustmentSnapshot latest;
-  latest.patches = {alcedo::test::SnapshotPatch({"exposure", R"({"exposure":1.25})", false})};
-
-  std::string error;
-  ASSERT_TRUE(ApplyEditorAdjustmentSnapshot(executor, first, &error)) << error;
-  ASSERT_TRUE(ApplyEditorAdjustmentSnapshot(executor, latest, &error)) << error;
-
-  const auto exposure =
-      executor.GetStage(PipelineStageName::Basic_Adjustment).GetOperator(OperatorType::EXPOSURE);
-  ASSERT_TRUE(exposure.has_value());
-  EXPECT_FLOAT_EQ(exposure.value()->ExportOperatorParams()["params"]["exposure"].get<float>(),
-                  1.25f);
-}
-
-TEST_F(EditorAdjustmentPipelineTest, SnapshotTouchesImageLoadingDetectsRawPatch) {
-  EditorRenderAdjustmentSnapshot tone_only;
-  tone_only.patches = {alcedo::test::SnapshotPatch({"exposure", R"({"exposure":0.5})", false})};
-  EXPECT_FALSE(SnapshotTouchesImageLoading(tone_only));
-
-  EditorRenderAdjustmentSnapshot raw_patch;
-  raw_patch.patches = {alcedo::test::SnapshotPatch({"raw_decode", R"({"raw":{"method":"default"}})", true})};
-  EXPECT_TRUE(SnapshotTouchesImageLoading(raw_patch));
-}
-
-// Content-path regression: re-applying an unchanged Image Loading operator must
-// not clear stage cache. View/detail/scope renders must not call this API at
-// all (see ReasonAppliesAdjustmentSnapshot); if they do, RAW_DECODE misses.
-TEST_F(EditorAdjustmentPipelineTest,
-       PreservesLensCalibrationCacheWhenCumulativeSnapshotReappliesLensPatch) {
-  CPUPipelineExecutor executor(true);
-  executor.ResetToCleanBaselineAdjustments();
-
-  auto lens_params                        = pipeline_defaults::MakeDefaultLensCalibParams();
-  lens_params["lens_calib"]["enabled"]    = true;
-  lens_params["lens_calib"]["lens_maker"] = "Nikon";
-  lens_params["lens_calib"]["lens_model"] = "Nikkor Test Lens";
-
-  EditorRenderAdjustmentSnapshot first;
-  first.patches = {
-      alcedo::test::SnapshotPatch({"lens_calib", lens_params.dump(), false}),
-      alcedo::test::SnapshotPatch({"exposure", R"({"exposure":0.25})", false}),
-  };
-
-  std::string error;
-  ASSERT_TRUE(ApplyEditorAdjustmentSnapshot(executor, first, &error)) << error;
-
-  auto& loading = executor.GetStage(PipelineStageName::Image_Loading);
-  ASSERT_TRUE(loading.GetOperator(OperatorType::LENS_CALIBRATION).has_value());
-  loading.SetOutputCacheValid(true);
-  const auto lens_before =
-      loading.GetOperator(OperatorType::LENS_CALIBRATION).value()->op_->GetParams();
-
-  EditorRenderAdjustmentSnapshot second;
-  second.patches = {
-      alcedo::test::SnapshotPatch({"lens_calib", lens_params.dump(), false}),
-      alcedo::test::SnapshotPatch({"exposure", R"({"exposure":0.75})", false}),
-  };
-  ASSERT_TRUE(ApplyEditorAdjustmentSnapshot(executor, second, &error)) << error;
-
-  EXPECT_TRUE(loading.CacheValid());
-  EXPECT_EQ(loading.GetOperator(OperatorType::LENS_CALIBRATION).value()->op_->GetParams(),
-            lens_before);
-
-  loading.SetOutputCacheValid(true);
-  auto changed_lens_params                        = lens_params;
-  changed_lens_params["lens_calib"]["lens_model"] = "Another Test Lens";
-  EditorRenderAdjustmentSnapshot changed;
-  changed.patches = {
-      alcedo::test::SnapshotPatch({"lens_calib", changed_lens_params.dump(), false}),
-  };
-  ASSERT_TRUE(ApplyEditorAdjustmentSnapshot(executor, changed, &error)) << error;
-  EXPECT_FALSE(loading.CacheValid());
-}
-
-TEST_F(EditorAdjustmentPipelineTest, RejectsUnknownFieldWithoutMutatingKnownOperators) {
-  CPUPipelineExecutor executor;
-  executor.ResetToCleanBaselineAdjustments();
-  const auto before = executor.GetStage(PipelineStageName::Basic_Adjustment)
-                          .GetOperator(OperatorType::EXPOSURE)
-                          .value()
-                          ->ExportOperatorParams();
-
-  EditorRenderAdjustmentSnapshot snapshot;
-  snapshot.patches = {alcedo::test::SnapshotPatch({"not_a_field", R"({"value":1})", false})};
-
-  std::string error;
-  EXPECT_FALSE(ApplyEditorAdjustmentSnapshot(executor, snapshot, &error));
-  EXPECT_NE(error.find("not_a_field"), std::string::npos);
-  EXPECT_EQ(executor.GetStage(PipelineStageName::Basic_Adjustment)
-                .GetOperator(OperatorType::EXPOSURE)
-                .value()
-                ->ExportOperatorParams(),
-            before);
-}
-
-TEST_F(EditorAdjustmentPipelineTest, WritePayloadMapsOntoDocumentAndExecutorKeys) {
+TEST(EditorAdjustmentPipelineTest, WritePayloadMapsOntoDocumentModelKeys) {
   const auto from_field = EditorAdjustmentDocumentParamsFromWrite("exposure", {{"exposure", 1.25}});
   EXPECT_FLOAT_EQ(from_field.at("exposure_ev").get<float>(), 1.25f);
   EXPECT_FALSE(from_field.contains("exposure"));
 
   const auto from_value = EditorAdjustmentDocumentParamsFromWrite("exposure", {{"value", 0.5}});
   EXPECT_FLOAT_EQ(from_value.at("exposure_ev").get<float>(), 0.5f);
+  EXPECT_FALSE(from_value.contains("value"));
 
-  const auto from_model =
-      EditorAdjustmentExecutorParamsFromWrite("exposure", {{"exposure_ev", -0.75}});
-  EXPECT_FLOAT_EQ(from_model.at("exposure").get<float>(), -0.75f);
-  EXPECT_FALSE(from_model.contains("exposure_ev"));
+  const auto from_lut =
+      EditorAdjustmentDocumentParamsFromWrite("lut", {{"ocio_lmt", "looks/film.cube"}});
+  EXPECT_EQ(from_lut.at("cube_path").get<std::string>(), "looks/film.cube");
+  EXPECT_FALSE(from_lut.contains("ocio_lmt"));
 
-  CPUPipelineExecutor executor;
-  executor.ResetToCleanBaselineAdjustments();
-  EditorRenderAdjustmentSnapshot snapshot;
-  snapshot.patches = {alcedo::test::SnapshotPatch({
-      "exposure", EditorAdjustmentExecutorParamsFromWrite("exposure", {{"value", 2.0}}).dump(),
-      false})};
-  std::string error;
-  ASSERT_TRUE(ApplyEditorAdjustmentSnapshot(executor, snapshot, &error)) << error;
-  const auto exposure =
-      executor.GetStage(PipelineStageName::Basic_Adjustment).GetOperator(OperatorType::EXPOSURE);
-  ASSERT_TRUE(exposure.has_value());
-  EXPECT_FLOAT_EQ(exposure.value()->ExportOperatorParams()["params"]["exposure"].get<float>(),
-                  2.0f);
+  const auto unchanged = EditorAdjustmentDocumentParamsFromWrite("contrast", {{"contrast", 12.0}});
+  EXPECT_FLOAT_EQ(unchanged.at("contrast").get<float>(), 12.0f);
+}
+
+TEST(EditorAdjustmentPipelineTest, UnknownFieldKeyHasNoAdjustmentField) {
+  EXPECT_TRUE(ResolveEditorAdjustmentField("exposure").has_value());
+  EXPECT_FALSE(ResolveEditorAdjustmentField("not_a_field").has_value());
 }
 
 }  // namespace

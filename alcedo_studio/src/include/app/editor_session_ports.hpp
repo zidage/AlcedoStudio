@@ -192,12 +192,6 @@ class IEditorHistoryPort {
     }
     return false;
   }
-  /// Read the adjustment state after a history operation. History remains the
-  /// source of truth; the session service must not guess the resulting params.
-  virtual auto ReadAdjustmentSnapshot(const EditorHistoryGuardHandle& guard,
-                                      EditorRenderAdjustmentSnapshot* snapshot, std::string* error)
-      -> bool = 0;
-
   /**
    * @brief Copy load-only panel values for the GUI.
    *
@@ -228,8 +222,8 @@ class IEditorHistoryPort {
   }
 
   /// Switch the checked-out Version after a successful save checkpoint. Rebuilds
-  /// the live pipeline from root + first-parent chain and refreshes the
-  /// adjustment snapshot. Default rejects so fakes must opt in.
+  /// the live document from root + first-parent chain and refreshes the panel
+  /// projection. Default rejects so fakes must opt in.
   /// Fail closed: prior Version and pipeline remain published on failure.
   /// `version_id` is a Version ref identity (Hash128 / version_ref_id_t).
   virtual auto CheckoutVersion(const EditorHistoryGuardHandle& /*guard*/,
@@ -264,7 +258,7 @@ class IEditorHistoryPort {
   }
 
   /// Return whether the active working head differs from the last materialized
-  /// head. The editor uses this to gate the current-image discard action.
+  /// head. The editor uses this to enable the current-image discard action.
   /// Test ports that do not model Mini-Git state may keep the default false.
   virtual auto HasUnmaterializedChanges(const EditorHistoryGuardHandle& /*guard*/,
                                         std::string* /*error*/) -> bool {
@@ -335,15 +329,6 @@ class IEditorHistoryPort {
     (void)version_display_name;
     return true;
   }
-
-  /// Cancel a live paste by restoring the prior Version and removing the paste Version.
-  virtual auto CancelLivePaste(const EditorHistoryGuardHandle& /*guard*/,
-                               const version_ref_id_t& /*prior_version_id*/,
-                               const version_ref_id_t& /*paste_version_id*/,
-                               std::string* /*error*/) -> bool {
-    return true;
-  }
-
 
   /// Capture the immutable live history prefix that a save checkpoint must
   /// persist. Production copies journal records and their inclusive sequence

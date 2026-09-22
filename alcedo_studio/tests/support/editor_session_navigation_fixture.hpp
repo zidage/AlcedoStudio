@@ -113,9 +113,6 @@ class EditorSessionNavigationFixture {
                           std::string* error) -> bool override;
     auto Undo(const EditorHistoryGuardHandle& guard, std::string* error) -> bool override;
     auto Redo(const EditorHistoryGuardHandle& guard, std::string* error) -> bool override;
-    auto ReadAdjustmentSnapshot(const EditorHistoryGuardHandle& guard,
-                                EditorRenderAdjustmentSnapshot* snapshot, std::string* error)
-        -> bool override;
     auto CaptureSaveCheckpoint(const EditorHistoryGuardHandle& guard, std::string* error)
         -> std::shared_ptr<const EditorMiniGitSaveCapture> override;
     auto CheckoutVersion(const EditorHistoryGuardHandle& guard, const Hash128& version_id,
