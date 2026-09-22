@@ -148,27 +148,31 @@ inline auto operator==(const PreparedSourceKey& a, const PreparedSourceKey& b) -
  * Output of Develop is camera scene-linear RGB. Camera-to-AP1 is a later node.
  */
 struct PreparedRawInput {
-  HostImagePlane                      pixels;
-  Extent2D                            host_extent{};
-  Extent2D                            develop_output_extent{};
-  Extent2D                            full_reference_extent{};
-  RectI                               sensor_active_area{};
-  RectI                               demosaic_output_crop{};
-  std::uint8_t                        downsample_passes = 0;
-  RawInputKind                        input_kind        = RawInputKind::BayerRaw;
-  RawCfaPattern                       cfa_pattern{};
-  RawLinearizationParams              linearization{};
+  HostImagePlane                           pixels;
+  Extent2D                                 host_extent{};
+  Extent2D                                 develop_output_extent{};
+  Extent2D                                 full_reference_extent{};
+  RectI                                    sensor_active_area{};
+  RectI                                    demosaic_output_crop{};
+  /// Student-tiled Neural Engine rectangle in the phase-aligned lattice.
+  RectI                                    neural_output_crop{};
+  Extent2D                                 neural_output_extent{};
+  Extent2D                                 neural_full_reference_extent{};
+  std::uint8_t                             downsample_passes = 0;
+  RawInputKind                             input_kind        = RawInputKind::BayerRaw;
+  RawCfaPattern                            cfa_pattern{};
+  RawLinearizationParams                   linearization{};
   // Present for unpacked RGB; absent for already scene-linear FromDirectRgb inputs.
   std::optional<RawRgbLinearizationParams> rgb_linearization;
-  RawSensorGeometry                   sensor{};
+  RawSensorGeometry                        sensor{};
   /// Camera multipliers plus lens EXIF copied at unpack. Develop lens calibration reads this.
-  RawRuntimeColorContext              color_context{};
-  std::optional<dng::WarpRectilinear> dng_warp_rectilinear;
-  SourceContentKey                    content_key{};
-  PreparedSourceKey                   source_key{};
-  SceneWorkingSpace                   working_space = SceneWorkingSpace::CameraRgb;
+  RawRuntimeColorContext                   color_context{};
+  std::optional<dng::WarpRectilinear>      dng_warp_rectilinear;
+  SourceContentKey                         content_key{};
+  PreparedSourceKey                        source_key{};
+  SceneWorkingSpace                        working_space = SceneWorkingSpace::CameraRgb;
 
-  [[nodiscard]] auto                  CompileSource() const -> DevelopCompileSource;
+  [[nodiscard]] auto                       CompileSource() const -> DevelopCompileSource;
 };
 
 }  // namespace alcedo

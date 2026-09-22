@@ -53,7 +53,7 @@ namespace {
 
 OpenClDemosaicNetModelCache* g_opencl_neural_cache_for_test = nullptr;
 
-void TraceDevelopStage(const char* stage) { (void)stage; }
+void                         TraceDevelopStage(const char* stage) { (void)stage; }
 
 struct GeometryResampleParams {
   float         m00;
@@ -102,9 +102,9 @@ void ExecuteOpenClLensCalibration(OpenClRenderDevice& device, const ExecutionPla
   }
 
   workspace.Device().SynchronizeRecordedWork(device.CommandContext());
-  const int width  = static_cast<int>(sensor->Texture().Width());
-  const int height = static_cast<int>(sensor->Texture().Height());
-  const auto bytes = static_cast<std::size_t>(width) * height * sizeof(float) * 4U;
+  const int  width   = static_cast<int>(sensor->Texture().Width());
+  const int  height  = static_cast<int>(sensor->Texture().Height());
+  const auto bytes   = static_cast<std::size_t>(width) * height * sizeof(float) * 4U;
   auto       staging = workspace.Device().CreateBuffer(bytes);
   workspace.Device().CopyImageToBuffer(sensor->Texture(), staging, 0, device.CommandContext());
   // Copy is on the DAG product queue. The retained lens kernels use OpenClContext::Queue(),
@@ -260,11 +260,18 @@ void CopyRgbaToPacked(opencl::OpenClEncodeQueue& stream, opencl::OpenClBufferVie
 void EncodeHighlightFromRgbaAndPack(opencl::OpenClEncodeQueue& stream, opencl::OpenClBufferView src,
                                     cl_mem packed, const PreparedRawInput& input,
                                     std::uint32_t src_width, std::uint32_t src_height,
-                                    opencl::OpenClBufferView dst, const HighlightScratch& scratch) {
+                                    opencl::OpenClBufferView dst, const HighlightScratch& scratch,
+                                    RectI crop = {}) {
   OpenCL::EncodeHighlightReconstruct(stream, src, dst, scratch.mask, scratch.dilated, scratch.sums,
                                      scratch.cnts, scratch.clipped, input.linearization.cam_mul,
                                      src_width, src_height);
-  CopyRgbaToPacked(stream, dst, packed, input, src_width, src_height, true);
+  if (crop.width <= 0 || crop.height <= 0) {
+    CopyRgbaToPacked(stream, dst, packed, input, src_width, src_height, true);
+    return;
+  }
+  OpenCL::EncodeCopyRgbaCropInverseOrient(stream, dst, packed, crop, src_width,
+                                          input.linearization.cam_mul,
+                                          input.sensor.orientation_flip);
 }
 
 void EncodePlanarHighlightAndPack(opencl::OpenClEncodeQueue& stream, opencl::OpenClBufferView r,
@@ -281,12 +288,12 @@ void EncodePlanarHighlightAndPack(opencl::OpenClEncodeQueue& stream, opencl::Ope
 
 auto AllocateLegacyDemosaicScratch(OpenClRenderDevice& device, const PreparedRawInput& input,
                                    bool hlr) -> LegacyDemosaicScratch {
-  auto&      transients  = device.Workspace().TransientBuffers();
-  auto&      backend     = device.Workspace().Device();
-  const auto width       = input.host_extent.width;
-  const auto height      = input.host_extent.height;
-  const auto plane_bytes = static_cast<std::size_t>(width) * height * sizeof(float);
-  const auto rgba_bytes  = plane_bytes * 4;
+  auto&                 transients  = device.Workspace().TransientBuffers();
+  auto&                 backend     = device.Workspace().Device();
+  const auto            width       = input.host_extent.width;
+  const auto            height      = input.host_extent.height;
+  const auto            plane_bytes = static_cast<std::size_t>(width) * height * sizeof(float);
+  const auto            rgba_bytes  = plane_bytes * 4;
 
   LegacyDemosaicScratch scratch;
   if (input.cfa_pattern.kind == RawCfaKind::XTrans6x6) {
@@ -321,9 +328,9 @@ auto AllocateLegacyDemosaicScratch(OpenClRenderDevice& device, const PreparedRaw
 }
 
 void ReleaseHighlightScratch(OpenClRenderDevice& device, const HighlightScratch& scratch) {
-  ReleaseTransientSlabsAfterGpuLastUse(device, {scratch.mask_ptr, scratch.dilated_ptr,
-                                               scratch.sums_ptr, scratch.cnts_ptr,
-                                               scratch.clipped_ptr});
+  ReleaseTransientSlabsAfterGpuLastUse(
+      device, {scratch.mask_ptr, scratch.dilated_ptr, scratch.sums_ptr, scratch.cnts_ptr,
+               scratch.clipped_ptr});
 }
 
 void EncodeLegacyDemosaic(OpenClRenderDevice& device, opencl::OpenClEncodeQueue& stream,
@@ -399,8 +406,8 @@ void EncodeNeural(OpenClRenderDevice& device, opencl::OpenClEncodeQueue& stream,
   std::lock_guard<std::mutex> neural_decode(OpenClNeuralDecodeMutex());
   auto&                       backend = device.Workspace().Device();
   auto&                       neural  = backend.NeuralDemosaicWorkspace();
-  const auto width   = input.host_extent.width;
-  const auto height  = input.host_extent.height;
+  const auto                  width   = input.host_extent.width;
+  const auto                  height  = input.host_extent.height;
   if (linear.offset_bytes % sizeof(float) != 0) {
     throw std::runtime_error("ExecuteOpenClDevelop: Neural CFA offset is not float-aligned");
   }
@@ -449,20 +456,27 @@ void EncodeNeural(OpenClRenderDevice& device, opencl::OpenClEncodeQueue& stream,
     (void)neural.executor.EnqueueXTrans(cache.XTrans(), neural.slots, dispatch);
   }
 
-  const auto aligned_w = static_cast<std::uint32_t>(geometry->aligned_width);
-  const auto aligned_h = static_cast<std::uint32_t>(geometry->aligned_height);
-  void*      hlr_ptr   = nullptr;
+  const auto  aligned_w   = static_cast<std::uint32_t>(geometry->aligned_width);
+  const auto  aligned_h   = static_cast<std::uint32_t>(geometry->aligned_height);
+  const RectI neural_crop = input.neural_output_crop;
+  if (neural_crop.width <= 0 || neural_crop.height <= 0 ||
+      neural_crop.x + neural_crop.width > geometry->aligned_width ||
+      neural_crop.y + neural_crop.height > geometry->aligned_height) {
+    throw std::runtime_error(
+        "ExecuteOpenClDevelop: Neural Engine output crop is outside the aligned CFA");
+  }
+  void*                           hlr_ptr = nullptr;
   std::optional<HighlightScratch> highlight;
   if (hlr) {
-    hlr_ptr   = device.Workspace().TransientBuffers().Allocate(rgba_bytes);
+    hlr_ptr      = device.Workspace().TransientBuffers().Allocate(rgba_bytes);
     auto hlr_dst = ViewFromPtr(backend, hlr_ptr, rgba_bytes);
-    highlight = AllocateHighlightScratch(device, aligned_w, aligned_h);
+    highlight    = AllocateHighlightScratch(device, aligned_w, aligned_h);
     EncodeHighlightFromRgbaAndPack(stream, rgba, packed, input, aligned_w, aligned_h, hlr_dst,
-                                   *highlight);
+                                   *highlight, neural_crop);
   } else {
-    OpenCL::EncodeCopyRgbaCropInverseOrient(
-        stream, rgba, packed, CropOrFull(input, aligned_w, aligned_h), aligned_w,
-        input.linearization.cam_mul, input.sensor.orientation_flip);
+    OpenCL::EncodeCopyRgbaCropInverseOrient(stream, rgba, packed, neural_crop, aligned_w,
+                                            input.linearization.cam_mul,
+                                            input.sensor.orientation_flip);
   }
   // Cached module kernels stay bound until this wait. Releasing the decode lock
   // before the queue drains lets another device Reset those cl_kernel arguments.
@@ -498,7 +512,7 @@ void ExecuteOpenClDevelop(OpenClRenderDevice& device, const ExecutionPlan& plan,
   if (develop == nullptr) {
     throw std::runtime_error("ExecuteOpenClDevelop: missing develop node");
   }
-  auto pending = TakePendingDirtyFields(develop->Params());
+  auto               pending     = TakePendingDirtyFields(develop->Params());
   const auto         flags       = develop->Params().Params();
   const bool         hlr         = flags.highlights_reconstruct;
   const auto         out_w       = plan.source.develop_output_extent.width;
@@ -684,7 +698,7 @@ void ExecuteOpenClCameraColor(OpenClRenderDevice& device, const ExecutionPlan& p
   if (develop == nullptr) {
     throw std::runtime_error("ExecuteOpenClCameraColor: missing develop node");
   }
-  auto pending = TakePendingDirtyFields(develop->Params());
+  auto       pending        = TakePendingDirtyFields(develop->Params());
   const auto develop_params = develop->Params().Params();
   const auto resolved       = ResolveDevelopColorTransform(develop_params);
   if (!resolved.ok) {

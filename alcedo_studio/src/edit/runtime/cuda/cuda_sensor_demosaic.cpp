@@ -78,14 +78,14 @@ void PackRgbWithOptionalHighlight(CudaRenderDevice& device, cv::cuda::GpuMat rgb
     CUDA::ApplyInverseCamMulAndPackRGBAOriented(rgb, packed, cam_mul, orientation_flip, &stream);
     return;
   }
-  auto&     workspace   = device.Workspace();
-  const int cw          = rgb.cols;
-  const int ch          = rgb.rows;
-  int*   anyclipped     = static_cast<int*>(AllocateTransient(workspace, sizeof(int)));
-  float* sums           = static_cast<float*>(AllocateTransient(workspace, sizeof(float) * 4));
-  float* cnts           = static_cast<float*>(AllocateTransient(workspace, sizeof(float) * 4));
-  void*  hlr_rgb        = AllocateTransient(workspace, static_cast<std::size_t>(cw) * ch *
-                                                            sizeof(float) * 3);
+  auto&     workspace  = device.Workspace();
+  const int cw         = rgb.cols;
+  const int ch         = rgb.rows;
+  int*      anyclipped = static_cast<int*>(AllocateTransient(workspace, sizeof(int)));
+  float*    sums       = static_cast<float*>(AllocateTransient(workspace, sizeof(float) * 4));
+  float*    cnts       = static_cast<float*>(AllocateTransient(workspace, sizeof(float) * 4));
+  void*     hlr_rgb =
+      AllocateTransient(workspace, static_cast<std::size_t>(cw) * ch * sizeof(float) * 3);
   CUDA::HighlightWorkspace highlight;
   highlight.BindExternal(anyclipped, sums, cnts, hlr_rgb, cw, ch);
   CUDA::HighlightCorrection   correction = CUDA::BuildHighlightCorrection(cam_mul);
@@ -103,11 +103,11 @@ void DemosaicBayerRcd(CudaRenderDevice& device, const PreparedRawInput& input,
   auto&     workspace = device.Workspace();
   const int w         = linear.cols;
   const int h         = linear.rows;
-  void* r_ptr  = AllocateTransient(workspace, static_cast<std::size_t>(w) * h * sizeof(float));
-  void* g_ptr  = AllocateTransient(workspace, static_cast<std::size_t>(w) * h * sizeof(float));
-  void* b_ptr  = AllocateTransient(workspace, static_cast<std::size_t>(w) * h * sizeof(float));
-  void* vh_ptr = AllocateTransient(workspace, static_cast<std::size_t>(w) * h * sizeof(float));
-  void* pq_ptr = AllocateTransient(workspace, static_cast<std::size_t>(w) * h * sizeof(float));
+  void*     r_ptr  = AllocateTransient(workspace, static_cast<std::size_t>(w) * h * sizeof(float));
+  void*     g_ptr  = AllocateTransient(workspace, static_cast<std::size_t>(w) * h * sizeof(float));
+  void*     b_ptr  = AllocateTransient(workspace, static_cast<std::size_t>(w) * h * sizeof(float));
+  void*     vh_ptr = AllocateTransient(workspace, static_cast<std::size_t>(w) * h * sizeof(float));
+  void*     pq_ptr = AllocateTransient(workspace, static_cast<std::size_t>(w) * h * sizeof(float));
 
   CUDA::RcdWorkspace rcd;
   rcd.BindExternal(r_ptr, g_ptr, b_ptr, vh_ptr, pq_ptr, cv::Size(w, h));
@@ -122,13 +122,13 @@ void DemosaicBayerRcd(CudaRenderDevice& device, const PreparedRawInput& input,
   }
 
   if (hlr) {
-    const int cw = r.cols;
-    const int ch = r.rows;
-    int*   anyclipped = static_cast<int*>(AllocateTransient(workspace, sizeof(int)));
-    float* sums       = static_cast<float*>(AllocateTransient(workspace, sizeof(float) * 4));
-    float* cnts       = static_cast<float*>(AllocateTransient(workspace, sizeof(float) * 4));
-    void*  hlr_rgb    = AllocateTransient(workspace, static_cast<std::size_t>(cw) * ch *
-                                                          sizeof(float) * 3);
+    const int cw         = r.cols;
+    const int ch         = r.rows;
+    int*      anyclipped = static_cast<int*>(AllocateTransient(workspace, sizeof(int)));
+    float*    sums       = static_cast<float*>(AllocateTransient(workspace, sizeof(float) * 4));
+    float*    cnts       = static_cast<float*>(AllocateTransient(workspace, sizeof(float) * 4));
+    void*     hlr_rgb =
+        AllocateTransient(workspace, static_cast<std::size_t>(cw) * ch * sizeof(float) * 3);
     CUDA::HighlightWorkspace highlight;
     highlight.BindExternal(anyclipped, sums, cnts, hlr_rgb, cw, ch);
     CUDA::HighlightCorrection correction =
@@ -137,12 +137,11 @@ void DemosaicBayerRcd(CudaRenderDevice& device, const PreparedRawInput& input,
     CUDA::AccumulateHighlightStats(r, g, b, correction, cv::Rect{}, highlight, accumulation,
                                    &stream);
     CUDA::FinalizeHighlightCorrection(accumulation, correction);
-    CUDA::ApplyHighlightCorrectionAndPackRGBAOriented(r, g, b, packed, correction,
-                                                      input.linearization.cam_mul,
-                                                      input.sensor.orientation_flip, &highlight,
-                                                      &stream);
-    ReleaseTransientSlabsAfterGpuLastUse(device, {r_ptr, g_ptr, b_ptr, anyclipped, sums, cnts,
-                                                 hlr_rgb});
+    CUDA::ApplyHighlightCorrectionAndPackRGBAOriented(
+        r, g, b, packed, correction, input.linearization.cam_mul, input.sensor.orientation_flip,
+        &highlight, &stream);
+    ReleaseTransientSlabsAfterGpuLastUse(device,
+                                         {r_ptr, g_ptr, b_ptr, anyclipped, sums, cnts, hlr_rgb});
     return;
   }
 
@@ -162,10 +161,9 @@ void DemosaicXTransInterpolator(CudaRenderDevice& device, const PreparedRawInput
   const int w         = linear.cols;
   const int h         = linear.rows;
   void* green_ptr = AllocateTransient(workspace, static_cast<std::size_t>(w) * h * sizeof(float));
-  void* rgb_ptr =
-      AllocateTransient(workspace, static_cast<std::size_t>(w) * h * sizeof(float) * 3);
-  auto      green  = WrapF32C1(green_ptr, w, h);
-  auto      rgb    = WrapF32C3(rgb_ptr, w, h);
+  void* rgb_ptr = AllocateTransient(workspace, static_cast<std::size_t>(w) * h * sizeof(float) * 3);
+  auto  green   = WrapF32C1(green_ptr, w, h);
+  auto  rgb     = WrapF32C3(rgb_ptr, w, h);
   const int passes = input.downsample_passes == 0 ? 3 : 1;
   CUDA::XTransToRGB_Ref(linear, green, rgb, input.cfa_pattern.xtrans_pattern, passes, &stream);
   ReleaseTransientSlabsAfterGpuLastUse(device, {linear.data, green_ptr});
@@ -183,18 +181,16 @@ void DemosaicNeuralEngine(CudaRenderDevice& device, const PreparedRawInput& inpu
   const bool  is_bayer = input.cfa_pattern.kind == RawCfaKind::Bayer2x2;
   const int   min_spatial =
       is_bayer ? DemosaicNetBayerSpec::kMinSpatial : DemosaicNetXTransSpec::kMinSpatial;
-  const auto geometry =
-      ComputeNeuralAlignedGeometry(input.cfa_pattern, linear.cols, linear.rows, min_spatial,
-                                   &error);
+  const auto geometry = ComputeNeuralAlignedGeometry(input.cfa_pattern, linear.cols, linear.rows,
+                                                     min_spatial, &error);
   if (!geometry.has_value()) {
     throw std::runtime_error("ExecuteCudaDevelop: Neural Engine preprocess failed: " + error);
   }
 
-  auto& workspace = device.Workspace();
-  void* aligned_ptr =
-      AllocateTransient(workspace, static_cast<std::size_t>(geometry->aligned_width) *
-                                       static_cast<std::size_t>(geometry->aligned_height) *
-                                       sizeof(float));
+  auto& workspace   = device.Workspace();
+  void* aligned_ptr = AllocateTransient(
+      workspace, static_cast<std::size_t>(geometry->aligned_width) *
+                     static_cast<std::size_t>(geometry->aligned_height) * sizeof(float));
   cv::cuda::GpuMat neural_cfa =
       WrapF32C1(aligned_ptr, geometry->aligned_width, geometry->aligned_height);
   const auto prep = PrepareNeuralEngineCfa(linear, input.cfa_pattern, neural_cfa, &stream);
@@ -205,10 +201,10 @@ void DemosaicNeuralEngine(CudaRenderDevice& device, const PreparedRawInput& inpu
 
   const auto policy =
       is_bayer ? detail::MakeBayerStudentTilePolicy() : detail::MakeXTransStudentTilePolicy();
-  void* rgb_ptr = AllocateTransient(
-      workspace, static_cast<std::size_t>(neural_cfa.cols) * static_cast<std::size_t>(neural_cfa.rows) *
-                     sizeof(float) * 3);
-  cv::cuda::GpuMat output_rgb = WrapF32C3(rgb_ptr, neural_cfa.cols, neural_cfa.rows);
+  void* rgb_ptr = AllocateTransient(workspace, static_cast<std::size_t>(neural_cfa.cols) *
+                                                   static_cast<std::size_t>(neural_cfa.rows) *
+                                                   sizeof(float) * 3);
+  cv::cuda::GpuMat            output_rgb = WrapF32C3(rgb_ptr, neural_cfa.cols, neural_cfa.rows);
 
   auto&                       neural_workspace = device.NeuralDemosaicWorkspace();
   CUDA::NeuralDemosaicOptions neural_options;
@@ -227,13 +223,12 @@ void DemosaicNeuralEngine(CudaRenderDevice& device, const PreparedRawInput& inpu
     throw std::runtime_error("ExecuteCudaDevelop: Neural Engine unavailable: " + cache.LastError());
   }
 
-  const int         tile_h     = policy.input_tile.height;
-  const int         tile_w     = policy.input_tile.width;
-  const int         tile_out_h = policy.output_tile.height;
-  const int         tile_out_w = policy.output_tile.width;
-  const std::size_t input_numel =
-      static_cast<std::size_t>(3) * static_cast<std::size_t>(tile_h) *
-      static_cast<std::size_t>(tile_w);
+  const int         tile_h      = policy.input_tile.height;
+  const int         tile_w      = policy.input_tile.width;
+  const int         tile_out_h  = policy.output_tile.height;
+  const int         tile_out_w  = policy.output_tile.width;
+  const std::size_t input_numel = static_cast<std::size_t>(3) * static_cast<std::size_t>(tile_h) *
+                                  static_cast<std::size_t>(tile_w);
   const std::size_t activation_bytes =
       is_bayer ? BayerDemosaicNet::EstimateWorkspaceBytes(tile_h, tile_w, 1)
                : XTransDemosaicNet::EstimateWorkspaceBytes(tile_h, tile_w, 1);
@@ -246,9 +241,8 @@ void DemosaicNeuralEngine(CudaRenderDevice& device, const PreparedRawInput& inpu
                                 activation_bytes, tile_rgb_ptr, tile_out_h, tile_out_w);
   neural_workspace.EnsureCapacity(variant, tile_h, tile_w, input_numel);
 
-  const auto jobs =
-      detail::BuildTileJobs(cv::Rect(0, 0, neural_cfa.cols, neural_cfa.rows), neural_cfa.size(),
-                            policy);
+  const auto       jobs = detail::BuildTileJobs(cv::Rect(0, 0, neural_cfa.cols, neural_cfa.rows),
+                                                neural_cfa.size(), policy);
   cv::cuda::GpuMat tile_rgb;
   for (const auto& job : jobs) {
     const auto result = CUDA::EnqueueDemosaicStudentTileWithNeuralEngine(
@@ -266,7 +260,10 @@ void DemosaicNeuralEngine(CudaRenderDevice& device, const PreparedRawInput& inpu
   arena.ReleaseSlabContaining(act_ptr);
   arena.ReleaseSlabContaining(tile_rgb_ptr);
 
-  auto cropped = CropIfNeeded(output_rgb, input.demosaic_output_crop);
+  if (input.neural_output_crop.width <= 0 || input.neural_output_crop.height <= 0) {
+    throw std::runtime_error("ExecuteCudaDevelop: Neural Engine output crop is empty");
+  }
+  auto cropped = CropIfNeeded(output_rgb, input.neural_output_crop);
   ThrowIfPackedExtentMismatch(packed, cropped, input.sensor.orientation_flip, "Neural Engine");
   PackRgbWithOptionalHighlight(device, cropped, packed, input.linearization.cam_mul,
                                input.sensor.orientation_flip, hlr, stream);
@@ -285,8 +282,8 @@ void ExecuteCudaRgbAndPack(CudaRenderDevice& device, const PreparedRawInput& inp
   auto&     workspace = device.Workspace();
   const int width     = uploaded_rgba.cols;
   const int height    = uploaded_rgba.rows;
-  void*     rgb_ptr   = AllocateTransient(
-      workspace, static_cast<std::size_t>(width) * height * sizeof(float) * 3);
+  void*     rgb_ptr =
+      AllocateTransient(workspace, static_cast<std::size_t>(width) * height * sizeof(float) * 3);
   auto rgb = WrapF32C3(rgb_ptr, width, height);
   CUDA::LinearizeRgb(uploaded_rgba, rgb,
                      input.rgb_linearization.value_or(RawRgbLinearizationParams{}), &stream);

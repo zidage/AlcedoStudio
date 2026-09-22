@@ -14,9 +14,9 @@
 
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/pipeline/pipeline_apply_request.hpp"
+#include "edit/runtime/develop_demosaic.hpp"
 #include "edit/runtime/drt_display.hpp"
 #include "edit/runtime/frame_presenter.hpp"
-#include "edit/runtime/develop_demosaic.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/renderer.hpp"
 #include "edit/runtime/result_persistence.hpp"
@@ -82,7 +82,8 @@ auto Renderer<Backend>::Render(const std::shared_ptr<ImageBuffer>& input, Decode
 
 template <class Backend>
 auto Renderer<Backend>::Render(const std::shared_ptr<ImageBuffer>& input,
-                               const PipelineApplyRequest& request) -> std::shared_ptr<ImageBuffer> {
+                               const PipelineApplyRequest&         request)
+    -> std::shared_ptr<ImageBuffer> {
   if (!document_) {
     throw std::runtime_error("Renderer: PipelineDocument is not configured");
   }
@@ -91,8 +92,8 @@ auto Renderer<Backend>::Render(const std::shared_ptr<ImageBuffer>& input,
   }
   const bool use_session_cache = request.cache_policy == RenderCachePolicy::UseSessionCache;
 
-  auto&      encoded       = input->GetBuffer();
-  const auto encoded_bytes = std::span<const std::byte>{
+  auto&      encoded           = input->GetBuffer();
+  const auto encoded_bytes     = std::span<const std::byte>{
       reinterpret_cast<const std::byte*>(encoded.data()), encoded.size()};
   if (use_session_cache) {
     EnsureSessionDevice();
@@ -129,9 +130,9 @@ auto Renderer<Backend>::Render(const std::shared_ptr<ImageBuffer>& input,
   }
   detail::TraceGpuDagGeometry<Backend>(plan, request.geometry, request.submission);
   const auto& prepared = use_session_cache ? prepared_lease->Get() : *one_shot_prepared;
-  const auto persistence =
+  const auto  persistence =
       use_session_cache ? ResultPersistenceScopeForRole(request.submission.metadata.frame_role)
-                        : ResultPersistenceScope::AllCurrentResults;
+                         : ResultPersistenceScope::AllCurrentResults;
   if (diag::PreviewPerformanceEnabled()) {
     diag::PreviewDevelopDecodeParams develop;
     switch (request.decode_res) {
@@ -154,9 +155,9 @@ auto Renderer<Backend>::Render(const std::shared_ptr<ImageBuffer>& input,
         develop.cfa = diag::PreviewCfaKind::XTrans;
         break;
       case DevelopInputKind::DirectRgb:
-        develop.cfa = diag::PreviewCfaKind::DirectRgb;
+        develop.cfa        = diag::PreviewCfaKind::DirectRgb;
         develop.upload_rgb = true;
-        develop.layout = diag::PreviewDevelopLayout::UploadRgb;
+        develop.layout     = diag::PreviewDevelopLayout::UploadRgb;
         break;
       case DevelopInputKind::BayerCfa:
       default:
@@ -164,32 +165,31 @@ auto Renderer<Backend>::Render(const std::shared_ptr<ImageBuffer>& input,
         break;
     }
     const auto* develop_node = document_->Develop();
-    const auto method =
-        develop_node == nullptr
-            ? RawDemosaicMethod::Legacy
-            : ResolveDevelopDemosaicMethod(develop_node->Params().Params(), prepared.CompileSource());
-    develop.demosaic = method == RawDemosaicMethod::NeuralEngine
-                           ? diag::PreviewDemosaicMethod::NeuralEngine
-                           : diag::PreviewDemosaicMethod::Legacy;
+    const auto  method       = develop_node == nullptr
+                                   ? RawDemosaicMethod::Legacy
+                                   : ResolveDevelopDemosaicMethod(develop_node->Params().Params(),
+                                                                  prepared.CompileSource());
+    develop.demosaic         = method == RawDemosaicMethod::NeuralEngine
+                                   ? diag::PreviewDemosaicMethod::NeuralEngine
+                                   : diag::PreviewDemosaicMethod::Legacy;
     develop.highlights_reconstruct =
         develop_node != nullptr && develop_node->Params().Params().highlights_reconstruct;
     develop.downsample_passes = prepared.downsample_passes;
     develop.host_width        = prepared.host_extent.width;
     develop.host_height       = prepared.host_extent.height;
-    develop.develop_width     = prepared.develop_output_extent.width;
-    develop.develop_height    = prepared.develop_output_extent.height;
-    develop.full_ref_width    = prepared.full_reference_extent.width;
-    develop.full_ref_height   = prepared.full_reference_extent.height;
+    develop.develop_width     = plan.source.develop_output_extent.width;
+    develop.develop_height    = plan.source.develop_output_extent.height;
+    develop.full_ref_width    = plan.source.full_reference_extent.width;
+    develop.full_ref_height   = plan.source.full_reference_extent.height;
     diag::PreviewPerformance::NoteDevelopDecode(develop);
   }
   GraphValueId output_id;
   {
     diag::PreviewCpuInterval encode(diag::PreviewCpuStage::Encode);
-    output_id = render_device->Execute(
-        plan, prepared, *document_, false,
-        use_session_cache ? TransientAllocationPolicy::SessionPacked
-                          : TransientAllocationPolicy::ExactRelease,
-        persistence);
+    output_id = render_device->Execute(plan, prepared, *document_, false,
+                                       use_session_cache ? TransientAllocationPolicy::SessionPacked
+                                                         : TransientAllocationPolicy::ExactRelease,
+                                       persistence);
   }
   if (diag::PreviewPerformanceEnabled()) {
     diag::PreviewPerformance::NoteResourceSnapshot(

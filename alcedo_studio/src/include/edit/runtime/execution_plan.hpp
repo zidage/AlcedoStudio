@@ -33,7 +33,7 @@ struct PassInstanceId {
   std::uint32_t ordinal = 0;
   MaskId        mask_id;
 
-  friend auto operator==(const PassInstanceId& lhs, const PassInstanceId& rhs) -> bool {
+  friend auto   operator==(const PassInstanceId& lhs, const PassInstanceId& rhs) -> bool {
     return lhs.owner == rhs.owner && lhs.kind == rhs.kind && lhs.ordinal == rhs.ordinal &&
            lhs.mask_id == rhs.mask_id;
   }
@@ -97,20 +97,19 @@ struct GpuPassDesc {
  * @param mask_id Owning Mask for MaskEvaluate. Empty for other kinds and Union.
  */
 [[nodiscard]] inline auto MakeGpuPass(GpuPassKind kind, NodeId owner, std::uint32_t ordinal,
-                                      std::vector<CompiledPassInput>            inputs,
-                                      std::vector<CompiledPassOutput>           outputs,
-                                      std::optional<AdjustmentInstanceId>       adjustment = {},
-                                      std::vector<AdjustmentInstanceId>         parameters = {},
-                                      MaskId                                    mask_id = {})
-    -> GpuPassDesc {
+                                      std::vector<CompiledPassInput>      inputs,
+                                      std::vector<CompiledPassOutput>     outputs,
+                                      std::optional<AdjustmentInstanceId> adjustment = {},
+                                      std::vector<AdjustmentInstanceId>   parameters = {},
+                                      MaskId mask_id = {}) -> GpuPassDesc {
   GpuPassDesc pass;
-  pass.kind        = kind;
-  pass.owner       = std::move(owner);
-  pass.instance    = PassInstanceId{pass.owner, kind, ordinal, std::move(mask_id)};
-  pass.adjustment  = std::move(adjustment);
-  pass.parameters  = std::move(parameters);
-  pass.inputs      = std::move(inputs);
-  pass.outputs     = std::move(outputs);
+  pass.kind       = kind;
+  pass.owner      = std::move(owner);
+  pass.instance   = PassInstanceId{pass.owner, kind, ordinal, std::move(mask_id)};
+  pass.adjustment = std::move(adjustment);
+  pass.parameters = std::move(parameters);
+  pass.inputs     = std::move(inputs);
+  pass.outputs    = std::move(outputs);
   return pass;
 }
 
@@ -164,11 +163,11 @@ enum class CompiledDrtStepKind : std::uint8_t {
 };
 
 struct CompiledDrtStep {
-  CompiledDrtStepKind             kind = CompiledDrtStepKind::DisplayTransform;
+  CompiledDrtStepKind                 kind = CompiledDrtStepKind::DisplayTransform;
   std::optional<AdjustmentInstanceId> instance_id;
-  OperatorTypeId                  type;
-  GraphValueId                    input{NodeId{""}, PortId{"image"}};
-  GraphValueId                    output{NodeId{""}, PortId{"image"}};
+  OperatorTypeId                      type;
+  GraphValueId                        input{NodeId{""}, PortId{"image"}};
+  GraphValueId                        output{NodeId{""}, PortId{"image"}};
 };
 
 /**
@@ -252,6 +251,23 @@ inline auto operator<(const StaticPlanKey& a, const StaticPlanKey& b) -> bool {
     return a.source_layout.full_reference_extent.height <
            b.source_layout.full_reference_extent.height;
   }
+  if (a.source_layout.neural_output_extent.width != b.source_layout.neural_output_extent.width) {
+    return a.source_layout.neural_output_extent.width < b.source_layout.neural_output_extent.width;
+  }
+  if (a.source_layout.neural_output_extent.height != b.source_layout.neural_output_extent.height) {
+    return a.source_layout.neural_output_extent.height <
+           b.source_layout.neural_output_extent.height;
+  }
+  if (a.source_layout.neural_full_reference_extent.width !=
+      b.source_layout.neural_full_reference_extent.width) {
+    return a.source_layout.neural_full_reference_extent.width <
+           b.source_layout.neural_full_reference_extent.width;
+  }
+  if (a.source_layout.neural_full_reference_extent.height !=
+      b.source_layout.neural_full_reference_extent.height) {
+    return a.source_layout.neural_full_reference_extent.height <
+           b.source_layout.neural_full_reference_extent.height;
+  }
   if (a.source_layout.downsample_passes != b.source_layout.downsample_passes) {
     return a.source_layout.downsample_passes < b.source_layout.downsample_passes;
   }
@@ -282,22 +298,21 @@ inline auto operator<(const StaticPlanKey& a, const StaticPlanKey& b) -> bool {
  * Finished full-frame planes are released after GPU last-use.
  */
 struct ExecutionPlan {
-  StaticPlanKey                           static_key{};
-  std::vector<GpuPassDesc>                passes;
-  GraphValueId                            sensor_linear_output{NodeId{"develop"},
-                                                               PortId{"sensor_linear"}};
-  GraphValueId                            geometry_output{NodeId{"geometry"}, PortId{"scene_source"}};
-  GraphValueId                            develop_output{NodeId{"develop"}, PortId{"image"}};
-  DevelopCompileSource                    source{};
-  ResolvedRenderGeometry                  geometry{};
-  bool                                    encode_geometry_resample = false;
-  std::size_t                             peak_transient_bytes     = 0;
-  std::vector<CompiledGradeNode>          grade_nodes;
-  CompiledDrtNode                         drt;
-  GraphValueId                            display_output{NodeId{"drt"}, PortId{"display"}};
+  StaticPlanKey                  static_key{};
+  std::vector<GpuPassDesc>       passes;
+  GraphValueId                   sensor_linear_output{NodeId{"develop"}, PortId{"sensor_linear"}};
+  GraphValueId                   geometry_output{NodeId{"geometry"}, PortId{"scene_source"}};
+  GraphValueId                   develop_output{NodeId{"develop"}, PortId{"image"}};
+  DevelopCompileSource           source{};
+  ResolvedRenderGeometry         geometry{};
+  bool                           encode_geometry_resample = false;
+  std::size_t                    peak_transient_bytes     = 0;
+  std::vector<CompiledGradeNode> grade_nodes;
+  CompiledDrtNode                drt;
+  GraphValueId                   display_output{NodeId{"drt"}, PortId{"display"}};
   std::optional<ExportColorProfileConfig> output_color_override;
 
-  [[nodiscard]] auto Contains(GpuPassKind kind) const -> bool {
+  [[nodiscard]] auto                      Contains(GpuPassKind kind) const -> bool {
     for (const auto& pass : passes) {
       if (pass.kind == kind) {
         return true;
@@ -379,7 +394,7 @@ struct ExecutionPlan {
  * @param plan Compiled plan. Does not allocate GPU memory or read parameter values.
  * @throws std::runtime_error when a binding is invalid.
  */
-void ValidateExecutionPlan(const ExecutionPlan& plan);
+void               ValidateExecutionPlan(const ExecutionPlan& plan);
 
 /**
  * @brief Parameter slots for every compiled Color Grade adjustment and DRT/Post adjustment.
@@ -410,7 +425,7 @@ class RemainingValueConsumers {
    * @brief Decrement the remaining consumer count for @p id.
    * @throws std::runtime_error when @p id has no remaining consumer.
    */
-  void Consume(const GraphValueId& id);
+  void               Consume(const GraphValueId& id);
 
   /** @brief Remaining readers of @p id, or zero when it had none. */
   [[nodiscard]] auto Remaining(const GraphValueId& id) const -> std::uint32_t;

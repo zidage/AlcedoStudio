@@ -20,6 +20,7 @@
 #include "decoders/libraw_unpack_guard.hpp"
 #include "decoders/processor/raw_normalization.hpp"
 #include "decoders/processor/raw_rgb_normalization.hpp"
+#include "edit/input/neural_develop_crop.hpp"
 
 namespace alcedo {
 namespace {
@@ -226,6 +227,24 @@ void FillOutputGeometry(PreparedRawInput& input, DecodeRes decode_res_for_full_r
                               static_cast<std::uint32_t>(full_crop.height)},
                      input.sensor.orientation_flip);
   input.sensor_active_area = BuildActiveAreaRect(input.sensor, host, divisor);
+
+  const RectI decode_crop  = BuildDecodeCropRect(input.sensor, host, divisor);
+  if (const auto neural = BuildNeuralDevelopCrop(input.cfa_pattern, host, decode_crop);
+      neural.has_value()) {
+    input.neural_output_crop = *neural;
+    input.neural_output_extent =
+        OrientedExtent(Extent2D{static_cast<std::uint32_t>(neural->width),
+                                static_cast<std::uint32_t>(neural->height)},
+                       input.sensor.orientation_flip);
+  }
+  const RectI full_decode = BuildDecodeCropRect(input.sensor, full_host, 1);
+  if (const auto neural = BuildNeuralDevelopCrop(input.cfa_pattern, full_host, full_decode);
+      neural.has_value()) {
+    input.neural_full_reference_extent =
+        OrientedExtent(Extent2D{static_cast<std::uint32_t>(neural->width),
+                                static_cast<std::uint32_t>(neural->height)},
+                       input.sensor.orientation_flip);
+  }
 }
 
 auto CopyPlane(const cv::Mat& src, HostPixelFormat format) -> HostImagePlane {
@@ -281,7 +300,8 @@ auto Rgb32fToRgbaPlane(const cv::Mat& rgb) -> HostImagePlane {
   for (int y = 0; y < rgb.rows; ++y) {
     const auto* row = rgb.ptr<float>(y);
     for (int x = 0; x < rgb.cols; ++x) {
-      const auto pixel = static_cast<std::size_t>(y) * plane.extent.width + static_cast<std::size_t>(x);
+      const auto pixel =
+          static_cast<std::size_t>(y) * plane.extent.width + static_cast<std::size_t>(x);
       out[pixel * 4 + 0] = row[static_cast<std::size_t>(x) * 3 + 0];
       out[pixel * 4 + 1] = row[static_cast<std::size_t>(x) * 3 + 1];
       out[pixel * 4 + 2] = row[static_cast<std::size_t>(x) * 3 + 2];
@@ -297,7 +317,7 @@ auto ExtractRgb32f(const cv::Mat& src) -> cv::Mat {
     return src;
   }
   if (src.type() == CV_32FC4) {
-    cv::Mat rgb(src.rows, src.cols, CV_32FC3);
+    cv::Mat   rgb(src.rows, src.cols, CV_32FC3);
     const int from_to[] = {0, 0, 1, 1, 2, 2};
     cv::mixChannels(&src, 1, &rgb, 1, from_to, 3);
     return rgb;
@@ -322,12 +342,12 @@ auto CopyDebayeredRgbPlane(LibRaw& raw, const RawSensorGeometry& sensor) -> Host
   const int   raw_width  = static_cast<int>(sizes.raw_width);
   const int   raw_height = static_cast<int>(sizes.raw_height);
 
-  cv::Mat rgb32f;
+  cv::Mat     rgb32f;
   if (raw_data.color3_image != nullptr) {
-    const std::size_t row_step = sizes.raw_pitch != 0
-                                     ? static_cast<std::size_t>(sizes.raw_pitch)
-                                     : static_cast<std::size_t>(raw_width) * sizeof(std::uint16_t) * 3;
-    cv::Mat           view(raw_height, raw_width, CV_16UC3, raw_data.color3_image, row_step);
+    const std::size_t row_step =
+        sizes.raw_pitch != 0 ? static_cast<std::size_t>(sizes.raw_pitch)
+                             : static_cast<std::size_t>(raw_width) * sizeof(std::uint16_t) * 3;
+    cv::Mat view(raw_height, raw_width, CV_16UC3, raw_data.color3_image, row_step);
     CropMatToDecodeArea(view, sensor).convertTo(rgb32f, CV_32F);
   } else if (raw_data.float3_image != nullptr) {
     const std::size_t row_step = sizes.raw_pitch != 0
@@ -336,11 +356,11 @@ auto CopyDebayeredRgbPlane(LibRaw& raw, const RawSensorGeometry& sensor) -> Host
     cv::Mat           view(raw_height, raw_width, CV_32FC3, raw_data.float3_image, row_step);
     rgb32f = CropMatToDecodeArea(view, sensor);
   } else if (raw_data.color4_image != nullptr && idata.colors == 3) {
-    const std::size_t row_step = sizes.raw_pitch != 0
-                                     ? static_cast<std::size_t>(sizes.raw_pitch)
-                                     : static_cast<std::size_t>(raw_width) * sizeof(std::uint16_t) * 4;
-    cv::Mat           view(raw_height, raw_width, CV_16UC4, raw_data.color4_image, row_step);
-    cv::Mat           rgba32f;
+    const std::size_t row_step =
+        sizes.raw_pitch != 0 ? static_cast<std::size_t>(sizes.raw_pitch)
+                             : static_cast<std::size_t>(raw_width) * sizeof(std::uint16_t) * 4;
+    cv::Mat view(raw_height, raw_width, CV_16UC4, raw_data.color4_image, row_step);
+    cv::Mat rgba32f;
     CropMatToDecodeArea(view, sensor).convertTo(rgba32f, CV_32F);
     rgb32f = ExtractRgb32f(rgba32f);
   } else if (raw_data.float4_image != nullptr && idata.colors == 3) {
@@ -356,14 +376,14 @@ auto CopyDebayeredRgbPlane(LibRaw& raw, const RawSensorGeometry& sensor) -> Host
 }
 
 void CollapseSensorToHost(RawSensorGeometry& sensor, Extent2D host) {
-  const auto width  = static_cast<std::int32_t>(host.width);
-  const auto height = static_cast<std::int32_t>(host.height);
-  sensor.raw_width    = width;
-  sensor.raw_height   = height;
-  sensor.width        = width;
-  sensor.height       = height;
-  sensor.left_margin  = 0;
-  sensor.top_margin   = 0;
+  const auto width       = static_cast<std::int32_t>(host.width);
+  const auto height      = static_cast<std::int32_t>(host.height);
+  sensor.raw_width       = width;
+  sensor.raw_height      = height;
+  sensor.width           = width;
+  sensor.height          = height;
+  sensor.left_margin     = 0;
+  sensor.top_margin      = 0;
   sensor.default_crop[0] = 0;
   sensor.default_crop[1] = 0;
   sensor.default_crop[2] = static_cast<std::uint16_t>(std::min(width, 65535));
@@ -424,9 +444,9 @@ auto LinearizationFromLibRaw(LibRaw& raw) -> RawLinearizationParams {
   }
   params.apply_as_shot_wb =
       (raw.imgdata.color.as_shot_wb_applied & LIBRAW_ASWB_APPLIED) == 0 ? 1 : 0;
-  const int tile_width    = raw.imgdata.rawdata.color.cblack[4];
-  const int tile_height   = raw.imgdata.rawdata.color.cblack[5];
-  const int entries       = tile_width * tile_height;
+  const int tile_width  = raw.imgdata.rawdata.color.cblack[4];
+  const int tile_height = raw.imgdata.rawdata.color.cblack[5];
+  const int entries     = tile_width * tile_height;
   if (entries > 0 && entries <= 36) {
     params.black_tile_width  = tile_width;
     params.black_tile_height = tile_height;
@@ -461,8 +481,8 @@ auto TrimLibRawField(const char* text) -> std::string {
     return {};
   }
   std::size_t length = std::min(std::strlen(text), static_cast<std::size_t>(256));
-  while (length > 0 && (text[length - 1] == '\0' ||
-                        std::isspace(static_cast<unsigned char>(text[length - 1])))) {
+  while (length > 0 &&
+         (text[length - 1] == '\0' || std::isspace(static_cast<unsigned char>(text[length - 1])))) {
     --length;
   }
   return {text, length};
@@ -480,8 +500,8 @@ void FillColorContext(LibRaw& raw, RawRuntimeColorContext& ctx) {
 
   // Develop lens calibration reads these fields from PreparedRawInput. The CPU path
   // received them through InjectRawMetadata; LoadEncoded must copy them from LibRaw.
-  ctx.lens_make_  = TrimLibRawField(raw.imgdata.lens.LensMake);
-  ctx.lens_model_ = TrimLibRawField(raw.imgdata.lens.Lens);
+  ctx.lens_make_    = TrimLibRawField(raw.imgdata.lens.LensMake);
+  ctx.lens_model_   = TrimLibRawField(raw.imgdata.lens.Lens);
   if (ctx.lens_model_.empty()) {
     ctx.lens_model_ = TrimLibRawField(raw.imgdata.lens.makernotes.Lens);
   }
@@ -501,8 +521,7 @@ void FillColorContext(LibRaw& raw, RawRuntimeColorContext& ctx) {
   if (raw.imgdata.lens.FocalLengthIn35mmFormat > 0) {
     ctx.focal_35mm_mm_ = static_cast<float>(raw.imgdata.lens.FocalLengthIn35mmFormat);
   } else if (raw.imgdata.lens.makernotes.FocalLengthIn35mmFormat > 0) {
-    ctx.focal_35mm_mm_ =
-        static_cast<float>(raw.imgdata.lens.makernotes.FocalLengthIn35mmFormat);
+    ctx.focal_35mm_mm_ = static_cast<float>(raw.imgdata.lens.makernotes.FocalLengthIn35mmFormat);
   }
   if (IsFinitePositive(ctx.focal_length_mm_) && IsFinitePositive(ctx.focal_35mm_mm_)) {
     ctx.crop_factor_hint_ = ctx.focal_35mm_mm_ / ctx.focal_length_mm_;
@@ -548,11 +567,13 @@ auto PreparedRawInput::CompileSource() const -> DevelopCompileSource {
   } else {
     source.kind = DevelopInputKind::BayerCfa;
   }
-  source.host_extent           = host_extent;
-  source.develop_output_extent = develop_output_extent;
-  source.full_reference_extent = full_reference_extent;
-  source.sensor_active_area    = sensor_active_area;
-  source.downsample_passes     = downsample_passes;
+  source.host_extent                  = host_extent;
+  source.develop_output_extent        = develop_output_extent;
+  source.full_reference_extent        = full_reference_extent;
+  source.neural_output_extent         = neural_output_extent;
+  source.neural_full_reference_extent = neural_full_reference_extent;
+  source.sensor_active_area           = sensor_active_area;
+  source.downsample_passes            = downsample_passes;
   return source;
 }
 

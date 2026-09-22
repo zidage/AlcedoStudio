@@ -23,6 +23,7 @@
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/operator_type_id.hpp"
 #include "edit/pipeline/local_tone_mapping.hpp"
+#include "edit/runtime/develop_demosaic.hpp"
 
 namespace alcedo {
 namespace {
@@ -152,9 +153,8 @@ auto HashGraphTopology(const PipelineDocument& document) -> std::uint64_t {
       for (const auto& mask : grade->Masks()) {
         masks.push_back(&mask);
       }
-      std::sort(masks.begin(), masks.end(), [](const MaskModel* a, const MaskModel* b) {
-        return a->id < b->id;
-      });
+      std::sort(masks.begin(), masks.end(),
+                [](const MaskModel* a, const MaskModel* b) { return a->id < b->id; });
       hash = MixU64(hash, masks.size());
       for (const auto* mask : masks) {
         hash = MixText(hash, mask->id.Value());
@@ -236,7 +236,7 @@ auto NextOrdinal(const ExecutionPlan& plan, GpuPassKind kind) -> std::uint32_t {
 void PushPass(ExecutionPlan& plan, GpuPassKind kind, NodeId owner,
               std::vector<CompiledPassInput> inputs, std::vector<CompiledPassOutput> outputs,
               std::optional<AdjustmentInstanceId> adjustment = {},
-              std::vector<AdjustmentInstanceId>   parameters = {}, MaskId mask_id = {}) {
+              std::vector<AdjustmentInstanceId> parameters = {}, MaskId mask_id = {}) {
   const auto ordinal = NextOrdinal(plan, kind);
   plan.passes.push_back(MakeGpuPass(kind, std::move(owner), ordinal, std::move(inputs),
                                     std::move(outputs), std::move(adjustment),
@@ -286,8 +286,8 @@ auto CompileGradeOwnedMaskStack(const ColorGradeNodeModel& grade, GraphValueId s
              {{PortId{"image"}, plan.geometry_output, CompiledValueKind::SceneImage},
               {PortId{"range"}, compiled.range_input, CompiledValueKind::SceneImage}},
              {{compiled.source_output, CompiledValueKind::Mask}}, {}, {}, compiled.mask_id);
-    union_inputs.push_back({PortId{std::string{compiled.mask_id.Value()}}, compiled.effective_output,
-                            CompiledValueKind::Mask});
+    union_inputs.push_back({PortId{std::string{compiled.mask_id.Value()}},
+                            compiled.effective_output, CompiledValueKind::Mask});
 #ifdef ALCEDO_ENABLE_BRUSH_MASK
     if (compiled.source_kind == MaskSourceKind::Brush) {
       throw std::runtime_error(
@@ -325,7 +325,7 @@ auto CompileColorGrade(const PipelineDocument& document, const ColorGradeNodeMod
   for (std::size_t index = 0; index < grade.AdjustmentCount(); ++index) {
     document_types.push_back(grade.AdjustmentAt(index).Type());
   }
-  const auto compile_order = ColorGradeCompileIndexOrder(document_types);
+  const auto                        compile_order = ColorGradeCompileIndexOrder(document_types);
 
   std::vector<AdjustmentInstanceId> parameters;
   parameters.reserve(grade.AdjustmentCount());
@@ -358,20 +358,24 @@ auto CompileDrt(const DrtNodeModel& drt, GraphValueId scene_input, ExecutionPlan
   compiled.scene_output   = GraphValueId{drt.Id(), PortId{"runtime.display_base"}};
   compiled.display_output = GraphValueId{drt.Id(), PortId{"display"}};
 
-  std::vector<OperatorTypeId>         drt_types;
-  std::vector<AdjustmentInstanceId>   parameters;
+  std::vector<OperatorTypeId>       drt_types;
+  std::vector<AdjustmentInstanceId> parameters;
   drt_types.reserve(drt.AdjustmentCount());
   parameters.reserve(drt.AdjustmentCount());
   compiled.post_adjustments.reserve(drt.AdjustmentCount());
-  compiled.steps.push_back(CompiledDrtStep{CompiledDrtStepKind::DisplayTransform, {},
-                                           OperatorTypeId{}, scene_input, compiled.scene_output});
+  compiled.steps.push_back(CompiledDrtStep{CompiledDrtStepKind::DisplayTransform,
+                                           {},
+                                           OperatorTypeId{},
+                                           scene_input,
+                                           compiled.scene_output});
   GraphValueId step_input = compiled.scene_output;
   for (std::size_t index = 0; index < drt.AdjustmentCount(); ++index) {
     const auto& type = drt.AdjustmentAt(index).Type();
     drt_types.push_back(type);
     const auto algorithm = CompileAdjustmentAlgorithm(type);
     if (algorithm != CompiledAdjustmentAlgorithm::Neighborhood) {
-      throw std::runtime_error("GraphCompiler: DRT/Post adjustment is not a neighborhood operation");
+      throw std::runtime_error(
+          "GraphCompiler: DRT/Post adjustment is not a neighborhood operation");
     }
     const auto instance = drt.AdjustmentIdAt(index);
     compiled.post_adjustments.push_back({instance, type, algorithm});
@@ -417,6 +421,23 @@ void CompileDevelopPasses(ExecutionPlan& plan, const NodeId& develop_id,
            {{plan.develop_output, CompiledValueKind::SceneImage}});
 }
 
+auto ResolveDevelopSourceLayout(const PipelineDocument& document, DevelopCompileSource source)
+    -> DevelopCompileSource {
+  const auto* develop = document.Develop();
+  if (develop == nullptr || source.neural_output_extent.Empty()) {
+    return source;
+  }
+  if (ResolveDevelopDemosaicMethod(develop->Params().Params(), source) !=
+      RawDemosaicMethod::NeuralEngine) {
+    return source;
+  }
+  source.develop_output_extent = source.neural_output_extent;
+  if (!source.neural_full_reference_extent.Empty()) {
+    source.full_reference_extent = source.neural_full_reference_extent;
+  }
+  return source;
+}
+
 }  // namespace
 
 auto GraphCompiler::MakeStaticPlanKey(const PipelineDocument&     document,
@@ -424,7 +445,7 @@ auto GraphCompiler::MakeStaticPlanKey(const PipelineDocument&     document,
                                       std::uint32_t backend_capability_version) -> StaticPlanKey {
   StaticPlanKey key;
   key.topology_hash              = HashGraphTopology(document);
-  key.source_layout              = source;
+  key.source_layout              = ResolveDevelopSourceLayout(document, source);
   key.backend_capability_version = backend_capability_version;
   key.compile_algorithm_version  = kGradeCompileAlgorithmVersion;
   return key;
@@ -441,14 +462,14 @@ auto GraphCompiler::CompileStatic(const PipelineDocument&     document,
 
   ExecutionPlan plan;
   plan.static_key           = MakeStaticPlanKey(document, source, backend_capability_version);
-  plan.source               = source;
+  plan.source               = plan.static_key.source_layout;
   const auto* develop       = document.Develop();
   plan.sensor_linear_output = GraphValueId{develop->Id(), PortId{"sensor_linear"}};
   plan.geometry_output      = GraphValueId{NodeId{"geometry"}, PortId{"scene_source"}};
   plan.develop_output       = GraphValueId{develop->Id(), PortId{"image"}};
-  plan.peak_transient_bytes = EstimatePeakTransientBytes(source);
+  plan.peak_transient_bytes = EstimatePeakTransientBytes(plan.source);
 
-  CompileDevelopPasses(plan, develop->Id(), source);
+  CompileDevelopPasses(plan, develop->Id(), plan.source);
 
   GraphValueId scene = plan.develop_output;
   for (const auto& id : document.Graph().ImageBackboneNodeIds()) {
@@ -460,13 +481,13 @@ auto GraphCompiler::CompileStatic(const PipelineDocument&     document,
     if (grade == nullptr) {
       continue;
     }
-    auto compiled = CompileColorGrade(document, *grade, scene, source, plan);
+    auto compiled = CompileColorGrade(document, *grade, scene, plan.source, plan);
     scene         = compiled.scene_output;
     plan.grade_nodes.push_back(std::move(compiled));
   }
 
-  const auto* drt    = document.Drt();
-  plan.drt           = CompileDrt(*drt, scene, plan);
+  const auto* drt     = document.Drt();
+  plan.drt            = CompileDrt(*drt, scene, plan);
   plan.display_output = plan.drt.display_output;
   if (plan.drt.scene_input != plan.SceneInputForDrt()) {
     throw std::runtime_error("GraphCompiler: DRT scene input is not the last backbone scene value");

@@ -77,7 +77,8 @@ auto Download(OpenClRenderDevice& device, const GraphValueId& id) -> std::vector
   std::vector<Rgba> pixels(static_cast<std::size_t>(tex.Width()) * tex.Height());
   device.Workspace().Device().DownloadTexture2D(
       tex,
-      std::span<std::byte>(reinterpret_cast<std::byte*>(pixels.data()), pixels.size() * sizeof(Rgba)),
+      std::span<std::byte>(reinterpret_cast<std::byte*>(pixels.data()),
+                           pixels.size() * sizeof(Rgba)),
       device.CommandContext());
   return pixels;
 }
@@ -133,7 +134,10 @@ auto MaxChannel(const std::vector<Rgba>& pixels) -> float {
 }
 
 auto PixelsDiffer(const std::vector<Rgba>& a, const std::vector<Rgba>& b) -> bool {
-  if (a.size() != b.size() || a.empty()) {
+  if (a.size() != b.size()) {
+    return true;
+  }
+  if (a.empty()) {
     return false;
   }
   for (std::size_t i = 0; i < a.size(); ++i) {
@@ -182,16 +186,16 @@ auto LoadEncodedFixture(const std::filesystem::path& path) -> std::vector<std::b
   }
   const std::vector<char> chars((std::istreambuf_iterator<char>(input)),
                                 std::istreambuf_iterator<char>());
-  std::vector<std::byte> bytes(chars.size());
+  std::vector<std::byte>  bytes(chars.size());
   std::transform(chars.begin(), chars.end(), bytes.begin(),
                  [](char value) { return static_cast<std::byte>(value); });
   return bytes;
 }
 
 auto CpuLinearize(const PreparedRawInput& input) -> std::vector<float> {
-  const auto  w       = input.host_extent.width;
-  const auto  h       = input.host_extent.height;
-  const auto* samples = reinterpret_cast<const std::uint16_t*>(input.pixels.bytes.get());
+  const auto         w       = input.host_extent.width;
+  const auto         h       = input.host_extent.height;
+  const auto*        samples = reinterpret_cast<const std::uint16_t*>(input.pixels.bytes.get());
   std::vector<float> out(static_cast<std::size_t>(w) * h);
   for (std::uint32_t y = 0; y < h; ++y) {
     for (std::uint32_t x = 0; x < w; ++x) {
@@ -200,13 +204,12 @@ auto CpuLinearize(const PreparedRawInput& input) -> std::vector<float> {
       if (input.linearization.black_tile_width > 0 && input.linearization.black_tile_height > 0) {
         const int tile_y = static_cast<int>(y) % input.linearization.black_tile_height;
         const int tile_x = static_cast<int>(x) % input.linearization.black_tile_width;
-        pattern_black =
-            input.linearization.pattern_black[tile_y * input.linearization.black_tile_width + tile_x];
+        pattern_black    = input.linearization
+                            .pattern_black[tile_y * input.linearization.black_tile_width + tile_x];
       }
       const float black = input.linearization.black_level[color] + pattern_black;
-      float       value =
-          raw_norm::NormalizeSample(static_cast<float>(samples[y * w + x]), black,
-                                    input.linearization.white_level[color]);
+      float       value = raw_norm::NormalizeSample(static_cast<float>(samples[y * w + x]), black,
+                                                    input.linearization.white_level[color]);
       value *= raw_norm::RelativeWhiteBalanceMultiplier(input.linearization.cam_mul, color,
                                                         input.linearization.apply_as_shot_wb != 0);
       out[y * w + x] = value;
@@ -349,10 +352,10 @@ TEST_F(OpenClDevelopFixture, OpenClDevelopLinearizeMatchesCudaReferenceWithinTol
   const auto prepared = RawInputLoader::FromUnpackedCfa(
       gpu_dag_test::MakeU16CfaPlane(32, 24, pattern), pattern, gpu_dag_test::DefaultLinearization(),
       gpu_dag_test::FullSensor(32, 24), DecodeRes::FULL);
-  const auto cpu = CpuLinearize(prepared);
+  const auto         cpu = CpuLinearize(prepared);
 
   OpenClRenderDevice device;
-  auto& transients = device.Workspace().TransientBuffers();
+  auto&              transients = device.Workspace().TransientBuffers();
   transients.Reserve(32ull * 24ull * 16ull);
   device.BeginRender();
   void* src = transients.Allocate(32ull * 24ull * sizeof(std::uint16_t));
@@ -478,7 +481,7 @@ TEST_F(OpenClDevelopFixture, OpenClDevelopXTransMatchesCudaReferenceWithinTolera
   const auto pixels = Download(device, plan.sensor_linear_output);
   const auto linear = CpuLinearize(prepared);
   ASSERT_FALSE(pixels.empty());
-  const auto  crop         = prepared.demosaic_output_crop;
+  const auto  crop          = prepared.demosaic_output_crop;
   float       max_green_err = 0.0f;
   std::size_t green_count   = 0;
   for (int y = 0; y < crop.height; ++y) {
@@ -488,11 +491,10 @@ TEST_F(OpenClDevelopFixture, OpenClDevelopXTransMatchesCudaReferenceWithinTolera
       if (RgbColorAt(pattern, src_y, src_x) != 1) {
         continue;
       }
-      const float expected =
-          linear[static_cast<std::size_t>(src_y) * prepared.host_extent.width +
-                 static_cast<std::size_t>(src_x)];
-      const auto& gpu = pixels[static_cast<std::size_t>(y) * crop.width + x];
-      max_green_err   = std::max(max_green_err, std::fabs(gpu.g - expected));
+      const float expected = linear[static_cast<std::size_t>(src_y) * prepared.host_extent.width +
+                                    static_cast<std::size_t>(src_x)];
+      const auto& gpu      = pixels[static_cast<std::size_t>(y) * crop.width + x];
+      max_green_err        = std::max(max_green_err, std::fabs(gpu.g - expected));
       ++green_count;
     }
   }
@@ -568,8 +570,7 @@ TEST_F(OpenClDevelopFixture,
   EXPECT_GT(MaxChannel(pixels), 1.0f);
 }
 
-TEST_F(OpenClDevelopFixture,
-       OpenClHundredMegapixelBayerFixturesCompleteAndProduceFinitePixels) {
+TEST_F(OpenClDevelopFixture, OpenClHundredMegapixelBayerFixturesCompleteAndProduceFinitePixels) {
   if (std::getenv("ALCEDO_RUN_100MP_OPENCL_TEST") == nullptr) {
     GTEST_SKIP() << "Set ALCEDO_RUN_100MP_OPENCL_TEST=1 for the bounded real-RAW GPU test.";
   }
@@ -602,18 +603,18 @@ TEST_F(OpenClDevelopFixture,
     device.WaitIdle();
     const auto elapsed = std::chrono::steady_clock::now() - started;
 
-    auto* output = device.Workspace().Images().Find(plan.sensor_linear_output);
+    auto*      output  = device.Workspace().Images().Find(plan.sensor_linear_output);
     ASSERT_NE(output, nullptr);
     ASSERT_EQ(output->Texture().Width(), plan.source.develop_output_extent.width);
     ASSERT_EQ(output->Texture().Height(), plan.source.develop_output_extent.height);
-    const std::size_t origin[3] = {output->Texture().Width() / 2,
-                                   output->Texture().Height() / 2, 0};
+    const std::size_t origin[3] = {output->Texture().Width() / 2, output->Texture().Height() / 2,
+                                   0};
     const std::size_t region[3] = {1, 1, 1};
     Rgba              pixel{};
-    ASSERT_EQ(clEnqueueReadImage(device.Workspace().Device().NativeQueue(),
-                                 output->Texture().Native(), CL_TRUE, origin, region, 0, 0, &pixel,
-                                 0, nullptr, nullptr),
-              CL_SUCCESS);
+    ASSERT_EQ(
+        clEnqueueReadImage(device.Workspace().Device().NativeQueue(), output->Texture().Native(),
+                           CL_TRUE, origin, region, 0, 0, &pixel, 0, nullptr, nullptr),
+        CL_SUCCESS);
     EXPECT_TRUE(std::isfinite(pixel.r));
     EXPECT_TRUE(std::isfinite(pixel.g));
     EXPECT_TRUE(std::isfinite(pixel.b));
@@ -638,15 +639,15 @@ TEST_F(OpenClDevelopFixture, OpenClGeometryUsesOneResampleForCropRotationViewpor
 
   auto document = CreateDefaultPipelineDocument();
   gpu_dag_test::EnsureTestCameraProfile(document);
-  auto prepared = RawInputLoader::FromDirectRgb(gpu_dag_test::MakeF32RgbaPlane(64, 48),
-                                                gpu_dag_test::FullSensor(64, 48));
+  auto          prepared = RawInputLoader::FromDirectRgb(gpu_dag_test::MakeF32RgbaPlane(64, 48),
+                                                         gpu_dag_test::FullSensor(64, 48));
   RenderRequest request;
-  request.view = view;
-  auto plan    = GraphCompiler::Compile(document, prepared.CompileSource(), request);
+  request.view  = view;
+  auto plan     = GraphCompiler::Compile(document, prepared.CompileSource(), request);
   plan.geometry = geometry;
   plan.encode_geometry_resample = true;
 
-  const auto host_src = MakeSrcImage(64, 48);
+  const auto         host_src   = MakeSrcImage(64, 48);
   OpenClRenderDevice device;
   device.BeginRender();
   ExecuteOpenClDevelop(device, plan, prepared, document);
@@ -669,9 +670,9 @@ TEST_F(OpenClDevelopFixture, OpenClGeometryUsesOneResampleForCropRotationViewpor
       const auto  src_xy = TransformPoint(geometry.render_to_decoded, PixelCenter(x, y));
       const auto  cpu    = BilinearSample(host_src, 64, 48, src_xy.x, src_xy.y, border);
       const auto& gpu    = host_dst[static_cast<std::size_t>(y) * render_w + x];
-      max_err = std::max(max_err, std::fabs(cpu.r - gpu.r));
-      max_err = std::max(max_err, std::fabs(cpu.g - gpu.g));
-      max_err = std::max(max_err, std::fabs(cpu.b - gpu.b));
+      max_err            = std::max(max_err, std::fabs(cpu.r - gpu.r));
+      max_err            = std::max(max_err, std::fabs(cpu.g - gpu.g));
+      max_err            = std::max(max_err, std::fabs(cpu.b - gpu.b));
     }
   }
   EXPECT_LT(max_err, 1.5e-4f);
