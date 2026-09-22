@@ -495,22 +495,25 @@ TEST_F(EditorRenderCoordinatorTest,
 TEST_F(EditorRenderCoordinatorTest, SubmitDoesNotMutateStoredIntentAfterAccept) {
   EditorRenderIntent intent =
       MakeIntent(EditorRenderQuality::Quality, EditorRenderPriority::Normal);
-  intent.adjustment.fingerprint = "tone:v1";
-  intent.adjustment.params_json = R"({"exposure":0.5})";
-  intent.adjustment.patches.push_back(alcedo::test::SnapshotPatch({"exposure", R"({"v":0.5})", false}));
+  intent.operation_id          = 77;
+  intent.geometry_overlay_only = true;
+  intent.requested_width       = 640;
+  intent.requested_height      = 480;
 
   const auto accepted = coordinator_->Submit(intent);
   EXPECT_EQ(accepted.kind, EditorRenderResultKind::RequestAccepted);
   EXPECT_EQ(accepted.intent.frame_role, FrameRole::QualityBase);
-  EXPECT_EQ(accepted.intent.adjustment.fingerprint, "tone:v1");
-  ASSERT_EQ(accepted.intent.adjustment.patches.size(), 1u);
-  EXPECT_EQ(accepted.intent.adjustment.patches[0].field_key, "exposure");
-  EXPECT_EQ(accepted.intent.adjustment.params_json, R"({"exposure":0.5})");
+  EXPECT_EQ(accepted.intent.operation_id, 77u);
+  EXPECT_TRUE(accepted.intent.geometry_overlay_only);
+  EXPECT_EQ(accepted.intent.requested_width, 640);
+  EXPECT_EQ(accepted.intent.requested_height, 480);
 
   ASSERT_FALSE(scheduler_->scheduled_.empty());
   const auto& scheduled_intent = scheduler_->scheduled_.front().intent;
-  EXPECT_TRUE(alcedo::test::SameSnapshotProjection(scheduled_intent.adjustment,
-                                                  accepted.intent.adjustment));
+  EXPECT_EQ(scheduled_intent.operation_id, accepted.intent.operation_id);
+  EXPECT_EQ(scheduled_intent.geometry_overlay_only, accepted.intent.geometry_overlay_only);
+  EXPECT_EQ(scheduled_intent.requested_width, accepted.intent.requested_width);
+  EXPECT_EQ(scheduled_intent.requested_height, accepted.intent.requested_height);
   EXPECT_EQ(scheduled_intent.frame_role, accepted.intent.frame_role);
 }
 
@@ -543,28 +546,6 @@ TEST_F(EditorRenderCoordinatorTest, IsTheOnlySchedulerCallerThroughSubmitPort) {
 
 // ---------------------------------------------------------------------------
 // Phase 5D per-reason coordinator decisions (D2 reuse-vs-render, A1).
-
-TEST(EditorRenderIntentPolicyTest, ViewDependentReasonsDoNotReplayAdjustmentSnapshot) {
-  // Operator params are applied incrementally on content change. Detail ROI /
-  // scope ROI / pure view transforms must not re-ApplyEditorAdjustmentSnapshot
-  // (that path thrash-invalidates Image Loading / RAW_DECODE).
-  EXPECT_FALSE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::ZoomPan));
-  EXPECT_FALSE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::Resize));
-  EXPECT_FALSE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::DetailRefresh));
-  EXPECT_FALSE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::ScopeRefresh));
-
-  EXPECT_TRUE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::InitialFrame));
-  EXPECT_TRUE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::InteractiveAdjustment));
-  EXPECT_TRUE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::SettledAdjustment));
-  EXPECT_TRUE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::UndoRedo));
-  EXPECT_TRUE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::ImageSwitch));
-  EXPECT_TRUE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::Retry));
-  EXPECT_TRUE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::CropRotate));
-  EXPECT_TRUE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::GraphTopologyChanged));
-  EXPECT_TRUE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::SettledMaskEdit));
-  EXPECT_TRUE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::VersionDocumentChanged));
-  EXPECT_TRUE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::PastedPipelineDocument));
-}
 
 TEST_F(EditorRenderCoordinatorTest, ZoomPanIntentIsReusedWithoutScheduling) {
   // A pure zoom/pan transform reuses the current full frame; the renderer

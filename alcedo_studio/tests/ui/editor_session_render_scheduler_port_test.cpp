@@ -118,6 +118,27 @@ TEST(EditorSessionRenderSchedulerPortTest,
   EXPECT_EQ(scheduler->context_payload_load_count(), 0u);
 }
 
+// Configure runs under the render lock before Apply. It attaches the frame sink and writes no
+// parameter: the stage table, exported here only as a check, stays equal for a content render.
+TEST(EditorSessionRenderSchedulerPortTest, RenderPortConfiguresOnlyFrameSinkUnderRenderLock) {
+  auto               scheduler = std::make_shared<EditorSessionRenderSchedulerPort>();
+  RecordingFrameSink sink;
+  scheduler->SetSinkResolver([&sink] { return static_cast<alcedo::IFrameSink*>(&sink); });
+  auto       context            = MakeReadyContext(51, 22, 11);
+  const auto executor           = context.pipeline_guard->pipeline_;
+  const auto stage_table_before = executor->ExportPipelineParams();
+  ASSERT_EQ(executor->GetFrameSink(), nullptr);
+  scheduler->InstallSessionContext(std::move(context));
+
+  auto request          = MakeRequest(90, 51);
+  request.intent.reason = alcedo::EditorRenderReason::SettledAdjustment;
+  ASSERT_NE(scheduler->Schedule(request), 0u);
+  scheduler->WaitForSessionIdle(51);
+
+  EXPECT_EQ(executor->GetFrameSink(), &sink);
+  EXPECT_EQ(executor->ExportPipelineParams(), stage_table_before);
+}
+
 TEST(EditorSessionRenderSchedulerPortTest, ViewDrivenReasonsDisableScopeFrameReplacement) {
   auto               scheduler = std::make_shared<EditorSessionRenderSchedulerPort>();
   RecordingFrameSink sink;

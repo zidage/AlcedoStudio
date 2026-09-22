@@ -31,8 +31,7 @@ void EditorSessionRenderController::SetPresentationSinkId(PresentationSinkId sin
     }
     if (pending_initial_reason_.has_value()) {
       pending_command.reason       = *pending_initial_reason_;
-    pending_command.operation_id = pending_operation_id_;
-    pending_command.adjustment   = pending_initial_adjustment_;
+      pending_command.operation_id = pending_operation_id_;
       pending_identity             = pending_session_identity_;
       pending_load_request         = pending_image_load_request_;
       has_pending                  = true;
@@ -54,8 +53,7 @@ void EditorSessionRenderController::SetPresentationSize(int width, int height) {
     presentation_height_ = std::max(0, height);
     if (pending_initial_reason_.has_value()) {
       pending_command.reason       = *pending_initial_reason_;
-    pending_command.operation_id = pending_operation_id_;
-    pending_command.adjustment   = pending_initial_adjustment_;
+      pending_command.operation_id = pending_operation_id_;
       pending_identity             = pending_session_identity_;
       pending_load_request         = pending_image_load_request_;
       has_pending                  = true;
@@ -82,8 +80,6 @@ auto EditorSessionRenderController::MakeRenderIntent(const EditorRenderCommand& 
   intent.quality               = DefaultQualityForReason(command.reason);
   intent.priority              = DefaultPriorityForReason(command.reason);
   intent.frame_role            = FrameRoleForQuality(intent.quality);
-  intent.adjustment            = command.adjustment;
-  intent.live_parameters_applied = command.live_parameters_applied;
   intent.geometry_overlay_only = geometry_overlay_active_.load(std::memory_order_acquire);
   intent.requested_width       = presentation_width_;
   intent.requested_height      = presentation_height_;
@@ -105,7 +101,6 @@ auto EditorSessionRenderController::RouteInitialRender(const EditorRenderCommand
     std::scoped_lock lock(mutex_);
     pending_initial_reason_     = command.reason;
     pending_operation_id_       = command.operation_id;
-    pending_initial_adjustment_ = command.adjustment;
     pending_session_identity_   = identity;
     pending_image_load_request_ = image_load_request;
     return 0;
@@ -143,7 +138,6 @@ auto EditorSessionRenderController::RouteInitialRender(const EditorRenderCommand
       first_frame_time_ms_        = -1.0;
       pending_session_identity_   = identity;
       pending_image_load_request_ = image_load_request;
-      pending_initial_adjustment_ = command.adjustment;
     }
     std::scoped_lock lock(mutex_);
     pending_initial_reason_.reset();
@@ -378,7 +372,6 @@ void EditorSessionRenderController::ResetForNewImage() {
   pending_detail_render_.reset();
   pending_initial_reason_.reset();
   pending_operation_id_       = 0;
-  pending_initial_adjustment_ = {};
   pending_session_identity_   = {};
   pending_image_load_request_ = {};
   first_frame_route_time_.reset();
@@ -464,7 +457,6 @@ void EditorSessionRenderController::TryEnterInteractiveFromFirstFrame(
   EditorRenderCommand qb_command;
   qb_command.operation_id = pending_operation_id_;
   qb_command.reason       = EditorRenderReason::SettledAdjustment;
-  qb_command.adjustment   = pending_initial_adjustment_;
   auto intent             = MakeRenderIntent(qb_command, identity, load_request);
   if (intent && deps_.render && PresentationTargetReady()) {
     intent->quality    = EditorRenderQuality::Quality;

@@ -37,7 +37,7 @@ struct EditorEditOutcome {
 /// Owns provisional/settled edit routing. All methods run during queue
 /// reduction; the type deliberately has no mutation mutex and never calls a live
 /// pipeline executor. Committed adjustment state lives in history and the live
-/// pipeline — not in this controller.
+/// document — not in this controller.
 class EditorSessionEditController final {
  public:
   struct Dependencies {
@@ -51,7 +51,8 @@ class EditorSessionEditController final {
   /// patch. Unspecified current-panel targets are completed from the live
   /// document in history. Explicit incomplete targets are rejected. Captures the
   /// before-preview state, commits settled patches to history, and returns a
-  /// render command carrying only the current field patch.
+  /// render command. The render reads the bound document; the command carries no
+  /// parameter values.
   auto HandlePatch(EditorAdjustmentPatch patch, bool settled,
                    const EditorHistoryGuardHandle& guard,
                    const EditorSessionIdentity& identity) -> EditorEditOutcome;
@@ -61,9 +62,8 @@ class EditorSessionEditController final {
    *
    * Captures first-before values, applies every field once, commits Release and
    * NodeSwitch sequences, restores Cancel without committing, and returns a
-   * single render command. Live parameters are applied during history capture;
-   * the render command sets @c live_parameters_applied so configure does not
-   * apply them again.
+   * single render command. History capture writes the live document; the render
+   * reads that document and the command carries no parameter values.
    */
   auto HandlePendingSequence(const EditorPendingSequence& sequence,
                              const EditorHistoryGuardHandle& guard,

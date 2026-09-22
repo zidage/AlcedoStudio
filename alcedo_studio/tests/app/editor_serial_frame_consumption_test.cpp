@@ -106,7 +106,6 @@ TEST_F(SerialFrameConsumptionTest, ReleaseBeforeFirstPreviewCommitsFinalValuesOn
   EXPECT_EQ(alcedo::test::ScalarValue(*history_->last_committed_patch.write), 1.25f);
   ASSERT_FALSE(latch_->scheduled().empty());
   EXPECT_EQ(latch_->scheduled().back().intent.quality, EditorRenderQuality::Quality);
-  EXPECT_TRUE(latch_->scheduled().back().intent.live_parameters_applied);
   EXPECT_TRUE(service_->PeekPendingInput().sequences.empty());
 }
 

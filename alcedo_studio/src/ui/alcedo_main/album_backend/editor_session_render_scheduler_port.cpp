@@ -13,7 +13,6 @@
 #include <string>
 #include <utility>
 
-#include "app/editor_adjustment_pipeline.hpp"
 #include "edit/frame_presentation_types.hpp"
 #include "image/image.hpp"
 #include "image/image_buffer.hpp"
@@ -457,25 +456,12 @@ void EditorSessionRenderSchedulerPort::DispatchPipelineFrame(Job job, alcedo::IF
     task.options_.is_callback_              = false;
     task.options_.is_seq_callback_          = false;
     task.options_.is_blocking_              = false;
-    const bool apply_adjustment =
-        alcedo::ReasonAppliesAdjustmentSnapshot(job.request.intent.reason);
-    const bool live_parameters_applied = job.request.intent.live_parameters_applied;
-    task.configure_under_render_lock_  = [snapshot = job.request.intent.adjustment, sink,
-                                         apply_adjustment, live_parameters_applied](
-                                            alcedo::PipelineTask& locked_task) {
+    // The renderer reads the bound document. Configure only attaches the frame sink under the
+    // render lock; it writes no parameter.
+    task.configure_under_render_lock_ = [sink](alcedo::PipelineTask& locked_task) {
       auto locked_exec = locked_task.pipeline_executor_;
       if (!locked_exec) {
         return false;
-      }
-      if (apply_adjustment && !live_parameters_applied) {
-        std::string apply_error;
-        if (!alcedo::ApplyEditorAdjustmentSnapshot(*locked_exec, snapshot, &apply_error)) {
-          throw std::runtime_error(apply_error.empty() ? "Failed to apply editor adjustment"
-                                                       : apply_error);
-        }
-        if (alcedo::SnapshotTouchesImageLoading(snapshot)) {
-          controllers::EnsureLoadingOperatorDefaults(locked_exec);
-        }
       }
       controllers::AttachExecutionStages(locked_exec, sink);
       return true;

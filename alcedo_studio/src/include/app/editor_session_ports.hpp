@@ -546,11 +546,7 @@ struct EditorRenderCoordinatorDiagnostics {
 struct EditorRenderCommand {
   EditorRenderReason                  reason       = EditorRenderReason::InitialFrame;
   std::uint64_t                       operation_id = 0;
-  EditorRenderAdjustmentSnapshot      adjustment{};
   std::optional<ViewportRenderRegion> view_region;
-  /// True when live document/executor already hold this batch. Configure skips
-  /// snapshot application.
-  bool                                live_parameters_applied = false;
 };
 
 /// Sole path from the session service into pipeline work. Production wraps

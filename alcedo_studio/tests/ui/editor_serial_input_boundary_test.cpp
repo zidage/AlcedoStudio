@@ -370,7 +370,6 @@ TEST_F(SerialInputBoundaryTest, ReleaseBeforeFirstPreviewCommitsFinalValuesOnce)
   const auto outcome = edit.HandlePendingSequence(*batch, handle_, identity_);
   EXPECT_EQ(outcome.kind, alcedo::EditorEditOutcome::Kind::RenderRouted);
   EXPECT_EQ(outcome.reason, alcedo::EditorRenderReason::SettledAdjustment);
-  EXPECT_TRUE(outcome.render_command.live_parameters_applied);
   EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_), 1.25f);
 
   std::string error;

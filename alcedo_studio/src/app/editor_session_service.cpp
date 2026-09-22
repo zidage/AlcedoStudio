@@ -1467,10 +1467,9 @@ auto EditorSessionService::RouteMaskCreationRender(bool interactive_preview, boo
     return result;
   }
   EditorRenderCommand render_command;
-  render_command.reason                  = quality_requested ? EditorRenderReason::SettledMaskEdit
-                                                             : EditorRenderReason::InteractiveAdjustment;
-  render_command.live_parameters_applied = true;
-  render_command.operation_id            = current_operation_id_;
+  render_command.reason       = quality_requested ? EditorRenderReason::SettledMaskEdit
+                                                  : EditorRenderReason::InteractiveAdjustment;
+  render_command.operation_id = current_operation_id_;
   const auto request_id = render_.RouteInitialRender(render_command, lifecycle_.identity(),
                                                      lifecycle_.active_image_load_request());
   if (request_id == 0) {
