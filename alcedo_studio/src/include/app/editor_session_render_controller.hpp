@@ -42,7 +42,7 @@ struct EditorRenderEvent {
 
 /// Owns the render and first-frame state for the focused editor session.
 /// Manages the presentation sink/dimensions, first-frame and quality-base
-/// request IDs, the single FrameReady gate, pending initial render
+/// request IDs, the single FrameReady check, pending initial render
 /// routing, render-busy notification, and first-frame timing. Receives
 /// immutable EditorRenderCommand values; never reads another component's
 /// mutable state.
@@ -78,7 +78,7 @@ class EditorSessionRenderController final {
       -> EditorRenderEvent;
 
   /// Feed a render result from the coordinator. The facade provides the session
-  /// identity and image-load request for filtering and first-frame gate updates.
+  /// identity and image-load request for filtering and first-frame state updates.
   void NotifyRenderResult(const EditorRenderResult&    render_result,
                           const EditorSessionIdentity& identity, ImageLoadRequestId image_load_request,
                           EditorSessionState state);
@@ -166,7 +166,6 @@ class EditorSessionRenderController final {
   std::optional<PendingDetailRender> pending_detail_render_{};
   std::optional<EditorRenderReason> pending_initial_reason_;
   std::uint64_t                     pending_operation_id_ = 0;
-  EditorRenderAdjustmentSnapshot    pending_initial_adjustment_;
   /// Identity at the time the first frame was routed. Used to correlate the
   /// first-frame Ready event with the correct identity snapshot.
   EditorSessionIdentity                                pending_session_identity_{};

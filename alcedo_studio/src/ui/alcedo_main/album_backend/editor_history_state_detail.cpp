@@ -69,27 +69,11 @@ auto EditorHistoryState::EnsureWorkingState(sl_element_id_t element_id, std::str
   auto state = std::make_shared<HistoryWorkingState>();
   state->pipeline_guard = guard;
   state->journal = journal;
-  const auto& image_state = guard->commit_graph_->GetImageEditState();
   // LoadEditorPipeline already installed the live document from a matching
-  // checkpoint or from first-parent replay. Panel state is read from that
-  // executor, never from a stored CPU-parameter checkpoint blob.
+  // checkpoint or from first-parent replay. Panel values are read from that
+  // document, never from a stored CPU-parameter checkpoint blob.
   if (!guard->pipeline_) {
     if (error) *error = "Mini-Git working state requires a live pipeline executor";
-    return nullptr;
-  }
-  try {
-    std::unique_lock<std::mutex> render_lock(guard->pipeline_->GetRenderLock());
-    if (!MakeAdjustmentSnapshotFromLivePipeline(*guard->pipeline_, &state->committed_snapshot,
-                                                error)) {
-      return nullptr;
-    }
-  } catch (const std::exception& ex) {
-    if (error) *error = ex.what();
-    return nullptr;
-  }
-  if (!RootSnapshotFromMaterialized(
-          state->committed_snapshot, *guard->commit_graph_,
-          image_state.materialized_head_commit_hash, &state->root_snapshot, error)) {
     return nullptr;
   }
 
@@ -121,7 +105,6 @@ auto EditorHistoryState::EnsureWorkingState(sl_element_id_t element_id, std::str
     } else {
       // Contiguous missing suffix: apply into unique graph + live pipeline.
       const auto prior_graph = *guard->commit_graph_;
-      const auto prior_snap  = state->committed_snapshot;
       const auto expected_materialized = prior_graph.GetImageEditState();
       alcedo::PipelineDocument prior_document;
       nlohmann::json           prior_params;
@@ -133,7 +116,6 @@ auto EditorHistoryState::EnsureWorkingState(sl_element_id_t element_id, std::str
 
       auto restore_recovery = [&]() {
         *guard->commit_graph_ = prior_graph;
-        state->committed_snapshot = prior_snap;
         if (!guard->pipeline_ || !guard->document_) {
           return;
         }
@@ -170,21 +152,6 @@ auto EditorHistoryState::EnsureWorkingState(sl_element_id_t element_id, std::str
         std::string isolate_error;
         (void)alcedo::MiniGitJournal::IsolateJournalFile(journal->path(), &isolate_error);
         return nullptr;
-      }
-
-      if (guard->pipeline_) {
-        try {
-          std::unique_lock<std::mutex> render_lock(guard->pipeline_->GetRenderLock());
-          if (!MakeAdjustmentSnapshotFromLivePipeline(*guard->pipeline_, &state->committed_snapshot,
-                                                      error)) {
-            restore_recovery();
-            return nullptr;
-          }
-        } catch (const std::exception& ex) {
-          restore_recovery();
-          if (error) *error = ex.what();
-          return nullptr;
-        }
       }
 
       guard->dirty_ = true;

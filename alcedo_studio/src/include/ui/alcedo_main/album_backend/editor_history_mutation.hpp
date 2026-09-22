@@ -24,8 +24,8 @@ class EditorHistoryState;
 /// Extracted mutation/navigation unit. Handles adjustment capture, settled
 /// commit, graph and Mask commands, Undo, Redo, explicit head movement, and
 /// Version checkout. Parameter operations run on the history queue and hold the
-/// executor render lock across document access, CPU operator remirror, and WAL
-/// publication. They never copy the document.
+/// executor render lock across document access and WAL publication. The live
+/// document is the only parameter store; no path writes a CPU stage operator.
 class EditorHistoryMutation {
  public:
   explicit EditorHistoryMutation(EditorHistoryState& state);

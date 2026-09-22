@@ -726,7 +726,7 @@ TEST(ThumbnailCacheUtilityTest, ResizeWithEvictDropsLruRecordsImmediately) {
   EXPECT_TRUE(cache.Contains(4));
 }
 
-TEST_F(ThumbnailServiceTests, ThumbnailTaskPropagatesDecodeResolutionToRawOperator) {
+TEST_F(ThumbnailServiceTests, ThumbnailApplyRequestCarriesRequestedDecodeResolution) {
   auto         exec = std::make_shared<CPUPipelineExecutor>(false);
 
   PipelineTask task;
@@ -735,28 +735,15 @@ TEST_F(ThumbnailServiceTests, ThumbnailTaskPropagatesDecodeResolutionToRawOperat
   task.options_.render_desc_.max_edge_    = 256;
   task.options_.render_desc_.decode_res_  = DecodeRes::EIGHTH;
 
-  task.SetExecutorRenderParams();
-
-  auto& raw_stage = exec->GetStage(PipelineStageName::Image_Loading);
-  auto  raw_entry = raw_stage.GetOperator(OperatorType::RAW_DECODE);
-  ASSERT_TRUE(raw_entry.has_value());
-  ASSERT_NE(raw_entry.value(), nullptr);
-  ASSERT_NE(raw_entry.value()->op_, nullptr);
-  const auto params = raw_entry.value()->op_->GetParams();
-  ASSERT_TRUE(params.contains("raw"));
-  EXPECT_EQ(params["raw"].value("decode_res", -1), static_cast<int>(DecodeRes::EIGHTH));
+  const auto eighth                       = task.MakeApplyRequest();
+  EXPECT_EQ(eighth.decode_res, DecodeRes::EIGHTH);
+  EXPECT_EQ(eighth.geometry.resolution.max_edge, 256U);
 
   task.options_.render_desc_.max_edge_   = 512;
   task.options_.render_desc_.decode_res_ = DecodeRes::QUARTER;
-  task.SetExecutorRenderParams();
-  raw_entry = raw_stage.GetOperator(OperatorType::RAW_DECODE);
-  ASSERT_TRUE(raw_entry.has_value());
-  ASSERT_NE(raw_entry.value(), nullptr);
-  ASSERT_NE(raw_entry.value()->op_, nullptr);
-  const auto updated_params = raw_entry.value()->op_->GetParams();
-  EXPECT_EQ(updated_params["raw"].value("decode_res", -1), static_cast<int>(DecodeRes::QUARTER));
-
-  task.ResetThumbnailRenderParams();
+  const auto quarter                     = task.MakeApplyRequest();
+  EXPECT_EQ(quarter.decode_res, DecodeRes::QUARTER);
+  EXPECT_EQ(quarter.geometry.resolution.max_edge, 512U);
 }
 
 TEST_F(ThumbnailServiceTests, DISABLED_GenerateThumbnailAndCallbacks) {

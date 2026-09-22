@@ -4,7 +4,7 @@
 
 // Phase 6D unit tests for Look typed models: white balance, HSL, CDL trackball,
 // and LUT catalog. Asserts operator-shaped params JSON, interactive + one
-// settled commit per completed drag, load-only setters, and canEdit gating.
+// settled commit per completed drag, load-only setters, and the canEdit check.
 // No QML / GPU.
 
 #include <gtest/gtest.h>
@@ -550,8 +550,7 @@ TEST(EditorLookModelTest, HlsSnapshotRebuildPreservesUiValues) {
   // the operator param JSON; BuildSnapshotMap converts to QVariantMap; QML
   // loadFromSnapshot parses it into model tables.
 
-  // Step 1: Create an EditorRenderAdjustmentSnapshot patch as
-  // InitializeCommittedSnapshotFromPipeline / UpsertCommittedSnapshot would.
+  // Step 1: Build the HLS field JSON that the panel snapshot map carries.
   // HLS operator returns {"HLS": {hls_adj_table: [[h, L/1000, C/1000], ...]}}
   const std::string hls_patch_json = R"({
     "HLS": {

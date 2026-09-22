@@ -65,7 +65,6 @@ class FakeEditorHistoryPort : public IEditorHistoryPort {
   bool fail_acquire   = false;
   bool fail_commit    = false;
   bool fail_undo      = false;
-  bool fail_snapshot  = false;
   bool fail_capture   = false;
   int  acquire_count  = 0;
   int  release_count  = 0;
@@ -89,7 +88,6 @@ class FakeEditorHistoryPort : public IEditorHistoryPort {
   commit_hash_t last_branch_commit{};
   version_ref_id_t active_version_id{};
   version_ref_id_t last_commit_version{};
-  EditorRenderAdjustmentSnapshot current_snapshot{};
   EditorAdjustmentPatch          last_captured_patch{};
   EditorAdjustmentPatch          last_committed_patch{};
   bool                           fail_node_command  = false;
@@ -230,21 +228,6 @@ class FakeEditorHistoryPort : public IEditorHistoryPort {
 
   auto Redo(const EditorHistoryGuardHandle&, std::string*) -> bool override {
     ++redo_count;
-    return true;
-  }
-
-  auto ReadAdjustmentSnapshot(const EditorHistoryGuardHandle&,
-                              EditorRenderAdjustmentSnapshot* snapshot, std::string* error)
-      -> bool override {
-    if (fail_snapshot) {
-      if (error != nullptr) {
-        *error = "snapshot read failed";
-      }
-      return false;
-    }
-    if (snapshot != nullptr) {
-      *snapshot = current_snapshot;
-    }
     return true;
   }
 

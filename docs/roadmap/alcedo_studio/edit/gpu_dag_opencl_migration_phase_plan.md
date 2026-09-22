@@ -2,7 +2,8 @@
 
 Date: 2026-08-28
 
-Status: O0–O5 complete; O6 planned
+Status: O0–O5 complete; O6 planned and executed by
+[Phase G10](gpu_dag_final_removal_phase_plan.md) (G10.5, G10.6, G10.10, G10.11)
 
 Branch: `feature/gpu-dag-opencl`
 
@@ -861,7 +862,7 @@ range. The DAG Grade path contains no `OpenClFusedParams` or `OperatorParams` re
   and counted; the dummy LUT is created during warm-up instead of the encode path.
 - warm median: not measured by the O2 behavior suite; the stable render assertions are zero
   resource/program/kernel creation after warm-up. Quantified warm median and p95 remain part of
-  the O6 performance gate.
+  the O6 performance acceptance criteria.
 - warm p95: not measured by the O2 behavior suite; O6 owns the benchmark matrix and threshold.
 
 **Remaining work owned by the next named Phase:** O3 — replace the explicit local-tone identity
@@ -1550,8 +1551,8 @@ Verification:
 - `TransientBufferArena.UnalignedFirstAllocationAppendsAnotherSlabWithoutLooping`: passed; a
   257-byte first allocation followed by a 512-byte aligned allocation exercises the exact
   no-progress boundary without requiring a multi-gigabyte device.
-- Focused OpenCL workspace and Develop run: 33 discovered, 32 passed, the environment-gated real
-  fixture test skipped by default, zero failed, 40.02 s.
+- Focused OpenCL workspace and Develop run: 33 discovered, 32 passed, the real fixture test that
+  requires an environment variable skipped by default, zero failed, 40.02 s.
 - `alcedo_main` debug target: built and linked successfully after the production changes.
 
 ##### Phase O5 follow-up (2026-08-29) disposable Metal scratch resources
@@ -1638,6 +1639,15 @@ Verification:
 - Implementation and regression tests add 120 net source lines before this plan record; the
   ownership change is centralized in `MetalBackend` rather than duplicated in each pass.
 
+## 11. Phase O6 — 旧 OpenCL 管线删除与性能验收
+
+Execution note (2026-09-22): O6 does not run as a separate phase.
+[Phase G10](gpu_dag_final_removal_phase_plan.md) executes this removal list and the Section 12
+performance acceptance. The user decided on 2026-09-22 that removed legacy files are preserved in
+`alcedo_studio/deprecated/legacy_pipeline/` outside the compile graph, and that the old OpenCL
+path is measured from the pinned baseline `ffb291ea` on the same device. The list below stays as
+the O6 removal requirement.
+
 目标：
 
 - 删除 OpenCL 产品路径中的旧 pipeline、stage、总参数 ABI 和混合 operator 执行；
@@ -1675,7 +1685,7 @@ OpenCL 专属删除项：
 - CUDA/Metal 已完成的旧路径删除项如果仍在共享 factory 中，O6 必须按主计划最终状态一起清理；
 - 全局共享类型只有在所有产品后端不再引用时才可物理删除；
 - 不得因保留旧算法 reference test 而保留旧产品 factory；reference fixture 必须改为直接调用
-  DAG renderer/pass 或保存 golden 数据。
+  DAG renderer/pass 或保存注明容差的 expected pixels 数据。
 
 静态检查：
 

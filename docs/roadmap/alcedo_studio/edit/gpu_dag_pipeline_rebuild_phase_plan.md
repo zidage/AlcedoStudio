@@ -4,6 +4,10 @@ Date: 2026-08-22
 
 Status: G1–G7 implementation landed；G7 产品验收撤回；G7R.1–G7R.3 complete；G7R.H complete（含 one-shot 缓存隔离、canonical LLF ROI 采样，以及 CUDA 产品 present 示波器 tap）；G7R.4–G7R.5 remaining；G7R 仍阻塞 G8。
 
+G10 status (2026-09-22): planned. The executable phase split is in
+[Phase G10 — Legacy Pipeline Removal and Release Qualification](gpu_dag_final_removal_phase_plan.md).
+That plan also executes the OpenCL O6 and Metal M7 removal and performance acceptance work.
+
 后续用户可编辑节点、多蒙版、节点感知参数面板、历史和 Version 语义见
 [Node-aware Pipeline Editing and Mask Authoring 总体方案](node_mask_editor_master_plan.md)。该方案
 承接本文建立的 `PipelineDocument` 和 GPU runtime，不把 UI 工作回填到本文各 GPU Phase。
@@ -1899,7 +1903,7 @@ Stack:
 | G7R | `feature/gpu-dag-cuda-check-and-fix` | G7 | CameraMatrices 色彩、内容缓存和默认管线性能恢复 |
 | G8 | `feature/gpu-dag-opencl` | G7R | OpenCL 完整移植 |
 | G9 | `feature/gpu-dag-metal` | G8 | Metal 完整移植 |
-| G10 | `feature/gpu-dag-final-removal` | G9 | 删除旧 stage、CPU 图像路径和过渡代码；全平台验证 |
+| G10 | `feature/gpu-dag-final-removal` | `main` at `92085ffe` or later | 删除旧 stage、CPU 图像路径和过渡代码；全平台验证。执行计划见 [G10 plan](gpu_dag_final_removal_phase_plan.md) |
 
 ## 33. Phase G0 — 设计与堆栈根
 
@@ -3362,7 +3366,7 @@ CameraMatrices 数据库。用户 CCT/tint 由 CPU 做 mired 双光源插值，�
 
 **Status:** complete — serializable Develop camera profile, CPU mired dual-illuminant
 interpolation, CUDA CameraColor multiplies the uploaded 3×3, import bind from
-MetadataExtractor. Creative CAT02 remains G7R.4. 41.8.2 `bf6686fb` pixel goldens
+MetadataExtractor. Creative CAT02 remains G7R.4. 41.8.2 `bf6686fb` stored expected pixels
 and 41.8.4 editor E2E remain residual.
 
 **Primary success call chain:**
@@ -3455,7 +3459,7 @@ steps 1–10 run from stored Develop params (step 1 at import bind, steps 2–9 
 `pipeline_cpu.cpp` remains 742; this phase only binds the camera profile on inject,
 document set, and legacy mirror.
 
-**Remaining gaps:** 41.8.2 `bf6686fb` CameraToAp1 pixel goldens are not generated.
+**Remaining gaps:** 41.8.2 `bf6686fb` CameraToAp1 stored expected pixels are not generated.
 41.8.4 editor real-RAW E2E still sits behind `ALCEDO_RUN_DEADLOCKING_RAW_GPU_E2E`.
 `RawInputLoader::FillColorContext` still writes only cam_mul/pre_mul/make/model;
 the CUDA product path does not use that context for CameraColor. OpenCL/Metal
@@ -3879,7 +3883,7 @@ Suite total: related discovered set `159/159` PASS；LLF memcheck `2/2` PASS；D
 
 **Residual gaps:** full-frame、跨 ROI 的 canonical LLF reference 仍是上一条记录明确列出的独立
 剩余项；本次没有用当前 ROI 缓存冒充 canonical reference。DNG 测试证明真实文件的 warp 元数据
-进入 prepared input，并以合成非恒等参数证明 CUDA 像素结果实际改变；没有保存新的大型 golden
+进入 prepared input，并以合成非恒等参数证明 CUDA 像素结果实际改变；没有保存新的大型 expected-pixel reference 文件
 图像。
 
 ##### 41.5.1 Canonical LLF reference 与 ROI 坐标采样（2026-08-23）
@@ -4306,64 +4310,24 @@ MetalBackendFailureDoesNotEnterCpuImageProcessing
 
 ## 44. Phase G10 — 最终删除与全平台验证
 
-Branch: `feature/gpu-dag-final-removal`
+Status: planned (2026-09-22).
 
-Base: `feature/gpu-dag-metal`
+The executable plan is
+[Phase G10 — Legacy Pipeline Removal and Release Qualification](gpu_dag_final_removal_phase_plan.md).
+It replaces the short list that was in this section. It splits G10 into G10.1–G10.11 and keeps
+every removal item and every verification name that this section listed.
 
-目标：
+Decisions recorded in that plan on 2026-09-22:
 
-- 删除所有旧执行结构；
-- 确认三个后端只使用新 DAG；
-- 完成性能、内存和序列化验证。
-
-删除：
-
-- PipelineStage；
-- PipelineStageName；
-- merged stage；
-- stage cache；
-- stage 邻接指针；
-- OperatorParams；
-- 后端总参数结构和总参数转换；
-- IOperatorBase::Apply；
-- IOperatorBase::ApplyGPU；
-- SetGlobalParams；
-- EnableGlobalParams；
-- CPU pipeline image execution；
-- LLF 私有 allocator 和 cache；
-- 每个算子的 GPU 内存管理；
-- 旧 OpenCL 和 Metal adapter；
-- LegacyPipelineImporter、legacy parameter snapshot 和 nested stage adapter；
-- 已迁移后的重复 kernel 入口；
-- 旧 stage JSON writer。
-
-验证：
-
-```text
-DefaultPipelineContainsExactlyDevelopGradeAndDrt
-AllBuiltInOperatorModelsHaveNoImageApplyEntryPoint
-AllGpuBackendsUseBasicRenderWorkspace
-NoPipelineStageTypeRemainsInFirstPartySource
-NoOperatorParamsAggregateRemainsInFirstPartySource
-NoCpuImageOperatorEntryPointRemainsInProductPipeline
-DefaultPipelineRoundTripPreservesThreeNodeGraph
-NoLegacyParameterImporterOrStageAdapterRemainsInProductPath
-RasterMaskRoundTripPreservesR8DataAndSamplingBounds
-CropRotateViewportAndDynamicResolutionMatchAcrossBackends
-SteadyStateRenderAllocatesNoGpuBufferOrTextureAcrossBackends
-OnlyDirtyParameterRangesTransferAcrossBackends
-```
-
-完成条件：
-
-- CUDA、OpenCL 和 Metal 产品路径全部使用新 DAG；
-- 没有 CPU 图像处理接口；
-- 没有 PipelineStage；
-- 没有 OperatorParams 总结构；
-- 默认图只有三个用户可见节点；
-- 所有临时 GPU 资源由 workspace 管理；
-- 所有持久蒙版通过 MaskStore；
-- 三个后端通过共同参考测试。
+- The branch base is `main`, not `feature/gpu-dag-metal`. OpenCL O0–O5 and Metal M0–M6 are
+  already on `main`.
+- G10 executes the OpenCL O6 and Metal M7 removal lists and their performance acceptance.
+- Legacy source files are preserved in `alcedo_studio/deprecated/legacy_pipeline/` and are not
+  part of the compile graph.
+- The project format changes to `0.9.0`. Projects with version `0.8.0` fail at open.
+- Performance uses pinned-commit A/B on the same device: CUDA `bf6686fb`, OpenCL `ffb291ea`,
+  Metal `9c1df791`.
+- G10 does not complete G7R.4 or G7R.5.
 
 ## 45. 测试分层
 
@@ -4573,7 +4537,7 @@ ctest --test-dir build/macos-debug --output-on-failure
 
 - 默认顺序写入明确列表；
 - format version 2 直接保存和读取明确 Model 顺序；旧 stage JSON 返回版本错误；
-- 使用 golden 图像和参数 round-trip 测试；
+- 使用存储的 expected pixels（注明容差）和参数 round-trip 测试；
 - GraphCompiler 不自动改变 Model 顺序。
 
 ### 48.3 ROI 与 mask 错位

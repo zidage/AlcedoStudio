@@ -8,6 +8,7 @@
 
 #include <stdexcept>
 
+#include "edit/graph/drt_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/commit_types.hpp"
@@ -55,6 +56,30 @@ TEST(AdjustmentTransferServiceTest, TransferSurfaceHasNoPipelineMergeOperation) 
   EXPECT_EQ(PipelineEditBatch::FromJSON(commit.GetPayloadJSON()).operation_kind,
             PipelineEditOperationKind::Paste);
   project.TearDown();
+}
+
+// The transfer coordinator persists the library HDR flag from IsHdrExportEncoding(document DRT).
+TEST(AdjustmentTransferServiceTest, HdrExportFlagFollowsDocumentDrtEncoding) {
+  auto  document = CreateDefaultPipelineDocument();
+  auto* drt      = document.Drt();
+  ASSERT_NE(drt, nullptr);
+  EXPECT_FALSE(IsHdrExportEncoding(*drt));
+
+  DrtParameterUpdate pq;
+  pq.encoding_eotf = DrtEotf::St2084;
+  drt->Params().ApplyUpdate(pq);
+  EXPECT_TRUE(IsHdrExportEncoding(*drt));
+
+  DrtParameterUpdate hlg;
+  hlg.encoding_eotf = DrtEotf::Hlg;
+  drt->Params().ApplyUpdate(hlg);
+  EXPECT_TRUE(IsHdrExportEncoding(*drt));
+
+  DrtParameterUpdate gamma;
+  gamma.encoding_eotf = DrtEotf::Gamma22;
+  drt->Params().ApplyUpdate(gamma);
+  EXPECT_FALSE(IsHdrExportEncoding(*drt));
+  EXPECT_EQ(drt->Params().ToJson(), CreateDefaultPipelineDocument().Drt()->Params().ToJson());
 }
 
 }  // namespace

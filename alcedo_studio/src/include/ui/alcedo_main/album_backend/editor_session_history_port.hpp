@@ -132,13 +132,6 @@ class EditorSessionHistoryPort final : public alcedo::IEditorHistoryPort {
                                     std::string version_display_name,
                                     alcedo::AdjustmentPasteResult* result, std::string* error)
       -> bool override;
-  auto CancelLivePaste(const alcedo::EditorHistoryGuardHandle& guard,
-                       const alcedo::version_ref_id_t& prior_version_id,
-                       const alcedo::version_ref_id_t& paste_version_id, std::string* error)
-      -> bool override;
-  auto ReadAdjustmentSnapshot(const alcedo::EditorHistoryGuardHandle& guard,
-                              alcedo::EditorRenderAdjustmentSnapshot* snapshot, std::string* error)
-      -> bool override;
   auto ReadPanelProjection(const alcedo::EditorHistoryGuardHandle& guard,
                            alcedo::EditorPanelProjection* projection, std::string* error)
       -> bool override;

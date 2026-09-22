@@ -72,7 +72,7 @@ struct EditorPendingSequence {
  * @brief Inspectable copy of queued change descriptions.
  *
  * This is the pending-input queue's own contents, not a mirror of
- * PipelineDocument or an EditorRenderAdjustmentSnapshot.
+ * PipelineDocument.
  */
 struct EditorPendingInputView {
   std::vector<EditorPendingSequence> sequences;

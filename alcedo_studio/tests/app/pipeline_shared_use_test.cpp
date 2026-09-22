@@ -466,7 +466,7 @@ TEST_F(PipelineSharedUseTest, BackgroundTasksReuseLivePipelineAndDocument) {
   pipelines->SavePipeline(live);
 }
 
-TEST_F(PipelineSharedUseTest, TaskRenderOptionsDoNotPersistInExecutor) {
+TEST_F(PipelineSharedUseTest, TaskRenderOptionsDoNotLeakIntoLaterEditorRequests) {
   if (!std::filesystem::exists(LinearDngPath())) {
     GTEST_SKIP() << "Sample DNG file is missing: " << LinearDngPath().string();
   }
@@ -477,30 +477,12 @@ TEST_F(PipelineSharedUseTest, TaskRenderOptionsDoNotPersistInExecutor) {
   auto live = pipelines->LoadPipeline(ids.first);
   ASSERT_NE(live, nullptr);
   BindImportedRawColor(live, *project.GetImagePoolService(), ids.second);
-  CPUPipelineExecutor::OneShotRenderParamsSnapshot prior;
-  {
-    std::lock_guard<std::mutex> render_lock(live->pipeline_->GetRenderLock());
-    live->pipeline_->SetForceCPUOutput(false);
-    live->pipeline_->SetEnableCache(true);
-    live->pipeline_->SetDecodeRes(DecodeRes::FULL);
-    prior = live->pipeline_->CaptureOneShotRenderParams();
-  }
-
   ThumbnailService thumbnails(project.GetSleeveService(), project.GetImagePoolService(), pipelines);
   const auto       result = GetThumbnailDetailedBlocking(thumbnails, ids.first, ids.second,
                                                          ThumbnailResolution::k256);
   EXPECT_EQ(result.status, ThumbnailRequestStatus::kReady) << result.message;
   ASSERT_NE(result.guard, nullptr);
   ASSERT_TRUE(pipelines->WaitUntilPinCount(live, 1, 10s));
-
-  CPUPipelineExecutor::OneShotRenderParamsSnapshot restored;
-  {
-    std::lock_guard<std::mutex> render_lock(live->pipeline_->GetRenderLock());
-    restored = live->pipeline_->CaptureOneShotRenderParams();
-  }
-  EXPECT_EQ(restored.enable_cache_, prior.enable_cache_);
-  EXPECT_EQ(restored.force_cpu_output_, prior.force_cpu_output_);
-  EXPECT_EQ(restored.decode_res_, prior.decode_res_);
 
   {
     auto extra = pipelines->LoadPipeline(ids.first);
@@ -519,14 +501,15 @@ TEST_F(PipelineSharedUseTest, TaskRenderOptionsDoNotPersistInExecutor) {
     scheduler.ScheduleTask(std::move(task));
     ASSERT_EQ(done_fut.wait_for(10s), std::future_status::ready);
   }
-  CPUPipelineExecutor::OneShotRenderParamsSnapshot after_failure;
-  {
-    std::lock_guard<std::mutex> render_lock(live->pipeline_->GetRenderLock());
-    after_failure = live->pipeline_->CaptureOneShotRenderParams();
-  }
-  EXPECT_EQ(after_failure.enable_cache_, prior.enable_cache_);
-  EXPECT_EQ(after_failure.force_cpu_output_, prior.force_cpu_output_);
-  EXPECT_EQ(after_failure.decode_res_, prior.decode_res_);
+  // Thumbnail options live only in their own apply request. A later editor request on the same
+  // executor keeps the editor settings.
+  PipelineTask editor;
+  editor.pipeline_executor_                 = live->pipeline_;
+  editor.options_.render_desc_.render_type_ = RenderType::FAST_PREVIEW;
+  const auto editor_request                 = editor.MakeApplyRequest();
+  EXPECT_EQ(editor_request.cache_policy, RenderCachePolicy::UseSessionCache);
+  EXPECT_FALSE(editor_request.require_host_output);
+  EXPECT_EQ(editor_request.decode_res, DecodeRes::FULL);
 
   thumbnails.ReleaseThumbnail(ThumbnailCacheKey{ids.first, ThumbnailResolution::k256});
   pipelines->SavePipeline(live);

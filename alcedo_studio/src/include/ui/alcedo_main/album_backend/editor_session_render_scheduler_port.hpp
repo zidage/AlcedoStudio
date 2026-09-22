@@ -52,6 +52,17 @@ struct EditorRenderSessionContext {
   std::shared_ptr<alcedo::PipelineGuard> pipeline_guard;
 };
 
+/**
+ * @brief Render description for one editor viewport request.
+ *
+ * Maps the intent to render type, viewport region, and frame metadata. Sets
+ * `document_geometry_ = UncroppedSource` exactly when `intent.geometry_overlay_only` is true
+ * (Geometry panel open); otherwise the document crop and rotation apply. Pure value; reads no
+ * pipeline state.
+ */
+[[nodiscard]] auto MakeEditorRenderDesc(const alcedo::EditorRenderRequest& request)
+    -> alcedo::RenderDesc;
+
 /// Thin adapter: builds a PipelineTask from bound session context and hands it
 /// to PipelineScheduler. No private worker thread and no second request queue —
 /// the coordinator owns single-flight; PipelineScheduler owns execution.

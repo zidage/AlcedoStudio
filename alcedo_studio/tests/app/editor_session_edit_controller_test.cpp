@@ -61,9 +61,7 @@ TEST_F(EditorSessionEditControllerTest, InteractiveAndSettledPatchUseOneHistoryC
   EXPECT_EQ(r1.reason, EditorRenderReason::InteractiveAdjustment);
   EXPECT_EQ(history_->capture_count, 1);
   EXPECT_EQ(history_->commit_count, 0);
-  ASSERT_EQ(r1.render_command.adjustment.patches.size(), 1u);
-  EXPECT_EQ(r1.render_command.adjustment.patches.front().field_key, "exposure");
-  EXPECT_EQ(r1.render_command.adjustment.fingerprint, "exposure");
+  EXPECT_EQ(r1.render_command.reason, EditorRenderReason::InteractiveAdjustment);
 
   patch.settled = true;
   auto r2       = edit_->HandlePatch(patch, true, guard(), identity());
@@ -73,20 +71,19 @@ TEST_F(EditorSessionEditControllerTest, InteractiveAndSettledPatchUseOneHistoryC
   EXPECT_EQ(history_->commit_count, 1);
   EXPECT_EQ(history_->last_committed_patch.field_key, "exposure");
   EXPECT_TRUE(history_->last_committed_patch.settled);
-  ASSERT_EQ(r2.render_command.adjustment.patches.size(), 1u);
-  EXPECT_EQ(r2.render_command.adjustment.patches.front().field_key, "exposure");
+  EXPECT_EQ(r2.render_command.reason, EditorRenderReason::SettledAdjustment);
 }
 
-TEST_F(EditorSessionEditControllerTest, InteractivePatchCarriesOnlyEditedField) {
+// The typed write goes to history, which writes the document. The render command names only
+// the render reason; the renderer reads the bound document.
+TEST_F(EditorSessionEditControllerTest, InteractivePatchSendsTypedWriteToHistoryOnly) {
   auto patch = test::WithColorGradeTarget(test::ScalarPatch("exposure", 1.25f, false));
   const auto result = edit_->HandlePatch(patch, false, guard(), identity());
   ASSERT_EQ(result.kind, EditorEditOutcome::Kind::RenderRouted);
-  ASSERT_EQ(result.render_command.adjustment.patches.size(), 1u);
-  EXPECT_EQ(result.render_command.adjustment.patches.front().field_key, "exposure");
-  ASSERT_TRUE(result.render_command.adjustment.patches.front().write.has_value());
-  EXPECT_EQ(test::ScalarValue(*result.render_command.adjustment.patches.front().write), 1.25f);
-  EXPECT_TRUE(result.render_command.adjustment.patches.front().params_json.empty());
-  EXPECT_EQ(result.render_command.adjustment.fingerprint, "exposure");
+  EXPECT_EQ(result.render_command.reason, EditorRenderReason::InteractiveAdjustment);
+  EXPECT_EQ(history_->last_captured_patch.field_key, "exposure");
+  ASSERT_TRUE(history_->last_captured_patch.write.has_value());
+  EXPECT_EQ(test::ScalarValue(*history_->last_captured_patch.write), 1.25f);
 }
 
 TEST_F(EditorSessionEditControllerTest, SettledCommitFailureReturnsRejected) {
@@ -98,31 +95,31 @@ TEST_F(EditorSessionEditControllerTest, SettledCommitFailureReturnsRejected) {
   EXPECT_EQ(history_->commit_count, 1);
 }
 
-TEST_F(EditorSessionEditControllerTest, RepeatedInteractivePatchesOnlyStampLatestFieldOnRender) {
+TEST_F(EditorSessionEditControllerTest, RepeatedInteractivePatchesCommitOnlyTheSettledValue) {
   auto patch = test::WithColorGradeTarget(test::ScalarPatch("exposure", 0.0f, false));
   for (int value = 0; value < 50; ++value) {
     patch.write = EditorScalarWrite{static_cast<float>(value)};
     const auto routed = edit_->HandlePatch(patch, false, guard(), identity());
     ASSERT_EQ(routed.kind, EditorEditOutcome::Kind::RenderRouted);
-    ASSERT_EQ(routed.render_command.adjustment.patches.size(), 1u);
-    EXPECT_EQ(routed.render_command.adjustment.patches.front().field_key, "exposure");
+    EXPECT_EQ(routed.render_command.reason, EditorRenderReason::InteractiveAdjustment);
   }
+  EXPECT_EQ(history_->capture_count, 50);
   EXPECT_EQ(history_->commit_count, 0);
 
   patch.settled = true;
   const auto settled = edit_->HandlePatch(patch, true, guard(), identity());
-  ASSERT_EQ(settled.render_command.adjustment.patches.size(), 1u);
-  ASSERT_TRUE(settled.render_command.adjustment.patches.front().write.has_value());
-  EXPECT_EQ(test::ScalarValue(*settled.render_command.adjustment.patches.front().write), 49.0f);
+  EXPECT_EQ(settled.render_command.reason, EditorRenderReason::SettledAdjustment);
+  ASSERT_TRUE(history_->last_committed_patch.write.has_value());
+  EXPECT_EQ(test::ScalarValue(*history_->last_committed_patch.write), 49.0f);
   EXPECT_EQ(history_->commit_count, 1);
 }
 
-TEST_F(EditorSessionEditControllerTest, UndoAdvancesWithEmptyRenderAdjustment) {
+TEST_F(EditorSessionEditControllerTest, UndoMovesHistoryWithoutParameterWrite) {
   auto result = edit_->HandleUndoRedo(true, guard(), identity());
   EXPECT_EQ(result.kind, EditorEditOutcome::Kind::Accepted);
   EXPECT_EQ(history_->undo_count, 1);
-  EXPECT_TRUE(result.render_command.adjustment.patches.empty());
-  EXPECT_TRUE(result.render_command.adjustment.params_json.empty());
+  EXPECT_EQ(history_->capture_count, 0);
+  EXPECT_EQ(history_->commit_count, 0);
 }
 
 TEST_F(EditorSessionEditControllerTest, UndoFailureReturnsFailed) {
@@ -132,11 +129,11 @@ TEST_F(EditorSessionEditControllerTest, UndoFailureReturnsFailed) {
   EXPECT_EQ(result.message, "undo failed");
 }
 
-TEST_F(EditorSessionEditControllerTest, DiscardUsesJournalPortAndLeavesRenderAdjustmentEmpty) {
+TEST_F(EditorSessionEditControllerTest, DiscardUsesJournalPortWithoutParameterWrite) {
   auto result = edit_->HandleDiscard(guard(), identity(), EditorSessionState::Interactive);
   EXPECT_EQ(result.kind, EditorEditOutcome::Kind::Accepted);
   EXPECT_EQ(journal_->discard_count, 1);
-  EXPECT_TRUE(result.render_command.adjustment.patches.empty());
+  EXPECT_EQ(history_->capture_count, 0);
 }
 
 TEST_F(EditorSessionEditControllerTest, PatchWithEmptyFieldKeyIsRejected) {
@@ -198,8 +195,8 @@ TEST_F(EditorSessionEditControllerTest, PendingSequenceAppliesEveryFieldOnceThen
   EXPECT_EQ(result.reason, EditorRenderReason::SettledAdjustment);
   EXPECT_EQ(history_->capture_count, 2);
   EXPECT_EQ(history_->commit_count, 2);
-  EXPECT_TRUE(result.render_command.live_parameters_applied);
-  ASSERT_EQ(result.render_command.adjustment.patches.size(), 2u);
+  EXPECT_EQ(history_->last_committed_patch.field_key, "contrast");
+  EXPECT_EQ(result.render_command.reason, EditorRenderReason::SettledAdjustment);
 }
 
 TEST_F(EditorSessionEditControllerTest, InteractiveSequenceCapturesWithoutCommit) {
@@ -215,7 +212,7 @@ TEST_F(EditorSessionEditControllerTest, InteractiveSequenceCapturesWithoutCommit
   EXPECT_EQ(result.reason, EditorRenderReason::InteractiveAdjustment);
   EXPECT_EQ(history_->capture_count, 1);
   EXPECT_EQ(history_->commit_count, 0);
-  EXPECT_TRUE(result.render_command.live_parameters_applied);
+  EXPECT_EQ(result.render_command.reason, EditorRenderReason::InteractiveAdjustment);
 }
 
 TEST_F(EditorSessionEditControllerTest, CancelRestoreRoutesRenderOnlyWhenLiveContentChanged) {
@@ -230,7 +227,7 @@ TEST_F(EditorSessionEditControllerTest, CancelRestoreRoutesRenderOnlyWhenLiveCon
   history_->restore_changes_live = true;
   auto restored = edit_->HandlePendingSequence(empty_cancel, guard(), identity());
   EXPECT_EQ(restored.kind, EditorEditOutcome::Kind::RenderRouted);
-  EXPECT_TRUE(restored.render_command.live_parameters_applied);
+  EXPECT_EQ(restored.render_command.reason, EditorRenderReason::InteractiveAdjustment);
   EXPECT_EQ(history_->restore_preview_count, 2);
 }
 

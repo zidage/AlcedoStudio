@@ -13,7 +13,6 @@
 #include <string>
 #include <unordered_map>
 
-#include "app/editor_adjustment_pipeline.hpp"
 #include "app/editor_adjustment_types.hpp"
 #include "app/editor_panel_projection.hpp"
 #include "app/editor_render_intent.hpp"
@@ -35,15 +34,14 @@ namespace alcedo::ui {
 class EditorSessionPipelinePort;
 
 /// Per-image history state owned by the queue-thread history unit. The command
-/// queue is the sole mutation owner for graph, redo, pending-before, and
-/// committed-snapshot fields. Live parameter writes go to pipeline_guard->document_.
+/// queue is the sole mutation owner for graph, redo, and pending-sequence fields.
+/// Live parameter writes go to pipeline_guard->document_ only.
 /// Parameter writes, Version ops, and rendering share the executor render lock.
 /// Load-only selected-node panel projection reads Models without that lock.
 struct HistoryWorkingState {
   std::shared_ptr<alcedo::PipelineGuard> pipeline_guard;
   std::shared_ptr<alcedo::MiniGitJournal> journal;
   std::unique_ptr<alcedo::MiniGitWorkingHistory> history;
-  std::unordered_map<std::string, alcedo::EditorAdjustmentOperatorState> pending_before;
   /// First complete target of the current input sequence, keyed by field_key.
   struct DocumentFieldEdit {
     alcedo::EditorParameterTarget target;
@@ -52,8 +50,6 @@ struct HistoryWorkingState {
   };
   std::unordered_map<std::string, DocumentFieldEdit> pending_document_sequence;
   std::unordered_map<alcedo::Hash128, DocumentFieldEdit> document_edit_by_commit;
-  alcedo::EditorRenderAdjustmentSnapshot root_snapshot;
-  alcedo::EditorRenderAdjustmentSnapshot committed_snapshot;
   /// Load-only panel values copied from live Models. Not a live Model pointer
   /// and not a writable parameter mirror. Selected-node copies do not take the
   /// render lock.

@@ -68,11 +68,19 @@ auto EstimatePeakTransientBytes(const DevelopCompileSource& source) -> std::size
   return (std::max)(EstimateDevelopTransientBytes(source), llf);
 }
 
-auto ImageParamsFromDocument(const PipelineDocument& document) -> ImageGeometryParams {
+/**
+ * @brief User geometry that this frame binds. UncroppedSource keeps only expand_to_fit and uses an
+ *        identity crop with zero rotation; the document is not changed.
+ */
+auto ImageParamsForRequest(const PipelineDocument& document, DocumentGeometryUse use)
+    -> ImageGeometryParams {
   ImageGeometryParams params;
+  params.expand_to_fit = document.Geometry().ExpandToFit();
+  if (use == DocumentGeometryUse::UncroppedSource) {
+    return params;
+  }
   params.crop_rect        = document.Geometry().CropRect();
   params.rotation_degrees = document.Geometry().RotationDegrees();
-  params.expand_to_fit    = document.Geometry().ExpandToFit();
   return params;
 }
 
@@ -502,8 +510,9 @@ void GraphCompiler::BindFrameGeometry(ExecutionPlan& plan, const PipelineDocumen
   const auto geom_source =
       MakeSourceGeometry(plan.source.develop_output_extent, plan.source.full_reference_extent,
                          plan.source.sensor_active_area, plan.source.downsample_passes);
-  plan.geometry = ResolveRenderGeometry(geom_source, ImageParamsFromDocument(document),
-                                        request.view, request.resolution, request.footprint);
+  plan.geometry =
+      ResolveRenderGeometry(geom_source, ImageParamsForRequest(document, request.document_geometry),
+                            request.view, request.resolution, request.footprint);
   plan.encode_geometry_resample = !IsIdentityResample(plan.geometry);
 }
 

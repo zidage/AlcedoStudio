@@ -13,7 +13,6 @@
 #include <string>
 #include <utility>
 
-#include "app/editor_adjustment_pipeline.hpp"
 #include "edit/frame_presentation_types.hpp"
 #include "image/image.hpp"
 #include "image/image_buffer.hpp"
@@ -92,6 +91,21 @@ void TraceDetailRequest(const char* stage, const alcedo::EditorRenderRequest& re
 }
 
 }  // namespace
+
+auto MakeEditorRenderDesc(const alcedo::EditorRenderRequest& request) -> alcedo::RenderDesc {
+  const auto&        intent = request.intent;
+  alcedo::RenderDesc desc;
+  desc.render_type_         = RenderTypeForIntent(intent);
+  desc.use_viewport_region_ = intent.quality == alcedo::EditorRenderQuality::Detail ||
+                              intent.reason == alcedo::EditorRenderReason::ScopeRefresh;
+  desc.viewport_region_                        = intent.view_region;
+  desc.frame_metadata_                         = FrameRoleToPreviewMetadata(intent);
+  desc.frame_metadata_.presentation_request_id = request.request_id;
+  desc.document_geometry_                      = intent.geometry_overlay_only
+                                                     ? alcedo::DocumentGeometryUse::UncroppedSource
+                                                     : alcedo::DocumentGeometryUse::ApplyCropAndRotation;
+  return desc;
+}
 
 EditorSessionRenderSchedulerPort::EditorSessionRenderSchedulerPort(
     std::shared_ptr<alcedo::PipelineScheduler> pipeline_scheduler)
@@ -437,41 +451,17 @@ void EditorSessionRenderSchedulerPort::DispatchPipelineFrame(Job job, alcedo::IF
     task.input_                             = context->input;
     task.input_desc_                        = context->image;
     task.pipeline_executor_                 = exec;
-    task.options_.render_desc_.render_type_ = RenderTypeForIntent(job.request.intent);
-    task.options_.render_desc_.use_viewport_region_ =
-        job.request.intent.quality == alcedo::EditorRenderQuality::Detail ||
-        job.request.intent.reason == alcedo::EditorRenderReason::ScopeRefresh;
-    task.options_.render_desc_.viewport_region_ = job.request.intent.view_region;
-    task.options_.render_desc_.frame_metadata_  = FrameRoleToPreviewMetadata(job.request.intent);
-    task.options_.render_desc_.frame_metadata_.presentation_request_id = job.request.request_id;
-    task.request_id_                                                   = job.request.request_id;
-    task.options_.is_callback_                                         = false;
-    task.options_.is_seq_callback_                                     = false;
-    task.options_.is_blocking_                                         = false;
-    const bool apply_adjustment =
-        alcedo::ReasonAppliesAdjustmentSnapshot(job.request.intent.reason);
-    const bool live_parameters_applied = job.request.intent.live_parameters_applied;
-    task.configure_under_render_lock_ = [snapshot = job.request.intent.adjustment, sink,
-                                         geometry_overlay_only =
-                                             job.request.intent.geometry_overlay_only,
-                                         apply_adjustment,
-                                         live_parameters_applied](alcedo::PipelineTask& locked_task) {
+    task.options_.render_desc_              = MakeEditorRenderDesc(job.request);
+    task.request_id_                        = job.request.request_id;
+    task.options_.is_callback_              = false;
+    task.options_.is_seq_callback_          = false;
+    task.options_.is_blocking_              = false;
+    // The renderer reads the bound document. Configure only attaches the frame sink under the
+    // render lock; it writes no parameter.
+    task.configure_under_render_lock_ = [sink](alcedo::PipelineTask& locked_task) {
       auto locked_exec = locked_task.pipeline_executor_;
       if (!locked_exec) {
         return false;
-      }
-      if (apply_adjustment && !live_parameters_applied) {
-        std::string apply_error;
-        if (!alcedo::ApplyEditorAdjustmentSnapshot(*locked_exec, snapshot, &apply_error)) {
-          throw std::runtime_error(apply_error.empty() ? "Failed to apply editor adjustment"
-                                                       : apply_error);
-        }
-        if (alcedo::SnapshotTouchesImageLoading(snapshot)) {
-          controllers::EnsureLoadingOperatorDefaults(locked_exec);
-        }
-      }
-      if (geometry_overlay_only) {
-        alcedo::DisableEditorGeometryOperatorForOverlay(*locked_exec);
       }
       controllers::AttachExecutionStages(locked_exec, sink);
       return true;

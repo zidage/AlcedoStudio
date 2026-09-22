@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "edit/geometry/types.hpp"
 
 namespace alcedo {
@@ -61,10 +63,22 @@ struct SamplingFootprint {
   bool  requires_full_reference  = false;
 };
 
+/**
+ * @brief How one render reads the document crop and rotation.
+ *
+ * Only editor viewport requests set @ref UncroppedSource, while the Geometry panel is open. The
+ * document is never changed; the value selects which user geometry the frame binds.
+ */
+enum class DocumentGeometryUse : std::uint8_t {
+  ApplyCropAndRotation,  ///< Default: every product render applies the document geometry.
+  UncroppedSource,       ///< Geometry panel open: identity crop and zero rotation for this frame.
+};
+
 struct RenderRequest {
-  ViewRequest        view{};
-  ResolutionRequest  resolution{};
-  SamplingFootprint  footprint{};
+  ViewRequest         view{};
+  ResolutionRequest   resolution{};
+  SamplingFootprint   footprint{};
+  DocumentGeometryUse document_geometry = DocumentGeometryUse::ApplyCropAndRotation;
 };
 
 }  // namespace alcedo

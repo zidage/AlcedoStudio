@@ -173,12 +173,6 @@ auto EditorSessionNavigationFixture::TrackingHistoryPort::Redo(
   return inner.Redo(guard, error);
 }
 
-auto EditorSessionNavigationFixture::TrackingHistoryPort::ReadAdjustmentSnapshot(
-    const EditorHistoryGuardHandle& guard, EditorRenderAdjustmentSnapshot* snapshot,
-    std::string* error) -> bool {
-  return inner.ReadAdjustmentSnapshot(guard, snapshot, error);
-}
-
 auto EditorSessionNavigationFixture::TrackingHistoryPort::CaptureSaveCheckpoint(
     const EditorHistoryGuardHandle& guard, std::string* error)
     -> std::shared_ptr<const EditorMiniGitSaveCapture> {

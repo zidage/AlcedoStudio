@@ -65,16 +65,10 @@ auto EditorSessionEditController::HandlePatch(EditorAdjustmentPatch patch, bool 
     return outcome;
   }
 
-  EditorRenderAdjustmentSnapshot render_delta;
-  render_delta.fingerprint = patch.field_key;
-  render_delta.patches     = {patch};
-
-  outcome.kind                      = EditorEditOutcome::Kind::RenderRouted;
-  outcome.reason                    = settled ? EditorRenderReason::SettledAdjustment
-                                              : EditorRenderReason::InteractiveAdjustment;
-  outcome.render_command.reason     = outcome.reason;
-  outcome.render_command.adjustment = std::move(render_delta);
-  outcome.render_command.live_parameters_applied = true;
+  outcome.kind                  = EditorEditOutcome::Kind::RenderRouted;
+  outcome.reason                = settled ? EditorRenderReason::SettledAdjustment
+                                          : EditorRenderReason::InteractiveAdjustment;
+  outcome.render_command.reason = outcome.reason;
   return outcome;
 }
 
@@ -120,11 +114,10 @@ auto EditorSessionEditController::HandlePendingSequence(const EditorPendingSeque
       outcome.message = "Cancelled unapplied adjustment input";
       return outcome;
     }
-    outcome.kind                                 = EditorEditOutcome::Kind::RenderRouted;
-    outcome.reason                               = EditorRenderReason::InteractiveAdjustment;
-    outcome.render_command.reason                = outcome.reason;
-    outcome.render_command.live_parameters_applied = true;
-    outcome.message                              = "Cancelled applied adjustment preview";
+    outcome.kind                  = EditorEditOutcome::Kind::RenderRouted;
+    outcome.reason                = EditorRenderReason::InteractiveAdjustment;
+    outcome.render_command.reason = outcome.reason;
+    outcome.message               = "Cancelled applied adjustment preview";
     return outcome;
   }
 
@@ -137,7 +130,6 @@ auto EditorSessionEditController::HandlePendingSequence(const EditorPendingSeque
 
   const bool commit = sequence.seal == EditorPendingInputBoundaryKind::Release ||
                       sequence.seal == EditorPendingInputBoundaryKind::NodeSwitch;
-  EditorRenderAdjustmentSnapshot render_delta;
   for (const auto& field : sequence.fields) {
     auto        patch = PatchFromPendingField(field);
     patch.settled     = commit;
@@ -185,19 +177,12 @@ auto EditorSessionEditController::HandlePendingSequence(const EditorPendingSeque
                                               : history_error;
       return outcome;
     }
-    if (!render_delta.fingerprint.empty()) {
-      render_delta.fingerprint += "|";
-    }
-    render_delta.fingerprint += patch.field_key;
-    render_delta.patches.push_back(std::move(patch));
   }
 
-  outcome.kind                                 = EditorEditOutcome::Kind::RenderRouted;
-  outcome.reason                               = commit ? EditorRenderReason::SettledAdjustment
-                                                        : EditorRenderReason::InteractiveAdjustment;
-  outcome.render_command.reason                = outcome.reason;
-  outcome.render_command.adjustment            = std::move(render_delta);
-  outcome.render_command.live_parameters_applied = true;
+  outcome.kind                  = EditorEditOutcome::Kind::RenderRouted;
+  outcome.reason                = commit ? EditorRenderReason::SettledAdjustment
+                                         : EditorRenderReason::InteractiveAdjustment;
+  outcome.render_command.reason = outcome.reason;
   return outcome;
 }
 

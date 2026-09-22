@@ -119,23 +119,11 @@ struct EditorAdjustmentPatch {
   bool enabled = true;
   /// Production write identity. Unspecified is filled at history; Apply still requires a complete target.
   EditorParameterTarget target{};
-  /// CPU operator JSON for executor remirror, committed snapshots, and history restore.
-  /// Live queue entries must not use this as the write payload.
+  /// Field JSON that test helpers parse into @c write. Production code does not read it;
+  /// live queue entries must not use it as the write payload.
   std::string params_json;
   /// Monotonic time of the QML/C++ submitWrite call. 0 means the caller did not stamp.
   std::int64_t qml_write_ns = 0;
-};
-
-/// Full adjustment snapshot stamped onto a render intent.
-struct EditorRenderAdjustmentSnapshot {
-  std::uint64_t snapshot_generation = 0;
-  /// Compact digest for cheap equality (optional; may equal params hash).
-  std::string   fingerprint;
-  /// Unused on the live write path. Checkpoint helpers may still store a stage document here.
-  std::string   params_json;
-  /// Ordered patches applied since the previous committed snapshot (may be empty).
-  std::vector<EditorAdjustmentPatch> patches;
-
 };
 
 }  // namespace alcedo

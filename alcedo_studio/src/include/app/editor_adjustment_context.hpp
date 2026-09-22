@@ -17,6 +17,7 @@
 #include "app/editor_panel_projection.hpp"
 #include "edit/graph/graph_ids.hpp"
 #include "image/metadata.hpp"
+#include "json.hpp"
 
 namespace alcedo {
 
@@ -185,5 +186,14 @@ auto ProjectSelectedNodePanelFields(const PipelineDocument& document, const Node
                                                const NodeId& selected_node_id,
                                                EditorImageExifDisplay exif)
     -> std::optional<EditorAdjustmentContext>;
+
+/**
+ * @brief Default `lens_calib` write payload for the Lens Calibration panel.
+ *
+ * Every value comes from `DevelopPayload{}` (the Develop node default), including
+ * `lens_profile_db_path`. The panel copies this object and sets `enabled`, `lens_maker`, and
+ * `lens_model` before it submits the write. Pure value; reads no document or stage state.
+ */
+[[nodiscard]] auto MakeDefaultLensCalibrationWriteJson() -> nlohmann::json;
 
 }  // namespace alcedo

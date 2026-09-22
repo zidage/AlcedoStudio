@@ -3,7 +3,6 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 #include "app/editor_session_render_controller.hpp"
-#include "support/editor_parameter_write_test.hpp"
 
 #include <gtest/gtest.h>
 
@@ -281,46 +280,49 @@ TEST_F(EditorSessionRenderControllerTest, RenderBusyTransitionsAroundViewChange)
   EXPECT_FALSE(render_->render_busy());
 }
 
-// ── Adjustment snapshots and stale results ──────────────────────────────────
+// ── Deferred initial render and stale results ───────────────────────────────
 
-TEST_F(EditorSessionRenderControllerTest, InitialRenderWithAdjustmentCarriesSnapshot) {
-  // Set up lifecycle for an image.
+// The render intent carries no parameter values. The render port binds the element's live
+// document, so a deferred first frame renders whatever that document holds when it runs.
+TEST_F(EditorSessionRenderControllerTest, DeferredInitialRenderPresentsBoundDocument) {
+  render_->SetPresentationSinkId(0);
   ASSERT_TRUE(lifecycle_->BeginAcquire(1, 2, false, nullptr, nullptr));
   ASSERT_TRUE(lifecycle_->AcquireGuards(nullptr));
   lifecycle_->MarkImageReady();
   render_->MarkImageAcquired();
 
   EditorRenderCommand command;
-  command.reason                         = EditorRenderReason::InitialFrame;
-  command.adjustment.params_json         = R"({"exposure":1.5})";
-  command.adjustment.snapshot_generation = 42;
-  EditorAdjustmentPatch patch;
-  patch.field_key   = "exposure";
-  patch.params_json = R"({"exposure":1.5})";
-  command.adjustment.patches.push_back(patch);
-
-  const auto request_id = render_->RouteInitialRender(command, lifecycle_->identity(),
-                                                      lifecycle_->active_image_load_request());
-  EXPECT_NE(request_id, 0u);
-
+  command.reason       = EditorRenderReason::InitialFrame;
+  command.operation_id = 9;
+  EXPECT_EQ(render_->RouteInitialRender(command, lifecycle_->identity(),
+                                        lifecycle_->active_image_load_request()),
+            0u);
   auto* sched = dynamic_cast<EditorSessionBootstrapSchedulerPort*>(scheduler_.get());
-  ASSERT_FALSE(sched->scheduled().empty());
+  ASSERT_NE(sched, nullptr);
+  EXPECT_TRUE(sched->scheduled().empty());
+
+  // Clearing the sink also cleared the size, so the deferred render waits for both.
+  render_->SetPresentationSinkId(1);
+  EXPECT_TRUE(sched->scheduled().empty());
+  render_->SetPresentationSize(640, 480);
+  ASSERT_EQ(sched->scheduled().size(), 1u);
   const auto& intent = sched->scheduled().front().intent;
-  EXPECT_EQ(intent.adjustment.params_json, R"({"exposure":1.5})");
-  EXPECT_EQ(intent.adjustment.snapshot_generation, 42u);
-  ASSERT_EQ(intent.adjustment.patches.size(), 1u);
-  EXPECT_EQ(intent.adjustment.patches.front().field_key, "exposure");
+  EXPECT_EQ(intent.reason, EditorRenderReason::InitialFrame);
+  EXPECT_EQ(intent.operation_id, 9u);
+  EXPECT_EQ(intent.element_id, lifecycle_->identity().element_id);
+  EXPECT_EQ(intent.image_id, lifecycle_->identity().image_id);
+  EXPECT_EQ(intent.image_load_request_id, lifecycle_->active_image_load_request());
+  EXPECT_EQ(intent.presentation_sink_id, 1u);
 }
 
-TEST_F(EditorSessionRenderControllerTest, QualityBaseCarriesSameAdjustmentAfterFirstFrame) {
+TEST_F(EditorSessionRenderControllerTest, QualityBaseAfterFirstFrameTargetsSameImage) {
   ASSERT_TRUE(lifecycle_->BeginAcquire(1, 2, false, nullptr, nullptr));
   ASSERT_TRUE(lifecycle_->AcquireGuards(nullptr));
   lifecycle_->MarkImageReady();
   render_->MarkImageAcquired();
 
   EditorRenderCommand command;
-  command.reason                 = EditorRenderReason::InitialFrame;
-  command.adjustment.params_json = R"({"saturation":0.8})";
+  command.reason = EditorRenderReason::InitialFrame;
   render_->RouteInitialRender(command, lifecycle_->identity(),
                               lifecycle_->active_image_load_request());
 
@@ -329,11 +331,14 @@ TEST_F(EditorSessionRenderControllerTest, QualityBaseCarriesSameAdjustmentAfterF
   const auto ff_request_id = sched->scheduled().front().request_id;
   coordinator_->NotifySchedulerCompleted(ff_request_id, true);
 
-  // The QualityBase follow-up should carry the same adjustment.
+  // The QualityBase follow-up renders the same image and load request.
   ASSERT_GE(sched->scheduled().size(), 2u);
-  const auto& qb_intent = sched->scheduled().back().intent;
+  const auto& first_intent = sched->scheduled().front().intent;
+  const auto& qb_intent    = sched->scheduled().back().intent;
   EXPECT_EQ(qb_intent.frame_role, FrameRole::QualityBase);
-  EXPECT_EQ(qb_intent.adjustment.params_json, R"({"saturation":0.8})");
+  EXPECT_EQ(qb_intent.element_id, first_intent.element_id);
+  EXPECT_EQ(qb_intent.image_id, first_intent.image_id);
+  EXPECT_EQ(qb_intent.image_load_request_id, first_intent.image_load_request_id);
 }
 
 TEST_F(EditorSessionRenderControllerTest, StaleSessionGenerationResultDoesNotAdvanceFirstFrame) {
@@ -374,7 +379,6 @@ TEST_F(EditorSessionRenderControllerTest, SecondRouteInitialRenderReturnsRequest
   // Route a first frame.
   EditorRenderCommand cmd1;
   cmd1.reason                 = EditorRenderReason::InitialFrame;
-  cmd1.adjustment.params_json = R"({"v1":1})";
   const auto id1              = render_->RouteInitialRender(cmd1, lifecycle_->identity(),
                                                             lifecycle_->active_image_load_request());
   EXPECT_NE(id1, 0u);
@@ -382,7 +386,6 @@ TEST_F(EditorSessionRenderControllerTest, SecondRouteInitialRenderReturnsRequest
   // Route a second render (e.g. undo/redo).
   EditorRenderCommand cmd2;
   cmd2.reason                 = EditorRenderReason::UndoRedo;
-  cmd2.adjustment.params_json = R"({"v2":2})";
   const auto id2              = render_->RouteInitialRender(cmd2, lifecycle_->identity(),
                                                             lifecycle_->active_image_load_request());
   // Undo/redo should still submit a render, just not as a first-frame.

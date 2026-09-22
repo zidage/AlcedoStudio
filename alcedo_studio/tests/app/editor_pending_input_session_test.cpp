@@ -89,8 +89,6 @@ TEST_F(EditorPendingInputSessionTest, EnqueueDoesNotCaptureHistoryOrApplyLivePat
 
   EXPECT_EQ(history_->capture_count, captures_before);
   EXPECT_EQ(history_->commit_count, commits_before);
-  EXPECT_TRUE(history_->current_snapshot.params_json.empty());
-  EXPECT_TRUE(history_->current_snapshot.patches.empty());
 
   const auto pending = service_->PeekPendingInput();
   ASSERT_EQ(pending.sequences.size(), 1u);

@@ -10,7 +10,6 @@
 #include <optional>
 #include <string>
 
-#include "app/editor_adjustment_types.hpp"
 #include "app/editor_session_request_ids.hpp"
 #include "edit/frame_presentation_types.hpp"
 #include "type/type.hpp"
@@ -99,7 +98,6 @@ struct EditorRenderIntent {
   std::uint64_t                                  operation_id       = 0;
   ImageLoadRequestId                             image_load_request_id{};
   EditorRenderReason                             reason = EditorRenderReason::InitialFrame;
-  EditorRenderAdjustmentSnapshot                 adjustment{};
   std::optional<ViewportRenderRegion>            view_region;
   int                                            requested_width  = 0;
   int                                            requested_height = 0;
@@ -109,13 +107,10 @@ struct EditorRenderIntent {
   std::shared_ptr<EditorRenderCancellationToken> cancellation;
   PresentationSinkId                             presentation_sink_id  = 0;
   // Geometry-panel previews keep the full source frame visible while the
-  // crop/rotation overlay is being edited. The adjustment state is still
-  // carried by the intent, but the scheduler disables CROP_ROTATE for this
-  // preview frame so its aspect matches the overlay's source-image UV space.
+  // crop/rotation overlay is being edited. The port maps this to
+  // DocumentGeometryUse::UncroppedSource, so the frame has the source aspect and
+  // matches the overlay's source-image UV space. The document is not changed.
   bool                                           geometry_overlay_only = false;
-  /// True when consume already wrote live document and CPU operators under the
-  /// render lock. Configure must not apply `adjustment` again.
-  bool                                           live_parameters_applied = false;
 };
 
 struct EditorRenderRequest {
@@ -198,37 +193,6 @@ struct EditorRenderResult {
 /// content-changing or detail-refresh reasons produce a render.
 [[nodiscard]] inline auto ReasonReusesCurrentFrame(EditorRenderReason reason) -> bool {
   return reason == EditorRenderReason::ZoomPan || reason == EditorRenderReason::Resize;
-}
-
-/// Whether frame configuration applies the full adjustment snapshot.
-///
-/// Pipeline operators are updated incrementally when a field changes
-/// (SetOperator + SetGlobalParams). Replaying a full adjustment snapshot every
-/// frame is only correct for content-bearing renders (open, edit, undo, crop
-/// commit). View-dependent work (Detail ROI, scope ROI, pure zoom/pan/resize)
-/// must only retarget Geometry render params (RESIZE ROI / user crop) so
-/// Image Loading caches such as RAW_DECODE stay warm.
-[[nodiscard]] inline auto ReasonAppliesAdjustmentSnapshot(EditorRenderReason reason) -> bool {
-  switch (reason) {
-    case EditorRenderReason::ZoomPan:
-    case EditorRenderReason::Resize:
-    case EditorRenderReason::DetailRefresh:
-    case EditorRenderReason::ScopeRefresh:
-      return false;
-    case EditorRenderReason::InitialFrame:
-    case EditorRenderReason::InteractiveAdjustment:
-    case EditorRenderReason::SettledAdjustment:
-    case EditorRenderReason::UndoRedo:
-    case EditorRenderReason::ImageSwitch:
-    case EditorRenderReason::Retry:
-    case EditorRenderReason::CropRotate:
-    case EditorRenderReason::GraphTopologyChanged:
-    case EditorRenderReason::SettledMaskEdit:
-    case EditorRenderReason::VersionDocumentChanged:
-    case EditorRenderReason::PastedPipelineDocument:
-      return true;
-  }
-  return true;
 }
 
 /// Scope reads image content, so view-only re-sampling and view-dependent ROI

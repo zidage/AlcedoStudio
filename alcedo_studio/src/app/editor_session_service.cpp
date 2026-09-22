@@ -610,20 +610,6 @@ void EditorSessionService::PublishDocumentSnapshot() {
   published_document_ = std::move(snapshot);
 }
 
-auto EditorSessionService::adjustment_snapshot() const -> EditorRenderAdjustmentSnapshot {
-  if (!dependencies_.history || !lifecycle_.has_history_guard()) {
-    return {};
-  }
-  EditorRenderAdjustmentSnapshot snapshot;
-  std::string                    error;
-  auto&                          history = *dependencies_.history;
-  if (!const_cast<IEditorHistoryPort&>(history).ReadAdjustmentSnapshot(lifecycle_.history_guard(),
-                                                                       &snapshot, &error)) {
-    return {};
-  }
-  return snapshot;
-}
-
 auto EditorSessionService::panel_projection() const -> EditorPanelProjection {
   if (!dependencies_.history || !lifecycle_.has_history_guard()) {
     return {};
@@ -1467,10 +1453,9 @@ auto EditorSessionService::RouteMaskCreationRender(bool interactive_preview, boo
     return result;
   }
   EditorRenderCommand render_command;
-  render_command.reason                  = quality_requested ? EditorRenderReason::SettledMaskEdit
-                                                             : EditorRenderReason::InteractiveAdjustment;
-  render_command.live_parameters_applied = true;
-  render_command.operation_id            = current_operation_id_;
+  render_command.reason       = quality_requested ? EditorRenderReason::SettledMaskEdit
+                                                  : EditorRenderReason::InteractiveAdjustment;
+  render_command.operation_id = current_operation_id_;
   const auto request_id = render_.RouteInitialRender(render_command, lifecycle_.identity(),
                                                      lifecycle_.active_image_load_request());
   if (request_id == 0) {

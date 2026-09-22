@@ -220,7 +220,6 @@ TEST_F(PipelineDocumentRenderTest, RenderLeavesPersistentDocumentParametersUncha
   SetExposure(0.75f);
   const auto  before         = document_->ToJson();
   const auto  stages_before  = executor_->ExportPipelineParams();
-  const auto  request_before = executor_->CaptureOneShotRenderParams();
   const auto* exposure = document_->PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure());
   for (const bool host : {false, true, false}) {
     SCOPED_TRACE(host);
@@ -244,7 +243,6 @@ TEST_F(PipelineDocumentRenderTest, RenderLeavesPersistentDocumentParametersUncha
     EXPECT_EQ(executor_->ExportPipelineParams(), stages_before);
     EXPECT_EQ(document_->PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()), exposure);
   }
-  executor_->RestoreOneShotRenderParams(request_before);
   EXPECT_EQ(document_->ToJson(), before);
   EXPECT_EQ(executor_->ExportPipelineParams(), stages_before);
 }
@@ -258,7 +256,6 @@ TEST_F(PipelineDocumentRenderTest, DefaultDocumentRendersRealRawAtFullDecodeAndO
   EXPECT_EQ(pixels.size(), full_extent_);
   EXPECT_TRUE(cv::checkRange(pixels));
   EXPECT_GT(cv::mean(pixels)[1], 0.01);
-  EXPECT_EQ(executor_->CaptureOneShotRenderParams().decode_res_, DecodeRes::FULL);
   EXPECT_EQ(document_->ToJson(), before);
   const auto stats = executor_->DebugCudaRenderer()->Stats();
   EXPECT_EQ(stats.libraw_open_unpack_count, 1u);
@@ -303,7 +300,6 @@ TEST_F(PipelineDocumentRenderTest, FailedGpuPresentationPropagatesErrorWithoutSu
   EXPECT_EQ(sink_.ready_count, 0);
   EXPECT_EQ(sink_.host_frame_count, 0);
   EXPECT_EQ(document_->ToJson(), before);
-  EXPECT_EQ(executor_->CaptureOneShotRenderParams().decode_res_, DecodeRes::FULL);
   sink_.reject_mapping = false;
   const auto pixels    = Render(false);
   EXPECT_LT(cv::norm(pixels, Reference(0.5f, RenderQuality::Preview), cv::NORM_INF), 2e-5);
@@ -333,7 +329,6 @@ TEST_F(PipelineDocumentRenderTest, MissingCameraProfileFailsWithoutReadingStageM
   const auto before = document_->ToJson();
   EXPECT_THROW((void)Render(true), std::runtime_error);
   EXPECT_EQ(document_->ToJson(), before);
-  EXPECT_EQ(executor_->CaptureOneShotRenderParams().decode_res_, DecodeRes::FULL);
   EXPECT_TRUE(input_->buffer_valid_);
   EXPECT_FALSE(input_->cpu_data_valid_);
   EXPECT_EQ(sink_.ready_count, 0);

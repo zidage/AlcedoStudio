@@ -15,8 +15,8 @@ namespace alcedo::ui {
 struct HistoryWorkingState;
 class EditorHistoryState;
 
-/// Extracted projection unit. Reads the history and adjustment snapshots for
-/// QML models. Copies mutable graph values under the short WorkingState lock,
+/// Extracted projection unit. Reads the history projection and the panel
+/// projection for QML models. Copies mutable graph values under the short WorkingState lock,
 /// then parses, sorts, and formats outside that lock.
 class EditorHistoryProjection {
  public:
@@ -29,11 +29,6 @@ class EditorHistoryProjection {
   /// Project the named refs and active first-parent path for the QML model.
   auto ReadHistorySnapshot(const alcedo::EditorHistoryGuardHandle& guard,
                            alcedo::EditorHistorySnapshot* snapshot, std::string* error) -> bool;
-
-  /// Return the committed adjustment snapshot for rendering and the UI.
-  auto ReadAdjustmentSnapshot(const alcedo::EditorHistoryGuardHandle& guard,
-                              alcedo::EditorRenderAdjustmentSnapshot* snapshot, std::string* error)
-      -> bool;
 
   auto ReadPanelProjection(const alcedo::EditorHistoryGuardHandle& guard,
                            alcedo::EditorPanelProjection* projection, std::string* error) -> bool;

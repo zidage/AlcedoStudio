@@ -7,7 +7,6 @@
 #include <ctime>
 #include <optional>
 #include <string>
-#include <unordered_map>
 #include <utility>
 
 #include <mutex>
@@ -29,9 +28,6 @@ struct NamedRefPriorState {
   alcedo::MiniGitWorkingSelection selection;
   bool dirty = false;
   bool serialized = false;
-  alcedo::EditorRenderAdjustmentSnapshot snapshot;
-  alcedo::EditorRenderAdjustmentSnapshot root_snapshot;
-  std::unordered_map<std::string, alcedo::EditorAdjustmentOperatorState> pending;
   bool recovered = false;
   std::optional<alcedo::PipelineDocument> document;
   nlohmann::json params;
@@ -43,9 +39,6 @@ auto CaptureNamedRefPrior(HistoryWorkingState& state) -> NamedRefPriorState {
   prior.selection = state.history->WorkingSelection();
   prior.dirty = state.pipeline_guard->dirty_;
   prior.serialized = state.pipeline_guard->serialized_state_needs_writeback_;
-  prior.snapshot = state.committed_snapshot;
-  prior.root_snapshot = state.root_snapshot;
-  prior.pending = state.pending_before;
   prior.recovered = state.recovered_head;
   if (state.pipeline_guard->pipeline_ && state.pipeline_guard->document_) {
     auto render_lock = LockLivePipeline(*state.pipeline_guard->pipeline_);
@@ -60,9 +53,6 @@ void RestoreNamedRefPrior(HistoryWorkingState& state, const NamedRefPriorState& 
   state.history->PublishWorkingSelection(prior.selection);
   state.pipeline_guard->dirty_ = prior.dirty;
   state.pipeline_guard->serialized_state_needs_writeback_ = prior.serialized;
-  state.committed_snapshot = prior.snapshot;
-  state.root_snapshot = prior.root_snapshot;
-  state.pending_before = prior.pending;
   state.recovered_head = prior.recovered;
   if (!prior.document.has_value() || !state.pipeline_guard->pipeline_) {
     return;
@@ -74,25 +64,9 @@ void RestoreNamedRefPrior(HistoryWorkingState& state, const NamedRefPriorState& 
   state.pipeline_guard->pipeline_->SetExecutionStages();
 }
 
-auto RefreshNamedRefSnapshotFromLive(HistoryWorkingState& state, std::string* error) -> bool {
-  if (!state.pipeline_guard || !state.pipeline_guard->pipeline_) {
-    if (error) *error = "Live pipeline unavailable while refreshing named-ref snapshot";
-    return false;
-  }
-  try {
-    std::unique_lock<std::mutex> render_lock(state.pipeline_guard->pipeline_->GetRenderLock());
-    return MakeAdjustmentSnapshotFromLivePipeline(*state.pipeline_guard->pipeline_,
-                                                  &state.committed_snapshot, error);
-  } catch (const std::exception& ex) {
-    if (error) *error = ex.what();
-    return false;
-  }
-}
-
 void PublishNamedRefSuccess(HistoryWorkingState& state) {
   state.pipeline_guard->dirty_ = false;
   state.pipeline_guard->serialized_state_needs_writeback_ = false;
-  state.pending_before.clear();
   state.recovered_head = false;
 }
 
@@ -125,17 +99,6 @@ auto EditorHistoryVersionRefs::CreateRootVersionAndCheckout(
     return false;
   }
   if (!state_.ReplayWorkingDocumentFromImmutableRoot(*state, std::nullopt, error)) {
-    try {
-      RestoreNamedRefPrior(*state, prior);
-    } catch (const std::exception& ex) {
-      if (error) {
-        *error = std::string("fatal editor session: ") + (error->empty() ? std::string{} : *error) +
-                 "; prior Version restoration failed: " + ex.what();
-      }
-    }
-    return false;
-  }
-  if (!RefreshNamedRefSnapshotFromLive(*state, error)) {
     try {
       RestoreNamedRefPrior(*state, prior);
     } catch (const std::exception& ex) {
@@ -199,17 +162,6 @@ auto EditorHistoryVersionRefs::BranchFromCommitAndCheckout(
     return false;
   }
   if (!state_.ReplayWorkingDocumentFromImmutableRoot(*state, commit_id, error)) {
-    try {
-      RestoreNamedRefPrior(*state, prior);
-    } catch (const std::exception& ex) {
-      if (error) {
-        *error = std::string("fatal editor session: ") + (error->empty() ? std::string{} : *error) +
-                 "; prior Version restoration failed: " + ex.what();
-      }
-    }
-    return false;
-  }
-  if (!RefreshNamedRefSnapshotFromLive(*state, error)) {
     try {
       RestoreNamedRefPrior(*state, prior);
     } catch (const std::exception& ex) {

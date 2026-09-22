@@ -7,6 +7,7 @@
 #include <algorithm>
 
 #include "app/pipeline_service.hpp"
+#include "edit/history/mini_git_working_history.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_shared_helpers.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_state_detail.hpp"
 
@@ -111,22 +112,6 @@ auto EditorHistoryProjection::ReadHistorySnapshot(
     projection.commits.push_back(CommitRowFromEdit(source.commit, source.position));
   }
   *snapshot = std::move(projection);
-  return true;
-}
-
-auto EditorHistoryProjection::ReadAdjustmentSnapshot(
-    const alcedo::EditorHistoryGuardHandle& guard,
-    alcedo::EditorRenderAdjustmentSnapshot* snapshot, std::string* error) -> bool {
-  auto state = state_.PeekWorkingState(guard.element_id);
-  if (!state) {
-    if (snapshot) *snapshot = {};
-    return true;
-  }
-  if (snapshot == nullptr) {
-    if (error) *error = "Adjustment snapshot output is null";
-    return false;
-  }
-  *snapshot = state->committed_snapshot;
   return true;
 }
 

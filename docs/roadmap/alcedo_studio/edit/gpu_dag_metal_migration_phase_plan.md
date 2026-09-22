@@ -2,7 +2,8 @@
 
 Date: 2026-08-24
 
-Status: M0–M6 complete; M7 planned
+Status: M0–M6 complete; M7 planned and executed by
+[Phase G10](gpu_dag_final_removal_phase_plan.md) (G10.5, G10.6, G10.10, G10.11)
 
 Branch: `feature/gpu-dag-metal`
 
@@ -980,6 +981,13 @@ MetalRealRawEditorUsesTheThreeNodeDag
 **Residual gaps:** Old fused Metal product wrappers and `MetalStage` remain until M7. Product A/B performance remains M7.
 
 ## 12. Phase M7 — 旧 Metal 管线删除与性能验收
+
+Execution note (2026-09-22): M7 does not run as a separate phase.
+[Phase G10](gpu_dag_final_removal_phase_plan.md) executes this removal list and the Section 13
+performance acceptance. Removed legacy files are preserved in
+`alcedo_studio/deprecated/legacy_pipeline/` outside the compile graph. The old Metal path is
+measured from the pinned baseline `9c1df791` (parent of the `main` M6 product switch `fba20f6c`)
+on the same Mac. The list below stays as the M7 removal requirement.
 
 目标：
 

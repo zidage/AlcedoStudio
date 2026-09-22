@@ -3,20 +3,14 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 #include <gtest/gtest.h>
-#include "support/editor_parameter_write_test.hpp"
 
+#include <algorithm>
 #include <memory>
-#include <string>
-
 #include <opencv2/core.hpp>
 #include <opencv2/core/cuda.hpp>
 
-#include "app/editor_adjustment_pipeline.hpp"
 #include "edit/operators/geometry/cuda_geometry_ops.hpp"
 #include "edit/operators/geometry/resize_op.hpp"
-#include "edit/operators/operator_registeration.hpp"
-#include "edit/pipeline/pipeline_accelerator.hpp"
-#include "edit/pipeline/pipeline_cpu.hpp"
 #include "image/gpu_backend.hpp"
 #include "image/image_buffer.hpp"
 
@@ -50,115 +44,10 @@ auto MakeGradientGpuBuffer(int width, int height, int type) -> std::shared_ptr<I
   return buffer;
 }
 
-class EditorGeometryOverlayPipelineTest : public ::testing::Test {
- protected:
-  static void SetUpTestSuite() { RegisterAllOperators(); }
-};
-
-// Mirrors the user action "open Geometry panel while a committed crop exists":
-// apply crop_rotate, then disable it for the source-frame overlay preview and
-// re-run the geometry stage with a bilinear preview downscale. This is the
-// exact operator sequence the unified scheduler runs for geometry_overlay_only.
-TEST_F(EditorGeometryOverlayPipelineTest,
-     OverlaySourceFramePreviewDisablesCropAndResizesSharedGpuInput) {
-  if (!EnsureCudaDevice()) {
-    GTEST_SKIP() << "No CUDA device available.";
-  }
-
-  CPUPipelineExecutor executor;
-  executor.ResetToCleanBaselineAdjustments();
-  executor.SetAcceleratorBackendPreference(AcceleratorBackendPreference::CUDA);
-  executor.SetExecutionStages();
-  executor.SetResizeDownsampleAlgorithm(ResizeDownsampleAlgorithm::Bilinear);
-  executor.SetRenderRegion(0, 0, 1.0f, 1.0f);
-  executor.SetRenderRes(false, 256);
-
-  EditorRenderAdjustmentSnapshot snapshot;
-  snapshot.patches = {alcedo::test::SnapshotPatch({
-      "crop_rotate",
-      R"({"crop_rotate":{"enabled":true,"angle_degrees":12.5,"enable_crop":true,"crop_rect":{"x":0.15,"y":0.2,"w":0.55,"h":0.5},"expand_to_fit":false,"aspect_ratio_preset":"free","aspect_ratio":{"width":1.0,"height":1.0}}})",
-      false})};
-
-  std::string error;
-  ASSERT_TRUE(ApplyEditorAdjustmentSnapshot(executor, snapshot, &error)) << error;
-  ASSERT_TRUE(executor.GetStage(PipelineStageName::Geometry_Adjustment)
-                  .GetOperator(OperatorType::CROP_ROTATE)
-                  .has_value());
-  EXPECT_TRUE(executor.GetStage(PipelineStageName::Geometry_Adjustment)
-                  .GetOperator(OperatorType::CROP_ROTATE)
-                  .value()
-                  ->enable_);
-
-  // First paint: committed crop is applied (matches pre-panel preview).
-  auto cropped = MakeGradientGpuBuffer(640, 480, CV_32FC4);
-  auto& geometry = executor.GetStage(PipelineStageName::Geometry_Adjustment);
-  geometry.SetInputImage(cropped);
-  geometry.SetOutputCacheValid(false);
-  auto cropped_out = geometry.ApplyStage(executor.GetGlobalParams());
-  ASSERT_NE(cropped_out, nullptr);
-  ASSERT_TRUE(cropped_out->gpu_data_valid_);
-  EXPECT_LT(cropped_out->GetGPUWidth(), 640);
-  EXPECT_LT(cropped_out->GetGPUHeight(), 480);
-
-  // Open Geometry panel: keep crop params installed but disable the operator so
-  // the preview is the full source frame under the crop overlay.
-  DisableEditorGeometryOperatorForOverlay(executor);
-  EXPECT_FALSE(executor.GetStage(PipelineStageName::Geometry_Adjustment)
-                   .GetOperator(OperatorType::CROP_ROTATE)
-                   .value()
-                   ->enable_);
-  const auto crop_params =
-      executor.GetStage(PipelineStageName::Geometry_Adjustment)
-          .GetOperator(OperatorType::CROP_ROTATE)
-          .value()
-          ->op_->GetParams();
-  EXPECT_FLOAT_EQ(crop_params["crop_rotate"]["angle_degrees"].get<float>(), 12.5f);
-
-  auto full_frame = MakeGradientGpuBuffer(640, 480, CV_32FC4);
-  geometry.SetInputImage(full_frame);
-  geometry.SetOutputCacheValid(false);
-  auto overlay_out = geometry.ApplyStage(executor.GetGlobalParams());
-  ASSERT_NE(overlay_out, nullptr);
-  ASSERT_TRUE(overlay_out->gpu_data_valid_);
-  // Source-frame overlay must not bake the crop; max-edge 256 keeps the long
-  // side at 256 while preserving aspect.
-  EXPECT_EQ(overlay_out->GetGPUWidth(), 256);
-  EXPECT_EQ(overlay_out->GetGPUHeight(), 192);
-}
-
-TEST_F(EditorGeometryOverlayPipelineTest,
-     OverlayPreviewWithRotationParamsStillSkipsWarpAndOnlyResizes) {
-  if (!EnsureCudaDevice()) {
-    GTEST_SKIP() << "No CUDA device available.";
-  }
-
-  CPUPipelineExecutor executor;
-  executor.ResetToCleanBaselineAdjustments();
-  executor.SetAcceleratorBackendPreference(AcceleratorBackendPreference::CUDA);
-  executor.SetExecutionStages();
-  executor.SetResizeDownsampleAlgorithm(ResizeDownsampleAlgorithm::Bilinear);
-  executor.SetRenderRegion(0, 0, 1.0f, 1.0f);
-  executor.SetRenderRes(false, 128);
-
-  EditorRenderAdjustmentSnapshot snapshot;
-  snapshot.patches = {alcedo::test::SnapshotPatch({
-      "crop_rotate",
-      R"({"crop_rotate":{"enabled":true,"angle_degrees":35.0,"enable_crop":true,"crop_rect":{"x":0.1,"y":0.1,"w":0.8,"h":0.8}}})",
-      false})};
-  std::string error;
-  ASSERT_TRUE(ApplyEditorAdjustmentSnapshot(executor, snapshot, &error)) << error;
-  DisableEditorGeometryOperatorForOverlay(executor);
-
-  auto input = MakeGradientGpuBuffer(320, 240, CV_32FC3);
-  auto& geometry = executor.GetStage(PipelineStageName::Geometry_Adjustment);
-  geometry.SetInputImage(input);
-  geometry.SetOutputCacheValid(false);
-  auto out = geometry.ApplyStage(executor.GetGlobalParams());
-  ASSERT_NE(out, nullptr);
-  ASSERT_TRUE(out->gpu_data_valid_);
-  EXPECT_EQ(out->GetGPUWidth(), 128);
-  EXPECT_EQ(out->GetGPUHeight(), 96);
-}
+// The Geometry panel source frame is rendered by the GPU DAG with
+// DocumentGeometryUse::UncroppedSource (GpuDagCudaDrtProductTest and
+// GpuDagGeometryTest). The cases below cover the ResizeOp and CUDA geometry
+// helpers only.
 
 // Adversarial ResizeOp GPU cases that ordinary unit tests skip: ROI of a shared
 // GpuMat, bilinear downscale (the overlay FAST_PREVIEW algorithm), odd sizes.

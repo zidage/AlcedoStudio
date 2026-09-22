@@ -277,21 +277,6 @@ auto EditorSessionHistoryPort::PasteLiveRootRelativeVersion(
                                                  result, error);
 }
 
-auto EditorSessionHistoryPort::CancelLivePaste(const alcedo::EditorHistoryGuardHandle& guard,
-                                               const alcedo::version_ref_id_t& prior_version_id,
-                                               const alcedo::version_ref_id_t& paste_version_id,
-                                               std::string* error) -> bool {
-  std::scoped_lock lock(mutex_);
-  return transfer_->CancelLivePaste(guard, prior_version_id, paste_version_id, error);
-}
-
-auto EditorSessionHistoryPort::ReadAdjustmentSnapshot(
-    const alcedo::EditorHistoryGuardHandle& guard, alcedo::EditorRenderAdjustmentSnapshot* snapshot,
-    std::string* error) -> bool {
-  std::scoped_lock lock(mutex_);
-  return projection_->ReadAdjustmentSnapshot(guard, snapshot, error);
-}
-
 auto EditorSessionHistoryPort::ReadPanelProjection(const alcedo::EditorHistoryGuardHandle& guard,
                                                    alcedo::EditorPanelProjection* projection,
                                                    std::string* error) -> bool {

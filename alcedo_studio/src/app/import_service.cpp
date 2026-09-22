@@ -12,8 +12,6 @@
 
 #include "app/pipeline_service.hpp"
 #include "decoders/processor/raw_color_context.hpp"
-#include "edit/operators/op_base.hpp"
-#include "edit/pipeline/default_pipeline_params.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
 #include "image/image.hpp"
 #include "image/metadata_extractor.hpp"
@@ -28,84 +26,12 @@ auto IsRootImportDestination(const image_path_t& dest) -> bool {
   return normalized.empty() || normalized == image_path_t{L"/"} || normalized == image_path_t{L"."};
 }
 
-/// Install default operator params (already on a freshly loaded executor) plus image-local
-/// RAW/lens/color-temp inherent fields, then rebuild global params and execution stages once.
-void AssembleImportPipelineParams(CPUPipelineExecutor& exec, const Image& image) {
-  auto& global_params = exec.GetGlobalParams();
-
-  auto& geometry_stage = exec.GetStage(PipelineStageName::Geometry_Adjustment);
-  nlohmann::json crop_params = pipeline_defaults::MakeDefaultCropRotateParams();
-  if (const auto crop_entry = geometry_stage.GetOperator(OperatorType::CROP_ROTATE);
-      crop_entry.has_value() && crop_entry.value() && crop_entry.value()->op_) {
-    crop_params = crop_entry.value()->op_->GetParams();
-  }
-  auto& source_size = crop_params["crop_rotate"]["source_size"];
-  source_size["width"]  = image.exif_display_.width_;
-  source_size["height"] = image.exif_display_.height_;
-  geometry_stage.SetOperator(OperatorType::CROP_ROTATE, crop_params, global_params);
-
+/// Bind the image-local RAW camera profile to the bound document before the root is created.
+/// Non-RAW files keep the default document; the root step binds their working-space profile.
+void BindImportRawCameraProfile(CPUPipelineExecutor& exec, const Image& image) {
   if (image.HasRawColorContext()) {
-    const auto ctx = MetadataExtractor::ReadRawColorContextForRender(image);
-    auto&       loading_stage = exec.GetStage(PipelineStageName::Image_Loading);
-
-    nlohmann::json raw_params = pipeline_defaults::MakeDefaultRawDecodeParams();
-    if (const auto raw_entry = loading_stage.GetOperator(OperatorType::RAW_DECODE);
-        raw_entry.has_value() && raw_entry.value() && raw_entry.value()->op_) {
-      raw_params = raw_entry.value()->op_->GetParams();
-    }
-    if (!raw_params.contains("raw") || !raw_params["raw"].is_object()) {
-      raw_params["raw"] = nlohmann::json::object();
-    }
-    const auto context_json = RawColorContextToJson(ctx);
-    for (auto it = context_json.begin(); it != context_json.end(); ++it) {
-      raw_params["raw"][it.key()] = it.value();
-    }
-    loading_stage.SetOperator(OperatorType::RAW_DECODE, raw_params, global_params);
-
-    nlohmann::json lens_params = pipeline_defaults::MakeDefaultLensCalibParams();
-    if (const auto lens_entry = loading_stage.GetOperator(OperatorType::LENS_CALIBRATION);
-        lens_entry.has_value() && lens_entry.value() && lens_entry.value()->op_) {
-      lens_params = lens_entry.value()->op_->GetParams();
-    }
-    if (!lens_params.contains("lens_calib") || !lens_params["lens_calib"].is_object()) {
-      lens_params["lens_calib"] = nlohmann::json::object();
-    }
-    auto& lens_inner = lens_params["lens_calib"];
-    if (!ctx.camera_make_.empty()) {
-      lens_inner["cam_maker"] = ctx.camera_make_;
-    }
-    if (!ctx.camera_model_.empty()) {
-      lens_inner["cam_model"] = ctx.camera_model_;
-    }
-    if (ctx.lens_metadata_valid_ || !ctx.lens_make_.empty() || !ctx.lens_model_.empty()) {
-      lens_inner["lens_maker"]        = ctx.lens_make_;
-      lens_inner["lens_model"]        = ctx.lens_model_;
-      lens_inner["focal_length_mm"]   = ctx.focal_length_mm_;
-      lens_inner["aperture_f_number"] = ctx.aperture_f_number_;
-      lens_inner["distance_m"]        = ctx.focus_distance_m_;
-      lens_inner["focal_35mm_mm"]     = ctx.focal_35mm_mm_;
-      lens_inner["crop_factor_hint"]  = ctx.crop_factor_hint_;
-    }
-    loading_stage.SetOperator(OperatorType::LENS_CALIBRATION, lens_params, global_params);
-    loading_stage.EnableOperator(OperatorType::LENS_CALIBRATION,
-                                 lens_inner.value("enabled", true), global_params);
-
-    // Populate import fields and the bound Develop camera profile before any rendering.
-    exec.InjectRawMetadata(ctx);
+    exec.InjectRawMetadata(MetadataExtractor::ReadRawColorContextForRender(image));
   }
-
-  auto& to_ws_stage = exec.GetStage(PipelineStageName::To_WorkingSpace);
-  if (const auto color_temp_entry = to_ws_stage.GetOperator(OperatorType::COLOR_TEMP);
-      color_temp_entry.has_value() && color_temp_entry.value() && color_temp_entry.value()->op_) {
-    color_temp_entry.value()->op_->SetGlobalParams(global_params);
-    to_ws_stage.SetOperator(OperatorType::COLOR_TEMP, color_temp_entry.value()->op_->GetParams(),
-                            global_params);
-  }
-
-  for (int i = 0; i < static_cast<int>(PipelineStageName::Stage_Count); ++i) {
-    exec.GetStage(static_cast<PipelineStageName>(i)).RefreshGlobalParams(global_params);
-  }
-  exec.SetExecutionStages();
 }
 
 void PersistAssembledImportPipeline(PipelineMgmtService& pipeline_service,
@@ -117,7 +43,7 @@ void PersistAssembledImportPipeline(PipelineMgmtService& pipeline_service,
 
   {
     std::unique_lock<std::mutex> render_lock(guard->pipeline_->GetRenderLock());
-    AssembleImportPipelineParams(*guard->pipeline_, *image);
+    BindImportRawCameraProfile(*guard->pipeline_, *image);
   }
 
   guard->dirty_ = true;

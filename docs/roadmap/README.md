@@ -24,7 +24,9 @@ use their own top-level category.
 ## Alcedo Studio — Image editing pipeline
 
 - [GPU DAG Pipeline Rebuild Phase Plan](alcedo_studio/edit/gpu_dag_pipeline_rebuild_phase_plan.md)
+- [GPU DAG OpenCL Migration Phase Plan](alcedo_studio/edit/gpu_dag_opencl_migration_phase_plan.md)
 - [GPU DAG Metal Migration Phase Plan](alcedo_studio/edit/gpu_dag_metal_migration_phase_plan.md)
+- [Phase G10 — Legacy Pipeline Removal and Release Qualification](alcedo_studio/edit/gpu_dag_final_removal_phase_plan.md)
 - [Node-aware Pipeline Editing and Mask Authoring Master Plan](alcedo_studio/edit/node_mask_editor_master_plan.md)
 - [Brush Mask Architecture, History, and Raster Materialization Master Plan](alcedo_studio/edit/brush_mask_architecture_master_plan.md)
 

@@ -100,7 +100,6 @@ class CPUPipelineExecutor : public PipelineExecutor {
   void ResolveAcceleratorBackend();
   void ApplyAcceleratorBackendToStages();
   void ApplyRuntimeRawDecodeBackend();
-  void SyncRawDecodeRuntimeControls();
 
  public:
   CPUPipelineExecutor();
@@ -137,6 +136,8 @@ class CPUPipelineExecutor : public PipelineExecutor {
    * @brief Render using an immutable per-task request. Does not write decode, cache, ROI,
    *        or host-output onto executor members.
    * @pre Caller holds GetRenderLock(); camera/profile data is already loaded.
+   * @param request Carries the cancel callback; Apply does not store it on the executor or
+   *        on any stage operator.
    * @throws std::runtime_error for missing document/backend, decode, GPU, or presentation failure.
    *         Failures do not switch executor cache/decode mode. Bypass ExactRelease scratch is
    *         released after GPU last-use or on the failure path.
@@ -212,20 +213,6 @@ class CPUPipelineExecutor : public PipelineExecutor {
   /// Select RAW decode resolution for the request under GetRenderLock(), without editing a Model.
   void SetDecodeRes(DecodeRes res);
 
-  /// Snapshot of one-shot render parameters that must not leak across Apply calls.
-  struct OneShotRenderParamsSnapshot {
-    DecodeRes                           decode_res_              = DecodeRes::FULL;
-    nlohmann::json                      render_params_           = {};
-    bool                                force_cpu_output_        = false;
-    bool                                enable_cache_            = true;
-    std::optional<ViewportRenderRegion> render_request_viewport_ = std::nullopt;
-  };
-
-  /// Read runtime request settings under GetRenderLock(); no document state is copied.
-  [[nodiscard]] auto CaptureOneShotRenderParams() const -> OneShotRenderParamsSnapshot;
-  /// Restore runtime request settings and clear cancellation under GetRenderLock(); no Model writes.
-  void               RestoreOneShotRenderParams(const OneShotRenderParamsSnapshot& snapshot);
-
   void               RegisterAllOperators();
   void               ResetToCleanBaselineAdjustments();
 
@@ -234,7 +221,8 @@ class CPUPipelineExecutor : public PipelineExecutor {
   /**
    * @brief Install image-local RAW camera/profile metadata during import or explicit load.
    * @pre Caller holds GetRenderLock() or exclusive initialization access. A document is bound.
-   * Updates Develop and the existing import-stage fields. Never call from a render task.
+   * Binds the document camera profile through BindImportedCameraProfile, then updates the
+   * import-stage fields that the stage mirror still writes. Never call from a render task.
    */
   void               InjectRawMetadata(const RawRuntimeColorContext& ctx);
 
@@ -244,15 +232,6 @@ class CPUPipelineExecutor : public PipelineExecutor {
    *        while keeping the pipeline configuration intact.
    */
   void               ClearAllIntermediateBuffers();
-
-  /**
-   * @brief Release transient merged-stage preview scratch buffers while keeping
-   *        the compiled GPU pipeline and LUT state intact.
-   *        Use this when a full-resolution preview/export frame returns to the
-   *        FAST_PREVIEW baseline and the large scratch high-water mark should
-   *        not stay pinned in VRAM.
-   */
-  void               ReleasePreviewGpuScratch();
 
   /**
    * @brief Release persistent GPU allocations held by execution stages.

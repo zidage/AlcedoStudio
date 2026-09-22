@@ -19,7 +19,7 @@
 ///   counts how many arrived while an initiating command was on the call
 ///   stack (the inline-completion sentinel).
 /// - `ControllableEditorHistoryPort`: a `FakeEditorHistoryPort` subclass that
-///   (a) exposes a shared worker gate that command operations deliberately do
+///   (a) exposes a shared worker lock that command operations deliberately do
 ///   not acquire, and (b) records the
 ///   durable-publication order (save-started vs. version-created)
 ///   and models a dirty journal for the Paste ordering tests.
@@ -157,7 +157,7 @@ class SessionResultRecorder {
 
 /// History port used by the CQ0 baseline tests. Extends the focused fake with
 /// two controllable axes:
-/// - `render_lock`: retained as a worker-owned gate for the tests. History
+/// - `render_lock`: retained as a worker-owned lock for the tests. History
 ///   operations intentionally do not acquire it; a test that holds the lock
 ///   verifies the command path remains available.
 /// - `event_log` / `dirty_journal`: record the durable-publication order so
@@ -192,7 +192,7 @@ class ControllableEditorHistoryPort : public FakeEditorHistoryPort {
     return true;
   }
 
-  /// Report the dirty journal through the same query the facade uses to gate
+  /// Report the dirty journal through the same query the facade uses to allow
   /// Paste and the discard action.
   auto HasUnmaterializedChanges(const EditorHistoryGuardHandle& /*guard*/, std::string* /*error*/)
       -> bool override {
@@ -240,14 +240,6 @@ class ControllableEditorHistoryPort : public FakeEditorHistoryPort {
       result->prior_version_id = Hash128{0x11111111ULL, 0x22222222ULL};
       result->new_version_id = Hash128{0x33333333ULL, 0x44444444ULL};
     }
-    return true;
-  }
-
-  auto CancelLivePaste(const EditorHistoryGuardHandle& /*guard*/,
-                       const version_ref_id_t& /*prior_version_id*/,
-                       const version_ref_id_t& /*paste_version_id*/, std::string* /*error*/)
-      -> bool override {
-    record("paste_cancelled");
     return true;
   }
 
