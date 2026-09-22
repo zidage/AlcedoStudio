@@ -11,6 +11,7 @@
 #include <optional>
 #include <string>
 
+#include "edit/geometry/render_request.hpp"
 #include "edit/operators/op_kernel.hpp"
 #include "edit/pipeline/pipeline.hpp"
 #include "edit/pipeline/pipeline_apply_request.hpp"
@@ -44,6 +45,9 @@ struct RenderDesc {
   FramePreviewMetadata frame_metadata_      = {};
   uint32_t             max_edge_            = 1024;       // max edge for thumbnail/export resize
   DecodeRes            decode_res_ = DecodeRes::QUARTER;  // RAW decode resolution for thumbnails
+  // Copied unchanged into PipelineApplyRequest::geometry. Only the editor viewport port sets
+  // UncroppedSource (Geometry panel open); thumbnail, export, and analysis keep the default.
+  DocumentGeometryUse  document_geometry_ = DocumentGeometryUse::ApplyCropAndRotation;
 };
 
 struct TaskOptions {
@@ -80,8 +84,5 @@ struct PipelineTask {
   std::uint64_t                                     request_id_ = 0;
 
   [[nodiscard]] auto MakeApplyRequest() const -> PipelineApplyRequest;
-  void               SetExecutorRenderParams();
-  void               ResetPreviewRenderParams();
-  void               ResetThumbnailRenderParams();
 };
 };  // namespace alcedo

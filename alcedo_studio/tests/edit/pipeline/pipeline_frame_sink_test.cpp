@@ -252,6 +252,9 @@ TEST_F(PipelineFrameSinkTest, RenderRegionDoesNotUpscaleWhenViewportTargetExceed
   EXPECT_EQ(output.rows, 50);
 }
 
+// Request construction tests read the per-task PipelineApplyRequest that Apply receives.
+// MakeApplyRequest never writes executor or stage state (G10.1).
+
 TEST_F(PipelineFrameSinkTest, DetailRoiPreviewUsesViewportTargetPixelsAsMaxEdge) {
   auto          exec = std::make_shared<CPUPipelineExecutor>();
   MockFrameSink sink;
@@ -274,22 +277,15 @@ TEST_F(PipelineFrameSinkTest, DetailRoiPreviewUsesViewportTargetPixelsAsMaxEdge)
   task.options_.render_desc_.use_viewport_region_               = true;
   task.options_.render_desc_.frame_metadata_.preview_generation = 7;
 
-  task.SetExecutorRenderParams();
-
-  const auto params = exec->CaptureOneShotRenderParams().render_params_;
-  ASSERT_TRUE(params.contains("resize"));
-  const auto& resize = params["resize"];
-  EXPECT_TRUE(resize.value("enable_scale", false));
-  EXPECT_EQ(resize.value("maximum_edge", 0), 1800);
-  EXPECT_TRUE(resize.value("enable_roi", false));
-  ASSERT_TRUE(resize.contains("roi"));
-  const auto& roi = resize["roi"];
-  EXPECT_EQ(roi.value("x", 0), 1200);
-  EXPECT_EQ(roi.value("y", 0), 600);
-  EXPECT_FLOAT_EQ(roi.value("resize_factor_x", 0.0f), 0.25f);
-  EXPECT_FLOAT_EQ(roi.value("resize_factor_y", 0.0f), 0.2f);
-  EXPECT_EQ(roi.value("reference_width", 0), 6000);
-  EXPECT_EQ(roi.value("reference_height", 0), 4000);
+  const auto request                                            = task.MakeApplyRequest();
+  EXPECT_EQ(request.geometry.resolution.max_edge, 1800U);
+  EXPECT_FLOAT_EQ(request.geometry.view.visible_rect_in_edit_space.x, 0.2f);
+  EXPECT_FLOAT_EQ(request.geometry.view.visible_rect_in_edit_space.y, 0.15f);
+  EXPECT_FLOAT_EQ(request.geometry.view.visible_rect_in_edit_space.w, 0.25f);
+  EXPECT_FLOAT_EQ(request.geometry.view.visible_rect_in_edit_space.h, 0.2f);
+  EXPECT_EQ(request.geometry.view.viewport_extent.width, 1800U);
+  EXPECT_EQ(request.geometry.view.viewport_extent.height, 1200U);
+  EXPECT_EQ(request.submission.metadata.frame_role, FrameRole::DetailPatch);
 }
 
 TEST_F(PipelineFrameSinkTest, DetailRoiPreviewUsesFrozenRequestRegionInsteadOfChangedSinkRegion) {
@@ -325,25 +321,21 @@ TEST_F(PipelineFrameSinkTest, DetailRoiPreviewUsesFrozenRequestRegionInsteadOfCh
   task.options_.render_desc_.render_type_         = RenderType::DETAIL_ROI_PREVIEW;
   task.options_.render_desc_.use_viewport_region_ = true;
   task.options_.render_desc_.viewport_region_     = requested_region;
-  task.SetExecutorRenderParams();
+  const auto request                              = task.MakeApplyRequest();
 
   EXPECT_EQ(sink.viewport_render_region_calls_, 0);
-  EXPECT_EQ(sink.last_bound_submission_.metadata.frame_role, FrameRole::DetailPatch);
-  EXPECT_NEAR(sink.last_bound_submission_.metadata.source_roi_norm.x, 316.0f / 903.0f, 1.0e-5f);
-  EXPECT_NEAR(sink.last_bound_submission_.metadata.source_roi_norm.y, 428.0f / 1351.0f, 1.0e-5f);
-  EXPECT_NEAR(sink.last_bound_submission_.metadata.source_roi_norm.width, 0.491694f, 1.0e-5f);
-  EXPECT_NEAR(sink.last_bound_submission_.metadata.source_roi_norm.height, 0.170244f, 1.0e-5f);
-
-  const auto params = exec->CaptureOneShotRenderParams().render_params_;
-  ASSERT_TRUE(params.contains("resize"));
-  EXPECT_EQ(params["resize"].value("maximum_edge", 0), 3008);
-  const auto frozen = exec->CaptureOneShotRenderParams().render_request_viewport_;
-  ASSERT_TRUE(frozen.has_value());
-  EXPECT_EQ(frozen->x_, requested_region.x_);
-  EXPECT_EQ(frozen->y_, requested_region.y_);
+  const auto& metadata = request.submission.metadata;
+  EXPECT_EQ(metadata.frame_role, FrameRole::DetailPatch);
+  EXPECT_NEAR(metadata.source_roi_norm.x, 316.0f / 903.0f, 1.0e-5f);
+  EXPECT_NEAR(metadata.source_roi_norm.y, 428.0f / 1351.0f, 1.0e-5f);
+  EXPECT_NEAR(metadata.source_roi_norm.width, 0.491694f, 1.0e-5f);
+  EXPECT_NEAR(metadata.source_roi_norm.height, 0.170244f, 1.0e-5f);
+  EXPECT_EQ(request.geometry.resolution.max_edge, 3008U);
+  EXPECT_NEAR(request.geometry.view.visible_rect_in_edit_space.x, 316.0f / 903.0f, 1.0e-5f);
+  EXPECT_EQ(request.geometry.view.viewport_extent.width, 3008U);
 }
 
-TEST_F(PipelineFrameSinkTest, QualityBaseAfterRoiClearsFrozenViewportGeometry) {
+TEST_F(PipelineFrameSinkTest, QualityBaseRequestDoesNotCarryViewportGeometry) {
   auto          exec = std::make_shared<CPUPipelineExecutor>();
   MockFrameSink sink;
   exec->SetExecutionStages(&sink);
@@ -360,84 +352,26 @@ TEST_F(PipelineFrameSinkTest, QualityBaseAfterRoiClearsFrozenViewportGeometry) {
   roi.pipeline_executor_                         = exec;
   roi.options_.render_desc_.render_type_         = RenderType::DETAIL_ROI_PREVIEW;
   roi.options_.render_desc_.use_viewport_region_ = true;
-  roi.SetExecutorRenderParams();
-  ASSERT_TRUE(exec->CaptureOneShotRenderParams().render_request_viewport_.has_value());
+  EXPECT_FALSE(roi.MakeApplyRequest().geometry.view.visible_rect_in_edit_space.IsFullFrame());
 
   PipelineTask quality_base;
   quality_base.pipeline_executor_                 = exec;
   quality_base.options_.render_desc_.render_type_ = RenderType::QUALITY_BASE_PREVIEW;
-  quality_base.SetExecutorRenderParams();
+  const auto request                              = quality_base.MakeApplyRequest();
 
-  EXPECT_FALSE(exec->CaptureOneShotRenderParams().render_request_viewport_.has_value());
-  EXPECT_EQ(sink.last_bound_submission_.mode, FramePresentationMode::ViewportTransformed);
-  EXPECT_FLOAT_EQ(sink.last_bound_submission_.metadata.source_roi_norm.x, 0.0f);
-  EXPECT_FLOAT_EQ(sink.last_bound_submission_.metadata.source_roi_norm.y, 0.0f);
-  EXPECT_FLOAT_EQ(sink.last_bound_submission_.metadata.source_roi_norm.width, 1.0f);
-  EXPECT_FLOAT_EQ(sink.last_bound_submission_.metadata.source_roi_norm.height, 1.0f);
+  EXPECT_TRUE(request.geometry.view.visible_rect_in_edit_space.IsFullFrame());
+  EXPECT_EQ(request.geometry.view.viewport_extent.width, 0U);
+  EXPECT_EQ(request.submission.mode, FramePresentationMode::ViewportTransformed);
+  EXPECT_FLOAT_EQ(request.submission.metadata.source_roi_norm.x, 0.0f);
+  EXPECT_FLOAT_EQ(request.submission.metadata.source_roi_norm.y, 0.0f);
+  EXPECT_FLOAT_EQ(request.submission.metadata.source_roi_norm.width, 1.0f);
+  EXPECT_FLOAT_EQ(request.submission.metadata.source_roi_norm.height, 1.0f);
 }
 
-TEST_F(PipelineFrameSinkTest, ActiveCudaHighlightShadowKeepsDetailRoiPreviewAsPatch) {
+TEST_F(PipelineFrameSinkTest, FastPreviewSubRegionUsesRoiFrameWithSinkRegion) {
   auto          exec = std::make_shared<CPUPipelineExecutor>();
   MockFrameSink sink;
   exec->SetExecutionStages(&sink);
-
-  try {
-    exec->SetAcceleratorBackendPreference(AcceleratorBackendPreference::CUDA);
-  } catch (const std::exception& e) {
-    GTEST_SKIP() << "CUDA backend unavailable: " << e.what();
-  }
-
-  auto& basic = exec->GetStage(PipelineStageName::Basic_Adjustment);
-  basic.SetOperator(OperatorType::SHADOWS, {{"shadows", 40.0f}}, exec->GetGlobalParams());
-
-  sink.viewport_render_region_ = ViewportRenderRegion{
-      .x_                = 900,
-      .y_                = 450,
-      .scale_x_          = 0.2f,
-      .scale_y_          = 0.2f,
-      .reference_width_  = 6000,
-      .reference_height_ = 4000,
-      .target_width_     = 2200,
-      .target_height_    = 1500,
-  };
-
-  PipelineTask task;
-  task.pipeline_executor_                                       = exec;
-  task.options_.render_desc_.render_type_                       = RenderType::DETAIL_ROI_PREVIEW;
-  task.options_.render_desc_.use_viewport_region_               = true;
-  task.options_.render_desc_.frame_metadata_.preview_generation = 8;
-
-  task.SetExecutorRenderParams();
-
-  EXPECT_GT(sink.viewport_render_region_calls_, 0);
-  EXPECT_EQ(sink.last_bound_submission_.metadata.frame_role, FrameRole::DetailPatch);
-  EXPECT_NEAR(sink.last_bound_submission_.metadata.source_roi_norm.x, 0.15f, 1.0e-5f);
-  EXPECT_NEAR(sink.last_bound_submission_.metadata.source_roi_norm.y, 0.1125f, 1.0e-5f);
-  EXPECT_NEAR(sink.last_bound_submission_.metadata.source_roi_norm.width, 0.2f, 1.0e-5f);
-  EXPECT_NEAR(sink.last_bound_submission_.metadata.source_roi_norm.height, 0.2f, 1.0e-5f);
-
-  const auto params = exec->CaptureOneShotRenderParams().render_params_;
-  ASSERT_TRUE(params.contains("resize"));
-  const auto& resize = params["resize"];
-  EXPECT_TRUE(resize.value("enable_roi", false));
-  EXPECT_TRUE(resize.value("enable_scale", false));
-  EXPECT_EQ(resize.value("maximum_edge", 0), 2200);
-}
-
-TEST_F(PipelineFrameSinkTest, ActiveCudaHighlightShadowKeepsFastPreviewAsRoiFrame) {
-  auto          exec = std::make_shared<CPUPipelineExecutor>();
-  MockFrameSink sink;
-  exec->SetExecutionStages(&sink);
-
-  try {
-    exec->SetAcceleratorBackendPreference(AcceleratorBackendPreference::CUDA);
-  } catch (const std::exception& e) {
-    GTEST_SKIP() << "CUDA backend unavailable: " << e.what();
-  }
-
-  auto& basic = exec->GetStage(PipelineStageName::Basic_Adjustment);
-  basic.SetOperator(OperatorType::HIGHLIGHTS, {{"highlights", -35.0f}}, exec->GetGlobalParams());
-
   sink.viewport_render_region_ = ViewportRenderRegion{
       .x_                = 600,
       .y_                = 400,
@@ -454,32 +388,20 @@ TEST_F(PipelineFrameSinkTest, ActiveCudaHighlightShadowKeepsFastPreviewAsRoiFram
   task.options_.render_desc_.render_type_                       = RenderType::FAST_PREVIEW;
   task.options_.render_desc_.use_viewport_region_               = true;
   task.options_.render_desc_.frame_metadata_.preview_generation = 9;
-
-  task.SetExecutorRenderParams();
+  const auto request                                            = task.MakeApplyRequest();
 
   EXPECT_GT(sink.viewport_render_region_calls_, 0);
-  EXPECT_EQ(sink.last_bound_submission_.mode, FramePresentationMode::RoiFrame);
-  EXPECT_EQ(sink.last_bound_submission_.metadata.frame_role, FrameRole::InteractivePrimary);
-  EXPECT_FALSE(sink.last_bound_submission_.metadata.scope_update_allowed);
-  EXPECT_NEAR(sink.last_bound_submission_.metadata.source_roi_norm.x, 0.12f, 1.0e-5f);
-  EXPECT_NEAR(sink.last_bound_submission_.metadata.source_roi_norm.y, 0.13333334f, 1.0e-5f);
-  EXPECT_NEAR(sink.last_bound_submission_.metadata.source_roi_norm.width, 0.3f, 1.0e-5f);
-  EXPECT_NEAR(sink.last_bound_submission_.metadata.source_roi_norm.height, 0.25f, 1.0e-5f);
-
-  const auto params = exec->CaptureOneShotRenderParams().render_params_;
-  ASSERT_TRUE(params.contains("resize"));
-  const auto& resize = params["resize"];
-  EXPECT_TRUE(resize.value("enable_roi", false));
-  EXPECT_TRUE(resize.value("enable_scale", false));
-  EXPECT_EQ(resize.value("maximum_edge", 0), 2560);
-  ASSERT_TRUE(resize.contains("roi"));
-  const auto& roi = resize["roi"];
-  EXPECT_EQ(roi.value("x", 0), 600);
-  EXPECT_EQ(roi.value("y", 0), 400);
-  EXPECT_FLOAT_EQ(roi.value("resize_factor_x", 0.0f), 0.3f);
-  EXPECT_FLOAT_EQ(roi.value("resize_factor_y", 0.0f), 0.25f);
-  EXPECT_EQ(roi.value("reference_width", 0), 5000);
-  EXPECT_EQ(roi.value("reference_height", 0), 3000);
+  const auto& metadata = request.submission.metadata;
+  EXPECT_EQ(request.submission.mode, FramePresentationMode::RoiFrame);
+  EXPECT_EQ(metadata.frame_role, FrameRole::InteractivePrimary);
+  EXPECT_FALSE(metadata.scope_update_allowed);
+  EXPECT_NEAR(metadata.source_roi_norm.x, 0.12f, 1.0e-5f);
+  EXPECT_NEAR(metadata.source_roi_norm.y, 0.13333334f, 1.0e-5f);
+  EXPECT_NEAR(metadata.source_roi_norm.width, 0.3f, 1.0e-5f);
+  EXPECT_NEAR(metadata.source_roi_norm.height, 0.25f, 1.0e-5f);
+  EXPECT_EQ(request.geometry.resolution.max_edge, 2560U);
+  EXPECT_EQ(request.geometry.view.viewport_extent.width, 1600U);
+  EXPECT_EQ(request.geometry.view.viewport_extent.height, 1200U);
 }
 
 TEST_F(PipelineFrameSinkTest, ScopeRefreshFastPreviewAllowsCurrentRoiAsScopeInput) {
@@ -504,57 +426,27 @@ TEST_F(PipelineFrameSinkTest, ScopeRefreshFastPreviewAllowsCurrentRoiAsScopeInpu
   task.options_.render_desc_.use_viewport_region_                    = true;
   task.options_.render_desc_.frame_metadata_.scope_update_allowed    = true;
   task.options_.render_desc_.frame_metadata_.scope_refresh_requested = true;
+  const auto request                                                 = task.MakeApplyRequest();
 
-  task.SetExecutorRenderParams();
-
-  EXPECT_EQ(sink.last_bound_submission_.mode, FramePresentationMode::RoiFrame);
-  EXPECT_TRUE(sink.last_bound_submission_.metadata.scope_update_allowed);
-  EXPECT_TRUE(sink.last_bound_submission_.metadata.scope_refresh_requested);
+  EXPECT_EQ(request.submission.mode, FramePresentationMode::RoiFrame);
+  EXPECT_TRUE(request.submission.metadata.scope_update_allowed);
+  EXPECT_TRUE(request.submission.metadata.scope_refresh_requested);
 }
 
-TEST_F(PipelineFrameSinkTest, RenderSourceCacheKeyUsesStableImageIdentityBeforeBufferPointer) {
-  auto image =
-      std::make_shared<Image>(42, std::filesystem::path(L"D:/photos/source.dng"), ImageType::DNG);
-
-  PipelineTask first;
-  first.pipeline_executor_                 = std::make_shared<CPUPipelineExecutor>();
-  first.input_desc_                        = image;
-  first.input_                             = std::make_shared<ImageBuffer>(cv::Mat(4, 4, CV_32FC3));
-  first.options_.render_desc_.render_type_ = RenderType::QUALITY_BASE_PREVIEW;
-  first.SetExecutorRenderParams();
-  const auto   first_key = first.pipeline_executor_->GetGlobalParams().render_source_cache_key_;
-
-  PipelineTask second;
-  second.pipeline_executor_ = std::make_shared<CPUPipelineExecutor>();
-  second.input_desc_        = image;
-  second.input_             = std::make_shared<ImageBuffer>(cv::Mat(4, 4, CV_32FC3));
-  second.options_.render_desc_.render_type_ = RenderType::DETAIL_ROI_PREVIEW;
-  second.SetExecutorRenderParams();
-  const auto second_key = second.pipeline_executor_->GetGlobalParams().render_source_cache_key_;
-
-  EXPECT_EQ(first_key, second_key);
-}
-
-TEST_F(PipelineFrameSinkTest, FullResExportPreservesHighlightShadowSourceDetail) {
+TEST_F(PipelineFrameSinkTest, FullResExportRequestsExportQualityAtFullResolution) {
   auto         exec = std::make_shared<CPUPipelineExecutor>();
 
   PipelineTask export_task;
   export_task.pipeline_executor_                 = exec;
   export_task.options_.render_desc_.render_type_ = RenderType::FULL_RES_EXPORT;
-  export_task.SetExecutorRenderParams();
-
-  EXPECT_TRUE(exec->GetGlobalParams().render_hs_preserve_source_detail_);
-
-  const auto params = exec->CaptureOneShotRenderParams().render_params_;
-  ASSERT_TRUE(params.contains("resize"));
-  EXPECT_FALSE(params["resize"].value("enable_scale", true));
+  const auto export_request                      = export_task.MakeApplyRequest();
+  EXPECT_EQ(export_request.geometry.resolution.quality, RenderQuality::Export);
+  EXPECT_EQ(export_request.geometry.resolution.max_edge, 0U);
 
   PipelineTask preview_task;
   preview_task.pipeline_executor_                 = exec;
   preview_task.options_.render_desc_.render_type_ = RenderType::QUALITY_BASE_PREVIEW;
-  preview_task.SetExecutorRenderParams();
-
-  EXPECT_FALSE(exec->GetGlobalParams().render_hs_preserve_source_detail_);
+  EXPECT_EQ(preview_task.MakeApplyRequest().geometry.resolution.quality, RenderQuality::Preview);
 }
 
 TEST_F(PipelineFrameSinkTest, ThumbnailAndExportApplyRequestsBypassSessionCache) {
@@ -592,38 +484,30 @@ TEST_F(PipelineFrameSinkTest, QualityBasePreviewUsesSessionCacheAndSensorDevelop
   EXPECT_EQ(request.geometry.resolution.max_edge, 4096U);
   EXPECT_EQ(ResultPersistenceScopeForRole(request.submission.metadata.frame_role),
             ResultPersistenceScope::SensorDevelopOnly);
-
-  exec->SetEnableCache(false);
-  quality.SetExecutorRenderParams();
-  EXPECT_TRUE(exec->CaptureOneShotRenderParams().enable_cache_);
 }
 
-TEST_F(PipelineFrameSinkTest, ThumbnailAndExportTasksDisableSessionCache) {
-  auto exec = std::make_shared<CPUPipelineExecutor>();
-  exec->SetEnableCache(true);
-  EXPECT_TRUE(exec->CaptureOneShotRenderParams().enable_cache_);
+TEST_F(PipelineFrameSinkTest, ThumbnailAndExportRequestsRequireHostOutput) {
+  auto         exec = std::make_shared<CPUPipelineExecutor>();
 
   PipelineTask thumbnail;
   thumbnail.pipeline_executor_                 = exec;
   thumbnail.options_.render_desc_.render_type_ = RenderType::THUMBNAIL;
   thumbnail.options_.render_desc_.max_edge_    = 256;
-  thumbnail.SetExecutorRenderParams();
-  EXPECT_FALSE(exec->CaptureOneShotRenderParams().enable_cache_);
-  EXPECT_TRUE(exec->CaptureOneShotRenderParams().force_cpu_output_);
+  const auto thumbnail_request                 = thumbnail.MakeApplyRequest();
+  EXPECT_TRUE(thumbnail_request.require_host_output);
+  EXPECT_EQ(thumbnail_request.sink, nullptr);
 
   PipelineTask preview;
   preview.pipeline_executor_                 = exec;
   preview.options_.render_desc_.render_type_ = RenderType::FAST_PREVIEW;
-  preview.SetExecutorRenderParams();
-  EXPECT_TRUE(exec->CaptureOneShotRenderParams().enable_cache_);
-  EXPECT_FALSE(exec->CaptureOneShotRenderParams().force_cpu_output_);
+  EXPECT_FALSE(preview.MakeApplyRequest().require_host_output);
 
   PipelineTask export_task;
   export_task.pipeline_executor_                 = exec;
   export_task.options_.render_desc_.render_type_ = RenderType::FULL_RES_EXPORT;
-  export_task.SetExecutorRenderParams();
-  EXPECT_FALSE(exec->CaptureOneShotRenderParams().enable_cache_);
-  EXPECT_TRUE(exec->CaptureOneShotRenderParams().force_cpu_output_);
+  const auto export_request                      = export_task.MakeApplyRequest();
+  EXPECT_TRUE(export_request.require_host_output);
+  EXPECT_EQ(export_request.sink, nullptr);
 }
 
 // =========================================================================
@@ -1004,7 +888,7 @@ TEST_F(PipelineFrameSinkTest, SinkIsRestoredAfterExceptionDuringRender) {
 
 TEST_F(PipelineFrameSinkTest, SinkIsRestoredAfterExceptionBeforeRender) {
   // If an exception is thrown between detach and Apply() (e.g., in
-  // SetExecutorRenderParams), the RAII guard must still restore the sink.
+  // MakeApplyRequest), the RAII guard must still restore the sink.
   auto          exec = std::make_shared<CPUPipelineExecutor>();
   MockFrameSink sink;
 
@@ -1027,7 +911,7 @@ TEST_F(PipelineFrameSinkTest, SinkIsRestoredAfterExceptionBeforeRender) {
     auto sink_guard = std::unique_ptr<void, std::function<void(void*)>>(
         reinterpret_cast<void*>(1), [&restore_sink](void*) { restore_sink(); });
 
-    // Throw before SetExecutorRenderParams / Apply.
+    // Throw before MakeApplyRequest / Apply.
     throw std::logic_error("pre-render failure");
   } catch (const std::logic_error&) {
     caught = true;

@@ -111,7 +111,7 @@ TEST(EditorSessionRenderSchedulerPortTest,
   ASSERT_NE(scheduler->Schedule(MakeRequest(33, 7)), 0u);
   scheduler->WaitForSessionIdle(7);
 
-  // Production Dispatch never EnsureSize; pipeline SetExecutorRenderParams binds.
+  // Production Dispatch never calls EnsureSize.
   EXPECT_EQ(sink.ensure_size_count(), 0);
   EXPECT_GE(sink.bind_count(), 1);
   EXPECT_EQ(sink.last_submission.metadata.presentation_request_id, 33u);
@@ -374,6 +374,35 @@ TEST(EditorSessionRenderSchedulerPortTest,
   // Fixture context has no real RAW bytes; pipeline may fail — the residual
   // cleanup claim is forward completion without SetCoordinator / weak_ptr.
   EXPECT_EQ(completed.load(), 1);
+}
+
+TEST(EditorSessionRenderSchedulerPortTest,
+     GeometryOverlayIntentSetsUncroppedSourceOnlyForEditorRequests) {
+  RegisterAllOperators();
+  auto overlay                         = MakeRequest(91, 5);
+  overlay.intent.geometry_overlay_only = true;
+  const auto overlay_desc              = MakeEditorRenderDesc(overlay);
+  EXPECT_EQ(overlay_desc.document_geometry_, alcedo::DocumentGeometryUse::UncroppedSource);
+  EXPECT_EQ(overlay_desc.frame_metadata_.presentation_request_id, 91u);
+
+  const auto closed_desc = MakeEditorRenderDesc(MakeRequest(92, 5));
+  EXPECT_EQ(closed_desc.document_geometry_, alcedo::DocumentGeometryUse::ApplyCropAndRotation);
+
+  // The value reaches the apply request unchanged.
+  alcedo::PipelineTask editor_task;
+  editor_task.pipeline_executor_    = std::make_shared<alcedo::CPUPipelineExecutor>();
+  editor_task.options_.render_desc_ = overlay_desc;
+  EXPECT_EQ(editor_task.MakeApplyRequest().geometry.document_geometry,
+            alcedo::DocumentGeometryUse::UncroppedSource);
+
+  // Thumbnail and export descriptions are built by their services from a default RenderDesc.
+  for (const auto type : {alcedo::RenderType::THUMBNAIL, alcedo::RenderType::FULL_RES_EXPORT}) {
+    alcedo::PipelineTask task;
+    task.pipeline_executor_                 = editor_task.pipeline_executor_;
+    task.options_.render_desc_.render_type_ = type;
+    EXPECT_EQ(task.MakeApplyRequest().geometry.document_geometry,
+              alcedo::DocumentGeometryUse::ApplyCropAndRotation);
+  }
 }
 
 }  // namespace

@@ -108,5 +108,65 @@ TEST(ImportPipelineDocumentTest, ImportCreatesRenderableDocumentWithoutStageMirr
   pipelines.SavePipeline(loaded);
 }
 
+/** @brief Import binds the RAW camera profile on the document; no stage value is read. */
+TEST(ImportPipelineDocumentTest, ImportBindsCameraProfileOnDocumentOnly) {
+  RegisterAllOperators();
+  const auto root =
+      std::filesystem::path(TEST_IMG_PATH).parent_path().parent_path().parent_path().parent_path();
+  const auto work = root / "build/tmp/g10_1" /
+                    ("import-camera-profile-" +
+                     std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  std::filesystem::create_directories(work);
+  const auto raw_path = std::filesystem::path(TEST_IMG_PATH) / "raw/linear_dng/mfzoty.dng";
+  ASSERT_TRUE(std::filesystem::exists(raw_path));
+
+  ProjectService    project(work / "project.db", work / "project.json");
+  auto              pool      = project.GetImagePoolService();
+  auto              pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  ImportServiceImpl importer(project.GetSleeveService(), pool, pipelines);
+  auto              job        = std::make_shared<ImportJob>();
+  auto              completion = std::make_shared<std::promise<ImportResult>>();
+  auto              completed  = completion->get_future();
+  job->on_finished_ = [completion](const ImportResult& result) { completion->set_value(result); };
+  job               = importer.ImportToFolder({raw_path}, L"", {}, job);
+  ASSERT_EQ(completed.wait_for(std::chrono::seconds(60)), std::future_status::ready);
+  ASSERT_EQ(completed.get().imported_, 1u);
+  const auto imported = job->import_log_->Snapshot();
+  ASSERT_EQ(imported.created_.size(), 1u);
+  importer.SyncImports(imported, L"");
+  const auto image =
+      pool->Read<std::shared_ptr<Image>>(imported.created_.front().image_id_,
+                                         [](const std::shared_ptr<Image>& value) { return value; });
+  ASSERT_NE(image, nullptr);
+  ASSERT_TRUE(image->HasRawColorContext());
+
+  // Expected values: the Develop defaults with only the imported RAW context bound.
+  DevelopPayload expected;
+  BindDevelopCameraProfile(expected, image->GetRawColorContext());
+
+  const auto stored = project.GetStorage()->GetElementStore().GetPipelineJsonByElementId(
+      imported.created_.front().element_id_);
+  ASSERT_TRUE(stored.has_value());
+  const auto document = PipelineDocument::FromJson(*stored);
+  ASSERT_NE(document.Develop(), nullptr);
+  const auto develop = document.Develop()->Params().Params();
+  EXPECT_EQ(develop.camera_profile.color_matrices_valid,
+            expected.camera_profile.color_matrices_valid);
+  EXPECT_EQ(develop.camera_profile.color_matrix_1, expected.camera_profile.color_matrix_1);
+  EXPECT_EQ(develop.camera_profile.color_matrix_2, expected.camera_profile.color_matrix_2);
+  EXPECT_EQ(develop.camera_profile.forward_matrix_1, expected.camera_profile.forward_matrix_1);
+  EXPECT_EQ(develop.camera_profile.forward_matrix_2, expected.camera_profile.forward_matrix_2);
+  EXPECT_EQ(develop.camera_profile.as_shot_neutral, expected.camera_profile.as_shot_neutral);
+  EXPECT_TRUE(DngColorProfilesEqual(develop.camera_profile.dng_profile,
+                                    expected.camera_profile.dng_profile));
+  EXPECT_FLOAT_EQ(develop.as_shot_cct, expected.as_shot_cct);
+  EXPECT_FLOAT_EQ(develop.as_shot_tint, expected.as_shot_tint);
+  // Import does not write user or lens fields into the document.
+  EXPECT_EQ(develop.lens_maker, DevelopPayload{}.lens_maker);
+  EXPECT_EQ(develop.lens_model, DevelopPayload{}.lens_model);
+  EXPECT_EQ(develop.lens_profile_db_path, DevelopPayload{}.lens_profile_db_path);
+  EXPECT_EQ(develop.wb_mode, DevelopPayload{}.wb_mode);
+}
+
 }  // namespace
 }  // namespace alcedo

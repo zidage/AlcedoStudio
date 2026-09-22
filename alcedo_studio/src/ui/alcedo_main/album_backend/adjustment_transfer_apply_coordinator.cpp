@@ -6,23 +6,20 @@
 
 #include <QVariantList>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 
 #include "app/adjustment_transfer_service.hpp"
 #include "app/document_transfer_planner.hpp"
 #include "app/pipeline_service.hpp"
-#include "edit/operators/utils/color_utils.hpp"
-#include "edit/pipeline/pipeline_cpu.hpp"
+#include "edit/graph/drt_node_model.hpp"
+#include "edit/graph/pipeline_document.hpp"
 #include "ui/alcedo_main/album_backend/library_module.hpp"
 #include "ui/alcedo_main/album_backend/project_module.hpp"
 #include "ui/alcedo_main/i18n.hpp"
 
 namespace alcedo::ui {
 namespace {
-
-auto IsHdrExportEotf(const alcedo::ColorUtils::EOTF eotf) -> bool {
-  return eotf == alcedo::ColorUtils::EOTF::ST2084 || eotf == alcedo::ColorUtils::EOTF::HLG;
-}
 
 auto ErrorResult(const QString& message) -> QVariantMap {
   return {{"success", false}, {"message", message}};
@@ -193,11 +190,15 @@ void AdjustmentTransferApplyCoordinator::RefreshOneTarget(sl_element_id_t elemen
       auto pipeline_service = project_->handler().pipeline_service();
       if (pipeline_service) {
         auto guard = pipeline_service->LoadPipeline(element_id);
-        if (guard && guard->pipeline_) {
-          const bool is_hdr =
-              IsHdrExportEotf(guard->pipeline_->GetGlobalParams().to_output_params_.eotf_);
+        if (guard && guard->document_) {
+          const auto*               drt = guard->document_->Drt();
+          const std::optional<bool> is_hdr =
+              drt != nullptr ? std::optional<bool>(IsHdrExportEncoding(*drt)) : std::nullopt;
           pipeline_service->SavePipeline(guard);
-          library_->PersistImageHdrFlag(element_id, image_id, is_hdr);
+          if (!is_hdr.has_value()) {
+            throw std::runtime_error("Adjustment transfer target has no DRT node");
+          }
+          library_->PersistImageHdrFlag(element_id, image_id, *is_hdr);
           if (hdr_metadata_dirty != nullptr) {
             *hdr_metadata_dirty = true;
           }

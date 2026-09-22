@@ -235,4 +235,12 @@ class DrtNodeModel final : public INodeModel {
   std::array<PortDescriptor, 1>     outputs_;
 };
 
+/**
+ * @brief True when the DRT node encodes an HDR signal (ST 2084 or HLG).
+ *
+ * Reads only @p drt's encoding EOTF through its Model lock. Library HDR flags use this value;
+ * no other parameter store is consulted.
+ */
+[[nodiscard]] auto IsHdrExportEncoding(const DrtNodeModel& drt) -> bool;
+
 }  // namespace alcedo

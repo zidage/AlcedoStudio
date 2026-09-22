@@ -2,7 +2,8 @@
 
 Date: 2026-09-22
 
-Status: **planned**. No G10 sub-phase has implementation evidence.
+Status: **in progress**. G10.1: automated criteria complete; manual Geometry panel check pending
+(Section 10.12). G10.2–G10.11 planned.
 
 Parent: [GPU DAG Pipeline Rebuild Phase Plan](gpu_dag_pipeline_rebuild_phase_plan.md),
 Section 44 (G10) and Section 47 (global completion criteria).
@@ -615,7 +616,7 @@ lines. Generated expected-pixel files and temporary evidence do not count.
 
 | Phase | Result | Main modules | Dependency | Expected diff | Status |
 | --- | --- | --- | --- | ---: | --- |
-| G10.1 | No product code reads stage-table values except the mirror itself; Geometry panel shows the uncropped source | scheduler, import, transfer, lens catalog, executor, render request | — | 1200–1700 | planned |
+| G10.1 | No product code reads stage-table values except the mirror itself; Geometry panel shows the uncropped source | scheduler, import, transfer, lens catalog, executor, render request | — | 1200–1700 | partial (manual check pending) |
 | G10.2 | Live edit, commit, Undo, Redo use the document only | history mutation, edit controller, render port | G10.1 | 1200–1800 | planned |
 | G10.3 | Open, checkout, rebuild, Version refs, Paste use build-then-swap without stage JSON | pipeline service, history state, transfer | G10.2 | 1200–1800 | planned |
 | G10.4 | Legacy history store removed; project format `0.9.0` | sleeve, storage, history, journal, CI | G10.3 | 900–1500 | planned |
@@ -771,13 +772,13 @@ ctest --test-dir build/debug --output-on-failure -R "PipelineSchedulerRequestIdT
 
 ### 10.10 Exit criteria
 
-- [ ] All twelve tests pass and are discovered by `ctest`.
+- [x] All twelve tests pass and are discovered by `ctest`.
 - [ ] Manual check on Windows CUDA: open the Geometry panel on a cropped and rotated image; the
       viewer shows the full source with the crop overlay, and the zoom readout matches the frame.
       Close the panel; the viewer shows the crop. Record it as manual evidence.
-- [ ] `alcedo_main` builds on `win_debug`.
-- [ ] The source check passes.
-- [ ] `git diff --name-only -- alcedo_studio/src/ui/alcedo_main/qml` is empty.
+- [x] `alcedo_main` builds on `win_debug`.
+- [x] The source check passes.
+- [x] `git diff --name-only -- alcedo_studio/src/ui/alcedo_main/qml` is empty.
 
 ### 10.11 Expected diff
 
@@ -799,6 +800,196 @@ Manual verification:
 Evidence path:
 Remaining defects or unavailable platforms:
 ```
+
+#### Phase G10.1 completion record (2026-09-22)
+
+**Status:** partial. All automated exit criteria are met. The manual Windows CUDA Geometry panel
+check (Section 10.10, second item) has not run yet and needs the user.
+
+- **Source revision and branch:** `46119f9d` on `feature/gpu-dag-final-removal`. The changes are
+  not committed yet.
+- **Actual changed modules:** `renderer/` (scheduler, `pipeline_task.hpp`), `edit/pipeline/`
+  (executor), `edit/geometry/` (`render_request.hpp`), `edit/runtime/` (`graph_compiler`),
+  `edit/graph/` (`develop_color_transform`, `drt_node_model`), `app/` (`import_service`,
+  `editor_adjustment_pipeline`, `editor_adjustment_context`, `editor_render_intent.hpp` comment),
+  and `ui/alcedo_main/album_backend/` (transfer coordinator, lens catalog, render scheduler port).
+  Tests and test CMake also changed.
+
+**Implemented behavior**
+
+- The scheduler has no stage read and no `OperatorParams` write. These are deleted:
+  `HasActiveGeometryRotation`, `HashStageOperator`, `BuildRenderSourceCacheKey`,
+  `RenderFrameRoleId`, `ApplyRenderFrameRole`, `DownsampleForRenderType`, the post-render
+  `ReleasePreviewGpuScratch` transition, `PipelineTask::SetExecutorRenderParams`,
+  `ResetPreviewRenderParams`, and `ResetThumbnailRenderParams`. FAST_PREVIEW loads the viewport
+  region when `viewport_region_render` is true.
+- Executor: `SyncRawDecodeRuntimeControls`, `ReleasePreviewGpuScratch`, and
+  `Capture/RestoreOneShotRenderParams` (with `OneShotRenderParamsSnapshot`) are deleted.
+  `Apply(input, request)` does not store the cancel callback. It stays only in the request.
+- `BindImportedCameraProfile(PipelineDocument&, const RawRuntimeColorContext&)` is in
+  `develop_color_transform`. `InjectRawMetadata` calls it. The anonymous
+  `ApplyImportedCameraProfile` is deleted. The stage writes in `InjectRawMetadata` stay until
+  G10.7.
+- `IsHdrExportEncoding(const DrtNodeModel&)` is in `drt_node_model`. The transfer coordinator reads
+  the document DRT before `SavePipeline`. It no longer reads `GetGlobalParams()`.
+- The lens catalog default comes from `MakeDefaultLensCalibrationWriteJson()`
+  (`editor_adjustment_context`), which is built from `DevelopPayload{}`.
+- Import keeps only the camera-profile binding. The `source_size`, `RAW_DECODE` context, lens EXIF,
+  color-temperature refresh, and `SetExecutionStages` stage writes are deleted. The helper is now
+  named `BindImportRawCameraProfile` (Section 10.6 calls it `AssembleImportPipelineParams`).
+- `DocumentGeometryUse` and `RenderRequest::document_geometry` are added, and
+  `RenderDesc::document_geometry_` is copied into `request.geometry`. `MakeEditorRenderDesc`
+  (render scheduler port) sets `UncroppedSource` only when `intent.geometry_overlay_only` is true.
+  `GraphCompiler::BindFrameGeometry` uses an identity crop and zero rotation for
+  `UncroppedSource` and keeps `expand_to_fit`. `DisableEditorGeometryOperatorForOverlay` is
+  deleted.
+- `tests/ci/legacy_removal_source_checks.cmake` is added. It registers the ctest scripts
+  `NoProductCodeReadsStageTableOutsideMirror` and `StageTableReadCheckRejectsProductFileOutsideMirror`.
+  The second script is a negative case: the same scan must report a file generated in the build
+  tree. The allowed list is Section 10.5 step 10, plus the headers that declare the stage API
+  (`include/edit/pipeline/{pipeline,pipeline_cpu,pipeline_stage}.hpp` and
+  `include/edit/operators/**`).
+
+**Explicitly unimplemented items:** The manual check needs the user. The mirror writes and
+`InjectRawMetadata` stage writes stay (G10.2, G10.3, G10.7). No QML changed.
+
+**Primary success call chain:**
+
+```text
+Import RAW file
+  -> ImportServiceImpl import worker -> PersistAssembledImportPipeline
+  -> PipelineMgmtService::LoadPipeline (document bound)
+  -> BindImportRawCameraProfile -> CPUPipelineExecutor::InjectRawMetadata
+       -> BindImportedCameraProfile(document, ctx)   (one ReplaceParams; no write when equal)
+  -> InitializeImageRoot -> SyncPipelineDocument -> SavePipeline
+
+HDR flag after DRT EOTF edit
+  -> DrtParamsModel encoding_eotf update (document)
+  -> AdjustmentTransferApplyCoordinator::RefreshOneTarget
+       -> IsHdrExportEncoding(*guard->document_->Drt())   (read before SavePipeline)
+       -> SavePipeline -> LibraryModule::PersistImageHdrFlag
+
+Geometry panel open
+  -> EditorSessionRenderController: intent.geometry_overlay_only = true
+  -> EditorSessionRenderSchedulerPort::DispatchPipelineFrame -> MakeEditorRenderDesc
+       (document_geometry_ = UncroppedSource)
+  -> PipelineTask::MakeApplyRequest: request.geometry.document_geometry = UncroppedSource
+  -> CPUPipelineExecutor::Apply -> Renderer<Backend>::Render
+  -> GraphCompiler::BindFrameGeometry (identity crop, zero rotation)
+  -> SensorDevelop skipped; Geometry, CameraColor, Grade, DRT run; frame has the source extent
+```
+
+**Primary failure and restore call chain:**
+
+```text
+BindImportedCameraProfile: DevelopParamsModel::ReplaceParams throws
+  -> no Develop write happens; the exception propagates out of InjectRawMetadata to the import
+     worker, which reports it through the existing import error path
+
+Correction to Section 10.7: invalid matrices do not throw. BindDevelopCameraProfile copies the
+matrices and leaves as_shot CCT/tint unchanged when the as-shot solve fails. This matches
+ApplyImportedCameraProfile at 92085ffe. A render with invalid matrices fails later in
+ResolveDevelopColorTransform with the real error.
+
+Transfer target document without a DRT node
+  -> SavePipeline still runs (pin released) -> std::runtime_error
+  -> the existing catch in RefreshOneTarget keeps the prior HDR flag
+     (every product document has a DRT node, so this path guards an invalid document only)
+
+Cancel before Apply
+  -> PipelineScheduler task_cancelled() -> finish(false), on_complete(false, "")
+  -> no renderer is created; no stage or executor state is written
+```
+
+**What was proven (executed tests)**
+
+| Required name | Target | Result |
+| --- | --- | --- |
+| `FastPreviewRequestIsUnchangedForRotatedCrop` | `PipelineSchedulerRequestIdTest` | PASS |
+| `RotatedCropFastPreviewRoiMatchesFullFramePixels` | `GpuDagCudaDrtProductTest` | PASS |
+| `HdrExportFlagFollowsDocumentDrtEncoding` | `AdjustmentTransferServiceTest` | PASS |
+| `ImportBindsCameraProfileOnDocumentOnly` | `ImportPipelineDocumentTest` | PASS |
+| `BindImportedCameraProfileMatchesPreviousDevelopParameters` | `GpuDagModelGraphTest` | PASS |
+| `LensCatalogDefaultPathComesFromDevelopDefaults` | `EditorAdjustmentContextTest` | PASS |
+| `CancelRequestReachesRendererWithoutStageWrite` | `GpuDagCudaDrtProductTest` | PASS |
+| `NoProductCodeReadsStageTableOutsideMirror` | ctest script | PASS |
+| `UncroppedSourceRequestIgnoresDocumentCropAndRotation` | `GpuDagGeometryTest` | PASS |
+| `GeometryPanelFrameShowsUncroppedSourceAndReusesSensorDevelop` | `GpuDagCudaDrtProductTest` | PASS |
+| `ClosingGeometryPanelRendersDocumentCropAgain` | `GpuDagCudaDrtProductTest` | PASS |
+| `GeometryOverlayIntentSetsUncroppedSourceOnlyForEditorRequests` | `EditorSessionRenderSchedulerPortTest` | PASS |
+| `StageTableReadCheckRejectsProductFileOutsideMirror` (added) | ctest script | PASS |
+| `BindImportedCameraProfileKeepsUserEditsAndSkipsEqualWrite` (added) | `GpuDagModelGraphTest` | PASS |
+| `ThumbnailApplyRequestCarriesRequestedDecodeResolution` (rewritten) | `ThumbnailServiceTest` (run directly; the target has no `gtest_discover_tests`) | PASS |
+
+Notes on test evidence:
+
+- The expected Develop JSON files are in `alcedo_studio/tests/resources/expected_json/`
+  (`imported_camera_profile_{dng,raw,rgb}_expected_develop.json`). They were written by
+  `CPUPipelineExecutor::InjectRawMetadata` at `92085ffe` before any production change. A temporary
+  test in `GpuDagCudaDrtProductTest` wrote them and was then removed. The fixtures are in
+  `tests/edit/graph/imported_camera_profile_fixtures.hpp`. The comparison is exact JSON equality.
+- The GPU pixel tests use tolerance 1/1024 per RGB channel. The panel-close test uses bitwise
+  equality.
+- The FAST_PREVIEW request test states the pre-change request values. It was not run on the
+  unchanged tree: its values come from defect D1, where the stage check was false for every
+  document edit.
+
+**Test rewrites and removals caused by deleted APIs**
+
+- `PipelineFrameSinkTest`: request cases now assert on `MakeApplyRequest()`.
+  `RenderSourceCacheKeyUsesStableImageIdentityBeforeBufferPointer` is deleted with its subject.
+  The two `ActiveCudaHighlightShadow*` stage cases are merged into
+  `FastPreviewSubRegionUsesRoiFrameWithSinkRegion`.
+  `FullResExportPreservesHighlightShadowSourceDetail` became
+  `FullResExportRequestsExportQualityAtFullResolution`.
+  `ThumbnailAndExportTasksDisableSessionCache` became
+  `ThumbnailAndExportRequestsRequireHostOutput`.
+- `PipelineSharedUseTest`: `TaskRenderOptionsDoNotPersistInExecutor` became
+  `TaskRenderOptionsDoNotLeakIntoLaterEditorRequests`. `PipelineDocumentRenderTest` no longer
+  asserts on the deleted capture API.
+- The stage-only overlay cases in `EditorGeometryOverlayPipelineTest` (2) and
+  `EditorAdjustmentPipelineTest` (1) are deleted. The new DAG tests above replace them.
+- `tests/edit/pipeline/cuda_preview_vram_reclamation_test.cu` covered only the deleted
+  merged-stage scratch release. It moved with `git mv`, unchanged, to
+  `alcedo_studio/deprecated/legacy_pipeline/tests/edit/pipeline/`. Its target and the option
+  `ALCEDO_ENABLE_CUDA_PREVIEW_VRAM_RECLAMATION_TEST` are removed. The archive README is still
+  G10.9 work.
+
+**Build and test commands with exit codes**
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target PipelineSchedulerRequestIdTest GpuDagCudaDrtProductTest GpuDagGeometryTest EditorSessionRenderSchedulerPortTest ImportPipelineDocumentTest GpuDagModelGraphTest EditorAdjustmentContextTest AdjustmentTransferServiceTest PipelineFrameSinkTest EditorGeometryOverlayPipelineTest EditorAdjustmentPipelineTest ThumbnailServiceTest PipelineSharedUseTest PipelineDocumentRenderTest alcedo_main   -> exit 0
+ctest --test-dir build/debug -j 4 -R "PipelineSchedulerRequestIdTest|GpuDagCudaDrtProductTest|GpuDagGeometryTest|EditorSessionRenderSchedulerPortTest|ImportPipelineDocumentTest|GpuDagModelGraphTest|EditorAdjustmentContextTest|AdjustmentTransferServiceTest\.|PipelineFrameSinkTest|EditorGeometryOverlayPipelineTest|EditorAdjustmentPipelineTest|NoProductCodeReadsStageTableOutsideMirror|StageTableReadCheckRejectsProductFileOutsideMirror|PipelineSharedUseTest|PipelineDocumentRenderTest"   -> exit 8 (5 failures from before this phase)
+```
+
+**Discovered / passed / failed / skipped counts**
+
+- Baseline on the unchanged branch: 239 discovered for the Section 10.9 targets plus
+  `PipelineFrameSinkTest`, `EditorGeometryOverlayPipelineTest`, and `EditorAdjustmentPipelineTest`.
+  231 passed, 8 failed, 0 skipped.
+- After the change: 275 discovered (this set plus `PipelineSharedUseTest`,
+  `PipelineDocumentRenderTest`, and the two source checks). 270 passed, 5 failed, 0 skipped.
+- The 5 failures were already present before G10.1. They are
+  `EditorSessionRenderSchedulerPortTest.{ProductionPipelinePathSchedulesInstalledContextWithoutAdapterBind,
+  ViewDrivenReasonsDisableScopeFrameReplacement, ScopeRefreshMarksFrameAsRequestedScopeInput,
+  SessionDoesNotStampPreviewGenerationFromIntent,
+  InstalledContextAllowsScheduleWithoutImagePoolService}`. They expect a sink `BindFrameSubmission`
+  (`bind_count >= 1`). Only the removed `SetExecutorRenderParams` performed that bind.
+- Two baseline failures were stage-only overlay cases that this phase deleted.
+- `ForwardScheduleCompletionInvokedWithoutReverseCoordinator` failed at baseline and passes now.
+
+**Other evidence**
+
+- Manual verification: not run.
+- Evidence path: `build/tmp/g10_1/` (`baseline_ctest.log`, `final_build.log`, `final_ctest.log`,
+  `capture/`).
+- Diff size: 1910 lines (1031 added, 879 removed). This excludes the expected JSON files and counts
+  the archive move as zero lines. It is above the 1200–1700 estimate and below the 2000-line limit.
+  Most of the extra lines are test rewrites caused by the deleted request helpers.
+- Remaining defects or unavailable platforms: the manual check above. Metal and OpenCL builds did
+  not run. The changed code is backend-neutral, but the `BindFrameGeometry` change is proven only
+  on CUDA. The 5 port failures above belong to a later rewrite of that test file.
+  `ThumbnailServiceTest` has no ctest discovery (known gap).
 
 ---
 

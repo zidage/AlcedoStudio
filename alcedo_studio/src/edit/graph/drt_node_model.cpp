@@ -554,4 +554,9 @@ void DrtNodeModel::InsertAdjustment(std::size_t index, AdjustmentInstanceId id,
   adjustments_.insert(adjustments_.begin() + static_cast<std::ptrdiff_t>(index), std::move(entry));
 }
 
+auto IsHdrExportEncoding(const DrtNodeModel& drt) -> bool {
+  const auto eotf = drt.Params().EncodingEotf();
+  return eotf == DrtEotf::St2084 || eotf == DrtEotf::Hlg;
+}
+
 }  // namespace alcedo

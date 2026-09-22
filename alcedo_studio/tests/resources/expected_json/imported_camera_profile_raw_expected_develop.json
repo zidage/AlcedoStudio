@@ -1,0 +1,87 @@
+{
+  "apply_crop": true,
+  "apply_distortion": true,
+  "apply_tca": true,
+  "apply_vignetting": true,
+  "as_shot_cct": 9654.1904296875,
+  "as_shot_tint": 150.0,
+  "auto_scale": true,
+  "camera_profile": {
+    "as_shot_neutral": [
+      0.45,
+      1.0,
+      0.62
+    ],
+    "as_shot_neutral_valid": true,
+    "calibration_illuminants_valid": true,
+    "cam_mul": [
+      2.0,
+      1.0,
+      1.5
+    ],
+    "color_matrices_valid": true,
+    "color_matrix_1": [
+      1.85,
+      0.22,
+      0.08,
+      0.36,
+      1.62,
+      0.14,
+      0.06,
+      0.28,
+      1.76
+    ],
+    "color_matrix_1_cct": 2856.0,
+    "color_matrix_2": [
+      1.42,
+      0.42,
+      0.24,
+      0.32,
+      1.48,
+      0.26,
+      0.16,
+      0.38,
+      1.66
+    ],
+    "color_matrix_2_cct": 6504.0,
+    "dng_profile": null,
+    "forward_matrices_valid": false,
+    "forward_matrix_1": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "forward_matrix_2": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  "custom_cct": 6500.0,
+  "custom_tint": 0.0,
+  "demosaic_method": "default",
+  "highlights_reconstruct": true,
+  "lens_enabled": false,
+  "lens_maker": "",
+  "lens_model": "",
+  "lens_profile_db_path": "src/config/lens_calib",
+  "projection_enabled": false,
+  "target_projection": "unknown",
+  "use_camera_wb": true,
+  "use_user_scale": false,
+  "user_scale": 1.0,
+  "user_wb": 7600.0,
+  "wb_mode": "as_shot"
+}

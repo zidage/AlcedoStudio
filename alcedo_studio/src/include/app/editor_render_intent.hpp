@@ -109,9 +109,9 @@ struct EditorRenderIntent {
   std::shared_ptr<EditorRenderCancellationToken> cancellation;
   PresentationSinkId                             presentation_sink_id  = 0;
   // Geometry-panel previews keep the full source frame visible while the
-  // crop/rotation overlay is being edited. The adjustment state is still
-  // carried by the intent, but the scheduler disables CROP_ROTATE for this
-  // preview frame so its aspect matches the overlay's source-image UV space.
+  // crop/rotation overlay is being edited. The port maps this to
+  // DocumentGeometryUse::UncroppedSource, so the frame has the source aspect and
+  // matches the overlay's source-image UV space. The document is not changed.
   bool                                           geometry_overlay_only = false;
   /// True when consume already wrote live document and CPU operators under the
   /// render lock. Configure must not apply `adjustment` again.

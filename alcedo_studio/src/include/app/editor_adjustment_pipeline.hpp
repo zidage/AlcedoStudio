@@ -87,10 +87,6 @@ auto ApplyEditorAdjustmentSnapshot(CPUPipelineExecutor&                  executo
 [[nodiscard]] auto SnapshotTouchesImageLoading(const EditorRenderAdjustmentSnapshot& snapshot)
     -> bool;
 
-/// Disable the geometry operator for an overlay editing preview while keeping
-/// its parameters installed on the executor for the next full render.
-void DisableEditorGeometryOperatorForOverlay(CPUPipelineExecutor& executor);
-
 /**
  * @brief Install default editable operator params while preserving image-local keys.
  *

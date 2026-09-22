@@ -44,6 +44,8 @@ class GraphCompiler {
   /**
    * @brief Fill @p plan.geometry from the document crop/rotation and the per-frame request.
    *
+   * With `request.document_geometry == UncroppedSource` the frame uses an identity crop and zero
+   * rotation (the document `expand_to_fit` is kept). The document is only read.
    * Does not change @p plan.static_key or the pass list. Must run before execute.
    */
   static void               BindFrameGeometry(ExecutionPlan& plan, const PipelineDocument& document,

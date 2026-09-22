@@ -2,15 +2,20 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
+#include "edit/graph/develop_color_transform.hpp"
+
 #include <gtest/gtest.h>
 
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <filesystem>
+#include <fstream>
 
-#include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "image/dng_camera_matrix.hpp"
+#include "imported_camera_profile_fixtures.hpp"
+#include "json.hpp"
 #include "test_camera_profile.hpp"
 
 namespace alcedo {
@@ -332,4 +337,40 @@ TEST(GpuDagModelGraph, DevelopColorTransformSolvesDaylightCctWhenAnalogBalanceIs
 }
 
 }  // namespace
+
+TEST(GpuDagModelGraph, BindImportedCameraProfileMatchesPreviousDevelopParameters) {
+  for (const auto& fixture : gpu_dag_test::MakeImportedCameraProfileFixtures()) {
+    SCOPED_TRACE(fixture.name_);
+    std::ifstream stream(std::filesystem::path(ALCEDO_EXPECTED_JSON_ROOT) / fixture.expected_file_);
+    ASSERT_TRUE(stream.is_open()) << fixture.expected_file_;
+    const auto expected = nlohmann::json::parse(stream);
+
+    auto       document = CreateDefaultPipelineDocument();
+    BindImportedCameraProfile(document, fixture.context_);
+    EXPECT_EQ(document.Develop()->Params().ToJson(), expected);
+  }
+}
+
+TEST(GpuDagModelGraph, BindImportedCameraProfileKeepsUserEditsAndSkipsEqualWrite) {
+  const auto fixtures = gpu_dag_test::MakeImportedCameraProfileFixtures();
+  auto       document = CreateDefaultPipelineDocument();
+  auto       payload  = document.Develop()->Params().Params();
+  payload.wb_mode     = "custom";
+  payload.custom_cct  = 4321.0f;
+  payload.lens_maker  = "Fixture Lens Co";
+  document.Develop()->Params().ReplaceParams(payload);
+
+  BindImportedCameraProfile(document, fixtures.front().context_);
+  const auto bound = document.Develop()->Params().Params();
+  EXPECT_EQ(bound.wb_mode, "custom");
+  EXPECT_FLOAT_EQ(bound.custom_cct, 4321.0f);
+  EXPECT_EQ(bound.lens_maker, "Fixture Lens Co");
+  EXPECT_TRUE(bound.camera_profile.color_matrices_valid);
+
+  (void)document.Develop()->Params().TakeDirtyFields();
+  BindImportedCameraProfile(document, fixtures.front().context_);
+  EXPECT_FALSE(document.Develop()->Params().IsDirty());
+  EXPECT_EQ(document.Develop()->Params().Params(), bound);
+}
+
 }  // namespace alcedo

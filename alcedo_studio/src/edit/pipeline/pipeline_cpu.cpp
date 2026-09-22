@@ -39,21 +39,6 @@ namespace alcedo {
 namespace {
 
 #if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
-/** @brief Bind import-time camera metadata with exclusive document access, preserving user edits. */
-void ApplyImportedCameraProfile(PipelineDocument&             document,
-                                const RawRuntimeColorContext& imported) {
-  auto* develop = document.Develop();
-  if (develop == nullptr) {
-    return;
-  }
-  auto payload = develop->Params().Params();
-  auto next    = payload;
-  BindDevelopCameraProfile(next, imported);
-  if (next != payload) {
-    develop->Params().ReplaceParams(std::move(next));
-  }
-}
-
 /** @brief Translate runtime settings to a render request without touching persistent Models. */
 auto BuildGpuDagRenderRequest(const std::optional<ViewportRenderRegion>& viewport,
                               const nlohmann::json& render_params, bool force_cpu_output)
@@ -248,7 +233,6 @@ auto CPUPipelineExecutor::Apply(std::shared_ptr<ImageBuffer> input,
         "CPUPipelineExecutor: product rendering requires a bound PipelineDocument");
   }
   if (use_gpu_dag) {
-    SetCancelRequested(request.cancel_requested);
 #ifdef HAVE_CUDA
     if (resolved_accelerator_backend_ == GpuBackendKind::CUDA) {
       return ApplyGpuDagProduct(cuda_product_renderer_, pipeline_document_, input, request);
@@ -409,26 +393,10 @@ void CPUPipelineExecutor::ApplyRuntimeRawDecodeBackend() {
     return;
   }
   raw_op->SetRuntimeGpuBackend(resolved_accelerator_backend_);
-  SyncRawDecodeRuntimeControls();
-}
-
-void CPUPipelineExecutor::SyncRawDecodeRuntimeControls() {
-  auto& raw_stage = stages_[static_cast<int>(PipelineStageName::Image_Loading)];
-  auto  entry     = raw_stage.GetOperator(OperatorType::RAW_DECODE);
-  if (!entry.has_value() || !entry.value() || !entry.value()->op_) {
-    return;
-  }
-
-  auto* raw_op = dynamic_cast<RawDecodeOp*>(entry.value()->op_.get());
-  if (!raw_op) {
-    return;
-  }
-  raw_op->SetCancelRequested(cancel_requested_);
 }
 
 void CPUPipelineExecutor::SetCancelRequested(std::function<bool()> cancel_requested) {
   cancel_requested_ = std::move(cancel_requested);
-  SyncRawDecodeRuntimeControls();
 }
 
 void CPUPipelineExecutor::SetAcceleratorBackendPreference(
@@ -572,50 +540,6 @@ void CPUPipelineExecutor::SetResizeDownsampleAlgorithm(ResizeDownsampleAlgorithm
 
 void CPUPipelineExecutor::SetDecodeRes(DecodeRes res) { decode_res_ = res; }
 
-auto CPUPipelineExecutor::CaptureOneShotRenderParams() const -> OneShotRenderParamsSnapshot {
-  OneShotRenderParamsSnapshot snapshot;
-  snapshot.decode_res_              = decode_res_;
-  snapshot.render_params_           = render_params_;
-  snapshot.force_cpu_output_        = force_cpu_output_;
-  snapshot.enable_cache_            = enable_cache_;
-  snapshot.render_request_viewport_ = render_request_viewport_;
-  return snapshot;
-}
-
-void CPUPipelineExecutor::RestoreOneShotRenderParams(const OneShotRenderParamsSnapshot& snapshot) {
-  force_cpu_output_ = snapshot.force_cpu_output_;
-  if (enable_cache_ != snapshot.enable_cache_) {
-    // SetEnableCache rebuilds stage cache flags; only call when the value changes.
-    SetEnableCache(snapshot.enable_cache_);
-  }
-  render_params_           = snapshot.render_params_;
-  render_request_viewport_ = snapshot.render_request_viewport_;
-
-  if (render_params_.contains("resize") && render_params_["resize"].is_object()) {
-    const auto& resize_params          = render_params_["resize"];
-    global_params_.render_roi_enabled_ = resize_params.value("enable_roi", false);
-    if (resize_params.contains("roi") && resize_params["roi"].is_object()) {
-      const auto& roi                             = resize_params["roi"];
-      global_params_.render_roi_x_                = roi.value("x", 0);
-      global_params_.render_roi_y_                = roi.value("y", 0);
-      global_params_.render_roi_scale_x_          = roi.value("resize_factor_x", 1.0f);
-      global_params_.render_roi_scale_y_          = roi.value("resize_factor_y", 1.0f);
-      global_params_.render_roi_reference_width_  = roi.value("reference_width", 0);
-      global_params_.render_roi_reference_height_ = roi.value("reference_height", 0);
-    } else {
-      global_params_.render_roi_x_                = 0;
-      global_params_.render_roi_y_                = 0;
-      global_params_.render_roi_scale_x_          = 1.0f;
-      global_params_.render_roi_scale_y_          = 1.0f;
-      global_params_.render_roi_reference_width_  = 0;
-      global_params_.render_roi_reference_height_ = 0;
-    }
-  }
-
-  SetDecodeRes(snapshot.decode_res_);
-  SetCancelRequested(nullptr);
-}
-
 auto CPUPipelineExecutor::GetViewportRenderRegion() const -> std::optional<ViewportRenderRegion> {
   if (!frame_sink_) {
     return std::nullopt;
@@ -708,7 +632,7 @@ void CPUPipelineExecutor::InjectRawMetadata(const RawRuntimeColorContext& ctx) {
 
 #if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
   if (pipeline_document_) {
-    ApplyImportedCameraProfile(*pipeline_document_, ctx);
+    BindImportedCameraProfile(*pipeline_document_, ctx);
   }
 #endif
 
@@ -773,12 +697,6 @@ void CPUPipelineExecutor::ClearAllIntermediateBuffers() {
     opencl_product_renderer_->ReleaseSessionCaches();
   }
 #endif
-}
-
-void CPUPipelineExecutor::ReleasePreviewGpuScratch() {
-  if (merged_stages_) {
-    merged_stages_->ResetRuntimeResources(PipelineStage::RuntimeResetMode::ReleaseGpuScratch);
-  }
 }
 
 void CPUPipelineExecutor::ReleaseAllGPUResources() {

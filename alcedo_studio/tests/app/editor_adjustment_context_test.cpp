@@ -12,7 +12,9 @@
 #include <string_view>
 #include <variant>
 
+#include "app/editor_parameter_write.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
+#include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
@@ -402,6 +404,23 @@ TEST(EditorAdjustmentContextTest, ColorGradeLookPanelFieldsTargetDocumentDrtNode
   ASSERT_TRUE(ScalarOf(projection, "clarity").has_value());
   EXPECT_FLOAT_EQ(*ScalarOf(projection, "clarity"), 12.0f);
   EXPECT_TRUE(ScalarOf(projection, "exposure").has_value());
+}
+
+TEST(EditorAdjustmentContextTest, LensCatalogDefaultPathComesFromDevelopDefaults) {
+  const DevelopPayload defaults{};
+  const auto           json = MakeDefaultLensCalibrationWriteJson();
+  ASSERT_TRUE(json.contains("lens_calib"));
+  const auto& lens = json.at("lens_calib");
+  EXPECT_EQ(lens.at("lens_profile_db_path").get<std::string>(), defaults.lens_profile_db_path);
+  EXPECT_EQ(lens.at("enabled").get<bool>(), defaults.lens_enabled);
+  EXPECT_EQ(lens.at("target_projection").get<std::string>(), defaults.target_projection);
+  EXPECT_FLOAT_EQ(lens.at("user_scale").get<float>(), defaults.user_scale);
+  EXPECT_FALSE(lens.contains("lens_maker"));
+  EXPECT_FALSE(lens.contains("lens_model"));
+
+  // The payload is a valid lens_calib write for the parameter parser.
+  std::string error;
+  EXPECT_TRUE(ParseEditorParameterWrite("lens_calib", json, &error).has_value()) << error;
 }
 
 }  // namespace alcedo

@@ -192,7 +192,7 @@ add_executable(PipelineSchedulerRequestIdTest
     ${ALCEDO_TEST_ROOT}/renderer/pipeline_scheduler_request_id_test.cpp)
 target_include_directories(PipelineSchedulerRequestIdTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(PipelineSchedulerRequestIdTest PRIVATE GTest::gtest_main Operators EditPipeline
-                                                    PipelineScheduler EditorRhiViewport
+                                                    PipelineScheduler EditorRhiViewport EditGraph
                                                     ${ALCEDO_TEST_OPENCV_MIN_DEPS})
 gtest_discover_tests(PipelineSchedulerRequestIdTest TEST_PREFIX "PipelineSchedulerRequestIdTest.")
 alcedo_register_test_target(PipelineSchedulerRequestIdTest edit)
@@ -295,7 +295,8 @@ target_link_libraries(GpuDagModelGraphTest PRIVATE GTest::gtest_main EditGraph E
 target_compile_definitions(GpuDagModelGraphTest PRIVATE
   ALCEDO_MODEL_HEADER_ROOT="${ALCEDO_INCLUDE_DIR}/edit/operators/models"
   ALCEDO_GRAPH_HEADER_ROOT="${ALCEDO_INCLUDE_DIR}/edit/graph"
-  ALCEDO_MASK_HEADER_ROOT="${ALCEDO_INCLUDE_DIR}/edit/mask")
+  ALCEDO_MASK_HEADER_ROOT="${ALCEDO_INCLUDE_DIR}/edit/mask"
+  ALCEDO_EXPECTED_JSON_ROOT="${ALCEDO_TEST_ROOT}/resources/expected_json")
 gtest_discover_tests(GpuDagModelGraphTest TEST_PREFIX "GpuDagModelGraphTest."
   PROPERTIES LABELS "ci_core_flow;edit;graph")
 alcedo_register_test_target(GpuDagModelGraphTest edit)
@@ -303,9 +304,10 @@ alcedo_register_test_target(GpuDagModelGraphTest edit)
 # GPU DAG Phase G3: RenderGeometryResolver (CPU).
 add_executable(GpuDagGeometryTest
   ${ALCEDO_TEST_ROOT}/edit/geometry/render_geometry_resolver_test.cpp
-  ${ALCEDO_TEST_ROOT}/edit/geometry/sampling_and_document_test.cpp)
+  ${ALCEDO_TEST_ROOT}/edit/geometry/sampling_and_document_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/geometry/document_geometry_use_test.cpp)
 target_include_directories(GpuDagGeometryTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(GpuDagGeometryTest PRIVATE GTest::gtest_main EditGeometry EditGraph)
+target_link_libraries(GpuDagGeometryTest PRIVATE GTest::gtest_main EditGeometry EditGraph EditRuntime)
 target_compile_definitions(GpuDagGeometryTest PRIVATE
   ALCEDO_MODEL_HEADER_ROOT="${ALCEDO_INCLUDE_DIR}/edit/operators/models"
   ALCEDO_GEOMETRY_HEADER_ROOT="${ALCEDO_INCLUDE_DIR}/edit/geometry")
@@ -467,10 +469,11 @@ if(ALCEDO_CUDA_ENABLED)
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_result_cache_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_product_scope_present_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_nm2_qualification_test.cpp
-    ${ALCEDO_TEST_ROOT}/edit/runtime/develop_camera_profile_import_test.cpp)
+    ${ALCEDO_TEST_ROOT}/edit/runtime/develop_camera_profile_import_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_document_geometry_request_test.cpp)
   target_include_directories(GpuDagCudaDrtProductTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagCudaDrtProductTest PRIVATE
-    GTest::gtest_main EditRuntimeCuda EditInput Image EditPipeline)
+    GTest::gtest_main EditRuntimeCuda EditInput Image EditPipeline PipelineScheduler)
   gtest_discover_tests(GpuDagCudaDrtProductTest TEST_PREFIX "GpuDagCudaDrtProductTest."
     PROPERTIES LABELS "gpu;edit;runtime;product")
   alcedo_register_test_target(GpuDagCudaDrtProductTest gpu)

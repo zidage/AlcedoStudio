@@ -16,6 +16,7 @@
 #include <utility>
 #include <vector>
 
+#include "edit/graph/pipeline_document.hpp"
 #include "edit/operators/operator_registeration.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
 #include "edit/pipeline/pipeline_stage.hpp"
@@ -245,6 +246,72 @@ TEST(PipelineSchedulerRequestIdTest,
 
   EXPECT_THROW((void)run_interactive(102), std::runtime_error);
   EXPECT_FALSE(geometry.CacheValid());
+}
+
+// G10.1 removed the stage CROP_ROTATE read from FAST_PREVIEW. Before that change the read was
+// false for every document edit (defect D1: the stage never received the crop_rotate key), so a
+// rotated crop used the ROI path. The expected values below are that pre-change request.
+TEST(PipelineSchedulerRequestIdTest, FastPreviewRequestIsUnchangedForRotatedCrop) {
+  RegisterAllOperators();
+  auto exec     = std::make_shared<CPUPipelineExecutor>();
+  auto document = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
+  document->Geometry().SetCropRect({0.2f, 0.1f, 0.5f, 0.6f});
+  document->Geometry().SetRotationDegrees(7.0f);
+  exec->SetPipelineDocument(document);
+  const auto document_before = document->ToJson();
+
+  auto       make_task       = [&](const ViewportRenderRegion& region) {
+    PipelineTask task;
+    task.pipeline_executor_                         = exec;
+    task.options_.render_desc_.render_type_         = RenderType::FAST_PREVIEW;
+    task.options_.render_desc_.use_viewport_region_ = true;
+    task.options_.render_desc_.viewport_region_     = region;
+    return task;
+  };
+
+  const ViewportRenderRegion roi{.x_                = 600,
+                                 .y_                = 400,
+                                 .scale_x_          = 0.3f,
+                                 .scale_y_          = 0.25f,
+                                 .reference_width_  = 5000,
+                                 .reference_height_ = 3000,
+                                 .target_width_     = 1600,
+                                 .target_height_    = 1200};
+  const auto                 roi_request = make_task(roi).MakeApplyRequest();
+  EXPECT_EQ(roi_request.submission.mode, FramePresentationMode::RoiFrame);
+  EXPECT_EQ(roi_request.submission.metadata.frame_role, FrameRole::InteractivePrimary);
+  EXPECT_FLOAT_EQ(roi_request.geometry.view.visible_rect_in_edit_space.x, 0.12f);
+  EXPECT_FLOAT_EQ(roi_request.geometry.view.visible_rect_in_edit_space.y, 400.0f / 3000.0f);
+  EXPECT_FLOAT_EQ(roi_request.geometry.view.visible_rect_in_edit_space.w, 0.3f);
+  EXPECT_FLOAT_EQ(roi_request.geometry.view.visible_rect_in_edit_space.h, 0.25f);
+  EXPECT_EQ(roi_request.geometry.view.viewport_extent.width, 1600U);
+  EXPECT_EQ(roi_request.geometry.view.viewport_extent.height, 1200U);
+  EXPECT_NEAR(roi_request.submission.metadata.source_roi_norm.x, 0.12f, 1.0e-6f);
+  EXPECT_NEAR(roi_request.submission.metadata.source_roi_norm.width, 0.3f, 1.0e-6f);
+  EXPECT_EQ(roi_request.geometry.resolution.max_edge, 2560U);
+  EXPECT_EQ(roi_request.geometry.resolution.quality, RenderQuality::Preview);
+  EXPECT_EQ(roi_request.decode_res, DecodeRes::FULL);
+  EXPECT_EQ(roi_request.cache_policy, RenderCachePolicy::UseSessionCache);
+  EXPECT_FALSE(roi_request.require_host_output);
+
+  const ViewportRenderRegion full{.x_                = 0,
+                                  .y_                = 0,
+                                  .scale_x_          = 1.0f,
+                                  .scale_y_          = 1.0f,
+                                  .reference_width_  = 5000,
+                                  .reference_height_ = 3000,
+                                  .target_width_     = 1600,
+                                  .target_height_    = 960};
+  const auto                 full_request = make_task(full).MakeApplyRequest();
+  EXPECT_EQ(full_request.submission.mode, FramePresentationMode::ViewportTransformed);
+  EXPECT_TRUE(full_request.geometry.view.visible_rect_in_edit_space.IsFullFrame());
+  EXPECT_EQ(full_request.geometry.view.viewport_extent.width, 1600U);
+  EXPECT_EQ(full_request.geometry.view.viewport_extent.height, 960U);
+  EXPECT_FLOAT_EQ(full_request.submission.metadata.source_roi_norm.width, 1.0f);
+  EXPECT_EQ(full_request.geometry.resolution.max_edge, 2560U);
+  EXPECT_EQ(full_request.decode_res, DecodeRes::FULL);
+
+  EXPECT_EQ(document->ToJson(), document_before);
 }
 
 TEST(DirectPresentQueueRequestIdTest, ConsumeNewestReadyPrefersHigherRequestId) {

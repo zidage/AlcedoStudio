@@ -9,6 +9,7 @@
 
 #include "decoders/processor/raw_color_context.hpp"
 #include "edit/graph/develop_node_model.hpp"
+#include "edit/graph/pipeline_document.hpp"
 
 namespace alcedo {
 
@@ -53,13 +54,25 @@ struct ColorTransformResult {
  * @brief Copy import-time RAW camera matrices into Develop payload fields.
  *
  * Also solves as-shot CCT/tint from AsShotNeutral (or cam_mul fallback).
- * `InjectRawMetadata` copies those values into ColorTempOp JSON so
- * EditorColorTempModel can display them without parsing RAW again.
  *
  * @pre @p imported was populated at import by MetadataExtractor.
  * Side effects: overwrites camera-profile fields and, on success, as-shot CCT/tint.
  */
 void BindDevelopCameraProfile(DevelopPayload& payload, const RawRuntimeColorContext& imported);
+
+/**
+ * @brief Bind import-time RAW camera metadata to the document's Develop node.
+ *
+ * Applies @ref BindDevelopCameraProfile to a copy of the Develop payload and publishes it with one
+ * `ReplaceParams` call. User edits outside the camera-profile and as-shot fields stay unchanged.
+ * An equal result does not mark the document dirty. A document without a Develop node is left
+ * unchanged.
+ *
+ * @pre The caller owns @p document under its render lock or has exclusive access before
+ *      publication (import, open, replay, checkout). Never call from a render task.
+ * @throws Whatever `DevelopParamsModel::ReplaceParams` throws; no write happens in that case.
+ */
+void BindImportedCameraProfile(PipelineDocument& document, const RawRuntimeColorContext& imported);
 
 /**
  * @brief Bind Rec.709 / sRGB XYZ→camera matrices for files that have no RAW camera profile.

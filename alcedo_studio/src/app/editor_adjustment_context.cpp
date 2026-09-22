@@ -378,4 +378,20 @@ auto MakeEditorAdjustmentContext(const PipelineDocument& document, const NodeId&
   return context;
 }
 
+auto MakeDefaultLensCalibrationWriteJson() -> nlohmann::json {
+  const DevelopPayload defaults{};
+  return {{"lens_calib",
+           {{"enabled", defaults.lens_enabled},
+            {"apply_vignetting", defaults.apply_vignetting},
+            {"apply_distortion", defaults.apply_distortion},
+            {"apply_tca", defaults.apply_tca},
+            {"apply_crop", defaults.apply_crop},
+            {"auto_scale", defaults.auto_scale},
+            {"use_user_scale", defaults.use_user_scale},
+            {"user_scale", defaults.user_scale},
+            {"projection_enabled", defaults.projection_enabled},
+            {"target_projection", defaults.target_projection},
+            {"lens_profile_db_path", defaults.lens_profile_db_path}}}};
+}
+
 }  // namespace alcedo

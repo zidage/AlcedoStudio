@@ -10,6 +10,7 @@
 #include <limits>
 #include <opencv2/core.hpp>
 #include <span>
+#include <utility>
 
 #include "edit/operators/basic/planckian_locus_table.hpp"
 #include "image/dng_camera_matrix.hpp"
@@ -627,6 +628,19 @@ void BindDevelopCameraProfile(DevelopPayload& payload, const RawRuntimeColorCont
   if (solved.ok) {
     payload.as_shot_cct  = solved.transform.resolved_cct;
     payload.as_shot_tint = solved.transform.resolved_tint;
+  }
+}
+
+void BindImportedCameraProfile(PipelineDocument& document, const RawRuntimeColorContext& imported) {
+  auto* develop = document.Develop();
+  if (develop == nullptr) {
+    return;
+  }
+  const auto current = develop->Params().Params();
+  auto       next    = current;
+  BindDevelopCameraProfile(next, imported);
+  if (next != current) {
+    develop->Params().ReplaceParams(std::move(next));
   }
 }
 
