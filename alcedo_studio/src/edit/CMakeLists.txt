@@ -174,6 +174,43 @@ if(WIN32 AND TARGET puerhlab_lensfun)
         VERBATIM)
 endif()
 
+# Histogram and waveform analysis of the presented display frame. The CUDA, OpenCL, and Metal
+# frame presenters link it; so do the legacy pipeline implementations until G10.9 and G10.10.
+set(EDIT_SCOPE_SRCS
+    ${ALCEDO_SRC_ROOT}/edit/scope/scope_analyzer.cpp
+    ${ALCEDO_SRC_ROOT}/edit/scope/final_display_frame_tap.cpp
+)
+if(ALCEDO_CUDA_ENABLED)
+    list(APPEND EDIT_SCOPE_SRCS ${ALCEDO_SRC_ROOT}/edit/scope/cuda_scope_analyzer.cu)
+endif()
+if(ALCEDO_METAL_ENABLED)
+    list(APPEND EDIT_SCOPE_SRCS ${ALCEDO_SRC_ROOT}/edit/scope/metal_scope_analyzer.cpp)
+endif()
+if(ALCEDO_OPENCL_ENABLED)
+    list(APPEND EDIT_SCOPE_SRCS ${ALCEDO_SRC_ROOT}/edit/scope/opencl_scope_analyzer.cpp)
+endif()
+def_cuda_library(EditScope
+    SOURCES ${EDIT_SCOPE_SRCS}
+    PUBLIC_DEPS EditGeometry ${ALCEDO_OPENCV_CORE_DEPS}
+)
+if(ALCEDO_CUDA_ENABLED)
+    target_compile_definitions(EditScope PUBLIC HAVE_CUDA)
+    target_include_directories(EditScope PRIVATE ${CUDAToolkit_INCLUDE_DIRS})
+    target_link_libraries(EditScope PRIVATE CUDA::cudart)
+endif()
+if(ALCEDO_METAL_ENABLED)
+    add_dependencies(EditScope ScopeAnalyzerMetalShaders)
+    target_compile_definitions(EditScope PUBLIC HAVE_METAL)
+    target_compile_definitions(EditScope PRIVATE
+        ALCEDO_METAL_SCOPE_ANALYZER_METALLIB_PATH="${METAL_SCOPE_ANALYZER_METALLIB}"
+    )
+    target_link_libraries(EditScope PUBLIC MetalContext alcedo::metal_cpp)
+endif()
+if(ALCEDO_OPENCL_ENABLED)
+    target_compile_definitions(EditScope PUBLIC HAVE_OPENCL)
+    target_link_libraries(EditScope PUBLIC OpenClContext PRIVATE OpenClProgramLibrary)
+endif()
+
 def_library(EditRuntime
     SOURCES ${EDIT_RUNTIME_SRCS}
     PUBLIC_DEPS EditGraph EditGeometry EditInput EditRuntimeDrt
@@ -195,7 +232,7 @@ if(ALCEDO_METAL_ENABLED)
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_mask_pass.mm
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_primary_grade_pass.mm
         PUBLIC_DEPS EditRuntime MetalContext alcedo::metal_cpp
-        PRIVATE_DEPS RawProcessorOp EditRuntimeLens MetalGeometryUtils MetalImage MetalDemosaicNetEntry PreviewPerformance
+        PRIVATE_DEPS RawProcessorOp EditRuntimeLens EditScope MetalGeometryUtils MetalImage MetalDemosaicNetEntry PreviewPerformance
     )
     target_compile_definitions(EditRuntimeMetal PUBLIC HAVE_METAL)
     target_compile_definitions(EditRuntimeMetal PRIVATE
@@ -251,7 +288,7 @@ if(ALCEDO_CUDA_ENABLED)
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_primary_grade_pass.cu
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/geometry_resample.cu
         PUBLIC_DEPS EditRuntime CUDA::cudart
-        PRIVATE_DEPS EditInput RawProcessorOp EditRuntimeLens CudaDemosaicNetEntry PreviewPerformance
+        PRIVATE_DEPS EditInput RawProcessorOp EditRuntimeLens EditScope CudaDemosaicNetEntry PreviewPerformance
     )
     target_compile_definitions(EditRuntimeCuda PUBLIC HAVE_CUDA)
 endif()
@@ -268,7 +305,7 @@ if(ALCEDO_OPENCL_ENABLED)
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_mask_pass.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_primary_grade_pass.cpp
         PUBLIC_DEPS EditRuntime EditInput RawProcessorOp OpenClDemosaicNetEntry OpenClContext OpenClProgramLibrary OpenCL::OpenCL
-        PRIVATE_DEPS EditRuntimeLens OpenClGeometryUtils PreviewPerformance
+        PRIVATE_DEPS EditRuntimeLens EditScope OpenClGeometryUtils PreviewPerformance
     )
     target_compile_definitions(EditRuntimeOpenCl PUBLIC HAVE_OPENCL)
 endif()

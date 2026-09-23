@@ -8,7 +8,7 @@
 
 // === Highlight / Shadow Local Tone ============================================
 
-// Mirrored from edit/pipeline/local_tone_mapping.hpp.
+// Mirrored from edit/runtime/local_tone_mapping.hpp.
 constant float kMetalHsAcesccMiddleGray = 0.41358840f;
 constant float kMetalHsAcesccCodePerEv = 1.0f / 17.52f;
 constant float kMetalHsBaseSigmaR = 0.07545252f;

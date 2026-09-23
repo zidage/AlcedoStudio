@@ -35,7 +35,7 @@ if(ALCEDO_METAL_ENABLED)
         "${ALCEDO_SRC_ROOT}/edit/operators/GPU_kernels/metal_shader/color.metal"
         "${ALCEDO_SRC_ROOT}/edit/operators/GPU_kernels/metal_shader/cst.metal"
         "${ALCEDO_SRC_ROOT}/edit/operators/GPU_kernels/metal_shader/detail.metal"
-        "${ALCEDO_SRC_ROOT}/edit/operators/GPU_kernels/metal_shader/prng.metal"
+        "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/prng.metal"
         "${ALCEDO_SRC_ROOT}/edit/operators/GPU_kernels/metal_shader/film_grain.metal"
         "${ALCEDO_SRC_ROOT}/edit/operators/GPU_kernels/metal_shader/halation.metal"
     )
@@ -348,7 +348,7 @@ if(ALCEDO_METAL_ENABLED)
             "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/drt_aces.metal"
             "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/drt_opendrt.metal"
             "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/drt_neighbor.metal"
-            "${ALCEDO_SRC_ROOT}/edit/operators/GPU_kernels/metal_shader/prng.metal"
+            "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/prng.metal"
             "${ALCEDO_INCLUDE_ROOT}/edit/runtime/aces_reference_gamut_compression.h"
     )
 

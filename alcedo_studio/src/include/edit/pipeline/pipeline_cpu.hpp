@@ -13,7 +13,7 @@
 
 #include "edit/operators/op_base.hpp"
 #include "edit/pipeline/pipeline_accelerator.hpp"
-#include "edit/pipeline/pipeline_apply_request.hpp"
+#include "edit/runtime/pipeline_apply_request.hpp"
 #include "edit/pipeline/pipeline_stage.hpp"
 #include "image/image_buffer.hpp"
 #include "pipeline.hpp"

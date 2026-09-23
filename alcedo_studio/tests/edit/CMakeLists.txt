@@ -84,14 +84,18 @@ target_link_libraries(ToneMappingOwnershipTest PRIVATE GTest::gtest_main)
 gtest_discover_tests(ToneMappingOwnershipTest TEST_PREFIX "ToneMappingOwnershipTest.")
 alcedo_register_test_target(ToneMappingOwnershipTest edit)
 
-# Local tone mapping contract: default construction, setters/getters.
-add_executable(LocalToneMappingContractTest ${ALCEDO_TEST_ROOT}/edit/operators/tone/local_tone_mapping_contract_test.cpp)
-target_compile_definitions(LocalToneMappingContractTest
+# Local-tone constants and helpers in edit/runtime/local_tone_mapping.hpp that the DAG runtime
+# uses. Two cases check the legacy alias header and legacy shader mirrors until G10.9 and G10.10
+# archive them.
+add_executable(LocalToneMappingConstantsMatchRuntimeTest
+    ${ALCEDO_TEST_ROOT}/edit/runtime/local_tone_mapping_constants_test.cpp)
+target_compile_definitions(LocalToneMappingConstantsMatchRuntimeTest
     PRIVATE ALCEDO_SOURCE_ROOT="${CMAKE_SOURCE_DIR}/alcedo_studio/src")
-target_include_directories(LocalToneMappingContractTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(LocalToneMappingContractTest PRIVATE GTest::gtest_main)
-gtest_discover_tests(LocalToneMappingContractTest TEST_PREFIX "LocalToneMappingContractTest.")
-alcedo_register_test_target(LocalToneMappingContractTest edit)
+target_include_directories(LocalToneMappingConstantsMatchRuntimeTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(LocalToneMappingConstantsMatchRuntimeTest PRIVATE GTest::gtest_main)
+gtest_discover_tests(LocalToneMappingConstantsMatchRuntimeTest
+    TEST_PREFIX "LocalToneMappingConstantsMatchRuntimeTest.")
+alcedo_register_test_target(LocalToneMappingConstantsMatchRuntimeTest edit)
 
 # Tone mapping facade: parameter interfaces.
 add_executable(ToneMappingFacadeTest ${ALCEDO_TEST_ROOT}/edit/operators/tone/tone_mapping_facade_test.cpp)
@@ -407,6 +411,7 @@ if(ALCEDO_CUDA_ENABLED)
   target_link_libraries(GpuDagCudaPrimaryGradeTest PRIVATE GTest::gtest_main EditRuntimeCuda EditInput
     PreviewPerformance)
   target_compile_definitions(GpuDagCudaPrimaryGradeTest PRIVATE
+    ALCEDO_NEIGHBOR_GRADE_EXPECTED_PIXEL_DIR="${ALCEDO_TEST_ROOT}/resources/expected_pixels/cuda_neighbor_grade"
     ALCEDO_CI_RAW_FIXTURE_ROOT="${ALCEDO_TEST_ROOT}/resources/sample_images/ci_rawfiles"
     ALCEDO_XTRANS_RAW_FIXTURE="${ALCEDO_TEST_ROOT}/resources/sample_images/raw/xtrans_edge/DSCF0019.RAF")
   gtest_discover_tests(GpuDagCudaPrimaryGradeTest TEST_PREFIX "GpuDagCudaPrimaryGradeTest."
@@ -420,17 +425,29 @@ if(ALCEDO_CUDA_ENABLED)
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_result_cache_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_product_scope_present_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_nm2_qualification_test.cpp
-    ${ALCEDO_TEST_ROOT}/edit/runtime/develop_camera_profile_import_test.cpp
-    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_document_geometry_request_test.cpp)
+    ${ALCEDO_TEST_ROOT}/edit/runtime/develop_camera_profile_import_test.cpp)
   target_include_directories(GpuDagCudaDrtProductTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  # The frame presenter gets scope analysis from EditScope. This target must not link the legacy
+  # pipeline (FramePresenterLinksScopeWithoutEditPipeline checks its link line).
   target_link_libraries(GpuDagCudaDrtProductTest PRIVATE
-    GTest::gtest_main EditRuntimeCuda EditInput Image EditPipeline PipelineScheduler)
+    GTest::gtest_main EditRuntimeCuda EditScope EditInput Image)
   target_compile_definitions(GpuDagCudaDrtProductTest PRIVATE
     ALCEDO_DRT_EXPECTED_PARAMETER_DIR="${ALCEDO_TEST_ROOT}/resources/expected_parameters/drt"
     ALCEDO_DRT_EXPECTED_PIXEL_DIR="${ALCEDO_TEST_ROOT}/resources/expected_pixels/drt")
   gtest_discover_tests(GpuDagCudaDrtProductTest TEST_PREFIX "GpuDagCudaDrtProductTest."
     PROPERTIES LABELS "gpu;edit;runtime;product")
   alcedo_register_test_target(GpuDagCudaDrtProductTest gpu)
+
+  # Geometry panel render requests through PipelineScheduler and the executor (G10.1).
+  add_executable(GpuDagCudaDocumentGeometryRequestTest
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_document_geometry_request_test.cpp)
+  target_include_directories(GpuDagCudaDocumentGeometryRequestTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(GpuDagCudaDocumentGeometryRequestTest PRIVATE
+    GTest::gtest_main EditRuntimeCuda EditInput Image EditPipeline PipelineScheduler)
+  gtest_discover_tests(GpuDagCudaDocumentGeometryRequestTest
+    TEST_PREFIX "GpuDagCudaDocumentGeometryRequestTest."
+    PROPERTIES LABELS "gpu;edit;runtime;product")
+  alcedo_register_test_target(GpuDagCudaDocumentGeometryRequestTest gpu)
 
   add_executable(GpuDagCudaMaskTest
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_mask_test.cpp)
@@ -583,7 +600,7 @@ if(ALCEDO_OPENCL_ENABLED)
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_nm2_qualification_test.cpp)
   target_include_directories(GpuDagOpenClDrtProductTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagOpenClDrtProductTest PRIVATE
-    GTest::gtest_main EditRuntimeOpenCl EditPipeline EditInput RawProcessorOp
+    GTest::gtest_main EditRuntimeOpenCl EditScope EditInput RawProcessorOp
     OpenClDemosaicNetEntry OpenClProgramLibrary Image)
   target_compile_definitions(GpuDagOpenClDrtProductTest PRIVATE
     ALCEDO_OPENCL_SHADER_SOURCE_ROOT="${ALCEDO_SRC_DIR}"

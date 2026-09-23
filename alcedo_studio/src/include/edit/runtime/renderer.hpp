@@ -20,7 +20,7 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/prepared_source_cache.hpp"
 #include "edit/input/raw_input_loader.hpp"
-#include "edit/pipeline/pipeline_apply_request.hpp"
+#include "edit/runtime/pipeline_apply_request.hpp"
 #include "edit/runtime/gpu_node_pass_stats.hpp"
 #include "edit/runtime/render_device_type.hpp"
 #include "edit/runtime/static_execution_plan_cache.hpp"

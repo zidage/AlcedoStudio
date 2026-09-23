@@ -5,7 +5,7 @@
 #ifndef ALCEDO_OPENCL_EDIT_PIPELINE_TONE_MAPPING_CL
 #define ALCEDO_OPENCL_EDIT_PIPELINE_TONE_MAPPING_CL
 
-// Mirrored from edit/pipeline/local_tone_mapping.hpp.
+// Mirrored from edit/runtime/local_tone_mapping.hpp.
 #define ALCEDO_OPENCL_HS_ACESCC_MIDDLE_GRAY 0.41358840f
 #define ALCEDO_OPENCL_HS_ACESCC_CODE_PER_EV (1.0f / 17.52f)
 #define ALCEDO_OPENCL_HS_BASE_SIGMA_R 0.07545252f

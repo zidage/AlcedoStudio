@@ -13,7 +13,7 @@
 #include <optional>
 #include <string>
 
-#include "edit/pipeline/pipeline_apply_request.hpp"
+#include "edit/runtime/pipeline_apply_request.hpp"
 #include "image/image_buffer.hpp"
 #include "io/image/image_loader.hpp"
 #include "renderer/pipeline_task.hpp"

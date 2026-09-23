@@ -16,7 +16,7 @@
 
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
-#include "edit/pipeline/local_tone_mapping.hpp"
+#include "edit/runtime/local_tone_mapping.hpp"
 #include "edit/runtime/content_key.hpp"
 #include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/grade_executor.hpp"

@@ -4,17 +4,15 @@
 
 #pragma once
 
-#include <cstdint>
-
 #include <cuda_runtime.h>
 
 #include <cstddef>
 #include <cstdint>
 
 #include "cuda/prng.hpp"
-#include "edit/operators/GPU_kernels/detail.cuh"
-#include "edit/operators/GPU_kernels/film_grain.cuh"
 #include "edit/runtime/adjustment_runtime.hpp"
+#include "edit/runtime/cuda/cuda_detail_math.cuh"
+#include "edit/runtime/cuda/cuda_film_grain_math.cuh"
 
 namespace alcedo::cuda_neighbor_grade {
 

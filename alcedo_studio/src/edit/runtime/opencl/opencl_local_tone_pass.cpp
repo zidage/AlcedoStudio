@@ -12,7 +12,7 @@
 #include <stdexcept>
 #include <string>
 
-#include "edit/pipeline/local_tone_mapping.hpp"
+#include "edit/runtime/local_tone_mapping.hpp"
 #include "edit/runtime/opencl/opencl_dag_programs.hpp"
 #include "edit/runtime/opencl/opencl_scene_work.hpp"
 #include "edit/runtime/frame_scene_binding.hpp"

@@ -13,7 +13,7 @@
 #include <string>
 
 #include "edit/pipeline/highlight_shadow_local_tone.hpp"
-#include "edit/pipeline/local_tone_mapping.hpp"
+#include "edit/runtime/local_tone_mapping.hpp"
 
 namespace alcedo {
 namespace {
@@ -56,14 +56,14 @@ auto ExtractFloatLiteral(const std::string& source, const std::string& symbol) -
 }
 
 auto AcesccDecode(float acescc) -> float {
-  constexpr float kLog2Min      = -15.0f;
-  constexpr float kLog2Denorm   = -16.0f;
-  constexpr float kDenormOffset = 0.00001525878906f;
-  constexpr float kA            = 9.72f;
-  constexpr float kB            = 17.52f;
+  constexpr float kLog2Min         = -15.0f;
+  constexpr float kLog2Denorm      = -16.0f;
+  constexpr float kDenormOffset    = 0.00001525878906f;
+  constexpr float kA               = 9.72f;
+  constexpr float kB               = 17.52f;
 
-  const float encode_floor     = (kLog2Denorm + kA) / kB;
-  const float denorm_threshold = (kLog2Min + kA) / kB;
+  const float     encode_floor     = (kLog2Denorm + kA) / kB;
+  const float     denorm_threshold = (kLog2Min + kA) / kB;
   if (acescc < encode_floor) {
     return acescc - encode_floor;
   }
@@ -80,7 +80,7 @@ auto AcesccEncode(float linear_ap1) -> float {
   constexpr float kA            = 9.72f;
   constexpr float kB            = 17.52f;
 
-  const float encode_floor = (kLog2Denorm + kA) / kB;
+  const float     encode_floor  = (kLog2Denorm + kA) / kB;
   if (linear_ap1 <= 0.0f) {
     return encode_floor + linear_ap1;
   }
@@ -92,7 +92,7 @@ auto AcesccEncode(float linear_ap1) -> float {
 
 }  // namespace
 
-TEST(LocalToneMappingContractTest, CompatibilityHeaderExportsSharedContract) {
+TEST(LocalToneMappingConstantsMatchRuntime, CompatibilityHeaderExportsRuntimeConstants) {
   EXPECT_EQ(highlight_shadow_local_tone::kMaxLevels, tone::kMaxLevels);
   EXPECT_FLOAT_EQ(highlight_shadow_local_tone::kBaseSigmaR, tone::kBaseSigmaR);
   EXPECT_FLOAT_EQ(highlight_shadow_local_tone::kHighlightStrengthScale,
@@ -100,7 +100,7 @@ TEST(LocalToneMappingContractTest, CompatibilityHeaderExportsSharedContract) {
   EXPECT_FLOAT_EQ(highlight_shadow_local_tone::kBackendAmountLimit, tone::kBackendAmountLimit);
 }
 
-TEST(LocalToneMappingContractTest, BuildSamplesCoversConfiguredGammaDomain) {
+TEST(LocalToneMappingConstantsMatchRuntime, BuildSamplesCoversConfiguredGammaDomain) {
   const auto  samples = tone::BuildSamples(0.75f, 0.65f);
   const float expected_step =
       std::max(tone::kBaseSigmaR * tone::kGammaStepScale, tone::kMinSampleStep);
@@ -120,7 +120,7 @@ TEST(LocalToneMappingContractTest, BuildSamplesCoversConfiguredGammaDomain) {
   EXPECT_FLOAT_EQ(mid.alpha, tone::DetailAlpha(mid.gamma, 0.75f, 0.65f));
 }
 
-TEST(LocalToneMappingContractTest, ReferenceCurvePreservesExpectedToneDirections) {
+TEST(LocalToneMappingConstantsMatchRuntime, ReferenceCurvePreservesExpectedToneDirections) {
   const float shadow_l    = tone::kAcesccMiddleGray - 4.5f * tone::kAcesccCodePerEv;
   const float highlight_l = tone::kAcesccMiddleGray + 5.0f * tone::kAcesccCodePerEv;
 
@@ -133,7 +133,7 @@ TEST(LocalToneMappingContractTest, ReferenceCurvePreservesExpectedToneDirections
   EXPECT_TRUE(std::isfinite(combined));
 }
 
-TEST(LocalToneMappingContractTest, DetailAlphaAndToneBetaStayBounded) {
+TEST(LocalToneMappingConstantsMatchRuntime, DetailAlphaAndToneBetaStayBounded) {
   const float deep_shadow = tone::kAcesccMiddleGray - 6.0f * tone::kAcesccCodePerEv;
   const float mid_shadow  = tone::kAcesccMiddleGray - 2.0f * tone::kAcesccCodePerEv;
 
@@ -147,7 +147,7 @@ TEST(LocalToneMappingContractTest, DetailAlphaAndToneBetaStayBounded) {
   }
 }
 
-TEST(LocalToneMappingContractTest, CacheKeysTrackAmountsFlagsAndRoi) {
+TEST(LocalToneMappingConstantsMatchRuntime, CacheKeysTrackAmountsFlagsAndRoi) {
   TestToneParams params;
   params.hs_mask_base_cache_key_ = 0x12345678ull;
   params.shadows_enabled_        = true;
@@ -175,7 +175,7 @@ TEST(LocalToneMappingContractTest, CacheKeysTrackAmountsFlagsAndRoi) {
   EXPECT_NE(roi_key, tone::BuildRoiAdjustedResultCacheKey(params, base));
 }
 
-TEST(LocalToneMappingContractTest, RoiReferenceReuseDoesNotRequireSamePresentationSize) {
+TEST(LocalToneMappingConstantsMatchRuntime, RoiReferenceReuseDoesNotRequireSamePresentationSize) {
   EXPECT_TRUE(tone::CanReuseReferenceForRoi(
       /*roi_frame_with_source_reference=*/true,
       /*reference_source_cache_valid=*/true,
@@ -204,20 +204,19 @@ TEST(LocalToneMappingContractTest, RoiReferenceReuseDoesNotRequireSamePresentati
       /*roi_reference_height=*/2731));
 }
 
-TEST(LocalToneMappingContractTest, AcesccDeltaFastPathMatchesLinearRatioInNormalRange) {
+TEST(LocalToneMappingConstantsMatchRuntime, AcesccDeltaFastPathMatchesLinearRatioInNormalRange) {
   constexpr float kDenormThreshold = (-15.0f + 9.72f) / 17.52f;
   const float     rgb[][3]         = {
-          {0.34f, 0.38f, 0.42f},
-          {0.48f, 0.50f, 0.53f},
-          {0.58f, 0.62f, 0.66f},
+      {0.34f, 0.38f, 0.42f},
+      {0.48f, 0.50f, 0.53f},
+      {0.58f, 0.62f, 0.66f},
   };
   const float deltas[] = {-0.12f, -0.03f, 0.04f, 0.18f};
 
   for (const auto& px : rgb) {
     const float source_ap1[3] = {AcesccDecode(px[0]), AcesccDecode(px[1]), AcesccDecode(px[2])};
     const float source_luma =
-        0.27222872f * source_ap1[0] + 0.67408177f * source_ap1[1] +
-        0.05368952f * source_ap1[2];
+        0.27222872f * source_ap1[0] + 0.67408177f * source_ap1[1] + 0.05368952f * source_ap1[2];
     ASSERT_GT(AcesccEncode(source_luma), kDenormThreshold);
 
     for (const float delta : deltas) {
@@ -236,13 +235,13 @@ TEST(LocalToneMappingContractTest, AcesccDeltaFastPathMatchesLinearRatioInNormal
   }
 }
 
-TEST(LocalToneMappingContractTest, ShaderMirrorConstantsMatchSharedContract) {
+TEST(LocalToneMappingConstantsMatchRuntime, LegacyShaderMirrorConstantsMatchRuntime) {
   const auto opencl = ReadSourceFile(SourcePath("edit/pipeline/opencl_shader/tone_mapping.cl"));
   const auto metal =
       ReadSourceFile(SourcePath("edit/operators/GPU_kernels/metal_shader/tone_mapping.metal"));
 
-  EXPECT_NE(opencl.find("Mirrored from edit/pipeline/local_tone_mapping.hpp"), std::string::npos);
-  EXPECT_NE(metal.find("Mirrored from edit/pipeline/local_tone_mapping.hpp"), std::string::npos);
+  EXPECT_NE(opencl.find("Mirrored from edit/runtime/local_tone_mapping.hpp"), std::string::npos);
+  EXPECT_NE(metal.find("Mirrored from edit/runtime/local_tone_mapping.hpp"), std::string::npos);
 
   EXPECT_FLOAT_EQ(ExtractFloatLiteral(opencl, "ALCEDO_OPENCL_HS_ACESCC_MIDDLE_GRAY"),
                   tone::kAcesccMiddleGray);

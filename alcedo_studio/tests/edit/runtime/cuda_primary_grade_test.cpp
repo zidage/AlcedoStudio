@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <span>
@@ -79,6 +80,58 @@ auto MakeNeighborhoodPlane(std::uint32_t width, std::uint32_t height, float surr
   }
   plane.bytes = std::const_pointer_cast<const std::byte>(storage);
   return plane;
+}
+
+/**
+ * @brief Deterministic probe with a horizontal ramp, a two-row ripple, and a sparse diagonal dot
+ *        pattern, so unsharp mask, clarity, and film grain all change pixels.
+ */
+auto MakeDetailProbePlane(std::uint32_t width, std::uint32_t height) -> HostImagePlane {
+  HostImagePlane plane;
+  plane.extent       = {width, height};
+  plane.stride_bytes = width * 16U;
+  plane.format       = HostPixelFormat::F32Rgba;
+  auto  storage      = std::shared_ptr<std::byte>(new std::byte[plane.ByteCount()],
+                                                  [](std::byte* p) { delete[] p; });
+  auto* pixels       = reinterpret_cast<float*>(storage.get());
+  for (std::uint32_t y = 0; y < height; ++y) {
+    const float ripple = (y % 4U) < 2U ? 0.85f : 1.0f;
+    for (std::uint32_t x = 0; x < width; ++x) {
+      const float ramp  = 0.04f + 0.6f * static_cast<float>(x) / static_cast<float>(width - 1U);
+      const float dot   = (x + y) % 5U == 0U ? 0.2f : 0.0f;
+      const auto  index = (static_cast<std::size_t>(y) * width + x) * 4;
+      pixels[index + 0] = ramp * ripple + dot;
+      pixels[index + 1] = ramp * 0.9f * ripple + dot;
+      pixels[index + 2] = ramp * 0.7f + dot * 0.5f;
+      pixels[index + 3] = 1.0f;
+    }
+  }
+  plane.bytes = std::const_pointer_cast<const std::byte>(storage);
+  return plane;
+}
+
+/// One neighbor-grade setting whose DRT Post display pixels are stored as expected data.
+struct NeighborGradeCase {
+  const char* expected_file;
+  float       sharpen_amount;
+  float       clarity;
+  float       film_grain;
+};
+
+constexpr NeighborGradeCase kNeighborGradeCases[] = {
+    {"cuda_neighbor_sharpen_amount80_radius2_expected_display_rgba32f.bin", 80.0f, 0.0f, 0.0f},
+    {"cuda_neighbor_clarity60_expected_display_rgba32f.bin", 0.0f, 60.0f, 0.0f},
+    {"cuda_neighbor_film_grain060_expected_display_rgba32f.bin", 0.0f, 0.0f, 0.6f},
+};
+
+auto ReadExpectedPixelBytes(const std::filesystem::path& path) -> std::vector<std::byte> {
+  std::ifstream file(path, std::ios::binary);
+  EXPECT_TRUE(file.is_open()) << path.string();
+  const std::vector<char> chars((std::istreambuf_iterator<char>(file)),
+                                std::istreambuf_iterator<char>());
+  std::vector<std::byte>  bytes(chars.size());
+  std::memcpy(bytes.data(), chars.data(), chars.size());
+  return bytes;
 }
 
 auto HasCudaDevice() -> bool {
@@ -295,6 +348,27 @@ class CudaPrimaryGradeFixture : public ::testing::Test {
         RawInputLoader::FromDirectRgb(MakeNeighborhoodPlane(width, height, surroundings, center),
                                       gpu_dag_test::FullSensor(width, height));
     plan_ = GraphCompiler::Compile(document_, prepared_.CompileSource(), request);
+  }
+
+  /// Render the detail probe through DRT Post with one neighbor-grade setting.
+  auto RenderNeighborGradeCase(const NeighborGradeCase& grade_case) -> std::vector<Rgba> {
+    constexpr std::uint32_t width  = 64;
+    constexpr std::uint32_t height = 48;
+    prepared_     = RawInputLoader::FromDirectRgb(MakeDetailProbePlane(width, height),
+                                                  gpu_dag_test::FullSensor(width, height));
+    plan_         = GraphCompiler::Compile(document_, prepared_.CompileSource(), RenderRequest{});
+    auto& sharpen = ModelByType<SharpenModel>(type_ids::Sharpen());
+    sharpen.SetAmount(grade_case.sharpen_amount);
+    sharpen.SetRadius(2.0f);
+    sharpen.SetThreshold(0.0f);
+    ModelByType<ClarityModel>(type_ids::Clarity()).SetValue(grade_case.clarity);
+    ModelByType<FilmGrainModel>(type_ids::FilmGrain()).SetValue(grade_case.film_grain);
+    const bool any_neighbor_grade = grade_case.sharpen_amount != 0.0f ||
+                                    grade_case.clarity != 0.0f || grade_case.film_grain != 0.0f;
+    const auto result = RenderThroughDrtPost();
+    EXPECT_EQ(result.post_neighborhood_count, any_neighbor_grade ? 1U : 0U)
+        << grade_case.expected_file;
+    return Download(result.display_post);
   }
 
   PreparedRawInput  prepared_;
@@ -942,4 +1016,29 @@ TEST(GpuDagCudaPrimaryGrade, ExecuteCudaCameraColorRejectsMissingCameraMatrices)
 }
 
 }  // namespace
+TEST_F(CudaPrimaryGradeFixture, CudaNeighborGradeDetailAndGrainPixelsAreUnchanged) {
+  // Each file holds the DRT Post display pixels (RGBA float32, row-major, 64x48) rendered before
+  // G10.6 moved the detail and film grain device helpers out of GPU_kernels. Film grain uses the
+  // fixed runtime seed, so every case must match bit for bit.
+  const auto directory = std::filesystem::path(ALCEDO_NEIGHBOR_GRADE_EXPECTED_PIXEL_DIR);
+  const auto identity  = RenderNeighborGradeCase({"identity", 0.0f, 0.0f, 0.0f});
+  for (const auto& grade_case : kNeighborGradeCases) {
+    const auto pixels   = RenderNeighborGradeCase(grade_case);
+    const auto expected = ReadExpectedPixelBytes(directory / grade_case.expected_file);
+    ASSERT_EQ(expected.size(), pixels.size() * sizeof(Rgba)) << grade_case.expected_file;
+    // The stored case must change the image, or it would not exercise the moved helpers.
+    EXPECT_NE(std::memcmp(expected.data(), identity.data(), expected.size()), 0)
+        << grade_case.expected_file;
+    std::size_t first_mismatch = pixels.size();
+    for (std::size_t index = 0; index < pixels.size(); ++index) {
+      if (std::memcmp(&pixels[index], expected.data() + index * sizeof(Rgba), sizeof(Rgba)) != 0) {
+        first_mismatch = index;
+        break;
+      }
+    }
+    EXPECT_EQ(first_mismatch, pixels.size())
+        << grade_case.expected_file << " differs first at pixel " << first_mismatch;
+  }
+}
+
 }  // namespace alcedo

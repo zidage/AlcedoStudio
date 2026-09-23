@@ -15,7 +15,7 @@
 #include <vector>
 
 #include "cuda_acescc.cuh"
-#include "edit/pipeline/local_tone_mapping.hpp"
+#include "edit/runtime/local_tone_mapping.hpp"
 #include "edit/runtime/cuda/cuda_local_tone_pass.hpp"
 #include "edit/runtime/cuda/cuda_render_device.hpp"
 #include "edit/runtime/cuda/cuda_scene_work.hpp"

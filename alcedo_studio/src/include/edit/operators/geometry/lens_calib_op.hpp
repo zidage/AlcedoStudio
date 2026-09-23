@@ -5,30 +5,21 @@
 #pragma once
 
 #include <filesystem>
-#include <optional>
 #include <string>
 
-#include "decoders/processor/raw_color_context.hpp"
-#include "edit/geometry/types.hpp"
-#include "edit/graph/develop_node_model.hpp"
 #include "edit/operators/op_base.hpp"
+#include "edit/runtime/lens/lens_calibration_resolver.hpp"
 
 namespace alcedo {
-struct InputMeta {
-  std::string cam_maker_         = {};
-  std::string cam_model_         = {};
-  std::string lens_maker_        = {};
-  std::string lens_model_        = {};
-  float       focal_length_mm_   = 0.0f;
-  float       aperture_f_number_ = 0.0f;
-  float       distance_m_        = 0.0f;
-  float       focal_35mm_mm_     = 0.0f;
-  float       crop_factor_hint_  = 0.0f;
-};
-
+/**
+ * @brief Legacy stage operator for lens calibration.
+ *
+ * Profile matching and coefficient sizing come from @ref LensCalibrationResolver. The GPU DAG
+ * Develop passes call the resolver directly and do not use this class.
+ */
 class LensCalibOp : public OperatorBase<LensCalibOp> {
  private:
-  mutable InputMeta     input_meta_;
+  LensInputMeta              input_meta_;
   std::filesystem::path lens_profile_db_path_;
   bool                  enabled_             = false;
   bool                  apply_vignetting_    = true;
@@ -41,17 +32,15 @@ class LensCalibOp : public OperatorBase<LensCalibOp> {
   bool                  projection_enabled_  = false;
   std::string           target_projection_   = "unknown";
   bool                  low_precision_preview_ = false;
-  mutable InputMeta     resolved_input_meta_   = {};
+  mutable LensInputMeta      resolved_input_meta_   = {};
   mutable LensCalibGpuParams resolved_params_ = {};
   mutable bool            has_resolved_params_ = false;
 
-  static auto           ProjectionFromString(const std::string& text)
-      -> LensCalibProjectionType;
-  static auto           ProjectionToString(LensCalibProjectionType projection) -> std::string;
-
   void                  ResolveRuntime(OperatorParams& params) const;
-  void                  ResolveRuntimeForMeta(const InputMeta& meta, bool dng_geometry_applied,
-                                              OperatorParams* owner) const;
+  void                  ResolveRuntimeForMeta(const LensInputMeta& meta, bool dng_geometry_applied,
+                                              OperatorParams& owner) const;
+  auto                  CorrectionSettings() const -> LensCorrectionSettings;
+  void                  BindImageExtent(int width, int height) const;
   auto                  BuildRuntimeCacheKey(const OperatorParams& params) const -> uint64_t;
 
  public:
@@ -63,20 +52,6 @@ class LensCalibOp : public OperatorBase<LensCalibOp> {
 
   LensCalibOp()                                         = default;
   LensCalibOp(const nlohmann::json& params);
-  explicit LensCalibOp(const DevelopPayload& params);
-
-  /**
-   * @brief Resolve Lensfun coefficients for one DAG Develop output.
-   *
-   * Uses prepared RAW focal/aperture metadata, then any non-empty user lens maker/model
-   * from the Develop payload. The returned uniforms are sized for the actual Develop
-   * texture and are ready for a CUDA, OpenCL, or Metal lens kernel.
-   * A disabled setting, missing profile, or profile with no requested correction returns
-   * @c std::nullopt; it does not select another backend or algorithm.
-   */
-  [[nodiscard]] auto ResolveRuntimeForImage(const RawRuntimeColorContext& context, Extent2D extent,
-                                            bool dng_geometry_applied) const
-      -> std::optional<LensCalibGpuParams>;
 
   void Apply(std::shared_ptr<ImageBuffer> input) override;
   void ApplyGPU(std::shared_ptr<ImageBuffer> input) override;

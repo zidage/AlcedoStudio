@@ -22,7 +22,7 @@
 #include "edit/mask/mask_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/operator_type_id.hpp"
-#include "edit/pipeline/local_tone_mapping.hpp"
+#include "edit/runtime/local_tone_mapping.hpp"
 #include "edit/runtime/develop_demosaic.hpp"
 
 namespace alcedo {
