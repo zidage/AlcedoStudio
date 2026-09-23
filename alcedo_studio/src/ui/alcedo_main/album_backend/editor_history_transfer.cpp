@@ -4,6 +4,7 @@
 
 #include "ui/alcedo_main/album_backend/editor_history_transfer.hpp"
 
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <unordered_set>
@@ -11,7 +12,6 @@
 
 #include "app/document_transfer.hpp"
 #include "app/document_transfer_planner.hpp"
-#include "app/editor_adjustment_pipeline.hpp"
 #include "app/editor_pipeline_command_service.hpp"
 #include "app/pipeline_document_history.hpp"
 #include "app/pipeline_history_applier.hpp"
@@ -20,7 +20,6 @@
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/mini_git_working_history.hpp"
 #include "edit/history/version_ref.hpp"
-#include "edit/pipeline/pipeline_cpu.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_shared_helpers.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_state_detail.hpp"
 
@@ -43,8 +42,7 @@ struct LivePastePriorState {
   alcedo::MiniGitWorkingSelection selection;
   bool dirty = false;
   bool serialized = false;
-  bool recovered = false;
-  std::optional<alcedo::PipelineDocument> document;
+  bool                                      recovered  = false;
   std::optional<alcedo::EditorRenderReason> published_reason;
 };
 
@@ -57,9 +55,6 @@ auto CaptureLivePastePrior(HistoryWorkingState& state, EditorHistoryState& histo
   prior.serialized = state.pipeline_guard->serialized_state_needs_writeback_;
   prior.recovered = state.recovered_head;
   prior.published_reason = history_state.LastPublishedRenderReason();
-  if (state.pipeline_guard->document_) {
-    prior.document = alcedo::ClonePipelineDocument(*state.pipeline_guard->document_);
-  }
   return prior;
 }
 
@@ -71,15 +66,6 @@ void RestoreLivePastePrior(HistoryWorkingState& state, EditorHistoryState& histo
   state.pipeline_guard->serialized_state_needs_writeback_ = prior.serialized;
   state.recovered_head = prior.recovered;
   history_state.RecordPublishedRenderReason(prior.published_reason);
-  if (prior.document.has_value() && state.pipeline_guard->document_) {
-    if (state.pipeline_guard->pipeline_) {
-      std::unique_lock<std::mutex> render_lock(state.pipeline_guard->pipeline_->GetRenderLock());
-      *state.pipeline_guard->document_ = alcedo::ClonePipelineDocument(*prior.document);
-      state.pipeline_guard->pipeline_->SetPipelineDocument(state.pipeline_guard->document_, false);
-    } else {
-      *state.pipeline_guard->document_ = alcedo::ClonePipelineDocument(*prior.document);
-    }
-  }
 }
 
 }  // namespace
@@ -168,21 +154,20 @@ auto EditorHistoryTransfer::PasteLiveRootRelativeVersion(
     return true;
   };
 
-  {
-    std::unique_lock<std::mutex> render_lock(state->pipeline_guard->pipeline_->GetRenderLock());
-    *state->pipeline_guard->document_ =
-        alcedo::ClonePipelineDocument(*state->pipeline_guard->root_document_);
-    if (!alcedo::ApplyPipelineEditBatch(*state->pipeline_guard->document_, prepared.batch,
-                                        alcedo::PipelineEditApplyDirection::Forward, error)) {
-      (void)rollback_after_version();
-      return false;
-    }
-    state->pipeline_guard->pipeline_->SetPipelineDocument(state->pipeline_guard->document_, false);
-    if (!alcedo::RemirrorCurrentPanelFromDocument(*state->pipeline_guard->pipeline_,
-                                                  *state->pipeline_guard->document_, error)) {
-      (void)rollback_after_version();
-      return false;
-    }
+  // Build phase: the pasted Version document is the root plus the paste batch. It stays
+  // private until the WAL append below succeeds.
+  std::shared_ptr<alcedo::PipelineDocument> pasted_document;
+  try {
+    pasted_document = std::make_shared<alcedo::PipelineDocument>(
+        alcedo::ClonePipelineDocument(*state->pipeline_guard->root_document_));
+  } catch (const std::exception& ex) {
+    (void)rollback_after_version();
+    return SetError(error, ex.what());
+  }
+  if (!alcedo::ApplyPipelineEditBatch(*pasted_document, prepared.batch,
+                                      alcedo::PipelineEditApplyDirection::Forward, error)) {
+    (void)rollback_after_version();
+    return false;
   }
 
   const auto prepared_edit = state->history->PrepareAppendEdit(prepared.batch);
@@ -199,6 +184,12 @@ auto EditorHistoryTransfer::PasteLiveRootRelativeVersion(
       return false;
     }
     return SetError(error, appended.error.empty() ? "Paste WAL append failed" : appended.error);
+  }
+
+  // Swap phase: the new Version head is published, so bind its document. This cannot fail.
+  {
+    auto render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
+    (void)alcedo::BindLivePipelineDocument(*state->pipeline_guard, std::move(pasted_document));
   }
 
   state_.RecordPublishedRenderReason(alcedo::RenderReasonForBatch(prepared.batch));

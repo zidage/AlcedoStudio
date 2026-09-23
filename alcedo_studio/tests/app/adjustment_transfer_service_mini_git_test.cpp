@@ -6,10 +6,12 @@
 
 #include <algorithm>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 
 #include "app/adjustment_transfer_package_builder.hpp"
 #include "app/adjustment_transfer_service.hpp"
+#include "app/editor_pipeline_command_service.hpp"
 #include "app/pipeline_service.hpp"
 #include "edit/graph/adjustment_ownership.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
@@ -20,8 +22,8 @@
 #include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/history/version_ref.hpp"
 #include "edit/operators/basic/color_temp_op.hpp"
-#include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/geometry/lens_calib_op.hpp"
+#include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/op_base.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
 #include "support/document_transfer_test_support.hpp"
@@ -41,6 +43,18 @@ auto MakeContrastPackage(float contrast_value) -> AdjustmentTransferPackage {
   test::PatchDocumentField(&document, test::ColorGradeFieldTarget("contrast"),
                            nlohmann::json{{"contrast", contrast_value}});
   return CaptureDocumentTransfer(document);
+}
+
+/// Current-panel (Default Color Grade) exposure read from @p document, the only parameter store.
+/// Paste remaps node ids, so the target is resolved from the document.
+auto DocumentExposureEv(const PipelineDocument& document) -> double {
+  std::string    error;
+  const auto     target = CompleteCurrentPanelParameterTarget(document, "exposure", &error);
+  nlohmann::json json;
+  if (!target.has_value() || !ReadEditorParameterJson(document, *target, &json, &error)) {
+    throw std::runtime_error(error);
+  }
+  return json.at("exposure_ev").get<double>();
 }
 
 // ============================================================================
@@ -117,6 +131,49 @@ TEST_F(AdjustmentTransferPasteMergeTest,
 }
 
 /// Paste with an empty package returns an error.
+/// Library Paste (AdjustmentTransferApplyCoordinator flow): the pasted Version document is built
+/// from the root and bound by swapping the pointer. The stage table is exported only to prove that
+/// Paste no longer mirrors document values into it.
+TEST_F(AdjustmentTransferPasteMergeTest, PasteAsNewVersionBindsTargetDocumentWithoutMirror) {
+  constexpr sl_element_id_t kElement = 303;
+  auto                      guard    = pipeline_service_->LoadEditorPipeline(kElement);
+  ASSERT_TRUE(guard && guard->pipeline_ && guard->commit_graph_ && guard->root_document_);
+  auto&          graph = *guard->commit_graph_;
+
+  nlohmann::json stage_table_before;
+  {
+    std::unique_lock<std::mutex> lock(guard->pipeline_->GetRenderLock());
+    stage_table_before = guard->pipeline_->ExportPipelineParams();
+  }
+  const auto prior_document = guard->document_;
+  const auto prior_exposure = DocumentExposureEv(*prior_document);
+  const auto prior_version  = graph.GetActiveVersionId();
+  const auto expected_state = graph.GetImageEditState();
+
+  const auto pasted         = AdjustmentTransferService::PasteAsRootRelativeVersion(
+      graph, *guard->root_document_, MakeExposurePackage(1.75f), "Pasted");
+  ASSERT_TRUE(pasted.pasted) << pasted.error;
+  std::string error;
+  ASSERT_TRUE(pipeline_service_->RebuildActiveEditorPipeline(guard, &error)) << error;
+
+  EXPECT_EQ(graph.GetActiveVersionId(), pasted.new_version_id);
+  EXPECT_NE(graph.GetActiveVersionId(), prior_version);
+  EXPECT_EQ(guard->working_head_commit_hash(), pasted.new_head);
+  EXPECT_NE(guard->document_, prior_document);
+  EXPECT_DOUBLE_EQ(DocumentExposureEv(*guard->document_), 1.75);
+  EXPECT_DOUBLE_EQ(DocumentExposureEv(*prior_document), prior_exposure)
+      << "the swapped-out document is not changed";
+  {
+    std::unique_lock<std::mutex> lock(guard->pipeline_->GetRenderLock());
+    EXPECT_EQ(guard->pipeline_->GpuDagDocument(), guard->document_);
+    EXPECT_EQ(guard->pipeline_->ExportPipelineParams(), stage_table_before);
+  }
+  EXPECT_TRUE(guard->serialized_state_needs_writeback_);
+
+  ASSERT_TRUE(pipeline_service_->PersistEditorHistoryState(guard, expected_state, &error)) << error;
+  pipeline_service_->SavePipeline(guard);
+}
+
 TEST_F(AdjustmentTransferPasteMergeTest, PasteWithEmptyPackageReturnsError) {
   const auto                element_id = test::EditorMiniGitProjectFixture::kElementA;
   auto*                     graph      = project_.graph(element_id).get();

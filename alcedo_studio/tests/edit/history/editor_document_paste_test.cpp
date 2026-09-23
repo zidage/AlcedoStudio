@@ -201,6 +201,7 @@ TEST_F(EditorDocumentPasteTest, FailedPasteCreatesNoVersionCommitHeadMoveOrRende
   const auto prior_head    = guard_->working_head_commit_hash();
   const auto prior_reason  = history_.LastPublishedRenderReason();
   const auto prior_hash    = alcedo::CanonicalPipelineDocumentJson(*guard_->document_);
+  const auto prior_document = guard_->document_;
 
   alcedo::AdjustmentPasteResult empty_result;
   EXPECT_FALSE(history_.PasteLiveRootRelativeVersion(handle, alcedo::AdjustmentTransferPackage{},
@@ -232,6 +233,8 @@ TEST_F(EditorDocumentPasteTest, FailedPasteCreatesNoVersionCommitHeadMoveOrRende
   EXPECT_EQ(guard_->working_head_commit_hash(), prior_head);
   EXPECT_EQ(history_.LastPublishedRenderReason(), prior_reason);
   EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(*guard_->document_), prior_hash);
+  // Build-then-swap: a failed Paste never binds its built document.
+  EXPECT_EQ(guard_->document_, prior_document);
 }
 
 TEST_F(EditorDocumentPasteTest, FailedPasteWalAppendCreatesNoVersionCommitHeadMoveOrRender) {
@@ -252,6 +255,7 @@ TEST_F(EditorDocumentPasteTest, FailedPasteWalAppendCreatesNoVersionCommitHeadMo
   const auto prior_head    = guard_->working_head_commit_hash();
   const auto prior_reason  = history_.LastPublishedRenderReason();
   const auto prior_hash    = alcedo::CanonicalPipelineDocumentJson(*guard_->document_);
+  const auto prior_document = guard_->document_;
 
   alcedo::AdjustmentPasteResult paste_result;
   EXPECT_FALSE(history_.PasteLiveRootRelativeVersion(
@@ -264,6 +268,8 @@ TEST_F(EditorDocumentPasteTest, FailedPasteWalAppendCreatesNoVersionCommitHeadMo
   EXPECT_EQ(guard_->working_head_commit_hash(), prior_head);
   EXPECT_EQ(history_.LastPublishedRenderReason(), prior_reason);
   EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(*guard_->document_), prior_hash);
+  // Build-then-swap: a failed Paste never binds its built document.
+  EXPECT_EQ(guard_->document_, prior_document);
 
   std::error_code ec;
   std::filesystem::remove(journal_path_.parent_path() / "not-a-directory", ec);

@@ -4,7 +4,9 @@ Date: 2026-09-22
 
 Status: **in progress**. G10.1: automated criteria complete; manual Geometry panel check pending
 (Section 10.12). G10.2: automated criteria complete; manual Exposure/Undo/Redo check pending; landed
-as two commits because the diff passed the 2000-line limit (Section 11.12). G10.3–G10.11 planned.
+as two commits because the diff passed the 2000-line limit (Section 11.12). G10.3: build-then-swap
+complete; manual Version/Paste check pending, and the last stage-JSON callers belong to G10.4 and
+G10.7 (Section 12.12). G10.4–G10.11 planned.
 
 Parent: [GPU DAG Pipeline Rebuild Phase Plan](gpu_dag_pipeline_rebuild_phase_plan.md),
 Section 44 (G10) and Section 47 (global completion criteria).
@@ -619,7 +621,7 @@ lines. Generated expected-pixel files and temporary evidence do not count.
 | --- | --- | --- | --- | ---: | --- |
 | G10.1 | No product code reads stage-table values except the mirror itself; Geometry panel shows the uncropped source | scheduler, import, transfer, lens catalog, executor, render request | — | 1200–1700 | partial (manual check pending) |
 | G10.2 | Live edit, commit, Undo, Redo use the document only | history mutation, edit controller, render port | G10.1 | 1200–1800 | partial (manual check pending; split into two commits) |
-| G10.3 | Open, checkout, rebuild, Version refs, Paste use build-then-swap without stage JSON | pipeline service, history state, transfer | G10.2 | 1200–1800 | planned |
+| G10.3 | Open, checkout, rebuild, Version refs, Paste use build-then-swap without stage JSON | pipeline service, history state, transfer | G10.2 | 1200–1800 | partial (manual check pending) |
 | G10.4 | Legacy history store removed; project format `0.9.0` | sleeve, storage, history, journal, CI | G10.3 | 900–1500 | planned |
 | G10.5 | DRT resolution moved out of `ODT_Op` and `OperatorParams` on three backends | runtime DRT | G10.1 | 1300–1900 | planned |
 | G10.6 | Lens resolver, CUDA detail and grain helpers, shared headers, shaders, and scope target moved | runtime, CMake | G10.5 | 1000–1700 | planned |
@@ -1300,7 +1302,7 @@ ctest --test-dir build/debug -j 4 -R "EditorSession|EditorMiniGit|EditorAdjustme
 
 - Manual verification: not run.
 - Evidence path: `build/tmp/g10_2/` (`baseline_build.log`, `baseline_ctest.log`,
-  `recorded_hashes.txt`, `build_2.log`, `build_all_k.log`, `ctest_final.log`, `ctest_wide.log`,
+  `recorded_hashes.txt`, `build_2.log`, `build_all_k.log`, `build_final.log`, `ctest_final.log`, `ctest_wide.log`,
   `head_two_ctest.log`, `head_wide_ctest.log`, `five_serial_after.log`).
 - Diff size: 2435 lines (506 added, 1929 removed), 47 files, before this completion
   record. This is above the 1200–1800 estimate
@@ -1409,9 +1411,10 @@ cases in the `ctest` environment first.
 
 ### 12.10 Exit criteria
 
-- [ ] All listed tests pass.
+- [x] All listed tests pass.
 - [ ] `ExportPipelineParams` and `ImportPipelineParams` have no caller in `alcedo_studio/src`
-      outside `edit/pipeline/`.
+      outside `edit/pipeline/`. Partly met: no rollback path calls them. The remaining callers
+      belong to G10.4 and G10.7 (see the completion record).
 - [ ] Manual check on Windows CUDA: create Version B, switch A → B → A, Paste to another image;
       viewer, history rows, and Version rail match. Record it as manual evidence.
 
@@ -1422,6 +1425,213 @@ cases in the `ctest` environment first.
 ### 12.12 Completion record
 
 Use the template in Section 10.12.
+
+#### Phase G10.3 completion record (2026-09-22)
+
+**Status:** partial. Every document replacement uses build-then-swap, and no rollback path copies
+the prior document or stage JSON. The manual Windows CUDA check (Section 12.10, third item) needs
+the user. The second exit criterion is met only for the paths this phase owns (see "Deviations").
+
+- **Source revision and branch:** based on `cd0a4f2e` (G10.2 merged) on
+  `refact/gpu-dag-g10-3-build-then-swap`. Not committed yet.
+- **Actual changed modules:** `app/` (`pipeline_service`, `editor_adjustment_pipeline`,
+  `adjustment_transfer_types.hpp` comment), `ui/alcedo_main/album_backend/` (history state detail,
+  Version refs, history mutation, history transfer, transfer apply coordinator), tests, test CMake,
+  and the source check script.
+
+**Implemented behavior**
+
+- `BindLivePipelineDocument` is now the swap step: it takes a `shared_ptr`, is `noexcept`, moves the
+  pointer into the guard, forwards it to the renderers, and returns the prior pointer. It copies and
+  validates nothing.
+- `PipelineMgmtService` (anonymous namespace): `BuildLiveDocumentFromRoot` replays the root through
+  the first-parent chain and calls `BindRootCameraProfile` (`EnsureRenderableCameraProfile`, then
+  `BindImportedCameraProfile` when the root has a RAW color context). It touches neither the guard
+  nor the executor.
+- `CheckoutVersion` follows Section 6.3: build, then one render lock scope that sets the active
+  Version and swaps. `prior_document`, `prior_params`, `restore_prior`, and the "fatal editor
+  session" restore messages are deleted because nothing can fail after the swap.
+- `RebuildActiveEditorPipeline` and editor open (`LoadEditorPipeline`, both the checkpoint path and
+  the replay path) use the same build-then-swap. The checkpoint path no longer calls
+  `SetExecutionStages()`. `ReplayLiveDocumentFromRoot`, `ImportSerializedPipelineState`, and
+  `BindLiveDocument` are deleted.
+- Replay paths no longer call `InjectRawMetadata`. The document part of that call
+  (`BindImportedCameraProfile`) now runs on the new document before the swap. Its stage writes had
+  no reader after G10.1. Import (`InitializeImageRoot`) still calls it until G10.7.
+- `editor_adjustment_pipeline`: `ApplyVersionHeadToLivePipeline`,
+  `RemirrorCurrentPanelFromDocument`, `ResetEditableOperatorsToDefaultsPreservingImageLocal`,
+  `IsImageLocalParamKey`, `MergePreservingImageLocal`, and every private stage helper are deleted
+  (the `.cpp` is 151 lines, was 438). It keeps `FieldSpec`, `ResolveEditorAdjustmentField`,
+  `EditorAdjustmentFieldKey` (G10.7), and `EditorAdjustmentDocumentParamsFromWrite`.
+- History state detail: `ReplayWorkingDocumentFromImmutableRoot` builds, then swaps. WAL recovery
+  restores only the graph on failure, because a failed rebuild leaves the prior document bound.
+- Version refs and history mutation checkout: the prior state keeps the prior document pointer
+  instead of a clone plus stage JSON. A failure after the swap (Version selection, projection, or
+  history persistence) binds that pointer back. The swapped-out document is never changed, so no
+  copy is needed.
+- Live Paste (`PasteLiveRootRelativeVersion`): the pasted document is built privately (root clone
+  plus the paste batch) and swapped in only after the WAL append succeeds. The Paste mirror
+  (`RemirrorCurrentPanelFromDocument`), the prior-document clone, and the in-place overwrite of the
+  live document are deleted. `CancelLivePaste` was already deleted in G10.2.
+- Transfer apply coordinator: `restore_prior` binds the prior document pointer back instead of
+  replaying the prior Version again, and it also restores `dirty_`.
+- Source checks: `app/editor_adjustment_pipeline.cpp` left the allowed list of
+  `NoProductCodeReadsStageTableOutsideMirror`. New check
+  `NoProductCodeUsesStageJsonOutsideLegacyOwners` (and its negative case
+  `StageJsonCheckRejectsRollbackOutsideLegacyOwners`) fails when a product file outside
+  `edit/pipeline/` and the listed legacy owners calls `ExportPipelineParams(` or
+  `ImportPipelineParams(`.
+
+**Deviations from Sections 12.3–12.8**
+
+- Exit criterion 2 cannot be met in this phase. The remaining callers are the legacy history store
+  (`app/editor_history_materializer.cpp`, `edit/history/edit_history.cpp`,
+  `edit/history/version.cpp`), which G10.4 removes, and the stage-JSON import in
+  `storage/mapper/pipeline/pipeline_mapper.cpp`, which G10.7 removes. None of them is a rollback
+  path. The new source check names exactly these owners, so G10.4 and G10.7 must delete their
+  entries.
+- `ReopenWithMatchingCheckpointSkipsReplay` and `ReopenWithStaleCheckpointReplaysFromRoot` are in
+  `PipelineMapperTest`, not `EditorCheckpointNavigationTest`. That target is a QML lock-policy test
+  with no pipeline service. They are the former
+  `MatchingDocumentCheckpointSkipsFirstParentReplay` and
+  `StaleDocumentCheckpointReplaysHistoryAndNeedsWriteback`, renamed and extended to assert the
+  replay count and that the executor renders the guard's document.
+- `CheckoutAndPasteHashesAreUnchanged` is in `EditorSessionHistoryPortTest`, not
+  `AdjustmentTransferServiceMiniGitTest`, because it drives the live Paste and checkout through the
+  history port (the code this phase changed). The values were recorded at `cd0a4f2e`, not
+  `92085ffe`; G10.1 and G10.2 did not change batch or hash inputs. The test pins the root id, the
+  `CommitClock`, and the Paste identity source (`CountingTransferIdentitySource`). Without the
+  identity source, the Paste hash changes on every run because Paste generates new node ids.
+- `PasteAsNewVersionBindsTargetDocumentWithoutMirror` proves "no mirror" by asserting that
+  `ExportPipelineParams()` is equal before and after Paste, like G10.2. The test target still links
+  the executor. At `cd0a4f2e` the same test fails at exactly that assertion.
+- Failure injection uses a commit whose batch targets a missing Color Grade node
+  (`grade.does_not_exist`), which already existed in `EditorVersionCheckoutTest`. No production test
+  hook was added.
+- The `EditorVersionCheckoutTest` fixture never binds its document to the executor. The two tests
+  that assert the executor's document bind it first, as production does.
+- Added beyond Section 12.8: `ActiveVersionRebuildFailureKeepsPriorDocumentPointer`
+  (`PipelineMapperTest`), and prior-pointer assertions in `FailedCheckoutRestoresPriorVersionAndDocument`
+  and the two failed-Paste tests in `EditorDocumentPasteTest`.
+
+**Primary success call chain:**
+
+```text
+Checkout (EditorSessionController::CheckoutVersion -> ... -> EditorHistoryMutation::CheckoutVersion)
+  -> PipelineMgmtService::CheckoutVersion
+       GetVersionRef(target).head_commit_hash; decode immutable root state
+       BuildLiveDocumentFromRoot: ReplayPipelineDocumentFromRoot + BindRootCameraProfile
+       render lock { graph.SetActiveVersionId(target); BindLivePipelineDocument(guard, doc) }
+       serialized_state_needs_writeback_ = true; dirty_ = true
+  -> MiniGitWorkingHistory::SelectVersion -> RefreshPanelProjectionFromDocument
+
+Editor open without a matching checkpoint
+  -> LoadEditorPipeline -> BuildLiveDocumentFromRoot(active head) -> render lock { swap }
+
+Live Paste
+  -> EditorHistoryTransfer::PasteLiveRootRelativeVersion
+       DocumentTransferPlanner::Plan(root) -> new Version ref -> SelectVersion -> persist Version
+       build: clone(root) + ApplyPipelineEditBatch(paste batch)          (private document)
+       PrepareAppendEdit -> PublishPreparedEdit                           (WAL append, head move)
+       render lock { BindLivePipelineDocument(guard, pasted) }
+
+Library Paste
+  -> AdjustmentTransferApplyCoordinator: PasteAsRootRelativeVersion(graph, root)
+  -> RebuildActiveEditorPipeline (build-then-swap) -> PersistEditorHistoryState -> SavePipeline
+```
+
+**Primary failure and restore call chain:**
+
+```text
+ReplayPipelineDocumentFromRoot fails at commit N (checkout, rebuild, open, Version ref, recovery)
+  -> BuildLiveDocumentFromRoot returns null with the replay error
+  -> no swap: guard.document_ and the renderer keep the prior pointer
+  -> CheckoutVersion / RebuildActiveEditorPipeline return false with the replay error
+     (rebuild prefixes "PipelineMgmtService: active Version rebuild failed: ")
+  -> active Version, dirty_, and serialized_state_needs_writeback_ are unchanged
+
+A step after the swap fails (Version selection, panel projection, history persistence)
+  -> the caller binds the prior pointer back with BindLivePipelineDocument (no copy)
+  -> graph, working selection, and flags are restored from the captured prior state
+
+Paste batch apply or WAL append fails
+  -> the private pasted document is dropped; it was never bound
+  -> RestoreLivePastePrior restores graph, selection, flags, and render reason
+```
+
+**What was proven (executed tests)**
+
+| Required name | Target | Result |
+| --- | --- | --- |
+| `CheckoutReplayFailureKeepsPriorVersionAndDocumentPointer` | `PipelineMapperTest` | PASS |
+| `CheckoutSuccessBindsReplayedDocumentAndMarksWriteBack` | `PipelineMapperTest` | PASS |
+| `ReopenWithMatchingCheckpointSkipsReplay` | `PipelineMapperTest` (see deviations) | PASS |
+| `ReopenWithStaleCheckpointReplaysFromRoot` | `PipelineMapperTest` (see deviations) | PASS |
+| `PasteAsNewVersionBindsTargetDocumentWithoutMirror` | `AdjustmentTransferServiceMiniGitTest` | PASS (fails at `cd0a4f2e` on the stage-table assertion) |
+| `VersionRefRestoreFailureKeepsPriorDocument` | `EditorSessionHistoryPortTest` | PASS (fails at `cd0a4f2e`: the old restore bound a clone) |
+| `CheckoutAndPasteHashesAreUnchanged` | `EditorSessionHistoryPortTest` (see deviations) | PASS (edit `b6cf9394…`/`e89bc194…`, Paste `1e665f1b…`/`1145a857…`, same as recorded) |
+| `ActiveVersionRebuildFailureKeepsPriorDocumentPointer` (added) | `PipelineMapperTest` | PASS (fails at `cd0a4f2e`) |
+| `NoProductCodeUsesStageJsonOutsideLegacyOwners` (added) | ctest script | PASS |
+| `StageJsonCheckRejectsRollbackOutsideLegacyOwners` (added) | ctest script | PASS |
+| `NoProductCodeReadsStageTableOutsideMirror` | ctest script | PASS (allowed list no longer has `editor_adjustment_pipeline.cpp`) |
+
+**Build and test commands with exit codes**
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target PipelineMapperTest EditorCheckpointNavigationTest EditorCheckpointQmlIntegrationTest AdjustmentTransferServiceMiniGitTest AdjustmentTransferServiceTest EditorSessionHistoryPortTest PipelineHistoryApplierTest PipelineDocumentCheckpointTest ThumbnailServiceTest alcedo_main   -> exit 0
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 -- -k 0   -> exit 0
+ctest --test-dir build/debug -j 1 -R "PipelineMapperTest|EditorCheckpoint|AdjustmentTransfer|EditorSessionHistoryPortTest|PipelineHistoryApplierTest|PipelineDocumentCheckpointTest|NoProductCodeReadsStageTableOutsideMirror|StageTableReadCheck|NoProductCodeUsesStageJson|StageJsonCheck"   -> exit 8 (4 failures from before this phase)
+ThumbnailServiceTest.exe --gtest_filter=-*Fuzz*:*Stress*   (run directly from its _runtime directory)
+```
+
+**Discovered / passed / failed / skipped counts**
+
+- `PipelineMapperTest` must run with `-j 1`: every case uses the same temp database
+  (`sleeve_service_test.db`). At `-j 4` about 15 cases fail on the unchanged branch.
+- Baseline (`cd0a4f2e` production code with the new tests, Section 12.9 set, `-j 1`): 230 run,
+  221 passed, 9 failed, 2 disabled. 5 of the 9 are the new or extended tests above, which fail on
+  the old code as expected (the hash test failed only on its placeholder values while they were
+  being recorded).
+- After the change (same set plus the two new source checks, `-j 1`): 232 run, 228 passed,
+  4 failed, 2 disabled (`FuzzTest`, `ThreadSafeTest`).
+- The 4 failures are the same at `cd0a4f2e`: `PipelineDocumentCheckpointTest.PipelineDocumentCheckpointFormat.{FullDocumentExpectedSerializedWithGradesAndMasksRemainsStable,
+  RootExpectedSerializedBindsOwnerDocumentAndDevelopIdentity,
+  CheckpointExpectedSerializedCarriesRootHeadChainAndDocument}` (stored expected JSON) and
+  `PipelineHistoryApplierTest.ParameterForwardInverseRestoresDocumentHash`
+  (`Unknown parameter: color_temp.lens_maker`).
+- `ThumbnailServiceTest` (no ctest discovery; the 50,000-iteration fuzz case was excluded because
+  it did not finish in 10 minutes): after the change 24 run, 19 passed, 5 failed; at `cd0a4f2e`
+  24 run, 20 passed, 4 failed. The same 4 fail on both (`ThumbnailRenderUsesInjectedRawMetadataForDng`,
+  `DiskCacheTracksRootAndActiveHeadAndServesAfterPipelineIsRemoved`, `MissingPipelineThrows`,
+  `MissingImageThrows`). The fifth, `AnalysisRenditionRendersWithoutSavePipelineOnLiveGuard`, is a
+  timing race on `live_guard->pin_count_` (gtest printed `1` for both sides). With
+  `--gtest_repeat=8` it failed 3 of 8 after the change and 1 of 8 at `cd0a4f2e`, at the same
+  assertion. The analysis render path (`LoadPipeline`) is not changed by this phase.
+- Wider regression after a full tree build (`-j 1`, regex
+  `EditorSession|EditorVersion|EditorDocument|EditorNode|EditorMiniGit|EditorHistory|EditorSaveCheckpoint|AdjustmentTransfer|PipelineMapper|PipelineHistory|PipelineDocument|PipelineEditBatch|CommitGraph|EditorCheckpoint|legacy_removal|NoProductCode|StageTable|StageJson`):
+  864 run, 850 passed, 14 failed, 3 disabled. All 14 fail before this phase: the 5
+  `EditorSessionRenderSchedulerPortTest` sink-bind cases (G10.1 record), the 2
+  `EditorSessionCommandQueueBaselineTest`/`EditorSessionActionPolicyCq3Test` cases (G10.2 record),
+  3 `EditorNodeDelegateQml` cases that search the unchanged QML source text, and the 4 baseline
+  failures above.
+
+**Other evidence**
+
+- Manual verification: not run.
+- Evidence path: `build/tmp/g10_3/` (`baseline_build.log`, `baseline_ctest_serial.log`,
+  `baseline_failures_detail.log`, `recorded_hashes.txt`, `build.log`, `build_2.log`,
+  `build_all_k.log`, `build_final.log`, `ctest_final.log`, `ctest_wide.log`, `thumbnail_service_after.log`,
+  `thumbnail_service_baseline.log`, `thumbnail_analysis_repeat.log`,
+  `thumbnail_analysis_repeat_baseline.log`).
+- Diff size: 1195 lines (527 added, 668 removed), 18 files, without this plan file. This is
+  below the 1200–1800 estimate.
+- LOC note: `pipeline_service.cpp` is 1255 lines (was 1340) and `editor_history_mutation.cpp` is
+  1121 lines (was 1132). Both were above 1000 lines before this phase, and this phase only shrinks
+  them. G10.7 removes the stage defaults from `pipeline_service.cpp`.
+- Remaining defects or unavailable platforms: the manual check above. Metal and OpenCL builds did
+  not run; the changed code is backend-neutral. The stage table still receives writes from open
+  and import (`EnsureDefault*`, `ResyncGlobalParamsFromOperators`, `InjectRawMetadata` in
+  `InitializeImageRoot`), which G10.7 removes.
 
 ---
 

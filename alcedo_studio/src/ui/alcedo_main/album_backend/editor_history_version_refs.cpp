@@ -5,18 +5,16 @@
 #include "ui/alcedo_main/album_backend/editor_history_version_refs.hpp"
 
 #include <ctime>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <utility>
 
-#include <mutex>
-
-#include "app/editor_adjustment_pipeline.hpp"
 #include "app/pipeline_service.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/mini_git_working_history.hpp"
-#include "json.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_shared_helpers.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_state_detail.hpp"
 
@@ -29,8 +27,9 @@ struct NamedRefPriorState {
   bool dirty = false;
   bool serialized = false;
   bool recovered = false;
-  std::optional<alcedo::PipelineDocument> document;
-  nlohmann::json params;
+  /// The document bound before the operation. Replay swaps in a new document and never
+  /// changes this one, so a restore binds it back without a copy.
+  std::shared_ptr<alcedo::PipelineDocument> document;
 };
 
 auto CaptureNamedRefPrior(HistoryWorkingState& state) -> NamedRefPriorState {
@@ -40,11 +39,7 @@ auto CaptureNamedRefPrior(HistoryWorkingState& state) -> NamedRefPriorState {
   prior.dirty = state.pipeline_guard->dirty_;
   prior.serialized = state.pipeline_guard->serialized_state_needs_writeback_;
   prior.recovered = state.recovered_head;
-  if (state.pipeline_guard->pipeline_ && state.pipeline_guard->document_) {
-    auto render_lock = LockLivePipeline(*state.pipeline_guard->pipeline_);
-    prior.document   = alcedo::ClonePipelineDocument(*state.pipeline_guard->document_);
-    prior.params     = state.pipeline_guard->pipeline_->ExportPipelineParams();
-  }
+  prior.document   = state.pipeline_guard->document_;
   return prior;
 }
 
@@ -54,14 +49,12 @@ void RestoreNamedRefPrior(HistoryWorkingState& state, const NamedRefPriorState& 
   state.pipeline_guard->dirty_ = prior.dirty;
   state.pipeline_guard->serialized_state_needs_writeback_ = prior.serialized;
   state.recovered_head = prior.recovered;
-  if (!prior.document.has_value() || !state.pipeline_guard->pipeline_) {
+  if (!prior.document || prior.document == state.pipeline_guard->document_ ||
+      !state.pipeline_guard->pipeline_) {
     return;
   }
   auto render_lock = LockLivePipeline(*state.pipeline_guard->pipeline_);
-  alcedo::BindLivePipelineDocument(*state.pipeline_guard,
-                                   alcedo::ClonePipelineDocument(*prior.document));
-  state.pipeline_guard->pipeline_->ImportPipelineParams(prior.params);
-  state.pipeline_guard->pipeline_->SetExecutionStages();
+  (void)alcedo::BindLivePipelineDocument(*state.pipeline_guard, prior.document);
 }
 
 void PublishNamedRefSuccess(HistoryWorkingState& state) {

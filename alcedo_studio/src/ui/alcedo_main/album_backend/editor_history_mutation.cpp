@@ -976,18 +976,9 @@ auto EditorHistoryMutation::CheckoutVersion(const alcedo::EditorHistoryGuardHand
   const bool prior_dirty      = state->pipeline_guard->dirty_;
   const bool prior_serialized = state->pipeline_guard->serialized_state_needs_writeback_;
   const bool prior_recovered  = state->recovered_head;
-  std::optional<alcedo::PipelineDocument> prior_document;
-  nlohmann::json                          prior_params;
-  if (state->pipeline_guard->pipeline_ && state->pipeline_guard->document_) {
-    try {
-      auto render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
-      prior_document   = alcedo::ClonePipelineDocument(*state->pipeline_guard->document_);
-      prior_params     = state->pipeline_guard->pipeline_->ExportPipelineParams();
-    } catch (const std::exception& ex) {
-      if (error) *error = ex.what();
-      return false;
-    }
-  }
+  // Checkout swaps in a new document and never changes this one, so a restore after a later
+  // failure binds this pointer back without a copy.
+  const auto prior_document   = state->pipeline_guard->document_;
 
   auto restore_prior = [&] {
     graph = graph_before;
@@ -995,14 +986,12 @@ auto EditorHistoryMutation::CheckoutVersion(const alcedo::EditorHistoryGuardHand
     state->pipeline_guard->dirty_ = prior_dirty;
     state->pipeline_guard->serialized_state_needs_writeback_ = prior_serialized;
     state->recovered_head = prior_recovered;
-    if (!prior_document.has_value() || !state->pipeline_guard->pipeline_) {
+    if (!prior_document || prior_document == state->pipeline_guard->document_ ||
+        !state->pipeline_guard->pipeline_) {
       return;
     }
     auto render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
-    alcedo::BindLivePipelineDocument(*state->pipeline_guard,
-                                     alcedo::ClonePipelineDocument(*prior_document));
-    state->pipeline_guard->pipeline_->ImportPipelineParams(prior_params);
-    state->pipeline_guard->pipeline_->SetExecutionStages();
+    (void)alcedo::BindLivePipelineDocument(*state->pipeline_guard, prior_document);
   };
 
   auto restore_or_report = [&](std::string original) {

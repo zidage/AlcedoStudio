@@ -45,3 +45,26 @@ add_test(NAME StageTableReadCheckRejectsProductFileOutsideMirror
 set_tests_properties(StageTableReadCheckRejectsProductFileOutsideMirror
   PROPERTIES PASS_REGULAR_EXPRESSION "renderer/reads_stage\\.cpp: void Read"
              LABELS "ci_core_flow;legacy_removal")
+
+# G10.3: stage-JSON export and import stay inside the executor and the legacy owners that G10.4
+# and G10.7 delete. No rollback path may copy stage JSON again.
+add_test(NAME NoProductCodeUsesStageJsonOutsideLegacyOwners
+  COMMAND ${CMAKE_COMMAND} -DALCEDO_SOURCE_ROOT=${ALCEDO_ROOT_DIR}/src
+          -DCHECK=NoProductCodeUsesStageJsonOutsideLegacyOwners
+          -P ${ALCEDO_TEST_ROOT}/ci/legacy_removal_source_checks.cmake)
+set_tests_properties(NoProductCodeUsesStageJsonOutsideLegacyOwners
+  PROPERTIES LABELS "ci_core_flow;legacy_removal")
+
+set(_stage_json_fixture_root "${CMAKE_CURRENT_BINARY_DIR}/stage_json_violation_fixture")
+file(WRITE "${_stage_json_fixture_root}/app/rollback.cpp"
+  "void Save(Executor& e) { auto prior = e.ExportPipelineParams(); }\n")
+file(WRITE "${_stage_json_fixture_root}/edit/history/accessor.hpp"
+  "auto Read(const History& h) { return h.GetImportPipelineParams(); }\n")
+add_test(NAME StageJsonCheckRejectsRollbackOutsideLegacyOwners
+  COMMAND ${CMAKE_COMMAND} -DALCEDO_SOURCE_ROOT=${_stage_json_fixture_root}
+          -DCHECK=NoProductCodeUsesStageJsonOutsideLegacyOwners
+          -P ${ALCEDO_TEST_ROOT}/ci/legacy_removal_source_checks.cmake)
+set_tests_properties(StageJsonCheckRejectsRollbackOutsideLegacyOwners
+  PROPERTIES PASS_REGULAR_EXPRESSION "app/rollback\.cpp: void Save"
+             FAIL_REGULAR_EXPRESSION "accessor\.hpp"
+             LABELS "ci_core_flow;legacy_removal")

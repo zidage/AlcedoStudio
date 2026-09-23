@@ -5,17 +5,16 @@
 #include "ui/alcedo_main/album_backend/editor_history_state_detail.hpp"
 
 #include <ctime>
+#include <memory>
 #include <mutex>
 #include <utility>
 #include <vector>
 
-#include "app/editor_adjustment_pipeline.hpp"
 #include "app/pipeline_history_applier.hpp"
 #include "app/pipeline_service.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/mini_git_working_history.hpp"
-#include "json.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_shared_helpers.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_pipeline_port.hpp"
 
@@ -104,26 +103,11 @@ auto EditorHistoryState::EnsureWorkingState(sl_element_id_t element_id, std::str
       state->recovered_head = false;
     } else {
       // Contiguous missing suffix: apply into unique graph + live pipeline.
+      // The document rebuild below is build-then-swap: a failed rebuild leaves the prior
+      // document bound, so only the graph needs a restore.
       const auto prior_graph = *guard->commit_graph_;
       const auto expected_materialized = prior_graph.GetImageEditState();
-      alcedo::PipelineDocument prior_document;
-      nlohmann::json           prior_params;
-      if (guard->pipeline_ && guard->document_) {
-        std::unique_lock<std::mutex> render_lock(guard->pipeline_->GetRenderLock());
-        prior_document = alcedo::ClonePipelineDocument(*guard->document_);
-        prior_params   = guard->pipeline_->ExportPipelineParams();
-      }
-
-      auto restore_recovery = [&]() {
-        *guard->commit_graph_ = prior_graph;
-        if (!guard->pipeline_ || !guard->document_) {
-          return;
-        }
-        std::unique_lock<std::mutex> render_lock(guard->pipeline_->GetRenderLock());
-        alcedo::BindLivePipelineDocument(*guard, alcedo::ClonePipelineDocument(prior_document));
-        guard->pipeline_->ImportPipelineParams(prior_params);
-        guard->pipeline_->SetExecutionStages();
-      };
+      auto       restore_recovery      = [&]() { *guard->commit_graph_ = prior_graph; };
 
       std::vector<alcedo::MiniGitJournalRecord> missing(
           journal_records.begin() +
@@ -286,50 +270,22 @@ auto EditorHistoryState::ReplayWorkingDocumentFromImmutableRoot(
     return false;
   }
 
-  alcedo::PipelineDocument prior_document;
-  nlohmann::json           prior_params;
+  std::shared_ptr<alcedo::PipelineDocument> document;
   try {
-    auto render_lock = LockLivePipeline(*state.pipeline_guard->pipeline_);
-    prior_document   = alcedo::ClonePipelineDocument(*state.pipeline_guard->document_);
-    prior_params     = state.pipeline_guard->pipeline_->ExportPipelineParams();
-  } catch (const std::exception& ex) {
-    if (error) *error = ex.what();
-    return false;
-  }
-
-  auto replayed = alcedo::ReplayPipelineDocumentFromRoot(
-      *state.pipeline_guard->root_document_, commits, error);
-  if (!replayed.has_value()) {
-    return false;
-  }
-
-  auto restore_live = [&]() {
-    alcedo::BindLivePipelineDocument(*state.pipeline_guard,
-                                     alcedo::ClonePipelineDocument(prior_document));
-    state.pipeline_guard->pipeline_->ImportPipelineParams(prior_params);
-    state.pipeline_guard->pipeline_->SetExecutionStages();
-  };
-
-  try {
-    auto render_lock = LockLivePipeline(*state.pipeline_guard->pipeline_);
-    alcedo::BindLivePipelineDocument(*state.pipeline_guard, std::move(*replayed));
-    if (!alcedo::ApplyVersionHeadToLivePipeline(*state.pipeline_guard->pipeline_,
-                                                *state.pipeline_guard->commit_graph_, head,
-                                                error)) {
-      restore_live();
+    auto replayed = alcedo::ReplayPipelineDocumentFromRoot(*state.pipeline_guard->root_document_,
+                                                           commits, error);
+    if (!replayed.has_value()) {
       return false;
     }
-    state.pipeline_guard->pipeline_->SetExecutionStages();
-    return true;
+    document = std::make_shared<alcedo::PipelineDocument>(std::move(*replayed));
   } catch (const std::exception& ex) {
-    try {
-      auto render_lock = LockLivePipeline(*state.pipeline_guard->pipeline_);
-      restore_live();
-    } catch (...) {
-    }
     if (error) *error = ex.what();
     return false;
   }
+
+  auto render_lock = LockLivePipeline(*state.pipeline_guard->pipeline_);
+  (void)alcedo::BindLivePipelineDocument(*state.pipeline_guard, std::move(document));
+  return true;
 }
 
 }  // namespace alcedo::ui
