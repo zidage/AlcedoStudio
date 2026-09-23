@@ -9,8 +9,8 @@ complete; manual Version/Paste check pending, and the last stage-JSON callers be
 G10.7 (Section 12.12). G10.4: legacy history store archived and removed from the compile
 graph, project format `0.9.0`; automated criteria complete (Section 13.12). G10.5: DRT
 resolver and the three backend switches done; CUDA and OpenCL byte tests pass, Metal
-unavailable, diff above the 2000-line limit (Section 14.12); on macOS the Metal DRT byte test
-fails at the G10.5 base as well (Section 15.12). G10.6: complete. Lens resolver, lens kernels, CUDA
+unavailable, diff above the 2000-line limit (Section 14.12); the Metal DRT byte test passes on
+macOS with macOS-packed ACES 2.0 files (Section 15.12). G10.6: complete. Lens resolver, lens kernels, CUDA
 detail and grain helpers, Metal PRNG, shared headers, and `EditScope` moved; Windows and macOS
 criteria pass, except failures that exist before this phase (Section 15.12). G10.7–G10.11
 planned.
@@ -2182,7 +2182,9 @@ and OpenDRT). The Metal files come from the same CPU packer compiled by MSVC x64
 runner was available. A temporary MSVC harness proved that `PackMetalDrtGpuParams` reproduces all
 12 Metal files after the change. If the macOS run differs only in ACES table bits, regenerate the
 Metal files from `0cf45f45` on macOS (compiler floating-point contraction can differ). Do not widen
-the test to a tolerance (Section 24).
+the test to a tolerance (Section 24). (2026-09-23: the macOS run differed in the four ACES 2.0 rows
+only. The ACES files were regenerated from `0cf45f45` on macOS as `metal_macos_aces20_*`; see
+Section 15.12, "macOS verification".)
 
 **Primary success call chain:**
 
@@ -2217,7 +2219,7 @@ DRT node holds an unknown EOTF (or method, space, non-positive peak, unsupported
 | --- | --- | --- |
 | `CudaDrtParameterBytesMatchStoredExpectedBytes` | `GpuDagCudaDrtProductTest` | PASS (12 rows) |
 | `OpenClDrtParameterBytesMatchStoredExpectedBytes` | `GpuDagOpenClDrtProductTest` | PASS (12 rows) |
-| `MetalDrtParameterBytesMatchStoredExpectedBytes` | `GpuDagMetalDrtTest` (macOS) | Metal: unavailable (not built); temporary MSVC harness: 12 of 12 equal |
+| `MetalDrtParameterBytesMatchStoredExpectedBytes` | `GpuDagMetalDrtTest` (macOS) | Metal: unavailable (not built); temporary MSVC harness: 12 of 12 equal. macOS (2026-09-23): PASS with `metal_macos_aces20_*` (Section 15.12) |
 | `DrtOutputResolverRejectsUnknownEncodingEotf` | `GpuDagModelGraphTest` | PASS |
 | `CudaDrtOutputMatchesStoredExpectedPixels` | `GpuDagCudaDrtProductTest` | PASS (≤ 1/4096 per channel) |
 | `RuntimeSourcesDoNotIncludeLegacyOperatorHeaders` | ctest script (176 runtime files) | PASS |
@@ -2659,8 +2661,20 @@ FramePresenter`.
   - `GpuDagMetalDrt.MetalDrtParameterBytesMatchStoredExpectedBytes` (G10.5 test, first run on
     macOS). The 8 OpenDRT configurations match. The 4 ACES 2.0 configurations differ from the
     stored bytes at byte 12, the first float of `aces.input.matrix_rgb_to_cam16`. The stored files
-    were packed by an MSVC x64 build. This is an open G10.5 Metal defect.
+    were packed by an MSVC x64 build. Resolved; see "Metal DRT expected data on macOS".
   - `MetalRendererFixture.InteractiveQualityBaseInteractiveReuses2560PixelResults`.
+- Metal DRT expected data on macOS (resolved after the first run). The ACES 2.0 difference is float
+  rounding between MSVC x64 and Apple clang arm64. Every integer and scalar field is equal. The
+  matrices differ by at most 1e-5 relative, the hue, upper-hull-gamma, and gamut-cusp tables by at
+  most 1.5e-4 relative (largest absolute: `table_reach_m[148]`, 343.7195 against 343.7256), and
+  `limit_to_display_matx` by at most 2e-7. A temporary writer at `0cf45f45` (removed afterwards)
+  packed the 12 rows through `ODT_Op` + `ResolveMetalDrtGpuParams` on macOS. All 12 files are
+  byte-identical to the output of `DrtOutputResolver` + `PackMetalDrtGpuParams` at the branch head
+  on macOS, so G10.5 does not change the Metal parameters on macOS either. The 8 OpenDRT files are
+  equal to the MSVC files. The 4 ACES 2.0 files are stored as `metal_macos_aces20_*_expected_params.bin`,
+  and the test reads them for the ACES 2.0 rows. The MSVC `metal_aces20_*` files stay as the record
+  of the Windows packing. After this change `GpuDagMetalDrtTest` passes (6 of 6), and 8 Metal
+  failures from before this phase remain.
 - Build targets that fail at `fcfbb2ef` as well and do not use G10.6 code: `ImageBufferMetalTest`
   (`cv::countNonZero` without `<opencv2/core.hpp>` since `59982073`), `EditorGeometryOverlayPipelineTest`
   (calls `CUDA::ResizeLinear`, which is built only with CUDA), and `UiFuzzAutomationTest`

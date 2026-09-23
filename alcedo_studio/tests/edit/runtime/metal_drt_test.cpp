@@ -433,6 +433,13 @@ TEST(GpuDagMetalDrt, MetalDrtMissingMetallibThrowsExplicitError) {
 // The stored files were packed through ODT_Op and ResolveMetalDrtGpuParams at commit 0cf45f45
 // (MSVC x64 build of the same CPU packer). MetalDrtGpuParams has no padding, so the whole struct
 // is compared.
+//
+// The ACES 2.0 rows use `metal_macos_*` files, packed through ODT_Op and ResolveMetalDrtGpuParams
+// at 0cf45f45 on macOS (Apple clang, arm64). ACES 2.0 builds its matrices and tables with libm
+// functions, and the MSVC packing differs from the macOS packing by float rounding only: every
+// integer and scalar field is equal, matrices differ by at most 1e-5 relative, and the hue,
+// hull-gamma, and cusp tables by at most 1.5e-4. The OpenDRT rows are equal on both platforms and
+// keep the shared `metal_*` files.
 TEST(GpuDagMetalDrt, MetalDrtParameterBytesMatchStoredExpectedBytes) {
   const std::filesystem::path directory(ALCEDO_DRT_EXPECTED_PARAMETER_DIR);
   const auto                  rows = drt_expected_data::ConfigurationMatrix();
@@ -444,8 +451,8 @@ TEST(GpuDagMetalDrt, MetalDrtParameterBytesMatchStoredExpectedBytes) {
     ASSERT_TRUE(DrtOutputResolver::Resolve(row.payload_, nullptr, &resolved, &error)) << error;
     std::vector<std::byte> actual;
     drt_expected_data::AppendBytes(actual, PackMetalDrtGpuParams(resolved));
-    const auto stored = drt_expected_data::ReadBytes(
-        drt_expected_data::ExpectedParameterPath(directory, "metal", row));
+    const auto stored = drt_expected_data::ReadBytes(drt_expected_data::ExpectedParameterPath(
+        directory, row.payload_.method == DrtMethod::Aces20 ? "metal_macos" : "metal", row));
     ASSERT_EQ(stored.size(), sizeof(MetalDrtGpuParams));
     EXPECT_EQ(drt_expected_data::FirstDifference(actual, stored), std::string::npos);
   }
