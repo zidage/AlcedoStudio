@@ -4,7 +4,7 @@
 
 #ifdef HAVE_OPENCL
 
-#include "edit/operators/geometry/opencl_lens_calib_ops.hpp"
+#include "edit/runtime/lens/opencl/opencl_lens_calib_ops.hpp"
 
 #include <algorithm>
 #include <cmath>

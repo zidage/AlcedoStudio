@@ -14,7 +14,7 @@
 #include "edit/operators/op_base.hpp"
 #include "image/image_buffer.hpp"
 #ifdef HAVE_CUDA
-#include "edit/operators/geometry/cuda_geometry_ops.hpp"
+#include "edit/runtime/lens/cuda/cuda_geometry_ops.hpp"
 #endif
 #ifdef HAVE_METAL
 #include "metal/metal_utils/geometry_utils.hpp"

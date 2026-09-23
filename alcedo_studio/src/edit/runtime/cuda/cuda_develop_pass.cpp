@@ -4,8 +4,9 @@
 
 #include "edit/runtime/cuda/cuda_develop_pass.hpp"
 
-#include <cstdint>
 #include <cuda_runtime.h>
+
+#include <cstdint>
 #include <opencv2/core/cuda.hpp>
 #include <opencv2/core/cuda_stream_accessor.hpp>
 #include <stdexcept>
@@ -15,12 +16,12 @@
 #include "decoders/processor/operators/gpu/cuda_dng_warp.hpp"
 #include "decoders/processor/operators/gpu/cuda_highlight_reconstruct.hpp"
 #include "decoders/processor/operators/gpu/cuda_white_balance.hpp"
-#include "edit/operators/geometry/cuda_geometry_ops.hpp"
-#include "edit/operators/geometry/cuda_lens_calib_ops.hpp"
-#include "edit/operators/geometry/lens_calib_op.hpp"
 #include "edit/operators/models/pending_parameter_patch.hpp"
 #include "edit/runtime/cuda/cuda_sensor_demosaic.hpp"
 #include "edit/runtime/cuda/geometry_resample_pass.hpp"
+#include "edit/runtime/lens/cuda/cuda_geometry_ops.hpp"
+#include "edit/runtime/lens/cuda/cuda_lens_calib_ops.hpp"
+#include "edit/runtime/lens/lens_calibration_resolver.hpp"
 #include "edit/runtime/texture_format.hpp"
 #include "gpu/transient_allocation_policy.hpp"
 #include "gpu/transient_buffer_scope.hpp"
@@ -61,10 +62,9 @@ auto AcquireRgba(CudaRenderWorkspace& workspace, const GraphValueId& id, std::ui
 void ExecuteCudaLensCalibration(CudaRenderDevice& device, const ExecutionPlan& plan,
                                 const PreparedRawInput& input,
                                 const DevelopPayload&   develop_params) {
-  LensCalibOp resolver(develop_params);
-  const auto  runtime =
-      resolver.ResolveRuntimeForImage(input.color_context, plan.source.develop_output_extent,
-                                      input.dng_warp_rectilinear.has_value());
+  const auto runtime = LensCalibrationResolver::Resolve(develop_params, input.color_context,
+                                                        plan.source.develop_output_extent,
+                                                        input.dng_warp_rectilinear.has_value());
   if (!runtime.has_value()) {
     return;
   }

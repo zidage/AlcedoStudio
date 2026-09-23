@@ -926,8 +926,8 @@ if(TARGET ${ALCEDO_MAIN_BIN})
                 DESTINATION "${_bundle_macos_dest}/opencl/decoders/processor/operators/gpu/opencl_shader")
             install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/edit/pipeline/opencl_shader/"
                 DESTINATION "${_bundle_macos_dest}/opencl/edit/pipeline/opencl_shader")
-            install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/edit/operators/geometry/opencl_shader/"
-                DESTINATION "${_bundle_macos_dest}/opencl/edit/operators/geometry/opencl_shader")
+            install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/edit/runtime/lens/opencl/shader/"
+                DESTINATION "${_bundle_macos_dest}/opencl/edit/runtime/lens/opencl/shader")
             install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/edit/scope/opencl_shader/"
                 DESTINATION "${_bundle_macos_dest}/opencl/edit/scope/opencl_shader")
             install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/opencl/opencl_shader/"
@@ -1045,8 +1045,8 @@ if(TARGET ${ALCEDO_MAIN_BIN})
                 DESTINATION "${CMAKE_INSTALL_BINDIR}/opencl/decoders/processor/operators/gpu/opencl_shader")
             install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/edit/pipeline/opencl_shader/"
                 DESTINATION "${CMAKE_INSTALL_BINDIR}/opencl/edit/pipeline/opencl_shader")
-            install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/edit/operators/geometry/opencl_shader/"
-                DESTINATION "${CMAKE_INSTALL_BINDIR}/opencl/edit/operators/geometry/opencl_shader")
+            install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/edit/runtime/lens/opencl/shader/"
+                DESTINATION "${CMAKE_INSTALL_BINDIR}/opencl/edit/runtime/lens/opencl/shader")
             install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/edit/scope/opencl_shader/"
                 DESTINATION "${CMAKE_INSTALL_BINDIR}/opencl/edit/scope/opencl_shader")
             install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/opencl/opencl_shader/"

@@ -6,7 +6,7 @@
 
 #include <opencv2/core/cuda.hpp>
 
-#include "edit/operators/geometry/lens_calib_runtime.hpp"
+#include "edit/runtime/lens/lens_calib_runtime.hpp"
 
 namespace alcedo {
 namespace CUDA {

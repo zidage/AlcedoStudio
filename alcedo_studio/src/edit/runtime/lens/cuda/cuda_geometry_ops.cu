@@ -12,7 +12,7 @@
 #include <string>
 #include <utility>
 
-#include "edit/operators/geometry/cuda_geometry_ops.hpp"
+#include "edit/runtime/lens/cuda/cuda_geometry_ops.hpp"
 
 namespace alcedo {
 namespace CUDA {

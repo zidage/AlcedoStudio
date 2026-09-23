@@ -131,18 +131,16 @@ gtest_discover_tests(CropRotateOpTest TEST_PREFIX "CropRotateOpTest."
   PROPERTIES LABELS "ci_core_flow")
 alcedo_register_test_target(CropRotateOpTest edit)
 
-# Develop lens identity: catalog maker/model resolve against Lensfun without RAW lens name.
+# Develop lens resolution: LensCalibrationResolver against stored pre-G10.6 LensCalibOp parameters
+# for CI RAW fixtures, catalog lens identity, DNG warp, and database failure.
 add_executable(LensCalibDevelopResolveTest
-  ${ALCEDO_TEST_ROOT}/edit/operators/geometry/lens_calib_develop_resolve_test.cpp)
+  ${ALCEDO_TEST_ROOT}/edit/runtime/lens_calibration_resolver_test.cpp)
 target_include_directories(LensCalibDevelopResolveTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(LensCalibDevelopResolveTest PRIVATE GTest::gtest_main Operators
-  ${ALCEDO_TEST_OPENCV_MIN_DEPS})
-if(ALCEDO_CUDA_ENABLED)
-  target_link_libraries(LensCalibDevelopResolveTest PRIVATE CudaUtils)
-endif()
-if(ALCEDO_OPENCL_ENABLED)
-  target_link_libraries(LensCalibDevelopResolveTest PRIVATE OpenClGeometryUtils)
-endif()
+target_link_libraries(LensCalibDevelopResolveTest PRIVATE GTest::gtest_main EditRuntimeLens EditInput
+  JSON ${ALCEDO_TEST_OPENCV_MIN_DEPS})
+target_compile_definitions(LensCalibDevelopResolveTest PRIVATE
+  ALCEDO_LENS_EXPECTED_PARAMETER_DIR="${ALCEDO_TEST_ROOT}/resources/expected_parameters/lens"
+  ALCEDO_CI_RAW_FIXTURE_ROOT="${ALCEDO_TEST_ROOT}/resources/sample_images/ci_rawfiles")
 gtest_discover_tests(LensCalibDevelopResolveTest TEST_PREFIX "LensCalibDevelopResolveTest."
   PROPERTIES LABELS "ci_core_flow;edit;operators")
 alcedo_register_test_target(LensCalibDevelopResolveTest edit)

@@ -20,7 +20,7 @@ if(ALCEDO_OPENCL_ENABLED)
     set(OPENCL_DEMOSAICNET_CONV_CL "${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/opencl_shader/demosaicnet_conv.cl")
     set(OPENCL_DEMOSAICNET_STRUCTURAL_CL "${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/opencl_shader/demosaicnet_structural.cl")
     set(OPENCL_GEOMETRY_UTILS_CL "${ALCEDO_SRC_ROOT}/opencl/opencl_shader/geometry_utils.cl")
-    set(OPENCL_EDIT_GEOMETRY_LENS_CALIB_CL "${ALCEDO_SRC_ROOT}/edit/operators/geometry/opencl_shader/lens_calib.cl")
+    set(OPENCL_LENS_CALIB_CL "${ALCEDO_SRC_ROOT}/edit/runtime/lens/opencl/shader/lens_calib.cl")
     set(OPENCL_SCOPE_ANALYZER_CL "${ALCEDO_SRC_ROOT}/edit/scope/opencl_shader/scope_analyzer.cl")
     set(OPENCL_DAG_GEOMETRY_CAMERA_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/geometry_camera.cl")
     set(OPENCL_DAG_PRIMARY_GRADE_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/primary_grade.cl")
@@ -125,7 +125,7 @@ if(ALCEDO_OPENCL_ENABLED)
         ALCEDO_OPENCL_DEMOSAICNET_CONV_CL="${OPENCL_DEMOSAICNET_CONV_CL}"
         ALCEDO_OPENCL_DEMOSAICNET_STRUCTURAL_CL="${OPENCL_DEMOSAICNET_STRUCTURAL_CL}"
         ALCEDO_OPENCL_GEOMETRY_UTILS_CL="${OPENCL_GEOMETRY_UTILS_CL}"
-        ALCEDO_OPENCL_EDIT_GEOMETRY_LENS_CALIB_CL="${OPENCL_EDIT_GEOMETRY_LENS_CALIB_CL}"
+        ALCEDO_OPENCL_LENS_CALIB_CL="${OPENCL_LENS_CALIB_CL}"
         ALCEDO_OPENCL_SCOPE_ANALYZER_CL="${OPENCL_SCOPE_ANALYZER_CL}"
         ALCEDO_OPENCL_DNG_PROFILE_MATH_H="${ALCEDO_INCLUDE_ROOT}/edit/runtime/dng_profile_gpu_math.h"
         ALCEDO_OPENCL_ACES_RGC_H="${ALCEDO_INCLUDE_ROOT}/edit/runtime/aces_reference_gamut_compression.h"

@@ -28,13 +28,13 @@
 #endif
 
 #ifdef HAVE_CUDA
-#include "edit/operators/geometry/cuda_lens_calib_ops.hpp"
+#include "edit/runtime/lens/cuda/cuda_lens_calib_ops.hpp"
 #endif
 #ifdef HAVE_METAL
-#include "edit/operators/geometry/metal_lens_calib.hpp"
+#include "edit/runtime/lens/metal/metal_lens_calib.hpp"
 #endif
 #ifdef HAVE_OPENCL
-#include "edit/operators/geometry/opencl_lens_calib_ops.hpp"
+#include "edit/runtime/lens/opencl/opencl_lens_calib_ops.hpp"
 #endif
 #include "utils/string/convert.hpp"
 

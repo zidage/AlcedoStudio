@@ -4,7 +4,7 @@
 
 #ifdef HAVE_METAL
 
-#include "edit/operators/geometry/metal_lens_calib.hpp"
+#include "edit/runtime/lens/metal/metal_lens_calib.hpp"
 
 #include <algorithm>
 #include <array>

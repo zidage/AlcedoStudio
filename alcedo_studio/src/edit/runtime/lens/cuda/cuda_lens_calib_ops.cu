@@ -2,7 +2,7 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-#include "edit/operators/geometry/cuda_lens_calib_ops.hpp"
+#include "edit/runtime/lens/cuda/cuda_lens_calib_ops.hpp"
 
 #include <cuda_runtime.h>
 #include <opencv2/core.hpp>
