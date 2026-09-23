@@ -202,10 +202,12 @@ class PipelineMgmtService final {
   /// Preconditions: `pipeline` is a loaded editor guard with a commit graph. The caller has already
   /// completed a save checkpoint so the working journal is empty for this image.
   ///
-  /// Behavior: resolves the target first-parent chain, then rebuilds the same live
-  /// document from the immutable root plus typed batches under the render lock. On any failure the
-  /// prior Version remains active and the prior document is restored. Does not invent a second head
-  /// on the guard.
+  /// Behavior (build-then-swap): replays a new document from the immutable root plus the target
+  /// first-parent typed batches and binds the camera profile, without the render lock and without
+  /// touching the guard. Only after that succeeds does it set the active Version and bind the new
+  /// document under one render lock scope; that swap cannot fail. A failure before the swap returns
+  /// the replay error and leaves the prior Version and the prior document pointer bound. No copy of
+  /// the prior document is taken. Marks the guard dirty and requests a checkpoint write-back.
   ///
   /// @return true when the Version tip and live document both match the checked-out head.
   auto               CheckoutVersion(const std::shared_ptr<PipelineGuard>& pipeline,
@@ -213,7 +215,9 @@ class PipelineMgmtService final {
       -> bool;
 
   /// Rebuild the live document from the immutable root and the first-parent chain of the
-  /// currently active Version tip. Used when the checkpoint label does not match history.
+  /// currently active Version tip. Used when the checkpoint label does not match history, after
+  /// WAL recovery, and after Paste into an open editor. Uses build-then-swap like CheckoutVersion:
+  /// on failure the prior document stays bound and @p error receives the replay error.
   auto               RebuildActiveEditorPipeline(const std::shared_ptr<PipelineGuard>& pipeline,
                                                  std::string*                          error = nullptr)
       -> bool;
@@ -253,14 +257,20 @@ struct PipelineCheckpointIdentity {
     -> bool;
 
 /**
- * @brief Replace the guard's writable document and bind it to the existing executor.
+ * @brief Swap step of build-then-swap: make @p document the guard's only writable document.
  *
- * Does not clone @p document again. Does not take the render lock.
+ * Moves the pointer into the guard and forwards it to the executor's renderers. It does not
+ * copy, validate, or replay anything, so callers build and bind the camera profile first and call
+ * this last. Does not take the render lock.
  *
- * @pre Caller holds the executor render lock when @p guard is live.
- * @param guard Loaded editor guard that already owns an executor.
+ * @pre @p document is not null. Caller holds the executor render lock when @p guard is live.
+ * @param guard Loaded editor guard.
  * @param document Complete DAG that becomes the only writable document.
+ * @return The document that was bound before the call (null when none was). A caller whose later
+ *         step fails binds it back with a second call; the returned document was not changed.
  */
-void BindLivePipelineDocument(PipelineGuard& guard, PipelineDocument document);
+auto BindLivePipelineDocument(PipelineGuard&                    guard,
+                              std::shared_ptr<PipelineDocument> document) noexcept
+    -> std::shared_ptr<PipelineDocument>;
 
 }  // namespace alcedo

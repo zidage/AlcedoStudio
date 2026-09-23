@@ -105,9 +105,9 @@ class EditorHistoryState {
 
   /// Rebuild @p state's live document from the cached immutable root and @p head.
   ///
-  /// Replays onto a clone, then binds the same live guard under the render lock.
-  /// Does not move the Version ref. On failure the live document is left
-  /// unchanged.
+  /// Build-then-swap: replays a new document from the root, then binds it to the
+  /// live guard under the render lock. Takes no copy of the prior document and
+  /// does not move the Version ref. On failure the live document is left bound.
   auto ReplayWorkingDocumentFromImmutableRoot(HistoryWorkingState& state,
                                               const alcedo::head_commit_hash_t& head,
                                               std::string* error) -> bool;

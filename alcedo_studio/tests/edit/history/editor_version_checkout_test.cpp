@@ -285,6 +285,9 @@ TEST_F(EditorVersionCheckoutTest, FailedCheckoutRestoresPriorVersionAndDocument)
   const auto prior_hash   = DocumentHash(*guard_);
   const auto prior_head   = guard_->working_head_commit_hash();
   const auto prior_reason = history_.LastPublishedRenderReason();
+  // Production guards always have the live document bound to the executor.
+  guard_->pipeline_->SetPipelineDocument(guard_->document_, false);
+  const auto prior_document = guard_->document_;
   ASSERT_TRUE(prior_head.has_value());
 
   // CreateVersionRefAtHead refuses a missing hash. Point a real Version at a
@@ -312,9 +315,51 @@ TEST_F(EditorVersionCheckoutTest, FailedCheckoutRestoresPriorVersionAndDocument)
   const auto bad_id = guard_->commit_graph_->CreateVersionRefAtHead("InvalidBatch", bad_hash);
   error.clear();
   EXPECT_FALSE(history_.CheckoutVersion(handle, bad_id, &error));
+  EXPECT_NE(error.find("grade.does_not_exist"), std::string::npos) << error;
   EXPECT_EQ(guard_->commit_graph_->GetActiveVersionId(), default_id);
   EXPECT_EQ(DocumentHash(*guard_), prior_hash);
   EXPECT_EQ(history_.LastPublishedRenderReason(), prior_reason);
+  // Build-then-swap: the replayed document was never bound, so the prior one stays live.
+  EXPECT_EQ(guard_->document_, prior_document);
+  EXPECT_EQ(guard_->pipeline_->GpuDagDocument(), prior_document);
+}
+
+TEST_F(EditorVersionCheckoutTest, VersionRefRestoreFailureKeepsPriorDocument) {
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  const auto default_id = guard_->commit_graph_->GetActiveVersionId();
+  ASSERT_TRUE(CommitSettled(history_, handle, "exposure", R"({"exposure":0.5})", &error)) << error;
+  const auto prior_hash   = DocumentHash(*guard_);
+  const auto prior_head   = guard_->working_head_commit_hash();
+  const auto prior_refs   = guard_->commit_graph_->GetAllVersionRefs().size();
+  const auto prior_reason = history_.LastPublishedRenderReason();
+  // Production guards always have the live document bound to the executor.
+  guard_->pipeline_->SetPipelineDocument(guard_->document_, false);
+  const auto prior_document = guard_->document_;
+
+  auto       missing_target = alcedo::test::ColorGradeFieldTarget("exposure");
+  missing_target.node_id    = alcedo::NodeId{"grade.does_not_exist"};
+  auto bad_commit           = alcedo::EditCommit::MakePipelineEdit(
+      guard_->commit_graph_->GetRootId(), std::nullopt,
+      alcedo::MakeSetParameterBatch(missing_target, nlohmann::json{{"exposure_ev", 0.0}},
+                                              nlohmann::json{{"exposure_ev", 3.0}}, true, true, "missing"));
+  const auto bad_hash = bad_commit.GetCommitHash();
+  ASSERT_TRUE(guard_->commit_graph_->InsertCommit(std::move(bad_commit)));
+
+  // A branch from the unreplayable commit selects the new Version, then replay fails.
+  alcedo::version_ref_id_t branch_id{};
+  EXPECT_FALSE(
+      history_.BranchFromCommitAndCheckout(handle, bad_hash, "Broken branch", &branch_id, &error));
+  EXPECT_NE(error.find("grade.does_not_exist"), std::string::npos) << error;
+  EXPECT_EQ(guard_->commit_graph_->GetActiveVersionId(), default_id);
+  EXPECT_EQ(guard_->commit_graph_->GetAllVersionRefs().size(), prior_refs);
+  EXPECT_EQ(guard_->working_head_commit_hash(), prior_head);
+  EXPECT_EQ(history_.LastPublishedRenderReason(), prior_reason);
+  EXPECT_EQ(guard_->document_, prior_document);
+  EXPECT_EQ(guard_->pipeline_->GpuDagDocument(), prior_document);
+  EXPECT_EQ(DocumentHash(*guard_), prior_hash);
+  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_), 0.5f);
 }
 
 TEST(EditorSessionHistoryPortProjectTest, RecoveryAppliesCommittedTypedSuffixExactlyOnce) {

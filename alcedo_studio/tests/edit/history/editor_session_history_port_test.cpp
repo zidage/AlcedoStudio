@@ -20,30 +20,31 @@
 #include <utility>
 #include <variant>
 
-#include "json.hpp"
 #include "app/adjustment_transfer_service.hpp"
+#include "app/document_transfer_planner.hpp"
+#include "app/editor_adjustment_pipeline.hpp"
+#include "app/editor_history_types.hpp"
+#include "app/editor_mini_git_materializer.hpp"
 #include "app/editor_pipeline_command_service.hpp"
 #include "app/editor_session_edit_controller.hpp"
-#include "edit/graph/pipeline_document.hpp"
-#include "edit/graph/pipeline_graph_commands.hpp"
-#include "edit/graph/color_grade_node_model.hpp"
-#include "edit/operators/models/builtin_type_ids.hpp"
-#include "edit/operators/models/scalar_operator_model.hpp"
-#include "app/editor_adjustment_pipeline.hpp"
-#include "app/editor_mini_git_materializer.hpp"
+#include "app/pipeline_document_history.hpp"
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
+#include "edit/graph/color_grade_node_model.hpp"
+#include "edit/graph/pipeline_document.hpp"
+#include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/history/commit_clock_test_access.hpp"
-#include "edit/history/pipeline_document_checkpoint.hpp"
 #include "edit/history/mini_git_working_history.hpp"
+#include "edit/history/pipeline_document_checkpoint.hpp"
+#include "edit/operators/models/builtin_type_ids.hpp"
+#include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/operators/operator_registeration.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
+#include "json.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
 #include "support/document_transfer_test_support.hpp"
 #include "support/editor_parameter_target_test.hpp"
 #include "support/editor_parameter_write_test.hpp"
-#include "app/pipeline_document_history.hpp"
-#include "app/editor_history_types.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_commit_presentation.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_shared_helpers.hpp"
 #include "utils/clock/time_provider.hpp"
@@ -296,6 +297,62 @@ TEST_F(EditorSessionHistoryPortTest, ExposureEditSequenceProducesUnchangedCommit
   EXPECT_EQ(undo_chain, exposure_chain);
   EXPECT_EQ(redo_head, contrast_head);
   EXPECT_EQ(redo_chain, contrast_chain);
+}
+
+// G10.3 changed Checkout and Paste to build-then-swap. The pinned root id and CommitClock make the
+// hashes depend only on the payloads. The expected values were recorded at cd0a4f2e (after G10.2,
+// before G10.3).
+TEST_F(EditorSessionHistoryPortTest, CheckoutAndPasteHashesAreUnchanged) {
+  const auto root_id    = alcedo::Hash128::FromString("0123456789abcdef0fedcba987654321");
+  guard_->commit_graph_ = std::make_shared<alcedo::CommitGraph>(
+      alcedo::CommitGraph::CreateEmptyWithRootId(42, root_id));
+  guard_->root_id_                          = root_id;
+  constexpr std::uint64_t kPinnedPreviousNs = 0x7000'0000'0000'0000ULL;
+  alcedo::edit_history_test::CommitClockAccess::ResetGlobal(kPinnedPreviousNs);
+
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  const auto default_version = guard_->commit_graph_->GetActiveVersionId();
+  ASSERT_TRUE(CommitSettled(history_, handle, "exposure", R"({"exposure":0.5})", &error)) << error;
+  const auto                             edit_head  = guard_->working_head_commit_hash();
+  const auto                             edit_chain = guard_->transaction_chain_hash();
+
+  // Paste folds newly generated node ids into its batch; a counting source makes them fixed.
+  alcedo::CountingTransferIdentitySource identities;
+  alcedo::SetDocumentTransferIdentitySourceForTesting(&identities);
+  alcedo::AdjustmentPasteResult paste_result;
+  const bool                    pasted = history_.PasteLiveRootRelativeVersion(
+      handle, MakeExposureTransferPackage(1.25), "Pasted", &paste_result, &error);
+  alcedo::SetDocumentTransferIdentitySourceForTesting(nullptr);
+  ASSERT_TRUE(pasted) << error;
+  const auto paste_head  = guard_->working_head_commit_hash();
+  const auto paste_chain = guard_->transaction_chain_hash();
+
+  ASSERT_TRUE(history_.CheckoutVersion(handle, default_version, &error)) << error;
+  const auto checkout_default_head  = guard_->working_head_commit_hash();
+  const auto checkout_default_chain = guard_->transaction_chain_hash();
+  const auto default_exposure       = DocumentExposureEv(*guard_->document_);
+  ASSERT_TRUE(history_.CheckoutVersion(handle, paste_result.new_version_id, &error)) << error;
+  const auto checkout_pasted_head  = guard_->working_head_commit_hash();
+  const auto checkout_pasted_chain = guard_->transaction_chain_hash();
+  const auto pasted_exposure       = DocumentExposureEv(*guard_->document_);
+  alcedo::edit_history_test::CommitClockAccess::ResetGlobal();
+
+  ASSERT_TRUE(edit_head.has_value());
+  ASSERT_TRUE(paste_head.has_value());
+  EXPECT_EQ(edit_head->ToString(), "b6cf9394111073bfab5f5020f7c5c9c3");
+  EXPECT_EQ(edit_chain.ToString(), "e89bc194d74eae2ca7e4e4f1b6fec12a");
+  EXPECT_EQ(paste_head->ToString(), "1e665f1b8f19d84688dbe192ff95d524");
+  EXPECT_EQ(paste_chain.ToString(), "1145a8571837a8d4da9af892050a1dfd");
+  EXPECT_EQ(checkout_default_head, edit_head);
+  EXPECT_EQ(checkout_default_chain, edit_chain);
+  EXPECT_EQ(checkout_pasted_head, paste_head);
+  EXPECT_EQ(checkout_pasted_chain, paste_chain);
+  ASSERT_TRUE(default_exposure.has_value());
+  ASSERT_TRUE(pasted_exposure.has_value());
+  EXPECT_DOUBLE_EQ(*default_exposure, 0.5);
+  EXPECT_DOUBLE_EQ(*pasted_exposure, 1.25);
 }
 
 // The stage table is exported only by this test to prove that no edit path writes it.

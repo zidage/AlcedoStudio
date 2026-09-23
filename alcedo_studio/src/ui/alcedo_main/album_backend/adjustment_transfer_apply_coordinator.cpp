@@ -6,6 +6,7 @@
 
 #include <QVariantList>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 
@@ -14,6 +15,7 @@
 #include "app/pipeline_service.hpp"
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
+#include "edit/pipeline/pipeline_cpu.hpp"
 #include "ui/alcedo_main/album_backend/library_module.hpp"
 #include "ui/alcedo_main/album_backend/project_module.hpp"
 #include "ui/alcedo_main/i18n.hpp"
@@ -79,13 +81,20 @@ auto AdjustmentTransferApplyCoordinator::ApplyToTargets(
     // That transition cannot be represented by the edit/head-move journal, so
     // publish it through the same guarded graph materialization used by named
     // Version operations.
+    // RebuildActiveEditorPipeline swaps in a new document and never changes the prior one, so a
+    // restore binds the prior pointer back instead of replaying the prior Version again.
     const auto graph_before_paste = *graph;
     const bool prior_serialized   = guard->serialized_state_needs_writeback_;
+    const bool prior_dirty        = guard->dirty_;
+    const auto prior_document     = guard->document_;
     auto       restore_prior      = [&] {
       *graph = graph_before_paste;
-      std::string ignored_error;
-      (void)pipeline_service->RebuildActiveEditorPipeline(guard, &ignored_error);
+      if (prior_document && prior_document != guard->document_) {
+        std::unique_lock<std::mutex> render_lock(guard->pipeline_->GetRenderLock());
+        (void)alcedo::BindLivePipelineDocument(*guard, prior_document);
+      }
       guard->serialized_state_needs_writeback_ = prior_serialized;
+      guard->dirty_                            = prior_dirty;
     };
     try {
       if (!guard->root_document_) {

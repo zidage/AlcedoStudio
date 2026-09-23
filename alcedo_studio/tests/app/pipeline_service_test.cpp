@@ -906,7 +906,7 @@ TEST_F(PipelineMapperTests, EditorLoadUsesMatchingSerializedStateWithoutReconstr
   reopened.SavePipeline(loaded);
 }
 
-TEST_F(PipelineMapperTests, MatchingDocumentCheckpointSkipsFirstParentReplay) {
+TEST_F(PipelineMapperTests, ReopenWithMatchingCheckpointSkipsReplay) {
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService first(project.GetStorage());
 
@@ -933,6 +933,10 @@ TEST_F(PipelineMapperTests, MatchingDocumentCheckpointSkipsFirstParentReplay) {
   EXPECT_EQ(reopened.EditorPipelineHistoryRebuildCount(), 0u)
       << "matching checkpoint identity must import serialized state without history rebuild";
   EXPECT_FALSE(loaded->serialized_state_needs_writeback_);
+  {
+    std::unique_lock<std::mutex> render_lock(loaded->pipeline_->GetRenderLock());
+    EXPECT_EQ(loaded->pipeline_->GpuDagDocument(), loaded->document_);
+  }
   reopened.SavePipeline(loaded);
 }
 
@@ -1017,7 +1021,7 @@ auto MakeExposureBatch(float before, float after) -> PipelineEditBatch {
                                std::move(after_json), true, true, "Default");
 }
 
-TEST_F(PipelineMapperTests, StaleDocumentCheckpointReplaysHistoryAndNeedsWriteback) {
+TEST_F(PipelineMapperTests, ReopenWithStaleCheckpointReplaysFromRoot) {
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService first(project.GetStorage());
 
@@ -1048,8 +1052,14 @@ TEST_F(PipelineMapperTests, StaleDocumentCheckpointReplaysHistoryAndNeedsWriteba
   }
 
   PipelineMgmtService reopened(project.GetStorage());
+  reopened.ResetEditorPipelineHistoryRebuildCountForTesting();
   auto                rebuilt = reopened.LoadEditorPipeline(702);
   ASSERT_NE(rebuilt, nullptr);
+  EXPECT_EQ(reopened.EditorPipelineHistoryRebuildCount(), 1u);
+  {
+    std::unique_lock<std::mutex> render_lock(rebuilt->pipeline_->GetRenderLock());
+    EXPECT_EQ(rebuilt->pipeline_->GpuDagDocument(), rebuilt->document_);
+  }
   EXPECT_EQ(rebuilt->root_id_, root_id);
   EXPECT_EQ(rebuilt->working_head_commit_hash(), expected_head);
   EXPECT_EQ(rebuilt->transaction_chain_hash(), expected_chain);
@@ -1065,6 +1075,119 @@ TEST_F(PipelineMapperTests, StaleDocumentCheckpointReplaysHistoryAndNeedsWriteba
   EXPECT_EQ(matched->transaction_chain_hash(), expected_chain);
   EXPECT_FLOAT_EQ(DocumentExposure(*matched->document_), 2.0f);
   after_writeback.SavePipeline(matched);
+}
+
+/// Insert a commit on the root whose batch cannot apply: its target Color Grade node does not
+/// exist, so ReplayPipelineDocumentFromRoot fails at that commit.
+auto InsertUnreplayableCommit(CommitGraph& graph) -> commit_hash_t {
+  auto missing_target    = test::ColorGradeFieldTarget("exposure");
+  missing_target.node_id = NodeId{"grade.does_not_exist"};
+  auto commit            = EditCommit::MakePipelineEdit(
+      graph.GetRootId(), std::nullopt,
+      MakeSetParameterBatch(missing_target, nlohmann::json{{"exposure_ev", 1.5}},
+                                       nlohmann::json{{"exposure_ev", 3.0}}, true, true, "missing"));
+  const auto hash = commit.GetCommitHash();
+  if (!graph.InsertCommit(std::move(commit))) {
+    throw std::runtime_error("unreplayable commit was not inserted");
+  }
+  return hash;
+}
+
+auto ExecutorDocument(const PipelineGuard& guard) -> std::shared_ptr<PipelineDocument> {
+  std::unique_lock<std::mutex> render_lock(guard.pipeline_->GetRenderLock());
+  return guard.pipeline_->GpuDagDocument();
+}
+
+TEST_F(PipelineMapperTests, CheckoutReplayFailureKeepsPriorVersionAndDocumentPointer) {
+  ProjectService      project(db_path_, meta_path_);
+  PipelineMgmtService pipelines(project.GetStorage());
+  auto                guard = pipelines.LoadEditorPipeline(741);
+  ASSERT_NE(guard, nullptr);
+  ASSERT_NE(guard->commit_graph_, nullptr);
+  auto&      graph = *guard->commit_graph_;
+
+  const auto bad_version =
+      graph.CreateVersionRefAtHead("Unreplayable", InsertUnreplayableCommit(graph));
+  const auto prior_version   = graph.GetActiveVersionId();
+  const auto prior_document  = guard->document_;
+  const auto prior_json      = prior_document->ToJson().dump();
+  const bool prior_dirty     = guard->dirty_;
+  const bool prior_writeback = guard->serialized_state_needs_writeback_;
+  ASSERT_NE(bad_version, prior_version);
+
+  std::string error;
+  EXPECT_FALSE(pipelines.CheckoutVersion(guard, bad_version, &error));
+  EXPECT_NE(error.find("grade.does_not_exist"), std::string::npos) << error;
+  EXPECT_EQ(graph.GetActiveVersionId(), prior_version);
+  EXPECT_EQ(guard->document_, prior_document) << "failed replay must not swap the document";
+  EXPECT_EQ(ExecutorDocument(*guard), prior_document) << "renderer must keep the prior document";
+  EXPECT_EQ(guard->document_->ToJson().dump(), prior_json);
+  EXPECT_EQ(guard->dirty_, prior_dirty);
+  EXPECT_EQ(guard->serialized_state_needs_writeback_, prior_writeback);
+  pipelines.SavePipeline(guard);
+}
+
+TEST_F(PipelineMapperTests, CheckoutSuccessBindsReplayedDocumentAndMarksWriteBack) {
+  ProjectService      project(db_path_, meta_path_);
+  PipelineMgmtService pipelines(project.GetStorage());
+  auto                guard = pipelines.LoadEditorPipeline(742);
+  ASSERT_NE(guard, nullptr);
+  ASSERT_NE(guard->commit_graph_, nullptr);
+  auto&      graph       = *guard->commit_graph_;
+
+  auto       commit      = EditCommit::MakePipelineEdit(graph.GetRootId(), std::nullopt,
+                                                        MakeExposureBatch(kDefaultPipelineExposureEv, 2.5f));
+  const auto edited_head = commit.GetCommitHash();
+  ASSERT_TRUE(graph.InsertCommit(std::move(commit)));
+  const auto edited_version                = graph.CreateVersionRefAtHead("Edited", edited_head);
+  const auto root_version                  = graph.GetActiveVersionId();
+  const auto prior_document                = guard->document_;
+  guard->dirty_                            = false;
+  guard->serialized_state_needs_writeback_ = false;
+
+  std::string error;
+  ASSERT_TRUE(pipelines.CheckoutVersion(guard, edited_version, &error)) << error;
+  EXPECT_EQ(graph.GetActiveVersionId(), edited_version);
+  EXPECT_EQ(guard->working_head_commit_hash(), edited_head);
+  EXPECT_NE(guard->document_, prior_document) << "checkout binds a newly built document";
+  EXPECT_EQ(ExecutorDocument(*guard), guard->document_);
+  EXPECT_FLOAT_EQ(DocumentExposure(*guard->document_), 2.5f);
+  EXPECT_FLOAT_EQ(DocumentExposure(*prior_document), kDefaultPipelineExposureEv)
+      << "the swapped-out document is not changed";
+  EXPECT_TRUE(guard->serialized_state_needs_writeback_);
+  EXPECT_TRUE(guard->dirty_);
+
+  ASSERT_TRUE(pipelines.CheckoutVersion(guard, root_version, &error)) << error;
+  EXPECT_EQ(guard->working_head_commit_hash(), std::nullopt);
+  EXPECT_EQ(ExecutorDocument(*guard), guard->document_);
+  EXPECT_FLOAT_EQ(DocumentExposure(*guard->document_), kDefaultPipelineExposureEv);
+  pipelines.SavePipeline(guard);
+}
+
+TEST_F(PipelineMapperTests, ActiveVersionRebuildFailureKeepsPriorDocumentPointer) {
+  ProjectService      project(db_path_, meta_path_);
+  PipelineMgmtService pipelines(project.GetStorage());
+  auto                guard = pipelines.LoadEditorPipeline(743);
+  ASSERT_NE(guard, nullptr);
+  ASSERT_NE(guard->commit_graph_, nullptr);
+  auto& graph = *guard->commit_graph_;
+
+  graph.MoveWorkingHead(graph.GetActiveVersionId(), InsertUnreplayableCommit(graph));
+  const auto prior_document                = guard->document_;
+  const auto prior_json                    = prior_document->ToJson().dump();
+  guard->dirty_                            = false;
+  guard->serialized_state_needs_writeback_ = false;
+
+  std::string error;
+  EXPECT_FALSE(pipelines.RebuildActiveEditorPipeline(guard, &error));
+  EXPECT_NE(error.find("active Version rebuild failed"), std::string::npos) << error;
+  EXPECT_NE(error.find("grade.does_not_exist"), std::string::npos) << error;
+  EXPECT_EQ(guard->document_, prior_document);
+  EXPECT_EQ(ExecutorDocument(*guard), prior_document);
+  EXPECT_EQ(guard->document_->ToJson().dump(), prior_json);
+  EXPECT_FALSE(guard->dirty_);
+  EXPECT_FALSE(guard->serialized_state_needs_writeback_);
+  pipelines.SavePipeline(guard);
 }
 
 TEST_F(PipelineMapperTests, CheckpointForAnotherImageNeverLoads) {
