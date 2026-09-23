@@ -9,9 +9,11 @@ complete; manual Version/Paste check pending, and the last stage-JSON callers be
 G10.7 (Section 12.12). G10.4: legacy history store archived and removed from the compile
 graph, project format `0.9.0`; automated criteria complete (Section 13.12). G10.5: DRT
 resolver and the three backend switches done; CUDA and OpenCL byte tests pass, Metal
-unavailable, diff above the 2000-line limit (Section 14.12). G10.6: lens resolver, lens kernels,
-CUDA detail and grain helpers, Metal PRNG, shared headers, and `EditScope` moved; all Windows
-criteria pass, Metal unavailable, three commits (Section 15.12). G10.7–G10.11 planned.
+unavailable, diff above the 2000-line limit (Section 14.12); on macOS the Metal DRT byte test
+fails at the G10.5 base as well (Section 15.12). G10.6: complete. Lens resolver, lens kernels, CUDA
+detail and grain helpers, Metal PRNG, shared headers, and `EditScope` moved; Windows and macOS
+criteria pass, except failures that exist before this phase (Section 15.12). G10.7–G10.11
+planned.
 
 Parent: [GPU DAG Pipeline Rebuild Phase Plan](gpu_dag_pipeline_rebuild_phase_plan.md),
 Section 44 (G10) and Section 47 (global completion criteria).
@@ -629,7 +631,7 @@ lines. Generated expected-pixel files and temporary evidence do not count.
 | G10.3 | Open, checkout, rebuild, Version refs, Paste use build-then-swap without stage JSON | pipeline service, history state, transfer | G10.2 | 1200–1800 | partial (manual check pending) |
 | G10.4 | Legacy history store removed; project format `0.9.0` | sleeve, storage, history, journal, CI | G10.3 | 900–1500 | complete (1.7k lines; Section 13.12) |
 | G10.5 | DRT resolution moved out of `ODT_Op` and `OperatorParams` on three backends | runtime DRT | G10.1 | 1300–1900 | in progress (Metal unavailable; 2.6k lines in two commits) |
-| G10.6 | Lens resolver, CUDA detail and grain helpers, shared headers, shaders, and scope target moved | runtime, CMake | G10.5 | 1000–1700 | in progress (Metal unavailable; 3.6k lines in three commits) |
+| G10.6 | Lens resolver, CUDA detail and grain helpers, shared headers, shaders, and scope target moved | runtime, CMake | G10.5 | 1000–1700 | complete (3.6k lines in three commits; Section 15.12) |
 | G10.7 | Executor and services have no stage table; history presentation uses `field_key` | executor, services, presentation | G10.3, G10.6 | 1400–1900 | planned |
 | G10.8 | `CPUPipelineExecutor` renamed to `PipelineExecutor` | all users | G10.7 | 500–900 | planned |
 | G10.9 | Shared, CUDA, CPU, and operator legacy files archived out of the compile graph | CMake, archive | G10.8 | 700–1300 | planned |
@@ -2372,8 +2374,9 @@ Same pattern as Section 14.9 with the targets above, on Windows and macOS.
 
 ### 15.10 Exit criteria
 
-- [ ] All tests pass on Windows (CUDA and OpenCL) and macOS (Metal). (Windows CUDA and OpenCL:
-      pass, except the 6 failures from before this phase. Metal: unavailable; Section 15.12.)
+- [x] All tests pass on Windows (CUDA and OpenCL) and macOS (Metal). (Windows CUDA and OpenCL:
+      pass, except the 6 failures from before this phase. Metal: pass, except the 9 failures from
+      before this phase; Section 15.12, "macOS verification".)
 - [x] The source check passes.
 
 ### 15.11 Expected diff
@@ -2386,11 +2389,12 @@ Use the template in Section 10.12.
 
 #### Phase G10.6 completion record (2026-09-23)
 
-**Status:** in progress. All Windows criteria pass: the lens parameter test, the CUDA detail and
-grain pixel test, the source check, the link check, and the CUDA and OpenCL develop suites (except
-the failures from before this phase). Metal: unavailable (no macOS runner in this session), so the
-phase stays in progress (Section 15.10, first item). The diff is above the 2000-line limit of
-Section 24 and landed as three commits, each below it (see "Diff size").
+**Status:** complete (macOS verification 2026-09-23). All Windows criteria pass: the lens
+parameter test, the CUDA detail and grain pixel test, the source check, the link check, and the
+CUDA and OpenCL develop suites (except the failures from before this phase). On macOS the Metal
+develop, grade, DRT, renderer, and workspace suites, the lens tests, and the source checks pass,
+except 9 Metal failures that also fail at `fcfbb2ef` (see "macOS verification"). The diff is above
+the 2000-line limit of Section 24 and landed as three commits, each below it (see "Diff size").
 
 - **Source revision and branch:** based on `fcfbb2ef` (G10.5 merged) on
   `refact/gpu-dag-g10-6-lens-resolver-and-shared-helpers`. Three commits: `b62dcd4d` (lens resolver,
@@ -2536,7 +2540,7 @@ Lens setting enabled with an empty Develop extent
 | `DagSourcesDoNotReferenceLegacyDirectories` | ctest script | PASS |
 | `FramePresenterLinksScopeWithoutEditPipeline` | ctest script on `build.ninja` | PASS |
 | Existing develop suites | `GpuDagCudaDevelopTest`, `GpuDagOpenClDevelopTest` | PASS except the failures from before this phase (below) |
-| Existing develop suite | `GpuDagMetalDevelopTest` | Metal: unavailable (not built) |
+| Existing develop suite | `GpuDagMetalDevelopTest` | PASS on macOS except the failures from before this phase ("macOS verification") |
 | `UserCatalogIdentityResolvesWhenRawLensNameIsEmpty`, `DisabledPayloadReturnsNoRuntime`, `EmptyCatalogIdentityWithoutRawLensNameReturnsNoRuntime`, `CatalogIdentityWithoutFocalLengthReturnsNoRuntime` (rewritten on the resolver) | `LensCalibDevelopResolveTest` | PASS |
 | `EnabledPayloadWithEmptyExtentThrows` (added) | `LensCalibDevelopResolveTest` | PASS |
 | `ProfileStatusNamesMissingIdentityAndUnknownLens` (added) | `LensCalibDevelopResolveTest` | PASS |
@@ -2608,12 +2612,57 @@ PipelineDocumentRenderTest|CudaPreviewVramReclamationTest|PipelineSharedUseTest`
   `lens_calibration_resolver_test.cpp` 315, `cuda_film_grain_math.cuh` 203,
   `lens_calibration_resolver.hpp` 128. `cuda_primary_grade_test.cpp` is 1044 lines (99 added); it
   was already above 1000 lines and needs a split by fixture in a later test cleanup.
-- Remaining defects or unavailable platforms: Metal: unavailable. The Metal develop pass, the moved
-  `lens_calib.metal` path, `LensCalibrationMetalShaders`, `EditScope` with the scope metallib, and
-  the new `prng.metal` include paths are not compiled in this session. `GpuDagMetalDevelopTest` and
-  `GpuDagMetalDrtTest` must build and pass on macOS before G10.6 is complete. The lens kernels and
-  `cuda_geometry_ops.cu` still include `decoders/processor/operators/gpu/cuda_raw_proc_utils.hpp`
-  (a macro header of the RAW processor module); G10.10 owns that module.
+- Remaining defects or unavailable platforms: none unavailable. The 9 Metal failures below exist
+  at `fcfbb2ef` and are not caused by G10.6. The lens kernels and `cuda_geometry_ops.cu` still
+  include `decoders/processor/operators/gpu/cuda_raw_proc_utils.hpp` (a macro header of the RAW
+  processor module); G10.10 owns that module.
+
+**macOS verification (2026-09-23)**
+
+Apple Silicon, macOS 27, Ninja, Debug, branch head `f7ec2591`. The Metal develop pass, the moved
+`lens_calib.metal` (`LensCalibrationMetalShaders`,
+`edit/runtime/lens/metal/shader/lens_calib.metallib`), `EditScope` with
+`edit/scope/metal_shader/scope_analyzer.metallib`, and the new `prng.metal` include paths in
+`drt_neighbor.metal` and `film_grain.metal` compile and link.
+
+```text
+cmake --preset macos_debug_tests                                            -> exit 0
+cmake --build --preset macos_debug_tests --parallel 10 -- -k 0              -> exit 1 (3 targets from before this phase, below)
+ctest --test-dir build/macos-debug-tests -j 1 -R "<macOS phase set>"        -> exit 8 (9 failures from before this phase)
+cmake --preset macos_debug && cmake --build --preset macos_debug --target alcedo_main   -> exit 0
+```
+
+macOS phase set regex: `GpuDagMetal|MetalGeometryUtilsTest|MetalRawOpsTest|MetalDemosaicNetModuleTest|
+LensCalibDevelopResolveTest|LocalToneMappingConstantsMatchRuntimeTest|GpuDagRawInputTest|
+GpuDagModelGraphTest|ToneMappingOwnershipTest|AdjustmentTransferServiceMiniGitTest|RuntimeSources|
+RuntimeLegacyHeader|NoProduct|NoTestSource|StageTable|StageJson|LegacyHistory|DagSources|DagLegacy|
+FramePresenter`.
+
+- After the change: 415 run, 395 passed, 9 failed, 11 skipped (RAW fixtures and demosaic reference
+  files not present on this machine). All 9 `LensCalibDevelopResolveTest` cases, the 8
+  `LocalToneMappingConstantsMatchRuntimeTest` cases, `DagSourcesDoNotReferenceLegacyDirectories`,
+  `DagLegacyDirectoryCheckRejectsLegacyIncludes`, `FramePresenterLinkCheckRejectsLegacyPipeline`,
+  and the earlier G10 source checks pass. `FramePresenterLinksScopeWithoutEditPipeline` is not
+  registered on macOS (it needs `GpuDagCudaDrtProductTest`).
+- Baseline: `fcfbb2ef` checked out in the same build tree, the five `GpuDagMetal*` targets rebuilt:
+  110 run, 101 passed, the same 9 failed. The failures:
+  - `MetalDevelopFixture.MetalGeometryUsesOneResampleForCropRotationViewportAndScale` (extent 30×25,
+    expected 40×30; the same defect as the CUDA
+    `CropRotateViewportAndScaleExecuteAsOneCudaResample` failure).
+  - `MetalDevelopFixture.MetalCameraColorConsumesSharedDualIlluminantTransform`.
+  - `MetalGradeFixture.MetalPointwiseAdjustmentsUseOneDispatchPerLlfSegment` (1 dispatch, expected 2).
+  - `GpuDagMetalGrade.MetalLlfRoiSamplesCanonicalReferenceWithSharedGeometryPlan`,
+    `GpuDagMetalGrade.MetalLlfMatchesCudaReferenceWithinTolerance`,
+    `MetalMaskFixture.MetalDisconnectedMaskUsesConstantOneCoverage`, and
+    `MetalMaskFixture.MetalNormalMixMatchesCudaReferenceWithinTolerance` (the test texture lease is
+    null).
+  - `GpuDagMetalDrt.MetalDrtParameterBytesMatchStoredExpectedBytes` (G10.5 test, first run on
+    macOS: every case differs from the stored bytes at byte 12). This is an open G10.5 Metal defect.
+  - `MetalRendererFixture.InteractiveQualityBaseInteractiveReuses2560PixelResults`.
+- Build targets that fail at `fcfbb2ef` as well and do not use G10.6 code: `ImageBufferMetalTest`
+  (`cv::countNonZero` without `<opencv2/core.hpp>` since `59982073`), `EditorGeometryOverlayPipelineTest`
+  (calls `CUDA::ResizeLinear`, which is built only with CUDA), and `UiFuzzAutomationTest`
+  (`qml_register_types_Alcedo_Main` undefined with `ALCEDO_GENERATE_QMLTYPES=OFF`).
 
 ---
 
