@@ -9,7 +9,9 @@ complete; manual Version/Paste check pending, and the last stage-JSON callers be
 G10.7 (Section 12.12). G10.4: legacy history store archived and removed from the compile
 graph, project format `0.9.0`; automated criteria complete (Section 13.12). G10.5: DRT
 resolver and the three backend switches done; CUDA and OpenCL byte tests pass, Metal
-unavailable, diff above the 2000-line limit (Section 14.12). G10.6–G10.11 planned.
+unavailable, diff above the 2000-line limit (Section 14.12). G10.6: lens resolver, lens kernels,
+CUDA detail and grain helpers, Metal PRNG, shared headers, and `EditScope` moved; all Windows
+criteria pass, Metal unavailable, three commits (Section 15.12). G10.7–G10.11 planned.
 
 Parent: [GPU DAG Pipeline Rebuild Phase Plan](gpu_dag_pipeline_rebuild_phase_plan.md),
 Section 44 (G10) and Section 47 (global completion criteria).
@@ -627,7 +629,7 @@ lines. Generated expected-pixel files and temporary evidence do not count.
 | G10.3 | Open, checkout, rebuild, Version refs, Paste use build-then-swap without stage JSON | pipeline service, history state, transfer | G10.2 | 1200–1800 | partial (manual check pending) |
 | G10.4 | Legacy history store removed; project format `0.9.0` | sleeve, storage, history, journal, CI | G10.3 | 900–1500 | complete (1.7k lines; Section 13.12) |
 | G10.5 | DRT resolution moved out of `ODT_Op` and `OperatorParams` on three backends | runtime DRT | G10.1 | 1300–1900 | in progress (Metal unavailable; 2.6k lines in two commits) |
-| G10.6 | Lens resolver, CUDA detail and grain helpers, shared headers, shaders, and scope target moved | runtime, CMake | G10.5 | 1000–1700 | planned |
+| G10.6 | Lens resolver, CUDA detail and grain helpers, shared headers, shaders, and scope target moved | runtime, CMake | G10.5 | 1000–1700 | in progress (Metal unavailable; 3.6k lines in three commits) |
 | G10.7 | Executor and services have no stage table; history presentation uses `field_key` | executor, services, presentation | G10.3, G10.6 | 1400–1900 | planned |
 | G10.8 | `CPUPipelineExecutor` renamed to `PipelineExecutor` | all users | G10.7 | 500–900 | planned |
 | G10.9 | Shared, CUDA, CPU, and operator legacy files archived out of the compile graph | CMake, archive | G10.8 | 700–1300 | planned |
@@ -2370,8 +2372,9 @@ Same pattern as Section 14.9 with the targets above, on Windows and macOS.
 
 ### 15.10 Exit criteria
 
-- [ ] All tests pass on Windows (CUDA and OpenCL) and macOS (Metal).
-- [ ] The source check passes.
+- [ ] All tests pass on Windows (CUDA and OpenCL) and macOS (Metal). (Windows CUDA and OpenCL:
+      pass, except the 6 failures from before this phase. Metal: unavailable; Section 15.12.)
+- [x] The source check passes.
 
 ### 15.11 Expected diff
 
@@ -2380,6 +2383,237 @@ Same pattern as Section 14.9 with the targets above, on Windows and macOS.
 ### 15.12 Completion record
 
 Use the template in Section 10.12.
+
+#### Phase G10.6 completion record (2026-09-23)
+
+**Status:** in progress. All Windows criteria pass: the lens parameter test, the CUDA detail and
+grain pixel test, the source check, the link check, and the CUDA and OpenCL develop suites (except
+the failures from before this phase). Metal: unavailable (no macOS runner in this session), so the
+phase stays in progress (Section 15.10, first item). The diff is above the 2000-line limit of
+Section 24 and landed as three commits, each below it (see "Diff size").
+
+- **Source revision and branch:** based on `fcfbb2ef` (G10.5 merged) on
+  `refact/gpu-dag-g10-6-lens-resolver-and-shared-helpers`. Three commits: `b62dcd4d` (lens resolver,
+  `EditRuntimeLens`, develop passes, lens tests and data), `c575329d` (`LensCalibOp` on the resolver,
+  CUDA helpers, Metal PRNG, shared headers, `EditScope`, pixel and local-tone tests), and the commit
+  that follows it (source and link checks, this record).
+- **Actual changed modules:** `edit/runtime/lens/` (new), `include/edit/runtime/lens/` (new),
+  `include/edit/runtime/cuda/`, `edit/runtime/{cuda,opencl,metal}` develop passes,
+  `edit/runtime/cuda/cuda_neighbor_grade.cuh`, `edit/runtime/metal/shader/`, the legacy
+  `LensCalibOp`, `detail.cuh`, `film_grain.cuh`, `film_grain.metal`, `pipeline_task.hpp`, the
+  `edit/`, `decoders/`, `metal/`, `opencl/`, `ui/alcedo_main/`, and root CMake files, the OpenCL
+  geometry manifest, and tests.
+
+**Implemented behavior**
+
+- `LensCalibrationResolver` (`include/edit/runtime/lens/lens_calibration_resolver.hpp`) holds the
+  Lensfun database cache, profile matching, coefficient rescaling, and scale helpers that were in
+  `lens_calib_op.cpp`. It has no `OperatorParams` parameter:
+  - `Resolve(const DevelopPayload&, const RawRuntimeColorContext&, Extent2D, bool
+    dng_geometry_applied) -> std::optional<LensCalibGpuParams>` is the Develop entry. It returns
+    `std::nullopt` for a disabled setting or when no correction applies, and throws only for an
+    enabled setting with an empty extent.
+  - `ResolveProfile(const LensInputMeta&, const LensCorrectionSettings&, bool) ->
+    LensProfileResolution` is the size-independent step. `LensProfileStatus` names the outcome:
+    `Resolved`, `NoCorrectionApplies`, `MissingLensIdentity`, `DatabaseUnavailable`, or
+    `LensNotInDatabase`.
+  - `BindImageExtent` sizes a profile (size fields, normalization, optical center, automatic
+    scale). `DefaultDatabasePath` is the default search.
+- The CUDA, OpenCL, and Metal develop passes call `LensCalibrationResolver::Resolve` in place of a
+  temporary `LensCalibOp`. The DAG no longer constructs a legacy operator.
+- `LensCalibOp` keeps only the legacy stage path. `ResolveRuntimeForMeta` maps the resolver status
+  to the `OperatorParams` flags exactly as before, and `ApplyGPU` sizes through `BindImageExtent`
+  (the three per-backend copies of the sizing code are gone). The `DevelopPayload` constructor and
+  `ResolveRuntimeForImage` are removed; only the develop passes and the old test used them.
+  `lens_calib_op.cpp` went from 1299 to 445 lines.
+- New library `EditRuntimeLens` (resolver; `cuda_geometry_ops.cu`, `cuda_lens_calib_ops.cu`,
+  `metal_lens_calib.cpp`, `opencl_lens_calib_ops.cpp`). The kernels moved with `git mv` and only
+  their include paths changed. `lens_calib.metal` and `lens_calib.cl` moved to
+  `edit/runtime/lens/{metal,opencl}/shader/`. The Metal target is now `LensCalibrationMetalShaders`,
+  the OpenCL define is `ALCEDO_OPENCL_LENS_CALIB_CL`, and both root install blocks install
+  `edit/runtime/lens/opencl/shader/`. The Lensfun include directory, build dependency, and
+  `lensfun.dll` copy moved from `Operators` to `EditRuntimeLens`.
+- `EditRuntimeCuda`, `EditRuntimeOpenCl`, and `EditRuntimeMetal` no longer link `Operators`; they
+  link `EditRuntimeLens` and `EditScope`. `Operators` links `EditRuntimeLens` publicly for
+  `LensCalibOp`, `CropRotateOp`, and `ResizeOp` until G10.9.
+- CUDA helpers: the `detail_*` functions moved to `include/edit/runtime/cuda/cuda_detail_math.cuh`
+  and the film grain math (every function that does not read `GPUOperatorParams`) to
+  `cuda_film_grain_math.cuh`. The text is unchanged except that `GPU_FUNC` is spelled out as
+  `__device__ __forceinline__`. Neither header includes `param.cuh`. The legacy `detail.cuh` and
+  `film_grain.cuh` include them and keep only their `GPUOperatorParams` kernels.
+- `prng.metal` moved to `edit/runtime/metal/shader/`. `drt_neighbor.metal` includes it by name; the
+  legacy `film_grain.metal` includes `../../../runtime/metal/shader/prng.metal`.
+- `local_tone_mapping.hpp` and `pipeline_apply_request.hpp` moved to `include/edit/runtime/` with
+  `git mv` and no content change. `pipeline_task.hpp` no longer includes `op_kernel.hpp` or
+  `pipeline.hpp` (it used neither).
+- New library `EditScope` (the five `edit/scope/` sources) with the scope Metal library path.
+  `EditPipeline` no longer compiles them and links `EditScope` publicly for the legacy Metal and
+  OpenCL implementations.
+- Source check `DagSourcesDoNotReferenceLegacyDirectories` and its negative fixture
+  `DagLegacyDirectoryCheckRejectsLegacyIncludes`; link check
+  `FramePresenterLinksScopeWithoutEditPipeline` (`tests/ci/target_link_checks.cmake`) and its
+  negative fixture `FramePresenterLinkCheckRejectsLegacyPipeline`.
+
+**Deviations from Sections 15.3–15.8**
+
+- Failure behavior (Section 15.7): confirmed before the move that `LensCalibOp` skipped lens
+  correction without an error when no database loaded, when the lens was not found, or when the
+  identity was incomplete. Per Section 15.7 the resolver keeps this: `Resolve` returns
+  `std::nullopt` and the develop pass renders without lens correction. No new failure mode was
+  added. Also observed: a configured directory that does not exist falls back to the default
+  search, and Lensfun loads a directory of malformed XML as an empty database, so that case is
+  `LensNotInDatabase`. `DatabaseUnavailable` happens only when the default search finds no
+  directory.
+- Headers and kernels: public headers moved to `include/edit/runtime/lens/{,cuda/,metal/,opencl/}`
+  and the CUDA helpers to `include/edit/runtime/cuda/`, not `edit/runtime/...`, because the legacy
+  headers under `include/` include them (the same reason as in G10.5).
+- The resolver API is a class of static functions with a typed status, not
+  `result<std::optional<...>>` (Section 7.2): the project has no result type, and the old path
+  reports no error.
+- Lens fixture set: every lens in the tracked CI RAW files has a Lensfun profile. The unmatched
+  fixture therefore uses `DSC00948.ARW` with its EXIF lens name replaced by `Qzxv Prototype`, and
+  the file records the name that the resolver received. The user catalog fixture selects
+  `Sony FE 20-70mm F4 G` on `_DSC0027.ARW` (28 mm, f/2). Lensfun's loose search with that name also
+  returns the `FE 28mm F2` profile, and the focal and aperture score chooses it. This is the
+  pre-G10.6 behavior, and the expected file records it.
+- The local-tone constants were already in `local_tone_mapping.hpp`. The test target is now
+  `LocalToneMappingConstantsMatchRuntimeTest` (file `tests/edit/runtime/local_tone_mapping_constants_test.cpp`,
+  suite `LocalToneMappingConstantsMatchRuntime`). Two cases still check the legacy alias header and
+  the legacy shader mirrors; G10.9 and G10.10 remove them with their subjects.
+- `FramePresenterLinksScopeWithoutEditPipeline`: `cuda_document_geometry_request_test.cpp` (G10.1)
+  needs the executor and scheduler, so it moved to the new target
+  `GpuDagCudaDocumentGeometryRequestTest`. `GpuDagCudaDrtProductTest` and
+  `GpuDagOpenClDrtProductTest` now link `EditScope` in place of `EditPipeline`. The check is
+  registered only for Ninja generators, because it reads `build.ninja`.
+
+**Expected data (generated before the change)**
+
+A temporary writer (appended to the unchanged test file and removed afterwards) called
+`LensCalibOp::ResolveRuntimeForImage` at `fcfbb2ef` for four CI RAW fixtures at `DecodeRes::EIGHTH`
+and wrote `alcedo_studio/tests/resources/expected_parameters/lens/{dng_embedded_warp,
+lensfun_matched_raw,lensfun_unmatched_raw,user_catalog_lens}_expected_lens_params.json` (raw file,
+EXIF lens name, develop extent, DNG warp flag, resolved flag, every `LensCalibGpuParams` field). Two
+runs were byte-identical. A second temporary writer rendered the 64×48 detail probe through DRT
+Post with sharpen (amount 80, radius 2), clarity 60, and film grain 0.6 at `fcfbb2ef` and wrote
+three RGBA float32 files to `expected_pixels/cuda_neighbor_grade/`. Two runs were byte-identical,
+and the final test passed on the unchanged code before any helper moved.
+
+**Primary success call chain:**
+
+```text
+Renderer<Backend>::Render -> ExecuteXxxDevelop (plan contains GpuPassKind::Lens)
+  -> ExecuteXxxLensCalibration(device, plan, input, develop payload)
+  -> LensCalibrationResolver::Resolve(develop payload, input.color_context,
+                                      plan.source.develop_output_extent, DNG warp present)
+       lens name: catalog maker/model when set, else the prepared RAW lens EXIF
+       ResolveProfile -> Lensfun database cache -> camera and lens match -> interpolate and
+                         rescale distortion, TCA, vignetting, crop -> LensProfileStatus::Resolved
+       BindImageExtent -> size, normalization, optical center, automatic scale
+  -> LensCalibGpuParams
+  -> EditRuntimeLens kernel: CUDA::ApplyLensCalibration | OpenCL::Geometry::ApplyLensCalibration |
+     metal::ApplyLensCalibration on develop.sensor_linear
+```
+
+**Primary failure call chain:**
+
+```text
+Lensfun database gives no profile (no directory, malformed XML, or lens not in the database),
+or the lens identity has no model or no focal length
+  -> ResolveProfile returns DatabaseUnavailable | LensNotInDatabase | MissingLensIdentity
+  -> Resolve returns std::nullopt; the develop pass returns before the lens kernel
+  -> develop.sensor_linear is published without lens correction; no error (pre-G10.6 behavior)
+Lens setting enabled with an empty Develop extent
+  -> Resolve throws "LensCalibrationResolver: cannot resolve an empty Develop image"
+  -> the develop pass stops; the exception reaches the renderer caller
+```
+
+**What was proven (executed tests)**
+
+| Required name | Target | Result |
+| --- | --- | --- |
+| `LensResolverMatchesStoredLensParametersForFixtureSet` | `LensCalibDevelopResolveTest` (rewritten) | PASS (4 fixtures, every field exact; 3 resolve, 1 does not) |
+| `CudaNeighborGradeDetailAndGrainPixelsAreUnchanged` | `GpuDagCudaPrimaryGradeTest` | PASS (3 cases, bitwise; each differs from the identity render) |
+| `DagSourcesDoNotReferenceLegacyDirectories` | ctest script | PASS |
+| `FramePresenterLinksScopeWithoutEditPipeline` | ctest script on `build.ninja` | PASS |
+| Existing develop suites | `GpuDagCudaDevelopTest`, `GpuDagOpenClDevelopTest` | PASS except the failures from before this phase (below) |
+| Existing develop suite | `GpuDagMetalDevelopTest` | Metal: unavailable (not built) |
+| `UserCatalogIdentityResolvesWhenRawLensNameIsEmpty`, `DisabledPayloadReturnsNoRuntime`, `EmptyCatalogIdentityWithoutRawLensNameReturnsNoRuntime`, `CatalogIdentityWithoutFocalLengthReturnsNoRuntime` (rewritten on the resolver) | `LensCalibDevelopResolveTest` | PASS |
+| `EnabledPayloadWithEmptyExtentThrows` (added) | `LensCalibDevelopResolveTest` | PASS |
+| `ProfileStatusNamesMissingIdentityAndUnknownLens` (added) | `LensCalibDevelopResolveTest` | PASS |
+| `DngWarpKeepsVignettingAndDisablesGeometryCorrections` (added) | `LensCalibDevelopResolveTest` | PASS |
+| `MalformedDatabaseSkipsLensCorrectionWithoutError` (added) | `LensCalibDevelopResolveTest` | PASS |
+| `DagLegacyDirectoryCheckRejectsLegacyIncludes` (added) | ctest script | PASS |
+| `FramePresenterLinkCheckRejectsLegacyPipeline` (added) | ctest script | PASS |
+| `LocalToneMappingConstantsMatchRuntimeTest.*` (renamed) | `LocalToneMappingConstantsMatchRuntimeTest` | PASS |
+
+**Build and test commands with exit codes**
+
+```text
+cmd /c scripts\msvc_env.cmd --preset win_debug -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake"   -> exit 0
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 -- -k 0   -> exit 0 (full tree, alcedo_main included)
+ctest --test-dir build/debug -j 1 -R "<phase set>"   -> exit 8 (6 failures from before this phase)
+ctest --test-dir build/debug -j 1 -R "<wide set>"    -> exit 8 (1 failure from before this phase)
+```
+
+Phase set regex: `LensCalibDevelopResolveTest|GpuDagCudaPrimaryGradeTest|GpuDagCudaDevelopTest|
+GpuDagOpenClDevelopTest|GpuDagCudaDrtProductTest|GpuDagCudaDocumentGeometryRequestTest|
+GpuDagOpenClDrtProductTest|LocalToneMappingConstantsMatchRuntimeTest|EditorGeometryOverlayPipelineTest|
+AdjustmentTransferServiceMiniGitTest|FilmGrainCudaStageTest|OpenClRuntimeTest|GpuDagCudaWorkspaceTest|
+GpuDagRawInputTest|RuntimeSources|RuntimeLegacyHeader|NoProductCode|StageTable|StageJson|
+LegacyHistory|SourceReferencesLegacy|DagSources|DagLegacy|FramePresenter` (the baseline used the
+same set without the new names, and the local-tone test under its former target name). Wide set regex:
+`CropRotateOpTest|ODTOpTest|FilmGrainOpTest|HalationOpTest|HalationCudaStageTest|ToneMappingFacadeTest|
+PipelineFrameSinkTest|PipelineSchedulerRequestIdTest|GpuDagCudaGeometryTest|GpuDagCudaMaskTest|
+GpuDagOpenClGradeTest|GpuDagOpenClWorkspaceTest|GpuDagModelGraphTest|EditorScopeControllerTest|
+PipelineDocumentRenderTest|CudaPreviewVramReclamationTest|PipelineSharedUseTest`.
+
+**Discovered / passed / failed / skipped counts**
+
+- Baseline (`fcfbb2ef`, phase set, `-j 1`): 491 run, 485 passed, 6 failed.
+- After the change (phase set, `-j 1`): 501 run, 495 passed, 6 failed (10 added: 5 lens, 1 pixel,
+  2 source check, 2 link check). The 6 failures are the same tests that fail at `fcfbb2ef`:
+  `GpuDagCudaWorkspace.GpuAndRuntimeHeadersDoNotIncludeCudaOrImageBuffer`,
+  `…RendererTemplateInstantiatesCudaWithoutMetalHeaders`,
+  `CudaDevelopFixture.CanonDngProfileRendersAtFullResolutionAndInvalidatesOnlyColorCache`,
+  `CudaDevelopFixture.SwitchingHighlightReconstructionDoesNotKeepStalePublishedTextures`,
+  `OpenClDevelopFixture.CanonDngProfileRendersAtFullResolutionAndInvalidatesOnlyColorCache`, and
+  `OpenClDevelopFixture.OpenClCameraColorConsumesSharedDualIlluminantTransform` (all in the G10.5
+  list of failures from before G10.5).
+- In the first run, 4 `OpenClRuntimeTest` cases failed on a stale `OpenClProgramLibrary.dll` copy in
+  `OpenClRuntimeTest_runtime` (old lens shader path). A test folder's DLL copies refresh only when
+  its executable relinks, and this one did not relink. After the built DLL was copied there, all
+  12 `OpenClRuntimeTest` cases pass. The counts above include that rerun.
+- Wide set after the change (`-j 1`): 297 run, 296 passed, 1 failed:
+  `CudaGeometryFixture.CropRotateViewportAndScaleExecuteAsOneCudaResample` (output extent 30×25,
+  expected 40×30). It is in the G10.5 list of failures from before G10.5 and does not use lens or
+  neighbor-grade code.
+
+**Other evidence**
+
+- Manual verification: none required by Section 15.10.
+- Evidence path: `build/tmp/g10_6/` (`baseline_build.log`, `baseline_ctest.log`, `lens_probe.log`,
+  `lens_writer_v3_{1,2}.log`, `lens_expected_v3_{1,2}/`, `pixel_writer_run{1,2}.log`,
+  `pixel_expected_run{1,2}/`, `pixel_check_baseline.log`, `configure.log`, `build.log`,
+  `build_full.log`, `build_final2.log`, `ctest.log`, `ctest_wide.log`, `lens_test.log`).
+- Diff size (rename detection on, expected data excluded): 73 files, 2132 added and 1441 removed,
+  3573 lines. This is above the 1000–1700 estimate and the 2000-line limit. About 1700 lines are
+  relocated code counted twice: the Lensfun code from `lens_calib_op.cpp` into
+  `lens_calibration_resolver.cpp` (about 790 added, 850 removed) and the CUDA helpers (about 280
+  added, 250 removed). Production and build files are 58 files and 2747 lines; tests are 15 files
+  and 826 lines. Commit sizes (expected data excluded): `b62dcd4d` 1509 lines, `c575329d` 1871, the
+  record commit 446. Each commit carries the tests that its code needs. In `b62dcd4d`, `LensCalibOp`
+  still has its own copy of the Lensfun code; `c575329d` replaces it with the resolver. Only the
+  last commit was built and tested; the first two were not built on their own.
+- LOC note: `lens_calibration_resolver.cpp` 790, `lens_calib_op.cpp` 445 (was 1299),
+  `lens_calibration_resolver_test.cpp` 315, `cuda_film_grain_math.cuh` 203,
+  `lens_calibration_resolver.hpp` 128. `cuda_primary_grade_test.cpp` is 1044 lines (99 added); it
+  was already above 1000 lines and needs a split by fixture in a later test cleanup.
+- Remaining defects or unavailable platforms: Metal: unavailable. The Metal develop pass, the moved
+  `lens_calib.metal` path, `LensCalibrationMetalShaders`, `EditScope` with the scope metallib, and
+  the new `prng.metal` include paths are not compiled in this session. `GpuDagMetalDevelopTest` and
+  `GpuDagMetalDrtTest` must build and pass on macOS before G10.6 is complete. The lens kernels and
+  `cuda_geometry_ops.cu` still include `decoders/processor/operators/gpu/cuda_raw_proc_utils.hpp`
+  (a macro header of the RAW processor module); G10.10 owns that module.
 
 ---
 

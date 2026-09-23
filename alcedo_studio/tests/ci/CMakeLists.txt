@@ -129,3 +129,58 @@ set_tests_properties(RuntimeLegacyHeaderCheckRejectsRuntimeInclude
   PROPERTIES PASS_REGULAR_EXPRESSION "edit/runtime/cuda/drt_pass\.cu: #include"
              FAIL_REGULAR_EXPRESSION "drt_state\.hpp|stage\.cpp"
              LABELS "ci_core_flow;legacy_removal")
+
+# G10.6: no DAG runtime, graph, or renderer file includes a legacy pipeline or operator path.
+add_test(NAME DagSourcesDoNotReferenceLegacyDirectories
+  COMMAND ${CMAKE_COMMAND} -DALCEDO_SOURCE_ROOT=${ALCEDO_ROOT_DIR}/src
+          -DCHECK=DagSourcesDoNotReferenceLegacyDirectories
+          -P ${ALCEDO_TEST_ROOT}/ci/legacy_removal_source_checks.cmake)
+set_tests_properties(DagSourcesDoNotReferenceLegacyDirectories
+  PROPERTIES LABELS "ci_core_flow;legacy_removal")
+
+# The same check must reject a relative shader include into GPU_kernels, a legacy operator header,
+# and a stage header in DAG files, and must accept the executor header, Model and data headers,
+# and legacy includes outside the DAG scope.
+set(_dag_legacy_fixture_root "${CMAKE_CURRENT_BINARY_DIR}/dag_legacy_directory_fixture")
+file(WRITE "${_dag_legacy_fixture_root}/edit/runtime/metal/shader/neighbor.metal"
+  "#include \"../../../operators/GPU_kernels/metal_shader/prng.metal\"\n")
+file(WRITE "${_dag_legacy_fixture_root}/edit/graph/node.cpp"
+  "#include \"edit/operators/geometry/lens_calib_op.hpp\"\n")
+file(WRITE "${_dag_legacy_fixture_root}/include/renderer/task.hpp"
+  "#include \"edit/pipeline/pipeline.hpp\"\n#include \"edit/pipeline/pipeline_cpu.hpp\"\n")
+file(WRITE "${_dag_legacy_fixture_root}/edit/runtime/allowed.cpp"
+  "#include \"edit/operators/models/sharpen_model.hpp\"\n#include \"edit/operators/basic/planckian_locus_table.hpp\"\n#include \"edit/runtime/local_tone_mapping.hpp\"\n")
+file(WRITE "${_dag_legacy_fixture_root}/edit/pipeline/stage.cpp"
+  "#include \"edit/operators/GPU_kernels/param.cuh\"\n")
+add_test(NAME DagLegacyDirectoryCheckRejectsLegacyIncludes
+  COMMAND ${CMAKE_COMMAND} -DALCEDO_SOURCE_ROOT=${_dag_legacy_fixture_root}
+          -DCHECK=DagSourcesDoNotReferenceLegacyDirectories
+          -P ${ALCEDO_TEST_ROOT}/ci/legacy_removal_source_checks.cmake)
+set_tests_properties(DagLegacyDirectoryCheckRejectsLegacyIncludes
+  PROPERTIES PASS_REGULAR_EXPRESSION "edit/graph/node\.cpp: #include.*edit/runtime/metal/shader/neighbor\.metal: #include.*include/renderer/task\.hpp: #include \"edit/pipeline/pipeline\.hpp\""
+             FAIL_REGULAR_EXPRESSION "allowed\.cpp|stage\.cpp|pipeline_cpu\.hpp"
+             LABELS "ci_core_flow;legacy_removal")
+
+# G10.6: a DAG frame presenter test links the scope analyzer from EditScope, without the legacy
+# pipeline libraries. The check reads the generated Ninja link statement.
+if(CMAKE_GENERATOR MATCHES "Ninja" AND TARGET GpuDagCudaDrtProductTest)
+  add_test(NAME FramePresenterLinksScopeWithoutEditPipeline
+    COMMAND ${CMAKE_COMMAND} -DNINJA_FILE=${CMAKE_BINARY_DIR}/build.ninja
+            -DTARGET_NAME=GpuDagCudaDrtProductTest
+            -DCHECK=FramePresenterLinksScopeWithoutEditPipeline
+            -P ${ALCEDO_TEST_ROOT}/ci/target_link_checks.cmake)
+  set_tests_properties(FramePresenterLinksScopeWithoutEditPipeline
+    PROPERTIES LABELS "ci_core_flow;legacy_removal")
+endif()
+
+# The link check must reject a link statement that names EditPipeline and lacks EditScope.
+set(_link_fixture_ninja "${CMAKE_CURRENT_BINARY_DIR}/frame_presenter_link_fixture/build.ninja")
+file(WRITE "${_link_fixture_ninja}"
+  "build tests/edit/PresenterTest.exe: CXX_EXECUTABLE_LINKER__PresenterTest_Debug a.obj\n  LINK_LIBRARIES = src/edit/EditRuntimeCuda.lib src/decoders/EditPipeline.lib\n")
+add_test(NAME FramePresenterLinkCheckRejectsLegacyPipeline
+  COMMAND ${CMAKE_COMMAND} -DNINJA_FILE=${_link_fixture_ninja} -DTARGET_NAME=PresenterTest
+          -DCHECK=FramePresenterLinksScopeWithoutEditPipeline
+          -P ${ALCEDO_TEST_ROOT}/ci/target_link_checks.cmake)
+set_tests_properties(FramePresenterLinkCheckRejectsLegacyPipeline
+  PROPERTIES PASS_REGULAR_EXPRESSION "PresenterTest does not link EditScope; links legacy library EditPipeline"
+             LABELS "ci_core_flow;legacy_removal")
