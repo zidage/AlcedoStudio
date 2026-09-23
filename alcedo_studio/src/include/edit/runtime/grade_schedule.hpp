@@ -14,7 +14,7 @@
 
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/operators/models/pending_parameter_patch.hpp"
-#include "edit/pipeline/local_tone_mapping.hpp"
+#include "edit/runtime/local_tone_mapping.hpp"
 #include "edit/runtime/adjustment_runtime.hpp"
 #include "edit/runtime/execution_plan.hpp"
 #include "edit/runtime/grade_parameter_slot.hpp"

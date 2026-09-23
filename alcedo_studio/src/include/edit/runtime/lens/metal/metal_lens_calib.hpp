@@ -6,7 +6,7 @@
 
 #ifdef HAVE_METAL
 
-#include "edit/operators/geometry/lens_calib_runtime.hpp"
+#include "edit/runtime/lens/lens_calib_runtime.hpp"
 
 namespace alcedo::metal {
 class MetalImage;

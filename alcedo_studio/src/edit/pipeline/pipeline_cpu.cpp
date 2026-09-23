@@ -22,7 +22,7 @@
 #include "edit/geometry/render_request.hpp"
 #include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/pipeline_document.hpp"
-#include "edit/pipeline/pipeline_apply_request.hpp"
+#include "edit/runtime/pipeline_apply_request.hpp"
 #endif
 #ifdef HAVE_CUDA
 #include "edit/runtime/cuda/cuda_product_renderer.hpp"

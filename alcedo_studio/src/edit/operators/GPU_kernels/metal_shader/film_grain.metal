@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "prng.metal"
+#include "../../../runtime/metal/shader/prng.metal"
 
 constant float    kMetalFilmGrainRedDensity[11]   = {0.22f, 0.22f, 0.25f, 0.42f, 0.78f, 1.19f,
                                                      1.58f, 1.94f, 2.26f, 2.45f, 2.52f};

@@ -110,28 +110,22 @@ set(OPERATORS_SRCS
     ${ALCEDO_SRC_ROOT}/edit/operators/operator_registeration.cpp
 )
 
-if(ALCEDO_CUDA_ENABLED)
-    list(APPEND OPERATORS_SRCS
-        ${ALCEDO_SRC_ROOT}/edit/operators/geometry/cuda_geometry_ops.cu
-        ${ALCEDO_SRC_ROOT}/edit/operators/geometry/cuda_lens_calib_ops.cu
-    )
-endif()
 if(ALCEDO_METAL_ENABLED)
     list(APPEND OPERATORS_SRCS
         ${ALCEDO_SRC_ROOT}/edit/operators/basic/highlight_shadow_local_tone_metal.cpp
-        ${ALCEDO_SRC_ROOT}/edit/operators/geometry/metal_lens_calib.cpp
     )
 endif()
 if(ALCEDO_OPENCL_ENABLED)
     list(APPEND OPERATORS_SRCS
         ${ALCEDO_SRC_ROOT}/edit/operators/basic/highlight_shadow_local_tone_opencl.cpp
-        ${ALCEDO_SRC_ROOT}/edit/operators/geometry/opencl_lens_calib_ops.cpp
     )
 endif()
 
+# LensCalibOp, CropRotateOp, and ResizeOp use the lens resolver and the lens and geometry kernels
+# of EditRuntimeLens until G10.9 archives them.
 def_cuda_library(Operators
     SOURCES ${OPERATORS_SRCS}
-    PUBLIC_DEPS ImageBuffer JSON OpenColorIO::OpenColorIO hwy::hwy puerhlab_lensfun
+    PUBLIC_DEPS ImageBuffer JSON OpenColorIO::OpenColorIO hwy::hwy EditRuntimeLens
     # Image provides RawColorContextToJson/FromJson used by RawDecodeOp durable params.
     PRIVATE_DEPS ${ALCEDO_OPENCV_IMAGE_DEPS} RawProcessor Image EditGraph EditRuntimeDrt
 )
@@ -139,30 +133,15 @@ if(ALCEDO_CUDA_ENABLED)
     set_target_properties(Operators PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 endif()
 if(ALCEDO_METAL_ENABLED)
-    add_dependencies(Operators LensCalibOpMetalShaders EditPipelineMetalShaders)
+    add_dependencies(Operators EditPipelineMetalShaders)
     target_link_libraries(Operators PRIVATE MetalGeometryUtils MetalImage MetalContext)
     target_compile_definitions(Operators PRIVATE
-        ALCEDO_METAL_LENS_CALIB_METALLIB_PATH="${METAL_LENS_CALIB_METALLIB}"
         ALCEDO_METAL_FUSED_PIPELINE_METALLIB_PATH="${METAL_FUSED_PIPELINE_METALLIB}"
     )
 endif()
 if(ALCEDO_OPENCL_ENABLED)
     target_compile_definitions(Operators PUBLIC HAVE_OPENCL)
     target_link_libraries(Operators PRIVATE OpenClProgramLibrary OpenClGeometryUtils)
-endif()
-if(DEFINED ALCEDO_LENSFUN_INCLUDE_DIR AND NOT "${ALCEDO_LENSFUN_INCLUDE_DIR}" STREQUAL "")
-    target_include_directories(Operators SYSTEM BEFORE PUBLIC "${ALCEDO_LENSFUN_INCLUDE_DIR}")
-endif()
-if(TARGET puerhlab_lensfun_build)
-    add_dependencies(Operators puerhlab_lensfun_build)
-endif()
-if(WIN32 AND TARGET puerhlab_lensfun)
-    add_custom_command(TARGET Operators POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "$<TARGET_FILE:puerhlab_lensfun>"
-            "$<TARGET_FILE_DIR:Operators>/lensfun.dll"
-        COMMENT "Alcedo: install submodule lensfun.dll next to Operators"
-        VERBATIM)
 endif()
 
 # --- Accelerator Backend Selection ---
@@ -191,37 +170,32 @@ set(PIPELINE_SRCS
     ${ALCEDO_SRC_ROOT}/edit/pipeline/pipeline_stage.cpp
     ${ALCEDO_SRC_ROOT}/edit/pipeline/pipeline_gpu_wrapper.cpp
     ${ALCEDO_INCLUDE_ROOT}/edit/pipeline/highlight_shadow_local_tone.hpp
-    ${ALCEDO_INCLUDE_ROOT}/edit/pipeline/local_tone_mapping.hpp
     ${ALCEDO_INCLUDE_ROOT}/edit/pipeline/metal_kernel_dispatch.hpp
     ${ALCEDO_INCLUDE_ROOT}/edit/pipeline/metal_pipeline_stats.hpp
     ${ALCEDO_INCLUDE_ROOT}/edit/pipeline/opencl_kernel_dispatch.hpp
-    ${ALCEDO_SRC_ROOT}/edit/scope/scope_analyzer.cpp
-    ${ALCEDO_SRC_ROOT}/edit/scope/final_display_frame_tap.cpp
 )
 
 if(ALCEDO_CUDA_ENABLED)
     set(GPU_PIPELINE_SRCS
         ${ALCEDO_SRC_ROOT}/edit/pipeline/pipeline_gpu_impl.cu
-        ${ALCEDO_SRC_ROOT}/edit/scope/cuda_scope_analyzer.cu
     )
 endif()
 if(ALCEDO_METAL_ENABLED)
     list(APPEND GPU_PIPELINE_SRCS
         ${ALCEDO_SRC_ROOT}/edit/pipeline/pipeline_metal_impl.cpp
-        ${ALCEDO_SRC_ROOT}/edit/scope/metal_scope_analyzer.cpp
     )
 endif()
 if(ALCEDO_OPENCL_ENABLED)
     list(APPEND GPU_PIPELINE_SRCS
         ${ALCEDO_SRC_ROOT}/edit/pipeline/pipeline_opencl_impl.cpp
         ${ALCEDO_SRC_ROOT}/edit/pipeline/pipeline_opencl_param.cpp
-        ${ALCEDO_SRC_ROOT}/edit/scope/opencl_scope_analyzer.cpp
     )
 endif()
 
 def_cuda_library(EditPipeline
     SOURCES ${PIPELINE_SRCS} ${GPU_PIPELINE_SRCS}
-    PUBLIC_DEPS Operators
+    # The legacy Metal and OpenCL pipeline implementations present frames through EditScope.
+    PUBLIC_DEPS Operators EditScope
     PRIVATE_DEPS ThreadPool opencv_imgproc CudaDriverRequirements AcceleratorBackend
 )
 
@@ -233,11 +207,10 @@ if(ALCEDO_CUDA_ENABLED)
     target_link_libraries(EditPipeline PRIVATE CUDA::cudart)
 endif()
 if(ALCEDO_METAL_ENABLED)
-    add_dependencies(EditPipeline EditPipelineMetalShaders ScopeAnalyzerMetalShaders)
+    add_dependencies(EditPipeline EditPipelineMetalShaders)
     target_compile_definitions(EditPipeline PUBLIC HAVE_METAL)
     target_compile_definitions(EditPipeline PRIVATE
         ALCEDO_METAL_FUSED_PIPELINE_METALLIB_PATH="${METAL_FUSED_PIPELINE_METALLIB}"
-        ALCEDO_METAL_SCOPE_ANALYZER_METALLIB_PATH="${METAL_SCOPE_ANALYZER_METALLIB}"
     )
     target_link_libraries(EditPipeline PRIVATE MetalImage MetalContext)
 endif()

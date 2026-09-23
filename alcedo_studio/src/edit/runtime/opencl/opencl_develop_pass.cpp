@@ -26,12 +26,12 @@
 #include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/graph_ids.hpp"
-#include "edit/operators/geometry/lens_calib_op.hpp"
-#include "edit/operators/geometry/opencl_lens_calib_ops.hpp"
 #include "edit/operators/models/pending_parameter_patch.hpp"
 #include "edit/runtime/camera_color_gpu_params.hpp"
 #include "edit/runtime/develop_demosaic.hpp"
 #include "edit/runtime/dng_profile_gpu_data.hpp"
+#include "edit/runtime/lens/lens_calibration_resolver.hpp"
+#include "edit/runtime/lens/opencl/opencl_lens_calib_ops.hpp"
 #include "edit/runtime/opencl/opencl_dag_programs.hpp"
 #include "edit/runtime/opencl/opencl_neural_session_workspace.hpp"
 #include "edit/runtime/parameter_arena.hpp"
@@ -87,10 +87,9 @@ auto AcquireRgba(OpenClRenderWorkspace& workspace, const GraphValueId& id, std::
 void ExecuteOpenClLensCalibration(OpenClRenderDevice& device, const ExecutionPlan& plan,
                                   const PreparedRawInput& input,
                                   const DevelopPayload&   develop_params) {
-  LensCalibOp resolver(develop_params);
-  const auto  runtime =
-      resolver.ResolveRuntimeForImage(input.color_context, plan.source.develop_output_extent,
-                                      input.dng_warp_rectilinear.has_value());
+  const auto runtime = LensCalibrationResolver::Resolve(develop_params, input.color_context,
+                                                        plan.source.develop_output_extent,
+                                                        input.dng_warp_rectilinear.has_value());
   if (!runtime.has_value()) {
     return;
   }

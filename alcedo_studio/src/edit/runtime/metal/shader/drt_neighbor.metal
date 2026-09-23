@@ -7,7 +7,7 @@
 #include <metal_stdlib>
 using namespace metal;
 
-#include "../../../operators/GPU_kernels/metal_shader/prng.metal"
+#include "prng.metal"
 
 constant uint kDrtNeighborBehaviorClarity   = 13u;
 constant uint kDrtNeighborBehaviorSharpen   = 14u;

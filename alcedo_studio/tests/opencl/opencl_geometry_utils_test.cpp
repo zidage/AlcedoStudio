@@ -22,7 +22,7 @@
 #include "decoders/processor/operators/gpu/cuda_dng_warp.hpp"
 #include "decoders/processor/operators/gpu/cuda_rotate.hpp"
 #include "edit/operators/geometry/crop_rotate_op.hpp"
-#include "edit/operators/geometry/cuda_geometry_ops.hpp"
+#include "edit/runtime/lens/cuda/cuda_geometry_ops.hpp"
 #include "edit/operators/geometry/resize_op.hpp"
 #include "image/image_buffer.hpp"
 #include "opencl/opencl_context.hpp"

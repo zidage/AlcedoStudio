@@ -13,7 +13,7 @@
 #include <utility>
 
 #include "edit/graph/pipeline_document.hpp"
-#include "edit/pipeline/pipeline_apply_request.hpp"
+#include "edit/runtime/pipeline_apply_request.hpp"
 #include "edit/runtime/develop_demosaic.hpp"
 #include "edit/runtime/drt_display.hpp"
 #include "edit/runtime/frame_presenter.hpp"

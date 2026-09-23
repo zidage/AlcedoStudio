@@ -921,7 +921,7 @@ if(APPLE AND ALCEDO_METAL_ENABLED AND ALCEDO_METAL_RUNTIME_LIBS)
     add_dependencies(alcedo_main
         MetalUtilsShaders
         MetalGeometryUtilsShaders
-        LensCalibOpMetalShaders
+        LensCalibrationMetalShaders
         EditPipelineMetalShaders
         ScopeAnalyzerMetalShaders
         MetalToLinearRefShaders

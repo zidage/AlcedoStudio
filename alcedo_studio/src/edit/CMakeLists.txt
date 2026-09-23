@@ -118,6 +118,99 @@ def_library(EditRuntimeDrt
     PUBLIC_DEPS EditGraph ${ALCEDO_OPENCV_CORE_DEPS}
 )
 
+# Lens calibration shared by the CUDA, OpenCL, and Metal Develop passes: the Lensfun resolver and the
+# lens and CUDA geometry kernels. The legacy LensCalibOp, CropRotateOp, and ResizeOp in Operators
+# also link it until G10.9 archives them.
+set(EDIT_RUNTIME_LENS_SRCS
+    ${ALCEDO_SRC_ROOT}/edit/runtime/lens/lens_calibration_resolver.cpp
+)
+if(ALCEDO_CUDA_ENABLED)
+    list(APPEND EDIT_RUNTIME_LENS_SRCS
+        ${ALCEDO_SRC_ROOT}/edit/runtime/lens/cuda/cuda_geometry_ops.cu
+        ${ALCEDO_SRC_ROOT}/edit/runtime/lens/cuda/cuda_lens_calib_ops.cu
+    )
+endif()
+if(ALCEDO_METAL_ENABLED)
+    list(APPEND EDIT_RUNTIME_LENS_SRCS
+        ${ALCEDO_SRC_ROOT}/edit/runtime/lens/metal/metal_lens_calib.cpp
+    )
+endif()
+if(ALCEDO_OPENCL_ENABLED)
+    list(APPEND EDIT_RUNTIME_LENS_SRCS
+        ${ALCEDO_SRC_ROOT}/edit/runtime/lens/opencl/opencl_lens_calib_ops.cpp
+    )
+endif()
+def_cuda_library(EditRuntimeLens
+    SOURCES ${EDIT_RUNTIME_LENS_SRCS}
+    PUBLIC_DEPS EditGraph EditGeometry ${ALCEDO_OPENCV_CORE_DEPS}
+    PRIVATE_DEPS puerhlab_lensfun
+)
+if(ALCEDO_CUDA_ENABLED)
+    set_target_properties(EditRuntimeLens PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+    target_link_libraries(EditRuntimeLens PRIVATE CUDA::cudart)
+endif()
+if(ALCEDO_METAL_ENABLED)
+    add_dependencies(EditRuntimeLens LensCalibrationMetalShaders)
+    target_link_libraries(EditRuntimeLens PRIVATE MetalGeometryUtils MetalImage MetalContext)
+    target_compile_definitions(EditRuntimeLens PRIVATE
+        ALCEDO_METAL_LENS_CALIB_METALLIB_PATH="${METAL_LENS_CALIB_METALLIB}"
+    )
+endif()
+if(ALCEDO_OPENCL_ENABLED)
+    target_link_libraries(EditRuntimeLens PUBLIC ImageBuffer PRIVATE OpenClContext OpenClProgramLibrary)
+endif()
+if(DEFINED ALCEDO_LENSFUN_INCLUDE_DIR AND NOT "${ALCEDO_LENSFUN_INCLUDE_DIR}" STREQUAL "")
+    target_include_directories(EditRuntimeLens SYSTEM BEFORE PRIVATE "${ALCEDO_LENSFUN_INCLUDE_DIR}")
+endif()
+if(TARGET puerhlab_lensfun_build)
+    add_dependencies(EditRuntimeLens puerhlab_lensfun_build)
+endif()
+if(WIN32 AND TARGET puerhlab_lensfun)
+    add_custom_command(TARGET EditRuntimeLens POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:puerhlab_lensfun>"
+            "$<TARGET_FILE_DIR:EditRuntimeLens>/lensfun.dll"
+        COMMENT "Alcedo: install submodule lensfun.dll next to EditRuntimeLens"
+        VERBATIM)
+endif()
+
+# Histogram and waveform analysis of the presented display frame. The CUDA, OpenCL, and Metal
+# frame presenters link it; so do the legacy pipeline implementations until G10.9 and G10.10.
+set(EDIT_SCOPE_SRCS
+    ${ALCEDO_SRC_ROOT}/edit/scope/scope_analyzer.cpp
+    ${ALCEDO_SRC_ROOT}/edit/scope/final_display_frame_tap.cpp
+)
+if(ALCEDO_CUDA_ENABLED)
+    list(APPEND EDIT_SCOPE_SRCS ${ALCEDO_SRC_ROOT}/edit/scope/cuda_scope_analyzer.cu)
+endif()
+if(ALCEDO_METAL_ENABLED)
+    list(APPEND EDIT_SCOPE_SRCS ${ALCEDO_SRC_ROOT}/edit/scope/metal_scope_analyzer.cpp)
+endif()
+if(ALCEDO_OPENCL_ENABLED)
+    list(APPEND EDIT_SCOPE_SRCS ${ALCEDO_SRC_ROOT}/edit/scope/opencl_scope_analyzer.cpp)
+endif()
+def_cuda_library(EditScope
+    SOURCES ${EDIT_SCOPE_SRCS}
+    PUBLIC_DEPS EditGeometry ${ALCEDO_OPENCV_CORE_DEPS}
+)
+if(ALCEDO_CUDA_ENABLED)
+    target_compile_definitions(EditScope PUBLIC HAVE_CUDA)
+    target_include_directories(EditScope PRIVATE ${CUDAToolkit_INCLUDE_DIRS})
+    target_link_libraries(EditScope PRIVATE CUDA::cudart)
+endif()
+if(ALCEDO_METAL_ENABLED)
+    add_dependencies(EditScope ScopeAnalyzerMetalShaders)
+    target_compile_definitions(EditScope PUBLIC HAVE_METAL)
+    target_compile_definitions(EditScope PRIVATE
+        ALCEDO_METAL_SCOPE_ANALYZER_METALLIB_PATH="${METAL_SCOPE_ANALYZER_METALLIB}"
+    )
+    target_link_libraries(EditScope PUBLIC MetalContext alcedo::metal_cpp)
+endif()
+if(ALCEDO_OPENCL_ENABLED)
+    target_compile_definitions(EditScope PUBLIC HAVE_OPENCL)
+    target_link_libraries(EditScope PUBLIC OpenClContext PRIVATE OpenClProgramLibrary)
+endif()
+
 def_library(EditRuntime
     SOURCES ${EDIT_RUNTIME_SRCS}
     PUBLIC_DEPS EditGraph EditGeometry EditInput EditRuntimeDrt
@@ -139,7 +232,7 @@ if(ALCEDO_METAL_ENABLED)
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_mask_pass.mm
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_primary_grade_pass.mm
         PUBLIC_DEPS EditRuntime MetalContext alcedo::metal_cpp
-        PRIVATE_DEPS RawProcessorOp Operators MetalGeometryUtils MetalImage MetalDemosaicNetEntry PreviewPerformance
+        PRIVATE_DEPS RawProcessorOp EditRuntimeLens EditScope MetalGeometryUtils MetalImage MetalDemosaicNetEntry PreviewPerformance
     )
     target_compile_definitions(EditRuntimeMetal PUBLIC HAVE_METAL)
     target_compile_definitions(EditRuntimeMetal PRIVATE
@@ -195,7 +288,7 @@ if(ALCEDO_CUDA_ENABLED)
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_primary_grade_pass.cu
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/geometry_resample.cu
         PUBLIC_DEPS EditRuntime CUDA::cudart
-        PRIVATE_DEPS EditInput RawProcessorOp Operators CudaDemosaicNetEntry PreviewPerformance
+        PRIVATE_DEPS EditInput RawProcessorOp EditRuntimeLens EditScope CudaDemosaicNetEntry PreviewPerformance
     )
     target_compile_definitions(EditRuntimeCuda PUBLIC HAVE_CUDA)
 endif()
@@ -212,7 +305,7 @@ if(ALCEDO_OPENCL_ENABLED)
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_mask_pass.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_primary_grade_pass.cpp
         PUBLIC_DEPS EditRuntime EditInput RawProcessorOp OpenClDemosaicNetEntry OpenClContext OpenClProgramLibrary OpenCL::OpenCL
-        PRIVATE_DEPS Operators OpenClGeometryUtils PreviewPerformance
+        PRIVATE_DEPS EditRuntimeLens EditScope OpenClGeometryUtils PreviewPerformance
     )
     target_compile_definitions(EditRuntimeOpenCl PUBLIC HAVE_OPENCL)
 endif()

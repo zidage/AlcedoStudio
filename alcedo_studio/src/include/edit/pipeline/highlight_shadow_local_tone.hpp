@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "edit/pipeline/local_tone_mapping.hpp"
+#include "edit/runtime/local_tone_mapping.hpp"
 
 namespace alcedo::highlight_shadow_local_tone {
 

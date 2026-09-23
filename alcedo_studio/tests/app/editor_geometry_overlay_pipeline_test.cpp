@@ -9,7 +9,7 @@
 #include <opencv2/core.hpp>
 #include <opencv2/core/cuda.hpp>
 
-#include "edit/operators/geometry/cuda_geometry_ops.hpp"
+#include "edit/runtime/lens/cuda/cuda_geometry_ops.hpp"
 #include "edit/operators/geometry/resize_op.hpp"
 #include "image/gpu_backend.hpp"
 #include "image/image_buffer.hpp"

@@ -23,6 +23,14 @@
 #   Fails when a file under edit/runtime/ or include/edit/runtime/ includes a legacy operator or
 #   stage parameter header (op_base.hpp, odt_op.hpp, param.cuh, fused_param.hpp,
 #   opencl_param.hpp). G10.5 moved the DRT resolution and parameter layouts out of them.
+#
+# CHECK=DagSourcesDoNotReferenceLegacyDirectories
+#   Fails when a file under edit/runtime/, include/edit/runtime/, edit/graph/, include/edit/graph/,
+#   renderer/, or include/renderer/ includes a path under edit/pipeline/ other than the executor
+#   header (pipeline_cpu.hpp), a path under edit/operators/GPU_kernels/ or
+#   edit/operators/CPU_kernels/, or any other header under edit/operators/ except the Model,
+#   utility, and shared data headers. G10.6 moved the lens resolver and kernels, the CUDA detail and
+#   film grain helpers, the Metal PRNG, and the local-tone and apply-request headers out of them.
 
 cmake_minimum_required(VERSION 3.21)
 
@@ -150,6 +158,79 @@ set(_runtime_scope
   "^include/edit/runtime/"
 )
 
+set(_dag_scope
+  "^edit/runtime/"
+  "^include/edit/runtime/"
+  "^edit/graph/"
+  "^include/edit/graph/"
+  "^renderer/"
+  "^include/renderer/"
+)
+
+# Headers under edit/operators/ that are Model, utility, or shared data headers, not legacy
+# operators. G10.9 keeps them in the build.
+set(_dag_allowed_operator_headers
+  "^edit/operators/models/"
+  "^edit/operators/utils/"
+  "^edit/operators/basic/planckian_locus_table\\.hpp$"
+  "^edit/operators/basic/camera_matrices\\.hpp$"
+  "^edit/operators/geometry/resize_algorithm\\.hpp$"
+)
+
+# Report one line per DAG file that includes a legacy pipeline or operator path.
+function(_alcedo_scan_dag_includes)
+  file(GLOB_RECURSE _sources RELATIVE "${ALCEDO_SOURCE_ROOT}"
+    "${ALCEDO_SOURCE_ROOT}/*.cpp" "${ALCEDO_SOURCE_ROOT}/*.hpp" "${ALCEDO_SOURCE_ROOT}/*.h"
+    "${ALCEDO_SOURCE_ROOT}/*.cu" "${ALCEDO_SOURCE_ROOT}/*.cuh" "${ALCEDO_SOURCE_ROOT}/*.mm"
+    "${ALCEDO_SOURCE_ROOT}/*.inl" "${ALCEDO_SOURCE_ROOT}/*.cl" "${ALCEDO_SOURCE_ROOT}/*.metal")
+  set(_violations "")
+  set(_scanned 0)
+  foreach(relative_path IN LISTS _sources)
+    _alcedo_matches_any("${relative_path}" _dag_scope _in_scope)
+    if(NOT _in_scope)
+      continue()
+    endif()
+    math(EXPR _scanned "${_scanned} + 1")
+    file(STRINGS "${ALCEDO_SOURCE_ROOT}/${relative_path}" _includes
+      REGEX "^[ \t]*#[ \t]*include[ \t]*[<\"]")
+    foreach(_line IN LISTS _includes)
+      string(REGEX REPLACE "^[ \t]*#[ \t]*include[ \t]*[<\"]([^\">]*)[\">].*$" "\\1"
+             _target "${_line}")
+      # Relative shader includes such as ../../../operators/GPU_kernels/x.metal name the same
+      # directories; drop leading ../ segments before the match.
+      string(REGEX REPLACE "^(\\.\\./)+" "" _target "${_target}")
+      if(_target MATCHES "^(edit/)?operators/")
+        string(REGEX REPLACE "^(edit/)?operators/" "edit/operators/" _target "${_target}")
+      endif()
+      set(_legacy FALSE)
+      if(_target MATCHES "^edit/pipeline/" AND NOT _target STREQUAL "edit/pipeline/pipeline_cpu.hpp")
+        set(_legacy TRUE)
+      elseif(_target MATCHES "^edit/operators/(GPU_kernels|CPU_kernels)/")
+        set(_legacy TRUE)
+      elseif(_target MATCHES "^edit/operators/")
+        _alcedo_matches_any("${_target}" _dag_allowed_operator_headers _allowed)
+        if(NOT _allowed)
+          set(_legacy TRUE)
+        endif()
+      endif()
+      if(_legacy)
+        string(STRIP "${_line}" _line)
+        list(APPEND _violations "${relative_path}: ${_line}")
+      endif()
+    endforeach()
+  endforeach()
+  if(_scanned EQUAL 0)
+    message(FATAL_ERROR "No source files found in the check scope under ${ALCEDO_SOURCE_ROOT}")
+  endif()
+  if(_violations)
+    list(JOIN _violations "
+  " _report)
+    message(FATAL_ERROR "DAG source includes a legacy pipeline or operator path:
+  ${_report}")
+  endif()
+  message(STATUS "Scanned ${_scanned} files; no DAG source includes a legacy pipeline or operator path.")
+endfunction()
+
 if(CHECK STREQUAL "NoProductCodeReadsStageTableOutsideMirror")
   _alcedo_scan("(GetStage|GetGlobalParams|GetOperator)\\(" _stage_mirror_hosts
     "Product code reads the stage table outside the stage mirror hosts"
@@ -172,6 +253,8 @@ elseif(CHECK STREQUAL "RuntimeSourcesDoNotIncludeLegacyOperatorHeaders")
     _runtime_scope
     "Runtime source includes a legacy operator or stage parameter header"
     "no runtime source includes a legacy operator or stage parameter header")
+elseif(CHECK STREQUAL "DagSourcesDoNotReferenceLegacyDirectories")
+  _alcedo_scan_dag_includes()
 else()
   message(FATAL_ERROR "Unknown source check: ${CHECK}")
 endif()

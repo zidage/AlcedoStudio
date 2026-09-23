@@ -16,9 +16,9 @@ if(ALCEDO_METAL_ENABLED)
     set(METAL_GEOMETRY_UTILS_AIR "${ALCEDO_BINARY_ROOT}/metal/metal_utils/geometry_utils.air")
     set(METAL_GEOMETRY_UTILS_METALLIB "${ALCEDO_BINARY_ROOT}/metal/metal_utils/geometry_utils.metallib"
         CACHE INTERNAL "Metal geometry utils metallib path" FORCE)
-    set(METAL_LENS_CALIB_SRC "${ALCEDO_SRC_ROOT}/edit/operators/geometry/metal_shader/lens_calib.metal")
-    set(METAL_LENS_CALIB_AIR "${ALCEDO_BINARY_ROOT}/edit/operators/geometry/metal_shader/lens_calib.air")
-    set(METAL_LENS_CALIB_METALLIB "${ALCEDO_BINARY_ROOT}/edit/operators/geometry/metal_shader/lens_calib.metallib"
+    set(METAL_LENS_CALIB_SRC "${ALCEDO_SRC_ROOT}/edit/runtime/lens/metal/shader/lens_calib.metal")
+    set(METAL_LENS_CALIB_AIR "${ALCEDO_BINARY_ROOT}/edit/runtime/lens/metal/shader/lens_calib.air")
+    set(METAL_LENS_CALIB_METALLIB "${ALCEDO_BINARY_ROOT}/edit/runtime/lens/metal/shader/lens_calib.metallib"
         CACHE INTERNAL "Metal lens calibration metallib path" FORCE)
     set(METAL_FUSED_PIPELINE_SRC "${ALCEDO_SRC_ROOT}/edit/pipeline/metal_shader/fused_pipeline.metal")
     set(METAL_FUSED_PIPELINE_AIR "${ALCEDO_BINARY_ROOT}/edit/pipeline/metal_shader/fused_pipeline.air")
@@ -35,7 +35,7 @@ if(ALCEDO_METAL_ENABLED)
         "${ALCEDO_SRC_ROOT}/edit/operators/GPU_kernels/metal_shader/color.metal"
         "${ALCEDO_SRC_ROOT}/edit/operators/GPU_kernels/metal_shader/cst.metal"
         "${ALCEDO_SRC_ROOT}/edit/operators/GPU_kernels/metal_shader/detail.metal"
-        "${ALCEDO_SRC_ROOT}/edit/operators/GPU_kernels/metal_shader/prng.metal"
+        "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/prng.metal"
         "${ALCEDO_SRC_ROOT}/edit/operators/GPU_kernels/metal_shader/film_grain.metal"
         "${ALCEDO_SRC_ROOT}/edit/operators/GPU_kernels/metal_shader/halation.metal"
     )
@@ -208,7 +208,7 @@ if(ALCEDO_METAL_ENABLED)
     )
 
     alcedo_add_metal_library(
-        LensCalibOpMetalShaders
+        LensCalibrationMetalShaders
         "${METAL_LENS_CALIB_SRC}"
         "${METAL_LENS_CALIB_AIR}"
         "${METAL_LENS_CALIB_METALLIB}"
@@ -348,7 +348,7 @@ if(ALCEDO_METAL_ENABLED)
             "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/drt_aces.metal"
             "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/drt_opendrt.metal"
             "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/drt_neighbor.metal"
-            "${ALCEDO_SRC_ROOT}/edit/operators/GPU_kernels/metal_shader/prng.metal"
+            "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/prng.metal"
             "${ALCEDO_INCLUDE_ROOT}/edit/runtime/aces_reference_gamut_compression.h"
     )
 

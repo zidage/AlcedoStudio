@@ -11,7 +11,7 @@
 #include "edit/geometry/resolved_render_geometry.hpp"
 #include "edit/geometry/texture_sampling_plan.hpp"
 #include "edit/geometry/types.hpp"
-#include "edit/pipeline/local_tone_mapping.hpp"
+#include "edit/runtime/local_tone_mapping.hpp"
 #include "edit/runtime/content_key.hpp"
 
 namespace alcedo {

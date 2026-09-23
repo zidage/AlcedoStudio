@@ -12,10 +12,8 @@
 #include <string>
 
 #include "edit/geometry/render_request.hpp"
-#include "edit/operators/op_kernel.hpp"
-#include "edit/pipeline/pipeline.hpp"
-#include "edit/pipeline/pipeline_apply_request.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
+#include "edit/runtime/pipeline_apply_request.hpp"
 #include "image/image.hpp"
 #include "image/image_buffer.hpp"
 #include "type/type.hpp"

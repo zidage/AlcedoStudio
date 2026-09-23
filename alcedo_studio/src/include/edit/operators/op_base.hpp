@@ -12,7 +12,7 @@
 #include <string>
 
 #include "decoders/processor/raw_color_context.hpp"
-#include "edit/operators/geometry/lens_calib_runtime.hpp"
+#include "edit/runtime/lens/lens_calib_runtime.hpp"
 #include "image/image_buffer.hpp"
 #include "json.hpp"
 #include "op_kernel.hpp"

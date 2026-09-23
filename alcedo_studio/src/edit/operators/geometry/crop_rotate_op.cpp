@@ -13,7 +13,7 @@
 #include <string_view>
 #include <utility>
 #ifdef HAVE_CUDA
-#include "edit/operators/geometry/cuda_geometry_ops.hpp"
+#include "edit/runtime/lens/cuda/cuda_geometry_ops.hpp"
 #endif
 #ifdef HAVE_METAL
 #include "metal/metal_utils/geometry_utils.hpp"

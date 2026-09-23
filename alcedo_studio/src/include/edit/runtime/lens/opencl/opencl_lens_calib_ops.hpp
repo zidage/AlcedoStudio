@@ -6,7 +6,7 @@
 
 #ifdef HAVE_OPENCL
 
-#include "edit/operators/geometry/lens_calib_runtime.hpp"
+#include "edit/runtime/lens/lens_calib_runtime.hpp"
 #include "image/opencl_image.hpp"
 
 namespace alcedo::OpenCL::Geometry {

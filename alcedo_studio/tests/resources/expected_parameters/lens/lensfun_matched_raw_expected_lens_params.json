@@ -1,0 +1,90 @@
+{
+  "develop_extent": [
+    493,
+    743
+  ],
+  "dng_geometry_applied": false,
+  "exif_lens_maker": "",
+  "exif_lens_model": "FE 28mm F2",
+  "params": {
+    "apply_crop": 0,
+    "apply_crop_circle": 0,
+    "apply_distortion": 1,
+    "apply_projection": 0,
+    "apply_tca": 1,
+    "apply_vignetting": 1,
+    "camera_crop_factor": 1.0,
+    "center_x": 0.41565924882888794,
+    "center_y": 0.6268681883811951,
+    "crop_bounds": [
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "crop_mode": 0,
+    "distortion_model": 1,
+    "distortion_terms": [
+      -0.13595052063465118,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "dst_height": 743,
+    "dst_width": 493,
+    "fast_path_distortion_only": 0,
+    "fast_path_vignetting_only": 0,
+    "interpolation": 0,
+    "lens_center_x": 0.0,
+    "lens_center_y": 0.0,
+    "low_precision_preview": 0,
+    "nominal_focal_mm": 28.0,
+    "norm_scale": 0.0016896717716008425,
+    "norm_unscale": 591.8309326171875,
+    "perspective_mode": 0,
+    "perspective_terms": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "real_focal_mm": 28.717079162597656,
+    "resolved_scale": 0.9772977828979492,
+    "source_projection": 1,
+    "src_height": 743,
+    "src_width": 493,
+    "target_projection": 0,
+    "tca_model": 2,
+    "tca_terms": [
+      1.0001366138458252,
+      0.9999474287033081,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "use_auto_scale": 1,
+    "use_user_scale": 0,
+    "user_scale": 1.0,
+    "version": 1,
+    "vignetting_model": 1,
+    "vignetting_terms": [
+      -2.413923501968384,
+      1.6764192581176758,
+      0.18548281490802765
+    ]
+  },
+  "raw_file": "tag @ryanbreitkreutz - free raws from @signatureeditsco -_DSC0135.ARW",
+  "resolved": true
+}
