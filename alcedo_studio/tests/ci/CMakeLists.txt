@@ -26,28 +26,31 @@ gtest_discover_tests(SleeveFilesystemCiTest TEST_PREFIX "SleeveFilesystemCiTest.
 alcedo_register_test_target(SleeveFilesystemCiTest ci_core)
 
 # G10 legacy removal: static source checks (cmake -P, no build dependency).
-add_test(NAME NoProductCodeReadsStageTableOutsideMirror
+# G10.7: only the stage and the legacy operators may use the stage table.
+add_test(NAME NoProductCodeUsesStageTable
   COMMAND ${CMAKE_COMMAND} -DALCEDO_SOURCE_ROOT=${ALCEDO_ROOT_DIR}/src
-          -DCHECK=NoProductCodeReadsStageTableOutsideMirror
+          -DCHECK=NoProductCodeUsesStageTable
           -P ${ALCEDO_TEST_ROOT}/ci/legacy_removal_source_checks.cmake)
-set_tests_properties(NoProductCodeReadsStageTableOutsideMirror
+set_tests_properties(NoProductCodeUsesStageTable
   PROPERTIES LABELS "ci_core_flow;legacy_removal")
 
-# The same check must reject a product file outside the mirror hosts. The fixture is generated in
-# the build tree so no test source outside the product tree is formatted or tidied.
-set(_stage_read_fixture_root "${CMAKE_CURRENT_BINARY_DIR}/stage_read_violation_fixture")
-file(WRITE "${_stage_read_fixture_root}/renderer/reads_stage.cpp"
-  "void Read(Executor& e) { (void)e.GetStage(PipelineStageName::Image_Loading); }\n")
-add_test(NAME StageTableReadCheckRejectsProductFileOutsideMirror
-  COMMAND ${CMAKE_COMMAND} -DALCEDO_SOURCE_ROOT=${_stage_read_fixture_root}
-          -DCHECK=NoProductCodeReadsStageTableOutsideMirror
+# The same check must reject stage-table use in the executor and a service. The fixture is
+# generated in the build tree so no test source outside the product tree is formatted or tidied.
+set(_stage_table_fixture_root "${CMAKE_CURRENT_BINARY_DIR}/stage_table_violation_fixture")
+file(WRITE "${_stage_table_fixture_root}/edit/pipeline/pipeline_cpu.cpp"
+  "void Configure(Executor& e) { e.SetOperator(Kind::Exposure, {}); }\n")
+file(WRITE "${_stage_table_fixture_root}/app/pipeline_service.cpp"
+  "auto Name() { return PipelineStageName::Image_Loading; }\n")
+add_test(NAME StageTableCheckRejectsExecutorAndServiceUse
+  COMMAND ${CMAKE_COMMAND} -DALCEDO_SOURCE_ROOT=${_stage_table_fixture_root}
+          -DCHECK=NoProductCodeUsesStageTable
           -P ${ALCEDO_TEST_ROOT}/ci/legacy_removal_source_checks.cmake)
-set_tests_properties(StageTableReadCheckRejectsProductFileOutsideMirror
-  PROPERTIES PASS_REGULAR_EXPRESSION "renderer/reads_stage\\.cpp: void Read"
+set_tests_properties(StageTableCheckRejectsExecutorAndServiceUse
+  PROPERTIES PASS_REGULAR_EXPRESSION "app/pipeline_service\\.cpp: auto Name.*edit/pipeline/pipeline_cpu\\.cpp: void Configure"
              LABELS "ci_core_flow;legacy_removal")
 
-# G10.3: stage-JSON export and import stay inside the executor and the legacy owners that G10.4
-# and G10.7 delete. No rollback path may copy stage JSON again.
+# G10.3: stage-JSON export and import stay inside the stage files that G10.9 archives. G10.7
+# removed the executor API and the mapper import. No rollback path may copy stage JSON again.
 add_test(NAME NoProductCodeUsesStageJsonOutsideLegacyOwners
   COMMAND ${CMAKE_COMMAND} -DALCEDO_SOURCE_ROOT=${ALCEDO_ROOT_DIR}/src
           -DCHECK=NoProductCodeUsesStageJsonOutsideLegacyOwners

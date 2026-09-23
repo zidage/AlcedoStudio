@@ -12,6 +12,7 @@
 #include <iterator>
 #include <memory>
 #include <mutex>
+#include <opencv2/imgproc.hpp>
 #include <optional>
 #include <stdexcept>
 #include <unordered_map>

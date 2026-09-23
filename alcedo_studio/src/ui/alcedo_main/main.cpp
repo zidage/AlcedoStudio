@@ -45,7 +45,6 @@
 #include "ui/editor_rhi/editor_backend.hpp"
 #include "ui/editor_rhi/editor_startup.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
-#include "edit/operators/operator_registeration.hpp"
 #include "utils/diagnostics/app_logging.hpp"
 #include "utils/diagnostics/preview_performance.hpp"
 #include "utils/clock/time_provider.hpp"
@@ -245,7 +244,6 @@ int main(int argc, char* argv[]) {
   }
 
   alcedo::TimeProvider::Refresh();
-  alcedo::RegisterAllOperators();
   Exiv2::LogMsg::setLevel(Exiv2::LogMsg::Level::error);
 
   QApplication app(argc, argv);

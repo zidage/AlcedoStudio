@@ -22,7 +22,6 @@
 #include <optional>
 #include <vector>
 
-#include "edit/operators/operator_registeration.hpp"
 #include "test_probe.hpp"
 #include "type/supported_file_type.hpp"
 #include "ui/alcedo_main/album_backend/application_module_host.hpp"
@@ -225,7 +224,6 @@ int main(int argc, char* argv[]) {
   }
 
   alcedo::TimeProvider::Refresh();
-  alcedo::RegisterAllOperators();
 
   QApplication app(argc, argv);
   QQuickStyle::setStyle("Basic");

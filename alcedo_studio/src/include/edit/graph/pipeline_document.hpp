@@ -137,12 +137,4 @@ inline constexpr float kDefaultPipelineSaturation = 1.3f;
 [[nodiscard]] auto ColorGradesOnImageBackbone(const PipelineDocument& document)
     -> std::vector<const ColorGradeNodeModel*>;
 
-/**
- * @brief True when Apply may remirror the legacy stage adapter into this document.
- *
- * Requires the canonical Develop, Primary Color Grade, and DRT nodes. Extra nodes such as
- * a mask stay in place because remirror writes operator values onto the existing graph.
- */
-[[nodiscard]] auto AllowsLegacyStageAdapterRemirror(const PipelineDocument& document) -> bool;
-
 }  // namespace alcedo

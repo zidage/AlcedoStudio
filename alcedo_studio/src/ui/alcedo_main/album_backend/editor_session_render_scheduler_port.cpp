@@ -14,12 +14,12 @@
 #include <utility>
 
 #include "edit/frame_presentation_types.hpp"
+#include "edit/pipeline/pipeline_cpu.hpp"
 #include "image/image.hpp"
 #include "image/image_buffer.hpp"
 #include "io/image/image_loader.hpp"
 #include "renderer/pipeline_task.hpp"
 #include "ui/alcedo_main/editor_support/controllers/image_controller.hpp"
-#include "ui/alcedo_main/editor_support/controllers/pipeline_controller.hpp"
 #include "utils/diagnostics/app_logging.hpp"
 
 namespace alcedo::ui {
@@ -463,7 +463,7 @@ void EditorSessionRenderSchedulerPort::DispatchPipelineFrame(Job job, alcedo::IF
       if (!locked_exec) {
         return false;
       }
-      controllers::AttachExecutionStages(locked_exec, sink);
+      locked_exec->AttachFrameSink(sink);
       return true;
     };
     if (job.request.intent.cancellation) {

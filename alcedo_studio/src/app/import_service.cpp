@@ -26,14 +26,6 @@ auto IsRootImportDestination(const image_path_t& dest) -> bool {
   return normalized.empty() || normalized == image_path_t{L"/"} || normalized == image_path_t{L"."};
 }
 
-/// Bind the image-local RAW camera profile to the bound document before the root is created.
-/// Non-RAW files keep the default document; the root step binds their working-space profile.
-void BindImportRawCameraProfile(CPUPipelineExecutor& exec, const Image& image) {
-  if (image.HasRawColorContext()) {
-    exec.InjectRawMetadata(MetadataExtractor::ReadRawColorContextForRender(image));
-  }
-}
-
 void PersistAssembledImportPipeline(PipelineMgmtService& pipeline_service,
                                     sl_element_id_t element_id, const std::shared_ptr<Image>& image) {
   auto guard = pipeline_service.LoadPipeline(element_id);
@@ -41,16 +33,11 @@ void PersistAssembledImportPipeline(PipelineMgmtService& pipeline_service,
     throw std::runtime_error("ImportService: pipeline unavailable during import assembly");
   }
 
-  {
-    std::unique_lock<std::mutex> render_lock(guard->pipeline_->GetRenderLock());
-    BindImportRawCameraProfile(*guard->pipeline_, *image);
-  }
-
   guard->dirty_ = true;
 
-  // Graph bootstrap still uses InitializeImageRoot until later plan items delete root.
-  // Inherent image parameters are captured by the immutable history root; the product save below
-  // persists only the document graph.
+  // InitializeImageRoot binds the camera profile onto the document under the render lock (the
+  // RAW color context, or the working-space profile for non-RAW files) and creates the immutable
+  // history root. The product save below persists only the document graph.
   const RawRuntimeColorContext* ctx_ptr =
       image && image->HasRawColorContext() ? &image->GetRawColorContext() : nullptr;
   pipeline_service.InitializeImageRoot(guard, ctx_ptr);

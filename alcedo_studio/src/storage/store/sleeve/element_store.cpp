@@ -539,19 +539,6 @@ auto ElementStore::ListFilteredFileIds(
   return out;
 }
 
-auto ElementStore::GetPipelineByElementId(const sl_element_id_t element_id)
-    -> std::shared_ptr<CPUPipelineExecutor> {
-  auto db_lock = guard_.Lock();
-  return pipeline_mapper_.GetPipelineParamByFileId(element_id);
-}
-
-auto ElementStore::UpdatePipelineByElementId(const sl_element_id_t                      element_id,
-                                             const std::shared_ptr<CPUPipelineExecutor> pipeline)
-    -> void {
-  auto db_lock = guard_.Lock();
-  pipeline_mapper_.UpdatePipelineParamByFileId(element_id, pipeline);
-}
-
 auto ElementStore::GetPipelineJsonByElementId(sl_element_id_t element_id)
     -> std::optional<nlohmann::json> {
   auto db_lock = guard_.Lock();
