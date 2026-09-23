@@ -194,6 +194,12 @@ Branch names must describe the feature, fix, refactor, or other engineering purp
 Do not include `codex` in a branch name. Use a functional name such as
 `fix/neighbor-operator-ping-pong` or `feature/opencl-program-cache`.
 
+### Commit and pull request requests
+
+When the user explicitly asks you to commit or to create a pull request, do only that. Do not run
+a build or any test suite as part of the request. Report the verification that already exists,
+and state what was not built or tested.
+
 ### Temporary files and local state
 
 Do **not** create temporary directories or ad-hoc dump files at the repository root
@@ -297,6 +303,62 @@ WebGPU RAW tests must heap-allocate `LibRaw` raw processors (for example with
 `std::make_unique<LibRaw>()`). Do not stack-allocate `LibRaw` in WebGPU-related tests; Dawn +
 LibRaw test paths have hit stack overflows in this repository.
 
+## Development Environment
+
+These rules come from the Windows development machine. They apply to every agent session.
+
+### Line endings
+
+- Use LF line endings only. Do not write CRLF into any file.
+- Some existing files still use CRLF. When you must change one, convert the whole file to LF in a
+  separate commit before the content change, so that the content diff stays readable.
+- Git Bash `sed -i` and some edit tools change line endings without a message. After a bulk edit,
+  run `git diff --stat` and look for files where the whole file changed.
+- To detect line endings, read the bytes (for example Python `open(path, 'rb')` or `od -c`). In the
+  Git Bash tool, `grep` and `sed` hide the carriage-return character and give wrong results.
+
+### Shells
+
+- Run every MSVC configure, build, and install command (`cmd /c scripts\msvc_env.cmd ...`) through
+  the PowerShell tool. Through the Bash tool, the same command runs the root `Makefile` (the
+  `format` target) instead of CMake, and the output shows no error.
+- The Bash tool and the PowerShell tool share one working directory. A `cd` in one changes the
+  other. Start PowerShell build commands with `Set-Location` to the repository root.
+- The sandbox can refuse `Remove-Item` inside `build/tmp/`. Write to a new folder under
+  `build/tmp/` instead of deleting the old one.
+- Exclude `third_party/` from recursive searches. `third_party/grpc` is very large, and a search of
+  the whole repository times out.
+
+### Builds, file locks, and formatting
+
+- Run one build at a time in a build directory. Do not run `ctest` while a build links test
+  executables or copies DLLs. Parallel runs fail with errors such as `Permission denied` on a DLL
+  copy.
+- Windows locks every file that a running compiler, linker, or test has open. A tool that writes
+  many files (`git clang-format`, `git checkout`, bulk scripts) can stop partway on a locked file and
+  leave some files written and some not. Run such tools only when no build or test runs, and check
+  `git status` after them.
+- Most existing files do not follow the clang-format style completely. Do not run `clang-format` on
+  a whole existing file; it adds unrelated changes. Format new files completely. For existing files,
+  format only the changed lines (`git clang-format`), and then review the diff for unrelated
+  realignment.
+- Some test targets exist only when a CMake option is on (for example `CudaImageGeometryOpsTest`
+  needs `ALCEDO_ENABLE_CUDA_IMAGE_GEOMETRY_OPS_TEST`). Check the test `CMakeLists.txt` before you
+  name a target on the build command line.
+
+### Windows test runtime
+
+- Before `ctest` or a direct test run, add the vcpkg debug `bin` directory
+  (`build/debug/vcpkg_installed/x64-windows/debug/bin`) to `PATH`. Qt is linked statically. Without
+  the path, `gtest_discover_tests` reports `_NOT_BUILT`.
+- Each Windows test executable runs from its own `<Target>_runtime/` folder that holds copies of the
+  first-party DLLs. The copies refresh only when that executable links again. A change that alters
+  only the contents of a DLL (for example a compile definition) does not relink the test, so the
+  test can load an old DLL. When a test failure names an old path or shows old behavior, compare the
+  DLL in the `_runtime/` folder with the one in `build/debug/alcedo_studio/src/<domain>/` before you
+  debug the code. Copy the current DLL into the folder, or relink the test.
+- Run GPU tests with `ctest -j 1`.
+
 ## Architecture
 
 The codebase follows a strict layered architecture. Higher layers depend only on the layer directly below them.
@@ -337,6 +399,7 @@ These façade services are the **only** API surface the UI layer may call. They 
 - **CUDA** requires Toolkit 12.8 and compute capability ≥ 6.0. CUDA files have their own compile database entry.
 - **SIMD**: The C++ build uses AVX/AVX2 SIMD flags.
 - **32-bit float pipeline**: All internal image processing operates in 32-bit float; output rendering uses ACES 2.0 with optional CUBE LUT.
+- **DuckDB ownership rule**: DuckDB connections must be requested from `DBController` at the operation boundary. Storage controllers must not own long-lived `duckdb_connection` / `ConnectionGuard` instances, including `SemanticStorageController`; this keeps connection lifetime, transaction scope, and cross-controller serialization explicit.
 
 ## Skills
 
