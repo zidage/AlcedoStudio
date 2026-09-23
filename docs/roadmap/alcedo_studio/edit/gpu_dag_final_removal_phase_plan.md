@@ -2657,7 +2657,9 @@ FramePresenter`.
     `MetalMaskFixture.MetalNormalMixMatchesCudaReferenceWithinTolerance` (the test texture lease is
     null).
   - `GpuDagMetalDrt.MetalDrtParameterBytesMatchStoredExpectedBytes` (G10.5 test, first run on
-    macOS: every case differs from the stored bytes at byte 12). This is an open G10.5 Metal defect.
+    macOS). The 8 OpenDRT configurations match. The 4 ACES 2.0 configurations differ from the
+    stored bytes at byte 12, the first float of `aces.input.matrix_rgb_to_cam16`. The stored files
+    were packed by an MSVC x64 build. This is an open G10.5 Metal defect.
   - `MetalRendererFixture.InteractiveQualityBaseInteractiveReuses2560PixelResults`.
 - Build targets that fail at `fcfbb2ef` as well and do not use G10.6 code: `ImageBufferMetalTest`
   (`cv::countNonZero` without `<opencv2/core.hpp>` since `59982073`), `EditorGeometryOverlayPipelineTest`
