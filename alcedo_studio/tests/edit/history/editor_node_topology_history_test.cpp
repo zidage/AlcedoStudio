@@ -28,7 +28,6 @@
 #include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/mask/mask_model.hpp"
-#include "edit/operators/operator_registeration.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
 #include "grade_owned_mask_support.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
@@ -274,7 +273,6 @@ auto MakeMemoryGuard(sl_element_id_t element_id) -> std::shared_ptr<PipelineGuar
 }
 
 TEST(NodeGraphTopologyHistory, ProductionPortPersistsExactTopologyThroughRecoveryAndCheckout) {
-  RegisterAllOperators();
   TemporaryProject               temporary;
   const auto&                    paths = temporary.paths();
   std::string                    error;
@@ -426,7 +424,6 @@ TEST(NodeGraphTopologyHistory, ProductionPortPersistsExactTopologyThroughRecover
 }
 
 TEST(NodeGraphTopologyHistory, ProductionPortRecoversExplicitNodeAndMaskUnlockFromCheckpointAndWal) {
-  RegisterAllOperators();
   TemporaryProject   temporary;
   const auto&        paths = temporary.paths();
   const NodeId       grade_id{"grade.primary"};
@@ -534,7 +531,6 @@ TEST(NodeGraphTopologyHistory, ProductionPortRecoversExplicitNodeAndMaskUnlockFr
 }
 
 TEST(NodeGraphTopologyHistory, JournalFailureRestoresTopologyDocumentHeadAndRenderState) {
-  RegisterAllOperators();
   TemporaryProject temporary;
   const auto&      paths    = temporary.paths();
 
@@ -573,7 +569,6 @@ TEST(NodeGraphTopologyHistory, JournalFailureRestoresTopologyDocumentHeadAndRend
 }
 
 TEST(NodeGraphTopologyHistory, MaskGroupTopInsertAndBridgeRemoveCommitOnceAndReplayThroughUndo) {
-  RegisterAllOperators();
   TemporaryProject temporary;
   const auto&      paths    = temporary.paths();
 
@@ -678,7 +673,6 @@ TEST(NodeGraphTopologyHistory, MaskGroupTopInsertAndBridgeRemoveCommitOnceAndRep
 }
 
 TEST(NodeGraphTopologyHistory, MaskGroupJournalFailureLeavesDocumentHeadAndCounterUntouched) {
-  RegisterAllOperators();
   TemporaryProject temporary;
   const auto&      paths    = temporary.paths();
 

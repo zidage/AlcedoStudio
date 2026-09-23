@@ -30,7 +30,6 @@
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
 #include "edit/graph/pipeline_document.hpp"
-#include "edit/operators/operator_registeration.hpp"
 #include "edit/operators/utils/color_utils.hpp"
 #include "edit/pipeline/default_pipeline_params.hpp"
 #include "edit/runtime/drt_display.hpp"
@@ -175,7 +174,6 @@ class ExportServiceTests : public ::testing::Test {
   void                  SetUp() override {
     TimeProvider::Refresh();
     Exiv2::LogMsg::setLevel(Exiv2::LogMsg::Level::mute);
-    RegisterAllOperators();
 
     db_path_ = std::filesystem::temp_directory_path() / "export_service_test.db";
     meta_path_ = std::filesystem::temp_directory_path() / "export_service_test.json";

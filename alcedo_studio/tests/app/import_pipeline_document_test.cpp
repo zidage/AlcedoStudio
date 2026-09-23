@@ -14,7 +14,7 @@
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
 #include "edit/graph/develop_color_transform.hpp"
-#include "edit/operators/operator_registeration.hpp"
+#include "edit/runtime/pipeline_apply_request.hpp"
 #include "io/image/image_loader.hpp"
 
 namespace alcedo {
@@ -22,7 +22,6 @@ namespace {
 
 /** @brief Exercise import graph creation, persisted camera data and the first background render. */
 TEST(ImportPipelineDocumentTest, ImportCreatesRenderableDocumentWithoutStageMirror) {
-  RegisterAllOperators();
   const auto root =
       std::filesystem::path(TEST_IMG_PATH).parent_path().parent_path().parent_path().parent_path();
   const auto work = root / "build/tmp/nm1" /
@@ -94,10 +93,12 @@ TEST(ImportPipelineDocumentTest, ImportCreatesRenderableDocumentWithoutStageMirr
   std::shared_ptr<ImageBuffer> output;
   {
     std::unique_lock lock(loaded->pipeline_->GetRenderLock());
-    loaded->pipeline_->SetForceCPUOutput(true);
-    loaded->pipeline_->SetDecodeRes(DecodeRes::FULL);
-    loaded->pipeline_->SetRenderRes(false, 256);
-    output = loaded->pipeline_->Apply(input);
+    PipelineApplyRequest request;
+    request.geometry.resolution.max_edge = 256;
+    request.geometry.resolution.quality  = RenderQuality::Export;
+    request.decode_res                   = DecodeRes::FULL;
+    request.require_host_output          = true;
+    output = loaded->pipeline_->Apply(input, request);
   }
   ASSERT_NE(output, nullptr);
   ASSERT_TRUE(output->cpu_data_valid_);
@@ -110,7 +111,6 @@ TEST(ImportPipelineDocumentTest, ImportCreatesRenderableDocumentWithoutStageMirr
 
 /** @brief Import binds the RAW camera profile on the document; no stage value is read. */
 TEST(ImportPipelineDocumentTest, ImportBindsCameraProfileOnDocumentOnly) {
-  RegisterAllOperators();
   const auto root =
       std::filesystem::path(TEST_IMG_PATH).parent_path().parent_path().parent_path().parent_path();
   const auto work = root / "build/tmp/g10_1" /

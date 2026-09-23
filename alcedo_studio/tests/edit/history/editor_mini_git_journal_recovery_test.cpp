@@ -18,7 +18,6 @@
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/mini_git_working_history.hpp"
 #include "edit/history/pipeline_document_checkpoint.hpp"
-#include "edit/operators/operator_registeration.hpp"
 #include "json.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
 #include "type/hash_type.hpp"
@@ -50,7 +49,6 @@ class EditorMiniGitJournalRecoveryTest : public ::testing::Test {
  protected:
   void SetUp() override {
     TimeProvider::Refresh();
-    RegisterAllOperators();
     const auto stamp =
         std::to_string(std::chrono::high_resolution_clock::now().time_since_epoch().count());
     const auto temp = std::filesystem::temp_directory_path();

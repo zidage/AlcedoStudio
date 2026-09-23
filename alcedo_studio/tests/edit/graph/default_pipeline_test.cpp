@@ -25,7 +25,6 @@ TEST(GpuDagModelGraph, DefaultPipelineHasDevelopGradeAndDrtNodes) {
   EXPECT_EQ(document.PrimaryGrade()->Type(), type_ids::ColorGradeNode());
   EXPECT_EQ(document.Drt()->Type(), type_ids::DrtNode());
   EXPECT_TRUE(document.Graph().Validate().empty());
-  EXPECT_TRUE(AllowsLegacyStageAdapterRemirror(document));
 }
 
 TEST(GpuDagModelGraph, DefaultPipelineConnectsDevelopThroughPrimaryGradeToDrt) {

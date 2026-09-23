@@ -27,7 +27,6 @@
 #include "edit/geometry/render_request.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/raw_input_loader.hpp"
-#include "edit/operators/operator_registeration.hpp"
 #include "edit/pipeline/pipeline_accelerator.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
 #include "edit/runtime/cuda/cuda_product_renderer.hpp"
@@ -204,7 +203,6 @@ TEST(GpuDagCudaDrtProduct, CancelRequestReachesRendererWithoutStageWrite) {
   if (!HasCudaDevice()) {
     GTEST_SKIP() << "No CUDA device available.";
   }
-  RegisterAllOperators();
   auto exec = std::make_shared<CPUPipelineExecutor>();
   exec->SetAcceleratorBackendPreference(AcceleratorBackendPreference::CUDA);
   auto document = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());

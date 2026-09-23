@@ -6,21 +6,15 @@
 
 #include <atomic>
 #include <chrono>
-#include <cstdint>
 #include <exception>
-#include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
-#include <opencv2/core.hpp>
 #include <thread>
 #include <vector>
 
-#include "edit/operators/operator_registeration.hpp"
-#include "edit/operators/raw/raw_decode_op.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
-#include "edit/pipeline/pipeline_stage.hpp"
 #include "edit/runtime/result_persistence.hpp"
-#include "image/image.hpp"
 #include "image/image_buffer.hpp"
 #include "renderer/pipeline_scheduler.hpp"
 #include "renderer/pipeline_task.hpp"
@@ -88,86 +82,23 @@ class MockFrameSink final : public IFrameSink {
 //   "Thumbnail rendering cannot call into an editor-owned IFrameSink."
 // =========================================================================
 
-class PipelineFrameSinkTest : public ::testing::Test {
- protected:
-  void SetUp() override { RegisterAllOperators(); }
-};
+class PipelineFrameSinkTest : public ::testing::Test {};
 
 TEST_F(PipelineFrameSinkTest, DetachFrameSinkClearsPointer) {
   auto          exec = std::make_shared<CPUPipelineExecutor>();
   MockFrameSink sink;
 
-  exec->SetExecutionStages(&sink);
+  exec->AttachFrameSink(&sink);
   EXPECT_EQ(exec->GetFrameSink(), &sink);
 
   exec->DetachFrameSink();
   EXPECT_EQ(exec->GetFrameSink(), nullptr);
 }
 
-TEST_F(PipelineFrameSinkTest, SetExecutionStagesWithoutSinkHasNullFrameSink) {
+TEST_F(PipelineFrameSinkTest, NewExecutorHasNoFrameSink) {
   auto exec = std::make_shared<CPUPipelineExecutor>();
 
-  exec->SetExecutionStages();
   EXPECT_EQ(exec->GetFrameSink(), nullptr);
-}
-
-// Re-attaching a frame sink must NOT recreate the merged GPU stage. The merged
-// stage owns the LLF highlight/shadow stage's cross-frame reference cache
-// (cached_reference_base_/cached_source_key_/cached_width_/...); recreating it
-// every render wipes that cache so zoomed ROI/detail frames can no longer reuse
-// the full-image mask (the 42ed19b CanReuseReferenceForRoi path) and recompute
-// instead, flickering on every pan/zoom. The QML production path re-attaches
-// the same sink per render via AttachExecutionStages -> SetExecutionStages
-// (IFrameSink*), so the merged-stage identity must be stable across re-attach.
-TEST_F(PipelineFrameSinkTest, ReattachingFrameSinkPreservesMergedStage) {
-  auto          exec = std::make_shared<CPUPipelineExecutor>();
-  MockFrameSink sink;
-
-  // First attach builds the stage graph (merged_stages_ non-null).
-  exec->SetExecutionStages(&sink);
-  const auto identity_after_build = exec->DebugGetMergedStageIdentity();
-  ASSERT_NE(identity_after_build, std::uintptr_t{0});
-
-  // Re-attaching the same sink must not rebuild the merged stage.
-  exec->SetExecutionStages(&sink);
-  EXPECT_EQ(exec->DebugGetMergedStageIdentity(), identity_after_build);
-
-  // Swapping to a different sink also must not rebuild; only the sink pointer
-  // changes (matching DetachFrameSink/AttachFrameSink's lightweight behavior).
-  MockFrameSink other_sink;
-  exec->SetExecutionStages(&other_sink);
-  EXPECT_EQ(exec->DebugGetMergedStageIdentity(), identity_after_build);
-  EXPECT_EQ(exec->GetFrameSink(), &other_sink);
-
-  // A genuine reset (e.g. backend switch routes through ResetExecutionStages)
-  // tears the graph down; the next attach rebuilds a merged stage. The new
-  // object's heap address may match the previous one after an immediate free
-  // and realloc, so freshness is the null identity between the two builds.
-  exec->ResetExecutionStages();
-  EXPECT_EQ(exec->DebugGetMergedStageIdentity(), std::uintptr_t{0});
-  exec->SetExecutionStages(&sink);
-  const auto identity_after_reset = exec->DebugGetMergedStageIdentity();
-  EXPECT_NE(identity_after_reset, std::uintptr_t{0});
-}
-
-TEST_F(PipelineFrameSinkTest, BindFrameSubmissionIsNoOpWhenSinkIsDetached) {
-  auto exec = std::make_shared<CPUPipelineExecutor>();
-
-  EXPECT_NO_THROW(exec->BindFrameSubmission(FramePreviewMetadata{},
-                                            FramePresentationMode::ViewportTransformed));
-}
-
-TEST_F(PipelineFrameSinkTest, BindFrameSubmissionForwardsToAttachedSink) {
-  auto          exec = std::make_shared<CPUPipelineExecutor>();
-  MockFrameSink sink;
-  exec->SetExecutionStages(&sink);
-
-  FramePreviewMetadata metadata{};
-  metadata.presentation_request_id = 42;
-  exec->BindFrameSubmission(metadata, FramePresentationMode::RoiFrame);
-  EXPECT_EQ(sink.bind_submission_calls_, 1);
-  EXPECT_EQ(sink.last_bound_submission_.metadata.presentation_request_id, 42u);
-  EXPECT_EQ(sink.last_bound_submission_.mode, FramePresentationMode::RoiFrame);
 }
 
 TEST_F(PipelineFrameSinkTest, GetViewportRenderRegionReturnsNulloptWhenSinkIsDetached) {
@@ -176,89 +107,13 @@ TEST_F(PipelineFrameSinkTest, GetViewportRenderRegionReturnsNulloptWhenSinkIsDet
   EXPECT_EQ(exec->GetViewportRenderRegion(), std::nullopt);
 }
 
-TEST_F(PipelineFrameSinkTest, RenderRegionCropsEvenWhenScaleIsFullRes) {
-  cv::Mat image(100, 200, CV_32FC3);
-  for (int y = 0; y < image.rows; ++y) {
-    for (int x = 0; x < image.cols; ++x) {
-      image.at<cv::Vec3f>(y, x) = cv::Vec3f(static_cast<float>(x), static_cast<float>(y), 0.0f);
-    }
-  }
-
-  nlohmann::json params;
-  params["resize"] = {{"enable_scale", false},
-                      {"maximum_edge", 4096},
-                      {"enable_roi", true},
-                      {"downsample_algorithm", "inter_area"},
-                      {"roi",
-                       {{"x", 50},
-                        {"y", 20},
-                        {"resize_factor_x", 0.5f},
-                        {"resize_factor_y", 0.5f},
-                        {"resize_factor", 0.5f},
-                        {"reference_width", 200},
-                        {"reference_height", 100}}}};
-
-  PipelineStage stage(PipelineStageName::Geometry_Adjustment,
-                      /*enable_cache=*/true,
-                      /*is_streamable=*/false);
-  stage.SetOperator(OperatorType::RESIZE, params);
-  stage.SetInputImage(std::make_shared<ImageBuffer>(std::move(image)));
-
-  OperatorParams global_params;
-  auto           result = stage.ApplyStage(global_params);
-  ASSERT_TRUE(result);
-  const auto& output = result->GetCPUData();
-
-  ASSERT_EQ(output.cols, 100);
-  ASSERT_EQ(output.rows, 50);
-  EXPECT_FLOAT_EQ(output.at<cv::Vec3f>(0, 0)[0], 50.0f);
-  EXPECT_FLOAT_EQ(output.at<cv::Vec3f>(0, 0)[1], 20.0f);
-}
-
-TEST_F(PipelineFrameSinkTest, RenderRegionDoesNotUpscaleWhenViewportTargetExceedsSourceRoi) {
-  cv::Mat image(100, 200, CV_32FC3);
-  for (int y = 0; y < image.rows; ++y) {
-    for (int x = 0; x < image.cols; ++x) {
-      image.at<cv::Vec3f>(y, x) = cv::Vec3f(static_cast<float>(x), static_cast<float>(y), 0.0f);
-    }
-  }
-
-  nlohmann::json params;
-  params["resize"] = {{"enable_scale", true},
-                      {"maximum_edge", 220},
-                      {"enable_roi", true},
-                      {"downsample_algorithm", "inter_area"},
-                      {"roi",
-                       {{"x", 0},
-                        {"y", 0},
-                        {"resize_factor_x", 0.5f},
-                        {"resize_factor_y", 0.5f},
-                        {"resize_factor", 0.5f},
-                        {"reference_width", 200},
-                        {"reference_height", 100}}}};
-
-  PipelineStage stage(PipelineStageName::Geometry_Adjustment,
-                      /*enable_cache=*/true,
-                      /*is_streamable=*/false);
-  stage.SetOperator(OperatorType::RESIZE, params);
-  stage.SetInputImage(std::make_shared<ImageBuffer>(std::move(image)));
-
-  OperatorParams global_params;
-  auto           result = stage.ApplyStage(global_params);
-  ASSERT_TRUE(result);
-  const auto& output = result->GetCPUData();
-
-  EXPECT_EQ(output.cols, 100);
-  EXPECT_EQ(output.rows, 50);
-}
-
 // Request construction tests read the per-task PipelineApplyRequest that Apply receives.
 // MakeApplyRequest never writes executor or stage state (G10.1).
 
 TEST_F(PipelineFrameSinkTest, DetailRoiPreviewUsesViewportTargetPixelsAsMaxEdge) {
   auto          exec = std::make_shared<CPUPipelineExecutor>();
   MockFrameSink sink;
-  exec->SetExecutionStages(&sink);
+  exec->AttachFrameSink(&sink);
 
   sink.viewport_render_region_ = ViewportRenderRegion{
       .x_                = 1200,
@@ -291,7 +146,7 @@ TEST_F(PipelineFrameSinkTest, DetailRoiPreviewUsesViewportTargetPixelsAsMaxEdge)
 TEST_F(PipelineFrameSinkTest, DetailRoiPreviewUsesFrozenRequestRegionInsteadOfChangedSinkRegion) {
   auto          exec = std::make_shared<CPUPipelineExecutor>();
   MockFrameSink sink;
-  exec->SetExecutionStages(&sink);
+  exec->AttachFrameSink(&sink);
 
   // Simulate the view moving after the session request was accepted but before
   // the blocking pipeline task acquired the executor render lock.
@@ -338,7 +193,7 @@ TEST_F(PipelineFrameSinkTest, DetailRoiPreviewUsesFrozenRequestRegionInsteadOfCh
 TEST_F(PipelineFrameSinkTest, QualityBaseRequestDoesNotCarryViewportGeometry) {
   auto          exec = std::make_shared<CPUPipelineExecutor>();
   MockFrameSink sink;
-  exec->SetExecutionStages(&sink);
+  exec->AttachFrameSink(&sink);
   sink.viewport_render_region_ = ViewportRenderRegion{.x_                = 700,
                                                       .y_                = 300,
                                                       .scale_x_          = 0.2f,
@@ -371,7 +226,7 @@ TEST_F(PipelineFrameSinkTest, QualityBaseRequestDoesNotCarryViewportGeometry) {
 TEST_F(PipelineFrameSinkTest, FastPreviewSubRegionUsesRoiFrameWithSinkRegion) {
   auto          exec = std::make_shared<CPUPipelineExecutor>();
   MockFrameSink sink;
-  exec->SetExecutionStages(&sink);
+  exec->AttachFrameSink(&sink);
   sink.viewport_render_region_ = ViewportRenderRegion{
       .x_                = 600,
       .y_                = 400,
@@ -407,7 +262,7 @@ TEST_F(PipelineFrameSinkTest, FastPreviewSubRegionUsesRoiFrameWithSinkRegion) {
 TEST_F(PipelineFrameSinkTest, ScopeRefreshFastPreviewAllowsCurrentRoiAsScopeInput) {
   auto          exec = std::make_shared<CPUPipelineExecutor>();
   MockFrameSink sink;
-  exec->SetExecutionStages(&sink);
+  exec->AttachFrameSink(&sink);
 
   sink.viewport_render_region_ = ViewportRenderRegion{
       .x_                = 600,
@@ -522,7 +377,7 @@ TEST_F(PipelineFrameSinkTest, DetachUnderLockIsSafeDuringConcurrentAccess) {
   auto          exec = std::make_shared<CPUPipelineExecutor>();
   MockFrameSink sink;
 
-  exec->SetExecutionStages(&sink);
+  exec->AttachFrameSink(&sink);
   EXPECT_EQ(exec->GetFrameSink(), &sink);
 
   {
@@ -541,7 +396,7 @@ TEST_F(PipelineFrameSinkTest, ReattachAfterDetachIsSafe) {
 
   {
     std::unique_lock<std::mutex> lock(exec->GetRenderLock());
-    exec->SetExecutionStages(&sink1);
+    exec->AttachFrameSink(&sink1);
   }
   EXPECT_EQ(exec->GetFrameSink(), &sink1);
 
@@ -553,90 +408,36 @@ TEST_F(PipelineFrameSinkTest, ReattachAfterDetachIsSafe) {
 
   {
     std::unique_lock<std::mutex> lock(exec->GetRenderLock());
-    exec->SetExecutionStages(&sink2);
+    exec->AttachFrameSink(&sink2);
   }
   EXPECT_EQ(exec->GetFrameSink(), &sink2);
 }
 
-TEST_F(PipelineFrameSinkTest, AttachFrameSinkSetsPointerWithoutRebuildingStages) {
-  // AttachFrameSink should set the sink on both the executor and the tail
-  // execution stage without tearing down and rebuilding the stage vector.
+TEST_F(PipelineFrameSinkTest, AttachDetachRoundTripKeepsSinkQueries) {
+  // The editor attaches the sink under the render lock before each render and detaches it on
+  // close; the round-trip must leave the viewport query routed to the attached sink only.
   auto          exec = std::make_shared<CPUPipelineExecutor>();
   MockFrameSink sink;
-
-  exec->SetExecutionStages();
-  EXPECT_EQ(exec->GetFrameSink(), nullptr);
+  sink.viewport_render_region_ = ViewportRenderRegion{.x_ = 10, .reference_width_ = 100};
 
   {
     std::unique_lock<std::mutex> lock(exec->GetRenderLock());
-    exec->AttachFrameSink(&sink);
-  }
-  EXPECT_EQ(exec->GetFrameSink(), &sink);
-
-  // Verify the sink delegates work — the tail stage should forward
-  // presentation metadata to the attached sink.
-  exec->BindFrameSubmission({}, FramePresentationMode::RoiFrame);
-  EXPECT_EQ(sink.bind_submission_calls_, 1);
-  EXPECT_EQ(sink.last_bound_submission_.mode, FramePresentationMode::RoiFrame);
-}
-
-TEST_F(PipelineFrameSinkTest, AttachDetachRoundTripWithoutStageRebuild) {
-  // Verify that AttachFrameSink / DetachFrameSink form a lightweight
-  // round-trip that does not require SetExecutionStages (which is expensive).
-  auto          exec = std::make_shared<CPUPipelineExecutor>();
-  MockFrameSink sink;
-
-  exec->SetExecutionStages(&sink);
-  EXPECT_EQ(exec->GetFrameSink(), &sink);
-
-  // Round-trip: detach → re-attach → detach again.
-  {
-    std::unique_lock<std::mutex> lock(exec->GetRenderLock());
-    exec->DetachFrameSink();
-    EXPECT_EQ(exec->GetFrameSink(), nullptr);
     exec->AttachFrameSink(&sink);
     EXPECT_EQ(exec->GetFrameSink(), &sink);
     exec->DetachFrameSink();
     EXPECT_EQ(exec->GetFrameSink(), nullptr);
+    EXPECT_EQ(exec->GetViewportRenderRegion(), std::nullopt);
   }
-
-  // Re-attach after round-trip still works.
-  {
-    std::unique_lock<std::mutex> lock(exec->GetRenderLock());
-    exec->AttachFrameSink(&sink);
-  }
-  EXPECT_EQ(exec->GetFrameSink(), &sink);
-
-  exec->BindFrameSubmission(FramePreviewMetadata{}, FramePresentationMode::FullFrame);
-  EXPECT_EQ(sink.bind_submission_calls_, 1);
-}
-
-TEST_F(PipelineFrameSinkTest, DetachThenAttachPreservesSinkCalls) {
-  // After detach+attach, the re-attached sink should receive subsequent
-  // frame presentation calls normally.
-  auto          exec = std::make_shared<CPUPipelineExecutor>();
-  MockFrameSink sink;
-
-  exec->SetExecutionStages(&sink);
-  exec->BindFrameSubmission({}, FramePresentationMode::FullFrame);
-  EXPECT_EQ(sink.bind_submission_calls_, 1);
-
-  {
-    std::unique_lock<std::mutex> lock(exec->GetRenderLock());
-    exec->DetachFrameSink();
-  }
-
-  exec->BindFrameSubmission({}, FramePresentationMode::RoiFrame);
-  EXPECT_EQ(sink.bind_submission_calls_, 1);
+  EXPECT_EQ(sink.viewport_render_region_calls_, 0);
 
   {
     std::unique_lock<std::mutex> lock(exec->GetRenderLock());
     exec->AttachFrameSink(&sink);
   }
-
-  exec->BindFrameSubmission({}, FramePresentationMode::RoiFrame);
-  EXPECT_EQ(sink.bind_submission_calls_, 2);
-  EXPECT_EQ(sink.last_bound_submission_.mode, FramePresentationMode::RoiFrame);
+  const auto region = exec->GetViewportRenderRegion();
+  ASSERT_TRUE(region.has_value());
+  EXPECT_EQ(region->x_, 10);
+  EXPECT_EQ(sink.viewport_render_region_calls_, 1);
 }
 
 // =========================================================================
@@ -645,50 +446,16 @@ TEST_F(PipelineFrameSinkTest, DetachThenAttachPreservesSinkCalls) {
 //    carrying stale UI output state."
 // =========================================================================
 
-TEST_F(PipelineFrameSinkTest, ResetExecutionStagesClearsFrameSink) {
-  // PipelineMgmtService::SavePipeline() calls ResetExecutionStages() which
-  // must clear frame_sink_ so the cached pipeline carries no stale sink.
-  auto          exec = std::make_shared<CPUPipelineExecutor>();
-  MockFrameSink sink;
-
-  exec->SetExecutionStages(&sink);
-  EXPECT_EQ(exec->GetFrameSink(), &sink);
-
-  exec->ResetExecutionStages();
-  EXPECT_EQ(exec->GetFrameSink(), nullptr);
-}
-
 TEST_F(PipelineFrameSinkTest, ClearAllIntermediateBuffersDoesNotClearFrameSink) {
   // ClearAllIntermediateBuffers() is an intermediate cleanup, not a full
   // reset; it should preserve the frame sink binding.
   auto          exec = std::make_shared<CPUPipelineExecutor>();
   MockFrameSink sink;
 
-  exec->SetExecutionStages(&sink);
+  exec->AttachFrameSink(&sink);
   exec->ClearAllIntermediateBuffers();
 
   EXPECT_EQ(exec->GetFrameSink(), &sink);
-}
-
-// =========================================================================
-// Phase 1 Acceptance Criterion 3 (partial):
-//   Importing history cannot mutate execution stages concurrently with render.
-// =========================================================================
-
-TEST_F(PipelineFrameSinkTest, ImportPipelineParamsResetsFrameSink) {
-  // ImportPipelineParams() internally calls ResetExecutionStages() and must
-  // clear the frame sink so that importing history doesn't leave a stale
-  // editor sink attached.
-  auto          exec = std::make_shared<CPUPipelineExecutor>();
-  MockFrameSink sink;
-
-  exec->SetExecutionStages(&sink);
-  EXPECT_EQ(exec->GetFrameSink(), &sink);
-
-  nlohmann::json params = exec->ExportPipelineParams();
-  exec->ImportPipelineParams(params);
-
-  EXPECT_EQ(exec->GetFrameSink(), nullptr);
 }
 
 TEST_F(PipelineFrameSinkTest, SetAcceleratorBackendPreservesFrameSink) {
@@ -697,7 +464,7 @@ TEST_F(PipelineFrameSinkTest, SetAcceleratorBackendPreservesFrameSink) {
   auto          exec = std::make_shared<CPUPipelineExecutor>();
   MockFrameSink sink;
 
-  exec->SetExecutionStages(&sink);
+  exec->AttachFrameSink(&sink);
   EXPECT_EQ(exec->GetFrameSink(), &sink);
 
   exec->SetAcceleratorBackendPreference(AcceleratorBackendPreference::CPU);
@@ -737,7 +504,7 @@ TEST_F(PipelineFrameSinkTest, ConcurrentDetachAndRenderLockIsDeadlockFree) {
   // operations must not deadlock.
   auto          exec = std::make_shared<CPUPipelineExecutor>();
   MockFrameSink sink;
-  exec->SetExecutionStages(&sink);
+  exec->AttachFrameSink(&sink);
 
   std::atomic<bool> stop{false};
   std::atomic<int>  ops{0};
@@ -746,7 +513,7 @@ TEST_F(PipelineFrameSinkTest, ConcurrentDetachAndRenderLockIsDeadlockFree) {
     while (!stop.load()) {
       std::unique_lock<std::mutex> lock(exec->GetRenderLock());
       exec->DetachFrameSink();
-      exec->SetExecutionStages(&sink);
+      exec->AttachFrameSink(&sink);
       ops.fetch_add(1);
       std::this_thread::yield();
     }
@@ -757,8 +524,7 @@ TEST_F(PipelineFrameSinkTest, ConcurrentDetachAndRenderLockIsDeadlockFree) {
       {
         std::unique_lock<std::mutex> lock(exec->GetRenderLock());
         // Simulate the render path's use of frame sink methods.
-        exec->BindFrameSubmission(FramePreviewMetadata{},
-                                  FramePresentationMode::ViewportTransformed);
+        (void)exec->GetFrameSink();
         (void)exec->GetViewportRenderRegion();
       }
       ops.fetch_add(1);
@@ -785,59 +551,6 @@ TEST_F(PipelineFrameSinkTest, ConcurrentDetachAndRenderLockIsDeadlockFree) {
   SUCCEED();
 }
 
-TEST_F(PipelineFrameSinkTest, ConcurrentImportPipelineParamsAndRenderIsDeadlockFree) {
-  // Simulates the scenario described in Acceptance Criterion 3:
-  // reopening the editor or importing history concurrently with render.
-  auto          exec = std::make_shared<CPUPipelineExecutor>();
-  MockFrameSink sink;
-  exec->SetExecutionStages(&sink);
-
-  const nlohmann::json params = exec->ExportPipelineParams();
-
-  std::atomic<bool>    stop{false};
-  std::atomic<int>     ops{0};
-
-  const auto           import_work = [&]() {
-    while (!stop.load()) {
-      {
-        std::unique_lock<std::mutex> lock(exec->GetRenderLock());
-        exec->ImportPipelineParams(params);
-        exec->SetExecutionStages(&sink);
-      }
-      ops.fetch_add(1);
-      std::this_thread::yield();
-    }
-  };
-
-  const auto render_work = [&]() {
-    while (!stop.load()) {
-      {
-        std::unique_lock<std::mutex> lock(exec->GetRenderLock());
-        exec->BindFrameSubmission({}, FramePresentationMode::ViewportTransformed);
-      }
-      ops.fetch_add(1);
-      std::this_thread::yield();
-    }
-  };
-
-  std::vector<std::thread> threads;
-  threads.reserve(4);
-  for (int i = 0; i < 2; ++i) {
-    threads.emplace_back(import_work);
-    threads.emplace_back(render_work);
-  }
-
-  std::this_thread::sleep_for(std::chrono::milliseconds(200));
-  stop.store(true);
-
-  for (auto& t : threads) {
-    t.join();
-  }
-
-  EXPECT_GT(ops.load(), 0);
-  SUCCEED();
-}
-
 // =========================================================================
 // Exception-safety tests
 // =========================================================================
@@ -849,7 +562,7 @@ TEST_F(PipelineFrameSinkTest, SinkIsRestoredAfterExceptionDuringRender) {
   auto          exec = std::make_shared<CPUPipelineExecutor>();
   MockFrameSink sink;
 
-  exec->SetExecutionStages(&sink);
+  exec->AttachFrameSink(&sink);
   EXPECT_EQ(exec->GetFrameSink(), &sink);
 
   IFrameSink* saved_sink = nullptr;
@@ -881,9 +594,9 @@ TEST_F(PipelineFrameSinkTest, SinkIsRestoredAfterExceptionDuringRender) {
   // After exception, the RAII guard must have restored the sink.
   EXPECT_EQ(exec->GetFrameSink(), &sink);
 
-  // And the sink is still functional.
-  exec->BindFrameSubmission({}, FramePresentationMode::FullFrame);
-  EXPECT_EQ(sink.bind_submission_calls_, 1);
+  // And the sink still answers the viewport query.
+  (void)exec->GetViewportRenderRegion();
+  EXPECT_EQ(sink.viewport_render_region_calls_, 1);
 }
 
 TEST_F(PipelineFrameSinkTest, SinkIsRestoredAfterExceptionBeforeRender) {
@@ -892,7 +605,7 @@ TEST_F(PipelineFrameSinkTest, SinkIsRestoredAfterExceptionBeforeRender) {
   auto          exec = std::make_shared<CPUPipelineExecutor>();
   MockFrameSink sink;
 
-  exec->SetExecutionStages(&sink);
+  exec->AttachFrameSink(&sink);
 
   IFrameSink* saved_sink = nullptr;
   bool        caught     = false;
@@ -924,8 +637,7 @@ TEST_F(PipelineFrameSinkTest, SinkIsRestoredAfterExceptionBeforeRender) {
 TEST_F(PipelineFrameSinkTest, SinkIsNotRestoredIfNeverDetached) {
   // If no sink was attached when entering the render path, the RAII guard
   // must be a no-op (no spurious attach of nullptr).
-  auto exec = std::make_shared<CPUPipelineExecutor>();
-  exec->SetExecutionStages();  // no sink attached
+  auto exec = std::make_shared<CPUPipelineExecutor>();  // no sink attached
 
   bool caught = false;
   try {
@@ -951,63 +663,17 @@ TEST_F(PipelineFrameSinkTest, SinkIsNotRestoredIfNeverDetached) {
   EXPECT_EQ(exec->GetFrameSink(), nullptr);
 }
 
-// The accelerator backend is a runtime property of the process (the user's
-// backend setting), never part of the persisted edit state. Stored params that
-// carry an old backend (e.g. "cuda" saved when the state was created) must not
-// drive the decode: an OpenCL session must decode with OpenCL even when the
-// imported state was saved under CUDA.
-auto RawDecodeBackendOf(CPUPipelineExecutor& exec) -> RawGpuBackend {
-  auto entry =
-      exec.GetStage(PipelineStageName::Image_Loading).GetOperator(OperatorType::RAW_DECODE);
-  if (!entry.has_value() || !entry.value() || !entry.value()->op_) {
-    return RawGpuBackend::CPU;
-  }
-  auto* raw_op = dynamic_cast<RawDecodeOp*>(entry.value()->op_.get());
-  return raw_op ? raw_op->params_.gpu_backend_ : RawGpuBackend::CPU;
-}
-
-TEST_F(PipelineFrameSinkTest, ImportedRawBackendCannotOverrideRuntimePreference) {
+// The accelerator backend is a runtime property of the process (the user's backend setting). It
+// is resolved on the executor and is never part of the persisted document.
+TEST_F(PipelineFrameSinkTest, AcceleratorPreferenceResolvesRuntimeBackend) {
   auto exec = std::make_shared<CPUPipelineExecutor>();
+  EXPECT_EQ(exec->GetAcceleratorBackendPreference(), AcceleratorBackendPreference::Auto);
+  EXPECT_EQ(exec->GetResolvedAcceleratorBackend(),
+            ResolveAcceleratorBackend(AcceleratorBackendPreference::Auto));
+
   exec->SetAcceleratorBackendPreference(AcceleratorBackendPreference::CPU);
-  EXPECT_EQ(RawDecodeBackendOf(*exec), RawGpuBackend::CPU);
-
-  // Params never carry the backend: exported state has no backend key.
-  // Exported stage state is nested as stage name -> {script_name -> {…}}.
-  const nlohmann::json exported   = exec->ExportPipelineParams();
-  const nlohmann::json raw_params = exported.value("Image_Loading", nlohmann::json::object())
-                                        .value("Image_Loading", nlohmann::json::object())
-                                        .value("raw_decode", nlohmann::json::object())
-                                        .value("params", nlohmann::json::object())
-                                        .value("raw", nlohmann::json::object());
-  EXPECT_FALSE(raw_params.contains("gpu_backend"));
-
-  // A state saved under a different backend (CUDA) must not change the decode.
-  nlohmann::json stored                                                                  = exported;
-  stored["Image_Loading"]["Image_Loading"]["raw_decode"]["params"]["raw"]["gpu_backend"] = "cuda";
-  exec->ImportPipelineParams(stored);
-
-  EXPECT_EQ(RawDecodeBackendOf(*exec), RawGpuBackend::CPU);
-}
-
-TEST_F(PipelineFrameSinkTest, RawBackendParamsAreInertAndRuntimePreferenceWins) {
-  auto exec = std::make_shared<CPUPipelineExecutor>();
-  exec->SetAcceleratorBackendPreference(AcceleratorBackendPreference::CPU);
-
-  // Direct param writes with backend keys must not move the decode: the keys
-  // are ignored by SetParams.
-  auto&          raw_stage = exec->GetStage(PipelineStageName::Image_Loading);
-  nlohmann::json stale_params;
-  stale_params["raw"] = {{"gpu_backend", "cuda"}};
-  raw_stage.SetOperator(OperatorType::RAW_DECODE, stale_params);
-  EXPECT_EQ(RawDecodeBackendOf(*exec), RawGpuBackend::CPU);
-
-  // The runtime preference drives the decode; switching it moves the op.
-  try {
-    exec->SetAcceleratorBackendPreference(AcceleratorBackendPreference::CUDA);
-  } catch (const std::exception& e) {
-    GTEST_SKIP() << "CUDA backend unavailable: " << e.what();
-  }
-  EXPECT_EQ(RawDecodeBackendOf(*exec), RawGpuBackend::CUDA);
+  EXPECT_EQ(exec->GetAcceleratorBackendPreference(), AcceleratorBackendPreference::CPU);
+  EXPECT_EQ(exec->GetResolvedAcceleratorBackend(), GpuBackendKind::None);
 }
 
 }  // namespace alcedo

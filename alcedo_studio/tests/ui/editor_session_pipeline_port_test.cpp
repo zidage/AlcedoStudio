@@ -9,7 +9,6 @@
 #include <memory>
 
 #include "app/pipeline_service.hpp"
-#include "edit/operators/operator_registeration.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
 
 namespace alcedo::ui {
@@ -23,7 +22,6 @@ auto MakeGuard(sl_element_id_t element_id) -> std::shared_ptr<alcedo::PipelineGu
 }
 
 TEST(EditorSessionPipelinePortTest, CachesLoadedGuardUntilRelease) {
-  RegisterAllOperators();
   auto                      loaded     = MakeGuard(42);
   int                       load_count = 0;
 

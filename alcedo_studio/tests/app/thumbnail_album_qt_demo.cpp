@@ -54,7 +54,6 @@
 #include "app/project_service.hpp"
 #include "app/sleeve_filter_service.hpp"
 #include "app/thumbnail_service.hpp"
-#include "edit/operators/operator_registeration.hpp"
 #include "sleeve/sleeve_element/sleeve_element.hpp"
 #include "sleeve/sleeve_filter/filter_combo.hpp"
 #include "type/supported_file_type.hpp"
@@ -1354,7 +1353,6 @@ class AlbumWidget final : public QWidget {
 
 int main(int argc, char** argv) {
   Exiv2::LogMsg::setLevel(Exiv2::LogMsg::Level::mute);
-  alcedo::RegisterAllOperators();
 
   QGuiApplication::setHighDpiScaleFactorRoundingPolicy(
       Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);

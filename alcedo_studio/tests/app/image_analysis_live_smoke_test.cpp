@@ -36,7 +36,6 @@
 #include "app/sleeve_filter_service.hpp"
 #include "app/thumbnail_service.hpp"
 #include "app/thumbnail_types.hpp"
-#include "edit/operators/operator_registeration.hpp"
 #include "sleeve/storage.hpp"
 #include "storage/store/ai/ai_store.hpp"
 
@@ -431,14 +430,6 @@ TEST(ImageAnalysisLiveSmokeTest, DescribesOneImageFromPackedProject) {
   const auto& provider_id = inputs->provider_id;
   const auto& api_key     = inputs->api_key;
 
-  // Populate the global OperatorFactory singleton, exactly as main.cpp:142 and every
-  // pipeline-using test fixture do. Without this, ThumbnailService's render path builds a
-  // CPUPipelineExecutor whose InitDefaultPipeline() calls OperatorFactory::Create() for each
-  // default operator — and Create() returns nullptr for unregistered types. SetOperator()'s
-  // 3-arg overload then dereferences the null op_ in SetGlobalParams, crashing the process
-  // (0xC0000005). This is a test-harness requirement, not a Phase 5e concern.
-  RegisterAllOperators();
-
   std::string build_err;
   auto        env = BuildLiveSmokeEnv(inputs->runtime_env, inputs->project_env, &build_err);
   ASSERT_NE(env, nullptr) << build_err;
@@ -551,8 +542,6 @@ TEST(ImageAnalysisLiveSmokeTest, RatesOneImageFromPackedProject) {
       << inputs->envtest_env;
   const auto& provider_id = inputs->provider_id;
   const auto& api_key     = inputs->api_key;
-
-  RegisterAllOperators();
 
   std::string build_err;
   auto        env = BuildLiveSmokeEnv(inputs->runtime_env, inputs->project_env, &build_err);

@@ -28,7 +28,6 @@
 #include "edit/mask/mask_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
-#include "edit/operators/operator_registeration.hpp"
 #include "grade_owned_mask_support.hpp"
 #include "support/editor_parameter_target_test.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_commit_presentation.hpp"
@@ -46,7 +45,6 @@ using test::WithDrtPostTarget;
 class EditorDocumentHistoryTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    RegisterAllOperators();
     const auto stamp = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
     journal_path_    = std::filesystem::path(TEST_IMG_PATH)
                         .parent_path()
@@ -340,7 +338,6 @@ TEST_F(EditorDocumentHistoryTest, PreviewCommitUndoRedoAndCancelWaitForRenderLoc
   const auto* grade       = guard_->document_->PrimaryGrade();
   const auto* exposure    = grade->FindAdjustmentByType(type_ids::Exposure());
   const auto  patch       = WithColorGradeTarget({"exposure", R"({"exposure_ev":2.5})", true});
-  const auto  stages      = guard_->pipeline_->ExportPipelineParams();
   const auto  run_blocked = [&](auto action, float before, float after) {
     std::unique_lock   held(guard_->pipeline_->GetRenderLock());
     std::promise<void> started;
@@ -371,7 +368,6 @@ TEST_F(EditorDocumentHistoryTest, PreviewCommitUndoRedoAndCancelWaitForRenderLoc
               2.5f, 3.0f);
   run_blocked([&](auto* e) { return history_.DiscardUnmaterializedChanges(handle, e); }, 3.0f,
               1.5f);
-  EXPECT_EQ(guard_->pipeline_->ExportPipelineParams(), stages);
 }
 
 TEST_F(EditorDocumentHistoryTest, TypedUndoAfterHistoryReleaseRestoresDocumentFromStoredBatch) {

@@ -27,7 +27,6 @@
 #include "edit/history/mini_git_working_history.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
-#include "edit/operators/operator_registeration.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
 
 namespace alcedo::ui {
@@ -53,7 +52,6 @@ auto MakeExposureBatch(float before, float after) -> alcedo::PipelineEditBatch {
 class EditorSessionCheckpointStoreTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    RegisterAllOperators();
     const auto stamp =
         std::to_string(std::chrono::high_resolution_clock::now().time_since_epoch().count());
     const auto temp = std::filesystem::temp_directory_path();

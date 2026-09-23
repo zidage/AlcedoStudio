@@ -49,7 +49,6 @@
 #include "app/pipeline_service.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/history/commit_graph.hpp"
-#include "edit/operators/operator_registeration.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
 #include "support/editor_parameter_target_test.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
@@ -84,7 +83,6 @@ auto MakeGuard(sl_element_id_t element_id) -> std::shared_ptr<alcedo::PipelineGu
 class ProductionSessionBackend final : public alcedo::IEditorSessionBackend {
  public:
   explicit ProductionSessionBackend(QObject* gui_anchor) : gui_anchor_(gui_anchor) {
-    RegisterAllOperators();
     const auto stamp =
         std::to_string(std::chrono::high_resolution_clock::now().time_since_epoch().count());
     journal_path_ = std::filesystem::temp_directory_path() / ("qml_multi_slider_" + stamp + ".wal");

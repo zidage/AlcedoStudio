@@ -30,12 +30,10 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/graph/develop_color_transform.hpp"
+#include "edit/graph/drt_node_model.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/edit_commit.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
-#include "edit/operators/op_base.hpp"
-#include "edit/operators/operator_registeration.hpp"
-#include "edit/pipeline/default_pipeline_params.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
 #include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
@@ -61,7 +59,6 @@ class PipelineMapperTests : public ::testing::Test {
     if (std::filesystem::exists(meta_path_)) {
       std::filesystem::remove(meta_path_);
     }
-    RegisterAllOperators();
   }
 
   void TearDown() override {
@@ -157,18 +154,13 @@ TEST_F(PipelineMapperTests, DefaultOutputTransformUsesOpenDRT) {
 
   auto                pipeline_guard = pipeline_service.LoadPipeline(42);
   ASSERT_NE(pipeline_guard, nullptr);
+  ASSERT_NE(pipeline_guard->document_->Drt(), nullptr);
 
-  const nlohmann::json exported = pipeline_guard->pipeline_->ExportPipelineParams();
-  ASSERT_TRUE(exported.contains("Output Transform"));
-  ASSERT_TRUE(exported["Output Transform"].contains("Output Transform"));
-  ASSERT_TRUE(exported["Output Transform"]["Output Transform"].contains("odt"));
-  ASSERT_TRUE(exported["Output Transform"]["Output Transform"]["odt"].contains("params"));
-  ASSERT_TRUE(exported["Output Transform"]["Output Transform"]["odt"]["params"].contains("odt"));
-  const auto& odt = exported["Output Transform"]["Output Transform"]["odt"]["params"]["odt"];
-  EXPECT_EQ(odt["method"], "open_drt");
-  EXPECT_EQ(odt["encoding_eotf"], "gamma_2_2");
-  EXPECT_EQ(odt["limiting_space"], "rec709");
-  EXPECT_TRUE(odt.contains("open_drt"));
+  const auto& drt = pipeline_guard->document_->Drt()->Params();
+  EXPECT_EQ(drt.Method(), DrtMethod::OpenDrt);
+  EXPECT_EQ(drt.EncodingEotf(), DrtEotf::Gamma22);
+  EXPECT_EQ(drt.LimitingSpace(), DrtColorSpace::Rec709);
+  const auto exported = drt.ToJson();
 
   pipeline_guard->dirty_ = true;
   pipeline_service.SavePipeline(pipeline_guard);
@@ -176,112 +168,7 @@ TEST_F(PipelineMapperTests, DefaultOutputTransformUsesOpenDRT) {
 
   auto reloaded = pipeline_service.LoadPipeline(42);
   ASSERT_NE(reloaded, nullptr);
-  EXPECT_EQ(exported.dump(), reloaded->pipeline_->ExportPipelineParams().dump());
-}
-
-TEST_F(PipelineMapperTests, DefaultPipelineAdjustmentsUseCleanBaseline) {
-  CPUPipelineExecutor exec;
-
-  const auto          exported = exec.ExportPipelineParams();
-  EXPECT_EQ(exported["Basic Adjustment"]["Basic Adjustment"]["exposure"]["params"]["exposure"],
-            1.5);
-  EXPECT_EQ(exported["Basic Adjustment"]["Basic Adjustment"]["contrast"]["params"]["contrast"],
-            0.0);
-  EXPECT_EQ(exported["Color Adjustment"]["Color Adjustment"]["saturation"]["params"]["saturation"],
-            30.0);
-  EXPECT_EQ(exported["Color Adjustment"]["Color Adjustment"]["ocio_lmt"]["params"]["ocio_lmt"], "");
-  EXPECT_FALSE(
-      exported["Geometry Adjustment"]["Geometry Adjustment"]["crop_rotate"]["enable"].get<bool>());
-  EXPECT_EQ(exported["Geometry Adjustment"]["Geometry Adjustment"]["crop_rotate"]["params"]
-                    ["crop_rotate"]["enabled"],
-            false);
-  EXPECT_EQ(exported["Output Transform"]["Output Transform"]["odt"]["params"]["odt"]["method"],
-            "open_drt");
-
-  const auto& global = exec.GetGlobalParams();
-  EXPECT_FLOAT_EQ(global.exposure_offset_, 1.5f / 17.52f);
-  EXPECT_TRUE(global.contrast_enabled_);
-  EXPECT_FLOAT_EQ(global.contrast_scale_, 4.0f);
-  EXPECT_FLOAT_EQ(global.saturation_offset_, 1.3f);
-  EXPECT_FALSE(global.lmt_enabled_);
-}
-
-TEST_F(PipelineMapperTests, ResetToCleanBaselineAdjustmentsPreservesLoadingAndColorTemp) {
-  CPUPipelineExecutor exec;
-  auto&               loading                 = exec.GetStage(PipelineStageName::Image_Loading);
-  auto&               to_ws                   = exec.GetStage(PipelineStageName::To_WorkingSpace);
-
-  nlohmann::json      raw_params              = pipeline_defaults::MakeDefaultRawDecodeParams();
-  raw_params["raw"]["highlights_reconstruct"] = false;
-  loading.SetOperator(OperatorType::RAW_DECODE, raw_params);
-
-  nlohmann::json color_temp_params = {
-      {"color_temp", {{"mode", "custom"}, {"cct", 7200.0f}, {"tint", 12.0f}}}};
-  to_ws.SetOperator(OperatorType::COLOR_TEMP, color_temp_params, exec.GetGlobalParams());
-
-  exec.GetStage(PipelineStageName::Basic_Adjustment)
-      .SetOperator(OperatorType::EXPOSURE, {{"exposure", 2.0f}}, exec.GetGlobalParams());
-  exec.GetStage(PipelineStageName::Color_Adjustment)
-      .SetOperator(OperatorType::SATURATION, {{"saturation", 55.0f}}, exec.GetGlobalParams());
-
-  exec.ResetToCleanBaselineAdjustments();
-
-  const auto exported = exec.ExportPipelineParams();
-  EXPECT_EQ(exported["Image Loading"]["Image Loading"]["raw_decode"]["params"]["raw"]
-                    ["highlights_reconstruct"],
-            false);
-  EXPECT_EQ(exported["To Working Space"]["To Working Space"]["color_temp"]["params"]["color_temp"]
-                    ["mode"],
-            "custom");
-  EXPECT_EQ(exported["Basic Adjustment"]["Basic Adjustment"]["exposure"]["params"]["exposure"],
-            1.5);
-  EXPECT_EQ(exported["Color Adjustment"]["Color Adjustment"]["saturation"]["params"]["saturation"],
-            30.0);
-}
-
-TEST_F(PipelineMapperTests, LoadPipelineRepairsLensCalibEnableMismatchFromParams) {
-  {
-    ProjectService      project(db_path_, meta_path_);
-    PipelineMgmtService pipeline_service(project.GetStorage());
-
-    auto                pipeline_guard = pipeline_service.LoadPipeline(44);
-    ASSERT_NE(pipeline_guard, nullptr);
-
-    nlohmann::json serialized = pipeline_guard->pipeline_->ExportPipelineParams();
-    auto&          lens_entry = serialized["Image Loading"]["Image Loading"]["lens_calib"];
-    ASSERT_TRUE(lens_entry.is_object());
-    ASSERT_TRUE(lens_entry.contains("params"));
-    ASSERT_TRUE(lens_entry["params"].contains("lens_calib"));
-
-    lens_entry["enable"]                          = true;
-    lens_entry["params"]["lens_calib"]["enabled"] = false;
-    pipeline_guard->pipeline_->ImportPipelineParams(serialized);
-
-    auto op = pipeline_guard->pipeline_->GetStage(PipelineStageName::Image_Loading)
-                  .GetOperator(OperatorType::LENS_CALIBRATION);
-    ASSERT_TRUE(op.has_value());
-    ASSERT_NE(op.value(), nullptr);
-    ASSERT_TRUE(op.value()->enable_);
-    ASSERT_FALSE(op.value()->op_->GetParams()["lens_calib"].value("enabled", true));
-
-    pipeline_guard->dirty_ = true;
-    pipeline_service.SavePipeline(pipeline_guard);
-    pipeline_service.Sync();
-  }
-
-  {
-    ProjectService      project(db_path_, meta_path_);
-    PipelineMgmtService pipeline_service(project.GetStorage());
-
-    auto                reloaded = pipeline_service.LoadPipeline(44);
-    ASSERT_NE(reloaded, nullptr);
-    auto op = reloaded->pipeline_->GetStage(PipelineStageName::Image_Loading)
-                  .GetOperator(OperatorType::LENS_CALIBRATION);
-    ASSERT_TRUE(op.has_value());
-    ASSERT_NE(op.value(), nullptr);
-    EXPECT_FALSE(op.value()->enable_);
-    EXPECT_FALSE(op.value()->op_->GetParams()["lens_calib"].value("enabled", true));
-  }
+  EXPECT_EQ(exported.dump(), reloaded->document_->Drt()->Params().ToJson().dump());
 }
 
 TEST_F(PipelineMapperTests, OutputTransformPersistencePreservesSharedAndMethodSpecificSettings) {
@@ -290,41 +177,42 @@ TEST_F(PipelineMapperTests, OutputTransformPersistencePreservesSharedAndMethodSp
 
   auto                pipeline_guard = pipeline_service.LoadPipeline(43);
   ASSERT_NE(pipeline_guard, nullptr);
-
-  nlohmann::json odt_params                             = pipeline_defaults::MakeDefaultODTParams();
-  odt_params["odt"]["method"]                           = "aces_2_0";
-  odt_params["odt"]["encoding_space"]                   = "rec2020";
-  odt_params["odt"]["encoding_eotf"]                    = "st2084";
-  odt_params["odt"]["peak_luminance"]                   = 600.0f;
-  odt_params["odt"]["limiting_space"]                   = "p3_d65";
-  odt_params["odt"]["open_drt"]["look_preset"]          = "umbra";
-  odt_params["odt"]["open_drt"]["tonescale_preset"]     = "aces_2_0";
-  odt_params["odt"]["open_drt"]["creative_white"]       = "d60";
-  odt_params["odt"]["open_drt"]["creative_white_limit"] = 23.5f;
-  odt_params["odt"]["open_drt"]["display_grey_luminance"] = 12.5f;
-
-  auto& output_stage = pipeline_guard->pipeline_->GetStage(PipelineStageName::Output_Transform);
-  output_stage.SetOperator(OperatorType::ODT, odt_params);
+  {
+    std::unique_lock<std::mutex> render_lock(pipeline_guard->pipeline_->GetRenderLock());
+    DrtParameterUpdate           update;
+    update.method                 = DrtMethod::Aces20;
+    update.encoding_space         = DrtColorSpace::Rec2020;
+    update.encoding_eotf          = DrtEotf::St2084;
+    update.peak_luminance         = 600.0f;
+    update.limiting_space         = DrtColorSpace::P3D65;
+    update.look_preset            = "umbra";
+    update.tonescale_preset       = "aces_2_0";
+    update.creative_white         = "d60";
+    update.creative_white_limit   = 23.5f;
+    update.display_grey_luminance = 12.5f;
+    pipeline_guard->document_->Drt()->Params().ApplyUpdate(std::move(update));
+  }
 
   pipeline_guard->dirty_ = true;
   pipeline_service.SavePipeline(pipeline_guard);
   pipeline_service.Sync();
+  project.GetStorage()->ForgetLivePipeline(43);
 
-  auto reloaded = pipeline_service.LoadPipeline(43);
+  PipelineMgmtService reopened(project.GetStorage());
+  auto                reloaded = reopened.LoadPipeline(43);
   ASSERT_NE(reloaded, nullptr);
-
-  const nlohmann::json exported = reloaded->pipeline_->ExportPipelineParams();
-  const auto& odt = exported["Output Transform"]["Output Transform"]["odt"]["params"]["odt"];
-  EXPECT_EQ(odt["method"], "aces_2_0");
-  EXPECT_EQ(odt["encoding_space"], "rec2020");
-  EXPECT_EQ(odt["encoding_eotf"], "st2084");
-  EXPECT_EQ(odt["peak_luminance"], 600.0);
-  EXPECT_EQ(odt["limiting_space"], "p3_d65");
-  EXPECT_EQ(odt["open_drt"]["look_preset"], "umbra");
-  EXPECT_EQ(odt["open_drt"]["tonescale_preset"], "aces_2_0");
-  EXPECT_EQ(odt["open_drt"]["creative_white"], "d60");
-  EXPECT_EQ(odt["open_drt"]["creative_white_limit"], 23.5);
-  EXPECT_EQ(odt["open_drt"]["display_grey_luminance"], 12.5);
+  const auto& drt = reloaded->document_->Drt()->Params();
+  EXPECT_EQ(drt.Method(), DrtMethod::Aces20);
+  EXPECT_EQ(drt.EncodingSpace(), DrtColorSpace::Rec2020);
+  EXPECT_EQ(drt.EncodingEotf(), DrtEotf::St2084);
+  EXPECT_FLOAT_EQ(drt.PeakLuminance(), 600.0f);
+  EXPECT_EQ(drt.LimitingSpace(), DrtColorSpace::P3D65);
+  EXPECT_EQ(drt.LookPreset(), "umbra");
+  EXPECT_EQ(drt.TonescalePreset(), "aces_2_0");
+  EXPECT_EQ(drt.CreativeWhite(), "d60");
+  EXPECT_FLOAT_EQ(drt.CreativeWhiteLimit(), 23.5f);
+  EXPECT_FLOAT_EQ(drt.DisplayGreyLuminance(), 12.5f);
+  reopened.SavePipeline(reloaded);
 }
 
 TEST_F(PipelineMapperTests, SharedGuardPinsUntilLastSave) {
@@ -413,11 +301,10 @@ TEST_F(PipelineMapperTests, CacheTest1) {
       EXPECT_EQ(pipeline_guard->id_, i);
       pipeline_ids[i - 1] = i;
 
-      // Modify the pipeline
-      auto& stage         = pipeline_guard->pipeline_->GetStage(PipelineStageName::To_WorkingSpace);
-      nlohmann::json exp_params;
-      exp_params["exposure"] = static_cast<float>(i) * 0.3f;
-      stage.SetOperator(OperatorType::EXPOSURE, exp_params);
+      // Modify the document
+      pipeline_guard->document_->PrimaryGrade()
+          ->FindAdjustmentByType(type_ids::Exposure())
+          ->LoadJson({{"exposure_ev", static_cast<float>(i) * 0.3f}});
       pipeline_guard->dirty_ = true;
       // Save it back
       // So no guard will be pinned
@@ -446,11 +333,10 @@ TEST_F(PipelineMapperTests, CacheTest2) {
       EXPECT_EQ(pipeline_guard->id_, i);
       pipeline_ids[i] = i;
 
-      // Modify the pipeline
-      auto& stage     = pipeline_guard->pipeline_->GetStage(PipelineStageName::To_WorkingSpace);
-      nlohmann::json exp_params;
-      exp_params["contrast"] = static_cast<float>(i) * 0.4f;
-      stage.SetOperator(OperatorType::CONTRAST, exp_params);
+      // Modify the document
+      pipeline_guard->document_->PrimaryGrade()
+          ->FindAdjustmentByType(type_ids::Contrast())
+          ->LoadJson({{"contrast", static_cast<float>(i) * 0.4f}});
       pipeline_guard->dirty_ = true;
 
       // No save back, so all pipelines are in use
@@ -475,7 +361,7 @@ TEST_F(PipelineMapperTests, DISABLED_FuzzTest) {
     std::uniform_int_distribution<int>               op_dist(0, 5);
     std::uniform_real_distribution<float>            value_dist(-2.0f, 2.0f);
     std::unordered_map<sl_element_id_t, std::string> expected_dump;
-    const auto empty_dump = CPUPipelineExecutor().ExportPipelineParams().dump();
+    const auto empty_dump = CreateDefaultPipelineDocument().ToJson().dump();
 
     for (int i = 0; i < kOpsCount; ++i) {
       const auto id = static_cast<sl_element_id_t>(id_dist(rng));
@@ -486,7 +372,7 @@ TEST_F(PipelineMapperTests, DISABLED_FuzzTest) {
         auto guard = pipeline_service.LoadPipeline(id);
         ASSERT_NE(guard, nullptr);
         EXPECT_EQ(guard->id_, id);
-        auto dump = guard->pipeline_->ExportPipelineParams().dump();
+        auto dump = guard->document_->ToJson().dump();
         if (expected_dump.contains(id)) {
           EXPECT_EQ(dump, expected_dump.at(id));
         } else {
@@ -497,23 +383,21 @@ TEST_F(PipelineMapperTests, DISABLED_FuzzTest) {
         // Load + modify + save (dirty path)
         auto guard = pipeline_service.LoadPipeline(id);
         ASSERT_NE(guard, nullptr);
-        auto&          stage = guard->pipeline_->GetStage(PipelineStageName::To_WorkingSpace);
-        nlohmann::json params;
-        params["exposure"] = static_cast<float>(id) + value_dist(rng);
-        stage.SetOperator(OperatorType::EXPOSURE, params);
+        guard->document_->PrimaryGrade()
+            ->FindAdjustmentByType(type_ids::Exposure())
+            ->LoadJson({{"exposure_ev", static_cast<float>(id) + value_dist(rng)}});
         guard->dirty_ = true;
         pipeline_service.SavePipeline(guard);
-        expected_dump[id] = guard->pipeline_->ExportPipelineParams().dump();
+        expected_dump[id] = guard->document_->ToJson().dump();
       } else if (op == 2) {
         // Load + modify without save (pinned & dirty in cache)
         auto guard = pipeline_service.LoadPipeline(id);
         ASSERT_NE(guard, nullptr);
-        auto&          stage = guard->pipeline_->GetStage(PipelineStageName::To_WorkingSpace);
-        nlohmann::json params;
-        params["contrast"] = static_cast<float>(id) + value_dist(rng);
-        stage.SetOperator(OperatorType::CONTRAST, params);
+        guard->document_->PrimaryGrade()
+            ->FindAdjustmentByType(type_ids::Contrast())
+            ->LoadJson({{"contrast", static_cast<float>(id) + value_dist(rng)}});
         guard->dirty_     = true;
-        expected_dump[id] = guard->pipeline_->ExportPipelineParams().dump();
+        expected_dump[id] = guard->document_->ToJson().dump();
       } else if (op == 3) {
         // Sync all dirty pipelines
         pipeline_service.Sync();
@@ -522,7 +406,7 @@ TEST_F(PipelineMapperTests, DISABLED_FuzzTest) {
         auto guard = pipeline_service.LoadPipeline(static_cast<sl_element_id_t>(kIdRange + id));
         ASSERT_NE(guard, nullptr);
         EXPECT_EQ(guard->id_, static_cast<sl_element_id_t>(kIdRange + id));
-        auto       dump   = guard->pipeline_->ExportPipelineParams().dump();
+        auto       dump   = guard->document_->ToJson().dump();
         const auto far_id = static_cast<sl_element_id_t>(kIdRange + id);
         if (expected_dump.contains(far_id)) {
           EXPECT_EQ(dump, expected_dump.at(far_id));
@@ -533,7 +417,7 @@ TEST_F(PipelineMapperTests, DISABLED_FuzzTest) {
         // Random read/serialize path
         auto guard = pipeline_service.LoadPipeline(id);
         ASSERT_NE(guard, nullptr);
-        auto serialized = guard->pipeline_->ExportPipelineParams().dump();
+        auto serialized = guard->document_->ToJson().dump();
         if (expected_dump.contains(id)) {
           EXPECT_EQ(serialized, expected_dump.at(id));
         } else {
@@ -554,7 +438,7 @@ TEST_F(PipelineMapperTests, DISABLED_FuzzTest) {
       auto guard = pipeline_service.LoadPipeline(id);
       ASSERT_NE(guard, nullptr);
       EXPECT_EQ(guard->id_, id);
-      auto serialized = guard->pipeline_->ExportPipelineParams().dump();
+      auto serialized = guard->document_->ToJson().dump();
       EXPECT_FALSE(serialized.empty());
     }
   }
@@ -578,10 +462,9 @@ TEST_F(PipelineMapperTests, DISABLED_ThreadSafeTest) {
         const auto id    = static_cast<sl_element_id_t>((t * kOpsPerThr + i) % kIdRange + 1);
         auto       guard = pipeline_service.LoadPipeline(id);
         ASSERT_NE(guard, nullptr);
-        auto&          stage = guard->pipeline_->GetStage(PipelineStageName::To_WorkingSpace);
-        nlohmann::json params;
-        params["exposure"] = static_cast<float>(id) + static_cast<float>(t) * 0.01f;
-        stage.SetOperator(OperatorType::EXPOSURE, params);
+        guard->document_->PrimaryGrade()
+            ->FindAdjustmentByType(type_ids::Exposure())
+            ->LoadJson({{"exposure_ev", static_cast<float>(id) + static_cast<float>(t) * 0.01f}});
         guard->dirty_ = true;
         pipeline_service.SavePipeline(guard);
         if (i % 10 == 0) {
@@ -599,54 +482,13 @@ TEST_F(PipelineMapperTests, DISABLED_ThreadSafeTest) {
   pipeline_service.Sync();
   EXPECT_EQ(ops_count.load(), kThreads * kOpsPerThr);
 
-  const auto empty_dump = CPUPipelineExecutor().ExportPipelineParams().dump();
+  const auto empty_dump = CreateDefaultPipelineDocument().ToJson().dump();
   for (sl_element_id_t id = 1; id <= 10; ++id) {
     auto guard = pipeline_service.LoadPipeline(id);
     ASSERT_NE(guard, nullptr);
-    auto serialized = guard->pipeline_->ExportPipelineParams().dump();
+    auto serialized = guard->document_->ToJson().dump();
     EXPECT_NE(serialized, empty_dump);
   }
-}
-
-TEST_F(PipelineMapperTests, ReloadedDocumentKeepsDecodeMethodWhenStagesDisagree) {
-  ProjectService      project(db_path_, meta_path_);
-  PipelineMgmtService first(project.GetStorage());
-
-  auto initial = first.LoadEditorPipeline(9102);
-  ASSERT_NE(initial, nullptr);
-  ASSERT_NE(initial->pipeline_, nullptr);
-  ASSERT_NE(initial->document_, nullptr);
-  EXPECT_FALSE(initial->pipeline_->MirrorsLegacyStageAdapter());
-
-  nlohmann::json raw_params = pipeline_defaults::MakeDefaultRawDecodeParams();
-  raw_params["raw"]["method"] = "neural_engine";
-  {
-    std::unique_lock<std::mutex> render_lock(initial->pipeline_->GetRenderLock());
-    initial->pipeline_->GetStage(PipelineStageName::Image_Loading)
-        .SetOperator(OperatorType::RAW_DECODE, raw_params);
-    initial->pipeline_->SetExecutionStages();
-  }
-  EXPECT_EQ(initial->document_->Develop()->Params().Params().demosaic_method, "default");
-
-  first.SyncPipelineDocument(initial);
-  const auto stored = project.GetStorage()->GetElementStore().GetPipelineJsonByElementId(9102);
-  ASSERT_TRUE(stored.has_value());
-  EXPECT_EQ(stored->at("format_version"), kPipelineDocumentFormatVersion);
-  EXPECT_FALSE(stored->contains("legacy_stage_adapter"));
-
-  initial->serialized_state_needs_writeback_ = true;
-  first.SavePipeline(initial);
-
-  PipelineMgmtService reopened(project.GetStorage());
-  auto                loaded = reopened.LoadEditorPipeline(9102);
-  ASSERT_NE(loaded, nullptr);
-  ASSERT_NE(loaded->document_, nullptr);
-  EXPECT_FALSE(loaded->pipeline_->MirrorsLegacyStageAdapter());
-  EXPECT_EQ(loaded->document_->Develop()->Params().Params().demosaic_method, "default");
-  const auto exported = loaded->pipeline_->ExportPipelineParams();
-  EXPECT_EQ(exported["Image Loading"]["Image Loading"]["raw_decode"]["params"]["raw"]["method"],
-            "neural_engine");
-  reopened.SavePipeline(loaded);
 }
 
 TEST_F(PipelineMapperTests, DocumentSaveReloadPreservesNodesEdgesAndParameters) {
@@ -737,11 +579,6 @@ TEST_F(PipelineMapperTests, SavedDocumentContainsNoStageAdapter) {
     std::unique_lock<std::mutex> render_lock(guard->pipeline_->GetRenderLock());
     ASSERT_TRUE(RenameColorGrade(*guard->document_, NodeId{"grade.primary"}, "Saved Grade")
                     .empty());
-    auto& stage = guard->pipeline_->GetStage(PipelineStageName::Image_Loading);
-    auto  raw   = pipeline_defaults::MakeDefaultRawDecodeParams();
-    raw["raw"]["method"] = "neural_engine";
-    stage.SetOperator(OperatorType::RAW_DECODE, raw);
-    guard->pipeline_->SetExecutionStages();
   }
   guard->dirty_ = true;
   pipeline_service.SavePipeline(guard);
@@ -890,7 +727,7 @@ TEST_F(PipelineMapperTests, EditorLoadUsesMatchingSerializedStateWithoutReconstr
   EXPECT_FALSE(initial->working_head_commit_hash().has_value());
   EXPECT_EQ(initial->transaction_chain_hash(), ComputeRootChainHash(initial->root_id_));
   EXPECT_FALSE(initial->serialized_state_needs_writeback_);
-  const auto expected_params = initial->pipeline_->ExportPipelineParams();
+  const auto expected_document = initial->document_->ToJson();
   first.SavePipeline(initial);
 
   // A new service instance forces the editor path to read the serialized state rather than
@@ -902,7 +739,7 @@ TEST_F(PipelineMapperTests, EditorLoadUsesMatchingSerializedStateWithoutReconstr
   EXPECT_EQ(loaded->working_head_commit_hash(), std::nullopt);
   EXPECT_EQ(loaded->transaction_chain_hash(), ComputeRootChainHash(initial->root_id_));
   EXPECT_FALSE(loaded->serialized_state_needs_writeback_);
-  EXPECT_EQ(loaded->pipeline_->ExportPipelineParams(), expected_params);
+  EXPECT_EQ(loaded->document_->ToJson(), expected_document);
   reopened.SavePipeline(loaded);
 }
 
@@ -1411,7 +1248,6 @@ TEST_F(PipelineMapperTests, ImageRootStoresCompleteDefaultDocumentAndDevelopData
 
   auto initial                              = first.LoadPipeline(704);
   ASSERT_NE(initial, nullptr);
-  initial->pipeline_->InjectRawMetadata(raw_context);
   first.InitializeImageRoot(initial, &raw_context);
   const auto root_id         = initial->root_id_;
   const auto persisted_dump  = initial->document_->ToJson().dump();
@@ -1443,12 +1279,9 @@ TEST_F(PipelineMapperTests, ImageRootStoresCompleteDefaultDocumentAndDevelopData
   auto                loaded = reopened.LoadEditorPipeline(704);
   ASSERT_NE(loaded, nullptr);
   EXPECT_EQ(loaded->document_->ToJson().dump(), persisted_dump);
-  const auto& global = loaded->pipeline_->GetGlobalParams();
-  EXPECT_TRUE(global.raw_runtime_valid_);
-  EXPECT_EQ(global.raw_camera_make_, "Alcedo Camera Co");
-  EXPECT_EQ(global.raw_camera_model_, "Root State Test");
-  EXPECT_TRUE(global.raw_color_matrices_valid_);
-  EXPECT_DOUBLE_EQ(global.raw_color_matrix_1_[0], 0.625);
+  const auto& profile = loaded->document_->Develop()->Params().Params().camera_profile;
+  EXPECT_TRUE(profile.color_matrices_valid);
+  EXPECT_DOUBLE_EQ(profile.color_matrix_1[0], 0.625);
   reopened.SavePipeline(loaded);
 }
 

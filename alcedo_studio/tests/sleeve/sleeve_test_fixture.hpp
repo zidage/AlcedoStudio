@@ -9,7 +9,6 @@
 #include <exiv2/exiv2.hpp>
 #include <filesystem>
 
-#include "edit/operators/operator_registeration.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "utils/profiler/profiler.hpp"
 
@@ -29,7 +28,6 @@ class SleeveFilterTests : public ::testing::Test {
     if (std::filesystem::exists(db_path_)) {
       std::filesystem::remove(db_path_);
     }
-    RegisterAllOperators();
 #ifdef EASY_PROFILER_ENABLE
     EASY_PROFILER_ENABLE;
 #endif

@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -17,10 +18,10 @@
 #include <string>
 #include <vector>
 
-#include "edit/operators/operator_registeration.hpp"
 #include "edit/pipeline/default_pipeline_params.hpp"
 #include "edit/pipeline/pipeline_accelerator.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
+#include "edit/runtime/pipeline_apply_request.hpp"
 #include "image/image_buffer.hpp"
 #include "opencl/opencl_context.hpp"
 #include "opencl/opencl_runtime.hpp"
@@ -121,31 +122,32 @@ struct BenchmarkScenario {
   const char*               name;
   int                       max_edge;
   bool                      full_res;
-  ResizeDownsampleAlgorithm downsample;
   float                     max_tolerance;
   double                    mean_tolerance;
 };
 
+/// Host-output request with the scenario's output limit (0 = full resolution).
+auto MakeHostRequest(std::uint32_t max_edge) -> PipelineApplyRequest {
+  PipelineApplyRequest request;
+  request.geometry.resolution.max_edge = max_edge;
+  request.geometry.resolution.quality  = RenderQuality::Export;
+  request.require_host_output          = true;
+  return request;
+}
+
 auto RunPipelineWithBackend(const std::filesystem::path& raw_path,
                             AcceleratorBackendPreference pref,
                             const BenchmarkScenario& scenario) -> PipelineBenchResult {
-  RegisterAllOperators();
 
-  CPUPipelineExecutor pipeline(true);
+  CPUPipelineExecutor pipeline;
   pipeline.SetAcceleratorBackendPreference(pref);
-  pipeline.SetForceCPUOutput(true);
-
-  if (scenario.full_res) {
-    pipeline.SetRenderRes(true);
-  } else {
-    pipeline.SetRenderRes(false, scenario.max_edge);
-  }
-  pipeline.SetResizeDownsampleAlgorithm(scenario.downsample);
+  const auto request =
+      MakeHostRequest(scenario.full_res ? 0U : static_cast<std::uint32_t>(scenario.max_edge));
 
   auto input = std::make_shared<ImageBuffer>(ReadFileToBuffer(raw_path));
 
   const auto start = ProfileClock::now();
-  auto       output = pipeline.Apply(input);
+  auto       output = pipeline.Apply(input, request);
   const double total_ms = ElapsedMs(start);
 
   if (output && !output->cpu_data_valid_) {
@@ -222,12 +224,9 @@ TEST(OpenClCudaFullPipelineBenchmark, RawToDisplayEndToEnd) {
   std::cout << "  RAW fixture: " << raw_path.filename().string() << "\n\n";
 
   const std::vector<BenchmarkScenario> scenarios = {
-      {"FastPreview (2560px, Bilinear)", 2560, false, ResizeDownsampleAlgorithm::Bilinear,
-       1.5e-1f, 4.0e-3},
-      {"DetailPreview (4096px, Area)", 4096, false, ResizeDownsampleAlgorithm::Area,
-       1.5e-1f, 4.0e-3},
-      {"FullRes (Area)", 0, true, ResizeDownsampleAlgorithm::Area,
-       1.5e-1f, 4.0e-3},
+      {"FastPreview (2560px)", 2560, false, 1.5e-1f, 4.0e-3},
+      {"DetailPreview (4096px)", 4096, false, 1.5e-1f, 4.0e-3},
+      {"FullRes", 0, true, 1.5e-1f, 4.0e-3},
   };
 
   // Header
@@ -297,7 +296,6 @@ TEST(OpenClCudaFullPipelineBenchmark, RepeatedFrameTimingStability) {
   constexpr int                   kWarmupFrames = 3;
   constexpr int                   kTimedFrames  = 10;
   constexpr int                   kMaxEdge      = 2560;
-  constexpr ResizeDownsampleAlgorithm kAlgo     = ResizeDownsampleAlgorithm::Bilinear;
 
   std::cout << "\n--- Repeated Frame Timing Stability ("
             << kTimedFrames << " frames, " << kMaxEdge << "px max edge) ---\n";
@@ -312,18 +310,15 @@ TEST(OpenClCudaFullPipelineBenchmark, RepeatedFrameTimingStability) {
 
   auto measure_backend = [&](AcceleratorBackendPreference pref,
                              const char* label) -> TimingStats {
-    RegisterAllOperators();
-    CPUPipelineExecutor pipeline(true);
+    CPUPipelineExecutor pipeline;
     pipeline.SetAcceleratorBackendPreference(pref);
-    pipeline.SetForceCPUOutput(true);
-    pipeline.SetRenderRes(false, kMaxEdge);
-    pipeline.SetResizeDownsampleAlgorithm(kAlgo);
+    const auto request = MakeHostRequest(static_cast<std::uint32_t>(kMaxEdge));
 
     // Warmup
     for (int i = 0; i < kWarmupFrames; ++i) {
       auto raw_bytes = ReadFileToBuffer(raw_path);
       auto input  = std::make_shared<ImageBuffer>(std::move(raw_bytes));
-      auto output = pipeline.Apply(input);
+      auto output = pipeline.Apply(input, request);
       (void)output;
     }
 
@@ -332,7 +327,7 @@ TEST(OpenClCudaFullPipelineBenchmark, RepeatedFrameTimingStability) {
       auto raw_bytes = ReadFileToBuffer(raw_path);
       auto input = std::make_shared<ImageBuffer>(std::move(raw_bytes));
       const auto start = ProfileClock::now();
-      auto       output = pipeline.Apply(input);
+      auto       output = pipeline.Apply(input, request);
       const double ms   = ElapsedMs(start);
       (void)output;
 

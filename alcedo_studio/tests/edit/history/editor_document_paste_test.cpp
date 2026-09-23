@@ -26,7 +26,6 @@
 #include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/mask/mask_id.hpp"
 #include "edit/operators/models/operator_type_id.hpp"
-#include "edit/operators/operator_registeration.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
 #include "grade_owned_mask_support.hpp"
 #include "support/document_transfer_test_support.hpp"
@@ -53,7 +52,6 @@ auto MakePastePipelineGuard(sl_element_id_t element_id) -> std::shared_ptr<alced
 class EditorDocumentPasteTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    RegisterAllOperators();
     const auto stamp =
         std::to_string(std::chrono::high_resolution_clock::now().time_since_epoch().count());
     journal_path_ = std::filesystem::temp_directory_path() / ("document_paste_" + stamp + ".wal");

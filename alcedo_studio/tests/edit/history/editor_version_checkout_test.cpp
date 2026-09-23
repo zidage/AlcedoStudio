@@ -33,7 +33,6 @@
 #include "edit/history/edit_commit.hpp"
 #include "edit/history/mini_git_working_history.hpp"
 #include "edit/mask/mask_model.hpp"
-#include "edit/operators/operator_registeration.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
 #include "grade_owned_mask_support.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
@@ -125,7 +124,6 @@ auto CommitCapturedAddColorGrade(EditorSessionHistoryPort& history,
 class EditorVersionCheckoutTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    RegisterAllOperators();
     journal_path_ = NodeHistoryPath("version_checkout", ".wal");
     guard_        = MakeGuard(42);
     pipeline_     = std::make_shared<EditorSessionPipelinePort>();
@@ -286,7 +284,7 @@ TEST_F(EditorVersionCheckoutTest, FailedCheckoutRestoresPriorVersionAndDocument)
   const auto prior_head   = guard_->working_head_commit_hash();
   const auto prior_reason = history_.LastPublishedRenderReason();
   // Production guards always have the live document bound to the executor.
-  guard_->pipeline_->SetPipelineDocument(guard_->document_, false);
+  guard_->pipeline_->SetPipelineDocument(guard_->document_);
   const auto prior_document = guard_->document_;
   ASSERT_TRUE(prior_head.has_value());
 
@@ -335,7 +333,7 @@ TEST_F(EditorVersionCheckoutTest, VersionRefRestoreFailureKeepsPriorDocument) {
   const auto prior_refs   = guard_->commit_graph_->GetAllVersionRefs().size();
   const auto prior_reason = history_.LastPublishedRenderReason();
   // Production guards always have the live document bound to the executor.
-  guard_->pipeline_->SetPipelineDocument(guard_->document_, false);
+  guard_->pipeline_->SetPipelineDocument(guard_->document_);
   const auto prior_document = guard_->document_;
 
   auto       missing_target = alcedo::test::ColorGradeFieldTarget("exposure");
@@ -363,7 +361,6 @@ TEST_F(EditorVersionCheckoutTest, VersionRefRestoreFailureKeepsPriorDocument) {
 }
 
 TEST(EditorSessionHistoryPortProjectTest, RecoveryAppliesCommittedTypedSuffixExactlyOnce) {
-  RegisterAllOperators();
   const auto db_path     = NodeHistoryPath("typed_wal_recovery", ".db");
   const auto meta_path   = NodeHistoryPath("typed_wal_recovery", ".json");
   const auto journal_path = NodeHistoryPath("typed_wal_recovery", ".wal");
@@ -444,7 +441,6 @@ TEST(EditorSessionHistoryPortProjectTest, RecoveryAppliesCommittedTypedSuffixExa
 }
 
 TEST(EditorSessionHistoryPortProjectTest, ProjectReopenPreservesDagVersionsHistoryAndMasks) {
-  RegisterAllOperators();
   const auto db_path      = NodeHistoryPath("reopen_versions", ".db");
   const auto meta_path    = NodeHistoryPath("reopen_versions", ".json");
   const auto journal_path = NodeHistoryPath("reopen_versions", ".wal");
@@ -546,7 +542,6 @@ TEST(EditorSessionHistoryPortProjectTest, ProjectReopenPreservesDagVersionsHisto
 }
 
 TEST(EditorSessionHistoryPortProjectTest, MissingReachableTypedCommitFailsClosed) {
-  RegisterAllOperators();
   const auto db_path   = NodeHistoryPath("missing_typed_commit", ".db");
   const auto meta_path = NodeHistoryPath("missing_typed_commit", ".json");
   std::error_code ec;

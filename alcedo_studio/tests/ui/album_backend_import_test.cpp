@@ -15,6 +15,7 @@
 #include <QSignalSpy>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 
 namespace alcedo::ui::test {
 namespace {

@@ -38,7 +38,6 @@
 #include "edit/history/pipeline_document_checkpoint.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
-#include "edit/operators/operator_registeration.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
 #include "json.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
@@ -205,7 +204,6 @@ auto LibraryPasteThenRelease(alcedo::PipelineMgmtService& pipeline_service,
 class EditorSessionHistoryPortTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    RegisterAllOperators();
     const auto stamp =
         std::to_string(std::chrono::high_resolution_clock::now().time_since_epoch().count());
     journal_path_ = std::filesystem::temp_directory_path() / ("session_history_" + stamp + ".wal");
@@ -355,12 +353,10 @@ TEST_F(EditorSessionHistoryPortTest, CheckoutAndPasteHashesAreUnchanged) {
   EXPECT_DOUBLE_EQ(*pasted_exposure, 1.25);
 }
 
-// The stage table is exported only by this test to prove that no edit path writes it.
 TEST_F(EditorSessionHistoryPortTest, LivePreviewWriteChangesOnlyDocument) {
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  const auto stage_table_before = guard_->pipeline_->ExportPipelineParams();
 
   const auto preview = WithColorGradeTarget({"exposure", R"({"exposure":0.6})", false});
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, preview, &error)) << error;
@@ -368,12 +364,10 @@ TEST_F(EditorSessionHistoryPortTest, LivePreviewWriteChangesOnlyDocument) {
   ASSERT_TRUE(preview_exposure.has_value());
   EXPECT_NEAR(*preview_exposure, 0.6, 1e-6);
   EXPECT_EQ(guard_->commit_graph_->CommitCount(), 0u);
-  EXPECT_EQ(guard_->pipeline_->ExportPipelineParams(), stage_table_before);
 
   const auto settled = WithColorGradeTarget({"exposure", R"({"exposure":0.6})", true});
   ASSERT_TRUE(history_.CommitAdjustment(handle, settled, &error)) << error;
   EXPECT_EQ(guard_->commit_graph_->CommitCount(), 1u);
-  EXPECT_EQ(guard_->pipeline_->ExportPipelineParams(), stage_table_before);
 }
 
 TEST_F(EditorSessionHistoryPortTest, UndoRedoRestoresDocumentValuesAndHead) {
@@ -382,7 +376,6 @@ TEST_F(EditorSessionHistoryPortTest, UndoRedoRestoresDocumentValuesAndHead) {
   ASSERT_TRUE(handle.valid) << error;
   const auto contrast_before = DocumentFieldNumber(*guard_->document_, "contrast", "contrast");
   ASSERT_TRUE(contrast_before.has_value());
-  const auto stage_table_before = guard_->pipeline_->ExportPipelineParams();
 
   ASSERT_TRUE(CommitSettled(history_, handle, "exposure", R"({"exposure":0.5})", &error)) << error;
   const auto exposure_head = guard_->working_head_commit_hash();
@@ -408,7 +401,6 @@ TEST_F(EditorSessionHistoryPortTest, UndoRedoRestoresDocumentValuesAndHead) {
   const auto panel_contrast_after_redo = PanelScalarValue(history_, handle, "contrast");
   ASSERT_TRUE(panel_contrast_after_redo.has_value());
   EXPECT_FLOAT_EQ(*panel_contrast_after_redo, 10.0f);
-  EXPECT_EQ(guard_->pipeline_->ExportPipelineParams(), stage_table_before);
 }
 
 // A curve field accepts only a curve write. The Model rejects the scalar write before it changes
@@ -767,7 +759,7 @@ TEST_F(EditorSessionHistoryPortTest,
   EXPECT_NEAR(captured_exposure.at("exposure_ev").get<double>(), 0.85, 1e-5);
   reopened_guard->document_ = std::make_shared<alcedo::PipelineDocument>(
       alcedo::ClonePipelineDocument(checkpoint.document));
-  reopened_guard->pipeline_->SetPipelineDocument(reopened_guard->document_, false);
+  reopened_guard->pipeline_->SetPipelineDocument(reopened_guard->document_);
   auto reopened_pipeline = std::make_shared<EditorSessionPipelinePort>();
   reopened_pipeline->SetServices(EditorSessionPipelineMappers{
       {}, [reopened_guard](sl_element_id_t) { return reopened_guard; }});
@@ -1227,6 +1219,50 @@ TEST(EditorHistoryCommitPresentationTest, FormatsNumericBooleanPathEnumAndCompou
   EXPECT_EQ(crop.after_text.toStdString(), "+12\u00b0");
 }
 
+// Titles and icons were recorded from the operator-type lookup at 5708f139, before the history
+// row presentation moved to the field-key table. Aliases must keep the title of their field.
+TEST(EditorHistoryCommitPresentationTest, HistoryRowTitlesAndIconsAreUnchangedForEveryFieldKey) {
+  struct RecordedRow {
+    const char* field_key;
+    const char* title;
+    const char* icon;
+  };
+  constexpr RecordedRow kRecordedRows[] = {
+      {"exposure", "Exposure", ":/history_icons/sun-medium.svg"},
+      {"contrast", "Contrast", ":/history_icons/contrast.svg"},
+      {"white", "Whites", ":/history_icons/sun.svg"},
+      {"whites", "Whites", ":/history_icons/sun.svg"},
+      {"black", "Blacks", ":/history_icons/moon.svg"},
+      {"blacks", "Blacks", ":/history_icons/moon.svg"},
+      {"shadows", "Shadows", ":/history_icons/square-split-horizontal.svg"},
+      {"highlights", "Highlights", ":/history_icons/sparkles.svg"},
+      {"curve", "Curve", ":/history_icons/chart-spline.svg"},
+      {"saturation", "Saturation", ":/history_icons/droplets.svg"},
+      {"vibrance", "Vibrance", ":/history_icons/sparkles.svg"},
+      {"tint", "Tint", ":/history_icons/pipette.svg"},
+      {"hls", "HSL", ":/history_icons/swatch-book.svg"},
+      {"HLS", "HSL", ":/history_icons/swatch-book.svg"},
+      {"color_wheel", "Color Wheel", ":/history_icons/palette.svg"},
+      {"lut", "LUT", ":/history_icons/file-sliders.svg"},
+      {"ocio_lmt", "LUT", ":/history_icons/file-sliders.svg"},
+      {"clarity", "Clarity", ":/history_icons/focus.svg"},
+      {"sharpen", "Sharpen", ":/history_icons/scan-line.svg"},
+      {"odt", "ODT", ":/history_icons/monitor.svg"},
+      {"film_grain", "Grain", ":/history_icons/scan-line.svg"},
+      {"halation", "Halation", ":/history_icons/sun.svg"},
+      {"crop_rotate", "Crop / Rotate", ":/history_icons/crop.svg"},
+      {"raw_decode", "RAW Decode", ":/history_icons/scan-search.svg"},
+      {"lens_calib", "Lens Profile", ":/history_icons/aperture.svg"},
+      {"color_temp", "Color Temp", ":/history_icons/thermometer.svg"},
+      {"not_a_field", "Edit", ":/history_icons/sliders-horizontal.svg"},
+  };
+  for (const auto& row : kRecordedRows) {
+    const auto presentation = PresentEditorHistoryCommit(row.field_key, "{}", "{}", true, true);
+    EXPECT_EQ(presentation.display_name.toStdString(), row.title) << row.field_key;
+    EXPECT_EQ(presentation.icon_key.toStdString(), row.icon) << row.field_key;
+  }
+}
+
 TEST(EditorHistoryCommitPresentationTest, TypedGraphOperationsUseSavedNamesAndKeepAdjustmentRows) {
   using alcedo::EditorHistoryCommit;
   using alcedo::PipelineEditOperationKind;
@@ -1362,7 +1398,6 @@ TEST_F(EditorSessionHistoryPortTest, FirstParentChainNavigationPreservesStateAcr
 TEST(EditorSessionHistoryPortPersistTest,
      CheckoutDefaultAfterPastePersistsWithoutLiveIdentityError) {
   alcedo::TimeProvider::Refresh();
-  RegisterAllOperators();
 
   const auto stamp =
       std::to_string(std::chrono::high_resolution_clock::now().time_since_epoch().count());
@@ -1451,7 +1486,6 @@ TEST(EditorSessionHistoryPortPersistTest,
 
 TEST(EditorSessionHistoryPortProjectTest,
      PasteCrashRecoveryReplaysWalOntoLogicalHead) {
-  RegisterAllOperators();
   const auto stamp =
       std::to_string(std::chrono::high_resolution_clock::now().time_since_epoch().count());
   const auto db_path =
@@ -1544,7 +1578,6 @@ TEST(EditorSessionHistoryPortProjectTest,
 
 TEST(EditorSessionHistoryPortProjectTest,
      LoadAttachesCompatibleWalThenComparesCheckpoint) {
-  RegisterAllOperators();
   const auto stamp =
       std::to_string(std::chrono::high_resolution_clock::now().time_since_epoch().count());
   const auto db_path =
@@ -1627,7 +1660,6 @@ TEST(EditorSessionHistoryPortProjectTest,
 /// Incompatible WAL must fail closed: EnsureWorkingState / Acquire reject load
 /// rather than silently discarding records or applying a broken prefix.
 TEST(EditorSessionHistoryPortProjectTest, LoadRejectsOrQuarantinesIncompatibleWal) {
-  RegisterAllOperators();
   const auto stamp =
       std::to_string(std::chrono::high_resolution_clock::now().time_since_epoch().count());
   const auto db_path =
@@ -1711,7 +1743,6 @@ TEST(EditorSessionHistoryPortProjectTest, LoadRejectsOrQuarantinesIncompatibleWa
 TEST(EditorSessionHistoryPortPersistTest,
      LibraryPasteOfLutRestoresLutFieldInLiveDocumentOnEditorReopen) {
   alcedo::TimeProvider::Refresh();
-  RegisterAllOperators();
 
   const auto stamp =
       std::to_string(std::chrono::high_resolution_clock::now().time_since_epoch().count());
@@ -1777,7 +1808,6 @@ TEST(EditorSessionHistoryPortPersistTest,
 TEST(EditorSessionHistoryPortPersistTest,
      LibraryPasteWithoutSerializedCheckpointStillRestoresLutFieldInLiveDocument) {
   alcedo::TimeProvider::Refresh();
-  RegisterAllOperators();
 
   const auto stamp =
       std::to_string(std::chrono::high_resolution_clock::now().time_since_epoch().count());

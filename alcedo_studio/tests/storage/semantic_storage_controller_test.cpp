@@ -16,7 +16,6 @@
 
 #include "app/project_service.hpp"
 #include "app/project_package_backend.hpp"
-#include "edit/operators/operator_registeration.hpp"
 #include "sleeve/sleeve_element/sleeve_file.hpp"
 #include "storage/store/database.hpp"
 
@@ -124,7 +123,6 @@ class SemanticStoreTest : public ::testing::Test {
   std::filesystem::path meta_path_;
 
   void                  SetUp() override {
-    RegisterAllOperators();
     const auto*       test_info = ::testing::UnitTest::GetInstance()->current_test_info();
     const std::string suffix = std::string(test_info->test_suite_name()) + "_" + test_info->name();
     db_path_   = std::filesystem::temp_directory_path() / (suffix + ".db");
