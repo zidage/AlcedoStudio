@@ -48,12 +48,11 @@ class EditorSessionActionPolicyCq3Test : public ::testing::Test {
     history_          = std::make_shared<ControllableEditorHistoryPort>();
     pipeline_         = std::make_shared<FakeEditorPipelinePort>();
     tasks_            = std::make_shared<FakeEditorTaskPort>();
-    journal_          = std::make_shared<OrderRecordingJournalPort>();
     scheduler_        = std::make_shared<RecordingScheduler>();
-    checkpoint_store_ = std::make_shared<FakeEditorCheckpointStore>();
+    checkpoint_store_ = std::make_shared<OrderRecordingCheckpointStore>();
     thumbnails_       = std::make_shared<FakeEditorThumbnailPort>();
-    runtime_ = EditorSessionRuntime::CreateWithPorts(pipeline_, history_, tasks_, journal_,
-                                                     scheduler_, checkpoint_store_, thumbnails_);
+    runtime_ = EditorSessionRuntime::CreateWithPorts(pipeline_, history_, tasks_, scheduler_,
+        checkpoint_store_, thumbnails_);
     service_ = runtime_->service.get();
     service_->SetPresentationSinkId(1);
     service_->SetPresentationSize(640, 480);
@@ -91,9 +90,8 @@ class EditorSessionActionPolicyCq3Test : public ::testing::Test {
   std::shared_ptr<ControllableEditorHistoryPort> history_;
   std::shared_ptr<FakeEditorPipelinePort>        pipeline_;
   std::shared_ptr<FakeEditorTaskPort>            tasks_;
-  std::shared_ptr<OrderRecordingJournalPort>     journal_;
   std::shared_ptr<RecordingScheduler>            scheduler_;
-  std::shared_ptr<FakeEditorCheckpointStore>     checkpoint_store_;
+  std::shared_ptr<OrderRecordingCheckpointStore>     checkpoint_store_;
   std::shared_ptr<FakeEditorThumbnailPort>       thumbnails_;
   std::unique_ptr<EditorSessionRuntime>          runtime_;
   EditorSessionService*                          service_ = nullptr;
@@ -152,7 +150,6 @@ TEST_F(EditorSessionActionPolicyCq3Test,
   ASSERT_TRUE(Decision(EditorAction::PreviewAdjustment).allowed);
   ASSERT_TRUE(Decision(EditorAction::ApplyPaste).allowed);
 
-  journal_->async_commit               = true;
   checkpoint_store_->async_materialize = true;
   availability_events_.clear();
   const auto started = service_->Switch(30, 40);
@@ -165,7 +162,6 @@ TEST_F(EditorSessionActionPolicyCq3Test,
   // SelectImage remains admissible so a rapid follow-up can queue.
   EXPECT_TRUE(Decision(EditorAction::SelectImage).allowed);
 
-  journal_->CompleteCommit(true);
   checkpoint_store_->CompleteMaterialization(true);
   drainQueue();
   presentFirstFrame();
@@ -178,7 +174,6 @@ TEST_F(EditorSessionActionPolicyCq3Test,
 TEST_F(EditorSessionActionPolicyCq3Test, SavingCheckpointRejectsSettledEditCheckoutAndPaste) {
   openInteractive();
   service_->SetCopiedPackageAvailable(true);
-  journal_->async_commit               = true;
   checkpoint_store_->async_materialize = true;
   const auto started                   = service_->Switch(30, 40);
   ASSERT_EQ(started.kind, EditorSessionResultKind::SaveStarted);
@@ -205,7 +200,6 @@ TEST_F(EditorSessionActionPolicyCq3Test, SavingCheckpointRejectsSettledEditCheck
   EXPECT_EQ(history_->checkout_count, checkouts_before);
   EXPECT_EQ(service_->identity().element_id, 10u);
 
-  journal_->CompleteCommit(true);
   checkpoint_store_->CompleteMaterialization(true);
   drainQueue();
   presentFirstFrame();
@@ -259,7 +253,6 @@ TEST_F(EditorSessionActionPolicyCq3Test,
   const auto a_load = service_->active_image_load_request();
   ASSERT_TRUE(a_load.valid());
 
-  journal_->async_commit               = false;
   checkpoint_store_->async_materialize = false;
   (void)service_->Switch(30, 40);  // B
   drainQueue();
@@ -303,11 +296,9 @@ TEST_F(EditorSessionActionPolicyCq3Test,
   EXPECT_LE(availability_events_.size(), 1u);
 
   availability_events_.clear();
-  journal_->async_commit               = true;
   checkpoint_store_->async_materialize = true;
   (void)service_->Switch(30, 40);
   EXPECT_LE(availability_events_.size(), 1u);
-  journal_->CompleteCommit(true);
   checkpoint_store_->CompleteMaterialization(true);
   drainQueue();
   EXPECT_LE(availability_events_.size(), 2u);

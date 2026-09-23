@@ -10,7 +10,14 @@
 # CHECK=NoProductCodeUsesStageJsonOutsideLegacyOwners
 #   Fails when a first-party product file calls ExportPipelineParams( or ImportPipelineParams(
 #   outside edit/pipeline/ and the legacy owners that later phases delete (G10.3 removed every
-#   stage-JSON rollback; the legacy history store goes in G10.4 and the mapper import in G10.7).
+#   stage-JSON rollback, G10.4 removed the legacy history store, and the mapper import goes in
+#   G10.7).
+#
+# CHECK=NoSourceReferencesLegacyHistoryStore
+#   Fails when a source or CMake file under ALCEDO_SOURCE_ROOT names a type, table, or target of
+#   the legacy history store that G10.4 archived (the edit-history table and object, Version and
+#   transaction types, the image journal and its writer port, the history management service, the
+#   legacy materializer, and the recovery-metadata table). Run once for src and once for tests.
 
 cmake_minimum_required(VERSION 3.21)
 
@@ -28,7 +35,6 @@ set(_stage_mirror_hosts
   "^edit/pipeline/pipeline_cpu\\.cpp$"
   "^ui/alcedo_main/editor_support/controllers/pipeline_controller\\.cpp$"
   "^edit/pipeline/pipeline_stage\\.cpp$"
-  "^edit/history/edit_transaction\\.cpp$"
   "^edit/operators/"
   # Headers that declare the stage-table API itself.
   "^include/edit/pipeline/pipeline_stage\\.hpp$"
@@ -41,10 +47,6 @@ set(_stage_json_owners
   # The executor that defines the API.
   "^edit/pipeline/"
   "^include/edit/pipeline/"
-  # Legacy history store (G10.4).
-  "^app/editor_history_materializer\\.cpp$"
-  "^edit/history/edit_history\\.cpp$"
-  "^edit/history/version\\.cpp$"
   # Stage-JSON import for format_version < 2 (G10.7).
   "^storage/mapper/pipeline/pipeline_mapper\\.cpp$"
 )
@@ -59,13 +61,24 @@ function(_alcedo_matches_any relative_path patterns_var out_var)
   endforeach()
 endfunction()
 
+# The static-check script and the CMake file that registers its negative fixtures spell the
+# legacy names on purpose.
+set(_legacy_history_check_hosts
+  "^ci/legacy_removal_source_checks\\.cmake$"
+  "^ci/CMakeLists\\.txt$"
+)
+
 # Scan every first-party source for api_regex and fail with one line per file that is not
-# matched by allowed_var.
+# matched by allowed_var. Extra glob patterns (relative to ALCEDO_SOURCE_ROOT) may follow.
 function(_alcedo_scan api_regex allowed_var failure_text success_text)
+  set(_extra_globs "")
+  foreach(_pattern IN LISTS ARGN)
+    list(APPEND _extra_globs "${ALCEDO_SOURCE_ROOT}/${_pattern}")
+  endforeach()
   file(GLOB_RECURSE _sources RELATIVE "${ALCEDO_SOURCE_ROOT}"
     "${ALCEDO_SOURCE_ROOT}/*.cpp" "${ALCEDO_SOURCE_ROOT}/*.hpp" "${ALCEDO_SOURCE_ROOT}/*.h"
     "${ALCEDO_SOURCE_ROOT}/*.cu" "${ALCEDO_SOURCE_ROOT}/*.cuh" "${ALCEDO_SOURCE_ROOT}/*.mm"
-    "${ALCEDO_SOURCE_ROOT}/*.inl" "${ALCEDO_SOURCE_ROOT}/*.qml")
+    "${ALCEDO_SOURCE_ROOT}/*.inl" "${ALCEDO_SOURCE_ROOT}/*.qml" ${_extra_globs})
   set(_violations "")
   set(_scanned 0)
   foreach(relative_path IN LISTS _sources)
@@ -99,10 +112,17 @@ if(CHECK STREQUAL "NoProductCodeReadsStageTableOutsideMirror")
     "Product code reads the stage table outside the stage mirror hosts"
     "no stage-table read outside the mirror hosts")
 elseif(CHECK STREQUAL "NoProductCodeUsesStageJsonOutsideLegacyOwners")
-  # The leading class excludes accessors such as EditHistory::GetImportPipelineParams().
+  # The leading class excludes accessors such as Document::GetImportPipelineParams().
   _alcedo_scan("(^|[^A-Za-z0-9_])(Export|Import)PipelineParams\\(" _stage_json_owners
     "Product code exports or imports stage JSON outside its legacy owners"
     "no stage-JSON export or import outside the legacy owners")
+elseif(CHECK STREQUAL "NoSourceReferencesLegacyHistoryStore")
+  _alcedo_scan(
+    "(^|[^A-Za-z0-9_])(Edit[H]istory|Edit[H]istoryMgmtService|Edit[H]istoryMapper|EditTransaction|EditorTransactionJournal|EditorJournalWriter|IEditorJournalPort|EditorSessionJournalWriterPort|EditorHistoryMaterializer|EditorRecoveryMetadata)([^A-Za-z0-9_]|$)"
+    _legacy_history_check_hosts
+    "Source names the archived legacy history store"
+    "no reference to the archived legacy history store"
+    "*.txt" "*.cmake")
 else()
   message(FATAL_ERROR "Unknown source check: ${CHECK}")
 endif()

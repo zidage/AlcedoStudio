@@ -7,7 +7,11 @@
 #include <gtest/gtest.h>
 
 #include <filesystem>
+#include <fstream>
 #include <stdexcept>
+#include <string>
+
+#include <json.hpp>
 
 #include "edit/history/mini_git_working_history.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
@@ -117,6 +121,44 @@ TEST_F(EditorMiniGitMaterializerTest,
     EXPECT_FLOAT_EQ(test::EditorMiniGitProjectFixture::CheckpointDocumentExposure(*stored->GetImageEditState().serialized_pipeline_state),
                     captured_exposure);
   }
+}
+
+/// G10.4: a saved 0.9.0 project reopens through the metadata version check with the same
+/// Version head, chain hash, and commit count, and the reopened working graph resumes at
+/// that head. The format cut changes no commit or chain identity.
+TEST_F(EditorMiniGitMaterializerTest, CurrentProjectReopensWithSameHeadAndChain) {
+  const auto element_id = test::EditorMiniGitProjectFixture::kElementA;
+  ASSERT_TRUE(project_.AppendExposureEdit(element_id, 0.0f, 0.5f));
+  ASSERT_TRUE(project_.AppendExposureEdit(element_id, 0.5f, 1.5f));
+  const auto capture = project_.CaptureWorkingState(element_id, 1.5f);
+
+  std::string error;
+  const auto  result = project_.MaterializeUnderSaveLock(capture, &error);
+  ASSERT_TRUE(result.accepted) << error << " / " << result.error;
+  ASSERT_TRUE(result.materialized);
+  project_.project().SaveProject(project_.meta_path());
+
+  {
+    std::ifstream  in(project_.meta_path());
+    ASSERT_TRUE(in.is_open());
+    nlohmann::json metadata;
+    in >> metadata;
+    EXPECT_EQ(metadata.at("project_file_version").get<std::string>(), "0.9.0");
+  }
+
+  project_.CloseAndReopenProject();
+  auto stored = project_.LoadStoredGraph(element_id);
+  ASSERT_TRUE(stored.has_value());
+  EXPECT_EQ(stored->CommitCount(), 2u);
+  EXPECT_EQ(stored->GetActiveVersionRef().head_commit_hash, capture.working_head);
+  EXPECT_EQ(stored->ChainHashForHead(capture.working_head), capture.transaction_chain_hash);
+  EXPECT_EQ(stored->GetImageEditState().materialized_transaction_chain_hash,
+            capture.transaction_chain_hash);
+
+  const auto reopened = project_.graph(element_id);
+  ASSERT_NE(reopened, nullptr);
+  EXPECT_EQ(reopened->GetActiveVersionRef().head_commit_hash, capture.working_head);
+  EXPECT_EQ(reopened->ChainHashForHead(capture.working_head), capture.transaction_chain_hash);
 }
 
 TEST_F(EditorMiniGitMaterializerTest, FailureBeforeDuckDBCommitLeavesPriorHeadUnchanged) {

@@ -56,7 +56,7 @@ class EditorSessionNavigationFixture {
   /// Request Version checkout on the open image. Starts a save checkpoint first.
   auto RequestCheckoutVersion(const version_ref_id_t& version_id) -> NavigationOutcome;
 
-  /// Complete the in-flight save successfully (journal durable + materialize).
+  /// Complete the in-flight save successfully (materialize).
   void CompleteCheckpoint();
 
   /// Complete the in-flight save as a materialization failure.
@@ -75,7 +75,6 @@ class EditorSessionNavigationFixture {
   [[nodiscard]] auto save_service() -> EditorSaveCheckpointService& { return *save_service_; }
   [[nodiscard]] auto pipeline() -> FakeEditorPipelinePort& { return pipeline_->inner; }
   [[nodiscard]] auto history() -> FakeEditorHistoryPort& { return history_->inner; }
-  [[nodiscard]] auto journal() -> FakeEditorJournalPort& { return journal_->inner; }
   [[nodiscard]] auto checkpoint_store() -> FakeEditorCheckpointStore& {
     return checkpoint_store_->inner;
   }
@@ -131,24 +130,9 @@ class EditorSessionNavigationFixture {
     EditorSessionNavigationFixture* owner_ = nullptr;
   };
 
-  /// Journal port that records "commit" when CommitJournalAsync is invoked.
-  class TrackingJournalPort final : public IEditorJournalPort {
-   public:
-    explicit TrackingJournalPort(EditorSessionNavigationFixture* owner) : owner_(owner) {}
-    auto FinalizeEdit(sl_element_id_t element_id, std::uint64_t session_generation,
-                      std::string* error) -> bool override;
-    auto CommitJournalAsync(sl_element_id_t element_id, std::uint64_t session_generation,
-                            EditorJournalCommitCallback callback) -> bool override;
-    auto DiscardUnflushed(sl_element_id_t element_id, std::string* error) -> bool override;
-
-    FakeEditorJournalPort inner;
-
-   private:
-    EditorSessionNavigationFixture* owner_ = nullptr;
-  };
-
-  /// Checkpoint store that records "truncate" when MaterializeAsync is invoked
-  /// (production truncate runs after DuckDB commit inside the materializer).
+  /// Checkpoint store that records "materialize" when the save starts
+  /// materialization (production truncates the Mini-Git journal after the
+  /// DuckDB commit inside the materializer).
   class TrackingCheckpointStore final : public IEditorCheckpointStore {
    public:
     explicit TrackingCheckpointStore(EditorSessionNavigationFixture* owner) : owner_(owner) {}
@@ -180,7 +164,6 @@ class EditorSessionNavigationFixture {
   std::shared_ptr<TrackingPipelinePort>               pipeline_;
   std::shared_ptr<TrackingHistoryPort>                history_;
   std::shared_ptr<FakeEditorTaskPort>                 tasks_;
-  std::shared_ptr<TrackingJournalPort>                journal_;
   std::shared_ptr<TrackingCheckpointStore>            checkpoint_store_;
   std::shared_ptr<TrackingThumbnailPort>              thumbnails_;
   std::shared_ptr<FakeEditorRenderSubmitPort>         render_submit_;

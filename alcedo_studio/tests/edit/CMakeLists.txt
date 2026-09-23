@@ -2,23 +2,11 @@
 set(ALCEDO_TEST_EDIT_HISTORY_ROOT "${ALCEDO_TEST_ROOT}/edit/history")
 include("${ALCEDO_TEST_ROOT}/cmake/AlcedoTestRegistration.cmake")
 
-# Phase 5H: recovery REDO, atomic DuckDB materialization, compaction, fault injection.
-add_executable(EditorHistoryMaterializerTest ${ALCEDO_TEST_ROOT}/edit/history/editor_history_materializer_test.cpp)
-target_include_directories(EditorHistoryMaterializerTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(EditorHistoryMaterializerTest
-  EditorHistoryMaterializer
-  ProjectService
-  EditHistory
-  GTest::gtest_main)
-gtest_discover_tests(EditorHistoryMaterializerTest TEST_PREFIX "EditorHistoryMaterializerTest."
-  PROPERTIES LABELS "ci_core_flow")
-alcedo_register_test_target(EditorHistoryMaterializerTest edit)
-
 # WAL alignment / unique-history replay helpers (replaced production JournalFold).
 add_executable(EditorMiniGitJournalFoldTest ${ALCEDO_TEST_ROOT}/edit/history/editor_mini_git_journal_fold_test.cpp)
 target_include_directories(EditorMiniGitJournalFoldTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(EditorMiniGitJournalFoldTest
-  EditHistory
+  PipelineHistory
   GTest::gtest_main)
 gtest_discover_tests(EditorMiniGitJournalFoldTest TEST_PREFIX "EditorMiniGitJournalFoldTest."
   PROPERTIES LABELS "ci_core_flow;edit;history")
@@ -34,7 +22,7 @@ target_link_libraries(EditorMiniGitCommitWriterTest
   EditorMiniGitMaterializer
   EditorSaveCheckpointCoordinator
   ProjectService
-  EditHistory
+  PipelineHistory
   Storage
   GTest::gtest_main)
 gtest_discover_tests(EditorMiniGitCommitWriterTest TEST_PREFIX "EditorMiniGitCommitWriterTest."
@@ -48,7 +36,7 @@ target_link_libraries(EditorMiniGitJournalRecoveryTest
   EditorMiniGitJournalRecovery
   EditorMiniGitCommitWriter
   ProjectService
-  EditHistory
+  PipelineHistory
   Storage
   GTest::gtest_main)
 gtest_discover_tests(EditorMiniGitJournalRecoveryTest TEST_PREFIX "EditorMiniGitJournalRecoveryTest."
@@ -65,7 +53,7 @@ target_link_libraries(EditorSaveCheckpointCaptureTest
   EditorMiniGitMaterializer
   EditorSaveCheckpointCoordinator
   ProjectService
-  EditHistory
+  PipelineHistory
   Storage
   GTest::gtest_main)
 gtest_discover_tests(EditorSaveCheckpointCaptureTest TEST_PREFIX "EditorSaveCheckpointCaptureTest."
@@ -81,7 +69,7 @@ target_link_libraries(EditorMiniGitMaterializerTest
   EditorMiniGitMaterializer
   EditorSaveCheckpointCoordinator
   ProjectService
-  EditHistory
+  PipelineHistory
   Storage
   GTest::gtest_main)
 gtest_discover_tests(EditorMiniGitMaterializerTest TEST_PREFIX "EditorMiniGitMaterializerTest."
@@ -197,18 +185,10 @@ target_link_libraries(PipelineSchedulerRequestIdTest PRIVATE GTest::gtest_main O
 gtest_discover_tests(PipelineSchedulerRequestIdTest TEST_PREFIX "PipelineSchedulerRequestIdTest.")
 alcedo_register_test_target(PipelineSchedulerRequestIdTest edit)
 
-# Version hash: deterministic parameter hashing.
-add_executable(VersionHashTest ${ALCEDO_TEST_ROOT}/edit/history/version_hash_test.cpp)
-target_include_directories(VersionHashTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(VersionHashTest EditHistory GTest::gtest_main)
-gtest_discover_tests(VersionHashTest TEST_PREFIX "VersionHashTest."
-  PROPERTIES LABELS "ci_core_flow")
-alcedo_register_test_target(VersionHashTest edit)
-
 # Commit graph: topology, LCA, serialization.
 add_executable(CommitGraphTest ${ALCEDO_TEST_ROOT}/edit/history/commit_graph_test.cpp)
 target_include_directories(CommitGraphTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(CommitGraphTest ProjectService EditHistory Storage GTest::gtest_main)
+target_link_libraries(CommitGraphTest ProjectService PipelineHistory Storage GTest::gtest_main)
 gtest_discover_tests(CommitGraphTest TEST_PREFIX "CommitGraphTest."
   PROPERTIES LABELS "ci_core_flow;edit;history;commit_graph")
 alcedo_register_test_target(CommitGraphTest edit)
@@ -219,7 +199,7 @@ add_executable(PipelineDocumentCheckpointTest
 target_include_directories(PipelineDocumentCheckpointTest
   PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
 target_link_libraries(PipelineDocumentCheckpointTest
-  EditHistory EditGraph ProjectService GTest::gtest_main)
+  PipelineHistory EditGraph ProjectService GTest::gtest_main)
 target_compile_definitions(PipelineDocumentCheckpointTest PRIVATE
   PIPELINE_HISTORY_FORMAT_EXPECTED_SERIALIZED_DIR="${ALCEDO_TEST_ROOT}/edit/history/expected_serialized")
 gtest_discover_tests(PipelineDocumentCheckpointTest
@@ -232,7 +212,7 @@ add_executable(PipelineDocumentDefaultNameTest
   ${ALCEDO_TEST_ROOT}/edit/history/pipeline_document_default_name_test.cpp)
 target_include_directories(PipelineDocumentDefaultNameTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(PipelineDocumentDefaultNameTest
-  PipelineHistoryApplier EditHistory EditGraph GTest::gtest_main)
+  PipelineHistoryApplier PipelineHistory EditGraph GTest::gtest_main)
 gtest_discover_tests(PipelineDocumentDefaultNameTest
   TEST_PREFIX "PipelineDocumentDefaultNameTest."
   PROPERTIES LABELS "ci_core_flow;edit;history")
@@ -242,41 +222,12 @@ alcedo_register_test_target(PipelineDocumentDefaultNameTest edit)
 add_executable(PipelineEditBatchTest ${ALCEDO_TEST_ROOT}/edit/history/pipeline_edit_batch_test.cpp)
 target_include_directories(PipelineEditBatchTest PUBLIC ${ALCEDO_INCLUDE_DIR}
   ${ALCEDO_TEST_ROOT}/edit/graph)
-target_link_libraries(PipelineEditBatchTest EditHistory GTest::gtest_main)
+target_link_libraries(PipelineEditBatchTest PipelineHistory GTest::gtest_main)
 target_compile_definitions(PipelineEditBatchTest PRIVATE
   PIPELINE_EDIT_BATCH_EXPECTED_SERIALIZED_DIR="${ALCEDO_TEST_ROOT}/edit/history/expected_serialized")
 gtest_discover_tests(PipelineEditBatchTest TEST_PREFIX "PipelineEditBatchTest."
   PROPERTIES LABELS "ci_core_flow;edit;history")
 alcedo_register_test_target(PipelineEditBatchTest edit)
-
-# Redo-only journal record format, RewriteTimeline, independent timeline simulator.
-add_executable(EditorTransactionJournalTest ${ALCEDO_TEST_ROOT}/edit/history/editor_transaction_journal_test.cpp)
-target_include_directories(EditorTransactionJournalTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(EditorTransactionJournalTest EditHistory GTest::gtest_main)
-gtest_discover_tests(EditorTransactionJournalTest TEST_PREFIX "EditorTransactionJournalTest."
-  PROPERTIES LABELS "ci_core_flow")
-alcedo_register_test_target(EditorTransactionJournalTest edit)
-
-# Image-scoped journal batching, flush durability, and committed replay.
-add_executable(EditorJournalWriterTest ${ALCEDO_TEST_ROOT}/edit/history/editor_journal_writer_test.cpp)
-target_include_directories(EditorJournalWriterTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(EditorJournalWriterTest EditHistory GTest::gtest_main)
-gtest_discover_tests(EditorJournalWriterTest TEST_PREFIX "EditorJournalWriterTest."
-  PROPERTIES LABELS "ci_core_flow")
-alcedo_register_test_target(EditorJournalWriterTest edit)
-
-# Deterministic seeded WAL restart/fault framework. Deliberately stays
-# test-side and dependency-free; scheduled CI can increase the step count.
-add_executable(EditorJournalFuzzFrameworkTest
-  ${ALCEDO_TEST_ROOT}/edit/history/editor_journal_fuzz_framework.cpp
-  ${ALCEDO_TEST_ROOT}/edit/history/editor_journal_fuzz_test.cpp)
-target_include_directories(EditorJournalFuzzFrameworkTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(EditorJournalFuzzFrameworkTest EditHistory GTest::gtest_main)
-target_compile_definitions(EditorJournalFuzzFrameworkTest PRIVATE
-  EDITOR_JOURNAL_FUZZ_CORPUS_PATH="${ALCEDO_TEST_ROOT}/edit/history/editor_journal_fuzz_seeds.txt")
-gtest_discover_tests(EditorJournalFuzzFrameworkTest TEST_PREFIX "EditorJournalFuzzFrameworkTest."
-  PROPERTIES LABELS "ci_core_flow")
-alcedo_register_test_target(EditorJournalFuzzFrameworkTest edit)
 
 # GPU DAG Phase G1: Model, DTO, PipelineGraph, format v2 JSON, legacy import.
 add_executable(GpuDagModelGraphTest

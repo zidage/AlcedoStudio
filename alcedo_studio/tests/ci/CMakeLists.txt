@@ -68,3 +68,37 @@ set_tests_properties(StageJsonCheckRejectsRollbackOutsideLegacyOwners
   PROPERTIES PASS_REGULAR_EXPRESSION "app/rollback\.cpp: void Save"
              FAIL_REGULAR_EXPRESSION "accessor\.hpp"
              LABELS "ci_core_flow;legacy_removal")
+
+# G10.4: the legacy history store is archived. No source or CMake file under src or tests may
+# name its types, tables, or targets again.
+add_test(NAME NoProductSourceReferencesLegacyHistoryStore
+  COMMAND ${CMAKE_COMMAND} -DALCEDO_SOURCE_ROOT=${ALCEDO_ROOT_DIR}/src
+          -DCHECK=NoSourceReferencesLegacyHistoryStore
+          -P ${ALCEDO_TEST_ROOT}/ci/legacy_removal_source_checks.cmake)
+set_tests_properties(NoProductSourceReferencesLegacyHistoryStore
+  PROPERTIES LABELS "ci_core_flow;legacy_removal")
+
+add_test(NAME NoTestSourceReferencesLegacyHistoryStore
+  COMMAND ${CMAKE_COMMAND} -DALCEDO_SOURCE_ROOT=${ALCEDO_TEST_ROOT}
+          -DCHECK=NoSourceReferencesLegacyHistoryStore
+          -P ${ALCEDO_TEST_ROOT}/ci/legacy_removal_source_checks.cmake)
+set_tests_properties(NoTestSourceReferencesLegacyHistoryStore
+  PROPERTIES LABELS "ci_core_flow;legacy_removal")
+
+# The same check must reject a source file and a CMake target list that name the legacy store,
+# and must not reject Mini-Git names that share a prefix.
+set(_legacy_history_fixture_root "${CMAKE_CURRENT_BINARY_DIR}/legacy_history_violation_fixture")
+file(WRITE "${_legacy_history_fixture_root}/sleeve/file.hpp"
+  "class File { std::shared_ptr<EditTransaction> pending_; };\n")
+file(WRITE "${_legacy_history_fixture_root}/app/CMakeLists.txt"
+  "target_link_libraries(App EditorJournalWriter)\n")
+file(WRITE "${_legacy_history_fixture_root}/edit/mini_git.hpp"
+  "struct EditorMiniGitSaveCapture; class PipelineHistoryApplier;\n")
+add_test(NAME LegacyHistoryCheckRejectsSourceAndTargetNames
+  COMMAND ${CMAKE_COMMAND} -DALCEDO_SOURCE_ROOT=${_legacy_history_fixture_root}
+          -DCHECK=NoSourceReferencesLegacyHistoryStore
+          -P ${ALCEDO_TEST_ROOT}/ci/legacy_removal_source_checks.cmake)
+set_tests_properties(LegacyHistoryCheckRejectsSourceAndTargetNames
+  PROPERTIES PASS_REGULAR_EXPRESSION "app/CMakeLists\.txt: target_link_libraries.*sleeve/file\.hpp: class File"
+             FAIL_REGULAR_EXPRESSION "mini_git\.hpp"
+             LABELS "ci_core_flow;legacy_removal")

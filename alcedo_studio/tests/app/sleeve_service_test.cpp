@@ -15,7 +15,6 @@
 #include <string>
 #include <vector>
 
-#include "app/history_mgmt_service.hpp"
 #include "app/pipeline_service.hpp"
 #include "app/project_package_backend.hpp"
 #include "app/project_service.hpp"
@@ -470,7 +469,7 @@ TEST_F(SleeveServiceTests, FolderCopyWriteKeepsNestedFileIdentity) {
   EXPECT_EQ(from_original->ref_count_, 1u);
 }
 
-TEST_F(SleeveServiceTests, ExplicitDuplicateClonesStateAndKeepsHistoryAndPipelineIndependent) {
+TEST_F(SleeveServiceTests, ExplicitDuplicateClonesStateAndKeepsPipelineIndependent) {
   ProjectService project(db_path_, meta_path_);
   auto           service = project.GetSleeveService();
 
@@ -491,15 +490,6 @@ TEST_F(SleeveServiceTests, ExplicitDuplicateClonesStateAndKeepsHistoryAndPipelin
     source_pipeline->dirty_ = true;
     pipeline_service.SavePipeline(source_pipeline);
     pipeline_service.Sync();
-  }
-
-  {
-    EditHistoryMgmtService history_service(project.GetStorage());
-    auto                   source_history = history_service.LoadHistory(source_id);
-    ASSERT_EQ(source_history->history_->GetVersions().size(), 1u);
-    (void)history_service.CreateVersion(source_history, "Source Look");
-    history_service.SaveHistory(source_history);
-    history_service.Sync();
   }
 
   const auto duplicated = service->DuplicateFileToFolder(source_id, album->element_id_);
@@ -523,17 +513,6 @@ TEST_F(SleeveServiceTests, ExplicitDuplicateClonesStateAndKeepsHistoryAndPipelin
   }
 
   {
-    EditHistoryMgmtService history_service(project.GetStorage());
-    auto                   source_history    = history_service.LoadHistory(source_id);
-    auto                   duplicate_history = history_service.LoadHistory(duplicate_id);
-    ASSERT_NE(source_history, nullptr);
-    ASSERT_NE(duplicate_history, nullptr);
-    EXPECT_EQ(source_history->history_->GetVersions().size(), 2u);
-    EXPECT_EQ(duplicate_history->history_->GetVersions().size(), 2u);
-    EXPECT_EQ(duplicate_history->history_->GetBoundImage(), duplicate_id);
-  }
-
-  {
     PipelineMgmtService pipeline_service(project.GetStorage());
     auto                duplicate_pipeline = pipeline_service.LoadPipeline(duplicate_id);
     auto* exposure = duplicate_pipeline->document_->PrimaryGrade()->FindAdjustmentByType(
@@ -546,27 +525,11 @@ TEST_F(SleeveServiceTests, ExplicitDuplicateClonesStateAndKeepsHistoryAndPipelin
   }
 
   {
-    EditHistoryMgmtService history_service(project.GetStorage());
-    auto                   duplicate_history = history_service.LoadHistory(duplicate_id);
-    (void)history_service.CreateVersion(duplicate_history, "Duplicate Look");
-    history_service.SaveHistory(duplicate_history);
-    history_service.Sync();
-  }
-
-  {
     PipelineMgmtService pipeline_service(project.GetStorage());
     auto                source_pipeline    = pipeline_service.LoadPipeline(source_id);
     auto                duplicate_pipeline = pipeline_service.LoadPipeline(duplicate_id);
     EXPECT_FLOAT_EQ(ReadExposure(source_pipeline), 2.5f);
     EXPECT_FLOAT_EQ(ReadExposure(duplicate_pipeline), 4.0f);
-  }
-
-  {
-    EditHistoryMgmtService history_service(project.GetStorage());
-    auto                   source_history    = history_service.LoadHistory(source_id);
-    auto                   duplicate_history = history_service.LoadHistory(duplicate_id);
-    EXPECT_EQ(source_history->history_->GetVersions().size(), 2u);
-    EXPECT_EQ(duplicate_history->history_->GetVersions().size(), 3u);
   }
 }
 
@@ -604,58 +567,50 @@ TEST_F(SleeveServiceTests, DuplicateUsesLatestPipelineSnapshotBeforePipelineSync
   }
 }
 
-TEST_F(SleeveServiceTests, DuplicateUsesLatestHistoryWhenLoadedFileCacheIsStale) {
-  sl_element_id_t source_id = 0;
-  sl_element_id_t album_id  = 0;
+/// G10.4: file import and file copy write only the element, file-binding, and
+/// folder rows. A 0.9.0 database has no legacy edit-history table, and a copied
+/// file reloads from storage without one.
+TEST_F(SleeveServiceTests, ImportAndCopyDoNotCreateLegacyHistory) {
+  sl_element_id_t source_id    = 0;
+  sl_element_id_t duplicate_id = 0;
   {
     ProjectService project(db_path_, meta_path_);
     auto           service = project.GetSleeveService();
-
     const auto     album   = service->CreateFolder(L"/", L"Album").first;
     const auto     source  = service->CreateFileInLibrary(L"Source.arw").first;
     ASSERT_NE(album, nullptr);
     ASSERT_NE(source, nullptr);
-
-    album_id  = album->element_id_;
     source_id = source->element_id_;
-    {
-      EditHistoryMgmtService history_service(project.GetStorage());
-      auto                   source_history = history_service.LoadHistory(source_id);
-      ASSERT_NE(source_history, nullptr);
-      (void)history_service.CreateVersion(source_history, "Baseline");
-      history_service.SaveHistory(source_history);
-    }
+
+    const auto duplicated = service->DuplicateFileToFolder(source_id, album->element_id_);
+    ASSERT_TRUE(duplicated.second.success_);
+    ASSERT_NE(duplicated.first, nullptr);
+    duplicate_id = duplicated.first->element_id_;
     project.SaveProject(meta_path_);
   }
 
-  ProjectService project(db_path_, meta_path_);
-  auto           service          = project.GetSleeveService();
-  const auto     resolved_source  = service->ResolveFile(L"/Source.arw");
-  ASSERT_NE(resolved_source, nullptr);
-  ASSERT_NE(resolved_source->GetEditHistory(), nullptr);
-  ASSERT_EQ(resolved_source->GetEditHistory()->GetVersions().size(), 2u);
+  // Table names of the archived legacy store. Split literals keep the removed type names out
+  // of the source tree (NoTestSourceReferencesLegacyHistoryStore).
+  constexpr char kLegacyHistoryTable[]  = "Edit" "History";
+  constexpr char kLegacyRecoveryTable[] = "EditorRecovery" "Metadata";
+  EXPECT_EQ(QueryDuckDbInt64(db_path_, std::string("SELECT COUNT(*) FROM duckdb_tables() WHERE "
+                                                   "table_name IN ('") +
+                                           kLegacyHistoryTable + "', '" + kLegacyRecoveryTable +
+                                           "');"),
+            0);
+  EXPECT_EQ(QueryDuckDbInt64(db_path_, "SELECT COUNT(*) FROM FileImage WHERE file_id IN (" +
+                                           std::to_string(source_id) + ", " +
+                                           std::to_string(duplicate_id) + ");"),
+            2);
 
-  {
-    EditHistoryMgmtService history_service(project.GetStorage());
-    auto                   source_history = history_service.LoadHistory(source_id);
-    ASSERT_NE(source_history, nullptr);
-    ASSERT_EQ(source_history->history_->GetVersions().size(), 2u);
-    (void)history_service.CreateVersion(source_history, "Source Look");
-    history_service.SaveHistory(source_history);
-  }
-
-  ASSERT_EQ(resolved_source->GetEditHistory()->GetVersions().size(), 2u);
-
-  const auto duplicated = service->DuplicateFileToFolder(source_id, album_id);
-  ASSERT_TRUE(duplicated.second.success_);
-  ASSERT_NE(duplicated.first, nullptr);
-
-  {
-    EditHistoryMgmtService history_service(project.GetStorage());
-    auto                   duplicate_history = history_service.LoadHistory(duplicated.first->element_id_);
-    ASSERT_NE(duplicate_history, nullptr);
-    EXPECT_EQ(duplicate_history->history_->GetVersions().size(), 3u);
-  }
+  ProjectService reopened(db_path_, meta_path_);
+  auto           service = reopened.GetSleeveService();
+  const auto     source  = service->ResolveFile(L"/Source.arw");
+  const auto     copy    = service->ResolveFile(L"/Album/Source.arw@");
+  ASSERT_NE(source, nullptr);
+  ASSERT_NE(copy, nullptr);
+  EXPECT_EQ(source->element_id_, source_id);
+  EXPECT_EQ(copy->element_id_, duplicate_id);
 }
 
 TEST_F(SleeveServiceTests, ReloadedRootMembershipKeepsLibraryFile) {

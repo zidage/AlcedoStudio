@@ -25,7 +25,6 @@
 #include <unordered_set>
 #include <vector>
 
-#include "app/history_mgmt_service.hpp"
 #include "app/import_service.hpp"
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"

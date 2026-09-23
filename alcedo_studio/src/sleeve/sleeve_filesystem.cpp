@@ -203,17 +203,6 @@ auto FileSystem::DuplicateFileToFolder(sl_element_id_t file_id, sl_element_id_t 
   }
 
   auto source_file = std::static_pointer_cast<SleeveFile>(source);
-  auto source_history = storage_service_.GetLiveEditHistory(source_file->element_id_);
-  if (!source_history) {
-    try {
-      source_history =
-          storage_service_.GetElementStore().GetEditHistoryByFileId(source_file->element_id_);
-    } catch (...) {
-    }
-  }
-  if (source_history) {
-    source_file->SetEditHistory(source_history);
-  }
 
   auto duplicate_name = source->element_name_;
   while (folder->Contains(duplicate_name) || (folder_id != 0 && root_->Contains(duplicate_name))) {

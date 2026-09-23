@@ -139,7 +139,7 @@ target_include_directories(AdjustmentTransferCatalogTest
     PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
 target_link_libraries(AdjustmentTransferCatalogTest
     PRIVATE GTest::gtest_main AdjustmentTransferCatalog PipelineHistoryApplier
-            EditorPipelineCommandService EditGraph EditMaskCore EditHistory)
+            EditorPipelineCommandService EditGraph EditMaskCore PipelineHistory)
 gtest_discover_tests(AdjustmentTransferCatalogTest
     TEST_PREFIX "AdjustmentTransferCatalogTest."
     PROPERTIES LABELS "ci_core_flow;edit;history")
@@ -180,7 +180,6 @@ target_include_directories(SleeveServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(SleeveServiceTest
   ProjectService
   PipelineMgmtService
-  EditHistoryMgmtService
   GTest::gtest_main)
 
 alcedo_register_test_target(SleeveServiceTest app)
@@ -220,8 +219,7 @@ target_link_libraries(AdjustmentTransferServiceMiniGitTest
   EditorSessionTestSupport
   ProjectService
   PipelineMgmtService
-  EditHistoryMgmtService
-  EditHistory
+  PipelineHistory
   EditGraph
   GTest::gtest_main
 )
@@ -239,20 +237,13 @@ target_link_libraries(AdjustmentTransferServiceTest
   EditorPipelineCommandService
   EditorSessionTestSupport
   EditGraph
-  EditHistory
+  PipelineHistory
   GTest::gtest_main
 )
 gtest_discover_tests(AdjustmentTransferServiceTest
   TEST_PREFIX "AdjustmentTransferServiceTest."
   PROPERTIES LABELS "ci_core_flow;edit;history")
 alcedo_register_test_target(AdjustmentTransferServiceTest app ci_core)
-
-add_executable(EditHistoryMgmtServiceTest ${ALCEDO_TEST_ROOT}/app/history_mgmt_service_test.cpp)
-target_include_directories(EditHistoryMgmtServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(EditHistoryMgmtServiceTest ProjectService EditHistoryMgmtService GTest::gtest_main)
-gtest_discover_tests(EditHistoryMgmtServiceTest TEST_PREFIX "EditHistoryMgmtServiceTest."
-  PROPERTIES LABELS "ci_core_flow")
-alcedo_register_test_target(EditHistoryMgmtServiceTest app ci_core)
 
 # Phase 5A: application-layer editor session + render coordinator (no GPU/QML).
 # EditorSessionCommandQueue is linked explicitly because the service's public
@@ -282,7 +273,7 @@ target_link_libraries(EditorSessionTestSupport
     EditorSessionRenderController
     EditorMiniGitMaterializer
     ProjectService
-    EditHistory
+    PipelineHistory
     EditGraph
     Storage
     GTest::gtest
@@ -356,7 +347,7 @@ add_executable(EditorSessionEditControllerTest ${ALCEDO_TEST_ROOT}/app/editor_se
 target_include_directories(EditorSessionEditControllerTest
   PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(EditorSessionEditControllerTest
-    EditorSessionEditController EditorSessionLifecycle EditHistory EditorAdjustmentPipeline
+    EditorSessionEditController EditorSessionLifecycle PipelineHistory EditorAdjustmentPipeline
     GTest::gtest_main)
 gtest_discover_tests(EditorSessionEditControllerTest
     TEST_PREFIX "EditorSessionEditControllerTest."

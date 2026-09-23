@@ -29,8 +29,9 @@ constexpr std::array<char, 8> kPackedProjectMagic{
     {'P', 'U', 'E', 'R', 'H', 'P', 'K', '1'}};
 constexpr uint32_t kPackedProjectVersion = kPackedProjectFormatVersion;
 constexpr uint64_t kMaxPackedComponentBytes = 2ULL * 1024ULL * 1024ULL * 1024ULL;
-// 0.7.0 is a destructive cutover: Brush mask payloads and 0.6.0 project
-// metadata are rejected at the versioned read boundary with no migration.
+// 0.9.0 is a destructive cutover: the legacy edit-history table and image
+// journal are gone, and 0.8.0 or older project metadata is rejected at the
+// versioned read boundary with no migration.
 constexpr std::string_view kProjectFileVersion = ::alcedo::kProjectFileVersion;
 constexpr std::string_view kMinSupportedProjectFileVersion =
     ::alcedo::kMinSupportedProjectFileVersion;

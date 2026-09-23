@@ -62,13 +62,12 @@ class EditorSessionCq5QualificationTest : public ::testing::Test {
     history_          = std::make_shared<ControllableEditorHistoryPort>();
     pipeline_         = std::make_shared<FakeEditorPipelinePort>();
     tasks_            = std::make_shared<FakeEditorTaskPort>();
-    journal_          = std::make_shared<OrderRecordingJournalPort>();
     scheduler_        = std::make_shared<RecordingScheduler>();
-    checkpoint_store_ = std::make_shared<FakeEditorCheckpointStore>();
+    checkpoint_store_ = std::make_shared<OrderRecordingCheckpointStore>();
     thumbnails_       = std::make_shared<FakeEditorThumbnailPort>();
 
-    runtime_ = EditorSessionRuntime::CreateWithPorts(pipeline_, history_, tasks_, journal_,
-                                                     scheduler_, checkpoint_store_, thumbnails_);
+    runtime_ = EditorSessionRuntime::CreateWithPorts(pipeline_, history_, tasks_, scheduler_,
+        checkpoint_store_, thumbnails_);
     service_ = runtime_->service.get();
     service_->SetPresentationSinkId(1);
     service_->SetPresentationSize(640, 480);
@@ -104,9 +103,8 @@ class EditorSessionCq5QualificationTest : public ::testing::Test {
   std::shared_ptr<ControllableEditorHistoryPort> history_;
   std::shared_ptr<FakeEditorPipelinePort>        pipeline_;
   std::shared_ptr<FakeEditorTaskPort>            tasks_;
-  std::shared_ptr<OrderRecordingJournalPort>     journal_;
   std::shared_ptr<RecordingScheduler>            scheduler_;
-  std::shared_ptr<FakeEditorCheckpointStore>     checkpoint_store_;
+  std::shared_ptr<OrderRecordingCheckpointStore>     checkpoint_store_;
   std::shared_ptr<FakeEditorThumbnailPort>       thumbnails_;
   std::unique_ptr<EditorSessionRuntime>          runtime_;
   EditorSessionService*                          service_ = nullptr;
@@ -132,9 +130,8 @@ TEST_F(EditorSessionCq5QualificationTest,
 
   std::vector<std::string> events;
   history_->event_log                  = &events;
-  journal_->event_log                  = &events;
+  checkpoint_store_->event_log                  = &events;
   history_->dirty_journal              = true;
-  journal_->async_commit               = false;
   checkpoint_store_->async_materialize = false;
 
   const auto accepted_render_count_before =
@@ -156,7 +153,6 @@ TEST_F(EditorSessionCq5QualificationTest,
 
 TEST_F(EditorSessionCq5QualificationTest,
        SaveCompletionWithoutExecutorIsDropped) {
-  auto journal          = std::make_shared<FakeEditorJournalPort>();
   auto tasks            = std::make_shared<FakeEditorTaskPort>();
   auto checkpoint_store = std::make_shared<FakeEditorCheckpointStore>();
   auto thumbnails       = std::make_shared<FakeEditorThumbnailPort>();
@@ -164,7 +160,6 @@ TEST_F(EditorSessionCq5QualificationTest,
   tasks->fail_begin     = true;
 
   EditorSaveCheckpointService::Dependencies deps;
-  deps.journal          = journal;
   deps.tasks            = tasks;
   deps.checkpoint_store = checkpoint_store;
   deps.thumbnails       = thumbnails;

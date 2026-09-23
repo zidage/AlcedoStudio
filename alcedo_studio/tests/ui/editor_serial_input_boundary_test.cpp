@@ -366,7 +366,7 @@ TEST_F(SerialInputBoundaryTest, ReleaseBeforeFirstPreviewCommitsFinalValuesOnce)
 
   auto history_ptr = std::shared_ptr<alcedo::IEditorHistoryPort>(
       static_cast<alcedo::IEditorHistoryPort*>(&history_), [](alcedo::IEditorHistoryPort*) {});
-  alcedo::EditorSessionEditController edit({history_ptr, nullptr});
+  alcedo::EditorSessionEditController edit({history_ptr});
   const auto outcome = edit.HandlePendingSequence(*batch, handle_, identity_);
   EXPECT_EQ(outcome.kind, alcedo::EditorEditOutcome::Kind::RenderRouted);
   EXPECT_EQ(outcome.reason, alcedo::EditorRenderReason::SettledAdjustment);

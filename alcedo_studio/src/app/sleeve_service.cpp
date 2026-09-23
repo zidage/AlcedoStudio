@@ -120,7 +120,6 @@ auto SleeveServiceImpl::Sync() -> SyncResult {
     for (auto& element : garbage_elements) {
       LogSyncElement("Deleted", element);
       if (element && element->type_ == ElementType::FILE) {
-        storage_->ForgetLiveEditHistory(element->element_id_);
         storage_->ForgetLivePipeline(element->element_id_);
       }
     }

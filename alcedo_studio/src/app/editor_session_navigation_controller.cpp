@@ -17,13 +17,11 @@ namespace alcedo {
 
 EditorSessionNavigationController::EditorSessionNavigationController(
     EditorSessionLifecycle& lifecycle, EditorSaveCheckpointService& save_service,
-    EditorSessionRenderController& render, IEditorJournalPort* journal,
-    IEditorCheckpointStore* checkpoint_store, IEditorHistoryPort* history,
-    EditorSessionNavigationState* state)
+    EditorSessionRenderController& render, IEditorCheckpointStore* checkpoint_store,
+    IEditorHistoryPort* history, EditorSessionNavigationState* state)
     : lifecycle_(lifecycle),
       save_service_(save_service),
       render_(render),
-      journal_(journal),
       checkpoint_store_(checkpoint_store),
       history_(history),
       state_(state != nullptr ? state : &owned_state_),
@@ -199,10 +197,6 @@ auto EditorSessionNavigationController::RequestClose(bool persist_changes) -> Na
 
   // Discard or no-image close: release only after the render worker confirms
   // that it no longer owns the session or presentation sink.
-  if (!persist_changes && journal_ != nullptr) {
-    std::string error;
-    journal_->DiscardUnflushed(current_identity.element_id, &error);
-  }
   PendingEditorAction pending;
   pending.kind              = PendingEditorActionKind::CloseEditor;
   pending.persist           = persist_changes;
@@ -411,13 +405,6 @@ auto EditorSessionNavigationController::SealAndStartSave(bool persist_changes,
   StartRenderIdleBarrier(sealed_load_request);
 
   if (persist_changes) {
-    if (journal_ != nullptr) {
-      std::string error;
-      if (!journal_->FinalizeEdit(identity.element_id, lifecycle_.active_image_load_request().value,
-                                  &error)) {
-        return CheckpointTicket{};
-      }
-    }
     // Project-owned global save lock is taken before capture so journal prefix
     // capture, DuckDB materialize, truncate, and thumbnail invalidation share
     // one ownership interval (Phase 2A).
@@ -451,11 +438,6 @@ auto EditorSessionNavigationController::SealAndStartSave(bool persist_changes,
     lifecycle_.BeginCheckpoint();
     return save_service_.Start(std::move(req),
                                [this](const SaveCheckpointResult& r) { OnCheckpointFinished(r); });
-  } else if (journal_ != nullptr) {
-    std::string error;
-    if (!journal_->DiscardUnflushed(identity.element_id, &error)) {
-      return CheckpointTicket{};
-    }
   }
   return CheckpointTicket{};
 }
@@ -742,19 +724,6 @@ auto EditorSessionNavigationController::DiscardAndContinueAfterFailure() -> Navi
     return outcome;
   }
   auto recovery = *state_->pending_recovery;
-
-  // Explicitly discard unflushed journal/working changes before continuing.
-  if (journal_ != nullptr) {
-    std::string discard_error;
-    if (!journal_->DiscardUnflushed(lifecycle_.identity().element_id, &discard_error)) {
-      const auto message =
-          discard_error.empty() ? "Failed to discard pending editor changes" : discard_error;
-      RetainPendingFailure(recovery, message);
-      outcome.failed  = true;
-      outcome.message = lifecycle_.last_error();
-      return outcome;
-    }
-  }
   state_->pending_recovery.reset();
 
   // Continue the pending navigation with persist=false (no save needed).

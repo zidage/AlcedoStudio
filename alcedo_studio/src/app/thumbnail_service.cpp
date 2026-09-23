@@ -17,7 +17,6 @@
 #include <unordered_map>
 #include <vector>
 
-#include "app/history_mgmt_service.hpp"
 #include "app/pipeline_service.hpp"
 #include "app/render_service.hpp"
 #include "app/thumbnail_disk_cache_service.hpp"

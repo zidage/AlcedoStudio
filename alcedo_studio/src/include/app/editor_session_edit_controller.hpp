@@ -42,7 +42,6 @@ class EditorSessionEditController final {
  public:
   struct Dependencies {
     std::shared_ptr<IEditorHistoryPort> history;
-    std::shared_ptr<IEditorJournalPort> journal;
   };
 
   explicit EditorSessionEditController(Dependencies dependencies);

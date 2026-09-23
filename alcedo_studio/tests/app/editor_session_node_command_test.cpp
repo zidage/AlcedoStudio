@@ -55,12 +55,11 @@ class EditorSessionNodeCommandTest : public ::testing::Test {
     history_          = std::make_shared<NodeLockHistoryPort>();
     pipeline_         = std::make_shared<test::FakeEditorPipelinePort>();
     tasks_            = std::make_shared<test::FakeEditorTaskPort>();
-    journal_          = std::make_shared<test::OrderRecordingJournalPort>();
     scheduler_        = std::make_shared<RecordingNodeCommandScheduler>();
-    checkpoint_store_ = std::make_shared<test::FakeEditorCheckpointStore>();
+    checkpoint_store_ = std::make_shared<test::OrderRecordingCheckpointStore>();
     thumbnails_       = std::make_shared<test::FakeEditorThumbnailPort>();
-    runtime_          = EditorSessionRuntime::CreateWithPorts(pipeline_, history_, tasks_, journal_,
-                                                              scheduler_, checkpoint_store_, thumbnails_);
+    runtime_          = EditorSessionRuntime::CreateWithPorts(
+        pipeline_, history_, tasks_, scheduler_, checkpoint_store_, thumbnails_);
     service_          = runtime_->service.get();
     service_->SetPresentationSinkId(1);
     service_->SetPresentationSize(640, 480);
@@ -102,9 +101,8 @@ class EditorSessionNodeCommandTest : public ::testing::Test {
   std::shared_ptr<NodeLockHistoryPort>                 history_;
   std::shared_ptr<test::FakeEditorPipelinePort>        pipeline_;
   std::shared_ptr<test::FakeEditorTaskPort>            tasks_;
-  std::shared_ptr<test::OrderRecordingJournalPort>     journal_;
   std::shared_ptr<RecordingNodeCommandScheduler>       scheduler_;
-  std::shared_ptr<test::FakeEditorCheckpointStore>     checkpoint_store_;
+  std::shared_ptr<test::OrderRecordingCheckpointStore>     checkpoint_store_;
   std::shared_ptr<test::FakeEditorThumbnailPort>       thumbnails_;
   std::unique_ptr<EditorSessionRuntime>                runtime_;
   EditorSessionService*                                service_ = nullptr;

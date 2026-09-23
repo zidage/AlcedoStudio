@@ -231,7 +231,6 @@ void Database::InitializeDB() {
     }
     duckdb_destroy_result(&result);
     RunDdlChecked(guard.conn_, ai_annotation_table_query);
-    RunDdlChecked(guard.conn_, editor_recovery_metadata_table_query);
     RunDdlChecked(guard.conn_, commit_graph_table_query);
     RefreshAiUnderstandingFtsBestEffort(guard.conn_);
     SeedSemanticLabelQueries(guard.conn_);
@@ -259,7 +258,6 @@ void Database::InitializeDB() {
   }
   duckdb_destroy_result(&result);
   RunDdlChecked(guard.conn_, ai_annotation_table_query);
-  RunDdlChecked(guard.conn_, editor_recovery_metadata_table_query);
   RunDdlChecked(guard.conn_, commit_graph_table_query);
   RefreshAiUnderstandingFtsBestEffort(guard.conn_);
   SeedSemanticLabelQueries(guard.conn_);

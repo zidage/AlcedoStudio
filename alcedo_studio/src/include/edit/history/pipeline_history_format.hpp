@@ -16,9 +16,13 @@ namespace alcedo {
  * project, document, history, root, checkpoint, WAL, and transfer identities
  * are rejected without conversion.
  *
+ * Project metadata 0.9.0 has no legacy edit-history table and no legacy
+ * `image-N.wal` journal. Every other identity below is unchanged from 0.8.0, so
+ * commit, chain, batch, root, checkpoint, and WAL bytes and hashes stay the same.
+ *
  * | Identity | Constant | Value |
  * | --- | --- | --- |
- * | Project metadata | @ref kProjectFileVersion | 0.8.0 |
+ * | Project metadata | @ref kProjectFileVersion | 0.9.0 |
  * | Packed project header | @ref kPackedProjectFormatVersion | 7 |
  * | Pipeline document JSON | @ref kPipelineDocumentFormatVersion | 7 |
  * | Image edit schema | @ref kImageEditSchemaVersion | 5 |
@@ -32,11 +36,11 @@ namespace alcedo {
  */
 
 /// Project metadata version written by SaveProject and required on open.
-inline constexpr std::string_view kProjectFileVersion = "0.8.0";
+inline constexpr std::string_view kProjectFileVersion = "0.9.0";
 /// Inclusive lower bound of accepted project metadata. Equals @ref kProjectFileVersion.
-inline constexpr std::string_view kMinSupportedProjectFileVersion = "0.8.0";
+inline constexpr std::string_view kMinSupportedProjectFileVersion = "0.9.0";
 /// Inclusive upper bound of accepted project metadata. Equals @ref kProjectFileVersion.
-inline constexpr std::string_view kMaxSupportedProjectFileVersion = "0.8.0";
+inline constexpr std::string_view kMaxSupportedProjectFileVersion = "0.9.0";
 /// Packed `.alcd` header version. Independent of the metadata string.
 inline constexpr std::uint32_t kPackedProjectFormatVersion = 7;
 

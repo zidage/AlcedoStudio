@@ -101,13 +101,12 @@ class EditorSessionCommandQueueBaselineTest : public ::testing::Test {
                                 : std::make_shared<ControllableEditorHistoryPort>();
     pipeline_         = std::make_shared<FakeEditorPipelinePort>();
     tasks_            = std::make_shared<FakeEditorTaskPort>();
-    journal_          = std::make_shared<OrderRecordingJournalPort>();
     scheduler_        = std::make_shared<RecordingScheduler>();
-    checkpoint_store_ = std::make_shared<FakeEditorCheckpointStore>();
+    checkpoint_store_ = std::make_shared<OrderRecordingCheckpointStore>();
     thumbnails_       = std::make_shared<FakeEditorThumbnailPort>();
 
-    runtime_          = EditorSessionRuntime::CreateWithPorts(pipeline_, history_, tasks_, journal_,
-                                                              scheduler_, checkpoint_store_, thumbnails_);
+    runtime_          = EditorSessionRuntime::CreateWithPorts(
+        pipeline_, history_, tasks_, scheduler_, checkpoint_store_, thumbnails_);
     service_          = runtime_->service.get();
     service_->SetPresentationSinkId(1);
     service_->SetPresentationSize(640, 480);
@@ -152,17 +151,15 @@ class EditorSessionCommandQueueBaselineTest : public ::testing::Test {
   void drainQueue() { service_->DrainCommandQueueForTests(); }
 
   /// Open A, switch to B, let the save finish, and present B's first frame.
-  /// `async_save` selects delayed worker completion (journal commit and
-  /// materialization complete from the test as the worker) or inline port
+  /// `async_save` selects delayed worker completion (materialization
+  /// completes from the test as the worker) or inline port
   /// completion (still posted to the queue, never run on the start stack).
   /// Returns the ordered (kind, state) result sequence the session published.
   auto runSwitchSequence(bool async_save)
       -> std::vector<std::pair<EditorSessionResultKind, EditorSessionState>> {
-    journal_->async_commit               = async_save;
     checkpoint_store_->async_materialize = async_save;
     openInteractive(10, 20);
     (void)service_->Switch(30, 40);
-    journal_->CompleteCommit(true);
     checkpoint_store_->CompleteMaterialization(true);
     drainQueue();
     presentFirstFrame();
@@ -182,9 +179,8 @@ class EditorSessionCommandQueueBaselineTest : public ::testing::Test {
   std::shared_ptr<ControllableEditorHistoryPort> history_;
   std::shared_ptr<FakeEditorPipelinePort>        pipeline_;
   std::shared_ptr<FakeEditorTaskPort>            tasks_;
-  std::shared_ptr<OrderRecordingJournalPort>     journal_;
   std::shared_ptr<RecordingScheduler>            scheduler_;
-  std::shared_ptr<FakeEditorCheckpointStore>     checkpoint_store_;
+  std::shared_ptr<OrderRecordingCheckpointStore>     checkpoint_store_;
   std::shared_ptr<FakeEditorThumbnailPort>       thumbnails_;
   std::unique_ptr<EditorSessionRuntime>          runtime_;
   EditorSessionService*                          service_ = nullptr;
@@ -193,18 +189,17 @@ class EditorSessionCommandQueueBaselineTest : public ::testing::Test {
 
 /// Invariant: a worker completion (the save checkpoint) is processed AFTER the
 /// initiating command returns, never inline on the service-start stack. The
-/// current synchronous save path invokes the journal callback inline, so the
+/// current synchronous save path invokes the materialization callback inline, so the
 /// save completion re-enters navigation and publishes save results BEFORE
 /// `Switch` returns. The sentinel counts results carrying a save task id that
 /// arrived during the initiating call; the target is zero.
 TEST_F(EditorSessionCommandQueueBaselineTest,
-       SynchronousJournalResultIsProcessedAfterInitiatingCommandReturns) {
+       SynchronousSaveResultIsProcessedAfterInitiatingCommandReturns) {
   openInteractive(10, 20);  // image A
 
   recorder_->mark_initiating();
   const auto before                    = recorder_->terminal_count();
-  // Inline (synchronous) save reproduces the production journal-writer path.
-  journal_->async_commit               = false;
+  // Inline (synchronous) materialization completes on the start stack.
   checkpoint_store_->async_materialize = false;
   const auto result                    = service_->Switch(30, 40);  // switch to B
   recorder_->mark_returned();
@@ -231,7 +226,6 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
   openInteractive(10, 20);  // image A
 
   // Start an async save for A; B is the pending running target.
-  journal_->async_commit               = true;
   checkpoint_store_->async_materialize = true;
   const auto switch_b                  = service_->Switch(30, 40);  // switch to B
   ASSERT_EQ(switch_b.kind, EditorSessionResultKind::SaveStarted);
@@ -247,7 +241,6 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
       << "second selection must replace/queue, not be rejected (unfinished op: C selection)";
 
   // The running target B must still complete after its save.
-  journal_->CompleteCommit(true);
   checkpoint_store_->CompleteMaterialization(true);
   drainQueue();
   EXPECT_EQ(service_->identity().element_id, static_cast<sl_element_id_t>(30))
@@ -255,7 +248,6 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
 
   // The queued selection C is promoted once B's save completes: it seals B and
   // runs its own save checkpoint before acquiring C.
-  journal_->CompleteCommit(true);
   checkpoint_store_->CompleteMaterialization(true);
   drainQueue();
   EXPECT_EQ(service_->identity().element_id, static_cast<sl_element_id_t>(50))
@@ -273,7 +265,6 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
   openInteractive(10, 20);  // image A
 
   // Start an async save for A; B pending, ticket assigned (correlated path).
-  journal_->async_commit               = true;
   checkpoint_store_->async_materialize = true;
   ASSERT_EQ(service_->Switch(30, 40).kind, EditorSessionResultKind::SaveStarted);
 
@@ -289,7 +280,6 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
   // Complete the real (correlated) save; only the matching generation may
   // release A's guards and acquire B. The completion is posted to the command
   // queue and reduces on drain.
-  journal_->CompleteCommit(true);
   checkpoint_store_->CompleteMaterialization(true);
   drainQueue();
 
@@ -307,7 +297,6 @@ TEST_F(EditorSessionCommandQueueBaselineTest, StaleFirstFrameCannotEnableEditing
   const auto load_a = service_->active_image_load_request();
 
   // Switch to B synchronously (inline save) and present B's first frame.
-  journal_->async_commit               = false;
   checkpoint_store_->async_materialize = false;
   (void)service_->Switch(30, 40);
   presentFirstFrame();
@@ -375,9 +364,8 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
 
   std::vector<std::string> events;
   history_->event_log                  = &events;
-  journal_->event_log                  = &events;
+  checkpoint_store_->event_log                  = &events;
   history_->dirty_journal              = true;
-  journal_->async_commit               = false;  // observe inline save ordering
   checkpoint_store_->async_materialize = false;
 
   const auto result = service_->PasteAdjustments(AdjustmentTransferPackage{}, "Pasted Version");
@@ -395,9 +383,8 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
 
   std::vector<std::string> events;
   history_->event_log                  = &events;
-  journal_->event_log                  = &events;
+  checkpoint_store_->event_log                  = &events;
   history_->dirty_journal              = true;
-  journal_->async_commit               = false;
   checkpoint_store_->async_materialize = false;
 
   const auto accepted_render_count_before =
@@ -432,9 +419,8 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
 
   std::vector<std::string> events;
   history_->event_log                  = &events;
-  journal_->event_log                  = &events;
+  checkpoint_store_->event_log                  = &events;
   history_->dirty_journal              = true;
-  journal_->async_commit               = false;
   checkpoint_store_->async_materialize = false;
   checkpoint_store_->fail_materialize  = true;
 
@@ -488,7 +474,6 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
   openInteractive(10, 20);  // image A
 
   recorder_->mark_initiating();
-  journal_->async_commit               = false;
   checkpoint_store_->async_materialize = false;
   (void)service_->Switch(30, 40);  // one accepted command: switch A->B
   recorder_->mark_returned();
@@ -524,7 +509,6 @@ TEST_F(EditorSessionCommandQueueBaselineTest, OneAcceptedCommandPublishesExactly
 
   const auto terminal_before = recorder_->terminal_count();
   recorder_->mark_initiating();
-  journal_->async_commit               = false;
   checkpoint_store_->async_materialize = false;
   (void)service_->Switch(30, 40);  // one accepted command: switch A->B
   recorder_->mark_returned();
@@ -561,7 +545,6 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
   service_->SetCopiedPackageAvailable(true);
 
   // Start a history checkpoint whose save cannot finish on its own.
-  journal_->async_commit               = true;
   checkpoint_store_->async_materialize = true;
   const auto paste =
       service_->PasteAdjustments(MakeExposureTransferPackage(0.5), "Pasted Version");
@@ -662,13 +645,11 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
   openInteractive(10, 20);
 
   history_->dirty_journal              = true;
-  journal_->async_commit               = false;
   checkpoint_store_->async_materialize = false;
   const auto result                    = service_->PersistCurrentImage();
   EXPECT_EQ(result.kind, EditorSessionResultKind::SaveStarted);
   EXPECT_EQ(service_->state(), EditorSessionState::Saving);
 
-  journal_->CompleteCommit(true);
   checkpoint_store_->CompleteMaterialization(true);
   drainQueue();
   EXPECT_EQ(service_->state(), EditorSessionState::Interactive);

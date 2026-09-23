@@ -377,7 +377,6 @@ auto ComputeProjectDataSummary(Storage& storage_service) -> nlohmann::json {
       {"FileImage", "file_id"},
       {"ComboFolder", "combo_id"},
       {"Filter", "combo_id"},
-      {"EditHistory", "file_id"},
       {"VersionRef", "version_id"},
       {"EditCommit", "commit_hash"},
       {"ImageEditState", "element_id"},

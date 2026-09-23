@@ -19,7 +19,6 @@
 #include "sleeve/sleeve_element/sleeve_folder.hpp"
 #include "storage/mapper/duckorm/duckdb_orm.hpp"
 #include "storage/store/ai/ai_store.hpp"
-#include "type/hash_type.hpp"
 #include "type/type.hpp"
 #include "utils/string/convert.hpp"
 
@@ -151,9 +150,7 @@ ElementStore::ElementStore(ConnectionGuard&& guard)
       element_id_mapper_(guard_.conn_),
       file_mapper_(guard_.conn_),
       folder_mapper_(guard_.conn_),
-      history_mapper_(guard_.conn_),
-      pipeline_mapper_(guard_.conn_),
-      edit_history_mapper_(guard_.conn_) {}
+      pipeline_mapper_(guard_.conn_) {}
 /**
  * @brief Add an element to the database.
  *
@@ -170,10 +167,6 @@ void ElementStore::InsertElementRows(const std::shared_ptr<SleeveElement>& eleme
   if (element->type_ == ElementType::FILE) {
     auto file = std::static_pointer_cast<SleeveFile>(element);
     file_mapper_.Insert({file->element_id_, file->image_id_});
-    if (file->GetEditHistory() != nullptr) {
-      auto history = file->GetEditHistory();
-      history_mapper_.Insert(history);
-    }
   } else if (element->type_ == ElementType::FOLDER) {
     auto  folder   = std::static_pointer_cast<SleeveFolder>(element);
     auto& contents = folder->ListElements();
@@ -235,8 +228,6 @@ auto ElementStore::GetElementById(const sl_element_id_t id) -> std::shared_ptr<S
     } catch (...) {
       file->image_id_ = 0;
     }
-    auto history = history_mapper_.GetEditHistoryByFileId(file->element_id_);
-    file->SetEditHistory(history);
   }
   result->SetSyncFlag(SyncFlag::SYNCED);
   return result;
@@ -259,7 +250,7 @@ auto ElementStore::GetFolderContent(const sl_element_id_t folder_id)
  * element is 0.
  *
  * Low-level row delete: removes the Element row only. It does NOT cascade
- * AI / semantic / history / pipeline / file-binding rows — that orchestration
+ * AI / semantic / pipeline / file-binding rows — that orchestration
  * lives at the service layer (SleeveServiceImpl::DeleteElement flows through
  * Write -> Sync -> RemoveElements / RemoveElement(shared_ptr), which call
  * DeleteSemanticAndAiRowsForFiles on the same connection). Keep this primitive
@@ -279,7 +270,6 @@ void ElementStore::RemoveElement(const std::shared_ptr<SleeveElement> element) {
     auto file = std::static_pointer_cast<SleeveFile>(element);
     DeleteSemanticAndAiRowsForFiles(guard_.conn_,
                                     std::span<const sl_element_id_t>(&file->element_id_, 1));
-    history_mapper_.RemoveById(file->element_id_);
     pipeline_mapper_.RemoveById(file->element_id_);
     file_mapper_.RemoveById(file->element_id_);
     folder_mapper_.RemoveContentById(file->element_id_);
@@ -320,7 +310,6 @@ void ElementStore::RemoveElements(std::span<const std::shared_ptr<SleeveElement>
 
   if (!file_ids.empty()) {
     DeleteSemanticAndAiRowsForFiles(guard_.conn_, file_ids);
-    history_mapper_.RemoveByIds(file_ids);
     pipeline_mapper_.RemoveByIds(file_ids);
     file_mapper_.RemoveByIds(file_ids);
     folder_mapper_.RemoveContentByIds(file_ids);
@@ -349,9 +338,6 @@ void ElementStore::UpdateElementRows(const std::shared_ptr<SleeveElement>& eleme
   if (element->type_ == ElementType::FILE) {
     auto file = std::static_pointer_cast<SleeveFile>(element);
     file_mapper_.Update({file->element_id_, file->image_id_}, file->image_id_);
-    if (file->GetEditHistory() != nullptr) {
-      history_mapper_.Update(file->GetEditHistory(), file->element_id_);
-    }
   } else if (element->type_ == ElementType::FOLDER) {
     auto folder = std::static_pointer_cast<SleeveFolder>(element);
     folder_mapper_.RemoveById(folder->element_id_);
@@ -587,135 +573,6 @@ auto ElementStore::RemovePipelinesByElementIds(std::span<const sl_element_id_t> 
     -> void {
   auto db_lock = guard_.Lock();
   pipeline_mapper_.RemoveByIds(element_ids);
-}
-
-auto ElementStore::GetEditHistoryByFileId(const sl_element_id_t file_id)
-    -> std::shared_ptr<EditHistory> {
-  auto db_lock = guard_.Lock();
-  return history_mapper_.GetEditHistoryByFileId(file_id);
-}
-
-auto ElementStore::UpdateEditHistoryByFileId(const sl_element_id_t              file_id,
-                                             const std::shared_ptr<EditHistory> history) -> void {
-  auto db_lock = guard_.Lock();
-  history_mapper_.Update(history, file_id);
-}
-
-auto ElementStore::RemoveEditHistoryByFileId(const sl_element_id_t file_id) -> void {
-  auto db_lock = guard_.Lock();
-  history_mapper_.RemoveById(file_id);
-}
-
-auto ElementStore::RemoveEditHistoriesByFileIds(std::span<const sl_element_id_t> file_ids) -> void {
-  auto db_lock = guard_.Lock();
-  history_mapper_.RemoveByIds(file_ids);
-}
-
-namespace {
-auto ToRecoveryMapperParams(const EditorRecoveryMetadata& metadata)
-    -> EditorRecoveryMetadataMapperParams {
-  EditorRecoveryMetadataMapperParams params;
-  params.file_id            = metadata.element_id;
-  params.version_id         = std::make_unique<std::string>(metadata.version_id.ToString());
-  params.journal_generation = metadata.journal_generation;
-  params.materialized_operation_sequence = metadata.materialized_operation_sequence;
-  params.transaction_chain_hash =
-      std::make_unique<std::string>(metadata.transaction_chain_hash.ToString());
-  params.pipeline_parameter_hash =
-      std::make_unique<std::string>(metadata.pipeline_parameter_hash.ToString());
-  return params;
-}
-
-auto FromRecoveryMapperParams(EditorRecoveryMetadataMapperParams&& params)
-    -> EditorRecoveryMetadata {
-  EditorRecoveryMetadata metadata;
-  metadata.element_id = params.file_id;
-  if (params.version_id && !params.version_id->empty()) {
-    metadata.version_id = Hash128::FromString(*params.version_id);
-  }
-  metadata.journal_generation              = params.journal_generation;
-  metadata.materialized_operation_sequence = params.materialized_operation_sequence;
-  if (params.transaction_chain_hash && !params.transaction_chain_hash->empty()) {
-    metadata.transaction_chain_hash = Hash128::FromString(*params.transaction_chain_hash);
-  }
-  if (params.pipeline_parameter_hash && !params.pipeline_parameter_hash->empty()) {
-    metadata.pipeline_parameter_hash = Hash128::FromString(*params.pipeline_parameter_hash);
-  }
-  return metadata;
-}
-}  // namespace
-
-auto ElementStore::MaterializeEditorState(const std::shared_ptr<EditHistory>&         history,
-                                          const std::shared_ptr<CPUPipelineExecutor>& pipeline,
-                                          const EditorRecoveryMetadata& recovery_metadata,
-                                          std::string*                  error) -> bool {
-  if (!history || !pipeline) {
-    if (error) {
-      *error = "MaterializeEditorState requires history and pipeline";
-    }
-    return false;
-  }
-  if (history->GetBoundImage() != recovery_metadata.element_id ||
-      pipeline->GetBoundFile() != recovery_metadata.element_id) {
-    if (error) {
-      *error = "MaterializeEditorState identity mismatch";
-    }
-    return false;
-  }
-
-  auto db_lock = guard_.Lock();
-  try {
-    if (duckorm::begin_transaction(guard_.conn_) != DuckDBSuccess) {
-      if (error) {
-        *error = "failed to begin editor materialize transaction";
-      }
-      return false;
-    }
-    try {
-      history_mapper_.UpdateEditHistory(history);
-      pipeline_mapper_.UpdatePipelineParamByFileId(recovery_metadata.element_id, pipeline);
-      EditorRecoveryMetadataMapper mapper(guard_.conn_);
-      mapper.Update(recovery_metadata.element_id, ToRecoveryMapperParams(recovery_metadata));
-      if (materialize_pre_commit_hook_) {
-        // Test seam: throw here to prove the three writes roll back together.
-        materialize_pre_commit_hook_();
-      }
-      if (duckorm::commit_transaction(guard_.conn_) != DuckDBSuccess) {
-        duckorm::rollback_transaction(guard_.conn_);
-        if (error) {
-          *error = "failed to commit editor materialize transaction";
-        }
-        return false;
-      }
-    } catch (const std::exception& ex) {
-      duckorm::rollback_transaction(guard_.conn_);
-      if (error) {
-        *error = ex.what();
-      }
-      return false;
-    }
-  } catch (const std::exception& ex) {
-    if (error) {
-      *error = ex.what();
-    }
-    return false;
-  }
-  return true;
-}
-
-auto ElementStore::GetEditorRecoveryMetadata(sl_element_id_t file_id)
-    -> std::optional<EditorRecoveryMetadata> {
-  auto                         db_lock = guard_.Lock();
-  EditorRecoveryMetadataMapper mapper(guard_.conn_);
-  auto                         rows = mapper.Get(std::format("file_id={}", file_id).c_str());
-  if (rows.empty()) {
-    return std::nullopt;
-  }
-  if (rows.size() > 1) {
-    throw std::runtime_error("multiple EditorRecoveryMetadata rows for file_id " +
-                             std::to_string(file_id));
-  }
-  return FromRecoveryMapperParams(std::move(rows.front()));
 }
 
 };  // namespace alcedo

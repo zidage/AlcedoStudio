@@ -46,9 +46,9 @@ auto PrimaryGradeJson(nlohmann::json& document_json) -> nlohmann::json& {
 }
 
 TEST(BrushSourceFormatBoundary, CurrentHistoryIdentitiesMatchPublishedConstants) {
-  EXPECT_EQ(kProjectFileVersion, "0.8.0");
-  EXPECT_EQ(kMinSupportedProjectFileVersion, "0.8.0");
-  EXPECT_EQ(kMaxSupportedProjectFileVersion, "0.8.0");
+  EXPECT_EQ(kProjectFileVersion, "0.9.0");
+  EXPECT_EQ(kMinSupportedProjectFileVersion, "0.9.0");
+  EXPECT_EQ(kMaxSupportedProjectFileVersion, "0.9.0");
   EXPECT_EQ(kPackedProjectFormatVersion, 7u);
   EXPECT_EQ(kPipelineDocumentFormatVersion, 7u);
   EXPECT_EQ(kImageEditSchemaVersion, 5u);

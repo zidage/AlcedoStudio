@@ -12,7 +12,6 @@
 
 #include "ui/alcedo_main/i18n.hpp"
 #include "app/export_service.hpp"
-#include "app/history_mgmt_service.hpp"
 #include "app/import_service.hpp"
 #include "app/mask_thumbnail_service.hpp"
 #include "app/pipeline_service.hpp"

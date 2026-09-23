@@ -36,11 +36,10 @@ class EditorPendingInputSessionTest : public ::testing::Test {
     history_          = std::make_shared<test::FakeEditorHistoryPort>();
     pipeline_         = std::make_shared<test::FakeEditorPipelinePort>();
     tasks_            = std::make_shared<test::FakeEditorTaskPort>();
-    journal_          = std::make_shared<test::FakeEditorJournalPort>();
     scheduler_        = std::make_shared<RecordingScheduler>();
     checkpoint_store_ = std::make_shared<test::FakeEditorCheckpointStore>();
     runtime_          = EditorSessionRuntime::CreateWithPorts(
-        pipeline_, history_, tasks_, journal_, scheduler_, checkpoint_store_);
+        pipeline_, history_, tasks_, scheduler_, checkpoint_store_);
     service_ = runtime_->service.get();
     service_->SetPresentationSinkId(1);
     service_->SetPresentationSize(640, 480);
@@ -65,7 +64,6 @@ class EditorPendingInputSessionTest : public ::testing::Test {
   std::shared_ptr<test::FakeEditorHistoryPort>      history_;
   std::shared_ptr<test::FakeEditorPipelinePort>     pipeline_;
   std::shared_ptr<test::FakeEditorTaskPort>         tasks_;
-  std::shared_ptr<test::FakeEditorJournalPort>      journal_;
   std::shared_ptr<RecordingScheduler>               scheduler_;
   std::shared_ptr<test::FakeEditorCheckpointStore>  checkpoint_store_;
   std::unique_ptr<EditorSessionRuntime>             runtime_;
