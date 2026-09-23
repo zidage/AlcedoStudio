@@ -320,6 +320,16 @@ auto OpenClProgramLibrary::RegisteredProgramNames() const -> std::vector<std::st
   return names;
 }
 
+auto OpenClProgramLibrary::RegisteredSourcePaths(std::string_view name) const
+    -> std::vector<std::filesystem::path> {
+  std::lock_guard<std::mutex> lock(mutex_);
+  const auto                  it = programs_.find(std::string(name));
+  if (it == programs_.end() || !it->second) {
+    return {};
+  }
+  return it->second->descriptor.source_paths;
+}
+
 }  // namespace alcedo
 
 #endif

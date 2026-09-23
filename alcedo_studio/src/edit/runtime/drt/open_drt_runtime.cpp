@@ -6,7 +6,7 @@
 //  This file contains GPLv3-derived logic based on OpenDRT v1.1.0
 //  by Jed Smith: https://github.com/jedypod/open-display-transform
 
-#include "edit/operators/cst/open_drt_cpu.hpp"
+#include "edit/runtime/drt/open_drt_runtime.hpp"
 
 #include <algorithm>
 #include <array>
@@ -927,7 +927,7 @@ void ResolveDisplayEncoding(ColorUtils::ColorSpace encoding_space, ColorUtils::E
     return;
   }
 
-  throw std::runtime_error("ODT_Op: unsupported OpenDRT output combination for encoding_space=\"" +
+  throw std::runtime_error("ResolveOpenDRTRuntime: unsupported OpenDRT output combination for encoding_space=\"" +
                            ColorUtils::ColorSpaceToString(encoding_space) +
                            "\" and encoding_eotf=\"" + ColorUtils::EOTFToString(encoding_eotf) +
                            "\".");

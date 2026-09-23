@@ -13,21 +13,21 @@
 
 #include "cuda/cuda_check.hpp"
 #include "cuda_acescc.cuh"
-#include "cuda_drt_runtime_state.cuh"
 #include "cuda_neighbor_grade.hpp"
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
-#include "edit/operators/GPU_kernels/color_mgmt/disp_enc_funcs.cuh"
-#include "edit/operators/GPU_kernels/color_mgmt/odt_funcs.cuh"
-#include "edit/operators/GPU_kernels/color_mgmt/open_drt_funcs.cuh"
-#include "edit/operators/cst/odt_op.hpp"
 #include "edit/operators/models/i_operator_model.hpp"
 #include "edit/operators/models/pending_parameter_patch.hpp"
-#include "edit/runtime/adjustment_runtime.hpp"
 #include "edit/runtime/aces_reference_gamut_compression.h"
+#include "edit/runtime/adjustment_runtime.hpp"
+#include "edit/runtime/cuda/cuda_drt_gpu_params.cuh"
 #include "edit/runtime/cuda/cuda_drt_pass.hpp"
+#include "edit/runtime/cuda/cuda_drt_runtime_state.hpp"
 #include "edit/runtime/cuda/cuda_scene_work.hpp"
-#include "edit/runtime/drt_display.hpp"
+#include "edit/runtime/cuda/drt/disp_enc_funcs.cuh"
+#include "edit/runtime/cuda/drt/odt_funcs.cuh"
+#include "edit/runtime/cuda/drt/open_drt_funcs.cuh"
+#include "edit/runtime/drt/drt_output_resolver.hpp"
 #include "edit/runtime/drt_post_executor.hpp"
 #include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/parameter_arena.hpp"
@@ -39,14 +39,8 @@ namespace {
 
 constexpr std::uint32_t kDrtDirtyBits = static_cast<std::uint32_t>(DrtDirty::All);
 
-void ResolveRuntime(CudaDrtRuntimeState& state, const nlohmann::json& drt_json) {
-  ODT_Op descriptor(nlohmann::json{{"odt", drt_json}});
-  descriptor.SetGlobalParams(state.cpu_params);
-  state.gpu_params = GPUParamsConverter::ConvertFromCPU(state.cpu_params, state.gpu_params);
-}
-
-__global__ void DrtKernel(const float4* input, float4* output, std::uint32_t pixel_count,
-                          const GPU_TO_OUTPUT_Params* params) {
+__global__ void         DrtKernel(const float4* input, float4* output, std::uint32_t pixel_count,
+                                  const CudaDrtGpuParams* params) {
   const std::uint32_t index = blockIdx.x * blockDim.x + threadIdx.x;
   if (index >= pixel_count) return;
   auto         runtime = *params;
@@ -56,7 +50,7 @@ __global__ void DrtKernel(const float4* input, float4* output, std::uint32_t pix
                                  cuda_acescc::Decode(source.z));
   const float3 scene = make_float3(compressed.r, compressed.g, compressed.b);
   float3       display_linear;
-  if (runtime.method_ == GPU_ODTMethod::ACES_2_0) {
+  if (runtime.method_ == CudaDrtMethod::ACES_2_0) {
     auto aces      = runtime.aces_params_;
     display_linear = CUDA::OutputTransform_fwd(scene, aces);
   } else {
@@ -143,13 +137,10 @@ struct CudaDrtOps {
                                                  : TakePendingDirtyFields(drt.Params());
     const bool             needs_initialize = !arena.Contains(key);
     if (needs_initialize || display_pending.has_value() || plan.output_color_override.has_value()) {
-      auto drt_json = drt.Params().ToJson();
-      if (plan.output_color_override.has_value()) {
-        OverlayExportColorOnDrtJson(drt_json, *plan.output_color_override);
-      }
-      ResolveRuntime(device.DrtRuntime(), drt_json);
-      const auto runtime = device.DrtRuntime().gpu_params.to_output_params_;
-      arena.BindOrWritePackedSlot(key, DirtyFieldMask{kDrtDirtyBits}, runtime);
+      const auto resolved =
+          DrtOutputResolver::ResolveNode(drt, plan.output_color_override, kErrorPrefix);
+      arena.BindOrWritePackedSlot(key, DirtyFieldMask{kDrtDirtyBits},
+                                  device.DrtRuntime().Pack(resolved));
     }
     if (display_pending) {
       pending.push_back(std::move(*display_pending));
@@ -162,7 +153,7 @@ struct CudaDrtOps {
     auto&                  arena   = device.Workspace().Parameters();
     const ParameterSlotKey key{drt_id, AdjustmentInstanceId{"drt.output"}};
     const auto&            binding = arena.Binding(key);
-    const auto*            params  = reinterpret_cast<const GPU_TO_OUTPUT_Params*>(
+    const auto*            params  = reinterpret_cast<const CudaDrtGpuParams*>(
         static_cast<const std::byte*>(arena.DeviceBuffer().DevicePointer()) + binding.offset);
     const std::uint32_t     pixels = width * height;
     constexpr std::uint32_t block  = 256;

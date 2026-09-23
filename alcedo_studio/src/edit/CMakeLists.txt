@@ -108,9 +108,19 @@ if(NOT ALCEDO_METAL_ENABLED)
         ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_backend_host.cpp
     )
 endif()
+# DRT output resolution shared by the CUDA, OpenCL, and Metal DRT passes. The legacy ODT_Op in
+# Operators also links it until G10.9 archives that operator.
+def_library(EditRuntimeDrt
+    SOURCES
+        ${ALCEDO_SRC_ROOT}/edit/runtime/drt/drt_output_resolver.cpp
+        ${ALCEDO_SRC_ROOT}/edit/runtime/drt/aces_odt_runtime.cpp
+        ${ALCEDO_SRC_ROOT}/edit/runtime/drt/open_drt_runtime.cpp
+    PUBLIC_DEPS EditGraph ${ALCEDO_OPENCV_CORE_DEPS}
+)
+
 def_library(EditRuntime
     SOURCES ${EDIT_RUNTIME_SRCS}
-    PUBLIC_DEPS EditGraph EditGeometry EditInput
+    PUBLIC_DEPS EditGraph EditGeometry EditInput EditRuntimeDrt
     PRIVATE_DEPS PreviewPerformance
 )
 if(ALCEDO_ENABLE_BRUSH_MASK)
@@ -176,6 +186,7 @@ if(ALCEDO_CUDA_ENABLED)
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_render_device.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_sensor_demosaic.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_drt_pass.cu
+            ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_drt_runtime_state.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_neighbor_grade.cu
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_local_tone_pass.cu
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_mask_pass.cu

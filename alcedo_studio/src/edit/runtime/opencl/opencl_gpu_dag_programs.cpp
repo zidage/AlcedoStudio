@@ -49,9 +49,9 @@ void RegisterOpenClGpuDagPrograms() {
                 OpenClProgramDescriptor{
                     .name                = OpenCL::GpuDag::kDrtProgramName,
                     .source_paths        = {ALCEDO_OPENCL_ACES_RGC_H,
-                                            ALCEDO_OPENCL_EDIT_PIPELINE_FUSED_PARAMS_CL,
-                                            ALCEDO_OPENCL_EDIT_PIPELINE_COMMON_CL,
-                                            ALCEDO_OPENCL_EDIT_PIPELINE_CST_CL, ALCEDO_OPENCL_DAG_DRT_CL},
+                                            ALCEDO_OPENCL_DAG_DRT_PARAMS_CL,
+                                            ALCEDO_OPENCL_DAG_COMMON_CL,
+                                            ALCEDO_OPENCL_DAG_CST_CL, ALCEDO_OPENCL_DAG_DRT_CL},
                     .build_options       = "-cl-std=CL1.2",
                     .required_at_startup = false,
                 },

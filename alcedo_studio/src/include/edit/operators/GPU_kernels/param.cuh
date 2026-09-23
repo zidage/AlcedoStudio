@@ -21,6 +21,7 @@
 
 #include "edit/operators/GPU_kernels/fused_param.hpp"
 #include "edit/operators/op_base.hpp"
+#include "edit/runtime/cuda/cuda_drt_gpu_params.cuh"
 #include "utils/lut/cube_lut.hpp"
 
 #define GPU_FUNC __device__ __forceinline__
@@ -62,241 +63,20 @@ struct GPU_LUT3D {
   }
 };
 
-struct GPU_JMhParams {
-  float MATRIX_RGB_to_CAM16_c_[9];
-  float MATRIX_CAM16_c_to_RGB_[9];
-  float MATRIX_cone_response_to_Aab_[9];
-  float MATRIX_Aab_to_cone_response_[9];
-  float F_L_n_;  // F_L normalized
-  float cz_;
-  float inv_cz_;  // 1/cz
-  float A_w_J_;
-  float inv_A_w_J_;  // 1/A_w_J
-};
-
-struct GPU_TSParams {
-  float n_;
-  float n_r_;
-  float g_;
-  float t_1_;
-  float c_t_;
-  float s_2_;
-  float u_2_;
-  float m_2_;
-  float forward_limit_;
-  float inverse_limit_;
-  float log_peak_;
-};
-
+// The DRT parameter layout moved to the runtime (G10.5). These names keep the legacy CUDA
+// pipeline compiling until G10.9 archives it.
+using GPU_JMhParams = CudaDrtJmhParams;
+using GPU_TSParams  = CudaDrtTonescaleParams;
 template <typename T>
-struct GPU_Table1D {
-  cudaTextureObject_t texture_object_ = 0;
-  void*               dev_ptr_        = nullptr;
-  size_t              count_          = 0;
+using GPU_Table1D          = CudaDrtTable1D<T>;
+using GPU_ODTParams        = CudaDrtAcesParams;
+using GPU_OpenDRTParams    = CudaDrtOpenDrtParams;
+using GPU_TO_OUTPUT_Params = CudaDrtGpuParams;
 
-  GPU_Table1D()                       = default;
-
-  void Reset() {
-    if (texture_object_) {
-      cudaDestroyTextureObject(texture_object_);
-      texture_object_ = 0;
-    }
-    if (dev_ptr_) {
-      cudaFree(dev_ptr_);
-      dev_ptr_ = nullptr;
-    }
-    count_ = 0;
-  }
-};
-
-// Note: This is a host-side helper that creates a texture object bound to linear
-// device memory (cudaResourceTypeLinear). It does not use hardware filtering.
-// We intentionally keep the CTL lookup / interpolation logic explicit in CUDA
-// code for correctness and maintainability.
 template <typename T>
 static GPU_Table1D<T> Create1DLinearTableTextureObject(const T* host_data, size_t count) {
-  GPU_Table1D<T> table;
-  if (!host_data || count == 0) {
-    return table;
-  }
-
-  table.count_       = count;
-
-  const size_t bytes = sizeof(T) * count;
-  cudaMalloc(&table.dev_ptr_, bytes);
-  cudaMemcpy(table.dev_ptr_, host_data, bytes, cudaMemcpyHostToDevice);
-
-  cudaResourceDesc res_desc       = {};
-  res_desc.resType                = cudaResourceTypeLinear;
-  res_desc.res.linear.devPtr      = table.dev_ptr_;
-  res_desc.res.linear.desc        = cudaCreateChannelDesc<T>();
-  res_desc.res.linear.sizeInBytes = bytes;
-
-  cudaTextureDesc tex_desc        = {};
-  tex_desc.normalizedCoords       = 0;
-  tex_desc.filterMode             = cudaFilterModePoint;
-  tex_desc.readMode               = cudaReadModeElementType;
-  tex_desc.addressMode[0]         = cudaAddressModeClamp;
-
-  cudaCreateTextureObject(&table.texture_object_, &res_desc, &tex_desc, nullptr);
-  return table;
+  return CreateCudaDrtTable<T>(host_data, count);
 }
-
-struct GPU_ODTParams {
-  float               peak_luminance_ = 100.0f;
-
-  // JMh parameters
-  GPU_JMhParams       input_params_;
-  GPU_JMhParams       reach_params_;
-  GPU_JMhParams       limit_params_;
-
-  // Tonescale parameters
-  GPU_TSParams        ts_;
-
-  // Shared compression parameters
-  float               limit_J_max;
-  float               model_gamma_inv;
-  GPU_Table1D<float>  table_reach_M_;
-  std::uintptr_t      host_table_reach_M_id_ = 0;
-
-  // Chroma compression parameters
-  float               sat;
-  float               sat_thr;
-  float               compr;
-  float               chroma_compress_scale;
-
-  // Gamut compression parameters
-  float               mid_J;
-  float               focus_dist;
-  float               lower_hull_gamma_inv;
-  GPU_Table1D<float>  table_hues_;
-  std::uintptr_t      host_table_hues_id_ = 0;
-
-  // Packed as float4{J, M, h}
-  GPU_Table1D<float4> table_gamut_cusps_;
-  std::uintptr_t      host_table_gamut_cusps_id_ = 0;
-
-  GPU_Table1D<float>  table_upper_hull_gamma_;
-  std::uintptr_t      host_table_upper_hull_gamma_id_ = 0;
-
-  int                 hue_linearity_search_range[2]   = {0, 1};
-
-  void                Reset() {
-    table_reach_M_.Reset();
-    table_hues_.Reset();
-    table_gamut_cusps_.Reset();
-    table_upper_hull_gamma_.Reset();
-    host_table_reach_M_id_          = 0;
-    host_table_hues_id_             = 0;
-    host_table_gamut_cusps_id_      = 0;
-    host_table_upper_hull_gamma_id_ = 0;
-    hue_linearity_search_range[0]   = 0;
-    hue_linearity_search_range[1]   = 1;
-  }
-};
-
-struct GPU_OpenDRTParams {
-  int   tn_hcon_enable_ = 0;
-  int   tn_lcon_enable_ = 0;
-  int   pt_enable_      = 1;
-  int   ptl_enable_     = 1;
-  int   ptm_enable_     = 1;
-  int   brl_enable_     = 1;
-  int   brlp_enable_    = 1;
-  int   hc_enable_      = 1;
-  int   hs_rgb_enable_  = 1;
-  int   hs_cmy_enable_  = 1;
-  int   creative_white_ = 2;
-  int   surround_       = 2;
-  int   clamp_          = 1;
-  int   display_gamut_  = 0;
-  int   display_eotf_   = 1;
-
-  float tn_con_         = 1.66f;
-  float tn_sh_          = 0.5f;
-  float tn_toe_         = 0.003f;
-  float tn_off_         = 0.005f;
-  float tn_hcon_        = 0.0f;
-  float tn_hcon_pv_     = 1.0f;
-  float tn_hcon_st_     = 4.0f;
-  float tn_lcon_        = 0.0f;
-  float tn_lcon_w_      = 0.5f;
-  float cwp_lm_         = 0.25f;
-  float rs_sa_          = 0.35f;
-  float rs_rw_          = 0.25f;
-  float rs_bw_          = 0.55f;
-  float pt_lml_         = 0.25f;
-  float pt_lml_r_       = 0.5f;
-  float pt_lml_g_       = 0.0f;
-  float pt_lml_b_       = 0.1f;
-  float pt_lmh_         = 0.25f;
-  float pt_lmh_r_       = 0.5f;
-  float pt_lmh_b_       = 0.0f;
-  float ptl_c_          = 0.06f;
-  float ptl_m_          = 0.08f;
-  float ptl_y_          = 0.06f;
-  float ptm_low_        = 0.4f;
-  float ptm_low_rng_    = 0.25f;
-  float ptm_low_st_     = 0.5f;
-  float ptm_high_       = -0.8f;
-  float ptm_high_rng_   = 0.35f;
-  float ptm_high_st_    = 0.4f;
-  float brl_            = 0.0f;
-  float brl_r_          = -2.5f;
-  float brl_g_          = -1.5f;
-  float brl_b_          = -1.5f;
-  float brl_rng_        = 0.5f;
-  float brl_st_         = 0.35f;
-  float brlp_           = -0.5f;
-  float brlp_r_         = -1.25f;
-  float brlp_g_         = -1.25f;
-  float brlp_b_         = -0.25f;
-  float hc_r_           = 1.0f;
-  float hc_r_rng_       = 0.3f;
-  float hs_r_           = 0.6f;
-  float hs_r_rng_       = 0.6f;
-  float hs_g_           = 0.35f;
-  float hs_g_rng_       = 1.0f;
-  float hs_b_           = 0.66f;
-  float hs_b_rng_       = 1.0f;
-  float hs_c_           = 0.25f;
-  float hs_c_rng_       = 1.0f;
-  float hs_m_           = 0.0f;
-  float hs_m_rng_       = 1.0f;
-  float hs_y_           = 0.0f;
-  float hs_y_rng_       = 1.0f;
-
-  float ts_x1_          = 0.0f;
-  float ts_y1_          = 0.0f;
-  float ts_x0_          = 0.0f;
-  float ts_y0_          = 0.0f;
-  float ts_s0_          = 0.0f;
-  float ts_p_           = 0.0f;
-  float ts_s10_         = 0.0f;
-  float ts_m1_          = 0.0f;
-  float ts_m2_          = 0.0f;
-  float ts_s_           = 0.0f;
-  float ts_dsc_         = 0.0f;
-  float pt_cmp_Lf_      = 0.0f;
-  float s_Lp100_        = 0.0f;
-  float ts_s1_          = 0.0f;
-};
-
-struct GPU_TO_OUTPUT_Params {
-  GPU_ODTMethod     method_          = GPU_ODTMethod::OPEN_DRT;
-  GPU_ODTParams     aces_params_     = {};
-  GPU_OpenDRTParams open_drt_params_ = {};
-  float             limit_to_display_matx[9];
-  float             display_linear_scale_ = 1.0f;
-  GPU_EOTF          eotf                  = GPU_EOTF::LINEAR;
-
-  void              Reset() {
-    aces_params_.Reset();
-    open_drt_params_      = {};
-    display_linear_scale_ = 1.0f;
-    eotf                  = GPU_EOTF::LINEAR;
-  }
-};
 
 struct GPUOperatorParams {
   using ToneMappingParams                                  = OperatorParams::ToneMappingParams;
@@ -716,15 +496,15 @@ class CudaFusedParamUploader {
       };
 
       copy33(to_output_cpu.limit_to_display_matx_, to_output_gpu.limit_to_display_matx);
-      to_output_gpu.eotf    = static_cast<GPU_EOTF>(static_cast<int>(to_output_cpu.eotf_));
-      to_output_gpu.method_ = static_cast<GPU_ODTMethod>(static_cast<int>(to_output_cpu.method_));
+      to_output_gpu.eotf    = static_cast<CudaDrtEotf>(static_cast<int>(to_output_cpu.eotf_));
+      to_output_gpu.method_ = static_cast<CudaDrtMethod>(static_cast<int>(to_output_cpu.method_));
       to_output_gpu.display_linear_scale_ = to_output_cpu.display_linear_scale_;
 
       if (!cpu_params.to_output_enabled_) {
         to_output_gpu.Reset();
         copy33(to_output_cpu.limit_to_display_matx_, to_output_gpu.limit_to_display_matx);
-        to_output_gpu.eotf    = static_cast<GPU_EOTF>(static_cast<int>(to_output_cpu.eotf_));
-        to_output_gpu.method_ = static_cast<GPU_ODTMethod>(static_cast<int>(to_output_cpu.method_));
+        to_output_gpu.eotf    = static_cast<CudaDrtEotf>(static_cast<int>(to_output_cpu.eotf_));
+        to_output_gpu.method_ = static_cast<CudaDrtMethod>(static_cast<int>(to_output_cpu.method_));
         to_output_gpu.display_linear_scale_ = to_output_cpu.display_linear_scale_;
         cpu_params.to_output_dirty_         = false;
       } else if (to_output_cpu.method_ == ColorUtils::ODTMethod::ACES_2_0) {

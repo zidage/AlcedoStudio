@@ -13,7 +13,7 @@
 #include <vector_types.h>
 
 #include "disp_enc_const.cuh"
-#include "edit/operators/GPU_kernels/param.cuh"
+#include "edit/runtime/cuda/cuda_drt_gpu_params.cuh"
 #include "odt_const.cuh"
 #include "util_funcs.cuh"
 
@@ -242,43 +242,43 @@ GPU_FUNC float3 HLG_to_display_linear_1000nits_f3(const float3& hlg_signal) {
   return rgb;
 }
 
-GPU_FUNC float3 eotf_inv(const float3& rgb_linear_in, GPU_EOTF otf_type) {
+GPU_FUNC float3 eotf_inv(const float3& rgb_linear_in, CudaDrtEotf otf_type) {
   float3 rgb_linear = make_float3(fmaxf(0.f, rgb_linear_in.x), fmaxf(0.f, rgb_linear_in.y),
                                   fmaxf(0.f, rgb_linear_in.z));
-  if (otf_type == GPU_EOTF::LINEAR) {
+  if (otf_type == CudaDrtEotf::LINEAR) {
     return rgb_linear;
-  } else if (otf_type == GPU_EOTF::ST2084) {
+  } else if (otf_type == CudaDrtEotf::ST2084) {
     return Y_to_ST2084_f3(rgb_linear);
-  } else if (otf_type == GPU_EOTF::HLG) {
+  } else if (otf_type == CudaDrtEotf::HLG) {
     return HLG_from_display_linear_1000nits_f3(rgb_linear);
-  } else if (otf_type == GPU_EOTF::BT1886) {
+  } else if (otf_type == CudaDrtEotf::BT1886) {
     return bt1886_inv_f3(rgb_linear, 2.4f, 1.0f, 0.0f);
-  } else if (otf_type == GPU_EOTF::GAMMA_2_6) {
+  } else if (otf_type == CudaDrtEotf::GAMMA_2_6) {
     return pow_f3(rgb_linear, 1.0f / 2.6f);
-  } else if (otf_type == GPU_EOTF::GAMMA_2_2) {
+  } else if (otf_type == CudaDrtEotf::GAMMA_2_2) {
     return pow_f3(rgb_linear, 1.0f / 2.2f);
-  } else if (otf_type == GPU_EOTF::GAMMA_1_8) {
+  } else if (otf_type == CudaDrtEotf::GAMMA_1_8) {
     return pow_f3(rgb_linear, 1.0f / 1.8f);
   } else {
     return moncurve_inv_f3(rgb_linear, 2.4f, 0.055f);
   }
 }
 
-GPU_FUNC float3 eotf(const float3& rgb_cv, GPU_EOTF eotf_enum) {
+GPU_FUNC float3 eotf(const float3& rgb_cv, CudaDrtEotf eotf_enum) {
   switch (eotf_enum) {
-    case GPU_EOTF::LINEAR:
+    case CudaDrtEotf::LINEAR:
       return rgb_cv;
-    case GPU_EOTF::ST2084:
+    case CudaDrtEotf::ST2084:
       return mult_f_f3(ST2084_to_Y_f3(rgb_cv), 1.0f / ref_luminance);
-    case GPU_EOTF::HLG:
+    case CudaDrtEotf::HLG:
       return HLG_to_display_linear_1000nits_f3(rgb_cv);
-    case GPU_EOTF::BT1886:
+    case CudaDrtEotf::BT1886:
       return pow_f3(rgb_cv, 2.6f);
-    case GPU_EOTF::GAMMA_2_6:
+    case CudaDrtEotf::GAMMA_2_6:
       return pow_f3(rgb_cv, 2.6f);
-    case GPU_EOTF::GAMMA_2_2:
+    case CudaDrtEotf::GAMMA_2_2:
       return pow_f3(rgb_cv, 2.2f);
-    case GPU_EOTF::GAMMA_1_8:
+    case CudaDrtEotf::GAMMA_1_8:
       return pow_f3(rgb_cv, 1.8f);
     default:
       return moncurve_fwd_f3(rgb_cv, 2.4f, 0.055f);
@@ -292,7 +292,7 @@ GPU_FUNC float3 ApplyWhiteScale(float3& rgb, float* MAT_limit_to_display) {
   return mult_f_f3(rgb, scale);
 }
 
-GPU_FUNC float3 DisplayEncoding(float3& rgb, float* MAT_limit_to_display, GPU_EOTF eotf_num,
+GPU_FUNC float3 DisplayEncoding(float3& rgb, float* MAT_limit_to_display, CudaDrtEotf eotf_num,
                                  float linear_scale = 1.f) {
   float3 rgb_disp_linear = mult_f3_f33(rgb, MAT_limit_to_display);
   float3 rgb_display_scaled =
@@ -300,7 +300,7 @@ GPU_FUNC float3 DisplayEncoding(float3& rgb, float* MAT_limit_to_display, GPU_EO
   return eotf_inv(rgb_display_scaled, eotf_num);
 }
 
-GPU_FUNC float3 DisplayDecoding(float3& rgb_cv, float* MAT_display_to_limit, GPU_EOTF eotf_num,
+GPU_FUNC float3 DisplayDecoding(float3& rgb_cv, float* MAT_display_to_limit, CudaDrtEotf eotf_num,
                                  float linear_scale = 1.f) {
   float3 rgb_display_linear = eotf(rgb_cv, eotf_num);
   float3 rgb_limit_scaled =

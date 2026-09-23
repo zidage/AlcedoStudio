@@ -6,26 +6,30 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <filesystem>
+#include <opencv2/core.hpp>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
-#include <opencv2/core.hpp>
-
 #include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
+#include "drt_expected_data_support.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/raw_input_loader.hpp"
-#include "edit/operators/cst/odt_op.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/operators/models/sharpen_model.hpp"
+#include "edit/runtime/drt/drt_output_resolver.hpp"
 #include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/graph_compiler.hpp"
+#include "edit/runtime/metal/metal_drt_gpu_params.hpp"
 #include "edit/runtime/metal/metal_drt_pass.hpp"
-#include "edit/runtime/metal/metal_scene_work.hpp"
 #include "edit/runtime/metal/metal_pass_encoder.hpp"
+#include "edit/runtime/metal/metal_scene_work.hpp"
 #include "metal/compute_pipeline_cache.hpp"
 
 namespace alcedo {
@@ -203,9 +207,7 @@ TEST_F(MetalDrtFixture, MetalDrtOpenDrtMatchesCudaReferenceWithinTolerance) {
   ASSERT_EQ(grade.size(), display.size());
   ASSERT_TRUE(AllFinite(display));
 
-  ODT_Op         descriptor(nlohmann::json{{"odt", document_.Drt()->Params().ToJson()}});
-  OperatorParams cpu;
-  descriptor.SetGlobalParams(cpu);
+  const auto resolved     = DrtOutputResolver::ResolveNode(*document_.Drt(), std::nullopt, "test");
   float identity_err = 0.0f;
   float cpu_err      = 0.0f;
   for (std::size_t i = 0; i < grade.size(); ++i) {
@@ -215,8 +217,8 @@ TEST_F(MetalDrtFixture, MetalDrtOpenDrtMatchesCudaReferenceWithinTolerance) {
     const float scene_r = AcesccDecode(grade[i].r);
     const float scene_g = AcesccDecode(grade[i].g);
     const float scene_b = AcesccDecode(grade[i].b);
-    const auto  linear  = CpuOpenDrt(cpu.to_output_params_.open_drt_params_, scene_r, scene_g, scene_b);
-    const auto  encoded = CpuDisplayEncoding(cpu.to_output_params_, linear[0], linear[1], linear[2]);
+    const auto  linear  = CpuOpenDrt(resolved.open_drt_params_, scene_r, scene_g, scene_b);
+    const auto  encoded = CpuDisplayEncoding(resolved, linear[0], linear[1], linear[2]);
     cpu_err = std::max(cpu_err, std::fabs(encoded.r - display[i].r));
     cpu_err = std::max(cpu_err, std::fabs(encoded.g - display[i].g));
     cpu_err = std::max(cpu_err, std::fabs(encoded.b - display[i].b));
@@ -426,6 +428,27 @@ TEST(GpuDagMetalDrt, MetalDrtMissingMetallibThrowsExplicitError) {
   EXPECT_THROW((void)metal::ComputePipelineCache::Instance().GetPipelineState(
                    "/alcedo/missing/drt.metallib", "drt_display", "Metal DRT"),
                std::runtime_error);
+}
+
+// The stored files were packed through ODT_Op and ResolveMetalDrtGpuParams at commit 0cf45f45
+// (MSVC x64 build of the same CPU packer). MetalDrtGpuParams has no padding, so the whole struct
+// is compared.
+TEST(GpuDagMetalDrt, MetalDrtParameterBytesMatchStoredExpectedBytes) {
+  const std::filesystem::path directory(ALCEDO_DRT_EXPECTED_PARAMETER_DIR);
+  const auto                  rows = drt_expected_data::ConfigurationMatrix();
+  ASSERT_EQ(rows.size(), 12U);
+  for (const auto& row : rows) {
+    SCOPED_TRACE(row.file_stem_);
+    ColorUtils::TO_OUTPUT_Params resolved;
+    std::string                  error;
+    ASSERT_TRUE(DrtOutputResolver::Resolve(row.payload_, nullptr, &resolved, &error)) << error;
+    std::vector<std::byte> actual;
+    drt_expected_data::AppendBytes(actual, PackMetalDrtGpuParams(resolved));
+    const auto stored = drt_expected_data::ReadBytes(
+        drt_expected_data::ExpectedParameterPath(directory, "metal", row));
+    ASSERT_EQ(stored.size(), sizeof(MetalDrtGpuParams));
+    EXPECT_EQ(drt_expected_data::FirstDifference(actual, stored), std::string::npos);
+  }
 }
 
 }  // namespace

@@ -22,12 +22,12 @@ void RegisterOpenClEditPipelinePrograms() {
                     .name = OpenCL::Pipeline::kFusedProgramName,
                     .source_paths =
                         {
-                            ALCEDO_OPENCL_EDIT_PIPELINE_FUSED_PARAMS_CL,
-                            ALCEDO_OPENCL_EDIT_PIPELINE_COMMON_CL,
+                            ALCEDO_OPENCL_DAG_DRT_PARAMS_CL,
+                            ALCEDO_OPENCL_DAG_COMMON_CL,
                             ALCEDO_OPENCL_EDIT_PIPELINE_BASIC_CL,
                             ALCEDO_OPENCL_EDIT_PIPELINE_TONE_MAPPING_CL,
                             ALCEDO_OPENCL_EDIT_PIPELINE_COLOR_CL,
-                            ALCEDO_OPENCL_EDIT_PIPELINE_CST_CL,
+                            ALCEDO_OPENCL_DAG_CST_CL,
                             ALCEDO_OPENCL_EDIT_PIPELINE_FUSED_CL,
                             ALCEDO_OPENCL_EDIT_PIPELINE_FUSED_PARAMS_VALIDATION_CL,
                         },
@@ -39,8 +39,8 @@ void RegisterOpenClEditPipelinePrograms() {
                     .source_paths =
                         {
                             ALCEDO_OPENCL_PRNG_CL,
-                            ALCEDO_OPENCL_EDIT_PIPELINE_FUSED_PARAMS_CL,
-                            ALCEDO_OPENCL_EDIT_PIPELINE_COMMON_CL,
+                            ALCEDO_OPENCL_DAG_DRT_PARAMS_CL,
+                            ALCEDO_OPENCL_DAG_COMMON_CL,
                             ALCEDO_OPENCL_EDIT_PIPELINE_TONE_MAPPING_CL,
                             ALCEDO_OPENCL_EDIT_PIPELINE_COLOR_CL,
                             ALCEDO_OPENCL_EDIT_PIPELINE_DETAIL_COMMON_CL,

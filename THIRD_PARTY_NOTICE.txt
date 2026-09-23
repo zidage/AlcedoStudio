@@ -183,7 +183,7 @@ C) File-level adaptation pointers in this repository
 - alcedo/src/decoders/processor/operators/gpu/cuda_debayer_rcd.cu
   Includes RCD authorship header and algorithm attribution.
 
-- alcedo/src/include/edit/operators/GPU_kernels/color_mgmt/*.cuh
+- alcedo/src/include/edit/runtime/cuda/drt/*.cuh
   ACES core links are referenced in comments for ported formulas.
 
 D) Redistribution reminder

@@ -8,7 +8,7 @@
 #include <memory>
 #include <stdexcept>
 
-#include "edit/operators/cst/aces_odt_cpu.hpp"
+#include "edit/runtime/drt/aces_odt_runtime.hpp"
 
 namespace alcedo {
 namespace {

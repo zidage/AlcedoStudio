@@ -31,7 +31,7 @@ Attribution/source pointers for adapted files:
   Adapted from LuisSR/RCD-Demosaicing.
 - alcedo/src/decoders/processor/operators/gpu/cuda_debayer_rcd.cu
   CUDA adaptation of RCD demosaicing algorithm with upstream attribution.
-- alcedo/src/edit/operators/cst/open_drt_cpu.cpp
+- alcedo/src/edit/runtime/drt/open_drt_runtime.cpp
   Contains GPLv3-derived logic adapted from OpenDRT v1.1.0.
 
 If you redistribute this project, preserve this NOTICE file, THIRD_PARTY_NOTICE.txt,

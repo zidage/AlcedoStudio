@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-#include "json.hpp"
+#include "edit/operators/utils/color_utils.hpp"
 
 namespace alcedo {
 
@@ -154,6 +154,14 @@ struct MetalDrtGpuParams {
   float              display_linear_scale     = 1.0f;
 };
 
-[[nodiscard]] auto ResolveMetalDrtGpuParams(const nlohmann::json& odt_json) -> MetalDrtGpuParams;
+/**
+ * @brief Copy a resolved DRT output transform into the Metal DRT parameter layout.
+ *
+ * ACES 2.0 copies the four lookup tables inline. Pure value function.
+ *
+ * @throws std::runtime_error when an ACES 2.0 transform has no resolved tables.
+ */
+[[nodiscard]] auto PackMetalDrtGpuParams(const ColorUtils::TO_OUTPUT_Params& resolved)
+    -> MetalDrtGpuParams;
 
 }  // namespace alcedo

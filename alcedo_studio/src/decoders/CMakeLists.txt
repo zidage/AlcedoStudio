@@ -100,8 +100,6 @@ set(OPERATORS_SRCS
     ${ALCEDO_SRC_ROOT}/edit/operators/curve/curve_op.cpp
     ${ALCEDO_SRC_ROOT}/edit/operators/cst/cst_op.cpp
     ${ALCEDO_SRC_ROOT}/edit/operators/cst/lmt_op.cpp
-    ${ALCEDO_SRC_ROOT}/edit/operators/cst/aces_odt_cpu.cpp
-    ${ALCEDO_SRC_ROOT}/edit/operators/cst/open_drt_cpu.cpp
     ${ALCEDO_SRC_ROOT}/edit/operators/cst/odt_op.cpp
     ${ALCEDO_SRC_ROOT}/edit/operators/cst/film_grain_op.cpp
     ${ALCEDO_SRC_ROOT}/edit/operators/cst/halation_op.cpp
@@ -135,7 +133,7 @@ def_cuda_library(Operators
     SOURCES ${OPERATORS_SRCS}
     PUBLIC_DEPS ImageBuffer JSON OpenColorIO::OpenColorIO hwy::hwy puerhlab_lensfun
     # Image provides RawColorContextToJson/FromJson used by RawDecodeOp durable params.
-    PRIVATE_DEPS ${ALCEDO_OPENCV_IMAGE_DEPS} RawProcessor Image EditGraph
+    PRIVATE_DEPS ${ALCEDO_OPENCV_IMAGE_DEPS} RawProcessor Image EditGraph EditRuntimeDrt
 )
 if(ALCEDO_CUDA_ENABLED)
     set_target_properties(Operators PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)

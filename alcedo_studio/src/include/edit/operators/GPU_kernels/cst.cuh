@@ -9,10 +9,10 @@
 #include <texture_fetch_functions.h>
 #include <vector_functions.h>
 
-#include "color_mgmt/disp_enc_funcs.cuh"
-#include "color_mgmt/odt_funcs.cuh"
-#include "color_mgmt/open_drt_funcs.cuh"
-#include "color_mgmt/util_funcs.cuh"
+#include "edit/runtime/cuda/drt/disp_enc_funcs.cuh"
+#include "edit/runtime/cuda/drt/odt_funcs.cuh"
+#include "edit/runtime/cuda/drt/open_drt_funcs.cuh"
+#include "edit/runtime/cuda/drt/util_funcs.cuh"
 #include "edit/operators/op_kernel.hpp"
 #include "param.cuh"
 
@@ -223,7 +223,7 @@ struct GPU_OUTPUT_Kernel : GPUPointOpTag {
         make_float3(acescc_decode(p->x), acescc_decode(p->y), acescc_decode(p->z));
 
     float3 odt_color;
-    if (params.to_output_params_.method_ == GPU_ODTMethod::ACES_2_0) {
+    if (params.to_output_params_.method_ == CudaDrtMethod::ACES_2_0) {
       odt_color = OutputTransform_fwd(aces_linear, params.to_output_params_.aces_params_);
     } else {
       odt_color = OpenDRTTransform_fwd(aces_linear, params.to_output_params_.open_drt_params_);

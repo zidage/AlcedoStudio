@@ -7,8 +7,6 @@
 #include <cstring>
 #include <stdexcept>
 
-#include "edit/operators/cst/odt_op.hpp"
-
 namespace alcedo {
 namespace {
 
@@ -38,12 +36,8 @@ void CopyJmh(const ColorUtils::JMhParams& src, MetalDrtJmhParams& dst) {
 
 }  // namespace
 
-auto ResolveMetalDrtGpuParams(const nlohmann::json& odt_json) -> MetalDrtGpuParams {
-  ODT_Op         descriptor(nlohmann::json{{"odt", odt_json}});
-  OperatorParams cpu_params;
-  descriptor.SetGlobalParams(cpu_params);
-  const auto&                cpu = cpu_params.to_output_params_;
-  MetalDrtGpuParams          gpu;
+auto PackMetalDrtGpuParams(const ColorUtils::TO_OUTPUT_Params& cpu) -> MetalDrtGpuParams {
+  MetalDrtGpuParams gpu;
   gpu.method               = static_cast<std::int32_t>(cpu.method_);
   gpu.eotf                 = static_cast<std::int32_t>(cpu.eotf_);
   Copy33(cpu.limit_to_display_matx_, gpu.limit_to_display_matx);
@@ -80,7 +74,7 @@ auto ResolveMetalDrtGpuParams(const nlohmann::json& odt_json) -> MetalDrtGpuPara
   if (cpu.method_ == ColorUtils::ODTMethod::ACES_2_0) {
     if (!odt_cpu.table_reach_M_ || !odt_cpu.table_hues_ || !odt_cpu.table_upper_hull_gammas_ ||
         !odt_cpu.table_gamut_cusps_) {
-      throw std::runtime_error("ExecuteMetalDrt: ACES 2.0 tables were not resolved");
+      throw std::runtime_error("PackMetalDrtGpuParams: ACES 2.0 tables were not resolved");
     }
     std::memcpy(odt.table_reach_m, odt_cpu.table_reach_M_->data(), sizeof(odt.table_reach_m));
     std::memcpy(odt.table_hues, odt_cpu.table_hues_->data(), sizeof(odt.table_hues));

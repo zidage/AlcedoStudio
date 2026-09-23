@@ -7,7 +7,9 @@ Status: **in progress**. G10.1: automated criteria complete; manual Geometry pan
 as two commits because the diff passed the 2000-line limit (Section 11.12). G10.3: build-then-swap
 complete; manual Version/Paste check pending, and the last stage-JSON callers belong to G10.4 and
 G10.7 (Section 12.12). G10.4: legacy history store archived and removed from the compile
-graph, project format `0.9.0`; automated criteria complete (Section 13.12). G10.5–G10.11 planned.
+graph, project format `0.9.0`; automated criteria complete (Section 13.12). G10.5: DRT
+resolver and the three backend switches done; CUDA and OpenCL byte tests pass, Metal
+unavailable, diff above the 2000-line limit (Section 14.12). G10.6–G10.11 planned.
 
 Parent: [GPU DAG Pipeline Rebuild Phase Plan](gpu_dag_pipeline_rebuild_phase_plan.md),
 Section 44 (G10) and Section 47 (global completion criteria).
@@ -624,7 +626,7 @@ lines. Generated expected-pixel files and temporary evidence do not count.
 | G10.2 | Live edit, commit, Undo, Redo use the document only | history mutation, edit controller, render port | G10.1 | 1200–1800 | partial (manual check pending; split into two commits) |
 | G10.3 | Open, checkout, rebuild, Version refs, Paste use build-then-swap without stage JSON | pipeline service, history state, transfer | G10.2 | 1200–1800 | partial (manual check pending) |
 | G10.4 | Legacy history store removed; project format `0.9.0` | sleeve, storage, history, journal, CI | G10.3 | 900–1500 | complete (1.7k lines; Section 13.12) |
-| G10.5 | DRT resolution moved out of `ODT_Op` and `OperatorParams` on three backends | runtime DRT | G10.1 | 1300–1900 | planned |
+| G10.5 | DRT resolution moved out of `ODT_Op` and `OperatorParams` on three backends | runtime DRT | G10.1 | 1300–1900 | in progress (Metal unavailable; 2.6k lines in two commits) |
 | G10.6 | Lens resolver, CUDA detail and grain helpers, shared headers, shaders, and scope target moved | runtime, CMake | G10.5 | 1000–1700 | planned |
 | G10.7 | Executor and services have no stage table; history presentation uses `field_key` | executor, services, presentation | G10.3, G10.6 | 1400–1900 | planned |
 | G10.8 | `CPUPipelineExecutor` renamed to `PipelineExecutor` | all users | G10.7 | 500–900 | planned |
@@ -2060,10 +2062,11 @@ ctest --test-dir build/macos-debug-tests -R "GpuDagMetalDrtTest|GpuDagMetalRende
 
 ### 14.10 Exit criteria
 
-- [ ] Byte tests pass on CUDA and OpenCL on Windows and on Metal on macOS.
-- [ ] If no macOS runner is available, the phase stays `in progress`. The record says
+- [ ] Byte tests pass on CUDA and OpenCL on Windows and on Metal on macOS. (CUDA and OpenCL:
+      pass. Metal: unavailable; Section 14.12.)
+- [x] If no macOS runner is available, the phase stays `in progress`. The record says
       `Metal: unavailable`, not `pass`.
-- [ ] The source check passes.
+- [x] The source check passes.
 
 ### 14.11 Expected diff
 
@@ -2072,6 +2075,217 @@ ctest --test-dir build/macos-debug-tests -R "GpuDagMetalDrtTest|GpuDagMetalRende
 ### 14.12 Completion record
 
 Use the template in Section 10.12.
+
+#### Phase G10.5 completion record (2026-09-23)
+
+**Status:** in progress. All Windows criteria are met: the CUDA and OpenCL byte tests, the CUDA
+pixel test, the resolver tests, and the source check pass. Metal: unavailable (no macOS runner in
+this session), so the phase stays in progress (Section 14.10, second item). The diff is above the
+2000-line limit of Section 24 (see "Diff size").
+
+- **Source revision and branch:** based on `0cf45f45` (G10.4 merged) on
+  `refact/gpu-dag-g10-5-drt-output-resolver`. Two commits: `6ead5394` (production code) and the
+  commit that follows it (tests, expected data, `.gitignore` exception, this record).
+- **Expected data tracking:** the root `.gitignore` ignores `*.bin`. Two negation rules keep the
+  `.bin` files under `alcedo_studio/tests/resources/expected_parameters/` and
+  `expected_pixels/` in Git.
+- **Actual changed modules:** `edit/runtime/drt/` (new), the `edit/runtime/{cuda,opencl,metal}`
+  DRT passes and packers, `include/edit/runtime/{drt,cuda,cuda/drt,opencl}`, the legacy headers
+  `param.cuh`, `opencl_param.hpp`, `cst.cuh`, `halation.cuh`, `odt_op.{hpp,cpp}`,
+  `drt_display.hpp`, `OpenClProgramLibrary`, the OpenCL program registry and its CMake, the `edit/`
+  and `decoders/` CMake, `NOTICE`, `THIRD_PARTY_NOTICE.txt`, and tests.
+
+**Implemented behavior**
+
+- `DrtOutputResolver::Resolve(const DrtPayload&, const ExportColorProfileConfig*,
+  TO_OUTPUT_Params*, std::string*) -> bool` maps the DRT node enums directly to `ColorUtils`
+  values. It returns false with a message, and leaves the output unchanged, for an unknown method,
+  encoding space, limiting space, or EOTF; a non-positive peak luminance; or an OpenDRT encoding
+  pair that the precompute rejects. It never substitutes a default.
+  `ResolveNode(const DrtNodeModel&, optional export encoding, caller)` copies the payload through
+  `DrtParamsModel::Params()` (so the ACES and OpenDRT precompute does not run under the Model lock;
+  the old path made the same copy through `ToJson()`) and throws `"<caller>: <message>"`.
+- The export encoding override is an argument of the resolver, not a JSON overlay. It keeps the
+  old mapping: Rec.2020 and P3-D65 pass through, every other export space encodes as Rec.709.
+  `OverlayExportColorOnDrtJson` had no other user and is removed.
+- The CPU math moved with `git mv`: `open_drt_cpu.*` and `aces_odt_cpu.*` are now
+  `edit/runtime/drt/{open_drt,aces_odt}_runtime.*` (namespace `odt_cpu` kept; only the include
+  paths and one error prefix changed). They build in the new static library `EditRuntimeDrt`
+  (resolver and math). `EditRuntime` links it publicly and `Operators` links it privately, the
+  same way `Operators` already links `EditGraph`.
+- CUDA: `include/edit/runtime/cuda/cuda_drt_gpu_params.cuh` defines `CudaDrtGpuParams` and its
+  nested structs, `CudaDrtMethod`, `CudaDrtEotf`, and `CreateCudaDrtTable`, with the pre-G10.5
+  field names. `static_assert`s pin the size and every top-level field offset to the values of the
+  old `GPU_TO_OUTPUT_Params` on MSVC x64 / CUDA 12.8 (printed from the old type at `0cf45f45`).
+  The eight `color_mgmt/*.cuh` device headers moved to `include/edit/runtime/cuda/drt/` and use the
+  new types. `CudaDrtRuntimeState` (public header, `.cpp` in `EditRuntimeCuda`) replaces the
+  `OperatorParams` + `GPUOperatorParams` pair: `Pack(resolved)` copies the scalars and uploads the
+  four ACES tables only when the host table identity changes, as the old uploader did.
+- OpenCL: lines 27–169 of `opencl_param.hpp` moved to
+  `include/edit/runtime/opencl/opencl_drt_gpu_params.hpp` with size and offset `static_assert`s.
+  `ResolveOpenClDrtParams(json)` became `PackOpenClDrtParams(const TO_OUTPUT_Params&)`.
+  `fused_params.cl` (renamed `drt_params.cl`), `common.cl`, and `cst.cl` moved to
+  `edit/runtime/opencl/shader/`. The defines are now `ALCEDO_OPENCL_DAG_{DRT_PARAMS,COMMON,CST}_CL`
+  and the include guards no longer contain `EDIT_PIPELINE`. The legacy `edit_pipeline` manifest
+  uses the new defines. `OpenClProgramLibrary::RegisteredSourcePaths` (read-only, no build) lets
+  the test check the registered paths.
+- Metal: `ResolveMetalDrtGpuParams(json)` became `PackMetalDrtGpuParams(const TO_OUTPUT_Params&)`;
+  `MetalDrtGpuParams` is unchanged.
+- The three DRT passes call `PackXxx(DrtOutputResolver::ResolveNode(drt,
+  plan.output_color_override, kErrorPrefix))` at the same point as before (slot missing, DRT
+  fields dirty, or export override), so resolution still runs at parameter-dirty time.
+- New source check `RuntimeSourcesDoNotIncludeLegacyOperatorHeaders` and its negative fixture
+  `RuntimeLegacyHeaderCheckRejectsRuntimeInclude`.
+
+**Deviations from Sections 14.3–14.8**
+
+- `PackCudaDrtParams` is the method `CudaDrtRuntimeState::Pack`, because the ACES tables are
+  device allocations that the state owns and reuses across packs (Section 7.2 listed a pure
+  function).
+- The CUDA device headers moved to `include/edit/runtime/cuda/drt/`, not `edit/runtime/cuda/drt/`,
+  because the legacy `cst.cuh` and `halation.cuh` under `include/` include them until G10.9.
+- The JSON helpers of `odt_op.cpp` (lines 16–138) did not move: the resolver reads the typed
+  `DrtPayload`, so only `ODT_Op` needs them, and G10.9 archives it. `ODT_Op::RebuildRuntime` keeps
+  its own copy of the rebuild (about 25 lines) until then.
+- `param.cuh` keeps the legacy names as aliases (`GPU_TO_OUTPUT_Params = CudaDrtGpuParams`, and so
+  on) so that the legacy CUDA pipeline and its stage tests compile until G10.9. The
+  `static_assert`s compare against recorded numbers, because the old type no longer exists.
+- The CUDA byte comparison uses a canonical form: the struct bytes with alignment padding, texture
+  handles, device pointers, and host table identities set to zero, followed by the four device
+  table contents read back from the GPU. The old path left the padding uninitialized (the writer
+  saw MSVC's `0xcc` fill at bytes 4–7 and 1100–1103); the kernel reads none of those bytes. The
+  OpenCL and Metal structs have no padding and no handles and are compared whole.
+- On an ACES → OpenDRT switch, `Pack` resets the unused ACES scalars to their defaults; the old
+  uploader released only the tables and kept stale scalars. The OpenDRT kernel branch does not read
+  them, and `CudaDrtRuntimeStateRepacksAfterMethodSwitch` proves that a switched state packs the
+  same canonical bytes as a fresh one.
+- The root `CMakeLists.txt` install blocks did not change: both already install the whole
+  `edit/runtime/opencl/shader/` directory, which now contains the moved files.
+- `EditRuntimeCuda`, `EditRuntimeOpenCl`, and `EditRuntimeMetal` still link `Operators`, because
+  the develop passes use `LensCalibOp` and the lens kernels (G10.6).
+
+**Expected data (generated before the change)**
+
+A temporary writer (outside the source tree, removed afterwards) packed the 12-row matrix of
+Section 14.5 through `ODT_Op` + `GPUParamsConverter` / `ResolveOpenClDrtParams` /
+`ResolveMetalDrtGpuParams` at `0cf45f45` and wrote 36 files to
+`alcedo_studio/tests/resources/expected_parameters/drt/`. Two runs were byte-identical. Rows:
+{`aces20`, `opendrt_standard`, `opendrt_arriba`} × {`rec709_gamma22`, `p3d65_gamma22`,
+`rec2020_pq_1000nit`, `rec2020_hlg_1000nit`}, with the limiting space equal to the encoding space.
+The CUDA pixel files in `alcedo_studio/tests/resources/expected_pixels/drt/` were rendered by
+`CudaDrtOutputMatchesStoredExpectedPixels` at `0cf45f45` (16×12 ramp, default document, ACES 2.0
+and OpenDRT). The Metal files come from the same CPU packer compiled by MSVC x64, because no macOS
+runner was available. A temporary MSVC harness proved that `PackMetalDrtGpuParams` reproduces all
+12 Metal files after the change. If the macOS run differs only in ACES table bits, regenerate the
+Metal files from `0cf45f45` on macOS (compiler floating-point contraction can differ). Do not widen
+the test to a tolerance (Section 24).
+
+**Primary success call chain:**
+
+```text
+Renderer<Backend>::Render -> PlanExecutor -> DrtPostExecutor<XxxDrtOps>::Execute
+  -> XxxDrtOps::BindDisplayParams (slot missing, DRT fields dirty, or export override)
+  -> DrtOutputResolver::ResolveNode(drt, plan.output_color_override, "ExecuteXxxDrt")
+       DrtParamsModel::Params()                      (payload copy under the Model lock)
+       DrtOutputResolver::Resolve -> TO_OUTPUT_Params
+         ACES 2.0: odt_cpu::ResolveACESODTRuntime (cached tables), limit-to-display matrix
+         OpenDRT:  odt_cpu::ResolveOpenDRTRuntime, ResolveOpenDRTDisplayLinearScale
+  -> CUDA:   CudaRenderDevice::DrtRuntime().Pack -> CudaDrtGpuParams (tables uploaded on change)
+     OpenCL: PackOpenClDrtParams -> OpenClToOutputParams
+     Metal:  PackMetalDrtGpuParams -> MetalDrtGpuParams
+  -> ParameterArena::BindOrWritePackedSlot -> dirty-range upload -> DRT kernel
+```
+
+**Primary failure call chain:**
+
+```text
+DRT node holds an unknown EOTF (or method, space, non-positive peak, unsupported OpenDRT pair)
+  -> DrtOutputResolver::Resolve returns false; no transform is produced
+  -> ResolveNode throws "ExecuteCudaDrt: DrtOutputResolver: unsupported DRT encoding EOTF 42."
+  -> the DRT pass stops before the slot write; the render publishes no drt.display image
+  -> the exception reaches the caller (Renderer -> PipelineScheduler)
+  -> after the parameter is valid again, the same device renders and publishes drt.display
+```
+
+**What was proven (executed tests)**
+
+| Required name | Target | Result |
+| --- | --- | --- |
+| `CudaDrtParameterBytesMatchStoredExpectedBytes` | `GpuDagCudaDrtProductTest` | PASS (12 rows) |
+| `OpenClDrtParameterBytesMatchStoredExpectedBytes` | `GpuDagOpenClDrtProductTest` | PASS (12 rows) |
+| `MetalDrtParameterBytesMatchStoredExpectedBytes` | `GpuDagMetalDrtTest` (macOS) | Metal: unavailable (not built); temporary MSVC harness: 12 of 12 equal |
+| `DrtOutputResolverRejectsUnknownEncodingEotf` | `GpuDagModelGraphTest` | PASS |
+| `CudaDrtOutputMatchesStoredExpectedPixels` | `GpuDagCudaDrtProductTest` | PASS (≤ 1/4096 per channel) |
+| `RuntimeSourcesDoNotIncludeLegacyOperatorHeaders` | ctest script (176 runtime files) | PASS |
+| `OpenClDrtProgramBuildsFromRuntimeShaderDirectory` | `GpuDagOpenClDrtProductTest` | PASS |
+| `DrtOutputResolverRejectsUnknownMethodAndColorSpaces` (added) | `GpuDagModelGraphTest` | PASS |
+| `DrtOutputResolverRejectsNonPositivePeakLuminance` (added) | `GpuDagModelGraphTest` | PASS |
+| `DrtOutputResolverRejectsUnsupportedOpenDrtEncodingPair` (added) | `GpuDagModelGraphTest` | PASS |
+| `AcesResolutionFillsTablesAndPqDisplayScale` (added) | `GpuDagModelGraphTest` | PASS |
+| `ExportEncodingReplacesPayloadEncodingButNotLimitingSpace` (added) | `GpuDagModelGraphTest` | PASS |
+| `ResolveNodeThrowsWithCallerPrefixAndReadsNodeParameters` (added) | `GpuDagModelGraphTest` | PASS |
+| `CudaDrtRuntimeStateRepacksAfterMethodSwitch` (added) | `GpuDagCudaDrtProductTest` | PASS |
+| `CudaDrtRejectsUnknownEotfWithoutPublishingDisplay` (added) | `GpuDagCudaDrtProductTest` | PASS |
+| `RuntimeLegacyHeaderCheckRejectsRuntimeInclude` (added) | ctest script | PASS |
+
+**Build and test commands with exit codes**
+
+```text
+cmd /c scripts\msvc_env.cmd --preset win_debug -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake"   -> exit 0
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 -- -k 0   -> exit 0 (full tree)
+ctest --test-dir build/debug -j 1 -R "<phase set>"   -> exit 0
+ctest --test-dir build/debug -j 1 -R "<wide set>"    -> exit 8 (8 failures from before this phase)
+```
+
+Phase set regex: `GpuDagCudaDrtProductTest|GpuDagOpenClDrtProductTest|GpuDagModelGraphTest|
+ODTOpTest|legacy_removal|NoProductCode|StageTable|StageJson|LegacyHistory|SourceReferencesLegacy`
+(after the change, also `RuntimeSources|RuntimeLegacyHeader`). Wide set regex: `GpuDag|
+OpenClRuntime|OpenClProgram|HalationCuda|FilmGrainCuda|HalationOp|FilmGrainOp|ExportService|
+PipelineSharedUse|ToneMapping|CudaPreview|PipelineFrameSink|EditorGeometryOverlay`.
+
+**Discovered / passed / failed / skipped counts**
+
+- Baseline (`0cf45f45`, phase set, `-j 1`): 189 run, 189 passed. This count includes
+  `CudaDrtOutputMatchesStoredExpectedPixels`, which was added first to write the expected pixels.
+- After the change (phase set, `-j 1`): 203 run, 203 passed (14 added).
+- Wide set after the change (`-j 1`): 722 run, 714 passed, 8 failed, 2 disabled. The 8 failures
+  also fail at `0cf45f45`. Proof: this change was stashed, the five targets were rebuilt, and the
+  8 tests were run again (0 of 8 passed). The failures:
+  `GpuDagCudaWorkspace.GpuAndRuntimeHeadersDoNotIncludeCudaOrImageBuffer` and
+  `…RendererTemplateInstantiatesCudaWithoutMetalHeaders` (the word `OpenCL` in
+  `basic_render_device.hpp:138` and `renderer.hpp:240`, files this phase does not touch),
+  `CudaGeometryFixture.CropRotateViewportAndScaleExecuteAsOneCudaResample`,
+  `CudaDevelopFixture.CanonDngProfileRendersAtFullResolutionAndInvalidatesOnlyColorCache`,
+  `CudaDevelopFixture.SwitchingHighlightReconstructionDoesNotKeepStalePublishedTextures`,
+  `OpenClDevelopFixture.CanonDngProfileRendersAtFullResolutionAndInvalidatesOnlyColorCache`,
+  `OpenClDevelopFixture.OpenClCameraColorConsumesSharedDualIlluminantTransform`, and
+  `ExportServiceTests.ExportHdrJpeg_WritesUltraHdrFile` (`resource deadlock would occur`).
+
+**Other evidence**
+
+- Manual verification: none required by Section 14.10.
+- Evidence path: `build/tmp/g10_5/` (`baseline_build*.log`, `baseline_ctest.log`,
+  `writer_run{1,2}.log` with the old layout offsets, `expected_run{1,2}/`, `expected_canonical/`,
+  `pixel_write.log`, `build.log`, `build_full.log`, `build_final.log`, `ctest.log`, `ctest_2.log`,
+  `ctest_final.log`, `ctest_wide.log`, `metal_pack_check.log`, `baseline_ab_build.log`,
+  `baseline_ab_ctest.log`).
+- Diff size (rename detection on, expected data excluded): 55 files, 1965 added and 610 removed,
+  2575 lines. This is above the 1300–1900 estimate and above the 2000-line limit. About 470 added
+  lines are the CUDA and OpenCL parameter structs relocated out of `param.cuh` and
+  `opencl_param.hpp` (counted once as removed and once as added), and about 650 are tests. It
+  landed as two commits, each below 2000 lines: `6ead5394` (production code and the two test
+  lines it needs to build: 48 files, 1855 lines) and the test commit (tests, expected data,
+  `.gitignore` exception, and this record). The first commit was not built on its own; the
+  build evidence above is for the two commits together.
+- LOC note: the largest new files are `cuda_drt_gpu_params.cuh` (335), `drt_output_resolver.cpp`
+  (242), `cuda_drt_runtime_state.cpp` (223), and `cuda_drt_expected_output_test.cpp` (242).
+  `param.cuh` lost 248 lines and `opencl_param.hpp` 145. No changed file is above 1000 lines
+  except the moved `open_drt_runtime.cpp` (1324; two lines changed).
+- Remaining defects or unavailable platforms: Metal: unavailable. `drt_params.cl`, `common.cl`,
+  and `cst.cl` still contain the legacy `OpenClFusedParams` struct and the functions that only the
+  legacy `edit_pipeline` programs use; G10.10 removes those programs and can trim the files. The
+  CUDA runtime still reaches `param.cuh` indirectly through `cuda_neighbor_grade.cuh`
+  (`detail.cuh`, `film_grain.cuh`), which is G10.6 scope; the source check tests direct includes.
 
 ---
 
