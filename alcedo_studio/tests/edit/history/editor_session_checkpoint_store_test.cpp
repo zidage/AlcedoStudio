@@ -8,11 +8,14 @@
 
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
+#include <string>
 #include <thread>
+#include <vector>
 
 #include "app/editor_mini_git_materializer.hpp"
 #include "app/editor_save_checkpoint_coordinator.hpp"
@@ -265,6 +268,40 @@ TEST_F(EditorSessionCheckpointStoreTest, MiniGitCheckpointDoesNotInvokeLegacyMat
   alcedo::MiniGitJournal reopened(journal_path_);
   ASSERT_TRUE(reopened.Load(&error)) << error;
   EXPECT_TRUE(reopened.records().empty());
+}
+
+/// G10.4: a save writes only the Mini-Git journal. With the production journal layout
+/// (`<project>/editor-journal/image-<id>.mini-git.wal`), no legacy `image-<id>.wal` file is
+/// created and the Mini-Git journal is the only file in the directory after the save.
+TEST_F(EditorSessionCheckpointStoreTest, SaveDoesNotOpenLegacyImageJournal) {
+  const auto journal_dir = db_path_.parent_path() / (db_path_.stem().string() + "-editor-journal");
+  std::error_code ec;
+  std::filesystem::create_directories(journal_dir, ec);
+  ASSERT_FALSE(ec) << ec.message();
+  const auto element_name = std::to_string(static_cast<std::uint64_t>(element_id_));
+  journal_path_           = journal_dir / ("image-" + element_name + ".mini-git.wal");
+  const auto legacy_path  = journal_dir / ("image-" + element_name + ".wal");
+
+  const auto  capture = CaptureEdit();
+  std::string error;
+  const auto  result = store_->Materialize(
+      std::make_shared<const alcedo::EditorMiniGitSaveCapture>(capture), &error);
+  ASSERT_TRUE(result.accepted) << error << " / " << result.error;
+  ASSERT_TRUE(result.materialized);
+
+  EXPECT_FALSE(std::filesystem::exists(legacy_path));
+  std::vector<std::filesystem::path> files;
+  for (const auto& entry : std::filesystem::directory_iterator(journal_dir)) {
+    files.push_back(entry.path().filename());
+  }
+  ASSERT_EQ(files.size(), 1u);
+  EXPECT_EQ(files.front(), journal_path_.filename());
+
+  alcedo::MiniGitJournal reopened(journal_path_);
+  ASSERT_TRUE(reopened.Load(&error)) << error;
+  EXPECT_TRUE(reopened.records().empty());
+
+  std::filesystem::remove_all(journal_dir, ec);
 }
 
 /// Phase 4A: capture failure / rejected materialize writes nothing and keeps journal bytes.

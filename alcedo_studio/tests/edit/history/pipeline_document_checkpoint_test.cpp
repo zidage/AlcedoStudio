@@ -53,7 +53,7 @@ auto MultiGradeDocument() -> PipelineDocument {
 }  // namespace
 
 TEST(PipelineHistoryFormatTable, PublishedConstantsIdentifyTheDocumentHistoryCutover) {
-  EXPECT_EQ(kProjectFileVersion, "0.8.0");
+  EXPECT_EQ(kProjectFileVersion, "0.9.0");
   EXPECT_EQ(kMinSupportedProjectFileVersion, kProjectFileVersion);
   EXPECT_EQ(kMaxSupportedProjectFileVersion, kProjectFileVersion);
   EXPECT_EQ(kPackedProjectFormatVersion, 7u);
@@ -67,6 +67,7 @@ TEST(PipelineHistoryFormatTable, PublishedConstantsIdentifyTheDocumentHistoryCut
   EXPECT_EQ(kMiniGitJournalRecordFormatVersion, 6u);
   EXPECT_EQ(kAdjustmentTransferSchema, "alcedo.adjustment_transfer.v6");
   EXPECT_TRUE(project_pack::ProjectVersionIsSupported(kProjectFileVersion));
+  EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.8.0"));
   EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.7.0"));
   EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.5.0"));
   EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.3.0"));

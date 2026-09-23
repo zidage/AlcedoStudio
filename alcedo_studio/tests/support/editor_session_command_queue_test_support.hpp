@@ -256,26 +256,20 @@ class ControllableEditorHistoryPort : public FakeEditorHistoryPort {
   }
 };
 
-/// Journal port that records when the save checkpoint starts, for the
-/// durable-publication ordering tests. `CommitJournalAsync` logs
-/// `save_started` before the (inline) save proceeds, so the test can compare
-/// save-start vs. version-create/merge-commit order.
-class OrderRecordingJournalPort : public FakeEditorJournalPort {
+/// Checkpoint store that records when the save checkpoint starts, for the
+/// durable-publication ordering tests. `MaterializeAsync` logs `save_started`
+/// before the (inline or deferred) materialization proceeds, so the test can
+/// compare save-start vs. version-create/merge-commit order.
+class OrderRecordingCheckpointStore final : public FakeEditorCheckpointStore {
  public:
   std::vector<std::string>* event_log = nullptr;
 
-  auto CommitJournalAsync(sl_element_id_t element_id, std::uint64_t session_generation,
-                          EditorJournalCommitCallback callback) -> bool override {
-    record("save_started");
-    return FakeEditorJournalPort::CommitJournalAsync(element_id, session_generation,
-                                                     std::move(callback));
-  }
-
- private:
-  void record(std::string event) {
+  auto MaterializeAsync(std::shared_ptr<const EditorMiniGitSaveCapture> capture,
+                        EditorMaterializeCallback callback) -> bool override {
     if (event_log != nullptr) {
-      event_log->push_back(std::move(event));
+      event_log->push_back("save_started");
     }
+    return FakeEditorCheckpointStore::MaterializeAsync(std::move(capture), std::move(callback));
   }
 };
 

@@ -27,7 +27,6 @@
 #include "ui/alcedo_main/album_backend/editor_node_controller.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_checkpoint_store.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_history_port.hpp"
-#include "ui/alcedo_main/album_backend/editor_session_journal_writer_port.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_task_port.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_thumbnail_port.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
@@ -137,21 +136,6 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
       }
       return project_->handler().project()->GetStorage();
     };
-    std::function<std::filesystem::path(sl_element_id_t)> journal_path =
-        [this](sl_element_id_t element_id) {
-          if (!project_) {
-            return std::filesystem::path{};
-          }
-          auto root = project_->handler().db_path().parent_path();
-          if (root.empty()) {
-            root = project_->handler().workspace_dir();
-          }
-          if (root.empty()) {
-            return std::filesystem::path{};
-          }
-          return root / "editor-journal" /
-                 ("image-" + std::to_string(static_cast<std::uint64_t>(element_id)) + ".wal");
-        };
     std::function<std::filesystem::path(sl_element_id_t)> mini_git_journal_path =
         [this](sl_element_id_t element_id) {
           if (!project_) {
@@ -193,8 +177,6 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     session_history->SetServices(EditorSessionHistoryPort::Services{mini_git_journal_path});
     session_history->SetPipelinePort(session_pipeline);
     session_scheduler->SetServices(EditorSessionSchedulerServices{image_pool});
-    auto session_journal = std::make_shared<EditorSessionJournalWriterPort>(
-        EditorSessionJournalWriterPort::Services{journal_path});
     // One project-owned global save lock for capture → materialize → terminal
     // callback. Shared by EditorSaveCheckpointService and Mini-Git materializer.
     auto save_coordinator   = std::make_shared<alcedo::EditorSaveCheckpointCoordinator>();
@@ -208,7 +190,7 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     // pacing deadlines, and serial frame consumption never wait on the GUI
     // thread's event loop or window-update waits.
     editor_session_runtime_ = alcedo::EditorSessionRuntime::CreateWithPorts(
-        session_pipeline, session_history, session_tasks, session_journal, session_scheduler,
+        session_pipeline, session_history, session_tasks, session_scheduler,
         session_checkpoint, session_thumbnail, save_coordinator,
         std::make_shared<alcedo::EditorSessionThreadedCommandExecutor>());
     // Completion is forward: coordinator installs on_complete at Schedule.

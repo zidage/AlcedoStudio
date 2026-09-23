@@ -42,7 +42,6 @@ class Database {
       "CREATE TABLE FileImage (file_id BIGINT, image_id BIGINT);"
       "CREATE TABLE ComboFolder (combo_id BIGINT, folder_id BIGINT);"
       "CREATE TABLE Filter (combo_id BIGINT, type INTEGER, data JSON);"
-      "CREATE TABLE EditHistory (file_id BIGINT PRIMARY KEY, history JSON);"
       "CREATE TABLE PipelineParam(file_id BIGINT PRIMARY KEY, param_json JSON);"
       // Mini-Git commit graph: immutable commits, Version refs, and per-image edit state.
       "CREATE TABLE EditCommit ("
@@ -161,31 +160,9 @@ class Database {
       "WHERE NOT EXISTS (SELECT 1 FROM SemanticModel WHERE active = TRUE) "
       "ORDER BY created_at DESC, model_key DESC LIMIT 1);";
 
-  // Phase 5f: AI image understanding + rating annotation tables. CREATE IF NOT EXISTS
-  // so this runs migration-safely on BOTH the fresh-DB and existing-DB paths (see
-  // InitializeDB). Foreign key is file_id = the Sleeve element id / inode, the same key
-  // the CLIP embeddings bind to (not the image id). PRIMARY KEY (file_id, task_id)
-  // makes insert_or_replace enforce "at most one row per pair", hence at most one
-  // active-for-search understanding per (file_id, task_id). Every text column is NOT
-  // NULL DEFAULT '' so the duckorm select path (which would turn a NULL cell into
-  // string(nullptr) and crash) never sees a NULL text value; updated_at is excluded from
-  // inserts and re-stamped on each upsert, so it doubles as last-write time. Rating is
-  // NOT part of full-text search: it is stored here only, and the search-document
-  // builder (sleeve_filter_service) intentionally reads the understanding table alone.
-  // Editor recovery metadata for atomic history/pipeline materialization.
-  // CREATE IF NOT EXISTS so existing project databases gain the table in place.
-  constexpr static const char* editor_recovery_metadata_table_query =
-      "CREATE TABLE IF NOT EXISTS EditorRecoveryMetadata ("
-      "file_id BIGINT PRIMARY KEY,"
-      "version_id VARCHAR NOT NULL DEFAULT '',"
-      "journal_generation UBIGINT NOT NULL DEFAULT 0,"
-      "materialized_operation_sequence UBIGINT NOT NULL DEFAULT 0,"
-      "transaction_chain_hash VARCHAR NOT NULL DEFAULT '',"
-      "pipeline_parameter_hash VARCHAR NOT NULL DEFAULT '');";
-
   // Mini-Git commit-graph tables. CREATE IF NOT EXISTS keeps the existing-DB open path
   // aligned with fresh projects; incompatible older project packages are rejected by
-  // project_file_version 0.6.0 before history is loaded. Root and checkpoint JSON
+  // project_file_version 0.9.0 before history is loaded. Root and checkpoint JSON
   // store full PipelineDocument JSON from EncodePipelineRootState /
   // EncodePipelineDocumentCheckpoint, not CPU parameter tables.
   constexpr static const char* commit_graph_table_query =
@@ -221,6 +198,17 @@ class Database {
       "element_id BIGINT UNIQUE NOT NULL,"
       "serialized_pipeline_state JSON NOT NULL);";
 
+  // Phase 5f: AI image understanding + rating annotation tables. CREATE IF NOT EXISTS
+  // so this runs migration-safely on BOTH the fresh-DB and existing-DB paths (see
+  // InitializeDB). Foreign key is file_id = the Sleeve element id / inode, the same key
+  // the CLIP embeddings bind to (not the image id). PRIMARY KEY (file_id, task_id)
+  // makes insert_or_replace enforce "at most one row per pair", hence at most one
+  // active-for-search understanding per (file_id, task_id). Every text column is NOT
+  // NULL DEFAULT '' so the duckorm select path (which would turn a NULL cell into
+  // string(nullptr) and crash) never sees a NULL text value; updated_at is excluded from
+  // inserts and re-stamped on each upsert, so it doubles as last-write time. Rating is
+  // NOT part of full-text search: it is stored here only, and the search-document
+  // builder (sleeve_filter_service) intentionally reads the understanding table alone.
   constexpr static const char* ai_annotation_table_query =
       "CREATE TABLE IF NOT EXISTS AiImageUnderstanding ("
       "file_id BIGINT NOT NULL,"

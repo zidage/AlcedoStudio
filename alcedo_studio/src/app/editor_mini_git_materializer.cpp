@@ -75,17 +75,16 @@ auto ValidateSaveCapture(const EditorMiniGitSaveCapture& capture, std::string* e
     SetError(error, "mini-Git journal records do not match the captured sequence range");
     return false;
   }
-  std::uint64_t expected = *capture.first_journal_sequence;
+  // Sequences are identities, not counts: a revoked tail record (failed undo,
+  // redo or edit publish) and a truncated prefix both leave gaps by design, and
+  // the journal never reuses a sequence. Require the same strict order Load does.
+  std::uint64_t previous = 0;
   for (const auto& record : capture.journal_records) {
-    if (record.sequence != expected) {
-      SetError(error, "mini-Git journal capture sequence numbers are not contiguous");
+    if (record.sequence <= previous) {
+      SetError(error, "mini-Git journal capture sequence numbers are not strictly increasing");
       return false;
     }
-    ++expected;
-  }
-  if (expected - 1 != *capture.last_journal_sequence) {
-    SetError(error, "mini-Git journal capture sequence range length mismatch");
-    return false;
+    previous = record.sequence;
   }
   return true;
 }

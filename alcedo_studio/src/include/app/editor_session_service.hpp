@@ -497,7 +497,6 @@ class EditorSessionService final : public IEditorSessionBackend {
     std::shared_ptr<IEditorPipelinePort>             pipeline;
     std::shared_ptr<IEditorHistoryPort>              history;
     std::shared_ptr<IEditorTaskPort>                 tasks;
-    std::shared_ptr<IEditorJournalPort>              journal;
     std::shared_ptr<IEditorCheckpointStore>          checkpoint_store;
     std::shared_ptr<IEditorThumbnailPort>            thumbnails;
     std::shared_ptr<IEditorRenderSubmitPort>         render;

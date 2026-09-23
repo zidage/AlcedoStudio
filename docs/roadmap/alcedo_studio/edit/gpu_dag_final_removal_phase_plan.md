@@ -6,7 +6,8 @@ Status: **in progress**. G10.1: automated criteria complete; manual Geometry pan
 (Section 10.12). G10.2: automated criteria complete; manual Exposure/Undo/Redo check pending; landed
 as two commits because the diff passed the 2000-line limit (Section 11.12). G10.3: build-then-swap
 complete; manual Version/Paste check pending, and the last stage-JSON callers belong to G10.4 and
-G10.7 (Section 12.12). G10.4–G10.11 planned.
+G10.7 (Section 12.12). G10.4: legacy history store archived and removed from the compile
+graph, project format `0.9.0`; automated criteria complete (Section 13.12). G10.5–G10.11 planned.
 
 Parent: [GPU DAG Pipeline Rebuild Phase Plan](gpu_dag_pipeline_rebuild_phase_plan.md),
 Section 44 (G10) and Section 47 (global completion criteria).
@@ -622,7 +623,7 @@ lines. Generated expected-pixel files and temporary evidence do not count.
 | G10.1 | No product code reads stage-table values except the mirror itself; Geometry panel shows the uncropped source | scheduler, import, transfer, lens catalog, executor, render request | — | 1200–1700 | partial (manual check pending) |
 | G10.2 | Live edit, commit, Undo, Redo use the document only | history mutation, edit controller, render port | G10.1 | 1200–1800 | partial (manual check pending; split into two commits) |
 | G10.3 | Open, checkout, rebuild, Version refs, Paste use build-then-swap without stage JSON | pipeline service, history state, transfer | G10.2 | 1200–1800 | partial (manual check pending) |
-| G10.4 | Legacy history store removed; project format `0.9.0` | sleeve, storage, history, journal, CI | G10.3 | 900–1500 | planned |
+| G10.4 | Legacy history store removed; project format `0.9.0` | sleeve, storage, history, journal, CI | G10.3 | 900–1500 | complete (1.7k lines; Section 13.12) |
 | G10.5 | DRT resolution moved out of `ODT_Op` and `OperatorParams` on three backends | runtime DRT | G10.1 | 1300–1900 | planned |
 | G10.6 | Lens resolver, CUDA detail and grain helpers, shared headers, shaders, and scope target moved | runtime, CMake | G10.5 | 1000–1700 | planned |
 | G10.7 | Executor and services have no stage table; history presentation uses `field_key` | executor, services, presentation | G10.3, G10.6 | 1400–1900 | planned |
@@ -1735,11 +1736,12 @@ unrelated link lines.
 
 ### 13.10 Exit criteria
 
-- [ ] All listed tests pass.
-- [ ] A full `win_debug` build succeeds.
-- [ ] `git grep -nw EditHistory -- alcedo_studio/src alcedo_studio/tests` returns no match.
+- [x] All listed tests pass. `BrushSourceFormatBoundaryTest` did not build here
+      (`ALCEDO_ENABLE_BRUSH_MASK` is off). See Section 13.12.
+- [x] A full `win_debug` build succeeds.
+- [x] `git grep -nw EditHistory -- alcedo_studio/src alcedo_studio/tests` returns no match.
       Mini-Git types use other names.
-- [ ] The macOS CI workflow still parses (`act` is not required; review the YAML diff).
+- [x] The macOS CI workflow still parses (`act` is not required; review the YAML diff).
 
 ### 13.11 Expected diff
 
@@ -1748,6 +1750,218 @@ unrelated link lines.
 ### 13.12 Completion record
 
 Use the template in Section 10.12.
+
+#### Phase G10.4 completion record (2026-09-22)
+
+**Status:** complete. The legacy history store is archived and out of the compile graph. The
+legacy journal port is gone. New projects save `0.9.0`, and `0.8.0` projects fail at the
+metadata version check. No manual check is required for this phase.
+
+- **Source revision and branch:** based on `aa604b0a` (G10.3 merged) on
+  `refact/gpu-dag-g10-4-legacy-history-removal`. Two commits: `cdf356ee` (archive with
+  `git mv`, no content change) and the removal commit that follows it (Section 13.5, step 5).
+- **Actual changed modules:** format header, `storage/` (DDL, element store), `sleeve/`
+  (file element, filesystem, storage), `app/` (save service, session controllers, bootstrap,
+  project service), `ui/alcedo_main/album_backend/` (module host, checkpoint store comment),
+  CMake, CI workflow, tests, test support, and the source check script.
+
+**Implemented behavior**
+
+- `kProjectFileVersion`, `kMinSupportedProjectFileVersion`, and
+  `kMaxSupportedProjectFileVersion` are `0.9.0`. Every other Section 4.3 value is unchanged.
+  The existing unsupported-version message states both values
+  (`project file version '0.8.0' is not supported (required 0.9.0)`), so it was kept.
+- `Database` no longer creates the legacy edit-history table. The stale `0.6.0` comment now
+  names `0.9.0`.
+- `ElementStore` has no history mapper. Insert, update, load, and delete of a file element touch
+  only the element, file-binding, folder, and pipeline rows. `GetEditHistoryByFileId`,
+  `UpdateEditHistoryByFileId`, the two remove methods, `MaterializeEditorState`,
+  `GetEditorRecoveryMetadata`, the pre-commit hook, and the mapper accessors are deleted.
+- `SleeveFile` holds only the image binding. `SetImage` and `Copy` create no history object.
+  `Storage` has no live-history cache. `FileSystem::DuplicateFileToFolder` no longer
+  reloads history.
+- The legacy journal port (`IEditorJournalPort`, its outcome and callback types, the
+  bootstrap port, and `EditorSessionJournalWriterPort`) is removed. Its only production
+  implementation was the legacy writer, which opened `editor-journal/image-N.wal` but never
+  appended to it. `EditorSaveCheckpointService::Start` now starts Mini-Git materialization
+  directly. The navigation, edit, and service `FinalizeEdit` / `DiscardUnflushed` calls are
+  deleted. `ApplicationModuleHost` builds only `mini_git_journal_path`.
+- The CMake target `EditHistory` is renamed to `PipelineHistory`, because the target name
+  alone would fail the exit grep. `SleeveFilter` and `SleeveElement` no longer depend on it.
+- The CI step `Run scheduled editor WAL fuzz seeds` is removed. The `schedule` trigger stays,
+  so the scheduled run still builds and runs the full macOS test preset.
+- New static checks: `NoProductSourceReferencesLegacyHistoryStore` (src) and
+  `NoTestSourceReferencesLegacyHistoryStore` (tests) fail when a source, `CMakeLists.txt`, or
+  `.cmake` file names an archived type, table, or target. The negative case
+  `LegacyHistoryCheckRejectsSourceAndTargetNames` proves that the check reports a source file
+  and a target list, and does not flag Mini-Git names with a shared prefix.
+  `NoProductCodeUsesStageJsonOutsideLegacyOwners` no longer lists the three history owners.
+  `NoProductCodeReadsStageTableOutsideMirror` no longer lists `edit_transaction.cpp`.
+
+**Archived files (commit `cdf356ee`)**
+
+Under `alcedo_studio/deprecated/legacy_pipeline/`, each at its original relative path:
+`edit/history/{edit_history,version,edit_transaction,editor_transaction_journal,
+editor_journal_writer,editor_journal_recovery}.{cpp,hpp}`,
+`app/{history_mgmt_service,editor_history_materializer}.{cpp,hpp}`,
+`storage/mapper/sleeve/edit_history/{history_mapper,recovery_metadata_mapper}.{cpp,hpp}`,
+`ui/alcedo_main/album_backend/editor_session_journal_writer_port.{cpp,hpp}`, and the tests
+`app/history_mgmt_service_test.cpp`,
+`edit/history/{editor_history_materializer_test,editor_journal_fuzz_framework,
+editor_journal_fuzz_test,editor_journal_writer_test,editor_transaction_journal_test,
+history_test,transaction_test,version_hash_test,version_test}.cpp`,
+`editor_journal_fuzz_framework.hpp`, `history_test_fixation.hpp`,
+`editor_journal_fuzz_seeds.txt`, and `ui/editor_session_journal_writer_port_test.cpp`.
+Test targets removed: `EditorHistoryMaterializerTest`, `VersionHashTest`,
+`EditorTransactionJournalTest`, `EditorJournalWriterTest`, `EditorJournalFuzzFrameworkTest`,
+`EditHistoryMgmtServiceTest`, and `EditorSessionJournalWriterPortTest`.
+
+**Deviations from Sections 13.3–13.8**
+
+- `EditorRecoveryMetadata` (table, mapper, and store API) was also removed. The plan did not
+  list it, but only the archived legacy materializer wrote or read it. Its fields
+  (journal generation, transaction chain hash) belong to the legacy journal, not to Mini-Git.
+  Mini-Git tables keep their DDL.
+- The whole legacy journal port abstraction was removed, not only the calls (Section 13.3
+  row 7). After the calls were removed, the interface had no production implementation. Tests
+  that used the fake journal's async commit as a pause point now use the fake checkpoint
+  store's async materialization. `OrderRecordingJournalPort` became
+  `OrderRecordingCheckpointStore`, which logs `save_started` when materialization starts.
+  Renamed tests: `SwitchToBWaitsForMaterializeAndThumbnailCompletion` (was
+  `…ForACommitTruncate…`), `SaveFailureDiscardThenSwitchAcquiresRequestedImage` (was
+  `…ClearsJournal…`), `DiscardUsesHistoryPortWithoutParameterWrite` (was `…JournalPort…`),
+  `SynchronousSaveResultIsProcessedAfterInitiatingCommandReturns` (was
+  `…JournalResult…`), and `MissingCheckpointStoreFailsWithoutMaterialization` (was
+  `…AfterDurableJournal`).
+- `Start` still returns a valid ticket when a registered save fails to start materialization,
+  as it did when that failure came after the journal step. Without a command executor it
+  returns an invalid ticket, because the failure completion cannot be delivered.
+- Test locations: `SaveDoesNotOpenLegacyImageJournal` is in `EditorSessionCheckpointStoreTest`
+  (the production save store, with the production `editor-journal/` layout).
+  `CurrentProjectReopensWithSameHeadAndChain` is in `EditorMiniGitMaterializerTest`, whose
+  fixture saves and reopens a real project. `EditorCheckpointNavigationTest` has no pipeline
+  or history service (see Section 12.12). `ProjectVersion080FailsBeforeHistoryLoad` replaces
+  `OldProjectMetadataFailsBeforeHistoryLoad`. It also proves that the database file bytes are
+  unchanged.
+- `ImportAndCopyDoNotCreateLegacyHistory` replaces
+  `DuplicateUsesLatestHistoryWhenLoadedFileCacheIsStale`, which tested only the legacy cache.
+  `ExplicitDuplicateClonesStateAndKeepsHistoryAndPipelineIndependent` lost its legacy history
+  blocks and is now `…KeepsPipelineIndependent`.
+- The archived table names appear in two tests as split literals (`"Edit" "History"`), so the
+  exit grep and the new static check stay clean.
+
+**Primary success call chain:**
+
+```text
+Create project
+  -> ProjectService(db, meta, kCreateNew) -> Database::InitializeDB
+       init_table_query without the legacy edit-history table; Mini-Git tables as before
+  -> ProjectService::SaveProject -> metadata project_file_version = "0.9.0"
+
+Import / copy a file
+  -> SleeveFile::SetImage (image binding only) / SleeveFile::Copy (image binding only)
+  -> ElementStore::AddElements -> element, FileImage, FolderContent rows
+  -> ImportService -> PipelineMgmtService::InitializeImageRoot (Mini-Git root)
+
+Save
+  -> EditorSessionNavigationController::SealAndStartSave (or StartHistoryCheckpointSave)
+       TryAcquireSaveLock -> IEditorHistoryPort::CaptureSaveCheckpoint
+  -> EditorSaveCheckpointService::Start -> IEditorCheckpointStore::MaterializeAsync
+  -> EditorMiniGitMaterializer (DuckDB commit, then Mini-Git WAL prefix truncate)
+  -> HandleMaterialization -> thumbnail refresh -> FinishSave (lock released) -> completion
+```
+
+**Primary failure call chain:**
+
+```text
+Open project with metadata 0.8.0 (folder or packed .alcd)
+  -> ProjectService::LoadProject: ProjectVersionIsSupported("0.8.0") == false
+       -> "Incompatible project format: project file version '0.8.0' is not supported
+           (required 0.9.0) ..."; the DuckDB file is not opened or changed
+  -> project_pack::UnpackProjectToWorkspace: same check before WriteFileBytes
+       -> returns false; no workspace database or metadata file is written
+
+Save cannot start materialization (no store, no capture, or store refuses)
+  -> EditorSaveCheckpointService::Start -> TakePendingSave -> FinishSave(false, reason)
+  -> task ended as failed, save lock released, completion posted once
+```
+
+**What was proven (executed tests)**
+
+| Required name | Target | Result |
+| --- | --- | --- |
+| `ProjectVersion080FailsBeforeHistoryLoad` | `CommitGraphTest` | PASS |
+| `PackedProjectVersion080FailsBeforeDatabaseOpen` | `ProjectServiceTest` | PASS |
+| `NewProjectWritesVersion090AndHasNoEditHistoryTable` | `ProjectServiceTest` | PASS |
+| `ImportAndCopyDoNotCreateLegacyHistory` | `SleeveServiceTest` (run directly; no ctest discovery) | PASS |
+| `SaveDoesNotOpenLegacyImageJournal` | `EditorSessionCheckpointStoreTest` (see deviations) | PASS |
+| `TypedCommitAndChainIdentityUnchangedAfterFormatCut` | `PipelineEditBatchTest` | PASS (commit `921e048d…`, root chain `56f50f13…`, chain `66d142b9…`, same as stored at `aa604b0a`) |
+| `CurrentProjectReopensWithSameHeadAndChain` | `EditorMiniGitMaterializerTest` (see deviations) | PASS |
+| `NoProductSourceReferencesLegacyHistoryStore` (added) | ctest script | PASS |
+| `NoTestSourceReferencesLegacyHistoryStore` (added) | ctest script | PASS |
+| `LegacyHistoryCheckRejectsSourceAndTargetNames` (added) | ctest script | PASS |
+| `CurrentHistoryIdentitiesMatchPublishedConstants` (updated to `0.9.0`) | `BrushSourceFormatBoundaryTest` | not built (`ALCEDO_ENABLE_BRUSH_MASK` is off in `win_debug`) |
+
+**Build and test commands with exit codes**
+
+```text
+cmd /c scripts\msvc_env.cmd --preset win_debug -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake"   -> exit 0
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 -- -k 0   -> exit 0 (full tree)
+ctest --test-dir build/debug -j 1 -R "<phase set>"   -> exit 8 (10 failures from before this phase)
+ctest --test-dir build/debug -j 1 -R "<wide set>"    -> exit 8 (16 failures from before this phase)
+SleeveServiceTest_runtime\SleeveServiceTest.exe --gtest_filter=-*Fuzzy*   -> exit 0
+git grep -nw EditHistory -- alcedo_studio/src alcedo_studio/tests   -> no match
+```
+
+Phase set regex: `CommitGraphTest|ProjectServiceTest|SleeveFSTest|EditorSessionTaskPortTest|
+PipelineEditBatchTest|EditorCheckpoint|EditorMiniGit|ImportServiceTest|
+EditorSessionCheckpointStoreTest|EditorSaveCheckpoint|EditorSession|
+PipelineDocumentCheckpointTest|BrushSourceFormat|legacy_removal|NoProductCode|StageTable|
+StageJson|PipelineMapperTest|AdjustmentTransfer` (after the change, also `LegacyHistory|
+SourceReferencesLegacy|EditorSerialInput`).
+
+**Discovered / passed / failed / skipped counts**
+
+- Baseline (`aa604b0a`, phase set, `-j 1`): 581 run, 571 passed, 10 failed, 2 disabled.
+- After the change (phase set with the added names, `-j 1`): 593 run, 583 passed, 10 failed,
+  2 disabled. Both runs have the same 10 failures: the 5 `EditorSessionRenderSchedulerPortTest`
+  sink-bind cases (G10.1 record), the 3 `PipelineDocumentCheckpointFormat` stored-JSON cases,
+  and `EditorSessionCommandQueueBaselineTest.RapidImageSelection…` and
+  `EditorSessionActionPolicyCq3Test.AdjustmentPanelsReload…` (G10.2 record).
+- Wide regression (`-j 1`, the G10.3 wide regex plus `WorkspaceShell|MainQml|AlbumBackend|
+  Sleeve|ProjectService|ImportService|FilterService|EditorSerial|EditorPending|AiStorage|
+  SemanticStor`): 1104 run, 1088 passed, 16 failed. 14 are listed in the G10.3 record. The
+  other 2, `AlbumBackendImportTest.ImportIntoNestedSubfolder_PersistsAcrossProjectReload` and
+  `AlbumBackendFolderTest.ReloadProject_PreservesVisibleNestedFolderUnderSelectedParent`, also
+  fail at `aa604b0a`: both targets were rebuilt there and failed at the same assertion (the
+  current folder returns to `\` after reload).
+- `SleeveServiceTest`: 23 run, 23 passed. The baseline run of this binary is not valid
+  evidence: it ran a stale `build/debug/alcedo_studio/tests/SleeveServiceTest.exe` from
+  2026-07-23. The current binary is under `SleeveServiceTest_runtime/`.
+
+**Other evidence**
+
+- Manual verification: none required.
+- Evidence path: `build/tmp/g10_4/` (`baseline_build.log`, `baseline_ctest.log`,
+  `configure.log`, `build.log`, `build_2.log`, `ctest.log`, `ctest_wide.log`,
+  `sleeve_service.log`, `albumbackend_fail.log`, `baseline_ab_*.log`,
+  `configure_final.log`, `build_final.log`, `ctest_final.log`).
+- Diff size of the removal commit without this plan file: 66 files, about 1.7k lines
+  (560 added, 1150 removed). This is above the 900–1500 estimate because the journal port
+  removal changed 17 test and support files. The archive commit moves 36 files and counts as
+  zero (Section 9).
+- LOC note: every changed production file shrank except two headers that gained a comment
+  (`pipeline_history_format.hpp` +4, `project_package_backend.hpp` +1).
+  `element_store.cpp` lost the history and recovery code;
+  `editor_save_checkpoint_service.cpp` lost `HandleJournalCommit`. Changed files above
+  1000 lines were already above it before this phase and changed only by removals or a few
+  lines: `editor_session_service.cpp` (2452), `thumbnail_service.cpp` (1204, one include),
+  and the tests `thumbnail_service_test.cpp`, `editor_session_history_port_test.cpp`,
+  `semantic_generation_service_test.cpp`, and `commit_graph_test.cpp`.
+- Remaining defects or unavailable platforms: macOS Metal and Linux builds did not run. The
+  changed code is backend-neutral. The CI YAML change removes one step and leaves valid
+  indentation. Stale `editor-journal/image-*.wal` files in user project folders are ignored and
+  not deleted (Section 13.4).
 
 ---
 

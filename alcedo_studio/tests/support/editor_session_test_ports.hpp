@@ -75,6 +75,7 @@ class FakeEditorHistoryPort : public IEditorHistoryPort {
   bool fail_restore_preview  = false;
   int  undo_count     = 0;
   int  redo_count     = 0;
+  int  discard_count  = 0;
   int  checkpoint_capture_count = 0;
   int  checkout_count           = 0;
   bool fail_checkout            = false;
@@ -231,6 +232,12 @@ class FakeEditorHistoryPort : public IEditorHistoryPort {
     return true;
   }
 
+  auto DiscardUnmaterializedChanges(const EditorHistoryGuardHandle&, std::string*)
+      -> bool override {
+    ++discard_count;
+    return true;
+  }
+
   auto CaptureSaveCheckpoint(const EditorHistoryGuardHandle&, std::string* error)
       -> std::shared_ptr<const EditorMiniGitSaveCapture> override {
     ++checkpoint_capture_count;
@@ -315,71 +322,8 @@ class FakeEditorTaskPort final : public IEditorTaskPort {
   }
 };
 
-/// Fake journal writer port with optional async commit and barrier failures.
-class FakeEditorJournalPort : public IEditorJournalPort {
- public:
-  bool                        fail_barrier      = false;
-  bool                        fail_commit_start = false;
-  bool                        async_commit      = false;
-  bool                        finalize_succeeds = true;
-  int                         barrier_count     = 0;
-  int                         discard_count     = 0;
-  EditorJournalCommitCallback pending_commit;
-
-  auto FinalizeEdit(sl_element_id_t, std::uint64_t, std::string* error) -> bool override {
-    if (!finalize_succeeds) {
-      if (error != nullptr) {
-        *error = "finalize failed";
-      }
-      return false;
-    }
-    return true;
-  }
-
-  auto AppendBarrier(sl_element_id_t, std::uint64_t, std::string* error) -> bool override {
-    ++barrier_count;
-    if (fail_barrier) {
-      if (error != nullptr) {
-        *error = "journal barrier failed";
-      }
-      return false;
-    }
-    return true;
-  }
-
-  auto CommitJournalAsync(sl_element_id_t element_id, std::uint64_t session_generation,
-                          EditorJournalCommitCallback callback) -> bool override {
-    if (fail_commit_start) {
-      return false;
-    }
-    if (!async_commit) {
-      return IEditorJournalPort::CommitJournalAsync(element_id, session_generation,
-                                                    std::move(callback));
-    }
-    pending_commit = std::move(callback);
-    return true;
-  }
-
-  /// Completes a pending async journal commit. Durable true maps to a successful
-  /// journal durability barrier that later materialization may truncate.
-  void CompleteCommit(bool durable, std::string error = {}) {
-    auto callback = std::move(pending_commit);
-    if (!callback) {
-      return;
-    }
-    callback(EditorJournalCommitOutcome{true, durable, !durable, durable ? 2u : 0u,
-                                        durable ? 1u : 0u, std::move(error)});
-  }
-
-  auto DiscardUnflushed(sl_element_id_t, std::string*) -> bool override {
-    ++discard_count;
-    return true;
-  }
-
-};
-
 /// Fake checkpoint store with optional async materialization and start failure.
-class FakeEditorCheckpointStore final : public IEditorCheckpointStore {
+class FakeEditorCheckpointStore : public IEditorCheckpointStore {
  public:
   bool                      async_materialize      = false;
   bool                      fail_materialize_start = false;

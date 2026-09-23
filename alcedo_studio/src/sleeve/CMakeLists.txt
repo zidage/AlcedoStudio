@@ -8,7 +8,7 @@ set(FILTER_SRCS
 def_library(SleeveFilter
     SOURCES ${FILTER_SRCS}
     PUBLIC_DEPS DuckORM StrConv
-    PRIVATE_DEPS Image EditHistory JSON
+    PRIVATE_DEPS Image JSON
 )
 
 set(ELEMENT_SRCS
@@ -20,7 +20,7 @@ set(ELEMENT_SRCS
 
 def_library(SleeveElement
     SOURCES ${ELEMENT_SRCS}
-    PUBLIC_DEPS Image ImageLoader SleeveFilter EditHistory ImagePool
+    PUBLIC_DEPS Image ImageLoader SleeveFilter ImagePool
 )
 
 # AI domain objects (Phase 5f): standalone image understanding/rating objects.

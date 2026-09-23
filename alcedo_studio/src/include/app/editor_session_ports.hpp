@@ -375,15 +375,6 @@ class IEditorTaskPort {
   virtual void EndTask(std::uint64_t task_id, bool success, const std::string& message)        = 0;
 };
 
-struct EditorJournalCommitOutcome {
-  bool          accepted                      = false;
-  bool          durable                       = false;
-  bool          pending                       = false;
-  std::uint64_t durable_batch_commit_sequence = 0;
-  std::uint64_t durable_operation_sequence    = 0;
-  std::string   error;
-};
-
 struct EditorMaterializeOutcome {
   bool          accepted                        = false;
   bool          materialized                    = false;
@@ -391,61 +382,7 @@ struct EditorMaterializeOutcome {
   std::string   error;
 };
 
-using EditorJournalCommitCallback = std::function<void(EditorJournalCommitOutcome)>;
-using EditorMaterializeCallback   = std::function<void(EditorMaterializeOutcome)>;
-
-/// Typed journal-writer boundary for one image-scoped editor session. Database
-/// materialization and recovery belong to IEditorCheckpointStore, so this
-/// interface contains only journal append, durability, and discard operations.
-class IEditorJournalPort {
- public:
-  virtual ~IEditorJournalPort() = default;
-
-  /// Finalize the open edit command. This boundary is synchronous and must not
-  /// perform file or database I/O.
-  virtual auto FinalizeEdit(sl_element_id_t /*element_id*/, std::uint64_t /*session_generation*/,
-                            std::string* /*error*/) -> bool {
-    return true;
-  }
-
-  /// Commit queued journal records. The default implementation adapts old test
-  /// ports that only override AppendBarrier.
-  virtual auto CommitJournal(sl_element_id_t element_id, std::uint64_t session_generation,
-                             std::string* error) -> EditorJournalCommitOutcome {
-    EditorJournalCommitOutcome outcome;
-    outcome.accepted = true;
-    outcome.durable  = AppendBarrier(element_id, session_generation, error);
-    if (!outcome.durable) {
-      outcome.error = error != nullptr ? *error : "Journal commit failed";
-    }
-    return outcome;
-  }
-
-  /// Async adapters invoke the callback after the journal durability operation
-  /// reaches its terminal state. The default is synchronous for deterministic
-  /// test ports.
-  virtual auto CommitJournalAsync(sl_element_id_t element_id, std::uint64_t session_generation,
-                                  EditorJournalCommitCallback callback) -> bool {
-    std::string error;
-    auto        outcome = CommitJournal(element_id, session_generation, &error);
-    if (outcome.error.empty()) {
-      outcome.error = std::move(error);
-    }
-    if (callback) {
-      callback(std::move(outcome));
-    }
-    return true;
-  }
-
-  /// Legacy compatibility hook for Phase 5F test doubles. Runtime and new tests
-  /// should override CommitJournal/CommitJournalAsync instead.
-  virtual auto AppendBarrier(sl_element_id_t /*element_id*/, std::uint64_t /*session_generation*/,
-                             std::string* /*error*/) -> bool {
-    return true;
-  }
-
-  virtual auto DiscardUnflushed(sl_element_id_t element_id, std::string* error) -> bool = 0;
-};
+using EditorMaterializeCallback = std::function<void(EditorMaterializeOutcome)>;
 
 /// Phase 6C-5: narrow checkpoint store for save/recovery. Accepts an immutable
 /// capture and drives materialization through the Mini-Git materializer facade.

@@ -8,7 +8,6 @@
 
 #include "app/editor_adjustment_pipeline.hpp"
 #include "app/editor_pending_input.hpp"
-#include "edit/history/edit_transaction.hpp"
 
 namespace alcedo {
 
@@ -255,14 +254,6 @@ auto EditorSessionEditController::HandleDiscard(const EditorHistoryGuardHandle& 
     outcome.kind    = EditorEditOutcome::Kind::Rejected;
     outcome.message = "Discard requires an image with an active history session";
     return outcome;
-  }
-  if (deps_.journal) {
-    std::string error;
-    if (!deps_.journal->DiscardUnflushed(identity.element_id, &error)) {
-      outcome.kind    = EditorEditOutcome::Kind::Failed;
-      outcome.message = error.empty() ? "Discard failed" : error;
-      return outcome;
-    }
   }
   std::string error;
   if (deps_.history && !deps_.history->DiscardUnmaterializedChanges(guard, &error)) {

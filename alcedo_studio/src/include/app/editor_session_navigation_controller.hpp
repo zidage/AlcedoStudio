@@ -21,7 +21,6 @@ namespace alcedo {
 
 class EditorSessionLifecycle;
 class EditorSessionRenderController;
-class IEditorJournalPort;
 class IEditorCheckpointStore;
 class IEditorHistoryPort;
 
@@ -125,9 +124,8 @@ class EditorSessionNavigationController final {
 
   explicit EditorSessionNavigationController(
       EditorSessionLifecycle& lifecycle, EditorSaveCheckpointService& save_service,
-      EditorSessionRenderController& render, IEditorJournalPort* journal,
-      IEditorCheckpointStore* checkpoint_store, IEditorHistoryPort* history,
-      EditorSessionNavigationState* state = nullptr);
+      EditorSessionRenderController& render, IEditorCheckpointStore* checkpoint_store,
+      IEditorHistoryPort* history, EditorSessionNavigationState* state = nullptr);
 
   /// Stamp the operation currently being reduced onto saves and render work.
   void SetOperationId(std::uint64_t operation_id);
@@ -194,9 +192,9 @@ class EditorSessionNavigationController final {
   /// Returns a NavigationOutcome for the re-attempted save.
   auto               RetrySaveAfterFailure() -> NavigationOutcome;
 
-  /// Phase 7A: discard unflushed changes and continue the pending navigation.
-  /// Clears the journal, releases the current guards, and proceeds to the
-  /// pending target. Returns a NavigationOutcome.
+  /// Phase 7A: continue the pending navigation without saving. Releases the
+  /// current guards and proceeds to the pending target. Returns a
+  /// NavigationOutcome.
   auto               DiscardAndContinueAfterFailure() -> NavigationOutcome;
 
   /// Phase 7A: cancel the pending navigation and resume Interactive on the
@@ -204,7 +202,7 @@ class EditorSessionNavigationController final {
   void               CancelPendingNavigation();
 
  private:
-  /// Seal the current image: finalize edit, capture checkpoint, start save.
+  /// Seal the current image: capture checkpoint, start save.
   /// Returns a valid ticket on success.
   auto SealAndStartSave(bool persist_changes, bool start_background_save) -> CheckpointTicket;
   /// Continue to the target image after a successful save. Acquires guards and
@@ -248,7 +246,6 @@ class EditorSessionNavigationController final {
   EditorSessionLifecycle&        lifecycle_;
   EditorSaveCheckpointService&   save_service_;
   EditorSessionRenderController& render_;
-  IEditorJournalPort*            journal_;
   IEditorCheckpointStore*        checkpoint_store_;
   IEditorHistoryPort*            history_;
   EditorSessionNavigationState   owned_state_;

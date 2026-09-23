@@ -85,7 +85,7 @@ unset(_alcedo_update_allow_install)
 def_library(FSService
     SOURCES
         "${ALCEDO_APP_ROOT}/sleeve_service.cpp"
-    PUBLIC_DEPS SleeveFS EditHistory
+    PUBLIC_DEPS SleeveFS PipelineHistory
 )
 
 def_library(SleeveFilterService
@@ -282,7 +282,7 @@ def_library(AdjustmentTransferService
         "${ALCEDO_APP_ROOT}/adjustment_transfer_service.cpp"
         "${ALCEDO_APP_ROOT}/document_transfer.cpp"
         "${ALCEDO_APP_ROOT}/document_transfer_planner.cpp"
-    PUBLIC_DEPS PipelineMgmtService EditPipeline EditGraph EditMaskCore EditHistory
+    PUBLIC_DEPS PipelineMgmtService EditPipeline EditGraph EditMaskCore PipelineHistory
                 PipelineHistoryApplier
     PRIVATE_DEPS EditorAdjustmentPipeline EditorPipelineCommandService
 )
@@ -294,17 +294,7 @@ def_library(AdjustmentTransferCatalog
     SOURCES
         "${ALCEDO_APP_ROOT}/adjustment_transfer_catalog.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/adjustment_transfer_catalog.hpp"
-    PUBLIC_DEPS PipelineHistoryApplier EditGraph EditHistory
-)
-
-def_library(EditHistoryMgmtService
-    SOURCES "${ALCEDO_APP_ROOT}/history_mgmt_service.cpp"
-    PUBLIC_DEPS ProjectService EditHistory
-)
-
-def_library(EditorHistoryMaterializer
-    SOURCES "${ALCEDO_APP_ROOT}/editor_history_materializer.cpp"
-    PUBLIC_DEPS ProjectService EditHistory Storage
+    PUBLIC_DEPS PipelineHistoryApplier EditGraph PipelineHistory
 )
 
 def_library(EditorSaveCheckpointCoordinator
@@ -343,7 +333,7 @@ def_library(EditorSessionNavigationController
     SOURCES
         "${ALCEDO_APP_ROOT}/editor_session_navigation_controller.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_session_navigation_controller.hpp"
-    PUBLIC_DEPS EditHistory xxHash
+    PUBLIC_DEPS PipelineHistory xxHash
     PRIVATE_DEPS EditorSessionLifecycle EditorSaveCheckpointService
                  EditorSessionRenderController EditorSessionEditController
                  EditorMiniGitMaterializer
@@ -369,27 +359,27 @@ def_library(EditorSessionEditController
         "${ALCEDO_APP_ROOT}/editor_session_edit_controller.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_session_edit_controller.hpp"
     PUBLIC_DEPS xxHash JSON ${ALCEDO_OPENCV_CORE_DEPS} EditorPendingInput
-    PRIVATE_DEPS EditHistory EditorAdjustmentPipeline
+    PRIVATE_DEPS PipelineHistory EditorAdjustmentPipeline
 )
 
 def_library(EditorMiniGitJournalFold
     SOURCES "${ALCEDO_APP_ROOT}/editor_mini_git_journal_fold.cpp"
-    PUBLIC_DEPS EditHistory
+    PUBLIC_DEPS PipelineHistory
 )
 
 def_library(EditorMiniGitCommitWriter
     SOURCES "${ALCEDO_APP_ROOT}/editor_mini_git_commit_writer.cpp"
-    PUBLIC_DEPS ProjectService EditHistory Storage
+    PUBLIC_DEPS ProjectService PipelineHistory Storage
 )
 
 def_library(EditorMiniGitJournalRecovery
     SOURCES "${ALCEDO_APP_ROOT}/editor_mini_git_journal_recovery.cpp"
-    PUBLIC_DEPS EditHistory Storage
+    PUBLIC_DEPS PipelineHistory Storage
 )
 
 def_library(EditorMiniGitMaterializer
     SOURCES "${ALCEDO_APP_ROOT}/editor_mini_git_materializer.cpp"
-    PUBLIC_DEPS ProjectService EditHistory Storage
+    PUBLIC_DEPS ProjectService PipelineHistory Storage
     PRIVATE_DEPS EditorSaveCheckpointCoordinator
                  EditorMiniGitCommitWriter EditorMiniGitJournalRecovery
 )
@@ -398,7 +388,7 @@ def_library(EditorAdjustmentPipeline
     SOURCES
         "${ALCEDO_APP_ROOT}/editor_adjustment_pipeline.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_adjustment_pipeline.hpp"
-    PUBLIC_DEPS EditPipeline EditHistory JSON EditorPipelineCommandService
+    PUBLIC_DEPS EditPipeline PipelineHistory JSON EditorPipelineCommandService
 )
 
 def_library(EditorParameterWrite
@@ -436,7 +426,7 @@ def_library(EditorNodeGraphDraft
     SOURCES
         "${ALCEDO_APP_ROOT}/editor_node_graph_draft.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_node_graph_draft.hpp"
-    PUBLIC_DEPS EditorNodeGraphProjection EditHistory EditGraph
+    PUBLIC_DEPS EditorNodeGraphProjection PipelineHistory EditGraph
 )
 
 def_library(PipelineHistoryApplier
@@ -445,7 +435,7 @@ def_library(PipelineHistoryApplier
         "${ALCEDO_APP_ROOT}/pipeline_document_history.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/pipeline_history_applier.hpp"
         "${ALCEDO_INCLUDE_ROOT}/app/pipeline_document_history.hpp"
-    PUBLIC_DEPS EditorPipelineCommandService EditorAdjustmentPipeline EditHistory EditGraph
+    PUBLIC_DEPS EditorPipelineCommandService EditorAdjustmentPipeline PipelineHistory EditGraph
                 EditMaskCore
 )
 
@@ -492,7 +482,7 @@ def_library(EditorSessionService
     # The session facade is application-only; no Widgets dependency belongs
     # on this target or on its public link interface.
     PRIVATE_DEPS EditorPendingInput xxHash JSON ${ALCEDO_OPENCV_CORE_DEPS} AppDiagnostics
-                 EditHistory EditorMiniGitMaterializer EditorSaveCheckpointService EditorSessionLifecycle
+                 PipelineHistory EditorMiniGitMaterializer EditorSaveCheckpointService EditorSessionLifecycle
                  EditorSessionNavigationController EditorSessionRenderController
                  EditorSessionEditController EditorSessionCommandQueue EditorActionPolicy
                  EditorSerialFrameAdmission EditorMaskCreationController

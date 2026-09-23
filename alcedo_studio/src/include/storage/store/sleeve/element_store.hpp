@@ -5,22 +5,17 @@
 #pragma once
 
 #include <cstddef>
-#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
 #include <string>
 #include <vector>
 
-#include "edit/history/edit_history.hpp"
-#include "edit/history/editor_journal_recovery.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
 #include "sleeve/sleeve_element/sleeve_element.hpp"
 #include "sleeve/sleeve_filter/filter_combo.hpp"
 #include "storage/mapper/duckorm/duckdb_expr.hpp"
 #include "storage/mapper/pipeline/pipeline_mapper.hpp"
-#include "storage/mapper/sleeve/edit_history/history_mapper.hpp"
-#include "storage/mapper/sleeve/edit_history/recovery_metadata_mapper.hpp"
 #include "storage/mapper/sleeve/element/element_id_mapper.hpp"
 #include "storage/mapper/sleeve/element/element_mapper.hpp"
 #include "storage/mapper/sleeve/element/file_mapper.hpp"
@@ -77,15 +72,11 @@ class ElementStore {
 
   FileMapper            file_mapper_;
   FolderMapper          folder_mapper_;
-  EditHistoryMapper     history_mapper_;
   PipelineMapper        pipeline_mapper_;
-  EditHistoryMapper     edit_history_mapper_;
-  std::function<void()> materialize_pre_commit_hook_{};
 
-  // Insert the element row plus its child rows (file binding / folder content /
-  // edit history). Does not touch sync_flag_ and does not manage a transaction, so
-  // it can run either autocommit (AddElement) or inside a shared transaction
-  // (AddElements).
+  // Insert the element row plus its child rows (file binding / folder content).
+  // Does not touch sync_flag_ and does not manage a transaction, so it can run
+  // either autocommit (AddElement) or inside a shared transaction (AddElements).
   void                  InsertElementRows(const std::shared_ptr<SleeveElement>& element);
   // Update the element row plus its child rows. Same transaction-neutrality contract
   // as InsertElementRows.
@@ -95,7 +86,7 @@ class ElementStore {
   ElementStore(ConnectionGuard&& guard);
 
   void AddElement(const std::shared_ptr<SleeveElement> element);
-  // Bulk-insert a batch of elements (and their file/folder-content/edit-history child
+  // Bulk-insert a batch of elements (and their file/folder-content child
   // rows) in a single transaction. Import sync should prefer this over the per-row
   // AddElement loop: one transaction for N elements instead of one autocommit
   // transaction per element.
@@ -151,34 +142,5 @@ class ElementStore {
   void UpdatePipelineJsonByElementId(sl_element_id_t element_id, const nlohmann::json& document);
   auto RemovePipelineByElementId(const sl_element_id_t element_id) -> void;
   auto RemovePipelinesByElementIds(std::span<const sl_element_id_t> element_ids) -> void;
-
-  auto GetEditHistoryByFileId(const sl_element_id_t file_id) -> std::shared_ptr<EditHistory>;
-  auto UpdateEditHistoryByFileId(const sl_element_id_t              file_id,
-                                 const std::shared_ptr<EditHistory> history) -> void;
-  auto RemoveEditHistoryByFileId(const sl_element_id_t file_id) -> void;
-  auto RemoveEditHistoriesByFileIds(std::span<const sl_element_id_t> file_ids) -> void;
-
-  /// Atomically update active Version history, active pipeline params, and
-  /// recovery metadata on this controller's connection. Editor materialization
-  /// and Version publication must use this path instead of separate
-  /// SaveHistory()/SavePipeline() calls.
-  auto MaterializeEditorState(const std::shared_ptr<EditHistory>&         history,
-                              const std::shared_ptr<CPUPipelineExecutor>& pipeline,
-                              const EditorRecoveryMetadata&               recovery_metadata,
-                              std::string*                                error = nullptr) -> bool;
-
-  auto GetEditorRecoveryMetadata(sl_element_id_t file_id) -> std::optional<EditorRecoveryMetadata>;
-
-  /// Test-only seam: a hook invoked after the history, pipeline, and recovery
-  /// metadata writes inside `MaterializeEditorState` but before the transaction
-  /// commits. Throwing from the hook forces a rollback so tests can prove all
-  /// three writes roll back together. Production leaves it unset.
-  void SetMaterializePreCommitHook(std::function<void()> hook) {
-    materialize_pre_commit_hook_ = std::move(hook);
-  }
-
-  auto GetEditHistoryMapper() -> std::shared_ptr<EditHistoryMapper>;
-
-  void UpdateEditHistoryMapper(const std::shared_ptr<EditHistoryMapper> new_service);
 };
 };  // namespace alcedo

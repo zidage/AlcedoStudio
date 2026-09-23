@@ -55,7 +55,8 @@ struct EditorMiniGitSaveCapture {
   std::vector<MiniGitJournalRecord> journal_records;
   std::filesystem::path             journal_path;
   /// Inclusive journal sequence range covered by journal_records. Both nullopt
-  /// when journal_records is empty; both set when non-empty.
+  /// when journal_records is empty; both set when non-empty. Records are strictly
+  /// increasing inside the range; gaps from revoked records are allowed.
   std::optional<std::uint64_t>      first_journal_sequence;
   std::optional<std::uint64_t>      last_journal_sequence;
 

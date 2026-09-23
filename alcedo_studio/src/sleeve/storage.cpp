@@ -85,36 +85,6 @@ auto Storage::GetAiStore() -> AiStore& {
 
 auto Storage::GetDatabase() -> Database& { return database_; }
 
-void Storage::RememberLiveEditHistory(const sl_element_id_t               file_id,
-                                             const std::shared_ptr<EditHistory>& history) {
-  std::lock_guard<std::mutex> lock(live_state_lock_);
-  if (!history) {
-    live_histories_.erase(file_id);
-    return;
-  }
-  live_histories_[file_id] = history;
-}
-
-auto Storage::GetLiveEditHistory(const sl_element_id_t file_id)
-    -> std::shared_ptr<EditHistory> {
-  std::lock_guard<std::mutex> lock(live_state_lock_);
-  const auto                  it = live_histories_.find(file_id);
-  if (it == live_histories_.end()) {
-    return nullptr;
-  }
-
-  auto history = it->second.lock();
-  if (!history) {
-    live_histories_.erase(it);
-  }
-  return history;
-}
-
-void Storage::ForgetLiveEditHistory(const sl_element_id_t file_id) {
-  std::lock_guard<std::mutex> lock(live_state_lock_);
-  live_histories_.erase(file_id);
-}
-
 void Storage::RememberLivePipeline(const sl_element_id_t                       file_id,
                                           const std::shared_ptr<CPUPipelineExecutor>& pipeline) {
   std::lock_guard<std::mutex> lock(live_state_lock_);

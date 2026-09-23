@@ -19,7 +19,6 @@
 
 namespace alcedo {
 class CPUPipelineExecutor;
-class EditHistory;
 
 class NodeStorageHandler {
  private:
@@ -45,7 +44,6 @@ class Storage {
   AiStore                                                       ai_store_;
   std::mutex                                                                live_state_lock_;
 
-  std::unordered_map<sl_element_id_t, std::weak_ptr<EditHistory>>           live_histories_;
   std::unordered_map<sl_element_id_t, std::shared_ptr<CPUPipelineExecutor>> live_pipelines_;
 
  public:
@@ -56,11 +54,6 @@ class Storage {
   auto GetImageStore() -> ImageStore&;
   auto GetSemanticStore() -> SemanticStore&;
   auto GetAiStore() -> AiStore&;
-
-  void RememberLiveEditHistory(sl_element_id_t                     file_id,
-                               const std::shared_ptr<EditHistory>& history);
-  auto GetLiveEditHistory(sl_element_id_t file_id) -> std::shared_ptr<EditHistory>;
-  void ForgetLiveEditHistory(sl_element_id_t file_id);
 
   void RememberLivePipeline(sl_element_id_t                             file_id,
                             const std::shared_ptr<CPUPipelineExecutor>& pipeline);

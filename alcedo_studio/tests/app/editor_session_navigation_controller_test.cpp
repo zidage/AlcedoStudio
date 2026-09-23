@@ -30,10 +30,11 @@ TEST_F(EditorSessionNavigationControllerTest, OpenWithNoPriorImageCompletesSynch
   EXPECT_EQ(fixture_.lifecycle().identity().image_id, static_cast<image_id_t>(20));
 }
 
-/// Phase 4B: A→B waits for journal commit, materialize/truncate, and thumbnail
-/// refresh before releasing A and acquiring B.
+/// Phase 4B: A→B waits for materialize/truncate and thumbnail refresh before
+/// releasing A and acquiring B. G10.4: materialization starts directly after the
+/// capture; no legacy journal commit runs in between.
 TEST_F(EditorSessionNavigationControllerTest,
-       SwitchToBWaitsForACommitTruncateAndThumbnailCompletion) {
+       SwitchToBWaitsForMaterializeAndThumbnailCompletion) {
   fixture_.OpenA();
 
   const auto result = fixture_.RequestSwitchToB();
@@ -43,9 +44,7 @@ TEST_F(EditorSessionNavigationControllerTest,
   EXPECT_TRUE(result.ticket.valid());
   ASSERT_GE(fixture_.events().size(), 2u);
   EXPECT_EQ(fixture_.events()[0], "checkpoint_a");
-  EXPECT_EQ(fixture_.events()[1], "commit");
-  // Materialize/truncate has not started until journal durability completes.
-  EXPECT_EQ(std::count(fixture_.events().begin(), fixture_.events().end(), "truncate"), 0);
+  EXPECT_EQ(fixture_.events()[1], "materialize");
   EXPECT_EQ(std::count(fixture_.events().begin(), fixture_.events().end(), "thumbnail"), 0);
   EXPECT_EQ(std::count(fixture_.events().begin(), fixture_.events().end(), "acquire_b"), 0);
 
@@ -55,13 +54,12 @@ TEST_F(EditorSessionNavigationControllerTest,
   EXPECT_EQ(fixture_.lifecycle().identity().element_id,
             test::EditorSessionNavigationFixture::kElementB);
 
-  ASSERT_EQ(fixture_.events().size(), 6u);
+  ASSERT_EQ(fixture_.events().size(), 5u);
   EXPECT_EQ(fixture_.events()[0], "checkpoint_a");
-  EXPECT_EQ(fixture_.events()[1], "commit");
-  EXPECT_EQ(fixture_.events()[2], "truncate");
-  EXPECT_EQ(fixture_.events()[3], "thumbnail");
-  EXPECT_EQ(fixture_.events()[4], "release_a");
-  EXPECT_EQ(fixture_.events()[5], "acquire_b");
+  EXPECT_EQ(fixture_.events()[1], "materialize");
+  EXPECT_EQ(fixture_.events()[2], "thumbnail");
+  EXPECT_EQ(fixture_.events()[3], "release_a");
+  EXPECT_EQ(fixture_.events()[4], "acquire_b");
   EXPECT_EQ(fixture_.thumbnails().refresh_count, 1);
   EXPECT_EQ(fixture_.thumbnails().refreshed_ids.front(),
             test::EditorSessionNavigationFixture::kElementA);
@@ -191,7 +189,7 @@ TEST_F(EditorSessionNavigationControllerTest, SaveFailureRetryThenSwitchAcquires
 }
 
 TEST_F(EditorSessionNavigationControllerTest,
-       SaveFailureDiscardThenSwitchClearsJournalAndAcquiresRequestedImage) {
+       SaveFailureDiscardThenSwitchAcquiresRequestedImage) {
   fixture_.OpenA();
   ASSERT_TRUE(fixture_.RequestSwitchToB().waiting_for_checkpoint);
   fixture_.FailCheckpoint("A materialization failed");
@@ -200,7 +198,6 @@ TEST_F(EditorSessionNavigationControllerTest,
   const auto discard = fixture_.nav().DiscardAndContinueAfterFailure();
   EXPECT_TRUE(discard.completed_synchronously);
   fixture_.lifecycle().MarkFirstFrameReady();
-  EXPECT_EQ(fixture_.journal().discard_count, 1);
   EXPECT_EQ(fixture_.lifecycle().state(), EditorSessionState::Interactive);
   EXPECT_TRUE(fixture_.lifecycle().has_image());
   EXPECT_EQ(fixture_.lifecycle().identity().element_id,
@@ -212,7 +209,6 @@ TEST_F(EditorSessionNavigationControllerTest,
 TEST_F(EditorSessionNavigationControllerTest,
        CreateRootVersionChecksOutRootAndNextCommitBelongsToNewVersion) {
   fixture_.OpenA();
-  fixture_.journal().async_commit               = true;
   fixture_.checkpoint_store().async_materialize = true;
   const auto prior_submit_count = fixture_.render_submit().submit_count;
 
@@ -239,7 +235,6 @@ TEST_F(EditorSessionNavigationControllerTest,
 TEST_F(EditorSessionNavigationControllerTest,
        BranchFromSelectedCommitChecksOutNamedRefWithoutDetachedHead) {
   fixture_.OpenA();
-  fixture_.journal().async_commit               = true;
   fixture_.checkpoint_store().async_materialize = true;
   const auto target_commit                      = commit_hash_t{0x12345678ULL, 0x90abcdefULL};
 
@@ -262,7 +257,6 @@ TEST_F(EditorSessionNavigationControllerTest,
   const auto prior_load     = fixture_.lifecycle().active_image_load_request();
   const auto prior_version                      = fixture_.history().active_version_id;
   fixture_.history().fail_root_version          = true;
-  fixture_.journal().async_commit               = true;
   fixture_.checkpoint_store().async_materialize = true;
 
   ASSERT_TRUE(fixture_.nav().RequestCreateRootVersion("Broken Root").waiting_for_checkpoint);
@@ -327,7 +321,6 @@ TEST_F(EditorSessionNavigationControllerTest, CloseWithNoPriorImageCompletesSync
 TEST_F(EditorSessionNavigationControllerTest, CloseWaitsForSaveThenCompletes) {
   fixture_.OpenA();
 
-  fixture_.journal().async_commit               = true;
   fixture_.checkpoint_store().async_materialize = true;
   const auto result                             = fixture_.nav().RequestClose(true);
   EXPECT_TRUE(result.waiting_for_checkpoint);
@@ -360,7 +353,6 @@ TEST_F(EditorSessionNavigationControllerTest, SaveCompletionDeliversThroughQueue
   // Inline (synchronous) save ports: the completion must still be posted to
   // the command executor and reduced only when Drain runs, never inline inside
   // SealAndStartSave.
-  fixture_.journal().async_commit = false;
   fixture_.checkpoint_store().async_materialize = false;
   const auto result =
       fixture_.nav().RequestOpenOrSwitch(test::EditorSessionNavigationFixture::kElementB,
@@ -384,11 +376,10 @@ TEST_F(EditorSessionNavigationControllerTest, SaveCompletionDeliversThroughQueue
 }
 
 TEST_F(EditorSessionNavigationControllerTest, SaveFailureRetainsImageAfterQueuedCompletion) {
-  fixture_.journal().fail_barrier = true;
+  fixture_.checkpoint_store().fail_materialize = true;
   fixture_.OpenA();
   const auto load_a = fixture_.lifecycle().active_image_load_request();
 
-  fixture_.journal().async_commit = false;
   fixture_.checkpoint_store().async_materialize = false;
   const auto result =
       fixture_.nav().RequestOpenOrSwitch(test::EditorSessionNavigationFixture::kElementB,
@@ -406,7 +397,6 @@ TEST_F(EditorSessionNavigationControllerTest, SaveFailureRetainsImageAfterQueued
 
 TEST_F(EditorSessionNavigationControllerTest, CloseCompletionDeliversThroughQueueNotInline) {
   fixture_.OpenA();
-  fixture_.journal().async_commit               = false;
   fixture_.checkpoint_store().async_materialize = false;
   const auto result                             = fixture_.nav().RequestClose(true);
   EXPECT_TRUE(result.waiting_for_checkpoint);
@@ -518,7 +508,6 @@ TEST_F(EditorSessionNavigationControllerTest, CloseAndShutdownEachProduceOneTerm
   fixture_.OpenA();
   int  close_terminals                          = 0;
   bool close_ok                                 = false;
-  fixture_.journal().async_commit               = true;
   fixture_.checkpoint_store().async_materialize = true;
   // SealAndStartSave wires OnCheckpointFinished; count via task ends + lifecycle.
   const auto close_outcome                      = fixture_.nav().RequestClose(true);
@@ -549,8 +538,7 @@ TEST_F(EditorSessionNavigationControllerTest, CloseAndShutdownEachProduceOneTerm
   cancel_completed = fixture_.tasks().ended_success.back();
   EXPECT_EQ(cancel_terminals, 1);
   EXPECT_FALSE(cancel_completed);
-  // Late journal/materialize completions must not finish the task again.
-  fixture_.journal().CompleteCommit(true);
+  // Late materialize completions must not finish the task again.
   fixture_.checkpoint_store().CompleteMaterialization(true);
   EXPECT_EQ(fixture_.tasks().end_count, ends_before_cancel + 1);
   EXPECT_EQ(fixture_.lifecycle().identity().element_id,

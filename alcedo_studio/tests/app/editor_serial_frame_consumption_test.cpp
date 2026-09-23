@@ -33,12 +33,11 @@ class SerialFrameConsumptionTest : public ::testing::Test {
     history_          = std::make_shared<test::FakeEditorHistoryPort>();
     pipeline_         = std::make_shared<test::FakeEditorPipelinePort>();
     tasks_            = std::make_shared<test::FakeEditorTaskPort>();
-    journal_          = std::make_shared<test::FakeEditorJournalPort>();
     checkpoint_store_ = std::make_shared<test::FakeEditorCheckpointStore>();
     latch_            = std::make_shared<test::LatchBlockedPipelineSchedulerPort>();
     clock_            = std::make_shared<ManualEditorClock>();
     runtime_          = EditorSessionRuntime::CreateWithPorts(
-        pipeline_, history_, tasks_, journal_, latch_, checkpoint_store_);
+        pipeline_, history_, tasks_, latch_, checkpoint_store_);
     service_ = runtime_->service.get();
     service_->SetMonotonicClock(clock_);
     service_->SetAdmissionDeadlineHandler(
@@ -85,7 +84,6 @@ class SerialFrameConsumptionTest : public ::testing::Test {
   std::shared_ptr<test::FakeEditorHistoryPort>             history_;
   std::shared_ptr<test::FakeEditorPipelinePort>            pipeline_;
   std::shared_ptr<test::FakeEditorTaskPort>                tasks_;
-  std::shared_ptr<test::FakeEditorJournalPort>             journal_;
   std::shared_ptr<test::FakeEditorCheckpointStore>         checkpoint_store_;
   std::shared_ptr<test::LatchBlockedPipelineSchedulerPort> latch_;
   std::shared_ptr<ManualEditorClock>                       clock_;

@@ -50,14 +50,8 @@ class EditorSaveCheckpointFixture {
                        SaveCheckpointCompletion completion) -> CheckpointTicket;
 
   /// Complete the pending DuckDB materialization step for the active async save.
-  ///
-  /// Preconditions: journal durability already completed (CompleteJournalTruncate).
+  /// Start begins materialization directly; no journal durability step precedes it.
   void CompleteDatabaseWrite(bool materialized = true, std::string error = {});
-
-  /// Complete the pending journal durability step that enables later truncation.
-  ///
-  /// @param durable  True when the journal commit is durable and materialize may begin.
-  void CompleteJournalTruncate(bool durable = true, std::string error = {});
 
   /// Stop accepting new callbacks and wait for in-flight save work to drain.
   void CancelAndWait();
@@ -70,7 +64,6 @@ class EditorSaveCheckpointFixture {
     return *command_executor_;
   }
   [[nodiscard]] auto tasks() -> FakeEditorTaskPort& { return *tasks_; }
-  [[nodiscard]] auto journal() -> FakeEditorJournalPort& { return *journal_; }
   [[nodiscard]] auto checkpoint_store() -> FakeEditorCheckpointStore& {
     return *checkpoint_store_;
   }
@@ -82,16 +75,13 @@ class EditorSaveCheckpointFixture {
   bool fail_capture = false;
   /// When true, task BeginTask returns 0 and Start returns an invalid ticket.
   bool fail_task_start = false;
-  /// When true, journal CommitJournalAsync fails to start or Completes non-durable.
-  bool fail_journal_commit = false;
-  /// When true, materialization reports failure after a durable journal commit.
+  /// When true, materialization reports failure.
   bool fail_materialization = false;
 
  private:
   auto MakeCapture() const -> std::shared_ptr<const EditorMiniGitSaveCapture>;
 
   std::shared_ptr<FakeEditorTaskPort>                tasks_;
-  std::shared_ptr<FakeEditorJournalPort>             journal_;
   std::shared_ptr<FakeEditorCheckpointStore>         checkpoint_store_;
   std::shared_ptr<FakeEditorThumbnailPort>           thumbnails_;
   std::shared_ptr<FakeEditorHistoryPort>             history_;

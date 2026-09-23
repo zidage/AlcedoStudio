@@ -24,6 +24,7 @@
 #include "edit/history/commit_types.hpp"
 #include "edit/history/edit_commit.hpp"
 #include "edit/history/pipeline_edit_change.hpp"
+#include "edit/history/pipeline_history_format.hpp"
 #include "edit/mask/mask_model.hpp"
 #include "edit/operators/models/adjustment_catalog.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
@@ -349,6 +350,31 @@ TEST(PipelineEditBatch, TypedCommitAndChainExpectedSerializedIdentitySurvivesLeg
 
   const auto folded = FoldTransactionChainHash(root_chain, commit.GetCommitHash());
   EXPECT_EQ(folded.ToString(), LoadExpectedBytes("set_parameter_chain_hash.txt"));
+}
+
+/// G10.4: the project format cut to 0.9.0 removes only the legacy history store. The
+/// commit, chain, batch, and WAL identities keep their format versions, and the stored
+/// set-parameter commit reproduces the same hashes recorded before the cut. The literals
+/// below were read from the expected-serialized files at `aa604b0a` (G10.3), so a change to
+/// those files alone cannot hide an identity change.
+TEST(PipelineEditBatch, TypedCommitAndChainIdentityUnchangedAfterFormatCut) {
+  EXPECT_EQ(kProjectFileVersion, "0.9.0");
+  EXPECT_EQ(kCommitFormatVersion, 5u);
+  EXPECT_EQ(kChainFormatVersion, 5u);
+  EXPECT_EQ(kPipelineEditBatchFormatVersion, 4u);
+  EXPECT_EQ(kMiniGitJournalRecordFormatVersion, 6u);
+
+  const auto batch = PipelineEditBatch::FromJSON(
+      nlohmann::json::parse(LoadExpectedBytes("set_parameter_batch.json")));
+  const root_id_t root{0x1122334455667788ULL, 0x99aabbccddeeff00ULL};
+  const auto      commit = edit_history_test::EditCommitAccess::MakePipelineEditAtTimestamp(
+      root, std::nullopt, 42, batch);
+  const auto root_chain = ComputeRootChainHash(root);
+
+  EXPECT_EQ(commit.GetCommitHash().ToString(), "921e048d2c9592b7611068af0afa9d64");
+  EXPECT_EQ(root_chain.ToString(), "56f50f13e2c38b23f6100cd9013e69a3");
+  EXPECT_EQ(FoldTransactionChainHash(root_chain, commit.GetCommitHash()).ToString(),
+            "66d142b9b476967a6652e53f097c4dee");
 }
 
 TEST(PipelineEditBatch, RemoveColorGradeExpectedBytesRemainStable) {

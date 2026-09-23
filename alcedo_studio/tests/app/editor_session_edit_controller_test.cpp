@@ -11,7 +11,6 @@
 #include <string>
 
 #include "app/editor_session_lifecycle.hpp"
-#include "edit/history/edit_transaction.hpp"
 #include "edit/operators/op_base.hpp"
 #include "json.hpp"
 #include "support/editor_parameter_target_test.hpp"
@@ -26,7 +25,6 @@ class EditorSessionEditControllerTest : public ::testing::Test {
   void SetUp() override {
     pipeline_ = std::make_shared<test::FakeEditorPipelinePort>();
     history_  = std::make_shared<test::FakeEditorHistoryPort>();
-    journal_  = std::make_shared<test::FakeEditorJournalPort>();
 
     EditorSessionLifecycle::Dependencies life_deps;
     life_deps.pipeline = pipeline_;
@@ -39,7 +37,7 @@ class EditorSessionEditControllerTest : public ::testing::Test {
     lifecycle_->MarkImageReady();
     lifecycle_->MarkFirstFrameReady();
 
-    EditorSessionEditController::Dependencies edit_deps{history_, journal_};
+    EditorSessionEditController::Dependencies edit_deps{history_};
     edit_ = std::make_unique<EditorSessionEditController>(std::move(edit_deps));
   }
 
@@ -48,7 +46,6 @@ class EditorSessionEditControllerTest : public ::testing::Test {
 
   std::shared_ptr<test::FakeEditorPipelinePort> pipeline_;
   std::shared_ptr<test::FakeEditorHistoryPort>  history_;
-  std::shared_ptr<test::FakeEditorJournalPort>  journal_;
   std::unique_ptr<EditorSessionLifecycle>       lifecycle_;
   std::unique_ptr<EditorSessionEditController>  edit_;
 };
@@ -129,10 +126,10 @@ TEST_F(EditorSessionEditControllerTest, UndoFailureReturnsFailed) {
   EXPECT_EQ(result.message, "undo failed");
 }
 
-TEST_F(EditorSessionEditControllerTest, DiscardUsesJournalPortWithoutParameterWrite) {
+TEST_F(EditorSessionEditControllerTest, DiscardUsesHistoryPortWithoutParameterWrite) {
   auto result = edit_->HandleDiscard(guard(), identity(), EditorSessionState::Interactive);
   EXPECT_EQ(result.kind, EditorEditOutcome::Kind::Accepted);
-  EXPECT_EQ(journal_->discard_count, 1);
+  EXPECT_EQ(history_->discard_count, 1);
   EXPECT_EQ(history_->capture_count, 0);
 }
 

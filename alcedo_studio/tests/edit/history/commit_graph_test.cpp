@@ -11,6 +11,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <json.hpp>
 #include <limits>
 #include <memory>
@@ -948,12 +949,17 @@ class ProjectSchemaBoundaryTests : public ::testing::Test {
 
 TEST_F(ProjectSchemaBoundaryTests, CurrentProjectFileVersionIsSupported) {
   EXPECT_TRUE(project_pack::ProjectVersionIsSupported(project_pack::kProjectFileVersion));
-  EXPECT_EQ(project_pack::kProjectFileVersion, "0.8.0");
+  EXPECT_EQ(project_pack::kProjectFileVersion, "0.9.0");
+  EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.8.0"));
   EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.7.0"));
   EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.5.0"));
 }
 
-TEST_F(ProjectSchemaBoundaryTests, OldProjectMetadataFailsBeforeHistoryLoad) {
+/// G10.4: a 0.8.0 project (the last format with the legacy history store) is rejected by the
+/// metadata version check. The database file is never opened: its placeholder bytes are not
+/// reported and stay unchanged, so no history table is read and no user file is modified.
+TEST_F(ProjectSchemaBoundaryTests, ProjectVersion080FailsBeforeHistoryLoad) {
+  EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.8.0"));
   EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.3.0"));
   EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.2.5"));
   EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.2.4"));
@@ -969,7 +975,7 @@ TEST_F(ProjectSchemaBoundaryTests, OldProjectMetadataFailsBeforeHistoryLoad) {
     nlohmann::json metadata;
     in >> metadata;
     in.close();
-    metadata["project_file_version"] = "0.3.0";
+    metadata["project_file_version"] = "0.8.0";
     std::ofstream out(meta_path_);
     ASSERT_TRUE(out.is_open());
     out << metadata.dump(4);
@@ -980,6 +986,11 @@ TEST_F(ProjectSchemaBoundaryTests, OldProjectMetadataFailsBeforeHistoryLoad) {
     ASSERT_TRUE(garbage.is_open());
     garbage << "not-a-duckdb-history-file";
   }
+  const auto read_db_bytes = [this] {
+    std::ifstream in(db_path_, std::ios::binary);
+    return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+  };
+  const auto db_bytes_before = read_db_bytes();
 
   try {
     ProjectService project(db_path_, meta_path_, ProjectOpenMode::kLoadExisting);
@@ -987,10 +998,12 @@ TEST_F(ProjectSchemaBoundaryTests, OldProjectMetadataFailsBeforeHistoryLoad) {
   } catch (const std::runtime_error& error) {
     const std::string message = error.what();
     EXPECT_NE(message.find("Incompatible project format"), std::string::npos);
-    EXPECT_NE(message.find("0.3.0"), std::string::npos);
+    EXPECT_NE(message.find("0.8.0"), std::string::npos);
+    EXPECT_NE(message.find("0.9.0"), std::string::npos);
     EXPECT_EQ(message.find("not-a-duckdb-history-file"), std::string::npos);
     EXPECT_EQ(message.find("DuckDB"), std::string::npos);
   }
+  EXPECT_EQ(read_db_bytes(), db_bytes_before);
 }
 
 TEST_F(ProjectSchemaBoundaryTests, OldProjectMetadataFailsBeforeAnyHistoryReader) {

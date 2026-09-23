@@ -20,6 +20,7 @@
 #include "app/pipeline_document_history.hpp"
 #include "app/pipeline_service.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
+#include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/i_node_model.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/history/mini_git_working_history.hpp"
@@ -387,6 +388,87 @@ TEST_F(EditorDocumentHistoryTest, TypedUndoAfterHistoryReleaseRestoresDocumentFr
   ASSERT_TRUE(history_.Undo(reopened, &error)) << error;
   EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"), 1.5f);
   EXPECT_NE(guard_->working_head_commit_hash(), head);
+}
+
+auto DocumentDevelopPayload(const alcedo::PipelineDocument& document) -> alcedo::DevelopPayload {
+  const auto* develop = document.Develop();
+  EXPECT_NE(develop, nullptr);
+  return develop == nullptr ? alcedo::DevelopPayload{} : develop->Params().Params();
+}
+
+/// Regression: RAW import re-binds the Develop camera profile and as-shot white
+/// balance outside history. White balance, lens and RAW decode commits store the
+/// whole shared Develop JSON, so a strict whole-JSON match made every earlier
+/// commit impossible to undo after a re-bind. Undo and redo must match and write
+/// only the keys the field owns, and keep the re-bound import data.
+TEST_F(EditorDocumentHistoryTest, DevelopCameraProfileRebindDoesNotBlockWhiteBalanceUndoRedo) {
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  const auto root = DocumentDevelopPayload(*guard_->document_);
+
+  const auto preview = test::PatchFromJson(
+      "color_temp", R"({"wb_mode":"custom","custom_cct":7200.0,"custom_tint":4.0})", false);
+  const auto settled = test::PatchFromJson(
+      "color_temp", R"({"wb_mode":"custom","custom_cct":7200.0,"custom_tint":4.0})", true);
+  ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, preview, &error)) << error;
+  ASSERT_TRUE(history_.CommitAdjustment(handle, settled, &error)) << error;
+  const auto lens_preview = test::PatchFromJson("lens_calib", R"({"apply_tca":true})", false);
+  const auto lens_settled = test::PatchFromJson("lens_calib", R"({"apply_tca":true})", true);
+  ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, lens_preview, &error)) << error;
+  ASSERT_TRUE(history_.CommitAdjustment(handle, lens_settled, &error)) << error;
+
+  // Simulate the RAW color context re-bind that happens outside history.
+  auto rebound = DocumentDevelopPayload(*guard_->document_);
+  rebound.as_shot_cct                  = root.as_shot_cct + 321.0f;
+  rebound.as_shot_tint                 = root.as_shot_tint + 3.0f;
+  rebound.camera_profile.cam_mul[0]    = root.camera_profile.cam_mul[0] + 0.5f;
+  rebound.camera_profile.color_matrix_1_cct = root.camera_profile.color_matrix_1_cct + 100.0;
+  guard_->document_->Develop()->Params().ReplaceParams(rebound);
+
+  ASSERT_TRUE(history_.Undo(handle, &error)) << error;
+  ASSERT_TRUE(history_.Undo(handle, &error)) << error;
+  auto undone = DocumentDevelopPayload(*guard_->document_);
+  EXPECT_EQ(undone.wb_mode, root.wb_mode);
+  EXPECT_FLOAT_EQ(undone.custom_cct, root.custom_cct);
+  EXPECT_FLOAT_EQ(undone.custom_tint, root.custom_tint);
+  EXPECT_EQ(undone.apply_tca, root.apply_tca);
+  EXPECT_FLOAT_EQ(undone.as_shot_cct, rebound.as_shot_cct);
+  EXPECT_FLOAT_EQ(undone.as_shot_tint, rebound.as_shot_tint);
+  EXPECT_FLOAT_EQ(undone.camera_profile.cam_mul[0], rebound.camera_profile.cam_mul[0]);
+  EXPECT_DOUBLE_EQ(undone.camera_profile.color_matrix_1_cct,
+                   rebound.camera_profile.color_matrix_1_cct);
+
+  ASSERT_TRUE(history_.Redo(handle, &error)) << error;
+  ASSERT_TRUE(history_.Redo(handle, &error)) << error;
+  auto redone = DocumentDevelopPayload(*guard_->document_);
+  EXPECT_EQ(redone.wb_mode, "custom");
+  EXPECT_FLOAT_EQ(redone.custom_cct, 7200.0f);
+  EXPECT_FLOAT_EQ(redone.custom_tint, 4.0f);
+  EXPECT_TRUE(redone.apply_tca);
+  EXPECT_FLOAT_EQ(redone.as_shot_cct, rebound.as_shot_cct);
+  EXPECT_FLOAT_EQ(redone.camera_profile.cam_mul[0], rebound.camera_profile.cam_mul[0]);
+}
+
+/// A drift in a key the field owns is still a real conflict: undo fails and leaves
+/// the document and working head unchanged.
+TEST_F(EditorDocumentHistoryTest, OwnedWhiteBalanceDriftStillRejectsUndo) {
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  const auto settled =
+      test::PatchFromJson("color_temp", R"({"wb_mode":"custom","custom_cct":7200.0})", true);
+  ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, settled, &error)) << error;
+  ASSERT_TRUE(history_.CommitAdjustment(handle, settled, &error)) << error;
+  auto drifted       = DocumentDevelopPayload(*guard_->document_);
+  drifted.custom_cct = 5100.0f;
+  guard_->document_->Develop()->Params().ReplaceParams(drifted);
+  const auto head = guard_->working_head_commit_hash();
+
+  EXPECT_FALSE(history_.Undo(handle, &error));
+  EXPECT_NE(error.find("does not match stored values"), std::string::npos) << error;
+  EXPECT_EQ(guard_->working_head_commit_hash(), head);
+  EXPECT_FLOAT_EQ(DocumentDevelopPayload(*guard_->document_).custom_cct, 5100.0f);
 }
 
 TEST_F(EditorDocumentHistoryTest, PostControlTargetsDrtAndRestoresOnUndo) {

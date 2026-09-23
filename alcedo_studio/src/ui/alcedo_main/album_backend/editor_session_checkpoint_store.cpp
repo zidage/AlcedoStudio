@@ -81,8 +81,7 @@ auto EditorSessionCheckpointStore::Materialize(
     if (error) *error = "Mini-Git storage is unavailable";
     return {false, false, 0, error != nullptr ? *error : "Mini-Git storage is unavailable"};
   }
-  // Production path: Mini-Git materializer only. The legacy transaction-array
-  // EditorHistoryMaterializer is never constructed or invoked from this store.
+  // Production path: the Mini-Git materializer is the only save writer.
   const auto result = materializer->Materialize(*capture, error);
   return {result.accepted, result.materialized, result.materialized ? 1u : 0u, result.error};
 }

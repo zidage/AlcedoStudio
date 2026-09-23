@@ -52,8 +52,8 @@ EditorSessionService::EditorSessionService(Dependencies dependencies)
       lifecycle_(
           EditorSessionLifecycle::Dependencies{dependencies_.pipeline, dependencies_.history}),
       save_service_(EditorSaveCheckpointService::Dependencies{
-          dependencies_.journal, dependencies_.checkpoint_store, dependencies_.thumbnails,
-          dependencies_.tasks, std::make_shared<SessionQueueCompletionExecutor>(command_queue_),
+          dependencies_.checkpoint_store, dependencies_.thumbnails, dependencies_.tasks,
+          std::make_shared<SessionQueueCompletionExecutor>(command_queue_),
           dependencies_.save_coordinator}),
       render_(EditorSessionRenderController::Dependencies{
           dependencies_.render,
@@ -71,11 +71,9 @@ EditorSessionService::EditorSessionService(Dependencies dependencies)
             completion.message              = event.message;
             PostCompletion(std::move(completion));
           }}),
-      edit_(
-          EditorSessionEditController::Dependencies{dependencies_.history, dependencies_.journal}),
-      navigation_(lifecycle_, save_service_, render_, dependencies_.journal.get(),
-                  dependencies_.checkpoint_store.get(), dependencies_.history.get(),
-                  &navigation_state_) {
+      edit_(EditorSessionEditController::Dependencies{dependencies_.history}),
+      navigation_(lifecycle_, save_service_, render_, dependencies_.checkpoint_store.get(),
+                  dependencies_.history.get(), &navigation_state_) {
   // Session mutations must run on the command-queue owner thread, not on the
   // thread that constructed the facade.
   lifecycle_.SetOwnerCheck([this] { return command_queue_.IsOwnerThread(); });
@@ -791,14 +789,6 @@ auto EditorSessionService::StartHistoryCheckpointSave() -> EditorSessionResult {
   }
 
   const auto identity = lifecycle_.identity();
-  if (dependencies_.journal) {
-    std::string finalize_error;
-    if (!dependencies_.journal->FinalizeEdit(
-            identity.element_id, lifecycle_.active_image_load_request().value, &finalize_error)) {
-      return Reject(finalize_error.empty() ? "Editor command could not be finalized"
-                                           : std::move(finalize_error));
-    }
-  }
   auto save_lock = save_service_.TryAcquireSaveLock(identity.element_id);
   if (!save_lock.owns_lock()) {
     return Reject("Another editor save checkpoint is in progress");

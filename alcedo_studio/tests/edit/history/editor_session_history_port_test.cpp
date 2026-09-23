@@ -419,7 +419,7 @@ TEST_F(EditorSessionHistoryPortTest, RejectedWriteKeepsDocumentAndCreatesNoCommi
   ASSERT_TRUE(handle.valid) << error;
   auto history = std::shared_ptr<alcedo::IEditorHistoryPort>(
       static_cast<alcedo::IEditorHistoryPort*>(&history_), [](alcedo::IEditorHistoryPort*) {});
-  alcedo::EditorSessionEditController edit({history, nullptr});
+  alcedo::EditorSessionEditController edit({history});
   alcedo::EditorSessionIdentity       identity;
   identity.element_id = 42;
 
