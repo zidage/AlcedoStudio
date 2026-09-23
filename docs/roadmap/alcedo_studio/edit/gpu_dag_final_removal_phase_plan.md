@@ -2851,7 +2851,7 @@ manual Windows CUDA and OpenCL check (Section 16.10). The diff is above the 2000
 - Diff: about 3.4k lines (0.94k added, 2.47k removed) in 69 files, plus two expected-pixel PNG
   files and the archive moves. This is above the 2000-line limit; 2.5k of the lines are deletions
   (executor 860 lines, frame-sink stage cases 375 lines, stage-only `PipelineMapperTest` cases). It
-  landed as separate commits: `5f02da01` retargets the tests to the document (about 1.9k lines; the
+  landed as separate commits: `5f02da01` retargets the tests to the document (about 1.5k lines; the
   tests compile against the old executor but need `99d79190` to run), and `99d79190` changes the
   executor, services, controller archive, presentation, and source checks (about 1.9k lines).
 - `ThumbnailAndExportRenderFromDocumentOnly` and `ExecutorConstructsWithoutOperatorRegistry` are in
