@@ -7,6 +7,7 @@
 #include <exception>
 #include <optional>
 #include <stdexcept>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -78,13 +79,58 @@ auto ApplyGraph(PipelineDocument& document, std::vector<GraphValidationError> er
   return true;
 }
 
+/// Keys each Develop field owns. `raw_decode`, `color_temp` and `lens_calib` share
+/// one Develop Params JSON, which also carries import-bound data (`camera_profile`,
+/// `as_shot_*`) that the RAW color context re-binds outside history.
+auto DevelopFieldOwnedKeys(std::string_view field_key) -> const std::vector<std::string_view>* {
+  static const std::vector<std::string_view> kRawDecode{
+      "demosaic_method", "highlights_reconstruct", "use_camera_wb", "user_wb"};
+  static const std::vector<std::string_view> kColorTemp{"wb_mode", "custom_cct", "custom_tint"};
+  static const std::vector<std::string_view> kLensCalib{
+      "lens_enabled",   "apply_vignetting", "apply_distortion",   "apply_tca",
+      "apply_crop",     "auto_scale",       "use_user_scale",     "user_scale",
+      "projection_enabled", "target_projection", "lens_profile_db_path", "lens_maker",
+      "lens_model"};
+  if (field_key == "raw_decode") return &kRawDecode;
+  if (field_key == "color_temp") return &kColorTemp;
+  if (field_key == "lens_calib") return &kLensCalib;
+  return nullptr;
+}
+
+/// Reduce a stored or live parameter JSON to the part @p field_key owns. Other
+/// fields own their whole Model JSON and are returned unchanged.
+auto FieldOwnedParameterJson(std::string_view field_key, const nlohmann::json& json)
+    -> nlohmann::json {
+  const auto* keys = DevelopFieldOwnedKeys(field_key);
+  if (keys == nullptr || !json.is_object()) {
+    return json;
+  }
+  const nlohmann::json* object = &json;
+  for (const char* wrapper : {"raw", "raw_decode", "color_temp", "lens_calib"}) {
+    if (json.contains(wrapper) && json.at(wrapper).is_object()) {
+      object = &json.at(wrapper);
+      break;
+    }
+  }
+  nlohmann::json owned = nlohmann::json::object();
+  for (const auto key : *keys) {
+    const std::string name{key};
+    if (object->contains(name)) {
+      owned[name] = object->at(name);
+    }
+  }
+  return owned;
+}
+
 auto ExpectedParameterJson(const PipelineDocument& document, const SetParameterChange& change,
                            PipelineEditApplyDirection direction, nlohmann::json* json,
                            std::string* error) -> bool {
   const auto target = ToEditorParameterTarget(change.target);
+  const auto& expected =
+      direction == PipelineEditApplyDirection::Forward ? change.before_value : change.after_value;
   return ReadEditorParameterJson(document, target, json, error) &&
-         JsonEqual(*json, direction == PipelineEditApplyDirection::Forward ? change.before_value
-                                                                          : change.after_value);
+         JsonEqual(FieldOwnedParameterJson(target.field_key, *json),
+                   FieldOwnedParameterJson(target.field_key, expected));
 }
 
 auto ApplySetParameter(PipelineDocument& document, const SetParameterChange& change,
@@ -101,7 +147,9 @@ auto ApplySetParameter(PipelineDocument& document, const SetParameterChange& cha
   const auto target = ToEditorParameterTarget(change.target);
   const auto& value = direction == PipelineEditApplyDirection::Forward ? change.after_value
                                                                       : change.before_value;
-  return ApplyEditorParameterPatch(document, target, value, error);
+  // Write only owned keys so a head move never restores stale import-bound data.
+  return ApplyEditorParameterPatch(document, target,
+                                   FieldOwnedParameterJson(target.field_key, value), error);
 }
 
 auto ApplySetNodeEnabled(PipelineDocument& document, const SetNodeEnabledChange& change,

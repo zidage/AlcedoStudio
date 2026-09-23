@@ -123,6 +123,64 @@ TEST_F(EditorMiniGitMaterializerTest,
   }
 }
 
+/// Regression: an undo whose document apply fails is abandoned and its WAL tail
+/// record revoked. The journal never reuses that sequence, so the next edit leaves
+/// a gap. Save must still materialize the capture instead of rejecting it as
+/// non-contiguous, and the saved head must survive a reopen.
+TEST_F(EditorMiniGitMaterializerTest, RevokedUndoSequenceGapStillMaterializesAndReopens) {
+  const auto element_id = test::EditorMiniGitProjectFixture::kElementA;
+  ASSERT_TRUE(project_.AppendExposureEdit(element_id, 0.0f, 1.25f));
+  ASSERT_TRUE(project_.AppendExposureEdit(element_id, 1.25f, 2.0f));
+
+  auto&       history         = project_.working_history(element_id);
+  const auto  prior_selection = history.WorkingSelection();
+  const auto  prepared        = history.PrepareUndo();
+  ASSERT_TRUE(prepared.ready);
+  ASSERT_TRUE(history.PublishPreparedHeadMove(prepared).moved);
+  std::string error;
+  ASSERT_TRUE(history.AbandonPublishedHeadMove(prepared, prior_selection, &error)) << error;
+  ASSERT_TRUE(project_.AppendExposureEdit(element_id, 2.0f, 2.5f));
+
+  auto capture = project_.CaptureWorkingState(element_id, 2.5f);
+  ASSERT_EQ(capture.journal_records.size(), 3u);
+  EXPECT_EQ(capture.journal_records[0].sequence, 1u);
+  EXPECT_EQ(capture.journal_records[1].sequence, 2u);
+  EXPECT_EQ(capture.journal_records[2].sequence, 4u);
+  const auto captured_head = capture.working_head;
+
+  const auto result = project_.MaterializeUnderSaveLock(capture, &error);
+  ASSERT_TRUE(result.accepted) << error << " / " << result.error;
+  ASSERT_TRUE(result.materialized);
+  EXPECT_TRUE(project_.ReadJournalRecords(element_id, &error).empty()) << error;
+
+  project_.CloseAndReopenProject();
+  auto stored = project_.LoadStoredGraph(element_id);
+  ASSERT_TRUE(stored.has_value());
+  EXPECT_EQ(stored->CommitCount(), 3u);
+  EXPECT_EQ(stored->GetActiveVersionRef().head_commit_hash, captured_head);
+  ASSERT_TRUE(stored->GetImageEditState().serialized_pipeline_state.has_value());
+  EXPECT_FLOAT_EQ(test::EditorMiniGitProjectFixture::CheckpointDocumentExposure(
+                      *stored->GetImageEditState().serialized_pipeline_state),
+                  2.5f);
+}
+
+/// A capture whose records are out of order is still rejected before any write.
+TEST_F(EditorMiniGitMaterializerTest, OutOfOrderJournalCaptureIsRejectedBeforeWrite) {
+  const auto element_id = test::EditorMiniGitProjectFixture::kElementA;
+  ASSERT_TRUE(project_.AppendExposureEdit(element_id, 0.0f, 1.25f));
+  ASSERT_TRUE(project_.AppendExposureEdit(element_id, 1.25f, 2.0f));
+  auto capture = project_.CaptureWorkingState(element_id, 2.0f);
+  ASSERT_EQ(capture.journal_records.size(), 2u);
+  capture.journal_records[1].sequence = capture.journal_records[0].sequence;
+  capture.last_journal_sequence       = capture.journal_records[1].sequence;
+
+  std::string error;
+  const auto  result = project_.MaterializeUnderSaveLock(capture, &error);
+  EXPECT_FALSE(result.accepted);
+  EXPECT_NE(error.find("strictly increasing"), std::string::npos) << error;
+  EXPECT_EQ(project_.CountStoredCommits(element_id), 0u);
+}
+
 /// G10.4: a saved 0.9.0 project reopens through the metadata version check with the same
 /// Version head, chain hash, and commit count, and the reopened working graph resumes at
 /// that head. The format cut changes no commit or chain identity.
