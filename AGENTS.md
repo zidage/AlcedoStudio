@@ -284,12 +284,13 @@ ctest --test-dir build/debug --output-on-failure
 
 Test names and reference-data files must follow **Naming and Terminology** above.
 
-**Do not run the full test suite unless you have a good reason.** A full `ctest` run takes about
-an hour and includes GPU, QML, thumbnail, and export suites that fail or time out for reasons
-unrelated to most changes. Run the test binaries that exercise the code you changed, plus the
-suites of their direct callers, with `ctest -R '<pattern>'` or by running the binary directly. A
-good reason is, for example, a change to a widely shared type or build configuration, or an
-explicit user request. When you do run the full suite, compare failures against a clean `HEAD`
+**Only the user can start a full test suite run.** An agent must never run the full `ctest`
+suite on its own decision, even when a plan, a skill, or an exit criterion asks for it. A full run
+takes several hours and includes GPU, QML, thumbnail, and export suites that fail or time out for
+reasons unrelated to most changes. Run the test binaries that exercise the code you changed, plus
+the suites of their direct callers, with `ctest -R '<pattern>'` or by running the binary directly.
+When a plan asks for a full-suite record, run the targeted suites and report the full-suite item as
+not run. When the user explicitly asks for a full run, compare failures against a clean `HEAD`
 before reporting any of them as regressions.
 
 **Qt UI/QML tests:** do not burn effort chasing failures in `WorkspaceShellTest` and similar
