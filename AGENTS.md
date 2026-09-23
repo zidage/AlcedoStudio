@@ -329,6 +329,23 @@ These rules come from the Windows development machine. They apply to every agent
 - Exclude `third_party/` from recursive searches. `third_party/grpc` is very large, and a search of
   the whole repository times out.
 
+### Build presets and build directories
+
+- Use only these presets: `win_debug` and `win_release` on Windows, `macos_debug` and
+  `macos_release` on macOS. Each has one fixed build directory (`build/debug`, `build/release`,
+  `build/macos-debug`, `build/macos-release`). Build there, and rebuild incrementally.
+- Do not use `win_release_test`, `macos_debug_tests`, `macos_arm_metal_ci`, or a new preset or
+  build directory without a good reason (for example, the user asks for it). A new build directory
+  builds the whole tree again. On Windows this includes gRPC, about 3000 extra steps.
+- `macos_debug` sets `ALCEDO_BUILD_TESTS=OFF`. To build tests on macOS, configure `macos_debug`
+  with `-DALCEDO_BUILD_TESTS=ON` (and `-DALCEDO_BUILD_CI_TESTS=ON` for the CI source checks) in
+  `build/macos-debug`.
+- `build/tmp/` holds logs, evidence, and experiment output only. Do not put a build tree in it.
+- For a baseline at another commit, check out that commit in the same working tree and rebuild
+  only the needed targets in the same build directory, then check out the branch again. Do not
+  create a second build directory or a worktree build.
+- Remove the logs and files that a task put in `build/tmp/` when the task is complete.
+
 ### Builds, file locks, and formatting
 
 - Run one build at a time in a build directory. Do not run `ctest` while a build links test
