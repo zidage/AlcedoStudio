@@ -102,3 +102,30 @@ set_tests_properties(LegacyHistoryCheckRejectsSourceAndTargetNames
   PROPERTIES PASS_REGULAR_EXPRESSION "app/CMakeLists\.txt: target_link_libraries.*sleeve/file\.hpp: class File"
              FAIL_REGULAR_EXPRESSION "mini_git\.hpp"
              LABELS "ci_core_flow;legacy_removal")
+
+# G10.5: DRT resolution and its GPU parameter layouts live in the runtime. No file under
+# edit/runtime or include/edit/runtime may include a legacy operator or stage parameter header.
+add_test(NAME RuntimeSourcesDoNotIncludeLegacyOperatorHeaders
+  COMMAND ${CMAKE_COMMAND} -DALCEDO_SOURCE_ROOT=${ALCEDO_ROOT_DIR}/src
+          -DCHECK=RuntimeSourcesDoNotIncludeLegacyOperatorHeaders
+          -P ${ALCEDO_TEST_ROOT}/ci/legacy_removal_source_checks.cmake)
+set_tests_properties(RuntimeSourcesDoNotIncludeLegacyOperatorHeaders
+  PROPERTIES LABELS "ci_core_flow;legacy_removal")
+
+# The same check must reject a runtime file that includes param.cuh, and must not reject a
+# runtime file that includes the relocated CUDA DRT header or a legacy file outside the runtime.
+set(_runtime_legacy_header_fixture_root "${CMAKE_CURRENT_BINARY_DIR}/runtime_legacy_header_fixture")
+file(WRITE "${_runtime_legacy_header_fixture_root}/edit/runtime/cuda/drt_pass.cu"
+  "#include \"edit/operators/GPU_kernels/param.cuh\"\n")
+file(WRITE "${_runtime_legacy_header_fixture_root}/include/edit/runtime/cuda/drt_state.hpp"
+  "#include \"edit/runtime/cuda/cuda_drt_gpu_params.cuh\"\n")
+file(WRITE "${_runtime_legacy_header_fixture_root}/edit/pipeline/stage.cpp"
+  "#include \"edit/operators/op_base.hpp\"\n")
+add_test(NAME RuntimeLegacyHeaderCheckRejectsRuntimeInclude
+  COMMAND ${CMAKE_COMMAND} -DALCEDO_SOURCE_ROOT=${_runtime_legacy_header_fixture_root}
+          -DCHECK=RuntimeSourcesDoNotIncludeLegacyOperatorHeaders
+          -P ${ALCEDO_TEST_ROOT}/ci/legacy_removal_source_checks.cmake)
+set_tests_properties(RuntimeLegacyHeaderCheckRejectsRuntimeInclude
+  PROPERTIES PASS_REGULAR_EXPRESSION "edit/runtime/cuda/drt_pass\.cu: #include"
+             FAIL_REGULAR_EXPRESSION "drt_state\.hpp|stage\.cpp"
+             LABELS "ci_core_flow;legacy_removal")

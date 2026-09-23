@@ -240,7 +240,8 @@ add_executable(GpuDagModelGraphTest
   ${ALCEDO_TEST_ROOT}/edit/graph/color_grade_mask_model_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/legacy_import_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/header_hygiene_test.cpp
-  ${ALCEDO_TEST_ROOT}/edit/graph/develop_color_transform_test.cpp)
+  ${ALCEDO_TEST_ROOT}/edit/graph/develop_color_transform_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/runtime/drt_output_resolver_test.cpp)
 target_include_directories(GpuDagModelGraphTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(GpuDagModelGraphTest PRIVATE GTest::gtest_main EditGraph EditRuntime)
 target_compile_definitions(GpuDagModelGraphTest PRIVATE
@@ -416,6 +417,7 @@ if(ALCEDO_CUDA_ENABLED)
 
   add_executable(GpuDagCudaDrtProductTest
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_drt_product_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_drt_expected_output_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_product_plan_cache_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_result_cache_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_product_scope_present_test.cpp
@@ -425,6 +427,9 @@ if(ALCEDO_CUDA_ENABLED)
   target_include_directories(GpuDagCudaDrtProductTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagCudaDrtProductTest PRIVATE
     GTest::gtest_main EditRuntimeCuda EditInput Image EditPipeline PipelineScheduler)
+  target_compile_definitions(GpuDagCudaDrtProductTest PRIVATE
+    ALCEDO_DRT_EXPECTED_PARAMETER_DIR="${ALCEDO_TEST_ROOT}/resources/expected_parameters/drt"
+    ALCEDO_DRT_EXPECTED_PIXEL_DIR="${ALCEDO_TEST_ROOT}/resources/expected_pixels/drt")
   gtest_discover_tests(GpuDagCudaDrtProductTest TEST_PREFIX "GpuDagCudaDrtProductTest."
     PROPERTIES LABELS "gpu;edit;runtime;product")
   alcedo_register_test_target(GpuDagCudaDrtProductTest gpu)
@@ -504,7 +509,8 @@ if(ALCEDO_METAL_ENABLED)
   target_link_libraries(GpuDagMetalDrtTest PRIVATE
     GTest::gtest_main EditRuntimeMetal EditInput RawProcessorOp Operators MetalDemosaicNetEntry)
   target_compile_definitions(GpuDagMetalDrtTest PRIVATE
-    ALCEDO_METAL_DRT_METALLIB_PATH="${METAL_DRT_METALLIB}")
+    ALCEDO_METAL_DRT_METALLIB_PATH="${METAL_DRT_METALLIB}"
+    ALCEDO_DRT_EXPECTED_PARAMETER_DIR="${ALCEDO_TEST_ROOT}/resources/expected_parameters/drt")
   add_dependencies(GpuDagMetalDrtTest GpuDagMetalShaders)
   gtest_discover_tests(GpuDagMetalDrtTest TEST_PREFIX "GpuDagMetalDrtTest."
     PROPERTIES LABELS "gpu;edit;runtime;metal")
@@ -575,13 +581,15 @@ if(ALCEDO_OPENCL_ENABLED)
 
   add_executable(GpuDagOpenClDrtProductTest
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_drt_product_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_drt_parameter_bytes_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_nm2_qualification_test.cpp)
   target_include_directories(GpuDagOpenClDrtProductTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagOpenClDrtProductTest PRIVATE
     GTest::gtest_main EditRuntimeOpenCl EditPipeline EditInput RawProcessorOp
     OpenClDemosaicNetEntry OpenClProgramLibrary Image)
   target_compile_definitions(GpuDagOpenClDrtProductTest PRIVATE
-    ALCEDO_OPENCL_SHADER_SOURCE_ROOT="${ALCEDO_SRC_DIR}")
+    ALCEDO_OPENCL_SHADER_SOURCE_ROOT="${ALCEDO_SRC_DIR}"
+    ALCEDO_DRT_EXPECTED_PARAMETER_DIR="${ALCEDO_TEST_ROOT}/resources/expected_parameters/drt")
   if(ALCEDO_CUDA_ENABLED)
     target_link_libraries(GpuDagOpenClDrtProductTest PRIVATE EditRuntimeCuda)
     target_compile_definitions(GpuDagOpenClDrtProductTest PRIVATE HAVE_CUDA)

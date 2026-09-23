@@ -18,6 +18,11 @@
 #   the legacy history store that G10.4 archived (the edit-history table and object, Version and
 #   transaction types, the image journal and its writer port, the history management service, the
 #   legacy materializer, and the recovery-metadata table). Run once for src and once for tests.
+#
+# CHECK=RuntimeSourcesDoNotIncludeLegacyOperatorHeaders
+#   Fails when a file under edit/runtime/ or include/edit/runtime/ includes a legacy operator or
+#   stage parameter header (op_base.hpp, odt_op.hpp, param.cuh, fused_param.hpp,
+#   opencl_param.hpp). G10.5 moved the DRT resolution and parameter layouts out of them.
 
 cmake_minimum_required(VERSION 3.21)
 
@@ -107,6 +112,44 @@ function(_alcedo_scan api_regex allowed_var failure_text success_text)
   message(STATUS "Scanned ${_scanned} files; ${success_text}.")
 endfunction()
 
+# Scan the files matched by scope_var for api_regex and fail with one line per matching file.
+function(_alcedo_scan_within api_regex scope_var failure_text success_text)
+  file(GLOB_RECURSE _sources RELATIVE "${ALCEDO_SOURCE_ROOT}"
+    "${ALCEDO_SOURCE_ROOT}/*.cpp" "${ALCEDO_SOURCE_ROOT}/*.hpp" "${ALCEDO_SOURCE_ROOT}/*.h"
+    "${ALCEDO_SOURCE_ROOT}/*.cu" "${ALCEDO_SOURCE_ROOT}/*.cuh" "${ALCEDO_SOURCE_ROOT}/*.mm"
+    "${ALCEDO_SOURCE_ROOT}/*.inl" "${ALCEDO_SOURCE_ROOT}/*.cl" "${ALCEDO_SOURCE_ROOT}/*.metal")
+  set(_violations "")
+  set(_scanned 0)
+  foreach(relative_path IN LISTS _sources)
+    _alcedo_matches_any("${relative_path}" ${scope_var} _in_scope)
+    if(NOT _in_scope)
+      continue()
+    endif()
+    math(EXPR _scanned "${_scanned} + 1")
+    file(STRINGS "${ALCEDO_SOURCE_ROOT}/${relative_path}" _hits REGEX "${api_regex}")
+    if(_hits)
+      list(GET _hits 0 _first_hit)
+      string(STRIP "${_first_hit}" _first_hit)
+      list(APPEND _violations "${relative_path}: ${_first_hit}")
+    endif()
+  endforeach()
+  if(_scanned EQUAL 0)
+    message(FATAL_ERROR "No source files found in the check scope under ${ALCEDO_SOURCE_ROOT}")
+  endif()
+  if(_violations)
+    list(JOIN _violations "
+  " _report)
+    message(FATAL_ERROR "${failure_text}:
+  ${_report}")
+  endif()
+  message(STATUS "Scanned ${_scanned} files; ${success_text}.")
+endfunction()
+
+set(_runtime_scope
+  "^edit/runtime/"
+  "^include/edit/runtime/"
+)
+
 if(CHECK STREQUAL "NoProductCodeReadsStageTableOutsideMirror")
   _alcedo_scan("(GetStage|GetGlobalParams|GetOperator)\\(" _stage_mirror_hosts
     "Product code reads the stage table outside the stage mirror hosts"
@@ -123,6 +166,12 @@ elseif(CHECK STREQUAL "NoSourceReferencesLegacyHistoryStore")
     "Source names the archived legacy history store"
     "no reference to the archived legacy history store"
     "*.txt" "*.cmake")
+elseif(CHECK STREQUAL "RuntimeSourcesDoNotIncludeLegacyOperatorHeaders")
+  _alcedo_scan_within(
+    "#[ \t]*include[ \t]*[<\"]([^\">]*/)?(op_base\\.hpp|odt_op\\.hpp|param\\.cuh|fused_param\\.hpp|opencl_param\\.hpp)[\">]"
+    _runtime_scope
+    "Runtime source includes a legacy operator or stage parameter header"
+    "no runtime source includes a legacy operator or stage parameter header")
 else()
   message(FATAL_ERROR "Unknown source check: ${CHECK}")
 endif()

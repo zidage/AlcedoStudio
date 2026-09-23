@@ -986,6 +986,9 @@ _deps
 
 # C/C++ binary extension file
 *.bin
+# Stored expected test data (GPU DAG G10.5 DRT parameter bytes and pixels).
+!alcedo_studio/tests/resources/expected_parameters/**/*.bin
+!alcedo_studio/tests/resources/expected_pixels/**/*.bin
 
 ##### C
 # Prerequisites
