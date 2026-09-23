@@ -6,7 +6,7 @@
 
 #include <cuda_runtime.h>
 
-#include "edit/operators/GPU_kernels/color_mgmt/disp_enc_funcs.cuh"
+#include "edit/runtime/cuda/drt/disp_enc_funcs.cuh"
 #include "edit/operators/GPU_kernels/param.cuh"
 #include "edit/operators/op_kernel.hpp"
 

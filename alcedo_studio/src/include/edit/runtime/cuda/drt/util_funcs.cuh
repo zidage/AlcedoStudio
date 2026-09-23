@@ -11,7 +11,7 @@
 #include <cuda_runtime.h>
 #include <vector_types.h>
 
-#include "edit/operators/GPU_kernels/param.cuh"
+#include "edit/runtime/cuda/cuda_drt_gpu_params.cuh"
 
 namespace alcedo {
 namespace CUDA {

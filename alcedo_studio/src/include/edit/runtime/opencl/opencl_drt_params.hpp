@@ -6,14 +6,19 @@
 
 #ifdef HAVE_OPENCL
 
-#include <json.hpp>
-
-#include "edit/operators/GPU_kernels/opencl_param.hpp"
+#include "edit/operators/utils/color_utils.hpp"
+#include "edit/runtime/opencl/opencl_drt_gpu_params.hpp"
 
 namespace alcedo {
 
-/** @brief Resolve the CPU ODT model into the OpenCL DRT parameter layout. */
-[[nodiscard]] auto ResolveOpenClDrtParams(const nlohmann::json& odt_json)
+/**
+ * @brief Copy a resolved DRT output transform into the OpenCL DRT parameter layout.
+ *
+ * ACES 2.0 copies the four lookup tables inline; OpenDRT leaves them zero. Pure value function.
+ *
+ * @throws std::runtime_error when an ACES 2.0 transform has no resolved tables.
+ */
+[[nodiscard]] auto PackOpenClDrtParams(const ColorUtils::TO_OUTPUT_Params& resolved)
     -> OpenCL::Pipeline::OpenClToOutputParams;
 
 }  // namespace alcedo

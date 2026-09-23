@@ -11,8 +11,6 @@
 #include <cstdint>
 #include <stdexcept>
 
-#include "edit/operators/cst/odt_op.hpp"
-
 namespace alcedo {
 namespace {
 
@@ -163,13 +161,8 @@ void CopyOpenDrt(const ColorUtils::OpenDRTParams& source, OpenClOpenDRTParams& d
 
 }  // namespace
 
-auto ResolveOpenClDrtParams(const nlohmann::json& odt_json)
+auto PackOpenClDrtParams(const ColorUtils::TO_OUTPUT_Params& cpu)
     -> OpenCL::Pipeline::OpenClToOutputParams {
-  ODT_Op         descriptor(nlohmann::json{{"odt", odt_json}});
-  OperatorParams cpu_params;
-  descriptor.SetGlobalParams(cpu_params);
-  const auto&                            cpu = cpu_params.to_output_params_;
-
   OpenCL::Pipeline::OpenClToOutputParams gpu;
   gpu.method_ = static_cast<std::int32_t>(cpu.method_);
   gpu.eotf_   = static_cast<std::int32_t>(cpu.eotf_);
@@ -180,7 +173,7 @@ auto ResolveOpenClDrtParams(const nlohmann::json& odt_json)
   if (cpu.method_ == ColorUtils::ODTMethod::ACES_2_0) {
     if (!cpu.aces_params_.table_reach_M_ || !cpu.aces_params_.table_hues_ ||
         !cpu.aces_params_.table_upper_hull_gammas_ || !cpu.aces_params_.table_gamut_cusps_) {
-      throw std::runtime_error("ResolveOpenClDrtParams: ACES 2.0 tables were not resolved");
+      throw std::runtime_error("PackOpenClDrtParams: ACES 2.0 tables were not resolved");
     }
     constexpr auto table_size = OpenCL::Pipeline::kOpenClAcesOdtTableSize;
     std::copy_n(cpu.aces_params_.table_reach_M_->data(), table_size,

@@ -75,6 +75,10 @@ class OpenClProgramLibrary {
   auto        IsProgramBuilt(std::string_view name) const -> bool;
 
   auto        RegisteredProgramNames() const -> std::vector<std::string>;
+
+  // Source files of the named program in build order, or empty when it is not registered. Does
+  // not trigger compilation. Used by tests that check where a program's sources live.
+  auto RegisteredSourcePaths(std::string_view name) const -> std::vector<std::filesystem::path>;
 };
 
 }  // namespace alcedo

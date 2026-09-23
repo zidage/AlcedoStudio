@@ -2,8 +2,8 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-#ifndef ALCEDO_OPENCL_EDIT_PIPELINE_CST_CL
-#define ALCEDO_OPENCL_EDIT_PIPELINE_CST_CL
+#ifndef ALCEDO_OPENCL_CST_CL
+#define ALCEDO_OPENCL_CST_CL
 
 // === 3D LUT helper ============================================================
 
@@ -907,4 +907,4 @@ static inline float4 opencl_output_op(float4 px, __global OpenClFusedParams* par
   return (float4)(cv.x, cv.y, cv.z, px.w);
 }
 
-#endif  // ALCEDO_OPENCL_EDIT_PIPELINE_CST_CL
+#endif  // ALCEDO_OPENCL_CST_CL

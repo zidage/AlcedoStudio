@@ -9,12 +9,12 @@
 #pragma once
 
 #include <cuda_runtime.h>
-#include "edit/operators/GPU_kernels/param.cuh"
+#include "edit/runtime/cuda/cuda_drt_gpu_params.cuh"
 
 namespace alcedo {
 namespace CUDA {
 
-GPU_FUNC float Tonescale_fwd(float x, GPU_TSParams& params) {
+GPU_FUNC float Tonescale_fwd(float x, CudaDrtTonescaleParams& params) {
   // Forward MM tone scale
   // Guard against 0/0 when x == -s_2_ and against negative denominators.
   // +Inf maps to the asymptote (ratio → 1); other non-finite inputs stay at 0.

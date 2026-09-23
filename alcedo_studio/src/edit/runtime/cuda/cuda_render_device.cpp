@@ -6,8 +6,8 @@
 
 #include <cuda_runtime.h>
 
-#include "cuda_drt_runtime_state.cuh"
 #include "decoders/processor/operators/gpu/cuda_demosaicnet.hpp"
+#include "edit/runtime/cuda/cuda_drt_runtime_state.hpp"
 
 namespace alcedo {
 

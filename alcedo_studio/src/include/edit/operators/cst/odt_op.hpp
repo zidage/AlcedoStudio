@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include "edit/operators/cst/open_drt_cpu.hpp"
 #include "edit/operators/op_base.hpp"
+#include "edit/runtime/drt/open_drt_runtime.hpp"
 
 namespace alcedo {
 

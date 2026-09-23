@@ -105,7 +105,7 @@ add_executable(ODTOpTest
   ${ALCEDO_TEST_ROOT}/edit/operators/cst/odt_op_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/operators/cst/aces_odt_numeric_stability_test.cpp)
 target_include_directories(ODTOpTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(ODTOpTest PRIVATE GTest::gtest_main Operators)
+target_link_libraries(ODTOpTest PRIVATE GTest::gtest_main Operators EditRuntimeDrt)
 gtest_discover_tests(ODTOpTest TEST_PREFIX "ODTOpTest.")
 alcedo_register_test_target(ODTOpTest edit)
 

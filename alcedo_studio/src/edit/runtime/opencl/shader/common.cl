@@ -2,8 +2,8 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-#ifndef ALCEDO_OPENCL_EDIT_PIPELINE_COMMON_CL
-#define ALCEDO_OPENCL_EDIT_PIPELINE_COMMON_CL
+#ifndef ALCEDO_OPENCL_COMMON_CL
+#define ALCEDO_OPENCL_COMMON_CL
 
 // === ACEScc encoding constants ================================================
 
@@ -313,4 +313,4 @@ static inline float opencl_hue2rgb(float p, float q, float t) {
   return p;
 }
 
-#endif  // ALCEDO_OPENCL_EDIT_PIPELINE_COMMON_CL
+#endif  // ALCEDO_OPENCL_COMMON_CL

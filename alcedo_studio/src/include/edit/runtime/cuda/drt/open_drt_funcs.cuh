@@ -12,7 +12,7 @@
 #include <vector_functions.h>
 #include <vector_types.h>
 
-#include "edit/operators/GPU_kernels/param.cuh"
+#include "edit/runtime/cuda/cuda_drt_gpu_params.cuh"
 #include "open_drt_const.cuh"
 
 namespace alcedo::CUDA {
@@ -213,9 +213,9 @@ GPU_FUNC float3 odrt_display_gamut_whitepoint(float3 rgb, float tsn, float cwp_l
   return odrt_mul_scalar(rgb, cwp_norm * cwp_f + 1.0f - cwp_f);
 }
 
-GPU_FUNC float3 OpenDRTTransform_fwd(const float3& input_color, const GPU_OpenDRTParams& p);
+GPU_FUNC float3 OpenDRTTransform_fwd(const float3& input_color, const CudaDrtOpenDrtParams& p);
 
-GPU_FUNC float3 OpenDRTTransform_fwd(const float3& input_color, const GPU_OpenDRTParams& p) {
+GPU_FUNC float3 OpenDRTTransform_fwd(const float3& input_color, const CudaDrtOpenDrtParams& p) {
   float3 rgb = odrt_apply_matrix(OPEN_DRT_AP1_TO_XYZ, input_color);
   rgb        = odrt_apply_matrix(OPEN_DRT_XYZ_TO_P3D65, rgb);
 

@@ -15,17 +15,17 @@
 #include <vector>
 
 #include "edit/graph/drt_node_model.hpp"
-#include "edit/operators/GPU_kernels/opencl_param.hpp"
 #include "edit/operators/models/i_operator_model.hpp"
 #include "edit/operators/models/pending_parameter_patch.hpp"
 #include "edit/runtime/adjustment_runtime.hpp"
-#include "edit/runtime/drt_display.hpp"
+#include "edit/runtime/drt/drt_output_resolver.hpp"
 #include "edit/runtime/drt_post_executor.hpp"
 #include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/opencl/opencl_dag_programs.hpp"
-#include "edit/runtime/opencl/opencl_scene_work.hpp"
+#include "edit/runtime/opencl/opencl_drt_gpu_params.hpp"
 #include "edit/runtime/opencl/opencl_drt_params.hpp"
 #include "edit/runtime/opencl/opencl_neighbor_dispatch.hpp"
+#include "edit/runtime/opencl/opencl_scene_work.hpp"
 #include "edit/runtime/parameter_arena.hpp"
 #include "edit/runtime/parameter_binding.hpp"
 #include "edit/runtime/texture_format.hpp"
@@ -169,11 +169,8 @@ struct OpenClDrtOps {
                                                  : TakePendingDirtyFields(drt.Params());
     const bool             needs_initialize = !arena.Contains(key);
     if (needs_initialize || display_pending.has_value() || plan.output_color_override.has_value()) {
-      auto drt_json = drt.Params().ToJson();
-      if (plan.output_color_override.has_value()) {
-        OverlayExportColorOnDrtJson(drt_json, *plan.output_color_override);
-      }
-      const auto runtime = ResolveOpenClDrtParams(drt_json);
+      const auto runtime = PackOpenClDrtParams(
+          DrtOutputResolver::ResolveNode(drt, plan.output_color_override, kErrorPrefix));
       arena.BindOrWritePackedSlot(key, DirtyFieldMask{kDrtDirtyBits}, runtime);
     }
     if (display_pending) {

@@ -8,7 +8,7 @@
 #include <cmath>
 #include <cstdint>
 
-#include "edit/operators/cst/aces_odt_cpu.hpp"
+#include "edit/runtime/drt/aces_odt_runtime.hpp"
 #include "edit/operators/utils/color_utils.hpp"
 
 namespace alcedo {

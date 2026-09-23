@@ -15,8 +15,8 @@
 
 #include <cmath>
 
-#include "edit/operators/GPU_kernels/color_mgmt/odt_const.cuh"
-#include "edit/operators/GPU_kernels/param.cuh"
+#include "edit/runtime/cuda/drt/odt_const.cuh"
+#include "edit/runtime/cuda/cuda_drt_gpu_params.cuh"
 #include "odt_const.cuh"
 #include "tonescale_funcs.cuh"
 #include "util_funcs.cuh"
@@ -80,7 +80,7 @@ GPU_FUNC float3 clamp_AP1(const float3& AP1_color, float clamp_lower_limit,
   return AP0_clamped;
 }
 
-GPU_FUNC float table_get(const GPU_Table1D<float>& table, int index) {
+GPU_FUNC float table_get(const CudaDrtTable1D<float>& table, int index) {
   return tex1Dfetch<float>(table.texture_object_, index);
 }
 
@@ -107,7 +107,7 @@ GPU_FUNC int hue_position_in_uniform_table(float hue, int table_size) {
 GPU_FUNC float lerp_f(float a, float b, float t) { return a + (b - a) * t; }
 
 // reach_M_from_table(h, p.TABLE_reach_M)
-GPU_FUNC float reach_M_from_table(float h, const GPU_Table1D<float>& table) {
+GPU_FUNC float reach_M_from_table(float h, const CudaDrtTable1D<float>& table) {
   const float hw   = wrap_to_360(h);
   const float pos  = hw * ((float)tableSize / hue_limit);
   const int   base = clamp_i((int)pos, 0, tableSize - 1);
@@ -116,14 +116,14 @@ GPU_FUNC float reach_M_from_table(float h, const GPU_Table1D<float>& table) {
   const int   i_lo = base + baseIndex;  // baseIndex=1 (padding)
   const int   i_hi = i_lo + 1;
 
-  //  GPU_Table1D is cudaResourceTypeLinear + point fetch, so use tex1Dfetch
+  //  CudaDrtTable1D is cudaResourceTypeLinear + point fetch, so use tex1Dfetch
   const float lo   = tex1Dfetch<float>(table.texture_object_, i_lo);
   const float hi   = tex1Dfetch<float>(table.texture_object_, i_hi);
 
   return lerp_f(lo, hi, t);
 }
 
-GPU_FUNC float reach_M_from_table(float h, GPU_ODTParams& p) {
+GPU_FUNC float reach_M_from_table(float h, CudaDrtAcesParams& p) {
   return reach_M_from_table(h, p.table_reach_M_);
 }
 
@@ -161,7 +161,7 @@ GPU_FUNC float J_to_Achromatic_n(float J, float inv_cz) {
   return safe_pow_pos(fmaxf(J, 0.0f) * (1.f / J_scale), inv_cz);
 }
 
-GPU_FUNC float3 RGB_to_Aab(const float3& RGB, GPU_JMhParams& p) {
+GPU_FUNC float3 RGB_to_Aab(const float3& RGB, CudaDrtJmhParams& p) {
   float3 RGB_m = mult_f3_f33(RGB, p.MATRIX_RGB_to_CAM16_c_);
 
   float3 RGB_a = make_float3(pacrc_fwd(RGB_m.x), pacrc_fwd(RGB_m.y), pacrc_fwd(RGB_m.z));
@@ -170,7 +170,7 @@ GPU_FUNC float3 RGB_to_Aab(const float3& RGB, GPU_JMhParams& p) {
   return Aab;
 }
 
-GPU_FUNC float3 Aab_to_JMh(const float3& Aab, GPU_JMhParams& p) {
+GPU_FUNC float3 Aab_to_JMh(const float3& Aab, CudaDrtJmhParams& p) {
   const float mask  = Aab.x > 0.f ? 1.f : 0.f;
   const float J     = Achromatic_n_to_J(Aab.x, p.cz_) * mask;
   const float M2    = Aab.y * Aab.y + Aab.z * Aab.z;
@@ -182,7 +182,7 @@ GPU_FUNC float3 Aab_to_JMh(const float3& Aab, GPU_JMhParams& p) {
   return make_float3(J, M, h);
 }
 
-GPU_FUNC float3 JMh_to_Aab(const float3& JMh, GPU_JMhParams& p) {
+GPU_FUNC float3 JMh_to_Aab(const float3& JMh, CudaDrtJmhParams& p) {
   float J      = JMh.x;
   float M      = JMh.y;
   float h      = JMh.z;
@@ -196,7 +196,7 @@ GPU_FUNC float3 JMh_to_Aab(const float3& JMh, GPU_JMhParams& p) {
   return make_float3(A, a, b);
 }
 
-GPU_FUNC float3 Aab_to_RGB(const float3& Aab, GPU_JMhParams& p) {
+GPU_FUNC float3 Aab_to_RGB(const float3& Aab, CudaDrtJmhParams& p) {
   float3 RGB_a = mult_f3_f33(Aab, p.MATRIX_Aab_to_cone_response_);
 
   float3 RGB_m = make_float3(pacrc_inv(RGB_a.x), pacrc_inv(RGB_a.y), pacrc_inv(RGB_a.z));
@@ -205,17 +205,17 @@ GPU_FUNC float3 Aab_to_RGB(const float3& Aab, GPU_JMhParams& p) {
   return RGB;
 }
 
-GPU_FUNC float3 RGB_to_JMh(const float3& color, GPU_JMhParams& p) {
+GPU_FUNC float3 RGB_to_JMh(const float3& color, CudaDrtJmhParams& p) {
   float3 Aab = RGB_to_Aab(color, p);
   return Aab_to_JMh(Aab, p);
 }
 
-GPU_FUNC float3 JMh_to_RGB(const float3& JMh, GPU_JMhParams& p) {
+GPU_FUNC float3 JMh_to_RGB(const float3& JMh, CudaDrtJmhParams& p) {
   float3 Aab = JMh_to_Aab(JMh, p);
   return Aab_to_RGB(Aab, p);
 }
 
-GPU_FUNC float _A_to_Y(float A, GPU_JMhParams& p) {
+GPU_FUNC float _A_to_Y(float A, CudaDrtJmhParams& p) {
   if (!isfinite_f(A) || A <= 0.0f) {
     return 0.0f;
   }
@@ -225,12 +225,12 @@ GPU_FUNC float _A_to_Y(float A, GPU_JMhParams& p) {
   return Y;
 }
 
-GPU_FUNC float J_to_Y(float J, GPU_JMhParams& p) {
+GPU_FUNC float J_to_Y(float J, CudaDrtJmhParams& p) {
   float abs_J = fabsf(J);
   return _A_to_Y(J_to_Achromatic_n(abs_J, p.inv_cz_), p);
 }
 
-GPU_FUNC float Y_to_J(float Y, GPU_JMhParams& p) {
+GPU_FUNC float Y_to_J(float Y, CudaDrtJmhParams& p) {
   float abs_Y = fabsf(Y);
   float Ra    = _pacrc_fwd(abs_Y * p.F_L_n_);
   float J     = Achromatic_n_to_J(Ra * p.inv_A_w_J_, p.cz_);
@@ -300,7 +300,7 @@ GPU_FUNC float toe(float x, float limit, float k1_in, float k2_in, int invert = 
   }
 }
 
-GPU_FUNC float3 chroma_compress_fwd(const float3& JMh, float tonemapped_J, GPU_ODTParams& p,
+GPU_FUNC float3 chroma_compress_fwd(const float3& JMh, float tonemapped_J, CudaDrtAcesParams& p,
                                     bool invert = false) {
   float J       = JMh.x;
   float M       = JMh.y;
@@ -361,7 +361,7 @@ GPU_FUNC float3 chroma_compress_fwd(const float3& JMh, float tonemapped_J, GPU_O
   return make_float3(tonemapped_J, M_compr, h);
 }
 
-GPU_FUNC float3 tonemap_and_compress_fwd(const float3& JMh, GPU_ODTParams& p) {
+GPU_FUNC float3 tonemap_and_compress_fwd(const float3& JMh, CudaDrtAcesParams& p) {
   // Applies the forward tonescale, then compresses M based on J and tonemapped J
 
   // Tonemap
@@ -376,7 +376,7 @@ GPU_FUNC float3 tonemap_and_compress_fwd(const float3& JMh, GPU_ODTParams& p) {
   // return make_float3(J_ts, JMh.y, JMh.z);
 }
 
-GPU_FUNC int look_hue_interval(float h, const GPU_Table1D<float>& hue_table,
+GPU_FUNC int look_hue_interval(float h, const CudaDrtTable1D<float>& hue_table,
                                int* hue_linearity_search_range) {
   const float hw = wrap_to_360(h);
   // Academy CTL seeds this search with totalTableSize so the window matches
@@ -412,7 +412,7 @@ GPU_FUNC float interpolation_weight(float h, float h_lo, float h_hi) {
   return clamp_f((h - h_lo) / denom, 0.0f, 1.0f);
 }
 
-GPU_FUNC float2 cusp_from_table(float h, const GPU_Table1D<float4>& table) {
+GPU_FUNC float2 cusp_from_table(float h, const CudaDrtTable1D<float4>& table) {
   const float hw     = wrap_to_360(h);
 
   int         low_i  = 0;
@@ -436,7 +436,7 @@ GPU_FUNC float2 cusp_from_table(float h, const GPU_Table1D<float4>& table) {
   return make_float2(lerp_f(lo.x, hi.x, t), lerp_f(lo.y, hi.y, t));
 }
 
-GPU_FUNC float2 cusp_from_table(float h, GPU_ODTParams& p) {
+GPU_FUNC float2 cusp_from_table(float h, CudaDrtAcesParams& p) {
   return cusp_from_table(h, p.table_gamut_cusps_);
 }
 
@@ -444,7 +444,7 @@ GPU_FUNC float compute_focus_J(float cusp_J, float mid_J, float limit_J_max) {
   return lerp_f(cusp_J, mid_J, fminf(1.f, cusp_mid_blend - (cusp_J / limit_J_max)));
 }
 
-GPU_FUNC HueDependentGamutParams init_HueDependentGamutParams(float h, GPU_ODTParams& p) {
+GPU_FUNC HueDependentGamutParams init_HueDependentGamutParams(float h, CudaDrtAcesParams& p) {
   HueDependentGamutParams hdp;
   hdp.gamma_bottom_inv = p.lower_hull_gamma_inv;
 
@@ -584,7 +584,7 @@ GPU_FUNC float remap_M(float M, float gamut_boundary_M, float reach_boundary_M,
   return threshold + reinhard_remap(scale, nd, invert);
 }
 
-GPU_FUNC float3 compress_gamut(const float3& JMh, float Jx, GPU_ODTParams& p,
+GPU_FUNC float3 compress_gamut(const float3& JMh, float Jx, CudaDrtAcesParams& p,
                                HueDependentGamutParams& hdp, bool invert = false) {
   const float J = JMh.x;
   const float M = JMh.y;
@@ -621,7 +621,7 @@ GPU_FUNC float3 compress_gamut(const float3& JMh, float Jx, GPU_ODTParams& p,
   return make_float3(clamp_f(J_out, 0.0f, p.limit_J_max), fmaxf(remapped_M, 0.0f), h);
 }
 
-GPU_FUNC float3 gamut_compress_fwd(const float3& JMh, GPU_ODTParams& p) {
+GPU_FUNC float3 gamut_compress_fwd(const float3& JMh, CudaDrtAcesParams& p) {
   const float J = JMh.x;
   const float M = JMh.y;
   const float h = JMh.z;
@@ -665,7 +665,7 @@ GPU_FUNC float3 limit_rgb_preserve_chroma(float3 rgb, float lower, float upper) 
   return rgb;
 }
 
-GPU_FUNC float3 OutputTransform_fwd(const float3& in_color, GPU_ODTParams& p) {
+GPU_FUNC float3 OutputTransform_fwd(const float3& in_color, CudaDrtAcesParams& p) {
   if (!isfinite_f(in_color.x) || !isfinite_f(in_color.y) || !isfinite_f(in_color.z)) {
     return make_float3(0.f, 0.f, 0.f);
   }
