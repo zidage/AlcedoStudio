@@ -7,10 +7,11 @@ import Alcedo.Main 1.0
 // independent from the transaction timeline so each rail destination owns its
 // own layout and actions.
 //
-// Naming is an inline draft under the Versions header (Enter commits, Escape
-// cancels, focus-loss commits only non-empty changed text). There is no modal
-// naming dialog. Active selection is outline-only; removal uses a labeled
-// trash action, never a stop-playback glyph.
+// Naming is inline (Enter commits, Escape cancels, focus-loss commits only
+// non-empty changed text). Create / branch use a draft row under the Versions
+// header; rename edits the card title in place. There is no modal naming
+// dialog. Active selection is outline-only; removal uses a labeled trash
+// action, never a stop-playback glyph.
 //
 // List scroll is restorable from the rail across Loader teardown (Phase 7A R6).
 Item {
@@ -23,12 +24,18 @@ Item {
     property bool versionCheckoutEnabled: true
     property string versionCheckoutDisabledReason: ""
 
-    // Inline draft state (create branch / create fork / rename share one field).
+    // Inline draft state shared by create branch / create fork / rename. The
+    // header field edits create drafts; the target card's title field edits a
+    // rename draft. draftText is the text of whichever field is active.
     property bool draftVisible: false
     // "branchHead" | "forkRoot" | "rename" — selects the draft's submit action.
     property string draftMode: ""
     property string draftVersionId: ""
     property string draftOriginalText: ""
+    property string draftText: ""
+    // Bumped to ask the inline rename field on the target card to take focus.
+    property int draftFocusRequest: 0
+    readonly property bool headerDraftVisible: root.draftVisible && root.draftMode !== "rename"
     // Name accepted on the last submit; used to detect model-projected success
     // when a terminal HistoryOperationFinished is delayed or missed.
     property string draftSubmittedName: ""
@@ -105,6 +112,12 @@ Item {
         root.restoreListScroll()
     }
 
+    function setDraftText(text) {
+        root.draftText = text
+        if (root.draftMode !== "rename")
+            versionNameField.text = text
+    }
+
     function clearDraftFields() {
         root.draftMode = ""
         root.draftVersionId = ""
@@ -112,6 +125,7 @@ Item {
         root.draftSubmittedName = ""
         root.draftPendingOperationId = null
         root.draftError = ""
+        root.draftText = ""
         versionNameField.text = ""
     }
 
@@ -130,11 +144,12 @@ Item {
         root.draftSubmittedName = ""
         root.draftPendingOperationId = null
         root.draftOriginalText = qsTr("Version %1").arg(root.historyModel.versions.count + 1)
-        versionNameField.text = root.draftOriginalText
+        root.setDraftText(root.draftOriginalText)
         root.draftVisible = true
         draftFocusTimer.restart()
     }
 
+    // Rename edits the card title in place; the header draft row stays closed.
     function openRenameVersion(versionId, displayName) {
         if (root.draftSubmitPending)
             return
@@ -144,7 +159,8 @@ Item {
         root.draftSubmittedName = ""
         root.draftPendingOperationId = null
         root.draftOriginalText = displayName
-        versionNameField.text = displayName
+        versionNameField.text = ""
+        root.setDraftText(displayName)
         root.draftVisible = true
         draftFocusTimer.restart()
     }
@@ -171,7 +187,7 @@ Item {
         // Re-show the naming row if SaveStarted already hid it.
         root.draftVisible = true
         if (root.draftSubmittedName.length > 0)
-            versionNameField.text = root.draftSubmittedName
+            root.setDraftText(root.draftSubmittedName)
         root.restoreListScroll()
         draftFocusTimer.restart()
     }
@@ -249,7 +265,7 @@ Item {
     function commitDraft(requireChanged) {
         if (!root.draftVisible || !root.historyModel || root.draftSubmitPending)
             return
-        var name = versionNameField.text.trim()
+        var name = root.draftText.trim()
         if (name.length === 0) {
             cancelDraft()
             return
@@ -331,9 +347,29 @@ Item {
         onTriggered: {
             if (!root.draftVisible)
                 return
+            if (root.draftMode === "rename") {
+                root.draftFocusRequest += 1
+                return
+            }
             versionNameField.forceActiveFocus()
             versionNameField.selectAll()
         }
+    }
+
+    // Focus-loss commit, deferred so a click on another control runs first.
+    // @p draftKey pins the draft that lost focus: if the user already opened a
+    // different draft (e.g. Rename on another card), this one must not commit
+    // or cancel the new draft.
+    function commitDraftAfterFocusLoss(draftKey) {
+        Qt.callLater(function () {
+            Qt.callLater(function () {
+                if (!root.draftVisible || root.draftSubmitPending)
+                    return
+                if (root.draftMode + ":" + root.draftVersionId !== draftKey)
+                    return
+                root.commitDraft(true)
+            })
+        })
     }
 
     Connections {
@@ -432,19 +468,20 @@ Item {
             }
         }
 
-        // Inline draft row under the Versions header (create + rename).
-        // Height snaps; no opacity animation on this subtree (R6).
+        // Inline create draft row under the Versions header (branch / fork).
+        // Rename edits the card title instead. Height snaps; no opacity
+        // animation on this subtree (R6).
         Item {
             objectName: "editorVersionDraftRow"
             Layout.fillWidth: true
-            Layout.preferredHeight: root.draftVisible
+            Layout.preferredHeight: root.headerDraftVisible
                                     ? (appTheme.spaceXl * 2 + appTheme.spaceSm
                                        + appTheme.spaceMd + appTheme.fontSizeCaption
                                        + (root.draftError.length > 0
                                           ? (appTheme.spaceXs + appTheme.fontSizeCaption * 2)
                                           : 0))
                                     : 0
-            visible: root.draftVisible
+            visible: root.headerDraftVisible
 
             ColumnLayout {
                 anchors.fill: parent
@@ -452,8 +489,7 @@ Item {
 
                 Label {
                     Layout.fillWidth: true
-                    text: root.draftMode === "rename" ? qsTr("Rename Version")
-                          : root.draftMode === "branchHead" ? qsTr("Branch from current")
+                    text: root.draftMode === "branchHead" ? qsTr("Branch from current")
                           : qsTr("Fork from root")
                     color: root.colMuted
                     font.family: appTheme.uiFontFamily
@@ -469,7 +505,7 @@ Item {
                         objectName: "editorVersionNameField"
                         Layout.fillWidth: true
                         Layout.preferredHeight: appTheme.spaceXl * 2 + appTheme.spaceSm
-                        enabled: root.draftVisible && !root.draftSubmitPending
+                        enabled: root.headerDraftVisible && !root.draftSubmitPending
                         color: root.colText
                         font.family: appTheme.uiFontFamily
                         font.pixelSize: appTheme.fontSizeBody
@@ -479,11 +515,9 @@ Item {
                         rightPadding: appTheme.spaceSm
                         selectionColor: appTheme.editorListSelectedFillColor
                         selectedTextColor: appTheme.editorListSelectedInkColor
-                        Accessible.name: root.draftMode === "rename"
-                                         ? qsTr("Rename Version")
-                                         : (root.draftMode === "branchHead"
-                                            ? qsTr("Branch from current")
-                                            : qsTr("Fork from root"))
+                        Accessible.name: root.draftMode === "branchHead"
+                                         ? qsTr("Branch from current")
+                                         : qsTr("Fork from root")
                         background: Rectangle {
                             implicitHeight: appTheme.spaceXl * 2 + appTheme.spaceSm
                             radius: appTheme.controlRadiusSmall
@@ -495,26 +529,29 @@ Item {
                             opacity: versionNameField.enabled ? 1.0 : 0.55
                         }
 
+                        onTextChanged: {
+                            if (root.headerDraftVisible)
+                                root.draftText = text
+                        }
                         onAccepted: root.commitDraft(false)
                         Keys.onEscapePressed: function (event) {
                             root.cancelDraft()
                             event.accepted = true
                         }
                         onEditingFinished: {
-                            Qt.callLater(function () {
-                                Qt.callLater(function () {
-                                    if (!root.draftVisible || root.draftSubmitPending)
-                                        return
-                                    root.commitDraft(true)
-                                })
-                            })
+                            if (root.headerDraftVisible)
+                                root.commitDraftAfterFocusLoss(root.draftMode + ":")
                         }
                     }
 
                     IconActionButton {
                         objectName: "editorVersionAcceptButton"
                         compact: true
-                        enabled: root.draftVisible && !root.draftSubmitPending
+                        // Keep focus in the name field: taking it would end
+                        // editing, and focus-loss cancels an unchanged default
+                        // name before this click lands.
+                        focusOnPointerPress: false
+                        enabled: root.headerDraftVisible && !root.draftSubmitPending
                                  && versionNameField.text.trim().length > 0
                         iconSrc: "qrc:/panel_icons/plus.svg"
                         iconColorDefault: root.colText
@@ -524,11 +561,9 @@ Item {
                         fillPressed: appTheme.buttonPressedFillColor
                         fillSelected: appTheme.buttonSelectedFillColor
                         focusRingColor: root.colText
-                        actionName: root.draftMode === "rename"
-                                    ? qsTr("Accept Rename")
-                                    : (root.draftMode === "branchHead"
-                                       ? qsTr("Accept branch from current")
-                                       : qsTr("Accept fork from root"))
+                        actionName: root.draftMode === "branchHead"
+                                    ? qsTr("Accept branch from current")
+                                    : qsTr("Accept fork from root")
                         onClicked: root.commitDraft(false)
                     }
                 }
@@ -602,6 +637,9 @@ Item {
 
                     property string versionHead: headCommitHash
                     property bool versionActive: active
+                    readonly property bool renaming: root.draftVisible
+                                                     && root.draftMode === "rename"
+                                                     && root.draftVersionId === versionId
                     // Outline-only active chrome: card surface stays cardSurface;
                     // the 1 px border is the selection signal (white/text color).
                     // No detached HEAD — the outline alone marks the checked-out
@@ -646,12 +684,91 @@ Item {
                         Label {
                             objectName: "editorVersionTitle"
                             Layout.fillWidth: true
+                            visible: !versionCard.renaming
                             text: displayName
                             color: root.colText
                             wrapMode: Text.Wrap
                             font.family: appTheme.uiFontFamily
                             font.pixelSize: appTheme.fontSizeTitle
                             font.weight: appTheme.fontWeightStrong
+                        }
+
+                        // In-place rename: replaces the title while this card
+                        // is the rename target. Enter commits, Escape cancels,
+                        // focus loss commits only changed non-empty text.
+                        TextField {
+                            id: inlineRenameField
+                            objectName: "editorVersionInlineRenameField"
+                            Layout.fillWidth: true
+                            visible: versionCard.renaming
+                            enabled: versionCard.renaming && !root.draftSubmitPending
+                            color: root.colText
+                            font.family: appTheme.uiFontFamily
+                            font.pixelSize: appTheme.fontSizeTitle
+                            font.weight: appTheme.fontWeightStrong
+                            placeholderText: qsTr("Version name")
+                            selectByMouse: true
+                            leftPadding: appTheme.spaceXs
+                            rightPadding: appTheme.spaceXs
+                            topPadding: 0
+                            bottomPadding: 0
+                            selectionColor: appTheme.editorListSelectedFillColor
+                            selectedTextColor: appTheme.editorListSelectedInkColor
+                            Accessible.name: qsTr("Rename Version")
+                            background: Rectangle {
+                                radius: appTheme.controlRadiusSmall
+                                color: appTheme.bgBaseColor
+                                border.width: 1
+                                border.color: inlineRenameField.activeFocus
+                                              ? root.colText
+                                              : root.colCardBorder
+                            }
+
+                            function loadDraftText() {
+                                if (versionCard.renaming && text !== root.draftText)
+                                    text = root.draftText
+                            }
+
+                            Component.onCompleted: loadDraftText()
+                            onVisibleChanged: loadDraftText()
+                            onTextChanged: {
+                                if (versionCard.renaming)
+                                    root.draftText = text
+                            }
+                            onAccepted: root.commitDraft(false)
+                            Keys.onEscapePressed: function (event) {
+                                root.cancelDraft()
+                                event.accepted = true
+                            }
+                            onEditingFinished: {
+                                if (versionCard.renaming)
+                                    root.commitDraftAfterFocusLoss("rename:" + versionCard.versionId)
+                            }
+
+                            Connections {
+                                target: root
+                                function onDraftTextChanged() {
+                                    inlineRenameField.loadDraftText()
+                                }
+                                function onDraftFocusRequestChanged() {
+                                    if (!versionCard.renaming)
+                                        return
+                                    inlineRenameField.loadDraftText()
+                                    inlineRenameField.forceActiveFocus()
+                                    inlineRenameField.selectAll()
+                                }
+                            }
+                        }
+
+                        Label {
+                            objectName: "editorVersionInlineRenameError"
+                            Layout.fillWidth: true
+                            visible: versionCard.renaming && root.draftError.length > 0
+                            text: root.draftError
+                            color: appTheme.dangerColor
+                            wrapMode: Text.WordWrap
+                            font.family: appTheme.uiFontFamily
+                            font.pixelSize: appTheme.fontSizeCaption
                         }
 
                         Label {
