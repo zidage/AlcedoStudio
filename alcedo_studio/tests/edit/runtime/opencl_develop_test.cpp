@@ -31,7 +31,6 @@
 #include "edit/geometry/render_request.hpp"
 #include "edit/geometry/source_geometry.hpp"
 #include "edit/geometry/types.hpp"
-#include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/graph_ids.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/prepared_raw_input.hpp"
@@ -218,21 +217,6 @@ auto CpuLinearize(const PreparedRawInput& input) -> std::vector<float> {
   return out;
 }
 
-auto AcesccEncode(float value) -> float {
-  constexpr float kA          = 9.72f;
-  constexpr float kB          = 17.52f;
-  constexpr float kOffset     = 0.0000152587890625f;
-  constexpr float kTransition = 0.000030517578125f;
-  constexpr float kFloor      = (-16.0f + kA) / kB;
-  if (value < 0.0f) {
-    return kFloor + value;
-  }
-  if (value < kTransition) {
-    return (std::log2(kOffset + value * 0.5f) + kA) / kB;
-  }
-  return (std::log2(value) + kA) / kB;
-}
-
 auto ReadBorder(const std::vector<Rgba>& src, int width, int height, int x, int y, Rgba border)
     -> Rgba {
   if (x < 0 || y < 0 || x >= width || y >= height) {
@@ -286,10 +270,6 @@ auto MakeSrcImage(std::uint32_t width, std::uint32_t height) -> std::vector<Rgba
 }
 
 }  // namespace
-
-TEST_F(OpenClDevelopFixture, CanonDngProfileRendersAtFullResolutionAndInvalidatesOnlyColorCache) {
-  gpu_dag_test::VerifyCanonDngProfile<OpenClRenderDevice>("opencl");
-}
 
 TEST_F(OpenClDevelopFixture, UnpackedRgbLevelsAndAppliedWhiteBalanceProduceEquivalentFullRenders) {
   gpu_dag_test::VerifyRgbWhiteBalanceAndLevels<OpenClRenderDevice>();
@@ -672,34 +652,6 @@ TEST_F(OpenClDevelopFixture, OpenClGeometryUsesOneResampleForCropRotationViewpor
     }
   }
   EXPECT_LT(max_err, 1.5e-4f);
-}
-
-TEST_F(OpenClDevelopFixture, OpenClCameraColorConsumesSharedDualIlluminantTransform) {
-  auto prepared = RawInputLoader::FromDirectRgb(gpu_dag_test::MakeF32RgbaPlane(16, 12),
-                                                gpu_dag_test::FullSensor(16, 12));
-  auto document = CreateDefaultPipelineDocument();
-  gpu_dag_test::EnsureTestCameraProfile(document);
-  const auto plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
-  OpenClRenderDevice device;
-  device.BeginRender();
-  ExecuteOpenClDevelop(device, plan, prepared, document);
-  ExecuteOpenClGeometryResample(device, plan);
-  ExecuteOpenClCameraColor(device, plan, document);
-  device.EndRender();
-  device.WaitIdle();
-
-  const auto pixels = Download(device, plan.develop_output);
-  ASSERT_FALSE(pixels.empty());
-  const auto resolved = ResolveDevelopColorTransform(document.Develop()->Params().Params());
-  ASSERT_TRUE(resolved.ok);
-  const float  src_r = 0.5f / 16.0f;
-  const float  src_g = 0.5f / 12.0f;
-  const float  src_b = 0.25f;
-  const float* m     = resolved.transform.camera_to_ap1.data();
-  EXPECT_NEAR(pixels.front().r, AcesccEncode(m[0] * src_r + m[1] * src_g + m[2] * src_b), 1.0e-5f);
-  EXPECT_NEAR(pixels.front().g, AcesccEncode(m[3] * src_r + m[4] * src_g + m[5] * src_b), 1.0e-5f);
-  EXPECT_NEAR(pixels.front().b, AcesccEncode(m[6] * src_r + m[7] * src_g + m[8] * src_b), 1.0e-5f);
-  EXPECT_NEAR(pixels.front().a, 1.0f, 1.0e-6f);
 }
 
 TEST_F(OpenClDevelopFixture, OpenClCctEditReusesSensorAndGeometryResults) {

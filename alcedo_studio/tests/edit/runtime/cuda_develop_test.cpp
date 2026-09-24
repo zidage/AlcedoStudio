@@ -139,10 +139,6 @@ auto AllFiniteNonZero(const std::vector<Rgba>& pixels) -> bool {
 
 }  // namespace
 
-TEST_F(CudaDevelopFixture, CanonDngProfileRendersAtFullResolutionAndInvalidatesOnlyColorCache) {
-  gpu_dag_test::VerifyCanonDngProfile<CudaRenderDevice>("cuda");
-}
-
 TEST_F(CudaDevelopFixture, UnpackedRgbLevelsAndAppliedWhiteBalanceProduceEquivalentFullRenders) {
   gpu_dag_test::VerifyRgbWhiteBalanceAndLevels<CudaRenderDevice>();
 }

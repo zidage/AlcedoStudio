@@ -273,14 +273,6 @@ if(ALCEDO_CUDA_ENABLED)
   gtest_discover_tests(PipelineDocumentRenderTest TEST_PREFIX "PipelineDocumentRenderTest."
     PROPERTIES LABELS "gpu;edit;pipeline;product")
   alcedo_register_test_target(PipelineDocumentRenderTest gpu)
-
-  add_executable(GpuDagCudaGeometryTest
-    ${ALCEDO_TEST_ROOT}/edit/geometry/cuda_geometry_resample_test.cpp)
-  target_include_directories(GpuDagCudaGeometryTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-  target_link_libraries(GpuDagCudaGeometryTest PRIVATE GTest::gtest_main EditRuntimeCuda)
-  gtest_discover_tests(GpuDagCudaGeometryTest TEST_PREFIX "GpuDagCudaGeometryTest."
-    PROPERTIES LABELS "gpu;edit;geometry")
-  alcedo_register_test_target(GpuDagCudaGeometryTest gpu)
 endif()
 
 # GPU DAG Phase G4: CPU RawInputLoader / GraphCompiler (no CUDA required).
@@ -393,13 +385,9 @@ if(ALCEDO_CUDA_ENABLED)
     ${ALCEDO_TEST_ROOT}/edit/runtime/transient_and_cache_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/transient_buffer_arena_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/texture_lease_test.cpp
-    ${ALCEDO_TEST_ROOT}/edit/runtime/graph_image_cache_test.cpp
-    ${ALCEDO_TEST_ROOT}/edit/runtime/header_hygiene_test.cpp)
+    ${ALCEDO_TEST_ROOT}/edit/runtime/graph_image_cache_test.cpp)
   target_include_directories(GpuDagCudaWorkspaceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagCudaWorkspaceTest PRIVATE GTest::gtest_main EditRuntimeCuda)
-  target_compile_definitions(GpuDagCudaWorkspaceTest PRIVATE
-    ALCEDO_GPU_HEADER_ROOT="${ALCEDO_INCLUDE_DIR}/gpu"
-    ALCEDO_RUNTIME_HEADER_ROOT="${ALCEDO_INCLUDE_DIR}/edit/runtime")
   gtest_discover_tests(GpuDagCudaWorkspaceTest TEST_PREFIX "GpuDagCudaWorkspaceTest."
     PROPERTIES LABELS "gpu;edit;runtime")
   alcedo_register_test_target(GpuDagCudaWorkspaceTest gpu)

@@ -51,7 +51,11 @@ class BasicRenderDevice {
 
   void               BeginRender() { workspace_.BeginRender(command_context_); }
   void               EndRender() { workspace_.EndRender(command_context_); }
-  void               WaitIdle() { workspace_.Device().Wait(command_context_); }
+  /** @brief Wait for submitted work, then release textures a published Develop rewrite replaced. */
+  void               WaitIdle() {
+    workspace_.Device().Wait(command_context_);
+    workspace_.ReleaseTexturesReplacedByDevelopRewrite();
+  }
 
   void BeginGpuWorkSample() {
     if constexpr (requires(Backend& backend, CommandContextType& context) {

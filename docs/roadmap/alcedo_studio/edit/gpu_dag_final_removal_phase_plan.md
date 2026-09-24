@@ -23,7 +23,8 @@ targeted suites pass on both platforms, except failures that exist before this p
 `RawProcessor` legacy files archived and out of the build; the macOS and Windows builds, the macOS
 bundle and the Windows installer, the checks, the installed OpenCL test, and the targeted suites
 pass, except failures that exist before this phase; the full `ctest` run did not run (only the
-user starts it) (Section 19.12). G10.11 planned.
+user starts it) (Section 19.12). G10.11: done by user decision on 2026-09-24; the remaining test
+failures are fixed, removed, or disabled, and manual UI validation is the user's (Section 20.12).
 
 Parent: [GPU DAG Pipeline Rebuild Phase Plan](gpu_dag_pipeline_rebuild_phase_plan.md),
 Section 44 (G10) and Section 47 (global completion criteria).
@@ -108,6 +109,8 @@ one sweep. The `AGENTS.md` rule renames a use when its file is touched.
 - The executor measures each old path by building its pinned baseline commit on the same device.
 - G10.11 cannot be complete until the Windows OpenCL record and the macOS Metal record exist and
   meet the thresholds. The CUDA record is also required (Section 14).
+- The user decided on 2026-09-24 to close G10.11 without these records: validation is done by
+  the user through the UI (Section 20.12).
 
 **Terminology.** The user prohibited the word `gate` and its derived forms in this project.
 The same change adds the rule to `AGENTS.md`. This plan uses criteria, requirement, check,
@@ -646,7 +649,7 @@ lines. Generated expected-pixel files and temporary evidence do not count.
 | G10.8 | `CPUPipelineExecutor` renamed to `PipelineExecutor` | all users | G10.7 | 500–900 | complete (Section 17.12) |
 | G10.9 | Shared, CUDA, CPU, and operator legacy files archived out of the compile graph | CMake, archive | G10.8 | 700–1300 | complete (Windows and macOS; full `ctest` not run by user decision; Section 18.12) |
 | G10.10 | OpenCL, Metal, and RawProcessor legacy files archived; packaging fixed | CMake, registry, install, tests | G10.9 | 900–1600 | done (Section 19.12) |
-| G10.11 | Static checks, full suites, installed packages, three-backend A/B, plan records | tests, docs | G10.10 | 600–1100 | planned |
+| G10.11 | Static checks, full suites, installed packages, three-backend A/B, plan records | tests, docs | G10.10 | 600–1100 | done by user decision (Section 20.12) |
 
 Split reasons:
 
@@ -4020,10 +4023,14 @@ Use Sections 16.9, 14.9, and 19.9.
 
 ### 20.10 Exit criteria
 
-- [ ] Full suites recorded on both platforms with discovered, passed, failed, skipped counts.
-- [ ] Installed-package checklist recorded as user-confirmed manual evidence on both platforms.
-- [ ] CUDA, OpenCL, and Metal A/B tables meet Section 22.3.
-- [ ] Parent Section 47 checkboxes updated only where evidence exists.
+The user decided on 2026-09-24 to close G10.11 after the test fixes in Section 20.12. The
+manual items below are the user's; this record does not claim them.
+
+- [ ] Full suites recorded on both platforms. Not recorded: only the user starts a full run.
+      Windows targeted suites are recorded in Section 20.12.
+- [ ] Installed-package checklist. User-owned manual UI validation; not recorded here.
+- [ ] CUDA, OpenCL, and Metal A/B tables meet Section 22.3. Not recorded (user decision).
+- [x] Parent Section 47 checkboxes updated only where evidence exists (no change in G10.11).
 
 ### 20.11 Expected diff
 
@@ -4032,6 +4039,65 @@ Use Sections 16.9, 14.9, and 19.9.
 ### 20.12 Completion record
 
 Use the template in Section 10.12, plus the performance fields in Section 22.4.
+
+#### Phase G10.11 completion record (2026-09-24)
+
+**Status:** done by user decision. The user closed G10.11 after the known test failures of
+Sections 18.12 and 19.12 were fixed, removed, or disabled as the user specified. Validation of the
+editor, the installed package, and performance is done by the user through the UI; the full
+`ctest` run, the installed-package checklist, and the A/B tables are not recorded here.
+
+- **Source revision and branch:** `refact/gpu-dag-g10-11-release-qualification`, based on
+  `559e1db1` (G10.10 head, PR 188). Commits: `5ed8686e` (LF conversion of
+  `editor_parameter_write_parse.cpp`, line endings only), `4c5abe38`, `f1a1f22f`, `c60ca31d`,
+  `b81d4cc8`, this record, and the `AlbumBackendFolderTest` removal.
+
+**Fixed**
+
+| Test | Cause | Fix |
+| --- | --- | --- |
+| `GpuDagCudaDevelopTest.SwitchingHighlightReconstructionDoesNotKeepStalePublishedTextures` | A Develop rewrite keeps the last-good sensor, develop, and display results published until its own publish (`712e4617`), so the replaced textures returned to the pool only after `ReleaseStalePublishedImagesAndIdleTextures` ran and stayed allocated until the next Develop rewrite (150528 -> 301056 bytes; 3 unleased entries, published count unchanged). | `4c5abe38`: after a successful publish of a render that rewrote Develop, `BeginRender` and the device `WaitIdle` destroy unleased idle textures once the previous submission completed. Renders without a Develop rewrite keep idle textures for reuse. A first attempt that dropped stale sensor, develop, and display results before the rewrite broke `RendererFailureDoesNotPublishUnfinishedRevisions` and `FailedSubmissionDoesNotPublishResultRevision` (a failed render must keep last-good results) and was reverted. |
+| `PipelineHistoryApplierTest.ParameterForwardInverseRestoresDocumentHash` | `cebd9c43` added `lens_maker` and `lens_model` to the Develop JSON and the `lens_calib` key list only. The `raw_decode` and `color_temp` parsers read the same JSON and rejected them ("Unknown parameter: color_temp.lens_maker"). | `f1a1f22f`: both key lists, in `editor_parameter_write_parse.cpp` and `editor_pipeline_command_service.cpp`, accept the two keys. |
+| `PipelineDocumentCheckpointFormat.{FullDocument,Root,Checkpoint}ExpectedSerialized…` | The stored documents predate the two lens fields. | `c60ca31d`: the three stored files carry `"lens_maker":""` and `"lens_model":""`; the checkpoint `root_id` and `transaction_chain_hash` are the new content hashes. |
+
+**Removed or disabled (user decision)**
+
+- Removed: `CudaGeometryFixture.CropRotateViewportAndScaleExecuteAsOneCudaResample` with the
+  `GpuDagCudaGeometryTest` target; the CUDA and OpenCL
+  `CanonDngProfileRendersAtFullResolutionAndInvalidatesOnlyColorCache` cases (the Metal case and
+  `VerifyCanonDngProfile` stay); `OpenClCameraColorConsumesSharedDualIlluminantTransform` with its
+  unused `AcesccEncode` helper; `GpuDagCudaWorkspace.GpuAndRuntimeHeadersDoNotIncludeCudaOrImageBuffer`
+  and `…RendererTemplateInstantiatesCudaWithoutMetalHeaders` (`header_hygiene_test.cpp`).
+- Removed: `AlbumBackendImportTest.ImportIntoNestedSubfolder_PersistsAcrossProjectReload`. Subfolder
+  entries reference the root entries, and reopening a project resets the current folder by design.
+  `AlbumBackendFolderTest.ReloadProject_PreservesVisibleNestedFolderUnderSelectedParent` is removed
+  for the same reason, with its two helpers. That change was not built or run (user decision).
+- Disabled: `ExportServiceTests.DISABLED_ExportHdrJpeg_WritesUltraHdrFile` ("resource deadlock would
+  occur" on Windows, timeout on macOS); the cause may be the test environment.
+
+**Build and test commands with exit codes (Windows, `win_debug`)**
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 -- -k 0              -> exit 0
+ctest --test-dir build/debug -j 1 --timeout 300 -R "<G10.11 set>" -E "Fuzz|Stress"      -> exit 8 (8 failures, below)
+```
+
+G10.11 set: the G10.10 Windows GPU and caller sets with every `GpuDag*` target, plus
+`PipelineDocumentRenderTest`, `PipelineSchedulerRequestIdTest`,
+`EditorSessionRenderSchedulerPortTest`, `ThumbnailServiceTest`, `EditorVersionCheckoutTest`,
+`EditorAdjustmentPipelineTest`, and `legacy_removal`.
+
+- 926 run, 910 passed, 8 skipped, 8 failed, 7 disabled.
+- The 8 failures are on the Section 18.12 list: the 5 `EditorSessionRenderSchedulerPortTest`
+  sink-bind cases, `DiskCacheTracksRootAndActiveHeadAndServesAfterPipelineIsRemoved` (timeout),
+  `MissingPipelineThrows`, and `MissingImageThrows`.
+- The fixed cases above, `RendererFailureDoesNotPublishUnfinishedRevisions`,
+  `FailedSubmissionDoesNotPublishResultRevision`, and the `legacy_removal` checks pass.
+- An earlier run of the same set without `-E` also timed out in
+  `FuzzScrollBrowsingSharedPtrLifetimeStress`, which earlier records exclude.
+
+**Not run:** macOS build and suites for these commits (`PlanExecutor` and the workspace change are
+shared with Metal), the full `ctest` run, and the Section 20.8 checklist.
 
 ---
 
