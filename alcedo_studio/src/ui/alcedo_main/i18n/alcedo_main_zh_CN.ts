@@ -3489,7 +3489,7 @@ Original source files on disk will be kept.</source>
     <message>
         <location filename="../qml/EditorWorkspaceRail.qml" line="+0"/>
         <source>Mask Groups</source>
-        <translation>蒙版组</translation>
+        <translation>图层</translation>
     </message>
     <message>
         <location filename="../qml/EditorWorkspaceRail.qml" line="+0"/>
