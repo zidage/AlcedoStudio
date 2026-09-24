@@ -113,6 +113,26 @@ class BasicRenderWorkspace {
   void ReleaseStalePublishedImagesAndIdleTextures() {
     DropUnusablePublishedImages();
     textures_.ReleaseUnleased();
+    develop_rewrite_in_render_ = true;
+  }
+
+  /**
+   * @brief Destroy idle textures left by a successful Develop rewrite once the GPU is idle.
+   *
+   * A Develop rewrite keeps the last-good sensor, develop, and display results
+   * published until its own results publish, so a failed render still has them.
+   * The replaced full-frame textures return to the pool only at that publish and
+   * would otherwise stay allocated until a later Develop rewrite. BeginRender and
+   * the device WaitIdle call this after the previous submission completed.
+   * Renders without a Develop rewrite keep idle textures for reuse. No-op while
+   * rendering, because this-frame scratch is not yet marked submitted.
+   */
+  void ReleaseTexturesReplacedByDevelopRewrite() {
+    if (rendering_ || !develop_rewrite_published_) {
+      return;
+    }
+    textures_.ReleaseUnleased();
+    develop_rewrite_published_ = false;
   }
 
   /** @brief Allocate an unpublished write texture for @p id. See GraphImageCache. */
@@ -199,6 +219,8 @@ class BasicRenderWorkspace {
     }
     backend_.Wait(command_context);
     images_.DiscardUnpublished();
+    ReleaseTexturesReplacedByDevelopRewrite();
+    develop_rewrite_in_render_ = false;
     transients_.Reset();
     textures_.BeginFrame();
     command_context.SetSubmissionId(backend_.NextSubmissionId());
@@ -230,6 +252,9 @@ class BasicRenderWorkspace {
    */
   void PublishImageResults(std::uint64_t submission_id) {
     images_.PublishSuccessfulSubmission(submission_id, persistence_scope_, persist_sensor_);
+    if (develop_rewrite_in_render_) {
+      develop_rewrite_published_ = true;
+    }
   }
 
   /**
@@ -314,6 +339,8 @@ class BasicRenderWorkspace {
   ResultPersistenceScope         persistence_scope_     = ResultPersistenceScope::AllCurrentResults;
   bool                           rendering_             = false;
   bool                           validity_prepared_     = false;
+  bool                           develop_rewrite_in_render_ = false;
+  bool                           develop_rewrite_published_ = false;
 };
 
 }  // namespace alcedo
