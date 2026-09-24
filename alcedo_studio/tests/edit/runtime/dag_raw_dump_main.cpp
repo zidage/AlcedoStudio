@@ -20,9 +20,6 @@
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 
-#include <libraw/libraw.h>
-
-#include "decoders/processor/raw_processor.hpp"
 #include "decoders/processor/raw_processor_pattern.hpp"
 #include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/pipeline_document.hpp"
@@ -114,47 +111,14 @@ auto PatternName(const alcedo::RawCfaPattern& p) -> const char* {
 
 int main(int argc, char** argv) {
   if (argc < 4) {
-    std::fprintf(stderr,
-                 "usage: %s <raw_path> <demosaic_method> <out_dir> [--sequential]\n"
-                 "  --sequential: run the v0.2.9-style sequential RawProcessor instead of the DAG\n",
-                 argv[0]);
+    std::fprintf(stderr, "usage: %s <raw_path> <demosaic_method> <out_dir>\n", argv[0]);
     return 2;
   }
   const std::filesystem::path raw_path   = argv[1];
   const std::string           method     = argv[2];
   const std::filesystem::path out_dir    = argv[3];
-  const bool sequential = argc > 4 && std::string(argv[4]) == "--sequential";
   std::filesystem::create_directories(out_dir);
-  const std::string stem =
-      raw_path.stem().string() + "." + method + (sequential ? ".sequential" : "");
-
-  if (sequential) {
-    const auto encoded = ReadFile(raw_path);
-    auto       raw     = std::make_unique<LibRaw>();
-    if (raw->open_buffer(const_cast<void*>(static_cast<const void*>(encoded.data())),
-                         encoded.size()) != LIBRAW_SUCCESS) {
-      throw std::runtime_error("LibRaw open_buffer failed");
-    }
-    if (raw->unpack() != LIBRAW_SUCCESS) {
-      throw std::runtime_error("LibRaw unpack failed");
-    }
-    alcedo::RawParams params;
-    params.gpu_backend_            = alcedo::RawGpuBackend::Metal;
-    params.demosaic_method_        = method == "neural_engine"
-                                        ? alcedo::RawDemosaicMethod::NeuralEngine
-                                        : alcedo::RawDemosaicMethod::Default;
-    params.highlights_reconstruct_ = true;
-    params.decode_res_             = alcedo::DecodeRes::FULL;
-    alcedo::RawRuntimeColorContext context;
-    const ushort                   no_crop[4] = {};
-    alcedo::RawProcessor           processor(params, raw->imgdata.rawdata, *raw, context, no_crop);
-    alcedo::ImageBuffer            previous = processor.Process();
-    cv::Mat                        host;
-    previous.GetMetalImage().Download(host);
-    WriteOutputs(out_dir / (stem + ".sensor_linear"), host);
-    std::fprintf(stderr, "[dump] sequential done\n");
-    return 0;
-  }
+  const std::string stem = raw_path.stem().string() + "." + method;
 
   (void)alcedo::BindSystemDefaultMetalPresentationDevice();
 

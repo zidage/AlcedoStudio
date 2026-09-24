@@ -52,7 +52,7 @@ static inline float4 opencl_sample_lut3d_linear(__global const float* lut, uint 
 
 // === LMT (Look Modification Transform) operator ===============================
 
-static inline float4 opencl_lmt_op(float4 px, __global const OpenClFusedParams* params,
+static inline float4 opencl_lmt_op(float4 px, __global const OpenClDrtParams* params,
                                     __global const float* lmt_lut) {
   if (params->lmt_enabled_ == 0u || params->lmt_lut_enabled_ == 0u ||
       params->lmt_lut_edge_size_ <= 1u) {
@@ -884,7 +884,7 @@ static inline float3 opencl_open_drt_transform_fwd(float3 input_color,
 
 // === To Output operator =======================================================
 
-static inline float4 opencl_output_op(float4 px, __global OpenClFusedParams* params) {
+static inline float4 opencl_output_op(float4 px, __global OpenClDrtParams* params) {
   if (params->to_output_enabled_ == 0u) {
     return px;
   }

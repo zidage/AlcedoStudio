@@ -114,15 +114,27 @@ if (-not $SkipOpenCLAssetCheck) {
         'opencl\decoders\processor\operators\gpu\opencl_shader\demosaicnet_structural.cl',
         'opencl\opencl\opencl_shader\prng.cl',
         'opencl\opencl\opencl_shader\geometry_utils.cl',
-        'opencl\edit\pipeline\opencl_shader\film_grain.cl',
-        'opencl\edit\pipeline\opencl_shader\halation.cl',
-        'opencl\edit\pipeline\opencl_shader\edit_pipeline_detail.cl',
-        'opencl\edit\pipeline\opencl_shader\edit_pipeline_fused.cl',
-        'opencl\edit\operators\geometry\opencl_shader\lens_calib.cl',
-        'opencl\edit\scope\opencl_shader\scope_analyzer.cl'
+        'opencl\edit\runtime\lens\opencl\shader\lens_calib.cl',
+        'opencl\edit\scope\opencl_shader\scope_analyzer.cl',
+        'opencl\edit\runtime\opencl\shader\common.cl',
+        'opencl\edit\runtime\opencl\shader\cst.cl',
+        'opencl\edit\runtime\opencl\shader\drt.cl',
+        'opencl\edit\runtime\opencl\shader\drt_params.cl',
+        'opencl\edit\runtime\opencl\shader\geometry_camera.cl',
+        'opencl\edit\runtime\opencl\shader\local_tone.cl',
+        'opencl\edit\runtime\opencl\shader\mask.cl',
+        'opencl\edit\runtime\opencl\shader\primary_grade.cl',
+        'opencl\edit\runtime\opencl\shader\primary_grade_neighbor.cl',
+        'opencl\include\edit\runtime\dng_profile_gpu_math.h',
+        'opencl\include\edit\runtime\aces_reference_gamut_compression.h'
     )
     foreach ($file in $openClFiles) {
         Assert-File (Join-Path $binDir $file)
+    }
+    # The legacy edit_pipeline OpenCL programs are archived (G10.10) and must not be packaged.
+    $legacyOpenClDir = Join-Path $binDir 'opencl\edit\pipeline\opencl_shader'
+    if (Test-Path -LiteralPath $legacyOpenClDir) {
+        throw "Legacy OpenCL edit_pipeline shaders are packaged: $legacyOpenClDir"
     }
 }
 

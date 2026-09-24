@@ -310,3 +310,121 @@ set_tests_properties(LegacyImporterCheckRejectsImporterUse
   PROPERTIES PASS_REGULAR_EXPRESSION "app/import\.cpp: auto doc"
              FAIL_REGULAR_EXPRESSION "stage_user|params_user"
              LABELS "ci_core_flow;legacy_removal")
+
+# G10.10 checks: the OpenCL and Metal legacy pipelines and RawProcessor are archived.
+foreach(_g10_10_check IN ITEMS
+    NoLegacyOpenClPipelineFactoryRemains
+    NoLegacyMetalPipelineFactoryRemains)
+  add_test(NAME ${_g10_10_check}
+    COMMAND ${CMAKE_COMMAND} -DALCEDO_SOURCE_ROOT=${ALCEDO_ROOT_DIR}/src
+            -DALCEDO_TEST_SOURCE_ROOT=${ALCEDO_TEST_ROOT}
+            -DCHECK=${_g10_10_check}
+            -P ${ALCEDO_TEST_ROOT}/ci/legacy_removal_source_checks.cmake)
+  set_tests_properties(${_g10_10_check} PROPERTIES LABELS "ci_core_flow;legacy_removal")
+endforeach()
+add_test(NAME NoRawProcessorEntryRemainsInProductBuild
+  COMMAND ${CMAKE_COMMAND} -DALCEDO_SOURCE_ROOT=${ALCEDO_ROOT_DIR}/src
+          -DALCEDO_TEST_SOURCE_ROOT=${ALCEDO_TEST_ROOT}
+          -DCHECK=NoRawProcessorEntryRemainsInProductBuild
+          -P ${ALCEDO_TEST_ROOT}/ci/legacy_removal_source_checks.cmake)
+set_tests_properties(NoRawProcessorEntryRemainsInProductBuild
+  PROPERTIES LABELS "ci_core_flow;legacy_removal")
+
+# Negative fixtures for the G10.10 checks. Each check must report the violating files and must not
+# report names that only contain the legacy name (OpenClStageProfiler, MetalStageTimer,
+# RawProcessorOp, the OpenCL::RawProcessor program-name namespace, raw_processor_pattern.hpp).
+set(_g10_10_fixture_src "${CMAKE_CURRENT_BINARY_DIR}/g10_10_violation_fixture/src")
+set(_g10_10_fixture_tests "${CMAKE_CURRENT_BINARY_DIR}/g10_10_violation_fixture/tests")
+file(WRITE "${_g10_10_fixture_src}/app/opencl_user.cpp"
+  "auto pipeline = CreateOpenCLGPUPipeline();\n")
+file(WRITE "${_g10_10_fixture_src}/opencl/CMakeLists.txt"
+  "set(X \${ALCEDO_SRC_ROOT}/edit/pipeline/opencl_shader/basic.cl)\n")
+file(WRITE "${_g10_10_fixture_src}/app/profiler.cpp"
+  "OpenClStageProfiler opencl_profiler;\nMetalStageTimer metal_timer;\n")
+file(WRITE "${_g10_10_fixture_src}/metal/CMakeLists.txt"
+  "add_dependencies(app EditPipelineMetalShaders)\n")
+file(WRITE "${_g10_10_fixture_src}/edit/runtime/metal/shader/grade.metal"
+  "#include \"../../../../edit/operators/GPU_kernels/metal_shader/common.metal\"\n")
+file(WRITE "${_g10_10_fixture_src}/app/raw_user.cpp"
+  "RawProcessor processor(params, data, raw, context, crop);\n")
+file(WRITE "${_g10_10_fixture_src}/decoders/decoder.cpp"
+  "#include \"decoders/raw_decoder.hpp\"\n")
+file(WRITE "${_g10_10_fixture_src}/decoders/encode.cpp"
+  "using OpenCL::RawProcessor::kCoreProgramName;\n#include \"decoders/processor/raw_processor_pattern.hpp\"\nnamespace alcedo::OpenCL::RawProcessor {\nRawProcessorOp op;\n")
+file(WRITE "${_g10_10_fixture_src}/decoders/CMakeLists.txt"
+  "def_cuda_library(RawProcessorOp SOURCES op.cu)\n")
+file(WRITE "${_g10_10_fixture_tests}/raw/CMakeLists.txt"
+  "target_link_libraries(RawTest PRIVATE RawProcessor RawProcessorOp)\n")
+
+add_test(NAME OpenClPipelineCheckRejectsFactoryAndProgramDirectory
+  COMMAND ${CMAKE_COMMAND} -DALCEDO_SOURCE_ROOT=${_g10_10_fixture_src}
+          -DALCEDO_TEST_SOURCE_ROOT=${_g10_10_fixture_tests}
+          -DCHECK=NoLegacyOpenClPipelineFactoryRemains
+          -P ${ALCEDO_TEST_ROOT}/ci/legacy_removal_source_checks.cmake)
+set_tests_properties(OpenClPipelineCheckRejectsFactoryAndProgramDirectory
+  PROPERTIES PASS_REGULAR_EXPRESSION "app/opencl_user\.cpp: auto pipeline.*opencl/CMakeLists\.txt: set"
+             FAIL_REGULAR_EXPRESSION "profiler\.cpp"
+             LABELS "ci_core_flow;legacy_removal")
+
+add_test(NAME MetalPipelineCheckRejectsFusedTargetAndLegacyShaders
+  COMMAND ${CMAKE_COMMAND} -DALCEDO_SOURCE_ROOT=${_g10_10_fixture_src}
+          -DALCEDO_TEST_SOURCE_ROOT=${_g10_10_fixture_tests}
+          -DCHECK=NoLegacyMetalPipelineFactoryRemains
+          -P ${ALCEDO_TEST_ROOT}/ci/legacy_removal_source_checks.cmake)
+set_tests_properties(MetalPipelineCheckRejectsFusedTargetAndLegacyShaders
+  PROPERTIES PASS_REGULAR_EXPRESSION "edit/runtime/metal/shader/grade\.metal: #include.*metal/CMakeLists\.txt: add_dependencies"
+             FAIL_REGULAR_EXPRESSION "profiler\.cpp"
+             LABELS "ci_core_flow;legacy_removal")
+
+add_test(NAME RawProcessorCheckRejectsClassIncludeAndTarget
+  COMMAND ${CMAKE_COMMAND} -DALCEDO_SOURCE_ROOT=${_g10_10_fixture_src}
+          -DALCEDO_TEST_SOURCE_ROOT=${_g10_10_fixture_tests}
+          -DCHECK=NoRawProcessorEntryRemainsInProductBuild
+          -P ${ALCEDO_TEST_ROOT}/ci/legacy_removal_source_checks.cmake)
+set_tests_properties(RawProcessorCheckRejectsClassIncludeAndTarget
+  PROPERTIES PASS_REGULAR_EXPRESSION "app/raw_user\.cpp: RawProcessor processor.*decoders/decoder\.cpp: #include"
+             FAIL_REGULAR_EXPRESSION "encode\.cpp|decoders/CMakeLists"
+             LABELS "ci_core_flow;legacy_removal")
+
+# The CMake half of the RawProcessor check runs only when the source half passes, so it has its own
+# fixture without source violations.
+set(_g10_10_cmake_fixture "${CMAKE_CURRENT_BINARY_DIR}/g10_10_raw_cmake_fixture")
+file(WRITE "${_g10_10_cmake_fixture}/src/decoders/encode.cpp"
+  "using OpenCL::RawProcessor::kCoreProgramName;\n")
+file(WRITE "${_g10_10_cmake_fixture}/src/decoders/CMakeLists.txt"
+  "def_cuda_library(RawProcessorOp SOURCES op.cu)\n")
+file(WRITE "${_g10_10_cmake_fixture}/tests/raw/CMakeLists.txt"
+  "target_link_libraries(RawTest PRIVATE RawProcessor RawProcessorOp)\n")
+add_test(NAME RawProcessorCheckRejectsCMakeTargetLink
+  COMMAND ${CMAKE_COMMAND} -DALCEDO_SOURCE_ROOT=${_g10_10_cmake_fixture}/src
+          -DALCEDO_TEST_SOURCE_ROOT=${_g10_10_cmake_fixture}/tests
+          -DCHECK=NoRawProcessorEntryRemainsInProductBuild
+          -P ${ALCEDO_TEST_ROOT}/ci/legacy_removal_source_checks.cmake)
+set_tests_properties(RawProcessorCheckRejectsCMakeTargetLink
+  PROPERTIES PASS_REGULAR_EXPRESSION "tests:raw/CMakeLists\.txt: target_link_libraries"
+             FAIL_REGULAR_EXPRESSION "decoders/CMakeLists"
+             LABELS "ci_core_flow;legacy_removal")
+
+if(ALCEDO_METAL_ENABLED)
+  string(REPLACE ";" "|" _metal_runtime_libs "${ALCEDO_METAL_RUNTIME_LIBS}")
+  add_test(NAME NoLegacyMetalMetallibIsPackaged
+    COMMAND ${CMAKE_COMMAND} -DALCEDO_SOURCE_ROOT=${ALCEDO_ROOT_DIR}/src
+            "-DMETAL_RUNTIME_LIBS=${_metal_runtime_libs}"
+            -DCHECK=NoLegacyMetalMetallibIsPackaged
+            -P ${ALCEDO_TEST_ROOT}/ci/legacy_removal_source_checks.cmake)
+  set_tests_properties(NoLegacyMetalMetallibIsPackaged
+    PROPERTIES LABELS "ci_core_flow;legacy_removal;metal")
+
+  set(_g10_10_bundle_fixture "${CMAKE_CURRENT_BINARY_DIR}/g10_10_metal_bundle_fixture")
+  file(WRITE "${_g10_10_bundle_fixture}/fused_pipeline.metallib" "")
+  add_test(NAME MetalMetallibCheckRejectsFusedPipelineAndMissingDagLibrary
+    COMMAND ${CMAKE_COMMAND} -DALCEDO_SOURCE_ROOT=${ALCEDO_ROOT_DIR}/src
+            "-DMETAL_RUNTIME_LIBS=a/fused_pipeline.metallib|a/drt.metallib"
+            -DMETALLIB_DIR=${_g10_10_bundle_fixture}
+            -DCHECK=NoLegacyMetalMetallibIsPackaged
+            -P ${ALCEDO_TEST_ROOT}/ci/legacy_removal_source_checks.cmake)
+  set_tests_properties(MetalMetallibCheckRejectsFusedPipelineAndMissingDagLibrary
+    PROPERTIES PASS_REGULAR_EXPRESSION "runtime list: fused_pipeline\.metallib.*misses geometry_resample\.metallib.*bundle: .*fused_pipeline\.metallib"
+               FAIL_REGULAR_EXPRESSION "misses drt\.metallib"
+               LABELS "ci_core_flow;legacy_removal;metal")
+endif()

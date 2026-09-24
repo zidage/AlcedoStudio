@@ -922,7 +922,6 @@ if(APPLE AND ALCEDO_METAL_ENABLED AND ALCEDO_METAL_RUNTIME_LIBS)
         MetalUtilsShaders
         MetalGeometryUtilsShaders
         LensCalibrationMetalShaders
-        EditPipelineMetalShaders
         ScopeAnalyzerMetalShaders
         MetalToLinearRefShaders
         MetalDebayerRcdShaders

@@ -65,20 +65,6 @@ if(ALCEDO_OPENCL_ENABLED)
     target_compile_definitions(OpenClDemosaicNet PRIVATE
         ALCEDO_DEMOASICNET_MODEL_DIR="${ALCEDO_SRC_ROOT}/config/models"
     )
-
-    # Product-path OpenCL Neural demosaic entry. Soft-fail API for
-    # RawProcessor OpenCL branch; not part of the generic OpenClDemosaicNet module layer.
-    def_library(OpenClDemosaicNetEntry
-        SOURCES
-            ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/opencl_demosaicnet.cpp
-        PUBLIC_DEPS
-            OpenClDemosaicNet
-            ImageBuffer
-            OpenClProgramLibrary
-            OpenCL::OpenCL
-            ${ALCEDO_OPENCV_CORE_DEPS}
-    )
-    target_compile_definitions(OpenClDemosaicNetEntry PUBLIC HAVE_OPENCL)
 endif()
 
 # Image Base

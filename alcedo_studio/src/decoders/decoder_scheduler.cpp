@@ -17,7 +17,6 @@
 
 #include "decoders/image_decoder.hpp"
 #include "decoders/metadata_decoder.hpp"
-#include "decoders/raw_decoder.hpp"
 #include "decoders/thumbnail_decoder.hpp"
 #include "image/image.hpp"
 #include "type/type.hpp"
@@ -113,9 +112,6 @@ void DecoderScheduler::ScheduleDecode(std::shared_ptr<Image> source_img, DecodeT
   switch (decode_type) {
     case DecodeType::THUMB:
       decoder = std::make_shared<ThumbnailDecoder>();
-      break;
-    case DecodeType::RAW:
-      decoder = std::make_shared<RawDecoder>();
       break;
     case DecodeType::REGULAR:
       // FIXME: Add RegularDecoder

@@ -19,8 +19,7 @@ namespace alcedo {
  * @brief Encode SensorDevelop into `develop.sensor_linear` on the product queue.
  *
  * Must be called between BeginRender and EndRender. Failures throw; there is no CPU,
- * CUDA, Metal, or RawProcessor product-path substitute. Output is camera scene-linear
- * RGBA32F.
+ * CUDA, or Metal product-path substitute. Output is camera scene-linear RGBA32F.
  */
 void ExecuteOpenClDevelop(OpenClRenderDevice& device, const ExecutionPlan& plan,
                           const PreparedRawInput& input, PipelineDocument& document);

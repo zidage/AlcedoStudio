@@ -38,8 +38,6 @@ option(ALCEDO_BUILD_DEMO_TARGETS "Enable GUI/demo target category targets." OFF)
 option(ALCEDO_BUILD_CI_TESTS "Enable zero-extra-cost GitHub CI test targets." OFF)
 option(ALCEDO_ENABLE_CUDA_IMAGE_GEOMETRY_OPS_TEST
        "Enable CudaImageGeometryOpsTest discovery and execution." ON)
-option(ALCEDO_ENABLE_GPU_PERF_TESTS
-       "Register GPU performance harnesses with the performance ctest label (opt-in)." OFF)
 
 add_custom_target(alcedo_tests_all)
 add_custom_target(alcedo_tests_core)
@@ -65,7 +63,6 @@ add_subdirectory(utils)
 add_subdirectory(ui)
 add_subdirectory(sleeve)
 add_subdirectory(raw)
-add_subdirectory(perf)
 add_subdirectory(ml_ops)
 add_subdirectory(io)
 add_subdirectory(image)

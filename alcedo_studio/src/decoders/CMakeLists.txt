@@ -1,56 +1,34 @@
-# Decoders target ownership (RAW processor, DemosaicNet, image decoding).
+# Decoders target ownership (RAW GPU operators, DemosaicNet, image decoding).
 # 3. Processors & Operators
 # ==============================================================================
 
-# --- RawProcessorOp Configuration (CPU/GPU Split) ---
-set(RAW_OP_CPU_SRCS
-    ${ALCEDO_SRC_ROOT}/decoders/processor/operators/cpu/color_space_conv.cpp
-    ${ALCEDO_SRC_ROOT}/decoders/processor/operators/cpu/debayer_ahd.cpp
-    ${ALCEDO_SRC_ROOT}/decoders/processor/operators/cpu/debayer_amaze.cpp
-    ${ALCEDO_SRC_ROOT}/decoders/processor/operators/cpu/debayer_rcd.cpp
-    ${ALCEDO_SRC_ROOT}/decoders/processor/operators/cpu/highlight_reconstruct.cpp
-    ${ALCEDO_SRC_ROOT}/decoders/processor/operators/cpu/white_balance.cpp
-    ${ALCEDO_SRC_ROOT}/decoders/processor/operators/cpu/raw_proc_utils.cpp
-)
-
+# --- RawProcessorOp: RAW GPU operators used by the GPU DAG develop passes ---
 set(RAW_OP_GPU_SRCS)
 if(ALCEDO_CUDA_ENABLED)
     list(APPEND RAW_OP_GPU_SRCS
         ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/cuda_color_space_conv.cu
         ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/cuda_debayer_rcd.cu
         ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/cuda_dng_warp.cu
-        ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/cuda_downsample.cu
         ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/cuda_highlight_reconstruct.cu
         ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/cuda_image_ops.cu
-        ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/cuda_rotate.cu
         ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/cuda_white_balance.cu
         ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/cuda_xtrans_interpolate.cu
     )
 endif()
 if(ALCEDO_METAL_ENABLED)
     list(APPEND RAW_OP_GPU_SRCS
-        ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/metal_cvt_ref_space.cpp
-        ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/metal_debayer_rcd.cpp
         ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/metal_encode.cpp
-        ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/metal_highlight_reconstruct.cpp
-        ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/metal_to_linear_ref.cpp
-        ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/metal_xtrans_interpolate.cpp
     )
 endif()
 if(ALCEDO_OPENCL_ENABLED)
     list(APPEND RAW_OP_GPU_SRCS
-        ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/opencl_to_linear_ref.cpp
-        ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/opencl_debayer_rcd.cpp
-        ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/opencl_xtrans_interpolate.cpp
-        ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/opencl_highlight_reconstruct.cpp
-        ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/opencl_cvt_ref_space.cpp
         ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/opencl_encode.cpp
     )
 endif()
 
 # RawProcessorOp Target
 def_cuda_library(RawProcessorOp
-    SOURCES ${RAW_OP_CPU_SRCS} ${RAW_OP_GPU_SRCS}
+    SOURCES ${RAW_OP_GPU_SRCS}
     PUBLIC_DEPS ImageBuffer libraw::raw_r Exiv2 hwy::hwy Eigen3::Eigen
 )
 target_link_libraries(RawProcessorOp PRIVATE OpenMP::OpenMP_CXX)
@@ -127,20 +105,8 @@ def_library(PipelineScheduler
     PUBLIC_DEPS EditPipeline ThreadPool ImageLoader
     PRIVATE_DEPS PreviewPerformance)
 
-# --- Raw Processor Wrapper ---
-set(RAW_PROCESSOR_BACKEND_SRCS)
-if(ALCEDO_CUDA_ENABLED)
-    list(APPEND RAW_PROCESSOR_BACKEND_SRCS ${ALCEDO_SRC_ROOT}/decoders/processor/raw_processor_cuda.cpp)
-endif()
-if(ALCEDO_METAL_ENABLED)
-    list(APPEND RAW_PROCESSOR_BACKEND_SRCS ${ALCEDO_SRC_ROOT}/decoders/processor/raw_processor_metal.cpp)
-endif()
-if(ALCEDO_OPENCL_ENABLED)
-    list(APPEND RAW_PROCESSOR_BACKEND_SRCS ${ALCEDO_SRC_ROOT}/decoders/processor/raw_processor_opencl.cpp)
-endif()
-
-# Hard-coded DemosaicNet modules + lazy model cache. Owned by the RAW CUDA backend path
-# (raw_processor_cuda.cpp / cuda_demosaicnet.cu), NOT by RawProcessorOp (legacy op facade only).
+# Hard-coded DemosaicNet modules + lazy model cache. Owned by the CUDA Neural Engine develop path
+# (cuda_demosaicnet.cu), NOT by RawProcessorOp.
 if(ALCEDO_CUDA_ENABLED)
     def_cuda_library(DemosaicNet
         SOURCES
@@ -171,20 +137,6 @@ if(ALCEDO_CUDA_ENABLED)
     target_compile_definitions(CudaDemosaicNetEntry PUBLIC HAVE_CUDA)
 endif()
 
-def_library(RawProcessor
-    SOURCES ${ALCEDO_SRC_ROOT}/decoders/processor/raw_processor.cpp ${RAW_PROCESSOR_BACKEND_SRCS}
-    PUBLIC_DEPS Image libraw::raw_r Exiv2 RawProcessorOp
-    PRIVATE_DEPS opencv_imgproc AcceleratorBackend
-)
-if(ALCEDO_CUDA_ENABLED)
-    target_link_libraries(RawProcessor PRIVATE CudaDemosaicNetEntry)
-endif()
-if(ALCEDO_METAL_ENABLED)
-    target_link_libraries(RawProcessor PRIVATE MetalDemosaicNetEntry MetalGeometryUtils)
-endif()
-if(ALCEDO_OPENCL_ENABLED)
-    target_link_libraries(RawProcessor PRIVATE OpenClGeometryUtils OpenClDemosaicNetEntry)
-endif()
 
 # ==============================================================================
 # 4. Decoding & IO
@@ -192,14 +144,13 @@ endif()
 
 set(DECODER_SRCS
     ${ALCEDO_SRC_ROOT}/decoders/decoder_scheduler.cpp
-    ${ALCEDO_SRC_ROOT}/decoders/raw_decoder.cpp
     ${ALCEDO_SRC_ROOT}/decoders/thumbnail_decoder.cpp
     ${ALCEDO_SRC_ROOT}/decoders/metadata_decoder.cpp
 )
 
 def_library(ImageDecoder
     SOURCES ${DECODER_SRCS}
-    PUBLIC_DEPS Image ThreadPool libraw::raw_r RawProcessor
+    PUBLIC_DEPS Image ThreadPool libraw::raw_r Exiv2
     PRIVATE_DEPS ${ALCEDO_OPENCV_IMAGE_DEPS}
 )
 

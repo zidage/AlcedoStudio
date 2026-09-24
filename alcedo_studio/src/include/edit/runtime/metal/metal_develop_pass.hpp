@@ -18,8 +18,8 @@ namespace alcedo {
 /**
  * @brief Encode SensorDevelop into `develop.sensor_linear` on the current Metal command buffer.
  *
- * Must be called between BeginRender and EndRender. Failures throw; there is no CPU or
- * RawProcessor product-path substitute. Output is camera scene-linear RGBA32F.
+ * Must be called between BeginRender and EndRender. Failures throw; there is no CPU
+ * product-path substitute. Output is camera scene-linear RGBA32F.
  */
 void ExecuteMetalDevelop(MetalRenderDevice& device, const ExecutionPlan& plan,
                          const PreparedRawInput& input, PipelineDocument& document);

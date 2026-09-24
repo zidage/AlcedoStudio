@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
@@ -14,7 +15,8 @@
 #include <vector>
 
 #include "decoders/processor/operators/gpu/opencl_demosaicnet_programs.hpp"
-#include "edit/pipeline/opencl_pipeline_programs.hpp"
+#include "decoders/processor/operators/gpu/opencl_raw_programs.hpp"
+#include "edit/runtime/opencl/opencl_dag_programs.hpp"
 #include "edit/scope/opencl_scope_programs.hpp"
 #include "opencl/opencl_backend_program_registry.hpp"
 #include "opencl/opencl_context.hpp"
@@ -295,52 +297,20 @@ __kernel void write_one(__global int* output) {
   EXPECT_NE(program.program, nullptr);
 }
 
-TEST(OpenClRuntimeTest, BuiltinEditPipelineFusedParamsProgramCompiles) {
-  auto& context = OpenClContext::Instance();
-  if (!TryEnsureOpenClContext()) {
-    GTEST_SKIP() << context.LastInitializationError();
-  }
-
+TEST(OpenClRuntimeTest, NoLegacyOpenClFusedProgramIsRegisteredOrPackaged) {
+  // The legacy edit_pipeline manifest is archived (G10.10). The install check for the package side
+  // is scripts/verify_windows_install_tree.ps1.
   RegisterOpenClBackendPrograms();
-  cl_program program =
-      OpenClProgramLibrary::Instance().GetProgram(OpenCL::Pipeline::kFusedProgramName);
-  ASSERT_NE(program, nullptr);
-
-  cl_int    error = CL_SUCCESS;
-  cl_kernel kernel =
-      clCreateKernel(program, OpenCL::Pipeline::kValidateFusedParamsKernelName, &error);
-  EXPECT_EQ(error, CL_SUCCESS);
-  EXPECT_NE(kernel, nullptr);
-  if (kernel != nullptr) {
-    clReleaseKernel(kernel);
+  const std::string legacy_manifest = std::string("edit_") + "pipeline";
+  const auto        manifests = OpenClBackendProgramRegistry::Instance().RegisteredManifestNames();
+  EXPECT_EQ(std::find(manifests.begin(), manifests.end(), legacy_manifest), manifests.end());
+  for (const char* expected : {OpenCL::RawProcessor::kManifestName, OpenCL::Geometry::kManifestName,
+                               OpenCL::Scope::kManifestName, OpenCL::DemosaicNet::kManifestName,
+                               OpenCL::GpuDag::kManifestName}) {
+    EXPECT_NE(std::find(manifests.begin(), manifests.end(), expected), manifests.end()) << expected;
   }
-}
-
-TEST(OpenClRuntimeTest, BuiltinEditPipelineDetailProgramCompiles) {
-  auto& context = OpenClContext::Instance();
-  if (!TryEnsureOpenClContext()) {
-    GTEST_SKIP() << context.LastInitializationError();
-  }
-
-  RegisterOpenClBackendPrograms();
-  cl_program program =
-      OpenClProgramLibrary::Instance().GetProgram(OpenCL::Pipeline::kDetailProgramName);
-  ASSERT_NE(program, nullptr);
-
-  const char* detail_kernels[] = {
-      OpenCL::Pipeline::kNeighborBlurHorizontalKernelName,
-      OpenCL::Pipeline::kNeighborApplyVerticalKernelName,
-      OpenCL::Pipeline::kHsExtractLogIntensityKernelName,
-      OpenCL::Pipeline::kHsApplyAdjustedLKernelName,
-  };
-  for (const char* kernel_name : detail_kernels) {
-    cl_int    error  = CL_SUCCESS;
-    cl_kernel kernel = clCreateKernel(program, kernel_name, &error);
-    EXPECT_EQ(error, CL_SUCCESS) << kernel_name;
-    EXPECT_NE(kernel, nullptr) << kernel_name;
-    if (kernel != nullptr) {
-      clReleaseKernel(kernel);
-    }
+  for (const auto& program : OpenClProgramLibrary::Instance().RegisteredProgramNames()) {
+    EXPECT_NE(program.rfind(legacy_manifest, 0), 0U) << program;
   }
 }
 

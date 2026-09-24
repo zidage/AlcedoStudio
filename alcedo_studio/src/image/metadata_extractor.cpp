@@ -50,8 +50,8 @@ auto IsFinitePositive(float value) -> bool { return std::isfinite(value) && valu
 void SetDisplayDimensionsFromLibRaw(const LibRaw& raw_processor, ExifDisplayMetaData& display) {
   uint32_t width  = static_cast<uint32_t>(raw_processor.imgdata.sizes.width);
   uint32_t height = static_cast<uint32_t>(raw_processor.imgdata.sizes.height);
-  // RawProcessor rotates the decoded pixels for LibRaw flip 5/6. Persist the
-  // dimensions of that rotated output, not the unrotated sensor rectangle.
+  // The develop output is rotated for LibRaw flip 5/6. Persist the dimensions
+  // of that rotated output, not the unrotated sensor rectangle.
   if (raw_processor.imgdata.sizes.flip == 5 || raw_processor.imgdata.sizes.flip == 6) {
     std::swap(width, height);
   }

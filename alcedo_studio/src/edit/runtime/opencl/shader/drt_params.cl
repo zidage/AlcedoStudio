@@ -254,6 +254,6 @@ typedef struct {
   float gamma_luminance_offset_;
   float gain_color_offset_[3];
   float gain_luminance_offset_;
-} OpenClFusedParams;
+} OpenClDrtParams;
 
 #endif

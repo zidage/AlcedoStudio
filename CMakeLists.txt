@@ -924,8 +924,6 @@ if(TARGET ${ALCEDO_MAIN_BIN})
         if(ALCEDO_OPENCL_ENABLED)
             install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/decoders/processor/operators/gpu/opencl_shader/"
                 DESTINATION "${_bundle_macos_dest}/opencl/decoders/processor/operators/gpu/opencl_shader")
-            install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/edit/pipeline/opencl_shader/"
-                DESTINATION "${_bundle_macos_dest}/opencl/edit/pipeline/opencl_shader")
             install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/edit/runtime/lens/opencl/shader/"
                 DESTINATION "${_bundle_macos_dest}/opencl/edit/runtime/lens/opencl/shader")
             install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/edit/scope/opencl_shader/"
@@ -934,7 +932,9 @@ if(TARGET ${ALCEDO_MAIN_BIN})
                 DESTINATION "${_bundle_macos_dest}/opencl/opencl/opencl_shader")
             install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/edit/runtime/opencl/shader/"
                 DESTINATION "${_bundle_macos_dest}/opencl/edit/runtime/opencl/shader")
-            install(FILES "${CMAKE_SOURCE_DIR}/alcedo_studio/src/include/edit/runtime/dng_profile_gpu_math.h"
+            install(FILES
+                "${CMAKE_SOURCE_DIR}/alcedo_studio/src/include/edit/runtime/dng_profile_gpu_math.h"
+                "${CMAKE_SOURCE_DIR}/alcedo_studio/src/include/edit/runtime/aces_reference_gamut_compression.h"
                 DESTINATION "${_bundle_macos_dest}/opencl/include/edit/runtime")
         endif()
         alcedo_install_metal_runtime_libs("${_bundle_resources_dest}/metallib")
@@ -1043,8 +1043,6 @@ if(TARGET ${ALCEDO_MAIN_BIN})
         if(ALCEDO_OPENCL_ENABLED)
             install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/decoders/processor/operators/gpu/opencl_shader/"
                 DESTINATION "${CMAKE_INSTALL_BINDIR}/opencl/decoders/processor/operators/gpu/opencl_shader")
-            install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/edit/pipeline/opencl_shader/"
-                DESTINATION "${CMAKE_INSTALL_BINDIR}/opencl/edit/pipeline/opencl_shader")
             install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/edit/runtime/lens/opencl/shader/"
                 DESTINATION "${CMAKE_INSTALL_BINDIR}/opencl/edit/runtime/lens/opencl/shader")
             install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/edit/scope/opencl_shader/"
@@ -1053,7 +1051,9 @@ if(TARGET ${ALCEDO_MAIN_BIN})
                 DESTINATION "${CMAKE_INSTALL_BINDIR}/opencl/opencl/opencl_shader")
             install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/edit/runtime/opencl/shader/"
                 DESTINATION "${CMAKE_INSTALL_BINDIR}/opencl/edit/runtime/opencl/shader")
-            install(FILES "${CMAKE_SOURCE_DIR}/alcedo_studio/src/include/edit/runtime/dng_profile_gpu_math.h"
+            install(FILES
+                "${CMAKE_SOURCE_DIR}/alcedo_studio/src/include/edit/runtime/dng_profile_gpu_math.h"
+                "${CMAKE_SOURCE_DIR}/alcedo_studio/src/include/edit/runtime/aces_reference_gamut_compression.h"
                 DESTINATION "${CMAKE_INSTALL_BINDIR}/opencl/include/edit/runtime")
         endif()
         alcedo_install_duckdb_extensions("${CMAKE_INSTALL_BINDIR}")

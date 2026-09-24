@@ -14,7 +14,6 @@
 namespace alcedo {
 
 void RegisterOpenClRawProcessorPrograms();
-void RegisterOpenClEditPipelinePrograms();
 void RegisterOpenClGeometryPrograms();
 void RegisterOpenClScopePrograms();
 void RegisterOpenClDemosaicNetPrograms();
@@ -30,7 +29,6 @@ void RegisterBuiltinOpenClProgramManifests() {
     // short-lived RAW processor or pipeline instances should not register
     // programs directly.
     RegisterOpenClRawProcessorPrograms();
-    RegisterOpenClEditPipelinePrograms();
     RegisterOpenClGeometryPrograms();
     RegisterOpenClScopePrograms();
     RegisterOpenClDemosaicNetPrograms();

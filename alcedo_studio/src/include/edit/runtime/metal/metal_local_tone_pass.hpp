@@ -28,7 +28,7 @@ struct MetalLocalToneResult {
  *
  * Pyramid scratch is destroyed after the recorded command buffer completes. Canonical
  * source/result planes live in workspace Values() under GraphValueId. Failures throw; there is no
- * CPU or MetalStage substitute.
+ * CPU substitute.
  */
 [[nodiscard]] auto ExecuteMetalLocalTone(MetalRenderDevice& device, const FrameSceneBinding& adjusted,
                                          const FrameSceneBinding& working,

@@ -77,11 +77,9 @@ gtest_discover_tests(EditorMiniGitMaterializerTest TEST_PREFIX "EditorMiniGitMat
 alcedo_register_test_target(EditorMiniGitMaterializerTest edit)
 
 # Local-tone constants and helpers in edit/runtime/local_tone_mapping.hpp that the DAG runtime
-# uses. One case checks the legacy OpenCL and Metal shader mirrors until G10.10 archives them.
+# uses.
 add_executable(LocalToneMappingConstantsMatchRuntimeTest
     ${ALCEDO_TEST_ROOT}/edit/runtime/local_tone_mapping_constants_test.cpp)
-target_compile_definitions(LocalToneMappingConstantsMatchRuntimeTest
-    PRIVATE ALCEDO_SOURCE_ROOT="${CMAKE_SOURCE_DIR}/alcedo_studio/src")
 target_include_directories(LocalToneMappingConstantsMatchRuntimeTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(LocalToneMappingConstantsMatchRuntimeTest PRIVATE GTest::gtest_main)
 gtest_discover_tests(LocalToneMappingConstantsMatchRuntimeTest
@@ -483,7 +481,7 @@ if(ALCEDO_METAL_ENABLED)
   target_include_directories(DagRawDump PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(DagRawDump PRIVATE
     EditRuntimeMetal EditPipeline EditInput RawProcessorOp MetalDemosaicNetEntry
-    Image RawProcessor opencv_imgproc opencv_imgcodecs Qt6::Gui)
+    Image opencv_imgproc opencv_imgcodecs Qt6::Gui)
   add_dependencies(DagRawDump GpuDagMetalShaders RawProcessorOpMetalShaders)
 endif()
 
@@ -504,7 +502,7 @@ if(ALCEDO_OPENCL_ENABLED)
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_develop_test.cpp)
   target_include_directories(GpuDagOpenClDevelopTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagOpenClDevelopTest PRIVATE
-    GTest::gtest_main EditRuntimeOpenCl EditInput RawProcessorOp OpenClDemosaicNetEntry
+    GTest::gtest_main EditRuntimeOpenCl EditInput RawProcessorOp OpenClDemosaicNet
     OpenClProgramLibrary Image opencv_imgproc Qt6::Gui)
   target_compile_definitions(GpuDagOpenClDevelopTest PRIVATE
     ALCEDO_OPENCL_SHADER_SOURCE_ROOT="${ALCEDO_SRC_DIR}"
@@ -534,7 +532,7 @@ if(ALCEDO_OPENCL_ENABLED)
   target_include_directories(GpuDagOpenClDrtProductTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagOpenClDrtProductTest PRIVATE
     GTest::gtest_main EditRuntimeOpenCl EditScope EditInput RawProcessorOp
-    OpenClDemosaicNetEntry OpenClProgramLibrary Image)
+    OpenClDemosaicNet OpenClProgramLibrary Image)
   target_compile_definitions(GpuDagOpenClDrtProductTest PRIVATE
     ALCEDO_OPENCL_SHADER_SOURCE_ROOT="${ALCEDO_SRC_DIR}"
     ALCEDO_DRT_EXPECTED_PARAMETER_DIR="${ALCEDO_TEST_ROOT}/resources/expected_parameters/drt")
