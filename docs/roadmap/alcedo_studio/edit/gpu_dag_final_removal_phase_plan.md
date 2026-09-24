@@ -20,9 +20,10 @@ two known flaky thumbnail pin-count cases (Section 17.12). G10.9: shared, CUDA, 
 legacy files are archived and out of the Windows and macOS builds; the six source checks and the
 targeted suites pass on both platforms, except failures that exist before this phase; the full
 `ctest` run did not run (only the user starts it) (Section 18.12). G10.10: OpenCL, Metal, and
-`RawProcessor` legacy files archived and out of the build; macOS build, bundle, checks, and suites
-pass; the Windows build, the OpenCL and CUDA suites, the installer, and the installed OpenCL test
-are open (Section 19.12). G10.11 planned.
+`RawProcessor` legacy files archived and out of the build; the macOS and Windows builds, the macOS
+bundle and the Windows installer, the checks, the installed OpenCL test, and the targeted suites
+pass, except failures that exist before this phase; the full `ctest` run did not run (only the
+user starts it) (Section 19.12). G10.11 planned.
 
 Parent: [GPU DAG Pipeline Rebuild Phase Plan](gpu_dag_pipeline_rebuild_phase_plan.md),
 Section 44 (G10) and Section 47 (global completion criteria).
@@ -644,7 +645,7 @@ lines. Generated expected-pixel files and temporary evidence do not count.
 | G10.7 | Executor and services have no stage table; history presentation uses `field_key` | executor, services, presentation | G10.3, G10.6 | 1400–1900 | partial (3.4k lines, two commits; full `ctest` and manual check not run; Section 16.12) |
 | G10.8 | `CPUPipelineExecutor` renamed to `PipelineExecutor` | all users | G10.7 | 500–900 | complete (Section 17.12) |
 | G10.9 | Shared, CUDA, CPU, and operator legacy files archived out of the compile graph | CMake, archive | G10.8 | 700–1300 | complete (Windows and macOS; full `ctest` not run by user decision; Section 18.12) |
-| G10.10 | OpenCL, Metal, and RawProcessor legacy files archived; packaging fixed | CMake, registry, install, tests | G10.9 | 900–1600 | partial (macOS complete; Windows verification open; Section 19.12) |
+| G10.10 | OpenCL, Metal, and RawProcessor legacy files archived; packaging fixed | CMake, registry, install, tests | G10.9 | 900–1600 | done (Section 19.12) |
 | G10.11 | Static checks, full suites, installed packages, three-backend A/B, plan records | tests, docs | G10.10 | 600–1100 | planned |
 
 Split reasons:
@@ -3642,10 +3643,10 @@ Run debug test suites on both platforms as in Sections 16.9 and 14.9.
 
 ### 19.10 Exit criteria
 
-- [ ] All checks pass on both platforms. macOS: pass (Section 19.12). Windows: not run.
-- [ ] The Windows installer and the macOS bundle build. macOS bundle: pass. Windows installer:
-      not run.
-- [ ] The installed OpenCL test passes. Not run: OpenCL is off in the macOS build.
+- [x] All checks pass on both platforms. macOS and Windows: pass (Section 19.12).
+- [x] The Windows installer and the macOS bundle build. Both pass (Section 19.12).
+- [x] The installed OpenCL test passes. Windows: pass (Section 19.12); OpenCL is off in the macOS
+      build.
 - [x] O6 Section 14.5 and M7 Section 15.4 removal checkboxes are checked in their plans with a
       link to this record.
 
@@ -3659,13 +3660,13 @@ Use the template in Section 10.12.
 
 #### Phase G10.10 completion record (2026-09-24)
 
-**Status:** partial. On macOS the phase is complete: the stored Metal expected pixels replace the
-`RawProcessor` parity reference, every file of Section 19.3 is in the archive and outside the
-compile graph, the `macos_debug` build with tests and the `macos_release` bundle pass, the
-`legacy_removal` checks pass, and the targeted suites give only failures that exist before this
-phase. Open: the Windows `win_debug` and `win_release` builds (the CUDA and OpenCL edits are not
-compiled), the CUDA and OpenCL suites, the Windows installer, and
-`InstalledOpenClPackageBuildsEveryGpuDagProgram` (OpenCL is off in the macOS build).
+**Status:** done. The stored Metal expected pixels replace the `RawProcessor` parity reference,
+and every file of Section 19.3 is in the archive and outside the compile graph. On macOS the
+`macos_debug` build with tests and the `macos_release` bundle pass. On Windows the `win_debug`
+build with tests, the `win_release` build, and the installer pass after one link fix
+(`149b80d6`, "Windows verification" below). `InstalledOpenClPackageBuildsEveryGpuDagProgram` also
+passes on Windows. The `legacy_removal` checks pass on both platforms. The targeted suites give only
+failures that exist before this phase. The full `ctest` run did not run (only the user starts it).
 
 - **Source revision and branch:** based on `045a0dc1` (G10.9 merged) on
   `refact/gpu-dag-g10-10-archive-opencl-metal-rawprocessor`. Commits: `4416fbc2` (stored expected
@@ -3835,8 +3836,10 @@ The Metal runtime list gains fused_pipeline.metallib or loses a GPU DAG metallib
 | `MetalDevelopMatchesStoredExpectedPixels` (four `...MatchesStoredExpectedPixels` cases) | `GpuDagMetalDevelopTest` | PASS |
 | macOS bundle has no fused metallib | `verify_macos_install_tree.sh` after `cmake --install build/macos-release` | PASS |
 | Archive moves are byte-identical | `git show -M100% --name-status 3ca68f1a 636c603b` | 84 of 84 R100 |
-| `NoLegacyOpenClFusedProgramIsRegisteredOrPackaged`, `OpenClDevelopMatchesStoredExpectedPixels`, `InstalledOpenClPackageBuildsEveryGpuDagProgram` | OpenCL | NOT RUN (OpenCL is off on macOS) |
-| Windows build, CUDA and OpenCL suites, installer | `win_debug`, `win_release` | NOT RUN (no Windows machine in this session) |
+| `NoLegacyOpenClFusedProgramIsRegisteredOrPackaged` | `OpenClRuntimeTest` (Windows) | PASS |
+| `InstalledOpenClPackageBuildsEveryGpuDagProgram` | `GpuDagOpenClWorkspaceTest` (Windows, `build/install/bin`) | PASS; FAIL as expected on a copy without `aces_reference_gamut_compression.h` |
+| `OpenClDevelopMatchesStoredExpectedPixels` | — | not added (no subject, "Deviations" above) |
+| Windows build, CUDA and OpenCL suites, installer | `win_debug`, `win_release` | PASS after `149b80d6`, except failures that exist before this phase ("Windows verification" below) |
 
 **Build and test commands with exit codes (macOS)**
 
@@ -3868,17 +3871,71 @@ BatchImportDngMetadataTest|EditorLookModelTest|ExportServiceTest|ImageLoader|Thu
   `sample_images/raw/linear_dng` or `raw/batch_import` does not exist on this machine, and
   `MissingPipelineThrows` and `MissingImageThrows` are on the G10.8 failure list.
 
+**Windows verification (2026-09-24, CUDA and OpenCL device, `win_debug` and `win_release`)**
+
+The first `win_debug` build failed to link targets that received symbols through `RawProcessor`.
+The macOS build did not show this.
+Commit `149b80d6` adds the links:
+
+- `AlbumBackendLib` (`project_handler.cpp`, `project_module.cpp`), `PipelineFrameSinkTest`, and
+  `OpenClCudaFullPipelineBenchmark` call `ResolveAcceleratorBackend` and
+  `AcceleratorBackendPreferenceToString`. They received `AcceleratorBackend` through
+  `ImageDecoder -> RawProcessor`, and now link it directly. The missing link failed
+  `alcedo_main`, `alcedo_studio_test_host`, and 53 UI and app test targets.
+- `CudaRawOpsTest` calls the CUDA Neural Engine entry, `DemosaicNetModelCache`, and the CUDA
+  runtime. It now links `CudaDemosaicNetEntry` and `CUDA::cudart`.
+
+```text
+cmd /c scripts\msvc_env.cmd --preset win_debug -DCMAKE_PREFIX_PATH=...          -> exit 0
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 -- -k 0      -> exit 1 (stale exports.def, below), exit 1 (link errors above), exit 0 after 149b80d6
+ctest --test-dir build/debug -j 4 -L legacy_removal                              -> exit 0 (32/32)
+ctest --test-dir build/debug -j 1 --timeout 300 -R "<Windows GPU set>"           -> exit 8 (7 failures, below)
+ctest --test-dir build/debug -j 1 --timeout 300 -R "<Windows caller set>"        -> exit 8 (6 failures, below)
+baseline 045a0dc1: build GpuDagCudaGeometryTest GpuDagCudaDevelopTest GpuDagCudaWorkspaceTest
+  GpuDagOpenClDevelopTest, ctest -R "<the 7 GPU failures>"                       -> exit 8, same 7 failures
+cmd /c scripts\msvc_env.cmd --preset win_release ...; --build --preset win_release -> exit 0, exit 0
+powershell -File scripts/package_windows.ps1 -BuildDir build/release -Preset win_release
+  (fresh build/install)                                                          -> exit 0; verify_windows_install_tree.ps1 passed;
+                                                                                    AlcedoStudio-0.2.9-Windows-AMD64.exe (135.47 MB, NSIS)
+ALCEDO_INSTALLED_OPENCL_BIN_DIR=build/install/bin ctest -R "InstalledOpenClPackageBuildsEveryGpuDagProgram|
+  NoLegacyOpenClFusedProgramIsRegisteredOrPackaged"                               -> exit 0 (2/2, the installed case ran, not skipped)
+same, on a copy of build/install/bin/opencl without aces_reference_gamut_compression.h
+                                                                                 -> exit 8: "installed package misses ...\aces_reference_gamut_compression.h"
+```
+
+Windows GPU set: `^(OpenClRuntimeTest|GpuDagOpenCl*|GpuDagCuda*|CudaRawOpsTest|OpenClDemosaicNet*|
+LocalToneMappingConstantsMatchRuntime*|GpuDagRawInput*|GpuDagModelGraph*|GpuDagGeometry*|
+CudaDriverRequirements*|PipelineFrameSinkTest)\.`. Windows caller set: the Section 18.12 set C plus
+`ImageLoader*|ImportServiceTest|AlbumBackendProjectTest|AlbumBackendThumbnailTest|AlbumBackendImportTest`.
+
+- GPU set: 685 run, 675 passed, 3 skipped (a timing dump, the installed case without the variable,
+  and the 100-megapixel fixtures), 7 failed. The 7 also fail at `045a0dc1`:
+  `CropRotateViewportAndScaleExecuteAsOneCudaResample` (output size), the CUDA and OpenCL
+  `CanonDngProfileRendersAtFullResolutionAndInvalidatesOnlyColorCache` (DNG profile tolerance),
+  `SwitchingHighlightReconstructionDoesNotKeepStalePublishedTextures` (published bytes),
+  `OpenClCameraColorConsumesSharedDualIlluminantTransform` (ACEScc values), and the two
+  `GpuDagCudaWorkspace` header checks (`OpenCL` token in `renderer.hpp:240` and
+  `basic_render_device.hpp:138`, files that this phase does not change).
+- Caller set: 425 discovered, 423 run, 413 passed, 4 skipped, 6 failed, 2 disabled. Five are the
+  Section 18.12 set C failures. `AlbumBackendImportTest.ImportIntoNestedSubfolder_PersistsAcrossProjectReload`
+  (the current folder returns to `\` after reload) is listed as failing at `aa604b0a` (Section 13.12).
+- `legacy_removal` has 32 checks on Windows. The two Metal metallib checks exist only when Metal is
+  enabled.
+- `CudaImageGeometryOpsTest` is not built: `ALCEDO_ENABLE_CUDA_IMAGE_GEOMETRY_OPS_TEST` is off.
+- Build tree: after the archive, and again after checking out `045a0dc1` and back,
+  `RawProcessorOp.dll` failed to link with symbols from the archived objects until
+  `build/debug/alcedo_studio/src/{decoders,opencl}/CMakeFiles/*.dir/exports.def` were deleted
+  (the Section 18.12 build-tree note). The old `build/install` from 2026-09-05 still held
+  `opencl/edit/pipeline/`. It was deleted before `package_windows.ps1`, so the install check ran on
+  a fresh tree. Neither is a source problem.
+
 **Parent plans:** O6 Section 14.5 and M7 Section 15.4 removal items are checked with a link to this
 record. Parent Section 47.1 "GPU 执行代码不在 operators 参数目录" is checked: `edit/operators` holds
 only Models, the planckian and camera-matrix data tables, `resize_algorithm.hpp`, and the colour
 utilities. "operators 只保存参数 Model…" stays open for those data and utility headers.
 
-**Remaining gaps:** Windows: configure and build `win_debug` and `win_release` (the CUDA and OpenCL
-test edits, `CudaRawOpsTest`, `CudaImageGeometryOpsTest`, `OpenClRuntimeTest`,
-`GpuDagOpenClWorkspaceTest`, the `OpenClDemosaicNet` link change, and the `OpenClDrtParams`
-rename are not compiled), run the CUDA and OpenCL develop and DRT suites and `OpenClRuntimeTest`,
-run `package_windows.ps1`, and run `InstalledOpenClPackageBuildsEveryGpuDagProgram` with
-`ALCEDO_INSTALLED_OPENCL_BIN_DIR=build/install/bin`. The full `ctest` run (only the user starts it).
+**Remaining gaps:** the full `ctest` run (only the user starts it). The installed application was
+not started; the installed OpenCL sources are covered by `InstalledOpenClPackageBuildsEveryGpuDagProgram`.
 
 ---
 
