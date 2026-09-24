@@ -17,8 +17,9 @@ services, and history presentation have no stage table; targeted suites pass; fu
 run by user decision and manual check pending (Section 16.12). G10.8: complete. The executor is
 `PipelineExecutor` in `pipeline_executor.{hpp,cpp}`; targeted suites give the G10.7 counts except for
 two known flaky thumbnail pin-count cases (Section 17.12). G10.9: shared, CUDA, CPU, and operator
-legacy files are archived and out of the Windows build; the six source checks and the targeted suites
-pass; the full `ctest` run and the macOS build did not run (Section 18.12). G10.10–G10.11 planned.
+legacy files are archived and out of the Windows and macOS builds; the six source checks and the
+targeted suites pass on both platforms, except failures that exist before this phase; the full
+`ctest` run did not run (only the user starts it) (Section 18.12). G10.10–G10.11 planned.
 
 Parent: [GPU DAG Pipeline Rebuild Phase Plan](gpu_dag_pipeline_rebuild_phase_plan.md),
 Section 44 (G10) and Section 47 (global completion criteria).
@@ -639,7 +640,7 @@ lines. Generated expected-pixel files and temporary evidence do not count.
 | G10.6 | Lens resolver, CUDA detail and grain helpers, shared headers, shaders, and scope target moved | runtime, CMake | G10.5 | 1000–1700 | complete (3.6k lines in three commits; Section 15.12) |
 | G10.7 | Executor and services have no stage table; history presentation uses `field_key` | executor, services, presentation | G10.3, G10.6 | 1400–1900 | partial (3.4k lines, two commits; full `ctest` and manual check not run; Section 16.12) |
 | G10.8 | `CPUPipelineExecutor` renamed to `PipelineExecutor` | all users | G10.7 | 500–900 | complete (Section 17.12) |
-| G10.9 | Shared, CUDA, CPU, and operator legacy files archived out of the compile graph | CMake, archive | G10.8 | 700–1300 | partial (Windows complete; macOS build and full `ctest` not run; Section 18.12) |
+| G10.9 | Shared, CUDA, CPU, and operator legacy files archived out of the compile graph | CMake, archive | G10.8 | 700–1300 | complete (Windows and macOS; full `ctest` not run by user decision; Section 18.12) |
 | G10.10 | OpenCL, Metal, and RawProcessor legacy files archived; packaging fixed | CMake, registry, install, tests | G10.9 | 900–1600 | planned |
 | G10.11 | Static checks, full suites, installed packages, three-backend A/B, plan records | tests, docs | G10.10 | 600–1100 | planned |
 
@@ -3261,7 +3262,8 @@ Also run the macOS configure and build, because `edit/operators` changes affect 
 
 - [ ] Full build and tests pass on Windows. The full `win_debug` build passes; the targeted suites
       give the pre-phase counts; the full `ctest` run did not run (only the user starts it).
-- [ ] macOS configure and build pass. Not run: no macOS machine in this session.
+- [x] macOS configure and build pass. `macos_debug` with tests: every target builds except two
+      test targets that also fail before this phase (Section 18.12, "macOS verification").
 - [x] All six checks pass (Section 18.12).
 
 ### 18.11 Expected diff
@@ -3274,11 +3276,12 @@ Use the template in Section 10.12.
 
 #### Phase G10.9 completion record (2026-09-23)
 
-**Status:** partial. On Windows the phase is complete: the archive and its README exist, every
+**Status:** complete (macOS verification 2026-09-23). On Windows the phase is complete: the archive and its README exist, every
 file of the Section 18.3 groups is in the archive and outside the compile graph, the full
 `win_debug` build passes, the six checks pass, and the targeted suites give the G10.8 counts minus
-the archived cases. Not done: the macOS configure and build (no macOS machine in this session) and
-the full `ctest` run (only the user starts it, `AGENTS.md`).
+the archived cases. On macOS the Metal build, the six checks, and the targeted suites pass, except
+failures that exist before this phase ("macOS verification"). Not done: the full `ctest` run (only
+the user starts it, `AGENTS.md`).
 
 - **Source revision and branch:** based on `8d0fa77a` (G10.8 merged) on
   `refact/gpu-dag-g10-9-archive-shared-cuda-cpu-operators`. Commits: `61c795ab` (LF conversion of
@@ -3423,7 +3426,7 @@ A kept file includes an archived header
 | Archive moves are byte-identical | `git show -M100% --name-status 685ffc11` | 152 of 152 R100 |
 | Full `win_debug` build | all targets | PASS (`build_6.log`) |
 | Full `win_debug` suite | `ctest` | NOT RUN (only the user starts it) |
-| macOS configure and build | `macos_debug` | NOT RUN (no macOS machine) |
+| macOS configure and build | `macos_debug` | PASS except two test targets that fail before this phase ("macOS verification") |
 
 **Build and test commands with exit codes**
 
@@ -3462,7 +3465,7 @@ Sets A and B are the patterns in Section 16.12.
   are not fixed here.
 
 **Checklist / exit condition (Section 18.10):** the six checks pass; the full Windows build passes;
-the full `ctest` run and the macOS build are open.
+the macOS build passes; the full `ctest` run is open.
 
 **LOC note:** the check script is 380 lines and `tests/ci/CMakeLists.txt` 312 lines. No changed
 file is above 1000 lines except `tests/ui/CMakeLists.txt` (about 1930, 4 lines removed) and
@@ -3480,8 +3483,53 @@ Section 47.7 "不存在 `LegacyPipelineImporter`…" are checked with a link to 
 只保存参数 Model…" and "GPU 执行代码不在 operators 参数目录" stay open: the eight legacy Metal shaders
 are still under `edit/operators/GPU_kernels/metal_shader/` until G10.10.
 
-**Remaining gaps:** the macOS configure and build (the Metal `EditPipeline` and test link changes
-are not compiled), the full `ctest` run, and the G10.10 items listed above.
+**Remaining gaps:** the full `ctest` run and the G10.10 items listed above.
+
+**macOS verification (2026-09-23)**
+
+Apple Silicon, macOS 27, Ninja, Debug, branch head `ed640604`, `build/macos-debug` (the
+`macos_debug` preset with tests on, `AGENTS.md`). The Metal `EditPipeline` (only
+`pipeline_executor.cpp`), the `AlbumBackendLib` link to `EditScope`, the rewritten tests, and
+`alcedo_main` compile and link.
+
+```text
+cmake --preset macos_debug -DALCEDO_BUILD_TESTS=ON -DALCEDO_BUILD_CI_TESTS=ON
+      -DALCEDO_BUILD_TESTS_BY_DEFAULT=ON                                     -> exit 0
+cmake --build --preset macos_debug --parallel 10 -- -k 0                     -> exit 1 (2 targets from before this phase, below)
+ctest --test-dir build/macos-debug -j 1 --timeout 300 -R "<macOS G10.9 set>" -> exit 8 (13 failures from before this phase)
+ctest --test-dir build/macos-debug -j 1 -L legacy_removal                     -> exit 0 (24/24)
+```
+
+macOS G10.9 set: the macOS phase set of Section 15.12 without `ToneMappingOwnershipTest`
+(archived), plus the G10.9 checks and fixtures and Set C of this record without the CUDA targets:
+`GpuDagMetal|MetalGeometryUtilsTest|MetalRawOpsTest|MetalDemosaicNetModuleTest|LensCalibDevelopResolveTest|
+LocalToneMappingConstantsMatchRuntimeTest|GpuDagRawInputTest|GpuDagModelGraphTest|AdjustmentTransferServiceMiniGitTest|
+RuntimeSources|RuntimeLegacyHeader|NoProduct|NoTestSource|StageTable|StageJson|LegacyHistory|DagSources|DagLegacy|
+FramePresenter|DeprecatedLegacyArchive|NoPipelineStage|NoOperatorParams|AllBuiltInOperatorModels|NoLegacy|
+ArchiveReference|PipelineStageCheck|OperatorParamsCheck|OperatorTypeCheck|ModelApplyCheck|LegacyImporterCheck|
+CommitGraphTest|PipelineDocumentCheckpointTest|PipelineEditBatchTest|SleeveServiceTest|PipelineHistoryApplierTest|
+EditorSessionEditControllerTest|MetadataExtractorTest|BatchImportDngMetadataTest|EditorLookModelTest|ExportServiceTest`.
+
+- Counts: 553 discovered, 551 run, 518 passed, 20 skipped (RAW fixtures that are not on this
+  machine, including 14 `MetadataExtractorTest` cases), 13 failed, 2 disabled.
+- The 8 Metal failures are the Section 15.12 list without the Metal DRT byte case (fixed by
+  `5a41ec04`): `MetalDevelopFixture.{MetalGeometryUsesOneResampleForCropRotationViewportAndScale,
+  MetalCameraColorConsumesSharedDualIlluminantTransform}`,
+  `MetalGradeFixture.MetalPointwiseAdjustmentsUseOneDispatchPerLlfSegment`,
+  `GpuDagMetalGrade.{MetalLlfRoiSamplesCanonicalReferenceWithSharedGeometryPlan,
+  MetalLlfMatchesCudaReferenceWithinTolerance}`,
+  `MetalMaskFixture.{MetalDisconnectedMaskUsesConstantOneCoverage,
+  MetalNormalMixMatchesCudaReferenceWithinTolerance}`, and
+  `MetalRendererFixture.InteractiveQualityBaseInteractiveReuses2560PixelResults`.
+- The other 5 failures are the Windows Set C failures of this record, which also fail at
+  `8d0fa77a`: the three `PipelineDocumentCheckpointFormat` expected-serialized cases,
+  `ParameterForwardInverseRestoresDocumentHash`, and `ExportHdrJpeg_WritesUltraHdrFile` (timeout).
+- The 24 `legacy_removal` tests pass. `FramePresenterLinksScopeWithoutEditPipeline` is not
+  registered on macOS (Section 15.12).
+- Build targets that fail and do not use G10.9 code (both listed in Section 15.12 at `fcfbb2ef`):
+  `ImageBufferMetalTest` (`cv::countNonZero` without `<opencv2/core.hpp>`) and
+  `EditorGeometryOverlayPipelineTest` (calls `CUDA::ResizeLinear`, built only with CUDA; the test
+  now links `EditRuntimeLens` instead of `Operators`, and the missing symbol is the same).
 
 ---
 
