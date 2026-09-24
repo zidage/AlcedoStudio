@@ -771,18 +771,50 @@ Item {
                             font.pixelSize: appTheme.fontSizeCaption
                         }
 
-                        Label {
+                        // Single identity line: a HEAD badge, then the
+                        // Version's head commit hash (or the image root). The
+                        // badge and hash are code identifiers, not prose: they
+                        // stay untranslated in the mono face. Only the image-
+                        // root wording is translated, in the UI face, because
+                        // the mono face has no CJK glyphs.
+                        RowLayout {
+                            objectName: "editorVersionHeadRow"
                             Layout.fillWidth: true
-                            objectName: "editorVersionSubtitle"
-                            // Single identity line: the Version's head commit
-                            // (or image root). No separate "Head" + "Commit".
-                            text: versionHead.length > 0
-                                  ? qsTr("Commit %1").arg(versionHead.slice(0, 8))
-                                  : qsTr("Commit image root")
-                            color: root.colMuted
-                            wrapMode: Text.Wrap
-                            font.family: appTheme.monoFontFamily
-                            font.pixelSize: appTheme.fontSizeCaption
+                            spacing: appTheme.spaceXs
+
+                            Rectangle {
+                                objectName: "editorVersionHeadBadge"
+                                Layout.alignment: Qt.AlignVCenter
+                                implicitWidth: headBadgeLabel.implicitWidth + appTheme.spaceXs * 2
+                                implicitHeight: headBadgeLabel.implicitHeight + 2
+                                radius: appTheme.badgeRadius
+                                color: "transparent"
+                                border.width: 1
+                                border.color: root.colMuted
+
+                                Label {
+                                    id: headBadgeLabel
+                                    anchors.centerIn: parent
+                                    text: "HEAD"
+                                    color: root.colMuted
+                                    font.family: appTheme.monoFontFamily
+                                    font.pixelSize: appTheme.fontSizeCaption
+                                    font.weight: appTheme.fontWeightStrong
+                                }
+                            }
+
+                            Label {
+                                objectName: "editorVersionSubtitle"
+                                Layout.fillWidth: true
+                                Layout.alignment: Qt.AlignVCenter
+                                text: versionHead.length > 0 ? versionHead.slice(0, 8)
+                                                             : qsTr("Image root")
+                                color: root.colMuted
+                                elide: Text.ElideRight
+                                font.family: versionHead.length > 0 ? appTheme.monoFontFamily
+                                                                    : appTheme.uiFontFamily
+                                font.pixelSize: appTheme.fontSizeCaption
+                            }
                         }
                     }
 

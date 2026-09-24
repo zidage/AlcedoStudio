@@ -3309,8 +3309,8 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <location line="+1"/>
-        <source>Commit image root</source>
-        <translation>提交图像根节点</translation>
+        <source>Image root</source>
+        <translation>图像根节点</translation>
     </message>
     <message>
         <location line="+47"/>

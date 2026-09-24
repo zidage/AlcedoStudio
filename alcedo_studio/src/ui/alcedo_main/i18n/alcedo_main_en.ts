@@ -3308,7 +3308,7 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <location line="+1"/>
-        <source>Commit image root</source>
+        <source>Image root</source>
         <translation type="unfinished"></translation>
     </message>
     <message>

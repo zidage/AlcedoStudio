@@ -217,16 +217,32 @@ TEST_F(EditorVersionsPanelQmlTest, ActiveVersionUsesOutlineWithoutStopPlaybackAc
             AppTheme::Instance().editorListSelectedFillColor());
 
   // No "CURRENT HEAD" pill or "Checked out" copy — outline alone marks active.
-  // Single commit identity line (no dual Head + Commit labels).
+  // Single identity line: an untranslated HEAD badge, then the bare short
+  // hash in the mono face (no translatable "Commit" word inside mono text).
+  auto* head_badge = active_card->findChild<QQuickItem*>(QStringLiteral("editorVersionHeadBadge"));
+  ASSERT_NE(head_badge, nullptr);
+  EXPECT_TRUE(head_badge->isVisible());
+  EXPECT_GT(head_badge->property("radius").toReal(), 0.0);
+  bool badge_reads_head = false;
+  for (auto* child : head_badge->findChildren<QQuickItem*>()) {
+    if (child->property("text").toString() == QStringLiteral("HEAD")) badge_reads_head = true;
+  }
+  EXPECT_TRUE(badge_reads_head);
   auto* active_subtitle =
       active_card->findChild<QQuickItem*>(QStringLiteral("editorVersionSubtitle"));
   ASSERT_NE(active_subtitle, nullptr);
   const QString active_sub = active_subtitle->property("text").toString();
   EXPECT_FALSE(active_sub.contains(QStringLiteral("Checked out"), Qt::CaseInsensitive));
   EXPECT_FALSE(active_sub.contains(QStringLiteral("CURRENT HEAD"), Qt::CaseInsensitive));
-  EXPECT_TRUE(active_sub.contains(QStringLiteral("Commit"), Qt::CaseInsensitive));
+  EXPECT_FALSE(active_sub.contains(QStringLiteral("Commit"), Qt::CaseInsensitive));
+  EXPECT_EQ(active_sub.size(), 8);
+  EXPECT_TRUE(active_card->property("versionHead").toString().startsWith(active_sub));
   EXPECT_EQ(active_subtitle->property("font").value<QFont>().family(),
             AppTheme::Instance().monoFontFamily());
+  // Head badge sits left of the hash on the same line.
+  const qreal badge_right = head_badge->mapToItem(active_card, QPointF(head_badge->width(), 0)).x();
+  const qreal hash_left   = active_subtitle->mapToItem(active_card, QPointF(0, 0)).x();
+  EXPECT_LE(badge_right, hash_left + 0.5);
 
   auto* remove_btn =
       inactive_card->findChild<QQuickItem*>(QStringLiteral("editorRemoveVersionButton"));
