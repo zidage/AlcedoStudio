@@ -365,7 +365,9 @@ auto ParseRawDecodeUpdate(const nlohmann::json& params) -> DevelopRawDecodeUpdat
                      "user_scale",
                      "projection_enabled",
                      "target_projection",
-                     "lens_profile_db_path"},
+                     "lens_profile_db_path",
+                     "lens_maker",
+                     "lens_model"},
                     "raw_decode");
   DevelopRawDecodeUpdate update;
   update.demosaic_method = ReadOptionalString(object, {"demosaic_method", "method"}, "raw_decode");
@@ -404,7 +406,9 @@ auto ParseColorTemperatureUpdate(const nlohmann::json& params) -> DevelopColorTe
                      "user_scale",
                      "projection_enabled",
                      "target_projection",
-                     "lens_profile_db_path"},
+                     "lens_profile_db_path",
+                     "lens_maker",
+                     "lens_model"},
                     "color_temp");
   DevelopColorTemperatureUpdate update;
   update.wb_mode      = ReadOptionalString(object, {"wb_mode", "mode"}, "color_temp");
