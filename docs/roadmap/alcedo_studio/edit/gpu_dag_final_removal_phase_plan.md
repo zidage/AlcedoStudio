@@ -3285,7 +3285,7 @@ the full `ctest` run (only the user starts it, `AGENTS.md`).
   five CRLF files, line endings only), `685ffc11` (`git mv` into the archive, 152 files, all R100),
   `6c87ec6a` (build references, test rewrites, source checks, and one more R100 move), and the
   README and this record.
-- **Diff:** 1242 lines (423 added, 819 removed) in 40 files in `6c87ec6a`, plus the 36-line README
+- **Diff:** 1242 lines (423 added, 819 removed) in 40 files in `6c87ec6a`, plus the 35-line README
   and this record. The moves count zero (Section 9).
 
 **Archived (`alcedo_studio/deprecated/legacy_pipeline/`, identical bytes)**
