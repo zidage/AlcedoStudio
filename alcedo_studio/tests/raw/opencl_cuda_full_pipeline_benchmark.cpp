@@ -18,7 +18,6 @@
 #include <string>
 #include <vector>
 
-#include "edit/pipeline/default_pipeline_params.hpp"
 #include "edit/pipeline/pipeline_accelerator.hpp"
 #include "edit/pipeline/pipeline_executor.hpp"
 #include "edit/runtime/pipeline_apply_request.hpp"

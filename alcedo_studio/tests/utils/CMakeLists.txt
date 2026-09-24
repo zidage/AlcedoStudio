@@ -29,11 +29,3 @@ target_link_libraries(PreviewPerformanceTest
 gtest_discover_tests(PreviewPerformanceTest TEST_PREFIX "PreviewPerformanceTest."
   PROPERTIES LABELS "ci_core_flow;preview_performance")
 alcedo_register_test_target(PreviewPerformanceTest core)
-
-if(ALCEDO_CUDA_ENABLED)
-  add_executable(SharedToneCurveTest ${ALCEDO_TEST_ROOT}/edit/operators/basic/shared_tone_curve_test.cpp)
-  target_include_directories(SharedToneCurveTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-  target_link_libraries(SharedToneCurveTest PRIVATE GTest::gtest_main Operators CUDA::cudart)
-  gtest_discover_tests(SharedToneCurveTest TEST_PREFIX "SharedToneCurveTest.")
-  alcedo_register_test_target(SharedToneCurveTest edit)
-endif()

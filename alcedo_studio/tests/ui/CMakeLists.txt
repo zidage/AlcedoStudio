@@ -213,7 +213,6 @@ target_link_libraries(EditorSessionHistoryPortTest
   ProjectService
   PipelineHistory
   EditPipeline
-  Operators
   GTest::gtest_main)
 # Land next to the shared tests runtime DLLs (not the heavier ui/ shell DLL set).
 set_target_properties(EditorSessionHistoryPortTest PROPERTIES
@@ -239,7 +238,6 @@ target_link_libraries(EditorSessionCheckpointStoreTest
   ProjectService
   PipelineHistory
   Storage
-  Operators
   GTest::gtest_main)
 set_target_properties(EditorSessionCheckpointStoreTest PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/alcedo_studio/tests"
@@ -645,7 +643,6 @@ target_link_libraries(EditorSerialInputBoundaryTest
   PRIVATE
     AlbumBackendLib
     EditorSessionService
-    Operators
     EditPipeline
     PipelineHistory
     EditorAdjustmentPipeline
@@ -1691,7 +1688,6 @@ target_include_directories(EditorMultiSliderQuickTest
 target_link_libraries(EditorMultiSliderQuickTest
     PRIVATE
         AlbumBackendLib
-        Operators
         EditPipeline
         PipelineHistory
         EditorAdjustmentPipeline

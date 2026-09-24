@@ -16,7 +16,6 @@
 #include "decoders/processor/operators/gpu/cuda_rotate.hpp"
 #include "edit/runtime/lens/cuda/cuda_geometry_ops.hpp"
 #include "edit/runtime/lens/cuda/cuda_lens_calib_ops.hpp"
-#include "edit/operators/geometry/lens_calib_op.hpp"
 #include "image/image_buffer.hpp"
 
 namespace alcedo {
@@ -692,47 +691,6 @@ TEST(CudaLensCalibOpsTest, CropCircleWritesAlphaMask) {
   const cv::Vec4f corner = gpu_out.at<cv::Vec4f>(0, 0);
   EXPECT_NEAR(center[3], 1.0f, 1e-6f);
   EXPECT_NEAR(corner[3], 0.0f, 1e-6f);
-}
-
-TEST(LensCalibOpTest, InvalidMetadataDisablesOperatorAndLeavesImageUnchanged) {
-  if (!EnsureCudaDevice()) {
-    GTEST_SKIP() << "No CUDA device available.";
-  }
-
-  const cv::Mat src = MakeGradientMat(60, 92, CV_32FC4);
-
-  nlohmann::json params = {
-      {"lens_calib",
-       {{"enabled", true},
-        {"apply_vignetting", true},
-        {"apply_distortion", true},
-        {"apply_tca", true},
-        {"apply_crop", true},
-        {"lens_profile_db_path", "__missing_lens_db_for_test__"}}},
-  };
-
-  LensCalibOp   op(params);
-  OperatorParams global{};
-  global.raw_runtime_valid_         = true;
-  global.raw_camera_make_           = "UnitTestCam";
-  global.raw_camera_model_          = "UnitTestModel";
-  global.raw_lens_make_             = "UnitTestLens";
-  global.raw_lens_model_            = "UnitTestLens 50mm";
-  global.raw_lens_focal_mm_         = 50.0f;
-  global.raw_lens_aperture_f_       = 2.8f;
-  global.raw_lens_focus_distance_m_ = 2.0f;
-  global.raw_lens_focal_35mm_       = 75.0f;
-  global.raw_lens_crop_factor_hint_ = 1.5f;
-
-  op.SetGlobalParams(global);
-  EXPECT_FALSE(global.lens_calib_runtime_valid_);
-  EXPECT_TRUE(global.lens_calib_runtime_failed_);
-
-  auto buffer = std::make_shared<ImageBuffer>(src.clone());
-  op.ApplyGPU(buffer);
-
-  const cv::Mat& out = buffer->GetCPUData();
-  EXPECT_LT(MeanAbsError(out, src), 1e-6);
 }
 
 }  // namespace alcedo

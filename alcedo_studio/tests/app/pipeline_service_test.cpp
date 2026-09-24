@@ -23,7 +23,6 @@
 
 #include "app/pipeline_document_history.hpp"
 #include "app/project_service.hpp"
-#include "edit/graph/legacy_pipeline_importer.hpp"
 #include "edit/history/pipeline_document_checkpoint.hpp"
 #include "support/editor_parameter_target_test.hpp"
 #include "edit/graph/color_grade_node_model.hpp"

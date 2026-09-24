@@ -34,7 +34,6 @@
 #include "app/project_service.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
-#include "edit/pipeline/default_pipeline_params.hpp"
 #include "edit/runtime/drt_display.hpp"
 #include "type/supported_file_type.hpp"
 #include "utils/clock/time_provider.hpp"
@@ -44,13 +43,18 @@ namespace {
 
 using namespace std::chrono_literals;
 
+// Study exposure and saturation of the reference exports. They are the values of the former legacy
+// clean baseline, so exports stay comparable with the earlier study runs.
+constexpr float kStudyExposureEv        = 1.5f;
+constexpr float kStudySaturationPercent = 30.0f;
+
 struct Options {
   std::filesystem::path              out_dir = std::filesystem::path("build") / "diagnostics" /
                                   "hs_reference_exports";
   std::vector<std::filesystem::path> raw_paths;
   float                              shadow_slider = 100.0f;
   float                              highlight_slider = -100.0f;
-  float                              saturation_slider = pipeline_defaults::kCleanBaselineSaturation;
+  float                              saturation_slider = kStudySaturationPercent;
   bool                               keep_project = false;
   bool                               use_default_lut = false;
 };
@@ -251,7 +255,7 @@ void ApplyReferenceStudyAdjustments(PipelineDocument& document, float shadow_sli
     }
     adjustment->LoadJson(params);
   };
-  load(type_ids::Exposure(), {{"exposure_ev", pipeline_defaults::kCleanBaselineExposure}});
+  load(type_ids::Exposure(), {{"exposure_ev", kStudyExposureEv}});
   load(type_ids::Contrast(), {{"contrast", 0.0f}});
   load(type_ids::Black(), {{"black", 0.0f}});
   load(type_ids::White(), {{"white", 0.0f}});

@@ -20,8 +20,7 @@
 #include <variant>
 #include <vector>
 
-#include "edit/operators/color/HLS_op.hpp"
-#include "edit/operators/color/vibrance_op.hpp"
+#include "json.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
 #include "ui/alcedo_main/album_backend/editor_cdl_trackball_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_color_temp_model.hpp"
@@ -412,68 +411,6 @@ TEST(EditorLookModelTest, LutFilterRebuildsEntriesAndEmitsEntriesChanged) {
   EXPECT_EQ(entries_spy.count(), after_filter);
 }
 
-// ── Vibrance operator round-trip ───────────────────────────────────────────
-
-TEST(EditorLookModelTest, VibranceSetGetParamsPreservesUiValue) {
-  // Simulate user setting vibrance to 75 on the [-100, 100] UI range:
-  // the submit path sends {"vibrance": 75}. Pipeline stores via SetParams
-  // (divides by 100 → internal 0.75). GetParams must scale back to 75.
-  const float        kUiValue = 75.0f;
-  alcedo::VibranceOp op;
-  op.SetParams({{"vibrance", kUiValue}});
-
-  const auto params = op.GetParams();
-  ASSERT_TRUE(params.contains("vibrance"));
-  // Bug: GetParams returns 0.75 without the * 100.0f scale-back.
-  EXPECT_NEAR(params["vibrance"].get<float>(), kUiValue, 1e-4f);
-}
-
-// ── HLS operator round-trip ────────────────────────────────────────────────
-
-TEST(EditorLookModelTest, HlsOperatorSetGetParamsPreservesUiValues) {
-  // Round-trip HLS params through the operator: set via SetParams with the
-  // same JSON shape the model submits, then read back via GetParams.
-  // Operator stores L/S internally at 1/kAdjUiToParamScale; GetParams must
-  // return them unchanged. The QML panel multiplies by 1000 on load.
-
-  const auto    params = nlohmann::json::parse(R"({
-    "HLS": {
-      "hue_bins": [0, 45, 90, 135, 180, 225, 270, 315],
-      "hls_adj_table": [
-        [0, 0, 0], [0, 0.02, 0], [0, 0, 0], [0, 0, 0],
-        [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]
-      ],
-      "h_range_table": [30, 30, 30, 30, 30, 30, 30, 30],
-      "target_hls": [45, 0.5, 1.0],
-      "hls_adj": [0, 0.02, 0],
-      "h_range": 30,
-      "l_range": 0.1,
-      "s_range": 0.1
-    }
-  })");
-
-  alcedo::HLSOp op;
-  op.SetParams(params);
-
-  const auto rt = op.GetParams();
-  ASSERT_TRUE(rt.contains("HLS"));
-  const auto& hls = rt["HLS"];
-
-  // The table at index 1 should have lightness=0.02 (20/1000 for UI 20)
-  ASSERT_TRUE(hls.contains("hls_adj_table"));
-  ASSERT_TRUE(hls["hls_adj_table"].is_array());
-  ASSERT_GE(hls["hls_adj_table"].size(), 2);
-  const auto& row = hls["hls_adj_table"][1];
-  ASSERT_TRUE(row.is_array());
-  ASSERT_GE(row.size(), 3);
-  EXPECT_NEAR(row[1].get<double>(), 0.02, 1e-6);
-  EXPECT_NEAR(row[2].get<double>(), 0.0, 1e-6);
-
-  // target_hls should match
-  ASSERT_TRUE(hls.contains("target_hls"));
-  EXPECT_NEAR(hls["target_hls"][0].get<double>(), 45.0, 1e-6);
-}
-
 TEST(EditorLookModelTest, HlsModelLoadFromTablesRestoresUiValues) {
   // Simulate user editing: select hue swatch 2, set lightness to 45 via drag,
   // then recreate the model from the submitted params (as happens on reopen).
@@ -492,7 +429,7 @@ TEST(EditorLookModelTest, HlsModelLoadFromTablesRestoresUiValues) {
   model.finishLightnessDrag();
   EXPECT_NEAR(model.lightness(), 45.0, 1e-6);
 
-  // Get the submitted params and re-parse as an operator would
+  // Get the submitted params as the panel reload reads them.
   ASSERT_FALSE(sub.calls.empty());
   const auto settled = model.paramsJson();
   ASSERT_FALSE(settled.isEmpty());
@@ -500,13 +437,8 @@ TEST(EditorLookModelTest, HlsModelLoadFromTablesRestoresUiValues) {
   const auto json = nlohmann::json::parse(settled.toStdString());
   ASSERT_TRUE(json.contains("HLS"));
 
-  // Round-trip through HLSOp as the pipeline does
-  alcedo::HLSOp op;
-  op.SetParams(json);
-  const auto  rt     = op.GetParams();
-
-  // Build UI tables from the operator output (as QML loadHlsFromSnapshot does)
-  const auto& rt_hls = rt["HLS"];
+  // Build UI tables from the submitted params (as QML loadHlsFromSnapshot does)
+  const auto& rt_hls = json["HLS"];
   ASSERT_TRUE(rt_hls.contains("hls_adj_table"));
   ASSERT_TRUE(rt_hls.contains("h_range_table"));
 
@@ -514,7 +446,7 @@ TEST(EditorLookModelTest, HlsModelLoadFromTablesRestoresUiValues) {
   for (const auto& row : rt_hls["hls_adj_table"]) {
     QVariantList r;
     r.append(QVariant(row[0].get<double>()));
-    // Operator stores at 1/kAdjUiToParamScale; multiply back for UI
+    // Params store L/S at 1/kAdjUiToParamScale; multiply back for UI
     r.append(QVariant(row[1].get<double>() * hls::kAdjUiToParamScale));
     r.append(QVariant(row[2].get<double>() * hls::kAdjUiToParamScale));
     ui_table.append(QVariant::fromValue(r));

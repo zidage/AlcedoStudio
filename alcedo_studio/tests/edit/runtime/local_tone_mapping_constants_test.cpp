@@ -12,7 +12,6 @@
 #include <sstream>
 #include <string>
 
-#include "edit/pipeline/highlight_shadow_local_tone.hpp"
 #include "edit/runtime/local_tone_mapping.hpp"
 
 namespace alcedo {
@@ -91,14 +90,6 @@ auto AcesccEncode(float linear_ap1) -> float {
 }
 
 }  // namespace
-
-TEST(LocalToneMappingConstantsMatchRuntime, CompatibilityHeaderExportsRuntimeConstants) {
-  EXPECT_EQ(highlight_shadow_local_tone::kMaxLevels, tone::kMaxLevels);
-  EXPECT_FLOAT_EQ(highlight_shadow_local_tone::kBaseSigmaR, tone::kBaseSigmaR);
-  EXPECT_FLOAT_EQ(highlight_shadow_local_tone::kHighlightStrengthScale,
-                  tone::kHighlightStrengthScale);
-  EXPECT_FLOAT_EQ(highlight_shadow_local_tone::kBackendAmountLimit, tone::kBackendAmountLimit);
-}
 
 TEST(LocalToneMappingConstantsMatchRuntime, BuildSamplesCoversConfiguredGammaDomain) {
   const auto  samples = tone::BuildSamples(0.75f, 0.65f);

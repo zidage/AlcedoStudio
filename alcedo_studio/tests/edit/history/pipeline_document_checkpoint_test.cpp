@@ -24,7 +24,6 @@
 #include "edit/history/version_ref.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
-#include "edit/operators/op_base.hpp"
 #include "grade_owned_mask_support.hpp"
 #include "json.hpp"
 #include "type/hash_type.hpp"

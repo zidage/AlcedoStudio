@@ -34,7 +34,7 @@ if(ALCEDO_OPENCL_ENABLED)
     set(OPENCL_DAG_COMMON_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/common.cl")
     set(OPENCL_DAG_CST_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/cst.cl")
 
-    # On Windows, first-party CUDA pipeline targets (RawProcessorOp, Operators,
+    # On Windows, first-party CUDA pipeline targets (RawProcessorOp, EditRuntimeLens,
     # EditPipeline, …) are SHARED by default. If OpenCL context/program runtime
     # stays STATIC, each DLL and alcedo_main gets its own Meyers singleton for
     # OpenClContext / OpenClProgramLibrary / OpenClBackendProgramRegistry.

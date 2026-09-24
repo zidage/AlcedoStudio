@@ -76,17 +76,8 @@ gtest_discover_tests(EditorMiniGitMaterializerTest TEST_PREFIX "EditorMiniGitMat
   PROPERTIES LABELS "ci_core_flow;edit;history;editor_history")
 alcedo_register_test_target(EditorMiniGitMaterializerTest edit)
 
-# Tone mapping ownership: op assignment, op-array roundtrip, JSON.
-add_executable(ToneMappingOwnershipTest ${ALCEDO_TEST_ROOT}/edit/operators/tone/tone_mapping_ownership_test.cpp)
-target_compile_definitions(ToneMappingOwnershipTest
-    PRIVATE ALCEDO_SOURCE_ROOT="${CMAKE_SOURCE_DIR}/alcedo_studio/src")
-target_link_libraries(ToneMappingOwnershipTest PRIVATE GTest::gtest_main)
-gtest_discover_tests(ToneMappingOwnershipTest TEST_PREFIX "ToneMappingOwnershipTest.")
-alcedo_register_test_target(ToneMappingOwnershipTest edit)
-
 # Local-tone constants and helpers in edit/runtime/local_tone_mapping.hpp that the DAG runtime
-# uses. Two cases check the legacy alias header and legacy shader mirrors until G10.9 and G10.10
-# archive them.
+# uses. One case checks the legacy OpenCL and Metal shader mirrors until G10.10 archives them.
 add_executable(LocalToneMappingConstantsMatchRuntimeTest
     ${ALCEDO_TEST_ROOT}/edit/runtime/local_tone_mapping_constants_test.cpp)
 target_compile_definitions(LocalToneMappingConstantsMatchRuntimeTest
@@ -96,44 +87,6 @@ target_link_libraries(LocalToneMappingConstantsMatchRuntimeTest PRIVATE GTest::g
 gtest_discover_tests(LocalToneMappingConstantsMatchRuntimeTest
     TEST_PREFIX "LocalToneMappingConstantsMatchRuntimeTest.")
 alcedo_register_test_target(LocalToneMappingConstantsMatchRuntimeTest edit)
-
-# Tone mapping facade: parameter interfaces.
-add_executable(ToneMappingFacadeTest ${ALCEDO_TEST_ROOT}/edit/operators/tone/tone_mapping_facade_test.cpp)
-target_include_directories(ToneMappingFacadeTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(ToneMappingFacadeTest PRIVATE GTest::gtest_main Operators)
-gtest_discover_tests(ToneMappingFacadeTest TEST_PREFIX "ToneMappingFacadeTest.")
-alcedo_register_test_target(ToneMappingFacadeTest edit)
-
-# ODT (Output Device Transform) operator test.
-add_executable(ODTOpTest
-  ${ALCEDO_TEST_ROOT}/edit/operators/cst/odt_op_test.cpp
-  ${ALCEDO_TEST_ROOT}/edit/operators/cst/aces_odt_numeric_stability_test.cpp)
-target_include_directories(ODTOpTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(ODTOpTest PRIVATE GTest::gtest_main Operators EditRuntimeDrt)
-gtest_discover_tests(ODTOpTest TEST_PREFIX "ODTOpTest.")
-alcedo_register_test_target(ODTOpTest edit)
-
-# Film grain operator test.
-add_executable(FilmGrainOpTest ${ALCEDO_TEST_ROOT}/edit/operators/cst/film_grain_op_test.cpp)
-target_include_directories(FilmGrainOpTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(FilmGrainOpTest PRIVATE GTest::gtest_main Operators)
-gtest_discover_tests(FilmGrainOpTest TEST_PREFIX "FilmGrainOpTest.")
-alcedo_register_test_target(FilmGrainOpTest edit)
-
-# Halation operator test.
-add_executable(HalationOpTest ${ALCEDO_TEST_ROOT}/edit/operators/cst/halation_op_test.cpp)
-target_include_directories(HalationOpTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(HalationOpTest PRIVATE GTest::gtest_main Operators)
-gtest_discover_tests(HalationOpTest TEST_PREFIX "HalationOpTest.")
-alcedo_register_test_target(HalationOpTest edit)
-
-# Crop and rotate operator test.
-add_executable(CropRotateOpTest ${ALCEDO_TEST_ROOT}/edit/operators/geometry/crop_rotate_op_test.cpp)
-target_include_directories(CropRotateOpTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(CropRotateOpTest PRIVATE GTest::gtest_main Operators ${ALCEDO_TEST_OPENCV_MIN_DEPS})
-gtest_discover_tests(CropRotateOpTest TEST_PREFIX "CropRotateOpTest."
-  PROPERTIES LABELS "ci_core_flow")
-alcedo_register_test_target(CropRotateOpTest edit)
 
 # Develop lens resolution: LensCalibrationResolver against stored pre-G10.6 LensCalibOp parameters
 # for CI RAW fixtures, catalog lens identity, DNG warp, and database failure.
@@ -149,31 +102,10 @@ gtest_discover_tests(LensCalibDevelopResolveTest TEST_PREFIX "LensCalibDevelopRe
   PROPERTIES LABELS "ci_core_flow;edit;operators")
 alcedo_register_test_target(LensCalibDevelopResolveTest edit)
 
-# RAW decode durable params: inherent RawColorContext round-trip, omit decode_res.
-add_executable(RawDecodeOpParamsTest
-  ${ALCEDO_TEST_ROOT}/edit/operators/raw/raw_decode_op_params_test.cpp)
-target_include_directories(RawDecodeOpParamsTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(RawDecodeOpParamsTest PRIVATE GTest::gtest_main Operators Image)
-gtest_discover_tests(RawDecodeOpParamsTest TEST_PREFIX "RawDecodeOpParamsTest."
-  PROPERTIES LABELS "ci_core_flow;edit;operators")
-alcedo_register_test_target(RawDecodeOpParamsTest edit)
-
-# ColorTemp durable params: as_shot_* vs custom_* keys and legacy aliases.
-add_executable(ColorTempOpParamsTest
-  ${ALCEDO_TEST_ROOT}/edit/operators/basic/color_temp_op_params_test.cpp)
-target_include_directories(ColorTempOpParamsTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(ColorTempOpParamsTest PRIVATE GTest::gtest_main Operators)
-# Skip post-build runtime DLL staging: this is a header/params unit test with no GPU path.
-set_target_properties(ColorTempOpParamsTest PROPERTIES RUNTIME_OUTPUT_DIRECTORY
-  "${CMAKE_CURRENT_BINARY_DIR}/ColorTempOpParamsTest_runtime")
-gtest_discover_tests(ColorTempOpParamsTest TEST_PREFIX "ColorTempOpParamsTest."
-  PROPERTIES LABELS "ci_core_flow;edit;operators")
-alcedo_register_test_target(ColorTempOpParamsTest edit)
-
 # Pipeline frame sink: CPU frame delivery contract.
 add_executable(PipelineFrameSinkTest ${ALCEDO_TEST_ROOT}/edit/pipeline/pipeline_frame_sink_test.cpp)
 target_include_directories(PipelineFrameSinkTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(PipelineFrameSinkTest PRIVATE GTest::gtest_main Operators EditPipeline
+target_link_libraries(PipelineFrameSinkTest PRIVATE GTest::gtest_main EditPipeline
                                                     PipelineScheduler ${ALCEDO_TEST_OPENCV_MIN_DEPS})
 gtest_discover_tests(PipelineFrameSinkTest TEST_PREFIX "PipelineFrameSinkTest.")
 alcedo_register_test_target(PipelineFrameSinkTest edit)
@@ -181,7 +113,7 @@ alcedo_register_test_target(PipelineFrameSinkTest edit)
 add_executable(PipelineSchedulerRequestIdTest
     ${ALCEDO_TEST_ROOT}/renderer/pipeline_scheduler_request_id_test.cpp)
 target_include_directories(PipelineSchedulerRequestIdTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(PipelineSchedulerRequestIdTest PRIVATE GTest::gtest_main Operators EditPipeline
+target_link_libraries(PipelineSchedulerRequestIdTest PRIVATE GTest::gtest_main EditPipeline
                                                     PipelineScheduler EditorRhiViewport EditGraph
                                                     ${ALCEDO_TEST_OPENCV_MIN_DEPS})
 gtest_discover_tests(PipelineSchedulerRequestIdTest TEST_PREFIX "PipelineSchedulerRequestIdTest.")
@@ -231,7 +163,7 @@ gtest_discover_tests(PipelineEditBatchTest TEST_PREFIX "PipelineEditBatchTest."
   PROPERTIES LABELS "ci_core_flow;edit;history")
 alcedo_register_test_target(PipelineEditBatchTest edit)
 
-# GPU DAG Phase G1: Model, DTO, PipelineGraph, format v2 JSON, legacy import.
+# GPU DAG Phase G1: Model, DTO, PipelineGraph, format v2 JSON; DRT runtime resolution and ACES math.
 add_executable(GpuDagModelGraphTest
   ${ALCEDO_TEST_ROOT}/edit/graph/default_pipeline_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/adjustment_ownership_test.cpp
@@ -240,10 +172,10 @@ add_executable(GpuDagModelGraphTest
   ${ALCEDO_TEST_ROOT}/edit/graph/dirty_patch_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/json_roundtrip_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/color_grade_mask_model_test.cpp
-  ${ALCEDO_TEST_ROOT}/edit/graph/legacy_import_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/header_hygiene_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/develop_color_transform_test.cpp
-  ${ALCEDO_TEST_ROOT}/edit/runtime/drt_output_resolver_test.cpp)
+  ${ALCEDO_TEST_ROOT}/edit/runtime/drt_output_resolver_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/runtime/aces_odt_numeric_stability_test.cpp)
 target_include_directories(GpuDagModelGraphTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(GpuDagModelGraphTest PRIVATE GTest::gtest_main EditGraph EditRuntime)
 target_compile_definitions(GpuDagModelGraphTest PRIVATE
@@ -522,7 +454,7 @@ if(ALCEDO_METAL_ENABLED)
     ${ALCEDO_TEST_ROOT}/edit/runtime/metal_drt_test.cpp)
   target_include_directories(GpuDagMetalDrtTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagMetalDrtTest PRIVATE
-    GTest::gtest_main EditRuntimeMetal EditInput RawProcessorOp Operators MetalDemosaicNetEntry)
+    GTest::gtest_main EditRuntimeMetal EditInput RawProcessorOp MetalDemosaicNetEntry)
   target_compile_definitions(GpuDagMetalDrtTest PRIVATE
     ALCEDO_METAL_DRT_METALLIB_PATH="${METAL_DRT_METALLIB}"
     ALCEDO_DRT_EXPECTED_PARAMETER_DIR="${ALCEDO_TEST_ROOT}/resources/expected_parameters/drt")
@@ -536,7 +468,7 @@ if(ALCEDO_METAL_ENABLED)
     ${ALCEDO_TEST_ROOT}/edit/runtime/metal_nm2_qualification_test.cpp)
   target_include_directories(GpuDagMetalRendererTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagMetalRendererTest PRIVATE
-    GTest::gtest_main EditRuntimeMetal EditPipeline EditInput RawProcessorOp Operators MetalDemosaicNetEntry)
+    GTest::gtest_main EditRuntimeMetal EditPipeline EditInput RawProcessorOp MetalDemosaicNetEntry)
   target_compile_definitions(GpuDagMetalRendererTest PRIVATE
     ALCEDO_METAL_DRT_METALLIB_PATH="${METAL_DRT_METALLIB}")
   add_dependencies(GpuDagMetalRendererTest GpuDagMetalShaders)

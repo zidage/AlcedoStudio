@@ -21,10 +21,7 @@
 #include "edit/history/edit_commit.hpp"
 #include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/history/version_ref.hpp"
-#include "edit/operators/basic/color_temp_op.hpp"
-#include "edit/operators/geometry/lens_calib_op.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
-#include "edit/operators/op_base.hpp"
 #include "edit/pipeline/pipeline_executor.hpp"
 #include "support/document_transfer_test_support.hpp"
 #include "support/editor_mini_git_project_fixture.hpp"
@@ -342,120 +339,5 @@ TEST_F(AdjustmentTransferPasteMergeTest, SelectivePasteFailureCreatesNoVersionOr
   EXPECT_EQ(graph->GetActiveVersionRef().head_commit_hash, prior_head);
 }
 
-// ============================================================================
-// Operator-owned merge policy (color_temp / lens_calib)
-// ============================================================================
-
-TEST(ColorTempOpMergePolicyTest, BothAsShotDoesNotConflictEvenWhenCctDiffers) {
-  ColorTempOp op;
-  const nlohmann::json current = {
-      {"color_temp",
-       {{"mode", "as_shot"},
-        {"custom_cct", 5200.0},
-        {"custom_tint", -3.0},
-        {"as_shot_cct", 5200.0},
-        {"as_shot_tint", -3.0}}}};
-  const nlohmann::json incoming = {{"color_temp", {{"mode", "as_shot"}}}};
-  EXPECT_FALSE(op.DetectMergeConflict(current, incoming));
-}
-
-TEST(ColorTempOpMergePolicyTest, CustomVersusAsShotConflicts) {
-  ColorTempOp op;
-  const nlohmann::json current = {
-      {"color_temp",
-       {{"mode", "custom"},
-        {"custom_cct", 7000.0},
-        {"custom_tint", 10.0},
-        {"as_shot_cct", 5200.0},
-        {"as_shot_tint", -3.0}}}};
-  const nlohmann::json incoming = {{"color_temp", {{"mode", "as_shot"}}}};
-  EXPECT_TRUE(op.DetectMergeConflict(current, incoming));
-}
-
-TEST(ColorTempOpMergePolicyTest, TakeIncomingAsShotPreservesCurrentAsShotBaseline) {
-  ColorTempOp op;
-  const nlohmann::json current = {
-      {"color_temp",
-       {{"mode", "custom"},
-        {"custom_cct", 7000.0},
-        {"custom_tint", 10.0},
-        {"as_shot_cct", 5200.0},
-        {"as_shot_tint", -3.0}}}};
-  const nlohmann::json incoming = {{"color_temp", {{"mode", "as_shot"}}}};
-  const auto merged =
-      op.MergeParams(current, incoming, OperatorMergeChoice::kTakeIncoming);
-  ASSERT_TRUE(merged.contains("color_temp"));
-  const auto& ct = merged["color_temp"];
-  EXPECT_EQ(ct.value("mode", std::string{}), "as_shot");
-  EXPECT_DOUBLE_EQ(ct.value("as_shot_cct", 0.0), 5200.0);
-  EXPECT_DOUBLE_EQ(ct.value("as_shot_tint", 0.0), -3.0);
-  EXPECT_DOUBLE_EQ(ct.value("custom_cct", 0.0), 7000.0);
-  EXPECT_DOUBLE_EQ(ct.value("custom_tint", 0.0), 10.0);
-}
-
-TEST(ColorTempOpMergePolicyTest, SetParamsAsShotWithoutAsShotKeysKeepsExistingAsShot) {
-  ColorTempOp op;
-  op.SetParams({{"color_temp",
-                 {{"mode", "custom"},
-                  {"custom_cct", 7000.0},
-                  {"custom_tint", 12.0},
-                  {"as_shot_cct", 4800.0},
-                  {"as_shot_tint", -5.0}}}});
-  op.SetParams({{"color_temp", {{"mode", "as_shot"}}}});
-  const auto params = op.GetParams()["color_temp"];
-  EXPECT_EQ(params.value("mode", std::string{}), "as_shot");
-  EXPECT_DOUBLE_EQ(params.value("as_shot_cct", 0.0), 4800.0);
-  EXPECT_DOUBLE_EQ(params.value("as_shot_tint", 0.0), -5.0);
-  EXPECT_DOUBLE_EQ(params.value("custom_cct", 0.0), 7000.0);
-  EXPECT_DOUBLE_EQ(params.value("custom_tint", 0.0), 12.0);
-}
-
-TEST(ColorTempOpMergePolicyTest, SetParamsAcceptsLegacyResolvedAndCctKeys) {
-  ColorTempOp op;
-  op.SetParams({{"color_temp",
-                 {{"mode", "custom"},
-                  {"cct", 7000.0},
-                  {"tint", 12.0},
-                  {"resolved_cct", 4800.0},
-                  {"resolved_tint", -5.0}}}});
-  const auto params = op.GetParams()["color_temp"];
-  EXPECT_DOUBLE_EQ(params.value("custom_cct", 0.0), 7000.0);
-  EXPECT_DOUBLE_EQ(params.value("custom_tint", 0.0), 12.0);
-  EXPECT_DOUBLE_EQ(params.value("as_shot_cct", 0.0), 4800.0);
-  EXPECT_DOUBLE_EQ(params.value("as_shot_tint", 0.0), -5.0);
-}
-
-TEST(LensCalibOpMergePolicyTest, ImageLocalMetaDoesNotForceConflictWhenPortableMatches) {
-  LensCalibOp op;
-  const nlohmann::json current = {
-      {"lens_calib",
-       {{"enabled", true},
-        {"apply_distortion", true},
-        {"cam_maker", "Canon"},
-        {"cam_model", "EOS R5"},
-        {"lens_model", "RF 24-70"}}}};
-  const nlohmann::json incoming = {
-      {"lens_calib", {{"enabled", true}, {"apply_distortion", true}}}};
-  EXPECT_FALSE(op.DetectMergeConflict(current, incoming));
-}
-
-TEST(LensCalibOpMergePolicyTest, TakeIncomingKeepsTargetImageLocalMeta) {
-  LensCalibOp op;
-  const nlohmann::json current = {
-      {"lens_calib",
-       {{"enabled", false},
-        {"apply_distortion", true},
-        {"cam_maker", "Nikon"},
-        {"lens_model", "Target Lens"}}}};
-  const nlohmann::json incoming = {
-      {"lens_calib", {{"enabled", true}, {"apply_distortion", false}}}};
-  const auto merged =
-      op.MergeParams(current, incoming, OperatorMergeChoice::kTakeIncoming);
-  const auto& lc = merged["lens_calib"];
-  EXPECT_TRUE(lc.value("enabled", false));
-  EXPECT_FALSE(lc.value("apply_distortion", true));
-  EXPECT_EQ(lc.value("cam_maker", std::string{}), "Nikon");
-  EXPECT_EQ(lc.value("lens_model", std::string{}), "Target Lens");
-}
 }  // namespace
 }  // namespace alcedo

@@ -14,7 +14,6 @@
 #include "../graph/grade_owned_mask_support.hpp"
 #include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
-#include "edit/graph/legacy_pipeline_importer.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/models/cat02_white_balance_model.hpp"
@@ -179,36 +178,30 @@ TEST(GpuDagCudaDrtProduct,
   EXPECT_EQ(cropped->GetCPUData().rows, 19);
 }
 
-TEST(GpuDagCudaDrtProduct, ProductRendererRendersLegacyImportWithTintWithoutUnregisteredType) {
+TEST(GpuDagCudaDrtProduct, ProductRendererRendersCat02TintOffsetWithoutTintAdjustment) {
   if (!HasCudaDevice()) GTEST_SKIP() << "No CUDA device available.";
 
-  nlohmann::json legacy;
-  legacy["Color Adjustment"]["Color Adjustment"]["tint"] = {
-      {"type", 11}, {"enable", true}, {"params", {{"tint", 18.0f}}}};
-  auto imported = LegacyPipelineImporter::Import(legacy);
-  ASSERT_TRUE(imported.Ok()) << imported.error;
-  ASSERT_EQ(imported.document->PrimaryGrade()->FindAdjustmentByType(type_ids::Tint()), nullptr);
-  const auto* cat02 = dynamic_cast<const Cat02WhiteBalanceModel*>(
-      imported.document->PrimaryGrade()->FindAdjustmentByType(type_ids::Cat02WhiteBalance()));
+  auto document = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
+  ASSERT_EQ(document->PrimaryGrade()->FindAdjustmentByType(type_ids::Tint()), nullptr);
+  auto* cat02 = dynamic_cast<Cat02WhiteBalanceModel*>(
+      document->PrimaryGrade()->FindAdjustmentByType(type_ids::Cat02WhiteBalance()));
   ASSERT_NE(cat02, nullptr);
+  cat02->SetTintOffset(18.0f);
   EXPECT_FLOAT_EQ(cat02->TintOffset(), 18.0f);
-
-  auto document = std::make_shared<PipelineDocument>(std::move(*imported.document));
   gpu_dag_test::EnsureTestCameraProfile(*document);
   CudaProductRenderer renderer(document, MakeUnpacker());
   const auto          image = MakeEncodedImage(41);
   ASSERT_NE(RenderHost(renderer, image, DecodeRes::FULL, RenderRequest{}), nullptr);
 }
 
-TEST(GpuDagCudaDrtProduct, LegacyShadowControlExecutesLocalLaplacianWorkspacePath) {
+TEST(GpuDagCudaDrtProduct, ShadowControlExecutesLocalLaplacianWorkspacePath) {
   if (!HasCudaDevice()) GTEST_SKIP() << "No CUDA device available.";
 
-  nlohmann::json legacy;
-  legacy["Basic Adjustment"]["Basic Adjustment"]["shadows"] = {
-      {"type", 6}, {"enable", true}, {"params", {{"shadows", 60.0f}}}};
-  auto imported = LegacyPipelineImporter::Import(legacy);
-  ASSERT_TRUE(imported.Ok()) << imported.error;
-  auto document = std::make_shared<PipelineDocument>(std::move(*imported.document));
+  auto  document = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
+  auto* shadows  = dynamic_cast<ShadowsModel*>(
+      document->PrimaryGrade()->FindAdjustmentByType(type_ids::Shadows()));
+  ASSERT_NE(shadows, nullptr);
+  shadows->SetValue(60.0f);
   gpu_dag_test::EnsureTestCameraProfile(*document);
 
   CudaProductRenderer renderer(document, MakeUnpacker());

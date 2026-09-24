@@ -4,14 +4,14 @@
 #
 # CHECK=NoProductCodeUsesStageTable
 #   Fails when a first-party product file uses the stage table (GetStage(, GetGlobalParams(,
-#   GetOperator(, SetOperator(, or a PipelineStageName value) and is not the stage itself or a
-#   legacy operator. G10.7 removed the stage table from the executor, the services, and the
-#   controllers; G10.9 archives the remaining owners.
+#   GetOperator(, SetOperator(, or a PipelineStageName value). G10.7 removed the stage table from
+#   the executor, the services, and the controllers; G10.9 archived the stage and the legacy
+#   operators, so no file may use it.
 #
 # CHECK=NoProductCodeUsesStageJsonOutsideLegacyOwners
-#   Fails when a first-party product file calls ExportPipelineParams( or ImportPipelineParams(
-#   outside the stage files that G10.9 archives. G10.3 removed every stage-JSON rollback, G10.4
-#   removed the legacy history store, and G10.7 removed the executor API and the mapper import.
+#   Fails when a first-party product file calls ExportPipelineParams( or ImportPipelineParams(.
+#   G10.3 removed every stage-JSON rollback, G10.4 removed the legacy history store, G10.7 removed
+#   the executor API and the mapper import, and G10.9 archived the stage that owned the rest.
 #
 # CHECK=NoSourceReferencesLegacyHistoryStore
 #   Fails when a source or CMake file under ALCEDO_SOURCE_ROOT names a type, table, or target of
@@ -31,29 +31,59 @@
 #   edit/operators/CPU_kernels/, or any other header under edit/operators/ except the Model,
 #   utility, and shared data headers. G10.6 moved the lens resolver and kernels, the CUDA detail and
 #   film grain helpers, the Metal PRNG, and the local-tone and apply-request headers out of them.
+#
+# G10.9 archived the stage, the legacy operators, and the legacy importer to
+# alcedo_studio/deprecated/legacy_pipeline/. The checks below keep them out of the build.
+#
+# CHECK=DeprecatedLegacyArchiveIsOutsideCompileGraph
+#   Needs REPO_ROOT (the repository root) instead of ALCEDO_SOURCE_ROOT; COMPILE_COMMANDS (a
+#   compile database) is optional. Fails when a CMakeLists.txt or *.cmake file in the repository
+#   root, alcedo_studio, scripts, or vcpkg-overlays (third_party excluded) names the archive
+#   directory, or when the compile database lists a file in it. This script is the only CMake file
+#   that may spell the archive path.
+#
+# CHECK=NoPipelineStageTypeRemainsInFirstPartySource
+#   Fails when a source file under ALCEDO_SOURCE_ROOT, or under ALCEDO_TEST_SOURCE_ROOT when it is
+#   given, names PipelineStage or PipelineStageName.
+#
+# CHECK=NoOperatorParamsAggregateRemainsInFirstPartySource
+#   Fails when a source file names the OperatorParams or GPUOperatorParams aggregate. Longer
+#   identifiers that contain the name, such as loadFromOperatorParams, do not match. Same roots as
+#   the stage check.
+#
+# CHECK=AllBuiltInOperatorModelsHaveNoImageApplyEntryPoint
+#   Fails when a file under edit/operators/models/ or include/edit/operators/models/ names Apply(
+#   or ApplyGPU(. A Model holds parameters; the GPU DAG passes process images.
+#
+# CHECK=NoLegacyParameterImporterOrStageAdapterRemainsInProductPath
+#   Fails when a product source file names LegacyPipelineImporter, legacy_stage_adapter, or
+#   MirrorsLegacyStageAdapter.
+#
+# CHECK=NoLegacyOperatorTypeEnumRemains
+#   Fails when a source file uses an OperatorType:: value or declares enum class OperatorType.
+#   OperatorTypeId, the Model type identifier, does not match. Same roots as the stage check.
 
 cmake_minimum_required(VERSION 3.21)
 
-if(NOT DEFINED ALCEDO_SOURCE_ROOT OR NOT IS_DIRECTORY "${ALCEDO_SOURCE_ROOT}")
-  message(FATAL_ERROR "ALCEDO_SOURCE_ROOT must name the alcedo_studio/src directory")
-endif()
 if(NOT DEFINED CHECK)
   message(FATAL_ERROR "CHECK must name the source check to run")
 endif()
+if(CHECK STREQUAL "DeprecatedLegacyArchiveIsOutsideCompileGraph")
+  if(NOT DEFINED REPO_ROOT OR NOT IS_DIRECTORY "${REPO_ROOT}")
+    message(FATAL_ERROR "REPO_ROOT must name the repository root")
+  endif()
+elseif(NOT DEFINED ALCEDO_SOURCE_ROOT OR NOT IS_DIRECTORY "${ALCEDO_SOURCE_ROOT}")
+  message(FATAL_ERROR "ALCEDO_SOURCE_ROOT must name the alcedo_studio/src directory")
+endif()
+if(DEFINED ALCEDO_TEST_SOURCE_ROOT AND NOT IS_DIRECTORY "${ALCEDO_TEST_SOURCE_ROOT}")
+  message(FATAL_ERROR "ALCEDO_TEST_SOURCE_ROOT must name the alcedo_studio/tests directory")
+endif()
 
-# Relative paths under ALCEDO_SOURCE_ROOT, as regular expressions.
-# The stage and the legacy operators own the stage-table API until G10.9 archives them.
-set(_stage_table_owners
-  "^edit/pipeline/pipeline_stage\\.cpp$"
-  "^include/edit/pipeline/pipeline_stage\\.hpp$"
-  "^edit/operators/"
-  "^include/edit/operators/"
-)
-
-set(_stage_json_owners
-  "^edit/pipeline/pipeline_stage\\.cpp$"
-  "^include/edit/pipeline/pipeline_stage\\.hpp$"
-)
+# Relative paths under ALCEDO_SOURCE_ROOT that may use an API, as regular expressions. G10.9
+# archived the stage and the legacy operators, so no file owns the stage table or stage JSON.
+set(_stage_table_owners "")
+set(_stage_json_owners "")
+set(_no_owners "")
 
 function(_alcedo_matches_any relative_path patterns_var out_var)
   set(${out_var} FALSE PARENT_SCOPE)
@@ -72,37 +102,48 @@ set(_legacy_history_check_hosts
   "^ci/CMakeLists\\.txt$"
 )
 
-# Scan every first-party source for api_regex and fail with one line per file that is not
-# matched by allowed_var. Extra glob patterns (relative to ALCEDO_SOURCE_ROOT) may follow.
+# Scan every first-party source under ALCEDO_SOURCE_ROOT, and under ALCEDO_TEST_SOURCE_ROOT when it
+# is given, for api_regex and fail with one line per file that is not matched by allowed_var.
+# Files under the test root are reported with a "tests:" prefix. Extra glob patterns (relative to
+# each root) may follow.
 function(_alcedo_scan api_regex allowed_var failure_text success_text)
-  set(_extra_globs "")
-  foreach(_pattern IN LISTS ARGN)
-    list(APPEND _extra_globs "${ALCEDO_SOURCE_ROOT}/${_pattern}")
-  endforeach()
-  file(GLOB_RECURSE _sources RELATIVE "${ALCEDO_SOURCE_ROOT}"
-    "${ALCEDO_SOURCE_ROOT}/*.cpp" "${ALCEDO_SOURCE_ROOT}/*.hpp" "${ALCEDO_SOURCE_ROOT}/*.h"
-    "${ALCEDO_SOURCE_ROOT}/*.cu" "${ALCEDO_SOURCE_ROOT}/*.cuh" "${ALCEDO_SOURCE_ROOT}/*.mm"
-    "${ALCEDO_SOURCE_ROOT}/*.inl" "${ALCEDO_SOURCE_ROOT}/*.qml" ${_extra_globs})
+  set(_roots "${ALCEDO_SOURCE_ROOT}")
+  if(DEFINED ALCEDO_TEST_SOURCE_ROOT)
+    list(APPEND _roots "${ALCEDO_TEST_SOURCE_ROOT}")
+  endif()
   set(_violations "")
   set(_scanned 0)
-  foreach(relative_path IN LISTS _sources)
-    if(relative_path MATCHES "^third_party/")
-      continue()
+  foreach(_root IN LISTS _roots)
+    set(_label "")
+    if(NOT "${_root}" STREQUAL "${ALCEDO_SOURCE_ROOT}")
+      set(_label "tests:")
     endif()
-    math(EXPR _scanned "${_scanned} + 1")
-    file(STRINGS "${ALCEDO_SOURCE_ROOT}/${relative_path}" _hits REGEX "${api_regex}")
-    if(NOT _hits)
-      continue()
-    endif()
-    _alcedo_matches_any("${relative_path}" ${allowed_var} _allowed)
-    if(NOT _allowed)
-      list(GET _hits 0 _first_hit)
-      string(STRIP "${_first_hit}" _first_hit)
-      list(APPEND _violations "${relative_path}: ${_first_hit}")
-    endif()
+    set(_extra_globs "")
+    foreach(_pattern IN LISTS ARGN)
+      list(APPEND _extra_globs "${_root}/${_pattern}")
+    endforeach()
+    file(GLOB_RECURSE _sources RELATIVE "${_root}"
+      "${_root}/*.cpp" "${_root}/*.hpp" "${_root}/*.h" "${_root}/*.cu" "${_root}/*.cuh"
+      "${_root}/*.mm" "${_root}/*.inl" "${_root}/*.qml" ${_extra_globs})
+    foreach(relative_path IN LISTS _sources)
+      if(relative_path MATCHES "^third_party/")
+        continue()
+      endif()
+      math(EXPR _scanned "${_scanned} + 1")
+      file(STRINGS "${_root}/${relative_path}" _hits REGEX "${api_regex}")
+      if(NOT _hits)
+        continue()
+      endif()
+      _alcedo_matches_any("${relative_path}" ${allowed_var} _allowed)
+      if(NOT _allowed)
+        list(GET _hits 0 _first_hit)
+        string(STRIP "${_first_hit}" _first_hit)
+        list(APPEND _violations "${_label}${relative_path}: ${_first_hit}")
+      endif()
+    endforeach()
   endforeach()
   if(_scanned EQUAL 0)
-    message(FATAL_ERROR "No source files found under ${ALCEDO_SOURCE_ROOT}")
+    message(FATAL_ERROR "No source files found under ${_roots}")
   endif()
   if(_violations)
     list(JOIN _violations "\n  " _report)
@@ -222,16 +263,103 @@ function(_alcedo_scan_dag_includes)
   message(STATUS "Scanned ${_scanned} files; no DAG source includes a legacy pipeline or operator path.")
 endfunction()
 
+set(_model_scope
+  "^edit/operators/models/"
+  "^include/edit/operators/models/"
+)
+
+# A path to the deprecated archive: alcedo_studio/deprecated, ${...}/deprecated, or
+# deprecated/legacy_pipeline, with forward or backward slashes.
+set(_archive_path_regex
+  "(alcedo_studio|})[/\\\\]+deprecated([/\\\\]|$)|deprecated[/\\\\]+legacy_pipeline")
+
+# Report every CMake file that names the archive or lives inside it, and every compile-database
+# line that names an archive path.
+function(_alcedo_scan_archive_references)
+  set(_files "")
+  if(EXISTS "${REPO_ROOT}/CMakeLists.txt")
+    list(APPEND _files "CMakeLists.txt")
+  endif()
+  foreach(_dir IN ITEMS alcedo_studio scripts vcpkg-overlays)
+    if(IS_DIRECTORY "${REPO_ROOT}/${_dir}")
+      file(GLOB_RECURSE _found RELATIVE "${REPO_ROOT}"
+        "${REPO_ROOT}/${_dir}/CMakeLists.txt" "${REPO_ROOT}/${_dir}/*.cmake")
+      list(APPEND _files ${_found})
+    endif()
+  endforeach()
+  set(_violations "")
+  set(_scanned 0)
+  foreach(relative_path IN LISTS _files)
+    if(relative_path MATCHES "(^|/)third_party/" OR
+       relative_path STREQUAL "alcedo_studio/tests/ci/legacy_removal_source_checks.cmake")
+      continue()
+    endif()
+    math(EXPR _scanned "${_scanned} + 1")
+    if(relative_path MATCHES "^alcedo_studio/deprecated/")
+      list(APPEND _violations "${relative_path}: CMake file inside the archive")
+      continue()
+    endif()
+    file(STRINGS "${REPO_ROOT}/${relative_path}" _hits REGEX "${_archive_path_regex}")
+    if(_hits)
+      list(GET _hits 0 _first_hit)
+      string(STRIP "${_first_hit}" _first_hit)
+      list(APPEND _violations "${relative_path}: ${_first_hit}")
+    endif()
+  endforeach()
+  if(_scanned EQUAL 0)
+    message(FATAL_ERROR "No CMake files found under ${REPO_ROOT}")
+  endif()
+  if(DEFINED COMPILE_COMMANDS AND NOT COMPILE_COMMANDS STREQUAL "")
+    if(NOT EXISTS "${COMPILE_COMMANDS}")
+      message(FATAL_ERROR "Compile database not found: ${COMPILE_COMMANDS}")
+    endif()
+    file(STRINGS "${COMPILE_COMMANDS}" _db_hits REGEX "${_archive_path_regex}")
+    foreach(_hit IN LISTS _db_hits)
+      string(STRIP "${_hit}" _hit)
+      list(APPEND _violations "compile database: ${_hit}")
+    endforeach()
+  endif()
+  if(_violations)
+    list(JOIN _violations "\n  " _report)
+    message(FATAL_ERROR "The deprecated legacy archive is referenced by the build:\n  ${_report}")
+  endif()
+  message(STATUS "Scanned ${_scanned} CMake files and the compile database; no archive reference.")
+endfunction()
+
 if(CHECK STREQUAL "NoProductCodeUsesStageTable")
   _alcedo_scan("(GetStage|GetGlobalParams|GetOperator|SetOperator)\\(|PipelineStageName::"
     _stage_table_owners
-    "Product code uses the stage table outside the stage and the legacy operators"
-    "no stage-table use outside the stage and the legacy operators")
+    "Product code uses the stage table"
+    "no stage-table use")
 elseif(CHECK STREQUAL "NoProductCodeUsesStageJsonOutsideLegacyOwners")
   # The leading class excludes accessors such as Document::GetImportPipelineParams().
   _alcedo_scan("(^|[^A-Za-z0-9_])(Export|Import)PipelineParams\\(" _stage_json_owners
-    "Product code exports or imports stage JSON outside its legacy owners"
-    "no stage-JSON export or import outside the legacy owners")
+    "Product code exports or imports stage JSON"
+    "no stage-JSON export or import")
+elseif(CHECK STREQUAL "DeprecatedLegacyArchiveIsOutsideCompileGraph")
+  _alcedo_scan_archive_references()
+elseif(CHECK STREQUAL "NoPipelineStageTypeRemainsInFirstPartySource")
+  _alcedo_scan("PipelineStage" _no_owners
+    "Source names the archived pipeline stage type"
+    "no PipelineStage or PipelineStageName")
+elseif(CHECK STREQUAL "NoOperatorParamsAggregateRemainsInFirstPartySource")
+  _alcedo_scan("(^|[^A-Za-z0-9_])(GPU)?OperatorParams([^A-Za-z0-9_]|$)" _no_owners
+    "Source names the archived operator parameter aggregate"
+    "no OperatorParams or GPUOperatorParams")
+elseif(CHECK STREQUAL "AllBuiltInOperatorModelsHaveNoImageApplyEntryPoint")
+  _alcedo_scan_within("(^|[^A-Za-z0-9_])Apply(GPU)?[ \t]*\\(" _model_scope
+    "Operator Model has an image apply entry point"
+    "no operator Model has Apply( or ApplyGPU(")
+elseif(CHECK STREQUAL "NoLegacyParameterImporterOrStageAdapterRemainsInProductPath")
+  _alcedo_scan("LegacyPipelineImporter|legacy_stage_adapter|MirrorsLegacyStageAdapter" _no_owners
+    "Product source names the archived legacy importer or stage adapter"
+    "no legacy importer or stage adapter")
+elseif(CHECK STREQUAL "NoLegacyOperatorTypeEnumRemains")
+  _alcedo_scan(
+    "(^|[^A-Za-z0-9_])OperatorType::|enum[ \t]+class[ \t]+OperatorType([^A-Za-z0-9_]|$)"
+    _no_owners
+    "Source uses the archived legacy OperatorType enum"
+    "no legacy OperatorType enum")
 elseif(CHECK STREQUAL "NoSourceReferencesLegacyHistoryStore")
   _alcedo_scan(
     "(^|[^A-Za-z0-9_])(Edit[H]istory|Edit[H]istoryMgmtService|Edit[H]istoryMapper|EditTransaction|EditorTransactionJournal|EditorJournalWriter|IEditorJournalPort|EditorSessionJournalWriterPort|EditorHistoryMaterializer|EditorRecoveryMetadata)([^A-Za-z0-9_]|$)"

@@ -218,6 +218,8 @@ target_link_libraries(AlbumBackendLib
         UiLocalization
         BackgroundTaskController
         EditorRhiViewport
+        # The editor scope controller and item analyze the presented frame through EditScope.
+        EditScope
         Qt6::Quick
         Qt6::Qml
         Qt6::QuickControls2
