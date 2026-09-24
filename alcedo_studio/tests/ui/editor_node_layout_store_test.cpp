@@ -6,6 +6,8 @@
 
 #include <gtest/gtest.h>
 
+#include <QSignalSpy>
+
 #include "app/editor_node_graph_projection.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
@@ -49,6 +51,31 @@ TEST(EditorNodeLayoutStore, NewKeyStartsWithDefaultViewZoomAndOpenDrawers) {
   EXPECT_EQ(store.view_position(), QPointF());
   EXPECT_TRUE(store.DrawerOpen(NodeId{"grade.primary"}));
   EXPECT_FALSE(store.hasNodePosition(QStringLiteral("grade.primary")));
+}
+
+TEST(EditorNodeLayoutStore, DrawerRevisionNotifiesOnDrawerFlagAndKeyChangesOnly) {
+  EditorNodeLayoutStore store(MakeMetrics());
+  store.activate("p", 1, 2, "version-a");
+  QSignalSpy drawer_changed(&store, &EditorNodeLayoutStore::drawerStateChanged);
+  const auto initial = store.drawer_revision();
+
+  store.SetDrawerOpen(NodeId{"grade.primary"}, false);
+  EXPECT_EQ(store.drawer_revision(), initial + 1);
+  EXPECT_EQ(drawer_changed.count(), 1);
+  EXPECT_EQ(store.property("drawerRevision").toULongLong(), initial + 1);
+
+  // Writing the stored value again and non-drawer writes do not notify.
+  store.SetDrawerOpen(NodeId{"grade.primary"}, false);
+  store.set_zoom(1.5);
+  store.setNodePosition(QStringLiteral("grade.primary"), 10.0, 20.0);
+  EXPECT_EQ(drawer_changed.count(), 1);
+
+  // Another key reads different drawer flags, so it notifies too.
+  store.activate("p", 1, 2, "version-b");
+  EXPECT_EQ(drawer_changed.count(), 2);
+  EXPECT_TRUE(store.DrawerOpen(NodeId{"grade.primary"}));
+  store.activate("p", 1, 2, "version-b");
+  EXPECT_EQ(drawer_changed.count(), 2);
 }
 
 TEST(EditorNodeLayoutStore, TwoVersionsKeepSeparatePositionsAndDrawerState) {

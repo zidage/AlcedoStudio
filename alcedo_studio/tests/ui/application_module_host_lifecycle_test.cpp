@@ -96,6 +96,7 @@ TEST_F(ApplicationModuleHostLifecycleTests,
     EXPECT_NE(host.adjustment_transfer(), nullptr);
     EXPECT_NE(host.editor_session(), nullptr);
     EXPECT_NE(host.workspace_router(), nullptr);
+    EXPECT_NE(host.editor_behavior(), nullptr);
     EXPECT_FALSE(host.project()->ServiceReady());
 
     const auto*                                            meta           = host.metaObject();
@@ -118,6 +119,7 @@ TEST_F(ApplicationModuleHostLifecycleTests,
         {"adjustmentTransfer", "alcedo::ui::AdjustmentTransferController*"},
         {"workspaceRouter", "alcedo::ui::WorkspaceRouter*"},
         {"editorSession", "alcedo::ui::EditorSessionController*"},
+        {"editorBehavior", "alcedo::ui::EditorBehaviorPreferences*"},
     };
     for (const auto& [name, type_name] : property_types) {
       const int index = meta->indexOfProperty(name);

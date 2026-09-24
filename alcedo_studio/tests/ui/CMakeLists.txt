@@ -937,6 +937,7 @@ alcedo_register_test_target(EditorNodeDelegateQmlTest ui)
 add_executable(EditorNodeSelectionLayoutTest
     ${ALCEDO_TEST_ROOT}/ui/editor_node_layout_store_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/editor_node_controller_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/editor_behavior_preferences_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
 )
 target_include_directories(EditorNodeSelectionLayoutTest

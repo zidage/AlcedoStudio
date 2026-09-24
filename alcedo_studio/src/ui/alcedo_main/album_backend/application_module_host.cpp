@@ -242,6 +242,8 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   }
   workspace_router_ = std::make_unique<WorkspaceRouter>(editor_session_.get(), this);
   RecordConstruction("WorkspaceRouter", workspace_router_.get());
+  editor_behavior_ = std::make_unique<EditorBehaviorPreferences>(this);
+  RecordConstruction("EditorBehaviorPreferences", editor_behavior_.get());
 
   library_->BindCollaborators(folders_.get(), search_.get(), stats_.get());
   library_->SetSemanticLabelProvider(
@@ -464,6 +466,7 @@ ApplicationModuleHost::~ApplicationModuleHost() {
     pointer.reset();
     RecordDestruction(type_name, object);
   };
+  destroy(editor_behavior_, "EditorBehaviorPreferences");
   destroy(workspace_router_, "WorkspaceRouter");
   destroy(editor_session_, "EditorSessionController");
   if (editor_session_runtime_) {

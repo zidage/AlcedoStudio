@@ -19,6 +19,7 @@ class QQmlEngine;
 #include "app/update_service.hpp"
 #include "ui/alcedo_main/album_backend/adjustment_transfer_controller.hpp"
 #include "ui/alcedo_main/album_backend/background_task_controller.hpp"
+#include "ui/alcedo_main/album_backend/editor_behavior_preferences.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_render_scheduler_port.hpp"
 #include "ui/alcedo_main/album_backend/folder_controller.hpp"
@@ -63,6 +64,7 @@ class ApplicationModuleHost final : public QObject {
   Q_PROPERTY(AdjustmentTransferController* adjustmentTransfer READ adjustment_transfer CONSTANT)
   Q_PROPERTY(EditorSessionController* editorSession READ editor_session CONSTANT)
   Q_PROPERTY(WorkspaceRouter* workspaceRouter READ workspace_router CONSTANT)
+  Q_PROPERTY(EditorBehaviorPreferences* editorBehavior READ editor_behavior CONSTANT)
 
  public:
   struct LifecycleEvent {
@@ -118,6 +120,9 @@ class ApplicationModuleHost final : public QObject {
 
   [[nodiscard]] auto editor_session() -> EditorSessionController* { return editor_session_.get(); }
   [[nodiscard]] auto workspace_router() -> WorkspaceRouter* { return workspace_router_.get(); }
+  [[nodiscard]] auto editor_behavior() -> EditorBehaviorPreferences* {
+    return editor_behavior_.get();
+  }
   /// Phase 5A application-layer editor session (owned by the host, not QML).
   [[nodiscard]] auto editor_session_service() -> alcedo::EditorSessionService* {
     return editor_session_runtime_ ? editor_session_runtime_->service.get() : nullptr;
@@ -169,6 +174,7 @@ class ApplicationModuleHost final : public QObject {
   std::shared_ptr<EditorSessionRenderSchedulerPort>    editor_session_scheduler_;
   std::unique_ptr<EditorSessionController>             editor_session_;
   std::unique_ptr<WorkspaceRouter>                     workspace_router_;
+  std::unique_ptr<EditorBehaviorPreferences>           editor_behavior_;
 
   LifecycleObserver                                    lifecycle_observer_{};
   bool                                                 shutting_down_ = false;

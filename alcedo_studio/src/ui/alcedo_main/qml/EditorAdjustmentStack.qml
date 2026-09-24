@@ -240,6 +240,13 @@ Item {
                 selectedNodeKind: root.nodeController
                                   ? String(root.nodeController.selectedNodeKind || "")
                                   : ""
+                selectedNodeLocked: root.nodeController
+                                    ? root.nodeController.selectedNodeDeletionProtected === true
+                                    : false
+                nodeController: root.nodeController
+                editorBehavior: typeof appModules !== "undefined" && appModules
+                                ? appModules.editorBehavior
+                                : null
                 controlsEnabled: root.controlsEnabled
             }
 

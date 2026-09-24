@@ -1762,13 +1762,13 @@ Original source files on disk will be kept.</source>
     <name>EditorAdjustmentHeader</name>
     <message>
         <location filename="../qml/EditorAdjustmentHeader.qml" line="+140"/>
-        <source>Radial</source>
-        <translation>径向</translation>
+        <source>Add Radial Mask</source>
+        <translation>添加径向蒙版</translation>
     </message>
     <message>
         <location line="+25"/>
-        <source>Gradient</source>
-        <translation>渐变</translation>
+        <source>Add Gradient Mask</source>
+        <translation>添加渐变蒙版</translation>
     </message>
 </context>
 <context>
@@ -3309,8 +3309,8 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <location line="+1"/>
-        <source>Commit image root</source>
-        <translation>提交图像根节点</translation>
+        <source>Image root</source>
+        <translation>图像根节点</translation>
     </message>
     <message>
         <location line="+47"/>
@@ -4571,6 +4571,41 @@ Original source files on disk will be kept.</source>
     </message>
 </context>
 <context>
+    <name>LockedNodeMaskPromptDialog</name>
+    <message>
+        <source>Add Mask to a Locked Node?</source>
+        <translation>在锁定节点上添加蒙版？</translation>
+    </message>
+    <message>
+        <source>The default adjustment node applies Alcedo&apos;s default adjustments, so it is locked. A Mask drawn on it also limits those default adjustments to the masked area, which differs from traditional editing software.
+
+Create a new layer above it and draw the Mask there?</source>
+        <translation>默认调整节点会应用 Alcedo 的一些默认调整，因此该节点默认处于锁定状态。在该节点上绘制的蒙版也会把这些默认调整限制在蒙版区域内，这与传统软件逻辑不同。
+
+是否在其上方新建一个图层，并在新图层上绘制蒙版？</translation>
+    </message>
+    <message>
+        <source>Don&apos;t ask again</source>
+        <translation>下次不再提示</translation>
+    </message>
+    <message>
+        <source>You can change this later in Settings &gt; Default Behavior.</source>
+        <translation>之后可以在“设置 &gt; 默认行为”中更改此选项。</translation>
+    </message>
+    <message>
+        <source>New Layer, Then Draw</source>
+        <translation>新建图层后绘制</translation>
+    </message>
+    <message>
+        <source>Draw on Current Node</source>
+        <translation>在当前节点上绘制</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>取消</translation>
+    </message>
+</context>
+<context>
     <name>Main</name>
     <message>
         <location filename="../qml/Main.qml" line="+48"/>
@@ -5155,6 +5190,38 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <location line="+21"/>
         <source>Restart Alcedo yourself to apply this backend change.</source>
         <translation>请自行重启 Alcedo，以使此后端更改生效。</translation>
+    </message>
+    <message>
+        <source>Language / Theme</source>
+        <translation>语言/主题</translation>
+    </message>
+    <message>
+        <source>Default Behavior</source>
+        <translation>默认行为</translation>
+    </message>
+    <message>
+        <source>Masks</source>
+        <translation>蒙版</translation>
+    </message>
+    <message>
+        <source>Adding a Mask on a locked node</source>
+        <translation>在锁定节点上添加蒙版</translation>
+    </message>
+    <message>
+        <source>Ask every time</source>
+        <translation>每次询问</translation>
+    </message>
+    <message>
+        <source>Create a new layer, then draw</source>
+        <translation>新建图层后绘制</translation>
+    </message>
+    <message>
+        <source>Draw on the current node</source>
+        <translation>在当前节点上绘制</translation>
+    </message>
+    <message>
+        <source>The default adjustment node applies Alcedo&apos;s default adjustments, so it is locked. A Mask drawn on it also limits those defaults to the masked area. Layers you add yourself are not locked and are never affected by this setting.</source>
+        <translation>默认调整节点会应用 Alcedo 的一些默认调整，因此该节点默认处于锁定状态。在该节点上绘制的蒙版也会把这些默认调整限制在蒙版区域内。你自行添加的图层不会被锁定，也不受此设置影响。</translation>
     </message>
 </context>
 <context>

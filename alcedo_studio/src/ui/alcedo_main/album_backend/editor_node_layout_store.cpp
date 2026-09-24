@@ -61,7 +61,9 @@ void EditorNodeLayoutStore::activate(const QString& project_id, quint64 element_
     return;
   }
   current_key_ = key;
+  ++drawer_revision_;
   emit LayoutChanged();
+  emit drawerStateChanged();
 }
 
 auto EditorNodeLayoutStore::ClampPanelWidth(int width) const -> int {
@@ -224,8 +226,10 @@ void EditorNodeLayoutStore::SetDrawerOpen(const NodeId& node_id, bool open) {
     return;
   }
   value.drawer_open[node_id] = open;
+  ++drawer_revision_;
   emit LayoutChanged();
   emit NodeHeightChanged();
+  emit drawerStateChanged();
 }
 
 auto EditorNodeLayoutStore::DefaultHeight(EditorNodeKind kind, int mask_count,

@@ -197,6 +197,7 @@ void EditorNodeController::ClearSnapshot() {
   selected_node_ids_.clear();
   last_selected_color_grade_id_ = {};
   selection_restore_node_id_    = {};
+  pending_inserted_selection_id_ = {};
   session_generation_ =
       session_ != nullptr ? static_cast<quint64>(session_->session_generation()) : 0;
   projection_revision_ = 0;
@@ -399,6 +400,12 @@ auto EditorNodeController::selected_node_kind() const -> QString {
   return {};
 }
 
+auto EditorNodeController::selected_node_deletion_protected() const -> bool {
+  const auto* node = NodeFor(selected_node_id_);
+  return node != nullptr && node->node_kind == EditorNodeKind::ColorGrade &&
+         node->deletion_protected;
+}
+
 auto EditorNodeController::supported_adjustment_panels() const -> QStringList {
   const auto* node = NodeFor(selected_node_id_);
   if (node == nullptr) {
@@ -476,8 +483,9 @@ auto EditorNodeController::PublishSnapshot(EditorNodeGraphSnapshot snapshot) -> 
   const bool generation_changed =
       !has_snapshot_ || snapshot.session_generation != session_generation_;
   if (generation_changed) {
-    last_selected_color_grade_id_ = {};
-    selection_restore_node_id_    = {};
+    last_selected_color_grade_id_  = {};
+    selection_restore_node_id_     = {};
+    pending_inserted_selection_id_ = {};
     session_generation_           = snapshot.session_generation;
     topology_revision_            = 1;
     projection_revision_          = 1;
@@ -773,7 +781,19 @@ bool EditorNodeController::refreshFromSession() {
     emit snapshotChanged();
     return false;
   }
-  return PublishDocument(*document, static_cast<std::uint64_t>(session_->session_generation()));
+  const bool published =
+      PublishDocument(*document, static_cast<std::uint64_t>(session_->session_generation()));
+  SelectPendingInsertedNode();
+  return published;
+}
+
+void EditorNodeController::SelectPendingInsertedNode() {
+  if (pending_inserted_selection_id_.Empty() || !ContainsNode(pending_inserted_selection_id_)) {
+    return;
+  }
+  const auto node_id             = pending_inserted_selection_id_;
+  pending_inserted_selection_id_ = {};
+  selectNode(NodeIdToQString(node_id));
 }
 
 [[nodiscard]] auto EditorNodeController::SessionIdentityChanged() const -> bool {
@@ -1295,9 +1315,16 @@ bool EditorNodeController::insertMaskGroupAtTop() {
     SetLastError(QString::fromStdString(result.message));
     return false;
   }
+  last_inserted_mask_group_id_   = new_id;
+  pending_inserted_selection_id_ = new_id;
   refreshFromSession();
-  selectNode(NodeIdToQString(new_id));
+  emit ActionAvailabilityChanged();
   return true;
+}
+
+auto EditorNodeController::last_inserted_mask_group_id() const -> QString {
+  return last_inserted_mask_group_id_.Empty() ? QString{}
+                                              : NodeIdToQString(last_inserted_mask_group_id_);
 }
 
 bool EditorNodeController::removeMaskGroup(const QString& node_id) {

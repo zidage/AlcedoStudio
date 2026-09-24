@@ -101,14 +101,13 @@ TEST_F(EditorVersionsPanelQmlTest, VersionNameInputCreatesRenamesAndRemovesNamed
   EXPECT_FALSE(controller_.history_snapshot().active_head.has_value());
 
   Click(window_, created_card->findChild<QQuickItem*>(QStringLiteral("editorRenameVersionButton")));
-  field = Find(QStringLiteral("editorVersionNameField"));
-  ASSERT_NE(field, nullptr);
-  QTRY_VERIFY_WITH_TIMEOUT(field->hasActiveFocus() || field->property("activeFocus").toBool(),
-                           1000);
+  auto* inline_field =
+      created_card->findChild<QQuickItem*>(QStringLiteral("editorVersionInlineRenameField"));
+  ASSERT_NE(inline_field, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(
+      inline_field->hasActiveFocus() || inline_field->property("activeFocus").toBool(), 1000);
   TypeText(window_, QStringLiteral("renamedlook"));
-  accept = Find(QStringLiteral("editorVersionAcceptButton"));
-  ASSERT_NE(accept, nullptr);
-  Click(window_, accept);
+  QTest::keyClick(window_, Qt::Key_Return);
   QTRY_VERIFY_WITH_TIMEOUT(backend_.rename_count() == 1, 2000);
   EXPECT_EQ(QString::fromStdString(backend_.last_rename_id().ToString()), created_id);
 
@@ -218,16 +217,32 @@ TEST_F(EditorVersionsPanelQmlTest, ActiveVersionUsesOutlineWithoutStopPlaybackAc
             AppTheme::Instance().editorListSelectedFillColor());
 
   // No "CURRENT HEAD" pill or "Checked out" copy — outline alone marks active.
-  // Single commit identity line (no dual Head + Commit labels).
+  // Single identity line: an untranslated HEAD badge, then the bare short
+  // hash in the mono face (no translatable "Commit" word inside mono text).
+  auto* head_badge = active_card->findChild<QQuickItem*>(QStringLiteral("editorVersionHeadBadge"));
+  ASSERT_NE(head_badge, nullptr);
+  EXPECT_TRUE(head_badge->isVisible());
+  EXPECT_GT(head_badge->property("radius").toReal(), 0.0);
+  bool badge_reads_head = false;
+  for (auto* child : head_badge->findChildren<QQuickItem*>()) {
+    if (child->property("text").toString() == QStringLiteral("HEAD")) badge_reads_head = true;
+  }
+  EXPECT_TRUE(badge_reads_head);
   auto* active_subtitle =
       active_card->findChild<QQuickItem*>(QStringLiteral("editorVersionSubtitle"));
   ASSERT_NE(active_subtitle, nullptr);
   const QString active_sub = active_subtitle->property("text").toString();
   EXPECT_FALSE(active_sub.contains(QStringLiteral("Checked out"), Qt::CaseInsensitive));
   EXPECT_FALSE(active_sub.contains(QStringLiteral("CURRENT HEAD"), Qt::CaseInsensitive));
-  EXPECT_TRUE(active_sub.contains(QStringLiteral("Commit"), Qt::CaseInsensitive));
+  EXPECT_FALSE(active_sub.contains(QStringLiteral("Commit"), Qt::CaseInsensitive));
+  EXPECT_EQ(active_sub.size(), 8);
+  EXPECT_TRUE(active_card->property("versionHead").toString().startsWith(active_sub));
   EXPECT_EQ(active_subtitle->property("font").value<QFont>().family(),
             AppTheme::Instance().monoFontFamily());
+  // Head badge sits left of the hash on the same line.
+  const qreal badge_right = head_badge->mapToItem(active_card, QPointF(head_badge->width(), 0)).x();
+  const qreal hash_left   = active_subtitle->mapToItem(active_card, QPointF(0, 0)).x();
+  EXPECT_LE(badge_right, hash_left + 0.5);
 
   auto* remove_btn =
       inactive_card->findChild<QQuickItem*>(QStringLiteral("editorRemoveVersionButton"));
@@ -287,7 +302,7 @@ TEST_F(EditorVersionsPanelQmlTest, InlineDraftPendingSubmitBlocksDuplicateCreate
   EXPECT_EQ(backend_.create_count(), 1);
 }
 
-TEST_F(EditorVersionsPanelQmlTest, RenameUsesSameInlineDraftField) {
+TEST_F(EditorVersionsPanelQmlTest, RenameEditsTheCardTitleInPlace) {
   ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
   OpenVersionsPage();
 
@@ -298,19 +313,87 @@ TEST_F(EditorVersionsPanelQmlTest, RenameUsesSameInlineDraftField) {
     if (card->property("versionActive").toBool()) active = card;
   }
   ASSERT_NE(active, nullptr);
+  auto* title = active->findChild<QQuickItem*>(QStringLiteral("editorVersionTitle"));
+  auto* inline_field =
+      active->findChild<QQuickItem*>(QStringLiteral("editorVersionInlineRenameField"));
+  ASSERT_NE(title, nullptr);
+  ASSERT_NE(inline_field, nullptr);
+  EXPECT_FALSE(inline_field->isVisible());
   Click(window_, active->findChild<QQuickItem*>(QStringLiteral("editorRenameVersionButton")));
 
-  auto* field = Find(QStringLiteral("editorVersionNameField"));
-  ASSERT_NE(field, nullptr);
-  QTRY_VERIFY_WITH_TIMEOUT(field->property("visible").toBool(), 1000);
+  // The title turns into the editor on the same card; the header create row
+  // stays closed and no modal dialog appears.
+  QTRY_VERIFY_WITH_TIMEOUT(inline_field->isVisible(), 1000);
+  EXPECT_FALSE(title->isVisible());
+  auto* draft_row = Find(QStringLiteral("editorVersionDraftRow"));
+  ASSERT_NE(draft_row, nullptr);
+  EXPECT_FALSE(draft_row->isVisible());
   EXPECT_EQ(Find(QStringLiteral("editorVersionNameDialog")), nullptr);
-  EXPECT_EQ(field->property("text").toString(), active->property("displayName").toString());
+  EXPECT_EQ(inline_field->property("text").toString(),
+            active->property("displayName").toString());
+  QTRY_VERIFY_WITH_TIMEOUT(
+      inline_field->hasActiveFocus() || inline_field->property("activeFocus").toBool(), 1000);
   TypeText(window_, QStringLiteral("renamedbase"));
   QTest::keyClick(window_, Qt::Key_Return);
   ProcessEvents();
   EXPECT_EQ(backend_.rename_count(), 1);
   EXPECT_EQ(controller_.last_history_result().value(QStringLiteral("action")).toString(),
             QStringLiteral("renameVersion"));
+  QTRY_VERIFY_WITH_TIMEOUT(!inline_field->isVisible(), 2000);
+  EXPECT_TRUE(title->isVisible());
+}
+
+TEST_F(EditorVersionsPanelQmlTest, InlineRenameEscapeRestoresTitleWithoutSubmitting) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenVersionsPage();
+
+  QQuickItem* active = nullptr;
+  for (auto* card : Cards()) {
+    if (card->property("versionActive").toBool()) active = card;
+  }
+  ASSERT_NE(active, nullptr);
+  const QString original = active->property("displayName").toString();
+  Click(window_, active->findChild<QQuickItem*>(QStringLiteral("editorRenameVersionButton")));
+  auto* inline_field =
+      active->findChild<QQuickItem*>(QStringLiteral("editorVersionInlineRenameField"));
+  ASSERT_NE(inline_field, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(
+      inline_field->hasActiveFocus() || inline_field->property("activeFocus").toBool(), 1000);
+  TypeText(window_, QStringLiteral("discarded"));
+  QTest::keyClick(window_, Qt::Key_Escape);
+  ProcessEvents();
+  EXPECT_EQ(backend_.rename_count(), 0);
+  QTRY_VERIFY_WITH_TIMEOUT(!inline_field->isVisible(), 1000);
+  EXPECT_EQ(active->property("displayName").toString(), original);
+}
+
+TEST_F(EditorVersionsPanelQmlTest, AcceptClickCreatesVersionWithUnchangedDefaultName) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenVersionsPage();
+  const int cards_before = static_cast<int>(Cards().size());
+
+  Click(window_, Find(QStringLiteral("editorForkFromRootButton")));
+  auto* field = Find(QStringLiteral("editorVersionNameField"));
+  ASSERT_NE(field, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(field->hasActiveFocus() || field->property("activeFocus").toBool(),
+                           1000);
+  const QString generated = field->property("text").toString().trimmed();
+  ASSERT_FALSE(generated.isEmpty());
+
+  // A real pointer click on "+" with the generated name untouched must create
+  // the Version; the press must not steal focus and cancel the draft first.
+  auto* accept = Find(QStringLiteral("editorVersionAcceptButton"));
+  ASSERT_NE(accept, nullptr);
+  Click(window_, accept);
+  QTRY_VERIFY_WITH_TIMEOUT(backend_.create_count() == 1, 2000);
+  QTRY_VERIFY_WITH_TIMEOUT(static_cast<int>(Cards().size()) == cards_before + 1, 2000);
+  const QString created_id = QString::fromStdString(backend_.last_created_id().ToString());
+  QQuickItem*   created    = nullptr;
+  for (auto* card : Cards()) {
+    if (card->property("versionId").toString() == created_id) created = card;
+  }
+  ASSERT_NE(created, nullptr);
+  EXPECT_EQ(created->property("displayName").toString(), generated);
 }
 
 TEST_F(EditorVersionsPanelQmlTest, VersionListPreservesContentYAcrossCreateRenameAndCheckout) {
@@ -358,8 +441,11 @@ TEST_F(EditorVersionsPanelQmlTest, VersionListPreservesContentYAcrossCreateRenam
   }
   ASSERT_NE(active_card, nullptr);
   Click(window_, active_card->findChild<QQuickItem*>(QStringLiteral("editorRenameVersionButton")));
-  field = Find(QStringLiteral("editorVersionNameField"));
-  ASSERT_NE(field, nullptr);
+  auto* inline_field =
+      active_card->findChild<QQuickItem*>(QStringLiteral("editorVersionInlineRenameField"));
+  ASSERT_NE(inline_field, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(
+      inline_field->hasActiveFocus() || inline_field->property("activeFocus").toBool(), 1000);
   TypeText(window_, QStringLiteral("scrolledrenamed"));
   QTest::keyClick(window_, Qt::Key_Return);
   ProcessEvents();
