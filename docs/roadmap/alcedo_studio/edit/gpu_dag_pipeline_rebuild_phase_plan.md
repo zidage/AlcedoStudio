@@ -4444,8 +4444,8 @@ ctest --test-dir build/macos-debug --output-on-failure
 - [ ] Geometry 是全局 Model 和内部 Pass，不是第四个用户节点。
 - [ ] MaskNode 是独立节点。
 - [x] ColorGradeNode 有可选 mask 输入和单一 Normal Mix。
-- [ ] PipelineStage 全部删除。
-- [ ] OperatorParams 总结构全部删除。
+- [x] PipelineStage 全部删除（G10.9，见 [G10 计划 18.12 节](gpu_dag_final_removal_phase_plan.md#phase-g109-completion-record-2026-09-23)）。
+- [x] OperatorParams 总结构全部删除（G10.9，见 [G10 计划 18.12 节](gpu_dag_final_removal_phase_plan.md#phase-g109-completion-record-2026-09-23)）。
 - [ ] operators 只保存参数 Model、DTO 和序列化逻辑。
 - [ ] GPU 执行代码不在 operators 参数目录。
 
@@ -4508,7 +4508,7 @@ ctest --test-dir build/macos-debug --output-on-failure
 - [ ] 新 JSON 只保存节点、边、Model 和 MaskAssetKey。
 - [ ] 新 JSON 不保存 GPU 或 viewport 短期状态。
 - [ ] 旧 stage JSON 返回明确 unsupported-format error，不进入新产品路径。
-- [ ] 不存在 `LegacyPipelineImporter`、legacy parameter snapshot 或 nested stage adapter。
+- [x] 不存在 `LegacyPipelineImporter`、legacy parameter snapshot 或 nested stage adapter（G10.9，见 [G10 计划 18.12 节](gpu_dag_final_removal_phase_plan.md#phase-g109-completion-record-2026-09-23)）。
 - [ ] 新保存只写 format version 2，不写旧 stage JSON。
 
 ### 47.8 性能
