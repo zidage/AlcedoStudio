@@ -590,6 +590,7 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/ThemeCheckBox.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/IconButton.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/IconActionButton.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorRailButton.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/RegisteredShortcut.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/SlidingIconNav.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/CollapsibleSection.qml"

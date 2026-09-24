@@ -3470,6 +3470,31 @@ Original source files on disk will be kept.</source>
         <source>Background Tasks</source>
         <translation type="unfinished">Background Tasks</translation>
     </message>
+    <message>
+        <location filename="../qml/EditorWorkspaceRail.qml" line="+0"/>
+        <source>History</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/EditorWorkspaceRail.qml" line="+0"/>
+        <source>Versions</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/EditorWorkspaceRail.qml" line="+0"/>
+        <source>Nodes</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/EditorWorkspaceRail.qml" line="+0"/>
+        <source>Mask Groups</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../qml/EditorWorkspaceRail.qml" line="+0"/>
+        <source>Tasks</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>ExportInspectorPanel</name>

@@ -49,8 +49,10 @@ TEST_F(EditorVersionsPanelQmlTest, ClickingNamedVersionChecksOutStableVersionId)
             selected_outline);
   auto* versions_button = Find(QStringLiteral("editorVersionsRailButton"));
   ASSERT_NE(versions_button, nullptr);
-  EXPECT_TRUE(versions_button->property("selectedOutline").toBool());
-  EXPECT_EQ(versions_button->property("fillSelected").value<QColor>(),
+  // Selected rail tile is outline-only: text-colored border over the card surface.
+  EXPECT_TRUE(versions_button->property("selected").toBool());
+  EXPECT_EQ(versions_button->property("selectedOutlineColor").value<QColor>(), selected_outline);
+  EXPECT_EQ(versions_button->property("fillColor").value<QColor>(),
             AppTheme::Instance().cardSurfaceColor());
   const QString alternate_id = alternate_card->property("versionId").toString();
   ASSERT_FALSE(alternate_id.isEmpty());
