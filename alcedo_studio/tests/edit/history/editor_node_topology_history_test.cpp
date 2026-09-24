@@ -28,7 +28,7 @@
 #include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/mask/mask_model.hpp"
-#include "edit/pipeline/pipeline_cpu.hpp"
+#include "edit/pipeline/pipeline_executor.hpp"
 #include "grade_owned_mask_support.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_history_port.hpp"
@@ -263,7 +263,7 @@ auto MaskJson(const PipelineDocument& document, const MaskId& mask_id) -> nlohma
 auto MakeMemoryGuard(sl_element_id_t element_id) -> std::shared_ptr<PipelineGuard> {
   auto guard           = std::make_shared<PipelineGuard>();
   guard->id_           = element_id;
-  guard->pipeline_     = std::make_shared<CPUPipelineExecutor>();
+  guard->pipeline_     = std::make_shared<PipelineExecutor>();
   guard->document_     = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
   guard->commit_graph_ = std::make_shared<CommitGraph>(CommitGraph::CreateEmpty(element_id));
   guard->root_id_      = guard->commit_graph_->GetRootId();

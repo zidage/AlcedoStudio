@@ -20,7 +20,7 @@
 #include "app/project_service.hpp"
 #include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/pipeline_document.hpp"
-#include "edit/pipeline/pipeline_cpu.hpp"
+#include "edit/pipeline/pipeline_executor.hpp"
 #include "edit/runtime/pipeline_apply_request.hpp"
 #include "image/image.hpp"
 #include "image/image_buffer.hpp"
@@ -93,8 +93,8 @@ auto MakeTempPath(const char* suffix) -> std::filesystem::path {
 
 /** Bind a Default document and install camera/profile data from the RAW file.
  *  Product Apply reads those matrices from the document; a bare executor fails. */
-auto BindDefaultDocumentWithImportedCamera(CPUPipelineExecutor& pipeline,
-                                            const std::filesystem::path& path) -> bool {
+auto BindDefaultDocumentWithImportedCamera(PipelineExecutor&            pipeline,
+                                           const std::filesystem::path& path) -> bool {
   Image image(1, path, ImageType::DEFAULT);
   MetadataExtractor::ExtractEXIF_ToImage(path, image);
   if (!image.HasRawColorContext()) {
@@ -125,7 +125,7 @@ auto RenderBlocking(RenderType render_type, const std::filesystem::path& path)
     return nullptr;
   }
 
-  auto pipeline = std::make_shared<CPUPipelineExecutor>();
+  auto pipeline = std::make_shared<PipelineExecutor>();
   if (!BindDefaultDocumentWithImportedCamera(*pipeline, path)) {
     ADD_FAILURE() << "CI RAW fixture has no camera matrices: " << path.string();
     return nullptr;
@@ -237,7 +237,7 @@ TEST_F(CiRawWorkflowTest, DefaultPipelineRendersCiRawFixture) {
   auto raw_bytes = ReadFileToBuffer(raw_files.front());
   ASSERT_FALSE(raw_bytes.empty());
 
-  CPUPipelineExecutor pipeline;
+  PipelineExecutor pipeline;
   ASSERT_TRUE(BindDefaultDocumentWithImportedCamera(pipeline, raw_files.front()))
       << raw_files.front().string();
   PipelineApplyRequest request;

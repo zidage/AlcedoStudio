@@ -9,7 +9,7 @@
 #include <memory>
 
 #include "app/pipeline_service.hpp"
-#include "edit/pipeline/pipeline_cpu.hpp"
+#include "edit/pipeline/pipeline_executor.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -17,7 +17,7 @@ namespace {
 auto MakeGuard(sl_element_id_t element_id) -> std::shared_ptr<alcedo::PipelineGuard> {
   auto guard       = std::make_shared<alcedo::PipelineGuard>();
   guard->id_       = element_id;
-  guard->pipeline_ = std::make_shared<alcedo::CPUPipelineExecutor>();
+  guard->pipeline_ = std::make_shared<alcedo::PipelineExecutor>();
   return guard;
 }
 

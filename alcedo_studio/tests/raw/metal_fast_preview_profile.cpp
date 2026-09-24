@@ -20,7 +20,7 @@
 
 #include "edit/operators/operator_registeration.hpp"
 #include "edit/pipeline/pipeline_accelerator.hpp"
-#include "edit/pipeline/pipeline_cpu.hpp"
+#include "edit/pipeline/pipeline_executor.hpp"
 #include "image/image_buffer.hpp"
 
 namespace alcedo {
@@ -186,7 +186,7 @@ auto RunFastPreviewOnce(const std::vector<std::uint8_t>& raw_bytes, int iteratio
   setenv("ALCEDO_METAL_PROFILE_VERBOSE", "1", 1);
 #endif
 
-  CPUPipelineExecutor pipeline(false);
+  PipelineExecutor pipeline(false);
   pipeline.SetAcceleratorBackendPreference(AcceleratorBackendPreference::Metal);
   pipeline.SetForceCPUOutput(true);
   pipeline.SetRenderRes(false, kFastPreviewMaxEdge);

@@ -26,7 +26,7 @@
 #include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/mask/mask_id.hpp"
 #include "edit/operators/models/operator_type_id.hpp"
-#include "edit/pipeline/pipeline_cpu.hpp"
+#include "edit/pipeline/pipeline_executor.hpp"
 #include "grade_owned_mask_support.hpp"
 #include "support/document_transfer_test_support.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_history_port.hpp"
@@ -38,7 +38,7 @@ namespace {
 auto MakePastePipelineGuard(sl_element_id_t element_id) -> std::shared_ptr<alcedo::PipelineGuard> {
   auto guard       = std::make_shared<alcedo::PipelineGuard>();
   guard->id_       = element_id;
-  guard->pipeline_ = std::make_shared<alcedo::CPUPipelineExecutor>();
+  guard->pipeline_ = std::make_shared<alcedo::PipelineExecutor>();
   guard->document_ =
       std::make_shared<alcedo::PipelineDocument>(alcedo::CreateDefaultPipelineDocument());
   guard->commit_graph_ =

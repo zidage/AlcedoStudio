@@ -90,7 +90,7 @@ TEST(MetalRawStagePreview, DecodeStillLifeWithRawStageOnly) {
   PipelineStage  raw_stage(PipelineStageName::Image_Loading, false, false);
 
   // The decode backend is a runtime property, not a param: push it directly
-  // into the op, exactly like CPUPipelineExecutor::ApplyRuntimeRawDecodeBackend
+  // into the op, exactly like PipelineExecutor::ApplyRuntimeRawDecodeBackend
   // does for pipeline-managed decodes.
   nlohmann::json decode_params                   = pipeline_defaults::MakeDefaultRawDecodeParams();
   decode_params["raw"]["backend"]                = "alcedo";

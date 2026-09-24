@@ -19,7 +19,7 @@
 #include "app/pipeline_document_history.hpp"
 #include "app/pipeline_history_applier.hpp"
 #include "app/pipeline_service.hpp"
-#include "edit/pipeline/pipeline_cpu.hpp"
+#include "edit/pipeline/pipeline_executor.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/history/commit_graph.hpp"

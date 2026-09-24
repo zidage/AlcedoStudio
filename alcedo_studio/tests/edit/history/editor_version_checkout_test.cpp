@@ -33,7 +33,7 @@
 #include "edit/history/edit_commit.hpp"
 #include "edit/history/mini_git_working_history.hpp"
 #include "edit/mask/mask_model.hpp"
-#include "edit/pipeline/pipeline_cpu.hpp"
+#include "edit/pipeline/pipeline_executor.hpp"
 #include "grade_owned_mask_support.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
 #include "support/editor_parameter_target_test.hpp"
@@ -53,7 +53,7 @@ auto NodeHistoryPath(std::string_view name, std::string_view ext) -> std::filesy
 auto MakeGuard(sl_element_id_t element_id) -> std::shared_ptr<alcedo::PipelineGuard> {
   auto guard       = std::make_shared<alcedo::PipelineGuard>();
   guard->id_       = element_id;
-  guard->pipeline_ = std::make_shared<alcedo::CPUPipelineExecutor>();
+  guard->pipeline_ = std::make_shared<alcedo::PipelineExecutor>();
   guard->document_ =
       std::make_shared<alcedo::PipelineDocument>(alcedo::CreateDefaultPipelineDocument());
   guard->commit_graph_ =

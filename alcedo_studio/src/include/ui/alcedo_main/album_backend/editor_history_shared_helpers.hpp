@@ -11,7 +11,7 @@
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/commit_types.hpp"
 #include "edit/history/edit_commit.hpp"
-#include "edit/pipeline/pipeline_cpu.hpp"
+#include "edit/pipeline/pipeline_executor.hpp"
 
 namespace alcedo::ui {
 
@@ -19,7 +19,7 @@ namespace alcedo::ui {
 /// render to finish the current frame. The GUI must not block on this: session
 /// code defers Version ops until render is idle, then takes the lock (free).
 /// Selection / panel projection must never call this.
-auto LockLivePipeline(alcedo::CPUPipelineExecutor& executor) -> std::unique_lock<std::mutex>;
+auto LockLivePipeline(alcedo::PipelineExecutor& executor) -> std::unique_lock<std::mutex>;
 
 /// Extract the resolved field key from an edit commit.
 auto CommitFieldKey(const alcedo::EditCommit& commit) -> std::string;

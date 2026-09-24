@@ -166,7 +166,7 @@ target_link_libraries(Operators PRIVATE AcceleratorBackend OpenMP::OpenMP_CXX)
 
 # --- Edit Pipeline ---
 set(PIPELINE_SRCS
-    ${ALCEDO_SRC_ROOT}/edit/pipeline/pipeline_cpu.cpp
+    ${ALCEDO_SRC_ROOT}/edit/pipeline/pipeline_executor.cpp
     ${ALCEDO_SRC_ROOT}/edit/pipeline/pipeline_stage.cpp
     ${ALCEDO_SRC_ROOT}/edit/pipeline/pipeline_gpu_wrapper.cpp
     ${ALCEDO_INCLUDE_ROOT}/edit/pipeline/highlight_shadow_local_tone.hpp

@@ -47,7 +47,7 @@ using OpenClProductRenderer = OpenClRenderer;
  * bound file id, and one lazily created renderer per compiled backend. It owns no parameter
  * values: every render reads the bound document.
  */
-class CPUPipelineExecutor {
+class PipelineExecutor {
  private:
   sl_element_id_t              bound_file_id_ = 0;
 
@@ -76,7 +76,7 @@ class CPUPipelineExecutor {
 
  public:
   /// Resolve the Auto accelerator preference. No document is bound yet.
-  CPUPipelineExecutor();
+  PipelineExecutor();
 
   void               SetBoundFile(sl_element_id_t file_id) { bound_file_id_ = file_id; }
   [[nodiscard]] auto GetBoundFile() const -> sl_element_id_t { return bound_file_id_; }

@@ -17,7 +17,7 @@
 #include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
-#include "edit/pipeline/pipeline_cpu.hpp"
+#include "edit/pipeline/pipeline_executor.hpp"
 #include "edit/runtime/pipeline_apply_request.hpp"
 #include "edit/runtime/cuda/cuda_product_renderer.hpp"
 #include "image/dng_color_profile_import.hpp"
@@ -79,7 +79,7 @@ class PipelineDocumentRenderTest : public ::testing::Test {
     input_    = std::make_shared<ImageBuffer>(std::move(bytes));
     document_ = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
     BindImportedCameraProfile(*document_, imported_);
-    executor_ = std::make_unique<CPUPipelineExecutor>();
+    executor_ = std::make_unique<PipelineExecutor>();
     executor_->SetAcceleratorBackendPreference(AcceleratorBackendPreference::CUDA);
     executor_->SetPipelineDocument(document_);
   }
@@ -140,7 +140,7 @@ class PipelineDocumentRenderTest : public ::testing::Test {
   RawRuntimeColorContext               imported_;
   std::shared_ptr<ImageBuffer>         input_;
   std::shared_ptr<PipelineDocument>    document_;
-  std::unique_ptr<CPUPipelineExecutor> executor_;
+  std::unique_ptr<PipelineExecutor>    executor_;
   PixelFrameSink                       sink_;
   cv::Size                             full_extent_;
 };
@@ -264,7 +264,7 @@ TEST_F(PipelineDocumentRenderTest, DefaultDocumentRendersRealRawAtFullDecodeAndO
 }
 
 TEST_F(PipelineDocumentRenderTest, MissingDocumentFailsWithoutRendering) {
-  CPUPipelineExecutor unbound;
+  PipelineExecutor unbound;
   unbound.SetAcceleratorBackendPreference(AcceleratorBackendPreference::CUDA);
   unbound.AttachFrameSink(&sink_);
   for (const bool host : {false, true}) {

@@ -38,7 +38,7 @@
 #include "edit/history/pipeline_document_checkpoint.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
-#include "edit/pipeline/pipeline_cpu.hpp"
+#include "edit/pipeline/pipeline_executor.hpp"
 #include "json.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
 #include "support/document_transfer_test_support.hpp"
@@ -55,7 +55,7 @@ auto MakeMiniGitPipelineGuard(sl_element_id_t element_id)
     -> std::shared_ptr<alcedo::PipelineGuard> {
   auto guard       = std::make_shared<alcedo::PipelineGuard>();
   guard->id_       = element_id;
-  guard->pipeline_ = std::make_shared<alcedo::CPUPipelineExecutor>();
+  guard->pipeline_ = std::make_shared<alcedo::PipelineExecutor>();
   guard->document_ =
       std::make_shared<alcedo::PipelineDocument>(alcedo::CreateDefaultPipelineDocument());
   guard->commit_graph_ =

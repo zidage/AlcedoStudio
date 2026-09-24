@@ -27,7 +27,7 @@
 # CHECK=DagSourcesDoNotReferenceLegacyDirectories
 #   Fails when a file under edit/runtime/, include/edit/runtime/, edit/graph/, include/edit/graph/,
 #   renderer/, or include/renderer/ includes a path under edit/pipeline/ other than the executor
-#   header (pipeline_cpu.hpp), a path under edit/operators/GPU_kernels/ or
+#   header (pipeline_executor.hpp), a path under edit/operators/GPU_kernels/ or
 #   edit/operators/CPU_kernels/, or any other header under edit/operators/ except the Model,
 #   utility, and shared data headers. G10.6 moved the lens resolver and kernels, the CUDA detail and
 #   film grain helpers, the Metal PRNG, and the local-tone and apply-request headers out of them.
@@ -194,7 +194,7 @@ function(_alcedo_scan_dag_includes)
         string(REGEX REPLACE "^(edit/)?operators/" "edit/operators/" _target "${_target}")
       endif()
       set(_legacy FALSE)
-      if(_target MATCHES "^edit/pipeline/" AND NOT _target STREQUAL "edit/pipeline/pipeline_cpu.hpp")
+      if(_target MATCHES "^edit/pipeline/" AND NOT _target STREQUAL "edit/pipeline/pipeline_executor.hpp")
         set(_legacy TRUE)
       elseif(_target MATCHES "^edit/operators/(GPU_kernels|CPU_kernels)/")
         set(_legacy TRUE)

@@ -28,7 +28,7 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/pipeline/pipeline_accelerator.hpp"
-#include "edit/pipeline/pipeline_cpu.hpp"
+#include "edit/pipeline/pipeline_executor.hpp"
 #include "edit/runtime/cuda/cuda_product_renderer.hpp"
 #include "image/image_buffer.hpp"
 #include "renderer/pipeline_scheduler.hpp"
@@ -203,7 +203,7 @@ TEST(GpuDagCudaDrtProduct, CancelRequestReachesRendererWithoutStageWrite) {
   if (!HasCudaDevice()) {
     GTEST_SKIP() << "No CUDA device available.";
   }
-  auto exec = std::make_shared<CPUPipelineExecutor>();
+  auto exec = std::make_shared<PipelineExecutor>();
   exec->SetAcceleratorBackendPreference(AcceleratorBackendPreference::CUDA);
   auto document = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
   gpu_dag_test::EnsureTestCameraProfile(*document);

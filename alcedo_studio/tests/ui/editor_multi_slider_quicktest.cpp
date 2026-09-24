@@ -7,7 +7,7 @@
 //
 // Drag sat → immediately drag vib → models call EditorSessionController::submitPatch
 // → backend Patch/Commit → real EditorSessionHistoryPort Capture/Commit against a
-// live CPUPipelineExecutor. A concurrent "render" worker holds GetRenderLock and
+// live PipelineExecutor. A concurrent "render" worker holds GetRenderLock and
 // BlockingQueued to the GUI (present handshake shape). If Capture/Commit block on
 // that lock while the worker waits for the GUI, the handoff freezes — the hang
 // users report when switching sliders quickly during a busy render.
@@ -49,7 +49,7 @@
 #include "app/pipeline_service.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/history/commit_graph.hpp"
-#include "edit/pipeline/pipeline_cpu.hpp"
+#include "edit/pipeline/pipeline_executor.hpp"
 #include "support/editor_parameter_target_test.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
@@ -68,7 +68,7 @@ auto SrcQmlDir() -> QString {
 auto MakeGuard(sl_element_id_t element_id) -> std::shared_ptr<alcedo::PipelineGuard> {
   auto guard       = std::make_shared<alcedo::PipelineGuard>();
   guard->id_       = element_id;
-  guard->pipeline_ = std::make_shared<alcedo::CPUPipelineExecutor>();
+  guard->pipeline_ = std::make_shared<alcedo::PipelineExecutor>();
   guard->document_ =
       std::make_shared<alcedo::PipelineDocument>(alcedo::CreateDefaultPipelineDocument());
   guard->commit_graph_ =

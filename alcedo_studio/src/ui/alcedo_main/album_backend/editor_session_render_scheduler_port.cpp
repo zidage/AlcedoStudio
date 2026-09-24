@@ -14,7 +14,7 @@
 #include <utility>
 
 #include "edit/frame_presentation_types.hpp"
-#include "edit/pipeline/pipeline_cpu.hpp"
+#include "edit/pipeline/pipeline_executor.hpp"
 #include "image/image.hpp"
 #include "image/image_buffer.hpp"
 #include "io/image/image_loader.hpp"

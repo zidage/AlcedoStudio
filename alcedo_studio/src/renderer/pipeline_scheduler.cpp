@@ -62,9 +62,9 @@ auto MetadataFromRegion(const FramePreviewMetadata&                base_metadata
   return metadata;
 }
 
-auto LoadViewportRegion(const std::shared_ptr<CPUPipelineExecutor>& pipeline_executor,
-                        bool                                        should_use_viewport_region,
-                        const std::optional<ViewportRenderRegion>&  requested_region)
+auto LoadViewportRegion(const std::shared_ptr<PipelineExecutor>&   pipeline_executor,
+                        bool                                       should_use_viewport_region,
+                        const std::optional<ViewportRenderRegion>& requested_region)
     -> std::optional<ViewportRenderRegion> {
   if (!pipeline_executor || !should_use_viewport_region) {
     return std::nullopt;

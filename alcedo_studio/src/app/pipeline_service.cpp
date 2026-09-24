@@ -22,7 +22,7 @@
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/edit_commit.hpp"
 #include "edit/history/pipeline_document_checkpoint.hpp"
-#include "edit/pipeline/pipeline_cpu.hpp"
+#include "edit/pipeline/pipeline_executor.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
 #include "type/type.hpp"
 
@@ -422,7 +422,7 @@ auto PipelineMgmtService::LoadPipeline(sl_element_id_t id) -> std::shared_ptr<Pi
   }
 
   try {
-    std::shared_ptr<CPUPipelineExecutor> pipeline;
+    std::shared_ptr<PipelineExecutor> pipeline;
     try {
       pipeline = storage_->GetLivePipeline(id);
     } catch (std::exception& e) {
@@ -431,7 +431,7 @@ auto PipelineMgmtService::LoadPipeline(sl_element_id_t id) -> std::shared_ptr<Pi
           std::to_string(id) + ": " + e.what());
     }
     if (pipeline == nullptr) {
-      pipeline = std::make_shared<CPUPipelineExecutor>();
+      pipeline = std::make_shared<PipelineExecutor>();
     }
 
     {

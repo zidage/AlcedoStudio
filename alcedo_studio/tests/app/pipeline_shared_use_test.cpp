@@ -35,7 +35,7 @@
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/i_operator_model.hpp"
 #include "edit/operators/utils/color_utils.hpp"
-#include "edit/pipeline/pipeline_cpu.hpp"
+#include "edit/pipeline/pipeline_executor.hpp"
 #include "edit/runtime/pipeline_apply_request.hpp"
 #include "edit/runtime/renderer.hpp"
 #include "image/image.hpp"
@@ -170,7 +170,7 @@ auto GetThumbnailDetailedBlocking(ThumbnailService& service, sl_element_id_t id,
   return fut.get();
 }
 
-auto SessionPreparedSourceCount(CPUPipelineExecutor& executor) -> std::size_t {
+auto SessionPreparedSourceCount(PipelineExecutor& executor) -> std::size_t {
 #ifdef HAVE_CUDA
   if (auto* renderer = executor.DebugCudaRenderer()) {
     return renderer->SessionResources().prepared_source_entry_count;
@@ -189,7 +189,7 @@ auto SessionPreparedSourceCount(CPUPipelineExecutor& executor) -> std::size_t {
   return 0;
 }
 
-auto OneShotWorkspace(CPUPipelineExecutor& executor) -> RenderSessionResources {
+auto OneShotWorkspace(PipelineExecutor& executor) -> RenderSessionResources {
 #ifdef HAVE_CUDA
   if (auto* renderer = executor.DebugCudaRenderer()) {
     return renderer->OneShotResources();
@@ -208,7 +208,7 @@ auto OneShotWorkspace(CPUPipelineExecutor& executor) -> RenderSessionResources {
   return {};
 }
 
-auto SessionWorkspace(CPUPipelineExecutor& executor) -> RenderSessionResources {
+auto SessionWorkspace(PipelineExecutor& executor) -> RenderSessionResources {
 #ifdef HAVE_CUDA
   if (auto* renderer = executor.DebugCudaRenderer()) {
     return renderer->SessionResources();
@@ -227,7 +227,7 @@ auto SessionWorkspace(CPUPipelineExecutor& executor) -> RenderSessionResources {
   return {};
 }
 
-auto SessionTexturePoolEntries(CPUPipelineExecutor& executor) -> std::size_t {
+auto SessionTexturePoolEntries(PipelineExecutor& executor) -> std::size_t {
 #ifdef HAVE_CUDA
   if (auto* renderer = executor.DebugCudaRenderer()) {
     return renderer->SessionResources().texture_pool_entry_count;
@@ -246,7 +246,7 @@ auto SessionTexturePoolEntries(CPUPipelineExecutor& executor) -> std::size_t {
   return 0;
 }
 
-auto OneShotPublishedResultCount(CPUPipelineExecutor& executor) -> std::size_t {
+auto OneShotPublishedResultCount(PipelineExecutor& executor) -> std::size_t {
 #ifdef HAVE_CUDA
   if (auto* renderer = executor.DebugCudaRenderer()) {
     return renderer->OneShotPublishedResultCount();
@@ -481,7 +481,7 @@ TEST_F(PipelineSharedUseTest, BackgroundTasksReuseLivePipelineAndDocument) {
   auto live = pipelines->LoadPipeline(ids.first);
   ASSERT_NE(live, nullptr);
   BindImportedRawColor(live, *project.GetImagePoolService(), ids.second);
-  CPUPipelineExecutor* const executor = live->pipeline_.get();
+  PipelineExecutor* const    executor = live->pipeline_.get();
   PipelineDocument* const    document = live->document_.get();
   ThumbnailService           thumbnails(project.GetSleeveService(), project.GetImagePoolService(),
                                           pipelines);
@@ -634,7 +634,7 @@ TEST_F(PipelineSharedUseTest, AnalysisAndExportUseSharedExecutorWithoutChangingE
   auto live = pipelines->LoadPipeline(ids.first);
   ASSERT_NE(live, nullptr);
   BindImportedRawColor(live, *project.GetImagePoolService(), ids.second);
-  CPUPipelineExecutor* const executor = live->pipeline_.get();
+  PipelineExecutor* const    executor  = live->pipeline_.get();
   PipelineDocument* const    document = live->document_.get();
   const auto                 live_json = live->document_->ToJson();
 
@@ -1236,7 +1236,7 @@ TEST_F(PipelineExecutorWithoutOperatorRegistryTest, ExecutorConstructsWithoutOpe
   auto live = pipelines->LoadPipeline(ids.first);
   ASSERT_NE(live, nullptr);
 
-  auto executor = std::make_shared<CPUPipelineExecutor>();
+  auto executor = std::make_shared<PipelineExecutor>();
   executor->SetPipelineDocument(live->document_);
 
   auto img = project.GetImagePoolService()->Read<std::shared_ptr<Image>>(

@@ -12,7 +12,7 @@
 #include <string>
 
 #include "edit/geometry/render_request.hpp"
-#include "edit/pipeline/pipeline_cpu.hpp"
+#include "edit/pipeline/pipeline_executor.hpp"
 #include "edit/runtime/pipeline_apply_request.hpp"
 #include "image/image.hpp"
 #include "image/image_buffer.hpp"
@@ -59,7 +59,7 @@ struct TaskOptions {
 };
 struct PipelineTask {
   uint32_t                                                    task_id_;
-  std::shared_ptr<CPUPipelineExecutor>                        pipeline_executor_;
+  std::shared_ptr<PipelineExecutor>                           pipeline_executor_;
   std::shared_ptr<ImageBuffer>                                input_;
   std::shared_ptr<Image>                                      input_desc_;
 
