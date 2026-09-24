@@ -19,7 +19,10 @@ run by user decision and manual check pending (Section 16.12). G10.8: complete. 
 two known flaky thumbnail pin-count cases (Section 17.12). G10.9: shared, CUDA, CPU, and operator
 legacy files are archived and out of the Windows and macOS builds; the six source checks and the
 targeted suites pass on both platforms, except failures that exist before this phase; the full
-`ctest` run did not run (only the user starts it) (Section 18.12). G10.10–G10.11 planned.
+`ctest` run did not run (only the user starts it) (Section 18.12). G10.10: OpenCL, Metal, and
+`RawProcessor` legacy files archived and out of the build; macOS build, bundle, checks, and suites
+pass; the Windows build, the OpenCL and CUDA suites, the installer, and the installed OpenCL test
+are open (Section 19.12). G10.11 planned.
 
 Parent: [GPU DAG Pipeline Rebuild Phase Plan](gpu_dag_pipeline_rebuild_phase_plan.md),
 Section 44 (G10) and Section 47 (global completion criteria).
@@ -641,7 +644,7 @@ lines. Generated expected-pixel files and temporary evidence do not count.
 | G10.7 | Executor and services have no stage table; history presentation uses `field_key` | executor, services, presentation | G10.3, G10.6 | 1400–1900 | partial (3.4k lines, two commits; full `ctest` and manual check not run; Section 16.12) |
 | G10.8 | `CPUPipelineExecutor` renamed to `PipelineExecutor` | all users | G10.7 | 500–900 | complete (Section 17.12) |
 | G10.9 | Shared, CUDA, CPU, and operator legacy files archived out of the compile graph | CMake, archive | G10.8 | 700–1300 | complete (Windows and macOS; full `ctest` not run by user decision; Section 18.12) |
-| G10.10 | OpenCL, Metal, and RawProcessor legacy files archived; packaging fixed | CMake, registry, install, tests | G10.9 | 900–1600 | planned |
+| G10.10 | OpenCL, Metal, and RawProcessor legacy files archived; packaging fixed | CMake, registry, install, tests | G10.9 | 900–1600 | partial (macOS complete; Windows verification open; Section 19.12) |
 | G10.11 | Static checks, full suites, installed packages, three-backend A/B, plan records | tests, docs | G10.10 | 600–1100 | planned |
 
 Split reasons:
@@ -3639,10 +3642,11 @@ Run debug test suites on both platforms as in Sections 16.9 and 14.9.
 
 ### 19.10 Exit criteria
 
-- [ ] All checks pass on both platforms.
-- [ ] The Windows installer and the macOS bundle build.
-- [ ] The installed OpenCL test passes.
-- [ ] O6 Section 14.5 and M7 Section 15.4 removal checkboxes are checked in their plans with a
+- [ ] All checks pass on both platforms. macOS: pass (Section 19.12). Windows: not run.
+- [ ] The Windows installer and the macOS bundle build. macOS bundle: pass. Windows installer:
+      not run.
+- [ ] The installed OpenCL test passes. Not run: OpenCL is off in the macOS build.
+- [x] O6 Section 14.5 and M7 Section 15.4 removal checkboxes are checked in their plans with a
       link to this record.
 
 ### 19.11 Expected diff
@@ -3652,6 +3656,229 @@ Run debug test suites on both platforms as in Sections 16.9 and 14.9.
 ### 19.12 Completion record
 
 Use the template in Section 10.12.
+
+#### Phase G10.10 completion record (2026-09-24)
+
+**Status:** partial. On macOS the phase is complete: the stored Metal expected pixels replace the
+`RawProcessor` parity reference, every file of Section 19.3 is in the archive and outside the
+compile graph, the `macos_debug` build with tests and the `macos_release` bundle pass, the
+`legacy_removal` checks pass, and the targeted suites give only failures that exist before this
+phase. Open: the Windows `win_debug` and `win_release` builds (the CUDA and OpenCL edits are not
+compiled), the CUDA and OpenCL suites, the Windows installer, and
+`InstalledOpenClPackageBuildsEveryGpuDagProgram` (OpenCL is off in the macOS build).
+
+- **Source revision and branch:** based on `045a0dc1` (G10.9 merged) on
+  `refact/gpu-dag-g10-10-archive-opencl-metal-rawprocessor`. Commits: `4416fbc2` (stored expected
+  pixels and the parity tests), `3ca68f1a` (`git mv` into the archive, 76 files, all R100),
+  `16bd16ae` and `461b7a15` (LF conversion of five CRLF files, line endings only), `636c603b`
+  (build references, registry, install rules, install checks, tests, source checks, and 8 more R100
+  moves), `23b67799` (two macOS test targets that failed before this phase), `69500015` (the metallib
+  post-build step), and the README and this record.
+- **Diff:** `4416fbc2` 272 lines (94 added, 178 removed) plus four 576 KiB expected-pixel files;
+  `636c603b` 1507 lines (400 added, 1107 removed) in 38 files; `23b67799` 26 lines; `69500015`
+  4 lines. The moves count zero (Section 9).
+
+**Stored expected pixels (Section 19.5 step 1)**
+
+Generated at `045a0dc1` in `build/macos-debug` (Apple Silicon, macOS 27, Debug) from the
+`RawProcessor` Metal Neural Engine path that the four parity tests compared with. A temporary,
+uncommitted change to `metal_develop_test.cpp` wrote nine 64×64 RGBA float32 patches of the
+`RawProcessor` output, at x in {0, (width − 64) / 2, width − 64} and the same set for y, when
+`ALCEDO_WRITE_METAL_NEURAL_EXPECTED` was set:
+
+```text
+cmake --build --preset macos_debug --target GpuDagMetalDevelopTest
+ALCEDO_WRITE_METAL_NEURAL_EXPECTED=<repo>/alcedo_studio/tests/resources/expected_pixels/metal_neural_develop \
+ALCEDO_EXPECTED_NAME=<file> GpuDagMetalDevelopTest --gtest_filter=MetalDevelopFixture.<case>   (4 runs, all OK)
+```
+
+| File (`tests/resources/expected_pixels/metal_neural_develop/`) | Case | Fixture |
+| --- | --- | --- |
+| `s5m2_rw2_full_neural_bayer_patch512_grid64_expected_sensor_linear_rgba32f.bin` | `MetalDevelopNeuralBayerPatchMatchesStoredExpectedPixels` | `local/metal_neural_bayer_s5m2.RW2`, 512×512 CFA patch |
+| `xt5_raf_full_neural_xtrans_patch1100_grid64_expected_sensor_linear_rgba32f.bin` | `MetalDevelopNeuralXTransPatchMatchesStoredExpectedPixels` | `local/metal_neural_xtrans_xt5.RAF`, 1100×1100 CFA patch |
+| `s5m2_rw2_full_neural_bayer_fullraw_grid64_expected_sensor_linear_rgba32f.bin` | `MetalDevelopNeuralBayerFullRawMatchesStoredExpectedPixels` | full RAW |
+| `xt5_raf_full_neural_xtrans_fullraw_grid64_expected_sensor_linear_rgba32f.bin` | `MetalDevelopNeuralXTransFullRawMatchesStoredExpectedPixels` | full RAW |
+
+The tests keep their comparison rule and tolerance: the patch cases compare RGB with a maximum
+absolute error below `1e-4`, the full-RAW cases use `cv::norm(NORM_INF) < 1e-4` on RGBA. A
+changed byte in a stored file makes the case fail at the changed patch (checked once, then
+restored).
+
+**Deviations from Sections 5.6, 5.8, 6.6, and 19.3**
+
+- Only the Metal parity tests used `RawProcessor` as a reference. The CUDA and OpenCL develop
+  suites only called `VerifyLegacyRgbGpu`, whose subject is `RawProcessor` itself, so it is deleted
+  (with its three `LegacyRgbEntry...` cases) and no CUDA or OpenCL expected file is needed.
+  `OpenClDevelopMatchesStoredExpectedPixels` (Section 19.8) has no subject and is not added.
+- The stored files hold a 3×3 grid of 64×64 patches, not the full 512 and 1100 patch outputs (3 MB
+  and 19 MB). The full-RAW cases already compared this grid.
+- The patch cases use only the local fixtures that the files were generated from; the Nikon D800E
+  and `raw/camera/fuji/xt5/DSCF2074.RAF` alternates are removed. Without the local fixtures the four
+  cases skip, as before.
+- Also archived (only `RawProcessor` or archived tests called them): the Metal and OpenCL
+  `DemosaicWithNeuralEngine` entry points with their legacy-fallback test counters
+  (`metal_demosaicnet.*`, `opencl_demosaicnet.*`). `MetalDemosaicNetEntry` keeps the tiled module;
+  `OpenClDemosaicNetEntry` is removed and its users link `OpenClDemosaicNet`. The CUDA
+  `DemosaicWithNeuralEngine` stays (`CudaRawOpsTest` uses it; the DAG uses the enqueue form).
+- `DecodeType::RAW` had no requester and is removed with `RawDecoder`.
+  `GpuBackendKindToRawGpuBackendString` had no caller and is removed.
+- The DAG OpenCL DRT parameter struct in `drt_params.cl`, `common.cl`, and `cst.cl` was still named
+  `OpenClFusedParams`; it is renamed `OpenClDrtParams` so the Section 19.8 check holds.
+- `MetalUtilsShaders` (`metal_convert.metal`) stays: `MetalImage::CropTo` and `ConvertTo` and
+  `ImageBuffer` use it (Section 19.3, "Unknown item").
+- The perf harness (`DemosaicNetPerfHarness`, its metrics and roofline files) constructs
+  `RawProcessor` and is archived with `tests/perf/CMakeLists.txt` removed and the unused
+  `ALCEDO_ENABLE_GPU_PERF_TESTS` option dropped.
+- Two macOS test targets that failed before this phase are fixed in `23b67799`
+  (`ImageBufferMetalTest` include; `EditorGeometryOverlayPipelineTest` is CUDA-only).
+
+**Archived (`alcedo_studio/deprecated/legacy_pipeline/`, identical bytes)**
+
+- OpenCL: `edit/pipeline/opencl_pipeline_programs.cpp`, `include/edit/pipeline/opencl_pipeline_programs.hpp`,
+  the nine `.cl` files of `edit/pipeline/opencl_shader/`.
+- Metal: `edit/pipeline/metal_shader/fused_pipeline.metal` and the eight shaders of
+  `edit/operators/GPU_kernels/metal_shader/`.
+- RAW: `raw_processor{,_cuda,_metal,_opencl}.cpp`, `raw_processor.hpp`, `raw_processor_internal.hpp`,
+  `decoders/processor/operators/cpu/*` (7 sources, 7 headers), `raw_decoder.{cpp,hpp}`,
+  `cuda_downsample`, `cuda_rotate`, `{metal,opencl}_{cvt_ref_space,debayer_rcd,highlight_reconstruct,to_linear_ref,xtrans_interpolate}`,
+  and `{metal,opencl}_demosaicnet.{cpp,hpp}`.
+- Tests: `raw/{raw_processor_crop,opencl_raw_neural,metal_raw_neural,opencl_cuda_to_linear_ref_compare,opencl_raw_ops}_test.cpp`,
+  `perf/*`, `gui_pocs/opencl_raw_{hlr_,}preview.cpp`.
+- Kept (Section 19.3): `raw_color_context.hpp`, `raw_processor_pattern.hpp`,
+  `raw_demosaic_method.hpp`, `nn/*`, `neural_tile_jobs.hpp`, `opencl_encode.cpp`, `metal_encode.cpp`,
+  the RAW kernels and shaders that the develop passes use, `opencl_raw_programs.*` (the
+  `raw_processor` program manifest that `opencl_encode` builds from), and `RawProcessorOp`.
+
+**Build and install changes**
+
+- `opencl/CMakeLists.txt` and the registry: the `edit_pipeline` manifest, nine source variables,
+  and nine defines are gone. The registry registers `raw_processor`, `opencl_geometry`,
+  `scope_analyzer`, `raw_demosaicnet`, and `gpu_dag`; no DAG program is `required_at_startup`.
+- Root `CMakeLists.txt`: both OpenCL install blocks drop `edit/pipeline/opencl_shader/` and install
+  `aces_reference_gamut_compression.h` next to `dng_profile_gpu_math.h` (defect D4).
+- `metal/CMakeLists.txt`: `EditPipelineMetalShaders`, its dependency list, and the fused metallib in
+  `ALCEDO_METAL_RUNTIME_LIBS` are gone; `alcedo_main` no longer depends on the target.
+- `decoders/CMakeLists.txt`: the CPU RAW sources, the RawProcessor-only GPU wrappers, the
+  `RawProcessor` target, and `raw_decoder.cpp` are gone; `ImageDecoder` links `Exiv2` instead of
+  `RawProcessor`.
+- `ui/alcedo_main/CMakeLists.txt`: the `alcedo_main` post-build step removes and recreates the
+  runtime metallib directory before it copies `ALCEDO_METAL_RUNTIME_LIBS`. The first macOS bundle
+  check failed: the build-tree `AlcedoStudio.app` still held `fused_pipeline.metallib` from an
+  earlier build (dated 2026-09-08), and the bundle install copies that directory. After the change
+  the build-tree and installed bundles hold the 16 listed metallibs only.
+- `scripts/verify_windows_install_tree.ps1` checks the nine gpu_dag `.cl` files and both OpenCL
+  headers, uses the current `lens_calib.cl` path (`edit/runtime/lens/opencl/shader`), and fails
+  when `edit/pipeline/opencl_shader` is installed. `scripts/verify_macos_install_tree.sh` checks the
+  six GPU DAG metallibs and fails when `fused_pipeline.metallib` is installed.
+
+**Tests changed**
+
+- `GpuDagMetalDevelopTest`: four cases renamed `...MatchesStoredExpectedPixels`;
+  `LegacyRgbEntryNormalizesAndRemovesAppliedWhiteBalanceOnGpu` deleted in the CUDA, OpenCL, and
+  Metal develop suites.
+- `OpenClRuntimeTest`: `BuiltinEditPipeline{FusedParams,Detail}ProgramCompiles` replaced by
+  `NoLegacyOpenClFusedProgramIsRegisteredOrPackaged` (no `edit_pipeline` manifest or program; the
+  five kept manifests are registered).
+- `GpuDagOpenClWorkspaceTest.InstalledOpenClPackageBuildsEveryGpuDagProgram` (added): with
+  `ALCEDO_INSTALLED_OPENCL_BIN_DIR` set to the installed directory that holds `opencl/`, each of
+  the five gpu_dag programs is registered again from the installed copies only and must build; a
+  missing file fails with the program name and path. Without the variable it skips.
+- `CudaRawOpsTest`: the four cases that construct `RawProcessor` are deleted; the RAW op and
+  DemosaicNet cases stay. `CudaImageGeometryOpsTest`: the CUDA rotate case is deleted.
+- `MetalRawOpsTest`: the RCD, X-Trans, to-linear, and two highlight wrapper cases are deleted
+  (the DAG develop suite covers these kernels through `metal_encode`);
+  `HighlightReconstructPartialGroupsRaiseClippedChannelAndMatchEncodedPath` is now
+  `EncodedHighlightReconstructRaisesClippedChannelInPartialGroups` with the same assertions on the
+  encoded path.
+- `LocalToneMappingConstantsMatchRuntime.LegacyShaderMirrorConstantsMatchRuntime` deleted (both
+  mirrors archived).
+- `DagRawDump`: the `--sequential` branch is removed.
+- Unregistered `opencl_geometry_utils_test.cpp`: rotation compares with `cv::rotate`; the CUDA
+  rotate timing block is removed.
+
+**Primary success call chain:**
+
+```text
+cmake configure (macos_debug, tests on)
+  -> no target names RawProcessor, RawDecoder, EditPipelineMetalShaders, or an archive path
+  -> build succeeds (alcedo_main and every test target)
+  -> ctest -L legacy_removal: 33 of 33 pass
+cmake --preset macos_release; build; install -> verify_macos_install_tree.sh passes
+  -> Resources/metallib has the six GPU DAG metallibs and no fused_pipeline.metallib
+OpenCL (Windows, open): RegisterOpenClBackendPrograms -> raw_processor, opencl_geometry,
+  scope_analyzer, raw_demosaicnet, gpu_dag -> first render builds gpu_dag from installed sources
+```
+
+**Primary failure call chain:**
+
+```text
+Installed package misses a gpu_dag source
+  -> InstalledOpenClPackageBuildsEveryGpuDagProgram fails with the program name and path
+  -> verify_windows_install_tree.ps1 fails on the missing file; no fallback program is added
+A source or CMake file names the legacy OpenCL or Metal pipeline or RawProcessor
+  -> NoLegacyOpenClPipelineFactoryRemains / NoLegacyMetalPipelineFactoryRemains /
+     NoRawProcessorEntryRemainsInProductBuild report the file and first line
+The Metal runtime list gains fused_pipeline.metallib or loses a GPU DAG metallib
+  -> NoLegacyMetalMetallibIsPackaged fails
+```
+
+**What was proven (executed tests, macOS)**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `NoLegacyOpenClPipelineFactoryRemains` | ctest script (src and tests, `*.cl`, CMake) | PASS |
+| `NoLegacyMetalPipelineFactoryRemains` | ctest script (src and tests, `*.metal`, CMake) | PASS |
+| `NoRawProcessorEntryRemainsInProductBuild` | ctest script (1078 src files; 32 CMake files in src and tests) | PASS |
+| `NoLegacyMetalMetallibIsPackaged` | ctest script on `ALCEDO_METAL_RUNTIME_LIBS` | PASS |
+| Negative fixtures `OpenClPipelineCheckRejectsFactoryAndProgramDirectory`, `MetalPipelineCheckRejectsFusedTargetAndLegacyShaders`, `RawProcessorCheckRejectsClassIncludeAndTarget`, `RawProcessorCheckRejectsCMakeTargetLink`, `MetalMetallibCheckRejectsFusedPipelineAndMissingDagLibrary` | ctest script | PASS |
+| Earlier `legacy_removal` checks (24) | `ctest -L legacy_removal` | PASS (33/33 in total) |
+| `MetalDevelopMatchesStoredExpectedPixels` (four `...MatchesStoredExpectedPixels` cases) | `GpuDagMetalDevelopTest` | PASS |
+| macOS bundle has no fused metallib | `verify_macos_install_tree.sh` after `cmake --install build/macos-release` | PASS |
+| Archive moves are byte-identical | `git show -M100% --name-status 3ca68f1a 636c603b` | 84 of 84 R100 |
+| `NoLegacyOpenClFusedProgramIsRegisteredOrPackaged`, `OpenClDevelopMatchesStoredExpectedPixels`, `InstalledOpenClPackageBuildsEveryGpuDagProgram` | OpenCL | NOT RUN (OpenCL is off on macOS) |
+| Windows build, CUDA and OpenCL suites, installer | `win_debug`, `win_release` | NOT RUN (no Windows machine in this session) |
+
+**Build and test commands with exit codes (macOS)**
+
+```text
+cmake --preset macos_debug -DALCEDO_BUILD_TESTS=ON -DALCEDO_BUILD_CI_TESTS=ON
+      -DALCEDO_BUILD_TESTS_BY_DEFAULT=ON                                          -> exit 0
+cmake --build --preset macos_debug --parallel 10 -- -k 0                          -> exit 1 (2 targets from before, fixed in 23b67799), then exit 0
+ctest --test-dir build/macos-debug -j 4 -L legacy_removal                         -> exit 0 (33/33)
+ctest --test-dir build/macos-debug -j 1 --timeout 300 -R "<macOS G10.10 set>"     -> exit 8 (31 failures, below)
+cmake --preset macos_release; cmake --build --preset macos_release;
+cmake --install build/macos-release; scripts/verify_macos_install_tree.sh
+      --install-dir build/install                                                 -> build 0, install 0, verify 1 (below), then verify 0
+```
+
+macOS G10.10 set: `GpuDagMetal|MetalGeometryUtilsTest|MetalRawOpsTest|MetalDemosaicNetModuleTest|MetalUtils|
+LensCalibDevelopResolveTest|LocalToneMappingConstantsMatchRuntimeTest|GpuDagRawInputTest|GpuDagModelGraphTest|
+AdjustmentTransferServiceMiniGitTest|CommitGraphTest|PipelineDocumentCheckpointTest|PipelineEditBatchTest|
+SleeveServiceTest|PipelineHistoryApplierTest|EditorSessionEditControllerTest|MetadataExtractorTest|
+BatchImportDngMetadataTest|EditorLookModelTest|ExportServiceTest|ImageLoader|ThumbnailService|ImportService`.
+
+**Discovered / passed / failed / skipped counts (macOS)**
+
+- 569 discovered, 560 run, 529 passed (27 of them skipped: RAW fixtures, demosaic references, and
+  sample directories that are not on this machine), 31 failed, 9 disabled.
+- 13 failures are the Section 18.12 macOS list: the 8 Metal cases, the three
+  `PipelineDocumentCheckpointFormat` cases, `ParameterForwardInverseRestoresDocumentHash`, and
+  `ExportHdrJpeg_WritesUltraHdrFile` (timeout).
+- 18 failures are `ThumbnailServiceTest` (new in this set): 16 throw because
+  `sample_images/raw/linear_dng` or `raw/batch_import` does not exist on this machine, and
+  `MissingPipelineThrows` and `MissingImageThrows` are on the G10.8 failure list.
+
+**Parent plans:** O6 Section 14.5 and M7 Section 15.4 removal items are checked with a link to this
+record. Parent Section 47.1 "GPU 执行代码不在 operators 参数目录" is checked: `edit/operators` holds
+only Models, the planckian and camera-matrix data tables, `resize_algorithm.hpp`, and the colour
+utilities. "operators 只保存参数 Model…" stays open for those data and utility headers.
+
+**Remaining gaps:** Windows: configure and build `win_debug` and `win_release` (the CUDA and OpenCL
+test edits, `CudaRawOpsTest`, `CudaImageGeometryOpsTest`, `OpenClRuntimeTest`,
+`GpuDagOpenClWorkspaceTest`, the `OpenClDemosaicNet` link change, and the `OpenClDrtParams`
+rename are not compiled), run the CUDA and OpenCL develop and DRT suites and `OpenClRuntimeTest`,
+run `package_windows.ps1`, and run `InstalledOpenClPackageBuildsEveryGpuDagProgram` with
+`ALCEDO_INSTALLED_OPENCL_BIN_DIR=build/install/bin`. The full `ctest` run (only the user starts it).
 
 ---
 
