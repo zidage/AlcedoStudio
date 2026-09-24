@@ -99,6 +99,13 @@ class EditorNodeLayoutStore : public QObject {
   Q_PROPERTY(QPointF viewPosition READ view_position WRITE set_view_position NOTIFY LayoutChanged)
   Q_PROPERTY(QString selectedNodeId READ selected_node_id_string WRITE set_selected_node_id_string
                  NOTIFY LayoutChanged)
+  /// Advances whenever drawerOpen() may return a different value: a stored
+  /// flag changed or activate() selected another key. QML bindings that call
+  /// drawerOpen() read this property to re-evaluate. A property dependency is
+  /// used because a QML Connections handler cannot be matched to the
+  /// capitalized LayoutChanged / NodeHeightChanged signals in the compiled
+  /// module, which left the Mask Groups cards stale.
+  Q_PROPERTY(quint64 drawerRevision READ drawer_revision NOTIFY drawerStateChanged)
 
  public:
   explicit EditorNodeLayoutStore(QObject* parent = nullptr);
@@ -146,6 +153,7 @@ class EditorNodeLayoutStore : public QObject {
    */
   Q_INVOKABLE void    setDrawerOpen(const QString& node_id, bool open);
   Q_INVOKABLE bool    drawerOpen(const QString& node_id) const;
+  [[nodiscard]] auto  drawer_revision() const -> quint64 { return drawer_revision_; }
 
   [[nodiscard]] auto  NodePosition(const NodeId& node_id) const -> std::optional<QPointF>;
   [[nodiscard]] auto  DrawerOpen(const NodeId& node_id) const -> bool;
@@ -215,6 +223,8 @@ class EditorNodeLayoutStore : public QObject {
    * resolution. Mask-count changes arrive through projection applies instead.
    */
   void NodeHeightChanged();
+  /// drawerRevision NOTIFY; see the property.
+  void drawerStateChanged();
 
  private:
   [[nodiscard]] auto      MutableCurrent() -> EditorNodeLayoutValue&;
@@ -223,6 +233,7 @@ class EditorNodeLayoutStore : public QObject {
   [[nodiscard]] auto      ClampZoom(qreal zoom) const -> qreal;
 
   EditorNodeLayoutMetrics metrics_{};
+  quint64                 drawer_revision_ = 0;
   EditorNodeLayoutKey     current_key_{};
   std::map<EditorNodeLayoutKey, EditorNodeLayoutValue> values_;
 };

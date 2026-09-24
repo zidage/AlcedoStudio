@@ -27,7 +27,6 @@ Item {
                                                               : null
 
     property var groupsModel: []
-    property int expansionRevision: 0
 
     readonly property color colText: theme ? theme.colText : appTheme.textColor
     readonly property color colMuted: theme ? theme.colTextMuted : appTheme.textMutedColor
@@ -336,16 +335,6 @@ Item {
         }
     }
 
-    Connections {
-        target: root.nodeLayoutStore
-        function onNodeHeightChanged() {
-            root.expansionRevision += 1
-        }
-        function onLayoutChanged() {
-            root.expansionRevision += 1
-        }
-    }
-
     // Reveal runs once per newly selected Mask — not on every
     // maskCreationChanged (parameter drags must not pull the viewport back).
     property string _lastRevealedMaskId: ""
@@ -619,12 +608,12 @@ Item {
                     ownerActive: root.groupOwnsMask(modelData, root.selectedMaskId)
                     selected: nodeId.length > 0 && nodeId === root.selectedNodeId
                               && !ownerActive
-                    expanded: {
-                        root.expansionRevision
-                        return root.nodeLayoutStore
-                               ? root.nodeLayoutStore.drawerOpen(nodeId)
-                               : true
-                    }
+                    // drawerRevision is the re-evaluation dependency for the
+                    // drawerOpen() call; see EditorNodeLayoutStore.
+                    expanded: root.nodeLayoutStore
+                              ? (root.nodeLayoutStore.drawerRevision >= 0
+                                 && root.nodeLayoutStore.drawerOpen(nodeId))
+                              : true
                     actionsEnabled: root.structureEditable
                     actionsDisabledReason: root.structureDisabledReason
                     reorderEnabled: root.structureEditable && root.groupsModel.length > 1

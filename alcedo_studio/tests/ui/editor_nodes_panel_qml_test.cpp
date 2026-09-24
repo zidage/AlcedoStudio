@@ -1713,6 +1713,71 @@ TEST_F(EditorNodesPanelQmlTest, MaskGroupHeaderClickTogglesDrawerInBothDirection
   QTRY_VERIFY_WITH_TIMEOUT(primary->property("expanded").toBool(), 2000);
 }
 
+TEST_F(EditorNodesPanelQmlTest, MaskGroupCardFollowsDrawerStoreWithoutAModelRefresh) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  backend_.AddMaskToPrimaryGrade(MakeMask(MaskId{"mask.one"}, RadialMaskSource{}));
+  OpenMaskGroupsPage();
+  QTRY_VERIFY_WITH_TIMEOUT(MaskGroupDelegates().size() == 1, 2000);
+  auto* layout = LayoutStore();
+  ASSERT_NE(layout, nullptr);
+  const auto node_id  = QStringLiteral("grade.primary");
+  auto*      delegate = MaskGroupDelegateFor(node_id);
+  ASSERT_NE(delegate, nullptr);
+  ASSERT_TRUE(delegate->property("expanded").toBool());
+
+  // Write only the store: no click, no selection change, no maskGroups
+  // republish. The card must follow the stored drawer state on its own, the
+  // way a header click in the app writes it (the app has no incidental
+  // snapshot refresh that would re-read the value).
+  layout->setDrawerOpen(node_id, false);
+  QTRY_VERIFY_WITH_TIMEOUT(!MaskGroupDelegateFor(node_id)->property("expanded").toBool(), 2000);
+  layout->setDrawerOpen(node_id, true);
+  QTRY_VERIFY_WITH_TIMEOUT(MaskGroupDelegateFor(node_id)->property("expanded").toBool(), 2000);
+
+  // The panel must bind to store notifications Qt can resolve; an unmatched
+  // Connections handler is the regression this guards against.
+  for (const auto& warning : warnings_) {
+    EXPECT_FALSE(warning.contains(QStringLiteral("no signal of the target matches")))
+        << warning.toStdString();
+  }
+}
+
+TEST_F(EditorNodesPanelQmlTest, MaskGroupHeaderTogglesDrawerAfterSelectingOneOfItsMasks) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  backend_.AddMaskToPrimaryGrade(MakeMask(MaskId{"mask.one"}, RadialMaskSource{}));
+  backend_.AddColorGradeBefore(NodeId{"drt"}, NodeId{"grade.b"});
+  AppTheme::Instance().setReduceMotion(false);
+  const auto restore_motion =
+      qScopeGuard([] { AppTheme::Instance().setReduceMotion(true); });
+  OpenMaskGroupsPage();
+  QTRY_VERIFY_WITH_TIMEOUT(MaskGroupDelegates().size() == 2, 2000);
+  auto* layout = LayoutStore();
+  ASSERT_NE(layout, nullptr);
+  const auto node_id = QStringLiteral("grade.primary");
+
+  // Editing a Mask is the usual state before folding its group.
+  auto* row = MaskRowIn(MaskGroupDelegateFor(node_id), QStringLiteral("mask.one"));
+  ASSERT_NE(row, nullptr);
+  Click(window_, row);
+  ProcessEvents();
+
+  for (int round = 0; round < 3; ++round) {
+    auto* delegate = MaskGroupDelegateFor(node_id);
+    ASSERT_NE(delegate, nullptr);
+    auto* header = delegate->findChild<QQuickItem*>(QStringLiteral("editorMaskGroupHeader"));
+    ASSERT_NE(header, nullptr);
+    const bool before = layout->drawerOpen(node_id);
+    Click(window_, header);
+    QTRY_VERIFY_WITH_TIMEOUT(layout->drawerOpen(node_id) != before, 2000);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        MaskGroupDelegateFor(node_id)->property("expanded").toBool() == !before, 2000);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        qFuzzyCompare(MaskGroupDelegateFor(node_id)->property("foldProgress").toReal() + 1.0,
+                      before ? 1.0 : 2.0),
+        2000);
+  }
+}
+
 TEST_F(EditorNodesPanelQmlTest, MaskGroupsAccessiblePhrasesCoverRowsActionsAndReasons) {
   ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
   backend_.AddMaskToPrimaryGrade(MakeMask(MaskId{"mask.one"}, RadialMaskSource{}));
