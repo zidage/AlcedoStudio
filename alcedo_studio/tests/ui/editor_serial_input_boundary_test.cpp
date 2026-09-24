@@ -12,7 +12,6 @@
 #include "app/pipeline_service.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/history/commit_graph.hpp"
-#include "edit/operators/operator_registeration.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
 #include "image/image.hpp"
 #include "image/metadata.hpp"
@@ -120,7 +119,6 @@ class QueuedInputSubmitter final : public QObject, public IEditorAdjustmentSubmi
 class SerialInputBoundaryTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    RegisterAllOperators();
     const auto stamp =
         std::to_string(std::chrono::high_resolution_clock::now().time_since_epoch().count());
     journal_path_ = std::filesystem::temp_directory_path() / ("serial_input_" + stamp + ".wal");

@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 
+#include <fstream>
 #include <memory>
 #include <unordered_set>
 

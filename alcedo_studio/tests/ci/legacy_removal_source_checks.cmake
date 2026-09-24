@@ -2,16 +2,16 @@
 #
 # Usage: cmake -DALCEDO_SOURCE_ROOT=<alcedo_studio/src> -DCHECK=<name> -P legacy_removal_source_checks.cmake
 #
-# CHECK=NoProductCodeReadsStageTableOutsideMirror
-#   Fails when a first-party product file calls a stage-table read API (GetStage(,
-#   GetGlobalParams(, GetOperator() and is not one of the files that still host the stage
-#   mirror or declare those APIs. Later G10 phases remove entries until the list is empty.
+# CHECK=NoProductCodeUsesStageTable
+#   Fails when a first-party product file uses the stage table (GetStage(, GetGlobalParams(,
+#   GetOperator(, SetOperator(, or a PipelineStageName value) and is not the stage itself or a
+#   legacy operator. G10.7 removed the stage table from the executor, the services, and the
+#   controllers; G10.9 archives the remaining owners.
 #
 # CHECK=NoProductCodeUsesStageJsonOutsideLegacyOwners
 #   Fails when a first-party product file calls ExportPipelineParams( or ImportPipelineParams(
-#   outside edit/pipeline/ and the legacy owners that later phases delete (G10.3 removed every
-#   stage-JSON rollback, G10.4 removed the legacy history store, and the mapper import goes in
-#   G10.7).
+#   outside the stage files that G10.9 archives. G10.3 removed every stage-JSON rollback, G10.4
+#   removed the legacy history store, and G10.7 removed the executor API and the mapper import.
 #
 # CHECK=NoSourceReferencesLegacyHistoryStore
 #   Fails when a source or CMake file under ALCEDO_SOURCE_ROOT names a type, table, or target of
@@ -42,26 +42,17 @@ if(NOT DEFINED CHECK)
 endif()
 
 # Relative paths under ALCEDO_SOURCE_ROOT, as regular expressions.
-set(_stage_mirror_hosts
-  "^app/pipeline_service\\.cpp$"
-  "^app/import_service\\.cpp$"
-  "^edit/pipeline/pipeline_cpu\\.cpp$"
-  "^ui/alcedo_main/editor_support/controllers/pipeline_controller\\.cpp$"
+# The stage and the legacy operators own the stage-table API until G10.9 archives them.
+set(_stage_table_owners
   "^edit/pipeline/pipeline_stage\\.cpp$"
-  "^edit/operators/"
-  # Headers that declare the stage-table API itself.
   "^include/edit/pipeline/pipeline_stage\\.hpp$"
-  "^include/edit/pipeline/pipeline\\.hpp$"
-  "^include/edit/pipeline/pipeline_cpu\\.hpp$"
+  "^edit/operators/"
   "^include/edit/operators/"
 )
 
 set(_stage_json_owners
-  # The executor that defines the API.
-  "^edit/pipeline/"
-  "^include/edit/pipeline/"
-  # Stage-JSON import for format_version < 2 (G10.7).
-  "^storage/mapper/pipeline/pipeline_mapper\\.cpp$"
+  "^edit/pipeline/pipeline_stage\\.cpp$"
+  "^include/edit/pipeline/pipeline_stage\\.hpp$"
 )
 
 function(_alcedo_matches_any relative_path patterns_var out_var)
@@ -231,10 +222,11 @@ function(_alcedo_scan_dag_includes)
   message(STATUS "Scanned ${_scanned} files; no DAG source includes a legacy pipeline or operator path.")
 endfunction()
 
-if(CHECK STREQUAL "NoProductCodeReadsStageTableOutsideMirror")
-  _alcedo_scan("(GetStage|GetGlobalParams|GetOperator)\\(" _stage_mirror_hosts
-    "Product code reads the stage table outside the stage mirror hosts"
-    "no stage-table read outside the mirror hosts")
+if(CHECK STREQUAL "NoProductCodeUsesStageTable")
+  _alcedo_scan("(GetStage|GetGlobalParams|GetOperator|SetOperator)\\(|PipelineStageName::"
+    _stage_table_owners
+    "Product code uses the stage table outside the stage and the legacy operators"
+    "no stage-table use outside the stage and the legacy operators")
 elseif(CHECK STREQUAL "NoProductCodeUsesStageJsonOutsideLegacyOwners")
   # The leading class excludes accessors such as Document::GetImportPipelineParams().
   _alcedo_scan("(^|[^A-Za-z0-9_])(Export|Import)PipelineParams\\(" _stage_json_owners

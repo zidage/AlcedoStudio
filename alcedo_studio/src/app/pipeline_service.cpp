@@ -22,9 +22,7 @@
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/edit_commit.hpp"
 #include "edit/history/pipeline_document_checkpoint.hpp"
-#include "edit/pipeline/default_pipeline_params.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
-#include "image/metadata_extractor.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
 #include "type/type.hpp"
 
@@ -53,131 +51,6 @@ auto LoadPipelineDocument(ElementStore& store, sl_element_id_t id)
   auto document = std::make_shared<PipelineDocument>(PipelineDocument::FromJson(*stored));
   ValidateProductDocument(*document, id);
   return document;
-}
-
-void ResetToDefaults(OperatorParams& params) {
-  // OperatorParams has const members, so it is not assignable.
-  // Reinitialize in-place to restore default values.
-  std::destroy_at(&params);
-  std::construct_at(&params);
-}
-
-void EnsureDefaultOutputTransform(CPUPipelineExecutor& exec) {
-  auto& global_params = exec.GetGlobalParams();
-  auto& output_stage  = exec.GetStage(PipelineStageName::Output_Transform);
-
-  // Older stored pipelines (or partially-initialized ones) might miss the ODT descriptor.
-  // Without it, the GPU path won't have precomputed ODT tables and can render black.
-  if (!output_stage.GetOperator(OperatorType::ODT).has_value()) {
-    const nlohmann::json output_params = pipeline_defaults::MakeDefaultODTParams();
-    output_stage.SetOperator(OperatorType::ODT, output_params, global_params);
-  }
-}
-
-void EnsureDefaultColorTemp(CPUPipelineExecutor& exec) {
-  auto& global_params = exec.GetGlobalParams();
-  auto& to_ws_stage   = exec.GetStage(PipelineStageName::To_WorkingSpace);
-
-  if (to_ws_stage.GetOperator(OperatorType::COLOR_TEMP).has_value()) {
-    return;
-  }
-
-  std::string mode      = "as_shot";
-  float       cct       = 6500.0f;
-  float       tint      = 0.0f;
-
-  auto&       raw_stage = exec.GetStage(PipelineStageName::Image_Loading);
-  auto        raw_entry = raw_stage.GetOperator(OperatorType::RAW_DECODE);
-  if (raw_entry.has_value() && raw_entry.value() && raw_entry.value()->op_) {
-    const nlohmann::json raw_params = raw_entry.value()->op_->GetParams();
-    if (raw_params.contains("raw") && raw_params["raw"].is_object()) {
-      const auto& raw = raw_params["raw"];
-      if (raw.contains("use_camera_wb") && raw["use_camera_wb"].is_boolean() &&
-          !raw["use_camera_wb"].get<bool>()) {
-        mode = "custom";
-      }
-      if (raw.contains("user_wb") && raw["user_wb"].is_number()) {
-        cct = std::clamp(raw["user_wb"].get<float>(), 2000.0f, 15000.0f);
-      }
-    }
-  }
-
-  nlohmann::json color_temp_params;
-  color_temp_params["color_temp"] = {
-      {"mode", mode},       {"custom_cct", cct},    {"custom_tint", tint},
-      {"as_shot_cct", cct}, {"as_shot_tint", tint},
-  };
-  to_ws_stage.SetOperator(OperatorType::COLOR_TEMP, color_temp_params, global_params);
-}
-
-void EnsureDefaultRawDecode(CPUPipelineExecutor& exec) {
-  auto& loading_stage = exec.GetStage(PipelineStageName::Image_Loading);
-  if (loading_stage.GetOperator(OperatorType::RAW_DECODE).has_value()) {
-    return;
-  }
-
-  const nlohmann::json raw_params = pipeline_defaults::MakeDefaultRawDecodeParams();
-  loading_stage.SetOperator(OperatorType::RAW_DECODE, raw_params);
-}
-
-void EnsureDefaultLensCalib(CPUPipelineExecutor& exec) {
-  auto& global_params = exec.GetGlobalParams();
-  auto& loading_stage = exec.GetStage(PipelineStageName::Image_Loading);
-
-  if (!loading_stage.GetOperator(OperatorType::LENS_CALIBRATION).has_value()) {
-    const nlohmann::json lens_params = pipeline_defaults::MakeDefaultLensCalibParams();
-    loading_stage.SetOperator(OperatorType::LENS_CALIBRATION, lens_params, global_params);
-  }
-
-  const auto op = loading_stage.GetOperator(OperatorType::LENS_CALIBRATION);
-  if (!op.has_value() || !op.value() || !op.value()->op_) {
-    return;
-  }
-
-  bool enabled = op.value()->enable_;
-  auto params  = op.value()->op_->GetParams();
-  if (params.contains("lens_calib") && params["lens_calib"].is_object()) {
-    enabled = params["lens_calib"].value("enabled", enabled);
-  }
-
-  if (!params.contains("lens_calib") || !params["lens_calib"].is_object()) {
-    params["lens_calib"] = nlohmann::json::object();
-  }
-  params["lens_calib"]["enabled"] = enabled;
-
-  // Keep the operator-local descriptor and the stage-level enable bit in lockstep.
-  // Stored pipelines may carry an older mismatch between the two; nested params are
-  // the durable source of truth because they are part of the serialized operator state.
-  loading_stage.SetOperator(OperatorType::LENS_CALIBRATION, params, global_params);
-  loading_stage.EnableOperator(OperatorType::LENS_CALIBRATION, enabled, global_params);
-}
-
-void ResyncGlobalParamsFromOperators(CPUPipelineExecutor& exec) {
-  // Global params are consumed/mutated during GPU parameter conversion (dirty flags cleared).
-  // Cached pipelines also release GPU resources when returned to the service.
-  // Rebuild global params from operator params so ODT/LMT GPU resources are re-uploaded.
-  auto& global_params = exec.GetGlobalParams();
-  ResetToDefaults(global_params);
-
-  for (int i = 0; i < static_cast<int>(PipelineStageName::Stage_Count); ++i) {
-    auto& stage = exec.GetStage(static_cast<PipelineStageName>(i));
-    for (auto& [op_type, op_entry] : stage.GetAllOperators()) {
-      (void)op_type;
-      if (!op_entry.op_) {
-        continue;
-      }
-      op_entry.op_->SetGlobalParams(global_params);
-    }
-  }
-}
-
-void ResetTransientPreviewState(CPUPipelineExecutor& exec) {
-  exec.SetResizeDownsampleAlgorithm(ResizeDownsampleAlgorithm::Bilinear);
-  exec.SetRenderRegion(0, 0, 1.0f);
-  exec.SetRenderRes(false, 4096);
-  exec.SetForceCPUOutput(false);
-  exec.SetEnableCache(true);
-  exec.SetDecodeRes(DecodeRes::FULL);
 }
 
 struct LoadedRootState {
@@ -227,19 +100,6 @@ auto MakeSerializedPipelineState(const PipelineGuard& guard) -> nlohmann::json {
 
 void CacheRootDocument(PipelineGuard& guard, const PipelineDocument& document) {
   guard.root_document_ = std::make_shared<PipelineDocument>(ClonePipelineDocument(document));
-}
-
-void BindDevelopData(PipelineDocument& document, const RawRuntimeColorContext& raw_color_context) {
-  auto* develop = document.Develop();
-  if (develop == nullptr) {
-    return;
-  }
-  auto payload = develop->Params().Params();
-  auto next    = payload;
-  BindDevelopCameraProfile(next, raw_color_context);
-  if (next != payload) {
-    develop->Params().ReplaceParams(std::move(next));
-  }
 }
 
 void BindWorkingSpaceDevelopData(PipelineDocument& document) {
@@ -353,15 +213,9 @@ auto BindLivePipelineDocument(PipelineGuard&                    guard,
   auto prior = std::exchange(guard.document_, std::move(document));
   if (guard.pipeline_) {
     // Throws only for a null document, which the precondition excludes.
-    guard.pipeline_->SetPipelineDocument(guard.document_, false);
+    guard.pipeline_->SetPipelineDocument(guard.document_);
   }
   return prior;
-}
-
-void PipelineMgmtService::InjectImageRawMetadata(CPUPipelineExecutor& executor, const Image& image) {
-  if (image.HasRawColorContext()) {
-    executor.InjectRawMetadata(MetadataExtractor::ReadRawColorContextForRender(image));
-  }
 }
 
 void PipelineMgmtService::HandleEviction(sl_element_id_t evicted_id) {
@@ -450,7 +304,7 @@ void PipelineMgmtService::CleanupIdlePipelineResources(
   }
   try {
     pipeline->pipeline_->ClearAllIntermediateBuffers();
-    pipeline->pipeline_->ResetExecutionStages();
+    pipeline->pipeline_->DetachFrameSink();
   } catch (...) {
   }
 }
@@ -511,14 +365,6 @@ auto PipelineMgmtService::LoadPipeline(sl_element_id_t id) -> std::shared_ptr<Pi
       std::unique_lock<std::mutex> render_guard(cached->pipeline_->GetRenderLock());
       cached->pipeline_->SetBoundFile(id);
       cached->pipeline_->SetAcceleratorBackendPreference(accelerator_preference_);
-      cached->pipeline_->SetExecutionStages();
-      ResetTransientPreviewState(*cached->pipeline_);
-
-      EnsureDefaultOutputTransform(*cached->pipeline_);
-      EnsureDefaultRawDecode(*cached->pipeline_);
-      EnsureDefaultColorTemp(*cached->pipeline_);
-      EnsureDefaultLensCalib(*cached->pipeline_);
-      ResyncGlobalParamsFromOperators(*cached->pipeline_);
       storage_->RememberLivePipeline(id, cached->pipeline_);
       {
         std::unique_lock<std::mutex> cache_lock(lock_);
@@ -592,13 +438,6 @@ auto PipelineMgmtService::LoadPipeline(sl_element_id_t id) -> std::shared_ptr<Pi
       std::unique_lock<std::mutex> render_guard(pipeline->GetRenderLock());
       pipeline->SetBoundFile(id);
       pipeline->SetAcceleratorBackendPreference(accelerator_preference_);
-      ResetTransientPreviewState(*pipeline);
-      EnsureDefaultOutputTransform(*pipeline);
-      EnsureDefaultRawDecode(*pipeline);
-      EnsureDefaultColorTemp(*pipeline);
-      EnsureDefaultLensCalib(*pipeline);
-      ResyncGlobalParamsFromOperators(*pipeline);
-      pipeline->SetExecutionStages();
     }
 
     pipeline_guard->pipeline_ = std::move(pipeline);
@@ -610,7 +449,7 @@ auto PipelineMgmtService::LoadPipeline(sl_element_id_t id) -> std::shared_ptr<Pi
       stored_raw = StoredRootRawColorContext(*storage_, id);
     }
     EnsureRenderableCameraProfile(*pipeline_guard->document_, stored_raw);
-    pipeline_guard->pipeline_->SetPipelineDocument(pipeline_guard->document_, false);
+    pipeline_guard->pipeline_->SetPipelineDocument(pipeline_guard->document_);
     ValidateProductDocument(*pipeline_guard->document_, id);
     pipeline_guard->dirty_ = false;
 
@@ -695,8 +534,7 @@ void PipelineMgmtService::InitializeImageRoot(const std::shared_ptr<PipelineGuar
   {
     std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
     if (raw_color_context != nullptr) {
-      BindDevelopData(*pipeline->document_, *raw_color_context);
-      pipeline->pipeline_->InjectRawMetadata(*raw_color_context);
+      BindImportedCameraProfile(*pipeline->document_, *raw_color_context);
       raw_json = RawColorContextToJson(*raw_color_context);
     } else {
       BindWorkingSpaceDevelopData(*pipeline->document_);
@@ -795,7 +633,6 @@ auto PipelineMgmtService::LoadEditorPipeline(sl_element_id_t id) -> std::shared_
           BindRootCameraProfile(*document, root_state->raw_color_context);
           std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
           pipeline->pipeline_->SetAcceleratorBackendPreference(accelerator_preference_);
-          ResetTransientPreviewState(*pipeline->pipeline_);
           (void)BindLivePipelineDocument(*pipeline, std::move(document));
           accepted_serialized_state = true;
         } catch (...) {

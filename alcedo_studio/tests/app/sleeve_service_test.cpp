@@ -19,7 +19,6 @@
 #include "app/project_package_backend.hpp"
 #include "app/project_service.hpp"
 #include "edit/operators/op_base.hpp"
-#include "edit/operators/operator_registeration.hpp"
 #include "sleeve/sleeve_element/sleeve_element.hpp"
 #include "sleeve/sleeve_element/sleeve_file.hpp"
 #include "utils/clock/time_provider.hpp"
@@ -103,7 +102,6 @@ class SleeveServiceTests : public ::testing::Test {
 
   void                  SetUp() override {
     TimeProvider::Refresh();
-    RegisterAllOperators();
     db_path_ = std::filesystem::temp_directory_path() / "sleeve_service_test.db";
     meta_path_ = std::filesystem::temp_directory_path() / "sleeve_service_test.json";
     if (std::filesystem::exists(db_path_)) {

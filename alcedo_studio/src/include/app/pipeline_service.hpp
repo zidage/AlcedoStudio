@@ -20,8 +20,8 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/commit_types.hpp"
-#include "edit/pipeline/pipeline.hpp"
 #include "edit/pipeline/pipeline_accelerator.hpp"
+#include "edit/pipeline/pipeline_cpu.hpp"
 #include "json.hpp"
 #include "renderer/pipeline_scheduler.hpp"
 #include "sleeve/storage.hpp"
@@ -31,19 +31,17 @@
 namespace alcedo {
 
 
-/// Live editor handle: one pipeline executor (parameter table + run state) plus a
-/// pointer to the image's CommitGraph.
+/// Live editor handle: one pipeline executor (render lock + renderers) bound to the live
+/// document, plus a pointer to the image's CommitGraph.
 ///
 /// Binding identity model (see commit_types.hpp and the single-live-pipeline roadmap
 /// "Final locked identity model"):
-/// - pipeline_ is only the parameter table / executor. It does not own HEAD.
+/// - pipeline_ only renders the bound document. It owns no parameters and does not own HEAD.
 /// - commit_graph_ is the sole owner of Version tips (working head).
 /// - working_head_commit_hash() / transaction_chain_hash() are convenience reads of
 ///   the active Version tip and its first-parent chain fold. They are not independent
 ///   caches; never write a parallel head field onto this guard.
 /// - On commit, history advances head once and folds chain hash once.
-///   Applying that commit to the table may call SetOperator many times; those calls are
-///   not separate chain-hash steps.
 /// - Serialized checkpoint identity is (root, head, chain, document). Load compares
 ///   that label to the history tip; match loads the document and skips first-parent replay.
 struct PipelineGuard {
@@ -53,7 +51,7 @@ struct PipelineGuard {
   sl_element_id_t                      id_;
   bool                                 dirty_     = false;
   /// Cache pin only: LoadPipeline / ReleasePipelineUse / SavePipeline refcount so
-  /// LRU eviction and "unpinned → re-init stages" do not drop a live editor/export
+  /// LRU eviction and "unpinned → re-init executor" do not drop a live editor/export
   /// guard. Live-pipeline *mutation* ownership is CPUPipelineExecutor::render_lock_
   /// (held for the full render task including present); pin_count_ is not that.
   bool                                 pinned_    = false;
@@ -139,9 +137,6 @@ class PipelineMgmtService final {
    * @param pipeline Guard returned by @ref LoadPipeline; no-op if null.
    */
   void               ReleasePipelineUse(std::shared_ptr<PipelineGuard> pipeline);
-
-  /// Load image-local RAW color data, including DNG profiles absent from older projects.
-  static void InjectImageRawMetadata(CPUPipelineExecutor& executor, const Image& image);
 
   /// Persist the current editor graph and serialized pipeline state while the
   /// caller keeps its editor guard pinned. `expected_materialized_state` is

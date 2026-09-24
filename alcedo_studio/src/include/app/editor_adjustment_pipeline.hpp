@@ -9,18 +9,38 @@
 #include <string>
 
 #include "app/editor_adjustment_types.hpp"
-#include "edit/operators/op_base.hpp"
 
 namespace alcedo {
 
-struct EditorAdjustmentFieldSpec {
-  PipelineStageName stage_name    = PipelineStageName::Stage_Count;
-  OperatorType      operator_type = OperatorType::UNKNOWN;
+/// Editor adjustment that a stable QML field key names. Aliases resolve to the same value.
+enum class EditorAdjustmentField {
+  Exposure,
+  Contrast,
+  Whites,
+  Blacks,
+  Shadows,
+  Highlights,
+  Curve,
+  Saturation,
+  Vibrance,
+  Tint,
+  Hls,
+  ColorWheel,
+  Lut,
+  Clarity,
+  Sharpen,
+  Drt,
+  FilmGrain,
+  Halation,
+  CropRotate,
+  RawDecode,
+  LensCalibration,
+  ColorTemperature,
 };
 
-/// Resolve the stable QML field key to the pipeline operator it controls.
+/// Resolve a stable QML field key (or one of its aliases) to the adjustment it controls.
 auto ResolveEditorAdjustmentField(const std::string& field_key)
-    -> std::optional<EditorAdjustmentFieldSpec>;
+    -> std::optional<EditorAdjustmentField>;
 
 /**
  * @brief Map a field write payload onto PipelineDocument Model JSON keys.
@@ -30,9 +50,5 @@ auto ResolveEditorAdjustmentField(const std::string& field_key)
  */
 auto EditorAdjustmentDocumentParamsFromWrite(const std::string& field_key, nlohmann::json params)
     -> nlohmann::json;
-
-/// Return the canonical QML field key for a committed operator payload.
-auto EditorAdjustmentFieldKey(PipelineStageName stage_name, OperatorType operator_type)
-    -> std::optional<std::string>;
 
 }  // namespace alcedo

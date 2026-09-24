@@ -26,7 +26,7 @@ struct LegacyImportResult {
 class LegacyPipelineImporter {
  public:
   /**
-   * @param stage_json CPUPipelineExecutor::ExportPipelineParams shape.
+   * @param stage_json Legacy stage JSON, in the shape that the executor exported before G10.7.
    * @return Document on success; error string and empty document on failure.
    */
   [[nodiscard]] static auto Import(const nlohmann::json& stage_json) -> LegacyImportResult;

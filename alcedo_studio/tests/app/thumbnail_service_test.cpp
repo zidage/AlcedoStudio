@@ -29,14 +29,13 @@
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
 #include "app/sleeve_service.hpp"
+#include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/legacy_pipeline_importer.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/history/edit_commit.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
-#include "edit/operators/op_base.hpp"
-#include "edit/operators/operator_registeration.hpp"
-#include "edit/pipeline/default_pipeline_params.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
+#include "edit/runtime/pipeline_apply_request.hpp"
 #include "image/metadata_extractor.hpp"
 #include "image/dng_color_profile_import.hpp"
 #include "io/image/image_loader.hpp"
@@ -678,7 +677,6 @@ class ThumbnailServiceTests : public ::testing::Test {
       }
     } catch (...) {
     }
-    RegisterAllOperators();
 #ifdef EASY_PROFILER_ENABLE
     EASY_PROFILER_ENABLE;
 #endif
@@ -726,7 +724,7 @@ TEST(ThumbnailCacheUtilityTest, ResizeWithEvictDropsLruRecordsImmediately) {
 }
 
 TEST_F(ThumbnailServiceTests, ThumbnailApplyRequestCarriesRequestedDecodeResolution) {
-  auto         exec = std::make_shared<CPUPipelineExecutor>(false);
+  auto         exec = std::make_shared<CPUPipelineExecutor>();
 
   PipelineTask task;
   task.pipeline_executor_                 = exec;
@@ -928,28 +926,10 @@ TEST_F(ThumbnailServiceTests, MetalGeometryPipelineThumbnailStillRenders) {
   ASSERT_NE(pipeline_guard, nullptr);
   ASSERT_NE(pipeline_guard->pipeline_, nullptr);
 
-  auto           exec           = pipeline_guard->pipeline_;
-  auto&          global_params  = exec->GetGlobalParams();
-  auto&          loading_stage  = exec->GetStage(PipelineStageName::Image_Loading);
-  auto&          geometry_stage = exec->GetStage(PipelineStageName::Geometry_Adjustment);
-
-  // The decode backend is a runtime property of the pipeline (resolved from
-  // the accelerator preference); the params must not carry it.
-  nlohmann::json raw_params     = pipeline_defaults::MakeDefaultRawDecodeParams();
-  raw_params["raw"]["backend"]  = "alcedo";
-  loading_stage.SetOperator(OperatorType::RAW_DECODE, raw_params);
-
-  nlohmann::json crop_params                  = pipeline_defaults::MakeDefaultCropRotateParams();
-  crop_params["crop_rotate"]["enabled"]       = true;
-  crop_params["crop_rotate"]["enable_crop"]   = true;
-  crop_params["crop_rotate"]["angle_degrees"] = 0.0f;
-  crop_params["crop_rotate"]["crop_rect"]     = {
-      {"x", 0.10f},
-      {"y", 0.10f},
-      {"w", 0.65f},
-      {"h", 0.60f},
-  };
-  geometry_stage.SetOperator(OperatorType::CROP_ROTATE, crop_params, global_params);
+  {
+    std::unique_lock<std::mutex> render_lock(pipeline_guard->pipeline_->GetRenderLock());
+    pipeline_guard->document_->Geometry().SetCropRect({0.10f, 0.10f, 0.65f, 0.60f});
+  }
 
   pipeline_guard->dirty_ = true;
   pipeline_service->SavePipeline(pipeline_guard);
@@ -1024,33 +1004,35 @@ TEST_F(ThumbnailServiceTests, ThumbnailRenderUsesInjectedRawMetadataForDng) {
 
   auto pipeline_guard = pipeline_service->LoadPipeline(element_id);
   ASSERT_NE(pipeline_guard, nullptr);
-  ASSERT_NE(pipeline_guard->pipeline_, nullptr);
-  const auto pipeline_params = pipeline_guard->pipeline_->ExportPipelineParams();
+  ASSERT_NE(pipeline_guard->document_, nullptr);
+  // The imported camera profile lives on the stored document; the direct render reads only it.
+  auto document = std::make_shared<PipelineDocument>(
+      PipelineDocument::FromJson(pipeline_guard->document_->ToJson()));
   pipeline_service->SavePipeline(pipeline_guard);
 
   auto direct_exec = std::make_shared<CPUPipelineExecutor>();
-  direct_exec->ImportPipelineParams(pipeline_params);
   direct_exec->SetBoundFile(element_id);
-  direct_exec->SetExecutionStages();
-  // Production thumbnail render uses imported operator inherent params; do not
-  // re-inject RAW metadata on each Apply (scheduler no longer does this).
-  direct_exec->BindFrameSubmission({}, FramePresentationMode::ViewportTransformed);
-  direct_exec->SetResizeDownsampleAlgorithm(ResizeDownsampleAlgorithm::Bilinear);
-  direct_exec->SetRenderRegion(0, 0, 1.0f);
-  direct_exec->SetForceCPUOutput(true);
-  direct_exec->SetRenderRes(false, 1024);
-  direct_exec->SetEnableCache(false);
-  direct_exec->SetDecodeRes(DecodeRes::QUARTER);
+  direct_exec->SetPipelineDocument(document);
+  PipelineApplyRequest request;
+  request.geometry.resolution.max_edge = 1024;
+  request.geometry.resolution.quality  = RenderQuality::Export;
+  request.decode_res                   = DecodeRes::QUARTER;
+  request.cache_policy                 = RenderCachePolicy::BypassSessionCache;
+  request.require_host_output          = true;
 
   auto bytes = ByteBufferLoader::LoadFromImage(image_desc);
   ASSERT_NE(bytes, nullptr);
 
-  auto direct_input  = std::make_shared<ImageBuffer>(std::move(*bytes));
-  auto direct_result = direct_exec->Apply(direct_input);
+  auto                         direct_input = std::make_shared<ImageBuffer>(std::move(*bytes));
+  std::shared_ptr<ImageBuffer> direct_result;
+  {
+    std::unique_lock<std::mutex> render_lock(direct_exec->GetRenderLock());
+    direct_result = direct_exec->Apply(direct_input, request);
+  }
   ASSERT_NE(direct_result, nullptr);
 
-  // Thumbnail may render on GPU (OpenCL) while this direct Apply is CPU-only;
-  // assert both paths produce valid non-empty pixels rather than bit-identical hashes.
+  // The thumbnail and the direct render use different sizes and decode resolutions; assert both
+  // paths produce valid non-empty pixels rather than bit-identical hashes.
   EXPECT_GT(thumbnail_hash, 0u);
   EXPECT_GT(HashImageBufferCpuBytes(*direct_result), 0u);
 }
@@ -1202,14 +1184,10 @@ TEST_F(ThumbnailServiceTests, ThumbnailRenderUsesGpuDagDocumentWithoutStageApply
   auto             live_guard = pipeline_service->LoadPipeline(element_id);
   ASSERT_NE(live_guard, nullptr);
   ASSERT_NE(live_guard->document_, nullptr);
-  live_guard->pipeline_->InjectRawMetadata(pinned.Get()->GetRawColorContext());
+  BindImportedCameraProfile(*live_guard->document_, pinned.Get()->GetRawColorContext());
   auto* exposure = live_guard->document_->PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure());
   ASSERT_NE(exposure, nullptr);
   exposure->LoadJson({{"exposure_ev", 2.25f}});
-  nlohmann::json stage_exposure;
-  stage_exposure["exposure"] = 9.0f;
-  live_guard->pipeline_->GetStage(PipelineStageName::Basic_Adjustment)
-      .SetOperator(OperatorType::EXPOSURE, stage_exposure);
   live_guard->dirty_   = true;
   const auto live_json = live_guard->document_->ToJson().dump();
   EXPECT_EQ(live_guard->document_.get(), live_guard->pipeline_->GpuDagDocument().get());
@@ -1259,7 +1237,7 @@ TEST_F(ThumbnailServiceTests, AnalysisRenditionUsesLiveDocument) {
   auto             live_guard = pipeline_service->LoadPipeline(element_id);
   ASSERT_NE(live_guard, nullptr);
   ASSERT_NE(live_guard->document_, nullptr);
-  live_guard->pipeline_->InjectRawMetadata(pinned.Get()->GetRawColorContext());
+  BindImportedCameraProfile(*live_guard->document_, pinned.Get()->GetRawColorContext());
   auto* analysis_exposure =
       live_guard->document_->PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure());
   ASSERT_NE(analysis_exposure, nullptr);
@@ -1519,7 +1497,7 @@ TEST_F(ThumbnailServiceTests, DISABLED_PipelineRestoredFromDBGeneratesCorrectThu
       thumbnail_service.ReleaseThumbnail(file_id);
 
       auto pipeline  = pipeline_service->LoadPipeline(file_id);
-      pipline_before = pipeline->pipeline_->ExportPipelineParams().dump();
+      pipline_before = pipeline->document_->ToJson().dump();
       pipeline_service->SavePipeline(pipeline);
     }
 
@@ -1528,11 +1506,10 @@ TEST_F(ThumbnailServiceTests, DISABLED_PipelineRestoredFromDBGeneratesCorrectThu
     {
       auto guard = pipeline_service->LoadPipeline(file_id);
       ASSERT_NE(guard, nullptr);
-      auto&          stage = guard->pipeline_->GetStage(PipelineStageName::Basic_Adjustment);
-      nlohmann::json params;
       // Use a strong exposure change so the thumbnail content should differ.
-      params["exposure"] = 3.0f;
-      stage.SetOperator(OperatorType::EXPOSURE, params, guard->pipeline_->GetGlobalParams());
+      guard->document_->PrimaryGrade()
+          ->FindAdjustmentByType(type_ids::Exposure())
+          ->LoadJson({{"exposure_ev", 3.0f}});
       guard->dirty_ = true;
       pipeline_service->SavePipeline(guard);
     }
@@ -1541,7 +1518,7 @@ TEST_F(ThumbnailServiceTests, DISABLED_PipelineRestoredFromDBGeneratesCorrectThu
     {
       ThumbnailService thumbnail_service(project.GetSleeveService(), img_pool, pipeline_service);
       auto             pipeline = pipeline_service->LoadPipeline(file_id);
-      pipline_after             = pipeline->pipeline_->ExportPipelineParams().dump();
+      pipline_after             = pipeline->document_->ToJson().dump();
       ASSERT_NE(pipline_before, pipline_after)
           << "Pipeline parameters did not change after modification";
       modified_hash = GetThumbnailHashBlocking(thumbnail_service, file_id, image_id);

@@ -132,19 +132,13 @@ TEST_F(AdjustmentTransferPasteMergeTest,
 
 /// Paste with an empty package returns an error.
 /// Library Paste (AdjustmentTransferApplyCoordinator flow): the pasted Version document is built
-/// from the root and bound by swapping the pointer. The stage table is exported only to prove that
-/// Paste no longer mirrors document values into it.
+/// from the root and bound by swapping the pointer.
 TEST_F(AdjustmentTransferPasteMergeTest, PasteAsNewVersionBindsTargetDocumentWithoutMirror) {
   constexpr sl_element_id_t kElement = 303;
   auto                      guard    = pipeline_service_->LoadEditorPipeline(kElement);
   ASSERT_TRUE(guard && guard->pipeline_ && guard->commit_graph_ && guard->root_document_);
   auto&          graph = *guard->commit_graph_;
 
-  nlohmann::json stage_table_before;
-  {
-    std::unique_lock<std::mutex> lock(guard->pipeline_->GetRenderLock());
-    stage_table_before = guard->pipeline_->ExportPipelineParams();
-  }
   const auto prior_document = guard->document_;
   const auto prior_exposure = DocumentExposureEv(*prior_document);
   const auto prior_version  = graph.GetActiveVersionId();
@@ -166,7 +160,6 @@ TEST_F(AdjustmentTransferPasteMergeTest, PasteAsNewVersionBindsTargetDocumentWit
   {
     std::unique_lock<std::mutex> lock(guard->pipeline_->GetRenderLock());
     EXPECT_EQ(guard->pipeline_->GpuDagDocument(), guard->document_);
-    EXPECT_EQ(guard->pipeline_->ExportPipelineParams(), stage_table_before);
   }
   EXPECT_TRUE(guard->serialized_state_needs_writeback_);
 
@@ -463,68 +456,6 @@ TEST(LensCalibOpMergePolicyTest, TakeIncomingKeepsTargetImageLocalMeta) {
   EXPECT_FALSE(lc.value("apply_distortion", true));
   EXPECT_EQ(lc.value("cam_maker", std::string{}), "Nikon");
   EXPECT_EQ(lc.value("lens_model", std::string{}), "Target Lens");
-}
-
-TEST_F(AdjustmentTransferPasteMergeTest,
-       LivePipelineColorTempBothAsShotHasNoConflictDespiteStrippedIncoming) {
-  // Live operator DetectMergeConflict (paste field-conflict policy).
-  const auto element_id = test::EditorMiniGitProjectFixture::kElementA;
-
-  auto guard = pipeline_service_->LoadPipeline(element_id);
-  ASSERT_TRUE(guard && guard->pipeline_);
-  nlohmann::json current_value;
-  {
-    std::unique_lock<std::mutex> lock(guard->pipeline_->GetRenderLock());
-    auto&                        to_ws = guard->pipeline_->GetStage(PipelineStageName::To_WorkingSpace);
-    const nlohmann::json full_as_shot = {
-        {"color_temp",
-         {{"mode", "as_shot"},
-          {"custom_cct", 5123.0},
-          {"custom_tint", -7.5},
-          {"as_shot_cct", 5123.0},
-          {"as_shot_tint", -7.5}}}};
-    to_ws.SetOperator(OperatorType::COLOR_TEMP, full_as_shot, guard->pipeline_->GetGlobalParams());
-    const auto current = to_ws.GetOperator(OperatorType::COLOR_TEMP);
-    ASSERT_TRUE(current.has_value() && current.value() && current.value()->op_);
-    current_value = current.value()->op_->GetParams();
-    EXPECT_FALSE(current.value()->op_->DetectMergeConflict(
-        current_value, nlohmann::json{{"color_temp", {{"mode", "as_shot"}}}}));
-  }
-  pipeline_service_->SavePipeline(guard);
-}
-
-TEST_F(AdjustmentTransferPasteMergeTest,
-       LivePipelineColorTempTakeIncomingAsShotKeepsTargetResolvedBaseline) {
-  const auto element_id = test::EditorMiniGitProjectFixture::kElementA;
-
-  auto guard = pipeline_service_->LoadPipeline(element_id);
-  ASSERT_TRUE(guard && guard->pipeline_);
-  nlohmann::json resolved;
-  {
-    std::unique_lock<std::mutex> lock(guard->pipeline_->GetRenderLock());
-    auto&                        to_ws = guard->pipeline_->GetStage(PipelineStageName::To_WorkingSpace);
-    const nlohmann::json custom = {
-        {"color_temp",
-         {{"mode", "custom"},
-          {"custom_cct", 7000.0},
-          {"custom_tint", 15.0},
-          {"as_shot_cct", 4550.0},
-          {"as_shot_tint", -2.0}}}};
-    to_ws.SetOperator(OperatorType::COLOR_TEMP, custom, guard->pipeline_->GetGlobalParams());
-    const auto current = to_ws.GetOperator(OperatorType::COLOR_TEMP);
-    ASSERT_TRUE(current.has_value() && current.value() && current.value()->op_);
-    const auto current_value = current.value()->op_->GetParams();
-    const nlohmann::json incoming = {{"color_temp", {{"mode", "as_shot"}}}};
-    ASSERT_TRUE(current.value()->op_->DetectMergeConflict(current_value, incoming));
-    resolved = current.value()->op_->MergeParams(current_value, incoming,
-                                                 OperatorMergeChoice::kTakeIncoming);
-  }
-  pipeline_service_->SavePipeline(guard);
-
-  const auto& ct = resolved["color_temp"];
-  EXPECT_EQ(ct.value("mode", std::string{}), "as_shot");
-  EXPECT_DOUBLE_EQ(ct.value("as_shot_cct", 0.0), 4550.0);
-  EXPECT_DOUBLE_EQ(ct.value("as_shot_tint", 0.0), -2.0);
 }
 }  // namespace
 }  // namespace alcedo

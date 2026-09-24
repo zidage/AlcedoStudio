@@ -17,7 +17,6 @@
 #include "app/import_service.hpp"
 #include "app/project_service.hpp"
 #include "app/sleeve_filter_service.hpp"
-#include "edit/operators/operator_registeration.hpp"
 #include "sleeve/sleeve_element/sleeve_element.hpp"
 #include "sleeve/sleeve_element/sleeve_file.hpp"
 #include "sleeve/sleeve_filter/filter_combo.hpp"
@@ -176,7 +175,6 @@ class FilterServiceTests : public ::testing::Test {
   void                  SetUp() override {
     TimeProvider::Refresh();
     Exiv2::LogMsg::setLevel(Exiv2::LogMsg::Level::mute);
-    RegisterAllOperators();
 
     db_path_ = std::filesystem::temp_directory_path() / "filter_service_test.db";
     meta_path_ = std::filesystem::temp_directory_path() / "filter_service_test.json";

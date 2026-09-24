@@ -364,9 +364,4 @@ auto ColorGradesOnImageBackbone(const PipelineDocument& document)
   return grades;
 }
 
-auto AllowsLegacyStageAdapterRemirror(const PipelineDocument& document) -> bool {
-  return document.Develop() != nullptr && document.PrimaryGrade() != nullptr &&
-         document.Drt() != nullptr;
-}
-
 }  // namespace alcedo

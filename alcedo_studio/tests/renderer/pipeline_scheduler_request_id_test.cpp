@@ -17,9 +17,7 @@
 #include <vector>
 
 #include "edit/graph/pipeline_document.hpp"
-#include "edit/operators/operator_registeration.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
-#include "edit/pipeline/pipeline_stage.hpp"
 #include "image/image_buffer.hpp"
 #include "renderer/pipeline_scheduler.hpp"
 #include "renderer/pipeline_task.hpp"
@@ -90,13 +88,6 @@ auto MakeSolidImage(int width, int height) -> std::shared_ptr<ImageBuffer> {
       cv::Mat(height, width, CV_32FC3, cv::Scalar(0.25f, 0.5f, 0.75f)));
 }
 
-void ConfigureMinimalPipeline(const std::shared_ptr<CPUPipelineExecutor>& exec) {
-  auto&          output_stage = exec->GetStage(PipelineStageName::Output_Transform);
-  nlohmann::json output_params;
-  output_params["ocio"] = {{"src", "ACEScct"}, {"dst", "Camera Rec.709"}, {"limit", true}};
-  output_stage.SetOperator(OperatorType::CST, output_params);
-}
-
 TEST(PipelineSchedulerRequestIdTest, OlderRequestIdIsRejectedAtSink) {
   RecordingFrameSink sink;
 
@@ -112,31 +103,11 @@ TEST(PipelineSchedulerRequestIdTest, OlderRequestIdIsRejectedAtSink) {
   EXPECT_EQ(sink.submissions().back().metadata.presentation_request_id, 2u);
 }
 
-TEST(PipelineSchedulerRequestIdTest, BindFrameSubmissionTagsRequestBeforeNotify) {
-  RegisterAllOperators();
-  auto               exec = std::make_shared<CPUPipelineExecutor>();
-  RecordingFrameSink sink;
-  ConfigureMinimalPipeline(exec);
-  exec->SetExecutionStages(&sink);
-
-  FramePreviewMetadata metadata{};
-  metadata.presentation_request_id = 9;
-  exec->BindFrameSubmission(metadata, FramePresentationMode::FullFrame);
-
-  FrameCompletionSubmission submission = exec->BoundFrameSubmission();
-  EXPECT_EQ(submission.metadata.presentation_request_id, 9u);
-  sink.NotifyFrameReady(submission);
-  ASSERT_EQ(sink.submissions().size(), 1u);
-  EXPECT_EQ(sink.submissions().front().metadata.presentation_request_id, 9u);
-}
-
 TEST(PipelineSchedulerRequestIdTest, StaleSchedulerTaskDoesNotReachSink) {
-  RegisterAllOperators();
 
   auto               exec = std::make_shared<CPUPipelineExecutor>();
   RecordingFrameSink sink;
-  ConfigureMinimalPipeline(exec);
-  exec->SetExecutionStages(&sink);
+  exec->AttachFrameSink(&sink);
 
   PipelineScheduler scheduler(1);
 
@@ -159,8 +130,8 @@ TEST(PipelineSchedulerRequestIdTest, StaleSchedulerTaskDoesNotReachSink) {
     return future;
   };
 
-  // Plan §5.5.1: request 2 reaches MarkSinkApplyStarted first. Apply may fail
-  // without a full operator graph; stale tracking must still reject request 1.
+  // Plan §5.5.1: request 2 reaches MarkSinkApplyStarted first. Apply fails without a bound
+  // document; stale tracking must still reject request 1.
   auto newer = run_blocking(2);
   ASSERT_TRUE(newer.wait_for(std::chrono::seconds(30)) == std::future_status::ready)
       << "newer request timed out";
@@ -183,11 +154,9 @@ TEST(PipelineSchedulerRequestIdTest, StaleSchedulerTaskDoesNotReachSink) {
 }
 
 TEST(PipelineSchedulerRequestIdTest, CompletionRunsAfterLivePipelineRenderLockIsReleased) {
-  RegisterAllOperators();
   auto               exec = std::make_shared<CPUPipelineExecutor>();
   RecordingFrameSink sink;
-  ConfigureMinimalPipeline(exec);
-  exec->SetExecutionStages(&sink);
+  exec->AttachFrameSink(&sink);
 
   PipelineScheduler scheduler(1);
   PipelineTask      task;
@@ -211,15 +180,9 @@ TEST(PipelineSchedulerRequestIdTest, CompletionRunsAfterLivePipelineRenderLockIs
   EXPECT_TRUE(completed.get());
 }
 
-TEST(PipelineSchedulerRequestIdTest,
-     MissingDocumentRequestsReportFailureWithoutUsingStageCache) {
-  RegisterAllOperators();
-
+TEST(PipelineSchedulerRequestIdTest, MissingDocumentRequestsReportFailureOnEveryRender) {
   auto exec = std::make_shared<CPUPipelineExecutor>();
   exec->SetAcceleratorBackendPreference(AcceleratorBackendPreference::CPU);
-  exec->GetStage(PipelineStageName::Image_Loading)
-      .EnableOperator(OperatorType::RAW_DECODE, false, exec->GetGlobalParams());
-  exec->SetExecutionStages();
 
   auto input = MakeSolidImage(64, 48);
   PipelineScheduler scheduler(1);
@@ -238,21 +201,14 @@ TEST(PipelineSchedulerRequestIdTest,
   };
 
   EXPECT_THROW((void)run_interactive(101), std::runtime_error);
-  auto& geometry = exec->GetStage(PipelineStageName::Geometry_Adjustment);
-  EXPECT_FALSE(geometry.CacheValid());
-
-  auto& basic = exec->GetStage(PipelineStageName::Basic_Adjustment);
-  basic.SetOperator(OperatorType::EXPOSURE, {{"exposure", 0.5f}}, exec->GetGlobalParams());
-
   EXPECT_THROW((void)run_interactive(102), std::runtime_error);
-  EXPECT_FALSE(geometry.CacheValid());
+  EXPECT_FALSE(exec->HasGpuDagDocument());
 }
 
 // G10.1 removed the stage CROP_ROTATE read from FAST_PREVIEW. Before that change the read was
 // false for every document edit (defect D1: the stage never received the crop_rotate key), so a
 // rotated crop used the ROI path. The expected values below are that pre-change request.
 TEST(PipelineSchedulerRequestIdTest, FastPreviewRequestIsUnchangedForRotatedCrop) {
-  RegisterAllOperators();
   auto exec     = std::make_shared<CPUPipelineExecutor>();
   auto document = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
   document->Geometry().SetCropRect({0.2f, 0.1f, 0.5f, 0.6f});
@@ -402,10 +358,8 @@ TEST(DirectPresentQueueRequestIdTest, ThirdInteractivePresentReusesFirstDisplaye
 }
 
 TEST(PipelineSchedulerRequestIdTest, EditorRenderFailureForwardsExceptionMessageInsteadOfEmptyResult) {
-  RegisterAllOperators();
   auto exec = std::make_shared<CPUPipelineExecutor>();
   exec->SetAcceleratorBackendPreference(AcceleratorBackendPreference::CPU);
-  exec->SetExecutionStages();
 
   PipelineScheduler scheduler(1);
   PipelineTask      task;

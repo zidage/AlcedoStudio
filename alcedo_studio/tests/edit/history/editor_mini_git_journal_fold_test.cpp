@@ -14,7 +14,6 @@
 
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/mini_git_working_history.hpp"
-#include "edit/operators/operator_registeration.hpp"
 #include "utils/clock/time_provider.hpp"
 
 namespace alcedo {
@@ -41,7 +40,6 @@ class MiniGitJournalAlignmentTest : public ::testing::Test {
  protected:
   void SetUp() override {
     TimeProvider::Refresh();
-    RegisterAllOperators();
     graph_   = std::make_shared<CommitGraph>(CommitGraph::CreateEmpty(1, "Default"));
     journal_ = std::make_shared<MiniGitJournal>();
     history_ = std::make_unique<MiniGitWorkingHistory>(graph_, journal_);

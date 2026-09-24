@@ -11,7 +11,6 @@
 #include <string>
 #include <vector>
 
-#include "edit/pipeline/pipeline_cpu.hpp"
 #include "sleeve/sleeve_element/sleeve_element.hpp"
 #include "sleeve/sleeve_filter/filter_combo.hpp"
 #include "storage/mapper/duckorm/duckdb_expr.hpp"
@@ -133,10 +132,6 @@ class ElementStore {
 
   void EnsureChildrenLoaded(sl_element_id_t folder_id);
 
-  auto GetPipelineByElementId(const sl_element_id_t element_id)
-      -> std::shared_ptr<CPUPipelineExecutor>;
-  auto               UpdatePipelineByElementId(const sl_element_id_t                      element_id,
-                                               const std::shared_ptr<CPUPipelineExecutor> pipeline) -> void;
   [[nodiscard]] auto GetPipelineJsonByElementId(sl_element_id_t element_id)
       -> std::optional<nlohmann::json>;
   void UpdatePipelineJsonByElementId(sl_element_id_t element_id, const nlohmann::json& document);

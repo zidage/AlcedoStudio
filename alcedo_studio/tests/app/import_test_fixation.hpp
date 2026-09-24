@@ -9,7 +9,6 @@
 #include <exiv2/exiv2.hpp>
 #include <filesystem>
 
-#include "edit/operators/operator_registeration.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "utils/profiler/profiler.hpp"
 
@@ -32,7 +31,6 @@ class ImportServiceTests : public ::testing::Test {
     if (std::filesystem::exists(meta_path_)) {
       std::filesystem::remove(meta_path_);
     }
-    RegisterAllOperators();
 #ifdef EASY_PROFILER_ENABLE
     EASY_PROFILER_ENABLE;
 #endif

@@ -25,7 +25,6 @@
 #include <string>
 #include <vector>
 
-#include "edit/operators/operator_registeration.hpp"
 #include "type/supported_file_type.hpp"
 #include "ui/alcedo_main/album_backend/application_module_host.hpp"
 #include "ui/alcedo_main/album_backend/folder_controller.hpp"
@@ -146,7 +145,6 @@ class ApplicationModuleHostTestFixture : public ::testing::Test {
 
   void                  SetUp() override {
     alcedo::TimeProvider::Refresh();
-    alcedo::RegisterAllOperators();
     Exiv2::LogMsg::setLevel(Exiv2::LogMsg::Level::mute);
 
     // Create a unique temp directory for each test.

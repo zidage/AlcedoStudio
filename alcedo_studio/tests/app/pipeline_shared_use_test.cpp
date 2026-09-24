@@ -7,11 +7,14 @@
 #include <atomic>
 #include <barrier>
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <future>
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <OpenImageIO/imageio.h>
+#include <opencv2/core.hpp>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -24,18 +27,17 @@
 #include "app/thumbnail_disk_cache_service.hpp"
 #include "app/thumbnail_service.hpp"
 #include "app/thumbnail_types.hpp"
+#include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/runtime/drt_display.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/edit_commit.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/i_operator_model.hpp"
-#include "edit/operators/op_base.hpp"
-#include "edit/operators/operator_registeration.hpp"
 #include "edit/operators/utils/color_utils.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
+#include "edit/runtime/pipeline_apply_request.hpp"
 #include "edit/runtime/renderer.hpp"
-#include "edit/pipeline/pipeline_stage.hpp"
 #include "image/image.hpp"
 #include "image/image_buffer.hpp"
 #include "io/image/export_color_profile_config.hpp"
@@ -104,6 +106,56 @@ auto ImportRawFile(ProjectService& project, std::shared_ptr<PipelineMgmtService>
 auto ImportLinearDng(ProjectService& project, std::shared_ptr<PipelineMgmtService> pipelines)
     -> std::pair<sl_element_id_t, image_id_t> {
   return ImportRawFile(project, pipelines, LinearDngPath());
+}
+
+auto ExpectedPixelPath(const char* file_name) -> std::filesystem::path {
+  return std::filesystem::path(ALCEDO_SHARED_USE_EXPECTED_PIXEL_DIR) / file_name;
+}
+
+/// Largest per-channel difference, as a fraction of the full code range of the pixel depth.
+auto MaxNormalizedDifference(const cv::Mat& actual, const cv::Mat& expected) -> double {
+  const double full_scale = actual.depth() == CV_16U ? 65535.0 : 255.0;
+  return cv::norm(actual, expected, cv::NORM_INF) / full_scale;
+}
+
+/// Read every channel of an 8- or 16-bit image file at its stored depth; empty on failure.
+auto ReadImagePixels(const std::filesystem::path& path) -> cv::Mat {
+  auto input = OIIO::ImageInput::open(path.string());
+  if (!input) {
+    return {};
+  }
+  const OIIO::ImageSpec spec    = input->spec();
+  const bool            sixteen = spec.format == OIIO::TypeDesc::UINT16;
+  cv::Mat pixels(spec.height, spec.width, CV_MAKETYPE(sixteen ? CV_16U : CV_8U, spec.nchannels));
+  const bool ok = input->read_image(0, 0, 0, spec.nchannels,
+                                    sixteen ? OIIO::TypeDesc::UINT16 : OIIO::TypeDesc::UINT8,
+                                    pixels.data);
+  input->close();
+  return ok ? pixels : cv::Mat{};
+}
+
+/// Write continuous 8- or 16-bit pixels to a lossless file; returns false on failure.
+auto WriteImagePixels(const std::filesystem::path& path, const cv::Mat& pixels) -> bool {
+  auto output = OIIO::ImageOutput::create(path.string());
+  if (!output || !pixels.isContinuous()) {
+    return false;
+  }
+  const OIIO::ImageSpec spec(pixels.cols, pixels.rows, pixels.channels(),
+                             pixels.depth() == CV_16U ? OIIO::TypeDesc::UINT16
+                                                      : OIIO::TypeDesc::UINT8);
+  if (!output->open(path.string(), spec)) {
+    return false;
+  }
+  const bool ok = output->write_image(spec.format, pixels.data);
+  output->close();
+  return ok;
+}
+
+auto HostPixels(ImageBuffer& buffer) -> cv::Mat {
+  if (!buffer.cpu_data_valid_ && buffer.gpu_data_valid_) {
+    buffer.SyncToCPU();
+  }
+  return buffer.GetCPUData().clone();
 }
 
 auto GetThumbnailDetailedBlocking(ThumbnailService& service, sl_element_id_t id,
@@ -224,7 +276,7 @@ void BindImportedRawColor(const std::shared_ptr<PipelineGuard>& live, ImagePoolS
     return;
   }
   std::lock_guard<std::mutex> render_lock(live->pipeline_->GetRenderLock());
-  live->pipeline_->InjectRawMetadata(img->GetRawColorContext());
+  BindImportedCameraProfile(*live->document_, img->GetRawColorContext());
 }
 
 }  // namespace
@@ -242,7 +294,6 @@ class PipelineSharedUseTest : public ::testing::Test {
     std::error_code ec;
     std::filesystem::remove(db_path_, ec);
     std::filesystem::remove(meta_path_, ec);
-    RegisterAllOperators();
   }
 
   void TearDown() override {
@@ -541,10 +592,13 @@ TEST_F(PipelineSharedUseTest, BackgroundReleaseDoesNotSaveOrClearEditorState) {
   auto input   = std::make_shared<ImageBuffer>(std::move(encoded));
   {
     std::lock_guard<std::mutex> render_lock(live->pipeline_->GetRenderLock());
-    live->pipeline_->SetForceCPUOutput(true);
-    live->pipeline_->SetEnableCache(true);
-    live->pipeline_->SetDecodeRes(DecodeRes::EIGHTH);
-    ASSERT_NO_THROW(live->pipeline_->Apply(input));
+    PipelineApplyRequest request;
+    request.geometry.resolution.max_edge = 4096;
+    request.geometry.resolution.quality  = RenderQuality::Export;
+    request.decode_res                   = DecodeRes::EIGHTH;
+    request.cache_policy                 = RenderCachePolicy::UseSessionCache;
+    request.require_host_output          = true;
+    ASSERT_NO_THROW(live->pipeline_->Apply(input, request));
   }
   const auto prepared_before = SessionPreparedSourceCount(*live->pipeline_);
   const auto session_textures_before = SessionTexturePoolEntries(*live->pipeline_);
@@ -1052,6 +1106,159 @@ TEST_F(PipelineSharedUseTest, ConcurrentThumbnailAndExportDoNotChangeDocumentOut
   pipelines->SavePipeline(live);
   std::error_code ec;
   std::filesystem::remove_all(export_dir, ec);
+}
+
+// Expected files hold the thumbnail (RGBA8, k256) and PNG export (RGB16, 256 px long edge) of
+// mfzoty.dng with exposure +0.75 EV, a crop, and a 3 degree rotation in the document. They were
+// rendered at 5708f139 on Windows CUDA, before the executor lost its stage table. The thumbnail
+// is 8-bit, so a 1/1024 limit means identical codes; the 16-bit export allows 1/1024 of range.
+TEST_F(PipelineSharedUseTest, ThumbnailAndExportRenderFromDocumentOnly) {
+  if (!std::filesystem::exists(LinearDngPath())) {
+    GTEST_SKIP() << "Sample DNG file is missing: " << LinearDngPath().string();
+  }
+  ProjectService project(db_path_, meta_path_);
+  auto           pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  const auto     ids       = ImportLinearDng(project, pipelines);
+  ASSERT_NE(ids.first, 0u);
+  auto live = pipelines->LoadPipeline(ids.first);
+  ASSERT_NE(live, nullptr);
+  {
+    std::lock_guard<std::mutex> render_lock(live->pipeline_->GetRenderLock());
+    auto* exposure = live->document_->PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure());
+    ASSERT_NE(exposure, nullptr);
+    exposure->LoadJson({{"exposure_ev", 0.75f}});
+    live->document_->Geometry().SetCropRect({0.1f, 0.15f, 0.7f, 0.6f});
+    live->document_->Geometry().SetRotationDegrees(3.0f);
+    live->dirty_ = true;
+  }
+
+  ThumbnailService thumbnails(project.GetSleeveService(), project.GetImagePoolService(), pipelines);
+  const auto       thumbnail = GetThumbnailDetailedBlocking(thumbnails, ids.first, ids.second,
+                                                            ThumbnailResolution::k256);
+  ASSERT_EQ(thumbnail.status, ThumbnailRequestStatus::kReady) << thumbnail.message;
+  ASSERT_NE(thumbnail.guard, nullptr);
+  ASSERT_NE(thumbnail.guard->thumbnail_buffer_, nullptr);
+  const cv::Mat thumbnail_pixels = HostPixels(*thumbnail.guard->thumbnail_buffer_);
+
+  const auto export_dir =
+      std::filesystem::temp_directory_path() /
+      ("pipeline_document_only_export_" +
+       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  std::filesystem::create_directories(export_dir);
+  ExportService export_service(project.GetSleeveService(), project.GetImagePoolService(), pipelines);
+  ExportTask    task;
+  task.sleeve_id_                = ids.first;
+  task.image_id_                 = ids.second;
+  task.options_.format_          = ImageFormatType::PNG;
+  task.options_.bit_depth_       = ExportFormatOptions::BIT_DEPTH::BIT_16;
+  task.options_.export_path_     = export_dir / "document-only.png";
+  task.options_.resize_enabled_  = true;
+  task.options_.max_length_side_ = 256;
+  task.recipe_                   = ExportRecipe::FromLegacyOptions(task.options_);
+  {
+    std::lock_guard<std::mutex> lock(live->pipeline_->GetRenderLock());
+    task.recipe_->output_color_ =
+        ExportColorProfileFromDrt(live->document_->Drt()->Params().Params());
+  }
+  export_service.EnqueueExportTask(task);
+  std::promise<std::shared_ptr<std::vector<ExportResult>>> export_done;
+  auto export_fut = export_done.get_future();
+  export_service.ExportAll([&export_done](std::shared_ptr<std::vector<ExportResult>> results) {
+    export_done.set_value(std::move(results));
+  });
+  ASSERT_EQ(export_fut.wait_for(120s), std::future_status::ready);
+  auto export_results = export_fut.get();
+  ASSERT_NE(export_results, nullptr);
+  ASSERT_EQ(export_results->size(), 1u);
+  ASSERT_TRUE((*export_results)[0].success_) << (*export_results)[0].message_;
+  const cv::Mat export_pixels = ReadImagePixels((*export_results)[0].output_path_);
+  ASSERT_FALSE(export_pixels.empty()) << (*export_results)[0].output_path_.string();
+  ASSERT_EQ(export_pixels.depth(), CV_16U);
+
+  thumbnails.ReleaseThumbnail(ThumbnailCacheKey{ids.first, ThumbnailResolution::k256});
+  pipelines->SavePipeline(live);
+  std::error_code ec;
+  std::filesystem::remove_all(export_dir, ec);
+
+  if (const char* record_dir = std::getenv("ALCEDO_RECORD_EXPECTED_PIXELS_DIR")) {
+    const std::filesystem::path out(record_dir);
+    ASSERT_TRUE(WriteImagePixels(out / "mfzoty_document_edit_thumbnail256_expected_rgba8.png",
+                                 thumbnail_pixels));
+    ASSERT_TRUE(WriteImagePixels(out / "mfzoty_document_edit_export256_expected_rgb16.png",
+                                 export_pixels));
+    GTEST_SKIP() << "Recorded expected pixels to " << out.string();
+  }
+
+  const cv::Mat expected_thumbnail =
+      ReadImagePixels(ExpectedPixelPath("mfzoty_document_edit_thumbnail256_expected_rgba8.png"));
+  const cv::Mat expected_export =
+      ReadImagePixels(ExpectedPixelPath("mfzoty_document_edit_export256_expected_rgb16.png"));
+  ASSERT_FALSE(expected_thumbnail.empty());
+  ASSERT_FALSE(expected_export.empty());
+  ASSERT_EQ(thumbnail_pixels.size(), expected_thumbnail.size());
+  ASSERT_EQ(thumbnail_pixels.type(), expected_thumbnail.type());
+  ASSERT_EQ(export_pixels.size(), expected_export.size());
+  ASSERT_EQ(export_pixels.type(), expected_export.type());
+  EXPECT_LE(MaxNormalizedDifference(thumbnail_pixels, expected_thumbnail), 1.0 / 1024.0);
+  EXPECT_LE(MaxNormalizedDifference(export_pixels, expected_export), 1.0 / 1024.0);
+}
+
+// A separate fixture with no operator registration: ctest runs each discovered test in its own
+// process, so nothing in this process fills the legacy operator registry. At 5708f139 the
+// executor constructor built the stage table through that registry and this test crashed.
+class PipelineExecutorWithoutOperatorRegistryTest : public ::testing::Test {
+ protected:
+  std::filesystem::path db_path_;
+  std::filesystem::path meta_path_;
+
+  void SetUp() override {
+    TimeProvider::Refresh();
+    const auto stamp = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    db_path_   = std::filesystem::temp_directory_path() / ("executor_no_registry_" + stamp + ".db");
+    meta_path_ = std::filesystem::temp_directory_path() / ("executor_no_registry_" + stamp + ".json");
+  }
+
+  void TearDown() override {
+    std::error_code ec;
+    std::filesystem::remove(db_path_, ec);
+    std::filesystem::remove(meta_path_, ec);
+  }
+};
+
+TEST_F(PipelineExecutorWithoutOperatorRegistryTest, ExecutorConstructsWithoutOperatorRegistry) {
+  if (!std::filesystem::exists(LinearDngPath())) {
+    GTEST_SKIP() << "Sample DNG file is missing: " << LinearDngPath().string();
+  }
+  ProjectService project(db_path_, meta_path_);
+  auto           pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  const auto     ids       = ImportLinearDng(project, pipelines);
+  ASSERT_NE(ids.first, 0u);
+  auto live = pipelines->LoadPipeline(ids.first);
+  ASSERT_NE(live, nullptr);
+
+  auto executor = std::make_shared<CPUPipelineExecutor>();
+  executor->SetPipelineDocument(live->document_);
+
+  auto img = project.GetImagePoolService()->Read<std::shared_ptr<Image>>(
+      ids.second, [](const std::shared_ptr<Image>& image) { return image; });
+  ASSERT_NE(img, nullptr);
+  auto input = std::make_shared<ImageBuffer>(ByteBufferLoader::LoadByteBufferFromImage(img));
+
+  PipelineApplyRequest request;
+  request.decode_res                   = DecodeRes::EIGHTH;
+  request.cache_policy                 = RenderCachePolicy::BypassSessionCache;
+  request.require_host_output          = true;
+  request.geometry.resolution.max_edge = 256;
+  std::shared_ptr<ImageBuffer> output;
+  {
+    std::lock_guard<std::mutex> render_lock(executor->GetRenderLock());
+    ASSERT_NO_THROW(output = executor->Apply(input, request));
+  }
+  ASSERT_NE(output, nullptr);
+  const cv::Mat pixels = HostPixels(*output);
+  ASSERT_FALSE(pixels.empty());
+  EXPECT_LE(std::max(pixels.cols, pixels.rows), 256);
+  pipelines->SavePipeline(live);
 }
 
 }  // namespace alcedo

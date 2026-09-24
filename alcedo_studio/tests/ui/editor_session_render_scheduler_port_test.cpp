@@ -12,7 +12,6 @@
 #include <memory>
 
 #include "app/pipeline_service.hpp"
-#include "edit/operators/operator_registeration.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
 #include "image/image.hpp"
 #include "image/image_buffer.hpp"
@@ -86,7 +85,6 @@ auto MakeRequest(std::uint64_t request_id, std::uint64_t image_load_request,
 
 auto MakeReadyContext(std::uint64_t epoch, sl_element_id_t element_id, image_id_t image_id,
                       alcedo::PresentationSinkId sink_id = 7) -> EditorRenderSessionContext {
-  RegisterAllOperators();
   EditorRenderSessionContext context;
   context.epoch                = epoch;
   context.element_id           = element_id;
@@ -118,15 +116,14 @@ TEST(EditorSessionRenderSchedulerPortTest,
   EXPECT_EQ(scheduler->context_payload_load_count(), 0u);
 }
 
-// Configure runs under the render lock before Apply. It attaches the frame sink and writes no
-// parameter: the stage table, exported here only as a check, stays equal for a content render.
+// Configure runs under the render lock before Apply. It only attaches the frame sink; the executor
+// holds no parameter values that configure could write.
 TEST(EditorSessionRenderSchedulerPortTest, RenderPortConfiguresOnlyFrameSinkUnderRenderLock) {
   auto               scheduler = std::make_shared<EditorSessionRenderSchedulerPort>();
   RecordingFrameSink sink;
   scheduler->SetSinkResolver([&sink] { return static_cast<alcedo::IFrameSink*>(&sink); });
   auto       context            = MakeReadyContext(51, 22, 11);
   const auto executor           = context.pipeline_guard->pipeline_;
-  const auto stage_table_before = executor->ExportPipelineParams();
   ASSERT_EQ(executor->GetFrameSink(), nullptr);
   scheduler->InstallSessionContext(std::move(context));
 
@@ -136,7 +133,6 @@ TEST(EditorSessionRenderSchedulerPortTest, RenderPortConfiguresOnlyFrameSinkUnde
   scheduler->WaitForSessionIdle(51);
 
   EXPECT_EQ(executor->GetFrameSink(), &sink);
-  EXPECT_EQ(executor->ExportPipelineParams(), stage_table_before);
 }
 
 TEST(EditorSessionRenderSchedulerPortTest, ViewDrivenReasonsDisableScopeFrameReplacement) {
@@ -399,7 +395,6 @@ TEST(EditorSessionRenderSchedulerPortTest,
 
 TEST(EditorSessionRenderSchedulerPortTest,
      GeometryOverlayIntentSetsUncroppedSourceOnlyForEditorRequests) {
-  RegisterAllOperators();
   auto overlay                         = MakeRequest(91, 5);
   overlay.intent.geometry_overlay_only = true;
   const auto overlay_desc              = MakeEditorRenderDesc(overlay);

@@ -165,7 +165,6 @@ TEST(GpuDagModelGraph, ApplyOntoKeepsMaskCameraProfileAndUpdatesExposure) {
   EXPECT_EQ(document.Graph().NodeCount(), 3u);
   EXPECT_FALSE(document.TopologyDirty());
   EXPECT_NE(document.PrimaryGrade()->FindMask(MaskId{"mask.radial"}), nullptr);
-  EXPECT_TRUE(AllowsLegacyStageAdapterRemirror(document));
   EXPECT_EQ(document.Develop()->Params().Params().camera_profile, profile_before);
   EXPECT_EQ(document.Develop()->Params().Params().demosaic_method, method_before);
   const auto* exposure = dynamic_cast<const ExposureModel*>(

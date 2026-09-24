@@ -75,10 +75,10 @@ class EditorColorTempModel : public EditorAdjustmentModelBase {
   [[nodiscard]] Q_INVOKABLE QString paramsJson() const;
 
   /// Snapshot load helper: mode string ("as_shot"/"custom"), display CCT/tint, supported.
-  /// Prefer loadFromOperatorParams when the payload is ColorTempOp::GetParams shape.
+  /// Prefer loadFromOperatorParams when the payload is a `color_temp` panel projection.
   Q_INVOKABLE void loadFromParams(const QString& mode, double cct, double tint, bool supported);
 
-  /// Load from ColorTempOp::GetParams() / SetOperator JSON (or the nested color_temp object).
+  /// Load from the `color_temp` panel projection object (or its nested color_temp object).
   /// Keys: mode, custom_cct, custom_tint, as_shot_cct, as_shot_tint (+ legacy aliases).
   /// Does not submit. Ignores calls while a pointer drag is open.
   Q_INVOKABLE void loadFromOperatorParams(const QVariantMap& params);

@@ -7,8 +7,10 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <optional>
+#include <string>
+#include <vector>
 
-#include "edit/pipeline/pipeline_cpu.hpp"
 #include "json.hpp"
 #include "storage/mapper/duckorm/duckdb_types.hpp"
 #include "storage/mapper/mapper.hpp"
@@ -22,10 +24,10 @@ struct PipelineMapperParams {
 };
 
 /**
- * @brief Single-table mapper for PipelineParam rows and CPUPipelineExecutor snapshots.
+ * @brief Single-table mapper for PipelineParam rows. Each row holds one pipeline document JSON.
  */
-class PipelineMapper : public Mapper<PipelineMapper, std::shared_ptr<CPUPipelineExecutor>,
-                                     PipelineMapperParams, sl_element_id_t>,
+class PipelineMapper : public Mapper<PipelineMapper, PipelineMapperParams, PipelineMapperParams,
+                                     sl_element_id_t>,
                        public FieldReflectable<PipelineMapper> {
  private:
   static constexpr uint32_t    field_count_                                      = 2;
@@ -37,15 +39,7 @@ class PipelineMapper : public Mapper<PipelineMapper, std::shared_ptr<CPUPipeline
 
  public:
   static auto FromRawData(std::vector<duckorm::VarTypes>&& data) -> PipelineMapperParams;
-  static auto ToParams(const std::shared_ptr<CPUPipelineExecutor> source) -> PipelineMapperParams;
-  static auto FromParams(PipelineMapperParams&& param) -> std::shared_ptr<CPUPipelineExecutor>;
-
-  auto        GetPipelineParamByFileId(const sl_element_id_t file_id)
-      -> std::shared_ptr<CPUPipelineExecutor>;
-  void               UpdatePipelineParamByFileId(const sl_element_id_t                      file_id,
-                                                 const std::shared_ptr<CPUPipelineExecutor> pipeline);
-
-  /** @brief Read the stored pipeline JSON without constructing a legacy executor. */
+  /** @brief Read the stored pipeline document JSON; nullopt when the row is absent. */
   [[nodiscard]] auto GetPipelineJsonByFileId(sl_element_id_t file_id)
       -> std::optional<nlohmann::json>;
   /** @brief Persist the authoritative format-version-2 pipeline document JSON. */

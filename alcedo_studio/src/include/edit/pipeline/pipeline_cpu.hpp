@@ -4,20 +4,13 @@
 
 #pragma once
 
-#include <array>
-#include <cstdint>
-#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
 
-#include "edit/operators/op_base.hpp"
 #include "edit/pipeline/pipeline_accelerator.hpp"
 #include "edit/runtime/pipeline_apply_request.hpp"
-#include "edit/pipeline/pipeline_stage.hpp"
 #include "image/image_buffer.hpp"
-#include "pipeline.hpp"
-#include "pipeline_stage.hpp"
 #include "type/type.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 
@@ -46,41 +39,30 @@ class OpenClBackend;
 using OpenClRenderer        = Renderer<OpenClBackend>;
 using OpenClProductRenderer = OpenClRenderer;
 #endif
-class CPUPipelineExecutor : public PipelineExecutor {
+
+/**
+ * @brief Binds one PipelineDocument to the GPU DAG renderer of the selected backend.
+ *
+ * The executor owns the render lock, the accelerator selection, the attached frame sink, the
+ * bound file id, and one lazily created renderer per compiled backend. It owns no parameter
+ * values: every render reads the bound document.
+ */
+class CPUPipelineExecutor {
  private:
-  sl_element_id_t                                                             bound_file_id_ = 0;
-  bool                                                                        enable_cache_  = true;
-  std::array<PipelineStage, static_cast<int>(PipelineStageName::Stage_Count)> stages_;
+  sl_element_id_t              bound_file_id_ = 0;
 
   // Sole ownership of the live pipeline for one frame of work: whoever holds
-  // this lock may configure, Apply (including present slot wait), or rebuild
-  // stages. Render holds it for the whole task; history waits for it. Do not
+  // this lock may configure, Apply (including present slot wait), or rebind the
+  // document. Render holds it for the whole task; history waits for it. Do not
   // introduce a second occupancy counter — that is the same ownership question.
-  std::mutex                                                                  render_lock_;
+  std::mutex                   render_lock_;
 
-  OperatorParams                                                              global_params_;
+  AcceleratorBackendPreference accelerator_preference_       = AcceleratorBackendPreference::Auto;
+  GpuBackendKind               resolved_accelerator_backend_ = GpuBackendKind::None;
 
-  bool                                  is_thumbnail_     = false;
-
-  bool                                  force_cpu_output_ = false;
-  DecodeRes                             decode_res_       = DecodeRes::FULL;
-  std::function<bool()>                 cancel_requested_;
-  AcceleratorBackendPreference        accelerator_preference_ = AcceleratorBackendPreference::Auto;
-  GpuBackendKind                      resolved_accelerator_backend_ = GpuBackendKind::None;
-
-  nlohmann::json                      render_params_                = {};
-  std::optional<ViewportRenderRegion> render_request_viewport_      = std::nullopt;
-
-  static constexpr PipelineBackend    backend_                      = PipelineBackend::CPU;
-
-  std::vector<PipelineStage*>         exec_stages_;
-  std::unique_ptr<PipelineStage>      merged_stages_;
-  IFrameSink*                         frame_sink_ = nullptr;
-  FrameCompletionSubmission           bound_frame_submission_{};
+  IFrameSink*                  frame_sink_                   = nullptr;
 #if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
   std::shared_ptr<PipelineDocument> pipeline_document_;
-  // Used only by the existing service load/save boundary, never by Apply.
-  bool                              mirror_legacy_stage_adapter_ = false;
 #endif
 #ifdef HAVE_CUDA
   std::shared_ptr<CudaRenderer> cuda_product_renderer_;
@@ -92,28 +74,19 @@ class CPUPipelineExecutor : public PipelineExecutor {
   std::shared_ptr<OpenClRenderer> opencl_product_renderer_;
 #endif
 
-  void ResetStages();
-
-  void ResetExecutionStagesCache();
-
-  void SetTemplateParams();
-  void ResolveAcceleratorBackend();
-  void ApplyAcceleratorBackendToStages();
-  void ApplyRuntimeRawDecodeBackend();
-
  public:
+  /// Resolve the Auto accelerator preference. No document is bound yet.
   CPUPipelineExecutor();
-  CPUPipelineExecutor(bool enable_cache);
 
-  void               SetBoundFile(sl_element_id_t file_id) override { bound_file_id_ = file_id; }
-  auto               GetBoundFile() const -> sl_element_id_t override { return bound_file_id_; }
+  void               SetBoundFile(sl_element_id_t file_id) { bound_file_id_ = file_id; }
+  [[nodiscard]] auto GetBoundFile() const -> sl_element_id_t { return bound_file_id_; }
 
-  void               SetEnableCache(bool enable_cache);
-  auto               GetBackend() -> PipelineBackend override;
-
-  void               SetForceCPUOutput(bool force) override { force_cpu_output_ = force; }
-  void               SetCancelRequested(std::function<bool()> cancel_requested);
-
+  /**
+   * @brief Select the accelerator for later renders.
+   * @pre Caller holds GetRenderLock() or has exclusive access.
+   * Existing renderers and the attached frame sink are kept. A render with a backend that has no
+   * compiled renderer throws; no other backend runs in its place.
+   */
   void               SetAcceleratorBackendPreference(AcceleratorBackendPreference preference);
   [[nodiscard]] auto GetAcceleratorBackendPreference() const -> AcceleratorBackendPreference {
     return accelerator_preference_;
@@ -124,20 +97,11 @@ class CPUPipelineExecutor : public PipelineExecutor {
 
   auto GetRenderLock() -> std::mutex& { return render_lock_; }
 
-  auto GetStage(PipelineStageName stage) -> PipelineStage& override;
-  /** @brief Render encoded input using the bound document and current request settings.
-   * @pre Caller holds GetRenderLock(); camera/profile data is already loaded.
-   * @throws std::runtime_error for missing document/backend, decode, GPU or presentation failure.
-   * Persistent Model values, nodes and edges are never changed; runtime caches may be updated.
-   */
-  auto Apply(std::shared_ptr<ImageBuffer> input) -> std::shared_ptr<ImageBuffer> override;
-
   /**
    * @brief Render using an immutable per-task request. Does not write decode, cache, ROI,
    *        or host-output onto executor members.
-   * @pre Caller holds GetRenderLock(); camera/profile data is already loaded.
-   * @param request Carries the cancel callback; Apply does not store it on the executor or
-   *        on any stage operator.
+   * @pre Caller holds GetRenderLock(); camera/profile data is already bound on the document.
+   * @param request Carries the cancel callback; Apply does not store it on the executor.
    * @throws std::runtime_error for missing document/backend, decode, GPU, or presentation failure.
    *         Failures do not switch executor cache/decode mode. Bypass ExactRelease scratch is
    *         released after GPU last-use or on the failure path.
@@ -146,107 +110,32 @@ class CPUPipelineExecutor : public PipelineExecutor {
       -> std::shared_ptr<ImageBuffer>;
 
   /**
-   * @brief Select the format-version-2 document used by the GPU DAG product path.
+   * @brief Select the document used by the GPU DAG product path.
    *
    * @param document Graph owned by the caller; retains shared ownership without changing values.
-   * @param mirror_legacy_stage_adapter Existing service load/save bookkeeping only.
-   *        Apply never reads stage parameters, regardless of this flag or output destination.
    * @pre Caller holds GetRenderLock() or has exclusive access before publication.
    * @throws std::invalid_argument when document is null; retains the prior binding.
    */
-  void SetPipelineDocument(std::shared_ptr<PipelineDocument> document,
-                           bool                              mirror_legacy_stage_adapter = false);
+  void               SetPipelineDocument(std::shared_ptr<PipelineDocument> document);
   [[nodiscard]] auto HasGpuDagDocument() const -> bool;
   [[nodiscard]] auto GpuDagDocument() const -> std::shared_ptr<PipelineDocument>;
-  [[nodiscard]] auto MirrorsLegacyStageAdapter() const -> bool;
 
-  void SetPreviewMode(bool is_preview);
-
-  void DetachFrameSink();
-
-  // Re-attach a frame sink without rebuilding execution stages.
-  // Must be called under render_lock_.
-  void AttachFrameSink(IFrameSink* frame_sink);
-
-  void SetExecutionStages();
-  void SetExecutionStages(IFrameSink* frame_sink);
-  void ResetExecutionStages();
+  /// Attach the editor frame sink that later requests read. Caller must hold render_lock_.
+  void AttachFrameSink(IFrameSink* frame_sink) { frame_sink_ = frame_sink; }
+  /// Clear the attached frame sink so no later request presents to it. Caller holds render_lock_.
+  void DetachFrameSink() { frame_sink_ = nullptr; }
 
   // Returns the raw frame sink pointer. Caller must hold render_lock_.
   auto GetFrameSink() const -> IFrameSink* { return frame_sink_; }
 
+  /// Viewport region of the attached frame sink, or nullopt when no sink is attached.
   auto GetViewportRenderRegion() const -> std::optional<ViewportRenderRegion>;
-  /// Freeze the viewport geometry carried by the current render request.
-  /// A null value explicitly means full-frame rendering; Apply never re-reads live UI state.
-  void SetRenderRequestViewport(std::optional<ViewportRenderRegion> viewport) {
-    render_request_viewport_ = std::move(viewport);
-  }
-  void BindFrameSubmission(const FramePreviewMetadata& metadata, FramePresentationMode mode);
-  [[nodiscard]] auto BoundFrameSubmission() const -> FrameCompletionSubmission;
-
-  auto               GetGlobalParams() -> OperatorParams& override { return global_params_; }
 
   /**
-   * @brief Serialize the pipeline parameters to JSON
-   *
-   * @return nlohmann::json
-   */
-  auto               ExportPipelineParams() const -> nlohmann::json override;
-  /**
-   * @brief Set the pipeline parameters from JSON. It will reset all stages and operators, as well
-   * as cache. After importing, you need to call SetExecutionStages() to rebuild the execution
-   * stages.
-   *
-   * @param j
-   */
-  void               ImportPipelineParams(const nlohmann::json& j) override;
-
-  /** @brief Set request ROI in reference-image pixels; does not write persistent parameters.
-   * @pre Caller holds GetRenderLock() or exclusive initialization access.
-   */
-  void SetRenderRegion(int x, int y, float scale_factor_x, float scale_factor_y = -1.0f,
-                       int reference_width = 0, int reference_height = 0) override;
-  /// Set the request output limit under GetRenderLock(); full_res disables the limit.
-  void SetRenderRes(bool full_res, int max_side_length = 2048) override;
-  /// Set the request's resize algorithm under GetRenderLock(); invalid enum values throw.
-  void SetResizeDownsampleAlgorithm(ResizeDownsampleAlgorithm algorithm) override;
-  /// Select RAW decode resolution for the request under GetRenderLock(), without editing a Model.
-  void SetDecodeRes(DecodeRes res);
-
-  void               RegisterAllOperators();
-  void               ResetToCleanBaselineAdjustments();
-
-  void               InitDefaultPipeline();
-
-  /**
-   * @brief Install image-local RAW camera/profile metadata during import or explicit load.
-   * @pre Caller holds GetRenderLock() or exclusive initialization access. A document is bound.
-   * Binds the document camera profile through BindImportedCameraProfile, then updates the
-   * import-stage fields that the stage mirror still writes. Never call from a render task.
-   */
-  void               InjectRawMetadata(const RawRuntimeColorContext& ctx);
-
-  /**
-   * @brief Clear all intermediate image buffers from all stages.
-   *        Call this after pipeline execution when you want to release memory
-   *        while keeping the pipeline configuration intact.
+   * @brief Release the session caches of every created renderer.
+   * @pre Caller holds GetRenderLock(). The document binding and the frame sink are kept.
    */
   void               ClearAllIntermediateBuffers();
-
-  /**
-   * @brief Release persistent GPU allocations held by execution stages.
-   *        Useful for batch export to avoid holding large VRAM allocations
-   *        across many cached pipelines.
-   */
-  void               ReleaseAllGPUResources();
-
-  [[nodiscard]] auto DebugGetMergedStageScratchBytes() const -> size_t;
-
-  /// Stable identity of the merged GPU stage. Changes only when the stage is
-  /// (re)created — which also recreates the LLF highlight/shadow reference
-  /// cache. Used by tests to assert re-attaching a frame sink does not wipe
-  /// the cross-frame LLF mask cache (the 42ed19b CanReuseReferenceForRoi path).
-  [[nodiscard]] auto DebugGetMergedStageIdentity() const -> std::uintptr_t;
 
 #ifdef HAVE_CUDA
   [[nodiscard]] auto DebugCudaRenderer() -> CudaRenderer* { return cuda_product_renderer_.get(); }

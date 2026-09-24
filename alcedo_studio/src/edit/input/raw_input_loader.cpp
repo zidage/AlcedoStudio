@@ -498,8 +498,8 @@ void FillColorContext(LibRaw& raw, RawRuntimeColorContext& ctx) {
   ctx.camera_make_  = raw.imgdata.idata.make;
   ctx.camera_model_ = raw.imgdata.idata.model;
 
-  // Develop lens calibration reads these fields from PreparedRawInput. The CPU path
-  // received them through InjectRawMetadata; LoadEncoded must copy them from LibRaw.
+  // Develop lens calibration reads these fields from PreparedRawInput, so LoadEncoded must copy
+  // them from LibRaw.
   ctx.lens_make_    = TrimLibRawField(raw.imgdata.lens.LensMake);
   ctx.lens_model_   = TrimLibRawField(raw.imgdata.lens.Lens);
   if (ctx.lens_model_.empty()) {

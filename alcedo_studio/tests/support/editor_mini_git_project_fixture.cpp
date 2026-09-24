@@ -13,7 +13,6 @@
 #include "edit/history/commit_clock_test_access.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
-#include "edit/operators/operator_registeration.hpp"
 #include "json.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
 #include "utils/clock/time_provider.hpp"
@@ -53,7 +52,6 @@ auto DocumentWithExposure(float exposure) -> PipelineDocument {
 
 void EditorMiniGitProjectFixture::SetUp() {
   TimeProvider::Refresh();
-  RegisterAllOperators();
   edit_history_test::CommitClockAccess::ResetGlobal(1'000'000'000ULL);
 
   const auto stamp =

@@ -26,7 +26,6 @@
 #include "app/import_service.hpp"
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
-#include "edit/operators/operator_registeration.hpp"
 #include "image/image.hpp"
 #include "type/supported_file_type.hpp"
 #include "utils/clock/time_provider.hpp"
@@ -742,7 +741,6 @@ class SemanticGenerationServiceTest : public ::testing::Test {
  protected:
   void SetUp() override {
     TimeProvider::Refresh();
-    RegisterAllOperators();
     const auto unique = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
     db_path_ = std::filesystem::temp_directory_path() / ("semantic_generation_" + unique + ".db");
     meta_path_ =

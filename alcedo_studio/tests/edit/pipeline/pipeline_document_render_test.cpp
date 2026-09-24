@@ -10,14 +10,15 @@
 #include <iterator>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <vector>
 
 #include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
-#include "edit/operators/operator_registeration.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
+#include "edit/runtime/pipeline_apply_request.hpp"
 #include "edit/runtime/cuda/cuda_product_renderer.hpp"
 #include "image/dng_color_profile_import.hpp"
 #include "image/metadata_extractor.hpp"
@@ -55,7 +56,6 @@ class PixelFrameSink final : public IFrameSink {
 class PipelineDocumentRenderTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    RegisterAllOperators();
     const auto path = std::filesystem::path(TEST_IMG_PATH) / "raw/linear_dng/mfzoty.dng";
     ASSERT_TRUE(std::filesystem::exists(path)) << path.string();
     std::ifstream             stream(path, std::ios::binary);
@@ -78,13 +78,10 @@ class PipelineDocumentRenderTest : public ::testing::Test {
     ASSERT_TRUE(imported_.color_matrices_valid_);
     input_    = std::make_shared<ImageBuffer>(std::move(bytes));
     document_ = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
+    BindImportedCameraProfile(*document_, imported_);
     executor_ = std::make_unique<CPUPipelineExecutor>();
     executor_->SetAcceleratorBackendPreference(AcceleratorBackendPreference::CUDA);
-    executor_->SetPipelineDocument(document_, true);
-    executor_->InjectRawMetadata(imported_);
-    executor_->SetDecodeRes(DecodeRes::FULL);
-    executor_->SetRenderRes(false, 256);
-    executor_->SetEnableCache(true);
+    executor_->SetPipelineDocument(document_);
   }
 
   /** @brief Apply an exposure edit to the same persistent Model used by the executor. */
@@ -94,12 +91,26 @@ class PipelineDocumentRenderTest : public ::testing::Test {
         ->LoadJson({{"exposure_ev", ev}});
   }
 
+  /** @brief Build the request the scheduler sends for an editor (sink) or host render. */
+  auto MakeRequest(bool host) -> PipelineApplyRequest {
+    PipelineApplyRequest request;
+    request.geometry.resolution.max_edge = max_edge_;
+    request.geometry.resolution.quality  = host ? RenderQuality::Export : RenderQuality::Preview;
+    if (visible_rect_.has_value()) {
+      request.geometry.view.visible_rect_in_edit_space = *visible_rect_;
+    }
+    request.decode_res          = decode_res_;
+    request.cache_policy        = use_session_cache_ ? RenderCachePolicy::UseSessionCache
+                                                     : RenderCachePolicy::BypassSessionCache;
+    request.require_host_output = host;
+    request.sink                = host ? nullptr : &sink_;
+    return request;
+  }
+
   /** @brief Execute with the same exclusive access required by the scheduler. */
   auto Render(bool host) -> cv::Mat {
     std::unique_lock lock(executor_->GetRenderLock());
-    executor_->SetForceCPUOutput(host);
-    executor_->AttachFrameSink(host ? nullptr : &sink_);
-    const auto result = executor_->Apply(input_);
+    const auto       result = executor_->Apply(input_, MakeRequest(host));
     if (!result) throw std::runtime_error("Missing render result");
     return host ? result->GetCPUData().clone() : sink_.pixels.clone();
   }
@@ -122,6 +133,10 @@ class PipelineDocumentRenderTest : public ::testing::Test {
         .clone();
   }
 
+  DecodeRes                            decode_res_        = DecodeRes::FULL;
+  std::uint32_t                        max_edge_          = 256;
+  bool                                 use_session_cache_ = true;
+  std::optional<NormalizedRect>        visible_rect_;
   RawRuntimeColorContext               imported_;
   std::shared_ptr<ImageBuffer>         input_;
   std::shared_ptr<PipelineDocument>    document_;
@@ -131,9 +146,6 @@ class PipelineDocumentRenderTest : public ::testing::Test {
 };
 
 TEST_F(PipelineDocumentRenderTest, EditorAndHostRenderUseDocumentParameters) {
-  // Stage values deliberately disagree, including a stage change between editor renders.
-  executor_->GetStage(PipelineStageName::Basic_Adjustment)
-      .SetOperator(OperatorType::EXPOSURE, {{"exposure", 9.0f}});
   SetExposure(-1.5f);
   const auto dark_reference = Reference(-1.5f);
   const auto dark_editor    = Render(false);
@@ -143,8 +155,6 @@ TEST_F(PipelineDocumentRenderTest, EditorAndHostRenderUseDocumentParameters) {
   EXPECT_LT(cv::norm(dark_editor, Reference(-1.5f, RenderQuality::Preview), cv::NORM_INF), 2e-5);
   EXPECT_LT(cv::norm(dark_host, dark_reference, cv::NORM_INF), 2e-5);
 
-  executor_->GetStage(PipelineStageName::Basic_Adjustment)
-      .SetOperator(OperatorType::EXPOSURE, {{"exposure", -9.0f}});
   SetExposure(1.5f);
   const auto bright_reference = Reference(1.5f);
   const auto bright_editor    = Render(false);
@@ -183,7 +193,7 @@ TEST_F(PipelineDocumentRenderTest, HostBypassRendersReuseOneShotDeviceAndLeaveSe
   EXPECT_GT(session_before.published_result_count, 0U);
   EXPECT_EQ(renderer->DebugOneShotDeviceIdentity(), 0U);
 
-  executor_->SetEnableCache(false);
+  use_session_cache_ = false;
   const auto host1        = Render(true);
   const auto one_shot_id  = renderer->DebugOneShotDeviceIdentity();
   const auto one_shot     = renderer->OneShotResources();
@@ -207,7 +217,7 @@ TEST_F(PipelineDocumentRenderTest, HostBypassRendersReuseOneShotDeviceAndLeaveSe
   EXPECT_EQ(renderer->OneShotResources().texture_pool_used_bytes, 0U);
   EXPECT_LT(cv::norm(host1, host2, cv::NORM_INF), 2e-5);
 
-  executor_->SetEnableCache(true);
+  use_session_cache_ = true;
   renderer->ResetStats();
   const auto editor2 = Render(false);
   EXPECT_EQ(renderer->Stats().prepared_source_hits, 1U);
@@ -218,37 +228,25 @@ TEST_F(PipelineDocumentRenderTest, HostBypassRendersReuseOneShotDeviceAndLeaveSe
 
 TEST_F(PipelineDocumentRenderTest, RenderLeavesPersistentDocumentParametersUnchanged) {
   SetExposure(0.75f);
-  const auto  before         = document_->ToJson();
-  const auto  stages_before  = executor_->ExportPipelineParams();
+  const auto  before   = document_->ToJson();
   const auto* exposure = document_->PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure());
   for (const bool host : {false, true, false}) {
     SCOPED_TRACE(host);
-    executor_->SetEnableCache(!host);
-    executor_->SetDecodeRes(host ? DecodeRes::EIGHTH : DecodeRes::FULL);
-    executor_->SetRenderRes(false, host ? 128 : 256);
-    executor_->SetResizeDownsampleAlgorithm(ResizeDownsampleAlgorithm::Bilinear);
-    ViewportRenderRegion viewport;
-    viewport.reference_width_  = 1024;
-    viewport.reference_height_ = 1024;
-    viewport.x_                = 128;
-    viewport.y_                = 128;
-    viewport.scale_x_          = 0.5f;
-    viewport.scale_y_          = 0.5f;
-    executor_->SetRenderRegion(128, 128, 0.5f, 0.5f, 1024, 1024);
-    executor_->SetRenderRequestViewport(viewport);
-    const auto pixels = Render(host);
+    use_session_cache_ = !host;
+    decode_res_        = host ? DecodeRes::EIGHTH : DecodeRes::FULL;
+    max_edge_          = host ? 128 : 256;
+    visible_rect_      = NormalizedRect{0.125f, 0.125f, 0.5f, 0.5f};
+    const auto pixels  = Render(host);
     ASSERT_FALSE(pixels.empty());
     EXPECT_TRUE(cv::checkRange(pixels));
     EXPECT_EQ(document_->ToJson(), before);
-    EXPECT_EQ(executor_->ExportPipelineParams(), stages_before);
     EXPECT_EQ(document_->PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()), exposure);
   }
   EXPECT_EQ(document_->ToJson(), before);
-  EXPECT_EQ(executor_->ExportPipelineParams(), stages_before);
 }
 
 TEST_F(PipelineDocumentRenderTest, DefaultDocumentRendersRealRawAtFullDecodeAndOutputResolution) {
-  executor_->SetRenderRes(true);
+  max_edge_         = 0;
   const auto before = document_->ToJson();
   const auto pixels = Render(true);
   ASSERT_FALSE(pixels.empty());
@@ -265,22 +263,19 @@ TEST_F(PipelineDocumentRenderTest, DefaultDocumentRendersRealRawAtFullDecodeAndO
   EXPECT_EQ(stats.pass.drt_execute, 1u);
 }
 
-TEST_F(PipelineDocumentRenderTest, MissingDocumentFailsWithoutExecutingStages) {
+TEST_F(PipelineDocumentRenderTest, MissingDocumentFailsWithoutRendering) {
   CPUPipelineExecutor unbound;
   unbound.SetAcceleratorBackendPreference(AcceleratorBackendPreference::CUDA);
-  unbound.SetExecutionStages(&sink_);
-  const auto before = unbound.ExportPipelineParams();
+  unbound.AttachFrameSink(&sink_);
   for (const bool host : {false, true}) {
-    unbound.SetForceCPUOutput(host);
     try {
-      (void)unbound.Apply(input_);
+      (void)unbound.Apply(input_, MakeRequest(host));
       FAIL() << "Missing document must fail";
     } catch (const std::runtime_error& error) {
       EXPECT_NE(std::string(error.what()).find("bound PipelineDocument"), std::string::npos);
     }
   }
   EXPECT_EQ(unbound.DebugCudaRenderer(), nullptr);
-  EXPECT_EQ(unbound.ExportPipelineParams(), before);
   EXPECT_EQ(sink_.ready_count, 0);
   EXPECT_EQ(sink_.host_frame_count, 0);
   EXPECT_TRUE(input_->buffer_valid_);
@@ -321,8 +316,8 @@ TEST_F(PipelineDocumentRenderTest, RebindingExecutorDoesNotOverwriteLoadedCamera
   EXPECT_EQ(executor_->GpuDagDocument(), loaded);
 }
 
-TEST_F(PipelineDocumentRenderTest, MissingCameraProfileFailsWithoutReadingStageMetadata) {
-  // The import-stage metadata remains valid; only the authoritative document is invalid.
+TEST_F(PipelineDocumentRenderTest, MissingCameraProfileFailsWithoutSubstituteProfile) {
+  // The imported RAW color data stays valid; only the authoritative document profile is invalid.
   auto develop                                = document_->Develop()->Params().Params();
   develop.camera_profile.color_matrices_valid = false;
   document_->Develop()->Params().ReplaceParams(develop);
@@ -349,7 +344,7 @@ TEST_F(PipelineDocumentRenderTest, CleanTopInsertedMaskGroupLeavesPixelsUnchange
   EXPECT_EQ(executor_->GpuDagDocument().get(), document_.get());
 }
 
-TEST_F(PipelineDocumentRenderTest, CpuPreferenceFailsInsteadOfExecutingLegacyStages) {
+TEST_F(PipelineDocumentRenderTest, CpuPreferenceFailsWithoutSubstituteBackend) {
   executor_->SetAcceleratorBackendPreference(AcceleratorBackendPreference::CPU);
   const auto before = document_->ToJson();
   try {

@@ -32,7 +32,8 @@
 #include "app/import_service.hpp"
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
-#include "edit/operators/operator_registeration.hpp"
+#include "edit/graph/pipeline_document.hpp"
+#include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/pipeline/default_pipeline_params.hpp"
 #include "edit/runtime/drt_display.hpp"
 #include "type/supported_file_type.hpp"
@@ -233,29 +234,32 @@ auto FindImportedEntry(const ImportLogSnapshot& snapshot, const std::filesystem:
   return nullptr;
 }
 
-void ApplyReferenceStudyAdjustments(CPUPipelineExecutor& exec, float shadow_slider,
+/// Write the study settings onto the image document through its Model owners. The Primary Color
+/// Grade of an imported image holds every adjustment below; a missing one is an error.
+void ApplyReferenceStudyAdjustments(PipelineDocument& document, float shadow_slider,
                                     float highlight_slider, float saturation_slider,
                                     const std::string& lut_path) {
-  exec.ResetToCleanBaselineAdjustments();
-
-  auto& global_params = exec.GetGlobalParams();
-  auto& basic_stage   = exec.GetStage(PipelineStageName::Basic_Adjustment);
-  auto& color_stage   = exec.GetStage(PipelineStageName::Color_Adjustment);
-
-  basic_stage.SetOperator(OperatorType::EXPOSURE,
-                          {{"exposure", pipeline_defaults::kCleanBaselineExposure}}, global_params);
-  basic_stage.SetOperator(OperatorType::CONTRAST, {{"contrast", 0.0f}}, global_params);
-  basic_stage.SetOperator(OperatorType::BLACK, {{"black", 0.0f}}, global_params);
-  basic_stage.SetOperator(OperatorType::WHITE, {{"white", 0.0f}}, global_params);
-  basic_stage.SetOperator(OperatorType::SHADOWS, {{"shadows", shadow_slider}}, global_params);
-  basic_stage.SetOperator(OperatorType::HIGHLIGHTS, {{"highlights", highlight_slider}},
-                          global_params);
-
-  color_stage.SetOperator(OperatorType::SATURATION,
-                          {{"saturation", saturation_slider}},
-                          global_params);
-  color_stage.SetOperator(OperatorType::TINT, {{"tint", 0.0f}}, global_params);
-  color_stage.SetOperator(OperatorType::LMT, {{"ocio_lmt", lut_path}}, global_params);
+  auto* grade = document.PrimaryGrade();
+  if (grade == nullptr) {
+    throw std::runtime_error("HS research export: document has no Primary Color Grade.");
+  }
+  const auto load = [grade](const OperatorTypeId& type, const nlohmann::json& params) {
+    auto* adjustment = grade->FindAdjustmentByType(type);
+    if (adjustment == nullptr) {
+      throw std::runtime_error("HS research export: missing adjustment " +
+                               std::string(type.Text()));
+    }
+    adjustment->LoadJson(params);
+  };
+  load(type_ids::Exposure(), {{"exposure_ev", pipeline_defaults::kCleanBaselineExposure}});
+  load(type_ids::Contrast(), {{"contrast", 0.0f}});
+  load(type_ids::Black(), {{"black", 0.0f}});
+  load(type_ids::White(), {{"white", 0.0f}});
+  load(type_ids::Shadows(), {{"shadows", shadow_slider}});
+  load(type_ids::Highlights(), {{"highlights", highlight_slider}});
+  // The Saturation Model stores the multiplier; the study slider uses the panel's percent scale.
+  load(type_ids::Saturation(), {{"saturation", 1.0f + saturation_slider / 100.0f}});
+  load(type_ids::Lmt(), {{"cube_path", lut_path}});
 }
 
 void RemoveIfExists(const std::filesystem::path& path) {
@@ -318,7 +322,6 @@ auto RunHsResearchExportTool(int argc, char** argv) -> int {
 
     TimeProvider::Refresh();
     Exiv2::LogMsg::setLevel(Exiv2::LogMsg::Level::mute);
-    RegisterAllOperators();
 
     std::filesystem::create_directories(options.out_dir);
     const std::filesystem::path db_path   = MakeProjectPath(options.out_dir, L".db");
@@ -351,13 +354,16 @@ auto RunHsResearchExportTool(int argc, char** argv) -> int {
         }
 
         auto pipeline_guard = pipeline_service->LoadPipeline(entry->element_id_);
-        if (!pipeline_guard || !pipeline_guard->pipeline_) {
+        if (!pipeline_guard || !pipeline_guard->pipeline_ || !pipeline_guard->document_) {
           throw std::runtime_error("Failed to load pipeline for " + PathToUtf8(raw_path));
         }
 
-        ApplyReferenceStudyAdjustments(*pipeline_guard->pipeline_, options.shadow_slider,
-                                       options.highlight_slider, options.saturation_slider,
-                                       default_lut_path);
+        {
+          std::lock_guard<std::mutex> lock(pipeline_guard->pipeline_->GetRenderLock());
+          ApplyReferenceStudyAdjustments(*pipeline_guard->document_, options.shadow_slider,
+                                         options.highlight_slider, options.saturation_slider,
+                                         default_lut_path);
+        }
         pipeline_guard->dirty_ = true;
 
         ExportTask task;

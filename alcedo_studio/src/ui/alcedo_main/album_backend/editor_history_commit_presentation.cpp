@@ -17,7 +17,6 @@
 #include "app/editor_adjustment_pipeline.hpp"
 #include "app/editor_history_types.hpp"
 #include "app/pipeline_document_history.hpp"
-#include "edit/operators/op_base.hpp"
 #include "json.hpp"
 
 namespace alcedo::ui {
@@ -166,131 +165,108 @@ auto PrettyToken(QString raw) -> QString {
   return normalized.join(QLatin1Char(' '));
 }
 
-// Per-operator display name and glyph used by the QML history rail.
+// Per-field display name and glyph used by the QML history rail. A field key that names no
+// adjustment shows the generic "Edit" row.
 
-auto DisplayName(OperatorType op) -> QString {
-  switch (op) {
-    case OperatorType::RAW_DECODE:
-      return QStringLiteral("RAW Decode");
-    case OperatorType::RESIZE:
-      return QStringLiteral("Resize");
-    case OperatorType::CROP_ROTATE:
-      return QStringLiteral("Crop / Rotate");
-    case OperatorType::EXPOSURE:
+auto DisplayName(std::optional<EditorAdjustmentField> field) -> QString {
+  if (!field.has_value()) {
+    return QStringLiteral("Edit");
+  }
+  switch (*field) {
+    case EditorAdjustmentField::Exposure:
       return QStringLiteral("Exposure");
-    case OperatorType::CONTRAST:
+    case EditorAdjustmentField::Contrast:
       return QStringLiteral("Contrast");
-    case OperatorType::WHITE:
+    case EditorAdjustmentField::Whites:
       return QStringLiteral("Whites");
-    case OperatorType::BLACK:
+    case EditorAdjustmentField::Blacks:
       return QStringLiteral("Blacks");
-    case OperatorType::SHADOWS:
+    case EditorAdjustmentField::Shadows:
       return QStringLiteral("Shadows");
-    case OperatorType::HIGHLIGHTS:
+    case EditorAdjustmentField::Highlights:
       return QStringLiteral("Highlights");
-    case OperatorType::CURVE:
+    case EditorAdjustmentField::Curve:
       return QStringLiteral("Curve");
-    case OperatorType::HLS:
-      return QStringLiteral("HSL");
-    case OperatorType::SATURATION:
+    case EditorAdjustmentField::Saturation:
       return QStringLiteral("Saturation");
-    case OperatorType::TINT:
-      return QStringLiteral("Tint");
-    case OperatorType::VIBRANCE:
+    case EditorAdjustmentField::Vibrance:
       return QStringLiteral("Vibrance");
-    case OperatorType::CST:
-      return QStringLiteral("Color Space");
-    case OperatorType::TO_WS:
-      return QStringLiteral("To Working Space");
-    case OperatorType::TO_OUTPUT:
-      return QStringLiteral("To Output");
-    case OperatorType::LMT:
-      return QStringLiteral("LUT");
-    case OperatorType::ODT:
-      return QStringLiteral("ODT");
-    case OperatorType::CLARITY:
-      return QStringLiteral("Clarity");
-    case OperatorType::SHARPEN:
-      return QStringLiteral("Sharpen");
-    case OperatorType::COLOR_WHEEL:
+    case EditorAdjustmentField::Tint:
+      return QStringLiteral("Tint");
+    case EditorAdjustmentField::Hls:
+      return QStringLiteral("HSL");
+    case EditorAdjustmentField::ColorWheel:
       return QStringLiteral("Color Wheel");
-    case OperatorType::ACES_TONE_MAPPING:
-      return QStringLiteral("ACES Tone");
-    case OperatorType::AUTO_EXPOSURE:
-      return QStringLiteral("Auto Exposure");
-    case OperatorType::LENS_CALIBRATION:
-      return QStringLiteral("Lens Profile");
-    case OperatorType::COLOR_TEMP:
-      return QStringLiteral("Color Temp");
-    case OperatorType::FILM_GRAIN:
+    case EditorAdjustmentField::Lut:
+      return QStringLiteral("LUT");
+    case EditorAdjustmentField::Clarity:
+      return QStringLiteral("Clarity");
+    case EditorAdjustmentField::Sharpen:
+      return QStringLiteral("Sharpen");
+    case EditorAdjustmentField::Drt:
+      return QStringLiteral("ODT");
+    case EditorAdjustmentField::FilmGrain:
       return QStringLiteral("Grain");
-    case OperatorType::HALATION:
+    case EditorAdjustmentField::Halation:
       return QStringLiteral("Halation");
-    case OperatorType::UNKNOWN:
-      return QStringLiteral("Edit");
+    case EditorAdjustmentField::CropRotate:
+      return QStringLiteral("Crop / Rotate");
+    case EditorAdjustmentField::RawDecode:
+      return QStringLiteral("RAW Decode");
+    case EditorAdjustmentField::LensCalibration:
+      return QStringLiteral("Lens Profile");
+    case EditorAdjustmentField::ColorTemperature:
+      return QStringLiteral("Color Temp");
   }
   return QStringLiteral("Edit");
 }
 
-auto IconResource(OperatorType op) -> QString {
-  switch (op) {
-    case OperatorType::RAW_DECODE:
-      return QStringLiteral(":/history_icons/scan-search.svg");
-    case OperatorType::RESIZE:
-      return QStringLiteral(":/history_icons/scaling.svg");
-    case OperatorType::CROP_ROTATE:
-      return QStringLiteral(":/history_icons/crop.svg");
-    case OperatorType::EXPOSURE:
+auto IconResource(std::optional<EditorAdjustmentField> field) -> QString {
+  if (!field.has_value()) {
+    return QStringLiteral(":/history_icons/sliders-horizontal.svg");
+  }
+  switch (*field) {
+    case EditorAdjustmentField::Exposure:
       return QStringLiteral(":/history_icons/sun-medium.svg");
-    case OperatorType::CONTRAST:
+    case EditorAdjustmentField::Contrast:
       return QStringLiteral(":/history_icons/contrast.svg");
-    case OperatorType::WHITE:
+    case EditorAdjustmentField::Whites:
+    case EditorAdjustmentField::Halation:
       return QStringLiteral(":/history_icons/sun.svg");
-    case OperatorType::BLACK:
+    case EditorAdjustmentField::Blacks:
       return QStringLiteral(":/history_icons/moon.svg");
-    case OperatorType::SHADOWS:
+    case EditorAdjustmentField::Shadows:
       return QStringLiteral(":/history_icons/square-split-horizontal.svg");
-    case OperatorType::HIGHLIGHTS:
+    case EditorAdjustmentField::Highlights:
+    case EditorAdjustmentField::Vibrance:
       return QStringLiteral(":/history_icons/sparkles.svg");
-    case OperatorType::CURVE:
+    case EditorAdjustmentField::Curve:
       return QStringLiteral(":/history_icons/chart-spline.svg");
-    case OperatorType::HLS:
-      return QStringLiteral(":/history_icons/swatch-book.svg");
-    case OperatorType::SATURATION:
+    case EditorAdjustmentField::Saturation:
       return QStringLiteral(":/history_icons/droplets.svg");
-    case OperatorType::TINT:
+    case EditorAdjustmentField::Tint:
       return QStringLiteral(":/history_icons/pipette.svg");
-    case OperatorType::VIBRANCE:
-      return QStringLiteral(":/history_icons/sparkles.svg");
-    case OperatorType::CST:
-      return QStringLiteral(":/history_icons/arrow-right-left.svg");
-    case OperatorType::TO_WS:
-      return QStringLiteral(":/history_icons/workflow.svg");
-    case OperatorType::TO_OUTPUT:
-      return QStringLiteral(":/history_icons/monitor-up.svg");
-    case OperatorType::LMT:
-      return QStringLiteral(":/history_icons/file-sliders.svg");
-    case OperatorType::ODT:
-      return QStringLiteral(":/history_icons/monitor.svg");
-    case OperatorType::CLARITY:
-      return QStringLiteral(":/history_icons/focus.svg");
-    case OperatorType::SHARPEN:
-    case OperatorType::FILM_GRAIN:
-      return QStringLiteral(":/history_icons/scan-line.svg");
-    case OperatorType::COLOR_WHEEL:
+    case EditorAdjustmentField::Hls:
+      return QStringLiteral(":/history_icons/swatch-book.svg");
+    case EditorAdjustmentField::ColorWheel:
       return QStringLiteral(":/history_icons/palette.svg");
-    case OperatorType::ACES_TONE_MAPPING:
-      return QStringLiteral(":/history_icons/git-commit-horizontal.svg");
-    case OperatorType::AUTO_EXPOSURE:
-      return QStringLiteral(":/history_icons/wand-sparkles.svg");
-    case OperatorType::LENS_CALIBRATION:
+    case EditorAdjustmentField::Lut:
+      return QStringLiteral(":/history_icons/file-sliders.svg");
+    case EditorAdjustmentField::Clarity:
+      return QStringLiteral(":/history_icons/focus.svg");
+    case EditorAdjustmentField::Sharpen:
+    case EditorAdjustmentField::FilmGrain:
+      return QStringLiteral(":/history_icons/scan-line.svg");
+    case EditorAdjustmentField::Drt:
+      return QStringLiteral(":/history_icons/monitor.svg");
+    case EditorAdjustmentField::CropRotate:
+      return QStringLiteral(":/history_icons/crop.svg");
+    case EditorAdjustmentField::RawDecode:
+      return QStringLiteral(":/history_icons/scan-search.svg");
+    case EditorAdjustmentField::LensCalibration:
       return QStringLiteral(":/history_icons/aperture.svg");
-    case OperatorType::COLOR_TEMP:
+    case EditorAdjustmentField::ColorTemperature:
       return QStringLiteral(":/history_icons/thermometer.svg");
-    case OperatorType::HALATION:
-      return QStringLiteral(":/history_icons/sun.svg");
-    case OperatorType::UNKNOWN:
-      return QStringLiteral(":/history_icons/sliders-horizontal.svg");
   }
   return QStringLiteral(":/history_icons/sliders-horizontal.svg");
 }
@@ -636,62 +612,65 @@ auto SummarizeCropRotate(const nlohmann::json& after, const nlohmann::json& befo
   return {QString(), QStringLiteral("Crop"), QStringLiteral("Geometry updated")};
 }
 
-auto BuildSummary(OperatorType op, const nlohmann::json& after, const nlohmann::json& before)
-    -> CommitSummary {
-  switch (op) {
-    case OperatorType::EXPOSURE:
+auto BuildSummary(std::optional<EditorAdjustmentField> field, const nlohmann::json& after,
+                  const nlohmann::json& before) -> CommitSummary {
+  if (!field.has_value()) {
+    return {};
+  }
+  switch (*field) {
+    case EditorAdjustmentField::Exposure:
       return SignedScalar(JsonNumberAtPath(before, {"exposure"}),
                           JsonNumberAtPath(after, {"exposure"}));
-    case OperatorType::CONTRAST:
+    case EditorAdjustmentField::Contrast:
       return SignedScalar(JsonNumberAtPath(before, {"contrast"}),
                           JsonNumberAtPath(after, {"contrast"}));
-    case OperatorType::WHITE:
+    case EditorAdjustmentField::Whites:
       return SignedScalar(JsonNumberAtPath(before, {"white"}), JsonNumberAtPath(after, {"white"}));
-    case OperatorType::BLACK:
+    case EditorAdjustmentField::Blacks:
       return SignedScalar(JsonNumberAtPath(before, {"black"}), JsonNumberAtPath(after, {"black"}));
-    case OperatorType::SHADOWS:
+    case EditorAdjustmentField::Shadows:
       return SignedScalar(JsonNumberAtPath(before, {"shadows"}),
                           JsonNumberAtPath(after, {"shadows"}));
-    case OperatorType::HIGHLIGHTS:
+    case EditorAdjustmentField::Highlights:
       return SignedScalar(JsonNumberAtPath(before, {"highlights"}),
                           JsonNumberAtPath(after, {"highlights"}));
-    case OperatorType::SATURATION:
+    case EditorAdjustmentField::Saturation:
       return SignedScalar(JsonNumberAtPath(before, {"saturation"}),
                           JsonNumberAtPath(after, {"saturation"}));
-    case OperatorType::VIBRANCE:
+    case EditorAdjustmentField::Vibrance:
       return SignedScalar(JsonNumberAtPath(before, {"vibrance"}),
                           JsonNumberAtPath(after, {"vibrance"}));
-    case OperatorType::CLARITY:
+    case EditorAdjustmentField::Clarity:
       return SignedScalar(JsonNumberAtPath(before, {"clarity"}),
                           JsonNumberAtPath(after, {"clarity"}));
-    case OperatorType::SHARPEN:
+    case EditorAdjustmentField::Sharpen:
       return SignedScalar(JsonNumberAtPath(before, {"sharpen", "offset"}),
                           JsonNumberAtPath(after, {"sharpen", "offset"}));
-    case OperatorType::FILM_GRAIN:
+    case EditorAdjustmentField::FilmGrain:
       return SignedScalar(JsonNumberAtPath(before, {"film_grain", "strength"}),
                           JsonNumberAtPath(after, {"film_grain", "strength"}));
-    case OperatorType::HALATION:
+    case EditorAdjustmentField::Halation:
       return SignedScalar(JsonNumberAtPath(before, {"halation", "strength"}),
                           JsonNumberAtPath(after, {"halation", "strength"}));
-    case OperatorType::RAW_DECODE:
+    case EditorAdjustmentField::RawDecode:
       return SummarizeRawDecode(after, before);
-    case OperatorType::LENS_CALIBRATION:
+    case EditorAdjustmentField::LensCalibration:
       return SummarizeLens(after, before);
-    case OperatorType::COLOR_TEMP:
+    case EditorAdjustmentField::ColorTemperature:
       return SummarizeColorTemp(after, before);
-    case OperatorType::HLS:
+    case EditorAdjustmentField::Hls:
       return SummarizeHls(after, before);
-    case OperatorType::COLOR_WHEEL:
+    case EditorAdjustmentField::ColorWheel:
       return SummarizeColorWheel(after, before);
-    case OperatorType::CURVE:
+    case EditorAdjustmentField::Curve:
       return SummarizeCurve(after, before);
-    case OperatorType::LMT:
+    case EditorAdjustmentField::Lut:
       return SummarizeLut(after, before);
-    case OperatorType::ODT:
+    case EditorAdjustmentField::Drt:
       return SummarizeOdt(after, before);
-    case OperatorType::CROP_ROTATE:
+    case EditorAdjustmentField::CropRotate:
       return SummarizeCropRotate(after, before);
-    default:
+    case EditorAdjustmentField::Tint:
       break;
   }
   return {};
@@ -793,10 +772,9 @@ auto PresentEditorHistoryCommit(const alcedo::EditorHistoryCommit& commit)
   const bool  after_enabled     = commit.after_enabled;
 
   EditorHistoryCommitPresentation out;
-  const auto         spec = alcedo::ResolveEditorAdjustmentField(field_key);
-  const OperatorType op   = spec.has_value() ? spec->operator_type : OperatorType::UNKNOWN;
-  out.display_name        = DisplayName(op);
-  out.icon_key            = IconResource(op);
+  const auto field = alcedo::ResolveEditorAdjustmentField(field_key);
+  out.display_name = DisplayName(field);
+  out.icon_key     = IconResource(field);
 
   nlohmann::json after    = nlohmann::json::object();
   nlohmann::json before   = nlohmann::json::object();
@@ -822,7 +800,7 @@ auto PresentEditorHistoryCommit(const alcedo::EditorHistoryCommit& commit)
       before["exposure"] = before.at("exposure_ev");
     }
   }
-  const CommitSummary summary = BuildSummary(op, after, before);
+  const CommitSummary summary = BuildSummary(field, after, before);
   out.before_text             = summary.before_text;
   out.after_text              = summary.after_text;
   out.delta_text              = summary.delta_text;

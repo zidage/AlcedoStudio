@@ -14,7 +14,6 @@
 
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
-#include "edit/pipeline/default_pipeline_params.hpp"
 #include "edit/pipeline/pipeline_accelerator.hpp"
 #ifdef HAVE_METAL
 #include "image/metal_image.hpp"
@@ -220,28 +219,10 @@ TEST_F(ThumbnailTests, MetalThumbnailGridLifecycleWithGeometryOperatorsProducesP
   ASSERT_NE(pipeline_guard, nullptr);
   ASSERT_NE(pipeline_guard->pipeline_, nullptr);
 
-  auto exec = pipeline_guard->pipeline_;
-  auto& global_params  = exec->GetGlobalParams();
-  auto& loading_stage  = exec->GetStage(PipelineStageName::Image_Loading);
-  auto& geometry_stage = exec->GetStage(PipelineStageName::Geometry_Adjustment);
-
-  // The decode backend is a runtime property of the pipeline (resolved from
-  // the accelerator preference); the params must not carry it.
-  nlohmann::json raw_params = pipeline_defaults::MakeDefaultRawDecodeParams();
-  raw_params["raw"]["backend"] = "alcedo";
-  loading_stage.SetOperator(OperatorType::RAW_DECODE, raw_params);
-
-  nlohmann::json crop_params = pipeline_defaults::MakeDefaultCropRotateParams();
-  crop_params["crop_rotate"]["enabled"]     = true;
-  crop_params["crop_rotate"]["enable_crop"] = true;
-  crop_params["crop_rotate"]["angle_degrees"] = 0.0f;
-  crop_params["crop_rotate"]["crop_rect"] = {
-      {"x", 0.12f},
-      {"y", 0.08f},
-      {"w", 0.62f},
-      {"h", 0.58f},
-  };
-  geometry_stage.SetOperator(OperatorType::CROP_ROTATE, crop_params, global_params);
+  {
+    std::unique_lock<std::mutex> render_lock(pipeline_guard->pipeline_->GetRenderLock());
+    pipeline_guard->document_->Geometry().SetCropRect({0.12f, 0.08f, 0.62f, 0.58f});
+  }
 
   pipeline_guard->dirty_ = true;
   pipeline_service->SavePipeline(pipeline_guard);

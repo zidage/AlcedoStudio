@@ -18,9 +18,10 @@
 
 #include "app/import_service.hpp"
 #include "app/project_service.hpp"
+#include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/pipeline_document.hpp"
-#include "edit/operators/operator_registeration.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
+#include "edit/runtime/pipeline_apply_request.hpp"
 #include "image/image.hpp"
 #include "image/image_buffer.hpp"
 #include "image/metadata_extractor.hpp"
@@ -100,9 +101,9 @@ auto BindDefaultDocumentWithImportedCamera(CPUPipelineExecutor& pipeline,
     return false;
   }
   auto document = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
+  BindImportedCameraProfile(*document, MetadataExtractor::ReadRawColorContextForRender(image));
   std::unique_lock lock(pipeline.GetRenderLock());
   pipeline.SetPipelineDocument(document);
-  pipeline.InjectRawMetadata(MetadataExtractor::ReadRawColorContextForRender(image));
   return true;
 }
 
@@ -156,7 +157,6 @@ class CiRawWorkflowTest : public ::testing::Test {
   void SetUp() override {
     TimeProvider::Refresh();
     Exiv2::LogMsg::setLevel(Exiv2::LogMsg::Level::mute);
-    RegisterAllOperators();
   }
 };
 
@@ -240,12 +240,14 @@ TEST_F(CiRawWorkflowTest, DefaultPipelineRendersCiRawFixture) {
   CPUPipelineExecutor pipeline;
   ASSERT_TRUE(BindDefaultDocumentWithImportedCamera(pipeline, raw_files.front()))
       << raw_files.front().string();
-  pipeline.SetForceCPUOutput(true);
+  PipelineApplyRequest request;
+  request.geometry.resolution.quality = RenderQuality::Export;
+  request.require_host_output         = true;
 
   std::shared_ptr<ImageBuffer> output;
   {
     std::unique_lock lock(pipeline.GetRenderLock());
-    output = pipeline.Apply(std::make_shared<ImageBuffer>(std::move(raw_bytes)));
+    output = pipeline.Apply(std::make_shared<ImageBuffer>(std::move(raw_bytes)), request);
   }
   ASSERT_NE(output, nullptr);
   if (!output->cpu_data_valid_) {

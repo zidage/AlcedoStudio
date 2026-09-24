@@ -12,8 +12,9 @@ resolver and the three backend switches done; CUDA and OpenCL byte tests pass, M
 unavailable, diff above the 2000-line limit (Section 14.12); the Metal DRT byte test passes on
 macOS with macOS-packed ACES 2.0 files (Section 15.12). G10.6: complete. Lens resolver, lens kernels, CUDA
 detail and grain helpers, Metal PRNG, shared headers, and `EditScope` moved; Windows and macOS
-criteria pass, except failures that exist before this phase (Section 15.12). G10.7–G10.11
-planned.
+criteria pass, except failures that exist before this phase (Section 15.12). G10.7: executor,
+services, and history presentation have no stage table; targeted suites pass; full `ctest` not
+run by user decision and manual check pending (Section 16.12). G10.8–G10.11 planned.
 
 Parent: [GPU DAG Pipeline Rebuild Phase Plan](gpu_dag_pipeline_rebuild_phase_plan.md),
 Section 44 (G10) and Section 47 (global completion criteria).
@@ -632,7 +633,7 @@ lines. Generated expected-pixel files and temporary evidence do not count.
 | G10.4 | Legacy history store removed; project format `0.9.0` | sleeve, storage, history, journal, CI | G10.3 | 900–1500 | complete (1.7k lines; Section 13.12) |
 | G10.5 | DRT resolution moved out of `ODT_Op` and `OperatorParams` on three backends | runtime DRT | G10.1 | 1300–1900 | in progress (Metal unavailable; 2.6k lines in two commits) |
 | G10.6 | Lens resolver, CUDA detail and grain helpers, shared headers, shaders, and scope target moved | runtime, CMake | G10.5 | 1000–1700 | complete (3.6k lines in three commits; Section 15.12) |
-| G10.7 | Executor and services have no stage table; history presentation uses `field_key` | executor, services, presentation | G10.3, G10.6 | 1400–1900 | planned |
+| G10.7 | Executor and services have no stage table; history presentation uses `field_key` | executor, services, presentation | G10.3, G10.6 | 1400–1900 | partial (3.4k lines, two commits; full `ctest` and manual check not run; Section 16.12) |
 | G10.8 | `CPUPipelineExecutor` renamed to `PipelineExecutor` | all users | G10.7 | 500–900 | planned |
 | G10.9 | Shared, CUDA, CPU, and operator legacy files archived out of the compile graph | CMake, archive | G10.8 | 700–1300 | planned |
 | G10.10 | OpenCL, Metal, and RawProcessor legacy files archived; packaging fixed | CMake, registry, install, tests | G10.9 | 900–1600 | planned |
@@ -2780,6 +2781,216 @@ Compare against the pre-phase record. Report known pre-existing failures by test
 ### 16.12 Completion record
 
 Use the template in Section 10.12.
+
+#### Phase G10.7 completion record (2026-09-23)
+
+**Status:** partial. The executor, services, controllers, mapper, and history presentation have no
+stage table, and every automated criterion that ran passes. Not done: the full `ctest` run
+(stopped by the user; `AGENTS.md` now allows a full run only when the user asks for it) and the
+manual Windows CUDA and OpenCL check (Section 16.10). The diff is above the 2000-line limit (see
+"Deviations").
+
+- **Source revision and branch:** based on `5708f139` (G10.6 merged) on
+  `refact/gpu-dag-g10-7-executor-without-stage-table`, commits `ffaa2f49` (`AGENTS.md` test
+  rule), `5f02da01` (tests), `99d79190` (executor, services, presentation), and this record.
+- **Actual changed modules:** `edit/pipeline/` (executor), `app/` (pipeline service, import
+  service, field table), `storage/` (pipeline mapper, element store), `edit/graph/`
+  (`AllowsLegacyStageAdapterRemirror` deleted), `ui/alcedo_main/` (history presentation, render
+  port, `main.cpp`), `ui/alcedo_studio_test_host/main.cpp`, tests, test CMake, the source check
+  script, `AGENTS.md` (test rule, user request), and the deprecated archive.
+
+**Implemented behavior**
+
+- `CPUPipelineExecutor` owns only the bound file id, the render lock, the accelerator preference
+  and resolved backend, the frame sink, the bound document, and one renderer per compiled backend
+  (`pipeline_cpu.{hpp,cpp}`: 153 + 157 lines, was 264 + 735). Deleted: the seven stages, the
+  merged stage, `OperatorParams`, `GPUPipelineWrapper` use, `mirror_legacy_stage_adapter_`, the
+  request-shaping members (`render_params_`, `render_request_viewport_`, `enable_cache_`,
+  `decode_res_`, `force_cpu_output_`, `cancel_requested_`, `bound_frame_submission_`), the
+  no-argument `Apply` (no product caller: the scheduler calls `Apply(input, request)`), and
+  `GetStage`, `GetGlobalParams`, `Export/ImportPipelineParams`, `SetExecutionStages`,
+  `ResetExecutionStages`, `RegisterAllOperators`, `ResetToCleanBaselineAdjustments`,
+  `InitDefaultPipeline`, `InjectRawMetadata`, `SetPreviewMode`, `GetBackend`,
+  `SetEnableCache`, `SetCancelRequested`, `SetRender*`, `SetDecodeRes`, `SetForceCPUOutput`,
+  `BindFrameSubmission`, `ReleaseAllGPUResources`, and the merged-stage debug accessors. The
+  constructor resolves the Auto accelerator preference, as `InitDefaultPipeline` did.
+  `SetAcceleratorBackendPreference` resolves before it assigns, so an unavailable backend keeps the
+  prior selection. `SetPipelineDocument` has no remirror flag.
+- `include/edit/pipeline/pipeline.hpp` (the `PipelineExecutor` stage interface) moved unchanged to
+  `alcedo_studio/deprecated/legacy_pipeline/src/include/edit/pipeline/pipeline.hpp`.
+- `PipelineMgmtService`: `ResetToDefaults`, `EnsureDefault*`, `ResyncGlobalParamsFromOperators`,
+  `ResetTransientPreviewState`, `BindDevelopData` (a copy of `BindImportedCameraProfile`), and
+  `InjectImageRawMetadata` are deleted. `InitializeImageRoot` calls `BindImportedCameraProfile`
+  where `InjectRawMetadata` ran. Idle cleanup detaches the frame sink instead of resetting stages.
+- `ImportService`: the pre-root `InjectRawMetadata` bind is deleted. `InitializeImageRoot` already
+  bound the same context afterwards, so the final document is unchanged.
+- `ui/alcedo_main/editor_support/controllers/pipeline_controller.{hpp,cpp}` had only stage code;
+  both moved unchanged to the archive and left `AlbumBackendLib`. The render port calls
+  `AttachFrameSink` under the render lock.
+- `PipelineMapper`: the domain type is the row itself. `ToParams`, `FromParams` (the stage-JSON
+  import), `GetPipelineParamByFileId`, `UpdatePipelineParamByFileId`, and
+  `ElementStore::Get/UpdatePipelineByElementId` are deleted (no caller).
+- `editor_adjustment_pipeline`: `EditorAdjustmentFieldSpec`, the `FieldSpec` stage table, and
+  `EditorAdjustmentFieldKey` are deleted. `ResolveEditorAdjustmentField` maps a field key or alias
+  to the new `EditorAdjustmentField` enum through one table.
+- History row presentation: `DisplayName`, `IconResource`, and `BuildSummary` take
+  `std::optional<EditorAdjustmentField>`; an unknown key keeps the "Edit" row and the sliders icon.
+  No displayed string or icon changed.
+- `RegisterAllOperators` is deleted from `main.cpp`, the test host, and every registered test
+  except the legacy operator tests (`FilmGrainOpTest`, `HalationOpTest`) that G10.9 archives.
+- Comments that named removed APIs are updated (`editor_color_temp_model.hpp`,
+  `raw_input_loader.cpp`, `legacy_pipeline_importer.hpp`, `PipelineGuard`).
+- Source checks: `NoProductCodeReadsStageTableOutsideMirror` is renamed
+  `NoProductCodeUsesStageTable`. It also rejects `SetOperator(` and `PipelineStageName::`, and it
+  allows only `edit/pipeline/pipeline_stage.*` and `edit/operators/**`. Its negative case is
+  `StageTableCheckRejectsExecutorAndServiceUse` (fixture `edit/pipeline/pipeline_cpu.cpp` and
+  `app/pipeline_service.cpp`). The stage-JSON owners are only the stage files.
+
+**Deviations from Sections 16.3–16.8**
+
+- Diff: about 3.4k lines (0.94k added, 2.47k removed) in 69 files, plus two expected-pixel PNG
+  files and the archive moves. This is above the 2000-line limit; 2.5k of the lines are deletions
+  (executor 860 lines, frame-sink stage cases 375 lines, stage-only `PipelineMapperTest` cases). It
+  landed as separate commits: `5f02da01` retargets the tests to the document (about 1.5k lines; the
+  tests compile against the old executor but need `99d79190` to run), and `99d79190` changes the
+  executor, services, controller archive, presentation, and source checks (about 1.9k lines).
+- `ThumbnailAndExportRenderFromDocumentOnly` and `ExecutorConstructsWithoutOperatorRegistry` are in
+  `PipelineSharedUseTest`, which already links `ThumbnailService` and `ExportService` and has the
+  linear DNG import helper. The registry case uses its own fixture
+  (`PipelineExecutorWithoutOperatorRegistryTest`), so nothing in its process registers operators.
+- Expected pixels: `tests/resources/expected_pixels/document_render/`
+  `mfzoty_document_edit_thumbnail256_expected_rgba8.png` (ThumbnailService k256, RGBA8) and
+  `mfzoty_document_edit_export256_expected_rgb16.png` (ExportService PNG, 16-bit, 256 px). The
+  document has exposure +0.75 EV, crop `{0.1, 0.15, 0.7, 0.6}`, and rotation 3°. They were
+  recorded at `5708f139` on Windows CUDA; two runs gave identical files (SHA-256 `C1EF0F57…` and
+  `275BD707…`). The limit is 1/1024 of full scale, which means identical codes for the 8-bit
+  thumbnail. The files are read and written with OpenImageIO because OpenCV in this build does not
+  decode PNG. The recording switch (`ALCEDO_RECORD_EXPECTED_PIXELS_DIR`) stays in the test so the
+  files can be written again after an approved pixel change.
+- Deleted stage-only tests (their subject no longer exists): `PipelineFrameSinkTest`
+  `ReattachingFrameSinkPreservesMergedStage`, `BindFrameSubmission*`, `RenderRegion*` (stage
+  `RESIZE`), `ResetExecutionStagesClearsFrameSink`, `ImportPipelineParamsResetsFrameSink`,
+  `ConcurrentImportPipelineParamsAndRenderIsDeadlockFree`, the two RAW-decode backend stage cases;
+  `PipelineSchedulerRequestIdTest.BindFrameSubmissionTagsRequestBeforeNotify`;
+  `PipelineMapperTests.DefaultPipelineAdjustmentsUseCleanBaseline`,
+  `ResetToCleanBaselineAdjustmentsPreservesLoadingAndColorTemp`,
+  `LoadPipelineRepairsLensCalibEnableMismatchFromParams`,
+  `ReloadedDocumentKeepsDecodeMethodWhenStagesDisagree`; and the two
+  `AdjustmentTransferPasteMergeTest.LivePipelineColorTemp*` cases (they drove `ColorTempOp` through
+  a stage; the direct `ColorTempOpMergePolicyTest` cases stay until G10.9).
+- Rewritten against the document or the request: `DefaultOutputTransformUsesOpenDRT` and
+  `OutputTransformPersistencePreservesSharedAndMethodSpecificSettings` (DRT node, reopened through a
+  new service), `CacheTest1/2` and the disabled fuzz and thread cases, `ImageRootStores…` (checks
+  the document camera profile instead of `OperatorParams`), `PipelineDocumentRenderTest` (explicit
+  `PipelineApplyRequest`; two cases renamed `MissingDocumentFailsWithoutRendering`,
+  `MissingCameraProfileFailsWithoutSubstituteProfile`, `CpuPreferenceFailsWithoutSubstituteBackend`),
+  `PipelineSchedulerRequestIdTest.MissingDocumentRequestsReportFailureOnEveryRender`, the
+  thumbnail, album, CI RAW, import-document, and shared-use callers, the OpenCL/CUDA benchmark
+  (G10.10 archives it; its downsample setting was already ignored by the old request builder), and
+  `HsResearchExportTool` (writes the study values to the document; not run).
+- Added beyond Section 16.8: `PipelineFrameSinkTest.AttachDetachRoundTripKeepsSinkQueries`,
+  `NewExecutorHasNoFrameSink`, `AcceleratorPreferenceResolvesRuntimeBackend`.
+- Not changed: `include/ui/alcedo_main/album_backend/editor_color_temp_model.hpp` Q_INVOKABLE
+  names (comments only), `tests/app/import_test_fixation.hpp` keeps its CRLF line endings (a
+  two-line deletion; convert it in a separate commit before any larger edit).
+
+**Primary success call chain:**
+
+```text
+PipelineMgmtService::LoadPipeline(id)
+  -> Storage::GetLivePipeline(id) or new CPUPipelineExecutor   (resolves Auto backend; no stages)
+  -> render lock { SetBoundFile; SetAcceleratorBackendPreference }
+  -> LoadPipelineDocument -> EnsureRenderableCameraProfile -> executor.SetPipelineDocument
+Import: PersistAssembledImportPipeline -> InitializeImageRoot
+  -> render lock { BindImportedCameraProfile(document, raw context) } -> root + checkpoint
+Editor render: EditorSessionRenderSchedulerPort configure { executor.AttachFrameSink(sink) }
+  -> PipelineScheduler -> PipelineTask::MakeApplyRequest -> executor.Apply(input, request)
+  -> Renderer<Backend>::Render(document, request)
+History row: PresentEditorHistoryCommit(field_key)
+  -> ResolveEditorAdjustmentField -> DisplayName / IconResource / BuildSummary
+```
+
+**Primary failure call chain:**
+
+```text
+Apply without a bound document
+  -> throws "CPUPipelineExecutor: product rendering requires a bound PipelineDocument"
+  -> PipelineScheduler reports the failure; no substitute render
+Apply with the CPU preference (no GPU backend)
+  -> throws "...requires a supported GPU backend"; no renderer is created
+SetAcceleratorBackendPreference(unavailable backend)
+  -> ResolveAcceleratorBackend throws before assignment; the prior backend stays selected
+Unknown history field key -> "Edit" row with the sliders icon (unchanged)
+```
+
+**What was proven (executed tests)**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `HistoryRowTitlesAndIconsAreUnchangedForEveryFieldKey` | `EditorSessionHistoryPortTest` | PASS (also PASS at `5708f139`, where the titles were recorded) |
+| `ExecutorConstructsWithoutOperatorRegistry` | `PipelineSharedUseTest` | PASS (SegFault at `5708f139`) |
+| `ThumbnailAndExportRenderFromDocumentOnly` | `PipelineSharedUseTest` (see deviations) | PASS (thumbnail identical, export ≤ 1/1024) |
+| `NoProductCodeUsesStageTable` | ctest script | PASS |
+| `StageTableCheckRejectsExecutorAndServiceUse` (added) | ctest script | PASS |
+| `NoProductCodeUsesStageJsonOutsideLegacyOwners`, `StageJsonCheckRejectsRollbackOutsideLegacyOwners` | ctest script | PASS |
+| Full `win_debug` build | all targets | PASS (`alcedo_main` included) |
+| Full `win_debug` suite | `ctest` | NOT RUN (stopped at about 1000 of 2979 tests at the user's request) |
+
+**Build and test commands with exit codes**
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 -- -k 0      -> exit 0 (build_4.log)
+ctest --test-dir build/debug -j 1 --timeout 300 -R "<set A>" -E "Fuzz|Stress"    -> exit 8
+ctest --test-dir build/debug -j 1 --timeout 300 -R "<set B>"                     -> exit 0
+set A = ^(PipelineFrameSinkTest|PipelineSchedulerRequestIdTest|PipelineDocumentRenderTest|
+        PipelineMapperTest|PipelineSharedUseTest|EditorSessionHistoryPortTest|
+        EditorAdjustmentPipelineTest|AdjustmentTransferServiceMiniGitTest|
+        EditorSessionRenderSchedulerPortTest|ImportPipelineDocumentTest|CiRawWorkflowTest|
+        EditorVersionCheckoutTest|ThumbnailServiceTest)\.|legacy_removal|NoProductCode|StageTable|StageJson
+set B = ^(EditorDocumentHistoryTest|EditorDocumentPasteTest|EditorNodeTopologyHistoryTest|
+        GpuDagModelGraphTest|ImportServiceTest|AdjustmentTransferServiceTest|
+        EditorMiniGitJournalRecoveryTest|EditorSessionCheckpointStoreTest)\.
+```
+
+**Discovered / passed / failed / skipped counts**
+
+- Set A before the change (`5708f139` binaries with the new tests): 282 discovered, 277 run,
+  264 passed, 13 failed, 5 disabled.
+- Set A after the change: 264 discovered, 259 run, 250 passed, 9 failed, 5 disabled. The 18 fewer
+  tests are the deleted stage-only cases above.
+- The 9 failures after the change also fail before it: the 5
+  `EditorSessionRenderSchedulerPortTest` sink-bind cases (G10.1 record),
+  `ThumbnailServiceTests.AnalysisRenditionRendersWithoutSavePipelineOnLiveGuard` (pin-count timing
+  race, G10.3 record), `DiskCacheTracksRootAndActiveHeadAndServesAfterPipelineIsRemoved` (timeout),
+  `MissingPipelineThrows`, and `MissingImageThrows`.
+- Fixed by this phase: `ExecutorConstructsWithoutOperatorRegistry` and
+  `ThumbnailServiceTests.ThumbnailRenderUsesInjectedRawMetadataForDng` (the direct render now reads
+  the stored document; it failed before this phase). The two old stage-read check tests failed in
+  the baseline run only because they scanned the already edited sources.
+- Set B after the change: 94 run, 94 passed.
+
+**Checklist / exit condition (Section 16.10)**
+
+- [ ] Full build and full `ctest` run recorded — the full build is recorded; the full `ctest` run
+  is not (user decision; `AGENTS.md` rule).
+- [x] No regression against the pre-phase record — for the targeted sets A and B.
+- [ ] Manual check on Windows CUDA and Windows OpenCL: open, edit, Version switch, export.
+
+**LOC note:** `pipeline_service.cpp` is 1092 lines (was 1255) and above 1000 before this phase;
+this phase only shrinks it. `editor_history_commit_presentation.cpp` is 825 lines (was 847).
+`pipeline_shared_use_test.cpp` is 1264 lines and `pipeline_service_test.cpp` 1488 lines; both were
+above 1000 before this phase.
+
+**Other evidence:** `build/tmp/g10_7/` (`baseline_build*.log`, `baseline_targeted.log`,
+`build*.log`, `after_targeted.log`, `after_targeted_2.log`, `expected_run1/`, `expected_run2/`,
+`record_run*.log`, the partial `baseline_ctest.log`). Metal and macOS builds did not run; the
+Metal-only thumbnail case (`MetalGeometryPipelineThumbnailStillRenders`) was edited but not
+compiled.
+
+**Remaining gaps:** the manual check, the full-suite item, the macOS build of the edited Metal
+test, and `HsResearchExportTool` (compiled, not run). The stage, `GPUPipelineWrapper`, legacy
+operators, and `OperatorFactory` stay in the compile graph for G10.9; `EditPipeline` still links
+them.
 
 ---
 
