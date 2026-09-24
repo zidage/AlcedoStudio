@@ -185,10 +185,6 @@ TEST_F(CudaDevelopFixture, EnabledLensVignettingChangesDevelopSensorPixels) {
   EXPECT_GT(corner.g, disabled.front().g);
 }
 
-TEST_F(CudaDevelopFixture, LegacyRgbEntryNormalizesAndRemovesAppliedWhiteBalanceOnGpu) {
-  gpu_dag_test::VerifyLegacyRgbGpu(RawGpuBackend::CUDA);
-}
-
 TEST_F(CudaDevelopFixture, SonyYcbcrRgbRendersWithImportedCameraProfileAtFullResolution) {
   gpu_dag_test::VerifyCameraRgbFile<CudaRenderDevice>("DSC04739.ARW", ImageType::ARW, "cuda");
 }

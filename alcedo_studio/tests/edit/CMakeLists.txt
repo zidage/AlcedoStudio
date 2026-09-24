@@ -327,7 +327,7 @@ if(ALCEDO_CUDA_ENABLED)
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_develop_test.cpp)
   target_include_directories(GpuDagCudaDevelopTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagCudaDevelopTest PRIVATE GTest::gtest_main EditRuntimeCuda EditInput
-    DemosaicNet Image RawProcessor opencv_imgproc Qt6::Gui)
+    DemosaicNet Image opencv_imgproc Qt6::Gui)
   gtest_discover_tests(GpuDagCudaDevelopTest TEST_PREFIX "GpuDagCudaDevelopTest."
     PROPERTIES LABELS "gpu;edit;runtime")
   alcedo_register_test_target(GpuDagCudaDevelopTest gpu)
@@ -423,8 +423,9 @@ if(ALCEDO_METAL_ENABLED)
   target_include_directories(GpuDagMetalDevelopTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagMetalDevelopTest PRIVATE
     GTest::gtest_main EditRuntimeMetal EditInput RawProcessorOp MetalDemosaicNetEntry Image
-    RawProcessor opencv_imgproc Qt6::Gui)
+    opencv_imgproc Qt6::Gui)
   target_compile_definitions(GpuDagMetalDevelopTest PRIVATE
+    ALCEDO_METAL_NEURAL_EXPECTED_PIXEL_DIR="${ALCEDO_TEST_ROOT}/resources/expected_pixels/metal_neural_develop"
     ALCEDO_METAL_TO_LINEAR_REF_METALLIB_PATH="${METAL_TO_LINEAR_REF_METALLIB}"
     ALCEDO_METAL_GEOMETRY_RESAMPLE_METALLIB_PATH="${METAL_GEOMETRY_RESAMPLE_METALLIB}"
     ALCEDO_METAL_CAMERA_COLOR_METALLIB_PATH="${METAL_CAMERA_COLOR_METALLIB}")
@@ -504,7 +505,7 @@ if(ALCEDO_OPENCL_ENABLED)
   target_include_directories(GpuDagOpenClDevelopTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagOpenClDevelopTest PRIVATE
     GTest::gtest_main EditRuntimeOpenCl EditInput RawProcessorOp OpenClDemosaicNetEntry
-    OpenClProgramLibrary Image RawProcessor opencv_imgproc Qt6::Gui)
+    OpenClProgramLibrary Image opencv_imgproc Qt6::Gui)
   target_compile_definitions(GpuDagOpenClDevelopTest PRIVATE
     ALCEDO_OPENCL_SHADER_SOURCE_ROOT="${ALCEDO_SRC_DIR}"
     ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/models"

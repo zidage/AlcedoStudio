@@ -334,10 +334,6 @@ TEST_F(OpenClDevelopFixture, EnabledLensVignettingChangesDevelopSensorPixels) {
   EXPECT_GT(corner.g, disabled.front().g);
 }
 
-TEST_F(OpenClDevelopFixture, LegacyRgbEntryNormalizesAndRemovesAppliedWhiteBalanceOnGpu) {
-  gpu_dag_test::VerifyLegacyRgbGpu(RawGpuBackend::OpenCL);
-}
-
 TEST_F(OpenClDevelopFixture, SonyYcbcrRgbRendersWithImportedCameraProfileAtFullResolution) {
   gpu_dag_test::VerifyCameraRgbFile<OpenClRenderDevice>("DSC04739.ARW", ImageType::ARW, "opencl");
 }

@@ -3,9 +3,9 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 #include <gtest/gtest.h>
-#include <libraw/libraw.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -25,7 +25,6 @@
 #include "decoders/processor/nn/metal_demosaicnet_cache.hpp"
 #include "decoders/processor/operators/gpu/metal_encode.hpp"
 #include "decoders/processor/raw_normalization.hpp"
-#include "decoders/processor/raw_processor.hpp"
 #include "decoders/processor/raw_processor_pattern.hpp"
 #include "dng_profile_test_support.hpp"
 #include "edit/geometry/render_geometry_resolver.hpp"
@@ -262,22 +261,49 @@ auto LoadEncodedFixture(const std::filesystem::path& path) -> std::vector<std::b
   return bytes;
 }
 
-auto ResolveXTransFixture() -> std::filesystem::path {
-  const std::filesystem::path candidates[] = {
-      std::filesystem::path(TEST_IMG_PATH) / "local" / "metal_neural_xtrans_xt5.RAF",
-      std::filesystem::path(TEST_IMG_PATH) / "raw" / "camera" / "fuji" / "xt5" / "DSCF2074.RAF",
-  };
-  for (const auto& path : candidates) {
-    if (std::filesystem::exists(path)) {
-      return path;
-    }
-  }
-  return {};
+// The stored Neural Engine files hold the sensor-linear output of the RawProcessor Metal path at
+// 045a0dc1, before G10.10 archived it. Each file holds nine 64x64 RGBA float32 patches (row-major,
+// y outer, x inner) at x in {0, (width - 64) / 2, width - 64} and y in the same set for height.
+constexpr int kExpectedGridPatchSize = 64;
+
+auto          BayerNeuralFixture() -> std::filesystem::path {
+  return std::filesystem::path(TEST_IMG_PATH) / "local" / "metal_neural_bayer_s5m2.RW2";
 }
 
-auto ExpectNeuralPatchMatchesPreviousMetalPath(const std::filesystem::path& path, int patch,
-                                               MetalDemosaicNetVariant variant, RawCfaKind kind)
-    -> void {
+auto XTransNeuralFixture() -> std::filesystem::path {
+  return std::filesystem::path(TEST_IMG_PATH) / "local" / "metal_neural_xtrans_xt5.RAF";
+}
+
+auto ExpectedGridOrigins(int extent) -> std::array<int, 3> {
+  const int last = extent - kExpectedGridPatchSize;
+  return {0, last / 2, last};
+}
+
+auto ReadExpectedGrid(const std::string& file_name) -> std::vector<cv::Mat> {
+  const auto    path = std::filesystem::path(ALCEDO_METAL_NEURAL_EXPECTED_PIXEL_DIR) / file_name;
+  std::ifstream input(path, std::ios::binary);
+  if (!input) {
+    throw std::runtime_error("Unable to open expected pixel file: " + path.string());
+  }
+  std::vector<cv::Mat> patches;
+  for (int index = 0; index < 9; ++index) {
+    cv::Mat patch(kExpectedGridPatchSize, kExpectedGridPatchSize, CV_32FC4);
+    input.read(reinterpret_cast<char*>(patch.data),
+               static_cast<std::streamsize>(patch.total() * patch.elemSize()));
+    if (!input) {
+      throw std::runtime_error("Expected pixel file is too short: " + path.string());
+    }
+    patches.push_back(std::move(patch));
+  }
+  if (input.peek() != std::char_traits<char>::eof()) {
+    throw std::runtime_error("Expected pixel file is too long: " + path.string());
+  }
+  return patches;
+}
+
+auto ExpectNeuralPatchMatchesStoredMetalPixels(const std::filesystem::path& path, int patch,
+                                               MetalDemosaicNetVariant variant, RawCfaKind kind,
+                                               const std::string& expected_file) -> void {
   if (!std::filesystem::exists(path)) {
     GTEST_SKIP() << "RAW fixture is unavailable: " << path;
   }
@@ -348,54 +374,34 @@ auto ExpectNeuralPatchMatchesPreviousMetalPath(const std::filesystem::path& path
   const int  dag_h      = static_cast<int>(plan.source.develop_output_extent.height);
   ASSERT_EQ(dag_pixels.size(), static_cast<std::size_t>(dag_w) * static_cast<std::size_t>(dag_h));
 
-  auto raw = std::make_unique<LibRaw>();
-  ASSERT_EQ(raw->open_file(path.string().c_str()), LIBRAW_SUCCESS);
-  ASSERT_EQ(raw->unpack(), LIBRAW_SUCCESS);
-  libraw_rawdata_t patch_data  = raw->imgdata.rawdata;
-  patch_data.raw_image         = patch_mat.ptr<std::uint16_t>();
-  patch_data.sizes.raw_width   = static_cast<ushort>(patch);
-  patch_data.sizes.raw_height  = static_cast<ushort>(patch);
-  patch_data.sizes.width       = static_cast<ushort>(patch);
-  patch_data.sizes.height      = static_cast<ushort>(patch);
-  patch_data.sizes.iwidth      = static_cast<ushort>(patch);
-  patch_data.sizes.iheight     = static_cast<ushort>(patch);
-  patch_data.sizes.left_margin = 0;
-  patch_data.sizes.top_margin  = 0;
-  patch_data.sizes.flip        = 0;
-  patch_data.sizes.raw_pitch   = static_cast<unsigned>(patch * sizeof(std::uint16_t));
-  RawParams params;
-  params.gpu_backend_            = RawGpuBackend::Metal;
-  params.demosaic_method_        = RawDemosaicMethod::NeuralEngine;
-  params.highlights_reconstruct_ = true;
-  params.decode_res_             = DecodeRes::FULL;
-  RawRuntimeColorContext context;
-  const ushort           no_crop[4] = {};
-  RawProcessor           processor(params, patch_data, *raw, context, no_crop);
-  ImageBuffer            previous = processor.Process();
-  ASSERT_TRUE(previous.gpu_data_valid_);
-  cv::Mat previous_host;
-  previous.GetMetalImage().Download(previous_host);
-  raw->recycle();
-
-  ASSERT_EQ(previous_host.type(), CV_32FC4);
-  ASSERT_EQ(previous_host.cols, dag_w);
-  ASSERT_EQ(previous_host.rows, dag_h);
-  float max_err = 0.0f;
-  for (int y = 0; y < dag_h; ++y) {
-    for (int x = 0; x < dag_w; ++x) {
-      const auto& dag = dag_pixels[static_cast<std::size_t>(y) * dag_w + x];
-      const auto& old = previous_host.at<cv::Vec4f>(y, x);
-      max_err         = std::max(max_err, std::fabs(dag.r - old[0]));
-      max_err         = std::max(max_err, std::fabs(dag.g - old[1]));
-      max_err         = std::max(max_err, std::fabs(dag.b - old[2]));
+  ASSERT_GE(dag_w, kExpectedGridPatchSize);
+  ASSERT_GE(dag_h, kExpectedGridPatchSize);
+  const auto expected  = ReadExpectedGrid(expected_file);
+  const auto origins_x = ExpectedGridOrigins(dag_w);
+  const auto origins_y = ExpectedGridOrigins(dag_h);
+  float      max_err   = 0.0f;
+  int        index     = 0;
+  for (const int origin_y : origins_y) {
+    for (const int origin_x : origins_x) {
+      const auto& old = expected[static_cast<std::size_t>(index++)];
+      for (int y = 0; y < kExpectedGridPatchSize; ++y) {
+        for (int x = 0; x < kExpectedGridPatchSize; ++x) {
+          const auto& dag =
+              dag_pixels[static_cast<std::size_t>(origin_y + y) * dag_w + (origin_x + x)];
+          const auto& ref = old.at<cv::Vec4f>(y, x);
+          max_err         = std::max(max_err, std::fabs(dag.r - ref[0]));
+          max_err         = std::max(max_err, std::fabs(dag.g - ref[1]));
+          max_err         = std::max(max_err, std::fabs(dag.b - ref[2]));
+        }
+      }
     }
   }
   EXPECT_LT(max_err, 1.0e-4f);
 }
 
-auto ExpectFullNeuralMatchesPreviousMetalPath(const std::filesystem::path& path,
-                                              MetalDemosaicNetVariant variant, RawCfaKind kind)
-    -> void {
+auto ExpectFullNeuralMatchesStoredMetalPixels(const std::filesystem::path& path,
+                                              MetalDemosaicNetVariant variant, RawCfaKind kind,
+                                              const std::string& expected_file) -> void {
   if (!std::filesystem::exists(path)) {
     GTEST_SKIP() << "RAW fixture is unavailable: " << path;
   }
@@ -418,43 +424,20 @@ auto ExpectFullNeuralMatchesPreviousMetalPath(const std::filesystem::path& path,
   auto* dag_output = device.Workspace().Images().Find(plan.sensor_linear_output);
   ASSERT_NE(dag_output, nullptr);
 
-  auto raw = std::make_unique<LibRaw>();
-  ASSERT_EQ(
-      raw->open_buffer(const_cast<void*>(static_cast<const void*>(encoded.data())), encoded.size()),
-      LIBRAW_SUCCESS);
-  ASSERT_EQ(raw->unpack(), LIBRAW_SUCCESS);
-  RawParams params;
-  params.gpu_backend_            = RawGpuBackend::Metal;
-  params.demosaic_method_        = RawDemosaicMethod::NeuralEngine;
-  params.highlights_reconstruct_ = true;
-  params.decode_res_             = DecodeRes::FULL;
-  RawRuntimeColorContext context;
-  const ushort           no_crop[4] = {};
-  RawProcessor           processor(params, raw->imgdata.rawdata, *raw, context, no_crop);
-  ImageBuffer            previous = processor.Process();
-  ASSERT_TRUE(previous.gpu_data_valid_);
-  auto& previous_metal = previous.GetMetalImage();
-
-  ASSERT_EQ(dag_output->Texture().Width(), previous_metal.Width());
-  ASSERT_EQ(dag_output->Texture().Height(), previous_metal.Height());
-  constexpr int kPatchSize = 64;
-  auto dag_metal =
+  const auto expected = ReadExpectedGrid(expected_file);
+  auto       dag_metal =
       metal::MetalImage::Wrap(static_cast<MTL::Texture*>(dag_output->Texture().Native()));
-  const int max_x = static_cast<int>(dag_output->Texture().Width()) - kPatchSize;
-  const int max_y = static_cast<int>(dag_output->Texture().Height()) - kPatchSize;
-  const int sample_x[] = {0, max_x / 2, max_x};
-  const int sample_y[] = {0, max_y / 2, max_y};
-  for (const int y : sample_y) {
-    for (const int x : sample_x) {
+  const auto origins_x = ExpectedGridOrigins(static_cast<int>(dag_output->Texture().Width()));
+  const auto origins_y = ExpectedGridOrigins(static_cast<int>(dag_output->Texture().Height()));
+  int        index     = 0;
+  for (const int y : origins_y) {
+    for (const int x : origins_x) {
       metal::MetalImage dag_patch;
-      metal::MetalImage previous_patch;
-      dag_metal.CropTo(dag_patch, cv::Rect(x, y, kPatchSize, kPatchSize));
-      previous_metal.CropTo(previous_patch, cv::Rect(x, y, kPatchSize, kPatchSize));
+      dag_metal.CropTo(dag_patch, cv::Rect(x, y, kExpectedGridPatchSize, kExpectedGridPatchSize));
       cv::Mat dag_host;
-      cv::Mat previous_host;
       dag_patch.Download(dag_host);
-      previous_patch.Download(previous_host);
-      EXPECT_LT(cv::norm(dag_host, previous_host, cv::NORM_INF), 1.0e-4)
+      EXPECT_LT(cv::norm(dag_host, expected[static_cast<std::size_t>(index++)], cv::NORM_INF),
+                1.0e-4)
           << "patch origin (" << x << ", " << y << ")";
     }
   }
@@ -506,10 +489,6 @@ TEST_F(MetalDevelopFixture, EnabledLensVignettingChangesDevelopSensorPixels) {
   const auto corner = enabled.front();
   EXPECT_GT(corner.r, disabled.front().r);
   EXPECT_GT(corner.g, disabled.front().g);
-}
-
-TEST_F(MetalDevelopFixture, LegacyRgbEntryNormalizesAndRemovesAppliedWhiteBalanceOnGpu) {
-  gpu_dag_test::VerifyLegacyRgbGpu(RawGpuBackend::Metal);
 }
 
 TEST_F(MetalDevelopFixture, SonyYcbcrRgbRendersWithImportedCameraProfileAtFullResolution) {
@@ -708,44 +687,28 @@ TEST_F(MetalDevelopFixture, MetalDevelopNeuralEngineFinishesWithoutReusingACommi
   EXPECT_TRUE(PixelsDiffer(Download(legacy_device, legacy_plan.sensor_linear_output), pixels));
 }
 
-TEST_F(MetalDevelopFixture, MetalDevelopNeuralBayerPatchMatchesPreviousMetalPath) {
-  const std::filesystem::path candidates[] = {
-      std::filesystem::path(TEST_IMG_PATH) / "local" / "metal_neural_bayer_s5m2.RW2",
-      std::filesystem::path(TEST_IMG_PATH) / "raw" / "camera" / "nikon" / "d800e" /
-          "Nikon-D800e-raw-00002.nef",
-  };
-  std::filesystem::path path;
-  for (const auto& candidate : candidates) {
-    if (std::filesystem::exists(candidate)) {
-      path = candidate;
-      break;
-    }
-  }
-  if (path.empty()) {
-    GTEST_SKIP() << "Bayer RAW fixture is unavailable.";
-  }
-  ExpectNeuralPatchMatchesPreviousMetalPath(path, 512, MetalDemosaicNetVariant::Bayer,
-                                            RawCfaKind::Bayer2x2);
+TEST_F(MetalDevelopFixture, MetalDevelopNeuralBayerPatchMatchesStoredExpectedPixels) {
+  ExpectNeuralPatchMatchesStoredMetalPixels(
+      BayerNeuralFixture(), 512, MetalDemosaicNetVariant::Bayer, RawCfaKind::Bayer2x2,
+      "s5m2_rw2_full_neural_bayer_patch512_grid64_expected_sensor_linear_rgba32f.bin");
 }
 
-TEST_F(MetalDevelopFixture, MetalDevelopNeuralXTransPatchMatchesPreviousMetalPath) {
-  const auto path = ResolveXTransFixture();
-  if (path.empty()) {
-    GTEST_SKIP() << "X-Trans RAW fixture is unavailable.";
-  }
-  ExpectNeuralPatchMatchesPreviousMetalPath(path, 1100, MetalDemosaicNetVariant::XTrans,
-                                            RawCfaKind::XTrans6x6);
+TEST_F(MetalDevelopFixture, MetalDevelopNeuralXTransPatchMatchesStoredExpectedPixels) {
+  ExpectNeuralPatchMatchesStoredMetalPixels(
+      XTransNeuralFixture(), 1100, MetalDemosaicNetVariant::XTrans, RawCfaKind::XTrans6x6,
+      "xt5_raf_full_neural_xtrans_patch1100_grid64_expected_sensor_linear_rgba32f.bin");
 }
 
-TEST_F(MetalDevelopFixture, MetalDevelopNeuralBayerFullRawMatchesPreviousMetalPath) {
-  ExpectFullNeuralMatchesPreviousMetalPath(
-      std::filesystem::path(TEST_IMG_PATH) / "local" / "metal_neural_bayer_s5m2.RW2",
-      MetalDemosaicNetVariant::Bayer, RawCfaKind::Bayer2x2);
+TEST_F(MetalDevelopFixture, MetalDevelopNeuralBayerFullRawMatchesStoredExpectedPixels) {
+  ExpectFullNeuralMatchesStoredMetalPixels(
+      BayerNeuralFixture(), MetalDemosaicNetVariant::Bayer, RawCfaKind::Bayer2x2,
+      "s5m2_rw2_full_neural_bayer_fullraw_grid64_expected_sensor_linear_rgba32f.bin");
 }
 
-TEST_F(MetalDevelopFixture, MetalDevelopNeuralXTransFullRawMatchesPreviousMetalPath) {
-  ExpectFullNeuralMatchesPreviousMetalPath(ResolveXTransFixture(), MetalDemosaicNetVariant::XTrans,
-                                           RawCfaKind::XTrans6x6);
+TEST_F(MetalDevelopFixture, MetalDevelopNeuralXTransFullRawMatchesStoredExpectedPixels) {
+  ExpectFullNeuralMatchesStoredMetalPixels(
+      XTransNeuralFixture(), MetalDemosaicNetVariant::XTrans, RawCfaKind::XTrans6x6,
+      "xt5_raf_full_neural_xtrans_fullraw_grid64_expected_sensor_linear_rgba32f.bin");
 }
 
 TEST_F(MetalDevelopFixture, MetalDevelopNeuralUsesSessionWorkspaceAndDoesNotSelectLegacyOnFailure) {
