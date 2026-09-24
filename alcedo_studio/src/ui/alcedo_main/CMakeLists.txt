@@ -248,6 +248,7 @@ target_link_libraries(AlbumBackendLib
         UpdateService
         SleeveFilterService
         FSService
+        AcceleratorBackend
         EditPipeline
         PipelineScheduler
         ImageLoader
@@ -922,7 +923,6 @@ if(APPLE AND ALCEDO_METAL_ENABLED AND ALCEDO_METAL_RUNTIME_LIBS)
         MetalUtilsShaders
         MetalGeometryUtilsShaders
         LensCalibrationMetalShaders
-        EditPipelineMetalShaders
         ScopeAnalyzerMetalShaders
         MetalToLinearRefShaders
         MetalDebayerRcdShaders
@@ -932,7 +932,11 @@ if(APPLE AND ALCEDO_METAL_ENABLED AND ALCEDO_METAL_RUNTIME_LIBS)
         MetalDemosaicNetIoShaders
     )
 
+    # Recreate the directory so it holds exactly ALCEDO_METAL_RUNTIME_LIBS. The bundle install copies
+    # this directory, so a metallib removed from the list (for example the archived fused pipeline
+    # library) must not survive from an earlier build.
     add_custom_command(TARGET alcedo_main POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E rm -rf "${_alcedo_metallib_runtime_dir}"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${_alcedo_metallib_runtime_dir}"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             ${ALCEDO_METAL_RUNTIME_LIBS}

@@ -4447,7 +4447,7 @@ ctest --test-dir build/macos-debug --output-on-failure
 - [x] PipelineStage 全部删除（G10.9，见 [G10 计划 18.12 节](gpu_dag_final_removal_phase_plan.md#phase-g109-completion-record-2026-09-23)）。
 - [x] OperatorParams 总结构全部删除（G10.9，见 [G10 计划 18.12 节](gpu_dag_final_removal_phase_plan.md#phase-g109-completion-record-2026-09-23)）。
 - [ ] operators 只保存参数 Model、DTO 和序列化逻辑。
-- [ ] GPU 执行代码不在 operators 参数目录。
+- [x] GPU 执行代码不在 operators 参数目录（G10.10，见 [G10 计划 19.12 节](gpu_dag_final_removal_phase_plan.md#phase-g1010-completion-record-2026-09-24)）。
 
 ### 47.2 参数
 

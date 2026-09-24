@@ -209,18 +209,4 @@ auto AcceleratorBackendPreferenceToString(AcceleratorBackendPreference preferenc
   return "unknown";
 }
 
-auto GpuBackendKindToRawGpuBackendString(GpuBackendKind backend) -> std::string_view {
-  switch (backend) {
-    case GpuBackendKind::CUDA:
-      return "cuda";
-    case GpuBackendKind::OpenCL:
-      return "opencl";
-    case GpuBackendKind::Metal:
-      return "metal";
-    case GpuBackendKind::None:
-      return "cpu";
-  }
-  return "cpu";
-}
-
 }  // namespace alcedo

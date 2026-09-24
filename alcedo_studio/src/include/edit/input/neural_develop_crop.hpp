@@ -19,7 +19,7 @@ namespace alcedo {
  *
  * Maps @p decode_crop from uploaded CFA coordinates through one phase shift and clamps
  * the far edge to the aligned lattice. The result can be smaller than the legacy demosaic
- * crop. It is the rectangle RawProcessor passes to DemosaicWithNeuralEngine.
+ * crop. The develop passes demosaic this rectangle with the tiled Neural Engine modules.
  * Returns nullopt when the CFA cannot be phase-aligned or the mapped crop is empty.
  */
 [[nodiscard]] inline auto BuildNeuralDevelopCrop(const RawCfaPattern& pattern, Extent2D host,

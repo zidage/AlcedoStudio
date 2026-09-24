@@ -62,6 +62,36 @@
 # CHECK=NoLegacyOperatorTypeEnumRemains
 #   Fails when a source file uses an OperatorType:: value or declares enum class OperatorType.
 #   OperatorTypeId, the Model type identifier, does not match. Same roots as the stage check.
+#
+# G10.10 archived the OpenCL and Metal legacy programs and shaders, RawProcessor, RawDecoder, the
+# CPU RAW operators, and the RAW GPU wrappers that only RawProcessor called.
+#
+# CHECK=NoLegacyOpenClPipelineFactoryRemains
+#   Fails when a source or CMake file names the legacy OpenCL pipeline (CreateOpenCLGPUPipeline,
+#   OpenCLGPUPipeline, OpenClFusedParams, OpenClFusedParamUploader, OpenClStage), its program
+#   manifest (RegisterOpenClEditPipelinePrograms, opencl_pipeline_programs), or its program
+#   directory (edit/pipeline/opencl_shader). Same roots as the stage check.
+#
+# CHECK=NoLegacyMetalPipelineFactoryRemains
+#   Fails when a source, shader, or CMake file names the legacy Metal pipeline
+#   (CreateMetalGPUPipeline, MetalGPUPipeline, MetalFusedParams, MetalStage), the fused pipeline
+#   shader or its target (fused_pipeline.metal, METAL_FUSED_PIPELINE, EditPipelineMetalShaders), or
+#   the legacy operator shader directory (edit/operators/GPU_kernels). Same roots as the stage
+#   check.
+#
+# CHECK=NoRawProcessorEntryRemainsInProductBuild
+#   Fails when a source file under ALCEDO_SOURCE_ROOT constructs or declares RawProcessor, names
+#   RawDecoder, RawParams, or RawGpuBackend, or includes raw_processor.hpp,
+#   raw_processor_internal.hpp, or raw_decoder.hpp; or when a CMake file under ALCEDO_SOURCE_ROOT
+#   or ALCEDO_TEST_SOURCE_ROOT names the RawProcessor target or a RawProcessor, RawDecoder, or CPU
+#   RAW operator source. The OpenCL::RawProcessor program-name namespace, RawProcessorOp, and
+#   raw_processor_pattern.hpp do not match.
+#
+# CHECK=NoLegacyMetalMetallibIsPackaged
+#   Needs METAL_RUNTIME_LIBS (the ALCEDO_METAL_RUNTIME_LIBS list with "|" as the separator);
+#   METALLIB_DIR (an installed bundle's metallib directory) is optional. Fails when the runtime
+#   list or the directory holds the fused pipeline metallib, or when the runtime list misses a
+#   GPU DAG metallib.
 
 cmake_minimum_required(VERSION 3.21)
 
@@ -71,6 +101,10 @@ endif()
 if(CHECK STREQUAL "DeprecatedLegacyArchiveIsOutsideCompileGraph")
   if(NOT DEFINED REPO_ROOT OR NOT IS_DIRECTORY "${REPO_ROOT}")
     message(FATAL_ERROR "REPO_ROOT must name the repository root")
+  endif()
+elseif(CHECK STREQUAL "NoLegacyMetalMetallibIsPackaged")
+  if(NOT DEFINED METAL_RUNTIME_LIBS)
+    message(FATAL_ERROR "METAL_RUNTIME_LIBS must list the Metal runtime libraries")
   endif()
 elseif(NOT DEFINED ALCEDO_SOURCE_ROOT OR NOT IS_DIRECTORY "${ALCEDO_SOURCE_ROOT}")
   message(FATAL_ERROR "ALCEDO_SOURCE_ROOT must name the alcedo_studio/src directory")
@@ -326,6 +360,45 @@ function(_alcedo_scan_archive_references)
   message(STATUS "Scanned ${_scanned} CMake files and the compile database; no archive reference.")
 endfunction()
 
+# Scan CMakeLists.txt and *.cmake files under ALCEDO_SOURCE_ROOT and ALCEDO_TEST_SOURCE_ROOT for
+# api_regex. The script and the file that registers its fixtures are not scanned.
+function(_alcedo_scan_cmake api_regex failure_text success_text)
+  set(_roots "${ALCEDO_SOURCE_ROOT}")
+  if(DEFINED ALCEDO_TEST_SOURCE_ROOT)
+    list(APPEND _roots "${ALCEDO_TEST_SOURCE_ROOT}")
+  endif()
+  set(_violations "")
+  set(_scanned 0)
+  foreach(_root IN LISTS _roots)
+    set(_label "")
+    if(NOT "${_root}" STREQUAL "${ALCEDO_SOURCE_ROOT}")
+      set(_label "tests:")
+    endif()
+    file(GLOB_RECURSE _cmake_files RELATIVE "${_root}" "${_root}/CMakeLists.txt" "${_root}/*.cmake")
+    foreach(relative_path IN LISTS _cmake_files)
+      if(relative_path MATCHES "^third_party/")
+        continue()
+      endif()
+      _alcedo_matches_any("${relative_path}" _legacy_history_check_hosts _is_host)
+      if(_is_host)
+        continue()
+      endif()
+      math(EXPR _scanned "${_scanned} + 1")
+      file(STRINGS "${_root}/${relative_path}" _hits REGEX "${api_regex}")
+      if(_hits)
+        list(GET _hits 0 _first_hit)
+        string(STRIP "${_first_hit}" _first_hit)
+        list(APPEND _violations "${_label}${relative_path}: ${_first_hit}")
+      endif()
+    endforeach()
+  endforeach()
+  if(_violations)
+    list(JOIN _violations "\n  " _report)
+    message(FATAL_ERROR "${failure_text}:\n  ${_report}")
+  endif()
+  message(STATUS "Scanned ${_scanned} CMake files; ${success_text}.")
+endfunction()
+
 if(CHECK STREQUAL "NoProductCodeUsesStageTable")
   _alcedo_scan("(GetStage|GetGlobalParams|GetOperator|SetOperator)\\(|PipelineStageName::"
     _stage_table_owners
@@ -375,6 +448,62 @@ elseif(CHECK STREQUAL "RuntimeSourcesDoNotIncludeLegacyOperatorHeaders")
     "no runtime source includes a legacy operator or stage parameter header")
 elseif(CHECK STREQUAL "DagSourcesDoNotReferenceLegacyDirectories")
   _alcedo_scan_dag_includes()
+elseif(CHECK STREQUAL "NoLegacyOpenClPipelineFactoryRemains")
+  _alcedo_scan(
+    "(^|[^A-Za-z0-9_])(CreateOpenCLGPUPipeline|OpenCLGPUPipeline|OpenClFusedParams|OpenClFusedParamUploader|OpenClStage|RegisterOpenClEditPipelinePrograms)([^A-Za-z0-9_]|$)|opencl_pipeline_programs|edit/pipeline/opencl_shader"
+    _legacy_history_check_hosts
+    "Source names the archived legacy OpenCL pipeline"
+    "no legacy OpenCL pipeline, program manifest, or program directory"
+    "*.cl" "*.txt" "*.cmake")
+elseif(CHECK STREQUAL "NoLegacyMetalPipelineFactoryRemains")
+  _alcedo_scan(
+    "(^|[^A-Za-z0-9_])(CreateMetalGPUPipeline|MetalGPUPipeline|MetalFusedParams|MetalStage|EditPipelineMetalShaders)([^A-Za-z0-9_]|$)|fused_pipeline\\.metal|METAL_FUSED_PIPELINE|edit/operators/GPU_kernels"
+    _legacy_history_check_hosts
+    "Source names the archived legacy Metal pipeline"
+    "no legacy Metal pipeline, fused shader, or legacy operator shader"
+    "*.metal" "*.txt" "*.cmake")
+elseif(CHECK STREQUAL "NoRawProcessorEntryRemainsInProductBuild")
+  # The source half scans the product source only; a test helper may use a name such as RawParams.
+  set(_test_source_root "${ALCEDO_TEST_SOURCE_ROOT}")
+  unset(ALCEDO_TEST_SOURCE_ROOT CACHE)
+  unset(ALCEDO_TEST_SOURCE_ROOT)
+  _alcedo_scan(
+    "(^|[^A-Za-z0-9_])RawProcessor[ \t]+[a-z_][A-Za-z0-9_]*[ \t]*[({;]|class[ \t]+RawProcessor([^A-Za-z0-9_]|$)|(^|[^A-Za-z0-9_])(RawDecoder|RawParams|RawGpuBackend)([^A-Za-z0-9_]|$)|include[ \t]*[<\"]([^\">]*/)?(raw_processor|raw_processor_internal|raw_decoder)\\.hpp"
+    _no_owners
+    "Product source uses the archived RawProcessor or RawDecoder"
+    "no RawProcessor, RawDecoder, or RAW parameter type")
+  if(_test_source_root)
+    set(ALCEDO_TEST_SOURCE_ROOT "${_test_source_root}")
+  endif()
+  _alcedo_scan_cmake(
+    "(^|[ \t(])RawProcessor([ \t)]|$)|RAW_PROCESSOR_BACKEND_SRCS|raw_processor(_cuda|_metal|_opencl)?\\.cpp|raw_decoder\\.cpp|processor/operators/cpu/"
+    "A CMake file builds or links the archived RawProcessor"
+    "no RawProcessor target or source")
+elseif(CHECK STREQUAL "NoLegacyMetalMetallibIsPackaged")
+  string(REPLACE "|" ";" _metal_libs "${METAL_RUNTIME_LIBS}")
+  set(_names "")
+  foreach(_lib IN LISTS _metal_libs)
+    get_filename_component(_name "${_lib}" NAME)
+    list(APPEND _names "${_name}")
+  endforeach()
+  set(_violations "")
+  if("fused_pipeline.metallib" IN_LIST _names)
+    list(APPEND _violations "runtime list: fused_pipeline.metallib")
+  endif()
+  foreach(_dag_lib IN ITEMS geometry_resample camera_color primary_grade local_tone mask drt)
+    if(NOT "${_dag_lib}.metallib" IN_LIST _names)
+      list(APPEND _violations "runtime list misses ${_dag_lib}.metallib")
+    endif()
+  endforeach()
+  if(DEFINED METALLIB_DIR AND EXISTS "${METALLIB_DIR}/fused_pipeline.metallib")
+    list(APPEND _violations "bundle: ${METALLIB_DIR}/fused_pipeline.metallib")
+  endif()
+  if(_violations)
+    list(JOIN _violations "\n  " _report)
+    message(FATAL_ERROR "The Metal runtime package is wrong:\n  ${_report}")
+  endif()
+  list(LENGTH _names _count)
+  message(STATUS "Checked ${_count} Metal runtime libraries; no fused pipeline metallib.")
 else()
   message(FATAL_ERROR "Unknown source check: ${CHECK}")
 endif()

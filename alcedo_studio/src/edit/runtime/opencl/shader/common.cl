@@ -116,7 +116,7 @@ static inline float opencl_shared_tone_luma(float3 rgb) {
 
 // === Shared tone curve evaluation =============================================
 
-static inline float opencl_evaluate_shared_tone_curve(float x, __global const OpenClFusedParams* params) {
+static inline float opencl_evaluate_shared_tone_curve(float x, __global const OpenClDrtParams* params) {
   const int curve_count = params->shared_tone_curve_ctrl_pts_size_;
   if (curve_count <= 0) return x;
   if (curve_count == 1) {
@@ -168,7 +168,7 @@ static inline float3 opencl_reconstruct_shared_tone_rgb(float3 rgb, float source
   return (float3)(mapped_luma) + delta * scale;
 }
 
-static inline float4 opencl_apply_shared_tone_mapping(float4 px, __global const OpenClFusedParams* params) {
+static inline float4 opencl_apply_shared_tone_mapping(float4 px, __global const OpenClDrtParams* params) {
   if (params->shared_tone_curve_enabled_ == 0u) {
     return px;
   }
@@ -185,7 +185,7 @@ static inline float4 opencl_apply_shared_tone_mapping(float4 px, __global const 
 
 // === Curve hermite evaluation =================================================
 
-static inline float opencl_evaluate_curve_hermite(float x, __global const OpenClFusedParams* params) {
+static inline float opencl_evaluate_curve_hermite(float x, __global const OpenClDrtParams* params) {
   const int curve_count = params->curve_ctrl_pts_size_;
   if (curve_count <= 0) return x;
   if (curve_count == 1) {

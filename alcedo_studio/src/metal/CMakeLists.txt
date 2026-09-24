@@ -20,25 +20,10 @@ if(ALCEDO_METAL_ENABLED)
     set(METAL_LENS_CALIB_AIR "${ALCEDO_BINARY_ROOT}/edit/runtime/lens/metal/shader/lens_calib.air")
     set(METAL_LENS_CALIB_METALLIB "${ALCEDO_BINARY_ROOT}/edit/runtime/lens/metal/shader/lens_calib.metallib"
         CACHE INTERNAL "Metal lens calibration metallib path" FORCE)
-    set(METAL_FUSED_PIPELINE_SRC "${ALCEDO_SRC_ROOT}/edit/pipeline/metal_shader/fused_pipeline.metal")
-    set(METAL_FUSED_PIPELINE_AIR "${ALCEDO_BINARY_ROOT}/edit/pipeline/metal_shader/fused_pipeline.air")
-    set(METAL_FUSED_PIPELINE_METALLIB "${ALCEDO_BINARY_ROOT}/edit/pipeline/metal_shader/fused_pipeline.metallib"
-        CACHE INTERNAL "Metal fused pipeline metallib path" FORCE)
     set(METAL_SCOPE_ANALYZER_SRC "${ALCEDO_SRC_ROOT}/edit/scope/metal_shader/scope_analyzer.metal")
     set(METAL_SCOPE_ANALYZER_AIR "${ALCEDO_BINARY_ROOT}/edit/scope/metal_shader/scope_analyzer.air")
     set(METAL_SCOPE_ANALYZER_METALLIB "${ALCEDO_BINARY_ROOT}/edit/scope/metal_shader/scope_analyzer.metallib"
         CACHE INTERNAL "Metal scope analyzer metallib path" FORCE)
-    set(METAL_FUSED_PIPELINE_DEPS
-        "${ALCEDO_SRC_ROOT}/edit/operators/GPU_kernels/metal_shader/common.metal"
-        "${ALCEDO_SRC_ROOT}/edit/operators/GPU_kernels/metal_shader/basic.metal"
-        "${ALCEDO_SRC_ROOT}/edit/operators/GPU_kernels/metal_shader/tone_mapping.metal"
-        "${ALCEDO_SRC_ROOT}/edit/operators/GPU_kernels/metal_shader/color.metal"
-        "${ALCEDO_SRC_ROOT}/edit/operators/GPU_kernels/metal_shader/cst.metal"
-        "${ALCEDO_SRC_ROOT}/edit/operators/GPU_kernels/metal_shader/detail.metal"
-        "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/prng.metal"
-        "${ALCEDO_SRC_ROOT}/edit/operators/GPU_kernels/metal_shader/film_grain.metal"
-        "${ALCEDO_SRC_ROOT}/edit/operators/GPU_kernels/metal_shader/halation.metal"
-    )
     set(METAL_TO_LINEAR_REF_SRC "${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/metal_shader/to_linear_ref.metal")
     set(METAL_TO_LINEAR_REF_AIR "${ALCEDO_BINARY_ROOT}/decoders/processor/operators/gpu/metal_shader/to_linear_ref.air")
     set(METAL_TO_LINEAR_REF_METALLIB "${ALCEDO_BINARY_ROOT}/decoders/processor/operators/gpu/metal_shader/to_linear_ref.metallib"
@@ -217,16 +202,6 @@ if(ALCEDO_METAL_ENABLED)
     )
 
     alcedo_add_metal_library(
-        EditPipelineMetalShaders
-        "${METAL_FUSED_PIPELINE_SRC}"
-        "${METAL_FUSED_PIPELINE_AIR}"
-        "${METAL_FUSED_PIPELINE_METALLIB}"
-        "Compiling Metal fused pipeline shader"
-        "Linking Metal fused pipeline library"
-        DEPENDS ${METAL_FUSED_PIPELINE_DEPS}
-    )
-
-    alcedo_add_metal_library(
         ScopeAnalyzerMetalShaders
         "${METAL_SCOPE_ANALYZER_SRC}"
         "${METAL_SCOPE_ANALYZER_AIR}"
@@ -373,7 +348,6 @@ if(ALCEDO_METAL_ENABLED)
         "${METAL_UTILS_METALLIB}"
         "${METAL_GEOMETRY_UTILS_METALLIB}"
         "${METAL_LENS_CALIB_METALLIB}"
-        "${METAL_FUSED_PIPELINE_METALLIB}"
         "${METAL_SCOPE_ANALYZER_METALLIB}"
         "${METAL_TO_LINEAR_REF_METALLIB}"
         "${METAL_DEBAYER_RCD_METALLIB}"
@@ -442,11 +416,10 @@ if(ALCEDO_METAL_ENABLED)
         "-framework MetalPerformanceShadersGraph"
     )
 
-    # Tile IO orchestration + product RAW Neural entry (hard-fail).
+    # Tile IO orchestration for the Metal Neural Engine develop path.
     def_library(MetalDemosaicNetEntry
         SOURCES
             "${ALCEDO_SRC_ROOT}/decoders/processor/nn/metal_demosaicnet_tiled.mm"
-            "${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/metal_demosaicnet.cpp"
         PUBLIC_DEPS
             MetalDemosaicNet
             MetalImage

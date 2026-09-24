@@ -124,7 +124,6 @@ if [[ "$skip_metal_assets" -eq 0 ]]; then
     metal_convert.metallib
     geometry_utils.metallib
     lens_calib.metallib
-    fused_pipeline.metallib
     scope_analyzer.metallib
     to_linear_ref.metallib
     debayer_rcd.metallib
@@ -132,7 +131,17 @@ if [[ "$skip_metal_assets" -eq 0 ]]; then
     xtrans_interpolate.metallib
     cvt_ref_space.metallib
     demosaicnet_io.metallib
+    geometry_resample.metallib
+    camera_color.metallib
+    primary_grade.metallib
+    local_tone.metallib
+    mask.metallib
+    drt.metallib
   )
+  # The legacy fused edit pipeline metallib is archived (G10.10) and must not be packaged.
+  if [[ -e "${metal_dir}/fused_pipeline.metallib" ]]; then
+    fail "legacy fused pipeline metallib is packaged: ${metal_dir}/fused_pipeline.metallib"
+  fi
   for lib in "${metal_libs[@]}"; do
     # Empty/corrupt metallibs would still "exist"; require a non-trivial size.
     assert_min_size "${metal_dir}/${lib}" 512

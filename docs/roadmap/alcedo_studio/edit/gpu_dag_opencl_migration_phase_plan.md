@@ -1847,12 +1847,12 @@ program 标记为自己的依赖。O5 产品切换后，新安装包不得再要
 
 ### 14.5 删除
 
-- [ ] 旧 OpenCL pipeline factory 和实现已删除。
-- [ ] OpenClFusedParams/OpenClFusedParamUploader 已删除。
-- [ ] OpenClStage 私有 LLF cache/allocator 已删除。
-- [ ] 旧 OpenCL fused program 不再注册、测试或打包。
-- [ ] 已迁移 operator 不再提供旧图像执行入口。
-- [ ] 不存在 build flag 可重新启用旧 OpenCL pipeline。
+- [x] 旧 OpenCL pipeline factory 和实现已删除（G10.10，见 [G10 计划 19.12 节](gpu_dag_final_removal_phase_plan.md#phase-g1010-completion-record-2026-09-24)）。
+- [x] OpenClFusedParams/OpenClFusedParamUploader 已删除（G10.10，见 [G10 计划 19.12 节](gpu_dag_final_removal_phase_plan.md#phase-g1010-completion-record-2026-09-24)）。
+- [x] OpenClStage 私有 LLF cache/allocator 已删除（G10.10，见 [G10 计划 19.12 节](gpu_dag_final_removal_phase_plan.md#phase-g1010-completion-record-2026-09-24)）。
+- [x] 旧 OpenCL fused program 不再注册、测试或打包（G10.10，见 [G10 计划 19.12 节](gpu_dag_final_removal_phase_plan.md#phase-g1010-completion-record-2026-09-24)）。
+- [x] 已迁移 operator 不再提供旧图像执行入口（G10.10，见 [G10 计划 19.12 节](gpu_dag_final_removal_phase_plan.md#phase-g1010-completion-record-2026-09-24)）。
+- [x] 不存在 build flag 可重新启用旧 OpenCL pipeline（G10.10，见 [G10 计划 19.12 节](gpu_dag_final_removal_phase_plan.md#phase-g1010-completion-record-2026-09-24)）。
 
 ### 14.6 性能
 

@@ -3,6 +3,7 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -623,6 +624,50 @@ TEST_F(OpenClWorkspaceFixture, OpenClProgramManifestCanLoadFromInstalledResource
   EXPECT_NO_THROW((void)OpenClProgramLibrary::Instance().GetProgram(program_name));
   EXPECT_TRUE(OpenClProgramLibrary::Instance().IsProgramBuilt(program_name));
   std::filesystem::remove(installed);
+}
+
+TEST_F(OpenClWorkspaceFixture, InstalledOpenClPackageBuildsEveryGpuDagProgram) {
+  // Run after `cmake --install` with ALCEDO_INSTALLED_OPENCL_BIN_DIR set to the installed
+  // directory that holds `opencl/` (for example build/install/bin). Each gpu_dag program is built
+  // again from the installed copies only, so a source file that the install rules miss fails here
+  // with the program name and the missing path.
+  const char* installed_bin = std::getenv("ALCEDO_INSTALLED_OPENCL_BIN_DIR");
+  if (installed_bin == nullptr || *installed_bin == '\0') {
+    GTEST_SKIP() << "ALCEDO_INSTALLED_OPENCL_BIN_DIR is not set";
+  }
+  const auto installed_root = std::filesystem::path(installed_bin) / "opencl";
+  ASSERT_TRUE(std::filesystem::is_directory(installed_root)) << installed_root.string();
+
+  RegisterOpenClBackendPrograms();
+  const auto source_root =
+      std::filesystem::path{ALCEDO_OPENCL_SHADER_SOURCE_ROOT}.lexically_normal();
+  auto& library = OpenClProgramLibrary::Instance();
+  for (const char* program_name :
+       {OpenCL::GpuDag::kGeometryCameraProgramName, OpenCL::GpuDag::kPrimaryGradeProgramName,
+        OpenCL::GpuDag::kLocalToneProgramName, OpenCL::GpuDag::kMaskProgramName,
+        OpenCL::GpuDag::kDrtProgramName}) {
+    SCOPED_TRACE(program_name);
+    const auto source_paths = library.RegisteredSourcePaths(program_name);
+    ASSERT_FALSE(source_paths.empty());
+    std::vector<std::filesystem::path> installed_paths;
+    for (const auto& source_path : source_paths) {
+      const auto rel = source_path.lexically_normal().lexically_relative(source_root);
+      ASSERT_FALSE(rel.empty() || *rel.begin() == "..") << source_path.string();
+      const auto installed = installed_root / rel;
+      ASSERT_TRUE(std::filesystem::is_regular_file(installed))
+          << "installed package misses " << installed.string();
+      installed_paths.push_back(installed);
+    }
+    const auto installed_program = std::string("installed_") + program_name + "_" + UniqueSuffix();
+    library.RegisterProgram(OpenClProgramDescriptor{
+        .name                = installed_program,
+        .source_paths        = installed_paths,
+        .build_options       = "-cl-std=CL1.2",
+        .required_at_startup = false,
+    });
+    EXPECT_NO_THROW((void)library.GetProgram(installed_program));
+    EXPECT_TRUE(library.IsProgramBuilt(installed_program));
+  }
 }
 
 TEST_F(OpenClWorkspaceFixture, OpenClCommandContextReleasesEveryRetainedEvent) {

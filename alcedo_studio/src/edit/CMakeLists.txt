@@ -301,7 +301,7 @@ if(ALCEDO_OPENCL_ENABLED)
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_local_tone_pass.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_mask_pass.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_primary_grade_pass.cpp
-        PUBLIC_DEPS EditRuntime EditInput RawProcessorOp OpenClDemosaicNetEntry OpenClContext OpenClProgramLibrary OpenCL::OpenCL
+        PUBLIC_DEPS EditRuntime EditInput RawProcessorOp OpenClDemosaicNet OpenClContext OpenClProgramLibrary OpenCL::OpenCL
         PRIVATE_DEPS EditRuntimeLens EditScope OpenClGeometryUtils PreviewPerformance
     )
     target_compile_definitions(EditRuntimeOpenCl PUBLIC HAVE_OPENCL)

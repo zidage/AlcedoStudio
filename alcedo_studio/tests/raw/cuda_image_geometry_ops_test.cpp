@@ -13,7 +13,6 @@
 #include <opencv2/imgproc.hpp>
 
 #include "decoders/processor/operators/gpu/cuda_image_ops.hpp"
-#include "decoders/processor/operators/gpu/cuda_rotate.hpp"
 #include "edit/runtime/lens/cuda/cuda_geometry_ops.hpp"
 #include "edit/runtime/lens/cuda/cuda_lens_calib_ops.hpp"
 #include "image/image_buffer.hpp"
@@ -388,38 +387,6 @@ TEST(CudaImageOpsTest, MergeRgbAndRgbToRgbaMatchesCpuReference) {
       EXPECT_FLOAT_EQ(v[3], 1.0f);
     }
   }
-}
-
-TEST(CudaImageOpsTest, Rotate90And180MatchesCpuRotate) {
-  if (!EnsureCudaDevice()) {
-    GTEST_SKIP() << "No CUDA device available.";
-  }
-
-  const cv::Mat src = MakeGradientMat(5, 7, CV_32FC1);
-
-  cv::cuda::GpuMat d_img(src);
-  CUDA::Rotate90CW(d_img);
-  cv::Mat cw_out;
-  d_img.download(cw_out);
-  cv::Mat cw_ref;
-  cv::rotate(src, cw_ref, cv::ROTATE_90_CLOCKWISE);
-  EXPECT_LT(MeanAbsError(cw_out, cw_ref), 1e-6);
-
-  d_img.upload(src);
-  CUDA::Rotate90CCW(d_img);
-  cv::Mat ccw_out;
-  d_img.download(ccw_out);
-  cv::Mat ccw_ref;
-  cv::rotate(src, ccw_ref, cv::ROTATE_90_COUNTERCLOCKWISE);
-  EXPECT_LT(MeanAbsError(ccw_out, ccw_ref), 1e-6);
-
-  d_img.upload(src);
-  CUDA::Rotate180(d_img);
-  cv::Mat r180_out;
-  d_img.download(r180_out);
-  cv::Mat r180_ref;
-  cv::rotate(src, r180_ref, cv::ROTATE_180);
-  EXPECT_LT(MeanAbsError(r180_out, r180_ref), 1e-6);
 }
 
 TEST(CudaGeometryOpsTest, ResizeAreaApproxVisuallyMatchesCpuInterArea) {

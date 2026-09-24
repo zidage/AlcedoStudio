@@ -6,10 +6,6 @@
 
 #include <cmath>
 #include <cstdint>
-#include <filesystem>
-#include <fstream>
-#include <regex>
-#include <sstream>
 #include <string>
 
 #include "edit/runtime/local_tone_mapping.hpp"
@@ -31,28 +27,6 @@ struct TestToneParams {
   int           render_roi_reference_width_  = 0;
   int           render_roi_reference_height_ = 0;
 };
-
-auto ReadSourceFile(const std::filesystem::path& path) -> std::string {
-  std::ifstream file(path, std::ios::binary);
-  EXPECT_TRUE(file.is_open()) << path.string();
-  std::ostringstream contents;
-  contents << file.rdbuf();
-  return contents.str();
-}
-
-auto SourcePath(const std::filesystem::path& relative) -> std::filesystem::path {
-  return std::filesystem::path(ALCEDO_SOURCE_ROOT) / relative;
-}
-
-auto ExtractFloatLiteral(const std::string& source, const std::string& symbol) -> float {
-  const std::regex pattern(symbol + R"(\s*(?:=|\s)\s*(-?\d+(?:\.\d+)?)(?:f)?)");
-  std::smatch      match;
-  EXPECT_TRUE(std::regex_search(source, match, pattern)) << symbol;
-  if (match.size() < 2) {
-    return 0.0f;
-  }
-  return std::stof(match[1].str());
-}
 
 auto AcesccDecode(float acescc) -> float {
   constexpr float kLog2Min         = -15.0f;
@@ -224,39 +198,6 @@ TEST(LocalToneMappingConstantsMatchRuntime, AcesccDeltaFastPathMatchesLinearRati
       }
     }
   }
-}
-
-TEST(LocalToneMappingConstantsMatchRuntime, LegacyShaderMirrorConstantsMatchRuntime) {
-  const auto opencl = ReadSourceFile(SourcePath("edit/pipeline/opencl_shader/tone_mapping.cl"));
-  const auto metal =
-      ReadSourceFile(SourcePath("edit/operators/GPU_kernels/metal_shader/tone_mapping.metal"));
-
-  EXPECT_NE(opencl.find("Mirrored from edit/runtime/local_tone_mapping.hpp"), std::string::npos);
-  EXPECT_NE(metal.find("Mirrored from edit/runtime/local_tone_mapping.hpp"), std::string::npos);
-
-  EXPECT_FLOAT_EQ(ExtractFloatLiteral(opencl, "ALCEDO_OPENCL_HS_ACESCC_MIDDLE_GRAY"),
-                  tone::kAcesccMiddleGray);
-  EXPECT_FLOAT_EQ(ExtractFloatLiteral(opencl, "ALCEDO_OPENCL_HS_BASE_SIGMA_R"), tone::kBaseSigmaR);
-  EXPECT_FLOAT_EQ(ExtractFloatLiteral(opencl, "ALCEDO_OPENCL_HS_HIGHLIGHT_STRENGTH_SCALE"),
-                  tone::kHighlightStrengthScale);
-  EXPECT_FLOAT_EQ(ExtractFloatLiteral(opencl, "ALCEDO_OPENCL_HS_BACKEND_AMOUNT_LIMIT"),
-                  tone::kBackendAmountLimit);
-  EXPECT_FLOAT_EQ(ExtractFloatLiteral(opencl, "ALCEDO_OPENCL_HS_TONE_BETA_EPS"),
-                  tone::kToneBetaEps);
-  EXPECT_FLOAT_EQ(ExtractFloatLiteral(opencl, "ALCEDO_OPENCL_HS_TONE_BETA_MIN"),
-                  tone::kToneBetaMin);
-  EXPECT_FLOAT_EQ(ExtractFloatLiteral(opencl, "ALCEDO_OPENCL_HS_TONE_BETA_MAX"),
-                  tone::kToneBetaMax);
-
-  EXPECT_FLOAT_EQ(ExtractFloatLiteral(metal, "kMetalHsAcesccMiddleGray"), tone::kAcesccMiddleGray);
-  EXPECT_FLOAT_EQ(ExtractFloatLiteral(metal, "kMetalHsBaseSigmaR"), tone::kBaseSigmaR);
-  EXPECT_FLOAT_EQ(ExtractFloatLiteral(metal, "kMetalHsHighlightStrengthScale"),
-                  tone::kHighlightStrengthScale);
-  EXPECT_FLOAT_EQ(ExtractFloatLiteral(metal, "kMetalHsBackendAmountLimit"),
-                  tone::kBackendAmountLimit);
-  EXPECT_FLOAT_EQ(ExtractFloatLiteral(metal, "kMetalHsToneBetaEps"), tone::kToneBetaEps);
-  EXPECT_FLOAT_EQ(ExtractFloatLiteral(metal, "kMetalHsToneBetaMin"), tone::kToneBetaMin);
-  EXPECT_FLOAT_EQ(ExtractFloatLiteral(metal, "kMetalHsToneBetaMax"), tone::kToneBetaMax);
 }
 
 }  // namespace alcedo

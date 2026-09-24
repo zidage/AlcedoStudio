@@ -5,6 +5,7 @@
 #pragma once
 
 #include <gtest/gtest.h>
+#include <libraw/libraw.h>
 
 #include <QImage>
 #include <algorithm>
@@ -19,7 +20,6 @@
 
 #include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
-#include "decoders/processor/raw_processor.hpp"
 #include "decoders/processor/raw_rgb_normalization.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/runtime/graph_compiler.hpp"
@@ -27,46 +27,6 @@
 #include "image/metadata_extractor.hpp"
 
 namespace alcedo::gpu_dag_test {
-
-/// The older RAW entry point must perform the same GPU level/WB conversion as the DAG.
-inline void VerifyLegacyRgbGpu(RawGpuBackend backend) {
-  auto    raw  = std::make_unique<LibRaw>();
-  auto&   data = raw->imgdata.rawdata;
-  cv::Mat codes(32, 48, CV_16UC4, cv::Scalar(9280, 9280, 9280, 0));
-  data.color4_image    = reinterpret_cast<ushort(*)[4]>(codes.data);
-  data.sizes.raw_width = data.sizes.width = codes.cols;
-  data.sizes.raw_height = data.sizes.height = codes.rows;
-  data.sizes.raw_pitch                      = static_cast<unsigned>(codes.step);
-  data.color.black                          = 1024;
-  data.color.maximum                        = 17536;
-  data.color.cam_mul[0]                     = 2.0f;
-  data.color.cam_mul[1]                     = 1.0f;
-  data.color.cam_mul[2]                     = 1.5f;
-  data.color.cam_mul[3]                     = 1.0f;
-  data.color.as_shot_wb_applied             = LIBRAW_ASWB_APPLIED | LIBRAW_ASWB_SONY;
-  raw->imgdata.color                        = data.color;
-  raw->imgdata.idata.colors                 = 3;
-  raw->imgdata.idata.filters                = 0;
-  RawParams params;
-  params.gpu_backend_            = backend;
-  params.highlights_reconstruct_ = false;
-  const ushort crop[4]           = {};
-  RawProcessor processor(params, data, *raw, RawRuntimeColorContext{}, crop);
-  auto         output = processor.Process();
-  output.SyncToCPU();
-  const auto& rgb = output.GetCPUData();
-  ASSERT_EQ(rgb.size(), codes.size());
-  ASSERT_EQ(rgb.type(), CV_32FC4);
-  for (int y = 0; y < rgb.rows; ++y) {
-    for (int x = 0; x < rgb.cols; ++x) {
-      const auto pixel = rgb.at<cv::Vec4f>(y, x);
-      EXPECT_NEAR(pixel[0], 0.25f, 1e-6f);
-      EXPECT_NEAR(pixel[1], 0.5f, 1e-6f);
-      EXPECT_NEAR(pixel[2], 1.0f / 3.0f, 1e-6f);
-      EXPECT_FLOAT_EQ(pixel[3], 1.0f);
-    }
-  }
-}
 
 template <typename Device>
 auto DownloadRgb(Device& device, const GraphValueId& id) -> cv::Mat {
