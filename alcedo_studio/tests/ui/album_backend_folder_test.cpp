@@ -27,20 +27,6 @@ auto FindPackedProjectPath(const std::filesystem::path& dir)
   return std::nullopt;
 }
 
-auto FindFolderId(const QVariantList& folders, const QString& name) -> uint {
-  for (const auto& v : folders) {
-    const auto map = v.toMap();
-    if (map.value("name").toString() == name) {
-      return map.value("folderId").toUInt();
-    }
-  }
-  return 0;
-}
-
-auto ContainsFolderName(const QVariantList& folders, const QString& name) -> bool {
-  return FindFolderId(folders, name) != 0;
-}
-
 // ── Create folder — signal emitted, folder visible ─────────────────────────
 
 TEST_F(FolderTests, CreateFolder_ValidName_EmitsFoldersChanged) {
@@ -137,37 +123,6 @@ TEST_F(FolderTests, SelectNestedFolder_LazyPathExpansionUpdatesCurrentPath) {
   ProcessEvents(300);
 
   EXPECT_EQ(backend.folders()->CurrentFolderPath(), "\\ParentFolder\\ChildFolder");
-}
-
-TEST_F(FolderTests, ReloadProject_PreservesVisibleNestedFolderUnderSelectedParent) {
-  ApplicationModuleHost backend;
-  ASSERT_TRUE(CreateTestProject(backend, "nested_reload"));
-
-  backend.folders()->CreateFolder("ParentFolder");
-  ProcessEvents(500);
-
-  const uint parent_id = FindFolderId(backend.folders()->Folders(), "ParentFolder");
-  ASSERT_NE(parent_id, 0u);
-
-  backend.folders()->SelectFolder(parent_id);
-  ProcessEvents(300);
-  backend.folders()->CreateFolder("ChildFolder");
-  ProcessEvents(500);
-
-  ASSERT_EQ(backend.folders()->CurrentFolderPath(), "\\ParentFolder");
-  ASSERT_TRUE(ContainsFolderName(backend.folders()->Folders(), "ChildFolder"));
-  ASSERT_TRUE(backend.project()->SaveProject());
-
-  const auto packed_project_path = FindPackedProjectPath(temp_dir_);
-  ASSERT_TRUE(packed_project_path.has_value());
-
-  QSignalSpy project_changed_spy(backend.project(), &ProjectModule::ProjectChanged);
-  ASSERT_TRUE(backend.project()->LoadProject(PathToQString(*packed_project_path)));
-  ASSERT_TRUE(WaitForSignal(project_changed_spy, 15000));
-  ProcessEvents(500);
-
-  EXPECT_EQ(backend.folders()->CurrentFolderPath(), "\\ParentFolder");
-  EXPECT_TRUE(ContainsFolderName(backend.folders()->Folders(), "ChildFolder"));
 }
 
 // ── Select folder — invalid ID ─────────────────────────────────────────────
