@@ -1761,12 +1761,12 @@ Original source files on disk will be kept.</source>
     <name>EditorAdjustmentHeader</name>
     <message>
         <location filename="../qml/EditorAdjustmentHeader.qml" line="+140"/>
-        <source>Radial</source>
+        <source>Add Radial Mask</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
         <location line="+25"/>
-        <source>Gradient</source>
+        <source>Add Gradient Mask</source>
         <translation type="unfinished"></translation>
     </message>
 </context>
@@ -4570,6 +4570,39 @@ Original source files on disk will be kept.</source>
     </message>
 </context>
 <context>
+    <name>LockedNodeMaskPromptDialog</name>
+    <message>
+        <source>Add Mask to a Locked Node?</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>The default adjustment node applies Alcedo&apos;s default adjustments, so it is locked. A Mask drawn on it also limits those default adjustments to the masked area, which differs from traditional editing software.
+
+Create a new layer above it and draw the Mask there?</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Don&apos;t ask again</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>You can change this later in Settings &gt; Default Behavior.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>New Layer, Then Draw</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Draw on Current Node</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
     <name>Main</name>
     <message>
         <location filename="../qml/Main.qml" line="+48"/>
@@ -5142,6 +5175,38 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <location line="+263"/>
         <source>Done</source>
         <translation>Done</translation>
+    </message>
+    <message>
+        <source>Language / Theme</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Default Behavior</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Masks</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Adding a Mask on a locked node</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Ask every time</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Create a new layer, then draw</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Draw on the current node</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>The default adjustment node applies Alcedo&apos;s default adjustments, so it is locked. A Mask drawn on it also limits those defaults to the masked area. Layers you add yourself are not locked and are never affected by this setting.</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>

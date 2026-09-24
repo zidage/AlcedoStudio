@@ -40,6 +40,7 @@ Dialog {
     property string pendingLanguageCode: languageManager.currentLanguageCode
     property string pendingSemanticImportPreference: appModules.semanticGeneration.importPreference
     property string pendingAcceleratorBackend: appModules.project.acceleratorBackend
+    property string pendingLockedNodeMaskAction: appModules.editorBehavior.lockedNodeMaskAction
     property int requestedCategory: 0
     readonly property bool canCompleteSettings: appModules.interactionPolicy.canRunSemanticGeneration
     readonly property bool acceleratorRestartHintVisible:
@@ -74,6 +75,7 @@ Dialog {
         pendingLanguageCode = languageManager.currentLanguageCode
         pendingSemanticImportPreference = appModules.semanticGeneration.importPreference
         pendingAcceleratorBackend = appModules.project.acceleratorBackend
+        pendingLockedNodeMaskAction = appModules.editorBehavior.lockedNodeMaskAction
         cachePanel.reloadPending()
     }
 
@@ -106,12 +108,22 @@ Dialog {
         return 0
     }
 
+    function lockedNodeMaskActionIndex(action) {
+        const entries = lockedNodeMaskComboModel.entries
+        for (let i = 0; i < entries.length; ++i) {
+            if (entries[i].value === action) {
+                return i
+            }
+        }
+        return 0
+    }
+
     function currentPageTitle() {
         if (currentCategory === 0) {
-            return qsTr("Language")
+            return qsTr("Language / Theme")
         }
         if (currentCategory === 1) {
-            return qsTr("Theme and color")
+            return qsTr("Default Behavior")
         }
         if (currentCategory === 2) {
             return qsTr("Cache")
@@ -150,6 +162,9 @@ Dialog {
         }
         if (languageManager.currentLanguageCode !== pendingLanguageCode) {
             languageManager.setLanguage(pendingLanguageCode)
+        }
+        if (appModules.editorBehavior.lockedNodeMaskAction !== pendingLockedNodeMaskAction) {
+            appModules.editorBehavior.setLockedNodeMaskAction(pendingLockedNodeMaskAction)
         }
         cachePanel.applyPending()
         if (appModules.semanticGeneration.importPreference !== pendingSemanticImportPreference) {
@@ -200,6 +215,23 @@ Dialog {
             const item = entries[index]
             if (item)
                 dialog.pendingThemeIndex = item.value
+        }
+    }
+
+    QtObject {
+        id: lockedNodeMaskComboModel
+        property string label: ""
+        property bool enabled: true
+        readonly property var entries: [
+            { value: "ask", label: qsTr("Ask every time") },
+            { value: "newLayer", label: qsTr("Create a new layer, then draw") },
+            { value: "currentNode", label: qsTr("Draw on the current node") }
+        ]
+        property int currentIndex: dialog.lockedNodeMaskActionIndex(dialog.pendingLockedNodeMaskAction)
+        function selectIndex(index) {
+            const item = entries[index]
+            if (item)
+                dialog.pendingLockedNodeMaskAction = item.value
         }
     }
 
@@ -317,8 +349,8 @@ Dialog {
                             // equivalent in production).
                             Instantiator {
                                 model: [
-                                    { label: qsTr("Language"), icon: "qrc:/panel_icons/language.svg" },
-                                    { label: qsTr("Theme and color"), icon: "qrc:/panel_icons/palette.svg" },
+                                    { label: qsTr("Language / Theme"), icon: "qrc:/panel_icons/language.svg" },
+                                    { label: qsTr("Default Behavior"), icon: "qrc:/panel_icons/adjustments.svg" },
                                     { label: qsTr("Cache"), icon: "qrc:/panel_icons/box.svg" },
                                     { label: qsTr("Local Content Recognition"), icon: "qrc:/panel_icons/search.svg" },
                                     { label: qsTr("Advanced Content Analysis"), icon: "qrc:/panel_icons/flask.svg" },
@@ -511,23 +543,13 @@ Dialog {
                                         }
                                     }
                                 }
-                            }
-                        }
-
-                        ScrollView {
-                            id: themeScroll
-                            contentWidth: availableWidth
-                            clip: true
-
-                            ColumnLayout {
-                                width: themeScroll.availableWidth
-                                spacing: 18
 
                                 SettingsSection {
                                     Layout.fillWidth: true
-                                    Layout.topMargin: 26
+                                    Layout.topMargin: 8
                                     Layout.leftMargin: 34
                                     Layout.rightMargin: 34
+                                    Layout.bottomMargin: 26
                                     title: qsTr("Workspace appearance")
                                     textColor: dialog.textColor
                                     mutedTextColor: dialog.mutedTextColor
@@ -552,6 +574,69 @@ Dialog {
                                             controlHeight: 36
                                             showResetButton: false
                                             model: themeComboModel
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        ScrollView {
+                            id: defaultBehaviorScroll
+                            objectName: "defaultBehaviorSettingsScroll"
+                            contentWidth: availableWidth
+                            clip: true
+
+                            ColumnLayout {
+                                width: defaultBehaviorScroll.availableWidth
+                                spacing: 18
+
+                                SettingsSection {
+                                    Layout.fillWidth: true
+                                    Layout.topMargin: 26
+                                    Layout.leftMargin: 34
+                                    Layout.rightMargin: 34
+                                    Layout.bottomMargin: 26
+                                    title: qsTr("Masks")
+                                    textColor: dialog.textColor
+                                    mutedTextColor: dialog.mutedTextColor
+                                    dividerColor: dialog.dividerColor
+
+                                    ColumnLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 10
+
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            spacing: 16
+
+                                            Label {
+                                                Layout.preferredWidth: 160
+                                                text: qsTr("Adding a Mask on a locked node")
+                                                color: dialog.textColor
+                                                font.pixelSize: 15
+                                                font.weight: 600
+                                                wrapMode: Text.Wrap
+                                            }
+
+                                            AdjustmentCombo {
+                                                objectName: "settingsLockedNodeMaskControl"
+                                                controlObjectName: "settingsLockedNodeMaskCombo"
+                                                Layout.fillWidth: true
+                                                controlHeight: 36
+                                                showResetButton: false
+                                                model: lockedNodeMaskComboModel
+                                            }
+                                        }
+
+                                        Label {
+                                            Layout.fillWidth: true
+                                            Layout.leftMargin: 176
+                                            text: qsTr("The default adjustment node applies Alcedo's default adjustments, so it is locked. A Mask drawn on it also limits those defaults to the masked area. Layers you add yourself are not locked and are never affected by this setting.")
+                                            wrapMode: Text.WordWrap
+                                            color: dialog.mutedTextColor
+                                            font.pixelSize: 12
+                                            font.weight: 500
+                                            lineHeight: 1.25
                                         }
                                     }
                                 }

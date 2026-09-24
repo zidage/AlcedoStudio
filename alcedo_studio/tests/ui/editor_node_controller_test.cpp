@@ -186,6 +186,12 @@ class DocumentSessionBackend final : public IEditorSessionBackend {
     if (backbone[backbone.size() - 2] != expected_predecessor_id) {
       return Rejected("The Mask Groups insertion point changed since the request was issued");
     }
+    if (defer_inserts_) {
+      // Production reduces the command on the session worker thread: the
+      // submit returns Accepted before the document holds the new node.
+      deferred_insert_id_ = new_id;
+      return Accepted("Editor session command queued");
+    }
     const auto errors = alcedo::AddCleanColorGrade(document_, backbone.back(), new_id);
     if (!errors.empty()) return Rejected(errors.front().message);
     PublishHistoryChange();
@@ -222,6 +228,16 @@ class DocumentSessionBackend final : public IEditorSessionBackend {
   }
   auto Document() -> PipelineDocument& { return document_; }
   void SetFailCommands(bool fail) { fail_commands_ = fail; }
+  void SetDeferInserts(bool defer) { defer_inserts_ = defer; }
+  /// Apply the queued insert and publish its history change, as the session
+  /// worker does after the submit has returned.
+  void CommitDeferredInsert() {
+    ASSERT_FALSE(deferred_insert_id_.Empty());
+    const auto backbone = document_.Graph().ImageBackboneNodeIds();
+    ASSERT_TRUE(alcedo::AddCleanColorGrade(document_, backbone.back(), deferred_insert_id_).empty());
+    deferred_insert_id_ = {};
+    PublishHistoryChange();
+  }
   void PublishAvailability(alcedo::EditorActionAvailability availability) {
     availability_ = std::move(availability);
     if (availability_observer_) {
@@ -276,6 +292,8 @@ class DocumentSessionBackend final : public IEditorSessionBackend {
   EditorSessionState                                state_     = EditorSessionState::Interactive;
   bool                                              has_image_ = true;
   bool                                              fail_commands_          = false;
+  bool                                              defer_inserts_          = false;
+  NodeId                                            deferred_insert_id_;
   int                                               rename_count_           = 0;
   int                                               edit_node_graph_count_  = 0;
   int                                               insert_grade_top_count_ = 0;
@@ -1097,6 +1115,70 @@ TEST(EditorNodeController, InsertMaskGroupAtTopSubmitsOneCommandAndSelectsTheNew
   EXPECT_EQ(controller.mask_group_snapshot().groups[0].node_id, new_id);
   EXPECT_EQ(controller.mask_group_snapshot().groups[0].display_name, "Color Grade 2");
   EXPECT_TRUE(controller.last_error().isEmpty());
+}
+
+TEST(EditorNodeController, QueuedInsertMaskGroupSelectsTheNewGroupWhenItsCommitArrives) {
+  DocumentSessionBackend backend;
+  backend.SetGeneration(49);
+  backend.SetDeferInserts(true);
+  EditorSessionController session(&backend);
+  EditorNodeController    controller;
+  controller.set_editor_session(&session);
+  controller.selectNode(QStringLiteral("grade.primary"));
+
+  ASSERT_TRUE(controller.insertMaskGroupAtTop());
+  const auto new_id = backend.last_insert_new_id();
+  EXPECT_EQ(controller.last_inserted_mask_group_id(),
+            QString::fromUtf8(new_id.Value().data(), static_cast<int>(new_id.Value().size())));
+  // The commit has not arrived: the locked grade stays selected, no error.
+  EXPECT_EQ(controller.selected_node_id(), NodeId{"grade.primary"});
+  EXPECT_TRUE(controller.last_error().isEmpty());
+
+  backend.CommitDeferredInsert();
+  EXPECT_EQ(controller.selected_node_id(), new_id);
+  EXPECT_FALSE(controller.selected_node_deletion_protected());
+
+  // Later history refreshes keep the user's own selection.
+  controller.selectNode(QStringLiteral("grade.primary"));
+  backend.PublishHistoryChange();
+  EXPECT_EQ(controller.selected_node_id(), NodeId{"grade.primary"});
+}
+
+TEST(EditorNodeController, SelectedNodeDeletionProtectedTracksTheLockedDefaultGrade) {
+  DocumentSessionBackend backend;
+  backend.SetGeneration(47);
+  EditorSessionController session(&backend);
+  EditorNodeController    controller;
+  controller.set_editor_session(&session);
+
+  // The default Color Grade carries application defaults and starts locked.
+  controller.selectNode(QStringLiteral("grade.primary"));
+  EXPECT_TRUE(controller.selected_node_deletion_protected());
+  EXPECT_TRUE(controller.property("selectedNodeDeletionProtected").toBool());
+
+  // A user-inserted layer is not locked; the prompt must not apply to it.
+  ASSERT_TRUE(controller.insertMaskGroupAtTop());
+  EXPECT_NE(controller.selected_node_id(), NodeId{"grade.primary"});
+  EXPECT_FALSE(controller.selected_node_deletion_protected());
+
+  // Endpoints are never reported as locked Color Grades.
+  controller.selectDevelop();
+  EXPECT_FALSE(controller.selected_node_deletion_protected());
+  controller.selectDrt();
+  EXPECT_FALSE(controller.selected_node_deletion_protected());
+}
+
+TEST(EditorNodeController, SelectedNodeDeletionProtectedIsFalseForAnUnlockedDefaultGrade) {
+  DocumentSessionBackend backend;
+  backend.SetGeneration(48);
+  backend.Document().PrimaryGrade()->SetDeletionProtected(false);
+  EditorSessionController session(&backend);
+  EditorNodeController    controller;
+  controller.set_editor_session(&session);
+  controller.selectNode(QStringLiteral("grade.primary"));
+
+  EXPECT_EQ(controller.selected_node_kind(), QStringLiteral("colorGrade"));
+  EXPECT_FALSE(controller.selected_node_deletion_protected());
 }
 
 TEST(EditorNodeController, RemoveMaskGroupBridgesAndSelectsTheSuccessor) {

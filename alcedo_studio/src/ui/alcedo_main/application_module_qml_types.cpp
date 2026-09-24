@@ -58,6 +58,8 @@ void RegisterApplicationModuleTypes() {
                                                     "Owned by EditorSessionController");
   qmlRegisterUncreatableType<WorkspaceRouter>("Alcedo.Main", 1, 0, "WorkspaceRouter",
                                               "Owned by ApplicationModuleHost");
+  qmlRegisterUncreatableType<EditorBehaviorPreferences>(
+      "Alcedo.Main", 1, 0, "EditorBehaviorPreferences", "Owned by ApplicationModuleHost");
 }
 
 }  // namespace alcedo::ui

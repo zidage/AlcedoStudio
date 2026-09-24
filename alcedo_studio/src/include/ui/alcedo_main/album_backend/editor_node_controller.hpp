@@ -77,8 +77,17 @@ class EditorNodeController : public QObject {
   /// creation stay disabled until the draft is committed or reverted.
   Q_PROPERTY(bool canEditMaskGroupStructure READ can_edit_mask_group_structure NOTIFY
                  ActionAvailabilityChanged)
+  /// NodeId of the Color Grade most recently submitted by insertMaskGroupAtTop;
+  /// empty before the first insert. Callers compare it with selectedNodeId to
+  /// learn when the queued insert has committed and been selected.
+  Q_PROPERTY(QString lastInsertedMaskGroupId READ last_inserted_mask_group_id NOTIFY
+                 ActionAvailabilityChanged)
   Q_PROPERTY(QString selectedNodeName READ selected_node_name NOTIFY SelectionChanged)
   Q_PROPERTY(QString selectedNodeKind READ selected_node_kind NOTIFY SelectionChanged)
+  /// True when the primary selected node is a deletion-protected (locked)
+  /// Color Grade, such as the default grade that carries application defaults.
+  Q_PROPERTY(bool selectedNodeDeletionProtected READ selected_node_deletion_protected NOTIFY
+                 SelectionChanged)
   Q_PROPERTY(QStringList supportedAdjustmentPanels READ supported_adjustment_panels NOTIFY
                  SelectionChanged)
   Q_PROPERTY(QVariantList selectedNodeMasks READ selected_node_masks NOTIFY SelectionChanged)
@@ -184,7 +193,12 @@ class EditorNodeController : public QObject {
    * Committed-document operation: the new node becomes the final Color Grade
    * before DRT/Post through one typed history commit. Rejects while a
    * node-graph draft exists; the draft must be completed or reverted first.
-   * On success the new group is selected.
+   *
+   * The production session reduces the command on its own worker thread, so
+   * an accepted insert may not be in the document when this returns. The new
+   * group is selected as soon as a published snapshot contains it: right away
+   * for a synchronous commit, otherwise on the history refresh that carries
+   * the commit. lastInsertedMaskGroupId names the node in both cases.
    */
   Q_INVOKABLE bool insertMaskGroupAtTop();
   /**
@@ -289,9 +303,12 @@ class EditorNodeController : public QObject {
   [[nodiscard]] auto has_mask_group_snapshot() const -> bool { return has_mask_group_snapshot_; }
   /// Structural Mask Groups commands require a committed graph with no draft.
   [[nodiscard]] auto can_edit_mask_group_structure() const -> bool;
+  [[nodiscard]] auto last_inserted_mask_group_id() const -> QString;
   [[nodiscard]] auto selected_node_name() const -> QString;
   /// Product kind key: develop, colorGrade, or drt. Empty when nothing is selected.
   [[nodiscard]] auto selected_node_kind() const -> QString;
+  /// Deletion protection of the primary selected Color Grade; false otherwise.
+  [[nodiscard]] auto selected_node_deletion_protected() const -> bool;
   /// Panel keys the selected node may show. Empty when nothing is selected.
   [[nodiscard]] auto supported_adjustment_panels() const -> QStringList;
   /// Read-only Mask identity rows for the selected Color Grade. Empty otherwise.
@@ -363,6 +380,8 @@ class EditorNodeController : public QObject {
   /// Topology edits that drop the current node leave selection empty.
   void               RestoreSelectionAfterSnapshot(bool select_default_color_grade);
   void               SyncSessionAdjustmentNode(bool seal_open_sequence);
+  /// Select the queued insertMaskGroupAtTop node once the snapshot contains it.
+  void               SelectPendingInsertedNode();
   [[nodiscard]] auto ContainsNode(const NodeId& node_id) const -> bool;
   /// Product default Color Grade (`grade.primary`) when that node exists.
   [[nodiscard]] auto DefaultSelectedNodeId() const -> NodeId;
@@ -451,6 +470,14 @@ class EditorNodeController : public QObject {
   std::vector<NodeId>                           selected_node_ids_;
   NodeId                                        last_selected_color_grade_id_;
   NodeId                                        selection_restore_node_id_;
+  /// Node submitted by insertMaskGroupAtTop whose commit has not reached the
+  /// published snapshot yet. The session reduces the insert on its worker
+  /// thread, so selectNode right after the submit finds no such node. Cleared
+  /// when the node is selected, on a new image-load generation, and when the
+  /// snapshot is cleared. A rejected queued insert never publishes the id; the
+  /// value then stays inert until one of those clears.
+  NodeId                                        pending_inserted_selection_id_;
+  NodeId                                        last_inserted_mask_group_id_;
   bool                                          command_active_            = false;
   bool                                          projection_apply_queued_   = false;
   bool                                          applying_layout_           = false;

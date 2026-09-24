@@ -291,8 +291,35 @@ class FakeNodeController final : public QObject {
   Q_PROPERTY(
       QStringList supportedAdjustmentPanels READ supportedAdjustmentPanels NOTIFY SelectionChanged)
   Q_PROPERTY(QVariantList selectedNodeMasks READ selectedNodeMasks NOTIFY SelectionChanged)
+  Q_PROPERTY(bool selectedNodeDeletionProtected READ selectedNodeDeletionProtected NOTIFY
+                 SelectionChanged)
+  Q_PROPERTY(bool canEditMaskGroupStructure READ canEditMaskGroupStructure CONSTANT)
+  Q_PROPERTY(QString selectedNodeId READ selectedNodeId NOTIFY SelectionChanged)
+  Q_PROPERTY(QString lastInsertedMaskGroupId READ lastInsertedMaskGroupId NOTIFY SelectionChanged)
 
  public:
+  auto selectedNodeId() const -> QString { return node_id_; }
+  auto lastInsertedMaskGroupId() const -> QString { return last_inserted_id_; }
+  /// Production commits the insert on the session worker thread; when set,
+  /// insertMaskGroupAtTop returns before the new layer is selected.
+  void setDeferInsertSelection(bool defer) { defer_insert_selection_ = defer; }
+  void commitDeferredInsert() { SelectInserted(); }
+  auto selectedNodeDeletionProtected() const -> bool { return locked_; }
+  auto canEditMaskGroupStructure() const -> bool { return true; }
+  auto insertCount() const -> int { return insert_count_; }
+  void setLocked(bool locked) {
+    locked_ = locked;
+    emit SelectionChanged();
+  }
+  /// Mirrors EditorNodeController: the new top layer is selected and unlocked.
+  Q_INVOKABLE bool insertMaskGroupAtTop() {
+    ++insert_count_;
+    last_inserted_id_ = QStringLiteral("grade.inserted.%1").arg(insert_count_);
+    if (!defer_insert_selection_) {
+      SelectInserted();
+    }
+    return true;
+  }
   auto selectedNodeName() const -> QString { return name_; }
   auto selectedNodeKind() const -> QString { return kind_; }
   auto supportedAdjustmentPanels() const -> QStringList { return panels_; }
@@ -307,13 +334,60 @@ class FakeNodeController final : public QObject {
 
  signals:
   void SelectionChanged();
+  void selectionChanged();
 
  private:
   QString      name_   = QStringLiteral("Color Grade");
   QString      kind_   = QStringLiteral("colorGrade");
   QStringList  panels_ = {QStringLiteral("tone"), QStringLiteral("look"), QStringLiteral("lut"),
                           QStringLiteral("masks")};
+  void SelectInserted() {
+    node_id_ = last_inserted_id_;
+    name_    = QStringLiteral("Color Grade 2");
+    locked_  = false;
+    emit SelectionChanged();
+    emit selectionChanged();
+  }
+
   QVariantList masks_;
+  QString      node_id_                = QStringLiteral("grade.primary");
+  QString      last_inserted_id_;
+  bool         locked_                 = false;
+  bool         defer_insert_selection_ = false;
+  int          insert_count_           = 0;
+};
+
+/// Stand-in for EditorBehaviorPreferences behind appModules.editorBehavior.
+class FakeEditorBehavior final : public QObject {
+  Q_OBJECT
+  Q_PROPERTY(QString lockedNodeMaskAction READ lockedNodeMaskAction NOTIFY
+                 lockedNodeMaskActionChanged)
+
+ public:
+  auto lockedNodeMaskAction() const -> QString { return action_; }
+  Q_INVOKABLE bool setLockedNodeMaskAction(const QString& action) {
+    action_ = action;
+    emit lockedNodeMaskActionChanged();
+    return true;
+  }
+
+ signals:
+  void lockedNodeMaskActionChanged();
+
+ private:
+  QString action_ = QStringLiteral("ask");
+};
+
+class FakeAppModules final : public QObject {
+  Q_OBJECT
+  Q_PROPERTY(QObject* editorBehavior READ editorBehavior CONSTANT)
+
+ public:
+  auto editorBehavior() -> QObject* { return &behavior_; }
+  auto behavior() -> FakeEditorBehavior& { return behavior_; }
+
+ private:
+  FakeEditorBehavior behavior_;
 };
 
 class FakeLutCatalogModel final : public QObject {
@@ -385,7 +459,8 @@ void RegisterQmlTypesOnce() {
 
 class StackHarness {
  public:
-  StackHarness(HeaderSession* session, FakeNodeController* nodes, int width) {
+  StackHarness(HeaderSession* session, FakeNodeController* nodes, int width,
+               QObject* app_modules = nullptr) {
     RegisterQmlTypesOnce();
     AppTheme::RegisterFonts();
     AppTheme::Instance().setReduceMotion(true);
@@ -394,6 +469,9 @@ class StackHarness {
     engine_.addImportPath(QStringLiteral("qrc:/"));
     engine_.addImportPath(QmlDirectory());
     engine_.rootContext()->setContextProperty(QStringLiteral("appTheme"), &AppTheme::Instance());
+    if (app_modules != nullptr) {
+      engine_.rootContext()->setContextProperty(QStringLiteral("appModules"), app_modules);
+    }
 
     QQmlComponent component(
         &engine_,
@@ -471,9 +549,9 @@ void ExpectMaskToolButtons(const StackHarness& harness) {
   ASSERT_NE(radial, nullptr);
   ASSERT_NE(gradient, nullptr);
   EXPECT_EQ(radial->property("iconSrc").toUrl(),
-            QUrl(QStringLiteral("qrc:/mask_icons/radial.svg")));
+            QUrl(QStringLiteral("qrc:/mask_icons/radial-add.svg")));
   EXPECT_EQ(gradient->property("iconSrc").toUrl(),
-            QUrl(QStringLiteral("qrc:/mask_icons/gradient.svg")));
+            QUrl(QStringLiteral("qrc:/mask_icons/gradient-add.svg")));
 }
 
 void ExpectExifAboveNameRow(const StackHarness& harness) {
@@ -930,6 +1008,154 @@ TEST(EditorAdjustmentHeaderQmlTest, MaskPageLoadsAtPanelWidthsInBothThemesWithou
     }
   }
   theme.setCurrentThemeIndex(original);
+}
+
+auto FindLockedNodeMaskPrompt(const StackHarness& harness) -> QObject* {
+  return harness.root() != nullptr
+             ? harness.root()->findChild<QObject*>(QStringLiteral("lockedNodeMaskPromptDialog"))
+             : nullptr;
+}
+
+void ClickRadial(const StackHarness& harness) {
+  auto* radial = harness.find(QStringLiteral("editorAdjustmentHeaderRadialButton"));
+  ASSERT_NE(radial, nullptr);
+  ASSERT_TRUE(QMetaObject::invokeMethod(radial, "clicked"));
+  ProcessEvents(30);
+}
+
+TEST(EditorAdjustmentHeaderQmlTest, AddMaskOnUnlockedGradeStartsWithoutPrompt) {
+  FakeMaskCreation   mask_creation;
+  HeaderSession      session(&mask_creation);
+  FakeNodeController nodes;
+  FakeAppModules     modules;
+  StackHarness       harness(&session, &nodes, 320, &modules);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  auto* prompt = FindLockedNodeMaskPrompt(harness);
+  ASSERT_NE(prompt, nullptr);
+
+  ClickRadial(harness);
+  EXPECT_FALSE(prompt->property("visible").toBool());
+  EXPECT_EQ(mask_creation.toolKind(), QStringLiteral("radial"));
+  EXPECT_EQ(nodes.insertCount(), 0);
+}
+
+TEST(EditorAdjustmentHeaderQmlTest, AddMaskOnLockedGradeAsksAndNewLayerChoicePersists) {
+  FakeMaskCreation   mask_creation;
+  HeaderSession      session(&mask_creation);
+  FakeNodeController nodes;
+  nodes.setLocked(true);
+  FakeAppModules modules;
+  StackHarness   harness(&session, &nodes, 320, &modules);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  auto* prompt = FindLockedNodeMaskPrompt(harness);
+  ASSERT_NE(prompt, nullptr);
+
+  ClickRadial(harness);
+  EXPECT_TRUE(prompt->property("visible").toBool());
+  EXPECT_TRUE(mask_creation.toolKind().isEmpty());
+  EXPECT_EQ(nodes.insertCount(), 0);
+
+  // "Don't ask again" starts checked, so the choice is stored.
+  ASSERT_TRUE(QMetaObject::invokeMethod(prompt, "resolve",
+                                        Q_ARG(QVariant, QVariant(QStringLiteral("newLayer")))));
+  ProcessEvents(30);
+  EXPECT_EQ(nodes.insertCount(), 1);
+  EXPECT_EQ(mask_creation.toolKind(), QStringLiteral("radial"));
+  EXPECT_EQ(modules.behavior().lockedNodeMaskAction(), QStringLiteral("newLayer"));
+}
+
+TEST(EditorAdjustmentHeaderQmlTest, NewLayerChoiceStartsMaskOnlyAfterQueuedLayerIsSelected) {
+  FakeMaskCreation   mask_creation;
+  HeaderSession      session(&mask_creation);
+  FakeNodeController nodes;
+  nodes.setLocked(true);
+  nodes.setDeferInsertSelection(true);
+  FakeAppModules modules;
+  modules.behavior().setLockedNodeMaskAction(QStringLiteral("newLayer"));
+  StackHarness harness(&session, &nodes, 320, &modules);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+
+  // The insert is queued: the locked grade is still selected, so the Mask
+  // must not start yet or it would land on the locked grade.
+  ClickRadial(harness);
+  EXPECT_EQ(nodes.insertCount(), 1);
+  EXPECT_TRUE(mask_creation.toolKind().isEmpty());
+
+  nodes.commitDeferredInsert();
+  ProcessEvents(30);
+  EXPECT_EQ(nodes.selectedNodeId(), QStringLiteral("grade.inserted.1"));
+  EXPECT_EQ(mask_creation.toolKind(), QStringLiteral("radial"));
+}
+
+TEST(EditorAdjustmentHeaderQmlTest, StoredNewLayerActionInsertsLayerWithoutPrompt) {
+  FakeMaskCreation   mask_creation;
+  HeaderSession      session(&mask_creation);
+  FakeNodeController nodes;
+  nodes.setLocked(true);
+  FakeAppModules modules;
+  modules.behavior().setLockedNodeMaskAction(QStringLiteral("newLayer"));
+  StackHarness harness(&session, &nodes, 320, &modules);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  auto* prompt = FindLockedNodeMaskPrompt(harness);
+  ASSERT_NE(prompt, nullptr);
+
+  ClickRadial(harness);
+  EXPECT_FALSE(prompt->property("visible").toBool());
+  EXPECT_EQ(nodes.insertCount(), 1);
+  EXPECT_EQ(mask_creation.toolKind(), QStringLiteral("radial"));
+}
+
+TEST(EditorAdjustmentHeaderQmlTest, StoredCurrentNodeActionDrawsOnLockedGradeWithoutPrompt) {
+  FakeMaskCreation   mask_creation;
+  HeaderSession      session(&mask_creation);
+  FakeNodeController nodes;
+  nodes.setLocked(true);
+  FakeAppModules modules;
+  modules.behavior().setLockedNodeMaskAction(QStringLiteral("currentNode"));
+  StackHarness harness(&session, &nodes, 320, &modules);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  auto* prompt = FindLockedNodeMaskPrompt(harness);
+  ASSERT_NE(prompt, nullptr);
+
+  ClickRadial(harness);
+  EXPECT_FALSE(prompt->property("visible").toBool());
+  EXPECT_EQ(nodes.insertCount(), 0);
+  EXPECT_EQ(mask_creation.toolKind(), QStringLiteral("radial"));
+}
+
+TEST(EditorAdjustmentHeaderQmlTest, LockedPromptCancelAndUncheckedChoiceDoNotPersist) {
+  FakeMaskCreation   mask_creation;
+  HeaderSession      session(&mask_creation);
+  FakeNodeController nodes;
+  nodes.setLocked(true);
+  FakeAppModules modules;
+  StackHarness   harness(&session, &nodes, 320, &modules);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  auto* prompt = FindLockedNodeMaskPrompt(harness);
+  ASSERT_NE(prompt, nullptr);
+
+  // Cancel starts nothing and stores nothing, even with the box checked.
+  ClickRadial(harness);
+  ASSERT_TRUE(prompt->property("visible").toBool());
+  ASSERT_TRUE(QMetaObject::invokeMethod(prompt, "close"));
+  ProcessEvents(30);
+  EXPECT_TRUE(mask_creation.toolKind().isEmpty());
+  EXPECT_EQ(nodes.insertCount(), 0);
+  EXPECT_EQ(modules.behavior().lockedNodeMaskAction(), QStringLiteral("ask"));
+
+  // With "Don't ask again" cleared, drawing on the current node is one-off.
+  ClickRadial(harness);
+  ASSERT_TRUE(prompt->property("visible").toBool());
+  auto* dont_ask = prompt->findChild<QObject*>(QStringLiteral("lockedNodeMaskPromptDontAskAgain"));
+  ASSERT_NE(dont_ask, nullptr);
+  EXPECT_TRUE(dont_ask->property("checked").toBool());
+  dont_ask->setProperty("checked", false);
+  ASSERT_TRUE(QMetaObject::invokeMethod(prompt, "resolve",
+                                        Q_ARG(QVariant, QVariant(QStringLiteral("currentNode")))));
+  ProcessEvents(30);
+  EXPECT_EQ(mask_creation.toolKind(), QStringLiteral("radial"));
+  EXPECT_EQ(nodes.insertCount(), 0);
+  EXPECT_EQ(modules.behavior().lockedNodeMaskAction(), QStringLiteral("ask"));
 }
 
 }  // namespace
