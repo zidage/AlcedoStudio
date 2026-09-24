@@ -4050,7 +4050,7 @@ editor, the installed package, and performance is done by the user through the U
 - **Source revision and branch:** `refact/gpu-dag-g10-11-release-qualification`, based on
   `559e1db1` (G10.10 head, PR 188). Commits: `5ed8686e` (LF conversion of
   `editor_parameter_write_parse.cpp`, line endings only), `4c5abe38`, `f1a1f22f`, `c60ca31d`,
-  `b81d4cc8`, and this record.
+  `b81d4cc8`, this record, and the `AlbumBackendFolderTest` removal.
 
 **Fixed**
 
@@ -4070,6 +4070,8 @@ editor, the installed package, and performance is done by the user through the U
   and `…RendererTemplateInstantiatesCudaWithoutMetalHeaders` (`header_hygiene_test.cpp`).
 - Removed: `AlbumBackendImportTest.ImportIntoNestedSubfolder_PersistsAcrossProjectReload`. Subfolder
   entries reference the root entries, and reopening a project resets the current folder by design.
+  `AlbumBackendFolderTest.ReloadProject_PreservesVisibleNestedFolderUnderSelectedParent` is removed
+  for the same reason, with its two helpers. That change was not built or run (user decision).
 - Disabled: `ExportServiceTests.DISABLED_ExportHdrJpeg_WritesUltraHdrFile` ("resource deadlock would
   occur" on Windows, timeout on macOS); the cause may be the test environment.
 
