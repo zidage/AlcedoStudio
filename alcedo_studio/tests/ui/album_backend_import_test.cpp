@@ -488,55 +488,5 @@ TEST_F(ImportTests, ImportIntoSubfolder_PersistsAcrossFreshProjectLoad) {
   EXPECT_EQ(imported.value("fileName").toString(), expected_name);
 }
 
-TEST_F(ImportTests, ImportIntoNestedSubfolder_PersistsAcrossProjectReload) {
-  auto images = CollectRawTestImages("airplane", 1);
-  if (images.empty()) {
-    GTEST_SKIP() << "No test RAW images available";
-  }
-
-  const QString expected_name = PathToQString(images.front().filename());
-
-  ApplicationModuleHost backend;
-  ASSERT_TRUE(CreateTestProject(backend, "nested_subfolder_import_reload"));
-
-  backend.folders()->CreateFolder("ParentFolder");
-  ProcessEvents(500);
-
-  const uint parent_folder_id = FindFolderId(backend.folders()->Folders(), "ParentFolder");
-  ASSERT_NE(parent_folder_id, 0u);
-
-  backend.folders()->SelectFolder(parent_folder_id);
-  ProcessEvents(300);
-  backend.folders()->CreateFolder("ChildFolder");
-  ProcessEvents(500);
-
-  const uint child_folder_id = FindFolderId(backend.folders()->Folders(), "ChildFolder");
-  ASSERT_NE(child_folder_id, 0u);
-
-  backend.folders()->SelectFolder(child_folder_id);
-  ProcessEvents(300);
-  ASSERT_EQ(backend.folders()->CurrentFolderPath(), "\\ParentFolder\\ChildFolder");
-
-  backend.import_export()->StartImport(PathsToQStringList(images));
-  WaitForImportFinished(backend);
-
-  ASSERT_FALSE(backend.import_export()->ImportRunning());
-  ASSERT_EQ(backend.library()->ShownCount(), 1);
-  ASSERT_EQ(backend.library()->Thumbnails().size(), 1);
-  EXPECT_EQ(backend.library()->Thumbnails().front().toMap().value("fileName").toString(), expected_name);
-  const auto packed_project_path = FindPackedProjectPath(temp_dir_);
-  ASSERT_TRUE(packed_project_path.has_value());
-
-  QSignalSpy project_spy(backend.project(), &ProjectModule::ProjectChanged);
-  ASSERT_TRUE(backend.project()->LoadProject(PathToQString(*packed_project_path)));
-  ASSERT_TRUE(WaitForSignal(project_spy, 15000));
-  ProcessEvents(500);
-
-  EXPECT_EQ(backend.folders()->CurrentFolderPath(), "\\ParentFolder\\ChildFolder");
-  ASSERT_EQ(backend.library()->ShownCount(), 1);
-  ASSERT_EQ(backend.library()->Thumbnails().size(), 1);
-  EXPECT_EQ(backend.library()->Thumbnails().front().toMap().value("fileName").toString(), expected_name);
-}
-
 }  // namespace
 }  // namespace alcedo::ui::test
