@@ -85,8 +85,8 @@ auto Storage::GetAiStore() -> AiStore& {
 
 auto Storage::GetDatabase() -> Database& { return database_; }
 
-void Storage::RememberLivePipeline(const sl_element_id_t                       file_id,
-                                          const std::shared_ptr<CPUPipelineExecutor>& pipeline) {
+void Storage::RememberLivePipeline(const sl_element_id_t                    file_id,
+                                   const std::shared_ptr<PipelineExecutor>& pipeline) {
   std::lock_guard<std::mutex> lock(live_state_lock_);
   if (!pipeline) {
     live_pipelines_.erase(file_id);
@@ -95,8 +95,7 @@ void Storage::RememberLivePipeline(const sl_element_id_t                       f
   live_pipelines_[file_id] = pipeline;
 }
 
-auto Storage::GetLivePipeline(const sl_element_id_t file_id)
-    -> std::shared_ptr<CPUPipelineExecutor> {
+auto Storage::GetLivePipeline(const sl_element_id_t file_id) -> std::shared_ptr<PipelineExecutor> {
   std::lock_guard<std::mutex> lock(live_state_lock_);
   const auto                  it = live_pipelines_.find(file_id);
   if (it == live_pipelines_.end()) {

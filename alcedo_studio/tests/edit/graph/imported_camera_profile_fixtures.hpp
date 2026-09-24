@@ -19,7 +19,7 @@ namespace alcedo::gpu_dag_test {
  * @brief One import-time RAW color context and the name of its stored expected Develop JSON.
  *
  * The expected files under tests/resources/expected_json/ were written from
- * `CPUPipelineExecutor::InjectRawMetadata` (anonymous `ApplyImportedCameraProfile`) at
+ * `PipelineExecutor::InjectRawMetadata` (anonymous `ApplyImportedCameraProfile`) at
  * revision 92085ffe on a default document. They hold `DevelopNodeModel::Params()` JSON only.
  */
 struct ImportedCameraProfileFixture {

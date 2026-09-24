@@ -14,7 +14,7 @@
 #include "edit/operators/op_base.hpp"
 #include "edit/operators/operator_factory.hpp"
 #include "edit/pipeline/pipeline.hpp"
-#include "edit/pipeline/pipeline_cpu.hpp"
+#include "edit/pipeline/pipeline_executor.hpp"
 #include "image/image_buffer.hpp"
 #include "pipeline_test_fixation.hpp"
 #include "sleeve/sleeve_manager.hpp"
@@ -74,7 +74,7 @@ TEST_F(PipelineTests, SchedulerBasic) {
 
       auto         buffer        = ByteBufferLoader::LoadFromImage(img_ptr);
       task.input_                = buffer ? std::make_shared<ImageBuffer>(std::move(*buffer)) : nullptr;
-      task.pipeline_executor_    = std::make_shared<CPUPipelineExecutor>();
+      task.pipeline_executor_    = std::make_shared<PipelineExecutor>();
       SetPipelineStages(task.pipeline_executor_);
 
       task.options_.is_blocking_ = false;

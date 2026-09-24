@@ -8,11 +8,11 @@
 
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/pipeline_edit_batch.hpp"
-#include "edit/pipeline/pipeline_cpu.hpp"
+#include "edit/pipeline/pipeline_executor.hpp"
 
 namespace alcedo::ui {
 
-auto LockLivePipeline(alcedo::CPUPipelineExecutor& executor) -> std::unique_lock<std::mutex> {
+auto LockLivePipeline(alcedo::PipelineExecutor& executor) -> std::unique_lock<std::mutex> {
   // Sole live-pipeline ownership. History waits here for render to release the
   // lock after the full frame (configure + Apply + present). Do not call this
   // from the GUI thread while that thread is still required for present — the

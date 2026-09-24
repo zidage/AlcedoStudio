@@ -311,7 +311,7 @@ if(ALCEDO_OPENCL_ENABLED)
 endif()
 
 if(ALCEDO_CUDA_ENABLED)
-    # The existing scheduler owns CPUPipelineExecutor. Its CUDA branch is a thin adapter into
+    # The existing scheduler owns PipelineExecutor. Its CUDA branch is a thin adapter into
     # EditRuntimeCuda.
     target_link_libraries(EditPipeline PRIVATE EditRuntimeCuda EditInput EditGraph)
 endif()

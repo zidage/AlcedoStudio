@@ -55,7 +55,7 @@ class EditorDocumentHistoryTest : public ::testing::Test {
     std::filesystem::create_directories(journal_path_.parent_path());
     guard_                = std::make_shared<PipelineGuard>();
     guard_->id_           = 42;
-    guard_->pipeline_     = std::make_shared<CPUPipelineExecutor>();
+    guard_->pipeline_     = std::make_shared<PipelineExecutor>();
     guard_->document_     = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
     guard_->commit_graph_ = std::make_shared<CommitGraph>(CommitGraph::CreateEmpty(42));
     guard_->root_id_      = guard_->commit_graph_->GetRootId();

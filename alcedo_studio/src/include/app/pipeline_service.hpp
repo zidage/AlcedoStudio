@@ -21,7 +21,7 @@
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/commit_types.hpp"
 #include "edit/pipeline/pipeline_accelerator.hpp"
-#include "edit/pipeline/pipeline_cpu.hpp"
+#include "edit/pipeline/pipeline_executor.hpp"
 #include "json.hpp"
 #include "renderer/pipeline_scheduler.hpp"
 #include "sleeve/storage.hpp"
@@ -45,14 +45,14 @@ namespace alcedo {
 /// - Serialized checkpoint identity is (root, head, chain, document). Load compares
 ///   that label to the history tip; match loads the document and skips first-parent replay.
 struct PipelineGuard {
-  std::shared_ptr<CPUPipelineExecutor> pipeline_;
+  std::shared_ptr<PipelineExecutor>       pipeline_;
   /// Authoritative pipeline DAG used by the CUDA product renderer.
   std::shared_ptr<PipelineDocument>    document_;
   sl_element_id_t                      id_;
   bool                                 dirty_     = false;
   /// Cache pin only: LoadPipeline / ReleasePipelineUse / SavePipeline refcount so
   /// LRU eviction and "unpinned → re-init executor" do not drop a live editor/export
-  /// guard. Live-pipeline *mutation* ownership is CPUPipelineExecutor::render_lock_
+  /// guard. Live-pipeline *mutation* ownership is PipelineExecutor::render_lock_
   /// (held for the full render task including present); pin_count_ is not that.
   bool                                 pinned_    = false;
   size_t                               pin_count_ = 0;
@@ -132,7 +132,7 @@ class PipelineMgmtService final {
    * When other pins remain (the editor), GPU session caches stay. When this is
    * the last pin, intermediate GPU caches and the one-shot device are released
    * so unused LRU entries do not keep VRAM. Must not be called while holding
-   * @c CPUPipelineExecutor::GetRenderLock().
+   * @c PipelineExecutor::GetRenderLock().
    *
    * @param pipeline Guard returned by @ref LoadPipeline; no-op if null.
    */

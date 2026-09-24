@@ -34,7 +34,7 @@
 #include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/history/edit_commit.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
-#include "edit/pipeline/pipeline_cpu.hpp"
+#include "edit/pipeline/pipeline_executor.hpp"
 #include "edit/runtime/pipeline_apply_request.hpp"
 #include "image/metadata_extractor.hpp"
 #include "image/dng_color_profile_import.hpp"
@@ -724,7 +724,7 @@ TEST(ThumbnailCacheUtilityTest, ResizeWithEvictDropsLruRecordsImmediately) {
 }
 
 TEST_F(ThumbnailServiceTests, ThumbnailApplyRequestCarriesRequestedDecodeResolution) {
-  auto         exec = std::make_shared<CPUPipelineExecutor>();
+  auto         exec = std::make_shared<PipelineExecutor>();
 
   PipelineTask task;
   task.pipeline_executor_                 = exec;
@@ -1010,7 +1010,7 @@ TEST_F(ThumbnailServiceTests, ThumbnailRenderUsesInjectedRawMetadataForDng) {
       PipelineDocument::FromJson(pipeline_guard->document_->ToJson()));
   pipeline_service->SavePipeline(pipeline_guard);
 
-  auto direct_exec = std::make_shared<CPUPipelineExecutor>();
+  auto direct_exec = std::make_shared<PipelineExecutor>();
   direct_exec->SetBoundFile(element_id);
   direct_exec->SetPipelineDocument(document);
   PipelineApplyRequest request;
@@ -1149,7 +1149,7 @@ TEST_F(ThumbnailServiceTests, OrdinaryThumbnailReusesLiveEditorExecutorAndDocume
   live_guard->dirty_ = true;
   ASSERT_EQ(live_guard->pin_count_, size_t{1});
   EXPECT_TRUE(live_guard->pipeline_->HasGpuDagDocument());
-  CPUPipelineExecutor* const live_executor = live_guard->pipeline_.get();
+  PipelineExecutor* const    live_executor = live_guard->pipeline_.get();
   PipelineDocument* const    live_document = live_guard->document_.get();
 
   auto thumbnail = GetThumbnailBlocking(thumbnail_service, element_id, image_id, true,

@@ -13,7 +13,7 @@
 #include <thread>
 #include <vector>
 
-#include "edit/pipeline/pipeline_cpu.hpp"
+#include "edit/pipeline/pipeline_executor.hpp"
 #include "edit/runtime/result_persistence.hpp"
 #include "image/image_buffer.hpp"
 #include "renderer/pipeline_scheduler.hpp"
@@ -85,7 +85,7 @@ class MockFrameSink final : public IFrameSink {
 class PipelineFrameSinkTest : public ::testing::Test {};
 
 TEST_F(PipelineFrameSinkTest, DetachFrameSinkClearsPointer) {
-  auto          exec = std::make_shared<CPUPipelineExecutor>();
+  auto          exec = std::make_shared<PipelineExecutor>();
   MockFrameSink sink;
 
   exec->AttachFrameSink(&sink);
@@ -96,13 +96,13 @@ TEST_F(PipelineFrameSinkTest, DetachFrameSinkClearsPointer) {
 }
 
 TEST_F(PipelineFrameSinkTest, NewExecutorHasNoFrameSink) {
-  auto exec = std::make_shared<CPUPipelineExecutor>();
+  auto exec = std::make_shared<PipelineExecutor>();
 
   EXPECT_EQ(exec->GetFrameSink(), nullptr);
 }
 
 TEST_F(PipelineFrameSinkTest, GetViewportRenderRegionReturnsNulloptWhenSinkIsDetached) {
-  auto exec = std::make_shared<CPUPipelineExecutor>();
+  auto exec = std::make_shared<PipelineExecutor>();
 
   EXPECT_EQ(exec->GetViewportRenderRegion(), std::nullopt);
 }
@@ -111,7 +111,7 @@ TEST_F(PipelineFrameSinkTest, GetViewportRenderRegionReturnsNulloptWhenSinkIsDet
 // MakeApplyRequest never writes executor or stage state (G10.1).
 
 TEST_F(PipelineFrameSinkTest, DetailRoiPreviewUsesViewportTargetPixelsAsMaxEdge) {
-  auto          exec = std::make_shared<CPUPipelineExecutor>();
+  auto          exec = std::make_shared<PipelineExecutor>();
   MockFrameSink sink;
   exec->AttachFrameSink(&sink);
 
@@ -144,7 +144,7 @@ TEST_F(PipelineFrameSinkTest, DetailRoiPreviewUsesViewportTargetPixelsAsMaxEdge)
 }
 
 TEST_F(PipelineFrameSinkTest, DetailRoiPreviewUsesFrozenRequestRegionInsteadOfChangedSinkRegion) {
-  auto          exec = std::make_shared<CPUPipelineExecutor>();
+  auto          exec = std::make_shared<PipelineExecutor>();
   MockFrameSink sink;
   exec->AttachFrameSink(&sink);
 
@@ -191,7 +191,7 @@ TEST_F(PipelineFrameSinkTest, DetailRoiPreviewUsesFrozenRequestRegionInsteadOfCh
 }
 
 TEST_F(PipelineFrameSinkTest, QualityBaseRequestDoesNotCarryViewportGeometry) {
-  auto          exec = std::make_shared<CPUPipelineExecutor>();
+  auto          exec = std::make_shared<PipelineExecutor>();
   MockFrameSink sink;
   exec->AttachFrameSink(&sink);
   sink.viewport_render_region_ = ViewportRenderRegion{.x_                = 700,
@@ -224,7 +224,7 @@ TEST_F(PipelineFrameSinkTest, QualityBaseRequestDoesNotCarryViewportGeometry) {
 }
 
 TEST_F(PipelineFrameSinkTest, FastPreviewSubRegionUsesRoiFrameWithSinkRegion) {
-  auto          exec = std::make_shared<CPUPipelineExecutor>();
+  auto          exec = std::make_shared<PipelineExecutor>();
   MockFrameSink sink;
   exec->AttachFrameSink(&sink);
   sink.viewport_render_region_ = ViewportRenderRegion{
@@ -260,7 +260,7 @@ TEST_F(PipelineFrameSinkTest, FastPreviewSubRegionUsesRoiFrameWithSinkRegion) {
 }
 
 TEST_F(PipelineFrameSinkTest, ScopeRefreshFastPreviewAllowsCurrentRoiAsScopeInput) {
-  auto          exec = std::make_shared<CPUPipelineExecutor>();
+  auto          exec = std::make_shared<PipelineExecutor>();
   MockFrameSink sink;
   exec->AttachFrameSink(&sink);
 
@@ -289,7 +289,7 @@ TEST_F(PipelineFrameSinkTest, ScopeRefreshFastPreviewAllowsCurrentRoiAsScopeInpu
 }
 
 TEST_F(PipelineFrameSinkTest, FullResExportRequestsExportQualityAtFullResolution) {
-  auto         exec = std::make_shared<CPUPipelineExecutor>();
+  auto         exec = std::make_shared<PipelineExecutor>();
 
   PipelineTask export_task;
   export_task.pipeline_executor_                 = exec;
@@ -305,7 +305,7 @@ TEST_F(PipelineFrameSinkTest, FullResExportRequestsExportQualityAtFullResolution
 }
 
 TEST_F(PipelineFrameSinkTest, ThumbnailAndExportApplyRequestsBypassSessionCache) {
-  auto exec = std::make_shared<CPUPipelineExecutor>();
+  auto         exec = std::make_shared<PipelineExecutor>();
 
   PipelineTask preview;
   preview.pipeline_executor_                 = exec;
@@ -328,7 +328,7 @@ TEST_F(PipelineFrameSinkTest, ThumbnailAndExportApplyRequestsBypassSessionCache)
 }
 
 TEST_F(PipelineFrameSinkTest, QualityBasePreviewUsesSessionCacheAndSensorDevelopPersistence) {
-  auto exec = std::make_shared<CPUPipelineExecutor>();
+  auto         exec = std::make_shared<PipelineExecutor>();
 
   PipelineTask quality;
   quality.pipeline_executor_                 = exec;
@@ -342,7 +342,7 @@ TEST_F(PipelineFrameSinkTest, QualityBasePreviewUsesSessionCacheAndSensorDevelop
 }
 
 TEST_F(PipelineFrameSinkTest, ThumbnailAndExportRequestsRequireHostOutput) {
-  auto         exec = std::make_shared<CPUPipelineExecutor>();
+  auto         exec = std::make_shared<PipelineExecutor>();
 
   PipelineTask thumbnail;
   thumbnail.pipeline_executor_                 = exec;
@@ -374,7 +374,7 @@ TEST_F(PipelineFrameSinkTest, ThumbnailAndExportRequestsRequireHostOutput) {
 TEST_F(PipelineFrameSinkTest, DetachUnderLockIsSafeDuringConcurrentAccess) {
   // Simulates the pattern used by EditorFrameManager::~EditorFrameManager():
   // acquire render_lock_ → DetachFrameSink() → release.
-  auto          exec = std::make_shared<CPUPipelineExecutor>();
+  auto          exec = std::make_shared<PipelineExecutor>();
   MockFrameSink sink;
 
   exec->AttachFrameSink(&sink);
@@ -390,7 +390,7 @@ TEST_F(PipelineFrameSinkTest, DetachUnderLockIsSafeDuringConcurrentAccess) {
 
 TEST_F(PipelineFrameSinkTest, ReattachAfterDetachIsSafe) {
   // After detach, re-attaching a new sink should work without stale state.
-  auto          exec = std::make_shared<CPUPipelineExecutor>();
+  auto          exec = std::make_shared<PipelineExecutor>();
   MockFrameSink sink1;
   MockFrameSink sink2;
 
@@ -416,7 +416,7 @@ TEST_F(PipelineFrameSinkTest, ReattachAfterDetachIsSafe) {
 TEST_F(PipelineFrameSinkTest, AttachDetachRoundTripKeepsSinkQueries) {
   // The editor attaches the sink under the render lock before each render and detaches it on
   // close; the round-trip must leave the viewport query routed to the attached sink only.
-  auto          exec = std::make_shared<CPUPipelineExecutor>();
+  auto          exec = std::make_shared<PipelineExecutor>();
   MockFrameSink sink;
   sink.viewport_render_region_ = ViewportRenderRegion{.x_ = 10, .reference_width_ = 100};
 
@@ -449,7 +449,7 @@ TEST_F(PipelineFrameSinkTest, AttachDetachRoundTripKeepsSinkQueries) {
 TEST_F(PipelineFrameSinkTest, ClearAllIntermediateBuffersDoesNotClearFrameSink) {
   // ClearAllIntermediateBuffers() is an intermediate cleanup, not a full
   // reset; it should preserve the frame sink binding.
-  auto          exec = std::make_shared<CPUPipelineExecutor>();
+  auto          exec = std::make_shared<PipelineExecutor>();
   MockFrameSink sink;
 
   exec->AttachFrameSink(&sink);
@@ -461,7 +461,7 @@ TEST_F(PipelineFrameSinkTest, ClearAllIntermediateBuffersDoesNotClearFrameSink) 
 TEST_F(PipelineFrameSinkTest, SetAcceleratorBackendPreservesFrameSink) {
   // Changing the accelerator backend preference should preserve an attached
   // frame sink so editor preview is not disrupted by a preference change.
-  auto          exec = std::make_shared<CPUPipelineExecutor>();
+  auto          exec = std::make_shared<PipelineExecutor>();
   MockFrameSink sink;
 
   exec->AttachFrameSink(&sink);
@@ -478,7 +478,7 @@ TEST_F(PipelineFrameSinkTest, SetAcceleratorBackendPreservesFrameSink) {
 TEST_F(PipelineFrameSinkTest, HistoryQueuesBehindRenderOwnershipOfLivePipeline) {
   // render_lock_ is sole live-pipeline ownership for the full frame. History
   // must wait until render releases it — not race under a second occupancy bit.
-  auto                         exec = std::make_shared<CPUPipelineExecutor>();
+  auto                         exec = std::make_shared<PipelineExecutor>();
   std::unique_lock<std::mutex> worker_lock(exec->GetRenderLock());
   EXPECT_TRUE(worker_lock.owns_lock());
 
@@ -502,7 +502,7 @@ TEST_F(PipelineFrameSinkTest, HistoryQueuesBehindRenderOwnershipOfLivePipeline) 
 TEST_F(PipelineFrameSinkTest, ConcurrentDetachAndRenderLockIsDeadlockFree) {
   // Multiple threads repeatedly acquiring render_lock_ for detach/render
   // operations must not deadlock.
-  auto          exec = std::make_shared<CPUPipelineExecutor>();
+  auto          exec = std::make_shared<PipelineExecutor>();
   MockFrameSink sink;
   exec->AttachFrameSink(&sink);
 
@@ -559,7 +559,7 @@ TEST_F(PipelineFrameSinkTest, SinkIsRestoredAfterExceptionDuringRender) {
   // Simulates the scenario from Phase 1 Review Finding 1:
   // if an exception is thrown after detaching the editor frame sink,
   // the RAII guard must restore the sink before the exception propagates.
-  auto          exec = std::make_shared<CPUPipelineExecutor>();
+  auto          exec = std::make_shared<PipelineExecutor>();
   MockFrameSink sink;
 
   exec->AttachFrameSink(&sink);
@@ -602,7 +602,7 @@ TEST_F(PipelineFrameSinkTest, SinkIsRestoredAfterExceptionDuringRender) {
 TEST_F(PipelineFrameSinkTest, SinkIsRestoredAfterExceptionBeforeRender) {
   // If an exception is thrown between detach and Apply() (e.g., in
   // MakeApplyRequest), the RAII guard must still restore the sink.
-  auto          exec = std::make_shared<CPUPipelineExecutor>();
+  auto          exec = std::make_shared<PipelineExecutor>();
   MockFrameSink sink;
 
   exec->AttachFrameSink(&sink);
@@ -637,7 +637,7 @@ TEST_F(PipelineFrameSinkTest, SinkIsRestoredAfterExceptionBeforeRender) {
 TEST_F(PipelineFrameSinkTest, SinkIsNotRestoredIfNeverDetached) {
   // If no sink was attached when entering the render path, the RAII guard
   // must be a no-op (no spurious attach of nullptr).
-  auto exec = std::make_shared<CPUPipelineExecutor>();  // no sink attached
+  auto exec   = std::make_shared<PipelineExecutor>();  // no sink attached
 
   bool caught = false;
   try {
@@ -666,7 +666,7 @@ TEST_F(PipelineFrameSinkTest, SinkIsNotRestoredIfNeverDetached) {
 // The accelerator backend is a runtime property of the process (the user's backend setting). It
 // is resolved on the executor and is never part of the persisted document.
 TEST_F(PipelineFrameSinkTest, AcceleratorPreferenceResolvesRuntimeBackend) {
-  auto exec = std::make_shared<CPUPipelineExecutor>();
+  auto exec = std::make_shared<PipelineExecutor>();
   EXPECT_EQ(exec->GetAcceleratorBackendPreference(), AcceleratorBackendPreference::Auto);
   EXPECT_EQ(exec->GetResolvedAcceleratorBackend(),
             ResolveAcceleratorBackend(AcceleratorBackendPreference::Auto));

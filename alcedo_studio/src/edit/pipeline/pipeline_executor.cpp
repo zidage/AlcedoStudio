@@ -2,7 +2,7 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-#include "edit/pipeline/pipeline_cpu.hpp"
+#include "edit/pipeline/pipeline_executor.hpp"
 
 #include <memory>
 #include <optional>
@@ -45,16 +45,15 @@ auto ApplyGpuDagProduct(std::shared_ptr<ProductRenderer>&            renderer,
 
 }  // namespace
 
-CPUPipelineExecutor::CPUPipelineExecutor()
+PipelineExecutor::PipelineExecutor()
     : resolved_accelerator_backend_(alcedo::ResolveAcceleratorBackend(accelerator_preference_)) {}
 
-auto CPUPipelineExecutor::Apply(std::shared_ptr<ImageBuffer> input,
-                                const PipelineApplyRequest& request)
-    -> std::shared_ptr<ImageBuffer> {
+auto PipelineExecutor::Apply(std::shared_ptr<ImageBuffer> input,
+                             const PipelineApplyRequest&  request) -> std::shared_ptr<ImageBuffer> {
 #if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
   if (!pipeline_document_) {
     throw std::runtime_error(
-        "CPUPipelineExecutor: product rendering requires a bound PipelineDocument");
+        "PipelineExecutor: product rendering requires a bound PipelineDocument");
   }
 #ifdef HAVE_CUDA
   if (resolved_accelerator_backend_ == GpuBackendKind::CUDA) {
@@ -74,13 +73,12 @@ auto CPUPipelineExecutor::Apply(std::shared_ptr<ImageBuffer> input,
 #endif
   (void)input;
   (void)request;
-  throw std::runtime_error(
-      "CPUPipelineExecutor: product rendering requires a supported GPU backend");
+  throw std::runtime_error("PipelineExecutor: product rendering requires a supported GPU backend");
 }
 
-void CPUPipelineExecutor::SetPipelineDocument(std::shared_ptr<PipelineDocument> document) {
+void PipelineExecutor::SetPipelineDocument(std::shared_ptr<PipelineDocument> document) {
   if (!document) {
-    throw std::invalid_argument("CPUPipelineExecutor: PipelineDocument is null");
+    throw std::invalid_argument("PipelineExecutor: PipelineDocument is null");
   }
 #if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
   pipeline_document_ = std::move(document);
@@ -105,7 +103,7 @@ void CPUPipelineExecutor::SetPipelineDocument(std::shared_ptr<PipelineDocument> 
 #endif
 }
 
-auto CPUPipelineExecutor::HasGpuDagDocument() const -> bool {
+auto PipelineExecutor::HasGpuDagDocument() const -> bool {
 #if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
   return static_cast<bool>(pipeline_document_);
 #else
@@ -113,7 +111,7 @@ auto CPUPipelineExecutor::HasGpuDagDocument() const -> bool {
 #endif
 }
 
-auto CPUPipelineExecutor::GpuDagDocument() const -> std::shared_ptr<PipelineDocument> {
+auto PipelineExecutor::GpuDagDocument() const -> std::shared_ptr<PipelineDocument> {
 #if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
   return pipeline_document_;
 #else
@@ -121,7 +119,7 @@ auto CPUPipelineExecutor::GpuDagDocument() const -> std::shared_ptr<PipelineDocu
 #endif
 }
 
-void CPUPipelineExecutor::SetAcceleratorBackendPreference(
+void PipelineExecutor::SetAcceleratorBackendPreference(
     const AcceleratorBackendPreference preference) {
   // Resolve first: an unavailable backend throws and leaves the prior selection in place.
   const auto resolved           = alcedo::ResolveAcceleratorBackend(preference);
@@ -129,14 +127,14 @@ void CPUPipelineExecutor::SetAcceleratorBackendPreference(
   resolved_accelerator_backend_ = resolved;
 }
 
-auto CPUPipelineExecutor::GetViewportRenderRegion() const -> std::optional<ViewportRenderRegion> {
+auto PipelineExecutor::GetViewportRenderRegion() const -> std::optional<ViewportRenderRegion> {
   if (!frame_sink_) {
     return std::nullopt;
   }
   return frame_sink_->GetViewportRenderRegion();
 }
 
-void CPUPipelineExecutor::ClearAllIntermediateBuffers() {
+void PipelineExecutor::ClearAllIntermediateBuffers() {
 #ifdef HAVE_CUDA
   if (cuda_product_renderer_) {
     cuda_product_renderer_->ReleaseSessionCaches();

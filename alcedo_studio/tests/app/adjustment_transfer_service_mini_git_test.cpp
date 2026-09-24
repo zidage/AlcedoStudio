@@ -25,7 +25,7 @@
 #include "edit/operators/geometry/lens_calib_op.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/op_base.hpp"
-#include "edit/pipeline/pipeline_cpu.hpp"
+#include "edit/pipeline/pipeline_executor.hpp"
 #include "support/document_transfer_test_support.hpp"
 #include "support/editor_mini_git_project_fixture.hpp"
 

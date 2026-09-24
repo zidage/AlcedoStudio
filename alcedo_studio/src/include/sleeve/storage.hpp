@@ -18,7 +18,7 @@
 #include "type/type.hpp"
 
 namespace alcedo {
-class CPUPipelineExecutor;
+class PipelineExecutor;
 
 class NodeStorageHandler {
  private:
@@ -44,7 +44,7 @@ class Storage {
   AiStore                                                       ai_store_;
   std::mutex                                                                live_state_lock_;
 
-  std::unordered_map<sl_element_id_t, std::shared_ptr<CPUPipelineExecutor>> live_pipelines_;
+  std::unordered_map<sl_element_id_t, std::shared_ptr<PipelineExecutor>>    live_pipelines_;
 
  public:
   Storage(std::filesystem::path db_path);
@@ -56,8 +56,8 @@ class Storage {
   auto GetAiStore() -> AiStore&;
 
   void RememberLivePipeline(sl_element_id_t                             file_id,
-                            const std::shared_ptr<CPUPipelineExecutor>& pipeline);
-  auto GetLivePipeline(sl_element_id_t file_id) -> std::shared_ptr<CPUPipelineExecutor>;
+                            const std::shared_ptr<PipelineExecutor>& pipeline);
+  auto GetLivePipeline(sl_element_id_t file_id) -> std::shared_ptr<PipelineExecutor>;
   void ForgetLivePipeline(sl_element_id_t file_id);
 };
 };  // namespace alcedo

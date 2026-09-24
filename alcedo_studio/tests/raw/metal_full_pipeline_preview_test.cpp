@@ -14,7 +14,7 @@
 #include <vector>
 
 #include "edit/operators/operator_registeration.hpp"
-#include "edit/pipeline/pipeline_cpu.hpp"
+#include "edit/pipeline/pipeline_executor.hpp"
 #include "image/image_buffer.hpp"
 #include "renderer/pipeline_scheduler.hpp"
 
@@ -77,7 +77,7 @@ auto CiRawFixturePath() -> std::filesystem::path {
 
 auto RenderBlocking(RenderType render_type, std::vector<uint8_t> raw_bytes)
     -> std::shared_ptr<ImageBuffer> {
-  auto         pipeline = std::make_shared<CPUPipelineExecutor>();
+  auto         pipeline = std::make_shared<PipelineExecutor>();
 
   PipelineTask task;
   task.pipeline_executor_                 = pipeline;
@@ -119,7 +119,7 @@ TEST(MetalFullPipelinePreview, DecodeGeometryAndMergedStageStillLife) {
 
   RegisterAllOperators();
 
-  CPUPipelineExecutor pipeline;
+  PipelineExecutor pipeline;
   pipeline.SetForceCPUOutput(true);
 
   auto input  = std::make_shared<ImageBuffer>(std::move(raw_bytes));

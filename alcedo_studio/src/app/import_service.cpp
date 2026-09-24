@@ -12,7 +12,7 @@
 
 #include "app/pipeline_service.hpp"
 #include "decoders/processor/raw_color_context.hpp"
-#include "edit/pipeline/pipeline_cpu.hpp"
+#include "edit/pipeline/pipeline_executor.hpp"
 #include "image/image.hpp"
 #include "image/metadata_extractor.hpp"
 #include "sleeve/sleeve_element/sleeve_element.hpp"

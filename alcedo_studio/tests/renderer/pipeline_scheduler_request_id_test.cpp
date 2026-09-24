@@ -17,7 +17,7 @@
 #include <vector>
 
 #include "edit/graph/pipeline_document.hpp"
-#include "edit/pipeline/pipeline_cpu.hpp"
+#include "edit/pipeline/pipeline_executor.hpp"
 #include "image/image_buffer.hpp"
 #include "renderer/pipeline_scheduler.hpp"
 #include "renderer/pipeline_task.hpp"
@@ -105,7 +105,7 @@ TEST(PipelineSchedulerRequestIdTest, OlderRequestIdIsRejectedAtSink) {
 
 TEST(PipelineSchedulerRequestIdTest, StaleSchedulerTaskDoesNotReachSink) {
 
-  auto               exec = std::make_shared<CPUPipelineExecutor>();
+  auto               exec = std::make_shared<PipelineExecutor>();
   RecordingFrameSink sink;
   exec->AttachFrameSink(&sink);
 
@@ -154,7 +154,7 @@ TEST(PipelineSchedulerRequestIdTest, StaleSchedulerTaskDoesNotReachSink) {
 }
 
 TEST(PipelineSchedulerRequestIdTest, CompletionRunsAfterLivePipelineRenderLockIsReleased) {
-  auto               exec = std::make_shared<CPUPipelineExecutor>();
+  auto               exec = std::make_shared<PipelineExecutor>();
   RecordingFrameSink sink;
   exec->AttachFrameSink(&sink);
 
@@ -181,7 +181,7 @@ TEST(PipelineSchedulerRequestIdTest, CompletionRunsAfterLivePipelineRenderLockIs
 }
 
 TEST(PipelineSchedulerRequestIdTest, MissingDocumentRequestsReportFailureOnEveryRender) {
-  auto exec = std::make_shared<CPUPipelineExecutor>();
+  auto exec = std::make_shared<PipelineExecutor>();
   exec->SetAcceleratorBackendPreference(AcceleratorBackendPreference::CPU);
 
   auto input = MakeSolidImage(64, 48);
@@ -209,7 +209,7 @@ TEST(PipelineSchedulerRequestIdTest, MissingDocumentRequestsReportFailureOnEvery
 // false for every document edit (defect D1: the stage never received the crop_rotate key), so a
 // rotated crop used the ROI path. The expected values below are that pre-change request.
 TEST(PipelineSchedulerRequestIdTest, FastPreviewRequestIsUnchangedForRotatedCrop) {
-  auto exec     = std::make_shared<CPUPipelineExecutor>();
+  auto exec     = std::make_shared<PipelineExecutor>();
   auto document = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
   document->Geometry().SetCropRect({0.2f, 0.1f, 0.5f, 0.6f});
   document->Geometry().SetRotationDegrees(7.0f);
@@ -358,7 +358,7 @@ TEST(DirectPresentQueueRequestIdTest, ThirdInteractivePresentReusesFirstDisplaye
 }
 
 TEST(PipelineSchedulerRequestIdTest, EditorRenderFailureForwardsExceptionMessageInsteadOfEmptyResult) {
-  auto exec = std::make_shared<CPUPipelineExecutor>();
+  auto exec = std::make_shared<PipelineExecutor>();
   exec->SetAcceleratorBackendPreference(AcceleratorBackendPreference::CPU);
 
   PipelineScheduler scheduler(1);

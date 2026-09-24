@@ -12,7 +12,7 @@
 #include <memory>
 
 #include "app/pipeline_service.hpp"
-#include "edit/pipeline/pipeline_cpu.hpp"
+#include "edit/pipeline/pipeline_executor.hpp"
 #include "image/image.hpp"
 #include "image/image_buffer.hpp"
 
@@ -95,7 +95,7 @@ auto MakeReadyContext(std::uint64_t epoch, sl_element_id_t element_id, image_id_
   context.input                = std::make_shared<alcedo::ImageBuffer>();
   context.pipeline_guard       = std::make_shared<alcedo::PipelineGuard>();
   context.pipeline_guard->id_  = element_id;
-  context.pipeline_guard->pipeline_ = std::make_shared<alcedo::CPUPipelineExecutor>();
+  context.pipeline_guard->pipeline_ = std::make_shared<alcedo::PipelineExecutor>();
   return context;
 }
 
@@ -406,7 +406,7 @@ TEST(EditorSessionRenderSchedulerPortTest,
 
   // The value reaches the apply request unchanged.
   alcedo::PipelineTask editor_task;
-  editor_task.pipeline_executor_    = std::make_shared<alcedo::CPUPipelineExecutor>();
+  editor_task.pipeline_executor_    = std::make_shared<alcedo::PipelineExecutor>();
   editor_task.options_.render_desc_ = overlay_desc;
   EXPECT_EQ(editor_task.MakeApplyRequest().geometry.document_geometry,
             alcedo::DocumentGeometryUse::UncroppedSource);

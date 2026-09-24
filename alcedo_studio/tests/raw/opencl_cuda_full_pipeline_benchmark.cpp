@@ -20,7 +20,7 @@
 
 #include "edit/pipeline/default_pipeline_params.hpp"
 #include "edit/pipeline/pipeline_accelerator.hpp"
-#include "edit/pipeline/pipeline_cpu.hpp"
+#include "edit/pipeline/pipeline_executor.hpp"
 #include "edit/runtime/pipeline_apply_request.hpp"
 #include "image/image_buffer.hpp"
 #include "opencl/opencl_context.hpp"
@@ -139,7 +139,7 @@ auto RunPipelineWithBackend(const std::filesystem::path& raw_path,
                             AcceleratorBackendPreference pref,
                             const BenchmarkScenario& scenario) -> PipelineBenchResult {
 
-  CPUPipelineExecutor pipeline;
+  PipelineExecutor pipeline;
   pipeline.SetAcceleratorBackendPreference(pref);
   const auto request =
       MakeHostRequest(scenario.full_res ? 0U : static_cast<std::uint32_t>(scenario.max_edge));
@@ -310,7 +310,7 @@ TEST(OpenClCudaFullPipelineBenchmark, RepeatedFrameTimingStability) {
 
   auto measure_backend = [&](AcceleratorBackendPreference pref,
                              const char* label) -> TimingStats {
-    CPUPipelineExecutor pipeline;
+    PipelineExecutor pipeline;
     pipeline.SetAcceleratorBackendPreference(pref);
     const auto request = MakeHostRequest(static_cast<std::uint32_t>(kMaxEdge));
 

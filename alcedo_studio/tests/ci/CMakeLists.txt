@@ -37,7 +37,7 @@ set_tests_properties(NoProductCodeUsesStageTable
 # The same check must reject stage-table use in the executor and a service. The fixture is
 # generated in the build tree so no test source outside the product tree is formatted or tidied.
 set(_stage_table_fixture_root "${CMAKE_CURRENT_BINARY_DIR}/stage_table_violation_fixture")
-file(WRITE "${_stage_table_fixture_root}/edit/pipeline/pipeline_cpu.cpp"
+file(WRITE "${_stage_table_fixture_root}/edit/pipeline/pipeline_executor.cpp"
   "void Configure(Executor& e) { e.SetOperator(Kind::Exposure, {}); }\n")
 file(WRITE "${_stage_table_fixture_root}/app/pipeline_service.cpp"
   "auto Name() { return PipelineStageName::Image_Loading; }\n")
@@ -46,7 +46,7 @@ add_test(NAME StageTableCheckRejectsExecutorAndServiceUse
           -DCHECK=NoProductCodeUsesStageTable
           -P ${ALCEDO_TEST_ROOT}/ci/legacy_removal_source_checks.cmake)
 set_tests_properties(StageTableCheckRejectsExecutorAndServiceUse
-  PROPERTIES PASS_REGULAR_EXPRESSION "app/pipeline_service\\.cpp: auto Name.*edit/pipeline/pipeline_cpu\\.cpp: void Configure"
+  PROPERTIES PASS_REGULAR_EXPRESSION "app/pipeline_service\\.cpp: auto Name.*edit/pipeline/pipeline_executor\\.cpp: void Configure"
              LABELS "ci_core_flow;legacy_removal")
 
 # G10.3: stage-JSON export and import stay inside the stage files that G10.9 archives. G10.7
@@ -150,7 +150,7 @@ file(WRITE "${_dag_legacy_fixture_root}/edit/runtime/metal/shader/neighbor.metal
 file(WRITE "${_dag_legacy_fixture_root}/edit/graph/node.cpp"
   "#include \"edit/operators/geometry/lens_calib_op.hpp\"\n")
 file(WRITE "${_dag_legacy_fixture_root}/include/renderer/task.hpp"
-  "#include \"edit/pipeline/pipeline.hpp\"\n#include \"edit/pipeline/pipeline_cpu.hpp\"\n")
+  "#include \"edit/pipeline/pipeline.hpp\"\n#include \"edit/pipeline/pipeline_executor.hpp\"\n")
 file(WRITE "${_dag_legacy_fixture_root}/edit/runtime/allowed.cpp"
   "#include \"edit/operators/models/sharpen_model.hpp\"\n#include \"edit/operators/basic/planckian_locus_table.hpp\"\n#include \"edit/runtime/local_tone_mapping.hpp\"\n")
 file(WRITE "${_dag_legacy_fixture_root}/edit/pipeline/stage.cpp"
@@ -161,7 +161,7 @@ add_test(NAME DagLegacyDirectoryCheckRejectsLegacyIncludes
           -P ${ALCEDO_TEST_ROOT}/ci/legacy_removal_source_checks.cmake)
 set_tests_properties(DagLegacyDirectoryCheckRejectsLegacyIncludes
   PROPERTIES PASS_REGULAR_EXPRESSION "edit/graph/node\.cpp: #include.*edit/runtime/metal/shader/neighbor\.metal: #include.*include/renderer/task\.hpp: #include \"edit/pipeline/pipeline\.hpp\""
-             FAIL_REGULAR_EXPRESSION "allowed\.cpp|stage\.cpp|pipeline_cpu\.hpp"
+             FAIL_REGULAR_EXPRESSION "allowed\.cpp|stage\.cpp|pipeline_executor\.hpp"
              LABELS "ci_core_flow;legacy_removal")
 
 # G10.6: a DAG frame presenter test links the scope analyzer from EditScope, without the legacy
