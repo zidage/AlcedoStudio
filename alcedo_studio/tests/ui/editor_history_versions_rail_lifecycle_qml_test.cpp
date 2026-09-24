@@ -10,6 +10,7 @@
 #include "editor_history_versions_rail_qml_harness.hpp"
 
 #include <QMetaObject>
+#include <QRectF>
 #include <QtGlobal>
 
 namespace alcedo::ui::test {
@@ -164,6 +165,57 @@ TEST_F(EditorHistoryVersionsRailLifecycleQmlTest,
   ASSERT_NE(versions_list, nullptr);
   EXPECT_TRUE(versions_list->property("reuseItems").toBool());
   QTRY_VERIFY_WITH_TIMEOUT(Find(QStringLiteral("editorHistoryList")) == nullptr, 2000);
+}
+
+TEST_F(EditorHistoryVersionsRailLifecycleQmlTest, RailButtonsShowFunctionLabelBelowIcon) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  auto* tool_rail = Find(QStringLiteral("editorToolRail"));
+  ASSERT_NE(tool_rail, nullptr);
+
+  for (const char* name :
+       {"editorHistoryRailButton", "editorVersionsRailButton", "editorNodesRailButton",
+        "editorMaskGroupsRailButton", "editorBackgroundTasksRailButton"}) {
+    auto* button = Find(QString::fromUtf8(name));
+    ASSERT_NE(button, nullptr) << name;
+    EXPECT_FALSE(button->property("label").toString().isEmpty()) << name;
+    EXPECT_FALSE(button->property("actionName").toString().isEmpty()) << name;
+    EXPECT_TRUE(button->activeFocusOnTab()) << name;
+    EXPECT_GE(button->height(), AppTheme::Instance().iconButtonHitSizeCompact() - 0.5) << name;
+    EXPECT_EQ(button->property("opticalSize").toInt(),
+              AppTheme::Instance().iconOpticalSizeCompact())
+        << name;
+
+    // The tile stays inside the rail.
+    const QRectF button_rect =
+        button->mapRectToItem(tool_rail, QRectF(0, 0, button->width(), button->height()));
+    EXPECT_GE(button_rect.left(), -0.5) << name;
+    EXPECT_LE(button_rect.right(), tool_rail->width() + 0.5) << name;
+
+    // The function label sits under the icon, inside the tile, and is not elided.
+    auto* icon  = button->property("iconItem").value<QQuickItem*>();
+    auto* label = button->property("labelItem").value<QQuickItem*>();
+    ASSERT_NE(icon, nullptr) << name;
+    ASSERT_NE(label, nullptr) << name;
+    const QRectF icon_rect = icon->mapRectToItem(button, QRectF(0, 0, icon->width(), icon->height()));
+    const QRectF label_rect =
+        label->mapRectToItem(button, QRectF(0, 0, label->width(), label->height()));
+    EXPECT_GE(label_rect.top(), icon_rect.bottom() - 0.5) << name;
+    EXPECT_LE(label_rect.bottom(), button->height() + 0.5) << name;
+    EXPECT_GT(label->property("contentWidth").toReal(), 0.0) << name;
+    EXPECT_FALSE(label->property("truncated").toBool()) << name << " label is elided";
+  }
+
+  // Selection is reflected on the labeled tile.
+  auto* versions_button = Find(QStringLiteral("editorVersionsRailButton"));
+  ASSERT_NE(versions_button, nullptr);
+  EXPECT_FALSE(versions_button->property("selected").toBool());
+  OpenVersionsPage();
+  QTRY_VERIFY_WITH_TIMEOUT(versions_button->property("selected").toBool(), 2000);
+  for (const auto& warning : warnings_) {
+    EXPECT_FALSE(warning.contains(QStringLiteral("EditorRailButton.qml")) ||
+                 warning.contains(QStringLiteral("EditorWorkspaceRail.qml")))
+        << warning.toStdString();
+  }
 }
 
 TEST_F(EditorHistoryVersionsRailLifecycleQmlTest,

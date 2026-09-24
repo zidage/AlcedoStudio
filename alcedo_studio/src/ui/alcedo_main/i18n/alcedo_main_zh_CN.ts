@@ -3471,6 +3471,31 @@ Original source files on disk will be kept.</source>
         <source>Background Tasks</source>
         <translation>后台任务</translation>
     </message>
+    <message>
+        <location filename="../qml/EditorWorkspaceRail.qml" line="+0"/>
+        <source>History</source>
+        <translation>历史</translation>
+    </message>
+    <message>
+        <location filename="../qml/EditorWorkspaceRail.qml" line="+0"/>
+        <source>Versions</source>
+        <translation>版本</translation>
+    </message>
+    <message>
+        <location filename="../qml/EditorWorkspaceRail.qml" line="+0"/>
+        <source>Nodes</source>
+        <translation>节点</translation>
+    </message>
+    <message>
+        <location filename="../qml/EditorWorkspaceRail.qml" line="+0"/>
+        <source>Mask Groups</source>
+        <translation>蒙版组</translation>
+    </message>
+    <message>
+        <location filename="../qml/EditorWorkspaceRail.qml" line="+0"/>
+        <source>Tasks</source>
+        <translation>后台任务</translation>
+    </message>
 </context>
 <context>
     <name>ExportInspectorPanel</name>

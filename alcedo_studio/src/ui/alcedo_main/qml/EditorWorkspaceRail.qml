@@ -53,7 +53,7 @@ Item {
                                           || activePage === "versions"
                                           || activePage === "nodes"
                                           || activePage === "maskgroups"
-    readonly property int railWidth: 48
+    readonly property int railWidth: 68
     readonly property int expandedPanelWidth: {
         if (activePage === "nodes" || activePage === "maskgroups")
             return nodesLayoutStore.preferredPanelWidth
@@ -210,102 +210,74 @@ Item {
 
         Column {
             anchors.top: parent.top
-            anchors.horizontalCenter: parent.horizontalCenter
-            anchors.topMargin: appTheme.spaceSm
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.margins: appTheme.spaceXs
             spacing: appTheme.spaceXs
 
-            IconActionButton {
-                id: historyRailButton
-                objectName: "editorHistoryRailButton"
-                compact: true
-                enabled: true
-                selected: root.activePage === "history"
-                selectedOutline: true
-                selectedOutlineColor: root.colText
-                iconSrc: "qrc:/history_icons/git-commit-horizontal.svg"
-                iconColorDefault: selected ? root.colText : root.colMuted
-                iconColorMuted: root.colMuted
+            component RailButton: EditorRailButton {
+                width: parent ? parent.width : implicitWidth
+                textColor: root.colText
+                mutedColor: root.colMuted
                 fillIdle: root.colCardSurface
                 fillHover: appTheme.buttonHoveredFillColor
                 fillPressed: appTheme.buttonPressedFillColor
-                fillSelected: root.colCardSurface
-                focusRingColor: root.colText
+            }
+
+            RailButton {
+                id: historyRailButton
+                objectName: "editorHistoryRailButton"
+                selected: root.activePage === "history"
+                iconSrc: "qrc:/history_icons/git-commit-horizontal.svg"
+                label: qsTr("History")
                 actionName: selected ? qsTr("Hide Edit History") : qsTr("Show Edit History")
                 onClicked: root.selectPage("history")
             }
 
-            IconActionButton {
+            RailButton {
                 id: versionsRailButton
                 objectName: "editorVersionsRailButton"
-                compact: true
                 enabled: root.versionCheckoutEnabled
                 selected: root.activePage === "versions"
-                selectedOutline: true
-                selectedOutlineColor: root.colText
                 iconSrc: "qrc:/panel_icons/versions.svg"
-                iconColorDefault: selected ? root.colText : root.colMuted
-                iconColorMuted: root.colMuted
-                fillIdle: root.colCardSurface
-                fillHover: appTheme.buttonHoveredFillColor
-                fillPressed: appTheme.buttonPressedFillColor
-                fillSelected: root.colCardSurface
-                focusRingColor: root.colText
+                label: qsTr("Versions")
                 actionName: selected ? qsTr("Hide Versions") : qsTr("Show Versions")
                 onClicked: root.selectPage("versions")
             }
 
-            IconActionButton {
+            RailButton {
                 id: nodesRailButton
                 objectName: "editorNodesRailButton"
-                compact: true
-                enabled: true
                 selected: root.activePage === "nodes"
-                selectedOutline: true
-                selectedOutlineColor: root.colText
                 iconSrc: "qrc:/panel_icons/pipeline.svg"
-                iconColorDefault: selected ? root.colText : root.colMuted
-                iconColorMuted: root.colMuted
-                fillIdle: root.colCardSurface
-                fillHover: appTheme.buttonHoveredFillColor
-                fillPressed: appTheme.buttonPressedFillColor
-                fillSelected: root.colCardSurface
-                focusRingColor: root.colText
+                label: qsTr("Nodes")
                 actionName: selected ? qsTr("Hide Nodes") : qsTr("Show Nodes")
                 onClicked: root.selectPage("nodes")
             }
 
-            IconActionButton {
+            RailButton {
                 id: maskGroupsRailButton
                 objectName: "editorMaskGroupsRailButton"
-                compact: true
-                enabled: true
                 selected: root.activePage === "maskgroups"
-                selectedOutline: true
-                selectedOutlineColor: root.colText
                 iconSrc: "qrc:/panel_icons/nodes.svg"
-                iconColorDefault: selected ? root.colText : root.colMuted
-                iconColorMuted: root.colMuted
-                fillIdle: root.colCardSurface
-                fillHover: appTheme.buttonHoveredFillColor
-                fillPressed: appTheme.buttonPressedFillColor
-                fillSelected: root.colCardSurface
-                focusRingColor: root.colText
+                label: qsTr("Mask Groups")
                 actionName: selected ? qsTr("Hide Mask Groups") : qsTr("Show Mask Groups")
                 onClicked: root.selectPage("maskgroups")
             }
 
-            IconActionButton {
+            // Separates the panel toggles above from the dialog launcher below.
+            Rectangle {
+                width: parent.width
+                height: 1
+                color: root.colCardBorder
+            }
+
+            RailButton {
                 id: backgroundTasksRailButton
                 objectName: "editorBackgroundTasksRailButton"
-                compact: true
                 enabled: root.host !== null
                 iconSrc: "qrc:/panel_icons/clock-play.svg"
-                iconColorDefault: root.colMuted
-                iconColorMuted: root.colMuted
-                fillIdle: root.colCardSurface
-                fillHover: appTheme.buttonHoveredFillColor
-                fillPressed: appTheme.buttonPressedFillColor
-                focusRingColor: root.colText
+                label: qsTr("Tasks")
                 actionName: qsTr("Background Tasks")
                 onClicked: root.host.openBackgroundTasksDialog()
             }
