@@ -14,7 +14,9 @@ macOS with macOS-packed ACES 2.0 files (Section 15.12). G10.6: complete. Lens re
 detail and grain helpers, Metal PRNG, shared headers, and `EditScope` moved; Windows and macOS
 criteria pass, except failures that exist before this phase (Section 15.12). G10.7: executor,
 services, and history presentation have no stage table; targeted suites pass; full `ctest` not
-run by user decision and manual check pending (Section 16.12). G10.8–G10.11 planned.
+run by user decision and manual check pending (Section 16.12). G10.8: complete. The executor is
+`PipelineExecutor` in `pipeline_executor.{hpp,cpp}`; targeted suites give the G10.7 counts except for
+two known flaky thumbnail pin-count cases (Section 17.12). G10.9–G10.11 planned.
 
 Parent: [GPU DAG Pipeline Rebuild Phase Plan](gpu_dag_pipeline_rebuild_phase_plan.md),
 Section 44 (G10) and Section 47 (global completion criteria).
@@ -3042,8 +3044,8 @@ Same as Section 16.9, plus the macOS build in Section 14.9.
 
 ### 17.10 Exit criteria
 
-- [ ] Counts equal G10.7.
-- [ ] The diff has no logic change (reviewer confirms).
+- [x] Counts equal G10.7 — for targeted sets A and B; see Section 17.12 for the two flaky cases.
+- [ ] The diff has no logic change (reviewer confirms). The author checked it; a reviewer has not.
 
 ### 17.11 Expected diff
 
@@ -3052,6 +3054,125 @@ Same as Section 16.9, plus the macOS build in Section 14.9.
 ### 17.12 Completion record
 
 Use the template in Section 10.12.
+
+#### Phase G10.8 completion record (2026-09-23)
+
+**Status:** complete. The executor is `PipelineExecutor`, declared in
+`include/edit/pipeline/pipeline_executor.hpp` and defined in `edit/pipeline/pipeline_executor.cpp`.
+Nothing else changed. The reviewer check of the diff and the full `ctest` run (user decision,
+`AGENTS.md`) are not done. The macOS build did not run.
+
+- **Source revision and branch:** based on `2c80877c` (G10.7 merged) on
+  `refact/gpu-dag-g10-8-rename-pipeline-executor`.
+- **Diff:** 43 files, 139 lines added and 142 removed. Git records the two files as renames.
+  This is below the 500–900 lines in Section 17.11: the estimate was made before G10.7 removed
+  most executor callers from the tests.
+- **What changed:**
+  - `git mv` of `pipeline_cpu.hpp` and `pipeline_cpu.cpp` to `pipeline_executor.hpp` and
+    `pipeline_executor.cpp`.
+  - `CPUPipelineExecutor` is replaced by `PipelineExecutor` in 20 product files and 21 test
+    files, including the error-message prefix `"PipelineExecutor: ..."`. The include paths and
+    the source file in `decoders/CMakeLists.txt` are updated as well.
+  - Source checks: `legacy_removal_source_checks.cmake` now allows
+    `edit/pipeline/pipeline_executor.hpp` in DAG files. The fixtures and regexes for
+    `StageTableCheckRejectsExecutorAndServiceUse` and `DagLegacyDirectoryCheckRejectsLegacyIncludes`
+    in `tests/ci/CMakeLists.txt` use the new file names.
+  - clang-format: only hunks that contain the renamed identifier were kept. These are realigned
+    declarations and continuation lines, plus two statements that now fit on one line. Other
+    `git clang-format` output (include order, blank lines, a doc-comment wrap) was discarded
+    because it is not part of this phase.
+  - The three CRLF files (`src/edit/CMakeLists.txt`, `src/decoders/CMakeLists.txt`,
+    `src/renderer/pipeline_scheduler.cpp`) were edited byte for byte and keep CRLF, so each
+    diff is small.
+- **Not changed:** `alcedo_studio/deprecated/` (archived code keeps its historical names) and
+  roadmap and refactor documents written before this phase. `pipeline_stage.cpp` already said
+  `"PipelineExecutor: No valid input image set"`; that message belongs to the stage interface
+  that G10.9 archives. `tests/edit/pipeline/cpu_pipeline_test.cpp` and
+  `pipeline_scheduler_test.cpp` are not registered in CMake and were not compiled; only the
+  identifier was replaced in them.
+- **QML and translations:** `git grep -n -e CPUPipelineExecutor -e pipeline_cpu -- '*.qml' '*.ts'`
+  returns no match.
+- **Remaining matches:** `git grep -n -e CPUPipelineExecutor -e pipeline_cpu -- ':!third_party'
+  ':!docs' ':!alcedo_studio/deprecated'` returns no match.
+
+**Primary success call chain:** Section 16.6 with the new name.
+
+```text
+PipelineMgmtService::LoadPipeline(id)
+  -> Storage::GetLivePipeline(id) or new PipelineExecutor   (resolves Auto backend)
+  -> render lock { SetBoundFile; SetAcceleratorBackendPreference }
+  -> LoadPipelineDocument -> EnsureRenderableCameraProfile -> executor.SetPipelineDocument
+Editor render: EditorSessionRenderSchedulerPort configure { executor.AttachFrameSink(sink) }
+  -> PipelineScheduler -> PipelineTask::MakeApplyRequest -> PipelineExecutor::Apply(input, request)
+  -> Renderer<Backend>::Render(document, request)
+```
+
+**Primary failure call chain:** Section 16.7 with the new name.
+
+```text
+Apply without a bound document
+  -> throws "PipelineExecutor: product rendering requires a bound PipelineDocument"
+  -> PipelineScheduler reports the failure; no substitute render
+Apply with the CPU preference (no GPU backend)
+  -> throws "PipelineExecutor: product rendering requires a supported GPU backend"
+SetAcceleratorBackendPreference(unavailable backend)
+  -> ResolveAcceleratorBackend throws before assignment; the prior backend stays selected
+```
+
+**What was proven (executed tests)**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| Full `win_debug` build | all targets | PASS (`alcedo_main` included; the second build had no work) |
+| Set A (Section 16.12) | `ctest` | 264 discovered, 259 run, 249 passed, 10 failed, 5 disabled |
+| Set B (Section 16.12) | `ctest` | 94 run, 94 passed |
+| `legacy_removal` label (13 source checks, including `DagSourcesDoNotReferenceLegacyDirectories` and `DagLegacyDirectoryCheckRejectsLegacyIncludes`) | `ctest -L legacy_removal` | 13/13 PASS |
+| No `CPUPipelineExecutor` or `pipeline_cpu` outside archive and docs | `git grep` | no match |
+| Full `win_debug` suite | `ctest` | NOT RUN (only the user can start a full run) |
+| macOS Metal targets | `macos_debug` build with `-DALCEDO_BUILD_TESTS=ON` | NOT RUN (no macOS machine in this session) |
+
+**Build and test commands with exit codes**
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 -- -k 0      -> exit 0 (build.log)
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4              -> exit 0 (build_2.log)
+ctest --test-dir build/debug -j 1 --timeout 300 -R "<set A>" -E "Fuzz|Stress"    -> exit 8
+ctest --test-dir build/debug -j 1 --timeout 300 -R "<set B>"                     -> exit 0
+ctest --test-dir build/debug -j 1 -L legacy_removal                              -> exit 0
+ctest ... --output-on-failure -R "OrdinaryThumbnailReuses...|AnalysisRenditionRenders..." x3
+                                                                                 -> exit 8, 8, 0
+```
+
+Sets A and B are the patterns in Section 16.12.
+
+**Count comparison with G10.7:** set A was 250 passed and 9 failed in G10.7; here it is 249 passed
+and 10 failed. The difference is
+`ThumbnailServiceTests.OrdinaryThumbnailReusesLiveEditorExecutorAndDocument`. It is flaky with
+the same cause as `AnalysisRenditionRendersWithoutSavePipelineOnLiveGuard` (the pin-count timing
+race in the G10.3 record). In three reruns of both cases, run 1 failed `OrdinaryThumbnail...`,
+run 2 failed `AnalysisRendition...`, and run 3 passed both. The failing assertion
+`EXPECT_EQ(live_guard->pin_count_, size_t{1})` printed "Which is: 1" for both sides, so the pin
+count changed between the comparison and the message. That is a timing race in the test's
+unsynchronized read of the pin count. A rename cannot cause it. The other 8 failures are the G10.7
+list: 5 `EditorSessionRenderSchedulerPortTest` sink-bind cases, `DiskCacheTracks...` (timeout),
+`MissingPipelineThrows`, and `MissingImageThrows`.
+
+**Checklist / exit condition (Section 17.10)**
+
+- [x] Counts equal G10.7 for the targeted sets, apart from the flaky case explained above.
+- [ ] Reviewer confirms that the diff has no logic change. The author's check: every hunk is the
+  identifier, a file name or path, or whitespace alignment on a changed line.
+
+**LOC note:** there are no new files. `pipeline_executor.hpp` has 153 lines and
+`pipeline_executor.cpp` has 155 lines. No changed file grew.
+
+**Other evidence:** `build/tmp/g10_8/` (`build.log`, `build_2.log`, `after_targeted_A.log`,
+`after_targeted_B.log`, `legacy_removal_checks.log`, `rerun_thumb_{1,2,3}.log`, and
+`clang_format_full.patch` and `clang_format_kept.patch`, which show the discarded and kept
+formatting hunks).
+
+**Remaining gaps:** the reviewer check, the full `ctest` run, and the macOS Metal build. The G10.7
+manual check is still open.
 
 ---
 
