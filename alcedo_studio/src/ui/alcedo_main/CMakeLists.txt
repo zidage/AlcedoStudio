@@ -248,6 +248,7 @@ target_link_libraries(AlbumBackendLib
         UpdateService
         SleeveFilterService
         FSService
+        AcceleratorBackend
         EditPipeline
         PipelineScheduler
         ImageLoader

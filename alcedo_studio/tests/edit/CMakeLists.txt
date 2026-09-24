@@ -103,8 +103,9 @@ alcedo_register_test_target(LensCalibDevelopResolveTest edit)
 # Pipeline frame sink: CPU frame delivery contract.
 add_executable(PipelineFrameSinkTest ${ALCEDO_TEST_ROOT}/edit/pipeline/pipeline_frame_sink_test.cpp)
 target_include_directories(PipelineFrameSinkTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(PipelineFrameSinkTest PRIVATE GTest::gtest_main EditPipeline
-                                                    PipelineScheduler ${ALCEDO_TEST_OPENCV_MIN_DEPS})
+target_link_libraries(PipelineFrameSinkTest PRIVATE GTest::gtest_main AcceleratorBackend
+                                                    EditPipeline PipelineScheduler
+                                                    ${ALCEDO_TEST_OPENCV_MIN_DEPS})
 gtest_discover_tests(PipelineFrameSinkTest TEST_PREFIX "PipelineFrameSinkTest.")
 alcedo_register_test_target(PipelineFrameSinkTest edit)
 
