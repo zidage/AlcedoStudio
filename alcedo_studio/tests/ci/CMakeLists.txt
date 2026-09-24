@@ -26,7 +26,7 @@ gtest_discover_tests(SleeveFilesystemCiTest TEST_PREFIX "SleeveFilesystemCiTest.
 alcedo_register_test_target(SleeveFilesystemCiTest ci_core)
 
 # G10 legacy removal: static source checks (cmake -P, no build dependency).
-# G10.7: only the stage and the legacy operators may use the stage table.
+# G10.7 removed the stage table from product code; G10.9 archived its last owners.
 add_test(NAME NoProductCodeUsesStageTable
   COMMAND ${CMAKE_COMMAND} -DALCEDO_SOURCE_ROOT=${ALCEDO_ROOT_DIR}/src
           -DCHECK=NoProductCodeUsesStageTable
@@ -49,8 +49,8 @@ set_tests_properties(StageTableCheckRejectsExecutorAndServiceUse
   PROPERTIES PASS_REGULAR_EXPRESSION "app/pipeline_service\\.cpp: auto Name.*edit/pipeline/pipeline_executor\\.cpp: void Configure"
              LABELS "ci_core_flow;legacy_removal")
 
-# G10.3: stage-JSON export and import stay inside the stage files that G10.9 archives. G10.7
-# removed the executor API and the mapper import. No rollback path may copy stage JSON again.
+# G10.3 removed the stage-JSON rollback, G10.7 the executor API and the mapper import, and G10.9
+# archived the stage. No file may copy stage JSON again.
 add_test(NAME NoProductCodeUsesStageJsonOutsideLegacyOwners
   COMMAND ${CMAKE_COMMAND} -DALCEDO_SOURCE_ROOT=${ALCEDO_ROOT_DIR}/src
           -DCHECK=NoProductCodeUsesStageJsonOutsideLegacyOwners
@@ -186,4 +186,127 @@ add_test(NAME FramePresenterLinkCheckRejectsLegacyPipeline
           -P ${ALCEDO_TEST_ROOT}/ci/target_link_checks.cmake)
 set_tests_properties(FramePresenterLinkCheckRejectsLegacyPipeline
   PROPERTIES PASS_REGULAR_EXPRESSION "PresenterTest does not link EditScope; links legacy library EditPipeline"
+             LABELS "ci_core_flow;legacy_removal")
+
+# G10.9: the stage, the legacy operators, and the legacy importer are archived outside the build.
+# No CMake file may name the archive, and the compile database may not list a file in it.
+add_test(NAME DeprecatedLegacyArchiveIsOutsideCompileGraph
+  COMMAND ${CMAKE_COMMAND} -DREPO_ROOT=${CMAKE_SOURCE_DIR}
+          -DCOMPILE_COMMANDS=$<$<BOOL:${CMAKE_EXPORT_COMPILE_COMMANDS}>:${CMAKE_BINARY_DIR}/compile_commands.json>
+          -DCHECK=DeprecatedLegacyArchiveIsOutsideCompileGraph
+          -P ${ALCEDO_TEST_ROOT}/ci/legacy_removal_source_checks.cmake)
+set_tests_properties(DeprecatedLegacyArchiveIsOutsideCompileGraph
+  PROPERTIES LABELS "ci_core_flow;legacy_removal")
+
+# The same check must reject a subdirectory into the archive, a CMake file inside the archive, and
+# an archive path in the compile database, and must not report a third_party file. The archive
+# directory name is assembled here so this file never spells the path itself.
+string(CONCAT _archive_dir "depre" "cated")
+set(_archive_fixture_root "${CMAKE_CURRENT_BINARY_DIR}/legacy_archive_reference_fixture")
+file(WRITE "${_archive_fixture_root}/CMakeLists.txt"
+  "add_subdirectory(\${ALCEDO_ROOT_DIR}/${_archive_dir}/legacy_pipeline/src)\n")
+file(WRITE "${_archive_fixture_root}/alcedo_studio/${_archive_dir}/legacy_pipeline/CMakeLists.txt"
+  "project(archive)\n")
+file(WRITE "${_archive_fixture_root}/alcedo_studio/src/third_party/lib/CMakeLists.txt"
+  "# vendored: ../../${_archive_dir}/legacy_pipeline\n")
+file(WRITE "${_archive_fixture_root}/scripts/clean.cmake" "set(X 1)\n")
+file(WRITE "${_archive_fixture_root}/compile_commands.json"
+  "[{\"file\": \"D:/repo/alcedo_studio/${_archive_dir}/legacy_pipeline/src/edit/stage.cpp\"}]\n")
+add_test(NAME ArchiveReferenceCheckRejectsBuildAndCompileDatabaseUse
+  COMMAND ${CMAKE_COMMAND} -DREPO_ROOT=${_archive_fixture_root}
+          -DCOMPILE_COMMANDS=${_archive_fixture_root}/compile_commands.json
+          -DCHECK=DeprecatedLegacyArchiveIsOutsideCompileGraph
+          -P ${ALCEDO_TEST_ROOT}/ci/legacy_removal_source_checks.cmake)
+set_tests_properties(ArchiveReferenceCheckRejectsBuildAndCompileDatabaseUse
+  PROPERTIES PASS_REGULAR_EXPRESSION "CMakeLists\.txt: add_subdirectory.*legacy_pipeline/CMakeLists\.txt: CMake file inside the archive.*compile database: .*stage\.cpp"
+             FAIL_REGULAR_EXPRESSION "third_party|clean\.cmake"
+             LABELS "ci_core_flow;legacy_removal")
+
+# G10.9 type and entry-point checks over src and tests.
+foreach(_g10_9_check IN ITEMS
+    NoPipelineStageTypeRemainsInFirstPartySource
+    NoOperatorParamsAggregateRemainsInFirstPartySource
+    NoLegacyOperatorTypeEnumRemains)
+  add_test(NAME ${_g10_9_check}
+    COMMAND ${CMAKE_COMMAND} -DALCEDO_SOURCE_ROOT=${ALCEDO_ROOT_DIR}/src
+            -DALCEDO_TEST_SOURCE_ROOT=${ALCEDO_TEST_ROOT}
+            -DCHECK=${_g10_9_check}
+            -P ${ALCEDO_TEST_ROOT}/ci/legacy_removal_source_checks.cmake)
+  set_tests_properties(${_g10_9_check} PROPERTIES LABELS "ci_core_flow;legacy_removal")
+endforeach()
+foreach(_g10_9_check IN ITEMS
+    AllBuiltInOperatorModelsHaveNoImageApplyEntryPoint
+    NoLegacyParameterImporterOrStageAdapterRemainsInProductPath)
+  add_test(NAME ${_g10_9_check}
+    COMMAND ${CMAKE_COMMAND} -DALCEDO_SOURCE_ROOT=${ALCEDO_ROOT_DIR}/src
+            -DCHECK=${_g10_9_check}
+            -P ${ALCEDO_TEST_ROOT}/ci/legacy_removal_source_checks.cmake)
+  set_tests_properties(${_g10_9_check} PROPERTIES LABELS "ci_core_flow;legacy_removal")
+endforeach()
+
+# Negative fixtures for the G10.9 checks. Each check must report the violating file and must not
+# report a file whose identifier only contains the legacy name.
+set(_g10_9_fixture_src "${CMAKE_CURRENT_BINARY_DIR}/g10_9_violation_fixture/src")
+set(_g10_9_fixture_tests "${CMAKE_CURRENT_BINARY_DIR}/g10_9_violation_fixture/tests")
+file(WRITE "${_g10_9_fixture_src}/app/stage_user.cpp"
+  "void Configure(PipelineStage& stage);\n")
+file(WRITE "${_g10_9_fixture_src}/app/params_user.cpp"
+  "void Resolve(OperatorParams& params);\nenum class OperatorType : int { EXPOSURE };\n")
+file(WRITE "${_g10_9_fixture_src}/ui/panel_model.cpp"
+  "void loadFromOperatorParams(const Map& m);\nauto t = OperatorTypeId::Exposure();\n")
+file(WRITE "${_g10_9_fixture_src}/edit/operators/models/exposure_model.hpp"
+  "class ExposureModel { void ApplyGPU(Buffer& b); };\n")
+file(WRITE "${_g10_9_fixture_src}/edit/operators/models/tint_model.hpp"
+  "class TintModel { void ApplyPatch(const Json& j); };\n")
+file(WRITE "${_g10_9_fixture_src}/app/import.cpp"
+  "auto doc = LegacyPipelineImporter::Import(json);\n")
+file(WRITE "${_g10_9_fixture_tests}/raw/gpu_params_test.cpp"
+  "GPUOperatorParams gpu{};\nauto k = OperatorType::ODT;\n")
+
+add_test(NAME PipelineStageCheckRejectsStageType
+  COMMAND ${CMAKE_COMMAND} -DALCEDO_SOURCE_ROOT=${_g10_9_fixture_src}
+          -DALCEDO_TEST_SOURCE_ROOT=${_g10_9_fixture_tests}
+          -DCHECK=NoPipelineStageTypeRemainsInFirstPartySource
+          -P ${ALCEDO_TEST_ROOT}/ci/legacy_removal_source_checks.cmake)
+set_tests_properties(PipelineStageCheckRejectsStageType
+  PROPERTIES PASS_REGULAR_EXPRESSION "app/stage_user\.cpp: void Configure"
+             FAIL_REGULAR_EXPRESSION "params_user|panel_model|gpu_params_test"
+             LABELS "ci_core_flow;legacy_removal")
+
+add_test(NAME OperatorParamsCheckRejectsAggregateInSourceAndTests
+  COMMAND ${CMAKE_COMMAND} -DALCEDO_SOURCE_ROOT=${_g10_9_fixture_src}
+          -DALCEDO_TEST_SOURCE_ROOT=${_g10_9_fixture_tests}
+          -DCHECK=NoOperatorParamsAggregateRemainsInFirstPartySource
+          -P ${ALCEDO_TEST_ROOT}/ci/legacy_removal_source_checks.cmake)
+set_tests_properties(OperatorParamsCheckRejectsAggregateInSourceAndTests
+  PROPERTIES PASS_REGULAR_EXPRESSION "app/params_user\.cpp: void Resolve.*tests:raw/gpu_params_test\.cpp: GPUOperatorParams"
+             FAIL_REGULAR_EXPRESSION "panel_model"
+             LABELS "ci_core_flow;legacy_removal")
+
+add_test(NAME OperatorTypeCheckRejectsEnumAndValues
+  COMMAND ${CMAKE_COMMAND} -DALCEDO_SOURCE_ROOT=${_g10_9_fixture_src}
+          -DALCEDO_TEST_SOURCE_ROOT=${_g10_9_fixture_tests}
+          -DCHECK=NoLegacyOperatorTypeEnumRemains
+          -P ${ALCEDO_TEST_ROOT}/ci/legacy_removal_source_checks.cmake)
+set_tests_properties(OperatorTypeCheckRejectsEnumAndValues
+  PROPERTIES PASS_REGULAR_EXPRESSION "app/params_user\.cpp: enum class OperatorType.*tests:raw/gpu_params_test\.cpp: auto k"
+             FAIL_REGULAR_EXPRESSION "panel_model"
+             LABELS "ci_core_flow;legacy_removal")
+
+add_test(NAME ModelApplyCheckRejectsImageEntryPoint
+  COMMAND ${CMAKE_COMMAND} -DALCEDO_SOURCE_ROOT=${_g10_9_fixture_src}
+          -DCHECK=AllBuiltInOperatorModelsHaveNoImageApplyEntryPoint
+          -P ${ALCEDO_TEST_ROOT}/ci/legacy_removal_source_checks.cmake)
+set_tests_properties(ModelApplyCheckRejectsImageEntryPoint
+  PROPERTIES PASS_REGULAR_EXPRESSION "edit/operators/models/exposure_model\.hpp: class ExposureModel"
+             FAIL_REGULAR_EXPRESSION "tint_model"
+             LABELS "ci_core_flow;legacy_removal")
+
+add_test(NAME LegacyImporterCheckRejectsImporterUse
+  COMMAND ${CMAKE_COMMAND} -DALCEDO_SOURCE_ROOT=${_g10_9_fixture_src}
+          -DCHECK=NoLegacyParameterImporterOrStageAdapterRemainsInProductPath
+          -P ${ALCEDO_TEST_ROOT}/ci/legacy_removal_source_checks.cmake)
+set_tests_properties(LegacyImporterCheckRejectsImporterUse
+  PROPERTIES PASS_REGULAR_EXPRESSION "app/import\.cpp: auto doc"
+             FAIL_REGULAR_EXPRESSION "stage_user|params_user"
              LABELS "ci_core_flow;legacy_removal")

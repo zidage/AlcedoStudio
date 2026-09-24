@@ -30,7 +30,6 @@
 #include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/mask/mask_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
-#include "edit/operators/op_base.hpp"
 #include "grade_owned_mask_support.hpp"
 #include "json.hpp"
 #include "support/editor_parameter_target_test.hpp"

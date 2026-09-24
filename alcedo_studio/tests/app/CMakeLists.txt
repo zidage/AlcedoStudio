@@ -42,7 +42,7 @@ endif()
 add_executable(EditorAdjustmentPipelineTest ${ALCEDO_TEST_ROOT}/app/editor_adjustment_pipeline_test.cpp)
 target_include_directories(EditorAdjustmentPipelineTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(EditorAdjustmentPipelineTest
-    PRIVATE GTest::gtest_main EditorAdjustmentPipeline Operators EditPipeline JSON ThreadPool)
+    PRIVATE GTest::gtest_main EditorAdjustmentPipeline EditPipeline JSON ThreadPool)
 gtest_discover_tests(EditorAdjustmentPipelineTest TEST_PREFIX "EditorAdjustmentPipelineTest.")
 alcedo_register_test_target(EditorAdjustmentPipelineTest app)
 
@@ -81,7 +81,7 @@ add_executable(PipelineHistoryApplierTest
 target_include_directories(PipelineHistoryApplierTest
     PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
 target_link_libraries(PipelineHistoryApplierTest
-    PRIVATE GTest::gtest_main PipelineHistoryApplier Operators EditMaskCore)
+    PRIVATE GTest::gtest_main PipelineHistoryApplier EditMaskCore)
 gtest_discover_tests(PipelineHistoryApplierTest
     TEST_PREFIX "PipelineHistoryApplierTest."
     PROPERTIES LABELS "ci_core_flow;edit;history")
@@ -151,7 +151,7 @@ add_executable(EditorGeometryOverlayPipelineTest
     ${ALCEDO_TEST_ROOT}/app/editor_geometry_overlay_pipeline_test.cpp)
 target_include_directories(EditorGeometryOverlayPipelineTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(EditorGeometryOverlayPipelineTest
-    PRIVATE GTest::gtest_main EditorAdjustmentPipeline Operators EditPipeline JSON ThreadPool
+    PRIVATE GTest::gtest_main EditorAdjustmentPipeline EditRuntimeLens EditPipeline JSON ThreadPool
             ${ALCEDO_TEST_OPENCV_MIN_DEPS})
 gtest_discover_tests(EditorGeometryOverlayPipelineTest
     TEST_PREFIX "EditorGeometryOverlayPipelineTest."

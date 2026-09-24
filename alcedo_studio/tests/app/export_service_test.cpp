@@ -31,7 +31,6 @@
 #include "app/project_service.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/operators/utils/color_utils.hpp"
-#include "edit/pipeline/default_pipeline_params.hpp"
 #include "edit/runtime/drt_display.hpp"
 #include "image/image.hpp"
 #include "io/image/export_color_profile_config.hpp"

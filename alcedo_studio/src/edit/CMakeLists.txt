@@ -66,10 +66,9 @@ set(EDIT_GRAPH_SRCS
     ${ALCEDO_SRC_ROOT}/edit/graph/develop_color_transform.cpp
     ${ALCEDO_SRC_ROOT}/edit/graph/develop_node_model.cpp
     ${ALCEDO_SRC_ROOT}/edit/graph/drt_node_model.cpp
-        ${ALCEDO_SRC_ROOT}/edit/graph/legacy_pipeline_importer.cpp
-        ${ALCEDO_SRC_ROOT}/edit/graph/pipeline_document.cpp
-        ${ALCEDO_SRC_ROOT}/edit/graph/pipeline_graph.cpp
-        ${ALCEDO_SRC_ROOT}/edit/graph/pipeline_graph_commands.cpp
+    ${ALCEDO_SRC_ROOT}/edit/graph/pipeline_document.cpp
+    ${ALCEDO_SRC_ROOT}/edit/graph/pipeline_graph.cpp
+    ${ALCEDO_SRC_ROOT}/edit/graph/pipeline_graph_commands.cpp
 )
 
 def_library(EditGraph
@@ -108,8 +107,7 @@ if(NOT ALCEDO_METAL_ENABLED)
         ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_backend_host.cpp
     )
 endif()
-# DRT output resolution shared by the CUDA, OpenCL, and Metal DRT passes. The legacy ODT_Op in
-# Operators also links it until G10.9 archives that operator.
+# DRT output resolution shared by the CUDA, OpenCL, and Metal DRT passes.
 def_library(EditRuntimeDrt
     SOURCES
         ${ALCEDO_SRC_ROOT}/edit/runtime/drt/drt_output_resolver.cpp
@@ -119,8 +117,7 @@ def_library(EditRuntimeDrt
 )
 
 # Lens calibration shared by the CUDA, OpenCL, and Metal Develop passes: the Lensfun resolver and the
-# lens and CUDA geometry kernels. The legacy LensCalibOp, CropRotateOp, and ResizeOp in Operators
-# also link it until G10.9 archives them.
+# lens and CUDA geometry kernels.
 set(EDIT_RUNTIME_LENS_SRCS
     ${ALCEDO_SRC_ROOT}/edit/runtime/lens/lens_calibration_resolver.cpp
 )
@@ -175,7 +172,7 @@ if(WIN32 AND TARGET puerhlab_lensfun)
 endif()
 
 # Histogram and waveform analysis of the presented display frame. The CUDA, OpenCL, and Metal
-# frame presenters link it; so do the legacy pipeline implementations until G10.9 and G10.10.
+# frame presenters link it.
 set(EDIT_SCOPE_SRCS
     ${ALCEDO_SRC_ROOT}/edit/scope/scope_analyzer.cpp
     ${ALCEDO_SRC_ROOT}/edit/scope/final_display_frame_tap.cpp

@@ -66,7 +66,7 @@ function(alcedo_copy_linked_runtime_dlls target_name)
 
   set(_alcedo_runtime_search_dirs "$<TARGET_FILE_DIR:${target_name}>")
   # Submodule lensfun and first-party product DLLs must win over vcpkg/installed.
-  # vcpkg lensfun 0.3.4 exports C++ names only; Operators imports the C lf_* API
+  # vcpkg lensfun 0.3.4 exports C++ names only; EditRuntimeLens imports the C lf_* API
   # from alcedo_studio/src/third_party/lensfun. Searching vcpkg first yields
   # STATUS_ENTRYPOINT_NOT_FOUND (0xC0000139).
   if(TARGET puerhlab_lensfun)

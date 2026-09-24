@@ -189,8 +189,8 @@ TEST_F(CudaDrtExpectedOutputFixture, CudaDrtRejectsUnknownEotfWithoutPublishingD
   EXPECT_FALSE(rendered->Empty());
 }
 
-// The stored files were packed through ODT_Op, OperatorParams, and GPUParamsConverter at commit
-// 0cf45f45 on a fresh GPUOperatorParams, one configuration per file.
+// The stored files were packed by the legacy ODT operator and its CUDA parameter converter (now in
+// alcedo_studio/deprecated/) at commit 0cf45f45, one configuration per file.
 TEST(CudaDrtParameterBytes, CudaDrtParameterBytesMatchStoredExpectedBytes) {
   if (!HasCudaDevice()) GTEST_SKIP() << "No CUDA device available.";
   const std::filesystem::path directory(ALCEDO_DRT_EXPECTED_PARAMETER_DIR);

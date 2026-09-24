@@ -13,7 +13,7 @@ namespace alcedo {
 
 /// Lightweight struct carrying raw-file colour and lens metadata extracted
 /// during decode or import.  Factored out of raw_processor.hpp so that
-/// headers without heavyweight dependencies (Image, OperatorParams, …) can
+/// headers without heavyweight dependencies (Image, the Develop model, …) can
 /// use it without pulling in libraw / decoder_scheduler.
 struct RawRuntimeColorContext {
   DngColorProfilePtr dng_profile_;

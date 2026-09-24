@@ -13,7 +13,6 @@
 #include <opencv2/imgproc.hpp>
 #include <vector>
 
-#include "edit/operators/operator_registeration.hpp"
 #include "edit/pipeline/pipeline_executor.hpp"
 #include "image/image_buffer.hpp"
 #include "renderer/pipeline_scheduler.hpp"
@@ -117,8 +116,6 @@ TEST(MetalFullPipelinePreview, DecodeGeometryAndMergedStageStillLife) {
   auto raw_bytes = ReadFileToBuffer(raw_path);
   ASSERT_FALSE(raw_bytes.empty());
 
-  RegisterAllOperators();
-
   PipelineExecutor pipeline;
   pipeline.SetForceCPUOutput(true);
 
@@ -150,8 +147,6 @@ TEST(MetalFullPipelinePreview, FastPreviewSchedulerStillProducesImage) {
   }
   ASSERT_TRUE(std::filesystem::exists(raw_path)) << raw_path.string();
 
-  RegisterAllOperators();
-
   auto output = RenderBlocking(RenderType::FAST_PREVIEW, ReadFileToBuffer(raw_path));
   ASSERT_NE(output, nullptr);
 
@@ -178,8 +173,6 @@ TEST(MetalFullPipelinePreview, ThumbnailSchedulerStillProducesImage) {
     GTEST_SKIP() << "CI RAW fixtures missing under TEST_IMG_PATH/ci_rawfiles";
   }
   ASSERT_TRUE(std::filesystem::exists(raw_path)) << raw_path.string();
-
-  RegisterAllOperators();
 
   auto output = RenderBlocking(RenderType::THUMBNAIL, ReadFileToBuffer(raw_path));
   ASSERT_NE(output, nullptr);

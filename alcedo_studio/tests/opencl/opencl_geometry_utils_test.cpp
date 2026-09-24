@@ -21,9 +21,7 @@
 #include "decoders/dng_default_crop.hpp"
 #include "decoders/processor/operators/gpu/cuda_dng_warp.hpp"
 #include "decoders/processor/operators/gpu/cuda_rotate.hpp"
-#include "edit/operators/geometry/crop_rotate_op.hpp"
 #include "edit/runtime/lens/cuda/cuda_geometry_ops.hpp"
-#include "edit/operators/geometry/resize_op.hpp"
 #include "image/image_buffer.hpp"
 #include "opencl/opencl_context.hpp"
 #include "opencl/opencl_runtime.hpp"
@@ -412,63 +410,6 @@ TEST(OpenClGeometryUtilsTest, RotatesLikeCudaRawGeometryUtils) {
     const cv::Mat expected = RunCudaRotate(src, test_case.rotate_code);
     ExpectGeometryNear(test_case.name, actual, expected, 0.0f);
   }
-}
-
-TEST(OpenClGeometryUtilsTest, ResizeOpOpenClMatchesCudaAreaDownsample) {
-  RequireOpenClAndCuda();
-
-  nlohmann::json params;
-  params["resize"] = {{"enable_scale", true},
-                      {"maximum_edge", 2},
-                      {"enable_roi", false},
-                      {"downsample_algorithm", "inter_area"}};
-
-  ResizeOp cuda_op(params);
-  auto     cuda_buffer = std::make_shared<ImageBuffer>(MakePattern(4, 4, CV_32FC3));
-  cuda_buffer->SyncToGPU(GpuBackendKind::CUDA);
-  cuda_buffer->ReleaseCPUData();
-  cuda_op.ApplyGPU(cuda_buffer);
-  cuda_buffer->SyncToCPU();
-
-  ResizeOp opencl_op(params);
-  auto     opencl_buffer = std::make_shared<ImageBuffer>(MakePattern(4, 4, CV_32FC3));
-  opencl_buffer->SyncToGPU(GpuBackendKind::OpenCL);
-  opencl_buffer->ReleaseCPUData();
-  opencl_op.ApplyGPU(opencl_buffer);
-  opencl_buffer->SyncToCPU();
-
-  ExpectGeometryNear("ResizeOpAreaDownsample", opencl_buffer->GetCPUData(),
-                     cuda_buffer->GetCPUData(), 1.0e-5f);
-}
-
-TEST(OpenClGeometryUtilsTest, CropRotateOpOpenClMatchesCuda) {
-  RequireOpenClAndCuda();
-
-  nlohmann::json params;
-  params["crop_rotate"] = {{"enabled", true},
-                           {"angle_degrees", 15.0f},
-                           {"enable_crop", true},
-                           {"crop_rect", {{"x", 0.1f}, {"y", 0.1f}, {"w", 0.75f}, {"h", 0.7f}}},
-                           {"expand_to_fit", true},
-                           {"aspect_ratio_preset", "free"},
-                           {"aspect_ratio", {{"width", 1.0f}, {"height", 1.0f}}}};
-
-  CropRotateOp cuda_op(params);
-  auto         cuda_buffer = std::make_shared<ImageBuffer>(MakePattern(8, 6, CV_32FC4));
-  cuda_buffer->SyncToGPU(GpuBackendKind::CUDA);
-  cuda_buffer->ReleaseCPUData();
-  cuda_op.ApplyGPU(cuda_buffer);
-  cuda_buffer->SyncToCPU();
-
-  CropRotateOp opencl_op(params);
-  auto         opencl_buffer = std::make_shared<ImageBuffer>(MakePattern(8, 6, CV_32FC4));
-  opencl_buffer->SyncToGPU(GpuBackendKind::OpenCL);
-  opencl_buffer->ReleaseCPUData();
-  opencl_op.ApplyGPU(opencl_buffer);
-  opencl_buffer->SyncToCPU();
-
-  ExpectGeometryNear("CropRotateOp", opencl_buffer->GetCPUData(), cuda_buffer->GetCPUData(),
-                     1.0e-4f);
 }
 
 TEST(OpenClGeometryUtilsTest, GeometryKernelsReportCudaOpenClPerformance) {

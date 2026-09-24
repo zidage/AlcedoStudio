@@ -4,12 +4,15 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <string>
 
-#include "edit/operators/basic/color_temp_op.hpp"
+#include "edit/graph/develop_color_transform.hpp"
+#include "edit/graph/develop_node_model.hpp"
 #include "image/dng_camera_matrix.hpp"
 #include "image/image.hpp"
 #include "image/metadata_extractor.hpp"
@@ -36,15 +39,13 @@ auto SonyA7CiiConvertedDngPath() -> std::filesystem::path {
          "ycbcr_compressed" / "DSC04739_dng.dng";
 }
 
-auto ResolveAsShotColorTemp(const RawRuntimeColorContext& ctx) -> OperatorParams {
-  OperatorParams params;
-  params.color_temp_enabled_ = true;
-  params.PopulateRawMetadata(ctx);
-  const nlohmann::json color_temp_params = {
-      {"color_temp", {{"mode", "as_shot"}, {"cct", 6500.0}, {"tint", 0.0}}}};
-  ColorTempOp op(color_temp_params);
-  op.SetGlobalParams(params);
-  return params;
+/// Bind the imported camera profile to a Develop payload in as-shot mode and resolve its
+/// camera transform, as import and the GPU DAG Develop pass do.
+auto ResolveAsShotDevelopTransform(const RawRuntimeColorContext& ctx) -> ColorTransformResult {
+  DevelopPayload develop;
+  BindDevelopCameraProfile(develop, ctx);
+  develop.wb_mode = "as_shot";
+  return ResolveDevelopColorTransform(develop);
 }
 
 void ExpectMatrixNear(const double* actual, const double (&expected)[9], const double epsilon) {
@@ -163,7 +164,8 @@ TEST(MetadataExtractorTest, RawColorContextSurvivesExifJsonRoundTrip) {
   }
 }
 
-TEST(MetadataExtractorTest, ColorTempOpSupportsDngWithoutCamXyzWhenDngMetadataIsPresent) {
+TEST(MetadataExtractorTest,
+     AsShotDevelopTransformSupportsDngWithoutCamXyzWhenDngMetadataIsPresent) {
   const auto sample_path = BadDngSamplePath();
   if (!std::filesystem::exists(sample_path)) {
     GTEST_SKIP() << "Sample DNG not found: " << sample_path.string();
@@ -173,27 +175,18 @@ TEST(MetadataExtractorTest, ColorTempOpSupportsDngWithoutCamXyzWhenDngMetadataIs
   ASSERT_NO_THROW(MetadataExtractor::ExtractEXIF_ToImage(sample_path, image));
   ASSERT_TRUE(image.HasRawColorContext());
 
-  OperatorParams params;
-  params.color_temp_enabled_ = true;
-  params.PopulateRawMetadata(image.GetRawColorContext());
-
-  for (float& value : params.raw_cam_xyz_) {
+  RawRuntimeColorContext ctx = image.GetRawColorContext();
+  for (float& value : ctx.cam_xyz_) {
     value = 0.0f;
   }
 
-  const nlohmann::json color_temp_params = {
-      {"color_temp", {{"mode", "as_shot"}, {"cct", 6500.0}, {"tint", 0.0}}}};
-  ColorTempOp op(color_temp_params);
-  ASSERT_NO_THROW(op.SetGlobalParams(params));
-
-  EXPECT_TRUE(params.color_temp_matrices_valid_);
-  EXPECT_GT(params.color_temp_resolved_xy_[0], 0.0f);
-  EXPECT_GT(params.color_temp_resolved_xy_[1], 0.0f);
-  EXPECT_GE(params.color_temp_resolved_cct_, 2000.0f);
-  EXPECT_LE(params.color_temp_resolved_cct_, 15000.0f);
+  const auto result = ResolveAsShotDevelopTransform(ctx);
+  ASSERT_TRUE(result.ok) << ColorTransformErrorMessage(result.error);
+  EXPECT_GE(result.transform.resolved_cct, 2000.0f);
+  EXPECT_LE(result.transform.resolved_cct, 15000.0f);
 }
 
-TEST(MetadataExtractorTest, ColorTempOpUsesForwardMatrixForBadColorDngAsShot) {
+TEST(MetadataExtractorTest, AsShotDevelopTransformUsesForwardMatrixForBadColorDng) {
   const auto sample_path = BadDngSamplePath();
   if (!std::filesystem::exists(sample_path)) {
     GTEST_SKIP() << "Sample DNG not found: " << sample_path.string();
@@ -203,30 +196,24 @@ TEST(MetadataExtractorTest, ColorTempOpUsesForwardMatrixForBadColorDngAsShot) {
   ASSERT_NO_THROW(MetadataExtractor::ExtractEXIF_ToImage(sample_path, image));
   ASSERT_TRUE(image.HasRawColorContext());
 
-  OperatorParams params;
-  params.color_temp_enabled_ = true;
-  params.PopulateRawMetadata(image.GetRawColorContext());
+  const auto& ctx    = image.GetRawColorContext();
+  const auto  result = ResolveAsShotDevelopTransform(ctx);
+  ASSERT_TRUE(result.ok) << ColorTransformErrorMessage(result.error);
+  const auto& cam_to_xyz_d50 = result.transform.camera_to_xyz_d50;
+  EXPECT_GT(result.transform.resolved_cct, 4000.0f);
+  EXPECT_LT(result.transform.resolved_cct, 6000.0f);
+  EXPECT_GT(std::abs(cam_to_xyz_d50[1]), 0.01f);
+  EXPECT_GT(std::abs(cam_to_xyz_d50[3]), 0.1f);
+  EXPECT_GT(std::abs(cam_to_xyz_d50[7]), 0.1f);
 
-  const nlohmann::json color_temp_params = {
-      {"color_temp", {{"mode", "as_shot"}, {"cct", 6500.0}, {"tint", 0.0}}}};
-  ColorTempOp op(color_temp_params);
-  ASSERT_NO_THROW(op.SetGlobalParams(params));
-
-  EXPECT_TRUE(params.color_temp_matrices_valid_);
-  EXPECT_GT(params.color_temp_resolved_cct_, 4000.0f);
-  EXPECT_LT(params.color_temp_resolved_cct_, 6000.0f);
-  EXPECT_GT(std::abs(params.color_temp_cam_to_xyz_d50_[1]), 0.01f);
-  EXPECT_GT(std::abs(params.color_temp_cam_to_xyz_d50_[3]), 0.1f);
-  EXPECT_GT(std::abs(params.color_temp_cam_to_xyz_d50_[7]), 0.1f);
-
-  const auto&  ctx    = image.GetRawColorContext();
   const double d50[3] = {.34567 / .35850, 1.0, (1 - .34567 - .35850) / .35850};
   const double maximum =
       std::max({ctx.as_shot_neutral_[0], ctx.as_shot_neutral_[1], ctx.as_shot_neutral_[2]});
   for (int r = 0; r < 3; ++r) {
     double neutral = 0;
     for (int c = 0; c < 3; ++c)
-      neutral += params.color_temp_cam_to_xyz_d50_[r * 3 + c] * ctx.as_shot_neutral_[c] / maximum;
+      neutral +=
+          cam_to_xyz_d50[static_cast<std::size_t>(r * 3 + c)] * ctx.as_shot_neutral_[c] / maximum;
     EXPECT_NEAR(neutral, d50[r], 2e-4);
   }
 }
@@ -252,25 +239,19 @@ TEST(MetadataExtractorTest, EmbeddedDngProfileTablesPreserveHasselbladForwardMat
   EXPECT_EQ(ctx.camera_make_, "Hasselblad");
   EXPECT_EQ(ctx.camera_model_, "X2D 100C-100c");
 
-  OperatorParams params;
-  params.color_temp_enabled_ = true;
-  params.PopulateRawMetadata(ctx);
-
-  const nlohmann::json color_temp_params = {
-      {"color_temp", {{"mode", "as_shot"}, {"cct", 6500.0}, {"tint", 0.0}}}};
-  ColorTempOp op(color_temp_params);
-  ASSERT_NO_THROW(op.SetGlobalParams(params));
-
-  EXPECT_TRUE(params.color_temp_matrices_valid_);
-  EXPECT_GT(params.color_temp_resolved_cct_, 4900.0f);
-  EXPECT_LT(params.color_temp_resolved_cct_, 5050.0f);
+  const auto result = ResolveAsShotDevelopTransform(ctx);
+  ASSERT_TRUE(result.ok) << ColorTransformErrorMessage(result.error);
+  const auto& cam_to_xyz_d50 = result.transform.camera_to_xyz_d50;
+  EXPECT_GT(result.transform.resolved_cct, 4900.0f);
+  EXPECT_LT(result.transform.resolved_cct, 5050.0f);
   const double d50[3] = {.34567 / .35850, 1.0, (1 - .34567 - .35850) / .35850};
   const double maximum =
       std::max({ctx.as_shot_neutral_[0], ctx.as_shot_neutral_[1], ctx.as_shot_neutral_[2]});
   for (int r = 0; r < 3; ++r) {
     double neutral = 0;
     for (int c = 0; c < 3; ++c)
-      neutral += params.color_temp_cam_to_xyz_d50_[r * 3 + c] * ctx.as_shot_neutral_[c] / maximum;
+      neutral +=
+          cam_to_xyz_d50[static_cast<std::size_t>(r * 3 + c)] * ctx.as_shot_neutral_[c] / maximum;
     EXPECT_NEAR(neutral, d50[r], 2e-4);
   }
 }
@@ -295,20 +276,12 @@ TEST(MetadataExtractorTest, SonyArwMakerNoteAsShotNeutralResolvesStableCct) {
   EXPECT_DOUBLE_EQ(ctx.as_shot_neutral_[1], 1.0);
   EXPECT_NEAR(ctx.as_shot_neutral_[2], 1024.0 / 2004.0, 1e-6);
 
-  OperatorParams params;
-  params.color_temp_enabled_ = true;
-  params.PopulateRawMetadata(ctx);
-
-  const nlohmann::json color_temp_params = {
-      {"color_temp", {{"mode", "as_shot"}, {"cct", 6500.0}, {"tint", 0.0}}}};
-  ColorTempOp op(color_temp_params);
-  ASSERT_NO_THROW(op.SetGlobalParams(params));
-
-  EXPECT_TRUE(params.color_temp_matrices_valid_);
-  EXPECT_GT(params.color_temp_resolved_cct_, 3900.0f);
-  EXPECT_LT(params.color_temp_resolved_cct_, 4050.0f);
-  EXPECT_GT(params.color_temp_resolved_tint_, -20.0f);
-  EXPECT_LT(params.color_temp_resolved_tint_, 0.0f);
+  const auto result = ResolveAsShotDevelopTransform(ctx);
+  ASSERT_TRUE(result.ok) << ColorTransformErrorMessage(result.error);
+  EXPECT_GT(result.transform.resolved_cct, 3900.0f);
+  EXPECT_LT(result.transform.resolved_cct, 4050.0f);
+  EXPECT_GT(result.transform.resolved_tint, -20.0f);
+  EXPECT_LT(result.transform.resolved_tint, 0.0f);
 }
 
 TEST(MetadataExtractorTest, SonyAdobeDngPreservesTaggedMatrixAndSeparateAnalogBalance) {
@@ -349,12 +322,12 @@ TEST(MetadataExtractorTest, SonyAdobeDngPreservesTaggedMatrixAndSeparateAnalogBa
     EXPECT_NEAR(ctx.dng_profile_->analog_balance[i], analog_balance[i], 1e-5);
   for (int i = 0; i < 9; ++i)
     EXPECT_NEAR(ctx.dng_profile_->camera_calibration_1[i], camera_calibration[i], 1e-5);
-  const auto params = ResolveAsShotColorTemp(ctx);
-  EXPECT_TRUE(params.color_temp_matrices_valid_);
-  EXPECT_GT(params.color_temp_resolved_cct_, 4800.0f);
-  EXPECT_LT(params.color_temp_resolved_cct_, 6200.0f);
-  EXPECT_GT(params.color_temp_resolved_tint_, -40.0f);
-  EXPECT_LT(params.color_temp_resolved_tint_, 40.0f);
+  const auto result = ResolveAsShotDevelopTransform(ctx);
+  ASSERT_TRUE(result.ok) << ColorTransformErrorMessage(result.error);
+  EXPECT_GT(result.transform.resolved_cct, 4800.0f);
+  EXPECT_LT(result.transform.resolved_cct, 6200.0f);
+  EXPECT_GT(result.transform.resolved_tint, -40.0f);
+  EXPECT_LT(result.transform.resolved_tint, 40.0f);
 }
 
 TEST(MetadataExtractorTest, XmpSidecarIsRejectedAsUnsupportedImportFormat) {

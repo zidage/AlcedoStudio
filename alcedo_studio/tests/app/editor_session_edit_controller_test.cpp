@@ -11,7 +11,6 @@
 #include <string>
 
 #include "app/editor_session_lifecycle.hpp"
-#include "edit/operators/op_base.hpp"
 #include "json.hpp"
 #include "support/editor_parameter_target_test.hpp"
 #include "support/editor_parameter_write_test.hpp"

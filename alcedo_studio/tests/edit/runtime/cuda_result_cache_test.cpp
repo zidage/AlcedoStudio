@@ -21,7 +21,6 @@
 #include "../graph/grade_owned_mask_support.hpp"
 #include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
-#include "edit/graph/legacy_pipeline_importer.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/input/raw_input_loader.hpp"
@@ -248,15 +247,14 @@ TEST_F(CudaResultCacheProductFixture,
   EXPECT_EQ(stats.pass.drt_skip, 1U);
 }
 
-TEST_F(CudaResultCacheProductFixture,
-       ApplyOntoExposureWithMaskReusesSensorGeometryCameraAndMask) {
+TEST_F(CudaResultCacheProductFixture, ExposureEditWithMaskReusesSensorGeometryCameraAndMask) {
   ConnectFullCoverageMask(*document_);
   ASSERT_TRUE(OutputIsFinite(Render()));
   renderer_->ResetStats();
-  nlohmann::json json;
-  json["Basic Adjustment"]["Basic Adjustment"]["exposure"] = {
-      {"type", 2}, {"enable", true}, {"params", {{"exposure", 0.75}}}};
-  ASSERT_TRUE(LegacyPipelineImporter::ApplyOnto(*document_, json).empty());
+  auto* exposure = dynamic_cast<ExposureModel*>(
+      document_->PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+  ASSERT_NE(exposure, nullptr);
+  exposure->SetValue(0.75f);
   ASSERT_TRUE(OutputIsFinite(Render()));
   const auto stats = renderer_->Stats();
   EXPECT_EQ(stats.pass.source_h2d_count, 0U);

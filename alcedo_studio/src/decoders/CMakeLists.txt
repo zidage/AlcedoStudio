@@ -17,7 +17,6 @@ set(RAW_OP_GPU_SRCS)
 if(ALCEDO_CUDA_ENABLED)
     list(APPEND RAW_OP_GPU_SRCS
         ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/cuda_color_space_conv.cu
-        ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/cuda_debayer_ahd.cu
         ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/cuda_debayer_rcd.cu
         ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/cuda_dng_warp.cu
         ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/cuda_downsample.cu
@@ -78,72 +77,6 @@ if(ALCEDO_OPENCL_ENABLED)
     target_compile_definitions(RawProcessorOp PUBLIC HAVE_OPENCL)
 endif()
 
-# --- Edit Operators ---
-set(OPERATORS_SRCS
-    ${ALCEDO_SRC_ROOT}/edit/operators/operator_factory.cpp
-    ${ALCEDO_SRC_ROOT}/edit/operators/basic/exposure_op.cpp
-    ${ALCEDO_SRC_ROOT}/edit/operators/basic/exposure_op_vec.cpp
-    ${ALCEDO_SRC_ROOT}/edit/operators/basic/contrast_op.cpp
-    ${ALCEDO_SRC_ROOT}/edit/operators/basic/black_op.cpp
-    ${ALCEDO_SRC_ROOT}/edit/operators/basic/color_temp_op.cpp
-    ${ALCEDO_SRC_ROOT}/edit/operators/basic/highlight_op.cpp
-    ${ALCEDO_SRC_ROOT}/edit/operators/basic/shadow_op.cpp
-    ${ALCEDO_SRC_ROOT}/edit/operators/basic/white_op.cpp
-    ${ALCEDO_SRC_ROOT}/edit/operators/color/tint_op.cpp
-    ${ALCEDO_SRC_ROOT}/edit/operators/color/conversion/Oklab_cvt.cpp
-    ${ALCEDO_SRC_ROOT}/edit/operators/color/saturation_op.cpp
-    ${ALCEDO_SRC_ROOT}/edit/operators/color/vibrance_op.cpp
-    ${ALCEDO_SRC_ROOT}/edit/operators/color/HLS_op.cpp
-    ${ALCEDO_SRC_ROOT}/edit/operators/detail/clarity_op.cpp
-    ${ALCEDO_SRC_ROOT}/edit/operators/detail/sharpen_op.cpp
-    ${ALCEDO_SRC_ROOT}/edit/operators/wheel/color_wheel_op.cpp
-    ${ALCEDO_SRC_ROOT}/edit/operators/curve/curve_op.cpp
-    ${ALCEDO_SRC_ROOT}/edit/operators/cst/cst_op.cpp
-    ${ALCEDO_SRC_ROOT}/edit/operators/cst/lmt_op.cpp
-    ${ALCEDO_SRC_ROOT}/edit/operators/cst/odt_op.cpp
-    ${ALCEDO_SRC_ROOT}/edit/operators/cst/film_grain_op.cpp
-    ${ALCEDO_SRC_ROOT}/edit/operators/cst/halation_op.cpp
-    ${ALCEDO_SRC_ROOT}/edit/operators/raw/raw_decode_op.cpp
-    ${ALCEDO_SRC_ROOT}/edit/operators/geometry/resize_op.cpp
-    ${ALCEDO_SRC_ROOT}/edit/operators/geometry/crop_rotate_op.cpp
-    ${ALCEDO_SRC_ROOT}/edit/operators/geometry/lens_calib_op.cpp
-    ${ALCEDO_SRC_ROOT}/edit/operators/operator_registeration.cpp
-)
-
-if(ALCEDO_METAL_ENABLED)
-    list(APPEND OPERATORS_SRCS
-        ${ALCEDO_SRC_ROOT}/edit/operators/basic/highlight_shadow_local_tone_metal.cpp
-    )
-endif()
-if(ALCEDO_OPENCL_ENABLED)
-    list(APPEND OPERATORS_SRCS
-        ${ALCEDO_SRC_ROOT}/edit/operators/basic/highlight_shadow_local_tone_opencl.cpp
-    )
-endif()
-
-# LensCalibOp, CropRotateOp, and ResizeOp use the lens resolver and the lens and geometry kernels
-# of EditRuntimeLens until G10.9 archives them.
-def_cuda_library(Operators
-    SOURCES ${OPERATORS_SRCS}
-    PUBLIC_DEPS ImageBuffer JSON OpenColorIO::OpenColorIO hwy::hwy EditRuntimeLens
-    # Image provides RawColorContextToJson/FromJson used by RawDecodeOp durable params.
-    PRIVATE_DEPS ${ALCEDO_OPENCV_IMAGE_DEPS} RawProcessor Image EditGraph EditRuntimeDrt
-)
-if(ALCEDO_CUDA_ENABLED)
-    set_target_properties(Operators PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
-endif()
-if(ALCEDO_METAL_ENABLED)
-    add_dependencies(Operators EditPipelineMetalShaders)
-    target_link_libraries(Operators PRIVATE MetalGeometryUtils MetalImage MetalContext)
-    target_compile_definitions(Operators PRIVATE
-        ALCEDO_METAL_FUSED_PIPELINE_METALLIB_PATH="${METAL_FUSED_PIPELINE_METALLIB}"
-    )
-endif()
-if(ALCEDO_OPENCL_ENABLED)
-    target_compile_definitions(Operators PUBLIC HAVE_OPENCL)
-    target_link_libraries(Operators PRIVATE OpenClProgramLibrary OpenClGeometryUtils)
-endif()
-
 # --- Accelerator Backend Selection ---
 def_library(AcceleratorBackend
     SOURCES ${ALCEDO_SRC_ROOT}/edit/pipeline/pipeline_accelerator.cpp
@@ -162,41 +95,14 @@ if(ALCEDO_OPENCL_ENABLED)
     target_compile_definitions(AcceleratorBackend PUBLIC HAVE_OPENCL)
     target_link_libraries(AcceleratorBackend PRIVATE OpenClProgramLibrary)
 endif()
-target_link_libraries(Operators PRIVATE AcceleratorBackend OpenMP::OpenMP_CXX)
 
 # --- Edit Pipeline ---
-set(PIPELINE_SRCS
-    ${ALCEDO_SRC_ROOT}/edit/pipeline/pipeline_executor.cpp
-    ${ALCEDO_SRC_ROOT}/edit/pipeline/pipeline_stage.cpp
-    ${ALCEDO_SRC_ROOT}/edit/pipeline/pipeline_gpu_wrapper.cpp
-    ${ALCEDO_INCLUDE_ROOT}/edit/pipeline/highlight_shadow_local_tone.hpp
-    ${ALCEDO_INCLUDE_ROOT}/edit/pipeline/metal_kernel_dispatch.hpp
-    ${ALCEDO_INCLUDE_ROOT}/edit/pipeline/metal_pipeline_stats.hpp
-    ${ALCEDO_INCLUDE_ROOT}/edit/pipeline/opencl_kernel_dispatch.hpp
-)
-
-if(ALCEDO_CUDA_ENABLED)
-    set(GPU_PIPELINE_SRCS
-        ${ALCEDO_SRC_ROOT}/edit/pipeline/pipeline_gpu_impl.cu
-    )
-endif()
-if(ALCEDO_METAL_ENABLED)
-    list(APPEND GPU_PIPELINE_SRCS
-        ${ALCEDO_SRC_ROOT}/edit/pipeline/pipeline_metal_impl.cpp
-    )
-endif()
-if(ALCEDO_OPENCL_ENABLED)
-    list(APPEND GPU_PIPELINE_SRCS
-        ${ALCEDO_SRC_ROOT}/edit/pipeline/pipeline_opencl_impl.cpp
-        ${ALCEDO_SRC_ROOT}/edit/pipeline/pipeline_opencl_param.cpp
-    )
-endif()
-
+# The executor binds a PipelineDocument and dispatches to the GPU DAG renderer of the resolved
+# backend. The legacy stage pipeline is archived (G10.9).
 def_cuda_library(EditPipeline
-    SOURCES ${PIPELINE_SRCS} ${GPU_PIPELINE_SRCS}
-    # The legacy Metal and OpenCL pipeline implementations present frames through EditScope.
-    PUBLIC_DEPS Operators EditScope
-    PRIVATE_DEPS ThreadPool opencv_imgproc CudaDriverRequirements AcceleratorBackend
+    SOURCES ${ALCEDO_SRC_ROOT}/edit/pipeline/pipeline_executor.cpp
+    PUBLIC_DEPS ImageBuffer EditGraph
+    PRIVATE_DEPS ThreadPool CudaDriverRequirements AcceleratorBackend
 )
 
 if(ALCEDO_CUDA_ENABLED)
@@ -207,11 +113,7 @@ if(ALCEDO_CUDA_ENABLED)
     target_link_libraries(EditPipeline PRIVATE CUDA::cudart)
 endif()
 if(ALCEDO_METAL_ENABLED)
-    add_dependencies(EditPipeline EditPipelineMetalShaders)
     target_compile_definitions(EditPipeline PUBLIC HAVE_METAL)
-    target_compile_definitions(EditPipeline PRIVATE
-        ALCEDO_METAL_FUSED_PIPELINE_METALLIB_PATH="${METAL_FUSED_PIPELINE_METALLIB}"
-    )
     target_link_libraries(EditPipeline PRIVATE MetalImage MetalContext)
 endif()
 if(ALCEDO_OPENCL_ENABLED)

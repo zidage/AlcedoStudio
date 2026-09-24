@@ -29,7 +29,6 @@
 #include "edit/history/pipeline_document_checkpoint.hpp"
 #include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/history/version_ref.hpp"
-#include "edit/operators/op_base.hpp"
 #include "storage/store/database.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
 #include "type/type.hpp"

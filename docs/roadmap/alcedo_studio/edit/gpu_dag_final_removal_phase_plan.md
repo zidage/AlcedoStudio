@@ -16,7 +16,10 @@ criteria pass, except failures that exist before this phase (Section 15.12). G10
 services, and history presentation have no stage table; targeted suites pass; full `ctest` not
 run by user decision and manual check pending (Section 16.12). G10.8: complete. The executor is
 `PipelineExecutor` in `pipeline_executor.{hpp,cpp}`; targeted suites give the G10.7 counts except for
-two known flaky thumbnail pin-count cases (Section 17.12). G10.9–G10.11 planned.
+two known flaky thumbnail pin-count cases (Section 17.12). G10.9: shared, CUDA, CPU, and operator
+legacy files are archived and out of the Windows and macOS builds; the six source checks and the
+targeted suites pass on both platforms, except failures that exist before this phase; the full
+`ctest` run did not run (only the user starts it) (Section 18.12). G10.10–G10.11 planned.
 
 Parent: [GPU DAG Pipeline Rebuild Phase Plan](gpu_dag_pipeline_rebuild_phase_plan.md),
 Section 44 (G10) and Section 47 (global completion criteria).
@@ -636,8 +639,8 @@ lines. Generated expected-pixel files and temporary evidence do not count.
 | G10.5 | DRT resolution moved out of `ODT_Op` and `OperatorParams` on three backends | runtime DRT | G10.1 | 1300–1900 | in progress (Metal unavailable; 2.6k lines in two commits) |
 | G10.6 | Lens resolver, CUDA detail and grain helpers, shared headers, shaders, and scope target moved | runtime, CMake | G10.5 | 1000–1700 | complete (3.6k lines in three commits; Section 15.12) |
 | G10.7 | Executor and services have no stage table; history presentation uses `field_key` | executor, services, presentation | G10.3, G10.6 | 1400–1900 | partial (3.4k lines, two commits; full `ctest` and manual check not run; Section 16.12) |
-| G10.8 | `CPUPipelineExecutor` renamed to `PipelineExecutor` | all users | G10.7 | 500–900 | planned |
-| G10.9 | Shared, CUDA, CPU, and operator legacy files archived out of the compile graph | CMake, archive | G10.8 | 700–1300 | planned |
+| G10.8 | `CPUPipelineExecutor` renamed to `PipelineExecutor` | all users | G10.7 | 500–900 | complete (Section 17.12) |
+| G10.9 | Shared, CUDA, CPU, and operator legacy files archived out of the compile graph | CMake, archive | G10.8 | 700–1300 | complete (Windows and macOS; full `ctest` not run by user decision; Section 18.12) |
 | G10.10 | OpenCL, Metal, and RawProcessor legacy files archived; packaging fixed | CMake, registry, install, tests | G10.9 | 900–1600 | planned |
 | G10.11 | Static checks, full suites, installed packages, three-backend A/B, plan records | tests, docs | G10.10 | 600–1100 | planned |
 
@@ -3257,9 +3260,11 @@ Also run the macOS configure and build, because `edit/operators` changes affect 
 
 ### 18.10 Exit criteria
 
-- [ ] Full build and tests pass on Windows.
-- [ ] macOS configure and build pass.
-- [ ] All six checks pass.
+- [ ] Full build and tests pass on Windows. The full `win_debug` build passes; the targeted suites
+      give the pre-phase counts; the full `ctest` run did not run (only the user starts it).
+- [x] macOS configure and build pass. `macos_debug` with tests: every target builds except two
+      test targets that also fail before this phase (Section 18.12, "macOS verification").
+- [x] All six checks pass (Section 18.12).
 
 ### 18.11 Expected diff
 
@@ -3268,6 +3273,263 @@ Also run the macOS configure and build, because `edit/operators` changes affect 
 ### 18.12 Completion record
 
 Use the template in Section 10.12.
+
+#### Phase G10.9 completion record (2026-09-23)
+
+**Status:** complete (macOS verification 2026-09-23). On Windows the phase is complete: the archive and its README exist, every
+file of the Section 18.3 groups is in the archive and outside the compile graph, the full
+`win_debug` build passes, the six checks pass, and the targeted suites give the G10.8 counts minus
+the archived cases. On macOS the Metal build, the six checks, and the targeted suites pass, except
+failures that exist before this phase ("macOS verification"). Not done: the full `ctest` run (only
+the user starts it, `AGENTS.md`).
+
+- **Source revision and branch:** based on `8d0fa77a` (G10.8 merged) on
+  `refact/gpu-dag-g10-9-archive-shared-cuda-cpu-operators`. Commits: `61c795ab` (LF conversion of
+  five CRLF files, line endings only), `685ffc11` (`git mv` into the archive, 152 files, all R100),
+  `6c87ec6a` (build references, test rewrites, source checks, and one more R100 move), and the
+  README and this record.
+- **Diff:** 1242 lines (423 added, 819 removed) in 40 files in `6c87ec6a`, plus the 35-line README
+  and this record. The moves count zero (Section 9).
+
+**Archived (`alcedo_studio/deprecated/legacy_pipeline/`, identical bytes)**
+
+- Shared: `edit/pipeline/pipeline_stage.cpp`, `pipeline_gpu_wrapper.cpp`; `include/edit/pipeline/`
+  `pipeline_stage.hpp`, `pipeline_gpu_wrapper.hpp`, `tile_scheduler.hpp`,
+  `highlight_shadow_local_tone.hpp`, `default_pipeline_params.hpp`.
+- CUDA: `pipeline_gpu_impl.cu`, `gpu_scheduler.cuh`, `kernel_stream_gpu.cuh`,
+  `cuda_output_texture_tail.cuh`, every header in `include/edit/operators/GPU_kernels/` (including
+  `param.cuh`, `fused_param.hpp`, `detail.cuh`, `film_grain.cuh`), and `cuda_debayer_ahd.{cu,hpp}`
+  (no caller).
+- CPU kernels: all of `include/edit/operators/CPU_kernels/`.
+- Operators: `op_base.hpp`, `op_kernel.hpp`, `operator_factory.*`, `operator_registeration.*`, and
+  every legacy operator class of Section 5.7 with its helpers (`Oklab_cvt`, `ocio_config_utils.hpp`,
+  `shadows_highlights_shared_curve.hpp`, `cst_op`, `cv_cvt_op`).
+- `edit/graph/legacy_pipeline_importer.{cpp,hpp}`.
+- Tests: all of `tests/edit/operators/` except `aces_odt_numeric_stability_test.cpp`;
+  `tests/edit/pipeline/{cpu_pipeline,pipeline_serial,pipeline_scheduler,tile}_test.cpp` and
+  `pipeline_test_fixation.hpp`; `tests/edit/graph/legacy_import_test.cpp`;
+  `tests/opencl/opencl_fused_edit_pipeline_test.cpp`; `tests/raw/color_temp_cuda_sanity_test.cpp`,
+  `opencl_cuda_pipeline_compare_test.cpp`, `metal_raw_stage_preview_test.cpp`,
+  `metal_fast_preview_profile.cpp` (stage table use); `tests/gui_pocs/opencl_cuda_pipeline_preview.cpp`
+  and `ui_test_fixation.hpp`.
+- Kept in the build (Section 18.3): `edit/operators/models/**`, `edit/operators/utils/*`,
+  `planckian_locus_table.hpp`, `camera_matrices.hpp`, `resize_algorithm.hpp`, and
+  `edit/pipeline/pipeline_accelerator.*` and `pipeline_executor.*`. `op_kernel.hpp` had no user left
+  (`renderer/pipeline_task.hpp` no longer includes it), so it was archived, not moved.
+
+**Deviations from Sections 5.6 and 18.3**
+
+- The OpenCL and Metal legacy pipeline implementations are archived here, not in G10.10:
+  `pipeline_opencl_impl.cpp`, `pipeline_opencl_param.cpp`, `pipeline_metal_impl.cpp`,
+  `opencl_kernel_dispatch.hpp`, `metal_kernel_dispatch.hpp`, `metal_pipeline_stats.hpp`,
+  `GPU_kernels/opencl_param.hpp`, `GPU_kernels/metal_param.hpp`, and
+  `highlight_shadow_local_tone_{opencl,metal}.{cpp,hpp}`. Their only caller is `GPUPipelineWrapper`
+  and they include `pipeline_gpu_wrapper.hpp` and `fused_param.hpp`, so they cannot stay in the
+  build once the wrapper leaves it (Section 18.7). G10.10 keeps the OpenCL program manifest
+  (`opencl_pipeline_programs.*`), the nine `.cl` files, `fused_pipeline.metal`, the eight shaders
+  in `GPU_kernels/metal_shader/`, `EditPipelineMetalShaders`, and the install rules.
+- `cuda_downsample.cu` and `cuda_rotate.cu` stay in `RawProcessorOp`: `raw_processor_cuda.cpp`
+  calls them. They leave with `RawProcessor` in G10.10.
+- `ColorTempCudaSanityTest` and `OpenClCudaPipelineCompareTest` (Section 5.8 lists them for
+  G10.10) are archived here because they construct `ColorTempOp`, `RawDecodeOp`, `LensCalibOp`, and
+  `ResizeOp`.
+- `CudaPreviewVramReclamationTest` no longer existed (G10.1 archived it).
+- The six checks take the plan names. `NoPipelineStageTypeRemainsInFirstPartySource`,
+  `NoOperatorParamsAggregateRemainsInFirstPartySource`, and `NoLegacyOperatorTypeEnumRemains` scan
+  `src` and `tests`; the model and importer checks scan `src`. `OperatorParams` matches as a whole
+  identifier, so `loadFromOperatorParams` (a Q_INVOKABLE that QML calls) is not renamed. The archive
+  check reads `CMakeLists.txt` and `*.cmake` in the repository root, `alcedo_studio`, `scripts`, and
+  `vcpkg-overlays` (`third_party` excluded) and the compile database. The install manifest
+  (Section 18.4) is not checked: `win_debug` does not install.
+
+**Build changes**
+
+- `decoders/CMakeLists.txt`: the `Operators` target and `OPERATORS_SRCS` are gone. `EditPipeline`
+  compiles only `pipeline_executor.cpp` with `PUBLIC ImageBuffer EditGraph`; the Metal fused
+  metallib dependency and definition are removed from it. `RawProcessorOp` drops the AHD source.
+- `edit/CMakeLists.txt`: `EditGraph` drops the importer; comments that said "until G10.9" updated.
+- `ui/alcedo_main/CMakeLists.txt`: `AlbumBackendLib` links `EditScope` publicly. Its scope
+  controller and item use it; before, they reached it through `EditPipeline PUBLIC EditScope`.
+- Test CMake: removed targets `ToneMappingOwnershipTest`, `ToneMappingFacadeTest`, `ODTOpTest`,
+  `FilmGrainOpTest`, `HalationOpTest`, `CropRotateOpTest`, `RawDecodeOpParamsTest`,
+  `ColorTempOpParamsTest`, `SharedToneCurveTest`, the CUDA ODT stage test, `FilmGrainCudaStageTest`,
+  `HalationCudaStageTest`, `ColorTempCudaSanityTest`, `OpenClCudaPipelineCompareTest`. Every
+  `Operators` link is removed; `EditorGeometryOverlayPipelineTest` and `CudaImageGeometryOpsTest`
+  link `EditRuntimeLens`, `MetadataExtractorTest` links `EditGraph`. The three ACES numeric cases
+  moved into `GpuDagModelGraphTest`.
+
+**Tests rewritten or reduced (kept subject, archived helper)**
+
+- `MetadataExtractorTest`: the five as-shot cases resolve the camera transform with
+  `BindDevelopCameraProfile` and `ResolveDevelopColorTransform`, the path `ColorTempOp` called
+  (Section 5.5). Same CCT, tint, and neutral assertions and limits; two cases renamed
+  `AsShotDevelopTransformSupportsDngWithoutCamXyzWhenDngMetadataIsPresent` and
+  `AsShotDevelopTransformUsesForwardMatrixForBadColorDng`. All five ran with their sample files
+  (none skipped).
+- Runtime tests that used `LegacyPipelineImporter` to edit a document write the Model instead:
+  `ProductRendererRendersCat02TintOffsetWithoutTintAdjustment` and
+  `ShadowControlExecutesLocalLaplacianWorkspacePath` (were `...LegacyImportWithTint...` and
+  `LegacyShadowControl...`), `ExposureEditWithMaskReusesSensorGeometryCameraAndMask`,
+  `ExposureEditKeepsSensorGeometryCameraAndMask` (were `ApplyOnto...`).
+- `EditorLookModelTest.HlsModelLoadFromTablesRestoresUiValues` reloads the tables from the submitted
+  params instead of an `HLSOp` round trip.
+- `LocalToneMappingConstantsMatchRuntimeTest`: the alias-header case is deleted; the OpenCL/Metal
+  shader mirror case stays for G10.10.
+- Deleted cases (subject archived): `ColorTempOpMergePolicyTest` (5) and
+  `LensCalibOpMergePolicyTest` (2) in `AdjustmentTransferServiceMiniGitTest`,
+  `CudaDrtProductFixture.LegacyPipelineImportRendersSameCudaReferenceWithinTolerance`,
+  `ResizeOpCudaOverlayCases.BilinearRoiDownscaleOnSharedGpuMatDoesNotAbort`,
+  `EditorLookModelTest.{Vibrance,HlsOperator}SetGetParams...`,
+  `LensCalibOpTest.InvalidMetadataDisablesOperatorAndLeavesImageUnchanged` (covered by
+  `LensCalibDevelopResolveTest`), and the six `GpuDagModelGraph` legacy import cases.
+- Unregistered sources edited without compiling: `opencl_geometry_utils_test.cpp` (two operator
+  cases removed), `metal_full_pipeline_preview_test.cpp` (operator registration removed; it already
+  used executor APIs that G10.7 deleted).
+
+**Primary success call chain:**
+
+```text
+cmake configure (win_debug)
+  -> EditPipeline = pipeline_executor.cpp (+ EditRuntimeCuda / EditRuntimeOpenCl); no Operators target
+  -> no target or source list names alcedo_studio/deprecated
+  -> build succeeds (alcedo_main and every test target)
+  -> compile_commands.json has no archive path
+  -> ctest -L legacy_removal: the six G10.9 checks and their fixtures pass
+Product render (unchanged): PipelineScheduler -> PipelineExecutor::Apply -> Renderer<Backend>
+```
+
+**Primary failure call chain:**
+
+```text
+A CMake file adds the archive (add_subdirectory, glob, include path) or a CMakeLists.txt appears in it
+  -> DeprecatedLegacyArchiveIsOutsideCompileGraph reports the file and line; the compile database
+     entry is reported too
+A source file names PipelineStage, OperatorParams, OperatorType::, LegacyPipelineImporter, or a
+Model gains Apply( / ApplyGPU(
+  -> the matching check reports the file and first line
+A kept file includes an archived header
+  -> the build fails on the missing include (Section 18.7); none remained in this phase
+```
+
+**What was proven (executed tests)**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `DeprecatedLegacyArchiveIsOutsideCompileGraph` | ctest script | PASS (41 CMake files and `build/debug/compile_commands.json` after reconfigure) |
+| `NoPipelineStageTypeRemainsInFirstPartySource` | ctest script | PASS (1491 files, src and tests) |
+| `NoOperatorParamsAggregateRemainsInFirstPartySource` | ctest script | PASS |
+| `AllBuiltInOperatorModelsHaveNoImageApplyEntryPoint` | ctest script | PASS (23 Model files) |
+| `NoLegacyParameterImporterOrStageAdapterRemainsInProductPath` | ctest script | PASS |
+| `NoLegacyOperatorTypeEnumRemains` | ctest script | PASS |
+| Negative fixtures `ArchiveReferenceCheckRejectsBuildAndCompileDatabaseUse`, `PipelineStageCheckRejectsStageType`, `OperatorParamsCheckRejectsAggregateInSourceAndTests`, `OperatorTypeCheckRejectsEnumAndValues`, `ModelApplyCheckRejectsImageEntryPoint`, `LegacyImporterCheckRejectsImporterUse` | ctest script | PASS |
+| Earlier legacy-removal checks (13) with empty owner lists | `ctest -L legacy_removal` | PASS (25/25 in total) |
+| Archive moves are byte-identical | `git show -M100% --name-status 685ffc11` | 152 of 152 R100 |
+| Full `win_debug` build | all targets | PASS (`build_6.log`) |
+| Full `win_debug` suite | `ctest` | NOT RUN (only the user starts it) |
+| macOS configure and build | `macos_debug` | PASS except two test targets that fail before this phase ("macOS verification") |
+
+**Build and test commands with exit codes**
+
+```text
+cmd /c scripts\msvc_env.cmd --preset win_debug -DCMAKE_PREFIX_PATH=...          -> exit 0 (configure.log)
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 -- -k 0      -> exit 1 (build.log, build_2.log), 0 (build_3.log)
+ctest --test-dir build/debug -j 1 --timeout 300 -R "<set A>" -E "Fuzz|Stress"    -> exit 8
+ctest --test-dir build/debug -j 1 --timeout 300 -R "<set B>"                     -> exit 0
+ctest --test-dir build/debug -j 1 --timeout 300 -R "<set C>"                     -> exit 8
+ctest --test-dir build/debug -j 1 -L legacy_removal                              -> exit 0
+baseline 8d0fa77a: build PipelineDocumentCheckpointTest PipelineHistoryApplierTest ExportServiceTest,
+  ctest -R "^(those three)\."                                                    -> exit 8, same 5 failures
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 -- -k 0      -> exit 0 (build_6.log, after return)
+set C = ^(CommitGraphTest|PipelineDocumentCheckpointTest|PipelineEditBatchTest|SleeveServiceTest|
+        PipelineHistoryApplierTest|EditorSessionEditControllerTest|EditorGeometryOverlayPipelineTest|
+        GpuDagCudaDrtProductTest|GpuDagRawInputTest|LocalToneMappingConstantsMatchRuntimeTest|
+        MetadataExtractorTest|BatchImportDngMetadataTest|EditorLookModelTest|ExportServiceTest)\.
+```
+
+Sets A and B are the patterns in Section 16.12.
+
+**Discovered / passed / failed / skipped counts**
+
+- Set A: 256 discovered, 251 run, 241 passed, 10 failed, 5 disabled. G10.8: 264 / 259 / 249 / 10 /
+  5. The 8 fewer tests are the 7 merge-policy cases and `LegacyStageJsonMaps...` (it matched the
+  `StageJson` pattern). The 10 failures are the G10.8 list: the 5 `EditorSessionRenderSchedulerPortTest`
+  sink-bind cases, the two flaky thumbnail pin-count cases (both failed in this run), the
+  `DiskCacheTracks...` timeout, `MissingPipelineThrows`, and `MissingImageThrows`.
+- Set B: 91 run, 91 passed. G10.8: 94. Minus the 6 `GpuDagModelGraph` legacy import cases, plus the
+  3 ACES numeric cases.
+- Set C (new for this phase): 380 discovered, 378 run, 373 passed, 5 failed, 2 disabled. The 5
+  failures also fail when the three targets are built and run at `8d0fa77a`:
+  `PipelineDocumentCheckpointFormat.{FullDocument,Root,Checkpoint}ExpectedSerialized...` (stored
+  JSON differs from the serialized document), `PipelineHistoryApplierTest.ParameterForwardInverseRestoresDocumentHash`,
+  and `ExportServiceTests.ExportHdrJpeg_WritesUltraHdrFile`. They are not caused by this phase and
+  are not fixed here.
+
+**Checklist / exit condition (Section 18.10):** the six checks pass; the full Windows build passes;
+the macOS build passes; the full `ctest` run is open.
+
+**LOC note:** the check script is 380 lines and `tests/ci/CMakeLists.txt` 312 lines. No changed
+file is above 1000 lines except `tests/ui/CMakeLists.txt` (about 1930, 4 lines removed) and
+`tests/edit/CMakeLists.txt` (about 550), both registration lists.
+
+**Build-tree note:** CMake does not regenerate a Windows `exports.def` when a target only loses
+objects. After this change (and after checking out an older commit and back), `RawProcessorOp.dll`
+failed to link with the removed AHD symbols until
+`build/debug/alcedo_studio/src/decoders/CMakeFiles/{RawProcessorOp,EditPipeline}.dir/exports.def`
+were deleted. Separately, `alcedo_main.pdb` reached 6.1 GB after repeated relinks and failed with
+LNK1140 until it was deleted. Neither is a source problem.
+
+**Parent plan:** Section 47.1 "PipelineStage 全部删除" and "OperatorParams 总结构全部删除" and
+Section 47.7 "不存在 `LegacyPipelineImporter`…" are checked with a link to this record. "operators
+只保存参数 Model…" and "GPU 执行代码不在 operators 参数目录" stay open: the eight legacy Metal shaders
+are still under `edit/operators/GPU_kernels/metal_shader/` until G10.10.
+
+**Remaining gaps:** the full `ctest` run and the G10.10 items listed above.
+
+**macOS verification (2026-09-23)**
+
+Apple Silicon, macOS 27, Ninja, Debug, branch head `ed640604`, `build/macos-debug` (the
+`macos_debug` preset with tests on, `AGENTS.md`). The Metal `EditPipeline` (only
+`pipeline_executor.cpp`), the `AlbumBackendLib` link to `EditScope`, the rewritten tests, and
+`alcedo_main` compile and link.
+
+```text
+cmake --preset macos_debug -DALCEDO_BUILD_TESTS=ON -DALCEDO_BUILD_CI_TESTS=ON
+      -DALCEDO_BUILD_TESTS_BY_DEFAULT=ON                                     -> exit 0
+cmake --build --preset macos_debug --parallel 10 -- -k 0                     -> exit 1 (2 targets from before this phase, below)
+ctest --test-dir build/macos-debug -j 1 --timeout 300 -R "<macOS G10.9 set>" -> exit 8 (13 failures from before this phase)
+ctest --test-dir build/macos-debug -j 1 -L legacy_removal                     -> exit 0 (24/24)
+```
+
+macOS G10.9 set: the macOS phase set of Section 15.12 without `ToneMappingOwnershipTest`
+(archived), plus the G10.9 checks and fixtures and Set C of this record without the CUDA targets:
+`GpuDagMetal|MetalGeometryUtilsTest|MetalRawOpsTest|MetalDemosaicNetModuleTest|LensCalibDevelopResolveTest|
+LocalToneMappingConstantsMatchRuntimeTest|GpuDagRawInputTest|GpuDagModelGraphTest|AdjustmentTransferServiceMiniGitTest|
+RuntimeSources|RuntimeLegacyHeader|NoProduct|NoTestSource|StageTable|StageJson|LegacyHistory|DagSources|DagLegacy|
+FramePresenter|DeprecatedLegacyArchive|NoPipelineStage|NoOperatorParams|AllBuiltInOperatorModels|NoLegacy|
+ArchiveReference|PipelineStageCheck|OperatorParamsCheck|OperatorTypeCheck|ModelApplyCheck|LegacyImporterCheck|
+CommitGraphTest|PipelineDocumentCheckpointTest|PipelineEditBatchTest|SleeveServiceTest|PipelineHistoryApplierTest|
+EditorSessionEditControllerTest|MetadataExtractorTest|BatchImportDngMetadataTest|EditorLookModelTest|ExportServiceTest`.
+
+- Counts: 553 discovered, 551 run, 518 passed, 20 skipped (RAW fixtures that are not on this
+  machine, including 14 `MetadataExtractorTest` cases), 13 failed, 2 disabled.
+- The 8 Metal failures are the Section 15.12 list without the Metal DRT byte case (fixed by
+  `5a41ec04`): `MetalDevelopFixture.{MetalGeometryUsesOneResampleForCropRotationViewportAndScale,
+  MetalCameraColorConsumesSharedDualIlluminantTransform}`,
+  `MetalGradeFixture.MetalPointwiseAdjustmentsUseOneDispatchPerLlfSegment`,
+  `GpuDagMetalGrade.{MetalLlfRoiSamplesCanonicalReferenceWithSharedGeometryPlan,
+  MetalLlfMatchesCudaReferenceWithinTolerance}`,
+  `MetalMaskFixture.{MetalDisconnectedMaskUsesConstantOneCoverage,
+  MetalNormalMixMatchesCudaReferenceWithinTolerance}`, and
+  `MetalRendererFixture.InteractiveQualityBaseInteractiveReuses2560PixelResults`.
+- The other 5 failures are the Windows Set C failures of this record, which also fail at
+  `8d0fa77a`: the three `PipelineDocumentCheckpointFormat` expected-serialized cases,
+  `ParameterForwardInverseRestoresDocumentHash`, and `ExportHdrJpeg_WritesUltraHdrFile` (timeout).
+- The 24 `legacy_removal` tests pass. `FramePresenterLinksScopeWithoutEditPipeline` is not
+  registered on macOS (Section 15.12).
+- Build targets that fail and do not use G10.9 code (both listed in Section 15.12 at `fcfbb2ef`):
+  `ImageBufferMetalTest` (`cv::countNonZero` without `<opencv2/core.hpp>`) and
+  `EditorGeometryOverlayPipelineTest` (calls `CUDA::ResizeLinear`, built only with CUDA; the test
+  now links `EditRuntimeLens` instead of `Operators`, and the missing symbol is the same).
 
 ---
 
@@ -3281,6 +3543,14 @@ Use the template in Section 10.12.
 - The legacy Metal metallib is not built, bundled, or installed.
 - The installed OpenCL package contains every DAG program source (defect D4).
 - Parity tests use stored expected pixels instead of `RawProcessor`.
+
+Change from G10.9 (Section 18.12): the OpenCL and Metal legacy pipeline C++ files
+(`pipeline_{opencl,metal}_impl.cpp`, `pipeline_opencl_param.cpp`, the kernel dispatch and stats
+headers, `opencl_param.hpp`, `metal_param.hpp`, and `highlight_shadow_local_tone_{opencl,metal}.*`),
+`ColorTempCudaSanityTest`, and `OpenClCudaPipelineCompareTest` are already archived. G10.10 still
+owns the program manifest, the `.cl` and `.metal` legacy shader files, `EditPipelineMetalShaders`,
+the install and bundle rules, `RawProcessor`, and `cuda_downsample.cu` and `cuda_rotate.cu` (only
+`raw_processor_cuda.cpp` calls them).
 
 ### 19.2 Inputs and prerequisites
 

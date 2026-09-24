@@ -30,7 +30,6 @@
 #include "app/project_service.hpp"
 #include "app/sleeve_service.hpp"
 #include "edit/graph/develop_color_transform.hpp"
-#include "edit/graph/legacy_pipeline_importer.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/history/edit_commit.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"

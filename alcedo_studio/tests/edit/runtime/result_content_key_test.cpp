@@ -13,7 +13,6 @@
 #include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
-#include "edit/graph/legacy_pipeline_importer.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/input/raw_input_loader.hpp"
@@ -262,7 +261,7 @@ TEST(GpuDagResultContentKey, CameraProfileChangeInvalidatesDevelopImageNotSensor
   EXPECT_NE(edited.develop_image, base.develop_image);
 }
 
-TEST(GpuDagResultContentKey, ApplyOntoExposureKeepsSensorGeometryCameraAndMask) {
+TEST(GpuDagResultContentKey, ExposureEditKeepsSensorGeometryCameraAndMask) {
   auto prepared = MakePrepared();
   auto document = CreateDefaultPipelineDocument();
   gpu_dag_test::EnsureTestCameraProfile(document);
@@ -271,10 +270,10 @@ TEST(GpuDagResultContentKey, ApplyOntoExposureKeepsSensorGeometryCameraAndMask) 
   const auto base = BuildFrameResultContentKeys(plan, prepared, document);
   ASSERT_FALSE(base.mask.Empty());
 
-  nlohmann::json json;
-  json["Basic Adjustment"]["Basic Adjustment"]["exposure"] = {
-      {"type", 2}, {"enable", true}, {"params", {{"exposure", 2.0}}}};
-  ASSERT_TRUE(LegacyPipelineImporter::ApplyOnto(document, json).empty());
+  auto* exposure = dynamic_cast<ExposureModel*>(
+      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+  ASSERT_NE(exposure, nullptr);
+  exposure->SetValue(2.0f);
   GraphCompiler::BindFrameGeometry(plan, document, RenderRequest{});
   const auto edited = BuildFrameResultContentKeys(plan, prepared, document);
   EXPECT_EQ(edited.sensor_linear, base.sensor_linear);
