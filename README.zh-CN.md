@@ -2,78 +2,141 @@
   <img src="docs/header.png" alt="Alcedo Studio" width="25%"/>
 </p>
 
-[项目网站](https://aoraw.org/zh-cn/) | [Project website](https://aoraw.org/)
+<p align="center">
+  <a href="https://aoraw.org/zh-cn/">项目网站</a> · <a href="https://aoraw.org/">Project website</a> · <a href="https://zidage.github.io/AlcedoStudio_docs/docs/intro">文档</a> · <a href="https://github.com/zidage/AlcedoStudio/releases/tag/v0.2.9">下载 v0.2.9</a>
+</p>
 
 <p align="right"><a href="./README.md">English</a> | <a href="./README.zh-CN.md"><strong>简体中文</strong></a></p>
 
 ![License](https://img.shields.io/badge/License-GPLv3-blue)
-![CUDA](https://img.shields.io/badge/CUDA-12.8-76B900)
 ![C++](https://img.shields.io/badge/C++-20-blue)
+![Platforms](https://img.shields.io/badge/Windows%20%7C%20macOS%20(Apple%20Silicon)-lightgrey)
 
-**Alcedo Studio** 是一款免费、开源的摄影工作站，为拍摄完成后的工作而生。
+**Alcedo Studio** 是一款免费、开源的 RAW 编辑器与照片图库。
 
-导入存储卡中的 RAW，图库随即就能浏览。通过 GPU 上的 32 位浮点管线，为高达 1.5 亿像素的照片调色。
+把照片拷贝到本地硬盘并导入文件夹后，你可以在 Alcedo 中浏览、评分和搜索它们，再通过 GPU 加速的 32 位浮点管线逐张冲洗 RAW，最高可处理 1.5 亿像素的文件。相册结构和每张照片的完整编辑历史都保存在同一个项目文件里，移动或备份它就像处理任何普通文件一样。
 
-每个项目都是一个带有额外元数据的 [DuckDB](https://duckdb.org/) 文件。相册结构和完整编辑历史都保存在其中。只需移动和保存一个文件，整洁，没有散落的数据。
+支持 Windows 10/11（x64）和搭载 Apple Silicon 的 Mac。
 
-更进一步，调色遵循电影工业的成像流程。相机 RAW 首先成为场景参照图像。你在对数空间中工作，就像 DI 调色系统处理 ACEScc 一样。胶片模拟 LUT 带来不同风格，最后由显示渲染变换为显示器形成画面。
+<p align="center">
+  <img src="docs/images/editor.jpg" alt="Alcedo Studio 编辑器：打开一张 RAW 照片，右侧为调整面板，底部为胶片条" width="100%"/>
+</p>
 
-支持 Windows 10/11 x64 和 Apple Silicon。当前版本：[v0.2.9](https://github.com/zidage/AlcedoStudio/releases/tag/v0.2.9)。
+<details>
+<summary><strong>观看演示</strong>（两段短视频）</summary>
 
----
+编辑器
 
 https://github.com/user-attachments/assets/d70cd10d-2045-42f3-a67d-97ab3ef9874b
 
+图库
+
 https://github.com/user-attachments/assets/ae0d9773-220e-4901-90f6-1989f58b0462
 
-## 功能
+</details>
 
-**先看相机支持，再谈 RAW 质量。** 已测试 Canon、Nikon、Sony、Fujifilm、Panasonic、OM System、Leica、Hasselblad、Phase One（包括 IQ4 150MP）、Pentax、Sigma，以及手机和无人机生成的 DNG。完整列表：[支持的格式](docs/supported_raw_formats.md)和[支持的相机](docs/supported_cameras.md)。来自 Z 8、Z 9、Z 6 III 和 Z 50 II 的 Nikon HE 与 HE★ NEF 文件通过项目的 [LibRaw 分支](https://github.com/zidage/LibRaw)解码，并针对性能进行了特别优化。
+## 功能一览
 
-你可以选择去马赛克方法：Default、RCD 或 Neural Engine。Neural Engine 是在 GPU 上运行的精简版 [DemosaicNet](https://groups.csail.mit.edu/graphics/demosaicnet/)，支持 Bayer 和 X-Trans。高光重建使用改进的 inpaint-opposed 方法，其原始实现来自 darktable 和 RawTherapee。
+### RAW 解码
 
-**2.5K@60，保持流畅。** 拖动滑块时，预览以 2.5K 分辨率保持 60 FPS。停止调整后，预览最高可达 4K，让高像素相机的表现完整呈现。RGB 直方图和波形图随画面同步更新，为下一步调整提供参考。NVIDIA 使用 CUDA，其他 Windows GPU 使用 OpenCL，macOS 使用 Metal。缓存机制在保持性能的同时降低内存占用。缩略图磁盘缓存的位置、大小、质量以及是否启用，都由你决定，不会出现来源不明的磁盘占用。
+Alcedo 可以读取 Canon、Nikon、Sony、Fujifilm、Panasonic、OM System、Leica、Hasselblad、Phase One（包括 1.5 亿像素的 IQ4）、Pentax、Sigma 的 RAW 文件，以及手机和无人机生成的 DNG，详见[支持的格式](docs/supported_raw_formats.md)和[支持的相机](docs/supported_cameras.md)。借助项目维护的 [LibRaw 分支](https://github.com/zidage/LibRaw)，它也能打开 Z 8、Z 9、Z 6 III 和 Z 50 II 拍摄的 Nikon 高效率（HE）NEF 文件。
 
-**显示渲染变换决定画面如何呈现。** 场景线性 RAW 包含显示器无法直接呈现的色彩和动态范围。DRT，也就是画面形成，是把这些内容映射到显示设备时所做的视觉决策。关于 DRT 的更多信息，请参阅 [Chris Brejon 对画面形成的介绍](https://chrisbrejon.com/articles/what-makes-a-good-picture-formation/)。你可以使用 ACES 2.0 或 OpenDRT，面向 sRGB、广色域或 HDR 进行调色，并选择编码色彩空间、EOTF 和 HDR 峰值亮度。在 macOS 上，编辑时还能直接预览 HDR 效果。
+它提供两种去马赛克方法。Bayer 传感器默认使用 RCD；Fujifilm X-Trans 默认使用 Neural Engine，这是一个从 [DemosaicNet](https://groups.csail.mit.edu/graphics/demosaicnet/) 蒸馏而来、在 GPU 上运行的精简神经网络，同样适用于 Bayer 文件。Alcedo 还支持基于 darktable 与 RawTherapee 的 inpaint-opposed 方法改进而来的高光重建、基于 Lensfun 配置文件的镜头校正，以及 DNG 文件内嵌的色彩配置文件。
 
-**胶片模拟 LUT。** [CUBE LUT 根据真实胶片的光谱响应生成](https://github.com/JanLohse/spectral_film_lut)，并搭配依据物理特性设计的颗粒和光晕效果。
+### 高性能 32 位浮点管线
 
-**保留、复制，也能随时回退的 Look。** 命名版本可以为同一张照片保存不同 Look，方便直接比较。你可以把 Look 复制到另一张照片，也可以把一个 Look 中的字段合并到另一个 Look。每一次调整都是可以撤销的步骤。完整历史保存在项目文件中，即使下个月重新打开项目，撤销路径依然存在。
+得益于高度优化的 GPU 加速管线（Windows 上基于 CUDA 和 OpenCL，Mac 上基于 Metal）和精心设计的缓存机制，即使打开 1.5 亿像素的文件，编辑依然流畅。拖动滑块时，无论原图分辨率多高，预览都能保持 2.5K、60 FPS；松开后，预览会提升到 4K。放大查看时，Alcedo 只以完整细节渲染当前可见的区域。
 
-**使用高度可定制的配置导出。** 在检查器中设置格式、尺寸、命名、元数据、ICC 和 Alpha 通道。支持 JPEG、PNG、TIFF 和最高 32 位的 EXR。尺寸可以使用原始像素、最长边、像素边界，或带 DPI 的打印尺寸。文件名可以包含源文件名、拍摄日期、相机、镜头、曝光、评分和序号。
+### 场景参考的色彩管线
 
-**评片与评分。** 接入你已经使用的 LLM，支持兼容 OpenAI 的服务、Anthropic 和 Volcengine Ark。它可以把描述、1–5 星评分和简短理由写入 EXIF。你可以设置评片的严格程度。
+Alcedo 在整个编辑过程中保留 RAW 文件的全部范围，只在最后一步为你的显示器形成画面：
 
-**打上标签，马上找到。** 本地多语言 CLIP 模型为图库生成标签。输入一个场景、一台相机、一个日期或一句描述即可搜索。检查器也会按拍摄日期、相机、镜头、标签和评分整理同一个图库。你可以自行管理 CLIP 模型：下载新模型、为当前图库启用已有模型，或删除已下载的模型以释放空间。
+```mermaid
+flowchart LR
+    A[RAW 文件] --> B[解码与去马赛克]
+    B --> C[场景线性图像]
+    C --> D[在 ACEScc 中调色]
+    D --> E[显示渲染变换]
+    E --> F[SDR、广色域或 HDR 显示器]
+```
 
-**大型拍摄项目也能保持快速。** DuckDB 可以让整张存储卡中的照片同时参与查询。筛选某个星期六、35mm 镜头和五星照片，网格会立即更新。检查器还能告诉你，那一周每台机身分别拍摄了多少张照片。
+显示渲染变换可以选择 ACES 2.0 输出变换或 OpenDRT，并设置目标色彩空间、传递函数和峰值亮度。在配备 HDR 显示屏的 Mac 上，编辑器可以直接预览 HDR 效果。
 
-FTS 让描述或标签中的文字直接成为查询条件。搜索“红色雨伞”时，它匹配的是画面描述，而不只是文件名。HNSW 则让画面相似的照片在向量空间中彼此接近。即使没有人把那句话写进文件名，一段描述也能按含义找到对应画面。
+### 基于节点的调色
 
-把项目文件放在你需要的位置。移动它，备份它。
+每张照片的编辑都是一张节点图。Develop 节点把 RAW 转换为场景参考图像，之后可以依次串联任意多个 Color Grade 节点，最后由 Display Transform 节点形成最终画面。每个 Color Grade 节点都有自己的调整和蒙版，因此一次调色既可以作用于整个画面，也可以只作用于你选定的区域。
+
+```mermaid
+flowchart LR
+    D[Develop] --> G1[Color Grade：基础]
+    G1 --> G2[Color Grade：天空<br/>渐变蒙版]
+    G2 --> G3[Color Grade：主体<br/>径向蒙版]
+    G3 --> T[Display Transform]
+```
+
+每个节点内都有常用的影调和色彩控制、色调曲线、Lift/Gamma/Gain 色轮、可选颜色和细节工具，阴影与高光由局部色调映射处理。Alcedo 还内置了[根据真实胶片光谱响应生成的 CUBE LUT](https://github.com/JanLohse/spectral_film_lut)，以及基于物理模型的胶片颗粒和光晕。
+
+### 版本与编辑历史
+
+每张照片可以保存多个命名版本，你也可以从历史中的任意一步分出新版本。每一次调整都会记录在类似 Git 的历史中，并保存在项目文件里，因此可以永远撤销。你还可以把完整的 Look，或只把其中你选中的部分，复制到其他照片上。实现原理请参阅[编辑历史设计说明](https://zidage.github.io/AlcedoStudio_docs/en/docs/developer/edit-history-architecture)。
+
+### 图库与搜索
+
+图库存储在 [DuckDB](https://duckdb.org/) 数据库中，照片越来越多时，浏览、筛选和搜索依然流畅。相册检查器按拍摄日期、相机、镜头、标签和评分对照片分组，选中某个分组即可筛选相册。
+
+Alcedo 支持三种搜索：按相机、镜头、日期、ISO、焦距和光圈进行 EXIF 搜索；使用在本地运行的多语言 CLIP 模型进行自然语言搜索，这些模型也可以在导入后自动为照片打标签；以及对 Alcedo 生成的描述和标签进行全文搜索。
+
+它还可以通过兼容 OpenAI 或 Anthropic 的接口，连接你已经在使用的 AI 服务，为每张照片撰写描述，并给出 1–5 星评分和简短理由。评片的严格程度和使用的语言都可以设置。API 密钥保存在 Windows 凭据管理器或 macOS 钥匙串中，分析在后台运行，不影响你继续工作。
+
+### 导出
+
+Alcedo 可以导出 JPEG、PNG、TIFF、OpenEXR 和 Ultra HDR JPEG，并根据格式支持 8、16 或 32 位。它支持按长边、像素尺寸或打印尺寸设置大小，嵌入 ICC 配置文件，并用源文件名、拍摄日期、相机、镜头、曝光参数、评分和序号组合文件名；常用设置可以保存为预设。导出的文件不包含定位信息、设备序列号和编辑历史。
+
+## 截图
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/images/library.jpg" alt="图库网格，相册检查器按相机和镜头分组"/></td>
+    <td width="50%"><img src="docs/images/display-transform.jpg" alt="显示变换面板，显示 OpenDRT 和 HDR 输出设置"/></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/images/nodes.jpg" alt="节点编辑器中有多个 Color Grade 节点，画面上显示蒙版"/></td>
+    <td width="50%"><img src="docs/images/versions.jpg" alt="版本面板中有多个命名版本和编辑历史"/></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/images/search.jpg" alt="自然语言搜索结果，检查器中显示 AI 描述"/></td>
+    <td width="50%"><img src="docs/images/export.jpg" alt="导出面板，显示格式、尺寸和文件命名选项"/></td>
+  </tr>
+</table>
 
 ## 系统要求
 
-- **Windows**：Windows 10/11 x64。NVIDIA GPU（计算能力 6.0 或更高）使用 CUDA；其他 GPU 使用 OpenCL。
-- **macOS**：Apple Silicon（M1 或更新），macOS 13.3 或更新，使用 Metal。
-- 最少 8GB RAM，大型图库建议使用 16GB 或更多内存。
-- 正式版本可以在“设置 → 更新”中安装经过签名的更新。
+- **Windows** 10 或 11，x64。计算能力 6.0 及以上的 NVIDIA GPU 使用 CUDA，其他 GPU 使用 OpenCL。
+- **macOS** 13.3 或更高版本，Apple Silicon（M1 或更新），使用 Metal。
+- 内存至少 8 GB，大型图库建议 16 GB 或以上。
 
 ## 文档
 
-用户指南和构建说明：[文档网站](https://zidage.github.io/AlcedoStudio_docs/docs/intro)。源码构建：[docs/build_from_source.md](docs/build_from_source.md)。由 AI 智能体制定的开发计划：[docs/roadmap/roadmap.md](docs/roadmap/roadmap.md)。变更日志：[docs/changelog/](docs/changelog/)。
+用户指南和开发者说明请见[文档网站](https://zidage.github.io/AlcedoStudio_docs/docs/intro)。从源码构建请参阅 [docs/build_from_source.md](docs/build_from_source.md)，各版本的更新说明位于 [docs/changelog/](docs/changelog/)。
 
 ## 致谢
 
-- 胶片 LUT 来自 [JanLohse/spectral_film_lut](https://github.com/JanLohse/spectral_film_lut)。
-- 相机色彩矩阵来自 [rawtoaces-data](https://github.com/AcademySoftwareFoundation/rawtoaces-data)。
-- Neural demosaic student models 蒸馏自 [mgharbi/demosaicnet](https://github.com/mgharbi/demosaicnet)（[Gharbi 等，2016](https://groups.csail.mit.edu/graphics/demosaicnet/)）。
-- Inpaint-opposed 高光重建改编自 [darktable opposed.c](https://github.com/darktable-org/darktable/blob/master/src/iop/hlreconstruct/opposed.c) 和 [RawTherapee](https://github.com/RawTherapee/RawTherapee/blob/dev/rtengine/hilite_recon.cc)。
-- RCD 去马赛克来自 [LuisSR/RCD-Demosaicing](https://github.com/LuisSR/RCD-Demosaicing)。
-- OpenDRT 移植自 [jedypod/open-display-transform](https://github.com/jedypod/open-display-transform)。
-- ACES 2.0 来自 [aces-aswf/aces-core](https://github.com/aces-aswf/aces-core)。
+Alcedo Studio 基于许多开源项目及其作者的工作。
+
+- 胶片模拟 LUT 来自 [JanLohse/spectral_film_lut](https://github.com/JanLohse/spectral_film_lut)。
+- 部分相机色彩矩阵来自 [rawtoaces-data](https://github.com/AcademySoftwareFoundation/rawtoaces-data)。
+- 神经网络去马赛克模型蒸馏自 [mgharbi/demosaicnet](https://github.com/mgharbi/demosaicnet)（[Gharbi 等，2016](https://groups.csail.mit.edu/graphics/demosaicnet/)）。
+- Inpaint-opposed 高光重建改编自 [darktable](https://github.com/darktable-org/darktable/blob/master/src/iop/hlreconstruct/opposed.c) 和 [RawTherapee](https://github.com/RawTherapee/RawTherapee/blob/dev/rtengine/hilite_recon.cc)。
+- RCD 去马赛克改编自 [LuisSR/RCD-Demosaicing](https://github.com/LuisSR/RCD-Demosaicing)。
+- OpenDRT 移植自 Jed Smith 的 [open-display-transform](https://github.com/jedypod/open-display-transform)。
+- ACES 2.0 输出变换依据 [aces-aswf/aces-core](https://github.com/aces-aswf/aces-core) 实现。
 - 胶片颗粒基于 [Realistic Film Grain Rendering](https://doi.org/10.5201/ipol.2017.192)（IPOL 2017）。
+- RAW 解码使用 [LibRaw](https://www.libraw.org/)，镜头校正使用 [Lensfun](https://lensfun.github.io/)，元数据使用 [Exiv2](https://exiv2.org/)，图像读写使用 [OpenImageIO](https://github.com/AcademySoftwareFoundation/OpenImageIO) 和 [OpenCV](https://opencv.org/)，色彩管理使用 [OpenColorIO](https://opencolorio.org/)，图库使用 [DuckDB](https://duckdb.org/)，界面使用 [Qt](https://www.qt.io/) 和 [QuickQanava](https://github.com/cneben/QuickQanava)。
+
+完整的第三方组件及其许可证列表请参阅 [THIRD_PARTY_NOTICE.txt](THIRD_PARTY_NOTICE.txt) 和 [third_party_licenses/](third_party_licenses/)。
+
+ACES 是美国电影艺术与科学学院（A.M.P.A.S.）的商标。Alcedo Studio 是独立项目，与 A.M.P.A.S.、Academy Software Foundation、Jed Smith 以及上文提到的其他上游作者均无关联，也未获得其认证或背书。文中提及这些名称仅用于标明相应的技术。
 
 ## 许可证
 
-Alcedo Studio 使用 GPL-3.0-only 许可证。请参阅 [LICENSE](LICENSE) 和 [NOTICE](NOTICE)。
+Alcedo Studio 使用 GNU 通用公共许可证 v3.0（GPL-3.0-only）。请参阅 [LICENSE](LICENSE) 和 [NOTICE](NOTICE)。
