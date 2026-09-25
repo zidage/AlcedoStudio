@@ -5,6 +5,9 @@
 #include "storage/mapper/duckorm/duckdb_expr.hpp"
 
 #include <charconv>
+#include <iomanip>
+#include <locale>
+#include <sstream>
 #include <string>
 #include <utility>
 
@@ -251,6 +254,28 @@ auto and_(std::initializer_list<SqlFragment> parts) -> SqlFragment {
 
 auto or_(std::initializer_list<SqlFragment> parts) -> SqlFragment {
   return or_(std::span<const SqlFragment>(parts.begin(), parts.size()));
+}
+
+auto column_eq(std::string_view column, const std::string& value) -> SqlFragment {
+  return eq(col(column), param(value));
+}
+
+auto column_eq(std::string_view column, int64_t value) -> SqlFragment {
+  return eq(col(column), param(value));
+}
+
+auto lit_float_array(std::span<const float> values) -> SqlFragment {
+  std::ostringstream out;
+  out.imbue(std::locale::classic());
+  out << '[';
+  for (size_t i = 0; i < values.size(); ++i) {
+    if (i > 0) {
+      out << ',';
+    }
+    out << std::setprecision(9) << values[i];
+  }
+  out << "]::FLOAT[" << values.size() << ']';
+  return raw(out.str());
 }
 
 }  // namespace expr

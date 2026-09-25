@@ -245,7 +245,7 @@ bool ProjectHandler::PurgeUninstalledSemanticModels() {
   if (!project_) {
     return false;
   }
-  auto&      semantic = project_->GetStorage()->GetSemanticStore();
+  auto&      semantic = project_->GetStorage()->GetSemanticModelRegistry();
   std::string err;
   const auto  models = semantic.ListModels(&err);
   bool        changed = false;

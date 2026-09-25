@@ -23,19 +23,9 @@
 #include <json.hpp>
 #include <xxhash.h>
 
-#ifdef _WIN32
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#elif defined(__APPLE__)
-#include <mach-o/dyld.h>
-#else
-#include <limits.h>
-#include <unistd.h>
-#endif
 
 #include "app/project_service.hpp"
+#include "storage/store/duckdb_extension.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
 #include "ui/alcedo_main/i18n.hpp"
 #include "utils/string/convert.hpp"
@@ -409,40 +399,6 @@ auto RunDuckDbQuery(duckdb_connection conn, const std::string& sql,
   return true;
 }
 
-auto ExecutableDirectory() -> std::filesystem::path {
-#ifdef _WIN32
-  std::wstring buffer(MAX_PATH, L'\0');
-  DWORD        size = 0;
-  while (true) {
-    size = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
-    if (size == 0) {
-      return {};
-    }
-    if (size < buffer.size() - 1) {
-      buffer.resize(size);
-      return std::filesystem::path(buffer).parent_path();
-    }
-    buffer.resize(buffer.size() * 2);
-  }
-#elif defined(__APPLE__)
-  uint32_t size = 0;
-  _NSGetExecutablePath(nullptr, &size);
-  std::string buffer(size, '\0');
-  if (_NSGetExecutablePath(buffer.data(), &size) != 0) {
-    return {};
-  }
-  return std::filesystem::weakly_canonical(std::filesystem::path(buffer.c_str())).parent_path();
-#else
-  std::string buffer(PATH_MAX, '\0');
-  const auto  size = readlink("/proc/self/exe", buffer.data(), buffer.size() - 1);
-  if (size <= 0) {
-    return {};
-  }
-  buffer.resize(static_cast<size_t>(size));
-  return std::filesystem::path(buffer).parent_path();
-#endif
-}
-
 auto QueryHasHnswIndex(duckdb_connection conn, bool* hasHnswIndexOut,
                        QString* errorOut) -> bool {
   duckdb_result result;
@@ -470,54 +426,13 @@ auto QueryHasHnswIndex(duckdb_connection conn, bool* hasHnswIndexOut,
 // both by the snapshot import path and by EnsureVssExtensionForExistingHnswIndexes
 // (normal project open), so the "ForSnapshot" suffix was misleading.
 auto LoadVssExtension(duckdb_connection conn, QString* errorOut) -> bool {
-  QString autoinstall_error;
-  RunDuckDbQuery(conn, "SET autoinstall_known_extensions=false;", "disable DuckDB extension autoinstall",
-                 &autoinstall_error);
-
-  std::vector<std::filesystem::path> candidates;
-  if (const char* env_path = std::getenv("ALCEDO_DUCKDB_VSS_EXTENSION")) {
-    if (*env_path != '\0') {
-      candidates.emplace_back(env_path);
-    }
-  }
-
-  const auto exe_dir = ExecutableDirectory();
-  if (!exe_dir.empty()) {
-#ifdef __APPLE__
-    candidates.push_back(exe_dir.parent_path() / "Resources" / "duckdb_extensions" /
-                         "vss.duckdb_extension");
-#endif
-    candidates.push_back(exe_dir / "duckdb_extensions" / "vss.duckdb_extension");
-    candidates.push_back(exe_dir / "extensions" / "vss.duckdb_extension");
-  }
-
-  QString load_errors;
-  for (const auto& candidate : candidates) {
-    std::error_code ec;
-    if (!std::filesystem::is_regular_file(candidate, ec) || ec) {
-      continue;
-    }
-
-    const std::string path_utf8 = candidate.generic_string();
-    QString           candidate_error;
-    if (RunDuckDbQuery(conn,
-                       "LOAD '" + album_util::EscapeSqlStringLiteral(path_utf8) + "';",
-                       "load vss extension", &candidate_error)) {
-      return true;
-    }
-    load_errors += Tr("\nPackaged extension load failed from %1: %2")
-                       .arg(album_util::PathToQString(candidate))
-                       .arg(candidate_error);
-  }
-
-  QString load_error;
-  if (RunDuckDbQuery(conn, "LOAD vss;", "load vss extension", &load_error)) {
+  std::string load_error;
+  if (LoadPackagedDuckDbExtension(conn, "vss", &load_error)) {
     return true;
   }
-  load_errors += Tr("\nDuckDB extension load failed by name: %1").arg(load_error);
   if (errorOut) {
     *errorOut = Tr("DuckDB requires the VSS extension for existing HNSW indexes.%1")
-                    .arg(load_errors);
+                    .arg(QStringLiteral("\n") + QString::fromStdString(load_error));
   }
   return false;
 }

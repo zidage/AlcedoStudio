@@ -34,7 +34,7 @@
 #include "storage/mapper/image/image_mapper.hpp"
 #include "storage/mapper/image/image_search_columns.hpp"
 #include "storage/store/ai/ai_store.hpp"
-#include "storage/store/semantic/semantic_store.hpp"
+#include "support/semantic_stores_test_support.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "utils/string/convert.hpp"
 #include "utils/string/search_text.hpp"
@@ -572,9 +572,9 @@ auto Contains(const std::vector<std::string>& values, const std::string& value) 
   return std::find(values.begin(), values.end(), value) != values.end();
 }
 
-void RegisterSemanticModel(SemanticStore& semantic, const std::string& model_key) {
+void RegisterSemanticModel(const semantic_test::SemanticStores& semantic, const std::string& model_key) {
   std::string error;
-  ASSERT_TRUE(semantic.UpsertModel(SemanticModelRecord{.model_key_     = model_key,
+  ASSERT_TRUE(semantic.models_.UpsertModel(SemanticModelRecord{.model_key_     = model_key,
                                                        .model_id_      = "mobileclip-test",
                                                        .revision_      = "test-rev",
                                                        .embedding_dim_ = kSemanticEmbeddingDim,
@@ -628,31 +628,31 @@ TEST_F(LibrarySearchColumnsTest, FuzzySearchWhereRunsNoCatalogQuery) {
 
   // A model activation after the first build adds the label clause with the new key; a second
   // activation replaces the key, and purging the active model removes the clause.
-  auto& semantic = project.GetStorage()->GetSemanticStore();
+  auto  semantic = semantic_test::StoresOf(*project.GetStorage());
   RegisterSemanticModel(semantic, "model-a");
   RegisterSemanticModel(semantic, "model-b");
   std::string error;
-  ASSERT_TRUE(semantic.SetActiveModelKey("model-a", &error)) << error;
+  ASSERT_TRUE(semantic.models_.SetActiveModelKey("model-a", &error)) << error;
   const auto with_model_a = BuildWhereWhileDatabaseIsLocked(project, filter_service, L"portrait");
   ASSERT_TRUE(with_model_a.has_value() && with_model_a->raw_sql_.has_value());
   EXPECT_NE(with_model_a->raw_sql_->find(L"SemanticImageLabel"), std::wstring::npos);
   EXPECT_TRUE(Contains(StringBinds(*with_model_a), "model-a"));
 
-  ASSERT_TRUE(semantic.SetActiveModelKey("model-b", &error)) << error;
+  ASSERT_TRUE(semantic.models_.SetActiveModelKey("model-b", &error)) << error;
   const auto with_model_b = BuildWhereWhileDatabaseIsLocked(project, filter_service, L"portrait");
   ASSERT_TRUE(with_model_b.has_value());
   EXPECT_TRUE(Contains(StringBinds(*with_model_b), "model-b"));
   EXPECT_FALSE(Contains(StringBinds(*with_model_b), "model-a"));
 
-  ASSERT_TRUE(semantic.PurgeModel("model-b", &error)) << error;
-  EXPECT_TRUE(semantic.ActiveModelKey().empty());
+  ASSERT_TRUE(semantic.models_.PurgeModel("model-b", &error)) << error;
+  EXPECT_TRUE(semantic.models_.ActiveModelKey().empty());
   const auto after_purge = BuildWhereWhileDatabaseIsLocked(project, filter_service, L"portrait");
   ASSERT_TRUE(after_purge.has_value() && after_purge->raw_sql_.has_value());
   EXPECT_EQ(after_purge->raw_sql_->find(L"SemanticImageLabel"), std::wstring::npos);
 
   // Registering an active model makes it the active one in the same way.
   std::string upsert_error;
-  ASSERT_TRUE(semantic.UpsertModel(SemanticModelRecord{.model_key_     = "model-c",
+  ASSERT_TRUE(semantic.models_.UpsertModel(SemanticModelRecord{.model_key_     = "model-c",
                                                        .model_id_      = "mobileclip-test",
                                                        .revision_      = "test-rev",
                                                        .embedding_dim_ = kSemanticEmbeddingDim,

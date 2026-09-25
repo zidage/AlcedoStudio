@@ -11,6 +11,7 @@
 #include <format>
 #include <memory>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -21,6 +22,7 @@
 #include "sleeve/sleeve_element/sleeve_folder.hpp"
 #include "storage/mapper/duckorm/duckdb_orm.hpp"
 #include "storage/store/ai/ai_store.hpp"
+#include "storage/store/semantic/semantic_embedding_store.hpp"
 #include "type/type.hpp"
 #include "utils/string/convert.hpp"
 
@@ -85,19 +87,15 @@ auto RunGroupByQuery(duckdb_connection conn, const std::string& sql,
   return rows;
 }
 
+/// Count of a stats or listing COUNT query. A failed query reads as 0, the same as a failed
+/// bucket query in RunGroupByQuery, so the stats panel shows empty values instead of failing.
 auto RunScalarInt64(duckdb_connection conn, const std::string& sql,
                     const duckorm::SqlFragment& binds) -> int64_t {
-  duckdb_result result;
-  if (duckorm::execute_query(conn, sql, binds, &result) != DuckDBSuccess) {
-    duckdb_destroy_result(&result);
+  try {
+    return duckorm::select_int64(conn, duckorm::SqlFragment{sql, binds.binds_}).value_or(0);
+  } catch (const std::runtime_error&) {
     return 0;
   }
-  int64_t value = 0;
-  if (duckdb_row_count(&result) > 0) {
-    value = duckdb_value_int64(&result, 0, 0);
-  }
-  duckdb_destroy_result(&result);
-  return value;
 }
 
 // Display columns of a search result row, in SearchResultRow order. Aliases follow
@@ -132,37 +130,12 @@ auto ReadSearchResultRow(duckdb_result* result, idx_t row) -> SearchResultRow {
   return out;
 }
 
-auto JoinIds(std::span<const sl_element_id_t> ids) -> std::string {
-  std::string out;
-  for (size_t i = 0; i < ids.size(); ++i) {
-    if (i > 0) {
-      out += ",";
-    }
-    out += std::to_string(ids[i]);
-  }
-  return out;
-}
-
 void DeleteSemanticAndAiRowsForFiles(duckdb_connection                conn,
                                      std::span<const sl_element_id_t> file_ids) {
   if (file_ids.empty()) {
     return;
   }
-  const auto    ids = JoinIds(file_ids);
-  duckdb_result result;
-  duckdb_query(
-      conn, std::format("DELETE FROM SemanticImageEmbedding WHERE file_id IN ({});", ids).c_str(),
-      &result);
-  duckdb_destroy_result(&result);
-  duckdb_query(
-      conn,
-      std::format("DELETE FROM SemanticImageEmbedding768 WHERE file_id IN ({});", ids).c_str(),
-      &result);
-  duckdb_destroy_result(&result);
-  duckdb_query(conn,
-               std::format("DELETE FROM SemanticImageLabel WHERE file_id IN ({});", ids).c_str(),
-               &result);
-  duckdb_destroy_result(&result);
+  DeleteSemanticRowsForFiles(conn, file_ids);
   // Phase 5f: AI image understanding + rating rows. Routed through the duckorm `remove`
   // path (`DeleteAiAnnotationRowsForFiles`) rather than a hand-written DELETE so the AI
   // ser/deser stays ORM-faithful. This runs on the ElementStore's own connection so
@@ -606,17 +579,18 @@ auto ElementStore::ListSearchResultRows(std::span<const sl_element_id_t> file_id
   if (file_ids.empty()) {
     return out;
   }
-  auto       db_lock = guard_.Lock();
-  const auto sql     = std::format(
-      "SELECT {} FROM Element e "
-          "JOIN FileImage fi ON fi.file_id = e.id "
-          "JOIN Image i ON i.id = fi.image_id "
-          "WHERE e.type = {} AND e.id IN ({})",
-      kSearchResultColumns, static_cast<uint32_t>(ElementType::FILE), JoinIds(file_ids));
+  auto db_lock = guard_.Lock();
+  auto query   = duckorm::expr::raw(
+      std::format("SELECT {} FROM Element e "
+                    "JOIN FileImage fi ON fi.file_id = e.id "
+                    "JOIN Image i ON i.id = fi.image_id "
+                    "WHERE e.type = {} AND ",
+                  kSearchResultColumns, static_cast<uint32_t>(ElementType::FILE)));
+  query.append(duckorm::expr::in_list(duckorm::expr::col("e.id"), file_ids));
 
   duckdb_result     result;
   duckdb_connection conn = guard_.conn_;
-  if (duckorm::execute_query(conn, sql, duckorm::SqlFragment{}, &result) != DuckDBSuccess) {
+  if (duckorm::execute_query(conn, query.sql_, query, &result) != DuckDBSuccess) {
     duckdb_destroy_result(&result);
     return out;
   }

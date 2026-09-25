@@ -220,9 +220,9 @@ auto EnsureCachedLabelPrototypes(const SemanticGenerationPersistenceOptions&    
                          QStringLiteral("model_key=%1 prompt_config=%2")
                              .arg(QString::fromStdString(persistence.model_key),
                                   QString::fromStdString(persistence.prompt_config_hash)));
-  if (!persistence.storage_controller) {
+  if (!persistence.label_store || !persistence.embedding_store) {
     if (error) {
-      *error = "semantic storage controller is not available";
+      *error = "semantic storage is not available";
     }
     return false;
   }
@@ -234,7 +234,7 @@ auto EnsureCachedLabelPrototypes(const SemanticGenerationPersistenceOptions&    
   }
 
   const auto query_count =
-      persistence.storage_controller->CountLabelQueries(persistence.prompt_config_hash);
+      persistence.label_store->CountLabelQueries(persistence.prompt_config_hash);
   if (query_count == 0) {
     if (error) {
       *error = "semantic label query table has no rows for prompt config " +
@@ -243,7 +243,7 @@ auto EnsureCachedLabelPrototypes(const SemanticGenerationPersistenceOptions&    
     return false;
   }
 
-  const auto prototype_count = persistence.storage_controller->CountLabelPrototypes(
+  const auto prototype_count = persistence.label_store->CountLabelPrototypes(
       persistence.model_key, persistence.prompt_config_hash);
   qCInfo(diag::semanticLog).noquote()
       << QStringLiteral("semantic.label_prototypes.counts model_key=%1 queries=%2 cached=%3")
@@ -255,7 +255,7 @@ auto EnsureCachedLabelPrototypes(const SemanticGenerationPersistenceOptions&    
   }
 
   const auto queries =
-      persistence.storage_controller->ListLabelQueries(persistence.prompt_config_hash, error);
+      persistence.label_store->ListLabelQueries(persistence.prompt_config_hash, error);
   if (queries.empty()) {
     if (error && error->empty()) {
       *error = "semantic label query table has no rows for prompt config " +
@@ -326,7 +326,7 @@ auto EnsureCachedLabelPrototypes(const SemanticGenerationPersistenceOptions&    
     }
   }
 
-  return persistence.storage_controller->UpsertLabelPrototypes(prototypes, error);
+  return persistence.label_store->UpsertLabelPrototypes(prototypes, error);
 }
 
 struct ThumbnailBatchWaitState {
@@ -957,8 +957,8 @@ void SemanticGenerationService::RunJob(
     remaining_items.reserve(items.size());
     const bool require_label = true;
     for (const auto& item : items) {
-      if (options.persistence->storage_controller &&
-          options.persistence->storage_controller->HasReadyImageEmbedding(
+      if (options.persistence->embedding_store &&
+          options.persistence->embedding_store->HasReadyImageEmbedding(
               item.element_id, item.image_id, options.persistence->model_key, require_label)) {
         SemanticGenerationItemResult result;
         result.item       = item;
@@ -1122,7 +1122,7 @@ void SemanticGenerationService::RunJob(
                  .arg(static_cast<qulonglong>(persist_records.size()))
                  .arg(SummarizeInputIds(inputs))
                  .arg(QString::fromStdString(options.persistence->model_key));
-      if (!options.persistence->storage_controller->UpsertImageEmbeddingsAndAssignLabels(
+      if (!options.persistence->embedding_store->UpsertImageEmbeddingsAndAssignLabels(
               persist_records, assignment, &assigned_labels, &persist_error)) {
         const std::string message =
             persist_error.empty() ? "semantic persistence failed" : std::move(persist_error);

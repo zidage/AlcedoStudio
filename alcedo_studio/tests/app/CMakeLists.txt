@@ -209,7 +209,7 @@ target_link_libraries(SleeveServiceTest
 alcedo_register_test_target(SleeveServiceTest app)
 
 add_executable(FilterServiceTest ${ALCEDO_TEST_ROOT}/app/filter_service_test.cpp)
-target_include_directories(FilterServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_include_directories(FilterServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(FilterServiceTest ImportService ProjectService SleeveFilterService GTest::gtest_main)
 gtest_discover_tests(FilterServiceTest TEST_PREFIX "FilterServiceTest."
   PROPERTIES LABELS "ci_core_flow")
@@ -231,7 +231,7 @@ alcedo_register_test_target(LibrarySearchRecallTest app ci_core)
 
 # Typed Image and AI search columns and the SQL that reads them (same plan, Phase S3).
 add_executable(LibrarySearchColumnsTest ${ALCEDO_TEST_ROOT}/app/library_search_columns_test.cpp)
-target_include_directories(LibrarySearchColumnsTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_include_directories(LibrarySearchColumnsTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(LibrarySearchColumnsTest
   ProjectService SleeveFilterService GTest::gtest_main)
 gtest_discover_tests(LibrarySearchColumnsTest TEST_PREFIX "LibrarySearchColumnsTest."
@@ -630,7 +630,7 @@ gtest_discover_tests(SemanticGrpcDependencySmokeTest TEST_PREFIX "SemanticGrpcDe
 alcedo_register_test_target(SemanticGrpcDependencySmokeTest app ci_core)
 
 add_executable(SemanticGenerationServiceTest ${ALCEDO_TEST_ROOT}/app/semantic_generation_service_test.cpp)
-target_include_directories(SemanticGenerationServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_include_directories(SemanticGenerationServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(SemanticGenerationServiceTest
   SemanticGenerationService
   ProjectService
