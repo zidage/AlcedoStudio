@@ -68,15 +68,26 @@ Storage::Storage(std::filesystem::path db_path)
     : database_(db_path),
       element_store_(database_.GetConnectionGuard()),
       image_store_(database_.GetConnectionGuard()),
-      semantic_store_(database_),
+      semantic_models_(database_),
+      semantic_embeddings_(database_),
+      semantic_labels_(database_),
+      semantic_vector_search_(database_),
       ai_store_(database_) {}
 
 auto Storage::GetElementStore() -> ElementStore& { return element_store_; }
 
 auto Storage::GetImageStore() -> ImageStore& { return image_store_; }
 
-auto Storage::GetSemanticStore() -> SemanticStore& {
-  return semantic_store_;
+auto Storage::GetSemanticModelRegistry() -> SemanticModelRegistry& { return semantic_models_; }
+
+auto Storage::GetSemanticEmbeddingStore() -> SemanticEmbeddingStore& {
+  return semantic_embeddings_;
+}
+
+auto Storage::GetSemanticLabelStore() -> SemanticLabelStore& { return semantic_labels_; }
+
+auto Storage::GetSemanticVectorSearch() -> SemanticVectorSearch& {
+  return semantic_vector_search_;
 }
 
 auto Storage::GetAiStore() -> AiStore& {

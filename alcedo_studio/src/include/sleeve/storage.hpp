@@ -13,7 +13,10 @@
 #include "storage/store/ai/ai_store.hpp"
 #include "storage/store/database.hpp"
 #include "storage/store/image/image_store.hpp"
-#include "storage/store/semantic/semantic_store.hpp"
+#include "storage/store/semantic/semantic_embedding_store.hpp"
+#include "storage/store/semantic/semantic_label_store.hpp"
+#include "storage/store/semantic/semantic_model_registry.hpp"
+#include "storage/store/semantic/semantic_vector_search.hpp"
 #include "storage/store/sleeve/element_store.hpp"
 #include "type/type.hpp"
 
@@ -40,7 +43,10 @@ class Storage {
   Database                                                              database_;
   ElementStore                                                         element_store_;
   ImageStore                                                           image_store_;
-  SemanticStore                                                 semantic_store_;
+  SemanticModelRegistry                                                 semantic_models_;
+  SemanticEmbeddingStore                                                semantic_embeddings_;
+  SemanticLabelStore                                                    semantic_labels_;
+  SemanticVectorSearch                                                  semantic_vector_search_;
   AiStore                                                       ai_store_;
   std::mutex                                                                live_state_lock_;
 
@@ -52,7 +58,10 @@ class Storage {
   auto GetDatabase() -> Database&;
   auto GetElementStore() -> ElementStore&;
   auto GetImageStore() -> ImageStore&;
-  auto GetSemanticStore() -> SemanticStore&;
+  auto GetSemanticModelRegistry() -> SemanticModelRegistry&;
+  auto GetSemanticEmbeddingStore() -> SemanticEmbeddingStore&;
+  auto GetSemanticLabelStore() -> SemanticLabelStore&;
+  auto GetSemanticVectorSearch() -> SemanticVectorSearch&;
   auto GetAiStore() -> AiStore&;
 
   void RememberLivePipeline(sl_element_id_t                             file_id,

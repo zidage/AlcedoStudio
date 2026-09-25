@@ -63,7 +63,7 @@ alcedo_register_test_target(AiStorageControllerTest storage)
 
 add_executable(SemanticStorageControllerTest
   ${ALCEDO_TEST_ROOT}/storage/semantic_storage_controller_test.cpp)
-target_include_directories(SemanticStorageControllerTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_include_directories(SemanticStorageControllerTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(SemanticStorageControllerTest PRIVATE GTest::gtest_main ProjectService)
 gtest_discover_tests(SemanticStorageControllerTest TEST_PREFIX "SemanticStorageControllerTest.")
 alcedo_copy_duckdb_extensions(SemanticStorageControllerTest)

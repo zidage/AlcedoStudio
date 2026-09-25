@@ -2,6 +2,7 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
+#include "support/semantic_stores_test_support.hpp"
 #include "app/semantic_generation_service.hpp"
 
 #include <duckdb.h>
@@ -370,9 +371,9 @@ auto LabelIndex(SemanticLabelLanguage language, const std::string& label) -> siz
   return 0;
 }
 
-void RegisterSemanticTestModel(SemanticStore& semantic) {
+void RegisterSemanticTestModel(const semantic_test::SemanticStores& semantic) {
   std::string error;
-  ASSERT_TRUE(semantic.UpsertModel(SemanticModelRecord{.model_key_     = "mobileclip-test",
+  ASSERT_TRUE(semantic.models_.UpsertModel(SemanticModelRecord{.model_key_     = "mobileclip-test",
                                                        .model_id_      = "mock/mobileclip",
                                                        .revision_      = "mock-revision",
                                                        .embedding_dim_ = kSemanticEmbeddingDim,
@@ -381,9 +382,9 @@ void RegisterSemanticTestModel(SemanticStore& semantic) {
       << error;
 }
 
-void RegisterLocalizedSemanticTestModel(SemanticStore& semantic) {
+void RegisterLocalizedSemanticTestModel(const semantic_test::SemanticStores& semantic) {
   std::string error;
-  ASSERT_TRUE(semantic.UpsertModel(
+  ASSERT_TRUE(semantic.models_.UpsertModel(
       SemanticModelRecord{.model_key_     = "localized-zh-test",
                           .model_id_      = "mock/localized-zh",
                           .revision_      = "mock-zh-revision",
@@ -1090,7 +1091,7 @@ TEST_F(SemanticGenerationServiceTest, DefaultPhotographyLabelsLiveInConfigHeader
 
 TEST_F(SemanticGenerationServiceTest, PersistsEmbeddingsAndAssignedLabels) {
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
-  auto&          semantic = project.GetStorage()->GetSemanticStore();
+  auto           semantic = semantic_test::StoresOf(*project.GetStorage());
   RegisterSemanticTestModel(semantic);
 
   auto                      thumbnails = std::make_shared<ImmediateThumbnailProvider>();
@@ -1105,7 +1106,8 @@ TEST_F(SemanticGenerationServiceTest, PersistsEmbeddingsAndAssignedLabels) {
                                .image_size          = 256,
                                .provider            = "mock"};
   SemanticGenerationPersistenceOptions persistence;
-  persistence.storage_controller         = &semantic;
+  persistence.label_store                = &semantic.labels_;
+  persistence.embedding_store            = &semantic.embeddings_;
   persistence.model_key                  = "mobileclip-test";
   persistence.label_prototype_batch_size = 7;
   options.persistence                    = persistence;
@@ -1118,15 +1120,15 @@ TEST_F(SemanticGenerationServiceTest, PersistsEmbeddingsAndAssignedLabels) {
   EXPECT_EQ(progress.embedded, 1U);
   EXPECT_EQ(progress.failed, 0U);
   EXPECT_EQ(
-      semantic.CountLabelPrototypes("mobileclip-test", kDefaultSemanticPhotographyPromptConfigHash),
+      semantic.labels_.CountLabelPrototypes("mobileclip-test", kDefaultSemanticPhotographyPromptConfigHash),
       DefaultSemanticPhotographyLabelQueries().size());
   const auto text_batch_sizes = embedder->TextBatchSizes();
   ASSERT_GT(text_batch_sizes.size(), 1U);
   EXPECT_EQ(text_batch_sizes.front(), 7U);
   EXPECT_EQ(std::accumulate(text_batch_sizes.begin(), text_batch_sizes.end(), size_t{0}),
             DefaultSemanticPhotographyLabelQueries().size());
-  EXPECT_EQ(semantic.CountImageEmbeddingsForFile(42, "mobileclip-test"), 1U);
-  EXPECT_EQ(semantic.CountImageLabelsForFile(42, "mobileclip-test"), 1U);
+  EXPECT_EQ(semantic.embeddings_.CountImageEmbeddingsForFile(42, "mobileclip-test"), 1U);
+  EXPECT_EQ(semantic.labels_.CountImageLabelsForFile(42, "mobileclip-test"), 1U);
 
   const auto results = job->Results();
   ASSERT_EQ(results.size(), 1U);
@@ -1135,7 +1137,7 @@ TEST_F(SemanticGenerationServiceTest, PersistsEmbeddingsAndAssignedLabels) {
   EXPECT_EQ(results.front().label, "street");
   EXPECT_TRUE(results.front().label_confident);
 
-  const auto stored_label = semantic.GetImageLabelForFile(42, "mobileclip-test", &error);
+  const auto stored_label = semantic.labels_.GetImageLabelForFile(42, "mobileclip-test", &error);
   ASSERT_TRUE(stored_label.has_value()) << error;
   EXPECT_EQ(stored_label->label_, "street");
   // The image is a pure one-hot "street" vector; every other prototype scores at most 0.25
@@ -1146,7 +1148,7 @@ TEST_F(SemanticGenerationServiceTest, PersistsEmbeddingsAndAssignedLabels) {
 
 TEST_F(SemanticGenerationServiceTest, PersistsLocalizedChineseLabelsAndMapsDisplayText) {
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
-  auto&          semantic = project.GetStorage()->GetSemanticStore();
+  auto           semantic = semantic_test::StoresOf(*project.GetStorage());
   RegisterLocalizedSemanticTestModel(semantic);
 
   auto thumbnails = std::make_shared<ImmediateThumbnailProvider>();
@@ -1164,7 +1166,8 @@ TEST_F(SemanticGenerationServiceTest, PersistsLocalizedChineseLabelsAndMapsDispl
                                .image_size          = 256,
                                .provider            = "mock"};
   SemanticGenerationPersistenceOptions persistence;
-  persistence.storage_controller = &semantic;
+  persistence.label_store     = &semantic.labels_;
+  persistence.embedding_store = &semantic.embeddings_;
   persistence.model_key          = "localized-zh-test";
   persistence.prompt_config_hash = kDefaultSemanticPhotographyZhPromptConfigHash;
   options.persistence            = persistence;
@@ -1176,10 +1179,10 @@ TEST_F(SemanticGenerationServiceTest, PersistsLocalizedChineseLabelsAndMapsDispl
   const auto progress = job->SnapshotProgress();
   EXPECT_EQ(progress.embedded, 1U);
   EXPECT_EQ(progress.failed, 0U);
-  EXPECT_EQ(semantic.CountLabelPrototypes("localized-zh-test",
+  EXPECT_EQ(semantic.labels_.CountLabelPrototypes("localized-zh-test",
                                           kDefaultSemanticPhotographyZhPromptConfigHash),
             DefaultSemanticPhotographyLabelQueries(SemanticLabelLanguage::kChinese).size());
-  EXPECT_EQ(semantic.CountImageLabelsForFile(42, "localized-zh-test"), 1U);
+  EXPECT_EQ(semantic.labels_.CountImageLabelsForFile(42, "localized-zh-test"), 1U);
 
   const auto results = job->Results();
   ASSERT_EQ(results.size(), 1U);
@@ -1187,7 +1190,7 @@ TEST_F(SemanticGenerationServiceTest, PersistsLocalizedChineseLabelsAndMapsDispl
   EXPECT_TRUE(results.front().has_label);
   EXPECT_EQ(results.front().label, "\xE9\xA3\x8E\xE6\x99\xAF");
 
-  const auto stored_label = semantic.GetImageLabelForFile(42, "localized-zh-test", &error);
+  const auto stored_label = semantic.labels_.GetImageLabelForFile(42, "localized-zh-test", &error);
   ASSERT_TRUE(stored_label.has_value()) << error;
   EXPECT_EQ(stored_label->label_, "\xE9\xA3\x8E\xE6\x99\xAF");
   EXPECT_EQ(SemanticLabelDisplayText(stored_label->label_, SemanticLabelLanguage::kEnglish),
@@ -1198,7 +1201,7 @@ TEST_F(SemanticGenerationServiceTest, PersistsLocalizedChineseLabelsAndMapsDispl
 
 TEST_F(SemanticGenerationServiceTest, SkipsReadyEmbeddingsUnlessForceRegenerate) {
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
-  auto&          semantic = project.GetStorage()->GetSemanticStore();
+  auto           semantic = semantic_test::StoresOf(*project.GetStorage());
   RegisterSemanticTestModel(semantic);
 
   auto thumbnails = std::make_shared<ImmediateThumbnailProvider>();
@@ -1207,7 +1210,8 @@ TEST_F(SemanticGenerationServiceTest, SkipsReadyEmbeddingsUnlessForceRegenerate)
 
   SemanticGenerationOptions            options;
   SemanticGenerationPersistenceOptions persistence;
-  persistence.storage_controller = &semantic;
+  persistence.label_store     = &semantic.labels_;
+  persistence.embedding_store = &semantic.embeddings_;
   persistence.model_key          = "mobileclip-test";
   options.persistence            = persistence;
 
@@ -1244,7 +1248,7 @@ TEST_F(SemanticGenerationServiceTest, GeneratesLabelsForRecursiveCameraSampleDat
   ASSERT_GT(paths.size(), 0U);
 
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
-  auto&          semantic = project.GetStorage()->GetSemanticStore();
+  auto           semantic = semantic_test::StoresOf(*project.GetStorage());
   RegisterSemanticTestModel(semantic);
 
   const auto items = ImportPaths(project, paths);
@@ -1290,7 +1294,8 @@ TEST_F(SemanticGenerationServiceTest, GeneratesLabelsForRecursiveCameraSampleDat
                                .image_size          = 256,
                                .provider            = "mock"};
   SemanticGenerationPersistenceOptions persistence;
-  persistence.storage_controller = &semantic;
+  persistence.label_store     = &semantic.labels_;
+  persistence.embedding_store = &semantic.embeddings_;
   persistence.model_key          = "mobileclip-test";
   options.persistence            = persistence;
 
@@ -1333,7 +1338,7 @@ TEST_F(SemanticGenerationServiceTest, GeneratesLabelsForRecursiveCameraSampleDat
 
 TEST_F(SemanticGenerationServiceTest, PersistenceRejectsBadVectorsWithoutWritingRows) {
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
-  auto&          semantic = project.GetStorage()->GetSemanticStore();
+  auto           semantic = semantic_test::StoresOf(*project.GetStorage());
   RegisterSemanticTestModel(semantic);
 
   auto bad_embedding                   = OneHot512(3);
@@ -1344,7 +1349,8 @@ TEST_F(SemanticGenerationServiceTest, PersistenceRejectsBadVectorsWithoutWriting
 
   SemanticGenerationOptions options;
   SemanticGenerationPersistenceOptions persistence;
-  persistence.storage_controller = &semantic;
+  persistence.label_store     = &semantic.labels_;
+  persistence.embedding_store = &semantic.embeddings_;
   persistence.model_key          = "mobileclip-test";
   options.persistence            = persistence;
 
@@ -1354,8 +1360,8 @@ TEST_F(SemanticGenerationServiceTest, PersistenceRejectsBadVectorsWithoutWriting
   const auto progress = job->SnapshotProgress();
   EXPECT_EQ(progress.embedded, 0U);
   EXPECT_EQ(progress.failed, 1U);
-  EXPECT_EQ(semantic.CountImageEmbeddingsForFile(77, "mobileclip-test"), 0U);
-  EXPECT_EQ(semantic.CountImageLabelsForFile(77, "mobileclip-test"), 0U);
+  EXPECT_EQ(semantic.embeddings_.CountImageEmbeddingsForFile(77, "mobileclip-test"), 0U);
+  EXPECT_EQ(semantic.labels_.CountImageLabelsForFile(77, "mobileclip-test"), 0U);
 
   const auto results = job->Results();
   ASSERT_EQ(results.size(), 1U);

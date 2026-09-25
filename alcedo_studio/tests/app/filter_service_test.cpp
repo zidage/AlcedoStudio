@@ -22,7 +22,7 @@
 #include "sleeve/sleeve_filter/filter_combo.hpp"
 #include "sleeve/sleeve_filter/filter_factory.hpp"
 #include "storage/store/ai/ai_store.hpp"
-#include "storage/store/semantic/semantic_store.hpp"
+#include "support/semantic_stores_test_support.hpp"
 #include "type/supported_file_type.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "utils/string/convert.hpp"
@@ -43,10 +43,10 @@ auto OneHot(size_t index) -> std::vector<float> {
   return embedding;
 }
 
-void RegisterSemanticSearchModel(SemanticStore& semantic, const std::string& model_key,
+void RegisterSemanticSearchModel(const semantic_test::SemanticStores& semantic, const std::string& model_key,
                                  bool active = true) {
   std::string error;
-  ASSERT_TRUE(semantic.UpsertModel(SemanticModelRecord{.model_key_     = model_key,
+  ASSERT_TRUE(semantic.models_.UpsertModel(SemanticModelRecord{.model_key_     = model_key,
                                                        .model_id_      = "mobileclip-test",
                                                        .revision_      = "test-rev",
                                                        .embedding_dim_ = kSemanticEmbeddingDim,
@@ -67,7 +67,7 @@ auto FindImageId(ProjectService& project, sl_element_id_t file_id) -> image_id_t
 
 void StoreSemanticLabel(ProjectService& project, const std::string& model_key,
                         sl_element_id_t file_id, const std::string& label, size_t embedding_index) {
-  auto&       semantic = project.GetStorage()->GetSemanticStore();
+  auto        semantic = semantic_test::StoresOf(*project.GetStorage());
   const auto  image_id = FindImageId(project, file_id);
   std::string error;
   ASSERT_NE(image_id, 0u);
@@ -80,7 +80,7 @@ void StoreSemanticLabel(ProjectService& project, const std::string& model_key,
                                   .margin_          = 0.79,
                                   .confident_       = true,
                                   .top_scores_json_ = R"([{"label":"test","score":0.91}])"};
-  ASSERT_TRUE(semantic.UpsertImageEmbeddingWithLabel(
+  ASSERT_TRUE(semantic.embeddings_.UpsertImageEmbeddingWithLabel(
       SemanticImageEmbeddingRecord{.file_id_   = file_id,
                                    .image_id_  = image_id,
                                    .model_key_ = model_key,
@@ -595,7 +595,7 @@ TEST_F(FilterServiceTests, FuzzySearchMatchesGeneratedSemanticLabelsAsOrdinaryTe
   ASSERT_NE(landscape_id, 0u);
   ASSERT_NE(portrait_id, 0u);
 
-  auto& semantic = project.GetStorage()->GetSemanticStore();
+  auto  semantic = semantic_test::StoresOf(*project.GetStorage());
   RegisterSemanticSearchModel(semantic, "mobileclip-test-a");
   RegisterSemanticSearchModel(semantic, "mobileclip-test-b");
   StoreSemanticLabel(project, "mobileclip-test-a", landscape_id, "landscape", 4);
@@ -655,10 +655,10 @@ TEST_F(FilterServiceTests, FuzzySearchIgnoresSemanticLabelsWhenNoModelIsActive) 
                                                      .camera_model_ = "Neutral Camera"});
   ASSERT_NE(landscape_id, 0u);
 
-  auto& semantic = project.GetStorage()->GetSemanticStore();
+  auto  semantic = semantic_test::StoresOf(*project.GetStorage());
   RegisterSemanticSearchModel(semantic, "inactive-mobileclip-test", false);
   StoreSemanticLabel(project, "inactive-mobileclip-test", landscape_id, "landscape", 4);
-  ASSERT_TRUE(semantic.ActiveModelKey().empty());
+  ASSERT_TRUE(semantic.models_.ActiveModelKey().empty());
 
   SleeveFilterService filter_service(project.GetStorage());
   EXPECT_TRUE(filter_service.SearchFolder(0, L"landscape", 0, 10).empty());
@@ -1404,7 +1404,7 @@ TEST_F(FilterServiceTests, LabelQueryUsesOrdinaryPathNotSemanticProvider) {
                                      .lens_         = "Plain Lens"});
   ASSERT_NE(landscape_id, 0u);
 
-  auto& semantic = project.GetStorage()->GetSemanticStore();
+  auto  semantic = semantic_test::StoresOf(*project.GetStorage());
   RegisterSemanticSearchModel(semantic, "mobileclip-route-test");
   StoreSemanticLabel(project, "mobileclip-route-test", landscape_id, "landscape", 4);
 
@@ -1524,7 +1524,7 @@ TEST_F(FilterServiceTests, StatsSemanticLabelExistsFilterRestrictsFolderStats) {
   ASSERT_NE(landscape_id, 0u);
   ASSERT_NE(portrait_id, 0u);
 
-  auto& semantic = project.GetStorage()->GetSemanticStore();
+  auto  semantic = semantic_test::StoresOf(*project.GetStorage());
   RegisterSemanticSearchModel(semantic, "mobileclip-stats-filter");
   StoreSemanticLabel(project, "mobileclip-stats-filter", landscape_id, "landscape", 4);
 

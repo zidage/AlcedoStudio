@@ -2,7 +2,7 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-#include "storage/store/semantic/semantic_store.hpp"
+#include "support/semantic_stores_test_support.hpp"
 
 #include <duckdb.h>
 #include <gtest/gtest.h>
@@ -94,9 +94,9 @@ void RunRawSql(const std::filesystem::path& db_path, const char* sql) {
   duckdb_close(&db);
 }
 
-void RegisterTestModel(SemanticStore& semantic) {
+void RegisterTestModel(const semantic_test::SemanticStores& semantic) {
   std::string error;
-  ASSERT_TRUE(semantic.UpsertModel(SemanticModelRecord{.model_key_     = kModelKey,
+  ASSERT_TRUE(semantic.models_.UpsertModel(SemanticModelRecord{.model_key_     = kModelKey,
                                                        .model_id_      = "mobileclip-test",
                                                        .revision_      = "test-rev",
                                                        .embedding_dim_ = kSemanticEmbeddingDim,
@@ -105,9 +105,9 @@ void RegisterTestModel(SemanticStore& semantic) {
       << error;
 }
 
-void RegisterSiglipTestModel(SemanticStore& semantic) {
+void RegisterSiglipTestModel(const semantic_test::SemanticStores& semantic) {
   std::string error;
-  ASSERT_TRUE(semantic.UpsertModel(SemanticModelRecord{.model_key_     = kSiglipModelKey,
+  ASSERT_TRUE(semantic.models_.UpsertModel(SemanticModelRecord{.model_key_     = kSiglipModelKey,
                                                        .model_id_      = "siglip2-test",
                                                        .revision_      = "test-rev",
                                                        .embedding_dim_ = kSemanticEmbeddingDim768,
@@ -157,10 +157,10 @@ class SemanticStoreTest : public ::testing::Test {
     return file.first ? file.first->element_id_ : 0;
   }
 
-  static void StoreEmbedding(SemanticStore& semantic, sl_element_id_t file_id,
+  static void StoreEmbedding(const semantic_test::SemanticStores& semantic, sl_element_id_t file_id,
                              image_id_t image_id, std::vector<float> embedding) {
     std::string error;
-    ASSERT_TRUE(semantic.UpsertImageEmbedding(
+    ASSERT_TRUE(semantic.embeddings_.UpsertImageEmbedding(
         SemanticImageEmbeddingRecord{
             .file_id_   = file_id,
             .image_id_  = image_id,
@@ -174,7 +174,7 @@ class SemanticStoreTest : public ::testing::Test {
 
 TEST_F(SemanticStoreTest, VssSearchRanksWithinRootAndFolderScope) {
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
-  auto&          semantic = project.GetStorage()->GetSemanticStore();
+  auto           semantic = semantic_test::StoresOf(*project.GetStorage());
   RegisterTestModel(semantic);
 
   const auto mountain_id = CreateSyntheticFile(project, L"mountain.raf");
@@ -194,10 +194,10 @@ TEST_F(SemanticStoreTest, VssSearchRanksWithinRootAndFolderScope) {
   }
 
   std::string error;
-  ASSERT_TRUE(semantic.EnsureVectorSearchIndex(kModelKey, &error)) << error;
+  ASSERT_TRUE(semantic.search_.EnsureVectorSearchIndex(kModelKey, &error)) << error;
 
   const auto root_results =
-      semantic.SearchImageEmbeddings(0, kModelKey, ClosePairQuery(1, 2), 0, 3, &error);
+      semantic.search_.SearchImageEmbeddings(0, kModelKey, ClosePairQuery(1, 2), 0, 3, &error);
   ASSERT_EQ(root_results.size(), 2U) << error;
   EXPECT_EQ(root_results[0].file_id_, beach_id);
   EXPECT_EQ(root_results[1].file_id_, portrait_id);
@@ -208,7 +208,7 @@ TEST_F(SemanticStoreTest, VssSearchRanksWithinRootAndFolderScope) {
   ASSERT_NE(album.first, nullptr);
   ASSERT_TRUE(sleeve->LinkFileToFolder(portrait_id, album.first->element_id_).success_);
 
-  const auto scoped_results = semantic.SearchImageEmbeddings(album.first->element_id_, kModelKey,
+  const auto scoped_results = semantic.search_.SearchImageEmbeddings(album.first->element_id_, kModelKey,
                                                              ClosePairQuery(1, 2), 0, 3, &error);
   ASSERT_EQ(scoped_results.size(), 1U) << error;
   EXPECT_EQ(scoped_results[0].file_id_, portrait_id);
@@ -217,7 +217,7 @@ TEST_F(SemanticStoreTest, VssSearchRanksWithinRootAndFolderScope) {
 TEST_F(SemanticStoreTest, PackedSnapshotSucceedsAfterVectorSearchIndex) {
   {
     ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
-    auto&          semantic = project.GetStorage()->GetSemanticStore();
+    auto           semantic = semantic_test::StoresOf(*project.GetStorage());
     RegisterTestModel(semantic);
 
     const auto file_id = CreateSyntheticFile(project, L"indexed.raf");
@@ -226,7 +226,7 @@ TEST_F(SemanticStoreTest, PackedSnapshotSucceedsAfterVectorSearchIndex) {
     StoreEmbedding(semantic, file_id, rows.front().image_id_, OneHot(0));
 
     std::string error;
-    ASSERT_TRUE(semantic.EnsureVectorSearchIndex(kModelKey, &error)) << error;
+    ASSERT_TRUE(semantic.search_.EnsureVectorSearchIndex(kModelKey, &error)) << error;
     project.SaveProject(meta_path_);
   }
 
@@ -245,7 +245,7 @@ TEST_F(SemanticStoreTest, PackedSnapshotSucceedsAfterVectorSearchIndex) {
 
 TEST_F(SemanticStoreTest, VssSearchCutsOffWeakTailBeforePaging) {
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
-  auto&          semantic = project.GetStorage()->GetSemanticStore();
+  auto           semantic = semantic_test::StoresOf(*project.GetStorage());
   RegisterTestModel(semantic);
 
   const auto strong_id      = CreateSyntheticFile(project, L"strong_match.raf");
@@ -268,26 +268,26 @@ TEST_F(SemanticStoreTest, VssSearchCutsOffWeakTailBeforePaging) {
   }
 
   std::string error;
-  ASSERT_TRUE(semantic.EnsureVectorSearchIndex(kModelKey, &error)) << error;
+  ASSERT_TRUE(semantic.search_.EnsureVectorSearchIndex(kModelKey, &error)) << error;
 
-  const auto first_page = semantic.SearchImageEmbeddings(0, kModelKey, OneHot(0), 0, 1, &error);
+  const auto first_page = semantic.search_.SearchImageEmbeddings(0, kModelKey, OneHot(0), 0, 1, &error);
   ASSERT_EQ(first_page.size(), 1U) << error;
   EXPECT_EQ(first_page[0].file_id_, strong_id);
 
-  const auto second_page = semantic.SearchImageEmbeddings(0, kModelKey, OneHot(0), 1, 1, &error);
+  const auto second_page = semantic.search_.SearchImageEmbeddings(0, kModelKey, OneHot(0), 1, 1, &error);
   ASSERT_EQ(second_page.size(), 1U) << error;
   EXPECT_EQ(second_page[0].file_id_, near_id);
 
-  const auto weak_tail = semantic.SearchImageEmbeddings(0, kModelKey, OneHot(0), 2, 10, &error);
+  const auto weak_tail = semantic.search_.SearchImageEmbeddings(0, kModelKey, OneHot(0), 2, 10, &error);
   EXPECT_TRUE(weak_tail.empty()) << error;
 }
 
 TEST_F(SemanticStoreTest, RejectsInvalidVectorsBeforeStorageOrSearch) {
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
-  auto&          semantic = project.GetStorage()->GetSemanticStore();
+  auto           semantic = semantic_test::StoresOf(*project.GetStorage());
 
   std::string    error;
-  EXPECT_FALSE(semantic.UpsertModel(SemanticModelRecord{.model_key_     = "wrong-dim",
+  EXPECT_FALSE(semantic.models_.UpsertModel(SemanticModelRecord{.model_key_     = "wrong-dim",
                                                         .model_id_      = "mobileclip-test",
                                                         .revision_      = "test-rev",
                                                         .embedding_dim_ = 3,
@@ -303,7 +303,7 @@ TEST_F(SemanticStoreTest, RejectsInvalidVectorsBeforeStorageOrSearch) {
 
   auto       wrong_dim = OneHot(0);
   wrong_dim.pop_back();
-  EXPECT_FALSE(semantic.UpsertImageEmbedding(SemanticImageEmbeddingRecord{.file_id_   = file_id,
+  EXPECT_FALSE(semantic.embeddings_.UpsertImageEmbedding(SemanticImageEmbeddingRecord{.file_id_   = file_id,
                                                                           .image_id_  = image_id,
                                                                           .model_key_ = kModelKey,
                                                                           .embedding_ = wrong_dim},
@@ -311,29 +311,29 @@ TEST_F(SemanticStoreTest, RejectsInvalidVectorsBeforeStorageOrSearch) {
 
   auto non_finite = OneHot(0);
   non_finite[3]   = std::numeric_limits<float>::quiet_NaN();
-  EXPECT_FALSE(semantic.UpsertImageEmbedding(SemanticImageEmbeddingRecord{.file_id_   = file_id,
+  EXPECT_FALSE(semantic.embeddings_.UpsertImageEmbedding(SemanticImageEmbeddingRecord{.file_id_   = file_id,
                                                                           .image_id_  = image_id,
                                                                           .model_key_ = kModelKey,
                                                                           .embedding_ = non_finite},
                                              &error));
 
   std::vector<float> zero(kSemanticEmbeddingDim, 0.0F);
-  EXPECT_FALSE(semantic.UpsertImageEmbedding(
+  EXPECT_FALSE(semantic.embeddings_.UpsertImageEmbedding(
       SemanticImageEmbeddingRecord{
           .file_id_ = file_id, .image_id_ = image_id, .model_key_ = kModelKey, .embedding_ = zero},
       &error));
 
   StoreEmbedding(semantic, file_id, image_id, OneHot(0));
-  EXPECT_EQ(semantic.CountImageEmbeddings(kModelKey), 1U);
+  EXPECT_EQ(semantic.embeddings_.CountImageEmbeddings(kModelKey), 1U);
 
-  const auto results = semantic.SearchImageEmbeddings(0, kModelKey, wrong_dim, 0, 10, &error);
+  const auto results = semantic.search_.SearchImageEmbeddings(0, kModelKey, wrong_dim, 0, 10, &error);
   EXPECT_TRUE(results.empty());
   EXPECT_FALSE(error.empty());
 }
 
 TEST_F(SemanticStoreTest, Supports768DimensionalModelStorageAndSearch) {
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
-  auto&          semantic = project.GetStorage()->GetSemanticStore();
+  auto           semantic = semantic_test::StoresOf(*project.GetStorage());
   RegisterSiglipTestModel(semantic);
 
   const auto landscape_id = CreateSyntheticFile(project, L"siglip_landscape.raf");
@@ -352,11 +352,11 @@ TEST_F(SemanticStoreTest, Supports768DimensionalModelStorageAndSearch) {
                                    .label_              = "portrait",
                                    .prompt_config_hash_ = "siglip-prompts",
                                    .embedding_          = OneHot768(13)}};
-  ASSERT_TRUE(semantic.UpsertLabelPrototypes(prototypes, &error)) << error;
-  EXPECT_EQ(semantic.CountLabelPrototypes(kSiglipModelKey, "siglip-prompts"), 2U);
+  ASSERT_TRUE(semantic.labels_.UpsertLabelPrototypes(prototypes, &error)) << error;
+  EXPECT_EQ(semantic.labels_.CountLabelPrototypes(kSiglipModelKey, "siglip-prompts"), 2U);
 
   const auto loaded_prototypes =
-      semantic.LoadLabelPrototypes(kSiglipModelKey, "siglip-prompts", &error);
+      semantic.labels_.LoadLabelPrototypes(kSiglipModelKey, "siglip-prompts", &error);
   ASSERT_EQ(loaded_prototypes.size(), 2U) << error;
   EXPECT_EQ(loaded_prototypes.front().embedding.size(),
             static_cast<size_t>(kSemanticEmbeddingDim768));
@@ -373,36 +373,36 @@ TEST_F(SemanticStoreTest, Supports768DimensionalModelStorageAndSearch) {
       assignment_options.confidence_score_threshold_  = 0.5;
       assignment_options.confidence_margin_threshold_ = 0.1;
       SemanticImageLabelRecord assigned_label;
-      ASSERT_TRUE(semantic.UpsertImageEmbeddingAndAssignLabel(record, assignment_options,
+      ASSERT_TRUE(semantic.embeddings_.UpsertImageEmbeddingAndAssignLabel(record, assignment_options,
                                                               &assigned_label, &error))
           << error;
       EXPECT_EQ(assigned_label.label_, "landscape");
     } else {
-      ASSERT_TRUE(semantic.UpsertImageEmbedding(record, &error)) << error;
+      ASSERT_TRUE(semantic.embeddings_.UpsertImageEmbedding(record, &error)) << error;
     }
   }
-  EXPECT_EQ(semantic.CountImageEmbeddings(kSiglipModelKey), 2U);
-  EXPECT_EQ(semantic.CountImageLabelsForFile(landscape_id, kSiglipModelKey), 1U);
+  EXPECT_EQ(semantic.embeddings_.CountImageEmbeddings(kSiglipModelKey), 2U);
+  EXPECT_EQ(semantic.labels_.CountImageLabelsForFile(landscape_id, kSiglipModelKey), 1U);
 
-  ASSERT_TRUE(semantic.EnsureVectorSearchIndex(kSiglipModelKey, &error)) << error;
+  ASSERT_TRUE(semantic.search_.EnsureVectorSearchIndex(kSiglipModelKey, &error)) << error;
   const auto results =
-      semantic.SearchImageEmbeddings(0, kSiglipModelKey, OneHot768(12), 0, 2, &error);
+      semantic.search_.SearchImageEmbeddings(0, kSiglipModelKey, OneHot768(12), 0, 2, &error);
   ASSERT_FALSE(results.empty()) << error;
   EXPECT_EQ(results.front().file_id_, landscape_id);
 }
 
 TEST_F(SemanticStoreTest, NewProjectSeedsDefaultLabelQueries) {
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
-  auto&          semantic = project.GetStorage()->GetSemanticStore();
+  auto           semantic = semantic_test::StoresOf(*project.GetStorage());
 
-  EXPECT_EQ(semantic.CountLabelQueries(kDefaultSemanticPhotographyPromptConfigHash),
+  EXPECT_EQ(semantic.labels_.CountLabelQueries(kDefaultSemanticPhotographyPromptConfigHash),
             DefaultSemanticPhotographyLabelQueries().size());
-  EXPECT_EQ(semantic.CountLabelQueries(kDefaultSemanticPhotographyZhPromptConfigHash),
+  EXPECT_EQ(semantic.labels_.CountLabelQueries(kDefaultSemanticPhotographyZhPromptConfigHash),
             DefaultSemanticPhotographyLabelQueries(SemanticLabelLanguage::kChinese).size());
 
   std::string error;
   const auto  queries =
-      semantic.ListLabelQueries(kDefaultSemanticPhotographyPromptConfigHash, &error);
+      semantic.labels_.ListLabelQueries(kDefaultSemanticPhotographyPromptConfigHash, &error);
   ASSERT_EQ(queries.size(), DefaultSemanticPhotographyLabelQueries().size()) << error;
   const auto& default_queries = DefaultSemanticPhotographyLabelQueries();
   const auto  default_portrait =
@@ -417,7 +417,7 @@ TEST_F(SemanticStoreTest, NewProjectSeedsDefaultLabelQueries) {
             queries.end());
 
   const auto zh_queries =
-      semantic.ListLabelQueries(kDefaultSemanticPhotographyZhPromptConfigHash, &error);
+      semantic.labels_.ListLabelQueries(kDefaultSemanticPhotographyZhPromptConfigHash, &error);
   ASSERT_EQ(zh_queries.size(),
             DefaultSemanticPhotographyLabelQueries(SemanticLabelLanguage::kChinese).size())
       << error;
@@ -433,11 +433,11 @@ TEST_F(SemanticStoreTest, NewProjectSeedsDefaultLabelQueries) {
 
 TEST_F(SemanticStoreTest, ActiveModelKeyAndLanguageMetadataAreStoredPerModel) {
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
-  auto&          semantic = project.GetStorage()->GetSemanticStore();
+  auto           semantic = semantic_test::StoresOf(*project.GetStorage());
 
   std::string    error;
   ASSERT_TRUE(
-      semantic.UpsertModel(SemanticModelRecord{.model_key_     = "mobileclip-en",
+      semantic.models_.UpsertModel(SemanticModelRecord{.model_key_     = "mobileclip-en",
                                                .model_id_      = "mobileclip-test",
                                                .revision_      = "en-rev",
                                                .embedding_dim_ = kSemanticEmbeddingDim,
@@ -448,11 +448,11 @@ TEST_F(SemanticStoreTest, ActiveModelKeyAndLanguageMetadataAreStoredPerModel) {
                                                .active_                        = true},
                            &error))
       << error;
-  EXPECT_EQ(semantic.ActiveModelKey(), "mobileclip-en");
-  EXPECT_EQ(semantic.GetModelSupportedTextLanguagesJson("mobileclip-en"), R"(["en"])");
+  EXPECT_EQ(semantic.models_.ActiveModelKey(), "mobileclip-en");
+  EXPECT_EQ(semantic.models_.GetModelSupportedTextLanguagesJson("mobileclip-en"), R"(["en"])");
 
   ASSERT_TRUE(
-      semantic.UpsertModel(SemanticModelRecord{.model_key_     = "multilingual-clip",
+      semantic.models_.UpsertModel(SemanticModelRecord{.model_key_     = "multilingual-clip",
                                                .model_id_      = "multilingual-clip-test",
                                                .revision_      = "multi-rev",
                                                .embedding_dim_ = kSemanticEmbeddingDim,
@@ -463,12 +463,12 @@ TEST_F(SemanticStoreTest, ActiveModelKeyAndLanguageMetadataAreStoredPerModel) {
                                                .active_                        = true},
                            &error))
       << error;
-  EXPECT_EQ(semantic.ActiveModelKey(), "multilingual-clip");
-  EXPECT_EQ(semantic.GetModelSupportedTextLanguagesJson("multilingual-clip"), R"(["en","zh"])");
+  EXPECT_EQ(semantic.models_.ActiveModelKey(), "multilingual-clip");
+  EXPECT_EQ(semantic.models_.GetModelSupportedTextLanguagesJson("multilingual-clip"), R"(["en","zh"])");
 
-  ASSERT_TRUE(semantic.SetActiveModelKey("mobileclip-en", &error)) << error;
-  EXPECT_EQ(semantic.ActiveModelKey(), "mobileclip-en");
-  EXPECT_FALSE(semantic.SetActiveModelKey("missing-model", &error));
+  ASSERT_TRUE(semantic.models_.SetActiveModelKey("mobileclip-en", &error)) << error;
+  EXPECT_EQ(semantic.models_.ActiveModelKey(), "mobileclip-en");
+  EXPECT_FALSE(semantic.models_.SetActiveModelKey("missing-model", &error));
 }
 
 TEST_F(SemanticStoreTest, ExistingSemanticModelWithoutActiveColumnPromotesLatestModel) {
@@ -489,13 +489,13 @@ TEST_F(SemanticStoreTest, ExistingSemanticModelWithoutActiveColumnPromotesLatest
             "TIMESTAMP '2026-01-02 00:00:00');");
 
   Database              db_controller(db_path_);
-  SemanticStore semantic(db_controller);
-  EXPECT_EQ(semantic.ActiveModelKey(), "latest-model");
+  SemanticModelRegistry models(db_controller);
+  EXPECT_EQ(models.ActiveModelKey(), "latest-model");
 }
 
 TEST_F(SemanticStoreTest, PersistsEmbeddingAndLabelTransactionally) {
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
-  auto&          semantic = project.GetStorage()->GetSemanticStore();
+  auto           semantic = semantic_test::StoresOf(*project.GetStorage());
   RegisterTestModel(semantic);
 
   const auto file_id = CreateSyntheticFile(project, L"labeled.raf");
@@ -513,8 +513,8 @@ TEST_F(SemanticStoreTest, PersistsEmbeddingAndLabelTransactionally) {
                                    .label_              = "portrait",
                                    .prompt_config_hash_ = "test-prompts",
                                    .embedding_          = OneHot(5)}};
-  ASSERT_TRUE(semantic.UpsertLabelPrototypes(prototypes, &error)) << error;
-  EXPECT_EQ(semantic.CountLabelPrototypes(kModelKey, "test-prompts"), 2U);
+  ASSERT_TRUE(semantic.labels_.UpsertLabelPrototypes(prototypes, &error)) << error;
+  EXPECT_EQ(semantic.labels_.CountLabelPrototypes(kModelKey, "test-prompts"), 2U);
 
   SemanticImageEmbeddingRecord embedding{
       .file_id_ = file_id, .image_id_ = image_id, .model_key_ = kModelKey, .embedding_ = OneHot(4)};
@@ -523,9 +523,9 @@ TEST_F(SemanticStoreTest, PersistsEmbeddingAndLabelTransactionally) {
                                      .label_     = "landscape",
                                      .score_     = 0.9,
                                      .confident_ = true};
-  EXPECT_FALSE(semantic.UpsertImageEmbeddingWithLabel(embedding, &bad_label, &error));
-  EXPECT_EQ(semantic.CountImageEmbeddingsForFile(file_id, kModelKey), 0U);
-  EXPECT_EQ(semantic.CountImageLabelsForFile(file_id, kModelKey), 0U);
+  EXPECT_FALSE(semantic.embeddings_.UpsertImageEmbeddingWithLabel(embedding, &bad_label, &error));
+  EXPECT_EQ(semantic.embeddings_.CountImageEmbeddingsForFile(file_id, kModelKey), 0U);
+  EXPECT_EQ(semantic.labels_.CountImageLabelsForFile(file_id, kModelKey), 0U);
 
   SemanticImageLabelRecord label{.file_id_         = file_id,
                                  .model_key_       = kModelKey,
@@ -536,11 +536,11 @@ TEST_F(SemanticStoreTest, PersistsEmbeddingAndLabelTransactionally) {
                                  .margin_          = 0.79,
                                  .confident_       = true,
                                  .top_scores_json_ = R"([{"label":"landscape","score":0.91}])"};
-  ASSERT_TRUE(semantic.UpsertImageEmbeddingWithLabel(embedding, &label, &error)) << error;
-  EXPECT_EQ(semantic.CountImageEmbeddingsForFile(file_id, kModelKey), 1U);
-  EXPECT_EQ(semantic.CountImageLabelsForFile(file_id, kModelKey), 1U);
+  ASSERT_TRUE(semantic.embeddings_.UpsertImageEmbeddingWithLabel(embedding, &label, &error)) << error;
+  EXPECT_EQ(semantic.embeddings_.CountImageEmbeddingsForFile(file_id, kModelKey), 1U);
+  EXPECT_EQ(semantic.labels_.CountImageLabelsForFile(file_id, kModelKey), 1U);
 
-  const auto stored_label = semantic.GetImageLabelForFile(file_id, kModelKey, &error);
+  const auto stored_label = semantic.labels_.GetImageLabelForFile(file_id, kModelKey, &error);
   ASSERT_TRUE(stored_label.has_value()) << error;
   EXPECT_EQ(stored_label->label_, "landscape");
   EXPECT_EQ(stored_label->second_label_, "portrait");
@@ -550,7 +550,7 @@ TEST_F(SemanticStoreTest, PersistsEmbeddingAndLabelTransactionally) {
 
 TEST_F(SemanticStoreTest, AssignsLabelInDatabaseTransaction) {
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
-  auto&          semantic = project.GetStorage()->GetSemanticStore();
+  auto           semantic = semantic_test::StoresOf(*project.GetStorage());
   RegisterTestModel(semantic);
 
   const auto file_id = CreateSyntheticFile(project, L"db_labeled.raf");
@@ -580,7 +580,7 @@ TEST_F(SemanticStoreTest, AssignsLabelInDatabaseTransaction) {
                                    .label_              = "product",
                                    .prompt_config_hash_ = "test-prompts",
                                    .embedding_          = OneHot(8)}};
-  ASSERT_TRUE(semantic.UpsertLabelPrototypes(prototypes, &error)) << error;
+  ASSERT_TRUE(semantic.labels_.UpsertLabelPrototypes(prototypes, &error)) << error;
 
   SemanticImageEmbeddingRecord   embedding{.file_id_   = file_id,
                                            .image_id_  = image_id,
@@ -589,9 +589,9 @@ TEST_F(SemanticStoreTest, AssignsLabelInDatabaseTransaction) {
   SemanticLabelAssignmentOptions missing_options;
   missing_options.prompt_config_hash_ = "missing-prompts";
   EXPECT_FALSE(
-      semantic.UpsertImageEmbeddingAndAssignLabel(embedding, missing_options, nullptr, &error));
-  EXPECT_EQ(semantic.CountImageEmbeddingsForFile(file_id, kModelKey), 0U);
-  EXPECT_EQ(semantic.CountImageLabelsForFile(file_id, kModelKey), 0U);
+      semantic.embeddings_.UpsertImageEmbeddingAndAssignLabel(embedding, missing_options, nullptr, &error));
+  EXPECT_EQ(semantic.embeddings_.CountImageEmbeddingsForFile(file_id, kModelKey), 0U);
+  EXPECT_EQ(semantic.labels_.CountImageLabelsForFile(file_id, kModelKey), 0U);
 
   SemanticLabelAssignmentOptions assignment_options;
   assignment_options.prompt_config_hash_          = "test-prompts";
@@ -600,11 +600,11 @@ TEST_F(SemanticStoreTest, AssignsLabelInDatabaseTransaction) {
   assignment_options.top_score_count_             = 8;
 
   SemanticImageLabelRecord assigned_label;
-  ASSERT_TRUE(semantic.UpsertImageEmbeddingAndAssignLabel(embedding, assignment_options,
+  ASSERT_TRUE(semantic.embeddings_.UpsertImageEmbeddingAndAssignLabel(embedding, assignment_options,
                                                           &assigned_label, &error))
       << error;
-  EXPECT_EQ(semantic.CountImageEmbeddingsForFile(file_id, kModelKey), 1U);
-  EXPECT_EQ(semantic.CountImageLabelsForFile(file_id, kModelKey), 1U);
+  EXPECT_EQ(semantic.embeddings_.CountImageEmbeddingsForFile(file_id, kModelKey), 1U);
+  EXPECT_EQ(semantic.labels_.CountImageLabelsForFile(file_id, kModelKey), 1U);
   EXPECT_EQ(assigned_label.label_, "landscape");
   // MixedQuery(4,5) scores [0.95, 0.05, 0, 0, 0]: a cliff after the top match. The elbow
   // keeps only one label, so the 0.05 runner-up is dropped rather than assigned as a
@@ -614,7 +614,7 @@ TEST_F(SemanticStoreTest, AssignsLabelInDatabaseTransaction) {
   EXPECT_NE(assigned_label.top_scores_json_.find("landscape"), std::string::npos);
   EXPECT_EQ(CountSubstring(assigned_label.top_scores_json_, "\"label\""), 1U);
 
-  const auto stored_label = semantic.GetImageLabelForFile(file_id, kModelKey, &error);
+  const auto stored_label = semantic.labels_.GetImageLabelForFile(file_id, kModelKey, &error);
   ASSERT_TRUE(stored_label.has_value()) << error;
   EXPECT_EQ(stored_label->label_, "landscape");
   EXPECT_TRUE(stored_label->second_label_.empty());
@@ -623,7 +623,7 @@ TEST_F(SemanticStoreTest, AssignsLabelInDatabaseTransaction) {
 
 TEST_F(SemanticStoreTest, AssignsElbowTruncatedLabelsByScoreDistribution) {
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
-  auto&          semantic = project.GetStorage()->GetSemanticStore();
+  auto           semantic = semantic_test::StoresOf(*project.GetStorage());
   RegisterTestModel(semantic);
 
   std::vector<SemanticLabelPrototypeRecord> prototypes{
@@ -638,7 +638,7 @@ TEST_F(SemanticStoreTest, AssignsElbowTruncatedLabelsByScoreDistribution) {
       SemanticLabelPrototypeRecord{.model_key_ = kModelKey, .label_ = "product",
                                    .prompt_config_hash_ = "test-prompts", .embedding_ = OneHot(8)}};
   std::string error;
-  ASSERT_TRUE(semantic.UpsertLabelPrototypes(prototypes, &error)) << error;
+  ASSERT_TRUE(semantic.labels_.UpsertLabelPrototypes(prototypes, &error)) << error;
 
   SemanticLabelAssignmentOptions assignment_options;
   assignment_options.prompt_config_hash_ = "test-prompts";
@@ -654,7 +654,7 @@ TEST_F(SemanticStoreTest, AssignsElbowTruncatedLabelsByScoreDistribution) {
                                             .model_key_ = kModelKey,
                                             .embedding_ = ClosePairQuery(4, 5)};
     SemanticImageLabelRecord     assigned;
-    ASSERT_TRUE(semantic.UpsertImageEmbeddingAndAssignLabel(embedding, assignment_options,
+    ASSERT_TRUE(semantic.embeddings_.UpsertImageEmbeddingAndAssignLabel(embedding, assignment_options,
                                                             &assigned, &error))
         << error;
     EXPECT_EQ(assigned.label_, "landscape");
@@ -682,7 +682,7 @@ TEST_F(SemanticStoreTest, AssignsElbowTruncatedLabelsByScoreDistribution) {
         .model_key_ = kModelKey,
         .embedding_ = WeightedQuery({{4, 1.0F}, {5, 0.9F}, {6, 0.8F}})};
     SemanticImageLabelRecord assigned;
-    ASSERT_TRUE(semantic.UpsertImageEmbeddingAndAssignLabel(embedding, assignment_options,
+    ASSERT_TRUE(semantic.embeddings_.UpsertImageEmbeddingAndAssignLabel(embedding, assignment_options,
                                                             &assigned, &error))
         << error;
     EXPECT_EQ(assigned.label_, "landscape");
@@ -695,7 +695,7 @@ TEST_F(SemanticStoreTest, AssignsElbowTruncatedLabelsByScoreDistribution) {
 
 TEST_F(SemanticStoreTest, DeletingFileRemovesSemanticRows) {
   ProjectService project(db_path_, meta_path_, ProjectOpenMode::kCreateNew);
-  auto&          semantic = project.GetStorage()->GetSemanticStore();
+  auto           semantic = semantic_test::StoresOf(*project.GetStorage());
   RegisterTestModel(semantic);
 
   const auto delete_id = CreateSyntheticFile(project, L"delete_me.raf");
@@ -707,16 +707,16 @@ TEST_F(SemanticStoreTest, DeletingFileRemovesSemanticRows) {
     StoreEmbedding(semantic, row.file_id_, row.image_id_,
                    row.file_id_ == delete_id ? OneHot(0) : OneHot(1));
   }
-  EXPECT_EQ(semantic.CountImageEmbeddings(kModelKey), 2U);
+  EXPECT_EQ(semantic.embeddings_.CountImageEmbeddings(kModelKey), 2U);
 
   ASSERT_TRUE(project.GetSleeveService()->DeleteFileEverywhere(delete_id).success_);
 
-  EXPECT_EQ(semantic.CountImageEmbeddingsForFile(delete_id, kModelKey), 0U);
-  EXPECT_EQ(semantic.CountImageEmbeddingsForFile(keep_id, kModelKey), 1U);
+  EXPECT_EQ(semantic.embeddings_.CountImageEmbeddingsForFile(delete_id, kModelKey), 0U);
+  EXPECT_EQ(semantic.embeddings_.CountImageEmbeddingsForFile(keep_id, kModelKey), 1U);
 
   std::string error;
   const auto  results =
-      semantic.SearchImageEmbeddings(0, kModelKey, MixedQuery(0, 1), 0, 10, &error);
+      semantic.search_.SearchImageEmbeddings(0, kModelKey, MixedQuery(0, 1), 0, 10, &error);
   ASSERT_EQ(results.size(), 1U) << error;
   EXPECT_EQ(results.front().file_id_, keep_id);
 }

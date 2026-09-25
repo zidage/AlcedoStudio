@@ -187,9 +187,8 @@ class ProjectSemanticSearchProvider final : public SemanticSearchProvider {
       throw std::runtime_error("Semantic storage service is unavailable.");
     }
 
-    auto&       semantic = storage_->GetSemanticStore();
     std::string error;
-    const auto  active_model = semantic.ActiveModel(&error);
+    const auto  active_model = storage_->GetSemanticModelRegistry().ActiveModel(&error);
     if (!active_model.has_value()) {
       throw std::runtime_error(error.empty() ? "No active semantic model is registered." : error);
     }
@@ -251,8 +250,8 @@ class ProjectSemanticSearchProvider final : public SemanticSearchProvider {
       throw std::runtime_error(*validation);
     }
 
-    const auto ranked = semantic.SearchImageEmbeddings(folder_id, active_model->model_key_,
-                                                       embedding.embedding, offset, limit, &error);
+    const auto ranked = storage_->GetSemanticVectorSearch().SearchImageEmbeddings(
+        folder_id, active_model->model_key_, embedding.embedding, offset, limit, &error);
     if (!error.empty()) {
       throw std::runtime_error(error);
     }

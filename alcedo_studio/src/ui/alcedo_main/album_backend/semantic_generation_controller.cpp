@@ -169,7 +169,7 @@ auto EmbeddingTimeoutForProfile(const SemanticResolvedModelManifest& manifest)
 }
 
 auto ItemsNeedingSemanticGeneration(const std::vector<SemanticGenerationItem>& items,
-                                    SemanticStore&                 semantic,
+                                    const SemanticEmbeddingStore&              embeddings,
                                     const std::string& model_key, bool force_regenerate)
     -> std::vector<SemanticGenerationItem> {
   if (force_regenerate || model_key.empty()) {
@@ -180,8 +180,8 @@ auto ItemsNeedingSemanticGeneration(const std::vector<SemanticGenerationItem>& i
   pending.reserve(items.size());
   constexpr bool require_label = true;
   for (const auto& item : items) {
-    if (!semantic.HasReadyImageEmbedding(item.element_id, item.image_id, model_key,
-                                         require_label)) {
+    if (!embeddings.HasReadyImageEmbedding(item.element_id, item.image_id, model_key,
+                                           require_label)) {
       pending.push_back(item);
     }
   }
@@ -256,7 +256,7 @@ QString SemanticGenerationController::ActiveModelProfileId() const {
   }
   std::string error;
   const auto  model =
-      project->GetStorage()->GetSemanticStore().ActiveModel(&error);
+      project->GetStorage()->GetSemanticModelRegistry().ActiveModel(&error);
   if (!model.has_value()) {
     return {};
   }
@@ -270,7 +270,7 @@ QString SemanticGenerationController::ActiveModelDisplayName() const {
   }
   std::string error;
   const auto  model =
-      project->GetStorage()->GetSemanticStore().ActiveModel(&error);
+      project->GetStorage()->GetSemanticModelRegistry().ActiveModel(&error);
   if (!model.has_value()) {
     return PL_TEXT("No active model").Render();
   }
@@ -347,12 +347,12 @@ void SemanticGenerationController::TryAutoActivateSelectedModel() {
   const auto        label_language = ModelLabelLanguage(*manifest);
   const auto        prompt_hash    = SemanticPromptConfigHashForLanguage(label_language);
 
-  auto&             semantic       = project->GetStorage()->GetSemanticStore();
-  const auto        query_count    = semantic.CountLabelQueries(prompt_hash);
+  auto&             labels         = project->GetStorage()->GetSemanticLabelStore();
+  const auto        query_count    = labels.CountLabelQueries(prompt_hash);
   if (query_count == 0) {
     return;
   }
-  const auto prototype_count = semantic.CountLabelPrototypes(model_key, prompt_hash);
+  const auto prototype_count = labels.CountLabelPrototypes(model_key, prompt_hash);
   if (prototype_count < query_count) {
     return;  // cold -> user must press Activate to generate the label cache
   }
@@ -361,7 +361,7 @@ void SemanticGenerationController::TryAutoActivateSelectedModel() {
   // active flag if the model row isn't registered, so a missing row can't leave the
   // project with no active model. Warm implies a prior Activate registered the row.
   std::string error;
-  if (!semantic.SetActiveModelKey(model_key, &error)) {
+  if (!project->GetStorage()->GetSemanticModelRegistry().SetActiveModelKey(model_key, &error)) {
     return;
   }
   model_key_ = model_key;
@@ -486,11 +486,12 @@ void SemanticGenerationController::ActivateSelectedModel() {
           Qt::QueuedConnection);
     };
 
-    auto&       semantic       = project->GetStorage()->GetSemanticStore();
+    auto&       models         = project->GetStorage()->GetSemanticModelRegistry();
+    auto&       labels         = project->GetStorage()->GetSemanticLabelStore();
     const auto  prompt_hash    = SemanticPromptConfigHashForLanguage(label_language);
-    const bool  already_active = semantic.ActiveModelKey() == model_key;
+    const bool  already_active = models.ActiveModelKey() == model_key;
     std::string error;
-    if (!semantic.UpsertModel(
+    if (!models.UpsertModel(
             SemanticModelRecord{.model_key_     = model_key,
                                 .model_id_      = manifest.model_id,
                                 .revision_      = manifest.revision,
@@ -509,8 +510,8 @@ void SemanticGenerationController::ActivateSelectedModel() {
       return;
     }
 
-    const auto query_count     = semantic.CountLabelQueries(prompt_hash);
-    const auto prototype_count = semantic.CountLabelPrototypes(model_key, prompt_hash);
+    const auto query_count     = labels.CountLabelQueries(prompt_hash);
+    const auto prototype_count = labels.CountLabelPrototypes(model_key, prompt_hash);
     prototype_warm             = query_count > 0 && prototype_count >= query_count;
     if (query_count == 0 || prototype_count < query_count) {
       auto runtime_status = runtime->Status();
@@ -543,7 +544,8 @@ void SemanticGenerationController::ActivateSelectedModel() {
       }
       auto embedder = std::make_shared<AiSidecarRuntimeImageEmbeddingClient>(runtime);
       SemanticGenerationPersistenceOptions persistence;
-      persistence.storage_controller         = &semantic;
+      persistence.label_store                = &labels;
+      persistence.embedding_store            = &project->GetStorage()->GetSemanticEmbeddingStore();
       persistence.model_key                  = model_key;
       persistence.prompt_config_hash         = prompt_hash;
       persistence.label_prototype_batch_size = LabelPrototypeBatchSizeForProfile(manifest);
@@ -556,7 +558,7 @@ void SemanticGenerationController::ActivateSelectedModel() {
       prototype_warm = true;
     }
 
-    if (!semantic.SetActiveModelKey(model_key, &error)) {
+    if (!models.SetActiveModelKey(model_key, &error)) {
       message = error;
       finish();
       return;
@@ -628,7 +630,7 @@ void SemanticGenerationController::RefreshAlbumSummary() {
     album_labeled_count_ = 0;
   } else {
     album_labeled_count_ = static_cast<int>(std::min<size_t>(
-        project->GetStorage()->GetSemanticStore().CountImageLabelsInFolder(
+        project->GetStorage()->GetSemanticLabelStore().CountImageLabelsInFolder(
             0, model_key),
         static_cast<size_t>(std::numeric_limits<int>::max())));
   }
@@ -724,7 +726,7 @@ auto SemanticGenerationController::StoredModelKey() const -> std::string {
   if (!project) {
     return {};
   }
-  return project->GetStorage()->GetSemanticStore().ActiveModelKey();
+  return project->GetStorage()->GetSemanticModelRegistry().ActiveModelKey();
 }
 
 bool SemanticGenerationController::IsFreshProject() const {
@@ -732,7 +734,7 @@ bool SemanticGenerationController::IsFreshProject() const {
   if (!project) {
     return false;
   }
-  return project->GetStorage()->GetSemanticStore().ListModels().empty();
+  return project->GetStorage()->GetSemanticModelRegistry().ListModels().empty();
 }
 
 auto SemanticGenerationController::ActiveModelKey() const -> std::string {
@@ -754,7 +756,7 @@ auto SemanticGenerationController::LabelDisplayText(sl_element_id_t elementId) c
   }
   std::string error;
   const auto  label =
-      project->GetStorage()->GetSemanticStore().GetImageLabelForFile(
+      project->GetStorage()->GetSemanticLabelStore().GetImageLabelForFile(
           elementId, model_key, &error);
   if (!label.has_value()) {
     return {};
@@ -928,11 +930,11 @@ void SemanticGenerationController::ContinueGenerationForItems(bool forceRegenera
     }
   }
 
-  auto&             semantic       = project->GetStorage()->GetSemanticStore();
+  auto&             storage        = *project->GetStorage();
   const std::string model_key      = SemanticModelKeyFromInfo(*runtime_status.model_info);
   const auto        label_language = ModelLabelLanguage(*runtime_status.model_info);
   std::string       error;
-  if (!semantic.UpsertModel(
+  if (!storage.GetSemanticModelRegistry().UpsertModel(
           SemanticModelRecord{
               .model_key_     = model_key,
               .model_id_      = runtime_status.model_info->model_id,
@@ -962,7 +964,8 @@ void SemanticGenerationController::ContinueGenerationForItems(bool forceRegenera
   }
 
   pending_items_ =
-      ItemsNeedingSemanticGeneration(pending_items_, semantic, model_key, forceRegenerate);
+      ItemsNeedingSemanticGeneration(pending_items_, storage.GetSemanticEmbeddingStore(),
+                                     model_key, forceRegenerate);
   model_key_ = model_key;
   total_     = ClampToInt(pending_items_.size());
   embedded_  = 0;
@@ -995,7 +998,8 @@ void SemanticGenerationController::ContinueGenerationForItems(bool forceRegenera
   options.expected_model_info  = runtime_status.model_info;
   options.force_regenerate     = forceRegenerate;
   SemanticGenerationPersistenceOptions persistence;
-  persistence.storage_controller = &semantic;
+  persistence.label_store        = &storage.GetSemanticLabelStore();
+  persistence.embedding_store    = &storage.GetSemanticEmbeddingStore();
   persistence.model_key          = model_key;
   persistence.prompt_config_hash = SemanticPromptConfigHashForLanguage(label_language);
   persistence.label_prototype_batch_size =

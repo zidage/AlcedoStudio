@@ -22,7 +22,7 @@
 #include "sleeve/sleeve_element/sleeve_folder.hpp"
 #include "storage/mapper/duckorm/duckdb_orm.hpp"
 #include "storage/store/ai/ai_store.hpp"
-#include "storage/store/semantic/semantic_store.hpp"
+#include "storage/store/semantic/semantic_embedding_store.hpp"
 #include "type/type.hpp"
 #include "utils/string/convert.hpp"
 

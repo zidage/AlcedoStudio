@@ -460,7 +460,7 @@ auto SleeveFilterService::BuildFolderStats(sl_element_id_t                  pare
   NotifyQueryThreadObserver("BuildFolderStats");
   const auto extra_predicate = CompileFilterPredicate(extra_filter);
 
-  const auto active_model_key = storage_->GetSemanticStore().ActiveModelKey();
+  const auto active_model_key = storage_->GetSemanticModelRegistry().ActiveModelKey();
   const auto storage_stats    = storage_->GetElementStore().BuildFolderStats(
       parent_id, extra_predicate, active_model_key);
 
@@ -516,7 +516,7 @@ auto SleeveFilterService::BuildFuzzySearchWhere(const std::wstring& query,
 
   // Both values are held in memory by their stores, so building the WHERE runs no SQL.
   const auto active_model_key =
-      storage_ ? storage_->GetSemanticStore().ActiveModelKey()
+      storage_ ? storage_->GetSemanticModelRegistry().ActiveModelKey()
                        : std::string{};
   const bool has_ai_fts =
       storage_ && storage_->GetAiStore().HasUnderstandingFtsIndex();
