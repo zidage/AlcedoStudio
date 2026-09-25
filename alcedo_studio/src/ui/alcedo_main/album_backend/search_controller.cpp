@@ -203,8 +203,8 @@ struct SearchApplyResult {
   QString                   error_text;
 };
 
-/// Runs on the search worker: the WHERE build, the thumbnail page with its total (one
-/// statement), and the stats queries.
+/// Runs on the search worker: the WHERE build, then the thumbnail page, its total, and the
+/// stats, all read from one evaluation of the search filter.
 auto RunSearchApplyRequest(const SearchApplyRequest& request) -> SearchApplyResult {
   SearchApplyResult result;
   try {
@@ -215,9 +215,10 @@ auto RunSearchApplyRequest(const SearchApplyRequest& request) -> SearchApplyResu
     if (!result.filter_node.has_value()) {
       return result;
     }
-    result.page = request.filter_service->ListSearchResultPage(
+    auto page_and_stats = request.filter_service->ListSearchResultPageWithStats(
         request.folder_id, result.filter_node, 0, LibraryModule::SearchWindowPageSize());
-    result.stats = request.filter_service->BuildFolderStats(request.folder_id, result.filter_node);
+    result.page  = std::move(page_and_stats.page_);
+    result.stats = std::move(page_and_stats.stats_);
   } catch (const std::exception& e) {
     result.error_text = QString::fromUtf8(e.what());
   } catch (...) {

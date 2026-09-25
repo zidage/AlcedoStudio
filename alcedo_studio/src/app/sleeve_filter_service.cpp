@@ -405,6 +405,24 @@ auto AiUnderstandingFtsClause(const std::wstring& query) -> duckorm::SqlFragment
   return fragment;
 }
 
+auto ToStatsBuckets(const std::vector<StorageStatsBucket>& buckets) -> std::vector<StatsBucket> {
+  std::vector<StatsBucket> out;
+  out.reserve(buckets.size());
+  for (const auto& bucket : buckets) {
+    out.push_back({bucket.label_, bucket.count_});
+  }
+  return out;
+}
+
+auto ToAlbumStatsView(const FolderStatsView& stats) -> AlbumStatsView {
+  return {.total_photo_count_ = stats.total_photo_count_,
+          .date_stats_        = ToStatsBuckets(stats.date_stats_),
+          .camera_stats_      = ToStatsBuckets(stats.camera_stats_),
+          .lens_stats_        = ToStatsBuckets(stats.lens_stats_),
+          .label_stats_       = ToStatsBuckets(stats.label_stats_),
+          .rating_stats_      = ToStatsBuckets(stats.rating_stats_)};
+}
+
 }  // namespace
 
 auto SleeveFilterService::CreateFilterCombo(const FilterNode& root) -> filter_id_t {
@@ -458,41 +476,23 @@ auto SleeveFilterService::BuildFolderStats(sl_element_id_t                  pare
                                            const std::optional<FilterNode>& extra_filter) const
     -> AlbumStatsView {
   NotifyQueryThreadObserver("BuildFolderStats");
-  const auto extra_predicate = CompileFilterPredicate(extra_filter);
+  return ToAlbumStatsView(storage_->GetElementStore().BuildFolderStats(
+      parent_id, CompileFilterPredicate(extra_filter),
+      storage_->GetSemanticModelRegistry().ActiveModelKey()));
+}
 
-  const auto active_model_key = storage_->GetSemanticModelRegistry().ActiveModelKey();
-  const auto storage_stats    = storage_->GetElementStore().BuildFolderStats(
-      parent_id, extra_predicate, active_model_key);
-
-  AlbumStatsView out;
-  out.total_photo_count_ = storage_stats.total_photo_count_;
-
-  out.date_stats_.reserve(storage_stats.date_stats_.size());
-  for (const auto& bucket : storage_stats.date_stats_) {
-    out.date_stats_.push_back({bucket.label_, bucket.count_});
+auto SleeveFilterService::ListSearchResultPageWithStats(sl_element_id_t                  parent_id,
+                                                        const std::optional<FilterNode>& filter,
+                                                        size_t offset, size_t limit) const
+    -> SearchResultPageAndStats {
+  NotifyQueryThreadObserver("ListSearchResultPageWithStats");
+  if (!storage_) {
+    return {};
   }
-
-  out.camera_stats_.reserve(storage_stats.camera_stats_.size());
-  for (const auto& bucket : storage_stats.camera_stats_) {
-    out.camera_stats_.push_back({bucket.label_, bucket.count_});
-  }
-
-  out.lens_stats_.reserve(storage_stats.lens_stats_.size());
-  for (const auto& bucket : storage_stats.lens_stats_) {
-    out.lens_stats_.push_back({bucket.label_, bucket.count_});
-  }
-
-  out.label_stats_.reserve(storage_stats.label_stats_.size());
-  for (const auto& bucket : storage_stats.label_stats_) {
-    out.label_stats_.push_back({bucket.label_, bucket.count_});
-  }
-
-  out.rating_stats_.reserve(storage_stats.rating_stats_.size());
-  for (const auto& bucket : storage_stats.rating_stats_) {
-    out.rating_stats_.push_back({bucket.label_, bucket.count_});
-  }
-
-  return out;
+  auto result = storage_->GetElementStore().ListSearchResultPageWithStats(
+      parent_id, offset, limit, CompileFilterPredicate(filter),
+      storage_->GetSemanticModelRegistry().ActiveModelKey());
+  return {.page_ = std::move(result.page_), .stats_ = ToAlbumStatsView(result.stats_)};
 }
 
 auto SleeveFilterService::BuildFuzzySearchWhere(const std::wstring& query,

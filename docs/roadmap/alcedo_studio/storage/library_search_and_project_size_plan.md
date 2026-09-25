@@ -2,7 +2,7 @@
 
 Date: 2026-09-24
 
-Status: Phases S0, S1, S2, and S3 complete (2026-09-24); S4, S5, S6, and S7 complete (2026-09-25); S8 not started (added 2026-09-25 after the first qualification run); S9 qualification: first measurement recorded, not complete
+Status: Phases S0, S1, S2, and S3 complete (2026-09-24); S4, S5, S6, S7, and S8 complete (2026-09-25); S9 qualification: benchmark re-measured after S8 (step 4), steps 1–3 open
 
 Primary owner: Alcedo Studio storage (Image schema, import, sleeve filter SQL) and library search.
 
@@ -1527,6 +1527,134 @@ Required tests:
 Acceptance: apply ≤ 50 ms on 1000 files and p50 ≤ 100 ms on 20 000 files (release
 benchmark).
 
+##### Phase S8 completion record (2026-09-25)
+
+**Status:** complete. An apply evaluates the search predicate once: one statement copies the
+matching rows into a temporary table, and the page, the total, and every stats bucket are read
+from it. `StatsEngine::RefreshStats` uses the same path. Release apply p50: 9.1–18.1 ms at
+1000 files (target ≤ 50 ms; S7: 44.7–50.4 ms) and 13.1–21.2 ms at 20 000 files (target
+≤ 100 ms; S7: 58.2–67.2 ms).
+
+Branch: `refactor/library-search-s8-single-match-set` (on top of `refactor/semantic-store-orm`,
+which holds Phase S7 and the duckorm store refactors after it). No schema change: the match set
+is a connection-local `TEMP` table that exists only during one read.
+
+**What changed:**
+
+| Step | Change |
+| --- | --- |
+| 1 | `ElementStore::ReadMatchSet` (private, under the connection lock) runs `CREATE OR REPLACE TEMP TABLE SearchMatchSet AS SELECT e.id AS file_id, fi.image_id, i.file_name, i.camera_model, i.lens, i.capture_date, i.rating <scope + filter>`. This is the only statement that evaluates the filter. Then one `GROUPING SETS ((d), (m), (l), (r), ())` statement reads the total and the date, camera, lens, and rating buckets. One statement reads the semantic labels of the active model (`sl.file_id IN (SELECT file_id FROM SearchMatchSet)`). The page is `SELECT ... FROM SearchMatchSet ORDER BY file_id LIMIT/OFFSET`, and its total is the `()` grouping row. `MatchSetTable` (RAII) drops the table at scope exit, also after a failed statement. New `ElementStore::ListSearchResultPageWithStats` and `SleeveFilterService::ListSearchResultPageWithStats` (`SearchResultPageAndStats`); `RunSearchApplyRequest` calls it instead of `ListSearchResultPage` + `BuildFolderStats`. |
+| 2 | `ElementStore::BuildFolderStats` reads through the same `ReadMatchSet` (without the page), so `StatsEngine::RefreshStats` evaluates the merged stats and search filter once. It now runs with or without a filter; the unfiltered case copies the folder scope. |
+| Order | Camera and lens buckets are ordered by count and then by name. Before, equal counts came back in any order. Date and rating orders are unchanged (descending, unknown date last). |
+| Failure | The stats path now throws `std::runtime_error` with DuckDB's message instead of returning empty buckets and a 0 total for a failed statement. Both callers already catch: the search apply reports the error and keeps the grid and stats; `RefreshStats` keeps the previous stats. |
+| Benchmark | `LibrarySearchBenchmarkTest` measures apply as WHERE build + `ListSearchResultPageWithStats`. |
+
+**Primary success call chain (apply):**
+
+```text
+SearchController::ApplyFuzzySearch -> SubmitApplyRequest -> SearchRequestWorker (kApply)
+  -> RunSearchApplyRequest
+     -> SleeveFilterService::BuildFuzzySearchWhere (no SQL, Phase S7)
+     -> SleeveFilterService::ListSearchResultPageWithStats
+        -> ElementStore::ListSearchResultPageWithStats (connection lock)
+           -> ReadMatchSet
+              -> MatchSetTable: CREATE OR REPLACE TEMP TABLE SearchMatchSet AS <scope + filter>
+              -> ReadMatchSetBuckets (GROUPING SETS: total, date, camera, lens, rating)
+              -> ReadMatchSetLabelBuckets (active model only)
+              -> page SELECT from SearchMatchSet
+              -> ~MatchSetTable: DROP TABLE IF EXISTS temp.SearchMatchSet
+  -> UI thread: CommitAppliedSearch -> ApplySearchWindow(page) + ApplyFolderStats(stats)
+Stats refresh: StatsEngine::RefreshStats -> MergeFilterNodes(stats filter, search filter)
+  -> SleeveFilterService::BuildFolderStats -> ElementStore::BuildFolderStats -> ReadMatchSet
+```
+
+**Primary failure call chain:**
+
+```text
+Any match set statement fails -> ExecuteQueryOrThrow / duckorm::execute throws
+  -> ~MatchSetTable drops the table -> exception leaves ElementStore
+  -> apply: RunSearchApplyRequest sets error_text -> CommitAppliedSearch logs it, grid and
+     stats stay as they were
+  -> refresh: StatsEngine::RefreshStats catch (...) keeps the previous stats
+```
+
+**What was proven (executed tests):**
+
+| Plan criterion | Test | Binary | Result |
+| --- | --- | --- | --- |
+| Bucket for bucket equality with the separate stats statements, for search only, stats filter only, and both | `StatsFromMatchSetEqualSeparateStatsQueries` | `LibrarySearchRecallTest` | PASS (12 filters: none, 5 searches, 3 stats filters, 2 merged; both `BuildFolderStats` and the apply read; page rows equal `ListSearchResultPage`) |
+| The apply evaluates the predicate once | `ApplySearchEvaluatesThePredicateOnce` | `LibrarySearchColumnsTest` | PASS |
+| The apply runs one query after the WHERE build | `ApplyFuzzySearchQueriesOnTheWorkerAndCommitsGridAndStats` (updated) | `AlbumBackendSearchWorkerTest` | PASS: the observer sees exactly `BuildFuzzySearchWhere`, `ListSearchResultPageWithStats` |
+| Regression | the 31 S6 targets (ctest `-j 1`) | — | 345/345 PASS (4 disabled by design) |
+| Regression | `SleeveServiceTest` (direct run) | — | 25/25 PASS |
+| Regression | `LibrarySearchRecallTest --gtest_also_run_disabled_tests` | — | 7/7 PASS, including the local Nikon test |
+
+Test-name mapping:
+
+- The plan says "equality with the current `BuildFolderStats`". That function now reads the
+  match set, so the test holds the six statements it ran before this phase, word for word, as
+  the reference (`SeparateStatementStats`). Date, rating, and label buckets are compared as
+  ordered lists. The old statements ordered camera and lens buckets by count only, so equal
+  counts had no fixed order. For those two kinds the test compares the buckets as a map and
+  checks the new order (count descending, then name). The library has ratings 0–3, an unknown
+  camera, lens, and date, and labels of an active and an inactive model.
+- The plan says "the query observer sees one predicate evaluation". The observer only sees
+  service calls, so the test adds a SQL-level count. It registers a volatile DuckDB function
+  `count_predicate_rows(BIGINT)` that counts the rows it is called for, and puts it in front of
+  the `nikkor` search predicate. The rows counted for the apply read equal the rows counted for
+  one `ListSearchResultPage` statement (one evaluation). A stats refresh counts the same.
+  `ListSearchResultPage` + `BuildFolderStats` count twice as many, which shows that the counter
+  sees each evaluation. The observer part checks that the apply is one
+  `ListSearchResultPageWithStats` call.
+
+**Measurements** (`LibrarySearchBenchmarkTest`, p50 of 3 runs per query, ranges over the five
+queries; S7 values in parentheses):
+
+| Library | Build | Preview p50 | Apply p50 | Apply p95 |
+| --- | --- | --- | --- | --- |
+| 1000 files | debug | 10.8–13.0 ms (7.6–8.6) | 13.2–24.0 ms (43.4–52.3) | 13.5–25.9 ms |
+| 1000 files | release | 7.9–9.3 ms (7.7–8.7) | 9.1–18.1 ms (44.7–50.4) | 9.6–19.6 ms |
+| 20 000 files | debug | 12.3–14.0 ms (11.5–12.8) | 13.0–25.9 ms (61.2–70.7) | 13.7–30.5 ms |
+| 20 000 files | release | 11.2–11.9 ms (10.4–11.9) | 13.1–21.2 ms (58.2–67.2) | 13.6–22.5 ms |
+
+Apply cost now grows with the number of matches, not with the six predicate evaluations: a
+miss (`jpg`, `P1000123`) costs about one preview, and `dsc` (493 / 8240 matches) is the
+slowest. Match counts are unchanged (0, 1, 0, 23, 493 and 0, 22, 0, 862, 8240). This phase
+did not change the preview path. Its release p50 is the same as in S7; the higher debug
+preview in this run was not investigated further.
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 8 --target <the 31 S6 targets> SleeveServiceTest LibrarySearchBenchmarkTest
+ctest --test-dir build/debug -R "^(<the 31 targets>)\." -j 1          -> 345/345
+SleeveServiceTest.exe                                                  -> 25/25
+LibrarySearchRecallTest.exe --gtest_also_run_disabled_tests            -> 7/7
+LibrarySearchBenchmarkTest.exe --gtest_also_run_disabled_tests --gtest_filter=*OneThousand*
+ALCEDO_SEARCH_BENCH_REPEAT=3 LibrarySearchBenchmarkTest.exe --gtest_also_run_disabled_tests --gtest_filter=*TwentyThousand*
+# Release: build/release reconfigured with -DALCEDO_BUILD_TESTS=ON, only
+# LibrarySearchBenchmarkTest built and run (same two commands), then set back to OFF.
+```
+
+Full `ctest` suite: not run (agent rule). `alcedo_main` was not linked.
+
+**Checklist / exit condition:** steps 1 and 2 done; both required tests pass; the regression
+targets are green. Acceptance met in the release build: apply ≤ 50 ms at 1000 files (p50
+9.1–18.1 ms, p95 ≤ 19.6 ms) and p50 ≤ 100 ms at 20 000 files (13.1–21.2 ms).
+
+**LOC note:** `element_store.cpp` 758 (+176 / −82), `sleeve_filter_service.cpp` 692
+(+33 / −33), `search_controller.cpp` 824 (+5 / −4). Tests: `library_search_recall_test.cpp`
+837 (+267), `library_search_columns_test.cpp` 859 (+95), `album_backend_search_worker_test.cpp`
+304 (+11 / −1).
+
+**Remaining gaps:**
+
+- Toggling a stats filter still reads the grid page (`LibraryModule::LoadThumbnailWindow`) and
+  the stats (`RefreshStats`) as two evaluations of the merged filter. The plan scoped Phase S8
+  to the search apply and to `RefreshStats`.
+- Release preview p95 at 1000 files is at the 10 ms target, not clearly under it. See the Phase
+  S9 record below.
+
 ### Phase S9 — Qualification
 
 1. Re-import the `demo.alcd` source folders. Record the file size, row counts, and benchmark
@@ -1627,6 +1755,109 @@ ALCEDO_SEARCH_BENCH_REPEAT=3 LibrarySearchBenchmarkTest.exe --gtest_also_run_dis
   files), apply ≤ 50 ms (1000 files). Not met in this run; re-run after Phases S6–S8.
 
 **Remaining gaps:** steps 1–4 after Phases S6–S8.
+
+##### Phase S9 benchmark record after Phases S6–S8 (2026-09-25)
+
+**Status:** step 4 re-measured on the Phase S8 code in the debug and release builds, and
+compared with the Phase S0 baseline and the first S9 measurement. Every latency and memory
+target is met except the 1000-file preview p95, which is at its 10 ms target (8.1–10.5 ms over
+10 runs). Steps 1–3 are still open.
+
+Branch: `refactor/library-search-s8-single-match-set`. Same benchmark tests and libraries as
+Phase S0: preview = `SearchFolderPage` with a 50-row page; apply = WHERE build +
+`ListSearchResultPageWithStats` with a 120-row page (Phase S0 and the first S9 run: count +
+page + `BuildFolderStats`).
+
+The S0 baseline was measured in the debug build only. The first S9 run showed the release build
+gives the same numbers for that code, because both builds load the same release `duckdb.dll`.
+The "× faster" columns therefore divide the S0 value by the current release value.
+
+1000 files, 155 DNG per 1000, p50 of 3 runs:
+
+| Query | Matches S0 → now | Preview S0 | Preview S9 first (release) | Preview now debug | Preview now release | × faster | Apply S0 | Apply S9 first (release) | Apply now debug | Apply now release | × faster |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `jpg` | 0 → 0 | 10.4 s | 23.6 ms | 12.2 ms | 7.9 ms | 1300× | 35.2 s | 64.1 ms | 13.2 ms | 9.1 ms | 3900× |
+| `2026-06-07` | 1 → 1 | 10.9 s | 24.2 ms | 12.9 ms | 9.3 ms | 1200× | 39.5 s | 67.4 ms | 22.3 ms | 18.1 ms | 2200× |
+| `P1000123` | 0 → 0 | 10.5 s | 22.6 ms | 13.0 ms | 8.9 ms | 1200× | 36.3 s | 63.4 ms | 14.7 ms | 10.1 ms | 3600× |
+| `6.7` | 1000 → 23 | 10.3 s | 23.3 ms | 13.0 ms | 8.7 ms | 1200× | 36.4 s | 65.6 ms | 23.6 ms | 13.5 ms | 2700× |
+| `dsc` | 493 → 493 | 0.7 s | 23.4 ms | 10.8 ms | 7.9 ms | 89× | 2.8 s | 62.3 ms | 24.0 ms | 14.2 ms | 197× |
+
+Release p95 (3 runs): preview 9.1–10.3 ms, apply 9.6–19.6 ms. A second release run with
+`ALCEDO_SEARCH_BENCH_REPEAT=10`: preview p50 7.3–8.2 ms, p95 8.1–10.5 ms (`2026-06-07`
+10.5 ms, `jpg` 9.6 ms, the others ≤ 8.6 ms); apply p50 8.9–12.7 ms, p95 9.5–19.7 ms.
+
+20 000 files, 20 DNG per 1000 (S0 and S9 first debug: 1 run; all others: p50 of 3 runs):
+
+| Query | Matches S0 → now | Preview S0 | Preview S9 first (release) | Preview now debug | Preview now release | × faster | Apply S0 | Apply S9 first (release) | Apply now debug | Apply now release | × faster |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `jpg` | 0 → 0 | 34.4 s | 984 ms | 12.3 ms | 11.2 ms | 3100× | 106.7 s | 2321 ms | 13.0 ms | 13.2 ms | 8100× |
+| `2026-06-07` | 22 → 22 | 33.8 s | 977 ms | 14.0 ms | 11.3 ms | 3000× | 116.1 s | 2461 ms | 19.7 ms | 15.3 ms | 7600× |
+| `P1000123` | 0 → 0 | 33.8 s | 1095 ms | 13.0 ms | 11.5 ms | 2900× | 112.9 s | 2536 ms | 14.1 ms | 13.1 ms | 8600× |
+| `6.7` | 20000 → 862 | 34.6 s | 1060 ms | 13.0 ms | 11.9 ms | 2900× | 116.6 s | 2790 ms | 23.1 ms | 18.9 ms | 6200× |
+| `dsc` | 8240 → 8240 | 26.3 s | 1014 ms | 13.1 ms | 11.9 ms | 2200× | 87.4 s | 2467 ms | 25.9 ms | 21.2 ms | 4100× |
+
+Release p95: preview 11.5–12.5 ms, apply 13.6–22.5 ms.
+
+Library build and fixed costs (from the same runs):
+
+| Measurement | S0 | S9 first | Now debug | Now release |
+| --- | --- | --- | --- | --- |
+| Build the 20 000-file library | 404 s | 292–296 s | 48.9 s | 28.7 s |
+| Build the 1000-file library | 4.5 s | — | 2.5 s | 1.5 s |
+| Private memory after the 20 000-file build | — | 16.3 GB (Problem P6) | 143 MiB | 99 MiB |
+| WHERE build (p50 of 20) | — | 14–17 ms (catalog probe on each call) | 0.23 ms | 0.006 ms |
+
+Where the time went, by phase: S3 and S4 removed the JSON and `REPLACE` scan (seconds → tens
+of milliseconds at 1000 files). S6 removed the memory that grew with the square of the file
+count, which made every 20 000-file query cost about 1 s. S7 removed the fixed costs of each
+call (catalog probe, per-row BM25 macro, AI text aggregation). S8 replaced the six predicate
+evaluations of an apply with one.
+
+**Performance targets:**
+
+| Target | Result (release) | State |
+| --- | --- | --- |
+| Preview p95 ≤ 10 ms, 1000 files | 9.1–10.3 ms (3 runs); 8.1–10.5 ms (10 runs) | At the target: 3 of 5 queries are clearly under it, `jpg` and `2026-06-07` land on either side of 10 ms between runs |
+| Preview p50 and p95 ≤ 50 ms, 20 000 files | p50 11.2–11.9 ms, p95 11.5–12.5 ms | Met |
+| Apply ≤ 50 ms, 1000 files, off the UI thread | p50 9.1–18.1 ms, p95 ≤ 19.7 ms; on the search worker since S5 | Met |
+| Apply p50 ≤ 100 ms, 20 000 files | 13.1–21.2 ms | Met |
+| Build a 20 000-file library < 2 GB private memory | 99 MiB | Met |
+| UI thread time per keystroke ≤ 2 ms | 0.12 ms (Phase S5; not measured again here) | Met in S5 |
+| `demo.alcd` after re-import ≤ 25 MB | not measured | Step 1 open |
+
+**Recall** (`LibrarySearchRecallTest.exe --gtest_also_run_disabled_tests`, debug): 7/7 PASS,
+including the local Nikon test (38 imported, 38 `Image` rows, exact `z8` and `dng` sets).
+
+Commands:
+
+```text
+LibrarySearchBenchmarkTest.exe --gtest_also_run_disabled_tests --gtest_filter=*OneThousand*
+ALCEDO_SEARCH_BENCH_REPEAT=3 LibrarySearchBenchmarkTest.exe --gtest_also_run_disabled_tests --gtest_filter=*TwentyThousand*
+ALCEDO_SEARCH_BENCH_REPEAT=10 LibrarySearchBenchmarkTest.exe --gtest_also_run_disabled_tests --gtest_filter=*OneThousand*   (release only)
+LibrarySearchRecallTest.exe --gtest_also_run_disabled_tests
+# Release: build/release reconfigured with -DALCEDO_BUILD_TESTS=ON, only
+# LibrarySearchBenchmarkTest built, then set back to OFF.
+```
+
+The packed project benchmark (`ALCEDO_SEARCH_BENCH_PROJECT`) was not run: `demo.alcd` uses the
+old format (Decision D1), and no project from the re-imported source folders exists yet
+(step 1).
+
+**Checklist / exit condition:**
+
+- [ ] Step 1: re-import the `demo.alcd` source folders and record the file size and row counts
+  (target ≤ 25 MB), then run the packed project benchmark on it.
+- [ ] Step 2: manual search checklist in the app.
+- [ ] Step 3: full ctest suite (only the user starts a full run).
+- [x] Step 4: benchmark (1000 and 20 000 files, debug and release) and recall tests re-run and
+  compared with the targets above. Open item: 1000-file preview p95 is at 10 ms, not clearly
+  under it.
+
+**Remaining gaps:** steps 1–3. For the 1000-file preview p95, the preview is one statement
+on a scan whose p50 is 7–9 ms. The Phase S7 note leaves the choice of an index for substring
+search, or filtering the previous result set while typing, to this phase. These measurements
+leave about 1.5 ms of margin, so the decision needs the re-imported `demo.alcd` numbers
+(step 1).
 
 ## Resolved questions (2026-09-24)
 

@@ -10,15 +10,19 @@
 // the expected set. When a later phase fixes the defect, the test fails and asks for the flag
 // to be cleared, so the table always states the real behavior.
 
+#include <duckdb.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <cstdlib>
 #include <exiv2/exiv2.hpp>
 #include <filesystem>
+#include <format>
 #include <future>
 #include <iostream>
+#include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -29,7 +33,13 @@
 #include "app/sleeve_filter_service.hpp"
 #include "library_search_test_support.hpp"
 #include "sleeve/sleeve_filter/filter_combo.hpp"
+#include "sleeve/sleeve_filter/filter_factory.hpp"
+#include "sleeve/storage.hpp"
+#include "storage/mapper/duckorm/duckdb_orm.hpp"
 #include "storage/store/ai/ai_store.hpp"
+#include "storage/store/semantic/semantic_embedding_store.hpp"
+#include "storage/store/semantic/semantic_model_registry.hpp"
+#include "storage/store/semantic/semantic_records.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "utils/import/import_log.hpp"
 
@@ -466,6 +476,263 @@ TEST_F(LibrarySearchRecallTest, Bm25SemiJoinMatchesTheSameFilesAsThePerRowClause
   EXPECT_EQ(where->raw_sql_->find(L"match_bm25(e.id"), std::wstring::npos);
   EXPECT_EQ(SearchFileNames(filter_service, folder_id, L"lighthouses"),
             (std::set<std::string>{"P2635860.RW2", "P2635861.RW2"}));
+}
+
+// ── Stats from one match set (Phase S8) ──────────────────────────────────────────────────
+
+/// Buckets of one query from the stats statements that ElementStore::BuildFolderStats ran
+/// before Phase S8, one statement for each bucket kind, each evaluating the filter again.
+auto SeparateStatementBuckets(duckdb_connection conn, const std::string& sql,
+                              const duckorm::SqlFragment& binds) -> std::vector<StatsBucket> {
+  std::vector<StatsBucket> buckets;
+  duckdb_result            result;
+  if (duckorm::execute_query(conn, sql, binds, &result) != DuckDBSuccess) {
+    ADD_FAILURE() << sql << ": " << duckdb_result_error(&result);
+    duckdb_destroy_result(&result);
+    return buckets;
+  }
+  for (idx_t row = 0; row < duckdb_row_count(&result); ++row) {
+    StatsBucket bucket;
+    if (!duckdb_value_is_null(&result, 0, row)) {
+      char* label   = duckdb_value_varchar(&result, 0, row);
+      bucket.label_ = label;
+      duckdb_free(label);
+    }
+    bucket.count_ = static_cast<int>(duckdb_value_int64(&result, 1, row));
+    buckets.push_back(std::move(bucket));
+  }
+  duckdb_destroy_result(&result);
+  return buckets;
+}
+
+/// The stats of @p filter computed the way BuildFolderStats did before Phase S8.
+auto SeparateStatementStats(ProjectService& project, sl_element_id_t folder_id,
+                            const std::optional<FilterNode>& filter, const std::string& model_key)
+    -> AlbumStatsView {
+  auto           guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+  auto           lock  = guard.Lock();
+  const auto     scope = BuildScopedFileQuery(folder_id, CompileFilterPredicate(filter));
+  const auto&    from  = scope.from_where_;
+  const auto&    binds = scope.binds_;
+  AlbumStatsView out;
+  const auto     total = SeparateStatementBuckets(
+      guard.conn_, std::format("SELECT 'total', COUNT(*) {}", from), binds);
+  out.total_photo_count_ = total.empty() ? -1 : total.front().count_;
+  out.date_stats_        = SeparateStatementBuckets(
+      guard.conn_,
+      std::format("SELECT CAST(i.capture_date AS VARCHAR) AS d, COUNT(*) AS c {} "
+                                "GROUP BY d ORDER BY d DESC",
+                         from),
+      binds);
+  out.camera_stats_ = SeparateStatementBuckets(
+      guard.conn_,
+      std::format("SELECT COALESCE(NULLIF(i.camera_model, ''), '(unknown)') AS m, COUNT(*) AS c "
+                  "{} GROUP BY m ORDER BY c DESC",
+                  from),
+      binds);
+  out.lens_stats_ = SeparateStatementBuckets(
+      guard.conn_,
+      std::format("SELECT COALESCE(NULLIF(i.lens, ''), '(unknown)') AS l, COUNT(*) AS c {} "
+                  "GROUP BY l ORDER BY c DESC",
+                  from),
+      binds);
+  if (!model_key.empty()) {
+    auto label_binds = binds;
+    label_binds.binds_.push_back(duckorm::BindValue{model_key});
+    out.label_stats_ = SeparateStatementBuckets(
+        guard.conn_,
+        std::format("WITH scoped AS (SELECT e.id AS file_id {}) "
+                    "SELECT sl.label AS l, COUNT(DISTINCT scoped.file_id) AS c FROM scoped "
+                    "JOIN SemanticImageLabel sl ON sl.file_id = scoped.file_id "
+                    "WHERE sl.model_key = ? AND sl.label IS NOT NULL AND sl.label <> '' "
+                    "GROUP BY sl.label ORDER BY c DESC, sl.label",
+                    from),
+        label_binds);
+  }
+  out.rating_stats_ = SeparateStatementBuckets(
+      guard.conn_,
+      std::format("SELECT CAST(i.rating AS VARCHAR) AS r, COUNT(*) AS c {} "
+                  "GROUP BY r ORDER BY r DESC",
+                  from),
+      binds);
+  return out;
+}
+
+auto BucketText(const std::vector<StatsBucket>& buckets) -> std::string {
+  std::string text;
+  for (const auto& bucket : buckets) {
+    text += std::format("{}={} ", bucket.label_, bucket.count_);
+  }
+  return text;
+}
+
+auto BucketMap(const std::vector<StatsBucket>& buckets) -> std::map<std::string, int> {
+  std::map<std::string, int> counts;
+  for (const auto& bucket : buckets) {
+    counts[bucket.label_] = bucket.count_;
+  }
+  return counts;
+}
+
+/// Cameras and lenses: the separate statements ordered by count only, so equal counts came in
+/// any order. The match set orders them by count, then by name; compare the buckets as a map
+/// and check that order.
+void ExpectSameCountOrderedBuckets(const std::vector<StatsBucket>& match_set,
+                                   const std::vector<StatsBucket>& separate,
+                                   const std::string&              context) {
+  EXPECT_EQ(BucketMap(match_set), BucketMap(separate))
+      << context << " match set: " << BucketText(match_set)
+      << " separate: " << BucketText(separate);
+  EXPECT_EQ(match_set.size(), separate.size()) << context;
+  for (size_t i = 1; i < match_set.size(); ++i) {
+    const auto& before = match_set[i - 1];
+    const auto& after  = match_set[i];
+    EXPECT_TRUE(before.count_ > after.count_ ||
+                (before.count_ == after.count_ && before.label_ < after.label_))
+        << context << " order: " << BucketText(match_set);
+  }
+}
+
+void ExpectSameStats(const AlbumStatsView& match_set, const AlbumStatsView& separate,
+                     const std::string& context) {
+  EXPECT_EQ(match_set.total_photo_count_, separate.total_photo_count_) << context;
+  EXPECT_EQ(BucketText(match_set.date_stats_), BucketText(separate.date_stats_))
+      << context << " date";
+  EXPECT_EQ(BucketText(match_set.rating_stats_), BucketText(separate.rating_stats_))
+      << context << " rating";
+  EXPECT_EQ(BucketText(match_set.label_stats_), BucketText(separate.label_stats_))
+      << context << " label";
+  ExpectSameCountOrderedBuckets(match_set.camera_stats_, separate.camera_stats_,
+                                context + " camera");
+  ExpectSameCountOrderedBuckets(match_set.lens_stats_, separate.lens_stats_, context + " lens");
+}
+
+void RegisterSemanticModel(Storage& storage, const std::string& model_key, bool active) {
+  std::string error;
+  ASSERT_TRUE(storage.GetSemanticModelRegistry().UpsertModel(
+      SemanticModelRecord{.model_key_     = model_key,
+                          .model_id_      = "mobileclip-test",
+                          .revision_      = "test-rev",
+                          .embedding_dim_ = kSemanticEmbeddingDim,
+                          .image_size_    = 256,
+                          .active_        = active},
+      &error))
+      << error;
+}
+
+void StoreSemanticLabel(Storage& storage, const SearchResultRow& file, size_t embedding_index,
+                        const std::string& model_key, const std::string& label) {
+  std::vector<float> embedding(kSemanticEmbeddingDim, 0.0F);
+  embedding.at(embedding_index) = 1.0F;
+  SemanticImageLabelRecord record{
+      .file_id_ = file.file_id_, .model_key_ = model_key, .label_ = label, .score_ = 0.9};
+  std::string error;
+  ASSERT_TRUE(storage.GetSemanticEmbeddingStore().UpsertImageEmbeddingWithLabel(
+      SemanticImageEmbeddingRecord{.file_id_   = file.file_id_,
+                                   .image_id_  = file.image_id_,
+                                   .model_key_ = model_key,
+                                   .embedding_ = std::move(embedding)},
+      &record, &error))
+      << error;
+}
+
+// Phase S8: the stats read from the match set table equal, bucket for bucket, the stats of the
+// separate statements they replaced, for a search only, a stats filter only, and both.
+TEST_F(LibrarySearchRecallTest, StatsFromMatchSetEqualSeparateStatsQueries) {
+  ProjectService          project(db_path_, meta_path_);
+  SyntheticLibraryBuilder builder(project);
+  auto                    specs = RecallLibrarySpecs();
+  // Ratings, an unknown camera, an unknown lens, and an unknown date, so every bucket kind
+  // has more than one bucket and the unknown buckets are covered.
+  for (size_t i = 0; i < specs.size(); ++i) {
+    specs[i].rating_ = static_cast<int>(i % 4);
+  }
+  specs[5].model_     = "";
+  specs[6].lens_      = "";
+  specs[7].date_time_ = "";
+  const auto file_ids = builder.AddFiles(specs);
+  ASSERT_EQ(file_ids.size(), specs.size());
+
+  // Semantic labels of the active model, and one label of an inactive model.
+  auto&             storage   = *project.GetStorage();
+  const std::string model_key = "match-set-test-model";
+  RegisterSemanticModel(storage, "other-model", false);
+  RegisterSemanticModel(storage, model_key, true);
+  ASSERT_EQ(storage.GetSemanticModelRegistry().ActiveModelKey(), model_key);
+  const auto files = storage.GetElementStore().ListSearchResultRows(file_ids);
+  ASSERT_EQ(files.size(), file_ids.size());
+  StoreSemanticLabel(storage, files[0], 0, model_key, "landscape");
+  StoreSemanticLabel(storage, files[1], 1, model_key, "landscape");
+  StoreSemanticLabel(storage, files[2], 2, model_key, "portrait");
+  StoreSemanticLabel(storage, files[3], 3, model_key, "landscape");
+  StoreSemanticLabel(storage, files[4], 4, "other-model", "portrait");
+
+  SleeveFilterService filter_service(project.GetStorage());
+  const auto          folder_id = LibraryRootFolderId(project);
+
+  std::vector<std::pair<std::string, std::optional<FilterNode>>> filters;
+  filters.emplace_back("no filter", std::nullopt);
+  for (const auto* query : {L"nikon", L"2026-06-07", L"dng", L"shangrila", L"jpg"}) {
+    filters.emplace_back("search " + conv::ToBytes(query),
+                         filter_service.BuildFuzzySearchWhere(query, kAllSearchFields));
+  }
+  const auto rating_one   = sleeve_filter::BuildRatingBucketFilter(L"1");
+  const auto nikon_camera = sleeve_filter::BuildCameraModelBucketFilter(L"NIKON Z 7");
+  filters.emplace_back("stats filter rating 1", rating_one);
+  filters.emplace_back("stats filter camera", nikon_camera);
+  filters.emplace_back("stats filter unknown date", sleeve_filter::BuildCaptureDateUnknownFilter());
+  filters.emplace_back("search nikon and rating 1",
+                       MergeFilterNodes(rating_one, filter_service.BuildFuzzySearchWhere(
+                                                        L"nikon", kAllSearchFields)));
+  filters.emplace_back("search 2026 and camera",
+                       MergeFilterNodes(nikon_camera, filter_service.BuildFuzzySearchWhere(
+                                                          L"2026", kAllSearchFields)));
+
+  for (const auto& [context, filter] : filters) {
+    const auto separate = SeparateStatementStats(project, folder_id, filter, model_key);
+    ExpectSameStats(filter_service.BuildFolderStats(folder_id, filter), separate, context);
+
+    const auto page_and_stats =
+        filter_service.ListSearchResultPageWithStats(folder_id, filter, 0, 1000);
+    ExpectSameStats(page_and_stats.stats_, separate, context + " (apply)");
+    EXPECT_EQ(page_and_stats.page_.total_, static_cast<size_t>(separate.total_photo_count_))
+        << context;
+    const auto page = filter_service.ListSearchResultPage(folder_id, filter, 0, 1000);
+    ASSERT_EQ(page_and_stats.page_.rows_.size(), page.rows_.size()) << context;
+    for (size_t i = 0; i < page.rows_.size(); ++i) {
+      const auto& actual   = page_and_stats.page_.rows_[i];
+      const auto& expected = page.rows_[i];
+      EXPECT_EQ(actual.file_id_, expected.file_id_) << context;
+      EXPECT_EQ(actual.image_id_, expected.image_id_) << context;
+      EXPECT_EQ(actual.file_name_, expected.file_name_) << context;
+      EXPECT_EQ(actual.camera_model_, expected.camera_model_) << context;
+      EXPECT_EQ(actual.lens_, expected.lens_) << context;
+      EXPECT_EQ(actual.capture_date_, expected.capture_date_) << context;
+      EXPECT_EQ(actual.rating_, expected.rating_) << context;
+    }
+  }
+
+  // The unfiltered library has two buckets or more of every kind, and the unknown buckets.
+  const auto all = filter_service.BuildFolderStats(folder_id, std::nullopt);
+  EXPECT_EQ(all.total_photo_count_, static_cast<int>(specs.size()));
+  EXPECT_EQ(BucketMap(all.label_stats_),
+            (std::map<std::string, int>{{"landscape", 3}, {"portrait", 1}}));
+  EXPECT_EQ(BucketMap(all.camera_stats_).count("(unknown)"), 1u);
+  EXPECT_EQ(BucketMap(all.lens_stats_).count("(unknown)"), 1u);
+  ASSERT_FALSE(all.date_stats_.empty());
+  EXPECT_EQ(all.date_stats_.back().label_, "") << "the unknown date bucket is last";
+  EXPECT_EQ(BucketMap(all.rating_stats_).size(), 4u);
+
+  // A page of the apply read leaves out the other rows; the total is the whole match set.
+  const auto second_page =
+      filter_service.ListSearchResultPageWithStats(folder_id, std::nullopt, 2, 3);
+  EXPECT_EQ(second_page.page_.total_, specs.size());
+  ASSERT_EQ(second_page.page_.rows_.size(), 3u);
+  EXPECT_EQ(second_page.page_.rows_.front().file_id_, file_ids[2]);
+  const auto past_end =
+      filter_service.ListSearchResultPageWithStats(folder_id, std::nullopt, 50, 3);
+  EXPECT_TRUE(past_end.page_.rows_.empty());
+  EXPECT_EQ(past_end.page_.total_, specs.size());
 }
 
 // ── Local Nikon folder (disabled by default) ──────────────────────────────────────────────

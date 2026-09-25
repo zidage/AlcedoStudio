@@ -9,8 +9,10 @@
 // Two measured paths, both through SleeveFilterService (the service the UI calls). Since
 // Phase S5 both run on the search worker, and the page statement also returns the total:
 //   preview = SearchFolderPage(page of 50)                       (one search dialog keystroke)
-//   apply   = BuildFuzzySearchWhere + ListSearchResultPage(page of 120)
-//             + BuildFolderStats(search filter)                  (grid page + stats panel)
+//   apply   = BuildFuzzySearchWhere + ListSearchResultPageWithStats(page of 120)
+//                                                                (grid page + stats panel)
+// Since Phase S8 the apply read evaluates the search predicate once for the page, the total,
+// and the stats.
 //
 // Environment variables:
 //   ALCEDO_SEARCH_BENCH_REPEAT   runs per query (default 3)
@@ -148,11 +150,11 @@ auto MeasureSearchLatency(const SleeveFilterService& service, sl_element_id_t fo
 
       start                 = Clock::now();
       const auto where      = service.BuildFuzzySearchWhere(query, kAllSearchFields);
-      const auto apply_page = service.ListSearchResultPage(folder_id, where, 0, kApplyPageSize);
-      const auto stats      = service.BuildFolderStats(folder_id, where);
+      const auto applied =
+          service.ListSearchResultPageWithStats(folder_id, where, 0, kApplyPageSize);
       latency.apply_ms_.push_back(ElapsedMs(start));
-      EXPECT_EQ(apply_page.total_, latency.match_count_) << conv::ToBytes(query);
-      EXPECT_EQ(static_cast<size_t>(stats.total_photo_count_), latency.match_count_)
+      EXPECT_EQ(applied.page_.total_, latency.match_count_) << conv::ToBytes(query);
+      EXPECT_EQ(static_cast<size_t>(applied.stats_.total_photo_count_), latency.match_count_)
           << conv::ToBytes(query);
     }
     results.push_back(std::move(latency));

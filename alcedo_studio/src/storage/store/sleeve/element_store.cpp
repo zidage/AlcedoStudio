@@ -61,34 +61,7 @@ auto BuildScopedFileQuery(sl_element_id_t                            folder_id,
 
 namespace {
 
-auto RunGroupByQuery(duckdb_connection conn, const std::string& sql,
-                     const duckorm::SqlFragment& binds) -> std::vector<StorageStatsBucket> {
-  std::vector<StorageStatsBucket> rows;
-  duckdb_result                   result;
-  if (duckorm::execute_query(conn, sql, binds, &result) != DuckDBSuccess) {
-    duckdb_destroy_result(&result);
-    return rows;
-  }
-
-  const auto row_count = duckdb_row_count(&result);
-  rows.reserve(static_cast<size_t>(row_count));
-  for (idx_t r = 0; r < row_count; ++r) {
-    char*              label_raw = duckdb_value_varchar(&result, 0, r);
-    StorageStatsBucket row;
-    if (label_raw) {
-      row.label_ = label_raw;
-      duckdb_free(label_raw);
-    }
-    row.count_ = static_cast<int>(duckdb_value_int64(&result, 1, r));
-    rows.push_back(std::move(row));
-  }
-
-  duckdb_destroy_result(&result);
-  return rows;
-}
-
-/// Count of a stats or listing COUNT query. A failed query reads as 0, the same as a failed
-/// bucket query in RunGroupByQuery, so the stats panel shows empty values instead of failing.
+/// Count of a listing COUNT query. A failed query reads as 0.
 auto RunScalarInt64(duckdb_connection conn, const std::string& sql,
                     const duckorm::SqlFragment& binds) -> int64_t {
   try {
@@ -128,6 +101,133 @@ auto ReadSearchResultRow(duckdb_result* result, idx_t row) -> SearchResultRow {
   out.capture_date_ = ReadVarchar(result, 5, row);
   out.rating_       = static_cast<int>(duckdb_value_int32(result, 6, row));
   return out;
+}
+
+/// Run a query and keep its result, or throw std::runtime_error with DuckDB's message.
+void ExecuteQueryOrThrow(duckdb_connection conn, const std::string& sql,
+                         const duckorm::SqlFragment& binds, duckdb_result* result) {
+  if (duckorm::execute_query(conn, sql, binds, result) == DuckDBSuccess) {
+    return;
+  }
+  const char* error   = duckdb_result_error(result);
+  std::string message = error ? error : "unknown DuckDB error";
+  duckdb_destroy_result(result);
+  throw std::runtime_error(message);
+}
+
+// Temporary table with the rows of one match set: the files that match a filter, with the
+// columns that the stats buckets and the search result rows read. It is a copy because the
+// page, the total, and every bucket must come from one evaluation of the filter; a query on
+// the live tables evaluates it again for each statement (Phase S8). Only the seven read
+// columns are copied. The table is read-only, never written back, and exists on the
+// ElementStore connection only while ElementStore::ReadMatchSet runs under the connection
+// lock, so no write can change the rows between the reads; MatchSetTable drops it when the
+// read ends.
+constexpr const char* kMatchSetTable = "SearchMatchSet";
+
+/// Owns the match set table for one read and drops it at scope exit, also after a failed
+/// statement, so the matched rows do not stay in memory between searches.
+class MatchSetTable {
+ public:
+  MatchSetTable(duckdb_connection conn, const ScopedFileQuery& scope) : conn_(conn) {
+    duckorm::execute(conn_, duckorm::SqlFragment{
+                                std::format("CREATE OR REPLACE TEMP TABLE {} AS SELECT e.id AS "
+                                            "file_id, fi.image_id, i.file_name, i.camera_model, "
+                                            "i.lens, i.capture_date, i.rating {}",
+                                            kMatchSetTable, scope.from_where_),
+                                scope.binds_.binds_});
+  }
+  MatchSetTable(const MatchSetTable&)            = delete;
+  MatchSetTable& operator=(const MatchSetTable&) = delete;
+  ~MatchSetTable() {
+    duckdb_result result;
+    // A failed drop leaves the table until the next CREATE OR REPLACE; nothing else reads it.
+    duckdb_query(conn_, std::format("DROP TABLE IF EXISTS temp.{}", kMatchSetTable).c_str(),
+                 &result);
+    duckdb_destroy_result(&result);
+  }
+
+ private:
+  duckdb_connection conn_;
+};
+
+// GROUPING(d, m, l, r) of each grouping set in ReadMatchSetBuckets: the bit of a column is 1
+// when the set does not group by it (first argument is the highest bit).
+constexpr int64_t kDateGroup   = 0b0111;
+constexpr int64_t kCameraGroup = 0b1011;
+constexpr int64_t kLensGroup   = 0b1101;
+constexpr int64_t kRatingGroup = 0b1110;
+constexpr int64_t kTotalGroup  = 0b1111;
+
+/// Read the total and the date, camera, lens, and rating buckets of the match set in one
+/// GROUPING SETS statement. Orders: dates and ratings descending (unknown date last), cameras
+/// and lenses by count descending, then by name.
+void              ReadMatchSetBuckets(duckdb_connection conn, FolderStatsView& out) {
+  const auto sql = std::format(
+      "SELECT g, label, c FROM ("
+                   "SELECT GROUPING(d, m, l, r) AS g, d, r, COALESCE(d, m, l, r) AS label, COUNT(*) AS c "
+                   "FROM (SELECT CAST(capture_date AS VARCHAR) AS d, "
+                   "COALESCE(NULLIF(camera_model, ''), '(unknown)') AS m, "
+                   "COALESCE(NULLIF(lens, ''), '(unknown)') AS l, CAST(rating AS VARCHAR) AS r FROM {}) "
+                   "GROUP BY GROUPING SETS ((d), (m), (l), (r), ())) "
+                   "ORDER BY g, CASE WHEN g = {} THEN d END DESC NULLS LAST, "
+                   "CASE WHEN g = {} THEN r END DESC NULLS LAST, c DESC, label",
+      kMatchSetTable, kDateGroup, kRatingGroup);
+  duckdb_result result;
+  ExecuteQueryOrThrow(conn, sql, {}, &result);
+
+  const auto row_count = duckdb_row_count(&result);
+  for (idx_t row = 0; row < row_count; ++row) {
+    const auto group = duckdb_value_int64(&result, 0, row);
+    const auto count = static_cast<int>(duckdb_value_int64(&result, 2, row));
+    if (group == kTotalGroup) {
+      out.total_photo_count_ = count;
+      continue;
+    }
+    StorageStatsBucket bucket{.label_ = ReadVarchar(&result, 1, row), .count_ = count};
+    switch (group) {
+      case kDateGroup:
+        out.date_stats_.push_back(std::move(bucket));
+        break;
+      case kCameraGroup:
+        out.camera_stats_.push_back(std::move(bucket));
+        break;
+      case kLensGroup:
+        out.lens_stats_.push_back(std::move(bucket));
+        break;
+      case kRatingGroup:
+        out.rating_stats_.push_back(std::move(bucket));
+        break;
+      default:
+        break;
+    }
+  }
+  duckdb_destroy_result(&result);
+}
+
+/// Semantic label buckets of the match set for the active model: files for each label, by
+/// count descending, then by label.
+auto ReadMatchSetLabelBuckets(duckdb_connection conn, const std::string& active_semantic_model_key)
+    -> std::vector<StorageStatsBucket> {
+  const auto sql = std::format(
+      "SELECT sl.label, COUNT(DISTINCT sl.file_id) AS c FROM SemanticImageLabel sl "
+      "WHERE sl.model_key = ? AND sl.label IS NOT NULL AND sl.label <> '' "
+      "AND sl.file_id IN (SELECT file_id FROM {}) "
+      "GROUP BY sl.label ORDER BY c DESC, sl.label",
+      kMatchSetTable);
+  duckdb_result result;
+  ExecuteQueryOrThrow(conn, sql,
+                      duckorm::SqlFragment{"", {duckorm::BindValue{active_semantic_model_key}}},
+                      &result);
+  std::vector<StorageStatsBucket> buckets;
+  const auto                      row_count = duckdb_row_count(&result);
+  buckets.reserve(static_cast<size_t>(row_count));
+  for (idx_t row = 0; row < row_count; ++row) {
+    buckets.push_back({.label_ = ReadVarchar(&result, 0, row),
+                       .count_ = static_cast<int>(duckdb_value_int64(&result, 1, row))});
+  }
+  duckdb_destroy_result(&result);
+  return buckets;
 }
 
 void DeleteSemanticAndAiRowsForFiles(duckdb_connection                conn,
@@ -421,64 +521,58 @@ auto ElementStore::GetElementIdsInFolderByFilter(const std::shared_ptr<FilterCom
   return ListFilteredFileIds(folder_id, where);
 }
 
-auto ElementStore::BuildFolderStats(sl_element_id_t                            folder_id,
-                                    const std::optional<duckorm::SqlFragment>& extra_filter,
-                                    const std::string& active_semantic_model_key)
+auto ElementStore::ReadMatchSet(sl_element_id_t                            folder_id,
+                                const std::optional<duckorm::SqlFragment>& extra_filter,
+                                const std::string& active_semantic_model_key,
+                                SearchResultPage* page, size_t offset, size_t limit) const
     -> FolderStatsView {
-  auto            db_lock = guard_.Lock();
-  FolderStatsView out;
+  duckdb_connection   conn = guard_.conn_;
+  // The only statement that evaluates the filter; every read below uses its rows.
+  const MatchSetTable match_set(conn, BuildScopedFileQuery(folder_id, extra_filter));
 
-  const auto      base_query = BuildScopedFileQuery(folder_id, extra_filter);
-  const auto&     base_join  = base_query.from_where_;
-  const auto&     binds      = base_query.binds_;
-
-  out.total_photo_count_     = static_cast<int>(
-      RunScalarInt64(guard_.conn_, std::format("SELECT COUNT(*) {}", base_join), binds));
-
-  out.date_stats_ = RunGroupByQuery(guard_.conn_,
-                                    std::format("SELECT CAST(i.capture_date AS VARCHAR) AS d, "
-                                                "COUNT(*) AS c {} "
-                                                "GROUP BY d ORDER BY d DESC",
-                                                base_join),
-                                    binds);
-
-  out.camera_stats_ =
-      RunGroupByQuery(guard_.conn_,
-                      std::format("SELECT COALESCE(NULLIF(i.camera_model, ''), '(unknown)') "
-                                  "AS m, COUNT(*) AS c {} "
-                                  "GROUP BY m ORDER BY c DESC",
-                                  base_join),
-                      binds);
-
-  out.lens_stats_ = RunGroupByQuery(guard_.conn_,
-                                    std::format("SELECT COALESCE(NULLIF(i.lens, ''), '(unknown)') "
-                                                "AS l, COUNT(*) AS c {} "
-                                                "GROUP BY l ORDER BY c DESC",
-                                                base_join),
-                                    binds);
-
+  FolderStatsView     out;
+  ReadMatchSetBuckets(conn, out);
   if (!active_semantic_model_key.empty()) {
-    duckorm::SqlFragment label_binds = binds;
-    label_binds.binds_.push_back(duckorm::BindValue{active_semantic_model_key});
-    out.label_stats_ = RunGroupByQuery(
-        guard_.conn_,
-        std::format("WITH scoped AS (SELECT e.id AS file_id {}) "
-                    "SELECT sl.label AS l, COUNT(DISTINCT scoped.file_id) AS c "
-                    "FROM scoped "
-                    "JOIN SemanticImageLabel sl ON sl.file_id = scoped.file_id "
-                    "WHERE sl.model_key = ? AND sl.label IS NOT NULL AND sl.label <> '' "
-                    "GROUP BY sl.label ORDER BY c DESC, sl.label",
-                    base_join),
-        label_binds);
+    out.label_stats_ = ReadMatchSetLabelBuckets(conn, active_semantic_model_key);
   }
 
-  out.rating_stats_ =
-      RunGroupByQuery(guard_.conn_,
-                      std::format("SELECT CAST(i.rating AS VARCHAR) AS r, COUNT(*) AS c {} "
-                                  "GROUP BY r ORDER BY r DESC",
-                                  base_join),
-                      binds);
+  if (page != nullptr) {
+    auto sql = std::format(
+        "SELECT file_id, image_id, file_name, camera_model, lens, "
+        "CAST(capture_date AS VARCHAR), rating FROM {} ORDER BY file_id",
+        kMatchSetTable);
+    if (limit > 0) {
+      sql += std::format(" LIMIT {} OFFSET {}", limit, offset);
+    }
+    duckdb_result result;
+    ExecuteQueryOrThrow(conn, sql, {}, &result);
+    const auto row_count = duckdb_row_count(&result);
+    page->rows_.reserve(static_cast<size_t>(row_count));
+    for (idx_t row = 0; row < row_count; ++row) {
+      page->rows_.push_back(ReadSearchResultRow(&result, row));
+    }
+    duckdb_destroy_result(&result);
+    page->total_ = static_cast<size_t>(out.total_photo_count_);
+  }
+  return out;
+}
 
+auto ElementStore::BuildFolderStats(sl_element_id_t                            folder_id,
+                                    const std::optional<duckorm::SqlFragment>& extra_filter,
+                                    const std::string& active_semantic_model_key) const
+    -> FolderStatsView {
+  auto db_lock = guard_.Lock();
+  return ReadMatchSet(folder_id, extra_filter, active_semantic_model_key, nullptr, 0, 0);
+}
+
+auto ElementStore::ListSearchResultPageWithStats(
+    sl_element_id_t folder_id, size_t offset, size_t limit,
+    const std::optional<duckorm::SqlFragment>& extra_filter,
+    const std::string& active_semantic_model_key) const -> SearchResultPageWithStats {
+  auto                      db_lock = guard_.Lock();
+  SearchResultPageWithStats out;
+  out.stats_ =
+      ReadMatchSet(folder_id, extra_filter, active_semantic_model_key, &out.page_, offset, limit);
   return out;
 }
 
