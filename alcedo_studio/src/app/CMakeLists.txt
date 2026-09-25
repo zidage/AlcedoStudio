@@ -92,6 +92,7 @@ def_library(SleeveFilterService
     SOURCES
         "${ALCEDO_APP_ROOT}/sleeve_filter_service.cpp"
         "${ALCEDO_APP_ROOT}/search_query_classifier.cpp"
+        "${ALCEDO_APP_ROOT}/search_query_parser.cpp"
     PUBLIC_DEPS SleeveElement Storage SleeveFilter StrConv
 )
 

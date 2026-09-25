@@ -22,11 +22,11 @@ namespace alcedo {
 /// search to one contributing field group so the search-settings drawer can
 /// scope results. Bits are combinable; `kAllSearchFields` reproduces the
 /// pre-mask behavior (every field contributes — the default).
-///   - `Filename`:      element name + Image `file_search_text` (file name and
-///                      parent folder name).
+///   - `Filename`:      Image `file_search_text` (file name and parent folder
+///                      name) + file kind terms on `file_ext`.
 ///   - `Exif`:          Image `exif_search_text` (make, model, lens, lens make,
-///                      date text) + ISO / focal length / aperture columns + date
-///                      matching on `capture_date`.
+///                      date text) + capture parameter terms on ISO / focal
+///                      length / aperture + date terms on `capture_date`.
 ///   - `AiDescription`: AI understanding `caption_search_text` (caption + scene).
 ///   - `AiTags`:        AI understanding `tags_search_text` + the local CLIP
 ///                      `SemanticImageLabel` taxonomy (AI-derived labels).
@@ -122,7 +122,11 @@ class SleeveFilterService {
   auto BuildFolderStats(sl_element_id_t                  parent_id,
                         const std::optional<FilterNode>& extra_filter = std::nullopt) const
       -> AlbumStatsView;
-  /// Build a filter tree for a fuzzy-search query. The returned node owns
+  /// Build a filter tree for a fuzzy-search query. SearchQueryParser splits the
+  /// query into typed terms (date, file kind, capture parameter, text); every
+  /// term must match. A typed term matches its column or its folded text in
+  /// the enabled search text columns; a text term matches only the text
+  /// columns (and the CLIP labels under AiTags). The returned node owns
   /// compiler output only (literals escaped by duckorm expr). Returns
   /// std::nullopt for an empty query, and a FALSE node when no field is
   /// selected (match nothing, distinct from "no filter").

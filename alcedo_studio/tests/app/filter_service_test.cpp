@@ -1434,7 +1434,8 @@ TEST_F(FilterServiceTests, StatsBarAndSearchMergeUnderOneCompiledPredicate) {
       project, SyntheticFileSpec{.file_name_    = L"merge_a.dng",
                                  .image_path_   = std::filesystem::path{L"D:/merge/a.dng"},
                                  .camera_model_ = "Nikon D850",
-                                 .lens_         = "NIKKOR 24mm"});
+                                 .lens_         = "NIKKOR 24mm",
+                                 .focal_        = 24.0f});
   const auto d850_50 = CreateSyntheticFile(
       project, SyntheticFileSpec{.file_name_    = L"merge_b.dng",
                                  .image_path_   = std::filesystem::path{L"D:/merge/b.dng"},
@@ -1454,7 +1455,7 @@ TEST_F(FilterServiceTests, StatsBarAndSearchMergeUnderOneCompiledPredicate) {
   const auto          search_node = filter_service.BuildFuzzySearchWhere(L"50mm");
   ASSERT_TRUE(search_node.has_value());
 
-  // Search alone: two files carry "50mm" in the lens field.
+  // Search alone: two files have a 50 mm focal length and "50mm" in the lens field.
   const auto search_where = CompileFilterPredicate(search_node);
   ASSERT_TRUE(search_where.has_value());
   auto search_rows = project.GetStorage()->GetElementStore().ListFilesInFolderPage(

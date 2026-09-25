@@ -64,6 +64,35 @@ auto FoldSearchText(std::wstring_view text) -> std::wstring {
   return out;
 }
 
+auto FoldSearchWords(std::wstring_view text) -> std::wstring {
+  std::wstring out;
+  out.reserve(text.size());
+  bool pending_space = false;
+  for (const auto ch : text) {
+    if (IsSearchSeparator(ch)) {
+      pending_space = !out.empty();
+      continue;
+    }
+    if (pending_space) {
+      out.push_back(L' ');
+      pending_space = false;
+    }
+    out.push_back(static_cast<wchar_t>(std::towlower(static_cast<std::wint_t>(ch))));
+  }
+  return out;
+}
+
+auto FoldSearchWordsUtf8(std::string_view text) -> std::string {
+  if (text.empty()) {
+    return {};
+  }
+  try {
+    return conv::ToBytes(FoldSearchWords(conv::FromBytes(std::string(text))));
+  } catch (...) {
+    return {};
+  }
+}
+
 auto FoldSearchTextUtf8(std::string_view text) -> std::string {
   if (text.empty()) {
     return {};

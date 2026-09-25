@@ -254,6 +254,13 @@ target_link_libraries(SearchQueryClassifierTest SleeveFilterService GTest::gtest
 gtest_discover_tests(SearchQueryClassifierTest TEST_PREFIX "SearchQueryClassifierTest.")
 alcedo_register_test_target(SearchQueryClassifierTest app)
 
+add_executable(SearchQueryParserTest ${ALCEDO_TEST_ROOT}/app/search_query_parser_test.cpp)
+target_include_directories(SearchQueryParserTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(SearchQueryParserTest SleeveFilterService GTest::gtest_main)
+gtest_discover_tests(SearchQueryParserTest TEST_PREFIX "SearchQueryParserTest."
+  PROPERTIES LABELS "ci_core_flow")
+alcedo_register_test_target(SearchQueryParserTest app ci_core)
+
 add_executable(PipelineMapperTest ${ALCEDO_TEST_ROOT}/app/pipeline_service_test.cpp)
 target_include_directories(PipelineMapperTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(PipelineMapperTest
