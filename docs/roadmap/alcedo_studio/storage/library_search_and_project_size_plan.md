@@ -2,7 +2,7 @@
 
 Date: 2026-09-24
 
-Status: Phases S0, S1, S2, and S3 complete (2026-09-24); S4 and S5 complete (2026-09-25); S6 not started
+Status: Phases S0, S1, S2, and S3 complete (2026-09-24); S4 and S5 complete (2026-09-25); S6–S8 not started (added 2026-09-25 after the first qualification run); S9 qualification: first measurement recorded, not complete
 
 Primary owner: Alcedo Studio storage (Image schema, import, sleeve filter SQL) and library search.
 
@@ -120,6 +120,22 @@ The same investigation found two related import risks:
   finishes. An import of more than 1024 files can evict a good Image before `SyncImports`
   writes it. The result is a `FileImage` row that points at a missing Image.
 
+### P6 — Library writes grow memory with the square of the file count
+
+Found by the first qualification run (2026-09-25). Building a 20 000-file library through the
+production image pool and sleeve services left 16.3 GB of private memory, most of it in the
+page file, and every later query paid for it. The sleeve write adds more memory per batch as
+the folder grows. Details and the per-batch numbers are in
+[Phase S6](#phase-s6--library-writes-use-linear-memory).
+
+### P7 — Each search pays fixed costs before its scan
+
+Found in the same run. Each preview spends 15 ms on a catalog scan to learn whether the AI FTS
+index exists, runs the AI BM25 macro for every library row, and aggregates the AI text table
+on every query. Each apply evaluates the search predicate once for the page and six more times
+for the stats. See [Phase S7](#phase-s7--preview-query-without-fixed-costs) and
+[Phase S8](#phase-s8--apply-and-stats-from-one-match-set).
+
 ## Current behavior: DNG color profile flow
 
 - The profile is read **only at import**:
@@ -207,8 +223,10 @@ add a runtime read before the document reaches the renderer.
 | Measurement | Target |
 | --- | --- |
 | Preview SQL (page + total), 1k-image library | p95 ≤ 10 ms |
-| Preview SQL, synthetic 20k-image library | p95 ≤ 50 ms |
+| Preview SQL, synthetic 20k-image library | p50 and p95 ≤ 50 ms |
 | `ApplyFuzzySearch` (page + stats), 1k library | ≤ 50 ms total, off the UI thread |
+| `ApplyFuzzySearch` (page + stats), synthetic 20k library | p50 ≤ 100 ms, off the UI thread |
+| Building or importing a 20k-file library | < 2 GB private memory; memory per batch does not grow with the library |
 | UI thread time for each keystroke in the search dialog | ≤ 2 ms (no SQL) |
 | `demo.alcd` library after re-import | ≤ 25 MB |
 
@@ -255,7 +273,7 @@ result is recorded.
 
 **Status:** complete — test-only change; no production code changed.
 
-Branch: `refactor/library-search-s0-baseline` (base of the S1–S6 PR stack).
+Branch: `refactor/library-search-s0-baseline` (base of the library search PR stack).
 
 Files added:
 
@@ -407,7 +425,7 @@ and no non-RAW file is in the library.
 
 **Status:** complete — import accepts RAW content only, a failed import writes no row, and the
 image pool keeps each unwritten Image until it is synced. The `demo.alcd` re-import in the
-acceptance line is a manual check and was not run (it belongs to the Phase S6 qualification).
+acceptance line is a manual check and was not run (it belongs to the Phase S9 qualification).
 
 Branch: `feature/library-search-s1-raw-only-import` (on top of
 `refactor/library-search-s0-baseline`).
@@ -484,7 +502,7 @@ Full `ctest` suite: not run (agent rule). `alcedo_main` was not linked; `AlbumBa
 compiles `import_export.cpp`, builds.
 
 **Checklist / exit condition:** steps 1–6 done. The acceptance line (`demo.alcd` re-import) was
-not run; it needs the user's source folders and is part of Phase S6.
+not run; it needs the user's source folders and is part of Phase S9.
 
 **LOC note:** new `import_raw_only_test.cpp` 319 lines, `tests/support/non_raw_import_files.hpp`
 95 lines. `metadata_extractor.cpp` is 1662 lines (1705 before; it was over the 1000-line limit
@@ -544,7 +562,7 @@ Acceptance:
 **Status:** complete — project tables store a DNG profile fingerprint only; the pipeline
 service binds the profile tables from the source file before a loaded document goes live.
 The `demo.alcd` size check (≤ 25 MB after re-import) was not run: it needs the user's source
-folders and belongs to the Phase S6 qualification.
+folders and belongs to the Phase S9 qualification.
 
 Branch: `feature/library-search-s2-runtime-dng-profile` (on top of
 `feature/library-search-s1-raw-only-import`, PR 194).
@@ -656,7 +674,7 @@ with `ALCEDO_ENABLE_BRUSH_MASK` (off here); its version literals were updated bu
 
 **Checklist / exit condition:** steps 1–10 done. Acceptance: no persisted JSON column holds
 profile tables (proven on the CI DNG import); the DNG render check is pixel-identical within 1e-6 on CUDA and OpenCL; the
-`demo.alcd` ≤ 25 MB check was not run (Phase S6, needs the source folders).
+`demo.alcd` ≤ 25 MB check was not run (Phase S9, needs the source folders).
 
 **LOC note:** `pipeline_service.cpp` 1092 → 1122 (it was over the 1000-line limit before this
 phase; the source-profile lookup went to the new `source_dng_profile_binding.cpp`, 71 lines,
@@ -668,7 +686,7 @@ before S2; not split).
 **Remaining gaps:**
 
 - `demo.alcd` re-import size (≤ 25 MB) is not measured; it needs the user's source folders
-  (Phase S6). The per-row sizes above are for one CI DNG.
+  (Phase S9). The per-row sizes above are for one CI DNG.
 - The source-changed warning is written for each bind while the stored fingerprint differs; the
   stored fingerprint changes only when the document is saved dirty. It is not rate-limited.
 - `SourceImagePath` reads the Element and Image rows (the Image row parse includes the metadata
@@ -797,7 +815,7 @@ rows and the compiled `jpg` predicate (all columns and the AI join). They measur
 cost, not the app path. The app path cannot run with release test targets (`build/release`
 has `ALCEDO_BUILD_TESTS=OFF`), so the debug numbers are the only measurement of the app path.
 `demo.alcd` is a 0.9.0 project and does not open after the S2 cutover, so the packed-project
-benchmark was not run (Phase S6 re-import).
+benchmark was not run (Phase S9 re-import).
 
 Commands:
 
@@ -1139,13 +1157,221 @@ sync preview/submit code are deleted). New: `search_request_worker.hpp` 80,
   behavior before S5.
 - The UI-thread commit (row maps for 24 rows, QML apply) was not timed separately.
 
-### Phase S6 — Qualification
+### Phase S6 — Library writes use linear memory
+
+Goal: building or importing a large library keeps memory proportional to the number of files,
+so later measurements and user sessions do not run from the page file.
+
+Evidence (2026-09-25, `LibrarySearchBenchmarkTest` with temporary instrumentation, debug):
+
+- The 20 000-file benchmark process reached 16.3 GB private memory (6.5 GB working set). The
+  memory stayed allocated after the `ProjectService` was destroyed and a new one opened the
+  same database.
+- In that state every query was slow, also queries that read no library data: `SELECT 1`
+  0.6 ms (1000 files: 0.08 ms), the `duckdb_functions()` probe 600–1060 ms (1000 files:
+  15 ms). The DuckDB catalog was the same size at 1000 and 20 000 files (2731 functions,
+  29 tables), and DuckDB reported 5–40 MB of its own memory.
+- The same 20 000 rows imported into a new database (DuckDB CLI v1.1.3; the app bundles
+  v1.2.1) run the full `jpg` predicate with a 50-row page and `COUNT(*) OVER ()` in 17 ms.
+- Private memory after each 500-file batch of `SyntheticLibraryBuilder` (4000 files): the
+  image pool sync adds a constant ~25 MB per batch; the sleeve write
+  (`SleeveServiceImpl::Write` → `Sync`) adds 57, 69, 85, 100, 121, 136, 152, 170 MB. Each
+  batch adds about 16 MB more than the one before, so the total grows with the square of the
+  file count.
+- Suspect: each `Sync` writes the modified library root folder through
+  `ElementStore::UpdateElements`, which rewrites the folder's full content list, so batch k
+  writes about 500·k content rows. The retained memory owner (C++ objects, DuckDB undo data,
+  or the allocator) is not identified yet.
+
+1. Split the per-batch measurement of the sleeve write into the filesystem operation,
+   `AddElements`, `UpdateElements`, and `GarbageCollect`, and identify the owner of the
+   retained memory. Record the result in the completion record.
+2. Write folder content changes incrementally: the folder records the child ids added and
+   removed since the last sync, and `UpdateElements` inserts and deletes only those
+   `FolderContent` rows, in the same transaction as the element rows.
+3. Release what the sync allocates. Destroying a `ProjectService` must return the process to
+   its memory level before the project was opened (within a stated tolerance).
+4. Check the image pool share (~50 KB per image kept after sync with a 1024-entry pool) and
+   fix it if the pool keeps synced images beyond its capacity.
+
+Required tests:
+
+- `FolderSyncWritesOnlyAddedAndRemovedContentRows`: one file added to a folder with N
+  children writes one `FolderContent` row; removal deletes one; the rows read back after
+  reopen match the folder.
+- `LibraryBuildMemoryGrowsLinearly`: building 4000 files in 500-file batches, the private
+  memory added by the last batch is at most 1.5× the first batch.
+- `ProjectCloseReleasesLibraryBuildMemory`: private memory after the project is destroyed is
+  within the stated tolerance of the level before it was opened.
+
+Acceptance: a 20 000-file library build stays below 2 GB private memory; `SELECT 1` and the
+catalog probe cost the same at 1000 and 20 000 files; the 20 000-file benchmark is re-run and
+recorded.
+
+### Phase S7 — Preview query without fixed costs
+
+Goal: a search dialog preview costs one scan of the library and nothing per call on top.
+
+Evidence (2026-09-25, 1000 files, per preview): `HasUnderstandingFtsIndex` 15 ms (it scans
+`duckdb_functions()` on a new connection on every `BuildFuzzySearchWhere`), the page with its
+total 8 ms, `ActiveModelKey` 0.5 ms. At 20 000 rows in a new database the `match_bm25` OR
+clause doubles the page cost (17 ms with it, 7 ms without).
+
+1. The AI FTS index state is owned by `AiStore`: it is set when the index is created or
+   rebuilt (`RefreshAiUnderstandingFtsBestEffort`, AI upserts that rebuild it) and read
+   without SQL. The active semantic model key is owned by `SemanticStore` in the same way and
+   changes only through model activation. `BuildFuzzySearchWhere` then runs no query.
+2. Metadata reads on the search path use the store's connection instead of a new
+   `GetConnectionGuard` connection for each call.
+3. The AI BM25 alternative is a semi-join on the set of matching documents
+   (`e.id IN (SELECT file_id FROM (SELECT file_id, match_bm25(file_id, ?) AS score FROM
+   AiImageFtsDocument) WHERE score IS NOT NULL)`), not a macro call for each library row.
+4. The AI search text is one row for each file, written when an AI understanding is upserted
+   or removed. The scope query joins that table only when an AI field bit is on, instead of
+   aggregating `AiImageUnderstanding` with `string_agg` on every query.
+
+Required tests:
+
+- `FuzzySearchWhereRunsNoCatalogQuery`: building the WHERE runs no SQL (query observer and
+  a statement count on the store connection), and it still reflects an FTS rebuild and a
+  model activation made after the first build.
+- `Bm25SemiJoinMatchesTheSameFilesAsThePerRowClause`: same result set on the recall library
+  with AI rows.
+- `AiSearchTextRowFollowsUpsertAndRemove`: the per-file AI text row is written, replaced,
+  and deleted with the understanding rows.
+- The Phase S0/S4 recall table and `LibrarySearchColumnsTest` stay green unchanged.
+
+Acceptance: preview p95 ≤ 10 ms on 1000 files and p50 ≤ 50 ms on 20 000 files (release
+benchmark, after Phase S6).
+
+Not part of this phase, with the reason: an index for substring search (n-gram or inverted)
+and filtering the previous result set while the user types. The measured scan at 20 000 rows
+in a clean database is 7–17 ms; Phase S9 decides with its measurements whether either is
+needed.
+
+### Phase S8 — Apply and stats from one match set
+
+Goal: applying a search evaluates the search predicate once, not once for each statement.
+
+Evidence (2026-09-25, 1000 files): `BuildFolderStats` takes 41 ms for six statements (total,
+date, camera, lens, label, rating), and each statement evaluates the full predicate again.
+Apply is WHERE + page + stats = 62–67 ms (release).
+
+1. The apply job materializes the matching file ids once (a temporary table owned by the
+   worker connection, or a `MATERIALIZED` CTE) and computes the grid page, the total, and all
+   stats buckets from it (or one `GROUPING SETS` pass).
+2. `StatsEngine::RefreshStats` with an active search filter uses the same path.
+
+Required tests:
+
+- `StatsFromMatchSetEqualSeparateStatsQueries`: bucket for bucket equality with the current
+  `BuildFolderStats` on the recall library, for search only, stats filter only, and both.
+- `ApplySearchEvaluatesThePredicateOnce`: the query observer sees one predicate evaluation
+  for an apply.
+
+Acceptance: apply ≤ 50 ms on 1000 files and p50 ≤ 100 ms on 20 000 files (release
+benchmark).
+
+### Phase S9 — Qualification
 
 1. Re-import the `demo.alcd` source folders. Record the file size, row counts, and benchmark
    numbers in the completion record.
 2. Run the manual search checklist: date forms, kinds, parameters, file names, AI fields on and
    off, the natural-language route, stats panel counts, and thumbnail grid scroll.
 3. Run the full ctest suite and list any failure that is also present on a clean `main`.
+4. Re-run the Phase S0 benchmark (1000 and 20 000 files, release and debug) and the recall
+   tests, and compare with the performance targets.
+
+##### Phase S9 first measurement record (2026-09-25)
+
+Recorded as the Phase S6 completion record before the plan added Phases S6–S8 (then
+numbered S6 — Qualification). It is the "before" measurement for Phases S6–S8.
+
+**Status:** measurement only — the Phase S0 benchmark and recall tests ran again on the S5 code, in
+the debug build and, for the first time, in the release build. The 1000-file library meets
+neither the 10 ms preview target nor the 50 ms apply target, and the 20 000-file library is
+about 20× over its 50 ms preview target. Steps 1–3 are not done (see the checklist). A later
+investigation on the same day found that the 20 000-file numbers come mostly from the process
+memory (Problem P6), not from the search SQL; Phases S6–S8 address the causes.
+
+Branch: `refactor/library-search-s6-qualification` (on top of
+`refactor/library-search-s5-search-worker`). No code change; this record only.
+
+**Benchmark** (`LibrarySearchBenchmarkTest`, same tests and libraries as Phase S0; preview =
+`SearchFolderPage` with a 50-row page, apply = WHERE + `ListSearchResultPage` with a 120-row
+page + `BuildFolderStats`):
+
+1000 files, 155 DNG per 1000, p50 (3 runs):
+
+| Query | Matches S0 → S9 | Preview S0 | Preview S9 debug | Preview S9 release | Apply S0 | Apply S9 debug | Apply S9 release |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `jpg` | 0 → 0 | 10.4 s | 23.0 ms | 23.6 ms | 35.2 s | 66.0 ms | 64.1 ms |
+| `2026-06-07` | 1 → 1 | 10.9 s | 32.3 ms | 24.2 ms | 39.5 s | 86.8 ms | 67.4 ms |
+| `P1000123` | 0 → 0 | 10.5 s | 36.2 ms | 22.6 ms | 36.3 s | 90.5 ms | 63.4 ms |
+| `6.7` | 1000 → 23 | 10.3 s | 33.1 ms | 23.3 ms | 36.4 s | 84.2 ms | 65.6 ms |
+| `dsc` | 493 → 493 | 0.7 s | 35.3 ms | 23.4 ms | 2.8 s | 93.4 ms | 62.3 ms |
+
+Release p95: preview 24.0–26.4 ms, apply 65.1–70.0 ms.
+
+20 000 files, 20 DNG per 1000, p50 (S0 and S9 debug: 1 run; S9 release: 3 runs):
+
+| Query | Matches S0 → S9 | Preview S0 | Preview S9 debug | Preview S9 release | Apply S0 | Apply S9 debug | Apply S9 release |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `jpg` | 0 → 0 | 34.4 s | 869 ms | 984 ms | 106.7 s | 2518 ms | 2321 ms |
+| `2026-06-07` | 22 → 22 | 33.8 s | 982 ms | 977 ms | 116.1 s | 2349 ms | 2461 ms |
+| `P1000123` | 0 → 0 | 33.8 s | 1048 ms | 1095 ms | 112.9 s | 2449 ms | 2536 ms |
+| `6.7` | 20000 → 862 | 34.6 s | 954 ms | 1060 ms | 116.6 s | 2521 ms | 2790 ms |
+| `dsc` | 8240 → 8240 | 26.3 s | 841 ms | 1014 ms | 87.4 s | 2342 ms | 2467 ms |
+
+Release p95: preview 992–1278 ms, apply 2404–2853 ms. The 20 000-file library took 292–296 s
+to build (S0: 404 s).
+
+Findings:
+
+- The release build gives the same numbers as the debug build. Both builds load the same
+  release `duckdb.dll` (29 423 240 bytes), so the time is spent inside DuckDB.
+- The S3 release DuckDB CLI measurement of the same kind of predicate predicted about 10 ms
+  (1000 files) and about 46 ms (20 000 files) for a preview. The app path takes about 23 ms
+  and about 1000 ms. The raw scan does not explain the gap; the app query path adds the cost.
+- The 1000-file preview is 23 ms for every query (0 to 493 matches), which points to a fixed
+  cost for each search call.
+- Since Phase S5 these queries run on the search worker. The UI thread spends 0.12 ms for each
+  keystroke request, so the UI stays responsive, but the results arrive late.
+
+**Recall** (`LibrarySearchRecallTest.exe --gtest_also_run_disabled_tests`, debug): 5/5 PASS,
+including `DISABLED_NikonFolderImportsRawOnlyAndSearchFindsFileNames` (8.5 s, local): 38
+imported and 38 `Image` rows (S0: 45 with orphans), exact `z8` (4 files) and `dng` (3 files)
+sets. `6.7` returns 23 of 1000 synthetic files (S0: all 1000).
+
+**Packed project** (`DISABLED_ReportsSearchLatencyForPackedProject` with `demo.alcd`, 329 MB):
+FAILED to open, as Decision D1 intends: "Incompatible project format: packed project metadata
+version is not supported. Older project packages are not migrated." The row needs a new
+project from the re-imported source folders (step 1).
+
+Commands:
+
+```text
+LibrarySearchBenchmarkTest.exe --gtest_also_run_disabled_tests --gtest_filter=*OneThousand*
+ALCEDO_SEARCH_BENCH_REPEAT=1 LibrarySearchBenchmarkTest.exe --gtest_also_run_disabled_tests --gtest_filter=*TwentyThousand*
+ALCEDO_SEARCH_BENCH_PROJECT=<demo.alcd> LibrarySearchBenchmarkTest.exe --gtest_also_run_disabled_tests --gtest_filter=*PackedProject*
+LibrarySearchRecallTest.exe --gtest_also_run_disabled_tests
+# Release (build/release reconfigured with -DALCEDO_BUILD_TESTS=ON, only this target built,
+# then set back to OFF):
+cmd /c scripts\msvc_env.cmd --build --preset win_release --parallel 4 --target LibrarySearchBenchmarkTest
+LibrarySearchBenchmarkTest.exe --gtest_also_run_disabled_tests --gtest_filter=*OneThousand*
+ALCEDO_SEARCH_BENCH_REPEAT=3 LibrarySearchBenchmarkTest.exe --gtest_also_run_disabled_tests --gtest_filter=*TwentyThousand*
+```
+
+**Checklist / exit condition:**
+
+- [ ] Step 1: re-import the `demo.alcd` source folders and record the file size and row counts
+  (target ≤ 25 MB).
+- [ ] Step 2: manual search checklist in the app.
+- [ ] Step 3: full ctest suite (only the user starts a full run).
+- [ ] Step 4 / performance targets: preview p95 ≤ 10 ms (1000 files) and ≤ 50 ms (20 000
+  files), apply ≤ 50 ms (1000 files). Not met in this run; re-run after Phases S6–S8.
+
+**Remaining gaps:** steps 1–4 after Phases S6–S8.
 
 ## Resolved questions (2026-09-24)
 
