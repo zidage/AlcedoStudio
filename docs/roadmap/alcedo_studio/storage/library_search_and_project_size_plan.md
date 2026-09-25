@@ -2,7 +2,7 @@
 
 Date: 2026-09-24
 
-Status: Phases S0, S1, S2, and S3 complete (2026-09-24); S4 and S5 complete (2026-09-25); S6–S8 not started (added 2026-09-25 after the first qualification run); S9 qualification: first measurement recorded, not complete
+Status: Phases S0, S1, S2, and S3 complete (2026-09-24); S4, S5, and S6 complete (2026-09-25); S7–S8 not started (added 2026-09-25 after the first qualification run); S9 qualification: first measurement recorded, not complete
 
 Primary owner: Alcedo Studio storage (Image schema, import, sleeve filter SQL) and library search.
 
@@ -1207,6 +1207,146 @@ Required tests:
 Acceptance: a 20 000-file library build stays below 2 GB private memory; `SELECT 1` and the
 catalog probe cost the same at 1000 and 20 000 files; the 20 000-file benchmark is re-run and
 recorded.
+
+##### Phase S6 completion record (2026-09-25)
+
+**Status:** complete. The retained memory came from one bug: `duckorm::PreparedStatement`
+never freed the result of an INSERT, UPDATE, or DELETE statement. Each leaked result kept
+about 30–70 KB and a reference to the DuckDB client context. The full `FolderContent` rewrite
+in each sync multiplied the number of leaked statements, which made the growth quadratic.
+Both are fixed. A 20 000-file library build now uses 150 MiB private memory (before: 16.3 GB).
+
+Branch: `refactor/library-search-s6-linear-memory` (on top of
+`refactor/library-search-s6-qualification`). No schema change.
+
+**Step 1: per-step measurement and the owner of the retained memory**
+(`LibraryBuildMemoryTest.DISABLED_ReportsPrivateBytesOfEachSleeveSyncStep`, debug, private MiB
+added by each step of a 500-file batch; the pool step writes Image rows without metadata; the
+filesystem and GC steps add 0.0–0.2 MiB in both runs):
+
+| Batch | Before: pool | Before: `AddElements` | Before: `UpdateElements` | After: pool | After: `AddElements` | After: `UpdateElements` |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 25.9 | 59.0 | 0.0 | 8.4 | 8.0 | 0.0 |
+| 2 | 26.1 | 30.7 | 35.4 | 3.9 | 0.3 | 1.0 |
+| 4 | 20.1 | 31.7 | 69.1 | −0.8 | 2.8 | 0.9 |
+| 8 | 19.2 | 31.3 | 139.6 | −3.0 | 1.5 | 1.3 |
+
+- `AddElements` kept ~31 MB per batch for 1000 single-row INSERTs (element + file binding).
+  `UpdateElements` kept ~17 MB more in each batch than in the one before: batch k re-inserted
+  all 500·k root content rows. DuckDB's own `duckdb_memory()` stayed at 6–13 MB, so the memory
+  was outside the buffer manager.
+- Owner: `PreparedStatement::RecycleResources` called `duckdb_destroy_result` only when
+  `result_.deprecated_columns` was set. DuckDB sets that field only after a deprecated value
+  accessor runs. The SELECT decoders run one; the DML paths (`insert`, `insert_or_replace`,
+  `update`, `remove`, `run_prepared`) do not. So the `MaterializedQueryResult` behind
+  `internal_data` leaked for every DML statement. It holds the client context, so the memory
+  outlived the `ProjectService`.
+
+**What changed:**
+
+| Step | Change |
+| --- | --- |
+| 1 | `duckdb_types.cpp`: `RecycleResources` always calls `duckdb_destroy_result`. The call accepts the zeroed result of a statement that never ran, and it zeroes the result after freeing it. |
+| 2 | `SleeveFolder` records `content_added_since_sync_` and `content_removed_since_sync_`; an add and a remove of the same id cancel. `AddElementToMap(change_sync=true)`, `RemoveNameFromMap`, `RemoveElementById`, `UpdateElementMap` (copy-on-write id replacement), and `Clear` record changes. Loading children from `FolderContent` (`change_sync=false`) does not. `ElementStore::UpdateElementRows` deletes the removed rows and inserts the added rows with two statements in the sync transaction (`FolderMapper::RemoveFolderContents`, `InsertFolderContents` with `ON CONFLICT DO NOTHING`). `InsertElementRows` writes a new folder's full list with one statement. `MarkContentSynced` runs after the commit, so a rolled-back sync keeps the pending changes. |
+| 2 (fix) | `SleeveFolder::UpdateElementMap` replaced the id in a copy of the child list (`auto` instead of `auto&`), so a copy-on-write child kept its old id in `ListElements()`. The recorded changes depend on that list, so this is fixed. |
+| 3 | Covered by the step 1 fix: closing the project returns the build's memory (test below). |
+| 4 | Checked: the pool does not keep the memory. The ~25 MB per batch was the leaked results of the Image INSERTs. After the fix, the pool step adds memory only while the 1024-entry pool fills (batches 1–2), then ≈ 0. No pool change. |
+| Benchmark | `LibrarySearchBenchmarkTest` reports private memory, `SELECT 1`, and the AI FTS catalog probe after the build. The new `process_memory_test_support.hpp` reads the Windows `PrivateUsage` value. |
+
+**Primary success call chain (library write):**
+
+```text
+SleeveServiceImpl::Write(op) -> op(FileSystem)
+  -> SleeveFolder::AddElementToMap / RemoveElementById -> RecordContentAdded / RecordContentRemoved
+     (folder MODIFIED)
+  -> SleeveServiceImpl::Sync -> ElementStore::AddElements (new rows; a new folder's list in one INSERT)
+  -> ElementStore::UpdateElements -> BEGIN -> UpdateElementRows
+     -> FolderMapper::RemoveFolderContents(removed ids) + InsertFolderContents(added ids) -> COMMIT
+  -> MarkFolderContentsSynced -> sync flags SYNCED
+each statement -> ~PreparedStatement -> duckdb_destroy_prepare + duckdb_destroy_result
+```
+
+**Primary failure call chain:**
+
+```text
+A FolderContent statement throws inside UpdateElements
+  -> ROLLBACK; MarkContentSynced not reached; folder stays MODIFIED with its pending changes
+  -> SyncResult{success=false, message}; the next sync writes the same changes again
+An added id already has a row (a folder written before its children were loaded)
+  -> ON CONFLICT DO NOTHING keeps the one row (before: delete all rows, insert the loaded list)
+```
+
+**What was proven (executed tests):**
+
+| Plan criterion | Test | Binary | Result |
+| --- | --- | --- | --- |
+| Step 2: one added file writes one row, one removal deletes one row, the other rows keep their rowid, and the rows after reopen match the folders | `FolderSyncWritesOnlyAddedAndRemovedContentRows` | `SleeveServiceTest` | PASS; FAILED ("album row rewritten") with the full rewrite restored |
+| 4000 files in 500-file batches: the last batch adds ≤ 1.5× the first | `LibraryBuildMemoryGrowsLinearly` | `LibraryBuildMemoryTest` (new) | PASS (26.5, 15.1, 6.1, 1.1, 9.9, −0.8, 4.6, 0.5 MiB); FAILED on the original code (75.8 → 190.7 MiB) |
+| Step 3: after close, private memory is within 32 MiB of the level before open. A warm-up project is opened and closed first, so one-time process state is not counted. | `ProjectCloseReleasesLibraryBuildMemory` | `LibraryBuildMemoryTest` | PASS (26.7 → 81.7 → 24.3 MiB); FAILED with the leak restored (458 MiB kept) |
+| Regression | all 25 cases | `SleeveServiceTest` (direct run; no ctest registration) | PASS |
+| Regression | `LibraryBuildMemoryTest`, `SleeveFSTest`, `SleeveFilesystemCiTest`, `FilterServiceTest`, `ProjectServiceTest`, `LibrarySearchRecallTest`, `LibrarySearchColumnsTest`, `ImportRawOnlyTest`, `SleeveFilterCompileTest`, `SleeveFilterFactoryTest`, `SemanticGenerationServiceTest`, `AlbumBackend{StatsFilter,Import,SearchWorker,Rating,ImageDetails,Folder,ImageDelete}Test`, `ApplicationModuleHostLifecycleTest`, `GlobalSearchDialogQmlTest`, `MainQmlWorkflowTest`, `SearchRequestWorkerTest`, `SearchQueryParserTest`, `PipelineDngProfileBindingTest`, `MapperCrtpRoundtripTest`, `PipelineMapperTest`, `CommitGraphTest`, `EditorSessionCheckpointStoreTest`, `EditorMiniGitCommitWriterTest`, `EditorMiniGitJournalRecoveryTest`, `ImageAnalysisControllerTest` (31 targets) | ctest `-j 1` | 340/340 PASS (4 disabled by design) |
+
+With the leak restored and the incremental write kept, `LibraryBuildMemoryGrowsLinearly` still
+passes (about 54 MiB per batch, constant). With the full rewrite restored and the leak fix
+kept, both memory tests pass, and the build takes 12.0 s instead of 8.0 s. The quadratic memory
+needed both defects. Each test fails for the defect it covers.
+
+A first ctest run at `-j 4` failed 49 tests after about 0.1 s each (in `FilterServiceTest`,
+`PipelineMapperTest`, `ProjectServiceTest`, and others). Tests in one binary share temp
+database paths, so parallel runs collide. All 49 passed at `-j 1`, and so did the full set.
+
+**Measurements** (debug, `LibrarySearchBenchmarkTest`, p50; values in parentheses are the
+Phase S9 first measurement, debug):
+
+| Library | Private memory after build | Build time | `SELECT 1` | Catalog probe | Preview p50 | Apply p50 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1000 files | 63 MiB | 1.8 s | 0.074 ms (0.08) | 14.4 ms (15) | 23.2–31.1 ms (23.0–36.2) | 66.3–71.4 ms (66.0–93.4) |
+| 20 000 files | 150 MiB (16.3 GB) | 39.4 s (292–296) | 0.069 ms (0.6) | 14.4 ms (600–1060) | 30.4–36.1 ms (841–1048) | 94.4–113.2 ms (2342–2521) |
+
+20 000 files, preview / apply p50 for each query (3 runs): `jpg` 30.9 / 101.6 ms,
+`2026-06-07` 32.6 / 109.8 ms, `P1000123` 30.5 / 95.7 ms, `6.7` 36.1 / 113.2 ms, `dsc`
+30.4 / 94.4 ms. The match counts are unchanged (0, 22, 0, 862, 8240).
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --preset win_debug -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake"
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 8 --target <the 31 targets> SleeveServiceTest LibrarySearchBenchmarkTest
+SleeveServiceTest.exe                                          -> 25/25
+LibraryBuildMemoryTest.exe --gtest_also_run_disabled_tests     -> 2/2 and the per-step report
+ctest --test-dir build/debug -R "^(<the 31 targets>)\." -j 1   -> 340/340
+LibrarySearchBenchmarkTest.exe --gtest_also_run_disabled_tests --gtest_filter=*OneThousand*
+ALCEDO_SEARCH_BENCH_REPEAT=3 LibrarySearchBenchmarkTest.exe --gtest_also_run_disabled_tests --gtest_filter=*TwentyThousand*
+```
+
+Full `ctest` suite: not run (agent rule). `alcedo_main` was not linked.
+
+**Checklist / exit condition:** steps 1–4 done. Acceptance: the 20 000-file build stays far
+below 2 GB (150 MiB after the build). `SELECT 1` (0.074 / 0.069 ms) and the catalog probe
+(14.4 / 14.4 ms) cost the same at 1000 and 20 000 files. The 20 000-file benchmark was re-run
+and is recorded above.
+
+**LOC note:** `duckdb_types.cpp` +3; `sleeve_folder.hpp` +25; `sleeve_folder.cpp` +35 (255
+lines); `folder_mapper.{hpp,cpp}` +8 / +32; `element_store.cpp` 681 → 701. New:
+`library_build_memory_test.cpp` 191, `process_memory_test_support.hpp` 43. Also
+`sleeve_service_test.cpp` +114 and `library_search_benchmark_test.cpp` +35.
+
+**Remaining gaps:**
+
+- Release numbers were not measured, because the release test targets are not built in
+  `build/release`. Phase S9 re-runs both builds.
+- Search costs that do not depend on memory remain. At 1000 files the preview is 23–31 ms
+  (target 10 ms) and apply is 66–71 ms (target 50 ms). At 20 000 files the preview p50 is
+  30–36 ms, within the 50 ms target, and apply is 94–113 ms against the 100 ms target. The
+  14 ms catalog probe in each `BuildFuzzySearchWhere` is Phase S7; the six stats statements
+  are Phase S8.
+- `SleeveFolder::AddElementToMap` still checks for duplicates with a linear scan of the child
+  list (`ContainsElementId`). Adding n files to one folder therefore costs O(n²) comparisons
+  in C++, but no memory. The cost is not visible in the 39 s build; not changed.
+- `FileSystem::Create` in the library root does not load the root's children first. After a
+  reopen, a write adds only the new rows, which is correct (`ON CONFLICT DO NOTHING`), but the
+  in-memory name check does not see existing names. This was already the behavior before
+  this phase; not changed.
 
 ### Phase S7 — Preview query without fixed costs
 

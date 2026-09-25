@@ -247,6 +247,20 @@ target_link_libraries(LibrarySearchBenchmarkTest
 gtest_discover_tests(LibrarySearchBenchmarkTest TEST_PREFIX "LibrarySearchBenchmarkTest.")
 alcedo_copy_duckdb_fts_extension(LibrarySearchBenchmarkTest)
 alcedo_register_test_target(LibrarySearchBenchmarkTest app)
+if(WIN32)
+  target_link_libraries(LibrarySearchBenchmarkTest psapi)
+endif()
+
+# Memory use of library writes (same plan, Phase S6). Windows only: reads the process
+# private bytes (process_memory_test_support.hpp).
+if(WIN32)
+  add_executable(LibraryBuildMemoryTest ${ALCEDO_TEST_ROOT}/app/library_build_memory_test.cpp)
+  target_include_directories(LibraryBuildMemoryTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+  target_link_libraries(LibraryBuildMemoryTest ProjectService psapi GTest::gtest_main)
+  gtest_discover_tests(LibraryBuildMemoryTest TEST_PREFIX "LibraryBuildMemoryTest.")
+  alcedo_copy_duckdb_fts_extension(LibraryBuildMemoryTest)
+  alcedo_register_test_target(LibraryBuildMemoryTest app)
+endif()
 
 add_executable(SearchQueryClassifierTest ${ALCEDO_TEST_ROOT}/app/search_query_classifier_test.cpp)
 target_include_directories(SearchQueryClassifierTest PUBLIC ${ALCEDO_INCLUDE_DIR})

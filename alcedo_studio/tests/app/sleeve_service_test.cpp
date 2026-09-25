@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <random>
 #include <stdexcept>
@@ -75,6 +76,29 @@ auto QueryDuckDbInt64(const std::filesystem::path& db_path, const std::string& s
   duckdb_disconnect(&conn);
   duckdb_close(&db);
   return value;
+}
+
+/// `FolderContent` rows of @p folder_id on the project's connection: element id -> DuckDB rowid.
+/// A row that a sync deletes and inserts again gets a new rowid.
+auto FolderContentRowIds(ProjectService& project, sl_element_id_t folder_id)
+    -> std::map<sl_element_id_t, int64_t> {
+  auto          guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+  auto          lock  = guard.Lock();
+  duckdb_result result;
+  const auto    sql = "SELECT element_id, rowid FROM FolderContent WHERE folder_id = " +
+                   std::to_string(folder_id);
+  if (duckdb_query(guard.conn_, sql.c_str(), &result) != DuckDBSuccess) {
+    const std::string error = duckdb_result_error(&result);
+    duckdb_destroy_result(&result);
+    throw std::runtime_error(error);
+  }
+  std::map<sl_element_id_t, int64_t> rows;
+  for (idx_t row = 0; row < duckdb_row_count(&result); ++row) {
+    rows[static_cast<sl_element_id_t>(duckdb_value_int64(&result, 0, row))] =
+        duckdb_value_int64(&result, 1, row);
+  }
+  duckdb_destroy_result(&result);
+  return rows;
 }
 
 auto ReadExposure(const std::shared_ptr<PipelineGuard>& pipeline_guard) -> float {
@@ -818,6 +842,96 @@ TEST_F(SleeveServiceTests, DeletingFromRootDeletesFileEverywhereAndPersists) {
   const auto album_entries = reloaded_service->ListFolderEntries(L"/Album");
   EXPECT_TRUE(album_entries.empty());
   EXPECT_THROW(reloaded_service->ResolveFile(L"/DeleteEverywhere.arw"), std::runtime_error);
+}
+
+// Library search plan, Phase S6: a sync writes only the FolderContent rows of the children added
+// or removed since the last sync. The rows of the other children keep their rowid.
+TEST_F(SleeveServiceTests, FolderSyncWritesOnlyAddedAndRemovedContentRows) {
+  constexpr size_t             kChildCount = 40;
+  sl_element_id_t              album_id    = 0;
+  std::vector<sl_element_id_t> file_ids;
+  std::map<sl_element_id_t, int64_t> album_rows_after_remove;
+  std::map<sl_element_id_t, int64_t> root_rows_after_add;
+  {
+    ProjectService project(db_path_, meta_path_);
+    auto           service = project.GetSleeveService();
+    const auto     album   = service->CreateFolder(L"/", L"Album").first;
+    ASSERT_NE(album, nullptr);
+    album_id      = album->element_id_;
+
+    const auto created = service->Write<std::vector<sl_element_id_t>>([&](FileSystem& fs) {
+      std::vector<sl_element_id_t> ids;
+      for (size_t i = 0; i < kChildCount; ++i) {
+        auto file = fs.CreateFileInLibrary(L"Child_" + std::to_wstring(i) + L".arw");
+        fs.LinkFileToFolder(file->element_id_, album_id);
+        ids.push_back(file->element_id_);
+      }
+      return ids;
+    });
+    ASSERT_TRUE(created.second.success_);
+    file_ids                 = created.first;
+    const auto album_before  = FolderContentRowIds(project, album_id);
+    const auto root_before   = FolderContentRowIds(project, 0);
+    ASSERT_EQ(album_before.size(), kChildCount);
+    ASSERT_EQ(root_before.size(), kChildCount + 1);  // the files and the album folder
+
+    // Add one file to the library root and the album.
+    const auto added = service->CreateFileInLibrary(L"Added.arw").first;
+    ASSERT_NE(added, nullptr);
+    ASSERT_TRUE(service->LinkFileToFolder(added->element_id_, album_id).success_);
+    const auto album_after_add = FolderContentRowIds(project, album_id);
+    root_rows_after_add        = FolderContentRowIds(project, 0);
+    ASSERT_EQ(album_after_add.size(), kChildCount + 1);
+    ASSERT_EQ(root_rows_after_add.size(), kChildCount + 2);
+    for (const auto& [element_id, rowid] : album_before) {
+      ASSERT_TRUE(album_after_add.contains(element_id));
+      EXPECT_EQ(album_after_add.at(element_id), rowid) << "album row rewritten: " << element_id;
+    }
+    for (const auto& [element_id, rowid] : root_before) {
+      ASSERT_TRUE(root_rows_after_add.contains(element_id));
+      EXPECT_EQ(root_rows_after_add.at(element_id), rowid) << "root row rewritten: " << element_id;
+    }
+    EXPECT_TRUE(album_after_add.contains(added->element_id_));
+    EXPECT_TRUE(root_rows_after_add.contains(added->element_id_));
+    file_ids.push_back(added->element_id_);
+
+    // Remove one file from the album.
+    const auto removed_id = file_ids.front();
+    ASSERT_TRUE(service->DeleteFileFromFolder(removed_id, album_id).success_);
+    album_rows_after_remove = FolderContentRowIds(project, album_id);
+    ASSERT_EQ(album_rows_after_remove.size(), kChildCount);
+    EXPECT_FALSE(album_rows_after_remove.contains(removed_id));
+    for (const auto& [element_id, rowid] : album_after_add) {
+      if (element_id == removed_id) {
+        continue;
+      }
+      ASSERT_TRUE(album_rows_after_remove.contains(element_id));
+      EXPECT_EQ(album_rows_after_remove.at(element_id), rowid)
+          << "album row rewritten: " << element_id;
+    }
+    EXPECT_EQ(FolderContentRowIds(project, 0), root_rows_after_add);
+    project.SaveProject(meta_path_);
+  }
+
+  // After reopen, the rows read back match each folder.
+  ProjectService reloaded_project(db_path_, meta_path_);
+  auto           service   = reloaded_project.GetSleeveService();
+  auto           album_ids = service->Read<std::vector<sl_element_id_t>>(
+      [album_id](FileSystem& fs) { return fs.ListFolderContent(album_id); });
+  auto root_ids = service->Read<std::vector<sl_element_id_t>>(
+      [](FileSystem& fs) { return fs.ListFolderContent(0); });
+  std::sort(album_ids.begin(), album_ids.end());
+  std::sort(root_ids.begin(), root_ids.end());
+
+  std::vector<sl_element_id_t> expected_album_ids(file_ids.begin() + 1, file_ids.end());
+  std::sort(expected_album_ids.begin(), expected_album_ids.end());
+  std::vector<sl_element_id_t> expected_root_ids(file_ids.begin(), file_ids.end());
+  expected_root_ids.push_back(album_id);
+  std::sort(expected_root_ids.begin(), expected_root_ids.end());
+  EXPECT_EQ(album_ids, expected_album_ids);
+  EXPECT_EQ(root_ids, expected_root_ids);
+  EXPECT_EQ(FolderContentRowIds(reloaded_project, album_id).size(), album_rows_after_remove.size());
+  EXPECT_EQ(FolderContentRowIds(reloaded_project, 0).size(), root_rows_after_add.size());
 }
 
 TEST_F(SleeveServiceTests, FuzzyCreateCopyTest) {
