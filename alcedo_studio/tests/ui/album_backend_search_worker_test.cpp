@@ -54,6 +54,7 @@ class SearchQueryThreadRecorder {
     filter_service_->SetQueryThreadObserver([this](std::string_view operation) {
       std::lock_guard lock(mutex_);
       ++query_count_;
+      operations_.emplace_back(operation);
       if (QThread::currentThread() == ui_thread_) {
         ui_thread_operations_.emplace_back(operation);
       }
@@ -68,6 +69,10 @@ class SearchQueryThreadRecorder {
     std::lock_guard lock(mutex_);
     return query_count_;
   }
+  auto Operations() -> std::vector<std::string> {
+    std::lock_guard lock(mutex_);
+    return operations_;
+  }
   auto UiThreadOperations() -> std::vector<std::string> {
     std::lock_guard lock(mutex_);
     return ui_thread_operations_;
@@ -78,6 +83,7 @@ class SearchQueryThreadRecorder {
   QThread*                             ui_thread_ = nullptr;
   std::mutex                           mutex_;
   int                                  query_count_ = 0;
+  std::vector<std::string>             operations_;
   std::vector<std::string>             ui_thread_operations_;
 };
 
@@ -219,7 +225,11 @@ TEST_F(SearchWorkerTests, ApplyFuzzySearchQueriesOnTheWorkerAndCommitsGridAndSta
   ASSERT_EQ(stats->CameraStats().size(), 1);
   EXPECT_EQ(stats->CameraStats().front().toMap().value("count").toInt(), 3);
 
-  EXPECT_GE(recorder.QueryCount(), 3);  // WHERE build, grid page, stats.
+  // Phase S8: the WHERE build, then one query that reads the grid page, the total, and the
+  // stats from one evaluation of the search predicate.
+  EXPECT_EQ(recorder.Operations(),
+            (std::vector<std::string>{"BuildFuzzySearchWhere", "ListSearchResultPageWithStats"}))
+      << JoinOperations(recorder.Operations());
   EXPECT_TRUE(recorder.UiThreadOperations().empty())
       << JoinOperations(recorder.UiThreadOperations());
 }

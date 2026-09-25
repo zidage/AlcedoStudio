@@ -11,6 +11,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <future>
@@ -758,6 +759,100 @@ TEST_F(LibrarySearchColumnsTest, AiSearchTextRowFollowsUpsertAndRemove) {
   EXPECT_EQ(row_count(project), (std::vector<std::string>{"1"}));
   SleeveFilterService filter_service(project.GetStorage());
   EXPECT_EQ(filter_service.CountSearchResults(LibraryRootFolderId(project), L"nightsky"), 1u);
+}
+
+/// Rows passed to the `count_predicate_rows` SQL function since the last reset.
+std::atomic<int64_t> predicate_rows_evaluated{0};
+
+/// `count_predicate_rows(BIGINT) -> BOOLEAN`: true for every row, and counts the rows it sees.
+/// A filter that contains it shows how many rows DuckDB evaluated the filter for.
+void CountPredicateRows(duckdb_function_info, duckdb_data_chunk input, duckdb_vector output) {
+  const auto rows = duckdb_data_chunk_get_size(input);
+  predicate_rows_evaluated += static_cast<int64_t>(rows);
+  auto* values = static_cast<bool*>(duckdb_vector_get_data(output));
+  for (idx_t row = 0; row < rows; ++row) {
+    values[row] = true;
+  }
+}
+
+/// Register `count_predicate_rows` in the project database. Functions registered through one
+/// connection are in the system catalog, so the store connections can call it.
+void RegisterPredicateRowCounter(ProjectService& project) {
+  auto                   guard    = project.GetStorage()->GetDatabase().GetConnectionGuard();
+  auto                   lock     = guard.Lock();
+  duckdb_scalar_function function = duckdb_create_scalar_function();
+  duckdb_scalar_function_set_name(function, "count_predicate_rows");
+  duckdb_logical_type bigint_type  = duckdb_create_logical_type(DUCKDB_TYPE_BIGINT);
+  duckdb_logical_type boolean_type = duckdb_create_logical_type(DUCKDB_TYPE_BOOLEAN);
+  duckdb_scalar_function_add_parameter(function, bigint_type);
+  duckdb_scalar_function_set_return_type(function, boolean_type);
+  duckdb_scalar_function_set_volatile(function);
+  duckdb_scalar_function_set_function(function, CountPredicateRows);
+  EXPECT_EQ(duckdb_register_scalar_function(guard.conn_, function), DuckDBSuccess);
+  duckdb_destroy_logical_type(&bigint_type);
+  duckdb_destroy_logical_type(&boolean_type);
+  duckdb_destroy_scalar_function(&function);
+}
+
+// Phase S8: applying a search evaluates the search predicate once. The page, the total, and
+// every stats bucket (including the semantic labels of the active model) come from one
+// evaluation; the query observer sees one query for the apply after the WHERE build.
+TEST_F(LibrarySearchColumnsTest, ApplySearchEvaluatesThePredicateOnce) {
+  ProjectService          project(db_path_, meta_path_);
+  SyntheticLibraryBuilder builder(project);
+  const auto              file_ids = builder.AddFiles(TwoFileSpecs());
+  ASSERT_EQ(file_ids.size(), 2u);
+  auto semantic = semantic_test::StoresOf(*project.GetStorage());
+  RegisterSemanticModel(semantic, "model-a");
+  std::string error;
+  ASSERT_TRUE(semantic.models_.SetActiveModelKey("model-a", &error)) << error;
+  RegisterPredicateRowCounter(project);
+
+  SleeveFilterService      filter_service(project.GetStorage());
+  const auto               folder_id = LibraryRootFolderId(project);
+  std::vector<std::string> observed_operations;
+  filter_service.SetQueryThreadObserver([&observed_operations](std::string_view operation) {
+    observed_operations.emplace_back(operation);
+  });
+
+  // The search predicate of `nikkor` AND-ed with the row counter.
+  auto search = filter_service.BuildFuzzySearchWhere(L"nikkor", kAllSearchFields);
+  ASSERT_TRUE(search.has_value() && search->raw_sql_.has_value());
+  FilterNode counted        = *search;
+  counted.raw_sql_          = L"count_predicate_rows(e.id) AND (" + *search->raw_sql_ + L")";
+
+  // One page statement evaluates the predicate once: that is the row count of one evaluation.
+  predicate_rows_evaluated  = 0;
+  const auto page           = filter_service.ListSearchResultPage(folder_id, counted, 0, 120);
+  const auto one_evaluation = predicate_rows_evaluated.load();
+  ASSERT_EQ(page.total_, 1u);
+  ASSERT_GT(one_evaluation, 0);
+
+  // The apply read evaluates it once for the page, the total, and all stats buckets.
+  observed_operations.clear();
+  predicate_rows_evaluated = 0;
+  const auto applied = filter_service.ListSearchResultPageWithStats(folder_id, counted, 0, 120);
+  EXPECT_EQ(predicate_rows_evaluated.load(), one_evaluation);
+  EXPECT_EQ(observed_operations, (std::vector<std::string>{"ListSearchResultPageWithStats"}));
+  EXPECT_EQ(applied.page_.total_, 1u);
+  ASSERT_EQ(applied.page_.rows_.size(), 1u);
+  EXPECT_EQ(applied.page_.rows_[0].file_id_, file_ids[0]);
+  EXPECT_EQ(applied.stats_.total_photo_count_, 1);
+  EXPECT_EQ(BucketCounts(applied.stats_.camera_stats_),
+            (std::map<std::string, int>{{"NIKON D810", 1}}));
+  EXPECT_EQ(BucketCounts(applied.stats_.rating_stats_), (std::map<std::string, int>{{"3", 1}}));
+
+  // The stats refresh with an active search also evaluates it once.
+  predicate_rows_evaluated = 0;
+  EXPECT_EQ(filter_service.BuildFolderStats(folder_id, counted).total_photo_count_, 1);
+  EXPECT_EQ(predicate_rows_evaluated.load(), one_evaluation);
+
+  // The counter tells evaluations apart: the page and the stats read separately evaluate the
+  // predicate twice.
+  predicate_rows_evaluated = 0;
+  (void)filter_service.ListSearchResultPage(folder_id, counted, 0, 120);
+  (void)filter_service.BuildFolderStats(folder_id, counted);
+  EXPECT_EQ(predicate_rows_evaluated.load(), 2 * one_evaluation);
 }
 
 }  // namespace

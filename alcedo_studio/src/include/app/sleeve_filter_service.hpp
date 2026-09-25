@@ -81,6 +81,12 @@ struct AlbumStatsView {
   std::vector<StatsBucket> rating_stats_{};
 };
 
+/// One page of the files that match a filter and the stats of all matching files.
+struct SearchResultPageAndStats {
+  SearchResultPage page_{};
+  AlbumStatsView   stats_{};
+};
+
 struct FuzzySearchMatch {
   sl_element_id_t file_id_  = 0;
   image_id_t      image_id_ = 0;
@@ -133,6 +139,8 @@ class SleeveFilterService {
   void RemoveFilterCombo(filter_id_t filter_id);
   auto ApplyFilterOn(filter_id_t filter_id, sl_element_id_t parent_id)
       -> std::optional<std::vector<sl_element_id_t>>;
+  /// Stats buckets of the files that match @p extra_filter (all files when empty). The filter
+  /// is evaluated once for all buckets. Throws std::runtime_error when a query fails.
   auto BuildFolderStats(sl_element_id_t                  parent_id,
                         const std::optional<FilterNode>& extra_filter = std::nullopt) const
       -> AlbumStatsView;
@@ -164,6 +172,13 @@ class SleeveFilterService {
   [[nodiscard]] auto ListSearchResultPage(sl_element_id_t                  parent_id,
                                           const std::optional<FilterNode>& filter, size_t offset,
                                           size_t limit) const -> SearchResultPage;
+  /// One page of the files that match @p filter, the total, and the BuildFolderStats buckets,
+  /// from one evaluation of the filter. This is what applying a search to the grid reads.
+  /// Throws std::runtime_error when a query fails.
+  [[nodiscard]] auto ListSearchResultPageWithStats(sl_element_id_t                  parent_id,
+                                                   const std::optional<FilterNode>& filter,
+                                                   size_t offset, size_t limit) const
+      -> SearchResultPageAndStats;
   /// Semantic (CLIP) search: the provider ranks the files, then one SQL statement reads their
   /// display columns. Rows keep the provider order. Empty when no provider is set.
   [[nodiscard]] auto SearchFolderSemanticRows(sl_element_id_t parent_id, const std::wstring& query,

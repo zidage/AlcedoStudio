@@ -84,6 +84,13 @@ struct SearchResultPage {
   std::vector<SearchResultRow> rows_{};
 };
 
+/// One page of the files that match a filter and the stats of all matching files, read from
+/// one evaluation of the filter.
+struct SearchResultPageWithStats {
+  SearchResultPage page_{};
+  FolderStatsView  stats_{};
+};
+
 class ElementStore {
  private:
   ConnectionGuard       guard_;
@@ -104,6 +111,12 @@ class ElementStore {
   // transaction-neutrality contract as InsertElementRows; the caller clears the folder's
   // pending content changes after the commit.
   void                  UpdateElementRows(const std::shared_ptr<SleeveElement>& element);
+  // Write the rows that match @p extra_filter into the temporary match set table, then read
+  // the stats (and, when @p page is set, one page) from it. The caller holds the lock.
+  auto                  ReadMatchSet(sl_element_id_t                            folder_id,
+                                     const std::optional<duckorm::SqlFragment>& extra_filter,
+                                     const std::string& active_semantic_model_key, SearchResultPage* page,
+                                     size_t offset, size_t limit) const -> FolderStatsView;
 
  public:
   ElementStore(ConnectionGuard&& guard);
@@ -134,9 +147,20 @@ class ElementStore {
   auto GetElementIdsInFolderByFilter(const std::shared_ptr<FilterCombo> filter,
                                      const sl_element_id_t              folder_id)
       -> std::vector<sl_element_id_t>;
+  /// Total, date, camera, lens, semantic label (when @p active_semantic_model_key is set), and
+  /// rating buckets of the files that match @p extra_filter. The filter is evaluated once: the
+  /// matching rows go into a temporary table on this store's connection and every bucket is
+  /// read from it. Throws std::runtime_error when a statement fails.
   auto BuildFolderStats(sl_element_id_t                            folder_id,
                         const std::optional<duckorm::SqlFragment>& extra_filter = std::nullopt,
-                        const std::string& active_semantic_model_key = {}) -> FolderStatsView;
+                        const std::string& active_semantic_model_key = {}) const -> FolderStatsView;
+  /// One page of the files that match @p extra_filter (ordered by element id; @p limit 0
+  /// returns every row), the total, and the BuildFolderStats buckets, from one evaluation of
+  /// the filter. Throws std::runtime_error when a statement fails.
+  auto ListSearchResultPageWithStats(sl_element_id_t folder_id, size_t offset, size_t limit,
+                                     const std::optional<duckorm::SqlFragment>& extra_filter,
+                                     const std::string& active_semantic_model_key) const
+      -> SearchResultPageWithStats;
 
   /// Return lightweight file metadata for every live File in a folder, queried directly from DB
   /// without materializing full SleeveElement objects.
