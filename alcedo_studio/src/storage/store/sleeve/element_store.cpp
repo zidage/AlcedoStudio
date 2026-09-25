@@ -31,19 +31,10 @@ auto BuildScopedFileQuery(sl_element_id_t                            folder_id,
     -> ScopedFileQuery {
   ScopedFileQuery scope;
   std::string     extra_where;
-  std::string     ai_join;
   if (extra_filter.has_value() && !extra_filter->empty()) {
     extra_where         = " AND (" + extra_filter->sql_ + ")";
     scope.binds_.sql_   = extra_filter->sql_;
     scope.binds_.binds_ = extra_filter->binds_;
-    // One row per file with the active AI understanding search text, for predicates that
-    // read `u.caption_search_text` / `u.tags_search_text`. The table key allows more than one
-    // active row per file (one per task_id), so the rows are grouped: the join never adds
-    // result rows. Files without an active understanding get NULL columns.
-    ai_join =
-        "LEFT JOIN (SELECT file_id, string_agg(caption_search_text, ' ') AS caption_search_text, "
-        "string_agg(tags_search_text, ' ') AS tags_search_text FROM AiImageUnderstanding "
-        "WHERE active = TRUE GROUP BY file_id) u ON u.file_id = e.id ";
   }
 
   if (folder_id == 0) {
@@ -51,9 +42,8 @@ auto BuildScopedFileQuery(sl_element_id_t                            folder_id,
         "FROM Element e "
         "JOIN FileImage fi ON fi.file_id = e.id "
         "JOIN Image i ON i.id = fi.image_id "
-        "{}"
         "WHERE e.type = {}{}",
-        ai_join, static_cast<uint32_t>(ElementType::FILE), extra_where);
+        static_cast<uint32_t>(ElementType::FILE), extra_where);
     return scope;
   }
 
@@ -62,9 +52,8 @@ auto BuildScopedFileQuery(sl_element_id_t                            folder_id,
       "JOIN Element e ON fc.element_id = e.id "
       "JOIN FileImage fi ON fi.file_id = e.id "
       "JOIN Image i ON i.id = fi.image_id "
-      "{}"
       "WHERE fc.folder_id = {} AND e.type = {}{}",
-      ai_join, folder_id, static_cast<uint32_t>(ElementType::FILE), extra_where);
+      folder_id, static_cast<uint32_t>(ElementType::FILE), extra_where);
   return scope;
 }
 

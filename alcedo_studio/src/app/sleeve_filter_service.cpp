@@ -98,9 +98,8 @@ struct SearchTextColumn {
   std::string_view words_;  ///< Empty when the column has no word-folded form.
 };
 
-/// Folded search text columns that the enabled field groups can match. `i.` columns are
-/// written by ImageMapper; `u.` columns come from the AI understanding join in
-/// BuildScopedFileQuery.
+/// Folded Image search text columns (written by ImageMapper) that the enabled field groups
+/// can match. The AI text is matched by AiSearchTextClause.
 auto SearchTextColumns(SearchFieldMask mask) -> std::vector<SearchTextColumn> {
   std::vector<SearchTextColumn> columns;
   if (mask & SearchField::Filename) {
@@ -109,13 +108,34 @@ auto SearchTextColumns(SearchFieldMask mask) -> std::vector<SearchTextColumn> {
   if (mask & SearchField::Exif) {
     columns.push_back({"i.exif_search_text", "i.exif_search_words"});
   }
+  return columns;
+}
+
+/**
+ * @brief Match a folded token in the AI search text of a file.
+ *
+ * `e.id IN (SELECT file_id FROM AiImageSearchText WHERE contains(caption_search_text, ?) OR
+ * contains(tags_search_text, ?))`, with the columns that the AiDescription (caption and scene)
+ * and AiTags bits enable. AiStore writes one row per file with the text of all its active
+ * understandings, so the scope query needs no join and nothing is aggregated per query.
+ * Returns std::nullopt when neither AI bit is set, so the table is not read.
+ */
+auto AiSearchTextClause(SearchFieldMask mask, const std::wstring& folded_token)
+    -> std::optional<duckorm::SqlFragment> {
+  std::vector<duckorm::SqlFragment> columns;
   if (mask & SearchField::AiDescription) {
-    columns.push_back({"u.caption_search_text", {}});
+    columns.push_back(FoldedColumnContains("caption_search_text", folded_token));
   }
   if (mask & SearchField::AiTags) {
-    columns.push_back({"u.tags_search_text", {}});
+    columns.push_back(FoldedColumnContains("tags_search_text", folded_token));
   }
-  return columns;
+  if (columns.empty()) {
+    return std::nullopt;
+  }
+  auto clause = duckorm::expr::raw("e.id IN (SELECT file_id FROM AiImageSearchText WHERE ");
+  clause.append(duckorm::expr::or_(columns));
+  clause.append(duckorm::expr::raw(")"));
+  return clause;
 }
 
 auto IsAsciiDigit(wchar_t ch) -> bool { return ch >= L'0' && ch <= L'9'; }
@@ -350,6 +370,9 @@ auto TermClause(const SearchTerm& term, const std::string& active_model_key, Sea
     for (const auto& column : SearchTextColumns(mask)) {
       clauses.push_back(FoldedTextClause(column, term.folded_text_));
     }
+    if (auto ai_clause = AiSearchTextClause(mask, term.folded_text_); ai_clause.has_value()) {
+      clauses.push_back(std::move(*ai_clause));
+    }
   }
 
   if (term.kind_ == SearchTermKind::Text && (mask & SearchField::AiTags)) {
@@ -364,10 +387,21 @@ auto TermClause(const SearchTerm& term, const std::string& active_model_key, Sea
   return expr::or_(clauses);
 }
 
+/**
+ * @brief Match the whole query against the BM25 index of the AI documents.
+ *
+ * A semi-join on the documents that score: `e.id IN (SELECT file_id FROM (SELECT file_id,
+ * match_bm25(file_id, ?) AS score FROM AiImageFtsDocument) WHERE score IS NOT NULL)`. The
+ * macro runs once for each AI document instead of once for each library row. The files are
+ * the same, because a file without a document has no score.
+ */
 auto AiUnderstandingFtsClause(const std::wstring& query) -> duckorm::SqlFragment {
-  auto fragment = duckorm::expr::raw("(fts_main_AiImageFtsDocument.match_bm25(e.id, ");
+  auto fragment = duckorm::expr::raw(
+      "e.id IN (SELECT file_id FROM (SELECT file_id, "
+      "fts_main_AiImageFtsDocument.match_bm25(file_id, ");
   fragment.append(LitW(query));
-  fragment.append(duckorm::expr::raw(") IS NOT NULL)"));
+  fragment.append(
+      duckorm::expr::raw(") AS score FROM AiImageFtsDocument) WHERE score IS NOT NULL)"));
   return fragment;
 }
 
@@ -480,6 +514,7 @@ auto SleeveFilterService::BuildFuzzySearchWhere(const std::wstring& query,
     return std::nullopt;
   }
 
+  // Both values are held in memory by their stores, so building the WHERE runs no SQL.
   const auto active_model_key =
       storage_ ? storage_->GetSemanticStore().ActiveModelKey()
                        : std::string{};
@@ -498,7 +533,7 @@ auto SleeveFilterService::BuildFuzzySearchWhere(const std::wstring& query,
   // The AI FTS index body is caption + tags_json + scene concatenated; a BM25
   // hit cannot be attributed to one sub-field, so only run it when both AI
   // field groups are enabled. A single-bit AI scope uses only the per-field
-  // search text clauses built above (u.caption_search_text / u.tags_search_text).
+  // search text clauses built above (AiImageSearchText caption / tags columns).
   const bool ai_fts_applicable =
       has_ai_fts && (mask & SearchField::AiDescription) && (mask & SearchField::AiTags);
   if (ai_fts_applicable) {

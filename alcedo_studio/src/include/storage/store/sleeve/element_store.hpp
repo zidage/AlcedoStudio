@@ -53,9 +53,9 @@ struct ScopedFileQuery {
 /// All folder-scoped file lookups (search, stats, listing, pagination) must use this builder so
 /// the scope definition stays consistent across the application.
 ///
-/// Aliases: `e` Element, `fi` FileImage, `i` Image (with its search columns). When
-/// @p extra_filter is set, `u` is also joined: one row per file with the active AI
-/// understanding `caption_search_text` and `tags_search_text` (NULL when the file has none).
+/// Aliases: `e` Element, `fi` FileImage, `i` Image (with its search columns). Predicates on
+/// other tables (AI search text, semantic labels, BM25 documents) are subqueries on `e.id`,
+/// so the scope never joins them.
 auto BuildScopedFileQuery(sl_element_id_t                            folder_id,
                           const std::optional<duckorm::SqlFragment>& extra_filter = std::nullopt)
     -> ScopedFileQuery;

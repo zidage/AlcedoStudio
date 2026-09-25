@@ -2,7 +2,7 @@
 
 Date: 2026-09-24
 
-Status: Phases S0, S1, S2, and S3 complete (2026-09-24); S4, S5, and S6 complete (2026-09-25); S7–S8 not started (added 2026-09-25 after the first qualification run); S9 qualification: first measurement recorded, not complete
+Status: Phases S0, S1, S2, and S3 complete (2026-09-24); S4, S5, S6, and S7 complete (2026-09-25); S8 not started (added 2026-09-25 after the first qualification run); S9 qualification: first measurement recorded, not complete
 
 Primary owner: Alcedo Studio storage (Image schema, import, sleeve filter SQL) and library search.
 
@@ -1388,6 +1388,121 @@ Not part of this phase, with the reason: an index for substring search (n-gram o
 and filtering the previous result set while the user types. The measured scan at 20 000 rows
 in a clean database is 7–17 ms; Phase S9 decides with its measurements whether either is
 needed.
+
+##### Phase S7 completion record (2026-09-25)
+
+**Status:** complete. Building the search WHERE runs no SQL (0.005 ms release, before: a
+14 ms catalog probe and a 0.5 ms model query on new connections). The AI BM25 alternative and
+the AI search text are semi-joins that read only files with AI rows. The scope query no longer
+aggregates `AiImageUnderstanding`. Release preview: p95 7.8–9.8 ms at 1000 files (target
+≤ 10 ms), p50 10.4–11.9 ms at 20 000 files (target ≤ 50 ms).
+
+Branch: `refactor/library-search-s7` (on top of `refactor/library-search-s6-linear-memory`).
+Schema: new derived table `AiImageSearchText` (`CREATE TABLE IF NOT EXISTS`, filled when the
+project opens), no other DDL change.
+
+**What changed:**
+
+| Step | Change |
+| --- | --- |
+| 1 | `AiStore` owns `understanding_fts_index_ready_` (atomic). The constructor rebuilds the AI search rows and the FTS index when the project opens (moved from `Database::InitializeDB`, which no longer has its own copy of the fts loader) and records whether `create_fts_index` succeeded; `UpsertUnderstandings` records it again after each rebuild. `HasUnderstandingFtsIndex()` reads the flag. The element deletion cascade also rebuilds the index but does not change the flag: without the extension no rebuild succeeds, and with it the index exists from the first build (an empty table is indexed too, checked with the DuckDB CLI), so a rebuild cannot remove it. `SemanticStore` holds `active_model_key_` behind its own mutex. The constructor loads it; `UpsertModel`, `SetActiveModelKey`, and `PurgeModel` (the only writers of `SemanticModel.active` after open) read it again on their own connection after the write. `ActiveModelKey()` returns the copy. |
+| 2 | Done through step 1: the search path's metadata reads (active model key, FTS index state) run no SQL and open no connection. The remaining search statements (page, stats) already run on `ElementStore`'s own connection. The other `SemanticStore` and `AiStore` methods keep a connection per call. They are not on the search path, and one shared connection would leave an open transaction after any exception between `BEGIN` and `COMMIT` in those methods. |
+| 3 | `AiUnderstandingFtsClause` is `e.id IN (SELECT file_id FROM (SELECT file_id, fts_main_AiImageFtsDocument.match_bm25(file_id, ?) AS score FROM AiImageFtsDocument) WHERE score IS NOT NULL)`. |
+| 4 | `AiImageSearchText(file_id PK, caption_search_text, tags_search_text)`: one row for each file with an active understanding, holding the folded text of all its understandings in `task_id` order. `AiStore` writes it in the upsert transaction (`RewriteSearchDocuments`, together with `AiImageFtsDocument`; a failure rolls back the upsert) and deletes it in `DeleteAiAnnotationRowsForFiles`. The project open rebuilds it from `AiImageUnderstanding`, so a project created before this phase gets its rows. The AI text term is a semi-join (`e.id IN (SELECT file_id FROM AiImageSearchText WHERE contains(...) OR contains(...))`), built only when an AI field bit is on. `BuildScopedFileQuery` no longer joins anything for AI (the plan asked for a join only when an AI bit is on; the semi-join reads the table only in that case too, and the scope query stays the same for every filter). |
+| Benchmark | `LibrarySearchBenchmarkTest` also reports the WHERE build time. |
+
+**Primary success call chain (preview):**
+
+```text
+SearchController -> SearchRequestWorker -> RunSearchPageRequest
+  -> SleeveFilterService::SearchFolderPage -> BuildFuzzySearchWhere
+     -> SemanticStore::ActiveModelKey (memory) + AiStore::HasUnderstandingFtsIndex (memory)
+     -> TermClause per term (Image columns OR AiImageSearchText semi-join OR label EXISTS)
+        AND-ed, OR BM25 semi-join
+  -> ElementStore::ListSearchResultPage (one statement on the store connection)
+AI write: AiStore::UpsertUnderstandings -> BEGIN -> insert_or_replace + folded text
+  -> RewriteSearchDocuments(file_id IN ...) -> COMMIT -> RebuildFtsIndex -> index flag
+Model change: SemanticStore::SetActiveModelKey / UpsertModel / PurgeModel -> COMMIT
+  -> RefreshActiveModelKey (same connection, under the database lock)
+```
+
+**Primary failure call chain:**
+
+```text
+AiImageSearchText write fails inside UpsertUnderstandings
+  -> exception -> ROLLBACK (understanding rows and search rows stay as before) -> rethrow
+AiImageSearchText rebuild fails when the project opens
+  -> ROLLBACK -> AiStore constructor throws -> the project does not open
+fts extension missing -> RebuildFtsIndex false -> flag false -> WHERE has no BM25 clause
+Active model key query fails after a model write -> previous key kept
+```
+
+**What was proven (executed tests):**
+
+| Plan criterion | Test | Binary | Result |
+| --- | --- | --- | --- |
+| Building the WHERE runs no SQL, and the WHERE follows an index rebuild and a model activation after the first build | `FuzzySearchWhereRunsNoCatalogQuery` | `LibrarySearchColumnsTest` | PASS; FAILED at all six builds with the old catalog probe restored in `HasUnderstandingFtsIndex` |
+| Same file set for the semi-join and the per-row BM25 clause, on the recall library with AI rows | `Bm25SemiJoinMatchesTheSameFilesAsThePerRowClause` | `LibrarySearchRecallTest` | PASS (11 queries, 10 with matches) |
+| The per-file AI text row is written, replaced, and deleted with the understanding rows | `AiSearchTextRowFollowsUpsertAndRemove` | `LibrarySearchColumnsTest` | PASS |
+| Recall table and columns tests unchanged | `LibrarySearchRecallTest` (5), `LibrarySearchColumnsTest` (10 existing) | — | PASS |
+| Regression | the 31 S6 targets (ctest `-j 1`) | — | 343/343 PASS (4 disabled by design) |
+| Regression | `SleeveServiceTest` (direct run) | — | 25/25 PASS |
+
+Test-name mapping: the plan says "query observer and a statement count on the store
+connection". The C API has no statement counter. Instead, the test holds the database lock
+while a second thread builds the WHERE, and every store statement takes that lock. So any SQL
+in the build blocks it, not only statements on one connection. The test also checks that the
+query observer sees only `BuildFuzzySearchWhere`. The FTS index exists from the project open
+in the test runtime, so the test proves the rebuild through its data: `lighthouses` matches
+the file only through BM25 stemming after the upsert. The model part covers activation,
+switching the model, purging the active model, and registering an active model.
+
+**Measurements** (`LibrarySearchBenchmarkTest`, p50 of 3 runs; S6 values in parentheses):
+
+| Library | Build | WHERE build | Preview p50 | Preview p95 | Apply p50 |
+| --- | --- | --- | --- | --- | --- |
+| 1000 files | debug | 0.184 ms | 7.6–8.6 ms (23.2–31.1) | 7.7–9.2 ms | 43.4–52.3 ms (66.3–71.4) |
+| 1000 files | release | 0.006 ms | 7.7–8.7 ms (S9 first run: 22.6–24.2) | 7.8–9.8 ms | 44.7–50.4 ms (62.3–67.4) |
+| 20 000 files | debug | 0.199 ms | 11.5–12.8 ms (30.4–36.1) | 11.9–14.2 ms | 61.2–70.7 ms (94.4–113.2) |
+| 20 000 files | release | 0.005 ms | 10.4–11.9 ms | 11.0–11.9 ms | 58.2–67.2 ms |
+
+Match counts are unchanged (0, 1, 0, 23, 493 and 0, 22, 0, 862, 8240). Private memory after
+the build: 46 / 97 MiB (release), 61 / 157 MiB (debug). The catalog probe itself still costs
+13.7–16.9 ms, but no search call runs it.
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 8 --target <the 31 S6 targets> LibrarySearchBenchmarkTest SleeveServiceTest
+ctest --test-dir build/debug -R "^(<the 31 targets>)\." -j 1          -> 343/343
+SleeveServiceTest.exe                                                  -> 25/25
+LibrarySearchBenchmarkTest.exe --gtest_also_run_disabled_tests --gtest_filter=*OneThousand*
+ALCEDO_SEARCH_BENCH_REPEAT=3 LibrarySearchBenchmarkTest.exe --gtest_also_run_disabled_tests --gtest_filter=*TwentyThousand*
+# Release: build/release reconfigured with -DALCEDO_BUILD_TESTS=ON, only
+# LibrarySearchBenchmarkTest built and run (same two commands, 3 runs), then set back to OFF.
+```
+
+Full `ctest` suite: not run (agent rule). `alcedo_main` was not linked.
+
+**Checklist / exit condition:** steps 1–4 done; the three required tests pass; recall and
+columns tests unchanged and green. Acceptance met in the release build: preview p95 ≤ 10 ms
+at 1000 files (7.8–9.8 ms) and p50 ≤ 50 ms at 20 000 files (10.4–11.9 ms).
+
+**LOC note:** `ai_store.cpp` 600 (+69 / −34), `semantic_store.cpp` 1964 (+55 / −27; already
+over 1000 lines before this phase, not split here), `sleeve_filter_service.cpp` 692 (+44 / −9),
+`database.cpp` 187 (−119), `element_store.cpp` 690 (−11). Tests: `library_search_columns_test.cpp`
+764 (+228), `library_search_recall_test.cpp` 570 (+92).
+
+**Remaining gaps:**
+
+- Apply is still 44.7–50.4 ms (release, 1000 files; target 50 ms) and 58–67 ms at 20 000 files.
+  The six stats statements are Phase S8.
+- `ai_storage_controller_test.cpp` and `semantic_storage_controller_test.cpp` have no CMake
+  target since commit 16e6d9f24 ("Give CMake files domain ownership"), so the `AiStore` and
+  `SemanticStore` unit tests there did not run. The behavior changed in this phase is covered
+  by the tests above and by `FilterServiceTest` (45/45), which uses both stores.
+- `semantic_store.cpp` is 1964 lines; a split by responsibility (model registry, embeddings,
+  labels, vector search) is not part of this phase.
 
 ### Phase S8 — Apply and stats from one match set
 

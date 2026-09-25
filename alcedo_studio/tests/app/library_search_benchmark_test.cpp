@@ -177,15 +177,31 @@ auto MedianStatementMs(ProjectService& project, const char* sql, int repeat) -> 
   return Percentile(samples, 50);
 }
 
-void ReportFixedCosts(const std::string& library_label, ProjectService& project) {
-  // The AI FTS index probe that BuildFuzzySearchWhere runs (AiStore::HasUnderstandingFtsIndex).
+/// Median time of `repeat` WHERE builds. Since Phase S7 the build runs no SQL.
+auto MedianWhereBuildMs(const SleeveFilterService& service, int repeat) -> double {
+  std::vector<double> samples;
+  for (int run = 0; run < repeat; ++run) {
+    const auto start = Clock::now();
+    const auto where = service.BuildFuzzySearchWhere(L"dsc", kAllSearchFields);
+    samples.push_back(ElapsedMs(start));
+    EXPECT_TRUE(where.has_value());
+  }
+  return Percentile(samples, 50);
+}
+
+void ReportFixedCosts(const std::string& library_label, ProjectService& project,
+                      const SleeveFilterService& service) {
+  // The AI FTS index probe that BuildFuzzySearchWhere ran on every call before Phase S7
+  // (AiStore::HasUnderstandingFtsIndex now reads the state recorded at the last index build).
   constexpr const char* kCatalogProbe =
       "SELECT COUNT(*) FROM duckdb_functions() WHERE schema_name = "
       "'fts_main_AiImageFtsDocument' AND function_name = 'match_bm25'";
   const auto line = std::format(
-      "  private memory {:.0f} MiB, SELECT 1 {:.3f} ms, catalog probe {:.1f} ms (p50 of 20)",
+      "  private memory {:.0f} MiB, SELECT 1 {:.3f} ms, catalog probe {:.1f} ms, "
+      "WHERE build {:.3f} ms (p50 of 20)",
       process_memory_test::Mebibytes(process_memory_test::PrivateBytes()),
-      MedianStatementMs(project, "SELECT 1", 20), MedianStatementMs(project, kCatalogProbe, 20));
+      MedianStatementMs(project, "SELECT 1", 20), MedianStatementMs(project, kCatalogProbe, 20),
+      MedianWhereBuildMs(service, 20));
   std::cout << "\n[library fixed costs] " << library_label << "\n" << line << "\n";
   ::testing::Test::RecordProperty(library_label + " fixed costs", line);
 }
@@ -228,9 +244,9 @@ class LibrarySearchBenchmarkTest : public ::testing::Test {
                              ElapsedMs(build_start) / 1000.0);
 
     const auto label = std::format("synthetic {} files, {} DNG per 1000", count, dng_per_mille);
-    ReportFixedCosts(label, project);
-
     SleeveFilterService service(project.GetStorage());
+    ReportFixedCosts(label, project, service);
+
     const auto results = MeasureSearchLatency(service, LibraryRootFolderId(project), RepeatCount());
     ReportLatency(label, results);
   }
