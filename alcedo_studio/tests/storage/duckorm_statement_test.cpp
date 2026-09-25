@@ -102,6 +102,32 @@ TEST_F(DuckormStatementTest, SelectByQueryBindsValuesAndDecodesRows) {
   EXPECT_EQ(std::get<std::optional<double>>(rows[1][2]), 1.5);
 }
 
+TEST_F(DuckormStatementTest, CellReadersReturnTextBooleanAndEmptyForNull) {
+  duckorm::execute(conn_, expr::raw("INSERT INTO Item (id, name, ok) VALUES (1, 'a', TRUE), "
+                                    "(2, NULL, FALSE), (3, 'c', NULL)"));
+  constexpr std::array<duckorm::DuckFieldDesc, 2> fields = {
+      duckorm::DuckFieldDesc{"name", duckorm::DuckDBType::NULLABLE_STRING, 0},
+      duckorm::DuckFieldDesc{"ok", duckorm::DuckDBType::BOOLEAN, 0}};
+  auto query = expr::raw("SELECT name, ok FROM Item WHERE ");
+  query.append(expr::column_eq("id", int64_t{1}));
+  auto rows = duckorm::select_by_query(conn_, fields, fields.size(), query);
+  ASSERT_EQ(rows.size(), 1u);
+  EXPECT_EQ(duckorm::cell_text(rows[0][0]), "a");
+  EXPECT_TRUE(duckorm::cell_bool(rows[0][1]));
+
+  rows = duckorm::select_by_query(conn_, fields, fields.size(),
+                                  expr::raw("SELECT name, ok FROM Item WHERE id > 1 ORDER BY id"));
+  ASSERT_EQ(rows.size(), 2u);
+  EXPECT_EQ(duckorm::cell_text(rows[0][0]), "");  // NULL
+  EXPECT_FALSE(duckorm::cell_bool(rows[0][1]));
+  EXPECT_FALSE(duckorm::cell_bool(rows[1][1]));  // NULL
+
+  const auto by_name = expr::column_eq("name", std::string("c"));
+  EXPECT_EQ(by_name.sql_, "(name = ?)");
+  ASSERT_EQ(by_name.binds_.size(), 1u);
+  EXPECT_EQ(std::get<std::string>(by_name.binds_[0]), "c");
+}
+
 TEST_F(DuckormStatementTest, TransactionCommitsOnlyWhenCommitIsCalled) {
   {
     duckorm::Transaction transaction(conn_);

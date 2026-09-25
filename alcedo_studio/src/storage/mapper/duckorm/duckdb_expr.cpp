@@ -256,6 +256,14 @@ auto or_(std::initializer_list<SqlFragment> parts) -> SqlFragment {
   return or_(std::span<const SqlFragment>(parts.begin(), parts.size()));
 }
 
+auto column_eq(std::string_view column, const std::string& value) -> SqlFragment {
+  return eq(col(column), param(value));
+}
+
+auto column_eq(std::string_view column, int64_t value) -> SqlFragment {
+  return eq(col(column), param(value));
+}
+
 auto lit_float_array(std::span<const float> values) -> SqlFragment {
   std::ostringstream out;
   out.imbue(std::locale::classic());

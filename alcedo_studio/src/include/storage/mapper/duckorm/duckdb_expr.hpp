@@ -116,6 +116,10 @@ namespace expr {
 [[nodiscard]] auto param(const std::string& value) -> SqlFragment;
 
 [[nodiscard]] auto eq(SqlFragment left, SqlFragment right) -> SqlFragment;
+/// `(column = ?)` with @p value bound.
+[[nodiscard]] auto column_eq(std::string_view column, const std::string& value) -> SqlFragment;
+/// `(column = ?)` with @p value bound.
+[[nodiscard]] auto column_eq(std::string_view column, int64_t value) -> SqlFragment;
 [[nodiscard]] auto ne(SqlFragment left, SqlFragment right) -> SqlFragment;
 [[nodiscard]] auto gt(SqlFragment left, SqlFragment right) -> SqlFragment;
 [[nodiscard]] auto lt(SqlFragment left, SqlFragment right) -> SqlFragment;

@@ -135,34 +135,19 @@ constexpr const char* kRatingTable        = "AiImageRating";
 constexpr const char* kFtsDocumentTable   = "AiImageFtsDocument";
 constexpr const char* kSearchTextTable    = "AiImageSearchText";
 
-// Read a VARCHAR/JSON/BOOLEAN/TIMESTAMP cell (always returned as a unique_ptr<string> by
-// duckorm select). Returns "" for a null pointer (the columns are NOT NULL DEFAULT '' so
-// this only guards against a hypothetical NULL).
-auto                  CellString(const duckorm::VarTypes& value) -> std::string {
-  const auto& ptr = std::get<std::unique_ptr<std::string>>(value);
-  return ptr ? *ptr : std::string{};
-}
-
-// A BOOLEAN cell comes back as the varchar "true"/"false"; treat any string starting with
-// 't' (any case) as true so the parse is robust to DuckDB's casing.
-auto CellBool(const duckorm::VarTypes& value) -> bool {
-  const auto& ptr = std::get<std::unique_ptr<std::string>>(value);
-  return ptr && !ptr->empty() && (*ptr)[0] == 't';
-}
-
 auto MapUnderstanding(const std::vector<duckorm::VarTypes>& row) -> AiDescription {
   AiDescription d;
   d.file_id_           = static_cast<sl_element_id_t>(std::get<int64_t>(row[0]));
-  d.task_id_           = CellString(row[1]);
-  d.provider_id_       = CellString(row[2]);
-  d.model_id_          = CellString(row[3]);
-  d.prompt_profile_id_ = CellString(row[4]);
-  d.rendition_kind_    = CellString(row[5]);
-  d.caption_           = CellString(row[6]);
-  d.tags_json_         = CellString(row[7]);
-  d.scene_             = CellString(row[8]);
+  d.task_id_           = duckorm::cell_text(row[1]);
+  d.provider_id_       = duckorm::cell_text(row[2]);
+  d.model_id_          = duckorm::cell_text(row[3]);
+  d.prompt_profile_id_ = duckorm::cell_text(row[4]);
+  d.rendition_kind_    = duckorm::cell_text(row[5]);
+  d.caption_           = duckorm::cell_text(row[6]);
+  d.tags_json_         = duckorm::cell_text(row[7]);
+  d.scene_             = duckorm::cell_text(row[8]);
   d.confidence_        = std::get<double>(row[9]);
-  d.active_            = CellBool(row[10]);
+  d.active_            = duckorm::cell_bool(row[10]);
   // row[11..12] are the derived search text columns; row[13] is updated_at — audit-only.
   // Neither is surfaced on the domain object.
   return d;
@@ -171,16 +156,16 @@ auto MapUnderstanding(const std::vector<duckorm::VarTypes>& row) -> AiDescriptio
 auto MapRating(const std::vector<duckorm::VarTypes>& row) -> AiRating {
   AiRating r;
   r.file_id_           = static_cast<sl_element_id_t>(std::get<int64_t>(row[0]));
-  r.task_id_           = CellString(row[1]);
-  r.provider_id_       = CellString(row[2]);
-  r.model_id_          = CellString(row[3]);
-  r.prompt_profile_id_ = CellString(row[4]);
-  r.rendition_kind_    = CellString(row[5]);
+  r.task_id_           = duckorm::cell_text(row[1]);
+  r.provider_id_       = duckorm::cell_text(row[2]);
+  r.model_id_          = duckorm::cell_text(row[3]);
+  r.prompt_profile_id_ = duckorm::cell_text(row[4]);
+  r.rendition_kind_    = duckorm::cell_text(row[5]);
   r.rating_            = static_cast<int>(std::get<int32_t>(row[6]));
-  r.rubric_id_         = CellString(row[7]);
-  r.rubric_version_    = CellString(row[8]);
-  r.reasons_           = CellString(row[9]);
-  r.active_            = CellBool(row[10]);
+  r.rubric_id_         = duckorm::cell_text(row[7]);
+  r.rubric_version_    = duckorm::cell_text(row[8]);
+  r.reasons_           = duckorm::cell_text(row[9]);
+  r.active_            = duckorm::cell_bool(row[10]);
   // row[11] is updated_at — audit-only.
   return r;
 }
@@ -190,8 +175,7 @@ auto FileIdColumnIn(std::span<const sl_element_id_t> file_ids) -> duckorm::SqlFr
 }
 
 auto FileIdEquals(sl_element_id_t file_id) -> duckorm::SqlFragment {
-  return duckorm::expr::eq(duckorm::expr::col("file_id"),
-                           duckorm::expr::param(static_cast<int64_t>(file_id)));
+  return duckorm::expr::column_eq("file_id", static_cast<int64_t>(file_id));
 }
 
 auto ActiveRowOfFile(sl_element_id_t file_id) -> duckorm::SqlFragment {

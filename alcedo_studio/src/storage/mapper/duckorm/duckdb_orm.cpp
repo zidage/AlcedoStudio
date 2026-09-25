@@ -615,6 +615,16 @@ auto select_string(duckdb_connection& conn, const SqlFragment& query)
   return value;
 }
 
+auto cell_text(const VarTypes& cell) -> std::string {
+  const auto& text = std::get<std::unique_ptr<std::string>>(cell);
+  return text ? *text : std::string{};
+}
+
+auto cell_bool(const VarTypes& cell) -> bool {
+  const auto& text = std::get<std::unique_ptr<std::string>>(cell);
+  return text && !text->empty() && ((*text)[0] == 't' || (*text)[0] == 'T');
+}
+
 Transaction::Transaction(duckdb_connection& conn) : conn_(conn) { begin_transaction(conn_); }
 
 Transaction::~Transaction() {

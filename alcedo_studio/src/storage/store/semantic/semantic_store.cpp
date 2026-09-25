@@ -42,16 +42,6 @@ constexpr double kSemanticFallbackScoreSpanKeepRatio = 0.35;
 constexpr double kSemanticElbowGapToSpanRatio        = 0.18;
 constexpr double kSemanticElbowGapToMedianRatio      = 3.0;
 
-// ---- result cells (duckorm select_by_query rows, see duckorm::VarTypes) ----
-
-auto CellString(const duckorm::VarTypes& value) -> std::string {
-  const auto& text = std::get<std::unique_ptr<std::string>>(value);
-  return text ? *text : std::string{};
-}
-
-// BOOLEAN cells are decoded as the text "true" / "false".
-auto CellBool(const duckorm::VarTypes& value) -> bool { return CellString(value) == "true"; }
-
 auto Column(const char* name, duckorm::DuckDBType type) -> duckorm::DuckFieldDesc {
   return duckorm::DuckFieldDesc{name, type, 0};
 }
@@ -75,17 +65,17 @@ const std::array<duckorm::DuckFieldDesc, 11> kModelRowFields = {
 
 auto MapModelRow(const std::vector<duckorm::VarTypes>& row) -> SemanticModelRecord {
   SemanticModelRecord record;
-  record.model_key_                     = CellString(row[0]);
-  record.model_id_                      = CellString(row[1]);
-  record.revision_                      = CellString(row[2]);
+  record.model_key_                     = duckorm::cell_text(row[0]);
+  record.model_id_                      = duckorm::cell_text(row[1]);
+  record.revision_                      = duckorm::cell_text(row[2]);
   record.embedding_dim_                 = std::get<int32_t>(row[3]);
   record.image_size_                    = std::get<int32_t>(row[4]);
-  record.engine_id_                     = CellString(row[5]);
-  record.profile_id_                    = CellString(row[6]);
-  record.supported_text_languages_json_ = CellString(row[7]);
-  record.prompt_config_hash_            = CellString(row[8]);
-  record.asset_manifest_json_           = CellString(row[9]);
-  record.active_                        = CellBool(row[10]);
+  record.engine_id_                     = duckorm::cell_text(row[5]);
+  record.profile_id_                    = duckorm::cell_text(row[6]);
+  record.supported_text_languages_json_ = duckorm::cell_text(row[7]);
+  record.prompt_config_hash_            = duckorm::cell_text(row[8]);
+  record.asset_manifest_json_           = duckorm::cell_text(row[9]);
+  record.active_                        = duckorm::cell_bool(row[10]);
   return record;
 }
 
@@ -257,22 +247,12 @@ auto ImageEmbeddingIndexName(int dim) -> const char* {
                                          : "idx_semantic_image_embedding_hnsw";
 }
 
-// ---- predicates ----
-
-auto ColumnEquals(const char* column, const std::string& value) -> duckorm::SqlFragment {
-  return expr::eq(expr::col(column), expr::param(value));
-}
-
-auto ColumnEquals(const char* column, int64_t value) -> duckorm::SqlFragment {
-  return expr::eq(expr::col(column), expr::param(value));
-}
-
 // ---- statements (all throw std::runtime_error with DuckDB's message on failure) ----
 
 // Embedding size of a registered model, or std::nullopt when the model is not registered.
 auto ModelEmbeddingDim(duckdb_connection conn, const std::string& model_key) -> std::optional<int> {
   auto query = expr::raw("SELECT embedding_dim FROM SemanticModel WHERE ");
-  query.append(ColumnEquals("model_key", model_key));
+  query.append(expr::column_eq("model_key", model_key));
   const auto value = duckorm::select_int64(conn, query);
   if (!value.has_value()) {
     return std::nullopt;
@@ -500,7 +480,7 @@ auto QueryAssignedLabel(duckdb_connection conn, const SemanticImageEmbeddingReco
   std::vector<std::pair<std::string, double>> scores;
   scores.reserve(rows.size());
   for (const auto& row : rows) {
-    auto label = CellString(row[0]);
+    auto label = duckorm::cell_text(row[0]);
     if (label.empty()) {
       throw std::runtime_error("Semantic label assignment returned an empty label.");
     }
@@ -622,7 +602,7 @@ auto QueryAssignedLabelsBatch(duckdb_connection                             conn
   std::vector<std::pair<std::string, double>> scores;
   for (size_t r = 0; r < rows.size(); ++r) {
     const auto file_id = static_cast<sl_element_id_t>(std::get<int64_t>(rows[r][0]));
-    auto       label   = CellString(rows[r][1]);
+    auto       label   = duckorm::cell_text(rows[r][1]);
     if (label.empty()) {
       throw std::runtime_error(
           "Semantic label assignment returned incomplete results for the batch.");
@@ -657,7 +637,7 @@ void DeleteEmbeddingAndLabelRows(duckdb_connection conn, int model_dim,
                                  const std::string&               model_key,
                                  std::span<const sl_element_id_t> file_ids) {
   const auto where = expr::and_(
-      {ColumnEquals("model_key", model_key), expr::in_list(expr::col("file_id"), file_ids)});
+      {expr::column_eq("model_key", model_key), expr::in_list(expr::col("file_id"), file_ids)});
   duckorm::remove(conn, ImageEmbeddingTableName(model_dim), where);
   duckorm::remove(conn, "SemanticImageLabel", where);
 }
@@ -762,7 +742,7 @@ auto SemanticStore::GetModelSupportedTextLanguagesJson(const std::string& model_
   auto guard   = database_.GetConnectionGuard();
   auto db_lock = guard.Lock();
   auto query   = expr::raw("SELECT supported_text_languages_json FROM SemanticModel WHERE ");
-  query.append(ColumnEquals("model_key", model_key));
+  query.append(expr::column_eq("model_key", model_key));
   try {
     return duckorm::select_string(guard.conn_, query).value_or(std::string{});
   } catch (const std::exception&) {
@@ -775,7 +755,7 @@ auto SemanticStore::GetModel(const std::string& model_key, std::string* error) c
   auto guard   = database_.GetConnectionGuard();
   auto db_lock = guard.Lock();
   auto query   = expr::raw(std::format("SELECT {} FROM SemanticModel WHERE ", kModelColumns));
-  query.append(ColumnEquals("model_key", model_key));
+  query.append(expr::column_eq("model_key", model_key));
   query.append(expr::raw(" LIMIT 1"));
   try {
     const auto rows =
@@ -840,7 +820,7 @@ auto SemanticStore::PurgeModel(const std::string& model_key, std::string* error)
   };
   try {
     duckorm::Transaction transaction(guard.conn_);
-    const auto           where = ColumnEquals("model_key", model_key);
+    const auto           where = expr::column_eq("model_key", model_key);
     for (const auto* table : kTables) {
       duckorm::remove(guard.conn_, table, where);
     }
@@ -869,7 +849,7 @@ auto SemanticStore::SetActiveModelKey(const std::string& model_key, std::string*
     duckorm::Transaction transaction(guard.conn_);
     duckorm::execute(guard.conn_, expr::raw("UPDATE SemanticModel SET active = FALSE"));
     auto activate = expr::raw("UPDATE SemanticModel SET active = TRUE WHERE ");
-    activate.append(ColumnEquals("model_key", model_key));
+    activate.append(expr::column_eq("model_key", model_key));
     duckorm::execute(guard.conn_, activate);
     transaction.commit();
   } catch (const std::exception& e) {
@@ -1133,7 +1113,7 @@ auto SemanticStore::CountImageEmbeddings(const std::string& model_key) const -> 
   auto db_lock = guard.Lock();
   auto query   = expr::raw(
       std::format("SELECT COUNT(*) FROM {} WHERE ", ImageEmbeddingTableName(*model_dim)));
-  query.append(ColumnEquals("model_key", model_key));
+  query.append(expr::column_eq("model_key", model_key));
   return CountOrZero(guard.conn_, query);
 }
 
@@ -1147,8 +1127,8 @@ auto SemanticStore::CountImageEmbeddingsForFile(sl_element_id_t    file_id,
   auto db_lock = guard.Lock();
   auto query   = expr::raw(
       std::format("SELECT COUNT(*) FROM {} WHERE ", ImageEmbeddingTableName(*model_dim)));
-  query.append(expr::and_({ColumnEquals("file_id", static_cast<int64_t>(file_id)),
-                           ColumnEquals("model_key", model_key)}));
+  query.append(expr::and_({expr::column_eq("file_id", static_cast<int64_t>(file_id)),
+                           expr::column_eq("model_key", model_key)}));
   return CountOrZero(guard.conn_, query);
 }
 
@@ -1166,10 +1146,10 @@ auto SemanticStore::HasReadyImageEmbedding(sl_element_id_t file_id, image_id_t i
       require_label ? "JOIN SemanticImageLabel sl ON sl.file_id = se.file_id AND "
                         "sl.model_key = se.model_key "
                       : ""));
-  query.append(expr::and_({ColumnEquals("se.file_id", static_cast<int64_t>(file_id)),
-                           ColumnEquals("se.image_id", static_cast<int64_t>(image_id)),
-                           ColumnEquals("se.model_key", model_key),
-                           ColumnEquals("se.embedding_dim", static_cast<int64_t>(*model_dim)),
+  query.append(expr::and_({expr::column_eq("se.file_id", static_cast<int64_t>(file_id)),
+                           expr::column_eq("se.image_id", static_cast<int64_t>(image_id)),
+                           expr::column_eq("se.model_key", model_key),
+                           expr::column_eq("se.embedding_dim", static_cast<int64_t>(*model_dim)),
                            expr::raw("se.status = 'ready' AND se.error IS NULL")}));
   if (require_label) {
     query.append(expr::raw(" AND sl.label IS NOT NULL AND sl.label <> ''"));
@@ -1182,8 +1162,8 @@ auto SemanticStore::CountImageLabelsForFile(sl_element_id_t    file_id,
   auto guard   = database_.GetConnectionGuard();
   auto db_lock = guard.Lock();
   auto query   = expr::raw("SELECT COUNT(*) FROM SemanticImageLabel WHERE ");
-  query.append(expr::and_({ColumnEquals("file_id", static_cast<int64_t>(file_id)),
-                           ColumnEquals("model_key", model_key)}));
+  query.append(expr::and_({expr::column_eq("file_id", static_cast<int64_t>(file_id)),
+                           expr::column_eq("model_key", model_key)}));
   return CountOrZero(guard.conn_, query);
 }
 
@@ -1199,7 +1179,7 @@ auto SemanticStore::CountImageLabelsInFolder(sl_element_id_t    folder_id,
       "SELECT COUNT(*) FROM SemanticImageLabel sl "
                 "JOIN (SELECT e.id AS file_id {}) scoped ON scoped.file_id = sl.file_id WHERE ",
       scope.from_where_));
-  query.append(ColumnEquals("sl.model_key", model_key));
+  query.append(expr::column_eq("sl.model_key", model_key));
   query.append(expr::raw(" AND sl.label IS NOT NULL AND sl.label <> ''"));
   return CountOrZero(guard.conn_, query);
 }
@@ -1214,8 +1194,8 @@ auto SemanticStore::CountLabelPrototypes(const std::string& model_key,
   auto db_lock = guard.Lock();
   auto query   = expr::raw(
       std::format("SELECT COUNT(*) FROM {} WHERE ", LabelPrototypeTableName(*model_dim)));
-  query.append(expr::and_({ColumnEquals("model_key", model_key),
-                           ColumnEquals("prompt_config_hash", prompt_config_hash)}));
+  query.append(expr::and_({expr::column_eq("model_key", model_key),
+                           expr::column_eq("prompt_config_hash", prompt_config_hash)}));
   return CountOrZero(guard.conn_, query);
 }
 
@@ -1223,7 +1203,7 @@ auto SemanticStore::CountLabelQueries(const std::string& prompt_config_hash) con
   auto guard   = database_.GetConnectionGuard();
   auto db_lock = guard.Lock();
   auto query   = expr::raw("SELECT COUNT(*) FROM SemanticLabelQuery WHERE ");
-  query.append(ColumnEquals("prompt_config_hash", prompt_config_hash));
+  query.append(expr::column_eq("prompt_config_hash", prompt_config_hash));
   return CountOrZero(guard.conn_, query);
 }
 
@@ -1234,7 +1214,7 @@ auto SemanticStore::ListLabelQueries(const std::string& prompt_config_hash,
   auto db_lock = guard.Lock();
   auto query   = expr::raw(
       "SELECT prompt_config_hash, label, query_text FROM SemanticLabelQuery WHERE ");
-  query.append(ColumnEquals("prompt_config_hash", prompt_config_hash));
+  query.append(expr::column_eq("prompt_config_hash", prompt_config_hash));
   query.append(expr::raw(" ORDER BY label"));
   static const std::array<duckorm::DuckFieldDesc, 3> fields = {
       Column("prompt_config_hash", duckorm::DuckDBType::VARCHAR),
@@ -1246,9 +1226,9 @@ auto SemanticStore::ListLabelQueries(const std::string& prompt_config_hash,
     const auto rows = duckorm::select_by_query(guard.conn_, fields, fields.size(), query);
     out.reserve(rows.size());
     for (const auto& row : rows) {
-      out.push_back(SemanticLabelQueryRecord{.prompt_config_hash_ = CellString(row[0]),
-                                             .label_              = CellString(row[1]),
-                                             .query_text_         = CellString(row[2])});
+      out.push_back(SemanticLabelQueryRecord{.prompt_config_hash_ = duckorm::cell_text(row[0]),
+                                             .label_              = duckorm::cell_text(row[1]),
+                                             .query_text_         = duckorm::cell_text(row[2])});
     }
   } catch (const std::exception& e) {
     SetError(error, e.what());
@@ -1286,15 +1266,15 @@ auto SemanticStore::LoadLabelPrototypes(const std::string& model_key,
     }
     auto query = expr::raw(std::format("SELECT label{} FROM {} WHERE ", columns,
                                        LabelPrototypeTableName(*model_dim)));
-    query.append(expr::and_({ColumnEquals("model_key", model_key),
-                             ColumnEquals("prompt_config_hash", prompt_config_hash)}));
+    query.append(expr::and_({expr::column_eq("model_key", model_key),
+                             expr::column_eq("prompt_config_hash", prompt_config_hash)}));
     query.append(expr::raw(" ORDER BY label"));
 
     const auto rows = duckorm::select_by_query(guard.conn_, fields, fields.size(), query);
     out.reserve(rows.size());
     for (const auto& row : rows) {
       SemanticGenerationLabelPrototype prototype;
-      prototype.label = CellString(row[0]);
+      prototype.label = duckorm::cell_text(row[0]);
       prototype.embedding.resize(static_cast<size_t>(*model_dim), 0.0F);
       for (int i = 0; i < *model_dim; ++i) {
         prototype.embedding[static_cast<size_t>(i)] =
@@ -1317,8 +1297,8 @@ auto SemanticStore::GetImageLabelForFile(sl_element_id_t file_id, const std::str
   auto query   = expr::raw(
       "SELECT file_id, model_key, label, score, second_label, second_score, margin, confident, "
         "top_scores FROM SemanticImageLabel WHERE ");
-  query.append(expr::and_({ColumnEquals("file_id", static_cast<int64_t>(file_id)),
-                           ColumnEquals("model_key", model_key)}));
+  query.append(expr::and_({expr::column_eq("file_id", static_cast<int64_t>(file_id)),
+                           expr::column_eq("model_key", model_key)}));
   static const std::array<duckorm::DuckFieldDesc, 9> fields = {
       Column("file_id", duckorm::DuckDBType::INT64),
       Column("model_key", duckorm::DuckDBType::VARCHAR),
@@ -1337,14 +1317,14 @@ auto SemanticStore::GetImageLabelForFile(sl_element_id_t file_id, const std::str
     const auto&              row = rows.front();
     SemanticImageLabelRecord record;
     record.file_id_         = static_cast<sl_element_id_t>(std::get<int64_t>(row[0]));
-    record.model_key_       = CellString(row[1]);
-    record.label_           = CellString(row[2]);
+    record.model_key_       = duckorm::cell_text(row[1]);
+    record.label_           = duckorm::cell_text(row[2]);
     record.score_           = std::get<double>(row[3]);
-    record.second_label_    = CellString(row[4]);
+    record.second_label_    = duckorm::cell_text(row[4]);
     record.second_score_    = std::get<std::optional<double>>(row[5]);
     record.margin_          = std::get<double>(row[6]);
-    record.confident_       = CellBool(row[7]);
-    record.top_scores_json_ = CellString(row[8]);
+    record.confident_       = duckorm::cell_bool(row[7]);
+    record.top_scores_json_ = duckorm::cell_text(row[8]);
     return record;
   } catch (const std::exception& e) {
     SetError(error, e.what());
@@ -1388,7 +1368,7 @@ auto SemanticStore::SearchImageEmbeddings(sl_element_id_t folder_id, const std::
   query.append(query_literal);
   query.append(expr::raw(
       std::format(") AS distance FROM {} se WHERE ", ImageEmbeddingTableName(*model_dim))));
-  query.append(ColumnEquals("se.model_key", model_key));
+  query.append(expr::column_eq("se.model_key", model_key));
   query.append(expr::raw(std::format(
       " AND se.status = 'ready' AND se.embedding_dim = {} ORDER BY array_distance(se.embedding, ",
       *model_dim)));
@@ -1416,7 +1396,7 @@ auto SemanticStore::SearchImageEmbeddings(sl_element_id_t folder_id, const std::
       candidates.push_back(
           SemanticRankedFile{.file_id_   = static_cast<sl_element_id_t>(std::get<int64_t>(row[0])),
                              .image_id_  = static_cast<image_id_t>(std::get<int64_t>(row[1])),
-                             .file_name_ = CellString(row[2]),
+                             .file_name_ = duckorm::cell_text(row[2]),
                              .score_     = std::get<double>(row[3])});
     }
   } catch (const std::exception& e) {

@@ -130,6 +130,18 @@ std::vector<std::vector<VarTypes>> select_by_query(duckdb_connection&           
                                                    size_t field_count, const SqlFragment& query);
 
 /**
+ * @brief Text of a decoded cell of a text type (VARCHAR, JSON, BOOLEAN, TIMESTAMP, STRING,
+ *        NULLABLE_STRING). Empty for a NULL cell.
+ */
+[[nodiscard]] auto cell_text(const VarTypes& cell) -> std::string;
+
+/**
+ * @brief Value of a decoded BOOLEAN cell, which select decodes as the text "true" / "false".
+ *        False for a NULL cell.
+ */
+[[nodiscard]] auto cell_bool(const VarTypes& cell) -> bool;
+
+/**
  * @brief One transaction on a connection, rolled back unless committed.
  *
  * The constructor runs BEGIN and commit() runs COMMIT; both throw on failure. When the object
