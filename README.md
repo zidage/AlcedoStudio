@@ -23,7 +23,7 @@ It supports Windows 10/11 (x64) and Macs with Apple Silicon.
 </p>
 
 <details>
-<summary><strong>Watch it in motion</strong> (two short videos)</summary>
+<summary><strong>Demo Video</strong> (two short videos)</summary>
 
 Editor
 
@@ -101,7 +101,7 @@ Alcedo exports JPEG, PNG, TIFF, OpenEXR, and Ultra HDR JPEG, at 8, 16, or 32 bit
   </tr>
   <tr>
     <td width="50%"><img src="docs/images/nodes.jpg" alt="Node editor with several Color Grade nodes and a mask shown on the photo"/></td>
-    <td width="50%"><img src="docs/images/versions.jpg" alt="Versions panel with several named versions and the edit history"/></td>
+    <td width="50%"><img src="docs/images/masks.jpg" alt="Mask editor with several Color Grade nodes and a mask shown on the photo"/></td>
   </tr>
   <tr>
     <td width="50%"><img src="docs/images/search.jpg" alt="Natural-language search results with an AI description in the inspector"/></td>

@@ -23,7 +23,7 @@
 </p>
 
 <details>
-<summary><strong>观看演示</strong>（两段短视频）</summary>
+<summary><strong>演示视频</strong>（两段短视频）</summary>
 
 编辑器
 
@@ -101,7 +101,7 @@ Alcedo 可以导出 JPEG、PNG、TIFF、OpenEXR 和 Ultra HDR JPEG，并根据�
   </tr>
   <tr>
     <td width="50%"><img src="docs/images/nodes.jpg" alt="节点编辑器中有多个 Color Grade 节点，画面上显示蒙版"/></td>
-    <td width="50%"><img src="docs/images/versions.jpg" alt="版本面板中有多个命名版本和编辑历史"/></td>
+    <td width="50%"><img src="docs/images/masks.jpg" alt="蒙版编辑器，画面上显示蒙版"/></td>
   </tr>
   <tr>
     <td width="50%"><img src="docs/images/search.jpg" alt="自然语言搜索结果，检查器中显示 AI 描述"/></td>
