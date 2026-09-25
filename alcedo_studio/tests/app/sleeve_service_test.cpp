@@ -565,7 +565,7 @@ TEST_F(SleeveServiceTests, DuplicateUsesLatestPipelineSnapshotBeforePipelineSync
 }
 
 /// G10.4: file import and file copy write only the element, file-binding, and
-/// folder rows. A 0.9.0 database has no legacy edit-history table, and a copied
+/// folder rows. A current database has no legacy edit-history table, and a copied
 /// file reloads from storage without one.
 TEST_F(SleeveServiceTests, ImportAndCopyDoNotCreateLegacyHistory) {
   sl_element_id_t source_id    = 0;

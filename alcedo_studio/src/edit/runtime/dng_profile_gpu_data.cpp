@@ -11,8 +11,9 @@ namespace alcedo {
 auto PackDngProfileGpuData(const DevelopCameraProfile&  profile,
                            const DevelopColorTransform& transform) -> std::vector<float> {
   std::vector<float> result(32, 0.0f);
-  if (!profile.dng_profile) return result;
-  const auto& dng = *profile.dng_profile;
+  const auto*        bound = profile.dng_profile.RequireBound();
+  if (!bound) return result;
+  const auto& dng = *bound;
   result[0]       = 1.0f;
   result[1] = static_cast<float>(std::exp2(dng.baseline_exposure + dng.baseline_exposure_offset));
   const auto append = [&](const DngHueSatMap& map, unsigned descriptor) {

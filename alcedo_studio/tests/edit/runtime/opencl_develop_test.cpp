@@ -318,6 +318,10 @@ TEST_F(OpenClDevelopFixture, SonyYcbcrRgbRendersWithImportedCameraProfileAtFullR
   gpu_dag_test::VerifyCameraRgbFile<OpenClRenderDevice>("DSC04739.ARW", ImageType::ARW, "opencl");
 }
 
+TEST_F(OpenClDevelopFixture, CanonDngProfileRendersAtFullResolutionAndInvalidatesOnlyColorCache) {
+  gpu_dag_test::VerifyCanonDngProfile<OpenClRenderDevice>("opencl");
+}
+
 TEST_F(OpenClDevelopFixture, ConvertedLinearDngRendersWarpAndPublishesCacheOutputAtFullResolution) {
   gpu_dag_test::VerifyCameraRgbFile<OpenClRenderDevice>("DSC04739_dng.dng", ImageType::DNG,
                                                         "opencl");

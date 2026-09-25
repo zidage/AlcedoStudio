@@ -3,8 +3,11 @@
 // Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 #pragma once
 #include "decoded_rgb_test_support.hpp"
+#include "edit/runtime/aces_reference_gamut_compression.h"
 #include "edit/runtime/dng_profile_gpu_data.hpp"
 #include "edit/runtime/dng_profile_gpu_math.h"
+#include "image/dng_color_profile_cache.hpp"
+#include "image/metadata_extractor.hpp"
 
 namespace alcedo::gpu_dag_test {
 inline void SaveDngRender(const cv::Mat& display, const char* backend, const char* label) {
@@ -52,6 +55,27 @@ void VerifyCanonDngProfile(const char* backend) {
   ASSERT_TRUE(cv::checkRange(display));
   SaveDngRender(display, backend, "profile");
 
+  // Project data stores only the profile fingerprint. A document read back from its JSON is
+  // unbound; after the profile is loaded from the source file through the profile cache, a
+  // fresh device (no shared result cache) must render the same pixels as the import-bound document.
+  {
+    auto reloaded = PipelineDocument::FromJson(document.ToJson());
+    ASSERT_TRUE(reloaded.Develop()->Params().DngProfile().IsReferenced());
+    ASSERT_FALSE(reloaded.Develop()->Params().DngProfile().IsBound());
+    DngColorProfileCache cache([](const std::filesystem::path& source) {
+      return MetadataExtractor::ReadDngColorProfileFromSource(source);
+    });
+    reloaded.Develop()->Params().BindDngColorProfile(cache.Load(path));
+    ASSERT_EQ(reloaded.ToJson(), document.ToJson());
+    Device     reload_device;
+    const auto reload_output = reload_device.Execute(plan, input, reloaded);
+    reload_device.WaitIdle();
+    const auto reload_display = DownloadRgb(reload_device, reload_output);
+    ASSERT_EQ(reload_display.size(), display.size());
+    EXPECT_LT(cv::norm(display, reload_display, cv::NORM_INF), 1e-6)
+        << backend << ": source-bound DNG profile changed the rendered pixels";
+  }
+
   // Sample GPU results against scalar table evaluation, independently of the output transform.
   {
     const cv::Mat sensor    = DownloadRgb(device, plan.geometry_output);
@@ -70,10 +94,12 @@ void VerifyCanonDngProfile(const char* backend) {
         for (int r = 0; r < 3; ++r)
           for (int k = 0; k < 3; ++k) c[r] += transform.transform.camera_to_ap1[r * 3 + k] * s[k];
         const auto corrected = DngApplyColorProfile(DngMakeRgb(c[0], c[1], c[2]), table.data());
-        const auto actual    = developed.at<cv::Vec4f>(y, x);
-        ASSERT_NEAR(actual[0], encode(corrected.r), 3e-4);
-        ASSERT_NEAR(actual[1], encode(corrected.g), 3e-4);
-        ASSERT_NEAR(actual[2], encode(corrected.b), 3e-4);
+        // The camera pass applies the ACES reference gamut compression before ACEScc encoding.
+        const auto compressed = AcesReferenceGamutCompress(corrected.r, corrected.g, corrected.b);
+        const auto actual     = developed.at<cv::Vec4f>(y, x);
+        ASSERT_NEAR(actual[0], encode(compressed.r), 3e-4);
+        ASSERT_NEAR(actual[1], encode(compressed.g), 3e-4);
+        ASSERT_NEAR(actual[2], encode(compressed.b), 3e-4);
       }
   }
   auto restored = PipelineDocument::FromJson(document.ToJson());

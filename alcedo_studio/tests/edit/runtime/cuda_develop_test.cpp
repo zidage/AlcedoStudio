@@ -185,6 +185,10 @@ TEST_F(CudaDevelopFixture, SonyYcbcrRgbRendersWithImportedCameraProfileAtFullRes
   gpu_dag_test::VerifyCameraRgbFile<CudaRenderDevice>("DSC04739.ARW", ImageType::ARW, "cuda");
 }
 
+TEST_F(CudaDevelopFixture, CanonDngProfileRendersAtFullResolutionAndInvalidatesOnlyColorCache) {
+  gpu_dag_test::VerifyCanonDngProfile<CudaRenderDevice>("cuda");
+}
+
 TEST_F(CudaDevelopFixture, ConvertedLinearDngRendersWarpAndPublishesCacheOutputAtFullResolution) {
   gpu_dag_test::VerifyCameraRgbFile<CudaRenderDevice>("DSC04739_dng.dng", ImageType::DNG, "cuda");
 }

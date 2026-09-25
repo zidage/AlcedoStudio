@@ -13,6 +13,7 @@
 
 #include "decoders/processor/raw_color_context.hpp"
 #include "image.hpp"
+#include "image/dng_color_profile.hpp"
 #include "type/type.hpp"
 #include "utils/import/import_error_code.hpp"
 
@@ -91,9 +92,17 @@ class MetadataExtractor {
    */
   static void ExtractEXIF_ToImage(const image_path_t& image_path, Image& image);
 
-  /// Resolve missing DNG profile data in older project metadata before rendering.
-  /// Does not mutate shared Image state; missing or invalid source data raises an error.
-  static auto ReadRawColorContextForRender(const Image& image) -> RawRuntimeColorContext;
+  /**
+   * @brief Runtime read of the DNG color profile from a source file.
+   *
+   * Reads the same IFD0 tags as import (ColorMatrix, calibration, and profile tables), so the
+   * result has the same fingerprint as the profile bound at import when the file is unchanged.
+   * Project data does not store the profile; DngColorProfileCache calls this on a cache miss.
+   *
+   * @return The profile, or null when the file has no DNG color matrices.
+   * @throws std::exception when the file cannot be opened or a present profile tag is invalid.
+   */
+  static auto ReadDngColorProfileFromSource(const image_path_t& image_path) -> DngColorProfilePtr;
 
   /**
    * @brief Extract metadata from a raw file using libraw and populate the Image with

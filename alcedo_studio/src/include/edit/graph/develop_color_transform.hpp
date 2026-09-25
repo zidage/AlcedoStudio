@@ -36,6 +36,8 @@ enum class ColorTransformError {
   NonFiniteMatrix,
   InvalidAsShotNeutral,
   InvalidWhitePoint,
+  /// The Develop data references a DNG profile that no owner bound from the source file.
+  UnboundDngProfile,
 };
 
 /**
@@ -55,8 +57,10 @@ struct ColorTransformResult {
  *
  * Also solves as-shot CCT/tint from AsShotNeutral (or cam_mul fallback).
  *
- * @pre @p imported was populated at import by MetadataExtractor.
+ * @pre @p imported was populated at import by MetadataExtractor, or its DNG profile reference
+ *      was bound by the pipeline service after a project read.
  * Side effects: overwrites camera-profile fields and, on success, as-shot CCT/tint.
+ * @throws std::runtime_error when @p imported references a DNG profile that is not bound.
  */
 void BindDevelopCameraProfile(DevelopPayload& payload, const RawRuntimeColorContext& imported);
 

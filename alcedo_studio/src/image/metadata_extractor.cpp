@@ -1582,17 +1582,16 @@ auto MetadataExtractor::EXIFToJSON(const Exiv2::Image::UniquePtr& exif_data) -> 
   return exif_json;
 }
 
-auto MetadataExtractor::ReadRawColorContextForRender(const Image& image) -> RawRuntimeColorContext {
-  auto context = image.GetRawColorContext();
-  if (IsDngExtension(image.image_path_) && !context.dng_profile_) {
-    auto exif = ExtractEXIF(image.image_path_);
-    if (!exif) throw std::runtime_error("DNG profile: source metadata is unavailable");
-    // Replace formerly baked ColorMatrix data with the tagged matrices and separate calibration.
-    PopulateDngColorMetadataFromExif(exif->exifData(), context);
-    if (!context.dng_profile_)
-      throw std::runtime_error("DNG profile: source color matrices are missing");
+auto MetadataExtractor::ReadDngColorProfileFromSource(const image_path_t& image_path)
+    -> DngColorProfilePtr {
+  auto exif = ExtractEXIF(image_path);
+  if (!exif || exif->exifData().empty()) {
+    throw std::runtime_error("DNG profile: source metadata is unavailable for '" +
+                             image_path.string() + "'");
   }
-  return context;
+  RawRuntimeColorContext context;
+  PopulateDngColorMetadataFromExif(exif->exifData(), context);
+  return context.dng_profile_.Profile();
 }
 
 void MetadataExtractor::ExtractEXIF_ToImage(const image_path_t& image_path, Image& image) {

@@ -126,6 +126,9 @@ inline constexpr float kDefaultPipelineSaturation = 1.3f;
 
 /**
  * @brief Deep copy via JSON round-trip. The clone does not share Model pointers.
+ *
+ * The clone keeps the immutable DNG profile that the source Develop node has bound (shared,
+ * not copied), because the JSON form holds only the profile fingerprint.
  */
 [[nodiscard]] auto ClonePipelineDocument(const PipelineDocument& src) -> PipelineDocument;
 

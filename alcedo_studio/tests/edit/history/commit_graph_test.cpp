@@ -948,7 +948,8 @@ class ProjectSchemaBoundaryTests : public ::testing::Test {
 
 TEST_F(ProjectSchemaBoundaryTests, CurrentProjectFileVersionIsSupported) {
   EXPECT_TRUE(project_pack::ProjectVersionIsSupported(project_pack::kProjectFileVersion));
-  EXPECT_EQ(project_pack::kProjectFileVersion, "0.9.0");
+  EXPECT_EQ(project_pack::kProjectFileVersion, "0.10.0");
+  EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.9.0"));
   EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.8.0"));
   EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.7.0"));
   EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.5.0"));
@@ -998,7 +999,7 @@ TEST_F(ProjectSchemaBoundaryTests, ProjectVersion080FailsBeforeHistoryLoad) {
     const std::string message = error.what();
     EXPECT_NE(message.find("Incompatible project format"), std::string::npos);
     EXPECT_NE(message.find("0.8.0"), std::string::npos);
-    EXPECT_NE(message.find("0.9.0"), std::string::npos);
+    EXPECT_NE(message.find("0.10.0"), std::string::npos);
     EXPECT_EQ(message.find("not-a-duckdb-history-file"), std::string::npos);
     EXPECT_EQ(message.find("DuckDB"), std::string::npos);
   }

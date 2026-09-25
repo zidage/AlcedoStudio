@@ -351,13 +351,14 @@ TEST(PipelineEditBatch, TypedCommitAndChainExpectedSerializedIdentitySurvivesLeg
   EXPECT_EQ(folded.ToString(), LoadExpectedBytes("set_parameter_chain_hash.txt"));
 }
 
-/// G10.4: the project format cut to 0.9.0 removes only the legacy history store. The
+/// G10.4: the project format cuts (0.9.0 removed the legacy history store, 0.10.0 removed the
+/// stored DNG profile tables) keep the typed commit identities. The
 /// commit, chain, batch, and WAL identities keep their format versions, and the stored
 /// set-parameter commit reproduces the same hashes recorded before the cut. The literals
 /// below were read from the expected-serialized files at `aa604b0a` (G10.3), so a change to
 /// those files alone cannot hide an identity change.
 TEST(PipelineEditBatch, TypedCommitAndChainIdentityUnchangedAfterFormatCut) {
-  EXPECT_EQ(kProjectFileVersion, "0.9.0");
+  EXPECT_EQ(kProjectFileVersion, "0.10.0");
   EXPECT_EQ(kCommitFormatVersion, 5u);
   EXPECT_EQ(kChainFormatVersion, 5u);
   EXPECT_EQ(kPipelineEditBatchFormatVersion, 4u);

@@ -44,66 +44,7 @@
       1.66
     ],
     "color_matrix_2_cct": 6504.0,
-    "dng_profile": {
-      "analog_balance": [
-        1.02,
-        1.0,
-        0.98
-      ],
-      "baseline_exposure": 0.25,
-      "baseline_exposure_offset": 0.0,
-      "camera_calibration_1": [
-        1.0,
-        0.0,
-        0.0,
-        0.0,
-        1.0,
-        0.0,
-        0.0,
-        0.0,
-        1.0
-      ],
-      "camera_calibration_2": [
-        1.0,
-        0.0,
-        0.0,
-        0.0,
-        1.0,
-        0.0,
-        0.0,
-        0.0,
-        1.0
-      ],
-      "hue_sat_map_1": {
-        "divisions": [
-          0,
-          0,
-          0
-        ],
-        "encoding": 0,
-        "entries": []
-      },
-      "hue_sat_map_2": {
-        "divisions": [
-          0,
-          0,
-          0
-        ],
-        "encoding": 0,
-        "entries": []
-      },
-      "look_table": {
-        "divisions": [
-          0,
-          0,
-          0
-        ],
-        "encoding": 0,
-        "entries": []
-      },
-      "name": "Fixture Standard",
-      "version": 1
-    },
+    "dng_profile_fingerprint": "fe283656e9b1715b",
     "forward_matrices_valid": true,
     "forward_matrix_1": [
       0.61,

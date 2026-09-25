@@ -74,7 +74,7 @@ class PipelineDocumentRenderTest : public ::testing::Test {
     const auto exif = MetadataExtractor::ExtractEXIFFromBuffer(bytes.data(), bytes.size());
     ASSERT_NE(exif, nullptr);
     imported_.dng_profile_ = ReadDngColorProfile(exif->exifData());
-    ASSERT_NE(imported_.dng_profile_, nullptr);
+    ASSERT_TRUE(imported_.dng_profile_.IsBound());
     ASSERT_TRUE(imported_.color_matrices_valid_);
     input_    = std::make_shared<ImageBuffer>(std::move(bytes));
     document_ = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());

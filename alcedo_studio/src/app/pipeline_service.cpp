@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "app/pipeline_history_applier.hpp"
+#include "app/source_dng_profile_binding.hpp"
 #include "edit/graph/develop_color_transform.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/edit_commit.hpp"
@@ -154,6 +155,15 @@ auto StoredRootRawColorContext(Storage& storage, sl_element_id_t id)
   } catch (...) {
     return std::nullopt;
   }
+}
+
+/// Bind the DNG profile of a decoded root state: the RAW color context and the root document.
+/// @pre The caller holds no database connection lock.
+void BindSourceDngProfiles(Storage& storage, sl_element_id_t id, LoadedRootState& root) {
+  if (root.raw_color_context.has_value()) {
+    BindSourceDngColorProfile(storage, id, *root.raw_color_context);
+  }
+  BindSourceDngColorProfile(storage, id, root.document);
 }
 
 /// Bind the image camera profile onto a document that is not live yet. RAW roots bind the stored
@@ -442,6 +452,7 @@ auto PipelineMgmtService::LoadPipeline(sl_element_id_t id) -> std::shared_ptr<Pi
 
     pipeline_guard->pipeline_ = std::move(pipeline);
     pipeline_guard->document_ = LoadPipelineDocument(storage_->GetElementStore(), id);
+    BindSourceDngColorProfile(*storage_, id, *pipeline_guard->document_);
     std::optional<RawRuntimeColorContext> stored_raw;
     const auto* develop = pipeline_guard->document_->Develop();
     if (develop != nullptr &&
@@ -565,12 +576,13 @@ void PipelineMgmtService::InitializeImageRoot(const std::shared_ptr<PipelineGuar
     throw std::runtime_error("PipelineMgmtService: immutable root state is missing for image " +
                              std::to_string(pipeline->id_));
   }
-  const auto root_state =
-      TryDecodeRootState(*root_encoded, pipeline->id_, graph->GetRootId());
+  auto root_state = TryDecodeRootState(*root_encoded, pipeline->id_, graph->GetRootId());
   if (!root_state.has_value()) {
     throw std::runtime_error("PipelineMgmtService: immutable root identity is invalid for image " +
                              std::to_string(pipeline->id_));
   }
+  db_lock.unlock();
+  BindSourceDngProfiles(*storage_, pipeline->id_, *root_state);
   SetPipelineHistoryState(*pipeline, *graph);
   CacheRootDocument(*pipeline, root_state->document);
 }
@@ -613,6 +625,8 @@ auto PipelineMgmtService::LoadEditorPipeline(sl_element_id_t id) -> std::shared_
             "PipelineMgmtService: stored image edit state does not match the active Version");
       }
     }
+
+    BindSourceDngProfiles(*storage_, id, *root_state);
 
     // History tip is sole authority. A checkpoint is used only when its root, head,
     // and chain labels match the active Version.
@@ -878,6 +892,14 @@ auto PipelineMgmtService::CheckoutVersion(const std::shared_ptr<PipelineGuard>& 
       return false;
     }
   }
+  try {
+    BindSourceDngProfiles(*storage_, pipeline->id_, *root_state);
+  } catch (const std::exception& ex) {
+    if (error != nullptr) {
+      *error = ex.what();
+    }
+    return false;
+  }
   CacheRootDocument(*pipeline, root_state->document);
 
   // Build phase: nothing below this point changes the guard until the swap.
@@ -933,6 +955,14 @@ auto PipelineMgmtService::RebuildActiveEditorPipeline(
       }
       return false;
     }
+  }
+  try {
+    BindSourceDngProfiles(*storage_, pipeline->id_, *root_state);
+  } catch (const std::exception& ex) {
+    if (error != nullptr) {
+      *error = ex.what();
+    }
+    return false;
   }
   CacheRootDocument(*pipeline, root_state->document);
 

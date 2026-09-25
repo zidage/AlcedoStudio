@@ -181,7 +181,7 @@ TEST_F(EditorMiniGitMaterializerTest, OutOfOrderJournalCaptureIsRejectedBeforeWr
   EXPECT_EQ(project_.CountStoredCommits(element_id), 0u);
 }
 
-/// G10.4: a saved 0.9.0 project reopens through the metadata version check with the same
+/// G10.4: a saved current-version project reopens through the metadata version check with the same
 /// Version head, chain hash, and commit count, and the reopened working graph resumes at
 /// that head. The format cut changes no commit or chain identity.
 TEST_F(EditorMiniGitMaterializerTest, CurrentProjectReopensWithSameHeadAndChain) {
@@ -201,7 +201,7 @@ TEST_F(EditorMiniGitMaterializerTest, CurrentProjectReopensWithSameHeadAndChain)
     ASSERT_TRUE(in.is_open());
     nlohmann::json metadata;
     in >> metadata;
-    EXPECT_EQ(metadata.at("project_file_version").get<std::string>(), "0.9.0");
+    EXPECT_EQ(metadata.at("project_file_version").get<std::string>(), "0.10.0");
   }
 
   project_.CloseAndReopenProject();

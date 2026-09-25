@@ -6,10 +6,14 @@
 #include <algorithm>
 #include <filesystem>
 #include <limits>
+#include <string>
 
+#include "edit/graph/develop_color_transform.hpp"
+#include "edit/graph/pipeline_document.hpp"
 #include "edit/runtime/aces_reference_gamut_compression.h"
 #include "edit/runtime/dng_profile_gpu_data.hpp"
 #include "edit/runtime/dng_profile_gpu_math.h"
+#include "image/dng_color_profile.hpp"
 #include "image/dng_color_profile_import.hpp"
 #include "image/image.hpp"
 #include "image/metadata_extractor.hpp"
@@ -94,17 +98,156 @@ TEST(DngColorProfile, MalformedTablesAndUnsupportedEncodingsAreRejected) {
   EXPECT_THROW(MakeDngColorProfile(profile), std::runtime_error);
 }
 
-TEST(DngColorProfile, SerializationPreservesTablesAndRecomputesContentFingerprint) {
+TEST(DngColorProfile, FingerprintIdentifiesContentAndIsPersistedAsSixteenHexDigits) {
   DngColorProfile profile;
   profile.baseline_exposure       = .28;
   profile.hue_sat_map_1.divisions = {1, 2, 1};
   profile.hue_sat_map_1.entries   = {0, 1, 1, 30, 1.5f, 1.1f};
   const auto original             = MakeDngColorProfile(profile);
-  const auto restored             = DngColorProfileFromJson(DngColorProfileToJson(original));
-  EXPECT_TRUE(DngColorProfilesEqual(original, restored));
+  EXPECT_EQ(MakeDngColorProfile(profile)->fingerprint, original->fingerprint);
+  EXPECT_TRUE(DngColorProfilesEqual(original, MakeDngColorProfile(profile)));
   profile.hue_sat_map_1.entries[4] = 1.6f;
   EXPECT_NE(original->fingerprint, MakeDngColorProfile(profile)->fingerprint);
-  EXPECT_THROW(DngColorProfileFromJson({{"version", 2}}), std::runtime_error);
+
+  const auto text = DngColorProfileFingerprintToText(original->fingerprint);
+  EXPECT_EQ(text.size(), 16u);
+  EXPECT_EQ(DngColorProfileFingerprintFromText(text), original->fingerprint);
+  EXPECT_EQ(DngColorProfileFingerprintToText(0x0123456789abcdefULL), "0123456789abcdef");
+  EXPECT_THROW(DngColorProfileFingerprintFromText("0123"), std::runtime_error);
+  EXPECT_THROW(DngColorProfileFingerprintFromText("0123456789ABCDEF"), std::runtime_error);
+
+  // The persisted reference is the fingerprint text; reading it gives an unbound reference.
+  const DngColorProfileRef bound(original);
+  const auto               stored = DngColorProfileRefToJson(bound);
+  EXPECT_EQ(stored, nlohmann::json(text));
+  const auto restored = DngColorProfileRefFromJson(stored);
+  EXPECT_TRUE(restored.IsReferenced());
+  EXPECT_FALSE(restored.IsBound());
+  EXPECT_EQ(restored, bound);
+  EXPECT_THROW((void)restored.RequireBound(), std::runtime_error);
+  EXPECT_EQ(bound.RequireBound(), original.get());
+  EXPECT_TRUE(DngColorProfileRefToJson(DngColorProfileRef{}).is_null());
+  EXPECT_FALSE(DngColorProfileRefFromJson(nullptr).IsReferenced());
+  EXPECT_EQ(DngColorProfileRef{}.RequireBound(), nullptr);
+}
+
+TEST(DngColorProfile, UnboundReferenceFailsColorTransformAndGpuPackingInsteadOfDroppingProfile) {
+  DngColorProfile dng;
+  dng.hue_sat_map_1.divisions = {1, 2, 1};
+  dng.hue_sat_map_1.entries   = {0, 1, 1, 10, 1.2f, 1.1f};
+  const auto profile          = MakeDngColorProfile(dng);
+
+  DevelopPayload payload;
+  auto&          p        = payload.camera_profile;
+  p.color_matrices_valid  = true;
+  p.as_shot_neutral_valid = true;
+  p.color_matrix_1 = p.color_matrix_2 = kDngIdentityMatrix;
+  p.as_shot_neutral                   = {1, 1, 1};
+  p.dng_profile                       = profile;
+  ASSERT_TRUE(ResolveDevelopColorTransform(payload).ok);
+
+  p.dng_profile         = DngColorProfileRef::Unbound(profile->fingerprint);
+  const auto unresolved = ResolveDevelopColorTransform(payload);
+  EXPECT_FALSE(unresolved.ok);
+  EXPECT_EQ(unresolved.error, ColorTransformError::UnboundDngProfile);
+  EXPECT_THROW((void)PackDngProfileGpuData(p, DevelopColorTransform{}), std::runtime_error);
+
+  RawRuntimeColorContext imported;
+  imported.color_matrices_valid_ = true;
+  imported.dng_profile_          = DngColorProfileRef::Unbound(profile->fingerprint);
+  DevelopPayload bind_target;
+  EXPECT_THROW(BindDevelopCameraProfile(bind_target, imported), std::runtime_error);
+  EXPECT_FALSE(bind_target.camera_profile.dng_profile.IsReferenced());
+}
+
+TEST(DngColorProfile, DevelopJsonStoresFingerprintAndLoadKeepsOnlyAMatchingBoundProfile) {
+  DngColorProfile dng;
+  dng.name                    = "Fixture";
+  dng.hue_sat_map_1.divisions = {1, 2, 1};
+  dng.hue_sat_map_1.entries   = {0, 1, 1, 10, 1.2f, 1.1f};
+  const auto profile          = MakeDngColorProfile(dng);
+  dng.name                    = "Other";
+  const auto other            = MakeDngColorProfile(dng);
+
+  auto document                      = CreateDefaultPipelineDocument();
+  auto payload                       = document.Develop()->Params().Params();
+  payload.camera_profile.dng_profile = profile;
+  document.Develop()->Params().ReplaceParams(payload);
+
+  const auto json = document.ToJson();
+  const auto text = json.dump();
+  EXPECT_EQ(text.find("hue_sat_map"), std::string::npos);
+  EXPECT_EQ(text.find("\"dng_profile\""), std::string::npos);
+  const auto develop_json = document.Develop()->Params().ToJson();
+  EXPECT_EQ(develop_json.at("camera_profile").at("dng_profile_fingerprint"),
+            nlohmann::json(DngColorProfileFingerprintToText(profile->fingerprint)));
+
+  // A document read from JSON holds an unbound reference to the same fingerprint.
+  const auto restored  = PipelineDocument::FromJson(json);
+  const auto reference = restored.Develop()->Params().DngProfile();
+  EXPECT_FALSE(reference.IsBound());
+  EXPECT_EQ(reference, DngColorProfileRef(profile));
+  EXPECT_EQ(restored.Develop()->Params().Params(), document.Develop()->Params().Params());
+
+  // LoadJson of the same fingerprint keeps the bound profile; another fingerprint unbinds it.
+  document.Develop()->Params().LoadJson(develop_json);
+  EXPECT_EQ(document.Develop()->Params().DngProfile().Profile(), profile);
+  auto changed = develop_json;
+  changed["camera_profile"]["dng_profile_fingerprint"] =
+      DngColorProfileFingerprintToText(other->fingerprint);
+  document.Develop()->Params().LoadJson(changed);
+  EXPECT_FALSE(document.Develop()->Params().DngProfile().IsBound());
+  EXPECT_EQ(document.Develop()->Params().DngProfile(), DngColorProfileRef(other));
+
+  // Binding makes the reference bound; a profile with a new fingerprint replaces the stored one.
+  document.Develop()->Params().BindDngColorProfile(other);
+  EXPECT_EQ(document.Develop()->Params().DngProfile().Profile(), other);
+  document.Develop()->Params().BindDngColorProfile(profile);
+  EXPECT_EQ(document.Develop()->Params().DngProfile(), DngColorProfileRef(profile));
+  EXPECT_THROW(document.Develop()->Params().BindDngColorProfile(nullptr), std::invalid_argument);
+}
+
+TEST(DngColorProfile, ClonedDocumentSharesTheSourceBoundProfile) {
+  DngColorProfile dng;
+  dng.hue_sat_map_1.divisions = {1, 2, 1};
+  dng.hue_sat_map_1.entries   = {0, 1, 1, 10, 1.2f, 1.1f};
+  const auto profile          = MakeDngColorProfile(dng);
+  auto       document         = CreateDefaultPipelineDocument();
+  document.Develop()->Params().BindDngColorProfile(profile);
+
+  const auto clone = ClonePipelineDocument(document);
+  EXPECT_EQ(clone.Develop()->Params().DngProfile().Profile(), profile);
+  const auto unbound_clone = ClonePipelineDocument(PipelineDocument::FromJson(document.ToJson()));
+  EXPECT_FALSE(unbound_clone.Develop()->Params().DngProfile().IsBound());
+  EXPECT_TRUE(unbound_clone.Develop()->Params().DngProfile().IsReferenced());
+}
+
+TEST(DngColorProfile, ImportedContextBindsProfileOnDocumentReadFromJson) {
+  DngColorProfile dng;
+  dng.hue_sat_map_1.divisions = {1, 2, 1};
+  dng.hue_sat_map_1.entries   = {0, 1, 1, 10, 1.2f, 1.1f};
+  RawRuntimeColorContext imported;
+  imported.color_matrices_valid_  = true;
+  imported.as_shot_neutral_valid_ = true;
+  for (int i = 0; i < 3; ++i) {
+    imported.color_matrix_1_[i * 4] = imported.color_matrix_2_[i * 4] = 1.0;
+    imported.as_shot_neutral_[i]                                     = 1.0;
+  }
+  imported.dng_profile_ = MakeDngColorProfile(dng);
+
+  auto document = CreateDefaultPipelineDocument();
+  BindImportedCameraProfile(document, imported);
+  // The checkpoint and replay paths bind the same context onto a document read from JSON.
+  // Its payload equals the bound payload (same fingerprint), yet the profile must be installed.
+  auto reloaded = PipelineDocument::FromJson(document.ToJson());
+  ASSERT_FALSE(reloaded.Develop()->Params().DngProfile().IsBound());
+  BindImportedCameraProfile(reloaded, imported);
+  EXPECT_EQ(reloaded.Develop()->Params().DngProfile().Profile(), imported.dng_profile_.Profile());
+  EXPECT_TRUE(ResolveDevelopColorTransform(reloaded.Develop()->Params().Params()).ok);
+
+  auto replaced = PipelineDocument::FromJson(document.ToJson());
+  replaced.Develop()->Params().ReplaceParams(document.Develop()->Params().Params());
+  EXPECT_EQ(replaced.Develop()->Params().DngProfile().Profile(), imported.dng_profile_.Profile());
 }
 
 TEST(DngColorProfile, ImportExpandsOmittedNeutralRowsAndTwoDimensionalTables) {
@@ -168,29 +311,34 @@ TEST(DngColorProfile, ReferenceGamutCompressionReducesExtremeAp1DistanceBeforeLo
   EXPECT_TRUE(std::isfinite(output.b));
 }
 
-TEST(DngColorProfile, LegacyProjectMetadataReloadsCompleteProfileWithoutMutatingSharedImage) {
+TEST(DngColorProfile, ProjectMetadataStoresFingerprintOnlyAndSourceReadGivesSameProfile) {
   const auto path = std::filesystem::path(TEST_IMG_PATH) /
                     "raw/camera/sony/a7cii/ycbcr_compressed/DSC04739_dng.dng";
   if (!std::filesystem::exists(path)) GTEST_SKIP() << "Private Sony fixture missing";
   Image source(1, path, ImageType::DNG);
   MetadataExtractor::ExtractEXIF_ToImage(path, source);
-  auto  encoded = nlohmann::json::parse(source.ExifToJson());
-  auto& legacy  = encoded["RawRuntimeColorContext"];
-  legacy.erase("DngColorProfile");
-  // Older projects stored AnalogBalance and CameraCalibration baked into ColorMatrix.
-  legacy["ColorMatrix1"][0] = 2.12;
+  const auto& imported = source.GetRawColorContext().dng_profile_;
+  ASSERT_TRUE(imported.IsBound());
+
+  const auto persisted = source.ExifToJson();
+  EXPECT_EQ(persisted.find("HueSatMap"), std::string::npos);
+  EXPECT_EQ(persisted.find("hue_sat_map"), std::string::npos);
+  EXPECT_EQ(persisted.find("look_table"), std::string::npos);
+  const auto encoded = nlohmann::json::parse(persisted);
+  EXPECT_EQ(encoded.at("RawRuntimeColorContext").at("DngProfileFingerprint"),
+            nlohmann::json(DngColorProfileFingerprintToText(imported->fingerprint)));
+
   Image restored(2, path, ImageType::DNG);
-  restored.JsonToExif(encoded.dump());
-  const auto resolved = MetadataExtractor::ReadRawColorContextForRender(restored);
-  EXPECT_TRUE(
-      DngColorProfilesEqual(source.GetRawColorContext().dng_profile_, resolved.dng_profile_));
-  EXPECT_NEAR(resolved.color_matrix_1_[0], .8784, 1e-6);
-  EXPECT_FALSE(restored.GetRawColorContext().dng_profile_);
-  EXPECT_DOUBLE_EQ(restored.GetRawColorContext().color_matrix_1_[0], 2.12);
-  restored.image_path_ = "missing-dng-profile.dng";
-  EXPECT_THROW(MetadataExtractor::ReadRawColorContextForRender(restored), std::exception);
-  source.image_path_ = restored.image_path_;
-  EXPECT_NO_THROW(MetadataExtractor::ReadRawColorContextForRender(source));
+  restored.JsonToExif(persisted);
+  const auto& reference = restored.GetRawColorContext().dng_profile_;
+  EXPECT_FALSE(reference.IsBound());
+  EXPECT_EQ(reference, imported);
+
+  const auto from_source = MetadataExtractor::ReadDngColorProfileFromSource(path);
+  ASSERT_NE(from_source, nullptr);
+  EXPECT_EQ(from_source->fingerprint, imported->fingerprint);
+  EXPECT_THROW((void)MetadataExtractor::ReadDngColorProfileFromSource("missing-dng-profile.dng"),
+               std::exception);
 }
 
 TEST(DngColorProfile, FullCalibrationMapsTaggedNeutralToD50WithOffDiagonalCameraCalibration) {
@@ -250,8 +398,10 @@ TEST(DngColorProfile, CanonR6iiiImportsFullAdobeTablesAndChangesColorBeyondAMatr
   EXPECT_GT(
       std::abs(corrected.r - c[0]) + std::abs(corrected.g - c[1]) + std::abs(corrected.b - c[2]),
       .01f);
-  const auto restored = DngColorProfileFromJson(DngColorProfileToJson(ctx.dng_profile_));
-  EXPECT_TRUE(DngColorProfilesEqual(ctx.dng_profile_, restored));
+  const auto from_source = MetadataExtractor::ReadDngColorProfileFromSource(path);
+  ASSERT_NE(from_source, nullptr);
+  EXPECT_EQ(from_source->fingerprint, ctx.dng_profile_->fingerprint);
+  EXPECT_EQ(from_source->look_table, dng.look_table);
 }
 }  // namespace
 }  // namespace alcedo

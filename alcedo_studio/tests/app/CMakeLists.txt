@@ -176,6 +176,18 @@ gtest_discover_tests(ImportRawOnlyTest TEST_PREFIX "ImportRawOnlyTest."
 alcedo_copy_duckdb_fts_extension(ImportRawOnlyTest)
 alcedo_register_test_target(ImportRawOnlyTest app ci_core)
 
+# DNG color profile is runtime-only: project tables hold the fingerprint, and the pipeline
+# service binds the profile from the source file on load.
+add_executable(PipelineDngProfileBindingTest
+  ${ALCEDO_TEST_ROOT}/app/pipeline_dng_profile_binding_test.cpp)
+target_include_directories(PipelineDngProfileBindingTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(PipelineDngProfileBindingTest
+  ImportService ProjectService PipelineMgmtService OpenImageIO::OpenImageIO GTest::gtest_main)
+gtest_discover_tests(PipelineDngProfileBindingTest TEST_PREFIX "PipelineDngProfileBindingTest."
+  PROPERTIES LABELS "ci_core_flow")
+alcedo_copy_duckdb_fts_extension(PipelineDngProfileBindingTest)
+alcedo_register_test_target(PipelineDngProfileBindingTest app ci_core)
+
 if(ALCEDO_CUDA_ENABLED)
   qt_add_executable(ImportPipelineDocumentTest
     ${ALCEDO_TEST_ROOT}/app/import_pipeline_document_test.cpp)
@@ -626,10 +638,11 @@ gtest_discover_tests(ImageAnalysisControllerTest TEST_PREFIX "ImageAnalysisContr
   PROPERTIES LABELS "ci_core_flow")
 alcedo_register_test_target(ImageAnalysisControllerTest app ci_core)
 
-# Env-gated live smoke: opens a real packed .alcd, materializes one k1024 thumbnail, starts the
-# real Rust sidecar (no CLIP model; describe uses the HTTP provider path), and asks a live LLM to
-# describe the image through ImageAnalysisService. Skipped unless ALCEDO_IA_LIVE_RUNTIME_PATH,
-# ALCEDO_TEST_PACKED_PROJECT_PATH, and ALCEDO_IA_LIVE_ENV_TEST_PATH are set. ProjectService
+# Live image analysis (runs only with the environment below): opens a real packed .alcd,
+# materializes one k1024 thumbnail, starts the real Rust sidecar (no CLIP model; describe uses
+# the HTTP provider path), and asks a live LLM to describe the image through ImageAnalysisService.
+# Skipped unless ALCEDO_IA_LIVE_RUNTIME_PATH, ALCEDO_TEST_PACKED_PROJECT_PATH, and
+# ALCEDO_IA_LIVE_ENV_TEST_PATH are set. ProjectService
 # transitively provides ProjectPackageService (unpack), AlbumBrowseService (enumerate), and
 # AiSidecarRuntimeService (sidecar); ThumbnailService provides the k1024 materialization.
 add_executable(ImageAnalysisLiveSmokeTest ${ALCEDO_TEST_ROOT}/app/image_analysis_live_smoke_test.cpp)
