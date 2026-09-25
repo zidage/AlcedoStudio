@@ -38,3 +38,19 @@ target_link_libraries(SleeveFilterFactoryTest PRIVATE GTest::gtest_main SleeveFi
 gtest_discover_tests(SleeveFilterFactoryTest TEST_PREFIX "SleeveFilterFactoryTest."
   PROPERTIES LABELS "ci_core_flow")
 alcedo_register_test_target(SleeveFilterFactoryTest storage ci_core)
+
+# AI annotation and semantic model/embedding stores against a real project database.
+add_executable(AiStorageControllerTest ${ALCEDO_TEST_ROOT}/storage/ai_storage_controller_test.cpp)
+target_include_directories(AiStorageControllerTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(AiStorageControllerTest PRIVATE GTest::gtest_main ProjectService)
+gtest_discover_tests(AiStorageControllerTest TEST_PREFIX "AiStorageControllerTest.")
+alcedo_copy_duckdb_extensions(AiStorageControllerTest)
+alcedo_register_test_target(AiStorageControllerTest storage)
+
+add_executable(SemanticStorageControllerTest
+  ${ALCEDO_TEST_ROOT}/storage/semantic_storage_controller_test.cpp)
+target_include_directories(SemanticStorageControllerTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(SemanticStorageControllerTest PRIVATE GTest::gtest_main ProjectService)
+gtest_discover_tests(SemanticStorageControllerTest TEST_PREFIX "SemanticStorageControllerTest.")
+alcedo_copy_duckdb_extensions(SemanticStorageControllerTest)
+alcedo_register_test_target(SemanticStorageControllerTest storage)
