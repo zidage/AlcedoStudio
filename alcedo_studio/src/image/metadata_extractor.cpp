@@ -1177,15 +1177,19 @@ auto ExtractDngMetadataToImageFast(const image_path_t& image_path, Image& image)
 
   // LibRaw open_file is cheap and preserves the same camera/model strings
   // the old import path used, without paying the DNG unpack cost.
+  // The open is also the RAW admission check: a `.dng` name with EXIF but content LibRaw
+  // cannot open (for example a renamed JPEG) is not a DNG.
   auto                   raw_processor = std::make_unique<LibRaw>();
 #if defined(_WIN32)
   const int open_ret = raw_processor->open_file(image_path.wstring().c_str());
 #else
   const int open_ret = raw_processor->open_file(image_path.string().c_str());
 #endif
-  if (open_ret == LIBRAW_SUCCESS) {
-    PopulateDngMetadataHintFromOpenLibRaw(*raw_processor, display, ctx);
+  if (open_ret != LIBRAW_SUCCESS) {
+    raw_processor->recycle();
+    return false;
   }
+  PopulateDngMetadataHintFromOpenLibRaw(*raw_processor, display, ctx);
   raw_processor->recycle();
 
   MetadataExtractor::MergeMetadataHint(&display, ctx);
@@ -1578,26 +1582,6 @@ auto MetadataExtractor::EXIFToJSON(const Exiv2::Image::UniquePtr& exif_data) -> 
   return exif_json;
 }
 
-/// Exiv2 can open metadata-only sidecars (XMP/XML) and some container types that
-/// are not importable raster images.  Folder import intentionally does not filter
-/// by extension, so this check is the content-based gate after LibRaw fails.
-auto IsImportableExiv2Raster(const Exiv2::Image& exiv_image) -> bool {
-  switch (exiv_image.imageType()) {
-    case Exiv2::ImageType::none:
-    case Exiv2::ImageType::xmp:
-    case Exiv2::ImageType::asf:
-    case Exiv2::ImageType::qtime:
-    case Exiv2::ImageType::riff:
-    case Exiv2::ImageType::mkv:
-      return false;
-    default:
-      break;
-  }
-  // Sidecars and non-image containers report 0x0; real raster/RAW Exiv2 readers
-  // populate dimensions from the primary IFD / image header.
-  return exiv_image.pixelWidth() > 0 && exiv_image.pixelHeight() > 0;
-}
-
 auto MetadataExtractor::ReadRawColorContextForRender(const Image& image) -> RawRuntimeColorContext {
   auto context = image.GetRawColorContext();
   if (IsDngExtension(image.image_path_) && !context.dng_profile_) {
@@ -1612,41 +1596,14 @@ auto MetadataExtractor::ReadRawColorContextForRender(const Image& image) -> RawR
 }
 
 void MetadataExtractor::ExtractEXIF_ToImage(const image_path_t& image_path, Image& image) {
-  // LibRaw is the authority on what constitutes a RAW image, regardless of
-  // file extension.  Try it first on every file; a successful open+unpack means
-  // the file is a supported RAW and the RawRuntimeColorContext is populated.
+  // Import accepts RAW files only, decided by content (never by extension): the only render
+  // input is the RAW decoder, so a file LibRaw cannot open and unpack could not render.
+  // Exiv2 still adds metadata to RAW files inside ExtractRawMetadata_ToImage.
   if (ExtractRawMetadata_ToImage(image_path, image)) {
     return;
   }
-
-  // LibRaw could not identify the file as RAW.  Fall back to Exiv2 for image
-  // formats that carry EXIF but are not RAW (e.g. TIFF/JPEG).  If Exiv2 also
-  // cannot read the file, it is not a supported image — throw so the import
-  // caller marks the placeholder as failed instead of importing empty metadata.
-  Exiv2::Image::UniquePtr exif_data;
-  try {
-    exif_data = ExtractEXIF(image_path);
-  } catch (const std::exception& e) {
-    throw MetadataExtractionError(
-        ImportErrorCode::UNSUPPORTED_FORMAT, image_path,
-        std::string("No RAW or EXIF reader could open this file: ") + e.what());
-  }
-  if (!exif_data) {
-    throw MetadataExtractionError(ImportErrorCode::UNSUPPORTED_FORMAT, image_path,
-                                  "No RAW or EXIF reader could open this file");
-  }
-  if (!IsImportableExiv2Raster(*exif_data)) {
-    throw MetadataExtractionError(
-        ImportErrorCode::UNSUPPORTED_FORMAT, image_path,
-        "File is not an importable raster image (metadata sidecar or non-image container)");
-  }
-  ExifDisplayMetaData display_metadata;
-  if (!exif_data->exifData().empty()) {
-    GetDisplayMetadataFromExif(exif_data->exifData(), display_metadata);
-  }
-  PopulateStandardRating(*exif_data, display_metadata);
-  display_metadata.is_hdr_ = DetectHdrMetadata(image_path, exif_data.get());
-  image.SetExifDisplayMetaData(std::move(display_metadata));
+  throw MetadataExtractionError(ImportErrorCode::UNSUPPORTED_FORMAT, image_path,
+                                "not a supported RAW file");
 }
 
 auto MetadataExtractor::ExtractRawMetadata_ToImage(const image_path_t& image_path, Image& image)

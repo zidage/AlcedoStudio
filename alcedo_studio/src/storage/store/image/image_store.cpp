@@ -77,6 +77,12 @@ void ImageStore::RemoveImagesByIds(std::span<const image_id_t> remove_ids) {
   image_mapper_.RemoveByIds(remove_ids);
 }
 
+void ImageStore::RemoveImagesWithoutFileBinding() {
+  auto db_lock = guard_.Lock();
+  image_mapper_.RemoveByClause(
+      std::string("NOT EXISTS (SELECT 1 FROM FileImage fi WHERE fi.image_id = Image.id)"));
+}
+
 /**
  * @brief Remove an image by its type.
  *

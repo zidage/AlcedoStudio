@@ -622,6 +622,16 @@ void ProjectService::LoadProject(const std::filesystem::path& meta_path) {
     }
   }
 
+  // Best-effort cleanup of Image rows that no library file references (left by imports
+  // before failed entries were removed from the image pool). SyncImports is the fix; this
+  // only clears rows already on disk. A failure leaves the rows and does not stop the load.
+  try {
+    storage_->GetImageStore().RemoveImagesWithoutFileBinding();
+  } catch (const std::exception& e) {
+    std::cerr << "[Alcedo] Unable to remove Image rows without a library file: " << e.what()
+              << "\n";
+  }
+
   RecreateSleeveService(start_id);
   pool_service_   = std::make_shared<ImagePoolService>(storage_, image_pool_start_id);
   filter_service_ = std::make_shared<SleeveFilterService>(storage_);

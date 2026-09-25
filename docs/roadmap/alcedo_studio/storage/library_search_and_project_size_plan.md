@@ -2,7 +2,7 @@
 
 Date: 2026-09-24
 
-Status: Phase S0 complete (2026-09-24); S1–S6 not started
+Status: Phases S0 and S1 complete (2026-09-24); S2–S6 not started
 
 Primary owner: Alcedo Studio storage (Image schema, import, sleeve filter SQL) and library search.
 
@@ -402,6 +402,102 @@ row.
 
 Acceptance: re-import of the `demo.alcd` source folders gives `Image` rows = `FileImage` rows,
 and no non-RAW file is in the library.
+
+##### Phase S1 completion record (2026-09-24)
+
+**Status:** complete — import accepts RAW content only, a failed import writes no row, and the
+image pool keeps each unwritten Image until it is synced. The `demo.alcd` re-import in the
+acceptance line is a manual check and was not run (it belongs to the Phase S6 qualification).
+
+Branch: `feature/library-search-s1-raw-only-import` (on top of
+`refactor/library-search-s0-baseline`).
+
+Commits: `style(image-pool)` (CRLF → LF for `image_pool_manager.{hpp,cpp}`, no content change),
+then one S1 commit.
+
+**What changed:**
+
+| Step | Change |
+| --- | --- |
+| 1 | `MetadataExtractor::ExtractEXIF_ToImage` throws `UNSUPPORTED_FORMAT` ("not a supported RAW file") when `ExtractRawMetadata_ToImage` fails. The Exiv2 raster fallback and `IsImportableExiv2Raster` are deleted. Extra defect found and fixed: `ExtractDngMetadataToImageFast` accepted any `.dng`-named file with EXIF even when LibRaw could not open it (a JPEG renamed to `.dng` imported); it now returns false unless LibRaw `open_file` succeeds. Exiv2 still adds DNG metadata inside the RAW path. |
+| 2 | `ImportServiceImpl::SyncImports` collects `image_id_` of every `metadata_failed_` entry and calls `ImagePoolService::RemoveBatch` before `SyncWithStorage`. |
+| 3 | `ImportExportHandler::FinishImport` queues semantic generation only for `created_` entries with `metadata_ok_`. This also excludes the unsupported Nikon HE entries, so the separate id set is gone. |
+| 4 | Option chosen: a pool rule, not per-import pins. `ImagePoolManager::IsEvictable` refuses to evict an Image whose sync state is not `SYNCED` (new, modified, or deleted and not yet written); the pool grows past 1024 until `SyncWithStorage` runs. Reason: the 1100-file test showed that the loss needs one more pool insert after the metadata tasks release their pins (for example the library grid reading a stored Image). Pinning only the import handles would not protect the other unwritten writes (`Write_NoSync` star ratings, `PersistImageHdrFlag`), which had the same eviction loss. Each imported Image is also held by its `SleeveFile`, so the rule adds no memory during import. |
+| 5 | `ImageStore::RemoveImagesWithoutFileBinding` (`DELETE … WHERE NOT EXISTS (SELECT 1 FROM FileImage …)`) runs once in `ProjectService::LoadProject`. A failure is logged and the load continues. |
+
+**Primary success call chain (RAW file):**
+
+```text
+ImportExportHandler (album backend) -> ImportServiceImpl::ImportToFolder
+  -> ImagePoolService::CreateAndReturnPinnedEmpty (UNSYNCED placeholder, pinned)
+  -> worker: MetadataExtractor::ExtractEXIF_ToImage -> ExtractRawMetadata_ToImage
+     (LibRaw open + unpack, or the DNG fast path with a LibRaw open)
+  -> ImportLog::MarkMetadataSuccess; pin released
+  -> other pool inserts before the sync: EnsureCapacityForInsert skips UNSYNCED entries
+  -> ImportExportHandler::FinishImport -> ImportServiceImpl::SyncImports
+  -> ImagePoolService::SyncWithStorage (Image row) -> SleeveServiceImpl::Sync (Element, FileImage)
+  -> semantic generation queued for metadata_ok_ entries only
+```
+
+**Primary failure call chain (non-RAW file):**
+
+```text
+ExtractEXIF_ToImage: ExtractRawMetadata_ToImage == false
+  -> MetadataExtractionError(UNSUPPORTED_FORMAT, "not a supported RAW file")
+  -> ImportLog::MarkMetadataFailure -> ImportResult.failed_ += 1
+  -> SyncImports: FileSystem::DeleteFileEverywhere(element) + ImagePoolService::RemoveBatch(image)
+  -> SyncWithStorage erases the DELETED placeholder without writing it
+  -> no Element, FileImage, or Image row
+  -> FinishImport: metadata_ok_ == false -> not queued for semantic generation
+Rows from older imports: ProjectService::LoadProject -> ImageStore::RemoveImagesWithoutFileBinding
+```
+
+**What was proven (executed tests):**
+
+| Plan criterion | Test | Binary | Result |
+| --- | --- | --- | --- |
+| Mixed folder (RAW + JPEG + TIFF + `.xmp` + `.mov` + unknown binary) imports only RAW; `Image` = `FileImage`; only the RAW entry has `metadata_ok_` | `MixedFolderImportsOnlyRawFilesAndLeavesNoOrphanImageRows` | `ImportRawOnlyTest` | PASS |
+| JPEG renamed to `.nef` fails, RAW renamed to `.bin` imports (also: JPEG renamed to `.dng` fails) | `ImportDecidesRawByContentNotByFileExtension` | `ImportRawOnlyTest` | PASS |
+| 1100-file import leaves no `FileImage` row without an `Image` row | `ImportLargerThanImagePoolCapacityWritesAnImageRowForEveryFile` | `ImportRawOnlyTest` | PASS (40 s). Before the pool fix: FAIL, 77 `FileImage` rows without an `Image` |
+| Pool keeps unwritten Images past its capacity until the sync | `ImagePoolKeepsUnwrittenImagesPastCapacityUntilSync` | `ImportRawOnlyTest` | PASS. Before the fix: FAIL, 1024 of 1100 written |
+| Load-time removal of Image rows without a library file | `ProjectLoadRemovesImageRowsWithoutLibraryFile` | `ImportRawOnlyTest` | PASS |
+| Extractor rejects JPEG and TIFF, also when renamed to `.nef` or `.dng` | `NonRawRastersAreRejectedAsUnsupportedRawWhateverTheExtension` | `MetadataExtractorTest` | PASS |
+| Nikon S0 test: 38 imported, 7 failed, `Image` = 38 (assertion changed from 45) | `DISABLED_NikonFolderImportsRawOnlyAndSearchFindsFileNames` | `LibrarySearchRecallTest` | PASS (local, 10.2 s) |
+| Regression | `MetadataExtractorTest` (12), `ProjectServiceTest` (8), `BatchImportDngMetadataTest` (1), `LibrarySearchRecallTest` (1 + Nikon) | direct run and ctest | PASS |
+| Regression | `ImportServiceTest` (no ctest registration; needs local files) | direct run | 12/13. `BatchCancelTest` fails the same way on clean HEAD (`a23c9165a`, stash and rebuild): `ImportToFolder` submits every task before it returns, and the test cancels 100 ms after the return, so nothing is cancelled |
+
+The RAW cases use the CI fixture `ci_rawfiles/…DSC00830.ARW` and skip when it is missing. The
+1100-file case uses hard links. NTFS allows 1023 links per file, so the links alternate between
+two copies of the fixture.
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target ImportRawOnlyTest MetadataExtractorTest LibrarySearchRecallTest ImportServiceTest ProjectServiceTest BatchImportDngMetadataTest AlbumBackendLib
+ctest --test-dir build/debug -R "ImportRawOnlyTest|MetadataExtractorTest|LibrarySearchRecallTest|ProjectServiceTest" -j 1
+  -> 26/26 passed (Nikon test listed as Disabled)
+LibrarySearchRecallTest.exe --gtest_also_run_disabled_tests -> 2/2 passed
+ImportServiceTest.exe -> 12/13 (BatchCancelTest fails on clean HEAD too)
+```
+
+Full `ctest` suite: not run (agent rule). `alcedo_main` was not linked; `AlbumBackendLib`, which
+compiles `import_export.cpp`, builds.
+
+**Checklist / exit condition:** steps 1–6 done. The acceptance line (`demo.alcd` re-import) was
+not run; it needs the user's source folders and is part of Phase S6.
+
+**LOC note:** new `import_raw_only_test.cpp` 319 lines, `tests/support/non_raw_import_files.hpp`
+95 lines. `metadata_extractor.cpp` is 1662 lines (1705 before; it was over the 1000-line limit
+before this phase). S1 made no split.
+
+**Remaining gaps:**
+
+- `FinishImport` (step 3) has no album-backend test. The import test covers the `metadata_ok_`
+  flag that it filters on.
+- `LibraryModule::PersistImageHdrFlag` writes with `Write_NoSync` and does not sync. Under the
+  new eviction rule such an Image stays in the pool until the next `SyncWithStorage`, where
+  before it could be evicted and its write lost.
+- `ImportServiceTests.BatchCancelTest` is a failure that exists on clean HEAD (see above).
 
 ### Phase S2 — DNG color profile is runtime-only
 

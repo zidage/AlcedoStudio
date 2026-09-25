@@ -9,6 +9,7 @@
 #include <memory>
 #include <mutex>
 #include <stdexcept>
+#include <vector>
 
 #include "app/pipeline_service.hpp"
 #include "decoders/processor/raw_color_context.hpp"
@@ -97,8 +98,8 @@ auto ImportServiceImpl::ImportToFolder(const std::vector<image_path_t>& paths,
       break;
     }
     // Validate that the path is a regular file. File-type detection is deferred
-    // to metadata extraction (LibRaw first, then Exiv2 raster gate) — non-images
-    // are marked failed and cleaned up by SyncImports.
+    // to metadata extraction, which accepts RAW content only; other files are
+    // marked failed and SyncImports removes their element and Image.
     if (!std::filesystem::is_regular_file(image_path)) {
       progress_ptr->failed_.fetch_add(1);
       if (job && job->on_progress_) {
@@ -258,6 +259,10 @@ void ImportServiceImpl::SyncImports(const ImportLogSnapshot& log_snapshot,
     return;
   }
 
+  // A failed import leaves no trace: its element is deleted and its placeholder Image is
+  // marked deleted in the pool, so the sync below never writes it as an Image row.
+  std::vector<image_id_t> failed_image_ids;
+  failed_image_ids.reserve(log_snapshot.metadata_failed_.size());
   for (const auto& entry : log_snapshot.metadata_failed_) {
     if (entry.element_id_ != 0) {
       try {
@@ -266,7 +271,9 @@ void ImportServiceImpl::SyncImports(const ImportLogSnapshot& log_snapshot,
       } catch (...) {
       }
     }
+    failed_image_ids.push_back(entry.image_id_);
   }
+  image_pool_service_->RemoveBatch(failed_image_ids);
   image_pool_service_->SyncWithStorage();
   fs_service_->Sync();
 }

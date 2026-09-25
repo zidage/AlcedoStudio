@@ -662,16 +662,12 @@ void ImportExportHandler::FinishImport(const ImportResult& result) {
   status_->SetTaskState(task_text, 100, false);
   status_->ScheduleIdleTaskStateReset(1800);
 
-  std::unordered_set<sl_element_id_t> nikon_he_ids;
-  nikon_he_ids.reserve(snapshot.unsupported_nikon_he_.size());
-  for (const auto& entry : snapshot.unsupported_nikon_he_) {
-    nikon_he_ids.insert(entry.element_id_);
-  }
+  // Only files whose metadata import succeeded are in the library. Failed entries were
+  // deleted by SyncImports, and unsupported Nikon HE files wait for recovery.
   std::vector<SemanticGenerationItem> semantic_items;
-  semantic_items.reserve(snapshot.created_.size());
+  semantic_items.reserve(snapshot.metadata_ok_.size());
   for (const auto& created : snapshot.created_) {
-    if (created.element_id_ == 0 || created.image_id_ == 0 ||
-        nikon_he_ids.contains(created.element_id_)) {
+    if (!created.metadata_ok_ || created.element_id_ == 0 || created.image_id_ == 0) {
       continue;
     }
     semantic_items.push_back(SemanticGenerationItem{created.element_id_, created.image_id_});
