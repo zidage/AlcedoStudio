@@ -494,7 +494,17 @@ auto BuildMaskOverlaySceneGeometry(const MaskOverlayDisplay& display, const Mask
     }
   }
   for (const auto& guide : display.selected_guides) {
-    append_dual(scene.selected_guides, guide.a, guide.b, guide_outer, guide_inner);
+    if (guide.dashed) {
+      const std::vector<QPointF> points{guide.a, guide.b};
+      AppendDashedPolylineStroke(scene.selected_guides, points, /*closed=*/false, guide_outer, aa,
+                                 style.control_fill, clip, kMaskOverlayDashLengthLogicalPx,
+                                 kMaskOverlayDashGapLogicalPx);
+      AppendDashedPolylineStroke(scene.selected_guides, points, /*closed=*/false, guide_inner, aa,
+                                 style.control_outline, clip, kMaskOverlayDashLengthLogicalPx,
+                                 kMaskOverlayDashGapLogicalPx);
+    } else {
+      append_dual(scene.selected_guides, guide.a, guide.b, guide_outer, guide_inner);
+    }
     ++scene.selected_guide_segment_count;
   }
   for (const auto& grip : display.edge_grips) {

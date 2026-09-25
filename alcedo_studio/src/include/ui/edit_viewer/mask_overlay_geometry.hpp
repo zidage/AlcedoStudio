@@ -104,12 +104,14 @@ struct MaskOverlayHandle {
  * @brief One open guide segment in item/logical coordinates.
  *
  * Gradient loci and Radial contours use open or closed polylines. These
- * segments are never joined into a closed polygon.
+ * segments are never joined into a closed polygon. @p dashed marks transition
+ * boundaries (Gradient start/end loci) with the feather-contour dash pattern.
  */
 struct MaskOverlayGuide {
   MaskOverlayHandleId id = MaskOverlayHandleId::None;
   QPointF             a{};
   QPointF             b{};
+  bool                dashed = false;
 };
 
 /**

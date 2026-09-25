@@ -1097,8 +1097,10 @@ auto EditorMaskCreationAdapter::handlePress(qreal x, qreal y, int button) -> boo
   if (!CanAuthorMasks() || interaction_ == nullptr) {
     return true;
   }
-  const auto sample = MakeSample(x, y, false);
-  if (!sample || !sample->inside_photograph) {
+  // Handles of an existing Mask may sit outside the photograph (a center
+  // dragged past the edge); only new-Mask creation requires an inside press.
+  const auto sample = MakeSample(x, y, true);
+  if (!sample) {
     return true;
   }
   pointer_.device_id   = 1;
@@ -1137,7 +1139,7 @@ auto EditorMaskCreationAdapter::handlePress(qreal x, qreal y, int button) -> boo
     }
   }
 
-  if (!creating()) {
+  if (!creating() || !sample->inside_photograph) {
     return true;
   }
   EditorMaskCreationCommand input;

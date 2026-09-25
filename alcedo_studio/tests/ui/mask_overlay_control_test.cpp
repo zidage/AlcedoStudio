@@ -6,6 +6,7 @@
 
 #include <QColor>
 #include <QCoreApplication>
+#include <QCursor>
 #include <QImage>
 #include <QPointF>
 #include <QQuickWindow>
@@ -17,6 +18,7 @@
 #include <chrono>
 #include <cmath>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "edit/geometry/types.hpp"
@@ -584,6 +586,121 @@ TEST(MaskOverlayControlTest, GradientControlAxisIsPerpendicularAfterNonSquareMap
   const float dy = normalized->y - source.origin_y;
   EXPECT_NEAR(dx, source.normal_x, 1.0e-5f);
   EXPECT_NEAR(dy, source.normal_y, 1.0e-5f);
+}
+
+TEST(MaskOverlayControlTest, GradientBoundaryGuidesRenderDashedAndOriginStaysSolid) {
+  const auto mapping = MakeMapping(400, 300, 400, 300, 1.0f, QVector2D(0, 0), 1.0f);
+  auto       display =
+      MakeLinearExistingOverlayDisplay(mapping, SampleLinear(), DefaultMaskOverlayStyle(), {});
+  ASSERT_EQ(display.selected_guides.size(), 3u);
+  EXPECT_TRUE(display.selected_guides[0].dashed);
+  EXPECT_FALSE(display.selected_guides[1].dashed);
+  EXPECT_TRUE(display.selected_guides[2].dashed);
+
+  // Grips and handles overlap the loci; drop them so only guides are sampled.
+  display.edge_grips.clear();
+  display.handles.clear();
+  display.connectors.clear();
+  const auto scene = BuildMaskOverlaySceneGeometry(display, DefaultMaskOverlayStyle());
+  const auto coverage_along = [&](const MaskOverlayGuide& guide) {
+    int covered = 0;
+    int gaps    = 0;
+    for (int i = 1; i < 400; ++i) {
+      const double  t = static_cast<double>(i) / 400.0;
+      const QPointF sample(guide.a.x() + (guide.b.x() - guide.a.x()) * t,
+                           guide.a.y() + (guide.b.y() - guide.a.y()) * t);
+      if (VerticesCoverPoint(scene.selected_guides, sample)) {
+        ++covered;
+      } else {
+        ++gaps;
+      }
+    }
+    return std::make_pair(covered, gaps);
+  };
+  const auto [start_covered, start_gaps] = coverage_along(display.selected_guides[0]);
+  EXPECT_GT(start_covered, 0);
+  EXPECT_GT(start_gaps, 0);
+  const auto [end_covered, end_gaps] = coverage_along(display.selected_guides[2]);
+  EXPECT_GT(end_covered, 0);
+  EXPECT_GT(end_gaps, 0);
+  const auto [origin_covered, origin_gaps] = coverage_along(display.selected_guides[1]);
+  EXPECT_GT(origin_covered, 0);
+  EXPECT_EQ(origin_gaps, 0);
+  EXPECT_EQ(scene.selected_guide_segment_count, 3);
+}
+
+TEST(MaskOverlayControlTest, CursorFollowsHandleRoleAndDragAxis) {
+  const auto mapping = MakeMapping(400, 300, 400, 300, 1.0f, QVector2D(0, 0), 1.0f);
+  auto       radial  = SampleRadial();
+  radial.rotation    = 0.0f;
+  auto display = MakeRadialExistingOverlayDisplay(mapping, radial, DefaultMaskOverlayStyle(), {});
+  const auto cursor_for = [&](MaskOverlayHandleId hovered, MaskOverlayHandleId active) {
+    display.hovered_handle = hovered;
+    display.active_handle  = active;
+    return MaskOverlayCursorForDisplay(display);
+  };
+  constexpr auto kNone = MaskOverlayHandleId::None;
+  EXPECT_EQ(cursor_for(kNone, kNone), MaskOverlayCursor::None);
+  EXPECT_EQ(cursor_for(MaskOverlayHandleId::RadialCenter, kNone), MaskOverlayCursor::Move);
+  EXPECT_EQ(cursor_for(MaskOverlayHandleId::RadialRotate, kNone), MaskOverlayCursor::Rotate);
+  EXPECT_EQ(cursor_for(MaskOverlayHandleId::RadialMajor, kNone),
+            MaskOverlayCursor::ResizeHorizontal);
+  EXPECT_EQ(cursor_for(MaskOverlayHandleId::RadialMinor, kNone),
+            MaskOverlayCursor::ResizeVertical);
+  EXPECT_EQ(cursor_for(MaskOverlayHandleId::RadialOuterFeather, kNone),
+            MaskOverlayCursor::ResizeHorizontal);
+  // A drag keeps its cursor even when the pointer hovers something else.
+  EXPECT_EQ(cursor_for(MaskOverlayHandleId::RadialCenter, MaskOverlayHandleId::RadialRotate),
+            MaskOverlayCursor::Rotate);
+
+  radial.rotation = 0.785398f;  // 45 degrees clockwise on screen (y down).
+  display = MakeRadialExistingOverlayDisplay(mapping, radial, DefaultMaskOverlayStyle(), {});
+  EXPECT_EQ(cursor_for(MaskOverlayHandleId::RadialMajor, kNone),
+            MaskOverlayCursor::ResizeDiagonalDown);
+  EXPECT_EQ(cursor_for(MaskOverlayHandleId::RadialMinor, kNone),
+            MaskOverlayCursor::ResizeDiagonalUp);
+
+  // SampleLinear's normal is +y: boundaries resize vertically.
+  display = MakeLinearExistingOverlayDisplay(mapping, SampleLinear(), DefaultMaskOverlayStyle(), {});
+  EXPECT_EQ(cursor_for(MaskOverlayHandleId::LinearOrigin, kNone), MaskOverlayCursor::Move);
+  EXPECT_EQ(cursor_for(MaskOverlayHandleId::LinearDirection, kNone), MaskOverlayCursor::Rotate);
+  EXPECT_EQ(cursor_for(MaskOverlayHandleId::LinearStartBoundary, kNone),
+            MaskOverlayCursor::ResizeVertical);
+  EXPECT_EQ(cursor_for(MaskOverlayHandleId::LinearEndBoundary, kNone),
+            MaskOverlayCursor::ResizeVertical);
+
+  display.mode = MaskOverlayMode::Hidden;
+  EXPECT_EQ(cursor_for(MaskOverlayHandleId::LinearOrigin, kNone), MaskOverlayCursor::None);
+}
+
+TEST(MaskOverlayControlTest, OverlayItemAppliesAndClearsHandleCursor) {
+  const auto mapping = MakeMapping(400, 300, 400, 300, 1.0f, QVector2D(0, 0), 1.0f);
+  auto       radial  = SampleRadial();
+  radial.rotation    = 0.0f;
+  auto display = MakeRadialExistingOverlayDisplay(mapping, radial, DefaultMaskOverlayStyle(), {});
+
+  editor_rhi::EditorOverlayItem overlay;
+  display.hovered_handle = MaskOverlayHandleId::RadialCenter;
+  overlay.setMaskOverlayDisplay(display);
+  EXPECT_EQ(overlay.cursor().shape(), Qt::SizeAllCursor);
+
+  display.hovered_handle = MaskOverlayHandleId::RadialMinor;
+  overlay.setMaskOverlayDisplay(display);
+  EXPECT_EQ(overlay.cursor().shape(), Qt::SizeVerCursor);
+
+  display.hovered_handle = MaskOverlayHandleId::RadialRotate;
+  overlay.setMaskOverlayDisplay(display);
+  EXPECT_EQ(overlay.cursor().shape(), Qt::BitmapCursor);
+  EXPECT_FALSE(overlay.cursor().pixmap().isNull());
+
+  // Leaving the handles, or hiding the overlay, hands the cursor back.
+  display.hovered_handle = MaskOverlayHandleId::None;
+  overlay.setMaskOverlayDisplay(display);
+  EXPECT_EQ(overlay.cursor().shape(), Qt::ArrowCursor);
+  display.hovered_handle = MaskOverlayHandleId::RadialCenter;
+  overlay.setMaskOverlayDisplay(display);
+  overlay.setMaskOverlayDisplay(MaskOverlayDisplay{});
+  EXPECT_EQ(overlay.cursor().shape(), Qt::ArrowCursor);
 }
 
 #ifdef ALCEDO_ENABLE_BRUSH_MASK

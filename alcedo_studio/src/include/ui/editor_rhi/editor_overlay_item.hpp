@@ -12,6 +12,7 @@
 
 #include "ui/edit_viewer/edit_viewer_overlay_geometry.hpp"
 #include "ui/edit_viewer/mask_overlay_geometry.hpp"
+#include "ui/edit_viewer/mask_overlay_layout.hpp"
 
 namespace alcedo::editor_rhi {
 
@@ -192,6 +193,9 @@ class EditorOverlayItem : public QQuickItem {
   void scheduleRebuildFromInteraction();
   void rebuildSceneGeometry();
   void rebuildMaskSceneGeometry();
+  // Item cursor wins over the viewport HoverHandler while a Mask handle is
+  // hovered or dragged; unset hands the cursor back to the viewport.
+  void applyMaskCursor();
   void bindInteraction(EditorInteractionController* controller);
   void onInteractionOverlayChanged();
 
@@ -200,6 +204,7 @@ class EditorOverlayItem : public QQuickItem {
   MaskOverlayDisplay mask_display_{};
   MaskOverlayStyle mask_style_ = DefaultMaskOverlayStyle();
   MaskOverlaySceneGeometry last_mask_scene_geometry_{};
+  MaskOverlayCursor mask_cursor_ = MaskOverlayCursor::None;
   int geometry_revision_ = 0;
   int geometry_rebuild_count_ = 0;
   int paint_node_create_count_ = 0;
