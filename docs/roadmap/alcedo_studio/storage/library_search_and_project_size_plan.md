@@ -2,7 +2,7 @@
 
 Date: 2026-09-24
 
-Status: Phases S0, S1, S2, and S3 complete (2026-09-24); S4 and S5 complete (2026-09-25); S6 not started
+Status: Phases S0, S1, S2, and S3 complete (2026-09-24); S4 and S5 complete (2026-09-25); S6 partial (2026-09-25: benchmarks and recall re-run, performance targets not met)
 
 Primary owner: Alcedo Studio storage (Image schema, import, sleeve filter SQL) and library search.
 
@@ -1146,6 +1146,92 @@ sync preview/submit code are deleted). New: `search_request_worker.hpp` 80,
 2. Run the manual search checklist: date forms, kinds, parameters, file names, AI fields on and
    off, the natural-language route, stats panel counts, and thumbnail grid scroll.
 3. Run the full ctest suite and list any failure that is also present on a clean `main`.
+
+##### Phase S6 completion record (2026-09-25)
+
+**Status:** partial — the Phase S0 benchmark and recall tests ran again on the S5 code, in
+the debug build and, for the first time, in the release build. The 1000-file library meets
+neither the 10 ms preview target nor the 50 ms apply target, and the 20 000-file library is
+about 20× over its 50 ms preview target. Steps 1–3 are not done (see the checklist).
+
+Branch: `refactor/library-search-s6-qualification` (on top of
+`refactor/library-search-s5-search-worker`). No code change; this record only.
+
+**Benchmark** (`LibrarySearchBenchmarkTest`, same tests and libraries as Phase S0; preview =
+`SearchFolderPage` with a 50-row page, apply = WHERE + `ListSearchResultPage` with a 120-row
+page + `BuildFolderStats`):
+
+1000 files, 155 DNG per 1000, p50 (3 runs):
+
+| Query | Matches S0 → S6 | Preview S0 | Preview S6 debug | Preview S6 release | Apply S0 | Apply S6 debug | Apply S6 release |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `jpg` | 0 → 0 | 10.4 s | 23.0 ms | 23.6 ms | 35.2 s | 66.0 ms | 64.1 ms |
+| `2026-06-07` | 1 → 1 | 10.9 s | 32.3 ms | 24.2 ms | 39.5 s | 86.8 ms | 67.4 ms |
+| `P1000123` | 0 → 0 | 10.5 s | 36.2 ms | 22.6 ms | 36.3 s | 90.5 ms | 63.4 ms |
+| `6.7` | 1000 → 23 | 10.3 s | 33.1 ms | 23.3 ms | 36.4 s | 84.2 ms | 65.6 ms |
+| `dsc` | 493 → 493 | 0.7 s | 35.3 ms | 23.4 ms | 2.8 s | 93.4 ms | 62.3 ms |
+
+Release p95: preview 24.0–26.4 ms, apply 65.1–70.0 ms.
+
+20 000 files, 20 DNG per 1000, p50 (S0 and S6 debug: 1 run; S6 release: 3 runs):
+
+| Query | Matches S0 → S6 | Preview S0 | Preview S6 debug | Preview S6 release | Apply S0 | Apply S6 debug | Apply S6 release |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `jpg` | 0 → 0 | 34.4 s | 869 ms | 984 ms | 106.7 s | 2518 ms | 2321 ms |
+| `2026-06-07` | 22 → 22 | 33.8 s | 982 ms | 977 ms | 116.1 s | 2349 ms | 2461 ms |
+| `P1000123` | 0 → 0 | 33.8 s | 1048 ms | 1095 ms | 112.9 s | 2449 ms | 2536 ms |
+| `6.7` | 20000 → 862 | 34.6 s | 954 ms | 1060 ms | 116.6 s | 2521 ms | 2790 ms |
+| `dsc` | 8240 → 8240 | 26.3 s | 841 ms | 1014 ms | 87.4 s | 2342 ms | 2467 ms |
+
+Release p95: preview 992–1278 ms, apply 2404–2853 ms. The 20 000-file library took 292–296 s
+to build (S0: 404 s).
+
+Findings:
+
+- The release build gives the same numbers as the debug build. Both builds load the same
+  release `duckdb.dll` (29 423 240 bytes), so the time is spent inside DuckDB.
+- The S3 release DuckDB CLI measurement of the same kind of predicate predicted about 10 ms
+  (1000 files) and about 46 ms (20 000 files) for a preview. The app path takes about 23 ms
+  and about 1000 ms. The raw scan does not explain the gap; the app query path adds the cost.
+- The 1000-file preview is 23 ms for every query (0 to 493 matches), which points to a fixed
+  cost for each search call.
+- Since Phase S5 these queries run on the search worker. The UI thread spends 0.12 ms for each
+  keystroke request, so the UI stays responsive, but the results arrive late.
+
+**Recall** (`LibrarySearchRecallTest.exe --gtest_also_run_disabled_tests`, debug): 5/5 PASS,
+including `DISABLED_NikonFolderImportsRawOnlyAndSearchFindsFileNames` (8.5 s, local): 38
+imported and 38 `Image` rows (S0: 45 with orphans), exact `z8` (4 files) and `dng` (3 files)
+sets. `6.7` returns 23 of 1000 synthetic files (S0: all 1000).
+
+**Packed project** (`DISABLED_ReportsSearchLatencyForPackedProject` with `demo.alcd`, 329 MB):
+FAILED to open, as Decision D1 intends: "Incompatible project format: packed project metadata
+version is not supported. Older project packages are not migrated." The row needs a new
+project from the re-imported source folders (step 1).
+
+Commands:
+
+```text
+LibrarySearchBenchmarkTest.exe --gtest_also_run_disabled_tests --gtest_filter=*OneThousand*
+ALCEDO_SEARCH_BENCH_REPEAT=1 LibrarySearchBenchmarkTest.exe --gtest_also_run_disabled_tests --gtest_filter=*TwentyThousand*
+ALCEDO_SEARCH_BENCH_PROJECT=<demo.alcd> LibrarySearchBenchmarkTest.exe --gtest_also_run_disabled_tests --gtest_filter=*PackedProject*
+LibrarySearchRecallTest.exe --gtest_also_run_disabled_tests
+# Release (build/release reconfigured with -DALCEDO_BUILD_TESTS=ON, only this target built,
+# then set back to OFF):
+cmd /c scripts\msvc_env.cmd --build --preset win_release --parallel 4 --target LibrarySearchBenchmarkTest
+LibrarySearchBenchmarkTest.exe --gtest_also_run_disabled_tests --gtest_filter=*OneThousand*
+ALCEDO_SEARCH_BENCH_REPEAT=3 LibrarySearchBenchmarkTest.exe --gtest_also_run_disabled_tests --gtest_filter=*TwentyThousand*
+```
+
+**Checklist / exit condition:**
+
+- [ ] Step 1: re-import the `demo.alcd` source folders and record the file size and row counts
+  (target ≤ 25 MB).
+- [ ] Step 2: manual search checklist in the app.
+- [ ] Step 3: full ctest suite (only the user starts a full run).
+- [ ] Performance targets: preview p95 ≤ 10 ms (1000 files) and ≤ 50 ms (20 000 files), apply
+  ≤ 50 ms (1000 files). Not met; the measurements above locate the gap in the app query path.
+
+**Remaining gaps:** the steps above, and the app query path cost at 20 000 files.
 
 ## Resolved questions (2026-09-24)
 
