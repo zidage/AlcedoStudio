@@ -82,10 +82,12 @@ class MetadataExtractor {
                                        const Exiv2::Image* exif_image = nullptr) -> bool;
 
   /**
-   * @brief Extract EXIF metadata and populate the Image object
+   * @brief Import-time metadata read: populate @p image from a RAW file.
    *
-   * @param image_path
-   * @param image
+   * The file is accepted only when LibRaw (or the DNG fast path) opens it; the decision uses
+   * the file content, never its extension. Any other file (JPEG, TIFF, sidecar, container)
+   * throws MetadataExtractionError with ImportErrorCode::UNSUPPORTED_FORMAT and leaves
+   * @p image without a RAW color context.
    */
   static void ExtractEXIF_ToImage(const image_path_t& image_path, Image& image);
 

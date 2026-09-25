@@ -94,6 +94,10 @@ class ImportService {
                               std::shared_ptr<ImportJob> job     = nullptr)
       -> std::shared_ptr<ImportJob>                                                         = 0;
 
+  /// Persist a finished import. Each `metadata_failed_` entry loses its library element and
+  /// its placeholder Image, so a failed import writes no Element, FileImage, or Image row;
+  /// then the image pool and the sleeve file system are written to storage.
+  /// Throws when the image store rejects the removal of failed Images.
   virtual void SyncImports(const ImportLogSnapshot& log_snapshot, const image_path_t& dest) = 0;
 };
 

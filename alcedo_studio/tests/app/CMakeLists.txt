@@ -167,6 +167,15 @@ target_link_libraries(ImportServiceTest ImportService ProjectService GTest::gtes
 
 alcedo_register_test_target(ImportServiceTest app)
 
+add_executable(ImportRawOnlyTest ${ALCEDO_TEST_ROOT}/app/import_raw_only_test.cpp)
+target_include_directories(ImportRawOnlyTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(ImportRawOnlyTest
+  ImportService ProjectService OpenImageIO::OpenImageIO GTest::gtest_main)
+gtest_discover_tests(ImportRawOnlyTest TEST_PREFIX "ImportRawOnlyTest."
+  PROPERTIES LABELS "ci_core_flow")
+alcedo_copy_duckdb_fts_extension(ImportRawOnlyTest)
+alcedo_register_test_target(ImportRawOnlyTest app ci_core)
+
 if(ALCEDO_CUDA_ENABLED)
   qt_add_executable(ImportPipelineDocumentTest
     ${ALCEDO_TEST_ROOT}/app/import_pipeline_document_test.cpp)

@@ -294,10 +294,8 @@ TEST_F(LibrarySearchRecallTest, DISABLED_NikonFolderImportsRawOnlyAndSearchFinds
   EXPECT_EQ(outcome.result_.failed_, 7u);
 
   EXPECT_EQ(CountTableRows(project, "FileImage"), 38);
-  // Known defect (plan P4, fixed in Phase S1): SyncImports writes the Image of each failed
-  // import, so the table holds 38 + 7 rows. Phase S1 changes this expectation to 38.
-  EXPECT_EQ(CountTableRows(project, "Image"), 45)
-      << "Orphan Image rows are gone. The defect is fixed: expect 38 here.";
+  // Phase S1: SyncImports removes the Image of each failed import, so no orphan rows remain.
+  EXPECT_EQ(CountTableRows(project, "Image"), 38);
 
   SleeveFilterService filter_service(project.GetStorage());
   const auto          folder_id = LibraryRootFolderId(project);

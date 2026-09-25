@@ -72,7 +72,11 @@ class ImagePoolManager {
       std::numeric_limits<size_t>::max()};
   uint32_t                                                capacity_ = kDefaultPoolCapacity;
 
+  /// Make room for one insert by evicting least recently used entries that IsEvictable
+  /// allows. The pool grows past its capacity while no entry is evictable.
   void EnsureCapacityForInsert();
+  /// True when @p id is unpinned and its Image has no pending write (sync state SYNCED).
+  auto IsEvictable(image_id_t id) -> bool;
   void EvictByKey(image_id_t id);
   void Pin(image_id_t id);
   void Unpin(image_id_t id);

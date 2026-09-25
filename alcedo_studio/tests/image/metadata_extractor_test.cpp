@@ -10,12 +10,14 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <vector>
 
 #include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/develop_node_model.hpp"
 #include "image/dng_camera_matrix.hpp"
 #include "image/image.hpp"
 #include "image/metadata_extractor.hpp"
+#include "support/non_raw_import_files.hpp"
 #include "utils/import/import_error_code.hpp"
 
 namespace alcedo {
@@ -367,6 +369,41 @@ TEST(MetadataExtractorTest, XmpSidecarIsRejectedAsUnsupportedImportFormat) {
     } catch (const MetadataExtractionError& e) {
       EXPECT_EQ(e.code(), ImportErrorCode::UNSUPPORTED_FORMAT) << path.string();
     }
+  }
+
+  std::error_code ec;
+  std::filesystem::remove_all(dir, ec);
+}
+
+// Decision D2a: import accepts a file only when LibRaw (or the DNG fast path) opens it.
+// Rasters that Exiv2 and OpenImageIO read are rejected, whatever their extension says.
+TEST(MetadataExtractorTest, NonRawRastersAreRejectedAsUnsupportedRawWhateverTheExtension) {
+  const auto dir = std::filesystem::temp_directory_path() / "alcedo_metadata_non_raw_reject";
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+
+  struct RasterCase {
+    std::string file_name_;
+    std::string encoded_as_;
+  };
+  const std::vector<RasterCase> cases = {{"photo.jpg", ".jpg"},
+                                         {"scan.tif", ".tif"},
+                                         {"renamed_jpeg.nef", ".jpg"},
+                                         {"renamed_jpeg.dng", ".jpg"},
+                                         {"renamed_tiff.dng", ".tif"}};
+  for (const auto& raster : cases) {
+    const auto path = dir / raster.file_name_;
+    test_support::WriteRgbRaster(path, raster.encoded_as_);
+    Image image(7, path, ImageType::DEFAULT);
+    try {
+      MetadataExtractor::ExtractEXIF_ToImage(path, image);
+      ADD_FAILURE() << "Expected MetadataExtractionError for " << raster.file_name_;
+    } catch (const MetadataExtractionError& e) {
+      EXPECT_EQ(e.code(), ImportErrorCode::UNSUPPORTED_FORMAT) << raster.file_name_;
+      EXPECT_NE(e.message().find("not a supported RAW file"), std::string::npos)
+          << raster.file_name_ << ": " << e.message();
+    }
+    EXPECT_FALSE(image.HasRawColorContext()) << raster.file_name_;
   }
 
   std::error_code ec;

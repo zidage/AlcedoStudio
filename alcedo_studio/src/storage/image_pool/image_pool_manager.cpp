@@ -104,6 +104,18 @@ void ImagePoolManager::ResizePool(const uint32_t new_capacity) {
   EnsureCapacityForInsert();
 }
 
+auto ImagePoolManager::IsEvictable(image_id_t id) -> bool {
+  const auto pin_it = pin_counts_.find(id);
+  if (pin_it != pin_counts_.end() && pin_it->second > 0) {
+    return false;
+  }
+  // The pool is the only owner of a pending write (a new, modified, or deleted Image that
+  // SyncWithStorage has not written yet). Evicting it would drop that write.
+  const auto image_it = image_pool_.find(id);
+  return image_it == image_pool_.end() ||
+         image_it->second->GetSyncState() == ImageSyncState::SYNCED;
+}
+
 void ImagePoolManager::EnsureCapacityForInsert() {
   if (capacity_ == 0) {
     return;
@@ -112,8 +124,7 @@ void ImagePoolManager::EnsureCapacityForInsert() {
     bool evicted = false;
     auto keys = lru_pool_.GetLRUKeys();
     for (auto key : keys) {
-      auto pin_it = pin_counts_.find(key);
-      if (pin_it == pin_counts_.end() || pin_it->second == 0) {
+      if (IsEvictable(key)) {
         EvictByKey(key);
         evicted = true;
         break;

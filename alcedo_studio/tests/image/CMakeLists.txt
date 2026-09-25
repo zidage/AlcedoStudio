@@ -2,8 +2,9 @@
 include("${ALCEDO_TEST_ROOT}/cmake/AlcedoTestRegistration.cmake")
 
 add_executable(MetadataExtractorTest ${ALCEDO_TEST_ROOT}/image/metadata_extractor_test.cpp)
-target_include_directories(MetadataExtractorTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(MetadataExtractorTest PRIVATE GTest::gtest_main Image EditGraph)
+target_include_directories(MetadataExtractorTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(MetadataExtractorTest PRIVATE GTest::gtest_main Image EditGraph
+    OpenImageIO::OpenImageIO)
 gtest_discover_tests(MetadataExtractorTest TEST_PREFIX "MetadataExtractorTest.")
 alcedo_register_test_target(MetadataExtractorTest image)
 
