@@ -157,17 +157,22 @@ void StatsEngine::RefreshStats() {
 
     const auto merged_filter =
         MergeFilterNodes(BuildStatsFilterNode(), search_->ActiveSearchFilterNode());
-    const auto stats = filter_service->BuildFolderStats(folder_id.value(), merged_filter);
-    total_photo_count_ = stats.total_photo_count_;
-    date_stats_        = ToStatsRows(stats.date_stats_);
-    camera_stats_      = ToStatsRows(stats.camera_stats_);
-    lens_stats_        = ToStatsRows(stats.lens_stats_);
-    label_stats_       = ToStatsRows(stats.label_stats_, true, true);
-    rating_stats_      = ToStatsRows(stats.rating_stats_);
+    ApplyFolderStats(filter_service->BuildFolderStats(folder_id.value(), merged_filter));
+    return;
   } catch (...) {
     // Keep previous stats if service query failed.
   }
 
+  emit StatsChanged();
+}
+
+void StatsEngine::ApplyFolderStats(const AlbumStatsView& stats) {
+  total_photo_count_ = stats.total_photo_count_;
+  date_stats_        = ToStatsRows(stats.date_stats_);
+  camera_stats_      = ToStatsRows(stats.camera_stats_);
+  lens_stats_        = ToStatsRows(stats.lens_stats_);
+  label_stats_       = ToStatsRows(stats.label_stats_, true, true);
+  rating_stats_      = ToStatsRows(stats.rating_stats_);
   emit StatsChanged();
 }
 

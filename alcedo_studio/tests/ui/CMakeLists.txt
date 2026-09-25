@@ -319,6 +319,13 @@ alcedo_register_test_target(AlbumBackendThumbnailTest ui)
 def_ui_test(AlbumBackendStatsFilterTest album_backend_stats_filter_test.cpp)
 alcedo_register_test_target(AlbumBackendStatsFilterTest ui)
 
+# Phase S5 (library search): search worker coalescing and search SQL off the UI thread.
+def_ui_test(SearchRequestWorkerTest search_request_worker_test.cpp)
+alcedo_register_test_target(SearchRequestWorkerTest ui)
+
+def_ui_test(AlbumBackendSearchWorkerTest album_backend_search_worker_test.cpp)
+alcedo_register_test_target(AlbumBackendSearchWorkerTest ui)
+
 def_ui_test(AlbumBackendI18nTest album_backend_i18n_test.cpp)
 alcedo_register_test_target(AlbumBackendI18nTest ui)
 

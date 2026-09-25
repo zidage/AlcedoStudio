@@ -399,6 +399,7 @@ void ApplicationModuleHost::ShutdownModules() {
       semantic_generation_->CancelGeneration();
     }
     if (search_) {
+      search_->CancelSearchRequests();
       search_->CancelSearchPreviewThumbnails();
     }
     if (library_) {

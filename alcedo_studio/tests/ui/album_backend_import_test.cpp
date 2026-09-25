@@ -75,6 +75,23 @@ auto WaitForSearchPreviewThumbnail(QSignalSpy& spy, uint element_id, int timeout
   return {};
 }
 
+/// Queue a search dialog page on the search worker and wait for its response.
+auto RequestSearchPage(SearchController& search, const QString& query, int offset, int limit)
+    -> QVariantMap {
+  QSignalSpy responses(&search, &SearchController::SearchResponseReady);
+  const auto request_id = search.RequestSearch(query, offset, limit);
+  const auto deadline   = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+  while (std::chrono::steady_clock::now() < deadline) {
+    for (const auto& args : responses) {
+      if (args.at(0).toULongLong() == request_id) {
+        return args.at(2).toMap();
+      }
+    }
+    responses.wait(100);
+  }
+  return {};
+}
+
 // ── Single RAW import ──────────────────────────────────────────────────────
 
 TEST_F(ImportTests, Import_SingleRawFile_Succeeds) {
@@ -217,13 +234,13 @@ TEST_F(ImportTests, SearchPreview_ReturnsPagedResultsAndTotalCount) {
   const QString query = PathToQString(images.front().stem()).left(4);
   ASSERT_FALSE(query.isEmpty());
 
-  const QVariantMap first_page = search->SearchPreview(query, 0, 3);
+  const QVariantMap first_page = RequestSearchPage(*search, query, 0, 3);
   const auto        first_rows = first_page.value("rows").toList();
   ASSERT_EQ(first_rows.size(), 3);
   EXPECT_GE(first_page.value("total").toInt(), backend.import_export()->ImportCompleted());
   EXPECT_TRUE(first_page.value("hasMore").toBool());
 
-  const QVariantMap second_page = search->SearchPreview(query, 3, 3);
+  const QVariantMap second_page = RequestSearchPage(*search, query, 3, 3);
   const auto        second_rows = second_page.value("rows").toList();
   ASSERT_EQ(second_rows.size(), 3);
   EXPECT_EQ(second_page.value("offset").toInt(), 3);
@@ -253,7 +270,7 @@ TEST_F(ImportTests, SearchPreviewThumbnail_LoadsForPagedVisibleResult) {
   const QString query = PathToQString(images.front().stem()).left(4);
   ASSERT_FALSE(query.isEmpty());
 
-  const QVariantMap second_page = search->SearchPreview(query, 3, 3);
+  const QVariantMap second_page = RequestSearchPage(*search, query, 3, 3);
   const auto        second_rows = second_page.value("rows").toList();
   ASSERT_FALSE(second_rows.empty());
 

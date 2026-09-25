@@ -2,7 +2,7 @@
 
 Date: 2026-09-24
 
-Status: Phases S0, S1, S2, and S3 complete (2026-09-24); S4 complete (2026-09-25); S5–S6 not started
+Status: Phases S0, S1, S2, and S3 complete (2026-09-24); S4 and S5 complete (2026-09-25); S6 not started
 
 Primary owner: Alcedo Studio storage (Image schema, import, sleeve filter SQL) and library search.
 
@@ -997,6 +997,147 @@ Goal: typing never blocks the UI.
 
 Acceptance: the Phase S0 UI-thread target is met. A scripted QML test types 20 characters
 quickly and the dialog applies only the last response.
+
+##### Phase S5 completion record (2026-09-25)
+
+**Status:** complete — every search route of `SearchController` (typing preview, paging,
+explicit submit, applied fuzzy search, exact search) runs its SQL on one search worker with
+latest-wins coalescing. The UI thread only classifies the query, builds result rows from
+query columns, and commits worker results. The synchronous `SearchPreview` and `SubmitSearch`
+`Q_INVOKABLE`s are deleted.
+
+Branch: `refactor/library-search-s5-search-worker` (on top of
+`refactor/library-search-s4-query-parser`). No schema change.
+
+**What changed:**
+
+| Step | Change |
+| --- | --- |
+| 1 | `GlobalSearchDialog.qml` `executePendingSearch` calls `RequestSearch` (preview) or `RequestSubmitSearch` (submit) and stores the returned id; the response arrives through `onSearchResponseReady`. `applySearchResponse` now requires `requestId == activeSearchRequestId` and a non-zero id: an older response that arrived between `beginSearchRequest` (id reset to 0) and `executePendingSearch` was accepted before. `SearchPreview` and `SubmitSearch` are deleted; the test callers (`AlbumBackendImportTest`, `GlobalSearchDialogQmlTest`, `MainQmlWorkflowTest`) use `RequestSearch` / `RequestSubmitSearch`. |
+| 2 | New `SearchRequestWorker` (`album_backend/search_request_worker.{hpp,cpp}`, no Qt): one `std::thread`, a queue in submit order, at most one pending request for each `SearchRequestKind` (`kPreview`: dialog page and submit; `kApply`: grid page and stats), so a preview never removes a pending apply. `Submit` returns a generation (unique across kinds) and removes the pending request of the same kind; `IsCurrent(kind, generation)` tells the owner whether a result that finished on the worker is still the newest; `Invalidate(kind)` drops the pending request and marks the running one stale. The destructor drops pending requests and joins after the running job. Executable interleaving (AGENTS.md rule): request N runs on the worker while request N+1 is submitted from the UI thread; N posts its result to the UI thread queue before N+1 finishes — `RapidPreviewRequestsDeliverOnlyTheNewestResponse` fails with 2 responses when the `IsCurrent` check is removed. The detached `std::thread` per semantic submit is gone. |
+| 3 | New `ElementStore::ListSearchResultPage`: `SELECT e.id, fi.image_id, i.file_name, i.camera_model, i.lens, CAST(i.capture_date AS VARCHAR), i.rating, COUNT(*) OVER () ... ORDER BY e.id LIMIT/OFFSET` — page, display columns, and total in one statement. A page past the last row has no window value; then one `COUNT(*)` supplies the total. `ListSearchResultRows(ids)` reads the display columns of the semantic provider's ranked ids in their order. `SleeveFilterService::SearchFolderPage` (query → WHERE → page), `ListSearchResultPage` (compiled filter → page), and `SearchFolderSemanticRows` wrap them. Deviation from the step wording: `ListFilesInFolderPage` keeps its three columns, because the album grid (`AlbumBrowseService`) also uses it and needs no display columns; search uses the new method. |
+| 4 | `SearchController::BuildResultRows(const std::vector<SearchResultRow>&)` reads `fileName`, `cameraModel`, `lens`, `captureDate`, `rating` from the row and the thumbnail state from `LibraryModule::FindAlbumItem`. The image pool `Read` for each row is deleted. |
+| 5 | Measured after S3/S4 (debug, 1000 files): apply 61–78 ms p50 (below). It is above 16 ms, so apply moved to the worker: `RunSearchApplyRequest` builds the WHERE (it reads the active semantic model and the AI index state, both SQL), `ListSearchResultPage(folder, filter, 0, 120)`, and `BuildFolderStats(folder, filter)`. `CommitAppliedSearch` on the UI thread installs the filter, clears the stats filters, and calls the new `LibraryModule::ApplySearchWindow` (the reset part of `LoadThumbnailWindow`, split into `ResetThumbnailWindow` / `PublishThumbnailWindowPage`) and `StatsEngine::ApplyFolderStats` (the property part of `RefreshStats`). `ApplyExactSearch` uses the same apply request with a prepared `e.id = ?` filter. `ClearFuzzySearch` and `ClearSearchState` (folder change) call `Invalidate(kApply)`: before this, an apply still on the worker would install its search after the user cleared it (`ClearFuzzySearchDropsAnApplyStillOnTheWorker` fails without it). A failed apply keeps the previous grid, stats, and query and logs the error. |
+| 6 | The 140 ms `previewTimer` debounce and the 24 ms `searchExecutionTimer` are unchanged. |
+| 7 | `SleeveFilterService::SetQueryThreadObserver`: an observer that receives the operation name at the start of `BuildFuzzySearchWhere`, `SearchFolderPage`, `ListSearchResultPage`, `SearchFolderSemanticRows`, `SearchFolder`, `SearchFolderSemantic`, `CountSearchResults`, and `BuildFolderStats`, on the query's thread (mutex-protected, empty by default). The tests' `SearchQueryThreadRecorder` fails on any call from the UI thread. |
+| Shutdown | `ApplicationModuleHost::ShutdownModules` calls the new `SearchController::CancelSearchRequests` (invalidates both kinds); the controller destructor joins the worker before anything else, so a running job can post to `this` (a result posted during teardown is removed with the object's posted events). |
+
+**Primary success call chain (typing preview):**
+
+```text
+GlobalSearchDialog onTextChanged -> previewTimer (140 ms) -> refreshPreview -> beginSearchRequest
+  -> searchExecutionTimer (24 ms) -> executePendingSearch
+  -> SearchController::RequestSearch -> RequestSearchPage (UI: ClassifySearchQuery, field mask,
+     folder id, filter service shared_ptr)
+  -> SearchRequestWorker::Submit(kPreview) [pending preview removed]
+  -> worker: RunSearchPageRequest -> SleeveFilterService::SearchFolderPage
+     -> BuildFuzzySearchWhere -> ElementStore::ListSearchResultPage (one statement: rows + total)
+  -> QMetaObject::invokeMethod(UI) -> IsCurrent(kPreview, generation)
+  -> BuildResultRows (query columns + LibraryModule thumbnail state) -> SearchResponseReady
+  -> QML applySearchResponse (requestId == activeSearchRequestId) -> readPreviewResponse
+```
+
+**Applied search chain:**
+
+```text
+Enter / recommendation / field toggle -> SearchController::ApplyFuzzySearch (or ApplyExactSearch)
+  -> SubmitApplyRequest -> SearchRequestWorker::Submit(kApply)
+  -> worker: RunSearchApplyRequest -> BuildFuzzySearchWhere -> ListSearchResultPage(0, 120)
+     -> BuildFolderStats
+  -> UI: IsCurrent(kApply) -> CommitAppliedSearch -> StatsEngine::ClearFilters
+     -> LibraryModule::ApplySearchWindow -> StatsEngine::ApplyFolderStats
+     -> StatsFilterChanged + SearchStateChanged
+```
+
+**Primary failure call chains:**
+
+```text
+Newer request of the same kind while one waits -> pending request removed, never runs
+Newer request while one runs -> result posted, IsCurrent false on the UI thread -> dropped
+Clear search / folder change while an apply runs -> Invalidate(kApply) -> result dropped
+Apply query parses to no terms -> CommitAppliedSearch -> ClearFuzzySearch
+Apply SQL throws -> error_text -> previous grid, stats, and query kept; qWarning
+Preview SQL throws -> response searchErrorText, no rows
+Semantic submit without provider / too long / no folder -> semanticUnavailable / tooLong
+Controller destroyed with a job running -> worker joined first; queued result removed with the object
+```
+
+**What was proven (executed tests):**
+
+| Plan criterion | Test | Binary | Result |
+| --- | --- | --- | --- |
+| Step 2: a pending request is replaced by the newer one of its kind (20 submits → 2 runs) | `PendingRequestIsReplacedByTheNewerRequestOfItsKind` | `SearchRequestWorkerTest` (new) | PASS |
+| Step 2: kinds do not replace each other; submit order kept | `RequestOfAnotherKindKeepsItsPendingRequest` | `SearchRequestWorkerTest` | PASS |
+| Step 2: the running request becomes stale | `RunningRequestBecomesStaleWhenANewerRequestArrives` | `SearchRequestWorkerTest` | PASS |
+| Clear: invalidate drops pending, marks running stale | `InvalidateDropsThePendingRequestAndMarksTheRunningOneStale` | `SearchRequestWorkerTest` | PASS |
+| Shutdown: destructor waits for the running job, drops pending | `DestructorDropsPendingRequestsAndWaitsForTheRunningJob` | `SearchRequestWorkerTest` | PASS |
+| Step 3: page + display columns + total in one statement; past-end total; rows by id in order; no semantic substitute | `SearchResultPageReadsDisplayColumnsAndTotalInOneStatement` | `LibrarySearchColumnsTest` | PASS |
+| Steps 1, 3, 4: `RequestSearch` returns before the result; rows carry display columns from the query; paging total | `PreviewRowsCarryDisplayColumnsAndTotalFromTheQuery` | `AlbumBackendSearchWorkerTest` (new) | PASS |
+| Step 2 + UI-thread target: 20 requests in one burst deliver one response (the newest); UI thread time 0.12 ms per request (< 2 ms asserted) | `RapidPreviewRequestsDeliverOnlyTheNewestResponse` | `AlbumBackendSearchWorkerTest` | PASS; FAILED (2 responses) with the `IsCurrent` check removed |
+| Step 5: apply queries on the worker, commits grid, stats, cleared stats filters; nothing installed before the result | `ApplyFuzzySearchQueriesOnTheWorkerAndCommitsGridAndStats` | `AlbumBackendSearchWorkerTest` | PASS |
+| Step 5: clear and folder change drop an apply still on the worker | `ClearFuzzySearchDropsAnApplyStillOnTheWorker` | `AlbumBackendSearchWorkerTest` | PASS; FAILED (search installed, 3 of 12 shown) without `Invalidate` in `ClearFuzzySearch` |
+| Step 7: no search SQL on the UI thread (preview, paging, submit, apply, exact, field toggle re-apply) | `SearchSqlNeverRunsOnTheUiThread` | `AlbumBackendSearchWorkerTest` | PASS |
+| Acceptance: scripted QML test types 20 characters quickly (each sends a request) and the dialog applies only the last response | `TypingTwentyCharactersQuicklyAppliesOnlyTheLastResponse` | `GlobalSearchDialogQmlTest` | PASS; FAILED (2 responses) with the `IsCurrent` check removed |
+| Step 1 regression: dialog paging, thumbnails, reopen; semantic typing / submit; routes | the other 5 cases | `GlobalSearchDialogQmlTest` | PASS |
+| Step 1 regression: paged preview and preview thumbnails (real RAW import) | `SearchPreview_ReturnsPagedResultsAndTotalCount`, `SearchPreviewThumbnail_LoadsForPagedVisibleResult` | `AlbumBackendImportTest` | PASS |
+| Regression | all cases | `AlbumBackendStatsFilterTest`, `MainQmlWorkflowTest`, `FilterServiceTest`, `LibrarySearchRecallTest`, `LibrarySearchColumnsTest` | PASS |
+| Regression | all cases | `SearchQueryParserTest`, `SearchQueryClassifierTest`, `ProjectServiceTest`, `SleeveServiceTest`, `SleeveFilterCompileTest`, `SleeveFilterFactoryTest`, `SleeveFSTest`, `SleeveFilesystemCiTest`, `SemanticGenerationServiceTest`, `AlbumBackendRatingTest`, `AlbumBackendImageDetailsTest`, `AlbumBackendFolderTest`, `AlbumBackendImageDeleteTest`, `ApplicationModuleHostLifecycleTest` | PASS (153/153, Nikon test disabled by design) |
+
+**Measurements** (debug build, `LibrarySearchBenchmarkTest`, 1000 files, 10 runs, p50 / p95; the
+benchmark now measures the S5 paths: preview = `SearchFolderPage`, apply = WHERE +
+`ListSearchResultPage` + `BuildFolderStats`):
+
+| Query | Matches | Preview S4 → S5 | Apply S4 → S5 |
+| --- | --- | --- | --- |
+| `jpg` | 0 | 58.7 / 59.5 → 24.2 / 29.7 ms | 130.0 / 135.0 → 61.1 / 69.9 ms |
+| `2026-06-07` | 1 | 56.3 / 62.6 → 23.3 / 27.8 ms | 124.0 / 128.6 → 65.4 / 70.8 ms |
+| `P1000123` | 0 | 54.3 / 54.6 → 27.1 / 31.7 ms | 116.0 / 117.6 → 71.8 / 87.0 ms |
+| `6.7` | 23 | 53.8 / 57.1 → 26.3 / 35.4 ms | 118.7 / 122.3 → 78.0 / 81.0 ms |
+| `dsc` | 493 | 52.4 / 58.9 → 24.8 / 27.5 ms | 113.9 / 116.8 → 71.5 / 76.7 ms |
+
+The preview is one statement instead of two. Both paths now run off the UI thread; the UI
+thread spends 0.12 ms for each preview request (`RapidPreviewRequestsDeliverOnlyTheNewestResponse`,
+debug). The release numbers were not measured (release test targets are not built in
+`build/release`).
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --preset win_debug -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake"
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target SearchRequestWorkerTest AlbumBackendSearchWorkerTest LibrarySearchColumnsTest GlobalSearchDialogQmlTest AlbumBackendStatsFilterTest AlbumBackendImportTest MainQmlWorkflowTest FilterServiceTest LibrarySearchRecallTest LibrarySearchBenchmarkTest
+ctest --test-dir build/debug -R "^(SearchRequestWorkerTest|AlbumBackendSearchWorkerTest|LibrarySearchColumnsTest|GlobalSearchDialogQmlTest|AlbumBackendStatsFilterTest|MainQmlWorkflowTest|FilterServiceTest|LibrarySearchRecallTest)\.|^AlbumBackendImportTest\..*Search" -j 1   -> 83/83 passed (Nikon test disabled by design)
+ctest --test-dir build/debug -R "^(<the 16 regression targets above>)\." -j 1   -> 153/153 passed
+LibrarySearchBenchmarkTest.exe --gtest_also_run_disabled_tests --gtest_filter=*OneThousand*   (ALCEDO_SEARCH_BENCH_REPEAT=10)
+```
+
+Full `ctest` suite: not run (agent rule). `alcedo_main` was not linked; `AlbumBackendLib`
+builds (the album backend and QML tests link it).
+
+**Checklist / exit condition:** steps 1–7 done (step 3 through a new search page method, see
+the table). Acceptance: the UI thread runs no search SQL (observer test) and spends 0.12 ms for
+each keystroke request; the scripted QML test types 20 characters and the dialog applies only
+the last response.
+
+**LOC note:** `search_controller.cpp` 857 → 823 (the detached-thread path and the duplicate
+sync preview/submit code are deleted). New: `search_request_worker.hpp` 80,
+`search_request_worker.cpp` 82, `search_request_worker_test.cpp` 182,
+`album_backend_search_worker_test.cpp` 294. `element_store.cpp` 571 → 681,
+`sleeve_filter_service.cpp` 592 → 657, `global_search_dialog_qml_test.cpp` 858 → 957.
+`GlobalSearchDialog.qml` is 1434 lines (pre-existing size; this phase changed 27 lines).
+
+**Remaining gaps:**
+
+- `ClearFuzzySearch`, stats bar toggles, star rating refresh, and grid scrolling
+  (`LoadMoreThumbnailView`) still run their page and stats SQL on the UI thread with the
+  active search filter. They are library browsing actions, not search routes; Phase S5 did not
+  cover them.
+- A project switch while an apply runs is not checked: the apply commits into the new
+  project's controllers. No short interleaving reaches it (opening a project takes longer than
+  the 60–80 ms apply); no guard was added.
+- `ApplySearchFieldEnabled` re-applies `active_search_query_`; after `ApplyExactSearch` that
+  text is the display label (`Image 12`), which parses as a fuzzy query. This was already the
+  behavior before S5.
+- The UI-thread commit (row maps for 24 rows, QML apply) was not timed separately.
 
 ### Phase S6 — Qualification
 
