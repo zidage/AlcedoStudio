@@ -16,6 +16,7 @@
 #include <iomanip>
 #include <limits>
 #include <locale>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <sstream>
@@ -978,9 +979,47 @@ auto QueryAssignedLabelsBatch(duckdb_connection                             conn
   }
   return true;
 }
+
+/// The key of the active semantic model as stored, or std::nullopt when the query fails. An
+/// empty string means no model is active.
+auto ReadActiveModelKey(duckdb_connection conn) -> std::optional<std::string> {
+  const auto sql =
+      "SELECT model_key FROM SemanticModel WHERE active = TRUE "
+      "ORDER BY created_at DESC, model_key DESC LIMIT 1;";
+
+  duckdb_result result;
+  if (duckdb_query(conn, sql, &result) != DuckDBSuccess) {
+    duckdb_destroy_result(&result);
+    return std::nullopt;
+  }
+
+  std::string out;
+  if (duckdb_row_count(&result) > 0) {
+    if (char* raw = duckdb_value_varchar(&result, 0, 0)) {
+      out = raw;
+      duckdb_free(raw);
+    }
+  }
+
+  duckdb_destroy_result(&result);
+  return out;
+}
 }  // namespace
 
-SemanticStore::SemanticStore(Database& db_ctrl) : database_(db_ctrl) {}
+SemanticStore::SemanticStore(Database& db_ctrl) : database_(db_ctrl) {
+  auto guard   = database_.GetConnectionGuard();
+  auto db_lock = guard.Lock();
+  RefreshActiveModelKey(guard.conn_);
+}
+
+void SemanticStore::RefreshActiveModelKey(duckdb_connection conn) const {
+  auto key = ReadActiveModelKey(conn);
+  if (!key.has_value()) {
+    return;
+  }
+  std::lock_guard lock(active_model_key_mutex_);
+  active_model_key_ = std::move(*key);
+}
 
 auto SemanticStore::UpsertModel(const SemanticModelRecord& model,
                                             std::string*               error) const -> bool {
@@ -1005,7 +1044,10 @@ auto SemanticStore::UpsertModel(const SemanticModelRecord& model,
   }
 
   if (!model.active_) {
-    return UpsertSemanticModel(guard.conn_, model, error);
+    // Replacing the active model's row with an inactive one leaves no active model.
+    const bool upserted = UpsertSemanticModel(guard.conn_, model, error);
+    RefreshActiveModelKey(guard.conn_);
+    return upserted;
   }
   if (!RunQuery(guard.conn_, "BEGIN TRANSACTION;", error)) {
     return false;
@@ -1016,7 +1058,9 @@ auto SemanticStore::UpsertModel(const SemanticModelRecord& model,
     RunQuery(guard.conn_, "ROLLBACK;", &rollback_error);
     return false;
   }
-  return RunQuery(guard.conn_, "COMMIT;", error);
+  const bool committed = RunQuery(guard.conn_, "COMMIT;", error);
+  RefreshActiveModelKey(guard.conn_);
+  return committed;
 }
 
 auto SemanticStore::HasModel(const std::string& model_key) const -> bool {
@@ -1080,28 +1124,8 @@ auto SemanticStore::ActiveModel(std::string* error) const
 }
 
 auto SemanticStore::ActiveModelKey() const -> std::string {
-  auto       guard   = database_.GetConnectionGuard();
-  auto       db_lock = guard.Lock();
-  const auto sql =
-      "SELECT model_key FROM SemanticModel WHERE active = TRUE "
-      "ORDER BY created_at DESC, model_key DESC LIMIT 1;";
-
-  duckdb_result result;
-  if (duckdb_query(guard.conn_, sql, &result) != DuckDBSuccess) {
-    duckdb_destroy_result(&result);
-    return {};
-  }
-
-  std::string out;
-  if (duckdb_row_count(&result) > 0) {
-    if (char* raw = duckdb_value_varchar(&result, 0, 0)) {
-      out = raw;
-      duckdb_free(raw);
-    }
-  }
-
-  duckdb_destroy_result(&result);
-  return out;
+  std::lock_guard lock(active_model_key_mutex_);
+  return active_model_key_;
 }
 
 auto SemanticStore::ListModels(std::string* error) const
@@ -1159,7 +1183,9 @@ auto SemanticStore::PurgeModel(const std::string& model_key, std::string* error)
       return false;
     }
   }
-  return RunQuery(guard.conn_, "COMMIT;", error);
+  const bool committed = RunQuery(guard.conn_, "COMMIT;", error);
+  RefreshActiveModelKey(guard.conn_);
+  return committed;
 }
 
 auto SemanticStore::SetActiveModelKey(const std::string& model_key,
@@ -1186,7 +1212,9 @@ auto SemanticStore::SetActiveModelKey(const std::string& model_key,
     RunQuery(guard.conn_, "ROLLBACK;", &rollback_error);
     return false;
   }
-  return RunQuery(guard.conn_, "COMMIT;", error);
+  const bool committed = RunQuery(guard.conn_, "COMMIT;", error);
+  RefreshActiveModelKey(guard.conn_);
+  return committed;
 }
 
 auto SemanticStore::LatestModelKey() const -> std::string {

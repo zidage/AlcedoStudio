@@ -31,8 +31,8 @@ namespace alcedo {
 ///   - `Exif`:          Image `exif_search_text` (make, model, lens, lens make,
 ///                      date text) + capture parameter terms on ISO / focal
 ///                      length / aperture + date terms on `capture_date`.
-///   - `AiDescription`: AI understanding `caption_search_text` (caption + scene).
-///   - `AiTags`:        AI understanding `tags_search_text` + the local CLIP
+///   - `AiDescription`: `AiImageSearchText.caption_search_text` (caption + scene).
+///   - `AiTags`:        `AiImageSearchText.tags_search_text` + the local CLIP
 ///                      `SemanticImageLabel` taxonomy (AI-derived labels).
 ///
 /// Declared `enum class` (scoped) deliberately: an unscoped enum would leak the

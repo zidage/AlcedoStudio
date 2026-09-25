@@ -4,17 +4,23 @@
 
 // Typed search columns (library_search_and_project_size_plan.md, Phase S3): the Image mapper
 // and the AI store write the columns, and search, stats, and the thumbnail filter read them
-// instead of the metadata JSON.
+// instead of the metadata JSON. Phase S7 adds the per-file AI search text row and the WHERE
+// build without SQL.
 
 #include <duckdb.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <chrono>
 #include <filesystem>
+#include <future>
 #include <map>
 #include <memory>
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
+#include <variant>
 #include <vector>
 
 #include "ai/ai_description.hpp"
@@ -28,6 +34,7 @@
 #include "storage/mapper/image/image_mapper.hpp"
 #include "storage/mapper/image/image_search_columns.hpp"
 #include "storage/store/ai/ai_store.hpp"
+#include "storage/store/semantic/semantic_store.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "utils/string/convert.hpp"
 #include "utils/string/search_text.hpp"
@@ -530,6 +537,227 @@ TEST_F(LibrarySearchColumnsTest, SearchResultPageReadsDisplayColumnsAndTotalInOn
 
   // Without a semantic provider the semantic rows are empty (no vector scan substitute).
   EXPECT_TRUE(filter_service.SearchFolderSemanticRows(folder_id, L"sunset", 0, 24).empty());
+}
+
+
+/// Build the fuzzy-search WHERE on another thread while this thread holds the database lock.
+/// Every store statement takes that lock, so a build that runs SQL cannot finish until the
+/// lock is released. Fails the test when the build is still waiting after five seconds.
+auto BuildWhereWhileDatabaseIsLocked(ProjectService& project, const SleeveFilterService& service,
+                                     const std::wstring& query) -> std::optional<FilterNode> {
+  auto guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+  auto lock  = guard.Lock();
+  auto build = std::async(std::launch::async, [&service, &query] {
+    return service.BuildFuzzySearchWhere(query, kAllSearchFields);
+  });
+  const bool finished_while_locked =
+      build.wait_for(std::chrono::seconds(5)) == std::future_status::ready;
+  lock.unlock();
+  EXPECT_TRUE(finished_while_locked)
+      << "BuildFuzzySearchWhere waited for the database lock, so it ran SQL";
+  return build.get();
+}
+
+auto StringBinds(const FilterNode& node) -> std::vector<std::string> {
+  std::vector<std::string> values;
+  for (const auto& bind : node.raw_binds_) {
+    if (const auto* value = std::get_if<std::string>(&bind)) {
+      values.push_back(*value);
+    }
+  }
+  return values;
+}
+
+auto Contains(const std::vector<std::string>& values, const std::string& value) -> bool {
+  return std::find(values.begin(), values.end(), value) != values.end();
+}
+
+void RegisterSemanticModel(SemanticStore& semantic, const std::string& model_key) {
+  std::string error;
+  ASSERT_TRUE(semantic.UpsertModel(SemanticModelRecord{.model_key_     = model_key,
+                                                       .model_id_      = "mobileclip-test",
+                                                       .revision_      = "test-rev",
+                                                       .embedding_dim_ = kSemanticEmbeddingDim,
+                                                       .image_size_    = 256,
+                                                       .active_        = false},
+                                   &error))
+      << error;
+}
+
+// Phase S7 steps 1 and 2: the AI FTS index state and the active semantic model key are held
+// by their stores, so building the WHERE runs no SQL. The WHERE still follows an index
+// rebuild and a model activation made after the first build.
+TEST_F(LibrarySearchColumnsTest, FuzzySearchWhereRunsNoCatalogQuery) {
+  ProjectService          project(db_path_, meta_path_);
+  SyntheticLibraryBuilder builder(project);
+  const auto              file_ids = builder.AddFiles(TwoFileSpecs());
+  ASSERT_EQ(file_ids.size(), 2u);
+
+  SleeveFilterService      filter_service(project.GetStorage());
+  const auto               folder_id = LibraryRootFolderId(project);
+  std::vector<std::string> observed_operations;
+  filter_service.SetQueryThreadObserver([&observed_operations](std::string_view operation) {
+    observed_operations.emplace_back(operation);
+  });
+
+  // First build: the index exists from the project open, and no semantic model is active.
+  ASSERT_TRUE(project.GetStorage()->GetAiStore().HasUnderstandingFtsIndex())
+      << "the test runtime ships the DuckDB fts extension";
+  const auto first = BuildWhereWhileDatabaseIsLocked(project, filter_service, L"lighthouses");
+  ASSERT_TRUE(first.has_value() && first->raw_sql_.has_value());
+  EXPECT_NE(first->raw_sql_->find(L"fts_main_AiImageFtsDocument.match_bm25"), std::wstring::npos);
+  EXPECT_EQ(first->raw_sql_->find(L"SemanticImageLabel"), std::wstring::npos);
+  EXPECT_EQ(observed_operations, (std::vector<std::string>{"BuildFuzzySearchWhere"}));
+  EXPECT_EQ(filter_service.ListSearchResultPage(folder_id, first, 0, 10).total_, 0u);
+
+  // An upsert rebuilds the index. `lighthouses` is not in the folded caption
+  // (`lighthouseonacliff`), so only the rebuilt BM25 index (stemming) can match the file.
+  AiDescription description;
+  description.file_id_     = file_ids[0];
+  description.task_id_     = "describe";
+  description.provider_id_ = "test_provider";
+  description.model_id_    = "test_model";
+  description.caption_     = "Lighthouse on a cliff";
+  ASSERT_TRUE(project.GetStorage()->GetAiStore().UpsertUnderstanding(description));
+  EXPECT_TRUE(project.GetStorage()->GetAiStore().HasUnderstandingFtsIndex());
+  const auto after_rebuild =
+      BuildWhereWhileDatabaseIsLocked(project, filter_service, L"lighthouses");
+  const auto rebuilt_page = filter_service.ListSearchResultPage(folder_id, after_rebuild, 0, 10);
+  ASSERT_EQ(rebuilt_page.rows_.size(), 1u);
+  EXPECT_EQ(rebuilt_page.rows_[0].file_id_, file_ids[0]);
+
+  // A model activation after the first build adds the label clause with the new key; a second
+  // activation replaces the key, and purging the active model removes the clause.
+  auto& semantic = project.GetStorage()->GetSemanticStore();
+  RegisterSemanticModel(semantic, "model-a");
+  RegisterSemanticModel(semantic, "model-b");
+  std::string error;
+  ASSERT_TRUE(semantic.SetActiveModelKey("model-a", &error)) << error;
+  const auto with_model_a = BuildWhereWhileDatabaseIsLocked(project, filter_service, L"portrait");
+  ASSERT_TRUE(with_model_a.has_value() && with_model_a->raw_sql_.has_value());
+  EXPECT_NE(with_model_a->raw_sql_->find(L"SemanticImageLabel"), std::wstring::npos);
+  EXPECT_TRUE(Contains(StringBinds(*with_model_a), "model-a"));
+
+  ASSERT_TRUE(semantic.SetActiveModelKey("model-b", &error)) << error;
+  const auto with_model_b = BuildWhereWhileDatabaseIsLocked(project, filter_service, L"portrait");
+  ASSERT_TRUE(with_model_b.has_value());
+  EXPECT_TRUE(Contains(StringBinds(*with_model_b), "model-b"));
+  EXPECT_FALSE(Contains(StringBinds(*with_model_b), "model-a"));
+
+  ASSERT_TRUE(semantic.PurgeModel("model-b", &error)) << error;
+  EXPECT_TRUE(semantic.ActiveModelKey().empty());
+  const auto after_purge = BuildWhereWhileDatabaseIsLocked(project, filter_service, L"portrait");
+  ASSERT_TRUE(after_purge.has_value() && after_purge->raw_sql_.has_value());
+  EXPECT_EQ(after_purge->raw_sql_->find(L"SemanticImageLabel"), std::wstring::npos);
+
+  // Registering an active model makes it the active one in the same way.
+  std::string upsert_error;
+  ASSERT_TRUE(semantic.UpsertModel(SemanticModelRecord{.model_key_     = "model-c",
+                                                       .model_id_      = "mobileclip-test",
+                                                       .revision_      = "test-rev",
+                                                       .embedding_dim_ = kSemanticEmbeddingDim,
+                                                       .image_size_    = 256,
+                                                       .active_        = true},
+                                   &upsert_error))
+      << upsert_error;
+  const auto with_model_c = BuildWhereWhileDatabaseIsLocked(project, filter_service, L"portrait");
+  ASSERT_TRUE(with_model_c.has_value());
+  EXPECT_TRUE(Contains(StringBinds(*with_model_c), "model-c"));
+}
+
+// Phase S7 step 4: AiImageSearchText holds one row for each file with an active
+// understanding: the folded text of all its understandings, in task_id order.
+TEST_F(LibrarySearchColumnsTest, AiSearchTextRowFollowsUpsertAndRemove) {
+  std::vector<sl_element_id_t> file_ids;
+  const auto                   row_of = [](sl_element_id_t file_id) {
+    return "SELECT caption_search_text, tags_search_text FROM AiImageSearchText WHERE file_id = " +
+           std::to_string(file_id);
+  };
+  const auto row_count = [](ProjectService& project) {
+    return QueryFirstRow(project, "SELECT COUNT(*) FROM AiImageSearchText");
+  };
+  const auto make_description = [&file_ids](size_t index, const std::string& task_id,
+                                            const std::string& caption,
+                                            std::vector<std::string> tags) {
+    AiDescription description;
+    description.file_id_     = file_ids[index];
+    description.task_id_     = task_id;
+    description.provider_id_ = "test_provider";
+    description.model_id_    = "test_model";
+    description.caption_     = caption;
+    description.SetTags(std::move(tags));
+    return description;
+  };
+
+  {
+    ProjectService          project(db_path_, meta_path_);
+    SyntheticLibraryBuilder builder(project);
+    file_ids = builder.AddFiles(TwoFileSpecs());
+    ASSERT_EQ(file_ids.size(), 2u);
+    auto& ai = project.GetStorage()->GetAiStore();
+    EXPECT_EQ(row_count(project), (std::vector<std::string>{"0"}));
+
+    // Written with the first understanding.
+    ASSERT_TRUE(ai.UpsertUnderstanding(make_description(0, "describe", "Sand dunes", {"Sahara"})));
+    EXPECT_EQ(QueryFirstRow(project, row_of(file_ids[0])),
+              (std::vector<std::string>{"sanddunes", "sahara"}));
+
+    // A second task adds its text to the same row, in task_id order.
+    ASSERT_TRUE(
+        ai.UpsertUnderstanding(make_description(0, "describe_v2", "Night sky", {"stars"})));
+    EXPECT_EQ(QueryFirstRow(project, row_of(file_ids[0])),
+              (std::vector<std::string>{"sanddunes nightsky", "sahara stars"}));
+    EXPECT_EQ(row_count(project), (std::vector<std::string>{"1"}));
+
+    // A re-run of the first task replaces its part of the row.
+    ASSERT_TRUE(ai.UpsertUnderstanding(make_description(0, "describe", "Red cliff", {"coast"})));
+    EXPECT_EQ(QueryFirstRow(project, row_of(file_ids[0])),
+              (std::vector<std::string>{"redcliff nightsky", "coast stars"}));
+
+    // An invalid understanding writes no row.
+    auto invalid         = make_description(1, "describe", "Partial result", {"partial"});
+    invalid.provider_id_ = "";
+    EXPECT_FALSE(ai.UpsertUnderstanding(invalid));
+    EXPECT_TRUE(QueryFirstRow(project, row_of(file_ids[1])).empty());
+
+    // A batch writes the second file; removing its AI rows deletes its search text row.
+    const std::vector<AiDescription> batch{
+        make_description(1, "describe", "Temple garden", {"maple"})};
+    ASSERT_EQ(ai.UpsertUnderstandings(batch), 1u);
+    EXPECT_EQ(QueryFirstRow(project, row_of(file_ids[1])),
+              (std::vector<std::string>{"templegarden", "maple"}));
+    const std::vector<sl_element_id_t> second_file{file_ids[1]};
+    ai.DeleteForFiles(second_file);
+    EXPECT_TRUE(QueryFirstRow(project, row_of(file_ids[1])).empty());
+    EXPECT_EQ(row_count(project), (std::vector<std::string>{"1"}));
+
+    // Deleting the file removes its row through the element deletion cascade.
+    ASSERT_EQ(ai.UpsertUnderstandings(batch), 1u);
+    SleeveFilterService filter_service(project.GetStorage());
+    const auto          folder_id = LibraryRootFolderId(project);
+    EXPECT_EQ(filter_service.CountSearchResults(folder_id, L"templegarden"), 1u);
+    const auto deleted = project.GetSleeveService()->DeleteElement(file_ids[1]);
+    ASSERT_TRUE(deleted.success_) << deleted.message_;
+    EXPECT_TRUE(QueryFirstRow(project, row_of(file_ids[1])).empty());
+    EXPECT_EQ(row_count(project), (std::vector<std::string>{"1"}));
+    EXPECT_EQ(filter_service.CountSearchResults(folder_id, L"templegarden"), 0u);
+  }
+
+  {
+    // The row reads back the same after reopen. The open rebuilds the table from the
+    // understandings, so a project whose rows are missing gets them back.
+    ProjectService project(db_path_, meta_path_);
+    EXPECT_EQ(QueryFirstRow(project, row_of(file_ids[0])),
+              (std::vector<std::string>{"redcliff nightsky", "coast stars"}));
+    RunStatement(project, "DELETE FROM AiImageSearchText");
+  }
+
+  ProjectService project(db_path_, meta_path_);
+  EXPECT_EQ(QueryFirstRow(project, row_of(file_ids[0])),
+            (std::vector<std::string>{"redcliff nightsky", "coast stars"}));
+  EXPECT_EQ(row_count(project), (std::vector<std::string>{"1"}));
+  SleeveFilterService filter_service(project.GetStorage());
+  EXPECT_EQ(filter_service.CountSearchResults(LibraryRootFolderId(project), L"nightsky"), 1u);
 }
 
 }  // namespace

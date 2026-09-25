@@ -151,6 +151,7 @@ inline constexpr std::array<duckorm::DuckFieldDesc, 12> kSelectRatingFields = {
 constexpr const char* kUnderstandingTable = "AiImageUnderstanding";
 constexpr const char* kRatingTable        = "AiImageRating";
 constexpr const char* kFtsDocumentTable   = "AiImageFtsDocument";
+constexpr const char* kSearchTextTable    = "AiImageSearchText";
 
 // Read a VARCHAR/JSON/BOOLEAN/TIMESTAMP cell (always returned as a unique_ptr<string> by
 // duckorm select). Returns "" for a null pointer (the columns are NOT NULL DEFAULT '' so
@@ -325,35 +326,68 @@ auto EnsureFtsDocumentTable(duckdb_connection conn) -> bool {
                          "updated_at TIMESTAMP DEFAULT current_timestamp);");
 }
 
-void RefreshFtsDocumentsForFiles(duckdb_connection                conn,
-                                 std::span<const sl_element_id_t> file_ids) {
-  if (file_ids.empty()) {
-    return;
+void RunQueryChecked(duckdb_connection conn, const std::string& sql) {
+  duckdb_result result;
+  if (duckdb_query(conn, sql.c_str(), &result) != DuckDBSuccess) {
+    const char*       error   = duckdb_result_error(&result);
+    const std::string message = error ? error : "AI search document query failed";
+    duckdb_destroy_result(&result);
+    throw std::runtime_error(message);
   }
+  duckdb_destroy_result(&result);
+}
+
+/**
+ * @brief Rewrite the per-file search rows of the given files, or of all files.
+ *
+ * @p file_filter is empty (all files) or `file_id IN (...)` with integer ids. Each file with
+ * at least one active understanding gets one `AiImageSearchText` row (the folded caption and
+ * tag text of its understandings, in task_id order) and one `AiImageFtsDocument` row (the
+ * BM25 body). Files without an active understanding get no rows. The search text statements
+ * throw on error, so the caller's transaction rolls back; the FTS document statements are
+ * best-effort because the BM25 index is optional.
+ */
+void RewriteSearchDocuments(duckdb_connection conn, const std::string& file_filter) {
+  const auto where     = file_filter.empty() ? std::string{} : " WHERE " + file_filter;
+  const auto and_where = file_filter.empty() ? std::string{} : " AND " + file_filter;
+  RunQueryChecked(conn, std::format("DELETE FROM {}{};", kSearchTextTable, where));
+  RunQueryChecked(
+      conn, std::format("INSERT INTO {} (file_id, caption_search_text, tags_search_text) "
+                        "SELECT file_id, string_agg(caption_search_text, ' ' ORDER BY task_id), "
+                        "string_agg(tags_search_text, ' ' ORDER BY task_id) "
+                        "FROM {} WHERE active = TRUE{} GROUP BY file_id;",
+                        kSearchTextTable, kUnderstandingTable, and_where));
   if (!EnsureFtsDocumentTable(conn)) {
     return;
   }
-  const auto ids = JoinFileIds(file_ids);
-  RunQueryNoThrow(conn,
-                  std::format("DELETE FROM {} WHERE file_id IN ({});", kFtsDocumentTable, ids));
+  RunQueryNoThrow(conn, std::format("DELETE FROM {}{};", kFtsDocumentTable, where));
   RunQueryNoThrow(
       conn,
       std::format("INSERT INTO {} (file_id, body) "
                   "SELECT file_id, string_agg(caption || ' ' || tags_json || ' ' || scene, ' ') "
-                  "FROM {} WHERE active = TRUE AND file_id IN ({}) GROUP BY file_id;",
-                  kFtsDocumentTable, kUnderstandingTable, ids));
+                  "FROM {} WHERE active = TRUE{} GROUP BY file_id;",
+                  kFtsDocumentTable, kUnderstandingTable, and_where));
 }
 
-void RebuildFtsIndex(duckdb_connection conn) {
+/**
+ * @brief Recreate the BM25 index over `AiImageFtsDocument`.
+ *
+ * DuckDB does not maintain FTS indexes when the source table changes, so every writer calls
+ * this after its commit. Returns true when `create_fts_index` succeeded, which is when the
+ * `match_bm25` macro exists. Without the fts extension it returns false on every call; with
+ * it, the index exists from the first build on (an empty table is indexed too), so a later
+ * rebuild does not change the result.
+ */
+auto RebuildFtsIndex(duckdb_connection conn) -> bool {
   if (!EnsureFtsDocumentTable(conn)) {
-    return;
+    return false;
   }
   if (!LoadFtsExtension(conn)) {
-    return;
+    return false;
   }
-  RunQueryNoThrow(conn,
-                  std::format("PRAGMA create_fts_index('{}', 'file_id', 'body', overwrite=1);",
-                              kFtsDocumentTable));
+  return RunQueryNoThrow(
+      conn, std::format("PRAGMA create_fts_index('{}', 'file_id', 'body', overwrite=1);",
+                        kFtsDocumentTable));
 }
 
 // Enforce the "file_id is a foreign key into Element(id)" contract at the write
@@ -381,7 +415,19 @@ auto FileExists(duckdb_connection conn, sl_element_id_t file_id) -> bool {
 
 }  // namespace
 
-AiStore::AiStore(Database& db_ctrl) : database_(db_ctrl) {}
+AiStore::AiStore(Database& db_ctrl) : database_(db_ctrl) {
+  auto guard = database_.GetConnectionGuard();
+  auto lock  = guard.Lock();
+  duckorm::begin_transaction(guard.conn_);
+  try {
+    RewriteSearchDocuments(guard.conn_, {});
+    duckorm::commit_transaction(guard.conn_);
+  } catch (...) {
+    duckorm::rollback_transaction(guard.conn_);
+    throw;
+  }
+  understanding_fts_index_ready_.store(RebuildFtsIndex(guard.conn_));
+}
 
 auto AiStore::UpsertUnderstanding(const AiDescription& description) const -> bool {
   const std::span<const AiDescription> descriptions(&description, 1);
@@ -398,6 +444,7 @@ auto AiStore::UpsertUnderstandings(std::span<const AiDescription> descriptions) 
 
   std::vector<sl_element_id_t> accepted_file_ids;
   accepted_file_ids.reserve(descriptions.size());
+  // DDL outside the transaction: a dropped document table is created again.
   EnsureFtsDocumentTable(guard.conn_);
 
   duckorm::begin_transaction(guard.conn_);
@@ -415,7 +462,8 @@ auto AiStore::UpsertUnderstandings(std::span<const AiDescription> descriptions) 
       accepted_file_ids.push_back(description.file_id_);
     }
     if (!accepted_file_ids.empty()) {
-      RefreshFtsDocumentsForFiles(guard.conn_, accepted_file_ids);
+      RewriteSearchDocuments(guard.conn_,
+                             std::format("file_id IN ({})", JoinFileIds(accepted_file_ids)));
     }
     duckorm::commit_transaction(guard.conn_);
   } catch (...) {
@@ -424,7 +472,7 @@ auto AiStore::UpsertUnderstandings(std::span<const AiDescription> descriptions) 
   }
 
   if (!accepted_file_ids.empty()) {
-    RebuildFtsIndex(guard.conn_);
+    understanding_fts_index_ready_.store(RebuildFtsIndex(guard.conn_));
   }
   return accepted_file_ids.size();
 }
@@ -462,22 +510,7 @@ auto AiStore::GetActiveUnderstanding(sl_element_id_t file_id) const
 }
 
 auto AiStore::HasUnderstandingFtsIndex() const -> bool {
-  auto                  guard = database_.GetConnectionGuard();
-  auto                  lock  = guard.Lock();
-  duckdb_result         result;
-  constexpr const char* kQuery =
-      "SELECT COUNT(*) FROM duckdb_functions() "
-      "WHERE schema_name = 'fts_main_AiImageFtsDocument' "
-      "AND function_name = 'match_bm25';";
-  if (duckdb_query(guard.conn_, kQuery, &result) != DuckDBSuccess) {
-    duckdb_destroy_result(&result);
-    return false;
-  }
-  const bool available = duckdb_row_count(&result) > 0 && duckdb_column_count(&result) > 0 &&
-                         !duckdb_value_is_null(&result, 0, 0) &&
-                         duckdb_value_int64(&result, 0, 0) > 0;
-  duckdb_destroy_result(&result);
-  return available;
+  return understanding_fts_index_ready_.load();
 }
 
 auto AiStore::UpsertRating(const AiRating& rating) const -> bool {
@@ -558,7 +591,9 @@ void DeleteAiAnnotationRowsForFiles(duckdb_connection                conn,
   // integer IN-list predicate, so no raw DELETE statement is written here.
   duckorm::remove(conn, kUnderstandingTable, where.c_str());
   duckorm::remove(conn, kRatingTable, where.c_str());
+  duckorm::remove(conn, kSearchTextTable, where.c_str());
   duckorm::remove(conn, kFtsDocumentTable, where.c_str());
+  // The result is not needed: a rebuild does not change whether the index exists.
   RebuildFtsIndex(conn);
 }
 

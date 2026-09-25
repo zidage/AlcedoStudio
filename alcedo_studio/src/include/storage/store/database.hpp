@@ -228,8 +228,11 @@ class Database {
   // NOT part of full-text search: it is stored here only, and the search-document
   // builder (sleeve_filter_service) intentionally reads the understanding table alone.
   // caption_search_text (caption + scene) and tags_search_text (tags) are the folded search
-  // text that AiStore writes on each upsert (see utils/string/search_text.hpp); library
-  // search reads them instead of folding caption, scene, and tags_json in SQL.
+  // text that AiStore writes on each upsert (see utils/string/search_text.hpp).
+  // AiImageFtsDocument (the BM25 index body) and AiImageSearchText (the folded text of all
+  // active understandings of a file) hold one row per file. AiStore writes both when an
+  // understanding is upserted or removed and rebuilds them when the project opens; library
+  // search reads AiImageSearchText instead of aggregating AiImageUnderstanding per query.
   constexpr static const char* ai_annotation_table_query =
       "CREATE TABLE IF NOT EXISTS AiImageUnderstanding ("
       "file_id BIGINT NOT NULL,"
@@ -253,6 +256,10 @@ class Database {
       "file_id BIGINT PRIMARY KEY,"
       "body VARCHAR NOT NULL DEFAULT '',"
       "updated_at TIMESTAMP DEFAULT current_timestamp);"
+      "CREATE TABLE IF NOT EXISTS AiImageSearchText ("
+      "file_id BIGINT PRIMARY KEY,"
+      "caption_search_text VARCHAR NOT NULL DEFAULT '',"
+      "tags_search_text VARCHAR NOT NULL DEFAULT '');"
       "CREATE TABLE IF NOT EXISTS AiImageRating ("
       "file_id BIGINT NOT NULL,"
       "task_id VARCHAR NOT NULL DEFAULT '',"

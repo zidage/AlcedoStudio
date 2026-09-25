@@ -4,7 +4,10 @@
 
 #pragma once
 
+#include <duckdb.h>
+
 #include <cstddef>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -81,7 +84,17 @@ struct SemanticRankedFile {
 
 class SemanticStore {
  private:
-  Database& database_;
+  Database&          database_;
+  // Key of the active model (empty when none is active). Loaded by the constructor and
+  // re-read after every write to SemanticModel (UpsertModel, SetActiveModelKey, PurgeModel),
+  // which are the only writers of the active flag after the database is opened. Search reads
+  // it on the search worker without SQL; the mutex covers the string copy only.
+  mutable std::mutex  active_model_key_mutex_;
+  mutable std::string active_model_key_;
+
+  // Re-read the active model key on @p conn after a SemanticModel write. Keeps the previous
+  // value when the query fails. Caller holds the database lock.
+  void               RefreshActiveModelKey(duckdb_connection conn) const;
 
  public:
   explicit SemanticStore(Database& db_ctrl);
@@ -96,6 +109,8 @@ class SemanticStore {
       -> std::optional<SemanticModelRecord>;
   [[nodiscard]] auto ActiveModel(std::string* error = nullptr) const
       -> std::optional<SemanticModelRecord>;
+  // Key of the active model, or empty when none is active. Returns the value recorded by the
+  // last model write: runs no SQL and does not take the database lock.
   [[nodiscard]] auto ActiveModelKey() const -> std::string;
   [[nodiscard]] auto SetActiveModelKey(const std::string& model_key,
                                        std::string*       error = nullptr) const -> bool;
