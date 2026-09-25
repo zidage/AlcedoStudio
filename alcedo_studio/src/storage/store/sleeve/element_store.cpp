@@ -29,10 +29,19 @@ auto BuildScopedFileQuery(sl_element_id_t                            folder_id,
     -> ScopedFileQuery {
   ScopedFileQuery scope;
   std::string     extra_where;
+  std::string     ai_join;
   if (extra_filter.has_value() && !extra_filter->empty()) {
     extra_where         = " AND (" + extra_filter->sql_ + ")";
     scope.binds_.sql_   = extra_filter->sql_;
     scope.binds_.binds_ = extra_filter->binds_;
+    // One row per file with the active AI understanding search text, for predicates that
+    // read `u.caption_search_text` / `u.tags_search_text`. The table key allows more than one
+    // active row per file (one per task_id), so the rows are grouped: the join never adds
+    // result rows. Files without an active understanding get NULL columns.
+    ai_join =
+        "LEFT JOIN (SELECT file_id, string_agg(caption_search_text, ' ') AS caption_search_text, "
+        "string_agg(tags_search_text, ' ') AS tags_search_text FROM AiImageUnderstanding "
+        "WHERE active = TRUE GROUP BY file_id) u ON u.file_id = e.id ";
   }
 
   if (folder_id == 0) {
@@ -40,8 +49,9 @@ auto BuildScopedFileQuery(sl_element_id_t                            folder_id,
         "FROM Element e "
         "JOIN FileImage fi ON fi.file_id = e.id "
         "JOIN Image i ON i.id = fi.image_id "
+        "{}"
         "WHERE e.type = {}{}",
-        static_cast<uint32_t>(ElementType::FILE), extra_where);
+        ai_join, static_cast<uint32_t>(ElementType::FILE), extra_where);
     return scope;
   }
 
@@ -50,8 +60,9 @@ auto BuildScopedFileQuery(sl_element_id_t                            folder_id,
       "JOIN Element e ON fc.element_id = e.id "
       "JOIN FileImage fi ON fi.file_id = e.id "
       "JOIN Image i ON i.id = fi.image_id "
+      "{}"
       "WHERE fc.folder_id = {} AND e.type = {}{}",
-      folder_id, static_cast<uint32_t>(ElementType::FILE), extra_where);
+      ai_join, folder_id, static_cast<uint32_t>(ElementType::FILE), extra_where);
   return scope;
 }
 
@@ -409,32 +420,27 @@ auto ElementStore::BuildFolderStats(sl_element_id_t                            f
   out.total_photo_count_     = static_cast<int>(
       RunScalarInt64(guard_.conn_, std::format("SELECT COUNT(*) {}", base_join), binds));
 
-  out.date_stats_ = RunGroupByQuery(
-      guard_.conn_,
-      std::format(
-          "SELECT TRY_CAST(json_extract(i.metadata, '$.DateTimeString') AS DATE)::VARCHAR AS d, "
-          "COUNT(*) AS c {} "
-          "GROUP BY d ORDER BY d DESC",
-          base_join),
-      binds);
+  out.date_stats_ = RunGroupByQuery(guard_.conn_,
+                                    std::format("SELECT CAST(i.capture_date AS VARCHAR) AS d, "
+                                                "COUNT(*) AS c {} "
+                                                "GROUP BY d ORDER BY d DESC",
+                                                base_join),
+                                    binds);
 
-  out.camera_stats_ = RunGroupByQuery(
-      guard_.conn_,
-      std::format(
-          "SELECT COALESCE(NULLIF(json_extract_string(i.metadata, '$.Model'), ''), '(unknown)') "
-          "AS m, COUNT(*) AS c {} "
-          "GROUP BY m ORDER BY c DESC",
-          base_join),
-      binds);
+  out.camera_stats_ =
+      RunGroupByQuery(guard_.conn_,
+                      std::format("SELECT COALESCE(NULLIF(i.camera_model, ''), '(unknown)') "
+                                  "AS m, COUNT(*) AS c {} "
+                                  "GROUP BY m ORDER BY c DESC",
+                                  base_join),
+                      binds);
 
-  out.lens_stats_ = RunGroupByQuery(
-      guard_.conn_,
-      std::format(
-          "SELECT COALESCE(NULLIF(json_extract_string(i.metadata, '$.Lens'), ''), '(unknown)') "
-          "AS l, COUNT(*) AS c {} "
-          "GROUP BY l ORDER BY c DESC",
-          base_join),
-      binds);
+  out.lens_stats_ = RunGroupByQuery(guard_.conn_,
+                                    std::format("SELECT COALESCE(NULLIF(i.lens, ''), '(unknown)') "
+                                                "AS l, COUNT(*) AS c {} "
+                                                "GROUP BY l ORDER BY c DESC",
+                                                base_join),
+                                    binds);
 
   if (!active_semantic_model_key.empty()) {
     duckorm::SqlFragment label_binds = binds;
@@ -451,12 +457,12 @@ auto ElementStore::BuildFolderStats(sl_element_id_t                            f
         label_binds);
   }
 
-  out.rating_stats_ = RunGroupByQuery(
-      guard_.conn_,
-      std::format("SELECT json_extract(i.metadata, '$.Rating')::VARCHAR AS r, COUNT(*) AS c {} "
-                  "GROUP BY r ORDER BY r DESC",
-                  base_join),
-      binds);
+  out.rating_stats_ =
+      RunGroupByQuery(guard_.conn_,
+                      std::format("SELECT CAST(i.rating AS VARCHAR) AS r, COUNT(*) AS c {} "
+                                  "GROUP BY r ORDER BY r DESC",
+                                  base_join),
+                      binds);
 
   return out;
 }

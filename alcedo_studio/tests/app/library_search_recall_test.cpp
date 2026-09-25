@@ -177,9 +177,12 @@ auto RecallCases() -> std::vector<RecallCase> {
       {L"20260607", {f1, f2}, passes},
       // File kinds.
       {L"jpg", {}, passes},
-      {L"dng", {f4, f5}, defect},
+      {L"dng", {f4, f5}, passes},  // Phase S3: no metadata dump in the search text
       {L"rw2", {f1, f2, f3, f9}, passes},
-      {L"raw", {f1, f2, f3, f4, f5, f6, f7, f8, f9}, passes},  // every file is RAW
+      // Every file is RAW. Before Phase S3 this matched only through the metadata JSON dump
+      // (the `RawRuntimeColorContext` key); now only `raw00011` matches until the Phase S4
+      // file kind term.
+      {L"raw", {f1, f2, f3, f4, f5, f6, f7, f8, f9}, defect},
       // Capture parameters.
       {L"iso800", {f1}, defect},
       {L"f2.8", {f2}, defect},

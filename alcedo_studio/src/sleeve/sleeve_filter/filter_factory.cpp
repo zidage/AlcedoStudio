@@ -47,12 +47,9 @@ auto BuildCaptureDateBucketFilter(const std::wstring& date_yyyy_mm_dd) -> Filter
 }
 
 auto BuildCaptureDateUnknownFilter() -> FilterNode {
-  // Use json_extract_string: comparing json_extract(...) to '' would cast ''
-  // to JSON and fail (Malformed JSON) in DuckDB.
-  const auto date_col = expr::col("json_extract_string(i.metadata, '$.DateTimeString')");
-  const auto fragment =
-      expr::or_({expr::is_null(date_col), expr::eq(date_col, expr::param(""))});
-  return MakeRawSQLNode(fragment);
+  // ImageMapper writes NULL when the capture date is missing or does not parse; this is the
+  // row set of the NULL date bucket in ElementStore::BuildFolderStats.
+  return MakeRawSQLNode(expr::is_null(expr::col("i.capture_date")));
 }
 
 auto BuildRatingBucketFilter(const std::wstring& label) -> FilterNode {
@@ -68,7 +65,7 @@ auto BuildRatingBucketFilter(const std::wstring& label) -> FilterNode {
     return MakeConditionNode(FilterField::RatingLabel, CompareOp::EQUALS, int64_t{value});
   }
   // Non-numeric bucket (for example "(unknown)"): the rating must be NULL.
-  return MakeRawSQLNode(expr::is_null(expr::col("json_extract(i.metadata, '$.Rating')")));
+  return MakeRawSQLNode(expr::is_null(expr::col("i.rating")));
 }
 
 auto BuildSemanticLabelExistsFilter(const std::string&           model_key,

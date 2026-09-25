@@ -156,6 +156,15 @@ void bind_field(duckdb_prepared_statement stmt, idx_t index, const void* obj,
       }
       break;
     }
+    case DuckDBType::NULLABLE_INT64: {
+      const auto& value = *reinterpret_cast<const std::optional<int64_t>*>(ptr);
+      if (value.has_value()) {
+        duckdb_bind_int64(stmt, index, *value);
+      } else {
+        duckdb_bind_null(stmt, index);
+      }
+      break;
+    }
     case DuckDBType::FLOAT_ARRAY: {
       auto array_value = make_float_array_value(*reinterpret_cast<const std::vector<float>*>(ptr));
       if (duckdb_bind_value(stmt, index, array_value.get()) != DuckDBSuccess) {
@@ -299,9 +308,32 @@ auto decode_select_rows(PreparedStatement& select_pre, std::span<const DuckField
         case DuckDBType::VARCHAR:
         case DuckDBType::JSON:
         case DuckDBType::BOOLEAN:
-        case DuckDBType::TIMESTAMP: {
-          const char* value = duckdb_value_varchar(&select_pre.result_, j, i);
-          results[i][j]     = std::make_unique<std::string>(value);
+        case DuckDBType::TIMESTAMP:
+        case DuckDBType::STRING:
+        case DuckDBType::NULLABLE_STRING: {
+          char* value = duckdb_value_is_null(&select_pre.result_, j, i)
+                            ? nullptr
+                            : duckdb_value_varchar(&select_pre.result_, j, i);
+          if (value == nullptr) {
+            results[i][j] = std::unique_ptr<std::string>{};
+          } else {
+            results[i][j] = std::make_unique<std::string>(value);
+            duckdb_free(value);
+          }
+          break;
+        }
+        case DuckDBType::NULLABLE_DOUBLE: {
+          results[i][j] =
+              duckdb_value_is_null(&select_pre.result_, j, i)
+                  ? std::optional<double>{}
+                  : std::optional<double>{duckdb_value_double(&select_pre.result_, j, i)};
+          break;
+        }
+        case DuckDBType::NULLABLE_INT64: {
+          results[i][j] =
+              duckdb_value_is_null(&select_pre.result_, j, i)
+                  ? std::optional<int64_t>{}
+                  : std::optional<int64_t>{duckdb_value_int64(&select_pre.result_, j, i)};
           break;
         }
         default:

@@ -22,11 +22,13 @@ namespace alcedo {
 /// search to one contributing field group so the search-settings drawer can
 /// scope results. Bits are combinable; `kAllSearchFields` reproduces the
 /// pre-mask behavior (every field contributes — the default).
-///   - `Filename`:      element name + image file name + image path.
-///   - `Exif`:          EXIF metadata JSON (Make/Model/Lens/LensMake/ISO/Focal/
-///                      Aperture) + date matching.
-///   - `AiDescription`: remote AI understanding caption + scene text.
-///   - `AiTags`:        remote AI understanding tags_json + the local CLIP
+///   - `Filename`:      element name + Image `file_search_text` (file name and
+///                      parent folder name).
+///   - `Exif`:          Image `exif_search_text` (make, model, lens, lens make,
+///                      date text) + ISO / focal length / aperture columns + date
+///                      matching on `capture_date`.
+///   - `AiDescription`: AI understanding `caption_search_text` (caption + scene).
+///   - `AiTags`:        AI understanding `tags_search_text` + the local CLIP
 ///                      `SemanticImageLabel` taxonomy (AI-derived labels).
 ///
 /// Declared `enum class` (scoped) deliberately: an unscoped enum would leak the

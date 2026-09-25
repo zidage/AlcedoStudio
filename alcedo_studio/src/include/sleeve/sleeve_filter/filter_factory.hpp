@@ -39,7 +39,8 @@ namespace alcedo::sleeve_filter {
 /**
  * @brief Build a filter node that matches files with no usable capture date.
  *
- * @return Predicate: the raw date string is NULL or empty.
+ * @return Predicate: the Image `capture_date` column is NULL (no date, or a date text that
+ *         does not parse). This is the NULL bucket of the capture date stats.
  */
 [[nodiscard]] auto BuildCaptureDateUnknownFilter() -> FilterNode;
 

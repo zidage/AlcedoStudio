@@ -229,6 +229,16 @@ gtest_discover_tests(LibrarySearchRecallTest TEST_PREFIX "LibrarySearchRecallTes
 alcedo_copy_duckdb_fts_extension(LibrarySearchRecallTest)
 alcedo_register_test_target(LibrarySearchRecallTest app ci_core)
 
+# Typed Image and AI search columns and the SQL that reads them (same plan, Phase S3).
+add_executable(LibrarySearchColumnsTest ${ALCEDO_TEST_ROOT}/app/library_search_columns_test.cpp)
+target_include_directories(LibrarySearchColumnsTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(LibrarySearchColumnsTest
+  ProjectService SleeveFilterService GTest::gtest_main)
+gtest_discover_tests(LibrarySearchColumnsTest TEST_PREFIX "LibrarySearchColumnsTest."
+  PROPERTIES LABELS "ci_core_flow")
+alcedo_copy_duckdb_fts_extension(LibrarySearchColumnsTest)
+alcedo_register_test_target(LibrarySearchColumnsTest app ci_core)
+
 add_executable(LibrarySearchBenchmarkTest
   ${ALCEDO_TEST_ROOT}/app/library_search_benchmark_test.cpp)
 target_include_directories(LibrarySearchBenchmarkTest PUBLIC ${ALCEDO_INCLUDE_DIR})

@@ -13,6 +13,8 @@
 #include <vector>
 
 #include "image/image.hpp"
+#include "image/metadata.hpp"
+#include "storage/mapper/image/image_search_columns.hpp"
 #include "utils/string/convert.hpp"
 
 namespace alcedo {
@@ -30,15 +32,35 @@ auto ImageMapper::FromRawData(std::vector<duckorm::VarTypes>&& data) -> ImageMap
       metadata == nullptr) {
     throw std::runtime_error("Encounting unmatching types when parsing the data from the DB");
   }
-  return {*id, std::move(*image_path), std::move(*file_name), *type, std::move(*metadata)};
+  // The search columns (data[5..]) are derived from the metadata; FromParams does not use
+  // them, so they are not read back.
+  ImageMapperParams params;
+  params.id         = *id;
+  params.image_path = std::move(*image_path);
+  params.file_name  = std::move(*file_name);
+  params.type       = *type;
+  params.metadata   = std::move(*metadata);
+  return params;
 }
 
 auto ImageMapper::ToParams(const std::shared_ptr<Image> source) -> ImageMapperParams {
-  std::string utf8_path     = conv::ToBytes(source->image_path_.wstring());
-  std::string utf8_img_name = conv::ToBytes(source->image_name_);
-  return {source->image_id_, std::make_unique<std::string>(utf8_path),
-          std::make_unique<std::string>(utf8_img_name), static_cast<uint32_t>(source->image_type_),
-          std::make_unique<std::string>(source->ExifToJson())};
+  ImageMapperParams params;
+  params.id         = source->image_id_;
+  params.image_path = std::make_unique<std::string>(conv::ToBytes(source->image_path_.wstring()));
+  params.file_name  = std::make_unique<std::string>(conv::ToBytes(source->image_name_));
+  params.type       = static_cast<uint32_t>(source->image_type_);
+  params.metadata   = std::make_unique<std::string>(source->ExifToJson());
+
+  // ExifToJson has refreshed exif_json_ from the display metadata when the display metadata
+  // is present, so this reads the same values that the metadata column stores.
+  if (source->has_exif_display_.load()) {
+    FillImageSearchColumns(source->image_name_, source->image_path_, source->exif_display_, params);
+  } else {
+    ExifDisplayMetaData display;
+    display.FromJson(source->exif_json_);
+    FillImageSearchColumns(source->image_name_, source->image_path_, display, params);
+  }
+  return params;
 }
 
 auto ImageMapper::FromParams(ImageMapperParams&& param) -> std::shared_ptr<Image> {

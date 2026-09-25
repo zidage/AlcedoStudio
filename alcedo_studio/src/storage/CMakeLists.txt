@@ -18,6 +18,7 @@ set(MAPPER_SRCS
     "${ALCEDO_SRC_ROOT}/storage/mapper/sleeve/base/base_mapper.cpp"
     "${ALCEDO_SRC_ROOT}/storage/mapper/sleeve/base/root_mapper.cpp"
     "${ALCEDO_SRC_ROOT}/storage/mapper/image/image_mapper.cpp"
+    "${ALCEDO_SRC_ROOT}/storage/mapper/image/image_search_columns.cpp"
     "${ALCEDO_SRC_ROOT}/storage/mapper/sleeve/filter/filter_mapper.cpp"
     "${ALCEDO_SRC_ROOT}/storage/mapper/sleeve/edit_history/edit_commit_mapper.cpp"
     "${ALCEDO_SRC_ROOT}/storage/mapper/sleeve/edit_history/version_ref_mapper.cpp"
@@ -27,7 +28,7 @@ set(MAPPER_SRCS
 
 def_library(SleeveMapper
     SOURCES ${MAPPER_SRCS}
-    PUBLIC_DEPS DuckDB DuckORM Image SleeveElement ImagePool PipelineHistory EditPipeline PipelineScheduler
+    PUBLIC_DEPS DuckDB DuckORM Image SleeveElement ImagePool PipelineHistory EditPipeline PipelineScheduler StrConv
 )
 
 # Stores + Storage facade (no storage/service rank)
