@@ -10,8 +10,6 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <cstdlib>
-#include <filesystem>
 #include <format>
 #include <iomanip>
 #include <limits>
@@ -26,19 +24,9 @@
 
 #include "storage/store/sleeve/element_store.hpp"
 #include "storage/mapper/duckorm/duckdb_orm.hpp"
+#include "storage/store/duckdb_extension.hpp"
 #include "utils/diagnostics/app_logging.hpp"
 
-#ifdef _WIN32
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#elif defined(__APPLE__)
-#include <mach-o/dyld.h>
-#else
-#include <limits.h>
-#include <unistd.h>
-#endif
 
 namespace alcedo {
 namespace {
@@ -262,40 +250,6 @@ auto FilterAndPageSemanticCandidates(std::vector<SemanticRankedFile> candidates,
   return {first, first + static_cast<std::ptrdiff_t>(count)};
 }
 
-auto ExecutableDirectory() -> std::filesystem::path {
-#ifdef _WIN32
-  std::wstring buffer(MAX_PATH, L'\0');
-  DWORD        size = 0;
-  while (true) {
-    size = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
-    if (size == 0) {
-      return {};
-    }
-    if (size < buffer.size() - 1) {
-      buffer.resize(size);
-      return std::filesystem::path(buffer).parent_path();
-    }
-    buffer.resize(buffer.size() * 2);
-  }
-#elif defined(__APPLE__)
-  uint32_t size = 0;
-  _NSGetExecutablePath(nullptr, &size);
-  std::string buffer(size, '\0');
-  if (_NSGetExecutablePath(buffer.data(), &size) != 0) {
-    return {};
-  }
-  return std::filesystem::weakly_canonical(std::filesystem::path(buffer.c_str())).parent_path();
-#else
-  std::string buffer(PATH_MAX, '\0');
-  const auto  size = readlink("/proc/self/exe", buffer.data(), buffer.size() - 1);
-  if (size <= 0) {
-    return {};
-  }
-  buffer.resize(static_cast<size_t>(size));
-  return std::filesystem::path(buffer).parent_path();
-#endif
-}
-
 void SetError(std::string* error, const std::string& message) {
   if (error) {
     *error = message;
@@ -371,49 +325,6 @@ auto UpsertLabelPrototypePrepared(duckdb_connection                   conn,
     SetError(error, e.what());
     return false;
   }
-}
-
-auto LoadVssExtension(duckdb_connection conn, std::string* error) -> bool {
-  std::string autoinstall_error;
-  RunQuery(conn, "SET autoinstall_known_extensions=false;", &autoinstall_error);
-
-  std::vector<std::filesystem::path> candidates;
-  if (const char* env_path = std::getenv("ALCEDO_DUCKDB_VSS_EXTENSION")) {
-    if (*env_path != '\0') {
-      candidates.emplace_back(env_path);
-    }
-  }
-
-  const auto exe_dir = ExecutableDirectory();
-  if (!exe_dir.empty()) {
-#ifdef __APPLE__
-    candidates.push_back(exe_dir.parent_path() / "Resources" / "duckdb_extensions" /
-                         "vss.duckdb_extension");
-#endif
-    candidates.push_back(exe_dir / "duckdb_extensions" / "vss.duckdb_extension");
-    candidates.push_back(exe_dir / "extensions" / "vss.duckdb_extension");
-  }
-
-  std::string load_error;
-  for (const auto& candidate : candidates) {
-    std::error_code ec;
-    if (!std::filesystem::is_regular_file(candidate, ec) || ec) {
-      continue;
-    }
-    std::string candidate_error;
-    if (RunQuery(conn, "LOAD " + SqlString(candidate.generic_string()) + ";", &candidate_error)) {
-      return true;
-    }
-    load_error += "\nPackaged extension load failed from " + candidate.generic_string() + ": " +
-                  candidate_error;
-  }
-
-  if (RunQuery(conn, "LOAD vss;", &load_error)) {
-    return true;
-  }
-
-  SetError(error, load_error);
-  return false;
 }
 
 auto ScalarInt64(duckdb_connection conn, const std::string& sql) -> std::optional<int64_t> {
@@ -1948,7 +1859,7 @@ auto SemanticStore::EnsureVectorSearchIndex(const std::string& model_key,
                                 *model_dim));
     return false;
   }
-  if (!LoadVssExtension(guard.conn_, error)) {
+  if (!LoadPackagedDuckDbExtension(guard.conn_, "vss", error)) {
     return false;
   }
   if (!RunQuery(guard.conn_, "SET hnsw_enable_experimental_persistence = true;", error)) {

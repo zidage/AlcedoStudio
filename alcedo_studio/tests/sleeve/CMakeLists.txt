@@ -46,6 +46,13 @@ gtest_discover_tests(SleeveFilterFactoryTest TEST_PREFIX "SleeveFilterFactoryTes
   PROPERTIES LABELS "ci_core_flow")
 alcedo_register_test_target(SleeveFilterFactoryTest storage ci_core)
 
+add_executable(DuckDbExtensionTest ${ALCEDO_TEST_ROOT}/storage/duckdb_extension_test.cpp)
+target_include_directories(DuckDbExtensionTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(DuckDbExtensionTest PRIVATE GTest::gtest_main Storage)
+gtest_discover_tests(DuckDbExtensionTest TEST_PREFIX "DuckDbExtensionTest.")
+alcedo_copy_duckdb_extensions(DuckDbExtensionTest)
+alcedo_register_test_target(DuckDbExtensionTest storage)
+
 # AI annotation and semantic model/embedding stores against a real project database.
 add_executable(AiStorageControllerTest ${ALCEDO_TEST_ROOT}/storage/ai_storage_controller_test.cpp)
 target_include_directories(AiStorageControllerTest PUBLIC ${ALCEDO_INCLUDE_DIR})

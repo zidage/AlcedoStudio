@@ -9,25 +9,15 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
-#include <filesystem>
 #include <format>
 #include <stdexcept>
 #include <string>
-#include <system_error>
 #include <vector>
 
 #include "storage/mapper/duckorm/duckdb_orm.hpp"
+#include "storage/store/duckdb_extension.hpp"
 #include "utils/string/search_text.hpp"
 
-#ifdef _WIN32
-#include <windows.h>
-#elif defined(__APPLE__)
-#include <mach-o/dyld.h>
-#else
-#include <limits.h>
-#include <unistd.h>
-#endif
 
 namespace alcedo {
 namespace {
@@ -221,103 +211,6 @@ auto RunQueryNoThrow(duckdb_connection conn, const std::string& sql) -> bool {
   return ok;
 }
 
-auto SqlString(const std::string& value) -> std::string {
-  std::string out;
-  out.reserve(value.size() + 2);
-  out.push_back('\'');
-  for (const char ch : value) {
-    if (ch == '\'') {
-      out.push_back('\'');
-    }
-    out.push_back(ch);
-  }
-  out.push_back('\'');
-  return out;
-}
-
-auto ExecutableDirectory() -> std::filesystem::path {
-#ifdef _WIN32
-  std::wstring buffer(MAX_PATH, L'\0');
-  DWORD        size = 0;
-  while (true) {
-    size = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
-    if (size == 0) {
-      return {};
-    }
-    if (size < buffer.size() - 1) {
-      buffer.resize(size);
-      return std::filesystem::path(buffer).parent_path();
-    }
-    buffer.resize(buffer.size() * 2);
-  }
-#elif defined(__APPLE__)
-  uint32_t size = 0;
-  _NSGetExecutablePath(nullptr, &size);
-  std::string buffer(size, '\0');
-  if (_NSGetExecutablePath(buffer.data(), &size) != 0) {
-    return {};
-  }
-  return std::filesystem::weakly_canonical(std::filesystem::path(buffer.c_str())).parent_path();
-#else
-  std::string buffer(PATH_MAX, '\0');
-  const auto  size = readlink("/proc/self/exe", buffer.data(), buffer.size() - 1);
-  if (size <= 0) {
-    return {};
-  }
-  buffer.resize(static_cast<size_t>(size));
-  return std::filesystem::path(buffer).parent_path();
-#endif
-}
-
-auto EnvironmentVariable(const char* name) -> std::string {
-#ifdef _WIN32
-  char*  raw = nullptr;
-  size_t len = 0;
-  if (_dupenv_s(&raw, &len, name) != 0 || raw == nullptr) {
-    return {};
-  }
-  std::string value(raw, len > 0 ? len - 1 : 0);
-  std::free(raw);
-  return value;
-#else
-  const char* raw = std::getenv(name);
-  return raw != nullptr ? std::string(raw) : std::string{};
-#endif
-}
-
-auto LoadFtsExtension(duckdb_connection conn) -> bool {
-  // `fts` is a DuckDB extension. The shipped app runs offline, so prefer the extension
-  // copied next to the executable. Disable autoinstall first so a missing packaged
-  // extension never stalls trying to download an optional accelerator.
-  RunQueryNoThrow(conn, "SET autoinstall_known_extensions=false;");
-  std::vector<std::filesystem::path> candidates;
-  if (const auto env_path = EnvironmentVariable("ALCEDO_DUCKDB_FTS_EXTENSION"); !env_path.empty()) {
-    candidates.emplace_back(env_path);
-  }
-
-  const auto exe_dir = ExecutableDirectory();
-  if (!exe_dir.empty()) {
-#ifdef __APPLE__
-    candidates.push_back(exe_dir.parent_path() / "Resources" / "duckdb_extensions" /
-                         "fts.duckdb_extension");
-#endif
-    candidates.push_back(exe_dir / "duckdb_extensions" / "fts.duckdb_extension");
-    candidates.push_back(exe_dir / "extensions" / "fts.duckdb_extension");
-  }
-
-  for (const auto& candidate : candidates) {
-    std::error_code ec;
-    if (!std::filesystem::is_regular_file(candidate, ec) || ec) {
-      continue;
-    }
-    if (RunQueryNoThrow(conn, "LOAD " + SqlString(candidate.generic_string()) + ";")) {
-      return true;
-    }
-  }
-
-  return RunQueryNoThrow(conn, "LOAD fts;");
-}
-
 auto EnsureFtsDocumentTable(duckdb_connection conn) -> bool {
   return RunQueryNoThrow(conn,
                          "CREATE TABLE IF NOT EXISTS AiImageFtsDocument ("
@@ -382,7 +275,7 @@ auto RebuildFtsIndex(duckdb_connection conn) -> bool {
   if (!EnsureFtsDocumentTable(conn)) {
     return false;
   }
-  if (!LoadFtsExtension(conn)) {
+  if (!LoadPackagedDuckDbExtension(conn, "fts")) {
     return false;
   }
   return RunQueryNoThrow(

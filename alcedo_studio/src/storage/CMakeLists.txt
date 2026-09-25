@@ -36,6 +36,7 @@ set(STORAGE_SRCS
     "${ALCEDO_SRC_ROOT}/sleeve/storage.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/store_types.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/database.cpp"
+    "${ALCEDO_SRC_ROOT}/storage/store/duckdb_extension.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/image/image_store.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/semantic/semantic_store.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/ai/ai_store.cpp"
