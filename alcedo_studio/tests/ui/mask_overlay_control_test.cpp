@@ -640,37 +640,37 @@ TEST(MaskOverlayControlTest, CursorFollowsHandleRoleAndDragAxis) {
     return MaskOverlayCursorForDisplay(display);
   };
   constexpr auto kNone = MaskOverlayHandleId::None;
-  EXPECT_EQ(cursor_for(kNone, kNone), MaskOverlayCursor::None);
-  EXPECT_EQ(cursor_for(MaskOverlayHandleId::RadialCenter, kNone), MaskOverlayCursor::Move);
-  EXPECT_EQ(cursor_for(MaskOverlayHandleId::RadialRotate, kNone), MaskOverlayCursor::Rotate);
+  EXPECT_EQ(cursor_for(kNone, kNone), OverlayCursor::None);
+  EXPECT_EQ(cursor_for(MaskOverlayHandleId::RadialCenter, kNone), OverlayCursor::Move);
+  EXPECT_EQ(cursor_for(MaskOverlayHandleId::RadialRotate, kNone), OverlayCursor::Rotate);
   EXPECT_EQ(cursor_for(MaskOverlayHandleId::RadialMajor, kNone),
-            MaskOverlayCursor::ResizeHorizontal);
+            OverlayCursor::ResizeHorizontal);
   EXPECT_EQ(cursor_for(MaskOverlayHandleId::RadialMinor, kNone),
-            MaskOverlayCursor::ResizeVertical);
+            OverlayCursor::ResizeVertical);
   EXPECT_EQ(cursor_for(MaskOverlayHandleId::RadialOuterFeather, kNone),
-            MaskOverlayCursor::ResizeHorizontal);
+            OverlayCursor::ResizeHorizontal);
   // A drag keeps its cursor even when the pointer hovers something else.
   EXPECT_EQ(cursor_for(MaskOverlayHandleId::RadialCenter, MaskOverlayHandleId::RadialRotate),
-            MaskOverlayCursor::Rotate);
+            OverlayCursor::Rotate);
 
   radial.rotation = 0.785398f;  // 45 degrees clockwise on screen (y down).
   display = MakeRadialExistingOverlayDisplay(mapping, radial, DefaultMaskOverlayStyle(), {});
   EXPECT_EQ(cursor_for(MaskOverlayHandleId::RadialMajor, kNone),
-            MaskOverlayCursor::ResizeDiagonalDown);
+            OverlayCursor::ResizeDiagonalDown);
   EXPECT_EQ(cursor_for(MaskOverlayHandleId::RadialMinor, kNone),
-            MaskOverlayCursor::ResizeDiagonalUp);
+            OverlayCursor::ResizeDiagonalUp);
 
   // SampleLinear's normal is +y: boundaries resize vertically.
   display = MakeLinearExistingOverlayDisplay(mapping, SampleLinear(), DefaultMaskOverlayStyle(), {});
-  EXPECT_EQ(cursor_for(MaskOverlayHandleId::LinearOrigin, kNone), MaskOverlayCursor::Move);
-  EXPECT_EQ(cursor_for(MaskOverlayHandleId::LinearDirection, kNone), MaskOverlayCursor::Rotate);
+  EXPECT_EQ(cursor_for(MaskOverlayHandleId::LinearOrigin, kNone), OverlayCursor::Move);
+  EXPECT_EQ(cursor_for(MaskOverlayHandleId::LinearDirection, kNone), OverlayCursor::Rotate);
   EXPECT_EQ(cursor_for(MaskOverlayHandleId::LinearStartBoundary, kNone),
-            MaskOverlayCursor::ResizeVertical);
+            OverlayCursor::ResizeVertical);
   EXPECT_EQ(cursor_for(MaskOverlayHandleId::LinearEndBoundary, kNone),
-            MaskOverlayCursor::ResizeVertical);
+            OverlayCursor::ResizeVertical);
 
   display.mode = MaskOverlayMode::Hidden;
-  EXPECT_EQ(cursor_for(MaskOverlayHandleId::LinearOrigin, kNone), MaskOverlayCursor::None);
+  EXPECT_EQ(cursor_for(MaskOverlayHandleId::LinearOrigin, kNone), OverlayCursor::None);
 }
 
 TEST(MaskOverlayControlTest, OverlayItemAppliesAndClearsHandleCursor) {

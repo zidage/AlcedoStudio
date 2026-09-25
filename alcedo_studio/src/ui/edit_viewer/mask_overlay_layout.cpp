@@ -324,28 +324,6 @@ void PopulateLinearHandles(MaskOverlayDisplay& display, const MaskEditViewMappin
   return std::nullopt;
 }
 
-[[nodiscard]] auto ResizeCursorForAxis(QPointF axis) -> MaskOverlayCursor {
-  if (!std::isfinite(axis.x()) || !std::isfinite(axis.y()) ||
-      std::hypot(axis.x(), axis.y()) < kMinRadius) {
-    return MaskOverlayCursor::None;
-  }
-  // Fold to [0, 180) degrees in item space (y down), then bucket by 45.
-  double degrees = std::atan2(axis.y(), axis.x()) * 180.0 / static_cast<double>(kPi);
-  if (degrees < 0.0) {
-    degrees += 180.0;
-  }
-  if (degrees < 22.5 || degrees >= 157.5) {
-    return MaskOverlayCursor::ResizeHorizontal;
-  }
-  if (degrees < 67.5) {
-    return MaskOverlayCursor::ResizeDiagonalDown;
-  }
-  if (degrees < 112.5) {
-    return MaskOverlayCursor::ResizeVertical;
-  }
-  return MaskOverlayCursor::ResizeDiagonalUp;
-}
-
 [[nodiscard]] auto FiniteRadii(const RadialMaskSource& source) -> bool {
   return std::isfinite(source.major_radius) && std::isfinite(source.minor_radius) &&
          source.major_radius > kMinRadius && source.minor_radius > kMinRadius &&
@@ -771,30 +749,30 @@ auto HitTestMaskOverlayHandle(const MaskOverlayDisplay& display, QPointF item,
   return hit;
 }
 
-auto MaskOverlayCursorForDisplay(const MaskOverlayDisplay& display) -> MaskOverlayCursor {
+auto MaskOverlayCursorForDisplay(const MaskOverlayDisplay& display) -> OverlayCursor {
   if (display.mode == MaskOverlayMode::Hidden) {
-    return MaskOverlayCursor::None;
+    return OverlayCursor::None;
   }
   const MaskOverlayHandleId id = display.active_handle != MaskOverlayHandleId::None
                                      ? display.active_handle
                                      : display.hovered_handle;
   switch (id) {
     case MaskOverlayHandleId::None:
-      return MaskOverlayCursor::None;
+      return OverlayCursor::None;
     case MaskOverlayHandleId::BrushMove:
     case MaskOverlayHandleId::RadialCenter:
     case MaskOverlayHandleId::LinearOrigin:
-      return MaskOverlayCursor::Move;
+      return OverlayCursor::Move;
     case MaskOverlayHandleId::RadialRotate:
     case MaskOverlayHandleId::LinearDirection:
-      return MaskOverlayCursor::Rotate;
+      return OverlayCursor::Rotate;
     case MaskOverlayHandleId::LinearStartBoundary:
     case MaskOverlayHandleId::LinearEndBoundary:
       // A boundary moves along the Gradient normal: perpendicular to its locus.
       for (const auto& guide : display.selected_guides) {
         if (guide.id == id) {
           const QPointF along = guide.b - guide.a;
-          return ResizeCursorForAxis(QPointF(-along.y(), along.x()));
+          return OverlayResizeCursorForAxis(QPointF(-along.y(), along.x()));
         }
       }
       break;
@@ -817,9 +795,9 @@ auto MaskOverlayCursorForDisplay(const MaskOverlayDisplay& display) -> MaskOverl
     handle = FindHandleItem(display, MaskOverlayHandleId::RadialMajor);
   }
   if (!anchor || !handle) {
-    return MaskOverlayCursor::None;
+    return OverlayCursor::None;
   }
-  return ResizeCursorForAxis(*handle - *anchor);
+  return OverlayResizeCursorForAxis(*handle - *anchor);
 }
 
 }  // namespace alcedo

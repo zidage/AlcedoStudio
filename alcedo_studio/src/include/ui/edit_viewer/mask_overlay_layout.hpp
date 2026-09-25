@@ -6,13 +6,13 @@
 
 #include <QPointF>
 #include <QRectF>
-#include <cstdint>
 #include <vector>
 
 #include "edit/geometry/types.hpp"
 #include "edit/mask/mask_model.hpp"
 #include "ui/edit_viewer/mask_edit_geometry.hpp"
 #include "ui/edit_viewer/mask_overlay_geometry.hpp"
+#include "ui/edit_viewer/overlay_cursor.hpp"
 
 namespace alcedo {
 
@@ -160,19 +160,6 @@ namespace alcedo {
 [[nodiscard]] auto HitTestMaskOverlayHandle(const MaskOverlayDisplay& display, QPointF item,
                                             float hit_radius_logical_px) -> MaskOverlayHandleId;
 
-/** @brief Pointer cursor for the handle under (or dragged by) the pointer. */
-enum class MaskOverlayCursor : std::uint8_t {
-  None             = 0,
-  Move             = 1,
-  Rotate           = 2,
-  ResizeHorizontal = 3,
-  ResizeVertical   = 4,
-  /// Top-left to bottom-right ("\").
-  ResizeDiagonalDown = 5,
-  /// Bottom-left to top-right ("/").
-  ResizeDiagonalUp = 6,
-};
-
 /**
  * @brief Cursor for @p display's active handle, else its hovered handle.
  *
@@ -181,7 +168,7 @@ enum class MaskOverlayCursor : std::uint8_t {
  * on-screen drag axis, quantized to the nearest of four resize cursors.
  */
 [[nodiscard]] auto MaskOverlayCursorForDisplay(const MaskOverlayDisplay& display)
-    -> MaskOverlayCursor;
+    -> OverlayCursor;
 
 /**
  * @brief Axis-aligned photograph rectangle in item coordinates.

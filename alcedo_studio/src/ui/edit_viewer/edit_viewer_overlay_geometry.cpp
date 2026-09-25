@@ -116,24 +116,25 @@ auto EditViewerOverlayGeometry::ComputeHover(const EditViewerOverlaySnapshot& sn
                                                crop_state.rotation_degrees,
                                                crop_state.metric_aspect);
 
+    const auto cursor = OverlayCursorShape(CropGeometry::CursorForCropHit(hover.crop_hit));
     if (hover.crop_hit.rotate_handle_hit) {
       hover.kind   = EditViewerOverlayHitKind::RotateHandle;
-      hover.cursor = Qt::OpenHandCursor;
+      hover.cursor = cursor;
       return hover;
     }
     if (hover.crop_hit.corner_index >= 0) {
       hover.kind   = EditViewerOverlayHitKind::Corner;
-      hover.cursor = CropGeometry::CursorForCropCorner(hover.crop_hit.corner_index);
+      hover.cursor = cursor;
       return hover;
     }
     if (hover.crop_hit.edge != CropEdge::None) {
       hover.kind   = EditViewerOverlayHitKind::Edge;
-      hover.cursor = Qt::SizeAllCursor;
+      hover.cursor = cursor;
       return hover;
     }
     if (hover.crop_hit.inside_crop) {
       hover.kind   = EditViewerOverlayHitKind::InsideCrop;
-      hover.cursor = Qt::SizeAllCursor;
+      hover.cursor = cursor;
       return hover;
     }
   }
