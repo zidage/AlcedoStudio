@@ -40,7 +40,8 @@ enum class EditorMaskCreationState : std::uint8_t {
  *
  * Mapping is the UI/item boundary (@c MaskEditGeometry). This service does not
  * reapply crop, zoom, or DPR. Pointer samples have no extra half-pixel offset.
- * @p inside_photograph is the press gate; captured drags may set it false.
+ * @p inside_photograph is the creation press gate; captured drags and presses
+ * on existing handles may set it false.
  */
 struct MaskCreationSample {
   Vector2 normalized{};

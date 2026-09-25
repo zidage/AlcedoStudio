@@ -12,6 +12,7 @@
 #include "edit/mask/mask_model.hpp"
 #include "ui/edit_viewer/mask_edit_geometry.hpp"
 #include "ui/edit_viewer/mask_overlay_geometry.hpp"
+#include "ui/edit_viewer/overlay_cursor.hpp"
 
 namespace alcedo {
 
@@ -158,6 +159,16 @@ namespace alcedo {
 
 [[nodiscard]] auto HitTestMaskOverlayHandle(const MaskOverlayDisplay& display, QPointF item,
                                             float hit_radius_logical_px) -> MaskOverlayHandleId;
+
+/**
+ * @brief Cursor for @p display's active handle, else its hovered handle.
+ *
+ * Center/origin and Brush Move handles move; rotation/direction handles
+ * rotate. Radius, feather, and Gradient boundary handles resize along their
+ * on-screen drag axis, quantized to the nearest of four resize cursors.
+ */
+[[nodiscard]] auto MaskOverlayCursorForDisplay(const MaskOverlayDisplay& display)
+    -> OverlayCursor;
 
 /**
  * @brief Axis-aligned photograph rectangle in item coordinates.

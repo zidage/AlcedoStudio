@@ -232,6 +232,39 @@ TEST(AnalyticMaskCreationTest, ExistingRadialMoveUpdatesInteractivePixelsBeforeR
   EXPECT_NE(harness.history.working_head(), head_before);
 }
 
+// A center dragged past the photograph edge must stay grabbable: handle
+// presses are not gated on inside_photograph, only creation presses are.
+TEST(AnalyticMaskCreationTest, ExistingRadialCenterOutsidePhotographCanBeMovedBack) {
+  AnalyticCreationHarness harness;
+  RadialMaskSource        radial;
+  radial.center_x     = 1.20f;
+  radial.center_y     = 0.50f;
+  radial.major_radius = 0.30f;
+  radial.minor_radius = 0.20f;
+  grade_mask_test::AddRadialMask(harness.document, MaskId{"mask.radial"}, radial);
+
+  ASSERT_TRUE(
+      harness.controller
+          .SelectMask(harness.document.PrimaryGrade()->Id(), MaskId{"mask.radial"}, harness.session)
+          .accepted);
+  const auto press =
+      SampleOf(harness.mapping, ItemOf(harness.mapping, Vector2{1.20f, 0.50f}), true);
+  ASSERT_FALSE(press.inside_photograph);
+  ASSERT_TRUE(
+      harness.controller.BeginMaskMove(AnalyticMaskHandle::RadialCenter, press, harness.pointer,
+                                       MaskSourceKind::Radial)
+          .accepted);
+  const auto moved =
+      SampleOf(harness.mapping, ItemOf(harness.mapping, Vector2{0.60f, 0.40f}), true);
+  ASSERT_TRUE(harness.controller.AppendMaskInput(moved, harness.pointer).accepted);
+  const auto* live = std::get_if<RadialMaskSource>(
+      &harness.document.PrimaryGrade()->FindMask(MaskId{"mask.radial"})->source);
+  ASSERT_NE(live, nullptr);
+  EXPECT_NEAR(live->center_x, 0.60f, 1.0e-2f);
+  EXPECT_NEAR(live->center_y, 0.40f, 1.0e-2f);
+  ASSERT_TRUE(harness.controller.FinishMaskInput().accepted);
+}
+
 TEST(AnalyticMaskCreationTest, FinishModeSettlesOnceAndLeavesMaskEditingInactive) {
   AnalyticCreationHarness harness;
   RadialMaskSource        radial;

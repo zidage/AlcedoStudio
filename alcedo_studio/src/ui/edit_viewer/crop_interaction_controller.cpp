@@ -109,9 +109,10 @@ auto CropInteractionController::HandlePress(ViewerState& state, const ViewportIm
   drag_edge_                 = CropEdge::None;
   drag_fixed_corner_uv_      = QPointF();
 
+  const auto hit_cursor = OverlayCursorShape(CropGeometry::CursorForCropHit(hit_test));
   if (hit_test.rotate_handle_hit) {
     drag_mode_    = CropDragMode::RotateHandle;
-    result.cursor = Qt::ClosedHandCursor;
+    result.cursor = hit_cursor;
   } else if (hit_test.corner_index >= 0) {
     drag_mode_                = CropDragMode::ResizeCorner;
     drag_corner_              = ToCropCorner(hit_test.corner_index);
@@ -119,14 +120,14 @@ auto CropInteractionController::HandlePress(ViewerState& state, const ViewportIm
     if (opposite_corner >= 0) {
       drag_fixed_corner_uv_ = crop_corners_uv[static_cast<size_t>(opposite_corner)];
     }
-    result.cursor = CropGeometry::CursorForCropCorner(hit_test.corner_index);
+    result.cursor = hit_cursor;
   } else if (hit_test.edge != CropEdge::None) {
     drag_mode_    = CropDragMode::ResizeEdge;
     drag_edge_    = hit_test.edge;
-    result.cursor = Qt::SizeAllCursor;
+    result.cursor = hit_cursor;
   } else if (hit_test.inside_crop) {
     drag_mode_    = CropDragMode::Move;
-    result.cursor = Qt::SizeAllCursor;
+    result.cursor = hit_cursor;
   } else {
     drag_mode_     = CropDragMode::Create;
     new_state.rect = CropGeometry::ClampCropRectForRotation(

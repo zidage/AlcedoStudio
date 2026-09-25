@@ -1499,6 +1499,35 @@ TEST_F(EditorNodesPanelQmlTest, MaskRowClickQueuesSelectMaskWithExplicitIdentity
   EXPECT_EQ(nodes->selected_node_id(), NodeId{"grade.primary"});
 }
 
+// Mask ids are unique only within a grade: selecting a Mask must not also
+// highlight the same-id Mask in another group.
+TEST_F(EditorNodesPanelQmlTest, MaskRowSelectionIsScopedToOwningGroup) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  backend_.AddMaskToPrimaryGrade(MakeMask(MaskId{"mask.one"}, RadialMaskSource{}));
+  backend_.AddColorGradeBefore(NodeId{"drt"}, NodeId{"grade.secondary"});
+  backend_.AddMaskToGrade(NodeId{"grade.secondary"},
+                          MakeMask(MaskId{"mask.one"}, RadialMaskSource{}));
+  OpenMaskGroupsPage();
+  QTRY_VERIFY_WITH_TIMEOUT(MaskGroupDelegates().size() == 2, 2000);
+  auto* primary_row =
+      MaskRowIn(MaskGroupDelegateFor(QStringLiteral("grade.primary")), QStringLiteral("mask.one"));
+  auto* secondary_row = MaskRowIn(MaskGroupDelegateFor(QStringLiteral("grade.secondary")),
+                                  QStringLiteral("mask.one"));
+  ASSERT_NE(primary_row, nullptr);
+  ASSERT_NE(secondary_row, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(primary_row->isVisible(), 2000);
+
+  Click(window_, primary_row);
+  QTRY_VERIFY_WITH_TIMEOUT(primary_row->property("selected").toBool(), 2000);
+  EXPECT_FALSE(secondary_row->property("selected").toBool());
+  EXPECT_TRUE(MaskGroupDelegateFor(QStringLiteral("grade.primary"))
+                  ->property("ownerActive")
+                  .toBool());
+  EXPECT_FALSE(MaskGroupDelegateFor(QStringLiteral("grade.secondary"))
+                   ->property("ownerActive")
+                   .toBool());
+}
+
 TEST_F(EditorNodesPanelQmlTest, GroupHeaderSelectsGradeAndFinishesOpenMaskEdit) {
   ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
   backend_.AddMaskToPrimaryGrade(MakeMask(MaskId{"mask.one"}, RadialMaskSource{}));

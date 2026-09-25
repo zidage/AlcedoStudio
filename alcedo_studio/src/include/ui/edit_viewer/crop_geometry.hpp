@@ -10,6 +10,8 @@
 #include <array>
 #include <utility>
 
+#include "ui/edit_viewer/overlay_cursor.hpp"
+
 namespace alcedo {
 
 enum class CropCorner {
@@ -33,6 +35,9 @@ struct CropHitTestResult {
   CropEdge edge              = CropEdge::None;
   bool     rotate_handle_hit = false;
   bool     inside_crop       = false;
+  /// Widget-space drag axis of the hit corner or edge: crop center to the
+  /// corner, or to the edge midpoint. Zero when no corner or edge is hit.
+  QPointF  resize_axis{};
 };
 
 class CropGeometry {
@@ -72,7 +77,8 @@ class CropGeometry {
   static auto CropCenterWidgetPoint(const std::array<QPointF, 4>& corners) -> QPointF;
   static auto CropRotateHandleWidgetPoint(const std::array<QPointF, 4>& corners)
       -> std::pair<QPointF, QPointF>;
-  static auto CursorForCropCorner(int corner_index) -> Qt::CursorShape;
+  /// Cursor for @p hit: rotate, a resize along its drag axis, or move inside.
+  static auto CursorForCropHit(const CropHitTestResult& hit) -> OverlayCursor;
   static auto OppositeCropCornerIndex(int corner_index) -> int;
   static auto ResizeRotatedCropFromFixedCorner(const QPointF& fixed_corner_uv,
                                                const QPointF& cursor_uv, float angle_degrees,

@@ -1320,6 +1320,31 @@ alcedo_ui_gtest_discover_tests(MaskOverlayControlTest
     PROPERTIES LABELS "mask_overlay;editor_rhi")
 alcedo_register_test_target(MaskOverlayControlTest ui)
 
+# Crop and Mask overlay cursors: shared axis mapping, rotate bitmap, and the
+# overlay item showing the Crop rotate marker.
+add_executable(OverlayCursorTest
+    ${ALCEDO_TEST_ROOT}/ui/overlay_cursor_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(OverlayCursorTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(OverlayCursorTest
+    PRIVATE
+        EditorRhiViewport
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Test
+        Qt6::Quick
+        Qt6::Widgets
+)
+alcedo_ui_gtest_discover_tests(OverlayCursorTest
+    TEST_PREFIX "OverlayCursorTest."
+    PROPERTIES LABELS "mask_overlay;editor_rhi")
+alcedo_register_test_target(OverlayCursorTest ui)
+
 add_executable(AnalyticMaskCreationTest
     ${ALCEDO_TEST_ROOT}/ui/analytic_mask_creation_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp

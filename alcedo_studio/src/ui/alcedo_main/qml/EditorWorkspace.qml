@@ -340,7 +340,10 @@ Item {
                         enabled: root.editorControlsEnabled
                         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.Stylus
                         // HoverHandler owns the platform cursor (Item has no cursorShape).
+                        // BitmapCursor marks the Crop rotate handle: EditorOverlayItem
+                        // shows that bitmap cursor, so it is not applied here.
                         cursorShape: editorInteraction.hasCustomCursor
+                                     && editorInteraction.cursorShape !== Qt.BitmapCursor
                                      ? editorInteraction.cursorShape
                                      : Qt.ArrowCursor
                         onPointChanged: {

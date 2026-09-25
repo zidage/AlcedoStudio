@@ -728,8 +728,10 @@ auto EditorMaskCreationController::BeginMaskMove(AnalyticMaskHandle  handle,
   if (!HandleMatchesKind(handle, kind_)) {
     return Reject("handle does not match the selected Mask kind");
   }
-  if (!FiniteSample(sample) || !sample.inside_photograph) {
-    return Reject("Mask press must lie inside the photograph");
+  // Existing handles may lie outside the photograph; only creation presses
+  // are gated on inside_photograph.
+  if (!FiniteSample(sample)) {
+    return Reject("Mask press sample is not finite");
   }
   auto* grade = Grade();
   if (grade == nullptr) {

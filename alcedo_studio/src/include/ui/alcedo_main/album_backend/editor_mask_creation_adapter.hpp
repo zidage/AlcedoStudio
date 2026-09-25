@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include "app/editor_mask_creation_controller.hpp"
@@ -46,6 +47,9 @@ class EditorMaskCreationAdapter : public QObject {
   Q_PROPERTY(bool maskControlsActive READ mask_controls_active NOTIFY maskCreationChanged)
   Q_PROPERTY(QString toolKind READ tool_kind NOTIFY maskCreationChanged)
   Q_PROPERTY(QString selectedMaskId READ selected_mask_id NOTIFY maskCreationChanged)
+  // Mask ids are unique only within their owning Color Grade node; pair with
+  // selectedMaskId to identify the selected Mask across groups.
+  Q_PROPERTY(QString selectedMaskNodeId READ selected_mask_node_id NOTIFY maskCreationChanged)
   Q_PROPERTY(qreal innerFeatherPercent READ inner_feather_percent NOTIFY maskCreationChanged)
   Q_PROPERTY(qreal outerFeatherPercent READ outer_feather_percent NOTIFY maskCreationChanged)
   Q_PROPERTY(qreal majorRadiusPercent READ major_radius_percent NOTIFY maskCreationChanged)
@@ -75,6 +79,10 @@ class EditorMaskCreationAdapter : public QObject {
   [[nodiscard]] auto mask_controls_active() const -> bool;
   [[nodiscard]] auto tool_kind() const -> QString { return tool_kind_; }
   [[nodiscard]] auto selected_mask_id() const -> QString { return selected_mask_id_; }
+  [[nodiscard]] auto selected_mask_node_id() const -> QString {
+    return selected_mask_id_.isEmpty() ? QString{}
+                                       : QString::fromStdString(std::string{edit_node_id_.Value()});
+  }
   [[nodiscard]] auto edit_node_id() const -> const NodeId& { return edit_node_id_; }
   [[nodiscard]] auto inner_feather_percent() const -> qreal;
   [[nodiscard]] auto outer_feather_percent() const -> qreal;

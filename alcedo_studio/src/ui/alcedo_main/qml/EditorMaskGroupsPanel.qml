@@ -73,6 +73,11 @@ Item {
     readonly property string selectedMaskId: root.maskCreation
             ? String(root.maskCreation.selectedMaskId || "")
             : ""
+    // Mask ids are unique only within a group, so selection matches on the
+    // (owner node, mask) pair.
+    readonly property string selectedMaskNodeId: root.maskCreation
+            ? String(root.maskCreation.selectedMaskNodeId || "")
+            : ""
 
     // Rail contract: status text and scroll offset live outside the Loader so
     // page switches restore both.
@@ -113,6 +118,10 @@ Item {
 
     function groupOwnsMask(groupRow, maskId) {
         if (!groupRow || maskId.length === 0 || !groupRow.masks) {
+            return false
+        }
+        if (root.selectedMaskNodeId.length > 0
+                && String(groupRow.nodeId || "") !== root.selectedMaskNodeId) {
             return false
         }
         for (var i = 0; i < groupRow.masks.length; ++i) {
@@ -342,11 +351,11 @@ Item {
     Connections {
         target: root.maskCreation
         function onMaskCreationChanged() {
-            const maskId = root.selectedMaskId
-            if (maskId === root._lastRevealedMaskId) {
+            const selectionKey = root.selectedMaskNodeId + "/" + root.selectedMaskId
+            if (selectionKey === root._lastRevealedMaskId) {
                 return
             }
-            root._lastRevealedMaskId = maskId
+            root._lastRevealedMaskId = selectionKey
             root.revealSelectedMask()
         }
     }
@@ -604,7 +613,7 @@ Item {
                     deletionProtected: modelData.deletionProtected === true
                     masks: modelData.masks !== undefined && modelData.masks !== null
                            ? modelData.masks : []
-                    selectedMaskId: root.selectedMaskId
+                    selectedMaskId: ownerActive ? root.selectedMaskId : ""
                     ownerActive: root.groupOwnsMask(modelData, root.selectedMaskId)
                     selected: nodeId.length > 0 && nodeId === root.selectedNodeId
                               && !ownerActive

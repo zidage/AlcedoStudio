@@ -6,6 +6,7 @@
 
 #include "ui/editor_rhi/editor_interaction_controller.hpp"
 
+#include <QCursor>
 #include <QMetaObject>
 #include <QSGGeometry>
 #include <QSGGeometryNode>
@@ -18,6 +19,7 @@
 
 #include "ui/edit_viewer/crop_geometry.hpp"
 #include "ui/edit_viewer/mask_overlay_geometry.hpp"
+#include "ui/edit_viewer/overlay_cursor.hpp"
 
 namespace alcedo::editor_rhi {
 namespace {
@@ -506,6 +508,7 @@ void EditorOverlayItem::bindInteraction(EditorInteractionController* controller)
     disconnect(interaction_, nullptr, this, nullptr);
   }
   interaction_ = controller;
+  applyOverlayCursor();
   if (!interaction_) {
     return;
   }
@@ -514,6 +517,8 @@ void EditorOverlayItem::bindInteraction(EditorInteractionController* controller)
           &EditorOverlayItem::onInteractionOverlayChanged);
   connect(interaction_, &EditorInteractionController::cropChanged, this,
           &EditorOverlayItem::onInteractionOverlayChanged);
+  connect(interaction_, &EditorInteractionController::cursorChanged, this,
+          &EditorOverlayItem::applyOverlayCursor);
   connect(interaction_, &EditorInteractionController::viewChanged, this,
           &EditorOverlayItem::onInteractionOverlayChanged);
   connect(interaction_, &EditorInteractionController::viewportMetricsChanged, this,
@@ -541,10 +546,33 @@ void EditorOverlayItem::rebuildMaskSceneGeometry() {
 
 void EditorOverlayItem::setMaskOverlayDisplay(MaskOverlayDisplay display) {
   mask_display_ = std::move(display);
+  applyOverlayCursor();
   rebuildMaskSceneGeometry();
   geometry_dirty_ = true;
   emit MaskOverlayRevisionChanged();
   update();
+}
+
+void EditorOverlayItem::applyOverlayCursor() {
+  OverlayCursor next = MaskOverlayCursorForDisplay(mask_display_);
+  // Crop reports its rotate handle through the Qt::CursorShape channel with a
+  // marker shape; the bitmap cursor is shown here.
+  if (next == OverlayCursor::None && interaction_ != nullptr &&
+      interaction_->hasCustomCursor() &&
+      interaction_->cursorShape() == static_cast<int>(kOverlayRotateCursorShape)) {
+    next = OverlayCursor::Rotate;
+  }
+  if (next == overlay_cursor_) {
+    return;
+  }
+  overlay_cursor_ = next;
+  if (next == OverlayCursor::Rotate) {
+    setCursor(OverlayRotateCursor());
+  } else if (const auto shape = OverlayCursorShape(next)) {
+    setCursor(*shape);
+  } else {
+    unsetCursor();
+  }
 }
 
 void EditorOverlayItem::setMaskOverlayControlColor(const QColor& color) {

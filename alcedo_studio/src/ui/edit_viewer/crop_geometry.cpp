@@ -237,8 +237,25 @@ auto CropGeometry::CropRotateHandleWidgetPoint(const std::array<QPointF, 4>& cor
   return {anchor, handle};
 }
 
-auto CropGeometry::CursorForCropCorner(int corner_index) -> Qt::CursorShape {
-  return (corner_index == 0 || corner_index == 2) ? Qt::SizeFDiagCursor : Qt::SizeBDiagCursor;
+auto CropGeometry::CursorForCropHit(const CropHitTestResult& hit) -> OverlayCursor {
+  if (hit.rotate_handle_hit) {
+    return OverlayCursor::Rotate;
+  }
+  if (hit.corner_index >= 0 || hit.edge != CropEdge::None) {
+    const OverlayCursor resize = OverlayResizeCursorForAxis(hit.resize_axis);
+    if (resize != OverlayCursor::None) {
+      return resize;
+    }
+    // No axis (a caller-built hit): fall back to the unrotated crop layout.
+    if (hit.corner_index >= 0) {
+      return (hit.corner_index == 0 || hit.corner_index == 2) ? OverlayCursor::ResizeDiagonalDown
+                                                              : OverlayCursor::ResizeDiagonalUp;
+    }
+    return (hit.edge == CropEdge::Top || hit.edge == CropEdge::Bottom)
+               ? OverlayCursor::ResizeVertical
+               : OverlayCursor::ResizeHorizontal;
+  }
+  return hit.inside_crop ? OverlayCursor::Move : OverlayCursor::None;
 }
 
 auto CropGeometry::OppositeCropCornerIndex(int corner_index) -> int {
@@ -314,6 +331,10 @@ auto CropGeometry::HitTestWidgetGeometry(const std::array<QPointF, 4>& corners_w
   hit.rotate_handle_hit =
       handle_d2 <= (kCropRotateHandleHitRadiusPx * kCropRotateHandleHitRadiusPx);
 
+  const QPointF center = CropCenterWidgetPoint(corners_widget);
+  if (hit.corner_index >= 0 && !hit.rotate_handle_hit) {
+    hit.resize_axis = corners_widget[static_cast<size_t>(hit.corner_index)] - center;
+  }
   if (hit.rotate_handle_hit || hit.corner_index >= 0) {
     return hit;
   }
@@ -338,6 +359,26 @@ auto CropGeometry::HitTestWidgetGeometry(const std::array<QPointF, 4>& corners_w
   try_edge(right_d2, CropEdge::Right);
   try_edge(bottom_d2, CropEdge::Bottom);
   try_edge(left_d2, CropEdge::Left);
+  const auto edge_midpoint = [&](int a, int b) {
+    return LerpPoint(corners_widget[static_cast<size_t>(a)],
+                     corners_widget[static_cast<size_t>(b)], 0.5f);
+  };
+  switch (hit.edge) {
+    case CropEdge::Top:
+      hit.resize_axis = edge_midpoint(0, 1) - center;
+      break;
+    case CropEdge::Right:
+      hit.resize_axis = edge_midpoint(1, 2) - center;
+      break;
+    case CropEdge::Bottom:
+      hit.resize_axis = edge_midpoint(2, 3) - center;
+      break;
+    case CropEdge::Left:
+      hit.resize_axis = edge_midpoint(3, 0) - center;
+      break;
+    case CropEdge::None:
+      break;
+  }
   return hit;
 }
 

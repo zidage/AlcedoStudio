@@ -244,7 +244,7 @@ void PopulateRadialContours(MaskOverlayDisplay& display, const MaskEditViewMappi
 
 void AppendClippedGuide(MaskOverlayDisplay& display, const MaskEditViewMapping& mapping,
                         const LinearGradientMaskSource& source, float signed_distance,
-                        MaskOverlayHandleId id, const MaskOverlayStyle& style,
+                        MaskOverlayHandleId id, bool dashed, const MaskOverlayStyle& style,
                         const QRectF& photograph) {
   const Vector2 n     = LinearNormal(source);
   const Vector2 perp  = PerpNormalized(n);
@@ -260,7 +260,8 @@ void AppendClippedGuide(MaskOverlayDisplay& display, const MaskEditViewMapping& 
   if (!clipped) {
     return;
   }
-  display.selected_guides.push_back(MaskOverlayGuide{id, clipped->first, clipped->second});
+  display.selected_guides.push_back(
+      MaskOverlayGuide{id, clipped->first, clipped->second, dashed});
   const QPointF grip_a =
       CropGeometry::LerpPoint(clipped->first, clipped->second, style.grip_span_t0);
   const QPointF grip_b =
@@ -303,12 +304,24 @@ void PopulateLinearHandles(MaskOverlayDisplay& display, const MaskEditViewMappin
 
   const QRectF photograph = PhotographItemRect(mapping);
   const QRectF guide_clip = photograph.isEmpty() ? clip : photograph;
+  // Transition boundaries are dashed like Radial feather contours; the origin
+  // locus stays solid.
   AppendClippedGuide(display, mapping, source, -half, MaskOverlayHandleId::LinearStartBoundary,
-                     style, guide_clip);
-  AppendClippedGuide(display, mapping, source, 0.0f, MaskOverlayHandleId::LinearOrigin, style,
-                     guide_clip);
-  AppendClippedGuide(display, mapping, source, half, MaskOverlayHandleId::LinearEndBoundary, style,
-                     guide_clip);
+                     /*dashed=*/true, style, guide_clip);
+  AppendClippedGuide(display, mapping, source, 0.0f, MaskOverlayHandleId::LinearOrigin,
+                     /*dashed=*/false, style, guide_clip);
+  AppendClippedGuide(display, mapping, source, half, MaskOverlayHandleId::LinearEndBoundary,
+                     /*dashed=*/true, style, guide_clip);
+}
+
+[[nodiscard]] auto FindHandleItem(const MaskOverlayDisplay& display, MaskOverlayHandleId id)
+    -> std::optional<QPointF> {
+  for (const auto& handle : display.handles) {
+    if (handle.id == id) {
+      return handle.item;
+    }
+  }
+  return std::nullopt;
 }
 
 [[nodiscard]] auto FiniteRadii(const RadialMaskSource& source) -> bool {
@@ -734,6 +747,57 @@ auto HitTestMaskOverlayHandle(const MaskOverlayDisplay& display, QPointF item,
     }
   }
   return hit;
+}
+
+auto MaskOverlayCursorForDisplay(const MaskOverlayDisplay& display) -> OverlayCursor {
+  if (display.mode == MaskOverlayMode::Hidden) {
+    return OverlayCursor::None;
+  }
+  const MaskOverlayHandleId id = display.active_handle != MaskOverlayHandleId::None
+                                     ? display.active_handle
+                                     : display.hovered_handle;
+  switch (id) {
+    case MaskOverlayHandleId::None:
+      return OverlayCursor::None;
+    case MaskOverlayHandleId::BrushMove:
+    case MaskOverlayHandleId::RadialCenter:
+    case MaskOverlayHandleId::LinearOrigin:
+      return OverlayCursor::Move;
+    case MaskOverlayHandleId::RadialRotate:
+    case MaskOverlayHandleId::LinearDirection:
+      return OverlayCursor::Rotate;
+    case MaskOverlayHandleId::LinearStartBoundary:
+    case MaskOverlayHandleId::LinearEndBoundary:
+      // A boundary moves along the Gradient normal: perpendicular to its locus.
+      for (const auto& guide : display.selected_guides) {
+        if (guide.id == id) {
+          const QPointF along = guide.b - guide.a;
+          return OverlayResizeCursorForAxis(QPointF(-along.y(), along.x()));
+        }
+      }
+      break;
+    case MaskOverlayHandleId::RadialMajor:
+    case MaskOverlayHandleId::RadialMinor:
+    case MaskOverlayHandleId::RadialInnerFeather:
+    case MaskOverlayHandleId::RadialOuterFeather:
+      break;
+  }
+  // Radius/feather handles (and boundaries without a visible locus) move
+  // along the axis from the anchor to the handle.
+  const MaskOverlayHandleId anchor_id = display.source_kind == MaskOverlaySourceKind::Radial
+                                            ? MaskOverlayHandleId::RadialCenter
+                                            : MaskOverlayHandleId::LinearOrigin;
+  const auto anchor = FindHandleItem(display, anchor_id);
+  // Feather handles share the major axis and may be merged away.
+  auto handle = FindHandleItem(display, id);
+  if (!handle && (id == MaskOverlayHandleId::RadialInnerFeather ||
+                  id == MaskOverlayHandleId::RadialOuterFeather)) {
+    handle = FindHandleItem(display, MaskOverlayHandleId::RadialMajor);
+  }
+  if (!anchor || !handle) {
+    return OverlayCursor::None;
+  }
+  return OverlayResizeCursorForAxis(*handle - *anchor);
 }
 
 }  // namespace alcedo
