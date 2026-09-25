@@ -16,7 +16,10 @@ void PreparedStatement::RecycleResources() {
     duckdb_destroy_prepare(&stmt_);
     stmt_ = nullptr;
   }
-  if (result_.deprecated_columns) duckdb_destroy_result(&result_);
+  // The result owns the materialized query result through `internal_data`; `deprecated_columns`
+  // is only set after a deprecated column accessor ran, so it cannot tell whether a result
+  // exists. `duckdb_destroy_result` accepts the zeroed result of a statement that never ran.
+  duckdb_destroy_result(&result_);
 }
 
 PreparedStatement::PreparedStatement(duckdb_connection& con) : stmt_(), con_(con) {

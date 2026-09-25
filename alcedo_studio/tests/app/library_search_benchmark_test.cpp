@@ -34,6 +34,7 @@
 #include "app/project_service.hpp"
 #include "app/sleeve_filter_service.hpp"
 #include "library_search_test_support.hpp"
+#include "process_memory_test_support.hpp"
 #include "utils/clock/time_provider.hpp"
 
 namespace alcedo {
@@ -159,6 +160,36 @@ auto MeasureSearchLatency(const SleeveFilterService& service, sl_element_id_t fo
   return results;
 }
 
+/// Median time of `repeat` runs of a statement that reads no library data. Since Phase S6 it
+/// must cost the same at 1000 and 20 000 files (the retained memory made it 8-70x slower).
+auto MedianStatementMs(ProjectService& project, const char* sql, int repeat) -> double {
+  std::vector<double> samples;
+  for (int run = 0; run < repeat; ++run) {
+    auto          guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto          lock  = guard.Lock();
+    duckdb_result result;
+    const auto    start = Clock::now();
+    const auto    state = duckdb_query(guard.conn_, sql, &result);
+    samples.push_back(ElapsedMs(start));
+    EXPECT_EQ(state, DuckDBSuccess) << sql;
+    duckdb_destroy_result(&result);
+  }
+  return Percentile(samples, 50);
+}
+
+void ReportFixedCosts(const std::string& library_label, ProjectService& project) {
+  // The AI FTS index probe that BuildFuzzySearchWhere runs (AiStore::HasUnderstandingFtsIndex).
+  constexpr const char* kCatalogProbe =
+      "SELECT COUNT(*) FROM duckdb_functions() WHERE schema_name = "
+      "'fts_main_AiImageFtsDocument' AND function_name = 'match_bm25'";
+  const auto line = std::format(
+      "  private memory {:.0f} MiB, SELECT 1 {:.3f} ms, catalog probe {:.1f} ms (p50 of 20)",
+      process_memory_test::Mebibytes(process_memory_test::PrivateBytes()),
+      MedianStatementMs(project, "SELECT 1", 20), MedianStatementMs(project, kCatalogProbe, 20));
+  std::cout << "\n[library fixed costs] " << library_label << "\n" << line << "\n";
+  ::testing::Test::RecordProperty(library_label + " fixed costs", line);
+}
+
 void ReportLatency(const std::string& library_label, const std::vector<QueryLatency>& results) {
   std::cout << "\n[library search latency] " << library_label << "\n"
             << std::format("  {:<12} {:>8} {:>12} {:>12} {:>12} {:>12}\n", "query", "matches",
@@ -196,10 +227,12 @@ class LibrarySearchBenchmarkTest : public ::testing::Test {
     std::cout << std::format("\nBuilt {} synthetic files in {:.1f} s\n", count,
                              ElapsedMs(build_start) / 1000.0);
 
+    const auto label = std::format("synthetic {} files, {} DNG per 1000", count, dng_per_mille);
+    ReportFixedCosts(label, project);
+
     SleeveFilterService service(project.GetStorage());
     const auto results = MeasureSearchLatency(service, LibraryRootFolderId(project), RepeatCount());
-    ReportLatency(std::format("synthetic {} files, {} DNG per 1000", count, dng_per_mille),
-                  results);
+    ReportLatency(label, results);
   }
 
   std::filesystem::path work_dir_;
