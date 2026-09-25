@@ -22,6 +22,7 @@
 #include "sleeve/sleeve_element/sleeve_folder.hpp"
 #include "storage/mapper/duckorm/duckdb_orm.hpp"
 #include "storage/store/ai/ai_store.hpp"
+#include "storage/store/semantic/semantic_store.hpp"
 #include "type/type.hpp"
 #include "utils/string/convert.hpp"
 
@@ -134,10 +135,7 @@ void DeleteSemanticAndAiRowsForFiles(duckdb_connection                conn,
   if (file_ids.empty()) {
     return;
   }
-  const auto file_in = duckorm::expr::in_list(duckorm::expr::col("file_id"), file_ids);
-  duckorm::remove(conn, "SemanticImageEmbedding", file_in);
-  duckorm::remove(conn, "SemanticImageEmbedding768", file_in);
-  duckorm::remove(conn, "SemanticImageLabel", file_in);
+  DeleteSemanticRowsForFiles(conn, file_ids);
   // Phase 5f: AI image understanding + rating rows. Routed through the duckorm `remove`
   // path (`DeleteAiAnnotationRowsForFiles`) rather than a hand-written DELETE so the AI
   // ser/deser stays ORM-faithful. This runs on the ElementStore's own connection so

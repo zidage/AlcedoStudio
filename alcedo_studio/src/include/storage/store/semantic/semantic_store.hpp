@@ -185,4 +185,10 @@ class SemanticStore {
   [[nodiscard]] auto EnsureVectorSearchIndex(const std::string& model_key,
                                              std::string*       error = nullptr) const -> bool;
 };
+
+// Delete every embedding row (both embedding sizes) and every label row of the given files, for
+// all models, on the supplied connection. The element deletion cascade passes its own connection
+// so the rows go in the caller's transaction. Throws std::runtime_error when a delete fails. A
+// no-op for an empty list.
+void DeleteSemanticRowsForFiles(duckdb_connection conn, std::span<const sl_element_id_t> file_ids);
 }  // namespace alcedo

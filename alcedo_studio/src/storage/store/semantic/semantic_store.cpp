@@ -10,26 +10,31 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <exception>
 #include <format>
 #include <iomanip>
 #include <limits>
-#include <locale>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <span>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <variant>
 #include <vector>
 
-#include "storage/store/sleeve/element_store.hpp"
+#include "storage/mapper/duckorm/duckdb_expr.hpp"
 #include "storage/mapper/duckorm/duckdb_orm.hpp"
 #include "storage/store/duckdb_extension.hpp"
+#include "storage/store/sleeve/element_store.hpp"
 #include "utils/diagnostics/app_logging.hpp"
-
 
 namespace alcedo {
 namespace {
+namespace expr = duckorm::expr;
+
 constexpr size_t kSemanticSearchMinCandidatePool     = 512;
 constexpr size_t kSemanticSearchCutoffSampleLimit    = 256;
 constexpr double kSemanticFlatScoreSpanRatio         = 0.08;
@@ -37,47 +42,51 @@ constexpr double kSemanticFallbackScoreSpanKeepRatio = 0.35;
 constexpr double kSemanticElbowGapToSpanRatio        = 0.18;
 constexpr double kSemanticElbowGapToMedianRatio      = 3.0;
 
-// Maps one SemanticModel result row to a SemanticModelRecord. Shared by GetModel
-// (single row) and ListModels (all rows) so the column order stays in sync.
-auto ReadSemanticModelRow(duckdb_result& result, idx_t row) -> SemanticModelRecord {
-  auto read_string = [&result, row](idx_t column) {
-    std::string value;
-    if (!duckdb_value_is_null(&result, column, row)) {
-      if (char* raw = duckdb_value_varchar(&result, column, row)) {
-        value = raw;
-        duckdb_free(raw);
-      }
-    }
-    return value;
-  };
+// ---- result cells (duckorm select_by_query rows, see duckorm::VarTypes) ----
 
-  SemanticModelRecord record;
-  record.model_key_                     = read_string(0);
-  record.model_id_                      = read_string(1);
-  record.revision_                      = read_string(2);
-  record.embedding_dim_                 = static_cast<int>(duckdb_value_int32(&result, 3, row));
-  record.image_size_                    = static_cast<int>(duckdb_value_int32(&result, 4, row));
-  record.engine_id_                     = read_string(5);
-  record.profile_id_                    = read_string(6);
-  record.supported_text_languages_json_ = read_string(7);
-  record.prompt_config_hash_            = read_string(8);
-  record.asset_manifest_json_           = read_string(9);
-  record.active_                        = duckdb_value_boolean(&result, 10, row);
-  return record;
+auto CellString(const duckorm::VarTypes& value) -> std::string {
+  const auto& text = std::get<std::unique_ptr<std::string>>(value);
+  return text ? *text : std::string{};
 }
 
-auto             SqlString(const std::string& value) -> std::string {
-  std::string out;
-  out.reserve(value.size() + 2);
-  out.push_back('\'');
-  for (const char ch : value) {
-    if (ch == '\'') {
-      out.push_back('\'');
-    }
-    out.push_back(ch);
-  }
-  out.push_back('\'');
-  return out;
+// BOOLEAN cells are decoded as the text "true" / "false".
+auto CellBool(const duckorm::VarTypes& value) -> bool { return CellString(value) == "true"; }
+
+auto Column(const char* name, duckorm::DuckDBType type) -> duckorm::DuckFieldDesc {
+  return duckorm::DuckFieldDesc{name, type, 0};
+}
+
+// SemanticModel columns read by GetModel and ListModels, in MapModelRow order.
+constexpr const char* kModelColumns =
+    "model_key, model_id, revision, embedding_dim, image_size, engine_id, profile_id, "
+    "supported_text_languages_json, prompt_config_hash, asset_manifest_json, active";
+const std::array<duckorm::DuckFieldDesc, 11> kModelRowFields = {
+    Column("model_key", duckorm::DuckDBType::VARCHAR),
+    Column("model_id", duckorm::DuckDBType::VARCHAR),
+    Column("revision", duckorm::DuckDBType::VARCHAR),
+    Column("embedding_dim", duckorm::DuckDBType::INT32),
+    Column("image_size", duckorm::DuckDBType::INT32),
+    Column("engine_id", duckorm::DuckDBType::NULLABLE_STRING),
+    Column("profile_id", duckorm::DuckDBType::NULLABLE_STRING),
+    Column("supported_text_languages_json", duckorm::DuckDBType::NULLABLE_STRING),
+    Column("prompt_config_hash", duckorm::DuckDBType::NULLABLE_STRING),
+    Column("asset_manifest_json", duckorm::DuckDBType::NULLABLE_STRING),
+    Column("active", duckorm::DuckDBType::BOOLEAN)};
+
+auto MapModelRow(const std::vector<duckorm::VarTypes>& row) -> SemanticModelRecord {
+  SemanticModelRecord record;
+  record.model_key_                     = CellString(row[0]);
+  record.model_id_                      = CellString(row[1]);
+  record.revision_                      = CellString(row[2]);
+  record.embedding_dim_                 = std::get<int32_t>(row[3]);
+  record.image_size_                    = std::get<int32_t>(row[4]);
+  record.engine_id_                     = CellString(row[5]);
+  record.profile_id_                    = CellString(row[6]);
+  record.supported_text_languages_json_ = CellString(row[7]);
+  record.prompt_config_hash_            = CellString(row[8]);
+  record.asset_manifest_json_           = CellString(row[9]);
+  record.active_                        = CellBool(row[10]);
+  return record;
 }
 
 auto SummarizeEmbeddingRecords(std::span<const SemanticImageEmbeddingRecord> records,
@@ -116,35 +125,10 @@ auto JsonString(const std::string& value) -> std::string {
   return out;
 }
 
-auto IdList(std::span<const sl_element_id_t> ids) -> std::string {
-  std::ostringstream out;
-  for (size_t i = 0; i < ids.size(); ++i) {
-    if (i > 0) {
-      out << ",";
-    }
-    out << ids[i];
-  }
-  return out.str();
-}
-
 auto RequestedCandidateLimit(size_t offset, size_t limit) -> size_t {
   const auto max_size      = std::numeric_limits<size_t>::max();
   const auto requested_end = offset > max_size - limit ? max_size : offset + limit;
   return std::max(requested_end, kSemanticSearchMinCandidatePool);
-}
-
-auto SqlFloatArrayLiteral(std::span<const float> values) -> std::string {
-  std::ostringstream out;
-  out.imbue(std::locale::classic());
-  out << '[';
-  for (size_t i = 0; i < values.size(); ++i) {
-    if (i > 0) {
-      out << ',';
-    }
-    out << std::setprecision(9) << values[i];
-  }
-  out << "]::FLOAT[" << values.size() << ']';
-  return out.str();
 }
 
 // Elbow/knee cutoff over a pre-sorted descending score sequence. Score-only so it
@@ -256,19 +240,6 @@ void SetError(std::string* error, const std::string& message) {
   }
 }
 
-auto RunQuery(duckdb_connection conn, const std::string& sql, std::string* error = nullptr)
-    -> bool {
-  duckdb_result result;
-  if (duckdb_query(conn, sql.c_str(), &result) != DuckDBSuccess) {
-    const char* raw_error = duckdb_result_error(&result);
-    SetError(error, raw_error ? raw_error : "DuckDB query failed");
-    duckdb_destroy_result(&result);
-    return false;
-  }
-  duckdb_destroy_result(&result);
-  return true;
-}
-
 auto IsSupportedSemanticEmbeddingDim(int dim) -> bool {
   return dim == kSemanticEmbeddingDim || dim == kSemanticEmbeddingDim768;
 }
@@ -286,90 +257,66 @@ auto ImageEmbeddingIndexName(int dim) -> const char* {
                                          : "idx_semantic_image_embedding_hnsw";
 }
 
-auto InsertReadyImageEmbedding(duckdb_connection conn, const SemanticImageEmbeddingRecord& record,
-                               int model_dim, std::string* error) -> bool {
-  static constexpr std::array<duckorm::DuckFieldDesc, 5> fields = {
-      FIELD_AS(SemanticImageEmbeddingRecord, file_id_, "file_id", UINT32),
-      FIELD_AS(SemanticImageEmbeddingRecord, image_id_, "image_id", UINT32),
-      FIELD_AS(SemanticImageEmbeddingRecord, model_key_, "model_key", STRING),
-      FIELD_AS(SemanticImageEmbeddingRecord, embedding_, "embedding", FLOAT_ARRAY),
-      FIELD_AS(SemanticImageEmbeddingRecord, thumbnail_resolution_, "thumbnail_resolution", INT32)};
-  try {
-    duckorm::insert_by_query(conn,
-                             std::format("INSERT INTO {} "
-                                         "(file_id, image_id, model_key, embedding, embedding_dim, "
-                                         "thumbnail_resolution, status, error) "
-                                         "VALUES (?, ?, ?, ?, {}, ?, 'ready', NULL);",
-                                         ImageEmbeddingTableName(model_dim), model_dim),
-                             &record, fields, fields.size());
-    return true;
-  } catch (const std::exception& e) {
-    SetError(error, e.what());
-    return false;
-  }
+// ---- predicates ----
+
+auto ColumnEquals(const char* column, const std::string& value) -> duckorm::SqlFragment {
+  return expr::eq(expr::col(column), expr::param(value));
 }
 
-auto UpsertLabelPrototypePrepared(duckdb_connection                   conn,
-                                  const SemanticLabelPrototypeRecord& record, int model_dim,
-                                  std::string* error) -> bool {
-  static constexpr std::array<duckorm::DuckFieldDesc, 4> fields = {
-      FIELD_AS(SemanticLabelPrototypeRecord, model_key_, "model_key", STRING),
-      FIELD_AS(SemanticLabelPrototypeRecord, label_, "label", STRING),
-      FIELD_AS(SemanticLabelPrototypeRecord, prompt_config_hash_, "prompt_config_hash", STRING),
-      FIELD_AS(SemanticLabelPrototypeRecord, embedding_, "embedding", FLOAT_ARRAY)};
-  try {
-    duckorm::insert_or_replace(conn, LabelPrototypeTableName(model_dim), &record, fields,
-                               fields.size());
-    return true;
-  } catch (const std::exception& e) {
-    SetError(error, e.what());
-    return false;
-  }
+auto ColumnEquals(const char* column, int64_t value) -> duckorm::SqlFragment {
+  return expr::eq(expr::col(column), expr::param(value));
 }
 
-auto ScalarInt64(duckdb_connection conn, const std::string& sql) -> std::optional<int64_t> {
-  duckdb_result result;
-  if (duckdb_query(conn, sql.c_str(), &result) != DuckDBSuccess) {
-    duckdb_destroy_result(&result);
-    return std::nullopt;
-  }
+// ---- statements (all throw std::runtime_error with DuckDB's message on failure) ----
 
-  std::optional<int64_t> value;
-  if (duckdb_row_count(&result) > 0 && duckdb_column_count(&result) > 0 &&
-      !duckdb_value_is_null(&result, 0, 0)) {
-    value = duckdb_value_int64(&result, 0, 0);
-  }
-  duckdb_destroy_result(&result);
-  return value;
-}
-
+// Embedding size of a registered model, or std::nullopt when the model is not registered.
 auto ModelEmbeddingDim(duckdb_connection conn, const std::string& model_key) -> std::optional<int> {
-  const auto value = ScalarInt64(conn, std::format("SELECT embedding_dim FROM SemanticModel "
-                                                  "WHERE model_key = {};",
-                                                  SqlString(model_key)));
+  auto query = expr::raw("SELECT embedding_dim FROM SemanticModel WHERE ");
+  query.append(ColumnEquals("model_key", model_key));
+  const auto value = duckorm::select_int64(conn, query);
   if (!value.has_value()) {
     return std::nullopt;
   }
   return static_cast<int>(*value);
 }
 
-auto ScalarString(duckdb_connection conn, const std::string& sql) -> std::string {
-  duckdb_result result;
-  if (duckdb_query(conn, sql.c_str(), &result) != DuckDBSuccess) {
-    duckdb_destroy_result(&result);
-    return {};
+// Count of a COUNT(*) query. A failed query reads as 0: the store's count methods report no
+// error.
+auto CountOrZero(duckdb_connection conn, const duckorm::SqlFragment& query) -> size_t {
+  try {
+    const auto count = duckorm::select_int64(conn, query);
+    return count.has_value() ? static_cast<size_t>(*count) : 0U;
+  } catch (const std::exception&) {
+    return 0U;
   }
+}
 
-  std::string value;
-  if (duckdb_row_count(&result) > 0 && duckdb_column_count(&result) > 0 &&
-      !duckdb_value_is_null(&result, 0, 0)) {
-    if (char* raw = duckdb_value_varchar(&result, 0, 0)) {
-      value = raw;
-      duckdb_free(raw);
-    }
-  }
-  duckdb_destroy_result(&result);
-  return value;
+void InsertReadyImageEmbedding(duckdb_connection conn, const SemanticImageEmbeddingRecord& record,
+                               int model_dim) {
+  static constexpr std::array<duckorm::DuckFieldDesc, 5> fields = {
+      FIELD_AS(SemanticImageEmbeddingRecord, file_id_, "file_id", UINT32),
+      FIELD_AS(SemanticImageEmbeddingRecord, image_id_, "image_id", UINT32),
+      FIELD_AS(SemanticImageEmbeddingRecord, model_key_, "model_key", STRING),
+      FIELD_AS(SemanticImageEmbeddingRecord, embedding_, "embedding", FLOAT_ARRAY),
+      FIELD_AS(SemanticImageEmbeddingRecord, thumbnail_resolution_, "thumbnail_resolution", INT32)};
+  duckorm::insert_by_query(conn,
+                           std::format("INSERT INTO {} "
+                                       "(file_id, image_id, model_key, embedding, embedding_dim, "
+                                       "thumbnail_resolution, status, error) "
+                                       "VALUES (?, ?, ?, ?, {}, ?, 'ready', NULL);",
+                                       ImageEmbeddingTableName(model_dim), model_dim),
+                           &record, fields, fields.size());
+}
+
+void InsertOrReplaceLabelPrototype(duckdb_connection                   conn,
+                                   const SemanticLabelPrototypeRecord& record, int model_dim) {
+  static constexpr std::array<duckorm::DuckFieldDesc, 4> fields = {
+      FIELD_AS(SemanticLabelPrototypeRecord, model_key_, "model_key", STRING),
+      FIELD_AS(SemanticLabelPrototypeRecord, label_, "label", STRING),
+      FIELD_AS(SemanticLabelPrototypeRecord, prompt_config_hash_, "prompt_config_hash", STRING),
+      FIELD_AS(SemanticLabelPrototypeRecord, embedding_, "embedding", FLOAT_ARRAY)};
+  duckorm::insert_or_replace(conn, LabelPrototypeTableName(model_dim), &record, fields,
+                             fields.size());
 }
 
 auto ValidateEmbedding(std::span<const float> embedding, int expected_dim, std::string* error)
@@ -442,8 +389,7 @@ auto MakeTopScoresJson(const std::vector<std::pair<std::string, double>>& scores
   return out.str();
 }
 
-auto InsertSemanticLabel(duckdb_connection conn, const SemanticImageLabelRecord& label,
-                         std::string* error) -> bool {
+void InsertSemanticLabel(duckdb_connection conn, const SemanticImageLabelRecord& label) {
   static constexpr std::array<duckorm::DuckFieldDesc, 9> fields = {
       FIELD_AS(SemanticImageLabelRecord, file_id_, "file_id", UINT32),
       FIELD_AS(SemanticImageLabelRecord, model_key_, "model_key", STRING),
@@ -454,23 +400,16 @@ auto InsertSemanticLabel(duckdb_connection conn, const SemanticImageLabelRecord&
       FIELD_AS(SemanticImageLabelRecord, margin_, "margin", DOUBLE),
       FIELD_AS(SemanticImageLabelRecord, confident_, "confident", BOOLEAN),
       FIELD_AS(SemanticImageLabelRecord, top_scores_json_, "top_scores", NULLABLE_STRING)};
-  try {
-    duckorm::insert_by_query(
-        conn,
-        "INSERT INTO SemanticImageLabel "
-        "(file_id, model_key, label, score, second_label, second_score, margin, confident, "
-        "top_scores) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);",
-        &label, fields, fields.size());
-    return true;
-  } catch (const std::exception& e) {
-    SetError(error, e.what());
-    return false;
-  }
+  duckorm::insert_by_query(
+      conn,
+      "INSERT INTO SemanticImageLabel "
+      "(file_id, model_key, label, score, second_label, second_score, margin, confident, "
+      "top_scores) "
+      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);",
+      &label, fields, fields.size());
 }
 
-auto UpsertSemanticModel(duckdb_connection conn, const SemanticModelRecord& model,
-                         std::string* error) -> bool {
+void UpsertSemanticModel(duckdb_connection conn, const SemanticModelRecord& model) {
   static constexpr std::array<duckorm::DuckFieldDesc, 11> fields = {
       FIELD_AS(SemanticModelRecord, model_key_, "model_key", STRING),
       FIELD_AS(SemanticModelRecord, model_id_, "model_id", STRING),
@@ -484,13 +423,7 @@ auto UpsertSemanticModel(duckdb_connection conn, const SemanticModelRecord& mode
       FIELD_AS(SemanticModelRecord, prompt_config_hash_, "prompt_config_hash", NULLABLE_STRING),
       FIELD_AS(SemanticModelRecord, asset_manifest_json_, "asset_manifest_json", NULLABLE_STRING),
       FIELD_AS(SemanticModelRecord, active_, "active", BOOLEAN)};
-  try {
-    duckorm::insert_or_replace(conn, "SemanticModel", &model, fields, fields.size());
-    return true;
-  } catch (const std::exception& e) {
-    SetError(error, e.what());
-    return false;
-  }
+  duckorm::insert_or_replace(conn, "SemanticModel", &model, fields, fields.size());
 }
 
 auto BuildAssignedLabel(sl_element_id_t file_id, const std::string& model_key,
@@ -525,397 +458,234 @@ auto BuildAssignedLabel(sl_element_id_t file_id, const std::string& model_key,
   return label;
 }
 
-auto QueryAssignedLabel(duckdb_connection conn, const SemanticImageEmbeddingRecord& record,
-                        int model_dim, const SemanticLabelAssignmentOptions& assignment_options,
-                        std::string* error) -> std::optional<SemanticImageLabelRecord> {
+void ValidateAssignmentOptions(const SemanticLabelAssignmentOptions& assignment_options) {
   if (assignment_options.prompt_config_hash_.empty()) {
-    SetError(error, "Semantic label assignment prompt config hash is empty.");
-    return std::nullopt;
+    throw std::runtime_error("Semantic label assignment prompt config hash is empty.");
   }
   if (!std::isfinite(assignment_options.confidence_score_threshold_) ||
       !std::isfinite(assignment_options.confidence_margin_threshold_)) {
-    SetError(error, "Semantic label assignment threshold contains NaN or infinity.");
-    return std::nullopt;
+    throw std::runtime_error("Semantic label assignment threshold contains NaN or infinity.");
   }
+}
+
+// Ranks the label prototypes against the embedding just written for @p record and builds its
+// label. Throws when the options are invalid, a label is empty, or no prototype exists.
+auto QueryAssignedLabel(duckdb_connection conn, const SemanticImageEmbeddingRecord& record,
+                        int model_dim, const SemanticLabelAssignmentOptions& assignment_options)
+    -> SemanticImageLabelRecord {
+  ValidateAssignmentOptions(assignment_options);
 
   // Rank enough prototypes for the elbow to find a knee; the display cap is applied
   // later in BuildAssignedLabel, not here.
-  const auto result_limit = kSemanticLabelCandidatePoolSize;
-  const auto sql          = std::format(
+  auto query = expr::raw(std::format(
       "SELECT lp.label, array_inner_product(lp.embedding, se.embedding) AS score "
-               "FROM {} lp "
-               "JOIN {} se ON se.model_key = lp.model_key "
-               "AND se.file_id = {} AND se.image_id = {} "
-               "WHERE lp.model_key = {} AND lp.prompt_config_hash = {} "
-               "AND se.status = 'ready' AND se.error IS NULL "
-               "ORDER BY score DESC, lp.label LIMIT {};",
-      LabelPrototypeTableName(model_dim), ImageEmbeddingTableName(model_dim), record.file_id_,
-      record.image_id_, SqlString(record.model_key_),
-      SqlString(assignment_options.prompt_config_hash_), result_limit);
+      "FROM {} lp "
+      "JOIN {} se ON se.model_key = lp.model_key AND se.file_id = ",
+      LabelPrototypeTableName(model_dim), ImageEmbeddingTableName(model_dim)));
+  query.append(expr::param(static_cast<int64_t>(record.file_id_)));
+  query.append(expr::raw(" AND se.image_id = "));
+  query.append(expr::param(static_cast<int64_t>(record.image_id_)));
+  query.append(expr::raw(" WHERE lp.model_key = "));
+  query.append(expr::param(record.model_key_));
+  query.append(expr::raw(" AND lp.prompt_config_hash = "));
+  query.append(expr::param(assignment_options.prompt_config_hash_));
+  query.append(expr::raw(std::format(" AND se.status = 'ready' AND se.error IS NULL "
+                                     "ORDER BY score DESC, lp.label LIMIT {};",
+                                     kSemanticLabelCandidatePoolSize)));
 
-  duckdb_result result;
-  if (duckdb_query(conn, sql.c_str(), &result) != DuckDBSuccess) {
-    const char* raw_error = duckdb_result_error(&result);
-    SetError(error, raw_error ? raw_error : "DuckDB semantic label assignment failed.");
-    duckdb_destroy_result(&result);
-    return std::nullopt;
-  }
+  static const std::array<duckorm::DuckFieldDesc, 2> fields = {
+      Column("label", duckorm::DuckDBType::VARCHAR), Column("score", duckorm::DuckDBType::DOUBLE)};
+  const auto rows = duckorm::select_by_query(conn, fields, fields.size(), query);
 
   std::vector<std::pair<std::string, double>> scores;
-  const auto                                  row_count = duckdb_row_count(&result);
-  scores.reserve(static_cast<size_t>(row_count));
-  for (idx_t r = 0; r < row_count; ++r) {
-    std::string label;
-    if (char* raw = duckdb_value_varchar(&result, 0, r)) {
-      label = raw;
-      duckdb_free(raw);
-    }
+  scores.reserve(rows.size());
+  for (const auto& row : rows) {
+    auto label = CellString(row[0]);
     if (label.empty()) {
-      duckdb_destroy_result(&result);
-      SetError(error, "Semantic label assignment returned an empty label.");
-      return std::nullopt;
+      throw std::runtime_error("Semantic label assignment returned an empty label.");
     }
-    scores.emplace_back(std::move(label), duckdb_value_double(&result, 1, r));
+    scores.emplace_back(std::move(label), std::get<double>(row[1]));
   }
-  duckdb_destroy_result(&result);
-
   if (scores.empty()) {
-    SetError(error, "Semantic label prototype cache is empty.");
-    return std::nullopt;
+    throw std::runtime_error("Semantic label prototype cache is empty.");
   }
   return BuildAssignedLabel(record.file_id_, record.model_key_, assignment_options, scores);
 }
 
-// RAII guard for a DuckDB logical type. The duckorm translation unit has its own; we
-// keep a local one here so the semantic controller can build FLOAT array values for
-// the Appender without depending on duckorm internals.
-class SemanticLogicalTypeGuard {
- public:
-  explicit SemanticLogicalTypeGuard(duckdb_logical_type type = nullptr) : type_(type) {}
-  SemanticLogicalTypeGuard(const SemanticLogicalTypeGuard&)                    = delete;
-  auto operator=(const SemanticLogicalTypeGuard&) -> SemanticLogicalTypeGuard& = delete;
-  ~SemanticLogicalTypeGuard() {
-    if (type_ != nullptr) {
-      duckdb_destroy_logical_type(&type_);
-    }
-  }
-  [[nodiscard]] auto get() const -> duckdb_logical_type { return type_; }
-
- private:
-  duckdb_logical_type type_;
-};
-
-// Bulk-inserts ready image embedding rows through the DuckDB Appender, the most
-// efficient load path in the C API. Runs within the caller's active transaction:
-// the Appender participates in the connection's transaction and does not auto-commit,
-// so flushed rows are visible to subsequent same-connection queries and are published
-// only on COMMIT. Only the non-default columns are appended; `generated_at` and
-// `error` fall back to their column defaults.
-auto AppendImageEmbeddingRows(duckdb_connection                             conn,
-                              std::span<const SemanticImageEmbeddingRecord> records, int model_dim,
-                              std::string* error) -> bool {
-  const char*     table_name = ImageEmbeddingTableName(model_dim);
-  duckdb_appender appender   = nullptr;
-  if (duckdb_appender_create(conn, nullptr, table_name, &appender) != DuckDBSuccess) {
-    const char* msg = duckdb_appender_error(appender);
-    SetError(error, msg ? std::string(msg)
-                        : std::format("DuckDB appender create failed for {}", table_name));
-    duckdb_appender_destroy(&appender);
-    return false;
-  }
-
-  static constexpr std::array<const char*, 7> kActiveColumns = {
+// Bulk-inserts ready image embedding rows through the DuckDB Appender within the caller's
+// transaction. Only the non-default columns are appended; `generated_at` and `error` fall back
+// to their column defaults.
+void AppendImageEmbeddingRows(duckdb_connection                             conn,
+                              std::span<const SemanticImageEmbeddingRecord> records,
+                              int                                           model_dim) {
+  static constexpr std::array<const char*, 7> kColumns = {
       "file_id", "image_id", "model_key", "embedding", "embedding_dim", "thumbnail_resolution",
       "status"};
-  for (const char* column : kActiveColumns) {
-    if (duckdb_appender_add_column(appender, column) != DuckDBSuccess) {
-      const char* msg = duckdb_appender_error(appender);
-      SetError(error, msg ? std::string(msg)
-                          : std::format("DuckDB appender add_column failed for {}", table_name));
-      duckdb_appender_destroy(&appender);
-      return false;
-    }
-  }
-
-  SemanticLogicalTypeGuard float_type(duckdb_create_logical_type(DUCKDB_TYPE_FLOAT));
-  if (!float_type.get()) {
-    SetError(error, std::format("DuckDB failed to create FLOAT logical type for {}", table_name));
-    duckdb_appender_destroy(&appender);
-    return false;
-  }
-
-  bool ok = true;
+  duckorm::Appender appender(conn, ImageEmbeddingTableName(model_dim), kColumns);
   for (const auto& record : records) {
-    if (duckdb_append_uint32(appender, static_cast<uint32_t>(record.file_id_)) != DuckDBSuccess ||
-        duckdb_append_uint32(appender, static_cast<uint32_t>(record.image_id_)) != DuckDBSuccess ||
-        duckdb_append_varchar(appender, record.model_key_.c_str()) != DuckDBSuccess) {
-      ok = false;
-      break;
+    if (record.embedding_.size() != static_cast<size_t>(model_dim)) {
+      throw std::runtime_error(
+          std::format("DuckDB appender failed for {}", ImageEmbeddingTableName(model_dim)));
     }
-
-    const auto                dim = record.embedding_.size();
-    std::vector<duckdb_value> values(dim, nullptr);
-    bool                      values_ok = dim == static_cast<size_t>(model_dim);
-    for (size_t i = 0; i < dim && values_ok; ++i) {
-      values[i] = duckdb_create_float(record.embedding_[i]);
-      if (values[i] == nullptr) {
-        values_ok = false;
-      }
-    }
-    duckdb_value array_value = nullptr;
-    if (values_ok) {
-      array_value =
-          duckdb_create_array_value(float_type.get(), values.data(), static_cast<idx_t>(dim));
-    }
-    for (duckdb_value value : values) {
-      if (value != nullptr) {
-        duckdb_destroy_value(&value);
-      }
-    }
-    if (array_value == nullptr) {
-      ok = false;
-      break;
-    }
-    const duckdb_state bind_state = duckdb_append_value(appender, array_value);
-    duckdb_destroy_value(&array_value);
-    if (bind_state != DuckDBSuccess) {
-      ok = false;
-      break;
-    }
-
-    if (duckdb_append_int32(appender, static_cast<int32_t>(model_dim)) != DuckDBSuccess ||
-        duckdb_append_int32(appender, static_cast<int32_t>(record.thumbnail_resolution_)) !=
-            DuckDBSuccess ||
-        duckdb_append_varchar(appender, "ready") != DuckDBSuccess ||
-        duckdb_appender_end_row(appender) != DuckDBSuccess) {
-      ok = false;
-      break;
-    }
+    appender.append_uint32(static_cast<uint32_t>(record.file_id_));
+    appender.append_uint32(static_cast<uint32_t>(record.image_id_));
+    appender.append_varchar(record.model_key_);
+    appender.append_float_array(record.embedding_);
+    appender.append_int32(static_cast<int32_t>(model_dim));
+    appender.append_int32(static_cast<int32_t>(record.thumbnail_resolution_));
+    appender.append_varchar("ready");
+    appender.end_row();
   }
-
-  if (ok && duckdb_appender_flush(appender) != DuckDBSuccess) {
-    ok = false;
-  }
-  if (!ok) {
-    const char* msg = duckdb_appender_error(appender);
-    SetError(error,
-             msg ? std::string(msg) : std::format("DuckDB appender failed for {}", table_name));
-  }
-  duckdb_appender_destroy(&appender);
-  return ok;
+  appender.flush();
 }
 
 // Bulk-inserts assigned label rows through the DuckDB Appender within the caller's
-// active transaction. `updated_at` falls back to its column default.
-auto AppendSemanticLabelRows(duckdb_connection                         conn,
-                             std::span<const SemanticImageLabelRecord> labels, std::string* error)
-    -> bool {
-  duckdb_appender appender = nullptr;
-  if (duckdb_appender_create(conn, nullptr, "SemanticImageLabel", &appender) != DuckDBSuccess) {
-    const char* msg = duckdb_appender_error(appender);
-    SetError(error, msg ? msg : "DuckDB appender create failed for SemanticImageLabel");
-    duckdb_appender_destroy(&appender);
-    return false;
-  }
-
-  static constexpr std::array<const char*, 9> kActiveColumns = {
+// transaction. `updated_at` falls back to its column default; an empty second label or top
+// scores text is stored as NULL.
+void AppendSemanticLabelRows(duckdb_connection                         conn,
+                             std::span<const SemanticImageLabelRecord> labels) {
+  static constexpr std::array<const char*, 9> kColumns = {
       "file_id",      "model_key", "label",     "score",     "second_label",
       "second_score", "margin",    "confident", "top_scores"};
-  for (const char* column : kActiveColumns) {
-    if (duckdb_appender_add_column(appender, column) != DuckDBSuccess) {
-      const char* msg = duckdb_appender_error(appender);
-      SetError(error, msg ? msg : "DuckDB appender add_column failed for SemanticImageLabel");
-      duckdb_appender_destroy(&appender);
-      return false;
-    }
-  }
-
-  auto append_nullable_string = [&appender](const std::string& value) -> bool {
+  duckorm::Appender appender(conn, "SemanticImageLabel", kColumns);
+  const auto        append_nullable_string = [&appender](const std::string& value) {
     if (value.empty()) {
-      return duckdb_append_null(appender) == DuckDBSuccess;
-    }
-    return duckdb_append_varchar(appender, value.c_str()) == DuckDBSuccess;
-  };
-
-  bool ok = true;
-  for (const auto& label : labels) {
-    if (duckdb_append_uint32(appender, static_cast<uint32_t>(label.file_id_)) != DuckDBSuccess ||
-        duckdb_append_varchar(appender, label.model_key_.c_str()) != DuckDBSuccess ||
-        duckdb_append_varchar(appender, label.label_.c_str()) != DuckDBSuccess ||
-        duckdb_append_double(appender, label.score_) != DuckDBSuccess ||
-        !append_nullable_string(label.second_label_)) {
-      ok = false;
-      break;
-    }
-    if (label.second_score_.has_value()) {
-      if (duckdb_append_double(appender, *label.second_score_) != DuckDBSuccess) {
-        ok = false;
-        break;
-      }
+      appender.append_null();
     } else {
-      if (duckdb_append_null(appender) != DuckDBSuccess) {
-        ok = false;
-        break;
-      }
+      appender.append_varchar(value);
     }
-    if (duckdb_append_double(appender, label.margin_) != DuckDBSuccess ||
-        duckdb_append_bool(appender, label.confident_) != DuckDBSuccess ||
-        !append_nullable_string(label.top_scores_json_) ||
-        duckdb_appender_end_row(appender) != DuckDBSuccess) {
-      ok = false;
-      break;
+  };
+  for (const auto& label : labels) {
+    appender.append_uint32(static_cast<uint32_t>(label.file_id_));
+    appender.append_varchar(label.model_key_);
+    appender.append_varchar(label.label_);
+    appender.append_double(label.score_);
+    append_nullable_string(label.second_label_);
+    if (label.second_score_.has_value()) {
+      appender.append_double(*label.second_score_);
+    } else {
+      appender.append_null();
     }
+    appender.append_double(label.margin_);
+    appender.append_bool(label.confident_);
+    append_nullable_string(label.top_scores_json_);
+    appender.end_row();
   }
-
-  if (ok && duckdb_appender_flush(appender) != DuckDBSuccess) {
-    ok = false;
-  }
-  if (!ok) {
-    const char* msg = duckdb_appender_error(appender);
-    SetError(error, msg ? msg : "DuckDB appender failed for SemanticImageLabel");
-  }
-  duckdb_appender_destroy(&appender);
-  return ok;
+  appender.flush();
 }
 
 // Assigns labels for an entire batch with a single SQL query. Ranks every prototype
 // against each just-inserted embedding and keeps the top-N per file via a window
-// function, then builds one SemanticImageLabelRecord per input record. `out_labels`
-// is resized to `records.size()` and filled in input order. Requires all records to
-// share the same model_key and to have unique file_ids.
+// function, then builds one SemanticImageLabelRecord per input record, in input order.
+// Requires all records to share the same model_key and to have unique file_ids. Throws when
+// a file of the batch gets no label.
 auto QueryAssignedLabelsBatch(duckdb_connection                             conn,
                               std::span<const SemanticImageEmbeddingRecord> records,
-                              const std::string& model_key, int model_dim,
-                              const SemanticLabelAssignmentOptions&  assignment_options,
-                              std::vector<SemanticImageLabelRecord>& out_labels, std::string* error)
-    -> bool {
-  out_labels.assign(records.size(), SemanticImageLabelRecord{});
-
+                              std::span<const sl_element_id_t> file_ids, const std::string& model_key,
+                              int                                   model_dim,
+                              const SemanticLabelAssignmentOptions& assignment_options)
+    -> std::vector<SemanticImageLabelRecord> {
+  std::vector<SemanticImageLabelRecord>       out_labels(records.size());
   std::unordered_map<sl_element_id_t, size_t> index_by_file;
   index_by_file.reserve(records.size() * 2);
-  std::string id_list;
   for (size_t i = 0; i < records.size(); ++i) {
-    if (i > 0) {
-      id_list += ",";
-    }
-    id_list += std::to_string(records[i].file_id_);
     index_by_file.emplace(records[i].file_id_, i);
   }
 
   // Rank enough prototypes for the elbow to find a knee; the display cap is applied
   // later in BuildAssignedLabel, not here.
-  const auto result_limit = kSemanticLabelCandidatePoolSize;
-  const auto sql          = std::format(
+  auto query = expr::raw(std::format(
       "WITH scored AS ("
-               "SELECT se.file_id AS file_id, lp.label AS label, "
-               "array_inner_product(lp.embedding, se.embedding) AS score "
-               "FROM {} se "
-               "JOIN {} lp ON lp.model_key = se.model_key "
-               "AND lp.prompt_config_hash = {} "
-               "WHERE se.model_key = {} AND se.status = 'ready' AND se.error IS NULL "
-               "AND se.file_id IN ({})"
-               ") SELECT file_id, label, score FROM ("
-               "SELECT file_id, label, score, "
-               "ROW_NUMBER() OVER (PARTITION BY file_id ORDER BY score DESC, label) AS rn "
-               "FROM scored) ranked WHERE rn <= {} ORDER BY file_id, rn;",
-      ImageEmbeddingTableName(model_dim), LabelPrototypeTableName(model_dim),
-      SqlString(assignment_options.prompt_config_hash_), SqlString(model_key), id_list,
-      result_limit);
+      "SELECT se.file_id AS file_id, lp.label AS label, "
+      "array_inner_product(lp.embedding, se.embedding) AS score "
+      "FROM {} se "
+      "JOIN {} lp ON lp.model_key = se.model_key AND lp.prompt_config_hash = ",
+      ImageEmbeddingTableName(model_dim), LabelPrototypeTableName(model_dim)));
+  query.append(expr::param(assignment_options.prompt_config_hash_));
+  query.append(expr::raw(" WHERE se.model_key = "));
+  query.append(expr::param(model_key));
+  query.append(expr::raw(" AND se.status = 'ready' AND se.error IS NULL AND "));
+  query.append(expr::in_list(expr::col("se.file_id"), file_ids));
+  query.append(expr::raw(std::format(
+      ") SELECT file_id, label, score FROM ("
+      "SELECT file_id, label, score, "
+      "ROW_NUMBER() OVER (PARTITION BY file_id ORDER BY score DESC, label) AS rn "
+      "FROM scored) ranked WHERE rn <= {} ORDER BY file_id, rn;",
+      kSemanticLabelCandidatePoolSize)));
 
-  duckdb_result result;
-  if (duckdb_query(conn, sql.c_str(), &result) != DuckDBSuccess) {
-    const char* raw_error = duckdb_result_error(&result);
-    SetError(error, raw_error ? raw_error : "DuckDB batched label assignment failed.");
-    duckdb_destroy_result(&result);
-    return false;
-  }
+  static const std::array<duckorm::DuckFieldDesc, 3> fields = {
+      Column("file_id", duckorm::DuckDBType::INT64), Column("label", duckorm::DuckDBType::VARCHAR),
+      Column("score", duckorm::DuckDBType::DOUBLE)};
+  const auto rows = duckorm::select_by_query(conn, fields, fields.size(), query);
 
+  // Rows are ordered by file, so the ranked scores of a file are one run of rows.
   std::vector<std::pair<std::string, double>> scores;
-  sl_element_id_t                             current_file = 0;
-  bool                                        have_current = false;
-  auto                                        flush_group  = [&](sl_element_id_t file_id) -> bool {
-    if (!have_current) {
-      return true;
+  for (size_t r = 0; r < rows.size(); ++r) {
+    const auto file_id = static_cast<sl_element_id_t>(std::get<int64_t>(rows[r][0]));
+    auto       label   = CellString(rows[r][1]);
+    if (label.empty()) {
+      throw std::runtime_error(
+          "Semantic label assignment returned incomplete results for the batch.");
     }
-    have_current = false;
-    if (scores.empty()) {
-      return false;
+    scores.emplace_back(std::move(label), std::get<double>(rows[r][2]));
+    const bool last_row_of_file =
+        r + 1 == rows.size() ||
+        static_cast<sl_element_id_t>(std::get<int64_t>(rows[r + 1][0])) != file_id;
+    if (!last_row_of_file) {
+      continue;
     }
     const auto it = index_by_file.find(file_id);
     if (it == index_by_file.end()) {
-      return false;
+      throw std::runtime_error(
+          "Semantic label assignment returned incomplete results for the batch.");
     }
     out_labels[it->second] = BuildAssignedLabel(file_id, model_key, assignment_options, scores);
     scores.clear();
-    return true;
-  };
-
-  bool        ok        = true;
-  const idx_t row_count = duckdb_row_count(&result);
-  for (idx_t r = 0; r < row_count; ++r) {
-    const auto  file_id = static_cast<sl_element_id_t>(duckdb_value_int64(&result, 0, r));
-    std::string label;
-    if (char* raw = duckdb_value_varchar(&result, 1, r)) {
-      label = raw;
-      duckdb_free(raw);
-    }
-    if (label.empty()) {
-      ok = false;
-      break;
-    }
-    if (have_current && file_id != current_file) {
-      if (!flush_group(current_file)) {
-        ok = false;
-        break;
-      }
-    }
-    current_file = file_id;
-    have_current = true;
-    scores.emplace_back(std::move(label), duckdb_value_double(&result, 2, r));
-  }
-  if (ok && have_current && !flush_group(current_file)) {
-    ok = false;
-  }
-  duckdb_destroy_result(&result);
-  if (!ok) {
-    SetError(error, "Semantic label assignment returned incomplete results for the batch.");
-    return false;
   }
 
-  for (size_t i = 0; i < records.size(); ++i) {
-    if (out_labels[i].label_.empty()) {
-      SetError(error, "Semantic label assignment produced no label for a file in the batch.");
-      return false;
+  for (const auto& label : out_labels) {
+    if (label.label_.empty()) {
+      throw std::runtime_error(
+          "Semantic label assignment produced no label for a file in the batch.");
     }
   }
-  return true;
+  return out_labels;
+}
+
+// Deletes the embedding rows and the label rows of @p model_key for @p file_ids.
+void DeleteEmbeddingAndLabelRows(duckdb_connection conn, int model_dim,
+                                 const std::string&               model_key,
+                                 std::span<const sl_element_id_t> file_ids) {
+  const auto where = expr::and_(
+      {ColumnEquals("model_key", model_key), expr::in_list(expr::col("file_id"), file_ids)});
+  duckorm::remove(conn, ImageEmbeddingTableName(model_dim), where);
+  duckorm::remove(conn, "SemanticImageLabel", where);
 }
 
 /// The key of the active semantic model as stored, or std::nullopt when the query fails. An
 /// empty string means no model is active.
 auto ReadActiveModelKey(duckdb_connection conn) -> std::optional<std::string> {
-  const auto sql =
-      "SELECT model_key FROM SemanticModel WHERE active = TRUE "
-      "ORDER BY created_at DESC, model_key DESC LIMIT 1;";
-
-  duckdb_result result;
-  if (duckdb_query(conn, sql, &result) != DuckDBSuccess) {
-    duckdb_destroy_result(&result);
+  try {
+    return duckorm::select_string(conn, expr::raw("SELECT model_key FROM SemanticModel WHERE "
+                                                  "active = TRUE ORDER BY created_at DESC, "
+                                                  "model_key DESC LIMIT 1"))
+        .value_or(std::string{});
+  } catch (const std::exception&) {
     return std::nullopt;
   }
-
-  std::string out;
-  if (duckdb_row_count(&result) > 0) {
-    if (char* raw = duckdb_value_varchar(&result, 0, 0)) {
-      out = raw;
-      duckdb_free(raw);
-    }
-  }
-
-  duckdb_destroy_result(&result);
-  return out;
 }
 }  // namespace
+
+void DeleteSemanticRowsForFiles(duckdb_connection                conn,
+                                std::span<const sl_element_id_t> file_ids) {
+  if (file_ids.empty()) {
+    return;
+  }
+  const auto file_in = expr::in_list(expr::col("file_id"), file_ids);
+  duckorm::remove(conn, "SemanticImageEmbedding", file_in);
+  duckorm::remove(conn, "SemanticImageEmbedding768", file_in);
+  duckorm::remove(conn, "SemanticImageLabel", file_in);
+}
 
 SemanticStore::SemanticStore(Database& db_ctrl) : database_(db_ctrl) {
   auto guard   = database_.GetConnectionGuard();
@@ -932,8 +702,8 @@ void SemanticStore::RefreshActiveModelKey(duckdb_connection conn) const {
   active_model_key_ = std::move(*key);
 }
 
-auto SemanticStore::UpsertModel(const SemanticModelRecord& model,
-                                            std::string*               error) const -> bool {
+auto SemanticStore::UpsertModel(const SemanticModelRecord& model, std::string* error) const
+    -> bool {
   auto guard   = database_.GetConnectionGuard();
   auto db_lock = guard.Lock();
   if (model.model_key_.empty()) {
@@ -954,79 +724,73 @@ auto SemanticStore::UpsertModel(const SemanticModelRecord& model,
     return false;
   }
 
-  if (!model.active_) {
-    // Replacing the active model's row with an inactive one leaves no active model.
-    const bool upserted = UpsertSemanticModel(guard.conn_, model, error);
-    RefreshActiveModelKey(guard.conn_);
-    return upserted;
-  }
-  if (!RunQuery(guard.conn_, "BEGIN TRANSACTION;", error)) {
+  try {
+    if (model.active_) {
+      duckorm::Transaction transaction(guard.conn_);
+      duckorm::execute(guard.conn_, expr::raw("UPDATE SemanticModel SET active = FALSE"));
+      UpsertSemanticModel(guard.conn_, model);
+      transaction.commit();
+    } else {
+      // Replacing the active model's row with an inactive one leaves no active model.
+      UpsertSemanticModel(guard.conn_, model);
+    }
+  } catch (const std::exception& e) {
+    SetError(error, e.what());
     return false;
   }
-  if (!RunQuery(guard.conn_, "UPDATE SemanticModel SET active = FALSE;", error) ||
-      !UpsertSemanticModel(guard.conn_, model, error)) {
-    std::string rollback_error;
-    RunQuery(guard.conn_, "ROLLBACK;", &rollback_error);
-    return false;
-  }
-  const bool committed = RunQuery(guard.conn_, "COMMIT;", error);
   RefreshActiveModelKey(guard.conn_);
-  return committed;
+  return true;
 }
 
 auto SemanticStore::HasModel(const std::string& model_key) const -> bool {
-  auto guard   = database_.GetConnectionGuard();
-  auto db_lock = guard.Lock();
-  return ModelEmbeddingDim(guard.conn_, model_key).has_value();
+  return GetModelEmbeddingDim(model_key).has_value();
 }
 
 auto SemanticStore::GetModelEmbeddingDim(const std::string& model_key) const
     -> std::optional<int> {
   auto guard   = database_.GetConnectionGuard();
   auto db_lock = guard.Lock();
-  return ModelEmbeddingDim(guard.conn_, model_key);
+  try {
+    return ModelEmbeddingDim(guard.conn_, model_key);
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
 }
 
-auto SemanticStore::GetModelSupportedTextLanguagesJson(
-    const std::string& model_key) const -> std::string {
+auto SemanticStore::GetModelSupportedTextLanguagesJson(const std::string& model_key) const
+    -> std::string {
   auto guard   = database_.GetConnectionGuard();
   auto db_lock = guard.Lock();
-  return ScalarString(guard.conn_,
-                      std::format("SELECT supported_text_languages_json FROM SemanticModel "
-                                  "WHERE model_key = {};",
-                                  SqlString(model_key)));
+  auto query   = expr::raw("SELECT supported_text_languages_json FROM SemanticModel WHERE ");
+  query.append(ColumnEquals("model_key", model_key));
+  try {
+    return duckorm::select_string(guard.conn_, query).value_or(std::string{});
+  } catch (const std::exception&) {
+    return {};
+  }
 }
 
 auto SemanticStore::GetModel(const std::string& model_key, std::string* error) const
     -> std::optional<SemanticModelRecord> {
-  auto       guard   = database_.GetConnectionGuard();
-  auto       db_lock = guard.Lock();
-  const auto sql     = std::format(
-      "SELECT model_key, model_id, revision, embedding_dim, image_size, "
-          "engine_id, profile_id, supported_text_languages_json, prompt_config_hash, "
-          "asset_manifest_json, active "
-          "FROM SemanticModel WHERE model_key = {} LIMIT 1;",
-      SqlString(model_key));
-
-  duckdb_result result;
-  if (duckdb_query(guard.conn_, sql.c_str(), &result) != DuckDBSuccess) {
-    const char* raw_error = duckdb_result_error(&result);
-    SetError(error, raw_error ? raw_error : "DuckDB semantic model query failed.");
-    duckdb_destroy_result(&result);
+  auto guard   = database_.GetConnectionGuard();
+  auto db_lock = guard.Lock();
+  auto query   = expr::raw(std::format("SELECT {} FROM SemanticModel WHERE ", kModelColumns));
+  query.append(ColumnEquals("model_key", model_key));
+  query.append(expr::raw(" LIMIT 1"));
+  try {
+    const auto rows =
+        duckorm::select_by_query(guard.conn_, kModelRowFields, kModelRowFields.size(), query);
+    if (rows.empty()) {
+      return std::nullopt;
+    }
+    return MapModelRow(rows.front());
+  } catch (const std::exception& e) {
+    SetError(error, e.what());
     return std::nullopt;
   }
-  if (duckdb_row_count(&result) == 0) {
-    duckdb_destroy_result(&result);
-    return std::nullopt;
-  }
-
-  SemanticModelRecord record = ReadSemanticModelRow(result, 0);
-  duckdb_destroy_result(&result);
-  return record;
 }
 
-auto SemanticStore::ActiveModel(std::string* error) const
-    -> std::optional<SemanticModelRecord> {
+auto SemanticStore::ActiveModel(std::string* error) const -> std::optional<SemanticModelRecord> {
   const auto key = ActiveModelKey();
   if (key.empty()) {
     return std::nullopt;
@@ -1039,68 +803,58 @@ auto SemanticStore::ActiveModelKey() const -> std::string {
   return active_model_key_;
 }
 
-auto SemanticStore::ListModels(std::string* error) const
-    -> std::vector<SemanticModelRecord> {
-  auto       guard   = database_.GetConnectionGuard();
-  auto       db_lock = guard.Lock();
-  const auto sql =
-      "SELECT model_key, model_id, revision, embedding_dim, image_size, "
-      "engine_id, profile_id, supported_text_languages_json, prompt_config_hash, "
-      "asset_manifest_json, active "
-      "FROM SemanticModel ORDER BY created_at DESC, model_key DESC;";
-
-  duckdb_result result;
-  if (duckdb_query(guard.conn_, sql, &result) != DuckDBSuccess) {
-    const char* raw_error = duckdb_result_error(&result);
-    SetError(error, raw_error ? raw_error : "DuckDB semantic model list query failed.");
-    duckdb_destroy_result(&result);
+auto SemanticStore::ListModels(std::string* error) const -> std::vector<SemanticModelRecord> {
+  auto guard   = database_.GetConnectionGuard();
+  auto db_lock = guard.Lock();
+  try {
+    const auto rows = duckorm::select_by_query(
+        guard.conn_, kModelRowFields, kModelRowFields.size(),
+        expr::raw(std::format(
+            "SELECT {} FROM SemanticModel ORDER BY created_at DESC, model_key DESC",
+            kModelColumns)));
+    std::vector<SemanticModelRecord> models;
+    models.reserve(rows.size());
+    for (const auto& row : rows) {
+      models.push_back(MapModelRow(row));
+    }
+    return models;
+  } catch (const std::exception& e) {
+    SetError(error, e.what());
     return {};
   }
-
-  std::vector<SemanticModelRecord> models;
-  const idx_t                      row_count = duckdb_row_count(&result);
-  models.reserve(row_count);
-  for (idx_t row = 0; row < row_count; ++row) {
-    models.push_back(ReadSemanticModelRow(result, row));
-  }
-  duckdb_destroy_result(&result);
-  return models;
 }
 
-auto SemanticStore::PurgeModel(const std::string& model_key, std::string* error) const
-    -> bool {
+auto SemanticStore::PurgeModel(const std::string& model_key, std::string* error) const -> bool {
   auto guard   = database_.GetConnectionGuard();
   auto db_lock = guard.Lock();
   if (model_key.empty()) {
     SetError(error, "Semantic model key is empty.");
     return false;
   }
-  const auto key = SqlString(model_key);
-  if (!RunQuery(guard.conn_, "BEGIN TRANSACTION;", error)) {
-    return false;
-  }
   // Embedding/prototype tables are dimension-sharded (512 vs 768); a given
   // model_key lives in only one of each pair, so deleting from both is a safe
   // no-op on the empty shard. SemanticModel holds the registry row itself.
-  const std::array<const char*, 6> tables = {
-      "SemanticImageEmbedding",    "SemanticImageEmbedding768",  "SemanticImageLabel",
-      "SemanticLabelPrototype",    "SemanticLabelPrototype768", "SemanticModel",
+  static constexpr std::array<const char*, 6> kTables = {
+      "SemanticImageEmbedding", "SemanticImageEmbedding768", "SemanticImageLabel",
+      "SemanticLabelPrototype", "SemanticLabelPrototype768", "SemanticModel",
   };
-  for (const auto* table : tables) {
-    if (!RunQuery(guard.conn_, std::format("DELETE FROM {} WHERE model_key = {};", table, key),
-                  error)) {
-      std::string rollback_error;
-      RunQuery(guard.conn_, "ROLLBACK;", &rollback_error);
-      return false;
+  try {
+    duckorm::Transaction transaction(guard.conn_);
+    const auto           where = ColumnEquals("model_key", model_key);
+    for (const auto* table : kTables) {
+      duckorm::remove(guard.conn_, table, where);
     }
+    transaction.commit();
+  } catch (const std::exception& e) {
+    SetError(error, e.what());
+    return false;
   }
-  const bool committed = RunQuery(guard.conn_, "COMMIT;", error);
   RefreshActiveModelKey(guard.conn_);
-  return committed;
+  return true;
 }
 
-auto SemanticStore::SetActiveModelKey(const std::string& model_key,
-                                                  std::string*       error) const -> bool {
+auto SemanticStore::SetActiveModelKey(const std::string& model_key, std::string* error) const
+    -> bool {
   auto guard   = database_.GetConnectionGuard();
   auto db_lock = guard.Lock();
   if (model_key.empty()) {
@@ -1111,55 +865,42 @@ auto SemanticStore::SetActiveModelKey(const std::string& model_key,
     SetError(error, "Semantic model is not registered.");
     return false;
   }
-  if (!RunQuery(guard.conn_, "BEGIN TRANSACTION;", error)) {
+  try {
+    duckorm::Transaction transaction(guard.conn_);
+    duckorm::execute(guard.conn_, expr::raw("UPDATE SemanticModel SET active = FALSE"));
+    auto activate = expr::raw("UPDATE SemanticModel SET active = TRUE WHERE ");
+    activate.append(ColumnEquals("model_key", model_key));
+    duckorm::execute(guard.conn_, activate);
+    transaction.commit();
+  } catch (const std::exception& e) {
+    SetError(error, e.what());
     return false;
   }
-  if (!RunQuery(guard.conn_, "UPDATE SemanticModel SET active = FALSE;", error) ||
-      !RunQuery(guard.conn_,
-                std::format("UPDATE SemanticModel SET active = TRUE WHERE model_key = {};",
-                            SqlString(model_key)),
-                error)) {
-    std::string rollback_error;
-    RunQuery(guard.conn_, "ROLLBACK;", &rollback_error);
-    return false;
-  }
-  const bool committed = RunQuery(guard.conn_, "COMMIT;", error);
   RefreshActiveModelKey(guard.conn_);
-  return committed;
+  return true;
 }
 
 auto SemanticStore::LatestModelKey() const -> std::string {
-  auto       guard   = database_.GetConnectionGuard();
-  auto       db_lock = guard.Lock();
-  const auto sql =
-      "SELECT model_key FROM SemanticModel ORDER BY created_at DESC, model_key DESC LIMIT 1;";
-
-  duckdb_result result;
-  if (duckdb_query(guard.conn_, sql, &result) != DuckDBSuccess) {
-    duckdb_destroy_result(&result);
+  auto guard   = database_.GetConnectionGuard();
+  auto db_lock = guard.Lock();
+  try {
+    return duckorm::select_string(guard.conn_,
+                                  expr::raw("SELECT model_key FROM SemanticModel ORDER BY "
+                                            "created_at DESC, model_key DESC LIMIT 1"))
+        .value_or(std::string{});
+  } catch (const std::exception&) {
     return {};
   }
-
-  std::string out;
-  if (duckdb_row_count(&result) > 0) {
-    if (char* raw = duckdb_value_varchar(&result, 0, 0)) {
-      out = raw;
-      duckdb_free(raw);
-    }
-  }
-
-  duckdb_destroy_result(&result);
-  return out;
 }
 
 auto SemanticStore::UpsertImageEmbedding(const SemanticImageEmbeddingRecord& record,
-                                                     std::string* error) const -> bool {
+                                         std::string*                        error) const -> bool {
   return UpsertImageEmbeddingWithLabel(record, nullptr, error);
 }
 
-auto SemanticStore::UpsertImageEmbeddingWithLabel(
-    const SemanticImageEmbeddingRecord& record, const SemanticImageLabelRecord* label,
-    std::string* error) const -> bool {
+auto SemanticStore::UpsertImageEmbeddingWithLabel(const SemanticImageEmbeddingRecord& record,
+                                                  const SemanticImageLabelRecord*     label,
+                                                  std::string* error) const -> bool {
   auto guard   = database_.GetConnectionGuard();
   auto db_lock = guard.Lock();
   if (record.file_id_ == 0) {
@@ -1170,42 +911,30 @@ auto SemanticStore::UpsertImageEmbeddingWithLabel(
     SetError(error, "Semantic embedding model key is empty.");
     return false;
   }
-  const auto model_dim = ModelEmbeddingDim(guard.conn_, record.model_key_);
-  if (!model_dim.has_value()) {
-    SetError(error, "Semantic model is not registered.");
-    return false;
-  }
-  if (!ValidateEmbedding(record.embedding_, *model_dim, error)) {
-    return false;
-  }
-  if (!ValidateLabel(record, label, error)) {
-    return false;
-  }
-
-  const auto delete_sql = std::format("DELETE FROM {} WHERE file_id = {} AND model_key = {};",
-                                      ImageEmbeddingTableName(*model_dim), record.file_id_,
-                                      SqlString(record.model_key_));
-  const auto delete_label_sql =
-      std::format("DELETE FROM SemanticImageLabel WHERE file_id = {} AND model_key = {};",
-                  record.file_id_, SqlString(record.model_key_));
-  if (!RunQuery(guard.conn_, "BEGIN TRANSACTION;", error)) {
-    return false;
-  }
-  if (!RunQuery(guard.conn_, delete_sql, error) ||
-      !RunQuery(guard.conn_, delete_label_sql, error) ||
-      !InsertReadyImageEmbedding(guard.conn_, record, *model_dim, error)) {
-    std::string rollback_error;
-    RunQuery(guard.conn_, "ROLLBACK;", &rollback_error);
-    return false;
-  }
-  if (label) {
-    if (!InsertSemanticLabel(guard.conn_, *label, error)) {
-      std::string rollback_error;
-      RunQuery(guard.conn_, "ROLLBACK;", &rollback_error);
+  try {
+    const auto model_dim = ModelEmbeddingDim(guard.conn_, record.model_key_);
+    if (!model_dim.has_value()) {
+      SetError(error, "Semantic model is not registered.");
       return false;
     }
+    if (!ValidateEmbedding(record.embedding_, *model_dim, error) ||
+        !ValidateLabel(record, label, error)) {
+      return false;
+    }
+
+    duckorm::Transaction transaction(guard.conn_);
+    DeleteEmbeddingAndLabelRows(guard.conn_, *model_dim, record.model_key_,
+                                std::span<const sl_element_id_t>(&record.file_id_, 1));
+    InsertReadyImageEmbedding(guard.conn_, record, *model_dim);
+    if (label) {
+      InsertSemanticLabel(guard.conn_, *label);
+    }
+    transaction.commit();
+    return true;
+  } catch (const std::exception& e) {
+    SetError(error, e.what());
+    return false;
   }
-  return RunQuery(guard.conn_, "COMMIT;", error);
 }
 
 auto SemanticStore::UpsertImageEmbeddingAndAssignLabel(
@@ -1227,53 +956,42 @@ auto SemanticStore::UpsertImageEmbeddingAndAssignLabel(
     SetError(error, "Semantic embedding model key is empty.");
     return false;
   }
-  const auto model_dim = ModelEmbeddingDim(guard.conn_, record.model_key_);
-  if (!model_dim.has_value()) {
-    SetError(error, "Semantic model is not registered.");
-    return false;
-  }
-  if (!ValidateEmbedding(record.embedding_, *model_dim, error)) {
+  SemanticImageLabelRecord label;
+  try {
+    const auto model_dim = ModelEmbeddingDim(guard.conn_, record.model_key_);
+    if (!model_dim.has_value()) {
+      SetError(error, "Semantic model is not registered.");
+      return false;
+    }
+    if (!ValidateEmbedding(record.embedding_, *model_dim, error)) {
+      return false;
+    }
+
+    duckorm::Transaction transaction(guard.conn_);
+    DeleteEmbeddingAndLabelRows(guard.conn_, *model_dim, record.model_key_,
+                                std::span<const sl_element_id_t>(&record.file_id_, 1));
+    InsertReadyImageEmbedding(guard.conn_, record, *model_dim);
+    label = QueryAssignedLabel(guard.conn_, record, *model_dim, assignment_options);
+    if (!ValidateLabel(record, &label, error)) {
+      return false;
+    }
+    InsertSemanticLabel(guard.conn_, label);
+    transaction.commit();
+  } catch (const std::exception& e) {
+    SetError(error, e.what());
     return false;
   }
 
-  const auto delete_sql = std::format("DELETE FROM {} WHERE file_id = {} AND model_key = {};",
-                                      ImageEmbeddingTableName(*model_dim), record.file_id_,
-                                      SqlString(record.model_key_));
-  const auto delete_label_sql =
-      std::format("DELETE FROM SemanticImageLabel WHERE file_id = {} AND model_key = {};",
-                  record.file_id_, SqlString(record.model_key_));
-  if (!RunQuery(guard.conn_, "BEGIN TRANSACTION;", error)) {
-    return false;
-  }
-  if (!RunQuery(guard.conn_, delete_sql, error) ||
-      !RunQuery(guard.conn_, delete_label_sql, error) ||
-      !InsertReadyImageEmbedding(guard.conn_, record, *model_dim, error)) {
-    std::string rollback_error;
-    RunQuery(guard.conn_, "ROLLBACK;", &rollback_error);
-    return false;
-  }
-
-  auto label = QueryAssignedLabel(guard.conn_, record, *model_dim, assignment_options, error);
-  if (!label.has_value() || !ValidateLabel(record, &*label, error) ||
-      !InsertSemanticLabel(guard.conn_, *label, error)) {
-    std::string rollback_error;
-    RunQuery(guard.conn_, "ROLLBACK;", &rollback_error);
-    return false;
-  }
-
-  if (!RunQuery(guard.conn_, "COMMIT;", error)) {
-    return false;
-  }
   qCInfo(diag::semanticDbLog).noquote()
       << QStringLiteral(
              "semantic.db.embedding.upsert_one.ok file_id=%1 image_id=%2 label=%3 "
              "score=%4")
              .arg(static_cast<qulonglong>(record.file_id_))
              .arg(static_cast<qulonglong>(record.image_id_))
-             .arg(QString::fromStdString(label->label_))
-             .arg(label->score_, 0, 'f', 4);
+             .arg(QString::fromStdString(label.label_))
+             .arg(label.score_, 0, 'f', 4);
   if (assigned_label) {
-    *assigned_label = std::move(*label);
+    *assigned_label = std::move(label);
   }
   return true;
 }
@@ -1295,86 +1013,51 @@ auto SemanticStore::UpsertImageEmbeddingsAndAssignLabels(
                          QStringLiteral("count=%1 ids=%2")
                              .arg(static_cast<qulonglong>(records.size()))
                              .arg(SummarizeEmbeddingRecords(records)));
-  if (assignment_options.prompt_config_hash_.empty()) {
-    SetError(error, "Semantic label assignment prompt config hash is empty.");
-    return false;
-  }
-  if (!std::isfinite(assignment_options.confidence_score_threshold_) ||
-      !std::isfinite(assignment_options.confidence_margin_threshold_)) {
-    SetError(error, "Semantic label assignment threshold contains NaN or infinity.");
-    return false;
-  }
-
-  const auto model_key = records.front().model_key_;
-  if (model_key.empty()) {
-    SetError(error, "Semantic embedding model key is empty.");
-    return false;
-  }
-  const auto model_dim = ModelEmbeddingDim(guard.conn_, model_key);
-  if (!model_dim.has_value()) {
-    SetError(error, "Semantic model is not registered.");
-    return false;
-  }
-  for (const auto& record : records) {
-    if (record.file_id_ == 0) {
-      SetError(error, "Semantic embedding file id is zero.");
-      return false;
-    }
-    if (record.model_key_ != model_key) {
-      SetError(error, "Semantic embedding batch mixes multiple model keys.");
-      return false;
-    }
-    if (!ValidateEmbedding(record.embedding_, *model_dim, error)) {
-      return false;
-    }
-  }
-
-  if (!RunQuery(guard.conn_, "BEGIN TRANSACTION;", error)) {
-    return false;
-  }
-  auto rollback = [&]() {
-    std::string rollback_error;
-    RunQuery(guard.conn_, "ROLLBACK;", &rollback_error);
-  };
-
-  std::string id_list;
-  for (size_t i = 0; i < records.size(); ++i) {
-    if (i > 0) {
-      id_list += ",";
-    }
-    id_list += std::to_string(records[i].file_id_);
-  }
-  const auto delete_embedding_sql =
-      std::format("DELETE FROM {} WHERE model_key = {} AND file_id IN ({});",
-                  ImageEmbeddingTableName(*model_dim), SqlString(model_key), id_list);
-  const auto delete_label_sql =
-      std::format("DELETE FROM SemanticImageLabel WHERE model_key = {} AND file_id IN ({});",
-                  SqlString(model_key), id_list);
-  if (!RunQuery(guard.conn_, delete_embedding_sql, error) ||
-      !RunQuery(guard.conn_, delete_label_sql, error) ||
-      !AppendImageEmbeddingRows(guard.conn_, records, *model_dim, error)) {
-    rollback();
-    return false;
-  }
 
   std::vector<SemanticImageLabelRecord> labels;
-  if (!QueryAssignedLabelsBatch(guard.conn_, records, model_key, *model_dim, assignment_options,
-                                labels, error)) {
-    rollback();
-    return false;
-  }
-  for (size_t i = 0; i < records.size(); ++i) {
-    if (!ValidateLabel(records[i], &labels[i], error)) {
-      rollback();
+  const auto&                           model_key = records.front().model_key_;
+  try {
+    ValidateAssignmentOptions(assignment_options);
+    if (model_key.empty()) {
+      SetError(error, "Semantic embedding model key is empty.");
       return false;
     }
-  }
-  if (!AppendSemanticLabelRows(guard.conn_, labels, error)) {
-    rollback();
-    return false;
-  }
-  if (!RunQuery(guard.conn_, "COMMIT;", error)) {
-    rollback();
+    const auto model_dim = ModelEmbeddingDim(guard.conn_, model_key);
+    if (!model_dim.has_value()) {
+      SetError(error, "Semantic model is not registered.");
+      return false;
+    }
+    std::vector<sl_element_id_t> file_ids;
+    file_ids.reserve(records.size());
+    for (const auto& record : records) {
+      if (record.file_id_ == 0) {
+        SetError(error, "Semantic embedding file id is zero.");
+        return false;
+      }
+      if (record.model_key_ != model_key) {
+        SetError(error, "Semantic embedding batch mixes multiple model keys.");
+        return false;
+      }
+      if (!ValidateEmbedding(record.embedding_, *model_dim, error)) {
+        return false;
+      }
+      file_ids.push_back(record.file_id_);
+    }
+
+    duckorm::Transaction transaction(guard.conn_);
+    DeleteEmbeddingAndLabelRows(guard.conn_, *model_dim, model_key, file_ids);
+    AppendImageEmbeddingRows(guard.conn_, records, *model_dim);
+    labels = QueryAssignedLabelsBatch(guard.conn_, records, file_ids, model_key, *model_dim,
+                                      assignment_options);
+    for (size_t i = 0; i < records.size(); ++i) {
+      if (!ValidateLabel(records[i], &labels[i], error)) {
+        return false;
+      }
+    }
+    AppendSemanticLabelRows(guard.conn_, labels);
+    transaction.commit();
+  } catch (const std::exception& e) {
+    SetError(error, e.what());
     return false;
   }
 
@@ -1390,446 +1073,357 @@ auto SemanticStore::UpsertImageEmbeddingsAndAssignLabels(
 }
 
 auto SemanticStore::UpsertLabelPrototype(const SemanticLabelPrototypeRecord& record,
-                                                     std::string* error) const -> bool {
-  auto guard   = database_.GetConnectionGuard();
-  auto db_lock = guard.Lock();
-  if (record.model_key_.empty()) {
-    SetError(error, "Semantic label prototype model key is empty.");
-    return false;
-  }
-  if (record.label_.empty()) {
-    SetError(error, "Semantic label prototype label is empty.");
-    return false;
-  }
-  if (record.prompt_config_hash_.empty()) {
-    SetError(error, "Semantic label prototype prompt config hash is empty.");
-    return false;
-  }
-  const auto model_dim = ModelEmbeddingDim(guard.conn_, record.model_key_);
-  if (!model_dim.has_value()) {
-    SetError(error, "Semantic model is not registered.");
-    return false;
-  }
-  if (!ValidateEmbedding(record.embedding_, *model_dim, error)) {
-    return false;
-  }
-
-  return UpsertLabelPrototypePrepared(guard.conn_, record, *model_dim, error);
+                                         std::string*                        error) const -> bool {
+  return UpsertLabelPrototypes(std::span<const SemanticLabelPrototypeRecord>(&record, 1), error);
 }
 
-auto SemanticStore::UpsertLabelPrototypes(
-    std::span<const SemanticLabelPrototypeRecord> records, std::string* error) const -> bool {
+auto SemanticStore::UpsertLabelPrototypes(std::span<const SemanticLabelPrototypeRecord> records,
+                                          std::string* error) const -> bool {
   auto guard   = database_.GetConnectionGuard();
   auto db_lock = guard.Lock();
   if (records.empty()) {
     return true;
   }
-  if (!RunQuery(guard.conn_, "BEGIN TRANSACTION;", error)) {
+  try {
+    duckorm::Transaction transaction(guard.conn_);
+    for (const auto& record : records) {
+      if (record.model_key_.empty()) {
+        SetError(error, "Semantic label prototype model key is empty.");
+        return false;
+      }
+      if (record.label_.empty()) {
+        SetError(error, "Semantic label prototype label is empty.");
+        return false;
+      }
+      if (record.prompt_config_hash_.empty()) {
+        SetError(error, "Semantic label prototype prompt config hash is empty.");
+        return false;
+      }
+      const auto model_dim = ModelEmbeddingDim(guard.conn_, record.model_key_);
+      if (!model_dim.has_value()) {
+        SetError(error, "Semantic model is not registered.");
+        return false;
+      }
+      if (!ValidateEmbedding(record.embedding_, *model_dim, error)) {
+        return false;
+      }
+      InsertOrReplaceLabelPrototype(guard.conn_, record, *model_dim);
+    }
+    transaction.commit();
+    return true;
+  } catch (const std::exception& e) {
+    SetError(error, e.what());
     return false;
   }
-  for (const auto& record : records) {
-    if (record.model_key_.empty()) {
-      SetError(error, "Semantic label prototype model key is empty.");
-      std::string rollback_error;
-      RunQuery(guard.conn_, "ROLLBACK;", &rollback_error);
-      return false;
-    }
-    if (record.label_.empty()) {
-      SetError(error, "Semantic label prototype label is empty.");
-      std::string rollback_error;
-      RunQuery(guard.conn_, "ROLLBACK;", &rollback_error);
-      return false;
-    }
-    if (record.prompt_config_hash_.empty()) {
-      SetError(error, "Semantic label prototype prompt config hash is empty.");
-      std::string rollback_error;
-      RunQuery(guard.conn_, "ROLLBACK;", &rollback_error);
-      return false;
-    }
-    const auto model_dim = ModelEmbeddingDim(guard.conn_, record.model_key_);
-    if (!model_dim.has_value()) {
-      SetError(error, "Semantic model is not registered.");
-      std::string rollback_error;
-      RunQuery(guard.conn_, "ROLLBACK;", &rollback_error);
-      return false;
-    }
-    if (!ValidateEmbedding(record.embedding_, *model_dim, error) ||
-        !UpsertLabelPrototypePrepared(guard.conn_, record, *model_dim, error)) {
-      std::string rollback_error;
-      RunQuery(guard.conn_, "ROLLBACK;", &rollback_error);
-      return false;
-    }
-  }
-  return RunQuery(guard.conn_, "COMMIT;", error);
 }
 
 void SemanticStore::DeleteImageEmbeddingsForFiles(
     std::span<const sl_element_id_t> file_ids) const {
   auto guard   = database_.GetConnectionGuard();
   auto db_lock = guard.Lock();
-  if (file_ids.empty()) {
-    return;
-  }
-  const auto ids = IdList(file_ids);
-  RunQuery(guard.conn_,
-           std::format("DELETE FROM SemanticImageEmbedding WHERE file_id IN ({});", ids));
-  RunQuery(guard.conn_,
-           std::format("DELETE FROM SemanticImageEmbedding768 WHERE file_id IN ({});", ids));
-  RunQuery(guard.conn_, std::format("DELETE FROM SemanticImageLabel WHERE file_id IN ({});", ids));
+  DeleteSemanticRowsForFiles(guard.conn_, file_ids);
 }
 
 auto SemanticStore::CountImageEmbeddings(const std::string& model_key) const -> size_t {
-  auto       guard     = database_.GetConnectionGuard();
-  auto       db_lock   = guard.Lock();
-  const auto model_dim = ModelEmbeddingDim(guard.conn_, model_key);
+  const auto model_dim = GetModelEmbeddingDim(model_key);
   if (!model_dim.has_value()) {
     return 0;
   }
-  const auto count = ScalarInt64(
-      guard.conn_, std::format("SELECT COUNT(*) FROM {} WHERE model_key = {};",
-                               ImageEmbeddingTableName(*model_dim), SqlString(model_key)));
-  return count.has_value() ? static_cast<size_t>(*count) : 0U;
+  auto guard   = database_.GetConnectionGuard();
+  auto db_lock = guard.Lock();
+  auto query   = expr::raw(
+      std::format("SELECT COUNT(*) FROM {} WHERE ", ImageEmbeddingTableName(*model_dim)));
+  query.append(ColumnEquals("model_key", model_key));
+  return CountOrZero(guard.conn_, query);
 }
 
 auto SemanticStore::CountImageEmbeddingsForFile(sl_element_id_t    file_id,
-                                                            const std::string& model_key) const
-    -> size_t {
-  auto       guard     = database_.GetConnectionGuard();
-  auto       db_lock   = guard.Lock();
-  const auto model_dim = ModelEmbeddingDim(guard.conn_, model_key);
+                                                const std::string& model_key) const -> size_t {
+  const auto model_dim = GetModelEmbeddingDim(model_key);
   if (!model_dim.has_value()) {
     return 0;
   }
-  const auto count = ScalarInt64(
-      guard.conn_, std::format("SELECT COUNT(*) FROM {} "
-                               "WHERE file_id = {} AND model_key = {};",
-                               ImageEmbeddingTableName(*model_dim), file_id, SqlString(model_key)));
-  return count.has_value() ? static_cast<size_t>(*count) : 0U;
+  auto guard   = database_.GetConnectionGuard();
+  auto db_lock = guard.Lock();
+  auto query   = expr::raw(
+      std::format("SELECT COUNT(*) FROM {} WHERE ", ImageEmbeddingTableName(*model_dim)));
+  query.append(expr::and_({ColumnEquals("file_id", static_cast<int64_t>(file_id)),
+                           ColumnEquals("model_key", model_key)}));
+  return CountOrZero(guard.conn_, query);
 }
 
 auto SemanticStore::HasReadyImageEmbedding(sl_element_id_t file_id, image_id_t image_id,
-                                                       const std::string& model_key,
-                                                       bool require_label) const -> bool {
-  auto       guard     = database_.GetConnectionGuard();
-  auto       db_lock   = guard.Lock();
-  const auto model_dim = ModelEmbeddingDim(guard.conn_, model_key);
+                                           const std::string& model_key,
+                                           bool               require_label) const -> bool {
+  const auto model_dim = GetModelEmbeddingDim(model_key);
   if (!model_dim.has_value()) {
     return false;
   }
-
-  std::string sql = std::format(
-      "SELECT COUNT(*) FROM {} se "
-      "{} "
-      "WHERE se.file_id = {} AND se.image_id = {} AND se.model_key = {} "
-      "AND se.embedding_dim = {} AND se.status = 'ready' AND se.error IS NULL",
-      ImageEmbeddingTableName(*model_dim),
+  auto guard   = database_.GetConnectionGuard();
+  auto db_lock = guard.Lock();
+  auto query   = expr::raw(std::format(
+      "SELECT COUNT(*) FROM {} se {}WHERE ", ImageEmbeddingTableName(*model_dim),
       require_label ? "JOIN SemanticImageLabel sl ON sl.file_id = se.file_id AND "
-                      "sl.model_key = se.model_key"
-                    : "",
-      file_id, image_id, SqlString(model_key), *model_dim);
+                        "sl.model_key = se.model_key "
+                      : ""));
+  query.append(expr::and_({ColumnEquals("se.file_id", static_cast<int64_t>(file_id)),
+                           ColumnEquals("se.image_id", static_cast<int64_t>(image_id)),
+                           ColumnEquals("se.model_key", model_key),
+                           ColumnEquals("se.embedding_dim", static_cast<int64_t>(*model_dim)),
+                           expr::raw("se.status = 'ready' AND se.error IS NULL")}));
   if (require_label) {
-    sql += " AND sl.label IS NOT NULL AND sl.label <> ''";
+    query.append(expr::raw(" AND sl.label IS NOT NULL AND sl.label <> ''"));
   }
-  sql += ";";
-
-  const auto count = ScalarInt64(guard.conn_, sql);
-  return count.has_value() && *count > 0;
+  return CountOrZero(guard.conn_, query) > 0;
 }
 
 auto SemanticStore::CountImageLabelsForFile(sl_element_id_t    file_id,
-                                                        const std::string& model_key) const
-    -> size_t {
-  auto       guard   = database_.GetConnectionGuard();
-  auto       db_lock = guard.Lock();
-  const auto count = ScalarInt64(guard.conn_, std::format("SELECT COUNT(*) FROM SemanticImageLabel "
-                                                          "WHERE file_id = {} AND model_key = {};",
-                                                          file_id, SqlString(model_key)));
-  return count.has_value() ? static_cast<size_t>(*count) : 0U;
+                                            const std::string& model_key) const -> size_t {
+  auto guard   = database_.GetConnectionGuard();
+  auto db_lock = guard.Lock();
+  auto query   = expr::raw("SELECT COUNT(*) FROM SemanticImageLabel WHERE ");
+  query.append(expr::and_({ColumnEquals("file_id", static_cast<int64_t>(file_id)),
+                           ColumnEquals("model_key", model_key)}));
+  return CountOrZero(guard.conn_, query);
 }
 
 auto SemanticStore::CountImageLabelsInFolder(sl_element_id_t    folder_id,
-                                                         const std::string& model_key) const
-    -> size_t {
-  auto guard   = database_.GetConnectionGuard();
-  auto db_lock = guard.Lock();
+                                             const std::string& model_key) const -> size_t {
   if (model_key.empty()) {
     return 0;
   }
-
-  const auto scope = BuildScopedFileQuery(folder_id);
-  const auto count = ScalarInt64(
-      guard.conn_,
-      std::format("SELECT COUNT(*) FROM SemanticImageLabel sl "
-                  "JOIN (SELECT e.id AS file_id {}) scoped ON scoped.file_id = sl.file_id "
-                  "WHERE sl.model_key = {} AND sl.label IS NOT NULL AND sl.label <> '';",
-                  scope.from_where_, SqlString(model_key)));
-  return count.has_value() ? static_cast<size_t>(*count) : 0U;
+  auto       guard   = database_.GetConnectionGuard();
+  auto       db_lock = guard.Lock();
+  const auto scope   = BuildScopedFileQuery(folder_id);
+  auto       query   = expr::raw(std::format(
+      "SELECT COUNT(*) FROM SemanticImageLabel sl "
+                "JOIN (SELECT e.id AS file_id {}) scoped ON scoped.file_id = sl.file_id WHERE ",
+      scope.from_where_));
+  query.append(ColumnEquals("sl.model_key", model_key));
+  query.append(expr::raw(" AND sl.label IS NOT NULL AND sl.label <> ''"));
+  return CountOrZero(guard.conn_, query);
 }
 
 auto SemanticStore::CountLabelPrototypes(const std::string& model_key,
-                                                     const std::string& prompt_config_hash) const
-    -> size_t {
-  auto       guard     = database_.GetConnectionGuard();
-  auto       db_lock   = guard.Lock();
-  const auto model_dim = ModelEmbeddingDim(guard.conn_, model_key);
+                                         const std::string& prompt_config_hash) const -> size_t {
+  const auto model_dim = GetModelEmbeddingDim(model_key);
   if (!model_dim.has_value()) {
     return 0;
   }
-  const auto count =
-      ScalarInt64(guard.conn_, std::format("SELECT COUNT(*) FROM {} "
-                                           "WHERE model_key = {} AND prompt_config_hash = {};",
-                                           LabelPrototypeTableName(*model_dim),
-                                           SqlString(model_key), SqlString(prompt_config_hash)));
-  return count.has_value() ? static_cast<size_t>(*count) : 0U;
+  auto guard   = database_.GetConnectionGuard();
+  auto db_lock = guard.Lock();
+  auto query   = expr::raw(
+      std::format("SELECT COUNT(*) FROM {} WHERE ", LabelPrototypeTableName(*model_dim)));
+  query.append(expr::and_({ColumnEquals("model_key", model_key),
+                           ColumnEquals("prompt_config_hash", prompt_config_hash)}));
+  return CountOrZero(guard.conn_, query);
 }
 
-auto SemanticStore::CountLabelQueries(const std::string& prompt_config_hash) const
-    -> size_t {
-  auto       guard   = database_.GetConnectionGuard();
-  auto       db_lock = guard.Lock();
-  const auto count = ScalarInt64(guard.conn_, std::format("SELECT COUNT(*) FROM SemanticLabelQuery "
-                                                          "WHERE prompt_config_hash = {};",
-                                                          SqlString(prompt_config_hash)));
-  return count.has_value() ? static_cast<size_t>(*count) : 0U;
+auto SemanticStore::CountLabelQueries(const std::string& prompt_config_hash) const -> size_t {
+  auto guard   = database_.GetConnectionGuard();
+  auto db_lock = guard.Lock();
+  auto query   = expr::raw("SELECT COUNT(*) FROM SemanticLabelQuery WHERE ");
+  query.append(ColumnEquals("prompt_config_hash", prompt_config_hash));
+  return CountOrZero(guard.conn_, query);
 }
 
 auto SemanticStore::ListLabelQueries(const std::string& prompt_config_hash,
-                                                 std::string*       error) const
+                                     std::string*       error) const
     -> std::vector<SemanticLabelQueryRecord> {
-  auto                                  guard   = database_.GetConnectionGuard();
-  auto                                  db_lock = guard.Lock();
+  auto guard   = database_.GetConnectionGuard();
+  auto db_lock = guard.Lock();
+  auto query   = expr::raw(
+      "SELECT prompt_config_hash, label, query_text FROM SemanticLabelQuery WHERE ");
+  query.append(ColumnEquals("prompt_config_hash", prompt_config_hash));
+  query.append(expr::raw(" ORDER BY label"));
+  static const std::array<duckorm::DuckFieldDesc, 3> fields = {
+      Column("prompt_config_hash", duckorm::DuckDBType::VARCHAR),
+      Column("label", duckorm::DuckDBType::VARCHAR),
+      Column("query_text", duckorm::DuckDBType::VARCHAR)};
+
   std::vector<SemanticLabelQueryRecord> out;
-  const auto                            sql = std::format(
-      "SELECT prompt_config_hash, label, query_text FROM SemanticLabelQuery "
-                                 "WHERE prompt_config_hash = {} ORDER BY label;",
-      SqlString(prompt_config_hash));
-
-  duckdb_result result;
-  if (duckdb_query(guard.conn_, sql.c_str(), &result) != DuckDBSuccess) {
-    const char* raw_error = duckdb_result_error(&result);
-    SetError(error, raw_error ? raw_error : "DuckDB semantic label query list failed.");
-    duckdb_destroy_result(&result);
-    return out;
+  try {
+    const auto rows = duckorm::select_by_query(guard.conn_, fields, fields.size(), query);
+    out.reserve(rows.size());
+    for (const auto& row : rows) {
+      out.push_back(SemanticLabelQueryRecord{.prompt_config_hash_ = CellString(row[0]),
+                                             .label_              = CellString(row[1]),
+                                             .query_text_         = CellString(row[2])});
+    }
+  } catch (const std::exception& e) {
+    SetError(error, e.what());
+    out.clear();
   }
-
-  const auto row_count = duckdb_row_count(&result);
-  out.reserve(static_cast<size_t>(row_count));
-  for (idx_t r = 0; r < row_count; ++r) {
-    SemanticLabelQueryRecord record;
-    if (char* raw = duckdb_value_varchar(&result, 0, r)) {
-      record.prompt_config_hash_ = raw;
-      duckdb_free(raw);
-    }
-    if (char* raw = duckdb_value_varchar(&result, 1, r)) {
-      record.label_ = raw;
-      duckdb_free(raw);
-    }
-    if (char* raw = duckdb_value_varchar(&result, 2, r)) {
-      record.query_text_ = raw;
-      duckdb_free(raw);
-    }
-    out.push_back(std::move(record));
-  }
-
-  duckdb_destroy_result(&result);
   return out;
 }
 
 auto SemanticStore::LoadLabelPrototypes(const std::string& model_key,
-                                                    const std::string& prompt_config_hash,
-                                                    std::string*       error) const
+                                        const std::string& prompt_config_hash,
+                                        std::string*       error) const
     -> std::vector<SemanticGenerationLabelPrototype> {
   auto                                          guard   = database_.GetConnectionGuard();
   auto                                          db_lock = guard.Lock();
   std::vector<SemanticGenerationLabelPrototype> out;
-  const auto                                    model_dim = ModelEmbeddingDim(guard.conn_, model_key);
-  if (!model_dim.has_value()) {
-    SetError(error, "Semantic model is not registered.");
-    return out;
-  }
-  if (!IsSupportedSemanticEmbeddingDim(*model_dim)) {
-    SetError(error, std::format("Semantic storage does not support {}-dimensional embeddings.",
-                                *model_dim));
-    return out;
-  }
-
-  std::ostringstream columns;
-  for (int i = 1; i <= *model_dim; ++i) {
-    columns << ", embedding[" << i << "]";
-  }
-  const auto sql = std::format(
-      "SELECT label{} FROM {} "
-      "WHERE model_key = {} AND prompt_config_hash = {} ORDER BY label;",
-      columns.str(), LabelPrototypeTableName(*model_dim), SqlString(model_key),
-      SqlString(prompt_config_hash));
-
-  duckdb_result result;
-  if (duckdb_query(guard.conn_, sql.c_str(), &result) != DuckDBSuccess) {
-    const char* raw_error = duckdb_result_error(&result);
-    SetError(error, raw_error ? raw_error : "DuckDB semantic label prototype query failed.");
-    duckdb_destroy_result(&result);
-    return out;
-  }
-
-  const auto row_count = duckdb_row_count(&result);
-  out.reserve(static_cast<size_t>(row_count));
-  for (idx_t r = 0; r < row_count; ++r) {
-    SemanticGenerationLabelPrototype prototype;
-    if (char* raw = duckdb_value_varchar(&result, 0, r)) {
-      prototype.label = raw;
-      duckdb_free(raw);
+  try {
+    const auto model_dim = ModelEmbeddingDim(guard.conn_, model_key);
+    if (!model_dim.has_value()) {
+      SetError(error, "Semantic model is not registered.");
+      return out;
     }
-    prototype.embedding.resize(static_cast<size_t>(*model_dim), 0.0F);
-    for (int i = 0; i < *model_dim; ++i) {
-      prototype.embedding[static_cast<size_t>(i)] =
-          duckdb_value_float(&result, static_cast<idx_t>(i + 1), r);
+    if (!IsSupportedSemanticEmbeddingDim(*model_dim)) {
+      SetError(error, std::format("Semantic storage does not support {}-dimensional embeddings.",
+                                  *model_dim));
+      return out;
     }
-    out.push_back(std::move(prototype));
-  }
 
-  duckdb_destroy_result(&result);
+    // One column for each embedding element: the select decoder has no array type.
+    std::string                         columns;
+    std::vector<duckorm::DuckFieldDesc> fields = {Column("label", duckorm::DuckDBType::VARCHAR)};
+    fields.reserve(static_cast<size_t>(*model_dim) + 1);
+    for (int i = 1; i <= *model_dim; ++i) {
+      columns += std::format(", embedding[{}]", i);
+      fields.push_back(Column("embedding", duckorm::DuckDBType::DOUBLE));
+    }
+    auto query = expr::raw(std::format("SELECT label{} FROM {} WHERE ", columns,
+                                       LabelPrototypeTableName(*model_dim)));
+    query.append(expr::and_({ColumnEquals("model_key", model_key),
+                             ColumnEquals("prompt_config_hash", prompt_config_hash)}));
+    query.append(expr::raw(" ORDER BY label"));
+
+    const auto rows = duckorm::select_by_query(guard.conn_, fields, fields.size(), query);
+    out.reserve(rows.size());
+    for (const auto& row : rows) {
+      SemanticGenerationLabelPrototype prototype;
+      prototype.label = CellString(row[0]);
+      prototype.embedding.resize(static_cast<size_t>(*model_dim), 0.0F);
+      for (int i = 0; i < *model_dim; ++i) {
+        prototype.embedding[static_cast<size_t>(i)] =
+            static_cast<float>(std::get<double>(row[static_cast<size_t>(i) + 1]));
+      }
+      out.push_back(std::move(prototype));
+    }
+  } catch (const std::exception& e) {
+    SetError(error, e.what());
+    out.clear();
+  }
   return out;
 }
 
-auto SemanticStore::GetImageLabelForFile(sl_element_id_t    file_id,
-                                                     const std::string& model_key,
-                                                     std::string*       error) const
+auto SemanticStore::GetImageLabelForFile(sl_element_id_t file_id, const std::string& model_key,
+                                         std::string* error) const
     -> std::optional<SemanticImageLabelRecord> {
-  auto       guard   = database_.GetConnectionGuard();
-  auto       db_lock = guard.Lock();
-  const auto sql     = std::format(
-      "SELECT file_id, model_key, label, score, second_label, second_score, "
-          "margin, confident, top_scores "
-          "FROM SemanticImageLabel WHERE file_id = {} AND model_key = {};",
-      file_id, SqlString(model_key));
-
-  duckdb_result result;
-  if (duckdb_query(guard.conn_, sql.c_str(), &result) != DuckDBSuccess) {
-    const char* raw_error = duckdb_result_error(&result);
-    SetError(error, raw_error ? raw_error : "DuckDB semantic label query failed.");
-    duckdb_destroy_result(&result);
+  auto guard   = database_.GetConnectionGuard();
+  auto db_lock = guard.Lock();
+  auto query   = expr::raw(
+      "SELECT file_id, model_key, label, score, second_label, second_score, margin, confident, "
+        "top_scores FROM SemanticImageLabel WHERE ");
+  query.append(expr::and_({ColumnEquals("file_id", static_cast<int64_t>(file_id)),
+                           ColumnEquals("model_key", model_key)}));
+  static const std::array<duckorm::DuckFieldDesc, 9> fields = {
+      Column("file_id", duckorm::DuckDBType::INT64),
+      Column("model_key", duckorm::DuckDBType::VARCHAR),
+      Column("label", duckorm::DuckDBType::VARCHAR),
+      Column("score", duckorm::DuckDBType::DOUBLE),
+      Column("second_label", duckorm::DuckDBType::NULLABLE_STRING),
+      Column("second_score", duckorm::DuckDBType::NULLABLE_DOUBLE),
+      Column("margin", duckorm::DuckDBType::DOUBLE),
+      Column("confident", duckorm::DuckDBType::BOOLEAN),
+      Column("top_scores", duckorm::DuckDBType::NULLABLE_STRING)};
+  try {
+    const auto rows = duckorm::select_by_query(guard.conn_, fields, fields.size(), query);
+    if (rows.empty()) {
+      return std::nullopt;
+    }
+    const auto&              row = rows.front();
+    SemanticImageLabelRecord record;
+    record.file_id_         = static_cast<sl_element_id_t>(std::get<int64_t>(row[0]));
+    record.model_key_       = CellString(row[1]);
+    record.label_           = CellString(row[2]);
+    record.score_           = std::get<double>(row[3]);
+    record.second_label_    = CellString(row[4]);
+    record.second_score_    = std::get<std::optional<double>>(row[5]);
+    record.margin_          = std::get<double>(row[6]);
+    record.confident_       = CellBool(row[7]);
+    record.top_scores_json_ = CellString(row[8]);
+    return record;
+  } catch (const std::exception& e) {
+    SetError(error, e.what());
     return std::nullopt;
   }
-
-  if (duckdb_row_count(&result) == 0) {
-    duckdb_destroy_result(&result);
-    return std::nullopt;
-  }
-
-  SemanticImageLabelRecord record;
-  record.file_id_ = static_cast<sl_element_id_t>(duckdb_value_int64(&result, 0, 0));
-  if (char* raw = duckdb_value_varchar(&result, 1, 0)) {
-    record.model_key_ = raw;
-    duckdb_free(raw);
-  }
-  if (char* raw = duckdb_value_varchar(&result, 2, 0)) {
-    record.label_ = raw;
-    duckdb_free(raw);
-  }
-  record.score_ = duckdb_value_double(&result, 3, 0);
-  if (!duckdb_value_is_null(&result, 4, 0)) {
-    if (char* raw = duckdb_value_varchar(&result, 4, 0)) {
-      record.second_label_ = raw;
-      duckdb_free(raw);
-    }
-  }
-  if (!duckdb_value_is_null(&result, 5, 0)) {
-    record.second_score_ = duckdb_value_double(&result, 5, 0);
-  }
-  record.margin_    = duckdb_value_double(&result, 6, 0);
-  record.confident_ = duckdb_value_boolean(&result, 7, 0);
-  if (!duckdb_value_is_null(&result, 8, 0)) {
-    if (char* raw = duckdb_value_varchar(&result, 8, 0)) {
-      record.top_scores_json_ = raw;
-      duckdb_free(raw);
-    }
-  }
-
-  duckdb_destroy_result(&result);
-  return record;
 }
 
-auto SemanticStore::SearchImageEmbeddings(
-    sl_element_id_t folder_id, const std::string& model_key, std::span<const float> query_embedding,
-    size_t offset, size_t limit, std::string* error) const -> std::vector<SemanticRankedFile> {
-  auto                            guard   = database_.GetConnectionGuard();
-  auto                            db_lock = guard.Lock();
-  diag::TraceScope                trace(diag::semanticDbLog(), QStringLiteral("semantic.db.search"),
-                                        QStringLiteral("folder_id=%1 model_key=%2 offset=%3 limit=%4 dim=%5")
-                                            .arg(static_cast<qulonglong>(folder_id))
-                                            .arg(QString::fromStdString(model_key))
-                                            .arg(static_cast<qulonglong>(offset))
-                                            .arg(static_cast<qulonglong>(limit))
-                                            .arg(static_cast<qulonglong>(query_embedding.size())));
-  std::vector<SemanticRankedFile> out;
+auto SemanticStore::SearchImageEmbeddings(sl_element_id_t folder_id, const std::string& model_key,
+                                          std::span<const float> query_embedding, size_t offset,
+                                          size_t limit, std::string* error) const
+    -> std::vector<SemanticRankedFile> {
+  auto             guard   = database_.GetConnectionGuard();
+  auto             db_lock = guard.Lock();
+  diag::TraceScope trace(diag::semanticDbLog(), QStringLiteral("semantic.db.search"),
+                         QStringLiteral("folder_id=%1 model_key=%2 offset=%3 limit=%4 dim=%5")
+                             .arg(static_cast<qulonglong>(folder_id))
+                             .arg(QString::fromStdString(model_key))
+                             .arg(static_cast<qulonglong>(offset))
+                             .arg(static_cast<qulonglong>(limit))
+                             .arg(static_cast<qulonglong>(query_embedding.size())));
   if (limit == 0) {
-    return out;
+    return {};
   }
-  const auto model_dim = ModelEmbeddingDim(guard.conn_, model_key);
+  const auto model_dim = GetModelEmbeddingDim(model_key);
   if (!model_dim.has_value()) {
     SetError(error, "Semantic model is not registered.");
-    return out;
+    return {};
   }
   if (!ValidateEmbedding(query_embedding, *model_dim, error)) {
-    return out;
+    return {};
   }
   if (!EnsureVectorSearchIndex(model_key, error)) {
-    return out;
+    return {};
   }
 
-  const auto scope           = BuildScopedFileQuery(folder_id);
-  const auto query_literal   = SqlFloatArrayLiteral(query_embedding);
-  const auto candidate_limit = RequestedCandidateLimit(offset, limit);
-  const auto sql             = std::format(
-      "WITH nearest AS ("
-                  "SELECT se.file_id, se.image_id, "
-                  "array_distance(se.embedding, {}) AS distance "
-                  "FROM {} se "
-                  "WHERE se.model_key = {} AND se.status = 'ready' AND se.embedding_dim = {} "
-                  "ORDER BY array_distance(se.embedding, {}) ASC "
-                  "LIMIT {}"
-                  "), "
-                  "scoped AS ("
-                  "SELECT e.id AS file_id, fi.image_id AS image_id, e.element_name AS file_name "
-                  "{}), "
-                  "ranked AS ("
-                  "SELECT scoped.file_id, scoped.image_id, scoped.file_name, "
-                  "1.0 - ((nearest.distance * nearest.distance) / 2.0) AS score "
-                  "FROM nearest "
-                  "JOIN scoped ON scoped.file_id = nearest.file_id "
-                  "AND scoped.image_id = nearest.image_id "
-                  ") "
-                  "SELECT file_id, image_id, file_name, score "
-                  "FROM ranked "
-                  "ORDER BY score DESC, file_id;",
-      query_literal, ImageEmbeddingTableName(*model_dim), SqlString(model_key), *model_dim,
-      query_literal, candidate_limit, scope.from_where_);
+  // The query vector is an array literal: DuckDB binds here have no array type.
+  const auto scope         = BuildScopedFileQuery(folder_id);
+  const auto query_literal = expr::lit_float_array(query_embedding);
+  auto       query         = expr::raw(
+      "WITH nearest AS (SELECT se.file_id, se.image_id, array_distance(se.embedding, ");
+  query.append(query_literal);
+  query.append(expr::raw(
+      std::format(") AS distance FROM {} se WHERE ", ImageEmbeddingTableName(*model_dim))));
+  query.append(ColumnEquals("se.model_key", model_key));
+  query.append(expr::raw(std::format(
+      " AND se.status = 'ready' AND se.embedding_dim = {} ORDER BY array_distance(se.embedding, ",
+      *model_dim)));
+  query.append(query_literal);
+  query.append(expr::raw(std::format(
+      ") ASC LIMIT {}), "
+      "scoped AS (SELECT e.id AS file_id, fi.image_id AS image_id, e.element_name AS file_name "
+      "{}), "
+      "ranked AS (SELECT scoped.file_id, scoped.image_id, scoped.file_name, "
+      "1.0 - ((nearest.distance * nearest.distance) / 2.0) AS score "
+      "FROM nearest JOIN scoped ON scoped.file_id = nearest.file_id "
+      "AND scoped.image_id = nearest.image_id) "
+      "SELECT file_id, image_id, file_name, score FROM ranked ORDER BY score DESC, file_id",
+      RequestedCandidateLimit(offset, limit), scope.from_where_)));
 
-  duckdb_result result;
-  if (duckdb_query(guard.conn_, sql.c_str(), &result) != DuckDBSuccess) {
-    const char* raw_error = duckdb_result_error(&result);
-    SetError(error, raw_error ? raw_error : "DuckDB semantic search failed.");
-    duckdb_destroy_result(&result);
-    return out;
-  }
-
-  const auto                      row_count = duckdb_row_count(&result);
+  static const std::array<duckorm::DuckFieldDesc, 4> fields = {
+      Column("file_id", duckorm::DuckDBType::INT64), Column("image_id", duckorm::DuckDBType::INT64),
+      Column("file_name", duckorm::DuckDBType::VARCHAR),
+      Column("score", duckorm::DuckDBType::DOUBLE)};
   std::vector<SemanticRankedFile> candidates;
-  candidates.reserve(static_cast<size_t>(row_count));
-  for (idx_t r = 0; r < row_count; ++r) {
-    SemanticRankedFile row;
-    row.file_id_   = static_cast<sl_element_id_t>(duckdb_value_int64(&result, 0, r));
-    row.image_id_  = static_cast<image_id_t>(duckdb_value_int64(&result, 1, r));
-    char* name_raw = duckdb_value_varchar(&result, 2, r);
-    if (name_raw) {
-      row.file_name_ = name_raw;
-      duckdb_free(name_raw);
+  try {
+    const auto rows = duckorm::select_by_query(guard.conn_, fields, fields.size(), query);
+    candidates.reserve(rows.size());
+    for (const auto& row : rows) {
+      candidates.push_back(
+          SemanticRankedFile{.file_id_   = static_cast<sl_element_id_t>(std::get<int64_t>(row[0])),
+                             .image_id_  = static_cast<image_id_t>(std::get<int64_t>(row[1])),
+                             .file_name_ = CellString(row[2]),
+                             .score_     = std::get<double>(row[3])});
     }
-    row.score_ = duckdb_value_double(&result, 3, r);
-    candidates.push_back(std::move(row));
+  } catch (const std::exception& e) {
+    SetError(error, e.what());
+    return {};
   }
 
-  duckdb_destroy_result(&result);
   const auto raw_count = candidates.size();
   auto       page      = FilterAndPageSemanticCandidates(std::move(candidates), offset, limit);
   qCInfo(diag::semanticDbLog).noquote()
@@ -1846,10 +1440,8 @@ auto SemanticStore::SearchImageEmbeddings(
 }
 
 auto SemanticStore::EnsureVectorSearchIndex(const std::string& model_key,
-                                                        std::string*       error) const -> bool {
-  auto       guard     = database_.GetConnectionGuard();
-  auto       db_lock   = guard.Lock();
-  const auto model_dim = ModelEmbeddingDim(guard.conn_, model_key);
+                                            std::string*       error) const -> bool {
+  const auto model_dim = GetModelEmbeddingDim(model_key);
   if (!model_dim.has_value()) {
     SetError(error, "Semantic model is not registered.");
     return false;
@@ -1859,17 +1451,22 @@ auto SemanticStore::EnsureVectorSearchIndex(const std::string& model_key,
                                 *model_dim));
     return false;
   }
+  auto guard   = database_.GetConnectionGuard();
+  auto db_lock = guard.Lock();
   if (!LoadPackagedDuckDbExtension(guard.conn_, "vss", error)) {
     return false;
   }
-  if (!RunQuery(guard.conn_, "SET hnsw_enable_experimental_persistence = true;", error)) {
+  try {
+    duckorm::execute(guard.conn_, expr::raw("SET hnsw_enable_experimental_persistence = true;"));
+    duckorm::execute(guard.conn_,
+                     expr::raw(std::format("CREATE INDEX IF NOT EXISTS {} ON {} USING HNSW "
+                                           "(embedding);",
+                                           ImageEmbeddingIndexName(*model_dim),
+                                           ImageEmbeddingTableName(*model_dim))));
+    return true;
+  } catch (const std::exception& e) {
+    SetError(error, e.what());
     return false;
   }
-  return RunQuery(
-      guard.conn_,
-      std::format("CREATE INDEX IF NOT EXISTS {} "
-                  "ON {} USING HNSW (embedding);",
-                  ImageEmbeddingIndexName(*model_dim), ImageEmbeddingTableName(*model_dim)),
-      error);
 }
 }  // namespace alcedo
