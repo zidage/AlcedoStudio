@@ -8,12 +8,17 @@
 #include <cstdint>
 #include <cwctype>
 #include <format>
+#include <initializer_list>
 #include <memory>
 #include <optional>
 #include <sstream>
+#include <string>
+#include <string_view>
+#include <vector>
 
 #include "storage/store/semantic/semantic_label_config.hpp"
 #include "utils/string/convert.hpp"
+#include "utils/string/search_text.hpp"
 
 namespace alcedo {
 namespace {
@@ -33,17 +38,10 @@ auto TrimCopy(std::wstring value) -> std::wstring {
   return std::wstring(first, last);
 }
 
-auto WStringToUtf8(const std::wstring& value) -> std::optional<std::string> {
-  try {
-    return conv::ToBytes(value);
-  } catch (...) {
-    return std::nullopt;
-  }
-}
-
-// Fuzzy-search clauses are composed from duckorm expr fragments.
-// Fixed DuckDB function shapes (contains / json_extract / REPLACE / BM25) stay
-// behind expr::raw; every user text value goes through expr::param (prepared binds).
+// Fuzzy-search clauses are composed from duckorm expr fragments. Search reads the typed and
+// folded search columns that the Image mapper and the AI store write (Decision D3 of
+// library_search_and_project_size_plan.md): no json_extract, no metadata cast, and no
+// separator folding in SQL. Every user text value goes through expr::param (prepared binds).
 
 auto LitW(const std::wstring& value) -> duckorm::SqlFragment {
   return duckorm::expr::param(conv::ToBytes(value));
@@ -82,212 +80,116 @@ auto ContainsClause(duckorm::SqlFragment field, const std::wstring& token)
   return expr::or_({std::move(plain), std::move(folded)});
 }
 
-auto StripSearchSeparators(std::wstring value) -> std::wstring {
-  std::wstring out;
-  out.reserve(value.size());
-  for (const auto ch : value) {
-    switch (ch) {
-      case L' ':
-      case L'\t':
-      case L'\n':
-      case L'\r':
-      case L'_':
-      case L'-':
-      case L'.':
-      case L'/':
-      case L'\\':
-      case L':':
-      case L';':
-      case L',':
-      case L'\'':
-      case L'"':
-      case L'(':
-      case L')':
-      case L'[':
-      case L']':
-      case L'{':
-      case L'}':
-      case L'%':
-      case L'*':
-      case L'?':
-      case L'!':
-      case L'@':
-      case L'#':
-      case L'$':
-      case L'&':
-      case L'+':
-      case L'=':
-      case L'|':
-      case L'`':
-      case L'~':
-        break;
-      default:
-        out.push_back(static_cast<wchar_t>(std::towlower(ch)));
-        break;
-    }
-  }
-  return out;
+/// `contains(COALESCE(column, ''), folded_token)` for a folded search text column. The
+/// column is already folded at write time, so the token is folded here with the same
+/// FoldSearchText and compared as is.
+auto FoldedColumnContains(std::string_view column, const std::wstring& folded_token)
+    -> duckorm::SqlFragment {
+  auto clause = duckorm::expr::raw("contains(COALESCE(" + std::string(column) + ", ''), ");
+  clause.append(LitW(folded_token));
+  clause.append(duckorm::expr::raw(")"));
+  return clause;
 }
 
-auto FoldSqlSearchSeparators(duckorm::SqlFragment expression) -> duckorm::SqlFragment {
-  namespace expr = duckorm::expr;
-
-  static constexpr std::wstring_view kSeparators[] = {
-      L" ", L"\t", L"\n", L"\r", L"_", L"-", L".", L"/", L"\\", L":", L";",
-      L",", L"'",  L"\"", L"(",  L")", L"[", L"]", L"{", L"}",  L"%", L"*",
-      L"?", L"!",  L"@",  L"#",  L"$", L"&", L"+", L"=", L"|",  L"`", L"~",
-  };
-
-  auto folded = expr::raw("LOWER(COALESCE(");
-  folded.append(std::move(expression));
-  folded.append(expr::raw(", ''))"));
-  for (const auto separator : kSeparators) {
-    auto replaced = expr::raw("REPLACE(");
-    replaced.append(folded);
-    replaced.append(expr::raw(", "));
-    replaced.append(LitW(std::wstring(separator)));
-    replaced.append(expr::raw(", '')"));
-    folded = std::move(replaced);
+/// Folded form of a query token for the search text columns, or std::nullopt when the token
+/// must match literally. A token with `%`, `*`, `?`, `'`, or `"` is taken as typed (these are
+/// not name separators the user wants to skip), and a token that is mostly separators would
+/// fold to too little text to be selective. Such tokens still match the literal clauses.
+auto FoldedTokenForColumns(const std::wstring& token) -> std::optional<std::wstring> {
+  if (token.find_first_of(L"%*?'\"") != std::wstring::npos) {
+    return std::nullopt;
+  }
+  auto folded = FoldSearchText(token);
+  if (folded.empty() || folded.size() < token.size() / 2) {
+    return std::nullopt;
   }
   return folded;
 }
 
-auto SemanticLabelExpr(const std::string& active_model_key) -> duckorm::SqlFragment {
+/// Folded search text columns that the enabled field groups can match. `i.` columns are
+/// written by ImageMapper; `u.` columns come from the AI understanding join in
+/// BuildScopedFileQuery.
+auto SearchTextColumns(SearchFieldMask mask) -> std::vector<std::string_view> {
+  std::vector<std::string_view> columns;
+  if (mask & SearchField::Filename) {
+    columns.push_back("i.file_search_text");
+  }
+  if (mask & SearchField::Exif) {
+    columns.push_back("i.exif_search_text");
+  }
+  if (mask & SearchField::AiDescription) {
+    columns.push_back("u.caption_search_text");
+  }
+  if (mask & SearchField::AiTags) {
+    columns.push_back("u.tags_search_text");
+  }
+  return columns;
+}
+
+/**
+ * @brief Match the CLIP semantic labels of a file against one query term.
+ *
+ * Query-side alias expansion: a label definition matches when the folded term is part of one
+ * of its folded aliases (canonical, English, or Chinese label). The clause is
+ * `EXISTS (SELECT 1 FROM SemanticImageLabel sl WHERE sl.file_id = e.id AND
+ * sl.model_key = ? AND (LOWER(sl.label) IN (LOWER(?), ...) OR contains(LOWER(sl.label),
+ * LOWER(?))))`. The IN list holds every alias of every matched definition, because a stored
+ * label can be any alias. The `contains` term matches a stored label that no definition
+ * lists. Returns std::nullopt when no semantic model is active.
+ */
+auto SemanticLabelClause(const std::wstring& term, const std::string& active_model_key)
+    -> std::optional<duckorm::SqlFragment> {
   namespace expr = duckorm::expr;
 
   if (active_model_key.empty()) {
-    return expr::lit("");
+    return std::nullopt;
   }
-  auto alias_case = expr::raw("CASE");
-  for (const auto& label : DefaultSemanticPhotographyLabelDefinitions()) {
-    const auto canonical = conv::FromBytes(label.canonical_label);
-    const auto en        = conv::FromBytes(label.english_label);
-    const auto zh        = conv::FromBytes(label.chinese_label);
-    const auto aliases = expr::lit(conv::ToBytes(canonical + L" " + en + L" " + zh));
-    for (const auto& variant : {canonical, en, zh}) {
-      auto when = expr::raw(" WHEN LOWER(sl.label) = LOWER(");
-      when.append(expr::lit(conv::ToBytes(variant)));
-      when.append(expr::raw(") THEN "));
-      when.append(aliases);
-      alias_case.append(std::move(when));
+  const auto                        folded_term = FoldSearchText(term);
+
+  std::vector<duckorm::SqlFragment> label_terms;
+  if (!folded_term.empty()) {
+    std::vector<duckorm::SqlFragment> alias_values;
+    for (const auto& label : DefaultSemanticPhotographyLabelDefinitions()) {
+      const auto canonical = conv::FromBytes(label.canonical_label);
+      const auto en        = conv::FromBytes(label.english_label);
+      const auto zh        = conv::FromBytes(label.chinese_label);
+      const bool matched   = std::ranges::any_of(
+          std::initializer_list<std::wstring>{canonical, en, zh},
+          [&folded_term](const std::wstring& alias) {
+            return FoldSearchText(alias).find(folded_term) != std::wstring::npos;
+          });
+      if (!matched) {
+        continue;
+      }
+      for (const auto& alias : {canonical, en, zh}) {
+        auto lower_alias = expr::raw("LOWER(");
+        lower_alias.append(LitW(alias));
+        lower_alias.append(expr::raw(")"));
+        alias_values.push_back(std::move(lower_alias));
+      }
+    }
+    if (!alias_values.empty()) {
+      auto in_list = expr::raw("(LOWER(sl.label) IN (");
+      for (size_t i = 0; i < alias_values.size(); ++i) {
+        if (i > 0) {
+          in_list.append(expr::raw(", "));
+        }
+        in_list.append(std::move(alias_values[i]));
+      }
+      in_list.append(expr::raw("))"));
+      label_terms.push_back(std::move(in_list));
     }
   }
-  alias_case.append(expr::raw(" ELSE sl.label END"));
+  auto lower_term = expr::raw("contains(LOWER(sl.label), LOWER(");
+  lower_term.append(LitW(term));
+  lower_term.append(expr::raw("))"));
+  label_terms.push_back(std::move(lower_term));
 
-  auto subquery = expr::raw("(SELECT string_agg(");
-  subquery.append(std::move(alias_case));
-  subquery.append(expr::raw(
-      ", ' ') FROM SemanticImageLabel sl WHERE sl.file_id = e.id AND sl.model_key = "));
-  subquery.append(expr::lit(active_model_key));
-  subquery.append(expr::raw(")"));
-  return subquery;
-}
-
-// Phase 5f: active AI image understanding (caption + tags + scene) participates in
-// full-text search; the remote LLM rating does NOT (it is a subjective 1..5 score
-// exposed for sort/filter only). This is a correlated subquery against the outer
-// `Element e` row (e.id is the file id / inode the AI rows bind to). tags_json is a JSON
-// array string (e.g. ["sahara","dunes"]); it is concatenated raw and the search
-// separator-folding (FoldSqlSearchSeparators) strips the JSON syntax characters so the
-// tag words become searchable. string_agg over zero rows is NULL, so COALESCE turns a
-// file with no AI understanding into an empty document contribution. Only
-// active-for-search rows participate, so a failed/partial remote call that was never
-// persisted (or a deactivated row) cannot surface in search.
-// Phase 5f's AI understanding is split so the search-settings drawer can scope to
-// "AI description" (caption + scene — the descriptive prose) independently of
-// "AI tags" (the tags_json array). Each is a correlated subquery against the
-// outer `Element e` row (e.id is the file id / inode the AI rows bind to).
-// string_agg over zero active rows is NULL, so COALESCE at the call site turns
-// a file with no AI understanding into an empty contribution. Only
-// active-for-search rows participate, so a failed/partial remote call that was
-// never persisted (or a deactivated row) cannot surface in search.
-auto AiCaptionExpr() -> duckorm::SqlFragment {
-  return duckorm::expr::raw(
-      "(SELECT string_agg(u.caption || ' ' || u.scene, ' ') "
-      "FROM AiImageUnderstanding u WHERE u.file_id = e.id AND u.active = TRUE)");
-}
-auto AiTagsExpr() -> duckorm::SqlFragment {
-  return duckorm::expr::raw(
-      "(SELECT string_agg(u.tags_json, ' ') "
-      "FROM AiImageUnderstanding u WHERE u.file_id = e.id AND u.active = TRUE)");
-}
-
-// Concatenates the enabled field groups into one search document. The folded
-// separator-match path and the whole-query LIKE both run against this. When no
-// field is enabled the result is the empty string; callers guard mask == 0
-// before reaching here so the empty-document case never reaches SQL.
-auto SearchDocumentExpr(const std::string& active_model_key, SearchFieldMask mask)
-    -> duckorm::SqlFragment {
-  namespace expr = duckorm::expr;
-
-  std::vector<duckorm::SqlFragment> parts;
-  if (mask & SearchField::Filename) {
-    parts.push_back(expr::raw("COALESCE(e.element_name, '')"));
-    parts.push_back(expr::raw("COALESCE(i.file_name, '')"));
-    parts.push_back(expr::raw("COALESCE(i.image_path, '')"));
-  }
-  if (mask & SearchField::Exif) {
-    parts.push_back(expr::raw("COALESCE(json_extract_string(i.metadata, '$.Make'), '')"));
-    parts.push_back(expr::raw("COALESCE(json_extract_string(i.metadata, '$.Model'), '')"));
-    parts.push_back(expr::raw("COALESCE(json_extract_string(i.metadata, '$.Lens'), '')"));
-    parts.push_back(expr::raw("COALESCE(json_extract_string(i.metadata, '$.LensMake'), '')"));
-    parts.push_back(expr::raw("COALESCE(json_extract_string(i.metadata, '$.DateTimeString'), '')"));
-    parts.push_back(expr::raw("COALESCE(CAST(i.metadata AS VARCHAR), '')"));
-  }
-  if (mask & SearchField::AiDescription) {
-    auto part = expr::raw("COALESCE(");
-    part.append(AiCaptionExpr());
-    part.append(expr::raw(", '')"));
-    parts.push_back(std::move(part));
-  }
-  if (mask & SearchField::AiTags) {
-    auto semantic_part = expr::raw("COALESCE(");
-    semantic_part.append(SemanticLabelExpr(active_model_key));
-    semantic_part.append(expr::raw(", '')"));
-    parts.push_back(std::move(semantic_part));
-
-    auto ai_tags_part = expr::raw("COALESCE(");
-    ai_tags_part.append(AiTagsExpr());
-    ai_tags_part.append(expr::raw(", '')"));
-    parts.push_back(std::move(ai_tags_part));
-  }
-  if (parts.empty()) {
-    return expr::lit("");
-  }
-
-  auto concat = expr::raw("CONCAT_WS(' ', ");
-  for (size_t i = 0; i < parts.size(); ++i) {
-    if (i > 0) {
-      concat.append(expr::raw(", "));
-    }
-    concat.append(parts[i]);
-  }
-  concat.append(expr::raw(")"));
-  return concat;
-}
-
-auto FoldedDocumentClause(const std::wstring& token, const std::string& active_model_key,
-                           SearchFieldMask mask) -> std::optional<duckorm::SqlFragment> {
-  namespace expr = duckorm::expr;
-
-  if (mask == 0) {
-    return std::nullopt;
-  }
-  if (token.find(L'%') != std::wstring::npos || token.find(L'*') != std::wstring::npos ||
-      token.find(L'?') != std::wstring::npos || token.find(L'\'') != std::wstring::npos ||
-      token.find(L'"') != std::wstring::npos) {
-    return std::nullopt;
-  }
-
-  const auto folded_token = StripSearchSeparators(token);
-  if (folded_token.size() < 2 || folded_token.size() < token.size() / 2) {
-    return std::nullopt;
-  }
-
-  const auto folded_doc = FoldSqlSearchSeparators(SearchDocumentExpr(active_model_key, mask));
-  const auto pattern =
-      expr::lit("%" + expr::escape_like_pattern(conv::ToBytes(folded_token)) + "%");
-  return expr::like_escape(folded_doc, pattern);
+  auto subquery = expr::raw("SELECT 1 FROM SemanticImageLabel sl WHERE ");
+  subquery.append(expr::and_({expr::eq(expr::col("sl.file_id"), expr::col("e.id")),
+                              expr::eq(expr::col("sl.model_key"), expr::param(active_model_key)),
+                              expr::or_(label_terms)}));
+  return expr::exists(std::move(subquery));
 }
 
 auto SplitTokens(const std::wstring& query) -> std::vector<std::wstring> {
@@ -364,10 +266,7 @@ auto NextMonthStart(int year, int month) -> std::wstring {
   return DateLiteral(year, month + 1, 1);
 }
 
-auto DateColumn() -> duckorm::SqlFragment {
-  return duckorm::expr::raw(
-      "TRY_CAST(json_extract_string(i.metadata, '$.DateTimeString') AS DATE)");
-}
+auto DateColumn() -> duckorm::SqlFragment { return duckorm::expr::raw("i.capture_date"); }
 
 auto DateValue(int year, int month, int day) -> duckorm::SqlFragment {
   return duckorm::expr::raw(
@@ -429,8 +328,7 @@ auto DateMatchClauses(const std::wstring& token) -> std::vector<duckorm::SqlFrag
     add_year(groups[0]);
   }
 
-  clauses.push_back(ContainsClause(
-      expr::raw("json_extract_string(i.metadata, '$.DateTimeString')"), token));
+  // The date text itself is matched through the folded `i.exif_search_text` column.
   return clauses;
 }
 
@@ -438,80 +336,55 @@ auto TokenSearchClause(const std::wstring& token, const std::string& active_mode
                        SearchFieldMask mask) -> duckorm::SqlFragment {
   namespace expr = duckorm::expr;
 
-  std::vector<std::wstring> search_terms{token};
-  if (const auto token_u8 = WStringToUtf8(token); token_u8.has_value()) {
-    if (const auto canonical = CanonicalSemanticLabel(*token_u8); canonical.has_value()) {
-      const auto canonical_w = conv::FromBytes(*canonical);
-      if (std::ranges::find(search_terms, canonical_w) == search_terms.end()) {
-        search_terms.push_back(canonical_w);
-      }
-      for (const auto& alias : SemanticLabelAliases(*canonical)) {
-        const auto alias_w = conv::FromBytes(alias);
-        if (std::ranges::find(search_terms, alias_w) == search_terms.end()) {
-          search_terms.push_back(alias_w);
-        }
-      }
+  std::vector<duckorm::SqlFragment> clauses;
+  if (const auto folded_token = FoldedTokenForColumns(token); folded_token.has_value()) {
+    for (const auto column : SearchTextColumns(mask)) {
+      clauses.push_back(FoldedColumnContains(column, *folded_token));
     }
   }
-
-  std::vector<duckorm::SqlFragment> clauses;
   if (mask & SearchField::Filename) {
+    // Literal matches for a token that is not folded (for example `100%_`). The Element name
+    // is not an Image column; a renamed library file keeps its own name.
     clauses.push_back(ContainsClause(expr::raw("e.element_name"), token));
     clauses.push_back(ContainsClause(expr::raw("i.file_name"), token));
-    clauses.push_back(ContainsClause(expr::raw("i.image_path"), token));
   }
   if (mask & SearchField::Exif) {
-    clauses.push_back(ContainsClause(expr::raw("json_extract_string(i.metadata, '$.Make')"), token));
-    clauses.push_back(
-        ContainsClause(expr::raw("json_extract_string(i.metadata, '$.Model')"), token));
-    clauses.push_back(
-        ContainsClause(expr::raw("json_extract_string(i.metadata, '$.Lens')"), token));
-    clauses.push_back(
-        ContainsClause(expr::raw("json_extract_string(i.metadata, '$.LensMake')"), token));
-    clauses.push_back(ContainsClause(expr::raw("CAST(i.metadata AS VARCHAR)"), token));
-    clauses.push_back(
-        ContainsClause(expr::raw("CAST(json_extract(i.metadata, '$.ISO') AS VARCHAR)"), token));
-    clauses.push_back(
-        ContainsClause(expr::raw("CAST(json_extract(i.metadata, '$.FocalLength') AS VARCHAR)"),
-                       token));
-    clauses.push_back(
-        ContainsClause(expr::raw("CAST(json_extract(i.metadata, '$.Aperture') AS VARCHAR)"),
-                       token));
+    clauses.push_back(ContainsClause(expr::raw("i.camera_make"), token));
+    clauses.push_back(ContainsClause(expr::raw("i.camera_model"), token));
+    clauses.push_back(ContainsClause(expr::raw("i.lens"), token));
+    clauses.push_back(ContainsClause(expr::raw("CAST(i.iso AS VARCHAR)"), token));
+    clauses.push_back(ContainsClause(expr::raw("CAST(i.focal_mm AS VARCHAR)"), token));
+    clauses.push_back(ContainsClause(expr::raw("CAST(i.aperture AS VARCHAR)"), token));
     auto date_clauses = DateMatchClauses(token);
     clauses.insert(clauses.end(), std::make_move_iterator(date_clauses.begin()),
                    std::make_move_iterator(date_clauses.end()));
   }
-  if (mask & SearchField::AiDescription) {
-    clauses.push_back(ContainsClause(AiCaptionExpr(), token));
-  }
   if (mask & SearchField::AiTags) {
-    clauses.push_back(ContainsClause(AiTagsExpr(), token));
-    if (!active_model_key.empty()) {
-      for (const auto& term : search_terms) {
-        clauses.push_back(ContainsClause(SemanticLabelExpr(active_model_key), term));
-      }
+    if (auto label_clause = SemanticLabelClause(token, active_model_key);
+        label_clause.has_value()) {
+      clauses.push_back(std::move(*label_clause));
     }
   }
-
-  if (auto folded_clause = FoldedDocumentClause(token, active_model_key, mask);
-      folded_clause.has_value()) {
-    clauses.push_back(std::move(*folded_clause));
+  if (clauses.empty()) {
+    return expr::raw("1=0");
   }
-
   return expr::or_(clauses);
 }
 
-auto SearchDocumentClause(const std::wstring& query, const std::string& active_model_key,
-                          SearchFieldMask mask) -> duckorm::SqlFragment {
+// Whole-query alternative for a multi-token query: the folded query (separators and spaces
+// removed) is part of one enabled search text column, so `P263 5860` matches `P2635860.RW2`.
+auto SearchDocumentClause(const std::wstring& query, SearchFieldMask mask) -> duckorm::SqlFragment {
   namespace expr = duckorm::expr;
 
   std::vector<duckorm::SqlFragment> clauses;
-  if (mask != 0) {
-    clauses.push_back(ContainsClause(SearchDocumentExpr(active_model_key, mask), query));
+  if (const auto folded_query = FoldedTokenForColumns(query); folded_query.has_value()) {
+    for (const auto column : SearchTextColumns(mask)) {
+      clauses.push_back(FoldedColumnContains(column, *folded_query));
+    }
   }
-  if (auto folded_clause = FoldedDocumentClause(query, active_model_key, mask);
-      folded_clause.has_value()) {
-    clauses.push_back(std::move(*folded_clause));
+  if (mask & SearchField::Filename) {
+    clauses.push_back(ContainsClause(expr::raw("e.element_name"), query));
+    clauses.push_back(ContainsClause(expr::raw("i.file_name"), query));
   }
   if (clauses.empty()) {
     return expr::raw("1=0");
@@ -647,13 +520,12 @@ auto SleeveFilterService::BuildFuzzySearchWhere(const std::wstring& query,
 
   auto where = duckorm::expr::and_(token_clauses);
   if (tokens.size() > 1) {
-    where = duckorm::expr::or_(
-        {std::move(where), SearchDocumentClause(trimmed, active_model_key, mask)});
+    where = duckorm::expr::or_({std::move(where), SearchDocumentClause(trimmed, mask)});
   }
   // The AI FTS index body is caption + tags_json + scene concatenated; a BM25
   // hit cannot be attributed to one sub-field, so only run it when both AI
-  // field groups are enabled. A single-bit AI scope falls back to the
-  // per-field LIKE clauses built above (AiCaptionExpr / AiTagsExpr).
+  // field groups are enabled. A single-bit AI scope uses only the per-field
+  // search text clauses built above (u.caption_search_text / u.tags_search_text).
   const bool ai_fts_applicable =
       has_ai_fts && (mask & SearchField::AiDescription) && (mask & SearchField::AiTags);
   if (ai_fts_applicable) {

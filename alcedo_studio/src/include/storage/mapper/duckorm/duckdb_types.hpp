@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <variant>
 
@@ -26,6 +27,7 @@ enum class DuckDBType : uint8_t {
   STRING,
   NULLABLE_STRING,
   NULLABLE_DOUBLE,
+  NULLABLE_INT64,
   FLOAT_ARRAY,
 };
 
@@ -69,6 +71,11 @@ struct DuckFieldDesc {
   duckorm::DuckFieldDesc { column, duckorm::DuckDBType::field_type, offsetof(type, field) }
 
 // brief Type alias for a variant that can hold various DuckDB-supported types.
+//
+// Text types (VARCHAR, JSON, BOOLEAN, TIMESTAMP, STRING, NULLABLE_STRING) read as
+// `std::unique_ptr<std::string>`; a NULL cell reads as an empty pointer. NULLABLE_DOUBLE and
+// NULLABLE_INT64 read as `std::optional`, with `std::nullopt` for a NULL cell.
 using VarTypes =
-    std::variant<int32_t, int64_t, uint32_t, uint64_t, double, std::unique_ptr<std::string>>;
+    std::variant<int32_t, int64_t, uint32_t, uint64_t, double, std::unique_ptr<std::string>,
+                 std::optional<double>, std::optional<int64_t>>;
 };  // namespace duckorm

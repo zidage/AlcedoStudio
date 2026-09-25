@@ -318,7 +318,7 @@ TEST_F(FilterServiceTests, SQLCompilationTest) {
   FilterNode root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
 
   const auto sql = FilterSQLCompiler::Compile(root);
-  EXPECT_EQ(sql.sql_, "(json_extract(i.metadata, '$.Model') = ?)");
+  EXPECT_EQ(sql.sql_, "(i.camera_model = ?)");
   ASSERT_EQ(sql.binds_.size(), 1u);
   EXPECT_EQ(std::get<std::string>(sql.binds_[0]), "Canon EOS 5D Mark IV");
 }
@@ -342,7 +342,7 @@ TEST_F(FilterServiceTests, ComplexFilterSQLTest) {
 
   const auto sql = FilterSQLCompiler::Compile(root);
   EXPECT_EQ(sql.sql_,
-            "((json_extract(i.metadata, '$.Model') = ?) AND "
+            "((i.camera_model = ?) AND "
             "(UPPER(i.file_name) LIKE ?))");
   ASSERT_EQ(sql.binds_.size(), 2u);
   EXPECT_EQ(std::get<std::string>(sql.binds_[0]), "Nikon D850");
@@ -359,7 +359,7 @@ TEST_F(FilterServiceTests, BetweenConditionSQLTest) {
   FilterNode root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
 
   const auto sql = FilterSQLCompiler::Compile(root);
-  EXPECT_EQ(sql.sql_, "(json_extract(i.metadata, '$.ISO')::INT BETWEEN ? AND ?)");
+  EXPECT_EQ(sql.sql_, "(i.iso BETWEEN ? AND ?)");
   ASSERT_EQ(sql.binds_.size(), 2u);
   EXPECT_EQ(std::get<int64_t>(sql.binds_[0]), 100);
   EXPECT_EQ(std::get<int64_t>(sql.binds_[1]), 800);
@@ -374,7 +374,7 @@ TEST_F(FilterServiceTests, BindsStringFilterValueWithEmbeddedQuote) {
   FilterNode root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
 
   const auto sql = FilterSQLCompiler::Compile(root);
-  EXPECT_EQ(sql.sql_, "(json_extract(i.metadata, '$.Model') = ?)");
+  EXPECT_EQ(sql.sql_, "(i.camera_model = ?)");
   ASSERT_EQ(sql.binds_.size(), 1u);
   EXPECT_EQ(std::get<std::string>(sql.binds_[0]), "O'Brien");
 }

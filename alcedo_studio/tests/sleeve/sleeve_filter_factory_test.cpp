@@ -22,24 +22,21 @@ auto Compile(const FilterNode& node) -> duckorm::SqlFragment {
 
 TEST(SleeveFilterFactoryTest, CameraModelBucketEqualsUsesCoalescedBucketColumnAndBind) {
   const auto frag = Compile(sleeve_filter::BuildCameraModelBucketFilter(L"Nikon D850"));
-  EXPECT_EQ(frag.sql_,
-            "(COALESCE(NULLIF(json_extract_string(i.metadata, '$.Model'), ''), '(unknown)') = ?)");
+  EXPECT_EQ(frag.sql_, "(COALESCE(NULLIF(i.camera_model, ''), '(unknown)') = ?)");
   ASSERT_EQ(frag.binds_.size(), 1u);
   EXPECT_EQ(std::get<std::string>(frag.binds_[0]), "Nikon D850");
 }
 
 TEST(SleeveFilterFactoryTest, CameraModelBucketBindsQuoteInsideLabelWithoutEmbedding) {
   const auto frag = Compile(sleeve_filter::BuildCameraModelBucketFilter(L"O'Brien"));
-  EXPECT_EQ(frag.sql_,
-            "(COALESCE(NULLIF(json_extract_string(i.metadata, '$.Model'), ''), '(unknown)') = ?)");
+  EXPECT_EQ(frag.sql_, "(COALESCE(NULLIF(i.camera_model, ''), '(unknown)') = ?)");
   ASSERT_EQ(frag.binds_.size(), 1u);
   EXPECT_EQ(std::get<std::string>(frag.binds_[0]), "O'Brien");
 }
 
 TEST(SleeveFilterFactoryTest, BucketLabelKeepsInjectPayloadOnlyInBind) {
   const auto frag = Compile(sleeve_filter::BuildCameraModelBucketFilter(L"x' OR 1=1 --"));
-  EXPECT_EQ(frag.sql_,
-            "(COALESCE(NULLIF(json_extract_string(i.metadata, '$.Model'), ''), '(unknown)') = ?)");
+  EXPECT_EQ(frag.sql_, "(COALESCE(NULLIF(i.camera_model, ''), '(unknown)') = ?)");
   ASSERT_EQ(frag.binds_.size(), 1u);
   EXPECT_EQ(std::get<std::string>(frag.binds_[0]), "x' OR 1=1 --");
   EXPECT_EQ(frag.sql_.find("OR 1=1"), std::string::npos);
@@ -48,39 +45,34 @@ TEST(SleeveFilterFactoryTest, BucketLabelKeepsInjectPayloadOnlyInBind) {
 
 TEST(SleeveFilterFactoryTest, LensBucketEqualsUsesCoalescedBucketColumnAndBind) {
   const auto frag = Compile(sleeve_filter::BuildLensBucketFilter(L"Synthetic 50mm"));
-  EXPECT_EQ(frag.sql_,
-            "(COALESCE(NULLIF(json_extract_string(i.metadata, '$.Lens'), ''), '(unknown)') = ?)");
+  EXPECT_EQ(frag.sql_, "(COALESCE(NULLIF(i.lens, ''), '(unknown)') = ?)");
   ASSERT_EQ(frag.binds_.size(), 1u);
   EXPECT_EQ(std::get<std::string>(frag.binds_[0]), "Synthetic 50mm");
 }
 
 TEST(SleeveFilterFactoryTest, CaptureDateBucketEqualsUsesDateCastColumnAndBind) {
   const auto frag = Compile(sleeve_filter::BuildCaptureDateBucketFilter(L"2026-05-25"));
-  EXPECT_EQ(frag.sql_,
-            "(TRY_CAST(json_extract(i.metadata, '$.DateTimeString') AS DATE)::VARCHAR = ?)");
+  EXPECT_EQ(frag.sql_, "(CAST(i.capture_date AS VARCHAR) = ?)");
   ASSERT_EQ(frag.binds_.size(), 1u);
   EXPECT_EQ(std::get<std::string>(frag.binds_[0]), "2026-05-25");
 }
 
-TEST(SleeveFilterFactoryTest, CaptureDateUnknownMatchesNullOrEmptyStringWithBind) {
+TEST(SleeveFilterFactoryTest, CaptureDateUnknownMatchesNullCaptureDateColumn) {
   const auto frag = Compile(sleeve_filter::BuildCaptureDateUnknownFilter());
-  EXPECT_EQ(frag.sql_,
-            "((json_extract_string(i.metadata, '$.DateTimeString') IS NULL) OR "
-            "(json_extract_string(i.metadata, '$.DateTimeString') = ?))");
-  ASSERT_EQ(frag.binds_.size(), 1u);
-  EXPECT_EQ(std::get<std::string>(frag.binds_[0]), "");
+  EXPECT_EQ(frag.sql_, "(i.capture_date IS NULL)");
+  EXPECT_TRUE(frag.binds_.empty());
 }
 
 TEST(SleeveFilterFactoryTest, RatingBucketNumericLabelBecomesIntEqualityBind) {
   const auto frag = Compile(sleeve_filter::BuildRatingBucketFilter(L"4"));
-  EXPECT_EQ(frag.sql_, "(json_extract(i.metadata, '$.Rating')::INT = ?)");
+  EXPECT_EQ(frag.sql_, "(i.rating = ?)");
   ASSERT_EQ(frag.binds_.size(), 1u);
   EXPECT_EQ(std::get<int64_t>(frag.binds_[0]), 4);
 }
 
 TEST(SleeveFilterFactoryTest, RatingBucketUnknownLabelBecomesNullCheck) {
   const auto frag = Compile(sleeve_filter::BuildRatingBucketFilter(L"(unknown)"));
-  EXPECT_EQ(frag.sql_, "(json_extract(i.metadata, '$.Rating') IS NULL)");
+  EXPECT_EQ(frag.sql_, "(i.rating IS NULL)");
   EXPECT_TRUE(frag.binds_.empty());
 }
 
@@ -113,9 +105,8 @@ TEST(SleeveFilterFactoryTest, MergeFilterNodesCombinesTwoTreesUnderAndRootWithBi
   ASSERT_TRUE(merged.has_value());
   const auto frag = Compile(*merged);
   EXPECT_EQ(frag.sql_,
-            "((COALESCE(NULLIF(json_extract_string(i.metadata, '$.Model'), ''), '(unknown)') = "
-            "?) AND (TRY_CAST(json_extract(i.metadata, '$.DateTimeString') AS DATE)::"
-            "VARCHAR = ?))");
+            "((COALESCE(NULLIF(i.camera_model, ''), '(unknown)') = ?) AND "
+            "(CAST(i.capture_date AS VARCHAR) = ?))");
   ASSERT_EQ(frag.binds_.size(), 2u);
   EXPECT_EQ(std::get<std::string>(frag.binds_[0]), "Nikon D850");
   EXPECT_EQ(std::get<std::string>(frag.binds_[1]), "2026-05-25");
@@ -140,8 +131,7 @@ TEST(SleeveFilterFactoryTest, CompileFilterPredicateKeepsBindsForBucketNode) {
   const auto node = sleeve_filter::BuildCameraModelBucketFilter(L"O'Brien");
   const auto where = CompileFilterPredicate(node);
   ASSERT_TRUE(where.has_value());
-  EXPECT_EQ(where->sql_,
-            "(COALESCE(NULLIF(json_extract_string(i.metadata, '$.Model'), ''), '(unknown)') = ?)");
+  EXPECT_EQ(where->sql_, "(COALESCE(NULLIF(i.camera_model, ''), '(unknown)') = ?)");
   ASSERT_EQ(where->binds_.size(), 1u);
   EXPECT_EQ(std::get<std::string>(where->binds_[0]), "O'Brien");
 }

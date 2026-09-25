@@ -12,11 +12,13 @@
 #include <cstdlib>
 #include <filesystem>
 #include <format>
+#include <stdexcept>
 #include <string>
 #include <system_error>
 #include <vector>
 
 #include "storage/mapper/duckorm/duckdb_orm.hpp"
+#include "utils/string/search_text.hpp"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -56,7 +58,7 @@ inline constexpr std::array<duckorm::DuckFieldDesc, 11> kInsertUnderstandingFiel
 // the value extraction. file_id is read as INT64 (BIGINT column, the proven read type)
 // and cast to uint32; BOOLEAN/TIMESTAMP come back as varchar ("true"/"false" / date
 // string), so `active` is parsed from its string and `updated_at` is ignored.
-inline constexpr std::array<duckorm::DuckFieldDesc, 12> kSelectUnderstandingFields = {
+inline constexpr std::array<duckorm::DuckFieldDesc, 14> kSelectUnderstandingFields = {
     duckorm::DuckFieldDesc{"file_id", duckorm::DuckDBType::INT64, 0},
     duckorm::DuckFieldDesc{"task_id", duckorm::DuckDBType::VARCHAR, 0},
     duckorm::DuckFieldDesc{"provider_id", duckorm::DuckDBType::VARCHAR, 0},
@@ -68,8 +70,53 @@ inline constexpr std::array<duckorm::DuckFieldDesc, 12> kSelectUnderstandingFiel
     duckorm::DuckFieldDesc{"scene", duckorm::DuckDBType::VARCHAR, 0},
     duckorm::DuckFieldDesc{"confidence", duckorm::DuckDBType::DOUBLE, 0},
     duckorm::DuckFieldDesc{"active", duckorm::DuckDBType::BOOLEAN, 0},
+    duckorm::DuckFieldDesc{"caption_search_text", duckorm::DuckDBType::VARCHAR, 0},
+    duckorm::DuckFieldDesc{"tags_search_text", duckorm::DuckDBType::VARCHAR, 0},
     duckorm::DuckFieldDesc{"updated_at", duckorm::DuckDBType::TIMESTAMP, 0},
 };
+
+auto JoinFolded(const std::vector<std::string>& parts) -> std::string {
+  std::string out;
+  for (const auto& part : parts) {
+    const auto folded = FoldSearchTextUtf8(part);
+    if (folded.empty()) {
+      continue;
+    }
+    if (!out.empty()) {
+      out.push_back(' ');
+    }
+    out += folded;
+  }
+  return out;
+}
+
+// Set the folded search text columns of the (file_id, task_id) row that the caller has just
+// written: caption_search_text = folded caption and scene, tags_search_text = folded tags with
+// one space between tags. Search reads these columns and never folds caption, scene, or
+// tags_json in SQL. A plain UPDATE is used because an INSERT ... ON CONFLICT DO UPDATE of a
+// row already written in the same transaction resets the columns it does not list (seen
+// with DuckDB in LibrarySearchColumnsTest). Throws on a DuckDB error.
+void WriteUnderstandingSearchText(duckdb_connection conn, const AiDescription& description) {
+  namespace expr = duckorm::expr;
+  auto statement = expr::raw("UPDATE AiImageUnderstanding SET caption_search_text = ");
+  statement.append(expr::param(JoinFolded({description.caption_, description.scene_})));
+  statement.append(expr::raw(", tags_search_text = "));
+  statement.append(expr::param(JoinFolded(description.Tags())));
+  statement.append(expr::raw(" WHERE file_id = "));
+  statement.append(expr::param(static_cast<int64_t>(description.file_id_)));
+  statement.append(expr::raw(" AND task_id = "));
+  statement.append(expr::param(description.task_id_));
+
+  duckdb_result result;
+  const auto    state = duckorm::execute_query(conn, statement.sql_, statement, &result);
+  if (state != DuckDBSuccess) {
+    const char*       error   = duckdb_result_error(&result);
+    const std::string message = error ? error : "AiImageUnderstanding search text update failed";
+    duckdb_destroy_result(&result);
+    throw std::runtime_error(message);
+  }
+  duckdb_destroy_result(&result);
+}
 
 // ---- rating (AiImageRating) field descriptors ----
 inline constexpr std::array<duckorm::DuckFieldDesc, 11> kInsertRatingFields = {
@@ -133,7 +180,8 @@ auto MapUnderstanding(const std::vector<duckorm::VarTypes>& row) -> AiDescriptio
   d.scene_             = CellString(row[8]);
   d.confidence_        = std::get<double>(row[9]);
   d.active_            = CellBool(row[10]);
-  // row[11] is updated_at — audit-only, not surfaced on the domain object.
+  // row[11..12] are the derived search text columns; row[13] is updated_at — audit-only.
+  // Neither is surfaced on the domain object.
   return d;
 }
 
@@ -363,6 +411,7 @@ auto AiStore::UpsertUnderstandings(std::span<const AiDescription> descriptions) 
       }
       duckorm::insert_or_replace(guard.conn_, kUnderstandingTable, &description,
                                  kInsertUnderstandingFields, kInsertUnderstandingFields.size());
+      WriteUnderstandingSearchText(guard.conn_, description);
       accepted_file_ids.push_back(description.file_id_);
     }
     if (!accepted_file_ids.empty()) {

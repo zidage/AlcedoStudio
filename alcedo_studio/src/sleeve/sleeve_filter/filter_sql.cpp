@@ -33,21 +33,22 @@ auto FormatTimestampLiteral(const std::tm& tm_value) -> SqlFragment {
  * @brief Map a domain field onto a scoped album-query column expression.
  *
  * Alias rule (must match ElementStore::BuildScopedFileQuery):
- * - `i` is the Image row (`i.metadata`, `i.file_name`, `i.image_path`)
+ * - `i` is the Image row (`i.file_name`, `i.image_path`, and the typed search columns that
+ *   ImageMapper writes; the metadata JSON is never read)
  * - `e` is the Element row (`e.element_name`, `e.added_time`)
  */
 auto FilterSQLCompiler::FieldToColumn(FilterField field) -> SqlFragment {
   switch (field) {
     case FilterField::ExifCameraModel:
-      return expr::col("json_extract(i.metadata, '$.Model')");
+      return expr::col("i.camera_model");
     case FilterField::ExifFocalLength:
-      return expr::col("json_extract(i.metadata, '$.FocalLength')::DOUBLE");
+      return expr::col("i.focal_mm");
     case FilterField::ExifAperture:
-      return expr::col("json_extract(i.metadata, '$.Aperture')::DOUBLE");
+      return expr::col("i.aperture");
     case FilterField::ExifISO:
-      return expr::col("json_extract(i.metadata, '$.ISO')::INT");
+      return expr::col("i.iso");
     case FilterField::CaptureDate:
-      return expr::col("json_extract(i.metadata, '$.DateTimeString')::TIMESTAMP");
+      return expr::col("i.capture_at");
     case FilterField::ImportDate:
       return expr::col("e.added_time");
     case FilterField::FileName:
@@ -55,24 +56,19 @@ auto FilterSQLCompiler::FieldToColumn(FilterField field) -> SqlFragment {
     case FilterField::FileExtension:
       return expr::col("UPPER(i.file_name)");
     case FilterField::ImageSize:
-      return expr::col("json_extract(i.metadata, '$.ImageSize')");
+      return expr::col("i.pixel_count");
     case FilterField::Rating:
-      return expr::col("json_extract(i.metadata, '$.Rating')");
+      return expr::col("i.rating");
     case FilterField::ImagePath:
       return expr::col("i.image_path");
     case FilterField::CameraModelLabel:
-      return expr::col("COALESCE(NULLIF(json_extract_string(i.metadata, '$.Model'), ''), "
-                       "'(unknown)')");
+      return expr::col("COALESCE(NULLIF(i.camera_model, ''), '(unknown)')");
     case FilterField::LensLabel:
-      return expr::col("COALESCE(NULLIF(json_extract_string(i.metadata, '$.Lens'), ''), "
-                       "'(unknown)')");
+      return expr::col("COALESCE(NULLIF(i.lens, ''), '(unknown)')");
     case FilterField::CaptureDateLabel:
-      // TRY_CAST: plain CAST would fail the whole query on rows whose date
-      // string is not parseable (for example an empty string).
-      return expr::col(
-          "TRY_CAST(json_extract(i.metadata, '$.DateTimeString') AS DATE)::VARCHAR");
+      return expr::col("CAST(i.capture_date AS VARCHAR)");
     case FilterField::RatingLabel:
-      return expr::col("json_extract(i.metadata, '$.Rating')::INT");
+      return expr::col("i.rating");
     case FilterField::SemanticTags:
       // Domain semantic-label filters use EXISTS factories (Phase 2). Placeholder only.
       return expr::col("i.embedding");

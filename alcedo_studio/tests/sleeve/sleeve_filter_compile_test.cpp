@@ -19,7 +19,7 @@ TEST(SleeveFilterCompileTest, EqualsCameraModelUsesImageAliasAndBoundParam) {
   FilterNode root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
 
   const auto sql = FilterSQLCompiler::Compile(root);
-  EXPECT_EQ(sql.sql_, "(json_extract(i.metadata, '$.Model') = ?)");
+  EXPECT_EQ(sql.sql_, "(i.camera_model = ?)");
   ASSERT_EQ(sql.binds_.size(), 1u);
   EXPECT_EQ(std::get<std::string>(sql.binds_[0]), "Canon EOS 5D Mark IV");
 }
@@ -43,7 +43,7 @@ TEST(SleeveFilterCompileTest, NestedAndOrUsesExprFragmentsWithBinds) {
 
   const auto sql = FilterSQLCompiler::Compile(root);
   EXPECT_EQ(sql.sql_,
-            "((json_extract(i.metadata, '$.Model') = ?) AND "
+            "((i.camera_model = ?) AND "
             "(UPPER(i.file_name) LIKE ?))");
   ASSERT_EQ(sql.binds_.size(), 2u);
   EXPECT_EQ(std::get<std::string>(sql.binds_[0]), "Nikon D850");
@@ -59,7 +59,7 @@ TEST(SleeveFilterCompileTest, BindsQuoteInsideStringFilterValueWithoutEmbedding)
   FilterNode root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
 
   const auto sql = FilterSQLCompiler::Compile(root);
-  EXPECT_EQ(sql.sql_, "(json_extract(i.metadata, '$.Model') LIKE ?)");
+  EXPECT_EQ(sql.sql_, "(i.camera_model LIKE ?)");
   ASSERT_EQ(sql.binds_.size(), 1u);
   EXPECT_EQ(std::get<std::string>(sql.binds_[0]), "%O'Brien%");
 }
@@ -82,7 +82,7 @@ TEST(SleeveFilterCompileTest, BetweenIsoUsesImageMetadataAliasAndBinds) {
   FilterNode root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
 
   const auto sql = FilterSQLCompiler::Compile(root);
-  EXPECT_EQ(sql.sql_, "(json_extract(i.metadata, '$.ISO')::INT BETWEEN ? AND ?)");
+  EXPECT_EQ(sql.sql_, "(i.iso BETWEEN ? AND ?)");
   ASSERT_EQ(sql.binds_.size(), 2u);
   EXPECT_EQ(std::get<int64_t>(sql.binds_[0]), 100);
   EXPECT_EQ(std::get<int64_t>(sql.binds_[1]), 800);
@@ -122,7 +122,7 @@ TEST(SleeveFilterCompileTest, TypedEqualsKeepsInjectPayloadOnlyInBind) {
   FilterNode root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
 
   const auto sql = FilterSQLCompiler::Compile(root);
-  EXPECT_EQ(sql.sql_, "(json_extract(i.metadata, '$.Model') = ?)");
+  EXPECT_EQ(sql.sql_, "(i.camera_model = ?)");
   ASSERT_EQ(sql.binds_.size(), 1u);
   EXPECT_EQ(std::get<std::string>(sql.binds_[0]), "x' OR 1=1 --");
   EXPECT_EQ(sql.sql_.find("OR 1=1"), std::string::npos);
@@ -130,12 +130,12 @@ TEST(SleeveFilterCompileTest, TypedEqualsKeepsInjectPayloadOnlyInBind) {
 }
 
 TEST(SleeveFilterCompileTest, RawSQLBridgeKeepsPreparedBindsWithoutSplicingValues) {
-  FilterNode root{FilterNode::Type::RawSQL, {}, {}, std::nullopt,
-                  std::wstring(L"(json_extract(i.metadata, '$.Model') = ?)")};
+  FilterNode root{
+      FilterNode::Type::RawSQL, {}, {}, std::nullopt, std::wstring(L"(i.camera_model = ?)")};
   root.raw_binds_.push_back(std::string("x' OR 1=1 --"));
 
   const auto sql = FilterSQLCompiler::Compile(root);
-  EXPECT_EQ(sql.sql_, "(json_extract(i.metadata, '$.Model') = ?)");
+  EXPECT_EQ(sql.sql_, "(i.camera_model = ?)");
   ASSERT_EQ(sql.binds_.size(), 1u);
   EXPECT_EQ(std::get<std::string>(sql.binds_[0]), "x' OR 1=1 --");
   EXPECT_EQ(sql.sql_.find("OR 1=1"), std::string::npos);
@@ -165,7 +165,7 @@ TEST(SleeveFilterCompileTest, LogicalNotWrapsSingleChildPredicate) {
   FilterNode root{FilterNode::Type::Logical, FilterOp::NOT, {child}, {}, std::nullopt};
 
   const auto sql = FilterSQLCompiler::Compile(root);
-  EXPECT_EQ(sql.sql_, "(NOT (json_extract(i.metadata, '$.Model') = ?))");
+  EXPECT_EQ(sql.sql_, "(NOT (i.camera_model = ?))");
   ASSERT_EQ(sql.binds_.size(), 1u);
   EXPECT_EQ(std::get<std::string>(sql.binds_[0]), "Nikon D850");
 }
@@ -192,7 +192,7 @@ TEST(SleeveFilterCompileTest, ContainsDoesNotEmbedLikeWildcardsIntoSqlText) {
   FilterNode root{FilterNode::Type::Condition, {}, {}, std::move(cond), std::nullopt};
 
   const auto sql = FilterSQLCompiler::Compile(root);
-  EXPECT_EQ(sql.sql_, "(json_extract(i.metadata, '$.Model') LIKE ?)");
+  EXPECT_EQ(sql.sql_, "(i.camera_model LIKE ?)");
   ASSERT_EQ(sql.binds_.size(), 1u);
   EXPECT_EQ(std::get<std::string>(sql.binds_[0]), "%100%_dune%");
   EXPECT_EQ(sql.sql_.find("%100%_dune%"), std::string::npos);

@@ -88,7 +88,8 @@ struct FilterNode {
  *
  * @details Maps domain FilterField values onto scoped album-query columns.
  * Alias rule (must match BuildScopedFileQuery):
- * - Image columns use `i.` (`i.metadata`, `i.file_name`, `i.image_path`)
+ * - Image columns use `i.` (`i.file_name`, `i.image_path`, and the typed search columns
+ *   such as `i.camera_model`, `i.capture_date`, `i.rating`; never the metadata JSON)
  * - Element columns use `e.` (`e.element_name`, `e.added_time`)
  *
  * This compiler builds only a WHERE predicate. Stores own FROM/JOIN scope.

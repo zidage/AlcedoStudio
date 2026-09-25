@@ -28,8 +28,25 @@ class Database {
 
   constexpr static const char*          init_table_query =
       "CREATE TABLE Sleeve (id BIGINT PRIMARY KEY);"
+      // Image search columns (file_stem ... exif_search_text) are written by ImageMapper from
+      // the Image on every insert and update; see image_search_columns.hpp. Search, stats,
+      // and the thumbnail filter read them instead of the metadata JSON.
       "CREATE TABLE Image (id BIGINT PRIMARY KEY, image_path TEXT, file_name TEXT, type INTEGER, "
-      "metadata JSON);"
+      "metadata JSON,"
+      "file_stem VARCHAR NOT NULL DEFAULT '',"
+      "file_ext VARCHAR NOT NULL DEFAULT '',"
+      "capture_at TIMESTAMP,"
+      "capture_date DATE,"
+      "camera_make VARCHAR NOT NULL DEFAULT '',"
+      "camera_model VARCHAR NOT NULL DEFAULT '',"
+      "lens VARCHAR NOT NULL DEFAULT '',"
+      "iso INTEGER,"
+      "focal_mm DOUBLE,"
+      "aperture DOUBLE,"
+      "rating INTEGER NOT NULL DEFAULT 0,"
+      "pixel_count BIGINT,"
+      "file_search_text VARCHAR NOT NULL DEFAULT '',"
+      "exif_search_text VARCHAR NOT NULL DEFAULT '');"
       "CREATE TABLE SleeveRoot (id BIGINT PRIMARY KEY);"
       "CREATE TABLE Element (id BIGINT PRIMARY KEY, type INTEGER, element_name TEXT, added_time "
       "TIMESTAMP, modified_time "
@@ -209,6 +226,9 @@ class Database {
   // inserts and re-stamped on each upsert, so it doubles as last-write time. Rating is
   // NOT part of full-text search: it is stored here only, and the search-document
   // builder (sleeve_filter_service) intentionally reads the understanding table alone.
+  // caption_search_text (caption + scene) and tags_search_text (tags) are the folded search
+  // text that AiStore writes on each upsert (see utils/string/search_text.hpp); library
+  // search reads them instead of folding caption, scene, and tags_json in SQL.
   constexpr static const char* ai_annotation_table_query =
       "CREATE TABLE IF NOT EXISTS AiImageUnderstanding ("
       "file_id BIGINT NOT NULL,"
@@ -222,6 +242,8 @@ class Database {
       "scene VARCHAR NOT NULL DEFAULT '',"
       "confidence DOUBLE NOT NULL DEFAULT 0.0,"
       "active BOOLEAN NOT NULL DEFAULT TRUE,"
+      "caption_search_text VARCHAR NOT NULL DEFAULT '',"
+      "tags_search_text VARCHAR NOT NULL DEFAULT '',"
       "updated_at TIMESTAMP DEFAULT current_timestamp,"
       "PRIMARY KEY (file_id, task_id));"
       "CREATE INDEX IF NOT EXISTS idx_ai_understanding_file_active "

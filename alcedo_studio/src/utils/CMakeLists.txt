@@ -45,6 +45,8 @@ def_library(CudaDriverRequirements
 )
 
 def_library(StrConv
-    SOURCES ${ALCEDO_SRC_ROOT}/utils/string/converter.cpp
+    SOURCES
+        ${ALCEDO_SRC_ROOT}/utils/string/converter.cpp
+        ${ALCEDO_SRC_ROOT}/utils/string/search_text.cpp
     PUBLIC_DEPS utfcpp
 )
