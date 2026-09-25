@@ -196,6 +196,27 @@ gtest_discover_tests(FilterServiceTest TEST_PREFIX "FilterServiceTest."
 alcedo_copy_duckdb_fts_extension(FilterServiceTest)
 alcedo_register_test_target(FilterServiceTest app ci_core)
 
+# Library search recall table and latency benchmark
+# (docs/roadmap/alcedo_studio/storage/library_search_and_project_size_plan.md, Phase S0).
+# The local Nikon folder test and the benchmarks are DISABLED_ by default.
+add_executable(LibrarySearchRecallTest ${ALCEDO_TEST_ROOT}/app/library_search_recall_test.cpp)
+target_include_directories(LibrarySearchRecallTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(LibrarySearchRecallTest
+  ImportService ProjectService SleeveFilterService GTest::gtest_main)
+gtest_discover_tests(LibrarySearchRecallTest TEST_PREFIX "LibrarySearchRecallTest."
+  PROPERTIES LABELS "ci_core_flow")
+alcedo_copy_duckdb_fts_extension(LibrarySearchRecallTest)
+alcedo_register_test_target(LibrarySearchRecallTest app ci_core)
+
+add_executable(LibrarySearchBenchmarkTest
+  ${ALCEDO_TEST_ROOT}/app/library_search_benchmark_test.cpp)
+target_include_directories(LibrarySearchBenchmarkTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(LibrarySearchBenchmarkTest
+  ProjectService SleeveFilterService Qt6::Core GTest::gtest_main)
+gtest_discover_tests(LibrarySearchBenchmarkTest TEST_PREFIX "LibrarySearchBenchmarkTest.")
+alcedo_copy_duckdb_fts_extension(LibrarySearchBenchmarkTest)
+alcedo_register_test_target(LibrarySearchBenchmarkTest app)
+
 add_executable(SearchQueryClassifierTest ${ALCEDO_TEST_ROOT}/app/search_query_classifier_test.cpp)
 target_include_directories(SearchQueryClassifierTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(SearchQueryClassifierTest SleeveFilterService GTest::gtest_main)
