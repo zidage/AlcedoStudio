@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <format>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -96,16 +97,7 @@ void WriteUnderstandingSearchText(duckdb_connection conn, const AiDescription& d
   statement.append(expr::param(static_cast<int64_t>(description.file_id_)));
   statement.append(expr::raw(" AND task_id = "));
   statement.append(expr::param(description.task_id_));
-
-  duckdb_result result;
-  const auto    state = duckorm::execute_query(conn, statement.sql_, statement, &result);
-  if (state != DuckDBSuccess) {
-    const char*       error   = duckdb_result_error(&result);
-    const std::string message = error ? error : "AiImageUnderstanding search text update failed";
-    duckdb_destroy_result(&result);
-    throw std::runtime_error(message);
-  }
-  duckdb_destroy_result(&result);
+  duckorm::execute(conn, statement);
 }
 
 // ---- rating (AiImageRating) field descriptors ----
@@ -193,73 +185,87 @@ auto MapRating(const std::vector<duckorm::VarTypes>& row) -> AiRating {
   return r;
 }
 
-auto JoinFileIds(std::span<const sl_element_id_t> file_ids) -> std::string {
-  std::string out;
-  for (size_t i = 0; i < file_ids.size(); ++i) {
-    if (i > 0) {
-      out += ',';
-    }
-    out += std::to_string(file_ids[i]);
-  }
-  return out;
+auto FileIdColumnIn(std::span<const sl_element_id_t> file_ids) -> duckorm::SqlFragment {
+  return duckorm::expr::in_list(duckorm::expr::col("file_id"), file_ids);
 }
 
-auto RunQueryNoThrow(duckdb_connection conn, const std::string& sql) -> bool {
-  duckdb_result result;
-  const bool    ok = duckdb_query(conn, sql.c_str(), &result) == DuckDBSuccess;
-  duckdb_destroy_result(&result);
-  return ok;
+auto FileIdEquals(sl_element_id_t file_id) -> duckorm::SqlFragment {
+  return duckorm::expr::eq(duckorm::expr::col("file_id"),
+                           duckorm::expr::param(static_cast<int64_t>(file_id)));
+}
+
+auto ActiveRowOfFile(sl_element_id_t file_id) -> duckorm::SqlFragment {
+  return duckorm::expr::and_({FileIdEquals(file_id), duckorm::expr::raw("active = TRUE")});
+}
+
+/// Runs a statement of the optional BM25 index path (document table, index build). The index
+/// is an accelerator: without the fts extension, or with a damaged document table, search
+/// matches the folded text only. Returns false when DuckDB rejects the statement.
+auto ExecuteFtsStatement(duckdb_connection conn, const duckorm::SqlFragment& statement) -> bool {
+  try {
+    duckorm::execute(conn, statement);
+    return true;
+  } catch (const std::runtime_error&) {
+    return false;
+  }
 }
 
 auto EnsureFtsDocumentTable(duckdb_connection conn) -> bool {
-  return RunQueryNoThrow(conn,
-                         "CREATE TABLE IF NOT EXISTS AiImageFtsDocument ("
-                         "file_id BIGINT PRIMARY KEY,"
-                         "body VARCHAR NOT NULL DEFAULT '',"
-                         "updated_at TIMESTAMP DEFAULT current_timestamp);");
-}
-
-void RunQueryChecked(duckdb_connection conn, const std::string& sql) {
-  duckdb_result result;
-  if (duckdb_query(conn, sql.c_str(), &result) != DuckDBSuccess) {
-    const char*       error   = duckdb_result_error(&result);
-    const std::string message = error ? error : "AI search document query failed";
-    duckdb_destroy_result(&result);
-    throw std::runtime_error(message);
-  }
-  duckdb_destroy_result(&result);
+  return ExecuteFtsStatement(conn, duckorm::expr::raw("CREATE TABLE IF NOT EXISTS AiImageFtsDocument ("
+                                                      "file_id BIGINT PRIMARY KEY,"
+                                                      "body VARCHAR NOT NULL DEFAULT '',"
+                                                      "updated_at TIMESTAMP DEFAULT "
+                                                      "current_timestamp);"));
 }
 
 /**
  * @brief Rewrite the per-file search rows of the given files, or of all files.
  *
- * @p file_filter is empty (all files) or `file_id IN (...)` with integer ids. Each file with
- * at least one active understanding gets one `AiImageSearchText` row (the folded caption and
- * tag text of its understandings, in task_id order) and one `AiImageFtsDocument` row (the
- * BM25 body). Files without an active understanding get no rows. The search text statements
- * throw on error, so the caller's transaction rolls back; the FTS document statements are
- * best-effort because the BM25 index is optional.
+ * @p file_ids is std::nullopt for all files. Each file with at least one active understanding
+ * gets one `AiImageSearchText` row (the folded caption and tag text of its understandings, in
+ * task_id order) and one `AiImageFtsDocument` row (the BM25 body). Files without an active
+ * understanding get no rows. The search text statements throw on error, so the caller's
+ * transaction rolls back; the FTS document statements are best-effort because the BM25 index
+ * is optional.
  */
-void RewriteSearchDocuments(duckdb_connection conn, const std::string& file_filter) {
-  const auto where     = file_filter.empty() ? std::string{} : " WHERE " + file_filter;
-  const auto and_where = file_filter.empty() ? std::string{} : " AND " + file_filter;
-  RunQueryChecked(conn, std::format("DELETE FROM {}{};", kSearchTextTable, where));
-  RunQueryChecked(
-      conn, std::format("INSERT INTO {} (file_id, caption_search_text, tags_search_text) "
-                        "SELECT file_id, string_agg(caption_search_text, ' ' ORDER BY task_id), "
-                        "string_agg(tags_search_text, ' ' ORDER BY task_id) "
-                        "FROM {} WHERE active = TRUE{} GROUP BY file_id;",
-                        kSearchTextTable, kUnderstandingTable, and_where));
+void RewriteSearchDocuments(duckdb_connection                                conn,
+                            std::optional<std::span<const sl_element_id_t>> file_ids) {
+  namespace expr         = duckorm::expr;
+  const auto files_where = [&file_ids](const char* keyword) {
+    if (!file_ids.has_value()) {
+      return duckorm::SqlFragment{};
+    }
+    auto where = expr::raw(keyword);
+    where.append(FileIdColumnIn(*file_ids));
+    return where;
+  };
+  const auto statement = [](std::string sql, duckorm::SqlFragment where, const char* tail) {
+    auto out = expr::raw(sql);
+    out.append(std::move(where));
+    out.append(expr::raw(tail));
+    return out;
+  };
+
+  duckorm::execute(conn, statement(std::format("DELETE FROM {}", kSearchTextTable),
+                                   files_where(" WHERE "), ";"));
+  duckorm::execute(
+      conn, statement(std::format("INSERT INTO {} (file_id, caption_search_text, tags_search_text) "
+                                  "SELECT file_id, string_agg(caption_search_text, ' ' ORDER BY "
+                                  "task_id), string_agg(tags_search_text, ' ' ORDER BY task_id) "
+                                  "FROM {} WHERE active = TRUE",
+                                  kSearchTextTable, kUnderstandingTable),
+                      files_where(" AND "), " GROUP BY file_id;"));
   if (!EnsureFtsDocumentTable(conn)) {
     return;
   }
-  RunQueryNoThrow(conn, std::format("DELETE FROM {}{};", kFtsDocumentTable, where));
-  RunQueryNoThrow(
-      conn,
-      std::format("INSERT INTO {} (file_id, body) "
-                  "SELECT file_id, string_agg(caption || ' ' || tags_json || ' ' || scene, ' ') "
-                  "FROM {} WHERE active = TRUE{} GROUP BY file_id;",
-                  kFtsDocumentTable, kUnderstandingTable, and_where));
+  ExecuteFtsStatement(conn, statement(std::format("DELETE FROM {}", kFtsDocumentTable),
+                                      files_where(" WHERE "), ";"));
+  ExecuteFtsStatement(
+      conn, statement(std::format("INSERT INTO {} (file_id, body) SELECT file_id, "
+                                  "string_agg(caption || ' ' || tags_json || ' ' || scene, ' ') "
+                                  "FROM {} WHERE active = TRUE",
+                                  kFtsDocumentTable, kUnderstandingTable),
+                      files_where(" AND "), " GROUP BY file_id;"));
 }
 
 /**
@@ -278,32 +284,25 @@ auto RebuildFtsIndex(duckdb_connection conn) -> bool {
   if (!LoadPackagedDuckDbExtension(conn, "fts")) {
     return false;
   }
-  return RunQueryNoThrow(
-      conn, std::format("PRAGMA create_fts_index('{}', 'file_id', 'body', overwrite=1);",
-                        kFtsDocumentTable));
+  return ExecuteFtsStatement(
+      conn, duckorm::expr::raw(std::format(
+                "PRAGMA create_fts_index('{}', 'file_id', 'body', overwrite=1);",
+                kFtsDocumentTable)));
 }
 
-// Enforce the "file_id is a foreign key into Element(id)" contract at the write
-// boundary. The AiImageUnderstanding / AiImageRating DDL declares file_id NOT
-// NULL but, like the semantic embedding tables, does NOT add a SQL-level
-// REFERENCES Element(id) constraint: a DDL foreign key could not be added
-// migration-safely here (CREATE TABLE IF NOT EXISTS skips existing DBs, so
-// enforcement would be inconsistent across fresh and pre-existing databases),
-// and the codebase's established pattern is manual cascade on the
-// ElementStore's connection. Instead, every upsert rejects a file_id with
-// no matching Element row, so no orphan AI annotation can ever be written.
-// `file_id` is an integer, so it is interpolated safely into the predicate.
+// Enforce the "file_id is a foreign key into Element(id)" rule at the write boundary. The
+// AiImageUnderstanding / AiImageRating DDL declares file_id NOT NULL but, like the semantic
+// embedding tables, does NOT add a SQL-level REFERENCES Element(id) constraint: a DDL foreign
+// key could not be added migration-safely here (CREATE TABLE IF NOT EXISTS skips existing DBs,
+// so enforcement would be inconsistent across fresh and pre-existing databases), and the
+// codebase's established pattern is manual cascade on the ElementStore's connection. Instead,
+// every upsert rejects a file_id with no matching Element row, so no orphan AI annotation can
+// ever be written. A query failure throws, so it never allows an orphan write either.
 auto FileExists(duckdb_connection conn, sl_element_id_t file_id) -> bool {
-  duckdb_result result;
-  const auto    sql = std::format("SELECT 1 FROM Element WHERE id = {} LIMIT 1;", file_id);
-  if (duckdb_query(conn, sql.c_str(), &result) != DuckDBSuccess) {
-    duckdb_destroy_result(&result);
-    // Fail closed: a query failure must never allow an orphan write.
-    return false;
-  }
-  const bool exists = duckdb_row_count(&result) > 0;
-  duckdb_destroy_result(&result);
-  return exists;
+  auto query = duckorm::expr::raw("SELECT 1 FROM Element WHERE id = ");
+  query.append(duckorm::expr::param(static_cast<int64_t>(file_id)));
+  query.append(duckorm::expr::raw(" LIMIT 1"));
+  return duckorm::select_int64(conn, query).has_value();
 }
 
 }  // namespace
@@ -311,13 +310,10 @@ auto FileExists(duckdb_connection conn, sl_element_id_t file_id) -> bool {
 AiStore::AiStore(Database& db_ctrl) : database_(db_ctrl) {
   auto guard = database_.GetConnectionGuard();
   auto lock  = guard.Lock();
-  duckorm::begin_transaction(guard.conn_);
-  try {
-    RewriteSearchDocuments(guard.conn_, {});
-    duckorm::commit_transaction(guard.conn_);
-  } catch (...) {
-    duckorm::rollback_transaction(guard.conn_);
-    throw;
+  {
+    duckorm::Transaction transaction(guard.conn_);
+    RewriteSearchDocuments(guard.conn_, std::nullopt);
+    transaction.commit();
   }
   understanding_fts_index_ready_.store(RebuildFtsIndex(guard.conn_));
 }
@@ -340,8 +336,8 @@ auto AiStore::UpsertUnderstandings(std::span<const AiDescription> descriptions) 
   // DDL outside the transaction: a dropped document table is created again.
   EnsureFtsDocumentTable(guard.conn_);
 
-  duckorm::begin_transaction(guard.conn_);
-  try {
+  {
+    duckorm::Transaction transaction(guard.conn_);
     for (const auto& description : descriptions) {
       if (!description.IsValid()) {
         continue;  // partial/failed result — leave no active search document
@@ -355,13 +351,9 @@ auto AiStore::UpsertUnderstandings(std::span<const AiDescription> descriptions) 
       accepted_file_ids.push_back(description.file_id_);
     }
     if (!accepted_file_ids.empty()) {
-      RewriteSearchDocuments(guard.conn_,
-                             std::format("file_id IN ({})", JoinFileIds(accepted_file_ids)));
+      RewriteSearchDocuments(guard.conn_, std::span<const sl_element_id_t>(accepted_file_ids));
     }
-    duckorm::commit_transaction(guard.conn_);
-  } catch (...) {
-    duckorm::rollback_transaction(guard.conn_);
-    throw;
+    transaction.commit();
   }
 
   if (!accepted_file_ids.empty()) {
@@ -373,13 +365,10 @@ auto AiStore::UpsertUnderstandings(std::span<const AiDescription> descriptions) 
 auto AiStore::GetUnderstanding(sl_element_id_t    file_id,
                                            const std::string& task_id) const
     -> std::optional<AiDescription> {
-  const auto where = std::format("file_id = {}", file_id);
-  auto       guard = database_.GetConnectionGuard();
-  auto       lock  = guard.Lock();
-  // Query by file_id (an integer, safely interpolated) and match task_id in C++ so no
-  // string is interpolated into the predicate.
-  auto       rows  = duckorm::select(guard.conn_, kUnderstandingTable, kSelectUnderstandingFields,
-                                     kSelectUnderstandingFields.size(), where.c_str());
+  auto guard = database_.GetConnectionGuard();
+  auto lock  = guard.Lock();
+  auto rows  = duckorm::select(guard.conn_, kUnderstandingTable, kSelectUnderstandingFields,
+                               kSelectUnderstandingFields.size(), FileIdEquals(file_id));
   for (auto& row : rows) {
     auto candidate = MapUnderstanding(row);
     if (candidate.task_id_ == task_id) {
@@ -391,11 +380,10 @@ auto AiStore::GetUnderstanding(sl_element_id_t    file_id,
 
 auto AiStore::GetActiveUnderstanding(sl_element_id_t file_id) const
     -> std::optional<AiDescription> {
-  const auto where = std::format("file_id = {} AND active = TRUE", file_id);
-  auto       guard = database_.GetConnectionGuard();
-  auto       lock  = guard.Lock();
-  auto       rows  = duckorm::select(guard.conn_, kUnderstandingTable, kSelectUnderstandingFields,
-                                     kSelectUnderstandingFields.size(), where.c_str());
+  auto guard = database_.GetConnectionGuard();
+  auto lock  = guard.Lock();
+  auto rows  = duckorm::select(guard.conn_, kUnderstandingTable, kSelectUnderstandingFields,
+                               kSelectUnderstandingFields.size(), ActiveRowOfFile(file_id));
   if (rows.empty()) {
     return std::nullopt;
   }
@@ -441,11 +429,10 @@ auto AiStore::UpsertRatingReasons(const AiRating& rating) const -> bool {
 
 auto AiStore::GetRating(sl_element_id_t file_id, const std::string& task_id) const
     -> std::optional<AiRating> {
-  const auto where = std::format("file_id = {}", file_id);
-  auto       guard = database_.GetConnectionGuard();
-  auto       lock  = guard.Lock();
-  auto       rows  = duckorm::select(guard.conn_, kRatingTable, kSelectRatingFields,
-                                     kSelectRatingFields.size(), where.c_str());
+  auto guard = database_.GetConnectionGuard();
+  auto lock  = guard.Lock();
+  auto rows  = duckorm::select(guard.conn_, kRatingTable, kSelectRatingFields,
+                               kSelectRatingFields.size(), FileIdEquals(file_id));
   for (auto& row : rows) {
     auto candidate = MapRating(row);
     if (candidate.task_id_ == task_id) {
@@ -457,11 +444,10 @@ auto AiStore::GetRating(sl_element_id_t file_id, const std::string& task_id) con
 
 auto AiStore::GetActiveRating(sl_element_id_t file_id) const
     -> std::optional<AiRating> {
-  const auto where = std::format("file_id = {} AND active = TRUE", file_id);
-  auto       guard = database_.GetConnectionGuard();
-  auto       lock  = guard.Lock();
-  auto       rows  = duckorm::select(guard.conn_, kRatingTable, kSelectRatingFields,
-                                     kSelectRatingFields.size(), where.c_str());
+  auto guard = database_.GetConnectionGuard();
+  auto lock  = guard.Lock();
+  auto rows  = duckorm::select(guard.conn_, kRatingTable, kSelectRatingFields,
+                               kSelectRatingFields.size(), ActiveRowOfFile(file_id));
   if (rows.empty()) {
     return std::nullopt;
   }
@@ -479,13 +465,11 @@ void DeleteAiAnnotationRowsForFiles(duckdb_connection                conn,
   if (file_ids.empty()) {
     return;
   }
-  const auto where = std::format("file_id IN ({})", JoinFileIds(file_ids));
-  // duckorm::remove builds `DELETE FROM <table> WHERE <where>`; we supply only the
-  // integer IN-list predicate, so no raw DELETE statement is written here.
-  duckorm::remove(conn, kUnderstandingTable, where.c_str());
-  duckorm::remove(conn, kRatingTable, where.c_str());
-  duckorm::remove(conn, kSearchTextTable, where.c_str());
-  duckorm::remove(conn, kFtsDocumentTable, where.c_str());
+  const auto where = FileIdColumnIn(file_ids);
+  duckorm::remove(conn, kUnderstandingTable, where);
+  duckorm::remove(conn, kRatingTable, where);
+  duckorm::remove(conn, kSearchTextTable, where);
+  duckorm::remove(conn, kFtsDocumentTable, where);
   // The result is not needed: a rebuild does not change whether the index exists.
   RebuildFtsIndex(conn);
 }
