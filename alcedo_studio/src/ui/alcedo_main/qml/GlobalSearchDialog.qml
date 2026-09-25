@@ -291,8 +291,8 @@ Dialog {
             searchLoading = false
             return
         }
-        // Natural-language mode: semantic route is submit-only. Do not schedule
-        // SearchPreview / searchLoading — that path races Enter/Search submits.
+        // Natural-language mode: semantic route is submit-only. Do not schedule a
+        // preview request / searchLoading — that path races Enter/Search submits.
         if (searchController.naturalLanguageSearchEnabled
                 && searchController.ClassifyQuery(query) === "semantic") {
             showSemanticAwaitingSubmit(query)
@@ -386,6 +386,8 @@ Dialog {
             finishSearchRequest(pendingSearchGeneration)
             return
         }
+        // Both kinds run on the C++ search worker. The response arrives through
+        // onSearchResponseReady; the request id is known before it (queued signal).
         if (pendingSearchKind === "submit") {
             activeSearchRequestId = searchController.RequestSubmitSearch(pendingSearchQuery,
                                                                          pendingSearchOffset,
@@ -393,21 +395,18 @@ Dialog {
                                                                          pendingSearchMode)
             return
         }
-
-        const generation = pendingSearchGeneration
-        const query = pendingSearchQuery
-        const mode = pendingSearchMode
-        const response = searchController.SearchPreview(query, pendingSearchOffset,
-                                                        pendingSearchLimit)
-        if (generation !== searchRequestGeneration || query !== lastQuery) {
-            return
-        }
-        applySearchResponse(activeSearchRequestId, mode, response)
+        activeSearchRequestId = searchController.RequestSearch(pendingSearchQuery,
+                                                               pendingSearchOffset,
+                                                               pendingSearchLimit,
+                                                               pendingSearchMode)
     }
 
     function applySearchResponse(requestId, mode, response) {
-        if ((Number(activeSearchRequestId) !== 0
-             && Number(requestId) !== Number(activeSearchRequestId))
+        // Only the response to the request this dialog is waiting for applies. Between
+        // beginSearchRequest and executePendingSearch the id is 0, so an older response
+        // that arrives in that window is dropped too.
+        if (Number(activeSearchRequestId) === 0
+                || Number(requestId) !== Number(activeSearchRequestId)
                 || pendingSearchGeneration !== searchRequestGeneration
                 || pendingSearchQuery !== lastQuery) {
             return

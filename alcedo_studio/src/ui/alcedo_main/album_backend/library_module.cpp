@@ -18,6 +18,7 @@
 #include "ui/alcedo_main/album_backend/project_module.hpp"
 #include "ui/alcedo_main/album_backend/search_controller.hpp"
 #include "ui/alcedo_main/album_backend/stats_engine.hpp"
+#include "utils/string/convert.hpp"
 
 namespace alcedo::ui {
 
@@ -252,12 +253,7 @@ bool LibraryModule::LoadThumbnailWindow(const std::optional<FilterNode>& statsFi
   const auto effective_filter = CompileFilterPredicate(merged_filter);
 
   if (reset) {
-    thumbs().ReleaseVisibleThumbnailPins();
-
-    view_state_.all_images_.clear();
-    view_state_.total_count_ = 0;
-    thumbnail_model_.resetModel({}, 0);
-    emit CountsChanged();
+    ResetThumbnailWindow();
   }
 
   auto proj = project_->handler().project();
@@ -301,6 +297,40 @@ bool LibraryModule::LoadThumbnailWindow(const std::optional<FilterNode>& statsFi
         file.file_name_, file_path);
   }
 
+  PublishThumbnailWindowPage(oldSize);
+  return !files.empty();
+}
+
+auto LibraryModule::SearchWindowPageSize() -> size_t { return kSearchMetadataPageSize; }
+
+void LibraryModule::ApplySearchWindow(sl_element_id_t folderId, const SearchResultPage& page) {
+  ThumbnailModelLoadingGuard loading_guard(thumbnail_model_);
+  ResetThumbnailWindow();
+  view_state_.total_count_  = page.total_;
+
+  const auto    folder_path = folders_->CurrentFolderFsPath();
+  const QString scope_type  = folderId == 0 ? QStringLiteral("root") : QStringLiteral("album");
+  for (const auto& row : page.rows_) {
+    if (row.file_id_ == 0 || row.image_id_ == 0) {
+      continue;
+    }
+    const auto file_name = conv::FromBytes(row.file_name_);
+    AddOrUpdateAlbumItem(row.file_id_, row.image_id_, folderId, scope_type, file_name,
+                         folder_path / file_name);
+  }
+  PublishThumbnailWindowPage(0);
+}
+
+void LibraryModule::ResetThumbnailWindow() {
+  thumbs().ReleaseVisibleThumbnailPins();
+
+  view_state_.all_images_.clear();
+  view_state_.total_count_ = 0;
+  thumbnail_model_.resetModel({}, 0);
+  emit CountsChanged();
+}
+
+void LibraryModule::PublishThumbnailWindowPage(size_t oldSize) {
   const size_t           newSize = view_state_.all_images_.size();
   std::vector<AlbumItem> newBatch;
   if (newSize > oldSize) {
@@ -319,9 +349,7 @@ bool LibraryModule::LoadThumbnailWindow(const std::optional<FilterNode>& statsFi
   }
 
   emit CountsChanged();
-  return !files.empty();
 }
-
 
 void LibraryModule::AddOrUpdateAlbumItem(sl_element_id_t elementId, image_id_t imageId,
                                         sl_element_id_t folderId, const QString& scopeType,

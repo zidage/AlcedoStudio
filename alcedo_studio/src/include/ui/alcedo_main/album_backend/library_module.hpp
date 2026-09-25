@@ -7,11 +7,12 @@
 #include <QObject>
 #include <QString>
 #include <QVariantList>
-#include <functional>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
 
+#include "storage/store/sleeve/element_store.hpp"
 #include "ui/alcedo_main/album_backend/album_catalog.hpp"
 #include "ui/alcedo_main/album_backend/album_thumbnail_model.hpp"
 #include "ui/alcedo_main/album_backend/album_types.hpp"
@@ -104,6 +105,13 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
   void ReloadFolderTree(const std::filesystem::path& preferredFolderPath = {}) override;
   void ReloadCurrentFolder() override;
   bool LoadThumbnailWindow(const std::optional<FilterNode>& statsFilter, bool reset) override;
+  /// Number of rows in one thumbnail window page while a search filter is active.
+  [[nodiscard]] static auto SearchWindowPageSize() -> size_t;
+  /// Reset the thumbnail grid to the first page of an applied search. @p page was queried
+  /// for @p folderId on the search worker with the search filter and no stats filter. Runs
+  /// no search SQL; the album items still read their Image through the image pool, as every
+  /// thumbnail window load does. UI thread only.
+  void ApplySearchWindow(sl_element_id_t folderId, const SearchResultPage& page);
 
   void LoadThumbnailDiskCacheSettings();
   void ApplyThumbnailDiskCacheSettingsToService();
@@ -124,6 +132,10 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
 
  private:
   void SaveThumbnailDiskCacheSettings();
+  /// Release the pins and empty the grid model before a new first page.
+  void                                    ResetThumbnailWindow();
+  /// Publish the album items from @p oldSize on to the model and emit CountsChanged.
+  void                                    PublishThumbnailWindowPage(size_t oldSize);
 
   ProjectModule*     project_ = nullptr;
   FolderController*  folders_ = nullptr;

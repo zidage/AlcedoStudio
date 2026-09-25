@@ -10,6 +10,7 @@
 #include <format>
 #include <initializer_list>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -422,6 +423,7 @@ auto SleeveFilterService::ApplyFilterOn(filter_id_t filter_id, sl_element_id_t p
 auto SleeveFilterService::BuildFolderStats(sl_element_id_t                  parent_id,
                                            const std::optional<FilterNode>& extra_filter) const
     -> AlbumStatsView {
+  NotifyQueryThreadObserver("BuildFolderStats");
   const auto extra_predicate = CompileFilterPredicate(extra_filter);
 
   const auto active_model_key = storage_->GetSemanticStore().ActiveModelKey();
@@ -462,6 +464,7 @@ auto SleeveFilterService::BuildFolderStats(sl_element_id_t                  pare
 auto SleeveFilterService::BuildFuzzySearchWhere(const std::wstring& query,
                                                 SearchFieldMask      mask) const
     -> std::optional<FilterNode> {
+  NotifyQueryThreadObserver("BuildFuzzySearchWhere");
   const auto trimmed = TrimCopy(query);
   if (trimmed.empty()) {
     return std::nullopt;
@@ -521,6 +524,7 @@ auto SleeveFilterService::BuildExactFileWhere(sl_element_id_t file_id) const -> 
 auto SleeveFilterService::SearchFolder(sl_element_id_t parent_id, const std::wstring& query,
                                        size_t offset, size_t limit, SearchFieldMask mask) const
     -> std::vector<FuzzySearchMatch> {
+  NotifyQueryThreadObserver("SearchFolder");
   std::vector<FuzzySearchMatch> out;
   if (!storage_) {
     return out;
@@ -555,15 +559,76 @@ auto SleeveFilterService::HasSemanticSearchProvider() const -> bool {
 auto SleeveFilterService::SearchFolderSemantic(sl_element_id_t parent_id, const std::wstring& query,
                                                size_t offset, size_t limit) const
     -> std::vector<FuzzySearchMatch> {
+  NotifyQueryThreadObserver("SearchFolderSemantic");
   if (!semantic_search_provider_) {
     return {};
   }
   return semantic_search_provider_->Search(parent_id, query, offset, limit);
 }
 
+auto SleeveFilterService::SearchFolderPage(sl_element_id_t parent_id, const std::wstring& query,
+                                           size_t offset, size_t limit, SearchFieldMask mask) const
+    -> SearchResultPage {
+  NotifyQueryThreadObserver("SearchFolderPage");
+  if (!storage_) {
+    return {};
+  }
+  const auto filter_node = BuildFuzzySearchWhere(query, mask);
+  if (!filter_node.has_value()) {
+    return {};
+  }
+  return ListSearchResultPage(parent_id, filter_node, offset, limit);
+}
+
+auto SleeveFilterService::ListSearchResultPage(sl_element_id_t                  parent_id,
+                                               const std::optional<FilterNode>& filter,
+                                               size_t offset, size_t limit) const
+    -> SearchResultPage {
+  NotifyQueryThreadObserver("ListSearchResultPage");
+  if (!storage_) {
+    return {};
+  }
+  return storage_->GetElementStore().ListSearchResultPage(parent_id, offset, limit,
+                                                          CompileFilterPredicate(filter));
+}
+
+auto SleeveFilterService::SearchFolderSemanticRows(sl_element_id_t     parent_id,
+                                                   const std::wstring& query, size_t offset,
+                                                   size_t limit) const
+    -> std::vector<SearchResultRow> {
+  NotifyQueryThreadObserver("SearchFolderSemanticRows");
+  if (!storage_) {
+    return {};
+  }
+  const auto                   matches = SearchFolderSemantic(parent_id, query, offset, limit);
+  std::vector<sl_element_id_t> file_ids;
+  file_ids.reserve(matches.size());
+  for (const auto& match : matches) {
+    file_ids.push_back(match.file_id_);
+  }
+  return storage_->GetElementStore().ListSearchResultRows(file_ids);
+}
+
+void SleeveFilterService::SetQueryThreadObserver(QueryThreadObserver observer) {
+  std::lock_guard lock(query_thread_observer_mutex_);
+  query_thread_observer_ = std::move(observer);
+}
+
+void SleeveFilterService::NotifyQueryThreadObserver(std::string_view operation) const {
+  QueryThreadObserver observer;
+  {
+    std::lock_guard lock(query_thread_observer_mutex_);
+    observer = query_thread_observer_;
+  }
+  if (observer) {
+    observer(operation);
+  }
+}
+
 auto SleeveFilterService::CountSearchResults(sl_element_id_t     parent_id,
                                              const std::wstring& query,
                                              SearchFieldMask      mask) const -> size_t {
+  NotifyQueryThreadObserver("CountSearchResults");
   if (!storage_) {
     return 0;
   }

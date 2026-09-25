@@ -66,6 +66,24 @@ struct FileListEntry {
   std::string     file_name_{};
 };
 
+/// One search result: the file and image ids plus the typed Image columns that the search
+/// dialog shows. Read from the query row, so no caller needs an image pool read.
+struct SearchResultRow {
+  sl_element_id_t file_id_  = 0;
+  image_id_t      image_id_ = 0;
+  std::string     file_name_{};     ///< `Image.file_name`.
+  std::string     camera_model_{};  ///< Empty when unknown.
+  std::string     lens_{};          ///< Empty when unknown.
+  std::string     capture_date_{};  ///< `YYYY-MM-DD`; empty when unknown.
+  int             rating_ = 0;
+};
+
+/// One page of search results and the number of rows that match the whole query.
+struct SearchResultPage {
+  size_t                       total_ = 0;
+  std::vector<SearchResultRow> rows_{};
+};
+
 class ElementStore {
  private:
   ConnectionGuard       guard_;
@@ -127,6 +145,19 @@ class ElementStore {
   auto CountFilesInFolder(
       sl_element_id_t                            folder_id,
       const std::optional<duckorm::SqlFragment>& extra_filter = std::nullopt) const -> size_t;
+
+  /// Return one page of files that match @p extra_filter, ordered by element id, with the
+  /// display columns and the total match count from one statement (`COUNT(*) OVER ()`).
+  /// @p limit 0 returns every row. When the page is empty and @p offset is past the first row,
+  /// the window value is not available and a `COUNT(*)` statement supplies the total.
+  /// Takes the connection lock; safe to call from any thread.
+  auto ListSearchResultPage(sl_element_id_t folder_id, size_t offset, size_t limit,
+                            const std::optional<duckorm::SqlFragment>& extra_filter =
+                                std::nullopt) const -> SearchResultPage;
+  /// Return the display rows of @p file_ids in the order given. Ids without a live file
+  /// row are skipped. Takes the connection lock; safe to call from any thread.
+  auto ListSearchResultRows(std::span<const sl_element_id_t> file_ids) const
+      -> std::vector<SearchResultRow>;
 
   /// Return element IDs for files in a folder matching an extra SqlFragment predicate.
   /// Uses the same BuildScopedFileQuery infrastructure for consistency with stats queries.

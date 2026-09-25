@@ -470,5 +470,67 @@ TEST_F(LibrarySearchColumnsTest, AiSearchJoinsEachFileOnceAndKeepsCaptionAndTagM
   EXPECT_EQ(filter_service.BuildFolderStats(folder_id, std::nullopt).total_photo_count_, 2);
 }
 
+// Phase S5 step 3: the search page statement returns the display columns and the total match
+// count (`COUNT(*) OVER ()`), so the search dialog needs no count query and no image pool read.
+TEST_F(LibrarySearchColumnsTest, SearchResultPageReadsDisplayColumnsAndTotalInOneStatement) {
+  ProjectService          project(db_path_, meta_path_);
+  SyntheticLibraryBuilder builder(project);
+  const auto              file_ids = builder.AddFiles(TwoFileSpecs());
+  ASSERT_EQ(file_ids.size(), 2u);
+
+  SleeveFilterService filter_service(project.GetStorage());
+  const auto          folder_id = LibraryRootFolderId(project);
+
+  // Page 1 of 2 (rows ordered by element id): the Nikon row with every display column.
+  const auto          first = filter_service.ListSearchResultPage(folder_id, std::nullopt, 0, 1);
+  EXPECT_EQ(first.total_, 2u);
+  ASSERT_EQ(first.rows_.size(), 1u);
+  EXPECT_EQ(first.rows_[0].file_id_, file_ids[0]);
+  EXPECT_EQ(first.rows_[0].image_id_, ImageIdOfFile(project, file_ids[0]));
+  EXPECT_EQ(first.rows_[0].file_name_, "Nikon-D810-raw00011.NEF");
+  EXPECT_EQ(first.rows_[0].camera_model_, "NIKON D810");
+  EXPECT_EQ(first.rows_[0].lens_, "NIKKOR 35mm f/1.8");
+  EXPECT_EQ(first.rows_[0].capture_date_, "2026-06-07");
+  EXPECT_EQ(first.rows_[0].rating_, 3);
+
+  // Page 2: the Canon row has no capture date; the total is the same.
+  const auto second = filter_service.ListSearchResultPage(folder_id, std::nullopt, 1, 1);
+  EXPECT_EQ(second.total_, 2u);
+  ASSERT_EQ(second.rows_.size(), 1u);
+  EXPECT_EQ(second.rows_[0].file_name_, "IMG_0067.CR3");
+  EXPECT_EQ(second.rows_[0].camera_model_, "Canon EOS R5");
+  EXPECT_TRUE(second.rows_[0].capture_date_.empty());
+  EXPECT_EQ(second.rows_[0].rating_, 0);
+
+  // A page past the last row has no window value; the total still comes back.
+  const auto past_end = filter_service.ListSearchResultPage(folder_id, std::nullopt, 5, 1);
+  EXPECT_TRUE(past_end.rows_.empty());
+  EXPECT_EQ(past_end.total_, 2u);
+
+  // The fuzzy-search page agrees with the separate count and search statements.
+  const auto nikkor = filter_service.SearchFolderPage(folder_id, L"nikkor", 0, 24);
+  EXPECT_EQ(nikkor.total_, filter_service.CountSearchResults(folder_id, L"nikkor"));
+  EXPECT_EQ(nikkor.total_, 1u);
+  ASSERT_EQ(nikkor.rows_.size(), 1u);
+  EXPECT_EQ(nikkor.rows_[0].file_name_, "Nikon-D810-raw00011.NEF");
+  EXPECT_EQ(nikkor.total_, filter_service.SearchFolder(folder_id, L"nikkor").size());
+
+  const auto miss = filter_service.SearchFolderPage(folder_id, L"sony", 0, 24);
+  EXPECT_EQ(miss.total_, 0u);
+  EXPECT_TRUE(miss.rows_.empty());
+  EXPECT_TRUE(filter_service.SearchFolderPage(folder_id, L"   ", 0, 24).rows_.empty());
+
+  // Rows by id keep the given order and skip ids without a file.
+  const std::vector<sl_element_id_t> ids{file_ids[1], 999999, file_ids[0]};
+  const auto rows = project.GetStorage()->GetElementStore().ListSearchResultRows(ids);
+  ASSERT_EQ(rows.size(), 2u);
+  EXPECT_EQ(rows[0].file_name_, "IMG_0067.CR3");
+  EXPECT_EQ(rows[1].file_name_, "Nikon-D810-raw00011.NEF");
+  EXPECT_EQ(rows[1].lens_, "NIKKOR 35mm f/1.8");
+
+  // Without a semantic provider the semantic rows are empty (no vector scan substitute).
+  EXPECT_TRUE(filter_service.SearchFolderSemanticRows(folder_id, L"sunset", 0, 24).empty());
+}
+
 }  // namespace
 }  // namespace alcedo

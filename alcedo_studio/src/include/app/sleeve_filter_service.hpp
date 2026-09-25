@@ -5,13 +5,17 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "sleeve/sleeve_filter/filter_combo.hpp"
 #include "sleeve/storage.hpp"
+#include "storage/store/sleeve/element_store.hpp"
 #include "type/type.hpp"
 #include "utils/cache/lru_cache.hpp"
 #include "utils/id/id_generator.hpp"
@@ -92,11 +96,21 @@ class SemanticSearchProvider {
       -> std::vector<FuzzySearchMatch> = 0;
 };
 
-// This service should not be used in multi-threaded scenarios.
+/// Threading: the const query methods (search, count, stats, WHERE build) read storage under
+/// its connection lock and may run on a worker thread while the UI thread uses the service.
+/// The filter combo storage and result caches are not synchronized: call CreateFilterCombo,
+/// ApplyFilterOn, InvalidateResultCache, and SetSemanticSearchProvider from one thread only.
 class SleeveFilterService {
+ public:
+  /// Receives the operation name at the start of each search or stats query, on the thread
+  /// that runs the query. Tests install one to prove that search SQL leaves the UI thread.
+  using QueryThreadObserver = std::function<void(std::string_view operation)>;
+
  private:
   std::shared_ptr<Storage>                       storage_;
   std::shared_ptr<SemanticSearchProvider>               semantic_search_provider_{};
+  mutable std::mutex                                    query_thread_observer_mutex_;
+  QueryThreadObserver                                   query_thread_observer_{};
 
   // Filter will not be saved in DB for now. It will be only stored in memory for the lifetime of
   // the application.
@@ -139,6 +153,24 @@ class SleeveFilterService {
                                   size_t offset = 0, size_t limit = 48,
                                   SearchFieldMask mask = kAllSearchFields) const
       -> std::vector<FuzzySearchMatch>;
+  /// One page of fuzzy-search results with the display columns and the total match count,
+  /// from one SQL statement. Returns an empty page for an empty query.
+  [[nodiscard]] auto SearchFolderPage(sl_element_id_t parent_id, const std::wstring& query,
+                                      size_t offset, size_t limit,
+                                      SearchFieldMask mask = kAllSearchFields) const
+      -> SearchResultPage;
+  /// One page of the files that match @p filter (all files when @p filter is empty), with
+  /// the display columns and the total, from one SQL statement.
+  [[nodiscard]] auto ListSearchResultPage(sl_element_id_t                  parent_id,
+                                          const std::optional<FilterNode>& filter, size_t offset,
+                                          size_t limit) const -> SearchResultPage;
+  /// Semantic (CLIP) search: the provider ranks the files, then one SQL statement reads their
+  /// display columns. Rows keep the provider order. Empty when no provider is set.
+  [[nodiscard]] auto SearchFolderSemanticRows(sl_element_id_t parent_id, const std::wstring& query,
+                                              size_t offset, size_t limit) const
+      -> std::vector<SearchResultRow>;
+  /// Install or clear (empty function) the query thread observer. Thread-safe.
+  void               SetQueryThreadObserver(QueryThreadObserver observer);
   void               SetSemanticSearchProvider(std::shared_ptr<SemanticSearchProvider> provider);
   [[nodiscard]] auto HasSemanticSearchProvider() const -> bool;
   [[nodiscard]] auto SearchFolderSemantic(sl_element_id_t parent_id, const std::wstring& query,
@@ -153,5 +185,8 @@ class SleeveFilterService {
 
   /// Invalidate the entire filter result cache.
   void InvalidateResultCache();
+
+ private:
+  void NotifyQueryThreadObserver(std::string_view operation) const;
 };
 }  // namespace alcedo

@@ -11,6 +11,7 @@
 #include <optional>
 #include <string>
 
+#include "app/sleeve_filter_service.hpp"
 #include "sleeve/sleeve_filter/filter_combo.hpp"
 #include "ui/alcedo_main/album_backend/album_types.hpp"
 
@@ -50,6 +51,9 @@ class StatsEngine final : public QObject {
 
   /// Execute GROUP BY aggregate queries and update stats properties.
   void RefreshStats();
+  /// Replace the stats properties with @p stats (already queried, for example on the search
+  /// worker) and emit StatsChanged. Runs no SQL. UI thread only.
+  void ApplyFolderStats(const AlbumStatsView& stats);
 
   [[nodiscard]] auto FormatPhotoInfo(int shown, int total) const -> QString;
   [[nodiscard]] auto MakeThumbMap(const AlbumItem& image, int index) const -> QVariantMap;

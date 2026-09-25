@@ -6,6 +6,7 @@
 
 #include <QCoreApplication>
 #include <QDate>
+#include <QDebug>
 #include <QImage>
 #include <QMetaObject>
 #include <QPointer>
@@ -16,16 +17,17 @@
 #include <memory>
 #include <thread>
 #include <utility>
+#include <vector>
 
-#include "app/thumbnail_service.hpp"
 #include "app/search_query_classifier.hpp"
-#include "image/image.hpp"
-#include "ui/alcedo_main/album_backend/search_controller.hpp"
-#include "ui/alcedo_main/album_backend/project_module.hpp"
-#include "ui/alcedo_main/album_backend/library_module.hpp"
+#include "app/thumbnail_service.hpp"
 #include "ui/alcedo_main/album_backend/folder_controller.hpp"
-#include "ui/alcedo_main/album_backend/stats_engine.hpp"
+#include "ui/alcedo_main/album_backend/library_module.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
+#include "ui/alcedo_main/album_backend/project_module.hpp"
+#include "ui/alcedo_main/album_backend/search_controller.hpp"
+#include "ui/alcedo_main/album_backend/search_request_worker.hpp"
+#include "ui/alcedo_main/album_backend/stats_engine.hpp"
 #include "ui/alcedo_main/i18n.hpp"
 
 namespace alcedo::ui {
@@ -76,73 +78,99 @@ auto MakeEmptyResponse(int offset, int limit, const std::string& route_name) -> 
                     {"route", QString::fromStdString(route_name)}};
 }
 
-struct SearchTask {
-  QString                              query;
+auto ClampToInt(size_t value) -> int {
+  return static_cast<int>(
+      std::min<size_t>(value, static_cast<size_t>(std::numeric_limits<int>::max())));
+}
+
+/// Input of one search dialog page request, captured on the UI thread (the classification,
+/// the field mask from QSettings, and the current folder) and read on the search worker.
+struct SearchPageRequest {
   std::wstring                         query_w;
   int                                  offset = 0;
   int                                  limit  = 0;
   bool                                 submit = false;
   SearchQueryClassification            classification;
   std::string                          route_name;
+  SearchFieldMask                      field_mask = kAllSearchFields;
   std::optional<sl_element_id_t>       folder_id;
-  std::shared_ptr<SleeveFilterService> semantic_filter_service;
+  std::shared_ptr<SleeveFilterService> filter_service;
 };
 
-struct SearchCoreResult {
-  QVariantMap                   response;
-  std::vector<FuzzySearchMatch> matches;
+/// Output of one page request: the response fields and the result rows. The UI thread adds
+/// the thumbnail state of each row (owned by LibraryModule) when it builds `rows`.
+struct SearchPageResult {
+  QVariantMap                  response;
+  std::vector<SearchResultRow> rows;
 };
 
-auto ExecuteSearchTask(const SearchTask& task) -> SearchCoreResult {
-  SearchCoreResult result{MakeEmptyResponse(task.offset, task.limit, task.route_name), {}};
+/// Runs on the search worker: one SQL statement for a traditional or label page, or the
+/// semantic provider and one display-column statement for a semantic submit.
+auto RunSearchPageRequest(const SearchPageRequest& request) -> SearchPageResult {
+  SearchPageResult result{MakeEmptyResponse(request.offset, request.limit, request.route_name), {}};
+  const auto       route = request.classification.route_;
 
-  if (task.classification.route_ == SearchQueryRoute::Empty) {
-    if (task.submit) {
+  if (route == SearchQueryRoute::Empty) {
+    if (request.submit) {
       result.response["recommendations"] = true;
     }
     return result;
   }
-
-  if (!task.submit && task.classification.route_ == SearchQueryRoute::Semantic) {
+  // Semantic preview must not run on every keystroke. Typing only signals that an explicit
+  // submit (Enter / Search button) is required.
+  if (route == SearchQueryRoute::Semantic && !request.submit) {
     result.response["awaitingSubmit"] = true;
     return result;
   }
-
-  if (task.limit <= 0) {
+  if (request.limit <= 0) {
     return result;
   }
-  if (task.classification.route_ != SearchQueryRoute::Semantic) {
+
+  const auto safe_offset = static_cast<size_t>(std::max(0, request.offset));
+  const auto safe_limit  = static_cast<size_t>(request.limit);
+
+  if (route != SearchQueryRoute::Semantic) {
+    // Label and Traditional routes use the ordinary SQL path.
+    if (!request.filter_service || !request.folder_id.has_value()) {
+      return result;
+    }
+    try {
+      auto page = request.filter_service->SearchFolderPage(
+          request.folder_id.value(), request.query_w, safe_offset, safe_limit, request.field_mask);
+      result.response["total"]   = ClampToInt(page.total_);
+      result.response["hasMore"] = safe_offset + page.rows_.size() < page.total_;
+      result.rows                = std::move(page.rows_);
+    } catch (const std::exception& e) {
+      result.response["searchErrorText"] = QString::fromUtf8(e.what());
+    } catch (...) {
+      result.response["searchErrorText"] = QStringLiteral("Unknown search error.");
+    }
+    return result;
+  }
+
+  // Semantic route: the only path that may reach the semantic provider. Guard the prompt
+  // length before embedding, and surface a clean unavailable state instead of falling back
+  // to a C++ vector scan.
+  if (!request.folder_id.has_value()) {
     result.response["semanticUnavailable"] = true;
     return result;
   }
-
-  if (!task.folder_id.has_value()) {
-    result.response["semanticUnavailable"] = true;
-    return result;
-  }
-
-  if (task.classification.too_long_) {
+  if (request.classification.too_long_) {
     result.response["tooLong"] = true;
     return result;
   }
-  if (!task.semantic_filter_service ||
-      !task.semantic_filter_service->HasSemanticSearchProvider()) {
+  if (!request.filter_service || !request.filter_service->HasSemanticSearchProvider()) {
     result.response["semanticUnavailable"] = true;
     return result;
   }
-
   try {
-    const auto safe_offset = static_cast<size_t>(std::max(0, task.offset));
-    const auto safe_limit  = static_cast<size_t>(std::max(0, task.limit));
-    result.matches = task.semantic_filter_service->SearchFolderSemantic(
-        task.folder_id.value(), task.query_w, safe_offset, safe_limit);
-    const bool has_more = safe_limit > 0 && result.matches.size() == safe_limit;
-    const auto approximate_total =
-        safe_offset + result.matches.size() + (has_more ? static_cast<size_t>(1) : 0U);
-    result.response["offset"]  = std::max(0, task.offset);
-    result.response["limit"]   = std::max(0, task.limit);
-    result.response["total"]   = static_cast<int>(std::min<size_t>(
-        approximate_total, static_cast<size_t>(std::numeric_limits<int>::max())));
+    result.rows = request.filter_service->SearchFolderSemanticRows(
+        request.folder_id.value(), request.query_w, safe_offset, safe_limit);
+    const bool has_more = result.rows.size() == safe_limit;
+    // The provider does not count its matches; report one row past the page when it may
+    // have more.
+    result.response["total"] =
+        ClampToInt(safe_offset + result.rows.size() + (has_more ? size_t{1} : size_t{0}));
     result.response["hasMore"] = has_more;
   } catch (const std::exception& e) {
     result.response["semanticUnavailable"] = true;
@@ -153,13 +181,61 @@ auto ExecuteSearchTask(const SearchTask& task) -> SearchCoreResult {
   return result;
 }
 
+/// Input of one applied search, captured on the UI thread. Exactly one of `query_w` (fuzzy
+/// search, parsed on the worker because the WHERE build reads the active semantic model and
+/// the AI index state) and `filter_node` (exact file) is set.
+struct SearchApplyRequest {
+  QString                              display_query;
+  std::optional<std::wstring>          query_w;
+  std::optional<FilterNode>            filter_node;
+  SearchFieldMask                      field_mask = kAllSearchFields;
+  sl_element_id_t                      folder_id  = 0;
+  std::shared_ptr<SleeveFilterService> filter_service;
+};
+
+/// Output of one applied search: the filter, the first thumbnail page, and the stats, all
+/// queried with the search filter and no stats filter (applying a search clears the stats
+/// filters). `filter_node` empty means the query parsed to no terms.
+struct SearchApplyResult {
+  std::optional<FilterNode> filter_node;
+  SearchResultPage          page;
+  AlbumStatsView            stats;
+  QString                   error_text;
+};
+
+/// Runs on the search worker: the WHERE build, the thumbnail page with its total (one
+/// statement), and the stats queries.
+auto RunSearchApplyRequest(const SearchApplyRequest& request) -> SearchApplyResult {
+  SearchApplyResult result;
+  try {
+    result.filter_node = request.filter_node.has_value()
+                             ? request.filter_node
+                             : request.filter_service->BuildFuzzySearchWhere(
+                                   request.query_w.value_or(L""), request.field_mask);
+    if (!result.filter_node.has_value()) {
+      return result;
+    }
+    result.page = request.filter_service->ListSearchResultPage(
+        request.folder_id, result.filter_node, 0, LibraryModule::SearchWindowPageSize());
+    result.stats = request.filter_service->BuildFolderStats(request.folder_id, result.filter_node);
+  } catch (const std::exception& e) {
+    result.error_text = QString::fromUtf8(e.what());
+  } catch (...) {
+    result.error_text = QStringLiteral("Unknown search error.");
+  }
+  return result;
+}
+
 }  // namespace
 
 SearchController::SearchController(ProjectModule* project, LibraryModule* library,
-                                   FolderController* folders, StatsEngine* stats,
-                                   QObject* parent)
-    : QObject(parent), project_(project), library_(library), folders_(folders),
-      stats_(stats) {
+                                   FolderController* folders, StatsEngine* stats, QObject* parent)
+    : QObject(parent),
+      project_(project),
+      library_(library),
+      folders_(folders),
+      stats_(stats),
+      worker_(std::make_unique<SearchRequestWorker>()) {
   QSettings settings;
   if (!settings.contains(QLatin1String(kNaturalLanguageSearchEnabledKey))) {
     // One-time migration: carry over the pre-rename "Semantic" toggle so
@@ -174,7 +250,11 @@ SearchController::SearchController(ProjectModule* project, LibraryModule* librar
   }
 }
 
-SearchController::~SearchController() { CancelSearchPreviewThumbnails(); }
+SearchController::~SearchController() {
+  // Join the worker first: a running job posts its result to `this`.
+  worker_.reset();
+  CancelSearchPreviewThumbnails();
+}
 
 bool SearchController::HasActiveSearchFilter() const {
   return active_search_filter_node_.has_value();
@@ -250,122 +330,36 @@ auto SearchController::SearchRecommendations(int limit) -> QVariantList {
   return stats_->BuildSearchRecommendations(limit);
 }
 
-auto SearchController::SearchPreview(const QString& query, int offset, int limit) -> QVariantMap {
-  const QString trimmed = query.trimmed();
-  const auto    classification =
-      ClassifySearchQuery(trimmed.toStdWString(), natural_language_search_enabled_);
-  const auto route_name = std::string(SearchQueryRouteName(classification.route_));
-
-  // Semantic preview must not run on every keystroke. Typing only signals that
-  // an explicit submit (Enter / Search button) is required.
-  if (classification.route_ == SearchQueryRoute::Semantic) {
-    auto response   = MakeEmptyResponse(offset, limit, route_name);
-    response["awaitingSubmit"] = true;
-    return response;
-  }
-  if (classification.route_ == SearchQueryRoute::Empty || limit <= 0) {
-    return MakeEmptyResponse(offset, limit, route_name);
-  }
-  return RunTraditionalPreview(trimmed, offset, limit, route_name);
-}
-
-auto SearchController::RunTraditionalPreview(const QString& query, int offset, int limit,
-                                             const std::string& route_name) -> QVariantMap {
-  auto response = MakeEmptyResponse(offset, limit, route_name);
-  QVariantList rows;
-  const QString trimmed = query.trimmed();
-  if (trimmed.isEmpty() || limit <= 0) {
-    response["rows"] = rows;
-    return response;
-  }
-
-  auto proj = project_->handler().project();
-  if (!proj) {
-    response["rows"] = rows;
-    return response;
-  }
-  auto filter_service = proj->GetSleeveFilterService();
-  if (!filter_service) {
-    response["rows"] = rows;
-    return response;
-  }
-  const auto folder_id = folders_->CurrentFolderElementId();
-  if (!folder_id.has_value()) {
-    response["rows"] = rows;
-    return response;
-  }
-
-  try {
-    const auto safe_offset = std::max(0, offset);
-    const auto safe_limit  = std::max(0, limit);
-    const auto field_mask  = BuildSearchFieldMask();
-    const auto total       = filter_service->CountSearchResults(folder_id.value(),
-                                                                trimmed.toStdWString(), field_mask);
-    const auto matches     = filter_service->SearchFolder(
-        folder_id.value(), trimmed.toStdWString(), static_cast<size_t>(safe_offset),
-        static_cast<size_t>(safe_limit), field_mask);
-    response["offset"]  = safe_offset;
-    response["limit"]   = safe_limit;
-    response["total"]   = static_cast<int>(std::min<size_t>(
-        total, static_cast<size_t>(std::numeric_limits<int>::max())));
-    response["hasMore"] = static_cast<size_t>(safe_offset) + matches.size() < total;
-    rows                = BuildResultRows(matches);
-  } catch (...) {
-  }
-  response["rows"] = rows;
-  return response;
-}
-
-auto SearchController::BuildResultRows(const std::vector<alcedo::FuzzySearchMatch>& matches)
+auto SearchController::BuildResultRows(const std::vector<SearchResultRow>& result_rows)
     -> QVariantList {
   QVariantList rows;
-  rows.reserve(static_cast<qsizetype>(matches.size()));
+  rows.reserve(static_cast<qsizetype>(result_rows.size()));
 
-  auto proj = project_->handler().project();
-  for (const auto& match : matches) {
-    QVariantMap row{{"elementId", static_cast<uint>(match.file_id_)},
-                    {"fileId", static_cast<uint>(match.file_id_)},
-                    {"imageId", static_cast<uint>(match.image_id_)},
-                    {"fileName", QString::fromUtf8(match.file_name_.c_str())},
-                    {"cameraModel", SEARCH_TEXT("Unknown").Render()},
-                    {"lens", QString{}},
-                    {"captureDate", QStringLiteral("--")},
-                    {"rating", 0},
-                    {"thumbUrl", QString{}},
-                    {"thumbLoading", false},
-                    {"thumbMissingSource", false},
-                    {"thumbErrorText", QString{}}};
+  for (const auto& result_row : result_rows) {
+    const QDate capture_date =
+        QDate::fromString(QString::fromStdString(result_row.capture_date_), Qt::ISODate);
+    QVariantMap row{
+        {"elementId", static_cast<uint>(result_row.file_id_)},
+        {"fileId", static_cast<uint>(result_row.file_id_)},
+        {"imageId", static_cast<uint>(result_row.image_id_)},
+        {"fileName", QString::fromStdString(result_row.file_name_)},
+        {"cameraModel", result_row.camera_model_.empty()
+                            ? SEARCH_TEXT("Unknown").Render()
+                            : QString::fromStdString(result_row.camera_model_)},
+        {"lens", QString::fromStdString(result_row.lens_)},
+        {"captureDate", capture_date.isValid() ? capture_date.toString(QStringLiteral("yyyy-MM-dd"))
+                                               : QStringLiteral("--")},
+        {"rating", result_row.rating_},
+        {"thumbUrl", QString{}},
+        {"thumbLoading", false},
+        {"thumbMissingSource", false},
+        {"thumbErrorText", QString{}}};
 
-    if (const auto* item = library_->FindAlbumItem(match.file_id_); item != nullptr) {
+    if (const auto* item = library_->FindAlbumItem(result_row.file_id_); item != nullptr) {
       row["thumbUrl"]           = item->thumb_data_url;
       row["thumbLoading"]       = item->thumb_loading;
       row["thumbMissingSource"] = item->thumb_missing_source;
       row["thumbErrorText"]     = item->thumb_error_text;
-    }
-
-    if (proj) {
-      try {
-        proj->GetImagePoolService()->Read<void>(
-            match.image_id_, [&row](std::shared_ptr<Image> image) {
-              if (!image) {
-                return;
-              }
-              if (!image->image_name_.empty()) {
-                row["fileName"] = album_util::WStringToQString(image->image_name_);
-              }
-              const auto& exif = image->exif_display_;
-              if (!exif.model_.empty()) {
-                row["cameraModel"] = QString::fromUtf8(exif.model_.c_str());
-              }
-              row["lens"]              = QString::fromUtf8(exif.lens_.c_str());
-              const QDate capture_date = album_util::DateFromExifString(exif.date_time_str_);
-              if (capture_date.isValid()) {
-                row["captureDate"] = capture_date.toString(QStringLiteral("yyyy-MM-dd"));
-              }
-              row["rating"] = exif.rating_;
-            });
-      } catch (...) {
-      }
     }
 
     rows.push_back(std::move(row));
@@ -373,125 +367,54 @@ auto SearchController::BuildResultRows(const std::vector<alcedo::FuzzySearchMatc
   return rows;
 }
 
-auto SearchController::SubmitSearch(const QString& query, int offset, int limit) -> QVariantMap {
-  const QString trimmed = query.trimmed();
-  const auto    classification =
-      ClassifySearchQuery(trimmed.toStdWString(), natural_language_search_enabled_);
-  const auto route_name = std::string(SearchQueryRouteName(classification.route_));
-
-  if (classification.route_ == SearchQueryRoute::Empty) {
-    auto response      = MakeEmptyResponse(offset, limit, route_name);
-    response["recommendations"] = true;
-    return response;
-  }
-  // Label and Traditional routes use the ordinary SQL path.
-  if (classification.route_ != SearchQueryRoute::Semantic) {
-    return RunTraditionalPreview(trimmed, offset, limit, route_name);
-  }
-
-  // Semantic route: the only path that may reach the semantic provider. Guard
-  // the prompt length before embedding, and surface a clean unavailable state
-  // instead of silently falling back to a C++ vector scan.
-  if (classification.too_long_) {
-    auto response  = MakeEmptyResponse(offset, limit, route_name);
-    response["tooLong"] = true;
-    return response;
-  }
-
-  auto proj = project_->handler().project();
-  auto filter_service = proj ? proj->GetSleeveFilterService() : nullptr;
-  const auto folder_id = folders_->CurrentFolderElementId();
-  if (!filter_service || !filter_service->HasSemanticSearchProvider() || !folder_id.has_value()) {
-    auto response            = MakeEmptyResponse(offset, limit, route_name);
-    response["semanticUnavailable"] = true;
-    return response;
-  }
-
-  auto response = MakeEmptyResponse(offset, limit, route_name);
-  QVariantList rows;
-  try {
-    const auto safe_offset = static_cast<size_t>(std::max(0, offset));
-    const auto safe_limit  = static_cast<size_t>(std::max(0, limit));
-    const auto matches     = filter_service->SearchFolderSemantic(
-        folder_id.value(), trimmed.toStdWString(), safe_offset, safe_limit);
-    const bool has_more = safe_limit > 0 && matches.size() == safe_limit;
-    const auto approximate_total =
-        safe_offset + matches.size() + (has_more ? static_cast<size_t>(1) : static_cast<size_t>(0));
-    response["offset"]  = std::max(0, offset);
-    response["limit"]   = std::max(0, limit);
-    response["total"]   = static_cast<int>(std::min<size_t>(
-        approximate_total, static_cast<size_t>(std::numeric_limits<int>::max())));
-    response["hasMore"] = has_more;
-    rows                = BuildResultRows(matches);
-  } catch (const std::exception& e) {
-    response["semanticUnavailable"] = true;
-    response["semanticErrorText"]   = QString::fromUtf8(e.what());
-  } catch (...) {
-    response["semanticUnavailable"] = true;
-  }
-  response["rows"] = rows;
-  return response;
+auto SearchController::RequestSearch(const QString& query, int offset, int limit,
+                                     const QString& mode) -> qulonglong {
+  return RequestSearchPage(query, offset, limit, mode, false);
 }
 
 auto SearchController::RequestSubmitSearch(const QString& query, int offset, int limit,
                                            const QString& mode) -> qulonglong {
-  return RequestSearch(query, offset, limit, mode, true);
+  return RequestSearchPage(query, offset, limit, mode, true);
 }
 
-auto SearchController::RequestSearch(const QString& query, int offset, int limit,
-                                     const QString& mode, bool submit) -> qulonglong {
-  const auto request_id = static_cast<qulonglong>(++search_response_request_sequence_);
-  const auto trimmed    = query.trimmed();
-  const auto classification = ClassifySearchQuery(trimmed.toStdWString(), natural_language_search_enabled_);
-
-  if (!submit || classification.route_ != SearchQueryRoute::Semantic) {
-    auto response = submit ? SubmitSearch(trimmed, offset, limit)
-                           : SearchPreview(trimmed, offset, limit);
-    QMetaObject::invokeMethod(
-        this,
-        [this, request_id, mode, response = std::move(response)]() {
-          emit SearchResponseReady(request_id, mode, response);
-          emit searchResponseReady(request_id, mode, response);
-        },
-        Qt::QueuedConnection);
-    return request_id;
-  }
-
-  auto       task       = SearchTask{
-            .query          = trimmed,
-            .query_w        = trimmed.toStdWString(),
-            .offset         = offset,
-            .limit          = limit,
-            .submit         = submit,
-            .classification = classification,
+auto SearchController::RequestSearchPage(const QString& query, int offset, int limit,
+                                         const QString& mode, bool submit) -> qulonglong {
+  const auto        trimmed = query.trimmed();
+  SearchPageRequest request{
+      .query_w = trimmed.toStdWString(),
+      .offset  = offset,
+      .limit   = limit,
+      .submit  = submit,
+      .classification =
+          ClassifySearchQuery(trimmed.toStdWString(), natural_language_search_enabled_),
+      .field_mask = BuildSearchFieldMask(),
+      .folder_id  = folders_->CurrentFolderElementId(),
   };
-  task.route_name = std::string(SearchQueryRouteName(task.classification.route_));
-
+  request.route_name = std::string(SearchQueryRouteName(request.classification.route_));
   if (auto project = project_->handler().project()) {
-    task.semantic_filter_service = project->GetSleeveFilterService();
+    request.filter_service = project->GetSleeveFilterService();
   }
-  task.folder_id = folders_->CurrentFolderElementId();
 
-  QPointer<SearchController> self(this);
-  std::thread([self, request_id, mode, task = std::move(task)]() mutable {
-    auto result = std::make_shared<SearchCoreResult>(ExecuteSearchTask(task));
-    if (!self) {
-      return;
-    }
-    QMetaObject::invokeMethod(
-        self,
-        [self, request_id, mode, result]() {
-          if (!self) {
-            return;
-          }
-          result->response["rows"] = self->BuildResultRows(result->matches);
-          emit self->SearchResponseReady(request_id, mode, result->response);
-          emit self->searchResponseReady(request_id, mode, result->response);
-        },
-        Qt::QueuedConnection);
-  }).detach();
-
-  return request_id;
+  const auto generation = worker_->Submit(
+      SearchRequestKind::kPreview,
+      [this, mode, request = std::move(request)](std::uint64_t request_generation) {
+        auto result = RunSearchPageRequest(request);
+        // The destructor joins the worker before QObject teardown, so `this` is valid here;
+        // a result posted during teardown is removed with the object's posted events.
+        QMetaObject::invokeMethod(
+            this,
+            [this, request_generation, mode, result = std::move(result)]() mutable {
+              if (!worker_->IsCurrent(SearchRequestKind::kPreview, request_generation)) {
+                return;
+              }
+              result.response["rows"] = BuildResultRows(result.rows);
+              const auto request_id   = static_cast<qulonglong>(request_generation);
+              emit       SearchResponseReady(request_id, mode, result.response);
+              emit       searchResponseReady(request_id, mode, result.response);
+            },
+            Qt::QueuedConnection);
+      });
+  return static_cast<qulonglong>(generation);
 }
 
 auto SearchController::ClassifyQuery(const QString& query) const -> QString {
@@ -516,37 +439,13 @@ void SearchController::ApplyFuzzySearch(const QString& query) {
     ClearFuzzySearch();
     return;
   }
-
-  auto proj = project_->handler().project();
-  if (!proj) {
-    return;
-  }
-  auto filter_service = proj->GetSleeveFilterService();
-  if (!filter_service) {
-    return;
-  }
-
-  auto filter_node = filter_service->BuildFuzzySearchWhere(trimmed.toStdWString(),
-                                                           BuildSearchFieldMask());
-  if (!filter_node.has_value()) {
-    ClearFuzzySearch();
-    return;
-  }
-
-  active_search_query_       = trimmed;
-  active_search_filter_node_ = std::move(filter_node);
-  stats_->ClearFilters();
-  stats_->RebuildThumbnailView();
-  stats_->RefreshStats();
-  emit stats_->StatsFilterChanged();
-  emit SearchStateChanged();
+  SubmitApplyRequest(trimmed, trimmed.toStdWString(), std::nullopt);
 }
 
 void SearchController::ApplyExactSearch(uint elementId) {
   if (elementId == 0) {
     return;
   }
-
   auto proj = project_->handler().project();
   if (!proj) {
     return;
@@ -555,25 +454,91 @@ void SearchController::ApplyExactSearch(uint elementId) {
   if (!filter_service) {
     return;
   }
+  SubmitApplyRequest(
+      SEARCH_TEXT("Image %1", QString::number(static_cast<qulonglong>(elementId))).Render(),
+      std::nullopt, filter_service->BuildExactFileWhere(static_cast<sl_element_id_t>(elementId)));
+}
 
-  active_search_query_ =
-      SEARCH_TEXT("Image %1", QString::number(static_cast<qulonglong>(elementId))).Render();
-  active_search_filter_node_ =
-      filter_service->BuildExactFileWhere(static_cast<sl_element_id_t>(elementId));
+void SearchController::SubmitApplyRequest(const QString&              display_query,
+                                          std::optional<std::wstring> query_w,
+                                          std::optional<FilterNode>   filter_node) {
+  auto proj = project_->handler().project();
+  if (!proj) {
+    return;
+  }
+  auto filter_service = proj->GetSleeveFilterService();
+  if (!filter_service) {
+    return;
+  }
+  const auto folder_id = folders_->CurrentFolderElementId();
+  if (!folder_id.has_value()) {
+    return;
+  }
+
+  SearchApplyRequest request{
+      .display_query  = display_query,
+      .query_w        = std::move(query_w),
+      .filter_node    = std::move(filter_node),
+      .field_mask     = BuildSearchFieldMask(),
+      .folder_id      = folder_id.value(),
+      .filter_service = std::move(filter_service),
+  };
+  worker_->Submit(SearchRequestKind::kApply, [this, request = std::move(request)](
+                                                 std::uint64_t request_generation) {
+    auto result = RunSearchApplyRequest(request);
+    QMetaObject::invokeMethod(
+        this,
+        [this, request_generation, display_query = request.display_query,
+         folder_id = request.folder_id, result = std::move(result)]() mutable {
+          if (!worker_->IsCurrent(SearchRequestKind::kApply, request_generation)) {
+            return;
+          }
+          CommitAppliedSearch(display_query, folder_id, std::move(result.filter_node), result.page,
+                              result.stats, result.error_text);
+        },
+        Qt::QueuedConnection);
+  });
+}
+
+void SearchController::CommitAppliedSearch(const QString& display_query, sl_element_id_t folder_id,
+                                           std::optional<FilterNode> filter_node,
+                                           const SearchResultPage&   page,
+                                           const AlbumStatsView& stats, const QString& error_text) {
+  if (!error_text.isEmpty()) {
+    // The grid, stats, and active query stay as they were; the failure is reported, not
+    // replaced by another result.
+    qWarning().noquote() << "Search apply failed:" << error_text;
+    return;
+  }
+  if (!filter_node.has_value()) {
+    ClearFuzzySearch();
+    return;
+  }
+
+  active_search_query_       = display_query;
+  active_search_filter_node_ = std::move(filter_node);
   stats_->ClearFilters();
-  stats_->RebuildThumbnailView();
-  stats_->RefreshStats();
+  library_->ApplySearchWindow(folder_id, page);
+  stats_->ApplyFolderStats(stats);
   emit stats_->StatsFilterChanged();
   emit SearchStateChanged();
 }
 
 void SearchController::ClearFuzzySearch() {
+  // An apply that is still on the worker was requested before this clear; it must not
+  // install its filter afterwards.
+  worker_->Invalidate(SearchRequestKind::kApply);
   if (active_search_query_.isEmpty() && !active_search_filter_node_.has_value()) {
     return;
   }
   ClearSearchState(true);
   stats_->RebuildThumbnailView();
   stats_->RefreshStats();
+}
+
+void SearchController::CancelSearchRequests() {
+  worker_->Invalidate(SearchRequestKind::kPreview);
+  worker_->Invalidate(SearchRequestKind::kApply);
 }
 
 void SearchController::SetSearchPreviewThumbnailVisible(uint elementId, uint imageId, bool visible,
@@ -847,6 +812,7 @@ void SearchController::CancelSearchPreviewThumbnails() {
 }
 
 void SearchController::ClearSearchState(bool emitSignal) {
+  worker_->Invalidate(SearchRequestKind::kApply);
   active_search_query_.clear();
   active_search_filter_node_.reset();
   if (emitSignal) {

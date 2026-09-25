@@ -112,7 +112,7 @@ TEST_F(MainQmlWorkflowTests, ProductionWindowLoadsAndRoutesCoreWorkspaceActions)
   host.import_export()->StartExport(PathToQString(temp_dir_));
   host.import_export()->ResetExportState();
   (void)host.images()->GetFocusedImageInspection(0, 0);
-  (void)host.search()->SearchPreview(QStringLiteral(""), 0, 24);
+  (void)host.search()->RequestSearch(QStringLiteral(""), 0, 24);
 
   host.workspace_router()->OpenEditor(0, 0);
   ProcessEvents(50);

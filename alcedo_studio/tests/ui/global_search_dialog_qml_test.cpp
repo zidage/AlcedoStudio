@@ -2,8 +2,6 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-#include "ui/album_backend_test_fixture.hpp"
-
 #include <QApplication>
 #include <QByteArray>
 #include <QImage>
@@ -17,7 +15,6 @@
 #include <QSettings>
 #include <QSignalSpy>
 #include <QUrl>
-
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
@@ -28,6 +25,8 @@
 #include <string>
 #include <vector>
 
+#include "ui/album_backend_seeded_project_fixture.hpp"
+#include "ui/album_backend_test_fixture.hpp"
 #include "ui/alcedo_main/album_backend/search_controller.hpp"
 #include "ui/alcedo_main/app_theme.hpp"
 
@@ -71,19 +70,6 @@ ApplicationWindow {
     }
 }
 )";
-
-void WaitForImportFinished(ApplicationModuleHost& backend, int timeoutMs = 180000) {
-  QSignalSpy spy(backend.import_export(), &ImportExportHandler::ImportStateChanged);
-  const int  stepMs  = 200;
-  int        waited  = 0;
-
-  while (backend.import_export()->ImportRunning() && waited < timeoutMs) {
-    spy.wait(stepMs);
-    waited += stepMs;
-  }
-
-  ProcessEvents(500);
-}
 
 auto WaitUntil(const std::function<bool()>& predicate, int timeoutMs,
                int stepMs = 50) -> bool {
@@ -340,6 +326,28 @@ auto SearchPreviewReadySignalCount(const QSignalSpy& spy) -> int {
   return readySignals;
 }
 
+/// Queue a preview (`submit` false) or submit page on the search worker and wait for the
+/// response to that request.
+auto RequestSearchPage(SearchController& search, const QString& query, int offset, int limit,
+                       bool submit) -> QVariantMap {
+  QSignalSpy  responses(&search, &SearchController::SearchResponseReady);
+  const auto  request_id = submit ? search.RequestSubmitSearch(query, offset, limit)
+                                  : search.RequestSearch(query, offset, limit);
+  QVariantMap response;
+  WaitUntil(
+      [&]() {
+        for (const auto& args : responses) {
+          if (args.at(0).toULongLong() == request_id) {
+            response = args.at(2).toMap();
+            return true;
+          }
+        }
+        return false;
+      },
+      10000);
+  return response;
+}
+
 auto VariantToJsonString(const QVariant& value) -> std::string {
   const QJsonValue jsonValue = QJsonValue::fromVariant(value);
   if (jsonValue.isObject()) {
@@ -390,7 +398,7 @@ TEST_F(GlobalSearchDialogQmlTests,
       << "Need at least 30 searchable RAW files to exercise page 2 thumbnail loading.";
 
   backend.import_export()->StartImport(PathsToQStringList(searchDataset));
-  WaitForImportFinished(backend);
+  WaitForImportFinished(backend, 180000);
 
   ASSERT_FALSE(backend.import_export()->ImportRunning());
   ASSERT_GE(backend.import_export()->ImportCompleted(), kSearchItemCount);
@@ -595,29 +603,29 @@ TEST_F(GlobalSearchDialogQmlTests, SearchControllerClassifiesAndRoutesBySemantic
   EXPECT_TRUE(
       QSettings{}.value(QStringLiteral("search/naturalLanguageSearchEnabled"), false).toBool());
 
-  // SubmitSearch routing: semantic route surfaces an unavailable state when the
+  // Submit routing: semantic route surfaces an unavailable state when the
   // active model/runtime path is not ready; it must not fall back to a C++ vector scan.
-  const auto semanticResp = searchController->SubmitSearch(
-      QStringLiteral("sunset over the mountains"), 0, kPageSize);
+  const auto semanticResp = RequestSearchPage(
+      *searchController, QStringLiteral("sunset over the mountains"), 0, kPageSize, true);
   EXPECT_EQ(semanticResp.value("route").toString().toStdString(), "semantic");
   EXPECT_TRUE(semanticResp.value("semanticUnavailable").toBool());
   EXPECT_TRUE(semanticResp.value("rows").toList().empty());
 
-  // Typing (SearchPreview) on a semantic route must NOT call the provider: it
+  // Typing (RequestSearch) on a semantic route must NOT call the provider: it
   // returns an awaiting-submit stub.
-  const auto typingResp =
-      searchController->SearchPreview(QStringLiteral("sunset over the mountains"), 0, kPageSize);
+  const auto typingResp = RequestSearchPage(
+      *searchController, QStringLiteral("sunset over the mountains"), 0, kPageSize, false);
   EXPECT_EQ(typingResp.value("route").toString().toStdString(), "semantic");
   EXPECT_TRUE(typingResp.value("awaitingSubmit").toBool());
   EXPECT_TRUE(typingResp.value("rows").toList().empty());
 
   // Label and empty submit routes carry their route name on the response.
-  EXPECT_EQ(searchController->SubmitSearch(QStringLiteral("portrait"), 0, kPageSize)
+  EXPECT_EQ(RequestSearchPage(*searchController, QStringLiteral("portrait"), 0, kPageSize, true)
                 .value("route")
                 .toString()
                 .toStdString(),
             "label");
-  EXPECT_EQ(searchController->SubmitSearch(QString(), 0, kPageSize)
+  EXPECT_EQ(RequestSearchPage(*searchController, QString(), 0, kPageSize, true)
                 .value("route")
                 .toString()
                 .toStdString(),
@@ -683,7 +691,7 @@ TEST_F(GlobalSearchDialogQmlTests, SemanticTypingShowsAwaitingSubmitAndLabelUses
   EXPECT_TRUE(dialog->property("results").toList().empty());
   EXPECT_FALSE(dialog->property("naturalLanguageStatusText").toString().isEmpty());
   EXPECT_FALSE(dialog->property("searchLoading").toBool())
-      << "Semantic typing must not schedule SearchPreview / searchLoading.";
+      << "Semantic typing must not schedule a preview request / searchLoading.";
   EXPECT_FALSE(dialog->property("naturalLanguagePreviewActive").toBool());
 
   // A label query still uses the ordinary path on typing even with the toggle on.
@@ -853,6 +861,97 @@ TEST_F(GlobalSearchDialogQmlTests, NaturalLanguageSearchGate_SyncedOnDialogOpen)
   searchController->SetNaturalLanguageSearchEnabled(false);
   QSettings{}.remove(QStringLiteral("search/naturalLanguageSearchEnabled"));
   QSettings{}.remove(QStringLiteral("search/semanticEnabled"));
+}
+
+// Phase S5 acceptance: twenty characters typed quickly, each one sending its own request (the
+// worst case, where the 140 ms debounce elapses between keys). The search worker runs at most
+// the first and the newest request, and the dialog applies only the last response.
+TEST_F(GlobalSearchDialogQmlTests, TypingTwentyCharactersQuicklyAppliesOnlyTheLastResponse) {
+  auto* app = qobject_cast<QApplication*>(QCoreApplication::instance());
+  ASSERT_NE(app, nullptr);
+
+  QQuickStyle::setStyle(QStringLiteral("Material"));
+  AppTheme::RegisterFonts();
+  AppTheme::ApplyApplicationFont(*app);
+
+  // 101 synthetic files, so the 20-character name album-delete-100.dng exists.
+  const auto packed_project = CreateSeededPackedProject(temp_dir_, {}, 101);
+  ASSERT_TRUE(packed_project.has_value());
+  ApplicationModuleHost backend;
+  ASSERT_TRUE(LoadPackedProject(backend, packed_project->packed_path_));
+  auto* searchController = backend.search();
+  ASSERT_NE(searchController, nullptr);
+  searchController->SetNaturalLanguageSearchEnabled(false);
+
+  QQmlApplicationEngine engine;
+  engine.addImportPath(QStringLiteral("qrc:/"));
+  backend.AttachQmlEngine(&engine);
+  engine.rootContext()->setContextProperty(QStringLiteral("appModules"), &backend);
+  engine.rootContext()->setContextProperty(QStringLiteral("appTheme"), &AppTheme::Instance());
+  engine.rootContext()->setContextProperty(QStringLiteral("dialogSourceUrl"),
+                                           GlobalSearchDialogFileUrl());
+  engine.loadData(QByteArray{kHarnessQml},
+                  QUrl(QStringLiteral("file:///GlobalSearchDialogTypingHarness.qml")));
+  ASSERT_FALSE(engine.rootObjects().empty()) << "QML harness failed to load.";
+  QObject* windowRoot = engine.rootObjects().front();
+
+  QObject* dialog     = nullptr;
+  ASSERT_TRUE(WaitUntil(
+      [&]() {
+        dialog = qvariant_cast<QObject*>(windowRoot->property("dialog"));
+        return dialog != nullptr;
+      },
+      10000));
+  ASSERT_TRUE(QMetaObject::invokeMethod(dialog, "openFromCollection"));
+  ASSERT_TRUE(WaitUntil([&]() { return dialog->property("visible").toBool(); }, 5000));
+
+  QObject* searchField = nullptr;
+  ASSERT_TRUE(WaitUntil(
+      [&]() {
+        searchField = FindSearchField(windowRoot);
+        return searchField != nullptr;
+      },
+      5000));
+  QObject* previewTimer = nullptr;
+  for (QObject* object : dialog->findChildren<QObject*>()) {
+    if (QString::fromLatin1(object->metaObject()->className()).contains(QStringLiteral("Timer")) &&
+        object->property("interval").toInt() == 140) {
+      previewTimer = object;
+    }
+  }
+  ASSERT_NE(previewTimer, nullptr) << "The 140 ms typing debounce timer was not found.";
+
+  const QString query = QStringLiteral("album-delete-100.dng");
+  ASSERT_EQ(query.size(), 20);
+  QSignalSpy responses(searchController, &SearchController::SearchResponseReady);
+  QSignalSpy appliedResults(dialog, SIGNAL(resultsChanged()));
+
+  for (int length = 1; length <= query.size(); ++length) {
+    searchField->setProperty("text", query.left(length));
+    ASSERT_TRUE(QMetaObject::invokeMethod(dialog, "refreshPreview"));
+    ASSERT_TRUE(QMetaObject::invokeMethod(dialog, "executePendingSearch"));
+  }
+  // Every keystroke sent its request above; the debounce must not send a 21st.
+  ASSERT_TRUE(QMetaObject::invokeMethod(previewTimer, "stop"));
+  const auto lastRequestId = dialog->property("activeSearchRequestId").toULongLong();
+  ASSERT_NE(lastRequestId, 0u);
+
+  ASSERT_TRUE(WaitUntil(
+      [&]() { return !dialog->property("searchLoading").toBool() && responses.count() >= 1; },
+      10000));
+  // A stale response would arrive right after the first; give it the time.
+  ProcessEvents(300);
+
+  ASSERT_EQ(responses.count(), 1) << "Only the newest request may deliver a response.";
+  EXPECT_EQ(responses.at(0).at(0).toULongLong(), lastRequestId);
+  EXPECT_EQ(appliedResults.count(), 1) << "The dialog must apply exactly one response.";
+  const auto rows = dialog->property("results").toList();
+  ASSERT_EQ(rows.size(), 1);
+  EXPECT_EQ(rows.front().toMap().value("fileName").toString(), query);
+  EXPECT_EQ(dialog->property("searchTotal").toInt(), 1);
+  EXPECT_EQ(dialog->property("lastQuery").toString(), query);
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(dialog, "close"));
 }
 
 }  // namespace alcedo::ui::test

@@ -11,6 +11,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -107,6 +108,38 @@ auto RunScalarInt64(duckdb_connection conn, const std::string& sql,
   }
   duckdb_destroy_result(&result);
   return value;
+}
+
+// Display columns of a search result row, in SearchResultRow order. Aliases follow
+// BuildScopedFileQuery (`e` Element, `fi` FileImage, `i` Image).
+constexpr const char* kSearchResultColumns =
+    "e.id, fi.image_id, i.file_name, i.camera_model, i.lens, "
+    "CAST(i.capture_date AS VARCHAR), i.rating";
+constexpr idx_t kSearchResultColumnCount = 7;
+
+auto            ReadVarchar(duckdb_result* result, idx_t column, idx_t row) -> std::string {
+  std::string value;
+  if (duckdb_value_is_null(result, column, row)) {
+    return value;
+  }
+  char* raw = duckdb_value_varchar(result, column, row);
+  if (raw) {
+    value = raw;
+    duckdb_free(raw);
+  }
+  return value;
+}
+
+auto ReadSearchResultRow(duckdb_result* result, idx_t row) -> SearchResultRow {
+  SearchResultRow out;
+  out.file_id_      = static_cast<sl_element_id_t>(duckdb_value_int64(result, 0, row));
+  out.image_id_     = static_cast<image_id_t>(duckdb_value_int64(result, 1, row));
+  out.file_name_    = ReadVarchar(result, 2, row);
+  out.camera_model_ = ReadVarchar(result, 3, row);
+  out.lens_         = ReadVarchar(result, 4, row);
+  out.capture_date_ = ReadVarchar(result, 5, row);
+  out.rating_       = static_cast<int>(duckdb_value_int32(result, 6, row));
+  return out;
 }
 
 auto JoinIds(std::span<const sl_element_id_t> ids) -> std::string {
@@ -518,6 +551,83 @@ auto ElementStore::CountFilesInFolder(sl_element_id_t                           
   duckdb_connection conn    = guard_.conn_;
   return static_cast<size_t>(
       RunScalarInt64(conn, std::format("SELECT COUNT(*) {}", scope.from_where_), scope.binds_));
+}
+
+auto ElementStore::ListSearchResultPage(
+    sl_element_id_t folder_id, size_t offset, size_t limit,
+    const std::optional<duckorm::SqlFragment>& extra_filter) const -> SearchResultPage {
+  auto             db_lock = guard_.Lock();
+  SearchResultPage out;
+  const auto       scope = BuildScopedFileQuery(folder_id, extra_filter);
+  // The window value counts the rows before LIMIT applies, so one statement gives the page
+  // and the total.
+  auto sql = std::format("SELECT {}, COUNT(*) OVER () {} ORDER BY e.id", kSearchResultColumns,
+                         scope.from_where_);
+  if (limit > 0) {
+    sql += std::format(" LIMIT {} OFFSET {}", limit, offset);
+  }
+
+  duckdb_result     result;
+  duckdb_connection conn = guard_.conn_;
+  if (duckorm::execute_query(conn, sql, scope.binds_, &result) != DuckDBSuccess) {
+    duckdb_destroy_result(&result);
+    return out;
+  }
+
+  const auto row_count = duckdb_row_count(&result);
+  out.rows_.reserve(static_cast<size_t>(row_count));
+  for (idx_t r = 0; r < row_count; ++r) {
+    out.rows_.push_back(ReadSearchResultRow(&result, r));
+  }
+  if (row_count > 0) {
+    out.total_ = static_cast<size_t>(duckdb_value_int64(&result, kSearchResultColumnCount, 0));
+  }
+  duckdb_destroy_result(&result);
+
+  if (row_count == 0 && offset > 0) {
+    out.total_ = static_cast<size_t>(
+        RunScalarInt64(conn, std::format("SELECT COUNT(*) {}", scope.from_where_), scope.binds_));
+  }
+  return out;
+}
+
+auto ElementStore::ListSearchResultRows(std::span<const sl_element_id_t> file_ids) const
+    -> std::vector<SearchResultRow> {
+  std::vector<SearchResultRow> out;
+  if (file_ids.empty()) {
+    return out;
+  }
+  auto       db_lock = guard_.Lock();
+  const auto sql     = std::format(
+      "SELECT {} FROM Element e "
+          "JOIN FileImage fi ON fi.file_id = e.id "
+          "JOIN Image i ON i.id = fi.image_id "
+          "WHERE e.type = {} AND e.id IN ({})",
+      kSearchResultColumns, static_cast<uint32_t>(ElementType::FILE), JoinIds(file_ids));
+
+  duckdb_result     result;
+  duckdb_connection conn = guard_.conn_;
+  if (duckorm::execute_query(conn, sql, duckorm::SqlFragment{}, &result) != DuckDBSuccess) {
+    duckdb_destroy_result(&result);
+    return out;
+  }
+
+  std::unordered_map<sl_element_id_t, SearchResultRow> rows_by_id;
+  const auto                                           row_count = duckdb_row_count(&result);
+  rows_by_id.reserve(static_cast<size_t>(row_count));
+  for (idx_t r = 0; r < row_count; ++r) {
+    auto row = ReadSearchResultRow(&result, r);
+    rows_by_id.emplace(row.file_id_, std::move(row));
+  }
+  duckdb_destroy_result(&result);
+
+  out.reserve(file_ids.size());
+  for (const auto file_id : file_ids) {
+    if (const auto it = rows_by_id.find(file_id); it != rows_by_id.end()) {
+      out.push_back(it->second);
+    }
+  }
+  return out;
 }
 
 auto ElementStore::ListFilteredFileIds(
