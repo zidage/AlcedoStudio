@@ -37,7 +37,7 @@ class Image {
   Exiv2::Image::UniquePtr     exif_data_;
   nlohmann::json              exif_json_;
   ExifDisplayMetaData         exif_display_;
-  RawRuntimeColorContext       raw_color_context_;
+  RawRuntimeColorContext      raw_color_context_;
   std::atomic<bool>           has_raw_color_context_{false};
 
   ImageBuffer                 image_data_;
@@ -89,6 +89,9 @@ class Image {
   void                  ClearThumbnail();
   void                  ComputeChecksum();
   auto                  ExifToJson() -> std::string;
+  /// Display metadata only (capture, gear, exposure fields), without the RAW color context.
+  /// For UI readers such as the EXIF details panel.
+  auto                  ExifDisplayToJson() const -> nlohmann::json;
   void                  JsonToExif(std::string json_str);
 
   void                  MarkSyncState(ImageSyncState state);

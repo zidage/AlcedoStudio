@@ -169,7 +169,7 @@ auto RecallCases() -> std::vector<RecallCase> {
       // Dates: month-day forms match June 7 of any year; "67" also matches IMG_0067.
       {L"6.7", {f1, f2, f4, f8}, defect},
       {L"6/7", {f1, f2, f4, f8}, defect},
-      {L"0607", {f1, f2, f4}, defect},
+      {L"0607", {f1, f2, f4}, passes},  // Phase S2: no DNG profile numbers in metadata
       {L"6月7日", {f1, f2, f4}, defect},
       {L"June 7", {f1, f2, f4}, defect},
       {L"2026.6", {f1, f2, f3}, passes},
@@ -187,7 +187,7 @@ auto RecallCases() -> std::vector<RecallCase> {
       // File names: whole stems, fragments, and stems split at separators.
       {L"P2635860", {f1}, passes},
       {L"2635860", {f1}, passes},
-      {L"5860", {f1}, defect},  // DNG profile numbers in the metadata dump match
+      {L"5860", {f1}, passes},  // Phase S2: no DNG profile numbers in metadata
       {L"P263 5860", {f1}, passes},
       {L"p26358", {f1, f2}, passes},
       {L"d810 raw 11", {f6}, passes},

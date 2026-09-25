@@ -101,7 +101,7 @@ auto BindDefaultDocumentWithImportedCamera(PipelineExecutor&            pipeline
     return false;
   }
   auto document = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
-  BindImportedCameraProfile(*document, MetadataExtractor::ReadRawColorContextForRender(image));
+  BindImportedCameraProfile(*document, image.GetRawColorContext());
   std::unique_lock lock(pipeline.GetRenderLock());
   pipeline.SetPipelineDocument(document);
   return true;

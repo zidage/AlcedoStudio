@@ -52,7 +52,7 @@ auto MultiGradeDocument() -> PipelineDocument {
 }  // namespace
 
 TEST(PipelineHistoryFormatTable, PublishedConstantsIdentifyTheDocumentHistoryCutover) {
-  EXPECT_EQ(kProjectFileVersion, "0.9.0");
+  EXPECT_EQ(kProjectFileVersion, "0.10.0");
   EXPECT_EQ(kMinSupportedProjectFileVersion, kProjectFileVersion);
   EXPECT_EQ(kMaxSupportedProjectFileVersion, kProjectFileVersion);
   EXPECT_EQ(kPackedProjectFormatVersion, 7u);
@@ -90,12 +90,12 @@ TEST(PipelineDocumentCheckpointFormat, FullDocumentExpectedSerializedWithGradesA
 TEST(PipelineDocumentCheckpointFormat, RootExpectedSerializedBindsOwnerDocumentAndDevelopIdentity) {
   const auto document = MultiGradeDocument();
   const auto encoded =
-      EncodePipelineRootState(42, document, nlohmann::json{{"CameraModel", "RootGolden"}});
+      EncodePipelineRootState(42, document, nlohmann::json{{"CameraModel", "RootStateCamera"}});
   EXPECT_EQ(encoded.dump(), LoadExpectedBytes("pipeline_root.json"));
   const auto decoded = DecodePipelineRootState(encoded);
   EXPECT_EQ(decoded.element_id, 42u);
   EXPECT_EQ(ComputeRootId(42, decoded.document, decoded.raw_color_context),
-            ComputeRootId(42, document, nlohmann::json{{"CameraModel", "RootGolden"}}));
+            ComputeRootId(42, document, nlohmann::json{{"CameraModel", "RootStateCamera"}}));
 }
 
 TEST(PipelineDocumentCheckpointFormat, CheckpointExpectedSerializedCarriesRootHeadChainAndDocument) {

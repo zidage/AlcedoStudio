@@ -233,7 +233,7 @@ void Database::InitializeDB() {
     RunDdlChecked(guard.conn_, ai_annotation_table_query);
     RunDdlChecked(guard.conn_, commit_graph_table_query);
     RefreshAiUnderstandingFtsBestEffort(guard.conn_);
-    SeedSemanticLabelQueries(guard.conn_);
+    PopulateSemanticLabelQueries(guard.conn_);
     return;
   }
 
@@ -260,11 +260,11 @@ void Database::InitializeDB() {
   RunDdlChecked(guard.conn_, ai_annotation_table_query);
   RunDdlChecked(guard.conn_, commit_graph_table_query);
   RefreshAiUnderstandingFtsBestEffort(guard.conn_);
-  SeedSemanticLabelQueries(guard.conn_);
+  PopulateSemanticLabelQueries(guard.conn_);
   initialized_ = true;
 }
 
-void Database::SeedSemanticLabelQueries(duckdb_connection conn) {
+void Database::PopulateSemanticLabelQueries(duckdb_connection conn) {
   duckdb_result result;
   if (duckdb_query(conn, "BEGIN TRANSACTION;", &result) != DuckDBSuccess) {
     std::string error_message = duckdb_result_error(&result);

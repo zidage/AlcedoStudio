@@ -273,6 +273,7 @@ def_library(ProjectService
 
 def_library(PipelineMgmtService
     SOURCES "${ALCEDO_APP_ROOT}/pipeline_service.cpp"
+            "${ALCEDO_APP_ROOT}/source_dng_profile_binding.cpp"
     PUBLIC_DEPS ProjectService EditPipeline EditGraph
 )
 

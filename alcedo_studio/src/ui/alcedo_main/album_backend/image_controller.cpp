@@ -329,12 +329,7 @@ auto ParseExifDisplayJson(const std::shared_ptr<Image>& image) -> json {
     return json::object();
   }
   try {
-    const std::string exif_text = image->ExifToJson();
-    if (exif_text.empty()) {
-      return json::object();
-    }
-    const json parsed = json::parse(exif_text, nullptr, false);
-    return parsed.is_discarded() ? json::object() : parsed;
+    return image->ExifDisplayToJson();
   } catch (...) {
     return json::object();
   }

@@ -2,7 +2,7 @@
 
 Date: 2026-09-24
 
-Status: Phases S0 and S1 complete (2026-09-24); S2–S6 not started
+Status: Phases S0, S1, and S2 complete (2026-09-24); S3–S6 not started
 
 Primary owner: Alcedo Studio storage (Image schema, import, sleeve filter SQL) and library search.
 
@@ -22,7 +22,7 @@ Related roadmaps and notes:
 
 - [duckorm Query Expression and Album Filter SQL Plan](duckorm_query_expression_and_album_filter_sql_plan.md)
 - [Semantic Generation and Search Integration Plan](../ai/semantic_generation_search_plan.md)
-- [DNG color profiles](../../../dng_color_profiles.md) (design note; Phase S2 replaces its storage section)
+- [DNG color profiles](../../../dng_color_profiles.md) (design note; Phase S2 replaced its storage section)
 
 Delivery: one feature branch, one commit series per phase. Phases S1 and S2 do not depend on the
 search phases and can land first.
@@ -538,6 +538,150 @@ Acceptance:
 - No persisted JSON column contains `HueSatMap`, `LookTable`, or profile table arrays.
 - The DNG render test is pixel-identical.
 - `demo.alcd` after re-import is ≤ 25 MB.
+
+##### Phase S2 completion record (2026-09-24)
+
+**Status:** complete — project tables store a DNG profile fingerprint only; the pipeline
+service binds the profile tables from the source file before a loaded document goes live.
+The `demo.alcd` size check (≤ 25 MB after re-import) was not run: it needs the user's source
+folders and belongs to the Phase S6 qualification.
+
+Branch: `feature/library-search-s2-runtime-dng-profile` (on top of
+`feature/library-search-s1-raw-only-import`, PR 194).
+
+Commits: `style(image)` and `style(tests)` (CRLF → LF for `image.cpp` and the three
+`imported_camera_profile_*_expected_develop.json` files, no content change). The S2 content
+change is not committed yet.
+
+**What changed:**
+
+| Step | Change |
+| --- | --- |
+| 1 | New `DngColorProfileCache` (`image/dng_color_profile_cache.{hpp,cpp}`): key = normalized path + file size + last write time, LRU at 100 files, profiles shared by fingerprint through a weak-pointer map, loader runs outside the lock. `DngColorProfileCache::Shared()` uses the new `MetadataExtractor::ReadDngColorProfileFromSource`, which reads the same IFD0 tags as import (`PopulateDngColorMetadataFromExif`), so an unchanged file gives the import fingerprint. It replaces `ReadRawColorContextForRender`, which had no product caller. |
+| 2 | New `DngColorProfileRef` (`dng_color_profile.hpp`): empty, bound (fingerprint + profile), or unbound (fingerprint only). `RawRuntimeColorContext::dng_profile_` is a `DngColorProfileRef`. `RawColorContextToJson` writes `DngProfileFingerprint` (16 hex digits or null) and no tables; `RawColorContextFromJson` reads an unbound reference. |
+| 3 | `DevelopCameraProfile::dng_profile` is a `DngColorProfileRef`. `DevelopParamsModel::ToJson` writes `camera_profile.dng_profile_fingerprint`. `LoadJson` keeps a bound profile when the fingerprint is the same and leaves any other fingerprint unbound. New `DngProfile()` and `BindDngColorProfile()`. `ReplaceParams` and `BindImportedCameraProfile` also install a bound profile when the payloads compare equal (equality compares fingerprints; the first run of `EditorLoadCheckpointAndRebuildBindSourceProfile` found that the checkpoint path skipped the bind). `ClonePipelineDocument` keeps the source's bound profile (the paste, history-detail, and adjustment-transfer paths clone `root_document_`). |
+| 4 | `app/source_dng_profile_binding.{hpp,cpp}` (in `PipelineMgmtService`): `SourceImagePath` (Element → FileImage → Image row), `LoadSourceDngColorProfile` (cache load; another fingerprint in the source file wins with one `std::cerr` warning for each bind), `BindSourceDngColorProfile` for a document and for a RAW context. Entry points in `pipeline_service.cpp`: `LoadPipeline` (thumbnail, export, analysis, and the base of every editor load), `InitializeImageRoot` for an existing root (after the connection lock is released), `LoadEditorPipeline` (root state; the checkpoint and replay documents then bind from the bound root context), `CheckoutVersion`, and `RebuildActiveEditorPipeline` (bind failure is returned in `error` and leaves the prior document bound). A new root (import) binds from the in-memory import context, which is already bound. |
+| 5 | `ComputeRootId` is unchanged in code: it hashes the document and RAW context dumps, which now carry the fingerprint text and no tables. `PipelineDocumentCheckpointTest` expected root id and chain hash changed because of this (document JSON is otherwise identical). |
+| 6 | `DngColorProfilesEqual` compares fingerprints only. `DngColorProfileFromJson` and the `DngHueSatMap` `from_json` are deleted (no persisted table data is read any more). |
+| 7 | New `Image::ExifDisplayToJson()`; `image_controller.cpp` `ParseExifDisplayJson` uses it and no longer serializes the RAW context. |
+| 8 | `docs/dng_color_profiles.md`: storage section replaced (fingerprint columns, cache, bind entry points, failure rules). |
+| 9 | Tests and expected files updated (list below). |
+| 10 | `VerifyCanonDngProfile` (CUDA/OpenCL/Metal) now also reads the document back from JSON, binds the profile from the source file through a `DngColorProfileCache`, renders on a new device, and requires the same pixels (NORM_INF < 1e-6). The helper had only a Metal caller; CUDA and OpenCL now call it too. |
+| D1 | Project format 0.9.0 → 0.10.0 (`kProjectFileVersion`, min and max). 0.9.0 projects are rejected. No migration. S3 lands in the same format version. |
+
+Rendering fails closed: an unbound reference gives `ColorTransformError::UnboundDngProfile`
+from `ResolveDevelopColorTransform`, and `PackDngProfileGpuData` throws. It never renders as
+"no profile".
+
+Renamed in touched files to follow the `AGENTS.md` terminology rules: the label-query setup
+method is now `Database::PopulateSemanticLabelQueries`, the checkpoint test camera value is now
+`RootStateCamera`, and one comment in `tests/app/CMakeLists.txt` was reworded.
+
+**Primary success call chain (load after reopen):**
+
+```text
+ThumbnailService / ExportService / editor -> PipelineMgmtService::LoadPipeline(element)
+  -> LoadPipelineDocument: PipelineParam JSON -> Develop dng_profile = unbound ref (fingerprint)
+  -> BindSourceDngColorProfile(storage, element, document)
+     -> SourceImagePath: ElementStore::GetElementById -> SleeveFile.image_id_
+        -> ImageStore::GetImageById -> image_path_
+     -> DngColorProfileCache::Shared().Load(path)   [hit: path + size + mtime match]
+        miss -> MetadataExtractor::ReadDngColorProfileFromSource -> ReadDngColorProfile (Exiv2)
+        -> shared by fingerprint
+     -> DevelopParamsModel::BindDngColorProfile(profile)
+  -> PipelineExecutor::SetPipelineDocument (document goes live)
+  -> render: ResolveDevelopColorTransform + PackDngProfileGpuData use the bound tables
+Editor: LoadEditorPipeline -> DecodePipelineRootState -> BindSourceDngProfiles(root ctx + root doc)
+  -> checkpoint doc: BindRootCameraProfile(doc, bound ctx) / replay: clone of bound root
+```
+
+**Primary failure call chains:**
+
+```text
+Source file missing -> DngColorProfileCache::Load throws "source file is unavailable"
+  -> LoadPipeline records load_error_ and rethrows -> thumbnail/export report the error
+  (CheckoutVersion / RebuildActiveEditorPipeline return false with the error; the prior
+  document stays bound)
+Source file has another profile -> the source profile binds, one warning per bind,
+  fingerprint and result cache key change
+Document read from JSON and never bound -> ResolveDevelopColorTransform: UnboundDngProfile,
+  PackDngProfileGpuData throws; BindDevelopCameraProfile rejects an unbound RAW context
+```
+
+**What was proven (executed tests):**
+
+| Plan criterion | Test | Binary | Result |
+| --- | --- | --- | --- |
+| Step 1: eviction at entry 101 | `EvictsLeastRecentlyUsedFileWhenTheHundredAndFirstFileLoads` | `DngColorProfileCacheTest` | PASS |
+| Step 1: shared pointer for equal fingerprints | `FilesWithEqualProfileContentShareOneProfile` | `DngColorProfileCacheTest` | PASS |
+| Step 1: reload after the source file changes (content + mtime, and mtime only) | `ChangedSourceFileIsReadAgainAndGivesTheNewProfile` | `DngColorProfileCacheTest` | PASS |
+| Step 1: missing file / failed read leave no entry; file without profile | `MissingFileOrFailedReadThrowsAndLeavesNoEntry`, `FileWithoutDngProfileIsCachedAsNoProfile` | `DngColorProfileCacheTest` | PASS |
+| Step 1: runtime read gives the import fingerprint (CI DNG) | `RealDngLoadsTheProfileFingerprintBoundAtImport` | `DngColorProfileCacheTest` | PASS |
+| Steps 2, 6: fingerprint text, unbound reference, equality by fingerprint | `FingerprintIdentifiesContentAndIsPersistedAsSixteenHexDigits` | `DngColorProfileTest` | PASS |
+| Unbound reference fails closed | `UnboundReferenceFailsColorTransformAndGpuPackingInsteadOfDroppingProfile` | `DngColorProfileTest` | PASS |
+| Step 3: Develop JSON fingerprint, LoadJson keeps a matching bound profile | `DevelopJsonStoresFingerprintAndLoadKeepsOnlyAMatchingBoundProfile` | `DngColorProfileTest` | PASS |
+| Clone keeps the bound profile | `ClonedDocumentSharesTheSourceBoundProfile` | `DngColorProfileTest` | PASS |
+| Equal payload still binds (checkpoint path regression) | `ImportedContextBindsProfileOnDocumentReadFromJson` | `DngColorProfileTest` | PASS |
+| Step 2: Image metadata holds only the fingerprint; source read gives the same profile (Sony DNG, local) | `ProjectMetadataStoresFingerprintOnlyAndSourceReadGivesSameProfile` | `DngColorProfileTest` | PASS |
+| Acceptance: no persisted JSON column holds `HueSatMap`/`LookTable`/table arrays (`Image.metadata`, `PipelineParam`, `PipelineRoot`) | `ImportedDngStoresProfileFingerprintAndNoProfileTables` | `PipelineDngProfileBindingTest` | PASS — stored bytes for the CI DNG: `Image.metadata` 1,404, `PipelineParam` 5,486, `PipelineRoot` 6,693 |
+| Step 4: `LoadPipeline` binds before the document goes live | `LoadPipelineBindsSourceProfileBeforeDocumentGoesLive` | `PipelineDngProfileBindingTest` | PASS |
+| Step 4: `LoadEditorPipeline` (root, `root_document_`), `RebuildActiveEditorPipeline`, checkpoint reopen; `ImageEditState` checkpoint holds no tables | `EditorLoadCheckpointAndRebuildBindSourceProfile` | `PipelineDngProfileBindingTest` | PASS (FAILED on the first run: found the equal-payload bind bug) |
+| D2: missing source file fails the load | `MissingSourceFileFailsPipelineLoad` | `PipelineDngProfileBindingTest` | PASS |
+| D2: another profile in the source file wins | `SourceFileWithAnotherProfileWinsOnLoad` | `PipelineDngProfileBindingTest` | PASS |
+| Step 5: root id / checkpoint expected output | `CheckpointExpectedSerializedCarriesRootHeadChainAndDocument` and the other expected-serialized cases | `PipelineDocumentCheckpointTest` | PASS (root id and chain hash updated; document JSON unchanged apart from the key) |
+| Step 9: expected Develop JSON (`imported_camera_profile_*`) | `BindImportedCameraProfileMatchesPreviousDevelopParameters` | `GpuDagModelGraphTest` | PASS (DNG fingerprint `fe283656e9b1715b`) |
+| D1: format 0.10.0, 0.9.0 rejected | `CurrentProjectFileVersionIsSupported`, `ProjectVersion080FailsBeforeHistoryLoad`, `NewProjectWritesCurrentVersionAndHasNoEditHistoryTable` | `CommitGraphTest`, `ProjectServiceTest` | PASS |
+| S0 recall table | `FuzzySearchReturnsExpectedFilesForEachRecallCase` | `LibrarySearchRecallTest` | PASS — `0607` and `5860` are now correct (profile numbers left the metadata) and were changed to `kPasses` |
+| Step 10: a DNG with HueSatMap and LookTable (Canon R6 III) renders the same pixels after JSON reload + source bind, on a new device (NORM_INF < 1e-6) | `CanonDngProfileRendersAtFullResolutionAndInvalidatesOnlyColorCache` | `GpuDagCudaDevelopTest`, `GpuDagOpenClDevelopTest` | PASS on CUDA (40.7 s) and OpenCL (6.2 s). Metal: not available on this Windows machine. The first run FAILED on both backends at the helper's older scalar-versus-GPU check (after the new reload check had passed): the scalar reference omitted `AcesReferenceGamutCompress`, which `fd048bbd7` added to all three camera passes; the helper had only a Metal caller, so this never ran on Windows. The reference now applies it. |
+| Import binds and reloads the profile; stored Develop JSON holds the fingerprint and no tables; first background render | `ImportCreatesRenderableDocumentWithoutStageMirror`, `ImportBindsCameraProfileOnDocumentOnly` | `ImportPipelineDocumentTest` | PASS |
+| GPU regression | all cases | `PipelineDocumentRenderTest`, `ImportPipelineDocumentTest`, `CiRawWorkflowTest`, `GpuDagCudaDevelopTest`, `GpuDagOpenClDevelopTest`, `GpuDagCudaDrtProductTest` | 135/138 on the first run (the 2 Canon cases above; 1 skipped: the 100-megapixel OpenCL fixture is missing); the 2 Canon cases re-run after the reference fix: 2/2 |
+| S0/S1 local Nikon import and file name recall | `DISABLED_NikonFolderImportsRawOnlyAndSearchFindsFileNames` | `LibrarySearchRecallTest` | PASS (local, 9.2 s) |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --preset win_debug -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake"
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target DngColorProfileCacheTest DngColorProfileTest MetadataExtractorTest BatchImportDngMetadataTest PipelineDngProfileBindingTest PipelineMapperTest PipelineDocumentCheckpointTest ImportPipelineDocumentTest CommitGraphTest ProjectServiceTest SleeveServiceTest LibrarySearchRecallTest ImportRawOnlyTest GpuDagModelGraphTest GpuDagRawInputTest EditorMiniGitMaterializerTest PipelineEditBatchTest CiRawWorkflowTest GpuDagCudaDevelopTest GpuDagOpenClDevelopTest GpuDagCudaDrtProductTest PipelineDocumentRenderTest AlbumBackendLib
+ctest --test-dir build/debug -R "DngColorProfileCacheTest|DngColorProfileTest|MetadataExtractorTest|BatchImportDngMetadataTest|PipelineDngProfileBindingTest|PipelineMapperTest|PipelineDocumentCheckpointTest|CommitGraphTest|ProjectServiceTest|SleeveServiceTest|LibrarySearchRecallTest|ImportRawOnlyTest|GpuDagModelGraphTest|GpuDagRawInputTest|EditorMiniGitMaterializerTest|PipelineEditBatchTest" -j 1
+  -> 403/403 passed (3 disabled by design: the local Nikon test, PipelineMapper Fuzz/ThreadSafe)
+ctest --test-dir build/debug -R "GpuDagCudaDevelopTest|GpuDagOpenClDevelopTest|GpuDagCudaDrtProductTest|PipelineDocumentRenderTest|ImportPipelineDocumentTest|CiRawWorkflowTest" -j 1
+  -> 135/138 (2 Canon reference failures, 1 skip); after the reference fix:
+ctest --test-dir build/debug -R "CanonDngProfileRendersAtFullResolution" -j 1 -> 2/2 passed
+LibrarySearchRecallTest.exe --gtest_also_run_disabled_tests --gtest_filter=*Nikon* -> 1/1 passed
+```
+
+Full `ctest` suite: not run (agent rule). `alcedo_main` was not linked; `AlbumBackendLib`
+(which compiles `image_controller.cpp`) builds. `BrushSourceFormatBoundaryTest` exists only
+with `ALCEDO_ENABLE_BRUSH_MASK` (off here); its version literals were updated but not built.
+
+**Checklist / exit condition:** steps 1–10 done. Acceptance: no persisted JSON column holds
+profile tables (proven on the CI DNG import); the DNG render check is pixel-identical within 1e-6 on CUDA and OpenCL; the
+`demo.alcd` ≤ 25 MB check was not run (Phase S6, needs the source folders).
+
+**LOC note:** `pipeline_service.cpp` 1092 → 1122 (it was over the 1000-line limit before this
+phase; the source-profile lookup went to the new `source_dng_profile_binding.cpp`, 71 lines,
+instead of into it). New files: `dng_color_profile_cache.{hpp,cpp}` 93 + 123,
+`source_dng_profile_binding.hpp` 55, `pipeline_dng_profile_binding_test.cpp` 250,
+`dng_color_profile_cache_test.cpp` 163. `metadata_extractor.cpp` 1662 → 1661 (over the limit
+before S2; not split).
+
+**Remaining gaps:**
+
+- `demo.alcd` re-import size (≤ 25 MB) is not measured; it needs the user's source folders
+  (Phase S6). The per-row sizes above are for one CI DNG.
+- The source-changed warning is written for each bind while the stored fingerprint differs; the
+  stored fingerprint changes only when the document is saved dirty. It is not rate-limited.
+- `SourceImagePath` reads the Element and Image rows (the Image row parse includes the metadata
+  JSON) on each bind of a referenced, unbound document. This is one lookup per pipeline cache
+  miss of a DNG; the plan's performance targets are for search and do not cover it.
+- `ThumbnailServiceTest` and `PipelineSharedUseTest` were not built or run. They bind camera
+  profiles from images that the test extracts in memory (bound references), so the S2 change
+  does not change what they bind. `ThumbnailServiceTest` has no ctest registration.
+- Two pre-existing test target names in `tests/app/CMakeLists.txt` (the semantic gRPC
+  dependency test and the live image analysis test) use a term that `AGENTS.md` prohibits. They
+  were not renamed; renaming them changes test file names outside this phase.
+- The S0 synthetic benchmark library still attaches a large profile to DNG rows, but the rows
+  now persist only the fingerprint, so S0 latency numbers are not comparable with a new run.
 
 ### Phase S3 — Typed search columns
 

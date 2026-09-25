@@ -9,12 +9,14 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <string>
 
 #include "app/import_service.hpp"
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
 #include "edit/graph/develop_color_transform.hpp"
 #include "edit/runtime/pipeline_apply_request.hpp"
+#include "image/dng_color_profile.hpp"
 #include "io/image/image_loader.hpp"
 
 namespace alcedo {
@@ -54,12 +56,18 @@ TEST(ImportPipelineDocumentTest, ImportCreatesRenderableDocumentWithoutStageMirr
   ASSERT_NE(image, nullptr);
   ASSERT_TRUE(image->HasRawColorContext());
   const auto& raw = image->GetRawColorContext();
-  ASSERT_NE(raw.dng_profile_, nullptr);
+  ASSERT_TRUE(raw.dng_profile_.IsBound());
   ASSERT_TRUE(raw.color_matrices_valid_);
 
   const auto stored =
       project.GetStorage()->GetElementStore().GetPipelineJsonByElementId(element_id);
   ASSERT_TRUE(stored.has_value());
+  // The stored Develop JSON references the DNG profile by fingerprint and holds no table data.
+  const auto stored_text = stored->dump();
+  EXPECT_EQ(stored_text.find("hue_sat_map"), std::string::npos);
+  EXPECT_EQ(stored_text.find("look_table"), std::string::npos);
+  EXPECT_NE(stored_text.find(DngColorProfileFingerprintToText(raw.dng_profile_->fingerprint)),
+            std::string::npos);
   EXPECT_FALSE(stored->contains("stages"));
   EXPECT_FALSE(stored->contains("legacy_stage_adapter"));
   const auto persisted = PipelineDocument::FromJson(*stored);
@@ -76,9 +84,11 @@ TEST(ImportPipelineDocumentTest, ImportCreatesRenderableDocumentWithoutStageMirr
   const auto* saturation = persisted.PrimaryGrade()->FindAdjustmentByType(type_ids::Saturation());
   ASSERT_NE(saturation, nullptr);
   EXPECT_FLOAT_EQ(saturation->ToJson().at("saturation").get<float>(), kDefaultPipelineSaturation);
-  EXPECT_TRUE(DngColorProfilesEqual(expected.camera_profile.dng_profile, raw.dng_profile_));
+  EXPECT_EQ(expected.camera_profile.dng_profile, raw.dng_profile_);
   EXPECT_TRUE(expected.camera_profile.color_matrices_valid);
-  EXPECT_TRUE(ResolveDevelopColorTransform(expected).ok);
+  // A document read from project data holds an unbound profile reference and does not render.
+  EXPECT_FALSE(expected.camera_profile.dng_profile.IsBound());
+  EXPECT_EQ(ResolveDevelopColorTransform(expected).error, ColorTransformError::UnboundDngProfile);
 
   PipelineMgmtService pipelines(project.GetStorage());
   pipelines.SetAcceleratorBackendPreference(AcceleratorBackendPreference::CUDA);
@@ -86,6 +96,11 @@ TEST(ImportPipelineDocumentTest, ImportCreatesRenderableDocumentWithoutStageMirr
   ASSERT_NE(loaded, nullptr);
   ASSERT_NE(loaded->document_, nullptr);
   EXPECT_EQ(loaded->document_->Develop()->Params().Params(), expected);
+  // LoadPipeline binds the profile from the source file before the document goes live.
+  const auto bound = loaded->document_->Develop()->Params().Params();
+  ASSERT_TRUE(bound.camera_profile.dng_profile.IsBound());
+  EXPECT_EQ(bound.camera_profile.dng_profile->fingerprint, raw.dng_profile_->fingerprint);
+  EXPECT_TRUE(ResolveDevelopColorTransform(bound).ok);
   EXPECT_EQ(loaded->pipeline_->GpuDagDocument(), loaded->document_);
   const auto                   before = loaded->document_->ToJson();
   auto                         bytes  = ByteBufferLoader::LoadByteBufferFromImage(image);
@@ -157,8 +172,8 @@ TEST(ImportPipelineDocumentTest, ImportBindsCameraProfileOnDocumentOnly) {
   EXPECT_EQ(develop.camera_profile.forward_matrix_1, expected.camera_profile.forward_matrix_1);
   EXPECT_EQ(develop.camera_profile.forward_matrix_2, expected.camera_profile.forward_matrix_2);
   EXPECT_EQ(develop.camera_profile.as_shot_neutral, expected.camera_profile.as_shot_neutral);
-  EXPECT_TRUE(DngColorProfilesEqual(develop.camera_profile.dng_profile,
-                                    expected.camera_profile.dng_profile));
+  EXPECT_EQ(develop.camera_profile.dng_profile, expected.camera_profile.dng_profile);
+  EXPECT_TRUE(develop.camera_profile.dng_profile.IsReferenced());
   EXPECT_FLOAT_EQ(develop.as_shot_cct, expected.as_shot_cct);
   EXPECT_FLOAT_EQ(develop.as_shot_tint, expected.as_shot_tint);
   // Import does not write user or lens fields into the document.

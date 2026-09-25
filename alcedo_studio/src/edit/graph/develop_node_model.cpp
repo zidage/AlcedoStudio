@@ -4,6 +4,9 @@
 
 #include "edit/graph/develop_node_model.hpp"
 
+#include <stdexcept>
+#include <utility>
+
 #include "edit/operators/models/json_read.hpp"
 
 namespace alcedo {
@@ -218,6 +221,24 @@ void DevelopParamsModel::ApplyLensCalibrationUpdate(DevelopLensCalibrationUpdate
   });
 }
 
+auto DevelopParamsModel::DngProfile() const -> DngColorProfileRef {
+  return Read([](const DevelopPayload& payload) { return payload.camera_profile.dng_profile; });
+}
+
+void DevelopParamsModel::BindDngColorProfile(DngColorProfilePtr profile) {
+  if (!profile) {
+    throw std::invalid_argument("DevelopParamsModel: cannot bind a null DNG profile");
+  }
+  MutateWithDirtyFields([&profile](DevelopPayload& payload) {
+    auto& bound = payload.camera_profile.dng_profile;
+    if (bound.Profile() == profile) {
+      return DirtyFieldMask{};
+    }
+    bound = DngColorProfileRef(std::move(profile));
+    return DirtyFieldMask{DevelopDirty::WhiteBalance};
+  });
+}
+
 auto DevelopParamsModel::ToJson() const -> nlohmann::json {
   const auto  payload = PayloadCopy();
   const auto& profile = payload.camera_profile;
@@ -231,7 +252,7 @@ auto DevelopParamsModel::ToJson() const -> nlohmann::json {
           {"as_shot_cct", payload.as_shot_cct},
           {"as_shot_tint", payload.as_shot_tint},
           {"camera_profile",
-           {{"dng_profile", DngColorProfileToJson(profile.dng_profile)},
+           {{"dng_profile_fingerprint", DngColorProfileRefToJson(profile.dng_profile)},
             {"color_matrices_valid", profile.color_matrices_valid},
             {"color_matrix_1", json_util::MakeJsonArray(profile.color_matrix_1.data(), 9)},
             {"color_matrix_2", json_util::MakeJsonArray(profile.color_matrix_2.data(), 9)},
@@ -275,8 +296,13 @@ void DevelopParamsModel::LoadJson(const nlohmann::json& json) {
     if (json.contains("camera_profile") && json["camera_profile"].is_object()) {
       const auto& profile_json = json["camera_profile"];
       auto&       profile      = payload.camera_profile;
-      profile.dng_profile =
-          DngColorProfileFromJson(profile_json.value("dng_profile", nlohmann::json(nullptr)));
+      // JSON holds only the fingerprint. Keep the bound profile when the fingerprint is the
+      // same; otherwise the reference stays unbound until the pipeline service binds it.
+      auto        dng_profile  = DngColorProfileRefFromJson(
+          profile_json.value("dng_profile_fingerprint", nlohmann::json(nullptr)));
+      if (dng_profile != profile.dng_profile) {
+        profile.dng_profile = std::move(dng_profile);
+      }
       profile.color_matrices_valid =
           json_util::ReadBool(profile_json, "color_matrices_valid", profile.color_matrices_valid);
       json_util::ReadNumberArray(profile_json, "color_matrix_1", profile.color_matrix_1.data(), 9);
@@ -323,6 +349,13 @@ void DevelopParamsModel::LoadJson(const nlohmann::json& json) {
 void DevelopParamsModel::ReplaceParams(DevelopPayload payload) {
   MutateWithDirtyFields([payload = std::move(payload)](DevelopPayload& dest) mutable {
     if (dest == payload) {
+      // Equal payloads can still differ in binding: equality compares the DNG profile
+      // fingerprint only. Take the bound profile the new payload carries.
+      auto& bound = payload.camera_profile.dng_profile;
+      if (bound.IsBound() && dest.camera_profile.dng_profile.Profile() != bound.Profile()) {
+        dest.camera_profile.dng_profile = std::move(bound);
+        return DirtyFieldMask{DevelopDirty::WhiteBalance};
+      }
       return DirtyFieldMask{};
     }
     DirtyFieldMask changed;

@@ -162,7 +162,7 @@ class Database {
 
   // Mini-Git commit-graph tables. CREATE IF NOT EXISTS keeps the existing-DB open path
   // aligned with fresh projects; incompatible older project packages are rejected by
-  // project_file_version 0.9.0 before history is loaded. Root and checkpoint JSON
+  // project_file_version 0.10.0 before history is loaded. Root and checkpoint JSON
   // store full PipelineDocument JSON from EncodePipelineRootState /
   // EncodePipelineDocumentCheckpoint, not CPU parameter tables.
   constexpr static const char* commit_graph_table_query =
@@ -247,7 +247,7 @@ class Database {
       "CREATE INDEX IF NOT EXISTS idx_ai_rating_file_active "
       "ON AiImageRating(file_id, active);";
 
-  void SeedSemanticLabelQueries(duckdb_connection conn);
+  void PopulateSemanticLabelQueries(duckdb_connection conn);
 
  public:
   explicit Database(file_path_t& db_path);

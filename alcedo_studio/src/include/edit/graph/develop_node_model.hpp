@@ -27,9 +27,13 @@ namespace alcedo {
  * image at import. CameraColor interpolates these fields; it does not parse RAW
  * or look up the CameraMatrices database at render time. cam_mul is only used
  * to derive as-shot neutral when AsShotNeutral is absent.
+ *
+ * The DNG profile is import-bound runtime data. JSON stores only its fingerprint
+ * (`dng_profile_fingerprint`); the pipeline service binds the profile tables from
+ * the source file before the document renders.
  */
 struct DevelopCameraProfile {
-  DngColorProfilePtr    dng_profile;
+  DngColorProfileRef    dng_profile;
   bool                  color_matrices_valid = false;
   std::array<double, 9> color_matrix_1{};
   std::array<double, 9> color_matrix_2{};
@@ -45,9 +49,8 @@ struct DevelopCameraProfile {
 };
 
 inline auto operator==(const DevelopCameraProfile& a, const DevelopCameraProfile& b) -> bool {
-  return DngColorProfilesEqual(a.dng_profile, b.dng_profile) &&
-         a.color_matrices_valid == b.color_matrices_valid && a.color_matrix_1 == b.color_matrix_1 &&
-         a.color_matrix_2 == b.color_matrix_2 &&
+  return a.dng_profile == b.dng_profile && a.color_matrices_valid == b.color_matrices_valid &&
+         a.color_matrix_1 == b.color_matrix_1 && a.color_matrix_2 == b.color_matrix_2 &&
          a.forward_matrices_valid == b.forward_matrices_valid &&
          a.forward_matrix_1 == b.forward_matrix_1 && a.forward_matrix_2 == b.forward_matrix_2 &&
          a.as_shot_neutral_valid == b.as_shot_neutral_valid &&
@@ -210,10 +213,30 @@ class DevelopParamsModel final
    */
   void               ApplyLensCalibrationUpdate(DevelopLensCalibrationUpdate update);
 
+  /// Current DNG profile reference, read under the Model lock.
+  [[nodiscard]] auto DngProfile() const -> DngColorProfileRef;
+
+  /**
+   * @brief Bind the DNG profile tables loaded from the source file.
+   *
+   * The reference becomes a bound reference to @p profile. When @p profile has another
+   * fingerprint than the stored reference (the source file changed), the new profile wins and
+   * the stored fingerprint changes with it. Marks WhiteBalance dirty only when the bound profile
+   * changes.
+   *
+   * @param profile Profile from DngColorProfileCache; must not be null.
+   * @throws std::invalid_argument when @p profile is null.
+   */
+  void               BindDngColorProfile(DngColorProfilePtr profile);
+
+  /// JSON writes the DNG profile fingerprint only. LoadJson keeps a bound profile whose
+  /// fingerprint matches the JSON; any other fingerprint gives an unbound reference.
   [[nodiscard]] auto ToJson() const -> nlohmann::json override;
   void               LoadJson(const nlohmann::json& json) override;
 
   [[nodiscard]] auto Params() const -> DevelopPayload { return PayloadCopy(); }
+  /// Replace the payload and mark the changed field groups dirty. A payload equal to the current
+  /// one (same DNG profile fingerprint) still installs its bound DNG profile.
   void               ReplaceParams(DevelopPayload payload);
 };
 

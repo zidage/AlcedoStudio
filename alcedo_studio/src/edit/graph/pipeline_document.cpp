@@ -349,7 +349,18 @@ auto CreateDefaultPipelineDocument() -> PipelineDocument {
 }
 
 auto ClonePipelineDocument(const PipelineDocument& src) -> PipelineDocument {
-  return PipelineDocument::FromJson(src.ToJson());
+  auto        clone          = PipelineDocument::FromJson(src.ToJson());
+  // JSON carries only the DNG profile fingerprint. Keep the profile the source has bound, so a
+  // clone renders like its source without another read of the source file.
+  const auto* source_develop = src.Develop();
+  auto*       clone_develop  = clone.Develop();
+  if (source_develop != nullptr && clone_develop != nullptr) {
+    const auto source_profile = source_develop->Params().DngProfile();
+    if (source_profile.IsBound()) {
+      clone_develop->Params().BindDngColorProfile(source_profile.Profile());
+    }
+  }
+  return clone;
 }
 
 auto ColorGradesOnImageBackbone(const PipelineDocument& document)

@@ -37,18 +37,42 @@ resulting positive scene values. This is an Alcedo scene-linear extension, not a
 of pixel equivalence to the SDK's bounded reference renderer. Negative ProPhoto
 channels are clamped before HSV table evaluation.
 
-Profile data is immutable and shared by image metadata and the Develop node. Both
-image metadata JSON and pipeline JSON preserve the tables. A content fingerprint is
-recomputed when data is read and participates in camera-pass cache identity. Changing
-only the profile reuses the sensor result and recomputes the color pass. Thumbnail
-cache version 2 excludes images made before this support was added.
+Profile data is immutable. One shared profile object serves image metadata and the
+Develop node of every document that references it.
 
-Older projects may have stored calibrated ColorMatrix values without their profile.
-`PipelineMgmtService::InjectImageRawMetadata` resolves that case from the source DNG
-before editor, thumbnail, or export rendering. It replaces the baked matrices with
-tagged matrices and separate calibration, without mutating a shared Image during a
-render. An unavailable or malformed source raises an error. Projects already storing
-the profile do not reread the file for color metadata.
+### Storage
+
+Project data does not store the profile tables. Project format 0.10.0 stores only a
+profile reference:
+
+| Location | Stored value |
+| --- | --- |
+| `Image.metadata` → `RawRuntimeColorContext.DngProfileFingerprint` | 16 hexadecimal digits, or null |
+| Develop JSON `camera_profile.dng_profile_fingerprint` (`PipelineParam`, `ImageEditState` checkpoint, `PipelineRoot` document) | 16 hexadecimal digits, or null |
+
+The fingerprint is the FNV-1a hash of the complete profile content. It is the profile
+input to the root id hash and to the camera-pass cache identity. Changing only the
+profile reuses the sensor result and recomputes the color pass. The small RAW context
+fields (color and forward matrices, AsShotNeutral, illuminant CCTs, cam_mul, lens data)
+stay stored, because Develop binding needs them before decode.
+
+The profile tables are runtime data:
+
+- Import reads the profile from the DNG IFD0 tags and binds it on the imported image and
+  the new document.
+- `DngColorProfileCache` (process-wide) keeps profiles read from source files. Its key is
+  the normalized path plus file size and last write time, and it holds at most 100 files
+  (least recently used eviction). Loads with the same fingerprint share one profile object.
+- `PipelineMgmtService` binds the referenced profile from the element's source file before
+  a loaded document goes live: in `LoadPipeline` (thumbnail, export, and analysis
+  renders), `InitializeImageRoot` for an existing root, `LoadEditorPipeline` (root state,
+  checkpoint, and replay), `CheckoutVersion`, and `RebuildActiveEditorPipeline`.
+  `ClonePipelineDocument` keeps the source document's bound profile.
+- A document read from JSON holds an unbound reference. Rendering an unbound reference
+  fails (`ColorTransformError::UnboundDngProfile`); it never renders without the profile.
+- A missing source file fails the load; the render needs the RAW data from that file too.
+- When the source file has another profile than the stored fingerprint, the source file
+  wins, and one warning is logged. The cache identity changes with the fingerprint.
 
 ## Scope and verification
 
@@ -59,9 +83,14 @@ here. Alcedo continues to use its existing ACES output transform. DNG decoding a
 opcode support remain separate from this color-profile change.
 
 `DngColorProfileTest` checks interpolation, encoding, calibration, invalid data,
-serialization, and legacy metadata. The CUDA/OpenCL/Metal Develop test suites include
-a full-resolution Canon R6 III DNG regression with scalar/GPU agreement, graph reload,
-color-only cache invalidation, and highlight reconstruction. Private camera fixtures
+fingerprint persistence, unbound references, and profile binding on clone and JSON load.
+`DngColorProfileCacheTest` checks eviction, sharing by fingerprint, and reload after a
+file change. `PipelineDngProfileBindingTest` checks that project tables hold no profile
+tables and that each load path binds the source profile. The CUDA/OpenCL/Metal Develop
+test suites include a full-resolution Canon R6 III DNG regression with scalar/GPU
+agreement, graph reload, a render of the reloaded and source-bound document that must
+match the import-bound render, color-only cache invalidation, and highlight
+reconstruction. Private camera fixtures
 are optional and produce an explicit skip when absent. Set `ALCEDO_DNG_RENDER_OUTPUT`
 to an existing directory under `build/tmp/` to save diagnostic previews; the render
 itself still runs at full resolution.

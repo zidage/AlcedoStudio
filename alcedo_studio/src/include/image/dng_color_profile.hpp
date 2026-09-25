@@ -8,8 +8,10 @@
 #include <cstdint>
 #include <json.hpp>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace alcedo {
@@ -59,19 +61,14 @@ struct DngColorProfile {
   DngHueSatMap          look_table;
   double                baseline_exposure        = 0.0;
   double                baseline_exposure_offset = 0.0;
-  std::uint64_t fingerprint = 0;  // Computed on construction; never trusted from persisted JSON.
+  std::uint64_t         fingerprint = 0;  // FNV-1a of the content; computed by MakeDngColorProfile.
 };
 using DngColorProfilePtr = std::shared_ptr<const DngColorProfile>;
 
 inline void to_json(nlohmann::json& j, const DngHueSatMap& map) {
   j = {{"divisions", map.divisions}, {"encoding", map.encoding}, {"entries", map.entries}};
 }
-inline void from_json(const nlohmann::json& j, DngHueSatMap& map) {
-  j.at("divisions").get_to(map.divisions);
-  j.at("encoding").get_to(map.encoding);
-  j.at("entries").get_to(map.entries);
-  map.Validate();
-}
+/// Complete profile content as JSON. It is the fingerprint input; project data never stores it.
 inline auto DngColorProfileToJson(const DngColorProfilePtr& profile) -> nlohmann::json {
   if (!profile) return nullptr;
   return {{"version", 1},
@@ -86,7 +83,7 @@ inline auto DngColorProfileToJson(const DngColorProfilePtr& profile) -> nlohmann
           {"baseline_exposure_offset", profile->baseline_exposure_offset}};
 }
 
-/// Validate before publishing immutable data, including data read from project files.
+/// Validate before publishing immutable data read from a source file.
 inline auto MakeDngColorProfile(DngColorProfile profile) -> DngColorProfilePtr {
   profile.hue_sat_map_1.Validate();
   profile.hue_sat_map_2.Validate();
@@ -118,26 +115,115 @@ inline auto MakeDngColorProfile(DngColorProfile profile) -> DngColorProfilePtr {
   return result;
 }
 
-inline auto DngColorProfileFromJson(const nlohmann::json& j) -> DngColorProfilePtr {
-  if (j.is_null()) return {};
-  if (j.at("version").get<int>() != 1)
-    throw std::runtime_error("Unsupported DNG profile data version");
-  DngColorProfile result;
-  j.at("name").get_to(result.name);
-  j.at("analog_balance").get_to(result.analog_balance);
-  j.at("camera_calibration_1").get_to(result.camera_calibration_1);
-  j.at("camera_calibration_2").get_to(result.camera_calibration_2);
-  j.at("hue_sat_map_1").get_to(result.hue_sat_map_1);
-  j.at("hue_sat_map_2").get_to(result.hue_sat_map_2);
-  j.at("look_table").get_to(result.look_table);
-  j.at("baseline_exposure").get_to(result.baseline_exposure);
-  j.at("baseline_exposure_offset").get_to(result.baseline_exposure_offset);
-  return MakeDngColorProfile(std::move(result));
-}
-
+/// Profiles are equal when their content fingerprints are equal. The fingerprint is the FNV-1a
+/// hash of the complete profile content, so no table data is compared.
 inline auto DngColorProfilesEqual(const DngColorProfilePtr& a, const DngColorProfilePtr& b)
     -> bool {
-  return a == b || (a && b && a->fingerprint == b->fingerprint &&
-                    DngColorProfileToJson(a) == DngColorProfileToJson(b));
+  return a == b || (a && b && a->fingerprint == b->fingerprint);
+}
+
+/// Persisted text form of a profile fingerprint: 16 lowercase hexadecimal digits.
+inline auto DngColorProfileFingerprintToText(std::uint64_t fingerprint) -> std::string {
+  static constexpr char kDigits[] = "0123456789abcdef";
+  std::string           text(16, '0');
+  for (int i = 15; i >= 0; --i) {
+    text[static_cast<std::size_t>(i)] = kDigits[fingerprint & 0xF];
+    fingerprint >>= 4;
+  }
+  return text;
+}
+
+/// Parse the text written by @ref DngColorProfileFingerprintToText.
+/// @throws std::runtime_error when @p text is not 16 hexadecimal digits.
+inline auto DngColorProfileFingerprintFromText(const std::string& text) -> std::uint64_t {
+  if (text.size() != 16) throw std::runtime_error("DNG profile: invalid fingerprint text");
+  std::uint64_t value = 0;
+  for (const char c : text) {
+    std::uint64_t digit = 0;
+    if (c >= '0' && c <= '9') {
+      digit = static_cast<std::uint64_t>(c - '0');
+    } else if (c >= 'a' && c <= 'f') {
+      digit = static_cast<std::uint64_t>(c - 'a' + 10);
+    } else {
+      throw std::runtime_error("DNG profile: invalid fingerprint text");
+    }
+    value = (value << 4) | digit;
+  }
+  return value;
+}
+
+/**
+ * @brief Reference from persisted image or Develop data to an import-bound DNG profile.
+ *
+ * Project data stores only the fingerprint. The profile tables are runtime data: the owner of a
+ * loaded document binds the profile from the source file (see DngColorProfileCache) before the
+ * document renders. A reference is in one of three states:
+ * - empty: the image has no DNG profile;
+ * - referenced and bound: fingerprint and profile are both set, and the fingerprint is the
+ *   profile's own fingerprint;
+ * - referenced and unbound: only the fingerprint is set (read from project data). Rendering code
+ *   must call @ref RequireBound and fail; it must never render such a reference as "no profile".
+ *
+ * Equality compares fingerprints only, so a bound and an unbound reference to the same profile
+ * are equal.
+ */
+class DngColorProfileRef {
+ public:
+  DngColorProfileRef() = default;
+  /// Bound reference to @p profile, or an empty reference when @p profile is null.
+  DngColorProfileRef(DngColorProfilePtr profile)  // NOLINT(google-explicit-constructor)
+      : profile_(std::move(profile)) {
+    if (profile_) fingerprint_ = profile_->fingerprint;
+  }
+
+  /// Unbound reference read from project data.
+  static auto Unbound(std::uint64_t fingerprint) -> DngColorProfileRef {
+    DngColorProfileRef ref;
+    ref.fingerprint_ = fingerprint;
+    return ref;
+  }
+
+  [[nodiscard]] auto IsReferenced() const -> bool { return fingerprint_.has_value(); }
+  [[nodiscard]] auto IsBound() const -> bool { return profile_ != nullptr; }
+  [[nodiscard]] auto Fingerprint() const -> const std::optional<std::uint64_t>& {
+    return fingerprint_;
+  }
+  /// Bound profile, or null for an empty or unbound reference.
+  [[nodiscard]] auto Profile() const -> const DngColorProfilePtr& { return profile_; }
+
+  /// Profile for rendering: null for an empty reference.
+  /// @throws std::runtime_error for a referenced but unbound reference.
+  [[nodiscard]] auto RequireBound() const -> const DngColorProfile* {
+    if (fingerprint_.has_value() && !profile_) {
+      throw std::runtime_error("DNG profile " + DngColorProfileFingerprintToText(*fingerprint_) +
+                               " is referenced but was not loaded from the source file");
+    }
+    return profile_.get();
+  }
+
+  explicit    operator bool() const { return IsBound(); }
+  auto        operator->() const -> const DngColorProfile* { return profile_.get(); }
+  auto        operator*() const -> const DngColorProfile& { return *profile_; }
+
+  friend auto operator==(const DngColorProfileRef& a, const DngColorProfileRef& b) -> bool {
+    return a.fingerprint_ == b.fingerprint_;
+  }
+
+ private:
+  std::optional<std::uint64_t> fingerprint_;
+  DngColorProfilePtr           profile_;
+};
+
+/// Persisted form of a reference: the fingerprint text, or null for an empty reference.
+inline auto DngColorProfileRefToJson(const DngColorProfileRef& ref) -> nlohmann::json {
+  if (!ref.IsReferenced()) return nullptr;
+  return DngColorProfileFingerprintToText(*ref.Fingerprint());
+}
+
+/// Read a persisted reference. The result is unbound; @p value null gives an empty reference.
+inline auto DngColorProfileRefFromJson(const nlohmann::json& value) -> DngColorProfileRef {
+  if (value.is_null()) return {};
+  if (!value.is_string()) throw std::runtime_error("DNG profile: fingerprint must be a string");
+  return DngColorProfileRef::Unbound(DngColorProfileFingerprintFromText(value.get<std::string>()));
 }
 }  // namespace alcedo

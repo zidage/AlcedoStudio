@@ -603,6 +603,8 @@ auto Fail(ColorTransformError error) -> ColorTransformResult {
 }  // namespace
 
 void BindDevelopCameraProfile(DevelopPayload& payload, const RawRuntimeColorContext& imported) {
+  // The as-shot solve below needs the DNG calibration; an unbound reference must not bind.
+  (void)imported.dng_profile_.RequireBound();
   auto& profile                     = payload.camera_profile;
   profile.dng_profile                   = imported.dng_profile_;
   profile.color_matrices_valid      = imported.color_matrices_valid_;
@@ -639,7 +641,10 @@ void BindImportedCameraProfile(PipelineDocument& document, const RawRuntimeColor
   const auto current = develop->Params().Params();
   auto       next    = current;
   BindDevelopCameraProfile(next, imported);
-  if (next != current) {
+  // Payload equality compares the DNG profile fingerprint only, so also publish a payload that
+  // differs only by its bound profile (a document read from JSON holds an unbound reference).
+  if (next != current ||
+      next.camera_profile.dng_profile.Profile() != current.camera_profile.dng_profile.Profile()) {
     develop->Params().ReplaceParams(std::move(next));
   }
 }
@@ -681,7 +686,11 @@ auto ResolveDevelopColorTransform(const DevelopPayload& develop) -> ColorTransfo
     return Fail(endpoint_error);
   }
 
-  const auto& dng_profile = develop.camera_profile.dng_profile;
+  const auto& dng_profile_ref = develop.camera_profile.dng_profile;
+  if (dng_profile_ref.IsReferenced() && !dng_profile_ref.IsBound()) {
+    return Fail(ColorTransformError::UnboundDngProfile);
+  }
+  const DngColorProfile* dng_profile = dng_profile_ref.Profile().get();
   if (dng_profile) {
     ApplyAnalogBalanceAndCameraCalibration(cm1.val, dng_profile->analog_balance.data(),
                                            dng_profile->camera_calibration_1.data());
@@ -803,6 +812,8 @@ auto ColorTransformErrorMessage(ColorTransformError error) -> std::string_view {
       return "invalid as-shot neutral";
     case ColorTransformError::InvalidWhitePoint:
       return "invalid white point";
+    case ColorTransformError::UnboundDngProfile:
+      return "DNG profile is referenced but was not loaded from the source file";
   }
   return "color transform error";
 }
