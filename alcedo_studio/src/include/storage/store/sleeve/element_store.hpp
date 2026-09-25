@@ -99,8 +99,10 @@ class ElementStore {
   // Does not touch sync_flag_ and does not manage a transaction, so it can run
   // either autocommit (AddElement) or inside a shared transaction (AddElements).
   void                  InsertElementRows(const std::shared_ptr<SleeveElement>& element);
-  // Update the element row plus its child rows. Same transaction-neutrality contract
-  // as InsertElementRows.
+  // Update the element row plus its child rows. For a folder, only the FolderContent rows of
+  // the children added or removed since the last sync are written. Same
+  // transaction-neutrality contract as InsertElementRows; the caller clears the folder's
+  // pending content changes after the commit.
   void                  UpdateElementRows(const std::shared_ptr<SleeveElement>& element);
 
  public:

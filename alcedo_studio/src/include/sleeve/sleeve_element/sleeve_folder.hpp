@@ -33,6 +33,15 @@ class SleeveFolder : public SleeveElement {
   uint32_t                                                      folder_count_;
   bool                                                          children_loaded_ = false;
 
+  /// Child ids added to or removed from this folder since its `FolderContent` rows were last
+  /// written. An id is in at most one of the two sets: removing an id that was added since the
+  /// last write (or the reverse) cancels the pending change.
+  std::unordered_set<sl_element_id_t>                           content_added_since_sync_;
+  std::unordered_set<sl_element_id_t>                           content_removed_since_sync_;
+
+  void RecordContentAdded(sl_element_id_t element_id);
+  void RecordContentRemoved(sl_element_id_t element_id);
+
  public:
   explicit SleeveFolder(sl_element_id_t id, file_name_t element_name);
   ~SleeveFolder();
@@ -41,6 +50,10 @@ class SleeveFolder : public SleeveElement {
 
   void AddElementToMap(const std::shared_ptr<SleeveElement> element);
   void AddElementToMap(const std::shared_ptr<SleeveElement> element, bool change_sync);
+  /// Add @p element as a child.
+  /// @param change_sync  true for a membership change: the folder becomes MODIFIED and the id is
+  ///                     recorded in ContentAddedSinceSync(). false only when the child is read
+  ///                     from its existing `FolderContent` row (loading the folder).
   void AddElementToMap(const std::shared_ptr<SleeveElement> element, bool change_sync,
                        bool increment_ref_count);
   void ReplaceChild(const sl_element_id_t from, const sl_element_id_t to);
@@ -72,5 +85,17 @@ class SleeveFolder : public SleeveElement {
   auto ContentSize() -> size_t;
   auto ChildrenLoaded() const -> bool { return children_loaded_; }
   void MarkChildrenLoaded(bool loaded = true) { children_loaded_ = loaded; }
+
+  /// Child ids whose `FolderContent` rows the next sync inserts.
+  auto ContentAddedSinceSync() const -> const std::unordered_set<sl_element_id_t>& {
+    return content_added_since_sync_;
+  }
+  /// Child ids whose `FolderContent` rows the next sync deletes.
+  auto ContentRemovedSinceSync() const -> const std::unordered_set<sl_element_id_t>& {
+    return content_removed_since_sync_;
+  }
+  /// Clear the pending content changes. Call after the transaction that wrote them (or that
+  /// inserted the folder with its full content list) committed.
+  void MarkContentSynced();
 };
 };  // namespace alcedo

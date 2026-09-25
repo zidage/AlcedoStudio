@@ -6,6 +6,7 @@
 
 #include <duckdb.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <format>
 #include <memory>
@@ -181,6 +182,22 @@ void DeleteSemanticAndAiRowsForFiles(duckdb_connection                conn,
   // old AI rating under a new image id.
   DeleteAiAnnotationRowsForFiles(conn, file_ids);
 }
+
+auto SortedIds(const std::unordered_set<sl_element_id_t>& ids) -> std::vector<sl_element_id_t> {
+  std::vector<sl_element_id_t> sorted(ids.begin(), ids.end());
+  std::sort(sorted.begin(), sorted.end());
+  return sorted;
+}
+
+/// Clear the pending folder content changes of the folders in @p elements. Runs after the
+/// transaction that wrote their rows committed.
+void MarkFolderContentsSynced(std::span<const std::shared_ptr<SleeveElement>> elements) {
+  for (const auto& element : elements) {
+    if (element && element->type_ == ElementType::FOLDER) {
+      std::static_pointer_cast<SleeveFolder>(element)->MarkContentSynced();
+    }
+  }
+}
 }  // namespace
 
 /**
@@ -203,6 +220,7 @@ ElementStore::ElementStore(ConnectionGuard&& guard)
 void ElementStore::AddElement(const std::shared_ptr<SleeveElement> element) {
   auto db_lock = guard_.Lock();
   InsertElementRows(element);
+  MarkFolderContentsSynced(std::span<const std::shared_ptr<SleeveElement>>(&element, 1));
   element->sync_flag_ = SyncFlag::SYNCED;
 }
 
@@ -212,11 +230,8 @@ void ElementStore::InsertElementRows(const std::shared_ptr<SleeveElement>& eleme
     auto file = std::static_pointer_cast<SleeveFile>(element);
     file_mapper_.Insert({file->element_id_, file->image_id_});
   } else if (element->type_ == ElementType::FOLDER) {
-    auto  folder   = std::static_pointer_cast<SleeveFolder>(element);
-    auto& contents = folder->ListElements();
-    for (auto& content_id : contents) {
-      folder_mapper_.Insert({folder->element_id_, content_id});
-    }
+    auto folder = std::static_pointer_cast<SleeveFolder>(element);
+    folder_mapper_.InsertFolderContents(folder->element_id_, folder->ListElements());
   }
 }
 
@@ -235,6 +250,7 @@ void ElementStore::AddElements(std::span<const std::shared_ptr<SleeveElement>> e
     duckorm::rollback_transaction(guard_.conn_);
     throw;
   }
+  MarkFolderContentsSynced(elements);
   for (const auto& element : elements) {
     element->sync_flag_ = SyncFlag::SYNCED;
   }
@@ -374,6 +390,7 @@ void ElementStore::RemoveElements(std::span<const std::shared_ptr<SleeveElement>
 void ElementStore::UpdateElement(const std::shared_ptr<SleeveElement> element) {
   auto db_lock = guard_.Lock();
   UpdateElementRows(element);
+  MarkFolderContentsSynced(std::span<const std::shared_ptr<SleeveElement>>(&element, 1));
   element->sync_flag_ = SyncFlag::SYNCED;
 }
 
@@ -383,11 +400,13 @@ void ElementStore::UpdateElementRows(const std::shared_ptr<SleeveElement>& eleme
     auto file = std::static_pointer_cast<SleeveFile>(element);
     file_mapper_.Update({file->element_id_, file->image_id_}, file->image_id_);
   } else if (element->type_ == ElementType::FOLDER) {
+    // Write only the membership changes since the last sync, so the cost of a sync does not
+    // grow with the number of children the folder already has.
     auto folder = std::static_pointer_cast<SleeveFolder>(element);
-    folder_mapper_.RemoveById(folder->element_id_);
-    for (auto& content_id : folder->ListElements()) {
-      AddFolderContent(folder->element_id_, content_id);
-    }
+    folder_mapper_.RemoveFolderContents(folder->element_id_,
+                                        SortedIds(folder->ContentRemovedSinceSync()));
+    folder_mapper_.InsertFolderContents(folder->element_id_,
+                                        SortedIds(folder->ContentAddedSinceSync()));
   }
 }
 
@@ -406,6 +425,7 @@ void ElementStore::UpdateElements(std::span<const std::shared_ptr<SleeveElement>
     duckorm::rollback_transaction(guard_.conn_);
     throw;
   }
+  MarkFolderContentsSynced(elements);
   for (const auto& element : elements) {
     element->sync_flag_ = SyncFlag::SYNCED;
   }

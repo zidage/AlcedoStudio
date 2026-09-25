@@ -45,6 +45,14 @@ class FolderMapper
   void        RemoveContentById(const sl_element_id_t content_id);
   void        RemoveContentByIds(std::span<const sl_element_id_t> content_ids);
   void        RemoveFolderContent(sl_element_id_t folder_id, sl_element_id_t content_id);
+  /// Insert one `FolderContent` row for each id in @p content_ids, in one statement. A row that
+  /// already exists is kept (the primary key is (folder_id, element_id)).
+  void        InsertFolderContents(sl_element_id_t                  folder_id,
+                                   std::span<const sl_element_id_t> content_ids);
+  /// Delete the `FolderContent` rows of @p folder_id for the ids in @p content_ids, in one
+  /// statement.
+  void        RemoveFolderContents(sl_element_id_t                  folder_id,
+                                   std::span<const sl_element_id_t> content_ids);
   void        UpdateFolderContent(const std::vector<sl_element_id_t>& content,
                                   const sl_element_id_t               folder_id);
 
