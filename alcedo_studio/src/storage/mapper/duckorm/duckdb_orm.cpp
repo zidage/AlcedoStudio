@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <format>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -79,7 +80,7 @@ duckdb_state run_transaction_control(duckdb_connection& conn, const char* sql) {
   return state;
 }
 
-auto make_float_array_value(const std::vector<float>& values) -> DuckValueGuard {
+auto make_float_array_value(std::span<const float> values) -> DuckValueGuard {
   DuckLogicalTypeGuard child_type(duckdb_create_logical_type(DUCKDB_TYPE_FLOAT));
   if (!child_type) {
     throw std::runtime_error("DuckDB failed to create FLOAT logical type");
@@ -537,5 +538,158 @@ std::vector<std::vector<VarTypes>> select_by_query(duckdb_connection&           
 
   return decode_select_rows(select_pre, sample_fields, field_count);
 }
+
+std::vector<std::vector<VarTypes>> select_by_query(duckdb_connection&             conn,
+                                                   std::span<const DuckFieldDesc> sample_fields,
+                                                   size_t field_count, const SqlFragment& query) {
+  PreparedStatement select_pre(conn, query.sql_);
+  bind_fragment_values(select_pre.stmt_, 1, query);
+
+  if (duckdb_execute_prepared(select_pre.stmt_, &select_pre.result_) != DuckDBSuccess) {
+    auto error_message = duckdb_result_error(&select_pre.result_);
+    throw std::runtime_error(error_message ? error_message : "DuckDB select_by_query failed");
+  }
+
+  return decode_select_rows(select_pre, sample_fields, field_count);
+}
+
+void execute(duckdb_connection& conn, const SqlFragment& statement) {
+  if (statement.binds_.empty()) {
+    duckdb_result result;
+    if (duckdb_query(conn, statement.sql_.c_str(), &result) != DuckDBSuccess) {
+      const char*       error   = duckdb_result_error(&result);
+      const std::string message = error ? error : "DuckDB statement failed";
+      duckdb_destroy_result(&result);
+      throw std::runtime_error(message);
+    }
+    duckdb_destroy_result(&result);
+    return;
+  }
+  PreparedStatement prepared(conn, statement.sql_);
+  bind_fragment_values(prepared.stmt_, 1, statement);
+  if (duckdb_execute_prepared(prepared.stmt_, &prepared.result_) != DuckDBSuccess) {
+    const char* error = duckdb_result_error(&prepared.result_);
+    throw std::runtime_error(error ? error : "DuckDB statement failed");
+  }
+}
+
+namespace {
+/// Runs @p query as a prepared statement and returns it for reading the first cell.
+auto run_scalar_query(duckdb_connection& conn, const SqlFragment& query)
+    -> std::unique_ptr<PreparedStatement> {
+  auto prepared = std::make_unique<PreparedStatement>(conn, query.sql_);
+  bind_fragment_values(prepared->stmt_, 1, query);
+  if (duckdb_execute_prepared(prepared->stmt_, &prepared->result_) != DuckDBSuccess) {
+    const char* error = duckdb_result_error(&prepared->result_);
+    throw std::runtime_error(error ? error : "DuckDB scalar query failed");
+  }
+  return prepared;
+}
+
+auto first_cell_is_value(duckdb_result& result) -> bool {
+  return duckdb_row_count(&result) > 0 && duckdb_column_count(&result) > 0 &&
+         !duckdb_value_is_null(&result, 0, 0);
+}
+}  // namespace
+
+auto select_int64(duckdb_connection& conn, const SqlFragment& query) -> std::optional<int64_t> {
+  const auto prepared = run_scalar_query(conn, query);
+  if (!first_cell_is_value(prepared->result_)) {
+    return std::nullopt;
+  }
+  return duckdb_value_int64(&prepared->result_, 0, 0);
+}
+
+auto select_string(duckdb_connection& conn, const SqlFragment& query)
+    -> std::optional<std::string> {
+  const auto prepared = run_scalar_query(conn, query);
+  if (!first_cell_is_value(prepared->result_)) {
+    return std::nullopt;
+  }
+  char* raw = duckdb_value_varchar(&prepared->result_, 0, 0);
+  if (raw == nullptr) {
+    return std::nullopt;
+  }
+  std::string value = raw;
+  duckdb_free(raw);
+  return value;
+}
+
+Transaction::Transaction(duckdb_connection& conn) : conn_(conn) { begin_transaction(conn_); }
+
+Transaction::~Transaction() {
+  if (committed_) {
+    return;
+  }
+  duckdb_result result;
+  duckdb_query(conn_, "ROLLBACK;", &result);
+  duckdb_destroy_result(&result);
+}
+
+void Transaction::commit() {
+  commit_transaction(conn_);
+  committed_ = true;
+}
+
+Appender::Appender(duckdb_connection& conn, const char* table,
+                   std::span<const char* const> columns)
+    : table_(table) {
+  if (duckdb_appender_create(conn, nullptr, table, &appender_) != DuckDBSuccess) {
+    const char*       error   = duckdb_appender_error(appender_);
+    const std::string message =
+        error ? error : std::format("DuckDB appender create failed for {}", table_);
+    duckdb_appender_destroy(&appender_);
+    throw std::runtime_error(message);
+  }
+  for (const char* column : columns) {
+    check(duckdb_appender_add_column(appender_, column), "add_column");
+  }
+}
+
+Appender::~Appender() {
+  if (appender_ != nullptr) {
+    duckdb_appender_destroy(&appender_);
+  }
+}
+
+void Appender::check(duckdb_state state, const char* operation) const {
+  if (state == DuckDBSuccess) {
+    return;
+  }
+  const char* error = duckdb_appender_error(appender_);
+  throw std::runtime_error(error ? std::string(error)
+                                 : std::format("DuckDB appender {} failed for {}", operation,
+                                               table_));
+}
+
+void Appender::append_int32(int32_t value) {
+  check(duckdb_append_int32(appender_, value), "append");
+}
+
+void Appender::append_uint32(uint32_t value) {
+  check(duckdb_append_uint32(appender_, value), "append");
+}
+
+void Appender::append_double(double value) {
+  check(duckdb_append_double(appender_, value), "append");
+}
+
+void Appender::append_bool(bool value) { check(duckdb_append_bool(appender_, value), "append"); }
+
+void Appender::append_varchar(std::string_view value) {
+  check(duckdb_append_varchar_length(appender_, value.data(), static_cast<idx_t>(value.size())),
+        "append");
+}
+
+void Appender::append_null() { check(duckdb_append_null(appender_), "append"); }
+
+void Appender::append_float_array(std::span<const float> values) {
+  const auto array_value = make_float_array_value(values);
+  check(duckdb_append_value(appender_, array_value.get()), "append");
+}
+
+void Appender::end_row() { check(duckdb_appender_end_row(appender_), "end_row"); }
+
+void Appender::flush() { check(duckdb_appender_flush(appender_), "flush"); }
 
 };  // namespace duckorm

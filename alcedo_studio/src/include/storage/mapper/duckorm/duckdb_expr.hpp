@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
@@ -160,6 +161,41 @@ namespace expr {
 [[nodiscard]] auto or_(std::span<const SqlFragment> parts) -> SqlFragment;
 [[nodiscard]] auto and_(std::initializer_list<SqlFragment> parts) -> SqlFragment;
 [[nodiscard]] auto or_(std::initializer_list<SqlFragment> parts) -> SqlFragment;
+
+/**
+ * @brief `operand IN (v1, v2, ...)` with the values as integer literals.
+ *
+ * @param operand Column or expression on the left.
+ * @param values Integer values, for example element ids. Each value must fit in int64_t.
+ * @return The IN predicate, or `FALSE` for an empty list (no row matches).
+ *
+ * @details Literals instead of binds: an id list can hold thousands of values, and integer
+ * literals need no escaping.
+ */
+template <std::integral T>
+[[nodiscard]] auto in_list(SqlFragment operand, std::span<const T> values) -> SqlFragment {
+  if (values.empty()) {
+    return raw("FALSE");
+  }
+  operand.append(raw(" IN ("));
+  for (size_t i = 0; i < values.size(); ++i) {
+    if (i > 0) {
+      operand.append(raw(", "));
+    }
+    operand.append(lit(static_cast<int64_t>(values[i])));
+  }
+  operand.append(raw(")"));
+  return operand;
+}
+
+/**
+ * @brief A `FLOAT[n]` array literal, for example `[0.5,-1]::FLOAT[2]`.
+ *
+ * @details Written with the classic locale and 9 significant digits, so every float value
+ * reads back unchanged. Used where a vector must be part of the SQL text (DuckDB binds have
+ * no array type here).
+ */
+[[nodiscard]] auto lit_float_array(std::span<const float> values) -> SqlFragment;
 
 }  // namespace expr
 }  // namespace duckorm

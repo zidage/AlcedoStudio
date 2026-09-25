@@ -14,6 +14,13 @@ gtest_discover_tests(DuckormExprTest TEST_PREFIX "DuckormExprTest."
   PROPERTIES LABELS "ci_core_flow")
 alcedo_register_test_target(DuckormExprTest storage ci_core)
 
+add_executable(DuckormStatementTest ${ALCEDO_TEST_ROOT}/storage/duckorm_statement_test.cpp)
+target_include_directories(DuckormStatementTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(DuckormStatementTest PRIVATE GTest::gtest_main DuckORM)
+gtest_discover_tests(DuckormStatementTest TEST_PREFIX "DuckormStatementTest."
+  PROPERTIES LABELS "ci_core_flow")
+alcedo_register_test_target(DuckormStatementTest storage ci_core)
+
 # Phase 3: merged CRTP Mapper base — ToParams/FromParams and SqlFragment WHERE round-trip.
 add_executable(MapperCrtpRoundtripTest ${ALCEDO_TEST_ROOT}/storage/mapper_crtp_roundtrip_test.cpp)
 target_include_directories(MapperCrtpRoundtripTest PUBLIC ${ALCEDO_INCLUDE_DIR})
