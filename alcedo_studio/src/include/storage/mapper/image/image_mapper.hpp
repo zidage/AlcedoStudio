@@ -47,6 +47,7 @@ struct ImageMapperParams {
   std::optional<int64_t>       pixel_count_;
   std::string                  file_search_text_;
   std::string                  exif_search_text_;
+  std::string                  exif_search_words_;
 };
 
 /**
@@ -56,7 +57,7 @@ class ImageMapper
     : public Mapper<ImageMapper, std::shared_ptr<Image>, ImageMapperParams, image_id_t>,
       public FieldReflectable<ImageMapper> {
  private:
-  static constexpr uint32_t                                         field_count_      = 19;
+  static constexpr uint32_t                                         field_count_      = 20;
   static constexpr const char*                                      table_name_       = "Image";
   static constexpr const char*                                      prime_key_clause_ = "id={}";
   // Order matches the `Image` table DDL, because duckorm select reads `SELECT *`.
@@ -79,7 +80,8 @@ class ImageMapper
       FIELD_AS(ImageMapperParams, rating_, "rating", INT32),
       FIELD_AS(ImageMapperParams, pixel_count_, "pixel_count", NULLABLE_INT64),
       FIELD_AS(ImageMapperParams, file_search_text_, "file_search_text", STRING),
-      FIELD_AS(ImageMapperParams, exif_search_text_, "exif_search_text", STRING)};
+      FIELD_AS(ImageMapperParams, exif_search_text_, "exif_search_text", STRING),
+      FIELD_AS(ImageMapperParams, exif_search_words_, "exif_search_words", STRING)};
 
  public:
   static auto FromRawData(std::vector<duckorm::VarTypes>&& data) -> ImageMapperParams;

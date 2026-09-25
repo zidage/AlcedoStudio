@@ -28,7 +28,7 @@ class Database {
 
   constexpr static const char*          init_table_query =
       "CREATE TABLE Sleeve (id BIGINT PRIMARY KEY);"
-      // Image search columns (file_stem ... exif_search_text) are written by ImageMapper from
+      // Image search columns (file_stem ... exif_search_words) are written by ImageMapper from
       // the Image on every insert and update; see image_search_columns.hpp. Search, stats,
       // and the thumbnail filter read them instead of the metadata JSON.
       "CREATE TABLE Image (id BIGINT PRIMARY KEY, image_path TEXT, file_name TEXT, type INTEGER, "
@@ -46,7 +46,8 @@ class Database {
       "rating INTEGER NOT NULL DEFAULT 0,"
       "pixel_count BIGINT,"
       "file_search_text VARCHAR NOT NULL DEFAULT '',"
-      "exif_search_text VARCHAR NOT NULL DEFAULT '');"
+      "exif_search_text VARCHAR NOT NULL DEFAULT '',"
+      "exif_search_words VARCHAR NOT NULL DEFAULT '');"
       "CREATE TABLE SleeveRoot (id BIGINT PRIMARY KEY);"
       "CREATE TABLE Element (id BIGINT PRIMARY KEY, type INTEGER, element_name TEXT, added_time "
       "TIMESTAMP, modified_time "

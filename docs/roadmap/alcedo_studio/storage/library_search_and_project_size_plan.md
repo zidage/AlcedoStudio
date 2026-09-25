@@ -2,7 +2,7 @@
 
 Date: 2026-09-24
 
-Status: Phases S0, S1, S2, and S3 complete (2026-09-24); S4–S6 not started
+Status: Phases S0, S1, S2, and S3 complete (2026-09-24); S4 complete (2026-09-25); S5–S6 not started
 
 Primary owner: Alcedo Studio storage (Image schema, import, sleeve filter SQL) and library search.
 
@@ -856,6 +856,128 @@ Goal: correct recall and precision.
 
 Acceptance: every Phase S0 recall case passes, including the disabled Nikon cases. `6.7`
 matches only June 7 captures and stems that contain `67`.
+
+##### Phase S4 completion record (2026-09-25)
+
+**Status:** complete — `SearchQueryParser` turns the query into typed terms and the WHERE
+builder compiles one clause for each term, combined with AND. Every Phase S0 recall case
+passes, including the local Nikon cases with exact `z8` and `dng` sets.
+
+Branch: `refactor/library-search-s4-query-parser` (on top of
+`refactor/library-search-s3-typed-search-columns`). Project format stays 0.10.0 (the S4
+column below joins the unreleased S2/S3 cutover of Decision D1).
+
+**What changed:**
+
+| Step | Change |
+| --- | --- |
+| 1 | New `app/search_query_parser.{hpp,cpp}` (in the `SleeveFilterService` library): `SearchQueryParser::Parse(query) -> std::vector<SearchTerm>`. A `SearchTerm` has a kind (`Date`, `FileKind`, `CaptureParameter`, `Text`), the query text, its folded text, and the typed value (`SearchDate` with `Day` / `YearMonth` / `Year` / `MonthDay` / `Month`, an extension list, or an ISO / aperture / focal length value). Date forms: `Y-M-D` with `- . / _`, `YYYYMMDD`, `YYYY.M`, `YYYY` (1000–9999), `M.D` / `M/D` / `M-D`, `M月D日` (also `号`), `M月`, `YYYY年M月`, `YYYY年M月D日`, `YYYY年`, and English month names (`June`, `June 7`, `7 June`, `June 7, 2026`, `Sept 2025`; a three-letter abbreviation only with a day or year, so `mar` and `jun` stay text). Invalid days (`2.30`, `2025.2.29`) are text. Kinds: `jpg`/`jpeg`, `tif`/`tiff`, `heic`/`heif`, `png`, `webp`, `raw` (29 LibRaw RAW extensions), and each RAW extension, with or without a dot. Parameters: `iso800`, `iso 800`, `ISO-800`, `f2.8`, `f/2.8`, `35mm`, `35 mm`. |
+| 2 | `TermClause`: a date term is `(capture_date predicate OR text)`: `= DATE`, a `[from, to)` range for a month or year, or `month(i.capture_date) = M [AND day(i.capture_date) = D]` for any year. A file kind term is `(i.file_ext IN (...) OR text)`. A parameter term is `(i.iso = ? OR text)` or `(abs(i.aperture - ?) < 0.005 OR text)` (same for `i.focal_mm`). The S3 month range for `YYYY.12` built `DATE 'YYYY-13-01'` (found by reading the code); the range now ends at January 1 of the next year. |
+| 3 | A text term is `contains(<folded search text column>, folded token)` for each column that the mask enables (file, EXIF, caption, tags), plus the CLIP label `EXISTS` clause under AiTags. The S3 literal clauses on `e.element_name`, `i.file_name`, make, model, lens, and `CAST(i.iso / focal_mm / aperture AS VARCHAR)` are deleted for folded tokens (no feature renames a library file, so the Element name equals the Image file name). A bare number (`800`) no longer matches the ISO column; the user writes `iso800`. |
+| 3 (kept) | A token with `%`, `*`, `?`, `'`, or `"`, or a token that folding shrinks to less than half, is a literal text term: it matches the name, camera, and lens columns as typed. `FuzzySearchEscapesSqlLikeWildcardsAndQuotesInWideInput` needs this: `100%_` must not fold to `100` and match `1000A...`. |
+| 4 | Terms combine with AND. The whole-query alternative (`SearchDocumentClause`) is deleted; `P263 5860` matches through two text terms. `FoldedDocumentClause` was already deleted in S3. The AI BM25 clause (`AiImageFtsDocument`, both AI bits on) stays OR-ed with the whole predicate. |
+| 5 | The typed part of a term needs the field bit of its column: Exif for dates and parameters, Filename for file kinds. The text part follows the enabled text columns. |
+| 6 (deviation) | No typo tolerance. The plain substring rule of step 6 cannot give the exact `z8` set of the acceptance: the lens `NIKKOR Z 85mm f/1.8 S` of the Z6II and Zf files folds to `nikkorz85mmf18s`, which contains `z8`. New rule for the EXIF text only: when a token ends with a digit, a match that crosses a word boundary must not end inside a number. `Image` gains `exif_search_words` (the `exif_search_text` parts folded with the new `FoldSearchWords`: one space between words, `\|` between parts). The clause is `contains(i.exif_search_text, ?) AND (contains(i.exif_search_words, ?) OR regexp_matches(i.exif_search_words, ?))` with the pattern `z ?8(?:[^0-9]\|$)` for `z8`; the regular expression runs only on rows that pass the first `contains`. File names keep the plain rule because users type counter prefixes (`dsc223` while typing `DSC_2230`), which the same rule would reject. AI text keeps the plain rule. |
+
+**Primary success call chain:**
+
+```text
+SearchController / StatsEngine / tests -> SleeveFilterService::CountSearchResults / SearchFolder
+  / BuildFolderStats(extra) -> BuildFuzzySearchWhere(query, mask)
+  -> SearchQueryParser::Parse(query) -> [Date | FileKind | CaptureParameter | Text] terms
+  -> TermClause(term, active_model_key, mask) for each term
+     -> CaptureDateClause / FileKindClause / CaptureParameterClause (field bit on)
+     -> FoldedTextClause for each enabled text column (EXIF: number-end check)
+     -> SemanticLabelClause (Text term, AiTags on)
+  -> AND of term clauses [OR AI BM25] -> RawSQL FilterNode with binds
+  -> ElementStore::CountFilesInFolder / ListFilesInFolderPage / BuildFolderStats
+```
+
+**Write path addition:**
+
+```text
+ImageMapper::ToParams -> FillImageSearchColumns
+  -> exif_search_text  = JoinFoldedParts(make, model, lens, lens make, date text)
+  -> exif_search_words = JoinWordFoldedParts(same parts)   (FoldSearchWords, `|` between parts)
+```
+
+**Primary failure call chains:**
+
+```text
+Empty or white-space query -> Parse returns [] -> std::nullopt (no filter)
+Mask 0 -> RawSQL FALSE (unchanged)
+Date that does not exist (2.30, 2026-02-30, 6月32日) -> Text term -> folded text only
+Typed column NULL (unknown date / ISO) -> typed predicate NULL -> only the text part can match
+Typed column's field bit off -> typed part omitted; no enabled column -> term is 1=0 -> no rows
+Token with an SQL wildcard or quote -> literal Text term -> bound contains on name/camera/lens
+```
+
+**What was proven (executed tests):**
+
+| Plan criterion | Test | Binary | Result |
+| --- | --- | --- | --- |
+| Step 1: date forms and their calendar ranges (28 forms) | `DateFormsParseToTheNamedCalendarRange` | `SearchQueryParserTest` (new, `ci_core`) | PASS |
+| Step 1: invalid or unlisted date forms stay text | `InvalidOrUnlistedDateFormsStayText` | `SearchQueryParserTest` | PASS |
+| Step 2: date terms keep the folded text alternative | `DateTermKeepsFoldedTextAlternative` | `SearchQueryParserTest` | PASS |
+| Step 1: file kinds and the RAW extension list | `FileKindTermsListTheirExtensions` | `SearchQueryParserTest` | PASS |
+| Step 1: capture parameters | `CaptureParameterFormsParseToFieldAndValue`, `WordsThatOnlyLookLikeParametersStayText` | `SearchQueryParserTest` | PASS |
+| Step 3: folded and literal text terms | `TextTermsFoldSeparatorsUnlessTypedLiterally` | `SearchQueryParserTest` | PASS |
+| Step 4: term order, multi-token terms, empty query | `QuerySplitsIntoTermsInOrder` | `SearchQueryParserTest` | PASS |
+| Acceptance: every S0 recall case (28; the 10 known defects are now `kPasses`) plus 13 S4 cases (`2026年6月`, `June`, `7 June`, `June 7 2026`, `3月`, `March 2024`, `iso 800`, `f/2.8`, `35 mm`, `.nef`, `dng 2026`, `raw 6.7`, `rw2 iso200`). `6.7` returns the three June 7 files and `IMG_0067` only. | `FuzzySearchReturnsExpectedFilesForEachRecallCase` | `LibrarySearchRecallTest` | PASS |
+| Step 5: the typed part needs its field bit | `TypedTermsMatchOnlyWhenTheirFieldBitIsEnabled` | `LibrarySearchRecallTest` | PASS |
+| Step 2: December month range, month and year terms | `YearMonthAndMonthTermsCoverDecember` | `LibrarySearchRecallTest` | PASS |
+| Step 6 deviation: EXIF number-end rule; file name prefixes kept | `CrossWordMatchDoesNotEndInsideANumber` | `LibrarySearchRecallTest` | PASS |
+| Acceptance: local Nikon folder, exact `z8` (4 files) and `dng` (3 files) | `DISABLED_NikonFolderImportsRawOnlyAndSearchFindsFileNames` | `LibrarySearchRecallTest` | PASS (local, 7.9 s). FAILED before the step 6 rule: `z8` also returned `DSC_0261.NEF` (Z6II) and `DSC_1456.NEF`, `DSC_1535.NEF` (Zf) through the lens `NIKKOR Z 85mm`. |
+| `FoldSearchWords` form | `FoldWordsKeepsOneSpaceBetweenWordsAndMatchesTheFoldWithoutSpaces` | `LibrarySearchColumnsTest` | PASS |
+| Stored `exif_search_words`; 20-column Image read back | `DerivesTypedValuesAndFoldedTextFromMetadata`, `ImageRowStoresSearchColumnsAndRewritesThemOnUpdate` | `LibrarySearchColumnsTest` | PASS |
+| Parameters with the metadata JSON cleared; bare `800` no longer matches ISO | `SearchStatsAndFiltersGiveSameResultsWithMetadataJsonCleared` | `LibrarySearchColumnsTest` | PASS (S3 had `800` → Nikon; now `iso800`, `f2.8`, `35mm` → Nikon and `800` → none) |
+| Search and stats regression | all cases | `FilterServiceTest` | PASS. `StatsBarAndSearchMergeUnderOneCompiledPredicate`: `50mm` is now a focal length term, so the fixture's `NIKKOR 24mm` file gets `focal_ = 24` (it had the default 50). |
+| Regression | `SearchQueryClassifierTest`, `ProjectServiceTest`, `ImportRawOnlyTest`, `SleeveServiceTest`, `MetadataExtractorTest`, `PipelineDngProfileBindingTest`, `PipelineMapperTest`, `MapperCrtpRoundtripTest`, `SleeveFSTest`, `SleeveFilterCompileTest`, `SleeveFilterFactoryTest`, `DuckormExprTest`, `CommitGraphTest`, `BatchImportDngMetadataTest`, `SleeveFilesystemCiTest`, `ImportPipelineDocumentTest`, `SemanticGenerationServiceTest`, `ExportServiceTest`, `AlbumBackendRatingTest`, `AlbumBackendStatsFilterTest`, `AlbumBackendImageDetailsTest`, `AlbumBackendFolderTest`, `AlbumBackendImageDeleteTest` | ctest | PASS |
+
+**Measurements** (debug build, `LibrarySearchBenchmarkTest`, 1000 files, p50 / p95):
+
+| Query | Matches S3 → S4 | Preview S4 | Apply S4 |
+| --- | --- | --- | --- |
+| `jpg` | 0 → 0 | 58.7 / 59.5 ms | 130.0 / 135.0 ms |
+| `2026-06-07` | 1 → 1 | 56.3 / 62.6 ms | 124.0 / 128.6 ms |
+| `P1000123` | 0 → 0 | 54.3 / 54.6 ms | 116.0 / 117.6 ms |
+| `6.7` | 1000 → 23 | 53.8 / 57.1 ms | 118.7 / 122.3 ms |
+| `dsc` | 493 → 493 | 52.4 / 58.9 ms | 113.9 / 116.8 ms |
+
+The S4 builder costs the same as S3 in the debug build (S3: 52–61 ms preview, 126–135 ms
+apply). The release measurement was not repeated. The new clauses are the same `contains`
+scans plus typed column compares, and the regular expression runs only for tokens that end
+with a digit, on rows that already contain the token.
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target SearchQueryParserTest LibrarySearchRecallTest FilterServiceTest LibrarySearchColumnsTest SearchQueryClassifierTest
+ctest --test-dir build/debug -R "SearchQueryParserTest|LibrarySearchRecallTest|FilterServiceTest|LibrarySearchColumnsTest|SearchQueryClassifierTest" -j 1   -> 74/74 passed (Nikon test disabled by design)
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target <the 22 regression targets above> LibrarySearchBenchmarkTest
+ctest --test-dir build/debug -R "^(<the 22 regression targets>)\." -j 1   -> 204/204 passed (5 disabled by design)
+LibrarySearchRecallTest.exe --gtest_also_run_disabled_tests --gtest_filter=*Nikon*   -> 1/1 passed
+LibrarySearchBenchmarkTest.exe --gtest_also_run_disabled_tests --gtest_filter=*OneThousand*
+```
+
+Full `ctest` suite: not run (agent rule). `alcedo_main` was not linked; `AlbumBackendLib`
+builds (the album backend tests link it).
+
+**Checklist / exit condition:** steps 1–5 done; step 6 done with the EXIF number-end
+deviation above. Acceptance: every Phase S0 recall case passes, including the disabled Nikon
+cases with exact sets; `6.7` matches only June 7 captures and the stem `IMG_0067`.
+
+**LOC note:** `sleeve_filter_service.cpp` 622 → 592. New files: `search_query_parser.hpp` 99,
+`search_query_parser.cpp` 526, `search_query_parser_test.cpp` 180.
+`library_search_recall_test.cpp` 344 → 478. No file is near the 1000-line limit.
+
+**Remaining gaps:**
+
+- The debug app path is still 52–59 ms preview and 114–135 ms apply for 1000 files. Phase S5
+  moves search off the UI thread and measures apply.
+- `SearchQueryClassifier` (route choice) and `SearchQueryParser` (term meaning) both scan the
+  query; the classifier is unchanged.
+- The AI BM25 clause is unchanged.
 
 ### Phase S5 — Search runs off the UI thread
 

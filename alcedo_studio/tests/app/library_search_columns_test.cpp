@@ -149,6 +149,18 @@ TEST(SearchTextFoldTest, FoldRemovesSeparatorsAndLowercasesAndKeepsSubstrings) {
             std::wstring::npos);
 }
 
+TEST(SearchTextFoldTest, FoldWordsKeepsOneSpaceBetweenWordsAndMatchesTheFoldWithoutSpaces) {
+  EXPECT_EQ(FoldSearchWords(L"NIKKOR Z 85mm f/1.8 S"), L"nikkor z 85mm f 1 8 s");
+  EXPECT_EQ(FoldSearchWords(L"  __Nikon-D810_raw00011.NEF--  "), L"nikon d810 raw00011 nef");
+  EXPECT_EQ(FoldSearchWords(L"_-./"), L"");
+  EXPECT_EQ(FoldSearchWordsUtf8("DSC_0431_dng.dng"), "dsc 0431 dng dng");
+  for (const auto* text : {L"NIKKOR Z 85mm f/1.8 S", L"2026:06:07 13:12:41", L"(EOS) R5!"}) {
+    auto words = FoldSearchWords(text);
+    std::erase(words, L' ');
+    EXPECT_EQ(words, FoldSearchText(text));
+  }
+}
+
 TEST(CaptureDateTimeTest, ParsesExifDateFormsAndRejectsInvalidDates) {
   const auto dash = ParseCaptureDateTime("2026-06-07 13:12:41");
   ASSERT_TRUE(dash.has_value());
@@ -205,6 +217,9 @@ TEST(ImageSearchColumnsFillTest, DerivesTypedValuesAndFoldedTextFromMetadata) {
   EXPECT_EQ(row.file_search_text_, "dsc0431dngdng z8");
   EXPECT_EQ(row.exif_search_text_,
             "nikoncorporation nikonz8 nikkorz24120mmf4s nikon 20260607131241");
+  // Phase S4: the EXIF words form keeps one space between words and `|` between parts.
+  EXPECT_EQ(row.exif_search_words_,
+            "nikon corporation|nikon z 8|nikkor z 24 120mm f 4 s|nikon|2026 06 07 13 12 41");
 
   // An unparsable date leaves both capture columns empty (written as NULL).
   metadata.date_time_str_ = "0000:00:00 00:00:00";
@@ -253,7 +268,12 @@ TEST_F(LibrarySearchColumnsTest, ImageRowStoresSearchColumnsAndRewritesThemOnUpd
             (std::vector<std::string>{"NIKON Z 8", "2026-07-01",
                                       "nikoncorporation nikonz8 nikkor35mmf18 20260701080000"}));
 
-  // The Image still reads back from the 19-column row through the mapper.
+  EXPECT_EQ(QueryFirstRow(project, "SELECT exif_search_words FROM Image WHERE id = " +
+                                       std::to_string(nikon_image)),
+            (std::vector<std::string>{
+                "nikon corporation|nikon z 8|nikkor 35mm f 1 8|2026 07 01 08 00 00"}));
+
+  // The Image still reads back from the 20-column row through the mapper.
   const auto stored = project.GetStorage()->GetImageStore().GetImageById(nikon_image);
   ASSERT_NE(stored, nullptr);
   EXPECT_EQ(stored->exif_display_.model_, "NIKON Z 8");
@@ -321,7 +341,11 @@ TEST_F(LibrarySearchColumnsTest, SearchStatsAndFiltersGiveSameResultsWithMetadat
             std::set<std::string>{nikon});
   EXPECT_EQ(SearchFileNames(filter_service, folder_id, L"2026.6"), std::set<std::string>{nikon});
   EXPECT_EQ(SearchFileNames(filter_service, folder_id, L"kyoto"), std::set<std::string>{canon});
-  EXPECT_EQ(SearchFileNames(filter_service, folder_id, L"800"), std::set<std::string>{nikon});
+  EXPECT_EQ(SearchFileNames(filter_service, folder_id, L"iso800"), std::set<std::string>{nikon});
+  EXPECT_EQ(SearchFileNames(filter_service, folder_id, L"f2.8"), std::set<std::string>{nikon});
+  EXPECT_EQ(SearchFileNames(filter_service, folder_id, L"35mm"), std::set<std::string>{nikon});
+  // Phase S4: a bare number is a text term; it does not match the ISO column.
+  EXPECT_TRUE(SearchFileNames(filter_service, folder_id, L"800").empty());
   EXPECT_EQ(filter_service.CountSearchResults(folder_id, L"nikkor", kAllSearchFields), 1u);
 
   const auto stats = filter_service.BuildFolderStats(folder_id, std::nullopt);

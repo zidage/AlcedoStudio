@@ -30,4 +30,16 @@ auto FoldSearchText(std::wstring_view text) -> std::wstring;
 /// UTF-8 form of FoldSearchText. Returns an empty string when @p text is not valid UTF-8.
 auto FoldSearchTextUtf8(std::string_view text) -> std::string;
 
+/**
+ * @brief Fold text like FoldSearchText, but keep one space between the words.
+ *
+ * A word is a run of characters that are not search separators. `NIKKOR Z 85mm f/1.8` gives
+ * `nikkor z 85mm f 1 8`. Removing the spaces gives FoldSearchText of the same text. Library
+ * search reads this form to see where a folded match crosses a word boundary.
+ */
+auto FoldSearchWords(std::wstring_view text) -> std::wstring;
+
+/// UTF-8 form of FoldSearchWords. Returns an empty string when @p text is not valid UTF-8.
+auto FoldSearchWordsUtf8(std::string_view text) -> std::string;
+
 }  // namespace alcedo

@@ -61,6 +61,22 @@ auto JoinFoldedParts(std::initializer_list<std::string> parts) -> std::string {
   return out;
 }
 
+// Join the non-empty word-folded parts with `|`. See FillImageSearchColumns.
+auto JoinWordFoldedParts(std::initializer_list<std::string> parts) -> std::string {
+  std::string out;
+  for (const auto& part : parts) {
+    const auto folded = FoldSearchWordsUtf8(part);
+    if (folded.empty()) {
+      continue;
+    }
+    if (!out.empty()) {
+      out.push_back('|');
+    }
+    out += folded;
+  }
+  return out;
+}
+
 auto Lowercase(std::wstring value) -> std::wstring {
   for (auto& ch : value) {
     ch = static_cast<wchar_t>(std::towlower(static_cast<std::wint_t>(ch)));
@@ -146,9 +162,12 @@ void FillImageSearchColumns(const std::wstring& file_name, const std::filesystem
   row.pixel_count_  = PositiveOrNull(static_cast<uint64_t>(metadata.width_) * metadata.height_);
 
   const auto parent_folder = conv::ToBytes(image_path.parent_path().filename().wstring());
-  row.file_search_text_    = JoinFoldedParts({conv::ToBytes(name_path.wstring()), parent_folder});
-  row.exif_search_text_    = JoinFoldedParts({metadata.make_, metadata.model_, metadata.lens_,
-                                              metadata.lens_make_, metadata.date_time_str_});
+  const auto file_name_text = conv::ToBytes(name_path.wstring());
+  row.file_search_text_     = JoinFoldedParts({file_name_text, parent_folder});
+  row.exif_search_text_     = JoinFoldedParts({metadata.make_, metadata.model_, metadata.lens_,
+                                               metadata.lens_make_, metadata.date_time_str_});
+  row.exif_search_words_    = JoinWordFoldedParts({metadata.make_, metadata.model_, metadata.lens_,
+                                                   metadata.lens_make_, metadata.date_time_str_});
 }
 
 }  // namespace alcedo

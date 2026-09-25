@@ -11,11 +11,11 @@
 #include <initializer_list>
 #include <memory>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include "app/search_query_parser.hpp"
 #include "storage/store/semantic/semantic_label_config.hpp"
 #include "utils/string/convert.hpp"
 #include "utils/string/search_text.hpp"
@@ -91,39 +91,78 @@ auto FoldedColumnContains(std::string_view column, const std::wstring& folded_to
   return clause;
 }
 
-/// Folded form of a query token for the search text columns, or std::nullopt when the token
-/// must match literally. A token with `%`, `*`, `?`, `'`, or `"` is taken as typed (these are
-/// not name separators the user wants to skip), and a token that is mostly separators would
-/// fold to too little text to be selective. Such tokens still match the literal clauses.
-auto FoldedTokenForColumns(const std::wstring& token) -> std::optional<std::wstring> {
-  if (token.find_first_of(L"%*?'\"") != std::wstring::npos) {
-    return std::nullopt;
-  }
-  auto folded = FoldSearchText(token);
-  if (folded.empty() || folded.size() < token.size() / 2) {
-    return std::nullopt;
-  }
-  return folded;
-}
+/// One folded search text column and, for the EXIF text, its word-folded form.
+struct SearchTextColumn {
+  std::string_view text_;
+  std::string_view words_;  ///< Empty when the column has no word-folded form.
+};
 
 /// Folded search text columns that the enabled field groups can match. `i.` columns are
 /// written by ImageMapper; `u.` columns come from the AI understanding join in
 /// BuildScopedFileQuery.
-auto SearchTextColumns(SearchFieldMask mask) -> std::vector<std::string_view> {
-  std::vector<std::string_view> columns;
+auto SearchTextColumns(SearchFieldMask mask) -> std::vector<SearchTextColumn> {
+  std::vector<SearchTextColumn> columns;
   if (mask & SearchField::Filename) {
-    columns.push_back("i.file_search_text");
+    columns.push_back({"i.file_search_text", {}});
   }
   if (mask & SearchField::Exif) {
-    columns.push_back("i.exif_search_text");
+    columns.push_back({"i.exif_search_text", "i.exif_search_words"});
   }
   if (mask & SearchField::AiDescription) {
-    columns.push_back("u.caption_search_text");
+    columns.push_back({"u.caption_search_text", {}});
   }
   if (mask & SearchField::AiTags) {
-    columns.push_back("u.tags_search_text");
+    columns.push_back({"u.tags_search_text", {}});
   }
   return columns;
+}
+
+auto IsAsciiDigit(wchar_t ch) -> bool { return ch >= L'0' && ch <= L'9'; }
+
+/// RE2 pattern that matches @p folded_token in a word-folded column with at most one space
+/// between two characters, and that is not followed by a digit:
+/// `z8` gives `z ?8(?:[^0-9]|$)`. ASCII punctuation is escaped; other characters are literal.
+auto CrossWordNumberEndPattern(const std::wstring& folded_token) -> std::string {
+  std::wstring pattern;
+  for (size_t i = 0; i < folded_token.size(); ++i) {
+    const auto ch = folded_token[i];
+    if (i > 0) {
+      pattern += L" ?";
+    }
+    if (ch < 0x80 && std::iswalnum(static_cast<std::wint_t>(ch)) == 0) {
+      pattern.push_back(L'\\');
+    }
+    pattern.push_back(ch);
+  }
+  pattern += L"(?:[^0-9]|$)";
+  return conv::ToBytes(pattern);
+}
+
+/**
+ * @brief Match a folded token in one search text column.
+ *
+ * `contains(text, token)` is the whole rule for a column without a word-folded form and for a
+ * token that does not end with a digit. In the EXIF text, a match of a token that ends with a
+ * digit must not cross a word boundary and then end inside a number: `z8` matches the model
+ * `NIKON Z 8` but not the lens `NIKKOR Z 85mm`, whose folded text `nikkorz85mm` also contains
+ * `z8`. Inside one word the token may end anywhere (`8` finds `85mm`). File names keep the
+ * plain rule, so a counter prefix typed without its separator (`dsc223` for `DSC_2230`) still
+ * matches. The `contains` term runs first and limits the regular expression to rows that
+ * already contain the token.
+ */
+auto FoldedTextClause(const SearchTextColumn& column, const std::wstring& folded_token)
+    -> duckorm::SqlFragment {
+  namespace expr     = duckorm::expr;
+  auto contains_text = FoldedColumnContains(column.text_, folded_token);
+  if (column.words_.empty() || folded_token.empty() || !IsAsciiDigit(folded_token.back())) {
+    return contains_text;
+  }
+  auto regexp = expr::raw("regexp_matches(" + std::string(column.words_) + ", ");
+  regexp.append(expr::param(CrossWordNumberEndPattern(folded_token)));
+  regexp.append(expr::raw(")"));
+  return expr::and_(
+      {std::move(contains_text),
+       expr::or_({FoldedColumnContains(column.words_, folded_token), std::move(regexp)})});
 }
 
 /**
@@ -192,199 +231,131 @@ auto SemanticLabelClause(const std::wstring& term, const std::string& active_mod
   return expr::exists(std::move(subquery));
 }
 
-auto SplitTokens(const std::wstring& query) -> std::vector<std::wstring> {
-  std::wistringstream       stream(query);
-  std::vector<std::wstring> tokens;
-  std::wstring              token;
-  while (stream >> token) {
-    token = TrimCopy(token);
-    if (!token.empty()) {
-      tokens.push_back(std::move(token));
-    }
-  }
-  return tokens;
+auto DateLiteral(int year, int month, int day) -> std::string {
+  return std::format("{:04}-{:02}-{:02}", year, month, day);
 }
-
-auto DigitsOnly(const std::wstring& value) -> std::wstring {
-  std::wstring digits;
-  for (const auto ch : value) {
-    if (std::iswdigit(ch) != 0) {
-      digits.push_back(ch);
-    }
-  }
-  return digits;
-}
-
-auto SafeToInt(const std::wstring& value) -> std::optional<int> {
-  if (value.empty() || value.size() > 9) {
-    return std::nullopt;
-  }
-  try {
-    return std::stoi(value);
-  } catch (...) {
-    return std::nullopt;
-  }
-}
-
-auto DigitGroups(const std::wstring& value) -> std::vector<int> {
-  std::vector<int> groups;
-  std::wstring     current;
-  for (const auto ch : value) {
-    if (std::iswdigit(ch) != 0) {
-      if (current.size() < 9) {
-        current.push_back(ch);
-      }
-      continue;
-    }
-    if (!current.empty()) {
-      if (const auto parsed = SafeToInt(current); parsed.has_value()) {
-        groups.push_back(*parsed);
-      }
-      current.clear();
-    }
-  }
-  if (!current.empty()) {
-    if (const auto parsed = SafeToInt(current); parsed.has_value()) {
-      groups.push_back(*parsed);
-    }
-  }
-  return groups;
-}
-
-auto IsValidMonth(int month) -> bool { return month >= 1 && month <= 12; }
-
-auto IsValidDay(int day) -> bool { return day >= 1 && day <= 31; }
-
-auto DateLiteral(int year, int month, int day) -> std::wstring {
-  return std::format(L"{:04}-{:02}-{:02}", year, month, day);
-}
-
-auto NextMonthStart(int year, int month) -> std::wstring {
-  if (month >= 12) {
-    return DateLiteral(year + 1, 1, 1);
-  }
-  return DateLiteral(year, month + 1, 1);
-}
-
-auto DateColumn() -> duckorm::SqlFragment { return duckorm::expr::raw("i.capture_date"); }
 
 auto DateValue(int year, int month, int day) -> duckorm::SqlFragment {
-  return duckorm::expr::raw(
-      "DATE " + duckorm::expr::lit(conv::ToBytes(DateLiteral(year, month, day))).sql_);
+  return duckorm::expr::raw("DATE " + duckorm::expr::lit(DateLiteral(year, month, day)).sql_);
 }
 
-auto DateMatchClauses(const std::wstring& token) -> std::vector<duckorm::SqlFragment> {
+/// `i.capture_date >= DATE 'from' AND i.capture_date < DATE 'to'`.
+auto CaptureDateRange(duckorm::SqlFragment from, duckorm::SqlFragment to) -> duckorm::SqlFragment {
+  namespace expr = duckorm::expr;
+  return expr::and_({expr::ge(expr::col("i.capture_date"), std::move(from)),
+                     expr::lt(expr::col("i.capture_date"), std::move(to))});
+}
+
+/// `<part>(i.capture_date) = value`, for `month` and `day`.
+auto CaptureDatePart(std::string_view part, int value) -> duckorm::SqlFragment {
+  return duckorm::expr::eq(duckorm::expr::raw(std::string(part) + "(i.capture_date)"),
+                           duckorm::expr::lit(static_cast<int64_t>(value)));
+}
+
+/// Typed predicate of a date term on `Image.capture_date`.
+auto CaptureDateClause(const SearchDate& date) -> duckorm::SqlFragment {
+  namespace expr = duckorm::expr;
+  switch (date.match_) {
+    case SearchDateMatch::Day:
+      return expr::eq(expr::col("i.capture_date"), DateValue(date.year_, date.month_, date.day_));
+    case SearchDateMatch::YearMonth:
+      return CaptureDateRange(DateValue(date.year_, date.month_, 1),
+                              date.month_ == 12 ? DateValue(date.year_ + 1, 1, 1)
+                                                : DateValue(date.year_, date.month_ + 1, 1));
+    case SearchDateMatch::Year:
+      return CaptureDateRange(DateValue(date.year_, 1, 1), DateValue(date.year_ + 1, 1, 1));
+    case SearchDateMatch::MonthDay:
+      return expr::and_({CaptureDatePart("month", date.month_), CaptureDatePart("day", date.day_)});
+    case SearchDateMatch::Month:
+      return CaptureDatePart("month", date.month_);
+  }
+  return expr::raw("1=0");
+}
+
+/// `i.file_ext IN ('ext', ...)`. The extensions come from the parser's fixed table.
+auto FileKindClause(const std::vector<std::string>& extensions) -> duckorm::SqlFragment {
+  auto clause = duckorm::expr::raw("i.file_ext IN (");
+  for (size_t i = 0; i < extensions.size(); ++i) {
+    if (i > 0) {
+      clause.append(duckorm::expr::raw(", "));
+    }
+    clause.append(duckorm::expr::lit(extensions[i]));
+  }
+  clause.append(duckorm::expr::raw(")"));
+  return clause;
+}
+
+/// Typed predicate of a capture parameter term. ISO is an integer column. Focal length and
+/// aperture are stored rounded to two decimals (see FillImageSearchColumns), so they match
+/// within half of that step.
+auto CaptureParameterClause(const SearchTerm& term) -> duckorm::SqlFragment {
+  namespace expr = duckorm::expr;
+  if (term.parameter_ == CaptureParameterField::Iso) {
+    return expr::eq(expr::col("i.iso"), expr::param(static_cast<int64_t>(term.parameter_value_)));
+  }
+  const auto* column =
+      term.parameter_ == CaptureParameterField::Aperture ? "i.aperture" : "i.focal_mm";
+  auto clause = expr::raw(std::string("abs(") + column + " - ");
+  clause.append(expr::param(term.parameter_value_));
+  clause.append(expr::raw(") < 0.005"));
+  return clause;
+}
+
+/**
+ * @brief Compile one parsed search term (Phase S4 of library_search_and_project_size_plan.md).
+ *
+ * A date, file kind, or capture parameter term is `(typed predicate OR text alternative)`;
+ * the typed predicate needs the field bit of its column (Exif for dates and parameters,
+ * Filename for file kinds). A text term matches the folded search text columns that @p mask
+ * enables, a literal text term matches the name, camera, and lens columns as typed, and with
+ * the AiTags bit a text term also matches the CLIP semantic labels.
+ */
+auto TermClause(const SearchTerm& term, const std::string& active_model_key, SearchFieldMask mask)
+    -> duckorm::SqlFragment {
   namespace expr = duckorm::expr;
 
   std::vector<duckorm::SqlFragment> clauses;
-  const auto                        digits = DigitsOnly(token);
-  const auto                        groups = DigitGroups(token);
-  const auto                        col    = DateColumn();
+  switch (term.kind_) {
+    case SearchTermKind::Date:
+      if (mask & SearchField::Exif) {
+        clauses.push_back(CaptureDateClause(term.date_));
+      }
+      break;
+    case SearchTermKind::FileKind:
+      if (mask & SearchField::Filename) {
+        clauses.push_back(FileKindClause(term.extensions_));
+      }
+      break;
+    case SearchTermKind::CaptureParameter:
+      if (mask & SearchField::Exif) {
+        clauses.push_back(CaptureParameterClause(term));
+      }
+      break;
+    case SearchTermKind::Text:
+      break;
+  }
 
-  auto add_exact = [&](int year, int month, int day) {
-    if (year >= 1000 && IsValidMonth(month) && IsValidDay(day)) {
-      clauses.push_back(expr::eq(col, DateValue(year, month, day)));
+  if (term.literal_) {
+    if (mask & SearchField::Filename) {
+      clauses.push_back(ContainsClause(expr::raw("e.element_name"), term.text_));
+      clauses.push_back(ContainsClause(expr::raw("i.file_name"), term.text_));
     }
-  };
-  auto add_month = [&](int year, int month) {
-    if (year >= 1000 && IsValidMonth(month)) {
-      clauses.push_back(expr::and_(
-          {expr::ge(col, DateValue(year, month, 1)),
-           expr::lt(col, DateValue(year, month + 1, 1))}));
+    if (mask & SearchField::Exif) {
+      clauses.push_back(ContainsClause(expr::raw("i.camera_make"), term.text_));
+      clauses.push_back(ContainsClause(expr::raw("i.camera_model"), term.text_));
+      clauses.push_back(ContainsClause(expr::raw("i.lens"), term.text_));
     }
-  };
-  auto add_year = [&](int year) {
-    if (year >= 1000) {
-      clauses.push_back(expr::and_(
-          {expr::ge(col, DateValue(year, 1, 1)), expr::lt(col, DateValue(year + 1, 1, 1))}));
-    }
-  };
-
-  if (digits.size() == 8) {
-    const auto year  = SafeToInt(digits.substr(0, 4));
-    const auto month = SafeToInt(digits.substr(4, 2));
-    const auto day   = SafeToInt(digits.substr(6, 2));
-    if (year.has_value() && month.has_value() && day.has_value()) {
-      add_exact(*year, *month, *day);
-    }
-  } else if (digits.size() == 6) {
-    const auto yy    = SafeToInt(digits.substr(0, 2));
-    const auto month = SafeToInt(digits.substr(2, 2));
-    const auto day   = SafeToInt(digits.substr(4, 2));
-    if (yy.has_value() && month.has_value() && day.has_value()) {
-      add_exact(*yy >= 70 ? 1900 + *yy : 2000 + *yy, *month, *day);
-    }
-  } else if (digits.size() == 4 && token.size() == 4) {
-    if (const auto year = SafeToInt(digits); year.has_value()) {
-      add_year(*year);
+  } else if (!term.folded_text_.empty()) {
+    for (const auto& column : SearchTextColumns(mask)) {
+      clauses.push_back(FoldedTextClause(column, term.folded_text_));
     }
   }
 
-  if (groups.size() >= 3) {
-    add_exact(groups[0], groups[1], groups[2]);
-  } else if (groups.size() == 2) {
-    add_month(groups[0], groups[1]);
-  } else if (groups.size() == 1 && digits.size() == 4 && groups[0] >= 1000) {
-    add_year(groups[0]);
-  }
-
-  // The date text itself is matched through the folded `i.exif_search_text` column.
-  return clauses;
-}
-
-auto TokenSearchClause(const std::wstring& token, const std::string& active_model_key,
-                       SearchFieldMask mask) -> duckorm::SqlFragment {
-  namespace expr = duckorm::expr;
-
-  std::vector<duckorm::SqlFragment> clauses;
-  if (const auto folded_token = FoldedTokenForColumns(token); folded_token.has_value()) {
-    for (const auto column : SearchTextColumns(mask)) {
-      clauses.push_back(FoldedColumnContains(column, *folded_token));
-    }
-  }
-  if (mask & SearchField::Filename) {
-    // Literal matches for a token that is not folded (for example `100%_`). The Element name
-    // is not an Image column; a renamed library file keeps its own name.
-    clauses.push_back(ContainsClause(expr::raw("e.element_name"), token));
-    clauses.push_back(ContainsClause(expr::raw("i.file_name"), token));
-  }
-  if (mask & SearchField::Exif) {
-    clauses.push_back(ContainsClause(expr::raw("i.camera_make"), token));
-    clauses.push_back(ContainsClause(expr::raw("i.camera_model"), token));
-    clauses.push_back(ContainsClause(expr::raw("i.lens"), token));
-    clauses.push_back(ContainsClause(expr::raw("CAST(i.iso AS VARCHAR)"), token));
-    clauses.push_back(ContainsClause(expr::raw("CAST(i.focal_mm AS VARCHAR)"), token));
-    clauses.push_back(ContainsClause(expr::raw("CAST(i.aperture AS VARCHAR)"), token));
-    auto date_clauses = DateMatchClauses(token);
-    clauses.insert(clauses.end(), std::make_move_iterator(date_clauses.begin()),
-                   std::make_move_iterator(date_clauses.end()));
-  }
-  if (mask & SearchField::AiTags) {
-    if (auto label_clause = SemanticLabelClause(token, active_model_key);
+  if (term.kind_ == SearchTermKind::Text && (mask & SearchField::AiTags)) {
+    if (auto label_clause = SemanticLabelClause(term.text_, active_model_key);
         label_clause.has_value()) {
       clauses.push_back(std::move(*label_clause));
     }
-  }
-  if (clauses.empty()) {
-    return expr::raw("1=0");
-  }
-  return expr::or_(clauses);
-}
-
-// Whole-query alternative for a multi-token query: the folded query (separators and spaces
-// removed) is part of one enabled search text column, so `P263 5860` matches `P2635860.RW2`.
-auto SearchDocumentClause(const std::wstring& query, SearchFieldMask mask) -> duckorm::SqlFragment {
-  namespace expr = duckorm::expr;
-
-  std::vector<duckorm::SqlFragment> clauses;
-  if (const auto folded_query = FoldedTokenForColumns(query); folded_query.has_value()) {
-    for (const auto column : SearchTextColumns(mask)) {
-      clauses.push_back(FoldedColumnContains(column, *folded_query));
-    }
-  }
-  if (mask & SearchField::Filename) {
-    clauses.push_back(ContainsClause(expr::raw("e.element_name"), query));
-    clauses.push_back(ContainsClause(expr::raw("i.file_name"), query));
   }
   if (clauses.empty()) {
     return expr::raw("1=0");
@@ -501,8 +472,8 @@ auto SleeveFilterService::BuildFuzzySearchWhere(const std::wstring& query,
     return FilterNode{FilterNode::Type::RawSQL, FilterOp::AND, {}, std::nullopt, L"FALSE"};
   }
 
-  auto tokens = SplitTokens(trimmed);
-  if (tokens.empty()) {
+  const auto terms = SearchQueryParser::Parse(trimmed);
+  if (terms.empty()) {
     return std::nullopt;
   }
 
@@ -512,16 +483,15 @@ auto SleeveFilterService::BuildFuzzySearchWhere(const std::wstring& query,
   const bool has_ai_fts =
       storage_ && storage_->GetAiStore().HasUnderstandingFtsIndex();
 
-  std::vector<duckorm::SqlFragment> token_clauses;
-  token_clauses.reserve(tokens.size());
-  for (const auto& token : tokens) {
-    token_clauses.push_back(TokenSearchClause(token, active_model_key, mask));
+  // Every term must match (Decision D4). There is no whole-query alternative: a name split
+  // at a separator (`P263 5860`) matches because each part is in the folded file name.
+  std::vector<duckorm::SqlFragment> term_clauses;
+  term_clauses.reserve(terms.size());
+  for (const auto& term : terms) {
+    term_clauses.push_back(TermClause(term, active_model_key, mask));
   }
 
-  auto where = duckorm::expr::and_(token_clauses);
-  if (tokens.size() > 1) {
-    where = duckorm::expr::or_({std::move(where), SearchDocumentClause(trimmed, mask)});
-  }
+  auto       where = duckorm::expr::and_(term_clauses);
   // The AI FTS index body is caption + tags_json + scene concatenated; a BM25
   // hit cannot be attributed to one sub-field, so only run it when both AI
   // field groups are enabled. A single-bit AI scope uses only the per-field
