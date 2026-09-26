@@ -191,7 +191,11 @@ This script:
 2. Records `git rev-parse HEAD` as `commit`. A dirty worktree is refused.
 3. Finds the package in the fixed output directory: Windows uses the NSIS
    `build/release/package/*.exe`; macOS uses
-   `build/macos-release/package/*.zip` plus its `.dmg`.
+   `build/macos-release/package/*.zip` plus its `.dmg`. The package script
+   records the commit it packaged in `<package>.commit`. The script refuses the
+   package when that record is missing, when the worktree had uncommitted
+   changes at package time, or when the record is not the `commit` from step 2.
+   After you check out another commit, package again before you publish.
 4. Writes a **single-platform** `update-manifest.json` (schema 1) that embeds
    the approved notes, this platform's build, and the packaged commit.
 5. Signs with `alcedo_update_signer` and verifies the signature and package

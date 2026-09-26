@@ -125,6 +125,13 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# publish_update.py refuses a package whose recorded commit differs from the manifest commit,
+# so a package from another checkout or from uncommitted changes cannot be published.
+packaged_commit="$(git -C "$repo_root" rev-parse HEAD)"
+if [[ -n "$(git -C "$repo_root" status --porcelain)" ]]; then
+  packaged_commit="${packaged_commit}-dirty"
+fi
+
 build_number_state_script="${repo_root}/scripts/update/build_number_state.cmake"
 cmake \
   "-DALCEDO_BUILD_NUMBER_MODE=resolve" \
@@ -274,8 +281,15 @@ fi
 
 echo
 echo "Running CPack ..."
+package_file_name="$(sed -n 's/^set(CPACK_PACKAGE_FILE_NAME "\(.*\)")$/\1/p' \
+  "${build_dir}/CPackConfig.cmake")"
+package_dmg="${package_out_dir}/${package_file_name}.dmg"
+package_zip="${package_out_dir}/${package_file_name}.zip"
+package_commit_file="${package_zip}.commit"
+
 mkdir -p "$package_out_dir"
 rm -rf "${package_out_dir}/_CPack_Packages"
+rm -f "$package_commit_file"
 cpack_args=(--config "${build_dir}/CPackConfig.cmake" -B "$package_out_dir")
 printf '> cpack'
 printf ' %q' "${cpack_args[@]}"
@@ -299,10 +313,6 @@ if [[ -d "$staging_root" ]]; then
   done < <(find "$staging_root" -name "${bundle_name}.app" -type d -print0)
 fi
 
-package_file_name="$(sed -n 's/^set(CPACK_PACKAGE_FILE_NAME "\(.*\)")$/\1/p' \
-  "${build_dir}/CPackConfig.cmake")"
-package_dmg="${package_out_dir}/${package_file_name}.dmg"
-package_zip="${package_out_dir}/${package_file_name}.zip"
 [[ -f "$package_dmg" ]] || { echo "Expected DMG was not generated: ${package_dmg}" >&2; exit 1; }
 [[ -f "$package_zip" ]] || { echo "Expected ZIP was not generated: ${package_zip}" >&2; exit 1; }
 
@@ -330,11 +340,21 @@ hdiutil detach -quiet "${package_verify_dir}/dmg"
 [[ "$dmg_verify_status" -eq 0 ]] || exit "$dmg_verify_status"
 rm -rf "$package_verify_dir"
 
+if [[ "$(git -C "$repo_root" rev-parse HEAD)" != "${packaged_commit%-dirty}" ]]; then
+  echo "HEAD changed while packaging from ${packaged_commit}; package again." >&2
+  exit 1
+fi
+printf '%s\n' "$packaged_commit" > "$package_commit_file"
+
 echo
 echo "========================================"
 echo "  Packaging Complete"
 echo "========================================"
 printf '%s\n' "$package_dmg" "$package_zip"
+echo "Packaged commit: ${packaged_commit}"
+if [[ "$packaged_commit" == *-dirty ]]; then
+  echo "WARNING: the worktree had uncommitted changes. publish_update.py will refuse this package." >&2
+fi
 
 # Consume the number only after every packaging and verification step passed.
 # A failed run retains the pending value so the retry uses the same identity.
