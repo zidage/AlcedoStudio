@@ -1694,14 +1694,12 @@ set(CPACK_PACKAGE_NAME "alcedo")
 set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
 set(CPACK_PACKAGE_FILE_NAME "${CPACK_PACKAGE_NAME}-${CPACK_PACKAGE_VERSION}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}")
 if(APPLE AND ALCEDO_MACOS_BUNDLE)
-    set(CPACK_GENERATOR "DragNDrop;ZIP")
+    # The update ZIP is created from the same bundle by create_macos_update_zip.cmake.
+    set(CPACK_GENERATOR "DragNDrop")
     set(CPACK_PACKAGE_NAME "${ALCEDO_MACOS_BUNDLE_NAME}")
     set(CPACK_PACKAGE_FILE_NAME "${CPACK_PACKAGE_NAME}-${CPACK_PACKAGE_VERSION}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}")
     set(CPACK_DMG_VOLUME_NAME "${ALCEDO_MACOS_BUNDLE_NAME}")
     set(CPACK_DMG_FORMAT "UDBZ")
-    # Include the .app bundle at the top level of the ZIP so the user
-    # extracts it and finds the app bundle directly.
-    set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY OFF)
     # Package / DMG volume icon (same brand mark as the .app bundle).
     set(_alcedo_macos_pkg_icns
         "${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/ICON/alcedo_icon.icns")
@@ -1829,11 +1827,23 @@ endif()
 set(ALCEDO_PACKAGE_INSTALL_COMPONENT "Unspecified")
 set(CPACK_INSTALL_CMAKE_PROJECTS
     "${CMAKE_BINARY_DIR};${CMAKE_PROJECT_NAME};${ALCEDO_PACKAGE_INSTALL_COMPONENT};/")
+if(APPLE AND ALCEDO_MACOS_BUNDLE AND TARGET ${ALCEDO_MAIN_BIN})
+    # Package the .app that `cmake --install` already deployed, signed, and verified. Running
+    # the install rules again would repeat macdeployqt and signing for each CPack generator,
+    # and the packages would not be the verified bundle.
+    set(CPACK_ALCEDO_MACOS_APP "${CMAKE_INSTALL_PREFIX}/${ALCEDO_MACOS_BUNDLE_NAME}.app")
+    set(CPACK_INSTALL_CMAKE_PROJECTS "")
+    set(CPACK_INSTALLED_DIRECTORIES "${CPACK_ALCEDO_MACOS_APP};${ALCEDO_MACOS_BUNDLE_NAME}.app")
+    set(CPACK_POST_BUILD_SCRIPTS "${CMAKE_SOURCE_DIR}/scripts/cmake/create_macos_update_zip.cmake")
+endif()
 include(CPack)
 
 if(APPLE AND ALCEDO_MACOS_BUNDLE AND TARGET ${ALCEDO_MAIN_BIN})
     add_custom_target(macos_package
+        COMMAND "${CMAKE_COMMAND}" -E rm -rf
+                "${CMAKE_INSTALL_PREFIX}/${ALCEDO_MACOS_BUNDLE_NAME}.app"
         COMMAND "${CMAKE_COMMAND}" --install "${CMAKE_BINARY_DIR}"
+                --component "${ALCEDO_PACKAGE_INSTALL_COMPONENT}"
         COMMAND "${CMAKE_SOURCE_DIR}/scripts/verify_macos_install_tree.sh"
                 --install-dir "${CMAKE_INSTALL_PREFIX}"
                 --bundle-name "${ALCEDO_MACOS_BUNDLE_NAME}"

@@ -242,13 +242,24 @@ printf '\n'
 cmake "${configure_args[@]}"
 
 echo
-echo "Building install target ..."
-echo "Note: Qt deployment uses macdeployqt and can take 10+ minutes on release builds."
-build_args=(--build "$build_dir" --target install --parallel "$jobs")
+echo "Building ..."
+build_args=(--build "$build_dir" --parallel "$jobs")
 printf '> cmake'
 printf ' %q' "${build_args[@]}"
 printf '\n'
 cmake "${build_args[@]}"
+
+# CPack packages this installed bundle as-is (CPACK_INSTALLED_DIRECTORIES), so start from an
+# empty bundle: files left by an earlier install must not reach the packages.
+echo
+echo "Installing ${bundle_name}.app ..."
+echo "Note: Qt deployment uses macdeployqt and can take 10+ minutes on release builds."
+rm -rf "${install_dir:?}/${bundle_name}.app"
+install_args=(--install "$build_dir" --component Unspecified)
+printf '> cmake'
+printf ' %q' "${install_args[@]}"
+printf '\n'
+cmake "${install_args[@]}"
 
 echo
 echo "Verifying install tree ..."
@@ -264,6 +275,7 @@ fi
 echo
 echo "Running CPack ..."
 mkdir -p "$package_out_dir"
+rm -rf "${package_out_dir}/_CPack_Packages"
 cpack_args=(--config "${build_dir}/CPackConfig.cmake" -B "$package_out_dir")
 printf '> cpack'
 printf ' %q' "${cpack_args[@]}"
@@ -287,16 +299,42 @@ if [[ -d "$staging_root" ]]; then
   done < <(find "$staging_root" -name "${bundle_name}.app" -type d -print0)
 fi
 
+package_file_name="$(sed -n 's/^set(CPACK_PACKAGE_FILE_NAME "\(.*\)")$/\1/p' \
+  "${build_dir}/CPackConfig.cmake")"
+package_dmg="${package_out_dir}/${package_file_name}.dmg"
+package_zip="${package_out_dir}/${package_file_name}.zip"
+[[ -f "$package_dmg" ]] || { echo "Expected DMG was not generated: ${package_dmg}" >&2; exit 1; }
+[[ -f "$package_zip" ]] || { echo "Expected ZIP was not generated: ${package_zip}" >&2; exit 1; }
+
+package_verify_dir="${package_out_dir}/_package_verify"
+rm -rf "$package_verify_dir"
+mkdir -p "${package_verify_dir}/zip" "${package_verify_dir}/dmg"
+package_verify_args=(--bundle-name "$bundle_name")
+if [[ "$require_metal_assets" -eq 0 ]]; then
+  package_verify_args+=(--skip-metal-asset-check)
+fi
+
+echo
+echo "Verifying update ZIP as extracted by the in-app updater ..."
+ditto -x -k --sequesterRsrc "$package_zip" "${package_verify_dir}/zip"
+"${script_dir}/verify_macos_install_tree.sh" --install-dir "${package_verify_dir}/zip" \
+  "${package_verify_args[@]}"
+
+echo
+echo "Verifying DMG ..."
+hdiutil attach -nobrowse -readonly -mountpoint "${package_verify_dir}/dmg" "$package_dmg" >/dev/null
+dmg_verify_status=0
+"${script_dir}/verify_macos_install_tree.sh" --install-dir "${package_verify_dir}/dmg" \
+  "${package_verify_args[@]}" || dmg_verify_status=$?
+hdiutil detach -quiet "${package_verify_dir}/dmg"
+[[ "$dmg_verify_status" -eq 0 ]] || exit "$dmg_verify_status"
+rm -rf "$package_verify_dir"
+
 echo
 echo "========================================"
 echo "  Packaging Complete"
 echo "========================================"
-generated_packages="$(find "$package_out_dir" -maxdepth 1 \( -name '*.dmg' -o -name '*.zip' \) -print | sort)"
-if [[ -z "$generated_packages" ]]; then
-  echo "No package files were generated in ${package_out_dir}." >&2
-  exit 1
-fi
-printf '%s\n' "$generated_packages"
+printf '%s\n' "$package_dmg" "$package_zip"
 
 # Consume the number only after every packaging and verification step passed.
 # A failed run retains the pending value so the retry uses the same identity.
