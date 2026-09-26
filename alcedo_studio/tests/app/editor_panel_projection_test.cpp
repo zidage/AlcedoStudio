@@ -137,7 +137,7 @@ void SetOwnedScalars(PipelineDocument& document) {
       ->SetCubePath("D:/luts/look.cube");
   dynamic_cast<Cat02WhiteBalanceModel*>(
       document.PrimaryGrade()->FindAdjustmentByType(type_ids::Cat02WhiteBalance()))
-      ->SetTintOffset(12.0f);
+      ->ApplyUpdate(Cat02WhiteBalanceUpdate{std::nullopt, 5200.0f, 12.0f});
   dynamic_cast<ClarityModel*>(document.Drt()->FindAdjustmentByType(type_ids::Clarity()))
       ->SetValue(7.0f);
   dynamic_cast<FilmGrainModel*>(document.Drt()->FindAdjustmentByType(type_ids::FilmGrain()))
@@ -183,7 +183,13 @@ TEST(EditorPanelProjectionTest, ProjectsToneLookLutRawOdtAndGeometryFromExplicit
   EXPECT_FLOAT_EQ(*ScalarOf(projection, "exposure"), 2.25f);
   EXPECT_FLOAT_EQ(*ScalarOf(projection, "contrast"), 18.0f);
   EXPECT_FLOAT_EQ(*ScalarOf(projection, "saturation"), 1.8f);
-  EXPECT_FLOAT_EQ(*ScalarOf(projection, "tint"), 12.0f);
+  const auto* grade_white_balance = FindField(projection, "grade_white_balance");
+  ASSERT_NE(grade_white_balance, nullptr);
+  const auto* white_balance =
+      std::get_if<EditorPanelGradeWhiteBalanceValue>(&grade_white_balance->value);
+  ASSERT_NE(white_balance, nullptr);
+  EXPECT_FLOAT_EQ(white_balance->temperature, 5200.0f);
+  EXPECT_FLOAT_EQ(white_balance->tint, 12.0f);
   EXPECT_FLOAT_EQ(*ScalarOf(projection, "clarity"), 7.0f);
 
   const auto* exposure = FindField(projection, "exposure");

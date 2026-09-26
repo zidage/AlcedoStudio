@@ -9,7 +9,7 @@ endif()
 #set(CMAKE_CXX_COMPILER "clang++")
 # Compiler flags.
 
-project(alcedo VERSION 0.2.9 LANGUAGES C CXX)
+project(alcedo VERSION 0.3.0 LANGUAGES C CXX)
 
 # Update metadata is compiled into the application. Release builds must set a
 # real Ed25519 public key. An empty key disables network update checks instead

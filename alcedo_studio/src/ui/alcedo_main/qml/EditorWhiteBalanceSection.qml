@@ -78,6 +78,10 @@ Item {
                     onActivated: colorTempModel.selectMode(1)
                 }
                 Item { Layout.fillWidth: true }
+                EditorInfoHint {
+                    objectName: "rawWhiteBalanceInfoHint"
+                    text: qsTr("RAW white balance sets the scene illuminant from the camera's own color data before the image enters the grading color space. As Shot uses the camera's recorded white balance. The Look page white balance is a separate creative adjustment applied after this one.")
+                }
             }
 
             Text {
@@ -89,44 +93,25 @@ Item {
                 font.pixelSize: appTheme.fontSizeCaption
             }
 
-            SliderRow {
-                objectName: "rawCctSlider"
-                title: qsTr("Temperature")
-                valueText: Math.round(colorTempModel.cct) + " K"
-                from: 0
-                to: 4096
-                value: colorTempModel.cctSliderPos
-                rowEnabled: root.controlsEnabled && colorTempModel.supported
-                gradientStops: Gradient {
-                    orientation: Gradient.Horizontal
-                    GradientStop { position: 0.0; color: "#9BD8FF" }
-                    GradientStop { position: 0.5; color: "#FFE8B0" }
-                    GradientStop { position: 1.0; color: "#FF8A3D" }
-                }
-                onBegin: function () { colorTempModel.beginCctDrag() }
-                onUpdate: function (v) { colorTempModel.updateCctSliderDrag(Math.round(v)) }
-                onFinish: function () { colorTempModel.finishCctDrag() }
-                onReset: function () { colorTempModel.reset() }
-            }
-
-            SliderRow {
-                objectName: "rawTintSlider"
-                title: qsTr("Tint")
-                valueText: String(Math.round(colorTempModel.tint))
-                from: -150
-                to: 150
-                value: colorTempModel.tint
-                rowEnabled: root.controlsEnabled && colorTempModel.supported
-                gradientStops: Gradient {
-                    orientation: Gradient.Horizontal
-                    GradientStop { position: 0.0; color: "#49C26D" }
-                    GradientStop { position: 0.5; color: "#E6E6E6" }
-                    GradientStop { position: 1.0; color: "#A85AE6" }
-                }
-                onBegin: function () { colorTempModel.beginTintDrag() }
-                onUpdate: function (v) { colorTempModel.updateTintDrag(v) }
-                onFinish: function () { colorTempModel.finishTintDrag() }
-                onReset: function () { colorTempModel.reset() }
+            EditorWhiteBalanceSliders {
+                Layout.fillWidth: true
+                flickable: root.flickable
+                slidersEnabled: root.controlsEnabled && colorTempModel.supported
+                textColor: root.colText
+                mutedColor: root.colMuted
+                temperatureObjectName: "rawCctSlider"
+                tintObjectName: "rawTintSlider"
+                temperature: colorTempModel.cct
+                temperatureSliderPos: colorTempModel.cctSliderPos
+                tint: colorTempModel.tint
+                onTemperatureDragBegin: colorTempModel.beginCctDrag()
+                onTemperatureDragUpdate: function (pos) { colorTempModel.updateCctSliderDrag(pos) }
+                onTemperatureDragFinish: colorTempModel.finishCctDrag()
+                onTemperatureReset: colorTempModel.reset()
+                onTintDragBegin: colorTempModel.beginTintDrag()
+                onTintDragUpdate: function (value) { colorTempModel.updateTintDrag(value) }
+                onTintDragFinish: colorTempModel.finishTintDrag()
+                onTintReset: colorTempModel.reset()
             }
         }
     }
@@ -158,57 +143,6 @@ Item {
             enabled: chip.chipEnabled
             cursorShape: Qt.PointingHandCursor
             onClicked: chip.activated()
-        }
-    }
-
-    component SliderRow: ColumnLayout {
-        id: row
-        property string title: ""
-        property string valueText: ""
-        property real from: 0
-        property real to: 100
-        property real value: 0
-        property var gradientStops: null
-        property bool rowEnabled: true
-        property var onBegin: function () {}
-        property var onUpdate: function (v) {}
-        property var onFinish: function () {}
-        property var onReset: function () {}
-
-        Layout.fillWidth: true
-        spacing: 2
-
-        RowLayout {
-            Layout.fillWidth: true
-            Layout.preferredHeight: Math.max(appTheme.lineHeightCaption,
-                                             wbRowTitle.implicitHeight)
-            spacing: appTheme.spaceSm
-            Text {
-                id: wbRowTitle
-                Layout.fillWidth: true
-                text: row.title
-                color: root.colText
-                font.pixelSize: appTheme.fontSizeCaption
-                wrapMode: Text.Wrap
-            }
-            Text {
-                text: row.valueText
-                color: root.colMuted
-                font.pixelSize: appTheme.fontSizeCaption
-                font.family: appTheme.dataFontFamily
-            }
-        }
-        EditorMonoSlider {
-            from: row.from
-            to: row.to
-            externalValue: row.value
-            enabled: row.rowEnabled
-            gradientStops: row.gradientStops
-            flickable: root.flickable
-            onBegin: function () { row.onBegin() }
-            onUpdate: function (v) { row.onUpdate(v) }
-            onFinish: function () { row.onFinish() }
-            onReset: function () { row.onReset() }
         }
     }
 }

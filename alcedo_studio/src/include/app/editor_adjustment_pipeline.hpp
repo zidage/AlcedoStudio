@@ -23,7 +23,7 @@ enum class EditorAdjustmentField {
   Curve,
   Saturation,
   Vibrance,
-  Tint,
+  GradeWhiteBalance,
   Hls,
   ColorWheel,
   Lut,

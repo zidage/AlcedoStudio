@@ -191,8 +191,8 @@ auto DisplayName(std::optional<EditorAdjustmentField> field) -> QString {
       return QStringLiteral("Saturation");
     case EditorAdjustmentField::Vibrance:
       return QStringLiteral("Vibrance");
-    case EditorAdjustmentField::Tint:
-      return QStringLiteral("Tint");
+    case EditorAdjustmentField::GradeWhiteBalance:
+      return QStringLiteral("Grade White Balance");
     case EditorAdjustmentField::Hls:
       return QStringLiteral("HSL");
     case EditorAdjustmentField::ColorWheel:
@@ -244,7 +244,7 @@ auto IconResource(std::optional<EditorAdjustmentField> field) -> QString {
       return QStringLiteral(":/history_icons/chart-spline.svg");
     case EditorAdjustmentField::Saturation:
       return QStringLiteral(":/history_icons/droplets.svg");
-    case EditorAdjustmentField::Tint:
+    case EditorAdjustmentField::GradeWhiteBalance:
       return QStringLiteral(":/history_icons/pipette.svg");
     case EditorAdjustmentField::Hls:
       return QStringLiteral(":/history_icons/swatch-book.svg");
@@ -670,7 +670,7 @@ auto BuildSummary(std::optional<EditorAdjustmentField> field, const nlohmann::js
       return SummarizeOdt(after, before);
     case EditorAdjustmentField::CropRotate:
       return SummarizeCropRotate(after, before);
-    case EditorAdjustmentField::Tint:
+    case EditorAdjustmentField::GradeWhiteBalance:
       break;
   }
   return {};

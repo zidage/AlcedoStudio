@@ -473,10 +473,10 @@ TEST_F(CudaPrimaryGradeFixture, CudaDrtPackedWriteDoesNotCopyFullDto) {
   EXPECT_EQ(OperatorModelFullDtoCopyCount::Peek(), 0);
 }
 
-TEST_F(CudaPrimaryGradeFixture, CudaCat02WhiteBalanceZeroOffsetPreservesAp1White) {
+TEST_F(CudaPrimaryGradeFixture, CudaCat02WhiteBalanceAtAp1WhiteLeavesPixelsUnchanged) {
   auto& wb = ModelByType<Cat02WhiteBalanceModel>(type_ids::Cat02WhiteBalance());
-  wb.SetTemperatureOffset(0.0f);
-  wb.SetTintOffset(0.0f);
+  wb.ApplyUpdate(
+      Cat02WhiteBalanceUpdate{std::nullopt, kCat02DefaultTemperature, kCat02DefaultTint});
   const auto result = Render();
   const auto input  = Download(plan_.develop_output);
   const auto output = Download(result.output);
@@ -488,15 +488,50 @@ TEST_F(CudaPrimaryGradeFixture, CudaCat02WhiteBalanceZeroOffsetPreservesAp1White
 
 TEST_F(CudaPrimaryGradeFixture, CudaCat02WhiteBalanceMaskedSampleMatchesFullAdjustmentAtMaskOne) {
   auto& wb = ModelByType<Cat02WhiteBalanceModel>(type_ids::Cat02WhiteBalance());
-  wb.SetTemperatureOffset(150.0f);
+  wb.SetTemperature(3200.0f);
   document_.PrimaryGrade()->SetMix(1.0f);
   const auto full = Download(Render().output);
   document_.PrimaryGrade()->SetMix(0.5f);
   const auto half   = Download(Render().output);
   const auto source = Download(plan_.develop_output);
   ASSERT_FALSE(full.empty());
+  EXPECT_GT(std::fabs(full.front().r - source.front().r), 1.0e-3f);
   EXPECT_NEAR(half.front().r, (full.front().r + source.front().r) * 0.5f, 1.0e-5f);
-  EXPECT_NEAR(full.front().g, source.front().g, 1.0e-6f);
+  EXPECT_NEAR(half.front().b, (full.front().b + source.front().b) * 0.5f, 1.0e-5f);
+}
+
+TEST_F(CudaPrimaryGradeFixture, CudaCat02WhiteBalanceMatchesLinearAp1MatrixReference) {
+  auto& wb = ModelByType<Cat02WhiteBalanceModel>(type_ids::Cat02WhiteBalance());
+  wb.ApplyUpdate(Cat02WhiteBalanceUpdate{std::nullopt, 4300.0f, 20.0f});
+  // Isolate CAT02: the other point adjustments stay at identity.
+  ModelByType<ContrastModel>(type_ids::Contrast()).SetValue(0.0f);
+  const auto result = Render();
+  const auto input  = Download(plan_.develop_output);
+  const auto output = Download(result.output);
+  ASSERT_EQ(input.size(), output.size());
+  ASSERT_FALSE(input.empty());
+  const auto matrix = BuildAp1Cat02WhiteBalanceMatrix(4300.0, 20.0);
+  const auto decode = [](float v) {
+    constexpr float kA = 9.72f;
+    constexpr float kB = 17.52f;
+    if (v < (-16.0f + kA) / kB) return v - (-16.0f + kA) / kB;
+    if (v <= (-15.0f + kA) / kB) return (std::exp2(v * kB - kA) - 0.0000152587890625f) * 2.0f;
+    return std::exp2(v * kB - kA);
+  };
+  for (std::size_t i = 0; i < input.size(); i += 97) {
+    const float r = decode(input[i].r);
+    const float g = decode(input[i].g);
+    const float b = decode(input[i].b);
+    const float expected[3] = {matrix[0] * r + matrix[1] * g + matrix[2] * b,
+                               matrix[3] * r + matrix[4] * g + matrix[5] * b,
+                               matrix[6] * r + matrix[7] * g + matrix[8] * b};
+    const float actual[3]   = {decode(output[i].r), decode(output[i].g), decode(output[i].b)};
+    for (int channel = 0; channel < 3; ++channel) {
+      EXPECT_NEAR(actual[channel], expected[channel],
+                  1.0e-4f * std::max(1.0f, std::fabs(expected[channel])))
+          << "pixel " << i << " channel " << channel;
+    }
+  }
 }
 
 TEST_F(CudaPrimaryGradeFixture, CudaPointAdjustmentsExecuteInFixedCompileOrder) {

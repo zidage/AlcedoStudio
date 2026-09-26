@@ -11,8 +11,12 @@
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
+#include <limits>
+#include <stdexcept>
+#include <utility>
 
 #include "edit/graph/pipeline_document.hpp"
+#include "edit/operators/models/cat02_white_balance_model.hpp"
 #include "image/dng_camera_matrix.hpp"
 #include "imported_camera_profile_fixtures.hpp"
 #include "json.hpp"
@@ -371,6 +375,96 @@ TEST(GpuDagModelGraph, BindImportedCameraProfileKeepsUserEditsAndSkipsEqualWrite
   BindImportedCameraProfile(document, fixtures.front().context_);
   EXPECT_FALSE(document.Develop()->Params().IsDirty());
   EXPECT_EQ(document.Develop()->Params().Params(), bound);
+}
+
+namespace {
+
+auto Ap1ToXyzY(const std::array<double, 3>& rgb) -> double {
+  return 0.2722287168 * rgb[0] + 0.6740817658 * rgb[1] + 0.0536895174 * rgb[2];
+}
+
+auto XyToAp1(const std::array<double, 2>& xy) -> std::array<double, 3> {
+  const double x = xy[0] / xy[1];
+  const double z = (1.0 - xy[0] - xy[1]) / xy[1];
+  return {1.6410233797 * x - 0.3248032942 - 0.2364246952 * z,
+          -0.6636628587 * x + 1.6153315917 + 0.0167563477 * z,
+          0.0117218943 * x - 0.0082844420 + 0.9883948585 * z};
+}
+
+auto Apply(const std::array<float, 9>& m, const std::array<double, 3>& rgb)
+    -> std::array<double, 3> {
+  return {m[0] * rgb[0] + m[1] * rgb[1] + m[2] * rgb[2],
+          m[3] * rgb[0] + m[4] * rgb[1] + m[5] * rgb[2],
+          m[6] * rgb[0] + m[7] * rgb[1] + m[8] * rgb[2]};
+}
+
+}  // namespace
+
+TEST(GradeCat02WhiteBalanceTest, AcesWhiteCctTintMatchesModelDefault) {
+  const auto& white = AcesWhiteTemperatureTint();
+  EXPECT_NEAR(white.cct, 6000.0, 1.0);
+  EXPECT_NEAR(white.cct, kCat02DefaultTemperature, 1.0e-2);
+  EXPECT_NEAR(white.tint, kCat02DefaultTint, 1.0e-3);
+  const auto xy = WhiteBalanceTemperatureTintToXy(white.cct, white.tint);
+  EXPECT_NEAR(xy[0], kAcesWhiteXy[0], 1.0e-5);
+  EXPECT_NEAR(xy[1], kAcesWhiteXy[1], 1.0e-5);
+}
+
+TEST(GradeCat02WhiteBalanceTest, MatrixAtAcesWhiteIsIdentity) {
+  const auto m = BuildAp1Cat02WhiteBalanceMatrix(kCat02DefaultTemperature, kCat02DefaultTint);
+  for (int r = 0; r < 3; ++r) {
+    for (int c = 0; c < 3; ++c) {
+      EXPECT_NEAR(m[static_cast<std::size_t>(r * 3 + c)], r == c ? 1.0f : 0.0f, 1.0e-4f)
+          << r << "," << c;
+    }
+  }
+}
+
+TEST(GradeCat02WhiteBalanceTest, MatrixNeutralizesSelectedIlluminantToAp1White) {
+  for (const auto& [cct, tint] : {std::pair{3200.0, 0.0}, std::pair{4500.0, -25.0},
+                                  std::pair{9000.0, 30.0}}) {
+    const auto illuminant = XyToAp1(WhiteBalanceTemperatureTintToXy(cct, tint));
+    const auto adapted    = Apply(BuildAp1Cat02WhiteBalanceMatrix(cct, tint), illuminant);
+    const double luminance = Ap1ToXyzY(adapted);
+    EXPECT_NEAR(adapted[0] / luminance, 1.0, 1.0e-4) << cct << " " << tint;
+    EXPECT_NEAR(adapted[1] / luminance, 1.0, 1.0e-4) << cct << " " << tint;
+    EXPECT_NEAR(adapted[2] / luminance, 1.0, 1.0e-4) << cct << " " << tint;
+  }
+}
+
+TEST(GradeCat02WhiteBalanceTest, HigherTemperatureWarmsAp1NeutralLikeRawCustomWb) {
+  const std::array<double, 3> grey{0.18, 0.18, 0.18};
+  const auto warm = Apply(BuildAp1Cat02WhiteBalanceMatrix(8000.0, kCat02DefaultTint), grey);
+  const auto cool = Apply(BuildAp1Cat02WhiteBalanceMatrix(4000.0, kCat02DefaultTint), grey);
+  EXPECT_GT(warm[0], warm[2]);
+  EXPECT_LT(cool[0], cool[2]);
+}
+
+TEST(GradeCat02WhiteBalanceTest, ModelDefaultsToAcesWhiteAndClampsToRawWbRanges) {
+  Cat02WhiteBalanceModel model;
+  EXPECT_TRUE(model.IsDefault());
+  EXPECT_FLOAT_EQ(model.Temperature(), kCat02DefaultTemperature);
+  EXPECT_FLOAT_EQ(model.Tint(), kCat02DefaultTint);
+  model.ApplyUpdate(Cat02WhiteBalanceUpdate{std::nullopt, 50000.0f, -400.0f});
+  EXPECT_FLOAT_EQ(model.Temperature(), kCat02TemperatureMax);
+  EXPECT_FLOAT_EQ(model.Tint(), kCat02TintMin);
+  EXPECT_FALSE(model.IsDefault());
+  EXPECT_THROW(model.SetTemperature(std::numeric_limits<float>::quiet_NaN()),
+               std::invalid_argument);
+}
+
+TEST(GradeCat02WhiteBalanceTest, JsonWithoutTemperatureTintLoadsAcesWhiteDefault) {
+  Cat02WhiteBalanceModel model;
+  model.ApplyUpdate(Cat02WhiteBalanceUpdate{std::nullopt, 3000.0f, 40.0f});
+  model.LoadJson(nlohmann::json{{"enabled", true}, {"temperature_offset", 0.0}, {"tint_offset", 0.0}});
+  EXPECT_TRUE(model.IsDefault());
+
+  Cat02WhiteBalanceModel copy;
+  model.ApplyUpdate(Cat02WhiteBalanceUpdate{false, 4100.0f, -12.0f});
+  copy.LoadJson(model.ToJson());
+  EXPECT_FALSE(copy.Enabled());
+  EXPECT_FLOAT_EQ(copy.Temperature(), 4100.0f);
+  EXPECT_FLOAT_EQ(copy.Tint(), -12.0f);
 }
 
 }  // namespace alcedo

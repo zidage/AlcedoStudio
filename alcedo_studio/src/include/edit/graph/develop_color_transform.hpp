@@ -5,6 +5,7 @@
 #pragma once
 
 #include <array>
+#include <optional>
 #include <string_view>
 
 #include "decoders/processor/raw_color_context.hpp"
@@ -111,5 +112,56 @@ void BindRgbWorkingSpaceCameraProfile(DevelopPayload& payload);
     -> ColorTransformResult;
 
 [[nodiscard]] auto ColorTransformErrorMessage(ColorTransformError error) -> std::string_view;
+
+/// White-balance CCT/tint ranges shared by RAW Custom WB and Color Grade CAT02 WB.
+inline constexpr double kWhiteBalanceCctMin  = 2000.0;
+inline constexpr double kWhiteBalanceCctMax  = 15000.0;
+inline constexpr double kWhiteBalanceTintMin = -150.0;
+inline constexpr double kWhiteBalanceTintMax = 150.0;
+
+/// CIE 1931 xy of the ACES AP1 white point (ACES "D60").
+inline constexpr std::array<double, 2> kAcesWhiteXy{0.32168, 0.33767};
+
+struct WhiteBalanceTemperatureTint {
+  double cct  = 0.0;
+  double tint = 0.0;
+};
+
+/**
+ * @brief Convert CCT/tint to CIE 1931 xy with the RAW Custom WB mapping.
+ *
+ * Uses the same CIE 1931 Planckian locus table and tint scale as Develop Custom WB. Inputs are
+ * clamped to the white-balance ranges above.
+ */
+[[nodiscard]] auto WhiteBalanceTemperatureTintToXy(double cct, double tint)
+    -> std::array<double, 2>;
+
+/**
+ * @brief Inverse of @ref WhiteBalanceTemperatureTintToXy (Ohno CCT solve + locus-normal tint).
+ * @return nullopt when @p xy is not finite or the solve fails.
+ */
+[[nodiscard]] auto WhiteBalanceXyToTemperatureTint(const std::array<double, 2>& xy)
+    -> std::optional<WhiteBalanceTemperatureTint>;
+
+/**
+ * @brief CCT/tint of the ACES AP1 white point under the RAW Custom WB mapping.
+ *
+ * This is the identity setting of Color Grade CAT02 white balance. Computed once.
+ */
+[[nodiscard]] auto AcesWhiteTemperatureTint() -> const WhiteBalanceTemperatureTint&;
+
+/**
+ * @brief Linear-AP1 CAT02 adaptation for Color Grade white balance.
+ *
+ * The grade input is assumed to be white-balanced to the AP1 white point. @p cct / @p tint name
+ * the illuminant to neutralize: its chromaticity is adapted to the AP1 white with the CAT02
+ * (von Kries in CAT02 LMS) transform. Raising @p cct above the AP1 white warms the image, as
+ * with RAW Custom WB.
+ *
+ * @return Row-major 3x3 matrix applied to linear AP1 column vectors. Identity at
+ *         @ref AcesWhiteTemperatureTint.
+ */
+[[nodiscard]] auto BuildAp1Cat02WhiteBalanceMatrix(double cct, double tint)
+    -> std::array<float, 9>;
 
 }  // namespace alcedo

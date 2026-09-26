@@ -344,8 +344,8 @@ TEST_F(EditorSessionHistoryPortTest, CheckoutAndPasteHashesAreUnchanged) {
   ASSERT_TRUE(paste_head.has_value());
   EXPECT_EQ(edit_head->ToString(), "b6cf9394111073bfab5f5020f7c5c9c3");
   EXPECT_EQ(edit_chain.ToString(), "e89bc194d74eae2ca7e4e4f1b6fec12a");
-  EXPECT_EQ(paste_head->ToString(), "3ebaf3988347ebf0552e79a57fb7a915");
-  EXPECT_EQ(paste_chain.ToString(), "48d482beee42853d5cadae7a674258bb");
+  EXPECT_EQ(paste_head->ToString(), "8376928d33c9a133b035b0794d752cab");
+  EXPECT_EQ(paste_chain.ToString(), "a04f1845c45e9f522de6fbbbf15b6012");
   EXPECT_EQ(checkout_default_head, edit_head);
   EXPECT_EQ(checkout_default_chain, edit_chain);
   EXPECT_EQ(checkout_pasted_head, paste_head);
@@ -1242,7 +1242,7 @@ TEST(EditorHistoryCommitPresentationTest, HistoryRowTitlesAndIconsAreUnchangedFo
       {"curve", "Curve", ":/history_icons/chart-spline.svg"},
       {"saturation", "Saturation", ":/history_icons/droplets.svg"},
       {"vibrance", "Vibrance", ":/history_icons/sparkles.svg"},
-      {"tint", "Tint", ":/history_icons/pipette.svg"},
+      {"grade_white_balance", "Grade White Balance", ":/history_icons/pipette.svg"},
       {"hls", "HSL", ":/history_icons/swatch-book.svg"},
       {"HLS", "HSL", ":/history_icons/swatch-book.svg"},
       {"color_wheel", "Color Wheel", ":/history_icons/palette.svg"},

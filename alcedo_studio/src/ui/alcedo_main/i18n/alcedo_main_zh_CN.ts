@@ -2464,6 +2464,16 @@ Original source files on disk will be kept.</source>
 <context>
     <name>EditorLookPanel</name>
     <message>
+        <location filename="../qml/EditorLookPanel.qml" line="+720"/>
+        <source>White Balance</source>
+        <translation>白平衡</translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>This white balance is a CAT02 chromatic adaptation in the grading color space. It assumes the image is already balanced to the ACES AP1 white point (about 6000 K), so the default is no change. It does not read the camera&apos;s data: use RAW Decode white balance to correct the capture, and this control for creative warming or cooling, including on JPEG and other non-RAW images. The same Kelvin value can look different here than on the RAW Decode page.</source>
+        <translation>此处的白平衡是在调色色彩空间中进行的 CAT02 色适应。它假设图像已平衡到 ACES AP1 白点（约 6000 K），因此默认值不改变画面。它不读取相机数据：校正拍摄白平衡请使用 RAW 解码页的白平衡，此控件用于创意性的加暖或加冷，也适用于 JPEG 等非 RAW 图像。同一色温数值在此处与 RAW 解码页上的效果可能不同。</translation>
+    </message>
+    <message>
         <location filename="../qml/EditorLookPanel.qml" line="+186"/>
         <source>Saturation</source>
         <translation>饱和度</translation>
@@ -3356,7 +3366,15 @@ Original source files on disk will be kept.</source>
         <translation>此图像无法使用白平衡。</translation>
     </message>
     <message>
-        <location line="+7"/>
+        <location line="+4"/>
+        <source>RAW white balance sets the scene illuminant from the camera&apos;s own color data before the image enters the grading color space. As Shot uses the camera&apos;s recorded white balance. The Look page white balance is a separate creative adjustment applied after this one.</source>
+        <translation>RAW 白平衡在图像进入调色色彩空间之前，依据相机自身的色彩数据设定场景光源。“按拍摄参数”使用相机记录的白平衡。“外观”页的白平衡是在此之后应用的另一项创意调整。</translation>
+    </message>
+</context>
+<context>
+    <name>EditorWhiteBalanceSliders</name>
+    <message>
+        <location filename="../qml/EditorWhiteBalanceSliders.qml" line="+34"/>
         <source>Temperature</source>
         <translation>色温</translation>
     </message>

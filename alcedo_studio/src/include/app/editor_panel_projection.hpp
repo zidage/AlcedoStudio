@@ -64,6 +64,12 @@ struct EditorPanelColorTempValue {
   float       as_shot_tint = 0.0f;
 };
 
+/// Color Grade CAT02 white balance: illuminant CCT (Kelvin) and tint on the RAW WB scale.
+struct EditorPanelGradeWhiteBalanceValue {
+  float temperature = 0.0f;
+  float tint        = 0.0f;
+};
+
 struct EditorPanelRawDecodeValue {
   std::string method                  = "default";
   bool        highlights_reconstruct  = true;
@@ -96,7 +102,8 @@ using EditorPanelFieldValue =
     std::variant<EditorPanelScalarValue, EditorPanelNestedScalarValue, EditorPanelLutValue,
                  EditorPanelCurveValue, EditorPanelHlsValue, EditorPanelColorWheelValue,
                  EditorPanelColorTempValue, EditorPanelRawDecodeValue, EditorPanelOdtValue,
-                 EditorPanelLensValue, EditorPanelGeometryValue>;
+                 EditorPanelLensValue, EditorPanelGeometryValue,
+                 EditorPanelGradeWhiteBalanceValue>;
 
 /**
  * @brief One panel field copied from a Graph Node Model.
