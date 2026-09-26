@@ -258,7 +258,9 @@ TEST_F(EditorSessionHistoryPortTest, SettledAdjustmentCreatesOneCommitAndUndoRed
 
 // Commit hashes fold root id, parent, created_at_ns, and the canonical batch payload. The test pins
 // the root id and the CommitClock so the hashes depend only on the edit payloads. The expected
-// values were recorded at fd7dae19 (after G10.1, before G10.2 removed the stage mirror).
+// values were recorded at fd7dae19 (after G10.1, before G10.2 removed the stage mirror); the
+// contrast hashes were re-recorded when the product Default look gained contrast +15, which the
+// contrast commit payload folds in as its prior value.
 TEST_F(EditorSessionHistoryPortTest, ExposureEditSequenceProducesUnchangedCommitAndChainHashes) {
   const auto root_id = alcedo::Hash128::FromString("0123456789abcdef0fedcba987654321");
   guard_->commit_graph_ =
@@ -289,8 +291,8 @@ TEST_F(EditorSessionHistoryPortTest, ExposureEditSequenceProducesUnchangedCommit
   ASSERT_TRUE(contrast_head.has_value());
   EXPECT_EQ(exposure_head->ToString(), "b6cf9394111073bfab5f5020f7c5c9c3");
   EXPECT_EQ(exposure_chain.ToString(), "e89bc194d74eae2ca7e4e4f1b6fec12a");
-  EXPECT_EQ(contrast_head->ToString(), "fbdfc14189bc811ee38aedc53914fee2");
-  EXPECT_EQ(contrast_chain.ToString(), "c2f464c65273154c17901a6fccd6007b");
+  EXPECT_EQ(contrast_head->ToString(), "b60e5bc54c5fe26494f7cda891eb2ad8");
+  EXPECT_EQ(contrast_chain.ToString(), "b721581fca24fb5ec96280d8b42b01b5");
   EXPECT_EQ(undo_head, exposure_head);
   EXPECT_EQ(undo_chain, exposure_chain);
   EXPECT_EQ(redo_head, contrast_head);
@@ -299,7 +301,8 @@ TEST_F(EditorSessionHistoryPortTest, ExposureEditSequenceProducesUnchangedCommit
 
 // G10.3 changed Checkout and Paste to build-then-swap. The pinned root id and CommitClock make the
 // hashes depend only on the payloads. The expected values were recorded at cd0a4f2e (after G10.2,
-// before G10.3).
+// before G10.3); the paste hashes were re-recorded after the product Default look gained contrast
+// +15 (the exposure edit hashes did not change).
 TEST_F(EditorSessionHistoryPortTest, CheckoutAndPasteHashesAreUnchanged) {
   const auto root_id    = alcedo::Hash128::FromString("0123456789abcdef0fedcba987654321");
   guard_->commit_graph_ = std::make_shared<alcedo::CommitGraph>(
@@ -341,8 +344,8 @@ TEST_F(EditorSessionHistoryPortTest, CheckoutAndPasteHashesAreUnchanged) {
   ASSERT_TRUE(paste_head.has_value());
   EXPECT_EQ(edit_head->ToString(), "b6cf9394111073bfab5f5020f7c5c9c3");
   EXPECT_EQ(edit_chain.ToString(), "e89bc194d74eae2ca7e4e4f1b6fec12a");
-  EXPECT_EQ(paste_head->ToString(), "1e665f1b8f19d84688dbe192ff95d524");
-  EXPECT_EQ(paste_chain.ToString(), "1145a8571837a8d4da9af892050a1dfd");
+  EXPECT_EQ(paste_head->ToString(), "3ebaf3988347ebf0552e79a57fb7a915");
+  EXPECT_EQ(paste_chain.ToString(), "48d482beee42853d5cadae7a674258bb");
   EXPECT_EQ(checkout_default_head, edit_head);
   EXPECT_EQ(checkout_default_chain, edit_chain);
   EXPECT_EQ(checkout_pasted_head, paste_head);

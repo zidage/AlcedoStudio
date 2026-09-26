@@ -112,13 +112,17 @@ class PipelineDocument {
 inline constexpr float kDefaultPipelineExposureEv = 1.5f;
 /// Product Default saturation multiplier (legacy UI +30 → 1 + 30/100).
 inline constexpr float kDefaultPipelineSaturation = 1.3f;
+/// Product Default contrast slider value (OkLab lightness S curve, slope 2^(15/100) at mid grey).
+inline constexpr float kDefaultPipelineContrast   = 15.0f;
 
 /**
  * @brief Three-node product Default: Develop -> Primary Color Grade -> DRT.
  *
  * The primary Color Grade is @ref ColorGradeNodeModel::MakeDefault with
- * @ref kDefaultPipelineExposureEv and @ref kDefaultPipelineSaturation applied
- * in this factory. Does not require legacy stage remirror.
+ * @ref kDefaultPipelineExposureEv, @ref kDefaultPipelineContrast, and
+ * @ref kDefaultPipelineSaturation applied in this factory. The editor sliders reset to the
+ * catalog identity values (0 EV, contrast 0), not to this look. Does not require legacy stage
+ * remirror.
  *
  * @return A document that satisfies graph Validate and ValidateImageBackbone.
  */

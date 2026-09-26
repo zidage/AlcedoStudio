@@ -139,10 +139,14 @@ void ResetProductLookToIdentity(PipelineDocument& document) {
       document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
   auto* saturation = dynamic_cast<SaturationModel*>(
       document.PrimaryGrade()->FindAdjustmentByType(type_ids::Saturation()));
+  auto* contrast = dynamic_cast<ContrastModel*>(
+      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Contrast()));
   ASSERT_NE(exposure, nullptr);
   ASSERT_NE(saturation, nullptr);
+  ASSERT_NE(contrast, nullptr);
   exposure->SetValue(0.0f);
   saturation->SetValue(1.0f);
+  contrast->SetValue(0.0f);
 }
 
 auto AcesccEncode(float value) -> float {

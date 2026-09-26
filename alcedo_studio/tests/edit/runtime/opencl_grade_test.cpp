@@ -41,10 +41,15 @@
 #include "edit/runtime/parameter_binding.hpp"
 #include "edit/runtime/result_content_key.hpp"
 #include "gpu/transient_buffer_arena.hpp"
+#include "oklab_contrast_reference.hpp"
 #include "opencl/opencl_runtime.hpp"
 
 namespace alcedo {
 namespace {
+
+/// GPU float math (cbrt, exp2, log2, tanh) against the host OkLab contrast reference, as a
+/// linear-AP1 error relative to the brightest channel of the pixel.
+constexpr float kContrastRelativeLinearTolerance = 1.0e-4f;
 
 struct Rgba {
   float r = 0.0f;
@@ -241,10 +246,10 @@ auto CpuApplyAdjustment(Rgba c, const GradeAdjustmentParams& p) -> Rgba {
     c.g += offset;
     c.b += offset;
   } else if (behavior == AdjustmentBehavior::Contrast) {
-    const float scale = 1.0f + value * 0.01f;
-    c.r               = (c.r - 0.18f) * scale + 0.18f;
-    c.g               = (c.g - 0.18f) * scale + 0.18f;
-    c.b               = (c.b - 0.18f) * scale + 0.18f;
+    const auto out = oklab_contrast_reference::ApplyContrastAcescc({c.r, c.g, c.b}, value);
+    c.r            = out[0];
+    c.g            = out[1];
+    c.b            = out[2];
   } else if (behavior == AdjustmentBehavior::White) {
     const float gain = 1.0f + std::max(value, 0.0f) * 0.005f;
     c.r *= gain;
@@ -580,10 +585,14 @@ void ResetProductLookToIdentity(PipelineDocument& document) {
       document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
   auto* saturation = dynamic_cast<SaturationModel*>(
       document.PrimaryGrade()->FindAdjustmentByType(type_ids::Saturation()));
+  auto* contrast = dynamic_cast<ContrastModel*>(
+      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Contrast()));
   ASSERT_NE(exposure, nullptr);
   ASSERT_NE(saturation, nullptr);
+  ASSERT_NE(contrast, nullptr);
   exposure->SetValue(0.0f);
   saturation->SetValue(1.0f);
+  contrast->SetValue(0.0f);
 }
 
 auto DownloadR32f(OpenClRenderDevice& device, const GraphValueId& id) -> std::vector<float> {
@@ -745,7 +754,31 @@ TEST_F(OpenClGradeFixture, OpenClPrimaryGradePreservesCompiledAdjustmentOrder) {
   const auto& input  = last_develop_pixels_;
   const auto& output = last_output_pixels_;
   ASSERT_FALSE(output.empty());
-  EXPECT_NEAR(output.front().r, (input.front().r + 1.0f / 17.52f - 0.18f) * 2.0f + 0.18f, 1.0e-5f);
+  const float offset   = 1.0f / 17.52f;
+  const auto  expected = oklab_contrast_reference::ApplyContrastAcescc(
+      {input.front().r + offset, input.front().g + offset, input.front().b + offset}, 100.0f);
+  EXPECT_LT(oklab_contrast_reference::RelativeLinearError(
+                {output.front().r, output.front().g, output.front().b}, expected),
+            kContrastRelativeLinearTolerance);
+}
+
+TEST_F(OpenClGradeFixture, OpenClContrastMatchesOkLabLightnessReferenceForEveryPixel) {
+  for (const float contrast : {40.0f, -40.0f, 100.0f}) {
+    ModelByType<ContrastModel>(type_ids::Contrast()).SetValue(contrast);
+    (void)RenderGrade();
+    const auto& input  = last_develop_pixels_;
+    const auto& output = last_output_pixels_;
+    ASSERT_EQ(input.size(), output.size());
+    ASSERT_FALSE(output.empty());
+    for (std::size_t i = 0; i < input.size(); ++i) {
+      const auto expected = oklab_contrast_reference::ApplyContrastAcescc(
+          {input[i].r, input[i].g, input[i].b}, contrast);
+      ASSERT_LT(oklab_contrast_reference::RelativeLinearError(
+                    {output[i].r, output[i].g, output[i].b}, expected),
+                kContrastRelativeLinearTolerance)
+          << contrast << " @ " << i;
+    }
+  }
 }
 
 TEST_F(OpenClGradeFixture, OpenClHlsHueAdjustmentChangesGradePixels) {

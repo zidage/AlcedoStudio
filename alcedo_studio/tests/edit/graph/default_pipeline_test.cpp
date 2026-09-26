@@ -97,7 +97,8 @@ TEST(GpuDagModelGraph, DefaultPrimaryGradeUsesFullMixAndNoMask) {
   }
 }
 
-TEST(GpuDagModelGraph, DefaultPipelineDocumentBakesOnePointFiveEvAndSaturationOnePointThree) {
+TEST(GpuDagModelGraph,
+     DefaultPipelineDocumentBakesOnePointFiveEvContrastFifteenAndSaturationOnePointThree) {
   const auto document = CreateDefaultPipelineDocument();
   const auto* grade   = document.PrimaryGrade();
   ASSERT_NE(grade, nullptr);
@@ -111,6 +112,12 @@ TEST(GpuDagModelGraph, DefaultPipelineDocumentBakesOnePointFiveEvAndSaturationOn
       grade->FindAdjustmentByType(type_ids::Saturation()));
   ASSERT_NE(saturation, nullptr);
   EXPECT_FLOAT_EQ(saturation->Value(), 1.3f);
+
+  const auto* contrast =
+      dynamic_cast<const ContrastModel*>(grade->FindAdjustmentByType(type_ids::Contrast()));
+  ASSERT_NE(contrast, nullptr);
+  EXPECT_FLOAT_EQ(contrast->Value(), 15.0f);
+  EXPECT_FLOAT_EQ(kDefaultPipelineContrast, 15.0f);
 
   EXPECT_NE(document.Graph().FindNode(NodeId{"grade.primary"}), nullptr);
   EXPECT_TRUE(document.Graph().Validate().empty());

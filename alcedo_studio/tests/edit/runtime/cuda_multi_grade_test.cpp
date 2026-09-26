@@ -160,16 +160,18 @@ TEST_F(CudaMultiGradeFixture, ThreeGradesComposeInEdgeOrder) {
   const auto b       = DownloadWork(device_, SceneWorkMember::Member1);
   const auto c       = DownloadWork(device_, SceneWorkMember::Member0);
   ASSERT_FALSE(c.empty());
-  const float after_a = multi_grade_test::ApplyExposureAcescc(develop.front().r, 1.0f);
-  const float after_b = multi_grade_test::ApplyContrastAcescc(after_a, 100.0f);
-  const float after_c = multi_grade_test::ApplyExposureAcescc(after_b, 2.0f);
-  EXPECT_NEAR(b.front().r, after_b, 1.0e-5f);
-  EXPECT_NEAR(c.front().r, after_c, 1.0e-5f);
-  const float swapped = multi_grade_test::ApplyExposureAcescc(
+  const auto after_a =
+      multi_grade_test::ApplyExposureAcescc(multi_grade_test::Rgb(develop.front()), 1.0f);
+  const auto after_b = multi_grade_test::ApplyContrastAcescc(after_a, 100.0f);
+  const auto after_c = multi_grade_test::ApplyExposureAcescc(after_b, 2.0f);
+  EXPECT_TRUE(multi_grade_test::RgbNear(b.front(), after_b, 1.0e-5f));
+  EXPECT_TRUE(multi_grade_test::RgbNear(c.front(), after_c, 1.0e-5f));
+  const auto swapped = multi_grade_test::ApplyExposureAcescc(
       multi_grade_test::ApplyContrastAcescc(
-          multi_grade_test::ApplyExposureAcescc(develop.front().r, 2.0f), 100.0f),
+          multi_grade_test::ApplyExposureAcescc(multi_grade_test::Rgb(develop.front()), 2.0f),
+          100.0f),
       1.0f);
-  EXPECT_GT(std::abs(c.front().r - swapped), 1.0e-4f);
+  EXPECT_GT(std::abs(c.front().r - swapped[0]), 1.0e-4f);
 }
 
 TEST_F(CudaMultiGradeFixture, ReconnectChangesNoncommutingGradeResult) {
@@ -185,9 +187,9 @@ TEST_F(CudaMultiGradeFixture, ReconnectChangesNoncommutingGradeResult) {
   Render(document, plan);
   const auto  first_order = DownloadWork(device_, LastGradeMember(plan.grade_nodes.size()));
   const auto  develop     = Download(device_, plan.develop_output);
-  const float expected_ab = multi_grade_test::ApplyContrastAcescc(
-      multi_grade_test::ApplyExposureAcescc(develop.front().r, 1.0f), 100.0f);
-  EXPECT_NEAR(first_order.front().r, expected_ab, 1.0e-5f);
+  const auto  expected_ab = multi_grade_test::ApplyContrastAcescc(
+      multi_grade_test::ApplyExposureAcescc(multi_grade_test::Rgb(develop.front()), 1.0f), 100.0f);
+  EXPECT_TRUE(multi_grade_test::RgbNear(first_order.front(), expected_ab, 1.0e-5f));
 
   ASSERT_TRUE(
       ReconnectColorGrade(document, NodeId{"grade.b"}, NodeId{"develop"}, NodeId{"grade.primary"})
@@ -197,9 +199,9 @@ TEST_F(CudaMultiGradeFixture, ReconnectChangesNoncommutingGradeResult) {
   Render(document, plan);
   EXPECT_GE(device_.PassStats().camera_color_skip, 1U);
   const auto  reconnected = DownloadWork(device_, LastGradeMember(plan.grade_nodes.size()));
-  const float expected_ba = multi_grade_test::ApplyExposureAcescc(
-      multi_grade_test::ApplyContrastAcescc(develop.front().r, 100.0f), 1.0f);
-  EXPECT_NEAR(reconnected.front().r, expected_ba, 1.0e-5f);
+  const auto  expected_ba = multi_grade_test::ApplyExposureAcescc(
+      multi_grade_test::ApplyContrastAcescc(multi_grade_test::Rgb(develop.front()), 100.0f), 1.0f);
+  EXPECT_TRUE(multi_grade_test::RgbNear(reconnected.front(), expected_ba, 1.0e-5f));
   EXPECT_GT(std::abs(reconnected.front().r - first_order.front().r), 1.0e-4f);
 }
 
@@ -254,11 +256,12 @@ TEST_F(CudaMultiGradeFixture, RepeatedAdjustmentInstancesKeepTheirOrder) {
   const auto  output   = DownloadWork(device_, LastGradeMember(plan.grade_nodes.size()));
   // The fixed compile order groups same-type instances at their rank, so the
   // second Exposure applies before Contrast regardless of stored position.
-  const float expected = multi_grade_test::ApplyContrastAcescc(
+  const auto  expected = multi_grade_test::ApplyContrastAcescc(
       multi_grade_test::ApplyExposureAcescc(
-          multi_grade_test::ApplyExposureAcescc(develop.front().r, 1.0f), 2.0f),
+          multi_grade_test::ApplyExposureAcescc(multi_grade_test::Rgb(develop.front()), 1.0f),
+          2.0f),
       100.0f);
-  EXPECT_NEAR(output.front().r, expected, 1.0e-5f);
+  EXPECT_TRUE(multi_grade_test::RgbNear(output.front(), expected, 1.0e-5f));
 }
 
 TEST_F(CudaMultiGradeFixture, EachGradeMixesAgainstItsOwnInput) {
@@ -304,15 +307,17 @@ TEST_F(CudaMultiGradeFixture, EachGradeMixesAgainstItsOwnInput) {
   const auto  develop = Download(device_, plan.develop_output);
   const auto  a       = DownloadWork(device_, SceneWorkMember::Member0);
   const auto  b       = DownloadWork(device_, SceneWorkMember::Member1);
-  const float adj_a   = multi_grade_test::ApplyExposureAcescc(develop.front().r, 1.0f);
-  const float out_a   = multi_grade_test::MixToward(develop.front().r, adj_a, 0.5f, 1.0f);
-  const float adj_b   = multi_grade_test::ApplyContrastAcescc(out_a, 100.0f);
-  const float out_b   = multi_grade_test::MixToward(out_a, adj_b, 0.25f, 128.0f / 255.0f);
-  EXPECT_NEAR(a.front().r, out_a, 1.0e-5f);
-  EXPECT_NEAR(b.front().r, out_b, 2.0e-5f);
-  const float wrong_mix =
-      multi_grade_test::MixToward(develop.front().r, adj_b, 0.25f, 128.0f / 255.0f);
-  EXPECT_GT(std::abs(b.front().r - wrong_mix), 1.0e-4f);
+  const auto  adj_a =
+      multi_grade_test::ApplyExposureAcescc(multi_grade_test::Rgb(develop.front()), 1.0f);
+  const auto out_a =
+      multi_grade_test::MixToward(multi_grade_test::Rgb(develop.front()), adj_a, 0.5f, 1.0f);
+  const auto adj_b = multi_grade_test::ApplyContrastAcescc(out_a, 100.0f);
+  const auto out_b = multi_grade_test::MixToward(out_a, adj_b, 0.25f, 128.0f / 255.0f);
+  EXPECT_TRUE(multi_grade_test::RgbNear(a.front(), out_a, 1.0e-5f));
+  EXPECT_TRUE(multi_grade_test::RgbNear(b.front(), out_b, 2.0e-5f));
+  const auto wrong_mix = multi_grade_test::MixToward(multi_grade_test::Rgb(develop.front()), adj_b,
+                                                     0.25f, 128.0f / 255.0f);
+  EXPECT_GT(std::abs(b.front().r - wrong_mix[0]), 1.0e-4f);
 }
 
 TEST_F(CudaMultiGradeFixture, DisabledGradeAliasesInputUntilFinalReader) {
@@ -333,10 +338,13 @@ TEST_F(CudaMultiGradeFixture, DisabledGradeAliasesInputUntilFinalReader) {
   const auto  develop  = Download(device_, plan.develop_output);
   const auto  a        = DownloadWork(device_, SceneWorkMember::Member0);
   const auto  c        = DownloadWork(device_, SceneWorkMember::Member1);
-  const float expected = multi_grade_test::ApplyContrastAcescc(
-      multi_grade_test::ApplyExposureAcescc(develop.front().r, 1.0f), 100.0f);
-  EXPECT_NEAR(c.front().r, expected, 1.0e-5f);
-  EXPECT_NEAR(a.front().r, multi_grade_test::ApplyExposureAcescc(develop.front().r, 1.0f), 1.0e-5f);
+  const auto  expected = multi_grade_test::ApplyContrastAcescc(
+      multi_grade_test::ApplyExposureAcescc(multi_grade_test::Rgb(develop.front()), 1.0f), 100.0f);
+  EXPECT_TRUE(multi_grade_test::RgbNear(c.front(), expected, 1.0e-5f));
+  EXPECT_TRUE(multi_grade_test::RgbNear(
+      a.front(),
+      multi_grade_test::ApplyExposureAcescc(multi_grade_test::Rgb(develop.front()), 1.0f),
+      1.0e-5f));
 }
 
 TEST_F(CudaMultiGradeFixture, ZeroMixGradeAliasesInputUntilFinalReader) {
@@ -359,10 +367,13 @@ TEST_F(CudaMultiGradeFixture, ZeroMixGradeAliasesInputUntilFinalReader) {
   const auto  develop  = Download(device_, plan.develop_output);
   const auto  a        = DownloadWork(device_, SceneWorkMember::Member0);
   const auto  c        = DownloadWork(device_, SceneWorkMember::Member1);
-  const float expected = multi_grade_test::ApplyContrastAcescc(
-      multi_grade_test::ApplyExposureAcescc(develop.front().r, 1.0f), 100.0f);
-  EXPECT_NEAR(c.front().r, expected, 1.0e-5f);
-  EXPECT_NEAR(a.front().r, multi_grade_test::ApplyExposureAcescc(develop.front().r, 1.0f), 1.0e-5f);
+  const auto  expected = multi_grade_test::ApplyContrastAcescc(
+      multi_grade_test::ApplyExposureAcescc(multi_grade_test::Rgb(develop.front()), 1.0f), 100.0f);
+  EXPECT_TRUE(multi_grade_test::RgbNear(c.front(), expected, 1.0e-5f));
+  EXPECT_TRUE(multi_grade_test::RgbNear(
+      a.front(),
+      multi_grade_test::ApplyExposureAcescc(multi_grade_test::Rgb(develop.front()), 1.0f),
+      1.0e-5f));
 }
 
 TEST_F(CudaMultiGradeFixture, TwoLocalToneGradesUseTheirOwnSources) {
@@ -449,11 +460,12 @@ TEST_F(CudaMultiGradeFixture, MiddleGradeEditReusesKeyStagesAndReexecutesEveryGr
   EXPECT_EQ(device_.PassStats().primary_grade_execute, 3U);
   const auto  develop  = Download(device_, plan.develop_output);
   const auto  output   = DownloadWork(device_, LastGradeMember(plan.grade_nodes.size()));
-  const float expected = multi_grade_test::ApplyExposureAcescc(
+  const auto  expected = multi_grade_test::ApplyExposureAcescc(
       multi_grade_test::ApplyContrastAcescc(
-          multi_grade_test::ApplyExposureAcescc(develop.front().r, 1.0f), 100.0f),
+          multi_grade_test::ApplyExposureAcescc(multi_grade_test::Rgb(develop.front()), 1.0f),
+          100.0f),
       0.5f);
-  EXPECT_NEAR(output.front().r, expected, 1.0e-5f);
+  EXPECT_TRUE(multi_grade_test::RgbNear(output.front(), expected, 1.0e-5f));
 }
 
 TEST_F(CudaMultiGradeFixture, NewGradeOrderMatchesIndependentExpectedPixelsWithinTolerance) {

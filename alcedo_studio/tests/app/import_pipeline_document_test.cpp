@@ -84,6 +84,9 @@ TEST(ImportPipelineDocumentTest, ImportCreatesRenderableDocumentWithoutStageMirr
   const auto* saturation = persisted.PrimaryGrade()->FindAdjustmentByType(type_ids::Saturation());
   ASSERT_NE(saturation, nullptr);
   EXPECT_FLOAT_EQ(saturation->ToJson().at("saturation").get<float>(), kDefaultPipelineSaturation);
+  const auto* contrast = persisted.PrimaryGrade()->FindAdjustmentByType(type_ids::Contrast());
+  ASSERT_NE(contrast, nullptr);
+  EXPECT_FLOAT_EQ(contrast->ToJson().at("contrast").get<float>(), kDefaultPipelineContrast);
   EXPECT_EQ(expected.camera_profile.dng_profile, raw.dng_profile_);
   EXPECT_TRUE(expected.camera_profile.color_matrices_valid);
   // A document read from project data holds an unbound profile reference and does not render.
