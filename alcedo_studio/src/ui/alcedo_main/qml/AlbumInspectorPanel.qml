@@ -24,6 +24,25 @@ ScrollView {
         width: root.availableWidth
         spacing: 0
 
+        // Drag-flicking is disabled above, which also stops the Flickable from
+        // handling wheel events; scroll the panel explicitly. Takes over from
+        // children so wheel over stats cards still scrolls.
+        WheelHandler {
+            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+            grabPermissions: PointerHandler.CanTakeOverFromItems
+                             | PointerHandler.CanTakeOverFromHandlersOfDifferentType
+                             | PointerHandler.ApprovesTakeOverByAnything
+            onWheel: function (event) {
+                var flick = root.contentItem
+                var step = event.pixelDelta.y !== 0
+                           ? event.pixelDelta.y
+                           : event.angleDelta.y / 120 * 48
+                var maxY = Math.max(0, flick.contentHeight - flick.height)
+                flick.contentY = Math.max(0, Math.min(maxY, flick.contentY - step))
+                event.accepted = true
+            }
+        }
+
         // Library Overview hero
         Item {
             Layout.fillWidth: true

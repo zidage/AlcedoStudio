@@ -4,22 +4,32 @@
 <context>
     <name>AboutPage</name>
     <message>
-        <location filename="../qml/AboutPage.qml" line="+79"/>
-        <source>New to Alcedo Studio?</source>
-        <translation>初次使用 Alcedo Studio？</translation>
+        <location filename="../qml/AboutPage.qml" line="+82"/>
+        <source>Welcome to Alcedo Studio</source>
+        <translation>欢迎使用 Alcedo Studio</translation>
     </message>
     <message>
         <location line="+10"/>
-        <source>The documentation website is the best place to learn how this software works — how to import, edit, and manage your photos, step by step. It is the tutorial for Alcedo Studio, and it is kept up to date with each release.</source>
-        <translation>文档网站是了解本软件工作原理的最佳去处——循序渐进地学习如何导入、编辑和管理你的照片。它是 Alcedo Studio 的教程，并随每个版本保持更新。</translation>
+        <source>The documentation walks you through importing, editing, and managing your photos step by step. Follow development on GitHub, and if Alcedo Studio is useful to you, consider supporting it with a donation.</source>
+        <translation>文档会一步步带你了解如何导入、编辑和管理照片。你可以在 GitHub 上关注开发进展；如果 Alcedo Studio 对你有帮助，也欢迎捐赠支持。</translation>
     </message>
     <message>
-        <location line="+13"/>
+        <location line="+17"/>
         <source>Open documentation</source>
         <translation>打开文档</translation>
     </message>
     <message>
-        <location line="+34"/>
+        <location line="+7"/>
+        <source>Open GitHub</source>
+        <translation>打开 GitHub</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Sponsor</source>
+        <translation>捐赠支持</translation>
+    </message>
+    <message>
+        <location line="+18"/>
         <source>About</source>
         <translation>关于</translation>
     </message>

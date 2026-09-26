@@ -350,7 +350,7 @@ Dialog {
                             Instantiator {
                                 model: [
                                     { label: qsTr("Language / Theme"), icon: "qrc:/panel_icons/language.svg" },
-                                    { label: qsTr("Default Behavior"), icon: "qrc:/panel_icons/adjustments.svg" },
+                                    { label: qsTr("Default Behavior"), icon: "qrc:/panel_icons/zero-config.svg" },
                                     { label: qsTr("Cache"), icon: "qrc:/panel_icons/box.svg" },
                                     { label: qsTr("Local Content Recognition"), icon: "qrc:/panel_icons/search.svg" },
                                     { label: qsTr("Advanced Content Analysis"), icon: "qrc:/panel_icons/flask.svg" },
@@ -891,8 +891,15 @@ Dialog {
                             enabled: dialog.canCompleteSettings
                             font.pixelSize: 15
                             font.weight: 800
-                            palette.buttonText: appTheme.editorListSelectedInkColor
                             onClicked: dialog.applySettings()
+                            contentItem: Text {
+                                text: applyButton.text
+                                font: applyButton.font
+                                color: "#FFFFFF"
+                                horizontalAlignment: Text.AlignHCenter
+                                verticalAlignment: Text.AlignVCenter
+                                elide: Text.ElideRight
+                            }
                             background: Rectangle {
                                 radius: 10
                                 color: applyButton.down
