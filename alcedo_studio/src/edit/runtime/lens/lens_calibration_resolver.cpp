@@ -25,6 +25,8 @@
 #define NOMINMAX
 #endif
 #include <Windows.h>
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
 #endif
 
 namespace alcedo {
@@ -98,6 +100,16 @@ auto GetExecutableDir() -> std::filesystem::path {
     }
     buffer.resize(buffer.size() * 2);
   }
+#elif defined(__APPLE__)
+  uint32_t size = 0;
+  if (_NSGetExecutablePath(nullptr, &size) != -1 || size == 0) {
+    return {};
+  }
+  std::string buffer(size, '\0');
+  if (_NSGetExecutablePath(buffer.data(), &size) != 0) {
+    return {};
+  }
+  return CanonicalPath(std::filesystem::path(buffer.c_str()).parent_path());
 #else
   return {};
 #endif
