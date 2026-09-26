@@ -166,11 +166,13 @@ void ValidateDocumentShape(const nlohmann::json& json) {
 
 void ApplyDefaultPipelineLook(ColorGradeNodeModel& grade) {
   auto* exposure   = grade.FindAdjustmentByType(type_ids::Exposure());
+  auto* contrast   = grade.FindAdjustmentByType(type_ids::Contrast());
   auto* saturation = grade.FindAdjustmentByType(type_ids::Saturation());
-  if (exposure == nullptr || saturation == nullptr) {
-    throw std::logic_error("Default Color Grade is missing exposure or saturation");
+  if (exposure == nullptr || contrast == nullptr || saturation == nullptr) {
+    throw std::logic_error("Default Color Grade is missing exposure, contrast, or saturation");
   }
   exposure->LoadJson({{"exposure_ev", kDefaultPipelineExposureEv}});
+  contrast->LoadJson({{"contrast", kDefaultPipelineContrast}});
   saturation->LoadJson({{"saturation", kDefaultPipelineSaturation}});
 }
 

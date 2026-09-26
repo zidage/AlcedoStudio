@@ -55,8 +55,8 @@ class ColorGradeNodeModel final : public INodeModel {
   /**
    * @brief Catalog Color Grade: CAT02 through LMT in the documented order.
    *
-   * Adjustment values are catalog identity (exposure 0 EV, saturation 1.0). Product
-   * Default look (+1.5 EV, saturation 1.3) is applied by
+   * Adjustment values are catalog identity (exposure 0 EV, contrast 0, saturation 1.0).
+   * Product Default look (+1.5 EV, contrast +15, saturation 1.3) is applied by
    * @ref CreateDefaultPipelineDocument, not by this factory. Clarity, Sharpen,
    * Halation, and Film Grain belong to DRT/Post and are omitted.
    *

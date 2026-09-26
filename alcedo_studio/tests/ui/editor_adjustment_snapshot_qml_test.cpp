@@ -23,6 +23,7 @@
 #include <mutex>
 #include <string>
 #include <utility>
+#include <variant>
 
 #include "app/editor_panel_projection.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
@@ -47,9 +48,11 @@ class SnapshotSession final : public QObject, public IEditorAdjustmentSubmitter 
   auto snapshotRevision() const -> quint64 { return revision_; }
   auto submitWrite(QString fieldKey, alcedo::EditorParameterWrite write, bool settled)
       -> bool override {
-    static_cast<void>(fieldKey);
-    static_cast<void>(write);
-    static_cast<void>(settled);
+    if (const auto* scalar = std::get_if<alcedo::EditorScalarWrite>(&write)) {
+      last_scalar_field_ = fieldKey;
+      last_scalar_value_ = scalar->value;
+      last_settled_      = settled;
+    }
     ++submit_count_;
     return true;
   }
@@ -63,6 +66,9 @@ class SnapshotSession final : public QObject, public IEditorAdjustmentSubmitter 
   }
   auto canEdit() const -> bool override { return true; }
   auto submitCount() const -> int { return submit_count_; }
+  auto lastScalarField() const -> QString { return last_scalar_field_; }
+  auto lastScalarValue() const -> float { return last_scalar_value_; }
+  auto lastSettled() const -> bool { return last_settled_; }
 
  signals:
   void AdjustmentSnapshotChanged();
@@ -71,6 +77,9 @@ class SnapshotSession final : public QObject, public IEditorAdjustmentSubmitter 
   QVariantMap snapshot_;
   quint64     revision_     = 0;
   int         submit_count_ = 0;
+  QString     last_scalar_field_;
+  float       last_scalar_value_ = 0.0f;
+  bool        last_settled_      = false;
 };
 
 auto QmlDirectory() -> QString {
@@ -187,6 +196,38 @@ TEST(EditorAdjustmentSnapshotQmlTest, QmlLoadFromTypedProjectionDoesNotSubmit) {
   EXPECT_NEAR(look_saturation->property("value").toDouble(), 40.0, 1.0e-5);
   EXPECT_EQ(lut_model->property("selectedPath").toString(), QStringLiteral("D:/luts/look.cube"));
   EXPECT_EQ(session.submitCount(), 0);
+}
+
+TEST(EditorAdjustmentSnapshotQmlTest, ToneExposureAndContrastResetToZeroNotProductDefaultLook) {
+  // The product Default document starts at +1.5 EV and +15 contrast, but the slider reset target
+  // (double-click) is the neutral value 0 so user-created grades reset the same way.
+  QVariantMap snapshot;
+  snapshot.insert(QStringLiteral("exposure"), QVariantMap{{QStringLiteral("exposure"), 1.5}});
+  snapshot.insert(QStringLiteral("contrast"), QVariantMap{{QStringLiteral("contrast"), 15.0}});
+  SnapshotSession              session(std::move(snapshot), 0);
+  AdjustmentSnapshotQmlHarness harness(&session);
+
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  auto* exposure = harness.root()->findChild<QObject*>(QStringLiteral("toneExposureModel"));
+  auto* contrast = harness.root()->findChild<QObject*>(QStringLiteral("toneContrastModel"));
+  ASSERT_NE(exposure, nullptr);
+  ASSERT_NE(contrast, nullptr);
+  EXPECT_DOUBLE_EQ(exposure->property("value").toDouble(), 1.5);
+  EXPECT_DOUBLE_EQ(contrast->property("value").toDouble(), 15.0);
+  EXPECT_DOUBLE_EQ(exposure->property("defaultValue").toDouble(), 0.0);
+  EXPECT_DOUBLE_EQ(contrast->property("defaultValue").toDouble(), 0.0);
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(exposure, "reset"));
+  EXPECT_DOUBLE_EQ(exposure->property("value").toDouble(), 0.0);
+  EXPECT_EQ(session.lastScalarField(), QStringLiteral("exposure"));
+  EXPECT_FLOAT_EQ(session.lastScalarValue(), 0.0f);
+  EXPECT_TRUE(session.lastSettled());
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(contrast, "reset"));
+  EXPECT_DOUBLE_EQ(contrast->property("value").toDouble(), 0.0);
+  EXPECT_EQ(session.lastScalarField(), QStringLiteral("contrast"));
+  EXPECT_FLOAT_EQ(session.lastScalarValue(), 0.0f);
+  EXPECT_TRUE(session.lastSettled());
 }
 
 }  // namespace

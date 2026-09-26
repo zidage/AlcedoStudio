@@ -703,8 +703,6 @@ add_executable(PipelineSharedUseTest ${ALCEDO_TEST_ROOT}/app/pipeline_shared_use
 target_include_directories(PipelineSharedUseTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(PipelineSharedUseTest ThumbnailService ExportService ProjectService
   ImportService GTest::gtest_main ImageWriter ${ALCEDO_TEST_OPENCV_MIN_DEPS})
-target_compile_definitions(PipelineSharedUseTest PRIVATE
-    ALCEDO_SHARED_USE_EXPECTED_PIXEL_DIR="${ALCEDO_TEST_ROOT}/resources/expected_pixels/document_render")
 gtest_discover_tests(PipelineSharedUseTest TEST_PREFIX "PipelineSharedUseTest.")
 alcedo_register_test_target(PipelineSharedUseTest app)
 

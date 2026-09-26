@@ -130,7 +130,9 @@ Item {
         label: qsTr("Exposure")
         minimum: -10
         maximum: 10
-        defaultValue: 1.5
+        // Reset (double-click) target is the neutral value. The product Default document starts
+        // at +1.5 EV, but user-created grades and reset both use 0.
+        defaultValue: 0
         step: 0.01
         precision: 2
         submitter: root.editorSession

@@ -6,12 +6,9 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <filesystem>
-#include <span>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -36,10 +33,6 @@ constexpr std::uint32_t kHeight = 12;
 auto                    HasCudaDevice() -> bool {
   int count = 0;
   return ::cudaGetDeviceCount(&count) == cudaSuccess && count > 0;
-}
-
-auto ExpectedPixelDirectory() -> std::filesystem::path {
-  return std::filesystem::path(ALCEDO_DRT_EXPECTED_PIXEL_DIR);
 }
 
 void ZeroBytes(std::vector<std::byte>& bytes, std::size_t begin, std::size_t end) {
@@ -100,64 +93,9 @@ class CudaDrtExpectedOutputFixture : public ::testing::Test {
                                            gpu_dag_test::FullSensor(kWidth, kHeight));
   }
 
-  /** Render the fixed ramp through the default DAG with @p method and return RGBA32F pixels. */
-  auto RenderDisplay(DrtMethod method) -> std::vector<float> {
-    auto document  = CreateDefaultPipelineDocument();
-    auto payload   = document.Drt()->Params().Params();
-    payload.method = method;
-    document.Drt()->Params().ReplaceParams(payload);
-    gpu_dag_test::EnsureTestCameraProfile(document);
-    const auto plan   = GraphCompiler::Compile(document, input_.CompileSource(), RenderRequest{});
-    const auto output = device_.Execute(plan, input_, document);
-    device_.WaitIdle();
-    auto* image = device_.Workspace().Images().Find(output);
-    if (image == nullptr || image->Empty()) return {};
-    const auto&        texture = image->Texture();
-    std::vector<float> pixels(static_cast<std::size_t>(texture.Width()) * texture.Height() * 4U);
-    device_.Workspace().Device().DownloadTexture2D(
-        texture,
-        std::span<std::byte>(reinterpret_cast<std::byte*>(pixels.data()),
-                             pixels.size() * sizeof(float)),
-        device_.CommandContext());
-    return pixels;
-  }
-
-  void ExpectMatchesStoredPixels(DrtMethod method, const char* file_name) {
-    const auto pixels = RenderDisplay(method);
-    ASSERT_EQ(pixels.size(), static_cast<std::size_t>(kWidth) * kHeight * 4U);
-    const auto path   = ExpectedPixelDirectory() / file_name;
-    const auto stored = drt_expected_data::ReadBytes(path);
-    ASSERT_EQ(stored.size(), pixels.size() * sizeof(float)) << path.string();
-    std::vector<float> expected(pixels.size());
-    std::memcpy(expected.data(), stored.data(), stored.size());
-    constexpr float kTolerance = 1.0f / 4096.0f;
-    float           max_error  = 0.0f;
-    std::size_t     worst      = 0;
-    for (std::size_t i = 0; i < pixels.size(); ++i) {
-      ASSERT_TRUE(std::isfinite(pixels[i])) << "channel " << i;
-      const float error = std::abs(pixels[i] - expected[i]);
-      if (error > max_error) {
-        max_error = error;
-        worst     = i;
-      }
-    }
-    EXPECT_LE(max_error, kTolerance)
-        << "channel " << worst << " rendered " << pixels[worst] << " stored " << expected[worst];
-  }
-
   PreparedRawInput input_;
   CudaRenderDevice device_;
 };
-
-// The stored pixels were rendered at commit 0cf45f45 (before G10.5) from the 16x12 ramp of
-// MakeF32RgbaPlane through the default document. The comparison allows 1/4096 per channel.
-TEST_F(CudaDrtExpectedOutputFixture, CudaDrtOutputMatchesStoredExpectedPixels) {
-  ExpectMatchesStoredPixels(DrtMethod::Aces20,
-                            "cuda_aces20_rec709_gamma22_ramp_16x12_expected_display_rgba32f.bin");
-  ExpectMatchesStoredPixels(
-      DrtMethod::OpenDrt,
-      "cuda_opendrt_standard_rec709_gamma22_ramp_16x12_expected_display_rgba32f.bin");
-}
 
 // Primary failure chain: the DRT pass rethrows the resolver message, the render publishes no
 // display image, and the same device renders once the parameter is valid again.

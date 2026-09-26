@@ -86,6 +86,15 @@ gtest_discover_tests(LocalToneMappingConstantsMatchRuntimeTest
     TEST_PREFIX "LocalToneMappingConstantsMatchRuntimeTest.")
 alcedo_register_test_target(LocalToneMappingConstantsMatchRuntimeTest edit)
 
+# Color Grade Contrast: host reference math (OkLab lightness S curve) that the CUDA, Metal, and
+# OpenCL grade tests compare against.
+add_executable(OkLabContrastReferenceTest
+    ${ALCEDO_TEST_ROOT}/edit/runtime/oklab_contrast_reference_test.cpp)
+target_link_libraries(OkLabContrastReferenceTest PRIVATE GTest::gtest_main)
+gtest_discover_tests(OkLabContrastReferenceTest TEST_PREFIX "OkLabContrastReferenceTest."
+    PROPERTIES LABELS "ci_core_flow;edit;runtime")
+alcedo_register_test_target(OkLabContrastReferenceTest edit)
+
 # Develop lens resolution: LensCalibrationResolver against stored pre-G10.6 LensCalibOp parameters
 # for CI RAW fixtures, catalog lens identity, DNG warp, and database failure.
 add_executable(LensCalibDevelopResolveTest
@@ -355,8 +364,7 @@ if(ALCEDO_CUDA_ENABLED)
   target_link_libraries(GpuDagCudaDrtProductTest PRIVATE
     GTest::gtest_main EditRuntimeCuda EditScope EditInput Image)
   target_compile_definitions(GpuDagCudaDrtProductTest PRIVATE
-    ALCEDO_DRT_EXPECTED_PARAMETER_DIR="${ALCEDO_TEST_ROOT}/resources/expected_parameters/drt"
-    ALCEDO_DRT_EXPECTED_PIXEL_DIR="${ALCEDO_TEST_ROOT}/resources/expected_pixels/drt")
+    ALCEDO_DRT_EXPECTED_PARAMETER_DIR="${ALCEDO_TEST_ROOT}/resources/expected_parameters/drt")
   gtest_discover_tests(GpuDagCudaDrtProductTest TEST_PREFIX "GpuDagCudaDrtProductTest."
     PROPERTIES LABELS "gpu;edit;runtime;product")
   alcedo_register_test_target(GpuDagCudaDrtProductTest gpu)

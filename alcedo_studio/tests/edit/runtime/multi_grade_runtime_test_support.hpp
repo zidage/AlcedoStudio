@@ -4,8 +4,11 @@
 
 #pragma once
 
+#include <gtest/gtest.h>
+
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -22,16 +25,29 @@
 #include "edit/input/prepared_raw_input.hpp"
 #include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
+#include "oklab_contrast_reference.hpp"
 
 namespace alcedo::multi_grade_test {
+
+using AcesccRgb = oklab_contrast_reference::Rgb;
+
+template <class Pixel>
+auto Rgb(const Pixel& pixel) -> AcesccRgb {
+  return {pixel.r, pixel.g, pixel.b};
+}
 
 inline auto ApplyExposureAcescc(float value, float exposure_ev) -> float {
   return value + exposure_ev / 17.52f;
 }
 
-inline auto ApplyContrastAcescc(float value, float contrast) -> float {
-  const float scale = 1.0f + contrast * 0.01f;
-  return (value - 0.18f) * scale + 0.18f;
+inline auto ApplyExposureAcescc(const AcesccRgb& value, float exposure_ev) -> AcesccRgb {
+  return {ApplyExposureAcescc(value[0], exposure_ev), ApplyExposureAcescc(value[1], exposure_ev),
+          ApplyExposureAcescc(value[2], exposure_ev)};
+}
+
+/// Contrast mixes channels (OkLab lightness), so it takes and returns the full ACEScc RGB.
+inline auto ApplyContrastAcescc(const AcesccRgb& value, float contrast) -> AcesccRgb {
+  return oklab_contrast_reference::ApplyContrastAcescc(value, contrast);
 }
 
 inline auto MixToward(float input, float adjusted, float mix, float coverage = 1.0f) -> float {
@@ -39,16 +55,42 @@ inline auto MixToward(float input, float adjusted, float mix, float coverage = 1
   return input + weight * (adjusted - input);
 }
 
+inline auto MixToward(const AcesccRgb& input, const AcesccRgb& adjusted, float mix,
+                      float coverage = 1.0f) -> AcesccRgb {
+  return {MixToward(input[0], adjusted[0], mix, coverage),
+          MixToward(input[1], adjusted[1], mix, coverage),
+          MixToward(input[2], adjusted[2], mix, coverage)};
+}
+
+/// Every RGB channel of @p pixel is within @p tolerance of @p expected.
+template <class Pixel>
+auto RgbNear(const Pixel& pixel, const AcesccRgb& expected, float tolerance)
+    -> ::testing::AssertionResult {
+  const AcesccRgb actual = Rgb(pixel);
+  for (std::size_t i = 0; i < actual.size(); ++i) {
+    if (!(std::fabs(actual[i] - expected[i]) <= tolerance)) {
+      return ::testing::AssertionFailure()
+             << "channel " << i << ": actual " << actual[i] << ", expected " << expected[i]
+             << ", tolerance " << tolerance;
+    }
+  }
+  return ::testing::AssertionSuccess();
+}
+
 inline void ResetGradeLookToIdentity(ColorGradeNodeModel& grade) {
   auto* exposure =
       dynamic_cast<ExposureModel*>(grade.FindAdjustmentByType(type_ids::Exposure()));
   auto* saturation =
       dynamic_cast<SaturationModel*>(grade.FindAdjustmentByType(type_ids::Saturation()));
+  auto* contrast = dynamic_cast<ContrastModel*>(grade.FindAdjustmentByType(type_ids::Contrast()));
   if (exposure != nullptr) {
     exposure->SetValue(0.0f);
   }
   if (saturation != nullptr) {
     saturation->SetValue(1.0f);
+  }
+  if (contrast != nullptr) {
+    contrast->SetValue(0.0f);
   }
 }
 
