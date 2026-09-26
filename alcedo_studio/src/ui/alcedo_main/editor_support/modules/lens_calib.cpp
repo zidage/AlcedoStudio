@@ -21,13 +21,22 @@ void SortAndUniqueStrings(std::vector<std::string>* values) {
 
 auto ResolveLensCatalogPath() -> std::filesystem::path {
   const std::filesystem::path app_dir(QCoreApplication::applicationDirPath().toStdWString());
-  const std::vector<std::filesystem::path> candidates = {
-      app_dir / "lens_calib" / "lens_catalog.json",
-      app_dir / "config" / "lens_calib" / "lens_catalog.json",
-      std::filesystem::path(CONFIG_PATH) / "lens_calib" / "lens_catalog.json",
-      std::filesystem::path("src/config/lens_calib/lens_catalog.json"),
-      std::filesystem::path("alcedo/src/config/lens_calib/lens_catalog.json"),
-  };
+  std::vector<std::filesystem::path> candidates;
+  // A packaged lens_calib directory next to the executable is authoritative: a catalog missing
+  // from it must not be silently read from the build machine's source checkout.
+  for (const auto& packaged_dir : {app_dir / "lens_calib", app_dir / "config" / "lens_calib"}) {
+    std::error_code ec;
+    if (std::filesystem::is_directory(packaged_dir, ec) && !ec) {
+      candidates.emplace_back(packaged_dir / "lens_catalog.json");
+    }
+  }
+  if (candidates.empty()) {
+    candidates = {
+        std::filesystem::path(CONFIG_PATH) / "lens_calib" / "lens_catalog.json",
+        std::filesystem::path("src/config/lens_calib/lens_catalog.json"),
+        std::filesystem::path("alcedo/src/config/lens_calib/lens_catalog.json"),
+    };
+  }
 
   for (const auto& path : candidates) {
     std::error_code ec;
