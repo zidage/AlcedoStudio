@@ -92,8 +92,15 @@ powershell -ExecutionPolicy Bypass -File scripts\package_windows.ps1
 ./scripts/package_macos.sh
 ```
 
-Use the NSIS `.exe` for Windows updates. Use the CPack `.zip` for macOS updates.
-Keep the DMG for manual / website download.
+Use the NSIS `.exe` for Windows updates. Use the `.zip` for macOS updates. Keep
+the DMG for manual / website download.
+
+On macOS, `cmake --install` deploys and signs the `.app` once. CPack packages that
+verified bundle into the DMG, and a CPack post-build script archives the same
+bundle into the ZIP with `ditto`, which keeps the extended attributes that hold
+code signatures. The package script then extracts the ZIP the way the in-app
+updater does, mounts the DMG, and verifies both bundles. Code signing
+(`--codesign-identity`) belongs to the install step, before these checks.
 
 Pass `-Channel beta` (Windows) or `--channel beta` (macOS) only when you are
 testing the updater. The matching VS Code tasks already pass those flags.
