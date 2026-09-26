@@ -46,6 +46,16 @@ function Invoke-BuildNumberState {
     }
 }
 
+# publish_update.py refuses a package whose recorded commit differs from the manifest commit,
+# so a package from another checkout or from uncommitted changes cannot be published.
+$packagedCommit = (& git -C $repoRoot.Path rev-parse HEAD).Trim()
+if ($LASTEXITCODE -ne 0) {
+    throw "git rev-parse HEAD failed."
+}
+if (& git -C $repoRoot.Path status --porcelain) {
+    $packagedCommit = "$packagedCommit-dirty"
+}
+
 Invoke-BuildNumberState -Mode resolve
 $pendingBuildNumberFile = Join-Path $repoRoot "build\tmp\update-build-number\windows.pending.txt"
 $resolvedBuildNumberText = (Get-Content -LiteralPath $pendingBuildNumberFile -Raw).Trim()
@@ -144,14 +154,30 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # ------------------------------------------------------------------
-# 2. Build install target
+# 2. Build, then install the application component into a fresh tree
 # ------------------------------------------------------------------
-Write-Host "Building install target ..." -ForegroundColor Yellow
-$buildCmd = "cmd /c `"$repoRoot\scripts\msvc_env.cmd`" --build $BuildDir --target install --parallel 4"
+Write-Host "Building ..." -ForegroundColor Yellow
+$buildCmd = "cmd /c `"$repoRoot\scripts\msvc_env.cmd`" --build $BuildDir --parallel 4"
 Write-Host "> $buildCmd"
 Invoke-Expression $buildCmd
 if ($LASTEXITCODE -ne 0) {
-    throw "Build/install failed."
+    throw "Build failed."
+}
+
+# Verify exactly what CPack packages: the application component (bundled gRPC/RE2
+# development files are a separate component), installed without stale files left
+# by earlier installs.
+$installDir = Join-Path $repoRoot "build\install"
+if (Test-Path -LiteralPath $installDir) {
+    Write-Host "Removing previous install tree: $installDir" -ForegroundColor Gray
+    Remove-Item -LiteralPath $installDir -Recurse -Force
+}
+Write-Host "Installing application component ..." -ForegroundColor Yellow
+$installCmd = "cmd /c `"$repoRoot\scripts\msvc_env.cmd`" --install $BuildDir --component Unspecified"
+Write-Host "> $installCmd"
+Invoke-Expression $installCmd
+if ($LASTEXITCODE -ne 0) {
+    throw "Install failed."
 }
 
 # ------------------------------------------------------------------
@@ -159,7 +185,6 @@ if ($LASTEXITCODE -ne 0) {
 # ------------------------------------------------------------------
 Write-Host "Verifying install tree ..." -ForegroundColor Yellow
 $verifyScript = Join-Path $repoRoot "scripts\verify_windows_install_tree.ps1"
-$installDir = Join-Path $repoRoot "build\install"
 $verifyArgs = @(
     '-ExecutionPolicy', 'Bypass',
     '-File', $verifyScript,
@@ -183,6 +208,13 @@ foreach ($legacyZipPackage in $legacyZipPackages) {
     Write-Host "Removing legacy Windows ZIP: $($legacyZipPackage.Name)" -ForegroundColor Gray
     Remove-Item -LiteralPath $legacyZipPackage.FullName -Force
 }
+$cpackConfig = Get-Content -LiteralPath "$BuildDir\CPackConfig.cmake" -Raw
+if ($cpackConfig -notmatch '(?m)^set\(CPACK_PACKAGE_FILE_NAME "([^"]+)"\)') {
+    throw "CPACK_PACKAGE_FILE_NAME was not found in $BuildDir\CPackConfig.cmake."
+}
+$updatePackage = Join-Path $PackageOutDir "$($Matches[1]).exe"
+$packagedCommitFile = "$updatePackage.commit"
+Remove-Item -LiteralPath $packagedCommitFile -Force -ErrorAction SilentlyContinue
 Write-Host "Running CPack ..." -ForegroundColor Yellow
 $cpackCmd = "cpack --config `"$BuildDir\CPackConfig.cmake`" -B `"$PackageOutDir`""
 Write-Host "> $cpackCmd"
@@ -207,6 +239,19 @@ if ($packages) {
     }
 } else {
     throw "No package files were generated in $PackageOutDir."
+}
+
+if ((& git -C $repoRoot.Path rev-parse HEAD).Trim() -ne ($packagedCommit -replace '-dirty$', '')) {
+    throw "HEAD changed while packaging from $packagedCommit; package again."
+}
+if (Test-Path -LiteralPath $updatePackage) {
+    Set-Content -LiteralPath $packagedCommitFile -Value $packagedCommit -Encoding ascii
+} else {
+    Write-Warning "NSIS update package not generated ($updatePackage); publish_update.py needs it."
+}
+Write-Host "  Packaged commit: $packagedCommit" -ForegroundColor Green
+if ($packagedCommit.EndsWith('-dirty')) {
+    Write-Warning "The worktree had uncommitted changes. publish_update.py will refuse this package."
 }
 
 # Only consume the number after configure, build, install verification, CPack,

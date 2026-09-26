@@ -43,6 +43,15 @@ function Assert-AnyFile {
 
 Assert-Directory $binDir
 
+# Bundled gRPC/RE2 development files (headers, static libs, CMake/pkg-config, roots.pem)
+# belong to the AlcedoGrpcDevelopment install component and must not reach the package.
+foreach ($developmentDir in @('include', 'lib', 'share')) {
+    $developmentPath = Join-Path $installRoot $developmentDir
+    if (Test-Path -LiteralPath $developmentPath) {
+        throw "Development files are in the install tree (install only the Unspecified component): $developmentPath"
+    }
+}
+
 $requiredFiles = @(
     'alcedo_main.exe',
     'alcedo_studio_ao.ico',
@@ -62,9 +71,16 @@ $requiredFiles = @(
     'msvcp140.dll',
     'fonts\main_Inter.ttf',
     'fonts\main_NotoSans_zh.ttf',
+    'lensfun.dll',
+    'editruntimecuda.dll',
+    'editruntimelens.dll',
+    'editscope.dll',
     'config\icc\rec709_gamma22.icc',
+    'config\lens_calib\lens_catalog.json',
+    'config\nikon_lens\id_map.json',
     'config\models\bayer.safetensors',
-    'config\models\xtrans.safetensors'
+    'config\models\xtrans.safetensors',
+    'configs\prompts\image_analysis_system_prompts.json'
 )
 
 foreach ($file in $requiredFiles) {

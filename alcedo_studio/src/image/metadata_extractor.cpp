@@ -34,6 +34,18 @@
 #include "json.hpp"
 #include "type/supported_file_type.hpp"
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <Windows.h>
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
+
 namespace alcedo {
 namespace {
 OIIO_NAMESPACE_USING
@@ -196,14 +208,65 @@ auto UInt64ToHexIdKey(uint64_t value, bool little_endian) -> std::string {
   return std::string(buffer);
 }
 
-auto LoadNikonLensIdLookup() -> NikonLensIdLookup {
-  NikonLensIdLookup                  db;
+auto GetExecutableDir() -> std::filesystem::path {
+#if defined(_WIN32)
+  std::wstring buffer(MAX_PATH, L'\0');
+  while (true) {
+    const DWORD copied =
+        GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (copied == 0) {
+      return {};
+    }
+    if (copied < buffer.size()) {
+      buffer.resize(copied);
+      return std::filesystem::path(buffer).parent_path();
+    }
+    buffer.resize(buffer.size() * 2);
+  }
+#elif defined(__APPLE__)
+  uint32_t size = 0;
+  if (_NSGetExecutablePath(nullptr, &size) != -1 || size == 0) {
+    return {};
+  }
+  std::string buffer(size, '\0');
+  if (_NSGetExecutablePath(buffer.data(), &size) != 0) {
+    return {};
+  }
+  return std::filesystem::path(buffer.c_str()).parent_path();
+#else
+  return {};
+#endif
+}
+
+/**
+ * @brief List the Nikon lens id map files to try, most authoritative first.
+ *
+ * Installed builds ship `config/nikon_lens/id_map.json` next to the executable. When that
+ * packaged directory exists it is the only candidate, so a missing packaged file is not
+ * masked by the build machine's source checkout. Build trees fall back to the source paths.
+ */
+auto NikonLensIdMapCandidates() -> std::vector<std::filesystem::path> {
+  const auto exe_dir = GetExecutableDir();
+  if (!exe_dir.empty()) {
+    const auto      packaged_dir = exe_dir / "config" / "nikon_lens";
+    std::error_code ec;
+    if (std::filesystem::is_directory(packaged_dir, ec) && !ec) {
+      return {packaged_dir / "id_map.json"};
+    }
+  }
+
   std::vector<std::filesystem::path> candidates;
 #ifdef CONFIG_PATH
   candidates.emplace_back(std::filesystem::path(CONFIG_PATH) / "nikon_lens" / "id_map.json");
 #endif
   candidates.emplace_back(std::filesystem::path("src/config/nikon_lens/id_map.json"));
   candidates.emplace_back(std::filesystem::path("alcedo/src/config/nikon_lens/id_map.json"));
+  return candidates;
+}
+
+auto LoadNikonLensIdLookup() -> NikonLensIdLookup {
+  NikonLensIdLookup db;
+  const auto        candidates = NikonLensIdMapCandidates();
 
   for (const auto& path : candidates) {
     std::error_code ec;

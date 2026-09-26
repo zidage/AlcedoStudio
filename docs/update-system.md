@@ -92,8 +92,15 @@ powershell -ExecutionPolicy Bypass -File scripts\package_windows.ps1
 ./scripts/package_macos.sh
 ```
 
-Use the NSIS `.exe` for Windows updates. Use the CPack `.zip` for macOS updates.
-Keep the DMG for manual / website download.
+Use the NSIS `.exe` for Windows updates. Use the `.zip` for macOS updates. Keep
+the DMG for manual / website download.
+
+On macOS, `cmake --install` deploys and signs the `.app` once. CPack packages that
+verified bundle into the DMG, and a CPack post-build script archives the same
+bundle into the ZIP with `ditto`, which keeps the extended attributes that hold
+code signatures. The package script then extracts the ZIP the way the in-app
+updater does, mounts the DMG, and verifies both bundles. Code signing
+(`--codesign-identity`) belongs to the install step, before these checks.
 
 Pass `-Channel beta` (Windows) or `--channel beta` (macOS) only when you are
 testing the updater. The matching VS Code tasks already pass those flags.
@@ -184,7 +191,11 @@ This script:
 2. Records `git rev-parse HEAD` as `commit`. A dirty worktree is refused.
 3. Finds the package in the fixed output directory: Windows uses the NSIS
    `build/release/package/*.exe`; macOS uses
-   `build/macos-release/package/*.zip` plus its `.dmg`.
+   `build/macos-release/package/*.zip` plus its `.dmg`. The package script
+   records the commit it packaged in `<package>.commit`. The script refuses the
+   package when that record is missing, when the worktree had uncommitted
+   changes at package time, or when the record is not the `commit` from step 2.
+   After you check out another commit, package again before you publish.
 4. Writes a **single-platform** `update-manifest.json` (schema 1) that embeds
    the approved notes, this platform's build, and the packaged commit.
 5. Signs with `alcedo_update_signer` and verifies the signature and package

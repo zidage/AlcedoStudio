@@ -97,6 +97,11 @@ required_files=(
   "${macos_dir}/fonts/main_Inter.ttf"
   "${macos_dir}/fonts/main_NotoSans_zh.ttf"
   "${macos_dir}/config/icc/rec709_gamma22.icc"
+  "${macos_dir}/config/lens_calib/lens_catalog.json"
+  "${macos_dir}/config/lens_calib/mil-sony.xml"
+  "${macos_dir}/config/nikon_lens/id_map.json"
+  "${macos_dir}/configs/prompts/image_analysis_system_prompts.json"
+  "${contents_dir}/Helpers/alcedo_update_installer"
   "${resources_dir}/duckdb_extensions/vss.duckdb_extension"
   "${resources_dir}/duckdb_extensions/fts.duckdb_extension"
   "${frameworks_dir}/QtCore.framework/QtCore"
@@ -104,6 +109,10 @@ required_files=(
   "${frameworks_dir}/QtQml.framework/QtQml"
   "${frameworks_dir}/QtQuick.framework/QtQuick"
   "${frameworks_dir}/QtWidgets.framework/QtWidgets"
+  "${frameworks_dir}/QtQuickShapes.framework/QtQuickShapes"
+  "${frameworks_dir}/QtQuickEffects.framework/QtQuickEffects"
+  "${resources_dir}/qml/QtQuick/Shapes/qmldir"
+  "${resources_dir}/qml/QtQuick/Effects/qmldir"
   "${plugins_dir}/platforms/libqcocoa.dylib"
 )
 
@@ -159,6 +168,12 @@ if otool -L "$mind_exe" | grep -q '@rpath/libswift'; then
 fi
 
 if command -v codesign >/dev/null 2>&1; then
+  # A signed bundle must still validate after CPack copies it into a package staging tree.
+  if codesign -dv "$app_dir" >/dev/null 2>&1; then
+    if ! codesign_verify_out="$(codesign --verify --deep --strict "$app_dir" 2>&1)"; then
+      fail "bundle code signature does not validate: ${codesign_verify_out}"
+    fi
+  fi
   main_codesign_details="$(codesign -dv --verbose=4 "$main_exe" 2>&1 || true)"
   if grep -q 'Signature=adhoc' <<<"$main_codesign_details" &&
      grep -q 'flags=.*runtime' <<<"$main_codesign_details"; then

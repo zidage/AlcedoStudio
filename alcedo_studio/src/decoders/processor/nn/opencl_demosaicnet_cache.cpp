@@ -111,6 +111,23 @@ auto OpenClDemosaicNetModelCache::ResolveModelDir(const OpenClDemosaicNetLoadOpt
   }
 #endif
 
+  // Packaged layouts: weights install next to the executable under config/models. An
+  // existing packaged directory is authoritative, so missing packaged weights fail with the
+  // packaged path instead of silently loading the build machine's source checkout.
+  const fs::path exe_dir = GetExecutableDir();
+  if (!exe_dir.empty()) {
+    const fs::path install_candidates[] = {
+        exe_dir / "config" / "models",
+        exe_dir / "models",
+    };
+    for (const fs::path& candidate : install_candidates) {
+      std::error_code ec;
+      if (fs::is_directory(candidate, ec) && !ec) {
+        return candidate;
+      }
+    }
+  }
+
 #ifdef ALCEDO_DEMOASICNET_MODEL_DIR
   {
     const fs::path compile_time{ALCEDO_DEMOASICNET_MODEL_DIR};
@@ -119,19 +136,6 @@ auto OpenClDemosaicNetModelCache::ResolveModelDir(const OpenClDemosaicNetLoadOpt
     }
   }
 #endif
-
-  const fs::path exe_dir = GetExecutableDir();
-  if (!exe_dir.empty()) {
-    const fs::path install_candidates[] = {
-        exe_dir / "config" / "models",
-        exe_dir / "models",
-    };
-    for (const fs::path& candidate : install_candidates) {
-      if (DirHasModels(candidate)) {
-        return candidate;
-      }
-    }
-  }
 
   const char* candidates[] = {
       "alcedo_studio/src/config/models",

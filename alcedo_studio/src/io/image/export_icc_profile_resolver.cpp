@@ -120,10 +120,19 @@ auto ResolveConfigProfileFileName(const ExportColorProfileConfig& config) -> std
 auto ResolveConfigSearchRoots() -> std::vector<std::filesystem::path> {
   std::vector<std::filesystem::path> roots;
 
+  // A packaged ICC directory next to the executable is authoritative: a profile missing from it
+  // must not be silently read from the build machine's source checkout.
   const auto exe_dir = GetExecutableDir();
   if (!exe_dir.empty()) {
-    roots.emplace_back(exe_dir / "config" / "icc");
-    roots.emplace_back(exe_dir / "icc");
+    for (const auto& packaged_root : {exe_dir / "config" / "icc", exe_dir / "icc"}) {
+      std::error_code ec;
+      if (std::filesystem::is_directory(packaged_root, ec) && !ec) {
+        roots.emplace_back(packaged_root);
+      }
+    }
+    if (!roots.empty()) {
+      return roots;
+    }
   }
 
 #ifdef CONFIG_PATH
