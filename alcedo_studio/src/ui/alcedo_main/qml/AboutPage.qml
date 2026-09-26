@@ -29,6 +29,7 @@ ColumnLayout {
 
     readonly property string docsUrl: "https://zidage.github.io/AlcedoStudio_docs/"
     readonly property string repoUrl: "https://github.com/zidage/AlcedoStudio"
+    readonly property string sponsorUrl: "https://github.com/zidage/AlcedoStudio/discussions/44"
 
     width: parent ? parent.width : implicitWidth
     spacing: appTheme.spaceXl
@@ -37,15 +38,15 @@ ColumnLayout {
         Qt.openUrlExternally(url)
     }
 
-    // 1. Documentation hero — the prominent, "guide the user" element. The docs
-    // site is the tutorial for this software, so it gets an accent-tinted card
-    // at the very top with a direct call to action.
+    // 1. Welcome hero — the first thing on the page. Guides the user to the
+    // documentation (the tutorial for this software), the GitHub repository,
+    // and the donation page.
     Rectangle {
         Layout.fillWidth: true
         Layout.topMargin: 26
         Layout.leftMargin: 34
         Layout.rightMargin: 34
-        Layout.preferredHeight: heroInner.implicitHeight + 32
+        Layout.preferredHeight: heroInner.implicitHeight + 44
         radius: appTheme.panelRadius
         color: appTheme.cardSurfaceColor
         border.width: 1
@@ -76,7 +77,7 @@ ColumnLayout {
 
                 Label {
                     Layout.fillWidth: true
-                    text: qsTr("New to Alcedo Studio?")
+                    text: qsTr("Welcome to Alcedo Studio")
                     color: page.textColor
                     font.family: page.headlineFontFamily
                     font.pixelSize: appTheme.fontSizeHeadline
@@ -86,7 +87,7 @@ ColumnLayout {
 
                 Label {
                     Layout.fillWidth: true
-                    text: qsTr("The documentation website is the best place to learn how this software works — how to import, edit, and manage your photos, step by step. It is the tutorial for Alcedo Studio, and it is kept up to date with each release.")
+                    text: qsTr("The documentation walks you through importing, editing, and managing your photos step by step. Follow development on GitHub, and if Alcedo Studio is useful to you, consider supporting it with a donation.")
                     color: page.mutedTextColor
                     font.family: page.uiFontFamily
                     font.pixelSize: appTheme.fontSizeBody
@@ -95,33 +96,28 @@ ColumnLayout {
                     lineHeight: 1.3
                 }
 
-                Button {
-                    id: docsButton
-                    Layout.topMargin: 4
-                    Layout.preferredHeight: appTheme.iconButtonHitSizeCompact
-                    text: qsTr("Open documentation")
-                    font.family: page.uiFontFamily
-                    font.pixelSize: appTheme.fontSizeSection
-                    font.weight: appTheme.fontWeightHeading
-                    onClicked: page.openUrl(page.docsUrl)
+                Flow {
+                    Layout.fillWidth: true
+                    Layout.topMargin: 8
+                    spacing: 10
 
-                    contentItem: Label {
-                        text: docsButton.text
-                        color: appTheme.editorListSelectedInkColor
-                        font: docsButton.font
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
+                    HeroButton {
+                        objectName: "aboutDocsButton"
+                        text: qsTr("Open documentation")
+                        primary: true
+                        onClicked: page.openUrl(page.docsUrl)
                     }
 
-                    background: Rectangle {
-                        radius: appTheme.controlRadius
-                        color: docsButton.down
-                               ? appTheme.buttonPressedFillColor
-                               : (docsButton.hovered
-                                  ? appTheme.buttonHoveredFillColor
-                                  : appTheme.editorListSelectedFillColor)
-                        border.width: 1
-                        border.color: appTheme.cardBorderColor
+                    HeroButton {
+                        objectName: "aboutGitHubButton"
+                        text: qsTr("Open GitHub")
+                        onClicked: page.openUrl(page.repoUrl)
+                    }
+
+                    HeroButton {
+                        objectName: "aboutSponsorButton"
+                        text: qsTr("Sponsor")
+                        onClicked: page.openUrl(page.sponsorUrl)
                     }
                 }
             }
@@ -509,6 +505,45 @@ ColumnLayout {
         ListElement { name: "utfcpp"; license: "Boost Software License 1.0" }
         ListElement { name: "uuid_v4 (Crashoz)"; license: "MIT" }
         ListElement { name: "xxHash (Yann Collet)"; license: "BSD-2-Clause" }
+    }
+
+    component HeroButton: Button {
+        id: heroButton
+
+        property bool primary: false
+
+        implicitHeight: appTheme.iconButtonHitSizeCompact
+        leftPadding: 18
+        rightPadding: 18
+        font.family: page.uiFontFamily
+        font.pixelSize: appTheme.fontSizeSection
+        font.weight: appTheme.fontWeightHeading
+
+        contentItem: Label {
+            text: heroButton.text
+            color: heroButton.primary ? "#FFFFFF" : page.textColor
+            font: heroButton.font
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+        }
+
+        background: Rectangle {
+            radius: appTheme.controlRadius
+            color: heroButton.primary
+                   ? (heroButton.down
+                      ? Qt.darker(page.primaryAccent, 1.16)
+                      : (heroButton.hovered ? Qt.lighter(page.primaryAccent, 1.06)
+                                            : page.primaryAccent))
+                   : (heroButton.down
+                      ? appTheme.buttonPressedFillColor
+                      : (heroButton.hovered ? appTheme.buttonHoveredFillColor
+                                            : appTheme.buttonIdleFillColor))
+            border.width: 1
+            border.color: heroButton.primary
+                          ? Qt.rgba(page.secondaryAccent.r, page.secondaryAccent.g,
+                                    page.secondaryAccent.b, 0.18)
+                          : appTheme.cardBorderColor
+        }
     }
 
     component SettingsSection: ColumnLayout {
