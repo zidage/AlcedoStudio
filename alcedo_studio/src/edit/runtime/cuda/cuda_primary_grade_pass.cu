@@ -251,11 +251,13 @@ __device__ auto ApplyAdjustment(float3 c, const CudaAdjustmentParams& p, const f
   const auto  behavior = static_cast<CudaAdjustmentBehavior>(p.behavior);
   const float value    = p.values[0];
   if (behavior == CudaAdjustmentBehavior::Cat02WhiteBalance && value != 0.0f) {
-    const float temperature = p.values[1] * 0.001f;
-    const float tint        = p.values[2] * 0.001f;
-    c.x *= exp2f(temperature - tint * 0.5f);
-    c.y *= exp2f(tint);
-    c.z *= exp2f(-temperature - tint * 0.5f);
+    // values[1..9]: row-major CAT02 adaptation in linear AP1 (resolved on the CPU).
+    const float3 linear = make_float3(cuda_acescc::Decode(c.x), cuda_acescc::Decode(c.y),
+                                      cuda_acescc::Decode(c.z));
+    const float* m      = p.values + 1;
+    c = make_float3(cuda_acescc::Encode(m[0] * linear.x + m[1] * linear.y + m[2] * linear.z),
+                    cuda_acescc::Encode(m[3] * linear.x + m[4] * linear.y + m[5] * linear.z),
+                    cuda_acescc::Encode(m[6] * linear.x + m[7] * linear.y + m[8] * linear.z));
   } else if (behavior == CudaAdjustmentBehavior::Exposure) {
     const float offset = value / 17.52f;
     c.x += offset;

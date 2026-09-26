@@ -5,7 +5,8 @@ import Alcedo.Main 1.0
 
 // Color Grade Look panel: global color amount, selective HSL, CDL
 // trackballs (Gamma top / Lift+Gain bottom), plus Detail and Texture.
-// White Balance lives on the RAW Decode page. LUT is LUTPanel.qml.
+// Camera white balance lives on the RAW Decode page; the Color section holds the
+// CAT02 grade white balance. LUT is LUTPanel.qml.
 Item {
     id: root
     objectName: "editorAdjustmentPanel_look"
@@ -32,6 +33,7 @@ Item {
 
     function wireEnabled() {
         const on = root.controlsEnabled
+        gradeWhiteBalanceModel.enabled = on
         saturationModel.enabled = on
         vibranceModel.enabled = on
         hlsModel.enabled = on
@@ -53,6 +55,8 @@ Item {
     function loadFromSnapshot(snapshot) {
         if (snapshot === undefined || snapshot === null)
             return
+        if (snapshot.grade_white_balance !== undefined)
+            gradeWhiteBalanceModel.loadFromSnapshot(snapshot)
         loadModelFromSnapshot(saturationModel, "saturation", snapshot)
         loadModelFromSnapshot(vibranceModel, "vibrance", snapshot)
         loadHlsFromSnapshot(snapshot)
@@ -178,6 +182,12 @@ Item {
             sharpenModel.value = num
     }
 
+
+    EditorGradeWhiteBalanceModel {
+        id: gradeWhiteBalanceModel
+        objectName: "lookGradeWhiteBalanceModel"
+        submitter: root.editorSession
+    }
 
     EditorAdjustmentValueModel {
         id: saturationModel
@@ -697,6 +707,45 @@ Item {
                     anchors.top: parent.top
                     anchors.margins: 6
                     spacing: 8
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: appTheme.spaceXs
+                        Text {
+                            Layout.fillWidth: true
+                            text: qsTr("White Balance")
+                            color: root.colText
+                            font.pixelSize: appTheme.fontSizeCaption
+                            font.weight: appTheme.fontWeightHeading
+                        }
+                        EditorInfoHint {
+                            objectName: "lookGradeWhiteBalanceInfoHint"
+                            text: qsTr("This white balance is a CAT02 chromatic adaptation in the grading color space. It assumes the image is already balanced to the ACES AP1 white point (about 6000 K), so the default is no change. It does not read the camera's data: use RAW Decode white balance to correct the capture, and this control for creative warming or cooling, including on JPEG and other non-RAW images. The same Kelvin value can look different here than on the RAW Decode page.")
+                        }
+                    }
+
+                    EditorWhiteBalanceSliders {
+                        Layout.fillWidth: true
+                        flickable: lookScroll
+                        slidersEnabled: root.controlsEnabled
+                        textColor: root.colText
+                        mutedColor: root.colMuted
+                        temperatureObjectName: "lookGradeTemperatureSlider"
+                        tintObjectName: "lookGradeTintSlider"
+                        temperature: gradeWhiteBalanceModel.temperature
+                        temperatureSliderPos: gradeWhiteBalanceModel.temperatureSliderPos
+                        tint: gradeWhiteBalanceModel.tint
+                        onTemperatureDragBegin: gradeWhiteBalanceModel.beginTemperatureDrag()
+                        onTemperatureDragUpdate: function (pos) {
+                            gradeWhiteBalanceModel.updateTemperatureSliderDrag(pos)
+                        }
+                        onTemperatureDragFinish: gradeWhiteBalanceModel.finishTemperatureDrag()
+                        onTemperatureReset: gradeWhiteBalanceModel.resetTemperature()
+                        onTintDragBegin: gradeWhiteBalanceModel.beginTintDrag()
+                        onTintDragUpdate: function (value) { gradeWhiteBalanceModel.updateTintDrag(value) }
+                        onTintDragFinish: gradeWhiteBalanceModel.finishTintDrag()
+                        onTintReset: gradeWhiteBalanceModel.resetTint()
+                    }
 
                     AdjustmentSlider {
                         objectName: "lookSaturationSlider"

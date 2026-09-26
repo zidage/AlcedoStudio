@@ -17,14 +17,21 @@
 #include <QVariantList>
 #include <algorithm>
 #include <memory>
+#include <optional>
+#include <string>
 #include <variant>
 #include <vector>
 
+#include "app/editor_panel_projection.hpp"
+#include "edit/graph/pipeline_document.hpp"
+#include "edit/operators/models/cat02_white_balance_model.hpp"
 #include "json.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
 #include "ui/alcedo_main/album_backend/editor_cdl_trackball_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_color_temp_model.hpp"
+#include "ui/alcedo_main/album_backend/editor_grade_white_balance_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_hls_model.hpp"
+#include "ui/alcedo_main/album_backend/editor_panel_presentation.hpp"
 #include "ui/alcedo_main/album_backend/editor_lut_catalog_model.hpp"
 #include "ui/alcedo_main/editor_support/modules/color_temp.hpp"
 #include "ui/alcedo_main/editor_support/modules/hls.hpp"
@@ -161,6 +168,114 @@ TEST(EditorLookModelTest, ColorTempCanEditFalseDropsSubmits) {
   model.beginCctDrag();
   model.updateCctDrag(6000.0);
   model.finishCctDrag();
+  EXPECT_TRUE(sub.calls.empty());
+}
+
+// ── Grade white balance (CAT02) ─────────────────────────────────────────────
+
+TEST(EditorLookModelTest, GradeWhiteBalanceDefaultsToAp1WhiteWithoutSubmitting) {
+  RecordingSubmitter           sub;
+  EditorGradeWhiteBalanceModel model;
+  model.setSubmitter(&sub);
+  EXPECT_EQ(model.fieldKey(), QStringLiteral("grade_white_balance"));
+  EXPECT_NEAR(model.temperature(), alcedo::kCat02DefaultTemperature, 1e-3);
+  EXPECT_NEAR(model.tint(), alcedo::kCat02DefaultTint, 1e-3);
+  EXPECT_EQ(model.temperatureSliderPos(), color_temp::kSliderUiMid);
+  EXPECT_TRUE(sub.calls.empty());
+}
+
+TEST(EditorLookModelTest, GradeWhiteBalanceTemperatureDragSubmitsCat02UpdateAndSettlesOnce) {
+  RecordingSubmitter           sub;
+  EditorGradeWhiteBalanceModel model;
+  model.setSubmitter(&sub);
+
+  model.beginTemperatureDrag();
+  model.updateTemperatureSliderDrag(color_temp::CctToSliderPos(5000.0f));
+  model.updateTemperatureSliderDrag(color_temp::CctToSliderPos(4500.0f));
+  model.finishTemperatureDrag();
+
+  EXPECT_GE(sub.interactiveCount(), 1);
+  EXPECT_EQ(sub.settledCount(), 1);
+  ASSERT_NE(sub.lastSettled(), nullptr);
+  EXPECT_EQ(sub.lastSettled()->fieldKey, QStringLiteral("grade_white_balance"));
+  const auto* update = std::get_if<alcedo::Cat02WhiteBalanceUpdate>(sub.lastSettledWrite());
+  ASSERT_NE(update, nullptr);
+  ASSERT_TRUE(update->temperature.has_value());
+  EXPECT_NEAR(*update->temperature, model.temperature(), 1e-3);
+  EXPECT_NEAR(*update->temperature, 4500.0, 25.0);
+  ASSERT_TRUE(update->tint.has_value());
+  EXPECT_NEAR(*update->tint, alcedo::kCat02DefaultTint, 1e-3);
+  EXPECT_FALSE(update->enabled.has_value());
+}
+
+TEST(EditorLookModelTest, GradeWhiteBalanceEmptyClickDoesNotSettle) {
+  RecordingSubmitter           sub;
+  EditorGradeWhiteBalanceModel model;
+  model.setSubmitter(&sub);
+  model.beginTintDrag();
+  model.finishTintDrag();
+  EXPECT_TRUE(sub.calls.empty());
+}
+
+TEST(EditorLookModelTest, GradeWhiteBalanceResetRestoresAp1WhitePerSlider) {
+  RecordingSubmitter           sub;
+  EditorGradeWhiteBalanceModel model;
+  model.setSubmitter(&sub);
+  model.setTemperature(3500.0);
+  model.setTint(40.0);
+
+  model.resetTemperature();
+  EXPECT_NEAR(model.temperature(), alcedo::kCat02DefaultTemperature, 1e-3);
+  EXPECT_NEAR(model.tint(), 40.0, 1e-3);
+  EXPECT_EQ(sub.settledCount(), 1);
+
+  model.resetTint();
+  EXPECT_NEAR(model.tint(), alcedo::kCat02DefaultTint, 1e-3);
+  EXPECT_EQ(sub.settledCount(), 2);
+
+  // Already at default: no extra history commit.
+  model.resetTint();
+  EXPECT_EQ(sub.settledCount(), 2);
+}
+
+TEST(EditorLookModelTest, GradeWhiteBalanceLoadsProjectionWithoutSubmitting) {
+  RecordingSubmitter           sub;
+  EditorGradeWhiteBalanceModel model;
+  model.setSubmitter(&sub);
+  QVariantMap inner;
+  inner.insert(QStringLiteral("temperature"), 5200.0);
+  inner.insert(QStringLiteral("tint"), -6.0);
+  QVariantMap snapshot;
+  snapshot.insert(QStringLiteral("grade_white_balance"), inner);
+
+  model.loadFromSnapshot(snapshot);
+  EXPECT_NEAR(model.temperature(), 5200.0, 1e-3);
+  EXPECT_NEAR(model.tint(), -6.0, 1e-3);
+  EXPECT_TRUE(sub.calls.empty());
+}
+
+TEST(EditorLookModelTest, GradeWhiteBalanceLoadsStoredValuesFromPanelSnapshotOnSourceSwitch) {
+  auto  document = alcedo::CreateDefaultPipelineDocument();
+  auto* cat02    = dynamic_cast<alcedo::Cat02WhiteBalanceModel*>(
+      document.PrimaryGrade()->FindAdjustmentByType(alcedo::type_ids::Cat02WhiteBalance()));
+  ASSERT_NE(cat02, nullptr);
+  cat02->ApplyUpdate(alcedo::Cat02WhiteBalanceUpdate{std::nullopt, 4100.0f, -22.0f});
+
+  alcedo::EditorPanelProjection projection;
+  std::string                   error;
+  ASSERT_TRUE(alcedo::ProjectCurrentPanelFields(document, 1, &projection, &error)) << error;
+  const auto snapshot = PanelProjectionToVariantMap(projection);
+
+  RecordingSubmitter           sub;
+  EditorGradeWhiteBalanceModel model;
+  model.setSubmitter(&sub);
+  model.setTemperature(7300.0);
+  model.setTint(35.0);
+
+  // The editor passes the whole adjustment snapshot when the image, layer, or mask changes.
+  model.loadFromSnapshot(snapshot);
+  EXPECT_NEAR(model.temperature(), 4100.0, 1e-3);
+  EXPECT_NEAR(model.tint(), -22.0, 1e-3);
   EXPECT_TRUE(sub.calls.empty());
 }
 

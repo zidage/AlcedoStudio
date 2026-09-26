@@ -203,11 +203,13 @@ static inline float3 ApplyAdjustment(float3 c, __global const GradeAdjustmentPar
   const uint  behavior = p->behavior;
   const float value    = p->values[0];
   if (behavior == 0u && value != 0.0f) {
-    const float temperature = p->values[1] * 0.001f;
-    const float tint        = p->values[2] * 0.001f;
-    c.x *= exp2(temperature - tint * 0.5f);
-    c.y *= exp2(tint);
-    c.z *= exp2(-temperature - tint * 0.5f);
+    // values[1..9]: row-major CAT02 adaptation in linear AP1 (resolved on the CPU).
+    __global const float* m   = p->values + 1;
+    const float3          lin = (float3)(ContrastAcesccDecode(c.x), ContrastAcesccDecode(c.y),
+                                         ContrastAcesccDecode(c.z));
+    c = (float3)(ContrastAcesccEncode(m[0] * lin.x + m[1] * lin.y + m[2] * lin.z),
+                 ContrastAcesccEncode(m[3] * lin.x + m[4] * lin.y + m[5] * lin.z),
+                 ContrastAcesccEncode(m[6] * lin.x + m[7] * lin.y + m[8] * lin.z));
   } else if (behavior == 1u) {
     const float offset = value / 17.52f;
     c.x += offset;

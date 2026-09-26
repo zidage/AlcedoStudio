@@ -12,6 +12,7 @@
 #include <string>
 
 #include "edit/geometry/resolved_render_geometry.hpp"
+#include "edit/graph/develop_color_transform.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/cat02_white_balance_model.hpp"
 #include "edit/operators/models/color_wheel_model.hpp"
@@ -200,10 +201,16 @@ auto MakeGradeRuntimeParams(const IOperatorModel& model, AdjustmentBehavior beha
       return RequireModel<Cat02WhiteBalanceModel>(model).Read(
           [behavior](const Cat02WhiteBalancePayload& payload) {
             GradeAdjustmentParams packed;
-            packed.behavior  = static_cast<std::uint32_t>(behavior);
-            packed.values[0] = payload.enabled ? 1.0f : 0.0f;
-            packed.values[1] = payload.temperature_offset;
-            packed.values[2] = payload.tint_offset;
+            packed.behavior = static_cast<std::uint32_t>(behavior);
+            // values[0] != 0 selects the kernel branch; the AP1 white default is identity.
+            const bool identity = payload.temperature == kCat02DefaultTemperature &&
+                                  payload.tint == kCat02DefaultTint;
+            if (!payload.enabled || identity) {
+              return packed;
+            }
+            const auto matrix = BuildAp1Cat02WhiteBalanceMatrix(payload.temperature, payload.tint);
+            packed.values[0]  = 1.0f;
+            std::copy(matrix.begin(), matrix.end(), packed.values + 1);
             return packed;
           });
     case AdjustmentBehavior::Curve:

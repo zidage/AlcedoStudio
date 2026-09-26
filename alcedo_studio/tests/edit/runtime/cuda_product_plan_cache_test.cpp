@@ -178,7 +178,7 @@ TEST(GpuDagCudaDrtProduct,
   EXPECT_EQ(cropped->GetCPUData().rows, 19);
 }
 
-TEST(GpuDagCudaDrtProduct, ProductRendererRendersCat02TintOffsetWithoutTintAdjustment) {
+TEST(GpuDagCudaDrtProduct, ProductRendererRendersCat02TintWithoutTintAdjustment) {
   if (!HasCudaDevice()) GTEST_SKIP() << "No CUDA device available.";
 
   auto document = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
@@ -186,8 +186,8 @@ TEST(GpuDagCudaDrtProduct, ProductRendererRendersCat02TintOffsetWithoutTintAdjus
   auto* cat02 = dynamic_cast<Cat02WhiteBalanceModel*>(
       document->PrimaryGrade()->FindAdjustmentByType(type_ids::Cat02WhiteBalance()));
   ASSERT_NE(cat02, nullptr);
-  cat02->SetTintOffset(18.0f);
-  EXPECT_FLOAT_EQ(cat02->TintOffset(), 18.0f);
+  cat02->SetTint(18.0f);
+  EXPECT_FLOAT_EQ(cat02->Tint(), 18.0f);
   gpu_dag_test::EnsureTestCameraProfile(*document);
   CudaProductRenderer renderer(document, MakeUnpacker());
   const auto          image = MakeEncodedImage(41);

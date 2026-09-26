@@ -5,6 +5,9 @@
 #include "edit/operators/models/cat02_white_balance_model.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <stdexcept>
+#include <utility>
 
 #include "edit/operators/models/json_read.hpp"
 
@@ -12,7 +15,8 @@ namespace alcedo {
 
 auto Cat02WhiteBalanceModel::IsDefault() const -> bool {
   return Read([](const Cat02WhiteBalancePayload& payload) {
-    return payload.enabled && payload.temperature_offset == 0.0f && payload.tint_offset == 0.0f;
+    return payload.enabled && payload.temperature == kCat02DefaultTemperature &&
+           payload.tint == kCat02DefaultTint;
   });
 }
 
@@ -20,22 +24,27 @@ void Cat02WhiteBalanceModel::SetEnabled(bool enabled) {
   ApplyUpdate(Cat02WhiteBalanceUpdate{enabled, std::nullopt, std::nullopt});
 }
 
-void Cat02WhiteBalanceModel::SetTemperatureOffset(float offset) {
-  const float clamped = std::clamp(offset, -100.0f, 100.0f);
-  ApplyUpdate(Cat02WhiteBalanceUpdate{std::nullopt, clamped, std::nullopt});
+void Cat02WhiteBalanceModel::SetTemperature(float kelvin) {
+  ApplyUpdate(Cat02WhiteBalanceUpdate{std::nullopt, kelvin, std::nullopt});
 }
 
-void Cat02WhiteBalanceModel::SetTintOffset(float offset) {
-  const float clamped = std::clamp(offset, -100.0f, 100.0f);
-  ApplyUpdate(Cat02WhiteBalanceUpdate{std::nullopt, std::nullopt, clamped});
+void Cat02WhiteBalanceModel::SetTint(float tint) {
+  ApplyUpdate(Cat02WhiteBalanceUpdate{std::nullopt, std::nullopt, tint});
 }
 
 void Cat02WhiteBalanceModel::ApplyUpdate(Cat02WhiteBalanceUpdate update) {
-  if (update.temperature_offset.has_value()) {
-    update.temperature_offset = std::clamp(*update.temperature_offset, -100.0f, 100.0f);
+  if (update.temperature.has_value()) {
+    if (!std::isfinite(*update.temperature)) {
+      throw std::invalid_argument("CAT02 white balance temperature must be finite");
+    }
+    update.temperature =
+        std::clamp(*update.temperature, kCat02TemperatureMin, kCat02TemperatureMax);
   }
-  if (update.tint_offset.has_value()) {
-    update.tint_offset = std::clamp(*update.tint_offset, -100.0f, 100.0f);
+  if (update.tint.has_value()) {
+    if (!std::isfinite(*update.tint)) {
+      throw std::invalid_argument("CAT02 white balance tint must be finite");
+    }
+    update.tint = std::clamp(*update.tint, kCat02TintMin, kCat02TintMax);
   }
   MutateWithDirtyFields([update = std::move(update)](Cat02WhiteBalancePayload& payload) {
     DirtyFieldMask changed;
@@ -43,13 +52,12 @@ void Cat02WhiteBalanceModel::ApplyUpdate(Cat02WhiteBalanceUpdate update) {
       payload.enabled = *update.enabled;
       changed |= DirtyFieldMask{Cat02WhiteBalanceDirty::Enabled};
     }
-    if (update.temperature_offset.has_value() &&
-        payload.temperature_offset != *update.temperature_offset) {
-      payload.temperature_offset = *update.temperature_offset;
+    if (update.temperature.has_value() && payload.temperature != *update.temperature) {
+      payload.temperature = *update.temperature;
       changed |= DirtyFieldMask{Cat02WhiteBalanceDirty::Temperature};
     }
-    if (update.tint_offset.has_value() && payload.tint_offset != *update.tint_offset) {
-      payload.tint_offset = *update.tint_offset;
+    if (update.tint.has_value() && payload.tint != *update.tint) {
+      payload.tint = *update.tint;
       changed |= DirtyFieldMask{Cat02WhiteBalanceDirty::Tint};
     }
     return changed;
@@ -60,25 +68,26 @@ auto Cat02WhiteBalanceModel::Enabled() const -> bool {
   return Read([](const Cat02WhiteBalancePayload& payload) { return payload.enabled; });
 }
 
-auto Cat02WhiteBalanceModel::TemperatureOffset() const -> float {
-  return Read([](const Cat02WhiteBalancePayload& payload) { return payload.temperature_offset; });
+auto Cat02WhiteBalanceModel::Temperature() const -> float {
+  return Read([](const Cat02WhiteBalancePayload& payload) { return payload.temperature; });
 }
 
-auto Cat02WhiteBalanceModel::TintOffset() const -> float {
-  return Read([](const Cat02WhiteBalancePayload& payload) { return payload.tint_offset; });
+auto Cat02WhiteBalanceModel::Tint() const -> float {
+  return Read([](const Cat02WhiteBalancePayload& payload) { return payload.tint; });
 }
 
 auto Cat02WhiteBalanceModel::ToJson() const -> nlohmann::json {
   const auto payload = PayloadCopy();
   return nlohmann::json{{"enabled", payload.enabled},
-                        {"temperature_offset", payload.temperature_offset},
-                        {"tint_offset", payload.tint_offset}};
+                        {"temperature", payload.temperature},
+                        {"tint", payload.tint}};
 }
 
 void Cat02WhiteBalanceModel::LoadJson(const nlohmann::json& json) {
-  SetEnabled(json_util::ReadBool(json, "enabled", true));
-  SetTemperatureOffset(json_util::ReadFloat(json, "temperature_offset", 0.0f));
-  SetTintOffset(json_util::ReadFloat(json, "tint_offset", 0.0f));
+  ApplyUpdate(Cat02WhiteBalanceUpdate{
+      json_util::ReadBool(json, "enabled", true),
+      json_util::ReadFloat(json, "temperature", kCat02DefaultTemperature),
+      json_util::ReadFloat(json, "tint", kCat02DefaultTint)});
 }
 
 }  // namespace alcedo

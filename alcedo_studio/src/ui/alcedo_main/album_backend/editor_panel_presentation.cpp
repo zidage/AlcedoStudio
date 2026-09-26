@@ -82,6 +82,11 @@ auto FieldMap(const alcedo::EditorPanelFieldPresentation& field) -> QVariantMap 
           temp.insert(QStringLiteral("as_shot_cct"), value.as_shot_cct);
           temp.insert(QStringLiteral("as_shot_tint"), value.as_shot_tint);
           map.insert(QStringLiteral("color_temp"), temp);
+        } else if constexpr (std::is_same_v<T, alcedo::EditorPanelGradeWhiteBalanceValue>) {
+          QVariantMap white_balance;
+          white_balance.insert(QStringLiteral("temperature"), value.temperature);
+          white_balance.insert(QStringLiteral("tint"), value.tint);
+          map.insert(QStringLiteral("grade_white_balance"), white_balance);
         } else if constexpr (std::is_same_v<T, alcedo::EditorPanelRawDecodeValue>) {
           QVariantMap raw;
           raw.insert(QStringLiteral("method"), String(value.method));

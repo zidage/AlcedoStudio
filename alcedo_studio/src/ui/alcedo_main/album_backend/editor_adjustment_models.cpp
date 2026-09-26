@@ -19,6 +19,7 @@
 #include "ui/alcedo_main/album_backend/editor_cdl_trackball_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_color_temp_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_geometry_math.hpp"
+#include "ui/alcedo_main/album_backend/editor_grade_white_balance_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_hls_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_lens_catalog_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_lut_catalog_model.hpp"
@@ -464,6 +465,8 @@ void RegisterEditorAdjustmentQmlTypes() {
   qmlRegisterType<EditorToneCurveModel>("Alcedo.Main", 1, 0, "EditorToneCurveModel");
   qmlRegisterType<EditorToneCurveItem>("Alcedo.Main", 1, 0, "EditorToneCurveItem");
   qmlRegisterType<EditorColorTempModel>("Alcedo.Main", 1, 0, "EditorColorTempModel");
+  qmlRegisterType<EditorGradeWhiteBalanceModel>("Alcedo.Main", 1, 0,
+                                                "EditorGradeWhiteBalanceModel");
   qmlRegisterType<EditorHlsModel>("Alcedo.Main", 1, 0, "EditorHlsModel");
   qmlRegisterType<EditorCdlTrackballModel>("Alcedo.Main", 1, 0, "EditorCdlTrackballModel");
   qmlRegisterType<EditorCdlTrackballItem>("Alcedo.Main", 1, 0, "EditorCdlTrackballItem");

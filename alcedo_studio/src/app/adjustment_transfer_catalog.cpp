@@ -35,7 +35,7 @@ auto Fail(std::string* error, std::string message) -> std::nullopt_t {
 /// Adjustment Stack and the Copy dialog do; unknown types fall back to the
 /// registered catalog name.
 auto AdjustmentDisplayName(const OperatorTypeId& type) -> std::string {
-  if (type == type_ids::Cat02WhiteBalance()) return "White Balance";
+  if (type == type_ids::Cat02WhiteBalance()) return "Grade White Balance";
   if (type == type_ids::White()) return "Whites";
   if (type == type_ids::Black()) return "Blacks";
   if (type == type_ids::Curve()) return "Tone Curve";
@@ -90,7 +90,11 @@ auto AdjustmentDisplayValue(const IOperatorModel& model) -> std::string {
   const auto params = model.ToJson();
   const auto type   = model.Type();
   if (type == type_ids::Cat02WhiteBalance()) {
-    return BoolText(params.value("enabled", true));
+    if (!params.value("enabled", true)) {
+      return BoolText(false);
+    }
+    return FixedNumber(params.value("temperature", 0.0), 0) + " K, tint " +
+           FixedNumber(params.value("tint", 0.0), 0);
   }
   if (type == type_ids::Curve()) {
     if (params.contains("points") && params["points"].is_array()) {

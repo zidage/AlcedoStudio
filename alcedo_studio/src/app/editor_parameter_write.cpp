@@ -120,10 +120,11 @@ void ApplyColorGradeWrite(IOperatorModel& model, std::string_view field,
     typed->SetPoints(RequireWrite<EditorCurveWrite>(write, field).points);
     return;
   }
-  if (field == "tint") {
+  if (field == "grade_white_balance") {
     auto* typed = dynamic_cast<Cat02WhiteBalanceModel*>(&model);
     if (typed == nullptr) {
-      throw std::invalid_argument("Adjustment Model type does not match field tint");
+      throw std::invalid_argument(
+          "Adjustment Model type does not match field grade_white_balance");
     }
     typed->ApplyUpdate(RequireWrite<Cat02WhiteBalanceUpdate>(write, field));
     return;

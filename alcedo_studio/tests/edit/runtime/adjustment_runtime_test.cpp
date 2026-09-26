@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cstddef>
 #include <cstring>
 #include <optional>
 #include <span>
@@ -13,6 +14,7 @@
 #include <vector>
 
 #include "edit/geometry/render_geometry_resolver.hpp"
+#include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/operators/models/cat02_white_balance_model.hpp"
 #include "edit/operators/models/color_wheel_model.hpp"
@@ -175,13 +177,22 @@ TEST(GpuDagAdjustmentRuntime, PackedGradeParamsMatchOwnerFieldsWithoutFullDtoCop
   EXPECT_FLOAT_EQ(packed_exposure.values[0], 1.25f);
 
   Cat02WhiteBalanceModel wb;
+  const auto packed_default_wb =
+      MakeGradeRuntimeParams(wb, AdjustmentBehavior::Cat02WhiteBalance);
+  EXPECT_EQ(packed_default_wb.behavior,
+            static_cast<std::uint32_t>(AdjustmentBehavior::Cat02WhiteBalance));
+  EXPECT_FLOAT_EQ(packed_default_wb.values[0], 0.0f);
+  wb.ApplyUpdate(Cat02WhiteBalanceUpdate{std::nullopt, 4500.0f, -3.0f});
+  const auto packed_wb      = MakeGradeRuntimeParams(wb, AdjustmentBehavior::Cat02WhiteBalance);
+  const auto expected_wb    = BuildAp1Cat02WhiteBalanceMatrix(4500.0, -3.0);
+  EXPECT_FLOAT_EQ(packed_wb.values[0], 1.0f);
+  for (std::size_t i = 0; i < expected_wb.size(); ++i) {
+    EXPECT_FLOAT_EQ(packed_wb.values[i + 1], expected_wb[i]) << i;
+  }
   wb.SetEnabled(false);
-  wb.SetTemperatureOffset(12.0f);
-  wb.SetTintOffset(-3.0f);
-  const auto packed_wb = MakeGradeRuntimeParams(wb, AdjustmentBehavior::Cat02WhiteBalance);
-  EXPECT_FLOAT_EQ(packed_wb.values[0], 0.0f);
-  EXPECT_FLOAT_EQ(packed_wb.values[1], 12.0f);
-  EXPECT_FLOAT_EQ(packed_wb.values[2], -3.0f);
+  const auto packed_disabled_wb =
+      MakeGradeRuntimeParams(wb, AdjustmentBehavior::Cat02WhiteBalance);
+  EXPECT_FLOAT_EQ(packed_disabled_wb.values[0], 0.0f);
 
   CurveModel curve;
   curve.SetPoints({{0.0f, 0.0f}, {0.5f, 0.6f}, {1.0f, 1.0f}});

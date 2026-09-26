@@ -59,9 +59,9 @@ auto IsDevelopField(std::string_view field) -> bool {
 auto IsColorGradeField(std::string_view field) -> bool {
   return field == "exposure" || field == "contrast" || field == "white" || field == "whites" ||
          field == "black" || field == "blacks" || field == "shadows" || field == "highlights" ||
-         field == "curve" || field == "saturation" || field == "vibrance" || field == "tint" ||
-         field == "hls" || field == "HLS" || field == "color_wheel" || field == "lut" ||
-         field == "ocio_lmt";
+         field == "curve" || field == "saturation" || field == "vibrance" ||
+         field == "grade_white_balance" || field == "hls" || field == "HLS" ||
+         field == "color_wheel" || field == "lut" || field == "ocio_lmt";
 }
 
 auto OperatorTypeForField(std::string_view field) -> const OperatorTypeId* {
@@ -74,7 +74,7 @@ auto OperatorTypeForField(std::string_view field) -> const OperatorTypeId* {
   if (field == "curve") return &type_ids::Curve();
   if (field == "saturation") return &type_ids::Saturation();
   if (field == "vibrance") return &type_ids::Vibrance();
-  if (field == "tint") return &type_ids::Cat02WhiteBalance();
+  if (field == "grade_white_balance") return &type_ids::Cat02WhiteBalance();
   if (field == "hls" || field == "HLS") return &type_ids::Hls();
   if (field == "color_wheel") return &type_ids::ColorWheel();
   if (field == "lut" || field == "ocio_lmt") return &type_ids::Lmt();

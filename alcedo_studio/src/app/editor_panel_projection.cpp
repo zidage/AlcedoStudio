@@ -271,17 +271,18 @@ auto ReadColorWheel(const PipelineDocument& document, const EditorParameterTarge
   return FinishField(target, std::move(value), out);
 }
 
-auto ReadTint(const PipelineDocument& document, const EditorParameterTarget& target,
-              EditorPanelFieldPresentation* out, std::string* error) -> bool {
+auto ReadGradeWhiteBalance(const PipelineDocument& document, const EditorParameterTarget& target,
+                           EditorPanelFieldPresentation* out, std::string* error) -> bool {
   const auto* model = ColorGradeModel(document, target, error);
   if (model == nullptr) {
     return false;
   }
   const auto* typed = dynamic_cast<const Cat02WhiteBalanceModel*>(model);
   if (typed == nullptr) {
-    return SetError(error, "Adjustment Model type does not match field tint");
+    return SetError(error, "Adjustment Model type does not match field grade_white_balance");
   }
-  return FinishField(target, EditorPanelScalarValue{"tint", typed->TintOffset()}, out);
+  return FinishField(target, EditorPanelGradeWhiteBalanceValue{typed->Temperature(), typed->Tint()},
+                     out);
 }
 
 auto ReadClarity(const PipelineDocument& document, const EditorParameterTarget& target,
@@ -448,7 +449,7 @@ auto EditorPanelAdapterTable::Production() -> EditorPanelAdapterTable {
     table.Add({"curve", "tone", &ReadCurve, true});
     table.Add({"saturation", "look", &ReadSaturation, true});
     table.Add({"vibrance", "look", &ReadVibrance, true});
-    table.Add({"tint", "look", &ReadTint, true});
+    table.Add({"grade_white_balance", "look", &ReadGradeWhiteBalance, true});
     table.Add({"hls", "look", &ReadHls, true});
     table.Add({"color_wheel", "look", &ReadColorWheel, true});
     table.Add({"lut", "lut", &ReadLut, true});

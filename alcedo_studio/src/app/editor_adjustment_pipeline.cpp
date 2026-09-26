@@ -26,7 +26,7 @@ constexpr std::array<std::pair<std::string_view, EditorAdjustmentField>, 26> kFi
     {"curve", EditorAdjustmentField::Curve},
     {"saturation", EditorAdjustmentField::Saturation},
     {"vibrance", EditorAdjustmentField::Vibrance},
-    {"tint", EditorAdjustmentField::Tint},
+    {"grade_white_balance", EditorAdjustmentField::GradeWhiteBalance},
     {"hls", EditorAdjustmentField::Hls},
     {"HLS", EditorAdjustmentField::Hls},
     {"color_wheel", EditorAdjustmentField::ColorWheel},

@@ -10,6 +10,7 @@
 #include <limits>
 #include <opencv2/core.hpp>
 #include <span>
+#include <stdexcept>
 #include <utility>
 
 #include "edit/operators/basic/planckian_locus_table.hpp"
@@ -20,10 +21,10 @@ namespace {
 
 constexpr double kCalibrationLowCCT  = 2856.0;
 constexpr double kCalibrationHighCCT = 6504.0;
-constexpr double kCustomCCTMin       = 2000.0;
-constexpr double kCustomCCTMax       = 15000.0;
-constexpr double kCustomTintMin      = -150.0;
-constexpr double kCustomTintMax      = 150.0;
+constexpr double kCustomCCTMin       = kWhiteBalanceCctMin;
+constexpr double kCustomCCTMax       = kWhiteBalanceCctMax;
+constexpr double kCustomTintMin      = kWhiteBalanceTintMin;
+constexpr double kCustomTintMax      = kWhiteBalanceTintMax;
 constexpr double kTintScale          = 3000.0;
 constexpr double kDeterminantEpsilon = 1e-10;
 constexpr double kValueEpsilon       = 1e-10;
@@ -816,6 +817,55 @@ auto ColorTransformErrorMessage(ColorTransformError error) -> std::string_view {
       return "DNG profile is referenced but was not loaded from the source file";
   }
   return "color transform error";
+}
+
+auto WhiteBalanceTemperatureTintToXy(double cct, double tint) -> std::array<double, 2> {
+  const cv::Vec2d xy = UVToXY(TemperatureTintToUV(ClampFinite(cct, kCustomCCTMin, kCustomCCTMax),
+                                                  ClampFinite(tint, kCustomTintMin, kCustomTintMax)));
+  return {xy[0], xy[1]};
+}
+
+auto WhiteBalanceXyToTemperatureTint(const std::array<double, 2>& xy)
+    -> std::optional<WhiteBalanceTemperatureTint> {
+  if (!std::isfinite(xy[0]) || !std::isfinite(xy[1])) {
+    return std::nullopt;
+  }
+  WhiteBalanceTemperatureTint result;
+  if (!UVToTemperatureTint(XYToUV(cv::Vec2d(xy[0], xy[1])), result.cct, result.tint)) {
+    return std::nullopt;
+  }
+  return result;
+}
+
+auto AcesWhiteTemperatureTint() -> const WhiteBalanceTemperatureTint& {
+  static const WhiteBalanceTemperatureTint kAcesWhite = [] {
+    const auto solved = WhiteBalanceXyToTemperatureTint(kAcesWhiteXy);
+    if (!solved.has_value()) {
+      throw std::logic_error("ACES white point has no CCT/tint solution");
+    }
+    return *solved;
+  }();
+  return kAcesWhite;
+}
+
+auto BuildAp1Cat02WhiteBalanceMatrix(double cct, double tint) -> std::array<float, 9> {
+  // CIE CAT02 (CIECAM02) XYZ -> LMS and its inverse.
+  static const cv::Matx33d kCat02(0.7328, 0.4296, -0.1624, -0.7036, 1.6975, 0.0061, 0.0030,
+                                  0.0136, 0.9834);
+  static const cv::Matx33d kCat02Inv = kCat02.inv();
+  static const cv::Matx33d kAp1ToXyz = kXyzD60ToAp1.inv();
+
+  const auto      source_xy = WhiteBalanceTemperatureTintToXy(cct, tint);
+  const cv::Vec3d src_lms   = kCat02 * XYToXYZ(cv::Vec2d(source_xy[0], source_xy[1]));
+  const cv::Vec3d dst_lms   = kCat02 * XYToXYZ(cv::Vec2d(kAcesWhiteXy[0], kAcesWhiteXy[1]));
+  const cv::Matx33d gain    = cv::Matx33d::diag(cv::Vec3d(
+      dst_lms[0] / std::max(src_lms[0], kValueEpsilon),
+      dst_lms[1] / std::max(src_lms[1], kValueEpsilon),
+      dst_lms[2] / std::max(src_lms[2], kValueEpsilon)));
+  const cv::Matx33d adaptation = kXyzD60ToAp1 * kCat02Inv * gain * kCat02 * kAp1ToXyz;
+  std::array<float, 9> result{};
+  StoreMatrix(adaptation, result);
+  return result;
 }
 
 }  // namespace alcedo

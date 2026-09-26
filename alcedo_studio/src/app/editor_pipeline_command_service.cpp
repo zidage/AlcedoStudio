@@ -534,15 +534,14 @@ auto ParseSharpenUpdate(const nlohmann::json& params) -> SharpenUpdate {
 
 auto ParseCat02Update(const nlohmann::json& params) -> Cat02WhiteBalanceUpdate {
   const auto& object =
-      (params.contains("cat02_white_balance") && params.at("cat02_white_balance").is_object())
-          ? UnwrapObject(params, {"cat02_white_balance"}, "tint")
-          : RequireObject(params, "tint");
-  RejectUnknownKeys(object, {"enabled", "temperature_offset", "tint_offset", "value", "tint"},
-                    "tint");
+      (params.contains("grade_white_balance") && params.at("grade_white_balance").is_object())
+          ? UnwrapObject(params, {"grade_white_balance"}, "grade_white_balance")
+          : RequireObject(params, "grade_white_balance");
+  RejectUnknownKeys(object, {"enabled", "temperature", "tint"}, "grade_white_balance");
   Cat02WhiteBalanceUpdate update;
-  update.enabled            = ReadOptionalBool(object, {"enabled"}, "tint");
-  update.temperature_offset = ReadOptionalFloat(object, {"temperature_offset"}, "tint");
-  update.tint_offset        = ReadOptionalFloat(object, {"tint_offset", "value", "tint"}, "tint");
+  update.enabled     = ReadOptionalBool(object, {"enabled"}, "grade_white_balance");
+  update.temperature = ReadOptionalFloat(object, {"temperature"}, "grade_white_balance");
+  update.tint        = ReadOptionalFloat(object, {"tint"}, "grade_white_balance");
   return update;
 }
 
@@ -744,7 +743,7 @@ auto OperatorTypeForCurrentPanelField(std::string_view field) -> const OperatorT
   if (field == "curve") return &type_ids::Curve();
   if (field == "saturation") return &type_ids::Saturation();
   if (field == "vibrance") return &type_ids::Vibrance();
-  if (field == "tint") return &type_ids::Cat02WhiteBalance();
+  if (field == "grade_white_balance") return &type_ids::Cat02WhiteBalance();
   if (field == "hls" || field == "HLS") return &type_ids::Hls();
   if (field == "color_wheel") return &type_ids::ColorWheel();
   if (field == "lut" || field == "ocio_lmt") return &type_ids::Lmt();
@@ -827,11 +826,12 @@ void ApplyColorGradeModelPatch(IOperatorModel& model, std::string_view field,
     typed->SetPoints(*points);
     return;
   }
-  if (field == "tint") {
+  if (field == "grade_white_balance") {
     auto  update = ParseCat02Update(params);
     auto* typed  = dynamic_cast<Cat02WhiteBalanceModel*>(&model);
     if (typed == nullptr) {
-      throw std::invalid_argument("Adjustment Model type does not match field tint");
+      throw std::invalid_argument(
+          "Adjustment Model type does not match field grade_white_balance");
     }
     typed->ApplyUpdate(std::move(update));
     return;

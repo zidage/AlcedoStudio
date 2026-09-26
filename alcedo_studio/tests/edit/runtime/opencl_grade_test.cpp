@@ -235,11 +235,14 @@ auto CpuApplyAdjustment(Rgba c, const GradeAdjustmentParams& p) -> Rgba {
   const auto  behavior = static_cast<AdjustmentBehavior>(p.behavior);
   const float value    = p.values[0];
   if (behavior == AdjustmentBehavior::Cat02WhiteBalance && value != 0.0f) {
-    const float temperature = p.values[1] * 0.001f;
-    const float tint        = p.values[2] * 0.001f;
-    c.r *= std::exp2(temperature - tint * 0.5f);
-    c.g *= std::exp2(tint);
-    c.b *= std::exp2(-temperature - tint * 0.5f);
+    namespace ref            = oklab_contrast_reference;
+    const float  lr          = ref::AcesccDecode(c.r);
+    const float  lg          = ref::AcesccDecode(c.g);
+    const float  lb          = ref::AcesccDecode(c.b);
+    const float* m           = p.values + 1;
+    c.r = ref::AcesccEncode(m[0] * lr + m[1] * lg + m[2] * lb);
+    c.g = ref::AcesccEncode(m[3] * lr + m[4] * lg + m[5] * lb);
+    c.b = ref::AcesccEncode(m[6] * lr + m[7] * lg + m[8] * lb);
   } else if (behavior == AdjustmentBehavior::Exposure) {
     const float offset = value / 17.52f;
     c.r += offset;
@@ -1059,7 +1062,7 @@ TEST_F(OpenClGradeFixture, OpenClFilmGrainStrengthScalesDeterministicDensityVari
 }
 
 TEST_F(OpenClGradeFixture, OpenClPrimaryGradeMatchesCudaReferenceWithinTolerance) {
-  ModelByType<Cat02WhiteBalanceModel>(type_ids::Cat02WhiteBalance()).SetTemperatureOffset(120.0f);
+  ModelByType<Cat02WhiteBalanceModel>(type_ids::Cat02WhiteBalance()).SetTemperature(4300.0f);
   ModelByType<ExposureModel>(type_ids::Exposure()).SetValue(0.5f);
   ModelByType<ContrastModel>(type_ids::Contrast()).SetValue(40.0f);
   ModelByType<WhiteModel>(type_ids::White()).SetValue(12.0f);

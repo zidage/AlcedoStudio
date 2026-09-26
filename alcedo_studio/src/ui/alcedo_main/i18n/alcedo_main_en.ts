@@ -2463,6 +2463,16 @@ Original source files on disk will be kept.</source>
 <context>
     <name>EditorLookPanel</name>
     <message>
+        <location filename="../qml/EditorLookPanel.qml" line="+720"/>
+        <source>White Balance</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>This white balance is a CAT02 chromatic adaptation in the grading color space. It assumes the image is already balanced to the ACES AP1 white point (about 6000 K), so the default is no change. It does not read the camera&apos;s data: use RAW Decode white balance to correct the capture, and this control for creative warming or cooling, including on JPEG and other non-RAW images. The same Kelvin value can look different here than on the RAW Decode page.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
         <location filename="../qml/EditorLookPanel.qml" line="+186"/>
         <source>Saturation</source>
         <translation type="unfinished"></translation>
@@ -3355,7 +3365,15 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+7"/>
+        <location line="+4"/>
+        <source>RAW white balance sets the scene illuminant from the camera&apos;s own color data before the image enters the grading color space. As Shot uses the camera&apos;s recorded white balance. The Look page white balance is a separate creative adjustment applied after this one.</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>EditorWhiteBalanceSliders</name>
+    <message>
+        <location filename="../qml/EditorWhiteBalanceSliders.qml" line="+34"/>
         <source>Temperature</source>
         <translation type="unfinished"></translation>
     </message>

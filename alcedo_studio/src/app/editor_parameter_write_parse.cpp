@@ -523,15 +523,14 @@ auto ParseSharpenUpdate(const nlohmann::json& params) -> SharpenUpdate {
 
 auto ParseCat02Update(const nlohmann::json& params) -> Cat02WhiteBalanceUpdate {
   const auto& object =
-      (params.contains("cat02_white_balance") && params.at("cat02_white_balance").is_object())
-          ? UnwrapObject(params, {"cat02_white_balance"}, "tint")
-          : RequireObject(params, "tint");
-  RejectUnknownKeys(object, {"enabled", "temperature_offset", "tint_offset", "value", "tint"},
-                    "tint");
+      (params.contains("grade_white_balance") && params.at("grade_white_balance").is_object())
+          ? UnwrapObject(params, {"grade_white_balance"}, "grade_white_balance")
+          : RequireObject(params, "grade_white_balance");
+  RejectUnknownKeys(object, {"enabled", "temperature", "tint"}, "grade_white_balance");
   Cat02WhiteBalanceUpdate update;
-  update.enabled            = ReadOptionalBool(object, {"enabled"}, "tint");
-  update.temperature_offset = ReadOptionalFloat(object, {"temperature_offset"}, "tint");
-  update.tint_offset        = ReadOptionalFloat(object, {"tint_offset", "value", "tint"}, "tint");
+  update.enabled     = ReadOptionalBool(object, {"enabled"}, "grade_white_balance");
+  update.temperature = ReadOptionalFloat(object, {"temperature"}, "grade_white_balance");
+  update.tint        = ReadOptionalFloat(object, {"tint"}, "grade_white_balance");
   return update;
 }
 
@@ -735,7 +734,7 @@ auto ParseWriteOrThrow(std::string_view field, const nlohmann::json& params)
   if (field == "color_wheel") {
     return ParseColorWheelUpdate(params);
   }
-  if (field == "tint") {
+  if (field == "grade_white_balance") {
     return ParseCat02Update(params);
   }
   if (field == "sharpen") {
