@@ -18,7 +18,6 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
-#include <opencv2/highgui.hpp>
 #include <opencv2/core/mat.hpp>
 #include <random>
 #include <thread>

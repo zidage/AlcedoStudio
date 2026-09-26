@@ -426,7 +426,7 @@ target_include_directories(JSON INTERFACE "${CMAKE_SOURCE_DIR}/alcedo_studio/thi
 # OpenCV
 # OpenCV 5 split calib3d into geometry/calib/stereo/ptcloud; Alcedo only needs
 # core image processing modules, so do not require the removed calib3d target.
-find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs highgui)
+find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs)
 
 # Eigen3
 find_package(Eigen3 CONFIG REQUIRED)
@@ -1396,7 +1396,6 @@ if(APPLE AND ALCEDO_MACOS_BUNDLE AND TARGET ${ALCEDO_MAIN_BIN})
             \"libopencv_core.412.dylib=@rpath/libopencv_core.412.dylib\"
             \"libopencv_imgproc.412.dylib=@rpath/libopencv_imgproc.412.dylib\"
             \"libopencv_imgcodecs.412.dylib=@rpath/libopencv_imgcodecs.412.dylib\"
-            \"libopencv_videoio.412.dylib=@rpath/libopencv_videoio.412.dylib\"
             \"libopencv_features2d.412.dylib=@rpath/libopencv_features2d.412.dylib\"
             \"libopencv_flann.412.dylib=@rpath/libopencv_flann.412.dylib\"
             \"libgcc_s.1.1.dylib=@rpath/libgcc_s.1.1.dylib\"
