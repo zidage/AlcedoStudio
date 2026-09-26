@@ -1825,6 +1825,11 @@ elseif(WIN32 AND TARGET ${ALCEDO_MAIN_BIN})
 else()
     set(CPACK_GENERATOR "ZIP")
 endif()
+# Package only the application install component. Bundled gRPC/RE2 development files are
+# installed under AlcedoGrpcDevelopment (see alcedo_studio/src/third_party/CMakeLists.txt).
+set(ALCEDO_PACKAGE_INSTALL_COMPONENT "Unspecified")
+set(CPACK_INSTALL_CMAKE_PROJECTS
+    "${CMAKE_BINARY_DIR};${CMAKE_PROJECT_NAME};${ALCEDO_PACKAGE_INSTALL_COMPONENT};/")
 include(CPack)
 
 if(APPLE AND ALCEDO_MACOS_BUNDLE AND TARGET ${ALCEDO_MAIN_BIN})

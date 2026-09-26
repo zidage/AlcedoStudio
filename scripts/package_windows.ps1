@@ -144,14 +144,30 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # ------------------------------------------------------------------
-# 2. Build install target
+# 2. Build, then install the application component into a fresh tree
 # ------------------------------------------------------------------
-Write-Host "Building install target ..." -ForegroundColor Yellow
-$buildCmd = "cmd /c `"$repoRoot\scripts\msvc_env.cmd`" --build $BuildDir --target install --parallel 4"
+Write-Host "Building ..." -ForegroundColor Yellow
+$buildCmd = "cmd /c `"$repoRoot\scripts\msvc_env.cmd`" --build $BuildDir --parallel 4"
 Write-Host "> $buildCmd"
 Invoke-Expression $buildCmd
 if ($LASTEXITCODE -ne 0) {
-    throw "Build/install failed."
+    throw "Build failed."
+}
+
+# Verify exactly what CPack packages: the application component (bundled gRPC/RE2
+# development files are a separate component), installed without stale files left
+# by earlier installs.
+$installDir = Join-Path $repoRoot "build\install"
+if (Test-Path -LiteralPath $installDir) {
+    Write-Host "Removing previous install tree: $installDir" -ForegroundColor Gray
+    Remove-Item -LiteralPath $installDir -Recurse -Force
+}
+Write-Host "Installing application component ..." -ForegroundColor Yellow
+$installCmd = "cmd /c `"$repoRoot\scripts\msvc_env.cmd`" --install $BuildDir --component Unspecified"
+Write-Host "> $installCmd"
+Invoke-Expression $installCmd
+if ($LASTEXITCODE -ne 0) {
+    throw "Install failed."
 }
 
 # ------------------------------------------------------------------
@@ -159,7 +175,6 @@ if ($LASTEXITCODE -ne 0) {
 # ------------------------------------------------------------------
 Write-Host "Verifying install tree ..." -ForegroundColor Yellow
 $verifyScript = Join-Path $repoRoot "scripts\verify_windows_install_tree.ps1"
-$installDir = Join-Path $repoRoot "build\install"
 $verifyArgs = @(
     '-ExecutionPolicy', 'Bypass',
     '-File', $verifyScript,

@@ -486,10 +486,23 @@ else()
         string(REPLACE "/GL" "" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
     endif()
 
+    # gRPC and its bundled RE2 install headers, static libraries, CMake/pkg-config files, and
+    # roots.pem even with gRPC_INSTALL=OFF. Alcedo links them statically and talks to the
+    # sidecar over an insecure local channel, so none of it belongs in the application package.
+    # Keep those rules out of the default component that CPack and package_windows.ps1 install.
+    if(DEFINED CMAKE_INSTALL_DEFAULT_COMPONENT_NAME AND
+       NOT CMAKE_INSTALL_DEFAULT_COMPONENT_NAME STREQUAL "Unspecified")
+        message(FATAL_ERROR
+            "CMAKE_INSTALL_DEFAULT_COMPONENT_NAME is already set to "
+            "'${CMAKE_INSTALL_DEFAULT_COMPONENT_NAME}'. The package install component "
+            "(ALCEDO_PACKAGE_INSTALL_COMPONENT) assumes first-party rules use 'Unspecified'.")
+    endif()
+    set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME "AlcedoGrpcDevelopment")
     add_subdirectory(
         "${PUERHLAB_GRPC_SOURCE_DIR}"
         "${CMAKE_BINARY_DIR}/third_party/grpc"
     )
+    set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME "Unspecified")
 
     if(MSVC)
         set(CMAKE_C_FLAGS_RELEASE "${_puerhlab_saved_c_flags_release}")
