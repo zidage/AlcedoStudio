@@ -507,6 +507,38 @@ TEST(EditorNodeController, MissingDefaultColorGradeAfterRefreshClearsSelection) 
   EXPECT_TRUE(controller.selected_node_id().Empty());
 }
 
+TEST(EditorNodeController, PublishDocumentSelectsRemappedDefaultGradeWithoutPrimaryIdentity) {
+  // Paste remaps every transferred Grade, so a pasted Version has no
+  // `grade.primary`. The default Grade must still receive the selection, or
+  // every adjustment panel write is rejected.
+  auto document = CreateDefaultPipelineDocument();
+  ASSERT_TRUE(
+      alcedo::AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.pasted"}).empty());
+  ASSERT_TRUE(alcedo::RemoveColorGradeAndBridge(document, NodeId{"grade.primary"}).empty());
+  document.SetDefaultGradeId(NodeId{"grade.pasted"});
+
+  EditorNodeController controller;
+  ASSERT_TRUE(controller.PublishDocument(document, 3));
+  EXPECT_EQ(controller.selected_node_id(), NodeId{"grade.pasted"});
+}
+
+TEST(EditorNodeController, VanishedSelectedGradeFallsBackToDefaultAndRestoresOnReturn) {
+  auto document = CreateDefaultPipelineDocument();
+  ASSERT_TRUE(
+      alcedo::AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.extra"}).empty());
+  EditorNodeController controller;
+  ASSERT_TRUE(controller.PublishDocument(document, 5));
+  controller.selectNode(QStringLiteral("grade.extra"));
+  ASSERT_EQ(controller.selected_node_id(), NodeId{"grade.extra"});
+
+  auto without_extra = CreateDefaultPipelineDocument();
+  ASSERT_TRUE(controller.PublishDocument(without_extra, 5));
+  EXPECT_EQ(controller.selected_node_id(), NodeId{"grade.primary"});
+
+  ASSERT_TRUE(controller.PublishDocument(document, 5));
+  EXPECT_EQ(controller.selected_node_id(), NodeId{"grade.extra"});
+}
+
 TEST(EditorNodeController, BlockedEditAvailabilityDisablesAddWithoutSnapshotChange) {
   DocumentSessionBackend backend;
   backend.SetGeneration(21);

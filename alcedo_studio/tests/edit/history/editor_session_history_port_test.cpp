@@ -713,6 +713,29 @@ TEST_F(EditorSessionHistoryPortTest, SettledEditPublishesDocumentValueToPanelPro
   EXPECT_FLOAT_EQ(actual.at("exposure_ev").get<float>(), 0.75f);
 }
 
+TEST_F(EditorSessionHistoryPortTest, LivePasteRefreshesPanelProjectionFromPastedDocument) {
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  ASSERT_TRUE(CommitSettled(history_, handle, "exposure", R"({"exposure":0.25})", &error))
+      << error;
+  ASSERT_EQ(PanelScalarValue(history_, handle, "exposure"), std::optional<float>{0.25f});
+
+  // The pasted Version replaces every Grade identity. The panels must show the
+  // pasted values right after the paste, as they do after a Version checkout.
+  alcedo::AdjustmentPasteResult paste_result;
+  ASSERT_TRUE(history_.PasteLiveRootRelativeVersion(handle, MakeExposureTransferPackage(0.85),
+                                                    "Pasted Version", &paste_result, &error))
+      << error;
+  ASSERT_TRUE(paste_result.pasted);
+  const auto panel_exposure = PanelScalarValue(history_, handle, "exposure");
+  ASSERT_TRUE(panel_exposure.has_value());
+  EXPECT_FLOAT_EQ(*panel_exposure, 0.85f);
+  const auto document_exposure = DocumentExposureEv(*guard_->document_);
+  ASSERT_TRUE(document_exposure.has_value());
+  EXPECT_NEAR(*document_exposure, 0.85, 1e-5);
+}
+
 TEST_F(EditorSessionHistoryPortTest,
        PublishedPasteCaptureReopensWithExactVersionHeadChainAndAdjustment) {
   std::string error;
