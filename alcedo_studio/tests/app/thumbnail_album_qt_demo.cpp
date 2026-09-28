@@ -793,7 +793,8 @@ static AlbumIds ImportBatchToTempProject(const std::filesystem::path& db_path,
   ProjectService            project(db_path, meta_path);
   auto                      fs_service = project.GetSleeveService();
   auto                      img_pool   = project.GetImagePoolService();
-  ImportServiceImpl         import_service(fs_service, img_pool);
+  auto              import_pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  ImportServiceImpl import_service(fs_service, img_pool, import_pipelines);
 
   std::filesystem::path     img_root_path = {TEST_IMG_PATH "/raw/batch_import"};
   std::vector<image_path_t> paths;

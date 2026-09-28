@@ -195,9 +195,7 @@ auto ImportServiceImpl::ImportToFolder(const std::vector<image_path_t>& paths,
       // Extract metadata, assemble full pipeline JSON, then mark success.
       try {
         MetadataExtractor::ExtractEXIF_ToImage(image_ptr->image_path_, *image_ptr);
-        if (pipeline_service) {
-          PersistAssembledImportPipeline(*pipeline_service, element_id, image_ptr);
-        }
+        PersistAssembledImportPipeline(*pipeline_service, element_id, image_ptr);
         if (import_log) {
           import_log->MarkMetadataSuccess(image_ptr->image_id_);
         }

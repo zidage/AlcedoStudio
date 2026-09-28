@@ -339,7 +339,7 @@ struct ThumbnailBatchWaitState {
 };
 
 auto WaitForThumbnailBatch(const std::shared_ptr<SemanticGenerationJob>&      job,
-                           const std::shared_ptr<ISemanticThumbnailProvider>& provider,
+                           const std::shared_ptr<IAnalysisRenditionProvider>& provider,
                            const std::vector<SemanticGenerationItem>&         items,
                            ThumbnailResolution resolution) -> std::vector<ThumbnailRequestResult> {
   auto state       = std::make_shared<ThumbnailBatchWaitState>();
@@ -350,8 +350,9 @@ auto WaitForThumbnailBatch(const std::shared_ptr<SemanticGenerationJob>&      jo
   for (size_t i = 0; i < items.size(); ++i) {
     const auto item = items[i];
     try {
-      provider->RequestThumbnail(
-          item, resolution, [state, provider, index = i](ThumbnailRequestResult result) {
+      provider->RequestRendition(
+          item.element_id, item.image_id, resolution,
+          [state, provider, index = i](ThumbnailRequestResult result) {
             bool              release_late_guard = false;
             ThumbnailCacheKey late_key{};
             {
@@ -367,7 +368,7 @@ auto WaitForThumbnailBatch(const std::shared_ptr<SemanticGenerationJob>&      jo
               }
             }
             if (release_late_guard) {
-              provider->ReleaseThumbnail(late_key);
+              provider->ReleaseRendition(late_key);
             }
             state->cv.notify_all();
           });
@@ -405,7 +406,7 @@ auto WaitForThumbnailBatch(const std::shared_ptr<SemanticGenerationJob>&      jo
         state->abandoned = true;
         lock.unlock();
         for (const auto& item : items) {
-          provider->CancelThumbnail(ThumbnailCacheKey{item.element_id, resolution});
+          provider->CancelRendition(ThumbnailCacheKey{item.element_id, resolution});
         }
         std::vector<ThumbnailRequestResult> canceled_results;
         canceled_results.reserve(items.size());
@@ -504,38 +505,6 @@ auto ToString(SemanticGenerationItemStatus status) -> const char* {
       return "error";
   }
   return "unknown";
-}
-
-ThumbnailServiceSemanticThumbnailProvider::ThumbnailServiceSemanticThumbnailProvider(
-    std::shared_ptr<ThumbnailService> service)
-    : service_(std::move(service)) {}
-
-void ThumbnailServiceSemanticThumbnailProvider::RequestThumbnail(
-    const SemanticGenerationItem& item, ThumbnailResolution resolution,
-    SemanticThumbnailRequestCallback callback) {
-  if (!service_) {
-    ThumbnailRequestResult result;
-    result.key     = ThumbnailCacheKey{item.element_id, resolution};
-    result.status  = ThumbnailRequestStatus::kError;
-    result.message = "ThumbnailService is not available";
-    callback(std::move(result));
-    return;
-  }
-
-  service_->RequestAnalysisRendition(item.element_id, item.image_id, resolution,
-                                     std::move(callback));
-}
-
-void ThumbnailServiceSemanticThumbnailProvider::CancelThumbnail(const ThumbnailCacheKey& key) {
-  if (service_) {
-    service_->CancelAnalysisRendition(key);
-  }
-}
-
-void ThumbnailServiceSemanticThumbnailProvider::ReleaseThumbnail(const ThumbnailCacheKey& key) {
-  if (service_) {
-    service_->ReleaseAnalysisRendition(key);
-  }
 }
 
 auto ISemanticImageEmbeddingClient::EmbedTextBatch(
@@ -849,7 +818,7 @@ void SemanticGenerationJob::Finish() {
 }
 
 SemanticGenerationService::SemanticGenerationService(
-    std::shared_ptr<ISemanticThumbnailProvider>    thumbnail_provider,
+    std::shared_ptr<IAnalysisRenditionProvider>    thumbnail_provider,
     std::shared_ptr<ISemanticImageEmbeddingClient> embedding_client)
     : thumbnail_provider_(std::move(thumbnail_provider)),
       embedding_client_(std::move(embedding_client)) {
@@ -918,7 +887,7 @@ void SemanticGenerationService::RunJob(
     const std::shared_ptr<SemanticGenerationJob>& job,
     const std::vector<SemanticGenerationItem>& items, SemanticGenerationOptions options,
     SemanticGenerationProgressCallback on_progress, SemanticGenerationFinishedCallback on_finished,
-    std::shared_ptr<ISemanticThumbnailProvider>    thumbnail_provider,
+    std::shared_ptr<IAnalysisRenditionProvider>    thumbnail_provider,
     std::shared_ptr<ISemanticImageEmbeddingClient> embedding_client) {
   auto finish = [&]() {
     auto results = job->Results();
@@ -1335,7 +1304,7 @@ void SemanticGenerationService::RunJob(
         result.error      = thumbnail_result.message.empty() ? "thumbnail request was canceled"
                                                              : thumbnail_result.message;
         if (thumbnail_result.guard) {
-          thumbnail_provider->ReleaseThumbnail(thumbnail_result.key);
+          thumbnail_provider->ReleaseRendition(thumbnail_result.key);
         }
         job->UpdateProgress([](SemanticGenerationProgress& progress) { progress.canceled++; });
         job->AppendResult(std::move(result));
@@ -1365,7 +1334,7 @@ void SemanticGenerationService::RunJob(
       std::string encode_error;
       const bool  materialized = MaterializeThumbnailRgba8(
           *thumbnail_result.guard, &input.rgba8_image, &input.format_hint, &encode_error);
-      thumbnail_provider->ReleaseThumbnail(thumbnail_result.key);
+      thumbnail_provider->ReleaseRendition(thumbnail_result.key);
 
       if (!materialized) {
         SemanticGenerationItemResult result;

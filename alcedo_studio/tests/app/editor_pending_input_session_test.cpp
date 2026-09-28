@@ -2,17 +2,22 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
+#include <gtest/gtest.h>
+
+#include <memory>
+#include <vector>
+
 #include "app/editor_pending_input.hpp"
 #include "app/editor_render_coordinator.hpp"
 #include "app/editor_session_bootstrap.hpp"
 #include "app/editor_session_service.hpp"
 #include "edit/graph/graph_ids.hpp"
-#include "support/editor_session_command_queue_test_support.hpp"
+#include "edit/graph/pipeline_document.hpp"
+#include "edit/history/commit_graph.hpp"
+#include "edit/history/mini_git_working_history.hpp"
+#include "edit/history/pipeline_edit_batch.hpp"
 #include "support/editor_parameter_write_test.hpp"
-
-#include <gtest/gtest.h>
-
-#include <memory>
+#include "support/editor_session_command_queue_test_support.hpp"
 
 namespace alcedo {
 namespace {
@@ -251,6 +256,108 @@ TEST_F(EditorPendingInputSealTest, SwitchIsRefusedWithTheRealErrorWhenTheQueuedE
   EXPECT_EQ(service_->identity().element_id, static_cast<sl_element_id_t>(10));
   EXPECT_NE(service_->last_error().find("mini-Git journal append failed"), std::string::npos)
       << service_->last_error();
+}
+
+/// History port with a real live document for locked-document (Mask) input. Records each settle
+/// and the input-sequence state the session reports, and what had settled when the save seal
+/// captured history.
+class MaskDocumentHistoryPort final : public test::FakeEditorHistoryPort {
+ public:
+  PipelineDocument             document = CreateDefaultPipelineDocument();
+  std::shared_ptr<CommitGraph> graph = std::make_shared<CommitGraph>(CommitGraph::CreateEmpty(10));
+  std::shared_ptr<MiniGitJournal>        journal = std::make_shared<MiniGitJournal>();
+  MiniGitWorkingHistory                  history{graph, journal};
+  bool                                   input_open = false;
+  std::vector<PipelineEditOperationKind> settled;
+  int                                    settled_at_capture    = -1;
+  bool                                   input_open_at_capture = false;
+
+  auto WithLockedLiveDocument(const EditorHistoryGuardHandle&, const LockedMaskDocumentOp& op,
+                              std::string* error) -> bool override {
+    LockedMaskSettle settle = [this](const PipelineEditBatch& batch, std::string*) {
+      settled.push_back(batch.operation_kind);
+      return true;
+    };
+    return op(document, history, settle, &input_open, error);
+  }
+
+  auto CaptureSaveCheckpoint(const EditorHistoryGuardHandle& guard, std::string* error)
+      -> std::shared_ptr<const EditorMiniGitSaveCapture> override {
+    settled_at_capture    = static_cast<int>(settled.size());
+    input_open_at_capture = input_open;
+    return FakeEditorHistoryPort::CaptureSaveCheckpoint(guard, error);
+  }
+};
+
+class EditorMaskInputSealTest : public EditorPendingInputSessionTest {
+ protected:
+  void SetUp() override {
+    EditorPendingInputSessionTest::SetUp();
+    mask_history_ = std::make_shared<MaskDocumentHistoryPort>();
+    history_      = mask_history_;
+    runtime_      = EditorSessionRuntime::CreateWithPorts(pipeline_, history_, tasks_, scheduler_,
+                                                          checkpoint_store_);
+    service_      = runtime_->service.get();
+    service_->SetPresentationSinkId(1);
+    service_->SetPresentationSize(640, 480);
+  }
+
+  static auto Sample(float x, float y) -> MaskCreationSample {
+    MaskCreationSample sample;
+    sample.normalized        = {x, y};
+    sample.reference_pixels  = {x * 640.0f, y * 480.0f};
+    sample.inside_photograph = true;
+    return sample;
+  }
+
+  /// Start a Radial creation drag and leave it open, as a held pointer does.
+  void OpenRadialCreationDrag() {
+    OpenInteractive();
+    const MaskPointerIdentity pointer{3, 1, 9};
+    EditorMaskCreationCommand begin_mode;
+    begin_mode.kind        = EditorMaskCreationCommandKind::BeginCreation;
+    begin_mode.source_kind = MaskSourceKind::Radial;
+    begin_mode.node_id     = mask_history_->document.DefaultGradeId();
+    EditorMaskCreationCommand press;
+    press.kind        = EditorMaskCreationCommandKind::BeginInput;
+    press.source_kind = MaskSourceKind::Radial;
+    press.sample      = Sample(0.40f, 0.40f);
+    press.identity    = pointer;
+    EditorMaskCreationCommand drag;
+    drag.kind     = EditorMaskCreationCommandKind::Append;
+    drag.sample   = Sample(0.60f, 0.55f);
+    drag.identity = pointer;
+    ASSERT_EQ(service_->EnqueueMaskCreation(begin_mode).kind, EditorSessionResultKind::Accepted);
+    ASSERT_EQ(service_->EnqueueMaskCreation(press).kind, EditorSessionResultKind::Accepted);
+    ASSERT_EQ(service_->EnqueueMaskCreation(drag).kind, EditorSessionResultKind::Accepted);
+    service_->DrainCommandQueueForTests();
+  }
+
+  std::shared_ptr<MaskDocumentHistoryPort> mask_history_;
+};
+
+TEST_F(EditorMaskInputSealTest, OpenMaskDragIsReportedAsUncommittedInput) {
+  OpenRadialCreationDrag();
+  EXPECT_TRUE(mask_history_->input_open);
+  EXPECT_TRUE(mask_history_->settled.empty());
+  EXPECT_EQ(mask_history_->document.PrimaryGrade()->MaskCount(), 1u)
+      << "the provisional Mask is on the live document before release";
+}
+
+TEST_F(EditorMaskInputSealTest, PersistCommitsAnOpenMaskDragBeforeTheSaveSealLikeASliderDrag) {
+  OpenRadialCreationDrag();
+  ASSERT_TRUE(mask_history_->input_open);
+
+  (void)service_->PersistCurrentImage();
+  service_->DrainCommandQueueForTests();
+
+  // The boundary finished the drag as a pointer release would: one AddMask commit, recorded
+  // before the capture, and no input left open on the live document.
+  ASSERT_EQ(mask_history_->settled.size(), 1u);
+  EXPECT_EQ(mask_history_->settled.front(), PipelineEditOperationKind::AddMask);
+  EXPECT_EQ(mask_history_->settled_at_capture, 1);
+  EXPECT_FALSE(mask_history_->input_open_at_capture);
+  EXPECT_FALSE(mask_history_->input_open);
 }
 
 }  // namespace

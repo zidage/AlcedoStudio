@@ -125,10 +125,12 @@ auto PipelineTask::MakeApplyRequest() const -> PipelineApplyRequest {
 
   FramePreviewMetadata  frame_metadata    = desc.frame_metadata_;
   FramePresentationMode presentation_mode = FramePresentationMode::FullFrame;
-  request.sink                            = pipeline_executor_->GetFrameSink();
 
   auto finish = [&](DecodeRes decode, bool host_output, ExecutorRole role, int max_edge,
                     bool export_quality, std::optional<ViewportRenderRegion> view) {
+    // Only interactive renders present. A batch render returns host pixels and never reads the
+    // executor's frame sink, whatever executor it runs on.
+    request.sink = role == ExecutorRole::Interactive ? pipeline_executor_->GetFrameSink() : nullptr;
     request.decode_res          = decode;
     request.require_host_output = host_output;
     request.role                = role;
@@ -179,9 +181,7 @@ auto PipelineTask::MakeApplyRequest() const -> PipelineApplyRequest {
     return request;
   }
   if (requested_render_type == RenderType::THUMBNAIL) {
-    presentation_mode    = FramePresentationMode::ViewportTransformed;
-    request.sink         = nullptr;
-    request.output_color = std::nullopt;
+    presentation_mode = FramePresentationMode::ViewportTransformed;
     finish(desc.decode_res_, true, ExecutorRole::Batch,
            static_cast<int>(desc.max_edge_), false, std::nullopt);
     return request;
@@ -194,7 +194,6 @@ auto PipelineTask::MakeApplyRequest() const -> PipelineApplyRequest {
   }
   if (requested_render_type == RenderType::FULL_RES_EXPORT) {
     presentation_mode    = FramePresentationMode::ViewportTransformed;
-    request.sink         = nullptr;
     request.output_color = options_.export_output_color_;
     finish(DecodeRes::FULL, true, ExecutorRole::Batch, 0, true, std::nullopt);
     return request;
@@ -205,6 +204,8 @@ auto PipelineTask::MakeApplyRequest() const -> PipelineApplyRequest {
 PipelineScheduler::PipelineScheduler() : thread_pool_(1) {}
 
 PipelineScheduler::PipelineScheduler(size_t thread_count) : thread_pool_(thread_count) {}
+
+void PipelineScheduler::Shutdown() { thread_pool_.Shutdown(); }
 
 auto PipelineScheduler::IsStaleForSink(IFrameSink* sink, std::uint64_t request_id) -> bool {
   if (!sink || request_id == 0) {
@@ -288,26 +289,6 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
       }
     };
 
-    const auto notify_thumbnail_failure_callbacks = [&task]() {
-      if (task.options_.render_desc_.render_type_ != RenderType::THUMBNAIL) {
-        return;
-      }
-
-      ImageBuffer empty_result;
-      if (task.options_.is_callback_ && task.callback_) {
-        try {
-          (*task.callback_)(empty_result);
-        } catch (...) {
-        }
-      }
-      if (task.options_.is_seq_callback_ && task.seq_callback_) {
-        try {
-          (*task.seq_callback_)(empty_result, task.task_id_);
-        } catch (...) {
-        }
-      }
-    };
-
     const auto task_cancelled = [&task]() {
       if (!task.cancel_requested_) {
         return false;
@@ -323,7 +304,6 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
       std::shared_ptr<ImageBuffer> result_copy;
       {
         if (task_cancelled()) {
-          notify_thumbnail_failure_callbacks();
           set_blocking_value(nullptr);
           finish(false);
           return;
@@ -333,25 +313,21 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
           try {
             prepared = (*task.prepare_)(task);
           } catch (const std::exception& ex) {
-            notify_thumbnail_failure_callbacks();
             set_blocking_exception();
             finish(false, ex.what());
             return;
           } catch (...) {
-            notify_thumbnail_failure_callbacks();
             set_blocking_exception();
             finish(false, "Pipeline render failed");
             return;
           }
           if (!prepared) {
-            notify_thumbnail_failure_callbacks();
             set_blocking_value(nullptr);
             finish(false);
             return;
           }
         }
         if (task_cancelled()) {
-          notify_thumbnail_failure_callbacks();
           set_blocking_value(nullptr);
           finish(false);
           return;
@@ -362,7 +338,6 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
               ByteBufferLoader::LoadByteBufferFromImage(task.input_desc_));
         }
         if (task_cancelled()) {
-          notify_thumbnail_failure_callbacks();
           set_blocking_value(nullptr);
           finish(false);
           return;
@@ -384,18 +359,15 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
               try {
                 prepared = (*task.configure_under_render_lock_)(task);
               } catch (const std::exception& ex) {
-                notify_thumbnail_failure_callbacks();
                 set_blocking_exception();
                 finish(false, ex.what());
                 return;
               } catch (...) {
-                notify_thumbnail_failure_callbacks();
                 set_blocking_exception();
                 finish(false, "Pipeline render failed");
                 return;
               }
               if (!prepared) {
-                notify_thumbnail_failure_callbacks();
                 set_blocking_value(nullptr);
                 finish(false);
                 return;
@@ -407,14 +379,12 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
 
           IFrameSink* output_sink = apply_request.sink;
           if (IsStaleForSink(output_sink, task.request_id_)) {
-            notify_thumbnail_failure_callbacks();
             set_blocking_value(nullptr);
             finish(false);
             return;
           }
 
           if (task_cancelled()) {
-            notify_thumbnail_failure_callbacks();
             set_blocking_value(nullptr);
             finish(false);
             return;
@@ -422,7 +392,6 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
 
           if (IsStaleForSink(output_sink, task.request_id_)) {
             std::cout << "PipelineScheduler: Stale for sink detected!\n";
-            notify_thumbnail_failure_callbacks();
             set_blocking_value(nullptr);
             finish(false);
             return;
@@ -447,15 +416,10 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
               result_has_cpu = false;
             }
           }
-          const bool require_gpu_valid = (render_desc.render_type_ != RenderType::THUMBNAIL);
-          const bool result_valid_for_copy =
-              result && result_has_cpu && (!require_gpu_valid || result->gpu_data_valid_);
+          const bool result_valid_for_copy = result && result_has_cpu;
 
           if (IsStaleForSink(output_sink, task.request_id_)) {
             std::cout << "PipelineScheduler: Stale for sink detected!\n";
-            if (render_desc.render_type_ == RenderType::THUMBNAIL) {
-              notify_thumbnail_failure_callbacks();
-            }
             set_blocking_value(nullptr);
             finish(false);
             return;
@@ -464,13 +428,16 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
           if (render_desc.render_type_ == RenderType::FAST_PREVIEW ||
               render_desc.render_type_ == RenderType::QUALITY_BASE_PREVIEW ||
               render_desc.render_type_ == RenderType::DETAIL_ROI_PREVIEW ||
-              render_desc.render_type_ == RenderType::FULL_RES_PREVIEW || !result_valid_for_copy) {
-            if (render_desc.render_type_ == RenderType::THUMBNAIL && !result_valid_for_copy) {
-              notify_thumbnail_failure_callbacks();
-            }
+              render_desc.render_type_ == RenderType::FULL_RES_PREVIEW) {
             const bool ok = result != nullptr;
             set_blocking_value(result);
             finish(ok);
+            return;
+          }
+          if (!result_valid_for_copy) {
+            // Batch renders exist to return host pixels; a result without them is a failure.
+            set_blocking_value(nullptr);
+            finish(false, "PipelineScheduler: render produced no host pixels");
             return;
           }
 
@@ -493,11 +460,9 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
         finish(false);
       }
     } catch (const std::exception& ex) {
-      notify_thumbnail_failure_callbacks();
       set_blocking_exception();
       finish(false, ex.what());
     } catch (...) {
-      notify_thumbnail_failure_callbacks();
       set_blocking_exception();
       finish(false, "Pipeline render failed");
     }

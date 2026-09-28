@@ -110,42 +110,6 @@ static uint64_t HashImageBufferCpuBytes(ImageBuffer& buffer) {
   return HashMatBytes(mat);
 }
 
-auto PinLinearDngInPool(ImagePoolService& pool, const std::filesystem::path& raw_path)
-    -> ImagePoolManager::PinnedImageHandle {
-  auto handle = pool.CreateAndReturnPinnedEmpty();
-  if (!handle) {
-    return {};
-  }
-  auto& image       = *handle;
-  image.image_path_ = raw_path;
-  image.image_type_ = ImageType::DNG;
-
-  auto raw = std::make_unique<LibRaw>();
-#if defined(_WIN32)
-  const int open_ret = raw->open_file(raw_path.wstring().c_str());
-#else
-  const int open_ret = raw->open_file(raw_path.string().c_str());
-#endif
-  if (open_ret != LIBRAW_SUCCESS) {
-    return handle;
-  }
-  if (raw->unpack() != LIBRAW_SUCCESS) {
-    raw->recycle();
-    return handle;
-  }
-  RawRuntimeColorContext ctx;
-  MetadataExtractor::PopulateRuntimeContextFromOpenLibRaw(*raw, ctx);
-  raw->recycle();
-  std::ifstream stream(raw_path, std::ios::binary);
-  const std::vector<std::uint8_t> bytes{std::istreambuf_iterator<char>(stream),
-                                        std::istreambuf_iterator<char>()};
-  const auto exif = MetadataExtractor::ExtractEXIFFromBuffer(bytes.data(), bytes.size());
-  if (!exif) throw std::runtime_error("DNG fixture metadata is missing");
-  ctx.dng_profile_ = ReadDngColorProfile(exif->exifData());
-  image.SetRawColorContext(std::move(ctx));
-  return handle;
-}
-
 static std::shared_ptr<ThumbnailGuard> GetThumbnailBlocking(
     ThumbnailService& service, sl_element_id_t id, image_id_t image_id, bool pin_if_found = true,
     ThumbnailResolution resolution = ThumbnailResolution::k1024) {
@@ -746,7 +710,8 @@ TEST_F(ThumbnailServiceTests, DISABLED_GenerateThumbnailAndCallbacks) {
   auto                      fs_service = project.GetSleeveService();
   auto                      img_pool   = project.GetImagePoolService();
 
-  ImportServiceImpl         import_service(fs_service, img_pool);
+  auto              import_pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  ImportServiceImpl import_service(fs_service, img_pool, import_pipelines);
   std::filesystem::path     img_root_path = {TEST_IMG_PATH "/raw/batch_import"};
   std::vector<image_path_t> paths{};
 
@@ -890,7 +855,8 @@ TEST_F(ThumbnailServiceTests, MetalGeometryPipelineThumbnailStillRenders) {
   ProjectService             project(db_path_, meta_path_);
   auto                       fs_service = project.GetSleeveService();
   auto                       img_pool   = project.GetImagePoolService();
-  ImportServiceImpl          import_service(fs_service, img_pool);
+  auto              import_pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  ImportServiceImpl import_service(fs_service, img_pool, import_pipelines);
 
   std::shared_ptr<ImportJob> import_job = std::make_shared<ImportJob>();
   std::promise<ImportResult> final_result;
@@ -960,7 +926,8 @@ TEST_F(ThumbnailServiceTests, ThumbnailRenderUsesInjectedRawMetadataForDng) {
   ProjectService             project(db_path_, meta_path_);
   auto                       fs_service = project.GetSleeveService();
   auto                       img_pool   = project.GetImagePoolService();
-  ImportServiceImpl          import_service(fs_service, img_pool);
+  auto              import_pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  ImportServiceImpl import_service(fs_service, img_pool, import_pipelines);
 
   std::shared_ptr<ImportJob> import_job = std::make_shared<ImportJob>();
   std::promise<ImportResult> final_result;
@@ -1000,17 +967,11 @@ TEST_F(ThumbnailServiceTests, ThumbnailRenderUsesInjectedRawMetadataForDng) {
   ASSERT_NE(image_desc, nullptr);
   ASSERT_TRUE(image_desc->HasRawColorContext());
 
-  auto pipeline_guard = pipeline_service->LoadPipeline(element_id);
-  ASSERT_NE(pipeline_guard, nullptr);
-  ASSERT_NE(pipeline_guard->document_, nullptr);
-  // The imported camera profile lives on the stored document; the direct render reads only it.
-  auto document = std::make_shared<PipelineDocument>(
-      PipelineDocument::FromJson(pipeline_guard->document_->ToJson()));
-  pipeline_service->SavePipeline(pipeline_guard);
-
-  auto       direct_exec = std::make_shared<PipelineExecutor>(ExecutorRole::Batch);
-  const auto direct_snapshot = PipelineGraphSnapshot::Preview(
-      document->Freeze(), element_id, PipelineLineageId::Next(), transaction_chain_hash_t{});
+  // The direct render reads the same committed snapshot the thumbnail rendered, which carries the
+  // imported camera profile bound from the stored root.
+  auto       direct_exec     = std::make_shared<PipelineExecutor>(ExecutorRole::Batch);
+  const auto direct_snapshot = pipeline_service->AcquireCommittedSnapshot(element_id);
+  ASSERT_NE(direct_snapshot, nullptr);
   PipelineApplyRequest request;
   request.geometry.resolution.max_edge = 1024;
   request.geometry.resolution.quality  = RenderQuality::Export;
@@ -1091,7 +1052,7 @@ TEST_F(ThumbnailServiceTests, AnalysisRenditionRendersWithoutSavePipelineOnLiveG
 
   std::promise<ThumbnailRequestResult> done;
   auto                                 done_future = done.get_future();
-  thumbnail_service.RequestAnalysisRendition(
+  const auto                           rendition   = thumbnail_service.RequestAnalysisRendition(
       element_id, image_id, ThumbnailResolution::k256,
       [&done](ThumbnailRequestResult r) { done.set_value(std::move(r)); });
   ASSERT_EQ(done_future.wait_for(30s), std::future_status::ready);
@@ -1106,11 +1067,11 @@ TEST_F(ThumbnailServiceTests, AnalysisRenditionRendersWithoutSavePipelineOnLiveG
   EXPECT_EQ(live_guard->dirty_, true);           // dirty not cleared
   ASSERT_NE(live_guard->pipeline_, nullptr);     // executor still valid
 
-  thumbnail_service.ReleaseAnalysisRendition(result.key);
+  thumbnail_service.ReleaseAnalysisRendition(rendition);
   pipeline_service->SavePipeline(live_guard);  // release the test's pin
 }
 
-TEST_F(ThumbnailServiceTests, OrdinaryThumbnailReusesLiveEditorExecutorAndDocument) {
+TEST_F(ThumbnailServiceTests, ThumbnailRendersOnItsOwnExecutorAndLeavesTheLiveGuardUntouched) {
   const auto raw_path = std::filesystem::path(TEST_IMG_PATH) / "raw" / "linear_dng" / "mfzoty.dng";
   if (!std::filesystem::exists(raw_path)) {
     GTEST_SKIP() << "Sample DNG file is missing: " << raw_path.string();
@@ -1160,117 +1121,22 @@ TEST_F(ThumbnailServiceTests, OrdinaryThumbnailReusesLiveEditorExecutorAndDocume
   EXPECT_EQ(live_guard->lineage_, live_lineage) << "a thumbnail render must not rebind the guard";
   EXPECT_EQ(live_guard->pin_count_, size_t{1});
   EXPECT_TRUE(live_guard->dirty_);
+  // The render ran on the service's own batch executors: the guard executor never created a
+  // batch renderer.
+#ifdef HAVE_CUDA
+  EXPECT_EQ(live_guard->pipeline_->DebugCudaBatchRenderer(), nullptr);
+#endif
+#ifdef HAVE_METAL
+  EXPECT_EQ(live_guard->pipeline_->DebugMetalBatchRenderer(), nullptr);
+#endif
+#ifdef HAVE_OPENCL
+  EXPECT_EQ(live_guard->pipeline_->DebugOpenClBatchRenderer(), nullptr);
+#endif
 
   thumbnail_service.ReleaseThumbnail(ThumbnailCacheKey{element_id, ThumbnailResolution::k256});
   pipeline_service->SavePipeline(live_guard);
 }
 
-TEST_F(ThumbnailServiceTests, ThumbnailRenderUsesLiveDocumentWithoutStageApplyOnto) {
-  const auto raw_path = std::filesystem::path(TEST_IMG_PATH) / "raw" / "linear_dng" / "mfzoty.dng";
-  if (!std::filesystem::exists(raw_path)) {
-    GTEST_SKIP() << "Sample DNG file is missing: " << raw_path.string();
-  }
-
-  ProjectService project(db_path_, meta_path_);
-  auto           img_pool = project.GetImagePoolService();
-  auto           pinned   = PinLinearDngInPool(*img_pool, raw_path);
-  ASSERT_TRUE(pinned);
-  ASSERT_TRUE(pinned.Get()->HasRawColorContext());
-  const auto image_id   = pinned.Get()->image_id_;
-  const auto element_id = sl_element_id_t{1};
-
-  auto             pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
-  ThumbnailService thumbnail_service(project.GetSleeveService(), img_pool, pipeline_service);
-  auto             live_guard = pipeline_service->LoadPipeline(element_id);
-  ASSERT_NE(live_guard, nullptr);
-  ASSERT_NE(live_guard->document_, nullptr);
-  BindImportedCameraProfile(*live_guard->document_, pinned.Get()->GetRawColorContext());
-  auto* exposure = live_guard->document_->PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure());
-  ASSERT_NE(exposure, nullptr);
-  exposure->LoadJson({{"exposure_ev", 2.25f}});
-  live_guard->dirty_   = true;
-  const auto live_json = live_guard->document_->ToJson().dump();
-  {
-    // Every render on the guard's executor freezes this document under the render lock.
-    std::unique_lock<std::mutex> render_lock(live_guard->pipeline_->GetRenderLock());
-    const auto                   frozen = live_guard->FreezeLiveSnapshot();
-    ASSERT_NE(frozen, nullptr);
-    EXPECT_EQ(frozen->Lineage(), live_guard->lineage_);
-    EXPECT_EQ(frozen->Document().ToJson().dump(), live_json);
-  }
-  EXPECT_FLOAT_EQ(exposure->ToJson().at("exposure_ev").get<float>(), 2.25f);
-
-  std::promise<ThumbnailRequestResult> done;
-  auto                                 done_future = done.get_future();
-  thumbnail_service.GetThumbnailDetailed(
-      element_id, image_id,
-      [&done](ThumbnailRequestResult r) { done.set_value(std::move(r)); }, true, nullptr,
-      ThumbnailResolution::k256);
-  ASSERT_EQ(done_future.wait_for(60s), std::future_status::ready);
-  const auto thumb_result = done_future.get();
-  EXPECT_EQ(thumb_result.status, ThumbnailRequestStatus::kReady) << thumb_result.message;
-  ASSERT_NE(thumb_result.guard, nullptr);
-  ASSERT_NE(thumb_result.guard->thumbnail_buffer_, nullptr);
-  EXPECT_EQ(live_guard->document_->ToJson().dump(), live_json);
-  EXPECT_EQ(live_guard->pin_count_, size_t{1});
-  EXPECT_TRUE(live_guard->dirty_);
-  EXPECT_FLOAT_EQ(live_guard->document_->PrimaryGrade()
-                      ->FindAdjustmentByType(type_ids::Exposure())
-                      ->ToJson()
-                      .at("exposure_ev")
-                      .get<float>(),
-                  2.25f);
-
-  thumbnail_service.ReleaseThumbnail(ThumbnailCacheKey{element_id, ThumbnailResolution::k256});
-  pipeline_service->SavePipeline(live_guard);
-}
-
-TEST_F(ThumbnailServiceTests, AnalysisRenditionUsesLiveDocument) {
-  const auto raw_path = std::filesystem::path(TEST_IMG_PATH) / "raw" / "linear_dng" / "mfzoty.dng";
-  if (!std::filesystem::exists(raw_path)) {
-    GTEST_SKIP() << "Sample DNG file is missing: " << raw_path.string();
-  }
-
-  ProjectService project(db_path_, meta_path_);
-  auto           img_pool = project.GetImagePoolService();
-  auto           pinned   = PinLinearDngInPool(*img_pool, raw_path);
-  ASSERT_TRUE(pinned);
-  ASSERT_TRUE(pinned.Get()->HasRawColorContext());
-  const auto image_id   = pinned.Get()->image_id_;
-  const auto element_id = sl_element_id_t{1};
-
-  auto             pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
-  ThumbnailService thumbnail_service(project.GetSleeveService(), img_pool, pipeline_service);
-  auto             live_guard = pipeline_service->LoadPipeline(element_id);
-  ASSERT_NE(live_guard, nullptr);
-  ASSERT_NE(live_guard->document_, nullptr);
-  BindImportedCameraProfile(*live_guard->document_, pinned.Get()->GetRawColorContext());
-  auto* analysis_exposure =
-      live_guard->document_->PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure());
-  ASSERT_NE(analysis_exposure, nullptr);
-  analysis_exposure->LoadJson({{"exposure_ev", 2.25f}});
-  live_guard->dirty_   = true;
-  const auto live_json = live_guard->document_->ToJson().dump();
-  PipelineDocument* const live_document = live_guard->document_.get();
-
-  std::promise<ThumbnailRequestResult> done;
-  auto                                 done_future = done.get_future();
-  thumbnail_service.RequestAnalysisRendition(
-      element_id, image_id, ThumbnailResolution::k256,
-      [&done](ThumbnailRequestResult r) { done.set_value(std::move(r)); });
-  ASSERT_EQ(done_future.wait_for(60s), std::future_status::ready);
-  const auto result = done_future.get();
-  EXPECT_EQ(result.status, ThumbnailRequestStatus::kReady) << result.message;
-  ASSERT_NE(result.guard, nullptr);
-  ASSERT_NE(result.guard->thumbnail_buffer_, nullptr);
-  EXPECT_EQ(live_guard->document_.get(), live_document);
-  EXPECT_EQ(live_guard->document_->ToJson().dump(), live_json);
-  EXPECT_EQ(live_guard->pin_count_, size_t{1});
-  EXPECT_TRUE(live_guard->dirty_);
-
-  thumbnail_service.ReleaseAnalysisRendition(result.key);
-  pipeline_service->SavePipeline(live_guard);
-}
 TEST_F(ThumbnailServiceTests, DiskCacheTracksRootAndActiveHeadAndServesAfterPipelineIsRemoved) {
   const auto raw_path = std::filesystem::path(TEST_IMG_PATH) / "raw" / "linear_dng" / "mfzoty.dng";
   if (!std::filesystem::exists(raw_path)) {
@@ -1287,7 +1153,8 @@ TEST_F(ThumbnailServiceTests, DiskCacheTracksRootAndActiveHeadAndServesAfterPipe
   ProjectService             project(db_path_, meta_path_);
   auto                       fs_service = project.GetSleeveService();
   auto                       img_pool   = project.GetImagePoolService();
-  ImportServiceImpl          import_service(fs_service, img_pool);
+  auto              import_pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  ImportServiceImpl import_service(fs_service, img_pool, import_pipelines);
 
   std::shared_ptr<ImportJob> import_job = std::make_shared<ImportJob>();
   std::promise<ImportResult> final_result;
@@ -1321,14 +1188,16 @@ TEST_F(ThumbnailServiceTests, DiskCacheTracksRootAndActiveHeadAndServesAfterPipe
   ASSERT_NE(root_guard, nullptr);
   root_pipeline_service->SavePipeline(root_guard);
 
-  root_id_t root_id{};
+  // Disk entries are labelled with the committed snapshot's head ("root" before the first
+  // commit) and its transaction chain.
+  std::string root_label;
   {
     auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
     auto             db_lock  = db_guard.Lock();
     CommitGraphStore graph_service(db_guard.conn_);
     auto             graph = graph_service.LoadGraph(element_id);
     ASSERT_TRUE(graph.has_value());
-    root_id = graph->GetRootId();
+    root_label = "root:" + graph->ChainHashForHead(std::nullopt).ToString();
   }
 
   uint64_t first_hash = 0;
@@ -1353,10 +1222,22 @@ TEST_F(ThumbnailServiceTests, DiskCacheTracksRootAndActiveHeadAndServesAfterPipe
     nlohmann::json metadata;
     metadata_file >> metadata;
     ASSERT_EQ(metadata["entries"].size(), 1u);
-    EXPECT_EQ(metadata["entries"][0]["edit_version_hash"].get<std::string>(), root_id.ToString());
+    EXPECT_EQ(metadata["entries"][0]["edit_version_hash"].get<std::string>(), root_label);
   }
 
+  // Thumbnails replay the stored history, so the commit's before side must be the committed value
+  // (the imported DNG carries a non-zero exposure).
+  const auto committed_exposure = PipelineMgmtService(project.GetStorage())
+                                      .AcquireCommittedSnapshot(element_id)
+                                      ->Document()
+                                      .PrimaryGrade()
+                                      ->FindAdjustmentByType(type_ids::Exposure())
+                                      ->ToJson();
+  auto raised_exposure           = committed_exposure;
+  raised_exposure["exposure_ev"] = committed_exposure.at("exposure_ev").get<float>() + 0.25f;
+
   commit_hash_t active_head{};
+  std::string   active_label;
   {
     auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
     auto             db_lock  = db_guard.Lock();
@@ -1364,14 +1245,14 @@ TEST_F(ThumbnailServiceTests, DiskCacheTracksRootAndActiveHeadAndServesAfterPipe
     auto             graph = graph_service.LoadGraph(element_id);
     ASSERT_TRUE(graph.has_value());
 
-    PipelineEditBatch batch;
+    PipelineEditBatch  batch;
     SetParameterChange change;
     change.target.owner_kind             = PipelineParameterOwnerKind::ColorGrade;
     change.target.node_id                = NodeId{"grade.primary"};
     change.target.adjustment_instance_id = AdjustmentInstanceId{"grade.primary.exposure"};
     change.target.field_key              = "exposure";
-    change.before_value                  = nlohmann::json{{"exposure_ev", 0.0f}};
-    change.after_value                   = nlohmann::json{{"exposure_ev", 0.25f}};
+    change.before_value                  = committed_exposure;
+    change.after_value                   = raised_exposure;
     change.before_enabled                = true;
     change.after_enabled                 = true;
     batch.operation_kind                 = PipelineEditOperationKind::SetParameter;
@@ -1381,6 +1262,7 @@ TEST_F(ThumbnailServiceTests, DiskCacheTracksRootAndActiveHeadAndServesAfterPipe
     active_head = commit.GetCommitHash();
     ASSERT_TRUE(graph->InsertCommit(std::move(commit)));
     graph->MoveWorkingHead(graph->GetActiveVersionId(), active_head);
+    active_label = active_head.ToString() + ":" + graph->ChainHashForHead(active_head).ToString();
     graph_service.Materialize(
         graph->CaptureMaterializationWithSerializedPipelineState({{"thumbnail_test", true}}));
   }
@@ -1406,8 +1288,8 @@ TEST_F(ThumbnailServiceTests, DiskCacheTracksRootAndActiveHeadAndServesAfterPipe
     for (const auto& entry : metadata["entries"]) {
       cache_hashes.insert(entry["edit_version_hash"].get<std::string>());
     }
-    EXPECT_TRUE(cache_hashes.contains(root_id.ToString()));
-    EXPECT_TRUE(cache_hashes.contains(active_head.ToString()));
+    EXPECT_TRUE(cache_hashes.contains(root_label));
+    EXPECT_TRUE(cache_hashes.contains(active_label));
   }
 
   auto deleting_pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
@@ -1446,7 +1328,8 @@ TEST_F(ThumbnailServiceTests, DISABLED_PipelineRestoredFromDBGeneratesCorrectThu
     ProjectService            project(db_path_, meta_path_);
     auto                      fs_service = project.GetSleeveService();
     auto                      img_pool   = project.GetImagePoolService();
-    ImportServiceImpl         import_service(fs_service, img_pool);
+    auto import_pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+    ImportServiceImpl         import_service(fs_service, img_pool, import_pipelines);
     std::filesystem::path     img_root_path = {TEST_IMG_PATH "/raw/batch_import"};
 
     std::vector<image_path_t> paths{};
@@ -1568,7 +1451,8 @@ TEST_F(ThumbnailServiceTests, DISABLED_FuzzScrollBrowsingNoThrowReloadService) {
     ProjectService            project(db_path_, meta_path_);
     auto                      fs_service = project.GetSleeveService();
     auto                      img_pool   = project.GetImagePoolService();
-    ImportServiceImpl         import_service(fs_service, img_pool);
+    auto import_pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+    ImportServiceImpl         import_service(fs_service, img_pool, import_pipelines);
     std::filesystem::path     img_root_path = {TEST_IMG_PATH "/raw/batch_import"};
 
     std::vector<image_path_t> paths{};
@@ -1661,7 +1545,8 @@ TEST_F(ThumbnailServiceTests, FuzzScrollBrowsingSharedPtrLifetimeStress) {
     ProjectService            project(db_path_, meta_path_);
     auto                      fs_service = project.GetSleeveService();
     auto                      img_pool   = project.GetImagePoolService();
-    ImportServiceImpl         import_service(fs_service, img_pool);
+    auto import_pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+    ImportServiceImpl         import_service(fs_service, img_pool, import_pipelines);
     std::filesystem::path     img_root_path = {TEST_IMG_PATH "/raw/batch_import"};
 
     std::vector<image_path_t> paths{};
@@ -1788,7 +1673,8 @@ TEST_F(ThumbnailServiceTests, DISABLED_Generate16ThumbnailsAndValidateAll) {
   ProjectService            project(db_path_, meta_path_);
   auto                      fs_service = project.GetSleeveService();
   auto                      img_pool   = project.GetImagePoolService();
-  ImportServiceImpl         import_service(fs_service, img_pool);
+  auto              import_pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  ImportServiceImpl import_service(fs_service, img_pool, import_pipelines);
 
   std::filesystem::path     img_root_path = {TEST_IMG_PATH "/raw/batch_import"};
   std::vector<image_path_t> paths{};
@@ -1891,37 +1777,63 @@ TEST_F(ThumbnailServiceTests, DISABLED_Generate16ThumbnailsAndValidateAll) {
   }
 }
 
-TEST_F(ThumbnailServiceTests, MissingPipelineThrows) {
+TEST_F(ThumbnailServiceTests, ThumbnailOfImageWithoutHistoryReportsError) {
+  // Every imported image has a history root; an element without one is a broken invariant and
+  // the request fails with that reason instead of rendering some other document.
   ProjectService   project(db_path_, meta_path_);
-  auto             img_pool         = project.GetImagePoolService();
+  auto           pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  ThumbnailService thumbnail_service(project.GetSleeveService(), project.GetImagePoolService(),
+                                     pipeline_service);
 
-  auto             storage_service  = project.GetStorage();
-  auto             conn_guard       = storage_service->GetDatabase().GetConnectionGuard();
-  auto             pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
-  auto             scheduler        = std::make_shared<PipelineScheduler>();
-
-  ThumbnailService thumbnail_service(project.GetSleeveService(), img_pool, pipeline_service);
-
-  EXPECT_THROW(thumbnail_service.GetThumbnail(12345, 12345, [](std::shared_ptr<ThumbnailGuard>) {}),
-               std::runtime_error);
+  std::promise<ThumbnailRequestResult> done;
+  auto                                 done_future = done.get_future();
+  thumbnail_service.GetThumbnailDetailed(
+      12345, 12345, [&done](ThumbnailRequestResult r) { done.set_value(std::move(r)); }, true,
+      nullptr, ThumbnailResolution::k256);
+  ASSERT_EQ(done_future.wait_for(30s), std::future_status::ready);
+  const auto result = done_future.get();
+  EXPECT_EQ(result.status, ThumbnailRequestStatus::kError);
+  EXPECT_EQ(result.guard, nullptr);
+  EXPECT_NE(result.message.find("has no edit history root"), std::string::npos) << result.message;
 }
 
-TEST_F(ThumbnailServiceTests, MissingImageThrows) {
-  ProjectService project(db_path_, meta_path_);
-  auto           img_pool         = project.GetImagePoolService();
+TEST_F(ThumbnailServiceTests, ThumbnailOfImageMissingFromThePoolReportsError) {
+  const auto raw_path = std::filesystem::path(TEST_IMG_PATH) / "raw" / "linear_dng" / "mfzoty.dng";
+  if (!std::filesystem::exists(raw_path)) {
+    GTEST_SKIP() << "Sample DNG file is missing: " << raw_path.string();
+  }
+  ProjectService    project(db_path_, meta_path_);
+  auto              pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  ImportServiceImpl import_service(project.GetSleeveService(), project.GetImagePoolService(),
+                                   pipeline_service);
+  auto              import_job = std::make_shared<ImportJob>();
+  std::promise<ImportResult> imported;
+  auto                       imported_future = imported.get_future();
+  import_job->on_finished_ = [&imported](const ImportResult& r) { imported.set_value(r); };
+  import_job               = import_service.ImportToFolder({raw_path}, L"", {}, import_job);
+  ASSERT_NE(import_job, nullptr);
+  ASSERT_EQ(imported_future.wait_for(60s), std::future_status::ready);
+  ASSERT_EQ(imported_future.get().imported_, 1u);
+  const auto created = import_job->import_log_->Snapshot().created_;
+  ASSERT_EQ(created.size(), 1u);
+  import_service.SyncImports(import_job->import_log_->Snapshot(), L"");
+  project.GetSleeveService()->Sync();
+  project.GetImagePoolService()->SyncWithStorage();
 
-  auto           storage_service  = project.GetStorage();
-  auto           conn_guard       = storage_service->GetDatabase().GetConnectionGuard();
-  auto           pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
-  auto           scheduler        = std::make_shared<PipelineScheduler>();
-
-  constexpr sl_element_id_t kMissingImageId = 7777;
-
-  ThumbnailService thumbnail_service(project.GetSleeveService(), img_pool, pipeline_service);
-
-  EXPECT_THROW(thumbnail_service.GetThumbnail(kMissingImageId, kMissingImageId,
-                                              [](std::shared_ptr<ThumbnailGuard>) {}),
-               std::runtime_error);
+  constexpr image_id_t kMissingImageId = 7777;
+  ThumbnailService     thumbnail_service(project.GetSleeveService(), project.GetImagePoolService(),
+                                         pipeline_service);
+  std::promise<ThumbnailRequestResult> done;
+  auto                                 done_future = done.get_future();
+  thumbnail_service.GetThumbnailDetailed(
+      created.front().element_id_, kMissingImageId,
+      [&done](ThumbnailRequestResult r) { done.set_value(std::move(r)); }, true, nullptr,
+      ThumbnailResolution::k256);
+  ASSERT_EQ(done_future.wait_for(30s), std::future_status::ready);
+  const auto result = done_future.get();
+  EXPECT_EQ(result.status, ThumbnailRequestStatus::kError);
+  EXPECT_EQ(result.guard, nullptr);
+  EXPECT_FALSE(result.message.empty());
 }
 };  // namespace alcedo
 
@@ -1937,7 +1849,8 @@ TEST_F(ThumbnailServiceTests, CacheKeySeparatesResolutions) {
   ProjectService            project(db_path_, meta_path_);
   auto                      fs_service = project.GetSleeveService();
   auto                      img_pool   = project.GetImagePoolService();
-  ImportServiceImpl         import_service(fs_service, img_pool);
+  auto              import_pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  ImportServiceImpl import_service(fs_service, img_pool, import_pipelines);
   std::filesystem::path     img_root_path = {TEST_IMG_PATH "/raw/linear_dng"};
 
   std::vector<image_path_t> paths{};
@@ -2032,7 +1945,8 @@ TEST_F(ThumbnailServiceTests, MultiResolutionPinIndependence) {
   ProjectService            project(db_path_, meta_path_);
   auto                      fs_service = project.GetSleeveService();
   auto                      img_pool   = project.GetImagePoolService();
-  ImportServiceImpl         import_service(fs_service, img_pool);
+  auto              import_pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  ImportServiceImpl import_service(fs_service, img_pool, import_pipelines);
   std::filesystem::path     img_root_path = {TEST_IMG_PATH "/raw/linear_dng"};
 
   std::vector<image_path_t> paths{};
@@ -2098,7 +2012,8 @@ TEST_F(ThumbnailServiceTests, DISABLED_CancelPendingDoesNotCrash) {
   ProjectService            project(db_path_, meta_path_);
   auto                      fs_service = project.GetSleeveService();
   auto                      img_pool   = project.GetImagePoolService();
-  ImportServiceImpl         import_service(fs_service, img_pool);
+  auto              import_pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  ImportServiceImpl import_service(fs_service, img_pool, import_pipelines);
   std::filesystem::path     img_root_path = {TEST_IMG_PATH "/raw/linear_dng"};
 
   std::vector<image_path_t> paths{};
@@ -2160,7 +2075,8 @@ TEST_F(ThumbnailServiceTests, DISABLED_CancelPendingStressMultiple) {
   ProjectService            project(db_path_, meta_path_);
   auto                      fs_service = project.GetSleeveService();
   auto                      img_pool   = project.GetImagePoolService();
-  ImportServiceImpl         import_service(fs_service, img_pool);
+  auto              import_pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  ImportServiceImpl import_service(fs_service, img_pool, import_pipelines);
   std::filesystem::path     img_root_path = {TEST_IMG_PATH "/raw/linear_dng"};
 
   std::vector<image_path_t> paths{};
@@ -2234,7 +2150,8 @@ TEST_F(ThumbnailServiceTests, ResizeCachePreservesPinnedEntries) {
   ProjectService            project(db_path_, meta_path_);
   auto                      fs_service = project.GetSleeveService();
   auto                      img_pool   = project.GetImagePoolService();
-  ImportServiceImpl         import_service(fs_service, img_pool);
+  auto              import_pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  ImportServiceImpl import_service(fs_service, img_pool, import_pipelines);
   std::filesystem::path     img_root_path = {TEST_IMG_PATH "/raw/linear_dng"};
 
   std::vector<image_path_t> paths{};
@@ -2292,7 +2209,8 @@ TEST_F(ThumbnailServiceTests, ResizeCacheClampsToBounds) {
   ProjectService            project(db_path_, meta_path_);
   auto                      fs_service = project.GetSleeveService();
   auto                      img_pool   = project.GetImagePoolService();
-  ImportServiceImpl         import_service(fs_service, img_pool);
+  auto              import_pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  ImportServiceImpl import_service(fs_service, img_pool, import_pipelines);
   std::filesystem::path     img_root_path = {TEST_IMG_PATH "/raw/linear_dng"};
 
   std::vector<image_path_t> paths{};
@@ -2343,7 +2261,8 @@ TEST_F(ThumbnailServiceTests, InvalidateClearsAllResolutionTiers) {
   ProjectService            project(db_path_, meta_path_);
   auto                      fs_service = project.GetSleeveService();
   auto                      img_pool   = project.GetImagePoolService();
-  ImportServiceImpl         import_service(fs_service, img_pool);
+  auto              import_pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  ImportServiceImpl import_service(fs_service, img_pool, import_pipelines);
   std::filesystem::path     img_root_path = {TEST_IMG_PATH "/raw/linear_dng"};
 
   std::vector<image_path_t> paths{};
@@ -2406,7 +2325,8 @@ TEST_F(ThumbnailServiceTests, BackwardCompatibleDefaultResolution) {
   ProjectService            project(db_path_, meta_path_);
   auto                      fs_service = project.GetSleeveService();
   auto                      img_pool   = project.GetImagePoolService();
-  ImportServiceImpl         import_service(fs_service, img_pool);
+  auto              import_pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  ImportServiceImpl import_service(fs_service, img_pool, import_pipelines);
   std::filesystem::path     img_root_path = {TEST_IMG_PATH "/raw/linear_dng"};
 
   std::vector<image_path_t> paths{};
@@ -2471,7 +2391,8 @@ TEST_F(ThumbnailServiceTests, DISABLED_FuzzCompositeKeyMultiResNoCrash) {
     ProjectService            project(db_path_, meta_path_);
     auto                      fs_service = project.GetSleeveService();
     auto                      img_pool   = project.GetImagePoolService();
-    ImportServiceImpl         import_service(fs_service, img_pool);
+    auto import_pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+    ImportServiceImpl         import_service(fs_service, img_pool, import_pipelines);
     std::filesystem::path     img_root_path = {TEST_IMG_PATH "/raw/batch_import"};
 
     std::vector<image_path_t> paths{};
@@ -2581,7 +2502,8 @@ TEST_F(ThumbnailServiceTests, CancelPendingReturnsNull) {
   ProjectService            project(db_path_, meta_path_);
   auto                      fs_service = project.GetSleeveService();
   auto                      img_pool   = project.GetImagePoolService();
-  ImportServiceImpl         import_service(fs_service, img_pool);
+  auto              import_pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  ImportServiceImpl import_service(fs_service, img_pool, import_pipelines);
   std::filesystem::path     img_root_path = {TEST_IMG_PATH "/raw/linear_dng"};
 
   std::vector<image_path_t> paths{};
@@ -2654,7 +2576,8 @@ TEST_F(ThumbnailServiceTests, CancelPendingDrainsAllResolutions) {
   ProjectService            project(db_path_, meta_path_);
   auto                      fs_service = project.GetSleeveService();
   auto                      img_pool   = project.GetImagePoolService();
-  ImportServiceImpl         import_service(fs_service, img_pool);
+  auto              import_pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  ImportServiceImpl import_service(fs_service, img_pool, import_pipelines);
   std::filesystem::path     img_root_path = {TEST_IMG_PATH "/raw/linear_dng"};
 
   std::vector<image_path_t> paths{};
@@ -2793,7 +2716,8 @@ TEST_F(ThumbnailServiceTests, RapidCancelRequestCycle) {
   ProjectService            project(db_path_, meta_path_);
   auto                      fs_service = project.GetSleeveService();
   auto                      img_pool   = project.GetImagePoolService();
-  ImportServiceImpl         import_service(fs_service, img_pool);
+  auto              import_pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  ImportServiceImpl import_service(fs_service, img_pool, import_pipelines);
   std::filesystem::path     img_root_path = {TEST_IMG_PATH "/raw/linear_dng"};
 
   std::vector<image_path_t> paths{};
@@ -2871,7 +2795,8 @@ TEST_F(ThumbnailServiceTests, CancelIsolationMultipleElements) {
   ProjectService            project(db_path_, meta_path_);
   auto                      fs_service = project.GetSleeveService();
   auto                      img_pool   = project.GetImagePoolService();
-  ImportServiceImpl         import_service(fs_service, img_pool);
+  auto              import_pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  ImportServiceImpl import_service(fs_service, img_pool, import_pipelines);
   std::filesystem::path     img_root_path = {TEST_IMG_PATH "/raw/batch_import"};
 
   std::vector<image_path_t> paths{};
@@ -2948,7 +2873,8 @@ TEST_F(ThumbnailServiceTests, GenerationTokenSurvivesConcurrentCancel) {
   ProjectService            project(db_path_, meta_path_);
   auto                      fs_service = project.GetSleeveService();
   auto                      img_pool   = project.GetImagePoolService();
-  ImportServiceImpl         import_service(fs_service, img_pool);
+  auto              import_pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  ImportServiceImpl import_service(fs_service, img_pool, import_pipelines);
   std::filesystem::path     img_root_path = {TEST_IMG_PATH "/raw/linear_dng"};
 
   std::vector<image_path_t> paths{};
@@ -3051,7 +2977,8 @@ TEST_F(ThumbnailServiceTests, CancelWhileRenderInProgress) {
   ProjectService            project(db_path_, meta_path_);
   auto                      fs_service = project.GetSleeveService();
   auto                      img_pool   = project.GetImagePoolService();
-  ImportServiceImpl         import_service(fs_service, img_pool);
+  auto              import_pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  ImportServiceImpl import_service(fs_service, img_pool, import_pipelines);
   std::filesystem::path     img_root_path = {TEST_IMG_PATH "/raw/linear_dng"};
 
   std::vector<image_path_t> paths{};
@@ -3115,7 +3042,8 @@ TEST_F(ThumbnailServiceTests, CancelThenImmediateRerequestSameTierCompletes) {
   ProjectService            project(db_path_, meta_path_);
   auto                      fs_service = project.GetSleeveService();
   auto                      img_pool   = project.GetImagePoolService();
-  ImportServiceImpl         import_service(fs_service, img_pool);
+  auto              import_pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  ImportServiceImpl import_service(fs_service, img_pool, import_pipelines);
   std::filesystem::path     img_root_path = {TEST_IMG_PATH "/raw/linear_dng"};
 
   std::vector<image_path_t> paths{};
@@ -3203,7 +3131,8 @@ TEST_F(ThumbnailServiceTests, FuzzCancelRequestRace) {
     ProjectService            project(db_path_, meta_path_);
     auto                      fs_service = project.GetSleeveService();
     auto                      img_pool   = project.GetImagePoolService();
-    ImportServiceImpl         import_service(fs_service, img_pool);
+    auto import_pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+    ImportServiceImpl         import_service(fs_service, img_pool, import_pipelines);
     std::filesystem::path     img_root_path = {TEST_IMG_PATH "/raw/batch_import"};
 
     std::vector<image_path_t> paths{};

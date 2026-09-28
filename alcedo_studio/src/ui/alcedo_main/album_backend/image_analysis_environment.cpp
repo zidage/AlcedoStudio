@@ -135,7 +135,7 @@ class AlbumImageAnalysisEnvironment final : public IImageAnalysisEnvironment {
                                 std::shared_ptr<alcedo::ImageAnalysisInFlightGate> gate)
       : project_(project), semantic_(semantic), profiles_(profiles), gate_(std::move(gate)) {}
 
-  auto ThumbnailProvider() -> std::shared_ptr<IImageAnalysisThumbnailProvider> override {
+  auto ThumbnailProvider() -> std::shared_ptr<IAnalysisRenditionProvider> override {
     if (thumbnail_provider_) {
       return thumbnail_provider_;
     }
@@ -146,7 +146,7 @@ class AlbumImageAnalysisEnvironment final : public IImageAnalysisEnvironment {
     if (!ts) {
       return nullptr;
     }
-    thumbnail_provider_ = std::make_shared<ThumbnailServiceImageAnalysisProvider>(ts);
+    thumbnail_provider_ = std::make_shared<ThumbnailServiceAnalysisRenditionProvider>(ts);
     return thumbnail_provider_;
   }
 
@@ -279,7 +279,7 @@ class AlbumImageAnalysisEnvironment final : public IImageAnalysisEnvironment {
   SemanticGenerationController*                    semantic_ = nullptr;
   alcedo::AiProviderProfileController*             profiles_ = nullptr;
   std::shared_ptr<alcedo::ImageAnalysisInFlightGate> gate_;
-  std::shared_ptr<IImageAnalysisThumbnailProvider> thumbnail_provider_;
+  std::shared_ptr<IAnalysisRenditionProvider>        thumbnail_provider_;
 };
 
 std::shared_ptr<IImageAnalysisEnvironment> MakeAlbumImageAnalysisEnvironment(

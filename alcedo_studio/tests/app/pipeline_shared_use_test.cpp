@@ -141,16 +141,33 @@ auto BatchWorkspace(PipelineExecutor& executor) -> RenderSessionResources {
   return {};
 }
 
+/// True when @p executor created a batch renderer, i.e. a thumbnail, analysis, or export render
+/// ran on it.
+auto HasBatchRenderer(PipelineExecutor& executor) -> bool {
+#ifdef HAVE_CUDA
+  if (executor.DebugCudaBatchRenderer() != nullptr) {
+    return true;
+  }
+#endif
+#ifdef HAVE_METAL
+  if (executor.DebugMetalBatchRenderer() != nullptr) {
+    return true;
+  }
+#endif
+#ifdef HAVE_OPENCL
+  if (executor.DebugOpenClBatchRenderer() != nullptr) {
+    return true;
+  }
+#endif
+  return false;
+}
+
 auto InteractivePreparedSourceCount(PipelineExecutor& executor) -> std::size_t {
   return InteractiveWorkspace(executor).prepared_source_entry_count;
 }
 
 auto InteractiveTexturePoolEntries(PipelineExecutor& executor) -> std::size_t {
   return InteractiveWorkspace(executor).texture_pool_entry_count;
-}
-
-auto BatchPublishedResultCount(PipelineExecutor& executor) -> std::size_t {
-  return BatchWorkspace(executor).published_result_count;
 }
 
 }  // namespace
@@ -176,15 +193,6 @@ class PipelineSharedUseTest : public ::testing::Test {
     std::filesystem::remove(meta_path_, ec);
   }
 };
-
-TEST_F(PipelineSharedUseTest, ThumbnailDiskCacheWriteAllowedRejectsStalePreviewAndDirtyLabels) {
-  EXPECT_TRUE(ThumbnailDiskCacheWriteAllowed("abc", "abc", false, false));
-  EXPECT_FALSE(ThumbnailDiskCacheWriteAllowed("h1", "h2", false, false));
-  EXPECT_FALSE(ThumbnailDiskCacheWriteAllowed("abc", "abc", true, false));
-  EXPECT_FALSE(ThumbnailDiskCacheWriteAllowed("abc", "abc", false, true));
-  EXPECT_FALSE(ThumbnailDiskCacheWriteAllowed("", "abc", false, false));
-  EXPECT_FALSE(ThumbnailDiskCacheWriteAllowed("abc", "", false, false));
-}
 
 TEST_F(PipelineSharedUseTest, BackgroundCacheMissUsesNormalDocumentLoad) {
   ProjectService      project(db_path_, meta_path_);
@@ -319,33 +327,9 @@ TEST_F(PipelineSharedUseTest, CanceledAndFailedTaskReleasesPipelineUse) {
   }
 
   pipelines->ReleasePipelineUse(live);
-  const auto ids = ImportLinearDng(project, pipelines);
-  if (ids.first == 0) {
-    GTEST_SKIP() << "Sample DNG file is missing: " << LinearDngPath().string();
-  }
-  auto imported = pipelines->LoadPipeline(ids.first);
-  ASSERT_NE(imported, nullptr);
-  BindImportedRawColor(imported, *project.GetImagePoolService(), ids.second);
-  ThumbnailService live_thumbnails(project.GetSleeveService(), project.GetImagePoolService(),
-                                    pipelines);
-  std::unique_lock held(imported->pipeline_->GetRenderLock());
-  std::promise<ThumbnailRequestResult> canceled;
-  auto                                 canceled_fut = canceled.get_future();
-  live_thumbnails.GetThumbnailDetailed(
-      ids.first, ids.second,
-      [&canceled](ThumbnailRequestResult result) { canceled.set_value(std::move(result)); }, true,
-      nullptr, ThumbnailResolution::k256);
-  ASSERT_TRUE(pipelines->WaitUntilPinCount(imported, 2, 10s));
-  live_thumbnails.CancelPending(ThumbnailCacheKey{ids.first, ThumbnailResolution::k256});
-  held.unlock();
-  ASSERT_EQ(canceled_fut.wait_for(30s), std::future_status::ready);
-  EXPECT_EQ(canceled_fut.get().status, ThumbnailRequestStatus::kCanceled);
-  EXPECT_TRUE(pipelines->WaitUntilPinCount(imported, 1, 5s));
-  EXPECT_EQ(imported->pin_count_, size_t{1});
-  pipelines->ReleasePipelineUse(imported);
 }
 
-TEST_F(PipelineSharedUseTest, BackgroundTasksReuseLivePipelineAndDocument) {
+TEST_F(PipelineSharedUseTest, ThumbnailAndAnalysisLeaveTheLiveGuardUntouched) {
   if (!std::filesystem::exists(LinearDngPath())) {
     GTEST_SKIP() << "Sample DNG file is missing: " << LinearDngPath().string();
   }
@@ -358,6 +342,7 @@ TEST_F(PipelineSharedUseTest, BackgroundTasksReuseLivePipelineAndDocument) {
   BindImportedRawColor(live, *project.GetImagePoolService(), ids.second);
   PipelineExecutor* const    executor = live->pipeline_.get();
   PipelineDocument* const    document = live->document_.get();
+  pipelines->ResetPipelineAcquireCountsForTesting();
   ThumbnailService           thumbnails(project.GetSleeveService(), project.GetImagePoolService(),
                                           pipelines);
   const auto first = GetThumbnailDetailedBlocking(thumbnails, ids.first, ids.second,
@@ -365,30 +350,33 @@ TEST_F(PipelineSharedUseTest, BackgroundTasksReuseLivePipelineAndDocument) {
   EXPECT_EQ(first.status, ThumbnailRequestStatus::kReady) << first.message;
   ASSERT_NE(first.guard, nullptr);
   ASSERT_NE(first.guard->thumbnail_buffer_, nullptr);
-  ASSERT_TRUE(pipelines->WaitUntilPinCount(live, 1, 10s));
   EXPECT_EQ(live->pipeline_.get(), executor);
   EXPECT_EQ(live->document_.get(), document);
   EXPECT_EQ(InteractivePreparedSourceCount(*live->pipeline_), 0u);
   EXPECT_EQ(InteractiveTexturePoolEntries(*live->pipeline_), 0u);
-  EXPECT_EQ(BatchPublishedResultCount(*live->pipeline_), 0u);
+  EXPECT_FALSE(HasBatchRenderer(*live->pipeline_));
 
   std::promise<ThumbnailRequestResult> analysis_done;
   auto                                 analysis_fut = analysis_done.get_future();
-  thumbnails.RequestAnalysisRendition(
-      ids.first, ids.second, ThumbnailResolution::k256,
-      [&analysis_done](ThumbnailRequestResult result) { analysis_done.set_value(std::move(result)); });
+  const auto                           rendition =
+      thumbnails.RequestAnalysisRendition(ids.first, ids.second, ThumbnailResolution::k256,
+                                          [&analysis_done](ThumbnailRequestResult result) {
+                                            analysis_done.set_value(std::move(result));
+                                          });
   ASSERT_EQ(analysis_fut.wait_for(60s), std::future_status::ready);
   const auto analysis = analysis_fut.get();
   EXPECT_EQ(analysis.status, ThumbnailRequestStatus::kReady) << analysis.message;
   ASSERT_NE(analysis.guard, nullptr);
   ASSERT_NE(analysis.guard->thumbnail_buffer_, nullptr);
-  ASSERT_TRUE(pipelines->WaitUntilPinCount(live, 1, 10s));
   EXPECT_EQ(live->pipeline_.get(), executor);
   EXPECT_EQ(live->document_.get(), document);
   EXPECT_EQ(live->pin_count_, size_t{1});
+  EXPECT_FALSE(HasBatchRenderer(*live->pipeline_));
+  // Neither render loaded a guard: both read the committed snapshot.
+  EXPECT_EQ(pipelines->PipelineLoadCount(), 0u);
 
   thumbnails.ReleaseThumbnail(ThumbnailCacheKey{ids.first, ThumbnailResolution::k256});
-  thumbnails.ReleaseAnalysisRendition(analysis.key);
+  thumbnails.ReleaseAnalysisRendition(rendition);
   pipelines->SavePipeline(live);
 }
 
@@ -403,12 +391,6 @@ TEST_F(PipelineSharedUseTest, TaskRenderOptionsDoNotLeakIntoLaterEditorRequests)
   auto live = pipelines->LoadPipeline(ids.first);
   ASSERT_NE(live, nullptr);
   BindImportedRawColor(live, *project.GetImagePoolService(), ids.second);
-  ThumbnailService thumbnails(project.GetSleeveService(), project.GetImagePoolService(), pipelines);
-  const auto       result = GetThumbnailDetailedBlocking(thumbnails, ids.first, ids.second,
-                                                         ThumbnailResolution::k256);
-  EXPECT_EQ(result.status, ThumbnailRequestStatus::kReady) << result.message;
-  ASSERT_NE(result.guard, nullptr);
-  ASSERT_TRUE(pipelines->WaitUntilPinCount(live, 1, 10s));
 
   {
     auto extra = pipelines->LoadPipeline(ids.first);
@@ -438,7 +420,6 @@ TEST_F(PipelineSharedUseTest, TaskRenderOptionsDoNotLeakIntoLaterEditorRequests)
   EXPECT_FALSE(editor_request.require_host_output);
   EXPECT_EQ(editor_request.decode_res, DecodeRes::FULL);
 
-  thumbnails.ReleaseThumbnail(ThumbnailCacheKey{ids.first, ThumbnailResolution::k256});
   pipelines->SavePipeline(live);
 }
 
@@ -486,7 +467,6 @@ TEST_F(PipelineSharedUseTest, BackgroundReleaseDoesNotSaveOrClearEditorState) {
                                                         ThumbnailResolution::k256);
   EXPECT_EQ(result.status, ThumbnailRequestStatus::kReady) << result.message;
   EXPECT_TRUE(live->dirty_);
-  ASSERT_TRUE(pipelines->WaitUntilPinCount(live, 1, std::chrono::seconds(10)));
   EXPECT_EQ(live->pin_count_, size_t{1});
   EXPECT_EQ(live->document_->ToJson(), live_json);
   const auto stored_after =
@@ -494,13 +474,13 @@ TEST_F(PipelineSharedUseTest, BackgroundReleaseDoesNotSaveOrClearEditorState) {
   EXPECT_EQ(stored_after, stored_before);
   EXPECT_EQ(InteractivePreparedSourceCount(*live->pipeline_), prepared_before);
   EXPECT_EQ(InteractiveTexturePoolEntries(*live->pipeline_), session_textures_before);
-  EXPECT_EQ(BatchPublishedResultCount(*live->pipeline_), 0u);
+  EXPECT_FALSE(HasBatchRenderer(*live->pipeline_));
 
   thumbnails.ReleaseThumbnail(ThumbnailCacheKey{ids.first, ThumbnailResolution::k256});
   pipelines->SavePipeline(live);
 }
 
-TEST_F(PipelineSharedUseTest, AnalysisAndExportUseSharedExecutorWithoutChangingEdits) {
+TEST_F(PipelineSharedUseTest, AnalysisAndExportLeaveLiveEditsUnchanged) {
   if (!std::filesystem::exists(LinearDngPath())) {
     GTEST_SKIP() << "Sample DNG file is missing: " << LinearDngPath().string();
   }
@@ -518,9 +498,11 @@ TEST_F(PipelineSharedUseTest, AnalysisAndExportUseSharedExecutorWithoutChangingE
   ThumbnailService thumbnails(project.GetSleeveService(), project.GetImagePoolService(), pipelines);
   std::promise<ThumbnailRequestResult> analysis_done;
   auto                                 analysis_fut = analysis_done.get_future();
-  thumbnails.RequestAnalysisRendition(
-      ids.first, ids.second, ThumbnailResolution::k256,
-      [&analysis_done](ThumbnailRequestResult result) { analysis_done.set_value(std::move(result)); });
+  const auto                           rendition =
+      thumbnails.RequestAnalysisRendition(ids.first, ids.second, ThumbnailResolution::k256,
+                                          [&analysis_done](ThumbnailRequestResult result) {
+                                            analysis_done.set_value(std::move(result));
+                                          });
   ASSERT_EQ(analysis_fut.wait_for(60s), std::future_status::ready);
   const auto analysis = analysis_fut.get();
   EXPECT_EQ(analysis.status, ThumbnailRequestStatus::kReady) << analysis.message;
@@ -564,105 +546,10 @@ TEST_F(PipelineSharedUseTest, AnalysisAndExportUseSharedExecutorWithoutChangingE
   EXPECT_EQ(live->document_->ToJson(), live_json);
   EXPECT_EQ(live->pin_count_, size_t{1});
 
-  thumbnails.ReleaseAnalysisRendition(analysis.key);
+  thumbnails.ReleaseAnalysisRendition(rendition);
   pipelines->SavePipeline(live);
   std::error_code ec;
   std::filesystem::remove_all(export_dir, ec);
-}
-
-TEST_F(PipelineSharedUseTest, QueuedRenderDoesNotStorePixelsUnderStaleCommitLabel) {
-  EXPECT_FALSE(ThumbnailDiskCacheWriteAllowed("old", "new", false, false));
-  if (!std::filesystem::exists(LinearDngPath())) {
-    GTEST_SKIP() << "Sample DNG file is missing: " << LinearDngPath().string();
-  }
-  ProjectService project(db_path_, meta_path_);
-  auto           pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
-  const auto     ids       = ImportLinearDng(project, pipelines);
-  ASSERT_NE(ids.first, 0u);
-  auto live = pipelines->LoadEditorPipeline(ids.first);
-  ASSERT_NE(live, nullptr);
-  BindImportedRawColor(live, *project.GetImagePoolService(), ids.second);
-  ASSERT_NE(live->commit_graph_, nullptr);
-  live->dirty_              = true;
-  live->unsettled_preview_  = true;
-
-  const auto cache_root =
-      std::filesystem::temp_directory_path() /
-      ("pipeline_shared_disk_" +
-       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-  ThumbnailService thumbnails(project.GetSleeveService(), project.GetImagePoolService(), pipelines,
-                               project.GetStorage(), project.GetProjectUUID(), cache_root);
-  const auto result = GetThumbnailDetailedBlocking(thumbnails, ids.first, ids.second,
-                                                    ThumbnailResolution::k256);
-  EXPECT_EQ(result.status, ThumbnailRequestStatus::kReady) << result.message;
-  ASSERT_NE(result.guard, nullptr);
-  EXPECT_TRUE(live->dirty_);
-  EXPECT_TRUE(live->unsettled_preview_);
-  ASSERT_TRUE(pipelines->WaitUntilPinCount(live, 1, std::chrono::seconds(10)));
-  EXPECT_EQ(live->pin_count_, size_t{1});
-
-  thumbnails.FlushDiskCacheMetadata();
-  ThumbnailDiskCacheKey key;
-  key.project_uuid         = project.GetProjectUUID();
-  key.element_id           = ids.first;
-  key.resolution           = ThumbnailResolution::k256;
-  key.purpose              = ThumbnailDiskCachePurpose::kThumbnail;
-  key.cache_schema_version  = 2;
-  const auto head          = live->working_head_commit_hash();
-  key.edit_version_hash    = head.has_value() ? head->ToString() : live->root_id_.ToString();
-  ThumbnailDiskCacheService disk(cache_root);
-  disk.Initialize(project.GetProjectUUID());
-  EXPECT_FALSE(disk.Lookup(key));
-
-  live->dirty_             = false;
-  live->unsettled_preview_ = false;
-  // The first request intentionally remains cached above. Force this second request through the
-  // scheduler so the test exercises a render queued behind the held live render lock.
-  thumbnails.InvalidateThumbnail(ids.first);
-  std::unique_lock held(live->pipeline_->GetRenderLock());
-  const auto queued_head = live->working_head_commit_hash();
-  std::promise<ThumbnailRequestResult> queued;
-  auto                                 queued_fut = queued.get_future();
-  thumbnails.GetThumbnailDetailed(
-      ids.first, ids.second,
-      [&queued](ThumbnailRequestResult result) { queued.set_value(std::move(result)); }, true,
-      nullptr, ThumbnailResolution::k256);
-  ASSERT_TRUE(pipelines->WaitUntilPinCount(live, 2, 10s));
-  PipelineEditBatch batch;
-  SetParameterChange change;
-  change.target.owner_kind             = PipelineParameterOwnerKind::ColorGrade;
-  change.target.node_id                = NodeId{"grade.primary"};
-  change.target.adjustment_instance_id = AdjustmentInstanceId{"grade.primary.exposure"};
-  change.target.field_key              = "exposure";
-  change.before_value                  = nlohmann::json{{"exposure_ev", 0.0f}};
-  change.after_value                   = nlohmann::json{{"exposure_ev", 0.25f}};
-  change.before_enabled                = true;
-  change.after_enabled                 = true;
-  batch.operation_kind                 = PipelineEditOperationKind::SetParameter;
-  batch.presentation_key               = "history.operation.set_parameter";
-  batch.changes.push_back(std::move(change));
-  auto commit = EditCommit::MakePipelineEdit(live->root_id_, live->working_head_commit_hash(),
-                                             std::move(batch));
-  const auto new_head = commit.GetCommitHash();
-  ASSERT_TRUE(live->commit_graph_->InsertCommit(std::move(commit)));
-  live->commit_graph_->MoveWorkingHead(live->commit_graph_->GetActiveVersionId(), new_head);
-  held.unlock();
-  ASSERT_EQ(queued_fut.wait_for(60s), std::future_status::ready);
-  EXPECT_EQ(queued_fut.get().status, ThumbnailRequestStatus::kReady);
-  thumbnails.FlushDiskCacheMetadata();
-  ThumbnailDiskCacheKey stale = key;
-  if (queued_head.has_value()) {
-    stale.edit_version_hash = queued_head->ToString();
-  }
-  ThumbnailDiskCacheKey fresh = key;
-  fresh.edit_version_hash      = new_head.ToString();
-  EXPECT_FALSE(disk.Lookup(stale));
-  EXPECT_FALSE(disk.Lookup(fresh));
-
-  thumbnails.ReleaseThumbnail(ThumbnailCacheKey{ids.first, ThumbnailResolution::k256});
-  pipelines->SavePipeline(live);
-  std::error_code ec;
-  std::filesystem::remove_all(cache_root, ec);
 }
 
 TEST_F(PipelineSharedUseTest, ConcurrentPipelineAcquirePublishesOneReadyLiveInstance) {
@@ -720,36 +607,6 @@ TEST_F(PipelineSharedUseTest, PipelineReacquirePreventsStaleLastUseCleanup) {
   EXPECT_TRUE(again->live_ready_);
   EXPECT_EQ(again->pin_count_, size_t{1});
   pipelines.ReleasePipelineUse(again);
-}
-
-TEST_F(PipelineSharedUseTest, BackgroundCompletionSignalsAfterPipelineUseRelease) {
-  if (!std::filesystem::exists(LinearDngPath())) {
-    GTEST_SKIP() << "Sample DNG file is missing: " << LinearDngPath().string();
-  }
-  ProjectService project(db_path_, meta_path_);
-  auto           pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
-  const auto     ids       = ImportLinearDng(project, pipelines);
-  ASSERT_NE(ids.first, 0u);
-  auto live = pipelines->LoadPipeline(ids.first);
-  ASSERT_NE(live, nullptr);
-  BindImportedRawColor(live, *project.GetImagePoolService(), ids.second);
-  std::atomic<int> completions{0};
-  ThumbnailService thumbnails(project.GetSleeveService(), project.GetImagePoolService(), pipelines);
-  std::promise<ThumbnailRequestResult> done;
-  auto                                 done_fut = done.get_future();
-  thumbnails.GetThumbnailDetailed(
-      ids.first, ids.second,
-      [&done, &completions](ThumbnailRequestResult result) {
-        completions.fetch_add(1, std::memory_order_relaxed);
-        done.set_value(std::move(result));
-      },
-      true, nullptr, ThumbnailResolution::k256);
-  ASSERT_EQ(done_fut.wait_for(60s), std::future_status::ready);
-  EXPECT_EQ(done_fut.get().status, ThumbnailRequestStatus::kReady);
-  EXPECT_EQ(completions.load(), 1);
-  ASSERT_TRUE(pipelines->WaitUntilPinCount(live, 1, 10s));
-  thumbnails.ReleaseThumbnail(ThumbnailCacheKey{ids.first, ThumbnailResolution::k256});
-  pipelines->SavePipeline(live);
 }
 
 TEST_F(PipelineSharedUseTest, BackgroundRendersKeepEditorResultCacheReusable) {
@@ -987,9 +844,10 @@ TEST_F(PipelineSharedUseTest, ConcurrentThumbnailAndExportDoNotChangeDocumentOut
   std::filesystem::remove_all(export_dir, ec);
 }
 
-// Thumbnail (k256) and 16-bit PNG export (256 px long edge) of mfzoty.dng render from the
-// document alone: exposure +0.75 EV, a crop, and a 3 degree rotation set on the document reach
-// both outputs without the executor's legacy stage table.
+// Thumbnail (k256) and 16-bit PNG export (256 px long edge) of mfzoty.dng render from a document
+// without the executor's legacy stage table. Export still renders the live document, so the
+// exposure +0.75 EV, crop, and 3 degree rotation set on it reach the export; the thumbnail renders
+// the committed state.
 TEST_F(PipelineSharedUseTest, ThumbnailAndExportRenderFromDocumentOnly) {
   if (!std::filesystem::exists(LinearDngPath())) {
     GTEST_SKIP() << "Sample DNG file is missing: " << LinearDngPath().string();

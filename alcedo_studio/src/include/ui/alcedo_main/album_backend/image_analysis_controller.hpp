@@ -38,7 +38,7 @@ class StatsEngine;
 class IImageAnalysisEnvironment {
  public:
   virtual ~IImageAnalysisEnvironment()                                                    = default;
-  virtual auto ThumbnailProvider() -> std::shared_ptr<IImageAnalysisThumbnailProvider>    = 0;
+  virtual auto ThumbnailProvider() -> std::shared_ptr<IAnalysisRenditionProvider>          = 0;
   virtual auto AnalysisClient() -> std::shared_ptr<IImageAnalysisClient>                  = 0;
   virtual auto CredentialStore() -> std::shared_ptr<IAiCredentialStore>                   = 0;
   virtual auto Gate() -> std::shared_ptr<ImageAnalysisInFlightGate>                       = 0;

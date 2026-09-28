@@ -60,11 +60,14 @@ auto FsPathFromQStringForTest(const QString& path) -> std::filesystem::path {
 
 // Synchronous thumbnail provider: returns a ready guard holding a small CPU mat so
 // the encoder produces real JPEG bytes. No ThumbnailService / pipeline required.
-class FakeThumbProvider : public alcedo::IImageAnalysisThumbnailProvider {
+class FakeThumbProvider : public alcedo::IAnalysisRenditionProvider {
  public:
-  void RequestThumbnail(const alcedo::ImageAnalysisItem&       item,
-                        alcedo::ThumbnailResolution            resolution,
-                        alcedo::ImageAnalysisThumbnailCallback callback) override {
+  void RequestRendition(sl_element_id_t element_id, image_id_t image_id,
+                        alcedo::ThumbnailResolution     resolution,
+                        alcedo::ThumbnailResultCallback callback) override {
+    alcedo::ImageAnalysisItem item{};
+    item.element_id = element_id;
+    item.image_id   = image_id;
     ++request_count_;
     alcedo::ThumbnailRequestResult r;
     r.key    = alcedo::ThumbnailCacheKey{item.element_id, resolution};
@@ -74,8 +77,8 @@ class FakeThumbProvider : public alcedo::IImageAnalysisThumbnailProvider {
     r.guard->thumbnail_buffer_ = std::make_unique<alcedo::ImageBuffer>(std::move(mat));
     callback(std::move(r));
   }
-  void CancelThumbnail(const alcedo::ThumbnailCacheKey&) override {}
-  void ReleaseThumbnail(const alcedo::ThumbnailCacheKey&) override { ++release_count_; }
+  void CancelRendition(const alcedo::ThumbnailCacheKey&) override {}
+  void ReleaseRendition(const alcedo::ThumbnailCacheKey&) override { ++release_count_; }
   auto RequestCount() const -> int { return request_count_.load(); }
   auto ReleaseCount() const -> int { return release_count_.load(); }
 
@@ -446,7 +449,7 @@ class FakeEnv : public IImageAnalysisEnvironment {
         gate_(std::move(gate)),
         store_(std::move(store)) {}
 
-  auto ThumbnailProvider() -> std::shared_ptr<alcedo::IImageAnalysisThumbnailProvider> override {
+  auto ThumbnailProvider() -> std::shared_ptr<alcedo::IAnalysisRenditionProvider> override {
     return thumbs_;
   }
   auto AnalysisClient() -> std::shared_ptr<alcedo::IImageAnalysisClient> override {

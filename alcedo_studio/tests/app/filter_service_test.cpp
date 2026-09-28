@@ -14,7 +14,10 @@
 #include <utility>
 #include <vector>
 
+#include "ai/ai_description.hpp"
+#include "ai/ai_rating.hpp"
 #include "app/import_service.hpp"
+#include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
 #include "app/sleeve_filter_service.hpp"
 #include "sleeve/sleeve_element/sleeve_element.hpp"
@@ -26,9 +29,6 @@
 #include "type/supported_file_type.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "utils/string/convert.hpp"
-
-#include "ai/ai_description.hpp"
-#include "ai/ai_rating.hpp"
 
 namespace alcedo {
 namespace {
@@ -213,8 +213,8 @@ class FilterServiceTests : public ::testing::Test {
     auto                           fs_service       = project.GetSleeveService();
     auto                           img_pool_service = project.GetImagePoolService();
 
-    std::unique_ptr<ImportService> import_service =
-        std::make_unique<ImportServiceImpl>(fs_service, img_pool_service);
+    std::unique_ptr<ImportService> import_service   = std::make_unique<ImportServiceImpl>(
+        fs_service, img_pool_service, std::make_shared<PipelineMgmtService>(project.GetStorage()));
 
     const image_path_t        batch_dir = std::string(TEST_IMG_PATH) + "/raw/batch";
 

@@ -22,6 +22,18 @@
 namespace alcedo {
 
 /**
+ * @brief History identity of the materialized state of one image, read without its checkpoint.
+ *
+ * The labels a reader compares to decide whether a document built earlier still equals the
+ * stored history state.
+ */
+struct MaterializedHistoryLabel {
+  root_id_t                root_id{};
+  head_commit_hash_t       head_commit_hash;
+  transaction_chain_hash_t transaction_chain_hash{};
+};
+
+/**
  * @brief Persist and reload the mini-Git commit graph for one image.
  *
  * Persistence only accepts a validated CommitGraphMaterialization so Version head, materialized
@@ -39,6 +51,15 @@ class CommitGraphStore {
   auto GetVersionRef(const version_ref_id_t& version_id) -> std::optional<VersionRef>;
   auto ListVersionRefsForElement(sl_element_id_t element_id) -> std::vector<VersionRef>;
   auto GetImageEditState(sl_element_id_t element_id) -> std::optional<ImageEditState>;
+
+  /**
+   * @brief Read only the root id, materialized head, and chain of @p element_id.
+   *
+   * Unlike @ref GetImageEditState it does not read or parse the serialized checkpoint document.
+   * @return nullopt when the image has no edit state.
+   */
+  auto GetMaterializedHistoryLabel(sl_element_id_t element_id)
+      -> std::optional<MaterializedHistoryLabel>;
 
   /// Read the immutable root state and verify that it belongs to the requested image.
   auto GetRootSerializedPipelineState(sl_element_id_t element_id, const root_id_t& root_id)

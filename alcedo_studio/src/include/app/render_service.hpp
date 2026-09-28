@@ -16,6 +16,8 @@ class RenderService {
     return std::make_shared<PipelineScheduler>();
   }
 
+  /// Shared workers whose only user is ExportService. ThumbnailService owns its own scheduler and
+  /// batch executors.
   static auto GetThumbnailOrExportScheduler() -> std::shared_ptr<PipelineScheduler> {
     static size_t thread_count = fmax(size_t(2), std::thread::hardware_concurrency() / 2);
     static std::shared_ptr<PipelineScheduler> scheduler =

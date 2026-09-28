@@ -1006,7 +1006,7 @@ void SemanticGenerationController::ContinueGenerationForItems(bool forceRegenera
       LabelPrototypeBatchSizeForProfile(*runtime_status.model_info);
   options.persistence = persistence;
 
-  auto thumbnails = std::make_shared<ThumbnailServiceSemanticThumbnailProvider>(thumbnail_service);
+  auto thumbnails = std::make_shared<ThumbnailServiceAnalysisRenditionProvider>(thumbnail_service);
   auto embedder   = std::make_shared<AiSidecarRuntimeImageEmbeddingClient>(runtime);
   auto service    = std::make_shared<SemanticGenerationService>(thumbnails, embedder);
   QPointer<SemanticGenerationController> self(this);

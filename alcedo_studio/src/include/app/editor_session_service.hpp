@@ -789,8 +789,31 @@ class EditorSessionService final : public IEditorSessionBackend {
   /// edit and no input of this image survives into the next session. Input
   /// admitted for another image is discarded, never applied here.
   auto SettlePendingInputForBoundary(std::string* error) -> bool;
+  /// Slider part of @ref SettlePendingInputForBoundary.
+  auto SettlePendingParameterInputForBoundary(std::string* error) -> bool;
+  /// Mask part of @ref SettlePendingInputForBoundary: apply queued Mask commands and finish an
+  /// open Mask input sequence as a pointer release would, so a Mask drag commits exactly like a
+  /// slider drag at the same boundary.
+  auto SettleMaskInputForBoundary(std::string* error) -> bool;
   void AbortMaskCreation();
   void ConsumePendingMaskCommands();
+  /// What one batch of Mask commands did to the live document.
+  struct MaskCommandBatchOutcome {
+    bool interactive_preview = false;
+    bool quality_requested   = false;
+    bool committed           = false;
+  };
+  /**
+   * @brief Apply @p batch to the live document under the history's locked-document access.
+   *
+   * The one path for queued Mask commands. With @p finish_open_input, an input sequence left open
+   * after the batch is finished (committed) as a pointer release would finish it. Reports the
+   * sequence state to the history on every return path. A rejected command cancels the open
+   * sequence and returns false with @p error set.
+   */
+  auto ApplyMaskCommandsToLiveDocument(const std::vector<EditorMaskCreationCommand>& batch,
+                                       bool finish_open_input, MaskCommandBatchOutcome* outcome,
+                                       std::string* error) -> bool;
   auto ApplyMaskCreationCommand(const EditorMaskCreationCommand& command)
       -> EditorMaskCreationResult;
   auto RouteMaskCreationRender(bool interactive_preview, bool quality_requested, bool committed)

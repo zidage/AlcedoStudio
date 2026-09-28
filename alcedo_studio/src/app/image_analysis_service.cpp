@@ -83,14 +83,14 @@ struct ThumbnailWaitState {
 // Requests one thumbnail and blocks (cooperatively, 25ms poll) until it returns or the
 // job is canceled. Mirrors WaitForThumbnailBatch in semantic_generation_service.cpp but
 // for a single item, since image analysis is serialized one image at a time.
-auto WaitForOneThumbnail(const std::shared_ptr<ImageAnalysisJob>&             job,
-                         const std::shared_ptr<IImageAnalysisThumbnailProvider>& provider,
+auto WaitForOneThumbnail(const std::shared_ptr<ImageAnalysisJob>&           job,
+                         const std::shared_ptr<IAnalysisRenditionProvider>& provider,
                          const ImageAnalysisItem& item, ThumbnailResolution resolution)
     -> ThumbnailRequestResult {
   auto state = std::make_shared<ThumbnailWaitState>();
 
   try {
-    provider->RequestThumbnail(item, resolution,
+    provider->RequestRendition(item.element_id, item.image_id, resolution,
                                [state, provider](ThumbnailRequestResult result) {
                                  bool               release_late = false;
                                  ThumbnailCacheKey  late_key{};
@@ -104,7 +104,7 @@ auto WaitForOneThumbnail(const std::shared_ptr<ImageAnalysisJob>&             jo
                                    }
                                  }
                                  if (release_late) {
-                                   provider->ReleaseThumbnail(late_key);
+                                   provider->ReleaseRendition(late_key);
                                  }
                                  state->cv.notify_all();
                                });
@@ -128,7 +128,7 @@ auto WaitForOneThumbnail(const std::shared_ptr<ImageAnalysisJob>&             jo
       if (job->IsCanceled()) {
         state->abandoned = true;
         lk.unlock();
-        provider->CancelThumbnail(ThumbnailCacheKey{item.element_id, resolution});
+        provider->CancelRendition(ThumbnailCacheKey{item.element_id, resolution});
         ThumbnailRequestResult r;
         r.key     = ThumbnailCacheKey{item.element_id, resolution};
         r.status  = ThumbnailRequestStatus::kCanceled;
@@ -323,39 +323,6 @@ auto ImageAnalysisInFlightGate::CurrentRequestId() const -> std::string {
 }
 
 void ImageAnalysisInFlightGate::NotifyAll() { cv_.notify_all(); }
-
-// --- ThumbnailServiceImageAnalysisProvider ---
-
-ThumbnailServiceImageAnalysisProvider::ThumbnailServiceImageAnalysisProvider(
-    std::shared_ptr<ThumbnailService> service)
-    : service_(std::move(service)) {}
-
-void ThumbnailServiceImageAnalysisProvider::RequestThumbnail(const ImageAnalysisItem& item,
-                                                             ThumbnailResolution      resolution,
-                                                             ImageAnalysisThumbnailCallback callback) {
-  if (!service_) {
-    ThumbnailRequestResult r;
-    r.key     = ThumbnailCacheKey{item.element_id, resolution};
-    r.status  = ThumbnailRequestStatus::kError;
-    r.message = "ThumbnailService is not available";
-    callback(std::move(r));
-    return;
-  }
-  service_->RequestAnalysisRendition(item.element_id, item.image_id, resolution,
-                                      std::move(callback));
-}
-
-void ThumbnailServiceImageAnalysisProvider::CancelThumbnail(const ThumbnailCacheKey& key) {
-  if (service_) {
-    service_->CancelAnalysisRendition(key);
-  }
-}
-
-void ThumbnailServiceImageAnalysisProvider::ReleaseThumbnail(const ThumbnailCacheKey& key) {
-  if (service_) {
-    service_->ReleaseAnalysisRendition(key);
-  }
-}
 
 // --- AiSidecarRuntimeImageAnalysisClient ---
 
@@ -630,9 +597,9 @@ void ImageAnalysisJob::SetClient(std::shared_ptr<IImageAnalysisClient> client) {
 // --- ImageAnalysisService ---
 
 ImageAnalysisService::ImageAnalysisService(
-    std::shared_ptr<IImageAnalysisThumbnailProvider> thumbnail_provider,
-    std::shared_ptr<IImageAnalysisClient>            analysis_client,
-    std::shared_ptr<ImageAnalysisInFlightGate>       in_flight_gate)
+    std::shared_ptr<IAnalysisRenditionProvider> thumbnail_provider,
+    std::shared_ptr<IImageAnalysisClient>       analysis_client,
+    std::shared_ptr<ImageAnalysisInFlightGate>  in_flight_gate)
     : thumbnail_provider_(std::move(thumbnail_provider)),
       analysis_client_(std::move(analysis_client)),
       in_flight_gate_(in_flight_gate ? in_flight_gate
@@ -756,14 +723,14 @@ auto ImageAnalysisService::ValidateConnection(
   return result;
 }
 
-void ImageAnalysisService::RunJob(const std::shared_ptr<ImageAnalysisJob>& job,
-                                  const std::vector<ImageAnalysisItem>&    items,
-                                  ImageAnalysisOptions                     options,
-                                  ImageAnalysisProgressCallback            on_progress,
-                                  ImageAnalysisFinishedCallback            on_finished,
-                                  std::shared_ptr<IImageAnalysisThumbnailProvider> thumbnail_provider,
-                                  std::shared_ptr<IImageAnalysisClient>            analysis_client,
-                                  std::shared_ptr<ImageAnalysisInFlightGate> in_flight_gate) {
+void ImageAnalysisService::RunJob(const std::shared_ptr<ImageAnalysisJob>&    job,
+                                  const std::vector<ImageAnalysisItem>&       items,
+                                  ImageAnalysisOptions                        options,
+                                  ImageAnalysisProgressCallback               on_progress,
+                                  ImageAnalysisFinishedCallback               on_finished,
+                                  std::shared_ptr<IAnalysisRenditionProvider> thumbnail_provider,
+                                  std::shared_ptr<IImageAnalysisClient>       analysis_client,
+                                  std::shared_ptr<ImageAnalysisInFlightGate>  in_flight_gate) {
   auto dispatch_progress = [&](const ImageAnalysisProgress& p) {
     if (on_progress) {
       on_progress(p);
@@ -891,7 +858,7 @@ void ImageAnalysisService::RunJob(const std::shared_ptr<ImageAnalysisJob>& job,
           &encode_error);
       // Release the thumbnail pin immediately after encode — BEFORE the encoded item
       // waits in the queue / behind the remote gate. The queue holds bytes, not a pin.
-      thumbnail_provider->ReleaseThumbnail(thumb.key);
+      thumbnail_provider->ReleaseRendition(thumb.key);
 
       if (!encoded.ok) {
         e.kind  = EncodedItemKind::kPrepFailed;

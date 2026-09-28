@@ -154,6 +154,10 @@ class EditorSessionHistoryPort final : public alcedo::IEditorHistoryPort {
                                             std::string* error) -> bool override;
 
  private:
+  /// Publish the committed snapshot of @p guard's image after a history operation (the
+  /// operation ran while the argument was evaluated) and return that operation's @p result.
+  auto PublishCommittedAfter(const alcedo::EditorHistoryGuardHandle& guard, bool result) -> bool;
+
   std::unique_ptr<EditorHistoryState>        state_;
   std::unique_ptr<EditorHistoryProjection>   projection_;
   std::unique_ptr<EditorHistoryMutation>     mutation_;

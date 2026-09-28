@@ -1409,11 +1409,12 @@ void EditorSessionService::AbortMaskCreation() {
   (void)dependencies_.history->WithLockedLiveDocument(
       guard,
       [this](PipelineDocument& document, MiniGitWorkingHistory& history,
-             const IEditorHistoryPort::LockedMaskSettle& settle, std::string*) {
+             const IEditorHistoryPort::LockedMaskSettle& settle, bool* input_open, std::string*) {
         mask_creation_.Bind(document, history);
         mask_creation_.SetSettlePublisher(settle);
         mask_creation_.SetInteractivePreview({});
         (void)mask_creation_.CancelCreationMode();
+        *input_open = mask_creation_.HasOpenOperation();
         return true;
       },
       &error);
@@ -1522,42 +1523,9 @@ void EditorSessionService::ConsumePendingMaskCommands() {
     serial_admission_.AbortCycle();
     return;
   }
-  bool        interactive_preview = false;
-  bool        quality_requested   = false;
-  bool        committed           = false;
-  std::string error;
-  const auto  applied = dependencies_.history->WithLockedLiveDocument(
-      lifecycle_.history_guard(),
-      [this, &batch, &interactive_preview, &quality_requested, &committed](
-          PipelineDocument& document, MiniGitWorkingHistory& history,
-          const IEditorHistoryPort::LockedMaskSettle& settle, std::string* op_error) {
-        mask_creation_.Bind(document, history);
-        mask_creation_.SetSettlePublisher(settle);
-        mask_creation_.SetInteractivePreview({});
-        for (const auto& command : batch) {
-          auto result = ApplyMaskCreationCommand(command);
-          if (!result.accepted) {
-            if (op_error != nullptr) {
-              *op_error =
-                  result.error.empty() ? "Mask creation command was rejected" : result.error;
-            }
-            if (mask_creation_.HasOpenOperation()) {
-              (void)mask_creation_.CancelMaskInput();
-            }
-            return false;
-          }
-          interactive_preview = interactive_preview || result.interactive_preview;
-          quality_requested   = quality_requested || result.quality_requested;
-          committed           = committed || result.committed;
-          if (command.kind == EditorMaskCreationCommandKind::Finish && result.committed &&
-              !result.mask_id.Empty()) {
-            (void)mask_creation_.SelectMask(mask_creation_.node_id(), result.mask_id,
-                                             lifecycle_.identity());
-          }
-        }
-        return true;
-      },
-      &error);
+  MaskCommandBatchOutcome outcome;
+  std::string             error;
+  const bool              applied = ApplyMaskCommandsToLiveDocument(batch, false, &outcome, &error);
   // The controller's observable state moved while bound to the live document;
   // publish the read state before GUI readers observe the result.
   RefreshMaskCreationReadState();
@@ -1572,11 +1540,71 @@ void EditorSessionService::ConsumePendingMaskCommands() {
     RequestPendingInputConsume();
     return;
   }
-  const auto routed = RouteMaskCreationRender(interactive_preview, quality_requested, committed);
+  const auto routed = RouteMaskCreationRender(outcome.interactive_preview,
+                                              outcome.quality_requested, outcome.committed);
   if (routed.kind == EditorSessionResultKind::Accepted) {
     serial_admission_.AbortCycle();
   }
   (void)Emit(routed);
+}
+
+auto EditorSessionService::ApplyMaskCommandsToLiveDocument(
+    const std::vector<EditorMaskCreationCommand>& batch, bool finish_open_input,
+    MaskCommandBatchOutcome* outcome, std::string* error) -> bool {
+  return dependencies_.history->WithLockedLiveDocument(
+      lifecycle_.history_guard(),
+      [this, &batch, finish_open_input, outcome](PipelineDocument&      document,
+                                                 MiniGitWorkingHistory& history,
+                                                 const IEditorHistoryPort::LockedMaskSettle& settle,
+                                                 bool* input_open, std::string* op_error) {
+        // Report the sequence state on every return path, including a rejected command.
+        struct ReportOpenSequence {
+          EditorMaskCreationController& controller;
+          bool*                         input_open;
+          ~ReportOpenSequence() { *input_open = controller.HasOpenOperation(); }
+        } report{mask_creation_, input_open};
+        mask_creation_.Bind(document, history);
+        mask_creation_.SetSettlePublisher(settle);
+        mask_creation_.SetInteractivePreview({});
+        const auto record = [outcome](const EditorMaskCreationResult& result) {
+          outcome->interactive_preview = outcome->interactive_preview || result.interactive_preview;
+          outcome->quality_requested   = outcome->quality_requested || result.quality_requested;
+          outcome->committed           = outcome->committed || result.committed;
+        };
+        for (const auto& command : batch) {
+          auto result = ApplyMaskCreationCommand(command);
+          if (!result.accepted) {
+            if (op_error != nullptr) {
+              *op_error =
+                  result.error.empty() ? "Mask creation command was rejected" : result.error;
+            }
+            if (mask_creation_.HasOpenOperation()) {
+              (void)mask_creation_.CancelMaskInput();
+            }
+            return false;
+          }
+          record(result);
+          if (command.kind == EditorMaskCreationCommandKind::Finish && result.committed &&
+              !result.mask_id.Empty()) {
+            (void)mask_creation_.SelectMask(mask_creation_.node_id(), result.mask_id,
+                                             lifecycle_.identity());
+          }
+        }
+        if (finish_open_input && mask_creation_.HasOpenOperation()) {
+          auto result = mask_creation_.FinishMaskInput();
+          if (!result.accepted) {
+            if (op_error != nullptr) {
+              *op_error =
+                  result.error.empty() ? "Open Mask input could not be committed" : result.error;
+            }
+            (void)mask_creation_.CancelMaskInput();
+            return false;
+          }
+          record(result);
+        }
+        return true;
+      },
+      error);
 }
 
 void EditorSessionService::RequestPendingInputConsume() {
@@ -1697,6 +1725,38 @@ void EditorSessionService::TryConsumePendingInput() {
 }
 
 auto EditorSessionService::SettlePendingInputForBoundary(std::string* error) -> bool {
+  return SettlePendingParameterInputForBoundary(error) && SettleMaskInputForBoundary(error);
+}
+
+auto EditorSessionService::SettleMaskInputForBoundary(std::string* error) -> bool {
+  std::vector<EditorMaskCreationCommand> batch;
+  {
+    std::scoped_lock lock(mask_command_mutex_);
+    batch.swap(pending_mask_commands_);
+  }
+  if (batch.empty() && !mask_creation_.HasOpenOperation()) {
+    return true;
+  }
+  if (!dependencies_.history || !lifecycle_.has_history_guard()) {
+    return true;
+  }
+  MaskCommandBatchOutcome outcome;
+  std::string             settle_error;
+  const bool applied = ApplyMaskCommandsToLiveDocument(batch, true, &outcome, &settle_error);
+  RefreshMaskCreationReadState();
+  if (!applied) {
+    if (error != nullptr) {
+      *error = settle_error.empty() ? "Pending Mask input could not be committed" : settle_error;
+    }
+    return false;
+  }
+  if (outcome.committed) {
+    BumpHistoryRevision();
+  }
+  return true;
+}
+
+auto EditorSessionService::SettlePendingParameterInputForBoundary(std::string* error) -> bool {
   if (pending_input_.empty()) {
     return true;
   }

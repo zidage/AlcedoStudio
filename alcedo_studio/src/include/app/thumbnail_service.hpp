@@ -4,11 +4,15 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <string>
+#include <unordered_map>
 
 #include "app/image_pool_service.hpp"
 #include "app/pipeline_service.hpp"
@@ -56,6 +60,24 @@ using ThumbnailCallback       = std::function<void(std::shared_ptr<ThumbnailGuar
 using ThumbnailResultCallback = std::function<void(ThumbnailRequestResult)>;
 using CallbackDispatcher      = std::function<void(std::function<void()>)>;
 
+/// Identity of one analysis rendition request; unique within one ThumbnailService.
+using AnalysisRenditionId     = std::uint64_t;
+
+/**
+ * @brief Renders thumbnails and analysis renditions of committed image states.
+ *
+ * Every render reads the committed pipeline graph snapshot of the image
+ * (@ref PipelineMgmtService::AcquireCommittedSnapshot): uncommitted editor values never reach a
+ * thumbnail, an analysis input, or the disk cache, and the disk cache key is the snapshot's
+ * history label (head and chain).
+ *
+ * Owns its own renderers: a fixed pool of batch executors (@ref kDefaultBatchExecutorCount) and a
+ * scheduler with one worker per executor. It never loads a PipelineGuard, never takes the
+ * editor's render lock, and never renders on the editor's executor.
+ *
+ * Request flow: memory cache (thumbnails only) → lookup worker (snapshot, disk cache read) →
+ * batch render → RGBA8 display buffer → disk cache write → callback.
+ */
 class ThumbnailService {
  private:
   struct State;
@@ -64,14 +86,27 @@ class ThumbnailService {
   static void            HandleEvict(State& st, std::optional<ThumbnailCacheKey> evicted_key);
 
  public:
+  /// Batch executors (and render workers) of one service unless the caller asks for another count.
+  static constexpr std::size_t kDefaultBatchExecutorCount = 2;
+
   ThumbnailService() = delete;
-  ThumbnailService(std::shared_ptr<SleeveServiceImpl>      sleeve_service,
-                   std::shared_ptr<ImagePoolService>       image_pool_service,
-                   std::shared_ptr<PipelineMgmtService>    pipeline_service,
-                   std::shared_ptr<Storage>          storage_service      = nullptr,
-                   const std::string&                      project_uuid         = {},
-                   const std::filesystem::path&            thumbnail_cache_root = {});
-  ~ThumbnailService() = default;
+  /**
+   * @param batch_executor_count Number of batch executors and render workers; at least 1. Each
+   *        executor creates its GPU device on first use with the pipeline service's accelerator
+   *        preference at construction time.
+   */
+  ThumbnailService(std::shared_ptr<SleeveServiceImpl>   sleeve_service,
+                   std::shared_ptr<ImagePoolService>    image_pool_service,
+                   std::shared_ptr<PipelineMgmtService> pipeline_service,
+                   std::shared_ptr<Storage>             storage_service      = nullptr,
+                   const std::string&                   project_uuid         = {},
+                   const std::filesystem::path&         thumbnail_cache_root = {},
+                   std::size_t batch_executor_count = kDefaultBatchExecutorCount);
+  /// Drops queued work, waits for running renders, and releases the executors.
+  ~ThumbnailService();
+
+  ThumbnailService(const ThumbnailService&)                    = delete;
+  auto operator=(const ThumbnailService&) -> ThumbnailService& = delete;
 
   // Request a thumbnail for the given element/image pair.
   // resolution selects the desired fixed tier (256, 512, 1024, 2048).
@@ -79,25 +114,28 @@ class ThumbnailService {
                     bool pin_if_found = true, CallbackDispatcher dispatcher = nullptr,
                     ThumbnailResolution resolution = ThumbnailResolution::k1024);
 
-  // Request a thumbnail and receive a detailed result. Rendering uses the live
-  // pipeline handle (same document/executor as the editor) under the scheduler
-  // render lock. Thumbnail work bypasses session GPU caches. This distinguishes
-  // cancellation from render/load failures, while GetThumbnail preserves the
-  // legacy guard/null callback behavior.
+  // Request a thumbnail and receive a detailed result that distinguishes cancellation from
+  // render/load failures; GetThumbnail keeps the guard/null callback behavior.
   void GetThumbnailDetailed(sl_element_id_t id, image_id_t image_id,
                             ThumbnailResultCallback callback, bool pin_if_found = true,
                             CallbackDispatcher  dispatcher = nullptr,
                             ThumbnailResolution resolution = ThumbnailResolution::k1024);
 
-  // Render an analysis rendition from the live pipeline handle. Pins via
-  // LoadPipeline and releases with ReleasePipelineUse (no SavePipeline). Results
-  // are not stored in thumbnail_cache_. Disk cache hits/writes use a separate
-  // analysis namespace and skip writes when the queued commit label is stale,
-  // the live document is dirty, or an editor preview is unsettled.
-  void RequestAnalysisRendition(sl_element_id_t element_id, image_id_t image_id,
-                                ThumbnailResolution resolution, ThumbnailResultCallback callback);
-  void CancelAnalysisRendition(const ThumbnailCacheKey& key);
-  void ReleaseAnalysisRendition(const ThumbnailCacheKey& key);
+  /**
+   * @brief Render one analysis rendition of the committed state of @p element_id.
+   *
+   * Same render path as a thumbnail, but the result is delivered once to @p callback and is not
+   * stored in the memory cache; the disk cache uses the analysis namespace.
+   * @return Identity for @ref CancelAnalysisRendition and @ref ReleaseAnalysisRendition. It
+   *         cancels only this request, never another client's request for the same image.
+   */
+  auto RequestAnalysisRendition(sl_element_id_t element_id, image_id_t image_id,
+                                ThumbnailResolution resolution, ThumbnailResultCallback callback)
+      -> AnalysisRenditionId;
+  /// Cancel @p id. A request that has not delivered yet delivers kCanceled.
+  void                  CancelAnalysisRendition(AnalysisRenditionId id);
+  /// Forget @p id; later cancels of it do nothing. Does not cancel it.
+  void                  ReleaseAnalysisRendition(AnalysisRenditionId id);
 
   // Cancel a pending thumbnail request for one element/resolution key.
   // Also increments the key generation token so queued tasks skip execution.
@@ -149,5 +187,42 @@ class ThumbnailService {
     std::string cache_root_path;
   };
   DiskCacheStats GetDiskCacheStats() const;
+};
+
+/**
+ * @brief Source of analysis renditions for one client (image analysis or semantic generation).
+ *
+ * Requests are keyed by (element, resolution) within the client; cancelling or releasing a key
+ * affects only this client's requests.
+ */
+class IAnalysisRenditionProvider {
+ public:
+  virtual ~IAnalysisRenditionProvider()                           = default;
+
+  virtual void RequestRendition(sl_element_id_t element_id, image_id_t image_id,
+                                ThumbnailResolution     resolution,
+                                ThumbnailResultCallback callback) = 0;
+  virtual void CancelRendition(const ThumbnailCacheKey& key)      = 0;
+  virtual void ReleaseRendition(const ThumbnailCacheKey& key)     = 0;
+};
+
+/**
+ * @brief @ref IAnalysisRenditionProvider backed by @ref ThumbnailService analysis renditions.
+ *
+ * Maps this client's keys to the service's request identities. Thread: any thread.
+ */
+class ThumbnailServiceAnalysisRenditionProvider final : public IAnalysisRenditionProvider {
+ public:
+  explicit ThumbnailServiceAnalysisRenditionProvider(std::shared_ptr<ThumbnailService> service);
+
+  void RequestRendition(sl_element_id_t element_id, image_id_t image_id,
+                        ThumbnailResolution resolution, ThumbnailResultCallback callback) override;
+  void CancelRendition(const ThumbnailCacheKey& key) override;
+  void ReleaseRendition(const ThumbnailCacheKey& key) override;
+
+ private:
+  std::shared_ptr<ThumbnailService>                               service_;
+  std::mutex                                                      mutex_;
+  std::unordered_multimap<ThumbnailCacheKey, AnalysisRenditionId> requests_;
 };
 };  // namespace alcedo

@@ -41,5 +41,13 @@ class PipelineScheduler {
   /// Run arbitrary work on the same pool as pipeline tasks (test producers,
   /// async failure completion). Prefer ScheduleTask for real renders.
   void ScheduleWork(std::function<void()> work);
+
+  /**
+   * @brief Drop queued tasks that have not started and wait for running ones to finish.
+   *
+   * For an owner whose tasks capture state it is about to destroy. Dropped tasks run no callback
+   * and no completion. Later ScheduleTask calls queue work that never runs.
+   */
+  void Shutdown();
 };
 };  // namespace alcedo

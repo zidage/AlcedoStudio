@@ -673,6 +673,130 @@ Suite totals：
 - 编辑器拖动期间同图缩略图不阻塞预览：新增计时测试，缩略图渲染期间编辑器帧延迟不受影响。
 - 盘缓存 key 与渲染内容一致（沿用 `QueuedRenderDoesNotStorePixelsUnderStaleCommitLabel` 改写）。
 
+##### Phase P4 completion record (2026-09-28)
+
+**Status:** complete — 缩略图与分析只渲染已提交快照，运行在 `ThumbnailService` 自己的 Batch executor 池（2 个）和 scheduler 上，
+不再加载 `PipelineGuard`、不再拿编辑器的 render lock、不再碰编辑器 executor。编辑器在每次已提交状态变化后发布快照。
+滑块与 Mask 输入改用同一条"未提交输入"规则。
+
+**实现要点（与计划条目的对应）：**
+
+| 计划条目 | 实现 |
+|---|---|
+| `AcquireCommittedSnapshot` | `PipelineMgmtService::AcquireCommittedSnapshot` / `PublishCommitted`，委托给新的 `CommittedSnapshotCache`（`app/committed_snapshot_cache.{hpp,cpp}`）。编辑器持有的图（`editor_owned_`）返回编辑器最近一次发布的快照；其他图由 `LoadCommittedSnapshotFromStorage` 从已物化的历史构建：checkpoint 的 root / head / chain 标签与物化标签一致就用 checkpoint，否则 `LoadGraph` 后从 root 重放。不读元素 JSON |
+| 无 root 的图片 | 按"每张图片都有 history root"这一不变量（用户确认），直接抛 `image N has no edit history root`，缩略图请求以 `kError` 带该原因结束。为了让这个不变量在代码里成立，`ImportServiceImpl` 的 pipeline service 参数改为必填（原本默认 `nullptr`，此时导入不建 root）；28 处测试夹具随之补上 |
+| CPU 快照缓存 | 存储构建的快照放在 16 项 LRU 中（§6 决策 4）。复用前用新增的 `CommitGraphStore::GetMaterializedHistoryLabel` 读三列 `(root, head, chain)`（不读、不解析 checkpoint 文档），与快照标签相同才复用。所以直接写存储的写者（Paste 到库中的图）不需要任何失效调用。编辑器发布的快照放在 LRU 之外：淘汰它会退回到落后于 journal 的存储状态，而编辑器对同一状态只发布一次。编辑器释放图片（`ReleaseEditorPipeline`）后该条目移入 LRU、之后按存储校验；删除图片时清除 |
+| 两条重放路径合一的前提 | 原 `pipeline_service.cpp` 匿名命名空间里的 root 解码、checkpoint 解码、相机 profile 绑定和按 root 重放移到 `app/pipeline_root_state.{hpp,cpp}`。编辑器加载与快照构建共用，不新增第三条重放路径（E8） |
+| 编辑器 commit 钩子 | 计划写的是 typed batch 发布成功后发布。实际 HEAD 与文档还会被 undo / redo / 移动 HEAD、Version checkout、新建 / 分支 Version、Paste、discard、WAL 恢复改变，所以钩子放在 `EditorSessionHistoryPort`：打开图片后和每个改历史的操作之后调用 `EditorHistoryState::PublishCommittedSnapshot`。它在 owner 线程冻结 live 文档（写者就是这个线程，不需要 render lock），以 `(lineage, head, chain)` 去重，**live 文档含未提交值时不发布** |
+| 未提交值的统一规则 | 调查发现 Mask 拖动与滑块拖动做的是同一件事（记录 before → 写 live → settle 成 typed batch / 取消恢复），但 Mask 不进 pending 序列：`unsettled_preview_` 在 Mask 拖动时不置位，保存路径会把临时蒙版写进声称等于 HEAD 的 checkpoint。现在 `LockedMaskDocumentOp` 在每条返回路径报告输入序列是否仍打开（`EditorMaskCreationController::HasOpenOperation`，其注释原来写"已有蒙版的编辑为 false"，与代码不符，已更正），`HistoryWorkingState::HasUncommittedLiveValues()` = 滑块 pending 非空 **或** Mask 输入打开，`unsettled_preview_` 与快照发布都用它 |
+| 边界 settle 覆盖 Mask | `SettlePendingInputForBoundary` 原来只把拖动中的滑块当松手提交，现在拆成 `SettlePendingParameterInputForBoundary` + `SettleMaskInputForBoundary`：先应用排队的 Mask 命令，再用 `FinishMaskInput` 把仍打开的 Mask 输入当松手提交。排队消费与边界 settle 共用 `ApplyMaskCommandsToLiveDocument`，没有第二条 Mask 写路径 |
+| `ThumbnailService` executor 池 | 拥有 `BatchExecutorPool`（默认 2，`kDefaultBatchExecutorCount`，构造参数可改）和同样数量 worker 的 `PipelineScheduler`；不再使用 `RenderService` 的静态池（R6，该静态池现在只有导出在用）。executor 首次使用时创建，后端偏好在服务构造时从 `PipelineMgmtService` 取（生产中 `project_handler.cpp` 先设偏好再构造服务）；后端不可用时该次渲染以真实错误失败 |
+| 每个任务的流程 | lookup worker：检查取消 → `AcquireCommittedSnapshot` → 用快照标签查盘缓存 → 命中则交付；未命中则调度渲染：`prepare_` 读图并从池里取一个空闲 executor，`snapshot_under_render_lock_` 直接返回该快照，`on_complete_` 归还 executor 并在未交付时以 `kError` / `kCanceled` 结束。`LoadPipeline`、`ReleasePipelineUse`、`HasGpuDagDocument` 检查全部删除（C1） |
+| 盘缓存 key | `edit_version_hash` = `head`（首个 commit 之前为 `root`）+ `:` + `chain`，`cache_schema_version` 升到 3（旧条目自然失效）。删除 `ReadCurrentVersionHash`（C2：原本每个请求在调用线程上开 DB 并 `LoadGraph`）、`RenderedCommitLabel`、`CommitLabelFromLiveGuard`、`EnqueueDiskWriteIfCommitLabelMatches` 与 `ThumbnailDiskCacheWriteAllowed`（C3）。key 与像素出自同一个快照，所以没有需要检查的不一致 |
+| 合并两条渲染路径（C4） | 缩略图与分析共用 `RenditionRequest`（一次性交付：`DeliverPixels` / `Fail` 只生效一次）和 `State::StartRendition` / `LookUpRendition` / `ScheduleRenditionRender`。两者只在交付方式上不同：缩略图进内存 LRU 并应答所有等待者，分析一次性回调。`analysis_tokens_` 删除，改为 `RequestAnalysisRendition` 返回的 `AnalysisRenditionId`，取消只作用于这一个请求。原来以 `(element, resolution)` 为 key 的取消会连带取消另一客户端（图像分析与语义生成可同时运行）对同一图同一档的请求 |
+| provider 适配器合并（C5） | `IImageAnalysisThumbnailProvider` / `ISemanticThumbnailProvider` 与两个逐字重复的适配器删除，统一为 `thumbnail_service.hpp` 中的 `IAnalysisRenditionProvider` 与 `ThumbnailServiceAnalysisRenditionProvider`（每个客户端一个实例，把自己的 key 映射到请求 id） |
+| scheduler（R2、R5） | `MakeApplyRequest` 只有 Interactive 请求读取 executor 的 frame sink，Batch 请求一律不带 sink（THUMBNAIL 与 EXPORT 的置空特判删除）。`notify_thumbnail_failure_callbacks` 与 `require_gpu_valid` 删除：失败统一经 `on_complete_`；Batch 渲染没有 host 像素时以 `render produced no host pixels` 失败，原来会以"成功"结束且不调 callback |
+| 生命周期 | 队列中的任务持有 `ThumbnailService::State`；`~ThumbnailService` 先 `StopWorkers()`（丢弃未开始的任务、等待运行中的任务），避免最后一个任务在 worker 线程上析构自己所在的线程池。新增 `PipelineScheduler::Shutdown()` |
+
+**与计划不同或计划未写明的决定：**
+
+- **P2A 不是阻塞项：** P3 记录写"P2A 仍需在 P4 共享已提交快照前完成"。核实后，Batch renderer 每次渲染都会 `ReleaseSessionResources()`，其中清空 `invalidation_` 与 `parameters_`，所以节点内的蒙版计数器对缩略图池没有影响；编辑器的 Interactive executor 按谱系释放，也不受影响。P2A 仍是蒙版拖动冻结成本的问题，与 P4 无关。
+- **Mask 输入改走统一规则**（见上表）是用户在本阶段要求的：像 Mask 拖动这样看似特殊的路径，如果没有必须特殊的理由，就应走通用逻辑。Mask 与滑块在输入表示上仍不同（滑块 pending 只能表示"某个参数字段的 before JSON"，装不下"临时新增的蒙版"或"蒙版 source 替换"），完全统一需要把待提交输入统一表示为已应用在 live 上、可逆的 typed batch。这属于 P6 让未提交状态成为会话内部状态的范围，本阶段只统一了判定与边界 settle。
+- **Open / Switch / Close 仍先取消 Mask 输入：** 这三个入口在进入 seal 之前调用 `AbortMaskCreation`（取消），而滑块拖动在同样的边界会被提交。按住指针拖动时通过 UI 切换图片的交错很难发生，本阶段没有改变这一行为，留作已知差异（见 Remaining gaps）。
+- **执行器数量：** 缩略图并行度从共享静态池的 `max(2, 硬件线程数 / 2)` 个 worker 降为 2 个 executor（§6 决策 1 的默认值）。
+
+**主调用链（成功路径）：**
+
+```text
+缩略图 / 分析请求 → ThumbnailService::GetThumbnailDetailed / RequestAnalysisRendition
+  -> 内存 LRU 命中则直接交付（仅缩略图）
+  -> State::StartRendition → lookup worker：LookUpRendition
+       -> PipelineMgmtService::AcquireCommittedSnapshot(element)
+            编辑器持有 → CommittedSnapshotCache 中编辑器发布的快照
+            否则       → GetMaterializedHistoryLabel 与缓存快照比对 → 相同则复用
+                         否则 LoadCommittedSnapshotFromStorage（checkpoint 或 root 重放 + 相机 profile）
+       -> 盘缓存 key = (element, 档位, 用途, head:chain, schema 3) → 命中则交付
+  -> ScheduleRenditionRender → ThumbnailService 自己的 PipelineScheduler worker
+       -> prepare_：读图 + BatchExecutorPool::Take
+       -> executor render lock（每个 executor 私有）→ Apply(snapshot, Batch) → host 像素
+       -> callback_：RGBA8 → DeliverPixels（缩略图：LRU + 所有等待者；分析：一次性回调）→ 盘缓存写入
+       -> on_complete_：归还 executor
+
+编辑器已提交状态变化 → EditorSessionHistoryPort::<操作> → PublishCommittedAfter
+  -> EditorHistoryState::PublishCommittedSnapshot（owner 线程）
+       -> HasUncommittedLiveValues() 为真（滑块 pending 或 Mask 输入打开）→ 不发布
+       -> (lineage, head, chain) 与上次相同 → 不发布
+       -> live.Freeze() → PipelineGraphSnapshot::Committed → PipelineMgmtService::PublishCommitted
+  -> 之后该图的缩略图 / 分析渲染这个快照；拖动中的值永远不会出现在缩略图、分析输入或盘缓存中
+
+显式保存 / Paste / Version 操作 → SettlePendingInputForBoundary
+  -> 滑块：拖动中的序列当松手提交
+  -> Mask：排队命令 + FinishMaskInput（ApplyMaskCommandsToLiveDocument）→ settle 成一个 typed commit
+  -> CaptureSaveCheckpoint 看到的 live 文档等于 HEAD
+```
+
+**失败路径：**
+
+```text
+图片没有 history root → LoadCommittedSnapshotFromStorage 抛 "has no edit history root"
+  -> LookUpRendition 以 kError 交付该原因，不渲染任何替代文档
+root / checkpoint / 历史解码或重放失败 → 同上，带真实错误
+请求在任一阶段被取消 → Fail(kCanceled)；缩略图的旧请求代次已变时不动新请求的等待者
+图片不在 image pool → prepare_ 抛出 → on_complete_(false, 原因) → kError
+executor 后端不可用 → BatchExecutorPool::Take 抛出 → 同上
+Batch 渲染没有 host 像素 → scheduler 以 "render produced no host pixels" 失败
+编辑器发布失败（仅冻结 / 构造异常）→ qWarning 记录，历史操作本身不回滚；缩略图保持上一个已提交状态
+边界 settle 时 Mask 命令被拒 → 取消打开的 Mask 输入，settle 返回错误，保存 / 切换以该错误拒绝
+```
+
+**What was proven (executed tests)：**
+
+| 名称 / 条目 | 目标 | 结果 |
+|---|---|---|
+| 退出条件 2（计时）：`EditorFrameLatencyStaysUnchangedWhileThumbnailsRender` | `ThumbnailCommittedRenderTest` | PASS。同一张图持续渲染 k2048 缩略图时，编辑器帧（FAST_PREVIEW，guard executor）中位 171.8 ms，空闲时 160.6 ms；单个 k2048 缩略图中位 3411 ms（debug）。P4 之前编辑器帧会排在整个缩略图渲染之后 |
+| 退出条件 2（确定性）：`ThumbnailRendersWhileTheEditorHoldsTheRenderLockOfTheImage` | 同上 | PASS：编辑器持有 render lock 期间，同图缩略图完成且为 kReady；guard executor 没有创建 batch renderer；`PipelineLoadCount` 为 0 |
+| 退出条件 3：`DiskCacheEntriesAreLabelledWithTheRenderedCommittedState`（替代 `QueuedRenderDoesNotStorePixelsUnderStaleCommitLabel`） | 同上 | PASS：root 与 +1.5 EV 两个已提交状态各自写入自己标签的盘条目；新服务（内存缓存为空）分别发布两个状态后请求，两次都命中盘缓存（`hit_count` +2），与当初交付的像素差 1.31 / 1.52（JPEG），两个状态之间差 32.6 |
+| 未提交值不进缩略图：`ThumbnailRendersTheCommittedStateNotUncommittedEditorValues` | 同上 | PASS：live 文档 +2 EV 未提交时缩略图与已提交状态逐像素相同；提交并发布后差 46.1 |
+| 快照构建与复用：`StoredSnapshotEqualsTheDocumentTheEditorLoads`、`StoredSnapshotIsReusedUntilTheStoredHistoryChanges`、`ImageWithoutHistoryRootFailsWithTheRealError`、`PublishRejectsAPreviewSnapshot` | 同上 | PASS |
+| 编辑器发布：`OpeningTheImagePublishesItsCommittedState`、`SliderPreviewIsNotPublishedUntilItSettles`、`CancelledPreviewLeavesThePublishedStateUnchanged`、`OpenMaskInputIsUncommittedUntilItsSettle`、`ReleasedImageIsServedFromStorageWhenItDiffers` | `EditorSessionHistoryPortTest`（新文件 `editor_committed_snapshot_publication_test.cpp`） | PASS |
+| Mask 边界 settle：`OpenMaskDragIsReportedAsUncommittedInput`、`PersistCommitsAnOpenMaskDragBeforeTheSaveSealLikeASliderDrag` | `EditorPendingInputSessionTest`（驱动真实 `EditorSessionService`，fake history port 持有真实 live 文档） | PASS：拖动中报告为未提交；`PersistCurrentImage` 在 capture 之前把它 settle 成一个 `AddMask` commit，capture 时无打开的输入 |
+| 缩略图不碰 guard：`ThumbnailRendersOnItsOwnExecutorAndLeavesTheLiveGuardUntouched`（原 `OrdinaryThumbnailReusesLiveEditorExecutorAndDocument`）、`ThumbnailAndAnalysisLeaveTheLiveGuardUntouched`（原 `BackgroundTasksReuseLivePipelineAndDocument`） | `ThumbnailServiceTest`、`PipelineSharedUseTest` | PASS：guard 的 executor、文档、谱系、pin、dirty 不变，没有创建 batch renderer，`PipelineLoadCount` 为 0 |
+| 错误路径：`ThumbnailOfImageWithoutHistoryReportsError`、`ThumbnailOfImageMissingFromThePoolReportsError`（取代预存失败的 `MissingPipelineThrows` / `MissingImageThrows`：`GetThumbnail` 是异步的，不会抛出） | `ThumbnailServiceTest` | PASS：均以 `kError` 交付真实原因 |
+
+删除的测试（断言的正是被移除的共享行为）：`ThumbnailDiskCacheWriteAllowedRejectsStalePreviewAndDirtyLabels`、`QueuedRenderDoesNotStorePixelsUnderStaleCommitLabel`、`BackgroundCompletionSignalsAfterPipelineUseRelease`（`PipelineSharedUseTest`），`ThumbnailRenderUsesLiveDocumentWithoutStageApplyOnto`、`AnalysisRenditionUsesLiveDocument`（`ThumbnailServiceTest`，由 `ThumbnailCommittedRenderTest` 的已提交状态用例取代）。
+
+Commands（PowerShell，PATH 前置 `build\debug\vcpkg_installed\x64-windows\debug\bin`）：
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 8          # 全量构建，0 错误
+ctest --test-dir build/debug -j 1 -R "^(ThumbnailCommittedRenderTest|PipelineSharedUseTest|ImageAnalysisServiceTest|ImageAnalysisControllerTest|SemanticGenerationServiceTest|ImportServiceTest|ExportServiceTest|FilterServiceTest|ImportRawOnlyTest|CiRawWorkflowTest|ExecutorSnapshotRenderTest|ExecutorIsolationTest|GpuDagModelGraphTest|GpuDagRawInputTest|GraphImageCacheRetentionTest|GpuDagCuda(Workspace|Develop|Mask|PrimaryGrade|DrtProduct|DocumentGeometryRequest)Test|GpuDagOpenCl(Grade|Workspace|DrtProduct)Test|AdjustmentTransfer.*|EditorAdjustmentContextTest|EditorPanelProjectionTest|EditorPipelineCommandServiceTest|EditorNodeGraph.*|EditorMask.*|EditorSession.*|EditorHistory.*|EditorVersion.*|EditorParameterWrite.*|EditorAdjustmentPipelineTest|PipelineMapperTest|PipelineServiceTest|PipelineGraph.*|PipelineDocument.*|PipelineHistory.*|PipelineEditBatchTest|PipelineDngProfileBindingTest|PipelineSchedulerRequestIdTest|PipelineFrameSinkTest|ImportPipelineDocumentTest|MiniGit.*|DocumentTransfer.*|CommitGraph.*)\."
+ctest --test-dir build/debug -j 1 -R "^(EditorPendingInputSessionTest|AnalyticMaskCreationTest|EditorSession.*|EditorMask.*|EditorDocumentHistory.*|ThumbnailCommittedRenderTest|PipelineSharedUseTest|ImageAnalysisServiceTest|ImageAnalysisControllerTest|SemanticGenerationServiceTest|ImportServiceTest)\."   # Mask 边界 settle 与格式化之后
+ThumbnailServiceTest.exe --gtest_filter=-*FuzzScroll*
+```
+
+Suite totals：
+
+- 定向回归集 1472 个（Mask 边界 settle 与格式化之前）：1463 通过，9 失败，与 P2 / P3 记录的预存失败完全相同：`EditorSessionRenderSchedulerPortTest` 5 个、`GpuDagOpenClWorkspaceTest` 2 个（P1 记录的测试清理缺陷）、`EditorSessionCommandQueueBaselineTest.RapidImageSelectionKeepsRunningTargetAndReplacesOnlyUnstartedSelection`、`EditorSessionActionPolicyCq3Test.AdjustmentPanelsReloadOnlyWhenCommittedContentChanges`。
+- Mask 边界 settle 与格式化之后重新全量构建（0 错误），第二轮 445 个（Mask / 编辑器会话 / 历史 / 缩略图 / 分析 / 导入套件）：438 通过，7 失败，即上面的 7 个非 OpenCL 预存失败。
+- `ThumbnailServiceTest`（排除 FuzzScroll）：23 通过，1 跳过（Metal 用例），0 失败。P3 记录的 2 个预存失败已改写为上表的错误路径测试。另有两个用例的测试数据被 P4 暴露出问题并已修正：`DiskCacheTracksRootAndActiveHeadAndServesAfterPipelineIsRemoved` 手工构造的 commit 把 before 写成 0 EV，而导入的 DNG 自带非零曝光。以前缩略图读元素 JSON、从不重放历史，这条无效 commit 从未被执行，现在重放会以真实错误拒绝它，改为以已提交值为 before。`ThumbnailRenderUsesInjectedRawMetadataForDng` 的直接渲染对照原来把 guard 文档做 JSON 往返（丢失已加载的 DNG profile），现在导入会建 root 并绑定 DNG profile，改为直接渲染同一个已提交快照。
+- `ThumbnailCommittedRenderTest`：8/8 通过。
+- 完整 ctest 按 AGENTS.md 未运行。
+
+**Checklist / exit condition：**
+- [x] `thumbnail_service.cpp` 不再引用 `PipelineGuard`、`LoadPipeline`、`ReleasePipelineUse`（grep 为零；头文件只在注释中写明"never loads a PipelineGuard"）
+- [x] 编辑器拖动期间同图缩略图不阻塞预览：确定性测试 + 计时测试（数据见上）
+- [x] 盘缓存 key 与渲染内容一致：`DiskCacheEntriesAreLabelledWithTheRenderedCommittedState`
+
+**LOC note：** 生产代码 34 个文件（含 4 个新文件），测试 19 个文件。`thumbnail_service.cpp` 1193 → 1046 行，`pipeline_service.cpp` 1194 → 1080 行（root 状态 helper 移出，仍超过 1000 行，P7 计划减半）。新文件：`committed_snapshot_cache.{hpp,cpp}` 98 + 185 行，`pipeline_root_state.{hpp,cpp}` 92 + 142 行。`editor_session_service.cpp` 2532 → 2592 行，原本就远超 1000 行，本阶段只把 Mask 命令的锁定文档逻辑提成 `ApplyMaskCommandsToLiveDocument` 并加上边界 settle，没有拆分。新测试：`thumbnail_committed_render_test.cpp` 537 行，`editor_committed_snapshot_publication_test.cpp` 242 行。只对改动行运行 `git clang-format`；`image_analysis_service.hpp` 中 `RunJob` 声明被 clang-format 对齐到 100 列以外，保留了手工对齐。`pipeline_scheduler.hpp`、`render_service.hpp`、`import_service_test.cpp` 原为 CRLF，先在单独提交中转为 LF。
+
+**Remaining gaps：**
+- **Open / Switch / Close 取消 Mask 输入**，而滑块拖动在同样的边界被提交（见上）。要一致，需要让这三个入口也经 `SettleMaskInputForBoundary` 提交，本阶段未改。
+- **Mask 输入的表示**仍与滑块不同，完全统一属于 P6（见上）。
+- **导出仍借用 guard executor 并渲染 live 文档**（C6、C7），`RenderService` 静态池只剩导出使用，属于 P5。P0 测试 2（`DISABLED_ExportDuringUnsettledEditorPreviewUsesCommittedState`）保持禁用。
+- **编辑器仍在 guard 上**：发布的快照取自 guard 的 live 文档，编辑器写 live 文档仍需 render lock（E1），直到 P6。
+- **Metal 未编译**（本机无 macOS）：本阶段没有改 Metal 专有代码，但 `ThumbnailService` 的 executor 池在 Metal 上未运行。
+- **UI 层未验证**：没有启动应用手动检查库视图缩略图与编辑器联动；`WorkspaceShellTest` 等 QML 套件按 AGENTS.md 未追查。
+
 ### P5 导出 executor，以及导入 / 复制 / 粘贴脱离 executor
 
 **目标：** 剩下的非编辑器消费者全部不再构造或借用 executor。
@@ -798,7 +922,7 @@ Suite totals：
 | P2 快照与 COW | 完成（2026-09-28） |
 | P2A 蒙版逐项写时复制 | 未开始 |
 | P3 executor 按请求接收快照 | 完成（2026-09-28） |
-| P4 缩略图 / 分析池 | 未开始 |
+| P4 缩略图 / 分析池 | 完成（2026-09-28） |
 | P5 导出、导入、复制、粘贴 | 未开始 |
 | P6 编辑器独占 executor | 未开始 |
 | P7 删除共享机制 | 未开始 |
