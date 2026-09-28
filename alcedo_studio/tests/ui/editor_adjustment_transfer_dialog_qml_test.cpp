@@ -614,7 +614,8 @@ TEST(AdjustmentTransferDialogQmlTest, PasteDialogShowsReadOnlyNodeAndItemSummary
   auto* item_list = harness.find(QStringLiteral("adjustmentTransferItemList"));
   ASSERT_NE(node_list, nullptr);
   ASSERT_NE(item_list, nullptr);
-  EXPECT_EQ(node_list->property("count").toInt(), 2);
+  // RAW and Geometry, the primary Grade, and DRT/Post.
+  EXPECT_EQ(node_list->property("count").toInt(), 3);
 
   auto* node_controls = harness.find(QStringLiteral("transferNodeHeaderControls"));
   auto* item_controls = harness.find(QStringLiteral("transferItemHeaderControls"));
@@ -633,9 +634,10 @@ TEST(AdjustmentTransferDialogQmlTest, PasteDialogShowsReadOnlyNodeAndItemSummary
   int first_node_items = 0;
   int other_node_items = 0;
   for (const auto& entry : rows) {
-    if (entry.toMap().value(QStringLiteral("node")).toInt() == 0) {
+    const int node = entry.toMap().value(QStringLiteral("node")).toInt();
+    if (node == 0) {
       ++first_node_items;
-    } else {
+    } else if (node == 1) {
       ++other_node_items;
     }
   }
@@ -645,10 +647,10 @@ TEST(AdjustmentTransferDialogQmlTest, PasteDialogShowsReadOnlyNodeAndItemSummary
 
   // Node focus still swaps the read-only item column — no selection mutation
   // exists in paste mode.
-  auto* drt_row =
+  auto* grade_row =
       FindDelegateByRole(harness, QStringLiteral("transferNodeDelegate"), "nodeId", "n1");
-  ASSERT_NE(drt_row, nullptr);
-  ClickRightEdge(harness.window, drt_row);
+  ASSERT_NE(grade_row, nullptr);
+  ClickRightEdge(harness.window, grade_row);
   ProcessEvents(60);
   EXPECT_EQ(item_list->property("count").toInt(), other_node_items);
 }
@@ -782,7 +784,8 @@ TEST(AdjustmentTransferDialogQmlTest, TransferDialogKeyboardOrderReachesAllThree
   ASSERT_TRUE(QMetaObject::invokeMethod(node_list, "forceActiveFocus"));
   ProcessEvents(40);
   ASSERT_TRUE(focus_within(node_list));
-  node_list->setProperty("currentIndex", 1);
+  // Row 0 is RAW and Geometry, row 1 the primary Grade, row 2 grade.extra.
+  node_list->setProperty("currentIndex", 2);
   QTest::keyClick(window, Qt::Key_Return);
   ProcessEvents(60);
   EXPECT_EQ(model->focused_node_id(), QStringLiteral("grade.extra"));

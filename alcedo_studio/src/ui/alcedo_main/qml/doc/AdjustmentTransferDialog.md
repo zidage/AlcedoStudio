@@ -24,7 +24,9 @@ The dialog shell composes three production pane components declared next to it:
 
 - `AdjustmentTransferVersionPane.qml` — read-only Version catalog rows.
 - `AdjustmentTransferNodePane.qml` — transferable nodes with derived three-state
-  checkboxes, a `Select All` checkbox, and a `Clear` action (copy mode).
+  checkboxes, a `Select All` checkbox, and a `Clear` action (copy mode). The first row is
+  `RAW and Geometry` (RAW Decode, White Balance, Lens Correction, Crop and Rotate), then
+  each Color Grade, then `DRT and Post Processing`.
 - `AdjustmentTransferItemPane.qml` — items of the focused node grouped by
   Adjustment Stack sections, with its own `Select All` and `Clear` scope
   (copy mode). The single all-or-none `Masks` row lives here.
@@ -107,10 +109,11 @@ selection itself never crosses the QML boundary.
 Emitted when paste confirmation is accepted. The owner applies the captured package using
 the provided strategy.
 
-#### pasteDiscarded()
+#### pasteCanceled()
 
-Emitted when the user cancels a paste confirmation. The owner discards the pending package
-and targets.
+Emitted when the user cancels a paste confirmation. The owner clears the pending targets.
+The copied package stays available, so the same adjustments can be pasted onto another
+selection.
 
 ## Methods
 

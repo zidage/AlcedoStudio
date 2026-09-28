@@ -23,6 +23,7 @@
 #include "app/pipeline_history_applier.hpp"
 #include "edit/graph/adjustment_ownership.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
+#include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/graph/graph_ids.hpp"
 #include "edit/graph/pipeline_document.hpp"
@@ -233,10 +234,11 @@ TEST_F(AdjustmentTransferCatalogHistoryTest,
   EXPECT_NEAR(ExposureEv(live_document_), -0.5, 1e-5);
   EXPECT_NEAR(ExposureEv(root_document_), 1.5, 1e-5);
 
-  ASSERT_EQ(read->nodes.size(), 2u);
-  EXPECT_EQ(read->nodes.at(0).kind, AdjustmentTransferNodeKind::ColorGrade);
-  EXPECT_EQ(read->nodes.at(0).node_id, NodeId{"grade.primary"});
-  EXPECT_EQ(read->nodes.at(1).kind, AdjustmentTransferNodeKind::DrtPost);
+  ASSERT_EQ(read->nodes.size(), 3u);
+  EXPECT_EQ(read->nodes.at(0).kind, AdjustmentTransferNodeKind::Develop);
+  EXPECT_EQ(read->nodes.at(1).kind, AdjustmentTransferNodeKind::ColorGrade);
+  EXPECT_EQ(read->nodes.at(1).node_id, NodeId{"grade.primary"});
+  EXPECT_EQ(read->nodes.at(2).kind, AdjustmentTransferNodeKind::DrtPost);
 
   ExpectSessionUnchanged(before, CaptureSession());
 }
@@ -296,17 +298,18 @@ TEST(AdjustmentTransferCatalogTest, CatalogOrdersGradesBySourceBackbone) {
   const auto nodes =
       AdjustmentTransferCatalogService::BuildNodeDescriptors(document, &error);
   ASSERT_TRUE(nodes.has_value()) << error;
-  ASSERT_EQ(nodes->size(), 4u);
-  EXPECT_EQ(nodes->at(0).node_id, NodeId{"grade.primary"});
-  EXPECT_EQ(nodes->at(0).display_name, "Zulu");
-  EXPECT_TRUE(nodes->at(0).is_default_grade);
-  EXPECT_EQ(nodes->at(1).node_id, NodeId{"grade.first"});
-  EXPECT_EQ(nodes->at(1).display_name, "Alpha");
-  EXPECT_FALSE(nodes->at(1).is_default_grade);
-  EXPECT_EQ(nodes->at(2).node_id, NodeId{"grade.extra"});
-  EXPECT_EQ(nodes->at(2).display_name, "Mike");
-  EXPECT_EQ(nodes->at(3).kind, AdjustmentTransferNodeKind::DrtPost);
-  EXPECT_EQ(nodes->at(3).display_name, "DRT and Post Processing");
+  ASSERT_EQ(nodes->size(), 5u);
+  EXPECT_EQ(nodes->at(0).kind, AdjustmentTransferNodeKind::Develop);
+  EXPECT_EQ(nodes->at(1).node_id, NodeId{"grade.primary"});
+  EXPECT_EQ(nodes->at(1).display_name, "Zulu");
+  EXPECT_TRUE(nodes->at(1).is_default_grade);
+  EXPECT_EQ(nodes->at(2).node_id, NodeId{"grade.first"});
+  EXPECT_EQ(nodes->at(2).display_name, "Alpha");
+  EXPECT_FALSE(nodes->at(2).is_default_grade);
+  EXPECT_EQ(nodes->at(3).node_id, NodeId{"grade.extra"});
+  EXPECT_EQ(nodes->at(3).display_name, "Mike");
+  EXPECT_EQ(nodes->at(4).kind, AdjustmentTransferNodeKind::DrtPost);
+  EXPECT_EQ(nodes->at(4).display_name, "DRT and Post Processing");
   for (std::size_t index = 0; index < nodes->size(); ++index) {
     EXPECT_EQ(nodes->at(index).source_order, index);
   }
@@ -331,7 +334,8 @@ TEST(AdjustmentTransferCatalogTest, CatalogUsesAdjustmentInstanceIdentity) {
   ASSERT_FALSE(nodes->empty());
 
   std::vector<const AdjustmentTransferItemDescriptor*> exposures;
-  for (const auto* item : ItemsOfKind(nodes->front(), AdjustmentTransferItemKind::Adjustment)) {
+  ASSERT_GE(nodes->size(), 2u);
+  for (const auto* item : ItemsOfKind(nodes->at(1), AdjustmentTransferItemKind::Adjustment)) {
     if (item->type == type_ids::Exposure()) {
       exposures.push_back(item);
     }
@@ -354,12 +358,12 @@ TEST(AdjustmentTransferCatalogTest, CatalogShowsOneMasksItemForAnyMaskCount) {
     const auto  nodes =
         AdjustmentTransferCatalogService::BuildNodeDescriptors(document, &error);
     EXPECT_TRUE(nodes.has_value()) << error;
-    if (!nodes.has_value() || nodes->empty()) {
+    if (!nodes.has_value() || nodes->size() < 2) {
       return std::vector<AdjustmentTransferItemDescriptor>{};
     }
     std::vector<AdjustmentTransferItemDescriptor> found;
     for (const auto* item :
-         ItemsOfKind(nodes->front(), AdjustmentTransferItemKind::Masks)) {
+         ItemsOfKind(nodes->at(1), AdjustmentTransferItemKind::Masks)) {
       found.push_back(*item);
     }
     return found;
@@ -385,6 +389,43 @@ TEST(AdjustmentTransferCatalogTest, CatalogShowsOneMasksItemForAnyMaskCount) {
   ASSERT_EQ(several.size(), 1u);
   EXPECT_TRUE(several.front().enabled);
   EXPECT_EQ(several.front().display_value, "3");
+}
+
+TEST(AdjustmentTransferCatalogTest, CatalogListsDevelopRowFirstWithRawAndGeometryItems) {
+  auto document = CreateDefaultPipelineDocument();
+  auto payload  = document.Develop()->Params().Params();
+  payload.wb_mode     = "custom";
+  payload.custom_cct  = 5200.0f;
+  payload.custom_tint = -8.0f;
+  document.Develop()->Params().ReplaceParams(payload);
+  document.Geometry().SetRotationDegrees(3.5f);
+
+  std::string error;
+  const auto  nodes = AdjustmentTransferCatalogService::BuildNodeDescriptors(document, &error);
+  ASSERT_TRUE(nodes.has_value()) << error;
+  ASSERT_FALSE(nodes->empty());
+
+  const auto& develop = nodes->front();
+  EXPECT_EQ(develop.kind, AdjustmentTransferNodeKind::Develop);
+  EXPECT_EQ(develop.node_id, document.Develop()->Id());
+  EXPECT_EQ(develop.display_name, "RAW and Geometry");
+  EXPECT_FALSE(develop.is_default_grade);
+  ASSERT_EQ(develop.items.size(), 4u);
+
+  const std::array<AdjustmentTransferItemKind, 4> expected_kinds{
+      AdjustmentTransferItemKind::RawDecode, AdjustmentTransferItemKind::WhiteBalance,
+      AdjustmentTransferItemKind::LensCalibration, AdjustmentTransferItemKind::Geometry};
+  for (std::size_t index = 0; index < expected_kinds.size(); ++index) {
+    const auto& item = develop.items.at(index);
+    EXPECT_EQ(item.kind, expected_kinds.at(index));
+    EXPECT_FALSE(item.adjustment_id.has_value());
+    EXPECT_TRUE(item.enabled);
+    EXPECT_EQ(item.source_order, index);
+  }
+  EXPECT_EQ(develop.items.at(0).section, AdjustmentTransferItemSection::Raw);
+  EXPECT_EQ(develop.items.at(3).section, AdjustmentTransferItemSection::Geometry);
+  EXPECT_EQ(develop.items.at(1).display_value, "5200 K, tint -8");
+  EXPECT_EQ(develop.items.at(3).display_value, "3.5 deg");
 }
 
 TEST(AdjustmentTransferCatalogTest, CatalogBuildsDrtPostItemsFromCurrentOwners) {

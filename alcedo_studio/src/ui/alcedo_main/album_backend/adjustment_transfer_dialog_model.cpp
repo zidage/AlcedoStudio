@@ -363,7 +363,15 @@ void AdjustmentTransferDialogModel::ApplyRead(alcedo::AdjustmentTransferCatalogR
     }
     node_states_.push_back(std::move(state));
   }
+  // Focus the first Color Grade: the RAW and Geometry row comes first in
+  // backbone order, but Grade items are the common transfer.
   focused_node_ = 0;
+  for (std::size_t index = 0; index < node_states_.size(); ++index) {
+    if (node_states_[index].descriptor.kind == alcedo::AdjustmentTransferNodeKind::ColorGrade) {
+      focused_node_ = index;
+      break;
+    }
+  }
   PublishNodeRows();
   PublishFocusedItems();
   PublishDerivedStates();
@@ -444,6 +452,14 @@ auto AdjustmentTransferDialogModel::ItemKeyFor(
       return QStringLiteral("masks");
     case alcedo::AdjustmentTransferItemKind::DrtParameters:
       return QStringLiteral("drt-params");
+    case alcedo::AdjustmentTransferItemKind::RawDecode:
+      return QStringLiteral("raw-decode");
+    case alcedo::AdjustmentTransferItemKind::WhiteBalance:
+      return QStringLiteral("white-balance");
+    case alcedo::AdjustmentTransferItemKind::LensCalibration:
+      return QStringLiteral("lens-calibration");
+    case alcedo::AdjustmentTransferItemKind::Geometry:
+      return QStringLiteral("geometry");
     case alcedo::AdjustmentTransferItemKind::Adjustment:
       if (descriptor.adjustment_id.has_value()) {
         return QStringLiteral("adj:") +

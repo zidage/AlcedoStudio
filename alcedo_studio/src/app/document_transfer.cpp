@@ -4,11 +4,15 @@
 
 #include "app/document_transfer.hpp"
 
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <utility>
 
 #include "app/adjustment_transfer_package_builder.hpp"
+#include "app/editor_adjustment_types.hpp"
+#include "app/editor_pipeline_command_service.hpp"
+#include "app/pipeline_history_applier.hpp"
 #include "edit/graph/adjustment_ownership.hpp"
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/mask/mask_model.hpp"
@@ -52,8 +56,35 @@ auto RequireStringField(const nlohmann::json& json, const char* key, std::string
 }
 
 // ---------------------------------------------------------------------------
-// Canonical v6 JSON
+// Canonical v7 JSON
 // ---------------------------------------------------------------------------
+
+/// Develop field keys in canonical order, paired with their package member.
+struct DevelopFieldSlot {
+  const char*                                   field_key;
+  std::optional<nlohmann::json> TransferDevelopValue::*member;
+};
+
+constexpr DevelopFieldSlot kDevelopFieldSlots[] = {
+    {"raw_decode", &TransferDevelopValue::raw_decode},
+    {"color_temp", &TransferDevelopValue::color_temp},
+    {"lens_calib", &TransferDevelopValue::lens_calib},
+};
+
+constexpr const char* kGeometryFieldKey = "crop_rotate";
+
+auto DevelopEntryJson(const TransferDevelopValue& develop) -> nlohmann::json {
+  nlohmann::json json = nlohmann::json::object();
+  for (const auto& slot : kDevelopFieldSlots) {
+    if (const auto& value = develop.*slot.member; value.has_value()) {
+      json[slot.field_key] = *value;
+    }
+  }
+  if (develop.geometry.has_value()) {
+    json["geometry"] = *develop.geometry;
+  }
+  return json;
+}
 
 auto AdjustmentValueJson(const TransferAdjustmentValue& value) -> nlohmann::json {
   return {{"id", std::string{value.source_id.Value()}},
@@ -173,6 +204,78 @@ auto DrtPostEntryFromJson(const nlohmann::json& json) -> TransferDrtPostValue {
   return drt_post;
 }
 
+auto DevelopEntryFromJson(const nlohmann::json& json) -> TransferDevelopValue {
+  RequireObject(json, "develop");
+  RejectUnknownKeys(json, {"raw_decode", "color_temp", "lens_calib", "geometry"}, "develop");
+  TransferDevelopValue develop;
+  for (const auto& slot : kDevelopFieldSlots) {
+    if (!json.contains(slot.field_key)) {
+      continue;
+    }
+    if (!json.at(slot.field_key).is_object()) {
+      Fail(std::string{"develop "} + slot.field_key + " must be a JSON object");
+    }
+    develop.*slot.member = json.at(slot.field_key);
+  }
+  if (json.contains("geometry")) {
+    if (!json.at("geometry").is_object()) {
+      Fail("develop geometry must be a JSON object");
+    }
+    develop.geometry = json.at("geometry");
+  }
+  return develop;
+}
+
+/// Checks each present Develop value by applying it to a clean default document
+/// through the same parameter write path Paste uses.
+void ValidateDevelopEntry(const TransferDevelopValue& develop) {
+  if (develop.Empty()) {
+    return;
+  }
+  auto        document = CreateDefaultPipelineDocument();
+  const auto* node     = document.Develop();
+  if (node == nullptr) {
+    Fail("transfer Develop validation requires a Develop node");
+  }
+  std::string error;
+  for (const auto& slot : kDevelopFieldSlots) {
+    const auto& value = develop.*slot.member;
+    if (!value.has_value()) {
+      continue;
+    }
+    const auto* owned_keys = DevelopFieldOwnedKeys(slot.field_key);
+    if (value->empty()) {
+      Fail(std::string{"transfer Develop "} + slot.field_key + " must not be empty");
+    }
+    for (const auto& [key, item] : value->items()) {
+      (void)item;
+      bool owned = false;
+      for (const auto owned_key : *owned_keys) {
+        owned = owned || key == owned_key;
+      }
+      if (!owned) {
+        Fail(std::string{"transfer Develop "} + slot.field_key + " has unowned field '" + key +
+             "'");
+      }
+    }
+    EditorParameterTarget target;
+    target.owner_kind = EditorParameterOwnerKind::Develop;
+    target.node_id    = node->Id();
+    target.field_key  = slot.field_key;
+    if (!ApplyEditorParameterPatch(document, target, *value, &error)) {
+      Fail(std::string{"transfer Develop "} + slot.field_key + " failed to load: " + error);
+    }
+  }
+  if (develop.geometry.has_value()) {
+    EditorParameterTarget target;
+    target.owner_kind = EditorParameterOwnerKind::Document;
+    target.field_key  = kGeometryFieldKey;
+    if (!ApplyEditorParameterPatch(document, target, *develop.geometry, &error)) {
+      Fail("transfer geometry failed to load: " + error);
+    }
+  }
+}
+
 auto CanonicalBody(const AdjustmentTransferPackage& package) -> nlohmann::json {
   nlohmann::json grades = nlohmann::json::array();
   for (const auto& grade : package.color_grades_) {
@@ -183,6 +286,7 @@ auto CanonicalBody(const AdjustmentTransferPackage& package) -> nlohmann::json {
           {"default_grade_id", package.default_grade_id_.Empty()
                                    ? nlohmann::json(nullptr)
                                    : nlohmann::json(package.default_grade_id_.Value())},
+          {"develop", DevelopEntryJson(package.develop_)},
           {"drt_post", DrtPostEntryJson(package.drt_post_)},
           {"schema",
            package.schema_.empty() ? std::string{kAdjustmentTransferSchema} : package.schema_}};
@@ -219,6 +323,7 @@ void ValidateDocumentTransfer(const AdjustmentTransferPackage& package) {
   if (package.Empty()) {
     Fail("transfer package requires at least one selected item");
   }
+  ValidateDevelopEntry(package.develop_);
 
   std::set<std::string> identities;
   const auto            claim = [&identities](const std::string& id, const char* kind) {
@@ -307,8 +412,8 @@ auto ImportDocumentTransfer(const nlohmann::json& json) -> AdjustmentTransferPac
     Fail("operator-list transfer packages are not accepted");
   }
   RejectUnknownKeys(json,
-                    {"color_grades", "default_grade_id", "document_format_version", "drt_post",
-                     "fingerprint", "schema"},
+                    {"color_grades", "default_grade_id", "develop", "document_format_version",
+                     "drt_post", "fingerprint", "schema"},
                     "transfer package");
   if (!json.contains("schema") || !json.at("schema").is_string() ||
       json.at("schema").get<std::string>() != kAdjustmentTransferSchema) {
@@ -336,6 +441,10 @@ auto ImportDocumentTransfer(const nlohmann::json& json) -> AdjustmentTransferPac
   for (const auto& grade : json.at("color_grades")) {
     package.color_grades_.push_back(ColorGradeEntryFromJson(grade));
   }
+  if (!json.contains("develop")) {
+    Fail("transfer package requires develop");
+  }
+  package.develop_ = DevelopEntryFromJson(json.at("develop"));
   if (!json.contains("drt_post")) {
     Fail("transfer package requires drt_post");
   }

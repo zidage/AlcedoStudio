@@ -187,22 +187,25 @@ TEST(AdjustmentTransferDialogModelTest, NodeRowsFollowSourceBackboneWithDrtPostL
 
   auto* nodes = model.nodes();
   ASSERT_NE(nodes, nullptr);
-  ASSERT_EQ(nodes->rowCount(), 4);
-  EXPECT_EQ(RowText(nodes, 0, AdjustmentTransferNodeListModel::NodeIdRole),
-            QStringLiteral("grade.primary"));
+  ASSERT_EQ(nodes->rowCount(), 5);
+  EXPECT_EQ(RowValue(nodes, 0, AdjustmentTransferNodeListModel::NodeKindRole).toInt(),
+            static_cast<int>(AdjustmentTransferNodeKind::Develop));
   EXPECT_EQ(RowText(nodes, 1, AdjustmentTransferNodeListModel::NodeIdRole),
-            QStringLiteral("grade.first"));
+            QStringLiteral("grade.primary"));
   EXPECT_EQ(RowText(nodes, 2, AdjustmentTransferNodeListModel::NodeIdRole),
+            QStringLiteral("grade.first"));
+  EXPECT_EQ(RowText(nodes, 3, AdjustmentTransferNodeListModel::NodeIdRole),
             QStringLiteral("grade.extra"));
-  EXPECT_EQ(RowText(nodes, 3, AdjustmentTransferNodeListModel::NodeIdRole), QStringLiteral("drt"));
-  EXPECT_EQ(RowValue(nodes, 3, AdjustmentTransferNodeListModel::NodeKindRole).toInt(),
+  EXPECT_EQ(RowText(nodes, 4, AdjustmentTransferNodeListModel::NodeIdRole), QStringLiteral("drt"));
+  EXPECT_EQ(RowValue(nodes, 4, AdjustmentTransferNodeListModel::NodeKindRole).toInt(),
             static_cast<int>(AdjustmentTransferNodeKind::DrtPost));
-  // Every item starts checked; the first backbone node is focused.
+  // Every item starts checked; the first Color Grade is focused.
   for (int row = 0; row < nodes->rowCount(); ++row) {
     EXPECT_EQ(RowValue(nodes, row, AdjustmentTransferNodeListModel::CheckStateRole).toInt(),
               Qt::Checked);
   }
-  EXPECT_TRUE(RowValue(nodes, 0, AdjustmentTransferNodeListModel::FocusedRole).toBool());
+  EXPECT_FALSE(RowValue(nodes, 0, AdjustmentTransferNodeListModel::FocusedRole).toBool());
+  EXPECT_TRUE(RowValue(nodes, 1, AdjustmentTransferNodeListModel::FocusedRole).toBool());
   EXPECT_EQ(model.focused_node_id(), QStringLiteral("grade.primary"));
 }
 
@@ -311,8 +314,8 @@ TEST(AdjustmentTransferDialogModelTest, FocusingNodeDoesNotChangeTransferSelecti
 
   model.FocusNode(QStringLiteral("grade.extra"));
   EXPECT_EQ(model.focused_node_id(), QStringLiteral("grade.extra"));
-  EXPECT_TRUE(RowValue(model.nodes(), 1, AdjustmentTransferNodeListModel::FocusedRole).toBool());
-  EXPECT_FALSE(RowValue(model.nodes(), 0, AdjustmentTransferNodeListModel::FocusedRole).toBool());
+  EXPECT_TRUE(RowValue(model.nodes(), 2, AdjustmentTransferNodeListModel::FocusedRole).toBool());
+  EXPECT_FALSE(RowValue(model.nodes(), 1, AdjustmentTransferNodeListModel::FocusedRole).toBool());
   // Item rows swap to the newly focused node.
   EXPECT_NE(model.items()->rowCount(), 0);
   EXPECT_EQ(SelectionShape(model), before_shape);
@@ -335,9 +338,9 @@ TEST(AdjustmentTransferDialogModelTest, NodeCheckSelectsOrClearsEveryOwnedItem) 
   model.SetNodeChecked(QStringLiteral("grade.primary"), false);
   EXPECT_EQ(model.NodeCheckStateForTesting(primary), Qt::Unchecked);
   EXPECT_EQ(CheckedItemCount(model.items()), 0);
-  EXPECT_EQ(RowValue(model.nodes(), 0, AdjustmentTransferNodeListModel::CheckStateRole).toInt(),
+  EXPECT_EQ(RowValue(model.nodes(), 1, AdjustmentTransferNodeListModel::CheckStateRole).toInt(),
             Qt::Unchecked);
-  // The DRT/Post node's items stay checked; bulk state derives from all nodes.
+  // The other nodes' items stay checked; bulk state derives from all nodes.
   EXPECT_EQ(model.all_nodes_check_state(), Qt::PartiallyChecked);
   EXPECT_TRUE(model.can_copy());
 
@@ -361,7 +364,7 @@ TEST(AdjustmentTransferDialogModelTest, NodeStateIsPartialWhenSomeItemsAreSelect
   EXPECT_EQ(model.NodeCheckStateForTesting(NodeId{"grade.primary"}), Qt::PartiallyChecked);
   EXPECT_EQ(model.focused_items_check_state(), Qt::PartiallyChecked);
   EXPECT_EQ(model.all_nodes_check_state(), Qt::PartiallyChecked);
-  EXPECT_EQ(RowValue(model.nodes(), 0, AdjustmentTransferNodeListModel::CheckStateRole).toInt(),
+  EXPECT_EQ(RowValue(model.nodes(), 1, AdjustmentTransferNodeListModel::CheckStateRole).toInt(),
             Qt::PartiallyChecked);
   EXPECT_FALSE(
       RowValue(model.items(), exposure, AdjustmentTransferItemListModel::CheckedRole).toBool());
@@ -413,6 +416,7 @@ TEST(AdjustmentTransferDialogModelTest, FocusedItemSelectAllChangesOnlyFocusedNo
   EXPECT_EQ(model.NodeCheckStateForTesting(NodeId{"grade.extra"}), Qt::Checked);
   EXPECT_EQ(model.NodeCheckStateForTesting(NodeId{"grade.primary"}), Qt::Unchecked);
   EXPECT_EQ(model.NodeCheckStateForTesting(NodeId{"drt"}), Qt::Unchecked);
+  EXPECT_EQ(model.NodeCheckStateForTesting(NodeId{"develop"}), Qt::Unchecked);
   EXPECT_EQ(model.focused_items_check_state(), Qt::Checked);
   EXPECT_EQ(model.all_nodes_check_state(), Qt::PartiallyChecked);
   EXPECT_TRUE(model.can_copy());
@@ -443,16 +447,57 @@ TEST(AdjustmentTransferDialogModelTest, BuildSelectionIncludesOnlyCheckedEnabled
 
   const auto selection = model.BuildSelection();
   ASSERT_EQ(selection.source_version_id, fixture.graph_->GetActiveVersionId());
-  ASSERT_EQ(selection.nodes.size(), 2u);
-  EXPECT_EQ(selection.nodes.at(0).node_id, NodeId{"grade.primary"});
-  EXPECT_EQ(selection.nodes.at(1).node_id, NodeId{"drt"});
-  for (const auto& item : selection.nodes.at(0).items) {
+  ASSERT_EQ(selection.nodes.size(), 3u);
+  EXPECT_EQ(selection.nodes.at(0).node_id, NodeId{"develop"});
+  EXPECT_EQ(selection.nodes.at(1).node_id, NodeId{"grade.primary"});
+  EXPECT_EQ(selection.nodes.at(2).node_id, NodeId{"drt"});
+  EXPECT_EQ(selection.nodes.at(0).items.size(), 4u);
+  for (const auto& item : selection.nodes.at(1).items) {
     EXPECT_NE(item.kind, AdjustmentTransferItemKind::Masks);
     if (item.kind == AdjustmentTransferItemKind::Adjustment) {
       ASSERT_TRUE(item.adjustment_id.has_value());
       EXPECT_NE(*item.adjustment_id, AdjustmentInstanceId{"grade.primary.exposure"});
     }
   }
+}
+
+TEST(AdjustmentTransferDialogModelTest, DevelopRowItemsBuildRawAndGeometryPackage) {
+  DialogModelHistoryFixture fixture;
+  auto                      document = CreateDefaultPipelineDocument();
+  document.Geometry().SetRotationDegrees(12.0f);
+  fixture.ReplaceRootDocument(std::move(document));
+
+  AdjustmentTransferDialogModel model;
+  std::string                   error;
+  ASSERT_TRUE(model.OpenSource(fixture.graph_, fixture.root_document_, &error)) << error;
+
+  model.FocusNode(QStringLiteral("develop"));
+  ASSERT_EQ(model.focused_node_id(), QStringLiteral("develop"));
+  auto* items = model.items();
+  ASSERT_EQ(items->rowCount(), 4);
+  for (const auto& key : {QStringLiteral("raw-decode"), QStringLiteral("white-balance"),
+                          QStringLiteral("lens-calibration"), QStringLiteral("geometry")}) {
+    const int row = ItemRowForKey(items, key);
+    ASSERT_GE(row, 0) << key.toStdString();
+    EXPECT_TRUE(RowValue(items, row, AdjustmentTransferItemListModel::CheckedRole).toBool());
+  }
+
+  // Copy only RAW and Geometry: every Grade and the DRT/Post endpoint are cleared.
+  model.ClearAll();
+  model.SetItemChecked(QStringLiteral("develop"), QStringLiteral("raw-decode"), true);
+  model.SetItemChecked(QStringLiteral("develop"), QStringLiteral("geometry"), true);
+  EXPECT_EQ(model.focused_items_check_state(), Qt::PartiallyChecked);
+  ASSERT_TRUE(model.can_copy());
+  std::string build_error;
+  const auto  package = model.BuildPackage(&build_error);
+  ASSERT_TRUE(package.has_value()) << build_error;
+  EXPECT_TRUE(package->color_grades_.empty());
+  EXPECT_TRUE(package->drt_post_.Empty());
+  EXPECT_TRUE(package->develop_.raw_decode.has_value());
+  EXPECT_FALSE(package->develop_.color_temp.has_value());
+  EXPECT_FALSE(package->develop_.lens_calib.has_value());
+  ASSERT_TRUE(package->develop_.geometry.has_value());
+  EXPECT_FLOAT_EQ(package->develop_.geometry->at("rotation_degrees").get<float>(), 12.0f);
 }
 
 TEST(AdjustmentTransferDialogModelTest, EmptySelectionFailsPackageBuildClosed) {

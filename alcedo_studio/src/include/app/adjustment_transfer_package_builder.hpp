@@ -21,10 +21,12 @@ class AdjustmentTransferPackageBuilder {
   AdjustmentTransferPackageBuilder() = delete;
 
   /**
-   * @brief Build one validated v6 package.
+   * @brief Build one validated v7 package.
    *
-   * Every selected @ref AdjustmentTransferNodeSelection::node_id must be a
-   * Color Grade on the source image backbone or the source DRT/Post endpoint.
+   * Every selected @ref AdjustmentTransferNodeSelection::node_id must be the
+   * source Develop endpoint, a Color Grade on the source image backbone, or the
+   * source DRT/Post endpoint. Develop items carry only owned field keys; the
+   * Geometry item carries the complete document geometry.
    * Every @ref AdjustmentTransferItemKind::Adjustment item must name an
    * @ref AdjustmentInstanceId owned by that node. Package Color Grade order is
    * the source backbone order, not the selection order.
@@ -44,7 +46,8 @@ class AdjustmentTransferPackageBuilder {
 /**
  * @brief Selection containing every transferable item of @p document.
  *
- * Lists each backbone Color Grade with node fields, every adjustment, and a
+ * Lists the Develop endpoint with RAW Decode, White Balance, Lens Correction,
+ * and Geometry, then each backbone Color Grade with node fields, every adjustment, and a
  * `Masks` item when the Grade owns at least one Mask, then the DRT/Post
  * endpoint with Display Transform and every post adjustment. Order follows the
  * document, so building from this selection captures the complete transferable

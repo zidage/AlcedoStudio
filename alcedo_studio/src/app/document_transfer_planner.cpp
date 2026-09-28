@@ -15,6 +15,7 @@
 #include "app/document_transfer.hpp"
 #include "app/editor_pipeline_command_service.hpp"
 #include "app/pipeline_document_history.hpp"
+#include "app/pipeline_history_applier.hpp"
 #include "edit/graph/adjustment_ownership.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/drt_node_model.hpp"
@@ -283,12 +284,71 @@ void AppendDrtParameterChanges(const PipelineDocument& root, const TransferDrtPo
   }
 }
 
+/// One SetParameter change for @p target when the selected value differs from
+/// the target root. Develop fields compare and store only owned keys, so the
+/// target camera profile and as-shot white balance are never rewritten.
+void AppendParameterChange(const PipelineDocument& root, const EditorParameterTarget& target,
+                           const nlohmann::json& selected_value,
+                           std::vector<PipelineEditChange>* changes) {
+  nlohmann::json before;
+  std::string    error;
+  if (!ReadEditorParameterJson(root, target, &before, &error)) {
+    Fail(error.empty() ? "Failed to read target " + target.field_key : error);
+  }
+  auto before_owned = FieldOwnedParameterJson(target.field_key, before);
+  auto after_owned  = FieldOwnedParameterJson(target.field_key, selected_value);
+  if (before_owned.dump() == after_owned.dump()) {
+    return;
+  }
+  SetParameterChange change;
+  change.target         = ToPipelineParameterTarget(target);
+  change.before_value   = std::move(before_owned);
+  change.after_value    = std::move(after_owned);
+  change.before_enabled = true;
+  change.after_enabled  = true;
+  changes->push_back(std::move(change));
+}
+
+void AppendDevelopParameterChanges(const PipelineDocument& root, const TransferDevelopValue& develop,
+                                   std::vector<PipelineEditChange>* changes) {
+  if (develop.Empty()) {
+    return;
+  }
+  const auto* node = root.Develop();
+  if (node == nullptr) {
+    Fail("Target root is missing Develop");
+  }
+  const std::pair<const char*, const std::optional<nlohmann::json>*> fields[] = {
+      {"raw_decode", &develop.raw_decode},
+      {"color_temp", &develop.color_temp},
+      {"lens_calib", &develop.lens_calib},
+  };
+  for (const auto& [field_key, value] : fields) {
+    if (!value->has_value()) {
+      continue;
+    }
+    EditorParameterTarget target;
+    target.owner_kind = EditorParameterOwnerKind::Develop;
+    target.node_id    = node->Id();
+    target.field_key  = field_key;
+    AppendParameterChange(root, target, **value, changes);
+  }
+  if (develop.geometry.has_value()) {
+    EditorParameterTarget target;
+    target.owner_kind = EditorParameterOwnerKind::Document;
+    target.field_key  = "crop_rotate";
+    AppendParameterChange(root, target, *develop.geometry, changes);
+  }
+}
+
 auto BuildPasteBatch(const PipelineDocument&            root,
                      const std::vector<nlohmann::json>& materialized_grades,
+                     const TransferDevelopValue&        develop,
                      const TransferDrtPostValue& drt_post, const NodeId& default_grade_id)
     -> PipelineEditBatch {
   auto                            working = ClonePipelineDocument(root);
   std::vector<PipelineEditChange> changes;
+  AppendDevelopParameterChanges(root, develop, &changes);
   if (!materialized_grades.empty()) {
     if (default_grade_id.Empty()) {
       Fail("selective paste requires one default Grade identity");
@@ -417,10 +477,12 @@ auto DocumentTransferPlanner::Plan(const AdjustmentTransferPackage&    package,
     }
     prepared.package.color_grades_.push_back(std::move(remapped.value));
   }
+  prepared.package.develop_     = package.develop_;
   prepared.package.drt_post_    = package.drt_post_;
   prepared.package.fingerprint_ = DocumentTransferFingerprint(prepared.package);
-  prepared.batch = BuildPasteBatch(root_document, materialized_grades, prepared.package.drt_post_,
-                                   prepared.package.default_grade_id_);
+  prepared.batch                = BuildPasteBatch(root_document, materialized_grades,
+                                                  prepared.package.develop_, prepared.package.drt_post_,
+                                                  prepared.package.default_grade_id_);
   return prepared;
 }
 
