@@ -179,6 +179,24 @@ TEST(EditorAdjustmentContextTest, WrongOwnerAndGeometryCapabilityFailExplicitly)
   EXPECT_TRUE(geometry->adjustment_instance_id.Empty());
 }
 
+TEST(EditorAdjustmentContextTest, GeometryWritesResolveAgainstDevelopWhateverIsSelected) {
+  auto document = CreateDefaultPipelineDocument();
+  ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.b"}).empty());
+  ASSERT_NE(document.Develop(), nullptr);
+
+  // A Geometry draft committed after the selection moved to a Grade still reaches
+  // its only owner instead of failing as "not owned by the selected node".
+  const auto owner = PanelWriteOwnerNode(document, NodeId{"grade.b"}, "crop_rotate");
+  EXPECT_EQ(owner, document.Develop()->Id());
+  std::string error;
+  const auto geometry = CompleteSelectedNodeParameterTarget(document, owner, "crop_rotate", &error);
+  ASSERT_TRUE(geometry.has_value()) << error;
+  EXPECT_EQ(geometry->owner_kind, EditorParameterOwnerKind::Document);
+
+  // Every other field keeps resolving against the selected node.
+  EXPECT_EQ(PanelWriteOwnerNode(document, NodeId{"grade.b"}, "exposure"), NodeId{"grade.b"});
+}
+
 TEST(EditorAdjustmentContextTest, SelectedNodePanelProjectionDoesNotCallModelJsonOrFullDto) {
   auto document = CreateDefaultPipelineDocument();
   auto counted  = std::make_unique<SerializationCountingModel>();

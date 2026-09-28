@@ -18,7 +18,7 @@ void EditorSessionPipelinePort::SetServices(EditorSessionPipelineMappers service
 
 auto EditorSessionPipelinePort::Acquire(sl_element_id_t element_id, std::string* /*error*/)
     -> alcedo::EditorPipelineGuardHandle {
-  // Open remains non-blocking; EnsureLoaded is the explicit first-frame load.
+  // The history working-state acquisition that follows performs the one editor load.
   return {element_id, true};
 }
 
@@ -40,7 +40,7 @@ void EditorSessionPipelinePort::Release(const alcedo::EditorPipelineGuardHandle&
     }
   }
   if (service && loaded_guard) {
-    service->ReleasePipelineUse(std::move(loaded_guard));
+    service->ReleaseEditorPipeline(std::move(loaded_guard));
   }
 }
 
@@ -68,6 +68,7 @@ auto EditorSessionPipelinePort::PipelineMapper() const
 
 auto EditorSessionPipelinePort::EnsureLoaded(sl_element_id_t element_id, std::string* error)
     -> std::shared_ptr<alcedo::PipelineGuard> {
+  std::scoped_lock load_lock(load_mutex_);
   {
     std::scoped_lock lock(mutex_);
     auto             it = guards_.find(element_id);
@@ -109,8 +110,9 @@ auto EditorSessionPipelinePort::EnsureLoaded(sl_element_id_t element_id, std::st
 auto EditorSessionPipelinePort::CheckoutVersion(sl_element_id_t        element_id,
                                                 const alcedo::Hash128& version_id,
                                                 std::string*           error) -> bool {
-  auto guard = EnsureLoaded(element_id, error);
+  auto guard = CurrentGuard(element_id);
   if (!guard) {
+    if (error) *error = "Version checkout requires the editor to own the image pipeline";
     return false;
   }
   std::shared_ptr<alcedo::PipelineMgmtService> service;

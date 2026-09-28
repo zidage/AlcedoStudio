@@ -85,6 +85,8 @@ EditorSessionService::EditorSessionService(Dependencies dependencies)
   serial_admission_.SetDeadlineHandler(default_deadline_handler_);
   navigation_.SetOwnerPoster(
       [this](std::function<void()> task) { command_queue_.PostCompletion(std::move(task)); });
+  navigation_.SetSealPreparer(
+      [this](std::string* error) { return SettlePendingInputForBoundary(error); });
   navigation_.SetCompletionNotifier([this](const NavigationCompletion& completion) {
     EditorSessionCompletion posted;
     posted.kind                 = EditorSessionCompletionKind::NavigationFinished;
@@ -579,6 +581,17 @@ auto EditorSessionService::history_snapshot() -> EditorHistorySnapshot {
   return snapshot;
 }
 
+auto EditorSessionService::SnapshotHistorySource(
+    std::shared_ptr<const CommitGraph>*      graph,
+    std::shared_ptr<const PipelineDocument>* root_document, std::string* error) -> bool {
+  if (!dependencies_.history || !lifecycle_.has_history_guard()) {
+    if (error != nullptr) *error = "No image history is open in the editor";
+    return false;
+  }
+  return dependencies_.history->SnapshotHistorySource(lifecycle_.history_guard(), graph,
+                                                      root_document, error);
+}
+
 auto EditorSessionService::active_version_id() const -> version_ref_id_t {
   if (!dependencies_.history || !lifecycle_.has_history_guard()) return {};
   std::string      error;
@@ -789,6 +802,11 @@ auto EditorSessionService::StartHistoryCheckpointSave() -> EditorSessionResult {
   }
 
   const auto identity = lifecycle_.identity();
+  std::string settle_error;
+  if (!SettlePendingInputForBoundary(&settle_error)) {
+    return Reject(settle_error.empty() ? "Pending edits could not be settled"
+                                       : std::move(settle_error));
+  }
   auto save_lock = save_service_.TryAcquireSaveLock(identity.element_id);
   if (!save_lock.owns_lock()) {
     return Reject("Another editor save checkpoint is in progress");
@@ -1667,10 +1685,61 @@ void EditorSessionService::TryConsumePendingInput() {
   PublishRenderProgressIfChanged();
 }
 
+auto EditorSessionService::SettlePendingInputForBoundary(std::string* error) -> bool {
+  if (pending_input_.empty()) {
+    return true;
+  }
+  const auto identity = lifecycle_.identity();
+  const bool can_apply =
+      lifecycle_.has_image() && lifecycle_.has_history_guard() && identity.element_id != 0;
+  // Seal the open sequence as a release so a drag in progress commits.
+  const auto view = pending_input_.Peek();
+  if (can_apply && !view.sequences.empty() &&
+      view.sequences.back().seal == EditorPendingInputBoundaryKind::None &&
+      view.sequences.back().identity.element_id == identity.element_id &&
+      view.sequences.back().identity.image_id == identity.image_id) {
+    (void)pending_input_.AdmitBoundary(identity, EditorPendingInputBoundaryKind::Release);
+  }
+  const auto guard     = lifecycle_.history_guard();
+  bool       committed = false;
+  while (auto batch = pending_input_.TakeReadyBatch()) {
+    if (!can_apply || batch->identity.element_id != identity.element_id ||
+        batch->identity.image_id != identity.image_id) {
+      continue;
+    }
+    const auto outcome = edit_.HandlePendingSequence(*batch, guard, identity);
+    if (outcome.kind == EditorEditOutcome::Kind::Rejected ||
+        outcome.kind == EditorEditOutcome::Kind::Failed) {
+      if (error != nullptr) {
+        *error = outcome.message.empty() ? "Pending edit could not be committed" : outcome.message;
+      }
+      return false;
+    }
+    committed = committed || !batch->fields.empty();
+  }
+  if (committed) {
+    BumpHistoryRevision();
+  }
+  return true;
+}
+
 auto EditorSessionService::ConsumeTakenSequence(const EditorPendingSequence& sequence)
     -> EditorSessionResult {
   const auto guard = lifecycle_.history_guard();
   const auto ident = lifecycle_.identity();
+  // Input is admitted for one image. A batch that outlived its image (queued
+  // before a switch) must never be applied to the image that is open now.
+  if (sequence.identity.element_id != ident.element_id ||
+      sequence.identity.image_id != ident.image_id) {
+    serial_admission_.AbortCycle();
+    EditorSessionResult dropped;
+    dropped.kind     = EditorSessionResultKind::Accepted;
+    dropped.state    = lifecycle_.state();
+    dropped.identity = ident;
+    dropped.message  = "Discarded adjustment input queued for another image";
+    RequestPendingInputConsume();
+    return dropped;
+  }
   const bool time_apply = diag::PreviewPerformanceEnabled();
   const auto apply_start = time_apply ? diag::PreviewPerformance::NowNs() : 0;
   auto       outcome     = edit_.HandlePendingSequence(sequence, guard, ident);

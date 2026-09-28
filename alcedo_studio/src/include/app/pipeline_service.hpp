@@ -63,6 +63,11 @@ struct PipelineGuard {
   /// True while an editor input sequence has live values that are not a history HEAD.
   /// Thumbnail/export disk caches must not store pixels under the committed label.
   bool                                 unsettled_preview_ = false;
+  /// True while the editor session owns this image's history and live document
+  /// (between AcquireEditorPipeline and ReleaseEditorPipeline). No other module
+  /// may load, rebind, or mutate the editor state of an owned guard. Guarded by
+  /// the PipelineMgmtService cache lock.
+  bool                                    editor_owned_      = false;
 
   /// Immutable root id for this image's edit graph (history identity, not a tip).
   root_id_t                            root_id_{};
@@ -117,6 +122,8 @@ class PipelineMgmtService final {
   void                         SyncDirtyPipelineDocument(
       const std::shared_ptr<PipelineGuard>& pipeline);
   void                         CleanupIdlePipelineResources(const std::shared_ptr<PipelineGuard>& pipeline);
+  /// Rebind the editor history + live document of a pinned guard from storage.
+  void BindEditorStateFromStorage(const std::shared_ptr<PipelineGuard>& pipeline);
 
  public:
   PipelineMgmtService() = delete;
@@ -174,7 +181,19 @@ class PipelineMgmtService final {
   /// If checkpoint (document + root/head/chain labels) matches active Version tip, load the
   /// document (skip first-parent replay). Otherwise rebuild from root + first-parent typed
   /// batches and mark write-back. Thumbnail/export must use LoadPipeline.
+  ///
+  /// For non-editor history users (Paste to library targets). Throws when the editor session
+  /// owns `id`: the editor is the sole owner of an open image's history and live document, so
+  /// rebinding them from storage here would silently discard its unsaved history.
   auto               LoadEditorPipeline(sl_element_id_t id) -> std::shared_ptr<PipelineGuard>;
+
+  /// Editor session entry: bind `id`'s history and live document from storage and take
+  /// exclusive editor ownership until @ref ReleaseEditorPipeline. While owned, the bound
+  /// CommitGraph and document are never replaced by any load; throws if already owned.
+  auto               AcquireEditorPipeline(sl_element_id_t id) -> std::shared_ptr<PipelineGuard>;
+
+  /// End editor ownership taken by @ref AcquireEditorPipeline and return its cache pin.
+  void               ReleaseEditorPipeline(std::shared_ptr<PipelineGuard> pipeline);
 
   /// Test/instrumentation counter: increments each time LoadEditorPipeline rebuilds from
   /// first-parent history instead of importing the serialized checkpoint.

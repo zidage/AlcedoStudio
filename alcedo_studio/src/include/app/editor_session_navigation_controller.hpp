@@ -179,6 +179,12 @@ class EditorSessionNavigationController final {
   /// Post render-idle completion back onto the session owner thread.
   void               SetOwnerPoster(std::function<void(std::function<void()>)> poster);
 
+  /// Settles every queued edit of the current image before a persisting seal
+  /// captures it. Installed by the session facade, which owns the input queue.
+  /// A failure aborts the seal with that error instead of saving a partial state.
+  using SealPreparer = std::function<bool(std::string* error)>;
+  void SetSealPreparer(SealPreparer preparer) { seal_preparer_ = std::move(preparer); }
+
   /// Inject the session-owner thread check. When unset, the assert falls back
   /// to the construction thread (legacy single-thread use).
   using OwnerCheck = std::function<bool()>;
@@ -255,6 +261,10 @@ class EditorSessionNavigationController final {
   std::uint64_t                  operation_id_ = 0;
   NavigationCompletionNotifier   completion_notifier_;
   std::function<void(std::function<void()>)> owner_poster_;
+  SealPreparer                               seal_preparer_;
+  /// Real cause of the last failed SealAndStartSave, appended to the retained
+  /// failure message so recovery shows it instead of a generic "save failed".
+  std::string                                seal_error_;
 };
 
 }  // namespace alcedo

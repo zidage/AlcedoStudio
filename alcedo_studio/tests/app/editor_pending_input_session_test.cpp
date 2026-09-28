@@ -181,5 +181,77 @@ TEST_F(EditorPendingInputSessionTest, SelectedNodeProjectionDoesNotWaitForInflig
   EXPECT_TRUE(runtime_->coordinator->has_inflight());
 }
 
+/// Records how many edits were committed when the save seal captured history.
+class SealOrderHistoryPort final : public test::FakeEditorHistoryPort {
+ public:
+  int  commits_at_capture = -1;
+
+  auto CaptureSaveCheckpoint(const EditorHistoryGuardHandle& guard, std::string* error)
+      -> std::shared_ptr<const EditorMiniGitSaveCapture> override {
+    commits_at_capture = commit_count;
+    return FakeEditorHistoryPort::CaptureSaveCheckpoint(guard, error);
+  }
+};
+
+class EditorPendingInputSealTest : public EditorPendingInputSessionTest {
+ protected:
+  void SetUp() override {
+    EditorPendingInputSessionTest::SetUp();
+    ordered_history_ = std::make_shared<SealOrderHistoryPort>();
+    history_         = ordered_history_;
+    runtime_ = EditorSessionRuntime::CreateWithPorts(pipeline_, history_, tasks_, scheduler_,
+                                                     checkpoint_store_);
+    service_ = runtime_->service.get();
+    service_->SetPresentationSinkId(1);
+    service_->SetPresentationSize(640, 480);
+  }
+
+  /// Leaves a settled crop edit queued behind an in-flight preview frame, the
+  /// state in which pacing defers its consume.
+  void QueueSettledEditBehindInflightFrame() {
+    OpenInteractive();
+    ASSERT_EQ(service_->EnqueueAdjustmentInput(test::ScalarPatch("exposure", 0.25f, false)).kind,
+              EditorSessionResultKind::Accepted);
+    service_->DrainCommandQueueForTests();
+    ASSERT_TRUE(runtime_->coordinator->has_inflight());
+    EditorAdjustmentPatch settled = test::ScalarPatch("exposure", 0.40f, true);
+    ASSERT_EQ(service_->EnqueueAdjustmentInput(settled).kind, EditorSessionResultKind::Accepted);
+    service_->DrainCommandQueueForTests();
+    ASSERT_EQ(history_->commit_count, 0);
+    ASSERT_FALSE(service_->PeekPendingInput().sequences.empty());
+  }
+
+  std::shared_ptr<SealOrderHistoryPort> ordered_history_;
+};
+
+TEST_F(EditorPendingInputSealTest, SwitchCommitsQueuedEditBeforeTheSaveSeal) {
+  QueueSettledEditBehindInflightFrame();
+
+  (void)service_->Switch(11, 21);
+  service_->DrainCommandQueueForTests();
+
+  // The deferred edit became this image's history before the capture, and
+  // nothing of it is left to be consumed against the next image.
+  EXPECT_EQ(history_->commit_count, 1);
+  EXPECT_EQ(ordered_history_->commits_at_capture, 1);
+  ASSERT_TRUE(history_->last_committed_patch.write.has_value());
+  EXPECT_TRUE(service_->PeekPendingInput().sequences.empty());
+}
+
+TEST_F(EditorPendingInputSealTest, SwitchIsRefusedWithTheRealErrorWhenTheQueuedEditCannotCommit) {
+  QueueSettledEditBehindInflightFrame();
+  history_->fail_commit = true;
+
+  (void)service_->Switch(11, 21);
+  service_->DrainCommandQueueForTests();
+
+  // Fail closed: no capture of a partial state, the image stays open, and the
+  // retained failure names the cause instead of a generic save error.
+  EXPECT_EQ(history_->checkpoint_capture_count, 0);
+  EXPECT_EQ(service_->identity().element_id, static_cast<sl_element_id_t>(10));
+  EXPECT_NE(service_->last_error().find("mini-Git journal append failed"), std::string::npos)
+      << service_->last_error();
+}
+
 }  // namespace
 }  // namespace alcedo

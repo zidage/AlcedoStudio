@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "app/pipeline_service.hpp"
+#include "edit/history/commit_graph.hpp"
 #include "ui/alcedo_main/album_backend/album_types.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
 #include "ui/alcedo_main/album_backend/import_export.hpp"
@@ -104,19 +105,33 @@ auto AdjustmentTransferController::PrepareCopy(uint elementId) -> QVariantMap {
   }
 
   try {
-    const auto guard =
-        pipeline_service->LoadEditorPipeline(static_cast<sl_element_id_t>(elementId));
-    if (!guard || !guard->commit_graph_ || !guard->root_document_) {
+    std::shared_ptr<const alcedo::CommitGraph>      source_graph;
+    std::shared_ptr<const alcedo::PipelineDocument> source_root;
+    std::string                                     error;
+    // The editor session owns the history of the image it has open. Read that
+    // image through the session; loading it here would rebind its history and
+    // live document from storage and drop the unsaved edits.
+    if (editor_session_ && editor_session_->has_image() &&
+        editor_session_->element_id() == elementId) {
+      if (!editor_session_->SnapshotHistorySource(&source_graph, &source_root, &error)) {
+        return ErrorResult(error.empty() ? Tr("Pipeline was not available.")
+                                         : QString::fromStdString(error));
+      }
+    } else {
+      const auto guard =
+          pipeline_service->LoadEditorPipeline(static_cast<sl_element_id_t>(elementId));
+      if (!guard || !guard->commit_graph_ || !guard->root_document_) {
+        pipeline_service->ReleasePipelineUse(guard);
+        return ErrorResult(Tr("Pipeline was not available."));
+      }
+      // Detach from the cached guard so a later Paste into this image cannot
+      // mutate the graph the dialog is reading.
+      source_graph = std::make_shared<const alcedo::CommitGraph>(*guard->commit_graph_);
+      source_root  = guard->root_document_;
       pipeline_service->ReleasePipelineUse(guard);
-      return ErrorResult(Tr("Pipeline was not available."));
     }
 
-    // The dialog model keeps shared ownership of the graph and root it reads, so
-    // this read-only use returns its cache pin at once.
-    std::string error;
-    const bool  opened =
-        dialog_model_->OpenSource(guard->commit_graph_, guard->root_document_, &error);
-    pipeline_service->ReleasePipelineUse(guard);
+    const bool opened = dialog_model_->OpenSource(source_graph, source_root, &error);
     if (!opened) {
       return ErrorResult(QString::fromStdString(error));
     }

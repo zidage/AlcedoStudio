@@ -109,6 +109,10 @@ class EditorSessionHistoryPort final : public alcedo::IEditorHistoryPort {
   auto ReadHistorySnapshot(const alcedo::EditorHistoryGuardHandle& guard,
                            alcedo::EditorHistorySnapshot* snapshot, std::string* error)
       -> bool override;
+  auto SnapshotHistorySource(const alcedo::EditorHistoryGuardHandle&          guard,
+                             std::shared_ptr<const alcedo::CommitGraph>*      graph,
+                             std::shared_ptr<const alcedo::PipelineDocument>* root_document,
+                             std::string* error) -> bool override;
   auto HasUnmaterializedChanges(const alcedo::EditorHistoryGuardHandle& guard,
                                 std::string* error) -> bool override;
   auto DiscardUnmaterializedChanges(const alcedo::EditorHistoryGuardHandle& guard,

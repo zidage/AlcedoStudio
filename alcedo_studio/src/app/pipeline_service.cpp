@@ -246,7 +246,9 @@ void PipelineMgmtService::HandleEviction(sl_element_id_t evicted_id) {
       }
 
       pipeline_guard = it->second;
-      if (pipeline_guard->pin_count_ == 0) {
+      // An editor-owned guard is the image's only live history; it never leaves the cache
+      // while owned, even if a save path returned the pin it was holding.
+      if (pipeline_guard->pin_count_ == 0 && !pipeline_guard->editor_owned_) {
         pipeline_guard->pinned_ = false;
         loaded_pipelines_.erase(it);
         break;
@@ -589,6 +591,59 @@ void PipelineMgmtService::InitializeImageRoot(const std::shared_ptr<PipelineGuar
 
 auto PipelineMgmtService::LoadEditorPipeline(sl_element_id_t id) -> std::shared_ptr<PipelineGuard> {
   auto pipeline = LoadPipeline(id);
+  bool owned    = false;
+  {
+    std::unique_lock<std::mutex> cache_lock(lock_);
+    owned = pipeline->editor_owned_;
+  }
+  if (owned) {
+    ReleasePipelineUse(pipeline);
+    throw std::runtime_error("PipelineMgmtService: image " + std::to_string(id) +
+                             " is open in the editor; its history is owned by the editor session");
+  }
+  BindEditorStateFromStorage(pipeline);
+  return pipeline;
+}
+
+auto PipelineMgmtService::AcquireEditorPipeline(sl_element_id_t id)
+    -> std::shared_ptr<PipelineGuard> {
+  auto pipeline = LoadPipeline(id);
+  {
+    std::unique_lock<std::mutex> cache_lock(lock_);
+    if (pipeline->editor_owned_) {
+      cache_lock.unlock();
+      ReleasePipelineUse(pipeline);
+      throw std::runtime_error("PipelineMgmtService: image " + std::to_string(id) +
+                               " is already owned by an editor session");
+    }
+    pipeline->editor_owned_ = true;
+  }
+  try {
+    BindEditorStateFromStorage(pipeline);
+  } catch (...) {
+    {
+      std::unique_lock<std::mutex> cache_lock(lock_);
+      pipeline->editor_owned_ = false;
+    }
+    throw;
+  }
+  return pipeline;
+}
+
+void PipelineMgmtService::ReleaseEditorPipeline(std::shared_ptr<PipelineGuard> pipeline) {
+  if (!pipeline) {
+    return;
+  }
+  {
+    std::unique_lock<std::mutex> cache_lock(lock_);
+    pipeline->editor_owned_ = false;
+  }
+  ReleasePipelineUse(std::move(pipeline));
+}
+
+void PipelineMgmtService::BindEditorStateFromStorage(
+    const std::shared_ptr<PipelineGuard>& pipeline) {
+  const auto id = pipeline->id_;
   try {
     InitializeImageRoot(pipeline);
 
@@ -666,7 +721,6 @@ auto PipelineMgmtService::LoadEditorPipeline(sl_element_id_t id) -> std::shared_
       (void)BindLivePipelineDocument(*pipeline, std::move(document));
       pipeline->serialized_state_needs_writeback_ = true;
     }
-    return pipeline;
   } catch (const std::exception& e) {
     ReleasePipelineUse(pipeline);
     throw std::runtime_error("[ERROR] PipelineMgmtService: editor history validation failed for " +

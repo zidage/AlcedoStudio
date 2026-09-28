@@ -80,7 +80,15 @@ class EditorHistoryState {
   void SetServices(Services services);
   void SetPipelinePort(std::shared_ptr<EditorSessionPipelinePort> pipeline_port);
 
-  /// Load or create the working history for one image.
+  /// Create the working history for one image: take editor ownership of its pipeline, attach
+  /// the WAL, and bind the unique CommitGraph. Only the history port's Acquire calls this;
+  /// it is the single place an image's editor history is loaded.
+  auto AcquireWorkingState(sl_element_id_t element_id, std::string* error)
+      -> std::shared_ptr<HistoryWorkingState>;
+
+  /// Return the acquired working history for one image. Never loads: an image that was not
+  /// acquired (or was already released) fails, so a stale caller cannot rebind history from
+  /// storage. Also fails closed when the history no longer drives the live guard's CommitGraph.
   auto EnsureWorkingState(sl_element_id_t element_id, std::string* error)
       -> std::shared_ptr<HistoryWorkingState>;
 

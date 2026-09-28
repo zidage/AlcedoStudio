@@ -241,6 +241,39 @@ TEST_F(EditorSessionHistoryPortTest, ActiveVersionIdentityReadReturnsOnlyTheChec
   EXPECT_EQ(active_version_id, guard_->commit_graph_->GetActiveVersionId());
 }
 
+TEST_F(EditorSessionHistoryPortTest, HistoryOfAnUnacquiredImageIsNeverLoaded) {
+  // Only Acquire binds an image's history. A stale caller (an input batch or
+  // render that outlived its image) must fail instead of loading it again.
+  std::string error;
+  const auto  preview = WithColorGradeTarget({"exposure", R"({"exposure":0.25})", false});
+  EXPECT_FALSE(history_.CaptureAdjustmentBeforePreview({42, true}, preview, &error));
+  EXPECT_NE(error.find("not acquired"), std::string::npos) << error;
+  EXPECT_EQ(pipeline_->CurrentGuard(42), nullptr);
+}
+
+TEST_F(EditorSessionHistoryPortTest, SplitHistoryGraphFailsClosedInsteadOfSavingAnEmptyHead) {
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  const auto preview = WithColorGradeTarget({"exposure", R"({"exposure":0.25})", false});
+  const auto settled = WithColorGradeTarget({"exposure", R"({"exposure":0.75})", true});
+  ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, preview, &error)) << error;
+  ASSERT_TRUE(history_.CommitAdjustment(handle, settled, &error)) << error;
+  ASSERT_EQ(guard_->commit_graph_->CommitCount(), 1u);
+
+  // The P2625433 data-loss shape: the live guard's graph is rebound to the stored
+  // (empty-head) copy while the WAL-backed history keeps the edits. Saving that
+  // pair wrote an empty head next to an edited document and truncated the WAL.
+  guard_->commit_graph_ = std::make_shared<alcedo::CommitGraph>(*root_graph_);
+
+  error.clear();
+  EXPECT_EQ(history_.CaptureSaveCheckpoint(handle, &error), nullptr);
+  EXPECT_NE(error.find("no longer drives"), std::string::npos) << error;
+  error.clear();
+  EXPECT_FALSE(history_.CaptureAdjustmentBeforePreview(handle, preview, &error));
+  EXPECT_NE(error.find("no longer drives"), std::string::npos) << error;
+}
+
 TEST_F(EditorSessionHistoryPortTest, SettledAdjustmentCreatesOneCommitAndUndoRedoMovesHead) {
   std::string error;
   const auto  handle = history_.Acquire(42, &error);

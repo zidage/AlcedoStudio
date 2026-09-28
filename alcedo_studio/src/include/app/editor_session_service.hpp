@@ -32,6 +32,7 @@
 
 namespace alcedo {
 
+class CommitGraph;
 class PipelineDocument;
 
 /// Background-task restrictions pushed by the controller or task port into the
@@ -91,6 +92,15 @@ class IEditorSessionBackend {
   /// Lightweight active Version identity for session/layout comparisons.
   [[nodiscard]] virtual auto active_version_id() const -> version_ref_id_t { return {}; }
   [[nodiscard]] virtual auto history_snapshot() -> EditorHistorySnapshot { return {}; }
+  /// Detached copy of the open image's CommitGraph and immutable root document for
+  /// read-only consumers (Copy Adjustments). The session is the only owner of an open
+  /// image's history, so other modules read it through here instead of loading it.
+  virtual auto SnapshotHistorySource(
+      std::shared_ptr<const CommitGraph>* /*graph*/,
+      std::shared_ptr<const PipelineDocument>* /*root_document*/, std::string* error) -> bool {
+    if (error != nullptr) *error = "History source snapshot is not supported";
+    return false;
+  }
   /// Immutable PipelineDocument snapshot for GUI projections (Nodes page,
   /// typed write targets). The owner publishes a fresh clone before every
   /// change notification so GUI readers never dereference the live document
@@ -550,6 +560,9 @@ class EditorSessionService final : public IEditorSessionBackend {
   }
   [[nodiscard]] auto active_version_id() const -> version_ref_id_t override;
   [[nodiscard]] auto history_snapshot() -> EditorHistorySnapshot override;
+  auto SnapshotHistorySource(std::shared_ptr<const CommitGraph>*      graph,
+                             std::shared_ptr<const PipelineDocument>* root_document,
+                             std::string*                             error) -> bool override;
   [[nodiscard]] auto pipeline_document() const
       -> std::shared_ptr<const PipelineDocument> override;
   [[nodiscard]] auto presentation_sink_id() const -> PresentationSinkId {
@@ -770,6 +783,12 @@ class EditorSessionService final : public IEditorSessionBackend {
   auto DeferIfLiveOwnershipHeld(std::function<EditorSessionResult()> retry, std::string message)
       -> std::optional<EditorSessionResult>;
   auto ConsumeTakenSequence(const EditorPendingSequence& sequence) -> EditorSessionResult;
+  /// Apply and commit every queued edit of the current image now, bypassing
+  /// render pacing. Every persisting seal (switch, close, Version change,
+  /// explicit save) runs this first, so the capture includes the user's last
+  /// edit and no input of this image survives into the next session. Input
+  /// admitted for another image is discarded, never applied here.
+  auto SettlePendingInputForBoundary(std::string* error) -> bool;
   void AbortMaskCreation();
   void ConsumePendingMaskCommands();
   auto ApplyMaskCreationCommand(const EditorMaskCreationCommand& command)

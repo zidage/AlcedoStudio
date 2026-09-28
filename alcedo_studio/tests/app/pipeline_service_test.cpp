@@ -742,6 +742,38 @@ TEST_F(PipelineMapperTests, EditorLoadUsesMatchingSerializedStateWithoutReconstr
   reopened.SavePipeline(loaded);
 }
 
+TEST_F(PipelineMapperTests, EditorOwnedPipelineIsNeverReboundFromStorage) {
+  ProjectService      project(db_path_, meta_path_);
+  PipelineMgmtService pipelines(project.GetStorage());
+
+  auto                editor = pipelines.AcquireEditorPipeline(751);
+  ASSERT_NE(editor, nullptr);
+  ASSERT_NE(editor->commit_graph_, nullptr);
+  const auto owned_graph    = editor->commit_graph_;
+  const auto owned_document = editor->document_;
+
+  // While the editor owns the image, no other history user may rebind its graph and live
+  // document from storage (that silently dropped the editor's unsaved history).
+  EXPECT_THROW((void)pipelines.LoadEditorPipeline(751), std::runtime_error);
+  EXPECT_THROW((void)pipelines.AcquireEditorPipeline(751), std::runtime_error);
+  EXPECT_EQ(editor->commit_graph_, owned_graph);
+  EXPECT_EQ(editor->document_, owned_document);
+
+  // Pixel readers still share the owned guard without touching its editor state.
+  auto reader = pipelines.LoadPipeline(751);
+  EXPECT_EQ(reader, editor);
+  EXPECT_EQ(reader->commit_graph_, owned_graph);
+  pipelines.ReleasePipelineUse(reader);
+  // The refused loads returned their pins: only the editor's pin remains.
+  EXPECT_TRUE(pipelines.WaitUntilPinCount(editor, 1, std::chrono::milliseconds(0)));
+
+  pipelines.ReleaseEditorPipeline(editor);
+  auto reloaded = pipelines.LoadEditorPipeline(751);
+  ASSERT_NE(reloaded, nullptr);
+  EXPECT_NE(reloaded->commit_graph_, owned_graph);
+  pipelines.SavePipeline(reloaded);
+}
+
 TEST_F(PipelineMapperTests, ReopenWithMatchingCheckpointSkipsReplay) {
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService first(project.GetStorage());

@@ -35,6 +35,7 @@
 #include "ui/alcedo_main/album_backend/editor_scope_controller.hpp"
 
 namespace alcedo {
+class CommitGraph;
 class IFrameSink;
 class IEditorSessionBackend;
 class PipelineDocument;
@@ -336,6 +337,11 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
 
   auto               PasteAdjustmentPackage(const alcedo::AdjustmentTransferPackage& package,
                                             const QString& versionDisplayName) -> alcedo::EditorSessionResult;
+  /// Detached copy of the open image's history for Copy Adjustments (see
+  /// IEditorSessionBackend::SnapshotHistorySource). False when no image is open.
+  auto SnapshotHistorySource(std::shared_ptr<const alcedo::CommitGraph>*      graph,
+                             std::shared_ptr<const alcedo::PipelineDocument>* root_document,
+                             std::string*                                     error) -> bool;
 
   // Bound QQuickRhiItem (EditorViewportItem). QPointer may clear after destroy.
   [[nodiscard]] auto presentation_viewport() const -> QObject*;
@@ -385,6 +391,10 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void DesktopUiChanged();
   void PresentationBindingChanged();
   void LastEditedImageChanged();
+  /// Emitted synchronously before the session seals the open image (switch,
+  /// close, save, Version change). Panels holding an uncommitted draft (the
+  /// Geometry crop) submit it now so it becomes this image's history.
+  void panelDraftCommitRequested();
   // Phase 7A P1: emitted with the typed result of a history/Version operation.
   void HistoryOperationFinished();
 
@@ -405,6 +415,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void                     InstallBackendNotifier();
   void                     ApplyActionAvailability();
   void                     PublishRenderProgressIfChanged();
+  /// Ask panels to commit their drafts into the open image before a seal.
+  void                     RequestPanelDraftCommit();
   void                     SyncBackgroundActionRestrictions();
   void                     SetCloseInFlight(bool in_flight);
   void                     SetPersistInFlight(bool in_flight);
