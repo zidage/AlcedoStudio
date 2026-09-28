@@ -10,10 +10,6 @@
 #include <utility>
 
 #include "image/image_buffer.hpp"
-#if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
-#include "edit/graph/pipeline_document.hpp"
-#include "edit/runtime/pipeline_apply_request.hpp"
-#endif
 #ifdef HAVE_CUDA
 #include "edit/runtime/cuda/cuda_product_renderer.hpp"
 #endif
@@ -29,17 +25,28 @@ namespace alcedo {
 namespace {
 
 #if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
-/** @brief Reuse the renderer bound to this document; propagate all render failures to the caller. */
-template <class ProductRenderer>
-auto ApplyGpuDagProduct(std::shared_ptr<ProductRenderer>&            renderer,
-                        const std::shared_ptr<const PipelineDocument>& document,
-                        const std::shared_ptr<ImageBuffer>&          input,
-                        const PipelineApplyRequest&                  request)
+/** @brief Render on the renderer of the request role; create it on first use. */
+template <class RendererType, class Renderers>
+auto ApplyOnRoleRenderer(Renderers& renderers, const PipelineGraphSnapshot& snapshot,
+                         const std::shared_ptr<ImageBuffer>& input,
+                         const PipelineApplyRequest&         request)
     -> std::shared_ptr<ImageBuffer> {
+  auto& renderer =
+      request.role == ExecutorRole::Interactive ? renderers.interactive : renderers.batch;
   if (!renderer) {
-    renderer = std::make_shared<ProductRenderer>(document);
+    renderer = std::make_shared<RendererType>(request.role);
   }
-  return renderer->Render(input, request);
+  return renderer->Render(snapshot, input, request);
+}
+
+template <class Renderers>
+void ReleaseRoleRenderers(Renderers& renderers) {
+  if (renderers.interactive) {
+    renderers.interactive->ReleaseBinding();
+  }
+  if (renderers.batch) {
+    renderers.batch->ReleaseBinding();
+  }
 }
 #endif
 
@@ -48,75 +55,35 @@ auto ApplyGpuDagProduct(std::shared_ptr<ProductRenderer>&            renderer,
 PipelineExecutor::PipelineExecutor()
     : resolved_accelerator_backend_(alcedo::ResolveAcceleratorBackend(accelerator_preference_)) {}
 
-auto PipelineExecutor::Apply(std::shared_ptr<ImageBuffer> input,
+PipelineExecutor::PipelineExecutor(ExecutorRole role)
+    : serves_interactive_(role == ExecutorRole::Interactive),
+      serves_batch_(role == ExecutorRole::Batch),
+      resolved_accelerator_backend_(alcedo::ResolveAcceleratorBackend(accelerator_preference_)) {}
+
+auto PipelineExecutor::Apply(const PipelineGraphSnapshot& snapshot,
+                             std::shared_ptr<ImageBuffer> input,
                              const PipelineApplyRequest&  request) -> std::shared_ptr<ImageBuffer> {
-#if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
-  if (!pipeline_document_) {
-    throw std::runtime_error(
-        "PipelineExecutor: product rendering requires a bound PipelineDocument");
+  if (!Serves(request.role)) {
+    throw std::invalid_argument("PipelineExecutor: this executor does not serve the request role");
   }
 #ifdef HAVE_CUDA
   if (resolved_accelerator_backend_ == GpuBackendKind::CUDA) {
-    return ApplyGpuDagProduct(cuda_product_renderer_, pipeline_document_, input, request);
+    return ApplyOnRoleRenderer<CudaRenderer>(cuda_renderers_, snapshot, input, request);
   }
 #endif
 #ifdef HAVE_METAL
   if (resolved_accelerator_backend_ == GpuBackendKind::Metal) {
-    return ApplyGpuDagProduct(metal_product_renderer_, pipeline_document_, input, request);
+    return ApplyOnRoleRenderer<MetalRenderer>(metal_renderers_, snapshot, input, request);
   }
 #endif
 #ifdef HAVE_OPENCL
   if (resolved_accelerator_backend_ == GpuBackendKind::OpenCL) {
-    return ApplyGpuDagProduct(opencl_product_renderer_, pipeline_document_, input, request);
+    return ApplyOnRoleRenderer<OpenClRenderer>(opencl_renderers_, snapshot, input, request);
   }
 #endif
-#endif
+  (void)snapshot;
   (void)input;
-  (void)request;
   throw std::runtime_error("PipelineExecutor: product rendering requires a supported GPU backend");
-}
-
-void PipelineExecutor::SetPipelineDocument(std::shared_ptr<const PipelineDocument> document) {
-  if (!document) {
-    throw std::invalid_argument("PipelineExecutor: PipelineDocument is null");
-  }
-#if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
-  pipeline_document_ = std::move(document);
-
-#ifdef HAVE_CUDA
-  if (cuda_product_renderer_) {
-    cuda_product_renderer_->SetDocument(pipeline_document_);
-  }
-#endif
-#ifdef HAVE_METAL
-  if (metal_product_renderer_) {
-    metal_product_renderer_->SetDocument(pipeline_document_);
-  }
-#endif
-#ifdef HAVE_OPENCL
-  if (opencl_product_renderer_) {
-    opencl_product_renderer_->SetDocument(pipeline_document_);
-  }
-#endif
-#else
-  (void)document;
-#endif
-}
-
-auto PipelineExecutor::HasGpuDagDocument() const -> bool {
-#if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
-  return static_cast<bool>(pipeline_document_);
-#else
-  return false;
-#endif
-}
-
-auto PipelineExecutor::GpuDagDocument() const -> std::shared_ptr<const PipelineDocument> {
-#if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
-  return pipeline_document_;
-#else
-  return nullptr;
-#endif
 }
 
 void PipelineExecutor::SetAcceleratorBackendPreference(
@@ -134,21 +101,15 @@ auto PipelineExecutor::GetViewportRenderRegion() const -> std::optional<Viewport
   return frame_sink_->GetViewportRenderRegion();
 }
 
-void PipelineExecutor::ClearAllIntermediateBuffers() {
+void PipelineExecutor::ReleaseBinding() {
 #ifdef HAVE_CUDA
-  if (cuda_product_renderer_) {
-    cuda_product_renderer_->ReleaseSessionCaches();
-  }
+  ReleaseRoleRenderers(cuda_renderers_);
 #endif
 #ifdef HAVE_METAL
-  if (metal_product_renderer_) {
-    metal_product_renderer_->ReleaseSessionCaches();
-  }
+  ReleaseRoleRenderers(metal_renderers_);
 #endif
 #ifdef HAVE_OPENCL
-  if (opencl_product_renderer_) {
-    opencl_product_renderer_->ReleaseSessionCaches();
-  }
+  ReleaseRoleRenderers(opencl_renderers_);
 #endif
 }
 

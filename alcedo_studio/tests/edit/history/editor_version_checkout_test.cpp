@@ -56,6 +56,7 @@ auto MakeGuard(sl_element_id_t element_id) -> std::shared_ptr<alcedo::PipelineGu
   guard->pipeline_ = std::make_shared<alcedo::PipelineExecutor>();
   guard->document_ =
       std::make_shared<alcedo::PipelineDocument>(alcedo::CreateDefaultPipelineDocument());
+  guard->lineage_ = alcedo::PipelineLineageId::Next();
   guard->commit_graph_ =
       std::make_shared<alcedo::CommitGraph>(alcedo::CommitGraph::CreateEmpty(element_id));
   guard->root_id_ = guard->commit_graph_->GetRootId();
@@ -283,9 +284,8 @@ TEST_F(EditorVersionCheckoutTest, FailedCheckoutRestoresPriorVersionAndDocument)
   const auto prior_hash   = DocumentHash(*guard_);
   const auto prior_head   = guard_->working_head_commit_hash();
   const auto prior_reason = history_.LastPublishedRenderReason();
-  // Production guards always have the live document bound to the executor.
-  guard_->pipeline_->SetPipelineDocument(guard_->document_);
   const auto prior_document = guard_->document_;
+  const auto prior_lineage  = guard_->lineage_;
   ASSERT_TRUE(prior_head.has_value());
 
   // CreateVersionRefAtHead refuses a missing hash. Point a real Version at a
@@ -319,7 +319,7 @@ TEST_F(EditorVersionCheckoutTest, FailedCheckoutRestoresPriorVersionAndDocument)
   EXPECT_EQ(history_.LastPublishedRenderReason(), prior_reason);
   // Build-then-swap: the replayed document was never bound, so the prior one stays live.
   EXPECT_EQ(guard_->document_, prior_document);
-  EXPECT_EQ(guard_->pipeline_->GpuDagDocument(), prior_document);
+  EXPECT_EQ(guard_->lineage_, prior_lineage) << "the executor keeps the prior binding";
 }
 
 TEST_F(EditorVersionCheckoutTest, VersionRefRestoreFailureKeepsPriorDocument) {
@@ -332,9 +332,8 @@ TEST_F(EditorVersionCheckoutTest, VersionRefRestoreFailureKeepsPriorDocument) {
   const auto prior_head   = guard_->working_head_commit_hash();
   const auto prior_refs   = guard_->commit_graph_->GetAllVersionRefs().size();
   const auto prior_reason = history_.LastPublishedRenderReason();
-  // Production guards always have the live document bound to the executor.
-  guard_->pipeline_->SetPipelineDocument(guard_->document_);
   const auto prior_document = guard_->document_;
+  const auto prior_lineage  = guard_->lineage_;
 
   auto       missing_target = alcedo::test::ColorGradeFieldTarget("exposure");
   missing_target.node_id    = alcedo::NodeId{"grade.does_not_exist"};
@@ -355,7 +354,7 @@ TEST_F(EditorVersionCheckoutTest, VersionRefRestoreFailureKeepsPriorDocument) {
   EXPECT_EQ(guard_->working_head_commit_hash(), prior_head);
   EXPECT_EQ(history_.LastPublishedRenderReason(), prior_reason);
   EXPECT_EQ(guard_->document_, prior_document);
-  EXPECT_EQ(guard_->pipeline_->GpuDagDocument(), prior_document);
+  EXPECT_EQ(guard_->lineage_, prior_lineage) << "the executor keeps the prior binding";
   EXPECT_EQ(DocumentHash(*guard_), prior_hash);
   EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_), 0.5f);
 }

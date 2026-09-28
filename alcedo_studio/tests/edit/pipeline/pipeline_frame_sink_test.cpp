@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "edit/pipeline/pipeline_executor.hpp"
+#include "edit/runtime/executor_role.hpp"
 #include "edit/runtime/result_persistence.hpp"
 #include "image/image_buffer.hpp"
 #include "renderer/pipeline_scheduler.hpp"
@@ -304,30 +305,30 @@ TEST_F(PipelineFrameSinkTest, FullResExportRequestsExportQualityAtFullResolution
   EXPECT_EQ(preview_task.MakeApplyRequest().geometry.resolution.quality, RenderQuality::Preview);
 }
 
-TEST_F(PipelineFrameSinkTest, ThumbnailAndExportApplyRequestsBypassSessionCache) {
+TEST_F(PipelineFrameSinkTest, ThumbnailAndExportApplyRequestsUseBatchRole) {
   auto         exec = std::make_shared<PipelineExecutor>();
 
   PipelineTask preview;
   preview.pipeline_executor_                 = exec;
   preview.options_.render_desc_.render_type_ = RenderType::FAST_PREVIEW;
   const auto preview_request                 = preview.MakeApplyRequest();
-  EXPECT_EQ(preview_request.cache_policy, RenderCachePolicy::UseSessionCache);
+  EXPECT_EQ(preview_request.role, ExecutorRole::Interactive);
 
   PipelineTask thumbnail;
   thumbnail.pipeline_executor_                 = exec;
   thumbnail.options_.render_desc_.render_type_ = RenderType::THUMBNAIL;
   thumbnail.options_.render_desc_.max_edge_    = 256;
   const auto thumbnail_request                 = thumbnail.MakeApplyRequest();
-  EXPECT_EQ(thumbnail_request.cache_policy, RenderCachePolicy::BypassSessionCache);
+  EXPECT_EQ(thumbnail_request.role, ExecutorRole::Batch);
 
   PipelineTask export_task;
   export_task.pipeline_executor_                 = exec;
   export_task.options_.render_desc_.render_type_ = RenderType::FULL_RES_EXPORT;
   const auto export_request                      = export_task.MakeApplyRequest();
-  EXPECT_EQ(export_request.cache_policy, RenderCachePolicy::BypassSessionCache);
+  EXPECT_EQ(export_request.role, ExecutorRole::Batch);
 }
 
-TEST_F(PipelineFrameSinkTest, QualityBasePreviewUsesSessionCacheAndSensorDevelopPersistence) {
+TEST_F(PipelineFrameSinkTest, QualityBasePreviewUsesInteractiveRoleAndSensorDevelopPersistence) {
   auto         exec = std::make_shared<PipelineExecutor>();
 
   PipelineTask quality;
@@ -335,7 +336,7 @@ TEST_F(PipelineFrameSinkTest, QualityBasePreviewUsesSessionCacheAndSensorDevelop
   quality.options_.render_desc_.render_type_ = RenderType::QUALITY_BASE_PREVIEW;
   const auto request                         = quality.MakeApplyRequest();
   EXPECT_EQ(request.submission.metadata.frame_role, FrameRole::QualityBase);
-  EXPECT_EQ(request.cache_policy, RenderCachePolicy::UseSessionCache);
+  EXPECT_EQ(request.role, ExecutorRole::Interactive);
   EXPECT_EQ(request.geometry.resolution.max_edge, 4096U);
   EXPECT_EQ(ResultPersistenceScopeForRole(request.submission.metadata.frame_role),
             ResultPersistenceScope::SensorDevelopOnly);
@@ -446,14 +447,17 @@ TEST_F(PipelineFrameSinkTest, AttachDetachRoundTripKeepsSinkQueries) {
 //    carrying stale UI output state."
 // =========================================================================
 
-TEST_F(PipelineFrameSinkTest, ClearAllIntermediateBuffersDoesNotClearFrameSink) {
-  // ClearAllIntermediateBuffers() is an intermediate cleanup, not a full
-  // reset; it should preserve the frame sink binding.
+TEST_F(PipelineFrameSinkTest, ReleaseBindingDoesNotClearFrameSink) {
+  // ReleaseBinding() releases the resources of the last rendered image, not the
+  // editor's output; it should preserve the frame sink binding.
   auto          exec = std::make_shared<PipelineExecutor>();
   MockFrameSink sink;
 
   exec->AttachFrameSink(&sink);
-  exec->ClearAllIntermediateBuffers();
+  {
+    std::unique_lock<std::mutex> lock(exec->GetRenderLock());
+    exec->ReleaseBinding();
+  }
 
   EXPECT_EQ(exec->GetFrameSink(), &sink);
 }

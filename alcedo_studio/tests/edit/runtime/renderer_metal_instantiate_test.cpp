@@ -6,12 +6,13 @@
 
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
 #include <iterator>
 #include <memory>
 #include <string>
 #include <type_traits>
 
-#include "edit/graph/pipeline_document.hpp"
+#include "edit/runtime/executor_role.hpp"
 #include "edit/runtime/metal/metal_backend.hpp"
 #include "edit/runtime/metal/metal_renderer.hpp"
 #include "edit/runtime/render_backend.hpp"
@@ -49,11 +50,13 @@ TEST(GpuDagRendererTemplate, RendererTemplateInstantiatesMetalWithoutCudaHeaders
   EXPECT_EQ(kMetalDagBackendCapabilityVersion, MetalBackend::kCapabilityVersion);
   EXPECT_NE(kMetalDagBackendCapabilityVersion, 1U);
 
-  auto document = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
-  MetalRenderer renderer(document);
-  EXPECT_EQ(renderer.PlanCache().BackendCapabilityVersion(), kMetalDagBackendCapabilityVersion);
-  EXPECT_EQ(renderer.SessionResources().published_result_count, 0U);
-  EXPECT_EQ(renderer.OneShotPublishedResultCount(), 0U);
+  for (const auto role : {ExecutorRole::Interactive, ExecutorRole::Batch}) {
+    MetalRenderer renderer(role);
+    EXPECT_EQ(renderer.Role(), role);
+    EXPECT_EQ(renderer.PlanCache().BackendCapabilityVersion(), kMetalDagBackendCapabilityVersion);
+    EXPECT_EQ(renderer.Resources().published_result_count, 0U);
+    EXPECT_FALSE(renderer.Binding().has_value());
+  }
 }
 
 }  // namespace

@@ -17,12 +17,14 @@
 #include <utility>
 #include <vector>
 
+#include "support/render_snapshot_source.hpp"
 #include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
 #include "decoders/processor/nn/metal_demosaicnet_cache.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
+#include "edit/runtime/executor_role.hpp"
 #include "edit/scope/detail/scope_metal_shared.hpp"
 #include "edit/scope/final_display_frame_tap.hpp"
 #include "edit/scope/scope_analyzer.hpp"
@@ -151,19 +153,22 @@ class MetalRendererFixture : public ::testing::Test {
     (void)BindSystemDefaultMetalPresentationDevice();
     document_ = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
     gpu_dag_test::EnsureTestCameraProfile(*document_);
-    renderer_ = std::make_unique<MetalRenderer>(document_, MakeUnpacker());
-    image_    = MakeEncodedImage(91);
+    source_         = std::make_unique<test::RenderSnapshotSource>(document_);
+    renderer_       = std::make_unique<MetalRenderer>(ExecutorRole::Interactive, MakeUnpacker());
+    batch_renderer_ = std::make_unique<MetalRenderer>(ExecutorRole::Batch, MakeUnpacker());
+    image_          = MakeEncodedImage(91);
   }
 
-  auto RenderHost(bool session = true) -> std::shared_ptr<ImageBuffer> {
-    return renderer_->Render(
-        image_, DecodeRes::FULL, RenderRequest{}, nullptr, {}, true,
-        session ? RenderCachePolicy::UseSessionCache : RenderCachePolicy::BypassSessionCache);
+  auto RenderHost(bool interactive = true) -> std::shared_ptr<ImageBuffer> {
+    auto& renderer = interactive ? *renderer_ : *batch_renderer_;
+    return renderer.Render(*source_->Freeze(), image_, DecodeRes::FULL, RenderRequest{}, nullptr,
+                           {}, true);
   }
 
   auto RenderTo(IFrameSink& sink, const FrameCompletionSubmission& submission = {})
       -> std::shared_ptr<ImageBuffer> {
-    return renderer_->Render(image_, DecodeRes::FULL, RenderRequest{}, &sink, submission, false);
+    return renderer_->Render(*source_->Freeze(), image_, DecodeRes::FULL, RenderRequest{}, &sink,
+                             submission, false);
   }
 
   auto RenderRole(FrameRole role, std::uint32_t max_edge) -> std::shared_ptr<ImageBuffer> {
@@ -171,7 +176,8 @@ class MetalRendererFixture : public ::testing::Test {
     request.resolution.max_edge = max_edge;
     FrameCompletionSubmission submission;
     submission.metadata.frame_role = role;
-    return renderer_->Render(image_, DecodeRes::FULL, request, nullptr, submission, true);
+    return renderer_->Render(*source_->Freeze(), image_, DecodeRes::FULL, request, nullptr,
+                             submission, true);
   }
 
   auto GeometryId() const -> GraphValueId {
@@ -227,9 +233,11 @@ class MetalRendererFixture : public ::testing::Test {
     return true;
   }
 
-  std::shared_ptr<PipelineDocument> document_;
-  std::unique_ptr<MetalRenderer>    renderer_;
-  std::shared_ptr<ImageBuffer>      image_;
+  std::shared_ptr<PipelineDocument>           document_;
+  std::unique_ptr<test::RenderSnapshotSource> source_;
+  std::unique_ptr<MetalRenderer>              renderer_;
+  std::unique_ptr<MetalRenderer>              batch_renderer_;
+  std::shared_ptr<ImageBuffer>                image_;
 };
 
 TEST_F(MetalRendererFixture, MetalRendererPresentsWorkspaceTextureWithoutHostDownload) {
@@ -277,7 +285,9 @@ TEST_F(MetalRendererFixture, MetalRoiKeepsNativePixelsWhenViewportTargetIsLarger
   request.view.visible_rect_in_edit_space = NormalizedRect{0.25f, 0.25f, 0.25f, 0.25f};
   request.view.viewport_extent            = Extent2D{100, 100};
 
-  ASSERT_NE(renderer_->Render(image_, DecodeRes::FULL, request, &sink, {}, false), nullptr);
+  ASSERT_NE(
+      renderer_->Render(*source_->Freeze(), image_, DecodeRes::FULL, request, &sink, {}, false),
+      nullptr);
 
   // The prepared Bayer fixture has a 24x24 full-reference image after the demosaic border.
   // Its quarter-size ROI therefore contains 6x6 native pixels. The viewer may enlarge those
@@ -314,18 +324,26 @@ TEST_F(MetalRendererFixture, MetalScopeTapUsesTheFinalDisplayTextureAndSubmissio
   EXPECT_EQ(downstream.last_metal_.texture_handle, image->native_object);
 }
 
-TEST_F(MetalRendererFixture, MetalOneShotRenderDoesNotPublishIntoSessionCache) {
+TEST_F(MetalRendererFixture, MetalBatchRenderLeavesInteractiveCachesAndReleasesItsResults) {
   ASSERT_NE(RenderHost(true), nullptr);
-  const auto session_before = renderer_->SessionResources();
-  EXPECT_GT(session_before.published_result_count, 0U);
+  const auto interactive_before = renderer_->Resources();
+  EXPECT_GT(interactive_before.published_result_count, 0U);
   renderer_->ResetStats();
 
   ASSERT_NE(RenderHost(false), nullptr);
-  EXPECT_EQ(renderer_->OneShotPublishedResultCount(), 0U);
-  EXPECT_EQ(renderer_->SessionResources().published_result_count,
-            session_before.published_result_count);
-  EXPECT_EQ(renderer_->SessionResources().prepared_source_entry_count,
-            session_before.prepared_source_entry_count);
+  const auto batch = batch_renderer_->Resources();
+  EXPECT_EQ(batch.published_result_count, 0U);
+  EXPECT_EQ(batch.texture_pool_entry_count, 0U);
+  EXPECT_EQ(batch.prepared_source_entry_count, 0U);
+  EXPECT_TRUE(batch.session_value_ids.empty());
+  EXPECT_EQ(batch_renderer_->Stats().prepared_source_hits, 0U);
+  EXPECT_EQ(batch_renderer_->Stats().plan_cache_hits, 0U);
+
+  const auto interactive_after = renderer_->Resources();
+  EXPECT_EQ(interactive_after.published_result_count, interactive_before.published_result_count);
+  EXPECT_EQ(interactive_after.prepared_source_entry_count,
+            interactive_before.prepared_source_entry_count);
+  EXPECT_EQ(interactive_after.session_value_ids, interactive_before.session_value_ids);
   EXPECT_EQ(renderer_->Stats().prepared_source_hits, 0U);
   EXPECT_EQ(renderer_->Stats().plan_cache_hits, 0U);
   EXPECT_EQ(renderer_->Stats().pass.sensor_develop_execute, 0U);
@@ -333,23 +351,24 @@ TEST_F(MetalRendererFixture, MetalOneShotRenderDoesNotPublishIntoSessionCache) {
 
 TEST_F(MetalRendererFixture, MetalPipelineReturnReleasesSessionResourcesAfterGpuCompletion) {
   ASSERT_NE(RenderHost(true), nullptr);
-  EXPECT_GT(renderer_->SessionResources().published_result_count, 0U);
-  renderer_->ReleaseSessionCaches();
-  EXPECT_EQ(renderer_->SessionResources().published_result_count, 0U);
-  EXPECT_EQ(renderer_->SessionResources().prepared_source_entry_count, 0U);
-  EXPECT_TRUE(renderer_->SessionResources().session_value_ids.empty());
+  EXPECT_GT(renderer_->Resources().published_result_count, 0U);
+  renderer_->ReleaseBinding();
+  EXPECT_FALSE(renderer_->Binding().has_value());
+  EXPECT_EQ(renderer_->Resources().published_result_count, 0U);
+  EXPECT_EQ(renderer_->Resources().prepared_source_entry_count, 0U);
+  EXPECT_TRUE(renderer_->Resources().session_value_ids.empty());
   EXPECT_FALSE(renderer_->Device().Workspace().IsRendering());
 }
 
 TEST_F(MetalRendererFixture, MetalBackendFailureDoesNotEnterCpuOrLegacyMetalExecution) {
   ASSERT_NE(RenderHost(true), nullptr);
-  const auto published_before    = renderer_->SessionResources().published_result_count;
+  const auto published_before    = renderer_->Resources().published_result_count;
   auto       develop             = document_->Develop()->Params().Params();
   develop.highlights_reconstruct = !develop.highlights_reconstruct;
   document_->Develop()->Params().ReplaceParams(develop);
   renderer_->Device().Workspace().Device().FailNextUpload();
   EXPECT_THROW(RenderHost(true), std::runtime_error);
-  EXPECT_EQ(renderer_->SessionResources().published_result_count, published_before);
+  EXPECT_EQ(renderer_->Resources().published_result_count, published_before);
   EXPECT_FALSE(renderer_->Device().Workspace().IsRendering());
 
   ThrowingMetalPresentSink sink;
@@ -376,16 +395,18 @@ TEST_F(MetalRendererFixture, MetalRendererRecompilesGeometryWhenBayerSwitchesToN
 
   auto large_document = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
   gpu_dag_test::EnsureTestCameraProfile(*large_document);
-  MetalRenderer large_renderer(
-      large_document, [](std::span<const std::byte>, DecodeRes decode_res) {
+  // Method switches are successive states of one loaded document: one lineage, frozen per render.
+  const test::RenderSnapshotSource large_source(large_document);
+  MetalRenderer                    large_renderer(
+      ExecutorRole::Interactive, [](std::span<const std::byte>, DecodeRes decode_res) {
         const auto pattern = gpu_dag_test::MakeRggbPattern();
         return RawInputLoader::FromUnpackedCfa(
             gpu_dag_test::MakeU16CfaPlane(128, 128, pattern), pattern,
             gpu_dag_test::DefaultLinearization(), gpu_dag_test::FullSensor(128, 128), decode_res);
       });
   const auto render = [&] {
-    return large_renderer.Render(image_, DecodeRes::FULL, RenderRequest{}, nullptr, {}, true,
-                                 RenderCachePolicy::UseSessionCache);
+    return large_renderer.Render(*large_source.Freeze(), image_, DecodeRes::FULL, RenderRequest{},
+                                 nullptr, {}, true);
   };
 
   SetDevelopMethod(*large_document, "legacy", false);
@@ -460,8 +481,8 @@ TEST_F(MetalRendererFixture, QualityBasePixelsMatchFreshExecutionWithinDeclaredT
   ASSERT_TRUE(HostRgbaIsFinite(quality));
   RenderRequest fresh_request;
   fresh_request.resolution.max_edge = 32;
-  const auto fresh = renderer_->Render(image_, DecodeRes::FULL, fresh_request, nullptr, {}, true,
-                                       RenderCachePolicy::BypassSessionCache);
+  const auto fresh = batch_renderer_->Render(*source_->Freeze(), image_, DecodeRes::FULL,
+                                             fresh_request, nullptr, {}, true);
   ASSERT_TRUE(HostRgbaIsFinite(fresh));
   EXPECT_EQ(quality->GetCPUData().cols, fresh->GetCPUData().cols);
   EXPECT_EQ(quality->GetCPUData().rows, fresh->GetCPUData().rows);

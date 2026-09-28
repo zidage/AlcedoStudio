@@ -70,6 +70,14 @@ class PipelineMapperTests : public ::testing::Test {
   }
 };
 
+/// Document of the snapshot that the next render of @p guard's executor receives.
+auto RenderedDocumentJson(PipelineGuard& guard) -> nlohmann::json {
+  std::unique_lock<std::mutex> render_lock(guard.pipeline_->GetRenderLock());
+  const auto                   snapshot = guard.FreezeLiveSnapshot();
+  EXPECT_EQ(snapshot->Lineage(), guard.lineage_);
+  return snapshot->Document().ToJson();
+}
+
 TEST_F(PipelineMapperTests, InitTest) {
   ProjectService project(db_path_, meta_path_);
   EXPECT_NO_THROW(PipelineMgmtService pipeline_service(project.GetStorage()));
@@ -801,10 +809,8 @@ TEST_F(PipelineMapperTests, ReopenWithMatchingCheckpointSkipsReplay) {
   EXPECT_EQ(reopened.EditorPipelineHistoryRebuildCount(), 0u)
       << "matching checkpoint identity must import serialized state without history rebuild";
   EXPECT_FALSE(loaded->serialized_state_needs_writeback_);
-  {
-    std::unique_lock<std::mutex> render_lock(loaded->pipeline_->GetRenderLock());
-    EXPECT_EQ(loaded->pipeline_->GpuDagDocument(), loaded->document_);
-  }
+  EXPECT_FALSE(loaded->lineage_.Empty());
+  EXPECT_EQ(RenderedDocumentJson(*loaded), loaded->document_->ToJson());
   reopened.SavePipeline(loaded);
 }
 
@@ -924,10 +930,8 @@ TEST_F(PipelineMapperTests, ReopenWithStaleCheckpointReplaysFromRoot) {
   auto                rebuilt = reopened.LoadEditorPipeline(702);
   ASSERT_NE(rebuilt, nullptr);
   EXPECT_EQ(reopened.EditorPipelineHistoryRebuildCount(), 1u);
-  {
-    std::unique_lock<std::mutex> render_lock(rebuilt->pipeline_->GetRenderLock());
-    EXPECT_EQ(rebuilt->pipeline_->GpuDagDocument(), rebuilt->document_);
-  }
+  EXPECT_FALSE(rebuilt->lineage_.Empty());
+  EXPECT_EQ(RenderedDocumentJson(*rebuilt), rebuilt->document_->ToJson());
   EXPECT_EQ(rebuilt->root_id_, root_id);
   EXPECT_EQ(rebuilt->working_head_commit_hash(), expected_head);
   EXPECT_EQ(rebuilt->transaction_chain_hash(), expected_chain);
@@ -961,10 +965,6 @@ auto InsertUnreplayableCommit(CommitGraph& graph) -> commit_hash_t {
   return hash;
 }
 
-auto ExecutorDocument(const PipelineGuard& guard) -> std::shared_ptr<const PipelineDocument> {
-  std::unique_lock<std::mutex> render_lock(guard.pipeline_->GetRenderLock());
-  return guard.pipeline_->GpuDagDocument();
-}
 
 TEST_F(PipelineMapperTests, CheckoutReplayFailureKeepsPriorVersionAndDocumentPointer) {
   ProjectService      project(db_path_, meta_path_);
@@ -978,6 +978,7 @@ TEST_F(PipelineMapperTests, CheckoutReplayFailureKeepsPriorVersionAndDocumentPoi
       graph.CreateVersionRefAtHead("Unreplayable", InsertUnreplayableCommit(graph));
   const auto prior_version   = graph.GetActiveVersionId();
   const auto prior_document  = guard->document_;
+  const auto prior_lineage   = guard->lineage_;
   const auto prior_json      = prior_document->ToJson().dump();
   const bool prior_dirty     = guard->dirty_;
   const bool prior_writeback = guard->serialized_state_needs_writeback_;
@@ -988,7 +989,7 @@ TEST_F(PipelineMapperTests, CheckoutReplayFailureKeepsPriorVersionAndDocumentPoi
   EXPECT_NE(error.find("grade.does_not_exist"), std::string::npos) << error;
   EXPECT_EQ(graph.GetActiveVersionId(), prior_version);
   EXPECT_EQ(guard->document_, prior_document) << "failed replay must not swap the document";
-  EXPECT_EQ(ExecutorDocument(*guard), prior_document) << "renderer must keep the prior document";
+  EXPECT_EQ(guard->lineage_, prior_lineage) << "renderer must keep the prior binding";
   EXPECT_EQ(guard->document_->ToJson().dump(), prior_json);
   EXPECT_EQ(guard->dirty_, prior_dirty);
   EXPECT_EQ(guard->serialized_state_needs_writeback_, prior_writeback);
@@ -1010,6 +1011,7 @@ TEST_F(PipelineMapperTests, CheckoutSuccessBindsReplayedDocumentAndMarksWriteBac
   const auto edited_version                = graph.CreateVersionRefAtHead("Edited", edited_head);
   const auto root_version                  = graph.GetActiveVersionId();
   const auto prior_document                = guard->document_;
+  const auto prior_lineage                 = guard->lineage_;
   guard->dirty_                            = false;
   guard->serialized_state_needs_writeback_ = false;
 
@@ -1018,16 +1020,19 @@ TEST_F(PipelineMapperTests, CheckoutSuccessBindsReplayedDocumentAndMarksWriteBac
   EXPECT_EQ(graph.GetActiveVersionId(), edited_version);
   EXPECT_EQ(guard->working_head_commit_hash(), edited_head);
   EXPECT_NE(guard->document_, prior_document) << "checkout binds a newly built document";
-  EXPECT_EQ(ExecutorDocument(*guard), guard->document_);
+  EXPECT_NE(guard->lineage_, prior_lineage) << "checkout releases the prior document's binding";
+  EXPECT_EQ(RenderedDocumentJson(*guard), guard->document_->ToJson());
   EXPECT_FLOAT_EQ(DocumentExposure(*guard->document_), 2.5f);
   EXPECT_FLOAT_EQ(DocumentExposure(*prior_document), kDefaultPipelineExposureEv)
       << "the swapped-out document is not changed";
   EXPECT_TRUE(guard->serialized_state_needs_writeback_);
   EXPECT_TRUE(guard->dirty_);
 
+  const auto edited_lineage = guard->lineage_;
   ASSERT_TRUE(pipelines.CheckoutVersion(guard, root_version, &error)) << error;
   EXPECT_EQ(guard->working_head_commit_hash(), std::nullopt);
-  EXPECT_EQ(ExecutorDocument(*guard), guard->document_);
+  EXPECT_NE(guard->lineage_, edited_lineage);
+  EXPECT_EQ(RenderedDocumentJson(*guard), guard->document_->ToJson());
   EXPECT_FLOAT_EQ(DocumentExposure(*guard->document_), kDefaultPipelineExposureEv);
   pipelines.SavePipeline(guard);
 }
@@ -1042,6 +1047,7 @@ TEST_F(PipelineMapperTests, ActiveVersionRebuildFailureKeepsPriorDocumentPointer
 
   graph.MoveWorkingHead(graph.GetActiveVersionId(), InsertUnreplayableCommit(graph));
   const auto prior_document                = guard->document_;
+  const auto prior_lineage                 = guard->lineage_;
   const auto prior_json                    = prior_document->ToJson().dump();
   guard->dirty_                            = false;
   guard->serialized_state_needs_writeback_ = false;
@@ -1051,7 +1057,7 @@ TEST_F(PipelineMapperTests, ActiveVersionRebuildFailureKeepsPriorDocumentPointer
   EXPECT_NE(error.find("active Version rebuild failed"), std::string::npos) << error;
   EXPECT_NE(error.find("grade.does_not_exist"), std::string::npos) << error;
   EXPECT_EQ(guard->document_, prior_document);
-  EXPECT_EQ(ExecutorDocument(*guard), prior_document);
+  EXPECT_EQ(guard->lineage_, prior_lineage);
   EXPECT_EQ(guard->document_->ToJson().dump(), prior_json);
   EXPECT_FALSE(guard->dirty_);
   EXPECT_FALSE(guard->serialized_state_needs_writeback_);

@@ -17,11 +17,14 @@
 #include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
+#include "edit/graph/pipeline_graph_snapshot.hpp"
 #include "edit/pipeline/pipeline_executor.hpp"
-#include "edit/runtime/pipeline_apply_request.hpp"
 #include "edit/runtime/cuda/cuda_product_renderer.hpp"
+#include "edit/runtime/executor_role.hpp"
+#include "edit/runtime/pipeline_apply_request.hpp"
 #include "image/dng_color_profile_import.hpp"
 #include "image/metadata_extractor.hpp"
+#include "support/render_snapshot_source.hpp"
 
 namespace alcedo {
 namespace {
@@ -81,10 +84,10 @@ class PipelineDocumentRenderTest : public ::testing::Test {
     BindImportedCameraProfile(*document_, imported_);
     executor_ = std::make_unique<PipelineExecutor>();
     executor_->SetAcceleratorBackendPreference(AcceleratorBackendPreference::CUDA);
-    executor_->SetPipelineDocument(document_);
+    source_ = std::make_unique<test::RenderSnapshotSource>(document_);
   }
 
-  /** @brief Apply an exposure edit to the same persistent Model used by the executor. */
+  /** @brief Apply an exposure edit to the working document that every render freezes. */
   void SetExposure(float ev) {
     document_->PrimaryGrade()
         ->FindAdjustmentByType(type_ids::Exposure())
@@ -100,8 +103,7 @@ class PipelineDocumentRenderTest : public ::testing::Test {
       request.geometry.view.visible_rect_in_edit_space = *visible_rect_;
     }
     request.decode_res          = decode_res_;
-    request.cache_policy        = use_session_cache_ ? RenderCachePolicy::UseSessionCache
-                                                     : RenderCachePolicy::BypassSessionCache;
+    request.role                = role_;
     request.require_host_output = host;
     request.sink                = host ? nullptr : &sink_;
     return request;
@@ -110,12 +112,18 @@ class PipelineDocumentRenderTest : public ::testing::Test {
   /** @brief Execute with the same exclusive access required by the scheduler. */
   auto Render(bool host) -> cv::Mat {
     std::unique_lock lock(executor_->GetRenderLock());
-    const auto       result = executor_->Apply(input_, MakeRequest(host));
+    const auto       snapshot = source_->Freeze();
+    const auto       result   = executor_->Apply(*snapshot, input_, MakeRequest(host));
     if (!result) throw std::runtime_error("Missing render result");
     return host ? result->GetCPUData().clone() : sink_.pixels.clone();
   }
 
-  /** @brief Render a separately initialized reference through the document-only Renderer API. */
+  /** @brief Binding the interactive renderer holds after rendering the fixture's source. */
+  auto ExpectedBinding() const -> std::optional<RenderBindingKey> {
+    return RenderBindingKey{.lineage = source_->Lineage(), .element_id = source_->ElementId()};
+  }
+
+  /** @brief Render a separately initialized reference through a standalone Renderer. */
   auto Reference(float ev, RenderQuality quality = RenderQuality::Export) -> cv::Mat {
     auto document = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
     auto develop  = document->Develop()->Params().Params();
@@ -124,25 +132,27 @@ class PipelineDocumentRenderTest : public ::testing::Test {
     document->PrimaryGrade()
         ->FindAdjustmentByType(type_ids::Exposure())
         ->LoadJson({{"exposure_ev", ev}});
-    CudaRenderer  renderer(document);
+    CudaRenderer  renderer(ExecutorRole::Interactive);
     RenderRequest request;
     request.resolution.max_edge = 256;
     request.resolution.quality  = quality;
-    return renderer.Render(input_, DecodeRes::FULL, request, nullptr, {}, true)
+    const auto snapshot         = test::FreezeInNewLineage(*document);
+    return renderer.Render(*snapshot, input_, DecodeRes::FULL, request, nullptr, {}, true)
         ->GetCPUData()
         .clone();
   }
 
-  DecodeRes                            decode_res_        = DecodeRes::FULL;
-  std::uint32_t                        max_edge_          = 256;
-  bool                                 use_session_cache_ = true;
-  std::optional<NormalizedRect>        visible_rect_;
-  RawRuntimeColorContext               imported_;
-  std::shared_ptr<ImageBuffer>         input_;
-  std::shared_ptr<PipelineDocument>    document_;
-  std::unique_ptr<PipelineExecutor>    executor_;
-  PixelFrameSink                       sink_;
-  cv::Size                             full_extent_;
+  DecodeRes                                   decode_res_ = DecodeRes::FULL;
+  std::uint32_t                               max_edge_   = 256;
+  ExecutorRole                                role_       = ExecutorRole::Interactive;
+  std::optional<NormalizedRect>               visible_rect_;
+  RawRuntimeColorContext                      imported_;
+  std::shared_ptr<ImageBuffer>                input_;
+  std::shared_ptr<PipelineDocument>           document_;
+  std::unique_ptr<test::RenderSnapshotSource> source_;
+  std::unique_ptr<PipelineExecutor>           executor_;
+  PixelFrameSink                              sink_;
+  cv::Size                                    full_extent_;
 };
 
 TEST_F(PipelineDocumentRenderTest, EditorAndHostRenderUseDocumentParameters) {
@@ -167,7 +177,8 @@ TEST_F(PipelineDocumentRenderTest, EditorAndHostRenderUseDocumentParameters) {
   EXPECT_GT(cv::mean(bright_host)[1], cv::mean(dark_host)[1] + 0.02);
   EXPECT_EQ(sink_.ready_count, 2);
   EXPECT_EQ(sink_.host_frame_count, 0);
-  EXPECT_EQ(executor_->GpuDagDocument().get(), document_.get());
+  ASSERT_NE(executor_->DebugCudaRenderer(), nullptr);
+  EXPECT_EQ(executor_->DebugCudaRenderer()->Binding(), ExpectedBinding());
 }
 
 TEST_F(PipelineDocumentRenderTest, ConsecutiveDocumentEditsReusePreparedSourceAndGeometry) {
@@ -184,40 +195,47 @@ TEST_F(PipelineDocumentRenderTest, ConsecutiveDocumentEditsReusePreparedSourceAn
   EXPECT_GT(cv::norm(before, after, cv::NORM_INF), 0.02);
 }
 
-TEST_F(PipelineDocumentRenderTest, HostBypassRendersReuseOneShotDeviceAndLeaveSessionCacheUntouched) {
-  const auto editor = Render(false);
+TEST_F(PipelineDocumentRenderTest,
+       HostBatchRendersReuseBatchDeviceAndLeaveInteractiveCacheUntouched) {
+  const auto editor   = Render(false);
   auto*      renderer = executor_->DebugCudaRenderer();
   ASSERT_NE(renderer, nullptr);
   renderer->ResetStats();
-  const auto session_before = renderer->SessionResources();
+  const auto session_before = renderer->Resources();
   EXPECT_GT(session_before.published_result_count, 0U);
-  EXPECT_EQ(renderer->DebugOneShotDeviceIdentity(), 0U);
+  EXPECT_EQ(executor_->DebugCudaBatchRenderer(), nullptr);
 
-  use_session_cache_ = false;
-  const auto host1        = Render(true);
-  const auto one_shot_id  = renderer->DebugOneShotDeviceIdentity();
-  const auto one_shot     = renderer->OneShotResources();
-  EXPECT_NE(one_shot_id, 0U);
-  EXPECT_EQ(renderer->OneShotPublishedResultCount(), 0U);
-  EXPECT_EQ(one_shot.published_result_count, 0U);
-  EXPECT_EQ(one_shot.texture_pool_used_bytes, 0U);
-  EXPECT_EQ(one_shot.texture_pool_entry_count, 0U);
+  role_            = ExecutorRole::Batch;
+  const auto host1 = Render(true);
+  auto*      batch = executor_->DebugCudaBatchRenderer();
+  ASSERT_NE(batch, nullptr);
+  ASSERT_NE(batch, renderer);
+  const auto batch_id        = batch->DebugDeviceIdentity();
+  const auto batch_resources = batch->Resources();
+  EXPECT_NE(batch_id, 0U);
+  EXPECT_NE(batch_id, renderer->DebugDeviceIdentity());
+  EXPECT_FALSE(batch->Binding().has_value());
+  EXPECT_EQ(batch_resources.published_result_count, 0U);
+  EXPECT_EQ(batch_resources.texture_pool_used_bytes, 0U);
+  EXPECT_EQ(batch_resources.texture_pool_entry_count, 0U);
+  EXPECT_EQ(batch_resources.prepared_source_entry_count, 0U);
   EXPECT_EQ(renderer->Stats().prepared_source_hits, 0U);
   EXPECT_EQ(renderer->Stats().prepared_source_misses, 0U);
   EXPECT_EQ(renderer->Stats().pass.sensor_develop_execute, 0U);
-  EXPECT_EQ(renderer->SessionResources().published_result_count,
-            session_before.published_result_count);
-  EXPECT_EQ(renderer->SessionResources().prepared_source_entry_count,
+  EXPECT_EQ(renderer->Resources().published_result_count, session_before.published_result_count);
+  EXPECT_EQ(renderer->Resources().prepared_source_entry_count,
             session_before.prepared_source_entry_count);
+  EXPECT_EQ(renderer->Binding(), ExpectedBinding());
   EXPECT_LT(cv::norm(host1, Reference(1.5f, RenderQuality::Export), cv::NORM_INF), 2e-5);
 
   const auto host2 = Render(true);
-  EXPECT_EQ(renderer->DebugOneShotDeviceIdentity(), one_shot_id);
-  EXPECT_EQ(renderer->OneShotPublishedResultCount(), 0U);
-  EXPECT_EQ(renderer->OneShotResources().texture_pool_used_bytes, 0U);
+  EXPECT_EQ(executor_->DebugCudaBatchRenderer(), batch);
+  EXPECT_EQ(batch->DebugDeviceIdentity(), batch_id);
+  EXPECT_EQ(batch->Resources().published_result_count, 0U);
+  EXPECT_EQ(batch->Resources().texture_pool_used_bytes, 0U);
   EXPECT_LT(cv::norm(host1, host2, cv::NORM_INF), 2e-5);
 
-  use_session_cache_ = true;
+  role_ = ExecutorRole::Interactive;
   renderer->ResetStats();
   const auto editor2 = Render(false);
   EXPECT_EQ(renderer->Stats().prepared_source_hits, 1U);
@@ -232,11 +250,11 @@ TEST_F(PipelineDocumentRenderTest, RenderLeavesPersistentDocumentParametersUncha
   const auto* exposure = document_->PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure());
   for (const bool host : {false, true, false}) {
     SCOPED_TRACE(host);
-    use_session_cache_ = !host;
-    decode_res_        = host ? DecodeRes::EIGHTH : DecodeRes::FULL;
-    max_edge_          = host ? 128 : 256;
-    visible_rect_      = NormalizedRect{0.125f, 0.125f, 0.5f, 0.5f};
-    const auto pixels  = Render(host);
+    role_             = host ? ExecutorRole::Batch : ExecutorRole::Interactive;
+    decode_res_       = host ? DecodeRes::EIGHTH : DecodeRes::FULL;
+    max_edge_         = host ? 128 : 256;
+    visible_rect_     = NormalizedRect{0.125f, 0.125f, 0.5f, 0.5f};
+    const auto pixels = Render(host);
     ASSERT_FALSE(pixels.empty());
     EXPECT_TRUE(cv::checkRange(pixels));
     EXPECT_EQ(document_->ToJson(), before);
@@ -263,19 +281,39 @@ TEST_F(PipelineDocumentRenderTest, DefaultDocumentRendersRealRawAtFullDecodeAndO
   EXPECT_EQ(stats.pass.drt_execute, 1u);
 }
 
-TEST_F(PipelineDocumentRenderTest, MissingDocumentFailsWithoutRendering) {
-  PipelineExecutor unbound;
-  unbound.SetAcceleratorBackendPreference(AcceleratorBackendPreference::CUDA);
-  unbound.AttachFrameSink(&sink_);
-  for (const bool host : {false, true}) {
-    try {
-      (void)unbound.Apply(input_, MakeRequest(host));
-      FAIL() << "Missing document must fail";
-    } catch (const std::runtime_error& error) {
-      EXPECT_NE(std::string(error.what()).find("bound PipelineDocument"), std::string::npos);
+TEST_F(PipelineDocumentRenderTest, SnapshotWithoutDocumentOrLineageIsRejectedBeforeRendering) {
+  // A render receives its graph as a snapshot, so a missing document is rejected when the
+  // snapshot is formed and never reaches an executor.
+  EXPECT_THROW((void)PipelineGraphSnapshot::Preview(nullptr, 1, PipelineLineageId::Next(),
+                                                    transaction_chain_hash_t{}),
+               std::invalid_argument);
+  EXPECT_THROW((void)PipelineGraphSnapshot::Preview(document_->Freeze(), 1, PipelineLineageId{},
+                                                    transaction_chain_hash_t{}),
+               std::invalid_argument);
+  EXPECT_EQ(executor_->DebugCudaRenderer(), nullptr);
+  EXPECT_EQ(executor_->DebugCudaBatchRenderer(), nullptr);
+  EXPECT_EQ(sink_.ready_count, 0);
+  EXPECT_EQ(sink_.host_frame_count, 0);
+  EXPECT_TRUE(input_->buffer_valid_);
+  EXPECT_FALSE(input_->cpu_data_valid_);
+}
+
+TEST_F(PipelineDocumentRenderTest, ExecutorRejectsUnservedRoleWithoutRendering) {
+  const auto snapshot = source_->Freeze();
+  for (const auto served : {ExecutorRole::Interactive, ExecutorRole::Batch}) {
+    SCOPED_TRACE(served == ExecutorRole::Interactive ? "interactive" : "batch");
+    PipelineExecutor single_role(served);
+    single_role.SetAcceleratorBackendPreference(AcceleratorBackendPreference::CUDA);
+    single_role.AttachFrameSink(&sink_);
+    role_ = served == ExecutorRole::Interactive ? ExecutorRole::Batch : ExecutorRole::Interactive;
+    for (const bool host : {false, true}) {
+      std::unique_lock lock(single_role.GetRenderLock());
+      EXPECT_THROW((void)single_role.Apply(*snapshot, input_, MakeRequest(host)),
+                   std::invalid_argument);
     }
+    EXPECT_EQ(single_role.DebugCudaRenderer(), nullptr);
+    EXPECT_EQ(single_role.DebugCudaBatchRenderer(), nullptr);
   }
-  EXPECT_EQ(unbound.DebugCudaRenderer(), nullptr);
   EXPECT_EQ(sink_.ready_count, 0);
   EXPECT_EQ(sink_.host_frame_count, 0);
   EXPECT_TRUE(input_->buffer_valid_);
@@ -301,19 +339,25 @@ TEST_F(PipelineDocumentRenderTest, FailedGpuPresentationPropagatesErrorWithoutSu
   EXPECT_EQ(sink_.ready_count, 1);
 }
 
-TEST_F(PipelineDocumentRenderTest, RebindingExecutorDoesNotOverwriteLoadedCameraProfileOrEdits) {
-  auto loaded = std::make_shared<PipelineDocument>(PipelineDocument::FromJson(document_->ToJson()));
+TEST_F(PipelineDocumentRenderTest, RenderingLoadedDocumentKeepsItsCameraProfileAndEdits) {
+  (void)Render(false);
+  const auto first_binding = ExpectedBinding();
+  // A copy keeps the source DNG profile binding that rendering needs; FromJson alone does not.
+  auto loaded = std::make_shared<PipelineDocument>(ClonePipelineDocument(*document_));
   auto payload = loaded->Develop()->Params().Params();
   payload.camera_profile.color_matrix_1[0] += 0.1;
   payload.wb_mode    = "custom";
   payload.custom_cct = 4800;
   loaded->Develop()->Params().ReplaceParams(payload);
   const auto before = loaded->ToJson();
-  executor_->SetPipelineDocument(loaded);
+  // A loaded document is a new history load, so it takes a new lineage and a new binding.
+  source_->Rebind(loaded);
+  const auto pixels = Render(true);
+  ASSERT_FALSE(pixels.empty());
   EXPECT_EQ(loaded->ToJson(), before);
-  EXPECT_EQ(executor_->GpuDagDocument(), loaded);
-  EXPECT_THROW(executor_->SetPipelineDocument(nullptr), std::invalid_argument);
-  EXPECT_EQ(executor_->GpuDagDocument(), loaded);
+  EXPECT_EQ(&source_->Document(), loaded.get());
+  EXPECT_EQ(executor_->DebugCudaRenderer()->Binding(), ExpectedBinding());
+  EXPECT_NE(executor_->DebugCudaRenderer()->Binding(), first_binding);
 }
 
 TEST_F(PipelineDocumentRenderTest, MissingCameraProfileFailsWithoutSubstituteProfile) {
@@ -341,7 +385,7 @@ TEST_F(PipelineDocumentRenderTest, CleanTopInsertedMaskGroupLeavesPixelsUnchange
   const auto after = Render(true);
   ASSERT_EQ(after.size(), before.size());
   EXPECT_LT(cv::norm(before, after, cv::NORM_INF), 2e-5);
-  EXPECT_EQ(executor_->GpuDagDocument().get(), document_.get());
+  EXPECT_EQ(executor_->DebugCudaRenderer()->Binding(), ExpectedBinding());
 }
 
 TEST_F(PipelineDocumentRenderTest, CpuPreferenceFailsWithoutSubstituteBackend) {

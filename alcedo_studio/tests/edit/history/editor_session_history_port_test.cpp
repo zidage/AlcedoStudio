@@ -58,6 +58,7 @@ auto MakeMiniGitPipelineGuard(sl_element_id_t element_id)
   guard->pipeline_ = std::make_shared<alcedo::PipelineExecutor>();
   guard->document_ =
       std::make_shared<alcedo::PipelineDocument>(alcedo::CreateDefaultPipelineDocument());
+  guard->lineage_ = alcedo::PipelineLineageId::Next();
   guard->commit_graph_ =
       std::make_shared<alcedo::CommitGraph>(alcedo::CommitGraph::CreateEmpty(element_id));
   guard->root_id_                  = guard->commit_graph_->GetRootId();
@@ -818,7 +819,7 @@ TEST_F(EditorSessionHistoryPortTest,
   EXPECT_NEAR(captured_exposure.at("exposure_ev").get<double>(), 0.85, 1e-5);
   reopened_guard->document_ = std::make_shared<alcedo::PipelineDocument>(
       alcedo::ClonePipelineDocument(checkpoint.document));
-  reopened_guard->pipeline_->SetPipelineDocument(reopened_guard->document_);
+  reopened_guard->lineage_  = alcedo::PipelineLineageId::Next();
   auto reopened_pipeline = std::make_shared<EditorSessionPipelinePort>();
   reopened_pipeline->SetServices(EditorSessionPipelineMappers{
       {}, [reopened_guard](sl_element_id_t) { return reopened_guard; }});

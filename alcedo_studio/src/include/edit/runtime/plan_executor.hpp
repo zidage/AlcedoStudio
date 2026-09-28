@@ -44,7 +44,7 @@ class PlanExecutor {
   /**
    * @brief Execute compiled passes that miss the result cache.
    *
-   * @param device Session or one-shot device that owns workspace and stats.
+   * @param device Interactive or batch device that owns workspace and stats.
    * @param publish_on_success When true, publishes unpublished writes after EndRender.
    *        Product present paths pass false and publish after the sink succeeds.
    * @param persistence Which published results this task may look up or replace.

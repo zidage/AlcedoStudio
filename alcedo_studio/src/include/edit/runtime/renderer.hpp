@@ -18,10 +18,12 @@
 #include "edit/geometry/render_request.hpp"
 #include "edit/graph/graph_ids.hpp"
 #include "edit/graph/pipeline_document.hpp"
+#include "edit/graph/pipeline_graph_snapshot.hpp"
 #include "edit/input/prepared_source_cache.hpp"
 #include "edit/input/raw_input_loader.hpp"
-#include "edit/runtime/pipeline_apply_request.hpp"
+#include "edit/runtime/executor_role.hpp"
 #include "edit/runtime/gpu_node_pass_stats.hpp"
+#include "edit/runtime/pipeline_apply_request.hpp"
 #include "edit/runtime/render_device_type.hpp"
 #include "edit/runtime/static_execution_plan_cache.hpp"
 #include "io/image/export_color_profile_config.hpp"
@@ -31,8 +33,6 @@
 namespace alcedo {
 
 class ImageBuffer;
-
-using CudaProductCachePolicy = RenderCachePolicy;
 
 /**
  * @brief Queryable prepare/compile and result-cache counters for one product session.
@@ -50,7 +50,7 @@ struct RenderSessionStats {
 using CudaProductSessionStats = RenderSessionStats;
 
 /**
- * @brief Live GPU/host allocations owned by one product session.
+ * @brief Live GPU/host allocations owned by one renderer's device and source cache.
  */
 struct RenderSessionResources {
   std::size_t               published_result_count      = 0;
@@ -67,14 +67,19 @@ struct RenderSessionResources {
 using CudaProductSessionResources = RenderSessionResources;
 
 /**
- * @brief Reusable product session for one opened PipelineDocument.
+ * @brief GPU DAG renderer of one backend in one @ref ExecutorRole.
  *
- * Reads the document only. Parameter changes are found by revision, so this renderer and
- * any other renderer can read the same document.
+ * Holds no document. Every render receives an immutable @ref PipelineGraphSnapshot and only
+ * reads it; parameter changes are found by revision, so any number of renderers can read the
+ * same snapshot. The role is fixed at construction:
  *
- * Owns editor session caches/device plus a lazily created one-shot device for
- * thumbnail and export work. Not created per Apply. Only session renders reuse
- * prepared sources, static plans, and published GPU results.
+ * - Interactive: keeps prepared sources, compiled static plans, and published GPU results for
+ *   the current @ref RenderBindingKey. A render with another key first releases all of them
+ *   (@ref ReleaseBinding). Frames may present to a sink.
+ * - Batch: the device uses a dedicated submission queue. Every render unpacks its source and
+ *   compiles its plan, and releases every result resource after delivery or failure.
+ *
+ * Thread: one render at a time, on the caller's thread (the executor's render lock).
  *
  * @tparam Backend Render backend. Include that backend's device header before
  *         instantiating this class so @ref RenderDeviceType is specialized.
@@ -84,92 +89,77 @@ class Renderer {
  public:
   using RenderDevice = typename RenderDeviceType<Backend>::Type;
 
-  explicit Renderer(std::shared_ptr<const PipelineDocument> document);
-  Renderer(std::shared_ptr<const PipelineDocument> document, PreparedSourceCache::UnpackFn unpack);
+  explicit Renderer(ExecutorRole role, PreparedSourceCache::UnpackFn unpack = {});
   ~Renderer();
 
   Renderer(const Renderer&)                    = delete;
   auto operator=(const Renderer&) -> Renderer& = delete;
 
-  void               SetDocument(std::shared_ptr<const PipelineDocument> document);
+  [[nodiscard]] auto Role() const -> ExecutorRole { return role_; }
 
   /**
-   * @brief Render one frame on the owning thread.
+   * @brief Render one frame of @p snapshot.
    *
-   * @param cache_policy Session mode reads and publishes reusable editor results. Bypass mode
-   *        uses an isolated one-shot workspace and releases its result resources after delivery.
+   * An interactive renderer whose binding differs from the snapshot's key releases the previous
+   * binding first. A batch renderer releases its result resources before it returns or throws.
+   *
+   * @pre No other render runs on this renderer.
+   * @throws std::invalid_argument when `request.role` differs from @ref Role.
    * @throws std::runtime_error for invalid input, GPU execution, or presentation failure.
    */
-  [[nodiscard]] auto Render(const std::shared_ptr<ImageBuffer>& input, DecodeRes decode_res,
+  [[nodiscard]] auto Render(const PipelineGraphSnapshot&        snapshot,
+                            const std::shared_ptr<ImageBuffer>& input,
+                            const PipelineApplyRequest& request) -> std::shared_ptr<ImageBuffer>;
+
+  /**
+   * @brief Render one frame from explicit arguments; the request role is this renderer's role.
+   */
+  [[nodiscard]] auto Render(const PipelineGraphSnapshot&        snapshot,
+                            const std::shared_ptr<ImageBuffer>& input, DecodeRes decode_res,
                             const RenderRequest& request, IFrameSink* sink,
                             const FrameCompletionSubmission& submission, bool require_host_output,
-                            RenderCachePolicy cache_policy = RenderCachePolicy::UseSessionCache,
                             const std::optional<ExportColorProfileConfig>& output_color = {})
       -> std::shared_ptr<ImageBuffer>;
 
-  /**
-   * @brief Render one frame from a task-owned request.
-   */
-  [[nodiscard]] auto Render(const std::shared_ptr<ImageBuffer>& input,
-                            const PipelineApplyRequest& request) -> std::shared_ptr<ImageBuffer>;
-
-  /** @brief Snapshot of source and static-plan cache counters since construction or ResetStats. */
+  /** @brief Source and static-plan cache counters since construction or ResetStats. */
   [[nodiscard]] auto Stats() const -> RenderSessionStats;
   void               ResetStats();
 
   /**
-   * @brief Drop GPU result textures, host prepared sources, the plan cache, the
-   *        one-shot device, and backend session extras.
+   * @brief Release every resource of the current binding and forget the binding.
    *
-   * The session device is kept when it already exists so the next editor Render
-   * does not rebuild GPU streams. Thumbnail-only Bypass renders
-   * never create that session device. Call when the last pipeline pin is
-   * released. The next Render rebuilds caches from the still-owned document.
+   * Drops published GPU results, transients, local tone caches, the plan cache, prepared
+   * sources, and the neural demosaic workspace after the device is idle. The device and its
+   * queue are kept, so the next render does not create GPU streams again.
+   * @pre No render runs on this renderer.
    */
-  void ReleaseSessionCaches();
+  void ReleaseBinding();
 
-  [[nodiscard]] auto SessionResources() const -> RenderSessionResources;
+  /// Binding of the last interactive render; empty for a batch renderer and after a release.
+  [[nodiscard]] auto Binding() const -> const std::optional<RenderBindingKey>& { return binding_; }
 
-  /**
-   * @brief Published result count of the isolated one-shot workspace.
-   *
-   * Zero when no one-shot device exists or after a successful bypass render that
-   * released that workspace. Session caches are not included.
-   */
-  [[nodiscard]] auto OneShotPublishedResultCount() const -> std::size_t;
+  /// Live allocations of this renderer's device and source cache.
+  [[nodiscard]] auto Resources() const -> RenderSessionResources;
 
   /**
-   * @brief Live allocations of the isolated one-shot workspace.
-   *
-   * Empty when no one-shot device exists. After a successful BypassSessionCache
-   * render, published results and texture-pool used bytes are zero because that
-   * workspace is released on delivery. Session prepared-source fields stay zero.
+   * @brief Address of the device, or 0 when none exists. Stable until the renderer is
+   *        destroyed; tests use it to detect device reconstruction.
    */
-  [[nodiscard]] auto OneShotResources() const -> RenderSessionResources;
+  [[nodiscard]] auto DebugDeviceIdentity() const -> std::uintptr_t;
 
   /**
-   * @brief Address of the lazily created one-shot device, or 0 if none exists.
-   *
-   * Stable across BypassSessionCache renders until @ref ReleaseSessionCaches.
-   * Tests use this to detect per-Apply device reconstruction.
+   * @brief Native queue/stream identity of the device, or 0 when none exists or the backend
+   *        has no queue query. Tests use it to verify that batch renderers do not share a queue.
    */
-  [[nodiscard]] auto DebugOneShotDeviceIdentity() const -> std::uintptr_t;
-
-  /**
-   * @brief Native queue/stream identity of the one-shot device, or 0 if none exists.
-   *
-   * Tests use this to verify that one-shot renders do not share the backend's
-   * session submission stream.
-   */
-  [[nodiscard]] auto DebugOneShotQueueIdentity() const -> std::uintptr_t;
+  [[nodiscard]] auto DebugQueueIdentity() const -> std::uintptr_t;
 
   [[nodiscard]] auto Device() -> RenderDevice& {
-    EnsureSessionDevice();
+    EnsureDevice();
     return *device_;
   }
   [[nodiscard]] auto Device() const -> const RenderDevice& {
     if (!device_) {
-      throw std::runtime_error("Renderer: session device has not been created");
+      throw std::runtime_error("Renderer: device has not been created");
     }
     return *device_;
   }
@@ -180,28 +170,21 @@ class Renderer {
   [[nodiscard]] auto PlanCache() const -> const StaticExecutionPlanCache& { return plan_cache_; }
 
  private:
-  void EnsureSessionDevice();
-  void EnsureOneShotDevice();
-  void ConfigureDevice(RenderDevice& device, const char* error_label);
+  void EnsureDevice();
+  void ReleaseDeviceResources();
 
-  std::shared_ptr<const PipelineDocument> document_;
-  std::unique_ptr<RenderDevice>     device_;
-  std::unique_ptr<RenderDevice>     one_shot_device_;
-  PreparedSourceCache::UnpackFn     unpack_;
-  PreparedSourceCache               source_cache_;
-  StaticExecutionPlanCache          plan_cache_{Backend::kCapabilityVersion};
+  ExecutorRole                    role_;
+  std::unique_ptr<RenderDevice>   device_;
+  PreparedSourceCache::UnpackFn   unpack_;
+  PreparedSourceCache             source_cache_;
+  StaticExecutionPlanCache        plan_cache_{Backend::kCapabilityVersion};
+  std::optional<RenderBindingKey> binding_;
 };
 
 template <class Backend>
-Renderer<Backend>::Renderer(std::shared_ptr<const PipelineDocument> document)
-    : Renderer(std::move(document), PreparedSourceCache::UnpackFn{}) {}
-
-template <class Backend>
-Renderer<Backend>::Renderer(std::shared_ptr<const PipelineDocument> document,
-                            PreparedSourceCache::UnpackFn           unpack)
-    : document_(std::move(document)),
+Renderer<Backend>::Renderer(ExecutorRole role, PreparedSourceCache::UnpackFn unpack)
+    : role_(role),
       device_(),
-      one_shot_device_(),
       unpack_(unpack ? std::move(unpack)
                      : PreparedSourceCache::UnpackFn{[](std::span<const std::byte> encoded,
                                                         DecodeRes                  decode_res) {
@@ -214,49 +197,26 @@ template <class Backend>
 Renderer<Backend>::~Renderer() = default;
 
 template <class Backend>
-void Renderer<Backend>::ConfigureDevice(RenderDevice& device, const char* error_label) {
-  device.SetErrorReporter([error_label](std::string_view message) {
-    std::fprintf(stderr, "[ERROR] %s DAG %s render failed: %.*s\n", Backend::kName, error_label,
-                 static_cast<int>(message.size()), message.data());
-  });
-}
-
-template <class Backend>
-void Renderer<Backend>::EnsureSessionDevice() {
+void Renderer<Backend>::EnsureDevice() {
   if (device_) {
     return;
   }
   device_ = std::make_unique<RenderDevice>();
-  ConfigureDevice(*device_, "product");
-}
-
-template <class Backend>
-void Renderer<Backend>::EnsureOneShotDevice() {
-  if (one_shot_device_) {
-    return;
+  if (role_ == ExecutorRole::Batch) {
+    if constexpr (requires {
+                    { device_->Workspace().Device().UseDedicatedQueue() };
+                  }) {
+      // Batch devices get an isolated submission stream (CUDA uses a stream per command
+      // context; OpenCL a dedicated command queue) so parallel batch renders never share one
+      // queue object.
+      device_->Workspace().Device().UseDedicatedQueue();
+    }
   }
-  one_shot_device_ = std::make_unique<RenderDevice>();
-  if constexpr (requires {
-                  { one_shot_device_->Workspace().Device().UseDedicatedQueue() };
-                }) {
-    // One-shot devices get an isolated submission stream (CUDA uses a stream
-    // per command context; OpenCL a dedicated command queue) so parallel
-    // thumbnail/export renders never share one queue object.
-    one_shot_device_->Workspace().Device().UseDedicatedQueue();
-  }
-  ConfigureDevice(*one_shot_device_, "one-shot");
-}
-
-template <class Backend>
-void Renderer<Backend>::SetDocument(std::shared_ptr<const PipelineDocument> document) {
-  if (!document) {
-    throw std::invalid_argument("Renderer: PipelineDocument is null");
-  }
-  const bool replaced = document_.get() != document.get();
-  document_           = std::move(document);
-  if (replaced && device_) {
-    device_->Workspace().ResultInvalidation().AdvanceDocumentEpoch();
-  }
+  const char* label = role_ == ExecutorRole::Batch ? "batch" : "interactive";
+  device_->SetErrorReporter([label](std::string_view message) {
+    std::fprintf(stderr, "[ERROR] %s DAG %s render failed: %.*s\n", Backend::kName, label,
+                 static_cast<int>(message.size()), message.data());
+  });
 }
 
 template <class Backend>
@@ -286,10 +246,7 @@ void Renderer<Backend>::ResetStats() {
 }
 
 template <class Backend>
-void Renderer<Backend>::ReleaseSessionCaches() {
-  one_shot_device_.reset();
-  source_cache_.Clear();
-  plan_cache_.Clear();
+void Renderer<Backend>::ReleaseDeviceResources() {
   if (!device_) {
     return;
   }
@@ -298,43 +255,28 @@ void Renderer<Backend>::ReleaseSessionCaches() {
   if constexpr (requires(RenderDevice& device) { device.ReleaseNeuralDemosaicWorkspace(); }) {
     device_->ReleaseNeuralDemosaicWorkspace();
   }
-  device_->ResetPassStats();
 }
 
 template <class Backend>
-auto Renderer<Backend>::SessionResources() const -> RenderSessionResources {
+void Renderer<Backend>::ReleaseBinding() {
+  source_cache_.Clear();
+  plan_cache_.Clear();
+  binding_.reset();
+  ReleaseDeviceResources();
+  if (device_) {
+    device_->ResetPassStats();
+  }
+}
+
+template <class Backend>
+auto Renderer<Backend>::Resources() const -> RenderSessionResources {
   RenderSessionResources resources;
+  resources.prepared_source_host_bytes  = source_cache_.HostBytesUsed();
+  resources.prepared_source_entry_count = source_cache_.EntryCount();
   if (!device_) {
     return resources;
   }
-  const auto& workspace                 = device_->Workspace();
-  resources.published_result_count      = workspace.Images().PublishedCount();
-  resources.texture_pool_used_bytes     = workspace.Textures().UsedBytes();
-  resources.texture_pool_entry_count    = workspace.Textures().EntryCount();
-  resources.prepared_source_host_bytes  = source_cache_.HostBytesUsed();
-  resources.prepared_source_entry_count = source_cache_.EntryCount();
-  resources.transient_used_bytes        = workspace.TransientBuffers().used_bytes();
-  resources.transient_capacity_bytes    = workspace.TransientBuffers().capacity_bytes();
-  resources.transient_slab_count        = workspace.TransientBuffers().slab_count();
-  resources.session_value_ids           = workspace.Images().CurrentValueIds();
-  return resources;
-}
-
-template <class Backend>
-auto Renderer<Backend>::OneShotPublishedResultCount() const -> std::size_t {
-  if (!one_shot_device_) {
-    return 0;
-  }
-  return one_shot_device_->Workspace().Images().PublishedCount();
-}
-
-template <class Backend>
-auto Renderer<Backend>::OneShotResources() const -> RenderSessionResources {
-  RenderSessionResources resources;
-  if (!one_shot_device_) {
-    return resources;
-  }
-  const auto& workspace              = one_shot_device_->Workspace();
+  const auto& workspace              = device_->Workspace();
   resources.published_result_count   = workspace.Images().PublishedCount();
   resources.texture_pool_used_bytes  = workspace.Textures().UsedBytes();
   resources.texture_pool_entry_count = workspace.Textures().EntryCount();
@@ -346,19 +288,18 @@ auto Renderer<Backend>::OneShotResources() const -> RenderSessionResources {
 }
 
 template <class Backend>
-auto Renderer<Backend>::DebugOneShotDeviceIdentity() const -> std::uintptr_t {
-  return reinterpret_cast<std::uintptr_t>(one_shot_device_.get());
+auto Renderer<Backend>::DebugDeviceIdentity() const -> std::uintptr_t {
+  return reinterpret_cast<std::uintptr_t>(device_.get());
 }
 
 template <class Backend>
-auto Renderer<Backend>::DebugOneShotQueueIdentity() const -> std::uintptr_t {
+auto Renderer<Backend>::DebugQueueIdentity() const -> std::uintptr_t {
   std::uintptr_t identity = 0;
-  if (one_shot_device_) {
+  if (device_) {
     if constexpr (requires {
-                    { one_shot_device_->Workspace().Device().NativeQueue() };
+                    { device_->Workspace().Device().NativeQueue() };
                   }) {
-      identity =
-          reinterpret_cast<std::uintptr_t>(one_shot_device_->Workspace().Device().NativeQueue());
+      identity = reinterpret_cast<std::uintptr_t>(device_->Workspace().Device().NativeQueue());
     }
   }
   return identity;

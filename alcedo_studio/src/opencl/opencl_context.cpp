@@ -34,7 +34,7 @@ struct OpenClDeviceCandidate {
 };
 
 // Render-local queue bound to the calling thread by EnterThreadQueueScope.
-// Only one-shot render threads bind; product/editor threads leave it null.
+// Only batch render threads bind; product/editor threads leave it null.
 thread_local cl_command_queue t_thread_queue_override = nullptr;
 
 auto ToLower(std::string value) -> std::string {

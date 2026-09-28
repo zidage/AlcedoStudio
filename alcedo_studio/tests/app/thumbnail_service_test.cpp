@@ -1008,14 +1008,14 @@ TEST_F(ThumbnailServiceTests, ThumbnailRenderUsesInjectedRawMetadataForDng) {
       PipelineDocument::FromJson(pipeline_guard->document_->ToJson()));
   pipeline_service->SavePipeline(pipeline_guard);
 
-  auto direct_exec = std::make_shared<PipelineExecutor>();
-  direct_exec->SetBoundFile(element_id);
-  direct_exec->SetPipelineDocument(document);
+  auto       direct_exec = std::make_shared<PipelineExecutor>(ExecutorRole::Batch);
+  const auto direct_snapshot = PipelineGraphSnapshot::Preview(
+      document->Freeze(), element_id, PipelineLineageId::Next(), transaction_chain_hash_t{});
   PipelineApplyRequest request;
   request.geometry.resolution.max_edge = 1024;
   request.geometry.resolution.quality  = RenderQuality::Export;
   request.decode_res                   = DecodeRes::QUARTER;
-  request.cache_policy                 = RenderCachePolicy::BypassSessionCache;
+  request.role                         = ExecutorRole::Batch;
   request.require_host_output          = true;
 
   auto bytes = ByteBufferLoader::LoadFromImage(image_desc);
@@ -1025,7 +1025,7 @@ TEST_F(ThumbnailServiceTests, ThumbnailRenderUsesInjectedRawMetadataForDng) {
   std::shared_ptr<ImageBuffer> direct_result;
   {
     std::unique_lock<std::mutex> render_lock(direct_exec->GetRenderLock());
-    direct_result = direct_exec->Apply(direct_input, request);
+    direct_result = direct_exec->Apply(*direct_snapshot, direct_input, request);
   }
   ASSERT_NE(direct_result, nullptr);
 
@@ -1146,9 +1146,10 @@ TEST_F(ThumbnailServiceTests, OrdinaryThumbnailReusesLiveEditorExecutorAndDocume
   ASSERT_NE(live_guard->pipeline_, nullptr);
   live_guard->dirty_ = true;
   ASSERT_EQ(live_guard->pin_count_, size_t{1});
-  EXPECT_TRUE(live_guard->pipeline_->HasGpuDagDocument());
+  ASSERT_FALSE(live_guard->lineage_.Empty());
   PipelineExecutor* const    live_executor = live_guard->pipeline_.get();
   PipelineDocument* const    live_document = live_guard->document_.get();
+  const PipelineLineageId    live_lineage  = live_guard->lineage_;
 
   auto thumbnail = GetThumbnailBlocking(thumbnail_service, element_id, image_id, true,
                                         ThumbnailResolution::k256);
@@ -1156,6 +1157,7 @@ TEST_F(ThumbnailServiceTests, OrdinaryThumbnailReusesLiveEditorExecutorAndDocume
   ASSERT_NE(thumbnail->thumbnail_buffer_, nullptr);
   EXPECT_EQ(live_guard->pipeline_.get(), live_executor);
   EXPECT_EQ(live_guard->document_.get(), live_document);
+  EXPECT_EQ(live_guard->lineage_, live_lineage) << "a thumbnail render must not rebind the guard";
   EXPECT_EQ(live_guard->pin_count_, size_t{1});
   EXPECT_TRUE(live_guard->dirty_);
 
@@ -1163,7 +1165,7 @@ TEST_F(ThumbnailServiceTests, OrdinaryThumbnailReusesLiveEditorExecutorAndDocume
   pipeline_service->SavePipeline(live_guard);
 }
 
-TEST_F(ThumbnailServiceTests, ThumbnailRenderUsesGpuDagDocumentWithoutStageApplyOnto) {
+TEST_F(ThumbnailServiceTests, ThumbnailRenderUsesLiveDocumentWithoutStageApplyOnto) {
   const auto raw_path = std::filesystem::path(TEST_IMG_PATH) / "raw" / "linear_dng" / "mfzoty.dng";
   if (!std::filesystem::exists(raw_path)) {
     GTEST_SKIP() << "Sample DNG file is missing: " << raw_path.string();
@@ -1188,7 +1190,14 @@ TEST_F(ThumbnailServiceTests, ThumbnailRenderUsesGpuDagDocumentWithoutStageApply
   exposure->LoadJson({{"exposure_ev", 2.25f}});
   live_guard->dirty_   = true;
   const auto live_json = live_guard->document_->ToJson().dump();
-  EXPECT_EQ(live_guard->document_.get(), live_guard->pipeline_->GpuDagDocument().get());
+  {
+    // Every render on the guard's executor freezes this document under the render lock.
+    std::unique_lock<std::mutex> render_lock(live_guard->pipeline_->GetRenderLock());
+    const auto                   frozen = live_guard->FreezeLiveSnapshot();
+    ASSERT_NE(frozen, nullptr);
+    EXPECT_EQ(frozen->Lineage(), live_guard->lineage_);
+    EXPECT_EQ(frozen->Document().ToJson().dump(), live_json);
+  }
   EXPECT_FLOAT_EQ(exposure->ToJson().at("exposure_ev").get<float>(), 2.25f);
 
   std::promise<ThumbnailRequestResult> done;

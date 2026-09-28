@@ -452,13 +452,14 @@ void EditorSessionRenderSchedulerPort::DispatchPipelineFrame(Job job, alcedo::IF
     task.input_                             = context->input;
     task.input_desc_                        = context->image;
     task.pipeline_executor_                 = exec;
+    task.snapshot_under_render_lock_        = alcedo::MakeLiveSnapshotSource(context->pipeline_guard);
     task.options_.render_desc_              = MakeEditorRenderDesc(job.request);
     task.request_id_                        = job.request.request_id;
     task.options_.is_callback_              = false;
     task.options_.is_seq_callback_          = false;
     task.options_.is_blocking_              = false;
-    // The renderer reads the bound document. Configure only attaches the frame sink under the
-    // render lock; it writes no parameter.
+    // The scheduler freezes the live document under the render lock and renders that snapshot.
+    // Configure only attaches the frame sink under the same lock; it writes no parameter.
     task.configure_under_render_lock_ = [sink](alcedo::PipelineTask& locked_task) {
       auto locked_exec = locked_task.pipeline_executor_;
       if (!locked_exec) {

@@ -104,7 +104,7 @@ TEST(ImportPipelineDocumentTest, ImportCreatesRenderableDocumentWithoutStageMirr
   ASSERT_TRUE(bound.camera_profile.dng_profile.IsBound());
   EXPECT_EQ(bound.camera_profile.dng_profile->fingerprint, raw.dng_profile_->fingerprint);
   EXPECT_TRUE(ResolveDevelopColorTransform(bound).ok);
-  EXPECT_EQ(loaded->pipeline_->GpuDagDocument(), loaded->document_);
+  EXPECT_FALSE(loaded->lineage_.Empty());
   const auto                   before = loaded->document_->ToJson();
   auto                         bytes  = ByteBufferLoader::LoadByteBufferFromImage(image);
   auto                         input  = std::make_shared<ImageBuffer>(std::move(bytes));
@@ -116,7 +116,9 @@ TEST(ImportPipelineDocumentTest, ImportCreatesRenderableDocumentWithoutStageMirr
     request.geometry.resolution.quality  = RenderQuality::Export;
     request.decode_res                   = DecodeRes::FULL;
     request.require_host_output          = true;
-    output = loaded->pipeline_->Apply(input, request);
+    const auto snapshot = loaded->FreezeLiveSnapshot();
+    ASSERT_NE(snapshot, nullptr);
+    output = loaded->pipeline_->Apply(*snapshot, input, request);
   }
   ASSERT_NE(output, nullptr);
   ASSERT_TRUE(output->cpu_data_valid_);

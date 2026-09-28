@@ -23,6 +23,7 @@
 #include "edit/scope/final_display_frame_tap.hpp"
 #include "edit/scope/scope_analyzer.hpp"
 #include "image/image_buffer.hpp"
+#include "support/render_snapshot_source.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 
 namespace alcedo {
@@ -166,18 +167,21 @@ class CudaProductScopePresentFixture : public ::testing::Test {
     }
     document_ = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
     gpu_dag_test::EnsureTestCameraProfile(*document_);
-    renderer_ = std::make_unique<CudaProductRenderer>(document_, MakeUnpacker());
+    source_   = std::make_unique<test::RenderSnapshotSource>(document_);
+    renderer_ = std::make_unique<CudaProductRenderer>(ExecutorRole::Interactive, MakeUnpacker());
     image_    = MakeEncodedImage(91);
   }
 
   auto RenderTo(IFrameSink& sink, const FrameCompletionSubmission& submission = {})
       -> std::shared_ptr<ImageBuffer> {
-    return renderer_->Render(image_, DecodeRes::FULL, RenderRequest{}, &sink, submission, false);
+    return renderer_->Render(*source_->Freeze(), image_, DecodeRes::FULL, RenderRequest{}, &sink,
+                             submission, false);
   }
 
-  std::shared_ptr<PipelineDocument>    document_;
-  std::unique_ptr<CudaProductRenderer> renderer_;
-  std::shared_ptr<ImageBuffer>         image_;
+  std::shared_ptr<PipelineDocument>           document_;
+  std::unique_ptr<test::RenderSnapshotSource> source_;
+  std::unique_ptr<CudaProductRenderer>        renderer_;
+  std::shared_ptr<ImageBuffer>                image_;
 };
 
 TEST_F(CudaProductScopePresentFixture,

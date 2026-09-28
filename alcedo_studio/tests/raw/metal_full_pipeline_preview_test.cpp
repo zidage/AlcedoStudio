@@ -10,10 +10,14 @@
 #include <fstream>
 #include <future>
 #include <memory>
+#include <mutex>
 #include <opencv2/imgproc.hpp>
 #include <vector>
 
+#include "support/render_snapshot_source.hpp"
+#include "edit/graph/pipeline_document.hpp"
 #include "edit/pipeline/pipeline_executor.hpp"
+#include "edit/runtime/pipeline_apply_request.hpp"
 #include "image/image_buffer.hpp"
 #include "renderer/pipeline_scheduler.hpp"
 
@@ -74,12 +78,19 @@ auto CiRawFixturePath() -> std::filesystem::path {
   return paths.empty() ? std::filesystem::path{} : paths.front();
 }
 
+auto MakeDefaultDocument() -> std::shared_ptr<PipelineDocument> {
+  return std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
+}
+
 auto RenderBlocking(RenderType render_type, std::vector<uint8_t> raw_bytes)
     -> std::shared_ptr<ImageBuffer> {
-  auto         pipeline = std::make_shared<PipelineExecutor>();
+  // Declared before the scheduler so it outlives the task.
+  test::RenderSnapshotSource source(MakeDefaultDocument());
+  auto                       pipeline = std::make_shared<PipelineExecutor>();
 
   PipelineTask task;
   task.pipeline_executor_                 = pipeline;
+  task.snapshot_under_render_lock_        = source.TaskSource();
   task.input_                             = std::make_shared<ImageBuffer>(std::move(raw_bytes));
   task.options_.render_desc_.render_type_ = render_type;
   task.options_.is_blocking_              = true;
@@ -116,11 +127,16 @@ TEST(MetalFullPipelinePreview, DecodeGeometryAndMergedStageStillLife) {
   auto raw_bytes = ReadFileToBuffer(raw_path);
   ASSERT_FALSE(raw_bytes.empty());
 
-  PipelineExecutor pipeline;
-  pipeline.SetForceCPUOutput(true);
+  PipelineExecutor     pipeline;
+  PipelineApplyRequest request;
+  request.require_host_output = true;
+  const auto document         = MakeDefaultDocument();
 
   auto input  = std::make_shared<ImageBuffer>(std::move(raw_bytes));
-  auto output = pipeline.Apply(input);
+  auto output = [&] {
+    std::lock_guard<std::mutex> lock(pipeline.GetRenderLock());
+    return pipeline.Apply(*test::FreezeInNewLineage(*document), input, request);
+  }();
 
   ASSERT_NE(output, nullptr);
   if (!output->cpu_data_valid_) {

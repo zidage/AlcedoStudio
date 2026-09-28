@@ -127,11 +127,11 @@ auto PipelineTask::MakeApplyRequest() const -> PipelineApplyRequest {
   FramePresentationMode presentation_mode = FramePresentationMode::FullFrame;
   request.sink                            = pipeline_executor_->GetFrameSink();
 
-  auto finish = [&](DecodeRes decode, bool host_output, RenderCachePolicy cache, int max_edge,
+  auto finish = [&](DecodeRes decode, bool host_output, ExecutorRole role, int max_edge,
                     bool export_quality, std::optional<ViewportRenderRegion> view) {
     request.decode_res          = decode;
     request.require_host_output = host_output;
-    request.cache_policy        = cache;
+    request.role                = role;
     request.geometry            = MakeGeometryRequest(view, max_edge, export_quality);
     request.geometry.document_geometry = desc.document_geometry_;
     request.submission          = FrameCompletionSubmission{.metadata = frame_metadata,
@@ -146,7 +146,7 @@ auto PipelineTask::MakeApplyRequest() const -> PipelineApplyRequest {
     if (full_frame_region) {
       presentation_mode              = FramePresentationMode::ViewportTransformed;
       frame_metadata.source_roi_norm = {};
-      finish(DecodeRes::FULL, false, RenderCachePolicy::UseSessionCache, kFastPreviewMaxLongEdge,
+      finish(DecodeRes::FULL, false, ExecutorRole::Interactive, kFastPreviewMaxLongEdge,
              false, viewport_region);
       return request;
     }
@@ -154,7 +154,7 @@ auto PipelineTask::MakeApplyRequest() const -> PipelineApplyRequest {
     frame_metadata    = MetadataFromRegion(frame_metadata, viewport_region, region_x, region_y,
                                            region_scale_x, region_scale_y);
     frame_metadata.scope_update_allowed = frame_metadata.scope_refresh_requested;
-    finish(DecodeRes::FULL, false, RenderCachePolicy::UseSessionCache, kFastPreviewMaxLongEdge,
+    finish(DecodeRes::FULL, false, ExecutorRole::Interactive, kFastPreviewMaxLongEdge,
            false, viewport_region);
     return request;
   }
@@ -162,7 +162,7 @@ auto PipelineTask::MakeApplyRequest() const -> PipelineApplyRequest {
     frame_metadata.frame_role      = FrameRole::QualityBase;
     frame_metadata.source_roi_norm = {};
     presentation_mode              = FramePresentationMode::ViewportTransformed;
-    finish(DecodeRes::FULL, false, RenderCachePolicy::UseSessionCache,
+    finish(DecodeRes::FULL, false, ExecutorRole::Interactive,
            kQualityBasePreviewMaxLongEdge, false, std::nullopt);
     return request;
   }
@@ -174,7 +174,7 @@ auto PipelineTask::MakeApplyRequest() const -> PipelineApplyRequest {
                                            region_scale_x, region_scale_y);
     presentation_mode = FramePresentationMode::ViewportTransformed;
     const int detail_target_long_edge = ViewportTargetLongEdge(viewport_region);
-    finish(DecodeRes::FULL, false, RenderCachePolicy::UseSessionCache,
+    finish(DecodeRes::FULL, false, ExecutorRole::Interactive,
            detail_target_long_edge > 0 ? detail_target_long_edge : 0, false, viewport_region);
     return request;
   }
@@ -182,13 +182,13 @@ auto PipelineTask::MakeApplyRequest() const -> PipelineApplyRequest {
     presentation_mode    = FramePresentationMode::ViewportTransformed;
     request.sink         = nullptr;
     request.output_color = std::nullopt;
-    finish(desc.decode_res_, true, RenderCachePolicy::BypassSessionCache,
+    finish(desc.decode_res_, true, ExecutorRole::Batch,
            static_cast<int>(desc.max_edge_), false, std::nullopt);
     return request;
   }
   if (requested_render_type == RenderType::FULL_RES_PREVIEW) {
     presentation_mode = FramePresentationMode::ViewportTransformed;
-    finish(DecodeRes::FULL, false, RenderCachePolicy::UseSessionCache, kFullResPreviewMaxLongEdge,
+    finish(DecodeRes::FULL, false, ExecutorRole::Interactive, kFullResPreviewMaxLongEdge,
            false, std::nullopt);
     return request;
   }
@@ -196,7 +196,7 @@ auto PipelineTask::MakeApplyRequest() const -> PipelineApplyRequest {
     presentation_mode    = FramePresentationMode::ViewportTransformed;
     request.sink         = nullptr;
     request.output_color = options_.export_output_color_;
-    finish(DecodeRes::FULL, true, RenderCachePolicy::BypassSessionCache, 0, true, std::nullopt);
+    finish(DecodeRes::FULL, true, ExecutorRole::Batch, 0, true, std::nullopt);
     return request;
   }
   throw std::runtime_error("[ERROR] PipelineTask: Unknown render type");
@@ -428,9 +428,17 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
             return;
           }
 
+          if (!task.snapshot_under_render_lock_) {
+            throw std::runtime_error("PipelineScheduler: render task has no snapshot source");
+          }
+          const auto snapshot = task.snapshot_under_render_lock_();
+          if (!snapshot) {
+            throw std::runtime_error("PipelineScheduler: render task snapshot is unavailable");
+          }
+
           MarkSinkApplyStarted(output_sink, task.request_id_);
 
-          auto result         = task.pipeline_executor_->Apply(task.input_, apply_request);
+          auto result = task.pipeline_executor_->Apply(*snapshot, task.input_, apply_request);
           bool result_has_cpu = false;
           if (result && result->cpu_data_valid_) {
             try {

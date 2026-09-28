@@ -217,14 +217,27 @@ void SetPipelineHistoryState(PipelineGuard& guard, const CommitGraph& graph) {
 
 }  // namespace
 
+auto PipelineGuard::FreezeLiveSnapshot() const -> std::shared_ptr<const PipelineGraphSnapshot> {
+  if (!document_) {
+    throw std::invalid_argument("PipelineGuard: no live document to freeze");
+  }
+  return PipelineGraphSnapshot::Preview(document_->Freeze(), id_, lineage_,
+                                        transaction_chain_hash_t{});
+}
+
+auto MakeLiveSnapshotSource(std::shared_ptr<const PipelineGuard> guard)
+    -> std::function<std::shared_ptr<const PipelineGraphSnapshot>()> {
+  if (!guard) {
+    throw std::invalid_argument("MakeLiveSnapshotSource: guard is null");
+  }
+  return [guard = std::move(guard)]() { return guard->FreezeLiveSnapshot(); };
+}
+
 auto BindLivePipelineDocument(PipelineGuard&                    guard,
                               std::shared_ptr<PipelineDocument> document) noexcept
     -> std::shared_ptr<PipelineDocument> {
-  auto prior = std::exchange(guard.document_, std::move(document));
-  if (guard.pipeline_) {
-    // Throws only for a null document, which the precondition excludes.
-    guard.pipeline_->SetPipelineDocument(guard.document_);
-  }
+  auto prior     = std::exchange(guard.document_, std::move(document));
+  guard.lineage_ = PipelineLineageId::Next();
   return prior;
 }
 
@@ -295,7 +308,7 @@ void PipelineMgmtService::HandleEviction(sl_element_id_t evicted_id) {
   if (pipeline_guard->pipeline_) {
     std::unique_lock<std::mutex> render_guard(pipeline_guard->pipeline_->GetRenderLock());
     // Clear intermediate buffers before removing from cache to ensure timely memory release.
-    pipeline_guard->pipeline_->ClearAllIntermediateBuffers();
+    pipeline_guard->pipeline_->ReleaseBinding();
   }
   pipeline_guard->live_ready_ = false;
 }
@@ -315,7 +328,7 @@ void PipelineMgmtService::CleanupIdlePipelineResources(
     cache_cv_.notify_all();
   }
   try {
-    pipeline->pipeline_->ClearAllIntermediateBuffers();
+    pipeline->pipeline_->ReleaseBinding();
     pipeline->pipeline_->DetachFrameSink();
   } catch (...) {
   }
@@ -375,7 +388,6 @@ auto PipelineMgmtService::LoadPipeline(sl_element_id_t id) -> std::shared_ptr<Pi
   if (cached && need_reinit) {
     try {
       std::unique_lock<std::mutex> render_guard(cached->pipeline_->GetRenderLock());
-      cached->pipeline_->SetBoundFile(id);
       cached->pipeline_->SetAcceleratorBackendPreference(accelerator_preference_);
       storage_->RememberLivePipeline(id, cached->pipeline_);
       {
@@ -448,12 +460,12 @@ auto PipelineMgmtService::LoadPipeline(sl_element_id_t id) -> std::shared_ptr<Pi
 
     {
       std::unique_lock<std::mutex> render_guard(pipeline->GetRenderLock());
-      pipeline->SetBoundFile(id);
       pipeline->SetAcceleratorBackendPreference(accelerator_preference_);
     }
 
     pipeline_guard->pipeline_ = std::move(pipeline);
     pipeline_guard->document_ = LoadPipelineDocument(storage_->GetElementStore(), id);
+    pipeline_guard->lineage_  = PipelineLineageId::Next();
     BindSourceDngColorProfile(*storage_, id, *pipeline_guard->document_);
     std::optional<RawRuntimeColorContext> stored_raw;
     const auto* develop = std::as_const(*pipeline_guard->document_).Develop();
@@ -462,7 +474,6 @@ auto PipelineMgmtService::LoadPipeline(sl_element_id_t id) -> std::shared_ptr<Pi
       stored_raw = StoredRootRawColorContext(*storage_, id);
     }
     EnsureRenderableCameraProfile(*pipeline_guard->document_, stored_raw);
-    pipeline_guard->pipeline_->SetPipelineDocument(pipeline_guard->document_);
     ValidateProductDocument(*pipeline_guard->document_, id);
     pipeline_guard->dirty_ = false;
 
@@ -1129,7 +1140,7 @@ void PipelineMgmtService::SetAcceleratorBackendPreference(AcceleratorBackendPref
   for (const auto& pipeline_guard : pipelines) {
     std::unique_lock<std::mutex> render_guard(pipeline_guard->pipeline_->GetRenderLock());
     pipeline_guard->pipeline_->SetAcceleratorBackendPreference(preference);
-    pipeline_guard->pipeline_->ClearAllIntermediateBuffers();
+    pipeline_guard->pipeline_->ReleaseBinding();
   }
 }
 

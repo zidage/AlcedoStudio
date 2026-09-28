@@ -17,10 +17,13 @@
 #include <vector>
 
 #include "edit/graph/pipeline_document.hpp"
+#include "edit/graph/pipeline_graph_snapshot.hpp"
 #include "edit/pipeline/pipeline_executor.hpp"
+#include "edit/runtime/executor_role.hpp"
 #include "image/image_buffer.hpp"
 #include "renderer/pipeline_scheduler.hpp"
 #include "renderer/pipeline_task.hpp"
+#include "support/render_snapshot_source.hpp"
 #include "ui/editor_rhi/direct_present_queue.hpp"
 
 namespace alcedo {
@@ -104,10 +107,13 @@ TEST(PipelineSchedulerRequestIdTest, OlderRequestIdIsRejectedAtSink) {
 }
 
 TEST(PipelineSchedulerRequestIdTest, StaleSchedulerTaskDoesNotReachSink) {
-
   auto               exec = std::make_shared<PipelineExecutor>();
+  // No GPU backend: Apply is reached and then fails, on every machine.
+  exec->SetAcceleratorBackendPreference(AcceleratorBackendPreference::CPU);
   RecordingFrameSink sink;
   exec->AttachFrameSink(&sink);
+  test::RenderSnapshotSource source(
+      std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument()));
 
   PipelineScheduler scheduler(1);
 
@@ -120,6 +126,7 @@ TEST(PipelineSchedulerRequestIdTest, StaleSchedulerTaskDoesNotReachSink) {
     task.options_.render_desc_.frame_metadata_.presentation_request_id = request_id;
     task.options_.is_blocking_                                     = true;
     task.result_ = std::make_shared<std::promise<std::shared_ptr<ImageBuffer>>>();
+    task.snapshot_under_render_lock_ = source.TaskSource();
     task.configure_under_render_lock_ = [&](PipelineTask& locked_task) {
       locked_task.pipeline_executor_->AttachFrameSink(&sink);
       locked_task.options_.render_desc_.frame_metadata_.presentation_request_id = request_id;
@@ -130,8 +137,8 @@ TEST(PipelineSchedulerRequestIdTest, StaleSchedulerTaskDoesNotReachSink) {
     return future;
   };
 
-  // Plan §5.5.1: request 2 reaches MarkSinkApplyStarted first. Apply fails without a bound
-  // document; stale tracking must still reject request 1.
+  // Plan §5.5.1: request 2 reaches MarkSinkApplyStarted first. Apply fails without a GPU
+  // backend; stale tracking must still reject request 1.
   auto newer = run_blocking(2);
   ASSERT_TRUE(newer.wait_for(std::chrono::seconds(30)) == std::future_status::ready)
       << "newer request timed out";
@@ -155,13 +162,18 @@ TEST(PipelineSchedulerRequestIdTest, StaleSchedulerTaskDoesNotReachSink) {
 
 TEST(PipelineSchedulerRequestIdTest, CompletionRunsAfterLivePipelineRenderLockIsReleased) {
   auto               exec = std::make_shared<PipelineExecutor>();
+  // No GPU backend: Apply is reached and then fails, on every machine.
+  exec->SetAcceleratorBackendPreference(AcceleratorBackendPreference::CPU);
   RecordingFrameSink sink;
   exec->AttachFrameSink(&sink);
+  test::RenderSnapshotSource source(
+      std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument()));
 
   PipelineScheduler scheduler(1);
   PipelineTask      task;
   task.input_                             = MakeSolidImage(8, 8);
   task.pipeline_executor_                 = exec;
+  task.snapshot_under_render_lock_        = source.TaskSource();
   task.request_id_                        = 17;
   task.options_.render_desc_.render_type_ = RenderType::FAST_PREVIEW;
   auto lock_released = std::make_shared<std::promise<bool>>();
@@ -180,29 +192,50 @@ TEST(PipelineSchedulerRequestIdTest, CompletionRunsAfterLivePipelineRenderLockIs
   EXPECT_TRUE(completed.get());
 }
 
-TEST(PipelineSchedulerRequestIdTest, MissingDocumentRequestsReportFailureOnEveryRender) {
+TEST(PipelineSchedulerRequestIdTest, MissingSnapshotRequestsReportFailureOnEveryRender) {
   auto exec = std::make_shared<PipelineExecutor>();
   exec->SetAcceleratorBackendPreference(AcceleratorBackendPreference::CPU);
 
   auto input = MakeSolidImage(64, 48);
   PipelineScheduler scheduler(1);
-  auto run_interactive = [&](std::uint64_t request_id) {
-    PipelineTask task;
-    task.input_                             = input;
-    task.pipeline_executor_                 = exec;
-    task.request_id_                        = request_id;
-    task.options_.render_desc_.render_type_ = RenderType::FAST_PREVIEW;
-    task.options_.is_blocking_              = true;
-    task.result_ = std::make_shared<std::promise<std::shared_ptr<ImageBuffer>>>();
-    auto future = task.result_->get_future();
-    scheduler.ScheduleTask(std::move(task));
-    EXPECT_EQ(future.wait_for(std::chrono::seconds(30)), std::future_status::ready);
-    return future.get();
+  auto run_interactive =
+      [&](std::uint64_t request_id,
+          std::function<std::shared_ptr<const PipelineGraphSnapshot>()> snapshot_source) {
+        PipelineTask task;
+        task.input_                             = input;
+        task.pipeline_executor_                 = exec;
+        task.snapshot_under_render_lock_        = std::move(snapshot_source);
+        task.request_id_                        = request_id;
+        task.options_.render_desc_.render_type_ = RenderType::FAST_PREVIEW;
+        task.options_.is_blocking_              = true;
+        task.result_ = std::make_shared<std::promise<std::shared_ptr<ImageBuffer>>>();
+        auto future  = task.result_->get_future();
+        scheduler.ScheduleTask(std::move(task));
+        EXPECT_EQ(future.wait_for(std::chrono::seconds(30)), std::future_status::ready);
+        return future.get();
+      };
+  const auto expect_failure = [&](std::uint64_t request_id,
+                                  std::function<std::shared_ptr<const PipelineGraphSnapshot>()>
+                                             snapshot_source,
+                                  const char* expected_message) {
+    SCOPED_TRACE(request_id);
+    try {
+      (void)run_interactive(request_id, std::move(snapshot_source));
+      FAIL() << "A render without a snapshot must fail";
+    } catch (const std::runtime_error& error) {
+      EXPECT_NE(std::string(error.what()).find(expected_message), std::string::npos)
+          << error.what();
+    }
   };
 
-  EXPECT_THROW((void)run_interactive(101), std::runtime_error);
-  EXPECT_THROW((void)run_interactive(102), std::runtime_error);
-  EXPECT_FALSE(exec->HasGpuDagDocument());
+  // A task without a snapshot source fails every time; the failure is not cached as success.
+  expect_failure(101, {}, "no snapshot source");
+  expect_failure(102, {}, "no snapshot source");
+  // A source that has no snapshot to give fails the same way.
+  expect_failure(103, [] { return std::shared_ptr<const PipelineGraphSnapshot>{}; },
+                 "snapshot is unavailable");
+  expect_failure(104, [] { return std::shared_ptr<const PipelineGraphSnapshot>{}; },
+                 "snapshot is unavailable");
 }
 
 // G10.1 removed the stage CROP_ROTATE read from FAST_PREVIEW. Before that change the read was
@@ -213,12 +246,15 @@ TEST(PipelineSchedulerRequestIdTest, FastPreviewRequestIsUnchangedForRotatedCrop
   auto document = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
   document->Geometry().SetCropRect({0.2f, 0.1f, 0.5f, 0.6f});
   document->Geometry().SetRotationDegrees(7.0f);
-  exec->SetPipelineDocument(document);
-  const auto document_before = document->ToJson();
+  test::RenderSnapshotSource source(document);
+  const auto                 document_before = document->ToJson();
 
-  auto       make_task       = [&](const ViewportRenderRegion& region) {
+  // The task carries the rotated-crop document as its snapshot source; building the request
+  // must neither read nor write it.
+  auto make_task = [&](const ViewportRenderRegion& region) {
     PipelineTask task;
     task.pipeline_executor_                         = exec;
+    task.snapshot_under_render_lock_                = source.TaskSource();
     task.options_.render_desc_.render_type_         = RenderType::FAST_PREVIEW;
     task.options_.render_desc_.use_viewport_region_ = true;
     task.options_.render_desc_.viewport_region_     = region;
@@ -247,7 +283,7 @@ TEST(PipelineSchedulerRequestIdTest, FastPreviewRequestIsUnchangedForRotatedCrop
   EXPECT_EQ(roi_request.geometry.resolution.max_edge, 2560U);
   EXPECT_EQ(roi_request.geometry.resolution.quality, RenderQuality::Preview);
   EXPECT_EQ(roi_request.decode_res, DecodeRes::FULL);
-  EXPECT_EQ(roi_request.cache_policy, RenderCachePolicy::UseSessionCache);
+  EXPECT_EQ(roi_request.role, ExecutorRole::Interactive);
   EXPECT_FALSE(roi_request.require_host_output);
 
   const ViewportRenderRegion full{.x_                = 0,

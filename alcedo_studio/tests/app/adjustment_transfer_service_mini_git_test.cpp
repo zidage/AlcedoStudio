@@ -5,7 +5,6 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
-#include <mutex>
 #include <stdexcept>
 #include <string>
 
@@ -137,6 +136,7 @@ TEST_F(AdjustmentTransferPasteMergeTest, PasteAsNewVersionBindsTargetDocumentWit
   auto&          graph = *guard->commit_graph_;
 
   const auto prior_document = guard->document_;
+  const auto prior_lineage  = guard->lineage_;
   const auto prior_exposure = DocumentExposureEv(*prior_document);
   const auto prior_version  = graph.GetActiveVersionId();
   const auto expected_state = graph.GetImageEditState();
@@ -154,10 +154,9 @@ TEST_F(AdjustmentTransferPasteMergeTest, PasteAsNewVersionBindsTargetDocumentWit
   EXPECT_DOUBLE_EQ(DocumentExposureEv(*guard->document_), 1.75);
   EXPECT_DOUBLE_EQ(DocumentExposureEv(*prior_document), prior_exposure)
       << "the swapped-out document is not changed";
-  {
-    std::unique_lock<std::mutex> lock(guard->pipeline_->GetRenderLock());
-    EXPECT_EQ(guard->pipeline_->GpuDagDocument(), guard->document_);
-  }
+  // The swap takes a new lineage, so the next render releases the prior document's resources.
+  EXPECT_FALSE(guard->lineage_.Empty());
+  EXPECT_NE(guard->lineage_, prior_lineage);
   EXPECT_TRUE(guard->serialized_state_needs_writeback_);
 
   ASSERT_TRUE(pipeline_service_->PersistEditorHistoryState(guard, expected_state, &error)) << error;

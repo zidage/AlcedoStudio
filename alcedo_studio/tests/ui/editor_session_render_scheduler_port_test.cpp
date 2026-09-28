@@ -12,6 +12,8 @@
 #include <memory>
 
 #include "app/pipeline_service.hpp"
+#include "edit/graph/pipeline_document.hpp"
+#include "edit/graph/pipeline_graph_snapshot.hpp"
 #include "edit/pipeline/pipeline_executor.hpp"
 #include "image/image.hpp"
 #include "image/image_buffer.hpp"
@@ -96,6 +98,11 @@ auto MakeReadyContext(std::uint64_t epoch, sl_element_id_t element_id, image_id_
   context.pipeline_guard       = std::make_shared<alcedo::PipelineGuard>();
   context.pipeline_guard->id_  = element_id;
   context.pipeline_guard->pipeline_ = std::make_shared<alcedo::PipelineExecutor>();
+  // The port renders a frozen copy of the guard's live document, so the guard needs a document
+  // and the lineage of its load.
+  context.pipeline_guard->document_ =
+      std::make_shared<alcedo::PipelineDocument>(alcedo::CreateDefaultPipelineDocument());
+  context.pipeline_guard->lineage_ = alcedo::PipelineLineageId::Next();
   return context;
 }
 

@@ -545,6 +545,106 @@ Suite totals：
 - `pipeline_executor.hpp` 中不再有文档成员。
 - 渲染输出与基线逐像素一致：抽样图片、编辑器三种帧角色、缩略图四档、导出 SDR / HDR。
 
+##### Phase P3 completion record (2026-09-28)
+
+**Status:** complete — `PipelineExecutor` 与 `Renderer<Backend>` 不再持有文档，每次渲染接收一个不可变的 `PipelineGraphSnapshot`；
+Renderer 按角色构造（Interactive / Batch 二选一），`RenderCachePolicy` 与同一 Renderer 内的双 device 结构删除（R1）；
+§3.3 的绑定键与全量释放已实现。所有权结构未动：消费者仍经 guard 借用同一个 executor，它同时持有两种角色的 Renderer。
+
+**实现要点（与计划条目的对应）：**
+
+| 计划条目 | 实现 |
+|---|---|
+| `Apply(snapshot, input, request)` | `PipelineExecutor::Apply(const PipelineGraphSnapshot&, input, request)`；`Renderer::Render(const PipelineGraphSnapshot&, ...)`。删除 `SetPipelineDocument` / `GpuDagDocument` / `HasGpuDagDocument`、`Renderer::document_` / `SetDocument`，以及 executor 的 `pipeline_document_` 成员。文档指针只剩 guard 上的一份（S8 的"存两份"消失，回滚 lambda 留到 P6） |
+| 删除 `SetBoundFile` / `bound_file_id_` | 已删（连同只有它们使用的 `GetBoundFile`） |
+| 按角色构造 | 新 `edit/runtime/executor_role.hpp`：`ExecutorRole { Interactive, Batch }` 与 `RenderBindingKey`。`Renderer(ExecutorRole, unpack)` 只有一个 device：Interactive 带 prepared source 缓存、plan cache、结果发布与可选 sink；Batch 用专用队列，每次解包 + 编译，结束后释放全部结果资源、保留 device（原 one-shot 语义）。`PipelineExecutor(ExecutorRole)` 只服务一种角色，另一种角色的请求抛 `std::invalid_argument`；默认构造的 executor 同时服务两种，只给 guard 用（过渡，P4 / P5 删除） |
+| `RenderCachePolicy` 拆到角色里 | 枚举删除；`PipelineApplyRequest::cache_policy` 改为 `role`。scheduler 的 `MakeApplyRequest`：THUMBNAIL / FULL_RES_EXPORT → Batch，其余 → Interactive。Renderer 检查 `request.role == Role()` |
+| 绑定键与全量释放 | Interactive 渲染时 `RenderBindingKey{lineage, element}` 与上次不同 → 先 `ReleaseBinding()`（WaitIdle、释放结果 / transient / LLF / 参数 arena、清 plan cache 与 prepared source、释放 neural demosaic 工作区、清 last-seen revision），device 与队列保留。同一键下不同的冻结文档对象不做任何释放，参数 / 拓扑变化照旧由 revision 与 `StaticPlanKey` 处理 |
+| `ClearAllIntermediateBuffers` → `ReleaseBinding()` | `PipelineExecutor::ReleaseBinding()` 释放两个 Renderer 的绑定。计划写"内部的"，但 S2 / S3 / S9（驱逐、最后一 pin 清理、后端切换）在 P7 前仍需从外部释放，所以保持公开 |
+| 过渡：guard 每次渲染冻结快照 | `PipelineGuard::lineage_`（`LoadPipeline` 构建文档时与每次 `BindLivePipelineDocument` 时取新值）与 `PipelineGuard::FreezeLiveSnapshot()`。`PipelineTask::snapshot_under_render_lock_` 为必填：scheduler 在 render lock 内、`configure_under_render_lock_` 之后调用它，再把结果交给 `Apply`；缺失或返回空则任务失败，不渲染其他文档。四个生产者（编辑器 port、缩略图、分析、导出）用 `MakeLiveSnapshotSource(guard)` 设置它 |
+
+**与计划不同或计划未写明的决定：**
+
+- **过渡快照的类型：** guard 冻结出的是 preview 快照（无 HEAD、空 chain）。live 文档可能含未提交的编辑器值，不能标成 committed；chain 留空是因为渲染线程不能读 `commit_graph_`（审计 §3 第 1 条，历史 owner 无锁替换它）。缩略图、分析、导出在 P4 / P5 之前仍渲染 live 文档，这是既有行为（C6），本阶段没有改变。
+- **哪些操作换谱系：** `BindLivePipelineDocument` 一律取新谱系，包括打开编辑器时的重放、Version checkout、重建，以及编辑器内 Paste 的文档替换和失败回滚。原来 `SetDocument` 只推进 document epoch、保留源缓存；现在这些操作之后的第一帧会重新解包 RAW 并重编 plan。这是 §6 决策 2 的"先全量释放，P6 实测后再定"，本阶段没有测首帧耗时。历史恢复 `*document_ = clone`（同一对象）不换谱系，由 P1 的 revision 协议处理。
+- **像素比较的容差：** 计划写"逐像素一致"。实测同一构建连续运行两次，Bayer / X-Trans 的部分用例最大相差 9.54e-6（CUDA 浮点，线性 DNG 完全一致），所以跨构建比较以"不超过同构建两次运行之间的差"为准。
+
+**主调用链（成功路径）：**
+
+```text
+编辑器帧：EditorSessionRenderSchedulerPort::DispatchPipelineFrame
+  -> PipelineTask{executor = guard->pipeline_, snapshot_under_render_lock_ = MakeLiveSnapshotSource(guard)}
+  -> PipelineScheduler worker：lock render_lock → configure（AttachFrameSink）→ MakeApplyRequest（role = Interactive）
+  -> guard->FreezeLiveSnapshot()：document_->Freeze() + lineage_ → PipelineGraphSnapshot::Preview
+  -> PipelineExecutor::Apply(snapshot) → interactive Renderer::Render
+       -> 键 (lineage, element) 与 Binding() 相同 → 复用 prepared source / plan / 已发布结果
+          不同 → ReleaseBinding() 后作为新绑定的首帧
+  -> Execute（只读快照文档）→ Present 到 sink
+缩略图 / 分析 / 导出：同一 guard executor，MakeApplyRequest（role = Batch）→ batch Renderer::Render
+  -> 解包 + CompileStatic → Execute → Download → 释放全部结果资源（device 保留）
+  -> 不读、不写、不清 interactive Renderer 的任何缓存
+Version checkout / 重建：BindLivePipelineDocument → 新 lineage_ → 下一编辑器帧全量释放后重建
+```
+
+**失败路径：**
+
+```text
+任务没有 snapshot source 或 source 返回空 → scheduler 抛 runtime_error → 阻塞结果为异常、on_complete(false)，不渲染
+guard 没有文档或谱系为空 → FreezeLiveSnapshot / PipelineGraphSnapshot 抛 invalid_argument → 同上
+请求角色与 executor 或 Renderer 不符 → invalid_argument，在创建 Renderer、读取输入之前
+渲染 / 呈现失败 → 与之前相同：CancelRender 或 WaitIdle，丢弃未发布结果；Batch 另外释放全部结果资源；
+  Interactive 的绑定保留（资源属于同一键，下一帧按 revision 重算）
+```
+
+**What was proven (executed tests)：**
+
+| 名称 / 条目 | 目标 | 结果 |
+|---|---|---|
+| 渲染输出与基线一致：3 张图（线性 DNG、Bayer ARW、X-Trans RAF）× 9 个用例（编辑器 InteractivePrimary / QualityBase / DetailPatch、缩略图 256 / 512 / 1024 / 2048、导出 SDR Rec.709 / HDR Rec.2020 PQ），在共享 executor 上交错渲染 | `ExecutorSnapshotRenderTest.EveryRenderCaseMatchesARenderOnANewExecutorOfItsRole` | PASS：每个用例与新建的同角色 executor 的结果差 ≤ 1e-4 |
+| 同上，跨构建：`ALCEDO_RENDER_OUTPUT_DIR` 转储 27 个用例，基线源码（`750d589ee`，同一测试改用旧 API）与 P3 源码比较 | 同上 + `compare_pixels.py` | 27/27 尺寸一致；线性 DNG 9 个用例逐字节一致；全部用例最大差 9.54e-6，与 P3 构建自身两次运行的最大差（9.54e-6）相同 |
+| 同谱系连续快照复用源与 plan | `InteractiveRendersOfOneLineageReuseSourceAndPlan` | PASS |
+| 换谱系全量释放后再渲染 | `InteractiveRenderOfAnotherLineageReleasesThePreviousBinding` | PASS |
+| Batch 释放结果、保留 device、不动 interactive | `BatchRenderReleasesItsResultsAndKeepsItsDevice` | PASS |
+| `ReleaseBinding` 清空两种 Renderer、保留 device | `ReleaseBindingReleasesEveryRendererAndKeepsDevices` | PASS |
+| 单角色 executor 拒绝另一角色 | `ExecutorRoleTest.ExecutorOfOneRoleRejectsRequestsOfTheOtherRole` | PASS |
+| 缺 snapshot source 的任务失败 | `ExecutorRoleTest.SchedulerFailsARenderTaskWithoutASnapshotSource` | PASS |
+| P0 / P1 隔离测试（interleaved one-shot 现为同 executor 上的 batch 渲染） | `ExecutorIsolationTest` | PASS（P5 的 `DISABLED_` 保持） |
+| 迁移后的 renderer 测试：batch 与 interactive 两个 Renderer 读同一快照、batch 不动 interactive 缓存、并行 batch 各用独立队列、换谱系释放 | `GpuDagCudaDrtProductTest`（含新 `RebindToNewLineageReleasesPreviousBindingBeforeRendering`）、`GpuDagOpenClDrtProductTest`、`PipelineDocumentRenderTest`、`PipelineSharedUseTest` | PASS |
+
+Commands（PowerShell，PATH 前置 `build\debug\vcpkg_installed\x64-windows\debug\bin`）：
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 8            # 全量构建，0 错误
+ctest --test-dir build/debug -j 1 -R "^(ExecutorSnapshotRenderTest|ExecutorIsolationTest|GpuDagModelGraphTest|GpuDagRawInputTest|GraphImageCacheRetentionTest|GpuDagCuda(Workspace|Develop|Mask|PrimaryGrade|DrtProduct|DocumentGeometryRequest)Test|GpuDagOpenCl(Grade|Workspace|DrtProduct)Test|AdjustmentTransfer.*|EditorAdjustmentContextTest|EditorPanelProjectionTest|EditorPipelineCommandServiceTest|EditorNodeGraph.*|EditorMask.*|EditorSession.*|EditorHistory.*|EditorVersion.*|EditorParameterWrite.*|EditorAdjustmentPipelineTest|PipelineMapperTest|PipelineSharedUseTest|PipelineServiceTest|PipelineGraph.*|PipelineDocument.*|PipelineHistory.*|PipelineEditBatchTest|PipelineDngProfileBindingTest|PipelineSchedulerRequestIdTest|PipelineFrameSinkTest|ImportPipelineDocumentTest|ExportServiceTest|ImportServiceTest|CiRawWorkflowTest|MiniGit.*|DocumentTransfer.*)\."
+ThumbnailServiceTest.exe --gtest_filter=-*FuzzScroll*
+$env:ALCEDO_RENDER_OUTPUT_DIR=...; ExecutorSnapshotRenderTest.exe      # P3 两次、基线一次
+基线：git stash push -u -- alcedo_studio/src（及被迁移的测试文件）→ 只重编相关目标 → 运行 → git stash pop
+```
+
+Suite totals：
+
+- 定向集 1296 个：1287 通过，9 失败，全部预存（另有 6 个预存 `DISABLED_`）：
+  - `EditorSessionRenderSchedulerPortTest` 5 个、`EditorSessionCommandQueueBaselineTest.RapidImageSelectionKeepsRunningTargetAndReplacesOnlyUnstartedSelection`、`EditorSessionActionPolicyCq3Test.AdjustmentPanelsReloadOnlyWhenCommittedContentChanges`：把 `alcedo_studio/src` 与 `editor_session_render_scheduler_port_test.cpp` 还原到基线后重编这三个目标，同样这 7 个失败（与 P2 记录一致）。
+  - `GpuDagOpenClWorkspaceTest` 2 个：P1 记录的测试清理缺陷（残留的 `opencl/edit/runtime/opencl/shader/` 目录）。
+- `ThumbnailServiceTest`（排除 FuzzScroll）：23 通过，2 失败，均为 P1 已记录的预存问题（`MissingPipelineThrows`、`MissingImageThrows`）。P2 记录中另外 3 个与 pin 计数 / 盘缓存相关的失败本次通过（它们是时序相关的，不作为 P3 的结论）。
+- Metal：本机无 macOS，`metal_renderer_test.cpp`、`metal_nm2_qualification_test.cpp`、`renderer_metal_instantiate_test.cpp` 与 `metal_full_pipeline_preview_test.cpp`（不在任何 CMake 目标中）只做了文本迁移，未编译。
+- 完整 ctest 按 AGENTS.md 未运行。
+
+**Checklist / exit condition：**
+- [x] `pipeline_executor.hpp` 中不再有文档成员（只有 `Apply` 的参数引用快照类型）
+- [x] 渲染输出与基线逐像素一致：抽样 3 张图、编辑器三种帧角色、缩略图四档、导出 SDR / HDR（容差见上）
+
+**LOC note：** 生产代码 19 个已有文件 +356 / −386，新增 `executor_role.hpp` 49 行。`renderer.hpp` 367 → 308 行，`pipeline_executor.cpp` 155 → 116 行。
+`pipeline_service.cpp`（1194 行）与 `thumbnail_service.cpp`（1193 行）原本就超过 1000 行，本阶段各只增减十余行，计划在 P4 / P7 拆减。
+测试 31 个已有文件 +981 / −661（四个子任务并行迁移，每处语义变化已逐条审阅），新增 `executor_snapshot_render_test.cpp` 572 行与 `support/render_snapshot_source.hpp` 84 行。
+`pipeline_scheduler.cpp` 原为 CRLF，先在单独提交中转为 LF。
+
+**Remaining gaps：**
+- 编辑器在同一 guard 上 Paste、checkout、重建之后的首帧会重新解包 RAW（全量释放，§6 决策 2），首帧耗时未测，P6 实测。
+- 蒙版内容 revision 仍是节点内计数器（P2A 未做）。同一谱系内它单调递增，不影响本阶段；跨谱系由换谱系时清空 last-seen 兜住。P2A 仍需在 P4 共享已提交快照前完成。
+- 过渡形态：缩略图 / 导出仍借用编辑器所在的 guard executor 与 render lock，并渲染 live 文档（C1、C6 不变），P4 / P5 处理。
+- `raw/opencl_cuda_full_pipeline_benchmark.cpp` 以前从不绑定文档（运行时必然失败），迁移后渲染无相机 profile 的默认文档，仍不代表真实 RAW 耗时；未运行。
+
 ### P4 缩略图 / 分析 executor 池
 
 **目标：** 缩略图、AI 分析、CLIP 不再碰 guard 和编辑器的 executor。
@@ -697,7 +797,7 @@ Suite totals：
 | P1 revision 协议 | 完成（2026-09-28） |
 | P2 快照与 COW | 完成（2026-09-28） |
 | P2A 蒙版逐项写时复制 | 未开始 |
-| P3 executor 按请求接收快照 | 未开始 |
+| P3 executor 按请求接收快照 | 完成（2026-09-28） |
 | P4 缩略图 / 分析池 | 未开始 |
 | P5 导出、导入、复制、粘贴 | 未开始 |
 | P6 编辑器独占 executor | 未开始 |
