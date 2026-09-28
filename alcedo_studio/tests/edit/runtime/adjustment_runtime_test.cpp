@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <cstring>
+#include <memory>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -130,6 +131,9 @@ class DtoOnlyExposureModel : public IOperatorModel {
   void CopyRevisionsFrom(const IOperatorModel& source) override {
     const auto* typed = dynamic_cast<const DtoOnlyExposureModel*>(&source);
     value_.CopyRevisionsFrom(typed != nullptr ? typed->value_ : source);
+  }
+  auto Clone() const -> std::unique_ptr<IOperatorModel> override {
+    return std::make_unique<DtoOnlyExposureModel>(*this);
   }
   auto        MakeFullDto() const -> OperatorParamDto override {
     ++dto_reads;

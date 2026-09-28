@@ -456,7 +456,7 @@ auto PipelineMgmtService::LoadPipeline(sl_element_id_t id) -> std::shared_ptr<Pi
     pipeline_guard->document_ = LoadPipelineDocument(storage_->GetElementStore(), id);
     BindSourceDngColorProfile(*storage_, id, *pipeline_guard->document_);
     std::optional<RawRuntimeColorContext> stored_raw;
-    const auto* develop = pipeline_guard->document_->Develop();
+    const auto* develop = std::as_const(*pipeline_guard->document_).Develop();
     if (develop != nullptr &&
         !develop->Params().Params().camera_profile.color_matrices_valid) {
       stored_raw = StoredRootRawColorContext(*storage_, id);

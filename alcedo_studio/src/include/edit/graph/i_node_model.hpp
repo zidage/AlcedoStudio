@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <memory>
 #include <span>
 #include <string_view>
 
@@ -35,6 +36,16 @@ class INodeModel {
    * @brief Serialize node identity, type, and parameters. Does not include edges.
    */
   [[nodiscard]] virtual auto ToJson() const -> nlohmann::json = 0;
+
+  /**
+   * @brief Copy of this node that shares its immutable parts.
+   *
+   * Adjustment Models and the Color Grade Mask list stay shared with this node until one of
+   * the two nodes writes them (@ref UnshareForWrite). Scalar fields, IDs, and Develop / DRT
+   * endpoint parameters are copied. Stamps are kept, so renderers see no change.
+   * Only @ref PipelineGraph calls this, before it writes a node that a frozen document shares.
+   */
+  [[nodiscard]] virtual auto Clone() const -> std::shared_ptr<INodeModel> = 0;
 };
 
 }  // namespace alcedo

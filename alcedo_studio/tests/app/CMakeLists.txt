@@ -511,7 +511,7 @@ add_executable(EditorSessionNodeCommandTest
 target_include_directories(EditorSessionNodeCommandTest
     PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(EditorSessionNodeCommandTest
-    EditorSessionService xxHash JSON ${ALCEDO_TEST_OPENCV_MIN_DEPS} GTest::gtest_main)
+    EditorSessionService EditGraph xxHash JSON ${ALCEDO_TEST_OPENCV_MIN_DEPS} GTest::gtest_main)
 gtest_discover_tests(EditorSessionNodeCommandTest
     TEST_PREFIX "EditorSessionNodeCommandTest."
     PROPERTIES LABELS "editor_session;quickqanava")

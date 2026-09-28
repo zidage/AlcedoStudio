@@ -19,10 +19,24 @@
 
 namespace alcedo {
 
+/**
+ * @brief One adjustment of a Color Grade or DRT node.
+ *
+ * The Model is shared with frozen documents (@ref PipelineDocument::Freeze). Read it through
+ * @p model; write it only through @ref MutableAdjustmentModel.
+ */
 struct AdjustmentModelEntry {
-  AdjustmentInstanceId            instance_id;
-  std::unique_ptr<IOperatorModel> model;
+  AdjustmentInstanceId                  instance_id;
+  std::shared_ptr<const IOperatorModel> model;
 };
+
+/**
+ * @brief Write access to the Model of @p entry.
+ *
+ * Copies the Model first when a frozen document shares it (@ref UnshareForWrite), so the
+ * frozen document keeps its values. Call only on the thread that writes the owning document.
+ */
+[[nodiscard]] auto MutableAdjustmentModel(AdjustmentModelEntry& entry) -> IOperatorModel&;
 
 /// Document node that may own an adjustment instance.
 enum class AdjustmentParameterOwner : std::uint8_t {

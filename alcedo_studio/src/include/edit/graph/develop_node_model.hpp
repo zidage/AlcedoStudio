@@ -255,6 +255,8 @@ class DevelopNodeModel final : public INodeModel {
   [[nodiscard]] auto InputPorts() const -> std::span<const PortDescriptor> override;
   [[nodiscard]] auto OutputPorts() const -> std::span<const PortDescriptor> override;
   [[nodiscard]] auto ToJson() const -> nlohmann::json override;
+  /// Copies the Develop parameters; the bound DNG profile stays shared (@ref INodeModel::Clone).
+  [[nodiscard]] auto Clone() const -> std::shared_ptr<INodeModel> override;
 
   [[nodiscard]] auto Params() -> DevelopParamsModel& { return params_; }
   [[nodiscard]] auto Params() const -> const DevelopParamsModel& { return params_; }
@@ -262,6 +264,10 @@ class DevelopNodeModel final : public INodeModel {
   static auto        FromJson(const nlohmann::json& json) -> std::unique_ptr<DevelopNodeModel>;
 
  private:
+  /// Used only by @ref Clone. Copy assignment is deleted.
+  DevelopNodeModel(const DevelopNodeModel& other)            = default;
+  DevelopNodeModel& operator=(const DevelopNodeModel& other) = delete;
+
   NodeId                        id_;
   DevelopParamsModel            params_;
   std::array<PortDescriptor, 1> outputs_;

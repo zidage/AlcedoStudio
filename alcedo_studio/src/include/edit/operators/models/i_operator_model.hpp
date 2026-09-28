@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <memory>
+
 #include "edit/operators/models/dirty_field_mask.hpp"
 #include "edit/operators/models/operator_param_dto.hpp"
 #include "edit/operators/models/operator_type_id.hpp"
@@ -72,6 +74,15 @@ class IOperatorModel {
    * @throws std::invalid_argument when @p source is another Model type.
    */
   virtual void               CopyRevisionsFrom(const IOperatorModel& source)                  = 0;
+
+  /**
+   * @brief Independent Model with the same field values and the same field stamps.
+   *
+   * Copy-on-write documents call this before they write a Model that a frozen document
+   * shares. Equal stamps are correct because the values are equal, so a renderer that
+   * applied this Model does not repack the copy.
+   */
+  [[nodiscard]] virtual auto Clone() const -> std::unique_ptr<IOperatorModel>              = 0;
 
   /// Full payload snapshot.
   [[nodiscard]] virtual auto MakeFullDto() const -> OperatorParamDto                          = 0;

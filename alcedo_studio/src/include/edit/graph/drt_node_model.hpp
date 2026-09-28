@@ -195,6 +195,8 @@ class DrtNodeModel final : public INodeModel {
   [[nodiscard]] auto InputPorts() const -> std::span<const PortDescriptor> override;
   [[nodiscard]] auto OutputPorts() const -> std::span<const PortDescriptor> override;
   [[nodiscard]] auto ToJson() const -> nlohmann::json override;
+  /// Copies the endpoint parameters; shares adjustment Models (@ref INodeModel::Clone).
+  [[nodiscard]] auto Clone() const -> std::shared_ptr<INodeModel> override;
 
   [[nodiscard]] auto Params() -> DrtParamsModel& { return params_; }
   [[nodiscard]] auto Params() const -> const DrtParamsModel& { return params_; }
@@ -210,6 +212,8 @@ class DrtNodeModel final : public INodeModel {
 
   [[nodiscard]] auto AdjustmentCount() const -> std::size_t { return adjustments_.size(); }
   [[nodiscard]] auto AdjustmentIdAt(std::size_t index) const -> const AdjustmentInstanceId&;
+  /// Non-const Model lookups copy a Model shared with a frozen document first
+  /// (@ref MutableAdjustmentModel). Use the const overloads to read.
   [[nodiscard]] auto AdjustmentAt(std::size_t index) -> IOperatorModel&;
   [[nodiscard]] auto AdjustmentAt(std::size_t index) const -> const IOperatorModel&;
   [[nodiscard]] auto FindAdjustment(const AdjustmentInstanceId& id) -> IOperatorModel*;
@@ -228,6 +232,10 @@ class DrtNodeModel final : public INodeModel {
                         std::unique_ptr<IOperatorModel> model);
 
  private:
+  /// Used only by @ref Clone. Copy assignment is deleted.
+  DrtNodeModel(const DrtNodeModel& other)            = default;
+  DrtNodeModel& operator=(const DrtNodeModel& other) = delete;
+
   NodeId                            id_;
   DrtParamsModel                    params_;
   std::vector<AdjustmentModelEntry> adjustments_;

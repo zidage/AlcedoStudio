@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "app/editor_session_ports.hpp"
+#include "edit/graph/pipeline_document.hpp"
 #include "type/hash_type.hpp"
 
 namespace alcedo::test {
@@ -31,6 +32,8 @@ inline auto MakeOpaqueSaveCapture() -> std::shared_ptr<const EditorMiniGitSaveCa
 }
 
 /// Fake pipeline port that records acquire/release counts and optional failures.
+/// When @p live_document is set, CurrentDocument returns it for every element, as the
+/// production port returns the loaded guard's document.
 class FakeEditorPipelinePort final : public IEditorPipelinePort {
  public:
   bool fail_acquire  = false;
@@ -38,6 +41,12 @@ class FakeEditorPipelinePort final : public IEditorPipelinePort {
   int  release_count = 0;
   std::vector<sl_element_id_t> acquired_ids;
   std::vector<sl_element_id_t> released_ids;
+  std::shared_ptr<PipelineDocument> live_document;
+
+  [[nodiscard]] auto CurrentDocument(sl_element_id_t /*element_id*/) const
+      -> const PipelineDocument* override {
+    return live_document.get();
+  }
 
   auto Acquire(sl_element_id_t element_id, std::string* error)
       -> EditorPipelineGuardHandle override {

@@ -393,6 +393,10 @@ DevelopNodeModel::DevelopNodeModel(NodeId id) : id_(std::move(id)) {
   outputs_[0] = PortDescriptor{PortId{"image"}, PortDataType::SceneImage, true};
 }
 
+auto DevelopNodeModel::Clone() const -> std::shared_ptr<INodeModel> {
+  return std::shared_ptr<INodeModel>(new DevelopNodeModel(*this));
+}
+
 auto DevelopNodeModel::InputPorts() const -> std::span<const PortDescriptor> { return {}; }
 
 auto DevelopNodeModel::OutputPorts() const -> std::span<const PortDescriptor> { return outputs_; }

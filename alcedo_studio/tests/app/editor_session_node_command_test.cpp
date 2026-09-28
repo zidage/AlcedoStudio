@@ -4,12 +4,17 @@
 
 #include <gtest/gtest.h>
 
+#include <cstddef>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include "app/editor_render_coordinator.hpp"
 #include "app/editor_session_bootstrap.hpp"
 #include "app/editor_session_service.hpp"
+#include "edit/graph/pipeline_document.hpp"
+#include "edit/operators/models/builtin_type_ids.hpp"
+#include "edit/operators/models/scalar_operator_model.hpp"
 #include "support/editor_session_command_queue_test_support.hpp"
 
 namespace alcedo {
@@ -119,6 +124,53 @@ TEST_F(EditorSessionNodeCommandTest, RenameCreatesOneHistoryChangeWithoutRender)
   EXPECT_EQ(history_->last_grade_name, "Sky");
   EXPECT_EQ(service_->history_revision(), revision_before + 1);
   EXPECT_EQ(scheduler_->requests.size(), renders_before);
+}
+
+// E5 of the executor ownership audit: each publication used to deep-copy the live document for
+// the GUI. It now freezes it: the published document shares unchanged nodes with the live
+// document, and a later live edit copies only the node it changes, so the earlier publication
+// keeps its values.
+TEST_F(EditorSessionNodeCommandTest, PublishedDocumentSharesNodesAndKeepsValuesAfterLiveEdit) {
+  pipeline_->live_document = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
+  auto& live               = *pipeline_->live_document;
+
+  ASSERT_EQ(service_->RenameColorGrade(NodeId{"grade.primary"}, "Sky").kind,
+            EditorSessionResultKind::Accepted);
+  service_->DrainCommandQueueForTests();
+  const auto first = service_->pipeline_document();
+  ASSERT_NE(first, nullptr);
+  ASSERT_EQ(first->Graph().NodeCount(), live.Graph().NodeCount());
+  for (std::size_t index = 0; index < live.Graph().NodeCount(); ++index) {
+    EXPECT_EQ(first->Graph().Nodes()[index].get(), live.Graph().Nodes()[index].get());
+  }
+  const auto first_json = first->ToJson();
+
+  // The history port writes the live document on the owner thread; the test is that thread.
+  auto* exposure = dynamic_cast<ExposureModel*>(
+      live.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+  ASSERT_NE(exposure, nullptr);
+  const float edited_ev = std::as_const(*first).PrimaryGrade()->FindAdjustmentByType(
+                              type_ids::Exposure())->ToJson().at("exposure_ev").get<float>() +
+                          0.75f;
+  exposure->SetValue(edited_ev);
+
+  ASSERT_EQ(service_->RenameColorGrade(NodeId{"grade.primary"}, "Sea").kind,
+            EditorSessionResultKind::Accepted);
+  service_->DrainCommandQueueForTests();
+  const auto second = service_->pipeline_document();
+  ASSERT_NE(second, nullptr);
+  ASSERT_NE(second, first);
+
+  EXPECT_EQ(first->ToJson(), first_json);
+  EXPECT_FLOAT_EQ(second->PrimaryGrade()
+                      ->FindAdjustmentByType(type_ids::Exposure())
+                      ->ToJson()
+                      .at("exposure_ev")
+                      .get<float>(),
+                  edited_ev);
+  EXPECT_EQ(first->Develop(), second->Develop());
+  EXPECT_EQ(first->Drt(), second->Drt());
+  EXPECT_NE(first->PrimaryGrade(), second->PrimaryGrade());
 }
 
 TEST_F(EditorSessionNodeCommandTest, DeletionLockPublishesOnlyEffectiveChangesWithoutRender) {

@@ -409,6 +409,10 @@ DrtNodeModel::DrtNodeModel(NodeId id) : id_(std::move(id)) {
   outputs_[0] = PortDescriptor{PortId{"display"}, PortDataType::DisplayImage, true};
 }
 
+auto DrtNodeModel::Clone() const -> std::shared_ptr<INodeModel> {
+  return std::shared_ptr<INodeModel>(new DrtNodeModel(*this));
+}
+
 auto DrtNodeModel::InputPorts() const -> std::span<const PortDescriptor> { return inputs_; }
 
 auto DrtNodeModel::OutputPorts() const -> std::span<const PortDescriptor> { return outputs_; }
@@ -485,7 +489,7 @@ auto DrtNodeModel::AdjustmentIdAt(std::size_t index) const -> const AdjustmentIn
 }
 
 auto DrtNodeModel::AdjustmentAt(std::size_t index) -> IOperatorModel& {
-  return *adjustments_.at(index).model;
+  return MutableAdjustmentModel(adjustments_.at(index));
 }
 
 auto DrtNodeModel::AdjustmentAt(std::size_t index) const -> const IOperatorModel& {
@@ -495,7 +499,7 @@ auto DrtNodeModel::AdjustmentAt(std::size_t index) const -> const IOperatorModel
 auto DrtNodeModel::FindAdjustment(const AdjustmentInstanceId& id) -> IOperatorModel* {
   for (auto& entry : adjustments_) {
     if (entry.instance_id == id) {
-      return entry.model.get();
+      return &MutableAdjustmentModel(entry);
     }
   }
   return nullptr;
@@ -513,7 +517,7 @@ auto DrtNodeModel::FindAdjustment(const AdjustmentInstanceId& id) const -> const
 auto DrtNodeModel::FindAdjustmentByType(const OperatorTypeId& type) -> IOperatorModel* {
   for (auto& entry : adjustments_) {
     if (entry.model->Type() == type) {
-      return entry.model.get();
+      return &MutableAdjustmentModel(entry);
     }
   }
   return nullptr;

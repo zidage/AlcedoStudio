@@ -849,12 +849,16 @@ class EditorSessionService final : public IEditorSessionBackend {
   bool                                           package_available_ = false;
   EditorBackgroundActionRestrictions             background_restrictions_{};
   std::atomic<bool>                              pending_recovery_published_{false};
-  /// Owner-published immutable document snapshot. `pipeline_document()`
-  /// returns this shared snapshot so GUI readers never touch the live
-  /// PipelineDocument while the session thread mutates it under the render
-  /// lock. Replaced before each change notification.
+  /// Owner-published frozen document (PipelineDocument::Freeze). `pipeline_document()`
+  /// returns it so GUI readers never touch the live PipelineDocument while the session thread
+  /// mutates it under the render lock. It shares unchanged nodes with the live document.
+  /// Replaced before each change notification.
   mutable std::mutex                             document_snapshot_mutex_;
   std::shared_ptr<const PipelineDocument>        published_document_;
+  /// DocumentRevisionFingerprint of published_document_ when it was frozen. Debug builds
+  /// check it before each replacement: a write that reached a frozen document is a
+  /// copy-on-write defect.
+  std::uint64_t                                  published_document_fingerprint_ = 0;
   /// Installed on `serial_admission_` so an empty SetAdmissionDeadlineHandler
   /// restores owner-thread deadline delivery instead of dropping wakeups.
   EditorSerialFrameAdmission::DeadlineHandler    default_deadline_handler_;

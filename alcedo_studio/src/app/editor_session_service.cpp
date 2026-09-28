@@ -5,6 +5,7 @@
 #include "app/editor_session_service.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <iterator>
 #include <mutex>
 #include <utility>
@@ -612,12 +613,22 @@ auto EditorSessionService::pipeline_document() const
 void EditorSessionService::PublishDocumentSnapshot() {
   std::shared_ptr<const PipelineDocument> snapshot;
   if (dependencies_.pipeline && lifecycle_.has_image()) {
+    // Runs on the owner thread, which is the only writer of the live document, as Freeze
+    // requires. The frozen document shares every node; the next edit copies only what it
+    // changes.
     if (const auto* document =
             dependencies_.pipeline->CurrentDocument(lifecycle_.identity().element_id)) {
-      snapshot = std::make_shared<PipelineDocument>(ClonePipelineDocument(*document));
+      snapshot = document->Freeze();
     }
   }
   std::scoped_lock lock(document_snapshot_mutex_);
+#ifndef NDEBUG
+  assert((published_document_ == nullptr ||
+          DocumentRevisionFingerprint(*published_document_) == published_document_fingerprint_) &&
+         "A write reached a frozen PipelineDocument");
+  published_document_fingerprint_ =
+      snapshot != nullptr ? DocumentRevisionFingerprint(*snapshot) : 0;
+#endif
   published_document_ = std::move(snapshot);
 }
 

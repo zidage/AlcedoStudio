@@ -10,7 +10,9 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
+#include "edit/graph/copy_on_write.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 
 namespace alcedo {
@@ -19,7 +21,7 @@ void PipelineGraph::AddNode(std::unique_ptr<INodeModel> node) {
   if (node == nullptr) {
     throw std::invalid_argument("AddNode requires a node");
   }
-  if (FindNode(node->Id()) != nullptr) {
+  if (std::as_const(*this).FindNode(node->Id()) != nullptr) {
     throw std::invalid_argument("Duplicate node id: " + std::string{node->Id().Value()});
   }
   nodes_.push_back(std::move(node));
@@ -42,7 +44,7 @@ void PipelineGraph::Disconnect(const NodeId& from_node, const PortId& from_port,
 }
 
 void PipelineGraph::RemoveNode(const NodeId& id) {
-  if (FindNode(id) == nullptr) {
+  if (std::as_const(*this).FindNode(id) == nullptr) {
     throw std::invalid_argument("Unknown node: " + std::string{id.Value()});
   }
   edges_.erase(std::remove_if(edges_.begin(), edges_.end(),
@@ -51,22 +53,36 @@ void PipelineGraph::RemoveNode(const NodeId& id) {
                               }),
                edges_.end());
   nodes_.erase(std::remove_if(nodes_.begin(), nodes_.end(),
-                              [&id](const std::unique_ptr<INodeModel>& node) {
+                              [&id](const std::shared_ptr<const INodeModel>& node) {
                                 return node->Id() == id;
                               }),
                nodes_.end());
 }
 
+auto PipelineGraph::NodeIndex(const NodeId& id) const -> std::size_t {
+  for (std::size_t index = 0; index < nodes_.size(); ++index) {
+    if (nodes_[index]->Id() == id) {
+      return index;
+    }
+  }
+  return nodes_.size();
+}
+
 auto PipelineGraph::FindNode(const NodeId& id) -> INodeModel* {
-  return const_cast<INodeModel*>(static_cast<const PipelineGraph*>(this)->FindNode(id));
+  const auto index = NodeIndex(id);
+  if (index == nodes_.size()) {
+    return nullptr;
+  }
+  return &UnshareForWrite(nodes_[index], [](const INodeModel& node) { return node.Clone(); });
 }
 
 auto PipelineGraph::ApplyBackboneEdit(const std::vector<GraphEdge>& disconnected,
                                       std::vector<GraphEdge>        connected,
                                       std::unique_ptr<INodeModel> inserted, const NodeId& removed)
     -> std::vector<GraphValidationError> {
-  if ((inserted && (!removed.Empty() || FindNode(inserted->Id()))) ||
-      (!removed.Empty() && !FindNode(removed))) {
+  const auto& graph = std::as_const(*this);
+  if ((inserted && (!removed.Empty() || graph.FindNode(inserted->Id()))) ||
+      (!removed.Empty() && !graph.FindNode(removed))) {
     throw std::invalid_argument("Invalid backbone node insertion/removal");
   }
   const auto matches = [](const GraphEdge& a, const GraphEdge& b) {
@@ -88,8 +104,8 @@ auto PipelineGraph::ApplyBackboneEdit(const std::vector<GraphEdge>& disconnected
   const auto                  removed_index = static_cast<std::size_t>(std::distance(
       nodes_.begin(), std::find_if(nodes_.begin(), nodes_.end(),
                                                     [&](const auto& node) { return node->Id() == removed; })));
-  std::unique_ptr<INodeModel> retained_node;
-  const bool                  has_insert = inserted != nullptr;
+  std::shared_ptr<const INodeModel> retained_node;
+  const bool                        has_insert = inserted != nullptr;
   for (auto it = retained.rbegin(); it != retained.rend(); ++it) {
     edges_.erase(edges_.begin() + it->first);
   }
@@ -127,7 +143,7 @@ auto PipelineGraph::ApplyTopologyDelta(const std::vector<TopologyNodeRemoval>&  
                                        const std::vector<TopologyEdgeRemoval>&   disconnected_edges,
                                        const std::vector<TopologyEdgeInsertion>& connected_edges,
                                        TopologyDeltaStepHook                     after_step,
-                                       std::vector<std::unique_ptr<INodeModel>>* discarded_nodes)
+                                       std::vector<std::shared_ptr<const INodeModel>>* discarded_nodes)
     -> std::vector<GraphValidationError> {
   auto error = [](std::string message) {
     return std::vector<GraphValidationError>{
@@ -171,7 +187,7 @@ auto PipelineGraph::ApplyTopologyDelta(const std::vector<TopologyNodeRemoval>&  
         break;
       }
     }
-    if (!replacing_removed && FindNode(id) != nullptr) {
+    if (!replacing_removed && std::as_const(*this).FindNode(id) != nullptr) {
       return error("Topology delta inserted NodeId already exists");
     }
   }
@@ -216,7 +232,7 @@ auto PipelineGraph::ApplyTopologyDelta(const std::vector<TopologyNodeRemoval>&  
 
   std::vector<std::pair<std::size_t, GraphEdge>> held_edges;
   held_edges.reserve(sorted_disconnected.size());
-  std::vector<std::pair<std::size_t, std::unique_ptr<INodeModel>>> held_nodes;
+  std::vector<std::pair<std::size_t, std::shared_ptr<const INodeModel>>> held_nodes;
   held_nodes.reserve(sorted_removed.size());
   std::vector<std::size_t> inserted_at;
   inserted_at.reserve(sorted_inserted.size());
@@ -307,12 +323,8 @@ auto PipelineGraph::ApplyTopologyDelta(const std::vector<TopologyNodeRemoval>&  
 }
 
 auto PipelineGraph::FindNode(const NodeId& id) const -> const INodeModel* {
-  for (const auto& node : nodes_) {
-    if (node->Id() == id) {
-      return node.get();
-    }
-  }
-  return nullptr;
+  const auto index = NodeIndex(id);
+  return index == nodes_.size() ? nullptr : nodes_[index].get();
 }
 
 auto PipelineGraph::FindNode(std::string_view id) -> INodeModel* {

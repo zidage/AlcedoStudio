@@ -212,7 +212,8 @@ auto AdjustmentTransferApplyCoordinator::ApplyPackageToTargets(
             result.applied_ids_.push_back(element_id);
             // The planner requires a DRT node on the target, so the rebuilt
             // document always carries one.
-            if (const auto* drt = guard->document_ ? guard->document_->Drt() : nullptr) {
+            if (const auto* drt =
+                    guard->document_ ? std::as_const(*guard->document_).Drt() : nullptr) {
               outcome.hdr_by_target_[element_id] = IsHdrExportEncoding(*drt);
             }
           }
