@@ -670,7 +670,8 @@ TEST(AdjustmentTransferDialogQmlTest, TransferDialogUsesThemeTypographyAndSelect
 
   const auto& theme = AppTheme::Instance();
 
-  // Focused node row uses the monochrome selected well + ink.
+  // Focused node row uses outline selection: card surface, 1 px text outline,
+  // and unchanged text. Its checkbox well stays distinct from the row fill.
   auto* focused_row = FindDelegateByRole(harness, QStringLiteral("transferNodeDelegate"), "nodeId",
                                          "grade.primary");
   ASSERT_NE(focused_row, nullptr);
@@ -678,15 +679,45 @@ TEST(AdjustmentTransferDialogQmlTest, TransferDialogUsesThemeTypographyAndSelect
   const auto children = focused_row->childItems();
   ASSERT_FALSE(children.isEmpty());
   auto* fill = children.first();
-  EXPECT_EQ(fill->property("color").value<QColor>(), theme.editorListSelectedFillColor());
+  ASSERT_EQ(fill->objectName(), QStringLiteral("transferNodeRowChrome"));
+  EXPECT_EQ(fill->property("color").value<QColor>(), theme.cardSurfaceColor());
+  auto* border = qvariant_cast<QObject*>(fill->property("border"));
+  ASSERT_NE(border, nullptr);
+  EXPECT_EQ(border->property("width").toReal(), 1.0);
+  EXPECT_EQ(border->property("color").value<QColor>(), theme.textColor());
+  EXPECT_NE(fill->property("color").value<QColor>(), theme.editorListSelectedFillColor());
 
   auto* layout = children.size() > 2 ? children.at(2) : nullptr;
   ASSERT_NE(layout, nullptr);
   const auto layout_children = layout->childItems();
   ASSERT_GE(layout_children.size(), 2);
   auto* name_label = layout_children.at(1);
-  EXPECT_EQ(name_label->property("color").value<QColor>(), theme.editorListSelectedInkColor());
+  EXPECT_EQ(name_label->property("color").value<QColor>(), theme.textColor());
   EXPECT_EQ(name_label->property("font").value<QFont>().family(), theme.uiFontFamily());
+
+  // An unfocused node row has no outline and no fill.
+  auto* other_row =
+      FindDelegateByRole(harness, QStringLiteral("transferNodeDelegate"), "nodeId", "drt");
+  ASSERT_NE(other_row, nullptr);
+  auto* other_fill = other_row->childItems().first();
+  EXPECT_EQ(qvariant_cast<QObject*>(other_fill->property("border"))->property("width").toReal(),
+            0.0);
+
+  // The selected Version row uses the same outline and keeps its text colors.
+  QQuickItem* selected_version = nullptr;
+  for (auto* delegate : harness.findAll(QStringLiteral("transferVersionDelegate"))) {
+    auto* item = qobject_cast<QQuickItem*>(delegate);
+    if (item != nullptr && item->property("selected").toBool()) {
+      selected_version = item;
+    }
+  }
+  ASSERT_NE(selected_version, nullptr);
+  auto* version_fill = selected_version->childItems().first();
+  ASSERT_EQ(version_fill->objectName(), QStringLiteral("transferVersionRowChrome"));
+  EXPECT_EQ(version_fill->property("color").value<QColor>(), theme.cardSurfaceColor());
+  EXPECT_EQ(qvariant_cast<QObject*>(version_fill->property("border"))->property("color")
+                .value<QColor>(),
+            theme.textColor());
 
   // List wells sit on the sunken base surface.
   auto* node_list =

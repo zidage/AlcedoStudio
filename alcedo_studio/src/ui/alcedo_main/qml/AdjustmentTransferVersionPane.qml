@@ -104,18 +104,26 @@ Item {
                         pane.versionActivated(versionDelegate.versionId)
                     }
 
+                    // Outline selection: the selected row keeps its text and
+                    // icon colors and gains a 1 px text-color outline. The
+                    // keyboard focus ring alone uses the muted outline.
+                    readonly property bool keyboardCurrent: versionDelegate.ListView.isCurrentItem
+                                                            && versionDelegate.ListView.view
+                                                            && versionDelegate.ListView.view.activeFocus
+
                     Rectangle {
+                        objectName: "transferVersionRowChrome"
                         anchors.fill: parent
                         radius: appTheme.badgeRadius
                         color: versionDelegate.selected
-                               ? appTheme.editorListSelectedFillColor
+                               ? appTheme.cardSurfaceColor
                                : (versionMouse.containsMouse
                                   ? appTheme.buttonHoveredFillColor
                                   : "transparent")
-                        border.width: (versionDelegate.ListView.isCurrentItem
-                                       && versionDelegate.ListView.view
-                                       && versionDelegate.ListView.view.activeFocus) ? 1 : 0
-                        border.color: appTheme.textColor
+                        border.width: versionDelegate.selected || versionDelegate.keyboardCurrent
+                                      ? 1 : 0
+                        border.color: versionDelegate.selected ? appTheme.textColor
+                                                               : appTheme.textMutedColor
                     }
 
                     RowLayout {
@@ -133,9 +141,7 @@ Item {
                             Label {
                                 anchors.centerIn: parent
                                 text: versionDelegate.displayName.slice(0, 1).toUpperCase()
-                                color: versionDelegate.selected
-                                       ? appTheme.editorListSelectedInkColor
-                                       : appTheme.textMutedColor
+                                color: appTheme.textMutedColor
                                 font.family: appTheme.uiFontFamily
                                 font.pixelSize: appTheme.fontSizeBody
                                 font.weight: appTheme.fontWeightHeading
@@ -150,9 +156,7 @@ Item {
                             Label {
                                 Layout.fillWidth: true
                                 text: versionDelegate.displayName
-                                color: versionDelegate.selected
-                                       ? appTheme.editorListSelectedInkColor
-                                       : appTheme.textColor
+                                color: appTheme.textColor
                                 font.family: appTheme.uiFontFamily
                                 font.pixelSize: appTheme.fontSizeBody
                                 font.weight: appTheme.fontWeightStrong
@@ -166,9 +170,7 @@ Item {
                                 Label {
                                     Layout.fillWidth: true
                                     text: pane.versionTimeText(versionDelegate.updatedAt)
-                                    color: versionDelegate.selected
-                                           ? appTheme.editorListSelectedInkColor
-                                           : appTheme.textMutedColor
+                                    color: appTheme.textMutedColor
                                     font.family: appTheme.dataFontFamily
                                     font.pixelSize: appTheme.fontSizeCaption
                                     wrapMode: Text.Wrap
@@ -177,9 +179,7 @@ Item {
                                 Label {
                                     visible: versionDelegate.active
                                     text: qsTr("Active")
-                                    color: versionDelegate.selected
-                                           ? appTheme.editorListSelectedInkColor
-                                           : appTheme.textMutedColor
+                                    color: appTheme.textMutedColor
                                     font.family: appTheme.uiFontFamily
                                     font.pixelSize: appTheme.fontSizeCaption
                                     font.weight: appTheme.fontWeightStrong

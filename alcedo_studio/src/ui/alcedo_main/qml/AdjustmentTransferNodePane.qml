@@ -148,18 +148,25 @@ Item {
                             nodeDelegate.checkState !== Qt.Checked)
                     }
 
+                    // Outline selection: the focused row keeps its text and
+                    // checkbox colors and gains a 1 px text-color outline. The
+                    // keyboard focus ring alone uses the muted outline.
+                    readonly property bool keyboardCurrent: nodeDelegate.ListView.isCurrentItem
+                                                            && nodeDelegate.ListView.view
+                                                            && nodeDelegate.ListView.view.activeFocus
+
                     Rectangle {
+                        objectName: "transferNodeRowChrome"
                         anchors.fill: parent
                         radius: appTheme.badgeRadius
                         color: nodeDelegate.focused
-                               ? appTheme.editorListSelectedFillColor
+                               ? appTheme.cardSurfaceColor
                                : (nodeMouse.containsMouse
                                   ? appTheme.buttonHoveredFillColor
                                   : "transparent")
-                        border.width: (nodeDelegate.ListView.isCurrentItem
-                                       && nodeDelegate.ListView.view
-                                       && nodeDelegate.ListView.view.activeFocus) ? 1 : 0
-                        border.color: appTheme.textColor
+                        border.width: nodeDelegate.focused || nodeDelegate.keyboardCurrent ? 1 : 0
+                        border.color: nodeDelegate.focused ? appTheme.textColor
+                                                           : appTheme.textMutedColor
                     }
 
                     MouseArea {
@@ -195,9 +202,7 @@ Item {
                         Label {
                             Layout.fillWidth: true
                             text: nodeDelegate.displayName
-                            color: nodeDelegate.focused
-                                   ? appTheme.editorListSelectedInkColor
-                                   : appTheme.textColor
+                            color: appTheme.textColor
                             font.family: appTheme.uiFontFamily
                             font.pixelSize: appTheme.fontSizeBody
                             font.weight: nodeDelegate.defaultGrade
