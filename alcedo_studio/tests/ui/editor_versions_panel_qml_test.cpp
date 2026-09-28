@@ -686,5 +686,23 @@ TEST_F(EditorVersionsPanelQmlTest, DisabledRootVersionActionDoesNotConsumeCtrlA)
   EXPECT_EQ(backend_.create_count(), 0);
   EXPECT_TRUE(Cards().size() == 2);
 }
+
+TEST_F(EditorVersionsPanelQmlTest, PasteAsVersionButtonUsesClipboardIconAndPastesIntoEditor) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenVersionsPage();
+
+  auto* paste = Find(QStringLiteral("editorVersionsPasteButton"));
+  ASSERT_NE(paste, nullptr);
+  EXPECT_EQ(paste->property("iconSrc").toString(),
+            QStringLiteral("qrc:/panel_icons/clipboard.svg"));
+  EXPECT_TRUE(paste->isEnabled());
+
+  Click(window_, paste);
+  EXPECT_EQ(transfer_.paste_count(), 1);
+  auto* paste_error = Find(QStringLiteral("editorVersionsPasteError"));
+  ASSERT_NE(paste_error, nullptr);
+  EXPECT_FALSE(paste_error->isVisible());
+}
+
 }  // namespace
 }  // namespace alcedo::ui::test

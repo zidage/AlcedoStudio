@@ -107,12 +107,12 @@ TEST_F(EditorHistoryTransactionsPanelQmlTest, HistoryToolbarUndoAndRedoFollowUse
   EXPECT_FALSE(Find(QStringLiteral("editorHistoryRedoButton"))->isEnabled());
 }
 
-TEST_F(EditorHistoryTransactionsPanelQmlTest, PasteUsesVisibleActionAndDoesNotExposeMerge) {
+TEST_F(EditorHistoryTransactionsPanelQmlTest, HistoryPanelHasNoPasteOrMergeAction) {
   ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
   OpenHistoryPage();
 
-  Click(window_, Find(QStringLiteral("editorHistoryPasteButton")));
-  EXPECT_EQ(transfer_.paste_count(), 1);
+  // Paste as a new Version lives in the Versions panel.
+  EXPECT_EQ(Find(QStringLiteral("editorHistoryPasteButton")), nullptr);
   EXPECT_EQ(Find(QStringLiteral("editorHistoryMergeButton")), nullptr);
   EXPECT_EQ(window_->findChild<QObject*>(QStringLiteral("editorMergeDialog")), nullptr);
 }

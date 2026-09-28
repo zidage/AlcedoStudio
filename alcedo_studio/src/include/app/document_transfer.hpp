@@ -15,9 +15,10 @@
 namespace alcedo {
 
 /**
- * @brief Capture transferable Color Grades, Masks, and DRT/Post from @p document.
+ * @brief Capture every transferable Develop field, geometry, Color Grade, Mask,
+ *        and DRT/Post value from @p document.
  *
- * Omits Develop, RAW metadata, geometry, history, Version ids, and UI state.
+ * Omits the camera profile, as-shot white balance, history, Version ids, and UI state.
  *
  * @param document Source DAG. Must have at least one Color Grade on the backbone.
  * @return Validated package with a computed fingerprint.

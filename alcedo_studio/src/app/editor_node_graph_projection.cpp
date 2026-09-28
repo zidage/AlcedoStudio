@@ -83,6 +83,7 @@ auto EditorNodeGraphProjection::Build(const PipelineDocument& document,
     }
     snapshot.edges.push_back({edge.from_node, edge.from_port, edge.to_node, edge.to_port});
   }
+  snapshot.default_grade_id = document.DefaultGradeId();
   return snapshot;
 }
 

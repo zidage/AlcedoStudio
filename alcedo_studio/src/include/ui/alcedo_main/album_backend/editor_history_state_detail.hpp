@@ -62,6 +62,14 @@ struct HistoryWorkingState {
 /// Owns per-image WorkingState acquisition, release, and service-path
 /// resolution. Delegated by EditorSessionHistoryPort; does not contain
 /// Mini-Git traversal or payload-formatting logic.
+/// Project every panel field of @p document into @p out: the fields of
+/// @p projection_node_id when @p document still holds that node, else the
+/// current-panel owners. Clears @p projection_node_id when the node is gone.
+/// Caller holds the render lock when @p document is live.
+auto ProjectPanelFieldsForDocument(const alcedo::PipelineDocument& document,
+                                   alcedo::NodeId*                 projection_node_id,
+                                   alcedo::EditorPanelProjection* out, std::string* error) -> bool;
+
 class EditorHistoryState {
  public:
   /// Path-resolution services used by state acquisition.

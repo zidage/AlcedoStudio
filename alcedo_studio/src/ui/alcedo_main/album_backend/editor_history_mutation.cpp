@@ -63,17 +63,9 @@ auto ProjectPanelFieldsForState(HistoryWorkingState& state, std::string* error) 
     state.panel_projection = {};
     return true;
   }
-  const auto& document = *state.pipeline_guard->document_;
-  if (!state.panel_projection_node_id.Empty()) {
-    if (document.Graph().FindNode(state.panel_projection_node_id) != nullptr) {
-      return alcedo::ProjectSelectedNodePanelFields(document, state.panel_projection_node_id, 0,
-                                                    &state.panel_projection, error);
-    }
-    // The committed edit removed the panel's node; fall back to current-panel
-    // routing until the UI selects another node.
-    state.panel_projection_node_id = {};
-  }
-  return alcedo::ProjectCurrentPanelFields(document, 0, &state.panel_projection, error);
+  return ProjectPanelFieldsForDocument(*state.pipeline_guard->document_,
+                                       &state.panel_projection_node_id, &state.panel_projection,
+                                       error);
 }
 
 /// Re-read every panel field from the live document after the document changed as a whole
@@ -86,6 +78,24 @@ auto RefreshPanelProjectionFromDocument(HistoryWorkingState& state, std::string*
     return false;
   }
 }
+
+}  // namespace
+
+auto ProjectPanelFieldsForDocument(const alcedo::PipelineDocument& document,
+                                   alcedo::NodeId*                 projection_node_id,
+                                   alcedo::EditorPanelProjection* out, std::string* error) -> bool {
+  if (!projection_node_id->Empty()) {
+    if (document.Graph().FindNode(*projection_node_id) != nullptr) {
+      return alcedo::ProjectSelectedNodePanelFields(document, *projection_node_id, 0, out, error);
+    }
+    // The document no longer holds the panel's node; fall back to current-panel
+    // routing until the UI selects another node.
+    *projection_node_id = {};
+  }
+  return alcedo::ProjectCurrentPanelFields(document, 0, out, error);
+}
+
+namespace {
 
 auto NodeDisplayName(const PipelineDocument& document, const NodeId& node_id) -> std::string {
   const auto* node = document.Graph().FindNode(node_id);

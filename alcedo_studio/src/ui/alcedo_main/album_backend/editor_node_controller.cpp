@@ -241,8 +241,18 @@ auto EditorNodeController::ContainsNode(const NodeId& node_id) const -> bool {
 }
 
 auto EditorNodeController::DefaultSelectedNodeId() const -> NodeId {
-  const NodeId default_grade{"grade.primary"};
-  return ContainsNode(default_grade) ? default_grade : NodeId{};
+  // The document default Grade identity is not always `grade.primary`: Paste
+  // remaps every transferred Grade to a new identity. Use the published default
+  // Grade, then the first Grade on the backbone.
+  if (IsColorGrade(snapshot_.default_grade_id)) {
+    return snapshot_.default_grade_id;
+  }
+  for (const auto& node : ActiveNodes()) {
+    if (node.node_kind == EditorNodeKind::ColorGrade) {
+      return node.node_id;
+    }
+  }
+  return {};
 }
 
 auto EditorNodeController::IndexOf(const NodeId& node_id) const -> int {
@@ -297,6 +307,15 @@ void EditorNodeController::RestoreSelectionAfterSnapshot(bool select_default_col
       }
     }
   }
+  // A node that vanished and returned (Undo, Version checkout) takes the
+  // selection back from the default Grade chosen when it vanished. Every
+  // explicit selection clears the restore identity.
+  if (ContainsNode(selection_restore_node_id_)) {
+    selected_node_id_          = selection_restore_node_id_;
+    selected_node_ids_         = {selected_node_id_};
+    selection_restore_node_id_ = {};
+    return;
+  }
   // The controller-owned selection survives a snapshot refresh; dead members
   // are pruned and the most recently selected survivor stays primary.
   std::vector<NodeId> surviving;
@@ -315,20 +334,19 @@ void EditorNodeController::RestoreSelectionAfterSnapshot(bool select_default_col
     }
     return;
   }
-  if (ContainsNode(selection_restore_node_id_)) {
-    selected_node_id_          = selection_restore_node_id_;
-    selected_node_ids_         = {selected_node_id_};
-    selection_restore_node_id_ = {};
-    return;
-  }
   if (ContainsNode(selected_node_id_)) {
     selected_node_ids_ = {selected_node_id_};
     return;
   }
-  if (!selected_node_id_.Empty()) {
+  // A selected node that left the document (Paste remaps every Grade, Version
+  // checkout replaces the graph) must not leave the adjustment panels without a
+  // write target: select the default Grade and keep the old identity for restore.
+  const bool selection_vanished = !selected_node_id_.Empty();
+  if (selection_vanished) {
     selection_restore_node_id_ = selected_node_id_;
   }
-  selected_node_id_ = select_default_color_grade ? DefaultSelectedNodeId() : NodeId{};
+  selected_node_id_ = select_default_color_grade || selection_vanished ? DefaultSelectedNodeId()
+                                                                       : NodeId{};
   if (!selected_node_id_.Empty()) {
     selected_node_ids_.push_back(selected_node_id_);
   }

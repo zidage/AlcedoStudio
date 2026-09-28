@@ -77,14 +77,18 @@ auto JsonKeys(const nlohmann::json& json, std::set<std::string>* keys) -> void {
   }
 }
 
-TEST(DocumentTransferTest, CaptureOmitsDevelopGeometryAndHistory) {
+TEST(DocumentTransferTest, CaptureIncludesDevelopFieldsAndGeometryButNotHistory) {
   auto document = test::DocumentWithExposureEv(2.25);
   document.Geometry().SetRotationDegrees(15.0f);
   const auto package = CaptureDocumentTransfer(document);
   const auto json    = ExportDocumentTransfer(package);
   EXPECT_FALSE(json.contains("operators"));
-  EXPECT_FALSE(json.contains("develop"));
-  EXPECT_FALSE(json.contains("geometry"));
+  ASSERT_TRUE(json.contains("develop"));
+  const auto& develop = json.at("develop");
+  for (const char* field : {"raw_decode", "color_temp", "lens_calib", "geometry"}) {
+    EXPECT_TRUE(develop.contains(field)) << field;
+  }
+  EXPECT_FLOAT_EQ(develop.at("geometry").at("rotation_degrees").get<float>(), 15.0f);
   EXPECT_FALSE(json.contains("root_id"));
   EXPECT_FALSE(json.contains("version"));
   EXPECT_EQ(json.at("schema").get<std::string>(), std::string{kAdjustmentTransferSchema});
@@ -136,7 +140,7 @@ TEST(DocumentTransferTest, ImportRejectsMissingOrInvalidProtectionAndDefaultIden
   }
 }
 
-TEST(DocumentTransferTest, PasteKeepsTargetDevelopRawLensAndGeometry) {
+TEST(DocumentTransferTest, PasteAppliesDevelopFieldsAndGeometryButKeepsTargetCameraProfile) {
   auto target = CreateDefaultPipelineDocument();
   target.Geometry().SetRotationDegrees(27.0f);
   target.Geometry().SetExpandToFit(true);
@@ -169,13 +173,120 @@ TEST(DocumentTransferTest, PasteKeepsTargetDevelopRawLensAndGeometry) {
   ASSERT_TRUE(
       ApplyPipelineEditBatch(working, prepared.batch, PipelineEditApplyDirection::Forward, &error))
       << error;
-  EXPECT_EQ(working.Develop()->Params().ToJson().dump(), develop_before.dump());
-  EXPECT_EQ(working.Geometry().ToJson().dump(), geometry_before.dump());
+  // RAW decode, white balance, lens correction, and geometry follow the source.
+  const auto pasted_develop = working.Develop()->Params().ToJson();
+  const auto source_json    = source.Develop()->Params().ToJson();
+  for (const char* field : {"raw_decode", "color_temp", "lens_calib"}) {
+    EXPECT_EQ(FieldOwnedParameterJson(field, pasted_develop).dump(),
+              FieldOwnedParameterJson(field, source_json).dump())
+        << field;
+  }
+  EXPECT_EQ(working.Geometry().ToJson().dump(), source.Geometry().ToJson().dump());
+  EXPECT_NE(working.Geometry().ToJson().dump(), geometry_before.dump());
+  // The camera profile and as-shot white balance are target image data.
+  EXPECT_EQ(pasted_develop.at("camera_profile").dump(), develop_before.at("camera_profile").dump());
+  EXPECT_EQ(pasted_develop.at("as_shot_cct").dump(), develop_before.at("as_shot_cct").dump());
+  EXPECT_EQ(pasted_develop.at("as_shot_tint").dump(), develop_before.at("as_shot_tint").dump());
   nlohmann::json exposure;
   ASSERT_TRUE(ReadEditorParameterJson(working, test::ColorGradeFieldTarget("exposure", "grade.t1"),
                                       &exposure, &error))
       << error;
   EXPECT_DOUBLE_EQ(exposure.at("exposure_ev").get<double>(), -0.5);
+}
+
+TEST(DocumentTransferTest, PasteWithoutDevelopItemsKeepsTargetDevelopAndGeometry) {
+  auto target = CreateDefaultPipelineDocument();
+  target.Geometry().SetRotationDegrees(27.0f);
+  auto develop_payload            = target.Develop()->Params().Params();
+  develop_payload.demosaic_method = "AMaZE";
+  develop_payload.lens_enabled    = true;
+  target.Develop()->Params().ReplaceParams(develop_payload);
+  const auto develop_before  = target.Develop()->Params().ToJson();
+  const auto geometry_before = target.Geometry().ToJson();
+
+  auto source = test::DocumentWithExposureEv(-0.5);
+  source.Geometry().SetRotationDegrees(90.0f);
+  const auto* grade = source.PrimaryGrade();
+  ASSERT_NE(grade, nullptr);
+  const auto* exposure_id = grade->FindAdjustmentIdByType(type_ids::Exposure());
+  ASSERT_NE(exposure_id, nullptr);
+  AdjustmentTransferSelection selection;
+  selection.nodes.push_back({grade->Id(), {{AdjustmentTransferItemKind::Adjustment, *exposure_id}}});
+  const auto package = AdjustmentTransferPackageBuilder::Build(source, selection);
+  EXPECT_TRUE(package.develop_.Empty());
+
+  const auto  prepared = DocumentTransferPlanner::Plan(package, target, {});
+  auto        working  = ClonePipelineDocument(target);
+  std::string error;
+  ASSERT_TRUE(
+      ApplyPipelineEditBatch(working, prepared.batch, PipelineEditApplyDirection::Forward, &error))
+      << error;
+  EXPECT_EQ(working.Develop()->Params().ToJson().dump(), develop_before.dump());
+  EXPECT_EQ(working.Geometry().ToJson().dump(), geometry_before.dump());
+}
+
+TEST(DocumentTransferTest, DevelopOnlyPasteKeepsTargetRootGradesAndChangesSelectedFields) {
+  auto       target = test::DocumentWithExposureEv(1.0);
+  const auto grades_before =
+      ExportDocumentTransfer(CaptureDocumentTransfer(target)).at("color_grades");
+
+  auto source                    = CreateDefaultPipelineDocument();
+  auto payload                   = source.Develop()->Params().Params();
+  payload.wb_mode                = "custom";
+  payload.custom_cct             = 4200.0f;
+  payload.custom_tint            = 12.0f;
+  payload.highlights_reconstruct = !payload.highlights_reconstruct;
+  source.Develop()->Params().ReplaceParams(payload);
+  source.Geometry().SetRotationDegrees(-4.5f);
+  AdjustmentTransferSelection selection;
+  selection.nodes.push_back({source.Develop()->Id(),
+                             {{AdjustmentTransferItemKind::WhiteBalance, std::nullopt},
+                              {AdjustmentTransferItemKind::Geometry, std::nullopt}}});
+  const auto package = AdjustmentTransferPackageBuilder::Build(source, selection);
+  ASSERT_TRUE(package.color_grades_.empty());
+  ASSERT_TRUE(package.develop_.color_temp.has_value());
+  ASSERT_TRUE(package.develop_.geometry.has_value());
+  EXPECT_FALSE(package.develop_.raw_decode.has_value());
+  EXPECT_FALSE(package.develop_.lens_calib.has_value());
+
+  const auto  prepared = DocumentTransferPlanner::Plan(package, target, {});
+  auto        working  = ClonePipelineDocument(target);
+  std::string error;
+  ASSERT_TRUE(
+      ApplyPipelineEditBatch(working, prepared.batch, PipelineEditApplyDirection::Forward, &error))
+      << error;
+  const auto develop = working.Develop()->Params().Params();
+  EXPECT_EQ(develop.wb_mode, "custom");
+  EXPECT_FLOAT_EQ(develop.custom_cct, 4200.0f);
+  EXPECT_FLOAT_EQ(develop.custom_tint, 12.0f);
+  // RAW Decode was not selected: the target keeps its highlight reconstruction.
+  EXPECT_EQ(develop.highlights_reconstruct,
+            target.Develop()->Params().Params().highlights_reconstruct);
+  EXPECT_FLOAT_EQ(working.Geometry().RotationDegrees(), -4.5f);
+  EXPECT_EQ(ExportDocumentTransfer(CaptureDocumentTransfer(working)).at("color_grades").dump(),
+            grades_before.dump());
+}
+
+TEST(DocumentTransferTest, ImportRejectsDevelopFieldCarryingImportBoundData) {
+  auto json = ExportDocumentTransfer(CaptureDocumentTransfer(test::DocumentWithExposureEv(0.5)));
+  json.erase("fingerprint");
+  EXPECT_NO_THROW((void)ImportDocumentTransfer(json));
+
+  auto with_profile = json;
+  with_profile.at("develop").at("raw_decode")["camera_profile"] = nlohmann::json::object();
+  EXPECT_THROW((void)ImportDocumentTransfer(with_profile), std::runtime_error);
+
+  auto with_as_shot = json;
+  with_as_shot.at("develop").at("color_temp")["as_shot_cct"] = 5000.0;
+  EXPECT_THROW((void)ImportDocumentTransfer(with_as_shot), std::runtime_error);
+
+  auto invalid_geometry = json;
+  invalid_geometry.at("develop").at("geometry")["crop_rect"] = "full";
+  EXPECT_THROW((void)ImportDocumentTransfer(invalid_geometry), std::runtime_error);
+
+  auto missing_develop = json;
+  missing_develop.erase("develop");
+  EXPECT_THROW((void)ImportDocumentTransfer(missing_develop), std::runtime_error);
 }
 
 TEST(DocumentTransferTest, PasteRemapsEveryNodeAdjustmentAndMaskId) {
@@ -397,7 +508,7 @@ TEST(DocumentTransferTest, TransferPackageRejectsItemOwnedByAnotherNode) {
                std::runtime_error);
 }
 
-TEST(DocumentTransferTest, TransferPackageV6FingerprintCoversFieldPresence) {
+TEST(DocumentTransferTest, TransferPackageFingerprintCoversFieldPresence) {
   auto        document = CreateDefaultPipelineDocument();
   const auto* grade    = document.PrimaryGrade();
   ASSERT_NE(grade, nullptr);
@@ -436,7 +547,7 @@ TEST(DocumentTransferTest, TransferPackageV5IsRejectedWithoutConversion) {
   }
 }
 
-TEST(DocumentTransferTest, TransferPackageOmitsDevelopRawLensGeometryAndCaches) {
+TEST(DocumentTransferTest, TransferPackageCarriesOnlyOwnedDevelopKeysAndNoCaches) {
   auto document = test::DocumentWithLutPath("D:/cache/luts/example.cube");
   document.Geometry().SetRotationDegrees(33.0f);
   grade_mask_test::AddRadialMask(document, MaskId{"mask.full"});
@@ -448,12 +559,14 @@ TEST(DocumentTransferTest, TransferPackageOmitsDevelopRawLensGeometryAndCaches) 
     actual_top.insert(key);
   }
   EXPECT_EQ(actual_top,
-            (std::set<std::string>{"color_grades", "default_grade_id", "document_format_version",
-                                   "drt_post", "fingerprint", "schema"}));
+            (std::set<std::string>{"color_grades", "default_grade_id", "develop",
+                                   "document_format_version", "drt_post", "fingerprint",
+                                   "schema"}));
 
   std::set<std::string> all_keys;
   JsonKeys(json, &all_keys);
-  for (const char* banned : {"develop", "geometry", "raw", "lens", "history", "version", "root_id",
+  for (const char* banned : {"camera_profile", "as_shot_cct", "as_shot_tint", "cam_mul",
+                             "dng_profile_fingerprint", "history", "version", "root_id",
                              "operators", "cache", "ui_state"}) {
     EXPECT_EQ(all_keys.count(banned), 0u) << banned;
   }

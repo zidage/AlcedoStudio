@@ -69,6 +69,7 @@ Item {
         if (kind === "editorSave") return qsTr("Editor Save")
         if (kind === "import") return qsTr("Import")
         if (kind === "export") return qsTr("Export")
+        if (kind === "adjustmentPaste") return qsTr("Paste Adjustments")
         return qsTr("Background Tasks")
     }
 

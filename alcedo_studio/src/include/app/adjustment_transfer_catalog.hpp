@@ -41,6 +41,11 @@ enum class AdjustmentTransferItemSection : std::uint8_t {
   DisplayTransform,
   /// The all-or-none Masks row of a Color Grade.
   Masks,
+  /// RAW panel values of the Develop endpoint: RAW Decode, White Balance, and
+  /// Lens Correction.
+  Raw,
+  /// Geometry panel value: crop and rotation.
+  Geometry,
 };
 
 /// Node row kind in the transferable-node column.
@@ -48,6 +53,8 @@ enum class AdjustmentTransferNodeKind : std::uint8_t {
   ColorGrade = 0,
   /// The single DRT and Post Processing endpoint row.
   DrtPost,
+  /// The single Develop endpoint row: RAW decode, white balance, lens, and geometry.
+  Develop,
 };
 
 /**
@@ -78,8 +85,8 @@ struct AdjustmentTransferItemDescriptor {
 /**
  * @brief Immutable descriptor for one transferable node row.
  *
- * One row per Color Grade on the source image backbone plus one DRT/Post
- * endpoint row last. @p node_id is the stable identity.
+ * One Develop endpoint row first, one row per Color Grade on the source image
+ * backbone, and one DRT/Post endpoint row last. @p node_id is the stable identity.
  */
 struct AdjustmentTransferNodeDescriptor {
   AdjustmentTransferNodeKind                        kind = AdjustmentTransferNodeKind::ColorGrade;
@@ -87,7 +94,7 @@ struct AdjustmentTransferNodeDescriptor {
   std::string                                       display_name;
   /// True when this row is the document default Color Grade.
   bool                                              is_default_grade = false;
-  /// 0-based backbone position; the DRT/Post row is always last.
+  /// 0-based row position; the Develop row is first and the DRT/Post row is last.
   std::uint32_t                                     source_order = 0;
   std::vector<AdjustmentTransferItemDescriptor>     items;
 
@@ -164,13 +171,15 @@ class AdjustmentTransferCatalogService final {
   /**
    * @brief Build node and item descriptors for an available document.
    *
-   * Color Grade order follows @ref ColorGradesOnImageBackbone; item order
+   * The Develop row comes first with RAW Decode, White Balance, Lens
+   * Correction, and Crop and Rotate. Color Grade order follows
+   * @ref ColorGradesOnImageBackbone; item order
    * follows document and catalog order. Every Color Grade carries exactly one
    * Masks row, disabled when the Grade has no Masks. The DRT/Post row carries
    * the Display Transform item plus its owned adjustments.
    *
    * @return The descriptor list, or nullopt with @p error when the document
-   *         lacks a valid DRT endpoint or an owned adjustment has a
+   *         lacks a Develop or valid DRT endpoint or an owned adjustment has a
    *         wrong-owner type.
    */
   [[nodiscard]] static auto BuildNodeDescriptors(const PipelineDocument& document,

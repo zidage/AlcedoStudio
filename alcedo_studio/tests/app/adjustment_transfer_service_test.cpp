@@ -22,14 +22,15 @@
 namespace alcedo {
 namespace {
 
-TEST(AdjustmentTransferServiceTest, CaptureExportImportRoundTripOmitsDevelopAndGeometry) {
+TEST(AdjustmentTransferServiceTest, CaptureExportImportRoundTripKeepsDevelopAndGeometry) {
   auto source = test::DocumentWithExposureEv(1.5);
   source.Geometry().SetRotationDegrees(12.0f);
   const auto package  = AdjustmentTransferService::Capture(source);
   const auto exported = AdjustmentTransferService::ExportPackage(package);
   EXPECT_FALSE(exported.contains("operators"));
-  EXPECT_FALSE(exported.contains("develop"));
-  EXPECT_FALSE(exported.contains("geometry"));
+  ASSERT_TRUE(exported.contains("develop"));
+  EXPECT_FLOAT_EQ(exported.at("develop").at("geometry").at("rotation_degrees").get<float>(), 12.0f);
+  EXPECT_FALSE(exported.at("develop").at("raw_decode").contains("camera_profile"));
   const auto imported = AdjustmentTransferService::ImportPackage(exported);
   EXPECT_EQ(imported.fingerprint_, package.fingerprint_);
   EXPECT_FALSE(imported.Empty());

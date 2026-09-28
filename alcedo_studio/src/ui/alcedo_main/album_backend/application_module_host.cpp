@@ -100,7 +100,7 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
                                                                    project_.get(), this);
   RecordConstruction("NikonHeRecoveryController", nikon_he_recovery_.get());
   adjustment_transfer_ = std::make_unique<AdjustmentTransferController>(
-      project_.get(), library_.get(), import_export_.get(), this);
+      project_.get(), library_.get(), import_export_.get(), background_tasks_.get(), this);
   RecordConstruction("AdjustmentTransferController", adjustment_transfer_.get());
   // Phase 5B/5E: wire runtime first-frame ports, direct presentation, and
   // BackgroundTaskController-backed editor_save registration into the session
@@ -228,6 +228,7 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
       return {};
     }
   });
+  adjustment_transfer_->SetEditorSession(editor_session_.get());
   connect(adjustment_transfer_.get(), &AdjustmentTransferController::PackageChanged,
           editor_session_.get(), [this]() {
             if (editor_session_) {

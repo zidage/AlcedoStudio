@@ -14,6 +14,7 @@
 #include "app/pipeline_history_applier.hpp"
 #include "edit/graph/adjustment_ownership.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
+#include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/operators/models/adjustment_catalog.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
@@ -23,6 +24,7 @@ namespace alcedo {
 namespace {
 
 constexpr std::string_view kDrtPostRowDisplayName = "DRT and Post Processing";
+constexpr std::string_view kDevelopRowDisplayName = "RAW and Geometry";
 
 auto Fail(std::string* error, std::string message) -> std::nullopt_t {
   if (error != nullptr) {
@@ -115,6 +117,88 @@ auto AdjustmentDisplayValue(const IOperatorModel& model) -> std::string {
     return *scalar;
   }
   return model.IsDefault() ? "Default" : "Adjusted";
+}
+
+auto JsonString(const nlohmann::json& json, const char* key) -> std::string {
+  if (json.contains(key) && json.at(key).is_string()) {
+    return json.at(key).get<std::string>();
+  }
+  return {};
+}
+
+auto JsonNumber(const nlohmann::json& json, const char* key) -> double {
+  if (json.contains(key) && json.at(key).is_number()) {
+    return json.at(key).get<double>();
+  }
+  return 0.0;
+}
+
+auto JsonBool(const nlohmann::json& json, const char* key) -> bool {
+  return json.contains(key) && json.at(key).is_boolean() && json.at(key).get<bool>();
+}
+
+auto DevelopItemDescriptor(AdjustmentTransferItemKind kind, AdjustmentTransferItemSection section,
+                           std::string display_name, std::string display_value,
+                           std::uint32_t order) -> AdjustmentTransferItemDescriptor {
+  AdjustmentTransferItemDescriptor item;
+  item.kind          = kind;
+  item.section       = section;
+  item.display_name  = std::move(display_name);
+  item.display_value = std::move(display_value);
+  item.source_order  = order;
+  return item;
+}
+
+/// RAW Decode, White Balance, Lens Correction, and Geometry rows of the Develop
+/// endpoint. Values describe the user-set fields only; the camera profile and
+/// as-shot white balance are image data and are never transferred.
+auto BuildDevelopItems(const PipelineDocument& document, const DevelopNodeModel& develop)
+    -> std::vector<AdjustmentTransferItemDescriptor> {
+  const auto params = develop.Params().ToJson();
+  std::vector<AdjustmentTransferItemDescriptor> items;
+  items.reserve(4);
+
+  auto demosaic = JsonString(params, "demosaic_method");
+  if (demosaic.empty()) {
+    demosaic = "default";
+  }
+  items.push_back(DevelopItemDescriptor(
+      AdjustmentTransferItemKind::RawDecode, AdjustmentTransferItemSection::Raw, "RAW Decode",
+      demosaic + ", highlights " + BoolText(JsonBool(params, "highlights_reconstruct")),
+      static_cast<std::uint32_t>(items.size())));
+
+  const auto wb_mode = JsonString(params, "wb_mode");
+  items.push_back(DevelopItemDescriptor(
+      AdjustmentTransferItemKind::WhiteBalance, AdjustmentTransferItemSection::Raw,
+      "White Balance",
+      wb_mode == "custom" ? FixedNumber(JsonNumber(params, "custom_cct"), 0) + " K, tint " +
+                                FixedNumber(JsonNumber(params, "custom_tint"), 0)
+                          : std::string{"As Shot"},
+      static_cast<std::uint32_t>(items.size())));
+
+  std::string lens_value = BoolText(JsonBool(params, "lens_enabled"));
+  if (JsonBool(params, "lens_enabled")) {
+    const auto model = JsonString(params, "lens_model");
+    lens_value       = model.empty() ? std::string{"Auto"} : model;
+  }
+  items.push_back(DevelopItemDescriptor(AdjustmentTransferItemKind::LensCalibration,
+                                        AdjustmentTransferItemSection::Raw, "Lens Correction",
+                                        std::move(lens_value),
+                                        static_cast<std::uint32_t>(items.size())));
+
+  const auto& geometry = document.Geometry();
+  const auto  crop     = geometry.CropRect();
+  const bool  cropped  = crop.x != 0.0f || crop.y != 0.0f || crop.w != 1.0f || crop.h != 1.0f;
+  std::string geometry_value =
+      FixedNumber(static_cast<double>(geometry.RotationDegrees()), 1) + " deg";
+  if (cropped) {
+    geometry_value += ", cropped";
+  }
+  items.push_back(DevelopItemDescriptor(AdjustmentTransferItemKind::Geometry,
+                                        AdjustmentTransferItemSection::Geometry, "Crop and Rotate",
+                                        std::move(geometry_value),
+                                        static_cast<std::uint32_t>(items.size())));
+  return items;
 }
 
 auto DrtMethodText(DrtMethod method) -> std::string {
@@ -306,6 +390,18 @@ auto AdjustmentTransferCatalogService::BuildNodeDescriptors(const PipelineDocume
     -> std::optional<std::vector<AdjustmentTransferNodeDescriptor>> {
   try {
     std::vector<AdjustmentTransferNodeDescriptor> nodes;
+    const auto* develop = document.Develop();
+    if (develop == nullptr) {
+      return Fail(error, "AdjustmentTransferCatalog: document has no Develop node");
+    }
+    AdjustmentTransferNodeDescriptor develop_row;
+    develop_row.kind         = AdjustmentTransferNodeKind::Develop;
+    develop_row.node_id      = develop->Id();
+    develop_row.display_name = std::string{kDevelopRowDisplayName};
+    develop_row.source_order = 0;
+    develop_row.items        = BuildDevelopItems(document, *develop);
+    nodes.push_back(std::move(develop_row));
+
     for (const auto* grade : ColorGradesOnImageBackbone(document)) {
       if (grade == nullptr) {
         continue;

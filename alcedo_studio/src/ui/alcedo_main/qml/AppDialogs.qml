@@ -115,9 +115,19 @@ Item {
             adjustmentTransferActionsObj.applyPaste(strategy)
             host.pendingAdjustmentPasteTargets = []
         }
-        onPasteDiscarded: {
-            appModules.adjustmentTransfer.Discard()
+        onPasteCanceled: {
             host.pendingAdjustmentPasteTargets = []
+        }
+    }
+
+    // Library targets paste on a worker thread; the background task bar shows
+    // the running Paste and this reports its result.
+    Connections {
+        target: appModules.adjustmentTransfer
+        function onPasteFinished(result) {
+            if (result && result.message) {
+                host.showSnackbar(String(result.message))
+            }
         }
     }
 

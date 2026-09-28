@@ -11,7 +11,9 @@
 #include <utility>
 
 #include "app/document_transfer.hpp"
+#include "app/pipeline_history_applier.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
+#include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/drt_node_model.hpp"
 
 namespace alcedo {
@@ -100,6 +102,12 @@ auto BuildColorGradeEntry(const ColorGradeNodeModel&            grade,
       case AdjustmentTransferItemKind::DrtParameters:
         Fail("DrtParameters item requires the DRT/Post endpoint, not Color Grade '" +
              std::string{grade.Id().Value()} + "'");
+      case AdjustmentTransferItemKind::RawDecode:
+      case AdjustmentTransferItemKind::WhiteBalance:
+      case AdjustmentTransferItemKind::LensCalibration:
+      case AdjustmentTransferItemKind::Geometry:
+        Fail("Develop item requires the Develop endpoint, not Color Grade '" +
+             std::string{grade.Id().Value()} + "'");
     }
   }
 
@@ -138,6 +146,12 @@ auto BuildDrtPostEntry(const DrtNodeModel&                    drt,
       case AdjustmentTransferItemKind::Masks:
         Fail("transfer item kind requires a Color Grade node, not DRT/Post endpoint '" +
              std::string{drt.Id().Value()} + "'");
+      case AdjustmentTransferItemKind::RawDecode:
+      case AdjustmentTransferItemKind::WhiteBalance:
+      case AdjustmentTransferItemKind::LensCalibration:
+      case AdjustmentTransferItemKind::Geometry:
+        Fail("Develop item requires the Develop endpoint, not DRT/Post endpoint '" +
+             std::string{drt.Id().Value()} + "'");
     }
   }
 
@@ -149,6 +163,45 @@ auto BuildDrtPostEntry(const DrtNodeModel&                    drt,
     }
     const auto& model = drt.AdjustmentAt(index);
     entry.adjustments.push_back({id, model.Type(), model.ToJson()});
+  }
+  return entry;
+}
+
+/// Selected Develop fields as owned-key values plus the complete document
+/// geometry. The source camera profile and as-shot white balance never enter
+/// the package because @ref FieldOwnedParameterJson drops them.
+auto BuildDevelopEntry(const PipelineDocument& document, const DevelopNodeModel& develop,
+                       const AdjustmentTransferNodeSelection& selection) -> TransferDevelopValue {
+  TransferDevelopValue  entry;
+  std::set<std::string> item_keys;
+  const auto            params = develop.Params().ToJson();
+  for (const auto& item : selection.items) {
+    if (!item_keys.insert(ItemKey(item)).second) {
+      Fail("duplicate transfer item on Develop endpoint '" + std::string{develop.Id().Value()} +
+           "'");
+    }
+    RequireNoAdjustmentIdentity(item, develop.Id());
+    switch (item.kind) {
+      case AdjustmentTransferItemKind::RawDecode:
+        entry.raw_decode = FieldOwnedParameterJson("raw_decode", params);
+        break;
+      case AdjustmentTransferItemKind::WhiteBalance:
+        entry.color_temp = FieldOwnedParameterJson("color_temp", params);
+        break;
+      case AdjustmentTransferItemKind::LensCalibration:
+        entry.lens_calib = FieldOwnedParameterJson("lens_calib", params);
+        break;
+      case AdjustmentTransferItemKind::Geometry:
+        entry.geometry = document.Geometry().ToJson();
+        break;
+      case AdjustmentTransferItemKind::NodeEnabled:
+      case AdjustmentTransferItemKind::NodeMix:
+      case AdjustmentTransferItemKind::Adjustment:
+      case AdjustmentTransferItemKind::Masks:
+      case AdjustmentTransferItemKind::DrtParameters:
+        Fail("transfer item kind is not a Develop item on Develop endpoint '" +
+             std::string{develop.Id().Value()} + "'");
+    }
   }
   return entry;
 }
@@ -181,6 +234,13 @@ auto AdjustmentTransferPackageBuilder::Build(const PipelineDocument&            
   package.document_format_version_ = document.FormatVersion();
 
   std::set<std::string> matched;
+  if (const auto* develop = document.Develop(); develop != nullptr) {
+    if (const auto found = by_node.find(std::string{develop->Id().Value()});
+        found != by_node.end()) {
+      matched.insert(found->first);
+      package.develop_ = BuildDevelopEntry(document, *develop, *found->second);
+    }
+  }
   for (const auto* grade : ColorGradesOnImageBackbone(document)) {
     const auto found = by_node.find(std::string{grade->Id().Value()});
     if (found == by_node.end()) {
@@ -215,6 +275,15 @@ auto AdjustmentTransferPackageBuilder::Build(const PipelineDocument&            
 
 auto SelectAllTransferableItems(const PipelineDocument& document) -> AdjustmentTransferSelection {
   AdjustmentTransferSelection selection;
+  if (const auto* develop = document.Develop(); develop != nullptr) {
+    AdjustmentTransferNodeSelection node;
+    node.node_id = develop->Id();
+    node.items.push_back({AdjustmentTransferItemKind::RawDecode, std::nullopt});
+    node.items.push_back({AdjustmentTransferItemKind::WhiteBalance, std::nullopt});
+    node.items.push_back({AdjustmentTransferItemKind::LensCalibration, std::nullopt});
+    node.items.push_back({AdjustmentTransferItemKind::Geometry, std::nullopt});
+    selection.nodes.push_back(std::move(node));
+  }
   for (const auto* grade : ColorGradesOnImageBackbone(document)) {
     AdjustmentTransferNodeSelection node;
     node.node_id = grade->Id();

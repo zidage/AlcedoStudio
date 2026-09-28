@@ -154,7 +154,10 @@ Do not replace it with a blue selection slab, tinted well, or blue side stripe.
 - Dense rows and segments use `editorListSelectedFillColor` with
   `editorListSelectedInkColor` by default. A per-file VI entry can instead
   require a neutral outline with unchanged text and icon colors. Mask Groups
-  use that outline treatment.
+  use that outline treatment. The Adjustment Transfer Version and Node panes
+  also use it: the selected row gets a `cardSurfaceColor` fill and a 1 px
+  `textColor` outline, and its checkbox keeps the normal selected well. A
+  keyboard focus ring without selection uses a 1 px `textMutedColor` outline.
 - Nodes and established outline-based surfaces keep their neutral fill and
   use the existing text-color outline. Nodes use `graphSelectionOutlineColor`
   (`textColor`), never a theme-accent alias. A neutral outline is permitted;

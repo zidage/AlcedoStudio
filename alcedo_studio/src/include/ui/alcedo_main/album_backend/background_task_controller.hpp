@@ -26,6 +26,8 @@ enum class BackgroundTaskKind {
   Export,
   /// Phase 5E: editor session seal/persist while leaving an image.
   EditorSave,
+  /// Adjustment Transfer Paste into library targets that are not open in the editor.
+  AdjustmentPaste,
 };
 
 /// Lifecycle state of a single background task record.

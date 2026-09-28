@@ -15,7 +15,6 @@ Item {
 
     property var theme: null
     property var editorSession: null
-    property var adjustmentTransfer: null
     property var historyModel: null
     property string statusMessage: ""
     property Item blurSource: null
@@ -45,12 +44,6 @@ Item {
             historyList.contentY = Math.max(0, Math.min(historyList.preservedContentY, maxY))
             historyList.restoringContentY = false
         })
-    }
-
-    function applyPaste() {
-        if (!root.adjustmentTransfer || !root.editorSession) return
-        var result = root.adjustmentTransfer.PasteIntoEditor(root.editorSession)
-        root.statusMessage = result.message || qsTr("Adjustments pasted")
     }
 
     ColumnLayout {
@@ -138,22 +131,6 @@ Item {
             }
 
             Item { Layout.fillWidth: true }
-
-            IconActionButton {
-                objectName: "editorHistoryPasteButton"
-                compact: true
-                enabled: root.editorSession && root.editorSession.actions.canPaste
-                iconSrc: "qrc:/panel_icons/to_bg.svg"
-                iconColorDefault: root.colMuted
-                iconColorMuted: root.colMuted
-                fillIdle: root.colCardSurface
-                fillHover: appTheme.buttonHoveredFillColor
-                fillPressed: appTheme.buttonPressedFillColor
-                fillSelected: appTheme.buttonSelectedFillColor
-                focusRingColor: root.colText
-                actionName: qsTr("Paste adjustments as a new Version")
-                onClicked: root.applyPaste()
-            }
         }
 
         Label {

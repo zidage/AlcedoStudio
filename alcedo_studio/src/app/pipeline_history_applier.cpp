@@ -79,6 +79,8 @@ auto ApplyGraph(PipelineDocument& document, std::vector<GraphValidationError> er
   return true;
 }
 
+}  // namespace
+
 /// Keys each Develop field owns. `raw_decode`, `color_temp` and `lens_calib` share
 /// one Develop Params JSON, which also carries import-bound data (`camera_profile`,
 /// `as_shot_*`) that the RAW color context re-binds outside history.
@@ -121,6 +123,8 @@ auto FieldOwnedParameterJson(std::string_view field_key, const nlohmann::json& j
   }
   return owned;
 }
+
+namespace {
 
 auto ExpectedParameterJson(const PipelineDocument& document, const SetParameterChange& change,
                            PipelineEditApplyDirection direction, nlohmann::json* json,

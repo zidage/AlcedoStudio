@@ -8,6 +8,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "edit/history/commit_types.hpp"
@@ -15,6 +16,7 @@
 #include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph.hpp"
+#include "json.hpp"
 
 namespace alcedo {
 
@@ -31,6 +33,27 @@ struct PipelineHistoryApplyContext {
   std::function<void(std::size_t applied_count)> after_successful_change;
   TopologyDeltaStepHook after_topology_step;
 };
+
+/**
+ * @brief Keys owned by one Develop parameter field.
+ *
+ * `raw_decode`, `color_temp`, and `lens_calib` share one Develop Params JSON.
+ * That JSON also carries import-bound data (`camera_profile`, `as_shot_*`) that
+ * is never part of a field value.
+ *
+ * @return The owned key list, or nullptr when @p field_key is not a Develop field.
+ */
+[[nodiscard]] auto DevelopFieldOwnedKeys(std::string_view field_key)
+    -> const std::vector<std::string_view>*;
+
+/**
+ * @brief Reduce a stored or live parameter JSON to the keys @p field_key owns.
+ *
+ * Develop fields keep only their owned keys. Every other field owns its whole
+ * Model JSON, which is returned unchanged.
+ */
+[[nodiscard]] auto FieldOwnedParameterJson(std::string_view field_key, const nlohmann::json& json)
+    -> nlohmann::json;
 
 /**
  * @brief Apply one typed batch to the live document in @p direction.

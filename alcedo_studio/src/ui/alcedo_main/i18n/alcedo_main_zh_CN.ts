@@ -318,6 +318,14 @@
         <source>Transfer all masks in this node</source>
         <translation>转移此节点中的所有蒙版</translation>
     </message>
+    <message>
+        <source>RAW</source>
+        <translation>RAW</translation>
+    </message>
+    <message>
+        <source>Geometry</source>
+        <translation>几何</translation>
+    </message>
 </context>
 <context>
     <name>AdjustmentTransferNodePane</name>
@@ -1367,6 +1375,10 @@ Alcedo 将改用 %1。</translation>
         <source>+%1</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <source>Paste Adjustments</source>
+        <translation>粘贴调整</translation>
+    </message>
 </context>
 <context>
     <name>BackgroundTasksDialog</name>
@@ -1474,6 +1486,10 @@ Alcedo 将改用 %1。</translation>
         <location line="+11"/>
         <source>Imports, exports, model work, and AI jobs will appear here.</source>
         <translation>导入、导出、模型与 AI 任务会显示在这里。</translation>
+    </message>
+    <message>
+        <source>Paste Adjustments</source>
+        <translation>粘贴调整</translation>
     </message>
 </context>
 <context>
@@ -3341,6 +3357,14 @@ Original source files on disk will be kept.</source>
         <location line="+12"/>
         <source>No versions yet</source>
         <translation>尚无版本</translation>
+    </message>
+    <message>
+        <source>Paste adjustments as a new Version</source>
+        <translation>将调整作为新版本粘贴</translation>
+    </message>
+    <message>
+        <source>Paste failed</source>
+        <translation>粘贴失败</translation>
     </message>
 </context>
 <context>

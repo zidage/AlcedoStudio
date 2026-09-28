@@ -21,7 +21,8 @@ namespace alcedo {
 
 /// Transferable item kinds on one node. @ref Adjustment requires
 /// @ref AdjustmentTransferItemSelection::adjustment_id; the other kinds describe
-/// one complete node value each.
+/// one complete node value each. The Develop kinds are valid only on the
+/// Develop endpoint.
 enum class AdjustmentTransferItemKind : std::uint8_t {
   NodeEnabled,
   NodeMix,
@@ -30,6 +31,16 @@ enum class AdjustmentTransferItemKind : std::uint8_t {
   Masks,
   /// Complete DRT parameter value of the DRT/Post endpoint. Indivisible.
   DrtParameters,
+  /// Develop `raw_decode` field: demosaic, highlight reconstruction, and RAW
+  /// white balance flags.
+  RawDecode,
+  /// Develop `color_temp` field: white balance mode and custom CCT/tint.
+  WhiteBalance,
+  /// Develop `lens_calib` field: lens correction flags, scale, projection, and
+  /// lens profile choice.
+  LensCalibration,
+  /// Document geometry (`crop_rotate`): normalized crop, rotation, expand-to-fit.
+  Geometry,
 };
 
 /**
@@ -107,15 +118,38 @@ struct TransferDrtPostValue {
 };
 
 /**
- * @brief Portable sparse Color Grade, Mask, and DRT/Post selection for Paste.
+ * @brief Sparse Develop and geometry transfer entry.
  *
- * Contains only selected values. Does not contain Develop, RAW metadata,
- * geometry, history, Version ids, cache paths, or UI state. @p fingerprint_ is
- * a hash of the canonical JSON without that field.
+ * Each present value holds only the keys its field owns (see
+ * @ref FieldOwnedParameterJson), never the import-bound camera profile or
+ * as-shot white balance of the source image. @p geometry holds the complete
+ * document geometry value. Does not store target node identity.
+ */
+struct TransferDevelopValue {
+  std::optional<nlohmann::json> raw_decode;
+  std::optional<nlohmann::json> color_temp;
+  std::optional<nlohmann::json> lens_calib;
+  std::optional<nlohmann::json> geometry;
+
+  [[nodiscard]] auto Empty() const -> bool {
+    return !raw_decode.has_value() && !color_temp.has_value() && !lens_calib.has_value() &&
+           !geometry.has_value();
+  }
+};
+
+/**
+ * @brief Portable sparse Develop, geometry, Color Grade, Mask, and DRT/Post
+ *        selection for Paste.
+ *
+ * Contains only selected values. Does not contain the camera profile, as-shot
+ * white balance, history, Version ids, cache paths, or UI state. @p fingerprint_
+ * is a hash of the canonical JSON without that field.
  */
 struct AdjustmentTransferPackage {
   std::string                          schema_ = std::string{kAdjustmentTransferSchema};
   std::uint32_t                        document_format_version_ = kPipelineDocumentFormatVersion;
+  /// Selected Develop fields and document geometry.
+  TransferDevelopValue                 develop_;
   /// Included Color Grades in source backbone order.
   std::vector<TransferColorGradeValue> color_grades_;
   /// Source default Grade when it is part of the selection; empty otherwise.
@@ -125,7 +159,7 @@ struct AdjustmentTransferPackage {
 
   /// True when nothing transferable was selected anywhere in the package.
   [[nodiscard]] auto Empty() const -> bool {
-    return color_grades_.empty() && drt_post_.Empty();
+    return develop_.Empty() && color_grades_.empty() && drt_post_.Empty();
   }
 };
 

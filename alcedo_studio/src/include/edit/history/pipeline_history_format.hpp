@@ -34,7 +34,7 @@ namespace alcedo {
  * | Immutable root serialized pipeline state | @ref kRootStateFormatVersion | 5 |
  * | Checkpoint serialized pipeline state | @ref kCheckpointStateFormatVersion | 5 |
  * | Mini-Git WAL record | @ref kMiniGitJournalRecordFormatVersion | 6 |
- * | Transfer package schema | @ref kAdjustmentTransferSchema | alcedo.adjustment_transfer.v6 |
+ * | Transfer package schema | @ref kAdjustmentTransferSchema | alcedo.adjustment_transfer.v7 |
  */
 
 /// Project metadata version written by SaveProject and required on open.
@@ -72,6 +72,6 @@ inline constexpr std::uint32_t kMiniGitJournalRecordFormatVersion = 6;
 
 /// Adjustment Transfer package `schema` string. v5 packages are rejected without
 /// conversion.
-inline constexpr std::string_view kAdjustmentTransferSchema = "alcedo.adjustment_transfer.v6";
+inline constexpr std::string_view kAdjustmentTransferSchema = "alcedo.adjustment_transfer.v7";
 
 }  // namespace alcedo

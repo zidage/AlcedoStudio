@@ -170,6 +170,22 @@ auto EditorHistoryTransfer::PasteLiveRootRelativeVersion(
     return false;
   }
 
+  // Project the panels from the pasted document before publishing, as Version
+  // checkout does. Without it every panel (LUT included) keeps the prior
+  // Version values after the paste.
+  alcedo::NodeId                pasted_projection_node_id = state->panel_projection_node_id;
+  alcedo::EditorPanelProjection pasted_projection;
+  try {
+    if (!ProjectPanelFieldsForDocument(*pasted_document, &pasted_projection_node_id,
+                                       &pasted_projection, error)) {
+      (void)rollback_after_version();
+      return false;
+    }
+  } catch (const std::exception& ex) {
+    (void)rollback_after_version();
+    return SetError(error, ex.what());
+  }
+
   const auto prepared_edit = state->history->PrepareAppendEdit(prepared.batch);
   if (!prepared_edit.ready) {
     if (!rollback_after_version()) {
@@ -186,10 +202,13 @@ auto EditorHistoryTransfer::PasteLiveRootRelativeVersion(
     return SetError(error, appended.error.empty() ? "Paste WAL append failed" : appended.error);
   }
 
-  // Swap phase: the new Version head is published, so bind its document. This cannot fail.
+  // Swap phase: the new Version head is published, so bind its document and its
+  // panel projection. This cannot fail.
   {
     auto render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
     (void)alcedo::BindLivePipelineDocument(*state->pipeline_guard, std::move(pasted_document));
+    state->panel_projection_node_id = std::move(pasted_projection_node_id);
+    state->panel_projection         = std::move(pasted_projection);
   }
 
   state_.RecordPublishedRenderReason(alcedo::RenderReasonForBatch(prepared.batch));

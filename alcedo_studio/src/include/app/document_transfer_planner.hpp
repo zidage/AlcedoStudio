@@ -94,9 +94,11 @@ struct DocumentTransferPasteOptions {
 };
 
 /**
- * @brief Plans one root-relative Paste batch from a sparse v6 transfer package.
+ * @brief Plans one root-relative Paste batch from a sparse v7 transfer package.
  *
- * Starts from the target immutable root document, materializes each selected
+ * Starts from the target immutable root document, applies the selected Develop
+ * fields and geometry to the target root Develop node and document geometry
+ * (the target camera profile and as-shot white balance stay), materializes each selected
  * Color Grade from clean catalog defaults, applies only the selected source
  * values, applies the selected DRT/Post values to the target root DRT/Post
  * node, and remaps every transferred identity to a collision-free target

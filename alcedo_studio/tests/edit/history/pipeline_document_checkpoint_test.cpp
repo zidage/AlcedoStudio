@@ -64,7 +64,7 @@ TEST(PipelineHistoryFormatTable, PublishedConstantsIdentifyTheDocumentHistoryCut
   EXPECT_EQ(kRootStateFormatVersion, 5u);
   EXPECT_EQ(kCheckpointStateFormatVersion, 5u);
   EXPECT_EQ(kMiniGitJournalRecordFormatVersion, 6u);
-  EXPECT_EQ(kAdjustmentTransferSchema, "alcedo.adjustment_transfer.v6");
+  EXPECT_EQ(kAdjustmentTransferSchema, "alcedo.adjustment_transfer.v7");
   EXPECT_TRUE(project_pack::ProjectVersionIsSupported(kProjectFileVersion));
   EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.8.0"));
   EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.7.0"));

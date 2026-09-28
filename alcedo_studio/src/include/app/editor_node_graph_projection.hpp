@@ -71,6 +71,8 @@ struct EditorNodeGraphSnapshot {
   std::uint64_t                         session_generation = 0;
   std::vector<EditorNodeProjection>     nodes;
   std::vector<EditorNodeEdgeProjection> edges;
+  /// Document default Color Grade identity; empty when the document has none.
+  NodeId                                default_grade_id;
 
   auto operator==(const EditorNodeGraphSnapshot&) const -> bool = default;
 };

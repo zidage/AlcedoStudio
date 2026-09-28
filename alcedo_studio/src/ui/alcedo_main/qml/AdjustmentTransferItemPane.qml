@@ -38,6 +38,8 @@ Item {
         case 3: return qsTr("LUT")
         case 4: return qsTr("Display Transform")
         case 5: return qsTr("Masks")
+        case 6: return qsTr("RAW")
+        case 7: return qsTr("Geometry")
         }
         return qsTr("Other")
     }
