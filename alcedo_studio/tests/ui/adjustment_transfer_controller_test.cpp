@@ -28,6 +28,7 @@
 #include "ui/alcedo_main/album_backend/adjustment_transfer_dialog_model.hpp"
 #include "ui/alcedo_main/album_backend/adjustment_transfer_list_models.hpp"
 #include "ui/alcedo_main/album_backend/application_module_host.hpp"
+#include "ui/alcedo_main/album_backend/interaction_policy_controller.hpp"
 #include "ui/alcedo_main/album_backend/library_module.hpp"
 #include "ui/alcedo_main/album_backend/project_module.hpp"
 
@@ -221,13 +222,24 @@ TEST_F(AdjustmentTransferControllerTest, MultiTargetCoordinatorRefreshesOnlySucc
       QVariantMap{{"elementId", static_cast<uint>(target.file_id_)},
                   {"imageId", static_cast<uint>(target.image_id_)}},
   };
-  const auto paste = transfer->Paste(targets, QStringLiteral("paste"));
+  // Library targets paste on a worker thread; the result arrives on the owner
+  // thread through PasteFinished while the task locks further pastes.
+  QSignalSpy finished_spy(transfer, &AdjustmentTransferController::PasteFinished);
+  const auto started = transfer->Paste(targets, QStringLiteral("paste"));
+  ASSERT_TRUE(started.value("success").toBool()) << started.value("message").toString().toStdString();
+  EXPECT_TRUE(started.value("pending").toBool());
+  EXPECT_TRUE(transfer->paste_in_progress());
+  EXPECT_FALSE(backend.interaction_policy()->CanPasteAdjustments());
+  ASSERT_TRUE(finished_spy.wait(60000));
+  const auto paste = finished_spy.front().front().toMap();
   EXPECT_EQ(paste.value("appliedCount").toInt(), 1);
   EXPECT_EQ(paste.value("failureCount").toInt(), 0);
+  EXPECT_FALSE(transfer->paste_in_progress());
+  EXPECT_TRUE(backend.interaction_policy()->CanPasteAdjustments());
   ASSERT_EQ(refreshed_spy.size(), 1);
   EXPECT_EQ(refreshed_spy.front().front().toUInt(), static_cast<uint>(target.file_id_));
 
-  // A package the planner rejects: empty sparse v6 carries nothing
+  // A package the planner rejects: an empty sparse package carries nothing
   // transferable, so the apply fails before any graph mutation.
   alcedo::AdjustmentTransferPackage empty_package;
   ASSERT_TRUE(empty_package.Empty());

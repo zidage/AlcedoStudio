@@ -213,6 +213,8 @@ auto BackgroundTaskController::KindToString(BackgroundTaskKind kind) -> QString 
       return QStringLiteral("export");
     case BackgroundTaskKind::EditorSave:
       return QStringLiteral("editorSave");
+    case BackgroundTaskKind::AdjustmentPaste:
+      return QStringLiteral("adjustmentPaste");
   }
   return QStringLiteral("unknown");
 }

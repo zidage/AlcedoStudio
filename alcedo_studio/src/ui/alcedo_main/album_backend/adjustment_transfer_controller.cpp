@@ -4,6 +4,7 @@
 
 #include "ui/alcedo_main/album_backend/adjustment_transfer_controller.hpp"
 
+#include <algorithm>
 #include <memory>
 #include <unordered_set>
 #include <vector>
@@ -73,17 +74,25 @@ auto MakeTargetIds(const std::vector<ExportTarget>& targets) -> std::vector<sl_e
 
 }  // namespace
 
-AdjustmentTransferController::AdjustmentTransferController(ProjectModule*       project,
-                                                           LibraryModule*       library,
-                                                           ImportExportHandler* import_export,
-                                                           QObject*             parent)
+AdjustmentTransferController::AdjustmentTransferController(
+    ProjectModule* project, LibraryModule* library, ImportExportHandler* import_export,
+    BackgroundTaskController* background_tasks, QObject* parent)
     : QObject(parent),
       project_(project),
       library_(library),
       import_export_(import_export),
       dialog_model_(new AdjustmentTransferDialogModel(this)),
-      apply_coordinator_(
-          std::make_unique<AdjustmentTransferApplyCoordinator>(project, library, this)) {}
+      apply_coordinator_(std::make_unique<AdjustmentTransferApplyCoordinator>(
+          project, library, background_tasks, this)) {
+  connect(apply_coordinator_.get(), &AdjustmentTransferApplyCoordinator::RunningChanged, this,
+          &AdjustmentTransferController::PasteInProgressChanged);
+  connect(apply_coordinator_.get(), &AdjustmentTransferApplyCoordinator::ApplyFinished, this,
+          &AdjustmentTransferController::PasteFinished);
+}
+
+void AdjustmentTransferController::SetEditorSession(EditorSessionController* editor_session) {
+  editor_session_ = editor_session;
+}
 
 auto AdjustmentTransferController::PrepareCopy(uint elementId) -> QVariantMap {
   auto pipeline_service = project_->handler().pipeline_service();
@@ -98,11 +107,17 @@ auto AdjustmentTransferController::PrepareCopy(uint elementId) -> QVariantMap {
     const auto guard =
         pipeline_service->LoadEditorPipeline(static_cast<sl_element_id_t>(elementId));
     if (!guard || !guard->commit_graph_ || !guard->root_document_) {
+      pipeline_service->ReleasePipelineUse(guard);
       return ErrorResult(Tr("Pipeline was not available."));
     }
 
+    // The dialog model keeps shared ownership of the graph and root it reads, so
+    // this read-only use returns its cache pin at once.
     std::string error;
-    if (!dialog_model_->OpenSource(guard->commit_graph_, guard->root_document_, &error)) {
+    const bool  opened =
+        dialog_model_->OpenSource(guard->commit_graph_, guard->root_document_, &error);
+    pipeline_service->ReleasePipelineUse(guard);
+    if (!opened) {
       return ErrorResult(QString::fromStdString(error));
     }
 
@@ -149,11 +164,47 @@ auto AdjustmentTransferController::Paste(const QVariantList& targetEntries, cons
   }
 
   const auto targets = import_export_->CollectExportTargets(targetEntries);
-  const auto ids     = MakeTargetIds(targets);
+  auto       ids     = MakeTargetIds(targets);
   if (ids.empty()) {
     return ErrorResult(Tr("No target images selected."));
   }
-  return apply_coordinator_->ApplyToTargets(*copied_package_, ids, Tr("Pasted Adjustments"));
+
+  // The editor session owns the history of the image it has open. Loading that
+  // pipeline here would change its graph behind the session, so its Versions
+  // panel would miss the new Version. Paste it through the session queue.
+  QString editor_message;
+  bool    editor_pasted = false;
+  if (editor_session_ && editor_session_->has_image()) {
+    const auto editor_id = static_cast<sl_element_id_t>(editor_session_->element_id());
+    const auto found     = std::find(ids.begin(), ids.end(), editor_id);
+    if (found != ids.end()) {
+      ids.erase(found);
+      const auto session_result = SessionResultMap(
+          editor_session_->PasteAdjustmentPackage(*copied_package_, Tr("Pasted Adjustments")));
+      editor_pasted  = session_result.value("success").toBool();
+      editor_message = session_result.value("message").toString();
+      if (!editor_pasted && ids.empty()) {
+        return ErrorResult(editor_message.isEmpty() ? Tr("Editor Paste failed.") : editor_message);
+      }
+    }
+  }
+  if (ids.empty()) {
+    QVariantMap result = SuccessResult(Tr("Adjustments pasted."));
+    result.insert("pending", false);
+    return result;
+  }
+
+  QString error;
+  if (!apply_coordinator_->StartApplyToTargets(*copied_package_, std::move(ids),
+                                               Tr("Pasted Adjustments"), &error)) {
+    return ErrorResult(error);
+  }
+  QVariantMap result = SuccessResult(Tr("Pasting adjustments…"));
+  result.insert("pending", true);
+  if (!editor_pasted && !editor_message.isEmpty()) {
+    result.insert("editorMessage", editor_message);
+  }
+  return result;
 }
 
 auto AdjustmentTransferController::PasteIntoEditor(QObject* editorSession) -> QVariantMap {

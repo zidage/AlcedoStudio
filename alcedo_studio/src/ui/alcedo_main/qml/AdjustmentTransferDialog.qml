@@ -43,7 +43,8 @@ Dialog {
 
     signal copyAccepted()
     signal pasteAccepted(string strategy)
-    signal pasteDiscarded()
+    // Paste mode was closed without pasting. The copied package stays available.
+    signal pasteCanceled()
 
     readonly property bool copyMode: mode === "copy"
     readonly property string selectedSourceVersionId:
@@ -430,7 +431,7 @@ Dialog {
                         text: qsTr("Cancel")
                         onClicked: {
                             if (!dialog.copyMode) {
-                                dialog.pasteDiscarded()
+                                dialog.pasteCanceled()
                             }
                             dialog.close()
                         }
