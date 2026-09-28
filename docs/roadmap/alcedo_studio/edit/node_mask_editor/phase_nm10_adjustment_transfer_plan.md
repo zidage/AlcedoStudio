@@ -134,7 +134,8 @@ The node column contains:
 - each Color Grade on the source image backbone;
 - one `DRT and Post Processing` endpoint row.
 
-The column does not contain Develop, RAW decode, camera data, lens identity, or geometry.
+Superseded on 2026-09-27 (Section 20): the column starts with one `RAW and Geometry` row
+for the Develop endpoint. It never lists camera data.
 The source backbone order defines the Color Grade order.
 Canvas position, creation time, and display-name sorting do not change this order.
 
@@ -378,17 +379,13 @@ The package is not empty when it contains a selected DRT/Post item.
 
 ### 3.6 Target image data
 
-Paste preserves these target values:
+Superseded on 2026-09-27 (Section 20). Paste applies the selected RAW Decode, White
+Balance, Lens Correction, and Crop and Rotate values. Paste always preserves these target
+values:
 
-- Develop endpoint;
 - RAW metadata;
-- camera profile;
-- lens identity;
-- geometry;
+- camera profile and as-shot white balance;
 - target image root identity.
-
-Paste does not transfer these source values.
-NM10 does not add an option to transfer geometry.
 
 ### 3.7 Package format
 
@@ -444,8 +441,6 @@ NM10 does not include:
 - History or Version repair work that the user confirmed as resolved;
 - pipeline Merge;
 - current-Version merge semantics;
-- geometry transfer;
-- RAW or lens transfer;
 - one-checkbox-per-Mask selection;
 - Mask preview thumbnails in this dialog;
 - Brush product enablement;
@@ -2435,7 +2430,8 @@ Stop implementation and update this plan when:
 - [ ] v5 import fails with no implicit conversion.
 - [ ] Partial Grades use clean defaults for unselected values.
 - [ ] DRT-only transfer keeps the target root Grade chain.
-- [ ] Paste preserves target Develop, RAW, camera, lens, geometry, and root identity.
+- [ ] Paste applies only selected Develop fields and geometry, and preserves the target
+      camera profile, as-shot white balance, and root identity.
 - [ ] Paste remaps every transferred identity.
 - [ ] One Paste creates one root-relative Version and one typed commit.
 - [ ] Failure creates no partial Version or published target state.
@@ -2446,3 +2442,58 @@ Stop implementation and update this plan when:
 
 Do not mark NM10 complete during plan creation.
 Add dated completion records after each implemented phase.
+
+---
+
+## 20. Adjustment Transfer audit fixes (2026-09-27)
+
+Branch: `fix/adjustment-transfer-audit` from `main` at `58e548fef`.
+
+### 20.1 Decision record
+
+The user reported that Adjustment Transfer was broken in both the UI and the logic. The user
+decided that RAW decode parameters and geometry are required. Transfer must have complete
+parameter-transfer and batch-adjustment behavior. This decision replaces the exclusions in
+Sections 2.3, 3.6, and 4.2.
+
+### 20.2 Reported defects and root causes
+
+| Report | Root cause | Fix |
+| --- | --- | --- |
+| RAW decode and geometry cannot be transferred | The catalog, package, and planner had no Develop or geometry item. | New `RAW and Geometry` node row with `RawDecode`, `WhiteBalance`, `LensCalibration`, and `Geometry` items. Package schema v7 adds a sparse `develop` entry. The planner writes one `SetParameterChange` per selected field. |
+| Library Paste blocks the UI thread with no progress | `AdjustmentTransferApplyCoordinator::ApplyToTargets` ran load, rebuild, persistence, and a whole-cache `Sync()` on the UI thread. It also packaged the project after every Paste. | `StartApplyToTargets` runs the per-target work on a worker thread. It registers one `AdjustmentPaste` background task with locks. The UI thread only refreshes thumbnails and changed HDR flags. The redundant global `Sync()` is gone. |
+| Library Paste does not show the new Version in the Versions panel | The coordinator loaded the pipeline of the image open in the editor and changed its graph behind `EditorSessionService`. | `AdjustmentTransferController::Paste` routes the editor image through `EditorSessionController::PasteAdjustmentPackage`. |
+| `Paste adjustments as a new Version` is in Edit History | UI placement. | The button moved to the Versions panel header with the `clipboard.svg` icon. |
+| The LUT panel shows pre-Paste values after Paste | `EditorHistoryTransfer::PasteLiveRootRelativeVersion` bound the pasted document but never re-projected the panels. Version checkout does re-project. | The pasted document's panel projection is built before the WAL publish and bound with the document. |
+| After a filmstrip switch the LUT panel does not apply a LUT until the panel changes | `EditorNodeController::DefaultSelectedNodeId` accepted only the literal `grade.primary`. Paste remaps every Grade identity, so pasted images had no selected node, and `CompleteSelectedNodeParameterTarget` rejected every LUT write. A selected node that disappeared after Paste also left the selection empty. | The default selection uses the document default Grade (`EditorNodeGraphSnapshot::default_grade_id`), then the first Grade. A vanished selection falls back to that Grade and is restored if the node returns. |
+| Occasionally the node cannot be switched in the Copy dialog | Not reproduced statically. See 20.4. | — |
+
+Other defects found during the audit:
+
+- `AdjustmentTransferController::PrepareCopy` never released the cache pin it took with
+  `LoadEditorPipeline`. It now calls `ReleasePipelineUse`.
+- Cancel in Paste mode called `Discard()` and removed the copied package. Cancel now keeps
+  the package, so the same adjustments can be pasted onto another selection.
+
+### 20.3 Develop transfer rules
+
+- Package values hold only `FieldOwnedParameterJson` keys: `raw_decode`
+  (`demosaic_method`, `highlights_reconstruct`, `use_camera_wb`, `user_wb`), `color_temp`
+  (`wb_mode`, `custom_cct`, `custom_tint`), and `lens_calib` (all 13 lens keys).
+  `camera_profile` and `as_shot_*` never enter a package.
+- `geometry` is the complete `ImageGeometryModel::ToJson` value: normalized crop, rotation,
+  and expand-to-fit.
+- Import rejects a Develop value with an unowned key and validates every value through
+  `ApplyEditorParameterPatch` on a default document.
+- The Copy dialog focuses the first Color Grade on open. The `RAW and Geometry` row comes
+  first in backbone order.
+
+### 20.4 Open items
+
+- Copy-dialog node switching: `FocusNode`, the list models, and the node pane delegates
+  show no deterministic failure. One path shows an empty node column: replay of the active
+  Version fails in `OpenSource`, and the dialog shows only the replay error. A reproduction
+  is needed.
+- The Develop item display names come from C++ English strings, like the existing items.
+  They are not translated.
+
