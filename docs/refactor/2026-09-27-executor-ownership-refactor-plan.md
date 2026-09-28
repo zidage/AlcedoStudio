@@ -627,7 +627,7 @@ Suite totals：
   - `EditorSessionRenderSchedulerPortTest` 5 个、`EditorSessionCommandQueueBaselineTest.RapidImageSelectionKeepsRunningTargetAndReplacesOnlyUnstartedSelection`、`EditorSessionActionPolicyCq3Test.AdjustmentPanelsReloadOnlyWhenCommittedContentChanges`：把 `alcedo_studio/src` 与 `editor_session_render_scheduler_port_test.cpp` 还原到基线后重编这三个目标，同样这 7 个失败（与 P2 记录一致）。
   - `GpuDagOpenClWorkspaceTest` 2 个：P1 记录的测试清理缺陷（残留的 `opencl/edit/runtime/opencl/shader/` 目录）。
 - `ThumbnailServiceTest`（排除 FuzzScroll）：23 通过，2 失败，均为 P1 已记录的预存问题（`MissingPipelineThrows`、`MissingImageThrows`）。P2 记录中另外 3 个与 pin 计数 / 盘缓存相关的失败本次通过（它们是时序相关的，不作为 P3 的结论）。
-- Metal：本机无 macOS，`metal_renderer_test.cpp`、`metal_nm2_qualification_test.cpp`、`renderer_metal_instantiate_test.cpp` 与 `metal_full_pipeline_preview_test.cpp`（不在任何 CMake 目标中）只做了文本迁移，未编译。
+- macOS（Apple Silicon，macOS 27.0，`build/macos-debug`，tests ON）：全量构建 0 错误。`GpuDagMetal*Test` 与 executor / pipeline 相关套件共 561 个，548 通过，13 失败，全部预存：`EditorSessionRenderSchedulerPortTest` 5 个（与 Windows 相同）；`GpuDagMetalDevelopTest` 2 个、`GpuDagMetalGradeTest` 5 个、`GpuDagMetalRendererTest.InteractiveQualityBaseInteractiveReuses2560PixelResults`——在同一台机器上切到 P2（`05277e9be`）重编这三个目标，同样这 8 个失败。`metal_full_pipeline_preview_test.cpp` 不在任何 CMake 目标中，只做了文本迁移。`ExecutorSnapshotRenderTest` 的 5 个 GPU 用例在 Mac 上跳过（该检出没有样例 RAW 的 Git LFS 内容），像素比较只在 CUDA 上完成；`ExecutorRoleTest` 2 个通过。
 - 完整 ctest 按 AGENTS.md 未运行。
 
 **Checklist / exit condition：**
