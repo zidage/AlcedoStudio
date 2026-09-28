@@ -60,6 +60,7 @@ set(EDIT_GRAPH_SRCS
     ${ALCEDO_SRC_ROOT}/edit/operators/models/curve_model.cpp
     ${ALCEDO_SRC_ROOT}/edit/operators/models/hls_model.cpp
     ${ALCEDO_SRC_ROOT}/edit/operators/models/lmt_model.cpp
+    ${ALCEDO_SRC_ROOT}/edit/operators/models/parameter_revision.cpp
     ${ALCEDO_SRC_ROOT}/edit/operators/models/sharpen_model.cpp
     ${ALCEDO_SRC_ROOT}/edit/graph/adjustment_ownership.cpp
     ${ALCEDO_SRC_ROOT}/edit/graph/color_grade_node_model.cpp

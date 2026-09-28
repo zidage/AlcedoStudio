@@ -30,7 +30,8 @@ struct PassEncoder {
    * @throws std::runtime_error when no backend specialization exists.
    */
   template <class Device>
-  static void Encode(Device&, const ExecutionPlan&, const PreparedRawInput&, PipelineDocument&) {
+  static void Encode(Device&, const ExecutionPlan&, const PreparedRawInput&,
+                     const PipelineDocument&) {
     throw std::runtime_error(std::string("PassEncoder: no specialization for ") +
                              GpuPassKindName(Kind));
   }

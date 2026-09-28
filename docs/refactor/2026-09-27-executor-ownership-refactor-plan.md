@@ -262,6 +262,121 @@ PipelineDocumentCopyCostTest.exe                               # 两次
 - P0 测试 1 通过。
 - 编辑器增量渲染的命中统计（`RenderSessionStats`、`PassStats`）与基线一致，即没有因改协议退化成全量重算。
 
+##### Phase P1 completion record (2026-09-28)
+
+**Status:** complete — 渲染路径只读文档；dirty 位协议已整体删除，改为进程级 revision 戳 + 各渲染 workspace 自己记录"上次应用的 revision"。
+P0 测试 1（审计 R7）已启用并通过；编辑器增量渲染的逐帧命中统计与基线逐项一致。
+
+**实现要点（与计划条目的对应）：**
+
+| 计划条目 | 实现 |
+|---|---|
+| 进程级单调计数器 | `edit/operators/models/parameter_revision.{hpp,cpp}`：`ParameterRevision`、`kNoParameterRevision`、`NextParameterRevision()`（EditGraph 内唯一定义，跨 DLL 共用一个计数器）。比较一律用 `!=`：无关 Model 可能带更小的戳 |
+| `IOperatorModel` revision | `Revision()`、`FieldsRevision(DirtyFieldMask)`（所选字段组内最新的戳）、`CopyRevisionsFrom()`（仅文档克隆使用）。`OperatorModelBase` 用按字段枚举位宽确定的定长数组保存逐字段戳；新 Model 构造时所有字段盖一次新戳；等值写入不盖戳 |
+| 删除 dirty 接口 | 删除 `IsDirty` / `DirtyFields` / `TakeDirtyPatch` / `TakeDirtyFields` / `RestoreDirty` / `MarkAllDirty`、`pending_parameter_patch.hpp`（`PendingParameterPatch`、`TakePending*`）以及只为它服务的 `OperatorParamPatchDto`。`DirtyFieldMask` 保留，语义改为"字段选择掩码" |
+| `topology_dirty_` → `TopologyRevision()` | `PipelineDocument::TopologyRevision()` / `MarkTopologyChanged()`。生产代码里原本只有 `CollectAndPropagate` 读它（且只是清掉），现在渲染侧没有读者 |
+| mix dirty → `MixRevision()` | `ColorGradeNodeModel::MixRevision()`；`SetEnabled` / `SetMix` 值变化时盖戳 |
+| `ParameterArena` 每槽 `applied_revision` | `WritePackedSlot(..., applied_revision)`、`AppliedRevision(key)`；`BindSlot` / `Clear` 清除记录。`BindOrRefreshGradeRuntimeSlot` 改为"槽缺失或 `AppliedRevision != model.Revision()` 时打包"，返回 `bool`。Metal DRT/Post 邻域槽同此 |
+| DRT 显示参数 | 三个后端的 `BindDisplayParams`：槽缺失、DRT revision 变化、或本帧有导出色彩覆盖时打包；覆盖写入记为 `kNoParameterRevision`，所以下一个普通帧必然重新打包 |
+| `CollectAndPropagate` | 签名改为 `const PipelineDocument&`。自存 last-seen：Develop 传感器字段组 / 白平衡字段组各一个戳、DRT 参数戳、按 `(owner node, adjustment instance)` 的调整戳、按 grade 的 mix 戳。调整与 mix 的表每帧按当前实例重建，删除后重新加入的 ID 视为变化。`AdvanceDocumentEpoch` / `Clear` 一并清空 |
+| 各 pass 签名 | CUDA / OpenCL / Metal 的 develop、camera_color、primary grade、DRT、pass encoder、`PlanExecutor`、`BasicRenderDevice::Execute`、`GradeExecutor`、`DrtPostExecutor` 全部改为 `const PipelineDocument&` / const Model。develop 与 camera_color 中只"取走再提交" dirty 位的代码删除 |
+| 克隆保留 revision | `ClonePipelineDocument` 在 JSON 往返并重绑 DNG profile 之后，按节点 ID / 调整实例 ID 复制 Develop、DRT、各 grade（含 mix）的戳和拓扑戳 |
+| 渲染器持有只读文档 | `Renderer<Backend>::document_` 与 `PipelineExecutor::pipeline_document_` 改为 `shared_ptr<const PipelineDocument>`；`GpuDagDocument()` 返回 const（调用方只做指针比较） |
+
+**上传失败语义（与计划原文不同）：** 计划写的是"上传失败时不前进 `applied_revision`"。实现在打包进 host 镜像时就记录 revision：
+`ParameterArena::UploadDirty` 失败时把合并后的区间重新排队、host 字节保留，下一次上传必然送达同一份字节。
+为失败再设一个"待提交 revision"不会改变任何可观察结果（AGENTS.md：没有可执行交错就不加一致性机制）。
+`GradeRuntimeSlotFailedUploadKeepsPackedBytesQueued` 与三个后端的 `ParameterUploadFailureKeepsPackedBytesQueuedUntilRetry` 固定这一行为。
+
+**主调用链（成功路径）：**
+
+```text
+编辑器滑块 → ApplyEditorParameterPatch
+  -> ExposureModel::SetValue → OperatorModelBase::MutateWithDirtyFields → 变化字段盖 NextParameterRevision()
+渲染（任意 workspace：编辑器 session device 或 one-shot device）
+  -> Renderer<Backend>::Render（const 文档）→ BasicRenderDevice::Execute → PlanExecutor::Execute
+  -> BasicRenderWorkspace::PrepareResultValidity → RuntimeInvalidationState::CollectAndPropagate(const doc)
+       -> 与本 workspace 的 last-seen revision 比较 → 变化源 GraphValueId 失效并向下游传播 → 更新 last-seen
+  -> GradeExecutor::Execute → BindAndScheduleGrade(const grade)
+       -> BindOrRefreshGradeRuntimeSlot：AppliedRevision != Revision → 打包写入 arena 并记录 revision
+  -> DrtPostExecutor::Execute → Ops::BindDisplayParams(const drt)（同上）
+  -> ParameterArena::UploadDirty → GPU 执行 → 发布结果
+  -> 文档未被写；另一个 workspace 之后渲染同一文档时，按自己的 last-seen 再次发现同一变化
+```
+
+**失败路径：**
+
+```text
+参数上传失败 → UploadDirty 重新排队区间并抛出 → CancelRender，结果不发布（completed 不前进）
+  -> 下一帧：required 仍领先 completed，受影响结果重算；arena 记录的 revision 与 Model 相同，不重复打包，
+     重新排队的字节随下一次 UploadDirty 送达
+导出色彩覆盖帧 → DRT 显示槽记为 kNoParameterRevision → 下一个普通帧必然重新打包
+历史恢复（*document = 编辑前的克隆）→ 克隆带编辑前的戳，与 last-seen 不等 → 受影响调整失效
+  （RestoredOlderDocumentInvalidatesChangedAdjustment）
+```
+
+**退出条件：**
+
+- [x] 渲染路径没有文档的非 const 引用：在 `edit/runtime`、`include/edit/runtime`、`renderer`、`edit/pipeline` 中 grep `PipelineDocument&`、`shared_ptr<PipelineDocument>` 和非 const Model 引用，结果为零（`Renderer` 与 `PipelineExecutor` 持有 `shared_ptr<const PipelineDocument>`）。
+- [x] P0 测试 1 通过：`ExecutorIsolationTest.EditorSessionRenderShowsParameterChangeAfterInterleavedOneShot` 已去掉 `DISABLED_` 并通过。同一测试在基线源码上仍失败（均值 0.635 < 0.762×1.2，最大差 0.273，与 P0 记录一致）。
+- [x] 编辑器增量命中统计与基线一致：新增 `ExecutorIsolationTest.EditorSessionEditSequenceReexecutesOnlyPassesDownstreamOfTheEdit`，经真实 `PipelineExecutor` 跑 7 帧（首帧、无改动、曝光、阴影 LLF、grade mix、白平衡、无改动），逐帧打印 `GpuNodePassStats` 与 plan cache 计数。把 `alcedo_studio/src` 换回基线（`5e11cbc84`）并重编同一测试后，**7 帧的全部计数逐项相同**：
+
+| 帧 | sensor 执行/跳过 | camera 执行/跳过 | grade 执行 | drt 执行/跳过 | content hits | revision misses | plan hit/miss |
+|---|---|---|---|---|---|---|---|
+| 0 首帧 | 1/0 | 1/0 | 1 | 1/0 | 0 | 0 | 0/1 |
+| 1 无改动 | 0/1 | 0/1 | 1 | 0/1 | 4 | 0 | 1/0 |
+| 2 曝光 | 0/1 | 0/1 | 1 | 1/0 | 3 | 1 | 1/0 |
+| 3 阴影（LLF） | 0/1 | 0/1 | 1 | 1/0 | 3 | 1 | 1/0 |
+| 4 grade mix | 0/1 | 0/1 | 1 | 1/0 | 7 | 1 | 1/0 |
+| 5 白平衡 | 0/1 | 1/0 | 1 | 1/0 | 2 | 3 | 1/0 |
+| 6 无改动 | 0/1 | 0/1 | 1 | 0/1 | 8 | 0 | 1/0 |
+
+grade 每帧都执行是既有设计（Grade `scene_output` 从不发布，见 `GradeExecutor::Execute` 注释），两种协议相同。
+该对比只在 CUDA 上测量；OpenCL 由 `GpuDagOpenClGradeTest` / `GpuDagOpenClWorkspaceTest` 既有的增量断言覆盖；Metal 未编译（见下）。
+
+**What was proven (executed tests)：**
+
+| 名称 / 条目 | 目标 | 结果 |
+|---|---|---|
+| `EditorSessionRenderShowsParameterChangeAfterInterleavedOneShot`（P0 测试 1，已启用） | `ExecutorIsolationTest` | PASS（基线 FAIL） |
+| `EditorSessionEditSequenceReexecutesOnlyPassesDownstreamOfTheEdit` | `ExecutorIsolationTest` | PASS，计数与基线相同 |
+| `ParameterChangeInvalidatesEveryStateThatReadsTheDocument`（R7 单元级） | `GpuDagRawInputTest` | PASS |
+| `CollectLeavesEveryDocumentRevisionUnchanged` | `GpuDagRawInputTest` | PASS |
+| `ClonedDocumentWithEqualValuesKeepsPublishedResultsValid`、`RestoredOlderDocumentInvalidatesChangedAdjustment` | `GpuDagRawInputTest` | PASS |
+| `GradeRuntimeSlotPackingInOneArenaLeavesOtherArenaStale`、`GradeRuntimeSlotWritesPackedBytesOnlyWhenModelRevisionChanges`、`GradeRuntimeSlotFailedUploadKeepsPackedBytesQueued` | `GpuDagRawInputTest` | PASS |
+| `parameter_revision_test.cpp`（替代 `dirty_patch_test.cpp`，12 个：并发唯一、等值写不变、字段组、克隆保留、克隆后写只影响克隆、拒绝异类型拷贝等） | `GpuDagModelGraphTest` | PASS |
+| 改写的 dirty 断言（命令服务、默认管线、拓扑命令、编辑器上下文 / 面板投影、复制目录、CUDA / OpenCL workspace 与 grade） | 各目标 | PASS |
+
+Commands（PowerShell，PATH 前置 `build\debug\vcpkg_installed\x64-windows\debug\bin`）：
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 8 --target <下列测试目标> alcedo_main
+ctest --test-dir build/debug -j 1 -R "^(ExecutorIsolationTest|GpuDagModelGraphTest|GpuDagRawInputTest|GraphImageCacheRetentionTest|GpuDagCudaWorkspaceTest|GpuDagCudaDevelopTest|GpuDagCudaMaskTest|GpuDagCudaPrimaryGradeTest|GpuDagOpenClGradeTest|GpuDagOpenClWorkspaceTest|PipelineDocumentCopyCostTest|AdjustmentTransferCatalogTest|EditorAdjustmentContextTest|EditorPanelProjectionTest|EditorPipelineCommandServiceTest|PipelineMapperTest|PipelineSharedUseTest|ExportServiceTest|ImportServiceTest|AdjustmentTransferServiceMiniGitTest|PipelineDngProfileBindingTest|EditorSessionHistoryPortTest|AdjustmentTransferControllerTest)\."
+ctest --test-dir build/debug -j 1 -R "^(AdjustmentTransferServiceMiniGitTest|EditorSessionHistoryPortTest|ImportPipelineDocumentTest|PipelineDngProfileBindingTest|PipelineDocumentRenderTest|PipelineMapperTest|PipelineSchedulerRequestIdTest|PipelineSharedUseTest|ExecutorIsolationTest|ExportServiceTest|ImportServiceTest|AdjustmentTransferControllerTest|GpuDagOpenClWorkspaceTest)\."   # PipelineExecutor 改 const 之后
+ThumbnailServiceTest.exe --gtest_filter=-*FuzzScroll*
+基线对比：git stash push -- alcedo_studio/src → 重编 ExecutorIsolationTest / ThumbnailServiceTest → 运行 → 从 stash 恢复 src
+```
+
+Suite totals：
+
+- 主定向集 709 个：707 通过；2 失败（下述测试环境残留，非 P1）；2 跳过（`InteractiveDagBaselinesDumpCurrentExecutionGpuTimes` 计时转储、`InstalledOpenClPackageBuildsEveryGpuDagProgram` 需要安装目录）；另有 7 个预存 `DISABLED_`（P0 列出的 5 个、P5 的 `ExportDuringUnsettledEditorPreviewUsesCommittedState` 等）。
+- `PipelineExecutor` 改 const 之后的 13 个套件：222/222 通过（包括上面 2 个 OpenCL 测试）。
+- `ThumbnailServiceTest`（排除 FuzzScroll）：21 通过、4 失败，全部预存：P0 已记录的 `OrdinaryThumbnailReusesLiveEditorExecutorAndDocument`、`DiskCacheTracksRootAndActiveHeadAndServesAfterPipelineIsRemoved`，以及 `MissingPipelineThrows`、`MissingImageThrows`（`GetThumbnail` 对缺失的 pipeline / 图片不抛异常；在基线源码上重编后同样失败，因此 P0 记录中"其余非压力测试通过"对这两个不成立）。
+- 完整 ctest 按 AGENTS.md 未运行。
+
+**两个 OpenCL 失败的原因：** `OpenClWorkspaceFixture.OpenClProgramManifestCanLoadFromInstalledResourceLayout` 在测试 exe 旁创建 `opencl/edit/runtime/opencl/shader/`，结束时只删文件不删目录。之后 `OpenClProgramLibrary` 看到该目录就按安装布局找 shader，于是 `OpenClPlanWarmUpBuildsOnlyRequiredProgramsAndKernels` 与 `OpenClSecondEmptyRenderCreatesNoBufferImageProgramOrKernel` 报 "failed to open source file ... geometry_camera.cl"。同一套件第一次运行时目录尚不存在，两者通过；删除空目录后重跑也通过。这是既有测试的清理缺陷，与 P1 无关，本阶段未修改。
+
+**Checklist / exit condition：** 三项退出条件全部满足（见上）。
+
+**LOC note：** 生产代码 54 个文件 +593/−530（大部分是三个后端 pass 的签名改 const），测试 36 个文件 +707/−401。改动文件均低于 1000 行（最大为 `color_grade_node_model.cpp` 526 行、`runtime_invalidation.cpp` 414 行）。`dirty_patch_test.cpp` 改名为 `parameter_revision_test.cpp` 并重写。只对改动行运行 `git clang-format`，并还原了它对未改动 include 块的重排。
+
+**Remaining gaps：**
+
+- **Metal 未编译：** 本机没有 macOS 环境。`metal_develop_pass.mm`、`metal_drt_pass.mm`、`metal_primary_grade_pass.mm`、`metal_pass_encoder.hpp` 和 Metal 测试的改动与 CUDA / OpenCL 同形，但只做了文本检查，需要在 macOS 上编译并运行 `GpuDagMetalWorkspaceTest` / `GpuDagMetalGradeTest`。
+- **静态 plan key 仍每帧计算：** P0 建议 P1 顺带让 `MakeStaticPlanKey` 不必每帧重算，本阶段未做。`HashGraphTopology` 覆盖节点、调整列表、蒙版 ID、蒙版源类型以及 color / luminance range 是否存在，而蒙版编辑等路径并不都调用 `MarkTopologyChanged()`；只凭 `TopologyRevision()` 缓存 key，会在这些编辑之后复用错误的 plan。要做需先让这些入口都盖拓扑戳，属于独立改动，建议在 P2 冻结快照时一并确定拓扑身份。
+- **蒙版 revision 仍是节点内计数器**（`next_mask_revision_`），按计划沿用。它不是进程级戳，不同文档的同一 `(grade, mask)` 可能得到相同数值，目前靠 `AdvanceDocumentEpoch` 清空 last-seen 兜住。P3 让 executor 按快照绑定时需改为进程级戳。
+- 编辑器仍在 render lock 下写 live 文档（E1），渲染在另一线程读；P1 只保证渲染不写，读写互斥仍依赖 render lock，直到 P6。
+
 ### P2 不可变管线图快照与低成本冻结
 
 **目标：** 引入 `PipelineGraphSnapshot`，并让冻结代价与改动量成正比，而不是与文档大小成正比。
@@ -452,7 +567,7 @@ PipelineDocumentCopyCostTest.exe                               # 两次
 | 阶段 | 状态 |
 |---|---|
 | P0 基线与保护网 | 完成（2026-09-28） |
-| P1 revision 协议 | 未开始 |
+| P1 revision 协议 | 完成（2026-09-28） |
 | P2 快照与 COW | 未开始 |
 | P3 executor 按请求接收快照 | 未开始 |
 | P4 缩略图 / 分析池 | 未开始 |

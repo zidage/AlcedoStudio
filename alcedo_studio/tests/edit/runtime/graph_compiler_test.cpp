@@ -574,7 +574,7 @@ TEST(GpuDagGraphCompiler, RangeInputUsesOwningGradeSceneInput) {
   auto* grade_b = multi_grade_test::GradeNode(document, "grade.b");
   ASSERT_NE(grade_b, nullptr);
   grade_mask_test::AddMask(*grade_b, grade_mask_test::MakeRadialMask(MaskId{"mask.b"}));
-  document.MarkTopologyDirty();
+  document.MarkTopologyChanged();
   const auto plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
   const auto* compiled_b = plan.FindGrade(NodeId{"grade.b"});
   const auto* compiled_a = plan.FindGrade(NodeId{"grade.primary"});

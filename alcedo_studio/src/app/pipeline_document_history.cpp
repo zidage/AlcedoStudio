@@ -544,7 +544,7 @@ auto ApplyNodeGraphTopologyChange(PipelineDocument& document, const NodeGraphTop
     if (!removed_default.Empty()) {
       document.SetDefaultGradeId(forward ? NodeId{} : removed_default);
     }
-    document.MarkTopologyDirty();
+    document.MarkTopologyChanged();
     return {};
   } catch (...) {
     document.SetNextColorGradeNameNumber(prior_counter);

@@ -191,7 +191,7 @@ auto MakeManyMaskDocument() -> PipelineDocument {
     primary->AddMask(std::move(mask), primary->MaskCount());
   }
 #endif
-  document.MarkTopologyDirty();
+  document.MarkTopologyChanged();
   return document;
 }
 

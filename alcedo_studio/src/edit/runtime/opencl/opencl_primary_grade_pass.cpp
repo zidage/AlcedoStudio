@@ -221,7 +221,8 @@ void EnqueueGradeMix(OpenClRenderDevice& device, const OpenClBackend::Texture2D&
   DispatchKernel(device, kernel, width, height);
 }
 
-auto LoadOpenClGradeLut(OpenClRenderDevice& device, ColorGradeNodeModel& grade) -> OpenClLutBinding {
+auto LoadOpenClGradeLut(OpenClRenderDevice& device, const ColorGradeNodeModel& grade)
+    -> OpenClLutBinding {
   const auto packed = TryPackGradeLut(grade);
   if (packed == nullptr) {
     return device.Workspace().Device().DummyLut();
@@ -229,7 +230,6 @@ auto LoadOpenClGradeLut(OpenClRenderDevice& device, ColorGradeNodeModel& grade) 
   return device.Workspace().Device().AcquireLut(packed->key, packed->rgba, packed->edge,
                                                 device.CommandContext());
 }
-
 
 struct OpenClGradeOps {
   using Device            = OpenClRenderDevice;
@@ -284,7 +284,8 @@ struct OpenClGradeOps {
     return 0;
   }
 
-  static auto LoadLut(OpenClRenderDevice& device, ColorGradeNodeModel& grade) -> OpenClLutBinding {
+  static auto LoadLut(OpenClRenderDevice& device, const ColorGradeNodeModel& grade)
+      -> OpenClLutBinding {
     return LoadOpenClGradeLut(device, grade);
   }
 
@@ -363,7 +364,7 @@ struct OpenClGradeOps {
 }  // namespace
 
 auto ExecuteOpenClPrimaryGrade(OpenClRenderDevice& device, const ExecutionPlan& plan,
-                               const PreparedRawInput& prepared, PipelineDocument& document,
+                               const PreparedRawInput& prepared, const PipelineDocument& document,
                                const CompiledGradeNode& compiled_grade_node,
                                const FrameSceneBinding& scene) -> OpenClPrimaryGradeResult {
   const auto executed = GradeExecutor<OpenClGradeOps>::Execute(device, plan, prepared, document,
@@ -384,7 +385,7 @@ auto ExecuteOpenClPrimaryGrade(OpenClRenderDevice& device, const ExecutionPlan& 
 }
 
 auto ExecuteOpenClPrimaryGrade(OpenClRenderDevice& device, const ExecutionPlan& plan,
-                               const PreparedRawInput& prepared, PipelineDocument& document)
+                               const PreparedRawInput& prepared, const PipelineDocument& document)
     -> OpenClPrimaryGradeResult {
   if (plan.grade_nodes.empty()) {
     throw std::runtime_error("ExecuteOpenClPrimaryGrade: plan has no Color Grade");

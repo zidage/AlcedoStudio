@@ -14,7 +14,6 @@
 #include "edit/runtime/aces_reference_gamut_compression.h"
 #include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/develop_node_model.hpp"
-#include "edit/operators/models/pending_parameter_patch.hpp"
 #include "edit/runtime/camera_color_gpu_params.hpp"
 #include "edit/runtime/cuda/cuda_develop_pass.hpp"
 #include "edit/runtime/dng_profile_gpu_data.hpp"
@@ -55,16 +54,15 @@ __global__ void CameraColorKernel(const float4* input, float4* output, std::uint
 }  // namespace
 
 void ExecuteCudaCameraColor(CudaRenderDevice& device, const ExecutionPlan& plan,
-                            PipelineDocument& document) {
+                            const PipelineDocument& document) {
   auto& workspace = device.Workspace();
   if (!workspace.IsRendering()) {
     throw std::runtime_error("ExecuteCudaCameraColor: BeginRender has not been called");
   }
-  auto* develop = document.Develop();
+  const auto* develop = document.Develop();
   if (develop == nullptr) {
     throw std::runtime_error("ExecuteCudaCameraColor: missing develop node");
   }
-  auto pending = TakePendingDirtyFields(develop->Params());
   const auto develop_params = develop->Params().Params();
   const auto resolved       = ResolveDevelopColorTransform(develop_params);
   if (!resolved.ok) {
@@ -105,9 +103,6 @@ void ExecuteCudaCameraColor(CudaRenderDevice& device, const ExecutionPlan& plan,
       static_cast<const float*>(tables.DevicePointer()));
   if (::cudaGetLastError() != cudaSuccess) {
     throw std::runtime_error("ExecuteCudaCameraColor: CUDA kernel launch failed");
-  }
-  if (pending.has_value()) {
-    pending->Commit();
   }
 }
 

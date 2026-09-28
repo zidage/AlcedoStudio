@@ -961,7 +961,7 @@ auto InsertUnreplayableCommit(CommitGraph& graph) -> commit_hash_t {
   return hash;
 }
 
-auto ExecutorDocument(const PipelineGuard& guard) -> std::shared_ptr<PipelineDocument> {
+auto ExecutorDocument(const PipelineGuard& guard) -> std::shared_ptr<const PipelineDocument> {
   std::unique_lock<std::mutex> render_lock(guard.pipeline_->GetRenderLock());
   return guard.pipeline_->GpuDagDocument();
 }

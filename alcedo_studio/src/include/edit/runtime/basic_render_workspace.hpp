@@ -88,9 +88,9 @@ class BasicRenderWorkspace {
    * @brief Collect dependency revisions once for the current @ref BeginRender.
    *
    * PlanExecutor and standalone grade encodes share this so a frame cannot assign
-   * two change versions. Operator dirty bits are read, not consumed.
+   * two change versions. The document is read only; changes are found by revision.
    */
-  void PrepareResultValidity(const ExecutionPlan& plan, PipelineDocument& document,
+  void PrepareResultValidity(const ExecutionPlan& plan, const PipelineDocument& document,
                              const PreparedRawInput& input) {
     if (validity_prepared_) {
       return;

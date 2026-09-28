@@ -55,23 +55,11 @@ class TypedOperatorParamPayload final : public IOperatorParamPayload {
 /**
  * @brief Full parameter snapshot used to build ParameterArena and recover devices.
  *
- * Independent of dirty state. payload is shared and immutable.
+ * Independent of parameter revisions. payload is shared and immutable.
  */
 struct OperatorParamDto {
   OperatorTypeId                               type;
   std::uint32_t                                data_version = 1;
-  std::shared_ptr<const IOperatorParamPayload> payload;
-};
-
-/**
- * @brief Dirty-field patch taken from a Model. node_id and adjustment_id may be
- * empty when taken directly from an IOperatorModel; ColorGrade fills them.
- */
-struct OperatorParamPatchDto {
-  NodeId                                       node_id;
-  AdjustmentInstanceId                         adjustment_id;
-  OperatorTypeId                               type;
-  DirtyFieldMask                               dirty_fields;
   std::shared_ptr<const IOperatorParamPayload> payload;
 };
 

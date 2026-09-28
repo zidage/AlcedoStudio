@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "edit/operators/models/dirty_field_mask.hpp"
+#include "edit/operators/models/parameter_revision.hpp"
 #include "edit/runtime/byte_range.hpp"
 #include "edit/runtime/parameter_binding.hpp"
 
@@ -22,7 +23,9 @@ namespace alcedo {
  * @brief Grow-only host+device parameter buffer with dirty-range H2D copies.
  *
  * Offsets assigned by BindSlot stay stable across renders. Grows only when the
- * backend has no in-flight GPU submission. Not thread-safe.
+ * backend has no in-flight GPU submission. Each slot also records the Model revision whose
+ * values its host bytes hold, so the owner packs a slot again only when that Model changed.
+ * The arena belongs to one render workspace; it never writes the Model. Not thread-safe.
  *
  * @tparam Backend Must provide Buffer, CreateBuffer, UploadBufferRange,
  *         DownloadBufferRange, and HasInFlightSubmission.
@@ -77,6 +80,7 @@ class ParameterArena {
     }
     used_       = end;
     slots_[key] = binding;
+    applied_revisions_.erase(key);
     return slots_[key];
   }
 
@@ -99,22 +103,31 @@ class ParameterArena {
    * copies; it does not wrap a Model DTO. Not thread-safe.
    * @throws std::runtime_error if the slot is missing or @p bytes does not match the slot.
    */
-  void WritePackedBytes(const ParameterSlotKey& key, std::span<const std::byte> bytes) {
+  void WritePackedBytes(const ParameterSlotKey& key, std::span<const std::byte> bytes,
+                        ParameterRevision applied_revision = kNoParameterRevision) {
     const auto& binding = Binding(key);
     if (bytes.size() != binding.size) {
       throw std::runtime_error("ParameterArena: packed slot size mismatch");
     }
     std::memcpy(host_.data() + binding.offset, bytes.data(), bytes.size());
     pending_.push_back(ByteRange{binding.offset, binding.size});
+    applied_revisions_[key] = applied_revision;
   }
 
   /**
    * @brief Copy a trivially-copyable GPU parameter struct into a bound slot.
+   *
+   * @param applied_revision Model revision the packed values come from, or
+   *        @ref kNoParameterRevision when they do not come from one Model revision (for
+   *        example an export color override). The slot is recorded with this revision.
    */
   template <class Packed>
-  void WritePackedSlot(const ParameterSlotKey& key, const Packed& packed) {
-    WritePackedBytes(key, std::span<const std::byte>(reinterpret_cast<const std::byte*>(&packed),
-                                                    sizeof(Packed)));
+  void WritePackedSlot(const ParameterSlotKey& key, const Packed& packed,
+                       ParameterRevision applied_revision = kNoParameterRevision) {
+    WritePackedBytes(
+        key,
+        std::span<const std::byte>(reinterpret_cast<const std::byte*>(&packed), sizeof(Packed)),
+        applied_revision);
   }
 
   /**
@@ -124,13 +137,26 @@ class ParameterArena {
    * It does not wrap a Model DTO.
    */
   template <class Packed>
-  void BindOrWritePackedSlot(const ParameterSlotKey& key, DirtyFieldMask dirty,
-                             const Packed& packed) {
+  void BindOrWritePackedSlot(const ParameterSlotKey& key, DirtyFieldMask fields,
+                             const Packed&     packed,
+                             ParameterRevision applied_revision = kNoParameterRevision) {
     if (!Contains(key)) {
-      const ParameterFieldBinding field{dirty, 0, 0, static_cast<std::uint32_t>(sizeof(Packed))};
+      const ParameterFieldBinding field{fields, 0, 0, static_cast<std::uint32_t>(sizeof(Packed))};
       BindSlot(key, static_cast<std::uint32_t>(sizeof(Packed)), std::span{&field, 1});
     }
-    WritePackedSlot(key, packed);
+    WritePackedSlot(key, packed, applied_revision);
+  }
+
+  /**
+   * @brief Model revision whose values the slot's host bytes hold.
+   *
+   * The bytes reach the device with the next successful @ref UploadDirty; a failed upload keeps
+   * them queued, so the recorded revision stays true for the device buffer after the retry.
+   * @return @ref kNoParameterRevision when the slot is missing or was written without a revision.
+   */
+  [[nodiscard]] auto AppliedRevision(const ParameterSlotKey& key) const -> ParameterRevision {
+    const auto it = applied_revisions_.find(key);
+    return it == applied_revisions_.end() ? kNoParameterRevision : it->second;
   }
 
   /**
@@ -175,6 +201,7 @@ class ParameterArena {
    */
   void Clear() {
     slots_.clear();
+    applied_revisions_.clear();
     pending_.clear();
     host_.clear();
     device_   = {};
@@ -199,6 +226,7 @@ class ParameterArena {
   std::size_t                                  capacity_ = 0;
   std::size_t                                  used_     = 0;
   std::map<ParameterSlotKey, ParameterBinding> slots_;
+  std::map<ParameterSlotKey, ParameterRevision> applied_revisions_;
   std::vector<ByteRange>                       pending_;
 };
 

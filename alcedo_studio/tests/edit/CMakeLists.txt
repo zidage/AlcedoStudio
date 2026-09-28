@@ -177,7 +177,7 @@ add_executable(GpuDagModelGraphTest
   ${ALCEDO_TEST_ROOT}/edit/graph/adjustment_ownership_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/graph_validation_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/pipeline_graph_command_test.cpp
-  ${ALCEDO_TEST_ROOT}/edit/graph/dirty_patch_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/graph/parameter_revision_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/json_roundtrip_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/color_grade_mask_model_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/header_hygiene_test.cpp

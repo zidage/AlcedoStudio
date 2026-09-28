@@ -35,12 +35,13 @@ struct CudaPrimaryGradeResult {
  *
  * Must run between CudaRenderDevice::BeginRender and EndRender. Parameters, output
  * images, execution order, and local-tone reference data are owned by the device
- * workspace. A failed parameter transfer restores the affected Model dirty bits.
+ * workspace. Reads the document only; a failed parameter transfer stays queued in the
+ * workspace arena.
  * No CPU image-processing fallback.
  */
 [[nodiscard]] auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan,
-                                           const PreparedRawInput& prepared,
-                                           PipelineDocument&       document,
+                                           const PreparedRawInput&  prepared,
+                                           const PipelineDocument&  document,
                                            const CompiledGradeNode& compiled_grade,
                                            const FrameSceneBinding& scene)
     -> CudaPrimaryGradeResult;
@@ -52,7 +53,7 @@ struct CudaPrimaryGradeResult {
  */
 [[nodiscard]] auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan,
                                            const PreparedRawInput& prepared,
-                                           PipelineDocument&       document)
+                                           const PipelineDocument& document)
     -> CudaPrimaryGradeResult;
 
 }  // namespace alcedo

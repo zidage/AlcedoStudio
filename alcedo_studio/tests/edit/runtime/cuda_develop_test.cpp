@@ -578,7 +578,7 @@ TEST_F(CudaDevelopFixture, ViewportGeometryResampleAllocatesADistinctDisplaySize
   EXPECT_EQ(geometry->Texture().Height(), plan.geometry.render_extent.height);
 }
 
-TEST_F(CudaDevelopFixture, CudaDevelopUploadFailureRestoresDirtyAndDoesNotFallback) {
+TEST_F(CudaDevelopFixture, CudaDevelopUploadFailureLeavesDocumentUnchangedAndDoesNotFallback) {
   const auto pattern  = gpu_dag_test::MakeRggbPattern();
   const auto prepared = RawInputLoader::FromUnpackedCfa(
       gpu_dag_test::MakeU16CfaPlane(64, 64, pattern), pattern, gpu_dag_test::DefaultLinearization(),
@@ -586,12 +586,13 @@ TEST_F(CudaDevelopFixture, CudaDevelopUploadFailureRestoresDirtyAndDoesNotFallba
   auto       document = CreateDefaultPipelineDocument();
   const auto plan     = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
 
+  const auto       revision = document.Develop()->Params().Revision();
   CudaRenderDevice device;
   device.Workspace().Device().FailNextUpload();
   device.BeginRender();
   EXPECT_THROW(ExecuteCudaDevelop(device, plan, prepared, document), std::runtime_error);
   device.EndRender();
-  EXPECT_TRUE(document.Develop()->Params().IsDirty());
+  EXPECT_EQ(document.Develop()->Params().Revision(), revision);
 }
 
 }  // namespace alcedo

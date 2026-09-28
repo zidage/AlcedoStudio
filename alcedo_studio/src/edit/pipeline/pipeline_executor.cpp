@@ -32,7 +32,7 @@ namespace {
 /** @brief Reuse the renderer bound to this document; propagate all render failures to the caller. */
 template <class ProductRenderer>
 auto ApplyGpuDagProduct(std::shared_ptr<ProductRenderer>&            renderer,
-                        const std::shared_ptr<PipelineDocument>&     document,
+                        const std::shared_ptr<const PipelineDocument>& document,
                         const std::shared_ptr<ImageBuffer>&          input,
                         const PipelineApplyRequest&                  request)
     -> std::shared_ptr<ImageBuffer> {
@@ -76,7 +76,7 @@ auto PipelineExecutor::Apply(std::shared_ptr<ImageBuffer> input,
   throw std::runtime_error("PipelineExecutor: product rendering requires a supported GPU backend");
 }
 
-void PipelineExecutor::SetPipelineDocument(std::shared_ptr<PipelineDocument> document) {
+void PipelineExecutor::SetPipelineDocument(std::shared_ptr<const PipelineDocument> document) {
   if (!document) {
     throw std::invalid_argument("PipelineExecutor: PipelineDocument is null");
   }
@@ -111,7 +111,7 @@ auto PipelineExecutor::HasGpuDagDocument() const -> bool {
 #endif
 }
 
-auto PipelineExecutor::GpuDagDocument() const -> std::shared_ptr<PipelineDocument> {
+auto PipelineExecutor::GpuDagDocument() const -> std::shared_ptr<const PipelineDocument> {
 #if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
   return pipeline_document_;
 #else

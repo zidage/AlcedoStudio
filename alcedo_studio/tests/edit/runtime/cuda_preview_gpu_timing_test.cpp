@@ -252,7 +252,7 @@ TEST_F(CudaPreviewGpuTimingFixture, GpuPassSamplesKeepRequestAndNodeIdentity) {
   auto* primary = document.PrimaryGrade();
   ASSERT_NE(primary, nullptr);
   AddGradeMasks(*primary, "mask.radial", "mask.linear");
-  document.MarkTopologyDirty();
+  document.MarkTopologyChanged();
   const auto plan   = Compile(document);
   const auto record = Capture(1001, document, plan);
   EXPECT_EQ(record.request_id, 1001u);
@@ -301,7 +301,7 @@ TEST_F(CudaPreviewGpuTimingFixture, GpuTimingDoesNotAddPerPassHostWaits) {
   auto* primary = document.PrimaryGrade();
   ASSERT_NE(primary, nullptr);
   AddGradeMasks(*primary, "mask.radial", "mask.linear");
-  document.MarkTopologyDirty();
+  document.MarkTopologyChanged();
   const auto plan = Compile(document);
 
   diag::PreviewPerformance::SetMode(diag::PreviewPerformanceMode::Off);
@@ -432,7 +432,7 @@ TEST_F(CudaPreviewGpuTimingFixture, InteractiveFourNodeSecondGradeMasksReportGpu
   ASSERT_NE(look, nullptr);
   look->SetMix(0.8f);
   AddGradeMasks(*look, "mask.look.radial", "mask.look.linear");
-  document.MarkTopologyDirty();
+  document.MarkTopologyChanged();
   const auto plan   = Compile(document);
   const auto record = Capture(1102, document, plan);
   DumpRecord("four_node_second_masked", record);
@@ -468,7 +468,7 @@ TEST_F(CudaPreviewGpuTimingFixture, InteractiveMultiGradeMaskMixReportsPerNodeGp
   AddGradeMasks(*g0, "mask.0.r", "mask.0.l");
   AddGradeMasks(*g1, "mask.1.r", "mask.1.l");
   AddGradeMasks(*g2, "mask.2.r", "mask.2.l");
-  document.MarkTopologyDirty();
+  document.MarkTopologyChanged();
   const auto plan   = Compile(document);
   const auto record = Capture(1103, document, plan);
   DumpRecord("multi_grade_mask_mix", record);
@@ -604,7 +604,7 @@ void InteractiveDagBaselinesDumpCurrentExecutionGpuTimesRetiredDead() {
     ASSERT_NE(look, nullptr);
     look->SetMix(0.8f);
     AddGradeMasks(*look, "mask.look.radial", "mask.look.linear");
-    document.MarkTopologyDirty();
+    document.MarkTopologyChanged();
     render_once(1202, document, "baseline_four_node_second_masked");
   }
   {
@@ -625,7 +625,7 @@ void InteractiveDagBaselinesDumpCurrentExecutionGpuTimesRetiredDead() {
     AddGradeMasks(*g0, "mask.0.r", "mask.0.l");
     AddGradeMasks(*g1, "mask.1.r", "mask.1.l");
     AddGradeMasks(*g2, "mask.2.r", "mask.2.l");
-    document.MarkTopologyDirty();
+    document.MarkTopologyChanged();
     render_once(1203, document, "baseline_multi_grade_mask_mix");
   }
   {

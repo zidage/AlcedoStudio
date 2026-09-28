@@ -13,7 +13,6 @@
 #include <vector>
 
 #include "edit/graph/color_grade_node_model.hpp"
-#include "edit/operators/models/pending_parameter_patch.hpp"
 #include "edit/runtime/local_tone_mapping.hpp"
 #include "edit/runtime/adjustment_runtime.hpp"
 #include "edit/runtime/execution_plan.hpp"
@@ -116,19 +115,21 @@ struct GradeScheduleInput {
 [[nodiscard]] auto MakeGradeDecisionTrace(const GradeSchedule& schedule) -> GradeDecisionTrace;
 
 /**
- * @brief Bind dirty Grade slots, then select launches from compiled stages.
+ * @brief Pack Grade slots whose Model revision changed, then select launches from compiled stages.
+ *
+ * Reads @p grade only. Slot revisions live in @p arena, so each render workspace packs from
+ * its own record of what it applied.
  *
  * @tparam Backend ParameterArena backend.
  * @param error_prefix Thrown message prefix when compiled adjustments do not match the graph.
- * @return Compacted schedule. Caller uploads dirty slots after this returns.
+ * @return Compacted schedule. Caller uploads queued slot bytes after this returns.
  */
 template <class Backend>
-[[nodiscard]] auto BindAndScheduleGrade(ParameterArena<Backend>& arena, ColorGradeNodeModel& grade,
-                                        const CompiledGradeNode&           compiled_grade,
-                                        const ResolvedRenderGeometry&      geometry,
-                                        std::vector<PendingParameterPatch>& pending,
-                                        std::string_view                   error_prefix)
-    -> GradeSchedule {
+[[nodiscard]] auto BindAndScheduleGrade(ParameterArena<Backend>&      arena,
+                                        const ColorGradeNodeModel&    grade,
+                                        const CompiledGradeNode&      compiled_grade,
+                                        const ResolvedRenderGeometry& geometry,
+                                        std::string_view error_prefix) -> GradeSchedule {
   auto Fail = [error_prefix](std::string_view detail) {
     throw std::runtime_error(std::string{error_prefix} + std::string{detail});
   };
@@ -136,7 +137,7 @@ template <class Backend>
   std::vector<GradeScheduleInput> bound;
   bound.reserve(compiled_grade.adjustments.size());
   for (const auto& compiled : compiled_grade.adjustments) {
-    auto* model = grade.FindAdjustment(compiled.instance_id);
+    const auto* model = grade.FindAdjustment(compiled.instance_id);
     if (model == nullptr || model->Type() != compiled.type) {
       Fail(": compiled adjustment no longer matches graph");
     }
@@ -153,9 +154,7 @@ template <class Backend>
       Fail(": non-local adjustment was compiled for LLF");
     }
     const ParameterSlotKey key{grade.Id(), compiled.instance_id};
-    if (auto change = BindOrRefreshGradeRuntimeSlot(arena, key, *model, *behavior)) {
-      pending.push_back(std::move(*change));
-    }
+    BindOrRefreshGradeRuntimeSlot(arena, key, *model, *behavior);
 
     GradeScheduleInput input;
     input.algorithm    = compiled.algorithm;

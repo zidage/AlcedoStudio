@@ -6,8 +6,9 @@
 // (docs/refactor/2026-09-27-executor-ownership-refactor-plan.md, phase P0).
 //
 // Each DISABLED_ test states a requirement that the shared PipelineGuard model breaks today. The
-// phase named in its comment enables it. The enabled test next to it runs the same steps without
-// the conflicting consumer, so it proves that the measurement itself is correct.
+// phase named in its comment enables it; an enabled test names the phase that fixed it. The
+// enabled control test next to it runs the same steps without the conflicting consumer, so it
+// proves that the measurement itself is correct.
 
 #include <gtest/gtest.h>
 
@@ -17,7 +18,9 @@
 #include <filesystem>
 #include <functional>
 #include <future>
+#include <iostream>
 #include <limits>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <OpenImageIO/imageio.h>
@@ -36,12 +39,22 @@
 #include "edit/pipeline/pipeline_executor.hpp"
 #include "edit/runtime/drt_display.hpp"
 #include "edit/runtime/pipeline_apply_request.hpp"
+#include "edit/runtime/renderer.hpp"
 #include "image/image_buffer.hpp"
 #include "io/image/export_recipe.hpp"
 #include "support/raw_import_pipeline_fixture.hpp"
 #include "type/supported_file_type.hpp"
 #include "type/type.hpp"
 #include "utils/clock/time_provider.hpp"
+#ifdef HAVE_CUDA
+#include "edit/runtime/cuda/cuda_product_renderer.hpp"
+#endif
+#ifdef HAVE_METAL
+#include "edit/runtime/metal/metal_renderer.hpp"
+#endif
+#ifdef HAVE_OPENCL
+#include "edit/runtime/opencl/opencl_renderer.hpp"
+#endif
 
 namespace alcedo {
 namespace {
@@ -107,6 +120,80 @@ auto ReadExportedPixels(const std::filesystem::path& path) -> cv::Mat {
 auto UniqueTempPath(const std::string& prefix) -> std::filesystem::path {
   return std::filesystem::temp_directory_path() /
          (prefix + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+}
+
+/// Session render counters of the backend renderer that @p executor uses; zero when none exists.
+auto SessionRenderStats(PipelineExecutor& executor) -> RenderSessionStats {
+#ifdef HAVE_CUDA
+  if (auto* renderer = executor.DebugCudaRenderer()) {
+    return renderer->Stats();
+  }
+#endif
+#ifdef HAVE_METAL
+  if (auto* renderer = executor.DebugMetalRenderer()) {
+    return renderer->Stats();
+  }
+#endif
+#ifdef HAVE_OPENCL
+  if (auto* renderer = executor.DebugOpenClRenderer()) {
+    return renderer->Stats();
+  }
+#endif
+  return {};
+}
+
+/// Pass and plan-cache counters of one editor frame (difference of two cumulative snapshots).
+struct EditorFramePassCounts {
+  std::uint64_t sensor_develop_execute = 0;
+  std::uint64_t sensor_develop_skip    = 0;
+  std::uint64_t camera_color_execute   = 0;
+  std::uint64_t camera_color_skip      = 0;
+  std::uint64_t primary_grade_execute  = 0;
+  std::uint64_t primary_grade_skip     = 0;
+  std::uint64_t drt_execute            = 0;
+  std::uint64_t drt_skip               = 0;
+  std::uint64_t result_content_hits    = 0;
+  std::uint64_t result_revision_misses = 0;
+  std::uint64_t plan_cache_hits        = 0;
+  std::uint64_t plan_cache_misses      = 0;
+};
+
+auto FramePassCounts(const RenderSessionStats& before, const RenderSessionStats& after)
+    -> EditorFramePassCounts {
+  EditorFramePassCounts counts;
+  counts.sensor_develop_execute =
+      after.pass.sensor_develop_execute - before.pass.sensor_develop_execute;
+  counts.sensor_develop_skip  = after.pass.sensor_develop_skip - before.pass.sensor_develop_skip;
+  counts.camera_color_execute = after.pass.camera_color_execute - before.pass.camera_color_execute;
+  counts.camera_color_skip    = after.pass.camera_color_skip - before.pass.camera_color_skip;
+  counts.primary_grade_execute =
+      after.pass.primary_grade_execute - before.pass.primary_grade_execute;
+  counts.primary_grade_skip  = after.pass.primary_grade_skip - before.pass.primary_grade_skip;
+  counts.drt_execute         = after.pass.drt_execute - before.pass.drt_execute;
+  counts.drt_skip            = after.pass.drt_skip - before.pass.drt_skip;
+  counts.result_content_hits = after.pass.result_content_hits - before.pass.result_content_hits;
+  counts.result_revision_misses =
+      after.pass.result_revision_misses - before.pass.result_revision_misses;
+  counts.plan_cache_hits   = after.plan_cache_hits - before.plan_cache_hits;
+  counts.plan_cache_misses = after.plan_cache_misses - before.plan_cache_misses;
+  return counts;
+}
+
+auto FormatFramePassCounts(const std::string& frame, const EditorFramePassCounts& counts)
+    -> std::string {
+  return "[editor-frame-counts] frame=" + frame +
+         " sensor_exec=" + std::to_string(counts.sensor_develop_execute) +
+         " sensor_skip=" + std::to_string(counts.sensor_develop_skip) +
+         " camera_exec=" + std::to_string(counts.camera_color_execute) +
+         " camera_skip=" + std::to_string(counts.camera_color_skip) +
+         " grade_exec=" + std::to_string(counts.primary_grade_execute) +
+         " grade_skip=" + std::to_string(counts.primary_grade_skip) +
+         " drt_exec=" + std::to_string(counts.drt_execute) +
+         " drt_skip=" + std::to_string(counts.drt_skip) +
+         " content_hits=" + std::to_string(counts.result_content_hits) +
+         " revision_misses=" + std::to_string(counts.result_revision_misses) +
+         " plan_hits=" + std::to_string(counts.plan_cache_hits) +
+         " plan_misses=" + std::to_string(counts.plan_cache_misses);
 }
 
 }  // namespace
@@ -230,11 +317,10 @@ TEST_F(ExecutorIsolationTest, EditorSessionRenderShowsParameterChangeWithoutInte
   pipelines->ReleasePipelineUse(live);
 }
 
-// Audit R7. A one-shot (thumbnail/export) render on the same document takes the Model dirty
-// bits, so the editor session arena and invalidation state see no change and keep the old
-// parameters. Enabled by P1 (revision protocol; rendering no longer writes the document).
-TEST_F(ExecutorIsolationTest,
-       DISABLED_EditorSessionRenderShowsParameterChangeAfterInterleavedOneShot) {
+// Audit R7. Before P1, a one-shot (thumbnail/export) render on the same document took the Model
+// dirty bits, so the editor session arena and invalidation state saw no change and kept the old
+// parameters. Enabled by P1: each render workspace compares Model revisions with its own record.
+TEST_F(ExecutorIsolationTest, EditorSessionRenderShowsParameterChangeAfterInterleavedOneShot) {
   ProjectService project(db_path_, meta_path_);
   auto           pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
   const auto     ids       = ImportLinearDng(project, pipelines);
@@ -261,6 +347,79 @@ TEST_F(ExecutorIsolationTest,
   EXPECT_GT(MeanOfAllChannels(after), MeanOfAllChannels(before) * 1.2);
   EXPECT_LE(MaxAbsDifference(after, reference), SameValuesTolerance(reference));
   pipelines->ReleasePipelineUse(live);
+}
+
+// P1 exit condition: the revision protocol must not turn editor incremental renders into full
+// recomputes. Each frame's pass counts are printed with the prefix [editor-frame-counts] so the
+// same sequence can be compared with a build of the dirty-bit protocol.
+TEST_F(ExecutorIsolationTest, EditorSessionEditSequenceReexecutesOnlyPassesDownstreamOfTheEdit) {
+  ProjectService project(db_path_, meta_path_);
+  auto           pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  const auto     ids       = ImportLinearDng(project, pipelines);
+  ASSERT_NE(ids.first, 0u);
+  auto live = pipelines->LoadPipeline(ids.first);
+  ASSERT_NE(live, nullptr);
+  BindImportedRawColor(live, *project.GetImagePoolService(), ids.second);
+  const auto input = LoadEncodedInput(*project.GetImagePoolService(), ids.second);
+  ASSERT_NE(input, nullptr);
+  auto& document = *live->document_;
+  auto* exposure = PrimaryExposure(document);
+  auto* shadows  = dynamic_cast<ShadowsModel*>(
+      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Shadows()));
+  ASSERT_NE(exposure, nullptr);
+  ASSERT_NE(shadows, nullptr);
+
+  auto&                                        executor = *live->pipeline_;
+  std::map<std::string, EditorFramePassCounts> frames;
+  const auto render_frame = [&](const std::string& name, const std::function<void()>& edit) {
+    {
+      std::lock_guard<std::mutex> render_lock(executor.GetRenderLock());
+      edit();
+    }
+    const auto before = SessionRenderStats(executor);
+    ASSERT_FALSE(Render(executor, input, RenderCachePolicy::UseSessionCache).empty()) << name;
+    frames[name] = FramePassCounts(before, SessionRenderStats(executor));
+    std::cout << FormatFramePassCounts(name, frames[name]) << std::endl;
+  };
+
+  render_frame("0_first", [] {});
+  render_frame("1_unchanged", [] {});
+  render_frame("2_exposure", [&] { exposure->SetValue(exposure->Value() + 0.5f); });
+  render_frame("3_shadows", [&] { shadows->SetValue(shadows->Value() + 20.0f); });
+  render_frame("4_grade_mix", [&] { document.PrimaryGrade()->SetMix(0.5f); });
+  render_frame("5_white_balance", [&] {
+    auto payload       = document.Develop()->Params().Params();
+    payload.wb_mode    = "custom";
+    payload.custom_cct = 4800.0f;
+    document.Develop()->Params().ReplaceParams(payload);
+  });
+  render_frame("6_unchanged", [] {});
+  pipelines->ReleasePipelineUse(live);
+  if (HasFatalFailure()) {
+    return;
+  }
+
+  for (const auto& [name, counts] : frames) {
+    if (name != "0_first") {
+      EXPECT_EQ(counts.plan_cache_misses, 0u) << name;
+    }
+  }
+  // Grade scene output is never published, so the Grade pass runs on every frame; the
+  // published DRT display result shows whether the frame reused the previous output.
+  for (const auto* name : {"1_unchanged", "6_unchanged"}) {
+    EXPECT_EQ(frames[name].sensor_develop_execute, 0u) << name;
+    EXPECT_EQ(frames[name].camera_color_execute, 0u) << name;
+    EXPECT_EQ(frames[name].drt_execute, 0u) << name;
+    EXPECT_EQ(frames[name].result_revision_misses, 0u) << name;
+  }
+  for (const auto* name : {"2_exposure", "3_shadows", "4_grade_mix"}) {
+    EXPECT_EQ(frames[name].sensor_develop_execute, 0u) << name;
+    EXPECT_EQ(frames[name].camera_color_execute, 0u) << name;
+    EXPECT_EQ(frames[name].drt_execute, 1u) << name;
+  }
+  EXPECT_EQ(frames["5_white_balance"].sensor_develop_execute, 0u);
+  EXPECT_EQ(frames["5_white_balance"].camera_color_execute, 1u);
+  EXPECT_EQ(frames["5_white_balance"].drt_execute, 1u);
 }
 
 // Control for the next test: two exports of an image that the editor holds, with no unsettled

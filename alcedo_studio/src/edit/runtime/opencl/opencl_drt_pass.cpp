@@ -16,7 +16,6 @@
 
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/operators/models/i_operator_model.hpp"
-#include "edit/operators/models/pending_parameter_patch.hpp"
 #include "edit/runtime/adjustment_runtime.hpp"
 #include "edit/runtime/drt/drt_output_resolver.hpp"
 #include "edit/runtime/drt_post_executor.hpp"
@@ -108,11 +107,9 @@ struct OpenClDrtOps {
 
   static constexpr const char* kErrorPrefix = "ExecuteOpenClDrt";
 
-  static auto RefreshNeighborhoodAdjustment(OpenClRenderDevice&, IOperatorModel& model,
-                                            const ParameterSlotKey&, AdjustmentBehavior)
-      -> std::optional<PendingParameterPatch> {
-    return TakePendingDirtyFields(model);
-  }
+  /// Post neighborhood parameters travel in the command, not in an arena slot.
+  static void RefreshNeighborhoodAdjustment(OpenClRenderDevice&, const IOperatorModel&,
+                                            const ParameterSlotKey&, AdjustmentBehavior) {}
 
   static void PrepareNeighborCommands(OpenClRenderDevice&, const NodeId&,
                                       std::span<const std::uint32_t>) {}
@@ -160,22 +157,25 @@ struct OpenClDrtOps {
     (void)device.Workspace().AcquireImageForWrite(id, {width, height, TextureFormat::Rgba32f});
   }
 
+  /**
+   * @brief Pack the display transform when the slot is missing, the DRT revision changed,
+   *        or this frame overrides the output color.
+   *
+   * An override is recorded without a revision, so the next plain frame packs again.
+   */
   static void BindDisplayParams(OpenClRenderDevice& device, const ExecutionPlan& plan,
-                                DrtNodeModel& drt, std::vector<PendingParameterPatch>& pending) {
+                                const DrtNodeModel& drt) {
     auto&                  arena = device.Workspace().Parameters();
     const ParameterSlotKey key{drt.Id(), AdjustmentInstanceId{"drt.output"}};
-    auto                   display_pending = plan.output_color_override.has_value()
-                                                 ? decltype(TakePendingDirtyFields(drt.Params())){}
-                                                 : TakePendingDirtyFields(drt.Params());
-    const bool             needs_initialize = !arena.Contains(key);
-    if (needs_initialize || display_pending.has_value() || plan.output_color_override.has_value()) {
-      const auto runtime = PackOpenClDrtParams(
-          DrtOutputResolver::ResolveNode(drt, plan.output_color_override, kErrorPrefix));
-      arena.BindOrWritePackedSlot(key, DirtyFieldMask{kDrtDirtyBits}, runtime);
+    const bool             overridden = plan.output_color_override.has_value();
+    const auto             revision   = drt.Params().Revision();
+    if (!overridden && arena.Contains(key) && arena.AppliedRevision(key) == revision) {
+      return;
     }
-    if (display_pending) {
-      pending.push_back(std::move(*display_pending));
-    }
+    const auto runtime = PackOpenClDrtParams(
+        DrtOutputResolver::ResolveNode(drt, plan.output_color_override, kErrorPrefix));
+    arena.BindOrWritePackedSlot(key, DirtyFieldMask{kDrtDirtyBits}, runtime,
+                                overridden ? kNoParameterRevision : revision);
   }
 
   static void DispatchDisplayTransform(OpenClRenderDevice& device, const FrameSceneBinding& scene,
@@ -193,7 +193,7 @@ struct OpenClDrtOps {
 }  // namespace
 
 auto ExecuteOpenClDrt(OpenClRenderDevice& device, const ExecutionPlan& plan,
-                      PipelineDocument& document, const FrameSceneBinding& scene)
+                      const PipelineDocument& document, const FrameSceneBinding& scene)
     -> OpenClDrtResult {
   const auto executed = DrtPostExecutor<OpenClDrtOps>::Execute(device, plan, document, scene);
   return {executed.output, executed.display_post, executed.post_neighborhood_count};

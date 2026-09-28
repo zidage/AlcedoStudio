@@ -4,11 +4,10 @@
 
 #pragma once
 
-#include <optional>
-
 #include "edit/operators/models/dirty_field_mask.hpp"
 #include "edit/operators/models/operator_param_dto.hpp"
 #include "edit/operators/models/operator_type_id.hpp"
+#include "edit/operators/models/parameter_revision.hpp"
 #include "json.hpp"
 
 namespace alcedo {
@@ -34,56 +33,48 @@ struct OperatorModelFullDtoCopyCount {
  * @brief Pure parameter Model. Does not receive images, allocate GPU memory, or
  * apply pixels.
  *
- * Setters mark dirty field bits. @ref TakeDirtyPatch copies the current payload
- * and clears taken bits under a short lock. Failed uploads call @ref RestoreDirty.
- * GPU packing uses @ref TakeDirtyFields so it can commit dirty bits without
- * copying the Model payload. ParameterArena stores packed GPU structs, not DTOs.
+ * Every setter that changes a field stamps that field with @ref NextParameterRevision.
+ * Readers never clear anything: a renderer remembers the stamps it last applied in its own
+ * workspace and compares them with @ref Revision or @ref FieldsRevision using `!=`. So any
+ * number of renderers can read one Model, and a render never writes the document.
  *
- * Thread-safe: setters, take, restore, and JSON load serialize on an internal mutex
- * in OperatorModelBase.
+ * Thread-safe: setters, reads, and JSON load serialize on an internal mutex in
+ * OperatorModelBase.
  */
 class IOperatorModel {
  public:
   virtual ~IOperatorModel() = default;
 
   [[nodiscard]] virtual auto Type() const -> OperatorTypeId = 0;
-  [[nodiscard]] virtual auto IsDefault() const -> bool      = 0;
-  [[nodiscard]] virtual auto IsDirty() const -> bool        = 0;
+  [[nodiscard]] virtual auto IsDefault() const -> bool             = 0;
 
   /**
-   * @brief Current dirty field mask. Does not clear bits.
+   * @brief Stamp of the last change to any field. Never @ref kNoParameterRevision.
    *
-   * Runtime invalidation reads this independently of @ref TakeDirtyPatch.
+   * A new Model stamps all fields once, so the first reader always sees a change.
    */
-  [[nodiscard]] virtual auto DirtyFields() const -> DirtyFieldMask = 0;
-
-  /// Full payload snapshot. Ignores dirty bits.
-  [[nodiscard]] virtual auto MakeFullDto() const -> OperatorParamDto = 0;
+  [[nodiscard]] virtual auto Revision() const -> ParameterRevision = 0;
 
   /**
-   * @brief Copy current payload and clear taken dirty bits.
-   * @return nullopt when no field is dirty.
-   */
-  virtual auto TakeDirtyPatch() -> std::optional<OperatorParamPatchDto> = 0;
-
-  /**
-   * @brief Clear taken dirty bits without copying the Model payload.
-   * @return nullopt when no field is dirty.
+   * @brief Stamp of the last change to any field in @p fields.
    *
-   * The default implementation takes a full patch and discards the payload. Owner
-   * Models override this to copy only the mask.
+   * Use this when different fields invalidate different results (for example Develop
+   * sensor fields and white balance). Bits outside the Model's field set are ignored.
+   * @return @ref kNoParameterRevision when @p fields selects no field of this Model.
    */
-  virtual auto TakeDirtyFields() -> std::optional<DirtyFieldMask> {
-    auto patch = TakeDirtyPatch();
-    if (!patch.has_value()) {
-      return std::nullopt;
-    }
-    return patch->dirty_fields;
-  }
+  [[nodiscard]] virtual auto FieldsRevision(DirtyFieldMask fields) const -> ParameterRevision = 0;
 
-  /// Re-set dirty bits after a cancelled or failed parameter transfer.
-  virtual void RestoreDirty(DirtyFieldMask fields) = 0;
-  virtual void MarkAllDirty()                      = 0;
+  /**
+   * @brief Copy the field stamps of @p source, a Model with equal field values.
+   *
+   * @pre @p source has the same type and equal field values, as after a JSON round trip of
+   *      @p source into this Model. Only document cloning calls this.
+   * @throws std::invalid_argument when @p source is another Model type.
+   */
+  virtual void               CopyRevisionsFrom(const IOperatorModel& source)                  = 0;
+
+  /// Full payload snapshot.
+  [[nodiscard]] virtual auto MakeFullDto() const -> OperatorParamDto                          = 0;
 
   [[nodiscard]] virtual auto ToJson() const -> nlohmann::json     = 0;
   virtual void               LoadJson(const nlohmann::json& json) = 0;

@@ -39,8 +39,8 @@ struct MetalPrimaryGradeResult {
  * throw; there is no CPU substitute.
  */
 [[nodiscard]] auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& plan,
-                                            const PreparedRawInput& prepared,
-                                            PipelineDocument& document,
+                                            const PreparedRawInput&  prepared,
+                                            const PipelineDocument&  document,
                                             const CompiledGradeNode& compiled_grade,
                                             const FrameSceneBinding& scene)
     -> MetalPrimaryGradeResult;
@@ -52,7 +52,8 @@ struct MetalPrimaryGradeResult {
  */
 [[nodiscard]] auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& plan,
                                             const PreparedRawInput& prepared,
-                                            PipelineDocument& document) -> MetalPrimaryGradeResult;
+                                            const PipelineDocument& document)
+    -> MetalPrimaryGradeResult;
 
 void               AppendMetalPrimaryGradeWarmup(std::vector<MetalPipelineWarmup>& pipelines);
 

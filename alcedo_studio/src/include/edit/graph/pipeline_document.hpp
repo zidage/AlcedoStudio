@@ -16,6 +16,7 @@
 #include "edit/graph/image_geometry_model.hpp"
 #include "edit/graph/pipeline_graph.hpp"
 #include "edit/history/pipeline_history_format.hpp"
+#include "edit/operators/models/parameter_revision.hpp"
 #include "json.hpp"
 
 namespace alcedo {
@@ -67,9 +68,18 @@ class PipelineDocument {
    */
   void               ConsumeNextColorGradeNameNumber();
 
-  [[nodiscard]] auto TopologyDirty() const -> bool { return topology_dirty_; }
-  void               MarkTopologyDirty() { topology_dirty_ = true; }
-  void               ClearTopologyDirty() { topology_dirty_ = false; }
+  /**
+   * @brief Stamp of the last node, edge, or adjustment-list change (@ref NextParameterRevision).
+   *
+   * Readers compare it with the stamp they saw last. Nothing clears it.
+   */
+  [[nodiscard]] auto TopologyRevision() const -> ParameterRevision { return topology_revision_; }
+  /// Record a node, edge, or adjustment-list change with a new stamp.
+  void               MarkTopologyChanged() { topology_revision_ = NextParameterRevision(); }
+  /// Take the topology stamp of @p source, a document this one was cloned from.
+  void               CopyTopologyRevisionFrom(const PipelineDocument& source) {
+    topology_revision_ = source.topology_revision_;
+  }
 
   [[nodiscard]] auto Develop() -> DevelopNodeModel*;
   [[nodiscard]] auto Develop() const -> const DevelopNodeModel*;
@@ -85,7 +95,7 @@ class PipelineDocument {
   [[nodiscard]] auto Drt() const -> const DrtNodeModel*;
 
   /**
-   * @brief Insert an adjustment on a ColorGrade node and set topology_dirty.
+   * @brief Insert an adjustment on a ColorGrade node and record a topology change.
    */
   void InsertAdjustment(const NodeId& grade_id, std::size_t index, AdjustmentInstanceId instance_id,
                         std::unique_ptr<IOperatorModel> model);
@@ -99,7 +109,7 @@ class PipelineDocument {
   PipelineGraph       graph_{};
   std::uint64_t       next_color_grade_name_number_ = kInitialNextColorGradeNameNumber;
   NodeId              default_grade_id_;
-  bool                topology_dirty_ = true;
+  ParameterRevision   topology_revision_ = NextParameterRevision();
 };
 
 /**

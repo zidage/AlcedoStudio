@@ -6,11 +6,10 @@
 
 #include <cstddef>
 #include <cstring>
-#include <optional>
 #include <span>
 #include <stdexcept>
 
-#include "edit/operators/models/pending_parameter_patch.hpp"
+#include "edit/operators/models/i_operator_model.hpp"
 #include "edit/runtime/adjustment_runtime.hpp"
 #include "edit/runtime/parameter_arena.hpp"
 #include "edit/runtime/parameter_binding.hpp"
@@ -20,21 +19,21 @@ namespace alcedo {
 /**
  * @brief Bind or refresh one Grade GPU slot from typed Model fields.
  *
- * Packs @ref MakeGradeRuntimeParams only when the slot is missing or the Model is
- * dirty. Writes the packed GPU layout into the existing ParameterArena. The returned
- * guard restores dirty bits unless @ref PendingParameterPatch::Commit is called after
- * a successful @ref ParameterArena::UploadDirty.
+ * Packs @ref MakeGradeRuntimeParams only when the slot is missing or holds values from
+ * another Model revision than @p model's. Writes the packed GPU layout into the existing
+ * ParameterArena and records the revision there. Reads the Model only; the caller uploads with
+ * @ref ParameterArena::UploadDirty.
  *
- * @return nullopt when the slot already holds the current packed parameters.
+ * @return true when the slot was packed in this call.
  */
 template <class Backend>
-[[nodiscard]] auto BindOrRefreshGradeRuntimeSlot(ParameterArena<Backend>& arena,
-                                                 const ParameterSlotKey& key, IOperatorModel& model,
-                                                 AdjustmentBehavior behavior)
-    -> std::optional<PendingParameterPatch> {
-  const bool missing = !arena.Contains(key);
-  if (!missing && !model.IsDirty()) {
-    return std::nullopt;
+auto BindOrRefreshGradeRuntimeSlot(ParameterArena<Backend>& arena, const ParameterSlotKey& key,
+                                   const IOperatorModel& model, AdjustmentBehavior behavior)
+    -> bool {
+  const auto revision = model.Revision();
+  const bool missing  = !arena.Contains(key);
+  if (!missing && arena.AppliedRevision(key) == revision) {
+    return false;
   }
 
   const auto packed = MakeGradeRuntimeParams(model, behavior);
@@ -43,8 +42,8 @@ template <class Backend>
                                       kGradeRuntimeParamBytes};
     arena.BindSlot(key, kGradeRuntimeParamBytes, std::span{&field, 1});
   }
-  arena.WritePackedSlot(key, packed);
-  return TakePendingDirtyFields(model);
+  arena.WritePackedSlot(key, packed, revision);
+  return true;
 }
 
 /**

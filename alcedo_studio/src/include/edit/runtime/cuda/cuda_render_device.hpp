@@ -101,12 +101,11 @@ class CudaRenderDevice {
    * succeeds. Reports and rethrows failures after cancelling the incomplete submission.
    * There is no CPU image-processing fallback.
    */
-  [[nodiscard]] auto Execute(const ExecutionPlan& plan, const PreparedRawInput& input,
-                             PipelineDocument& document, bool publish_on_success = true,
-                             TransientAllocationPolicy transient_policy =
-                                 TransientAllocationPolicy::SessionPacked,
-                             ResultPersistenceScope persistence =
-                                 ResultPersistenceScope::AllCurrentResults)
+  [[nodiscard]] auto Execute(
+      const ExecutionPlan& plan, const PreparedRawInput& input, const PipelineDocument& document,
+      bool                      publish_on_success = true,
+      TransientAllocationPolicy transient_policy   = TransientAllocationPolicy::SessionPacked,
+      ResultPersistenceScope    persistence        = ResultPersistenceScope::AllCurrentResults)
       -> GraphValueId;
 
  private:

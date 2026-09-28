@@ -32,27 +32,6 @@
 namespace alcedo {
 namespace {
 
-void ConsumeOperatorDirty(PipelineDocument& document) {
-  if (auto* develop = document.Develop()) {
-    (void)develop->Params().TakeDirtyPatch();
-  }
-  if (auto* drt = document.Drt()) {
-    (void)drt->Params().TakeDirtyPatch();
-    for (std::size_t index = 0; index < drt->AdjustmentCount(); ++index) {
-      (void)drt->AdjustmentAt(index).TakeDirtyPatch();
-    }
-  }
-  for (const auto& node : document.Graph().Nodes()) {
-    auto* grade = dynamic_cast<ColorGradeNodeModel*>(document.Graph().FindNode(node->Id()));
-    if (grade == nullptr) {
-      continue;
-    }
-    for (std::size_t index = 0; index < grade->AdjustmentCount(); ++index) {
-      (void)grade->AdjustmentAt(index).TakeDirtyPatch();
-    }
-  }
-}
-
 struct HostTextureBackend {
   struct Texture2D {
     std::uint32_t          width       = 0;
@@ -110,7 +89,6 @@ struct HostRetentionHarness {
     gpu_dag_test::EnsureTestCameraProfile(document);
     plan = GraphCompiler::Compile(document, prepared.CompileSource(), RenderRequest{});
     invalidation.CollectAndPropagate(plan, document, prepared);
-    ConsumeOperatorDirty(document);
   }
 
   auto Sensor() const -> GraphValueId { return plan.sensor_linear_output; }

@@ -17,7 +17,6 @@
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/operators/models/i_operator_model.hpp"
-#include "edit/operators/models/pending_parameter_patch.hpp"
 #include "edit/runtime/aces_reference_gamut_compression.h"
 #include "edit/runtime/adjustment_runtime.hpp"
 #include "edit/runtime/cuda/cuda_drt_gpu_params.cuh"
@@ -69,11 +68,9 @@ struct CudaDrtOps {
 
   static constexpr const char* kErrorPrefix = "ExecuteCudaDrt";
 
-  static auto RefreshNeighborhoodAdjustment(CudaRenderDevice&, IOperatorModel& model,
-                                            const ParameterSlotKey&, AdjustmentBehavior)
-      -> std::optional<PendingParameterPatch> {
-    return TakePendingDirtyFields(model);
-  }
+  /// Post neighborhood parameters travel in the command, not in an arena slot.
+  static void RefreshNeighborhoodAdjustment(CudaRenderDevice&, const IOperatorModel&,
+                                            const ParameterSlotKey&, AdjustmentBehavior) {}
 
   static void PrepareNeighborCommands(CudaRenderDevice&, const NodeId&,
                                       std::span<const std::uint32_t>) {}
@@ -128,23 +125,25 @@ struct CudaDrtOps {
     (void)device.Workspace().AcquireImageForWrite(id, {width, height, TextureFormat::Rgba32f});
   }
 
+  /**
+   * @brief Pack the display transform when the slot is missing, the DRT revision changed,
+   *        or this frame overrides the output color.
+   *
+   * An override is recorded without a revision, so the next plain frame packs again.
+   */
   static void BindDisplayParams(CudaRenderDevice& device, const ExecutionPlan& plan,
-                                DrtNodeModel& drt, std::vector<PendingParameterPatch>& pending) {
+                                const DrtNodeModel& drt) {
     auto&                  arena = device.Workspace().Parameters();
     const ParameterSlotKey key{drt.Id(), AdjustmentInstanceId{"drt.output"}};
-    auto                   display_pending = plan.output_color_override.has_value()
-                                                 ? decltype(TakePendingDirtyFields(drt.Params())){}
-                                                 : TakePendingDirtyFields(drt.Params());
-    const bool             needs_initialize = !arena.Contains(key);
-    if (needs_initialize || display_pending.has_value() || plan.output_color_override.has_value()) {
-      const auto resolved =
-          DrtOutputResolver::ResolveNode(drt, plan.output_color_override, kErrorPrefix);
-      arena.BindOrWritePackedSlot(key, DirtyFieldMask{kDrtDirtyBits},
-                                  device.DrtRuntime().Pack(resolved));
+    const bool             overridden = plan.output_color_override.has_value();
+    const auto             revision   = drt.Params().Revision();
+    if (!overridden && arena.Contains(key) && arena.AppliedRevision(key) == revision) {
+      return;
     }
-    if (display_pending) {
-      pending.push_back(std::move(*display_pending));
-    }
+    const auto runtime = device.DrtRuntime().Pack(
+        DrtOutputResolver::ResolveNode(drt, plan.output_color_override, kErrorPrefix));
+    arena.BindOrWritePackedSlot(key, DirtyFieldMask{kDrtDirtyBits}, runtime,
+                                overridden ? kNoParameterRevision : revision);
   }
 
   static void DispatchDisplayTransform(CudaRenderDevice& device, const FrameSceneBinding& scene,
@@ -171,8 +170,9 @@ struct CudaDrtOps {
 
 }  // namespace
 
-auto ExecuteCudaDrt(CudaRenderDevice& device, const ExecutionPlan& plan, PipelineDocument& document,
-                    const FrameSceneBinding& scene) -> CudaDrtResult {
+auto ExecuteCudaDrt(CudaRenderDevice& device, const ExecutionPlan& plan,
+                    const PipelineDocument& document, const FrameSceneBinding& scene)
+    -> CudaDrtResult {
   const auto executed = DrtPostExecutor<CudaDrtOps>::Execute(device, plan, document, scene);
   return {executed.output, executed.display_post, executed.post_neighborhood_count};
 }

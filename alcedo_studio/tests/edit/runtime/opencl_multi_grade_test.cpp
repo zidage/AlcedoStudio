@@ -301,7 +301,7 @@ TEST_F(OpenClMultiGradeFixture, EachGradeMixesAgainstItsOwnInput) {
   };
   make_fill(1.0f, "grade.primary", "mask.a");
   make_fill(128.0f / 255.0f, "grade.b", "mask.b");
-  document.MarkTopologyDirty();
+  document.MarkTopologyChanged();
 
   const auto plan = Compile(document);
   ASSERT_TRUE(plan.grade_nodes[0].mask_stack.has_value());

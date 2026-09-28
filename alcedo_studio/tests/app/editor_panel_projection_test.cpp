@@ -42,17 +42,18 @@ class SerializationCountingModel : public IOperatorModel {
 
   auto Type() const -> OperatorTypeId override { return value_.Type(); }
   auto IsDefault() const -> bool override { return value_.IsDefault(); }
-  auto IsDirty() const -> bool override { return value_.IsDirty(); }
-  auto DirtyFields() const -> DirtyFieldMask override { return value_.DirtyFields(); }
+  auto        Revision() const -> ParameterRevision override { return value_.Revision(); }
+  auto        FieldsRevision(DirtyFieldMask fields) const -> ParameterRevision override {
+    return value_.FieldsRevision(fields);
+  }
+  void CopyRevisionsFrom(const IOperatorModel& source) override {
+    const auto* typed = dynamic_cast<const SerializationCountingModel*>(&source);
+    value_.CopyRevisionsFrom(typed != nullptr ? typed->value_ : source);
+  }
   auto MakeFullDto() const -> OperatorParamDto override {
     ++dto_reads;
     return value_.MakeFullDto();
   }
-  auto TakeDirtyPatch() -> std::optional<OperatorParamPatchDto> override {
-    return value_.TakeDirtyPatch();
-  }
-  void RestoreDirty(DirtyFieldMask fields) override { value_.RestoreDirty(fields); }
-  void MarkAllDirty() override { value_.MarkAllDirty(); }
   auto ToJson() const -> nlohmann::json override {
     ++json_reads;
     return value_.ToJson();

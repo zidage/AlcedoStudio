@@ -22,7 +22,6 @@
 #include "edit/operators/models/hls_model.hpp"
 #include "edit/operators/models/i_operator_model.hpp"
 #include "edit/operators/models/lmt_model.hpp"
-#include "edit/operators/models/pending_parameter_patch.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/operators/models/sharpen_model.hpp"
 #include "edit/runtime/byte_range.hpp"
@@ -124,17 +123,18 @@ class DtoOnlyExposureModel : public IOperatorModel {
 
   auto        Type() const -> OperatorTypeId override { return value_.Type(); }
   auto        IsDefault() const -> bool override { return value_.IsDefault(); }
-  auto        IsDirty() const -> bool override { return value_.IsDirty(); }
-  auto        DirtyFields() const -> DirtyFieldMask override { return value_.DirtyFields(); }
+  auto        Revision() const -> ParameterRevision override { return value_.Revision(); }
+  auto        FieldsRevision(DirtyFieldMask fields) const -> ParameterRevision override {
+    return value_.FieldsRevision(fields);
+  }
+  void CopyRevisionsFrom(const IOperatorModel& source) override {
+    const auto* typed = dynamic_cast<const DtoOnlyExposureModel*>(&source);
+    value_.CopyRevisionsFrom(typed != nullptr ? typed->value_ : source);
+  }
   auto        MakeFullDto() const -> OperatorParamDto override {
     ++dto_reads;
     return value_.MakeFullDto();
   }
-  auto TakeDirtyPatch() -> std::optional<OperatorParamPatchDto> override {
-    return value_.TakeDirtyPatch();
-  }
-  void RestoreDirty(DirtyFieldMask fields) override { value_.RestoreDirty(fields); }
-  void MarkAllDirty() override { value_.MarkAllDirty(); }
   auto ToJson() const -> nlohmann::json override { return value_.ToJson(); }
   void LoadJson(const nlohmann::json& json) override { value_.LoadJson(json); }
 
@@ -149,14 +149,31 @@ struct HostParameterBackend {
   auto CreateBuffer(std::size_t) -> Buffer { return {}; }
   void UploadBufferRange(Buffer&, std::uint32_t offset, std::span<const std::byte> data,
                          CommandContext&) {
+    if (fail_upload) {
+      throw std::runtime_error("HostParameterBackend: upload failed");
+    }
     last_uploads.push_back(ByteRange{offset, static_cast<std::uint32_t>(data.size())});
+    if (device.size() < offset + data.size()) {
+      device.resize(offset + data.size());
+    }
+    std::memcpy(device.data() + offset, data.data(), data.size());
   }
   void                   DownloadBufferRange(const Buffer&, std::uint32_t, std::span<std::byte>,
                                              CommandContext&) const {}
   [[nodiscard]] auto     HasInFlightSubmission() const -> bool { return false; }
   void                   NoteHostToDeviceBegin() { last_uploads.clear(); }
 
+  /// values[0] of the Grade slot that starts at @p offset in the uploaded device bytes.
+  [[nodiscard]] auto     UploadedValue(std::uint32_t offset) const -> float {
+    float value = 0.0f;
+    std::memcpy(&value, device.data() + offset + offsetof(GradeAdjustmentParams, values),
+                    sizeof(value));
+    return value;
+  }
+
   std::vector<ByteRange> last_uploads;
+  std::vector<std::byte> device;
+  bool                   fail_upload = false;
 };
 
 auto SlotParams(const ParameterArena<HostParameterBackend>& arena, const ParameterSlotKey& key)
@@ -292,7 +309,7 @@ TEST(GpuDagAdjustmentRuntime, GradePackingRejectsMismatchedModelTypeWithoutFullD
   EXPECT_EQ(OperatorModelFullDtoCopyCount::Peek(), 0);
 }
 
-TEST(GpuDagAdjustmentRuntime, GradeRuntimeSlotWritesPackedBytesOnlyWhenDirty) {
+TEST(GpuDagAdjustmentRuntime, GradeRuntimeSlotWritesPackedBytesOnlyWhenModelRevisionChanges) {
   HostParameterBackend                 backend;
   ParameterArena<HostParameterBackend> arena(backend);
   ParameterSlotKey key{NodeId{"grade.primary"}, AdjustmentInstanceId{"exposure"}};
@@ -300,31 +317,68 @@ TEST(GpuDagAdjustmentRuntime, GradeRuntimeSlotWritesPackedBytesOnlyWhenDirty) {
   model.SetValue(0.75f);
   OperatorModelFullDtoCopyCount::Reset();
 
-  auto first = BindOrRefreshGradeRuntimeSlot(arena, key, model, AdjustmentBehavior::Exposure);
-  ASSERT_TRUE(first.has_value());
+  EXPECT_TRUE(BindOrRefreshGradeRuntimeSlot(arena, key, model, AdjustmentBehavior::Exposure));
   EXPECT_TRUE(arena.HasPendingUpload());
+  EXPECT_EQ(arena.AppliedRevision(key), model.Revision());
   EXPECT_FLOAT_EQ(SlotParams(arena, key).values[0], 0.75f);
   EXPECT_FLOAT_EQ(PackedGradeControlValue(arena, key), 0.75f);
 
   HostParameterBackend::CommandContext context;
   arena.UploadDirty(context);
-  first->Commit();
   EXPECT_FALSE(arena.HasPendingUpload());
-  EXPECT_FALSE(model.IsDirty());
 
-  auto second = BindOrRefreshGradeRuntimeSlot(arena, key, model, AdjustmentBehavior::Exposure);
-  EXPECT_FALSE(second.has_value());
+  EXPECT_FALSE(BindOrRefreshGradeRuntimeSlot(arena, key, model, AdjustmentBehavior::Exposure));
   EXPECT_FALSE(arena.HasPendingUpload());
   EXPECT_FLOAT_EQ(PackedGradeControlValue(arena, key), 0.75f);
 
   model.SetValue(1.5f);
-  auto third = BindOrRefreshGradeRuntimeSlot(arena, key, model, AdjustmentBehavior::Exposure);
-  ASSERT_TRUE(third.has_value());
+  EXPECT_TRUE(BindOrRefreshGradeRuntimeSlot(arena, key, model, AdjustmentBehavior::Exposure));
   EXPECT_TRUE(arena.HasPendingUpload());
+  EXPECT_EQ(arena.AppliedRevision(key), model.Revision());
   EXPECT_FLOAT_EQ(SlotParams(arena, key).values[0], 1.5f);
   arena.UploadDirty(context);
-  third->Commit();
   EXPECT_EQ(OperatorModelFullDtoCopyCount::Peek(), 0);
+}
+
+TEST(GpuDagAdjustmentRuntime, GradeRuntimeSlotPackingInOneArenaLeavesOtherArenaStale) {
+  // Two render workspaces read one Model. Packing in the first must not hide the change from
+  // the second (the audit R7 defect: a one-shot render took the change from the editor).
+  HostParameterBackend                 backend;
+  ParameterArena<HostParameterBackend> session(backend);
+  ParameterArena<HostParameterBackend> one_shot(backend);
+  ParameterSlotKey key{NodeId{"grade.primary"}, AdjustmentInstanceId{"exposure"}};
+  ExposureModel    model;
+  model.SetValue(0.25f);
+  EXPECT_TRUE(BindOrRefreshGradeRuntimeSlot(session, key, model, AdjustmentBehavior::Exposure));
+
+  model.SetValue(1.25f);
+  EXPECT_TRUE(BindOrRefreshGradeRuntimeSlot(one_shot, key, model, AdjustmentBehavior::Exposure));
+  EXPECT_FLOAT_EQ(PackedGradeControlValue(one_shot, key), 1.25f);
+
+  EXPECT_TRUE(BindOrRefreshGradeRuntimeSlot(session, key, model, AdjustmentBehavior::Exposure));
+  EXPECT_FLOAT_EQ(PackedGradeControlValue(session, key), 1.25f);
+  EXPECT_EQ(session.AppliedRevision(key), one_shot.AppliedRevision(key));
+}
+
+TEST(GpuDagAdjustmentRuntime, GradeRuntimeSlotFailedUploadKeepsPackedBytesQueued) {
+  HostParameterBackend                 backend;
+  ParameterArena<HostParameterBackend> arena(backend);
+  ParameterSlotKey key{NodeId{"grade.primary"}, AdjustmentInstanceId{"exposure"}};
+  ExposureModel    model;
+  model.SetValue(0.5f);
+  ASSERT_TRUE(BindOrRefreshGradeRuntimeSlot(arena, key, model, AdjustmentBehavior::Exposure));
+
+  HostParameterBackend::CommandContext context;
+  backend.fail_upload = true;
+  EXPECT_THROW(arena.UploadDirty(context), std::runtime_error);
+  EXPECT_TRUE(arena.HasPendingUpload());
+
+  // The Model did not change, so the slot is not packed again; the retry uploads the same bytes.
+  EXPECT_FALSE(BindOrRefreshGradeRuntimeSlot(arena, key, model, AdjustmentBehavior::Exposure));
+  backend.fail_upload = false;
+  arena.UploadDirty(context);
+  EXPECT_FALSE(arena.HasPendingUpload());
+  EXPECT_FLOAT_EQ(backend.UploadedValue(arena.Binding(key).offset), 0.5f);
 }
 
 TEST(GpuDagAdjustmentRuntime, WritePackedSlotRejectsSizeMismatch) {

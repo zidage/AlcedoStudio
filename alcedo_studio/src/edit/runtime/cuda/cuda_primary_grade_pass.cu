@@ -18,7 +18,6 @@
 #include "cuda_acescc.cuh"
 #include "cuda_neighbor_grade.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
-#include "edit/operators/models/pending_parameter_patch.hpp"
 #include "edit/runtime/local_tone_mapping.hpp"
 #include "edit/runtime/adjustment_runtime.hpp"
 #include "edit/runtime/content_key.hpp"
@@ -55,7 +54,8 @@ auto AcquireCudaScratch(CudaRenderWorkspace& workspace, std::uint32_t width, std
   return workspace.Textures().Acquire({width, height, TextureFormat::Rgba32f});
 }
 
-auto LoadCudaGradeLut(CudaRenderDevice& device, ColorGradeNodeModel& grade) -> CudaLutBinding {
+auto LoadCudaGradeLut(CudaRenderDevice& device, const ColorGradeNodeModel& grade)
+    -> CudaLutBinding {
   const auto packed = TryPackGradeLut(grade);
   if (packed == nullptr) {
     return device.Workspace().Device().DummyLut();
@@ -431,7 +431,8 @@ struct CudaGradeOps {
     return static_cast<std::uint32_t>(bytes);
   }
 
-  static auto LoadLut(CudaRenderDevice& device, ColorGradeNodeModel& grade) -> CudaLutBinding {
+  static auto LoadLut(CudaRenderDevice& device, const ColorGradeNodeModel& grade)
+      -> CudaLutBinding {
     return LoadCudaGradeLut(device, grade);
   }
 
@@ -507,7 +508,7 @@ struct CudaGradeOps {
 }  // namespace
 
 auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan,
-                             const PreparedRawInput& prepared, PipelineDocument& document,
+                             const PreparedRawInput& prepared, const PipelineDocument& document,
                              const CompiledGradeNode& compiled_grade_node,
                              const FrameSceneBinding& scene) -> CudaPrimaryGradeResult {
   const auto executed = GradeExecutor<CudaGradeOps>::Execute(device, plan, prepared, document,
@@ -526,7 +527,7 @@ auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan
 }
 
 auto ExecuteCudaPrimaryGrade(CudaRenderDevice& device, const ExecutionPlan& plan,
-                             const PreparedRawInput& prepared, PipelineDocument& document)
+                             const PreparedRawInput& prepared, const PipelineDocument& document)
     -> CudaPrimaryGradeResult {
   if (plan.grade_nodes.empty()) {
     throw std::runtime_error("ExecuteCudaPrimaryGrade: plan has no Color Grade");

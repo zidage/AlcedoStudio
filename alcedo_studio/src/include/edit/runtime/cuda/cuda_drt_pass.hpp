@@ -25,11 +25,11 @@ struct CudaDrtResult {
  *
  * The display kernel decodes the compiled ACEScc input before ACES 2.0 or OpenDRT. Neighborhood
  * operations consume that display-referred result and write the final display output. Grade mix
- * and masks do not suppress these endpoint operations. A failed parameter upload retains Model
- * dirty bits.
+ * and masks do not suppress these endpoint operations. Reads the document only; a failed
+ * parameter upload stays queued in the workspace arena.
  */
 [[nodiscard]] auto ExecuteCudaDrt(CudaRenderDevice& device, const ExecutionPlan& plan,
-                                  PipelineDocument& document, const FrameSceneBinding& scene)
+                                  const PipelineDocument& document, const FrameSceneBinding& scene)
     -> CudaDrtResult;
 
 }  // namespace alcedo

@@ -347,7 +347,7 @@ TEST_F(CudaPreviewInteractiveBaselineFixture, EightGradeLastExposureReexecutesGr
     PopulateHeavyGrade(document, NodeId{ids[static_cast<std::size_t>(i)]},
                        0.15f * static_cast<float>(i + 1));
   }
-  document.MarkTopologyDirty();
+  document.MarkTopologyChanged();
   auto plan = CompileInteractive(document);
   ASSERT_EQ(plan.grade_nodes.size(), 8u);
   Warmup(document, plan);
@@ -376,7 +376,7 @@ TEST_F(CudaPreviewInteractiveBaselineFixture, EightGradeMidCurveKeepsOwnLlfAndIn
   for (int i = 0; i < 8; ++i) {
     PopulateHeavyGrade(document, NodeId{ids[static_cast<std::size_t>(i)]}, 0.2f);
   }
-  document.MarkTopologyDirty();
+  document.MarkTopologyChanged();
   auto plan = CompileInteractive(document);
   Warmup(document, plan);
 
@@ -400,7 +400,7 @@ TEST_F(CudaPreviewInteractiveBaselineFixture, EightGradeOwnShadowsRebuildsLlfRes
   multi_grade_test::AddCleanGradesBeforeDrt(
       document, {"g1", "g2", "g3", "g4", "g5", "g6", "g7"});
   PopulateHeavyGrade(document, NodeId{"g4"}, 0.3f);
-  document.MarkTopologyDirty();
+  document.MarkTopologyChanged();
   auto plan = CompileInteractive(document);
   Warmup(document, plan);
 
@@ -420,7 +420,7 @@ TEST_F(CudaPreviewInteractiveBaselineFixture, EightGradeMaskFeatherKeepsOwnLlfAn
   grade_mask_test::AddMask(*look, grade_mask_test::MakeRadialMask(MaskId{"mask.g1.radial"}));
   look->SetMix(0.7f);
   PopulateHeavyGrade(document, NodeId{"g1"}, 0.4f);
-  document.MarkTopologyDirty();
+  document.MarkTopologyChanged();
   auto plan = CompileInteractive(document);
   Warmup(document, plan);
 
@@ -443,7 +443,7 @@ TEST_F(CudaPreviewInteractiveBaselineFixture, EightGradeDrtClarityReexecutesGrad
   multi_grade_test::AddCleanGradesBeforeDrt(
       document, {"g1", "g2", "g3", "g4", "g5", "g6", "g7"});
   PopulateHeavyGrade(document, NodeId{"grade.primary"}, 0.2f);
-  document.MarkTopologyDirty();
+  document.MarkTopologyChanged();
   auto plan = CompileInteractive(document);
   Warmup(document, plan);
 
@@ -500,7 +500,7 @@ TEST_F(CudaPreviewInteractiveBaselineFixture,
   for (int i = 0; i < 8; ++i) {
     PopulateHeavyGrade(document, NodeId{ids[static_cast<std::size_t>(i)]}, 0.2f);
   }
-  document.MarkTopologyDirty();
+  document.MarkTopologyChanged();
   auto plan = CompileInteractive(document);
   ASSERT_EQ(LongEdge(plan.geometry.render_extent), kInteractiveMaxLongEdge);
   ASSERT_TRUE(plan.encode_geometry_resample);
@@ -604,7 +604,7 @@ TEST_F(CudaPreviewInteractiveBaselineFixture,
     ASSERT_NE(look, nullptr);
     look->SetMix(0.8f);
     AddGradeMasks(*look, "mask.look.radial", "mask.look.linear");
-    document.MarkTopologyDirty();
+    document.MarkTopologyChanged();
     auto plan = CompileInteractive(document);
     expect_native(plan);
     DumpRecord(out, "native_four_node_second_masked_cold", CaptureHot(3201, document, plan),
@@ -633,7 +633,7 @@ TEST_F(CudaPreviewInteractiveBaselineFixture,
     AddGradeMasks(*g0, "mask.0.r", "mask.0.l");
     AddGradeMasks(*g1, "mask.1.r", "mask.1.l");
     AddGradeMasks(*g2, "mask.2.r", "mask.2.l");
-    document.MarkTopologyDirty();
+    document.MarkTopologyChanged();
     auto plan = CompileInteractive(document);
     expect_native(plan);
     DumpRecord(out, "native_multi_grade_mask_mix_cold", CaptureHot(3301, document, plan),
@@ -674,7 +674,7 @@ TEST_F(CudaPreviewInteractiveBaselineFixture,
     for (int i = 0; i < 8; ++i) {
       PopulateHeavyGrade(document, NodeId{ids[static_cast<std::size_t>(i)]}, 0.2f);
     }
-    document.MarkTopologyDirty();
+    document.MarkTopologyChanged();
     auto plan = CompileInteractive(document);
     expect_native(plan);
     DumpRecord(out, "native_eight_grade_cold", CaptureHot(3501, document, plan),

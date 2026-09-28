@@ -132,12 +132,11 @@ class BasicRenderDevice {
   /**
    * @brief Run the compiled DAG. Skips published content keys. No image-processing substitute.
    */
-  [[nodiscard]] auto Execute(const ExecutionPlan& plan, const PreparedRawInput& input,
-                             PipelineDocument& document, bool publish_on_success = true,
-                             TransientAllocationPolicy transient_policy =
-                                 TransientAllocationPolicy::SessionPacked,
-                             ResultPersistenceScope persistence =
-                                 ResultPersistenceScope::AllCurrentResults)
+  [[nodiscard]] auto Execute(
+      const ExecutionPlan& plan, const PreparedRawInput& input, const PipelineDocument& document,
+      bool                      publish_on_success = true,
+      TransientAllocationPolicy transient_policy   = TransientAllocationPolicy::SessionPacked,
+      ResultPersistenceScope    persistence        = ResultPersistenceScope::AllCurrentResults)
       -> GraphValueId {
     // Backends with an isolated submission stream (OpenCL dedicated queue)
     // bind it to this thread for the encode so shared helpers that resolve a

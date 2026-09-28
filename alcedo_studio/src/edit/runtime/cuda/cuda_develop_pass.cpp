@@ -16,7 +16,6 @@
 #include "decoders/processor/operators/gpu/cuda_dng_warp.hpp"
 #include "decoders/processor/operators/gpu/cuda_highlight_reconstruct.hpp"
 #include "decoders/processor/operators/gpu/cuda_white_balance.hpp"
-#include "edit/operators/models/pending_parameter_patch.hpp"
 #include "edit/runtime/cuda/cuda_sensor_demosaic.hpp"
 #include "edit/runtime/cuda/geometry_resample_pass.hpp"
 #include "edit/runtime/lens/cuda/cuda_geometry_ops.hpp"
@@ -99,19 +98,17 @@ void ExecuteCudaLensCalibration(CudaRenderDevice& device, const ExecutionPlan& p
 }  // namespace
 
 void ExecuteCudaDevelop(CudaRenderDevice& device, const ExecutionPlan& plan,
-                        const PreparedRawInput& input, PipelineDocument& document) {
+                        const PreparedRawInput& input, const PipelineDocument& document) {
   auto& workspace = device.Workspace();
   if (!workspace.IsRendering()) {
     throw std::runtime_error("ExecuteCudaDevelop: BeginRender has not been called");
   }
   TransientAllocationPolicyScope<CudaBackend> exact_release(
       workspace.TransientBuffers(), TransientAllocationPolicy::ExactRelease);
-  auto* develop = document.Develop();
+  const auto* develop = document.Develop();
   if (develop == nullptr) {
     throw std::runtime_error("ExecuteCudaDevelop: missing develop node");
   }
-
-  auto pending = TakePendingDirtyFields(develop->Params());
 
   auto&              ctx           = device.CommandContext();
   auto               stream        = WrapStream(ctx.Stream());
@@ -203,10 +200,6 @@ void ExecuteCudaDevelop(CudaRenderDevice& device, const ExecutionPlan& plan,
   if (plan.Contains(GpuPassKind::Lens)) {
     diag::PreviewSubStageInterval lens(diag::PreviewSubStageKind::Lens);
     ExecuteCudaLensCalibration(device, plan, input, flags);
-  }
-
-  if (pending.has_value()) {
-    pending->Commit();
   }
 }
 
