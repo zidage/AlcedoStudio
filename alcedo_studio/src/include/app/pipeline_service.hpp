@@ -207,7 +207,8 @@ class PipelineMgmtService final {
   /// Persist the current metadata-resolved document as the immutable root for a newly imported
   /// image. When @p raw_color_context is null (non-RAW RGB files), Rec.709 XYZ→camera matrices
   /// are bound onto the Develop node before the root is written. Calling this again for an image
-  /// that already has a root verifies and loads that root; it never replaces the stored root state.
+  /// that already has a root verifies and loads that root; it never replaces the stored root state
+  /// and does not change the camera profile of the live document.
   void               InitializeImageRoot(const std::shared_ptr<PipelineGuard>& pipeline,
                                          const RawRuntimeColorContext*         raw_color_context = nullptr);
 

@@ -151,7 +151,8 @@ R7 是本次重构的**硬前置条件**：只要 dirty 位还是文档上的可
    最后一 pin 清理可能清掉编辑器缓存并 detach sink。
 7. discard/checkout 把 `dirty_` 置 false 但不写元素 JSON（`editor_history_mutation.cpp:953,1065`），
    驱逐/重启后 `LoadPipeline` 读到旧文档，而缩略图盘缓存 key 用的是新 head。
-8. R7 描述的 dirty 位被后台渲染抢先消费。
+8. R7 描述的 dirty 位被后台渲染抢先消费。**已证实（2026-09-28，P0）：**
+   `ExecutorIsolationTest.DISABLED_EditorSessionRenderShowsParameterChangeAfterInterleavedOneShot`。
 9. 缩略图渲染的文档来源取决于缓存历史：元素 JSON（`:456`）或编辑器重放出的文档（`:700-721`）。
 
 ---

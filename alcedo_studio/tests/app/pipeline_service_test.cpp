@@ -1407,6 +1407,50 @@ TEST_F(PipelineMapperTests, PersistedNonRawDocumentWithoutCameraMatricesBecomesR
   pipelines.SavePipeline(editor);
 }
 
+// The editor open path calls InitializeImageRoot without a RAW color context for an image that
+// already has a root. That call must not bind the working-space Rec.709 profile onto the live
+// document: a render on the same guard before the history replay would use the wrong colors.
+TEST_F(PipelineMapperTests, InitializeImageRootOnExistingRawRootLeavesLiveCameraProfileUnchanged) {
+  ProjectService      project(db_path_, meta_path_);
+  PipelineMgmtService pipelines(project.GetStorage());
+
+  RawRuntimeColorContext raw_context;
+  raw_context.valid_                  = true;
+  raw_context.output_in_camera_space_ = true;
+  raw_context.color_matrices_valid_   = true;
+  raw_context.color_matrix_1_[0]      = 0.625;
+  raw_context.color_matrix_2_[0]      = 0.5;
+
+  auto live = pipelines.LoadPipeline(724);
+  ASSERT_NE(live, nullptr);
+  pipelines.InitializeImageRoot(live, &raw_context);
+  const auto root_id     = live->root_id_;
+  const auto before_json = live->document_->ToJson();
+  ASSERT_DOUBLE_EQ(live->document_->Develop()->Params().Params().camera_profile.color_matrix_1[0],
+                   0.625);
+
+  pipelines.InitializeImageRoot(live);
+
+  const auto profile = live->document_->Develop()->Params().Params().camera_profile;
+  EXPECT_TRUE(profile.color_matrices_valid);
+  EXPECT_DOUBLE_EQ(profile.color_matrix_1[0], 0.625);
+  EXPECT_DOUBLE_EQ(profile.color_matrix_2[0], 0.5);
+  EXPECT_EQ(live->document_->ToJson(), before_json);
+  EXPECT_EQ(live->root_id_, root_id);
+  {
+    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto             db_lock  = db_guard.Lock();
+    CommitGraphStore graph_service(db_guard.conn_);
+    const auto       encoded = graph_service.GetRootSerializedPipelineState(724, root_id);
+    ASSERT_TRUE(encoded.has_value());
+    const auto root = DecodePipelineRootState(*encoded);
+    ASSERT_TRUE(root.raw_color_context.has_value());
+    EXPECT_DOUBLE_EQ(root.document.Develop()->Params().Params().camera_profile.color_matrix_1[0],
+                     0.625);
+  }
+  pipelines.SavePipeline(live);
+}
+
 TEST_F(PipelineMapperTests, PersistedRawRootWithoutMatricesDoesNotReceiveWorkingSpaceProfile) {
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService first(project.GetStorage());

@@ -47,6 +47,7 @@
 #include "renderer/pipeline_scheduler.hpp"
 #include "renderer/pipeline_task.hpp"
 #include "sleeve/storage.hpp"
+#include "support/raw_import_pipeline_fixture.hpp"
 #include "type/supported_file_type.hpp"
 #include "type/type.hpp"
 #include "utils/clock/time_provider.hpp"
@@ -64,49 +65,11 @@
 namespace alcedo {
 namespace {
 using namespace std::chrono_literals;
-
-auto LinearDngPath() -> std::filesystem::path {
-  return std::filesystem::path(TEST_IMG_PATH) / "raw" / "linear_dng" / "mfzoty.dng";
-}
-
-auto ImportRawFile(ProjectService& project, std::shared_ptr<PipelineMgmtService> pipelines,
-                   const std::filesystem::path& raw_path) -> std::pair<sl_element_id_t, image_id_t> {
-  if (!std::filesystem::exists(raw_path) || !pipelines) {
-    return {0, 0};
-  }
-  auto              fs_service = project.GetSleeveService();
-  auto              img_pool   = project.GetImagePoolService();
-  ImportServiceImpl import_service(fs_service, img_pool, pipelines);
-  auto              import_job = std::make_shared<ImportJob>();
-  std::promise<ImportResult> imported;
-  auto                       imported_future = imported.get_future();
-  import_job->on_finished_                   = [&imported](const ImportResult& result) {
-    imported.set_value(result);
-  };
-  import_job = import_service.ImportToFolder({raw_path}, L"", {}, import_job);
-  if (!import_job) {
-    return {0, 0};
-  }
-  if (imported_future.wait_for(60s) != std::future_status::ready) {
-    return {0, 0};
-  }
-  if (imported_future.get().imported_ != 1u || !import_job->import_log_) {
-    return {0, 0};
-  }
-  const auto snapshot = import_job->import_log_->Snapshot();
-  if (snapshot.created_.size() != 1u) {
-    return {0, 0};
-  }
-  import_service.SyncImports(snapshot, L"");
-  project.GetSleeveService()->Sync();
-  project.GetImagePoolService()->SyncWithStorage();
-  return {snapshot.created_.front().element_id_, snapshot.created_.front().image_id_};
-}
-
-auto ImportLinearDng(ProjectService& project, std::shared_ptr<PipelineMgmtService> pipelines)
-    -> std::pair<sl_element_id_t, image_id_t> {
-  return ImportRawFile(project, pipelines, LinearDngPath());
-}
+using raw_import_test::BindImportedRawColor;
+using raw_import_test::HostPixels;
+using raw_import_test::ImportLinearDng;
+using raw_import_test::ImportRawFile;
+using raw_import_test::LinearDngPath;
 
 /// Read every channel of an 8- or 16-bit image file at its stored depth; empty on failure.
 auto ReadImagePixels(const std::filesystem::path& path) -> cv::Mat {
@@ -122,13 +85,6 @@ auto ReadImagePixels(const std::filesystem::path& path) -> cv::Mat {
                                     pixels.data);
   input->close();
   return ok ? pixels : cv::Mat{};
-}
-
-auto HostPixels(ImageBuffer& buffer) -> cv::Mat {
-  if (!buffer.cpu_data_valid_ && buffer.gpu_data_valid_) {
-    buffer.SyncToCPU();
-  }
-  return buffer.GetCPUData().clone();
 }
 
 auto GetThumbnailDetailedBlocking(ThumbnailService& service, sl_element_id_t id,
@@ -236,20 +192,6 @@ auto OneShotPublishedResultCount(PipelineExecutor& executor) -> std::size_t {
   }
 #endif
   return 0;
-}
-
-void BindImportedRawColor(const std::shared_ptr<PipelineGuard>& live, ImagePoolService& pool,
-                           image_id_t image_id) {
-  if (!live || !live->pipeline_) {
-    return;
-  }
-  auto img = pool.Read<std::shared_ptr<Image>>(
-      image_id, [](const std::shared_ptr<Image>& image) { return image; });
-  if (!img || !img->HasRawColorContext()) {
-    return;
-  }
-  std::lock_guard<std::mutex> render_lock(live->pipeline_->GetRenderLock());
-  BindImportedCameraProfile(*live->document_, img->GetRawColorContext());
 }
 
 }  // namespace

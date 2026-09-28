@@ -137,6 +137,100 @@ P1、P2 是纯基础设施，不改变所有权。P3 起逐个消费者迁移。
 
 **退出条件：** 基线已记录；新增测试已提交并标明预期；测量数据写回本节。
 
+##### Phase P0 completion record (2026-09-28)
+
+**Status:** complete — 基线已记录（定向套件，完整 ctest 未运行，见下）；三个保护测试已提交并在当前代码上证实失败；
+成本测量已写回；Rec.709 小修复已落地并由新测试覆盖。
+
+**小修复的主调用链（成功路径）：**
+
+```text
+EditorSessionPipelinePort / AdjustmentTransfer → PipelineMgmtService::AcquireEditorPipeline / LoadEditorPipeline
+  -> BindEditorStateFromStorage(guard)
+  -> InitializeImageRoot(guard, raw_color_context = nullptr)
+       -> DB 锁内 GetImageEditState(id) → 已有 root
+       -> 不拿 render lock，不改 live 文档（旧代码此处无条件 BindWorkingSpaceDevelopData → Rec.709）
+       -> LoadGraph + GetRootSerializedPipelineState → SetPipelineHistoryState / CacheRootDocument
+  -> checkpoint 或 BuildLiveDocumentFromRoot → BindLivePipelineDocument（render lock 内换文档）
+  -> 同 guard 上的缩略图在任何时刻都只看到 RAW 相机 profile
+```
+
+**新 root 路径与失败路径：**
+
+```text
+InitializeImageRoot（无 edit state，导入时）
+  -> DB 锁内查询为空 → 释放 DB 锁（避免 DB→render 锁序）
+  -> render lock 内绑定 RAW context 或工作色彩空间 profile + ValidateProductDocument
+  -> 重新拿 DB 锁并复查：仍为空 → CreateRootPipelinePersisted；已被并发创建 → 走"已有 root"加载分支
+失败：ValidateProductDocument / DB 抛异常 → 异常原样上抛；已有 root 的 live 文档没有被改过，不需要回滚
+```
+
+**保护测试（`ExecutorIsolationTest`，`tests/app/executor_isolation_test.cpp`）：**
+
+| 计划条目 | 测试名 | 当前代码 | 启用阶段 |
+|---|---|---|---|
+| 1. R7 dirty 位被 one-shot 抢先消费 | `DISABLED_EditorSessionRenderShowsParameterChangeAfterInterleavedOneShot` | **失败**（已证实）：曝光 +1.5 EV 后编辑器 session 渲染均值 0.635 < 改前 0.762×1.2，与新 executor 参考渲染最大差 0.273（容差 1e-4）。审计中的"疑似"R7 由此确认为真实缺陷 | P1 |
+| 1 的对照 | `EditorSessionRenderShowsParameterChangeWithoutInterleavedOneShot` | 通过（去掉中间的 one-shot，其余相同） | — |
+| 2. C6 拖动中导出 | `DISABLED_ExportDuringUnsettledEditorPreviewUsesCommittedState` | **失败**（已证实）：已提交导出与拖动中导出的 JPEG 最大差 98（容差 1） | P5 |
+| 2 的对照 | `RepeatedExportOfEditorOwnedImageWithoutPreviewIsUnchanged` | 通过 | — |
+| 3. 打开编辑器时 live 文档变 Rec.709 | `EditorOpenNeverExposesWorkingSpaceProfileOnLiveRawDocument` | 修复前**失败**：观察线程按缩略图的方式在 render lock 下读 live 文档，一次打开内看到 19338 次 Rec.709；修复后 0 次，通过。已启用 | P0（本阶段） |
+| 小修复的确定性单测 | `PipelineMapperTest.InitializeImageRootOnExistingRawRootLeavesLiveCameraProfileUnchanged` | 通过 | P0 |
+
+测试 3 按计划写成"并发读 live 文档"而不是"并发渲染缩略图"：缩略图读的就是同一个 guard 上的同一份文档，
+直接断言文档 profile 比比较缩略图颜色更确定。`DISABLED_` 测试用 `--gtest_also_run_disabled_tests` 运行得到上面的失败数据。
+
+**成本测量（`PipelineDocumentCopyCostTest`，`tests/edit/graph/pipeline_document_copy_cost_test.cpp`，win_debug，两次运行一致）：**
+
+| 文档 | 规模 | `ClonePipelineDocument` | `MakeStaticPlanKey` | 打包全部 Grade 槽 | 打包 1 个槽 |
+|---|---|---|---|---|---|
+| 默认（3 节点） | 1 Grade，JSON 5.3 KB | 中位 2.67 ms，7310 次分配 | 中位 0.53 ms，2592 次分配 | 13 槽 22–25 µs | 0.6 µs |
+| 多蒙版 | 4 Grade × 32 蒙版（16 径向 + 16 线性），JSON 60 KB | 中位 21.0 ms，55812 次分配 | 中位 2.33 ms，10318 次分配 | 52 槽 72–76 µs | 0.5 µs |
+
+- 分配数来自 debug CRT 的 `_CrtSetAllocHook`，覆盖 EditGraph / EditRuntime DLL 内的分配。
+- **笔刷蒙版未测：** `ALCEDO_ENABLE_BRUSH_MASK` 在所有 preset 中均为 OFF（"not part of the shipped product"），
+  发布构建里没有笔刷文档。测试在该开关打开时会加入 8 个 × 200 笔 × 32 采样的笔刷蒙版；本次未打开。
+  "重笔刷文档"在本阶段以"多蒙版文档"代替。
+- **只有 debug 数据：** `win_release` 的 `ALCEDO_BUILD_TESTS=OFF`。P2 的门槛应在同一构建类型下与本表比较。
+- 对 P1 / P2 的含义：`MakeStaticPlanKey` 每帧 0.5–2.3 ms、上千次分配（debug），与克隆同一数量级的十分之一，
+  P1 改 revision 协议时应一并让静态 key 不必每帧重算；参数打包本身可以忽略。
+- 建议的 P2 门槛（同为 debug）：多蒙版文档冻结 + 改一个滑块字段 ≤ 克隆耗时的 1%（约 0.2 ms），分配 ≤ 100 次。
+
+**基线（完整 ctest 未运行）：** 按 AGENTS.md，智能体不自行运行完整 ctest。改为运行本重构涉及的定向套件，在 HEAD `fb8b3d65c` 上：
+
+| 套件 | HEAD 基线 | P0 之后 |
+|---|---|---|
+| `PipelineMapperTest` `PipelineSharedUseTest` `ExportServiceTest` `GpuDagRawInputTest` `ImportServiceTest` | 207/207 通过，5 个预存 DISABLED | 213/213 通过（+`ExecutorIsolationTest` 3 个、`PipelineDocumentCopyCostTest` 2 个、`PipelineMapperTest` 1 个），7 个 DISABLED（新增 2 个为本阶段的预期失败测试） |
+| 直接调用方：`AdjustmentTransferServiceMiniGitTest` `PipelineDngProfileBindingTest` `EditorSessionHistoryPortTest` `AdjustmentTransferControllerTest` `ThumbnailServiceTest` | — | 前四个 ctest 117/117 通过。`ThumbnailServiceTest` 过滤运行（排除 5 万次迭代的 `FuzzScroll*` 压力测试）：`OrdinaryThumbnailReusesLiveEditorExecutorAndDocument`（pin 计数，3 次中失败 1–2 次）与 `DiskCacheTracksRootAndActiveHeadAndServesAfterPipelineIsRemoved`（盘缓存 metadata 文件不存在，3/3 失败）在去掉 P0 生产改动的 HEAD 代码上同样失败，属预存问题；其余非压力测试通过 |
+
+预存 DISABLED（非本阶段）：`PipelineMapperTests.FuzzTest`、`ThreadSafeTest`，`ExportServiceTests.ExportHdrJpeg_WritesUltraHdrFile`、
+`BatchExport_LimitedCount_WritesReadableFiles`、`Manual_KeepExportFiles`。
+
+Commands（PowerShell，PATH 前置 `build\debug\vcpkg_installed\x64-windows\debug\bin`）：
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target PipelineMapperTest PipelineSharedUseTest ExportServiceTest GpuDagRawInputTest ImportServiceTest ExecutorIsolationTest PipelineDocumentCopyCostTest
+ctest --test-dir build/debug -j 1 -R "^(PipelineMapperTest|PipelineSharedUseTest|ExportServiceTest|GpuDagRawInputTest|ImportServiceTest|ExecutorIsolationTest|PipelineDocumentCopyCostTest)\." --output-on-failure
+ExecutorIsolationTest.exe --gtest_also_run_disabled_tests      # 修复前代码上运行，得到上表的失败数据
+PipelineDocumentCopyCostTest.exe                               # 两次
+```
+
+**Checklist / exit condition：**
+- [x] 基线已记录（定向套件；完整 ctest 按项目规则未运行）
+- [x] 新增测试 1、2 已提交为 `DISABLED_`，注释写明由 P1 / P5 启用；测试 3 随小修复启用
+- [x] 测量数据已写回（笔刷文档与 release 数据缺失，原因见上）
+- [x] 小修复：已有 root 时 `InitializeImageRoot` 不再改 live 文档的相机 profile
+
+**LOC note：** 生产代码只改 `app/pipeline_service.cpp`（+24/−17，1183 行，原本就超过 1000 行，P7 计划将其降到一半以下）和
+`pipeline_service.hpp` 注释。`pipeline_shared_use_test.cpp` 删除与新 `tests/support/raw_import_pipeline_fixture.hpp` 重复的导入 / 像素辅助函数（净 −58 行）。
+新测试文件 371 + 277 行。
+
+**Remaining gaps：**
+- 测试 1 的失败说明 R7 现在就会让编辑器预览在同图缩略图渲染后停留在旧参数上（用户可见），修复属于 P1。
+- 测试 3 在修复前是时序相关的检测（窗口大，本机 19338 次命中）；修复后的保证由确定性单测
+  `InitializeImageRootOnExistingRawRootLeavesLiveCameraProfileUnchanged` 承担。该单测在修复前代码上的失败未单独运行，
+  依据是旧代码会把 `color_matrix_1[0]` 从 0.625 改为 3.2404542。
+- 笔刷文档和 release 构建的成本数据未测量。
+
 ### P1 运行时只读文档：dirty 位协议改为 revision 协议
 
 **目标：** 渲染路径不再写文档。`Execute` 及所有 pass 改为接受 `const PipelineDocument&`。
@@ -357,7 +451,7 @@ P1、P2 是纯基础设施，不改变所有权。P3 起逐个消费者迁移。
 
 | 阶段 | 状态 |
 |---|---|
-| P0 基线与保护网 | 未开始 |
+| P0 基线与保护网 | 完成（2026-09-28） |
 | P1 revision 协议 | 未开始 |
 | P2 快照与 COW | 未开始 |
 | P3 executor 按请求接收快照 | 未开始 |
