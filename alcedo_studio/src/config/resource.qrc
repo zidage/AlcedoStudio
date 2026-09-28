@@ -35,6 +35,7 @@
     <file>panel_icons/git-branch.svg</file>
     <file>panel_icons/branch-current.svg</file>
     <file>panel_icons/fork-root.svg</file>
+    <file>panel_icons/clipboard.svg</file>
     <file>panel_icons/import.svg</file>
     <file>panel_icons/export.svg</file>
     <file>panel_icons/folder-open.svg</file>

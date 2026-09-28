@@ -21,6 +21,8 @@ Item {
     property var theme: null
     property var editorSession: null
     property var historyModel: null
+    // AdjustmentTransferController: pastes the copied adjustments as a new Version.
+    property var adjustmentTransfer: null
     property bool versionCheckoutEnabled: true
     property string versionCheckoutDisabledReason: ""
 
@@ -44,6 +46,8 @@ Item {
     // terminal HistoryOperationFinished may close or fail this draft (R4).
     property var draftPendingOperationId: null
     property string draftError: ""
+    // Rejection text of the last paste-as-Version request; empty after success.
+    property string pasteError: ""
     property real _preservedContentY: 0
     property bool _restoringContentY: false
     // Active Version's working head commit; empty when the active Version sits at
@@ -85,6 +89,15 @@ Item {
     // Freeze scroll capture BEFORE any model mutation. ListView modelReset can
     // jump contentY to 0 synchronously; if _restoringContentY is still false,
     // onContentYChanged would overwrite _preservedContentY with 0.
+    function pasteAdjustmentsAsVersion() {
+        if (!root.adjustmentTransfer || !root.editorSession)
+            return
+        const result = root.adjustmentTransfer.PasteIntoEditor(root.editorSession)
+        root.pasteError = result && result.success !== true
+                          ? String(result.message || qsTr("Paste failed"))
+                          : ""
+    }
+
     function captureListScroll() {
         if (!versionList)
             return
@@ -466,6 +479,34 @@ Item {
                     qsTr("Fork new version from root"), "versions.createDefaultFromRoot")
                 onClicked: root.openCreateVersion("forkRoot")
             }
+
+            IconActionButton {
+                objectName: "editorVersionsPasteButton"
+                compact: true
+                enabled: root.adjustmentTransfer !== null && root.editorSession
+                         && root.editorSession.actions.canPaste === true
+                iconSrc: "qrc:/panel_icons/clipboard.svg"
+                iconColorDefault: root.colText
+                iconColorMuted: root.colMuted
+                fillIdle: root.colCardSurface
+                fillHover: appTheme.buttonHoveredFillColor
+                fillPressed: appTheme.buttonPressedFillColor
+                fillSelected: appTheme.buttonSelectedFillColor
+                focusRingColor: root.colText
+                actionName: qsTr("Paste adjustments as a new Version")
+                onClicked: root.pasteAdjustmentsAsVersion()
+            }
+        }
+
+        Label {
+            objectName: "editorVersionsPasteError"
+            Layout.fillWidth: true
+            visible: root.pasteError.length > 0
+            text: root.pasteError
+            color: appTheme.dangerColor
+            wrapMode: Text.WordWrap
+            font.family: appTheme.uiFontFamily
+            font.pixelSize: appTheme.fontSizeCaption
         }
 
         // Inline create draft row under the Versions header (branch / fork).

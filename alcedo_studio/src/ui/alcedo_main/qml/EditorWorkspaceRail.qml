@@ -344,7 +344,6 @@ Item {
         EditorHistoryTransactionsPanel {
             theme: root.theme
             editorSession: root.editorSession
-            adjustmentTransfer: root.adjustmentTransfer
             historyModel: root.historyModel
             blurSource: root.blurSource
             Component.onDestruction: {
@@ -361,6 +360,7 @@ Item {
         EditorVersionsPanel {
             theme: root.theme
             editorSession: root.editorSession
+            adjustmentTransfer: root.adjustmentTransfer
             historyModel: root.historyModel
             versionCheckoutEnabled: root.versionCheckoutEnabled
             versionCheckoutDisabledReason: root.versionCheckoutDisabledReason
