@@ -2466,7 +2466,7 @@ Sections 2.3, 3.6, and 4.2.
 | `Paste adjustments as a new Version` is in Edit History | UI placement. | The button moved to the Versions panel header with the `clipboard.svg` icon. |
 | The LUT panel shows pre-Paste values after Paste | `EditorHistoryTransfer::PasteLiveRootRelativeVersion` bound the pasted document but never re-projected the panels. Version checkout does re-project. | The pasted document's panel projection is built before the WAL publish and bound with the document. |
 | After a filmstrip switch the LUT panel does not apply a LUT until the panel changes | `EditorNodeController::DefaultSelectedNodeId` accepted only the literal `grade.primary`. Paste remaps every Grade identity, so pasted images had no selected node, and `CompleteSelectedNodeParameterTarget` rejected every LUT write. A selected node that disappeared after Paste also left the selection empty. | The default selection uses the document default Grade (`EditorNodeGraphSnapshot::default_grade_id`), then the first Grade. A vanished selection falls back to that Grade and is restored if the node returns. |
-| Occasionally the node cannot be switched in the Copy dialog | Not reproduced statically. See 20.4. | — |
+| Occasionally the node cannot be switched in the Copy dialog | The user traced it to the old library Paste path. That path changed the graph of the image open in the editor behind the session, so the Copy dialog read a graph that did not match the editor state. | Library Paste routes the editor image through its session (see the second row). |
 
 Other defects found during the audit:
 
@@ -2490,10 +2490,6 @@ Other defects found during the audit:
 
 ### 20.4 Open items
 
-- Copy-dialog node switching: `FocusNode`, the list models, and the node pane delegates
-  show no deterministic failure. One path shows an empty node column: replay of the active
-  Version fails in `OpenSource`, and the dialog shows only the replay error. A reproduction
-  is needed.
 - The Develop item display names come from C++ English strings, like the existing items.
   They are not translated.
 
