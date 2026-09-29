@@ -1107,6 +1107,19 @@ Suite totals:
 - **Open / Switch / Close still cancel Mask input** (P4 remaining gap), unchanged.
 - **`SleeveService` duplicates images without copying history** (P5 remaining gap): a copied image has no root, so after this phase it also cannot be opened in the editor (real error `has no edit history root`). Not fixed in this phase.
 
+### Geometry 面板缺陷（先于当前 P7 修复，方案待定）
+
+**状态：** 只记录现象，方案之后另行规划。缺陷记录：[#221](https://github.com/zidage/AlcedoStudio/issues/221)。
+这个面板可能需要彻底重构，作为 P7 进行；修复之后才进入当前的 P7（删除共享机制）。阶段编号在规划时调整。
+
+`ui/alcedo_main/qml/EditorGeometryPanel.qml`（裁切 / 旋转）现象：
+
+1. **裁切后旋转，不是旋转裁切后的画面。** 裁切后旋转时，裁切框内的画面没有被当作新的"原图像"，而是变成以裁切框为视角去"看"原画面。
+2. **切换图像后 "Source Aspect" 变化，裁切失效。** 裁切并确认后切换图像，面板中的 "Source Aspect" 变成另一个值，可能是视口大小，而不是输入图像的源比例。此时复原裁切框，面板似乎把这个新的 aspect ratio 和对应的大小当作图像大小，裁切失效。
+3. **面板本应很简单。** 它只能在 full frame 视图中进入；从 ROI 视图进入时会自动回到 full frame。
+
+相关代码事实（未做诊断）：面板的 `imageAspect` 取自已存 `crop_rotate` 条目中的 `source_size`；条目没有 `source_size` 时改用 `interaction.metricAspect`，"Source aspect" 标签显示的就是这个值。
+
 ### P7 删除共享机制，收窄 `PipelineMgmtService`
 
 **目标：** 删掉只为共享而存在的代码。
@@ -1178,5 +1191,6 @@ Suite totals:
 | P4 缩略图 / 分析池 | 完成（2026-09-28） |
 | P5 导出、导入、复制、粘贴 | 完成（2026-09-28） |
 | P6 编辑器独占 executor | 完成（2026-09-28，手工 UI 验证未做） |
-| P7 删除共享机制 | 未开始 |
+| Geometry 面板缺陷（#221，先于 P7） | 已记录现象，方案待定 |
+| P7 删除共享机制 | 未开始 |（等待 Geometry 面板修复）
 | P8 文档与决策更新 | 未开始 |
