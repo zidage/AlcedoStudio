@@ -5,16 +5,20 @@
 #include "app/export_service.hpp"
 
 #include <atomic>
+#include <cstddef>
 #include <filesystem>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <system_error>
+#include <utility>
 
 #if defined(_WIN32)
 #include <Windows.h>
 #endif
 
+#include "edit/runtime/drt_display.hpp"
 #include "image/image.hpp"
 #include "image/image_buffer.hpp"
 #include "io/image/image_loader.hpp"
@@ -95,7 +99,42 @@ void CommitExportFile(const std::filesystem::path& temporary_path,
 
 }  // namespace
 
-auto ExportService::RunExportRenderTask(const ExportTask& task) -> ExportResult {
+ExportService::ExportService(std::shared_ptr<SleeveServiceImpl>   sleeve_service,
+                             std::shared_ptr<ImagePoolService>    image_pool_service,
+                             std::shared_ptr<PipelineMgmtService> pipeline_service)
+    : sleeve_service_(std::move(sleeve_service)),
+      image_pool_service_(std::move(image_pool_service)),
+      pipeline_service_(std::move(pipeline_service)),
+      executors_(kExportExecutorCount, pipeline_service_
+                                           ? pipeline_service_->GetAcceleratorBackendPreference()
+                                           : AcceleratorBackendPreference::Auto),
+      render_scheduler_(executors_.Size()) {}
+
+void ExportService::EnqueueExportTask(const ExportTask& task) {
+  if (!task.recipe_.has_value()) {
+    throw std::runtime_error("ExportService: export recipe must be complete before scheduling");
+  }
+  if (!pipeline_service_) {
+    throw std::runtime_error("ExportService: pipeline service is unavailable");
+  }
+  auto         snapshot = pipeline_service_->AcquireCommittedSnapshot(task.sleeve_id_);
+  QueuedExport queued{.task_ = task, .snapshot_ = snapshot};
+  auto&        recipe = *queued.task_.recipe_;
+  if (!recipe.output_color_.has_value()) {
+    const auto* drt = snapshot->Document().Drt();
+    if (drt == nullptr) {
+      throw std::runtime_error("ExportService: committed document of element " +
+                               std::to_string(task.sleeve_id_) + " has no DRT node");
+    }
+    recipe.output_color_ = ExportColorProfileFromDrt(drt->Params().Params());
+  }
+  RequireResolvedExportOutputColor(recipe);
+  std::lock_guard<std::mutex> lock(queue_mutex_);
+  export_queue_.push_back(std::move(queued));
+}
+
+auto ExportService::RunExportRenderTask(const QueuedExport& queued) -> ExportResult {
+  const auto&  task = queued.task_;
   ExportResult result;
   if (!task.recipe_.has_value()) {
     result.message_      = "ExportService: export recipe is required";
@@ -113,15 +152,7 @@ auto ExportService::RunExportRenderTask(const ExportTask& task) -> ExportResult 
   auto         final_path = recipe.codec_.export_path_;
   std::filesystem::path temporary_path;
   result.output_path_ = final_path;
-  std::error_code                   cleanup_error;
-  std::shared_ptr<PipelineGuard> pipeline_guard;
-  auto                              release_pipeline_use = [&]() {
-    if (!pipeline_guard) {
-      return;
-    }
-    pipeline_service_->ReleasePipelineUse(pipeline_guard);
-    pipeline_guard.reset();
-  };
+  std::error_code cleanup_error;
 
   std::string stage = "prepare-name";
   try {
@@ -144,13 +175,6 @@ auto ExportService::RunExportRenderTask(const ExportTask& task) -> ExportResult 
     temporary_path = TemporaryExportPath(final_path, task.image_id_);
     std::filesystem::remove(temporary_path, cleanup_error);
 
-    stage = "load-pipeline";
-    pipeline_guard = pipeline_service_->LoadPipeline(task.sleeve_id_);
-    if (!pipeline_guard || !pipeline_guard->pipeline_ || !pipeline_guard->document_) {
-      throw std::runtime_error(
-          "[ERROR] ExportService: Failed to load pipeline document for sleeve id " +
-          std::to_string(task.sleeve_id_));
-    }
     stage           = "load-source";
     // Get the image from image pool service
     auto source_img = image_pool_service_->Read<std::shared_ptr<Image>>(
@@ -168,8 +192,21 @@ auto ExportService::RunExportRenderTask(const ExportTask& task) -> ExportResult 
     // To avoid reading too many images into memory at once, we let the pipeline load the image
     // So we create a dummy Image object with only the path set
     render_task.input_desc_           = std::make_shared<Image>(img_src_path, ImageType::DEFAULT);
-    render_task.pipeline_executor_    = pipeline_guard->pipeline_;
-    render_task.snapshot_under_render_lock_ = MakeLiveSnapshotSource(pipeline_guard);
+    render_task.snapshot_under_render_lock_ = [snapshot = queued.snapshot_] { return snapshot; };
+    // The render takes this service's executor for the whole task and returns it when the task
+    // ends on any path.
+    auto executor_index                     = std::make_shared<std::optional<std::size_t>>();
+    render_task.prepare_                    = [this, executor_index](PipelineTask& prepared) {
+      auto [index, executor]      = executors_.Take();
+      *executor_index             = index;
+      prepared.pipeline_executor_ = std::move(executor);
+      return true;
+    };
+    render_task.on_complete_ = [this, executor_index](bool, std::string) {
+      if (executor_index->has_value()) {
+        executors_.Return(**executor_index);
+      }
+    };
     render_task.options_.is_blocking_ = true;
     render_task.options_.is_callback_ = false;
 
@@ -182,7 +219,7 @@ auto ExportService::RunExportRenderTask(const ExportTask& task) -> ExportResult 
     render_task.result_ = render_promise;
     auto render_future  = render_promise->get_future();
     // Schedule the render task
-    pipeline_scheduler_->ScheduleTask(std::move(render_task));
+    render_scheduler_.ScheduleTask(std::move(render_task));
 
     std::shared_ptr<ImageBuffer> rendered_image;
     try {
@@ -196,8 +233,8 @@ auto ExportService::RunExportRenderTask(const ExportTask& task) -> ExportResult 
     const auto  effective_profile = recipe.icc_ == ExportIccPolicy::OMIT
                                        ? std::optional<ExportColorProfileConfig>{}
                                        : recipe.output_color_;
-    const bool wrote_ultra_hdr   = ImageWriter::ShouldWriteUltraHdr(recipe.codec_, recipe.output_color_);
-    release_pipeline_use();
+    const bool  wrote_ultra_hdr =
+        ImageWriter::ShouldWriteUltraHdr(recipe.codec_, recipe.output_color_);
     stage                      = "encode";
     recipe.codec_.export_path_ = temporary_path;
     ImageWriter::WriteImageToPath(img_src_path, rendered_image, recipe, recipe.output_color_,
@@ -222,14 +259,12 @@ auto ExportService::RunExportRenderTask(const ExportTask& task) -> ExportResult 
     result.resolution_tags_written_ = recipe.resize_.dpi_ > 0.0;
     return result;
   } catch (const std::exception& error) {
-    release_pipeline_use();
     if (!temporary_path.empty()) std::filesystem::remove(temporary_path, cleanup_error);
     result.success_      = false;
     result.failed_stage_ = std::move(stage);
     result.message_      = error.what();
     return result;
   } catch (...) {
-    release_pipeline_use();
     if (!temporary_path.empty()) std::filesystem::remove(temporary_path, cleanup_error);
     result.success_      = false;
     result.failed_stage_ = std::move(stage);
@@ -246,8 +281,8 @@ void ExportService::ExportAll(
 void ExportService::ExportAll(
     std::function<void(const ExportProgress&)>                      progress_callback,
     std::function<void(std::shared_ptr<std::vector<ExportResult>>)> callback) {
-  auto                    results = std::make_shared<std::vector<ExportResult>>();
-  std::vector<ExportTask> tasks;
+  auto                      results = std::make_shared<std::vector<ExportResult>>();
+  std::vector<QueuedExport> tasks;
 
   {
     std::lock_guard<std::mutex> lock(queue_mutex_);
@@ -273,10 +308,11 @@ void ExportService::ExportAll(
   auto succeeded = std::make_shared<std::atomic_size_t>(0);
   auto failed    = std::make_shared<std::atomic_size_t>(0);
   for (size_t task_index = 0; task_index < tasks.size(); ++task_index) {
-    const auto task = tasks[task_index];
+    auto queued = std::move(tasks[task_index]);
     // Export in thread pool
-    export_thread_pool_.Submit([this, task, results, progress_callback, callback, completed,
-                                succeeded, failed, queue_size, task_index]() {
+    export_thread_pool_.Submit([this, queued = std::move(queued), results, progress_callback,
+                                callback, completed, succeeded, failed, queue_size, task_index]() {
+      const auto& task = queued.task_;
       if (progress_callback) {
         try {
           progress_callback(ExportProgress{
@@ -295,7 +331,7 @@ void ExportService::ExportAll(
       ExportResult result;
       // Do export, this call will block until done
       try {
-        result = RunExportRenderTask(task);
+        result = RunExportRenderTask(queued);
       } catch (const std::exception& e) {
         result.success_ = false;
         result.message_ = e.what();

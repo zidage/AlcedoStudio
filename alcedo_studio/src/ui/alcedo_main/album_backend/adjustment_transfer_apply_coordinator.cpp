@@ -8,7 +8,6 @@
 #include <QPointer>
 #include <QVariantList>
 #include <memory>
-#include <mutex>
 #include <thread>
 #include <utility>
 
@@ -16,7 +15,7 @@
 #include "app/document_transfer_planner.hpp"
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
-#include "edit/pipeline/pipeline_executor.hpp"
+#include "edit/history/commit_graph.hpp"
 #include "ui/alcedo_main/album_backend/album_types.hpp"
 #include "ui/alcedo_main/album_backend/library_module.hpp"
 #include "ui/alcedo_main/album_backend/project_module.hpp"
@@ -135,99 +134,29 @@ auto AdjustmentTransferApplyCoordinator::ApplyPackageToTargets(
     if (element_id == 0) {
       continue;
     }
-
-    std::shared_ptr<PipelineGuard> guard;
+    // Each target is pasted on a private copy of its stored history. Storage and every other
+    // reader see the target unchanged until PersistHistory writes the complete result in one
+    // transaction, so a failure at any step leaves nothing to restore.
     try {
-      guard = pipeline_service.LoadEditorPipeline(element_id);
-    } catch (const std::exception& e) {
-      result.failures_.push_back({element_id, e.what()});
-      continue;
-    }
-    if (!guard || !guard->pipeline_) {
-      result.failures_.push_back({element_id, "Pipeline was not available."});
-      continue;
-    }
-
-    // Use the commit graph attached to the pipeline guard.
-    CommitGraph* graph = guard->commit_graph_ ? guard->commit_graph_.get() : nullptr;
-    if (graph == nullptr) {
-      result.failures_.push_back({element_id, "Mini-Git graph was not available for paste."});
-      pipeline_service.SavePipeline(guard);
-      continue;
-    }
-
-    // A root-relative Paste creates both immutable commits and a named Version.
-    // That transition cannot be represented by the edit/head-move journal, so
-    // publish it through the same guarded graph materialization used by named
-    // Version operations.
-    // RebuildActiveEditorPipeline swaps in a new document and never changes the prior one, so a
-    // restore binds the prior pointer back instead of replaying the prior Version again.
-    const auto graph_before_paste = *graph;
-    const bool prior_serialized   = guard->serialized_state_needs_writeback_;
-    const bool prior_dirty        = guard->dirty_;
-    const auto prior_document     = guard->document_;
-    auto       restore_prior      = [&] {
-      *graph = graph_before_paste;
-      if (prior_document && prior_document != guard->document_) {
-        std::unique_lock<std::mutex> render_lock(guard->pipeline_->GetRenderLock());
-        (void)alcedo::BindLivePipelineDocument(*guard, prior_document);
-      }
-      guard->serialized_state_needs_writeback_ = prior_serialized;
-      guard->dirty_                            = prior_dirty;
-    };
-    try {
-      if (!guard->root_document_) {
-        restore_prior();
-        result.failures_.push_back({element_id, "Target root document was not available."});
-        pipeline_service.SavePipeline(guard);
-        continue;
-      }
+      const auto                           base  = pipeline_service.LoadHistorySnapshot(element_id);
+      CommitGraph                          graph = *base.graph_;
+      // A root-relative Paste creates both immutable commits and a named Version.
       alcedo::DocumentTransferPasteOptions options;
       auto paste_result = alcedo::AdjustmentTransferService::PasteAsRootRelativeVersion(
-          *graph, *guard->root_document_, package, version_display_name, options);
-      if (paste_result.pasted) {
-        std::string rebuild_error;
-        if (!pipeline_service.RebuildActiveEditorPipeline(guard, &rebuild_error)) {
-          restore_prior();
-          result.failures_.push_back({element_id, rebuild_error.empty()
-                                                      ? "Failed to rebuild pasted pipeline"
-                                                      : std::move(rebuild_error)});
-        } else {
-          guard->serialized_state_needs_writeback_ = true;
-          std::string persistence_error;
-          if (!pipeline_service.PersistEditorHistoryState(
-                  guard, graph_before_paste.GetImageEditState(), &persistence_error)) {
-            restore_prior();
-            result.failures_.push_back({element_id, persistence_error.empty()
-                                                        ? "Failed to persist pasted Version"
-                                                        : std::move(persistence_error)});
-          } else {
-            // Persist writes the new Version and clears the stale serialized
-            // checkpoint. The live pipeline was just rebuilt from that Version,
-            // so SavePipeline must store the new checkpoint. Otherwise the next
-            // editor open rebuilds the image correctly but projects an empty
-            // adjustment snapshot (LUT panel highlights None).
-            guard->serialized_state_needs_writeback_ = true;
-            guard->dirty_                            = false;
-            result.applied_ids_.push_back(element_id);
-            // The planner requires a DRT node on the target, so the rebuilt
-            // document always carries one.
-            if (const auto* drt =
-                    guard->document_ ? std::as_const(*guard->document_).Drt() : nullptr) {
-              outcome.hdr_by_target_[element_id] = IsHdrExportEncoding(*drt);
-            }
-          }
-        }
-      } else {
-        restore_prior();
+          graph, base.root_->document, package, version_display_name, options);
+      if (!paste_result.pasted) {
         result.failures_.push_back({element_id, paste_result.error});
+        continue;
+      }
+      const auto committed = pipeline_service.PersistHistory(base, graph);
+      result.applied_ids_.push_back(element_id);
+      // The planner requires a DRT node on the target, so the pasted document always has one.
+      if (const auto* drt = committed->Document().Drt()) {
+        outcome.hdr_by_target_[element_id] = IsHdrExportEncoding(*drt);
       }
     } catch (const std::exception& e) {
-      restore_prior();
       result.failures_.push_back({element_id, e.what()});
     }
-    // SavePipeline writes this target's document and checkpoint, then releases the pin.
-    pipeline_service.SavePipeline(guard);
   }
   return outcome;
 }

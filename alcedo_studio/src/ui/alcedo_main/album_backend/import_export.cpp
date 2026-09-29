@@ -10,14 +10,11 @@
 #include <QSettings>
 #include <QStandardPaths>
 #include <algorithm>
-#include <mutex>
 #include <optional>
 #include <thread>
 #include <tuple>
 #include <unordered_set>
 #include <utility>
-
-#include "edit/runtime/drt_display.hpp"
 
 #include "ui/alcedo_main/album_backend/folder_controller.hpp"
 #include "ui/alcedo_main/album_backend/import_export.hpp"
@@ -973,25 +970,7 @@ auto ImportExportHandler::BuildExportQueue(
       }
       if (is_hdr_export) task.recipe_->resize_.maximum_edge_pixels_ = 8192;
 
-      auto pipes = project_->handler().pipeline_service();
-      if (!pipes) {
-        throw std::runtime_error("Export pipeline service is unavailable");
-      }
-      auto live = pipes->LoadPipeline(elementId);
-      if (!live || !live->document_ || !std::as_const(*live->document_).Drt() ||
-          !live->pipeline_) {
-        if (live) {
-          pipes->ReleasePipelineUse(live);
-        }
-        throw std::runtime_error("Export: document DRT is missing");
-      }
-      {
-        std::lock_guard<std::mutex> render_lock(live->pipeline_->GetRenderLock());
-        task.recipe_->output_color_ =
-            ExportColorProfileFromDrt(std::as_const(*live->document_).Drt()->Params().Params());
-      }
-      pipes->ReleasePipelineUse(live);
-
+      // Captures the committed snapshot of the image and reads the output color from its DRT.
       esvc->EnqueueExportTask(task);
       ++summary.queued_count_;
       summary.queued_targets_.emplace_back(elementId, imageId);

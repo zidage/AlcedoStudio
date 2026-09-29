@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <memory>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "app/pipeline_service.hpp"
@@ -118,17 +119,12 @@ auto AdjustmentTransferController::PrepareCopy(uint elementId) -> QVariantMap {
                                          : QString::fromStdString(error));
       }
     } else {
-      const auto guard =
-          pipeline_service->LoadEditorPipeline(static_cast<sl_element_id_t>(elementId));
-      if (!guard || !guard->commit_graph_ || !guard->root_document_) {
-        pipeline_service->ReleasePipelineUse(guard);
-        return ErrorResult(Tr("Pipeline was not available."));
-      }
-      // Detach from the cached guard so a later Paste into this image cannot
-      // mutate the graph the dialog is reading.
-      source_graph = std::make_shared<const alcedo::CommitGraph>(*guard->commit_graph_);
-      source_root  = guard->root_document_;
-      pipeline_service->ReleasePipelineUse(guard);
+      // Every other image: read its stored history. The snapshot is immutable, so a later
+      // Paste into this image cannot change the graph the dialog is reading.
+      auto history = pipeline_service->LoadHistorySnapshot(static_cast<sl_element_id_t>(elementId));
+      source_graph = std::move(history.graph_);
+      source_root =
+          std::shared_ptr<const alcedo::PipelineDocument>(history.root_, &history.root_->document);
     }
 
     const bool opened = dialog_model_->OpenSource(source_graph, source_root, &error);

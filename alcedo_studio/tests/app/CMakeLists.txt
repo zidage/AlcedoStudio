@@ -731,6 +731,15 @@ target_link_libraries(ExecutorSnapshotRenderTest ExportService ProjectService Im
 gtest_discover_tests(ExecutorSnapshotRenderTest TEST_PREFIX "ExecutorSnapshotRenderTest.")
 alcedo_register_test_target(ExecutorSnapshotRenderTest app)
 
+# Executor ownership refactor P5: export, import, Copy, and Paste to library images load no
+# PipelineGuard and construct no executor outside the owning service.
+add_executable(LibraryHistoryAndExportTest ${ALCEDO_TEST_ROOT}/app/library_history_and_export_test.cpp)
+target_include_directories(LibraryHistoryAndExportTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(LibraryHistoryAndExportTest ExportService ProjectService ImportService ImageWriter
+  GTest::gtest_main ${ALCEDO_TEST_OPENCV_MIN_DEPS})
+gtest_discover_tests(LibraryHistoryAndExportTest TEST_PREFIX "LibraryHistoryAndExportTest.")
+alcedo_register_test_target(LibraryHistoryAndExportTest app)
+
 add_executable(ThumbnailDiskCacheServiceTest ${ALCEDO_TEST_ROOT}/app/thumbnail_disk_cache_service_test.cpp)
 target_include_directories(ThumbnailDiskCacheServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(ThumbnailDiskCacheServiceTest ThumbnailDiskCacheService GTest::gtest_main)
@@ -753,7 +762,7 @@ alcedo_register_test_target(ExportRecipeTest app ci_core)
 
 add_executable(HsResearchExportTool ${ALCEDO_TEST_ROOT}/app/hs_research_export_tool.cpp)
 target_include_directories(HsResearchExportTool PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(HsResearchExportTool PRIVATE ExportService ProjectService ImportService ImageWriter ${ALCEDO_TEST_OPENCV_MIN_DEPS})
+target_link_libraries(HsResearchExportTool PRIVATE ExportService ProjectService ImportService ImageWriter AdjustmentTransferService ${ALCEDO_TEST_OPENCV_MIN_DEPS})
 alcedo_register_test_target(HsResearchExportTool app)
 
 add_executable(ThumbnailAlbumQtDemo ${ALCEDO_TEST_ROOT}/app/thumbnail_album_qt_demo.cpp)

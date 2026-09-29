@@ -2,6 +2,7 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
+#include <OpenImageIO/imageio.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -13,7 +14,6 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
-#include <OpenImageIO/imageio.h>
 #include <opencv2/core.hpp>
 #include <stdexcept>
 #include <string>
@@ -29,14 +29,13 @@
 #include "app/thumbnail_types.hpp"
 #include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/pipeline_document.hpp"
-#include "edit/runtime/drt_display.hpp"
-#include "edit/runtime/executor_role.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/edit_commit.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/i_operator_model.hpp"
 #include "edit/operators/utils/color_utils.hpp"
 #include "edit/pipeline/pipeline_executor.hpp"
+#include "edit/runtime/executor_role.hpp"
 #include "edit/runtime/pipeline_apply_request.hpp"
 #include "edit/runtime/renderer.hpp"
 #include "image/image.hpp"
@@ -524,11 +523,6 @@ TEST_F(PipelineSharedUseTest, AnalysisAndExportLeaveLiveEditsUnchanged) {
   task.options_.resize_enabled_  = true;
   task.options_.max_length_side_ = 256;
   task.recipe_                   = ExportRecipe::FromLegacyOptions(task.options_);
-  {
-    std::lock_guard<std::mutex> lock(live->pipeline_->GetRenderLock());
-    task.recipe_->output_color_ =
-        ExportColorProfileFromDrt(live->document_->Drt()->Params().Params());
-  }
   export_service.EnqueueExportTask(task);
   std::promise<std::shared_ptr<std::vector<ExportResult>>> export_done;
   auto export_fut = export_done.get_future();
@@ -731,12 +725,7 @@ TEST_F(PipelineSharedUseTest, ParallelBackgroundRendersPreservePixelsAndReleaseW
   export_task.options_.export_path_     = export_dir / "parallel.jpg";
   export_task.options_.resize_enabled_  = true;
   export_task.options_.max_length_side_ = 256;
-  export_task.recipe_ = ExportRecipe::FromLegacyOptions(export_task.options_);
-  {
-    std::lock_guard<std::mutex> lock(live_b->pipeline_->GetRenderLock());
-    export_task.recipe_->output_color_ =
-        ExportColorProfileFromDrt(live_b->document_->Drt()->Params().Params());
-  }
+  export_task.recipe_                   = ExportRecipe::FromLegacyOptions(export_task.options_);
   export_service.EnqueueExportTask(export_task);
   std::promise<std::shared_ptr<std::vector<ExportResult>>> export_done;
   auto export_fut = export_done.get_future();
@@ -845,9 +834,8 @@ TEST_F(PipelineSharedUseTest, ConcurrentThumbnailAndExportDoNotChangeDocumentOut
 }
 
 // Thumbnail (k256) and 16-bit PNG export (256 px long edge) of mfzoty.dng render from a document
-// without the executor's legacy stage table. Export still renders the live document, so the
-// exposure +0.75 EV, crop, and 3 degree rotation set on it reach the export; the thumbnail renders
-// the committed state.
+// without the executor's legacy stage table. Both render the committed state; the exposure
+// +0.75 EV, crop, and 3 degree rotation set on the live document reach neither.
 TEST_F(PipelineSharedUseTest, ThumbnailAndExportRenderFromDocumentOnly) {
   if (!std::filesystem::exists(LinearDngPath())) {
     GTEST_SKIP() << "Sample DNG file is missing: " << LinearDngPath().string();
@@ -892,11 +880,6 @@ TEST_F(PipelineSharedUseTest, ThumbnailAndExportRenderFromDocumentOnly) {
   task.options_.resize_enabled_  = true;
   task.options_.max_length_side_ = 256;
   task.recipe_                   = ExportRecipe::FromLegacyOptions(task.options_);
-  {
-    std::lock_guard<std::mutex> lock(live->pipeline_->GetRenderLock());
-    task.recipe_->output_color_ =
-        ExportColorProfileFromDrt(live->document_->Drt()->Params().Params());
-  }
   export_service.EnqueueExportTask(task);
   std::promise<std::shared_ptr<std::vector<ExportResult>>> export_done;
   auto export_fut = export_done.get_future();

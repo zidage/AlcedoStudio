@@ -113,18 +113,22 @@ TEST_F(AdjustmentTransferControllerTest, CopyDoesNotSaveOrRenderSourceImage) {
 
   auto*      transfer = backend.adjustment_transfer();
   ASSERT_NE(transfer, nullptr);
+  auto pipeline_service = backend.project()->handler().pipeline_service();
+  ASSERT_TRUE(pipeline_service);
+  pipeline_service->ResetPipelineAcquireCountsForTesting();
 
   const auto prepare = transfer->PrepareCopy(static_cast<uint>(source.file_id_));
   ASSERT_TRUE(prepare.value("success").toBool())
       << prepare.value("message").toString().toStdString();
+  // Copy reads the stored history; it loads no PipelineGuard and constructs no executor.
+  EXPECT_EQ(pipeline_service->PipelineLoadCount(), 0u);
+  EXPECT_EQ(pipeline_service->PipelineConstructCount(), 0u);
   EXPECT_EQ(prepare.value("sourceTitle").toString(), QStringLiteral("album-delete-0.dng"));
   EXPECT_FALSE(prepare.value("activeVersionId").toString().isEmpty());
   // The routing result carries provenance only; rows live on the dialog model.
   EXPECT_FALSE(prepare.contains("adjustmentRows"));
   EXPECT_FALSE(prepare.contains("selectedKeys"));
 
-  auto pipeline_service = backend.project()->handler().pipeline_service();
-  ASSERT_TRUE(pipeline_service);
   const auto guard = pipeline_service->LoadEditorPipeline(source.file_id_);
   ASSERT_TRUE(guard && guard->commit_graph_ && guard->document_);
   const auto before = CaptureSourceGuard(guard, pipeline_service.get());
@@ -200,7 +204,7 @@ TEST_F(AdjustmentTransferControllerTest, ControllerNoLongerOwnsTransferRowFormat
 
 // ============================================================================
 // Paste: the coordinator owns per-target apply + refresh; a failed target is
-// restored and never refreshed.
+// never written and never refreshed.
 // ============================================================================
 
 TEST_F(AdjustmentTransferControllerTest, MultiTargetCoordinatorRefreshesOnlySuccessfulTargets) {
@@ -225,6 +229,9 @@ TEST_F(AdjustmentTransferControllerTest, MultiTargetCoordinatorRefreshesOnlySucc
   // Library targets paste on a worker thread; the result arrives on the owner
   // thread through PasteFinished while the task locks further pastes.
   QSignalSpy finished_spy(transfer, &AdjustmentTransferController::PasteFinished);
+  auto       pipeline_service = backend.project()->handler().pipeline_service();
+  ASSERT_TRUE(pipeline_service);
+  pipeline_service->ResetPipelineAcquireCountsForTesting();
   const auto started = transfer->Paste(targets, QStringLiteral("paste"));
   ASSERT_TRUE(started.value("success").toBool()) << started.value("message").toString().toStdString();
   EXPECT_TRUE(started.value("pending").toBool());
@@ -238,6 +245,12 @@ TEST_F(AdjustmentTransferControllerTest, MultiTargetCoordinatorRefreshesOnlySucc
   EXPECT_TRUE(backend.interaction_policy()->CanPasteAdjustments());
   ASSERT_EQ(refreshed_spy.size(), 1);
   EXPECT_EQ(refreshed_spy.front().front().toUInt(), static_cast<uint>(target.file_id_));
+  // Paste edits a private copy of the target history and persists it in one transaction; it
+  // loads no PipelineGuard and constructs no executor.
+  EXPECT_EQ(pipeline_service->PipelineLoadCount(), 0u);
+  EXPECT_EQ(pipeline_service->PipelineConstructCount(), 0u);
+  const auto pasted_state =
+      pipeline_service->LoadHistorySnapshot(target.file_id_).graph_->GetImageEditState();
 
   // A package the planner rejects: an empty sparse package carries nothing
   // transferable, so the apply fails before any graph mutation.
@@ -253,10 +266,15 @@ TEST_F(AdjustmentTransferControllerTest, MultiTargetCoordinatorRefreshesOnlySucc
   // The failed target received no HDR write, no thumbnail work, and no
   // TargetRefreshed emission — the spy still holds only the first success.
   EXPECT_EQ(refreshed_spy.size(), 1);
+  // The failed paste wrote nothing: the stored history is still the first paste.
+  const auto after_failure =
+      pipeline_service->LoadHistorySnapshot(target.file_id_).graph_->GetImageEditState();
+  EXPECT_EQ(after_failure.active_version_id, pasted_state.active_version_id);
+  EXPECT_EQ(after_failure.materialized_head_commit_hash,
+            pasted_state.materialized_head_commit_hash);
 
   // The pasted target gained a root-relative Version it did not have before.
-  auto       pipeline_service = backend.project()->handler().pipeline_service();
-  const auto target_guard     = pipeline_service->LoadEditorPipeline(target.file_id_);
+  const auto target_guard = pipeline_service->LoadEditorPipeline(target.file_id_);
   ASSERT_TRUE(target_guard && target_guard->commit_graph_);
   bool found_pasted_version = false;
   for (const auto& kv : target_guard->commit_graph_->GetAllVersionRefs()) {

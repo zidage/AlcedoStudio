@@ -818,6 +818,133 @@ Suite totals：
 - 除编辑器外，全仓不再有 `LoadPipeline` / `LoadEditorPipeline` 的调用方。
 - P0 测试 2 通过。
 
+##### Phase P5 completion record (2026-09-28)
+
+**Status:** complete — 导出、导入、Copy、Paste 到库中图片都不再加载 `PipelineGuard`，也不再构造或借用编辑器的 executor。
+导出在 `ExportService` 自己的 Batch executor 上渲染入队时取得的已提交快照，输出色彩从同一快照的 DRT 读取；
+导入在私有文档上建立 root；Copy 读存储中的历史；Paste 在私有历史副本上完成，一次事务写入并发布新快照。
+分支：`refactor/executor-ownership-p5`（基于 `refactor/executor-ownership-p4` 的 `8e2aba985`）。
+
+**实现要点（与计划条目的对应）：**
+
+| 计划条目 | 实现 |
+|---|---|
+| `ExportService` 拥有 1 个 Batch executor 和自己的队列 | `ExportService` 拥有 `BatchExecutorPool(1)` 和 `PipelineScheduler(1)`；编码仍在原来的 4 线程池上并行，渲染经这一个 executor 串行。P4 的 `BatchExecutorPool` 从 `thumbnail_service.cpp` 的匿名命名空间移到 `app/batch_executor_pool.hpp`，缩略图与导出共用一份实现。`render_service.hpp`（共享静态池）已无任何使用者，本阶段删除（计划原写在 P7） |
+| 入队时取已提交快照 | `EnqueueExportTask` 调 `AcquireCommittedSnapshot`，快照与任务一起存进服务内部的 `QueuedExport`（调用方的 `ExportTask` 不变）。渲染任务的 `snapshot_under_render_lock_` 直接返回这个快照。编辑器持有的图返回编辑器最近发布的快照，拖动中的未提交值永远进不了导出（C6） |
+| 输出色彩从同一快照读 | 配方没有显式 `output_color_` 时，`EnqueueExportTask` 从同一快照的 DRT 读取（`ExportColorProfileFromDrt`），像素与 ICC 用同一编码。`import_export.cpp` 的 `LoadPipeline` + render lock 读取整段删除（C7）。显式 `output_color_` 保留为"导出目标"（`ExportRecipe` 注释原本就写了"或显式目标"，`ExportPixelsAndIccUseTheSameRecipeColorConfiguration` 依赖它），它不是同一事实的第二来源：未设置时唯一来源是被渲染的快照 |
+| `InitializeImageRoot(element, document, raw_ctx)` | 新签名，调用方交出私有文档：绑定源 DNG profile，再绑 RAW color context 或 Rec.709 工作空间 profile，校验后一次事务写 root、默认 Version、image edit state，最后写元素 JSON（兼容旧版本，§6 决策 3）。已有 root 时以 `image root already exists` 失败（root 不可变）。`ImportService` 传 `CreateDefaultPipelineDocument()`，不再 `LoadPipeline` / `SyncPipelineDocument` / `SavePipeline`（S10、S11）。原来每导入一张图就在 guard LRU 里留下一个带 executor 的条目，现在没有 |
+| 旧的 guard 版 `InitializeImageRoot` | 删除公开接口。它的"已有 root"分支只是重复 `BindEditorStateFromStorage` 随后的读取；"没有 root"分支只剩编辑器打开时使用，改为私有的 `CreateMissingRootForEditor`（见 Remaining gaps） |
+| Copy：`LoadHistorySnapshot(element)` | 返回 `ImageHistorySnapshot{graph_, root_}`（不可变的 CommitGraph 与解码后的 root，已绑定 DNG profile）。编辑器持有的图直接报错（其历史可能有尚未物化的 commit；controller 本来就把它路由到会话）。存储读取与校验抽成 `ReadStoredHistory`，编辑器加载（`BindEditorStateFromStorage`）、Copy、Paste 共用一条读取路径 |
+| Paste：私有副本 + `PersistHistory` 原子写入并发布 | 计划签名是 `PersistHistory(element, graph, document)`。实现为 `PersistHistory(base, graph)`：文档由服务按 `graph` 的 active head 从 `base` 的 root 重放得出，而不是由调用方传入。这样 checkpoint 与历史只有一个来源，调用方无法写入与历史不一致的文档。一次 `Materialize` 事务写入新 commit、Version、image edit state 与 checkpoint（原来是先清 checkpoint 持久化、再在最后一个 pin 释放时回写 checkpoint 两步）；写前比对存储状态与 `base` 读取时的状态（与 `PersistEditorHistoryState` 共用 `SameMaterializedState`），不同则拒绝。成功后把快照放入已提交快照缓存并返回，Paste 的 HDR 标志从这个快照读 |
+| 失败时丢弃私有对象 | coordinator 每个目标：`LoadHistorySnapshot` → 复制 graph → `PasteAsRootRelativeVersion` → `PersistHistory`。任何一步失败只记录失败，存储从未被改动。`restore_prior` 回滚 lambda、`RebuildActiveEditorPipeline` / `PersistEditorHistoryState` / `SavePipeline` 在这条路径上的使用全部删除（C9） |
+| 打开中的图经由编辑器会话 | 不变：controller 把编辑器打开的图从目标中移出交给会话；`LoadHistorySnapshot` / `PersistHistory` 对编辑器持有的图报错，作为同一规则的第二道检查 |
+
+**调查过的"特殊路径"（用户要求：没有特殊性就应走通用逻辑）：**
+
+- **导出的输出色彩由 UI 单独读 live 文档：** 无特殊性。它与渲染读的是两个时刻的两个文档（C7），改为从被渲染的快照读。
+- **Paste 两步写 checkpoint（先清空，最后一个 pin 释放时再回写）：** 无特殊性，是 guard 共享的副产品；回写失败还会被静默吞掉。改为同一事务写入。
+- **Paste 把 `dirty_` 置 false、不写元素 JSON：** 追溯 `be021c955` / `587d89951`，没有记录理由。`PersistHistory` 不写元素 JSON，保持现有行为；元素 JSON 在 P5 之后已无渲染路径读取，是否对所有写者统一写入属于 §6 决策 3，未改。
+- **`PersistHistory` 由调用方传文档：** 见上表，改为服务重放，去掉第二来源。
+- **编辑器打开没有 root 的图时就地创建 root：** 这与 P4 确认的"每张图都有 root"不变量矛盾，而且对 RAW 图会绑定 Rec.709 工作空间 profile。调查结论：没有必须特殊的理由，应改为与快照加载一样以真实错误失败。但它属于编辑器加载路径（P6），且 68 处测试依赖在裸 id 上打开编辑器，本阶段只把它收窄为私有的 `CreateMissingRootForEditor` 并在此记录，未改行为。
+- **研究工具 `HsResearchExportTool` 改 live 文档后导出：** 导出不再读 live 文档，所以改为像用户粘贴一样把调整提交为 root-relative Version 后再导出。
+
+**主调用链（成功路径）：**
+
+```text
+导出：ImportExportHandler::BuildExportQueue（UI 线程）
+  -> ExportService::EnqueueExportTask
+       -> PipelineMgmtService::AcquireCommittedSnapshot(element)   编辑器持有 → 其发布的快照；否则存储
+       -> 配方无显式色彩 → ExportColorProfileFromDrt(快照 DRT)
+       -> QueuedExport{task, snapshot} 入队
+  -> ExportAll → export_thread_pool_ → RunExportRenderTask
+       -> ExportService::render_scheduler_ worker：prepare_ 取 BatchExecutorPool 的 executor
+       -> Apply(snapshot, Batch) → host 像素 → on_complete_ 归还 executor
+       -> ImageWriter（像素与 ICC 用同一 output_color_）→ 临时文件 → 提交文件
+
+导入：ImportServiceImpl 元数据任务
+  -> PipelineMgmtService::InitializeImageRoot(element, CreateDefaultPipelineDocument(), raw_ctx)
+       -> BindSourceDngColorProfile → BindImportedCameraProfile / BindWorkingSpaceDevelopData → 校验
+       -> CommitGraphStore::CreateRootPipelinePersisted（一次事务）→ 元素 JSON
+
+Copy：AdjustmentTransferController::PrepareCopy（非编辑器图）
+  -> PipelineMgmtService::LoadHistorySnapshot → ReadStoredHistory（LoadGraph + root + 校验 + DNG profile）
+  -> dialog_model_->OpenSource(graph_, root_->document)
+
+Paste：AdjustmentTransferApplyCoordinator::ApplyPackageToTargets（worker 线程，每个目标）
+  -> LoadHistorySnapshot → CommitGraph 私有副本
+  -> AdjustmentTransferService::PasteAsRootRelativeVersion(副本, root)
+  -> PipelineMgmtService::PersistHistory(base, 副本)
+       -> BuildDocumentFromRoot(副本 active head) → checkpoint
+       -> DB 锁内：存储状态 == base 状态 → Materialize（commit + Version + state + checkpoint）
+       -> PipelineGraphSnapshot::Committed → CommittedSnapshotCache::Publish
+  -> FinishApply（owner 线程）：HDR 标志、缩略图失效与刷新（缩略图随后命中刚发布的快照）
+```
+
+**失败路径：**
+
+```text
+导出：图片没有 root / 历史无法构建 → EnqueueExportTask 抛出真实错误，任务不入队（UI 计入 skipped 与 first_error）
+      快照无 DRT 或解析出的色彩无效 → 同上
+      渲染 / 编码 / 提交失败 → ExportResult 带失败阶段，临时文件删除，executor 在 on_complete_ 归还
+导入：root 已存在 → InitializeImageRoot 抛出，root 不变；导入记为元数据失败
+Copy：编辑器持有该图 → LoadHistorySnapshot 抛出（controller 正常情况下先路由到会话）
+      没有 root / 存储状态与 active Version 不符 → 抛出，PrepareCopy 返回错误
+Paste：planner 拒绝 → 记录失败，存储未动
+       重放失败 / 编辑器持有 / 存储状态已被其他写者改变 → PersistHistory 抛出，事务未开始或回滚，存储保持原状
+```
+
+**What was proven (executed tests)：**
+
+| 名称 / 条目 | 目标 | 结果 |
+|---|---|---|
+| 退出条件 2：`ExportDuringUnsettledEditorPreviewUsesCommittedState`（去掉 `DISABLED_`） | `ExecutorIsolationTest` | PASS：编辑器 live 文档 +2 EV 且 `unsettled_preview_` 时导出，与已提交状态导出的像素差 ≤ 1 |
+| 导出不加载 guard：`ExportRendersWithoutLoadingAPipelineGuard` | `LibraryHistoryAndExportTest`（新文件 `library_history_and_export_test.cpp`） | PASS：`PipelineConstructCount` / `PipelineLoadCount` 为 0 |
+| 导出渲染入队时的已提交状态：`ExportRendersTheCommittedStateCapturedAtEnqueue` | 同上 | PASS：入队后再提交 +2 EV，该导出与参考导出平均差 ≤ 1；之后入队的导出平均差 > 5 |
+| 输出色彩来自快照 DRT：`ExportIccProfileIsTheEncodingOfTheCommittedDrt` | 同上 | PASS：嵌入的 ICC 与快照 DRT 编码解析出的 ICC 逐字节相同 |
+| 无历史的导出在入队时拒绝：`ExportOfAnImageWithoutHistoryIsRefusedAtEnqueue`、`EnqueueRefusesTasksThatCannotResolveTheirCommittedState`（取代 `ExportRecipeContainsResolvedOutputColorBeforeScheduling`） | 同上、`ExportServiceTest` | PASS：错误为 `has no edit history root`，`ExportAll` 结果为空 |
+| 导入不加载 guard：`ImportCreatesTheRootWithoutLoadingAPipelineGuard` | `LibraryHistoryAndExportTest` | PASS：计数为 0；root 带 RAW color context 与有效相机矩阵；元素 JSON 与已提交快照文档相同 |
+| root 不可变：`InitializeImageRootRefusesAnImageThatAlreadyHasARoot` | 同上 | PASS |
+| Copy 读取：`HistorySnapshotIsReadWithoutAPipelineGuardAndStaysImmutable` | 同上 | PASS：之后的历史写入不改变已取得的快照 |
+| 编辑器持有的图：`HistoryReadAndWriteRefuseTheImageTheEditorHolds` | 同上 | PASS：读、写都抛出，存储标签不变 |
+| Paste 原子写入与发布：`PersistHistoryWritesTheNewStateAndPublishesItsSnapshot` | 同上 | PASS：存储标签、checkpoint 标签与文档都等于返回的快照；下一次 `AcquireCommittedSnapshot` 返回同一对象且不读存储；新服务从存储构建出相同文档 |
+| 并发写者：`PersistHistoryRejectsAStaleBaseAndLeavesStorageUnchanged` | 同上 | PASS：第二个基于旧状态的写入被拒绝，存储保持第一个写入 |
+| Copy / Paste 经 controller：`CopyDoesNotSaveOrRenderSourceImage`、`MultiTargetCoordinatorRefreshesOnlySuccessfulTargets`（新增断言） | `AdjustmentTransferControllerTest` | 见下方 Suite totals |
+| 测试夹具：`CreateSeededPackedProject` 为每张图调用 `InitializeImageRoot`（与导入相同），使夹具满足"每张图都有 root" | `album_backend_seeded_project_fixture.hpp` | 见下方 Suite totals |
+| 迁移：root 初始化 4 个用例（`ImageRootStoresCompleteDefaultDocumentAndDevelopData`、`NonRawImageRootBindsWorkingSpaceCameraProfile`、`EditorOpenOfExistingRawRootKeepsTheRawCameraProfile`（原 `InitializeImageRootOnExistingRawRootLeavesLiveCameraProfileUnchanged`）、`PersistedRawRootWithoutMatricesDoesNotReceiveWorkingSpaceProfile`）；library Paste 的 LUT 用例改用生产路径（`LibraryPasteWithoutStoredCheckpointStillRestoresLutFieldInLiveDocument` 先 Paste 再清 checkpoint） | `PipelineMapperTest`、`EditorSessionHistoryPortPersistTest` | 见下方 Suite totals |
+
+Commands（PowerShell，PATH 前置 `build\debug\vcpkg_installed\x64-windows\debug\bin`）：
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 8          # 全量构建，0 错误
+ctest --test-dir build/debug -j 1 -R "^(LibraryHistoryAndExportTest|ExecutorIsolationTest|ExportServiceTest)\."
+ctest --test-dir build/debug -j 1 -R "^(ThumbnailCommittedRenderTest|PipelineSharedUseTest|ImageAnalysisServiceTest|ImageAnalysisControllerTest|SemanticGenerationServiceTest|ImportServiceTest|FilterServiceTest|ImportRawOnlyTest|CiRawWorkflowTest|ExecutorSnapshotRenderTest|GpuDagModelGraphTest|GpuDagRawInputTest|GraphImageCacheRetentionTest|GpuDagCuda(Workspace|Develop|Mask|PrimaryGrade|DrtProduct|DocumentGeometryRequest)Test|GpuDagOpenCl(Grade|Workspace|DrtProduct)Test|AdjustmentTransfer.*|EditorAdjustmentContextTest|EditorPanelProjectionTest|EditorPipelineCommandServiceTest|EditorNodeGraph.*|EditorMask.*|EditorSession.*|EditorHistory.*|EditorVersion.*|EditorParameterWrite.*|EditorAdjustmentPipelineTest|EditorPendingInputSessionTest|PipelineMapperTest|PipelineServiceTest|PipelineGraph.*|PipelineDocument.*|PipelineHistory.*|PipelineEditBatchTest|PipelineDngProfileBindingTest|PipelineSchedulerRequestIdTest|PipelineFrameSinkTest|ImportPipelineDocumentTest|MiniGit.*|DocumentTransfer.*|CommitGraph.*|SleeveServiceTest|AlbumBackend.*)\."
+ThumbnailServiceTest.exe --gtest_filter=-*FuzzScroll*
+```
+
+Suite totals：
+
+- P5 集（新文件 + 导出 + 隔离）：19 通过，0 失败，3 个预存 `DISABLED_`（`ExportServiceTest` 的 HDR / 批量 / 手工保留用例）。
+- 定向回归集 1590 个（首轮）：1576 通过，14 失败。
+  - 9 个是 P2–P4 记录的预存失败：`EditorSessionRenderSchedulerPortTest` 5 个、`GpuDagOpenClWorkspaceTest` 2 个、`EditorSessionCommandQueueBaselineTest.RapidImageSelectionKeepsRunningTargetAndReplacesOnlyUnstartedSelection`、`EditorSessionActionPolicyCq3Test.AdjustmentPanelsReloadOnlyWhenCommittedContentChanges`。
+  - `AdjustmentTransferControllerTest` 4 个：测试夹具 `CreateSeededPackedProject` 绕过导入直接写库文件，图片没有 history root；原来 Copy / Paste 经 `LoadEditorPipeline` 就地补建 root，掩盖了这一点。夹具改为像导入一样调用 `InitializeImageRoot` 建 root 后，4 个全部通过（没有放宽 Copy / Paste 的 root 要求）。
+  - `SemanticGenerationServiceTest.GeneratesLabelsForRecursiveCameraSampleDatabaseAndSqlChecks`：测试体通过，`TearDown` 删除 DB 文件时文件仍被占用。stash 全部改动回到 `8e2aba985`、只重编该目标后同样失败，为预存问题。
+- 修复夹具后重跑 `AdjustmentTransferControllerTest|AlbumBackend.*|LibraryHistoryAndExportTest|ExecutorIsolationTest|ExportServiceTest|SemanticGenerationServiceTest`：152 个，151 通过，1 失败（上面的预存 `TearDown` 失败）。
+- `ThumbnailServiceTest`（排除 FuzzScroll，直接运行 exe）：23 通过，1 跳过（Metal 用例），0 失败。
+- 完整 ctest 按 AGENTS.md 未运行。
+
+**Checklist / exit condition：**
+- [x] 除编辑器外，生产代码不再有 `LoadPipeline` / `LoadEditorPipeline` 的调用方：`LoadPipeline` 只在 `pipeline_service.cpp` 内部被 `LoadEditorPipeline` / `AcquireEditorPipeline` 调用；`LoadEditorPipeline` 只有编辑器的 `EditorSessionPipelinePort::EnsureLoaded`。测试中仍有调用，均为验证 guard 机制本身的用例（`pipeline_shared_use_test` 等），P7 随 guard 一起删除或改写
+- [x] P0 测试 2 通过：`ExportDuringUnsettledEditorPreviewUsesCommittedState`
+
+**LOC note：** 生产代码 12 个已有文件 + 新 `batch_executor_pool.hpp`（83 行），删除 `render_service.hpp`（32 行）。`pipeline_service.cpp` 1080 → 1144 行（新增 `ReadStoredHistory`、`LoadHistorySnapshot`、`PersistHistory`、新 `InitializeImageRoot`，删除旧 guard 版初始化与编辑器加载中的重复读取）；它原本就超过 1000 行，P7 删除 guard 状态机后计划减半，本阶段不拆。`export_service.cpp` 347 → 383 行，`thumbnail_service.cpp` 1046 → 993 行，`adjustment_transfer_apply_coordinator.cpp` 305 → 234 行。新测试 `library_history_and_export_test.cpp` 442 行。只对改动行运行 `git clang-format`（撤回了它对 `export_service.cpp` 中未改动 include 的重排）。
+
+**Remaining gaps：**
+- **编辑器打开没有 root 的图仍会就地创建 root**（`CreateMissingRootForEditor`，RAW 图会拿到工作空间 profile），与"每张图都有 root"不变量矛盾。P6 改编辑器加载时应改为以真实错误失败，并迁移依赖裸 id 打开编辑器的测试。
+- **`SleeveService` 的复制图片只复制元素 JSON、不复制历史**（`sleeve_service.cpp` 的 `ClonePipelineForDuplicate`）：复制出的图片没有 root，P4 起它的缩略图、P5 起它的导出都会以 `has no edit history root` 失败。这是 P4 不变量暴露的既有问题，不属于 executor 所有权，本阶段未改。
+- **导出入队在 UI 线程上取快照**：编辑器持有的图直接返回发布的快照；其他图在 checkpoint 标签匹配时读 checkpoint，否则从 root 重放。原来这里在 UI 线程上 `LoadPipeline`（读 JSON 并构造 executor）。未测大批量导出入队的耗时。
+- **`PipelineSharedUseTest.ParallelBackgroundRendersPreservePixelsAndReleaseWorkspaces`** 观察的是 guard executor 的 batch 工作区，缩略图（P4）与导出（P5）都已不在 guard executor 上渲染，断言恒成立。按 P7 计划随 `pipeline_shared_use_test` 一起改写。
+- **UI 层未验证**：没有启动应用手动检查导出、Copy、Paste；QML 套件按 AGENTS.md 未追查。Metal 未编译（本机无 macOS）。
+
 ### P6 编辑器独占 executor
 
 **目标：** 编辑器会话拥有工作文档、历史和唯一的 Interactive executor。滑块路径不再拿任何跨模块的锁。
@@ -923,7 +1050,7 @@ Suite totals：
 | P2A 蒙版逐项写时复制 | 未开始 |
 | P3 executor 按请求接收快照 | 完成（2026-09-28） |
 | P4 缩略图 / 分析池 | 完成（2026-09-28） |
-| P5 导出、导入、复制、粘贴 | 未开始 |
+| P5 导出、导入、复制、粘贴 | 完成（2026-09-28） |
 | P6 编辑器独占 executor | 未开始 |
 | P7 删除共享机制 | 未开始 |
 | P8 文档与决策更新 | 未开始 |
