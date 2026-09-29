@@ -598,6 +598,7 @@ Suite totals：
   - `PipelineDocumentCheckpointFormat` 3 个（expected serialized 字节不符）与 `EditorHistoryCommitPresentationTest.FormatsNumericBooleanPathEnumAndCompoundAdjustments`（Crop 呈现）：在 HEAD（`062ab0c4b`）源码上重编这两个目标后同样 4 个失败，与蒙版无关（发生在 Geometry 重构之后）。
 - 最后一处改动（`PublishAddMask` 重新查找）之后全量重编，并复跑受影响的目标：359 个中 355 通过，4 个失败即上面的预存 4 个。
 - 完整 ctest 按 AGENTS.md 未运行。
+- macOS（Apple Silicon，macOS 27.0，`build/macos-debug`，tests ON，Brush OFF，提交 `62fca136`）：全量构建 0 错误。`GpuDagMetal*` 与上面同一组定向套件共 1046 个，1026 通过，20 失败，全部预存：在同一台机器上切到 P8（`062ab0c4b`）重编这 9 个目标后，同样这 20 个失败——Windows 上的 13 个预存失败中的 11 个（`GpuDagOpenClWorkspaceTest` 不在 Mac 上），`GpuDagMetalDevelopTest` 2 个、`GpuDagMetalGradeTest` 5 个（含 `MetalMaskFixture` 的 `MetalDisconnectedMaskUsesConstantOneCoverage`、`MetalNormalMixMatchesCudaReferenceWithinTolerance`）、`GpuDagMetalRendererTest.InteractiveQualityBaseInteractiveReuses2560PixelResults`（与 P3 记录的 8 个 Metal 预存失败相同），以及 QML 的 `EditorHistoryTransactionsPanelQmlTest.EachTransactionCardShowsItsOwnCommitHash`。`MaskDragTickCostDoesNotGrowWithMaskCount` 在 Mac 上通过（分配计数只在 Windows Debug CRT 上可用；8 / 32 / 多蒙版中位 0.29 / 0.38 / 0.38 µs）。
 
 **Checklist / exit condition：**
 - [x] 蒙版拖动 tick 的分配次数与蒙版数量无关，并满足 P0 门槛（测试断言：8 与 32 个蒙版相等；多蒙版文档 75 次 ≤ 100、20 µs ≤ 200 µs）
@@ -608,7 +609,6 @@ Suite totals：
 
 **Remaining gaps：**
 - **笔刷模块未编译：** 本机 `ALCEDO_ENABLE_BRUSH_MASK=OFF`。四个笔刷命令改为经 `RequireBrushMaskIndex` + `StoreMask`，只做了文本检查，需要在开启该选项的构建上编译并运行 `brush_parameterized_source_test` 等。
-- **Metal 未编译**（本机无 macOS）：`metal_mask_test.cpp` 的改动与 CUDA / OpenCL 同形。
 - `RuntimeInvalidationState::AdvanceDocumentEpoch` 没有生产调用方；它原本兜住节点内蒙版计数撞号的问题，现已不需要。未在本阶段删除，另起任务处理。
 
 ### P3 `PipelineExecutor` 改为"按请求接收快照"
@@ -1457,7 +1457,7 @@ Thumbnail / analysis / export -> PipelineMgmtService::AcquireCommittedSnapshot
 | P0 基线与保护网 | 完成（2026-09-28） |
 | P1 revision 协议 | 完成（2026-09-28） |
 | P2 快照与 COW | 完成（2026-09-28） |
-| P2A 蒙版逐项写时复制 | 完成（2026-09-29；笔刷模块与 Metal 未编译） |
+| P2A 蒙版逐项写时复制 | 完成（2026-09-29，Windows + macOS 验证；笔刷模块未编译） |
 | P3 executor 按请求接收快照 | 完成（2026-09-28） |
 | P4 缩略图 / 分析池 | 完成（2026-09-28） |
 | P5 导出、导入、复制、粘贴 | 完成（2026-09-28） |
