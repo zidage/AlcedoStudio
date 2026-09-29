@@ -232,6 +232,42 @@ auto CommitGraphStore::GetImageEditState(sl_element_id_t element_id)
   return FromImageEditStateParams(std::move(rows.front()));
 }
 
+auto CommitGraphStore::GetMaterializedHistoryLabel(sl_element_id_t element_id)
+    -> std::optional<MaterializedHistoryLabel> {
+  duckdb_result result;
+  const auto    sql = std::format(
+      "SELECT root_id, materialized_head_commit_hash, materialized_transaction_chain_hash "
+         "FROM ImageEditState WHERE element_id={};",
+      element_id);
+  if (duckdb_query(conn_, sql.c_str(), &result) != DuckDBSuccess) {
+    const char*       error   = duckdb_result_error(&result);
+    const std::string message = error ? error : "CommitGraphStore history label query failed";
+    duckdb_destroy_result(&result);
+    throw std::runtime_error(message);
+  }
+  if (duckdb_row_count(&result) == 0) {
+    duckdb_destroy_result(&result);
+    return std::nullopt;
+  }
+  const auto read_text = [&result](idx_t column) -> std::string {
+    if (duckdb_value_is_null(&result, column, 0)) {
+      return {};
+    }
+    char*       raw  = duckdb_value_varchar(&result, column, 0);
+    std::string text = raw ? raw : "";
+    if (raw) {
+      duckdb_free(raw);
+    }
+    return text;
+  };
+  MaterializedHistoryLabel label;
+  label.root_id                = Hash128::FromString(read_text(0));
+  label.head_commit_hash       = HeadCommitHashFromStorage(read_text(1));
+  label.transaction_chain_hash = Hash128::FromString(read_text(2));
+  duckdb_destroy_result(&result);
+  return label;
+}
+
 void CommitGraphStore::InsertRootSerializedPipelineState(
     const root_id_t& root_id, sl_element_id_t element_id,
     const nlohmann::json& serialized_pipeline_state) {

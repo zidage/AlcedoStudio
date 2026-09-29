@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "app/import_service.hpp"
+#include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
 #include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/pipeline_document.hpp"
@@ -188,7 +189,8 @@ TEST_F(CiRawWorkflowTest, RawImportPersistsAcrossProjectReload) {
     auto                      sleeve_service = project.GetSleeveService();
     auto                      image_pool     = project.GetImagePoolService();
 
-    ImportServiceImpl         import_service(sleeve_service, image_pool);
+    ImportServiceImpl         import_service(sleeve_service, image_pool,
+                                             std::make_shared<PipelineMgmtService>(project.GetStorage()));
 
     std::vector<image_path_t> paths;
     paths.reserve(raw_files.size());

@@ -274,6 +274,8 @@ def_library(ProjectService
 
 def_library(PipelineMgmtService
     SOURCES "${ALCEDO_APP_ROOT}/pipeline_service.cpp"
+            "${ALCEDO_APP_ROOT}/pipeline_root_state.cpp"
+            "${ALCEDO_APP_ROOT}/committed_snapshot_cache.cpp"
             "${ALCEDO_APP_ROOT}/source_dng_profile_binding.cpp"
     PUBLIC_DEPS ProjectService EditPipeline EditGraph
 )
@@ -500,7 +502,7 @@ endif()
 def_library(ImportService
     SOURCES "${ALCEDO_APP_ROOT}/import_service.cpp"
     # Import assembly calls LoadPipeline / SyncPipeline / InitializeImageRoot /
-    # SavePipeline on the optional PipelineMgmtService injected at construction.
+    # SavePipeline on the PipelineMgmtService injected at construction.
     PUBLIC_DEPS SleeveManager ImageWriter ImagePoolService FSService PipelineMgmtService
 )
 

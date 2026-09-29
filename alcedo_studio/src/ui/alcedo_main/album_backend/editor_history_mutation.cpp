@@ -33,7 +33,7 @@ namespace {
 
 void SyncUnsettledPreviewFlag(HistoryWorkingState& state) {
   if (state.pipeline_guard) {
-    state.pipeline_guard->unsettled_preview_ = !state.pending_document_sequence.empty();
+    state.pipeline_guard->unsettled_preview_ = state.HasUncommittedLiveValues();
   }
 }
 
@@ -1125,7 +1125,12 @@ auto EditorHistoryMutation::WithLockedLiveDocument(
         return PublishAppliedTypedBatch(*state, state_, batch, true,
                                         settle_error);
       };
-  return op(*state->pipeline_guard->document_, *state->history, settle, error);
+  bool       input_open = state->locked_document_input_open;
+  const bool applied =
+      op(*state->pipeline_guard->document_, *state->history, settle, &input_open, error);
+  state->locked_document_input_open = input_open;
+  SyncUnsettledPreviewFlag(*state);
+  return applied;
 }
 
 }  // namespace alcedo::ui

@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <stdexcept>
 #include <utility>
 
 #include "app/sleeve_service.hpp"
@@ -104,12 +105,18 @@ class ImportService {
 class ImportServiceImpl final : public ImportService {
  public:
   ImportServiceImpl() = delete;
-  ImportServiceImpl(std::shared_ptr<SleeveServiceImpl> fs_service,
-                    std::shared_ptr<ImagePoolService>  image_pool_service,
-                    std::shared_ptr<PipelineMgmtService> pipeline_service = nullptr)
+  /// @throws std::invalid_argument when @p pipeline_service is null: every imported image gets
+  ///         its history root at import, and only the pipeline service can create it.
+  ImportServiceImpl(std::shared_ptr<SleeveServiceImpl>   fs_service,
+                    std::shared_ptr<ImagePoolService>    image_pool_service,
+                    std::shared_ptr<PipelineMgmtService> pipeline_service)
       : fs_service_(std::move(fs_service)),
         image_pool_service_(std::move(image_pool_service)),
-        pipeline_service_(std::move(pipeline_service)) {}
+        pipeline_service_(std::move(pipeline_service)) {
+    if (!pipeline_service_) {
+      throw std::invalid_argument("ImportServiceImpl: pipeline service is required");
+    }
+  }
 
   ~ImportServiceImpl() = default;
 
@@ -117,9 +124,8 @@ class ImportServiceImpl final : public ImportService {
 
   std::shared_ptr<ImagePoolService> image_pool_service_ = nullptr;
 
-  /// Assembles and saves full operator params (including image-local RAW/lens/CCT)
-  /// after metadata extraction succeeds. Optional for unit tests that only exercise
-  /// placeholder creation.
+  /// Assembles and saves full operator params (including image-local RAW/lens/CCT) and creates
+  /// the image's history root after metadata extraction succeeds.
   std::shared_ptr<PipelineMgmtService> pipeline_service_ = nullptr;
 
   ThreadPool                            thread_pool_{8};

@@ -151,9 +151,17 @@ class IEditorHistoryPort {
 
   using LockedMaskSettle =
       std::function<bool(const PipelineEditBatch& batch, std::string* error)>;
+  /**
+   * @brief Operation on the locked live document.
+   *
+   * Before returning (also on failure) the operation sets @p input_open to whether its input
+   * sequence is still open, that is, whether the live document now holds values that are not
+   * committed. The history treats those values exactly like a pending slider sequence: nothing
+   * is saved and no committed snapshot is published until the sequence settles or is cancelled.
+   */
   using LockedMaskDocumentOp =
       std::function<bool(PipelineDocument& document, MiniGitWorkingHistory& history,
-                         const LockedMaskSettle& settle, std::string* error)>;
+                         const LockedMaskSettle& settle, bool* input_open, std::string* error)>;
 
   /**
    * @brief Run @p op while holding the live pipeline render lock.

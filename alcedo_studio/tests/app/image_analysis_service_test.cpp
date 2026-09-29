@@ -107,10 +107,13 @@ auto EnvOrFileValue(const std::filesystem::path& env_path,
 // holds callbacks without delivering them, so a Phase 5e test can stall the producer (the
 // "consumer waiting for an encoded item" case): cancel then unblocks the producer via
 // RunJob's 25ms poll, and the held callbacks are simply discarded on provider teardown.
-class FakeThumbnailProvider : public IImageAnalysisThumbnailProvider {
+class FakeThumbnailProvider : public IAnalysisRenditionProvider {
  public:
-  void RequestThumbnail(const ImageAnalysisItem& item, ThumbnailResolution resolution,
-                        ImageAnalysisThumbnailCallback callback) override {
+  void RequestRendition(sl_element_id_t element_id, image_id_t image_id,
+                        ThumbnailResolution resolution, ThumbnailResultCallback callback) override {
+    ImageAnalysisItem item{};
+    item.element_id = element_id;
+    item.image_id   = image_id;
     ++request_count_;
     if (block_mode_.load()) {
       std::unique_lock lk(block_mutex_);
@@ -120,14 +123,14 @@ class FakeThumbnailProvider : public IImageAnalysisThumbnailProvider {
     }
     DeliverReady(item, resolution, std::move(callback));
   }
-  void CancelThumbnail(const ThumbnailCacheKey& /*key*/) override { ++cancel_count_; }
-  void ReleaseThumbnail(const ThumbnailCacheKey& /*key*/) override { ++release_count_; }
+  void CancelRendition(const ThumbnailCacheKey& /*key*/) override { ++cancel_count_; }
+  void ReleaseRendition(const ThumbnailCacheKey& /*key*/) override { ++release_count_; }
 
   void SetBlockMode(bool block) {
     std::unique_lock lk(block_mutex_);
     block_mode_ = block;
   }
-  // Blocks until at least one request is pending (the producer has entered RequestThumbnail
+  // Blocks until at least one request is pending (the producer has entered RequestRendition
   // and is now blocked waiting for the callback). Returns false on timeout.
   auto WaitForPending(std::chrono::milliseconds timeout) -> bool {
     std::unique_lock lk(block_mutex_);
@@ -145,11 +148,11 @@ class FakeThumbnailProvider : public IImageAnalysisThumbnailProvider {
   struct Pending {
     ImageAnalysisItem               item;
     ThumbnailResolution             resolution;
-    ImageAnalysisThumbnailCallback  callback;
+    ThumbnailResultCallback         callback;
   };
 
   static void DeliverReady(const ImageAnalysisItem& item, ThumbnailResolution resolution,
-                           ImageAnalysisThumbnailCallback callback) {
+                           ThumbnailResultCallback callback) {
     ThumbnailRequestResult r;
     r.key    = ThumbnailCacheKey{item.element_id, resolution};
     r.status = ThumbnailRequestStatus::kReady;
@@ -501,9 +504,9 @@ auto BaseDescribeOpts(const std::string& tag) -> ImageAnalysisOptions {
   return opts;
 }
 
-auto RunDescribe(std::shared_ptr<IImageAnalysisThumbnailProvider> provider,
-                 std::shared_ptr<IImageAnalysisClient>            client,
-                 std::shared_ptr<ImageAnalysisInFlightGate>       gate, const std::string& tag)
+auto RunDescribe(std::shared_ptr<IAnalysisRenditionProvider> provider,
+                 std::shared_ptr<IImageAnalysisClient>       client,
+                 std::shared_ptr<ImageAnalysisInFlightGate> gate, const std::string& tag)
     -> std::vector<ImageAnalysisItemResult> {
   ImageAnalysisService service(provider, client, gate);
   auto                 opts = BaseDescribeOpts(tag);
@@ -1054,7 +1057,7 @@ TEST(ImageAnalysisServiceLiveTest, ValidateConnectionDiscoversOpencodeModels) {
 
 // Pipeline overlap: while image 1 is blocked in the fake remote call, image 2 must already
 // be thumbnail-requested AND encoded. Encoding is proven by the pin release (the producer
-// calls ReleaseThumbnail only after EncodeThumbnailForRemoteAnalysis), so ReleaseCount == 2
+// calls ReleaseRendition only after EncodeThumbnailForRemoteAnalysis), so ReleaseCount == 2
 // while DescribeCalls == 1 means image 2 was fully prepped locally behind image 1's RPC.
 TEST(ImageAnalysisServiceTest, PrefillPipelinePreparesImage2WhileImage1BlockedInRpc) {
   auto provider = std::make_shared<FakeThumbnailProvider>();

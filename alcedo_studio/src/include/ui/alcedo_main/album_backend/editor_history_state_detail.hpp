@@ -18,6 +18,7 @@
 #include "app/editor_render_intent.hpp"
 #include "app/editor_session_ports.hpp"
 #include "app/editor_session_types.hpp"
+#include "edit/graph/pipeline_graph_snapshot.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "json.hpp"
 #include "type/hash_type.hpp"
@@ -49,6 +50,10 @@ struct HistoryWorkingState {
     nlohmann::json                after_model_json;
   };
   std::unordered_map<std::string, DocumentFieldEdit> pending_document_sequence;
+  /// True while an input sequence run through WithLockedLiveDocument (a Mask drag or Mask value
+  /// edit) has left uncommitted values on the live document. Set from the operation's report
+  /// after each call.
+  bool                                                   locked_document_input_open = false;
   std::unordered_map<alcedo::Hash128, DocumentFieldEdit> document_edit_by_commit;
   /// Load-only panel values copied from live Models. Not a live Model pointer
   /// and not a writable parameter mirror. Selected-node copies do not take the
@@ -57,6 +62,20 @@ struct HistoryWorkingState {
   /// Node last requested for panel projection. Empty means current-panel owners.
   alcedo::NodeId panel_projection_node_id;
   bool recovered_head = false;
+
+  /// History state of the last committed snapshot published for this image.
+  struct PublishedCommit {
+    alcedo::PipelineLineageId        lineage;
+    alcedo::head_commit_hash_t       head;
+    alcedo::transaction_chain_hash_t chain{};
+  };
+  std::optional<PublishedCommit> last_published_commit;
+
+  /// True while the live document holds any value that is not committed: a pending slider
+  /// sequence or an open locked-document input sequence. One rule for every kind of input.
+  [[nodiscard]] auto             HasUncommittedLiveValues() const -> bool {
+    return !pending_document_sequence.empty() || locked_document_input_open;
+  }
 };
 
 /// Owns per-image WorkingState acquisition, release, and service-path
@@ -112,6 +131,18 @@ class EditorHistoryState {
   /// Return the journal-path resolver for checkpoint capture.
   [[nodiscard]] auto JournalPathResolver() const
       -> std::function<std::filesystem::path(sl_element_id_t)>;
+
+  /**
+   * @brief Publish the committed snapshot of @p element_id when its committed state changed.
+   *
+   * Freezes the live document and hands it to PipelineMgmtService::PublishCommitted, labelled
+   * with the working head and chain. Does nothing while the live document holds uncommitted
+   * values (@ref HistoryWorkingState::HasUncommittedLiveValues) or when lineage, head, and chain
+   * equal the last publication. Call on the history owner thread after every history operation;
+   * the document is written only on that thread, so the freeze needs no render lock.
+   * A failed publication is logged; the history operation that preceded it stands.
+   */
+  void               PublishCommittedSnapshot(sl_element_id_t element_id);
 
   /// Record the render reason of the last successful mutation on this port.
   void RecordPublishedRenderReason(std::optional<alcedo::EditorRenderReason> reason);

@@ -715,6 +715,15 @@ target_link_libraries(ExecutorIsolationTest ExportService ProjectService ImportS
 gtest_discover_tests(ExecutorIsolationTest TEST_PREFIX "ExecutorIsolationTest.")
 alcedo_register_test_target(ExecutorIsolationTest app)
 
+# Executor ownership refactor P4: thumbnails and analysis render committed snapshots on their own
+# batch executors, never on the editor's executor or behind its render lock.
+add_executable(ThumbnailCommittedRenderTest ${ALCEDO_TEST_ROOT}/app/thumbnail_committed_render_test.cpp)
+target_include_directories(ThumbnailCommittedRenderTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(ThumbnailCommittedRenderTest ThumbnailService ProjectService ImportService
+  GTest::gtest_main ${ALCEDO_TEST_OPENCV_MIN_DEPS})
+gtest_discover_tests(ThumbnailCommittedRenderTest TEST_PREFIX "ThumbnailCommittedRenderTest.")
+alcedo_register_test_target(ThumbnailCommittedRenderTest app)
+
 add_executable(ExecutorSnapshotRenderTest ${ALCEDO_TEST_ROOT}/app/executor_snapshot_render_test.cpp)
 target_include_directories(ExecutorSnapshotRenderTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(ExecutorSnapshotRenderTest ExportService ProjectService ImportService

@@ -133,7 +133,6 @@ struct ImageAnalysisItemResult {
 
 using ImageAnalysisProgressCallback  = std::function<void(const ImageAnalysisProgress&)>;
 using ImageAnalysisFinishedCallback  = std::function<void(std::vector<ImageAnalysisItemResult>)>;
-using ImageAnalysisThumbnailCallback = std::function<void(ThumbnailRequestResult)>;
 
 // Serializes remote image-analysis calls to at most one in flight across ALL
 // ImageAnalysisService instances that share the same gate. Phase 5d mandates a
@@ -168,29 +167,6 @@ class ImageAnalysisInFlightGate {
   std::condition_variable cv_;
   bool                    in_flight_ = false;
   std::string             in_flight_request_id_;
-};
-
-class IImageAnalysisThumbnailProvider {
- public:
-  virtual ~IImageAnalysisThumbnailProvider()                             = default;
-
-  virtual void RequestThumbnail(const ImageAnalysisItem& item, ThumbnailResolution resolution,
-                                ImageAnalysisThumbnailCallback callback) = 0;
-  virtual void CancelThumbnail(const ThumbnailCacheKey& key)             = 0;
-  virtual void ReleaseThumbnail(const ThumbnailCacheKey& key)            = 0;
-};
-
-class ThumbnailServiceImageAnalysisProvider final : public IImageAnalysisThumbnailProvider {
- public:
-  explicit ThumbnailServiceImageAnalysisProvider(std::shared_ptr<ThumbnailService> service);
-
-  void RequestThumbnail(const ImageAnalysisItem& item, ThumbnailResolution resolution,
-                        ImageAnalysisThumbnailCallback callback) override;
-  void CancelThumbnail(const ThumbnailCacheKey& key) override;
-  void ReleaseThumbnail(const ThumbnailCacheKey& key) override;
-
- private:
-  std::shared_ptr<ThumbnailService> service_;
 };
 
 // Sidecar-call seam for ImageAnalysisService (mirrors ISemanticImageEmbeddingClient).
@@ -296,9 +272,9 @@ class ImageAnalysisJob final {
 
 class ImageAnalysisService final {
  public:
-  ImageAnalysisService(std::shared_ptr<IImageAnalysisThumbnailProvider> thumbnail_provider,
-                       std::shared_ptr<IImageAnalysisClient>            analysis_client,
-                       std::shared_ptr<ImageAnalysisInFlightGate>       in_flight_gate = nullptr);
+  ImageAnalysisService(std::shared_ptr<IAnalysisRenditionProvider> thumbnail_provider,
+                       std::shared_ptr<IImageAnalysisClient>       analysis_client,
+                       std::shared_ptr<ImageAnalysisInFlightGate>  in_flight_gate = nullptr);
 
   auto StartAnalysis(std::vector<ImageAnalysisItem> items, ImageAnalysisOptions options = {},
                      ImageAnalysisProgressCallback on_progress = {},
@@ -311,15 +287,15 @@ class ImageAnalysisService final {
  private:
   static void RunJob(const std::shared_ptr<ImageAnalysisJob>& job,
                      const std::vector<ImageAnalysisItem>& items, ImageAnalysisOptions options,
-                     ImageAnalysisProgressCallback                    on_progress,
-                     ImageAnalysisFinishedCallback                    on_finished,
-                     std::shared_ptr<IImageAnalysisThumbnailProvider> thumbnail_provider,
-                     std::shared_ptr<IImageAnalysisClient>            analysis_client,
-                     std::shared_ptr<ImageAnalysisInFlightGate>       in_flight_gate);
+                     ImageAnalysisProgressCallback               on_progress,
+                     ImageAnalysisFinishedCallback               on_finished,
+                     std::shared_ptr<IAnalysisRenditionProvider> thumbnail_provider,
+                     std::shared_ptr<IImageAnalysisClient>       analysis_client,
+                     std::shared_ptr<ImageAnalysisInFlightGate>  in_flight_gate);
 
-  std::shared_ptr<IImageAnalysisThumbnailProvider> thumbnail_provider_;
-  std::shared_ptr<IImageAnalysisClient>            analysis_client_;
-  std::shared_ptr<ImageAnalysisInFlightGate>       in_flight_gate_;
+  std::shared_ptr<IAnalysisRenditionProvider> thumbnail_provider_;
+  std::shared_ptr<IImageAnalysisClient>       analysis_client_;
+  std::shared_ptr<ImageAnalysisInFlightGate>  in_flight_gate_;
 };
 
 auto ToString(ImageAnalysisItemStatus status) -> const char*;

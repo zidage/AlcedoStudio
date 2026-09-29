@@ -108,32 +108,8 @@ struct SemanticImageEmbeddingBatchResult {
 using SemanticGenerationProgressCallback = std::function<void(const SemanticGenerationProgress&)>;
 using SemanticGenerationFinishedCallback =
     std::function<void(std::vector<SemanticGenerationItemResult>)>;
-using SemanticThumbnailRequestCallback = std::function<void(ThumbnailRequestResult)>;
 using SemanticImageEmbeddingBatchCallback =
     std::function<void(std::vector<SemanticImageEmbeddingBatchResult>)>;
-
-class ISemanticThumbnailProvider {
- public:
-  virtual ~ISemanticThumbnailProvider()                                    = default;
-
-  virtual void RequestThumbnail(const SemanticGenerationItem& item, ThumbnailResolution resolution,
-                                SemanticThumbnailRequestCallback callback) = 0;
-  virtual void CancelThumbnail(const ThumbnailCacheKey& key)               = 0;
-  virtual void ReleaseThumbnail(const ThumbnailCacheKey& key)              = 0;
-};
-
-class ThumbnailServiceSemanticThumbnailProvider final : public ISemanticThumbnailProvider {
- public:
-  explicit ThumbnailServiceSemanticThumbnailProvider(std::shared_ptr<ThumbnailService> service);
-
-  void RequestThumbnail(const SemanticGenerationItem& item, ThumbnailResolution resolution,
-                        SemanticThumbnailRequestCallback callback) override;
-  void CancelThumbnail(const ThumbnailCacheKey& key) override;
-  void ReleaseThumbnail(const ThumbnailCacheKey& key) override;
-
- private:
-  std::shared_ptr<ThumbnailService> service_;
-};
 
 class ISemanticImageEmbeddingClient {
  public:
@@ -223,7 +199,7 @@ class SemanticGenerationJob final {
 
 class SemanticGenerationService final {
  public:
-  SemanticGenerationService(std::shared_ptr<ISemanticThumbnailProvider>    thumbnail_provider,
+  SemanticGenerationService(std::shared_ptr<IAnalysisRenditionProvider>    thumbnail_provider,
                             std::shared_ptr<ISemanticImageEmbeddingClient> embedding_client);
 
   static auto EnsureLabelPrototypes(const SemanticGenerationPersistenceOptions& persistence,
@@ -242,10 +218,10 @@ class SemanticGenerationService final {
                      SemanticGenerationOptions                      options,
                      SemanticGenerationProgressCallback             on_progress,
                      SemanticGenerationFinishedCallback             on_finished,
-                     std::shared_ptr<ISemanticThumbnailProvider>    thumbnail_provider,
+                     std::shared_ptr<IAnalysisRenditionProvider>    thumbnail_provider,
                      std::shared_ptr<ISemanticImageEmbeddingClient> embedding_client);
 
-  std::shared_ptr<ISemanticThumbnailProvider>    thumbnail_provider_;
+  std::shared_ptr<IAnalysisRenditionProvider>    thumbnail_provider_;
   std::shared_ptr<ISemanticImageEmbeddingClient> embedding_client_;
 };
 

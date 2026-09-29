@@ -436,7 +436,7 @@ TEST_F(ExportServiceTests, DISABLED_BatchExport_LimitedCount_WritesReadableFiles
   auto              image_pool       = project.GetImagePoolService();
   auto              pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
 
-  ImportServiceImpl import_service(sleeve_service, image_pool);
+  ImportServiceImpl import_service(sleeve_service, image_pool, pipeline_service);
 
   // Requirement: never export more than 50 images. Keep this test lighter by default.
   constexpr size_t  kMaxExport    = 200;
@@ -516,7 +516,7 @@ TEST_F(ExportServiceTests, DISABLED_Manual_KeepExportFiles) {
   auto              image_pool       = project.GetImagePoolService();
   auto              pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
 
-  ImportServiceImpl import_service(sleeve_service, image_pool);
+  ImportServiceImpl import_service(sleeve_service, image_pool, pipeline_service);
   auto              paths = CollectSupportedBatchImportImages(/*max_count=*/2);
   if (paths.empty()) {
     GTEST_SKIP() << "No supported images found under TEST_IMG_PATH/raw/batch_import";

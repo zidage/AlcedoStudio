@@ -282,9 +282,10 @@ class EditorMaskCreationController {
   [[nodiscard]] auto active_handle() const -> AnalyticMaskHandle { return handle_; }
   [[nodiscard]] auto node_id() const -> const NodeId& { return node_id_; }
   /**
-   * @brief True while an initial Radial/Linear drawing sequence is open.
+   * @brief True while an input sequence is open: a creation drag, an existing-mask handle move,
+   *        or a Mask value edit. The live document may then hold values that are not committed.
    *
-   * Existing-mask edits are false. Armed creation without a press is false.
+   * Armed creation without a press is false.
    */
   [[nodiscard]] auto HasOpenOperation() const -> bool { return open_; }
   [[nodiscard]] auto OverlayIsCreating() const -> bool;

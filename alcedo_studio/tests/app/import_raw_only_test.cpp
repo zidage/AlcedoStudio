@@ -24,6 +24,7 @@
 
 #include "app/image_pool_service.hpp"
 #include "app/import_service.hpp"
+#include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
 #include "library_search_test_support.hpp"
 #include "storage/image_pool/image_pool_manager.hpp"
@@ -100,7 +101,8 @@ struct ImportOutcome {
 /// in which the library UI keeps reading the image pool.
 auto ImportToLibraryRoot(ProjectService& project, const std::vector<image_path_t>& paths,
                          const std::function<void()>& before_sync = {}) -> ImportOutcome {
-  ImportServiceImpl import_service(project.GetSleeveService(), project.GetImagePoolService());
+  ImportServiceImpl import_service(project.GetSleeveService(), project.GetImagePoolService(),
+                                   std::make_shared<PipelineMgmtService>(project.GetStorage()));
   auto              job = std::make_shared<ImportJob>();
   std::promise<ImportResult> finished;
   auto                       finished_future = finished.get_future();

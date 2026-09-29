@@ -29,6 +29,7 @@
 
 #include "ai/ai_description.hpp"
 #include "app/import_service.hpp"
+#include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
 #include "app/sleeve_filter_service.hpp"
 #include "library_search_test_support.hpp"
@@ -762,8 +763,9 @@ struct NikonImportOutcome {
 
 auto ImportFolderToLibraryRoot(ProjectService& project, const std::vector<image_path_t>& paths)
     -> NikonImportOutcome {
-  auto import_service = std::make_unique<ImportServiceImpl>(project.GetSleeveService(),
-                                                            project.GetImagePoolService());
+  auto import_service = std::make_unique<ImportServiceImpl>(
+      project.GetSleeveService(), project.GetImagePoolService(),
+      std::make_shared<PipelineMgmtService>(project.GetStorage()));
   auto job            = std::make_shared<ImportJob>();
   std::promise<ImportResult> finished;
   auto                       finished_future = finished.get_future();

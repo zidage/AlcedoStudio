@@ -15,6 +15,7 @@
 #include <string>
 #include <unordered_map>
 
+#include "app/committed_snapshot_cache.hpp"
 #include "app/image_pool_service.hpp"
 #include "decoders/processor/raw_color_context.hpp"
 #include "edit/graph/pipeline_document.hpp"
@@ -67,8 +68,8 @@ struct PipelineGuard {
   bool                                 live_ready_ = false;
   bool                                 initializing_ = false;
   std::exception_ptr                   load_error_;
-  /// True while an editor input sequence has live values that are not a history HEAD.
-  /// Thumbnail/export disk caches must not store pixels under the committed label.
+  /// True while an editor input sequence (slider or Mask) has live values that are not a history
+  /// HEAD. Saves and checkpoints refuse to persist the live document while it is set.
   bool                                 unsettled_preview_ = false;
   /// True while the editor session owns this image's history and live document
   /// (between AcquireEditorPipeline and ReleaseEditorPipeline). No other module
@@ -98,10 +99,12 @@ struct PipelineGuard {
   /**
    * @brief Freeze document_ into the snapshot that one render task passes to Apply.
    *
-   * Transitional until each consumer owns its executor: the snapshot is a preview (no HEAD, empty
-   * chain) because document_ may hold uncommitted editor values, and it is rendered by every user
-   * of pipeline_ (editor, thumbnails, analysis, export). The chain is left empty because the
-   * render thread must not read commit_graph_, which the history owner replaces without this lock.
+   * Transitional until the editor and export own their executors: the snapshot is a preview (no
+   * HEAD, empty chain) because document_ may hold uncommitted editor values, and it is rendered by
+   * the users of pipeline_ (the editor and export; thumbnails and analysis render committed
+   * snapshots, see PipelineMgmtService::AcquireCommittedSnapshot). The chain is left empty because
+   * the render thread must not read commit_graph_, which the history owner replaces without this
+   * lock.
    *
    * @pre Caller holds pipeline_->GetRenderLock(); document_ is set and lineage_ is not empty.
    * @throws std::invalid_argument when document_ is null or lineage_ is empty.
@@ -138,6 +141,11 @@ class PipelineMgmtService final {
 
   std::uint64_t                editor_pipeline_history_rebuild_count_ = 0;
 
+  CommittedSnapshotCache       committed_snapshots_;
+
+  /// True while an editor session owns @p id (AcquireEditorPipeline .. ReleaseEditorPipeline).
+  [[nodiscard]] auto           EditorHoldsImage(sl_element_id_t id) -> bool;
+
   void                         HandleEviction(sl_element_id_t evicted_id);
   void                         SyncDirtyPipelineDocument(
       const std::shared_ptr<PipelineGuard>& pipeline);
@@ -148,14 +156,17 @@ class PipelineMgmtService final {
  public:
   PipelineMgmtService() = delete;
   explicit PipelineMgmtService(std::shared_ptr<Storage> storage_service)
-      : storage_(storage_service), pipeline_cache_(default_cache_capacity_), loaded_pipelines_() {}
+      : storage_(storage_service),
+        pipeline_cache_(default_cache_capacity_),
+        loaded_pipelines_(),
+        committed_snapshots_(storage_service) {}
 
   void               SavePipeline(std::shared_ptr<PipelineGuard> pipeline);
 
   /**
    * @brief Unpin a live pipeline without writing storage or clearing dirty.
    *
-   * Thumbnail, analysis, and export must call this instead of @ref SavePipeline.
+   * Export and other borrowers of the live guard must call this instead of @ref SavePipeline.
    * When other pins remain (the editor), GPU session caches stay. When this is
    * the last pin, the executor releases the resources of its binding (both
    * renderers) so unused LRU entries do not keep VRAM. Must not be called while holding
@@ -174,6 +185,37 @@ class PipelineMgmtService final {
                                                std::string*                          error = nullptr) -> bool;
 
   auto               LoadPipeline(sl_element_id_t id) -> std::shared_ptr<PipelineGuard>;
+
+  /**
+   * @brief Committed pipeline graph snapshot of @p id, for renders that must not see
+   *        uncommitted editor values (thumbnails, analysis).
+   *
+   * For the image the editor holds, returns the snapshot the editor published last
+   * (@ref PublishCommitted); when it has published none yet, the stored state. For every other
+   * image, builds the snapshot from the materialized history in storage, or reuses the cached one
+   * while its head and chain still equal the stored labels. Never loads a PipelineGuard, never
+   * takes a render lock, and never reads the element pipeline JSON.
+   *
+   * Thread: any thread; storage reads run on the calling thread, so call it off the UI thread.
+   * @throws std::runtime_error when the image has no history root or its history cannot be built.
+   */
+  [[nodiscard]] auto AcquireCommittedSnapshot(sl_element_id_t id)
+      -> std::shared_ptr<const PipelineGraphSnapshot>;
+
+  /**
+   * @brief Publish the editor's snapshot of a committed state of the image it holds.
+   *
+   * Called by the editor history after each change of its committed state. Later
+   * @ref AcquireCommittedSnapshot calls for that image return it until the next publication or
+   * until the editor releases the image.
+   * @throws std::invalid_argument when @p snapshot is null or not committed.
+   */
+  void               PublishCommitted(std::shared_ptr<const PipelineGraphSnapshot> snapshot);
+
+  /// Test/instrumentation: committed snapshots built from storage since construction.
+  [[nodiscard]] auto CommittedSnapshotStorageLoadCount() const -> std::size_t {
+    return committed_snapshots_.StorageLoadCount();
+  }
 
   /**
    * @brief Wait until @p pipeline pin_count_ equals @p expected.
@@ -200,7 +242,8 @@ class PipelineMgmtService final {
   /// Load editor document for `id` using history tip as authority.
   /// If checkpoint (document + root/head/chain labels) matches active Version tip, load the
   /// document (skip first-parent replay). Otherwise rebuild from root + first-parent typed
-  /// batches and mark write-back. Thumbnail/export must use LoadPipeline.
+  /// batches and mark write-back. Export uses LoadPipeline; thumbnails and analysis use
+  /// AcquireCommittedSnapshot.
   ///
   /// For non-editor history users (Paste to library targets). Throws when the editor session
   /// owns `id`: the editor is the sole owner of an open image's history and live document, so

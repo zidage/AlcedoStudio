@@ -346,7 +346,7 @@ auto RunHsResearchExportTool(int argc, char** argv) -> int {
       auto           pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
       pipeline_service->SetAcceleratorBackendPreference(AcceleratorBackendPreference::CUDA);
 
-      ImportServiceImpl import_service(sleeve_service, image_pool);
+      ImportServiceImpl import_service(sleeve_service, image_pool, pipeline_service);
       const auto        snapshot = ImportBlocking(import_service, options.raw_paths);
 
       ExportService export_service(sleeve_service, image_pool, pipeline_service);

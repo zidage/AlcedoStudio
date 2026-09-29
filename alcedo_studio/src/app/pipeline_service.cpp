@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "app/pipeline_history_applier.hpp"
+#include "app/pipeline_root_state.hpp"
 #include "app/source_dng_profile_binding.hpp"
 #include "edit/graph/develop_color_transform.hpp"
 #include "edit/history/commit_graph.hpp"
@@ -29,19 +30,6 @@
 
 namespace alcedo {
 namespace {
-void ValidateProductDocument(const PipelineDocument& document, sl_element_id_t id) {
-  const auto graph_errors = document.Graph().Validate();
-  if (!graph_errors.empty()) {
-    throw std::runtime_error("PipelineMgmtService: invalid graph for element " +
-                             std::to_string(id) + ": " + graph_errors.front().message);
-  }
-  const auto backbone_errors = document.Graph().ValidateImageBackbone();
-  if (!backbone_errors.empty()) {
-    throw std::runtime_error("PipelineMgmtService: invalid image backbone for element " +
-                             std::to_string(id) + ": " + backbone_errors.front().message);
-  }
-}
-
 auto LoadPipelineDocument(ElementStore& store, sl_element_id_t id)
     -> std::shared_ptr<PipelineDocument> {
   const auto stored = store.GetPipelineJsonByElementId(id);
@@ -54,46 +42,6 @@ auto LoadPipelineDocument(ElementStore& store, sl_element_id_t id)
   return document;
 }
 
-struct LoadedRootState {
-  PipelineDocument                      document;
-  std::optional<RawRuntimeColorContext> raw_color_context;
-};
-
-auto TryDecodeRootState(const nlohmann::json& encoded, sl_element_id_t element_id,
-                        const root_id_t& expected_root_id) -> std::optional<LoadedRootState> {
-  try {
-    const auto root = DecodePipelineRootState(encoded);
-    if (root.element_id != element_id) {
-      return std::nullopt;
-    }
-    if (ComputeRootId(root.element_id, root.document, root.raw_color_context) !=
-        expected_root_id) {
-      return std::nullopt;
-    }
-    LoadedRootState loaded;
-    loaded.document = ClonePipelineDocument(root.document);
-    if (root.raw_color_context.has_value()) {
-      RawRuntimeColorContext context;
-      if (!RawColorContextFromJson(*root.raw_color_context, context)) {
-        return std::nullopt;
-      }
-      loaded.raw_color_context = std::move(context);
-    }
-    return loaded;
-  } catch (...) {
-    return std::nullopt;
-  }
-}
-
-auto TryDecodeCheckpoint(const nlohmann::json& encoded)
-    -> std::optional<PipelineDocumentCheckpoint> {
-  try {
-    return DecodePipelineDocumentCheckpoint(encoded);
-  } catch (...) {
-    return std::nullopt;
-  }
-}
-
 auto MakeSerializedPipelineState(const PipelineGuard& guard) -> nlohmann::json {
   return EncodePipelineDocumentCheckpoint(guard.root_id_, guard.working_head_commit_hash(),
                                           guard.transaction_chain_hash(), *guard.document_);
@@ -101,36 +49,6 @@ auto MakeSerializedPipelineState(const PipelineGuard& guard) -> nlohmann::json {
 
 void CacheRootDocument(PipelineGuard& guard, const PipelineDocument& document) {
   guard.root_document_ = std::make_shared<PipelineDocument>(ClonePipelineDocument(document));
-}
-
-void BindWorkingSpaceDevelopData(PipelineDocument& document) {
-  auto* develop = document.Develop();
-  if (develop == nullptr) {
-    return;
-  }
-  auto payload = develop->Params().Params();
-  auto next    = payload;
-  BindRgbWorkingSpaceCameraProfile(next);
-  if (next != payload) {
-    develop->Params().ReplaceParams(std::move(next));
-  }
-}
-
-/// Bind Rec.709 onto a live document that cannot resolve CameraToAp1 and has no stored RAW
-/// color context. RAW roots keep missing matrices so decode/import still fails closed.
-void EnsureRenderableCameraProfile(
-    PipelineDocument& document, const std::optional<RawRuntimeColorContext>& raw_color_context) {
-  auto* develop = document.Develop();
-  if (develop == nullptr) {
-    return;
-  }
-  if (develop->Params().Params().camera_profile.color_matrices_valid) {
-    return;
-  }
-  if (raw_color_context.has_value()) {
-    return;
-  }
-  BindWorkingSpaceDevelopData(document);
 }
 
 auto StoredRootRawColorContext(Storage& storage, sl_element_id_t id)
@@ -155,58 +73,6 @@ auto StoredRootRawColorContext(Storage& storage, sl_element_id_t id)
   } catch (...) {
     return std::nullopt;
   }
-}
-
-/// Bind the DNG profile of a decoded root state: the RAW color context and the root document.
-/// @pre The caller holds no database connection lock.
-void BindSourceDngProfiles(Storage& storage, sl_element_id_t id, LoadedRootState& root) {
-  if (root.raw_color_context.has_value()) {
-    BindSourceDngColorProfile(storage, id, *root.raw_color_context);
-  }
-  BindSourceDngColorProfile(storage, id, root.document);
-}
-
-/// Bind the image camera profile onto a document that is not live yet. RAW roots bind the stored
-/// RAW color context; roots without one fall back to the Rec.709 working-space profile.
-void BindRootCameraProfile(PipelineDocument&                            document,
-                           const std::optional<RawRuntimeColorContext>& raw_color_context) {
-  EnsureRenderableCameraProfile(document, raw_color_context);
-  if (raw_color_context.has_value()) {
-    BindImportedCameraProfile(document, *raw_color_context);
-  }
-}
-
-auto FirstParentCommits(const CommitGraph& graph, head_commit_hash_t head)
-    -> std::vector<EditCommit> {
-  return FirstParentCommitsForHead(graph, head);
-}
-
-/// Build phase of build-then-swap: replay the immutable root through the first-parent chain of
-/// @p head and bind the camera profile. Touches neither the guard nor the executor, so the caller
-/// may run it without the render lock and drop the result on failure.
-/// @return the new document, or null with @p error set.
-auto BuildLiveDocumentFromRoot(const CommitGraph& graph, const LoadedRootState& root_state,
-                               head_commit_hash_t head, std::string* error)
-    -> std::shared_ptr<PipelineDocument> {
-  try {
-    auto replayed =
-        ReplayPipelineDocumentFromRoot(root_state.document, FirstParentCommits(graph, head), error);
-    if (!replayed.has_value()) {
-      return nullptr;
-    }
-    auto document = std::make_shared<PipelineDocument>(std::move(*replayed));
-    BindRootCameraProfile(*document, root_state.raw_color_context);
-    return document;
-  } catch (const std::exception& ex) {
-    if (error != nullptr) {
-      *error = ex.what();
-    }
-  } catch (...) {
-    if (error != nullptr) {
-      *error = "PipelineMgmtService: live document replay failed with an unknown error";
-    }
-  }
-  return nullptr;
 }
 
 void SetPipelineHistoryState(PipelineGuard& guard, const CommitGraph& graph) {
@@ -509,6 +375,25 @@ auto PipelineMgmtService::LoadPipeline(sl_element_id_t id) -> std::shared_ptr<Pi
   }
 }
 
+auto PipelineMgmtService::EditorHoldsImage(sl_element_id_t id) -> bool {
+  std::unique_lock<std::mutex> cache_lock(lock_);
+  const auto                   it = loaded_pipelines_.find(id);
+  return it != loaded_pipelines_.end() && it->second && it->second->editor_owned_;
+}
+
+auto PipelineMgmtService::AcquireCommittedSnapshot(sl_element_id_t id)
+    -> std::shared_ptr<const PipelineGraphSnapshot> {
+  return committed_snapshots_.Acquire(id, EditorHoldsImage(id));
+}
+
+void PipelineMgmtService::PublishCommitted(std::shared_ptr<const PipelineGraphSnapshot> snapshot) {
+  if (!snapshot) {
+    throw std::invalid_argument("PipelineMgmtService: cannot publish a null snapshot");
+  }
+  const auto id = snapshot->ElementId();
+  committed_snapshots_.Publish(std::move(snapshot), EditorHoldsImage(id));
+}
+
 void PipelineMgmtService::SyncPipelineDocument(const std::shared_ptr<PipelineGuard>& pipeline) {
   if (!pipeline || !pipeline->pipeline_ || !pipeline->document_) {
     throw std::invalid_argument("PipelineMgmtService: cannot save an incomplete PipelineDocument");
@@ -656,6 +541,7 @@ void PipelineMgmtService::ReleaseEditorPipeline(std::shared_ptr<PipelineGuard> p
     std::unique_lock<std::mutex> cache_lock(lock_);
     pipeline->editor_owned_ = false;
   }
+  committed_snapshots_.EndEditorPublication(pipeline->id_);
   ReleasePipelineUse(std::move(pipeline));
 }
 
@@ -715,9 +601,7 @@ void PipelineMgmtService::BindEditorStateFromStorage(
           stored->head_commit_hash == expected_head &&
           stored->transaction_chain_hash == expected_chain) {
         try {
-          auto document =
-              std::make_shared<PipelineDocument>(ClonePipelineDocument(stored->document));
-          BindRootCameraProfile(*document, root_state->raw_color_context);
+          auto                         document = BuildDocumentFromCheckpoint(*stored, *root_state);
           std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
           pipeline->pipeline_->SetAcceleratorBackendPreference(accelerator_preference_);
           (void)BindLivePipelineDocument(*pipeline, std::move(document));
@@ -731,7 +615,7 @@ void PipelineMgmtService::BindEditorStateFromStorage(
     if (!accepted_serialized_state) {
       ++editor_pipeline_history_rebuild_count_;
       std::string replay_error;
-      auto document = BuildLiveDocumentFromRoot(*graph, *root_state, expected_head, &replay_error);
+      auto document = BuildDocumentFromRoot(*graph, *root_state, expected_head, &replay_error);
       if (!document) {
         throw std::runtime_error(replay_error);
       }
@@ -935,7 +819,7 @@ auto PipelineMgmtService::CheckoutVersion(const std::shared_ptr<PipelineGuard>& 
   head_commit_hash_t target_head;
   try {
     target_head = graph.GetVersionRef(version_id).head_commit_hash;
-    (void)FirstParentCommits(graph, target_head);
+    (void)FirstParentCommitsForHead(graph, target_head);
   } catch (const std::exception& ex) {
     if (error != nullptr) {
       *error = ex.what();
@@ -976,7 +860,7 @@ auto PipelineMgmtService::CheckoutVersion(const std::shared_ptr<PipelineGuard>& 
 
   // Build phase: nothing below this point changes the guard until the swap.
   std::string replay_error;
-  auto        document = BuildLiveDocumentFromRoot(graph, *root_state, target_head, &replay_error);
+  auto        document = BuildDocumentFromRoot(graph, *root_state, target_head, &replay_error);
   if (!document) {
     if (error != nullptr) {
       *error = replay_error.empty() ? "PipelineMgmtService: checkout replay failed" : replay_error;
@@ -1047,7 +931,7 @@ auto PipelineMgmtService::RebuildActiveEditorPipeline(
     replay_error = ex.what();
   }
   auto document = replay_error.empty()
-                      ? BuildLiveDocumentFromRoot(graph, *root_state, active_head, &replay_error)
+                      ? BuildDocumentFromRoot(graph, *root_state, active_head, &replay_error)
                       : nullptr;
   if (!document) {
     if (error != nullptr) {
@@ -1079,6 +963,7 @@ void PipelineMgmtService::DeletePipeline(sl_element_id_t id) {
     pipeline_cache_.RemoveRecord(id);
     loaded_pipelines_.erase(id);
   }
+  committed_snapshots_.Forget(id);
   storage_->ForgetLivePipeline(id);
   try {
     storage_->GetElementStore().RemovePipelineByElementId(id);
@@ -1099,6 +984,7 @@ void PipelineMgmtService::DeletePipelines(std::span<const sl_element_id_t> ids) 
   }
   for (const auto id : ids) {
     if (id != 0) {
+      committed_snapshots_.Forget(id);
       storage_->ForgetLivePipeline(id);
     }
   }

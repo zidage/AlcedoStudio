@@ -49,25 +49,28 @@ auto MakeTextEmbeddingResult(const std::string& request_id, uint32_t dimension)
   return result;
 }
 
-class CountingRealThumbnailProvider final : public ISemanticThumbnailProvider {
+class CountingRealThumbnailProvider final : public IAnalysisRenditionProvider {
  public:
   explicit CountingRealThumbnailProvider(std::shared_ptr<ThumbnailService> service)
       : inner_(std::move(service)) {}
 
-  void RequestThumbnail(const SemanticGenerationItem& item, ThumbnailResolution resolution,
-                        SemanticThumbnailRequestCallback callback) override {
+  void RequestRendition(sl_element_id_t element_id, image_id_t image_id,
+                        ThumbnailResolution resolution, ThumbnailResultCallback callback) override {
+    SemanticGenerationItem item{};
+    item.element_id = element_id;
+    item.image_id   = image_id;
     request_count_.fetch_add(1);
-    inner_.RequestThumbnail(item, resolution, std::move(callback));
+    inner_.RequestRendition(element_id, image_id, resolution, std::move(callback));
   }
 
-  void CancelThumbnail(const ThumbnailCacheKey& key) override {
+  void CancelRendition(const ThumbnailCacheKey& key) override {
     cancel_count_.fetch_add(1);
-    inner_.CancelThumbnail(key);
+    inner_.CancelRendition(key);
   }
 
-  void ReleaseThumbnail(const ThumbnailCacheKey& key) override {
+  void ReleaseRendition(const ThumbnailCacheKey& key) override {
     release_count_.fetch_add(1);
-    inner_.ReleaseThumbnail(key);
+    inner_.ReleaseRendition(key);
   }
 
   auto RequestCount() const -> int { return request_count_.load(); }
@@ -75,7 +78,7 @@ class CountingRealThumbnailProvider final : public ISemanticThumbnailProvider {
   auto CancelCount() const -> int { return cancel_count_.load(); }
 
  private:
-  ThumbnailServiceSemanticThumbnailProvider inner_;
+  ThumbnailServiceAnalysisRenditionProvider inner_;
   std::atomic<int>                          request_count_{0};
   std::atomic<int>                          release_count_{0};
   std::atomic<int>                          cancel_count_{0};
@@ -149,10 +152,13 @@ class RecordingEmbeddingClient final : public ISemanticImageEmbeddingClient {
   std::vector<size_t>       batch_sizes_;
 };
 
-class ImmediateThumbnailProvider final : public ISemanticThumbnailProvider {
+class ImmediateThumbnailProvider final : public IAnalysisRenditionProvider {
  public:
-  void RequestThumbnail(const SemanticGenerationItem& item, ThumbnailResolution resolution,
-                        SemanticThumbnailRequestCallback callback) override {
+  void RequestRendition(sl_element_id_t element_id, image_id_t image_id,
+                        ThumbnailResolution resolution, ThumbnailResultCallback callback) override {
+    SemanticGenerationItem item{};
+    item.element_id = element_id;
+    item.image_id   = image_id;
     request_count_.fetch_add(1);
     ThumbnailRequestResult result;
     result.key    = ThumbnailCacheKey{item.element_id, resolution};
@@ -163,12 +169,12 @@ class ImmediateThumbnailProvider final : public ISemanticThumbnailProvider {
     callback(std::move(result));
   }
 
-  void CancelThumbnail(const ThumbnailCacheKey& key) override {
+  void CancelRendition(const ThumbnailCacheKey& key) override {
     (void)key;
     cancel_count_.fetch_add(1);
   }
 
-  void ReleaseThumbnail(const ThumbnailCacheKey& key) override {
+  void ReleaseRendition(const ThumbnailCacheKey& key) override {
     (void)key;
     release_count_.fetch_add(1);
   }
@@ -183,13 +189,16 @@ class ImmediateThumbnailProvider final : public ISemanticThumbnailProvider {
   std::atomic<int> cancel_count_{0};
 };
 
-class BatchGateThumbnailProvider final : public ISemanticThumbnailProvider {
+class BatchGateThumbnailProvider final : public IAnalysisRenditionProvider {
  public:
   explicit BatchGateThumbnailProvider(size_t release_batch_size)
       : release_batch_size_(release_batch_size) {}
 
-  void RequestThumbnail(const SemanticGenerationItem& item, ThumbnailResolution resolution,
-                        SemanticThumbnailRequestCallback callback) override {
+  void RequestRendition(sl_element_id_t element_id, image_id_t image_id,
+                        ThumbnailResolution resolution, ThumbnailResultCallback callback) override {
+    SemanticGenerationItem item{};
+    item.element_id = element_id;
+    item.image_id   = image_id;
     std::vector<PendingRequest> ready;
     {
       std::unique_lock lock(lock_);
@@ -214,13 +223,13 @@ class BatchGateThumbnailProvider final : public ISemanticThumbnailProvider {
     }
   }
 
-  void CancelThumbnail(const ThumbnailCacheKey& key) override {
+  void CancelRendition(const ThumbnailCacheKey& key) override {
     (void)key;
     std::unique_lock lock(lock_);
     cancel_count_++;
   }
 
-  void ReleaseThumbnail(const ThumbnailCacheKey& key) override {
+  void ReleaseRendition(const ThumbnailCacheKey& key) override {
     (void)key;
     std::unique_lock lock(lock_);
     release_count_++;
@@ -245,7 +254,7 @@ class BatchGateThumbnailProvider final : public ISemanticThumbnailProvider {
   struct PendingRequest {
     SemanticGenerationItem           item{};
     ThumbnailResolution              resolution = ThumbnailResolution::k256;
-    SemanticThumbnailRequestCallback callback{};
+    ThumbnailResultCallback          callback{};
   };
 
   size_t                      release_batch_size_;

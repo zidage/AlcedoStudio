@@ -4,7 +4,9 @@
 
 #include "ui/alcedo_main/album_backend/editor_history_state_detail.hpp"
 
+#include <QtGlobal>
 #include <ctime>
+#include <exception>
 #include <memory>
 #include <mutex>
 #include <utility>
@@ -13,6 +15,7 @@
 #include "app/pipeline_history_applier.hpp"
 #include "app/pipeline_service.hpp"
 #include "edit/graph/pipeline_document.hpp"
+#include "edit/graph/pipeline_graph_snapshot.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/mini_git_working_history.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_shared_helpers.hpp"
@@ -263,6 +266,36 @@ auto EditorHistoryState::JournalPathResolver() const
     -> std::function<std::filesystem::path(sl_element_id_t)> {
   std::scoped_lock lock(mutex_);
   return services_.mini_git_journal_path;
+}
+
+void EditorHistoryState::PublishCommittedSnapshot(sl_element_id_t element_id) {
+  const auto state = PeekWorkingState(element_id);
+  if (!state || !state->history || !state->pipeline_guard || !state->pipeline_guard->document_) {
+    return;
+  }
+  if (state->HasUncommittedLiveValues()) {
+    return;
+  }
+  const auto service = PipelineMapper();
+  if (!service) {
+    return;
+  }
+  const auto head    = state->history->working_head();
+  const auto chain   = state->history->transaction_chain_hash();
+  const auto lineage = state->pipeline_guard->lineage_;
+  if (state->last_published_commit.has_value() &&
+      state->last_published_commit->lineage == lineage &&
+      state->last_published_commit->head == head && state->last_published_commit->chain == chain) {
+    return;
+  }
+  try {
+    service->PublishCommitted(alcedo::PipelineGraphSnapshot::Committed(
+        state->pipeline_guard->document_->Freeze(), element_id, lineage, head, chain));
+    state->last_published_commit = HistoryWorkingState::PublishedCommit{lineage, head, chain};
+  } catch (const std::exception& ex) {
+    qWarning("Editor history: committed snapshot of image %llu was not published: %s",
+             static_cast<unsigned long long>(element_id), ex.what());
+  }
 }
 
 void EditorHistoryState::RecordPublishedRenderReason(

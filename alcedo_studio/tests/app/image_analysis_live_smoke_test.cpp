@@ -257,7 +257,7 @@ struct LiveSmokeEnv {
   std::shared_ptr<PipelineMgmtService>         pipeline_service;
   std::shared_ptr<ThumbnailService>           thumbnail_service;
   std::shared_ptr<AiSidecarRuntimeService>     runtime;
-  std::shared_ptr<ThumbnailServiceImageAnalysisProvider> thumb_provider;
+  std::shared_ptr<ThumbnailServiceAnalysisRenditionProvider> thumb_provider;
   std::shared_ptr<AiSidecarRuntimeImageAnalysisClient>    analysis_client;
   std::shared_ptr<ImageAnalysisInFlightGate>             gate;
   std::unique_ptr<ProjectService>                        project;
@@ -357,7 +357,8 @@ auto BuildLiveSmokeEnv(const char* runtime_env, const char* project_env,
   }
 
   // (5) Wire the image-analysis module: real thumbnail provider + real sidecar client + gate.
-  env->thumb_provider   = std::make_shared<ThumbnailServiceImageAnalysisProvider>(env->thumbnail_service);
+  env->thumb_provider =
+      std::make_shared<ThumbnailServiceAnalysisRenditionProvider>(env->thumbnail_service);
   env->analysis_client  = std::make_shared<AiSidecarRuntimeImageAnalysisClient>(env->runtime);
   env->gate             = std::make_shared<ImageAnalysisInFlightGate>();
   return env;

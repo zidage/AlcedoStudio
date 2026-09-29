@@ -48,9 +48,10 @@ using OpenClProductRenderer = OpenClRenderer;
  *
  * Roles (@ref ExecutorRole): an executor constructed with one role serves only that role, so it
  * owns exactly one renderer per backend. The default constructor serves both roles. It exists
- * only for the per-image executor that PipelineGuard still shares between the editor, thumbnails,
- * and export: it keeps an interactive renderer and a batch renderer side by side, so thumbnail and
- * export requests never touch the editor's session caches.
+ * only for the per-image executor that PipelineGuard still shares between the editor and export:
+ * it keeps an interactive renderer and a batch renderer side by side, so export requests never
+ * touch the editor's session caches. Thumbnails and analysis use batch-only executors owned by
+ * ThumbnailService.
  */
 class PipelineExecutor {
  private:
