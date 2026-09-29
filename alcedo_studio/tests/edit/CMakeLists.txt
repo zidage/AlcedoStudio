@@ -120,7 +120,7 @@ alcedo_register_test_target(PipelineFrameSinkTest edit)
 
 add_executable(PipelineSchedulerRequestIdTest
     ${ALCEDO_TEST_ROOT}/renderer/pipeline_scheduler_request_id_test.cpp)
-target_include_directories(PipelineSchedulerRequestIdTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_include_directories(PipelineSchedulerRequestIdTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(PipelineSchedulerRequestIdTest PRIVATE GTest::gtest_main EditPipeline
                                                     PipelineScheduler EditorRhiViewport EditGraph
                                                     ${ALCEDO_TEST_OPENCV_MIN_DEPS})
@@ -291,7 +291,7 @@ alcedo_register_test_target(GraphImageCacheRetentionTest edit ci_core)
 if(ALCEDO_CUDA_ENABLED)
   qt_add_executable(PipelineDocumentRenderTest
     ${ALCEDO_TEST_ROOT}/edit/pipeline/pipeline_document_render_test.cpp)
-  target_include_directories(PipelineDocumentRenderTest PRIVATE ${ALCEDO_INCLUDE_DIR})
+  target_include_directories(PipelineDocumentRenderTest PRIVATE ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
   target_link_libraries(PipelineDocumentRenderTest PRIVATE
     GTest::gtest_main EditPipeline EditRuntimeCuda Image ThreadPool)
   gtest_discover_tests(PipelineDocumentRenderTest TEST_PREFIX "PipelineDocumentRenderTest."
@@ -373,7 +373,7 @@ if(ALCEDO_CUDA_ENABLED)
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_product_scope_present_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_nm2_qualification_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/develop_camera_profile_import_test.cpp)
-  target_include_directories(GpuDagCudaDrtProductTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_include_directories(GpuDagCudaDrtProductTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
   # The frame presenter gets scope analysis from EditScope. This target must not link the legacy
   # pipeline (FramePresenterLinksScopeWithoutEditPipeline checks its link line).
   target_link_libraries(GpuDagCudaDrtProductTest PRIVATE
@@ -387,7 +387,7 @@ if(ALCEDO_CUDA_ENABLED)
   # Geometry panel render requests through PipelineScheduler and the executor (G10.1).
   add_executable(GpuDagCudaDocumentGeometryRequestTest
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_document_geometry_request_test.cpp)
-  target_include_directories(GpuDagCudaDocumentGeometryRequestTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_include_directories(GpuDagCudaDocumentGeometryRequestTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
   target_link_libraries(GpuDagCudaDocumentGeometryRequestTest PRIVATE
     GTest::gtest_main EditRuntimeCuda EditInput Image EditPipeline PipelineScheduler)
   gtest_discover_tests(GpuDagCudaDocumentGeometryRequestTest
@@ -477,7 +477,7 @@ if(ALCEDO_METAL_ENABLED)
   add_executable(GpuDagMetalRendererTest
     ${ALCEDO_TEST_ROOT}/edit/runtime/metal_renderer_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/metal_nm2_qualification_test.cpp)
-  target_include_directories(GpuDagMetalRendererTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_include_directories(GpuDagMetalRendererTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
   target_link_libraries(GpuDagMetalRendererTest PRIVATE
     GTest::gtest_main EditRuntimeMetal EditPipeline EditInput RawProcessorOp MetalDemosaicNetEntry)
   target_compile_definitions(GpuDagMetalRendererTest PRIVATE
@@ -541,7 +541,7 @@ if(ALCEDO_OPENCL_ENABLED)
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_drt_product_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_drt_parameter_bytes_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_nm2_qualification_test.cpp)
-  target_include_directories(GpuDagOpenClDrtProductTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_include_directories(GpuDagOpenClDrtProductTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
   target_link_libraries(GpuDagOpenClDrtProductTest PRIVATE
     GTest::gtest_main EditRuntimeOpenCl EditScope EditInput RawProcessorOp
     OpenClDemosaicNet OpenClProgramLibrary Image)

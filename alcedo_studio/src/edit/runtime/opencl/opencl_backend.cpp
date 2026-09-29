@@ -328,7 +328,7 @@ OpenClBackend::~OpenClBackend() {
   dummy_lut_.Reset();
   lut_cache_.clear();
   if (owned_queue_ != nullptr) {
-    // Drain whatever the one-shot device left in flight before dropping the
+    // Drain whatever the batch device left in flight before dropping the
     // queue object; WaitIdle normally already emptied it.
     (void)clFinish(owned_queue_);
     clReleaseCommandQueue(owned_queue_);

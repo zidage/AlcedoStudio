@@ -715,6 +715,13 @@ target_link_libraries(ExecutorIsolationTest ExportService ProjectService ImportS
 gtest_discover_tests(ExecutorIsolationTest TEST_PREFIX "ExecutorIsolationTest.")
 alcedo_register_test_target(ExecutorIsolationTest app)
 
+add_executable(ExecutorSnapshotRenderTest ${ALCEDO_TEST_ROOT}/app/executor_snapshot_render_test.cpp)
+target_include_directories(ExecutorSnapshotRenderTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(ExecutorSnapshotRenderTest ExportService ProjectService ImportService
+  GTest::gtest_main ${ALCEDO_TEST_OPENCV_MIN_DEPS})
+gtest_discover_tests(ExecutorSnapshotRenderTest TEST_PREFIX "ExecutorSnapshotRenderTest.")
+alcedo_register_test_target(ExecutorSnapshotRenderTest app)
+
 add_executable(ThumbnailDiskCacheServiceTest ${ALCEDO_TEST_ROOT}/app/thumbnail_disk_cache_service_test.cpp)
 target_include_directories(ThumbnailDiskCacheServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(ThumbnailDiskCacheServiceTest ThumbnailDiskCacheService GTest::gtest_main)

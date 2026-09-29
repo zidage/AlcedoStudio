@@ -13,6 +13,7 @@
 #include <utility>
 
 #include "edit/graph/pipeline_document.hpp"
+#include "edit/graph/pipeline_graph_snapshot.hpp"
 #include "edit/runtime/pipeline_apply_request.hpp"
 #include "edit/runtime/develop_demosaic.hpp"
 #include "edit/runtime/drt_display.hpp"
@@ -63,48 +64,54 @@ void TraceGpuDagGeometry(const ExecutionPlan& plan, const RenderRequest& request
 }  // namespace detail
 
 template <class Backend>
-auto Renderer<Backend>::Render(const std::shared_ptr<ImageBuffer>& input, DecodeRes decode_res,
+auto Renderer<Backend>::Render(const PipelineGraphSnapshot&        snapshot,
+                               const std::shared_ptr<ImageBuffer>& input, DecodeRes decode_res,
                                const RenderRequest& request, IFrameSink* sink,
                                const FrameCompletionSubmission& submission,
-                               bool require_host_output, RenderCachePolicy cache_policy,
+                               bool require_host_output,
                                const std::optional<ExportColorProfileConfig>& output_color)
     -> std::shared_ptr<ImageBuffer> {
   PipelineApplyRequest apply;
   apply.geometry            = request;
   apply.decode_res          = decode_res;
-  apply.cache_policy        = cache_policy;
+  apply.role                = role_;
   apply.require_host_output = require_host_output;
   apply.sink                = sink;
   apply.submission          = submission;
   apply.output_color        = output_color;
-  return Render(input, apply);
+  return Render(snapshot, input, apply);
 }
 
 template <class Backend>
-auto Renderer<Backend>::Render(const std::shared_ptr<ImageBuffer>& input,
+auto Renderer<Backend>::Render(const PipelineGraphSnapshot&        snapshot,
+                               const std::shared_ptr<ImageBuffer>& input,
                                const PipelineApplyRequest&         request)
     -> std::shared_ptr<ImageBuffer> {
-  if (!document_) {
-    throw std::runtime_error("Renderer: PipelineDocument is not configured");
+  if (request.role != role_) {
+    throw std::invalid_argument("Renderer: request role does not match the renderer role");
   }
   if (!input || !input->buffer_valid_) {
     throw std::runtime_error("Renderer: product path requires encoded image bytes");
   }
-  const bool use_session_cache = request.cache_policy == RenderCachePolicy::UseSessionCache;
+  const bool interactive = role_ == ExecutorRole::Interactive;
+  if (interactive) {
+    const auto key = RenderBindingKey::Of(snapshot);
+    if (binding_.has_value() && *binding_ != key) {
+      ReleaseBinding();
+    }
+    binding_ = key;
+  }
+  const PipelineDocument& document = snapshot.Document();
 
   auto&      encoded           = input->GetBuffer();
   const auto encoded_bytes     = std::span<const std::byte>{
       reinterpret_cast<const std::byte*>(encoded.data()), encoded.size()};
-  if (use_session_cache) {
-    EnsureSessionDevice();
-  } else {
-    EnsureOneShotDevice();
-  }
+  EnsureDevice();
 
   std::optional<PreparedSourceCache::Lease> prepared_lease;
-  std::optional<PreparedRawInput>           one_shot_prepared;
+  std::optional<PreparedRawInput>           batch_prepared;
   ExecutionPlan                             plan;
-  RenderDevice*                             render_device = device_.get();
+  RenderDevice* const                       render_device = device_.get();
   struct BoundPreviewRequest {
     explicit BoundPreviewRequest(std::uint64_t request_id) {
       diag::PreviewPerformance::BindCurrentRequest(request_id);
@@ -112,27 +119,26 @@ auto Renderer<Backend>::Render(const std::shared_ptr<ImageBuffer>& input,
     ~BoundPreviewRequest() { diag::PreviewPerformance::ClearCurrentRequest(); }
   };
   BoundPreviewRequest bound_request(request.submission.metadata.presentation_request_id);
-  if (use_session_cache) {
+  if (interactive) {
     prepared_lease.emplace(source_cache_.AcquireEncoded(encoded_bytes, request.decode_res));
-    plan = plan_cache_.GetOrCompile(*document_, prepared_lease->Get().CompileSource());
+    plan = plan_cache_.GetOrCompile(document, prepared_lease->Get().CompileSource());
   } else {
-    one_shot_prepared.emplace(unpack_(encoded_bytes, request.decode_res));
+    batch_prepared.emplace(unpack_(encoded_bytes, request.decode_res));
     diag::PreviewCpuInterval compile(diag::PreviewCpuStage::PlanCompile);
-    plan          = GraphCompiler::CompileStatic(*document_, one_shot_prepared->CompileSource(),
-                                                 Backend::kCapabilityVersion);
-    render_device = one_shot_device_.get();
+    plan = GraphCompiler::CompileStatic(document, batch_prepared->CompileSource(),
+                                        Backend::kCapabilityVersion);
   }
-  GraphCompiler::BindFrameGeometry(plan, *document_, request.geometry);
+  GraphCompiler::BindFrameGeometry(plan, document, request.geometry);
   plan.output_color_override = request.output_color;
   if (diag::PreviewPerformanceEnabled()) {
     diag::PreviewPerformance::NoteRenderExtent(plan.geometry.render_extent.width,
                                                plan.geometry.render_extent.height);
   }
   detail::TraceGpuDagGeometry<Backend>(plan, request.geometry, request.submission);
-  const auto& prepared = use_session_cache ? prepared_lease->Get() : *one_shot_prepared;
+  const auto& prepared = interactive ? prepared_lease->Get() : *batch_prepared;
   const auto  persistence =
-      use_session_cache ? ResultPersistenceScopeForRole(request.submission.metadata.frame_role)
-                         : ResultPersistenceScope::AllCurrentResults;
+      interactive ? ResultPersistenceScopeForRole(request.submission.metadata.frame_role)
+                  : ResultPersistenceScope::AllCurrentResults;
   if (diag::PreviewPerformanceEnabled()) {
     diag::PreviewDevelopDecodeParams develop;
     switch (request.decode_res) {
@@ -164,7 +170,7 @@ auto Renderer<Backend>::Render(const std::shared_ptr<ImageBuffer>& input,
         develop.cfa = diag::PreviewCfaKind::Bayer;
         break;
     }
-    const auto* develop_node = document_->Develop();
+    const auto* develop_node = document.Develop();
     const auto  method       = develop_node == nullptr
                                    ? RawDemosaicMethod::Legacy
                                    : ResolveDevelopDemosaicMethod(develop_node->Params().Params(),
@@ -186,17 +192,17 @@ auto Renderer<Backend>::Render(const std::shared_ptr<ImageBuffer>& input,
   GraphValueId output_id;
   {
     diag::PreviewCpuInterval encode(diag::PreviewCpuStage::Encode);
-    output_id = render_device->Execute(plan, prepared, *document_, false,
-                                       use_session_cache ? TransientAllocationPolicy::SessionPacked
-                                                         : TransientAllocationPolicy::ExactRelease,
+    output_id = render_device->Execute(plan, prepared, document, false,
+                                       interactive ? TransientAllocationPolicy::SessionPacked
+                                                   : TransientAllocationPolicy::ExactRelease,
                                        persistence);
   }
   if (diag::PreviewPerformanceEnabled()) {
     diag::PreviewPerformance::NoteResourceSnapshot(
         render_device->Workspace().CaptureResourceSnapshot());
   }
-  const auto release_one_shot_resources = [&]() {
-    if (use_session_cache) {
+  const auto release_batch_resources = [&]() {
+    if (interactive) {
       return;
     }
     render_device->Workspace().Images().DiscardUnpublished();
@@ -210,13 +216,13 @@ auto Renderer<Backend>::Render(const std::shared_ptr<ImageBuffer>& input,
     display_config.encoding_space = request.output_color->encoding_space;
     display_config.encoding_eotf  = request.output_color->encoding_eotf;
     display_config.peak_luminance = request.output_color->peak_luminance;
-  } else if (const auto* drt = document_->Drt()) {
+  } else if (const auto* drt = document.Drt()) {
     display_config = ViewerDisplayConfigFromDrt(drt->Params().Params());
   }
 
   const auto finish_successful_session = [&]() {
-    if (!use_session_cache) {
-      release_one_shot_resources();
+    if (!interactive) {
+      release_batch_resources();
       return;
     }
     render_device->PublishResults();
@@ -256,7 +262,7 @@ auto Renderer<Backend>::Render(const std::shared_ptr<ImageBuffer>& input,
         render_device->WaitIdle();
       }
       render_device->Workspace().Images().DiscardUnpublished();
-      if (!use_session_cache) {
+      if (!interactive) {
         render_device->WaitIdle();
         render_device->Workspace().ReleaseSessionResources();
         render_device->ReleaseNeuralDemosaicWorkspace();

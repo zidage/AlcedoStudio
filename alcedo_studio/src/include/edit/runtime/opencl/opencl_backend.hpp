@@ -86,7 +86,7 @@ class OpenClCommandContext {
  * @brief OpenCL 1.2 resource factory for the DAG workspace.
  *
  * Uses OpenClContext::Instance() device and context. Session devices submit on
- * the shared product queue; one-shot devices call @ref UseDedicatedQueue so
+ * the shared product queue; batch devices call @ref UseDedicatedQueue so
  * parallel thumbnail/export renders never enqueue onto one shared queue object.
  * Move-only Buffer and Texture2D wrappers own cl_mem. One in-flight submission.
  * Not thread-safe.
@@ -205,7 +205,7 @@ class OpenClBackend {
   /**
    * @brief Switch this device to its own in-order command queue.
    *
-   * Parallel one-shot renders must not share the product queue object: host
+   * Parallel batch renders must not share the product queue object: host
    * threads enqueueing onto one cl_command_queue exhaust driver staging
    * resources (OpenCL error -5 on UploadDeviceMemory) and serialize unrelated
    * submissions. The session device keeps the product queue because OpenCL/GL

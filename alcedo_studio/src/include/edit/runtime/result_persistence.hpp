@@ -28,8 +28,8 @@ enum class ResultPersistenceScope : std::uint8_t {
 /**
  * @brief Persistence used by an editor frame role.
  *
- * Thumbnail/export @ref RenderCachePolicy::BypassSessionCache uses a one-shot
- * workspace instead of this scope.
+ * Only interactive renders use this scope. A batch renderer (@ref ExecutorRole::Batch) keeps all
+ * current results of one render and releases them when the render completes.
  */
 [[nodiscard]] inline auto ResultPersistenceScopeForRole(FrameRole role) -> ResultPersistenceScope {
   return role == FrameRole::QualityBase ? ResultPersistenceScope::SensorDevelopOnly

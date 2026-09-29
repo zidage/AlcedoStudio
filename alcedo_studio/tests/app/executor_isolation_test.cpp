@@ -38,11 +38,13 @@
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/pipeline/pipeline_executor.hpp"
 #include "edit/runtime/drt_display.hpp"
+#include "edit/runtime/executor_role.hpp"
 #include "edit/runtime/pipeline_apply_request.hpp"
 #include "edit/runtime/renderer.hpp"
 #include "image/image_buffer.hpp"
 #include "io/image/export_recipe.hpp"
 #include "support/raw_import_pipeline_fixture.hpp"
+#include "support/render_snapshot_source.hpp"
 #include "type/supported_file_type.hpp"
 #include "type/type.hpp"
 #include "utils/clock/time_provider.hpp"
@@ -122,7 +124,7 @@ auto UniqueTempPath(const std::string& prefix) -> std::filesystem::path {
          (prefix + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
 }
 
-/// Session render counters of the backend renderer that @p executor uses; zero when none exists.
+/// Counters of the interactive renderer that @p executor uses; zero when none exists.
 auto SessionRenderStats(PipelineExecutor& executor) -> RenderSessionStats {
 #ifdef HAVE_CUDA
   if (auto* renderer = executor.DebugCudaRenderer()) {
@@ -222,30 +224,42 @@ class ExecutorIsolationTest : public ::testing::Test {
     std::filesystem::remove_all(export_dir_, ec);
   }
 
-  /// Render @p input on @p executor and return the host pixels.
-  static auto Render(PipelineExecutor& executor, const std::shared_ptr<ImageBuffer>& input,
-                     RenderCachePolicy cache_policy) -> cv::Mat {
+  static auto MakeRequest(ExecutorRole role) -> PipelineApplyRequest {
     PipelineApplyRequest request;
     request.geometry.resolution.max_edge = 4096;
     request.geometry.resolution.quality  = RenderQuality::Export;
     request.decode_res                   = DecodeRes::EIGHTH;
-    request.cache_policy                 = cache_policy;
+    request.role                         = role;
     request.require_host_output          = true;
+    return request;
+  }
+
+  /// Render @p input on @p guard's executor in @p role and return the host pixels. The guard
+  /// document is frozen under the render lock, as the scheduler does for a production task.
+  static auto Render(PipelineGuard& guard, const std::shared_ptr<ImageBuffer>& input,
+                     ExecutorRole role) -> cv::Mat {
+    const auto                   request = MakeRequest(role);
     std::shared_ptr<ImageBuffer> output;
     {
-      std::lock_guard<std::mutex> render_lock(executor.GetRenderLock());
-      output = executor.Apply(input, request);
+      std::lock_guard<std::mutex> render_lock(guard.pipeline_->GetRenderLock());
+      const auto                  snapshot = guard.FreezeLiveSnapshot();
+      output                               = guard.pipeline_->Apply(*snapshot, input, request);
     }
     return output ? HostPixels(*output) : cv::Mat{};
   }
 
-  /// Render the committed-state reference: a new executor on a copy of @p document.
+  /// Render the committed-state reference: a new executor on a frozen copy of @p document.
   static auto RenderOnNewExecutor(const PipelineDocument&             document,
                                   const std::shared_ptr<ImageBuffer>& input) -> cv::Mat {
-    auto executor = std::make_shared<PipelineExecutor>();
-    executor->SetPipelineDocument(
-        std::make_shared<PipelineDocument>(ClonePipelineDocument(document)));
-    return Render(*executor, input, RenderCachePolicy::UseSessionCache);
+    PipelineExecutor executor(ExecutorRole::Interactive);
+    const auto       snapshot = test::FreezeInNewLineage(document);
+    const auto       request  = MakeRequest(ExecutorRole::Interactive);
+    std::shared_ptr<ImageBuffer> output;
+    {
+      std::lock_guard<std::mutex> render_lock(executor.GetRenderLock());
+      output = executor.Apply(*snapshot, input, request);
+    }
+    return output ? HostPixels(*output) : cv::Mat{};
   }
 
   /// Export @p ids through ExportService as a 256 px JPEG and read the pixels back.
@@ -288,7 +302,7 @@ class ExecutorIsolationTest : public ::testing::Test {
   }
 };
 
-// Control for the next test: with no one-shot render in between, the editor session render
+// Control for the next test: with no batch (one-shot) render in between, the editor session render
 // shows a parameter change and matches a render of the same values on a new executor.
 TEST_F(ExecutorIsolationTest, EditorSessionRenderShowsParameterChangeWithoutInterleavedOneShot) {
   ProjectService project(db_path_, meta_path_);
@@ -303,13 +317,13 @@ TEST_F(ExecutorIsolationTest, EditorSessionRenderShowsParameterChangeWithoutInte
   auto* exposure = PrimaryExposure(*live->document_);
   ASSERT_NE(exposure, nullptr);
 
-  const cv::Mat before = Render(*live->pipeline_, input, RenderCachePolicy::UseSessionCache);
+  const cv::Mat before = Render(*live, input, ExecutorRole::Interactive);
   ASSERT_FALSE(before.empty());
   {
     std::lock_guard<std::mutex> render_lock(live->pipeline_->GetRenderLock());
     exposure->SetValue(exposure->Value() + 1.5f);
   }
-  const cv::Mat after     = Render(*live->pipeline_, input, RenderCachePolicy::UseSessionCache);
+  const cv::Mat after     = Render(*live, input, ExecutorRole::Interactive);
   const cv::Mat reference = RenderOnNewExecutor(*live->document_, input);
 
   EXPECT_GT(MeanOfAllChannels(after), MeanOfAllChannels(before) * 1.2);
@@ -320,6 +334,8 @@ TEST_F(ExecutorIsolationTest, EditorSessionRenderShowsParameterChangeWithoutInte
 // Audit R7. Before P1, a one-shot (thumbnail/export) render on the same document took the Model
 // dirty bits, so the editor session arena and invalidation state saw no change and kept the old
 // parameters. Enabled by P1: each render workspace compares Model revisions with its own record.
+// Since P3 the one-shot render is a batch-role render on the same shared executor; it reads a
+// snapshot frozen from the same live document between the edit and the editor frame.
 TEST_F(ExecutorIsolationTest, EditorSessionRenderShowsParameterChangeAfterInterleavedOneShot) {
   ProjectService project(db_path_, meta_path_);
   auto           pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
@@ -333,15 +349,15 @@ TEST_F(ExecutorIsolationTest, EditorSessionRenderShowsParameterChangeAfterInterl
   auto* exposure = PrimaryExposure(*live->document_);
   ASSERT_NE(exposure, nullptr);
 
-  const cv::Mat before = Render(*live->pipeline_, input, RenderCachePolicy::UseSessionCache);
+  const cv::Mat before = Render(*live, input, ExecutorRole::Interactive);
   ASSERT_FALSE(before.empty());
   {
     std::lock_guard<std::mutex> render_lock(live->pipeline_->GetRenderLock());
     exposure->SetValue(exposure->Value() + 1.5f);
   }
-  const cv::Mat one_shot = Render(*live->pipeline_, input, RenderCachePolicy::BypassSessionCache);
+  const cv::Mat one_shot = Render(*live, input, ExecutorRole::Batch);
   ASSERT_FALSE(one_shot.empty());
-  const cv::Mat after     = Render(*live->pipeline_, input, RenderCachePolicy::UseSessionCache);
+  const cv::Mat after     = Render(*live, input, ExecutorRole::Interactive);
   const cv::Mat reference = RenderOnNewExecutor(*live->document_, input);
 
   EXPECT_GT(MeanOfAllChannels(after), MeanOfAllChannels(before) * 1.2);
@@ -377,7 +393,7 @@ TEST_F(ExecutorIsolationTest, EditorSessionEditSequenceReexecutesOnlyPassesDowns
       edit();
     }
     const auto before = SessionRenderStats(executor);
-    ASSERT_FALSE(Render(executor, input, RenderCachePolicy::UseSessionCache).empty()) << name;
+    ASSERT_FALSE(Render(*live, input, ExecutorRole::Interactive).empty()) << name;
     frames[name] = FramePassCounts(before, SessionRenderStats(executor));
     std::cout << FormatFramePassCounts(name, frames[name]) << std::endl;
   };

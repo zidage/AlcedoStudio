@@ -169,6 +169,7 @@ auto ExportService::RunExportRenderTask(const ExportTask& task) -> ExportResult 
     // So we create a dummy Image object with only the path set
     render_task.input_desc_           = std::make_shared<Image>(img_src_path, ImageType::DEFAULT);
     render_task.pipeline_executor_    = pipeline_guard->pipeline_;
+    render_task.snapshot_under_render_lock_ = MakeLiveSnapshotSource(pipeline_guard);
     render_task.options_.is_blocking_ = true;
     render_task.options_.is_callback_ = false;
 

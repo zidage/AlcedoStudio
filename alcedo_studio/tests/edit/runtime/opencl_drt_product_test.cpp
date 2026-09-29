@@ -24,6 +24,7 @@
 #include "edit/runtime/cuda/cuda_render_device.hpp"
 #endif
 
+#include "support/render_snapshot_source.hpp"
 #include "../graph/test_camera_profile.hpp"
 #include "../input/prepared_raw_test_support.hpp"
 #include "edit/graph/pipeline_document.hpp"
@@ -31,6 +32,7 @@
 #include "edit/operators/models/i_operator_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/operators/models/sharpen_model.hpp"
+#include "edit/runtime/executor_role.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/opencl/opencl_renderer.hpp"
 #include "edit/scope/detail/scope_opencl_shared.hpp"
@@ -585,19 +587,22 @@ class OpenClRendererFixture : public ::testing::Test {
     }
     document_ = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
     gpu_dag_test::EnsureTestCameraProfile(*document_);
-    renderer_ = std::make_unique<OpenClRenderer>(document_, MakeUnpacker());
-    image_    = MakeEncodedImage(91);
+    source_         = std::make_unique<test::RenderSnapshotSource>(document_);
+    renderer_       = std::make_unique<OpenClRenderer>(ExecutorRole::Interactive, MakeUnpacker());
+    batch_renderer_ = std::make_unique<OpenClRenderer>(ExecutorRole::Batch, MakeUnpacker());
+    image_          = MakeEncodedImage(91);
   }
 
-  auto RenderHost(bool session = true) -> std::shared_ptr<ImageBuffer> {
-    return renderer_->Render(
-        image_, DecodeRes::FULL, RenderRequest{}, nullptr, {}, true,
-        session ? RenderCachePolicy::UseSessionCache : RenderCachePolicy::BypassSessionCache);
+  auto RenderHost(bool interactive = true) -> std::shared_ptr<ImageBuffer> {
+    auto& renderer = interactive ? *renderer_ : *batch_renderer_;
+    return renderer.Render(*source_->Freeze(), image_, DecodeRes::FULL, RenderRequest{}, nullptr,
+                           {}, true);
   }
 
   auto RenderTo(IFrameSink& sink, const FrameCompletionSubmission& submission = {})
       -> std::shared_ptr<ImageBuffer> {
-    return renderer_->Render(image_, DecodeRes::FULL, RenderRequest{}, &sink, submission, false);
+    return renderer_->Render(*source_->Freeze(), image_, DecodeRes::FULL, RenderRequest{}, &sink,
+                             submission, false);
   }
 
   auto RenderRole(FrameRole role, std::uint32_t max_edge) -> std::shared_ptr<ImageBuffer> {
@@ -605,7 +610,8 @@ class OpenClRendererFixture : public ::testing::Test {
     request.resolution.max_edge = max_edge;
     FrameCompletionSubmission submission;
     submission.metadata.frame_role = role;
-    return renderer_->Render(image_, DecodeRes::FULL, request, nullptr, submission, true);
+    return renderer_->Render(*source_->Freeze(), image_, DecodeRes::FULL, request, nullptr,
+                             submission, true);
   }
 
   auto GeometryId() const -> GraphValueId { return {NodeId{"geometry"}, PortId{"scene_source"}}; }
@@ -616,9 +622,11 @@ class OpenClRendererFixture : public ::testing::Test {
         document_->PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
   }
 
-  std::shared_ptr<PipelineDocument> document_;
-  std::unique_ptr<OpenClRenderer>   renderer_;
-  std::shared_ptr<ImageBuffer>      image_;
+  std::shared_ptr<PipelineDocument>           document_;
+  std::unique_ptr<test::RenderSnapshotSource> source_;
+  std::unique_ptr<OpenClRenderer>             renderer_;
+  std::unique_ptr<OpenClRenderer>             batch_renderer_;
+  std::shared_ptr<ImageBuffer>                image_;
 };
 
 TEST_F(OpenClRendererFixture, OpenClRendererPresentsWorkspaceImageWithoutHostDownload) {
@@ -720,41 +728,51 @@ TEST_F(OpenClRendererFixture, OpenClScopeTapUsesTheFinalDisplayImageAndSubmissio
   EXPECT_EQ(output.session_epoch, 2U);
 }
 
-TEST_F(OpenClRendererFixture, OpenClOneShotRenderDoesNotPublishIntoSessionCache) {
+TEST_F(OpenClRendererFixture, OpenClBatchRenderLeavesInteractiveCachesAndReleasesItsResults) {
   ASSERT_NE(RenderHost(true), nullptr);
-  const auto session_before = renderer_->SessionResources();
-  ASSERT_GT(session_before.published_result_count, 0U);
+  const auto interactive_before = renderer_->Resources();
+  ASSERT_GT(interactive_before.published_result_count, 0U);
   renderer_->ResetStats();
 
   ASSERT_NE(RenderHost(false), nullptr);
-  EXPECT_EQ(renderer_->OneShotPublishedResultCount(), 0U);
-  EXPECT_EQ(renderer_->SessionResources().published_result_count,
-            session_before.published_result_count);
-  EXPECT_EQ(renderer_->SessionResources().prepared_source_entry_count,
-            session_before.prepared_source_entry_count);
+  const auto batch = batch_renderer_->Resources();
+  EXPECT_EQ(batch.published_result_count, 0U);
+  EXPECT_EQ(batch.texture_pool_entry_count, 0U);
+  EXPECT_EQ(batch.prepared_source_entry_count, 0U);
+  EXPECT_TRUE(batch.session_value_ids.empty());
+  EXPECT_NE(batch_renderer_->DebugDeviceIdentity(), renderer_->DebugDeviceIdentity());
+  EXPECT_EQ(batch_renderer_->Stats().prepared_source_hits, 0U);
+  EXPECT_EQ(batch_renderer_->Stats().plan_cache_hits, 0U);
+
+  const auto interactive_after = renderer_->Resources();
+  EXPECT_EQ(interactive_after.published_result_count, interactive_before.published_result_count);
+  EXPECT_EQ(interactive_after.prepared_source_entry_count,
+            interactive_before.prepared_source_entry_count);
+  EXPECT_EQ(interactive_after.session_value_ids, interactive_before.session_value_ids);
   EXPECT_EQ(renderer_->Stats().prepared_source_hits, 0U);
   EXPECT_EQ(renderer_->Stats().plan_cache_hits, 0U);
   EXPECT_EQ(renderer_->Stats().pass.sensor_develop_execute, 0U);
 }
 
-TEST_F(OpenClRendererFixture, OpenClParallelOneShotRendersCompleteAndReleaseWorkspaces) {
-  // Regression: parallel thumbnail renders each own a one-shot render device.
+TEST_F(OpenClRendererFixture, OpenClParallelBatchRendersCompleteAndReleaseWorkspaces) {
+  // Regression: parallel thumbnail renders each own a batch renderer device.
   // Shared command-queue submission and shared cl_kernel argument state used to
   // fail with OpenCL error -5 (CL_OUT_OF_RESOURCES) on
   // OpenClBackend::UploadDeviceMemory.
   constexpr int kWorkers = 4;
   struct Worker {
-    std::unique_ptr<OpenClRenderer> renderer;
-    std::shared_ptr<ImageBuffer>    image;
-    bool                            finite          = false;
-    std::uintptr_t                  device_identity = 0;
-    std::uintptr_t                  queue_identity  = 0;
-    std::size_t                     published       = 1;
-    std::size_t                     pool_bytes      = 1;
-    std::size_t                     pool_entries    = 1;
-    std::uint64_t                   source_hits     = 1;
-    std::uint64_t                   source_misses   = 1;
-    std::string                     error;
+    std::unique_ptr<OpenClRenderer>              renderer;
+    std::shared_ptr<const PipelineGraphSnapshot> snapshot;
+    std::shared_ptr<ImageBuffer>                 image;
+    bool                                         finite          = false;
+    std::uintptr_t                               device_identity = 0;
+    std::uintptr_t                               queue_identity  = 0;
+    std::size_t                                  published       = 1;
+    std::size_t                                  pool_bytes      = 1;
+    std::size_t                                  pool_entries    = 1;
+    std::uint64_t                                source_hits     = 1;
+    std::uint64_t                                source_misses   = 1;
+    std::string                                  error;
   };
 
   std::vector<Worker> workers(static_cast<std::size_t>(kWorkers));
@@ -762,7 +780,8 @@ TEST_F(OpenClRendererFixture, OpenClParallelOneShotRendersCompleteAndReleaseWork
     auto document = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
     gpu_dag_test::EnsureTestCameraProfile(*document);
     workers[static_cast<std::size_t>(i)].renderer =
-        std::make_unique<OpenClRenderer>(document, MakeUnpackerFor(1024, 768));
+        std::make_unique<OpenClRenderer>(ExecutorRole::Batch, MakeUnpackerFor(1024, 768));
+    workers[static_cast<std::size_t>(i)].snapshot = test::FreezeInNewLineage(*document);
     workers[static_cast<std::size_t>(i)].image =
         MakeEncodedImage(static_cast<std::uint8_t>(90 + i));
   }
@@ -778,22 +797,21 @@ TEST_F(OpenClRendererFixture, OpenClParallelOneShotRendersCompleteAndReleaseWork
       ready.fetch_add(1, std::memory_order_relaxed);
       go.wait();
       try {
-        const auto output = worker.renderer->Render(worker.image, DecodeRes::FULL, RenderRequest{},
-                                                    nullptr, {}, true,
-                                                    RenderCachePolicy::BypassSessionCache);
+        const auto output = worker.renderer->Render(*worker.snapshot, worker.image, DecodeRes::FULL,
+                                                    RenderRequest{}, nullptr, {}, true);
         worker.finite          = HostRgbaIsFinite(output);
-        worker.device_identity = worker.renderer->DebugOneShotDeviceIdentity();
-        worker.queue_identity  = worker.renderer->DebugOneShotQueueIdentity();
-        worker.published       = worker.renderer->OneShotPublishedResultCount();
-        const auto one_shot    = worker.renderer->OneShotResources();
-        worker.pool_bytes      = one_shot.texture_pool_used_bytes;
-        worker.pool_entries    = one_shot.texture_pool_entry_count;
+        worker.device_identity = worker.renderer->DebugDeviceIdentity();
+        worker.queue_identity  = worker.renderer->DebugQueueIdentity();
+        const auto batch       = worker.renderer->Resources();
+        worker.published       = batch.published_result_count;
+        worker.pool_bytes      = batch.texture_pool_used_bytes;
+        worker.pool_entries    = batch.texture_pool_entry_count;
         worker.source_hits     = worker.renderer->Stats().prepared_source_hits;
         worker.source_misses   = worker.renderer->Stats().prepared_source_misses;
       } catch (const std::exception& ex) {
         worker.error = ex.what();
       } catch (...) {
-        worker.error = "unknown parallel one-shot failure";
+        worker.error = "unknown parallel batch render failure";
       }
     });
   }
@@ -830,9 +848,10 @@ TEST_F(OpenClRendererFixture, OpenClParallelOneShotRendersCompleteAndReleaseWork
 
 TEST_F(OpenClRendererFixture, OpenClPipelineReturnReleasesSessionResourcesAfterGpuCompletion) {
   ASSERT_NE(RenderHost(true), nullptr);
-  ASSERT_GT(renderer_->SessionResources().published_result_count, 0U);
-  renderer_->ReleaseSessionCaches();
-  const auto resources = renderer_->SessionResources();
+  ASSERT_GT(renderer_->Resources().published_result_count, 0U);
+  renderer_->ReleaseBinding();
+  const auto resources = renderer_->Resources();
+  EXPECT_FALSE(renderer_->Binding().has_value());
   EXPECT_EQ(resources.published_result_count, 0U);
   EXPECT_EQ(resources.texture_pool_entry_count, 0U);
   EXPECT_EQ(resources.prepared_source_entry_count, 0U);
@@ -842,14 +861,14 @@ TEST_F(OpenClRendererFixture, OpenClPipelineReturnReleasesSessionResourcesAfterG
 
 TEST_F(OpenClRendererFixture, OpenClBackendFailureDoesNotEnterCpuOrLegacyOpenClExecution) {
   ASSERT_NE(RenderHost(true), nullptr);
-  const auto published_before = renderer_->SessionResources().published_result_count;
+  const auto published_before = renderer_->Resources().published_result_count;
   auto       params           = document_->Drt()->Params().Params();
   params.peak_luminance       = 200.0f;
   document_->Drt()->Params().ReplaceParams(params);
   renderer_->Device().Workspace().Device().FailNextUpload();
 
   EXPECT_THROW(RenderHost(true), std::runtime_error);
-  EXPECT_EQ(renderer_->SessionResources().published_result_count, published_before);
+  EXPECT_EQ(renderer_->Resources().published_result_count, published_before);
   EXPECT_EQ(renderer_->Device().Workspace().Images().UnpublishedCount(), 0U);
   EXPECT_FALSE(renderer_->Device().Workspace().IsRendering());
 }
@@ -875,7 +894,7 @@ TEST_F(OpenClRendererFixture, OpenClPresentRejectsAnIncompatibleSinkWithoutHostS
   EXPECT_THROW(RenderTo(sink), std::runtime_error);
   EXPECT_EQ(sink.submit_count_, 0);
   EXPECT_EQ(sink.notify_count_, 0);
-  EXPECT_EQ(renderer_->SessionResources().published_result_count, 0U);
+  EXPECT_EQ(renderer_->Resources().published_result_count, 0U);
   EXPECT_EQ(renderer_->Device().Workspace().Images().UnpublishedCount(), 0U);
   EXPECT_FALSE(renderer_->Device().Workspace().IsRendering());
 }
@@ -947,8 +966,8 @@ TEST_F(OpenClRendererFixture, QualityBasePixelsMatchFreshExecutionWithinDeclared
   ASSERT_TRUE(HostRgbaIsFinite(quality));
   RenderRequest fresh_request;
   fresh_request.resolution.max_edge = 32;
-  const auto fresh = renderer_->Render(image_, DecodeRes::FULL, fresh_request, nullptr, {}, true,
-                                       RenderCachePolicy::BypassSessionCache);
+  const auto fresh = batch_renderer_->Render(*source_->Freeze(), image_, DecodeRes::FULL,
+                                             fresh_request, nullptr, {}, true);
   ASSERT_TRUE(HostRgbaIsFinite(fresh));
   EXPECT_EQ(quality->GetCPUData().cols, fresh->GetCPUData().cols);
   EXPECT_EQ(quality->GetCPUData().rows, fresh->GetCPUData().rows);

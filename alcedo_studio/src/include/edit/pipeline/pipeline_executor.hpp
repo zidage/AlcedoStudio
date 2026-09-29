@@ -8,19 +8,18 @@
 #include <mutex>
 #include <optional>
 
+#include "edit/graph/pipeline_graph_snapshot.hpp"
 #include "edit/pipeline/pipeline_accelerator.hpp"
+#include "edit/runtime/executor_role.hpp"
 #include "edit/runtime/pipeline_apply_request.hpp"
 #include "image/image_buffer.hpp"
-#include "type/type.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 
-#if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
-#include "edit/graph/pipeline_document.hpp"
-#endif
-
 namespace alcedo {
-class PipelineDocument;
 #if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
+// Renderer<Backend> is defined in backend headers that pull in CUDA / OpenCL / Metal device
+// types; this header is included by app and UI code that must not see them. The members below
+// hold renderers only through shared_ptr, and pipeline_executor.cpp includes every definition.
 template <class Backend>
 class Renderer;
 #endif
@@ -41,45 +40,64 @@ using OpenClProductRenderer = OpenClRenderer;
 #endif
 
 /**
- * @brief Binds one PipelineDocument to the GPU DAG renderer of the selected backend.
+ * @brief Renders immutable pipeline graph snapshots on the selected GPU backend.
  *
- * The executor owns the render lock, the accelerator selection, the attached frame sink, the
- * bound file id, and one lazily created renderer per compiled backend. It owns no parameter
- * values: every render reads the bound document.
+ * Holds no document. Every Apply receives the snapshot to render; the executor keeps only GPU
+ * state: the render lock, the accelerator selection, the attached frame sink, and one lazily
+ * created renderer per compiled backend and served role.
+ *
+ * Roles (@ref ExecutorRole): an executor constructed with one role serves only that role, so it
+ * owns exactly one renderer per backend. The default constructor serves both roles. It exists
+ * only for the per-image executor that PipelineGuard still shares between the editor, thumbnails,
+ * and export: it keeps an interactive renderer and a batch renderer side by side, so thumbnail and
+ * export requests never touch the editor's session caches.
  */
 class PipelineExecutor {
  private:
-  sl_element_id_t              bound_file_id_ = 0;
-
-  // Sole ownership of the live pipeline for one frame of work: whoever holds
-  // this lock may configure, Apply (including present slot wait), or rebind the
-  // document. Render holds it for the whole task; history waits for it. Do not
-  // introduce a second occupancy counter — that is the same ownership question.
+  // Sole ownership of the executor for one frame of work: whoever holds this lock may configure,
+  // Apply (including present slot wait), or release the binding. Render holds it for the whole
+  // task. The shared per-image executor also uses it to order live document writes against the
+  // freeze that produces each render's snapshot.
   std::mutex                   render_lock_;
+
+  bool                         serves_interactive_           = true;
+  bool                         serves_batch_                 = true;
 
   AcceleratorBackendPreference accelerator_preference_       = AcceleratorBackendPreference::Auto;
   GpuBackendKind               resolved_accelerator_backend_ = GpuBackendKind::None;
 
   IFrameSink*                  frame_sink_                   = nullptr;
-#if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
-  std::shared_ptr<const PipelineDocument> pipeline_document_;
-#endif
+
+  /// Renderers of one backend, one per served role; each is created by its first Apply.
+  template <class RendererType>
+  struct RoleRenderers {
+    std::shared_ptr<RendererType> interactive;
+    std::shared_ptr<RendererType> batch;
+  };
 #ifdef HAVE_CUDA
-  std::shared_ptr<CudaRenderer> cuda_product_renderer_;
+  RoleRenderers<CudaRenderer> cuda_renderers_;
 #endif
 #ifdef HAVE_METAL
-  std::shared_ptr<MetalRenderer> metal_product_renderer_;
+  RoleRenderers<MetalRenderer> metal_renderers_;
 #endif
 #ifdef HAVE_OPENCL
-  std::shared_ptr<OpenClRenderer> opencl_product_renderer_;
+  RoleRenderers<OpenClRenderer> opencl_renderers_;
 #endif
 
  public:
-  /// Resolve the Auto accelerator preference. No document is bound yet.
+  /**
+   * @brief Executor that serves both roles. Resolves the Auto accelerator preference.
+   *
+   * Used only by the per-image executor that PipelineGuard shares; see the class comment.
+   */
   PipelineExecutor();
 
-  void               SetBoundFile(sl_element_id_t file_id) { bound_file_id_ = file_id; }
-  [[nodiscard]] auto GetBoundFile() const -> sl_element_id_t { return bound_file_id_; }
+  /// Executor that serves only @p role. Resolves the Auto accelerator preference.
+  explicit PipelineExecutor(ExecutorRole role);
+
+  [[nodiscard]] auto Serves(ExecutorRole role) const -> bool {
+    return role == ExecutorRole::Interactive ? serves_interactive_ : serves_batch_;
+  }
 
   /**
    * @brief Select the accelerator for later renders.
@@ -98,28 +116,21 @@ class PipelineExecutor {
   auto GetRenderLock() -> std::mutex& { return render_lock_; }
 
   /**
-   * @brief Render using an immutable per-task request. Does not write decode, cache, ROI,
-   *        or host-output onto executor members.
-   * @pre Caller holds GetRenderLock(); camera/profile data is already bound on the document.
-   * @param request Carries the cancel callback; Apply does not store it on the executor.
-   * @throws std::runtime_error for missing document/backend, decode, GPU, or presentation failure.
-   *         Failures do not switch executor cache/decode mode. Bypass ExactRelease scratch is
-   *         released after GPU last-use or on the failure path.
-   */
-  auto Apply(std::shared_ptr<ImageBuffer> input, const PipelineApplyRequest& request)
-      -> std::shared_ptr<ImageBuffer>;
-
-  /**
-   * @brief Select the document used by the GPU DAG product path.
+   * @brief Render @p snapshot with an immutable per-task request.
    *
-   * @param document Graph owned by the caller; retains shared ownership and only reads it.
-   *        Rendering finds parameter changes by revision and never writes the document.
-   * @pre Caller holds GetRenderLock() or has exclusive access before publication.
-   * @throws std::invalid_argument when document is null; retains the prior binding.
+   * Runs on the renderer of the resolved backend and of `request.role`. The interactive renderer
+   * releases every resource of its previous binding when the snapshot's lineage or element
+   * differs from it. Neither the snapshot nor the request is stored on the executor.
+   *
+   * @pre Caller holds GetRenderLock(); camera/profile data is already bound on the document.
+   * @param snapshot Graph to render; only read. The caller keeps it alive for the call.
+   * @param request Carries the role and the cancel callback.
+   * @throws std::invalid_argument when this executor does not serve `request.role`.
+   * @throws std::runtime_error for missing backend, decode, GPU, or presentation failure.
+   *         Batch result resources are released after GPU last-use or on the failure path.
    */
-  void               SetPipelineDocument(std::shared_ptr<const PipelineDocument> document);
-  [[nodiscard]] auto HasGpuDagDocument() const -> bool;
-  [[nodiscard]] auto GpuDagDocument() const -> std::shared_ptr<const PipelineDocument>;
+  auto Apply(const PipelineGraphSnapshot& snapshot, std::shared_ptr<ImageBuffer> input,
+             const PipelineApplyRequest& request) -> std::shared_ptr<ImageBuffer>;
 
   /// Attach the editor frame sink that later requests read. Caller must hold render_lock_.
   void AttachFrameSink(IFrameSink* frame_sink) { frame_sink_ = frame_sink; }
@@ -133,21 +144,35 @@ class PipelineExecutor {
   auto GetViewportRenderRegion() const -> std::optional<ViewportRenderRegion>;
 
   /**
-   * @brief Release the session caches of every created renderer.
-   * @pre Caller holds GetRenderLock(). The document binding and the frame sink are kept.
+   * @brief Release every GPU and host resource bound to the last rendered image, in every
+   *        created renderer. Devices and the frame sink are kept.
+   * @pre Caller holds GetRenderLock().
    */
-  void               ClearAllIntermediateBuffers();
+  void               ReleaseBinding();
 
 #ifdef HAVE_CUDA
-  [[nodiscard]] auto DebugCudaRenderer() -> CudaRenderer* { return cuda_product_renderer_.get(); }
+  [[nodiscard]] auto DebugCudaRenderer() -> CudaRenderer* {
+    return cuda_renderers_.interactive.get();
+  }
   [[nodiscard]] auto DebugCudaProductRenderer() -> CudaRenderer* { return DebugCudaRenderer(); }
+  [[nodiscard]] auto DebugCudaBatchRenderer() -> CudaRenderer* {
+    return cuda_renderers_.batch.get();
+  }
 #endif
 #ifdef HAVE_METAL
-  [[nodiscard]] auto DebugMetalRenderer() -> MetalRenderer* { return metal_product_renderer_.get(); }
+  [[nodiscard]] auto DebugMetalRenderer() -> MetalRenderer* {
+    return metal_renderers_.interactive.get();
+  }
+  [[nodiscard]] auto DebugMetalBatchRenderer() -> MetalRenderer* {
+    return metal_renderers_.batch.get();
+  }
 #endif
 #ifdef HAVE_OPENCL
   [[nodiscard]] auto DebugOpenClRenderer() -> OpenClRenderer* {
-    return opencl_product_renderer_.get();
+    return opencl_renderers_.interactive.get();
+  }
+  [[nodiscard]] auto DebugOpenClBatchRenderer() -> OpenClRenderer* {
+    return opencl_renderers_.batch.get();
   }
 #endif
 };

@@ -17,12 +17,12 @@
 #include <vector>
 
 #include "edit/graph/graph_ids.hpp"
-#include "edit/graph/pipeline_document.hpp"
 #include "edit/mask/mask_asset.hpp"
 #include "edit/runtime/result_representation.hpp"
 #include "edit/runtime/runtime_revision.hpp"
 #include "edit/runtime/texture_format.hpp"
 #include "edit/runtime/execution_plan.hpp"
+#include "edit/runtime/executor_role.hpp"
 #include "edit/runtime/opencl/opencl_dag_programs.hpp"
 #include "edit/runtime/opencl/opencl_neural_session_workspace.hpp"
 #include "edit/runtime/pass_kind.hpp"
@@ -122,11 +122,13 @@ TEST(GpuDagOpenClWorkspace, RendererTemplateInstantiatesOpenClWithoutCudaOrMetal
   if (!HasOpenClDevice()) {
     GTEST_SKIP() << "No OpenCL device available.";
   }
-  auto document = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
-  OpenClRenderer renderer(document);
-  EXPECT_EQ(renderer.PlanCache().BackendCapabilityVersion(), kOpenClDagBackendCapabilityVersion);
-  EXPECT_EQ(renderer.SessionResources().published_result_count, 0U);
-  EXPECT_EQ(renderer.OneShotPublishedResultCount(), 0U);
+  for (const auto role : {ExecutorRole::Interactive, ExecutorRole::Batch}) {
+    OpenClRenderer renderer(role);
+    EXPECT_EQ(renderer.Role(), role);
+    EXPECT_EQ(renderer.PlanCache().BackendCapabilityVersion(), kOpenClDagBackendCapabilityVersion);
+    EXPECT_EQ(renderer.Resources().published_result_count, 0U);
+    EXPECT_FALSE(renderer.Binding().has_value());
+  }
 }
 
 TEST_F(OpenClWorkspaceFixture, OpenClMaxSlabBytesUsesDeviceReportedMaxMemAllocSize) {

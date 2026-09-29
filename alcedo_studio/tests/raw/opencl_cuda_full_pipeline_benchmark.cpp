@@ -18,6 +18,8 @@
 #include <string>
 #include <vector>
 
+#include "edit/graph/pipeline_document.hpp"
+#include "edit/graph/pipeline_graph_snapshot.hpp"
 #include "edit/pipeline/pipeline_accelerator.hpp"
 #include "edit/pipeline/pipeline_executor.hpp"
 #include "edit/runtime/pipeline_apply_request.hpp"
@@ -125,6 +127,13 @@ struct BenchmarkScenario {
   double                    mean_tolerance;
 };
 
+/// Preview snapshot of a Default document in a new lineage; every backend renders the same graph.
+auto MakeDefaultSnapshot() -> std::shared_ptr<const PipelineGraphSnapshot> {
+  auto document = std::make_shared<const PipelineDocument>(CreateDefaultPipelineDocument());
+  return PipelineGraphSnapshot::Preview(std::move(document), 1, PipelineLineageId::Next(),
+                                        transaction_chain_hash_t{});
+}
+
 /// Host-output request with the scenario's output limit (0 = full resolution).
 auto MakeHostRequest(std::uint32_t max_edge) -> PipelineApplyRequest {
   PipelineApplyRequest request;
@@ -142,11 +151,12 @@ auto RunPipelineWithBackend(const std::filesystem::path& raw_path,
   pipeline.SetAcceleratorBackendPreference(pref);
   const auto request =
       MakeHostRequest(scenario.full_res ? 0U : static_cast<std::uint32_t>(scenario.max_edge));
+  const auto snapshot = MakeDefaultSnapshot();
 
   auto input = std::make_shared<ImageBuffer>(ReadFileToBuffer(raw_path));
 
   const auto start = ProfileClock::now();
-  auto       output = pipeline.Apply(input, request);
+  auto       output = pipeline.Apply(*snapshot, input, request);
   const double total_ms = ElapsedMs(start);
 
   if (output && !output->cpu_data_valid_) {
@@ -311,13 +321,14 @@ TEST(OpenClCudaFullPipelineBenchmark, RepeatedFrameTimingStability) {
                              const char* label) -> TimingStats {
     PipelineExecutor pipeline;
     pipeline.SetAcceleratorBackendPreference(pref);
-    const auto request = MakeHostRequest(static_cast<std::uint32_t>(kMaxEdge));
+    const auto request  = MakeHostRequest(static_cast<std::uint32_t>(kMaxEdge));
+    const auto snapshot = MakeDefaultSnapshot();
 
     // Warmup
     for (int i = 0; i < kWarmupFrames; ++i) {
       auto raw_bytes = ReadFileToBuffer(raw_path);
       auto input  = std::make_shared<ImageBuffer>(std::move(raw_bytes));
-      auto output = pipeline.Apply(input, request);
+      auto output = pipeline.Apply(*snapshot, input, request);
       (void)output;
     }
 
@@ -326,7 +337,7 @@ TEST(OpenClCudaFullPipelineBenchmark, RepeatedFrameTimingStability) {
       auto raw_bytes = ReadFileToBuffer(raw_path);
       auto input = std::make_shared<ImageBuffer>(std::move(raw_bytes));
       const auto start = ProfileClock::now();
-      auto       output = pipeline.Apply(input, request);
+      auto       output = pipeline.Apply(*snapshot, input, request);
       const double ms   = ElapsedMs(start);
       (void)output;
 

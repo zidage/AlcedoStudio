@@ -2,7 +2,7 @@
 include("${ALCEDO_TEST_ROOT}/cmake/AlcedoTestRegistration.cmake")
 
 add_executable(CiRawWorkflowTest ${ALCEDO_TEST_ROOT}/ci/ci_raw_workflow_test.cpp)
-target_include_directories(CiRawWorkflowTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_include_directories(CiRawWorkflowTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(CiRawWorkflowTest
   PRIVATE
     GTest::gtest_main

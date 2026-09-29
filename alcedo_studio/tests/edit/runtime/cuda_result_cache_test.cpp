@@ -36,6 +36,7 @@
 #include "image/image_buffer.hpp"
 #include "json.hpp"
 #include "multi_grade_runtime_test_support.hpp"
+#include "support/render_snapshot_source.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 
 namespace alcedo {
@@ -70,17 +71,12 @@ void ConnectFullCoverageMask(PipelineDocument& document) {
   grade_mask_test::AddLinearGradientMask(document, MaskId{"mask.full"}, flat);
 }
 
-auto RenderHost(CudaProductRenderer& renderer, const std::shared_ptr<ImageBuffer>& input,
-                DecodeRes decode_res, const RenderRequest& request)
-    -> std::shared_ptr<ImageBuffer> {
-  return renderer.Render(input, decode_res, request, nullptr, FrameCompletionSubmission{}, true);
-}
-
-auto RenderHostWithoutSessionCache(CudaProductRenderer&                renderer,
-                                   const std::shared_ptr<ImageBuffer>& input, DecodeRes decode_res,
-                                   const RenderRequest& request) -> std::shared_ptr<ImageBuffer> {
-  return renderer.Render(input, decode_res, request, nullptr, FrameCompletionSubmission{}, true,
-                         CudaProductCachePolicy::BypassSessionCache);
+/// Host render of @p snapshot; the renderer's role decides interactive or batch behavior.
+auto RenderHost(CudaProductRenderer& renderer, const PipelineGraphSnapshot& snapshot,
+                const std::shared_ptr<ImageBuffer>& input, DecodeRes decode_res,
+                const RenderRequest& request) -> std::shared_ptr<ImageBuffer> {
+  return renderer.Render(snapshot, input, decode_res, request, nullptr, FrameCompletionSubmission{},
+                         true);
 }
 
 auto CompareHostRgba(const std::shared_ptr<ImageBuffer>& left,
@@ -151,12 +147,19 @@ class CudaResultCacheProductFixture : public ::testing::Test {
     }
     document_ = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
     gpu_dag_test::EnsureTestCameraProfile(*document_);
-    renderer_ = std::make_unique<CudaProductRenderer>(document_, MakeUnpacker());
-    image_    = MakeEncodedImage(71);
+    source_   = std::make_unique<test::RenderSnapshotSource>(document_);
+    renderer_ = std::make_unique<CudaProductRenderer>(ExecutorRole::Interactive, MakeUnpacker());
+    batch_renderer_ = std::make_unique<CudaProductRenderer>(ExecutorRole::Batch, MakeUnpacker());
+    image_          = MakeEncodedImage(71);
   }
 
   auto Render(const RenderRequest& request = {}) -> std::shared_ptr<ImageBuffer> {
-    return RenderHost(*renderer_, image_, DecodeRes::FULL, request);
+    return RenderHost(*renderer_, *source_->Freeze(), image_, DecodeRes::FULL, request);
+  }
+
+  /// Batch render of the same snapshot the interactive renderer would receive now.
+  auto RenderBatch(const RenderRequest& request = {}) -> std::shared_ptr<ImageBuffer> {
+    return RenderHost(*batch_renderer_, *source_->Freeze(), image_, DecodeRes::FULL, request);
   }
 
   auto RenderRole(FrameRole role, std::uint32_t max_edge) -> std::shared_ptr<ImageBuffer> {
@@ -164,7 +167,8 @@ class CudaResultCacheProductFixture : public ::testing::Test {
     request.resolution.max_edge = max_edge;
     FrameCompletionSubmission submission;
     submission.metadata.frame_role = role;
-    return renderer_->Render(image_, DecodeRes::FULL, request, nullptr, submission, true);
+    return renderer_->Render(*source_->Freeze(), image_, DecodeRes::FULL, request, nullptr,
+                             submission, true);
   }
 
   auto GeometryId() const -> GraphValueId {
@@ -179,9 +183,11 @@ class CudaResultCacheProductFixture : public ::testing::Test {
         document_->PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
   }
 
-  std::shared_ptr<PipelineDocument>    document_;
-  std::unique_ptr<CudaProductRenderer> renderer_;
-  std::shared_ptr<ImageBuffer>         image_;
+  std::shared_ptr<PipelineDocument>           document_;
+  std::unique_ptr<test::RenderSnapshotSource> source_;
+  std::unique_ptr<CudaProductRenderer>        renderer_;
+  std::unique_ptr<CudaProductRenderer>        batch_renderer_;
+  std::shared_ptr<ImageBuffer>                image_;
 };
 
 TEST_F(CudaResultCacheProductFixture,
@@ -363,10 +369,11 @@ TEST_F(CudaResultCacheProductFixture,
   EXPECT_EQ(stats.pass.sensor_develop_skip, 0U);
 }
 
-TEST_F(CudaResultCacheProductFixture, ImageSwitchBackAfterReleaseSessionCachesMissesAndReexecutes) {
+TEST_F(CudaResultCacheProductFixture, ImageSwitchBackAfterReleaseBindingMissesAndReexecutes) {
   ASSERT_TRUE(OutputIsFinite(Render()));
-  renderer_->ReleaseSessionCaches();
-  const auto released = renderer_->SessionResources();
+  renderer_->ReleaseBinding();
+  EXPECT_FALSE(renderer_->Binding().has_value());
+  const auto released = renderer_->Resources();
   EXPECT_EQ(released.published_result_count, 0U);
   EXPECT_EQ(released.texture_pool_entry_count, 0U);
   EXPECT_EQ(released.prepared_source_entry_count, 0U);
@@ -379,14 +386,40 @@ TEST_F(CudaResultCacheProductFixture, ImageSwitchBackAfterReleaseSessionCachesMi
   EXPECT_EQ(stats.pass.sensor_develop_skip, 0U);
 }
 
-TEST_F(CudaResultCacheProductFixture,
-       ClearAllIntermediateBuffersReleasesCudaProductSessionGpuAndHostCaches) {
+TEST_F(CudaResultCacheProductFixture, RebindToNewLineageReleasesPreviousBindingBeforeRendering) {
   ASSERT_TRUE(OutputIsFinite(Render()));
-  EXPECT_GT(renderer_->SessionResources().texture_pool_used_bytes, 0U);
-  EXPECT_GT(renderer_->SessionResources().published_result_count, 0U);
-  EXPECT_GT(renderer_->SessionResources().prepared_source_host_bytes, 0U);
-  renderer_->ReleaseSessionCaches();
-  const auto resources = renderer_->SessionResources();
+  const auto device_before = renderer_->DebugDeviceIdentity();
+  const auto first_binding = renderer_->Binding();
+  ASSERT_TRUE(first_binding.has_value());
+  EXPECT_EQ(first_binding->lineage, source_->Lineage());
+
+  // Same document content in a new lineage models a reload of the image history.
+  auto reloaded = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
+  gpu_dag_test::EnsureTestCameraProfile(*reloaded);
+  source_->Rebind(reloaded);
+  renderer_->ResetStats();
+  ASSERT_TRUE(OutputIsFinite(Render()));
+  const auto stats = renderer_->Stats();
+  EXPECT_EQ(stats.prepared_source_hits, 0U);
+  EXPECT_EQ(stats.prepared_source_misses, 1U);
+  EXPECT_EQ(stats.plan_compile_count, 1U);
+  EXPECT_EQ(stats.pass.sensor_develop_execute, 1U);
+  EXPECT_EQ(stats.pass.drt_execute, 1U);
+  EXPECT_EQ(stats.pass.sensor_develop_skip, 0U);
+  ASSERT_TRUE(renderer_->Binding().has_value());
+  EXPECT_EQ(renderer_->Binding()->lineage, source_->Lineage());
+  EXPECT_NE(renderer_->Binding()->lineage, first_binding->lineage);
+  EXPECT_EQ(renderer_->DebugDeviceIdentity(), device_before);
+}
+
+TEST_F(CudaResultCacheProductFixture, ReleaseBindingReleasesCudaProductSessionGpuAndHostCaches) {
+  ASSERT_TRUE(OutputIsFinite(Render()));
+  EXPECT_GT(renderer_->Resources().texture_pool_used_bytes, 0U);
+  EXPECT_GT(renderer_->Resources().published_result_count, 0U);
+  EXPECT_GT(renderer_->Resources().prepared_source_host_bytes, 0U);
+  renderer_->ReleaseBinding();
+  EXPECT_FALSE(renderer_->Binding().has_value());
+  const auto resources = renderer_->Resources();
   EXPECT_EQ(resources.texture_pool_used_bytes, 0U);
   EXPECT_EQ(resources.texture_pool_entry_count, 0U);
   EXPECT_EQ(resources.published_result_count, 0U);
@@ -416,29 +449,38 @@ TEST_F(CudaResultCacheProductFixture, ThreeSequentialImagePinsDoNotRetainPreviou
   gpu_dag_test::EnsureTestCameraProfile(*document_a);
   gpu_dag_test::EnsureTestCameraProfile(*document_b);
   gpu_dag_test::EnsureTestCameraProfile(*document_c);
-  CudaProductRenderer session_a(document_a, MakeUnpacker());
-  CudaProductRenderer session_b(document_b, MakeUnpacker());
-  CudaProductRenderer session_c(document_c, MakeUnpacker());
-  ASSERT_TRUE(OutputIsFinite(RenderHost(session_a, MakeEncodedImage(11), DecodeRes::FULL, {})));
-  EXPECT_GT(session_a.SessionResources().texture_pool_used_bytes, 0U);
-  session_a.ReleaseSessionCaches();
-  ASSERT_TRUE(OutputIsFinite(RenderHost(session_b, MakeEncodedImage(12), DecodeRes::FULL, {})));
-  EXPECT_EQ(session_a.SessionResources().texture_pool_used_bytes, 0U);
-  EXPECT_GT(session_b.SessionResources().texture_pool_used_bytes, 0U);
-  session_b.ReleaseSessionCaches();
-  ASSERT_TRUE(OutputIsFinite(RenderHost(session_c, MakeEncodedImage(13), DecodeRes::FULL, {})));
-  EXPECT_EQ(session_a.SessionResources().texture_pool_used_bytes, 0U);
-  EXPECT_EQ(session_b.SessionResources().texture_pool_used_bytes, 0U);
-  EXPECT_GT(session_c.SessionResources().texture_pool_used_bytes, 0U);
+  const auto          snapshot_a = test::FreezeInNewLineage(*document_a);
+  const auto          snapshot_b = test::FreezeInNewLineage(*document_b);
+  const auto          snapshot_c = test::FreezeInNewLineage(*document_c);
+  CudaProductRenderer session_a(ExecutorRole::Interactive, MakeUnpacker());
+  CudaProductRenderer session_b(ExecutorRole::Interactive, MakeUnpacker());
+  CudaProductRenderer session_c(ExecutorRole::Interactive, MakeUnpacker());
+  ASSERT_TRUE(OutputIsFinite(
+      RenderHost(session_a, *snapshot_a, MakeEncodedImage(11), DecodeRes::FULL, {})));
+  EXPECT_GT(session_a.Resources().texture_pool_used_bytes, 0U);
+  session_a.ReleaseBinding();
+  ASSERT_TRUE(OutputIsFinite(
+      RenderHost(session_b, *snapshot_b, MakeEncodedImage(12), DecodeRes::FULL, {})));
+  EXPECT_EQ(session_a.Resources().texture_pool_used_bytes, 0U);
+  EXPECT_GT(session_b.Resources().texture_pool_used_bytes, 0U);
+  session_b.ReleaseBinding();
+  ASSERT_TRUE(OutputIsFinite(
+      RenderHost(session_c, *snapshot_c, MakeEncodedImage(13), DecodeRes::FULL, {})));
+  EXPECT_EQ(session_a.Resources().texture_pool_used_bytes, 0U);
+  EXPECT_EQ(session_b.Resources().texture_pool_used_bytes, 0U);
+  EXPECT_GT(session_c.Resources().texture_pool_used_bytes, 0U);
 }
 
 TEST_F(CudaResultCacheProductFixture, ImageSwitchBackReusesMatchingPreparedSourceAndGpuResults) {
   const auto image_a = MakeEncodedImage(81);
   const auto image_b = MakeEncodedImage(82);
-  ASSERT_TRUE(OutputIsFinite(RenderHost(*renderer_, image_a, DecodeRes::FULL, {})));
-  ASSERT_TRUE(OutputIsFinite(RenderHost(*renderer_, image_b, DecodeRes::FULL, {})));
+  ASSERT_TRUE(
+      OutputIsFinite(RenderHost(*renderer_, *source_->Freeze(), image_a, DecodeRes::FULL, {})));
+  ASSERT_TRUE(
+      OutputIsFinite(RenderHost(*renderer_, *source_->Freeze(), image_b, DecodeRes::FULL, {})));
   renderer_->ResetStats();
-  ASSERT_TRUE(OutputIsFinite(RenderHost(*renderer_, image_a, DecodeRes::FULL, {})));
+  ASSERT_TRUE(
+      OutputIsFinite(RenderHost(*renderer_, *source_->Freeze(), image_a, DecodeRes::FULL, {})));
   const auto stats = renderer_->Stats();
   EXPECT_EQ(stats.libraw_open_unpack_count, 0U);
   EXPECT_EQ(stats.prepared_source_hits, 1U);
@@ -448,24 +490,32 @@ TEST_F(CudaResultCacheProductFixture, ImageSwitchBackReusesMatchingPreparedSourc
   EXPECT_EQ(stats.pass.drt_skip, 0U);
 }
 
-TEST_F(CudaResultCacheProductFixture, OneShotRenderDoesNotReadWriteOrClearEditorSessionCaches) {
+TEST_F(CudaResultCacheProductFixture,
+       BatchRenderOfSameSnapshotDoesNotReadWriteOrClearInteractiveRendererCaches) {
   ASSERT_TRUE(OutputIsFinite(Render()));
-  const auto resources_before = renderer_->SessionResources();
+  const auto resources_before = renderer_->Resources();
+  const auto binding_before   = renderer_->Binding();
   renderer_->ResetStats();
 
-  ASSERT_TRUE(
-      OutputIsFinite(RenderHostWithoutSessionCache(*renderer_, image_, DecodeRes::FULL, {})));
+  ASSERT_TRUE(OutputIsFinite(RenderBatch()));
 
-  const auto after_one_shot = renderer_->Stats();
-  EXPECT_EQ(after_one_shot.prepared_source_hits, 0U);
-  EXPECT_EQ(after_one_shot.prepared_source_misses, 0U);
-  EXPECT_EQ(after_one_shot.plan_cache_hits, 0U);
-  EXPECT_EQ(after_one_shot.plan_cache_misses, 0U);
-  EXPECT_EQ(after_one_shot.pass.sensor_develop_execute, 0U);
-  EXPECT_EQ(renderer_->SessionResources().published_result_count,
-            resources_before.published_result_count);
-  EXPECT_EQ(renderer_->SessionResources().prepared_source_entry_count,
+  const auto after_batch = renderer_->Stats();
+  EXPECT_EQ(after_batch.prepared_source_hits, 0U);
+  EXPECT_EQ(after_batch.prepared_source_misses, 0U);
+  EXPECT_EQ(after_batch.plan_cache_hits, 0U);
+  EXPECT_EQ(after_batch.plan_cache_misses, 0U);
+  EXPECT_EQ(after_batch.pass.sensor_develop_execute, 0U);
+  EXPECT_EQ(renderer_->Resources().published_result_count, resources_before.published_result_count);
+  EXPECT_EQ(renderer_->Resources().prepared_source_entry_count,
             resources_before.prepared_source_entry_count);
+  EXPECT_EQ(renderer_->Binding(), binding_before);
+  const auto batch_stats = batch_renderer_->Stats();
+  EXPECT_EQ(batch_stats.prepared_source_hits, 0U);
+  EXPECT_EQ(batch_stats.plan_cache_hits, 0U);
+  EXPECT_GE(batch_stats.pass.sensor_develop_execute, 1U);
+  EXPECT_EQ(batch_renderer_->Resources().published_result_count, 0U);
+  EXPECT_EQ(batch_renderer_->Resources().texture_pool_used_bytes, 0U);
+  EXPECT_FALSE(batch_renderer_->Binding().has_value());
 
   ASSERT_TRUE(OutputIsFinite(Render()));
   const auto after_preview = renderer_->Stats();
@@ -480,20 +530,17 @@ TEST_F(CudaResultCacheProductFixture, OneShotRenderDoesNotReadWriteOrClearEditor
 TEST_F(CudaResultCacheProductFixture, BackgroundMultiGradeRenderPreservesEditorCache) {
   multi_grade_test::AddCleanGradesBeforeDrt(*document_, {"grade.b", "grade.c"});
   ASSERT_TRUE(OutputIsFinite(Render()));
-  const auto resources_before = renderer_->SessionResources();
+  const auto resources_before = renderer_->Resources();
   EXPECT_GT(resources_before.published_result_count, 0U);
   renderer_->ResetStats();
 
-  ASSERT_TRUE(
-      OutputIsFinite(RenderHostWithoutSessionCache(*renderer_, image_, DecodeRes::FULL, {})));
+  ASSERT_TRUE(OutputIsFinite(RenderBatch()));
 
-  EXPECT_EQ(renderer_->OneShotPublishedResultCount(), 0U);
-  EXPECT_EQ(renderer_->SessionResources().published_result_count,
-            resources_before.published_result_count);
-  EXPECT_EQ(renderer_->SessionResources().prepared_source_entry_count,
+  EXPECT_EQ(renderer_->Resources().published_result_count, resources_before.published_result_count);
+  EXPECT_EQ(renderer_->Resources().prepared_source_entry_count,
             resources_before.prepared_source_entry_count);
-  EXPECT_EQ(renderer_->OneShotResources().published_result_count, 0U);
-  EXPECT_EQ(renderer_->OneShotResources().texture_pool_used_bytes, 0U);
+  EXPECT_EQ(batch_renderer_->Resources().published_result_count, 0U);
+  EXPECT_EQ(batch_renderer_->Resources().texture_pool_used_bytes, 0U);
 
   ASSERT_TRUE(OutputIsFinite(Render()));
   EXPECT_EQ(renderer_->Stats().pass.sensor_develop_skip, 1U);
@@ -548,37 +595,33 @@ TEST_F(CudaResultCacheProductFixture, CudaRendererPreservesCurrentPlanAndResultC
   expect_current(plan.display_output, keys.geometry_extent);
 }
 
-TEST_F(CudaResultCacheProductFixture, RepeatedOneShotRendersReuseDeviceAndReleaseWorkspace) {
+TEST_F(CudaResultCacheProductFixture, RepeatedBatchRendersReuseDeviceAndReleaseWorkspace) {
   ASSERT_TRUE(OutputIsFinite(Render()));
-  const auto session_before = renderer_->SessionResources();
+  const auto session_before = renderer_->Resources();
   EXPECT_GT(session_before.published_result_count, 0U);
   renderer_->ResetStats();
-  EXPECT_EQ(renderer_->DebugOneShotDeviceIdentity(), 0U);
+  EXPECT_EQ(batch_renderer_->DebugDeviceIdentity(), 0U);
 
-  ASSERT_TRUE(
-      OutputIsFinite(RenderHostWithoutSessionCache(*renderer_, image_, DecodeRes::FULL, {})));
-  const auto first_id = renderer_->DebugOneShotDeviceIdentity();
+  ASSERT_TRUE(OutputIsFinite(RenderBatch()));
+  const auto first_id = batch_renderer_->DebugDeviceIdentity();
   EXPECT_NE(first_id, 0U);
-  EXPECT_EQ(renderer_->OneShotPublishedResultCount(), 0U);
-  EXPECT_EQ(renderer_->OneShotResources().published_result_count, 0U);
-  EXPECT_EQ(renderer_->OneShotResources().texture_pool_used_bytes, 0U);
-  EXPECT_EQ(renderer_->OneShotResources().texture_pool_entry_count, 0U);
-  EXPECT_EQ(renderer_->SessionResources().published_result_count,
-            session_before.published_result_count);
-  EXPECT_EQ(renderer_->SessionResources().prepared_source_entry_count,
+  EXPECT_NE(first_id, renderer_->DebugDeviceIdentity());
+  EXPECT_EQ(batch_renderer_->Resources().published_result_count, 0U);
+  EXPECT_EQ(batch_renderer_->Resources().texture_pool_used_bytes, 0U);
+  EXPECT_EQ(batch_renderer_->Resources().texture_pool_entry_count, 0U);
+  EXPECT_EQ(renderer_->Resources().published_result_count, session_before.published_result_count);
+  EXPECT_EQ(renderer_->Resources().prepared_source_entry_count,
             session_before.prepared_source_entry_count);
   EXPECT_EQ(renderer_->Stats().prepared_source_hits, 0U);
   EXPECT_EQ(renderer_->Stats().prepared_source_misses, 0U);
   EXPECT_EQ(renderer_->Stats().pass.sensor_develop_execute, 0U);
 
-  ASSERT_TRUE(
-      OutputIsFinite(RenderHostWithoutSessionCache(*renderer_, image_, DecodeRes::FULL, {})));
-  EXPECT_EQ(renderer_->DebugOneShotDeviceIdentity(), first_id);
-  EXPECT_EQ(renderer_->OneShotPublishedResultCount(), 0U);
-  EXPECT_EQ(renderer_->OneShotResources().texture_pool_used_bytes, 0U);
-  EXPECT_EQ(renderer_->OneShotResources().texture_pool_entry_count, 0U);
-  EXPECT_EQ(renderer_->SessionResources().published_result_count,
-            session_before.published_result_count);
+  ASSERT_TRUE(OutputIsFinite(RenderBatch()));
+  EXPECT_EQ(batch_renderer_->DebugDeviceIdentity(), first_id);
+  EXPECT_EQ(batch_renderer_->Resources().published_result_count, 0U);
+  EXPECT_EQ(batch_renderer_->Resources().texture_pool_used_bytes, 0U);
+  EXPECT_EQ(batch_renderer_->Resources().texture_pool_entry_count, 0U);
+  EXPECT_EQ(renderer_->Resources().published_result_count, session_before.published_result_count);
 
   ASSERT_TRUE(OutputIsFinite(Render()));
   EXPECT_EQ(renderer_->Stats().prepared_source_hits, 1U);
@@ -587,19 +630,20 @@ TEST_F(CudaResultCacheProductFixture, RepeatedOneShotRendersReuseDeviceAndReleas
   EXPECT_EQ(renderer_->Stats().pass.drt_skip, 1U);
 }
 
-TEST_F(CudaResultCacheProductFixture, ParallelOneShotRendersCompleteAndReleaseWorkspaces) {
+TEST_F(CudaResultCacheProductFixture, ParallelBatchRendersCompleteAndReleaseWorkspaces) {
   constexpr int kWorkers = 2;
   struct Worker {
-    std::unique_ptr<CudaProductRenderer> renderer;
-    std::shared_ptr<ImageBuffer>         image;
-    bool                                 finite           = false;
-    std::uintptr_t                       device_identity  = 0;
-    std::size_t                          published        = 1;
-    std::size_t                          pool_bytes       = 1;
-    std::size_t                          pool_entries     = 1;
-    std::uint64_t                        source_hits      = 1;
-    std::uint64_t                        source_misses    = 1;
-    std::string                          error;
+    std::unique_ptr<CudaProductRenderer>         renderer;
+    std::shared_ptr<const PipelineGraphSnapshot> snapshot;
+    std::shared_ptr<ImageBuffer>                 image;
+    bool                                         finite          = false;
+    std::uintptr_t                               device_identity = 0;
+    std::size_t                                  published       = 1;
+    std::size_t                                  pool_bytes      = 1;
+    std::size_t                                  pool_entries    = 1;
+    std::uint64_t                                source_hits     = 1;
+    std::uint64_t                                source_misses   = 1;
+    std::string                                  error;
   };
 
   std::vector<Worker> workers(static_cast<std::size_t>(kWorkers));
@@ -607,7 +651,8 @@ TEST_F(CudaResultCacheProductFixture, ParallelOneShotRendersCompleteAndReleaseWo
     auto document = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
     gpu_dag_test::EnsureTestCameraProfile(*document);
     workers[static_cast<std::size_t>(i)].renderer =
-        std::make_unique<CudaProductRenderer>(document, MakeUnpacker());
+        std::make_unique<CudaProductRenderer>(ExecutorRole::Batch, MakeUnpacker());
+    workers[static_cast<std::size_t>(i)].snapshot = test::FreezeInNewLineage(*document);
     workers[static_cast<std::size_t>(i)].image =
         MakeEncodedImage(static_cast<std::uint8_t>(90 + i));
   }
@@ -624,19 +669,19 @@ TEST_F(CudaResultCacheProductFixture, ParallelOneShotRendersCompleteAndReleaseWo
       go.wait();
       try {
         const auto output =
-            RenderHostWithoutSessionCache(*worker.renderer, worker.image, DecodeRes::FULL, {});
+            RenderHost(*worker.renderer, *worker.snapshot, worker.image, DecodeRes::FULL, {});
         worker.finite          = OutputIsFinite(output);
-        worker.device_identity = worker.renderer->DebugOneShotDeviceIdentity();
-        worker.published       = worker.renderer->OneShotPublishedResultCount();
-        const auto one_shot    = worker.renderer->OneShotResources();
-        worker.pool_bytes      = one_shot.texture_pool_used_bytes;
-        worker.pool_entries    = one_shot.texture_pool_entry_count;
+        worker.device_identity = worker.renderer->DebugDeviceIdentity();
+        const auto batch       = worker.renderer->Resources();
+        worker.published       = batch.published_result_count;
+        worker.pool_bytes      = batch.texture_pool_used_bytes;
+        worker.pool_entries    = batch.texture_pool_entry_count;
         worker.source_hits     = worker.renderer->Stats().prepared_source_hits;
         worker.source_misses   = worker.renderer->Stats().prepared_source_misses;
       } catch (const std::exception& ex) {
         worker.error = ex.what();
       } catch (...) {
-        worker.error = "unknown parallel one-shot failure";
+        worker.error = "unknown parallel batch render failure";
       }
     });
   }
@@ -664,18 +709,17 @@ TEST_F(CudaResultCacheProductFixture, ParallelOneShotRendersCompleteAndReleaseWo
   EXPECT_NE(workers[0].device_identity, workers[1].device_identity);
 }
 
-TEST_F(CudaResultCacheProductFixture, RendererOneShotWorkspaceCannotPublishIntoSessionCache) {
+TEST_F(CudaResultCacheProductFixture, BatchRendererWorkspaceCannotPublishIntoInteractiveCache) {
   ASSERT_TRUE(OutputIsFinite(Render()));
-  const auto session_before = renderer_->SessionResources();
+  const auto session_before = renderer_->Resources();
   EXPECT_GT(session_before.published_result_count, 0U);
   renderer_->ResetStats();
 
-  ASSERT_TRUE(
-      OutputIsFinite(RenderHostWithoutSessionCache(*renderer_, image_, DecodeRes::FULL, {})));
-  EXPECT_EQ(renderer_->OneShotPublishedResultCount(), 0U);
-  EXPECT_EQ(renderer_->SessionResources().published_result_count,
-            session_before.published_result_count);
-  EXPECT_EQ(renderer_->SessionResources().prepared_source_entry_count,
+  ASSERT_TRUE(OutputIsFinite(RenderBatch()));
+  EXPECT_EQ(batch_renderer_->Resources().published_result_count, 0U);
+  EXPECT_TRUE(batch_renderer_->Resources().session_value_ids.empty());
+  EXPECT_EQ(renderer_->Resources().published_result_count, session_before.published_result_count);
+  EXPECT_EQ(renderer_->Resources().prepared_source_entry_count,
             session_before.prepared_source_entry_count);
   EXPECT_EQ(renderer_->Stats().prepared_source_hits, 0U);
   EXPECT_EQ(renderer_->Stats().plan_cache_hits, 0U);
@@ -696,7 +740,7 @@ TEST_F(CudaResultCacheProductFixture, RendererFailureDoesNotPublishUnfinishedRev
   const auto& prepared     = source_lease.Get();
   auto        first_plan   = renderer_->PlanCache().GetOrCompile(*document_, prepared.CompileSource());
   GraphCompiler::BindFrameGeometry(first_plan, *document_, {});
-  const auto published_before = renderer_->SessionResources().published_result_count;
+  const auto published_before = renderer_->Resources().published_result_count;
   auto&      images           = renderer_->Device().Workspace().Images();
   const auto published_sensor = images.PublishedRevision(first_plan.sensor_linear_output);
   const auto published_display = images.PublishedRevision(first_plan.display_output);
@@ -712,7 +756,7 @@ TEST_F(CudaResultCacheProductFixture, RendererFailureDoesNotPublishUnfinishedRev
   renderer_->Device().WaitIdle();
   const auto completed = renderer_->Device().Workspace().Device().CompletedSubmission();
   auto&      invalidation = renderer_->Device().Workspace().ResultInvalidation();
-  EXPECT_EQ(renderer_->SessionResources().published_result_count, published_before);
+  EXPECT_EQ(renderer_->Resources().published_result_count, published_before);
   EXPECT_TRUE(images.FindValidResult(first_plan.sensor_linear_output, published_sensor, sensor_repr,
                                      completed));
   EXPECT_TRUE(images.FindValidResult(first_plan.display_output, published_display, display_repr,
@@ -744,7 +788,7 @@ TEST_F(CudaResultCacheProductFixture,
   EXPECT_EQ(images.Find(SensorId())->Handle(), sensor_handle);
   EXPECT_EQ(images.PublishedRevision(SensorId()), sensor_rev);
   EXPECT_EQ(images.PublishedRevision(GeometryId()), geometry_rev);
-  const auto fresh = RenderHostWithoutSessionCache(*renderer_, image_, DecodeRes::FULL, [] {
+  const auto fresh = RenderBatch([] {
     RenderRequest request;
     request.resolution.max_edge = 16;
     return request;
@@ -896,7 +940,8 @@ TEST_F(CudaResultCacheProductFixture, QualityBaseFailurePreservesUnchangedIntera
   request.resolution.max_edge = 32;
   FrameCompletionSubmission submission;
   submission.metadata.frame_role = FrameRole::QualityBase;
-  EXPECT_THROW((void)renderer_->Render(image_, DecodeRes::FULL, request, &sink, submission, false),
+  EXPECT_THROW((void)renderer_->Render(*source_->Freeze(), image_, DecodeRes::FULL, request, &sink,
+                                       submission, false),
                std::runtime_error);
   EXPECT_EQ(images.Find(GeometryId())->Handle(), geometry_handle);
   EXPECT_EQ(images.PublishedRevision(GeometryId()), geometry_rev);
@@ -908,7 +953,7 @@ TEST_F(CudaResultCacheProductFixture, QualityBaseFailurePreservesUnchangedIntera
 
 TEST_F(CudaResultCacheProductFixture, QualityBasePixelsMatchFreshExecutionWithinDeclaredTolerance) {
   // Same 32x32 fixture, QualityBase long-edge 32. Compare bypass-cache pixels
-  // against a one-shot execution of the same request. Absolute tolerance 1e-4
+  // against a batch execution of the same request. Absolute tolerance 1e-4
   // on RGB in the renderer host RGBA32F download (ACES display encoding).
   ConnectFullCoverageMask(*document_);
   auto* shadows = dynamic_cast<ShadowsModel*>(
@@ -924,8 +969,7 @@ TEST_F(CudaResultCacheProductFixture, QualityBasePixelsMatchFreshExecutionWithin
   ASSERT_TRUE(OutputIsFinite(quality));
   RenderRequest fresh_request;
   fresh_request.resolution.max_edge = 32;
-  const auto fresh =
-      RenderHostWithoutSessionCache(*renderer_, image_, DecodeRes::FULL, fresh_request);
+  const auto fresh = RenderBatch(fresh_request);
   ASSERT_TRUE(OutputIsFinite(fresh));
   EXPECT_EQ(quality->GetCPUData().cols, fresh->GetCPUData().cols);
   EXPECT_EQ(quality->GetCPUData().rows, fresh->GetCPUData().rows);

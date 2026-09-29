@@ -18,6 +18,7 @@
 #include "app/image_pool_service.hpp"
 #include "decoders/processor/raw_color_context.hpp"
 #include "edit/graph/pipeline_document.hpp"
+#include "edit/graph/pipeline_graph_snapshot.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/commit_types.hpp"
 #include "edit/pipeline/pipeline_accelerator.hpp"
@@ -36,7 +37,9 @@ namespace alcedo {
 ///
 /// Binding identity model (see commit_types.hpp and the single-live-pipeline roadmap
 /// "Final locked identity model"):
-/// - pipeline_ only renders the bound document. It owns no parameters and does not own HEAD.
+/// - pipeline_ holds no document. Each render task freezes document_ under the render lock
+///   (FreezeLiveSnapshot) and passes that snapshot to Apply. It owns no parameters and does not
+///   own HEAD.
 /// - commit_graph_ is the sole owner of Version tips (working head).
 /// - working_head_commit_hash() / transaction_chain_hash() are convenience reads of
 ///   the active Version tip and its first-parent chain fold. They are not independent
@@ -46,8 +49,12 @@ namespace alcedo {
 ///   that label to the history tip; match loads the document and skips first-parent replay.
 struct PipelineGuard {
   std::shared_ptr<PipelineExecutor>       pipeline_;
-  /// Authoritative pipeline DAG used by the CUDA product renderer.
+  /// Authoritative live pipeline DAG. Written under pipeline_'s render lock; renders read a
+  /// frozen copy of it (FreezeLiveSnapshot).
   std::shared_ptr<PipelineDocument>    document_;
+  /// History identity of document_. A new value each time document_ is replaced (load and
+  /// BindLivePipelineDocument), so the executor releases the resources of the previous document.
+  PipelineLineageId                    lineage_;
   sl_element_id_t                      id_;
   bool                                 dirty_     = false;
   /// Cache pin only: LoadPipeline / ReleasePipelineUse / SavePipeline refcount so
@@ -87,6 +94,19 @@ struct PipelineGuard {
     }
     return commit_graph_->GetActiveVersionRef().head_commit_hash;
   }
+
+  /**
+   * @brief Freeze document_ into the snapshot that one render task passes to Apply.
+   *
+   * Transitional until each consumer owns its executor: the snapshot is a preview (no HEAD, empty
+   * chain) because document_ may hold uncommitted editor values, and it is rendered by every user
+   * of pipeline_ (editor, thumbnails, analysis, export). The chain is left empty because the
+   * render thread must not read commit_graph_, which the history owner replaces without this lock.
+   *
+   * @pre Caller holds pipeline_->GetRenderLock(); document_ is set and lineage_ is not empty.
+   * @throws std::invalid_argument when document_ is null or lineage_ is empty.
+   */
+  [[nodiscard]] auto FreezeLiveSnapshot() const -> std::shared_ptr<const PipelineGraphSnapshot>;
 
   /// First-parent chain fold for the active tip. Same algorithm history uses when
   /// recording commits; used as the checkpoint label next to the saved document.
@@ -137,8 +157,8 @@ class PipelineMgmtService final {
    *
    * Thumbnail, analysis, and export must call this instead of @ref SavePipeline.
    * When other pins remain (the editor), GPU session caches stay. When this is
-   * the last pin, intermediate GPU caches and the one-shot device are released
-   * so unused LRU entries do not keep VRAM. Must not be called while holding
+   * the last pin, the executor releases the resources of its binding (both
+   * renderers) so unused LRU entries do not keep VRAM. Must not be called while holding
    * @c PipelineExecutor::GetRenderLock().
    *
    * @param pipeline Guard returned by @ref LoadPipeline; no-op if null.
@@ -272,11 +292,21 @@ struct PipelineCheckpointIdentity {
     -> bool;
 
 /**
+ * @brief Snapshot source for a render task that uses @p guard's shared executor.
+ *
+ * The returned function keeps @p guard alive and calls PipelineGuard::FreezeLiveSnapshot. The
+ * scheduler calls it while it holds the render lock (PipelineTask::snapshot_under_render_lock_).
+ */
+[[nodiscard]] auto MakeLiveSnapshotSource(std::shared_ptr<const PipelineGuard> guard)
+    -> std::function<std::shared_ptr<const PipelineGraphSnapshot>()>;
+
+/**
  * @brief Swap step of build-then-swap: make @p document the guard's only writable document.
  *
- * Moves the pointer into the guard and forwards it to the executor's renderers. It does not
- * copy, validate, or replay anything, so callers build and bind the camera profile first and call
- * this last. Does not take the render lock.
+ * Moves the pointer into the guard and takes a new lineage, so the next render on the guard's
+ * executor releases every resource of the previous document. It does not copy, validate, or
+ * replay anything, so callers build and bind the camera profile first and call this last. Does
+ * not take the render lock.
  *
  * @pre @p document is not null. Caller holds the executor render lock when @p guard is live.
  * @param guard Loaded editor guard.

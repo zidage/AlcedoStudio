@@ -17,6 +17,7 @@
 #include <filesystem>
 #include <future>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -176,7 +177,15 @@ TEST_F(PipelineDngProfileBindingTest, LoadPipelineBindsSourceProfileBeforeDocume
   auto                guard = pipelines.LoadPipeline(element_id_);
   ASSERT_NE(guard, nullptr);
   ExpectBoundTo(*guard->document_, imported_profile_);
-  EXPECT_EQ(guard->pipeline_->GpuDagDocument(), guard->document_);
+  EXPECT_FALSE(guard->lineage_.Empty());
+  // Renders freeze the guard document, so the frozen graph carries the bound profile.
+  {
+    std::unique_lock<std::mutex> lock(guard->pipeline_->GetRenderLock());
+    const auto                   snapshot = guard->FreezeLiveSnapshot();
+    ASSERT_NE(snapshot, nullptr);
+    EXPECT_EQ(snapshot->Lineage(), guard->lineage_);
+    ExpectBoundTo(snapshot->Document(), imported_profile_);
+  }
   pipelines.ReleasePipelineUse(guard);
 }
 

@@ -33,6 +33,7 @@
 #include "image/image_buffer.hpp"
 #include "renderer/pipeline_scheduler.hpp"
 #include "renderer/pipeline_task.hpp"
+#include "support/render_snapshot_source.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 
 namespace alcedo {
@@ -114,16 +115,20 @@ class CudaDocumentGeometryRequestFixture : public ::testing::Test {
     gpu_dag_test::EnsureTestCameraProfile(*document_);
     document_->Geometry().SetCropRect({0.2f, 0.1f, 0.5f, 0.6f});
     document_->Geometry().SetRotationDegrees(7.0f);
-    renderer_ = std::make_unique<CudaProductRenderer>(document_, MakeUnpacker());
+    source_   = std::make_unique<test::RenderSnapshotSource>(document_);
+    renderer_ = std::make_unique<CudaProductRenderer>(ExecutorRole::Interactive, MakeUnpacker());
     image_    = MakeEncodedImage(83);
   }
 
-  auto Render(CudaProductRenderer& renderer, const RenderRequest& request) -> cv::Mat {
-    return HostPixels(renderer.Render(image_, DecodeRes::FULL, request, nullptr,
+  auto Render(CudaProductRenderer& renderer, const PipelineGraphSnapshot& snapshot,
+              const RenderRequest& request) -> cv::Mat {
+    return HostPixels(renderer.Render(snapshot, image_, DecodeRes::FULL, request, nullptr,
                                       FrameCompletionSubmission{}, true));
   }
 
-  auto Render(const RenderRequest& request = {}) -> cv::Mat { return Render(*renderer_, request); }
+  auto Render(const RenderRequest& request = {}) -> cv::Mat {
+    return Render(*renderer_, *source_->Freeze(), request);
+  }
 
   static auto Uncropped() -> RenderRequest {
     RenderRequest request;
@@ -131,9 +136,10 @@ class CudaDocumentGeometryRequestFixture : public ::testing::Test {
     return request;
   }
 
-  std::shared_ptr<PipelineDocument>    document_;
-  std::unique_ptr<CudaProductRenderer> renderer_;
-  std::shared_ptr<ImageBuffer>         image_;
+  std::shared_ptr<PipelineDocument>           document_;
+  std::unique_ptr<test::RenderSnapshotSource> source_;
+  std::unique_ptr<CudaProductRenderer>        renderer_;
+  std::shared_ptr<ImageBuffer>                image_;
 };
 
 TEST_F(CudaDocumentGeometryRequestFixture, RotatedCropFastPreviewRoiMatchesFullFramePixels) {
@@ -179,8 +185,9 @@ TEST_F(CudaDocumentGeometryRequestFixture,
   // developed source extent, so equal size means the frame has the uncropped source aspect ratio.
   auto identity = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
   gpu_dag_test::EnsureTestCameraProfile(*identity);
-  CudaProductRenderer identity_renderer(identity, MakeUnpacker());
-  const auto          expected = Render(identity_renderer, RenderRequest{});
+  CudaProductRenderer identity_renderer(ExecutorRole::Interactive, MakeUnpacker());
+  const auto          expected =
+      Render(identity_renderer, *test::FreezeInNewLineage(*identity), RenderRequest{});
   ASSERT_FALSE(expected.empty());
   EXPECT_EQ(uncropped.size(), expected.size());
   EXPECT_FALSE(uncropped.size() == cropped.size());
@@ -207,7 +214,6 @@ TEST(GpuDagCudaDrtProduct, CancelRequestReachesRendererWithoutStageWrite) {
   exec->SetAcceleratorBackendPreference(AcceleratorBackendPreference::CUDA);
   auto document = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
   gpu_dag_test::EnsureTestCameraProfile(*document);
-  exec->SetPipelineDocument(document);
 
   bool cancel_calls_seen = false;
   auto cancel            = [&cancel_calls_seen]() {
@@ -215,9 +221,11 @@ TEST(GpuDagCudaDrtProduct, CancelRequestReachesRendererWithoutStageWrite) {
     return true;
   };
 
-  PipelineTask task;
+  const test::RenderSnapshotSource source(document);
+  PipelineTask                     task;
   task.input_                             = MakeEncodedImage(91);
   task.pipeline_executor_                 = exec;
+  task.snapshot_under_render_lock_        = source.TaskSource();
   task.options_.render_desc_.render_type_ = RenderType::QUALITY_BASE_PREVIEW;
   task.cancel_requested_                  = cancel;
 

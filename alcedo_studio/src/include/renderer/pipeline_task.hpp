@@ -12,6 +12,7 @@
 #include <string>
 
 #include "edit/geometry/render_request.hpp"
+#include "edit/graph/pipeline_graph_snapshot.hpp"
 #include "edit/pipeline/pipeline_executor.hpp"
 #include "edit/runtime/pipeline_apply_request.hpp"
 #include "image/image.hpp"
@@ -71,6 +72,11 @@ struct PipelineTask {
   // Request-specific executor configuration performed under the same render
   // lock as Apply(). This is the only safe place to mutate a shared executor.
   std::optional<std::function<bool(PipelineTask&)>> configure_under_render_lock_;
+  // Returns the pipeline graph snapshot this task renders. Called once per task by the scheduler
+  // while it holds the executor render lock, after configure_under_render_lock_ and before Apply,
+  // so a live document written under the same lock is frozen at a consistent point. Required for
+  // every task that renders; a missing source or a null result fails the task.
+  std::function<std::shared_ptr<const PipelineGraphSnapshot>()> snapshot_under_render_lock_;
   std::function<bool()>                             cancel_requested_;
   // Optional control-plane completion (preview + export). Invoked once on every
   // terminal path so callers do not need a dedicated blocking worker thread.

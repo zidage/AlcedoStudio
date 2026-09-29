@@ -476,15 +476,6 @@ void ThumbnailService::GetThumbnailDetailed(sl_element_id_t id, image_id_t image
                         id),
             false);
       }
-#if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
-      if (!task_context->live->pipeline_->HasGpuDagDocument()) {
-        return fail_pending_request(
-            std::format("[ERROR] ThumbnailService: pipeline for {} is missing a GPU DAG "
-                        "document.",
-                        id),
-            false);
-      }
-#endif
 
       std::shared_ptr<Image> img_result;
       try {
@@ -508,8 +499,9 @@ void ThumbnailService::GetThumbnailDetailed(sl_element_id_t id, image_id_t image
             false);
       }
 
-      task.pipeline_executor_ = task_context->live->pipeline_;
-      task.input_desc_        = std::move(img_result);
+      task.pipeline_executor_          = task_context->live->pipeline_;
+      task.snapshot_under_render_lock_ = MakeLiveSnapshotSource(task_context->live);
+      task.input_desc_                 = std::move(img_result);
       return true;
     };
 
@@ -772,11 +764,6 @@ void ThumbnailService::RequestAnalysisRendition(sl_element_id_t element_id, imag
       if (!ctx->live || !ctx->live->pipeline_ || !ctx->live->document_) {
         return fail("analysis rendition: no usable pipeline graph");
       }
-#if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
-      if (!ctx->live->pipeline_->HasGpuDagDocument()) {
-        return fail("analysis rendition: pipeline is missing a GPU DAG document");
-      }
-#endif
 
       std::shared_ptr<Image> img_result;
       try {
@@ -795,8 +782,9 @@ void ThumbnailService::RequestAnalysisRendition(sl_element_id_t element_id, imag
             std::format("analysis rendition: image with ID {} not found in pool.", image_id));
       }
 
-      t.pipeline_executor_ = ctx->live->pipeline_;
-      t.input_desc_        = std::move(img_result);
+      t.pipeline_executor_          = ctx->live->pipeline_;
+      t.snapshot_under_render_lock_ = MakeLiveSnapshotSource(ctx->live);
+      t.input_desc_                 = std::move(img_result);
       return true;
     };
 

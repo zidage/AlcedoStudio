@@ -25,16 +25,19 @@
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
+#include "edit/graph/pipeline_graph_snapshot.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/models/adjustment_catalog.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/operators/models/sharpen_model.hpp"
+#include "edit/runtime/executor_role.hpp"
 #include "edit/runtime/renderer.hpp"
 #include "image/image_buffer.hpp"
 #include "io/image/export_color_profile_config.hpp"
 #include "json.hpp"
 #include "multi_grade_runtime_test_support.hpp"
+#include "support/render_snapshot_source.hpp"
 
 namespace alcedo::nm2_qualification {
 
@@ -170,27 +173,29 @@ inline auto HostMaxAbsError(ImageBuffer& lhs, ImageBuffer& rhs) -> float {
   return static_cast<float>(cv::norm(a, b, cv::NORM_INF));
 }
 
+/** @brief Interactive render of @p snapshot; keeps the renderer's binding caches. */
 template <class Renderer>
-auto RenderSession(Renderer& renderer, const std::shared_ptr<ImageBuffer>& image)
-    -> std::shared_ptr<ImageBuffer> {
-  return renderer.Render(image, DecodeRes::FULL, RenderRequest{}, nullptr,
+auto RenderSession(Renderer& renderer, const PipelineGraphSnapshot& snapshot,
+                   const std::shared_ptr<ImageBuffer>& image) -> std::shared_ptr<ImageBuffer> {
+  return renderer.Render(snapshot, image, DecodeRes::FULL, RenderRequest{}, nullptr,
                          FrameCompletionSubmission{}, true);
 }
 
+/** @brief Batch render of @p snapshot on a renderer constructed with ExecutorRole::Batch. */
 template <class Renderer>
-auto RenderOneShot(Renderer& renderer, const std::shared_ptr<ImageBuffer>& image,
-                   const std::optional<ExportColorProfileConfig>& output_color = {})
+auto RenderBatch(Renderer& batch_renderer, const PipelineGraphSnapshot& snapshot,
+                 const std::shared_ptr<ImageBuffer>&            image,
+                 const std::optional<ExportColorProfileConfig>& output_color = {})
     -> std::shared_ptr<ImageBuffer> {
-  return renderer.Render(image, DecodeRes::FULL, RenderRequest{}, nullptr,
-                         FrameCompletionSubmission{}, true, RenderCachePolicy::BypassSessionCache,
-                         output_color);
+  return batch_renderer.Render(snapshot, image, DecodeRes::FULL, RenderRequest{}, nullptr,
+                               FrameCompletionSubmission{}, true, output_color);
 }
 
 template <class Renderer>
 void PrintResourceSnapshot(std::string_view label, Renderer& renderer, std::uint64_t grade_execute,
                            double ms) {
   renderer.Device().WaitIdle();
-  const auto session = renderer.SessionResources();
+  const auto session = renderer.Resources();
   const auto& params = renderer.Device().Workspace().Parameters();
   const auto completed = renderer.Device().Workspace().Device().CompletedSubmission();
   std::cout << "NM2.5 " << label << " grade_execute=" << grade_execute
@@ -212,30 +217,39 @@ void PrintResourceSnapshot(std::string_view label, Renderer& renderer, std::uint
 }
 
 /**
- * @brief Export overlay must change pixels without writing DRT/Post on the live document.
+ * @brief Export overlay must change pixels without writing DRT/Post on the live document, and
+ *        the batch export render must leave the interactive renderer's caches untouched.
+ *
+ * @param renderer Interactive renderer (ExecutorRole::Interactive).
+ * @param batch_renderer Batch renderer (ExecutorRole::Batch) reading the same snapshots.
  */
 template <class Renderer>
-void ExportRecipeDoesNotChangeNextEditorRender(Renderer& renderer, PipelineDocument& document,
+void ExportRecipeDoesNotChangeNextEditorRender(Renderer& renderer, Renderer& batch_renderer,
+                                               const test::RenderSnapshotSource&   source,
                                                const std::shared_ptr<ImageBuffer>& image) {
-  const auto document_before = document.ToJson();
-  const auto editor          = RenderSession(renderer, image);
+  const auto& document        = source.Document();
+  const auto  document_before = document.ToJson();
+  const auto  snapshot        = source.Freeze();
+  const auto  editor          = RenderSession(renderer, *snapshot, image);
   ASSERT_TRUE(HostIsFinite(editor));
-  const auto session_before = renderer.SessionResources();
+  const auto session_before = renderer.Resources();
   EXPECT_GT(session_before.published_result_count, 0U);
   renderer.ResetStats();
 
-  const auto exported = RenderOneShot(renderer, image, DistinctExportColor());
+  const auto exported = RenderBatch(batch_renderer, *snapshot, image, DistinctExportColor());
   ASSERT_TRUE(HostIsFinite(exported));
   EXPECT_EQ(document.ToJson(), document_before);
   EXPECT_GT(HostMaxAbsError(*editor, *exported), kExportDiffMin);
-  EXPECT_EQ(renderer.OneShotPublishedResultCount(), 0U);
-  EXPECT_EQ(renderer.OneShotResources().texture_pool_used_bytes, 0U);
-  EXPECT_EQ(renderer.SessionResources().published_result_count,
-            session_before.published_result_count);
+  batch_renderer.Device().WaitIdle();
+  EXPECT_EQ(batch_renderer.Resources().published_result_count, 0U);
+  EXPECT_EQ(batch_renderer.Resources().texture_pool_used_bytes, 0U);
+  EXPECT_EQ(batch_renderer.Stats().prepared_source_hits, 0U);
+  EXPECT_EQ(renderer.Resources().published_result_count, session_before.published_result_count);
   EXPECT_EQ(renderer.Stats().prepared_source_hits, 0U);
+  EXPECT_EQ(renderer.Stats().prepared_source_misses, 0U);
 
   renderer.ResetStats();
-  const auto editor_again = RenderSession(renderer, image);
+  const auto editor_again = RenderSession(renderer, *source.Freeze(), image);
   ASSERT_TRUE(HostIsFinite(editor_again));
   EXPECT_EQ(document.ToJson(), document_before);
   EXPECT_LT(HostMaxAbsError(*editor, *editor_again), kEditorMatchTol);
@@ -245,13 +259,17 @@ void ExportRecipeDoesNotChangeNextEditorRender(Renderer& renderer, PipelineDocum
 
 /**
  * @brief JSON reopen keeps owners and edges; loaded document renders the same pixels.
+ *
+ * The reopened document is rendered by a new interactive renderer of the same backend in a new
+ * lineage, like a reload.
  */
-template <class Renderer, class MakeRenderer>
-void MultiGradeDocumentRoundTripPreservesOwnersAndEdges(
-    Renderer& renderer, PipelineDocument& document, const std::shared_ptr<ImageBuffer>& image,
-    MakeRenderer make_renderer) {
+template <class Renderer>
+void MultiGradeDocumentRoundTripPreservesOwnersAndEdges(Renderer&                         renderer,
+                                                        const test::RenderSnapshotSource& source,
+                                                        const std::shared_ptr<ImageBuffer>& image) {
+  const auto& document = source.Document();
   ExpectOwnersAndEdges(document);
-  const auto original = RenderSession(renderer, image);
+  const auto original = RenderSession(renderer, *source.Freeze(), image);
   ASSERT_TRUE(HostIsFinite(original));
 
   const auto json     = document.ToJson();
@@ -259,8 +277,9 @@ void MultiGradeDocumentRoundTripPreservesOwnersAndEdges(
   auto loaded = std::make_shared<PipelineDocument>(PipelineDocument::FromJson(json));
   ExpectOwnersAndEdges(*loaded);
 
-  auto loaded_renderer = make_renderer(loaded);
-  const auto restored  = RenderSession(*loaded_renderer, image);
+  const test::RenderSnapshotSource loaded_source(loaded, source.ElementId());
+  auto loaded_renderer = std::make_unique<Renderer>(ExecutorRole::Interactive, MakeUnpacker());
+  const auto restored  = RenderSession(*loaded_renderer, *loaded_source.Freeze(), image);
   ASSERT_TRUE(HostIsFinite(restored));
   EXPECT_LT(HostMaxAbsError(*original, *restored), kEditorMatchTol);
 
@@ -270,27 +289,32 @@ void MultiGradeDocumentRoundTripPreservesOwnersAndEdges(
 }
 
 /**
- * @brief Thumbnail/export ExactRelease must not drop editor session results.
+ * @brief A thumbnail/export batch render of the same snapshot must not drop editor results.
+ *
+ * @param renderer Interactive renderer (ExecutorRole::Interactive).
+ * @param batch_renderer Batch renderer (ExecutorRole::Batch) reading the same snapshots.
  */
 template <class Renderer>
-void BackgroundMultiGradeRenderPreservesEditorCache(Renderer& renderer,
+void BackgroundMultiGradeRenderPreservesEditorCache(Renderer& renderer, Renderer& batch_renderer,
+                                                    const test::RenderSnapshotSource&   source,
                                                     const std::shared_ptr<ImageBuffer>& image) {
-  ASSERT_TRUE(HostIsFinite(RenderSession(renderer, image)));
-  const auto resources_before = renderer.SessionResources();
+  const auto snapshot = source.Freeze();
+  ASSERT_TRUE(HostIsFinite(RenderSession(renderer, *snapshot, image)));
+  const auto resources_before = renderer.Resources();
   EXPECT_GT(resources_before.published_result_count, 0U);
   renderer.ResetStats();
 
-  ASSERT_TRUE(HostIsFinite(RenderOneShot(renderer, image)));
-  EXPECT_EQ(renderer.OneShotPublishedResultCount(), 0U);
-  EXPECT_EQ(renderer.OneShotResources().texture_pool_used_bytes, 0U);
-  EXPECT_EQ(renderer.OneShotResources().transient_slab_count, 0U);
-  EXPECT_EQ(renderer.SessionResources().published_result_count,
-            resources_before.published_result_count);
-  EXPECT_EQ(renderer.SessionResources().prepared_source_entry_count,
+  ASSERT_TRUE(HostIsFinite(RenderBatch(batch_renderer, *snapshot, image)));
+  batch_renderer.Device().WaitIdle();
+  EXPECT_EQ(batch_renderer.Resources().published_result_count, 0U);
+  EXPECT_EQ(batch_renderer.Resources().texture_pool_used_bytes, 0U);
+  EXPECT_EQ(batch_renderer.Resources().transient_slab_count, 0U);
+  EXPECT_EQ(renderer.Resources().published_result_count, resources_before.published_result_count);
+  EXPECT_EQ(renderer.Resources().prepared_source_entry_count,
             resources_before.prepared_source_entry_count);
 
   renderer.ResetStats();
-  ASSERT_TRUE(HostIsFinite(RenderSession(renderer, image)));
+  ASSERT_TRUE(HostIsFinite(RenderSession(renderer, *source.Freeze(), image)));
   EXPECT_EQ(renderer.Stats().pass.sensor_develop_skip, 1U);
   EXPECT_EQ(renderer.Stats().pass.drt_skip, 1U);
 }
@@ -298,16 +322,23 @@ void BackgroundMultiGradeRenderPreservesEditorCache(Renderer& renderer,
 /**
  * @brief Measure 1/2/3 Grades, wait for GPU completion, then reclaim after removal.
  *
- * Pool used-bytes are the logical retain set. Device QueryDeviceMemory is recorded
- * and must not be treated as equal to those bytes.
+ * Grades are added to and removed from the source document in place, so every render is a new
+ * snapshot of the same lineage and the interactive renderer keeps its binding. Pool used-bytes
+ * are the logical retain set. Device QueryDeviceMemory is recorded and must not be treated as
+ * equal to those bytes.
+ *
+ * @param renderer Interactive renderer (ExecutorRole::Interactive).
+ * @param batch_renderer Batch renderer (ExecutorRole::Batch) reading the same snapshots.
  */
 template <class Renderer>
-void MultiGradeResourceBytesAfterGpuCompletion(Renderer& renderer, PipelineDocument& document,
+void MultiGradeResourceBytesAfterGpuCompletion(Renderer& renderer, Renderer& batch_renderer,
+                                               const test::RenderSnapshotSource&   source,
                                                const std::shared_ptr<ImageBuffer>& image) {
+  auto&      document    = source.Document();
   const auto time_render = [&](std::string_view label) {
     renderer.ResetStats();
     const auto start = std::chrono::steady_clock::now();
-    ASSERT_TRUE(HostIsFinite(RenderSession(renderer, image)));
+    ASSERT_TRUE(HostIsFinite(RenderSession(renderer, *source.Freeze(), image)));
     const auto ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
                                                               start)
                         .count();
@@ -319,8 +350,8 @@ void MultiGradeResourceBytesAfterGpuCompletion(Renderer& renderer, PipelineDocum
   };
 
   time_render("grades=1");
-  const auto one_published = renderer.SessionResources().published_result_count;
-  const auto one_pool      = renderer.SessionResources().texture_pool_used_bytes;
+  const auto one_published = renderer.Resources().published_result_count;
+  const auto one_pool      = renderer.Resources().texture_pool_used_bytes;
   const auto one_slots     = renderer.Device().Workspace().Parameters().SlotCount();
   EXPECT_EQ(renderer.Stats().pass.primary_grade_execute, 1U);
   EXPECT_GT(one_published, 0U);
@@ -330,8 +361,8 @@ void MultiGradeResourceBytesAfterGpuCompletion(Renderer& renderer, PipelineDocum
   time_render("grades=2");
   EXPECT_EQ(renderer.Stats().pass.primary_grade_execute, 2U);
   EXPECT_EQ(renderer.Stats().pass.primary_grade_skip, 0U);
-  EXPECT_GE(renderer.SessionResources().published_result_count, one_published);
-  EXPECT_GE(renderer.SessionResources().texture_pool_used_bytes, one_pool);
+  EXPECT_GE(renderer.Resources().published_result_count, one_published);
+  EXPECT_GE(renderer.Resources().texture_pool_used_bytes, one_pool);
 
   multi_grade_test::AddCleanGradesBeforeDrt(document, {"grade.c"});
   multi_grade_test::GradeAdjustment<ContrastModel>(document, NodeId{"grade.b"},
@@ -347,22 +378,22 @@ void MultiGradeResourceBytesAfterGpuCompletion(Renderer& renderer, PipelineDocum
   multi_grade_test::GradeAdjustment<ContrastModel>(document, NodeId{"grade.b"},
                                                   type_ids::Contrast())
       .SetValue(80.0f);
-  ASSERT_TRUE(HostIsFinite(RenderSession(renderer, image)));
+  ASSERT_TRUE(HostIsFinite(RenderSession(renderer, *source.Freeze(), image)));
   EXPECT_EQ(renderer.Stats().pass.primary_grade_skip, 0U);
   EXPECT_EQ(renderer.Stats().pass.primary_grade_execute, 3U);
 
   renderer.ResetStats();
-  ASSERT_TRUE(HostIsFinite(RenderSession(renderer, image)));
+  ASSERT_TRUE(HostIsFinite(RenderSession(renderer, *source.Freeze(), image)));
   EXPECT_EQ(renderer.Stats().pass.primary_grade_execute, 3U);
   EXPECT_EQ(renderer.Stats().pass.drt_skip, 1U);
 
-  const auto session_before_oneshot = renderer.SessionResources();
-  ASSERT_TRUE(HostIsFinite(RenderOneShot(renderer, image)));
-  renderer.Device().WaitIdle();
-  EXPECT_EQ(renderer.OneShotResources().texture_pool_used_bytes, 0U);
-  EXPECT_EQ(renderer.OneShotResources().published_result_count, 0U);
-  EXPECT_EQ(renderer.SessionResources().published_result_count,
-            session_before_oneshot.published_result_count);
+  const auto session_before_batch = renderer.Resources();
+  ASSERT_TRUE(HostIsFinite(RenderBatch(batch_renderer, *source.Freeze(), image)));
+  batch_renderer.Device().WaitIdle();
+  EXPECT_EQ(batch_renderer.Resources().texture_pool_used_bytes, 0U);
+  EXPECT_EQ(batch_renderer.Resources().published_result_count, 0U);
+  EXPECT_EQ(renderer.Resources().published_result_count,
+            session_before_batch.published_result_count);
 
   ASSERT_TRUE(RemoveColorGradeAndBridge(document, NodeId{"grade.c"}).empty());
   ASSERT_TRUE(RemoveColorGradeAndBridge(document, NodeId{"grade.b"}).empty());
@@ -371,13 +402,14 @@ void MultiGradeResourceBytesAfterGpuCompletion(Renderer& renderer, PipelineDocum
   EXPECT_EQ(renderer.Stats().pass.primary_grade_execute, 1U);
   EXPECT_LT(renderer.Device().Workspace().Parameters().SlotCount(), three_slots);
 
-  renderer.ReleaseSessionCaches();
+  renderer.ReleaseBinding();
   renderer.Device().WaitIdle();
-  const auto released = renderer.SessionResources();
+  const auto released = renderer.Resources();
   EXPECT_EQ(released.published_result_count, 0U);
   EXPECT_EQ(released.texture_pool_used_bytes, 0U);
   EXPECT_EQ(released.texture_pool_entry_count, 0U);
   EXPECT_TRUE(released.session_value_ids.empty());
+  EXPECT_FALSE(renderer.Binding().has_value());
 }
 
 }  // namespace alcedo::nm2_qualification

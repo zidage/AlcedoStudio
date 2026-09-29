@@ -158,7 +158,7 @@ class OpenClContext {
   /**
    * @brief Bind a render-local queue as Queue() for the calling thread.
    *
-   * Render devices running parallel one-shot work bind their dedicated queue
+   * Render devices running parallel batch work bind their dedicated queue
    * for the encode so every helper resolving the submission queue through
    * this context lands on the render-local queue. The returned scope restores
    * the previous binding; keep it alive for the whole encode.

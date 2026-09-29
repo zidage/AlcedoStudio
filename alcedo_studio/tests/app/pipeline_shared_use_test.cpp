@@ -30,6 +30,7 @@
 #include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/runtime/drt_display.hpp"
+#include "edit/runtime/executor_role.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/edit_commit.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
@@ -99,99 +100,57 @@ auto GetThumbnailDetailedBlocking(ThumbnailService& service, sl_element_id_t id,
   return fut.get();
 }
 
-auto SessionPreparedSourceCount(PipelineExecutor& executor) -> std::size_t {
+/// Resources of the interactive (editor) renderer of @p executor; empty when none exists.
+auto InteractiveWorkspace(PipelineExecutor& executor) -> RenderSessionResources {
 #ifdef HAVE_CUDA
   if (auto* renderer = executor.DebugCudaRenderer()) {
-    return renderer->SessionResources().prepared_source_entry_count;
+    return renderer->Resources();
   }
 #endif
 #ifdef HAVE_METAL
   if (auto* renderer = executor.DebugMetalRenderer()) {
-    return renderer->SessionResources().prepared_source_entry_count;
+    return renderer->Resources();
   }
 #endif
 #ifdef HAVE_OPENCL
   if (auto* renderer = executor.DebugOpenClRenderer()) {
-    return renderer->SessionResources().prepared_source_entry_count;
-  }
-#endif
-  return 0;
-}
-
-auto OneShotWorkspace(PipelineExecutor& executor) -> RenderSessionResources {
-#ifdef HAVE_CUDA
-  if (auto* renderer = executor.DebugCudaRenderer()) {
-    return renderer->OneShotResources();
-  }
-#endif
-#ifdef HAVE_METAL
-  if (auto* renderer = executor.DebugMetalRenderer()) {
-    return renderer->OneShotResources();
-  }
-#endif
-#ifdef HAVE_OPENCL
-  if (auto* renderer = executor.DebugOpenClRenderer()) {
-    return renderer->OneShotResources();
+    return renderer->Resources();
   }
 #endif
   return {};
 }
 
-auto SessionWorkspace(PipelineExecutor& executor) -> RenderSessionResources {
+/// Resources of the batch (thumbnail, analysis, export) renderer of @p executor; empty when none
+/// exists.
+auto BatchWorkspace(PipelineExecutor& executor) -> RenderSessionResources {
 #ifdef HAVE_CUDA
-  if (auto* renderer = executor.DebugCudaRenderer()) {
-    return renderer->SessionResources();
+  if (auto* renderer = executor.DebugCudaBatchRenderer()) {
+    return renderer->Resources();
   }
 #endif
 #ifdef HAVE_METAL
-  if (auto* renderer = executor.DebugMetalRenderer()) {
-    return renderer->SessionResources();
+  if (auto* renderer = executor.DebugMetalBatchRenderer()) {
+    return renderer->Resources();
   }
 #endif
 #ifdef HAVE_OPENCL
-  if (auto* renderer = executor.DebugOpenClRenderer()) {
-    return renderer->SessionResources();
+  if (auto* renderer = executor.DebugOpenClBatchRenderer()) {
+    return renderer->Resources();
   }
 #endif
   return {};
 }
 
-auto SessionTexturePoolEntries(PipelineExecutor& executor) -> std::size_t {
-#ifdef HAVE_CUDA
-  if (auto* renderer = executor.DebugCudaRenderer()) {
-    return renderer->SessionResources().texture_pool_entry_count;
-  }
-#endif
-#ifdef HAVE_METAL
-  if (auto* renderer = executor.DebugMetalRenderer()) {
-    return renderer->SessionResources().texture_pool_entry_count;
-  }
-#endif
-#ifdef HAVE_OPENCL
-  if (auto* renderer = executor.DebugOpenClRenderer()) {
-    return renderer->SessionResources().texture_pool_entry_count;
-  }
-#endif
-  return 0;
+auto InteractivePreparedSourceCount(PipelineExecutor& executor) -> std::size_t {
+  return InteractiveWorkspace(executor).prepared_source_entry_count;
 }
 
-auto OneShotPublishedResultCount(PipelineExecutor& executor) -> std::size_t {
-#ifdef HAVE_CUDA
-  if (auto* renderer = executor.DebugCudaRenderer()) {
-    return renderer->OneShotPublishedResultCount();
-  }
-#endif
-#ifdef HAVE_METAL
-  if (auto* renderer = executor.DebugMetalRenderer()) {
-    return renderer->OneShotPublishedResultCount();
-  }
-#endif
-#ifdef HAVE_OPENCL
-  if (auto* renderer = executor.DebugOpenClRenderer()) {
-    return renderer->OneShotPublishedResultCount();
-  }
-#endif
-  return 0;
+auto InteractiveTexturePoolEntries(PipelineExecutor& executor) -> std::size_t {
+  return InteractiveWorkspace(executor).texture_pool_entry_count;
+}
+
+auto BatchPublishedResultCount(PipelineExecutor& executor) -> std::size_t {
+  return BatchWorkspace(executor).published_result_count;
 }
 
 }  // namespace
@@ -346,6 +305,7 @@ TEST_F(PipelineSharedUseTest, CanceledAndFailedTaskReleasesPipelineUse) {
     auto                done_fut = done.get_future();
     PipelineTask        task;
     task.pipeline_executor_                 = extra->pipeline_;
+    task.snapshot_under_render_lock_        = MakeLiveSnapshotSource(extra);
     task.input_                              = std::make_shared<ImageBuffer>(std::vector<uint8_t>{1, 2, 3});
     task.options_.render_desc_.render_type_ = RenderType::THUMBNAIL;
     task.options_.is_blocking_              = false;
@@ -408,9 +368,9 @@ TEST_F(PipelineSharedUseTest, BackgroundTasksReuseLivePipelineAndDocument) {
   ASSERT_TRUE(pipelines->WaitUntilPinCount(live, 1, 10s));
   EXPECT_EQ(live->pipeline_.get(), executor);
   EXPECT_EQ(live->document_.get(), document);
-  EXPECT_EQ(SessionPreparedSourceCount(*live->pipeline_), 0u);
-  EXPECT_EQ(SessionTexturePoolEntries(*live->pipeline_), 0u);
-  EXPECT_EQ(OneShotPublishedResultCount(*live->pipeline_), 0u);
+  EXPECT_EQ(InteractivePreparedSourceCount(*live->pipeline_), 0u);
+  EXPECT_EQ(InteractiveTexturePoolEntries(*live->pipeline_), 0u);
+  EXPECT_EQ(BatchPublishedResultCount(*live->pipeline_), 0u);
 
   std::promise<ThumbnailRequestResult> analysis_done;
   auto                                 analysis_fut = analysis_done.get_future();
@@ -457,6 +417,7 @@ TEST_F(PipelineSharedUseTest, TaskRenderOptionsDoNotLeakIntoLaterEditorRequests)
     auto                done_fut = done.get_future();
     PipelineTask        task;
     task.pipeline_executor_                  = extra->pipeline_;
+    task.snapshot_under_render_lock_         = MakeLiveSnapshotSource(extra);
     task.input_                              = std::make_shared<ImageBuffer>(std::vector<uint8_t>{0});
     task.options_.render_desc_.render_type_ = RenderType::THUMBNAIL;
     task.options_.is_blocking_              = false;
@@ -473,7 +434,7 @@ TEST_F(PipelineSharedUseTest, TaskRenderOptionsDoNotLeakIntoLaterEditorRequests)
   editor.pipeline_executor_                 = live->pipeline_;
   editor.options_.render_desc_.render_type_ = RenderType::FAST_PREVIEW;
   const auto editor_request                 = editor.MakeApplyRequest();
-  EXPECT_EQ(editor_request.cache_policy, RenderCachePolicy::UseSessionCache);
+  EXPECT_EQ(editor_request.role, ExecutorRole::Interactive);
   EXPECT_FALSE(editor_request.require_host_output);
   EXPECT_EQ(editor_request.decode_res, DecodeRes::FULL);
 
@@ -511,12 +472,13 @@ TEST_F(PipelineSharedUseTest, BackgroundReleaseDoesNotSaveOrClearEditorState) {
     request.geometry.resolution.max_edge = 4096;
     request.geometry.resolution.quality  = RenderQuality::Export;
     request.decode_res                   = DecodeRes::EIGHTH;
-    request.cache_policy                 = RenderCachePolicy::UseSessionCache;
+    request.role                         = ExecutorRole::Interactive;
     request.require_host_output          = true;
-    ASSERT_NO_THROW(live->pipeline_->Apply(input, request));
+    const auto snapshot                  = live->FreezeLiveSnapshot();
+    ASSERT_NO_THROW(live->pipeline_->Apply(*snapshot, input, request));
   }
-  const auto prepared_before = SessionPreparedSourceCount(*live->pipeline_);
-  const auto session_textures_before = SessionTexturePoolEntries(*live->pipeline_);
+  const auto prepared_before = InteractivePreparedSourceCount(*live->pipeline_);
+  const auto session_textures_before = InteractiveTexturePoolEntries(*live->pipeline_);
   EXPECT_GT(prepared_before, 0u);
 
   ThumbnailService thumbnails(project.GetSleeveService(), project.GetImagePoolService(), pipelines);
@@ -530,9 +492,9 @@ TEST_F(PipelineSharedUseTest, BackgroundReleaseDoesNotSaveOrClearEditorState) {
   const auto stored_after =
       project.GetStorage()->GetElementStore().GetPipelineJsonByElementId(ids.first);
   EXPECT_EQ(stored_after, stored_before);
-  EXPECT_EQ(SessionPreparedSourceCount(*live->pipeline_), prepared_before);
-  EXPECT_EQ(SessionTexturePoolEntries(*live->pipeline_), session_textures_before);
-  EXPECT_EQ(OneShotPublishedResultCount(*live->pipeline_), 0u);
+  EXPECT_EQ(InteractivePreparedSourceCount(*live->pipeline_), prepared_before);
+  EXPECT_EQ(InteractiveTexturePoolEntries(*live->pipeline_), session_textures_before);
+  EXPECT_EQ(BatchPublishedResultCount(*live->pipeline_), 0u);
 
   thumbnails.ReleaseThumbnail(ThumbnailCacheKey{ids.first, ThumbnailResolution::k256});
   pipelines->SavePipeline(live);
@@ -805,6 +767,7 @@ TEST_F(PipelineSharedUseTest, BackgroundRendersKeepEditorResultCacheReusable) {
   auto              run_preview = [&]() {
     PipelineTask task;
     task.pipeline_executor_                 = live->pipeline_;
+    task.snapshot_under_render_lock_        = MakeLiveSnapshotSource(live);
     task.input_desc_                        = std::make_shared<Image>(LinearDngPath(), ImageType::DEFAULT);
     task.options_.render_desc_.render_type_ = RenderType::FAST_PREVIEW;
     task.options_.is_blocking_              = true;
@@ -818,7 +781,7 @@ TEST_F(PipelineSharedUseTest, BackgroundRendersKeepEditorResultCacheReusable) {
     EXPECT_NE(blocking.get(), nullptr);
   };
   run_preview();
-  const auto session_after_editor = SessionWorkspace(*live->pipeline_);
+  const auto session_after_editor = InteractiveWorkspace(*live->pipeline_);
   EXPECT_GT(session_after_editor.prepared_source_entry_count +
                 session_after_editor.published_result_count,
             0u);
@@ -829,7 +792,7 @@ TEST_F(PipelineSharedUseTest, BackgroundRendersKeepEditorResultCacheReusable) {
   EXPECT_EQ(thumb.status, ThumbnailRequestStatus::kReady) << thumb.message;
   ASSERT_TRUE(pipelines->WaitUntilPinCount(live, 1, 10s));
   run_preview();
-  const auto session_after_reuse = SessionWorkspace(*live->pipeline_);
+  const auto session_after_reuse = InteractiveWorkspace(*live->pipeline_);
   EXPECT_GE(session_after_reuse.prepared_source_entry_count,
             session_after_editor.prepared_source_entry_count);
   thumbnails.ReleaseThumbnail(ThumbnailCacheKey{ids.first, ThumbnailResolution::k256});
@@ -847,13 +810,14 @@ TEST_F(PipelineSharedUseTest, BackgroundTaskFailureReleasesTemporaryGpuResources
   auto live = pipelines->LoadPipeline(ids.first);
   ASSERT_NE(live, nullptr);
   BindImportedRawColor(live, *project.GetImagePoolService(), ids.second);
-  const auto session_before = SessionWorkspace(*live->pipeline_);
+  const auto session_before = InteractiveWorkspace(*live->pipeline_);
   PipelineScheduler scheduler(1);
   std::promise<void> done;
   auto               done_fut = done.get_future();
   auto extra                  = pipelines->LoadPipeline(ids.first);
   PipelineTask task;
   task.pipeline_executor_                 = extra->pipeline_;
+  task.snapshot_under_render_lock_        = MakeLiveSnapshotSource(extra);
   task.input_                             = std::make_shared<ImageBuffer>(std::vector<uint8_t>{0});
   task.options_.render_desc_.render_type_ = RenderType::THUMBNAIL;
   task.on_complete_                       = [pipelines, extra, &done](bool, std::string) {
@@ -863,12 +827,12 @@ TEST_F(PipelineSharedUseTest, BackgroundTaskFailureReleasesTemporaryGpuResources
   scheduler.ScheduleTask(std::move(task));
   ASSERT_EQ(done_fut.wait_for(30s), std::future_status::ready);
   ASSERT_TRUE(pipelines->WaitUntilPinCount(live, 1, 5s));
-  const auto one_shot = OneShotWorkspace(*live->pipeline_);
-  EXPECT_EQ(one_shot.texture_pool_used_bytes, 0u);
-  EXPECT_EQ(one_shot.transient_used_bytes, 0u);
-  EXPECT_EQ(one_shot.transient_slab_count, 0u);
-  EXPECT_EQ(one_shot.published_result_count, 0u);
-  const auto session_after = SessionWorkspace(*live->pipeline_);
+  const auto batch = BatchWorkspace(*live->pipeline_);
+  EXPECT_EQ(batch.texture_pool_used_bytes, 0u);
+  EXPECT_EQ(batch.transient_used_bytes, 0u);
+  EXPECT_EQ(batch.transient_slab_count, 0u);
+  EXPECT_EQ(batch.published_result_count, 0u);
+  const auto session_after = InteractiveWorkspace(*live->pipeline_);
   EXPECT_EQ(session_after.texture_pool_used_bytes, session_before.texture_pool_used_bytes);
   pipelines->SavePipeline(live);
 }
@@ -920,16 +884,16 @@ TEST_F(PipelineSharedUseTest, ParallelBackgroundRendersPreservePixelsAndReleaseW
   std::promise<std::shared_ptr<std::vector<ExportResult>>> export_done;
   auto export_fut = export_done.get_future();
 
-  std::atomic<std::size_t> peak_one_shot_bytes{0};
+  std::atomic<std::size_t> peak_batch_bytes{0};
   std::thread observer([&] {
     while (thumb_fut.wait_for(0s) != std::future_status::ready ||
            export_fut.wait_for(0s) != std::future_status::ready) {
-      const auto shot_a = OneShotWorkspace(*live_a->pipeline_);
-      const auto shot_b = OneShotWorkspace(*live_b->pipeline_);
+      const auto shot_a = BatchWorkspace(*live_a->pipeline_);
+      const auto shot_b = BatchWorkspace(*live_b->pipeline_);
       const auto used   = shot_a.texture_pool_used_bytes + shot_a.transient_capacity_bytes +
                         shot_b.texture_pool_used_bytes + shot_b.transient_capacity_bytes;
-      auto prev = peak_one_shot_bytes.load();
-      while (used > prev && !peak_one_shot_bytes.compare_exchange_weak(prev, used)) {
+      auto prev = peak_batch_bytes.load();
+      while (used > prev && !peak_batch_bytes.compare_exchange_weak(prev, used)) {
       }
       std::this_thread::sleep_for(1ms);
     }
@@ -951,16 +915,16 @@ TEST_F(PipelineSharedUseTest, ParallelBackgroundRendersPreservePixelsAndReleaseW
   EXPECT_TRUE((*export_results)[0].success_) << (*export_results)[0].message_;
   ASSERT_TRUE(pipelines->WaitUntilPinCount(live_a, 1, 10s));
   ASSERT_TRUE(pipelines->WaitUntilPinCount(live_b, 1, 10s));
-  const auto one_shot_a = OneShotWorkspace(*live_a->pipeline_);
-  const auto one_shot_b = OneShotWorkspace(*live_b->pipeline_);
-  EXPECT_EQ(one_shot_a.texture_pool_used_bytes, 0u);
-  EXPECT_EQ(one_shot_a.transient_slab_count, 0u);
-  EXPECT_EQ(one_shot_a.published_result_count, 0u);
-  EXPECT_EQ(one_shot_b.texture_pool_used_bytes, 0u);
-  EXPECT_EQ(one_shot_b.transient_slab_count, 0u);
-  EXPECT_EQ(one_shot_b.published_result_count, 0u);
-  std::cout << "NM1.4R parallel one-shot peak bytes (allocator, two images): "
-            << peak_one_shot_bytes.load() << '\n';
+  const auto batch_a = BatchWorkspace(*live_a->pipeline_);
+  const auto batch_b = BatchWorkspace(*live_b->pipeline_);
+  EXPECT_EQ(batch_a.texture_pool_used_bytes, 0u);
+  EXPECT_EQ(batch_a.transient_slab_count, 0u);
+  EXPECT_EQ(batch_a.published_result_count, 0u);
+  EXPECT_EQ(batch_b.texture_pool_used_bytes, 0u);
+  EXPECT_EQ(batch_b.transient_slab_count, 0u);
+  EXPECT_EQ(batch_b.published_result_count, 0u);
+  std::cout << "NM1.4R parallel batch peak bytes (allocator, two images): "
+            << peak_batch_bytes.load() << '\n';
   thumbnails.ReleaseThumbnail(ThumbnailCacheKey{first.first, ThumbnailResolution::k256});
   pipelines->SavePipeline(live_a);
   pipelines->SavePipeline(live_b);
@@ -1130,8 +1094,13 @@ TEST_F(PipelineExecutorWithoutOperatorRegistryTest, ExecutorConstructsWithoutOpe
   auto live = pipelines->LoadPipeline(ids.first);
   ASSERT_NE(live, nullptr);
 
-  auto executor = std::make_shared<PipelineExecutor>();
-  executor->SetPipelineDocument(live->document_);
+  auto executor = std::make_shared<PipelineExecutor>(ExecutorRole::Batch);
+  std::shared_ptr<const PipelineGraphSnapshot> snapshot;
+  {
+    std::lock_guard<std::mutex> live_lock(live->pipeline_->GetRenderLock());
+    snapshot = live->FreezeLiveSnapshot();
+  }
+  ASSERT_NE(snapshot, nullptr);
 
   auto img = project.GetImagePoolService()->Read<std::shared_ptr<Image>>(
       ids.second, [](const std::shared_ptr<Image>& image) { return image; });
@@ -1140,13 +1109,13 @@ TEST_F(PipelineExecutorWithoutOperatorRegistryTest, ExecutorConstructsWithoutOpe
 
   PipelineApplyRequest request;
   request.decode_res                   = DecodeRes::EIGHTH;
-  request.cache_policy                 = RenderCachePolicy::BypassSessionCache;
+  request.role                         = ExecutorRole::Batch;
   request.require_host_output          = true;
   request.geometry.resolution.max_edge = 256;
   std::shared_ptr<ImageBuffer> output;
   {
     std::lock_guard<std::mutex> render_lock(executor->GetRenderLock());
-    ASSERT_NO_THROW(output = executor->Apply(input, request));
+    ASSERT_NO_THROW(output = executor->Apply(*snapshot, input, request));
   }
   ASSERT_NE(output, nullptr);
   const cv::Mat pixels = HostPixels(*output);

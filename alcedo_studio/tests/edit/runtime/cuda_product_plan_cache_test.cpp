@@ -24,6 +24,7 @@
 #include "edit/runtime/local_tone_cache_ids.hpp"
 #include "image/image_buffer.hpp"
 #include "multi_grade_runtime_test_support.hpp"
+#include "support/render_snapshot_source.hpp"
 
 namespace alcedo {
 namespace {
@@ -49,10 +50,11 @@ auto MakeUnpacker() -> PreparedSourceCache::UnpackFn {
   };
 }
 
-auto RenderHost(CudaProductRenderer& renderer, const std::shared_ptr<ImageBuffer>& input,
-                DecodeRes decode_res, const RenderRequest& request)
-    -> std::shared_ptr<ImageBuffer> {
-  return renderer.Render(input, decode_res, request, nullptr, FrameCompletionSubmission{}, true);
+auto RenderHost(CudaProductRenderer& renderer, const test::RenderSnapshotSource& source,
+                const std::shared_ptr<ImageBuffer>& input, DecodeRes decode_res,
+                const RenderRequest& request) -> std::shared_ptr<ImageBuffer> {
+  return renderer.Render(*source.Freeze(), input, decode_res, request, nullptr,
+                         FrameCompletionSubmission{}, true);
 }
 
 TEST(GpuDagCudaDrtProduct, ProductRendererCompilesStaticPlanOnlyForTopologyOrSourceLayoutChange) {
@@ -60,11 +62,12 @@ TEST(GpuDagCudaDrtProduct, ProductRendererCompilesStaticPlanOnlyForTopologyOrSou
 
   auto document = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
   gpu_dag_test::EnsureTestCameraProfile(*document);
-  CudaProductRenderer renderer(document, MakeUnpacker());
+  const auto          source = test::RenderSnapshotSource(document);
+  CudaProductRenderer renderer(ExecutorRole::Interactive, MakeUnpacker());
   const auto          image = MakeEncodedImage(11);
   RenderRequest       request;
 
-  ASSERT_NE(RenderHost(renderer, image, DecodeRes::FULL, request), nullptr);
+  ASSERT_NE(RenderHost(renderer, source, image, DecodeRes::FULL, request), nullptr);
   EXPECT_EQ(renderer.Stats().libraw_open_unpack_count, 1U);
   EXPECT_EQ(renderer.Stats().plan_compile_count, 1U);
 
@@ -72,29 +75,29 @@ TEST(GpuDagCudaDrtProduct, ProductRendererCompilesStaticPlanOnlyForTopologyOrSou
       document->PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
   ASSERT_NE(exposure, nullptr);
   exposure->SetValue(0.8f);
-  ASSERT_NE(RenderHost(renderer, image, DecodeRes::FULL, request), nullptr);
+  ASSERT_NE(RenderHost(renderer, source, image, DecodeRes::FULL, request), nullptr);
 
   auto develop       = document->Develop()->Params().Params();
   develop.wb_mode    = "custom";
   develop.custom_cct = 4800.0f;
   document->Develop()->Params().ReplaceParams(develop);
-  ASSERT_NE(RenderHost(renderer, image, DecodeRes::FULL, request), nullptr);
+  ASSERT_NE(RenderHost(renderer, source, image, DecodeRes::FULL, request), nullptr);
 
   auto drt           = document->Drt()->Params().Params();
   drt.peak_luminance = 180.0f;
   document->Drt()->Params().ReplaceParams(drt);
-  ASSERT_NE(RenderHost(renderer, image, DecodeRes::FULL, request), nullptr);
+  ASSERT_NE(RenderHost(renderer, source, image, DecodeRes::FULL, request), nullptr);
 
   request.resolution.quality = RenderQuality::Export;
-  ASSERT_NE(RenderHost(renderer, image, DecodeRes::FULL, request), nullptr);
+  ASSERT_NE(RenderHost(renderer, source, image, DecodeRes::FULL, request), nullptr);
 
   document->Geometry().SetCropRect({0.05f, 0.05f, 0.9f, 0.9f});
 
   auto&      encoded       = image->GetBuffer();
   const auto encoded_bytes = std::span<const std::byte>{
       reinterpret_cast<const std::byte*>(encoded.data()), encoded.size()};
-  const auto    source = renderer.SourceCache().AcquireEncoded(encoded_bytes, DecodeRes::FULL);
-  auto          plan   = renderer.PlanCache().GetOrCompile(*document, source.Get().CompileSource());
+  const auto    prepared = renderer.SourceCache().AcquireEncoded(encoded_bytes, DecodeRes::FULL);
+  auto          plan = renderer.PlanCache().GetOrCompile(*document, prepared.Get().CompileSource());
   const auto    key    = plan.static_key;
   RenderRequest viewport                   = request;
   viewport.view.visible_rect_in_edit_space = {0.1f, 0.1f, 0.8f, 0.8f};
@@ -112,20 +115,20 @@ TEST(GpuDagCudaDrtProduct, ProductRendererCompilesStaticPlanOnlyForTopologyOrSou
 
   auto* grade = document->PrimaryGrade();
   grade->MoveAdjustment(grade->AdjustmentIdAt(0), grade->AdjustmentCount() - 1);
-  ASSERT_NE(RenderHost(renderer, image, DecodeRes::FULL, request), nullptr);
+  ASSERT_NE(RenderHost(renderer, source, image, DecodeRes::FULL, request), nullptr);
   // Stored adjustment order is non-semantic under the fixed compile order.
   EXPECT_EQ(renderer.Stats().plan_compile_count, 1U);
   EXPECT_EQ(renderer.Stats().libraw_open_unpack_count, 1U);
 
   grade_mask_test::AddRadialMask(*document, MaskId{"mask.radial"});
-  ASSERT_NE(RenderHost(renderer, image, DecodeRes::FULL, request), nullptr);
+  ASSERT_NE(RenderHost(renderer, source, image, DecodeRes::FULL, request), nullptr);
   EXPECT_EQ(renderer.Stats().plan_compile_count, 2U);
 
-  ASSERT_NE(RenderHost(renderer, image, DecodeRes::HALF, request), nullptr);
+  ASSERT_NE(RenderHost(renderer, source, image, DecodeRes::HALF, request), nullptr);
   EXPECT_EQ(renderer.Stats().libraw_open_unpack_count, 2U);
   EXPECT_EQ(renderer.Stats().plan_compile_count, 3U);
 
-  ASSERT_NE(RenderHost(renderer, image, DecodeRes::FULL, request), nullptr);
+  ASSERT_NE(RenderHost(renderer, source, image, DecodeRes::FULL, request), nullptr);
   EXPECT_EQ(renderer.Stats().libraw_open_unpack_count, 2U);
   EXPECT_EQ(renderer.Stats().plan_compile_count, 3U);
 }
@@ -135,14 +138,15 @@ TEST(GpuDagCudaDrtProduct, ProductRendererReusesPreparedSourceAfterSwitchingEnco
 
   auto document = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
   gpu_dag_test::EnsureTestCameraProfile(*document);
-  CudaProductRenderer renderer(document, MakeUnpacker());
+  const auto          source = test::RenderSnapshotSource(document);
+  CudaProductRenderer renderer(ExecutorRole::Interactive, MakeUnpacker());
   const auto          image_a = MakeEncodedImage(21);
   const auto          image_b = MakeEncodedImage(22);
   RenderRequest       request;
 
-  ASSERT_NE(RenderHost(renderer, image_a, DecodeRes::FULL, request), nullptr);
-  ASSERT_NE(RenderHost(renderer, image_b, DecodeRes::FULL, request), nullptr);
-  ASSERT_NE(RenderHost(renderer, image_a, DecodeRes::FULL, request), nullptr);
+  ASSERT_NE(RenderHost(renderer, source, image_a, DecodeRes::FULL, request), nullptr);
+  ASSERT_NE(RenderHost(renderer, source, image_b, DecodeRes::FULL, request), nullptr);
+  ASSERT_NE(RenderHost(renderer, source, image_a, DecodeRes::FULL, request), nullptr);
 
   EXPECT_EQ(renderer.Stats().libraw_open_unpack_count, 2U);
   EXPECT_EQ(renderer.Stats().prepared_source_misses, 2U);
@@ -156,13 +160,14 @@ TEST(GpuDagCudaDrtProduct,
 
   auto document = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
   gpu_dag_test::EnsureTestCameraProfile(*document);
-  CudaProductRenderer renderer(document, MakeUnpacker());
+  const auto          source = test::RenderSnapshotSource(document);
+  CudaProductRenderer renderer(ExecutorRole::Interactive, MakeUnpacker());
   const auto          image = MakeEncodedImage(31);
   RenderRequest       request;
   request.view.viewport_extent = {48, 32};
   request.resolution.max_edge  = 48;
 
-  const auto output            = RenderHost(renderer, image, DecodeRes::FULL, request);
+  const auto output            = RenderHost(renderer, source, image, DecodeRes::FULL, request);
   ASSERT_NE(output, nullptr);
   const auto& cpu = output->GetCPUData();
   EXPECT_EQ(cpu.cols, 48);
@@ -170,7 +175,7 @@ TEST(GpuDagCudaDrtProduct,
 
   request.view.visible_rect_in_edit_space = {0.1f, 0.1f, 0.8f, 0.8f};
   request.view.viewport_extent            = {40, 24};
-  const auto cropped                      = RenderHost(renderer, image, DecodeRes::FULL, request);
+  const auto cropped = RenderHost(renderer, source, image, DecodeRes::FULL, request);
   ASSERT_NE(cropped, nullptr);
   // Full-frame may upsample (48x32 from 24x24 develop). A visible subregion must
   // not manufacture a larger patch: 0.8 * 24 native ROI rounds to 19x19.
@@ -189,9 +194,10 @@ TEST(GpuDagCudaDrtProduct, ProductRendererRendersCat02TintWithoutTintAdjustment)
   cat02->SetTint(18.0f);
   EXPECT_FLOAT_EQ(cat02->Tint(), 18.0f);
   gpu_dag_test::EnsureTestCameraProfile(*document);
-  CudaProductRenderer renderer(document, MakeUnpacker());
+  const auto          source = test::RenderSnapshotSource(document);
+  CudaProductRenderer renderer(ExecutorRole::Interactive, MakeUnpacker());
   const auto          image = MakeEncodedImage(41);
-  ASSERT_NE(RenderHost(renderer, image, DecodeRes::FULL, RenderRequest{}), nullptr);
+  ASSERT_NE(RenderHost(renderer, source, image, DecodeRes::FULL, RenderRequest{}), nullptr);
 }
 
 TEST(GpuDagCudaDrtProduct, ShadowControlExecutesLocalLaplacianWorkspacePath) {
@@ -204,8 +210,10 @@ TEST(GpuDagCudaDrtProduct, ShadowControlExecutesLocalLaplacianWorkspacePath) {
   shadows->SetValue(60.0f);
   gpu_dag_test::EnsureTestCameraProfile(*document);
 
-  CudaProductRenderer renderer(document, MakeUnpacker());
-  ASSERT_NE(RenderHost(renderer, MakeEncodedImage(42), DecodeRes::FULL, RenderRequest{}), nullptr);
+  const auto          source = test::RenderSnapshotSource(document);
+  CudaProductRenderer renderer(ExecutorRole::Interactive, MakeUnpacker());
+  ASSERT_NE(RenderHost(renderer, source, MakeEncodedImage(42), DecodeRes::FULL, RenderRequest{}),
+            nullptr);
   const auto* reference = renderer.Device().Workspace().Images().Find(
       LocalToneSourceId(document->PrimaryGrade()->Id()));
   ASSERT_NE(reference, nullptr);
@@ -229,12 +237,13 @@ TEST(GpuDagCudaDrtProduct,
   if (!HasCudaDevice()) GTEST_SKIP() << "No CUDA device available.";
   auto document = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
   gpu_dag_test::EnsureTestCameraProfile(*document);
-  CudaProductRenderer renderer(document, MakeUnpacker());
+  const auto          source = test::RenderSnapshotSource(document);
+  CudaProductRenderer renderer(ExecutorRole::Interactive, MakeUnpacker());
   const auto image = MakeEncodedImage(51);
   RenderRequest request;
   auto& exposure = multi_grade_test::GradeAdjustment<ExposureModel>(
       *document, document->PrimaryGrade()->Id(), type_ids::Exposure());
-  ASSERT_NE(RenderHost(renderer, image, DecodeRes::FULL, request), nullptr);
+  ASSERT_NE(RenderHost(renderer, source, image, DecodeRes::FULL, request), nullptr);
   // Two complete full-size frame working sets allow current results and warm scratch.
   // The bound is fixed before edits; neither iteration count nor visited sizes enters it.
   const auto max_entries = 2U * renderer.Device().Workspace().Textures().EntryCount();
@@ -247,15 +256,15 @@ TEST(GpuDagCudaDrtProduct,
       SCOPED_TRACE(edit);
       exposure.SetValue(static_cast<float>((iteration * 2 + edit) % 9) * 0.15f);
       renderer.Device().ResetPassStats();
-      const auto cached = RenderHost(renderer, image, DecodeRes::FULL, request);
+      const auto cached = RenderHost(renderer, source, image, DecodeRes::FULL, request);
       ASSERT_NE(cached, nullptr);
       EXPECT_EQ(renderer.Device().PassStats().sensor_develop_execute, 0U);
       EXPECT_EQ(renderer.Device().PassStats().sensor_develop_skip, 1U);
       EXPECT_EQ(renderer.Device().PassStats().source_h2d_count, 0U);
       EXPECT_LE(renderer.Device().Workspace().Textures().EntryCount(), max_entries);
       EXPECT_LE(renderer.Device().Workspace().Textures().UsedBytes(), max_bytes);
-      CudaProductRenderer fresh(document, MakeUnpacker());
-      const auto expected = RenderHost(fresh, image, DecodeRes::FULL, request);
+      CudaProductRenderer fresh(ExecutorRole::Interactive, MakeUnpacker());
+      const auto expected = RenderHost(fresh, source, image, DecodeRes::FULL, request);
       ASSERT_NE(expected, nullptr);
       ExpectMatchingPixels(*cached, *expected);
     }
@@ -288,8 +297,9 @@ TEST(GpuDagCudaDrtProduct,
   configure_grade(*single, NodeId{"grade.primary"});
   const auto image = MakeEncodedImage(52);
   const RenderRequest request;
-  CudaProductRenderer single_renderer(single, unpack);
-  ASSERT_NE(RenderHost(single_renderer, image, DecodeRes::FULL, request), nullptr);
+  const auto single_source = test::RenderSnapshotSource(single);
+  CudaProductRenderer single_renderer(ExecutorRole::Interactive, unpack);
+  ASSERT_NE(RenderHost(single_renderer, single_source, image, DecodeRes::FULL, request), nullptr);
   const auto single_entries = single_renderer.Device().Workspace().Textures().EntryCount();
   const auto single_bytes = single_renderer.Device().Workspace().Textures().UsedBytes();
   const auto single_published = single_renderer.Device().Workspace().Images().PublishedCount();
@@ -299,8 +309,9 @@ TEST(GpuDagCudaDrtProduct,
   for (const char* id : {"grade.primary", "grade.b", "grade.c", "grade.d"}) {
     configure_grade(*document, NodeId{id});
   }
-  CudaProductRenderer renderer(document, unpack);
-  const auto cached = RenderHost(renderer, image, DecodeRes::FULL, request);
+  const auto          source = test::RenderSnapshotSource(document);
+  CudaProductRenderer renderer(ExecutorRole::Interactive, unpack);
+  const auto cached = RenderHost(renderer, source, image, DecodeRes::FULL, request);
   ASSERT_NE(cached, nullptr);
   EXPECT_EQ(renderer.Device().PassStats().primary_grade_execute, 4U);
   // Persistent Grade outputs and LLF source/result planes are legitimate extra storage.
@@ -311,8 +322,8 @@ TEST(GpuDagCudaDrtProduct,
   EXPECT_LE(renderer.Device().Workspace().Textures().EntryCount(), single_entries + extra_results);
   EXPECT_LE(renderer.Device().Workspace().Textures().UsedBytes(),
             single_bytes + extra_results * 64U * 64U * 4U * sizeof(float));
-  CudaProductRenderer fresh(document, unpack);
-  const auto expected = RenderHost(fresh, image, DecodeRes::FULL, request);
+  CudaProductRenderer fresh(ExecutorRole::Interactive, unpack);
+  const auto expected = RenderHost(fresh, source, image, DecodeRes::FULL, request);
   ASSERT_NE(expected, nullptr);
   ExpectMatchingPixels(*cached, *expected);
 }
