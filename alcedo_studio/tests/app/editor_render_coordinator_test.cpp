@@ -37,9 +37,6 @@ class RecordingScheduler final : public IEditorPipelineSchedulerPort {
     return ++next_job_;
   }
   void Cancel(std::uint64_t job_id) override { cancelled_.push_back(job_id); }
-  void WaitForSessionIdle(std::uint64_t session_epoch) override {
-    waited_sessions_.push_back(session_epoch);
-  }
   void BindSessionContext(std::uint64_t epoch, sl_element_id_t element_id, image_id_t image_id,
                           PresentationSinkId presentation_sink_id = 0) override {
     bind_calls_.push_back({epoch, element_id, image_id, presentation_sink_id});
@@ -55,7 +52,6 @@ class RecordingScheduler final : public IEditorPipelineSchedulerPort {
 
   std::vector<EditorRenderRequest>     scheduled_;
   std::vector<std::uint64_t>           cancelled_;
-  std::vector<std::uint64_t>           waited_sessions_;
   std::vector<BindCall>                bind_calls_;
   EditorPipelineScheduleCompletion     last_completion_;
   int                                  clear_count_ = 0;
@@ -209,41 +205,6 @@ TEST_F(EditorRenderCoordinatorTest, CancelSessionReportsIdleImmediatelyWhenSessi
     idle_reported = true;
   });
   EXPECT_TRUE(idle_reported);
-}
-
-TEST_F(EditorRenderCoordinatorTest, CancelSessionAndWaitJoinsTheMatchingSchedulerWork) {
-  coordinator_->Submit(MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal));
-
-  coordinator_->CancelSessionAndWait(1);
-
-  ASSERT_EQ(scheduler_->cancelled_.size(), 1u);
-  ASSERT_EQ(scheduler_->waited_sessions_.size(), 1u);
-  EXPECT_EQ(scheduler_->waited_sessions_.front(), 1u);
-  coordinator_->NotifySchedulerCompleted(coordinator_->last_scheduled_request_id(), false,
-                                         "cancelled");
-  EXPECT_FALSE(coordinator_->has_inflight());
-}
-
-TEST_F(EditorRenderCoordinatorTest, WaitForSessionIdleDropsPendingButDoesNotCancelInflight) {
-  // Interactive is in-flight; Quality sits pending. History queues behind the
-  // current frame: pending is superseded, inflight is not cancelled.
-  coordinator_->Submit(MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal));
-  coordinator_->Submit(MakeIntent(EditorRenderQuality::Quality, EditorRenderPriority::High));
-  EXPECT_TRUE(coordinator_->has_inflight());
-  EXPECT_EQ(coordinator_->pending_count(), 1u);
-  const auto inflight_id = coordinator_->last_scheduled_request_id();
-
-  coordinator_->WaitForSessionIdle(1);
-
-  EXPECT_TRUE(scheduler_->cancelled_.empty());
-  ASSERT_FALSE(scheduler_->waited_sessions_.empty());
-  EXPECT_EQ(scheduler_->waited_sessions_.front(), 1u);
-  EXPECT_TRUE(coordinator_->has_inflight());
-  EXPECT_EQ(coordinator_->pending_count(), 0u);
-
-  coordinator_->NotifySchedulerCompleted(inflight_id, true);
-  EXPECT_FALSE(coordinator_->has_inflight());
-  EXPECT_EQ(coordinator_->pending_count(), 0u);
 }
 
 TEST_F(EditorRenderCoordinatorTest, CancellationTokenPreventsSchedule) {

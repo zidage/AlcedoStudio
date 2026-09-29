@@ -11,7 +11,6 @@ namespace alcedo::test {
 
 void EditorSessionNavigationFixture::SetUp() {
   events_.clear();
-  pipeline_         = std::make_shared<TrackingPipelinePort>(this);
   history_          = std::make_shared<TrackingHistoryPort>(this);
   tasks_            = std::make_shared<FakeEditorTaskPort>();
   checkpoint_store_ = std::make_shared<TrackingCheckpointStore>(this);
@@ -19,7 +18,6 @@ void EditorSessionNavigationFixture::SetUp() {
   render_submit_    = std::make_shared<FakeEditorRenderSubmitPort>();
 
   EditorSessionLifecycle::Dependencies life_deps;
-  life_deps.pipeline = pipeline_;
   life_deps.history  = history_;
   lifecycle_         = std::make_unique<EditorSessionLifecycle>(std::move(life_deps));
 
@@ -67,7 +65,6 @@ void EditorSessionNavigationFixture::TearDown() {
   checkpoint_store_.reset();
   tasks_.reset();
   history_.reset();
-  pipeline_.reset();
   events_.clear();
 }
 
@@ -114,9 +111,9 @@ void EditorSessionNavigationFixture::Drain() {
   }
 }
 
-auto EditorSessionNavigationFixture::TrackingPipelinePort::Acquire(sl_element_id_t element_id,
-                                                                   std::string*    error)
-    -> EditorPipelineGuardHandle {
+auto EditorSessionNavigationFixture::TrackingHistoryPort::Acquire(sl_element_id_t element_id,
+                                                                  std::string*    error)
+    -> EditorHistoryGuardHandle {
   auto handle = inner.Acquire(element_id, error);
   if (handle.valid && element_id == kElementB && owner_ != nullptr) {
     owner_->RecordEvent("acquire_b");
@@ -124,22 +121,11 @@ auto EditorSessionNavigationFixture::TrackingPipelinePort::Acquire(sl_element_id
   return handle;
 }
 
-void EditorSessionNavigationFixture::TrackingPipelinePort::Release(
-    const EditorPipelineGuardHandle& guard) {
+void EditorSessionNavigationFixture::TrackingHistoryPort::Release(
+    const EditorHistoryGuardHandle& guard) {
   if (guard.valid && guard.element_id == kElementA && owner_ != nullptr) {
     owner_->RecordEvent("release_a");
   }
-  inner.Release(guard);
-}
-
-auto EditorSessionNavigationFixture::TrackingHistoryPort::Acquire(sl_element_id_t element_id,
-                                                                  std::string*    error)
-    -> EditorHistoryGuardHandle {
-  return inner.Acquire(element_id, error);
-}
-
-void EditorSessionNavigationFixture::TrackingHistoryPort::Release(
-    const EditorHistoryGuardHandle& guard) {
   inner.Release(guard);
 }
 

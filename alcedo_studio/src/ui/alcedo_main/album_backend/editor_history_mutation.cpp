@@ -31,12 +31,6 @@
 namespace alcedo::ui {
 namespace {
 
-void SyncUnsettledPreviewFlag(HistoryWorkingState& state) {
-  if (state.pipeline_guard) {
-    state.pipeline_guard->unsettled_preview_ = state.HasUncommittedLiveValues();
-  }
-}
-
 [[nodiscard]] auto PanelFieldMatchesProjectionNode(const PipelineDocument& document,
                                                     const NodeId& projection_node,
                                                     const EditorParameterTarget& target) -> bool {
@@ -59,17 +53,12 @@ void SyncUnsettledPreviewFlag(HistoryWorkingState& state) {
 }
 
 auto ProjectPanelFieldsForState(HistoryWorkingState& state, std::string* error) -> bool {
-  if (state.pipeline_guard == nullptr || state.pipeline_guard->document_ == nullptr) {
-    state.panel_projection = {};
-    return true;
-  }
-  return ProjectPanelFieldsForDocument(*state.pipeline_guard->document_,
-                                       &state.panel_projection_node_id, &state.panel_projection,
-                                       error);
+  return ProjectPanelFieldsForDocument(state.document->Document(), &state.panel_projection_node_id,
+                                       &state.panel_projection, error);
 }
 
-/// Re-read every panel field from the live document after the document changed as a whole
-/// (head move, typed batch, Version checkout). Caller holds the render lock.
+/// Re-read every panel field from the working document after the document changed as a whole
+/// (head move, typed batch, Version checkout).
 auto RefreshPanelProjectionFromDocument(HistoryWorkingState& state, std::string* error) -> bool {
   try {
     return ProjectPanelFieldsForState(state, error);
@@ -109,29 +98,26 @@ auto NodeDisplayName(const PipelineDocument& document, const NodeId& node_id) ->
 /// The projection reads the live document, which already holds the edited value.
 void ProjectDocumentEdit(HistoryWorkingState&                          state,
                          const HistoryWorkingState::DocumentFieldEdit& edit) {
-  if (state.pipeline_guard != nullptr && state.pipeline_guard->document_ != nullptr) {
-    if (!PanelFieldMatchesProjectionNode(*state.pipeline_guard->document_,
-                                         state.panel_projection_node_id, edit.target)) {
-      return;
-    }
-    alcedo::EditorPanelFieldPresentation field;
-    std::string                          ignore;
-    if (alcedo::ReadEditorPanelField(*state.pipeline_guard->document_, edit.target, &field,
-                                     &ignore)) {
-      alcedo::UpsertEditorPanelField(&state.panel_projection, std::move(field));
-    }
+  if (!PanelFieldMatchesProjectionNode(state.document->Document(), state.panel_projection_node_id,
+                                       edit.target)) {
+    return;
+  }
+  alcedo::EditorPanelFieldPresentation field;
+  std::string                          ignore;
+  if (alcedo::ReadEditorPanelField(state.document->Document(), edit.target, &field, &ignore)) {
+    alcedo::UpsertEditorPanelField(&state.panel_projection, std::move(field));
   }
 }
 
-/// Restore local before-values in reverse order under the caller's render lock.
+/// Restore local before-values in reverse order.
 /// Report a restoration error and stop; never continue using a substitute pipeline.
 auto RestoreDocumentFields(HistoryWorkingState&                                       state,
                            const std::vector<HistoryWorkingState::DocumentFieldEdit>& fields,
                            std::string* error) -> bool {
   for (auto it = fields.rbegin(); it != fields.rend(); ++it) {
     std::string restore_error;
-    if (!ApplyEditorParameterPatch(*state.pipeline_guard->document_, it->target,
-                                   it->before_model_json, &restore_error)) {
+    if (!ApplyEditorParameterPatch(state.document->Document(), it->target, it->before_model_json,
+                                   &restore_error)) {
       if (error) *error = "Document parameter restoration failed: " + restore_error;
       return false;
     }
@@ -139,7 +125,7 @@ auto RestoreDocumentFields(HistoryWorkingState&                                 
   return true;
 }
 
-/// Apply one traversed commit to the live document only. The caller restores earlier commits
+/// Apply one traversed commit to the working document only. The caller restores earlier commits
 /// of the same head move when a later one fails.
 auto ApplyCommitToLiveDocument(HistoryWorkingState& state, const EditCommit& commit, bool backward,
                                std::string* error) -> bool {
@@ -148,8 +134,7 @@ auto ApplyCommitToLiveDocument(HistoryWorkingState& state, const EditCommit& com
       const auto batch = PipelineEditBatch::FromJSON(commit.GetPayloadJSON());
       const auto direction =
           backward ? PipelineEditApplyDirection::Inverse : PipelineEditApplyDirection::Forward;
-      if (!ApplyPipelineEditBatch(*state.pipeline_guard->document_, batch, direction, error,
-                                  {})) {
+      if (!ApplyPipelineEditBatch(state.document->Document(), batch, direction, error, {})) {
         return false;
       }
     } catch (const std::exception& ex) {
@@ -165,8 +150,7 @@ auto ApplyCommitToLiveDocument(HistoryWorkingState& state, const EditCommit& com
       return false;
     }
     const auto& json = backward ? found->second.before_model_json : found->second.after_model_json;
-    if (!ApplyEditorParameterPatch(*state.pipeline_guard->document_, found->second.target, json,
-                                   error)) {
+    if (!ApplyEditorParameterPatch(state.document->Document(), found->second.target, json, error)) {
       return false;
     }
   }
@@ -178,16 +162,12 @@ auto InverseApplyCommitToLiveDocument(HistoryWorkingState& state, const EditComm
   return ApplyCommitToLiveDocument(state, commit, !original_backward, error);
 }
 
-/// WAL-first same-session head move. Hold the render lock across document reads,
-/// history publication, writes and rollback (caller owns the lock).
+/// WAL-first same-session head move: publish the head move, apply the traversed commits to the
+/// working document, and restore both when a later step fails.
 auto ApplyPreparedHeadMoveOnLivePipeline(HistoryWorkingState&           state,
                                          EditorHistoryState&            history_state,
                                          const MiniGitPreparedHeadMove& prepared,
                                          std::string*                   error) -> bool {
-  if (!state.pipeline_guard->pipeline_ || !state.pipeline_guard->document_) {
-    if (error) *error = "Live pipeline document is unavailable";
-    return false;
-  }
   const auto prior_selection = state.history->WorkingSelection();
   const auto published       = state.history->PublishPreparedHeadMove(prepared);
   if (!published.moved) {
@@ -232,10 +212,8 @@ auto ApplyPreparedHeadMoveOnLivePipeline(HistoryWorkingState&           state,
     return false;
   }
   history_state.RecordPublishedRenderReason(RenderReasonForHeadMove(prepared.traversed_commits));
-  state.pipeline_guard->dirty_ = true;
   state.pending_document_sequence.clear();
   state.recovered_head = false;
-  SyncUnsettledPreviewFlag(state);
   return true;
 }
 
@@ -251,13 +229,13 @@ auto PublishAppliedTypedBatch(HistoryWorkingState& state, EditorHistoryState& hi
     for (const auto& change : batch.changes) {
       std::vector<GraphValidationError> errors;
       if (const auto* removed_grade = std::get_if<RemoveColorGradeChange>(&change)) {
-        errors = state.pipeline_guard->document_->ValidateUserDeletion(removed_grade->node_id);
+        errors = state.document->Document().ValidateUserDeletion(removed_grade->node_id);
       } else if (const auto* removed_mask = std::get_if<RemoveMaskChange>(&change)) {
-        errors = state.pipeline_guard->document_->ValidateUserDeletion(removed_mask->node_id,
-                                                                       removed_mask->mask_id);
+        errors = state.document->Document().ValidateUserDeletion(removed_mask->node_id,
+                                                                 removed_mask->mask_id);
       } else if (const auto* topology = std::get_if<NodeGraphTopologyChange>(&change)) {
         for (const auto& removed_node : topology->removed_nodes) {
-          auto rejected = state.pipeline_guard->document_->ValidateUserDeletion(
+          auto rejected = state.document->Document().ValidateUserDeletion(
               NodeId{removed_node.node.at("id").get<std::string>()});
           errors.insert(errors.end(), rejected.begin(), rejected.end());
         }
@@ -267,10 +245,9 @@ auto PublishAppliedTypedBatch(HistoryWorkingState& state, EditorHistoryState& hi
         return false;
       }
     }
-    pre_apply_document = ClonePipelineDocument(*state.pipeline_guard->document_);
-    if (!ApplyPipelineEditBatch(*state.pipeline_guard->document_, batch,
-                                PipelineEditApplyDirection::Forward, error,
-                                {})) {
+    pre_apply_document = ClonePipelineDocument(state.document->Document());
+    if (!ApplyPipelineEditBatch(state.document->Document(), batch,
+                                PipelineEditApplyDirection::Forward, error, {})) {
       return false;
     }
   }
@@ -278,7 +255,7 @@ auto PublishAppliedTypedBatch(HistoryWorkingState& state, EditorHistoryState& hi
     if (!pre_apply_document.has_value()) {
       return;
     }
-    *state.pipeline_guard->document_ = std::move(*pre_apply_document);
+    state.document->Document()       = std::move(*pre_apply_document);
     state.panel_projection_node_id   = prior_panel_node;
   };
   const auto prior_selection = state.history->WorkingSelection();
@@ -308,9 +285,7 @@ auto PublishAppliedTypedBatch(HistoryWorkingState& state, EditorHistoryState& hi
     return false;
   }
   history_state.RecordPublishedRenderReason(RenderReasonForBatch(batch));
-  state.pipeline_guard->dirty_ = true;
-  state.recovered_head         = false;
-  SyncUnsettledPreviewFlag(state);
+  state.recovered_head = false;
   return true;
 }
 
@@ -323,10 +298,6 @@ auto EditorHistoryMutation::CaptureAdjustmentBeforePreview(
     std::string* error) -> bool {
   auto state = state_.EnsureWorkingState(guard.element_id, error);
   if (!state) return false;
-  if (!state->pipeline_guard || !state->pipeline_guard->document_) {
-    if (error) *error = "Live pipeline document is unavailable";
-    return false;
-  }
   if (!alcedo::ResolveEditorAdjustmentField(patch.field_key).has_value()) {
     if (error) *error = "Unknown editor adjustment field: " + patch.field_key;
     return false;
@@ -336,23 +307,17 @@ auto EditorHistoryMutation::CaptureAdjustmentBeforePreview(
     return false;
   }
 
-  if (!state->pipeline_guard->pipeline_) {
-    if (error) *error = "Live pipeline executor is unavailable";
-    return false;
-  }
-  auto       render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
   const auto sequence    = state->pending_document_sequence.find(patch.field_key);
   HistoryWorkingState::DocumentFieldEdit edit;
   if (sequence == state->pending_document_sequence.end()) {
     if (patch.target.owner_kind == alcedo::EditorParameterOwnerKind::Unspecified) {
       if (!state->panel_projection_node_id.Empty()) {
         auto filled = alcedo::CompleteSelectedNodeParameterTarget(
-            *state->pipeline_guard->document_, state->panel_projection_node_id, patch.field_key,
-            error);
+            state->document->Document(), state->panel_projection_node_id, patch.field_key, error);
         if (!filled.has_value()) return false;
         edit.target = std::move(*filled);
       } else {
-        auto filled = alcedo::CompleteCurrentPanelParameterTarget(*state->pipeline_guard->document_,
+        auto filled = alcedo::CompleteCurrentPanelParameterTarget(state->document->Document(),
                                                                   patch.field_key, error);
         if (!filled.has_value()) return false;
         edit.target = std::move(*filled);
@@ -366,24 +331,22 @@ auto EditorHistoryMutation::CaptureAdjustmentBeforePreview(
       }
       edit.target = patch.target;
     }
-    if (!ReadEditorParameterJson(*state->pipeline_guard->document_, edit.target,
-                                 &edit.before_model_json, error))
+    if (!ReadEditorParameterJson(state->document->Document(), edit.target, &edit.before_model_json,
+                                 error))
       return false;
   } else {
     edit = sequence->second;
   }
   // The document is the only parameter store. A rejected write leaves it unchanged.
-  if (!ApplyEditorParameterWrite(*state->pipeline_guard->document_, edit.target, *patch.write,
-                                 error)) {
+  if (!ApplyEditorParameterWrite(state->document->Document(), edit.target, *patch.write, error)) {
     return false;
   }
   {
     alcedo::EditorPanelFieldPresentation field;
     std::string                          ignore;
-    if (PanelFieldMatchesProjectionNode(*state->pipeline_guard->document_,
+    if (PanelFieldMatchesProjectionNode(state->document->Document(),
                                         state->panel_projection_node_id, edit.target) &&
-        alcedo::ReadEditorPanelField(*state->pipeline_guard->document_, edit.target, &field,
-                                     &ignore)) {
+        alcedo::ReadEditorPanelField(state->document->Document(), edit.target, &field, &ignore)) {
       alcedo::UpsertEditorPanelField(&state->panel_projection, std::move(field));
     }
   }
@@ -391,7 +354,6 @@ auto EditorHistoryMutation::CaptureAdjustmentBeforePreview(
   if (sequence == state->pending_document_sequence.end()) {
     state->pending_document_sequence.emplace(patch.field_key, std::move(edit));
   }
-  SyncUnsettledPreviewFlag(*state);
   return true;
 }
 
@@ -400,14 +362,6 @@ auto EditorHistoryMutation::RestoreUnsettledPreview(const alcedo::EditorHistoryG
     -> bool {
   auto state = state_.EnsureWorkingState(guard.element_id, error);
   if (!state) return false;
-  if (!state->pipeline_guard || !state->pipeline_guard->document_) {
-    if (error) *error = "Live pipeline document is unavailable";
-    return false;
-  }
-  if (!state->pipeline_guard->pipeline_) {
-    if (error) *error = "Live pipeline executor is unavailable";
-    return false;
-  }
   const bool changed = !state->pending_document_sequence.empty();
   if (live_changed != nullptr) {
     *live_changed = changed;
@@ -415,8 +369,6 @@ auto EditorHistoryMutation::RestoreUnsettledPreview(const alcedo::EditorHistoryG
   if (!changed) {
     return true;
   }
-  auto                                                      render_lock =
-      LockLivePipeline(*state->pipeline_guard->pipeline_);
   std::vector<HistoryWorkingState::DocumentFieldEdit> fields;
   fields.reserve(state->pending_document_sequence.size());
   for (const auto& [_, edit] : state->pending_document_sequence) {
@@ -429,7 +381,6 @@ auto EditorHistoryMutation::RestoreUnsettledPreview(const alcedo::EditorHistoryG
     ProjectDocumentEdit(*state, edit);
   }
   state->pending_document_sequence.clear();
-  SyncUnsettledPreviewFlag(*state);
   return true;
 }
 
@@ -438,7 +389,7 @@ auto EditorHistoryMutation::CommitAdjustment(const alcedo::EditorHistoryGuardHan
                                              std::string* error) -> bool {
   auto state = state_.EnsureWorkingState(guard.element_id, error);
   if (!state) return false;
-  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_ || !state->history) {
+  if (!state->history) {
     if (error) *error = "Editor history graph is unavailable";
     return false;
   }
@@ -464,35 +415,24 @@ auto EditorHistoryMutation::CommitAdjustment(const alcedo::EditorHistoryGuardHan
     if (error) *error = "Typed field write is required";
     return false;
   }
-  if (!state->pipeline_guard->document_) {
-    if (error) *error = "Live pipeline document is unavailable";
-    return false;
-  }
 
-  if (!state->pipeline_guard->pipeline_) {
-    if (error) *error = "Live pipeline executor is unavailable";
-    return false;
-  }
-  auto       render_lock   = LockLivePipeline(*state->pipeline_guard->pipeline_);
   const auto locked_target = sequence->second.target;
   HistoryWorkingState::DocumentFieldEdit recorded = sequence->second;
-  if (!ReadEditorParameterJson(*state->pipeline_guard->document_, locked_target,
+  if (!ReadEditorParameterJson(state->document->Document(), locked_target,
                                &recorded.after_model_json, error))
     return false;
 
   if (recorded.before_model_json == recorded.after_model_json) {
     ProjectDocumentEdit(*state, recorded);
     state->pending_document_sequence.erase(sequence);
-    SyncUnsettledPreviewFlag(*state);
     return true;
   }
   const auto restore_before = [&] { return RestoreDocumentFields(*state, {recorded}, error); };
   PipelineEditBatch batch;
   try {
-    batch = MakeSetParameterBatch(locked_target, recorded.before_model_json,
-                                  recorded.after_model_json, true, true,
-                                  NodeDisplayName(*state->pipeline_guard->document_,
-                                                   locked_target.node_id));
+    batch = MakeSetParameterBatch(
+        locked_target, recorded.before_model_json, recorded.after_model_json, true, true,
+        NodeDisplayName(state->document->Document(), locked_target.node_id));
   } catch (const std::exception& ex) {
     if (error) *error = ex.what();
     (void)restore_before();
@@ -504,7 +444,6 @@ auto EditorHistoryMutation::CommitAdjustment(const alcedo::EditorHistoryGuardHan
   }
   ProjectDocumentEdit(*state, recorded);
   state->pending_document_sequence.erase(patch.field_key);
-  SyncUnsettledPreviewFlag(*state);
   return true;
 }
 
@@ -512,15 +451,10 @@ auto EditorHistoryMutation::Undo(const alcedo::EditorHistoryGuardHandle& guard,
                                  std::string* error) -> bool {
   auto state = state_.EnsureWorkingState(guard.element_id, error);
   if (!state) return false;
-  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_ || !state->history) {
+  if (!state->history) {
     if (error) *error = "Editor history graph is unavailable";
     return false;
   }
-  if (!state->pipeline_guard->pipeline_ || !state->pipeline_guard->document_) {
-    if (error) *error = "Live pipeline document is unavailable";
-    return false;
-  }
-  auto       render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
   const auto prepared = state->history->PrepareUndo();
   if (!prepared.ready) {
     if (error) *error = prepared.error;
@@ -534,15 +468,10 @@ auto EditorHistoryMutation::Redo(const alcedo::EditorHistoryGuardHandle& guard,
                                  std::string* error) -> bool {
   auto state = state_.EnsureWorkingState(guard.element_id, error);
   if (!state) return false;
-  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_ || !state->history) {
+  if (!state->history) {
     if (error) *error = "Editor history graph is unavailable";
     return false;
   }
-  if (!state->pipeline_guard->pipeline_ || !state->pipeline_guard->document_) {
-    if (error) *error = "Live pipeline document is unavailable";
-    return false;
-  }
-  auto       render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
   const auto prepared = state->history->PrepareRedo();
   if (!prepared.ready) {
     if (error) *error = prepared.error;
@@ -557,15 +486,10 @@ auto EditorHistoryMutation::MoveHeadToCommit(const alcedo::EditorHistoryGuardHan
                                              std::string* error) -> bool {
   auto state = state_.EnsureWorkingState(guard.element_id, error);
   if (!state) return false;
-  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_ || !state->history) {
+  if (!state->history) {
     if (error) *error = "Editor history graph is unavailable";
     return false;
   }
-  if (!state->pipeline_guard->pipeline_ || !state->pipeline_guard->document_) {
-    if (error) *error = "Live pipeline document is unavailable";
-    return false;
-  }
-  auto       render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
   const auto prepared = state->history->PrepareMoveHeadToCommit(commit_id);
   if (!prepared.ready) {
     if (error) *error = prepared.error;
@@ -580,15 +504,10 @@ auto EditorHistoryMutation::CommitPipelineEditBatch(const alcedo::EditorHistoryG
                                                     std::string* error) -> bool {
   auto state = state_.EnsureWorkingState(guard.element_id, error);
   if (!state) return false;
-  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_ || !state->history) {
+  if (!state->history) {
     if (error) *error = "Editor history graph is unavailable";
     return false;
   }
-  if (!state->pipeline_guard->pipeline_ || !state->pipeline_guard->document_) {
-    if (error) *error = "Live pipeline document is unavailable";
-    return false;
-  }
-  auto render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
   return PublishAppliedTypedBatch(*state, state_, batch, false, error);
 }
 
@@ -597,15 +516,10 @@ auto EditorHistoryMutation::EditNodeGraph(const alcedo::EditorHistoryGuardHandle
                                           std::string* error) -> bool {
   auto state = state_.EnsureWorkingState(guard.element_id, error);
   if (!state) return false;
-  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_ || !state->history) {
+  if (!state->history) {
     if (error) *error = "Editor history graph is unavailable";
     return false;
   }
-  if (!state->pipeline_guard->pipeline_ || !state->pipeline_guard->document_) {
-    if (error) *error = "Live pipeline document is unavailable";
-    return false;
-  }
-  auto render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
   try {
     return PublishAppliedTypedBatch(*state, state_, MakeEditNodeGraphBatch(std::move(change)), false,
                                     error);
@@ -620,17 +534,12 @@ auto EditorHistoryMutation::RenameColorGrade(const alcedo::EditorHistoryGuardHan
                                              std::string* error) -> bool {
   auto state = state_.EnsureWorkingState(guard.element_id, error);
   if (!state) return false;
-  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_ || !state->history) {
+  if (!state->history) {
     if (error) *error = "Editor history graph is unavailable";
     return false;
   }
-  if (!state->pipeline_guard->pipeline_ || !state->pipeline_guard->document_) {
-    if (error) *error = "Live pipeline document is unavailable";
-    return false;
-  }
-  auto render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
   const auto* grade = dynamic_cast<const ColorGradeNodeModel*>(
-      state->pipeline_guard->document_->Graph().FindNode(node_id));
+      state->document->Document().Graph().FindNode(node_id));
   if (grade == nullptr) {
     if (error) *error = "Color Grade node is missing: " + std::string{node_id.Value()};
     return false;
@@ -647,17 +556,12 @@ auto EditorHistoryMutation::SetColorGradeDeletionProtected(
   if (changed) *changed = false;
   auto state = state_.EnsureWorkingState(guard.element_id, error);
   if (!state) return false;
-  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_ || !state->history) {
+  if (!state->history) {
     if (error) *error = "Editor history graph is unavailable";
     return false;
   }
-  if (!state->pipeline_guard->pipeline_ || !state->pipeline_guard->document_) {
-    if (error) *error = "Live pipeline document is unavailable";
-    return false;
-  }
-  auto render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
   const auto* grade = dynamic_cast<const ColorGradeNodeModel*>(
-      state->pipeline_guard->document_->Graph().FindNode(node_id));
+      state->document->Document().Graph().FindNode(node_id));
   if (grade == nullptr) {
     if (error) *error = "Color Grade node is missing: " + std::string{node_id.Value()};
     return false;
@@ -681,18 +585,13 @@ auto EditorHistoryMutation::InsertColorGradeAtTop(const alcedo::EditorHistoryGua
                                                   std::string*          error) -> bool {
   auto state = state_.EnsureWorkingState(guard.element_id, error);
   if (!state) return false;
-  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_ || !state->history) {
+  if (!state->history) {
     if (error) *error = "Editor history graph is unavailable";
     return false;
   }
-  if (!state->pipeline_guard->pipeline_ || !state->pipeline_guard->document_) {
-    if (error) *error = "Live pipeline document is unavailable";
-    return false;
-  }
-  auto render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
   try {
-    auto change = alcedo::CaptureAddColorGradeAtTopChange(*state->pipeline_guard->document_,
-                                                          new_id, expected_predecessor_id);
+    auto change = alcedo::CaptureAddColorGradeAtTopChange(state->document->Document(), new_id,
+                                                          expected_predecessor_id);
     return PublishAppliedTypedBatch(
         *state, state_, alcedo::MakeAddColorGradeBatch(std::move(change)), false, error);
   } catch (const std::exception& ex) {
@@ -706,17 +605,12 @@ auto EditorHistoryMutation::RemoveColorGradeAndBridge(const alcedo::EditorHistor
                                                       std::string*          error) -> bool {
   auto state = state_.EnsureWorkingState(guard.element_id, error);
   if (!state) return false;
-  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_ || !state->history) {
+  if (!state->history) {
     if (error) *error = "Editor history graph is unavailable";
     return false;
   }
-  if (!state->pipeline_guard->pipeline_ || !state->pipeline_guard->document_) {
-    if (error) *error = "Live pipeline document is unavailable";
-    return false;
-  }
-  auto render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
   try {
-    auto change = alcedo::CaptureRemoveColorGradeChange(*state->pipeline_guard->document_, node_id);
+    auto change = alcedo::CaptureRemoveColorGradeChange(state->document->Document(), node_id);
     return PublishAppliedTypedBatch(
         *state, state_, alcedo::MakeRemoveColorGradeBatch(std::move(change)), false, error);
   } catch (const std::exception& ex) {
@@ -730,17 +624,12 @@ auto EditorHistoryMutation::SetColorGradeEnabled(const alcedo::EditorHistoryGuar
                                                  std::string* error) -> bool {
   auto state = state_.EnsureWorkingState(guard.element_id, error);
   if (!state) return false;
-  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_ || !state->history) {
+  if (!state->history) {
     if (error) *error = "Editor history graph is unavailable";
     return false;
   }
-  if (!state->pipeline_guard->pipeline_ || !state->pipeline_guard->document_) {
-    if (error) *error = "Live pipeline document is unavailable";
-    return false;
-  }
-  auto render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
   const auto* grade = dynamic_cast<const ColorGradeNodeModel*>(
-      state->pipeline_guard->document_->Graph().FindNode(node_id));
+      state->document->Document().Graph().FindNode(node_id));
   if (grade == nullptr) {
     if (error) *error = "Color Grade node is missing: " + std::string{node_id.Value()};
     return false;
@@ -755,17 +644,12 @@ auto EditorHistoryMutation::SetColorGradeMix(const alcedo::EditorHistoryGuardHan
                                              std::string* error) -> bool {
   auto state = state_.EnsureWorkingState(guard.element_id, error);
   if (!state) return false;
-  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_ || !state->history) {
+  if (!state->history) {
     if (error) *error = "Editor history graph is unavailable";
     return false;
   }
-  if (!state->pipeline_guard->pipeline_ || !state->pipeline_guard->document_) {
-    if (error) *error = "Live pipeline document is unavailable";
-    return false;
-  }
-  auto render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
   const auto* grade = dynamic_cast<const ColorGradeNodeModel*>(
-      state->pipeline_guard->document_->Graph().FindNode(node_id));
+      state->document->Document().Graph().FindNode(node_id));
   if (grade == nullptr) {
     if (error) *error = "Color Grade node is missing: " + std::string{node_id.Value()};
     return false;
@@ -779,15 +663,10 @@ auto EditorHistoryMutation::AddMask(const alcedo::EditorHistoryGuardHandle& guar
                                     std::uint32_t display_index, std::string* error) -> bool {
   auto state = state_.EnsureWorkingState(guard.element_id, error);
   if (!state) return false;
-  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_ || !state->history) {
+  if (!state->history) {
     if (error) *error = "Editor history graph is unavailable";
     return false;
   }
-  if (!state->pipeline_guard->pipeline_ || !state->pipeline_guard->document_) {
-    if (error) *error = "Live pipeline document is unavailable";
-    return false;
-  }
-  auto render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
   const auto mask_id = mask.id;
   auto       json    = MaskModelToJson(mask);
   auto batch = MakeAddMaskBatch(node_id, mask_id, std::move(json), display_index);
@@ -799,17 +678,12 @@ auto EditorHistoryMutation::RemoveMask(const alcedo::EditorHistoryGuardHandle& g
                                        std::string* error) -> bool {
   auto state = state_.EnsureWorkingState(guard.element_id, error);
   if (!state) return false;
-  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_ || !state->history) {
+  if (!state->history) {
     if (error) *error = "Editor history graph is unavailable";
     return false;
   }
-  if (!state->pipeline_guard->pipeline_ || !state->pipeline_guard->document_) {
-    if (error) *error = "Live pipeline document is unavailable";
-    return false;
-  }
-  auto render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
-  auto* grade = dynamic_cast<ColorGradeNodeModel*>(
-      state->pipeline_guard->document_->Graph().FindNode(node_id));
+  auto* grade =
+      dynamic_cast<ColorGradeNodeModel*>(state->document->Document().Graph().FindNode(node_id));
   if (grade == nullptr) {
     if (error) *error = "Color Grade node is missing: " + std::string{node_id.Value()};
     return false;
@@ -836,17 +710,12 @@ auto EditorHistoryMutation::ReplaceMaskSource(const alcedo::EditorHistoryGuardHa
     -> bool {
   auto state = state_.EnsureWorkingState(guard.element_id, error);
   if (!state) return false;
-  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_ || !state->history) {
+  if (!state->history) {
     if (error) *error = "Editor history graph is unavailable";
     return false;
   }
-  if (!state->pipeline_guard->pipeline_ || !state->pipeline_guard->document_) {
-    if (error) *error = "Live pipeline document is unavailable";
-    return false;
-  }
-  auto render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
   const auto* grade = dynamic_cast<const ColorGradeNodeModel*>(
-      state->pipeline_guard->document_->Graph().FindNode(node_id));
+      state->document->Document().Graph().FindNode(node_id));
   if (grade == nullptr) {
     if (error) *error = "Color Grade node is missing: " + std::string{node_id.Value()};
     return false;
@@ -868,17 +737,12 @@ auto EditorHistoryMutation::SetMaskField(const alcedo::EditorHistoryGuardHandle&
                                          std::string* error) -> bool {
   auto state = state_.EnsureWorkingState(guard.element_id, error);
   if (!state) return false;
-  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_ || !state->history) {
+  if (!state->history) {
     if (error) *error = "Editor history graph is unavailable";
     return false;
   }
-  if (!state->pipeline_guard->pipeline_ || !state->pipeline_guard->document_) {
-    if (error) *error = "Live pipeline document is unavailable";
-    return false;
-  }
-  auto render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
   const auto* grade = dynamic_cast<const ColorGradeNodeModel*>(
-      state->pipeline_guard->document_->Graph().FindNode(node_id));
+      state->document->Document().Graph().FindNode(node_id));
   if (grade == nullptr) {
     if (error) *error = "Color Grade node is missing: " + std::string{node_id.Value()};
     return false;
@@ -913,27 +777,21 @@ auto EditorHistoryMutation::DiscardUnmaterializedChanges(
     const alcedo::EditorHistoryGuardHandle& guard, std::string* error) -> bool {
   auto state = state_.EnsureWorkingState(guard.element_id, error);
   if (!state) return false;
-  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_ || !state->history) {
+  if (!state->history) {
     if (error) *error = "Editor history graph is unavailable";
     return false;
   }
 
-  if (!state->pipeline_guard->pipeline_ || !state->pipeline_guard->document_) {
-    if (error) *error = "Live pipeline document is unavailable";
-    return false;
-  }
-  auto render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
   {
     for (const auto& [_, edit] : state->pending_document_sequence) {
-      if (!ApplyEditorParameterPatch(*state->pipeline_guard->document_, edit.target,
+      if (!ApplyEditorParameterPatch(state->document->Document(), edit.target,
                                      edit.before_model_json, error))
         return false;
       ProjectDocumentEdit(*state, edit);
     }
     state->pending_document_sequence.clear();
   }
-  const auto materialized_head =
-      state->pipeline_guard->commit_graph_->GetImageEditState().materialized_head_commit_hash;
+  const auto materialized_head = state->graph->GetImageEditState().materialized_head_commit_hash;
   while (state->history->working_head() != materialized_head) {
     const auto prepared = materialized_head.has_value()
                               ? state->history->PrepareMoveHeadToCommit(*materialized_head)
@@ -950,11 +808,8 @@ auto EditorHistoryMutation::DiscardUnmaterializedChanges(
 
   if (state->journal && !state->journal->TruncateMaterialized(error)) return false;
   state->history->PublishWorkingSelection({});
-  state->pipeline_guard->dirty_ = false;
-  state->pipeline_guard->serialized_state_needs_writeback_ = false;
   state->pending_document_sequence.clear();
   state->recovered_head = false;
-  SyncUnsettledPreviewFlag(*state);
   return true;
 }
 
@@ -963,12 +818,12 @@ auto EditorHistoryMutation::CheckoutVersion(const alcedo::EditorHistoryGuardHand
                                             std::string* error) -> bool {
   auto state = state_.EnsureWorkingState(guard.element_id, error);
   if (!state) return false;
-  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_ || !state->history) {
+  if (!state->history) {
     if (error) *error = "Editor history graph is unavailable";
     return false;
   }
 
-  auto& graph = *state->pipeline_guard->commit_graph_;
+  auto& graph = *state->graph;
   if (graph.GetActiveVersionId() == version_id) {
     return true;
   }
@@ -981,32 +836,29 @@ auto EditorHistoryMutation::CheckoutVersion(const alcedo::EditorHistoryGuardHand
     return false;
   }
 
-  const auto graph_before     = graph;
-  const auto prior_select     = state->history->WorkingSelection();
-  const bool prior_dirty      = state->pipeline_guard->dirty_;
-  const bool prior_serialized = state->pipeline_guard->serialized_state_needs_writeback_;
-  const bool prior_recovered  = state->recovered_head;
-  // Checkout swaps in a new document and never changes this one, so a restore after a later
-  // failure binds this pointer back without a copy.
-  const auto prior_document   = state->pipeline_guard->document_;
-
-  auto restore_prior = [&] {
-    graph = graph_before;
-    state->history->PublishWorkingSelection(prior_select);
-    state->pipeline_guard->dirty_ = prior_dirty;
-    state->pipeline_guard->serialized_state_needs_writeback_ = prior_serialized;
-    state->recovered_head = prior_recovered;
-    if (!prior_document || prior_document == state->pipeline_guard->document_ ||
-        !state->pipeline_guard->pipeline_) {
-      return;
+  // Build phase: the target document and its panel projection stay private until every
+  // fallible step has succeeded, so a failure restores only the history.
+  auto document = EditorHistoryState::BuildDocumentForHead(*state, target_head, error);
+  if (!document) return false;
+  alcedo::NodeId                projection_node_id = state->panel_projection_node_id;
+  alcedo::EditorPanelProjection projection;
+  try {
+    if (!ProjectPanelFieldsForDocument(*document, &projection_node_id, &projection, error)) {
+      return false;
     }
-    auto render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
-    (void)alcedo::BindLivePipelineDocument(*state->pipeline_guard, prior_document);
-  };
+  } catch (const std::exception& ex) {
+    if (error) *error = ex.what();
+    return false;
+  }
 
-  auto restore_or_report = [&](std::string original) {
+  const auto graph_before      = graph;
+  const auto prior_select      = state->history->WorkingSelection();
+  const bool prior_recovered   = state->recovered_head;
+  auto       restore_or_report = [&](std::string original) {
     try {
-      restore_prior();
+      graph = graph_before;
+      state->history->PublishWorkingSelection(prior_select);
+      state->recovered_head = prior_recovered;
       if (error) *error = std::move(original);
     } catch (const std::exception& ex) {
       if (error) {
@@ -1017,41 +869,15 @@ auto EditorHistoryMutation::CheckoutVersion(const alcedo::EditorHistoryGuardHand
   };
 
   try {
-    if (auto pipeline_service = state_.PipelineMapper()) {
-      std::string checkout_error;
-      if (!pipeline_service->CheckoutVersion(state->pipeline_guard, version_id,
-                                             &checkout_error)) {
-        if (error) *error = checkout_error;
-        return false;
-      }
-    } else if (!state_.ReplayWorkingDocumentFromImmutableRoot(*state, target_head, error)) {
-      return false;
-    } else {
-      graph.SetActiveVersionId(version_id);
-    }
-
+    graph.SetActiveVersionId(version_id);
     if (!state->history->SelectVersion(version_id, error)) {
-      const auto select_error = error ? *error : std::string{"Version selection failed"};
-      restore_or_report(select_error);
+      restore_or_report(error ? *error : std::string{"Version selection failed"});
       return false;
     }
-
-    bool projected = false;
-    {
-      auto render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
-      projected        = RefreshPanelProjectionFromDocument(*state, error);
-    }
-    if (!projected) {
-      const auto projection_error = error ? *error : std::string{"Panel projection refresh failed"};
-      restore_or_report(projection_error);
-      return false;
-    }
-
     if (auto pipeline_service = state_.PipelineMapper()) {
       std::string persistence_error;
-      if (!pipeline_service->PersistEditorHistoryState(state->pipeline_guard,
-                                                       graph_before.GetImageEditState(),
-                                                       &persistence_error)) {
+      if (!pipeline_service->PersistEditorHistory(graph, graph_before.GetImageEditState(),
+                                                  *document, &persistence_error)) {
         restore_or_report(persistence_error);
         return false;
       }
@@ -1061,9 +887,11 @@ auto EditorHistoryMutation::CheckoutVersion(const alcedo::EditorHistoryGuardHand
     return false;
   }
 
+  // Swap phase: the checked-out Version is active and persisted; bind its document.
+  state->document->Replace(std::move(document));
+  state->panel_projection_node_id = std::move(projection_node_id);
+  state->panel_projection         = std::move(projection);
   state_.RecordPublishedRenderReason(alcedo::EditorRenderReason::VersionDocumentChanged);
-  state->pipeline_guard->dirty_ = false;
-  state->pipeline_guard->serialized_state_needs_writeback_ = false;
   state->recovered_head = false;
   return true;
 }
@@ -1082,13 +910,9 @@ auto EditorHistoryMutation::SetPanelProjectionNode(const alcedo::EditorHistoryGu
     state->panel_projection         = {};
     return true;
   }
-  if (!state->pipeline_guard || !state->pipeline_guard->document_) {
-    if (error) *error = "Live pipeline document is unavailable";
-    return false;
-  }
   try {
     alcedo::EditorPanelProjection next;
-    const auto& document = *state->pipeline_guard->document_;
+    const auto&                   document = state->document->Document();
     if (!alcedo::ProjectSelectedNodePanelFields(document, node_id, session_generation, &next,
                                                 error)) {
       return false;
@@ -1102,34 +926,27 @@ auto EditorHistoryMutation::SetPanelProjectionNode(const alcedo::EditorHistoryGu
   }
 }
 
-auto EditorHistoryMutation::WithLockedLiveDocument(
-    const alcedo::EditorHistoryGuardHandle& guard,
-    const alcedo::IEditorHistoryPort::LockedMaskDocumentOp& op, std::string* error) -> bool {
+auto EditorHistoryMutation::WithWorkingDocument(
+    const alcedo::EditorHistoryGuardHandle&           guard,
+    const alcedo::IEditorHistoryPort::MaskDocumentOp& op, std::string* error) -> bool {
   if (!op) {
     if (error) *error = "Locked Mask document operation is empty";
     return false;
   }
   auto state = state_.EnsureWorkingState(guard.element_id, error);
   if (!state) return false;
-  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_ || !state->history) {
+  if (!state->history) {
     if (error) *error = "Editor history graph is unavailable";
     return false;
   }
-  if (!state->pipeline_guard->pipeline_ || !state->pipeline_guard->document_) {
-    if (error) *error = "Live pipeline document is unavailable";
-    return false;
-  }
-  auto render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
-  alcedo::IEditorHistoryPort::LockedMaskSettle settle =
+  alcedo::IEditorHistoryPort::MaskSettle settle =
       [this, state](const alcedo::PipelineEditBatch& batch, std::string* settle_error) {
         return PublishAppliedTypedBatch(*state, state_, batch, true,
                                         settle_error);
       };
-  bool       input_open = state->locked_document_input_open;
-  const bool applied =
-      op(*state->pipeline_guard->document_, *state->history, settle, &input_open, error);
-  state->locked_document_input_open = input_open;
-  SyncUnsettledPreviewFlag(*state);
+  bool       input_open = state->mask_input_open;
+  const bool applied = op(state->document->Document(), *state->history, settle, &input_open, error);
+  state->mask_input_open = input_open;
   return applied;
 }
 

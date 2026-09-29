@@ -423,44 +423,6 @@ void EditorRenderCoordinator::CancelSession(std::uint64_t image_load_request_id,
   }
 }
 
-void EditorRenderCoordinator::CancelSessionAndWait(std::uint64_t image_load_request_id) {
-  CancelSession(image_load_request_id);
-  if (scheduler_) {
-    scheduler_->WaitForSessionIdle(image_load_request_id);
-  }
-}
-
-void EditorRenderCoordinator::WaitForSessionIdle(std::uint64_t image_load_request_id) {
-  // History head moves queue behind the *current* frame only:
-  // - Drop not-yet-started pending (stale after rebuild; no point finishing them).
-  // - Do not cancel in-flight work — let it present, then take render_lock.
-  {
-    std::scoped_lock lock(mutex_);
-    for (auto& slot : slots_) {
-      if (!slot.has_value() ||
-          slot->request.intent.image_load_request_id.value != image_load_request_id) {
-        continue;
-      }
-      EditorRenderResult cancelled;
-      cancelled.kind       = EditorRenderResultKind::Cancelled;
-      cancelled.request_id = slot->request.request_id;
-      cancelled.intent     = slot->request.intent;
-      cancelled.message    = "Superseded while queueing behind in-flight frame";
-      Emit(std::move(cancelled));
-      terminal_request_ids_.insert(slot->request.request_id);
-      slot.reset();
-    }
-  }
-  DeliverPendingResults();
-  // Joins the scheduler worker for this session. Present waits release
-  // render_lock and the port pumps GUI events so this can complete on the
-  // owner thread. Coordinator inflight_ may lag one CompleteJob call; the
-  // worker has already left Apply/present before Wait returns.
-  if (scheduler_) {
-    scheduler_->WaitForSessionIdle(image_load_request_id);
-  }
-}
-
 auto EditorRenderCoordinator::CancelRequest(std::uint64_t request_id) -> bool {
   bool          did_cancel              = false;
   std::uint64_t scheduler_job_to_cancel = 0;

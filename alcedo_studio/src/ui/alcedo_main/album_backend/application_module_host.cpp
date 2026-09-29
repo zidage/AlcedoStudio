@@ -117,11 +117,6 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     pipeline_services.pipeline_service = [this]() -> std::shared_ptr<alcedo::PipelineMgmtService> {
       return project_ ? project_->handler().pipeline_service() : nullptr;
     };
-    pipeline_services.load_editor_pipeline_guard =
-        [this](sl_element_id_t element_id) -> std::shared_ptr<alcedo::PipelineGuard> {
-      auto service = project_ ? project_->handler().pipeline_service() : nullptr;
-      return service ? service->AcquireEditorPipeline(element_id) : nullptr;
-    };
     std::function<std::shared_ptr<alcedo::ImagePoolService>()> image_pool =
         [this]() -> std::shared_ptr<alcedo::ImagePoolService> {
       if (!project_ || !project_->handler().project()) {

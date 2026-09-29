@@ -38,32 +38,22 @@ EditorHistoryTransfer::EditorHistoryTransfer(EditorHistoryState& state) : state_
 namespace {
 
 struct LivePastePriorState {
-  alcedo::CommitGraph graph;  // includes logical head on active Version
-  alcedo::MiniGitWorkingSelection selection;
-  bool dirty = false;
-  bool serialized = false;
-  bool                                      recovered  = false;
+  alcedo::CommitGraph                       graph;  // includes logical head on active Version
+  alcedo::MiniGitWorkingSelection           selection;
+  bool                                      recovered = false;
   std::optional<alcedo::EditorRenderReason> published_reason;
 };
 
 auto CaptureLivePastePrior(HistoryWorkingState& state, EditorHistoryState& history_state)
     -> LivePastePriorState {
-  LivePastePriorState prior;
-  prior.graph = *state.pipeline_guard->commit_graph_;
-  prior.selection = state.history->WorkingSelection();
-  prior.dirty = state.pipeline_guard->dirty_;
-  prior.serialized = state.pipeline_guard->serialized_state_needs_writeback_;
-  prior.recovered = state.recovered_head;
-  prior.published_reason = history_state.LastPublishedRenderReason();
-  return prior;
+  return LivePastePriorState{*state.graph, state.history->WorkingSelection(), state.recovered_head,
+                             history_state.LastPublishedRenderReason()};
 }
 
 void RestoreLivePastePrior(HistoryWorkingState& state, EditorHistoryState& history_state,
                            const LivePastePriorState& prior) {
-  *state.pipeline_guard->commit_graph_ = prior.graph;
+  *state.graph = prior.graph;
   state.history->PublishWorkingSelection(prior.selection);
-  state.pipeline_guard->dirty_ = prior.dirty;
-  state.pipeline_guard->serialized_state_needs_writeback_ = prior.serialized;
   state.recovered_head = prior.recovered;
   history_state.RecordPublishedRenderReason(prior.published_reason);
 }
@@ -79,34 +69,28 @@ auto EditorHistoryTransfer::PasteLiveRootRelativeVersion(
   if (result == nullptr) return SetError(error, "Paste result storage is required");
   *result = {};
   if (package.Empty()) return SetError(error, "Adjustment transfer package is empty");
-  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_ || !state->history ||
-      !state->journal) {
+  if (!state->history || !state->journal) {
     return SetError(error, "Editor live paste requires a complete history state");
   }
-  if (!state->pipeline_guard->pipeline_) {
-    return SetError(error, "Editor live paste requires a live pipeline executor");
-  }
-  if (!state->pipeline_guard->document_) {
-    return SetError(error, "Editor live paste requires a live pipeline document");
-  }
 
-  auto& graph = *state->pipeline_guard->commit_graph_;
+  auto&                                graph            = *state->graph;
   const auto prior_version_id = graph.GetActiveVersionId();
   const auto prior = CaptureLivePastePrior(*state, state_);
-
-  if (!state->pipeline_guard->root_document_) {
-    return SetError(error, "Editor live paste requires an immutable root document");
-  }
 
   alcedo::DocumentTransferPasteOptions options;
 
   alcedo::PreparedDocumentPaste prepared;
   try {
-    prepared = alcedo::DocumentTransferPlanner::Plan(
-        package, *state->pipeline_guard->root_document_, options);
+    prepared = alcedo::DocumentTransferPlanner::Plan(package, state->root->document, options);
   } catch (const std::exception& ex) {
     return SetError(error, ex.what());
   }
+
+  // Build phase: the new Version starts at the root, so its document is the replay of the root.
+  // It is the checkpoint of the persisted Version state and, with the paste batch applied, the
+  // pasted document. It stays private until the WAL append below succeeds.
+  auto pasted_document = EditorHistoryState::BuildDocumentForHead(*state, std::nullopt, error);
+  if (!pasted_document) return false;
 
   const auto expected_before_version = graph.GetImageEditState();
   alcedo::version_ref_id_t new_version_id{};
@@ -127,8 +111,8 @@ auto EditorHistoryTransfer::PasteLiveRootRelativeVersion(
   alcedo::ImageEditState persisted_version_state{};
   if (auto pipeline_service = state_.PipelineMapper()) {
     std::string persistence_error;
-    if (!pipeline_service->PersistEditorHistoryState(
-            state->pipeline_guard, expected_before_version, &persistence_error)) {
+    if (!pipeline_service->PersistEditorHistory(graph, expected_before_version, *pasted_document,
+                                                &persistence_error)) {
       RestoreLivePastePrior(*state, state_, prior);
       return SetError(error, persistence_error.empty() ? "Paste Version persistence failed"
                                                        : persistence_error);
@@ -137,14 +121,15 @@ auto EditorHistoryTransfer::PasteLiveRootRelativeVersion(
     persisted_version_state = graph.GetImageEditState();
   }
 
-  // Every rollback runs before the WAL append publishes, so no journal truncate is needed.
+  // Every rollback runs before the WAL append publishes, so no journal truncate is needed. The
+  // working document was never replaced, so it is the document of the restored Version.
   auto rollback_after_version = [&]() -> bool {
     RestoreLivePastePrior(*state, state_, prior);
     if (version_persisted) {
       if (auto pipeline_service = state_.PipelineMapper()) {
         std::string persistence_error;
-        if (!pipeline_service->PersistEditorHistoryState(
-                state->pipeline_guard, persisted_version_state, &persistence_error)) {
+        if (!pipeline_service->PersistEditorHistory(
+                graph, persisted_version_state, state->document->Document(), &persistence_error)) {
           return SetError(error, persistence_error.empty()
                                      ? "Paste Version persistence rollback failed"
                                      : persistence_error);
@@ -154,16 +139,6 @@ auto EditorHistoryTransfer::PasteLiveRootRelativeVersion(
     return true;
   };
 
-  // Build phase: the pasted Version document is the root plus the paste batch. It stays
-  // private until the WAL append below succeeds.
-  std::shared_ptr<alcedo::PipelineDocument> pasted_document;
-  try {
-    pasted_document = std::make_shared<alcedo::PipelineDocument>(
-        alcedo::ClonePipelineDocument(*state->pipeline_guard->root_document_));
-  } catch (const std::exception& ex) {
-    (void)rollback_after_version();
-    return SetError(error, ex.what());
-  }
   if (!alcedo::ApplyPipelineEditBatch(*pasted_document, prepared.batch,
                                       alcedo::PipelineEditApplyDirection::Forward, error)) {
     (void)rollback_after_version();
@@ -203,17 +178,12 @@ auto EditorHistoryTransfer::PasteLiveRootRelativeVersion(
   }
 
   // Swap phase: the new Version head is published, so bind its document and its
-  // panel projection. This cannot fail.
-  {
-    auto render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
-    (void)alcedo::BindLivePipelineDocument(*state->pipeline_guard, std::move(pasted_document));
-    state->panel_projection_node_id = std::move(pasted_projection_node_id);
-    state->panel_projection         = std::move(pasted_projection);
-  }
+  // panel projection.
+  state->document->Replace(std::move(pasted_document));
+  state->panel_projection_node_id = std::move(pasted_projection_node_id);
+  state->panel_projection         = std::move(pasted_projection);
 
   state_.RecordPublishedRenderReason(alcedo::RenderReasonForBatch(prepared.batch));
-  state->pipeline_guard->dirty_ = true;
-  state->pipeline_guard->serialized_state_needs_writeback_ = true;
   state->recovered_head = false;
 
   result->pasted = true;

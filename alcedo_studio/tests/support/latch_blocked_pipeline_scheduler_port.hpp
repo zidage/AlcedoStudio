@@ -39,7 +39,7 @@ class LatchBlockedPipelineSchedulerPort final : public IEditorPipelineSchedulerP
     cancelled_.push_back(job_id);
   }
 
-  void WaitForSessionIdle(std::uint64_t session_epoch) override {
+  void WaitForSessionIdle(std::uint64_t session_epoch) {
     std::scoped_lock lock(mutex_);
     waited_sessions_.push_back(session_epoch);
   }

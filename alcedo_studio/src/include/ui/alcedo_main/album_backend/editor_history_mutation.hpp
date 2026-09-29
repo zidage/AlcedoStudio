@@ -23,14 +23,15 @@ class EditorHistoryState;
 
 /// Extracted mutation/navigation unit. Handles adjustment capture, settled
 /// commit, graph and Mask commands, Undo, Redo, explicit head movement, and
-/// Version checkout. Parameter operations run on the history queue and hold the
-/// executor render lock across document access and WAL publication. The live
-/// document is the only parameter store; no path writes a CPU stage operator.
+/// Version checkout. Every operation runs on the session owner thread, the only
+/// writer of the working document, and takes no lock; renders read the preview
+/// snapshot the history publishes afterward. The working document is the only
+/// parameter store; no path writes a CPU stage operator.
 class EditorHistoryMutation {
  public:
   explicit EditorHistoryMutation(EditorHistoryState& state);
 
-  /// Capture the target Model value once and apply preview under the render lock.
+  /// Capture the target Model value once and apply the preview to the working document.
   /// Unspecified current-panel targets are completed from the live document.
   /// Explicit incomplete targets are rejected. The matching CPU operator is
   /// updated in the same lock so configure does not apply the patch again.
@@ -64,13 +65,13 @@ class EditorHistoryMutation {
                                       std::string* error, bool* changed = nullptr) -> bool;
   /// Mask Groups: capture and commit one clean Color Grade inserted at the top
   /// of the Mask Groups stack (the node before DRT/Post must equal
-  /// @p expected_predecessor_id). Runs under the live render lock.
+  /// @p expected_predecessor_id).
   auto InsertColorGradeAtTop(const alcedo::EditorHistoryGuardHandle& guard,
                              const alcedo::NodeId& new_id,
                              const alcedo::NodeId& expected_predecessor_id, std::string* error)
       -> bool;
   /// Mask Groups: capture and commit one bridge-removal of a backbone Color
-  /// Grade. Runs under the live render lock.
+  /// Grade.
   auto RemoveColorGradeAndBridge(const alcedo::EditorHistoryGuardHandle& guard,
                                  const alcedo::NodeId& node_id, std::string* error) -> bool;
   auto SetColorGradeEnabled(const alcedo::EditorHistoryGuardHandle& guard, const alcedo::NodeId& node_id,
@@ -110,19 +111,19 @@ class EditorHistoryMutation {
                        const alcedo::Hash128& version_id, std::string* error) -> bool;
 
   /// Replace panel_projection from @p node_id without mutating parameters,
-  /// creating history state, or taking the live render lock.
+  /// or creating history state.
   auto SetPanelProjectionNode(const alcedo::EditorHistoryGuardHandle& guard,
                               const alcedo::NodeId& node_id, std::uint64_t session_generation,
                               std::string* error) -> bool;
 
   /**
-   * @brief Run @p op under the live pipeline render lock.
+   * @brief Run @p op on the working document.
    *
    * @p settle publishes typed batches whose live document already holds after values.
    */
-  auto WithLockedLiveDocument(const alcedo::EditorHistoryGuardHandle& guard,
-                              const alcedo::IEditorHistoryPort::LockedMaskDocumentOp& op,
-                              std::string* error) -> bool;
+  auto WithWorkingDocument(const alcedo::EditorHistoryGuardHandle&           guard,
+                           const alcedo::IEditorHistoryPort::MaskDocumentOp& op, std::string* error)
+      -> bool;
 
  private:
   EditorHistoryState& state_;

@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "app/editor_session_ports.hpp"
+#include "app/editor_working_document.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "type/hash_type.hpp"
 
@@ -31,39 +32,15 @@ inline auto MakeOpaqueSaveCapture() -> std::shared_ptr<const EditorMiniGitSaveCa
           [](const EditorMiniGitSaveCapture*) {}};
 }
 
-/// Fake pipeline port that records acquire/release counts and optional failures.
-/// When @p live_document is set, CurrentDocument returns it for every element, as the
-/// production port returns the loaded guard's document.
+/// Fake pipeline port. When @p working_document is set, CurrentPreview returns its last published
+/// preview for every element, as the production port returns the preview of the held lease.
 class FakeEditorPipelinePort final : public IEditorPipelinePort {
  public:
-  bool fail_acquire  = false;
-  int  acquire_count = 0;
-  int  release_count = 0;
-  std::vector<sl_element_id_t> acquired_ids;
-  std::vector<sl_element_id_t> released_ids;
-  std::shared_ptr<PipelineDocument> live_document;
+  std::shared_ptr<EditorWorkingDocument> working_document;
 
-  [[nodiscard]] auto CurrentDocument(sl_element_id_t /*element_id*/) const
-      -> const PipelineDocument* override {
-    return live_document.get();
-  }
-
-  auto Acquire(sl_element_id_t element_id, std::string* error)
-      -> EditorPipelineGuardHandle override {
-    ++acquire_count;
-    acquired_ids.push_back(element_id);
-    if (fail_acquire) {
-      if (error != nullptr) {
-        *error = "pipeline acquire failed";
-      }
-      return {};
-    }
-    return EditorPipelineGuardHandle{element_id, true};
-  }
-
-  void Release(const EditorPipelineGuardHandle& guard) override {
-    ++release_count;
-    released_ids.push_back(guard.element_id);
+  [[nodiscard]] auto                     CurrentPreview(sl_element_id_t /*element_id*/) const
+      -> std::shared_ptr<const PipelineGraphSnapshot> override {
+    return working_document ? working_document->CurrentPreview() : nullptr;
   }
 };
 
@@ -74,6 +51,8 @@ class FakeEditorHistoryPort : public IEditorHistoryPort {
   bool fail_acquire   = false;
   bool fail_commit    = false;
   bool fail_undo      = false;
+  /// When set, ReadHistorySnapshot reports an undoable history, so the action policy admits Undo.
+  bool                                            report_undoable_history  = false;
   bool fail_capture   = false;
   int  acquire_count  = 0;
   int  release_count  = 0;
@@ -115,6 +94,18 @@ class FakeEditorHistoryPort : public IEditorHistoryPort {
   std::uint64_t                  last_panel_projection_generation = 0;
   std::optional<EditorRenderReason> last_render_reason = EditorRenderReason::UndoRedo;
   std::shared_ptr<const EditorMiniGitSaveCapture> next_capture = MakeOpaqueSaveCapture();
+
+  auto ReadHistorySnapshot(const EditorHistoryGuardHandle& /*guard*/,
+                           EditorHistorySnapshot* snapshot, std::string* error) -> bool override {
+    if (!report_undoable_history) {
+      return IEditorHistoryPort::ReadHistorySnapshot({}, snapshot, error);
+    }
+    if (snapshot != nullptr) {
+      *snapshot          = {};
+      snapshot->can_undo = true;
+    }
+    return true;
+  }
 
   auto Acquire(sl_element_id_t element_id, std::string* error)
       -> EditorHistoryGuardHandle override {
@@ -421,7 +412,6 @@ class FakeEditorRenderSubmitPort final : public IEditorRenderSubmitPort {
   SessionIdleCallback pending_idle_completion;
   std::uint64_t pending_idle_epoch = 0;
 
-  void CancelSessionAndWait(std::uint64_t) override { ++cancel_count; }
   void CancelSession(std::uint64_t) override { ++cancel_count; }
   void CancelSession(std::uint64_t epoch, SessionIdleCallback on_idle) override {
     ++cancel_count;

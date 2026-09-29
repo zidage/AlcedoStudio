@@ -29,7 +29,6 @@ class RecordingScheduler final : public IEditorPipelineSchedulerPort {
     return ++next_job_;
   }
   void Cancel(std::uint64_t) override {}
-  void WaitForSessionIdle(std::uint64_t) override {}
 
  private:
   std::uint64_t next_job_ = 0;
@@ -272,9 +271,9 @@ class MaskDocumentHistoryPort final : public test::FakeEditorHistoryPort {
   int                                    settled_at_capture    = -1;
   bool                                   input_open_at_capture = false;
 
-  auto WithLockedLiveDocument(const EditorHistoryGuardHandle&, const LockedMaskDocumentOp& op,
-                              std::string* error) -> bool override {
-    LockedMaskSettle settle = [this](const PipelineEditBatch& batch, std::string*) {
+  auto WithWorkingDocument(const EditorHistoryGuardHandle&, const MaskDocumentOp& op,
+                           std::string* error) -> bool override {
+    MaskSettle settle = [this](const PipelineEditBatch& batch, std::string*) {
       settled.push_back(batch.operation_kind);
       return true;
     };

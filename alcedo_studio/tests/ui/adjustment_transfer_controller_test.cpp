@@ -5,7 +5,7 @@
 /// @file adjustment_transfer_controller_test.cpp
 /// @brief NM10.4 controller/coordinator tests against a real packed project:
 ///        the controller only routes commands and owns the copied package;
-///        source inspection must not mutate the live source pipeline, and
+///        source inspection must not change the stored source history, and
 ///        the apply coordinator refreshes only successfully persisted targets.
 
 #include "ui/alcedo_main/album_backend/adjustment_transfer_controller.hpp"
@@ -35,42 +35,41 @@
 namespace alcedo::ui::test {
 namespace {
 
-/// Live source-pipeline state that source inspection must never change.
-struct SourceGuardSnapshot {
+/// Stored source history and committed document that source inspection must never change.
+struct SourceHistoryState {
   version_ref_id_t   active_version_id;
   head_commit_hash_t active_head;
   std::size_t        commit_count;
   std::size_t        version_count;
-  bool               dirty;
-  bool               serialized_writeback;
-  std::string        live_document_json;
+  nlohmann::json     image_edit_state_json;
+  std::string        committed_document_json;
   std::uint64_t      history_rebuilds;
 };
 
-auto CaptureSourceGuard(const std::shared_ptr<PipelineGuard>& guard, PipelineMgmtService* service)
-    -> SourceGuardSnapshot {
-  SourceGuardSnapshot snapshot{};
-  snapshot.active_version_id    = guard->commit_graph_->GetActiveVersionId();
-  snapshot.active_head          = guard->commit_graph_->GetActiveVersionRef().head_commit_hash;
-  snapshot.commit_count         = guard->commit_graph_->CommitCount();
-  snapshot.version_count        = guard->commit_graph_->GetAllVersionRefs().size();
-  snapshot.dirty                = guard->dirty_;
-  snapshot.serialized_writeback = guard->serialized_state_needs_writeback_;
-  snapshot.live_document_json   = CanonicalPipelineDocumentJson(*guard->document_);
-  snapshot.history_rebuilds     = service->EditorPipelineHistoryRebuildCount();
-  return snapshot;
+auto CaptureSourceHistory(sl_element_id_t source_id, PipelineMgmtService* service)
+    -> SourceHistoryState {
+  const auto         history   = service->LoadHistorySnapshot(source_id);
+  const auto         committed = service->AcquireCommittedSnapshot(source_id);
+  SourceHistoryState state{};
+  state.active_version_id       = history.graph_->GetActiveVersionId();
+  state.active_head             = history.graph_->GetActiveVersionRef().head_commit_hash;
+  state.commit_count            = history.graph_->CommitCount();
+  state.version_count           = history.graph_->GetAllVersionRefs().size();
+  state.image_edit_state_json   = history.graph_->GetImageEditState().ToJSON();
+  state.committed_document_json = CanonicalPipelineDocumentJson(committed->Document());
+  state.history_rebuilds        = service->EditorPipelineHistoryRebuildCount();
+  return state;
 }
 
-void ExpectSourceGuardUnchanged(const SourceGuardSnapshot& before,
-                                const SourceGuardSnapshot& after) {
+void ExpectSourceHistoryUnchanged(const SourceHistoryState& before,
+                                  const SourceHistoryState& after) {
   EXPECT_EQ(after.active_version_id, before.active_version_id);
   EXPECT_EQ(HeadCommitHashToStorage(after.active_head),
             HeadCommitHashToStorage(before.active_head));
   EXPECT_EQ(after.commit_count, before.commit_count);
   EXPECT_EQ(after.version_count, before.version_count);
-  EXPECT_EQ(after.dirty, before.dirty);
-  EXPECT_EQ(after.serialized_writeback, before.serialized_writeback);
-  EXPECT_EQ(after.live_document_json, before.live_document_json);
+  EXPECT_EQ(after.image_edit_state_json, before.image_edit_state_json);
+  EXPECT_EQ(after.committed_document_json, before.committed_document_json);
   EXPECT_EQ(after.history_rebuilds, before.history_rebuilds);
 }
 
@@ -101,7 +100,7 @@ class AdjustmentTransferControllerTest : public ApplicationModuleHostTestFixture
 
 // ============================================================================
 // Copy: the controller prepares the dialog model and publishes the package;
-// the live source pipeline is never mutated in the process.
+// the stored source history is never changed in the process.
 // ============================================================================
 
 TEST_F(AdjustmentTransferControllerTest, CopyDoesNotSaveOrRenderSourceImage) {
@@ -129,12 +128,10 @@ TEST_F(AdjustmentTransferControllerTest, CopyDoesNotSaveOrRenderSourceImage) {
   EXPECT_FALSE(prepare.contains("adjustmentRows"));
   EXPECT_FALSE(prepare.contains("selectedKeys"));
 
-  const auto guard = pipeline_service->LoadEditorPipeline(source.file_id_);
-  ASSERT_TRUE(guard && guard->commit_graph_ && guard->document_);
-  const auto before = CaptureSourceGuard(guard, pipeline_service.get());
+  const auto before = CaptureSourceHistory(source.file_id_, pipeline_service.get());
 
   // A model command (focus + uncheck) and the Copy build must not touch the
-  // live source graph, document, dirty flag, WAL, or render counters.
+  // stored source history, its checkpoint, its committed document, or the replay counter.
   auto*      model  = transfer->dialog_model();
   ASSERT_NE(model, nullptr);
   model->FocusNode(QStringLiteral("drt"));
@@ -148,8 +145,10 @@ TEST_F(AdjustmentTransferControllerTest, CopyDoesNotSaveOrRenderSourceImage) {
   EXPECT_FALSE(transfer->package_source_version().isEmpty());
   EXPECT_FALSE(transfer->package_summary().isEmpty());
 
-  const auto after = CaptureSourceGuard(guard, pipeline_service.get());
-  ExpectSourceGuardUnchanged(before, after);
+  const auto after = CaptureSourceHistory(source.file_id_, pipeline_service.get());
+  ExpectSourceHistoryUnchanged(before, after);
+  EXPECT_EQ(pipeline_service->PipelineLoadCount(), 0u);
+  EXPECT_EQ(pipeline_service->PipelineConstructCount(), 0u);
 }
 
 TEST_F(AdjustmentTransferControllerTest, CopyFailureKeepsPriorPackage) {
@@ -274,10 +273,10 @@ TEST_F(AdjustmentTransferControllerTest, MultiTargetCoordinatorRefreshesOnlySucc
             pasted_state.materialized_head_commit_hash);
 
   // The pasted target gained a root-relative Version it did not have before.
-  const auto target_guard = pipeline_service->LoadEditorPipeline(target.file_id_);
-  ASSERT_TRUE(target_guard && target_guard->commit_graph_);
+  const auto target_history = pipeline_service->LoadHistorySnapshot(target.file_id_);
+  ASSERT_NE(target_history.graph_, nullptr);
   bool found_pasted_version = false;
-  for (const auto& kv : target_guard->commit_graph_->GetAllVersionRefs()) {
+  for (const auto& kv : target_history.graph_->GetAllVersionRefs()) {
     if (kv.second.display_name == "Pasted Adjustments") {
       found_pasted_version = true;
       break;

@@ -8,7 +8,6 @@
 #include <functional>
 #include <memory>
 #include <mutex>
-#include <queue>
 #include <vector>
 
 #include "app/editor_interactive_pacing.hpp"
@@ -19,18 +18,16 @@ namespace alcedo {
 /**
  * @brief One-writer admission for consume/apply/render cycles.
  *
- * Owns whether a pending-input consume currently holds live ownership, the
- * Interactive 16 ms cadence, and owner work deferred until the inflight frame
- * is owner-safe. Does not own the pending-input queue, history, or coordinator.
+ * Owns whether a pending-input consume cycle is in flight and the Interactive
+ * 16 ms cadence. Does not own the pending-input queue, history, or coordinator.
  *
- * @thread_safety Session owner thread only for cycle/deferred state. The
+ * @thread_safety Session owner thread only for cycle state. The
  * deadline-handler slot itself is mutex-protected so the facade can rebind it
  * from the GUI thread while the owner arms deadlines concurrently.
  */
 class EditorSerialFrameAdmission {
  public:
-  using DeadlineHandler  = std::function<void(std::int64_t delay_ns)>;
-  using DeferredOwnerWork = std::function<void()>;
+  using DeadlineHandler = std::function<void(std::int64_t delay_ns)>;
 
   EditorSerialFrameAdmission();
 
@@ -88,10 +85,6 @@ class EditorSerialFrameAdmission {
   /// If Interactive work is waiting on cadence, arm the deadline handler once.
   void RequestInteractiveDeadlineIfNeeded();
 
-  void DeferOwnerWork(DeferredOwnerWork work);
-  [[nodiscard]] auto HasDeferredOwnerWork() const -> bool;
-  auto               TakeDeferredOwnerWork() -> DeferredOwnerWork;
-
   [[nodiscard]] auto interactive_start_times_ns() const -> const std::vector<std::int64_t>& {
     return interactive_start_times_ns_;
   }
@@ -111,7 +104,6 @@ class EditorSerialFrameAdmission {
   mutable std::mutex                     deadline_handler_mutex_;
   DeadlineHandler                        deadline_handler_;
   EditorInteractivePacing                pacing_;
-  std::queue<DeferredOwnerWork>          deferred_;
   bool                                   holding_ownership_     = false;
   bool                                   cycle_is_interactive_  = false;
   std::uint64_t                          inflight_request_id_   = 0;

@@ -50,8 +50,7 @@ class SessionQueueCompletionExecutor final : public IEditorSessionCommandExecuto
 EditorSessionService::EditorSessionService(Dependencies dependencies)
     : dependencies_(std::move(dependencies)),
       command_queue_(dependencies_.command_executor),
-      lifecycle_(
-          EditorSessionLifecycle::Dependencies{dependencies_.pipeline, dependencies_.history}),
+      lifecycle_(EditorSessionLifecycle::Dependencies{dependencies_.history}),
       save_service_(EditorSaveCheckpointService::Dependencies{
           dependencies_.checkpoint_store, dependencies_.thumbnails, dependencies_.tasks,
           std::make_shared<SessionQueueCompletionExecutor>(command_queue_),
@@ -201,7 +200,6 @@ void EditorSessionService::EndPublication() {
   if (publication_depth_ == 0 && publication_dirty_) {
     publication_dirty_ = false;
     PublishActionAvailabilityIfChanged();
-    PublishDocumentSnapshot();
     NotifyChange();
   }
 }
@@ -396,7 +394,6 @@ auto EditorSessionService::Emit(EditorSessionResult result) -> EditorSessionResu
   if (publication_depth_ != 0) {
     publication_dirty_ = true;
   } else {
-    PublishDocumentSnapshot();
     NotifyChange();
   }
   return result;
@@ -555,11 +552,6 @@ auto EditorSessionService::Open(sl_element_id_t element_id, image_id_t image_id)
 auto EditorSessionService::CheckoutVersion(const version_ref_id_t& version_id)
     -> EditorSessionResult {
   if (!InOwnerReduction()) {
-    if (auto deferred =
-            DeferIfLiveOwnershipHeld([this, version_id] { return CheckoutVersion(version_id); },
-                                     "Checkout queued behind in-flight frame")) {
-      return *deferred;
-    }
     EditorSessionCommand command;
     command.kind       = EditorSessionCommandKind::CheckoutVersion;
     command.version_id = version_id;
@@ -606,30 +598,13 @@ auto EditorSessionService::active_version_id() const -> version_ref_id_t {
 
 auto EditorSessionService::pipeline_document() const
     -> std::shared_ptr<const PipelineDocument> {
-  std::scoped_lock lock(document_snapshot_mutex_);
-  return published_document_;
-}
-
-void EditorSessionService::PublishDocumentSnapshot() {
-  std::shared_ptr<const PipelineDocument> snapshot;
-  if (dependencies_.pipeline && lifecycle_.has_image()) {
-    // Runs on the owner thread, which is the only writer of the live document, as Freeze
-    // requires. The frozen document shares every node; the next edit copies only what it
-    // changes.
-    if (const auto* document =
-            dependencies_.pipeline->CurrentDocument(lifecycle_.identity().element_id)) {
-      snapshot = document->Freeze();
-    }
+  // The history publishes a preview after every write, before any change notification, so a
+  // GUI reader that reacts to a notification sees at least the document it announced.
+  if (!dependencies_.pipeline || !lifecycle_.has_image()) {
+    return nullptr;
   }
-  std::scoped_lock lock(document_snapshot_mutex_);
-#ifndef NDEBUG
-  assert((published_document_ == nullptr ||
-          DocumentRevisionFingerprint(*published_document_) == published_document_fingerprint_) &&
-         "A write reached a frozen PipelineDocument");
-  published_document_fingerprint_ =
-      snapshot != nullptr ? DocumentRevisionFingerprint(*snapshot) : 0;
-#endif
-  published_document_ = std::move(snapshot);
+  const auto preview = dependencies_.pipeline->CurrentPreview(lifecycle_.identity().element_id);
+  return preview ? preview->SharedDocument() : nullptr;
 }
 
 auto EditorSessionService::panel_projection() const -> EditorPanelProjection {
@@ -1406,10 +1381,10 @@ void EditorSessionService::AbortMaskCreation() {
   }
   std::string error;
   const auto  guard = lifecycle_.history_guard();
-  (void)dependencies_.history->WithLockedLiveDocument(
+  (void)dependencies_.history->WithWorkingDocument(
       guard,
       [this](PipelineDocument& document, MiniGitWorkingHistory& history,
-             const IEditorHistoryPort::LockedMaskSettle& settle, bool* input_open, std::string*) {
+             const IEditorHistoryPort::MaskSettle& settle, bool* input_open, std::string*) {
         mask_creation_.Bind(document, history);
         mask_creation_.SetSettlePublisher(settle);
         mask_creation_.SetInteractivePreview({});
@@ -1551,12 +1526,11 @@ void EditorSessionService::ConsumePendingMaskCommands() {
 auto EditorSessionService::ApplyMaskCommandsToLiveDocument(
     const std::vector<EditorMaskCreationCommand>& batch, bool finish_open_input,
     MaskCommandBatchOutcome* outcome, std::string* error) -> bool {
-  return dependencies_.history->WithLockedLiveDocument(
+  return dependencies_.history->WithWorkingDocument(
       lifecycle_.history_guard(),
-      [this, &batch, finish_open_input, outcome](PipelineDocument&      document,
-                                                 MiniGitWorkingHistory& history,
-                                                 const IEditorHistoryPort::LockedMaskSettle& settle,
-                                                 bool* input_open, std::string* op_error) {
+      [this, &batch, finish_open_input, outcome](
+          PipelineDocument& document, MiniGitWorkingHistory& history,
+          const IEditorHistoryPort::MaskSettle& settle, bool* input_open, std::string* op_error) {
         // Report the sequence state on every return path, including a rejected command.
         struct ReportOpenSequence {
           EditorMaskCreationController& controller;
@@ -1653,8 +1627,7 @@ void EditorSessionService::NoteExtraScheduleWait(const EditorPendingSequence& se
     return;
   }
   std::int64_t startable_ns = sequence.latest_accepted_ns;
-  const auto   released_ns =
-      last_live_pipeline_release_ns_.load(std::memory_order_acquire);
+  const auto   released_ns  = last_frame_finished_ns_.load(std::memory_order_acquire);
   if (released_ns > startable_ns) {
     startable_ns = released_ns;
   }
@@ -1680,13 +1653,6 @@ void EditorSessionService::TryConsumePendingInput() {
   }
   if (render_.render_diagnostics().has_inflight) {
     serial_admission_.RequestInteractiveDeadlineIfNeeded();
-    return;
-  }
-  if (serial_admission_.HasDeferredOwnerWork()) {
-    auto work = serial_admission_.TakeDeferredOwnerWork();
-    if (work) {
-      work();
-    }
     return;
   }
   bool has_mask_commands = false;
@@ -1888,30 +1854,7 @@ void EditorSessionService::FinishSerialFrameIfNeeded(const EditorRenderResult& r
   if (serial_admission_.HoldsOwnership()) {
     return;
   }
-  if (serial_admission_.HasDeferredOwnerWork()) {
-    auto work = serial_admission_.TakeDeferredOwnerWork();
-    if (work) {
-      work();
-    }
-    PublishRenderProgressIfChanged();
-    return;
-  }
   TryConsumePendingInput();
-}
-
-auto EditorSessionService::DeferIfLiveOwnershipHeld(std::function<EditorSessionResult()> retry,
-                                                    std::string                          message)
-    -> std::optional<EditorSessionResult> {
-  if (!serial_admission_.HoldsOwnership() || !retry) {
-    return std::nullopt;
-  }
-  serial_admission_.DeferOwnerWork([retry = std::move(retry)]() { (void)retry(); });
-  EditorSessionResult result;
-  result.kind     = EditorSessionResultKind::Accepted;
-  result.state    = lifecycle_.state();
-  result.identity = lifecycle_.identity();
-  result.message  = std::move(message);
-  return result;
 }
 
 auto EditorSessionService::PublishTypedNodeHistorySuccess(std::string message)
@@ -2082,10 +2025,6 @@ auto EditorSessionService::CommitAdjustment(std::string patch_key) -> EditorSess
 
 auto EditorSessionService::Undo() -> EditorSessionResult {
   if (!InOwnerReduction()) {
-    if (auto deferred = DeferIfLiveOwnershipHeld([this] { return Undo(); },
-                                                 "Undo queued behind in-flight frame")) {
-      return *deferred;
-    }
     EditorSessionCommand command;
     command.kind = EditorSessionCommandKind::Undo;
     return SubmitCommand(std::move(command),
@@ -2121,10 +2060,6 @@ auto EditorSessionService::Undo() -> EditorSessionResult {
 
 auto EditorSessionService::Redo() -> EditorSessionResult {
   if (!InOwnerReduction()) {
-    if (auto deferred = DeferIfLiveOwnershipHeld([this] { return Redo(); },
-                                                 "Redo queued behind in-flight frame")) {
-      return *deferred;
-    }
     EditorSessionCommand command;
     command.kind = EditorSessionCommandKind::Redo;
     return SubmitCommand(std::move(command),
@@ -2431,7 +2366,7 @@ void EditorSessionService::NotifyRenderResult(const EditorRenderResult& render_r
     case EditorRenderResultKind::Cancelled: {
       const auto now_ns = diag::PreviewPerformanceEnabled() ? diag::PreviewPerformance::NowNs()
                                                             : serial_admission_.NowNs();
-      last_live_pipeline_release_ns_.store(now_ns, std::memory_order_release);
+      last_frame_finished_ns_.store(now_ns, std::memory_order_release);
       break;
     }
     case EditorRenderResultKind::RequestAccepted:

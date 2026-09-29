@@ -4,18 +4,31 @@
 
 /// Slider and typed-model input enqueue without live document mutation.
 /// GUI callbacks update local controls and admit change descriptions; they do
-/// not take the render lock or capture history.
+/// not write the working document or capture history.
+
+#include <gtest/gtest.h>
+
+#include <QString>
+#include <QVariantList>
+#include <QVariantMap>
+#include <chrono>
+#include <exception>
+#include <filesystem>
+#include <memory>
+#include <string>
+#include <thread>
 
 #include "app/editor_pending_input.hpp"
 #include "app/editor_pipeline_command_service.hpp"
 #include "app/editor_session_edit_controller.hpp"
 #include "app/pipeline_service.hpp"
 #include "edit/graph/pipeline_document.hpp"
-#include "edit/history/commit_graph.hpp"
-#include "edit/pipeline/pipeline_executor.hpp"
+#include "edit/graph/pipeline_graph_snapshot.hpp"
 #include "image/image.hpp"
 #include "image/metadata.hpp"
 #include "json.hpp"
+#include "support/editor_history_port_test_reads.hpp"
+#include "support/editor_lease_test_support.hpp"
 #include "support/editor_parameter_target_test.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
@@ -25,35 +38,8 @@
 #include "ui/alcedo_main/album_backend/editor_session_pipeline_port.hpp"
 #include "ui/alcedo_main/album_backend/editor_tone_curve_model.hpp"
 
-#include <QString>
-#include <QVariantList>
-#include <QVariantMap>
-
-#include <gtest/gtest.h>
-
-#include <chrono>
-#include <exception>
-#include <filesystem>
-#include <memory>
-#include <string>
-#include <thread>
-
 namespace alcedo::ui {
 namespace {
-
-auto MakePipelineGuard(sl_element_id_t element_id) -> std::shared_ptr<alcedo::PipelineGuard> {
-  auto guard       = std::make_shared<alcedo::PipelineGuard>();
-  guard->id_       = element_id;
-  guard->pipeline_ = std::make_shared<alcedo::PipelineExecutor>();
-  guard->document_ =
-      std::make_shared<alcedo::PipelineDocument>(alcedo::CreateDefaultPipelineDocument());
-  guard->commit_graph_ =
-      std::make_shared<alcedo::CommitGraph>(alcedo::CommitGraph::CreateEmpty(element_id));
-  guard->root_id_ = guard->commit_graph_->GetRootId();
-  guard->root_document_ =
-      std::make_shared<alcedo::PipelineDocument>(alcedo::ClonePipelineDocument(*guard->document_));
-  return guard;
-}
 
 auto DocumentExposureEv(const alcedo::PipelineDocument& document) -> float {
   nlohmann::json json;
@@ -122,10 +108,9 @@ class SerialInputBoundaryTest : public ::testing::Test {
     const auto stamp =
         std::to_string(std::chrono::high_resolution_clock::now().time_since_epoch().count());
     journal_path_ = std::filesystem::temp_directory_path() / ("serial_input_" + stamp + ".wal");
-    guard_        = MakePipelineGuard(42);
     pipeline_     = std::make_shared<EditorSessionPipelinePort>();
-    pipeline_->SetServices(
-        EditorSessionPipelineMappers{{}, [g = guard_](sl_element_id_t) { return g; }});
+    pipeline_->SetServices(EditorSessionPipelineMappers{
+        {}, [](sl_element_id_t id) { return alcedo::test::MakeInMemoryEditorLease(id); }});
     history_.SetServices(
         EditorSessionHistoryPort::Services{[this](sl_element_id_t) { return journal_path_; }});
     history_.SetPipelinePort(pipeline_);
@@ -144,8 +129,12 @@ class SerialInputBoundaryTest : public ::testing::Test {
     std::filesystem::remove(journal_path_, ec);
   }
 
-  std::filesystem::path                  journal_path_;
-  std::shared_ptr<alcedo::PipelineGuard> guard_;
+  /// Working document as the history published it after its last operation.
+  auto Working() -> std::shared_ptr<const alcedo::PipelineGraphSnapshot> {
+    return alcedo::test::EditorWorkingPreview(*pipeline_, 42);
+  }
+
+  std::filesystem::path                      journal_path_;
   std::shared_ptr<EditorSessionPipelinePort> pipeline_;
   EditorSessionHistoryPort               history_;
   alcedo::EditorHistoryGuardHandle       handle_{};
@@ -153,7 +142,7 @@ class SerialInputBoundaryTest : public ::testing::Test {
   alcedo::EditorPendingInputQueue        queue_;
 };
 
-TEST_F(SerialInputBoundaryTest, SliderMovesWhileBlockedRenderLeaveLiveParametersUnchanged) {
+TEST_F(SerialInputBoundaryTest, SliderMovesOnlyQueueInputAndLeaveLiveParametersUnchanged) {
   QueuedInputSubmitter submitter(&queue_, identity_);
   auto                 model = std::make_unique<EditorAdjustmentValueModel>();
   model->setSubmitter(&submitter);
@@ -162,12 +151,11 @@ TEST_F(SerialInputBoundaryTest, SliderMovesWhileBlockedRenderLeaveLiveParameters
   model->setMaximum(5.0);
   model->setValue(0.0);
 
-  const float live_before = DocumentExposureEv(*guard_->document_);
+  const float live_before = DocumentExposureEv(Working()->Document());
   EXPECT_FLOAT_EQ(live_before, alcedo::kDefaultPipelineExposureEv);
-  const auto live_json_before = guard_->document_->ToJson().dump();
+  const auto  live_json_before = Working()->Document().ToJson().dump();
 
-  std::unique_lock render_held(guard_->pipeline_->GetRenderLock());
-  std::thread      drag([&] {
+  std::thread drag([&] {
     model->beginDrag();
     model->updateDrag(0.10);
     model->updateDrag(0.20);
@@ -178,8 +166,8 @@ TEST_F(SerialInputBoundaryTest, SliderMovesWhileBlockedRenderLeaveLiveParameters
 
   EXPECT_TRUE(submitter.last_error_.empty()) << submitter.last_error_;
   EXPECT_DOUBLE_EQ(model->value(), 0.50);
-  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_), live_before);
-  EXPECT_EQ(guard_->document_->ToJson().dump(), live_json_before);
+  EXPECT_FLOAT_EQ(DocumentExposureEv(Working()->Document()), live_before);
+  EXPECT_EQ(Working()->Document().ToJson().dump(), live_json_before);
   const auto pending = queue_.Peek();
   ASSERT_EQ(pending.sequences.size(), 1u);
   EXPECT_EQ(pending.sequences.front().seal, alcedo::EditorPendingInputBoundaryKind::None);
@@ -188,10 +176,6 @@ TEST_F(SerialInputBoundaryTest, SliderMovesWhileBlockedRenderLeaveLiveParameters
   EXPECT_EQ(alcedo::PendingScalarValue(*exposure), 0.50f);
   EXPECT_EQ(exposure->identity.element_id, identity_.element_id);
   EXPECT_EQ(exposure->identity.image_id, identity_.image_id);
-
-  render_held.unlock();
-  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_), live_before);
-  EXPECT_EQ(guard_->document_->ToJson().dump(), live_json_before);
 }
 
 TEST_F(SerialInputBoundaryTest, PendingDifferentFieldsSurviveInputCoalescing) {
@@ -219,7 +203,7 @@ TEST_F(SerialInputBoundaryTest, PendingDifferentFieldsSurviveInputCoalescing) {
 
   EXPECT_DOUBLE_EQ(exposure->value(), 0.75);
   EXPECT_DOUBLE_EQ(contrast->value(), 18.0);
-  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_), alcedo::kDefaultPipelineExposureEv);
+  EXPECT_FLOAT_EQ(DocumentExposureEv(Working()->Document()), alcedo::kDefaultPipelineExposureEv);
 
   const auto pending = queue_.Peek();
   ASSERT_EQ(pending.sequences.size(), 1u);
@@ -246,7 +230,7 @@ TEST_F(SerialInputBoundaryTest, ReleaseBeforeFirstPreviewKeepsFinalQueuedValuesO
   model->reset();
 
   EXPECT_DOUBLE_EQ(model->value(), 1.25);
-  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_), alcedo::kDefaultPipelineExposureEv);
+  EXPECT_FLOAT_EQ(DocumentExposureEv(Working()->Document()), alcedo::kDefaultPipelineExposureEv);
   const auto pending = queue_.Peek();
   ASSERT_EQ(pending.sequences.size(), 1u);
   EXPECT_EQ(pending.sequences.front().seal, alcedo::EditorPendingInputBoundaryKind::Release);
@@ -332,7 +316,7 @@ TEST_F(SerialInputBoundaryTest, TypedModelsEnqueueThroughSameOwnerRuleWithoutLiv
   color_temp->setSubmitter(&submitter);
   color_temp->editCct(6500.0);
 
-  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_), alcedo::kDefaultPipelineExposureEv);
+  EXPECT_FLOAT_EQ(DocumentExposureEv(Working()->Document()), alcedo::kDefaultPipelineExposureEv);
   const auto pending = queue_.Peek();
   ASSERT_FALSE(pending.sequences.empty());
   EXPECT_NE(alcedo::FindPendingField(pending, "exposure"), nullptr);
@@ -368,11 +352,11 @@ TEST_F(SerialInputBoundaryTest, ReleaseBeforeFirstPreviewCommitsFinalValuesOnce)
   const auto outcome = edit.HandlePendingSequence(*batch, handle_, identity_);
   EXPECT_EQ(outcome.kind, alcedo::EditorEditOutcome::Kind::RenderRouted);
   EXPECT_EQ(outcome.reason, alcedo::EditorRenderReason::SettledAdjustment);
-  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_), 1.25f);
+  EXPECT_FLOAT_EQ(DocumentExposureEv(Working()->Document()), 1.25f);
 
   std::string error;
   ASSERT_TRUE(history_.Undo(handle_, &error)) << error;
-  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_), alcedo::kDefaultPipelineExposureEv);
+  EXPECT_FLOAT_EQ(DocumentExposureEv(Working()->Document()), alcedo::kDefaultPipelineExposureEv);
 }
 
 TEST_F(SerialInputBoundaryTest, ImageExifDisplayFieldsAreOwnedByImageNotPipelineDocument) {
@@ -392,8 +376,8 @@ TEST_F(SerialInputBoundaryTest, ImageExifDisplayFieldsAreOwnedByImageNotPipeline
   EXPECT_FLOAT_EQ(image.exif_display_.aperture_, 2.8f);
   EXPECT_FLOAT_EQ(image.exif_display_.focal_, 50.0f);
   EXPECT_NE(image.exif_display_.focal_, image.exif_display_.focal_35mm_);
-  EXPECT_EQ(guard_->document_->ToJson().dump().find("shutter_speed"), std::string::npos);
-  EXPECT_EQ(guard_->document_->ToJson().dump().find("\"iso\""), std::string::npos);
+  EXPECT_EQ(Working()->Document().ToJson().dump().find("shutter_speed"), std::string::npos);
+  EXPECT_EQ(Working()->Document().ToJson().dump().find("\"iso\""), std::string::npos);
 }
 
 }  // namespace

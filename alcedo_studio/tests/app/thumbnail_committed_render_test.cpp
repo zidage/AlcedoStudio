@@ -5,6 +5,8 @@
 // Executor ownership refactor P4: thumbnails and analysis renditions render committed pipeline
 // graph snapshots on the ThumbnailService's own batch executors. They never load a
 // PipelineGuard, never take the editor's render lock, and never see uncommitted editor values.
+// Since P6 the editor session owns its working document and its Interactive executor; these tests
+// stand in for it with an EditorStandIn that owns the same objects.
 
 #include <gtest/gtest.h>
 
@@ -25,6 +27,7 @@
 #include <utility>
 #include <vector>
 
+#include "app/editor_working_document.hpp"
 #include "app/pipeline_history_applier.hpp"
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
@@ -37,6 +40,8 @@
 #include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/pipeline/pipeline_executor.hpp"
+#include "edit/runtime/executor_role.hpp"
+#include "edit/runtime/pipeline_apply_request.hpp"
 #include "image/image.hpp"
 #include "image/image_buffer.hpp"
 #include "json.hpp"
@@ -100,20 +105,45 @@ auto MeanAbsoluteDifference(const cv::Mat& a, const cv::Mat& b) -> double {
   return sum / a.channels();
 }
 
-/// Raise exposure on the guard's live document by @p delta_ev and record it as one commit on its
-/// CommitGraph, as the editor does when a slider settles. Returns the new head. The imported DNG
-/// already carries a non-zero exposure, so callers state a change, not a value.
-auto CommitExposure(PipelineGuard& guard, float delta_ev) -> commit_hash_t {
-  nlohmann::json before;
-  {
-    std::lock_guard<std::mutex> render_lock(guard.pipeline_->GetRenderLock());
-    before = std::as_const(*guard.document_)
-                 .PrimaryGrade()
-                 ->FindAdjustmentByType(type_ids::Exposure())
-                 ->ToJson();
+/// What the editor session owns for the image it holds: the history lease, the working document,
+/// and the only Interactive executor. The service holds none of them.
+struct EditorStandIn {
+  sl_element_id_t                        id = 0;
+  EditorHistoryLease                     lease;
+  std::unique_ptr<EditorWorkingDocument> working;
+  std::shared_ptr<PipelineExecutor>      executor;
+
+  [[nodiscard]] auto                     Head() const -> head_commit_hash_t {
+    return lease.graph_.GetActiveVersionRef().head_commit_hash;
   }
-  nlohmann::json after = before;
-  after["exposure_ev"] = before.at("exposure_ev").get<float>() + delta_ev;
+};
+
+/// Take the editor lease of @p id and build the editor's working document and executor.
+auto OpenEditor(PipelineMgmtService& pipelines, sl_element_id_t id) -> EditorStandIn {
+  EditorStandIn editor;
+  editor.id       = id;
+  editor.lease    = pipelines.AcquireEditorLease(id);
+  editor.working  = std::make_unique<EditorWorkingDocument>(id, editor.lease.document_);
+  editor.executor = std::make_shared<PipelineExecutor>(ExecutorRole::Interactive);
+  return editor;
+}
+
+/// Exposure of the editor's working document.
+auto WorkingExposureJson(const EditorStandIn& editor) -> nlohmann::json {
+  return std::as_const(*editor.working)
+      .Document()
+      .PrimaryGrade()
+      ->FindAdjustmentByType(type_ids::Exposure())
+      ->ToJson();
+}
+
+/// Raise exposure on the editor's working document by @p delta_ev and record it as one commit on
+/// its CommitGraph, as the editor does when a slider settles. Returns the new head. The imported
+/// DNG already carries a non-zero exposure, so callers state a change, not a value.
+auto CommitExposure(EditorStandIn& editor, float delta_ev) -> commit_hash_t {
+  nlohmann::json before = WorkingExposureJson(editor);
+  nlohmann::json after  = before;
+  after["exposure_ev"]  = before.at("exposure_ev").get<float>() + delta_ev;
   PipelineEditBatch  batch;
   SetParameterChange change;
   change.target.owner_kind             = PipelineParameterOwnerKind::ColorGrade;
@@ -127,31 +157,30 @@ auto CommitExposure(PipelineGuard& guard, float delta_ev) -> commit_hash_t {
   batch.operation_kind                 = PipelineEditOperationKind::SetParameter;
   batch.presentation_key               = "history.operation.set_parameter";
   batch.changes.push_back(std::move(change));
-  {
-    std::lock_guard<std::mutex> render_lock(guard.pipeline_->GetRenderLock());
-    std::string                 error;
-    if (!ApplyPipelineEditBatch(*guard.document_, batch, PipelineEditApplyDirection::Forward,
-                                &error)) {
-      throw std::runtime_error("exposure batch did not apply: " + error);
-    }
+  std::string error;
+  if (!ApplyPipelineEditBatch(editor.working->Document(), batch,
+                              PipelineEditApplyDirection::Forward, &error)) {
+    throw std::runtime_error("exposure batch did not apply: " + error);
   }
-  auto commit =
-      EditCommit::MakePipelineEdit(guard.root_id_, guard.working_head_commit_hash(), batch);
-  const auto head = commit.GetCommitHash();
-  if (!guard.commit_graph_->InsertCommit(std::move(commit))) {
+  auto&      graph  = editor.lease.graph_;
+  auto       commit = EditCommit::MakePipelineEdit(graph.GetRootId(), editor.Head(), batch);
+  const auto head   = commit.GetCommitHash();
+  if (!graph.InsertCommit(std::move(commit))) {
     throw std::runtime_error("commit was not inserted");
   }
-  guard.commit_graph_->MoveWorkingHead(guard.commit_graph_->GetActiveVersionId(), head);
+  graph.MoveWorkingHead(graph.GetActiveVersionId(), head);
+  (void)editor.working->PublishPreview();
   return head;
 }
 
-/// Publish the guard's live document as the committed state at its working head, as the editor
-/// history does after a settled change.
-auto PublishLiveAsCommitted(PipelineMgmtService& pipelines, const PipelineGuard& guard)
+/// Publish the editor's working document as the committed state at its working head, as the
+/// editor history does after a settled change.
+auto PublishWorkingAsCommitted(PipelineMgmtService& pipelines, const EditorStandIn& editor)
     -> std::shared_ptr<const PipelineGraphSnapshot> {
-  auto snapshot = PipelineGraphSnapshot::Committed(guard.document_->Freeze(), guard.id_,
-                                                   guard.lineage_, guard.working_head_commit_hash(),
-                                                   guard.transaction_chain_hash());
+  const auto head     = editor.Head();
+  auto       snapshot = PipelineGraphSnapshot::Committed(
+      std::as_const(*editor.working).Document().Freeze(), editor.id, PipelineLineageId::Next(),
+      head, editor.lease.graph_.ChainHashForHead(head));
   pipelines.PublishCommitted(snapshot);
   return snapshot;
 }
@@ -215,11 +244,12 @@ TEST_F(ThumbnailCommittedRenderTest, StoredSnapshotEqualsTheDocumentTheEditorLoa
   EXPECT_EQ(snapshot->ElementId(), ids.first);
   EXPECT_FALSE(snapshot->Head().has_value()) << "an imported image has only its root";
 
-  auto editor = pipelines->LoadEditorPipeline(ids.first);
-  ASSERT_NE(editor, nullptr);
-  EXPECT_EQ(snapshot->Chain(), editor->transaction_chain_hash());
-  EXPECT_EQ(snapshot->Document().ToJson(), editor->document_->ToJson());
-  pipelines->SavePipeline(editor);
+  const auto lease = pipelines->AcquireEditorLease(ids.first);
+  ASSERT_NE(lease.document_, nullptr);
+  EXPECT_EQ(snapshot->Chain(),
+            lease.graph_.ChainHashForHead(lease.graph_.GetActiveVersionRef().head_commit_hash));
+  EXPECT_EQ(snapshot->Document().ToJson(), lease.document_->ToJson());
+  pipelines->ReleaseEditorLease(ids.first);
 }
 
 TEST_F(ThumbnailCommittedRenderTest, StoredSnapshotIsReusedUntilTheStoredHistoryChanges) {
@@ -236,21 +266,17 @@ TEST_F(ThumbnailCommittedRenderTest, StoredSnapshotIsReusedUntilTheStoredHistory
   EXPECT_EQ(first, second);
   EXPECT_EQ(pipelines->CommittedSnapshotStorageLoadCount(), 1u);
 
-  // A writer that persists history directly (Paste to a library image) needs no invalidation
-  // call: the next acquire sees that the stored labels moved.
-  auto writer = pipelines->LoadEditorPipeline(ids.first);
-  ASSERT_NE(writer, nullptr);
-  const auto  before_state = writer->commit_graph_->GetImageEditState();
-  const float stored_ev    = std::as_const(*writer->document_)
-                              .PrimaryGrade()
-                              ->FindAdjustmentByType(type_ids::Exposure())
-                              ->ToJson()
-                              .at("exposure_ev")
-                              .get<float>();
-  const auto  head = CommitExposure(*writer, 1.0f);
+  // A writer that persists history directly needs no invalidation call: the next acquire sees
+  // that the stored labels moved. The writer here is an editor that publishes nothing.
+  auto        writer       = OpenEditor(*pipelines, ids.first);
+  const auto  before_state = writer.lease.graph_.GetImageEditState();
+  const float stored_ev    = WorkingExposureJson(writer).at("exposure_ev").get<float>();
+  const auto  head         = CommitExposure(writer, 1.0f);
   std::string error;
-  ASSERT_TRUE(pipelines->PersistEditorHistoryState(writer, before_state, &error)) << error;
-  pipelines->SavePipeline(writer);
+  ASSERT_TRUE(pipelines->PersistEditorHistory(writer.lease.graph_, before_state,
+                                              writer.working->Document(), &error))
+      << error;
+  pipelines->ReleaseEditorLease(ids.first);
 
   const auto after = pipelines->AcquireCommittedSnapshot(ids.first);
   ASSERT_NE(after, first);
@@ -293,24 +319,23 @@ TEST_F(ThumbnailCommittedRenderTest, ThumbnailRendersTheCommittedStateNotUncommi
   auto           pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
   const auto     ids       = ImportLinearDng(project, pipelines);
   ASSERT_NE(ids.first, 0u);
-  auto editor = pipelines->AcquireEditorPipeline(ids.first);
-  ASSERT_NE(editor, nullptr);
-  (void)PublishLiveAsCommitted(*pipelines, *editor);
+  auto editor = OpenEditor(*pipelines, ids.first);
+  (void)PublishWorkingAsCommitted(*pipelines, editor);
 
   ThumbnailService thumbnails(project.GetSleeveService(), project.GetImagePoolService(), pipelines);
   const auto       committed = ThumbnailPixels(
       RequestThumbnail(thumbnails, ids.first, ids.second, ThumbnailResolution::k256));
   ASSERT_FALSE(committed.empty());
 
-  // An editor drag writes the live document without committing.
+  // An editor drag writes the working document and publishes its preview without committing.
   float committed_ev = 0.0f;
   {
-    std::lock_guard<std::mutex> render_lock(editor->pipeline_->GetRenderLock());
-    auto* exposure = editor->document_->PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure());
+    auto* exposure =
+        editor.working->Document().PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure());
     ASSERT_NE(exposure, nullptr);
     committed_ev = exposure->ToJson().at("exposure_ev").get<float>();
     exposure->LoadJson({{"exposure_ev", committed_ev + 2.0f}});
-    editor->unsettled_preview_ = true;
+    (void)editor.working->PublishPreview();
   }
   thumbnails.InvalidateThumbnail(ids.first);
   const auto during_drag = ThumbnailPixels(
@@ -319,15 +344,12 @@ TEST_F(ThumbnailCommittedRenderTest, ThumbnailRendersTheCommittedStateNotUncommi
       << "uncommitted editor values must not reach a thumbnail";
 
   // The drag settles: the value is committed and the editor publishes the new state.
-  {
-    std::lock_guard<std::mutex> render_lock(editor->pipeline_->GetRenderLock());
-    editor->document_->PrimaryGrade()
-        ->FindAdjustmentByType(type_ids::Exposure())
-        ->LoadJson({{"exposure_ev", committed_ev}});
-    editor->unsettled_preview_ = false;
-  }
-  (void)CommitExposure(*editor, 2.0f);
-  (void)PublishLiveAsCommitted(*pipelines, *editor);
+  editor.working->Document()
+      .PrimaryGrade()
+      ->FindAdjustmentByType(type_ids::Exposure())
+      ->LoadJson({{"exposure_ev", committed_ev}});
+  (void)CommitExposure(editor, 2.0f);
+  (void)PublishWorkingAsCommitted(*pipelines, editor);
   thumbnails.InvalidateThumbnail(ids.first);
   const auto settled = ThumbnailPixels(
       RequestThumbnail(thumbnails, ids.first, ids.second, ThumbnailResolution::k256));
@@ -338,7 +360,7 @@ TEST_F(ThumbnailCommittedRenderTest, ThumbnailRendersTheCommittedStateNotUncommi
       << "the committed +2 EV state must reach the thumbnail";
 
   thumbnails.ReleaseThumbnail(ids.first);
-  pipelines->ReleaseEditorPipeline(editor);
+  pipelines->ReleaseEditorLease(ids.first);
 }
 
 TEST_F(ThumbnailCommittedRenderTest, DiskCacheEntriesAreLabelledWithTheRenderedCommittedState) {
@@ -349,9 +371,8 @@ TEST_F(ThumbnailCommittedRenderTest, DiskCacheEntriesAreLabelledWithTheRenderedC
   auto           pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
   const auto     ids       = ImportLinearDng(project, pipelines);
   ASSERT_NE(ids.first, 0u);
-  auto editor = pipelines->AcquireEditorPipeline(ids.first);
-  ASSERT_NE(editor, nullptr);
-  const auto root_state = PublishLiveAsCommitted(*pipelines, *editor);
+  auto       editor     = OpenEditor(*pipelines, ids.first);
+  const auto root_state = PublishWorkingAsCommitted(*pipelines, editor);
 
   cv::Mat    root_pixels;
   cv::Mat    committed_pixels;
@@ -365,8 +386,8 @@ TEST_F(ThumbnailCommittedRenderTest, DiskCacheEntriesAreLabelledWithTheRenderedC
     ASSERT_FALSE(root_pixels.empty());
 
     // A render queued behind an editor commit renders, and is stored under, the state it read.
-    (void)CommitExposure(*editor, 1.5f);
-    committed_state = PublishLiveAsCommitted(*pipelines, *editor);
+    (void)CommitExposure(editor, 1.5f);
+    committed_state = PublishWorkingAsCommitted(*pipelines, editor);
     ASSERT_EQ(pipelines->AcquireCommittedSnapshot(ids.first), committed_state);
     // Drop only the memory entry; InvalidateThumbnail would also delete the disk entries.
     thumbnails.ReleaseThumbnail(ids.first);
@@ -402,7 +423,7 @@ TEST_F(ThumbnailCommittedRenderTest, DiskCacheEntriesAreLabelledWithTheRenderedC
   EXPECT_LT(root_error, kJpegDifference) << "the root label holds the root pixels";
   EXPECT_LT(committed_error, kJpegDifference) << "the head label holds the committed pixels";
 
-  pipelines->ReleaseEditorPipeline(editor);
+  pipelines->ReleaseEditorLease(ids.first);
 }
 
 TEST_F(ThumbnailCommittedRenderTest, ThumbnailRendersWhileTheEditorHoldsTheRenderLockOfTheImage) {
@@ -413,15 +434,28 @@ TEST_F(ThumbnailCommittedRenderTest, ThumbnailRendersWhileTheEditorHoldsTheRende
   auto           pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
   const auto     ids       = ImportLinearDng(project, pipelines);
   ASSERT_NE(ids.first, 0u);
-  auto editor = pipelines->AcquireEditorPipeline(ids.first);
-  ASSERT_NE(editor, nullptr);
-  (void)PublishLiveAsCommitted(*pipelines, *editor);
+  auto editor = OpenEditor(*pipelines, ids.first);
+  (void)PublishWorkingAsCommitted(*pipelines, editor);
   pipelines->ResetPipelineAcquireCountsForTesting();
+  // One editor frame binds the editor executor to the image before the thumbnail request.
+  {
+    const auto input =
+        raw_import_test::LoadEncodedInput(*project.GetImagePoolService(), ids.second);
+    ASSERT_NE(input, nullptr);
+    PipelineApplyRequest request;
+    request.geometry.resolution.max_edge = 1024;
+    request.geometry.resolution.quality  = RenderQuality::Export;
+    request.decode_res                   = DecodeRes::EIGHTH;
+    request.role                         = ExecutorRole::Interactive;
+    request.require_host_output          = true;
+    std::lock_guard<std::mutex> render_lock(editor.executor->GetRenderLock());
+    ASSERT_NE(editor.executor->Apply(*editor.working->CurrentPreview(), input, request), nullptr);
+  }
 
   ThumbnailService thumbnails(project.GetSleeveService(), project.GetImagePoolService(), pipelines);
   // An editor frame holds this lock from configure through present. Before P4 a thumbnail of
   // the same image queued on it for the whole frame.
-  std::unique_lock<std::mutex>         editor_frame(editor->pipeline_->GetRenderLock());
+  std::unique_lock<std::mutex>         editor_frame(editor.executor->GetRenderLock());
   std::promise<ThumbnailRequestResult> done;
   auto                                 done_future = done.get_future();
   thumbnails.GetThumbnailDetailed(
@@ -433,11 +467,11 @@ TEST_F(ThumbnailCommittedRenderTest, ThumbnailRendersWhileTheEditorHoldsTheRende
   const auto result = done_future.get();
   editor_frame.unlock();
   EXPECT_EQ(result.status, ThumbnailRequestStatus::kReady) << result.message;
-  EXPECT_FALSE(HasBatchRenderer(*editor->pipeline_));
+  EXPECT_FALSE(HasBatchRenderer(*editor.executor));
   EXPECT_EQ(pipelines->PipelineLoadCount(), 0u);
 
   thumbnails.ReleaseThumbnail(ids.first);
-  pipelines->ReleaseEditorPipeline(editor);
+  pipelines->ReleaseEditorLease(ids.first);
 }
 
 TEST_F(ThumbnailCommittedRenderTest, EditorFrameLatencyStaysUnchangedWhileThumbnailsRender) {
@@ -448,15 +482,14 @@ TEST_F(ThumbnailCommittedRenderTest, EditorFrameLatencyStaysUnchangedWhileThumbn
   auto           pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
   const auto     ids       = ImportLinearDng(project, pipelines);
   ASSERT_NE(ids.first, 0u);
-  auto editor = pipelines->AcquireEditorPipeline(ids.first);
-  ASSERT_NE(editor, nullptr);
-  (void)PublishLiveAsCommitted(*pipelines, *editor);
+  auto editor = OpenEditor(*pipelines, ids.first);
+  (void)PublishWorkingAsCommitted(*pipelines, editor);
 
   PipelineScheduler editor_worker(1);
   const auto        run_editor_frame = [&]() -> double {
     PipelineTask task;
-    task.pipeline_executor_          = editor->pipeline_;
-    task.snapshot_under_render_lock_ = MakeLiveSnapshotSource(editor);
+    task.pipeline_executor_          = editor.executor;
+    task.snapshot_under_render_lock_ = [&editor]() { return editor.working->CurrentPreview(); };
     task.input_desc_ = std::make_shared<Image>(LinearDngPath(), ImageType::DEFAULT);
     task.options_.render_desc_.render_type_ = RenderType::FAST_PREVIEW;
     task.options_.is_blocking_              = true;
@@ -530,7 +563,7 @@ TEST_F(ThumbnailCommittedRenderTest, EditorFrameLatencyStaysUnchangedWhileThumbn
   EXPECT_LT(loaded_ms, idle_ms + thumbnail_md)
       << "editor frames are serialized behind thumbnail renders";
 
-  pipelines->ReleaseEditorPipeline(editor);
+  pipelines->ReleaseEditorLease(ids.first);
 }
 
 }  // namespace

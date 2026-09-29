@@ -10,35 +10,40 @@
 #include <algorithm>
 #include <atomic>
 #include <filesystem>
-#include <stdexcept>
 #include <format>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <random>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <vector>
 
+#include "app/editor_working_document.hpp"
 #include "app/pipeline_document_history.hpp"
+#include "app/pipeline_history_applier.hpp"
+#include "app/pipeline_root_state.hpp"
 #include "app/project_service.hpp"
-#include "edit/history/pipeline_document_checkpoint.hpp"
-#include "support/editor_parameter_target_test.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
-#include "edit/graph/pipeline_document.hpp"
-#include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/drt_node_model.hpp"
+#include "edit/graph/pipeline_document.hpp"
+#include "edit/graph/pipeline_graph_commands.hpp"
+#include "edit/graph/pipeline_graph_snapshot.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/edit_commit.hpp"
+#include "edit/history/pipeline_document_checkpoint.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
-#include "edit/pipeline/pipeline_executor.hpp"
 #include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/operators/models/sharpen_model.hpp"
+#include "edit/pipeline/pipeline_executor.hpp"
 #include "sleeve/storage.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
+#include "support/editor_parameter_target_test.hpp"
 #include "utils/clock/time_provider.hpp"
 
 namespace alcedo {
@@ -69,14 +74,6 @@ class PipelineMapperTests : public ::testing::Test {
     }
   }
 };
-
-/// Document of the snapshot that the next render of @p guard's executor receives.
-auto RenderedDocumentJson(PipelineGuard& guard) -> nlohmann::json {
-  std::unique_lock<std::mutex> render_lock(guard.pipeline_->GetRenderLock());
-  const auto                   snapshot = guard.FreezeLiveSnapshot();
-  EXPECT_EQ(snapshot->Lineage(), guard.lineage_);
-  return snapshot->Document().ToJson();
-}
 
 TEST_F(PipelineMapperTests, InitTest) {
   ProjectService project(db_path_, meta_path_);
@@ -659,12 +656,88 @@ TEST_F(PipelineMapperTests, InvalidStoredDocumentFailsWithoutReplacement) {
   expect_failure(8520, std::move(wrong_owner), "belongs to DRT/Post");
 }
 
+auto DocumentExposure(const PipelineDocument& document) -> float {
+  const auto* exposure = dynamic_cast<const ExposureModel*>(
+      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+  if (exposure == nullptr) {
+    throw std::runtime_error("document is missing exposure");
+  }
+  return exposure->Value();
+}
+
+auto MakeExposureBatch(float before, float after) -> PipelineEditBatch {
+  nlohmann::json before_json{{"exposure_ev", before}};
+  nlohmann::json after_json{{"exposure_ev", after}};
+  return MakeSetParameterBatch(test::ColorGradeFieldTarget("exposure"), std::move(before_json),
+                               std::move(after_json), true, true, "Default");
+}
+
+/// Insert a commit on the root whose batch cannot apply: its target Color Grade node does not
+/// exist, so ReplayPipelineDocumentFromRoot fails at that commit.
+auto InsertUnreplayableCommit(CommitGraph& graph) -> commit_hash_t {
+  auto missing_target    = test::ColorGradeFieldTarget("exposure");
+  missing_target.node_id = NodeId{"grade.does_not_exist"};
+  auto commit            = EditCommit::MakePipelineEdit(
+      graph.GetRootId(), std::nullopt,
+      MakeSetParameterBatch(missing_target, nlohmann::json{{"exposure_ev", 1.5}},
+                                       nlohmann::json{{"exposure_ev", 3.0}}, true, true, "missing"));
+  const auto hash = commit.GetCommitHash();
+  if (!graph.InsertCommit(std::move(commit))) {
+    throw std::runtime_error("unreplayable commit was not inserted");
+  }
+  return hash;
+}
+
+/// Create the history root of @p element_id from the default document with the working-space
+/// camera profile, as import does for an RGB file. The editor opens only images with a root.
+void InitializeDefaultRoot(PipelineMgmtService& pipelines, sl_element_id_t element_id) {
+  pipelines.InitializeImageRoot(element_id, CreateDefaultPipelineDocument(), nullptr);
+}
+
+/// Apply @p batch to the editor's working document and record it as the next commit on the active
+/// Version of the lease's graph, as the editor history does for a settled edit.
+auto CommitOnLease(EditorHistoryLease& lease, const PipelineEditBatch& batch) -> commit_hash_t {
+  std::string error;
+  if (!ApplyPipelineEditBatch(*lease.document_, batch, PipelineEditApplyDirection::Forward,
+                              &error)) {
+    throw std::runtime_error("batch did not apply: " + error);
+  }
+  auto&      graph  = lease.graph_;
+  auto       commit = EditCommit::MakePipelineEdit(graph.GetRootId(),
+                                                   graph.GetActiveVersionRef().head_commit_hash, batch);
+  const auto head   = commit.GetCommitHash();
+  if (!graph.InsertCommit(std::move(commit))) {
+    throw std::runtime_error("commit was not inserted");
+  }
+  graph.MoveWorkingHead(graph.GetActiveVersionId(), head);
+  return head;
+}
+
+/// Committed snapshot of the lease's working document at the active head, as the editor publishes
+/// it after a committed change.
+auto CommittedSnapshotOfLease(const EditorHistoryLease& lease, sl_element_id_t element_id)
+    -> std::shared_ptr<const PipelineGraphSnapshot> {
+  const auto head = lease.graph_.GetActiveVersionRef().head_commit_hash;
+  return PipelineGraphSnapshot::Committed(std::as_const(*lease.document_).Freeze(), element_id,
+                                          PipelineLineageId::Next(), head,
+                                          lease.graph_.ChainHashForHead(head));
+}
+
+/// Stored image edit state of @p element_id; fails the test when there is none.
+auto StoredEditState(ProjectService& project, sl_element_id_t element_id)
+    -> std::optional<ImageEditState> {
+  auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+  auto             db_lock  = db_guard.Lock();
+  CommitGraphStore graph_service(db_guard.conn_);
+  return graph_service.GetImageEditState(element_id);
+}
+
 TEST_F(PipelineMapperTests, FailedDocumentSaveKeepsDirtyStateAndJournal) {
   constexpr sl_element_id_t element_id = 8506;
   ProjectService           project(db_path_, meta_path_);
   PipelineMgmtService      pipeline_service(project.GetStorage());
 
-  auto guard = pipeline_service.LoadEditorPipeline(element_id);
+  auto                      guard = pipeline_service.LoadPipeline(element_id);
   ASSERT_NE(guard, nullptr);
   guard->dirty_ = true;
   pipeline_service.SavePipeline(guard);
@@ -672,9 +745,8 @@ TEST_F(PipelineMapperTests, FailedDocumentSaveKeepsDirtyStateAndJournal) {
       project.GetStorage()->GetElementStore().GetPipelineJsonByElementId(element_id);
   ASSERT_TRUE(stored_before.has_value());
 
-  guard = pipeline_service.LoadEditorPipeline(element_id);
+  guard = pipeline_service.LoadPipeline(element_id);
   ASSERT_NE(guard, nullptr);
-  ASSERT_NE(guard->commit_graph_, nullptr);
   const auto head_before = guard->working_head_commit_hash();
   guard->serialized_state_needs_writeback_ = true;
   {
@@ -726,69 +798,103 @@ TEST_F(PipelineMapperTests, SaveDoesNotPersistUnsettledPreviewAsCommittedState) 
 TEST_F(PipelineMapperTests, EditorLoadUsesMatchingSerializedStateWithoutReconstruction) {
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService first(project.GetStorage());
+  InitializeDefaultRoot(first, 701);
 
-  auto                initial = first.LoadEditorPipeline(701);
-  ASSERT_NE(initial, nullptr);
-  ASSERT_NE(initial->pipeline_, nullptr);
-  EXPECT_NE(initial->root_id_, Hash128{});
-  EXPECT_FALSE(initial->working_head_commit_hash().has_value());
-  EXPECT_EQ(initial->transaction_chain_hash(), ComputeRootChainHash(initial->root_id_));
-  EXPECT_FALSE(initial->serialized_state_needs_writeback_);
-  const auto expected_document = initial->document_->ToJson();
-  first.SavePipeline(initial);
+  auto initial = first.AcquireEditorLease(701);
+  ASSERT_NE(initial.document_, nullptr);
+  const auto root_id = initial.graph_.GetRootId();
+  EXPECT_NE(root_id, Hash128{});
+  EXPECT_FALSE(initial.graph_.GetActiveVersionRef().head_commit_hash.has_value());
+  EXPECT_EQ(initial.graph_.ChainHashForHead(std::nullopt), ComputeRootChainHash(root_id));
+  const auto  expected_document = initial.document_->ToJson();
+  std::string error;
+  ASSERT_TRUE(first.PersistEditorHistory(initial.graph_, initial.graph_.GetImageEditState(),
+                                         *initial.document_, &error))
+      << error;
+  first.ReleaseEditorLease(701);
 
   // A new service instance forces the editor path to read the serialized state rather than
-  // reusing the first service's cache entry.
+  // reusing anything the first service holds.
   PipelineMgmtService reopened(project.GetStorage());
-  auto                loaded = reopened.LoadEditorPipeline(701);
-  ASSERT_NE(loaded, nullptr);
-  EXPECT_EQ(loaded->root_id_, initial->root_id_);
-  EXPECT_EQ(loaded->working_head_commit_hash(), std::nullopt);
-  EXPECT_EQ(loaded->transaction_chain_hash(), ComputeRootChainHash(initial->root_id_));
-  EXPECT_FALSE(loaded->serialized_state_needs_writeback_);
-  EXPECT_EQ(loaded->document_->ToJson(), expected_document);
-  reopened.SavePipeline(loaded);
+  reopened.ResetEditorPipelineHistoryRebuildCountForTesting();
+  const auto loaded = reopened.AcquireEditorLease(701);
+  ASSERT_NE(loaded.document_, nullptr);
+  EXPECT_EQ(reopened.EditorPipelineHistoryRebuildCount(), 0u);
+  EXPECT_EQ(loaded.graph_.GetRootId(), root_id);
+  EXPECT_EQ(loaded.graph_.GetActiveVersionRef().head_commit_hash, std::nullopt);
+  EXPECT_EQ(loaded.graph_.ChainHashForHead(std::nullopt), ComputeRootChainHash(root_id));
+  EXPECT_EQ(loaded.document_->ToJson(), expected_document);
+  reopened.ReleaseEditorLease(701);
 }
 
-TEST_F(PipelineMapperTests, EditorOwnedPipelineIsNeverReboundFromStorage) {
+// Regression test of commit 671802168: while the editor holds an image, no other history user may
+// replace its history from storage or read storage as its state (that silently dropped the
+// editor's unsaved history). Thumbnails and export read what the editor published.
+TEST_F(PipelineMapperTests,
+       HeldEditorLeaseRefusesStorageHistoryUsersAndReleaseKeepsThePublishedState) {
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService pipelines(project.GetStorage());
+  InitializeDefaultRoot(pipelines, 751);
+  // A library writer read the stored history before the editor opened the image.
+  const auto  library_base = pipelines.LoadHistorySnapshot(751);
+  CommitGraph library_edit = *library_base.graph_;
+  {
+    auto       commit       = EditCommit::MakePipelineEdit(library_edit.GetRootId(), std::nullopt,
+                                                           MakeExposureBatch(kDefaultPipelineExposureEv, 3.0f));
+    const auto library_head = commit.GetCommitHash();
+    ASSERT_TRUE(library_edit.InsertCommit(std::move(commit)));
+    library_edit.MoveWorkingHead(library_edit.GetActiveVersionId(), library_head);
+  }
 
-  auto                editor = pipelines.AcquireEditorPipeline(751);
-  ASSERT_NE(editor, nullptr);
-  ASSERT_NE(editor->commit_graph_, nullptr);
-  const auto owned_graph    = editor->commit_graph_;
-  const auto owned_document = editor->document_;
+  auto lease = pipelines.AcquireEditorLease(751);
+  ASSERT_NE(lease.document_, nullptr);
+  EXPECT_THROW((void)pipelines.AcquireEditorLease(751), std::runtime_error);
+  EXPECT_THROW((void)pipelines.LoadHistorySnapshot(751), std::runtime_error);
+  EXPECT_THROW((void)pipelines.PersistHistory(library_base, library_edit), std::runtime_error);
 
-  // While the editor owns the image, no other history user may rebind its graph and live
-  // document from storage (that silently dropped the editor's unsaved history).
-  EXPECT_THROW((void)pipelines.LoadEditorPipeline(751), std::runtime_error);
-  EXPECT_THROW((void)pipelines.AcquireEditorPipeline(751), std::runtime_error);
-  EXPECT_EQ(editor->commit_graph_, owned_graph);
-  EXPECT_EQ(editor->document_, owned_document);
+  // The editor commits a change and publishes it before the history reaches storage.
+  const auto head      = CommitOnLease(lease, MakeExposureBatch(kDefaultPipelineExposureEv, 2.5f));
+  const auto published = CommittedSnapshotOfLease(lease, 751);
+  pipelines.PublishCommitted(published);
+  ASSERT_EQ(StoredEditState(project, 751)->materialized_head_commit_hash, std::nullopt);
+  const auto committed = pipelines.AcquireCommittedSnapshot(751);
+  EXPECT_EQ(committed, published) << "the held image renders what the editor published";
+  EXPECT_EQ(committed->Head(), head);
+  EXPECT_FLOAT_EQ(DocumentExposure(committed->Document()), 2.5f);
 
-  // Pixel readers still share the owned guard without touching its editor state.
-  auto reader = pipelines.LoadPipeline(751);
-  EXPECT_EQ(reader, editor);
-  EXPECT_EQ(reader->commit_graph_, owned_graph);
-  pipelines.ReleasePipelineUse(reader);
-  // The refused loads returned their pins: only the editor's pin remains.
-  EXPECT_TRUE(pipelines.WaitUntilPinCount(editor, 1, std::chrono::milliseconds(0)));
+  std::string error;
+  ASSERT_TRUE(pipelines.PersistEditorHistory(lease.graph_, lease.graph_.GetImageEditState(),
+                                             *lease.document_, &error))
+      << error;
+  pipelines.ReleaseEditorLease(751);
 
-  pipelines.ReleaseEditorPipeline(editor);
-  auto reloaded = pipelines.LoadEditorPipeline(751);
-  ASSERT_NE(reloaded, nullptr);
-  EXPECT_NE(reloaded->commit_graph_, owned_graph);
-  pipelines.SavePipeline(reloaded);
+  const auto element_json = project.GetStorage()->GetElementStore().GetPipelineJsonByElementId(751);
+  ASSERT_TRUE(element_json.has_value());
+  EXPECT_EQ(*element_json, published->Document().ToJson())
+      << "release writes the last published committed document as the element pipeline JSON";
+
+  pipelines.ResetEditorPipelineHistoryRebuildCountForTesting();
+  const auto reopened = pipelines.AcquireEditorLease(751);
+  ASSERT_NE(reopened.document_, nullptr);
+  EXPECT_EQ(pipelines.EditorPipelineHistoryRebuildCount(), 0u);
+  EXPECT_EQ(reopened.graph_.GetActiveVersionRef().head_commit_hash, head);
+  EXPECT_EQ(reopened.document_->ToJson(), published->Document().ToJson());
+  pipelines.ReleaseEditorLease(751);
 }
 
 TEST_F(PipelineMapperTests, ReopenWithMatchingCheckpointSkipsReplay) {
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService first(project.GetStorage());
+  InitializeDefaultRoot(first, 731);
 
-  auto                initial = first.LoadEditorPipeline(731);
-  ASSERT_NE(initial, nullptr);
-  first.SavePipeline(initial);
+  auto initial = first.AcquireEditorLease(731);
+  ASSERT_NE(initial.document_, nullptr);
+  const auto  expected_document = initial.document_->ToJson();
+  std::string error;
+  ASSERT_TRUE(first.PersistEditorHistory(initial.graph_, initial.graph_.GetImageEditState(),
+                                         *initial.document_, &error))
+      << error;
+  first.ReleaseEditorLease(731);
 
   {
     auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
@@ -804,34 +910,31 @@ TEST_F(PipelineMapperTests, ReopenWithMatchingCheckpointSkipsReplay) {
 
   PipelineMgmtService reopened(project.GetStorage());
   reopened.ResetEditorPipelineHistoryRebuildCountForTesting();
-  auto loaded = reopened.LoadEditorPipeline(731);
-  ASSERT_NE(loaded, nullptr);
+  const auto loaded = reopened.AcquireEditorLease(731);
+  ASSERT_NE(loaded.document_, nullptr);
   EXPECT_EQ(reopened.EditorPipelineHistoryRebuildCount(), 0u)
       << "matching checkpoint identity must import serialized state without history rebuild";
-  EXPECT_FALSE(loaded->serialized_state_needs_writeback_);
-  EXPECT_FALSE(loaded->lineage_.Empty());
-  EXPECT_EQ(RenderedDocumentJson(*loaded), loaded->document_->ToJson());
-  reopened.SavePipeline(loaded);
+  EXPECT_EQ(loaded.document_->ToJson(), expected_document);
+  reopened.ReleaseEditorLease(731);
 }
 
-TEST_F(PipelineMapperTests, PersistEditorHistoryStateWritesNewActiveVersionBeforeEditorReopen) {
+TEST_F(PipelineMapperTests, PersistEditorHistoryWritesNewActiveVersionBeforeEditorReopen) {
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService pipeline_service(project.GetStorage());
+  InitializeDefaultRoot(pipeline_service, 715);
 
-  auto                guard = pipeline_service.LoadEditorPipeline(715);
-  ASSERT_NE(guard, nullptr);
-  ASSERT_NE(guard->commit_graph_, nullptr);
-  const auto expected_materialized_state = guard->commit_graph_->GetImageEditState();
+  auto lease = pipeline_service.AcquireEditorLease(715);
+  ASSERT_NE(lease.document_, nullptr);
+  const auto expected_materialized_state = lease.graph_.GetImageEditState();
 
-  const auto new_version = guard->commit_graph_->CreateVersionRefAtRoot("Root Version");
-  guard->commit_graph_->SetActiveVersionId(new_version);
-  guard->serialized_state_needs_writeback_ = true;
+  const auto new_version                 = lease.graph_.CreateVersionRefAtRoot("Root Version");
+  lease.graph_.SetActiveVersionId(new_version);
 
   std::string error;
-  ASSERT_TRUE(
-      pipeline_service.PersistEditorHistoryState(guard, expected_materialized_state, &error))
+  ASSERT_TRUE(pipeline_service.PersistEditorHistory(lease.graph_, expected_materialized_state,
+                                                    lease.root_->document, &error))
       << error;
-  EXPECT_FALSE(guard->serialized_state_needs_writeback_);
+  EXPECT_EQ(lease.graph_.GetImageEditState().active_version_id, new_version);
 
   {
     auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
@@ -843,29 +946,23 @@ TEST_F(PipelineMapperTests, PersistEditorHistoryStateWritesNewActiveVersionBefor
     EXPECT_EQ(persisted->GetActiveVersionRef().head_commit_hash, std::nullopt);
   }
 
-  pipeline_service.SavePipeline(guard);
+  pipeline_service.ReleaseEditorLease(715);
 
   PipelineMgmtService reopened_service(project.GetStorage());
-  auto                reopened = reopened_service.LoadEditorPipeline(715);
-  ASSERT_NE(reopened, nullptr);
-  ASSERT_NE(reopened->commit_graph_, nullptr);
-  EXPECT_EQ(reopened->commit_graph_->GetActiveVersionId(), new_version);
-  EXPECT_EQ(reopened->working_head_commit_hash(), std::nullopt);
-  reopened_service.SavePipeline(reopened);
+  const auto          reopened = reopened_service.AcquireEditorLease(715);
+  EXPECT_EQ(reopened.graph_.GetActiveVersionId(), new_version);
+  EXPECT_EQ(reopened.graph_.GetActiveVersionRef().head_commit_hash, std::nullopt);
+  reopened_service.ReleaseEditorLease(715);
 }
 
 TEST_F(PipelineMapperTests, DeletePipelinesRemovesTheDeletedImagesMiniGitGraphOnly) {
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService pipelines(project.GetStorage());
 
-  auto                deleted  = pipelines.LoadEditorPipeline(711);
-  auto                retained = pipelines.LoadEditorPipeline(712);
-  ASSERT_NE(deleted, nullptr);
-  ASSERT_NE(retained, nullptr);
-  const auto deleted_root  = deleted->root_id_;
-  const auto retained_root = retained->root_id_;
-  pipelines.SavePipeline(deleted);
-  pipelines.SavePipeline(retained);
+  InitializeDefaultRoot(pipelines, 711);
+  InitializeDefaultRoot(pipelines, 712);
+  const auto deleted_root  = pipelines.LoadHistorySnapshot(711).graph_->GetRootId();
+  const auto retained_root = pipelines.LoadHistorySnapshot(712).graph_->GetRootId();
 
   const std::vector<sl_element_id_t> deleted_ids = {711};
   pipelines.DeletePipelines(deleted_ids);
@@ -879,30 +976,11 @@ TEST_F(PipelineMapperTests, DeletePipelinesRemovesTheDeletedImagesMiniGitGraphOn
   EXPECT_TRUE(graph_service.GetRootSerializedPipelineState(712, retained_root).has_value());
 }
 
-auto DocumentExposure(const PipelineDocument& document) -> float {
-  const auto* exposure = dynamic_cast<const ExposureModel*>(
-      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
-  if (exposure == nullptr) {
-    throw std::runtime_error("document is missing exposure");
-  }
-  return exposure->Value();
-}
-
-auto MakeExposureBatch(float before, float after) -> PipelineEditBatch {
-  nlohmann::json before_json{{"exposure_ev", before}};
-  nlohmann::json after_json{{"exposure_ev", after}};
-  return MakeSetParameterBatch(test::ColorGradeFieldTarget("exposure"), std::move(before_json),
-                               std::move(after_json), true, true, "Default");
-}
-
 TEST_F(PipelineMapperTests, ReopenWithStaleCheckpointReplaysFromRoot) {
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService first(project.GetStorage());
-
-  auto                initial = first.LoadEditorPipeline(702);
-  ASSERT_NE(initial, nullptr);
-  const auto root_id = initial->root_id_;
-  first.SavePipeline(initial);
+  InitializeDefaultRoot(first, 702);
+  const auto               root_id = first.LoadHistorySnapshot(702).graph_->GetRootId();
 
   commit_hash_t            expected_head{};
   transaction_chain_hash_t expected_chain{};
@@ -927,161 +1005,167 @@ TEST_F(PipelineMapperTests, ReopenWithStaleCheckpointReplaysFromRoot) {
 
   PipelineMgmtService reopened(project.GetStorage());
   reopened.ResetEditorPipelineHistoryRebuildCountForTesting();
-  auto                rebuilt = reopened.LoadEditorPipeline(702);
-  ASSERT_NE(rebuilt, nullptr);
+  auto rebuilt = reopened.AcquireEditorLease(702);
+  ASSERT_NE(rebuilt.document_, nullptr);
   EXPECT_EQ(reopened.EditorPipelineHistoryRebuildCount(), 1u);
-  EXPECT_FALSE(rebuilt->lineage_.Empty());
-  EXPECT_EQ(RenderedDocumentJson(*rebuilt), rebuilt->document_->ToJson());
-  EXPECT_EQ(rebuilt->root_id_, root_id);
-  EXPECT_EQ(rebuilt->working_head_commit_hash(), expected_head);
-  EXPECT_EQ(rebuilt->transaction_chain_hash(), expected_chain);
-  EXPECT_TRUE(rebuilt->serialized_state_needs_writeback_);
-  EXPECT_FLOAT_EQ(DocumentExposure(*rebuilt->document_), 2.0f);
-  reopened.SavePipeline(rebuilt);
+  EXPECT_EQ(rebuilt.graph_.GetRootId(), root_id);
+  EXPECT_EQ(rebuilt.graph_.GetActiveVersionRef().head_commit_hash, expected_head);
+  EXPECT_EQ(rebuilt.graph_.ChainHashForHead(expected_head), expected_chain);
+  EXPECT_FLOAT_EQ(DocumentExposure(*rebuilt.document_), 2.0f);
+  // The editor writes the checkpoint of the replayed document with its next history write.
+  std::string error;
+  ASSERT_TRUE(reopened.PersistEditorHistory(rebuilt.graph_, rebuilt.graph_.GetImageEditState(),
+                                            *rebuilt.document_, &error))
+      << error;
+  reopened.ReleaseEditorLease(702);
 
   PipelineMgmtService after_writeback(project.GetStorage());
-  auto                matched = after_writeback.LoadEditorPipeline(702);
-  ASSERT_NE(matched, nullptr);
-  EXPECT_FALSE(matched->serialized_state_needs_writeback_);
-  EXPECT_EQ(matched->working_head_commit_hash(), expected_head);
-  EXPECT_EQ(matched->transaction_chain_hash(), expected_chain);
-  EXPECT_FLOAT_EQ(DocumentExposure(*matched->document_), 2.0f);
-  after_writeback.SavePipeline(matched);
+  after_writeback.ResetEditorPipelineHistoryRebuildCountForTesting();
+  const auto matched = after_writeback.AcquireEditorLease(702);
+  ASSERT_NE(matched.document_, nullptr);
+  EXPECT_EQ(after_writeback.EditorPipelineHistoryRebuildCount(), 0u);
+  EXPECT_EQ(matched.graph_.GetActiveVersionRef().head_commit_hash, expected_head);
+  EXPECT_EQ(matched.graph_.ChainHashForHead(expected_head), expected_chain);
+  EXPECT_FLOAT_EQ(DocumentExposure(*matched.document_), 2.0f);
+  after_writeback.ReleaseEditorLease(702);
 }
 
-/// Insert a commit on the root whose batch cannot apply: its target Color Grade node does not
-/// exist, so ReplayPipelineDocumentFromRoot fails at that commit.
-auto InsertUnreplayableCommit(CommitGraph& graph) -> commit_hash_t {
-  auto missing_target    = test::ColorGradeFieldTarget("exposure");
-  missing_target.node_id = NodeId{"grade.does_not_exist"};
-  auto commit            = EditCommit::MakePipelineEdit(
-      graph.GetRootId(), std::nullopt,
-      MakeSetParameterBatch(missing_target, nlohmann::json{{"exposure_ev", 1.5}},
-                                       nlohmann::json{{"exposure_ev", 3.0}}, true, true, "missing"));
-  const auto hash = commit.GetCommitHash();
-  if (!graph.InsertCommit(std::move(commit))) {
-    throw std::runtime_error("unreplayable commit was not inserted");
-  }
-  return hash;
-}
-
-
-TEST_F(PipelineMapperTests, CheckoutReplayFailureKeepsPriorVersionAndDocumentPointer) {
+// Version checkout builds the target document privately; a replay failure reports the failing
+// commit and changes neither the graph nor the working document.
+TEST_F(PipelineMapperTests, VersionReplayFailureReportsTheFailingCommitAndChangesNoEditorState) {
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService pipelines(project.GetStorage());
-  auto                guard = pipelines.LoadEditorPipeline(741);
-  ASSERT_NE(guard, nullptr);
-  ASSERT_NE(guard->commit_graph_, nullptr);
-  auto&      graph = *guard->commit_graph_;
+  InitializeDefaultRoot(pipelines, 741);
+  auto       lease          = pipelines.AcquireEditorLease(741);
+  auto&      graph          = lease.graph_;
 
-  const auto bad_version =
-      graph.CreateVersionRefAtHead("Unreplayable", InsertUnreplayableCommit(graph));
-  const auto prior_version   = graph.GetActiveVersionId();
-  const auto prior_document  = guard->document_;
-  const auto prior_lineage   = guard->lineage_;
-  const auto prior_json      = prior_document->ToJson().dump();
-  const bool prior_dirty     = guard->dirty_;
-  const bool prior_writeback = guard->serialized_state_needs_writeback_;
+  const auto bad_head       = InsertUnreplayableCommit(graph);
+  const auto bad_version    = graph.CreateVersionRefAtHead("Unreplayable", bad_head);
+  const auto prior_version  = graph.GetActiveVersionId();
+  const auto prior_document = lease.document_;
+  const auto prior_json     = prior_document->ToJson().dump();
+  const auto prior_state    = StoredEditState(project, 741);
   ASSERT_NE(bad_version, prior_version);
 
   std::string error;
-  EXPECT_FALSE(pipelines.CheckoutVersion(guard, bad_version, &error));
+  EXPECT_EQ(BuildDocumentFromRoot(graph, *lease.root_, bad_head, &error), nullptr);
   EXPECT_NE(error.find("grade.does_not_exist"), std::string::npos) << error;
   EXPECT_EQ(graph.GetActiveVersionId(), prior_version);
-  EXPECT_EQ(guard->document_, prior_document) << "failed replay must not swap the document";
-  EXPECT_EQ(guard->lineage_, prior_lineage) << "renderer must keep the prior binding";
-  EXPECT_EQ(guard->document_->ToJson().dump(), prior_json);
-  EXPECT_EQ(guard->dirty_, prior_dirty);
-  EXPECT_EQ(guard->serialized_state_needs_writeback_, prior_writeback);
-  pipelines.SavePipeline(guard);
+  EXPECT_EQ(lease.document_, prior_document) << "failed replay must not swap the document";
+  EXPECT_EQ(lease.document_->ToJson().dump(), prior_json);
+  const auto state_after = StoredEditState(project, 741);
+  ASSERT_TRUE(prior_state.has_value() && state_after.has_value());
+  EXPECT_EQ(state_after->ToJSON(), prior_state->ToJSON());
+  pipelines.ReleaseEditorLease(741);
 }
 
-TEST_F(PipelineMapperTests, CheckoutSuccessBindsReplayedDocumentAndMarksWriteBack) {
+// Version checkout: the replayed document of the target head becomes the working document in a
+// new lineage, and the history write stores it as the checkpoint of the new active head.
+TEST_F(PipelineMapperTests, VersionCheckoutPersistsTheReplayedDocumentAsTheCheckpointOfTheNewHead) {
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService pipelines(project.GetStorage());
-  auto                guard = pipelines.LoadEditorPipeline(742);
-  ASSERT_NE(guard, nullptr);
-  ASSERT_NE(guard->commit_graph_, nullptr);
-  auto&      graph       = *guard->commit_graph_;
+  InitializeDefaultRoot(pipelines, 742);
+  auto                  lease = pipelines.AcquireEditorLease(742);
+  auto&                 graph = lease.graph_;
+  EditorWorkingDocument working(742, lease.document_);
 
   auto       commit      = EditCommit::MakePipelineEdit(graph.GetRootId(), std::nullopt,
                                                         MakeExposureBatch(kDefaultPipelineExposureEv, 2.5f));
   const auto edited_head = commit.GetCommitHash();
   ASSERT_TRUE(graph.InsertCommit(std::move(commit)));
-  const auto edited_version                = graph.CreateVersionRefAtHead("Edited", edited_head);
-  const auto root_version                  = graph.GetActiveVersionId();
-  const auto prior_document                = guard->document_;
-  const auto prior_lineage                 = guard->lineage_;
-  guard->dirty_                            = false;
-  guard->serialized_state_needs_writeback_ = false;
+  const auto edited_version = graph.CreateVersionRefAtHead("Edited", edited_head);
+  const auto root_version   = graph.GetActiveVersionId();
+  const auto prior_lineage  = working.Lineage();
 
-  std::string error;
-  ASSERT_TRUE(pipelines.CheckoutVersion(guard, edited_version, &error)) << error;
+  const auto checkout       = [&](version_ref_id_t version, head_commit_hash_t head) {
+    std::string error;
+    auto        built = BuildDocumentFromRoot(graph, *lease.root_, head, &error);
+    ASSERT_NE(built, nullptr) << error;
+    const auto expected = graph.GetImageEditState();
+    graph.SetActiveVersionId(version);
+    ASSERT_TRUE(pipelines.PersistEditorHistory(graph, expected, *built, &error)) << error;
+    working.Replace(std::move(built));
+    (void)working.PublishPreview();
+  };
+
+  checkout(edited_version, edited_head);
   EXPECT_EQ(graph.GetActiveVersionId(), edited_version);
-  EXPECT_EQ(guard->working_head_commit_hash(), edited_head);
-  EXPECT_NE(guard->document_, prior_document) << "checkout binds a newly built document";
-  EXPECT_NE(guard->lineage_, prior_lineage) << "checkout releases the prior document's binding";
-  EXPECT_EQ(RenderedDocumentJson(*guard), guard->document_->ToJson());
-  EXPECT_FLOAT_EQ(DocumentExposure(*guard->document_), 2.5f);
-  EXPECT_FLOAT_EQ(DocumentExposure(*prior_document), kDefaultPipelineExposureEv)
+  EXPECT_NE(working.Lineage(), prior_lineage) << "checkout releases the prior document's binding";
+  EXPECT_FLOAT_EQ(DocumentExposure(working.Document()), 2.5f);
+  EXPECT_FLOAT_EQ(DocumentExposure(*lease.document_), kDefaultPipelineExposureEv)
       << "the swapped-out document is not changed";
-  EXPECT_TRUE(guard->serialized_state_needs_writeback_);
-  EXPECT_TRUE(guard->dirty_);
+  EXPECT_EQ(working.CurrentPreview()->Document().ToJson(), working.Document().ToJson());
+  {
+    const auto state = StoredEditState(project, 742);
+    ASSERT_TRUE(state.has_value() && state->serialized_pipeline_state.has_value());
+    EXPECT_EQ(state->active_version_id, edited_version);
+    EXPECT_EQ(state->materialized_head_commit_hash, edited_head);
+    const auto checkpoint = DecodePipelineDocumentCheckpoint(*state->serialized_pipeline_state);
+    EXPECT_EQ(checkpoint.head_commit_hash, edited_head);
+    EXPECT_EQ(checkpoint.transaction_chain_hash, graph.ChainHashForHead(edited_head));
+    EXPECT_EQ(checkpoint.document.ToJson(), working.Document().ToJson())
+        << "the checkpoint equals the document of the new active head";
+  }
 
-  const auto edited_lineage = guard->lineage_;
-  ASSERT_TRUE(pipelines.CheckoutVersion(guard, root_version, &error)) << error;
-  EXPECT_EQ(guard->working_head_commit_hash(), std::nullopt);
-  EXPECT_NE(guard->lineage_, edited_lineage);
-  EXPECT_EQ(RenderedDocumentJson(*guard), guard->document_->ToJson());
-  EXPECT_FLOAT_EQ(DocumentExposure(*guard->document_), kDefaultPipelineExposureEv);
-  pipelines.SavePipeline(guard);
+  const auto edited_lineage = working.Lineage();
+  checkout(root_version, std::nullopt);
+  EXPECT_EQ(graph.GetActiveVersionRef().head_commit_hash, std::nullopt);
+  EXPECT_NE(working.Lineage(), edited_lineage);
+  EXPECT_FLOAT_EQ(DocumentExposure(working.Document()), kDefaultPipelineExposureEv);
+  {
+    const auto state = StoredEditState(project, 742);
+    ASSERT_TRUE(state.has_value() && state->serialized_pipeline_state.has_value());
+    EXPECT_EQ(state->active_version_id, root_version);
+    const auto checkpoint = DecodePipelineDocumentCheckpoint(*state->serialized_pipeline_state);
+    EXPECT_EQ(checkpoint.head_commit_hash, std::nullopt);
+    EXPECT_EQ(checkpoint.document.ToJson(), working.Document().ToJson());
+  }
+  pipelines.ReleaseEditorLease(742);
 }
 
-TEST_F(PipelineMapperTests, ActiveVersionRebuildFailureKeepsPriorDocumentPointer) {
+// The editor opens an image whose stored active head cannot be replayed: the open fails with the
+// replay error, and the lease is not left held.
+TEST_F(PipelineMapperTests, EditorLeaseOfAnUnreplayableActiveHeadFailsWithTheReplayError) {
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService pipelines(project.GetStorage());
-  auto                guard = pipelines.LoadEditorPipeline(743);
-  ASSERT_NE(guard, nullptr);
-  ASSERT_NE(guard->commit_graph_, nullptr);
-  auto& graph = *guard->commit_graph_;
+  InitializeDefaultRoot(pipelines, 743);
+  {
+    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto             db_lock  = db_guard.Lock();
+    CommitGraphStore graph_service(db_guard.conn_);
+    auto             graph = graph_service.LoadGraph(743);
+    ASSERT_TRUE(graph.has_value());
+    graph->MoveWorkingHead(graph->GetActiveVersionId(), InsertUnreplayableCommit(*graph));
+    graph_service.Materialize(graph->CaptureMaterialization());
+  }
 
-  graph.MoveWorkingHead(graph.GetActiveVersionId(), InsertUnreplayableCommit(graph));
-  const auto prior_document                = guard->document_;
-  const auto prior_lineage                 = guard->lineage_;
-  const auto prior_json                    = prior_document->ToJson().dump();
-  guard->dirty_                            = false;
-  guard->serialized_state_needs_writeback_ = false;
-
-  std::string error;
-  EXPECT_FALSE(pipelines.RebuildActiveEditorPipeline(guard, &error));
-  EXPECT_NE(error.find("active Version rebuild failed"), std::string::npos) << error;
-  EXPECT_NE(error.find("grade.does_not_exist"), std::string::npos) << error;
-  EXPECT_EQ(guard->document_, prior_document);
-  EXPECT_EQ(guard->lineage_, prior_lineage);
-  EXPECT_EQ(guard->document_->ToJson().dump(), prior_json);
-  EXPECT_FALSE(guard->dirty_);
-  EXPECT_FALSE(guard->serialized_state_needs_writeback_);
-  pipelines.SavePipeline(guard);
+  try {
+    (void)pipelines.AcquireEditorLease(743);
+    FAIL() << "an unreplayable active head must fail the editor open";
+  } catch (const std::runtime_error& error) {
+    EXPECT_NE(std::string{error.what()}.find("grade.does_not_exist"), std::string::npos)
+        << error.what();
+  }
+  EXPECT_NO_THROW((void)pipelines.LoadHistorySnapshot(743)) << "the failed open holds no lease";
 }
 
 TEST_F(PipelineMapperTests, CheckpointForAnotherImageNeverLoads) {
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService first(project.GetStorage());
-
-  auto target = first.LoadEditorPipeline(801);
-  auto donor  = first.LoadEditorPipeline(802);
-  ASSERT_NE(target, nullptr);
-  ASSERT_NE(donor, nullptr);
-  first.SavePipeline(target);
+  InitializeDefaultRoot(first, 801);
+  InitializeDefaultRoot(first, 802);
 
   {
-    std::unique_lock<std::mutex> render_lock(donor->pipeline_->GetRenderLock());
+    auto donor = first.AcquireEditorLease(802);
     dynamic_cast<ExposureModel*>(
-        donor->document_->PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()))
+        donor.document_->PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()))
         ->SetValue(3.25f);
+    std::string error;
+    ASSERT_TRUE(first.PersistEditorHistory(donor.graph_, donor.graph_.GetImageEditState(),
+                                           *donor.document_, &error))
+        << error;
+    first.ReleaseEditorLease(802);
   }
-  donor->serialized_state_needs_writeback_ = true;
-  first.SavePipeline(donor);
 
   nlohmann::json donor_checkpoint;
   {
@@ -1102,22 +1186,19 @@ TEST_F(PipelineMapperTests, CheckpointForAnotherImageNeverLoads) {
 
   PipelineMgmtService reopened(project.GetStorage());
   reopened.ResetEditorPipelineHistoryRebuildCountForTesting();
-  auto loaded = reopened.LoadEditorPipeline(801);
-  ASSERT_NE(loaded, nullptr);
+  const auto loaded = reopened.AcquireEditorLease(801);
+  ASSERT_NE(loaded.document_, nullptr);
   EXPECT_GE(reopened.EditorPipelineHistoryRebuildCount(), 1u);
-  EXPECT_FLOAT_EQ(DocumentExposure(*loaded->document_), kDefaultPipelineExposureEv);
-  EXPECT_NE(loaded->document_->ToJson().dump(), donor_checkpoint.at("pipeline_document").dump());
-  reopened.SavePipeline(loaded);
+  EXPECT_FLOAT_EQ(DocumentExposure(*loaded.document_), kDefaultPipelineExposureEv);
+  EXPECT_NE(loaded.document_->ToJson().dump(), donor_checkpoint.at("pipeline_document").dump());
+  reopened.ReleaseEditorLease(801);
 }
 
 TEST_F(PipelineMapperTests,
        LoadWithMismatchedCheckpointRebuildsFromHistoryAndIgnoresStalePipelineJsonValues) {
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService first(project.GetStorage());
-
-  auto                initial = first.LoadEditorPipeline(732);
-  ASSERT_NE(initial, nullptr);
-  first.SavePipeline(initial);
+  InitializeDefaultRoot(first, 732);
 
   commit_hash_t expected_head{};
   {
@@ -1144,32 +1225,31 @@ TEST_F(PipelineMapperTests,
 
   PipelineMgmtService reopened(project.GetStorage());
   reopened.ResetEditorPipelineHistoryRebuildCountForTesting();
-  auto rebuilt = reopened.LoadEditorPipeline(732);
-  ASSERT_NE(rebuilt, nullptr);
+  const auto rebuilt = reopened.AcquireEditorLease(732);
+  ASSERT_NE(rebuilt.document_, nullptr);
   EXPECT_EQ(reopened.EditorPipelineHistoryRebuildCount(), 1u);
-  EXPECT_EQ(rebuilt->working_head_commit_hash(), expected_head);
-  EXPECT_FLOAT_EQ(DocumentExposure(*rebuilt->document_), 3.25f)
+  EXPECT_EQ(rebuilt.graph_.GetActiveVersionRef().head_commit_hash, expected_head);
+  EXPECT_FLOAT_EQ(DocumentExposure(*rebuilt.document_), 3.25f)
       << "rebuild must follow history, not a wrong-root checkpoint document";
-  reopened.SavePipeline(rebuilt);
+  reopened.ReleaseEditorLease(732);
 }
 
-TEST_F(PipelineMapperTests, SerializedStateWritebackRejectsAConcurrentMaterializedHistoryChange) {
+TEST_F(PipelineMapperTests, EditorHistoryPersistenceRejectsAConcurrentMaterializedHistoryChange) {
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService pipelines(project.GetStorage());
+  InitializeDefaultRoot(pipelines, 703);
 
-  auto                local = pipelines.LoadEditorPipeline(703);
-  ASSERT_NE(local, nullptr);
-  ASSERT_NE(local->commit_graph_, nullptr);
-  const auto          root_id = local->root_id_;
+  auto       local          = pipelines.AcquireEditorLease(703);
+  const auto root_id        = local.graph_.GetRootId();
+  const auto expected_state = local.graph_.GetImageEditState();
 
-  const auto local_version = local->commit_graph_->CreateVersionRefAtRoot("Local Writeback");
-  auto local_commit =
+  const auto local_version  = local.graph_.CreateVersionRefAtRoot("Local Writeback");
+  auto       local_commit =
       EditCommit::MakePipelineEdit(root_id, std::nullopt, MakeExposureBatch(0.0f, 1.0f));
   const auto local_head = local_commit.GetCommitHash();
-  ASSERT_TRUE(local->commit_graph_->InsertCommit(std::move(local_commit)));
-  local->commit_graph_->MoveWorkingHead(local_version, local_head);
-  local->commit_graph_->SetActiveVersionId(local_version);
-  local->serialized_state_needs_writeback_ = true;
+  ASSERT_TRUE(local.graph_.InsertCommit(std::move(local_commit)));
+  local.graph_.MoveWorkingHead(local_version, local_head);
+  local.graph_.SetActiveVersionId(local_version);
 
   commit_hash_t remote_head{};
   {
@@ -1187,8 +1267,13 @@ TEST_F(PipelineMapperTests, SerializedStateWritebackRejectsAConcurrentMaterializ
     graph_service.Materialize(remote_graph->CaptureMaterialization());
   }
 
-  pipelines.SavePipeline(local);
-  EXPECT_TRUE(local->serialized_state_needs_writeback_);
+  const auto  local_state = local.graph_.GetImageEditState();
+  std::string error;
+  EXPECT_FALSE(
+      pipelines.PersistEditorHistory(local.graph_, expected_state, *local.document_, &error));
+  EXPECT_NE(error.find("persisted history changed"), std::string::npos) << error;
+  EXPECT_EQ(local.graph_.GetImageEditState().ToJSON(), local_state.ToJSON())
+      << "a rejected write leaves the graph's materialized state unchanged";
 
   {
     auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
@@ -1199,39 +1284,31 @@ TEST_F(PipelineMapperTests, SerializedStateWritebackRejectsAConcurrentMaterializ
     EXPECT_EQ(persisted->GetActiveVersionRef().head_commit_hash, remote_head);
     EXPECT_NE(persisted->GetActiveVersionRef().head_commit_hash, local_head);
   }
-
-  // The test deliberately leaves the local writeback rejected; do not retry it during teardown.
-  local->serialized_state_needs_writeback_ = false;
+  pipelines.ReleaseEditorLease(703);
 }
 
 TEST_F(PipelineMapperTests,
-       CheckpointMaterializedStateSyncLetsVersionPersistenceGuardAcceptDurableTuple) {
+       CheckpointMaterializedStateSyncLetsVersionPersistenceAcceptDurableTuple) {
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService pipeline_service(project.GetStorage());
+  InitializeDefaultRoot(pipeline_service, 720);
 
-  auto                guard = pipeline_service.LoadEditorPipeline(720);
-  ASSERT_NE(guard, nullptr);
-  ASSERT_NE(guard->commit_graph_, nullptr);
-  const auto          root_id = guard->root_id_;
+  auto       lease    = pipeline_service.AcquireEditorLease(720);
+  auto&      graph    = lease.graph_;
 
   // Commit an adjustment: the working head advances, but ImageEditState.materialized_*
   // stays at root (MoveWorkingHead never advances materialized state by design).
-  auto edit =
-      EditCommit::MakePipelineEdit(root_id, std::nullopt, MakeExposureBatch(0.0f, 1.0f));
-  const auto new_head = edit.GetCommitHash();
-  ASSERT_TRUE(guard->commit_graph_->InsertCommit(std::move(edit)));
-  guard->commit_graph_->MoveWorkingHead(guard->commit_graph_->GetActiveVersionId(), new_head);
+  const auto new_head = CommitOnLease(lease, MakeExposureBatch(kDefaultPipelineExposureEv, 1.0f));
 
-  // Simulate the save checkpoint: it writes the active head to DuckDB but, like the
-  // production checkpoint path, does NOT call ApplyMaterializedState, so the in-memory
-  // materialized_* stays at root while DuckDB advances to the working head.
+  // Simulate a checkpoint write that stores the active head in DuckDB but does NOT call
+  // ApplyMaterializedState, so the in-memory materialized_* stays at root while DuckDB advances
+  // to the working head.
   {
     auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
     auto             db_lock  = db_guard.Lock();
     CommitGraphStore graph_service(db_guard.conn_);
-    graph_service.Materialize(
-        guard->commit_graph_->CaptureMaterializationWithSerializedPipelineState(
-            nlohmann::json{{"exposure", 1.0f}}));
+    graph_service.Materialize(graph.CaptureMaterializationWithSerializedPipelineState(
+        nlohmann::json{{"exposure", 1.0f}}));
   }
 
   // DuckDB now holds the working head; the in-memory graph still reports root.
@@ -1245,24 +1322,23 @@ TEST_F(PipelineMapperTests,
     durable_head = persisted->GetImageEditState().materialized_head_commit_hash.value();
     ASSERT_EQ(durable_head, new_head);
   }
-  EXPECT_EQ(guard->commit_graph_->GetImageEditState().materialized_head_commit_hash, std::nullopt)
+  EXPECT_EQ(graph.GetImageEditState().materialized_head_commit_hash, std::nullopt)
       << "in-memory materialized head must stay stale until the post-checkpoint sync";
 
   // Fix B: mirror the durable materialization into the in-memory state.
-  guard->commit_graph_->MaterializeActiveHeadInMemory();
-  EXPECT_EQ(guard->commit_graph_->GetImageEditState().materialized_head_commit_hash, new_head);
-  EXPECT_EQ(guard->commit_graph_->GetImageEditState().materialized_transaction_chain_hash,
-            guard->transaction_chain_hash());
+  graph.MaterializeActiveHeadInMemory();
+  EXPECT_EQ(graph.GetImageEditState().materialized_head_commit_hash, new_head);
+  EXPECT_EQ(graph.GetImageEditState().materialized_transaction_chain_hash,
+            graph.ChainHashForHead(new_head));
 
-  // The PersistEditorHistoryState guard now sees DuckDB == expected and accepts the
-  // durable tuple. Without the sync it throws "persisted history changed before editor
-  // history persistence" — the original fork-from-root-after-edits failure.
+  // The PersistEditorHistory check now sees DuckDB == expected and accepts the durable tuple.
+  // Without the sync it fails with "persisted history changed before editor history
+  // persistence", the original fork-from-root-after-edits failure.
   std::string error;
-  EXPECT_TRUE(pipeline_service.PersistEditorHistoryState(
-      guard, guard->commit_graph_->GetImageEditState(), &error))
+  EXPECT_TRUE(pipeline_service.PersistEditorHistory(graph, graph.GetImageEditState(),
+                                                    *lease.document_, &error))
       << error;
-
-  pipeline_service.SavePipeline(guard);
+  pipeline_service.ReleaseEditorLease(720);
 }
 
 TEST_F(PipelineMapperTests, ImageRootStoresCompleteDefaultDocumentAndDevelopData) {
@@ -1321,13 +1397,13 @@ TEST_F(PipelineMapperTests, ImageRootStoresCompleteDefaultDocumentAndDevelopData
   }
 
   PipelineMgmtService reopened(project.GetStorage());
-  auto                loaded = reopened.LoadEditorPipeline(704);
-  ASSERT_NE(loaded, nullptr);
-  EXPECT_EQ(loaded->document_->ToJson().dump(), persisted_dump);
-  const auto& profile = loaded->document_->Develop()->Params().Params().camera_profile;
+  const auto          loaded = reopened.AcquireEditorLease(704);
+  ASSERT_NE(loaded.document_, nullptr);
+  EXPECT_EQ(loaded.document_->ToJson().dump(), persisted_dump);
+  const auto& profile = loaded.document_->Develop()->Params().Params().camera_profile;
   EXPECT_TRUE(profile.color_matrices_valid);
   EXPECT_DOUBLE_EQ(profile.color_matrix_1[0], 0.625);
-  reopened.SavePipeline(loaded);
+  reopened.ReleaseEditorLease(704);
 }
 
 TEST_F(PipelineMapperTests, NonRawImageRootBindsWorkingSpaceCameraProfile) {
@@ -1347,13 +1423,13 @@ TEST_F(PipelineMapperTests, NonRawImageRootBindsWorkingSpaceCameraProfile) {
   EXPECT_NE(payload.camera_profile.color_matrix_1[0], 0.625);
 
   PipelineMgmtService reopened(project.GetStorage());
-  auto                loaded = reopened.LoadEditorPipeline(711);
-  ASSERT_NE(loaded, nullptr);
-  const auto reopened_payload = loaded->document_->Develop()->Params().Params();
+  const auto          loaded = reopened.AcquireEditorLease(711);
+  ASSERT_NE(loaded.document_, nullptr);
+  const auto reopened_payload = loaded.document_->Develop()->Params().Params();
   EXPECT_TRUE(reopened_payload.camera_profile.color_matrices_valid);
   EXPECT_NEAR(reopened_payload.camera_profile.color_matrix_1[0], 3.2404542, 1e-6);
   ASSERT_TRUE(ResolveDevelopColorTransform(reopened_payload).ok);
-  reopened.SavePipeline(loaded);
+  reopened.ReleaseEditorLease(711);
 }
 
 TEST_F(PipelineMapperTests, PersistedNonRawDocumentWithoutCameraMatricesBecomesRenderableOnReload) {
@@ -1391,10 +1467,10 @@ TEST_F(PipelineMapperTests, PersistedNonRawDocumentWithoutCameraMatricesBecomesR
   EXPECT_NEAR(loaded_payload.camera_profile.color_matrix_1[0], 3.2404542, 1e-6);
   ASSERT_TRUE(ResolveDevelopColorTransform(loaded_payload).ok);
 
-  auto editor = pipelines.LoadEditorPipeline(722);
-  ASSERT_NE(editor, nullptr);
-  ASSERT_NE(editor->document_->Develop(), nullptr);
-  const auto editor_payload = editor->document_->Develop()->Params().Params();
+  const auto editor = pipelines.AcquireEditorLease(722);
+  ASSERT_NE(editor.document_, nullptr);
+  ASSERT_NE(editor.document_->Develop(), nullptr);
+  const auto editor_payload = editor.document_->Develop()->Params().Params();
   EXPECT_TRUE(editor_payload.camera_profile.color_matrices_valid);
   EXPECT_NEAR(editor_payload.camera_profile.color_matrix_1[0], 3.2404542, 1e-6);
   ASSERT_TRUE(ResolveDevelopColorTransform(editor_payload).ok);
@@ -1404,7 +1480,7 @@ TEST_F(PipelineMapperTests, PersistedNonRawDocumentWithoutCameraMatricesBecomesR
     auto             db_lock  = db_guard.Lock();
     CommitGraphStore graph_service(db_guard.conn_);
     const auto       encoded =
-        graph_service.GetRootSerializedPipelineState(722, editor->root_id_);
+        graph_service.GetRootSerializedPipelineState(722, editor.graph_.GetRootId());
     ASSERT_TRUE(encoded.has_value());
     const auto root = DecodePipelineRootState(*encoded);
     EXPECT_FALSE(root.raw_color_context.has_value());
@@ -1412,12 +1488,13 @@ TEST_F(PipelineMapperTests, PersistedNonRawDocumentWithoutCameraMatricesBecomesR
     EXPECT_FALSE(root.document.Develop()->Params().Params().camera_profile.color_matrices_valid);
   }
 
-  pipelines.SavePipeline(editor);
+  pipelines.ReleaseEditorLease(722);
+  pipelines.ReleasePipelineUse(loaded);
 }
 
 // Editor open of an image whose RAW root exists must not bind the working-space Rec.709 profile
-// onto the live document: a render on the same guard would use the wrong colors. The live document
-// carries the RAW camera profile of the root, and the root stays as stored.
+// onto the editor's document: its renders would use the wrong colors. The document carries the
+// RAW camera profile of the root, and the root stays as stored.
 TEST_F(PipelineMapperTests, EditorOpenOfExistingRawRootKeepsTheRawCameraProfile) {
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService pipelines(project.GetStorage());
@@ -1432,13 +1509,13 @@ TEST_F(PipelineMapperTests, EditorOpenOfExistingRawRootKeepsTheRawCameraProfile)
   pipelines.InitializeImageRoot(724, CreateDefaultPipelineDocument(), &raw_context);
   const auto root_id = pipelines.LoadHistorySnapshot(724).graph_->GetRootId();
 
-  auto       live    = pipelines.LoadEditorPipeline(724);
-  ASSERT_NE(live, nullptr);
-  const auto profile = live->document_->Develop()->Params().Params().camera_profile;
+  const auto lease   = pipelines.AcquireEditorLease(724);
+  ASSERT_NE(lease.document_, nullptr);
+  const auto profile = lease.document_->Develop()->Params().Params().camera_profile;
   EXPECT_TRUE(profile.color_matrices_valid);
   EXPECT_DOUBLE_EQ(profile.color_matrix_1[0], 0.625);
   EXPECT_DOUBLE_EQ(profile.color_matrix_2[0], 0.5);
-  EXPECT_EQ(live->root_id_, root_id);
+  EXPECT_EQ(lease.graph_.GetRootId(), root_id);
   {
     auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
     auto             db_lock  = db_guard.Lock();
@@ -1450,7 +1527,7 @@ TEST_F(PipelineMapperTests, EditorOpenOfExistingRawRootKeepsTheRawCameraProfile)
     EXPECT_DOUBLE_EQ(root.document.Develop()->Params().Params().camera_profile.color_matrix_1[0],
                      0.625);
   }
-  pipelines.SavePipeline(live);
+  pipelines.ReleaseEditorLease(724);
 }
 
 TEST_F(PipelineMapperTests, PersistedRawRootWithoutMatricesDoesNotReceiveWorkingSpaceProfile) {
@@ -1474,31 +1551,27 @@ TEST_F(PipelineMapperTests, PersistedRawRootWithoutMatricesDoesNotReceiveWorking
   EXPECT_FALSE(loaded->document_->Develop()->Params().Params().camera_profile.color_matrices_valid);
   EXPECT_FALSE(ResolveDevelopColorTransform(loaded->document_->Develop()->Params().Params()).ok);
 
-  auto editor = reopened.LoadEditorPipeline(723);
-  ASSERT_NE(editor, nullptr);
-  ASSERT_NE(editor->document_->Develop(), nullptr);
-  EXPECT_FALSE(editor->document_->Develop()->Params().Params().camera_profile.color_matrices_valid);
-  EXPECT_FALSE(ResolveDevelopColorTransform(editor->document_->Develop()->Params().Params()).ok);
-  reopened.SavePipeline(editor);
+  const auto editor = reopened.AcquireEditorLease(723);
+  ASSERT_NE(editor.document_, nullptr);
+  ASSERT_NE(editor.document_->Develop(), nullptr);
+  EXPECT_FALSE(editor.document_->Develop()->Params().Params().camera_profile.color_matrices_valid);
+  EXPECT_FALSE(ResolveDevelopColorTransform(editor.document_->Develop()->Params().Params()).ok);
+  reopened.ReleaseEditorLease(723);
+  reopened.ReleasePipelineUse(loaded);
 }
 
 TEST_F(PipelineMapperTests, RootStateRejectsDifferentImageOwner) {
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService pipelines(project.GetStorage());
 
-  auto                first  = pipelines.LoadEditorPipeline(705);
-  auto                second = pipelines.LoadEditorPipeline(706);
-  ASSERT_NE(first, nullptr);
-  ASSERT_NE(second, nullptr);
+  InitializeDefaultRoot(pipelines, 705);
+  InitializeDefaultRoot(pipelines, 706);
+  const auto       first_root = pipelines.LoadHistorySnapshot(705).graph_->GetRootId();
 
   auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
   auto             db_lock  = db_guard.Lock();
   CommitGraphStore graph_service(db_guard.conn_);
-  EXPECT_THROW(graph_service.GetRootSerializedPipelineState(706, first->root_id_),
-               std::runtime_error);
-  db_lock.unlock();
-  pipelines.SavePipeline(first);
-  pipelines.SavePipeline(second);
+  EXPECT_THROW(graph_service.GetRootSerializedPipelineState(706, first_root), std::runtime_error);
 }
 
 TEST_F(PipelineMapperTests, SyncPipelineDoesNotPersistUnrelatedDirtyGuards) {
@@ -1524,9 +1597,7 @@ TEST_F(PipelineMapperTests, SyncPipelineDoesNotPersistUnrelatedDirtyGuards) {
 TEST_F(PipelineMapperTests, EditorLoadReportsMissingReachableCommit) {
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService first(project.GetStorage());
-  auto                initial = first.LoadEditorPipeline(703);
-  ASSERT_NE(initial, nullptr);
-  first.SavePipeline(initial);
+  InitializeDefaultRoot(first, 703);
 
   commit_hash_t missing_hash{};
   {
@@ -1555,10 +1626,118 @@ TEST_F(PipelineMapperTests, EditorLoadReportsMissingReachableCommit) {
 
   PipelineMgmtService reopened(project.GetStorage());
   try {
-    (void)reopened.LoadEditorPipeline(703);
+    (void)reopened.AcquireEditorLease(703);
     FAIL() << "expected missing first-parent commit to reject editor open";
   } catch (const std::runtime_error& error) {
     EXPECT_NE(std::string(error.what()).find("missing"), std::string::npos);
   }
+}
+
+TEST_F(PipelineMapperTests, EditorLeaseOfAnImageWithoutHistoryRootFailsWithTheRealError) {
+  ProjectService      project(db_path_, meta_path_);
+  PipelineMgmtService pipelines(project.GetStorage());
+
+  try {
+    (void)pipelines.AcquireEditorLease(761);
+    FAIL() << "an image without a history root must not open in the editor";
+  } catch (const std::runtime_error& error) {
+    EXPECT_NE(std::string{error.what()}.find("has no edit history root"), std::string::npos)
+        << error.what();
+  }
+  EXPECT_FALSE(StoredEditState(project, 761).has_value())
+      << "the failed open must not create a root";
+
+  // The failed open does not hold the lease: once the image has a root, it opens.
+  InitializeDefaultRoot(pipelines, 761);
+  const auto lease = pipelines.AcquireEditorLease(761);
+  ASSERT_NE(lease.document_, nullptr);
+  EXPECT_EQ(lease.graph_.GetElementId(), 761u);
+  pipelines.ReleaseEditorLease(761);
+}
+
+TEST_F(PipelineMapperTests, PersistEditorHistoryWritesHistoryAndCheckpointInOneTransaction) {
+  ProjectService      project(db_path_, meta_path_);
+  PipelineMgmtService pipelines(project.GetStorage());
+  InitializeDefaultRoot(pipelines, 762);
+
+  auto        lease          = pipelines.AcquireEditorLease(762);
+  const auto  expected_state = lease.graph_.GetImageEditState();
+  const auto  head  = CommitOnLease(lease, MakeExposureBatch(kDefaultPipelineExposureEv, 2.25f));
+  const auto  chain = lease.graph_.ChainHashForHead(head);
+
+  std::string error;
+  ASSERT_TRUE(
+      pipelines.PersistEditorHistory(lease.graph_, expected_state, *lease.document_, &error))
+      << error;
+  EXPECT_EQ(lease.graph_.GetImageEditState().materialized_head_commit_hash, head)
+      << "a successful write advances the graph's materialized state";
+
+  const auto stored = StoredEditState(project, 762);
+  ASSERT_TRUE(stored.has_value());
+  EXPECT_EQ(stored->materialized_head_commit_hash, head);
+  EXPECT_EQ(stored->materialized_transaction_chain_hash, chain);
+  ASSERT_TRUE(stored->serialized_pipeline_state.has_value());
+  const auto checkpoint = DecodePipelineDocumentCheckpoint(*stored->serialized_pipeline_state);
+  EXPECT_EQ(checkpoint.root_id, lease.graph_.GetRootId());
+  EXPECT_EQ(checkpoint.head_commit_hash, head);
+  EXPECT_EQ(checkpoint.transaction_chain_hash, chain);
+  EXPECT_EQ(checkpoint.document.ToJson(), lease.document_->ToJson());
+  EXPECT_FLOAT_EQ(DocumentExposure(checkpoint.document), 2.25f);
+  {
+    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto             db_lock  = db_guard.Lock();
+    CommitGraphStore graph_service(db_guard.conn_);
+    const auto       persisted = graph_service.LoadGraph(762);
+    ASSERT_TRUE(persisted.has_value());
+    EXPECT_EQ(persisted->GetActiveVersionRef().head_commit_hash, head);
+  }
+
+  // A second write that still expects the state before the first one is stale: it fails and
+  // leaves storage as the first write left it.
+  auto stale_document = ClonePipelineDocument(*lease.document_);
+  dynamic_cast<ExposureModel*>(
+      stale_document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()))
+      ->SetValue(4.0f);
+  CommitGraph stale_graph = lease.graph_;
+  const auto  stale_head  = [&] {
+    auto commit =
+        EditCommit::MakePipelineEdit(stale_graph.GetRootId(), head, MakeExposureBatch(2.25f, 4.0f));
+    const auto hash = commit.GetCommitHash();
+    EXPECT_TRUE(stale_graph.InsertCommit(std::move(commit)));
+    stale_graph.MoveWorkingHead(stale_graph.GetActiveVersionId(), hash);
+    return hash;
+  }();
+  const auto stale_graph_state = stale_graph.GetImageEditState();
+  error.clear();
+  EXPECT_FALSE(pipelines.PersistEditorHistory(stale_graph, expected_state, stale_document, &error));
+  EXPECT_NE(error.find("persisted history changed"), std::string::npos) << error;
+  EXPECT_EQ(stale_graph.GetImageEditState().ToJSON(), stale_graph_state.ToJSON());
+  const auto after_stale = StoredEditState(project, 762);
+  ASSERT_TRUE(after_stale.has_value());
+  EXPECT_EQ(after_stale->ToJSON(), stored->ToJSON()) << "a rejected write changes no storage";
+  EXPECT_NE(after_stale->materialized_head_commit_hash, stale_head);
+  pipelines.ReleaseEditorLease(762);
+}
+
+TEST_F(PipelineMapperTests, PersistEditorHistoryRefusesAnImageTheEditorDoesNotHold) {
+  ProjectService      project(db_path_, meta_path_);
+  PipelineMgmtService pipelines(project.GetStorage());
+  InitializeDefaultRoot(pipelines, 763);
+
+  auto lease = pipelines.AcquireEditorLease(763);
+  pipelines.ReleaseEditorLease(763);
+  const auto stored_before  = StoredEditState(project, 763);
+  const auto expected_state = lease.graph_.GetImageEditState();
+  (void)CommitOnLease(lease, MakeExposureBatch(kDefaultPipelineExposureEv, 2.0f));
+  const auto  graph_state = lease.graph_.GetImageEditState();
+
+  std::string error;
+  EXPECT_FALSE(
+      pipelines.PersistEditorHistory(lease.graph_, expected_state, *lease.document_, &error));
+  EXPECT_NE(error.find("is not held by an editor session"), std::string::npos) << error;
+  EXPECT_EQ(lease.graph_.GetImageEditState().ToJSON(), graph_state.ToJSON());
+  const auto stored_after = StoredEditState(project, 763);
+  ASSERT_TRUE(stored_before.has_value() && stored_after.has_value());
+  EXPECT_EQ(stored_after->ToJSON(), stored_before->ToJSON());
 }
 }  // namespace alcedo

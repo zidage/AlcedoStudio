@@ -413,18 +413,6 @@ void EditorSessionRenderController::CancelSession(
       });
 }
 
-void EditorSessionRenderController::CancelSessionAndWait(ImageLoadRequestId image_load_request) {
-  if (deps_.render && image_load_request.valid()) {
-    deps_.render->CancelSessionAndWait(image_load_request.value);
-  }
-}
-
-void EditorSessionRenderController::WaitForSessionIdle(ImageLoadRequestId image_load_request) {
-  if (deps_.render && image_load_request.valid()) {
-    deps_.render->WaitForSessionIdle(image_load_request.value);
-  }
-}
-
 void EditorSessionRenderController::TryEnterInteractiveFromFirstFrame(
     const EditorSessionIdentity& identity) {
   bool ready = false;

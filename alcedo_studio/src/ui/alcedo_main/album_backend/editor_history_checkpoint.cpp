@@ -6,7 +6,6 @@
 
 #include <exception>
 #include <filesystem>
-#include <mutex>
 #include <utility>
 
 #include "app/editor_mini_git_materializer.hpp"
@@ -30,33 +29,25 @@ auto EditorHistoryCheckpoint::CaptureSaveCheckpoint(
 
   auto state = state_.EnsureWorkingState(guard.element_id, error);
   if (!state) return nullptr;
-  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_ || !state->history ||
-      !state->journal) {
+  if (!state->history || !state->journal) {
     if (error) *error = "Mini-Git save capture requires an immutable history state";
     return nullptr;
   }
-
-  if (!state->pipeline_guard->document_) {
-    if (error) *error = "Mini-Git save capture requires a live pipeline document";
+  // Only committed state is persisted. Every persisting seal settles open input first, so an
+  // uncommitted value here is a caller defect, not a state to save.
+  if (state->HasUncommittedLiveValues()) {
+    if (error) *error = "Mini-Git save capture cannot run while an editor preview is unsettled";
     return nullptr;
   }
 
   // Single live identity: CommitGraph active Version head is the only logical head.
-  // Build one materialization from the graph, then project capture fields from it.
-  auto& graph = *state->pipeline_guard->commit_graph_;
-  nlohmann::json serialized;
-  {
-    std::unique_lock<std::mutex> render_lock(state->pipeline_guard->pipeline_->GetRenderLock());
-    if (state->pipeline_guard->unsettled_preview_) {
-      if (error) *error = "Mini-Git save capture cannot run while an editor preview is unsettled";
-      return nullptr;
-    }
-    const auto logical_head  = graph.GetActiveVersionRef().head_commit_hash;
-    const auto logical_chain = graph.ChainHashForHead(logical_head);
-    serialized = alcedo::MakeEditorSerializedPipelineState(
-        state->pipeline_guard->root_id_, logical_head, logical_chain,
-        *state->pipeline_guard->document_);
-  }
+  // Build one materialization from the graph, then project capture fields from it. The capture
+  // runs on the owner thread, the only writer of the working document, so it reads it directly.
+  auto&      graph         = *state->graph;
+  const auto logical_head  = graph.GetActiveVersionRef().head_commit_hash;
+  const auto logical_chain = graph.ChainHashForHead(logical_head);
+  const auto serialized    = alcedo::MakeEditorSerializedPipelineState(
+      graph.GetRootId(), logical_head, logical_chain, state->document->Document());
   const auto journal_snapshot = state->journal->Snapshot();
 
   alcedo::EditorMiniGitSaveCapture capture;
@@ -101,12 +92,8 @@ auto EditorHistoryCheckpoint::SyncMaterializedStateAfterCheckpoint(
     const alcedo::EditorHistoryGuardHandle& guard, std::string* error) -> bool {
   auto state = state_.EnsureWorkingState(guard.element_id, error);
   if (!state) return false;
-  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_) {
-    if (error) *error = "Mini-Git commit graph is unavailable for materialized-state sync";
-    return false;
-  }
   try {
-    state->pipeline_guard->commit_graph_->MaterializeActiveHeadInMemory();
+    state->graph->MaterializeActiveHeadInMemory();
   } catch (const std::exception& ex) {
     if (error) *error = ex.what();
     return false;

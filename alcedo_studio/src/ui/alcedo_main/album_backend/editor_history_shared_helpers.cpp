@@ -8,19 +8,8 @@
 
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/pipeline_edit_batch.hpp"
-#include "edit/pipeline/pipeline_executor.hpp"
 
 namespace alcedo::ui {
-
-auto LockLivePipeline(alcedo::PipelineExecutor& executor) -> std::unique_lock<std::mutex> {
-  // Sole live-pipeline ownership. History waits here for render to release the
-  // lock after the full frame (configure + Apply + present). Do not call this
-  // from the GUI thread while that thread is still required for present — the
-  // session defers Version ops until render is idle so the GUI never blocks on
-  // render, only history queues for ownership. Selected-node panel projection
-  // must never call this.
-  return std::unique_lock<std::mutex>(executor.GetRenderLock());
-}
 
 auto CommitFieldKey(const alcedo::EditCommit& commit) -> std::string {
   if (alcedo::IsPipelineEditBatchJson(commit.GetPayloadJSON())) {

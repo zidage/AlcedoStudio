@@ -4,8 +4,8 @@ import QtTest
 
 // User-operation reproduction: drag sat, immediately drag vib.
 // Models submit through EditorSessionController → real history Capture/Commit
-// against a live pipeline. hangProbe can run a contended render worker that
-// holds GetRenderLock and BlockingQueued to the GUI (present shape).
+// against the working document. hangProbe can run a contended render worker that
+// holds a frame and BlockingQueued to the GUI (present shape).
 //
 // Nested ApplicationWindow: QQuickView cannot host Window as root; Controls
 // need a real QQuickWindow for reliable pointer delivery (same as gtest harness).
@@ -159,14 +159,14 @@ Item {
                     fail("history path blocked GUI " + hangProbe.maxHistoryMs + "ms")
             }
 
-            // Same handoff while a continuous render worker holds GetRenderLock
+            // Same handoff while a continuous render worker holds a frame
             // and BlockingQueued to the GUI (present handshake under load).
             function test_02_rapidHandoff_duringBusyRender_keepsEventLoopAlive() {
                 verify(waitLoaders())
                 satModel.value = 0
                 vibModel.value = 0
                 hangProbe.beginContendedRender()
-                wait(100) // let worker take the lock once
+                wait(100) // let the worker start its first frame
 
                 hangProbe.markSequenceStart()
                 var t0 = Date.now()
@@ -185,10 +185,10 @@ Item {
                 if (hangProbe.historyFailCount > 0 && hangProbe.submitCount === 0)
                     fail("all history ops failed under busy render; failCount="
                          + hangProbe.historyFailCount)
-                // Must not spend seconds blocked on the render lock per call.
+                // Must not spend seconds blocked on the in-flight frame per call.
                 if (hangProbe.maxHistoryMs >= 2000)
                     fail("history blocked " + hangProbe.maxHistoryMs
-                         + "ms while render held GetRenderLock")
+                         + "ms while a frame was in flight")
             }
 
             function test_03_doubleClickReset_productionSubmit_keepsEventLoopAlive() {

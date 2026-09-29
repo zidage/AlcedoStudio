@@ -278,7 +278,8 @@ alcedo_register_test_target(SearchQueryParserTest app ci_core)
 add_executable(PipelineMapperTest ${ALCEDO_TEST_ROOT}/app/pipeline_service_test.cpp)
 target_include_directories(PipelineMapperTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(PipelineMapperTest
-  ProjectService PipelineMgmtService PipelineHistoryApplier GTest::gtest_main)
+  ProjectService PipelineMgmtService PipelineHistoryApplier EditorWorkingDocument
+  GTest::gtest_main)
 gtest_discover_tests(PipelineMapperTest TEST_PREFIX "PipelineMapperTest."
   PROPERTIES LABELS "ci_core_flow")
 
@@ -711,7 +712,7 @@ alcedo_register_test_target(PipelineSharedUseTest app)
 add_executable(ExecutorIsolationTest ${ALCEDO_TEST_ROOT}/app/executor_isolation_test.cpp)
 target_include_directories(ExecutorIsolationTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(ExecutorIsolationTest ExportService ProjectService ImportService
-  GTest::gtest_main ImageWriter ${ALCEDO_TEST_OPENCV_MIN_DEPS})
+  EditorWorkingDocument GTest::gtest_main ImageWriter ${ALCEDO_TEST_OPENCV_MIN_DEPS})
 gtest_discover_tests(ExecutorIsolationTest TEST_PREFIX "ExecutorIsolationTest.")
 alcedo_register_test_target(ExecutorIsolationTest app)
 
@@ -720,7 +721,7 @@ alcedo_register_test_target(ExecutorIsolationTest app)
 add_executable(ThumbnailCommittedRenderTest ${ALCEDO_TEST_ROOT}/app/thumbnail_committed_render_test.cpp)
 target_include_directories(ThumbnailCommittedRenderTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(ThumbnailCommittedRenderTest ThumbnailService ProjectService ImportService
-  GTest::gtest_main ${ALCEDO_TEST_OPENCV_MIN_DEPS})
+  EditorWorkingDocument GTest::gtest_main ${ALCEDO_TEST_OPENCV_MIN_DEPS})
 gtest_discover_tests(ThumbnailCommittedRenderTest TEST_PREFIX "ThumbnailCommittedRenderTest.")
 alcedo_register_test_target(ThumbnailCommittedRenderTest app)
 

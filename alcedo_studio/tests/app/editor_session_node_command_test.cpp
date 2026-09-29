@@ -28,7 +28,6 @@ class RecordingNodeCommandScheduler final : public IEditorPipelineSchedulerPort 
     return ++next_job;
   }
   void                             Cancel(std::uint64_t) override {}
-  void                             WaitForSessionIdle(std::uint64_t) override {}
 
   std::vector<EditorRenderRequest> requests;
   std::uint64_t                    next_job = 0;
@@ -127,12 +126,13 @@ TEST_F(EditorSessionNodeCommandTest, RenameCreatesOneHistoryChangeWithoutRender)
 }
 
 // E5 of the executor ownership audit: each publication used to deep-copy the live document for
-// the GUI. It now freezes it: the published document shares unchanged nodes with the live
-// document, and a later live edit copies only the node it changes, so the earlier publication
-// keeps its values.
+// the GUI. The GUI now reads the preview the history publishes after each write: it shares
+// unchanged nodes with the working document, and a later edit copies only the node it changes,
+// so the earlier publication keeps its values.
 TEST_F(EditorSessionNodeCommandTest, PublishedDocumentSharesNodesAndKeepsValuesAfterLiveEdit) {
-  pipeline_->live_document = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
-  auto& live               = *pipeline_->live_document;
+  pipeline_->working_document = std::make_shared<EditorWorkingDocument>(
+      10, std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument()));
+  auto& live = pipeline_->working_document->Document();
 
   ASSERT_EQ(service_->RenameColorGrade(NodeId{"grade.primary"}, "Sky").kind,
             EditorSessionResultKind::Accepted);
@@ -153,6 +153,7 @@ TEST_F(EditorSessionNodeCommandTest, PublishedDocumentSharesNodesAndKeepsValuesA
                               type_ids::Exposure())->ToJson().at("exposure_ev").get<float>() +
                           0.75f;
   exposure->SetValue(edited_ev);
+  (void)pipeline_->working_document->PublishPreview();
 
   ASSERT_EQ(service_->RenameColorGrade(NodeId{"grade.primary"}, "Sea").kind,
             EditorSessionResultKind::Accepted);

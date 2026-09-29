@@ -35,7 +35,6 @@ class RecordingScheduler final : public IEditorPipelineSchedulerPort {
     return ++next_job_;
   }
   void Cancel(std::uint64_t job_id) override { cancelled_.push_back(job_id); }
-  void WaitForSessionIdle(std::uint64_t) override {}
 
   std::vector<EditorRenderRequest> scheduled_;
   std::vector<std::uint64_t>       cancelled_;

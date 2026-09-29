@@ -22,14 +22,7 @@ namespace alcedo {
 /// the GPU so the session state machine and render-intent route can run before
 /// Phase 5B wires real PipelineMgmtService / checkpoint store / presentation.
 
-class EditorSessionBootstrapPipelinePort final : public IEditorPipelinePort {
- public:
-  auto Acquire(sl_element_id_t element_id, std::string* /*error*/)
-      -> EditorPipelineGuardHandle override {
-    return EditorPipelineGuardHandle{element_id, true};
-  }
-  void Release(const EditorPipelineGuardHandle& /*guard*/) override {}
-};
+class EditorSessionBootstrapPipelinePort final : public IEditorPipelinePort {};
 
 class EditorSessionBootstrapHistoryPort final : public IEditorHistoryPort {
  public:

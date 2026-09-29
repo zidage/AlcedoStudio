@@ -29,6 +29,7 @@
 #include <thread>
 #include <vector>
 
+#include "app/editor_working_document.hpp"
 #include "app/export_service.hpp"
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
@@ -261,6 +262,19 @@ class ExecutorIsolationTest : public ::testing::Test {
     return output ? HostPixels(*output) : cv::Mat{};
   }
 
+  /// Render @p snapshot on @p executor in the Interactive role, as the editor render port does
+  /// for one frame, and return the host pixels.
+  static auto RenderSnapshot(PipelineExecutor& executor, const PipelineGraphSnapshot& snapshot,
+                             const std::shared_ptr<ImageBuffer>& input) -> cv::Mat {
+    const auto                   request = MakeRequest(ExecutorRole::Interactive);
+    std::shared_ptr<ImageBuffer> output;
+    {
+      std::lock_guard<std::mutex> render_lock(executor.GetRenderLock());
+      output = executor.Apply(snapshot, input, request);
+    }
+    return output ? HostPixels(*output) : cv::Mat{};
+  }
+
   /// Export @p ids through ExportService as a 256 px JPEG and read the pixels back. The output
   /// color comes from the DRT of the committed snapshot the export renders.
   auto Export(ProjectService& project, const std::shared_ptr<PipelineMgmtService>& pipelines,
@@ -432,71 +446,76 @@ TEST_F(ExecutorIsolationTest, EditorSessionEditSequenceReexecutesOnlyPassesDowns
   EXPECT_EQ(frames["5_white_balance"].drt_execute, 1u);
 }
 
-// Control for the next test: two exports of an image that the editor holds, with no unsettled
+// Control for the next test: two exports of an image that the editor holds, with no uncommitted
 // preview, produce the same pixels.
 TEST_F(ExecutorIsolationTest, RepeatedExportOfEditorOwnedImageWithoutPreviewIsUnchanged) {
   ProjectService project(db_path_, meta_path_);
   auto           pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
   const auto     ids       = ImportLinearDng(project, pipelines);
   ASSERT_NE(ids.first, 0u);
-  auto editor = pipelines->AcquireEditorPipeline(ids.first);
-  ASSERT_NE(editor, nullptr);
+  const auto lease = pipelines->AcquireEditorLease(ids.first);
+  ASSERT_NE(lease.document_, nullptr);
 
   const cv::Mat first  = Export(project, pipelines, ids, "first.jpg");
   const cv::Mat second = Export(project, pipelines, ids, "second.jpg");
   ASSERT_FALSE(first.empty());
   EXPECT_LE(MaxAbsDifference(first, second), 1.0);
-  pipelines->ReleaseEditorPipeline(editor);
+  pipelines->ReleaseEditorLease(ids.first);
 }
 
 // Audit C6. Before P5, export borrowed the editor's live document and did not check
 // unsettled_preview_, so an export of an open image during a slider drag wrote the drag value.
-// Enabled by P5: export renders the committed snapshot captured at enqueue.
+// Enabled by P5: export renders the committed snapshot captured at enqueue. Since P6 the editor
+// owns its working document and its Interactive executor; export uses neither.
 TEST_F(ExecutorIsolationTest, ExportDuringUnsettledEditorPreviewUsesCommittedState) {
   ProjectService project(db_path_, meta_path_);
   auto           pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
   const auto     ids       = ImportLinearDng(project, pipelines);
   ASSERT_NE(ids.first, 0u);
-  auto editor = pipelines->AcquireEditorPipeline(ids.first);
-  ASSERT_NE(editor, nullptr);
-  auto* exposure = PrimaryExposure(*editor->document_);
-  ASSERT_NE(exposure, nullptr);
+  const auto lease = pipelines->AcquireEditorLease(ids.first);
+  ASSERT_NE(lease.document_, nullptr);
+  EditorWorkingDocument working(ids.first, lease.document_);
+  PipelineExecutor      editor_executor(ExecutorRole::Interactive);
+  const auto            input = LoadEncodedInput(*project.GetImagePoolService(), ids.second);
+  ASSERT_NE(input, nullptr);
 
+  const cv::Mat committed_frame = RenderSnapshot(editor_executor, *working.CurrentPreview(), input);
+  ASSERT_FALSE(committed_frame.empty());
   const cv::Mat committed = Export(project, pipelines, ids, "committed.jpg");
   ASSERT_FALSE(committed.empty());
 
-  // A slider drag writes the working value into the document and marks it unsettled.
-  const float committed_ev = exposure->Value();
-  {
-    std::lock_guard<std::mutex> render_lock(editor->pipeline_->GetRenderLock());
-    exposure->SetValue(committed_ev + 2.0f);
-    editor->unsettled_preview_ = true;
-  }
-  const cv::Mat during_drag = Export(project, pipelines, ids, "during_drag.jpg");
-  {
-    std::lock_guard<std::mutex> render_lock(editor->pipeline_->GetRenderLock());
-    exposure->SetValue(committed_ev);
-    editor->unsettled_preview_ = false;
-  }
+  // A slider drag writes the uncommitted value into the working document and publishes the
+  // preview that the editor renders. Nothing is committed or published to the service.
+  auto* exposure = PrimaryExposure(working.Document());
+  ASSERT_NE(exposure, nullptr);
+  exposure->SetValue(exposure->Value() + 2.0f);
+  const auto    drag_preview = working.PublishPreview();
+  const cv::Mat drag_frame   = RenderSnapshot(editor_executor, *drag_preview, input);
+  ASSERT_FALSE(drag_frame.empty());
+  EXPECT_GT(MeanOfAllChannels(drag_frame), MeanOfAllChannels(committed_frame) * 1.2)
+      << "the editor frame must show the drag value";
 
+  const cv::Mat during_drag = Export(project, pipelines, ids, "during_drag.jpg");
   EXPECT_LE(MaxAbsDifference(committed, during_drag), 1.0);
-  pipelines->ReleaseEditorPipeline(editor);
+
+  // The export did not use the editor executor: its next frame of the same preview is unchanged.
+  const cv::Mat drag_frame_after_export = RenderSnapshot(editor_executor, *drag_preview, input);
+  EXPECT_LE(MaxAbsDifference(drag_frame_after_export, drag_frame), SameValuesTolerance(drag_frame));
+  pipelines->ReleaseEditorLease(ids.first);
 }
 
-// Audit section 3 item 3. Opening the editor must never leave the working-space Rec.709 profile
-// on the live document of a RAW image: a thumbnail rendered from the same guard at that moment
-// would use the wrong colors. The observer reads the live document under the render lock, as a
-// thumbnail render does, for the whole editor-open call.
-TEST_F(ExecutorIsolationTest, EditorOpenNeverExposesWorkingSpaceProfileOnLiveRawDocument) {
+// Audit section 3 item 3. Opening the editor must never expose the working-space Rec.709 profile
+// on a RAW document that another consumer renders. Since P6 thumbnails, analysis, and export
+// render the committed snapshot, and the editor lease builds its document privately. The observer
+// reads the committed snapshot, as a thumbnail render does, for the whole editor-open call.
+TEST_F(ExecutorIsolationTest, EditorOpenNeverExposesWorkingSpaceProfileOnCommittedRawSnapshot) {
   ProjectService project(db_path_, meta_path_);
   auto           pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
   const auto     ids       = ImportLinearDng(project, pipelines);
   ASSERT_NE(ids.first, 0u);
-  auto live = pipelines->LoadPipeline(ids.first);
-  ASSERT_NE(live, nullptr);
   {
-    std::lock_guard<std::mutex> render_lock(live->pipeline_->GetRenderLock());
-    const auto& profile = live->document_->Develop()->Params().Params().camera_profile;
+    const auto  snapshot = pipelines->AcquireCommittedSnapshot(ids.first);
+    const auto& profile  = snapshot->Document().Develop()->Params().Params().camera_profile;
     ASSERT_TRUE(profile.color_matrices_valid);
     ASSERT_FALSE(IsWorkingSpaceRec709Profile(profile));
   }
@@ -506,20 +525,18 @@ TEST_F(ExecutorIsolationTest, EditorOpenNeverExposesWorkingSpaceProfileOnLiveRaw
   std::atomic<int>  rec709_observations{0};
   std::thread       observer([&] {
     do {
-      {
-        std::lock_guard<std::mutex> render_lock(live->pipeline_->GetRenderLock());
-        const auto profile = live->document_->Develop()->Params().Params().camera_profile;
-        if (IsWorkingSpaceRec709Profile(profile)) {
-          rec709_observations.fetch_add(1, std::memory_order_relaxed);
-        }
-        observations.fetch_add(1, std::memory_order_relaxed);
+      const auto snapshot = pipelines->AcquireCommittedSnapshot(ids.first);
+      if (IsWorkingSpaceRec709Profile(
+              snapshot->Document().Develop()->Params().Params().camera_profile)) {
+        rec709_observations.fetch_add(1, std::memory_order_relaxed);
       }
+      observations.fetch_add(1, std::memory_order_relaxed);
       std::this_thread::yield();
     } while (!editor_open_done.load(std::memory_order_acquire));
   });
-  std::shared_ptr<PipelineGuard> editor;
+  EditorHistoryLease lease;
   try {
-    editor = pipelines->AcquireEditorPipeline(ids.first);
+    lease = pipelines->AcquireEditorLease(ids.first);
   } catch (...) {
     editor_open_done.store(true, std::memory_order_release);
     observer.join();
@@ -528,13 +545,15 @@ TEST_F(ExecutorIsolationTest, EditorOpenNeverExposesWorkingSpaceProfileOnLiveRaw
   editor_open_done.store(true, std::memory_order_release);
   observer.join();
 
-  ASSERT_EQ(editor.get(), live.get());
   EXPECT_GT(observations.load(), 0);
   EXPECT_EQ(rec709_observations.load(), 0);
+  ASSERT_NE(lease.document_, nullptr);
+  ASSERT_NE(lease.root_, nullptr);
   EXPECT_FALSE(
-      IsWorkingSpaceRec709Profile(editor->document_->Develop()->Params().Params().camera_profile));
-  pipelines->ReleaseEditorPipeline(editor);
-  pipelines->ReleasePipelineUse(live);
+      IsWorkingSpaceRec709Profile(lease.document_->Develop()->Params().Params().camera_profile));
+  EXPECT_FALSE(IsWorkingSpaceRec709Profile(
+      lease.root_->document.Develop()->Params().Params().camera_profile));
+  pipelines->ReleaseEditorLease(ids.first);
 }
 
 }  // namespace alcedo

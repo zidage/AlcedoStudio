@@ -4,10 +4,9 @@
 
 #include "ui/alcedo_main/album_backend/editor_session_pipeline_port.hpp"
 
+#include <QtGlobal>
+#include <exception>
 #include <utility>
-
-#include "app/pipeline_service.hpp"
-#include "edit/graph/pipeline_document.hpp"
 
 namespace alcedo::ui {
 
@@ -16,117 +15,90 @@ void EditorSessionPipelinePort::SetServices(EditorSessionPipelineMappers service
   services_ = std::move(services);
 }
 
-auto EditorSessionPipelinePort::Acquire(sl_element_id_t element_id, std::string* /*error*/)
-    -> alcedo::EditorPipelineGuardHandle {
-  // The history working-state acquisition that follows performs the one editor load.
-  return {element_id, true};
-}
-
-void EditorSessionPipelinePort::Release(const alcedo::EditorPipelineGuardHandle& guard) {
-  if (!guard.valid) {
-    return;
-  }
-  std::shared_ptr<alcedo::PipelineGuard>       loaded_guard;
-  std::shared_ptr<alcedo::PipelineMgmtService> service;
+auto EditorSessionPipelinePort::AcquireLease(sl_element_id_t element_id, std::string* error)
+    -> std::optional<EditorImageLease> {
+  std::function<alcedo::EditorHistoryLease(sl_element_id_t)> acquire;
+  std::shared_ptr<alcedo::PipelineMgmtService>               service;
   {
     std::scoped_lock lock(mutex_);
-    auto             it = guards_.find(guard.element_id);
-    if (it != guards_.end()) {
-      loaded_guard = it->second;
-      guards_.erase(it);
+    if (leases_.contains(element_id)) {
+      if (error) *error = "The editor already holds image " + std::to_string(element_id);
+      return std::nullopt;
     }
+    acquire = services_.acquire_editor_lease;
     if (services_.pipeline_service) {
       service = services_.pipeline_service();
     }
   }
-  if (service && loaded_guard) {
-    service->ReleaseEditorPipeline(std::move(loaded_guard));
+  if (!acquire && !service) {
+    if (error) *error = "Pipeline service is unavailable";
+    return std::nullopt;
+  }
+  bool service_lease_taken = false;
+  try {
+    auto lease          = acquire ? acquire(element_id) : service->AcquireEditorLease(element_id);
+    service_lease_taken = !acquire;
+    EditorImageLease held{
+        .graph_ = std::make_shared<alcedo::CommitGraph>(std::move(lease.graph_)),
+        .root_  = std::move(lease.root_),
+        .document_ =
+            std::make_shared<alcedo::EditorWorkingDocument>(element_id, std::move(lease.document_)),
+    };
+    std::scoped_lock lock(mutex_);
+    leases_[element_id] = held.document_;
+    return held;
+  } catch (const std::exception& ex) {
+    if (error) *error = ex.what();
+  } catch (...) {
+    if (error) *error = "Unknown editor lease failure";
+  }
+  // A failure after the service granted the lease (building the working document) returns it.
+  if (service_lease_taken) {
+    ReturnLeaseToService(*service, element_id);
+  }
+  return std::nullopt;
+}
+
+void EditorSessionPipelinePort::ReleaseLease(sl_element_id_t element_id) {
+  std::shared_ptr<alcedo::PipelineMgmtService> service;
+  {
+    std::scoped_lock lock(mutex_);
+    if (leases_.erase(element_id) == 0) {
+      return;
+    }
+    if (!services_.acquire_editor_lease && services_.pipeline_service) {
+      service = services_.pipeline_service();
+    }
+  }
+  if (service) {
+    ReturnLeaseToService(*service, element_id);
   }
 }
 
-auto EditorSessionPipelinePort::CurrentGuard(sl_element_id_t element_id) const
-    -> std::shared_ptr<alcedo::PipelineGuard> {
+void EditorSessionPipelinePort::ReturnLeaseToService(alcedo::PipelineMgmtService& service,
+                                                     sl_element_id_t              element_id) {
+  // The lease ends inside ReleaseEditorLease before its compatibility write of the element
+  // pipeline JSON. A failed write leaves the history in storage intact and must not escape a
+  // release (a destructor path returns leases), so it is reported here.
+  try {
+    service.ReleaseEditorLease(element_id);
+  } catch (const std::exception& ex) {
+    qWarning("Editor lease of image %llu: element pipeline JSON was not written: %s",
+             static_cast<unsigned long long>(element_id), ex.what());
+  }
+}
+
+auto EditorSessionPipelinePort::CurrentPreview(sl_element_id_t element_id) const
+    -> std::shared_ptr<const alcedo::PipelineGraphSnapshot> {
   std::scoped_lock lock(mutex_);
-  auto             it = guards_.find(element_id);
-  return it == guards_.end() ? nullptr : it->second;
-}
-
-auto EditorSessionPipelinePort::CurrentDocument(sl_element_id_t element_id) const
-    -> const alcedo::PipelineDocument* {
-  auto guard = CurrentGuard(element_id);
-  if (!guard || !guard->document_) {
-    return nullptr;
-  }
-  return guard->document_.get();
+  const auto       it = leases_.find(element_id);
+  return it == leases_.end() ? nullptr : it->second->CurrentPreview();
 }
 
 auto EditorSessionPipelinePort::PipelineMapper() const
     -> std::shared_ptr<alcedo::PipelineMgmtService> {
   std::scoped_lock lock(mutex_);
   return services_.pipeline_service ? services_.pipeline_service() : nullptr;
-}
-
-auto EditorSessionPipelinePort::EnsureLoaded(sl_element_id_t element_id, std::string* error)
-    -> std::shared_ptr<alcedo::PipelineGuard> {
-  std::scoped_lock load_lock(load_mutex_);
-  {
-    std::scoped_lock lock(mutex_);
-    auto             it = guards_.find(element_id);
-    if (it != guards_.end()) {
-      return it->second;
-    }
-  }
-
-  std::function<std::shared_ptr<alcedo::PipelineGuard>(sl_element_id_t)> guard_loader;
-  std::shared_ptr<alcedo::PipelineMgmtService>                           service;
-  {
-    std::scoped_lock lock(mutex_);
-    guard_loader = services_.load_editor_pipeline_guard;
-    if (services_.pipeline_service) {
-      service = services_.pipeline_service();
-    }
-  }
-  if (!guard_loader && !service) {
-    if (error) *error = "Pipeline service is unavailable";
-    return nullptr;
-  }
-  try {
-    auto guard = guard_loader ? guard_loader(element_id) : service->LoadEditorPipeline(element_id);
-    if (!guard || !guard->pipeline_) {
-      if (error) *error = "Failed to load pipeline for editor session";
-      return nullptr;
-    }
-    std::scoped_lock lock(mutex_);
-    guards_[element_id] = guard;
-    return guard;
-  } catch (const std::exception& ex) {
-    if (error) *error = ex.what();
-  } catch (...) {
-    if (error) *error = "Unknown pipeline load failure";
-  }
-  return nullptr;
-}
-
-auto EditorSessionPipelinePort::CheckoutVersion(sl_element_id_t        element_id,
-                                                const alcedo::Hash128& version_id,
-                                                std::string*           error) -> bool {
-  auto guard = CurrentGuard(element_id);
-  if (!guard) {
-    if (error) *error = "Version checkout requires the editor to own the image pipeline";
-    return false;
-  }
-  std::shared_ptr<alcedo::PipelineMgmtService> service;
-  {
-    std::scoped_lock lock(mutex_);
-    if (services_.pipeline_service) {
-      service = services_.pipeline_service();
-    }
-  }
-  if (!service) {
-    if (error) *error = "Pipeline service is unavailable for Version checkout";
-    return false;
-  }
-  return service->CheckoutVersion(guard, version_id, error);
 }
 
 }  // namespace alcedo::ui

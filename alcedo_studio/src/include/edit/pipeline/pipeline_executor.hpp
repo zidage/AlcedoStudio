@@ -47,18 +47,16 @@ using OpenClProductRenderer = OpenClRenderer;
  * created renderer per compiled backend and served role.
  *
  * Roles (@ref ExecutorRole): an executor constructed with one role serves only that role, so it
- * owns exactly one renderer per backend. The default constructor serves both roles. It exists
- * only for the per-image executor that PipelineGuard still shares between the editor and export:
- * it keeps an interactive renderer and a batch renderer side by side, so export requests never
- * touch the editor's session caches. Thumbnails and analysis use batch-only executors owned by
- * ThumbnailService.
+ * owns exactly one renderer per backend. Owners: the editor render port owns one Interactive
+ * executor; ThumbnailService and ExportService own Batch executors. The default constructor serves
+ * both roles; only the remaining PipelineGuard executor uses it until the guard is removed.
  */
 class PipelineExecutor {
  private:
   // Sole ownership of the executor for one frame of work: whoever holds this lock may configure,
-  // Apply (including present slot wait), or release the binding. Render holds it for the whole
-  // task. The shared per-image executor also uses it to order live document writes against the
-  // freeze that produces each render's snapshot.
+  // Apply (including present slot wait), or release the binding. The scheduler holds it for the
+  // whole task. An owner whose every use runs on one worker thread has exclusive access without
+  // it.
   std::mutex                   render_lock_;
 
   bool                         serves_interactive_           = true;
@@ -133,12 +131,14 @@ class PipelineExecutor {
   auto Apply(const PipelineGraphSnapshot& snapshot, std::shared_ptr<ImageBuffer> input,
              const PipelineApplyRequest& request) -> std::shared_ptr<ImageBuffer>;
 
-  /// Attach the editor frame sink that later requests read. Caller must hold render_lock_.
+  /// Attach the editor frame sink that later requests read. Caller holds render_lock_ or has
+  /// exclusive access.
   void AttachFrameSink(IFrameSink* frame_sink) { frame_sink_ = frame_sink; }
-  /// Clear the attached frame sink so no later request presents to it. Caller holds render_lock_.
+  /// Clear the attached frame sink so no later request presents to it. Caller holds render_lock_
+  /// or has exclusive access.
   void DetachFrameSink() { frame_sink_ = nullptr; }
 
-  // Returns the raw frame sink pointer. Caller must hold render_lock_.
+  // Returns the raw frame sink pointer. Caller holds render_lock_ or has exclusive access.
   auto GetFrameSink() const -> IFrameSink* { return frame_sink_; }
 
   /// Viewport region of the attached frame sink, or nullopt when no sink is attached.
@@ -147,7 +147,7 @@ class PipelineExecutor {
   /**
    * @brief Release every GPU and host resource bound to the last rendered image, in every
    *        created renderer. Devices and the frame sink are kept.
-   * @pre Caller holds GetRenderLock().
+   * @pre Caller holds GetRenderLock() or has exclusive access.
    */
   void               ReleaseBinding();
 

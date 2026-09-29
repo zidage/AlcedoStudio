@@ -22,13 +22,11 @@ namespace {
 class EditorSessionEditControllerTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    pipeline_ = std::make_shared<test::FakeEditorPipelinePort>();
     history_  = std::make_shared<test::FakeEditorHistoryPort>();
 
     EditorSessionLifecycle::Dependencies life_deps;
-    life_deps.pipeline = pipeline_;
-    life_deps.history  = history_;
-    lifecycle_         = std::make_unique<EditorSessionLifecycle>(std::move(life_deps));
+    life_deps.history = history_;
+    lifecycle_        = std::make_unique<EditorSessionLifecycle>(std::move(life_deps));
 
     std::string error;
     ASSERT_TRUE(lifecycle_->BeginAcquire(1, 2, false, nullptr, &error)) << error;
@@ -43,7 +41,6 @@ class EditorSessionEditControllerTest : public ::testing::Test {
   auto guard() const -> EditorHistoryGuardHandle { return lifecycle_->history_guard(); }
   auto identity() const -> EditorSessionIdentity { return lifecycle_->identity(); }
 
-  std::shared_ptr<test::FakeEditorPipelinePort> pipeline_;
   std::shared_ptr<test::FakeEditorHistoryPort>  history_;
   std::unique_ptr<EditorSessionLifecycle>       lifecycle_;
   std::unique_ptr<EditorSessionEditController>  edit_;

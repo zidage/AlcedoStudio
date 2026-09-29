@@ -273,11 +273,11 @@ TEST_F(LibraryHistoryAndExportTest, HistoryReadAndWriteRefuseTheImageTheEditorHo
   auto       edited       = AddExposureCommit(*pipelines, ids.first, 1.0f);
   const auto label_before = StoredLabel(project, ids.first);
 
-  auto       editor       = pipelines->AcquireEditorPipeline(ids.first);
-  ASSERT_NE(editor, nullptr);
+  const auto editor       = pipelines->AcquireEditorLease(ids.first);
+  ASSERT_NE(editor.document_, nullptr);
   EXPECT_THROW((void)pipelines->LoadHistorySnapshot(ids.first), std::runtime_error);
   EXPECT_THROW((void)pipelines->PersistHistory(edited.base, edited.graph), std::runtime_error);
-  pipelines->ReleaseEditorPipeline(editor);
+  pipelines->ReleaseEditorLease(ids.first);
 
   const auto label_after = StoredLabel(project, ids.first);
   ASSERT_TRUE(label_before.has_value() && label_after.has_value());

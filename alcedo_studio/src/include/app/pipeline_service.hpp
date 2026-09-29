@@ -14,6 +14,7 @@
 #include <span>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "app/committed_snapshot_cache.hpp"
 #include "app/image_pool_service.hpp"
@@ -69,14 +70,9 @@ struct PipelineGuard {
   bool                                 live_ready_ = false;
   bool                                 initializing_ = false;
   std::exception_ptr                   load_error_;
-  /// True while an editor input sequence (slider or Mask) has live values that are not a history
-  /// HEAD. Saves and checkpoints refuse to persist the live document while it is set.
-  bool                                 unsettled_preview_ = false;
-  /// True while the editor session owns this image's history and live document
-  /// (between AcquireEditorPipeline and ReleaseEditorPipeline). No other module
-  /// may load, rebind, or mutate the editor state of an owned guard. Guarded by
-  /// the PipelineMgmtService cache lock.
-  bool                                    editor_owned_      = false;
+  /// True while live values are not a history HEAD. Saves and checkpoints refuse to persist the
+  /// live document while it is set. The editor does not use guards (see EditorHistoryLease).
+  bool                                    unsettled_preview_ = false;
 
   /// Immutable root id for this image's edit graph (history identity, not a tip).
   root_id_t                            root_id_{};
@@ -138,6 +134,23 @@ struct ImageHistorySnapshot {
   std::shared_ptr<const LoadedRootState> root_;
 };
 
+/**
+ * @brief History of one image that the editor session takes over with its lease.
+ *
+ * Returned by @ref PipelineMgmtService::AcquireEditorLease. Not a copy of shared state: the
+ * session becomes the only owner of the image's history and working document until it releases
+ * the lease, and no other module loads or changes them in that time.
+ * - graph_: the materialized CommitGraph; the session appends its commits to it.
+ * - root_: the decoded immutable root with the image DNG profile bound; the start of every replay.
+ * - document_: the document of the active Version head, from the matching checkpoint or from a
+ *   replay of the root; the session's working document.
+ */
+struct EditorHistoryLease {
+  CommitGraph                            graph_;
+  std::shared_ptr<const LoadedRootState> root_;
+  std::shared_ptr<PipelineDocument>      document_;
+};
+
 class PipelineMgmtService final {
  private:
   std::shared_ptr<Storage>                                            storage_;
@@ -160,18 +173,21 @@ class PipelineMgmtService final {
 
   CommittedSnapshotCache       committed_snapshots_;
 
-  /// True while an editor session owns @p id (AcquireEditorPipeline .. ReleaseEditorPipeline).
+  /// Images whose history the editor session holds (AcquireEditorLease .. ReleaseEditorLease).
+  /// The single-writer lease table, guarded by lock_. It carries no executor and no document.
+  std::unordered_set<sl_element_id_t> editor_leases_;
+
+  /// True while the editor session holds the lease of @p id.
   [[nodiscard]] auto           EditorHoldsImage(sl_element_id_t id) -> bool;
+
+  /// Write the document of @p snapshot as the element pipeline JSON, kept for older versions of
+  /// the application (plan decision 3). The history in storage stays the source of truth.
+  void                         WriteElementPipelineJson(const PipelineGraphSnapshot& snapshot);
 
   void                         HandleEviction(sl_element_id_t evicted_id);
   void                         SyncDirtyPipelineDocument(
       const std::shared_ptr<PipelineGuard>& pipeline);
-  void                         CleanupIdlePipelineResources(const std::shared_ptr<PipelineGuard>& pipeline);
-  /// Rebind the editor history + live document of a pinned guard from storage.
-  void BindEditorStateFromStorage(const std::shared_ptr<PipelineGuard>& pipeline);
-  /// Editor open of an image that has no history root: create the root from the guard's live
-  /// document with the working-space camera profile. No effect when the root exists.
-  void CreateMissingRootForEditor(const std::shared_ptr<PipelineGuard>& pipeline);
+  void CleanupIdlePipelineResources(const std::shared_ptr<PipelineGuard>& pipeline);
 
  public:
   PipelineMgmtService() = delete;
@@ -195,14 +211,6 @@ class PipelineMgmtService final {
    * @param pipeline Guard returned by @ref LoadPipeline; no-op if null.
    */
   void               ReleasePipelineUse(std::shared_ptr<PipelineGuard> pipeline);
-
-  /// Persist the current editor graph and serialized pipeline state while the
-  /// caller keeps its editor guard pinned. `expected_materialized_state` is
-  /// the state observed before the in-memory history mutation and prevents a
-  /// concurrent writer from being overwritten.
-  auto               PersistEditorHistoryState(const std::shared_ptr<PipelineGuard>& pipeline,
-                                               const ImageEditState&                 expected_materialized_state,
-                                               std::string*                          error = nullptr) -> bool;
 
   auto               LoadPipeline(sl_element_id_t id) -> std::shared_ptr<PipelineGuard>;
 
@@ -293,28 +301,50 @@ class PipelineMgmtService final {
   /** @brief Save the guard's authoritative GPU DAG document. */
   void               SyncPipelineDocument(const std::shared_ptr<PipelineGuard>& pipeline);
 
-  /// Load editor document for `id` using history tip as authority.
-  /// If checkpoint (document + root/head/chain labels) matches active Version tip, load the
-  /// document (skip first-parent replay). Otherwise rebuild from root + first-parent typed
-  /// batches and mark write-back. Thumbnails, analysis, and export use AcquireCommittedSnapshot;
-  /// Copy and Paste to library images use LoadHistorySnapshot and PersistHistory.
-  ///
-  /// Caller: the editor session pipeline port (EditorSessionPipelinePort::EnsureLoaded); no
-  /// module other than the editor loads a guard. Throws when the editor session owns `id`: the
-  /// editor is the sole owner of an open image's history and live document, so rebinding them from
-  /// storage here would silently discard its unsaved history.
-  auto               LoadEditorPipeline(sl_element_id_t id) -> std::shared_ptr<PipelineGuard>;
+  /**
+   * @brief Take the single-writer lease of @p id for the editor session and read its history.
+   *
+   * Reads the materialized history and the immutable root, then builds the document of the
+   * active Version head: from the stored checkpoint when its root, head, and chain labels equal
+   * the history tip, otherwise by replay from the root. While the lease is held, thumbnails,
+   * analysis, and export read the snapshots the editor publishes (@ref PublishCommitted), and
+   * @ref LoadHistorySnapshot and @ref PersistHistory refuse the image. Loads no PipelineGuard
+   * and constructs no executor.
+   *
+   * Thread: any thread; storage reads run on the calling thread.
+   * @throws std::runtime_error when the lease is already held, when the image has no history root
+   *         (every imported image has one), or when its history or root cannot be decoded or
+   *         replayed. The lease is not taken on failure.
+   */
+  [[nodiscard]] auto AcquireEditorLease(sl_element_id_t id) -> EditorHistoryLease;
 
-  /// Editor session entry: bind `id`'s history and live document from storage and take
-  /// exclusive editor ownership until @ref ReleaseEditorPipeline. While owned, the bound
-  /// CommitGraph and document are never replaced by any load; throws if already owned.
-  auto               AcquireEditorPipeline(sl_element_id_t id) -> std::shared_ptr<PipelineGuard>;
+  /**
+   * @brief End the editor lease of @p id.
+   *
+   * The last committed snapshot the editor published becomes an ordinary cache entry that is
+   * checked against storage, and its document is written as the element pipeline JSON. No effect
+   * when the lease is not held.
+   */
+  void               ReleaseEditorLease(sl_element_id_t id);
 
-  /// End editor ownership taken by @ref AcquireEditorPipeline and return its cache pin.
-  void               ReleaseEditorPipeline(std::shared_ptr<PipelineGuard> pipeline);
+  /**
+   * @brief Persist the editor's @p graph and the checkpoint of @p document in one transaction.
+   *
+   * @p document must be the document of the active Version head of @p graph; the checkpoint is
+   * labelled with that head and its chain. Writes only when storage still holds
+   * @p expected_materialized_state, so a concurrent writer is never overwritten. On success the
+   * materialized state of @p graph is advanced to what was written.
+   *
+   * Thread: the editor session owner thread (the only writer of @p graph).
+   * @return false with @p error set when the lease is not held, the graph belongs to another
+   *         image, the stored state changed, or the write failed. Storage and @p graph are
+   *         unchanged on failure.
+   */
+  auto PersistEditorHistory(CommitGraph& graph, const ImageEditState& expected_materialized_state,
+                            const PipelineDocument& document, std::string* error = nullptr) -> bool;
 
-  /// Test/instrumentation counter: increments each time LoadEditorPipeline rebuilds from
-  /// first-parent history instead of importing the serialized checkpoint.
+  /// Test/instrumentation counter: increments each time AcquireEditorLease rebuilds the document
+  /// from first-parent history instead of importing the serialized checkpoint.
   [[nodiscard]] auto EditorPipelineHistoryRebuildCount() const -> std::uint64_t {
     return editor_pipeline_history_rebuild_count_;
   }
@@ -338,31 +368,6 @@ class PipelineMgmtService final {
   void               InitializeImageRoot(sl_element_id_t id, PipelineDocument document,
                                          const RawRuntimeColorContext* raw_color_context);
 
-  /// Switch the live editor document to another Version on the same image.
-  ///
-  /// Preconditions: `pipeline` is a loaded editor guard with a commit graph. The caller has already
-  /// completed a save checkpoint so the working journal is empty for this image.
-  ///
-  /// Behavior (build-then-swap): replays a new document from the immutable root plus the target
-  /// first-parent typed batches and binds the camera profile, without the render lock and without
-  /// touching the guard. Only after that succeeds does it set the active Version and bind the new
-  /// document under one render lock scope; that swap cannot fail. A failure before the swap returns
-  /// the replay error and leaves the prior Version and the prior document pointer bound. No copy of
-  /// the prior document is taken. Marks the guard dirty and requests a checkpoint write-back.
-  ///
-  /// @return true when the Version tip and live document both match the checked-out head.
-  auto               CheckoutVersion(const std::shared_ptr<PipelineGuard>& pipeline,
-                                     const version_ref_id_t& version_id, std::string* error = nullptr)
-      -> bool;
-
-  /// Rebuild the live document from the immutable root and the first-parent chain of the
-  /// currently active Version tip. Used when the checkpoint label does not match history, after
-  /// WAL recovery, and after Paste into an open editor. Uses build-then-swap like CheckoutVersion:
-  /// on failure the prior document stays bound and @p error receives the replay error.
-  auto               RebuildActiveEditorPipeline(const std::shared_ptr<PipelineGuard>& pipeline,
-                                                 std::string*                          error = nullptr)
-      -> bool;
-
   /// Clean project-exit garbage collection: mark from every Version head through first-parent
   /// reachability and delete unreachable EditCommit rows. Must run only after the final
   /// successful save; abnormal shutdown must not call this.
@@ -377,6 +382,8 @@ class PipelineMgmtService final {
     return accelerator_preference_;
   }
 
+  /// Write the element pipeline JSON of every dirty guard and of every image the editor holds
+  /// (from its last published committed snapshot).
   void Sync();
 
   /// Persist only the requested live pipeline. This avoids saving unrelated dirty editor state.

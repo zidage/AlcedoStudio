@@ -12,13 +12,12 @@
 #include <utility>
 #include <vector>
 
-#include "app/pipeline_history_applier.hpp"
+#include "app/pipeline_root_state.hpp"
 #include "app/pipeline_service.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_snapshot.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/mini_git_working_history.hpp"
-#include "ui/alcedo_main/album_backend/editor_history_shared_helpers.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_pipeline_port.hpp"
 
 namespace alcedo::ui {
@@ -48,17 +47,6 @@ auto EditorHistoryState::EnsureWorkingState(sl_element_id_t element_id, std::str
     }
     return nullptr;
   }
-  // One CommitGraph per open image: the WAL-backed history and the live guard (read by the
-  // history panel and every save capture) must share it. A split would commit into one graph
-  // and persist the other, dropping history.
-  if (state->history && state->pipeline_guard &&
-      state->history->graph() != state->pipeline_guard->commit_graph_) {
-    if (error) {
-      *error = "Editor history no longer drives the live pipeline CommitGraph for image " +
-               std::to_string(element_id);
-    }
-    return nullptr;
-  }
   return state;
 }
 
@@ -77,11 +65,25 @@ auto EditorHistoryState::AcquireWorkingState(sl_element_id_t element_id, std::st
     if (error) *error = "Editor pipeline port is unavailable";
     return nullptr;
   }
-  auto guard = pipeline_port->EnsureLoaded(element_id, error);
-  if (!guard || !guard->commit_graph_) {
-    if (error && error->empty()) *error = "Editor Mini-Git history graph is unavailable";
+  auto lease = pipeline_port->AcquireLease(element_id, error);
+  if (!lease.has_value()) {
+    if (error && error->empty()) *error = "Editor history lease is unavailable";
     return nullptr;
   }
+  // Every return below that does not publish the state returns the lease.
+  struct LeaseReturn {
+    EditorSessionPipelinePort& port;
+    sl_element_id_t            element_id;
+    bool                       kept = false;
+    ~LeaseReturn() {
+      if (!kept) port.ReleaseLease(element_id);
+    }
+  } lease_return{*pipeline_port, element_id};
+
+  auto state      = std::make_shared<HistoryWorkingState>();
+  state->graph    = lease->graph_;
+  state->root     = lease->root_;
+  state->document = lease->document_;
 
   std::filesystem::path path;
   try {
@@ -95,27 +97,13 @@ auto EditorHistoryState::AcquireWorkingState(sl_element_id_t element_id, std::st
   }
   auto journal = std::make_shared<alcedo::MiniGitJournal>(std::move(path));
   if (!journal->Load(error)) return nullptr;
+  state->journal             = journal;
 
-  auto state = std::make_shared<HistoryWorkingState>();
-  state->pipeline_guard = guard;
-  state->journal = journal;
-  // LoadEditorPipeline already installed the live document from a matching
-  // checkpoint or from first-parent replay. Panel values are read from that
-  // document, never from a stored CPU-parameter checkpoint blob.
-  if (!guard->pipeline_) {
-    if (error) *error = "Mini-Git working state requires a live pipeline executor";
-    return nullptr;
-  }
-
-  // Attach WAL against the unique history instance — no shadow CommitGraph copy,
-  // no ApplyRecoveredRecordToSnapshot reducer.
+  // Attach the WAL against the unique history instance: no shadow CommitGraph copy.
   const auto journal_records = journal->records();
-  if (journal_records.empty()) {
-    guard->dirty_ = false;
-    state->recovered_head = false;
-  } else {
-    const auto alignment = alcedo::MiniGitWorkingHistory::AlignJournalWithStoredHead(
-        *guard->commit_graph_, journal_records);
+  if (!journal_records.empty()) {
+    const auto alignment =
+        alcedo::MiniGitWorkingHistory::AlignJournalWithStoredHead(*state->graph, journal_records);
     if (!alignment.accepted || alignment.broken) {
       std::string isolate_error;
       (void)alcedo::MiniGitJournal::IsolateJournalFile(journal->path(), &isolate_error);
@@ -130,100 +118,56 @@ auto EditorHistoryState::AcquireWorkingState(sl_element_id_t element_id, std::st
     if (alignment.fully_covered) {
       // Crash after durable save, before WAL clear: discard leftover log only.
       if (!journal->TruncateMaterialized(error)) return nullptr;
-      guard->dirty_ = false;
-      state->recovered_head = false;
     } else {
-      // Contiguous missing suffix: apply into unique graph + live pipeline.
-      // The document rebuild below is build-then-swap: a failed rebuild leaves the prior
-      // document bound, so only the graph needs a restore.
-      const auto prior_graph = *guard->commit_graph_;
-      const auto expected_materialized = prior_graph.GetImageEditState();
-      auto       restore_recovery      = [&]() { *guard->commit_graph_ = prior_graph; };
-
+      // Contiguous missing suffix: build the recovered history and its document first; nothing
+      // is swapped in until both exist.
+      const auto expected_materialized = state->graph->GetImageEditState();
+      auto       recovered_graph       = *state->graph;
       std::vector<alcedo::MiniGitJournalRecord> missing(
-          journal_records.begin() +
-              static_cast<std::ptrdiff_t>(alignment.missing_from_index),
+          journal_records.begin() + static_cast<std::ptrdiff_t>(alignment.missing_from_index),
           journal_records.end());
-
       std::string replay_error;
-      if (!alcedo::MiniGitWorkingHistory::Replay(*guard->commit_graph_, missing, &replay_error)) {
-        restore_recovery();
+      if (!alcedo::MiniGitWorkingHistory::Replay(recovered_graph, missing, &replay_error)) {
         if (error) *error = replay_error;
         std::string isolate_error;
         (void)alcedo::MiniGitJournal::IsolateJournalFile(journal->path(), &isolate_error);
         return nullptr;
       }
-
-      const auto recovered_head = guard->commit_graph_->GetActiveVersionRef().head_commit_hash;
-      if (auto pipeline_service = PipelineMapper()) {
-        if (!pipeline_service->RebuildActiveEditorPipeline(guard, error)) {
-          restore_recovery();
-          std::string isolate_error;
-          (void)alcedo::MiniGitJournal::IsolateJournalFile(journal->path(), &isolate_error);
-          return nullptr;
-        }
-      } else if (!ReplayWorkingDocumentFromImmutableRoot(*state, recovered_head, error)) {
-        restore_recovery();
+      const auto recovered_head = recovered_graph.GetActiveVersionRef().head_commit_hash;
+      auto       recovered_document =
+          alcedo::BuildDocumentFromRoot(recovered_graph, *state->root, recovered_head, error);
+      if (!recovered_document) {
         std::string isolate_error;
         (void)alcedo::MiniGitJournal::IsolateJournalFile(journal->path(), &isolate_error);
         return nullptr;
       }
 
-      guard->dirty_ = true;
-      guard->serialized_state_needs_writeback_ = true;
+      // Swap: the recovered history and document become the working state.
+      *state->graph = std::move(recovered_graph);
+      state->document->Replace(recovered_document);
       state->recovered_head = true;
 
-      // Normal save APIs for recovery result: history persist + pipeline checkpoint.
+      // Persist the recovered history with the checkpoint of its document in one transaction,
+      // then clear the WAL. A failed write keeps the recovered state in memory and the WAL on
+      // disk for the next save.
       if (auto pipeline_service = PipelineMapper()) {
         std::string persist_error;
-        if (!pipeline_service->PersistEditorHistoryState(guard, expected_materialized,
-                                                         &persist_error)) {
-          // Keep recovered memory/live state; leave WAL for retry.
+        if (!pipeline_service->PersistEditorHistory(*state->graph, expected_materialized,
+                                                    *recovered_document, &persist_error)) {
           if (error) *error = persist_error;
         } else {
-          if (guard->pipeline_) {
-            try {
-              pipeline_service->SavePipeline(guard);
-            } catch (const std::exception& ex) {
-              if (error) *error = ex.what();
-              // Leave WAL intact when pipeline checkpoint fails.
-              goto attach_history;
-            } catch (...) {
-              if (error) *error = "Recovered pipeline checkpoint save failed";
-              goto attach_history;
-            }
-          }
-          if (!journal->TruncateMaterialized(error)) {
-            return nullptr;
-          }
-          guard->dirty_ = false;
-          guard->serialized_state_needs_writeback_ = false;
+          if (!journal->TruncateMaterialized(error)) return nullptr;
           state->recovered_head = false;
-          try {
-            guard->commit_graph_->MaterializeActiveHeadInMemory();
-          } catch (const std::exception& ex) {
-            if (error) *error = ex.what();
-            return nullptr;
-          }
         }
       }
     }
   }
 
-attach_history:
-  state->history =
-      std::make_unique<alcedo::MiniGitWorkingHistory>(guard->commit_graph_, journal);
-
-  // After WAL attach, if checkpoint identity still disagrees with logical head,
-  // history remains authoritative and a new checkpoint writeback is required.
-  const auto& post_wal_state = guard->commit_graph_->GetImageEditState();
-  if (!alcedo::CheckpointMatchesLogicalHead(post_wal_state, guard->working_head_commit_hash(),
-                                            guard->transaction_chain_hash())) {
-    guard->serialized_state_needs_writeback_ = true;
-  }
+  state->history = std::make_unique<alcedo::MiniGitWorkingHistory>(state->graph, journal);
 
   std::scoped_lock lock(mutex_);
   const auto [it, inserted] = working_states_.emplace(element_id, state);
+  lease_return.kept         = inserted;
   return inserted ? state : it->second;
 }
 
@@ -235,8 +179,13 @@ auto EditorHistoryState::PeekWorkingState(sl_element_id_t element_id) const
 }
 
 void EditorHistoryState::ReleaseState(sl_element_id_t element_id) {
-  std::scoped_lock lock(mutex_);
-  working_states_.erase(element_id);
+  std::shared_ptr<EditorSessionPipelinePort> pipeline_port;
+  {
+    std::scoped_lock lock(mutex_);
+    if (working_states_.erase(element_id) == 0) return;
+    pipeline_port = pipeline_port_.lock();
+  }
+  if (pipeline_port) pipeline_port->ReleaseLease(element_id);
 }
 
 auto EditorHistoryState::PipelinePort() const -> std::shared_ptr<EditorSessionPipelinePort> {
@@ -254,12 +203,12 @@ auto EditorHistoryState::HasUnmaterializedChanges(sl_element_id_t element_id, st
     -> bool {
   auto state = PeekWorkingState(element_id);
   if (!state) return false;
-  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_ || !state->history) {
+  if (!state->history) {
     if (error) *error = "Editor history graph is unavailable";
     return false;
   }
   return state->history->working_head() !=
-         state->pipeline_guard->commit_graph_->GetImageEditState().materialized_head_commit_hash;
+         state->graph->GetImageEditState().materialized_head_commit_hash;
 }
 
 auto EditorHistoryState::JournalPathResolver() const
@@ -268,9 +217,17 @@ auto EditorHistoryState::JournalPathResolver() const
   return services_.mini_git_journal_path;
 }
 
-void EditorHistoryState::PublishCommittedSnapshot(sl_element_id_t element_id) {
+void EditorHistoryState::PublishWorkingSnapshots(sl_element_id_t element_id) {
   const auto state = PeekWorkingState(element_id);
-  if (!state || !state->history || !state->pipeline_guard || !state->pipeline_guard->document_) {
+  if (!state || !state->history) {
+    return;
+  }
+  std::shared_ptr<const alcedo::PipelineGraphSnapshot> preview;
+  try {
+    preview = state->document->PublishPreview();
+  } catch (const std::exception& ex) {
+    qWarning("Editor history: preview snapshot of image %llu was not published: %s",
+             static_cast<unsigned long long>(element_id), ex.what());
     return;
   }
   if (state->HasUncommittedLiveValues()) {
@@ -282,15 +239,16 @@ void EditorHistoryState::PublishCommittedSnapshot(sl_element_id_t element_id) {
   }
   const auto head    = state->history->working_head();
   const auto chain   = state->history->transaction_chain_hash();
-  const auto lineage = state->pipeline_guard->lineage_;
+  const auto lineage = preview->Lineage();
   if (state->last_published_commit.has_value() &&
       state->last_published_commit->lineage == lineage &&
       state->last_published_commit->head == head && state->last_published_commit->chain == chain) {
     return;
   }
   try {
+    // The preview froze a document without uncommitted values, so it is the committed document.
     service->PublishCommitted(alcedo::PipelineGraphSnapshot::Committed(
-        state->pipeline_guard->document_->Freeze(), element_id, lineage, head, chain));
+        preview->SharedDocument(), element_id, lineage, head, chain));
     state->last_published_commit = HistoryWorkingState::PublishedCommit{lineage, head, chain};
   } catch (const std::exception& ex) {
     qWarning("Editor history: committed snapshot of image %llu was not published: %s",
@@ -310,43 +268,15 @@ auto EditorHistoryState::LastPublishedRenderReason() const
   return last_published_render_reason_;
 }
 
-auto EditorHistoryState::ReplayWorkingDocumentFromImmutableRoot(
-    HistoryWorkingState& state, const alcedo::head_commit_hash_t& head, std::string* error)
-    -> bool {
-  if (!state.pipeline_guard || !state.pipeline_guard->pipeline_ ||
-      !state.pipeline_guard->document_ || !state.pipeline_guard->commit_graph_) {
-    if (error) *error = "Live pipeline document is unavailable for Version replay";
-    return false;
+auto EditorHistoryState::BuildDocumentForHead(const HistoryWorkingState&        state,
+                                              const alcedo::head_commit_hash_t& head,
+                                              std::string*                      error)
+    -> std::shared_ptr<alcedo::PipelineDocument> {
+  if (!state.graph || !state.root) {
+    if (error) *error = "Editor history root is unavailable for Version replay";
+    return nullptr;
   }
-  if (!state.pipeline_guard->root_document_) {
-    if (error) *error = "Immutable root document is missing for Version replay";
-    return false;
-  }
-
-  std::vector<alcedo::EditCommit> commits;
-  try {
-    commits = alcedo::FirstParentCommitsForHead(*state.pipeline_guard->commit_graph_, head);
-  } catch (const std::exception& ex) {
-    if (error) *error = ex.what();
-    return false;
-  }
-
-  std::shared_ptr<alcedo::PipelineDocument> document;
-  try {
-    auto replayed = alcedo::ReplayPipelineDocumentFromRoot(*state.pipeline_guard->root_document_,
-                                                           commits, error);
-    if (!replayed.has_value()) {
-      return false;
-    }
-    document = std::make_shared<alcedo::PipelineDocument>(std::move(*replayed));
-  } catch (const std::exception& ex) {
-    if (error) *error = ex.what();
-    return false;
-  }
-
-  auto render_lock = LockLivePipeline(*state.pipeline_guard->pipeline_);
-  (void)alcedo::BindLivePipelineDocument(*state.pipeline_guard, std::move(document));
-  return true;
+  return alcedo::BuildDocumentFromRoot(*state.graph, *state.root, head, error);
 }
 
 }  // namespace alcedo::ui

@@ -17,13 +17,11 @@ namespace {
 class EditorSessionLifecycleTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    pipeline_ = std::make_shared<test::FakeEditorPipelinePort>();
-    history_  = std::make_shared<test::FakeEditorHistoryPort>();
+    history_ = std::make_shared<test::FakeEditorHistoryPort>();
 
     EditorSessionLifecycle::Dependencies deps;
-    deps.pipeline = pipeline_;
-    deps.history  = history_;
-    lifecycle_    = std::make_unique<EditorSessionLifecycle>(std::move(deps));
+    deps.history = history_;
+    lifecycle_   = std::make_unique<EditorSessionLifecycle>(std::move(deps));
   }
 
   void OpenImage(sl_element_id_t eid = 100, image_id_t iid = 200) {
@@ -34,7 +32,6 @@ class EditorSessionLifecycleTest : public ::testing::Test {
     lifecycle_->MarkFirstFrameReady();
   }
 
-  std::shared_ptr<test::FakeEditorPipelinePort> pipeline_;
   std::shared_ptr<test::FakeEditorHistoryPort>  history_;
   std::unique_ptr<EditorSessionLifecycle>       lifecycle_;
 };
@@ -48,7 +45,6 @@ TEST_F(EditorSessionLifecycleTest, BeginAcquireAndAcquireGuardsSucceed) {
   EXPECT_EQ(lifecycle_->active_image_load_request().value, 1u);
 
   EXPECT_TRUE(lifecycle_->AcquireGuards(&error)) << error;
-  EXPECT_EQ(pipeline_->acquire_count, 1);
   EXPECT_EQ(history_->acquire_count, 1);
   EXPECT_TRUE(lifecycle_->has_history_guard());
   const auto guard = lifecycle_->history_guard();
@@ -56,38 +52,25 @@ TEST_F(EditorSessionLifecycleTest, BeginAcquireAndAcquireGuardsSucceed) {
   EXPECT_EQ(guard.element_id, static_cast<sl_element_id_t>(100));
 }
 
-TEST_F(EditorSessionLifecycleTest, PipelineAcquireFailureReturnsFalseAndNoHistoryAcquire) {
-  pipeline_->fail_acquire = true;
-  ASSERT_TRUE(lifecycle_->BeginAcquire(100, 200, false, nullptr, nullptr));
-  std::string error;
-  EXPECT_FALSE(lifecycle_->AcquireGuards(&error));
-  EXPECT_EQ(pipeline_->acquire_count, 1);
-  EXPECT_EQ(history_->acquire_count, 0);
-  EXPECT_FALSE(lifecycle_->has_history_guard());
-  EXPECT_EQ(lifecycle_->state(), EditorSessionState::Failed);
-}
-
-TEST_F(EditorSessionLifecycleTest, HistoryAcquireFailureReleasesPipelineGuard) {
+// The history port takes the editor lease; there is no separate pipeline acquisition to undo.
+TEST_F(EditorSessionLifecycleTest, HistoryAcquireFailureLeavesTheSessionFailedWithoutAGuard) {
   history_->fail_acquire = true;
   ASSERT_TRUE(lifecycle_->BeginAcquire(100, 200, false, nullptr, nullptr));
   std::string error;
   EXPECT_FALSE(lifecycle_->AcquireGuards(&error));
-  EXPECT_EQ(pipeline_->acquire_count, 1);
   EXPECT_EQ(history_->acquire_count, 1);
-  EXPECT_EQ(pipeline_->release_count, 1);
+  EXPECT_EQ(history_->release_count, 0);
   EXPECT_FALSE(lifecycle_->has_history_guard());
   EXPECT_EQ(lifecycle_->state(), EditorSessionState::Failed);
 }
 
-TEST_F(EditorSessionLifecycleTest, ReleaseGuardsReleasesBothExactlyOnce) {
+TEST_F(EditorSessionLifecycleTest, ReleaseGuardsReleasesTheHistoryGuardExactlyOnce) {
   ASSERT_TRUE(lifecycle_->BeginAcquire(100, 200, false, nullptr, nullptr));
   ASSERT_TRUE(lifecycle_->AcquireGuards(nullptr));
   lifecycle_->ReleaseGuards();
-  EXPECT_EQ(pipeline_->release_count, 1);
   EXPECT_EQ(history_->release_count, 1);
   EXPECT_FALSE(lifecycle_->has_history_guard());
   lifecycle_->ReleaseGuards();
-  EXPECT_EQ(pipeline_->release_count, 1);
   EXPECT_EQ(history_->release_count, 1);
 }
 
@@ -97,7 +80,6 @@ TEST_F(EditorSessionLifecycleTest, ReleaseAfterCheckpointReleasesAndReturnsIdent
   const auto outcome = lifecycle_->ReleaseAfterCheckpoint();
   EXPECT_TRUE(outcome.released);
   EXPECT_EQ(outcome.identity.element_id, static_cast<sl_element_id_t>(100));
-  EXPECT_EQ(pipeline_->release_count, 1);
   EXPECT_EQ(history_->release_count, 1);
   EXPECT_FALSE(lifecycle_->has_history_guard());
 }

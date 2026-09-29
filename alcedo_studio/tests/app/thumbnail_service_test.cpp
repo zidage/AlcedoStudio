@@ -1184,9 +1184,9 @@ TEST_F(ThumbnailServiceTests, DiskCacheTracksRootAndActiveHeadAndServesAfterPipe
   const auto image_id              = snapshot.created_.front().image_id_;
 
   auto       root_pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
-  auto       root_guard            = root_pipeline_service->LoadEditorPipeline(element_id);
-  ASSERT_NE(root_guard, nullptr);
-  root_pipeline_service->SavePipeline(root_guard);
+  const auto root_lease            = root_pipeline_service->AcquireEditorLease(element_id);
+  ASSERT_NE(root_lease.document_, nullptr);
+  root_pipeline_service->ReleaseEditorLease(element_id);
 
   // Disk entries are labelled with the committed snapshot's head ("root" before the first
   // commit) and its transaction chain.

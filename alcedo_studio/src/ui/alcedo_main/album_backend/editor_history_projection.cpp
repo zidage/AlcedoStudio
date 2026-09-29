@@ -29,11 +29,7 @@ auto EditorHistoryProjection::ReadActiveVersionId(
     *version_id = {};
     return true;
   }
-  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_) {
-    if (error != nullptr) *error = "Editor history graph is unavailable";
-    return false;
-  }
-  *version_id = state->pipeline_guard->commit_graph_->GetActiveVersionId();
+  *version_id = state->graph->GetActiveVersionId();
   return true;
 }
 
@@ -56,12 +52,11 @@ auto EditorHistoryProjection::ReadHistorySnapshot(
   bool can_redo = false;
   std::vector<alcedo::EditorHistoryVersion> versions;
   std::vector<ProjectionCommitSource> commit_sources;
-  if (snapshot == nullptr || !state->pipeline_guard || !state->pipeline_guard->commit_graph_ ||
-      !state->history) {
+  if (snapshot == nullptr || !state->history) {
     if (error) *error = "Editor history graph is unavailable";
     return false;
   }
-  const auto& graph = *state->pipeline_guard->commit_graph_;
+  const auto& graph    = *state->graph;
   active_version_id = graph.GetActiveVersionId();
   active_head = graph.GetActiveVersionRef().head_commit_hash;
   recovered_head = state->recovered_head;

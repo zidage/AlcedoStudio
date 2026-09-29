@@ -121,9 +121,9 @@ struct EditorPanelFieldPresentation {
  * @brief Load-only panel values copied at the session/render owner boundary.
  *
  * Displayed fields: @p fields, each a named panel value plus the instance that
- * produced it. Source owner: PipelineDocument, read while the caller holds the
- * executor render lock. Consistency: every field was read before that lock was
- * released. GUI delivery: this struct is a value copy with no Model pointers.
+ * produced it. Source owner: PipelineDocument, read on the thread that writes it (the
+ * editor session owner thread). Consistency: every field was read in one owner-thread
+ * step. GUI delivery: this struct is a value copy with no Model pointers.
  * Drop it when @p session_generation does not match the live session, or when a
  * newer copy for the same session replaces it.
  */
@@ -190,7 +190,7 @@ void UpsertEditorPanelField(EditorPanelProjection* projection, EditorPanelFieldP
  * Looks up the actual AdjustmentInstanceId on @p target. Does not infer
  * PrimaryGrade or the first instance of an operator type.
  *
- * @pre Caller holds the executor render lock when @p document is live.
+ * @pre No other thread writes @p document during the call.
  * @pre @p target is a complete production target.
  * @return false when the node, instance, or adapter is missing. @p out is
  *         left unchanged.
@@ -220,7 +220,7 @@ auto ReadEditorPanelField(const PipelineDocument& document, const EditorParamete
  * Failure leaves @p out unchanged. Missing or wrong-owner instances fail
  * explicitly; PrimaryGrade is not substituted.
  *
- * @pre Caller holds the executor render lock when @p document is live.
+ * @pre No other thread writes @p document during the call.
  */
 auto ProjectEditorPanelFields(const PipelineDocument& document,
                               std::span<const EditorParameterTarget> targets,
@@ -235,7 +235,7 @@ auto ProjectEditorPanelFields(const PipelineDocument& document,
 /**
  * @brief Project every production panel field from current-panel owners.
  *
- * @pre Caller holds the executor render lock when @p document is live.
+ * @pre No other thread writes @p document during the call.
  */
 auto ProjectCurrentPanelFields(const PipelineDocument& document, std::uint64_t session_generation,
                                EditorPanelProjection* out, std::string* error) -> bool;

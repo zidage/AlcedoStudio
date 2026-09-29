@@ -36,7 +36,7 @@ class EditorHistoryCheckpoint {
   /// Reconcile the in-memory ImageEditState.materialized_* with the durable tuple
   /// a successful checkpoint just wrote to DuckDB. Advances the in-memory
   /// materialized head/chain to the active Version's working head so a subsequent
-  /// PersistEditorHistoryState guard accepts the durable state.
+  /// PipelineMgmtService::PersistEditorHistory check accepts the durable state.
   auto SyncMaterializedStateAfterCheckpoint(const alcedo::EditorHistoryGuardHandle& guard,
                                              std::string* error) -> bool;
 

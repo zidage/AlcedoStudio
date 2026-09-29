@@ -13,8 +13,10 @@
 #include <string>
 #include <utility>
 
+#include "app/pipeline_service.hpp"
 #include "edit/frame_presentation_types.hpp"
 #include "edit/pipeline/pipeline_executor.hpp"
+#include "edit/runtime/executor_role.hpp"
 #include "image/image.hpp"
 #include "image/image_buffer.hpp"
 #include "io/image/image_loader.hpp"
@@ -126,7 +128,9 @@ EditorSessionRenderSchedulerPort::~EditorSessionRenderSchedulerPort() {
     running_cancellation->Cancel();
   }
 
-  // Drain in-flight pool work before tearing down this port.
+  // Drain in-flight pool work before tearing down this port: its completion calls back into this
+  // object. The in-flight frame may wait for the scene graph to hand over a present slot, which
+  // needs the GUI thread, so a GUI-thread caller keeps delivering events while it waits.
   for (;;) {
     {
       std::unique_lock lock(mutex_);
@@ -166,7 +170,7 @@ void EditorSessionRenderSchedulerPort::BindSessionContext(
     std::uint64_t epoch, sl_element_id_t element_id, image_id_t image_id,
     alcedo::PresentationSinkId presentation_sink_id) {
   std::scoped_lock lock(mutex_);
-  // Same open image: keep Image / ImageBuffer / PipelineGuard. RouteInitialRender
+  // Same open image: keep Image / ImageBuffer. RouteInitialRender
   // (undo, head-move, quality re-route) rebinds with the same element/image and
   // must not force another full-file LoadImageInputBuffer or drop the payload.
   // Only a true image identity change replaces the whole context.
@@ -185,8 +189,18 @@ void EditorSessionRenderSchedulerPort::BindSessionContext(
 }
 
 void EditorSessionRenderSchedulerPort::ClearSessionContext() {
-  std::scoped_lock lock(mutex_);
-  session_context_.reset();
+  std::shared_ptr<alcedo::PipelineExecutor> executor;
+  {
+    std::scoped_lock lock(mutex_);
+    session_context_.reset();
+    executor = executor_;
+  }
+  if (!executor) {
+    return;
+  }
+  // Every use of the executor runs on the single worker, which gives this work exclusive access
+  // after the in-flight frame: the release never waits and never races a render.
+  EnsurePipelineScheduler()->ScheduleWork([executor] { executor->ReleaseBinding(); });
 }
 
 void EditorSessionRenderSchedulerPort::InstallSessionContext(EditorRenderSessionContext context) {
@@ -220,8 +234,7 @@ auto EditorSessionRenderSchedulerPort::ContextMatchesRequest(
 
 auto EditorSessionRenderSchedulerPort::ContextPayloadReady(
     const EditorRenderSessionContext& context) const -> bool {
-  return context.image && !context.image->image_path_.empty() && context.input &&
-         context.pipeline_guard && context.pipeline_guard->pipeline_;
+  return context.image && !context.image->image_path_.empty() && context.input;
 }
 
 auto EditorSessionRenderSchedulerPort::Schedule(
@@ -310,11 +323,10 @@ auto EditorSessionRenderSchedulerPort::EnsureContextForRequest(
     return std::nullopt;
   }
 
-  // Rendering only reads the pipeline the editor session owns. A request for an image the
+  // Rendering only reads the image the editor session holds. A request for an image the
   // session no longer (or not yet) holds is stale; loading here would rebind that image's
-  // history and live document behind the session.
-  auto guard = pipeline_port->CurrentGuard(request.intent.element_id);
-  if (!guard || !guard->pipeline_) {
+  // history and working document behind the session.
+  if (!pipeline_port->CurrentPreview(request.intent.element_id)) {
     if (error) {
       *error = "Editor pipeline is not held for this image; the render request is stale";
     }
@@ -369,9 +381,8 @@ auto EditorSessionRenderSchedulerPort::EnsureContextForRequest(
   }
   // Only the first successful payload load for this identity counts.
   if (!ContextPayloadReady(*session_context_)) {
-    session_context_->image          = std::move(image_desc);
-    session_context_->input          = std::move(input);
-    session_context_->pipeline_guard = std::move(guard);
+    session_context_->image = std::move(image_desc);
+    session_context_->input = std::move(input);
     ++context_payload_load_count_;
   }
   return session_context_;
@@ -384,6 +395,36 @@ auto EditorSessionRenderSchedulerPort::EnsurePipelineScheduler()
     pipeline_scheduler_ = std::make_shared<alcedo::PipelineScheduler>(1);
   }
   return pipeline_scheduler_;
+}
+
+auto EditorSessionRenderSchedulerPort::EnsureExecutor()
+    -> std::shared_ptr<alcedo::PipelineExecutor> {
+  std::shared_ptr<EditorSessionPipelinePort> pipeline_port;
+  {
+    std::scoped_lock lock(mutex_);
+    if (executor_) {
+      return executor_;
+    }
+    pipeline_port = pipeline_port_;
+  }
+  // The backend preference is fixed at construction; a preference change takes effect after the
+  // application restarts, like every other executor.
+  const auto service = pipeline_port ? pipeline_port->PipelineMapper() : nullptr;
+  auto executor = std::make_shared<alcedo::PipelineExecutor>(alcedo::ExecutorRole::Interactive);
+  if (service) {
+    executor->SetAcceleratorBackendPreference(service->GetAcceleratorBackendPreference());
+  }
+  std::scoped_lock lock(mutex_);
+  if (!executor_) {
+    executor_ = std::move(executor);
+  }
+  return executor_;
+}
+
+auto EditorSessionRenderSchedulerPort::interactive_executor() const
+    -> std::shared_ptr<alcedo::PipelineExecutor> {
+  std::scoped_lock lock(mutex_);
+  return executor_;
 }
 
 void EditorSessionRenderSchedulerPort::DispatchJob(Job job) {
@@ -444,28 +485,43 @@ void EditorSessionRenderSchedulerPort::DispatchPipelineFrame(Job job, alcedo::IF
     return;
   }
 
+  // The latest preview the history published: the working document at dispatch. A frame that
+  // starts after a later write renders that later preview, never a partly written document.
+  std::shared_ptr<EditorSessionPipelinePort> pipeline_port;
+  {
+    std::scoped_lock lock(mutex_);
+    pipeline_port = pipeline_port_;
+  }
+  auto snapshot =
+      pipeline_port ? pipeline_port->CurrentPreview(job.request.intent.element_id) : nullptr;
+  if (!snapshot) {
+    scheduler->ScheduleWork([this, job]() mutable {
+      FinishJob(job, false,
+                "Editor pipeline is not held for this image; the render request is stale");
+    });
+    return;
+  }
+
   try {
     TraceDetailRequest("pipeline-submit", job.request);
-    auto                 exec = context->pipeline_guard->pipeline_;
-
     alcedo::PipelineTask task;
-    task.input_                             = context->input;
-    task.input_desc_                        = context->image;
-    task.pipeline_executor_                 = exec;
-    task.snapshot_under_render_lock_        = alcedo::MakeLiveSnapshotSource(context->pipeline_guard);
-    task.options_.render_desc_              = MakeEditorRenderDesc(job.request);
-    task.request_id_                        = job.request.request_id;
-    task.options_.is_callback_              = false;
-    task.options_.is_seq_callback_          = false;
-    task.options_.is_blocking_              = false;
-    // The scheduler freezes the live document under the render lock and renders that snapshot.
-    // Configure only attaches the frame sink under the same lock; it writes no parameter.
-    task.configure_under_render_lock_ = [sink](alcedo::PipelineTask& locked_task) {
-      auto locked_exec = locked_task.pipeline_executor_;
-      if (!locked_exec) {
-        return false;
+    task.input_                      = context->input;
+    task.input_desc_                 = context->image;
+    task.pipeline_executor_          = EnsureExecutor();
+    task.snapshot_under_render_lock_ = [snapshot = std::move(snapshot)] { return snapshot; };
+    task.options_.render_desc_       = MakeEditorRenderDesc(job.request);
+    task.request_id_                 = job.request.request_id;
+    task.options_.is_callback_       = false;
+    task.options_.is_seq_callback_   = false;
+    task.options_.is_blocking_       = false;
+    // The executor belongs to this port and every use of it runs on the single worker, which has
+    // exclusive access, so the viewport sink is attached there before the frame. It changes only
+    // when the viewport item is replaced.
+    task.prepare_                    = [sink](alcedo::PipelineTask& prepared_task) {
+      auto& executor = *prepared_task.pipeline_executor_;
+      if (executor.GetFrameSink() != sink) {
+        executor.AttachFrameSink(sink);
       }
-      locked_exec->AttachFrameSink(sink);
       return true;
     };
     if (job.request.intent.cancellation) {
@@ -513,30 +569,6 @@ void EditorSessionRenderSchedulerPort::Cancel(std::uint64_t scheduler_job_id) {
     cancellation->Cancel();
   }
   // Completion arrives from the pipeline pool via on_complete_ / FinishJob.
-}
-
-void EditorSessionRenderSchedulerPort::WaitForSessionIdle(std::uint64_t session_epoch) {
-  const auto idle = [this, session_epoch] {
-    return !running_job_ ||
-           running_job_->request.intent.image_load_request_id.value != session_epoch;
-  };
-
-  for (;;) {
-    {
-      std::unique_lock lock(mutex_);
-      if (idle()) {
-        return;
-      }
-      jobs_changed_.wait_for(lock, std::chrono::milliseconds(16), idle);
-      if (idle()) {
-        return;
-      }
-    }
-    if (QCoreApplication::instance() != nullptr &&
-        QThread::currentThread() == QCoreApplication::instance()->thread()) {
-      QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 16);
-    }
-  }
 }
 
 auto EditorSessionRenderSchedulerPort::last_scheduled() const

@@ -207,35 +207,33 @@ TEST_F(SerialFrameConsumptionTest, GuiRemainsResponsiveWhilePresentNeedsAnUpdate
   EXPECT_EQ(alcedo::PendingScalarValue(pending.sequences.front().fields.front()), 0.12f);
 }
 
-TEST_F(SerialFrameConsumptionTest, UndoAndCheckoutWaitForOwnerWithoutBlockingGui) {
+// The history owns the working document and every frame renders an immutable preview on the
+// editor's own executor, so history operations no longer wait for the in-flight frame.
+TEST_F(SerialFrameConsumptionTest, UndoAndCheckoutRunWhileAFrameIsInFlight) {
   OpenInteractive();
   EnqueueExposure(0.21f);
   ConsumeQueued();
   ASSERT_TRUE(service_->serial_frame_admission().HoldsOwnership());
-  const int  undos_before = history_->undo_count;
-  const auto undo         = service_->Undo();
-  EXPECT_EQ(undo.kind, EditorSessionResultKind::Accepted);
-  EXPECT_NE(undo.message.find("queued"), std::string::npos);
-  EXPECT_EQ(history_->undo_count, undos_before);
-  EXPECT_TRUE(latch_->running());
+  ASSERT_TRUE(latch_->running());
 
-  latch_->Complete(true);
-  CompleteInflightAndDrain();
+  history_->report_undoable_history = true;
+  const int undos_before            = history_->undo_count;
+  (void)service_->Undo();
+  service_->DrainCommandQueueForTests();
   EXPECT_EQ(history_->undo_count, undos_before + 1);
-  EXPECT_FALSE(service_->serial_frame_admission().HasDeferredOwnerWork());
-
-  EnqueueExposure(0.22f);
-  ConsumeQueued();
-  ASSERT_TRUE(service_->serial_frame_admission().HoldsOwnership());
-  const int  checkouts_before = history_->checkout_count;
-  const auto checkout         = service_->CheckoutVersion(history_->last_root_version);
-  EXPECT_EQ(checkout.kind, EditorSessionResultKind::Accepted);
-  EXPECT_NE(checkout.message.find("queued"), std::string::npos);
-  EXPECT_EQ(history_->checkout_count, checkouts_before);
   EXPECT_TRUE(latch_->running());
+
+  const int checkouts_before = history_->checkout_count;
+  (void)service_->CheckoutVersion(history_->last_root_version);
+  for (int i = 0; i < 8 && history_->checkout_count == checkouts_before; ++i) {
+    service_->DrainCommandQueueForTests();
+  }
+  EXPECT_EQ(history_->checkout_count, checkouts_before + 1);
+  EXPECT_TRUE(latch_->running());
+
   latch_->Complete(true);
   CompleteInflightAndDrain();
-  EXPECT_FALSE(service_->serial_frame_admission().HasDeferredOwnerWork());
+  EXPECT_FALSE(runtime_->coordinator->has_inflight());
 }
 
 TEST_F(SerialFrameConsumptionTest, DeadlineWithEmptyQueueDoesNotScheduleAnEmptyFrame) {

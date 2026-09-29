@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "app/import_service.hpp"
+#include "app/pipeline_root_state.hpp"
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
 #include "edit/graph/develop_color_transform.hpp"
@@ -189,20 +190,25 @@ TEST_F(PipelineDngProfileBindingTest, LoadPipelineBindsSourceProfileBeforeDocume
   pipelines.ReleasePipelineUse(guard);
 }
 
-TEST_F(PipelineDngProfileBindingTest, EditorLoadCheckpointAndRebuildBindSourceProfile) {
+TEST_F(PipelineDngProfileBindingTest, EditorLeaseCheckpointAndReplayBindSourceProfile) {
   {
     PipelineMgmtService pipelines(project_->GetStorage());
-    auto                editor = pipelines.LoadEditorPipeline(element_id_);
-    ASSERT_NE(editor, nullptr);
-    ExpectBoundTo(*editor->document_, imported_profile_);
-    ASSERT_NE(editor->root_document_, nullptr);
-    ExpectBoundTo(*editor->root_document_, imported_profile_);
+    auto                lease = pipelines.AcquireEditorLease(element_id_);
+    ASSERT_NE(lease.document_, nullptr);
+    ExpectBoundTo(*lease.document_, imported_profile_);
+    ASSERT_NE(lease.root_, nullptr);
+    ExpectBoundTo(lease.root_->document, imported_profile_);
 
     std::string error;
-    ASSERT_TRUE(pipelines.RebuildActiveEditorPipeline(editor, &error)) << error;
-    ExpectBoundTo(*editor->document_, imported_profile_);
-    // Last pin with write-back pending: SavePipeline stores the checkpoint.
-    pipelines.SavePipeline(editor);
+    const auto  replayed = BuildDocumentFromRoot(
+        lease.graph_, *lease.root_, lease.graph_.GetActiveVersionRef().head_commit_hash, &error);
+    ASSERT_NE(replayed, nullptr) << error;
+    ExpectBoundTo(*replayed, imported_profile_);
+    // The editor persists its history together with the checkpoint of its working document.
+    ASSERT_TRUE(pipelines.PersistEditorHistory(lease.graph_, lease.graph_.GetImageEditState(),
+                                               *replayed, &error))
+        << error;
+    pipelines.ReleaseEditorLease(element_id_);
   }
   ExpectNoProfileTables(QueryTexts(*project_,
                                    "SELECT CAST(serialized_pipeline_state AS VARCHAR) FROM "
@@ -211,12 +217,12 @@ TEST_F(PipelineDngProfileBindingTest, EditorLoadCheckpointAndRebuildBindSourcePr
 
   PipelineMgmtService reopened(project_->GetStorage());
   reopened.ResetEditorPipelineHistoryRebuildCountForTesting();
-  auto editor = reopened.LoadEditorPipeline(element_id_);
-  ASSERT_NE(editor, nullptr);
+  const auto lease = reopened.AcquireEditorLease(element_id_);
+  ASSERT_NE(lease.document_, nullptr);
   EXPECT_EQ(reopened.EditorPipelineHistoryRebuildCount(), 0u)
       << "the checkpoint path must load and bind the stored document";
-  ExpectBoundTo(*editor->document_, imported_profile_);
-  reopened.SavePipeline(editor);
+  ExpectBoundTo(*lease.document_, imported_profile_);
+  reopened.ReleaseEditorLease(element_id_);
 }
 
 TEST_F(PipelineDngProfileBindingTest, MissingSourceFileFailsPipelineLoad) {
