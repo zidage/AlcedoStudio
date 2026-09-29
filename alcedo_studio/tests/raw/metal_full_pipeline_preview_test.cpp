@@ -86,11 +86,14 @@ auto RenderBlocking(RenderType render_type, std::vector<uint8_t> raw_bytes)
     -> std::shared_ptr<ImageBuffer> {
   // Declared before the scheduler so it outlives the task.
   test::RenderSnapshotSource source(MakeDefaultDocument());
-  auto                       pipeline = std::make_shared<PipelineExecutor>();
+  auto                       pipeline = std::make_shared<PipelineExecutor>(
+      render_type == RenderType::THUMBNAIL || render_type == RenderType::FULL_RES_EXPORT
+          ? ExecutorRole::Batch
+          : ExecutorRole::Interactive);
 
   PipelineTask task;
   task.pipeline_executor_                 = pipeline;
-  task.snapshot_under_render_lock_        = source.TaskSource();
+  task.snapshot_                          = source.Freeze();
   task.input_                             = std::make_shared<ImageBuffer>(std::move(raw_bytes));
   task.options_.render_desc_.render_type_ = render_type;
   task.options_.is_blocking_              = true;
@@ -127,7 +130,7 @@ TEST(MetalFullPipelinePreview, DecodeGeometryAndMergedStageStillLife) {
   auto raw_bytes = ReadFileToBuffer(raw_path);
   ASSERT_FALSE(raw_bytes.empty());
 
-  PipelineExecutor     pipeline;
+  PipelineExecutor     pipeline(ExecutorRole::Interactive);
   PipelineApplyRequest request;
   request.require_host_output = true;
   const auto document         = MakeDefaultDocument();

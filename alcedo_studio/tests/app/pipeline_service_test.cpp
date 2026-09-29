@@ -8,18 +8,14 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
-#include <atomic>
+#include <array>
 #include <filesystem>
 #include <format>
 #include <memory>
-#include <mutex>
 #include <optional>
-#include <random>
 #include <stdexcept>
 #include <string>
-#include <string_view>
-#include <thread>
-#include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "app/editor_working_document.hpp"
@@ -40,7 +36,6 @@
 #include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/operators/models/sharpen_model.hpp"
-#include "edit/pipeline/pipeline_executor.hpp"
 #include "sleeve/storage.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
 #include "support/editor_parameter_target_test.hpp"
@@ -78,582 +73,6 @@ class PipelineMapperTests : public ::testing::Test {
 TEST_F(PipelineMapperTests, InitTest) {
   ProjectService project(db_path_, meta_path_);
   EXPECT_NO_THROW(PipelineMgmtService pipeline_service(project.GetStorage()));
-}
-
-TEST_F(PipelineMapperTests, PipelineMgmtServiceBuildsDefaultGpuDagForNewImage) {
-  ProjectService      project(db_path_, meta_path_);
-  PipelineMgmtService pipeline_service(project.GetStorage());
-  auto                guard = pipeline_service.LoadPipeline(9001);
-  ASSERT_NE(guard, nullptr);
-  ASSERT_NE(guard->document_, nullptr);
-  EXPECT_EQ(guard->document_->Graph().Nodes().size(), 3U);
-  EXPECT_EQ(guard->document_->Graph().Edges().size(), 2U);
-  EXPECT_EQ(guard->document_->ToJson().at("format_version"), kPipelineDocumentFormatVersion);
-
-  guard->dirty_ = true;
-  pipeline_service.SavePipeline(guard);
-  const auto stored = project.GetStorage()->GetElementStore().GetPipelineJsonByElementId(9001);
-  ASSERT_TRUE(stored.has_value());
-  EXPECT_EQ(stored->at("format_version"), kPipelineDocumentFormatVersion);
-  EXPECT_EQ(stored->at("nodes").size(), 3U);
-  EXPECT_FALSE(stored->contains("stages"));
-}
-
-TEST_F(PipelineMapperTests, BasicPipelineRWTest) {
-  std::string pipeline_param;
-  {
-    ProjectService      project(db_path_, meta_path_);
-    PipelineMgmtService pipeline_service(project.GetStorage());
-
-    // Load a pipeline that does not exist yet, should get a new pipeline
-    auto                pipeline_guard = pipeline_service.LoadPipeline(1);
-
-    EXPECT_NE(pipeline_guard, nullptr);
-    EXPECT_EQ(pipeline_guard->id_, 1);
-    EXPECT_EQ(pipeline_guard->pinned_, true);
-    EXPECT_EQ(pipeline_guard->dirty_, false);
-
-    // Modify the authoritative document.
-    auto* exposure = pipeline_guard->document_->PrimaryGrade()->FindAdjustmentByType(
-        type_ids::Exposure());
-    ASSERT_NE(exposure, nullptr);
-    exposure->LoadJson({{"exposure_ev", 2.25f}});
-    pipeline_guard->dirty_ = true;
-
-    // Save it back
-    pipeline_service.SavePipeline(pipeline_guard);
-
-    // Sync is idempotent after the explicit save and must not change the document.
-    pipeline_service.Sync();
-
-    // Load it again and serialize the pipeline to compare
-    auto pipeline_guard_2 = pipeline_service.LoadPipeline(1);
-    EXPECT_NE(pipeline_guard_2, nullptr);
-    EXPECT_EQ(pipeline_guard_2->id_, 1);
-    EXPECT_EQ(pipeline_guard_2->pinned_, true);
-    EXPECT_EQ(pipeline_guard_2->dirty_,
-              false);  // We have sync the cache, so it should not be dirty
-    // Serialize the document, not the executor's compatibility stages.
-    pipeline_param = pipeline_guard_2->document_->ToJson().dump(2);
-  }
-  // Leave the scope, reopen and load again
-  {
-    ProjectService      project(db_path_, meta_path_);
-    PipelineMgmtService pipeline_service(project.GetStorage());
-
-    auto                pipeline_guard = pipeline_service.LoadPipeline(1);
-    EXPECT_NE(pipeline_guard, nullptr);
-    EXPECT_EQ(pipeline_guard->id_, 1);
-    EXPECT_EQ(pipeline_guard->pinned_, true);
-    EXPECT_EQ(pipeline_guard->dirty_, false);  // Not dirty since we just loaded it
-    // Serialize the document.
-    auto pipeline_param_2 = pipeline_guard->document_->ToJson().dump(2);
-    EXPECT_EQ(pipeline_param, pipeline_param_2);
-  }
-}
-
-TEST_F(PipelineMapperTests, DefaultOutputTransformUsesOpenDRT) {
-  ProjectService      project(db_path_, meta_path_);
-  PipelineMgmtService pipeline_service(project.GetStorage());
-
-  auto                pipeline_guard = pipeline_service.LoadPipeline(42);
-  ASSERT_NE(pipeline_guard, nullptr);
-  ASSERT_NE(pipeline_guard->document_->Drt(), nullptr);
-
-  const auto& drt = pipeline_guard->document_->Drt()->Params();
-  EXPECT_EQ(drt.Method(), DrtMethod::OpenDrt);
-  EXPECT_EQ(drt.EncodingEotf(), DrtEotf::Gamma22);
-  EXPECT_EQ(drt.LimitingSpace(), DrtColorSpace::Rec709);
-  const auto exported = drt.ToJson();
-
-  pipeline_guard->dirty_ = true;
-  pipeline_service.SavePipeline(pipeline_guard);
-  pipeline_service.Sync();
-
-  auto reloaded = pipeline_service.LoadPipeline(42);
-  ASSERT_NE(reloaded, nullptr);
-  EXPECT_EQ(exported.dump(), reloaded->document_->Drt()->Params().ToJson().dump());
-}
-
-TEST_F(PipelineMapperTests, OutputTransformPersistencePreservesSharedAndMethodSpecificSettings) {
-  ProjectService      project(db_path_, meta_path_);
-  PipelineMgmtService pipeline_service(project.GetStorage());
-
-  auto                pipeline_guard = pipeline_service.LoadPipeline(43);
-  ASSERT_NE(pipeline_guard, nullptr);
-  {
-    std::unique_lock<std::mutex> render_lock(pipeline_guard->pipeline_->GetRenderLock());
-    DrtParameterUpdate           update;
-    update.method                 = DrtMethod::Aces20;
-    update.encoding_space         = DrtColorSpace::Rec2020;
-    update.encoding_eotf          = DrtEotf::St2084;
-    update.peak_luminance         = 600.0f;
-    update.limiting_space         = DrtColorSpace::P3D65;
-    update.look_preset            = "umbra";
-    update.tonescale_preset       = "aces_2_0";
-    update.creative_white         = "d60";
-    update.creative_white_limit   = 23.5f;
-    update.display_grey_luminance = 12.5f;
-    pipeline_guard->document_->Drt()->Params().ApplyUpdate(std::move(update));
-  }
-
-  pipeline_guard->dirty_ = true;
-  pipeline_service.SavePipeline(pipeline_guard);
-  pipeline_service.Sync();
-  project.GetStorage()->ForgetLivePipeline(43);
-
-  PipelineMgmtService reopened(project.GetStorage());
-  auto                reloaded = reopened.LoadPipeline(43);
-  ASSERT_NE(reloaded, nullptr);
-  const auto& drt = reloaded->document_->Drt()->Params();
-  EXPECT_EQ(drt.Method(), DrtMethod::Aces20);
-  EXPECT_EQ(drt.EncodingSpace(), DrtColorSpace::Rec2020);
-  EXPECT_EQ(drt.EncodingEotf(), DrtEotf::St2084);
-  EXPECT_FLOAT_EQ(drt.PeakLuminance(), 600.0f);
-  EXPECT_EQ(drt.LimitingSpace(), DrtColorSpace::P3D65);
-  EXPECT_EQ(drt.LookPreset(), "umbra");
-  EXPECT_EQ(drt.TonescalePreset(), "aces_2_0");
-  EXPECT_EQ(drt.CreativeWhite(), "d60");
-  EXPECT_FLOAT_EQ(drt.CreativeWhiteLimit(), 23.5f);
-  EXPECT_FLOAT_EQ(drt.DisplayGreyLuminance(), 12.5f);
-  reopened.SavePipeline(reloaded);
-}
-
-TEST_F(PipelineMapperTests, SharedGuardPinsUntilLastSave) {
-  ProjectService      project(db_path_, meta_path_);
-  PipelineMgmtService pipeline_service(project.GetStorage());
-
-  auto                guard_a = pipeline_service.LoadPipeline(7);
-  auto                guard_b = pipeline_service.LoadPipeline(7);
-
-  ASSERT_NE(guard_a, nullptr);
-  ASSERT_NE(guard_b, nullptr);
-  EXPECT_EQ(guard_a.get(), guard_b.get());
-  EXPECT_TRUE(guard_a->pinned_);
-  EXPECT_EQ(guard_a->pin_count_, 2u);
-
-  pipeline_service.SavePipeline(guard_a);
-  EXPECT_TRUE(guard_b->pinned_);
-  EXPECT_EQ(guard_b->pin_count_, 1u);
-
-  pipeline_service.SavePipeline(guard_b);
-  EXPECT_FALSE(guard_b->pinned_);
-  EXPECT_EQ(guard_b->pin_count_, 0u);
-
-  auto guard_c = pipeline_service.LoadPipeline(7);
-  ASSERT_NE(guard_c, nullptr);
-  EXPECT_TRUE(guard_c->pinned_);
-  EXPECT_EQ(guard_c->pin_count_, 1u);
-}
-
-TEST_F(PipelineMapperTests, MultiplePipelineTest) {
-  constexpr int                           pipeline_count = 5;
-  std::array<std::string, pipeline_count> pipeline_params;
-  {
-    ProjectService      project(db_path_, meta_path_);
-    PipelineMgmtService pipeline_service(project.GetStorage());
-
-    // Create and save multiple pipelines
-    for (sl_element_id_t i = 1; i <= pipeline_count; ++i) {
-      auto pipeline_guard = pipeline_service.LoadPipeline(i);
-      EXPECT_NE(pipeline_guard, nullptr);
-      EXPECT_EQ(pipeline_guard->id_, i);
-
-      // Modify the authoritative document.
-      auto* contrast = pipeline_guard->document_->PrimaryGrade()->FindAdjustmentByType(
-          type_ids::Contrast());
-      ASSERT_NE(contrast, nullptr);
-      contrast->LoadJson({{"contrast", static_cast<float>(i) * 0.5f}});
-      pipeline_guard->dirty_ = true;
-
-      // Save it back
-      pipeline_service.SavePipeline(pipeline_guard);
-      pipeline_params[i - 1] = pipeline_guard->document_->ToJson().dump(2);
-    }
-    // Sync to DB
-    pipeline_service.Sync();
-  }
-
-  // Reopen and load again to verify
-  {
-    ProjectService      project(db_path_, meta_path_);
-    PipelineMgmtService pipeline_service(project.GetStorage());
-
-    for (sl_element_id_t i = 1; i <= pipeline_count; ++i) {
-      auto pipeline_guard = pipeline_service.LoadPipeline(i);
-      EXPECT_NE(pipeline_guard, nullptr);
-      EXPECT_EQ(pipeline_guard->id_, i);
-
-      // Serialize the document.
-      auto pipeline_param_2 = pipeline_guard->document_->ToJson().dump(2);
-      EXPECT_EQ(pipeline_params[i - 1], pipeline_param_2);
-    }
-  }
-}
-
-TEST_F(PipelineMapperTests, CacheTest1) {
-  {
-    ProjectService                              project(db_path_, meta_path_);
-    PipelineMgmtService                         pipeline_service(project.GetStorage());
-
-    // The default cache size is 64, so we will create 65 pipelines to exceed the cache size
-    constexpr int                               pipeline_count = 65;
-    std::array<sl_element_id_t, pipeline_count> pipeline_ids;
-    for (sl_element_id_t i = 1; i <= pipeline_count; ++i) {
-      auto pipeline_guard = pipeline_service.LoadPipeline(i);
-      EXPECT_NE(pipeline_guard, nullptr);
-      EXPECT_EQ(pipeline_guard->id_, i);
-      pipeline_ids[i - 1] = i;
-
-      // Modify the document
-      pipeline_guard->document_->PrimaryGrade()
-          ->FindAdjustmentByType(type_ids::Exposure())
-          ->LoadJson({{"exposure_ev", static_cast<float>(i) * 0.3f}});
-      pipeline_guard->dirty_ = true;
-      // Save it back
-      // So no guard will be pinned
-      pipeline_service.SavePipeline(pipeline_guard);
-    }
-    // Now try to access the first pipeline again, it should be evicted and synced to DB, so it is
-    // not dirty
-    auto first_pipeline_guard = pipeline_service.LoadPipeline(pipeline_ids[0]);
-    EXPECT_NE(first_pipeline_guard, nullptr);
-    EXPECT_EQ(first_pipeline_guard->id_, pipeline_ids[0]);
-    EXPECT_EQ(first_pipeline_guard->dirty_, false);
-  }
-}
-
-TEST_F(PipelineMapperTests, CacheTest2) {
-  {
-    ProjectService                              project(db_path_, meta_path_);
-    PipelineMgmtService                         pipeline_service(project.GetStorage());
-
-    // The default cache size is 64, so we will create 70 pipelines to exceed the cache size
-    constexpr int                               pipeline_count = 70;
-    std::array<sl_element_id_t, pipeline_count> pipeline_ids;
-    for (sl_element_id_t i = 0; i < pipeline_count; ++i) {
-      auto pipeline_guard = pipeline_service.LoadPipeline(i);
-      EXPECT_NE(pipeline_guard, nullptr);
-      EXPECT_EQ(pipeline_guard->id_, i);
-      pipeline_ids[i] = i;
-
-      // Modify the document
-      pipeline_guard->document_->PrimaryGrade()
-          ->FindAdjustmentByType(type_ids::Contrast())
-          ->LoadJson({{"contrast", static_cast<float>(i) * 0.4f}});
-      pipeline_guard->dirty_ = true;
-
-      // No save back, so all pipelines are in use
-    }
-    // Now try to access the first pipeline again, it should still be in the cache and dirty
-    auto first_pipeline_guard = pipeline_service.LoadPipeline(pipeline_ids[0]);
-    EXPECT_NE(first_pipeline_guard, nullptr);
-    EXPECT_EQ(first_pipeline_guard->id_, pipeline_ids[0]);
-    EXPECT_EQ(first_pipeline_guard->dirty_, true);
-  }
-}
-
-TEST_F(PipelineMapperTests, DISABLED_FuzzTest) {
-  {
-    ProjectService                                   project(db_path_, meta_path_);
-    PipelineMgmtService                              pipeline_service(project.GetStorage());
-
-    constexpr int                                    kOpsCount = 500;
-    constexpr int                                    kIdRange  = 96;
-    std::mt19937                                     rng{12345};
-    std::uniform_int_distribution<int>               id_dist(1, kIdRange);
-    std::uniform_int_distribution<int>               op_dist(0, 5);
-    std::uniform_real_distribution<float>            value_dist(-2.0f, 2.0f);
-    std::unordered_map<sl_element_id_t, std::string> expected_dump;
-    const auto empty_dump = CreateDefaultPipelineDocument().ToJson().dump();
-
-    for (int i = 0; i < kOpsCount; ++i) {
-      const auto id = static_cast<sl_element_id_t>(id_dist(rng));
-      const auto op = op_dist(rng);
-
-      if (op == 0) {
-        // Load pipeline (cache hit/miss paths)
-        auto guard = pipeline_service.LoadPipeline(id);
-        ASSERT_NE(guard, nullptr);
-        EXPECT_EQ(guard->id_, id);
-        auto dump = guard->document_->ToJson().dump();
-        if (expected_dump.contains(id)) {
-          EXPECT_EQ(dump, expected_dump.at(id));
-        } else {
-          // If we never wrote an ID-bound param, it should still be empty
-          EXPECT_EQ(dump, empty_dump);
-        }
-      } else if (op == 1) {
-        // Load + modify + save (dirty path)
-        auto guard = pipeline_service.LoadPipeline(id);
-        ASSERT_NE(guard, nullptr);
-        guard->document_->PrimaryGrade()
-            ->FindAdjustmentByType(type_ids::Exposure())
-            ->LoadJson({{"exposure_ev", static_cast<float>(id) + value_dist(rng)}});
-        guard->dirty_ = true;
-        pipeline_service.SavePipeline(guard);
-        expected_dump[id] = guard->document_->ToJson().dump();
-      } else if (op == 2) {
-        // Load + modify without save (pinned & dirty in cache)
-        auto guard = pipeline_service.LoadPipeline(id);
-        ASSERT_NE(guard, nullptr);
-        guard->document_->PrimaryGrade()
-            ->FindAdjustmentByType(type_ids::Contrast())
-            ->LoadJson({{"contrast", static_cast<float>(id) + value_dist(rng)}});
-        guard->dirty_     = true;
-        expected_dump[id] = guard->document_->ToJson().dump();
-      } else if (op == 3) {
-        // Sync all dirty pipelines
-        pipeline_service.Sync();
-      } else if (op == 4) {
-        // Stress eviction by accessing a far ID
-        auto guard = pipeline_service.LoadPipeline(static_cast<sl_element_id_t>(kIdRange + id));
-        ASSERT_NE(guard, nullptr);
-        EXPECT_EQ(guard->id_, static_cast<sl_element_id_t>(kIdRange + id));
-        auto       dump   = guard->document_->ToJson().dump();
-        const auto far_id = static_cast<sl_element_id_t>(kIdRange + id);
-        if (expected_dump.contains(far_id)) {
-          EXPECT_EQ(dump, expected_dump.at(far_id));
-        } else {
-          EXPECT_EQ(dump, empty_dump);
-        }
-      } else {
-        // Random read/serialize path
-        auto guard = pipeline_service.LoadPipeline(id);
-        ASSERT_NE(guard, nullptr);
-        auto serialized = guard->document_->ToJson().dump();
-        if (expected_dump.contains(id)) {
-          EXPECT_EQ(serialized, expected_dump.at(id));
-        } else {
-          EXPECT_EQ(serialized, empty_dump);
-        }
-      }
-    }
-
-    pipeline_service.Sync();
-  }
-
-  // Reopen to verify some pipelines persisted and can be read
-  {
-    ProjectService      project(db_path_, meta_path_);
-    PipelineMgmtService pipeline_service(project.GetStorage());
-
-    for (sl_element_id_t id = 1; id <= 10; ++id) {
-      auto guard = pipeline_service.LoadPipeline(id);
-      ASSERT_NE(guard, nullptr);
-      EXPECT_EQ(guard->id_, id);
-      auto serialized = guard->document_->ToJson().dump();
-      EXPECT_FALSE(serialized.empty());
-    }
-  }
-}
-
-TEST_F(PipelineMapperTests, DISABLED_ThreadSafeTest) {
-  ProjectService           project(db_path_, meta_path_);
-  PipelineMgmtService      pipeline_service(project.GetStorage());
-
-  constexpr int            kThreads   = 8;
-  constexpr int            kOpsPerThr = 200;
-  constexpr int            kIdRange   = 64;
-
-  std::atomic<int>         ops_count{0};
-  std::vector<std::thread> workers;
-  workers.reserve(kThreads);
-
-  for (int t = 0; t < kThreads; ++t) {
-    workers.emplace_back([t, &pipeline_service, &ops_count]() {
-      for (int i = 0; i < kOpsPerThr; ++i) {
-        const auto id    = static_cast<sl_element_id_t>((t * kOpsPerThr + i) % kIdRange + 1);
-        auto       guard = pipeline_service.LoadPipeline(id);
-        ASSERT_NE(guard, nullptr);
-        guard->document_->PrimaryGrade()
-            ->FindAdjustmentByType(type_ids::Exposure())
-            ->LoadJson({{"exposure_ev", static_cast<float>(id) + static_cast<float>(t) * 0.01f}});
-        guard->dirty_ = true;
-        pipeline_service.SavePipeline(guard);
-        if (i % 10 == 0) {
-          pipeline_service.Sync();
-        }
-        ++ops_count;
-      }
-    });
-  }
-
-  for (auto& worker : workers) {
-    worker.join();
-  }
-
-  pipeline_service.Sync();
-  EXPECT_EQ(ops_count.load(), kThreads * kOpsPerThr);
-
-  const auto empty_dump = CreateDefaultPipelineDocument().ToJson().dump();
-  for (sl_element_id_t id = 1; id <= 10; ++id) {
-    auto guard = pipeline_service.LoadPipeline(id);
-    ASSERT_NE(guard, nullptr);
-    auto serialized = guard->document_->ToJson().dump();
-    EXPECT_NE(serialized, empty_dump);
-  }
-}
-
-TEST_F(PipelineMapperTests, DocumentSaveReloadPreservesNodesEdgesAndParameters) {
-  constexpr sl_element_id_t element_id = 8501;
-  ProjectService           project(db_path_, meta_path_);
-  PipelineMgmtService      pipeline_service(project.GetStorage());
-
-  auto guard = pipeline_service.LoadPipeline(element_id);
-  ASSERT_NE(guard, nullptr);
-  ASSERT_NE(guard->document_, nullptr);
-  {
-    std::unique_lock<std::mutex> render_lock(guard->pipeline_->GetRenderLock());
-    ASSERT_TRUE(AddCleanColorGrade(*guard->document_, NodeId{"drt"}, NodeId{"grade.extra"})
-                    .empty());
-    ASSERT_TRUE(ReconnectColorGrade(*guard->document_, NodeId{"grade.primary"},
-                                    NodeId{"grade.extra"}, NodeId{"drt"})
-                    .empty());
-
-    auto* extra = dynamic_cast<ColorGradeNodeModel*>(
-        guard->document_->Graph().FindNode(NodeId{"grade.extra"}));
-    ASSERT_NE(extra, nullptr);
-    ASSERT_TRUE(RenameColorGrade(*guard->document_, NodeId{"grade.extra"}, "Document Look")
-                    .empty());
-    ASSERT_TRUE(SetColorGradeEnabled(*guard->document_, NodeId{"grade.extra"}, false).empty());
-    extra->SetMix(0.625f);
-    auto* contrast = extra->FindAdjustmentByType(type_ids::Contrast());
-    ASSERT_NE(contrast, nullptr);
-    contrast->LoadJson({{"contrast", 12.5f}});
-    auto* clarity = dynamic_cast<ClarityModel*>(
-        guard->document_->Drt()->FindAdjustmentByType(type_ids::Clarity()));
-    auto* sharpen = dynamic_cast<SharpenModel*>(
-        guard->document_->Drt()->FindAdjustmentByType(type_ids::Sharpen()));
-    ASSERT_NE(clarity, nullptr);
-    ASSERT_NE(sharpen, nullptr);
-    clarity->SetValue(25.0f);
-    sharpen->SetAmount(12.0f);
-
-    ASSERT_TRUE(RemoveColorGradeAndBridge(*guard->document_, NodeId{"grade.primary"}).empty());
-  }
-  guard->dirty_ = true;
-  pipeline_service.SavePipeline(guard);
-
-  const auto stored = project.GetStorage()->GetElementStore().GetPipelineJsonByElementId(element_id);
-  ASSERT_TRUE(stored.has_value());
-  EXPECT_FALSE(stored->contains("stages"));
-  EXPECT_FALSE(stored->contains("legacy_stage_adapter"));
-
-  // Force the next service instance through the persisted document boundary.
-  project.GetStorage()->ForgetLivePipeline(element_id);
-  PipelineMgmtService reopened(project.GetStorage());
-  auto                loaded = reopened.LoadPipeline(element_id);
-  ASSERT_NE(loaded, nullptr);
-  ASSERT_NE(loaded->document_, nullptr);
-  EXPECT_EQ(loaded->document_->Graph().NodeCount(), 3U);
-  EXPECT_EQ(loaded->document_->Graph().Edges().size(), 2U);
-  EXPECT_EQ(loaded->document_->Graph().ImageBackboneNodeIds(),
-            (std::vector<NodeId>{NodeId{"develop"}, NodeId{"grade.extra"}, NodeId{"drt"}}));
-
-  const auto* extra = dynamic_cast<const ColorGradeNodeModel*>(
-      loaded->document_->Graph().FindNode(NodeId{"grade.extra"}));
-  ASSERT_NE(extra, nullptr);
-  EXPECT_EQ(extra->DisplayName(), "Document Look");
-  EXPECT_FALSE(extra->Enabled());
-  EXPECT_FLOAT_EQ(extra->Mix(), 0.625f);
-  const auto* contrast = extra->FindAdjustmentByType(type_ids::Contrast());
-  ASSERT_NE(contrast, nullptr);
-  EXPECT_FLOAT_EQ(contrast->ToJson().at("contrast").get<float>(), 12.5f);
-  EXPECT_EQ(extra->FindAdjustmentByType(type_ids::Clarity()), nullptr);
-  const auto* clarity = dynamic_cast<const ClarityModel*>(
-      loaded->document_->Drt()->FindAdjustmentByType(type_ids::Clarity()));
-  const auto* sharpen = dynamic_cast<const SharpenModel*>(
-      loaded->document_->Drt()->FindAdjustmentByType(type_ids::Sharpen()));
-  ASSERT_NE(clarity, nullptr);
-  ASSERT_NE(sharpen, nullptr);
-  EXPECT_FLOAT_EQ(clarity->Value(), 25.0f);
-  EXPECT_FLOAT_EQ(sharpen->Amount(), 12.0f);
-  reopened.SavePipeline(loaded);
-}
-
-TEST_F(PipelineMapperTests, SavedDocumentContainsNoStageAdapter) {
-  constexpr sl_element_id_t element_id = 8502;
-  ProjectService           project(db_path_, meta_path_);
-  PipelineMgmtService      pipeline_service(project.GetStorage());
-
-  auto guard = pipeline_service.LoadPipeline(element_id);
-  ASSERT_NE(guard, nullptr);
-  {
-    std::unique_lock<std::mutex> render_lock(guard->pipeline_->GetRenderLock());
-    ASSERT_TRUE(RenameColorGrade(*guard->document_, NodeId{"grade.primary"}, "Saved Grade")
-                    .empty());
-  }
-  guard->dirty_ = true;
-  pipeline_service.SavePipeline(guard);
-
-  const auto stored = project.GetStorage()->GetElementStore().GetPipelineJsonByElementId(element_id);
-  ASSERT_TRUE(stored.has_value());
-  EXPECT_FALSE(stored->contains("stages"));
-  EXPECT_FALSE(stored->contains("legacy_stage_adapter"));
-  ASSERT_TRUE(stored->contains("nodes"));
-  const auto stored_grade = std::find_if(
-      stored->at("nodes").begin(), stored->at("nodes").end(), [](const nlohmann::json& node) {
-        return node.value("id", std::string{}) == "grade.primary";
-      });
-  ASSERT_NE(stored_grade, stored->at("nodes").end());
-  EXPECT_EQ(stored_grade->value("display_name", std::string{}), "Saved Grade");
-  project.GetStorage()->ForgetLivePipeline(element_id);
-
-  PipelineMgmtService reopened(project.GetStorage());
-  auto                loaded = reopened.LoadPipeline(element_id);
-  ASSERT_NE(loaded, nullptr);
-  EXPECT_EQ(loaded->document_->PrimaryGrade()->DisplayName(), "Saved Grade");
-  reopened.SavePipeline(loaded);
-}
-
-TEST_F(PipelineMapperTests, InvalidStoredDocumentFailsWithoutReplacement) {
-  ProjectService      project(db_path_, meta_path_);
-  const auto           storage = project.GetStorage();
-  const auto           valid   = CreateDefaultPipelineDocument().ToJson();
-
-  const auto expect_failure = [&](sl_element_id_t element_id, nlohmann::json invalid,
-                                  std::string_view expected_text) {
-    storage->GetElementStore().UpdatePipelineJsonByElementId(element_id, valid);
-    storage->GetElementStore().UpdatePipelineJsonByElementId(element_id, invalid);
-    storage->ForgetLivePipeline(element_id);
-
-    PipelineMgmtService loader(storage);
-    bool                threw = false;
-    std::string         message;
-    try {
-      (void)loader.LoadPipeline(element_id);
-    } catch (const std::exception& error) {
-      threw   = true;
-      message = error.what();
-    }
-    EXPECT_TRUE(threw);
-    EXPECT_NE(message.find(expected_text), std::string::npos) << message;
-    EXPECT_EQ(storage->GetLivePipeline(element_id), nullptr);
-  };
-
-  auto missing_nodes = valid;
-  missing_nodes.erase("nodes");
-  expect_failure(8503, std::move(missing_nodes), "nodes");
-
-  auto invalid_topology = valid;
-  invalid_topology["edges"] = nlohmann::json::array();
-  expect_failure(8504, std::move(invalid_topology), "graph");
-
-  auto corrupt_params = valid;
-  corrupt_params["nodes"][0]["params"] = "corrupt";
-  expect_failure(8505, std::move(corrupt_params), "params");
-
-  auto wrong_owner = valid;
-  for (auto& node : wrong_owner["nodes"]) {
-    if (node.at("id") != "grade.primary") {
-      continue;
-    }
-    node["adjustments"].push_back({{"id", "grade.primary.clarity"},
-                                   {"type", std::string{type_ids::Clarity().Text()}},
-                                   {"params", {{"clarity", 10.0f}}}});
-  }
-  expect_failure(8520, std::move(wrong_owner), "belongs to DRT/Post");
 }
 
 auto DocumentExposure(const PipelineDocument& document) -> float {
@@ -732,67 +151,305 @@ auto StoredEditState(ProjectService& project, sl_element_id_t element_id)
   return graph_service.GetImageEditState(element_id);
 }
 
-TEST_F(PipelineMapperTests, FailedDocumentSaveKeepsDirtyStateAndJournal) {
-  constexpr sl_element_id_t element_id = 8506;
-  ProjectService           project(db_path_, meta_path_);
-  PipelineMgmtService      pipeline_service(project.GetStorage());
-
-  auto                      guard = pipeline_service.LoadPipeline(element_id);
-  ASSERT_NE(guard, nullptr);
-  guard->dirty_ = true;
-  pipeline_service.SavePipeline(guard);
-  const auto stored_before =
-      project.GetStorage()->GetElementStore().GetPipelineJsonByElementId(element_id);
-  ASSERT_TRUE(stored_before.has_value());
-
-  guard = pipeline_service.LoadPipeline(element_id);
-  ASSERT_NE(guard, nullptr);
-  const auto head_before = guard->working_head_commit_hash();
-  guard->serialized_state_needs_writeback_ = true;
-  {
-    std::unique_lock<std::mutex> render_lock(guard->pipeline_->GetRenderLock());
-    guard->document_->Graph().Disconnect(NodeId{"develop"}, PortId{"image"},
-                                         NodeId{"grade.primary"}, PortId{"image"});
-  }
-  guard->dirty_ = true;
-
-  EXPECT_THROW(pipeline_service.SavePipeline(guard), std::runtime_error);
-  EXPECT_TRUE(guard->dirty_);
-  EXPECT_TRUE(guard->serialized_state_needs_writeback_);
-  EXPECT_EQ(guard->working_head_commit_hash(), head_before);
-  EXPECT_EQ(project.GetStorage()->GetElementStore().GetPipelineJsonByElementId(element_id),
-            stored_before);
-  EXPECT_EQ(guard->pin_count_, 0U);
+/// Stored element pipeline JSON of @p element_id, the copy kept for older application versions.
+auto StoredElementPipelineJson(ProjectService& project, sl_element_id_t element_id)
+    -> std::optional<nlohmann::json> {
+  return project.GetStorage()->GetElementStore().GetPipelineJsonByElementId(element_id);
 }
 
-TEST_F(PipelineMapperTests, SaveDoesNotPersistUnsettledPreviewAsCommittedState) {
-  constexpr sl_element_id_t element_id = 8507;
-  ProjectService           project(db_path_, meta_path_);
-  PipelineMgmtService      pipeline_service(project.GetStorage());
+// A new image's root holds the default three-node document; the element pipeline JSON written
+// with the root has the same shape and no stage list.
+TEST_F(PipelineMapperTests, NewImageRootHoldsTheDefaultThreeNodeDocument) {
+  constexpr sl_element_id_t element_id = 9001;
+  ProjectService            project(db_path_, meta_path_);
+  PipelineMgmtService       pipeline_service(project.GetStorage());
+  InitializeDefaultRoot(pipeline_service, element_id);
 
-  auto guard = pipeline_service.LoadPipeline(element_id);
-  ASSERT_NE(guard, nullptr);
-  guard->dirty_ = true;
-  pipeline_service.SavePipeline(guard);
-  const auto stored_before =
-      project.GetStorage()->GetElementStore().GetPipelineJsonByElementId(element_id);
-  ASSERT_TRUE(stored_before.has_value());
+  const auto lease = pipeline_service.AcquireEditorLease(element_id);
+  ASSERT_NE(lease.document_, nullptr);
+  EXPECT_EQ(lease.document_->Graph().Nodes().size(), 3U);
+  EXPECT_EQ(lease.document_->Graph().Edges().size(), 2U);
+  EXPECT_EQ(lease.document_->ToJson().at("format_version"), kPipelineDocumentFormatVersion);
+  pipeline_service.ReleaseEditorLease(element_id);
 
-  guard = pipeline_service.LoadPipeline(element_id);
-  ASSERT_NE(guard, nullptr);
+  const auto stored = StoredElementPipelineJson(project, element_id);
+  ASSERT_TRUE(stored.has_value());
+  EXPECT_EQ(stored->at("format_version"), kPipelineDocumentFormatVersion);
+  EXPECT_EQ(stored->at("nodes").size(), 3U);
+  EXPECT_FALSE(stored->contains("stages"));
+}
+
+// An edit the editor commits and persists survives a project reopen. While the editor holds the
+// image, Sync writes the last published committed document as the element pipeline JSON.
+TEST_F(PipelineMapperTests, EditorPersistedEditSurvivesProjectReopen) {
+  constexpr sl_element_id_t element_id = 1;
+  std::string               expected_document;
   {
-    std::unique_lock<std::mutex> render_lock(guard->pipeline_->GetRenderLock());
-    ASSERT_TRUE(RenameColorGrade(*guard->document_, NodeId{"grade.primary"}, "Preview Only")
-                    .empty());
-    guard->unsettled_preview_ = true;
-  }
-  guard->dirty_ = true;
+    ProjectService      project(db_path_, meta_path_);
+    PipelineMgmtService pipeline_service(project.GetStorage());
+    InitializeDefaultRoot(pipeline_service, element_id);
 
-  EXPECT_THROW(pipeline_service.SavePipeline(guard), std::runtime_error);
-  EXPECT_TRUE(guard->dirty_);
-  EXPECT_EQ(project.GetStorage()->GetElementStore().GetPipelineJsonByElementId(element_id),
-            stored_before);
-  EXPECT_EQ(guard->pin_count_, 0U);
+    auto       lease          = pipeline_service.AcquireEditorLease(element_id);
+    const auto expected_state = lease.graph_.GetImageEditState();
+    (void)CommitOnLease(lease, MakeExposureBatch(kDefaultPipelineExposureEv, 2.25f));
+    std::string error;
+    ASSERT_TRUE(pipeline_service.PersistEditorHistory(lease.graph_, expected_state,
+                                                      *lease.document_, &error))
+        << error;
+    const auto published = CommittedSnapshotOfLease(lease, element_id);
+    pipeline_service.PublishCommitted(published);
+
+    pipeline_service.Sync();
+    const auto element_json = StoredElementPipelineJson(project, element_id);
+    ASSERT_TRUE(element_json.has_value());
+    EXPECT_EQ(*element_json, published->Document().ToJson());
+    // Sync is idempotent and must not change the stored document.
+    pipeline_service.Sync();
+    EXPECT_EQ(StoredElementPipelineJson(project, element_id), element_json);
+
+    expected_document = lease.document_->ToJson().dump(2);
+    pipeline_service.ReleaseEditorLease(element_id);
+  }
+  {
+    ProjectService      project(db_path_, meta_path_);
+    PipelineMgmtService pipeline_service(project.GetStorage());
+    const auto          lease = pipeline_service.AcquireEditorLease(element_id);
+    ASSERT_NE(lease.document_, nullptr);
+    EXPECT_EQ(pipeline_service.EditorPipelineHistoryRebuildCount(), 0u);
+    EXPECT_FLOAT_EQ(DocumentExposure(*lease.document_), 2.25f);
+    EXPECT_EQ(lease.document_->ToJson().dump(2), expected_document);
+    pipeline_service.ReleaseEditorLease(element_id);
+  }
+}
+
+TEST_F(PipelineMapperTests, EditorPersistedEditsOfSeveralImagesSurviveProjectReopen) {
+  constexpr int                           pipeline_count = 5;
+  std::array<std::string, pipeline_count> expected_documents;
+  {
+    ProjectService      project(db_path_, meta_path_);
+    PipelineMgmtService pipeline_service(project.GetStorage());
+
+    for (sl_element_id_t i = 1; i <= pipeline_count; ++i) {
+      InitializeDefaultRoot(pipeline_service, i);
+      auto       lease          = pipeline_service.AcquireEditorLease(i);
+      const auto expected_state = lease.graph_.GetImageEditState();
+      (void)CommitOnLease(lease, MakeExposureBatch(kDefaultPipelineExposureEv,
+                                                   2.0f + static_cast<float>(i) * 0.5f));
+      std::string error;
+      ASSERT_TRUE(pipeline_service.PersistEditorHistory(lease.graph_, expected_state,
+                                                        *lease.document_, &error))
+          << error;
+      expected_documents[i - 1] = lease.document_->ToJson().dump(2);
+      pipeline_service.ReleaseEditorLease(i);
+    }
+  }
+
+  // Reopen and read each image's document again.
+  {
+    ProjectService      project(db_path_, meta_path_);
+    PipelineMgmtService pipeline_service(project.GetStorage());
+
+    for (sl_element_id_t i = 1; i <= pipeline_count; ++i) {
+      const auto lease = pipeline_service.AcquireEditorLease(i);
+      ASSERT_NE(lease.document_, nullptr);
+      EXPECT_EQ(lease.graph_.GetElementId(), i);
+      EXPECT_FLOAT_EQ(DocumentExposure(*lease.document_), 2.0f + static_cast<float>(i) * 0.5f);
+      EXPECT_EQ(lease.document_->ToJson().dump(2), expected_documents[i - 1]);
+      pipeline_service.ReleaseEditorLease(i);
+    }
+  }
+}
+
+TEST_F(PipelineMapperTests, DefaultOutputTransformUsesOpenDRT) {
+  ProjectService      project(db_path_, meta_path_);
+  PipelineMgmtService pipeline_service(project.GetStorage());
+  InitializeDefaultRoot(pipeline_service, 42);
+
+  std::string exported;
+  {
+    const auto lease = pipeline_service.AcquireEditorLease(42);
+    ASSERT_NE(lease.document_, nullptr);
+    ASSERT_NE(lease.document_->Drt(), nullptr);
+    const auto& drt = lease.document_->Drt()->Params();
+    EXPECT_EQ(drt.Method(), DrtMethod::OpenDrt);
+    EXPECT_EQ(drt.EncodingEotf(), DrtEotf::Gamma22);
+    EXPECT_EQ(drt.LimitingSpace(), DrtColorSpace::Rec709);
+    exported = drt.ToJson().dump();
+    pipeline_service.ReleaseEditorLease(42);
+  }
+
+  PipelineMgmtService reopened(project.GetStorage());
+  const auto          reloaded = reopened.AcquireEditorLease(42);
+  ASSERT_NE(reloaded.document_, nullptr);
+  EXPECT_EQ(exported, reloaded.document_->Drt()->Params().ToJson().dump());
+  reopened.ReleaseEditorLease(42);
+}
+
+// The checkpoint carries the whole document, so every output transform setting must survive its
+// encoding and the editor reopen that imports it.
+TEST_F(PipelineMapperTests, OutputTransformPersistencePreservesSharedAndMethodSpecificSettings) {
+  ProjectService      project(db_path_, meta_path_);
+  PipelineMgmtService pipeline_service(project.GetStorage());
+  InitializeDefaultRoot(pipeline_service, 43);
+
+  {
+    auto lease = pipeline_service.AcquireEditorLease(43);
+    ASSERT_NE(lease.document_, nullptr);
+    DrtParameterUpdate update;
+    update.method                 = DrtMethod::Aces20;
+    update.encoding_space         = DrtColorSpace::Rec2020;
+    update.encoding_eotf          = DrtEotf::St2084;
+    update.peak_luminance         = 600.0f;
+    update.limiting_space         = DrtColorSpace::P3D65;
+    update.look_preset            = "umbra";
+    update.tonescale_preset       = "aces_2_0";
+    update.creative_white         = "d60";
+    update.creative_white_limit   = 23.5f;
+    update.display_grey_luminance = 12.5f;
+    lease.document_->Drt()->Params().ApplyUpdate(std::move(update));
+
+    std::string error;
+    ASSERT_TRUE(pipeline_service.PersistEditorHistory(
+        lease.graph_, lease.graph_.GetImageEditState(), *lease.document_, &error))
+        << error;
+    pipeline_service.ReleaseEditorLease(43);
+  }
+
+  PipelineMgmtService reopened(project.GetStorage());
+  const auto          reloaded = reopened.AcquireEditorLease(43);
+  ASSERT_NE(reloaded.document_, nullptr);
+  EXPECT_EQ(reopened.EditorPipelineHistoryRebuildCount(), 0u);
+  const auto& drt = reloaded.document_->Drt()->Params();
+  EXPECT_EQ(drt.Method(), DrtMethod::Aces20);
+  EXPECT_EQ(drt.EncodingSpace(), DrtColorSpace::Rec2020);
+  EXPECT_EQ(drt.EncodingEotf(), DrtEotf::St2084);
+  EXPECT_FLOAT_EQ(drt.PeakLuminance(), 600.0f);
+  EXPECT_EQ(drt.LimitingSpace(), DrtColorSpace::P3D65);
+  EXPECT_EQ(drt.LookPreset(), "umbra");
+  EXPECT_EQ(drt.TonescalePreset(), "aces_2_0");
+  EXPECT_EQ(drt.CreativeWhite(), "d60");
+  EXPECT_FLOAT_EQ(drt.CreativeWhiteLimit(), 23.5f);
+  EXPECT_FLOAT_EQ(drt.DisplayGreyLuminance(), 12.5f);
+  reopened.ReleaseEditorLease(43);
+}
+
+// Graph topology, node settings, and adjustment parameters survive the checkpoint the editor
+// writes and the reopen that imports it without a replay.
+TEST_F(PipelineMapperTests, CheckpointReloadPreservesNodesEdgesAndParameters) {
+  constexpr sl_element_id_t element_id = 8501;
+  ProjectService            project(db_path_, meta_path_);
+  PipelineMgmtService       pipeline_service(project.GetStorage());
+  InitializeDefaultRoot(pipeline_service, element_id);
+
+  {
+    auto lease = pipeline_service.AcquireEditorLease(element_id);
+    ASSERT_NE(lease.document_, nullptr);
+    auto& document = *lease.document_;
+    ASSERT_TRUE(AddCleanColorGrade(document, NodeId{"drt"}, NodeId{"grade.extra"}).empty());
+    ASSERT_TRUE(
+        ReconnectColorGrade(document, NodeId{"grade.primary"}, NodeId{"grade.extra"}, NodeId{"drt"})
+            .empty());
+
+    auto* extra =
+        dynamic_cast<ColorGradeNodeModel*>(document.Graph().FindNode(NodeId{"grade.extra"}));
+    ASSERT_NE(extra, nullptr);
+    ASSERT_TRUE(RenameColorGrade(document, NodeId{"grade.extra"}, "Document Look").empty());
+    ASSERT_TRUE(SetColorGradeEnabled(document, NodeId{"grade.extra"}, false).empty());
+    extra->SetMix(0.625f);
+    auto* contrast = extra->FindAdjustmentByType(type_ids::Contrast());
+    ASSERT_NE(contrast, nullptr);
+    contrast->LoadJson({{"contrast", 12.5f}});
+    auto* clarity =
+        dynamic_cast<ClarityModel*>(document.Drt()->FindAdjustmentByType(type_ids::Clarity()));
+    auto* sharpen =
+        dynamic_cast<SharpenModel*>(document.Drt()->FindAdjustmentByType(type_ids::Sharpen()));
+    ASSERT_NE(clarity, nullptr);
+    ASSERT_NE(sharpen, nullptr);
+    clarity->SetValue(25.0f);
+    sharpen->SetAmount(12.0f);
+
+    ASSERT_TRUE(RemoveColorGradeAndBridge(document, NodeId{"grade.primary"}).empty());
+
+    std::string error;
+    ASSERT_TRUE(pipeline_service.PersistEditorHistory(
+        lease.graph_, lease.graph_.GetImageEditState(), document, &error))
+        << error;
+    pipeline_service.ReleaseEditorLease(element_id);
+  }
+
+  PipelineMgmtService reopened(project.GetStorage());
+  const auto          loaded = reopened.AcquireEditorLease(element_id);
+  ASSERT_NE(loaded.document_, nullptr);
+  EXPECT_EQ(reopened.EditorPipelineHistoryRebuildCount(), 0u);
+  EXPECT_EQ(loaded.document_->Graph().NodeCount(), 3U);
+  EXPECT_EQ(loaded.document_->Graph().Edges().size(), 2U);
+  EXPECT_EQ(loaded.document_->Graph().ImageBackboneNodeIds(),
+            (std::vector<NodeId>{NodeId{"develop"}, NodeId{"grade.extra"}, NodeId{"drt"}}));
+
+  const auto* extra = dynamic_cast<const ColorGradeNodeModel*>(
+      loaded.document_->Graph().FindNode(NodeId{"grade.extra"}));
+  ASSERT_NE(extra, nullptr);
+  EXPECT_EQ(extra->DisplayName(), "Document Look");
+  EXPECT_FALSE(extra->Enabled());
+  EXPECT_FLOAT_EQ(extra->Mix(), 0.625f);
+  const auto* contrast = extra->FindAdjustmentByType(type_ids::Contrast());
+  ASSERT_NE(contrast, nullptr);
+  EXPECT_FLOAT_EQ(contrast->ToJson().at("contrast").get<float>(), 12.5f);
+  EXPECT_EQ(extra->FindAdjustmentByType(type_ids::Clarity()), nullptr);
+  const auto* clarity = dynamic_cast<const ClarityModel*>(
+      loaded.document_->Drt()->FindAdjustmentByType(type_ids::Clarity()));
+  const auto* sharpen = dynamic_cast<const SharpenModel*>(
+      loaded.document_->Drt()->FindAdjustmentByType(type_ids::Sharpen()));
+  ASSERT_NE(clarity, nullptr);
+  ASSERT_NE(sharpen, nullptr);
+  EXPECT_FLOAT_EQ(clarity->Value(), 25.0f);
+  EXPECT_FLOAT_EQ(sharpen->Amount(), 12.0f);
+  reopened.ReleaseEditorLease(element_id);
+}
+
+// Neither the checkpoint nor the element pipeline JSON written when the editor releases the image
+// carries a stage list or a stage adapter.
+TEST_F(PipelineMapperTests, SavedDocumentContainsNoStageAdapter) {
+  constexpr sl_element_id_t element_id = 8502;
+  ProjectService            project(db_path_, meta_path_);
+  PipelineMgmtService       pipeline_service(project.GetStorage());
+  InitializeDefaultRoot(pipeline_service, element_id);
+
+  {
+    auto lease = pipeline_service.AcquireEditorLease(element_id);
+    ASSERT_NE(lease.document_, nullptr);
+    ASSERT_TRUE(RenameColorGrade(*lease.document_, NodeId{"grade.primary"}, "Saved Grade").empty());
+    std::string error;
+    ASSERT_TRUE(pipeline_service.PersistEditorHistory(
+        lease.graph_, lease.graph_.GetImageEditState(), *lease.document_, &error))
+        << error;
+    pipeline_service.PublishCommitted(CommittedSnapshotOfLease(lease, element_id));
+    pipeline_service.ReleaseEditorLease(element_id);
+  }
+
+  const auto stored = StoredElementPipelineJson(project, element_id);
+  ASSERT_TRUE(stored.has_value());
+  EXPECT_FALSE(stored->contains("stages"));
+  EXPECT_FALSE(stored->contains("legacy_stage_adapter"));
+  ASSERT_TRUE(stored->contains("nodes"));
+  const auto stored_grade = std::find_if(
+      stored->at("nodes").begin(), stored->at("nodes").end(), [](const nlohmann::json& node) {
+        return node.value("id", std::string{}) == "grade.primary";
+      });
+  ASSERT_NE(stored_grade, stored->at("nodes").end());
+  EXPECT_EQ(stored_grade->value("display_name", std::string{}), "Saved Grade");
+
+  const auto state = StoredEditState(project, element_id);
+  ASSERT_TRUE(state.has_value() && state->serialized_pipeline_state.has_value());
+  const auto& checkpoint_document = state->serialized_pipeline_state->at("pipeline_document");
+  EXPECT_FALSE(checkpoint_document.contains("stages"));
+  EXPECT_FALSE(checkpoint_document.contains("legacy_stage_adapter"));
+
+  PipelineMgmtService reopened(project.GetStorage());
+  const auto          loaded = reopened.AcquireEditorLease(element_id);
+  ASSERT_NE(loaded.document_, nullptr);
+  EXPECT_EQ(loaded.document_->PrimaryGrade()->DisplayName(), "Saved Grade");
+  reopened.ReleaseEditorLease(element_id);
 }
 
 TEST_F(PipelineMapperTests, EditorLoadUsesMatchingSerializedStateWithoutReconstruction) {
@@ -1432,7 +1089,11 @@ TEST_F(PipelineMapperTests, NonRawImageRootBindsWorkingSpaceCameraProfile) {
   reopened.ReleaseEditorLease(711);
 }
 
-TEST_F(PipelineMapperTests, PersistedNonRawDocumentWithoutCameraMatricesBecomesRenderableOnReload) {
+// A non-RAW root stored without camera matrices (written before import bound the working-space
+// profile) renders with the working-space profile in the committed snapshot and in the editor.
+// The stored root stays as it is.
+TEST_F(PipelineMapperTests,
+       NonRawRootWithoutCameraMatricesIsRenderableInCommittedSnapshotAndEditor) {
   ProjectService project(db_path_, meta_path_);
   {
     auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
@@ -1440,8 +1101,6 @@ TEST_F(PipelineMapperTests, PersistedNonRawDocumentWithoutCameraMatricesBecomesR
     CommitGraphStore graph_service(db_guard.conn_);
     graph_service.CreateRootPipelinePersisted(722, CreateDefaultPipelineDocument(), std::nullopt);
   }
-  project.GetStorage()->GetElementStore().UpdatePipelineJsonByElementId(
-      722, CreateDefaultPipelineDocument().ToJson());
 
   {
     auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
@@ -1459,13 +1118,13 @@ TEST_F(PipelineMapperTests, PersistedNonRawDocumentWithoutCameraMatricesBecomesR
   }
 
   PipelineMgmtService pipelines(project.GetStorage());
-  auto                loaded = pipelines.LoadPipeline(722);
-  ASSERT_NE(loaded, nullptr);
-  ASSERT_NE(loaded->document_->Develop(), nullptr);
-  const auto loaded_payload = loaded->document_->Develop()->Params().Params();
-  EXPECT_TRUE(loaded_payload.camera_profile.color_matrices_valid);
-  EXPECT_NEAR(loaded_payload.camera_profile.color_matrix_1[0], 3.2404542, 1e-6);
-  ASSERT_TRUE(ResolveDevelopColorTransform(loaded_payload).ok);
+  const auto          committed = pipelines.AcquireCommittedSnapshot(722);
+  ASSERT_NE(committed, nullptr);
+  ASSERT_NE(committed->Document().Develop(), nullptr);
+  const auto committed_payload = committed->Document().Develop()->Params().Params();
+  EXPECT_TRUE(committed_payload.camera_profile.color_matrices_valid);
+  EXPECT_NEAR(committed_payload.camera_profile.color_matrix_1[0], 3.2404542, 1e-6);
+  ASSERT_TRUE(ResolveDevelopColorTransform(committed_payload).ok);
 
   const auto editor = pipelines.AcquireEditorLease(722);
   ASSERT_NE(editor.document_, nullptr);
@@ -1489,7 +1148,6 @@ TEST_F(PipelineMapperTests, PersistedNonRawDocumentWithoutCameraMatricesBecomesR
   }
 
   pipelines.ReleaseEditorLease(722);
-  pipelines.ReleasePipelineUse(loaded);
 }
 
 // Editor open of an image whose RAW root exists must not bind the working-space Rec.709 profile
@@ -1545,11 +1203,12 @@ TEST_F(PipelineMapperTests, PersistedRawRootWithoutMatricesDoesNotReceiveWorking
   EXPECT_FALSE(ResolveDevelopColorTransform(root->document.Develop()->Params().Params()).ok);
 
   PipelineMgmtService reopened(project.GetStorage());
-  auto                loaded = reopened.LoadPipeline(723);
-  ASSERT_NE(loaded, nullptr);
-  ASSERT_NE(loaded->document_->Develop(), nullptr);
-  EXPECT_FALSE(loaded->document_->Develop()->Params().Params().camera_profile.color_matrices_valid);
-  EXPECT_FALSE(ResolveDevelopColorTransform(loaded->document_->Develop()->Params().Params()).ok);
+  const auto          committed = reopened.AcquireCommittedSnapshot(723);
+  ASSERT_NE(committed, nullptr);
+  ASSERT_NE(committed->Document().Develop(), nullptr);
+  EXPECT_FALSE(
+      committed->Document().Develop()->Params().Params().camera_profile.color_matrices_valid);
+  EXPECT_FALSE(ResolveDevelopColorTransform(committed->Document().Develop()->Params().Params()).ok);
 
   const auto editor = reopened.AcquireEditorLease(723);
   ASSERT_NE(editor.document_, nullptr);
@@ -1557,7 +1216,6 @@ TEST_F(PipelineMapperTests, PersistedRawRootWithoutMatricesDoesNotReceiveWorking
   EXPECT_FALSE(editor.document_->Develop()->Params().Params().camera_profile.color_matrices_valid);
   EXPECT_FALSE(ResolveDevelopColorTransform(editor.document_->Develop()->Params().Params()).ok);
   reopened.ReleaseEditorLease(723);
-  reopened.ReleasePipelineUse(loaded);
 }
 
 TEST_F(PipelineMapperTests, RootStateRejectsDifferentImageOwner) {
@@ -1572,26 +1230,6 @@ TEST_F(PipelineMapperTests, RootStateRejectsDifferentImageOwner) {
   auto             db_lock  = db_guard.Lock();
   CommitGraphStore graph_service(db_guard.conn_);
   EXPECT_THROW(graph_service.GetRootSerializedPipelineState(706, first_root), std::runtime_error);
-}
-
-TEST_F(PipelineMapperTests, SyncPipelineDoesNotPersistUnrelatedDirtyGuards) {
-  ProjectService      project(db_path_, meta_path_);
-  PipelineMgmtService pipelines(project.GetStorage());
-
-  auto                requested = pipelines.LoadPipeline(707);
-  auto                unrelated = pipelines.LoadPipeline(708);
-  ASSERT_NE(requested, nullptr);
-  ASSERT_NE(unrelated, nullptr);
-  requested->dirty_ = true;
-  unrelated->dirty_ = true;
-
-  pipelines.SyncPipeline(707);
-  EXPECT_FALSE(requested->dirty_);
-  EXPECT_TRUE(unrelated->dirty_);
-
-  pipelines.SavePipeline(requested);
-  unrelated->dirty_ = false;
-  pipelines.SavePipeline(unrelated);
 }
 
 TEST_F(PipelineMapperTests, EditorLoadReportsMissingReachableCommit) {

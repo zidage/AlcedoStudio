@@ -1159,6 +1159,130 @@ Suite totals:
 **退出条件：** `PipelineMgmtService` 的公开 API 只剩：加载 / 重放 / 持久化历史与文档、快照获取与发布、
 租约、删除、root 初始化、垃圾回收。代码量显著下降（预期 `pipeline_service.cpp` 1176 行降到一半以下）。
 
+##### Phase P7 completion record (2026-09-29)
+
+**Status:** complete (the manual UI check was not run) — the sharing mechanism is deleted. `PipelineMgmtService` holds only the committed snapshot cache and the editor lease table; it has no executor, no pin, and no LRU. The scheduler receives a frozen snapshot with each task, has no configuration hook under the render lock, and no longer defers completion. `PipelineExecutor` has no dual-role constructor.
+Branch: `refactor/executor-ownership-p7` (based on `c7809f8db` of `refactor/geometry-crop-frame`).
+
+**Implementation notes (mapped to plan items):**
+
+| Plan item | Implementation |
+|---|---|
+| Delete `PipelineGuard`; the service keeps snapshot cache entries and a lease table | `PipelineGuard`, `loaded_pipelines_`, `pipeline_cache_` (LRU), `cache_cv_`, and the construct / load counters are deleted. Private state: `storage_`, `lock_` (lease table and rebuild counter only), `accelerator_preference_` (const), `committed_snapshots_`, `editor_leases_` |
+| `pin_count_`, `pinned_`, `live_ready_`, `initializing_`, `load_error_`, and the `LoadPipeline` state machine (S1) | Deleted with the guard. `LoadPipelineDocument`, `StoredRootRawColorContext`, and `MakeSerializedPipelineState` are also deleted; their only callers were `LoadPipeline` and `SavePipeline` |
+| `HandleEviction`, the `+5` growth, and eviction write-back (S2); `CleanupIdlePipelineResources` (S3); `ReleasePipelineUse`, `SavePipeline`, `will_release_last_pin` (S4); `WaitUntilPinCount` (S5) | Deleted. `SyncPipelineDocument`, `SyncDirtyPipelineDocument`, and `SyncPipeline` are deleted too; they wrote the element JSON of dirty guards. `Sync()` now writes only the element JSON of images the editor holds, as in P6 |
+| `SetAcceleratorBackendPreference` loop over all executors (S9) | The setter is deleted. The preference is now a constructor argument (`PipelineMgmtService(storage, preference)`) and stays fixed for the life of the service. `ProjectHandler` passes it when it builds the project services. §3.3 says a backend change rebuilds the owners, which is already how it works: the preference takes effect at project open. Owners read `GetAcceleratorBackendPreference()` when they construct their executors |
+| `Storage::live_pipelines_`, `RememberLivePipeline` / `GetLivePipeline` / `ForgetLivePipeline`, and the forward declaration (S12) | Deleted, with `live_state_lock_`. `SleeveService::Sync` no longer calls `ForgetLivePipeline` for deleted files |
+| Scheduler: `prepare_` taking a guard, the `completion_guard` hack, `configure_under_render_lock_` (R4) | `prepare_` had stopped taking a guard in P6; the editor port attaches its sink there. `configure_under_render_lock_` is deleted from `PipelineTask`. The task body moved into `PipelineScheduler::RunTask`, which returns `TaskOutcome{success, message}`. The worker calls `on_complete_` only after `RunTask` returns, so the render lock and all task resources are already released; this replaces the `unique_ptr` destructor hack. `snapshot_under_render_lock_` was a function called under the render lock, needed only to freeze the guard's shared document. It is replaced by `std::shared_ptr<const PipelineGraphSnapshot> snapshot_`; every owner already froze its snapshot before scheduling |
+| Shared static pool in `render_service.hpp` | The file was already gone before P7; nothing to do |
+| Unused includes in `pipeline_service.hpp` | Removed: `image_pool_service.hpp`, `pipeline_scheduler.hpp`, `pipeline_executor.hpp`, `lru_cache.hpp`, `json.hpp` |
+| Executor dual-role default constructor (P6 remaining gap) | Deleted. `serves_interactive_` and `serves_batch_` now default to false, so every executor must state its role |
+| `CheckpointMatchesLogicalHead` / `PipelineCheckpointIdentity` | No callers; deleted |
+
+**Differences from the plan or not stated in the plan:**
+
+- **The executor render lock is kept.** §3.4 allows deleting it, but P7's list does not include it. Nothing else can contend for it now, because every executor has one owner and one worker. The scheduler holds it from `Apply` through the present handoff. Tests use it to prove that the editor path does not wait on it (`SliderTicksCompleteWhileAFrameHoldsTheEditorExecutorLock`).
+- **`pipeline_shared_use_test.cpp` is renamed** to `background_render_isolation_test.cpp` (target `BackgroundRenderIsolationTest`), because none of its remaining tests are about sharing.
+- **`EditorSessionEditSequenceReexecutesOnlyPassesDownstreamOfTheEdit`:** the first rewrite kept adjustment-model pointers taken before the first freeze. The Debug copy-on-write check in `EditorWorkingDocument::PublishPreview` then stopped it with "A write reached a frozen PipelineDocument". The test now looks up each model through the working document on every edit, as the history does. The defect was in the test, not in production code.
+
+**Primary success call chain (after P7):**
+
+```text
+Project open: ProjectHandler::InitializeServices
+  -> PipelineMgmtService(storage, accelerator_preference)            owns no executor
+  -> ThumbnailService / ExportService / editor render port build their own executors
+     with GetAcceleratorBackendPreference()
+Render (any owner): the owner freezes or acquires the snapshot
+  (editor: EditorWorkingDocument::CurrentPreview; thumbnail / export: AcquireCommittedSnapshot)
+  -> PipelineTask{pipeline_executor_ = owner's executor, snapshot_ = snapshot, prepare_}
+  -> PipelineScheduler::ScheduleTask -> worker: RunTask
+       -> prepare_ (editor: attach viewport sink) -> load input
+       -> executor render lock -> Apply(*snapshot_) -> deliver result
+  -> RunTask returns (lock released) -> on_complete_(outcome)
+Project save: ProjectHandler -> PipelineMgmtService::Sync
+  -> element JSON of each leased image, from its last published committed snapshot
+```
+
+**Failure paths:**
+
+```text
+Task without a snapshot -> RunTask throws "render task has no snapshot" -> the blocking result gets the
+  exception, on_complete_(false, message); the next task that has a snapshot renders normally
+prepare_ throws -> on_complete_(false, exception message); the render lock is never taken
+Stale request for a sink, or cancelled task -> nullptr result, on_complete_(false, "")
+Request for a role the executor does not serve -> Apply throws invalid_argument -> on_complete_(false, ...)
+Backend unavailable -> the owner's executor throws at construction or Apply; the service never resolves
+  the backend, so it cannot fail on it
+```
+
+**What was proven (executed tests):**
+
+| Name / item | Target | Result |
+|---|---|---|
+| Exit condition: the public API has only load / replay / persist of history and documents, snapshot acquire and publish, the lease, delete, root initialization, and garbage collection | inspection of `pipeline_service.hpp` | Holds: `AcquireCommittedSnapshot`, `PublishCommitted`, `LoadHistorySnapshot`, `PersistHistory`, `AcquireEditorLease`, `ReleaseEditorLease`, `PersistEditorHistory`, `InitializeImageRoot`, `CollectUnreachableEditCommits`, `DeletePipeline(s)`, `Sync`, `GetAcceleratorBackendPreference`, plus two test counters |
+| Isolation (a), executors do not affect each other: new `EditorExecutorKeepsItsBindingAndCachesWhileThumbnailAnalysisAndExportRender`. Asserts the binding, prepared-source / result / texture-pool counts, and value ids are unchanged; the next frame has no source, unpack, or plan-cache miss; the pixels are equal | `BackgroundRenderIsolationTest` | PASS |
+| (a), also: `BatchRenderReleasesItsResultsAndKeepsItsDevice`, `EveryRenderCaseMatchesARenderOnANewExecutorOfItsRole` | `ExecutorSnapshotRenderTest` | PASS |
+| (b), a snapshot is not affected by later edits (existing tests): `PublishedPreviewKeepsItsValuesAfterALaterWrite`, `FrameRendersThePreviewPublishedLastAtDispatch`, `ThumbnailRendersTheCommittedStateNotUncommittedEditorValues`, `ExportDuringUnsettledEditorPreviewUsesCommittedState` | `EditorSessionHistoryPortTest`, `EditorSessionRenderSchedulerPortTest`, `ThumbnailCommittedRenderTest`, `ExecutorIsolationTest` | PASS |
+| (c), resources go to zero after a binding change: `InteractiveRenderOfAnotherLineageReleasesThePreviousBinding`, `ReleaseBindingReleasesTheRendererResourcesAndKeepsItsDevice` (renamed from `ReleaseBindingReleasesEveryRendererAndKeepsDevices`), `ClearSessionContextReleasesTheExecutorBindingAfterTheFrame` | `ExecutorSnapshotRenderTest`, `EditorSessionRenderSchedulerPortTest` | PASS |
+| Scheduler: `CompletionRunsAfterTheExecutorRenderLockIsReleased`, `RequestsWithoutASnapshotReportFailureOnEveryRender`, `PrepareFailureForwardsExceptionMessageInsteadOfEmptyResult`, `StaleSchedulerTaskDoesNotReachSink` | `PipelineSchedulerRequestIdTest` | PASS |
+| Service tests rewritten onto root + lease + checkpoint, among them: `NewImageRootHoldsTheDefaultThreeNodeDocument`, `EditorPersistedEditSurvivesProjectReopen`, `EditorPersistedEditsOfSeveralImagesSurviveProjectReopen`, `CheckpointReloadPreservesNodesEdgesAndParameters`, `OutputTransformPersistencePreservesSharedAndMethodSpecificSettings`, `SavedDocumentContainsNoStageAdapter`, `NonRawRootWithoutCameraMatricesIsRenderableInCommittedSnapshotAndEditor` | `PipelineMapperTest` | PASS (31/31) |
+| The committed snapshot binds the source DNG profile: `CommittedSnapshotBindsSourceProfileBeforeAnyRender`, `MissingSourceFileFailsCommittedSnapshotAndEditorLease`, `SourceFileWithAnotherProfileWinsOnLoad` | `PipelineDngProfileBindingTest` | PASS |
+| Dual-role fixture split into one executor per role | `PipelineDocumentRenderTest` (12), `PipelineFrameSinkTest` (23) | PASS |
+| Thumbnail tests edit through persisted history or editor publication | `ThumbnailServiceTest`, `AlbumBackendThumbnailTest` (Metal cases skip on Windows) | PASS, except the stress case listed below |
+| A duplicate copies only the element JSON | `SleeveServiceTest` (run directly; not registered in ctest) | PASS 24/24 |
+
+**Deleted tests.** Their subject was the guard, its pins, its LRU, or the element-JSON load path.
+
+- From `PipelineMapperTests`:
+  - `SharedGuardPinsUntilLastSave`, `CacheTest1`, `CacheTest2`, `DISABLED_FuzzTest`, `DISABLED_ThreadSafeTest`
+  - `FailedDocumentSaveKeepsDirtyStateAndJournal`
+  - `SaveDoesNotPersistUnsettledPreviewAsCommittedState`: the editor's single check is now `HasUncommittedLiveValues` (P6).
+  - `SyncPipelineDoesNotPersistUnrelatedDirtyGuards`
+  - `InvalidStoredDocumentFailsWithoutReplacement`: nothing reads the element JSON any more. `adjustment_ownership_test` and `json_roundtrip_test` cover `FromJson` rejection.
+- From `SleeveServiceTest`: `DuplicateUsesLatestPipelineSnapshotBeforePipelineSync`.
+- From `pipeline_shared_use_test`:
+  - `BackgroundCacheMissUsesNormalDocumentLoad`, `ConcurrentPipelineAcquirePublishesOneReadyLiveInstance`, `PipelineReacquirePreventsStaleLastUseCleanup`
+  - `DocumentMutationWaitsForSharedRender`: it asserts the opposite of the P6 design.
+  - `CanceledAndFailedTaskReleasesPipelineUse`
+  - `TaskRenderOptionsDoNotLeakIntoLaterEditorRequests`: with single-role executors and per-task requests, the leak cannot happen.
+  - `ParallelBackgroundRendersPreservePixelsAndReleaseWorkspaces`: the renderer-level `ParallelBatchRendersCompleteAndReleaseWorkspaces` covers it.
+  - `BackgroundTaskFailureReleasesTemporaryGpuResources`, `ThumbnailAndExportRenderFromDocumentOnly`
+  - Five guard-state tests were merged into the new isolation test above.
+- `ExecutorRoleTest` lost its three `shared_executor` lines.
+
+Commands (PowerShell from the repository root, with the vcpkg debug `bin` in `PATH` and `QT_QPA_PLATFORM=offscreen`):
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 8 --target alcedo_main -- -k 0   # 0 errors
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 8 -- -k 0                        # full tree, 0 errors
+ctest --test-dir build/debug -j 1 --timeout 900 -R "^(BackgroundRenderIsolationTest|PipelineExecutorWithoutOperatorRegistryTest|PipelineMapperTest|ExecutorIsolationTest|ExecutorSnapshotRenderTest|ThumbnailCommittedRenderTest|LibraryHistoryAndExportTest|AdjustmentTransfer.*|ImportPipelineDocumentTest|PipelineDngProfileBindingTest|ThumbnailServiceTest|AlbumBackendThumbnail.*|PipelineSchedulerRequestIdTest|PipelineFrameSinkTest|PipelineDocumentRenderTest|CiRawWorkflowTest|GpuDagCudaDocumentGeometryRequestTest|EditorSessionRenderSchedulerPort.*|ExportServiceTest|EditorSessionHistoryPortTest|EditorSessionPipelinePortTest|EditorSerialFrameConsumptionTest|EditorPendingInputSessionTest|ImageAnalysisServiceTest)\."
+ExecutorIsolationTest.exe ; SleeveServiceTest.exe ; ImportServiceTest.exe   # direct runs
+```
+
+Suite totals:
+
+- Targeted set, 388 tests: 380 passed, 8 failed. After the test fix above, `ExecutorIsolationTest` passes 6/6. The failures:
+  - `EditorSessionRenderSchedulerPortTest` (5): baseline failures recorded since P2, caused by the empty `ImageBuffer` fixture.
+  - `EditorHistoryCommitPresentationTest.FormatsNumericBooleanPathEnumAndCompoundAdjustments`: the crop text is "Crop" instead of "+12°". It fails the same way on a clean `c7809f8db` (stash, rebuild the target, rerun). The cause is the Geometry panel change, not P7.
+  - `ThumbnailServiceTests.FuzzScrollBrowsingSharedPtrLifetimeStress`: reached the 900 s ctest timeout. P6 could not assess it either. It tests the thumbnail memory cache `ThumbnailGuard`, which P7 does not change.
+  - `EditorSessionEditSequenceReexecutesOnlyPassesDownstreamOfTheEdit`: a defect in the test, now fixed (see above).
+- `ImportServiceTest` 12/13: `BatchCancelTest` fails because all 164 imports finished before the cancel arrived; the test itself prints that it can fail when imports are fast. P7 changes only a comment in `import_service.cpp`. It was not compared against a clean HEAD.
+- Full ctest was not run, per AGENTS.md. Metal and OpenCL-only paths were not run on this machine.
+
+**Checklist / exit condition:**
+- [x] Deleted: `PipelineGuard`, the pins, the `LoadPipeline` state machine, eviction, idle cleanup, `SavePipeline` / `ReleasePipelineUse` / `WaitUntilPinCount`, the backend-preference loop, the `Storage` live registry, and the scheduler guard hooks. A grep over `src/` and `tests/` finds none of them.
+- [x] The public API has only the listed groups (see the table).
+- [x] `pipeline_service.cpp` 918 → 348 lines, below half of the 1176 the plan counted. The header is 434 → 259.
+- [x] `pipeline_shared_use_test` is rewritten as isolation tests. The `ForgetLivePipeline` detours in `pipeline_service_test` are deleted.
+
+**LOC note:** Production code: 18 files, +221 / −1073. `pipeline_scheduler.cpp` 471 → 398. Tests: 25 files, +1208 / −2157; three sub-agents migrated them in parallel by file group, and every deleted or renamed test is listed above. `git clang-format` was run on changed lines only.
+
+**Remaining gaps:**
+- **Three rewritten `PipelineMapperTest` cases skip the commit:** `OutputTransformPersistence…`, `CheckpointReloadPreservesNodesEdgesAndParameters`, and `SavedDocumentContainsNoStageAdapter`. Each edits the leased document and persists it with `PersistEditorHistory`, so the checkpoint carries the root head's label but holds edited values. They test the checkpoint round trip, and the existing `CheckpointForAnotherImageNeverLoads` uses the same pattern. A future check that a checkpoint equals its replay would reject these fixtures.
+- **Batch release after a mid-GPU failure has no executor-level test.** The deleted `BackgroundTaskFailureReleasesTemporaryGpuResources` failed at decode, before any GPU allocation.
+- **The UI layer is not verified:** the application was not started, and Metal and the Metal-only tests were not compiled.
+- **Carried from P6:** `SleeveService` duplicates images without history; Open / Switch / Close cancel Mask input; the history port uses a `mutex_` for GUI reads.
+
 ### P8 文档与决策更新
 
 - 在以下文档相关章节加 "Superseded by 2026-09-27 executor ownership refactor" 注记，并链接本方案：
@@ -1208,5 +1332,5 @@ Suite totals:
 | P5 导出、导入、复制、粘贴 | 完成（2026-09-28） |
 | P6 编辑器独占 executor | 完成（2026-09-28，手工 UI 验证未做） |
 | Geometry 面板重构（#221，先于 P7） | 完成（2026-09-28，手工 UI 验证未做） |
-| P7 删除共享机制 | 未开始 |
+| P7 删除共享机制 | 完成（2026-09-29，手工 UI 验证未做） |
 | P8 文档与决策更新 | 未开始 |

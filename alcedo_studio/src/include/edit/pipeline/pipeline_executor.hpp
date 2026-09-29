@@ -48,8 +48,7 @@ using OpenClProductRenderer = OpenClRenderer;
  *
  * Roles (@ref ExecutorRole): an executor constructed with one role serves only that role, so it
  * owns exactly one renderer per backend. Owners: the editor render port owns one Interactive
- * executor; ThumbnailService and ExportService own Batch executors. The default constructor serves
- * both roles; only the remaining PipelineGuard executor uses it until the guard is removed.
+ * executor; ThumbnailService and ExportService own Batch executors.
  */
 class PipelineExecutor {
  private:
@@ -59,8 +58,8 @@ class PipelineExecutor {
   // it.
   std::mutex                   render_lock_;
 
-  bool                         serves_interactive_           = true;
-  bool                         serves_batch_                 = true;
+  bool                         serves_interactive_           = false;
+  bool                         serves_batch_                 = false;
 
   AcceleratorBackendPreference accelerator_preference_       = AcceleratorBackendPreference::Auto;
   GpuBackendKind               resolved_accelerator_backend_ = GpuBackendKind::None;
@@ -84,13 +83,6 @@ class PipelineExecutor {
 #endif
 
  public:
-  /**
-   * @brief Executor that serves both roles. Resolves the Auto accelerator preference.
-   *
-   * Used only by the per-image executor that PipelineGuard shares; see the class comment.
-   */
-  PipelineExecutor();
-
   /// Executor that serves only @p role. Resolves the Auto accelerator preference.
   explicit PipelineExecutor(ExecutorRole role);
 

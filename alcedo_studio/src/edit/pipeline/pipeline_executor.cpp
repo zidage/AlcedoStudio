@@ -52,9 +52,6 @@ void ReleaseRoleRenderers(Renderers& renderers) {
 
 }  // namespace
 
-PipelineExecutor::PipelineExecutor()
-    : resolved_accelerator_backend_(alcedo::ResolveAcceleratorBackend(accelerator_preference_)) {}
-
 PipelineExecutor::PipelineExecutor(ExecutorRole role)
     : serves_interactive_(role == ExecutorRole::Interactive),
       serves_batch_(role == ExecutorRole::Batch),

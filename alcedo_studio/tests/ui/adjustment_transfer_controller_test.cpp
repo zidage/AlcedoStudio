@@ -114,14 +114,10 @@ TEST_F(AdjustmentTransferControllerTest, CopyDoesNotSaveOrRenderSourceImage) {
   ASSERT_NE(transfer, nullptr);
   auto pipeline_service = backend.project()->handler().pipeline_service();
   ASSERT_TRUE(pipeline_service);
-  pipeline_service->ResetPipelineAcquireCountsForTesting();
 
   const auto prepare = transfer->PrepareCopy(static_cast<uint>(source.file_id_));
   ASSERT_TRUE(prepare.value("success").toBool())
       << prepare.value("message").toString().toStdString();
-  // Copy reads the stored history; it loads no PipelineGuard and constructs no executor.
-  EXPECT_EQ(pipeline_service->PipelineLoadCount(), 0u);
-  EXPECT_EQ(pipeline_service->PipelineConstructCount(), 0u);
   EXPECT_EQ(prepare.value("sourceTitle").toString(), QStringLiteral("album-delete-0.dng"));
   EXPECT_FALSE(prepare.value("activeVersionId").toString().isEmpty());
   // The routing result carries provenance only; rows live on the dialog model.
@@ -147,8 +143,6 @@ TEST_F(AdjustmentTransferControllerTest, CopyDoesNotSaveOrRenderSourceImage) {
 
   const auto after = CaptureSourceHistory(source.file_id_, pipeline_service.get());
   ExpectSourceHistoryUnchanged(before, after);
-  EXPECT_EQ(pipeline_service->PipelineLoadCount(), 0u);
-  EXPECT_EQ(pipeline_service->PipelineConstructCount(), 0u);
 }
 
 TEST_F(AdjustmentTransferControllerTest, CopyFailureKeepsPriorPackage) {
@@ -230,7 +224,6 @@ TEST_F(AdjustmentTransferControllerTest, MultiTargetCoordinatorRefreshesOnlySucc
   QSignalSpy finished_spy(transfer, &AdjustmentTransferController::PasteFinished);
   auto       pipeline_service = backend.project()->handler().pipeline_service();
   ASSERT_TRUE(pipeline_service);
-  pipeline_service->ResetPipelineAcquireCountsForTesting();
   const auto started = transfer->Paste(targets, QStringLiteral("paste"));
   ASSERT_TRUE(started.value("success").toBool()) << started.value("message").toString().toStdString();
   EXPECT_TRUE(started.value("pending").toBool());
@@ -244,10 +237,7 @@ TEST_F(AdjustmentTransferControllerTest, MultiTargetCoordinatorRefreshesOnlySucc
   EXPECT_TRUE(backend.interaction_policy()->CanPasteAdjustments());
   ASSERT_EQ(refreshed_spy.size(), 1);
   EXPECT_EQ(refreshed_spy.front().front().toUInt(), static_cast<uint>(target.file_id_));
-  // Paste edits a private copy of the target history and persists it in one transaction; it
-  // loads no PipelineGuard and constructs no executor.
-  EXPECT_EQ(pipeline_service->PipelineLoadCount(), 0u);
-  EXPECT_EQ(pipeline_service->PipelineConstructCount(), 0u);
+  // Paste edits a private copy of the target history and persists it in one transaction.
   const auto pasted_state =
       pipeline_service->LoadHistorySnapshot(target.file_id_).graph_->GetImageEditState();
 

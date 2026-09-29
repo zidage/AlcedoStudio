@@ -5,7 +5,6 @@
 #include "sleeve/storage.hpp"
 
 #include <exception>
-#include <mutex>
 
 namespace alcedo {
 NodeStorageHandler::NodeStorageHandler(
@@ -95,28 +94,4 @@ auto Storage::GetAiStore() -> AiStore& {
 }
 
 auto Storage::GetDatabase() -> Database& { return database_; }
-
-void Storage::RememberLivePipeline(const sl_element_id_t                    file_id,
-                                   const std::shared_ptr<PipelineExecutor>& pipeline) {
-  std::lock_guard<std::mutex> lock(live_state_lock_);
-  if (!pipeline) {
-    live_pipelines_.erase(file_id);
-    return;
-  }
-  live_pipelines_[file_id] = pipeline;
-}
-
-auto Storage::GetLivePipeline(const sl_element_id_t file_id) -> std::shared_ptr<PipelineExecutor> {
-  std::lock_guard<std::mutex> lock(live_state_lock_);
-  const auto                  it = live_pipelines_.find(file_id);
-  if (it == live_pipelines_.end()) {
-    return nullptr;
-  }
-  return it->second;
-}
-
-void Storage::ForgetLivePipeline(const sl_element_id_t file_id) {
-  std::lock_guard<std::mutex> lock(live_state_lock_);
-  live_pipelines_.erase(file_id);
-}
 };  // namespace alcedo

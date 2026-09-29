@@ -107,7 +107,7 @@ TEST(PipelineSchedulerRequestIdTest, OlderRequestIdIsRejectedAtSink) {
 }
 
 TEST(PipelineSchedulerRequestIdTest, StaleSchedulerTaskDoesNotReachSink) {
-  auto               exec = std::make_shared<PipelineExecutor>();
+  auto exec = std::make_shared<PipelineExecutor>(ExecutorRole::Interactive);
   // No GPU backend: Apply is reached and then fails, on every machine.
   exec->SetAcceleratorBackendPreference(AcceleratorBackendPreference::CPU);
   RecordingFrameSink sink;
@@ -126,12 +126,7 @@ TEST(PipelineSchedulerRequestIdTest, StaleSchedulerTaskDoesNotReachSink) {
     task.options_.render_desc_.frame_metadata_.presentation_request_id = request_id;
     task.options_.is_blocking_                                     = true;
     task.result_ = std::make_shared<std::promise<std::shared_ptr<ImageBuffer>>>();
-    task.snapshot_under_render_lock_ = source.TaskSource();
-    task.configure_under_render_lock_ = [&](PipelineTask& locked_task) {
-      locked_task.pipeline_executor_->AttachFrameSink(&sink);
-      locked_task.options_.render_desc_.frame_metadata_.presentation_request_id = request_id;
-      return true;
-    };
+    task.snapshot_ = source.Freeze();
     auto future = task.result_->get_future();
     scheduler.ScheduleTask(std::move(task));
     return future;
@@ -160,8 +155,8 @@ TEST(PipelineSchedulerRequestIdTest, StaleSchedulerTaskDoesNotReachSink) {
   EXPECT_EQ(sink.notify_count(), notifies_after_newer);
 }
 
-TEST(PipelineSchedulerRequestIdTest, CompletionRunsAfterLivePipelineRenderLockIsReleased) {
-  auto               exec = std::make_shared<PipelineExecutor>();
+TEST(PipelineSchedulerRequestIdTest, CompletionRunsAfterTheExecutorRenderLockIsReleased) {
+  auto exec = std::make_shared<PipelineExecutor>(ExecutorRole::Interactive);
   // No GPU backend: Apply is reached and then fails, on every machine.
   exec->SetAcceleratorBackendPreference(AcceleratorBackendPreference::CPU);
   RecordingFrameSink sink;
@@ -173,7 +168,7 @@ TEST(PipelineSchedulerRequestIdTest, CompletionRunsAfterLivePipelineRenderLockIs
   PipelineTask      task;
   task.input_                             = MakeSolidImage(8, 8);
   task.pipeline_executor_                 = exec;
-  task.snapshot_under_render_lock_        = source.TaskSource();
+  task.snapshot_                          = source.Freeze();
   task.request_id_                        = 17;
   task.options_.render_desc_.render_type_ = RenderType::FAST_PREVIEW;
   auto lock_released = std::make_shared<std::promise<bool>>();
@@ -192,69 +187,55 @@ TEST(PipelineSchedulerRequestIdTest, CompletionRunsAfterLivePipelineRenderLockIs
   EXPECT_TRUE(completed.get());
 }
 
-TEST(PipelineSchedulerRequestIdTest, MissingSnapshotRequestsReportFailureOnEveryRender) {
-  auto exec = std::make_shared<PipelineExecutor>();
+TEST(PipelineSchedulerRequestIdTest, RequestsWithoutASnapshotReportFailureOnEveryRender) {
+  auto exec = std::make_shared<PipelineExecutor>(ExecutorRole::Interactive);
   exec->SetAcceleratorBackendPreference(AcceleratorBackendPreference::CPU);
 
-  auto input = MakeSolidImage(64, 48);
+  auto              input = MakeSolidImage(64, 48);
   PipelineScheduler scheduler(1);
-  auto run_interactive =
-      [&](std::uint64_t request_id,
-          std::function<std::shared_ptr<const PipelineGraphSnapshot>()> snapshot_source) {
-        PipelineTask task;
-        task.input_                             = input;
-        task.pipeline_executor_                 = exec;
-        task.snapshot_under_render_lock_        = std::move(snapshot_source);
-        task.request_id_                        = request_id;
-        task.options_.render_desc_.render_type_ = RenderType::FAST_PREVIEW;
-        task.options_.is_blocking_              = true;
-        task.result_ = std::make_shared<std::promise<std::shared_ptr<ImageBuffer>>>();
-        auto future  = task.result_->get_future();
-        scheduler.ScheduleTask(std::move(task));
-        EXPECT_EQ(future.wait_for(std::chrono::seconds(30)), std::future_status::ready);
-        return future.get();
-      };
-  const auto expect_failure = [&](std::uint64_t request_id,
-                                  std::function<std::shared_ptr<const PipelineGraphSnapshot>()>
-                                             snapshot_source,
-                                  const char* expected_message) {
+  const auto        expect_failure = [&](std::uint64_t request_id) {
     SCOPED_TRACE(request_id);
+    PipelineTask task;
+    task.input_                             = input;
+    task.pipeline_executor_                 = exec;
+    task.request_id_                        = request_id;
+    task.options_.render_desc_.render_type_ = RenderType::FAST_PREVIEW;
+    task.options_.is_blocking_              = true;
+    task.result_ = std::make_shared<std::promise<std::shared_ptr<ImageBuffer>>>();
+    auto future  = task.result_->get_future();
+    scheduler.ScheduleTask(std::move(task));
+    ASSERT_EQ(future.wait_for(std::chrono::seconds(30)), std::future_status::ready);
     try {
-      (void)run_interactive(request_id, std::move(snapshot_source));
+      (void)future.get();
       FAIL() << "A render without a snapshot must fail";
     } catch (const std::runtime_error& error) {
-      EXPECT_NE(std::string(error.what()).find(expected_message), std::string::npos)
+      EXPECT_NE(std::string(error.what()).find("render task has no snapshot"), std::string::npos)
           << error.what();
     }
   };
 
-  // A task without a snapshot source fails every time; the failure is not cached as success.
-  expect_failure(101, {}, "no snapshot source");
-  expect_failure(102, {}, "no snapshot source");
-  // A source that has no snapshot to give fails the same way.
-  expect_failure(103, [] { return std::shared_ptr<const PipelineGraphSnapshot>{}; },
-                 "snapshot is unavailable");
-  expect_failure(104, [] { return std::shared_ptr<const PipelineGraphSnapshot>{}; },
-                 "snapshot is unavailable");
+  // A task without a snapshot fails every time; the failure is not cached as success.
+  expect_failure(101);
+  expect_failure(102);
 }
 
 // G10.1 removed the stage CROP_ROTATE read from FAST_PREVIEW. Before that change the read was
 // false for every document edit (defect D1: the stage never received the crop_rotate key), so a
 // rotated crop used the ROI path. The expected values below are that pre-change request.
 TEST(PipelineSchedulerRequestIdTest, FastPreviewRequestIsUnchangedForRotatedCrop) {
-  auto exec     = std::make_shared<PipelineExecutor>();
+  auto exec     = std::make_shared<PipelineExecutor>(ExecutorRole::Interactive);
   auto document = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
   document->Geometry().SetCropRect({0.2f, 0.1f, 0.5f, 0.6f});
   document->Geometry().SetRotationDegrees(7.0f);
   test::RenderSnapshotSource source(document);
   const auto                 document_before = document->ToJson();
 
-  // The task carries the rotated-crop document as its snapshot source; building the request
+  // The task carries a snapshot of the rotated-crop document; building the request
   // must neither read nor write it.
   auto make_task = [&](const ViewportRenderRegion& region) {
     PipelineTask task;
     task.pipeline_executor_                         = exec;
-    task.snapshot_under_render_lock_                = source.TaskSource();
+    task.snapshot_                                  = source.Freeze();
     task.options_.render_desc_.render_type_         = RenderType::FAST_PREVIEW;
     task.options_.render_desc_.use_viewport_region_ = true;
     task.options_.render_desc_.viewport_region_     = region;
@@ -393,8 +374,8 @@ TEST(DirectPresentQueueRequestIdTest, ThirdInteractivePresentReusesFirstDisplaye
   queue.CompleteRendererRead(second_slot);
 }
 
-TEST(PipelineSchedulerRequestIdTest, EditorRenderFailureForwardsExceptionMessageInsteadOfEmptyResult) {
-  auto exec = std::make_shared<PipelineExecutor>();
+TEST(PipelineSchedulerRequestIdTest, PrepareFailureForwardsExceptionMessageInsteadOfEmptyResult) {
+  auto exec = std::make_shared<PipelineExecutor>(ExecutorRole::Interactive);
   exec->SetAcceleratorBackendPreference(AcceleratorBackendPreference::CPU);
 
   PipelineScheduler scheduler(1);
@@ -404,7 +385,7 @@ TEST(PipelineSchedulerRequestIdTest, EditorRenderFailureForwardsExceptionMessage
   task.options_.render_desc_.render_type_ = RenderType::FAST_PREVIEW;
   auto done                               = std::make_shared<std::promise<std::pair<bool, std::string>>>();
   auto future                             = done->get_future();
-  task.configure_under_render_lock_       = [](PipelineTask&) -> bool {
+  task.prepare_                           = [](PipelineTask&) -> bool {
     throw std::runtime_error("Neural Engine unavailable: missing weights");
   };
   task.on_complete_ = [done](bool success, std::string message) {

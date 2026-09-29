@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <functional>
 #include <memory>
 #include <stdexcept>
 #include <utility>
@@ -18,7 +17,7 @@ namespace alcedo::test {
 /**
  * @brief Test owner of one working document that renderers receive as frozen snapshots.
  *
- * Stands in for the document owner (editor session or PipelineGuard) in renderer and executor
+ * Stands in for the document owner (the editor session) in renderer and executor
  * tests. Every @ref Freeze returns a preview snapshot of the document's current values with the
  * same lineage, like successive frames of one loaded history, so an interactive renderer keeps
  * its binding. @ref Rebind replaces the document and takes a new lineage, like a reload or a
@@ -42,13 +41,6 @@ class RenderSnapshotSource {
   [[nodiscard]] auto Freeze() const -> std::shared_ptr<const PipelineGraphSnapshot> {
     return PipelineGraphSnapshot::Preview(document_->Freeze(), element_id_, lineage_,
                                           transaction_chain_hash_t{});
-  }
-
-  /// Source for PipelineTask::snapshot_under_render_lock_. Freezes this owner's document at
-  /// the time the scheduler calls it; the owner must outlive the task.
-  [[nodiscard]] auto TaskSource() const
-      -> std::function<std::shared_ptr<const PipelineGraphSnapshot>()> {
-    return [this]() { return Freeze(); };
   }
 
   /// Replace the document and take a new lineage.

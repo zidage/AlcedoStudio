@@ -16,11 +16,14 @@
 #include <string>
 #include <vector>
 
-#include "app/pipeline_service.hpp"
 #include "app/project_package_backend.hpp"
 #include "app/project_service.hpp"
+#include "edit/graph/pipeline_document.hpp"
+#include "edit/operators/models/builtin_type_ids.hpp"
+#include "json.hpp"
 #include "sleeve/sleeve_element/sleeve_element.hpp"
 #include "sleeve/sleeve_element/sleeve_file.hpp"
+#include "sleeve/storage.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "utils/string/convert.hpp"
 
@@ -101,13 +104,30 @@ auto FolderContentRowIds(ProjectService& project, sl_element_id_t folder_id)
   return rows;
 }
 
-auto ReadExposure(const std::shared_ptr<PipelineGuard>& pipeline_guard) -> float {
-  const auto* exposure = pipeline_guard->document_->PrimaryGrade()->FindAdjustmentByType(
-      type_ids::Exposure());
+/// Exposure in the element pipeline JSON of @p id: the data SleeveService copies when it
+/// duplicates a file.
+auto ReadStoredExposure(Storage& storage, sl_element_id_t id) -> float {
+  const auto json = storage.GetElementStore().GetPipelineJsonByElementId(id);
+  if (!json.has_value()) {
+    throw std::runtime_error("Element has no stored pipeline JSON");
+  }
+  const auto  document = PipelineDocument::FromJson(*json);
+  const auto* exposure = document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure());
   if (exposure == nullptr) {
     throw std::runtime_error("Pipeline document has no exposure adjustment");
   }
   return exposure->ToJson().at("exposure_ev").get<float>();
+}
+
+/// Store a default document with @p exposure_ev as the element pipeline JSON of @p id.
+void WriteStoredExposure(Storage& storage, sl_element_id_t id, float exposure_ev) {
+  auto  document = CreateDefaultPipelineDocument();
+  auto* exposure = document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure());
+  if (exposure == nullptr) {
+    throw std::runtime_error("Pipeline document has no exposure adjustment");
+  }
+  exposure->LoadJson({{"exposure_ev", exposure_ev}});
+  storage.GetElementStore().UpdatePipelineJsonByElementId(id, document.ToJson());
 }
 
 }  // namespace
@@ -500,18 +520,11 @@ TEST_F(SleeveServiceTests, ExplicitDuplicateClonesStateAndKeepsPipelineIndepende
   ASSERT_NE(source, nullptr);
 
   const auto source_id = source->element_id_;
+  auto       storage   = project.GetStorage();
 
-  {
-    PipelineMgmtService pipeline_service(project.GetStorage());
-    auto                source_pipeline = pipeline_service.LoadPipeline(source_id);
-    auto* exposure = source_pipeline->document_->PrimaryGrade()->FindAdjustmentByType(
-        type_ids::Exposure());
-    ASSERT_NE(exposure, nullptr);
-    exposure->LoadJson({{"exposure_ev", 2.5f}});
-    source_pipeline->dirty_ = true;
-    pipeline_service.SavePipeline(source_pipeline);
-    pipeline_service.Sync();
-  }
+  // SleeveService duplicates the element pipeline JSON only (the history is not copied), so the
+  // stored JSON is what this test checks.
+  WriteStoredExposure(*storage, source_id, 2.5f);
 
   const auto duplicated = service->DuplicateFileToFolder(source_id, album->element_id_);
   ASSERT_TRUE(duplicated.second.success_);
@@ -523,69 +536,13 @@ TEST_F(SleeveServiceTests, ExplicitDuplicateClonesStateAndKeepsPipelineIndepende
   EXPECT_EQ(service->ResolveFile(L"/Source.arw@")->element_id_, duplicate_id);
   EXPECT_EQ(service->ResolveFile(L"/Album/Source.arw@")->element_id_, duplicate_id);
 
-  {
-    PipelineMgmtService pipeline_service(project.GetStorage());
-    auto                source_pipeline    = pipeline_service.LoadPipeline(source_id);
-    auto                duplicate_pipeline = pipeline_service.LoadPipeline(duplicate_id);
-    ASSERT_NE(source_pipeline, nullptr);
-    ASSERT_NE(duplicate_pipeline, nullptr);
-    EXPECT_FLOAT_EQ(ReadExposure(source_pipeline), 2.5f);
-    EXPECT_FLOAT_EQ(ReadExposure(duplicate_pipeline), 2.5f);
-  }
+  EXPECT_FLOAT_EQ(ReadStoredExposure(*storage, source_id), 2.5f);
+  EXPECT_FLOAT_EQ(ReadStoredExposure(*storage, duplicate_id), 2.5f);
 
-  {
-    PipelineMgmtService pipeline_service(project.GetStorage());
-    auto                duplicate_pipeline = pipeline_service.LoadPipeline(duplicate_id);
-    auto* exposure = duplicate_pipeline->document_->PrimaryGrade()->FindAdjustmentByType(
-        type_ids::Exposure());
-    ASSERT_NE(exposure, nullptr);
-    exposure->LoadJson({{"exposure_ev", 4.0f}});
-    duplicate_pipeline->dirty_ = true;
-    pipeline_service.SavePipeline(duplicate_pipeline);
-    pipeline_service.Sync();
-  }
+  WriteStoredExposure(*storage, duplicate_id, 4.0f);
 
-  {
-    PipelineMgmtService pipeline_service(project.GetStorage());
-    auto                source_pipeline    = pipeline_service.LoadPipeline(source_id);
-    auto                duplicate_pipeline = pipeline_service.LoadPipeline(duplicate_id);
-    EXPECT_FLOAT_EQ(ReadExposure(source_pipeline), 2.5f);
-    EXPECT_FLOAT_EQ(ReadExposure(duplicate_pipeline), 4.0f);
-  }
-}
-
-TEST_F(SleeveServiceTests, DuplicateUsesLatestPipelineSnapshotBeforePipelineSync) {
-  ProjectService project(db_path_, meta_path_);
-  auto           service = project.GetSleeveService();
-
-  const auto     album   = service->CreateFolder(L"/", L"Album").first;
-  const auto     source  = service->CreateFileInLibrary(L"Source.arw").first;
-  ASSERT_NE(album, nullptr);
-  ASSERT_NE(source, nullptr);
-
-  const auto source_id = source->element_id_;
-
-  {
-    PipelineMgmtService pipeline_service(project.GetStorage());
-    auto                source_pipeline = pipeline_service.LoadPipeline(source_id);
-    auto* exposure = source_pipeline->document_->PrimaryGrade()->FindAdjustmentByType(
-        type_ids::Exposure());
-    ASSERT_NE(exposure, nullptr);
-    exposure->LoadJson({{"exposure_ev", 2.5f}});
-    source_pipeline->dirty_ = true;
-    pipeline_service.SavePipeline(source_pipeline);
-  }
-
-  const auto duplicated = service->DuplicateFileToFolder(source_id, album->element_id_);
-  ASSERT_TRUE(duplicated.second.success_);
-  ASSERT_NE(duplicated.first, nullptr);
-
-  {
-    PipelineMgmtService pipeline_service(project.GetStorage());
-    auto                duplicate_pipeline = pipeline_service.LoadPipeline(duplicated.first->element_id_);
-    ASSERT_NE(duplicate_pipeline, nullptr);
-    EXPECT_FLOAT_EQ(ReadExposure(duplicate_pipeline), 2.5f);
-  }
+  EXPECT_FLOAT_EQ(ReadStoredExposure(*storage, source_id), 2.5f);
+  EXPECT_FLOAT_EQ(ReadStoredExposure(*storage, duplicate_id), 4.0f);
 }
 
 /// G10.4: file import and file copy write only the element, file-binding, and

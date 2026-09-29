@@ -102,19 +102,15 @@ inline auto HostPixels(ImageBuffer& buffer) -> cv::Mat {
   return buffer.GetCPUData().clone();
 }
 
-/// Bind the imported RAW color context of @p image_id onto the live document of @p live.
-inline void BindImportedRawColor(const std::shared_ptr<PipelineGuard>& live,
-                                 ImagePoolService& pool, image_id_t image_id) {
-  if (!live || !live->pipeline_) {
-    return;
-  }
+/// Bind the imported RAW color context of @p image_id onto @p document.
+inline void BindImportedRawColor(PipelineDocument& document, ImagePoolService& pool,
+                                 image_id_t image_id) {
   auto img = pool.Read<std::shared_ptr<Image>>(
       image_id, [](const std::shared_ptr<Image>& image) { return image; });
   if (!img || !img->HasRawColorContext()) {
     return;
   }
-  std::lock_guard<std::mutex> render_lock(live->pipeline_->GetRenderLock());
-  BindImportedCameraProfile(*live->document_, img->GetRawColorContext());
+  BindImportedCameraProfile(document, img->GetRawColorContext());
 }
 
 }  // namespace alcedo::raw_import_test

@@ -64,8 +64,8 @@ struct ExportProgress {
 /**
  * @brief Renders export tasks from committed pipeline graph snapshots on executors it owns.
  *
- * Owner of one batch executor and one render worker, independent of the editor, the thumbnail
- * pool, and every PipelineGuard. Each task renders the committed snapshot captured when it was
+ * Owner of one batch executor and one render worker, independent of the editor and the thumbnail
+ * pool. Each task renders the committed snapshot captured when it was
  * queued, so an export shows the state the user committed before pressing Export, never an
  * uncommitted editor value and never a later edit.
  */

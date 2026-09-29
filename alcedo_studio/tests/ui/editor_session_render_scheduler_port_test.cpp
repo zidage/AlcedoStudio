@@ -30,6 +30,7 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_snapshot.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
+#include "edit/pipeline/pipeline_accelerator.hpp"
 #include "edit/pipeline/pipeline_executor.hpp"
 #include "edit/runtime/executor_role.hpp"
 #include "image/dng_color_profile_import.hpp"
@@ -265,13 +266,14 @@ class EditorSessionRenderSchedulerPortGpuTest : public ::testing::Test {
     const auto stamp = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
     db_path_   = std::filesystem::temp_directory_path() / ("editor_render_port_" + stamp + ".db");
     meta_path_ = std::filesystem::temp_directory_path() / ("editor_render_port_" + stamp + ".json");
-    project_   = std::make_unique<alcedo::ProjectService>(db_path_, meta_path_);
-    service_   = std::make_shared<alcedo::PipelineMgmtService>(project_->GetStorage());
+    project_         = std::make_unique<alcedo::ProjectService>(db_path_, meta_path_);
     try {
-      service_->SetAcceleratorBackendPreference(alcedo::AcceleratorBackendPreference::CUDA);
+      (void)alcedo::ResolveAcceleratorBackend(alcedo::AcceleratorBackendPreference::CUDA);
     } catch (const std::exception& ex) {
       GTEST_SKIP() << "No CUDA device available: " << ex.what();
     }
+    service_ = std::make_shared<alcedo::PipelineMgmtService>(
+        project_->GetStorage(), alcedo::AcceleratorBackendPreference::CUDA);
     const auto path = std::filesystem::path(TEST_IMG_PATH) / "raw" / "linear_dng" / "mfzoty.dng";
     if (!std::filesystem::exists(path)) {
       GTEST_SKIP() << "Sample DNG file is missing: " << path.string();
@@ -690,7 +692,8 @@ TEST(EditorSessionRenderSchedulerPortTest,
 
   // The value reaches the apply request unchanged.
   alcedo::PipelineTask editor_task;
-  editor_task.pipeline_executor_    = std::make_shared<alcedo::PipelineExecutor>();
+  editor_task.pipeline_executor_ =
+      std::make_shared<alcedo::PipelineExecutor>(alcedo::ExecutorRole::Interactive);
   editor_task.options_.render_desc_ = overlay_desc;
   EXPECT_EQ(editor_task.MakeApplyRequest().geometry.document_geometry,
             alcedo::DocumentGeometryUse::RotatedUncroppedSource);

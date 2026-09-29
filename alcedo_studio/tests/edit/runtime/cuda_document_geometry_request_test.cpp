@@ -249,7 +249,7 @@ TEST(GpuDagCudaDrtProduct, CancelRequestReachesRendererWithoutStageWrite) {
   if (!HasCudaDevice()) {
     GTEST_SKIP() << "No CUDA device available.";
   }
-  auto exec = std::make_shared<PipelineExecutor>();
+  auto exec = std::make_shared<PipelineExecutor>(ExecutorRole::Interactive);
   exec->SetAcceleratorBackendPreference(AcceleratorBackendPreference::CUDA);
   auto document = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
   gpu_dag_test::EnsureTestCameraProfile(*document);
@@ -264,7 +264,7 @@ TEST(GpuDagCudaDrtProduct, CancelRequestReachesRendererWithoutStageWrite) {
   PipelineTask                     task;
   task.input_                             = MakeEncodedImage(91);
   task.pipeline_executor_                 = exec;
-  task.snapshot_under_render_lock_        = source.TaskSource();
+  task.snapshot_                          = source.Freeze();
   task.options_.render_desc_.render_type_ = RenderType::QUALITY_BASE_PREVIEW;
   task.cancel_requested_                  = cancel;
 

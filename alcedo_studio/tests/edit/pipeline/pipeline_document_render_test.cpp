@@ -82,8 +82,10 @@ class PipelineDocumentRenderTest : public ::testing::Test {
     input_    = std::make_shared<ImageBuffer>(std::move(bytes));
     document_ = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
     BindImportedCameraProfile(*document_, imported_);
-    executor_ = std::make_unique<PipelineExecutor>();
+    executor_       = std::make_unique<PipelineExecutor>(ExecutorRole::Interactive);
+    batch_executor_ = std::make_unique<PipelineExecutor>(ExecutorRole::Batch);
     executor_->SetAcceleratorBackendPreference(AcceleratorBackendPreference::CUDA);
+    batch_executor_->SetAcceleratorBackendPreference(AcceleratorBackendPreference::CUDA);
     source_ = std::make_unique<test::RenderSnapshotSource>(document_);
   }
 
@@ -109,11 +111,15 @@ class PipelineDocumentRenderTest : public ::testing::Test {
     return request;
   }
 
-  /** @brief Execute with the same exclusive access required by the scheduler. */
+  /**
+   * @brief Execute on the executor of role_ (the editor's or the batch owner's) with the same
+   *        exclusive access required by the scheduler.
+   */
   auto Render(bool host) -> cv::Mat {
-    std::unique_lock lock(executor_->GetRenderLock());
+    auto&            executor = role_ == ExecutorRole::Batch ? *batch_executor_ : *executor_;
+    std::unique_lock lock(executor.GetRenderLock());
     const auto       snapshot = source_->Freeze();
-    const auto       result   = executor_->Apply(*snapshot, input_, MakeRequest(host));
+    const auto       result   = executor.Apply(*snapshot, input_, MakeRequest(host));
     if (!result) throw std::runtime_error("Missing render result");
     return host ? result->GetCPUData().clone() : sink_.pixels.clone();
   }
@@ -150,7 +156,10 @@ class PipelineDocumentRenderTest : public ::testing::Test {
   std::shared_ptr<ImageBuffer>                input_;
   std::shared_ptr<PipelineDocument>           document_;
   std::unique_ptr<test::RenderSnapshotSource> source_;
+  /// Interactive executor, like the editor's.
   std::unique_ptr<PipelineExecutor>           executor_;
+  /// Batch executor, like a thumbnail or export owner's.
+  std::unique_ptr<PipelineExecutor>           batch_executor_;
   PixelFrameSink                              sink_;
   cv::Size                                    full_extent_;
 };
@@ -203,11 +212,11 @@ TEST_F(PipelineDocumentRenderTest,
   renderer->ResetStats();
   const auto session_before = renderer->Resources();
   EXPECT_GT(session_before.published_result_count, 0U);
-  EXPECT_EQ(executor_->DebugCudaBatchRenderer(), nullptr);
+  EXPECT_EQ(batch_executor_->DebugCudaBatchRenderer(), nullptr);
 
   role_            = ExecutorRole::Batch;
   const auto host1 = Render(true);
-  auto*      batch = executor_->DebugCudaBatchRenderer();
+  auto*      batch = batch_executor_->DebugCudaBatchRenderer();
   ASSERT_NE(batch, nullptr);
   ASSERT_NE(batch, renderer);
   const auto batch_id        = batch->DebugDeviceIdentity();
@@ -229,7 +238,7 @@ TEST_F(PipelineDocumentRenderTest,
   EXPECT_LT(cv::norm(host1, Reference(1.5f, RenderQuality::Export), cv::NORM_INF), 2e-5);
 
   const auto host2 = Render(true);
-  EXPECT_EQ(executor_->DebugCudaBatchRenderer(), batch);
+  EXPECT_EQ(batch_executor_->DebugCudaBatchRenderer(), batch);
   EXPECT_EQ(batch->DebugDeviceIdentity(), batch_id);
   EXPECT_EQ(batch->Resources().published_result_count, 0U);
   EXPECT_EQ(batch->Resources().texture_pool_used_bytes, 0U);
@@ -291,7 +300,7 @@ TEST_F(PipelineDocumentRenderTest, SnapshotWithoutDocumentOrLineageIsRejectedBef
                                                     transaction_chain_hash_t{}),
                std::invalid_argument);
   EXPECT_EQ(executor_->DebugCudaRenderer(), nullptr);
-  EXPECT_EQ(executor_->DebugCudaBatchRenderer(), nullptr);
+  EXPECT_EQ(batch_executor_->DebugCudaBatchRenderer(), nullptr);
   EXPECT_EQ(sink_.ready_count, 0);
   EXPECT_EQ(sink_.host_frame_count, 0);
   EXPECT_TRUE(input_->buffer_valid_);

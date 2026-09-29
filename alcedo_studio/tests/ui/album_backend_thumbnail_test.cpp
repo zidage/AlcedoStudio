@@ -2,19 +2,25 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-#include "ui/album_backend_test_fixture.hpp"
-
 #include <QByteArray>
 #include <QImage>
 #include <QSignalSpy>
-
 #include <algorithm>
 #include <filesystem>
 #include <functional>
+#include <string>
+#include <utility>
 
+#include "app/editor_adjustment_types.hpp"
+#include "app/editor_pipeline_command_service.hpp"
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
+#include "edit/graph/pipeline_document.hpp"
+#include "edit/history/commit_graph.hpp"
+#include "edit/history/edit_commit.hpp"
+#include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/pipeline/pipeline_accelerator.hpp"
+#include "ui/album_backend_test_fixture.hpp"
 #ifdef HAVE_METAL
 #include "image/metal_image.hpp"
 #endif
@@ -215,18 +221,42 @@ TEST_F(ThumbnailTests, MetalThumbnailGridLifecycleWithGeometryOperatorsProducesP
 
   ProjectService project(db_path_, meta_path_);
   auto           pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
-  auto           pipeline_guard   = pipeline_service->LoadPipeline(element_id);
-  ASSERT_NE(pipeline_guard, nullptr);
-  ASSERT_NE(pipeline_guard->pipeline_, nullptr);
-
+  // Crop the image with one commit on its stored history, as a library edit does; thumbnails
+  // render the stored history.
   {
-    std::unique_lock<std::mutex> render_lock(pipeline_guard->pipeline_->GetRenderLock());
-    pipeline_guard->document_->Geometry().SetCropRect({0.12f, 0.08f, 0.62f, 0.58f});
-  }
+    auto base = pipeline_service->LoadHistorySnapshot(element_id);
+    auto cropped =
+        ClonePipelineDocument(pipeline_service->AcquireCommittedSnapshot(element_id)->Document());
+    EditorParameterTarget read_target;
+    read_target.owner_kind = EditorParameterOwnerKind::Document;
+    read_target.field_key  = "crop_rotate";
+    nlohmann::json before;
+    nlohmann::json after;
+    std::string    error;
+    ASSERT_TRUE(ReadEditorParameterJson(cropped, read_target, &before, &error)) << error;
+    cropped.Geometry().SetCropRect({0.12f, 0.08f, 0.62f, 0.58f});
+    ASSERT_TRUE(ReadEditorParameterJson(cropped, read_target, &after, &error)) << error;
 
-  pipeline_guard->dirty_ = true;
-  pipeline_service->SavePipeline(pipeline_guard);
-  pipeline_service->Sync();
+    PipelineEditBatch  batch;
+    SetParameterChange change;
+    change.target.owner_kind = PipelineParameterOwnerKind::Document;
+    change.target.field_key  = "crop_rotate";
+    change.before_value      = std::move(before);
+    change.after_value       = std::move(after);
+    change.before_enabled    = true;
+    change.after_enabled     = true;
+    batch.operation_kind     = PipelineEditOperationKind::SetParameter;
+    batch.presentation_key   = "history.operation.set_parameter";
+    batch.changes.push_back(std::move(change));
+
+    CommitGraph graph  = *base.graph_;
+    auto        commit = EditCommit::MakePipelineEdit(graph.GetRootId(),
+                                                      graph.GetActiveVersionRef().head_commit_hash, batch);
+    const auto  head   = commit.GetCommitHash();
+    ASSERT_TRUE(graph.InsertCommit(std::move(commit)));
+    graph.MoveWorkingHead(graph.GetActiveVersionId(), head);
+    ASSERT_NE(pipeline_service->PersistHistory(base, graph), nullptr);
+  }
 
   QSignalSpy thumb_spy(backend.library(), &LibraryModule::ThumbnailUpdated);
 

@@ -377,7 +377,7 @@ void ThumbnailService::State::ScheduleRenditionRender(
   task.options_.is_callback_              = true;
   task.options_.is_seq_callback_          = false;
   task.cancel_requested_                  = [request] { return request->IsCanceled(); };
-  task.snapshot_under_render_lock_        = [snapshot = std::move(snapshot)] { return snapshot; };
+  task.snapshot_                          = std::move(snapshot);
 
   task.prepare_                           = [st, request, lease](PipelineTask& prepared) -> bool {
     auto image = st->image_pool_service_->Read<std::shared_ptr<Image>>(
