@@ -124,6 +124,31 @@ The scan reads every CUBE header and computes SHA-256 only for files that
 declare `origin: alcedo`. User LUTs are not hashed. Header reads and hashing run
 on a bounded worker set. The result is written as `lut-inventory.json` in the
 library root and read on later starts and panel openings without rescanning.
+A missing or damaged `lut-inventory.json` is rebuilt from local files at start.
+
+`LutLibraryService` owns the root and these files:
+
+| Root entry | Contents |
+| --- | --- |
+| `lut-inventory.json` | Scan result: entries with path, size, write time, header status, metadata, SHA-256 (official files only), and the owning package ID |
+| `lut-library.json` | User state: favorites as root-relative paths and the previous roots of migrated libraries |
+| `lut-migration-cleanup.json` | Present only while a migration's source cleanup is pending: source root and the verified size and SHA-256 of each copied file |
+| `user/` | Files imported by the application |
+| `packages/<id>/installed.json` | Package activation receipt; the scan reads `package_id` and `content_directory` |
+| `packages/<id>/content/<hash>/` | Package content; only the receipt's active directory is scanned |
+| `.downloads/` | Partial downloads; never scanned or migrated |
+
+A receipt has the form
+`{"schema":1,"kind":"alcedo-lut-package-receipt","package_id":"<id>","content_directory":"packages/<id>/content/<hash>"}`.
+L3 adds the verified descriptor fields. An invalid receipt is a scan diagnostic, and its package
+content is not listed, so the inventory is reported as incomplete. Only entries inside an active
+content directory carry a package ID. A loose file that declares `origin: alcedo` is not package-owned.
+
+Root migration copies every regular file except `.downloads`, verifies each copy with SHA-256,
+writes the state files, and renames a staging directory beside the destination into place.
+Persisting the new root preference is the commit point. Afterwards the source cleanup deletes
+only files that still hash to the copied bytes, and resumes from `lut-migration-cleanup.json`
+after an interruption.
 
 ## 3. Signed package feed
 

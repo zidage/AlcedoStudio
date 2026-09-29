@@ -100,6 +100,20 @@ def_library(LutPackageManifest
     PRIVATE_DEPS DetachedSignature
 )
 
+# Owner of the local LUT library: root choice, inventory, favorites, import,
+# and root migration (lut_library_and_package_management_plan.md, L2).
+def_library(LutLibraryService
+    SOURCES
+        "${ALCEDO_APP_ROOT}/lut_library_inventory.cpp"
+        "${ALCEDO_APP_ROOT}/lut_library_migration.cpp"
+        "${ALCEDO_APP_ROOT}/lut_library_service.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/lut_library_inventory.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/lut_library_migration.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/lut_library_service.hpp"
+    PUBLIC_DEPS LutMetadata Qt6::Core
+    PRIVATE_DEPS JSON Qt6::Gui
+)
+
 def_library(FSService
     SOURCES
         "${ALCEDO_APP_ROOT}/sleeve_service.cpp"

@@ -4,22 +4,27 @@
 
 #pragma once
 
-#include <QSettings>
+#include <QPointer>
 #include <QStringList>
 #include <QVariantList>
+#include <optional>
 #include <string>
 
+#include "app/lut_library_service.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
 #include "ui/alcedo_main/editor_support/modules/lut_catalog.hpp"
 
 namespace alcedo::ui {
 
-/// Phase 6D LUT catalog model. Lists cube LUTs from the resolved LUT directory,
-/// tracks selection, and submits operator-shaped params matching ParamsForField
-/// (Lut): {"ocio_lmt":"<path-or-empty>"}. Relative selection supports Look-panel
-/// keyboard shortcuts (prev/next). Load via setSelectedPath does not submit.
+/// Phase 6D LUT catalog model. Lists the entries of the application's
+/// LutLibraryService, tracks selection, and submits operator-shaped params
+/// matching ParamsForField (Lut): {"ocio_lmt":"<path-or-empty>"}. Relative
+/// selection supports Look-panel keyboard shortcuts (prev/next). Load via
+/// setSelectedPath does not submit. Favorites are stored by the library as
+/// root-relative entry paths; this model exposes them as absolute paths.
 class EditorLutCatalogModel : public EditorAdjustmentModelBase {
   Q_OBJECT
+  Q_PROPERTY(alcedo::LutLibraryService* library READ library WRITE setLibrary NOTIFY libraryChanged)
   Q_PROPERTY(QVariantList entries READ entries NOTIFY entriesChanged)
   Q_PROPERTY(
       QString selectedPath READ selectedPath WRITE setSelectedPath NOTIFY selectedPathChanged)
@@ -28,13 +33,15 @@ class EditorLutCatalogModel : public EditorAdjustmentModelBase {
   Q_PROPERTY(QString statusText READ statusText NOTIFY catalogChanged)
   Q_PROPERTY(bool canOpenDirectory READ canOpenDirectory NOTIFY catalogChanged)
   Q_PROPERTY(QString filterText READ filterText WRITE setFilterText NOTIFY filterTextChanged)
-  Q_PROPERTY(QStringList favoritePaths READ favoritePaths WRITE setFavoritePaths NOTIFY
-                 favoritePathsChanged)
+  Q_PROPERTY(QStringList favoritePaths READ favoritePaths NOTIFY favoritePathsChanged)
 
  public:
   explicit EditorLutCatalogModel(QObject* parent = nullptr);
   ~EditorLutCatalogModel() override;
 
+  [[nodiscard]] auto                library() const -> alcedo::LutLibraryService* { return library_; }
+  /// Bind the application library. Rebuilds the list and follows its changes.
+  void                              setLibrary(alcedo::LutLibraryService* library);
   [[nodiscard]] auto                entries() const -> QVariantList { return entries_; }
   [[nodiscard]] auto                selectedPath() const -> QString { return selectedPath_; }
   /// Load-only selection: updates selectedPath/selectedIndex without submitting.
@@ -45,10 +52,11 @@ class EditorLutCatalogModel : public EditorAdjustmentModelBase {
   [[nodiscard]] auto                canOpenDirectory() const -> bool { return canOpenDirectory_; }
   [[nodiscard]] auto                filterText() const -> QString { return filterText_; }
   void                              setFilterText(const QString& text);
-  [[nodiscard]] auto                favoritePaths() const -> QStringList { return favoritePaths_; }
-  void                              setFavoritePaths(const QStringList& paths);
+  [[nodiscard]] auto                favoritePaths() const -> QStringList;
 
-  /// Rescan the LUT directory. force=true invalidates the catalog cache.
+  /// force=true asks the library for a user-requested rescan; the list follows
+  /// when the new inventory is published. force=false rebuilds the list from the
+  /// current inventory and checks a missing current LUT through the library.
   Q_INVOKABLE void                  refresh(bool force = false);
   /// User selection: commit one settled LUT transaction when the path changes.
   /// Does not emit entriesChanged (selection is via selectedPathChanged only).
@@ -57,10 +65,10 @@ class EditorLutCatalogModel : public EditorAdjustmentModelBase {
   Q_INVOKABLE bool                  selectRelative(int step);
   Q_INVOKABLE void                  clearSelection();
   [[nodiscard]] Q_INVOKABLE QString paramsJson() const;
-  [[nodiscard]] Q_INVOKABLE QString defaultLutPath() const;
-  /// Absolute filesystem directory for "Open folder". Empty when unavailable.
-  [[nodiscard]] Q_INVOKABLE QString directoryPath() const;
-  /// Toggle a path's favorite status and persist via QSettings.
+  /// Open the library folder in the platform file manager. On failure the
+  /// library's error is shown through statusText and openFolderFailed.
+  Q_INVOKABLE bool                  openDirectory();
+  /// Toggle the favorite state of a library entry given by its absolute path.
   Q_INVOKABLE void                  toggleFavoritePath(const QString& path);
   /// True when path is present in the persisted favoritePaths list.
   Q_INVOKABLE bool                  isFavoritePath(const QString& path) const;
@@ -71,17 +79,18 @@ class EditorLutCatalogModel : public EditorAdjustmentModelBase {
   void catalogChanged();
   void filterTextChanged();
   void settledCommitted();
-  void openFolderRequested(const QString& path);
+  void openFolderFailed(const QString& message);
   void favoritePathsChanged();
+  void libraryChanged();
 
  private:
   void                    rebuildEntriesView();
   void                    applySelectionHighlight();
   void                    submitSettled();
   [[nodiscard]] auto      buildParamsJson() const -> QString;
-  void                    loadFavoriteSettings();
-  void                    saveFavoriteSettings() const;
+  [[nodiscard]] auto      relativePathOf(const QString& path) const -> std::optional<std::string>;
 
+  QPointer<alcedo::LutLibraryService> library_;
   lut_catalog::LutCatalog catalog_{};
   QVariantList            entries_;
   QString                 selectedPath_;
@@ -91,7 +100,6 @@ class EditorLutCatalogModel : public EditorAdjustmentModelBase {
   bool                    canOpenDirectory_ = false;
   QString                 filterText_;
   std::string             selectedPathUtf8_;
-  QStringList             favoritePaths_{};
 };
 
 }  // namespace alcedo::ui

@@ -254,6 +254,7 @@ target_link_libraries(AlbumBackendLib
         AiCredentialStore
         ModelDownloadService
         UpdateService
+        LutLibraryService
         SleeveFilterService
         FSService
         AcceleratorBackend

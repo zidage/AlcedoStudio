@@ -56,6 +56,10 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   RecordConstruction("ModelDownloadService", model_download_service_.get());
   updates_ = std::make_unique<alcedo::UpdateService>(*download_service_, this);
   RecordConstruction("UpdateService", updates_.get());
+  // Loads the persisted LUT inventory without network access (plan 4.3).
+  lut_library_ = std::make_unique<alcedo::LutLibraryService>(alcedo::LutLibraryServiceOptions{});
+  RecordConstruction("LutLibraryService", lut_library_.get());
+  lut_library_->Start();
   project_ = std::make_unique<ProjectModule>(this);
   RecordConstruction("ProjectModule", project_.get());
   library_ = std::make_unique<LibraryModule>(project_.get(), this);
@@ -394,6 +398,9 @@ void ApplicationModuleHost::ShutdownModules() {
     if (semantic_generation_) {
       semantic_generation_->CancelGeneration();
     }
+    if (lut_library_) {
+      lut_library_->Shutdown();
+    }
     if (search_) {
       search_->CancelSearchRequests();
       search_->CancelSearchPreviewThumbnails();
@@ -492,6 +499,7 @@ ApplicationModuleHost::~ApplicationModuleHost() {
   destroy(folders_, "FolderController");
   destroy(library_, "LibraryModule");
   destroy(project_, "ProjectModule");
+  destroy(lut_library_, "LutLibraryService");
   destroy(updates_, "UpdateService");
   destroy(model_download_service_, "ModelDownloadService");
   destroy(download_service_, "DownloadService");

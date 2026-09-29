@@ -14,13 +14,6 @@
 namespace alcedo::ui {
 namespace {
 
-auto PathToQString(const std::filesystem::path& path) -> QString {
-  if (path.empty()) {
-    return {};
-  }
-  return QString::fromStdWString(path.wstring());
-}
-
 auto QStringToUtf8(const QString& value) -> std::string {
   const auto bytes = value.toUtf8();
   return {bytes.constData(), static_cast<size_t>(bytes.size())};
@@ -43,46 +36,70 @@ auto KindString(lut_catalog::LutCatalogEntryKind kind) -> QString {
 EditorLutCatalogModel::EditorLutCatalogModel(QObject* parent) : EditorAdjustmentModelBase(parent) {
   setFieldKey(QStringLiteral("lut"));
   setLabel(QStringLiteral("LUT"));
-  loadFavoriteSettings();
   refresh(false);
 }
 
 EditorLutCatalogModel::~EditorLutCatalogModel() = default;
 
-void EditorLutCatalogModel::loadFavoriteSettings() {
-  QSettings settings;
-  favoritePaths_ = settings.value(QStringLiteral("editor/lutPanel/favoritePaths")).toStringList();
-}
-
-void EditorLutCatalogModel::saveFavoriteSettings() const {
-  QSettings settings;
-  settings.setValue(QStringLiteral("editor/lutPanel/favoritePaths"), favoritePaths_);
-}
-
-void EditorLutCatalogModel::setFavoritePaths(const QStringList& paths) {
-  if (favoritePaths_ == paths)
+void EditorLutCatalogModel::setLibrary(alcedo::LutLibraryService* library) {
+  if (library_ == library) {
     return;
-  favoritePaths_ = paths;
-  saveFavoriteSettings();
+  }
+  if (library_) {
+    disconnect(library_, nullptr, this, nullptr);
+  }
+  library_ = library;
+  if (library_) {
+    connect(library_, &alcedo::LutLibraryService::InventoryChanged, this,
+            [this] { refresh(false); });
+    connect(library_, &alcedo::LutLibraryService::RootChanged, this, [this] {
+      refresh(false);
+      emit favoritePathsChanged();
+    });
+    connect(library_, &alcedo::LutLibraryService::FavoritesChanged, this,
+            &EditorLutCatalogModel::favoritePathsChanged);
+  }
+  emit libraryChanged();
+  refresh(false);
   emit favoritePathsChanged();
+}
+
+auto EditorLutCatalogModel::relativePathOf(const QString& path) const
+    -> std::optional<std::string> {
+  const QString trimmed = path.trimmed();
+  if (!library_ || trimmed.isEmpty()) {
+    return std::nullopt;
+  }
+  return library_->RelativePathInRoot(alcedo::LutPathFromUtf8(QStringToUtf8(trimmed)));
+}
+
+auto EditorLutCatalogModel::favoritePaths() const -> QStringList {
+  QStringList paths;
+  if (!library_) {
+    return paths;
+  }
+  for (const std::string& relative : library_->FavoritePaths()) {
+    paths.push_back(QString::fromStdString(
+        alcedo::LutPathToUtf8(library_->Root() / alcedo::LutPathFromUtf8(relative))));
+  }
+  return paths;
 }
 
 void EditorLutCatalogModel::toggleFavoritePath(const QString& path) {
-  const QString trimmed = path.trimmed();
-  if (trimmed.isEmpty())
+  const std::optional<std::string> relative = relativePathOf(path);
+  if (!relative) {
     return;
-  const int idx = favoritePaths_.indexOf(trimmed);
-  if (idx >= 0) {
-    favoritePaths_.removeAt(idx);
-  } else {
-    favoritePaths_.append(trimmed);
   }
-  saveFavoriteSettings();
-  emit favoritePathsChanged();
+  if (library_->SetFavorite(*relative, !library_->IsFavorite(*relative)) !=
+      alcedo::LutLibraryService::Status::kOk) {
+    statusText_ = library_->last_error();
+    emit catalogChanged();
+  }
 }
 
 bool EditorLutCatalogModel::isFavoritePath(const QString& path) const {
-  return !path.trimmed().isEmpty() && favoritePaths_.contains(path.trimmed());
+  const std::optional<std::string> relative = relativePathOf(path);
+  return relative && library_->IsFavorite(*relative);
 }
 
 void EditorLutCatalogModel::setSelectedPath(const QString& path) {
@@ -107,15 +124,34 @@ void EditorLutCatalogModel::setFilterText(const QString& text) {
 }
 
 void EditorLutCatalogModel::refresh(bool force) {
-  catalog_ = lut_catalog::BuildCatalog(selectedPathUtf8_, force);
-  directoryText_ =
-      lut_catalog::FormatDirectoryDisplayText(catalog_.directory_);
-  statusText_        = lut_catalog::CatalogStatusText(catalog_);
-  std::error_code ec;
-  canOpenDirectory_  = !catalog_.directory_.empty() &&
-                      std::filesystem::is_directory(catalog_.directory_, ec) && !ec;
+  if (force && library_) {
+    library_->RefreshInventory();
+  }
+  catalog_          = lut_catalog::BuildCatalog(library_.data(), selectedPathUtf8_);
+  directoryText_    = lut_catalog::FormatDirectoryDisplayText(catalog_.directory_);
+  statusText_       = lut_catalog::CatalogStatusText(catalog_);
+  canOpenDirectory_ = catalog_.directory_exists_;
+  if (!force && lut_catalog::FindEntryIndexForPath(catalog_, selectedPathUtf8_) < 0) {
+    // A current LUT that the inventory no longer lists requests one library refresh.
+    if (const std::optional<std::string> relative = relativePathOf(selectedPath_)) {
+      library_->LocateEntry(*relative);
+    }
+  }
   rebuildEntriesView();
   emit catalogChanged();
+}
+
+auto EditorLutCatalogModel::openDirectory() -> bool {
+  if (!library_) {
+    return false;
+  }
+  if (library_->OpenRootDirectory()) {
+    return true;
+  }
+  statusText_ = library_->last_error();
+  emit catalogChanged();
+  emit openFolderFailed(statusText_);
+  return false;
 }
 
 void EditorLutCatalogModel::selectPath(const QString& path) {
@@ -168,14 +204,6 @@ auto EditorLutCatalogModel::selectRelative(int step) -> bool {
 void EditorLutCatalogModel::clearSelection() { selectPath(QString()); }
 
 auto EditorLutCatalogModel::paramsJson() const -> QString { return buildParamsJson(); }
-
-auto EditorLutCatalogModel::defaultLutPath() const -> QString {
-  return QString::fromStdString(lut_catalog::DefaultLutPath(catalog_));
-}
-
-auto EditorLutCatalogModel::directoryPath() const -> QString {
-  return PathToQString(catalog_.directory_);
-}
 
 void EditorLutCatalogModel::rebuildEntriesView() {
   entries_.clear();
