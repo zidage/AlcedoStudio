@@ -102,16 +102,31 @@ def_library(LutPackageManifest
 
 # Owner of the local LUT library: root choice, inventory, favorites, import,
 # and root migration (lut_library_and_package_management_plan.md, L2).
+# Package extraction and activation (L3) run as a library operation.
 def_library(LutLibraryService
     SOURCES
         "${ALCEDO_APP_ROOT}/lut_library_inventory.cpp"
         "${ALCEDO_APP_ROOT}/lut_library_migration.cpp"
         "${ALCEDO_APP_ROOT}/lut_library_service.cpp"
+        "${ALCEDO_APP_ROOT}/lut_package_install.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/lut_library_inventory.hpp"
         "${ALCEDO_INCLUDE_ROOT}/app/lut_library_migration.hpp"
         "${ALCEDO_INCLUDE_ROOT}/app/lut_library_service.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/lut_package_install.hpp"
     PUBLIC_DEPS LutMetadata Qt6::Core
-    PRIVATE_DEPS JSON Qt6::Gui
+    PRIVATE_DEPS JSON Qt6::Gui LibArchive::LibArchive
+)
+
+# Signed LUT package feed check, per-package status, and download (L3).
+def_library(LutPackageService
+    SOURCES
+        "${ALCEDO_APP_ROOT}/lut_package_service.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/lut_package_service.hpp"
+    PUBLIC_DEPS LutLibraryService LutPackageManifest DownloadService Qt6::Core Qt6::Network
+)
+target_compile_definitions(LutPackageService PRIVATE
+    ALCEDO_LUT_PACKAGE_FEED_URL="${ALCEDO_LUT_PACKAGE_FEED_URL}"
+    ALCEDO_UPDATE_PUBLIC_KEY_BASE64="${ALCEDO_UPDATE_PUBLIC_KEY_BASE64}"
 )
 
 def_library(FSService

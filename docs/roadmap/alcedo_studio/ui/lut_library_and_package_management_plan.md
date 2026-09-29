@@ -1,7 +1,7 @@
 # LUT Library and Package Management Plan
 
 Date: 2026-09-29  
-Status: L1 and L2 complete (2026-09-29); L3-L6 not started; panel visual design intentionally blank  
+Status: L1, L2, and L3 complete (2026-09-29); L4-L6 not started; panel visual design intentionally blank  
 Source revision: `dc73591020ef917fed089db7e4f454839d82051f`  
 Primary area: Alcedo Studio UI and application services  
 Parent: Standalone feature plan, indexed by the [roadmap index](../../README.md)  
@@ -575,7 +575,7 @@ Count the resulting maintenance changes in the phase estimate. Keep unrelated ed
 | --- | --- | --- | ---: | --- |
 | L1 | Metadata, exporter annotations, package schema, signing and publication tools | Confirmed data specification | 1300-1850 | Complete 2026-09-29; actual size exceeded the estimate (see its record). |
 | L2 | Service-owned recursive inventory, user import, root selection and migration | L1 metadata | 1450-1950 | Complete 2026-09-29; actual size exceeded the estimate (see its record). |
-| L3 | Independent signed package checking, 7z installation, repair and cancellation | L1, L2 | 1500-1950 | Keep Settings QML in L6. Not started. |
+| L3 | Independent signed package checking, 7z installation, repair and cancellation | L1, L2 | 1500-1950 | Complete 2026-09-29; actual size exceeded the estimate (see its record). Settings QML stays in L6. |
 | L4 | Stable runtime references, missing-file behavior and LUT strength on all backends | L1, L2 | 1500-1950 | Reuse existing typed writes and grade parameters. Not started. |
 | L5 | Indexed classification, fuzzy search, favorites and exact-node application | L2, L4 | 1200-1750 | No visual layout work. Not started. |
 | L6 | Independent navigation, Settings, small editor control and payload-free installers | L1-L5; separate visual design input | 1300-1900 | No preview worker. Not started. |
@@ -1002,13 +1002,158 @@ platforms in L6. Do not require private keys or the live R2 account for automate
 
 **Exit criteria.**
 
-- [ ] Each package reports and changes independently.
-- [ ] Every pre-commit failure preserves current content.
-- [ ] Cancel and application shutdown leave a recoverable library.
-- [ ] Package checking never runs from application startup.
-- [ ] Edited files with retained official metadata are replaced without an extra prompt or preserved user copy.
+- [x] Each package reports and changes independently.
+- [x] Every pre-commit failure preserves current content.
+- [x] Cancel and application shutdown leave a recoverable library.
+- [x] Package checking never runs from application startup.
+- [x] Edited files with retained official metadata are replaced without an extra prompt or preserved user copy.
 
-**Expected diff.** 1500-1950 lines. **Completion record:** Not started; fill section 12 for L3.
+**Expected diff.** 1500-1950 lines. **Completion record:** see below.
+
+##### Phase L3 completion record (2026-09-29)
+
+**Status:** complete. `LutPackageService` fetches and verifies the signed feed only on request,
+compares each package with the published inventory, and downloads one package through the shared
+`DownloadService` admission. Extraction, verification, and activation run as a new
+`LutLibraryService` operation (`kInstallPackage`), so the single library owner serializes them with
+refresh, import, and root changes. libarchive (7z/LZMA2) is linked in process; a real
+`py7zr` archive from `prepare_lut_packages.py` extracts with it.
+
+**Source revisions and branches.**
+
+| Repository | Base | Branch | State |
+| --- | --- | --- | --- |
+| `pu-erh_lab` | `bfee8b339` (L2 commit on `feature/lut-library-inventory-migration`) | `feature/lut-package-install` | Uncommitted working tree |
+
+**Implemented modules.**
+
+| Module | Responsibility |
+| --- | --- |
+| `app/lut_package_install.{hpp,cpp}` (in `LutLibraryService` library, links `LibArchive::LibArchive`) | `ExtractLutPackageArchive`: streaming 7z read, safe-path, link, special-file, duplicate, byte-budget, and file-count checks, per-file SHA-256, inventory and descriptor cross-check. `InstallLutPackageArchive`: archive size/SHA-256 check -> retire interrupted content -> extract into `packages/<id>/content/<inventory_sha256>[-n]` -> feed evidence -> receipt replacement (commit point) -> retire old content. `RetireInactiveLutPackageContent`: moves `origin: user` files to `user/<id>/`, removes other inactive content, skips packages with unreadable receipts |
+| `app/lut_package_service.{hpp,cpp}` (new `LutPackageService` library) | Feed fetch (HTTPS, feed host only, 256 KiB / 1 KiB limits), `VerifyLutPackageManifest` with the LUT trusted sequence (`lut/packages/highestTrustedSequence`), `CompareLutPackage` (inventory-only comparison), per-package status (Not installed, Current, Update available, Repair required, Checking, Downloading, Verifying, Installing, Error), progress, cancel, retry, shutdown; `LutArchiveDownloader` port with `DownloadServiceLutArchiveDownloader`; `packages` QML property for L6 |
+| `app/lut_library_inventory.{hpp,cpp}` | Receipt descriptor fields (revision, count, digest, unpacked bytes, artifact, feed sequence), `WriteLutPackageReceiptFile` (`QSaveFile`), `IsLutPackageId`, `LutInventoryMatchesPackageReceipts` |
+| `app/lut_library_service.{hpp,cpp}` | `InstallPackage`, `CancelOperation`, `PackageReceipts()`, `PackageInstallStageChanged`, `OperationResult::committed_package_id`; load and root selection retire inactive content and rebuild an inventory that disagrees with the receipts |
+| `app/lut_library_migration.{hpp,cpp}` | `write_package_receipt` step in `LutLibraryFileOperations` (failure injection) |
+| `ApplicationModuleHost` | Constructs `LutPackageService` without a network request; `lutPackages` property; shutdown cancels the download before the library worker stops |
+| Root and app CMake | `find_package(LibArchive 3.6 REQUIRED)`; Homebrew `libarchive` prefix hints; `ALCEDO_LUT_PACKAGE_FEED_URL` cache value (empty disables packages) |
+| `docs/lut-package-system.md` section 6, `docs/build_from_source.md` | Client check/installation rules; `vcpkg install "libarchive[lzma]:x64-windows"` and `brew install libarchive` |
+
+Decisions made during L3:
+
+1. The package service owns only feed and per-package action state. All file changes in the root run
+   through `LutLibraryService` operations (plan 5.1 single owner).
+2. Each installation extracts into a new content directory, including a repair of the same revision.
+   Official entries therefore change their root-relative path on every installation; their metadata ID
+   and package ownership stay the same. L4 must resolve official references by package and LUT ID.
+3. One package action runs at a time for the whole service. The other package stays checkable and
+   installable after it finishes.
+4. The feed URL is a build setting and is empty by default, so this build reports packages as disabled
+   until a release operator supplies the deployed URL (section 3).
+5. A canceled installation keeps its verified archive in `.downloads` so a retry skips or resumes the
+   transfer; success and failure remove it.
+
+**Primary success call chain:**
+
+```text
+Settings open (L6) / explicit retry -> LutPackageService::CheckPackages
+  -> fetch manifest.json + manifest.json.sig (feed host, bounded) -> VerifyLutPackageManifest
+     (Ed25519, trusted LUT sequence, no expiry) -> SaveTrustedSequence
+  -> CompareLutPackage per descriptor (receipt digest + inventory records -> ComputeLutInventoryDigest,
+     no file reads) -> Not installed | Current | Update available | Repair required
+  -> incomplete inventory -> LutLibraryService::RefreshInventory -> InventoryChanged -> recompute
+user action -> LutPackageService::InstallPackage(id)
+  -> LutArchiveDownloader::Start -> DownloadService (shared admission, size + SHA-256)
+  -> finished -> LutLibraryService::InstallPackage (kInstallPackage on the library worker)
+     -> InstallLutPackageArchive: archive hash -> RetireInactiveLutPackageContent
+        -> ExtractLutPackageArchive (libarchive stream, path/link/limit checks, per-file SHA-256,
+           package-inventory.json vs descriptor) -> feed evidence -> write_package_receipt (commit)
+        -> retire previous content (relocate origin:user files to user/<id>/)
+     -> ScanLutLibraryRoot + write_inventory -> owner thread: PublishInventory(inventory, receipts)
+  -> OperationFinished -> archive removed -> RecomputeComparisons -> Current
+```
+
+**Primary failure call chain:**
+
+```text
+feed network error, bad signature, or older sequence -> FailCheck -> lastError, previous package list kept
+transfer busy (application/model download) -> DownloadService::Start false -> package Error "Another download"
+download canceled -> package error "canceled"; receipt and content unchanged
+archive size/SHA-256 mismatch, unsafe path, link, duplicate, limit, inventory or file mismatch,
+evidence or receipt write failure, stop requested before commit
+  -> new content directory removed -> previous receipt and content stay active -> kIoError / kCanceled
+  -> package Error with message; retry through InstallPackage
+inventory write failure after the receipt commit -> kPersistenceError, committed_package_id set,
+  "installed; an inventory refresh is required" -> next Start: LutInventoryMatchesPackageReceipts false
+  -> rescan and rewrite -> Current
+process stop before the commit -> inactive content directory -> next Start retires it
+shutdown -> LutPackageService::Shutdown cancels the transfer -> LutLibraryService::Shutdown requests stop
+  -> pre-commit stop point removes new content; a committed installation completes
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `SettingsCheckDoesNotStartDownload` (two feed requests, zero transfers, both Not installed) | `LutPackageServiceTest` | PASS |
+| `StartupDoesNotRequestLutFeed` (service level: zero feed requests; host level: `lutPackages` neither checking nor checked after construction) | `LutPackageServiceTest`, `ApplicationModuleHostLifecycleTest` | PASS |
+| `UpdateOnePackageKeepsOtherPackageAndUserFiles` (bytes, receipts, IDs, user files, old content retired) | `LutPackageServiceTest` | PASS |
+| `ArchiveHashMismatchKeepsInstalledPackage` | `LutPackageServiceTest` | PASS |
+| `ArchiveTraversalAndLinksAreRejected` (`..`, nested `..`, absolute, drive, backslash, symbolic link, case-colliding duplicate, unlisted file, existing destination; each case is a valid package plus one bad entry and asserts the specific reason) | `LutPackageServiceTest` | PASS |
+| `InterruptedActivationRecoversCommittedReceipt` (receipt-write failure before commit; stopped leftover directory; inventory-write failure after commit; restart rebuild) | `LutPackageServiceTest` | PASS |
+| `CancelBeforeActivationKeepsInstalledPackage` (cancel during download; stop requested before commit; retry succeeds) | `LutPackageServiceTest` | PASS |
+| `EditedOfficialLutIsReplacedWithoutPromptOrUserCopy` | `LutPackageServiceTest` | PASS |
+| `OfficialHashMismatchDoesNotChangeOwnership` | `LutPackageServiceTest` | PASS |
+| `UserDeclaredVariantSurvivesPackageReplacement` | `LutPackageServiceTest` | PASS |
+| `ApplicationAndLutDownloadsShareAdmission` (real `DownloadService` with the fake aria2 process) | `LutPackageServiceTest` | PASS |
+| Step 8, unchanged comparison without downloading or rehashing: `UnchangedRemoteComparisonReadsInventoryWithoutHashing` | `LutPackageServiceTest` | PASS |
+| Publishing-tool codec: `PublishingToolArchiveExtractsWithBundledLibarchive` (checked-in `spectral_film_lut_py7zr_package.7z`, py7zr LZMA2 preset 9) | `LutPackageServiceTest` | PASS |
+| Tampered feed: `TamperedFeedSignatureKeepsPreviousStatusAndReportsError` | `LutPackageServiceTest` | PASS |
+| Existing `LutPackageManifestTest`, `UpdateManifestTest`, `DownloadServiceTest`, `LutLibraryServiceTest`, `LutMetadataTest`, `EditorLookModelTest`, `EditorLutPanelQmlTest`, host lifecycle and shutdown | respective targets | PASS |
+| Guard check: disabling the archive hash check, the link/special-file check, the `origin: user` relocation, and the receipt/inventory agreement check failed exactly `ArchiveHashMismatchKeepsInstalledPackage`, `ArchiveTraversalAndLinksAreRejected`, `UserDeclaredVariantSurvivesPackageReplacement`, and `InterruptedActivationRecoversCommittedReceipt`; code restored | `LutPackageServiceTest` | 4 expected failures, then PASS |
+
+Commands:
+
+```powershell
+cmd /c scripts\msvc_env.cmd --preset win_debug -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake"
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target LutPackageServiceTest LutLibraryServiceTest LutMetadataTest LutPackageManifestTest DownloadServiceTest UpdateManifestTest EditorLookModelTest EditorLutPanelQmlTest ApplicationModuleHostLifecycleTest ApplicationModuleHostShutdownTest alcedo_main --parallel 4
+$env:PATH = "D:/Projects/pu-erh_lab/vcpkg/installed/x64-windows/debug/bin;" + $env:PATH
+ctest --test-dir build/debug -R "^(LutPackageServiceTest|LutLibraryServiceTest|LutMetadataTest|LutPackageManifestTest|DownloadServiceTest|UpdateManifestTest|EditorLookModelTest|EditorLutPanelQmlTest|ApplicationModuleHostLifecycleTest|ApplicationModuleHostShutdownTest)\." --output-on-failure
+```
+
+Suite totals: 115/115 (LutPackageServiceTest 14, LutLibraryServiceTest 15, LutMetadataTest 16,
+LutPackageManifestTest 5, DownloadServiceTest 2, UpdateManifestTest 13, EditorLookModelTest 32,
+EditorLutPanelQmlTest 14, ApplicationModuleHost lifecycle and shutdown 4). Configure, build (including
+`alcedo_main`), and ctest exit codes 0. The vcpkg runtime directory on this machine is
+`vcpkg/installed/x64-windows/debug/bin`, not `build/debug/vcpkg_installed`. The full suite was not run
+(repository rule). No macOS build or run.
+
+**Checklist / exit condition:** all five L3 exit criteria are checked above. Application shutdown is
+verified through the same stop-before-commit path as cancellation, restart recovery after a committed
+receipt, and the existing host shutdown test; no test stops the host during a running extraction.
+
+**LOC note (grill-code-review):** about +2840/-53 lines: new production C++ about 1370 (install 485 +
+125 header, package service 530 + 234 header), changes to existing production and CMake about 390,
+tests about 1000 (`lut_package_service_test.cpp` 988 lines), documentation about 70, and a 930-byte
+binary fixture. This exceeds the 1500-1950 estimate mainly through tests. The test file is close to
+1000 lines; split its archive-validation cases into their own file before adding L4 cases to it.
+The largest production file is `lut_library_service.cpp` (583 lines).
+
+**Remaining gaps:**
+
+- Nothing is committed. No Settings UI, progress bar, or background-task popover entry exists; L6 binds
+  the `lutPackages` properties. Status and error texts are English and untranslated.
+- `ALCEDO_LUT_PACKAGE_FEED_URL` is empty by default, so product builds report packages as disabled until
+  the deployed URL is configured. No real R2 feed, production key, or live download was used.
+- Windows packaged-application deployment of `archive.dll` and its codec DLLs relies on the existing
+  `GET_RUNTIME_DEPENDENCIES` install step and was not inspected. macOS Homebrew `libarchive` linkage and
+  bundle deployment are untested (L6 packaged-artifact checks).
+- Step 6 publishes the changed entry paths through `InventoryChanged`; there is no render-side consumer yet.
+  L4 adds resource resolution and invalidation, and must keep retired content alive while readers use it
+  (it is removed immediately after the commit today).
+- Favorites of official entries are stored by root-relative path, which changes on each installation (decision 2).
+  L4/L5 must move official favorites and references to package and LUT IDs.
+- The streaming byte-budget and file-count limits are implemented but not exercised by a test.
+- `ScanLutLibrary` still has no stop check (L2 gap), so shutdown waits for a post-commit rescan.
 
 ### L4. Stable references, missing resources, and strength
 
@@ -1283,7 +1428,7 @@ the visible library. Revisit an estimate before introducing a larger index or wo
 
 ## 12. Completion records
 
-L1 and L2 are recorded under their phases. L3-L6 are not started. Copy this record into the relevant phase after implementation:
+L1, L2, and L3 are recorded under their phases. L4-L6 are not started. Copy this record into the relevant phase after implementation:
 
 ```text
 Phase / date / status:

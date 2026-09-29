@@ -163,6 +163,7 @@ auto LutLibraryFileOperations::Default() -> LutLibraryFileOperations {
   };
   io.write_inventory  = WriteLutLibraryInventoryFile;
   io.write_user_state = WriteLutLibraryUserStateFile;
+  io.write_package_receipt = WriteLutPackageReceiptFile;
   return io;
 }
 

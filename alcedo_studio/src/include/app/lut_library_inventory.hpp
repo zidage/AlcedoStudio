@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -57,14 +58,33 @@ struct LutLibraryUserStateReadResult {
 [[nodiscard]] auto WriteLutLibraryUserStateFile(const std::filesystem::path& root,
                                                 const LutLibraryUserState&   state) -> std::string;
 
-/// The part of a package activation receipt (`packages/<id>/installed.json`) that
-/// the library scan needs: which content directory is active. L3 writes receipts.
+/// Package activation receipt (`packages/<id>/installed.json`).
+///
+/// The receipt is the persistent commit point of a package installation: it
+/// names the active content directory and records the verified feed descriptor
+/// of that content. It does not copy the inventory rows. Receipts written before
+/// L3 hold only the package ID and content directory; their descriptor fields
+/// stay empty or zero.
 struct LutPackageReceipt {
-  std::string package_id;
+  std::string   package_id;
   /// Library-root-relative path of the active content directory,
-  /// `packages/<id>/content/<inventory-hash>`.
-  std::string content_directory;
+  /// `packages/<id>/content/<name>`.
+  std::string   content_directory;
+  std::string   revision;
+  std::uint64_t file_count = 0;
+  /// Canonical inventory digest, 64 lowercase hexadecimal characters.
+  std::string   inventory_sha256;
+  std::uint64_t unpacked_bytes = 0;
+  std::string   artifact_url;
+  std::uint64_t artifact_size = 0;
+  /// SHA-256 of the exact archive bytes, 64 lowercase hexadecimal characters.
+  std::string   artifact_sha256;
+  /// Sequence of the signed feed that listed this descriptor.
+  std::uint64_t feed_sequence = 0;
 };
+
+/// Package IDs usable as a directory name: 1-64 characters of `[a-z0-9_-]`.
+[[nodiscard]] auto IsLutPackageId(std::string_view id) -> bool;
 
 /// Read every `packages/<id>/installed.json`. An unreadable or invalid receipt
 /// produces a `kInvalidPackageReceipt` diagnostic and no content directory, so its
@@ -72,6 +92,22 @@ struct LutPackageReceipt {
 void               ReadLutPackageReceipts(const std::filesystem::path&    root,
                                           std::vector<LutPackageReceipt>* receipts,
                                           std::vector<LutScanDiagnostic>* diagnostics);
+
+[[nodiscard]] auto SerializeLutPackageReceipt(const LutPackageReceipt& receipt) -> std::string;
+
+/// Atomically replace `<root>/packages/<id>/installed.json` through a temporary
+/// file and rename. Readers see the previous or the complete new receipt.
+/// Returns an empty string on success or the failure description.
+[[nodiscard]] auto WriteLutPackageReceiptFile(const std::filesystem::path& root,
+                                              const LutPackageReceipt&     receipt) -> std::string;
+
+/// True when the package ownership in @p inventory agrees with @p receipts:
+/// every package-owned entry lies in its package's active content directory, and
+/// every receipt that declares LUTs has at least one entry. A false result means
+/// that a receipt changed after the inventory was written (for example, an
+/// installation committed and the process stopped before the inventory write).
+[[nodiscard]] auto LutInventoryMatchesPackageReceipts(
+    const LutLibraryInventory& inventory, const std::vector<LutPackageReceipt>& receipts) -> bool;
 
 /// Scan loose files and only the active content of installed packages.
 ///

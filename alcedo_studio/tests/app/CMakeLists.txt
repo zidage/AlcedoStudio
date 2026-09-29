@@ -27,6 +27,20 @@ gtest_discover_tests(LutLibraryServiceTest TEST_PREFIX "LutLibraryServiceTest."
     PROPERTIES LABELS "ci_core_flow")
 alcedo_register_test_target(LutLibraryServiceTest app ci_core)
 
+add_executable(LutPackageServiceTest
+    ${ALCEDO_TEST_ROOT}/app/lut_package_service_test.cpp
+    ${ALCEDO_TEST_ROOT}/app/download_service_test_main.cpp)
+target_include_directories(LutPackageServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_compile_definitions(LutPackageServiceTest PRIVATE
+    ALCEDO_FAKE_ARIA2_PATH="$<TARGET_FILE:DownloadServiceFakeAria2>"
+    ALCEDO_LUT_METADATA_FIXTURE_DIR="${ALCEDO_TEST_ROOT}/resources/lut_metadata")
+target_link_libraries(LutPackageServiceTest PRIVATE LutPackageService LibArchive::LibArchive
+    JSON unofficial::ed25519::ed25519 GTest::gtest Qt6::Test)
+add_dependencies(LutPackageServiceTest DownloadServiceFakeAria2)
+gtest_discover_tests(LutPackageServiceTest TEST_PREFIX "LutPackageServiceTest."
+    PROPERTIES LABELS "ci_core_flow")
+alcedo_register_test_target(LutPackageServiceTest app ci_core)
+
 add_executable(DownloadServiceFakeAria2
     ${ALCEDO_TEST_ROOT}/app/download_service_fake_aria2.cpp)
 target_link_libraries(DownloadServiceFakeAria2 PRIVATE Qt6::Core)

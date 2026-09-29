@@ -91,6 +91,10 @@ TEST_F(ApplicationModuleHostLifecycleTests,
     EXPECT_NE(host.model_download(), nullptr);
     EXPECT_NE(host.updates(), nullptr);
     EXPECT_NE(host.lut_library(), nullptr);
+    EXPECT_NE(host.lut_packages(), nullptr);
+    // Constructing the application modules makes no LUT feed request (plan L3).
+    EXPECT_FALSE(host.lut_packages()->checking());
+    EXPECT_FALSE(host.lut_packages()->checked());
     EXPECT_NE(host.semantic_generation(), nullptr);
     EXPECT_NE(host.ai_provider_profiles(), nullptr);
     EXPECT_NE(host.image_analysis(), nullptr);
@@ -115,6 +119,7 @@ TEST_F(ApplicationModuleHostLifecycleTests,
         {"modelDownload", "alcedo::ui::ModelDownloadController*"},
         {"updates", "alcedo::UpdateService*"},
         {"lutLibrary", "alcedo::LutLibraryService*"},
+        {"lutPackages", "alcedo::LutPackageService*"},
         {"semanticGeneration", "alcedo::ui::SemanticGenerationController*"},
         {"aiProviderProfiles", "alcedo::AiProviderProfileController*"},
         {"imageAnalysis", "alcedo::ui::ImageAnalysisController*"},

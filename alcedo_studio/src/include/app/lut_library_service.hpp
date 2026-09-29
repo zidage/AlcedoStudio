@@ -21,6 +21,7 @@
 
 #include "app/lut_library_inventory.hpp"
 #include "app/lut_library_migration.hpp"
+#include "app/lut_package_install.hpp"
 #include "utils/lut/lut_library_scan.hpp"
 
 namespace alcedo {
@@ -86,7 +87,16 @@ class LutLibraryService final : public QObject {
   Q_PROPERTY(QString lastError READ last_error NOTIFY OperationStateChanged)
 
  public:
-  enum class Operation { kNone, kLoad, kRefresh, kImport, kUseRoot, kMigrateRoot, kSourceCleanup };
+  enum class Operation {
+    kNone,
+    kLoad,
+    kRefresh,
+    kImport,
+    kUseRoot,
+    kMigrateRoot,
+    kSourceCleanup,
+    kInstallPackage
+  };
   Q_ENUM(Operation)
 
   enum class Status {
@@ -111,6 +121,9 @@ class LutLibraryService final : public QObject {
     std::vector<std::string> affected_paths;
     /// Migration source files kept because they changed after copying.
     std::vector<std::string> kept_source_paths;
+    /// Package installation: the package ID when its new receipt was committed,
+    /// even if the following inventory write failed.
+    std::string              committed_package_id;
   };
 
   enum class LocateStatus { kFound, kMissing, kNotInInventory };
@@ -171,6 +184,12 @@ class LutLibraryService final : public QObject {
   /// Add or remove a favorite and persist it. Rejected (kBusy) while a root
   /// operation runs, because that operation carries the favorites to a new root.
   auto               SetFavorite(std::string_view relative_path, bool favorite) -> Status;
+  /// Scoped const read of the package receipts read with the published
+  /// inventory, sorted by package ID. Invalid receipts are absent (and reported
+  /// as inventory diagnostics).
+  [[nodiscard]] auto PackageReceipts() const -> const std::vector<LutPackageReceipt>& {
+    return package_receipts_;
+  }
   /// Previous roots this library was migrated from (absolute UTF-8 paths).
   [[nodiscard]] auto PreviousRoots() const -> const std::vector<std::string>& {
     return user_state_.previous_roots;
@@ -191,6 +210,18 @@ class LutLibraryService final : public QObject {
   /// Open the root in the platform file manager. Returns false and sets
   /// lastError when the operating system rejects the request.
   auto             OpenRootDirectory() -> bool;
+  /// Verify, extract, and activate a downloaded official package through the
+  /// library's serial operation (InstallLutPackageArchive), then rescan and
+  /// publish the inventory. Other packages and user files are not changed.
+  /// Before the receipt commit, failure or cancellation keeps the previous
+  /// package active. After it, an inventory write failure finishes with
+  /// kPersistenceError and `committed_package_id` set; the next Start rebuilds
+  /// the inventory from the receipt. kBusy while another operation runs.
+  auto             InstallPackage(LutPackageInstallRequest request) -> Status;
+  /// Request cancellation of a running package installation. Returns false when
+  /// no cancelable operation runs. The operation stops at its next cancellation
+  /// point before the receipt commit, or completes if it already committed.
+  auto             CancelOperation() -> bool;
 
   Q_INVOKABLE bool refresh() { return RefreshInventory() == Status::kOk; }
   Q_INVOKABLE bool openRootDirectory() { return OpenRootDirectory(); }
@@ -207,6 +238,8 @@ class LutLibraryService final : public QObject {
   /// An operation completed; details are in LastResult().
   void OperationFinished(alcedo::LutLibraryService::Operation operation,
                          alcedo::LutLibraryService::Status    status);
+  /// A running installation of @p package_id entered @p stage.
+  void PackageInstallStageChanged(const QString& package_id, alcedo::LutPackageInstallStage stage);
 
  private:
   using Completion = std::function<void()>;
@@ -215,8 +248,11 @@ class LutLibraryService final : public QObject {
   /// returns the owner-thread completion that publishes its result.
   auto Begin(Operation operation, std::function<Completion(std::stop_token)> work) -> Status;
   void Finish(OperationResult result);
-  /// Replace the published inventory and announce the changed entry paths.
-  auto PublishInventory(LutLibraryInventory inventory) -> std::vector<std::string>;
+  /// Replace the published inventory (and, when given, the package receipts it
+  /// was scanned with) and announce the changed entry paths.
+  auto PublishInventory(LutLibraryInventory                           inventory,
+                        std::optional<std::vector<LutPackageReceipt>> receipts = std::nullopt)
+      -> std::vector<std::string>;
   void ResumeSourceCleanup();
   void ConvertLegacyFavorites();
   auto RequestRefresh(bool user_requested) -> Status;
@@ -225,6 +261,7 @@ class LutLibraryService final : public QObject {
   std::filesystem::path              root_;
   LutLibraryInventory                inventory_;
   LutLibraryUserState                user_state_;
+  std::vector<LutPackageReceipt>     package_receipts_;
   Operation                          operation_ = Operation::kNone;
   OperationResult                    last_result_;
   QString                            last_error_;

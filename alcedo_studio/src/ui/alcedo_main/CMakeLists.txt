@@ -255,6 +255,7 @@ target_link_libraries(AlbumBackendLib
         ModelDownloadService
         UpdateService
         LutLibraryService
+        LutPackageService
         SleeveFilterService
         FSService
         AcceleratorBackend

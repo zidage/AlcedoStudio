@@ -60,6 +60,17 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   lut_library_ = std::make_unique<alcedo::LutLibraryService>(alcedo::LutLibraryServiceOptions{});
   RecordConstruction("LutLibraryService", lut_library_.get());
   lut_library_->Start();
+  // Constructing the package service makes no network request; Settings starts
+  // the signed feed check (plan L3). Archives use the shared download admission.
+  {
+    alcedo::LutPackageServiceOptions lut_package_options =
+        alcedo::LutPackageServiceOptions::FromBuildConfiguration();
+    lut_package_options.downloader =
+        std::make_unique<alcedo::DownloadServiceLutArchiveDownloader>(*download_service_);
+    lut_packages_ =
+        std::make_unique<alcedo::LutPackageService>(std::move(lut_package_options), *lut_library_);
+  }
+  RecordConstruction("LutPackageService", lut_packages_.get());
   project_ = std::make_unique<ProjectModule>(this);
   RecordConstruction("ProjectModule", project_.get());
   library_ = std::make_unique<LibraryModule>(project_.get(), this);
@@ -398,6 +409,11 @@ void ApplicationModuleHost::ShutdownModules() {
     if (semantic_generation_) {
       semantic_generation_->CancelGeneration();
     }
+    // Cancel a LUT package download before the library worker stops; an
+    // installation that already committed its receipt completes in Shutdown().
+    if (lut_packages_) {
+      lut_packages_->Shutdown();
+    }
     if (lut_library_) {
       lut_library_->Shutdown();
     }
@@ -499,6 +515,7 @@ ApplicationModuleHost::~ApplicationModuleHost() {
   destroy(folders_, "FolderController");
   destroy(library_, "LibraryModule");
   destroy(project_, "ProjectModule");
+  destroy(lut_packages_, "LutPackageService");
   destroy(lut_library_, "LutLibraryService");
   destroy(updates_, "UpdateService");
   destroy(model_download_service_, "ModelDownloadService");

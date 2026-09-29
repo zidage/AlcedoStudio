@@ -12,6 +12,8 @@ Reference implementations:
 | Package inventory digest | `alcedo_studio/src/utils/lut/lut_inventory_digest.cpp` | `scripts/luts/lut_inventory.py` |
 | Local library scan | `alcedo_studio/src/utils/lut/lut_library_scan.cpp` | — |
 | Signed feed | `alcedo_studio/src/app/lut_package_manifest.cpp` | `scripts/luts/prepare_lut_packages.py` |
+| Package check and download | `alcedo_studio/src/app/lut_package_service.cpp` | — |
+| Archive extraction and activation | `alcedo_studio/src/app/lut_package_install.cpp` | `scripts/luts/lut_package_archive.py` (verification) |
 
 Shared test fixtures live in `alcedo_studio/tests/resources/lut_metadata/`.
 
@@ -139,10 +141,20 @@ A missing or damaged `lut-inventory.json` is rebuilt from local files at start.
 | `.downloads/` | Partial downloads; never scanned or migrated |
 
 A receipt has the form
-`{"schema":1,"kind":"alcedo-lut-package-receipt","package_id":"<id>","content_directory":"packages/<id>/content/<hash>"}`.
-L3 adds the verified descriptor fields. An invalid receipt is a scan diagnostic, and its package
-content is not listed, so the inventory is reported as incomplete. Only entries inside an active
-content directory carry a package ID. A loose file that declares `origin: alcedo` is not package-owned.
+
+```json
+{"schema":1,"kind":"alcedo-lut-package-receipt","package_id":"<id>",
+ "content_directory":"packages/<id>/content/<inventory_sha256>","revision":"2026.09.1",
+ "file_count":42,"inventory_sha256":"<64 lowercase hex>","unpacked_bytes":123456,
+ "feed_sequence":20260929120000,
+ "artifact":{"url":"https://...7z","size":12345,"sha256":"<64 lowercase hex>"}}
+```
+
+The descriptor fields repeat the verified feed descriptor of the active content. Receipts without
+them (written before package installation existed) are still read; a present field must be well
+formed. An invalid receipt is a scan diagnostic, and its package content is not listed, so the
+inventory is reported as incomplete. Only entries inside an active content directory carry a
+package ID. A loose file that declares `origin: alcedo` is not package-owned.
 
 Root migration copies every regular file except `.downloads`, verifies each copy with SHA-256,
 writes the state files, and renames a staging directory beside the destination into place.
@@ -208,3 +220,50 @@ archived manifest signature and manifest (immutable), then the live
 mismatched pair during the short window rejects the signature and retries later.
 The public prefix `luts/v1` is a deployment value supplied by the release
 operator.
+
+## 6. Client check and installation
+
+The build reads the feed URL from the CMake cache value `ALCEDO_LUT_PACKAGE_FEED_URL` (HTTPS,
+empty by default) and verifies it with the software-update public key. An empty value disables
+package checks and downloads. The highest accepted feed sequence is stored in the setting
+`lut/packages/highestTrustedSequence`, separate from the update sequence.
+
+`LutPackageService` makes no network request at startup. `CheckPackages()` fetches
+`manifest.json` (at most 256 KiB) and `manifest.json.sig` (at most 1 KiB) from the feed host only,
+verifies them, and compares each listed package with the published local inventory without
+reading or hashing files:
+
+| Status | Rule |
+| --- | --- |
+| Not installed | No receipt for the package |
+| Update available | The receipt's `inventory_sha256` differs from the feed descriptor |
+| Current | The installed entries reproduce the descriptor's LUT count and inventory digest |
+| Repair required | The receipt matches the descriptor, but the installed entries do not (changed bytes, missing files, or a file whose origin is now `user`) |
+
+A check also requests one inventory refresh when the local inventory is incomplete.
+Checking never downloads. `InstallPackage(id)` performs one package action:
+
+1. Download `artifact.url` to `.downloads/<id>-<sha256 prefix>.7z` through the shared
+   `DownloadService`. A running application or model download rejects the request (busy); no
+   second transfer starts.
+2. As a `LutLibraryService` operation (serialized with refresh, import, and root changes): check
+   the archive size and SHA-256, remove content left by an interrupted installation, and extract
+   into a new `packages/<id>/content/<inventory_sha256>[-n]` directory. Extraction uses the bundled
+   libarchive (7z/LZMA2) and accepts only regular files and directories with safe relative paths.
+   Links, special files, `..`, absolute or drive paths, backslashes, case-colliding duplicates, and
+   bytes or files beyond the signed limits stop the extraction.
+3. Compare `package-inventory.json` with the signed descriptor and every extracted file with its
+   listed size and SHA-256. The archive must hold exactly the listed files and the inventory.
+4. Write `feed-manifest.json` and `feed-manifest.json.sig` (the exact signed feed bytes) into the
+   content directory, then atomically replace `installed.json`. This replacement is the commit
+   point.
+5. Retire the previous content directory. A `.cube` file in it that explicitly declares
+   `origin: user` is first moved to `user/<id>/<path>` and kept as a user entry. Files that still
+   declare `origin: alcedo` are replaced without a copy or a prompt.
+6. Rescan, write `lut-inventory.json`, and publish the inventory.
+
+Before the commit point, every failure and every cancellation removes the new directory and keeps
+the previous receipt and content active. After it, the installation completes; if the inventory
+cannot be written, the result reports that the package is installed and an inventory refresh is
+required, and the next start rebuilds the inventory because it no longer agrees with the receipts.
+The next start also retires content directories that no receipt names.

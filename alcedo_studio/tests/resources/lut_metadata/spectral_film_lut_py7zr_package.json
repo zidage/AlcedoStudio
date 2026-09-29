@@ -1,0 +1,12 @@
+{
+ "id": "spectral_film_lut",
+ "revision": "fixture.1",
+ "file_count": 2,
+ "inventory_sha256": "76f5a255cae704d975924744f5a9c33cbb071802d087ebc2af9bd8a81e808cce",
+ "unpacked_bytes": 848,
+ "artifact": {
+  "url": "https://static.aoraw.org/luts/v1/packages/spectral_film_lut/fixture.1/spectral_film_lut-fixture.1.7z",
+  "size": 930,
+  "sha256": "8f34aa05ec6e089d8c37a36200ba905880f7aa5e3e4255be327630eb1dba2279"
+ }
+}

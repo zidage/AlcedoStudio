@@ -65,6 +65,14 @@ cmd /c scripts\msvc_env.cmd ...
 .\vcpkg\bootstrap-vcpkg.bat
 ```
 
+LUT package extraction links libarchive with LZMA (7z) support. The classic-mode vcpkg tree
+must contain it:
+LUT 包解压依赖带 LZMA（7z）支持的 libarchive，经典模式 vcpkg 需要安装：
+
+```powershell
+.\vcpkg\vcpkg.exe install "libarchive[lzma]:x64-windows"
+```
+
 ### 3.2 Debug build (`win_debug`) / 调试构建（`win_debug`）
 
 ```powershell
@@ -120,7 +128,7 @@ Install dependencies:
 安装依赖：
 
 ```bash
-brew install cmake ninja qt opencv opencolorio duckdb exiv2 glib libraw little-cms2 highway openimageio pkg-config xxhash eigen libomp
+brew install cmake ninja qt opencv opencolorio duckdb exiv2 glib libraw little-cms2 highway openimageio pkg-config xxhash eigen libomp libarchive
 ```
 
 Debug app build (`macos_debug`):
