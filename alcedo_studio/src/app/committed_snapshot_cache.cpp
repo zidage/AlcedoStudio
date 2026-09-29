@@ -150,15 +150,24 @@ void CommittedSnapshotCache::Publish(std::shared_ptr<const PipelineGraphSnapshot
   StoreLocked(std::move(snapshot));
 }
 
-void CommittedSnapshotCache::EndEditorPublication(sl_element_id_t element_id) {
+auto CommittedSnapshotCache::EndEditorPublication(sl_element_id_t element_id)
+    -> std::shared_ptr<const PipelineGraphSnapshot> {
   std::scoped_lock lock(mutex_);
   const auto       it = published_.find(element_id);
   if (it == published_.end()) {
-    return;
+    return nullptr;
   }
   auto snapshot = std::move(it->second);
   published_.erase(it);
-  StoreLocked(std::move(snapshot));
+  StoreLocked(snapshot);
+  return snapshot;
+}
+
+auto CommittedSnapshotCache::EditorPublished(sl_element_id_t element_id) const
+    -> std::shared_ptr<const PipelineGraphSnapshot> {
+  std::scoped_lock lock(mutex_);
+  const auto       it = published_.find(element_id);
+  return it == published_.end() ? nullptr : it->second;
 }
 
 void CommittedSnapshotCache::Forget(sl_element_id_t element_id) {

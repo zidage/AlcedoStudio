@@ -117,11 +117,6 @@ class EditorSessionRenderController final {
   /// their owner thread.
   void               CancelSession(ImageLoadRequestId image_load_request,
                                    std::function<void(ImageLoadRequestId)> on_idle);
-  /// Cancel the active render session and wait until workers leave it.
-  void               CancelSessionAndWait(ImageLoadRequestId image_load_request);
-  /// Wait for the active session's renders to finish (no cancel). History head
-  /// moves queue behind the current frame instead of racing it.
-  void               WaitForSessionIdle(ImageLoadRequestId image_load_request);
 
  private:
   /// Build a fully-stamped render intent from the command and identity.

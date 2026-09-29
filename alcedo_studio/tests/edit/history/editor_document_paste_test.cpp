@@ -20,34 +20,22 @@
 #include "edit/graph/adjustment_ownership.hpp"
 #include "edit/graph/graph_ids.hpp"
 #include "edit/graph/pipeline_document.hpp"
+#include "edit/graph/pipeline_graph_snapshot.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/commit_types.hpp"
 #include "edit/history/edit_commit.hpp"
 #include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/mask/mask_id.hpp"
 #include "edit/operators/models/operator_type_id.hpp"
-#include "edit/pipeline/pipeline_executor.hpp"
 #include "grade_owned_mask_support.hpp"
 #include "support/document_transfer_test_support.hpp"
+#include "support/editor_history_port_test_reads.hpp"
+#include "support/editor_lease_test_support.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_history_port.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_pipeline_port.hpp"
 
 namespace alcedo::ui {
 namespace {
-
-auto MakePastePipelineGuard(sl_element_id_t element_id) -> std::shared_ptr<alcedo::PipelineGuard> {
-  auto guard       = std::make_shared<alcedo::PipelineGuard>();
-  guard->id_       = element_id;
-  guard->pipeline_ = std::make_shared<alcedo::PipelineExecutor>();
-  guard->document_ =
-      std::make_shared<alcedo::PipelineDocument>(alcedo::CreateDefaultPipelineDocument());
-  guard->commit_graph_ =
-      std::make_shared<alcedo::CommitGraph>(alcedo::CommitGraph::CreateEmpty(element_id));
-  guard->root_id_ = guard->commit_graph_->GetRootId();
-  guard->root_document_ =
-      std::make_shared<alcedo::PipelineDocument>(alcedo::ClonePipelineDocument(*guard->document_));
-  return guard;
-}
 
 class EditorDocumentPasteTest : public ::testing::Test {
  protected:
@@ -55,10 +43,14 @@ class EditorDocumentPasteTest : public ::testing::Test {
     const auto stamp =
         std::to_string(std::chrono::high_resolution_clock::now().time_since_epoch().count());
     journal_path_ = std::filesystem::temp_directory_path() / ("document_paste_" + stamp + ".wal");
-    guard_        = MakePastePipelineGuard(77);
     pipeline_     = std::make_shared<EditorSessionPipelinePort>();
+    // The root carries the working-space camera profile, as every stored root does, so a
+    // checkout of a root Version reproduces the opened document.
     pipeline_->SetServices(
-        EditorSessionPipelineMappers{{}, [guard = guard_](sl_element_id_t) { return guard; }});
+        EditorSessionPipelineMappers{{}, [](sl_element_id_t id) {
+                                       return alcedo::test::MakeInMemoryEditorLease(
+                                           id, alcedo::test::WorkingSpaceBoundDefaultDocument());
+                                     }});
     history_.SetServices(
         EditorSessionHistoryPort::Services{[this](sl_element_id_t) { return journal_path_; }});
     history_.SetPipelinePort(pipeline_);
@@ -71,8 +63,17 @@ class EditorDocumentPasteTest : public ::testing::Test {
     std::filesystem::remove(journal_path_, ec);
   }
 
+  auto Graph() -> std::shared_ptr<const alcedo::CommitGraph> {
+    return alcedo::test::EditorHistoryGraph(history_, 77);
+  }
+  auto Head() -> alcedo::head_commit_hash_t {
+    return alcedo::test::EditorWorkingHead(history_, 77);
+  }
+  auto Working() -> std::shared_ptr<const alcedo::PipelineGraphSnapshot> {
+    return alcedo::test::EditorWorkingPreview(*pipeline_, 77);
+  }
+
   std::filesystem::path                      journal_path_;
-  std::shared_ptr<alcedo::PipelineGuard>     guard_;
   std::shared_ptr<EditorSessionPipelinePort> pipeline_;
   EditorSessionHistoryPort                   history_;
 };
@@ -82,13 +83,13 @@ TEST_F(EditorDocumentPasteTest, PasteCreatesOneRootRelativeVersionAndOneTypedCom
   const auto  handle = history_.Acquire(77, &error);
   ASSERT_TRUE(handle.valid) << error;
 
-  const auto prior_version     = guard_->commit_graph_->GetActiveVersionId();
-  const auto prior_count       = guard_->commit_graph_->CommitCount();
-  const auto prior_refs        = guard_->commit_graph_->GetAllVersionRefs().size();
+  const auto prior_version     = Graph()->GetActiveVersionId();
+  const auto prior_count       = Graph()->CommitCount();
+  const auto prior_refs        = Graph()->GetAllVersionRefs().size();
   auto       source            = test::DocumentWithExposureEv(0.85);
   const auto source_default_id = source.DefaultGradeId();
-  const auto target_default_id = guard_->document_->DefaultGradeId();
-  const auto target_document   = alcedo::CanonicalPipelineDocumentJson(*guard_->document_);
+  const auto target_default_id = Working()->Document().DefaultGradeId();
+  const auto target_document   = alcedo::CanonicalPipelineDocumentJson(Working()->Document());
   source.PrimaryGrade()->SetDisplayName("Renamed source default");
   source.PrimaryGrade()->SetDeletionProtected(false);
   auto& unlocked = alcedo::grade_mask_test::AddRadialMask(source, alcedo::MaskId{"mask.unlocked"});
@@ -106,16 +107,17 @@ TEST_F(EditorDocumentPasteTest, PasteCreatesOneRootRelativeVersionAndOneTypedCom
       << error;
   ASSERT_TRUE(paste_result.pasted);
   EXPECT_EQ(paste_result.prior_version_id, prior_version);
-  EXPECT_NE(guard_->commit_graph_->GetActiveVersionId(), prior_version);
-  EXPECT_EQ(guard_->commit_graph_->GetActiveVersionId(), paste_result.new_version_id);
-  EXPECT_EQ(guard_->commit_graph_->GetAllVersionRefs().size(), prior_refs + 1u);
-  EXPECT_EQ(guard_->commit_graph_->CommitCount(), prior_count + 1u);
-  ASSERT_TRUE(guard_->working_head_commit_hash().has_value());
-  EXPECT_EQ(*guard_->working_head_commit_hash(), paste_result.new_head);
+  EXPECT_NE(Graph()->GetActiveVersionId(), prior_version);
+  EXPECT_EQ(Graph()->GetActiveVersionId(), paste_result.new_version_id);
+  EXPECT_EQ(Graph()->GetAllVersionRefs().size(), prior_refs + 1u);
+  EXPECT_EQ(Graph()->CommitCount(), prior_count + 1u);
+  ASSERT_TRUE(Head().has_value());
+  EXPECT_EQ(*Head(), paste_result.new_head);
 
-  const auto chain = guard_->commit_graph_->FirstParentChain(paste_result.new_head);
+  const auto graph = Graph();
+  const auto chain = graph->FirstParentChain(paste_result.new_head);
   ASSERT_EQ(chain.size(), 1u);
-  const auto& commit = guard_->commit_graph_->GetCommit(chain[0]);
+  const auto& commit = graph->GetCommit(chain[0]);
   EXPECT_EQ(commit.GetFirstParentHash(), std::nullopt);
   ASSERT_TRUE(alcedo::IsPipelineEditBatchJson(commit.GetPayloadJSON()));
   const auto batch = alcedo::PipelineEditBatch::FromJSON(commit.GetPayloadJSON());
@@ -123,13 +125,14 @@ TEST_F(EditorDocumentPasteTest, PasteCreatesOneRootRelativeVersionAndOneTypedCom
   EXPECT_EQ(history_.LastPublishedRenderReason(),
             alcedo::EditorRenderReason::PastedPipelineDocument);
 
-  const auto pasted_default_id = guard_->document_->DefaultGradeId();
+  const auto pasted_default_id = Working()->Document().DefaultGradeId();
   EXPECT_FALSE(pasted_default_id.Empty());
   EXPECT_NE(pasted_default_id, source_default_id);
   const auto assert_pasted_state = [&]() {
-    EXPECT_EQ(guard_->document_->DefaultGradeId(), pasted_default_id);
-    const auto* grade = dynamic_cast<const alcedo::ColorGradeNodeModel*>(
-        guard_->document_->Graph().FindNode(pasted_default_id));
+    EXPECT_EQ(Working()->Document().DefaultGradeId(), pasted_default_id);
+    const auto  working = Working();
+    const auto* grade   = dynamic_cast<const alcedo::ColorGradeNodeModel*>(
+        working->Document().Graph().FindNode(pasted_default_id));
     ASSERT_NE(grade, nullptr);
     EXPECT_EQ(grade->DisplayName(), "Renamed source default");
     // The remapped source default stays the target default, so the target
@@ -145,22 +148,22 @@ TEST_F(EditorDocumentPasteTest, PasteCreatesOneRootRelativeVersionAndOneTypedCom
     EXPECT_NE(grade->MaskAt(1).id, alcedo::MaskId{"mask.locked"});
   };
   assert_pasted_state();
-  const auto pasted_document = alcedo::CanonicalPipelineDocumentJson(*guard_->document_);
+  const auto pasted_document = alcedo::CanonicalPipelineDocumentJson(Working()->Document());
   alcedo::version_ref_id_t clean_version{};
   ASSERT_TRUE(history_.CreateRootVersionAndCheckout(handle, "Clean target", &clean_version, &error))
       << error;
-  EXPECT_EQ(guard_->document_->DefaultGradeId(), target_default_id);
-  EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(*guard_->document_), target_document);
+  EXPECT_EQ(Working()->Document().DefaultGradeId(), target_default_id);
+  EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(Working()->Document()), target_document);
   ASSERT_TRUE(history_.CheckoutVersion(handle, paste_result.new_version_id, &error)) << error;
   assert_pasted_state();
-  EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(*guard_->document_), pasted_document);
+  EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(Working()->Document()), pasted_document);
 }
 
 TEST_F(EditorDocumentPasteTest, PasteWithoutSourceDefaultEstablishesFirstGradeAsDefault) {
   std::string error;
   const auto  handle = history_.Acquire(77, &error);
   ASSERT_TRUE(handle.valid) << error;
-  const auto target_default_id = guard_->document_->DefaultGradeId();
+  const auto target_default_id = Working()->Document().DefaultGradeId();
   ASSERT_FALSE(target_default_id.Empty());
   auto source = test::DocumentWithExposureEv(0.5);
   source.SetDefaultGradeId(alcedo::NodeId{});
@@ -172,34 +175,35 @@ TEST_F(EditorDocumentPasteTest, PasteWithoutSourceDefaultEstablishesFirstGradeAs
   ASSERT_TRUE(result.pasted);
   // The package omits the source default, so the first included Grade becomes
   // the target default and receives the required default deletion protection.
-  const auto pasted_default_id = guard_->document_->DefaultGradeId();
+  const auto pasted_default_id = Working()->Document().DefaultGradeId();
   EXPECT_FALSE(pasted_default_id.Empty());
   EXPECT_NE(pasted_default_id, target_default_id);
-  const auto* primary = guard_->document_->PrimaryGrade();
+  const auto  pasted  = Working();
+  const auto* primary = pasted->Document().PrimaryGrade();
   ASSERT_NE(primary, nullptr);
   EXPECT_EQ(primary->Id(), pasted_default_id);
   EXPECT_TRUE(primary->DeletionProtected());
-  const auto pasted_document = alcedo::CanonicalPipelineDocumentJson(*guard_->document_);
+  const auto pasted_document = alcedo::CanonicalPipelineDocumentJson(Working()->Document());
   alcedo::version_ref_id_t clean_version{};
   ASSERT_TRUE(history_.CreateRootVersionAndCheckout(handle, "Clean target", &clean_version, &error))
       << error;
-  EXPECT_EQ(guard_->document_->DefaultGradeId(), target_default_id);
+  EXPECT_EQ(Working()->Document().DefaultGradeId(), target_default_id);
   ASSERT_TRUE(history_.CheckoutVersion(handle, result.new_version_id, &error)) << error;
-  EXPECT_EQ(guard_->document_->DefaultGradeId(), pasted_default_id);
-  EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(*guard_->document_), pasted_document);
+  EXPECT_EQ(Working()->Document().DefaultGradeId(), pasted_default_id);
+  EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(Working()->Document()), pasted_document);
 }
 
 TEST_F(EditorDocumentPasteTest, FailedPasteCreatesNoVersionCommitHeadMoveOrRender) {
   std::string error;
   const auto  handle = history_.Acquire(77, &error);
   ASSERT_TRUE(handle.valid) << error;
-  const auto prior_version = guard_->commit_graph_->GetActiveVersionId();
-  const auto prior_count   = guard_->commit_graph_->CommitCount();
-  const auto prior_refs    = guard_->commit_graph_->GetAllVersionRefs().size();
-  const auto prior_head    = guard_->working_head_commit_hash();
+  const auto prior_version = Graph()->GetActiveVersionId();
+  const auto prior_count   = Graph()->CommitCount();
+  const auto prior_refs    = Graph()->GetAllVersionRefs().size();
+  const auto prior_head    = Head();
   const auto prior_reason  = history_.LastPublishedRenderReason();
-  const auto prior_hash    = alcedo::CanonicalPipelineDocumentJson(*guard_->document_);
-  const auto prior_document = guard_->document_;
+  const auto prior_hash    = alcedo::CanonicalPipelineDocumentJson(Working()->Document());
+  const auto prior_lineage = Working()->Lineage();
 
   alcedo::AdjustmentPasteResult empty_result;
   EXPECT_FALSE(history_.PasteLiveRootRelativeVersion(handle, alcedo::AdjustmentTransferPackage{},
@@ -225,14 +229,14 @@ TEST_F(EditorDocumentPasteTest, FailedPasteCreatesNoVersionCommitHeadMoveOrRende
   EXPECT_FALSE(collision_result.pasted);
   alcedo::SetDocumentTransferIdentitySourceForTesting(nullptr);
 
-  EXPECT_EQ(guard_->commit_graph_->GetActiveVersionId(), prior_version);
-  EXPECT_EQ(guard_->commit_graph_->CommitCount(), prior_count);
-  EXPECT_EQ(guard_->commit_graph_->GetAllVersionRefs().size(), prior_refs);
-  EXPECT_EQ(guard_->working_head_commit_hash(), prior_head);
+  EXPECT_EQ(Graph()->GetActiveVersionId(), prior_version);
+  EXPECT_EQ(Graph()->CommitCount(), prior_count);
+  EXPECT_EQ(Graph()->GetAllVersionRefs().size(), prior_refs);
+  EXPECT_EQ(Head(), prior_head);
   EXPECT_EQ(history_.LastPublishedRenderReason(), prior_reason);
-  EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(*guard_->document_), prior_hash);
+  EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(Working()->Document()), prior_hash);
   // Build-then-swap: a failed Paste never binds its built document.
-  EXPECT_EQ(guard_->document_, prior_document);
+  EXPECT_EQ(Working()->Lineage(), prior_lineage);
 }
 
 TEST_F(EditorDocumentPasteTest, FailedPasteWalAppendCreatesNoVersionCommitHeadMoveOrRender) {
@@ -247,27 +251,27 @@ TEST_F(EditorDocumentPasteTest, FailedPasteWalAppendCreatesNoVersionCommitHeadMo
   std::string error;
   const auto  handle = history_.Acquire(77, &error);
   ASSERT_TRUE(handle.valid) << error;
-  const auto prior_version = guard_->commit_graph_->GetActiveVersionId();
-  const auto prior_count   = guard_->commit_graph_->CommitCount();
-  const auto prior_refs    = guard_->commit_graph_->GetAllVersionRefs().size();
-  const auto prior_head    = guard_->working_head_commit_hash();
+  const auto prior_version = Graph()->GetActiveVersionId();
+  const auto prior_count   = Graph()->CommitCount();
+  const auto prior_refs    = Graph()->GetAllVersionRefs().size();
+  const auto prior_head    = Head();
   const auto prior_reason  = history_.LastPublishedRenderReason();
-  const auto prior_hash    = alcedo::CanonicalPipelineDocumentJson(*guard_->document_);
-  const auto prior_document = guard_->document_;
+  const auto prior_hash    = alcedo::CanonicalPipelineDocumentJson(Working()->Document());
+  const auto prior_lineage = Working()->Lineage();
 
   alcedo::AdjustmentPasteResult paste_result;
   EXPECT_FALSE(history_.PasteLiveRootRelativeVersion(
       handle, test::MakeExposureTransferPackage(1.25), "WAL fail", &paste_result, &error));
   EXPECT_FALSE(paste_result.pasted);
   EXPECT_FALSE(error.empty());
-  EXPECT_EQ(guard_->commit_graph_->GetActiveVersionId(), prior_version);
-  EXPECT_EQ(guard_->commit_graph_->CommitCount(), prior_count);
-  EXPECT_EQ(guard_->commit_graph_->GetAllVersionRefs().size(), prior_refs);
-  EXPECT_EQ(guard_->working_head_commit_hash(), prior_head);
+  EXPECT_EQ(Graph()->GetActiveVersionId(), prior_version);
+  EXPECT_EQ(Graph()->CommitCount(), prior_count);
+  EXPECT_EQ(Graph()->GetAllVersionRefs().size(), prior_refs);
+  EXPECT_EQ(Head(), prior_head);
   EXPECT_EQ(history_.LastPublishedRenderReason(), prior_reason);
-  EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(*guard_->document_), prior_hash);
+  EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(Working()->Document()), prior_hash);
   // Build-then-swap: a failed Paste never binds its built document.
-  EXPECT_EQ(guard_->document_, prior_document);
+  EXPECT_EQ(Working()->Lineage(), prior_lineage);
 
   std::error_code ec;
   std::filesystem::remove(journal_path_.parent_path() / "not-a-directory", ec);

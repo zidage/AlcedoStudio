@@ -15,7 +15,7 @@
 
 #include "app/editor_render_coordinator.hpp"
 #include "app/editor_render_intent.hpp"
-#include "app/pipeline_service.hpp"
+#include "edit/pipeline/pipeline_executor.hpp"
 #include "image/image.hpp"
 #include "image/image_buffer.hpp"
 #include "renderer/pipeline_scheduler.hpp"
@@ -38,18 +38,18 @@ struct EditorSessionSchedulerServices {
 };
 
 /// Stable render inputs for the currently open/switched editor image.
-/// Bound at open/switch (identity immediately; image/buffer/pipeline lazy-once).
-/// Image switch replaces the whole context under the new epoch.
+/// Bound at open/switch (identity immediately; image/buffer lazy-once).
+/// Image switch replaces the whole context under the new epoch. The graph to render is not part
+/// of the context: each frame renders the preview snapshot published at dispatch.
 struct EditorRenderSessionContext {
-  std::uint64_t                          epoch                 = 0;
-  sl_element_id_t                        element_id            = 0;
-  image_id_t                             image_id              = 0;
+  std::uint64_t                        epoch                = 0;
+  sl_element_id_t                      element_id           = 0;
+  image_id_t                           image_id             = 0;
   /// Presentation sink identity stamped at open/switch. Live `IFrameSink*` is
   /// resolved only at pipeline submit; this id is the session-scoped identity.
-  alcedo::PresentationSinkId             presentation_sink_id  = 0;
-  std::shared_ptr<alcedo::Image>         image;
-  std::shared_ptr<alcedo::ImageBuffer>   input;
-  std::shared_ptr<alcedo::PipelineGuard> pipeline_guard;
+  alcedo::PresentationSinkId           presentation_sink_id = 0;
+  std::shared_ptr<alcedo::Image>       image;
+  std::shared_ptr<alcedo::ImageBuffer> input;
 };
 
 /**
@@ -63,10 +63,21 @@ struct EditorRenderSessionContext {
 [[nodiscard]] auto MakeEditorRenderDesc(const alcedo::EditorRenderRequest& request)
     -> alcedo::RenderDesc;
 
-/// Thin adapter: builds a PipelineTask from bound session context and hands it
-/// to PipelineScheduler. No private worker thread and no second request queue —
-/// the coordinator owns single-flight; PipelineScheduler owns execution.
-/// Completion is forward-only via the Schedule `on_complete` callback.
+/**
+ * @brief The editor's render adapter and the owner of the editor's only executor.
+ *
+ * Builds a PipelineTask from the bound session context and the preview snapshot the editor
+ * history published last, and hands it to the editor's PipelineScheduler(1). No second request
+ * queue: the coordinator owns single-flight; PipelineScheduler owns execution. Completion is
+ * forward-only via the Schedule `on_complete` callback.
+ *
+ * Executor: one Interactive PipelineExecutor, created on the first frame with the accelerator
+ * preference of the pipeline service and kept for the life of this port. No other module renders
+ * on it and nothing shares its render lock. A frame of another image (another lineage) releases
+ * every resource of the previous binding before it renders (executor binding rule);
+ * @ref ClearSessionContext releases them when the editor closes the image. Frame sink: the
+ * viewport sink resolved at submit is attached on the worker before the frame renders.
+ */
 class EditorSessionRenderSchedulerPort final : public alcedo::IEditorPipelineSchedulerPort {
  public:
   explicit EditorSessionRenderSchedulerPort(
@@ -78,9 +89,10 @@ class EditorSessionRenderSchedulerPort final : public alcedo::IEditorPipelineSch
   void SetServices(EditorSessionSchedulerServices services);
 
   /// Bind identity for the open/switched image. Replaces any prior context.
-  /// Image/buffer/pipeline load once on first production frame for this bind.
+  /// Image/buffer load once on first production frame for this bind.
   void BindSessionContext(std::uint64_t epoch, sl_element_id_t element_id, image_id_t image_id,
                           alcedo::PresentationSinkId presentation_sink_id = 0) override;
+  /// Drop the bound context and release the executor's binding after the in-flight frame.
   void ClearSessionContext() override;
   /// Install a fully populated context (tests / preloaded open path).
   void InstallSessionContext(EditorRenderSessionContext context);
@@ -88,9 +100,10 @@ class EditorSessionRenderSchedulerPort final : public alcedo::IEditorPipelineSch
   auto Schedule(const alcedo::EditorRenderRequest& request,
                 alcedo::EditorPipelineScheduleCompletion on_complete = {})
       -> std::uint64_t override;
-  void Cancel(std::uint64_t scheduler_job_id) override;
-  void WaitForSessionIdle(std::uint64_t session_epoch) override;
+  void               Cancel(std::uint64_t scheduler_job_id) override;
   [[nodiscard]] auto last_scheduled() const -> std::vector<alcedo::EditorRenderRequest>;
+  /// The editor's executor, or null before the first frame. Diagnostics and tests only.
+  [[nodiscard]] auto interactive_executor() const -> std::shared_ptr<alcedo::PipelineExecutor>;
   /// Snapshot of the bound context identity and payload presence (for tests).
   [[nodiscard]] auto session_context() const -> std::optional<EditorRenderSessionContext>;
   /// Times image-pool resolution ran to load context payload (bind/hot-path).
@@ -108,6 +121,9 @@ class EditorSessionRenderSchedulerPort final : public alcedo::IEditorPipelineSch
 
   [[nodiscard]] auto CanProduceFrame(const alcedo::EditorRenderRequest& request) const -> bool;
   [[nodiscard]] auto EnsurePipelineScheduler() -> std::shared_ptr<alcedo::PipelineScheduler>;
+  /// Create the Interactive executor on first use with the pipeline service's accelerator
+  /// preference.
+  [[nodiscard]] auto EnsureExecutor() -> std::shared_ptr<alcedo::PipelineExecutor>;
   /// Ensure context identity matches the request and payload is loaded once.
   [[nodiscard]] auto EnsureContextForRequest(const alcedo::EditorRenderRequest& request,
                                              std::string* error)
@@ -124,6 +140,7 @@ class EditorSessionRenderSchedulerPort final : public alcedo::IEditorPipelineSch
   [[nodiscard]] auto JobIsCancelled(const Job& job) const -> bool;
 
   std::shared_ptr<alcedo::PipelineScheduler> pipeline_scheduler_;
+  std::shared_ptr<alcedo::PipelineExecutor>  executor_;
   EditorSessionFrameSinkResolver             sink_resolver_;
   std::shared_ptr<EditorSessionPipelinePort> pipeline_port_;
   EditorSessionSchedulerServices             services_{};

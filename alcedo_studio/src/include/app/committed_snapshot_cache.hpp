@@ -71,8 +71,16 @@ class CommittedSnapshotCache {
    */
   void Publish(std::shared_ptr<const PipelineGraphSnapshot> snapshot, bool editor_holds_image);
 
-  /// The editor released @p element_id: check its entry against storage from now on.
-  void EndEditorPublication(sl_element_id_t element_id);
+  /**
+   * @brief The editor released @p element_id: check its entry against storage from now on.
+   * @return The last snapshot the editor published for the image, or null when it published none.
+   */
+  auto EndEditorPublication(sl_element_id_t element_id)
+      -> std::shared_ptr<const PipelineGraphSnapshot>;
+
+  /// Last snapshot the editor published for the image it holds, or null when it published none.
+  [[nodiscard]] auto EditorPublished(sl_element_id_t element_id) const
+      -> std::shared_ptr<const PipelineGraphSnapshot>;
 
   /// Drop the entry of a deleted image.
   void Forget(sl_element_id_t element_id);

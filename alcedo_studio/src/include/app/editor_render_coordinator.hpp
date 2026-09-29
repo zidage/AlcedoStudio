@@ -33,7 +33,6 @@ class IEditorPipelineSchedulerPort {
   virtual auto Schedule(const EditorRenderRequest& request,
                         EditorPipelineScheduleCompletion on_complete = {}) -> std::uint64_t = 0;
   virtual void Cancel(std::uint64_t scheduler_job_id) = 0;
-  virtual void WaitForSessionIdle(std::uint64_t /*session_epoch*/) {}
   /// Bind stable render inputs for the open/switched image (epoch + identity +
   /// presentation sink id). Production loads image/buffer/pipeline once; fakes no-op.
   virtual void BindSessionContext(std::uint64_t /*epoch*/, sl_element_id_t /*element_id*/,
@@ -91,13 +90,7 @@ class EditorRenderCoordinator final : public IEditorRenderSubmitPort {
 
   /// Cancel every pending/in-flight request for an image-load request (image switch).
   void CancelSession(std::uint64_t image_load_request_id) override;
-  void CancelSession(std::uint64_t image_load_request_id,
-                     SessionIdleCallback on_idle) override;
-  void CancelSessionAndWait(std::uint64_t image_load_request_id) override;
-  /// Queue behind the in-flight frame: drop not-yet-started pending for this
-  /// session, then wait for the running job (and its present handoff) to finish.
-  /// Does not cancel work already in Apply/present.
-  void WaitForSessionIdle(std::uint64_t image_load_request_id) override;
+  void CancelSession(std::uint64_t image_load_request_id, SessionIdleCallback on_idle) override;
 
   /// Cancel one request by id (token or explicit). Starts the next runnable request.
   auto CancelRequest(std::uint64_t request_id) -> bool;

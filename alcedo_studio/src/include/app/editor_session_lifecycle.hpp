@@ -55,8 +55,7 @@ struct ReleaseOutcome {
 class EditorSessionLifecycle final {
  public:
   struct Dependencies {
-    std::shared_ptr<IEditorPipelinePort> pipeline;
-    std::shared_ptr<IEditorHistoryPort>  history;
+    std::shared_ptr<IEditorHistoryPort> history;
   };
 
   /// Returns true when the calling thread owns session mutations.
@@ -75,8 +74,8 @@ class EditorSessionLifecycle final {
   auto               BeginAcquire(sl_element_id_t element_id, image_id_t image_id, bool is_switch,
                                   IEditorCheckpointStore* checkpoint_store, std::string* error) -> bool;
 
-  /// Acquire pipeline and history guards for the current image. Returns false
-  /// and transitions to Failed on failure. Must be called after BeginAcquire.
+  /// Acquire the history guard (and with it the editor lease) for the current image. Returns
+  /// false and transitions to Failed on failure. Must be called after BeginAcquire.
   auto               AcquireGuards(std::string* error) -> bool;
 
   /// Mark the image ready after guards succeed. Stays in Loading until the
@@ -177,7 +176,6 @@ class EditorSessionLifecycle final {
   EditorSessionIdentity     identity_{};
   ImageLoadRequestId        active_load_request_{};
   std::uint64_t             next_load_request_id_ = 1;
-  EditorPipelineGuardHandle pipeline_guard_{};
   EditorHistoryGuardHandle  history_guard_{};
   std::string               last_error_;
 };

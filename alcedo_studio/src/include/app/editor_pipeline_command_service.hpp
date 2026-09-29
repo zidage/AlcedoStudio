@@ -22,7 +22,8 @@ namespace alcedo {
  * Model operations normalize values and stamp changed fields; topology and other Models stay
  * intact.
  * Compound input is parsed completely before any owner field is changed.
- * @pre Caller holds the shared executor render lock; target is complete and is not Mask.
+ * @pre Caller is the only writer of @p document (the editor session owner thread for its
+ *      working document); target is complete and is not Mask.
  * @param document Live document to mutate in place.
  * @param target Explicit node/adjustment identity; no missing identity is inferred.
  * @param params Field-specific JSON boundary object. Persistence/history JSON is accepted at this

@@ -19,6 +19,7 @@
 #include "app/editor_render_intent.hpp"
 #include "app/editor_session_types.hpp"
 #include "edit/graph/graph_ids.hpp"
+#include "edit/graph/pipeline_graph_snapshot.hpp"
 #include "edit/history/pipeline_edit_batch.hpp"
 #include "type/type.hpp"
 
@@ -40,26 +41,29 @@ struct AdjustmentPasteResult;
 /// PipelineMgmtService, Mini-Git journal storage, thumbnail work, and background tasks.
 /// Tests inject fakes. The service never exposes these ports to QML modules.
 
-struct EditorPipelineGuardHandle {
-  sl_element_id_t element_id = 0;
-  bool            valid      = false;
-};
-
 struct EditorHistoryGuardHandle {
   sl_element_id_t element_id = 0;
   bool            valid      = false;
 };
 
+/**
+ * @brief Read side of the editor's working document.
+ *
+ * The history port takes the editor lease and owns the working document; this port only exposes
+ * the preview snapshot the history publishes after each write, for readers off the session owner
+ * thread (the GUI projections and typed write targets).
+ */
 class IEditorPipelinePort {
  public:
   virtual ~IEditorPipelinePort() = default;
-  virtual auto Acquire(sl_element_id_t element_id, std::string* error)
-      -> EditorPipelineGuardHandle                             = 0;
-  virtual void Release(const EditorPipelineGuardHandle& guard) = 0;
-  /// Live PipelineDocument for the Nodes-page projection. Null when the image
-  /// has no loaded guard. Default fakes return nullptr.
-  [[nodiscard]] virtual auto CurrentDocument(sl_element_id_t /*element_id*/) const
-      -> const PipelineDocument* {
+  /**
+   * @brief Last preview snapshot published from the working document of @p element_id.
+   *
+   * Immutable; safe on any thread. Null when the editor holds no lease for the image. Default
+   * fakes return null.
+   */
+  [[nodiscard]] virtual auto CurrentPreview(sl_element_id_t /*element_id*/) const
+      -> std::shared_ptr<const PipelineGraphSnapshot> {
     return nullptr;
   }
 };
@@ -149,32 +153,30 @@ class IEditorHistoryPort {
     return false;
   }
 
-  using LockedMaskSettle =
-      std::function<bool(const PipelineEditBatch& batch, std::string* error)>;
+  using MaskSettle = std::function<bool(const PipelineEditBatch& batch, std::string* error)>;
   /**
-   * @brief Operation on the locked live document.
+   * @brief Operation on the working document.
    *
    * Before returning (also on failure) the operation sets @p input_open to whether its input
-   * sequence is still open, that is, whether the live document now holds values that are not
+   * sequence is still open, that is, whether the working document now holds values that are not
    * committed. The history treats those values exactly like a pending slider sequence: nothing
    * is saved and no committed snapshot is published until the sequence settles or is cancelled.
    */
-  using LockedMaskDocumentOp =
+  using MaskDocumentOp =
       std::function<bool(PipelineDocument& document, MiniGitWorkingHistory& history,
-                         const LockedMaskSettle& settle, bool* input_open, std::string* error)>;
+                         const MaskSettle& settle, bool* input_open, std::string* error)>;
 
   /**
-   * @brief Run @p op while holding the live pipeline render lock.
+   * @brief Run @p op on the working document of the session owner thread.
    *
-   * @p settle publishes a typed batch whose live document already holds after
-   * values. Default fakes reject. Must not be called from a GUI pointer callback
-   * that still needs the GUI thread for present.
+   * @p settle publishes a typed batch whose working document already holds the after values.
+   * The history publishes the resulting preview (and, when the sequence is closed, committed)
+   * snapshot after @p op returns. Takes no render lock. Default fakes reject.
    */
-  virtual auto WithLockedLiveDocument(const EditorHistoryGuardHandle& /*guard*/,
-                                      const LockedMaskDocumentOp& /*op*/, std::string* error)
-      -> bool {
+  virtual auto WithWorkingDocument(const EditorHistoryGuardHandle& /*guard*/,
+                                   const MaskDocumentOp& /*op*/, std::string* error) -> bool {
     if (error != nullptr) {
-      *error = "Locked live document access is not supported by this history port";
+      *error = "Working document access is not supported by this history port";
     }
     return false;
   }
@@ -220,7 +222,7 @@ class IEditorHistoryPort {
    * @brief Replace load-only panel values with the selected node's fields.
    *
    * Does not mutate parameters, commit history, or request a photo render.
-   * Must not wait on the live render lock or an inflight present handshake.
+   * Must not wait on an inflight present handshake.
    * Default fakes succeed without storing a node.
    */
   virtual auto SetPanelProjectionNode(const EditorHistoryGuardHandle& /*guard*/,
@@ -512,17 +514,6 @@ class IEditorRenderSubmitPort {
       on_idle(session_generation);
     }
   }
-  /// Cancel a session and wait until production workers no longer use its
-  /// presentation sink. Test/fake ports keep the historical synchronous
-  /// behavior through this default implementation.
-  virtual void CancelSessionAndWait(std::uint64_t session_generation) {
-    CancelSession(session_generation);
-  }
-  /// Wait until pending/in-flight renders for this image-load request finish.
-  /// Does not cancel — used when the next owner-thread op (history rebuild)
-  /// should simply queue behind the current frame. Default is a no-op for
-  /// fakes that never run real workers.
-  virtual void WaitForSessionIdle(std::uint64_t /*session_generation*/) {}
   /// Stamps the active image-load request and cancels pending/in-flight work for
   /// other image-load requests.
   virtual void SetActiveImageLoadRequest(std::uint64_t image_load_request_id) = 0;

@@ -110,8 +110,8 @@ using EditorParameterWrite = std::variant<
  * Compound operations are already complete values. The Model update runs once
  * after target validation. Topology and other Models stay intact.
  *
- * @pre Caller holds the shared executor render lock. @p target is complete and
- *      is not Mask.
+ * @pre Caller is the only writer of @p document (the editor session owner thread for its
+ *      working document). @p target is complete and is not Mask.
  * @param document Live document to mutate in place.
  * @param target Explicit node/adjustment identity; no missing identity is inferred.
  * @param write Operation produced by a control or by ParseEditorParameterWrite.

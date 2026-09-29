@@ -47,10 +47,6 @@ auto MakeSerializedPipelineState(const PipelineGuard& guard) -> nlohmann::json {
                                           guard.transaction_chain_hash(), *guard.document_);
 }
 
-void CacheRootDocument(PipelineGuard& guard, const PipelineDocument& document) {
-  guard.root_document_ = std::make_shared<PipelineDocument>(ClonePipelineDocument(document));
-}
-
 auto StoredRootRawColorContext(Storage& storage, sl_element_id_t id)
     -> std::optional<RawRuntimeColorContext> {
   try {
@@ -73,12 +69,6 @@ auto StoredRootRawColorContext(Storage& storage, sl_element_id_t id)
   } catch (...) {
     return std::nullopt;
   }
-}
-
-void SetPipelineHistoryState(PipelineGuard& guard, const CommitGraph& graph) {
-  guard.root_id_                          = graph.GetRootId();
-  guard.serialized_state_needs_writeback_ = false;
-  guard.commit_graph_                     = std::make_shared<CommitGraph>(graph);
 }
 
 /// True when storage still holds the materialized state that a writer read before its change.
@@ -183,9 +173,7 @@ void PipelineMgmtService::HandleEviction(sl_element_id_t evicted_id) {
       }
 
       pipeline_guard = it->second;
-      // An editor-owned guard is the image's only live history; it never leaves the cache
-      // while owned, even if a save path returned the pin it was holding.
-      if (pipeline_guard->pin_count_ == 0 && !pipeline_guard->editor_owned_) {
+      if (pipeline_guard->pin_count_ == 0) {
         pipeline_guard->pinned_ = false;
         loaded_pipelines_.erase(it);
         break;
@@ -435,8 +423,14 @@ auto PipelineMgmtService::LoadPipeline(sl_element_id_t id) -> std::shared_ptr<Pi
 
 auto PipelineMgmtService::EditorHoldsImage(sl_element_id_t id) -> bool {
   std::unique_lock<std::mutex> cache_lock(lock_);
-  const auto                   it = loaded_pipelines_.find(id);
-  return it != loaded_pipelines_.end() && it->second && it->second->editor_owned_;
+  return editor_leases_.contains(id);
+}
+
+void PipelineMgmtService::WriteElementPipelineJson(const PipelineGraphSnapshot& snapshot) {
+  const auto& document = snapshot.Document();
+  ValidateProductDocument(document, snapshot.ElementId());
+  storage_->GetElementStore().UpdatePipelineJsonByElementId(snapshot.ElementId(),
+                                                            document.ToJson());
 }
 
 auto PipelineMgmtService::AcquireCommittedSnapshot(sl_element_id_t id)
@@ -573,136 +567,104 @@ void PipelineMgmtService::InitializeImageRoot(sl_element_id_t id, PipelineDocume
   storage_->GetElementStore().UpdatePipelineJsonByElementId(id, document.ToJson());
 }
 
-void PipelineMgmtService::CreateMissingRootForEditor(
-    const std::shared_ptr<PipelineGuard>& pipeline) {
-  auto             db_guard = storage_->GetDatabase().GetConnectionGuard();
-  auto             db_lock  = db_guard.Lock();
-  CommitGraphStore graph_service(db_guard.conn_);
-  if (graph_service.GetImageEditState(pipeline->id_).has_value()) {
-    return;
-  }
-  // The live document may be rendered, so bind under the render lock, and never hold the render
-  // lock and the database lock together.
-  db_lock.unlock();
-  {
-    std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
-    BindWorkingSpaceDevelopData(*pipeline->document_);
-    ValidateProductDocument(*pipeline->document_, pipeline->id_);
-  }
-  db_lock.lock();
-  if (!graph_service.GetImageEditState(pipeline->id_).has_value()) {
-    (void)graph_service.CreateRootPipelinePersisted(pipeline->id_, *pipeline->document_,
-                                                    std::nullopt);
-  }
-}
-
-auto PipelineMgmtService::LoadEditorPipeline(sl_element_id_t id) -> std::shared_ptr<PipelineGuard> {
-  auto pipeline = LoadPipeline(id);
-  bool owned    = false;
+auto PipelineMgmtService::AcquireEditorLease(sl_element_id_t id) -> EditorHistoryLease {
   {
     std::unique_lock<std::mutex> cache_lock(lock_);
-    owned = pipeline->editor_owned_;
-  }
-  if (owned) {
-    ReleasePipelineUse(pipeline);
-    throw std::runtime_error("PipelineMgmtService: image " + std::to_string(id) +
-                             " is open in the editor; its history is owned by the editor session");
-  }
-  BindEditorStateFromStorage(pipeline);
-  return pipeline;
-}
-
-auto PipelineMgmtService::AcquireEditorPipeline(sl_element_id_t id)
-    -> std::shared_ptr<PipelineGuard> {
-  auto pipeline = LoadPipeline(id);
-  {
-    std::unique_lock<std::mutex> cache_lock(lock_);
-    if (pipeline->editor_owned_) {
-      cache_lock.unlock();
-      ReleasePipelineUse(pipeline);
+    if (!editor_leases_.insert(id).second) {
       throw std::runtime_error("PipelineMgmtService: image " + std::to_string(id) +
-                               " is already owned by an editor session");
+                               " is already held by an editor session");
     }
-    pipeline->editor_owned_ = true;
   }
   try {
-    BindEditorStateFromStorage(pipeline);
-  } catch (...) {
-    {
-      std::unique_lock<std::mutex> cache_lock(lock_);
-      pipeline->editor_owned_ = false;
-    }
-    throw;
-  }
-  return pipeline;
-}
+    auto                              stored         = ReadStoredHistory(*storage_, id);
+    const auto&                       graph          = stored.graph;
+    const auto                        expected_head  = graph.GetActiveVersionRef().head_commit_hash;
+    const auto                        expected_chain = graph.ChainHashForHead(expected_head);
 
-void PipelineMgmtService::ReleaseEditorPipeline(std::shared_ptr<PipelineGuard> pipeline) {
-  if (!pipeline) {
-    return;
-  }
-  {
-    std::unique_lock<std::mutex> cache_lock(lock_);
-    pipeline->editor_owned_ = false;
-  }
-  committed_snapshots_.EndEditorPublication(pipeline->id_);
-  ReleasePipelineUse(std::move(pipeline));
-}
-
-void PipelineMgmtService::BindEditorStateFromStorage(
-    const std::shared_ptr<PipelineGuard>& pipeline) {
-  const auto id = pipeline->id_;
-  try {
-    CreateMissingRootForEditor(pipeline);
-    const auto  stored     = ReadStoredHistory(*storage_, id);
-    const auto& graph      = stored.graph;
-    const auto& root_state = stored.root;
-
-    // History tip is sole authority. A checkpoint is used only when its root, head,
-    // and chain labels match the active Version.
-    SetPipelineHistoryState(*pipeline, graph);
-    CacheRootDocument(*pipeline, root_state.document);
-    const auto& state                     = graph.GetImageEditState();
-    const auto  expected_head             = graph.GetActiveVersionRef().head_commit_hash;
-    const auto  expected_chain            = graph.ChainHashForHead(expected_head);
-    bool        accepted_serialized_state = false;
+    // History tip is the sole authority. A checkpoint is used only when its root, head, and chain
+    // labels match the active Version; otherwise the document is replayed from the root.
+    std::shared_ptr<PipelineDocument> document;
+    const auto&                       state = graph.GetImageEditState();
     if (state.serialized_pipeline_state.has_value()) {
       const auto checkpoint = TryDecodeCheckpoint(*state.serialized_pipeline_state);
       if (checkpoint.has_value() && checkpoint->root_id == graph.GetRootId() &&
           checkpoint->head_commit_hash == expected_head &&
           checkpoint->transaction_chain_hash == expected_chain) {
-        try {
-          auto document = BuildDocumentFromCheckpoint(*checkpoint, root_state);
-          std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
-          pipeline->pipeline_->SetAcceleratorBackendPreference(accelerator_preference_);
-          (void)BindLivePipelineDocument(*pipeline, std::move(document));
-          accepted_serialized_state = true;
-        } catch (...) {
-          accepted_serialized_state = false;
-        }
+        document = BuildDocumentFromCheckpoint(*checkpoint, stored.root);
       }
     }
-
-    if (!accepted_serialized_state) {
-      ++editor_pipeline_history_rebuild_count_;
+    if (!document) {
       std::string replay_error;
-      auto        document = BuildDocumentFromRoot(graph, root_state, expected_head, &replay_error);
+      document = BuildDocumentFromRoot(graph, stored.root, expected_head, &replay_error);
       if (!document) {
         throw std::runtime_error(replay_error);
       }
-      std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
-      (void)BindLivePipelineDocument(*pipeline, std::move(document));
-      pipeline->serialized_state_needs_writeback_ = true;
+      std::unique_lock<std::mutex> cache_lock(lock_);
+      ++editor_pipeline_history_rebuild_count_;
     }
+    ValidateProductDocument(*document, id);
+    return EditorHistoryLease{
+        .graph_    = std::move(stored.graph),
+        .root_     = std::make_shared<const LoadedRootState>(std::move(stored.root)),
+        .document_ = std::move(document),
+    };
   } catch (const std::exception& e) {
-    ReleasePipelineUse(pipeline);
-    throw std::runtime_error("[ERROR] PipelineMgmtService: editor history validation failed for " +
-                             std::to_string(id) + ": " + e.what());
-  } catch (...) {
-    ReleasePipelineUse(pipeline);
-    throw std::runtime_error("[ERROR] PipelineMgmtService: editor history validation failed for " +
-                             std::to_string(id) + ": unknown error");
+    {
+      std::unique_lock<std::mutex> cache_lock(lock_);
+      editor_leases_.erase(id);
+    }
+    throw std::runtime_error("PipelineMgmtService: editor history of image " + std::to_string(id) +
+                             " cannot be loaded: " + e.what());
   }
+}
+
+void PipelineMgmtService::ReleaseEditorLease(sl_element_id_t id) {
+  {
+    std::unique_lock<std::mutex> cache_lock(lock_);
+    if (editor_leases_.erase(id) == 0) {
+      return;
+    }
+  }
+  if (const auto last = committed_snapshots_.EndEditorPublication(id)) {
+    WriteElementPipelineJson(*last);
+  }
+}
+
+auto PipelineMgmtService::PersistEditorHistory(CommitGraph&            graph,
+                                               const ImageEditState&   expected_materialized_state,
+                                               const PipelineDocument& document, std::string* error)
+    -> bool {
+  try {
+    const auto id = graph.GetElementId();
+    if (!EditorHoldsImage(id)) {
+      throw std::runtime_error("PipelineMgmtService: image " + std::to_string(id) +
+                               " is not held by an editor session");
+    }
+    ValidateProductDocument(document, id);
+    const auto head = graph.GetActiveVersionRef().head_commit_hash;
+    const auto materialization =
+        graph.CaptureMaterializationWithSerializedPipelineState(EncodePipelineDocumentCheckpoint(
+            graph.GetRootId(), head, graph.ChainHashForHead(head), document));
+    {
+      auto             db_guard = storage_->GetDatabase().GetConnectionGuard();
+      auto             db_lock  = db_guard.Lock();
+      CommitGraphStore graph_service(db_guard.conn_);
+      const auto       stored_state = graph_service.GetImageEditState(id);
+      if (!stored_state.has_value() ||
+          !SameMaterializedState(*stored_state, expected_materialized_state)) {
+        throw std::runtime_error(
+            "PipelineMgmtService: persisted history changed before editor history persistence");
+      }
+      graph_service.Materialize(materialization);
+    }
+    graph.ApplyMaterializedState(materialization.image_state);
+    return true;
+  } catch (const std::exception& ex) {
+    if (error != nullptr) *error = ex.what();
+  } catch (...) {
+    if (error != nullptr) *error = "PipelineMgmtService: editor history persistence failed";
+  }
+  return false;
 }
 
 void PipelineMgmtService::SavePipeline(std::shared_ptr<PipelineGuard> pipeline) {
@@ -819,201 +781,6 @@ void PipelineMgmtService::ReleasePipelineUse(std::shared_ptr<PipelineGuard> pipe
   CleanupIdlePipelineResources(pipeline);
 }
 
-auto PipelineMgmtService::PersistEditorHistoryState(
-    const std::shared_ptr<PipelineGuard>& pipeline,
-    const ImageEditState& expected_materialized_state, std::string* error) -> bool {
-  if (!pipeline || !pipeline->commit_graph_) {
-    if (error != nullptr) {
-      *error = "PipelineMgmtService: history persistence requires a loaded editor graph";
-    }
-    return false;
-  }
-
-  try {
-    auto             db_guard = storage_->GetDatabase().GetConnectionGuard();
-    auto             db_lock  = db_guard.Lock();
-    CommitGraphStore graph_service(db_guard.conn_);
-    auto             stored_graph = graph_service.LoadGraph(pipeline->id_);
-    if (!stored_graph.has_value()) {
-      throw std::runtime_error("PipelineMgmtService: persisted editor graph is missing");
-    }
-
-    if (!SameMaterializedState(stored_graph->GetImageEditState(), expected_materialized_state)) {
-      throw std::runtime_error(
-          "PipelineMgmtService: persisted history changed before editor history persistence");
-    }
-
-    // Logical head is only the live CommitGraph active Version (no guard cache).
-    auto& graph = *pipeline->commit_graph_;
-    if (graph.GetElementId() != pipeline->id_ || graph.GetRootId() != pipeline->root_id_) {
-      throw std::runtime_error(
-          "PipelineMgmtService: live history identity changed before editor history persistence");
-    }
-
-    const auto materialization = graph.CaptureMaterializationClearingSerializedPipelineState();
-    graph_service.Materialize(materialization);
-    pipeline->commit_graph_->ApplyMaterializedState(materialization.image_state);
-    pipeline->serialized_state_needs_writeback_ = false;
-    return true;
-  } catch (const std::exception& ex) {
-    if (error != nullptr) *error = ex.what();
-  } catch (...) {
-    if (error != nullptr) *error = "PipelineMgmtService: editor history persistence failed";
-  }
-  return false;
-}
-
-auto PipelineMgmtService::CheckoutVersion(const std::shared_ptr<PipelineGuard>& pipeline,
-                                          const version_ref_id_t& version_id, std::string* error)
-    -> bool {
-  if (!pipeline || !pipeline->pipeline_ || !pipeline->commit_graph_ || !pipeline->document_) {
-    if (error != nullptr) {
-      *error =
-          "PipelineMgmtService: checkout requires a loaded editor pipeline with a commit graph";
-    }
-    return false;
-  }
-
-  auto&      graph            = *pipeline->commit_graph_;
-  const auto prior_version_id = graph.GetActiveVersionId();
-  if (prior_version_id == version_id) {
-    return true;
-  }
-
-  head_commit_hash_t target_head;
-  try {
-    target_head = graph.GetVersionRef(version_id).head_commit_hash;
-    (void)FirstParentCommitsForHead(graph, target_head);
-  } catch (const std::exception& ex) {
-    if (error != nullptr) {
-      *error = ex.what();
-    }
-    return false;
-  }
-
-  std::optional<LoadedRootState> root_state;
-  {
-    auto             db_guard = storage_->GetDatabase().GetConnectionGuard();
-    auto             db_lock  = db_guard.Lock();
-    CommitGraphStore graph_service(db_guard.conn_);
-    const auto       root_encoded =
-        graph_service.GetRootSerializedPipelineState(pipeline->id_, graph.GetRootId());
-    if (!root_encoded.has_value()) {
-      if (error != nullptr) {
-        *error = "PipelineMgmtService: immutable root state is missing for checkout";
-      }
-      return false;
-    }
-    root_state = TryDecodeRootState(*root_encoded, pipeline->id_, graph.GetRootId());
-    if (!root_state.has_value()) {
-      if (error != nullptr) {
-        *error = "PipelineMgmtService: immutable root state is invalid for checkout";
-      }
-      return false;
-    }
-  }
-  try {
-    BindSourceDngProfiles(*storage_, pipeline->id_, *root_state);
-  } catch (const std::exception& ex) {
-    if (error != nullptr) {
-      *error = ex.what();
-    }
-    return false;
-  }
-  CacheRootDocument(*pipeline, root_state->document);
-
-  // Build phase: nothing below this point changes the guard until the swap.
-  std::string replay_error;
-  auto        document = BuildDocumentFromRoot(graph, *root_state, target_head, &replay_error);
-  if (!document) {
-    if (error != nullptr) {
-      *error = replay_error.empty() ? "PipelineMgmtService: checkout replay failed" : replay_error;
-    }
-    return false;
-  }
-
-  // Swap phase: the target Version was resolved above, so neither step can fail.
-  {
-    std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
-    graph.SetActiveVersionId(version_id);
-    (void)BindLivePipelineDocument(*pipeline, std::move(document));
-  }
-  pipeline->serialized_state_needs_writeback_ = true;
-  pipeline->dirty_                            = true;
-  return true;
-}
-
-auto PipelineMgmtService::RebuildActiveEditorPipeline(
-    const std::shared_ptr<PipelineGuard>& pipeline, std::string* error) -> bool {
-  if (!pipeline || !pipeline->pipeline_ || !pipeline->commit_graph_) {
-    if (error != nullptr) {
-      *error =
-          "PipelineMgmtService: active Version rebuild requires a loaded editor pipeline with a "
-          "commit graph";
-    }
-    return false;
-  }
-
-  auto&                          graph = *pipeline->commit_graph_;
-  std::optional<LoadedRootState> root_state;
-  {
-    auto             db_guard = storage_->GetDatabase().GetConnectionGuard();
-    auto             db_lock  = db_guard.Lock();
-    CommitGraphStore graph_service(db_guard.conn_);
-    const auto       root_encoded =
-        graph_service.GetRootSerializedPipelineState(pipeline->id_, graph.GetRootId());
-    if (!root_encoded.has_value()) {
-      if (error != nullptr) {
-        *error = "PipelineMgmtService: immutable root state is missing for active Version rebuild";
-      }
-      return false;
-    }
-    root_state = TryDecodeRootState(*root_encoded, pipeline->id_, graph.GetRootId());
-    if (!root_state.has_value()) {
-      if (error != nullptr) {
-        *error = "PipelineMgmtService: immutable root state is invalid for active Version rebuild";
-      }
-      return false;
-    }
-  }
-  try {
-    BindSourceDngProfiles(*storage_, pipeline->id_, *root_state);
-  } catch (const std::exception& ex) {
-    if (error != nullptr) {
-      *error = ex.what();
-    }
-    return false;
-  }
-  CacheRootDocument(*pipeline, root_state->document);
-
-  ++editor_pipeline_history_rebuild_count_;
-  std::string        replay_error;
-  head_commit_hash_t active_head;
-  try {
-    active_head = graph.GetActiveVersionRef().head_commit_hash;
-  } catch (const std::exception& ex) {
-    replay_error = ex.what();
-  }
-  auto document = replay_error.empty()
-                      ? BuildDocumentFromRoot(graph, *root_state, active_head, &replay_error)
-                      : nullptr;
-  if (!document) {
-    if (error != nullptr) {
-      *error = "PipelineMgmtService: active Version rebuild failed: " +
-               (replay_error.empty() ? std::string("unknown error") : replay_error);
-    }
-    return false;
-  }
-
-  {
-    std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
-    (void)BindLivePipelineDocument(*pipeline, std::move(document));
-  }
-  pipeline->serialized_state_needs_writeback_ = true;
-  pipeline->dirty_                            = true;
-  return true;
-}
-
 auto PipelineMgmtService::CollectUnreachableEditCommits() -> std::size_t {
   auto             db_guard = storage_->GetDatabase().GetConnectionGuard();
   auto             db_lock  = db_guard.Lock();
@@ -1096,6 +863,7 @@ void PipelineMgmtService::SetAcceleratorBackendPreference(AcceleratorBackendPref
 
 void PipelineMgmtService::Sync() {
   std::vector<std::shared_ptr<PipelineGuard>> pipelines;
+  std::vector<sl_element_id_t>                leased;
   {
     std::unique_lock<std::mutex> cache_lock(lock_);
     pipelines.reserve(loaded_pipelines_.size());
@@ -1105,10 +873,16 @@ void PipelineMgmtService::Sync() {
         pipelines.push_back(pipeline_guard);
       }
     }
+    leased.assign(editor_leases_.begin(), editor_leases_.end());
   }
 
   for (const auto& pipeline_guard : pipelines) {
     SyncDirtyPipelineDocument(pipeline_guard);
+  }
+  for (const auto id : leased) {
+    if (const auto published = committed_snapshots_.EditorPublished(id)) {
+      WriteElementPipelineJson(*published);
+    }
   }
 }
 

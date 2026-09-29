@@ -6,53 +6,53 @@
 
 #include <gtest/gtest.h>
 
-#include <memory>
+#include <string>
 
+#include "../support/editor_lease_test_support.hpp"
 #include "app/pipeline_service.hpp"
-#include "edit/pipeline/pipeline_executor.hpp"
 
 namespace alcedo::ui {
 namespace {
 
-auto MakeGuard(sl_element_id_t element_id) -> std::shared_ptr<alcedo::PipelineGuard> {
-  auto guard       = std::make_shared<alcedo::PipelineGuard>();
-  guard->id_       = element_id;
-  guard->pipeline_ = std::make_shared<alcedo::PipelineExecutor>();
-  return guard;
-}
-
-TEST(EditorSessionPipelinePortTest, CachesLoadedGuardUntilRelease) {
-  auto                      loaded     = MakeGuard(42);
-  int                       load_count = 0;
+TEST(EditorSessionPipelinePortTest, HeldLeaseExposesPreviewUntilRelease) {
+  int                       acquire_count = 0;
 
   EditorSessionPipelinePort port;
   port.SetServices(EditorSessionPipelineMappers{{}, [&](sl_element_id_t element_id) {
-                                                   ++load_count;
-                                                   EXPECT_EQ(element_id, 42u);
-                                                   return loaded;
-                                                 }});
+                                                  ++acquire_count;
+                                                  EXPECT_EQ(element_id, 42u);
+                                                  return alcedo::test::MakeInMemoryEditorLease(
+                                                      element_id);
+                                                }});
 
-  const auto handle = port.Acquire(42, nullptr);
-  ASSERT_TRUE(handle.valid);
-  EXPECT_EQ(port.CurrentGuard(42), nullptr);
+  EXPECT_EQ(port.CurrentPreview(42), nullptr);
 
-  const auto first = port.EnsureLoaded(42, nullptr);
-  ASSERT_EQ(first, loaded);
-  EXPECT_EQ(port.EnsureLoaded(42, nullptr), loaded);
-  EXPECT_EQ(load_count, 1);
-  EXPECT_EQ(port.CurrentGuard(42), loaded);
+  std::string error;
+  const auto  lease = port.AcquireLease(42, &error);
+  ASSERT_TRUE(lease.has_value()) << error;
+  ASSERT_NE(lease->graph_, nullptr);
+  ASSERT_NE(lease->root_, nullptr);
+  ASSERT_NE(lease->document_, nullptr);
+  EXPECT_EQ(acquire_count, 1);
+  EXPECT_EQ(port.CurrentPreview(42), lease->document_->CurrentPreview());
+  EXPECT_NE(port.CurrentPreview(42), nullptr);
 
-  port.Release(handle);
-  EXPECT_EQ(port.CurrentGuard(42), nullptr);
+  EXPECT_FALSE(port.AcquireLease(42, &error).has_value());
+  EXPECT_EQ(error, "The editor already holds image 42");
+  EXPECT_EQ(acquire_count, 1);
+
+  port.ReleaseLease(42);
+  EXPECT_EQ(port.CurrentPreview(42), nullptr);
 }
 
-TEST(EditorSessionPipelinePortTest, ReportsUnavailableLoader) {
+TEST(EditorSessionPipelinePortTest, AcquireLeaseReportsUnavailableService) {
   EditorSessionPipelinePort port;
   port.SetServices({});
 
   std::string error;
-  EXPECT_EQ(port.EnsureLoaded(42, &error), nullptr);
+  EXPECT_FALSE(port.AcquireLease(42, &error).has_value());
   EXPECT_EQ(error, "Pipeline service is unavailable");
+  EXPECT_EQ(port.CurrentPreview(42), nullptr);
 }
 
 }  // namespace

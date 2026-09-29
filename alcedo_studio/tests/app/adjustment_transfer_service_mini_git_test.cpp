@@ -126,43 +126,39 @@ TEST_F(AdjustmentTransferPasteMergeTest,
   EXPECT_EQ(original_ref.head_commit_hash, edited_head);
 }
 
-/// Paste with an empty package returns an error.
-/// Library Paste (AdjustmentTransferApplyCoordinator flow): the pasted Version document is built
-/// from the root and bound by swapping the pointer.
-TEST_F(AdjustmentTransferPasteMergeTest, PasteAsNewVersionBindsTargetDocumentWithoutMirror) {
+/// Library Paste (AdjustmentTransferApplyCoordinator flow): the pasted Version is applied to a
+/// private copy of the stored history and persisted in one step; its document is the root replayed
+/// through the paste batch, and the stored history read before the paste is not changed.
+TEST_F(AdjustmentTransferPasteMergeTest,
+       LibraryPastePersistsTheReplayedRootDocumentOfTheNewVersion) {
   constexpr sl_element_id_t kElement = 303;
-  auto                      guard    = pipeline_service_->LoadEditorPipeline(kElement);
-  ASSERT_TRUE(guard && guard->pipeline_ && guard->commit_graph_ && guard->root_document_);
-  auto&          graph = *guard->commit_graph_;
+  pipeline_service_->InitializeImageRoot(kElement, CreateDefaultPipelineDocument(), nullptr);
+  const auto base = pipeline_service_->LoadHistorySnapshot(kElement);
+  ASSERT_TRUE(base.graph_ && base.root_);
+  const auto  prior_version  = base.graph_->GetActiveVersionId();
+  const auto  prior_exposure = DocumentExposureEv(base.root_->document);
 
-  const auto prior_document = guard->document_;
-  const auto prior_lineage  = guard->lineage_;
-  const auto prior_exposure = DocumentExposureEv(*prior_document);
-  const auto prior_version  = graph.GetActiveVersionId();
-  const auto expected_state = graph.GetImageEditState();
-
-  const auto pasted         = AdjustmentTransferService::PasteAsRootRelativeVersion(
-      graph, *guard->root_document_, MakeExposurePackage(1.75f), "Pasted");
+  CommitGraph graph          = *base.graph_;
+  const auto  pasted         = AdjustmentTransferService::PasteAsRootRelativeVersion(
+      graph, base.root_->document, MakeExposurePackage(1.75f), "Pasted");
   ASSERT_TRUE(pasted.pasted) << pasted.error;
-  std::string error;
-  ASSERT_TRUE(pipeline_service_->RebuildActiveEditorPipeline(guard, &error)) << error;
+  const auto snapshot = pipeline_service_->PersistHistory(base, graph);
+  ASSERT_NE(snapshot, nullptr);
 
   EXPECT_EQ(graph.GetActiveVersionId(), pasted.new_version_id);
   EXPECT_NE(graph.GetActiveVersionId(), prior_version);
-  EXPECT_EQ(guard->working_head_commit_hash(), pasted.new_head);
-  EXPECT_NE(guard->document_, prior_document);
-  EXPECT_DOUBLE_EQ(DocumentExposureEv(*guard->document_), 1.75);
-  EXPECT_DOUBLE_EQ(DocumentExposureEv(*prior_document), prior_exposure)
-      << "the swapped-out document is not changed";
-  // The swap takes a new lineage, so the next render releases the prior document's resources.
-  EXPECT_FALSE(guard->lineage_.Empty());
-  EXPECT_NE(guard->lineage_, prior_lineage);
-  EXPECT_TRUE(guard->serialized_state_needs_writeback_);
+  EXPECT_EQ(snapshot->Head(), pasted.new_head);
+  EXPECT_DOUBLE_EQ(DocumentExposureEv(snapshot->Document()), 1.75);
+  EXPECT_EQ(base.graph_->GetActiveVersionId(), prior_version)
+      << "the history read before the paste is not changed";
+  EXPECT_DOUBLE_EQ(DocumentExposureEv(base.root_->document), prior_exposure);
 
-  ASSERT_TRUE(pipeline_service_->PersistEditorHistoryState(guard, expected_state, &error)) << error;
-  pipeline_service_->SavePipeline(guard);
+  const auto stored = pipeline_service_->LoadHistorySnapshot(kElement);
+  EXPECT_EQ(stored.graph_->GetActiveVersionId(), pasted.new_version_id);
+  EXPECT_EQ(stored.graph_->GetActiveVersionRef().head_commit_hash, pasted.new_head);
 }
 
+/// Paste with an empty package returns an error.
 TEST_F(AdjustmentTransferPasteMergeTest, PasteWithEmptyPackageReturnsError) {
   const auto                element_id = test::EditorMiniGitProjectFixture::kElementA;
   auto*                     graph      = project_.graph(element_id).get();

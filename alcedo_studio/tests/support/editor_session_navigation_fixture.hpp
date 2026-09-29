@@ -73,7 +73,6 @@ class EditorSessionNavigationFixture {
   [[nodiscard]] auto render() -> EditorSessionRenderController& { return *render_; }
   [[nodiscard]] auto render_submit() -> FakeEditorRenderSubmitPort& { return *render_submit_; }
   [[nodiscard]] auto save_service() -> EditorSaveCheckpointService& { return *save_service_; }
-  [[nodiscard]] auto pipeline() -> FakeEditorPipelinePort& { return pipeline_->inner; }
   [[nodiscard]] auto history() -> FakeEditorHistoryPort& { return history_->inner; }
   [[nodiscard]] auto checkpoint_store() -> FakeEditorCheckpointStore& {
     return checkpoint_store_->inner;
@@ -84,21 +83,8 @@ class EditorSessionNavigationFixture {
  private:
   void                       RecordEvent(std::string name);
 
-  /// Pipeline port that records release_a / acquire_b into the event vector.
-  class TrackingPipelinePort final : public IEditorPipelinePort {
-   public:
-    explicit TrackingPipelinePort(EditorSessionNavigationFixture* owner) : owner_(owner) {}
-    auto Acquire(sl_element_id_t element_id, std::string* error)
-        -> EditorPipelineGuardHandle override;
-    void                   Release(const EditorPipelineGuardHandle& guard) override;
-
-    FakeEditorPipelinePort inner;
-
-   private:
-    EditorSessionNavigationFixture* owner_ = nullptr;
-  };
-
-  /// History port that records checkpoint_a when capturing A's save prefix.
+  /// History port that records release_a / acquire_b (the history takes and returns the editor
+  /// lease) and checkpoint_a when capturing A's save prefix.
   class TrackingHistoryPort final : public IEditorHistoryPort {
    public:
     explicit TrackingHistoryPort(EditorSessionNavigationFixture* owner) : owner_(owner) {}
@@ -161,7 +147,6 @@ class EditorSessionNavigationFixture {
     EditorSessionNavigationFixture* owner_ = nullptr;
   };
 
-  std::shared_ptr<TrackingPipelinePort>               pipeline_;
   std::shared_ptr<TrackingHistoryPort>                history_;
   std::shared_ptr<FakeEditorTaskPort>                 tasks_;
   std::shared_ptr<TrackingCheckpointStore>            checkpoint_store_;

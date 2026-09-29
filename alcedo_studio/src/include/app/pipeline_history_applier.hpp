@@ -25,8 +25,8 @@ class CommitGraph;
 /**
  * @brief Optional apply observers.
  *
- * @p after_successful_change runs after each applied change while the caller
- * still holds the render lock. Tests use it to observe intermediate documents
+ * @p after_successful_change runs after each applied change, before the next one.
+ * Tests use it to observe intermediate documents
  * and to inject a later-change failure.
  */
 struct PipelineHistoryApplyContext {
@@ -60,7 +60,7 @@ struct PipelineHistoryApplyContext {
  *
  * Validates the expected current side of each change before mutation. If change
  * @c n fails, inverse-applies changes @c n-1 through @c 1. Does not own UI,
- * storage, or rendering. Does not take the render lock; the caller must hold it.
+ * storage, or rendering. Takes no lock; the caller is the only writer of @p document.
  *
  * @param document Live writable document for the image.
  * @param batch Validated typed batch. Empty batches are rejected by Validate.
@@ -72,7 +72,8 @@ struct PipelineHistoryApplyContext {
  *         matches the pre-call hash: failed changes are inverse-applied when
  *         possible, and a pre-call clone is restored when graph validation fails
  *         after a structural batch.
- * @pre Caller holds the shared executor render lock.
+ * @pre Caller is the only writer of @p document (the editor session owner thread for its
+ *      working document).
  */
 auto ApplyPipelineEditBatch(PipelineDocument& document, const PipelineEditBatch& batch,
                             PipelineEditApplyDirection direction, std::string* error,
@@ -81,8 +82,8 @@ auto ApplyPipelineEditBatch(PipelineDocument& document, const PipelineEditBatch&
 /**
  * @brief Clone @p root_document and apply first-parent typed batch commits in order.
  *
- * Typed batches use @ref ApplyPipelineEditBatch. A failed change leaves the returned document unset;
- * the clone is discarded. Does not take the render lock.
+ * Typed batches use @ref ApplyPipelineEditBatch. A failed change leaves the returned document
+ * unset; the clone is discarded. Takes no lock.
  *
  * @param root_document Immutable image root DAG.
  * @param first_parent_commits Root-to-head first-parent commits, oldest first.

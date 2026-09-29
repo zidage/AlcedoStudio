@@ -142,9 +142,9 @@ class EditorSessionHistoryPort final : public alcedo::IEditorHistoryPort {
   auto SetPanelProjectionNode(const alcedo::EditorHistoryGuardHandle& guard,
                               const alcedo::NodeId& node_id, std::uint64_t session_generation,
                               std::string* error) -> bool override;
-  auto WithLockedLiveDocument(const alcedo::EditorHistoryGuardHandle& guard,
-                              const alcedo::IEditorHistoryPort::LockedMaskDocumentOp& op,
-                              std::string* error) -> bool override;
+  auto WithWorkingDocument(const alcedo::EditorHistoryGuardHandle&           guard,
+                           const alcedo::IEditorHistoryPort::MaskDocumentOp& op, std::string* error)
+      -> bool override;
   auto CaptureSaveCheckpoint(const alcedo::EditorHistoryGuardHandle& guard, std::string* error)
       -> std::shared_ptr<const alcedo::EditorMiniGitSaveCapture> override;
   auto DiscardMaterializedJournalThrough(const alcedo::EditorHistoryGuardHandle& guard,
@@ -154,9 +154,10 @@ class EditorSessionHistoryPort final : public alcedo::IEditorHistoryPort {
                                             std::string* error) -> bool override;
 
  private:
-  /// Publish the committed snapshot of @p guard's image after a history operation (the
-  /// operation ran while the argument was evaluated) and return that operation's @p result.
-  auto PublishCommittedAfter(const alcedo::EditorHistoryGuardHandle& guard, bool result) -> bool;
+  /// Publish the preview and committed snapshots of @p guard's image after an operation that may
+  /// write the working document (the operation ran while the argument was evaluated) and return
+  /// that operation's @p result.
+  auto PublishAfterWrite(const alcedo::EditorHistoryGuardHandle& guard, bool result) -> bool;
 
   std::unique_ptr<EditorHistoryState>        state_;
   std::unique_ptr<EditorHistoryProjection>   projection_;

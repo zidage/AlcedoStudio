@@ -23,6 +23,7 @@
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_snapshot.hpp"
+#include "edit/history/commit_graph.hpp"
 #include "edit/history/mini_git_working_history.hpp"
 #include "edit/mask/mask_model.hpp"
 #include "grade_owned_mask_support.hpp"
@@ -65,26 +66,20 @@ class EditorCommittedSnapshotPublicationTest : public ::testing::Test {
     project_        = std::make_unique<alcedo::ProjectService>(db_path_, meta_path_,
                                                                alcedo::ProjectOpenMode::kCreateNew);
     pipelines_      = std::make_shared<alcedo::PipelineMgmtService>(project_->GetStorage());
-    pipeline_port_  = std::make_shared<EditorSessionPipelinePort>();
+    pipelines_->InitializeImageRoot(kElementId, alcedo::CreateDefaultPipelineDocument(), nullptr);
+    pipeline_port_ = std::make_shared<EditorSessionPipelinePort>();
     pipeline_port_->SetServices(
-        EditorSessionPipelineMappers{[pipelines = pipelines_]() { return pipelines; },
-                                     [pipelines = pipelines_](sl_element_id_t id) {
-                                       return pipelines->AcquireEditorPipeline(id);
-                                     }});
+        EditorSessionPipelineMappers{[pipelines = pipelines_]() { return pipelines; }, {}});
     history_.SetServices(
         EditorSessionHistoryPort::Services{[this](sl_element_id_t) { return journal_path_; }});
     history_.SetPipelinePort(pipeline_port_);
     std::string error;
     handle_ = history_.Acquire(kElementId, &error);
     ASSERT_TRUE(handle_.valid) << error;
-    guard_ = pipeline_port_->CurrentGuard(kElementId);
-    ASSERT_NE(guard_, nullptr);
   }
 
   void TearDown() override {
     history_.Release(handle_);
-    pipeline_port_->Release({kElementId, true});
-    guard_.reset();
     pipelines_.reset();
     project_.reset();
     std::error_code ec;
@@ -97,6 +92,37 @@ class EditorCommittedSnapshotPublicationTest : public ::testing::Test {
     return pipelines_->AcquireCommittedSnapshot(kElementId);
   }
 
+  /// Working document as the history published it after its last operation.
+  auto Working() -> std::shared_ptr<const alcedo::PipelineGraphSnapshot> {
+    return pipeline_port_->CurrentPreview(kElementId);
+  }
+
+  /// Copy of the editor's CommitGraph, read through the history port.
+  auto Graph() -> std::shared_ptr<const alcedo::CommitGraph> {
+    std::shared_ptr<const alcedo::CommitGraph>      graph;
+    std::shared_ptr<const alcedo::PipelineDocument> root_document;
+    std::string                                     error;
+    EXPECT_TRUE(history_.SnapshotHistorySource(handle_, &graph, &root_document, &error)) << error;
+    return graph;
+  }
+
+  auto Head() -> alcedo::head_commit_hash_t {
+    return Graph()->GetActiveVersionRef().head_commit_hash;
+  }
+
+  auto Chain() -> alcedo::transaction_chain_hash_t {
+    const auto graph = Graph();
+    return graph->ChainHashForHead(graph->GetActiveVersionRef().head_commit_hash);
+  }
+
+  /// True when the working document holds a value that is not committed: the save capture
+  /// refuses exactly that state.
+  auto HoldsUncommittedValues() -> bool {
+    std::string error;
+    const auto  capture = history_.CaptureSaveCheckpoint(handle_, &error);
+    return capture == nullptr && error.find("unsettled") != std::string::npos;
+  }
+
   std::filesystem::path                        db_path_;
   std::filesystem::path                        meta_path_;
   std::filesystem::path                        journal_path_;
@@ -105,7 +131,6 @@ class EditorCommittedSnapshotPublicationTest : public ::testing::Test {
   std::shared_ptr<EditorSessionPipelinePort>   pipeline_port_;
   EditorSessionHistoryPort                     history_;
   alcedo::EditorHistoryGuardHandle             handle_{};
-  std::shared_ptr<alcedo::PipelineGuard>       guard_;
 };
 
 TEST_F(EditorCommittedSnapshotPublicationTest, OpeningTheImagePublishesItsCommittedState) {
@@ -113,10 +138,10 @@ TEST_F(EditorCommittedSnapshotPublicationTest, OpeningTheImagePublishesItsCommit
   ASSERT_NE(committed, nullptr);
   EXPECT_TRUE(committed->IsCommitted());
   EXPECT_EQ(committed->ElementId(), kElementId);
-  EXPECT_EQ(committed->Head(), guard_->working_head_commit_hash());
-  EXPECT_EQ(committed->Chain(), guard_->transaction_chain_hash());
-  EXPECT_EQ(committed->Lineage(), guard_->lineage_);
-  EXPECT_EQ(committed->Document().ToJson(), guard_->document_->ToJson());
+  EXPECT_EQ(committed->Head(), Head());
+  EXPECT_EQ(committed->Chain(), Chain());
+  EXPECT_EQ(committed->Lineage(), Working()->Lineage());
+  EXPECT_EQ(committed->Document().ToJson(), Working()->Document().ToJson());
   EXPECT_EQ(pipelines_->CommittedSnapshotStorageLoadCount(), 0u)
       << "the image the editor holds is served from the editor's publication";
 }
@@ -127,7 +152,8 @@ TEST_F(EditorCommittedSnapshotPublicationTest, SliderPreviewIsNotPublishedUntilI
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(
       handle_, WithColorGradeTarget({"exposure", R"({"exposure":0.25})", false}), &error))
       << error;
-  EXPECT_TRUE(guard_->unsettled_preview_);
+  EXPECT_TRUE(HoldsUncommittedValues());
+  EXPECT_NEAR(ExposureEv(Working()->Document()), 0.25, 1e-6);
   EXPECT_EQ(Committed(), before) << "a preview value is not a committed state";
   EXPECT_DOUBLE_EQ(ExposureEv(Committed()->Document()), ExposureEv(before->Document()));
 
@@ -138,12 +164,12 @@ TEST_F(EditorCommittedSnapshotPublicationTest, SliderPreviewIsNotPublishedUntilI
   ASSERT_TRUE(history_.CommitAdjustment(
       handle_, WithColorGradeTarget({"exposure", R"({"exposure":0.75})", true}), &error))
       << error;
-  EXPECT_FALSE(guard_->unsettled_preview_);
+  EXPECT_FALSE(HoldsUncommittedValues());
   const auto settled = Committed();
   ASSERT_NE(settled, before);
   ASSERT_TRUE(settled->Head().has_value());
-  EXPECT_EQ(settled->Head(), guard_->working_head_commit_hash());
-  EXPECT_EQ(settled->Chain(), guard_->transaction_chain_hash());
+  EXPECT_EQ(settled->Head(), Head());
+  EXPECT_EQ(settled->Chain(), Chain());
   EXPECT_NEAR(ExposureEv(settled->Document()), 0.75, 1e-6);
 
   ASSERT_TRUE(history_.Undo(handle_, &error)) << error;
@@ -163,22 +189,22 @@ TEST_F(EditorCommittedSnapshotPublicationTest, CancelledPreviewLeavesThePublishe
   bool live_changed = false;
   ASSERT_TRUE(history_.RestoreUnsettledPreview(handle_, &live_changed, &error)) << error;
   EXPECT_TRUE(live_changed);
-  EXPECT_FALSE(guard_->unsettled_preview_);
+  EXPECT_FALSE(HoldsUncommittedValues());
   EXPECT_EQ(Committed(), before) << "restoring the committed values publishes nothing new";
 }
 
 TEST_F(EditorCommittedSnapshotPublicationTest, OpenMaskInputIsUncommittedUntilItsSettle) {
   std::string  error;
   const auto   before   = Committed();
-  const auto   grade_id = guard_->document_->DefaultGradeId();
+  const auto   grade_id = Working()->Document().DefaultGradeId();
   const MaskId mask_id{"mask.drag"};
 
   // First call: the input sequence writes a provisional mask and stays open, as a Mask drag does
   // between pointer samples.
-  ASSERT_TRUE(history_.WithLockedLiveDocument(
+  ASSERT_TRUE(history_.WithWorkingDocument(
       handle_,
       [&](alcedo::PipelineDocument& document, alcedo::MiniGitWorkingHistory&,
-          const alcedo::IEditorHistoryPort::LockedMaskSettle&, bool* input_open, std::string*) {
+          const alcedo::IEditorHistoryPort::MaskSettle&, bool* input_open, std::string*) {
         auto* grade =
             dynamic_cast<alcedo::ColorGradeNodeModel*>(document.Graph().FindNode(grade_id));
         grade->AddMask(alcedo::grade_mask_test::MakeRadialMask(mask_id), 0);
@@ -187,16 +213,17 @@ TEST_F(EditorCommittedSnapshotPublicationTest, OpenMaskInputIsUncommittedUntilIt
       },
       &error))
       << error;
-  EXPECT_TRUE(guard_->unsettled_preview_)
+  EXPECT_TRUE(HoldsUncommittedValues())
       << "an open Mask input is uncommitted exactly like a slider preview";
+  EXPECT_NE(Working()->Document().PrimaryGrade()->FindMask(mask_id), nullptr);
   EXPECT_EQ(Committed(), before);
   EXPECT_EQ(Committed()->Document().PrimaryGrade()->FindMask(mask_id), nullptr);
 
   // Second call: the pointer release settles the provisional mask as one commit and closes.
-  ASSERT_TRUE(history_.WithLockedLiveDocument(
+  ASSERT_TRUE(history_.WithWorkingDocument(
       handle_,
-      [&](alcedo::PipelineDocument& document, alcedo::MiniGitWorkingHistory&,
-          const alcedo::IEditorHistoryPort::LockedMaskSettle& settle, bool* input_open,
+      [&](alcedo::PipelineDocument&                     document, alcedo::MiniGitWorkingHistory&,
+          const alcedo::IEditorHistoryPort::MaskSettle& settle, bool* input_open,
           std::string* op_error) {
         const auto* grade = document.PrimaryGrade();
         const auto  batch = alcedo::MakeAddMaskBatch(
@@ -207,10 +234,10 @@ TEST_F(EditorCommittedSnapshotPublicationTest, OpenMaskInputIsUncommittedUntilIt
       },
       &error))
       << error;
-  EXPECT_FALSE(guard_->unsettled_preview_);
+  EXPECT_FALSE(HoldsUncommittedValues());
   const auto settled = Committed();
   ASSERT_NE(settled, before);
-  EXPECT_EQ(settled->Head(), guard_->working_head_commit_hash());
+  EXPECT_EQ(settled->Head(), Head());
   EXPECT_NE(settled->Document().PrimaryGrade()->FindMask(mask_id), nullptr);
 }
 
@@ -229,7 +256,6 @@ TEST_F(EditorCommittedSnapshotPublicationTest, ReleasedImageIsServedFromStorageW
   // Release without a save: the commit exists only in the journal, so storage still holds the
   // root state and the released entry no longer matches it.
   history_.Release(handle_);
-  pipeline_port_->Release({kElementId, true});
   handle_           = {};
   const auto stored = Committed();
   EXPECT_FALSE(stored->Head().has_value());

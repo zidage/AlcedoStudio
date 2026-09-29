@@ -470,6 +470,15 @@ def_library(EditorSerialFrameAdmission
         "${ALCEDO_INCLUDE_ROOT}/app/editor_monotonic_clock.hpp"
 )
 
+# Working document of the image open in the editor and the preview snapshots published from it.
+# The editor history writes it; the session and the render port read its previews.
+def_library(EditorWorkingDocument
+    SOURCES
+        "${ALCEDO_APP_ROOT}/editor_working_document.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_working_document.hpp"
+    PUBLIC_DEPS EditGraph
+)
+
 def_library(EditorSessionService
     SOURCES
         "${ALCEDO_APP_ROOT}/editor_session_service.cpp"
@@ -498,6 +507,8 @@ def_library(EditorSessionService
 if(ALCEDO_METAL_ENABLED)
     target_link_libraries(EditorSessionService PUBLIC alcedo::metal_cpp)
 endif()
+# The pipeline port publishes previews of the editor's working document.
+target_link_libraries(EditorSessionService PUBLIC EditorWorkingDocument)
 
 def_library(ImportService
     SOURCES "${ALCEDO_APP_ROOT}/import_service.cpp"

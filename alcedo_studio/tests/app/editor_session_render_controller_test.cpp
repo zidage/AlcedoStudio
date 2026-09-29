@@ -20,15 +20,13 @@ namespace {
 class EditorSessionRenderControllerTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    pipeline_    = std::make_shared<EditorSessionBootstrapPipelinePort>();
     history_     = std::make_shared<EditorSessionBootstrapHistoryPort>();
     scheduler_   = std::make_shared<EditorSessionBootstrapSchedulerPort>();
     coordinator_ = std::make_shared<EditorRenderCoordinator>(scheduler_);
 
     EditorSessionLifecycle::Dependencies life_deps;
-    life_deps.pipeline = pipeline_;
-    life_deps.history  = history_;
-    lifecycle_         = std::make_unique<EditorSessionLifecycle>(std::move(life_deps));
+    life_deps.history = history_;
+    lifecycle_        = std::make_unique<EditorSessionLifecycle>(std::move(life_deps));
 
     EditorSessionRenderController::Dependencies render_deps{
         coordinator_,
@@ -82,7 +80,6 @@ class EditorSessionRenderControllerTest : public ::testing::Test {
     }
   }
 
-  std::shared_ptr<EditorSessionBootstrapPipelinePort>  pipeline_;
   std::shared_ptr<EditorSessionBootstrapHistoryPort>   history_;
   std::shared_ptr<EditorSessionBootstrapSchedulerPort> scheduler_;
   std::shared_ptr<EditorRenderCoordinator>             coordinator_;

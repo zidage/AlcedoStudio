@@ -49,24 +49,16 @@ auto EditorSessionLifecycle::BeginAcquire(sl_element_id_t element_id, image_id_t
 auto EditorSessionLifecycle::AcquireGuards(std::string* error) -> bool {
   std::scoped_lock lock(mutex_);
   AssertMutationThread();
-  if (!deps_.pipeline || !deps_.history) {
+  if (!deps_.history) {
     if (error) {
-      *error = "Pipeline or history port is missing";
+      *error = "History port is missing";
     }
     state_      = EditorSessionState::Failed;
-    last_error_ = error != nullptr ? *error : "Pipeline or history port is missing";
-    return false;
-  }
-  pipeline_guard_ = deps_.pipeline->Acquire(identity_.element_id, error);
-  if (!pipeline_guard_.valid) {
-    state_      = EditorSessionState::Failed;
-    last_error_ = error != nullptr ? *error : "Pipeline acquire failed";
+    last_error_ = error != nullptr ? *error : "History port is missing";
     return false;
   }
   history_guard_ = deps_.history->Acquire(identity_.element_id, error);
   if (!history_guard_.valid) {
-    deps_.pipeline->Release(pipeline_guard_);
-    pipeline_guard_ = {};
     state_          = EditorSessionState::Failed;
     last_error_     = error != nullptr ? *error : "History acquire failed";
     return false;
@@ -100,11 +92,7 @@ auto EditorSessionLifecycle::ReleaseAfterCheckpoint() -> ReleaseOutcome {
   if (deps_.history && history_guard_.valid) {
     deps_.history->Release(history_guard_);
   }
-  history_guard_ = {};
-  if (deps_.pipeline && pipeline_guard_.valid) {
-    deps_.pipeline->Release(pipeline_guard_);
-  }
-  pipeline_guard_  = {};
+  history_guard_   = {};
   outcome.released = true;
   return outcome;
 }
@@ -116,10 +104,6 @@ void EditorSessionLifecycle::ReleaseGuards() {
     deps_.history->Release(history_guard_);
   }
   history_guard_ = {};
-  if (deps_.pipeline && pipeline_guard_.valid) {
-    deps_.pipeline->Release(pipeline_guard_);
-  }
-  pipeline_guard_ = {};
 }
 
 void EditorSessionLifecycle::CompleteClose() {

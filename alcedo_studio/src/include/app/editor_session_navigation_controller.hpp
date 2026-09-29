@@ -214,6 +214,8 @@ class EditorSessionNavigationController final {
   /// Continue to the target image after a successful save. Acquires guards and
   /// starts the first-frame render.
   void ContinueToTarget(sl_element_id_t element_id, image_id_t image_id, bool is_switch);
+  /// Cancel the frames of the sealed session. Switch and Close also wait until the in-flight
+  /// frame has left the viewport sink (render_idle); Version operations on the same image do not.
   void StartRenderIdleBarrier(ImageLoadRequestId image_load_request);
   void OnRenderSessionIdle(ImageLoadRequestId image_load_request);
   void TryCompletePendingAction();

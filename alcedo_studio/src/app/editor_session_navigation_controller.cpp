@@ -249,6 +249,18 @@ void EditorSessionNavigationController::StartRenderIdleBarrier(
     return;
   }
   state_->pending_action->sealed_image_load_request_id = image_load_request;
+  const auto kind                                      = state_->pending_action->kind;
+  if (kind != PendingEditorActionKind::SwitchImage &&
+      kind != PendingEditorActionKind::CloseEditor) {
+    // A Version operation keeps the image: frames render immutable preview snapshots on the
+    // session's own executor, so replacing the working document never waits for a frame. Only
+    // the frames of the old Version are cancelled.
+    render_.CancelSession(image_load_request);
+    state_->pending_action->render_idle = true;
+    return;
+  }
+  // Switch and Close release the image and hand the viewport to another state; the in-flight
+  // frame may still present to the viewport sink, so the action completes after it leaves.
   render_.CancelSession(image_load_request, [this](ImageLoadRequestId completed_request) {
     auto completion = [this, completed_request] { OnRenderSessionIdle(completed_request); };
     if (owner_poster_) {

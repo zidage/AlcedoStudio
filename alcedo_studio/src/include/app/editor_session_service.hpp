@@ -101,10 +101,10 @@ class IEditorSessionBackend {
     if (error != nullptr) *error = "History source snapshot is not supported";
     return false;
   }
-  /// Immutable PipelineDocument snapshot for GUI projections (Nodes page,
-  /// typed write targets). The owner publishes a fresh clone before every
-  /// change notification so GUI readers never dereference the live document
-  /// while the session thread mutates it. Empty when no image document is
+  /// Immutable PipelineDocument for GUI projections (Nodes page, typed write
+  /// targets): the preview the history published after its last write, before
+  /// any change notification, so GUI readers never dereference the working
+  /// document the session thread writes. Empty when no image document is
   /// loaded. Default fakes return null.
   [[nodiscard]] virtual auto pipeline_document() const
       -> std::shared_ptr<const PipelineDocument> {
@@ -140,7 +140,7 @@ class IEditorSessionBackend {
    * @brief Reproject load-only panel values from @p node_id.
    *
    * Does not enqueue an edit, commit history, or render. Does not wait for an
-   * inflight frame or take the live render lock.
+   * inflight frame.
    * Default fakes accept without changing stored projection.
    */
   virtual auto SetAdjustmentProjectionNode(const NodeId& /*node_id*/) -> EditorSessionResult {
@@ -312,7 +312,7 @@ class IEditorSessionBackend {
   /**
    * @brief Queue one Mask-creation command for owner-thread consume.
    *
-   * Does not take the render lock or mutate the live Grade. Latest Append
+   * Does not mutate the working Grade. Latest Append
    * samples with the same pointer identity coalesce. Default backends reject.
    */
   virtual auto EnqueueMaskCreation(EditorMaskCreationCommand /*command*/) -> EditorSessionResult {
@@ -335,8 +335,8 @@ class IEditorSessionBackend {
    * @brief Copy of queued Mask-creation commands. Empty when none are waiting.
    *
    * Synchronized with the Mask command queue. Latest non-ordered Append samples
-   * with the same pointer identity are already coalesced. Does not take the
-   * render lock or mutate the live Grade.
+   * with the same pointer identity are already coalesced. Does not mutate the
+   * working Grade.
    */
   [[nodiscard]] virtual auto PeekPendingMaskCommands() const
       -> std::vector<EditorMaskCreationCommand> {
@@ -367,8 +367,7 @@ class IEditorSessionBackend {
    * @brief Consume the next pending-input batch when the owner is idle.
    *
    * No-op on backends that do not own a pending-input queue. Must run on the
-   * session owner thread. Does not take the render lock from a GUI input
-   * callback.
+   * session owner thread.
    */
   virtual void               TryConsumePendingInput() {}
   virtual void               SetAdmissionDeadlineHandler(
@@ -769,10 +768,6 @@ class EditorSessionService final : public IEditorSessionBackend {
   /// the command executor after `delay_ns`. Installed as the admission's
   /// default deadline handler so pacing never waits on a GUI-thread timer.
   void ScheduleDeadlineConsume(std::int64_t delay_ns);
-  /// Clone the live PipelineDocument into `published_document_` for GUI
-  /// readers. Owner-thread only; called before every change notification so
-  /// the snapshot never lags the NotifyChange that follows it.
-  void PublishDocumentSnapshot();
   /// Copy the mask-creation controller's observable state into
   /// `mask_read_state_`. Owner-thread only; called after every mask command
   /// batch and abort while the controller is still bound to a live document.
@@ -780,8 +775,6 @@ class EditorSessionService final : public IEditorSessionBackend {
   void PublishRenderProgressIfChanged();
   void NoteExtraScheduleWait(const EditorPendingSequence& sequence, std::uint64_t request_id);
   void FinishSerialFrameIfNeeded(const EditorRenderResult& render_result);
-  auto DeferIfLiveOwnershipHeld(std::function<EditorSessionResult()> retry, std::string message)
-      -> std::optional<EditorSessionResult>;
   auto ConsumeTakenSequence(const EditorPendingSequence& sequence) -> EditorSessionResult;
   /// Apply and commit every queued edit of the current image now, bypassing
   /// render pacing. Every persisting seal (switch, close, Version change,
@@ -856,7 +849,8 @@ class EditorSessionService final : public IEditorSessionBackend {
   bool                                           publication_dirty_    = false;
   std::atomic<bool>                              consume_wakeup_posted_{false};
   bool                                           last_published_render_busy_ = false;
-  std::atomic<std::int64_t>                      last_live_pipeline_release_ns_{0};
+  /// When the last frame finished (ready, failed, or cancelled); preview diagnostics only.
+  std::atomic<std::int64_t>                      last_frame_finished_ns_{0};
   std::vector<EditorSessionResult>               results_;
   mutable std::mutex                             results_mutex_;
   std::optional<PendingHistoryCheckpoint>        pending_history_checkpoint_;
@@ -872,16 +866,6 @@ class EditorSessionService final : public IEditorSessionBackend {
   bool                                           package_available_ = false;
   EditorBackgroundActionRestrictions             background_restrictions_{};
   std::atomic<bool>                              pending_recovery_published_{false};
-  /// Owner-published frozen document (PipelineDocument::Freeze). `pipeline_document()`
-  /// returns it so GUI readers never touch the live PipelineDocument while the session thread
-  /// mutates it under the render lock. It shares unchanged nodes with the live document.
-  /// Replaced before each change notification.
-  mutable std::mutex                             document_snapshot_mutex_;
-  std::shared_ptr<const PipelineDocument>        published_document_;
-  /// DocumentRevisionFingerprint of published_document_ when it was frozen. Debug builds
-  /// check it before each replacement: a write that reached a frozen document is a
-  /// copy-on-write defect.
-  std::uint64_t                                  published_document_fingerprint_ = 0;
   /// Installed on `serial_admission_` so an empty SetAdmissionDeadlineHandler
   /// restores owner-thread deadline delivery instead of dropping wakeups.
   EditorSerialFrameAdmission::DeadlineHandler    default_deadline_handler_;

@@ -9,26 +9,27 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
-#include <future>
 #include <iterator>
-#include <thread>
 #include <variant>
 #include <vector>
 
-#include "app/editor_pipeline_command_service.hpp"
 #include "app/editor_history_types.hpp"
+#include "app/editor_pipeline_command_service.hpp"
 #include "app/pipeline_document_history.hpp"
 #include "app/pipeline_service.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/i_node_model.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
+#include "edit/graph/pipeline_graph_snapshot.hpp"
 #include "edit/history/mini_git_working_history.hpp"
 #include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/mask/mask_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "grade_owned_mask_support.hpp"
+#include "support/editor_history_port_test_reads.hpp"
+#include "support/editor_lease_test_support.hpp"
 #include "support/editor_parameter_target_test.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_commit_presentation.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_history_port.hpp"
@@ -41,7 +42,7 @@ using test::DrtPostFieldTarget;
 using test::WithColorGradeTarget;
 using test::WithDrtPostTarget;
 
-/// Real document, executor, history and WAL; no project/storage/UI fixture is needed.
+/// Real document, history and WAL; no project/storage/UI fixture is needed.
 class EditorDocumentHistoryTest : public ::testing::Test {
  protected:
   void SetUp() override {
@@ -53,17 +54,10 @@ class EditorDocumentHistoryTest : public ::testing::Test {
                         .parent_path() /
                     "build/tmp/nm1" / ("document_history_" + stamp + ".wal");
     std::filesystem::create_directories(journal_path_.parent_path());
-    guard_                = std::make_shared<PipelineGuard>();
-    guard_->id_           = 42;
-    guard_->pipeline_     = std::make_shared<PipelineExecutor>();
-    guard_->document_     = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
-    guard_->commit_graph_ = std::make_shared<CommitGraph>(CommitGraph::CreateEmpty(42));
-    guard_->root_id_      = guard_->commit_graph_->GetRootId();
-    guard_->root_document_ =
-        std::make_shared<PipelineDocument>(ClonePipelineDocument(*guard_->document_));
-    pipeline_             = std::make_shared<EditorSessionPipelinePort>();
-    pipeline_->SetServices(
-        EditorSessionPipelineMappers{{}, [this](sl_element_id_t) { return guard_; }});
+    lease_    = test::MakeInMemoryEditorLease(42);
+    pipeline_ = std::make_shared<EditorSessionPipelinePort>();
+    pipeline_->SetServices(EditorSessionPipelineMappers{
+        {}, [this](sl_element_id_t) { return test::CopyEditorLease(lease_); }});
     history_.SetPipelinePort(pipeline_);
     history_.SetServices(
         EditorSessionHistoryPort::Services{[this](sl_element_id_t) { return journal_path_; }});
@@ -73,8 +67,48 @@ class EditorDocumentHistoryTest : public ::testing::Test {
     std::error_code ec;
     std::filesystem::remove(journal_path_, ec);
   }
+  /// Start the next Acquire from a root and working document that also hold a clean Color
+  /// Grade @p node_id before DRT/Post.
+  void AddColorGradeToRoot(const NodeId& node_id) {
+    auto root_document = CreateDefaultPipelineDocument();
+    ASSERT_TRUE(AddCleanColorGrade(root_document, NodeId{"drt"}, node_id).empty());
+    lease_ = test::MakeInMemoryEditorLease(42, std::move(root_document));
+  }
+
+  /// Release image 42 and store its history and working document in lease_, so a test can change
+  /// what the next Acquire takes. The journal is removed: lease_ already holds its commits.
+  void ReleaseIntoLease(const EditorHistoryGuardHandle& handle) {
+    lease_.graph_ = *Graph();
+    lease_.document_ =
+        std::make_shared<PipelineDocument>(ClonePipelineDocument(Working()->Document()));
+    history_.Release(handle);
+    std::error_code ec;
+    std::filesystem::remove(journal_path_, ec);
+  }
+
+  auto Graph() -> std::shared_ptr<const CommitGraph> {
+    return test::EditorHistoryGraph(history_, 42);
+  }
+  auto Head() -> head_commit_hash_t { return test::EditorWorkingHead(history_, 42); }
+  auto Chain() -> transaction_chain_hash_t { return test::EditorWorkingChain(history_, 42); }
+  auto Working() -> std::shared_ptr<const PipelineGraphSnapshot> {
+    return test::EditorWorkingPreview(*pipeline_, 42);
+  }
+
+  /// Color Grade @p node_id of the working document as published by the last history operation.
+  /// The pointer stays valid until the next call; it does not follow later operations.
+  auto WorkingGrade(const NodeId& node_id) -> const ColorGradeNodeModel* {
+    held_preview_ = Working();
+    return held_preview_ ? dynamic_cast<const ColorGradeNodeModel*>(
+                               held_preview_->Document().Graph().FindNode(node_id))
+                         : nullptr;
+  }
+
   std::filesystem::path                      journal_path_;
-  std::shared_ptr<PipelineGuard>             guard_;
+  /// Preview that keeps the node returned by WorkingGrade alive.
+  std::shared_ptr<const PipelineGraphSnapshot> held_preview_;
+  /// History and documents that the next Acquire of image 42 takes (as a copy).
+  EditorHistoryLease                           lease_;
   std::shared_ptr<EditorSessionPipelinePort> pipeline_;
   EditorSessionHistoryPort                   history_;
 };
@@ -101,29 +135,29 @@ TEST_F(EditorDocumentHistoryTest, ProtectedGradeBatchRemovalKeepsDocumentAndHist
   std::string error;
   const auto handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  const auto before = guard_->document_->ToJson();
-  const auto count = guard_->commit_graph_->CommitCount();
-  const auto head = guard_->working_head_commit_hash();
-  auto batch = alcedo::MakeRemoveColorGradeBatch(
-      alcedo::CaptureRemoveColorGradeChange(*guard_->document_, NodeId{"grade.primary"}));
+  const auto before = Working()->Document().ToJson();
+  const auto count  = Graph()->CommitCount();
+  const auto head   = Head();
+  auto       batch  = alcedo::MakeRemoveColorGradeBatch(
+      alcedo::CaptureRemoveColorGradeChange(Working()->Document(), NodeId{"grade.primary"}));
   EXPECT_FALSE(history_.CommitPipelineEditBatch(handle, std::move(batch), &error));
   EXPECT_NE(error.find("grade.primary"), std::string::npos);
-  EXPECT_EQ(guard_->document_->ToJson(), before);
-  EXPECT_EQ(guard_->working_head_commit_hash(), head);
-  EXPECT_EQ(guard_->commit_graph_->CommitCount(), count);
+  EXPECT_EQ(Working()->Document().ToJson(), before);
+  EXPECT_EQ(Head(), head);
+  EXPECT_EQ(Graph()->CommitCount(), count);
 }
 
 TEST_F(EditorDocumentHistoryTest, SettledExposurePatchWritesPrimaryGradeDocumentNotOnlyStages) {
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  ASSERT_NE(guard_->document_, nullptr);
-  const auto before_hash = alcedo::CanonicalPipelineDocumentJson(*guard_->document_);
+  ASSERT_NE(Working(), nullptr);
+  const auto before_hash = alcedo::CanonicalPipelineDocumentJson(Working()->Document());
   auto       settled     = WithColorGradeTarget({"exposure", R"({"exposure_ev":2.25})", true});
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, settled, &error)) << error;
   ASSERT_TRUE(history_.CommitAdjustment(handle, settled, &error)) << error;
-  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"), 2.25f);
-  EXPECT_NE(alcedo::CanonicalPipelineDocumentJson(*guard_->document_), before_hash);
+  EXPECT_FLOAT_EQ(DocumentExposureEv(Working()->Document(), "grade.primary"), 2.25f);
+  EXPECT_NE(alcedo::CanonicalPipelineDocumentJson(Working()->Document()), before_hash);
 }
 
 TEST_F(EditorDocumentHistoryTest,
@@ -131,25 +165,23 @@ TEST_F(EditorDocumentHistoryTest,
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  const auto before_hash = alcedo::CanonicalPipelineDocumentJson(*guard_->document_);
+  const auto before_hash      = alcedo::CanonicalPipelineDocumentJson(Working()->Document());
   auto       missing_node = WithColorGradeTarget({"exposure", R"({"exposure_ev":3.0})", false});
   missing_node.target.node_id = alcedo::NodeId{};
   EXPECT_FALSE(history_.CaptureAdjustmentBeforePreview(handle, missing_node, &error));
   EXPECT_EQ(error, "Editor parameter target requires node_id");
-  EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(*guard_->document_), before_hash);
-  EXPECT_FALSE(guard_->working_head_commit_hash().has_value());
-  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"),
+  EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(Working()->Document()), before_hash);
+  EXPECT_FALSE(Head().has_value());
+  EXPECT_FLOAT_EQ(DocumentExposureEv(Working()->Document(), "grade.primary"),
                   alcedo::kDefaultPipelineExposureEv);
 }
 
 TEST_F(EditorDocumentHistoryTest, ProvisionalSequenceReusesTargetResolvedAtFirstPatch) {
+  AddColorGradeToRoot(alcedo::NodeId{"grade.extra"});
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  auto add_errors = alcedo::AddCleanColorGrade(*guard_->document_, alcedo::NodeId{"drt"},
-                                               alcedo::NodeId{"grade.extra"});
-  ASSERT_TRUE(add_errors.empty());
-  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.extra"), 0.0f);
+  EXPECT_FLOAT_EQ(DocumentExposureEv(Working()->Document(), "grade.extra"), 0.0f);
 
   auto first = WithColorGradeTarget({"exposure", R"({"exposure_ev":2.0})", false}, "grade.primary");
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, first, &error)) << error;
@@ -158,20 +190,20 @@ TEST_F(EditorDocumentHistoryTest, ProvisionalSequenceReusesTargetResolvedAtFirst
   auto settled = WithColorGradeTarget({"exposure", R"({"exposure_ev":4.0})", true}, "grade.extra");
   ASSERT_TRUE(history_.CommitAdjustment(handle, settled, &error)) << error;
 
-  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"), 4.0f);
-  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.extra"), 0.0f);
+  EXPECT_FLOAT_EQ(DocumentExposureEv(Working()->Document(), "grade.primary"), 4.0f);
+  EXPECT_FLOAT_EQ(DocumentExposureEv(Working()->Document(), "grade.extra"), 0.0f);
 }
 
 TEST_F(EditorDocumentHistoryTest, UnknownFieldRejectedLeavesDocumentHashAndHistoryHeadUnchanged) {
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  const auto before_hash = alcedo::CanonicalPipelineDocumentJson(*guard_->document_);
+  const auto before_hash = alcedo::CanonicalPipelineDocumentJson(Working()->Document());
   auto       patch       = WithColorGradeTarget({"not_a_supported_adjustment", R"({})", false});
   EXPECT_FALSE(history_.CaptureAdjustmentBeforePreview(handle, patch, &error));
   EXPECT_EQ(error, "Unknown editor adjustment field: not_a_supported_adjustment");
-  EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(*guard_->document_), before_hash);
-  EXPECT_FALSE(guard_->working_head_commit_hash().has_value());
+  EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(Working()->Document()), before_hash);
+  EXPECT_FALSE(Head().has_value());
 }
 
 TEST_F(EditorDocumentHistoryTest, UndoSettledExposureRestoresDocumentValue) {
@@ -181,12 +213,12 @@ TEST_F(EditorDocumentHistoryTest, UndoSettledExposureRestoresDocumentValue) {
   auto settled = WithColorGradeTarget({"exposure", R"({"exposure_ev":2.5})", true});
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, settled, &error)) << error;
   ASSERT_TRUE(history_.CommitAdjustment(handle, settled, &error)) << error;
-  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"), 2.5f);
+  EXPECT_FLOAT_EQ(DocumentExposureEv(Working()->Document(), "grade.primary"), 2.5f);
   ASSERT_TRUE(history_.Undo(handle, &error)) << error;
-  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"),
+  EXPECT_FLOAT_EQ(DocumentExposureEv(Working()->Document(), "grade.primary"),
                   alcedo::kDefaultPipelineExposureEv);
   ASSERT_TRUE(history_.Redo(handle, &error)) << error;
-  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"), 2.5f);
+  EXPECT_FLOAT_EQ(DocumentExposureEv(Working()->Document(), "grade.primary"), 2.5f);
 }
 
 TEST_F(EditorDocumentHistoryTest, IncompleteLaterPatchRejectedLeavesLockedDocumentUnchanged) {
@@ -195,14 +227,14 @@ TEST_F(EditorDocumentHistoryTest, IncompleteLaterPatchRejectedLeavesLockedDocume
   ASSERT_TRUE(handle.valid) << error;
   auto first = WithColorGradeTarget({"exposure", R"({"exposure_ev":2.0})", false});
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, first, &error)) << error;
-  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"), 2.0f);
+  EXPECT_FLOAT_EQ(DocumentExposureEv(Working()->Document(), "grade.primary"), 2.0f);
 
   auto missing_node = WithColorGradeTarget({"contrast", R"({"contrast":40.0})", false});
   missing_node.target.node_id = alcedo::NodeId{};
   EXPECT_FALSE(history_.CaptureAdjustmentBeforePreview(handle, missing_node, &error));
   EXPECT_EQ(error, "Editor parameter target requires node_id");
-  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"), 2.0f);
-  EXPECT_FALSE(guard_->working_head_commit_hash().has_value());
+  EXPECT_FLOAT_EQ(DocumentExposureEv(Working()->Document(), "grade.primary"), 2.0f);
+  EXPECT_FALSE(Head().has_value());
 }
 
 TEST_F(EditorDocumentHistoryTest, JournalAppendFailureRestoresDocumentExposureEv) {
@@ -219,11 +251,11 @@ TEST_F(EditorDocumentHistoryTest, JournalAppendFailureRestoresDocumentExposureEv
   ASSERT_TRUE(handle.valid) << error;
   auto settled = WithColorGradeTarget({"exposure", R"({"exposure_ev":2.25})", true});
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, settled, &error)) << error;
-  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"), 2.25f);
+  EXPECT_FLOAT_EQ(DocumentExposureEv(Working()->Document(), "grade.primary"), 2.25f);
   EXPECT_FALSE(history_.CommitAdjustment(handle, settled, &error));
   EXPECT_FALSE(error.empty());
-  EXPECT_FALSE(guard_->working_head_commit_hash().has_value());
-  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"),
+  EXPECT_FALSE(Head().has_value());
+  EXPECT_FLOAT_EQ(DocumentExposureEv(Working()->Document(), "grade.primary"),
                   alcedo::kDefaultPipelineExposureEv);
   std::error_code ec;
   std::filesystem::remove(journal_path_.parent_path() / "not-a-directory", ec);
@@ -236,9 +268,9 @@ TEST_F(EditorDocumentHistoryTest, CaptureAppliesTypedScalarWriteWhenParamsJsonIs
   auto patch = WithColorGradeTarget(test::ScalarPatch("exposure", 2.25f, true));
   patch.params_json.clear();
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, patch, &error)) << error;
-  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"), 2.25f);
+  EXPECT_FLOAT_EQ(DocumentExposureEv(Working()->Document(), "grade.primary"), 2.25f);
   ASSERT_TRUE(history_.CommitAdjustment(handle, patch, &error)) << error;
-  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"), 2.25f);
+  EXPECT_FLOAT_EQ(DocumentExposureEv(Working()->Document(), "grade.primary"), 2.25f);
 }
 
 TEST_F(EditorDocumentHistoryTest, DiscardUncommittedPreviewRestoresDocumentExposureEv) {
@@ -247,9 +279,9 @@ TEST_F(EditorDocumentHistoryTest, DiscardUncommittedPreviewRestoresDocumentExpos
   ASSERT_TRUE(handle.valid) << error;
   auto preview = WithColorGradeTarget({"exposure", R"({"exposure_ev":2.25})", false});
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, preview, &error)) << error;
-  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"), 2.25f);
+  EXPECT_FLOAT_EQ(DocumentExposureEv(Working()->Document(), "grade.primary"), 2.25f);
   ASSERT_TRUE(history_.DiscardUnmaterializedChanges(handle, &error)) << error;
-  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"),
+  EXPECT_FLOAT_EQ(DocumentExposureEv(Working()->Document(), "grade.primary"),
                   alcedo::kDefaultPipelineExposureEv);
 }
 
@@ -257,7 +289,7 @@ TEST_F(EditorDocumentHistoryTest, MaskTargetWriteIsRejected) {
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  const auto before_hash = alcedo::CanonicalPipelineDocumentJson(*guard_->document_);
+  const auto before_hash = alcedo::CanonicalPipelineDocumentJson(Working()->Document());
   alcedo::EditorAdjustmentPatch patch = test::ScalarPatch("exposure", 3.0f);
   patch.target.owner_kind             = alcedo::EditorParameterOwnerKind::ColorGradeMask;
   patch.target.node_id                = alcedo::NodeId{"grade.primary"};
@@ -266,42 +298,41 @@ TEST_F(EditorDocumentHistoryTest, MaskTargetWriteIsRejected) {
   patch.target.field_key              = "exposure";
   EXPECT_FALSE(history_.CaptureAdjustmentBeforePreview(handle, patch, &error));
   EXPECT_EQ(error, "Mask parameter targets are rejected until NM3");
-  EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(*guard_->document_), before_hash);
-  EXPECT_FALSE(guard_->working_head_commit_hash().has_value());
+  EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(Working()->Document()), before_hash);
+  EXPECT_FALSE(Head().has_value());
 }
 
 TEST_F(EditorDocumentHistoryTest, InvalidParameterLeavesLiveValueAndHistoryHeadUnchanged) {
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  const auto before = guard_->document_->ToJson();
+  const auto before = Working()->Document().ToJson();
   auto       bad    = WithColorGradeTarget({"exposure", R"({"exposure_ev":"bad"})", false});
   EXPECT_FALSE(history_.CaptureAdjustmentBeforePreview(handle, bad, &error));
-  EXPECT_EQ(guard_->document_->ToJson(), before);
-  EXPECT_FALSE(guard_->working_head_commit_hash().has_value());
-  EXPECT_EQ(guard_->commit_graph_->CommitCount(), 0u);
-  EXPECT_FALSE(guard_->dirty_);
+  EXPECT_EQ(Working()->Document().ToJson(), before);
+  EXPECT_FALSE(Head().has_value());
+  EXPECT_EQ(Graph()->CommitCount(), 0u);
 
   auto valid = WithColorGradeTarget({"exposure", R"({"exposure_ev":2.0})", true});
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, valid, &error)) << error;
   ASSERT_TRUE(history_.CommitAdjustment(handle, valid, &error)) << error;
-  const auto head    = guard_->working_head_commit_hash();
-  const auto count   = guard_->commit_graph_->CommitCount();
+  const auto head    = Head();
+  const auto count   = Graph()->CommitCount();
   auto       preview = WithColorGradeTarget({"exposure", R"({"exposure_ev":3.0})", false});
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, preview, &error)) << error;
   bad.settled = true;
   EXPECT_FALSE(history_.CommitAdjustment(handle, bad, &error));
-  EXPECT_EQ(guard_->working_head_commit_hash(), head);
-  EXPECT_EQ(guard_->commit_graph_->CommitCount(), count);
-  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"), 3.0f);
+  EXPECT_EQ(Head(), head);
+  EXPECT_EQ(Graph()->CommitCount(), count);
+  EXPECT_FLOAT_EQ(DocumentExposureEv(Working()->Document(), "grade.primary"), 3.0f);
   ASSERT_TRUE(history_.CommitAdjustment(handle, preview, &error)) << error;
   ASSERT_TRUE(history_.Undo(handle, &error)) << error;
-  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"), 2.0f);
+  EXPECT_FLOAT_EQ(DocumentExposureEv(Working()->Document(), "grade.primary"), 2.0f);
 }
 
 TEST_F(EditorDocumentHistoryTest,
        RejectedFirstPatchDoesNotLockTargetAndHistoryUsesNormalizedModelValues) {
-  ASSERT_TRUE(AddCleanColorGrade(*guard_->document_, NodeId{"drt"}, NodeId{"grade.extra"}).empty());
+  AddColorGradeToRoot(NodeId{"grade.extra"});
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
@@ -310,11 +341,10 @@ TEST_F(EditorDocumentHistoryTest,
   auto valid = WithColorGradeTarget({"exposure", R"({"exposure_ev":100.0})", true}, "grade.extra");
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, valid, &error)) << error;
   ASSERT_TRUE(history_.CommitAdjustment(handle, valid, &error)) << error;
-  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"), 1.5f);
-  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.extra"), 16.0f);
-  const auto head = *guard_->working_head_commit_hash();
-  const auto payload =
-      PipelineEditBatch::FromJSON(guard_->commit_graph_->GetCommit(head).GetPayloadJSON());
+  EXPECT_FLOAT_EQ(DocumentExposureEv(Working()->Document(), "grade.primary"), 1.5f);
+  EXPECT_FLOAT_EQ(DocumentExposureEv(Working()->Document(), "grade.extra"), 16.0f);
+  const auto  head      = *Head();
+  const auto  payload   = PipelineEditBatch::FromJSON(Graph()->GetCommit(head).GetPayloadJSON());
   const auto* parameter = std::get_if<SetParameterChange>(&payload.changes.front());
   ASSERT_NE(parameter, nullptr);
   EXPECT_EQ(parameter->before_value.at("exposure_ev"), 0.0);
@@ -323,50 +353,43 @@ TEST_F(EditorDocumentHistoryTest,
   valid.write = alcedo::EditorScalarWrite{20.0f};
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, valid, &error)) << error;
   ASSERT_TRUE(history_.CommitAdjustment(handle, valid, &error)) << error;
-  EXPECT_EQ(guard_->working_head_commit_hash(), head);
+  EXPECT_EQ(Head(), head);
   ASSERT_TRUE(history_.Undo(handle, &error)) << error;
-  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.extra"), 0.0f);
+  EXPECT_FLOAT_EQ(DocumentExposureEv(Working()->Document(), "grade.extra"), 0.0f);
   ASSERT_TRUE(history_.Redo(handle, &error)) << error;
-  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.extra"), 16.0f);
-  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"), 1.5f);
+  EXPECT_FLOAT_EQ(DocumentExposureEv(Working()->Document(), "grade.extra"), 16.0f);
+  EXPECT_FLOAT_EQ(DocumentExposureEv(Working()->Document(), "grade.primary"), 1.5f);
 }
 
-TEST_F(EditorDocumentHistoryTest, PreviewCommitUndoRedoAndCancelWaitForRenderLock) {
+// History writes take no render lock: a render reads the preview snapshot taken at its dispatch.
+// Each write publishes a new snapshot, and every earlier snapshot keeps the values it was taken
+// with, so a render in flight never sees a partly applied write.
+TEST_F(EditorDocumentHistoryTest, PreviewCommitUndoRedoAndCancelLeaveEarlierPreviewsUnchanged) {
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  const auto* grade       = guard_->document_->PrimaryGrade();
-  const auto* exposure    = grade->FindAdjustmentByType(type_ids::Exposure());
-  const auto  patch       = WithColorGradeTarget({"exposure", R"({"exposure_ev":2.5})", true});
-  const auto  run_blocked = [&](auto action, float before, float after) {
-    std::unique_lock   held(guard_->pipeline_->GetRenderLock());
-    std::promise<void> started;
-    auto               ready  = started.get_future();
-    auto               worker = std::async(std::launch::async, [&] {
-      std::string local_error;
-      started.set_value();
-      const bool ok = action(&local_error);
-      return std::pair{ok, local_error};
-    });
-    ready.wait();
-    EXPECT_EQ(worker.wait_for(std::chrono::milliseconds(100)), std::future_status::timeout);
-    EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"), before);
-    held.unlock();
-    const auto [ok, local_error] = worker.get();
-    EXPECT_TRUE(ok) << local_error;
-    EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"), after);
-    EXPECT_EQ(guard_->document_->PrimaryGrade(), grade);
-    EXPECT_EQ(grade->FindAdjustmentByType(type_ids::Exposure()), exposure);
+  const auto patch       = WithColorGradeTarget({"exposure", R"({"exposure_ev":2.5})", true});
+  const auto run_checked = [&](auto action, float before, float after) {
+    const auto earlier = Working();
+    ASSERT_NE(earlier, nullptr);
+    EXPECT_FLOAT_EQ(DocumentExposureEv(earlier->Document(), "grade.primary"), before);
+    std::string local_error;
+    EXPECT_TRUE(action(&local_error)) << local_error;
+    const auto published = Working();
+    ASSERT_NE(published, nullptr);
+    EXPECT_FLOAT_EQ(DocumentExposureEv(published->Document(), "grade.primary"), after);
+    EXPECT_FLOAT_EQ(DocumentExposureEv(earlier->Document(), "grade.primary"), before)
+        << "a published preview snapshot is immutable";
   };
-  run_blocked([&](auto* e) { return history_.CaptureAdjustmentBeforePreview(handle, patch, e); },
+  run_checked([&](auto* e) { return history_.CaptureAdjustmentBeforePreview(handle, patch, e); },
               1.5f, 2.5f);
-  run_blocked([&](auto* e) { return history_.CommitAdjustment(handle, patch, e); }, 2.5f, 2.5f);
-  run_blocked([&](auto* e) { return history_.Undo(handle, e); }, 2.5f, 1.5f);
-  run_blocked([&](auto* e) { return history_.Redo(handle, e); }, 1.5f, 2.5f);
+  run_checked([&](auto* e) { return history_.CommitAdjustment(handle, patch, e); }, 2.5f, 2.5f);
+  run_checked([&](auto* e) { return history_.Undo(handle, e); }, 2.5f, 1.5f);
+  run_checked([&](auto* e) { return history_.Redo(handle, e); }, 1.5f, 2.5f);
   const auto preview = WithColorGradeTarget({"exposure", R"({"exposure_ev":3.0})", false});
-  run_blocked([&](auto* e) { return history_.CaptureAdjustmentBeforePreview(handle, preview, e); },
+  run_checked([&](auto* e) { return history_.CaptureAdjustmentBeforePreview(handle, preview, e); },
               2.5f, 3.0f);
-  run_blocked([&](auto* e) { return history_.DiscardUnmaterializedChanges(handle, e); }, 3.0f,
+  run_checked([&](auto* e) { return history_.DiscardUnmaterializedChanges(handle, e); }, 3.0f,
               1.5f);
 }
 
@@ -380,10 +403,10 @@ TEST_F(EditorDocumentHistoryTest, TypedUndoAfterHistoryReleaseRestoresDocumentFr
   history_.Release(handle);
   const auto reopened = history_.Acquire(42, &error);
   ASSERT_TRUE(reopened.valid) << error;
-  const auto head = guard_->working_head_commit_hash();
+  const auto head = Head();
   ASSERT_TRUE(history_.Undo(reopened, &error)) << error;
-  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"), 1.5f);
-  EXPECT_NE(guard_->working_head_commit_hash(), head);
+  EXPECT_FLOAT_EQ(DocumentExposureEv(Working()->Document(), "grade.primary"), 1.5f);
+  EXPECT_NE(Head(), head);
 }
 
 auto DocumentDevelopPayload(const alcedo::PipelineDocument& document) -> alcedo::DevelopPayload {
@@ -401,7 +424,7 @@ TEST_F(EditorDocumentHistoryTest, DevelopCameraProfileRebindDoesNotBlockWhiteBal
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  const auto root = DocumentDevelopPayload(*guard_->document_);
+  const auto root    = DocumentDevelopPayload(Working()->Document());
 
   const auto preview = test::PatchFromJson(
       "color_temp", R"({"wb_mode":"custom","custom_cct":7200.0,"custom_tint":4.0})", false);
@@ -414,17 +437,21 @@ TEST_F(EditorDocumentHistoryTest, DevelopCameraProfileRebindDoesNotBlockWhiteBal
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, lens_preview, &error)) << error;
   ASSERT_TRUE(history_.CommitAdjustment(handle, lens_settled, &error)) << error;
 
-  // Simulate the RAW color context re-bind that happens outside history.
-  auto rebound = DocumentDevelopPayload(*guard_->document_);
+  // Simulate the RAW color context re-bind that happens outside history: the editor reopens the
+  // image with the same history and a re-bound Develop camera profile.
+  auto rebound                              = DocumentDevelopPayload(Working()->Document());
   rebound.as_shot_cct                  = root.as_shot_cct + 321.0f;
   rebound.as_shot_tint                 = root.as_shot_tint + 3.0f;
   rebound.camera_profile.cam_mul[0]    = root.camera_profile.cam_mul[0] + 0.5f;
   rebound.camera_profile.color_matrix_1_cct = root.camera_profile.color_matrix_1_cct + 100.0;
-  guard_->document_->Develop()->Params().ReplaceParams(rebound);
+  ReleaseIntoLease(handle);
+  lease_.document_->Develop()->Params().ReplaceParams(rebound);
+  const auto reopened = history_.Acquire(42, &error);
+  ASSERT_TRUE(reopened.valid) << error;
 
-  ASSERT_TRUE(history_.Undo(handle, &error)) << error;
-  ASSERT_TRUE(history_.Undo(handle, &error)) << error;
-  auto undone = DocumentDevelopPayload(*guard_->document_);
+  ASSERT_TRUE(history_.Undo(reopened, &error)) << error;
+  ASSERT_TRUE(history_.Undo(reopened, &error)) << error;
+  auto undone = DocumentDevelopPayload(Working()->Document());
   EXPECT_EQ(undone.wb_mode, root.wb_mode);
   EXPECT_FLOAT_EQ(undone.custom_cct, root.custom_cct);
   EXPECT_FLOAT_EQ(undone.custom_tint, root.custom_tint);
@@ -435,9 +462,9 @@ TEST_F(EditorDocumentHistoryTest, DevelopCameraProfileRebindDoesNotBlockWhiteBal
   EXPECT_DOUBLE_EQ(undone.camera_profile.color_matrix_1_cct,
                    rebound.camera_profile.color_matrix_1_cct);
 
-  ASSERT_TRUE(history_.Redo(handle, &error)) << error;
-  ASSERT_TRUE(history_.Redo(handle, &error)) << error;
-  auto redone = DocumentDevelopPayload(*guard_->document_);
+  ASSERT_TRUE(history_.Redo(reopened, &error)) << error;
+  ASSERT_TRUE(history_.Redo(reopened, &error)) << error;
+  auto redone = DocumentDevelopPayload(Working()->Document());
   EXPECT_EQ(redone.wb_mode, "custom");
   EXPECT_FLOAT_EQ(redone.custom_cct, 7200.0f);
   EXPECT_FLOAT_EQ(redone.custom_tint, 4.0f);
@@ -456,47 +483,50 @@ TEST_F(EditorDocumentHistoryTest, OwnedWhiteBalanceDriftStillRejectsUndo) {
       test::PatchFromJson("color_temp", R"({"wb_mode":"custom","custom_cct":7200.0})", true);
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, settled, &error)) << error;
   ASSERT_TRUE(history_.CommitAdjustment(handle, settled, &error)) << error;
-  auto drifted       = DocumentDevelopPayload(*guard_->document_);
+  auto drifted       = DocumentDevelopPayload(Working()->Document());
   drifted.custom_cct = 5100.0f;
-  guard_->document_->Develop()->Params().ReplaceParams(drifted);
-  const auto head = guard_->working_head_commit_hash();
+  ReleaseIntoLease(handle);
+  lease_.document_->Develop()->Params().ReplaceParams(drifted);
+  const auto reopened = history_.Acquire(42, &error);
+  ASSERT_TRUE(reopened.valid) << error;
+  const auto head = Head();
 
-  EXPECT_FALSE(history_.Undo(handle, &error));
+  EXPECT_FALSE(history_.Undo(reopened, &error));
   EXPECT_NE(error.find("does not match stored values"), std::string::npos) << error;
-  EXPECT_EQ(guard_->working_head_commit_hash(), head);
-  EXPECT_FLOAT_EQ(DocumentDevelopPayload(*guard_->document_).custom_cct, 5100.0f);
+  EXPECT_EQ(Head(), head);
+  EXPECT_FLOAT_EQ(DocumentDevelopPayload(Working()->Document()).custom_cct, 5100.0f);
 }
 
 TEST_F(EditorDocumentHistoryTest, PostControlTargetsDrtAndRestoresOnUndo) {
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  ASSERT_NE(guard_->document_, nullptr);
+  ASSERT_NE(Working(), nullptr);
   const auto filled =
-      alcedo::CompleteCurrentPanelParameterTarget(*guard_->document_, "clarity", &error);
+      alcedo::CompleteCurrentPanelParameterTarget(Working()->Document(), "clarity", &error);
   ASSERT_TRUE(filled.has_value()) << error;
   EXPECT_EQ(filled->owner_kind, alcedo::EditorParameterOwnerKind::DrtPost);
   EXPECT_EQ(filled->node_id, alcedo::NodeId{"drt"});
   EXPECT_EQ(filled->adjustment_instance_id, alcedo::AdjustmentInstanceId{"drt.clarity"});
-  EXPECT_FLOAT_EQ(DocumentClarity(*guard_->document_), 0.0f);
+  EXPECT_FLOAT_EQ(DocumentClarity(Working()->Document()), 0.0f);
 
   alcedo::EditorAdjustmentPatch unspecified = test::ScalarPatch("clarity", 25.0f);
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, unspecified, &error)) << error;
-  EXPECT_FLOAT_EQ(DocumentClarity(*guard_->document_), 25.0f);
+  EXPECT_FLOAT_EQ(DocumentClarity(Working()->Document()), 25.0f);
 
   auto preview = WithDrtPostTarget({"clarity", R"({"clarity":40.0})", false});
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, preview, &error)) << error;
-  EXPECT_FLOAT_EQ(DocumentClarity(*guard_->document_), 40.0f);
+  EXPECT_FLOAT_EQ(DocumentClarity(Working()->Document()), 40.0f);
 
   auto settled = WithDrtPostTarget({"clarity", R"({"clarity":40.0})", true});
   ASSERT_TRUE(history_.CommitAdjustment(handle, settled, &error)) << error;
-  EXPECT_FLOAT_EQ(DocumentClarity(*guard_->document_), 40.0f);
+  EXPECT_FLOAT_EQ(DocumentClarity(Working()->Document()), 40.0f);
   ASSERT_TRUE(history_.Undo(handle, &error)) << error;
-  EXPECT_FLOAT_EQ(DocumentClarity(*guard_->document_), 0.0f);
+  EXPECT_FLOAT_EQ(DocumentClarity(Working()->Document()), 0.0f);
   ASSERT_TRUE(history_.Redo(handle, &error)) << error;
-  EXPECT_FLOAT_EQ(DocumentClarity(*guard_->document_), 40.0f);
+  EXPECT_FLOAT_EQ(DocumentClarity(Working()->Document()), 40.0f);
 
-  const auto restored = alcedo::PipelineDocument::FromJson(guard_->document_->ToJson());
+  const auto restored = alcedo::PipelineDocument::FromJson(Working()->Document().ToJson());
   EXPECT_FLOAT_EQ(DocumentClarity(restored), 40.0f);
   EXPECT_EQ(restored.PrimaryGrade()->FindAdjustmentByType(alcedo::type_ids::Clarity()), nullptr);
 }
@@ -515,9 +545,9 @@ auto BackboneNodeIds(const alcedo::PipelineDocument& document) -> std::vector<st
   return ids;
 }
 
-auto CommitCapturedAddColorGrade(EditorSessionHistoryPort& history,
+auto CommitCapturedAddColorGrade(EditorSessionHistoryPort&               history,
                                  const alcedo::EditorHistoryGuardHandle& handle,
-                                 alcedo::PipelineDocument& document,
+                                 const alcedo::PipelineDocument&         document,
                                  const alcedo::NodeId& before_node_id, const alcedo::NodeId& new_id,
                                  std::string* error) -> bool {
   try {
@@ -532,10 +562,10 @@ auto CommitCapturedAddColorGrade(EditorSessionHistoryPort& history,
   }
 }
 
-auto CommitCapturedRemoveColorGrade(EditorSessionHistoryPort& history,
+auto CommitCapturedRemoveColorGrade(EditorSessionHistoryPort&               history,
                                     const alcedo::EditorHistoryGuardHandle& handle,
-                                    alcedo::PipelineDocument& document, const alcedo::NodeId& node_id,
-                                    std::string* error) -> bool {
+                                    const alcedo::PipelineDocument&         document,
+                                    const alcedo::NodeId& node_id, std::string* error) -> bool {
   try {
     auto change = alcedo::CaptureRemoveColorGradeChange(document, node_id);
     return history.CommitPipelineEditBatch(
@@ -548,11 +578,11 @@ auto CommitCapturedRemoveColorGrade(EditorSessionHistoryPort& history,
   }
 }
 
-auto CommitCapturedReconnectColorGrade(EditorSessionHistoryPort& history,
+auto CommitCapturedReconnectColorGrade(EditorSessionHistoryPort&               history,
                                        const alcedo::EditorHistoryGuardHandle& handle,
-                                       alcedo::PipelineDocument& document,
-                                       const alcedo::NodeId& node_id,
-                                       const alcedo::NodeId& new_predecessor_id,
+                                       const alcedo::PipelineDocument&         document,
+                                       const alcedo::NodeId&                   node_id,
+                                       const alcedo::NodeId&                   new_predecessor_id,
                                        const alcedo::NodeId& new_successor_id, std::string* error)
     -> bool {
   try {
@@ -572,124 +602,125 @@ TEST_F(EditorDocumentHistoryTest, AddGradeUndoRedoPreservesStableIdsAndCleanValu
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  ASSERT_TRUE(CommitCapturedAddColorGrade(history_, handle, *guard_->document_,
+  ASSERT_TRUE(CommitCapturedAddColorGrade(history_, handle, Working()->Document(),
                                           alcedo::NodeId{"drt"}, alcedo::NodeId{"grade.extra"},
                                           &error))
       << error;
-  const auto* extra = dynamic_cast<const alcedo::ColorGradeNodeModel*>(
-      guard_->document_->Graph().FindNode(alcedo::NodeId{"grade.extra"}));
+  const auto* extra = WorkingGrade(alcedo::NodeId{"grade.extra"});
   ASSERT_NE(extra, nullptr);
   const auto stored = extra->ToJson();
   EXPECT_TRUE(extra->Enabled());
   EXPECT_FLOAT_EQ(extra->Mix(), 1.0f);
   EXPECT_EQ(extra->DisplayName(), "Color Grade 2");
-  EXPECT_EQ(guard_->document_->NextColorGradeNameNumber(), 3u);
+  EXPECT_EQ(Working()->Document().NextColorGradeNameNumber(), 3u);
   ASSERT_TRUE(history_.Undo(handle, &error)) << error;
-  EXPECT_EQ(guard_->document_->Graph().FindNode(alcedo::NodeId{"grade.extra"}), nullptr);
-  EXPECT_EQ(guard_->document_->NextColorGradeNameNumber(), 2u);
+  EXPECT_EQ(Working()->Document().Graph().FindNode(alcedo::NodeId{"grade.extra"}), nullptr);
+  EXPECT_EQ(Working()->Document().NextColorGradeNameNumber(), 2u);
   ASSERT_TRUE(history_.Redo(handle, &error)) << error;
-  const auto* restored = dynamic_cast<const alcedo::ColorGradeNodeModel*>(
-      guard_->document_->Graph().FindNode(alcedo::NodeId{"grade.extra"}));
+  const auto* restored = WorkingGrade(alcedo::NodeId{"grade.extra"});
   ASSERT_NE(restored, nullptr);
   EXPECT_EQ(restored->ToJson(), stored);
   EXPECT_EQ(restored->DisplayName(), "Color Grade 2");
-  EXPECT_EQ(guard_->document_->NextColorGradeNameNumber(), 3u);
+  EXPECT_EQ(Working()->Document().NextColorGradeNameNumber(), 3u);
 }
 
 TEST_F(EditorDocumentHistoryTest, DeleteGradeUndoRestoresNodeMasksAndExactEdges) {
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  ASSERT_TRUE(CommitCapturedAddColorGrade(history_, handle, *guard_->document_,
+  ASSERT_TRUE(CommitCapturedAddColorGrade(history_, handle, Working()->Document(),
                                           alcedo::NodeId{"drt"}, alcedo::NodeId{"grade.extra"},
                                           &error))
       << error;
-  auto* extra = dynamic_cast<alcedo::ColorGradeNodeModel*>(
-      guard_->document_->Graph().FindNode(alcedo::NodeId{"grade.extra"}));
+  ASSERT_TRUE(history_.AddMask(
+      handle, alcedo::NodeId{"grade.extra"},
+      alcedo::grade_mask_test::MakeRadialMask(alcedo::MaskId{"mask.radial"}), 0, &error))
+      << error;
+  ASSERT_TRUE(history_.AddMask(
+      handle, alcedo::NodeId{"grade.extra"},
+      alcedo::grade_mask_test::MakeLinearGradientMask(alcedo::MaskId{"mask.linear"}), 1, &error))
+      << error;
+  const auto* extra = WorkingGrade(alcedo::NodeId{"grade.extra"});
   ASSERT_NE(extra, nullptr);
-  extra->AddMask(alcedo::grade_mask_test::MakeRadialMask(alcedo::MaskId{"mask.radial"}), 0);
-  extra->AddMask(alcedo::grade_mask_test::MakeLinearGradientMask(alcedo::MaskId{"mask.linear"}), 1);
+  ASSERT_EQ(extra->MaskCount(), 2u);
   const auto node_json = extra->ToJson();
-  const auto incoming  = *alcedo::FindSceneImagePredecessor(guard_->document_->Graph(),
-                                                           alcedo::NodeId{"grade.extra"});
-  const auto outgoing  = *alcedo::FindSceneImageSuccessor(guard_->document_->Graph(),
-                                                         alcedo::NodeId{"grade.extra"});
-  ASSERT_TRUE(CommitCapturedRemoveColorGrade(history_, handle, *guard_->document_,
+  const auto incoming  = *alcedo::FindSceneImagePredecessor(Working()->Document().Graph(),
+                                                            alcedo::NodeId{"grade.extra"});
+  const auto outgoing  = *alcedo::FindSceneImageSuccessor(Working()->Document().Graph(),
+                                                          alcedo::NodeId{"grade.extra"});
+  ASSERT_TRUE(CommitCapturedRemoveColorGrade(history_, handle, Working()->Document(),
                                              alcedo::NodeId{"grade.extra"}, &error))
       << error;
-  EXPECT_EQ(guard_->document_->Graph().FindNode(alcedo::NodeId{"grade.extra"}), nullptr);
+  EXPECT_EQ(Working()->Document().Graph().FindNode(alcedo::NodeId{"grade.extra"}), nullptr);
   ASSERT_TRUE(history_.Undo(handle, &error)) << error;
-  const auto* restored = dynamic_cast<const alcedo::ColorGradeNodeModel*>(
-      guard_->document_->Graph().FindNode(alcedo::NodeId{"grade.extra"}));
+  const auto* restored = WorkingGrade(alcedo::NodeId{"grade.extra"});
   ASSERT_NE(restored, nullptr);
   EXPECT_EQ(restored->ToJson().dump(), node_json.dump());
-  EXPECT_EQ(alcedo::FindSceneImagePredecessor(guard_->document_->Graph(),
-                                               alcedo::NodeId{"grade.extra"})
+  EXPECT_EQ(alcedo::FindSceneImagePredecessor(Working()->Document().Graph(),
+                                              alcedo::NodeId{"grade.extra"})
                 ->from_node,
             incoming.from_node);
-  EXPECT_EQ(alcedo::FindSceneImagePredecessor(guard_->document_->Graph(),
-                                               alcedo::NodeId{"grade.extra"})
+  EXPECT_EQ(alcedo::FindSceneImagePredecessor(Working()->Document().Graph(),
+                                              alcedo::NodeId{"grade.extra"})
                 ->to_node,
             incoming.to_node);
-  EXPECT_EQ(alcedo::FindSceneImageSuccessor(guard_->document_->Graph(),
-                                           alcedo::NodeId{"grade.extra"})
-                ->to_node,
-            outgoing.to_node);
+  EXPECT_EQ(
+      alcedo::FindSceneImageSuccessor(Working()->Document().Graph(), alcedo::NodeId{"grade.extra"})
+          ->to_node,
+      outgoing.to_node);
 }
 
 TEST_F(EditorDocumentHistoryTest, ReconnectUndoRedoRestoresBackboneOrder) {
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  ASSERT_TRUE(CommitCapturedAddColorGrade(history_, handle, *guard_->document_,
+  ASSERT_TRUE(CommitCapturedAddColorGrade(history_, handle, Working()->Document(),
                                           alcedo::NodeId{"drt"}, alcedo::NodeId{"grade.a"}, &error))
       << error;
-  ASSERT_TRUE(CommitCapturedAddColorGrade(history_, handle, *guard_->document_,
+  ASSERT_TRUE(CommitCapturedAddColorGrade(history_, handle, Working()->Document(),
                                           alcedo::NodeId{"drt"}, alcedo::NodeId{"grade.b"}, &error))
       << error;
-  const auto before = BackboneNodeIds(*guard_->document_);
-  ASSERT_TRUE(CommitCapturedReconnectColorGrade(history_, handle, *guard_->document_,
-                                                alcedo::NodeId{"grade.b"}, alcedo::NodeId{"develop"},
-                                                alcedo::NodeId{"grade.primary"}, &error))
+  const auto before = BackboneNodeIds(Working()->Document());
+  ASSERT_TRUE(CommitCapturedReconnectColorGrade(
+      history_, handle, Working()->Document(), alcedo::NodeId{"grade.b"}, alcedo::NodeId{"develop"},
+      alcedo::NodeId{"grade.primary"}, &error))
       << error;
-  const auto moved = BackboneNodeIds(*guard_->document_);
+  const auto moved = BackboneNodeIds(Working()->Document());
   EXPECT_NE(moved, before);
   ASSERT_TRUE(history_.Undo(handle, &error)) << error;
-  EXPECT_EQ(BackboneNodeIds(*guard_->document_), before);
+  EXPECT_EQ(BackboneNodeIds(Working()->Document()), before);
   ASSERT_TRUE(history_.Redo(handle, &error)) << error;
-  EXPECT_EQ(BackboneNodeIds(*guard_->document_), moved);
+  EXPECT_EQ(BackboneNodeIds(Working()->Document()), moved);
 }
 
 TEST_F(EditorDocumentHistoryTest, InvalidReconnectLeavesDocumentHashAndHistoryHeadUnchanged) {
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  ASSERT_TRUE(CommitCapturedAddColorGrade(history_, handle, *guard_->document_,
+  ASSERT_TRUE(CommitCapturedAddColorGrade(history_, handle, Working()->Document(),
                                           alcedo::NodeId{"drt"}, alcedo::NodeId{"grade.b"}, &error))
       << error;
-  const auto before_hash  = alcedo::CanonicalPipelineDocumentJson(*guard_->document_);
-  const auto before_count = guard_->commit_graph_->CommitCount();
-  const auto before_head  = guard_->working_head_commit_hash();
-  EXPECT_FALSE(CommitCapturedReconnectColorGrade(history_, handle, *guard_->document_,
-                                                 alcedo::NodeId{"grade.primary"},
-                                                 alcedo::NodeId{"develop"}, alcedo::NodeId{"drt"},
-                                                 &error));
+  const auto before_hash  = alcedo::CanonicalPipelineDocumentJson(Working()->Document());
+  const auto before_count = Graph()->CommitCount();
+  const auto before_head  = Head();
+  EXPECT_FALSE(CommitCapturedReconnectColorGrade(
+      history_, handle, Working()->Document(), alcedo::NodeId{"grade.primary"},
+      alcedo::NodeId{"develop"}, alcedo::NodeId{"drt"}, &error));
   EXPECT_FALSE(error.empty());
-  EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(*guard_->document_), before_hash);
-  EXPECT_EQ(guard_->commit_graph_->CommitCount(), before_count);
-  EXPECT_EQ(guard_->working_head_commit_hash(), before_head);
+  EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(Working()->Document()), before_hash);
+  EXPECT_EQ(Graph()->CommitCount(), before_count);
+  EXPECT_EQ(Head(), before_head);
 }
 
 TEST_F(EditorDocumentHistoryTest, RenameCreatesHistoryWithoutRenderIntent) {
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  const auto count = guard_->commit_graph_->CommitCount();
+  const auto count = Graph()->CommitCount();
   ASSERT_TRUE(history_.RenameColorGrade(handle, alcedo::NodeId{"grade.primary"}, "Look A", &error))
       << error;
-  EXPECT_EQ(guard_->commit_graph_->CommitCount(), count + 1);
-  const auto* grade = dynamic_cast<const alcedo::ColorGradeNodeModel*>(
-      guard_->document_->Graph().FindNode(alcedo::NodeId{"grade.primary"}));
+  EXPECT_EQ(Graph()->CommitCount(), count + 1);
+  const auto* grade = WorkingGrade(alcedo::NodeId{"grade.primary"});
   ASSERT_NE(grade, nullptr);
   EXPECT_EQ(grade->DisplayName(), "Look A");
   EXPECT_FALSE(history_.LastPublishedRenderReason().has_value());
@@ -699,31 +730,28 @@ TEST_F(EditorDocumentHistoryTest, NodeDeletionLockHistoryRoundTripHasNoRenderInt
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  const auto count = guard_->commit_graph_->CommitCount();
+  const auto count    = Graph()->CommitCount();
   const auto grade_id = alcedo::NodeId{"grade.primary"};
   ASSERT_TRUE(history_.SetColorGradeDeletionProtected(handle, grade_id, false, &error)) << error;
-  const auto* grade = dynamic_cast<const alcedo::ColorGradeNodeModel*>(
-      guard_->document_->Graph().FindNode(grade_id));
+  const auto* grade = WorkingGrade(grade_id);
   ASSERT_NE(grade, nullptr);
   EXPECT_FALSE(grade->DeletionProtected());
-  EXPECT_EQ(guard_->commit_graph_->CommitCount(), count + 1);
+  EXPECT_EQ(Graph()->CommitCount(), count + 1);
   EXPECT_FALSE(history_.LastPublishedRenderReason().has_value());
   ASSERT_TRUE(history_.SetColorGradeDeletionProtected(handle, grade_id, true, &error)) << error;
-  EXPECT_EQ(guard_->commit_graph_->CommitCount(), count + 2);
+  EXPECT_EQ(Graph()->CommitCount(), count + 2);
   EXPECT_FALSE(history_.LastPublishedRenderReason().has_value());
   ASSERT_TRUE(history_.Undo(handle, &error)) << error;
-  grade = dynamic_cast<const alcedo::ColorGradeNodeModel*>(
-      guard_->document_->Graph().FindNode(grade_id));
+  grade = WorkingGrade(grade_id);
   ASSERT_NE(grade, nullptr);
   EXPECT_FALSE(grade->DeletionProtected());
-  EXPECT_EQ(guard_->commit_graph_->CommitCount(), count + 2);
+  EXPECT_EQ(Graph()->CommitCount(), count + 2);
   EXPECT_FALSE(history_.LastPublishedRenderReason().has_value());
   ASSERT_TRUE(history_.Redo(handle, &error)) << error;
-  grade = dynamic_cast<const alcedo::ColorGradeNodeModel*>(
-      guard_->document_->Graph().FindNode(grade_id));
+  grade = WorkingGrade(grade_id);
   ASSERT_NE(grade, nullptr);
   EXPECT_TRUE(grade->DeletionProtected());
-  EXPECT_EQ(guard_->commit_graph_->CommitCount(), count + 2);
+  EXPECT_EQ(Graph()->CommitCount(), count + 2);
   EXPECT_FALSE(history_.LastPublishedRenderReason().has_value());
 }
 
@@ -731,14 +759,14 @@ TEST_F(EditorDocumentHistoryTest, SameValueNodeLockPreservesHistoryAndClearsStal
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  const auto count        = guard_->commit_graph_->CommitCount();
-  const auto before_head  = guard_->working_head_commit_hash();
+  const auto count        = Graph()->CommitCount();
+  const auto before_head  = Head();
   bool       changed      = true;
   ASSERT_TRUE(history_.SetColorGradeDeletionProtected(
       handle, alcedo::NodeId{"grade.primary"}, true, &error, &changed)) << error;
   EXPECT_FALSE(changed);
-  EXPECT_EQ(guard_->commit_graph_->CommitCount(), count);
-  EXPECT_EQ(guard_->working_head_commit_hash(), before_head);
+  EXPECT_EQ(Graph()->CommitCount(), count);
+  EXPECT_EQ(Head(), before_head);
   EXPECT_FALSE(history_.LastPublishedRenderReason().has_value());
 }
 
@@ -746,38 +774,38 @@ TEST_F(EditorDocumentHistoryTest, MaskCreationUndoRedoRestoresExactIdentity) {
   std::string error;
   const auto handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  const auto grade_id = guard_->document_->DefaultGradeId();
+  const auto   grade_id = Working()->Document().DefaultGradeId();
   const MaskId mask_id{"mask.created"};
   ASSERT_TRUE(history_.AddMask(handle, grade_id,
                                grade_mask_test::MakeRadialMask(mask_id), 0, &error)) << error;
   // Masks are never deletion-protected; only the owning Color Grade can lock.
-  EXPECT_FALSE(guard_->document_->PrimaryGrade()->FindMask(mask_id)->deletion_protected);
-  const auto created = guard_->document_->ToJson();
+  EXPECT_FALSE(Working()->Document().PrimaryGrade()->FindMask(mask_id)->deletion_protected);
+  const auto created = Working()->Document().ToJson();
   ASSERT_TRUE(history_.Undo(handle, &error)) << error;
-  EXPECT_EQ(guard_->document_->PrimaryGrade()->FindMask(mask_id), nullptr);
+  EXPECT_EQ(Working()->Document().PrimaryGrade()->FindMask(mask_id), nullptr);
   ASSERT_TRUE(history_.Redo(handle, &error)) << error;
-  EXPECT_EQ(guard_->document_->ToJson(), created);
+  EXPECT_EQ(Working()->Document().ToJson(), created);
 }
 
 TEST_F(EditorDocumentHistoryTest, MixedLockAndPixelBatchRequestsRenderThroughUndoRedo) {
   std::string error;
   const auto handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  const auto grade_id = guard_->document_->DefaultGradeId();
+  const auto grade_id = Working()->Document().DefaultGradeId();
   auto batch = PipelineEditBatch::Make(PipelineEditOperationKind::Paste,
       {SetNodeDeletionProtectionChange{grade_id, true, false},
        SetNodeMixChange{grade_id, 1.0f, 0.5f}}, "history.operation.paste");
   ASSERT_TRUE(history_.CommitPipelineEditBatch(handle, std::move(batch), &error)) << error;
-  EXPECT_FALSE(guard_->document_->PrimaryGrade()->DeletionProtected());
-  EXPECT_FLOAT_EQ(guard_->document_->PrimaryGrade()->Mix(), 0.5f);
+  EXPECT_FALSE(Working()->Document().PrimaryGrade()->DeletionProtected());
+  EXPECT_FLOAT_EQ(Working()->Document().PrimaryGrade()->Mix(), 0.5f);
   EXPECT_TRUE(history_.LastPublishedRenderReason().has_value());
   ASSERT_TRUE(history_.Undo(handle, &error)) << error;
-  EXPECT_TRUE(guard_->document_->PrimaryGrade()->DeletionProtected());
-  EXPECT_FLOAT_EQ(guard_->document_->PrimaryGrade()->Mix(), 1.0f);
+  EXPECT_TRUE(Working()->Document().PrimaryGrade()->DeletionProtected());
+  EXPECT_FLOAT_EQ(Working()->Document().PrimaryGrade()->Mix(), 1.0f);
   EXPECT_TRUE(history_.LastPublishedRenderReason().has_value());
   ASSERT_TRUE(history_.Redo(handle, &error)) << error;
-  EXPECT_FALSE(guard_->document_->PrimaryGrade()->DeletionProtected());
-  EXPECT_FLOAT_EQ(guard_->document_->PrimaryGrade()->Mix(), 0.5f);
+  EXPECT_FALSE(Working()->Document().PrimaryGrade()->DeletionProtected());
+  EXPECT_FLOAT_EQ(Working()->Document().PrimaryGrade()->Mix(), 0.5f);
   EXPECT_TRUE(history_.LastPublishedRenderReason().has_value());
 }
 
@@ -785,17 +813,17 @@ TEST_F(EditorDocumentHistoryTest, MultipleMaskRemovalRejectsBeforePartialMutatio
   std::string error;
   const auto handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  const auto grade_id = guard_->document_->DefaultGradeId();
+  const auto   grade_id = Working()->Document().DefaultGradeId();
   const MaskId first{"mask.first"};
   const MaskId second{"mask.second"};
   ASSERT_TRUE(history_.AddMask(handle, grade_id,
                                grade_mask_test::MakeRadialMask(first), 0, &error)) << error;
   ASSERT_TRUE(history_.AddMask(handle, grade_id,
                                grade_mask_test::MakeRadialMask(second), 1, &error)) << error;
-  const auto* grade = guard_->document_->PrimaryGrade();
-  const auto before = guard_->document_->ToJson();
-  const auto head = guard_->working_head_commit_hash();
-  const auto count = guard_->commit_graph_->CommitCount();
+  const auto* grade  = WorkingGrade(grade_id);
+  const auto  before = Working()->Document().ToJson();
+  const auto  head   = Head();
+  const auto  count  = Graph()->CommitCount();
   // A batch that removes an unknown Mask must reject atomically before any
   // mutation is applied.
   const auto missing_json =
@@ -806,9 +834,9 @@ TEST_F(EditorDocumentHistoryTest, MultipleMaskRemovalRejectsBeforePartialMutatio
       "history.operation.paste");
   EXPECT_FALSE(history_.CommitPipelineEditBatch(handle, std::move(batch), &error));
   EXPECT_NE(error.find("mask.missing"), std::string::npos);
-  EXPECT_EQ(guard_->document_->ToJson(), before);
-  EXPECT_EQ(guard_->working_head_commit_hash(), head);
-  EXPECT_EQ(guard_->commit_graph_->CommitCount(), count);
+  EXPECT_EQ(Working()->Document().ToJson(), before);
+  EXPECT_EQ(Head(), head);
+  EXPECT_EQ(Graph()->CommitCount(), count);
 }
 
 TEST_F(EditorDocumentHistoryTest, MaskProtectionFlagRoundTripsAcrossUndoAndRedo) {
@@ -821,50 +849,51 @@ TEST_F(EditorDocumentHistoryTest, MaskProtectionFlagRoundTripsAcrossUndoAndRedo)
   const auto mask_id = alcedo::MaskId{"mask.radial"};
   ASSERT_TRUE(history_.AddMask(handle, grade_id,
                                alcedo::grade_mask_test::MakeRadialMask(mask_id), 0, &error)) << error;
-  const auto* grade = dynamic_cast<const alcedo::ColorGradeNodeModel*>(
-      guard_->document_->Graph().FindNode(grade_id));
+  const auto* grade = WorkingGrade(grade_id);
   ASSERT_NE(grade, nullptr);
   const auto revision = grade->MaskContentRevision(mask_id);
-  const auto count = guard_->commit_graph_->CommitCount();
+  const auto count    = Graph()->CommitCount();
   ASSERT_TRUE(history_.LastPublishedRenderReason().has_value());
   EXPECT_FALSE(grade->FindMask(mask_id)->deletion_protected);
 
   ASSERT_TRUE(history_.SetMaskField(handle, grade_id, mask_id,
                                     "deletion_protected", true, &error)) << error;
+  grade = WorkingGrade(grade_id);
+  ASSERT_NE(grade, nullptr);
   EXPECT_TRUE(grade->FindMask(mask_id)->deletion_protected);
   EXPECT_EQ(grade->MaskContentRevision(mask_id), revision);
-  EXPECT_EQ(guard_->commit_graph_->CommitCount(), count + 1);
+  EXPECT_EQ(Graph()->CommitCount(), count + 1);
   EXPECT_FALSE(history_.LastPublishedRenderReason().has_value());
-  const auto flagged_head = guard_->working_head_commit_hash();
+  const auto flagged_head = Head();
   // A same-value write is a no-op: no commit, no render reason.
   ASSERT_TRUE(history_.SetMaskField(handle, grade_id, mask_id,
                                     "deletion_protected", true, &error)) << error;
-  EXPECT_EQ(guard_->commit_graph_->CommitCount(), count + 1);
-  EXPECT_EQ(guard_->working_head_commit_hash(), flagged_head);
+  EXPECT_EQ(Graph()->CommitCount(), count + 1);
+  EXPECT_EQ(Head(), flagged_head);
   EXPECT_FALSE(history_.LastPublishedRenderReason().has_value());
 
   ASSERT_TRUE(history_.SetMaskField(handle, grade_id, mask_id,
                                     "deletion_protected", false, &error)) << error;
+  grade = WorkingGrade(grade_id);
+  ASSERT_NE(grade, nullptr);
   EXPECT_FALSE(grade->FindMask(mask_id)->deletion_protected);
   EXPECT_EQ(grade->MaskContentRevision(mask_id), revision);
-  EXPECT_EQ(guard_->commit_graph_->CommitCount(), count + 2);
+  EXPECT_EQ(Graph()->CommitCount(), count + 2);
   EXPECT_FALSE(history_.LastPublishedRenderReason().has_value());
 
   ASSERT_TRUE(history_.Undo(handle, &error)) << error;
-  grade = dynamic_cast<const alcedo::ColorGradeNodeModel*>(
-      guard_->document_->Graph().FindNode(grade_id));
+  grade = WorkingGrade(grade_id);
   ASSERT_NE(grade, nullptr);
   EXPECT_TRUE(grade->FindMask(mask_id)->deletion_protected);
   EXPECT_EQ(grade->MaskContentRevision(mask_id), revision);
-  EXPECT_EQ(guard_->commit_graph_->CommitCount(), count + 2);
+  EXPECT_EQ(Graph()->CommitCount(), count + 2);
   EXPECT_FALSE(history_.LastPublishedRenderReason().has_value());
   ASSERT_TRUE(history_.Redo(handle, &error)) << error;
-  grade = dynamic_cast<const alcedo::ColorGradeNodeModel*>(
-      guard_->document_->Graph().FindNode(grade_id));
+  grade = WorkingGrade(grade_id);
   ASSERT_NE(grade, nullptr);
   EXPECT_FALSE(grade->FindMask(mask_id)->deletion_protected);
   EXPECT_EQ(grade->MaskContentRevision(mask_id), revision);
-  EXPECT_EQ(guard_->commit_graph_->CommitCount(), count + 2);
+  EXPECT_EQ(Graph()->CommitCount(), count + 2);
   EXPECT_FALSE(history_.LastPublishedRenderReason().has_value());
 }
 
@@ -872,7 +901,7 @@ TEST_F(EditorDocumentHistoryTest, AddRenameAndDeleteSnapshotsPresentTypedHistory
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  ASSERT_TRUE(CommitCapturedAddColorGrade(history_, handle, *guard_->document_,
+  ASSERT_TRUE(CommitCapturedAddColorGrade(history_, handle, Working()->Document(),
                                           alcedo::NodeId{"drt"}, alcedo::NodeId{"grade.extra"},
                                           &error))
       << error;
@@ -894,7 +923,7 @@ TEST_F(EditorDocumentHistoryTest, AddRenameAndDeleteSnapshotsPresentTypedHistory
   EXPECT_EQ(rename_pres.display_name.toStdString(), "Rename Color Grade");
   EXPECT_EQ(rename_pres.after_text.toStdString(), "Sky");
 
-  ASSERT_TRUE(CommitCapturedRemoveColorGrade(history_, handle, *guard_->document_,
+  ASSERT_TRUE(CommitCapturedRemoveColorGrade(history_, handle, Working()->Document(),
                                              alcedo::NodeId{"grade.extra"}, &error))
       << error;
   alcedo::EditorHistorySnapshot removed;
@@ -911,22 +940,22 @@ TEST_F(EditorDocumentHistoryTest,
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  const auto before_document = alcedo::CanonicalPipelineDocumentJson(*guard_->document_);
-  const auto before_head     = guard_->working_head_commit_hash();
-  const auto before_count    = guard_->commit_graph_->CommitCount();
-  const auto before_counter  = guard_->document_->NextColorGradeNameNumber();
+  const auto before_document = alcedo::CanonicalPipelineDocumentJson(Working()->Document());
+  const auto before_head     = Head();
+  const auto before_count    = Graph()->CommitCount();
+  const auto before_counter  = Working()->Document().NextColorGradeNameNumber();
   const auto before_reason   = history_.LastPublishedRenderReason();
   ASSERT_TRUE(std::filesystem::create_directory(journal_path_));
 
-  EXPECT_FALSE(CommitCapturedAddColorGrade(history_, handle, *guard_->document_,
+  EXPECT_FALSE(CommitCapturedAddColorGrade(history_, handle, Working()->Document(),
                                            alcedo::NodeId{"drt"}, alcedo::NodeId{"grade.failed"},
                                            &error));
   EXPECT_EQ(error, "mini-Git journal file could not be opened for append");
-  EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(*guard_->document_), before_document);
-  EXPECT_EQ(guard_->working_head_commit_hash(), before_head);
-  EXPECT_EQ(guard_->commit_graph_->CommitCount(), before_count);
-  EXPECT_EQ(guard_->document_->NextColorGradeNameNumber(), before_counter);
-  EXPECT_EQ(guard_->document_->Graph().FindNode(alcedo::NodeId{"grade.failed"}), nullptr);
+  EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(Working()->Document()), before_document);
+  EXPECT_EQ(Head(), before_head);
+  EXPECT_EQ(Graph()->CommitCount(), before_count);
+  EXPECT_EQ(Working()->Document().NextColorGradeNameNumber(), before_counter);
+  EXPECT_EQ(Working()->Document().Graph().FindNode(alcedo::NodeId{"grade.failed"}), nullptr);
   EXPECT_EQ(history_.LastPublishedRenderReason(), before_reason);
 }
 
@@ -948,17 +977,17 @@ TEST_F(EditorDocumentHistoryTest, MaskAddRemoveUndoRestoresValueAndDisplayIndex)
       handle, grade_id, alcedo::grade_mask_test::MakeLinearGradientMask(alcedo::MaskId{"mask.linear"}),
       2, &error))
       << error;
-  const auto* grade = dynamic_cast<const alcedo::ColorGradeNodeModel*>(
-      guard_->document_->Graph().FindNode(grade_id));
+  const auto* grade = WorkingGrade(grade_id);
   ASSERT_NE(grade, nullptr);
   ASSERT_EQ(grade->MaskCount(), 3u);
   EXPECT_EQ(grade->MaskAt(1).id, alcedo::MaskId{"mask.radial"});
   const auto radial_json = alcedo::MaskModelToJson(grade->MaskAt(1));
   ASSERT_TRUE(history_.RemoveMask(handle, grade_id, alcedo::MaskId{"mask.radial"}, &error)) << error;
+  grade = WorkingGrade(grade_id);
+  ASSERT_NE(grade, nullptr);
   EXPECT_EQ(grade->MaskCount(), 2u);
   ASSERT_TRUE(history_.Undo(handle, &error)) << error;
-  grade = dynamic_cast<const alcedo::ColorGradeNodeModel*>(
-      guard_->document_->Graph().FindNode(grade_id));
+  grade = WorkingGrade(grade_id);
   ASSERT_EQ(grade->MaskCount(), 3u);
   EXPECT_EQ(grade->MaskAt(1).id, alcedo::MaskId{"mask.radial"});
   EXPECT_EQ(alcedo::MaskModelToJson(grade->MaskAt(1)).dump(), radial_json.dump());
@@ -977,8 +1006,7 @@ TEST_F(EditorDocumentHistoryTest, MaskSourceUndoRestoresExactVariantValues) {
                                                                       radial),
                                0, &error))
       << error;
-  auto* grade = dynamic_cast<alcedo::ColorGradeNodeModel*>(
-      guard_->document_->Graph().FindNode(grade_id));
+  const auto* grade         = WorkingGrade(grade_id);
   const auto before_source = alcedo::MaskModelToJson(grade->MaskAt(0)).at("source");
   alcedo::LinearGradientMaskSource linear;
   linear.origin_x            = 0.1f;
@@ -989,10 +1017,11 @@ TEST_F(EditorDocumentHistoryTest, MaskSourceUndoRestoresExactVariantValues) {
   ASSERT_TRUE(history_.ReplaceMaskSource(handle, grade_id, alcedo::MaskId{"mask.geo"}, after_source,
                                          &error))
       << error;
+  grade = WorkingGrade(grade_id);
+  ASSERT_NE(grade, nullptr);
   EXPECT_EQ(alcedo::MaskModelToJson(grade->MaskAt(0)).at("source").dump(), after_source.dump());
   ASSERT_TRUE(history_.Undo(handle, &error)) << error;
-  grade = dynamic_cast<alcedo::ColorGradeNodeModel*>(
-      guard_->document_->Graph().FindNode(grade_id));
+  grade = WorkingGrade(grade_id);
   EXPECT_EQ(alcedo::MaskModelToJson(grade->MaskAt(0)).at("source").dump(), before_source.dump());
 }
 
@@ -1000,15 +1029,15 @@ TEST_F(EditorDocumentHistoryTest, MultiChangeActionCreatesOneCommitAndOneChainFo
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  const auto before_count = guard_->commit_graph_->CommitCount();
-  const auto before_chain = guard_->transaction_chain_hash();
+  const auto     before_count = Graph()->CommitCount();
+  const auto     before_chain = Chain();
   nlohmann::json exposure;
   nlohmann::json contrast;
-  ASSERT_TRUE(alcedo::ReadEditorParameterJson(*guard_->document_, ColorGradeFieldTarget("exposure"),
-                                              &exposure, &error))
+  ASSERT_TRUE(alcedo::ReadEditorParameterJson(Working()->Document(),
+                                              ColorGradeFieldTarget("exposure"), &exposure, &error))
       << error;
-  ASSERT_TRUE(alcedo::ReadEditorParameterJson(*guard_->document_, ColorGradeFieldTarget("contrast"),
-                                              &contrast, &error))
+  ASSERT_TRUE(alcedo::ReadEditorParameterJson(Working()->Document(),
+                                              ColorGradeFieldTarget("contrast"), &contrast, &error))
       << error;
   alcedo::SetParameterChange first;
   first.target         = alcedo::ToPipelineParameterTarget(ColorGradeFieldTarget("exposure"));
@@ -1028,8 +1057,8 @@ TEST_F(EditorDocumentHistoryTest, MultiChangeActionCreatesOneCommitAndOneChainFo
       alcedo::PipelineEditOperationKind::Paste, {first, second},
       alcedo::PresentationKeyForOperation(alcedo::PipelineEditOperationKind::Paste));
   ASSERT_TRUE(history_.CommitPipelineEditBatch(handle, batch, &error)) << error;
-  EXPECT_EQ(guard_->commit_graph_->CommitCount(), before_count + 1);
-  EXPECT_NE(guard_->transaction_chain_hash(), before_chain);
+  EXPECT_EQ(Graph()->CommitCount(), before_count + 1);
+  EXPECT_NE(Chain(), before_chain);
   EXPECT_EQ(batch.changes.size(), 2u);
 }
 
@@ -1043,38 +1072,38 @@ TEST_F(EditorDocumentHistoryTest, UndoRedoAppliesTypedBatchesInRequiredOrder) {
   auto second = WithColorGradeTarget({"exposure", R"({"exposure_ev":3.0})", true});
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, second, &error)) << error;
   ASSERT_TRUE(history_.CommitAdjustment(handle, second, &error)) << error;
-  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"), 3.0f);
+  EXPECT_FLOAT_EQ(DocumentExposureEv(Working()->Document(), "grade.primary"), 3.0f);
   ASSERT_TRUE(history_.Undo(handle, &error)) << error;
-  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"), 2.0f);
+  EXPECT_FLOAT_EQ(DocumentExposureEv(Working()->Document(), "grade.primary"), 2.0f);
   ASSERT_TRUE(history_.Undo(handle, &error)) << error;
-  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"), 1.5f);
+  EXPECT_FLOAT_EQ(DocumentExposureEv(Working()->Document(), "grade.primary"), 1.5f);
   ASSERT_TRUE(history_.Redo(handle, &error)) << error;
-  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"), 2.0f);
+  EXPECT_FLOAT_EQ(DocumentExposureEv(Working()->Document(), "grade.primary"), 2.0f);
   ASSERT_TRUE(history_.Redo(handle, &error)) << error;
-  EXPECT_FLOAT_EQ(DocumentExposureEv(*guard_->document_, "grade.primary"), 3.0f);
+  EXPECT_FLOAT_EQ(DocumentExposureEv(Working()->Document(), "grade.primary"), 3.0f);
 }
 
 TEST_F(EditorDocumentHistoryTest, MoveToAncestorAndRedoChildUsesStoredDirections) {
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  const auto root_hash = alcedo::CanonicalPipelineDocumentJson(*guard_->document_);
+  const auto root_hash = alcedo::CanonicalPipelineDocumentJson(Working()->Document());
   auto first = WithColorGradeTarget({"exposure", R"({"exposure_ev":2.0})", true});
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, first, &error)) << error;
   ASSERT_TRUE(history_.CommitAdjustment(handle, first, &error)) << error;
-  const auto first_head = *guard_->working_head_commit_hash();
-  const auto first_hash = alcedo::CanonicalPipelineDocumentJson(*guard_->document_);
+  const auto first_head = *Head();
+  const auto first_hash = alcedo::CanonicalPipelineDocumentJson(Working()->Document());
   auto second = WithColorGradeTarget({"exposure", R"({"exposure_ev":3.0})", true});
   ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, second, &error)) << error;
   ASSERT_TRUE(history_.CommitAdjustment(handle, second, &error)) << error;
-  const auto second_hash = alcedo::CanonicalPipelineDocumentJson(*guard_->document_);
+  const auto second_hash = alcedo::CanonicalPipelineDocumentJson(Working()->Document());
   ASSERT_TRUE(history_.MoveHeadToCommit(handle, first_head, &error)) << error;
-  EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(*guard_->document_), first_hash);
+  EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(Working()->Document()), first_hash);
   ASSERT_TRUE(history_.Redo(handle, &error)) << error;
-  EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(*guard_->document_), second_hash);
+  EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(Working()->Document()), second_hash);
   ASSERT_TRUE(history_.Undo(handle, &error)) << error;
   ASSERT_TRUE(history_.Undo(handle, &error)) << error;
-  EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(*guard_->document_), root_hash);
+  EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(Working()->Document()), root_hash);
 }
 
 }  // namespace

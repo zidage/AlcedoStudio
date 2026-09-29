@@ -981,6 +981,145 @@ Suite totals：
 - `WorkspaceShellTests` / `EditorViewportReceivesRealPointerAndWheelEvents` 等 UI 测试全绿。
 - 手工验证：拖动滑块、Undo/Redo、Version checkout、库 ↔ 编辑器切换、几何面板开关与裁切确认、ROI 放大 detail patch。
 
+##### Phase P6 completion record (2026-09-28)
+
+**Status:** complete (the manual UI check was not run) — the editor session owns its working document, its CommitGraph, and its immutable root through a single-writer lease. The editor render port owns the only Interactive executor. The editor path takes no `PipelineGuard` and no cross-module lock. Every frame renders an immutable preview snapshot that the history publishes after each write. History operations no longer wait for the in-flight frame.
+Branch: `refactor/executor-ownership-p6` (based on `95404292b` of `refactor/executor-ownership-p5`). CRLF → LF conversion of three test files is in its own commit, `2d1daf858`.
+
+**Implementation notes (mapped to plan items):**
+
+| Plan item | Implementation |
+|---|---|
+| Lease `AcquireEditorLease` / `ReleaseEditorLease` | `PipelineMgmtService::AcquireEditorLease(id) -> EditorHistoryLease{graph_, root_, document_}`. The lease table `editor_leases_` (under `lock_`) replaces `editor_owned_`. It records who writes and holds no executor and no document. It reads the history in the same way as Copy and Paste (`ReadStoredHistory`). The document of the active head comes from the checkpoint when its labels match, otherwise from `BuildDocumentFromRoot`. `EditorHoldsImage` checks the lease table. `ReleaseEditorLease` ends the lease, returns the editor's last published committed snapshot to the cache (to be checked against storage), and writes its document to the element pipeline JSON (§6 decision 3: writes continue). `Sync()` also writes this JSON for images the editor still holds. Removed: `AcquireEditorPipeline`, `ReleaseEditorPipeline`, `LoadEditorPipeline`, `BindEditorStateFromStorage`, `CreateMissingRootForEditor`, the guard versions of `CheckoutVersion` / `RebuildActiveEditorPipeline` / `PersistEditorHistoryState`, and `PipelineGuard::editor_owned_` |
+| Session state holds the working document, history, and CommitGraph | `HistoryWorkingState{graph, root, document, journal, history, …}`. `document` is the new `EditorWorkingDocument` (`app/editor_working_document.{hpp,cpp}`, separate library `EditorWorkingDocument`): it holds the working document and its lineage, writes happen on the owner thread without a lock, `Replace` takes a new lineage, `PublishPreview` freezes the document and publishes it, and `CurrentPreview` can be read from any thread. `EditorSessionPipelinePort` only acquires and releases leases and exposes previews (`AcquireLease` / `ReleaseLease` / `CurrentPreview`). `IEditorPipelinePort` has only `CurrentPreview` left. The empty `Acquire`, `EnsureLoaded` with its `load_mutex_`, and the dead `CheckoutVersion` are deleted (E6, E11) |
+| Editor executor lifecycle | `EditorSessionRenderSchedulerPort` owns one `PipelineExecutor(ExecutorRole::Interactive)`. It is created on the first frame with the service's backend preference and lives as long as this port and its `PipelineScheduler(1)`. At dispatch, each frame takes `pipeline_port->CurrentPreview(element)`; if there is none, the frame fails as stale. An image switch changes the lineage, so the first frame triggers the §3.3 full release. `ClearSessionContext` (close / before a switch) queues `ReleaseBinding()` behind the in-flight frame on the single worker. `configure_under_render_lock_` is no longer set: the sink is attached in the task's `prepare_` on the single worker (see "Differences from the plan") (R3) |
+| History write path without locks (E1) | `LockLivePipeline` is deleted. All 30+ mutation sites write `state->document->Document()` directly. The history port's `PublishAfterWrite` (after every operation, including preview capture and Mask operations) calls `PublishWorkingSnapshots`: it always publishes the preview, and when there is no uncommitted value it publishes the same frozen document as the committed snapshot (one freeze per write) |
+| Delete owner-work deferral and event pumping (E2, E3) | `DeferIfLiveOwnershipHeld` and the deferral queue in `EditorSerialFrameAdmission` (`DeferOwnerWork` / `HasDeferredOwnerWork` / `TakeDeferredOwnerWork`) are deleted, so Undo / Redo / Checkout run immediately. `WaitForSessionIdle` / `CancelSessionAndWait` have no production callers; they are removed from the port, the coordinator, the render controller, and both port interfaces, together with the port's `processEvents` pump. `EditorSerialFrameAdmission` keeps only pacing |
+| `unsettled_preview_` becomes session-internal (S7, E4) | The guard flag is no longer written by the editor. The only rule is `HistoryWorkingState::HasUncommittedLiveValues()`: while it holds, no committed snapshot is published, and the save capture refuses with a real error in one place (every sealing save settles open input first). `CaptureAdjustmentBeforePreview` / `RestoreUnsettledPreview` keep their meaning |
+| Checkout, new Version, branch, Paste: build and then swap (S8) | Each operation builds the target document privately first (`EditorHistoryState::BuildDocumentForHead` → `BuildDocumentFromRoot`), with its panel projection. It then changes the graph, calls `SelectVersion`, and persists (`PersistEditorHistory`), restoring only the graph on failure. After everything succeeds it swaps with `document->Replace`. `BindLivePipelineDocument` is no longer used by the editor, and all 4 document-restore lambdas are deleted |
+| Merge the two replay paths (E8) | The history's own `ReplayWorkingDocumentFromImmutableRoot` (which ran when `PipelineMapper()` was null and did not bind the RAW color context) is deleted. The editor, snapshot building, Copy, and Paste all use `BuildDocumentFromRoot` (the plan's `ReplayDocument`) |
+| Remove the graph identity check (E7) | `EnsureWorkingState` no longer checks `history->graph() != guard->commit_graph_`. Only one `CommitGraph` instance exists (`HistoryWorkingState::graph`, shared with `MiniGitWorkingHistory`) and no API can rebind it |
+| Navigation seal (E9) | `StartRenderIdleBarrier`: Version operations that stay on the same image (Checkout / new Version / branch) only cancel this session's frames and mark `render_idle` at once; completion no longer waits for render idle. Switch / Close still wait for the in-flight frame to finish before releasing (see "Differences from the plan") |
+| Keep `SettlePendingInputForBoundary` | Unchanged |
+
+**Unusual paths investigated (user request: without a real special case they should use the common logic):**
+
+- **Editor opens an image without a root and creates the root on the spot** (P5 remaining gap): no special case found. It was a side effect of guard sharing (an arbitrary element id could be loaded), and it bound the Rec.709 working-space profile to RAW images. Deleted: `AcquireEditorLease` now fails with the real error `has no edit history root`, like thumbnails and export. Test fixtures that open the editor on images in storage now create the root first with `InitializeImageRoot`, the same way import does.
+- **Owner work queued behind the in-flight frame (`DeferIfLiveOwnershipHeld`)**: no special case; it existed only because the history had to take the render lock that the frame held. The investigation also found that the deferred retry ran inside the owner reduction and so **skipped the action policy check** (the rewritten `UndoAndCheckoutRunWhileAFrameIsInFlight` first showed that Undo in this fake setup is rejected by the policy because `can_undo` is false). After deletion, Undo goes through the same policy as every other command.
+- **History's fallback replay path** (E8): no special case, and it disagreed with the main path about binding the camera profile. Deleted.
+- **Version operations cleared the checkpoint when persisting (`CaptureMaterializationClearingSerializedPipelineState`) and wrote it back later**: the only reason was that the guard document could not be guaranteed equal to the new head. The session now builds the document of the new head itself, so `PersistEditorHistory` writes the history and that document's checkpoint in one transaction. WAL recovery used to do two steps (`PersistEditorHistoryState` + `SavePipeline`); it is now the same single transaction. Audit §3 item 6 (WAL recovery calling `SavePipeline` on the editor's own guard and releasing the editor's pin) is gone with it.
+- **The GUI document published separately** (`EditorSessionService::PublishDocumentSnapshot` froze once more before each notification): no special case; it was a second publication point for the same fact. `pipeline_document()` now reads the preview the history publishes, and the Debug freeze check (fingerprint) moves into `EditorWorkingDocument::PublishPreview`.
+- **The Mask "locked document" access (`WithLockedLiveDocument`)**: once the lock is gone the name is wrong. Renamed to `WithWorkingDocument` / `MaskDocumentOp` / `MaskSettle` / `mask_input_open`. The behavior is unchanged: Mask input follows the same uncommitted-value rule.
+- **The render port's destructor `processEvents` pump: kept.** The in-flight frame can be waiting in `DirectFrameSink` for the scene graph to hand over a present slot, which needs the GUI thread to process events. This is a present handshake, not ownership, so it is a real special case. The comment now states the reason.
+- **Close / Switch still wait for render idle: kept.** After release the in-flight frame may still present to the viewport sink. That is sink lifetime, not document ownership. Version operations on the same image no longer wait.
+
+**Differences from the plan or not stated in the plan:**
+
+- **Frame sink "attached once at construction"**: not done. The sink is the `EditorViewportItem` sink resolved at submit time, and the QML viewport can be recreated after the port is built. The final design: the task's `prepare_` re-attaches only when the resolved sink changed. It runs on the port's single worker, which has exclusive access to the executor, and it does not take the render lock (the `PipelineExecutor` precondition documentation was changed to "holds the render lock or has exclusive access"). `configure_under_render_lock_` has no editor user left and is deleted together with the scheduler in P7.
+- **Element pipeline JSON**: previously the editor guard's `dirty_` caused it to be written at project `Sync()` or eviction. It is now written from the editor's last published committed snapshot at lease release and at `Sync()`. The source of truth is still the history. A failed write does not stop the lease from being released; the port reports it with `qWarning` (`ReturnLeaseToService`), because some release paths run in destructors.
+- **When previews are published**: the plan says "freeze preview snapshot → submit {snapshot, intent}". In the implementation the history publishes after each write, and the render dispatch takes the latest preview. Reason: the coordinator merges and delays intents (the quality / detail slots can start on the worker thread after an earlier frame ends). A snapshot pinned to the intent would make a quality frame that starts later render a document that is already out of date. Taking the latest preview matches the old behavior of freezing at render time.
+- **`PipelineGuard` / `LoadPipeline` / `FreezeLiveSnapshot` / `MakeLiveSnapshotSource` / `BindLivePipelineDocument`** now have no production callers and are used only by the guard mechanism's own tests. They are deleted in P7 together with the guard.
+
+**Primary call chain (success path):**
+
+```text
+Slider: EditorSessionController::submitWrite → EditorSessionService (owner thread) consume
+  -> EditorSessionHistoryPort::CaptureAdjustmentBeforePreview
+       -> EditorHistoryMutation: ApplyEditorParameterWrite(state->document->Document())   no lock
+       -> PublishAfterWrite → EditorHistoryState::PublishWorkingSnapshots
+            -> EditorWorkingDocument::PublishPreview (Freeze, O(changed nodes))
+            -> uncommitted value present → do not publish committed
+  -> EditorSessionRenderController::RouteInitialRender → EditorRenderCoordinator::Submit
+  -> EditorSessionRenderSchedulerPort::DispatchPipelineFrame (owner or worker thread)
+       -> pipeline_port->CurrentPreview(element) → task.snapshot = that preview
+       -> EnsureExecutor (Interactive, first frame) ; prepare_ attaches the viewport sink
+  -> PipelineScheduler(1) worker: Apply(snapshot) → binding key (lineage, element) → Present
+Settle / Undo / Version: history writes / builds → Replace → PublishWorkingSnapshots
+  -> PipelineMgmtService::PublishCommitted(same frozen document) → thumbnails / export read it
+Open: EditorSessionHistoryPort::Acquire → EditorHistoryState::AcquireWorkingState
+  -> EditorSessionPipelinePort::AcquireLease → PipelineMgmtService::AcquireEditorLease
+  -> WAL alignment (missing suffix: replay into a graph copy → BuildDocumentFromRoot → swap
+     → PersistEditorHistory in one transaction → truncate WAL) → PublishWorkingSnapshots
+Close: history Release → ReleaseLease → ReleaseEditorLease (end lease, write JSON)
+  ; ClearSessionContext → worker ReleaseBinding
+```
+
+**Failure paths:**
+
+```text
+Image without root / history cannot be decoded or replayed → AcquireEditorLease throws, lease not held → open fails with the real error
+Lease already held → AcquireEditorLease throws; LoadHistorySnapshot / PersistHistory refuse while the editor holds it
+Frame for an image whose lease is not held → no preview → job fails as "stale", nothing is loaded
+Version build / selection / persistence fails → only the graph and selection are restored; the working document was never replaced
+PersistEditorHistory: storage state ≠ expected → refused, storage and graph unchanged
+WAL recovery persistence fails → recovered state stays in memory, WAL stays on disk for the next save (same as before)
+Save capture with uncommitted values → refused ("unsettled"), single check point
+Element JSON write at lease release fails → lease is released anyway, port logs qWarning, history unaffected
+Preview / committed publication throws → qWarning, the preceding history operation stands (same rule as P4)
+```
+
+**What was proven (executed tests):**
+
+| Name / item | Target | Result |
+|---|---|---|
+| Exit condition 2 (no lock wait on the slider path): `SliderTicksCompleteWhileAFrameHoldsTheEditorExecutorLock` | `EditorSessionHistoryPortTest` (new file `editor_working_document_test.cpp`) | PASS: while another thread holds the Interactive executor's render lock the whole time, 8 slider ticks plus the settle finish within 10 s. The preview after each tick has that tick's value |
+| `EditorWorkingDocument`: `ConstructionPublishesAPreviewOfTheWorkingDocument`, `PublishedPreviewKeepsItsValuesAfterALaterWrite`, `ReplaceTakesANewLineageAndPublishesOnlyWhenAsked` | same as above | PASS |
+| Exit condition 3 (671802168 regressions as lease assertions): `HeldEditorLeaseRefusesStorageHistoryUsersAndReleaseKeepsThePublishedState` (was `EditorOwnedPipelineIsNeverReboundFromStorage`) | `PipelineMapperTest` | PASS: a second lease throws; `LoadHistorySnapshot` / `PersistHistory` throw; `AcquireCommittedSnapshot` returns the editor-published object (storage is still at root); after release the element JSON equals the published document, and a new lease returns the persisted state |
+| 671802168: `HistoryOfAnUnacquiredImageIsNeverLoaded` (asserts `CurrentPreview == nullptr`), `SwitchCommitsQueuedEditBeforeTheSaveSeal`, `SwitchIsRefusedWithTheRealErrorWhenTheQueuedEditCannotCommit` | `EditorSessionHistoryPortTest`, `EditorPendingInputSessionTest` | PASS. `SplitHistoryGraphFailsClosedInsteadOfSavingAnEmptyHead` becomes `SaveCaptureAndHistoryReadDescribeTheSameWorkingHead` (a split is now impossible by construction; this asserts that the capture and the history read see the same head) |
+| Lease / persistence: `EditorLeaseOfAnImageWithoutHistoryRootFailsWithTheRealError`, `PersistEditorHistoryWritesHistoryAndCheckpointInOneTransaction`, `PersistEditorHistoryRefusesAnImageTheEditorDoesNotHold`, `EditorHistoryPersistenceRejectsAConcurrentMaterializedHistoryChange`, `VersionCheckoutPersistsTheReplayedDocumentAsTheCheckpointOfTheNewHead`, `EditorLeaseOfAnUnreplayableActiveHeadFailsWithTheReplayError` | `PipelineMapperTest` | PASS |
+| No deferral: `UndoAndCheckoutRunWhileAFrameIsInFlight` (was `UndoAndCheckoutWaitForOwnerWithoutBlockingGui`) | `EditorSerialFrameConsumptionTest` | PASS: while a frame is in flight, Undo runs immediately and Checkout finishes after the checkpoint, and the frame is still running |
+| Editor executor ownership: `FrameRendersOnThePortExecutorWithTheResolvedSinkAttached`, `RenderOfAnImageWithoutAHeldLeaseFailsAsStale`, `FrameRendersThePreviewPublishedLastAtDispatch` (CUDA, real DNG: rendered pixels follow the last published preview, not unpublished writes; binding = `{preview lineage, element}`), `ClearSessionContextReleasesTheExecutorBindingAfterTheFrame` (CUDA: after clear, binding is empty and result count is 0; executor and device unchanged) | `EditorSessionRenderSchedulerPortTest` | PASS |
+| Version operations write the checkpoint of the new head: `CheckoutDefaultAfterPastePersistsWithoutLiveIdentityError`, `ProjectReopenPreservesDagVersionsHistoryAndMasks`, `VersionCheckoutReplacesTheDocumentWithoutRetakingTheLease` | `EditorSessionHistoryPortTest` | PASS |
+| Export / thumbnails do not read uncommitted values or touch the editor executor: `ExportDuringUnsettledEditorPreviewUsesCommittedState`, `ThumbnailRendersWhileTheEditorHoldsTheRenderLockOfTheImage`, `EditorFrameLatencyStaysUnchangedWhileThumbnailsRender`, etc. | `ExecutorIsolationTest`, `ThumbnailCommittedRenderTest` | PASS (editor side now uses the lease + `EditorWorkingDocument` + test-owned Interactive executor) |
+| Library Paste: `LibraryPastePersistsTheReplayedRootDocumentOfTheNewVersion` (rewritten from the guard-based `PasteAsNewVersionBindsTargetDocumentWithoutMirror`) | `AdjustmentTransferServiceMiniGitTest` | PASS |
+
+Deleted tests: `EditorRenderCoordinatorTest.CancelSessionAndWaitJoinsTheMatchingSchedulerWork` and `WaitForSessionIdleDropsPendingButDoesNotCancelInflight` (the API is deleted and had no production callers); `EditorSessionHistoryPortTest.SelectedNodeProjectionCompletesWhileRenderLockHeld` (the history no longer touches any executor, so the case cannot happen; projection is still covered by `UnspecifiedWriteUsesSelectedProjectionNodeNotPrimaryGrade`); `EditorSessionLifecycleTest.PipelineAcquireFailureReturnsFalseAndNoHistoryAcquire` (there is no separate pipeline acquire any more; replaced by `HistoryAcquireFailureLeavesTheSessionFailedWithoutAGuard`).
+
+Commands (PowerShell; builds and tests serialized with `build\tmp\p6\serial.ps1`, which adds the vcpkg debug bin to PATH and sets `QT_QPA_PLATFORM=offscreen`):
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 8 -- -k 0      # full build, 0 errors
+ctest --test-dir build/debug -j 1 -R "^(EditorSessionHistoryPortTest|EditorSessionPipelinePortTest|EditorSerialInputBoundaryTest|EditorSessionRenderSchedulerPortTest|EditorSessionLifecycleTest|EditorSessionEditControllerTest|EditorSessionRenderControllerTest|EditorSessionNavigationControllerTest|EditorSessionNodeCommandTest|EditorSessionCommandQueue.*|EditorSessionActionPolicy.*|EditorSessionCq5.*|EditorSerialFrameConsumptionTest|EditorPendingInputSessionTest|EditorRenderCoordinatorTest|LibraryHistoryAndExportTest|ExecutorIsolationTest|ExportServiceTest|ThumbnailCommittedRenderTest|PipelineSharedUseTest|ImageAnalysisServiceTest|ImageAnalysisControllerTest|SemanticGenerationServiceTest|ImportServiceTest|FilterServiceTest|ImportRawOnlyTest|CiRawWorkflowTest|ExecutorSnapshotRenderTest|ExecutorRoleTest|GpuDagModelGraphTest|GpuDagRawInputTest|GraphImageCacheRetentionTest|GpuDagCuda(Workspace|Develop|Mask|PrimaryGrade|DrtProduct|DocumentGeometryRequest)Test|GpuDagOpenCl(Grade|Workspace|DrtProduct)Test|AdjustmentTransfer.*|EditorAdjustmentContextTest|EditorPanelProjectionTest|EditorPipelineCommandServiceTest|EditorNodeGraph.*|EditorMask.*|EditorHistory.*|EditorVersion.*|EditorParameterWrite.*|EditorAdjustmentPipelineTest|PipelineMapperTest|PipelineServiceTest|PipelineGraph.*|PipelineDocument.*|PipelineHistory.*|PipelineEditBatchTest|PipelineDngProfileBindingTest|PipelineSchedulerRequestIdTest|PipelineFrameSinkTest|ImportPipelineDocumentTest|MiniGit.*|DocumentTransfer.*|CommitGraph.*|SleeveServiceTest|AlbumBackend.*)\."
+ctest ... -R "^(EditorSessionHistoryPortTest|EditorSessionPipelinePortTest|EditorSerialInputBoundaryTest|EditorSerialFrameConsumptionTest|EditorPendingInputSessionTest|EditorSessionNavigationControllerTest|EditorSessionLifecycleTest|EditorSessionNodeCommandTest|EditorRenderCoordinatorTest|EditorSessionRenderControllerTest|EditorSessionEditControllerTest|PipelineMapperTest|AdjustmentTransfer.*|LibraryHistoryAndExportTest|ThumbnailCommittedRenderTest|ExecutorIsolationTest)\."   # after formatting and the fake fix
+ThumbnailServiceTest.exe --gtest_filter=DiskCacheTracksRootAndActiveHeadAndServesAfterPipelineIsRemoved
+```
+
+Suite totals:
+
+- Targeted regression set, 1598 tests: 1587 passed, 11 failed. 10 are baseline failures already recorded in P2–P5: `EditorSessionRenderSchedulerPortTest` 5 (the fixture input is an empty `ImageBuffer`, so the Renderer throws "product path requires encoded image bytes" before presenting; the migrated tests still fail this way), `GpuDagOpenClWorkspaceTest` 2, `EditorSessionCommandQueueBaselineTest.RapidImageSelectionKeepsRunningTargetAndReplacesOnlyUnstartedSelection`, `EditorSessionActionPolicyCq3Test.AdjustmentPanelsReloadOnlyWhenCommittedContentChanges`, and `SemanticGenerationServiceTest.GeneratesLabelsForRecursiveCameraSampleDatabaseAndSqlChecks` (TearDown). The remaining one was `UndoAndCheckoutRunWhileAFrameIsInFlight` (the fake history port had no `can_undo`, see above). After fixing it and formatting, the 370-test editor / lease / export / thumbnail subset ran: 370/370 passed.
+- `EditorMultiSliderQuickTest`: fails at `compile()` of `tst_multi_slider_handoff` with `module QtQuick.Controls plugin qtquickcontrols2plugin not found`. The QML import fails in the test runtime before any C++ changed in this phase runs. It was not compared against a clean HEAD. A teardown use-after-free in its `QuickTestSetup` (the backend was destroyed before its QObject children) was fixed during migration, and it now exits with 1 instead of crashing.
+- `ThumbnailServiceTests.FuzzScrollBrowsingSharedPtrLifetimeStress` (50,000 iterations) was not assessed: it ran more than 20 minutes while holding the build lock and was stopped by hand.
+- Full ctest was not run, per AGENTS.md.
+
+**Checklist / exit condition:**
+- [x] No `GetRenderLock` or `PipelineGuard` on the editor path: grep over `ui/alcedo_main/album_backend/editor_*`, `app/editor_*`, and `include/{app,ui/alcedo_main/album_backend}/editor_*` finds no calls. The only remaining `GetRenderLock` is inside `PipelineScheduler`'s shared task execution (the executor's internal lock, uncontended for the editor executor; P7 cleans up the scheduler)
+- [x] No lock wait on the owner thread per slider tick: `SliderTicksCompleteWhileAFrameHoldsTheEditorExecutorLock`. The only mutex on the slider path is the history port's own `mutex_` (it serializes GUI history reads such as `ReadHistorySnapshot`, is held briefly, and never waits for rendering)
+- [x] All 671802168 regression tests kept and passing (rewritten as lease assertions; see table)
+- [ ] `WorkspaceShellTests` / `EditorViewportReceivesRealPointerAndWheelEvents`: `WorkspaceShellTest` is retired in `tests/ui/CMakeLists.txt` and not built (ctest: "No tests were found"). Not run
+- [ ] Manual checks (dragging sliders, Undo/Redo, Version checkout, switching between library and editor, geometry panel and crop confirm, ROI zoom detail patch, first-frame time for decision 2): the application was not started, so not verified. This includes decision 2 in §6 ("does checkout do a full release"): the first-frame time after checkout and switch was not measured
+
+**LOC note:** Production code: 46 files, +1106 / −1682; new files `editor_working_document.{hpp,cpp}` (88 + 51 lines). `pipeline_service.cpp` 1144 → 918, `editor_history_mutation.cpp` 1136 → 953, `editor_history_state_detail.cpp` 352 → 282, `editor_session_service.cpp` 2592 → 2527 (it was already far above 1000 lines; this phase only deletes, no split), `editor_session_render_scheduler_port.cpp` 597 → 629 (it now owns the executor). Tests: about 40 files, +2879 / −2019 (three sub-agents migrated them in parallel by file group; each semantic change is listed in their reports and in the table above). New test support: `tests/support/editor_lease_test_support.hpp` (in-memory lease; the root is bound in the same way as by `BuildDocumentFromRoot`, so opening and replaying give the same document) and `tests/support/editor_history_port_test_reads.hpp`. `git clang-format` was run only on changed lines; two realignments of unchanged lines were reverted by hand.
+
+**Remaining gaps:**
+- **UI layer not verified**: the application was not started, and the manual items above and the first-frame time after checkout were not measured. Metal was not compiled (no macOS on this machine); `metal_*` tests were not migrated with this phase and must be compiled on a Mac.
+- **Guard code that is now dead**: `PipelineGuard`, `LoadPipeline`, `SavePipeline`, `ReleasePipelineUse`, `FreezeLiveSnapshot`, `MakeLiveSnapshotSource`, `BindLivePipelineDocument`, the scheduler's `configure_under_render_lock_`, and the executor's dual-role default constructor now serve only their own tests. They are deleted together in P7.
+- **The history port's `mutex_`**: it serializes GUI reads of history (`history_snapshot()` / `active_version_id()` / panel projection) with the owner thread's writes. It is not a render lock, but a GUI read can make a slider tick wait a short time. Moving those reads to owner-published values (like `pipeline_document()`) belongs to a separate GUI read-path cleanup and is not changed in this phase.
+- **Open / Switch / Close still cancel Mask input** (P4 remaining gap), unchanged.
+- **`SleeveService` duplicates images without copying history** (P5 remaining gap): a copied image has no root, so after this phase it also cannot be opened in the editor (real error `has no edit history root`). Not fixed in this phase.
+
+### Geometry 面板缺陷（先于当前 P7 修复，方案待定）
+
+**状态：** 只记录现象，方案之后另行规划。缺陷记录：[#221](https://github.com/zidage/AlcedoStudio/issues/221)。
+这个面板可能需要彻底重构，作为 P7 进行；修复之后才进入当前的 P7（删除共享机制）。阶段编号在规划时调整。
+
+`ui/alcedo_main/qml/EditorGeometryPanel.qml`（裁切 / 旋转）现象：
+
+1. **裁切后旋转，不是旋转裁切后的画面。** 裁切后旋转时，裁切框内的画面没有被当作新的"原图像"，而是变成以裁切框为视角去"看"原画面。
+2. **切换图像后 "Source Aspect" 变化，裁切失效。** 裁切并确认后切换图像，面板中的 "Source Aspect" 变成另一个值，可能是视口大小，而不是输入图像的源比例。此时复原裁切框，面板似乎把这个新的 aspect ratio 和对应的大小当作图像大小，裁切失效。
+3. **面板本应很简单。** 它只能在 full frame 视图中进入；从 ROI 视图进入时会自动回到 full frame。
+
+相关代码事实（未做诊断）：面板的 `imageAspect` 取自已存 `crop_rotate` 条目中的 `source_size`；条目没有 `source_size` 时改用 `interaction.metricAspect`，"Source aspect" 标签显示的就是这个值。
+
 ### P7 删除共享机制，收窄 `PipelineMgmtService`
 
 **目标：** 删掉只为共享而存在的代码。
@@ -1051,6 +1190,7 @@ Suite totals：
 | P3 executor 按请求接收快照 | 完成（2026-09-28） |
 | P4 缩略图 / 分析池 | 完成（2026-09-28） |
 | P5 导出、导入、复制、粘贴 | 完成（2026-09-28） |
-| P6 编辑器独占 executor | 未开始 |
-| P7 删除共享机制 | 未开始 |
+| P6 编辑器独占 executor | 完成（2026-09-28，手工 UI 验证未做） |
+| Geometry 面板缺陷（#221，先于 P7） | 已记录现象，方案待定 |
+| P7 删除共享机制 | 未开始 |（等待 Geometry 面板修复）
 | P8 文档与决策更新 | 未开始 |

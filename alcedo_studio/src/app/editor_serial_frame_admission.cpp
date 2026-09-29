@@ -111,24 +111,4 @@ void EditorSerialFrameAdmission::RequestInteractiveDeadlineIfNeeded() {
   }
 }
 
-void EditorSerialFrameAdmission::DeferOwnerWork(DeferredOwnerWork work) {
-  if (!work) {
-    return;
-  }
-  deferred_.push(std::move(work));
-}
-
-auto EditorSerialFrameAdmission::HasDeferredOwnerWork() const -> bool {
-  return !deferred_.empty();
-}
-
-auto EditorSerialFrameAdmission::TakeDeferredOwnerWork() -> DeferredOwnerWork {
-  if (deferred_.empty()) {
-    return {};
-  }
-  auto taken = std::move(deferred_.front());
-  deferred_.pop();
-  return taken;
-}
-
 }  // namespace alcedo

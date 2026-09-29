@@ -102,7 +102,7 @@ TEST_F(EditorSessionNavigationControllerTest, CheckpointFailureKeepsAAndNeverAcq
   EXPECT_EQ(std::count(fixture_.events().begin(), fixture_.events().end(), "release_a"), 0);
   EXPECT_EQ(std::count(fixture_.events().begin(), fixture_.events().end(), "thumbnail"), 0);
   EXPECT_EQ(fixture_.thumbnails().refresh_count, 0);
-  EXPECT_EQ(fixture_.pipeline().acquire_count, 1);
+  EXPECT_EQ(fixture_.history().acquire_count, 1);
 }
 
 /// Phase 6C-6: Version checkout always completes a save checkpoint first, then
@@ -371,7 +371,6 @@ TEST_F(EditorSessionNavigationControllerTest, SaveCompletionDeliversThroughQueue
   EXPECT_EQ(fixture_.lifecycle().identity().image_id,
             test::EditorSessionNavigationFixture::kImageB);
   EXPECT_EQ(fixture_.lifecycle().active_image_load_request().value, load_a.value + 1);
-  EXPECT_EQ(fixture_.pipeline().acquire_count, 2);
   EXPECT_EQ(fixture_.history().acquire_count, 2);
 }
 
@@ -498,7 +497,7 @@ TEST_F(EditorSessionNavigationControllerTest,
             test::EditorSessionNavigationFixture::kElementB);
   EXPECT_EQ(fixture_.lifecycle().active_image_load_request(), b_load);
   EXPECT_EQ(fixture_.tasks().end_count, ends_before + 1);
-  EXPECT_EQ(fixture_.pipeline().acquire_count, 2);
+  EXPECT_EQ(fixture_.history().acquire_count, 2);
   EXPECT_EQ(std::count(fixture_.events().begin(), fixture_.events().end(), "acquire_b"), 1);
 }
 

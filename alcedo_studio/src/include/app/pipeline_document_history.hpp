@@ -131,7 +131,8 @@ namespace alcedo {
  * counter. Does not clone the document. On any validation error or exception
  * the live node objects, node order, edge order, and counter are restored.
  *
- * @pre Caller holds the shared executor render lock.
+ * @pre Caller is the only writer of @p document (the editor session owner thread for its
+ *      working document).
  */
 [[nodiscard]] auto ApplyNodeGraphTopologyChange(PipelineDocument& document,
                                                 const NodeGraphTopologyChange& change,
