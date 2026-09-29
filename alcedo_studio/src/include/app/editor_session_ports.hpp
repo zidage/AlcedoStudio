@@ -24,6 +24,7 @@
 
 namespace alcedo {
 
+class CommitGraph;
 class Hash128;
 class MiniGitWorkingHistory;
 class PipelineDocument;
@@ -230,6 +231,19 @@ class IEditorHistoryPort {
                                const Hash128& /*version_id*/, std::string* error) -> bool {
     if (error != nullptr) {
       *error = "Version checkout is not supported by this history port";
+    }
+    return false;
+  }
+
+  /// Copy the owned image's CommitGraph and immutable root document for a
+  /// read-only consumer (Copy Adjustments). The copies are detached from the
+  /// live history, so the consumer never loads or observes the editor state.
+  virtual auto SnapshotHistorySource(const EditorHistoryGuardHandle& /*guard*/,
+                                     std::shared_ptr<const CommitGraph>* /*graph*/,
+                                     std::shared_ptr<const PipelineDocument>* /*root_document*/,
+                                     std::string* error) -> bool {
+    if (error != nullptr) {
+      *error = "History source snapshot is not supported by this history port";
     }
     return false;
   }

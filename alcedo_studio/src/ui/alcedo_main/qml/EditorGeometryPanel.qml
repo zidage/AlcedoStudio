@@ -18,6 +18,9 @@ Item {
     // Geometry draft dirty: crop/rotate edits while the panel is open stay on the
     // overlay until confirm (panel leave or Enter). Pipeline submit is deferred.
     property bool draftDirty: false
+    // Session identity (image + load epoch) the draft was edited in. A draft
+    // belongs to exactly one image; it is never submitted to another one.
+    property string draftIdentityKey: ""
     property var aspectEntries: []
     property int sourceImageWidth: 0
     property int sourceImageHeight: 0
@@ -146,9 +149,16 @@ Item {
         }
     }
 
+    function setDraftDirty() {
+        if (!root.draftDirty)
+            root.draftIdentityKey = root.editorSession
+                    ? String(root.editorSession.viewportIdentityKey) : ""
+        root.draftDirty = true
+    }
+
     function markDraftDirty() {
         if (!root.restoring && !root.syncingToInteraction)
-            root.draftDirty = true
+            root.setDraftDirty()
     }
 
     function submitCrop(settled) {
@@ -164,6 +174,12 @@ Item {
     function confirmPendingCrop() {
         if (!root.draftDirty)
             return false
+        const currentKey = root.editorSession ? String(root.editorSession.viewportIdentityKey) : ""
+        if (root.draftIdentityKey !== currentKey) {
+            // The image changed under the draft; it must not land on this one.
+            root.draftDirty = false
+            return false
+        }
         const ok = root.submitCrop(true)
         if (ok)
             root.draftDirty = false
@@ -260,7 +276,7 @@ Item {
         root.syncToInteraction()
         // Reset stays draft-only (legacy MarkGeometryEditDirty). Enter / leave
         // commits the full-frame crop when the user confirms.
-        root.draftDirty = true
+        root.setDraftDirty()
     }
 
     function restoreDefaults() {
@@ -566,6 +582,16 @@ Item {
     }
 
     Connections {
+        target: root.editorSession
+        ignoreUnknownSignals: true
+        // Image navigation and saves seal the session: commit the draft first
+        // so it is part of this image's history, not dropped or carried over.
+        function onPanelDraftCommitRequested() {
+            root.confirmPendingCrop()
+        }
+    }
+
+    Connections {
         target: root.interaction
         function onCropRectCommitted(rect, isFinal) {
             if (!root.panelActive || root.syncingToInteraction || root.restoring)
@@ -574,7 +600,7 @@ Item {
             // Pipeline bake waits for confirmPendingCrop (leave / Enter).
             root.overlayInputActive = !isFinal
             root.syncFromOverlayRect(rect)
-            root.draftDirty = true
+            root.setDraftDirty()
             if (isFinal)
                 root.overlayInputActive = false
         }
@@ -588,7 +614,7 @@ Item {
             if (root.interaction.cropRectNormalized)
                 root.setRectModels(root.interaction.cropRectNormalized)
             root.syncingToInteraction = wasSyncing
-            root.draftDirty = true
+            root.setDraftDirty()
             if (isFinal)
                 root.overlayInputActive = false
         }

@@ -232,6 +232,16 @@ auto AdjustmentFieldIsSupported(EditorNodeKind kind, std::string_view field_key)
   return false;
 }
 
+auto PanelWriteOwnerNode(const PipelineDocument& document, const NodeId& selected_node_id,
+                         std::string_view field_key) -> NodeId {
+  if (field_key == "crop_rotate") {
+    if (const auto* develop = document.Develop(); develop != nullptr) {
+      return develop->Id();
+    }
+  }
+  return selected_node_id;
+}
+
 auto CompleteSelectedNodeParameterTarget(const PipelineDocument& document,
                                          const NodeId& selected_node_id, std::string field_key,
                                          std::string* error)

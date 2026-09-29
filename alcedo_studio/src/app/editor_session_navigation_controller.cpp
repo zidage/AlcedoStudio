@@ -400,7 +400,17 @@ void EditorSessionNavigationController::ClearPendingAction() {
 auto EditorSessionNavigationController::SealAndStartSave(bool persist_changes,
                                                          bool start_background_save)
     -> CheckpointTicket {
+  seal_error_.clear();
   const auto identity = lifecycle_.identity();
+  if (persist_changes && seal_preparer_) {
+    // Queued input of this image must be history before the capture and before
+    // the render barrier: once the image is released, nothing may apply it.
+    std::string prepare_error;
+    if (!seal_preparer_(&prepare_error)) {
+      seal_error_ = prepare_error.empty() ? "Pending edits could not be settled" : prepare_error;
+      return CheckpointTicket{};
+    }
+  }
   const auto sealed_load_request = lifecycle_.active_image_load_request();
   StartRenderIdleBarrier(sealed_load_request);
 
@@ -421,6 +431,7 @@ auto EditorSessionNavigationController::SealAndStartSave(bool persist_changes,
     std::string error;
     auto        capture = history_->CaptureSaveCheckpoint(lifecycle_.history_guard(), &error);
     if (!capture || !error.empty()) {
+      seal_error_ = error.empty() ? "Save capture failed" : error;
       return CheckpointTicket{};
     }
     if (!start_background_save) {
@@ -642,6 +653,10 @@ void EditorSessionNavigationController::SetCompletionNotifier(
 
 void EditorSessionNavigationController::RetainPendingFailure(PendingEditorAction pending,
                                                              std::string         message) {
+  if (!seal_error_.empty()) {
+    message += ": " + seal_error_;
+    seal_error_.clear();
+  }
   lifecycle_.KeepCurrentAfterCheckpointFailure(std::move(message));
   state_->pending_recovery = std::move(pending);
   NotifyCompletion(false, true, lifecycle_.last_error(), state_->pending_recovery->ticket);

@@ -310,12 +310,13 @@ auto EditorSessionRenderSchedulerPort::EnsureContextForRequest(
     return std::nullopt;
   }
 
-  std::string pipeline_error;
-  auto        guard = pipeline_port->EnsureLoaded(request.intent.element_id, &pipeline_error);
+  // Rendering only reads the pipeline the editor session owns. A request for an image the
+  // session no longer (or not yet) holds is stale; loading here would rebind that image's
+  // history and live document behind the session.
+  auto guard = pipeline_port->CurrentGuard(request.intent.element_id);
   if (!guard || !guard->pipeline_) {
     if (error) {
-      *error = pipeline_error.empty() ? "No pipeline guard for image; open may lack a project"
-                                      : std::move(pipeline_error);
+      *error = "Editor pipeline is not held for this image; the render request is stale";
     }
     return std::nullopt;
   }

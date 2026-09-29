@@ -8,6 +8,8 @@
 #include <optional>
 
 #include "app/editor_session_types.hpp"
+#include "app/pipeline_service.hpp"
+#include "edit/history/commit_graph.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_checkpoint.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_mutation.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_projection.hpp"
@@ -47,7 +49,7 @@ auto EditorSessionHistoryPort::Acquire(sl_element_id_t element_id, std::string* 
   auto journal_path = state_->JournalPathResolver();
   if (journal_path) {
     std::string prepare_error;
-    if (!state_->EnsureWorkingState(element_id, &prepare_error)) {
+    if (!state_->AcquireWorkingState(element_id, &prepare_error)) {
       if (error)
         *error = prepare_error.empty() ? "Editor Mini-Git history initialization failed"
                                        : std::move(prepare_error);
@@ -225,6 +227,27 @@ auto EditorSessionHistoryPort::ReadHistorySnapshot(const alcedo::EditorHistoryGu
                                                    std::string* error) -> bool {
   std::scoped_lock lock(mutex_);
   return projection_->ReadHistorySnapshot(guard, snapshot, error);
+}
+
+auto EditorSessionHistoryPort::SnapshotHistorySource(
+    const alcedo::EditorHistoryGuardHandle&          guard,
+    std::shared_ptr<const alcedo::CommitGraph>*      graph,
+    std::shared_ptr<const alcedo::PipelineDocument>* root_document, std::string* error) -> bool {
+  if (graph == nullptr || root_document == nullptr) {
+    if (error) *error = "History source snapshot requires output storage";
+    return false;
+  }
+  std::scoped_lock lock(mutex_);
+  auto             state = state_->EnsureWorkingState(guard.element_id, error);
+  if (!state) return false;
+  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_ ||
+      !state->pipeline_guard->root_document_) {
+    if (error) *error = "Editor history source is unavailable";
+    return false;
+  }
+  *graph = std::make_shared<const alcedo::CommitGraph>(*state->pipeline_guard->commit_graph_);
+  *root_document = state->pipeline_guard->root_document_;
+  return true;
 }
 
 auto EditorSessionHistoryPort::HasUnmaterializedChanges(

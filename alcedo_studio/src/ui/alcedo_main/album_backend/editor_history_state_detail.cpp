@@ -33,6 +33,34 @@ void EditorHistoryState::SetPipelinePort(
 
 auto EditorHistoryState::EnsureWorkingState(sl_element_id_t element_id, std::string* error)
     -> std::shared_ptr<HistoryWorkingState> {
+  std::shared_ptr<HistoryWorkingState> state;
+  {
+    std::scoped_lock lock(mutex_);
+    const auto       existing = working_states_.find(element_id);
+    if (existing != working_states_.end()) state = existing->second;
+  }
+  if (!state) {
+    if (error) {
+      *error = "Editor history is not acquired for image " + std::to_string(element_id);
+    }
+    return nullptr;
+  }
+  // One CommitGraph per open image: the WAL-backed history and the live guard (read by the
+  // history panel and every save capture) must share it. A split would commit into one graph
+  // and persist the other, dropping history.
+  if (state->history && state->pipeline_guard &&
+      state->history->graph() != state->pipeline_guard->commit_graph_) {
+    if (error) {
+      *error = "Editor history no longer drives the live pipeline CommitGraph for image " +
+               std::to_string(element_id);
+    }
+    return nullptr;
+  }
+  return state;
+}
+
+auto EditorHistoryState::AcquireWorkingState(sl_element_id_t element_id, std::string* error)
+    -> std::shared_ptr<HistoryWorkingState> {
   std::shared_ptr<EditorSessionPipelinePort> pipeline_port;
   std::function<std::filesystem::path(sl_element_id_t)> journal_path;
   {

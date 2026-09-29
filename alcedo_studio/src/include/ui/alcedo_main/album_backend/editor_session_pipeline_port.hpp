@@ -25,13 +25,16 @@ namespace alcedo::ui {
 struct EditorSessionPipelineMappers {
   /// Resolve the service that owns the image-scoped pipeline guard.
   std::function<std::shared_ptr<alcedo::PipelineMgmtService>()>          pipeline_service;
-  /// Load the serialized editor pipeline for one Sleeve element.
+  /// Take editor ownership of one Sleeve element's pipeline (history + live document).
   std::function<std::shared_ptr<alcedo::PipelineGuard>(sl_element_id_t)> load_editor_pipeline_guard;
 };
 
-/// Owns the pipeline guards used by one editor session. Acquire is deliberately
-/// lightweight; EnsureLoaded is the explicit first-frame operation that may
-/// resolve a real pipeline from the project service.
+/// Owns the pipeline guards used by one editor session. This port is the only
+/// place that binds an image's history and live document for the editor:
+/// EnsureLoaded (driven by the history working-state acquisition) takes editor
+/// ownership once, and Release returns it. Readers such as the render worker
+/// use CurrentGuard and never load; a request for an image this port does not
+/// hold is stale and fails instead of rebinding the image from storage.
 class EditorSessionPipelinePort final : public alcedo::IEditorPipelinePort {
  public:
   /// Replace the service callbacks used by later guard acquisitions.
@@ -52,7 +55,8 @@ class EditorSessionPipelinePort final : public alcedo::IEditorPipelinePort {
   /// Resolve the application pipeline service for history operations that
   /// rebuild the already-loaded editor guard.
   [[nodiscard]] auto PipelineMapper() const -> std::shared_ptr<alcedo::PipelineMgmtService>;
-  /// Resolve and cache the real pipeline guard used by history and rendering.
+  /// Take editor ownership of the image's pipeline once and cache the guard until Release.
+  /// Loads are serialized, so concurrent callers never bind the same image twice.
   auto               EnsureLoaded(sl_element_id_t element_id, std::string* error)
       -> std::shared_ptr<alcedo::PipelineGuard>;
 
@@ -64,6 +68,8 @@ class EditorSessionPipelinePort final : public alcedo::IEditorPipelinePort {
  private:
   EditorSessionPipelineMappers                                               services_{};
   mutable std::mutex                                                          mutex_;
+  /// Serializes EnsureLoaded's check-then-load; never held by readers.
+  std::mutex                                                                  load_mutex_;
   std::unordered_map<sl_element_id_t, std::shared_ptr<alcedo::PipelineGuard>> guards_;
 };
 

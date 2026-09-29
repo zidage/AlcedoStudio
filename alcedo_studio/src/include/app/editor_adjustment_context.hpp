@@ -156,6 +156,18 @@ struct EditorAdjustmentContext {
     -> std::optional<EditorParameterTarget>;
 
 /**
+ * @brief Node a panel write for @p field_key must resolve against.
+ *
+ * Geometry (`crop_rotate`) belongs to the document and its panel only to the
+ * Develop node, so it always resolves against Develop: a Geometry draft that
+ * is committed while the selection moves to another node still reaches its
+ * owner. Every other field resolves against @p selected_node_id.
+ */
+[[nodiscard]] auto PanelWriteOwnerNode(const PipelineDocument& document,
+                                       const NodeId& selected_node_id, std::string_view field_key)
+    -> NodeId;
+
+/**
  * @brief Supported production adapter targets for @p selected_node_id.
  *
  * @return nullopt when the node is missing or a supported instance cannot be
