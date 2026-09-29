@@ -24,6 +24,14 @@ Related documents:
 - [Editor Single Live Pipeline + WAL + Checkpoint Simplification Plan](editor_single_live_pipeline_wal_checkpoint_plan.md)
   (**binding identity model** for head / chain hash / checkpoint — do not reintroduce dual pipeline
   heads from older 7A wording)
+
+**Superseded by 2026-09-27 executor ownership refactor** (2026-09-29): this plan assumes that
+`PipelineMgmtService` owns the live executor of the open image, so checkout and rollback
+"rebuild the live executor" and the rollback tuple contains "live pipeline executor state". That no
+longer holds. The editor session owns the working document and history; its executor is private to
+the editor render port and holds no document, so rollback restores the document and history only.
+`PipelineMgmtService` keeps committed snapshots and the editor lease. See
+[Executor ownership refactor plan](../../../refactor/2026-09-27-executor-ownership-refactor-plan.md).
 - [QML Editor and Qt RHI Unified Workspace Refactor Plan](qml_editor_rhi_unified_workspace_plan.md)
 - [Alcedo Studio QML Visual Identity](../../../../alcedo_studio/src/ui/alcedo_main/DESIGN.md)
 

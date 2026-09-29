@@ -1296,6 +1296,48 @@ Suite totals:
   - G10 中两个 pin 计数相关的 flaky 测试记录。
 - 更新 `docs/technical/app/` 中涉及服务职责的说明。
 
+##### Phase P8 completion record (2026-09-29)
+
+**Status:** complete — documentation only. Every conflicting decision the plan lists now has a "Superseded by 2026-09-27 executor ownership refactor" note that links here; the three open items are closed or updated; `docs/technical/app/` has a current note on service responsibilities. No code changed.
+Branch: `refactor/executor-ownership-p8` (based on `73326e822` of `refactor/executor-ownership-p7`).
+
+**Changes by plan item:**
+
+| Plan item | File | Change |
+|---|---|---|
+| single-live-pipeline plan A1 | `docs/roadmap/alcedo_studio/ui/editor_single_live_pipeline_wal_checkpoint_plan.md` | Note under the header: A1, the "Live pipeline (executor)" role row, and the `PipelineGuard` code mirror no longer apply; the identity rules (HEAD only in history, chain once per commit, checkpoint is a label) still apply. The A1 row carries the same note. The non-goal "split `PipelineExecutor` into param graph and GPU executor" is marked done (P3) |
+| NM1 §10.5 background 1 and §12 | `docs/roadmap/alcedo_studio/edit/node_mask_editor/phase_nm1_pipeline_document_editing_plan.md` | Note after background 1 with the reason, referring to audit §4: the rejected snapshot cloned an executor per snapshot, deep-copied parameters, and read mutable live state; the new snapshot has no executor, shares nodes by copy-on-write, and non-editor consumers read only committed snapshots. Note after §12: the guard/pin and "no lease service, no per-consumer executor" constraints are withdrawn; the domain function form still applies |
+| G10 §6.1 and §16.4 | `docs/roadmap/alcedo_studio/edit/gpu_dag_final_removal_phase_plan.md` | §6.1: the `PipelineDocument`, `PipelineMgmtService`, and `PipelineExecutor` rows no longer describe the code; current owners listed. §16.4: the rule "executor API stays source-compatible" is withdrawn (P3 snapshot argument, P6/P7 single-role executors) |
+| Phase 6C / 7A "PMS owns the live executor" | `docs/roadmap/alcedo_studio/ui/phase_6c_mini_git_history_and_pipeline_snapshot_plan.md`, `phase_7a_history_versions_repair_and_ui_refactor_plan.md` | 6C: note under the status (the **Pipeline snapshot** definition, Section 5, and the chains that return a live snapshot to the service are historical; the checkpoint compare in Section 5 still applies and now runs in `AcquireEditorLease`), plus a pointer at Section 5. 7A: note under the related documents (no "rebuild live executor" on checkout; rollback restores document and history only) |
+| 2026-05-24 frame sink remaining item | `docs/refactor/2026-05-24-pipeline-frame-sink-thumbnail-lifecycle.md` | New section "Resolution: 2026-09-29": closed. Only the editor's interactive executor has a `frame_sink_`, attached in each task's `prepare_` on the single editor worker; batch executors never get one. `frame_sink_` stays an executor member rather than a per-invocation context, because one owner and one worker per executor leave nothing for that to protect |
+| Issue #113 (disk cache label) | `docs/issues/thumbnail_disk_cache_writeback.md` | Status set to resolved by P4, with a "Resolution" section: the key and pixels come from the same committed snapshot; the removed helpers and state are listed (checked by grep over `src/` and `tests/`: none remain). The acceptance criteria are marked one by one; two are not met: no test of concurrent thumbnail + analysis writes or write failure during a render, and the parallel task count changed on purpose (pool of 2) |
+| G10 two pin-count flaky tests | `gpu_dag_final_removal_phase_plan.md` status line and §17.12 | Closed: both read `PipelineGuard::pin_count_`, which no longer exists. `OrdinaryThumbnailReusesLiveEditorExecutorAndDocument` → `ThumbnailRendersOnItsOwnExecutorAndLeavesTheEditorStateUntouched` (P4, P7); `AnalysisRenditionRendersWithoutSavePipelineOnLiveGuard` → `AnalysisRenditionLeavesTheEditorLeaseAndWorkingDocumentUntouched` (P7). The `pin_count_` still read in `ThumbnailServiceTest` belongs to `ThumbnailGuard` (memory cache) |
+| `docs/technical/app/` service responsibilities | new `docs/technical/app/pipeline_services.md`; banners on `image_pool_service.md`, `import_service.md` | The existing files are archived design chats with no current service description, so a new note holds the ownership table, the `PipelineMgmtService` operation groups, executor rules, and the editor / thumbnail / export / import-copy-paste call chains. The two chats that discuss RenderService and pipeline state get a banner pointing to it. `sleeve_service.md` and `architecture_details.md` do not mention pipelines or executors and are unchanged |
+
+**Primary chain documented (the state these notes point to):**
+
+```text
+Editor commit -> MiniGitWorkingHistory -> PipelineMgmtService::PublishCommitted(committed snapshot)
+Thumbnail / analysis / export -> PipelineMgmtService::AcquireCommittedSnapshot
+  -> owner's batch executor (pool 2 / export 1) -> PipelineExecutor::Apply(snapshot)
+  -> thumbnail: disk cache written under the key built from the same snapshot
+```
+
+**Failure chain:** not applicable (no code change).
+
+**What was proven:** every statement in the notes was checked against the code on this branch: `PipelineMgmtService` API (`pipeline_service.hpp`), `kDefaultBatchExecutorCount` = 2 and the default used by `ProjectHandler`, `kExportExecutorCount` = 1, `BatchExecutorPool` creating `ExecutorRole::Batch` executors, the editor sink attached in `prepare_` (`editor_session_render_scheduler_port.cpp`), `BuildDiskCacheKey` / `kDiskCacheSchemaVersion` = 3, and the test renames (`git log -S`). Tests were not run, per the user's instruction; the change touches only Markdown. Relative links were written for each file's directory; they were not checked by a link tool.
+
+**Checklist / exit condition:**
+- [x] Superseded notes with a link to this plan: single-live-pipeline A1; NM1 §10.5 background 1 and §12; G10 §6.1 and §16.4; Phase 6C / 7A.
+- [x] Closed or updated: the 2026-05-24 frame sink item; Issue #113; the two G10 pin-count flaky records.
+- [x] `docs/technical/app/` updated.
+
+**Remaining gaps:**
+- `docs/technical/` is ignored by git (`.gitignore:1112`, `/docs/technical`), so the new `pipeline_services.md` and the two banners exist only in the working copy and are not in the commit. Tracking them needs the ignore rule changed or the note moved, which is the user's decision.
+- GitHub issue [#113](https://github.com/zidage/AlcedoStudio/issues/113) itself is not closed; the document says it can be closed with a link to its resolution section.
+- The audit ([2026-09-27-executor-ownership-audit.md](2026-09-27-executor-ownership-audit.md)) is left unchanged as the pre-refactor record.
+- P2A (mask copy-on-write per item) is still not started.
+
 ---
 
 ## 5. 风险与对策
@@ -1333,4 +1375,4 @@ Suite totals:
 | P6 编辑器独占 executor | 完成（2026-09-28，手工 UI 验证未做） |
 | Geometry 面板重构（#221，先于 P7） | 完成（2026-09-28，手工 UI 验证未做） |
 | P7 删除共享机制 | 完成（2026-09-29，手工 UI 验证未做） |
-| P8 文档与决策更新 | 未开始 |
+| P8 文档与决策更新 | 完成（2026-09-29） |

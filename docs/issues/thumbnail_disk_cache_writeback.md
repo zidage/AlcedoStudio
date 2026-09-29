@@ -2,7 +2,8 @@
 
 Date: 2026-08-30
 
-Status: Open; design discussion pending.
+Status: Resolved by the 2026-09-27 executor ownership refactor (P4, 2026-09-28); see
+[Resolution](#resolution-2026-09-29). Two test-coverage criteria are not met and are listed there.
 
 GitHub issue: [#113](https://github.com/zidage/AlcedoStudio/issues/113).
 
@@ -133,3 +134,46 @@ Do not use sleeps, unlimited polling, or a longer timeout as the fix.
 - `alcedo_studio/tests/app/pipeline_shared_use_test.cpp`: the existing test for commit labels.
 - `docs/roadmap/alcedo_studio/edit/node_mask_editor/phase_nm1_pipeline_document_editing_plan.md`.
 - `docs/roadmap/alcedo_studio/edit/node_mask_editor_master_plan.md`.
+
+## Resolution (2026-09-29)
+
+**Superseded by 2026-09-27 executor ownership refactor**
+([plan](../refactor/2026-09-27-executor-ownership-refactor-plan.md), P4 record). The design
+questions above no longer arise. The defect was that the callback read live state after the render
+to guess which commit produced the pixels. Now the disk cache key and the pixels come from the same
+immutable committed snapshot, so no check is needed:
+
+- `ThumbnailService::LookUpRendition` calls `PipelineMgmtService::AcquireCommittedSnapshot` and
+  builds the disk key from it (`BuildDiskCacheKey`: `edit_version_hash` = `head:chain`, or the
+  root before the first commit; `cache_schema_version` 3).
+- The render task receives the same snapshot. The callback writes the delivered pixels under the
+  key built before the render, unless the request was canceled. It reads no HEAD, dirty state, or
+  preview state.
+- Non-editor renders only receive committed snapshots, so uncommitted editor values never reach
+  the disk cache. A result for an older head gets that head's key, which is correct, not stale.
+- Removed: `ReadCurrentVersionHash`, `RenderedCommitLabel`, `CommitLabelFromLiveGuard`,
+  `EnqueueDiskWriteIfCommitLabelMatches`, `ThumbnailDiskCacheWriteAllowed`,
+  `unsettled_preview_`, and `SyncUnsettledPreviewFlag`.
+- The test `PipelineSharedUseTest.QueuedRenderDoesNotStorePixelsUnderStaleCommitLabel` was replaced
+  by `ThumbnailCommittedRenderTest.DiskCacheEntriesAreLabelledWithTheRenderedCommittedState`.
+
+Acceptance criteria, as they stand after the refactor:
+
+- [x] Scheduler callbacks do not read live HEAD, dirty state, or preview state to decide whether to write.
+- [x] The service writes valid results under the correct keys and can read them again
+  (`DiskCacheEntriesAreLabelledWithTheRenderedCommittedState`).
+- [x] The service does not reject all writes as a substitute for correct behavior.
+- [x] Canceled results do not enter the disk index (the callback returns first);
+  `ThumbnailDiskCacheServiceTest.InvalidateSuppressesPendingWrites` covers invalidation of
+  queued writes. With the key taken from the rendered snapshot, no result is invalid or obsolete
+  for its own key.
+- [x] The change removes the copied state and helpers listed above.
+- [x] Write permission needs no decision any more; invalidation and write completion stay in
+  `ThumbnailDiskCacheService` (`Invalidate`, pending-write queue, `Shutdown` drain).
+- [ ] Not met: no test covers concurrent writes of thumbnail and analysis namespaces together, or
+  write failures during a render.
+- [ ] Not met as written: the number of parallel background tasks changed on purpose. Thumbnail and
+  analysis renders now use a pool of 2 batch executors (plan decision 1) instead of one executor
+  per image.
+
+The GitHub issue can be closed with a link to this section.

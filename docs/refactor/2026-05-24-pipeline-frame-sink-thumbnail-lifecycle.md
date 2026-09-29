@@ -361,3 +361,24 @@ completion would move frame sink binding from cached executor state to per-invoc
 context (e.g., passing an optional `IFrameSink*` through `PipelineTask::options_` or a dedicated
 render context struct). The current hardening is sufficient to prevent the concrete crash paths,
 but future thumbnail/editor interactions may benefit from the cleaner model.
+
+## Resolution: 2026-09-29
+
+**Superseded by 2026-09-27 executor ownership refactor**
+([plan](2026-09-27-executor-ownership-refactor-plan.md), P3–P7). The remaining item above is
+closed. The problem it tracked was that executors cached per image by `PipelineMgmtService` kept an
+editor sink that thumbnail and export renders could reach. That cannot happen any more:
+
+- `PipelineMgmtService` owns no executor. `PipelineGuard` and the per-image executor cache are
+  deleted.
+- Thumbnail, analysis, and export render on batch executors that their services own
+  (`ThumbnailService` pool of 2, `ExportService` 1). Nothing attaches a frame sink to them, and a
+  batch executor rejects interactive requests.
+- Only the editor's interactive executor, owned by `EditorSessionRenderSchedulerPort`, has a
+  `frame_sink_`. The port attaches the viewport sink in each task's `prepare_` on the single
+  editor worker, and changes it only when the viewport item is replaced.
+- Execution stages no longer exist. Each render receives an immutable `PipelineGraphSnapshot`, so
+  reopening the editor or importing history cannot change what a render in progress reads.
+
+`frame_sink_` stays a member of the executor instead of moving into a per-invocation render
+context. With one owner and one worker per executor, per-invocation binding would add no safety.
