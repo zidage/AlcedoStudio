@@ -46,6 +46,8 @@ class ColorGradeNodeModel final : public INodeModel {
   [[nodiscard]] auto InputPorts() const -> std::span<const PortDescriptor> override;
   [[nodiscard]] auto OutputPorts() const -> std::span<const PortDescriptor> override;
   [[nodiscard]] auto ToJson() const -> nlohmann::json override;
+  /// Shares adjustment Models and the Mask list with this node (@ref INodeModel::Clone).
+  [[nodiscard]] auto Clone() const -> std::shared_ptr<INodeModel> override;
 
   /**
    * @brief Replace the UI label. Does not change @ref Id.
@@ -116,6 +118,9 @@ class ColorGradeNodeModel final : public INodeModel {
 
   [[nodiscard]] auto AdjustmentCount() const -> std::size_t { return adjustments_.size(); }
   [[nodiscard]] auto AdjustmentIdAt(std::size_t index) const -> const AdjustmentInstanceId&;
+  /// Non-const Model lookups return a Model that only this node holds; a Model shared with a
+  /// frozen document is copied first (@ref MutableAdjustmentModel). Use the const overloads to
+  /// read.
   [[nodiscard]] auto AdjustmentAt(std::size_t index) -> IOperatorModel&;
   [[nodiscard]] auto AdjustmentAt(std::size_t index) const -> const IOperatorModel&;
   [[nodiscard]] auto FindAdjustment(const AdjustmentInstanceId& id) -> IOperatorModel*;
@@ -228,14 +233,33 @@ class ColorGradeNodeModel final : public INodeModel {
   [[nodiscard]] auto BrushPlacementTranslation(const MaskId& mask_id) const -> Vector2;
 #endif
 
-  [[nodiscard]] auto MaskCount() const -> std::size_t { return masks_.size(); }
-  [[nodiscard]] auto Masks() const -> std::span<const MaskModel> { return masks_; }
+  [[nodiscard]] auto MaskCount() const -> std::size_t { return mask_list_->masks.size(); }
+  [[nodiscard]] auto Masks() const -> std::span<const MaskModel> { return mask_list_->masks; }
+  /// Non-const Mask lookups copy the Mask list first when a frozen document shares it.
   [[nodiscard]] auto MaskAt(std::size_t index) -> MaskModel&;
   [[nodiscard]] auto MaskAt(std::size_t index) const -> const MaskModel&;
   [[nodiscard]] auto FindMask(const MaskId& mask_id) -> MaskModel*;
   [[nodiscard]] auto FindMask(const MaskId& mask_id) const -> const MaskModel*;
 
  private:
+  /**
+   * @brief Mask values and their content revisions, kept together because every Mask write
+   *        changes both.
+   *
+   * Held through `shared_ptr<const>` and shared with frozen documents, so freezing and cloning
+   * this node do not copy Masks. Written only through @ref MutableMaskList.
+   */
+  struct MaskList {
+    std::vector<MaskModel>          masks;
+    std::map<MaskId, std::uint64_t> content_revisions;
+  };
+
+  /// Used only by @ref Clone. Copy assignment is deleted.
+  ColorGradeNodeModel(const ColorGradeNodeModel& other)            = default;
+  ColorGradeNodeModel& operator=(const ColorGradeNodeModel& other) = delete;
+
+  /// The Mask list that only this node holds (@ref UnshareForWrite).
+  auto MutableMaskList() -> MaskList&;
   void TouchMask(const MaskId& mask_id);
 #ifdef ALCEDO_ENABLE_BRUSH_MASK
   auto RequireBrushMask(const NodeId& node_id, const MaskId& mask_id,
@@ -245,8 +269,7 @@ class ColorGradeNodeModel final : public INodeModel {
   NodeId id_;
   std::string display_name_ = "Color Grade";
   std::vector<AdjustmentModelEntry> adjustments_;
-  std::vector<MaskModel>            masks_;
-  std::map<MaskId, std::uint64_t>   mask_content_revision_;
+  std::shared_ptr<const MaskList>   mask_list_;
   std::uint64_t                     next_mask_revision_ = 1;
   bool  enabled_ = true;
   float mix_     = 1.0f;

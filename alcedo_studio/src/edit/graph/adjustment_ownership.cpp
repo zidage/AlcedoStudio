@@ -5,9 +5,11 @@
 #include "edit/graph/adjustment_ownership.hpp"
 
 #include <algorithm>
+#include <memory>
 #include <stdexcept>
 #include <string>
 
+#include "edit/graph/copy_on_write.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 
 namespace alcedo {
@@ -26,6 +28,12 @@ auto OwnerName(AdjustmentParameterOwner owner) -> const char* {
 }
 
 }  // namespace
+
+auto MutableAdjustmentModel(AdjustmentModelEntry& entry) -> IOperatorModel& {
+  return UnshareForWrite(entry.model, [](const IOperatorModel& model) {
+    return std::shared_ptr<IOperatorModel>(model.Clone());
+  });
+}
 
 auto ColorGradeAdjustmentTypes() -> std::array<OperatorTypeId, 13> {
   return {type_ids::Cat02WhiteBalance(), type_ids::Exposure(), type_ids::Contrast(),

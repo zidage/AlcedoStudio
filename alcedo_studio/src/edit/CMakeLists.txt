@@ -70,11 +70,13 @@ set(EDIT_GRAPH_SRCS
     ${ALCEDO_SRC_ROOT}/edit/graph/pipeline_document.cpp
     ${ALCEDO_SRC_ROOT}/edit/graph/pipeline_graph.cpp
     ${ALCEDO_SRC_ROOT}/edit/graph/pipeline_graph_commands.cpp
+    ${ALCEDO_SRC_ROOT}/edit/graph/pipeline_graph_snapshot.cpp
 )
 
+# xxHash: PipelineGraphSnapshot carries commit hashes (type/hash_type.hpp).
 def_library(EditGraph
     SOURCES ${EDIT_GRAPH_SRCS}
-    PUBLIC_DEPS JSON EditGeometry EditMaskCore
+    PUBLIC_DEPS JSON EditGeometry EditMaskCore xxHash
     PRIVATE_DEPS ${ALCEDO_OPENCV_CORE_DEPS}
 )
 if(ALCEDO_ENABLE_BRUSH_MASK)

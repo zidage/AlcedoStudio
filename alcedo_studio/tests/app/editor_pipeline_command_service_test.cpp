@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 
 #include <limits>
+#include <memory>
 #include <stdexcept>
 
 #include "edit/graph/develop_node_model.hpp"
@@ -36,6 +37,9 @@ class SerializationCountingModel : public IOperatorModel {
   void CopyRevisionsFrom(const IOperatorModel& source) override {
     const auto* typed = dynamic_cast<const SerializationCountingModel*>(&source);
     value_.CopyRevisionsFrom(typed != nullptr ? typed->value_ : source);
+  }
+  auto Clone() const -> std::unique_ptr<IOperatorModel> override {
+    return std::make_unique<SerializationCountingModel>(*this);
   }
   auto MakeFullDto() const -> OperatorParamDto override { return value_.MakeFullDto(); }
   auto ToJson() const -> nlohmann::json override {

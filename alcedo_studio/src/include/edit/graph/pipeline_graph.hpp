@@ -62,9 +62,20 @@ using TopologyDeltaStepHook = std::function<void(std::string_view step, std::siz
  * cycle errors. @ref ValidateImageBackbone additionally requires a unique Develop to
  * DRT scene-image path that visits every Color Grade. Product graph edits go through
  * pipeline graph commands; this type does not expose a mutable node container.
+ *
+ * Nodes are held as `shared_ptr<const INodeModel>` so that @ref PipelineDocument::Freeze can
+ * share them with an immutable frozen document. A non-const @ref FindNode copies the one node
+ * it returns when a frozen document shares it (@ref UnshareForWrite); other nodes stay shared.
+ * Only @ref PipelineDocument copies a graph.
  */
 class PipelineGraph {
  public:
+  PipelineGraph()                                    = default;
+  PipelineGraph(PipelineGraph&&) noexcept            = default;
+  PipelineGraph& operator=(PipelineGraph&&) noexcept = default;
+  PipelineGraph& operator=(const PipelineGraph&)     = delete;
+  ~PipelineGraph()                                   = default;
+
   void AddNode(std::unique_ptr<INodeModel> node);
   void Connect(NodeId from_node, PortId from_port, NodeId to_node, PortId to_port);
   /**
@@ -107,7 +118,7 @@ class PipelineGraph {
                           const std::vector<TopologyEdgeRemoval>&     disconnected_edges,
                           const std::vector<TopologyEdgeInsertion>&   connected_edges,
                           TopologyDeltaStepHook                       after_step = {},
-                          std::vector<std::unique_ptr<INodeModel>>*   discarded_nodes = nullptr)
+                          std::vector<std::shared_ptr<const INodeModel>>* discarded_nodes = nullptr)
       -> std::vector<GraphValidationError>;
 
   [[nodiscard]] auto Validate() const -> std::vector<GraphValidationError>;
@@ -133,21 +144,35 @@ class PipelineGraph {
   [[nodiscard]] auto NodeCount() const -> std::size_t { return nodes_.size(); }
   [[nodiscard]] auto Edges() const -> const std::vector<GraphEdge>& { return edges_; }
 
+  /**
+   * @brief Node that only this graph holds, for writing.
+   *
+   * When a frozen document shares the node, it is cloned first and the clone replaces it at the
+   * same index. Other nodes are not touched. Call only on the thread that writes this graph.
+   * Use the const overload to read.
+   * @return Null when @p id is not in the graph.
+   */
   [[nodiscard]] auto FindNode(const NodeId& id) -> INodeModel*;
   [[nodiscard]] auto FindNode(const NodeId& id) const -> const INodeModel*;
   [[nodiscard]] auto FindNode(std::string_view id) -> INodeModel*;
   [[nodiscard]] auto FindNode(std::string_view id) const -> const INodeModel*;
 
-  [[nodiscard]] auto Nodes() const -> const std::vector<std::unique_ptr<INodeModel>>& {
+  [[nodiscard]] auto Nodes() const -> const std::vector<std::shared_ptr<const INodeModel>>& {
     return nodes_;
   }
 
  private:
+  friend class PipelineDocument;
+
+  /// Shares every node with @p other. Only @ref PipelineDocument::Freeze calls this.
+  PipelineGraph(const PipelineGraph& other) = default;
+
+  [[nodiscard]] auto NodeIndex(const NodeId& id) const -> std::size_t;
   [[nodiscard]] auto FindPort(const INodeModel& node, const PortId& id, bool input) const
       -> const PortDescriptor*;
 
-  std::vector<std::unique_ptr<INodeModel>> nodes_;
-  std::vector<GraphEdge>                   edges_;
+  std::vector<std::shared_ptr<const INodeModel>> nodes_;
+  std::vector<GraphEdge>                         edges_;
 };
 
 }  // namespace alcedo

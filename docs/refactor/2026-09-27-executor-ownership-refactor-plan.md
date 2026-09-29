@@ -395,6 +395,133 @@ Suite totals：
 - 快照在工作文档后续修改后内容不变（新增单测）。
 - GUI 面板投影测试全绿。
 
+##### Phase P2 completion record (2026-09-28)
+
+**Status:** complete — 文档改为写时复制，`Freeze()` 只复制文档对象和节点 / 边两个 vector；编辑器 GUI 发布改用 `Freeze()`（审计 E5 删除）；
+`PipelineGraphSnapshot` 与 `PipelineLineageId` 已定义并有单测。所有权结构未动（P3 起才有消费者使用快照类型）。
+
+**实现要点（与计划条目的对应）：**
+
+| 计划条目 | 实现 |
+|---|---|
+| 节点存储改为共享 + COW | `PipelineGraph::nodes_` 为 `vector<shared_ptr<const INodeModel>>`。节点对象创建时非 const，只经 `UnshareForWrite`（新 `edit/graph/copy_on_write.hpp`）取得可写引用：use count > 1 时先 `Clone()` 并替换同一下标；为 1 时 acquire fence 后原地写。`Nodes()` 只交出 `shared_ptr<const>`，因此从 `Nodes()` 拿可写指针在编译期被拒 |
+| 非 const 访问先克隆 | 非 const `FindNode` 只复制它返回的那一个节点。`Develop()` / `PrimaryGrade()` / `Drt()` 先走 const 查找，再只对找到的节点取写权限，所以查找过程不会复制其他节点。图内部的存在性检查全部改为 const 查找 |
+| 节点内部共享 | 计划只写"节点级 COW"。实测一个多蒙版 Grade（13 个调整、32 个蒙版）整节点深拷贝就超过 100 次分配，所以再下一层：`AdjustmentModelEntry::model` 改为 `shared_ptr<const IOperatorModel>`，写经 `MutableAdjustmentModel`；Color Grade 的蒙版列表与蒙版内容 revision 合为一个共享的 `MaskList`，写经 `MutableMaskList`。节点 `Clone()`（新 `INodeModel` 纯虚）是私有拷贝构造：共享 Model 与蒙版列表，复制 ID、标量字段和 Develop / DRT 端点参数 |
+| Model 克隆 | 新 `IOperatorModel::Clone()`；`OperatorModelBase` 的受保护拷贝构造在源 Model 锁内复制 payload 与逐字段戳。克隆保留戳（值相等），渲染器看到的 revision 不变，不会重打包 |
+| 大块数据 | DNG profile 本来就是 `shared_ptr`（`DngColorProfileRef`），节点克隆不复制。笔刷 stroke 在 `MaskList` 内，冻结与 Grade 克隆都不复制；只有蒙版写入才复制该 Grade 的蒙版列表（笔刷模块发布构建未启用） |
+| `Freeze()` | `PipelineDocument::Freeze() const -> shared_ptr<const PipelineDocument>`，经私有拷贝构造共享全部节点。`PipelineDocument` / `PipelineGraph` 不可公开拷贝（只能 move），共享只能通过 `Freeze()` 产生；独立可编辑副本仍用 `ClonePipelineDocument` |
+| GUI 快照 | `EditorSessionService::PublishDocumentSnapshot` 改为 `document->Freeze()`。Debug 构建记录每个已发布文档的 `DocumentRevisionFingerprint`，下次替换前断言未变（计划 §5 风险表的对策） |
+| 快照类型 | `edit/graph/pipeline_graph_snapshot.{hpp,cpp}`：`PipelineLineageId`（进程内唯一，`Next()` 线程安全）与 `PipelineGraphSnapshot`（只能经 `Committed(...)` / `Preview(...)` 构造，拒绝空文档与空谱系；preview 无 head；committed 的 head 可空，对应只有 root 的历史）。`EditGraph` 因 `Hash128` 增加 `xxHash` 公开依赖 |
+| 非编辑器的非 const 读取 | COW 之后非 const 访问器是写操作。审计出三处只读却用了非 const 访问的位置（导出入队读 DRT、Paste 读 DRT、`LoadPipeline` 读 Develop），改为 `std::as_const` |
+
+**线程规则（写在 `UnshareForWrite` / `Freeze` 的前置条件里）：** 同一份共享部件只能有一个可写持有者，并且它只在一个线程（或同一把锁）上写；冻结文档从不写。
+编辑器的 live 文档满足这一点：写入与 `PublishDocumentSnapshot` 都在会话 owner 线程上。渲染线程只在 render lock 下读 live 文档，
+COW 替换 `nodes_` 元素也发生在持 render lock 的写路径里。未改动：编辑器写 live 文档仍需 render lock（E1），直到 P6。
+
+**主调用链（成功路径）：**
+
+```text
+滑块 → EditorSessionService（owner 线程）→ history port → LockLivePipeline（render lock）
+  -> live.PrimaryGrade()                       // 只复制被上次 Freeze 共享的这一个 Grade 节点
+  -> ->FindAdjustmentByType(Exposure)          // 只复制这一个 Model，保留戳
+  -> ExposureModel::SetValue                   // 新戳
+  -> Emit → PublishDocumentSnapshot → live.Freeze()   // 新文档对象 + 节点 / 边 vector，节点全部共享
+  -> published_document_ 替换；旧冻结文档随最后一个 GUI 持有者释放，其独占的旧节点一并释放
+  -> GUI 读 pipeline_document()：不可变，无需锁
+```
+
+**失败路径：**
+
+```text
+代码持有可写节点 / Model 指针跨过一次 Freeze 再写 → 写穿到冻结文档
+  -> Debug：下一次 PublishDocumentSnapshot 断言 DocumentRevisionFingerprint 不变
+  -> Release：无检测；由单测覆盖全部写入口（见下表）
+Clone / 蒙版列表复制抛异常（内存不足）→ UnshareForWrite 在替换前抛出，工作文档与冻结文档均不变
+PipelineGraphSnapshot 以空文档或空谱系构造 → std::invalid_argument
+```
+
+**What was proven (executed tests)：**
+
+| 名称 / 条目 | 目标 | 结果 |
+|---|---|---|
+| 冻结 + 一次滑块写 ≤ 0.2 ms、≤ 100 次分配：`DefaultDocumentFreezeAndOneSliderEditStayWithinLimit`、`ManyMaskDocumentFreezeAndOneSliderEditStayWithinLimit` | `PipelineDocumentCopyCostTest` | PASS。两次运行：默认文档中位 12.6–13.2 µs / 57 次分配；多蒙版文档中位 15.2–16.1 µs / 69 次分配（同构建下旧的整文档克隆为 20.6–20.8 ms / 55905 次） |
+| 快照在后续修改后不变：`FrozenDocumentKeepsParameterValuesAfterEveryWorkingDocumentWrite`（Develop、Grade 调整、DRT 参数与 DRT/Post 调整、mix、enabled、名称、删除保护、几何、命名计数）、`FrozenDocumentKeepsMasksAfterEveryWorkingDocumentMaskWrite`（全部蒙版 setter 及经 `FindMask` / `MaskAt` 的直接写）、`FrozenDocumentKeepsTopologyAfterWorkingDocumentGraphCommands` | `GpuDagModelGraphTest` | PASS |
+| 只复制被写部分：`ParameterEditCopiesOnlyTheEditedNodeAndModel`、`NonConstLookupCopiesOnlyTheReturnedNode`、`WorkingDocumentWritesInPlaceWhenNoFrozenDocumentSharesIt` | `GpuDagModelGraphTest` | PASS |
+| 克隆保留戳：`CopiedNodesKeepTheChangeStampsOfTheirSource`、`RevisionFingerprintChangesWithEveryStampedWrite` | `GpuDagModelGraphTest` | PASS |
+| 跨线程：`FrozenDocumentsReadOnAnotherThreadKeepTheirValuesWhileOwnerEdits`（owner 300 轮写 + 冻结，读线程逐个比对 JSON） | `GpuDagModelGraphTest` | PASS |
+| 快照类型：`PipelineGraphSnapshot` 5 个、`PipelineLineageId.DefaultIdIsEmptyAndNextIdsAreUniqueAcrossThreads` | `GpuDagModelGraphTest` | PASS |
+| E5 在服务层：`PublishedDocumentSharesNodesAndKeepsValuesAfterLiveEdit`（发布的文档与 live 共享节点；live 写后旧发布不变、未写节点仍为同一对象） | `EditorSessionNodeCommandTest` | PASS |
+| GUI 面板投影与编辑器上下文 | `EditorPanelProjectionTest`、`EditorAdjustmentContextTest`、`EditorPipelineCommandServiceTest` | PASS |
+
+Commands（PowerShell，PATH 前置 `build\debug\vcpkg_installed\x64-windows\debug\bin`）：
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 8          # 全量构建，0 错误
+ctest --test-dir build/debug -j 1 -R "^(GpuDagModelGraphTest|PipelineDocumentCopyCostTest|EditorSessionNodeCommandTest)\."
+PipelineDocumentCopyCostTest.exe                                              # 两次，读取 [P2 cost] 行
+ctest --test-dir build/debug -j 1 -R "^(ExecutorIsolationTest|GpuDagRawInputTest|GraphImageCacheRetentionTest|GpuDagCuda(Workspace|Develop|Mask|PrimaryGrade)Test|GpuDagOpenCl(Grade|Workspace)Test|AdjustmentTransfer.*|EditorAdjustmentContextTest|EditorPanelProjectionTest|EditorPipelineCommandServiceTest|EditorNodeGraph.*|EditorMask.*|EditorSession.*|EditorHistory.*|EditorParameterWrite.*|EditorAdjustmentPipelineTest|PipelineMapperTest|PipelineSharedUseTest|PipelineGraph.*|PipelineDocument.*|PipelineHistory.*|PipelineEditBatchTest|PipelineDngProfileBindingTest|PipelineDocumentRenderTest|PipelineSchedulerRequestIdTest|ImportPipelineDocumentTest|ExportServiceTest|ImportServiceTest|MiniGit.*|DocumentTransfer.*)\."
+ThumbnailServiceTest.exe --gtest_filter=-*FuzzScroll*
+基线对比：git stash push -u -- alcedo_studio → 只重编失败的目标 → 运行 → git stash pop
+```
+
+Suite totals：
+
+- 新测试所在的三个目标：111/111 通过（新增 18 个）。
+- 定向回归集 1041 个（另 7 个预存 `DISABLED_`）：1032 通过，9 失败，全部预存：
+  - `EditorSessionRenderSchedulerPortTest` 5 个、`EditorSessionCommandQueueBaselineTest.RapidImageSelectionKeepsRunningTargetAndReplacesOnlyUnstartedSelection`、`EditorSessionActionPolicyCq3Test.AdjustmentPanelsReloadOnlyWhenCommittedContentChanges`：把 `alcedo_studio` 还原到 HEAD（`42de0f07e`）重编这三个目标后，同样 7 个失败。这些测试使用不带文档的 fake port，与 COW 无关。
+  - `GpuDagOpenClWorkspaceTest` 2 个：P1 记录的测试清理缺陷（残留的 `opencl/edit/runtime/opencl/shader/` 目录）。
+- `ThumbnailServiceTest`（排除 FuzzScroll）：20 通过，5 失败，全部预存。P1 已记录其中 4 个；第 5 个 `AnalysisRenditionRendersWithoutSavePipelineOnLiveGuard` 在 HEAD 源码上重编后 6/6 失败（无锁读 `pin_count_`，审计 S5），P2 源码上 3 次中 1 次通过。
+- 读 `pipeline_document()` 的 UI 层测试（`EditorNodeDelegateQmlTest`、`EditorNodeGraphDraftTest`、`EditorNodeGraphProjectionTest`、`EditorNodeSelectionLayoutTest`、`EditorNodesPanelQmlTest`、`EditorPreviewPresentTrajectoryTest`）：4 个失败，全部预存（HEAD 源码上重编后同样 4 个失败）：`EditorNodeDelegateQml` 3 个 QML 输入测试与 `EditorNodeController.GeometryWriteRejectedWhenColorGradeIsSelected`。
+- 最终构建上复跑 P2 相关 7 个目标：157/157 通过。
+- 完整 ctest 按 AGENTS.md 未运行。
+
+**Checklist / exit condition：**
+- [x] 冻结耗时满足 P0 门槛：多蒙版文档冻结 + 改一个滑块中位 ~16 µs（< 200 µs）、69 次分配（≤ 100），由测试断言固定
+- [x] 快照在工作文档后续修改后内容不变：参数、蒙版、拓扑三类写入口全覆盖，另有跨线程读测试
+- [x] GUI 面板投影测试全绿（`EditorPanelProjectionTest` 及编辑器上下文 / 命令服务测试）
+
+**LOC note：** 已有生产文件 21 个 +366 / −89（含 CMake），新增 `copy_on_write.hpp`（46 行）、`pipeline_graph_snapshot.{hpp,cpp}`（115 + 54 行）。改动文件均低于 1000 行（最大 `pipeline_graph.cpp` 621 行、`color_grade_node_model.cpp` 562 行）。已有测试文件 9 个 +159 / −7，新测试文件 323 + 113 行。
+
+**Remaining gaps：**
+- 蒙版写入会复制该 Grade 的整个蒙版列表（被冻结文档共享时）。拖动蒙版手柄的每个 tick 会复制一次该 Grade 的全部蒙版（多蒙版文档 32 个）。由 P2A 修复。
+- 笔刷模块未启用，未测笔刷文档的冻结成本（与 P0 相同的限制）。
+- Release 构建没有"写穿冻结文档"的检测，靠 Debug 断言与单测。编辑器仍经 render lock 写 live 文档（E1），P6 处理。
+- `PipelineGraphSnapshot` 目前没有生产调用方；P3 / P4 开始使用。
+
+### P2A 蒙版逐项写时复制
+
+**目标：** 蒙版写入只复制被写的那一个蒙版。拖动蒙版手柄每个 tick 的冻结代价与该 Grade 的蒙版数量无关。
+
+**问题（P2 遗留）：** P2 把一个 Color Grade 的全部蒙版与内容 revision 放在一个共享的 `MaskList` 里。
+冻结文档共享该列表时，任何一次蒙版写入（`SetMaskOpacity`、`ReplaceMaskSource`、`FindMask` / `MaskAt` 的非 const 访问等）
+都会复制整个列表：每个蒙版的 `MaskId`、显示名、source variant，以及 `std::map<MaskId, uint64_t>` 的全部节点。
+编辑器拖动径向 / 线性蒙版时每个 tick 都会发布一次冻结文档，所以每个 tick 复制一次该 Grade 的全部蒙版
+（多蒙版文档 32 个，约 100 次以上分配），超出 P0 为单次编辑设定的门槛。
+
+**方案：**
+- `ColorGradeNodeModel` 的蒙版存储改为逐项共享：
+  - 列表元素为 `{shared_ptr<const MaskModel> mask; ParameterRevision content_revision;}`，列表本身仍以 `shared_ptr<const>` 共享；
+  - 写一个蒙版：列表被共享时只复制元素 vector（N 个指针 + N 个戳，一次分配，不复制字符串），再只克隆被写的那个 `MaskModel`；
+  - 增删、移动蒙版只改元素 vector，不克隆任何 `MaskModel`。
+- 删除 `std::map<MaskId, uint64_t>`：内容 revision 存在元素里，查找按 `MaskId` 线性扫描（与 `FindMask` 相同）。
+- 内容 revision 改为进程级戳（`NextParameterRevision()`），不再用节点内计数 `next_mask_revision_`。这同时解决 P1 记录的
+  "不同文档的同一 `(grade, mask)` 可能得到相同 revision"问题，P3 按快照绑定时需要它。笔刷命令的 `expected_revision` 比较不受影响（仍是相等比较）。
+- `Masks()` 目前返回 `std::span<const MaskModel>`，要求连续存储。改为返回按下标访问的只读视图（`MaskCount()` + `MaskAt(i) const`
+  或一个可迭代的 const 视图类型）。调用方：生产代码 10 处、测试 33 处，全部同步修改。
+- 冻结文档的蒙版值与 revision 保持不变的保证沿用 P2 的测试，并扩展到逐项共享。
+
+**测试：**
+- `MaskEditCopiesOnlyTheEditedMask`：冻结后改一个蒙版的不透明度，其余蒙版与冻结文档是同一对象，被改蒙版不同。
+- `MaskDragTickCostDoesNotGrowWithMaskCount`（`PipelineDocumentCopyCostTest`）：一个 tick = 改一个蒙版 source + 冻结 + 释放上一个冻结文档。
+  8 个与 32 个蒙版的 Grade 上分配次数相同；多蒙版文档中位 ≤ 0.2 ms、分配 ≤ 100（Debug）。
+- `MaskContentRevisionIsUniqueAcrossDocuments`：两个独立文档里同 ID 蒙版的内容 revision 不相等。
+- P2 的 `FrozenDocumentKeepsMasksAfterEveryWorkingDocumentMaskWrite` 与蒙版相关 GPU 测试（`GpuDagCudaMaskTest` 等）保持通过。
+
+**退出条件：**
+- 蒙版拖动 tick 的分配次数与蒙版数量无关，并满足 P0 门槛（测试断言）。
+- 冻结文档在全部蒙版写入口之后内容不变。
+- 蒙版渲染与失效测试（CUDA / OpenCL）全绿。
+
 ### P3 `PipelineExecutor` 改为"按请求接收快照"
 
 **目标：** executor 不再绑定文档，也不再有一个两种世界共用的 Renderer。
@@ -568,7 +695,8 @@ Suite totals：
 |---|---|
 | P0 基线与保护网 | 完成（2026-09-28） |
 | P1 revision 协议 | 完成（2026-09-28） |
-| P2 快照与 COW | 未开始 |
+| P2 快照与 COW | 完成（2026-09-28） |
+| P2A 蒙版逐项写时复制 | 未开始 |
 | P3 executor 按请求接收快照 | 未开始 |
 | P4 缩略图 / 分析池 | 未开始 |
 | P5 导出、导入、复制、粘贴 | 未开始 |

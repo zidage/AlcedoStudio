@@ -5,12 +5,15 @@
 // Cost measurements for the executor ownership refactor
 // (docs/refactor/2026-09-27-executor-ownership-refactor-plan.md, phase P0).
 //
-// P2 replaces the whole-document JSON copy with a copy-on-write freeze. These tests record what
-// the current copy costs, and what the per-frame static plan key and Grade parameter packing
-// cost, for a typical document and for a document with many Masks. Each test also checks that
-// the measured operation produced a correct result, so a fast but wrong path cannot pass.
-// Timings are printed with the "[P0 cost]" prefix; they are not compared with a limit because
-// the numbers depend on the build type.
+// P2 replaces the whole-document JSON copy with a copy-on-write freeze. The P0 tests record what
+// the whole-document copy costs, and what the per-frame static plan key and Grade parameter
+// packing cost, for a typical document and for a document with many Masks. Each test also checks
+// that the measured operation produced a correct result, so a fast but wrong path cannot pass.
+// Those timings are printed with the "[P0 cost]" prefix and are not compared with a limit.
+//
+// The P2 tests measure one editor tick with the copy-on-write freeze (edit one slider, freeze,
+// release the previous frozen document) and require the limit that P0 set from the numbers
+// above: at most 0.2 ms median and at most 100 heap allocations in the debug build.
 
 #include <gtest/gtest.h>
 
@@ -19,6 +22,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <memory>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -29,7 +34,9 @@
 #include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/mask/mask_id.hpp"
 #include "edit/mask/mask_model.hpp"
+#include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/i_operator_model.hpp"
+#include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/runtime/adjustment_runtime.hpp"
 #include "edit/runtime/develop_compile_source.hpp"
 #include "edit/runtime/graph_compiler.hpp"
@@ -253,7 +260,75 @@ void ReportCost(std::string_view document_name, const PipelineDocument& document
             << " min_us=" << pack_one_time.minimum << '\n';
 }
 
+/// P0 limit for one editor tick: freeze plus one slider edit, in the debug build.
+constexpr double      kFreezeTickMedianLimitMicros = 200.0;
+constexpr std::size_t kFreezeTickAllocationLimit   = 100;
+
+auto ExposureOf(PipelineDocument& document) -> ExposureModel& {
+  auto* model = dynamic_cast<ExposureModel*>(
+      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+  if (model == nullptr) {
+    throw std::logic_error("Primary Grade has no Exposure");
+  }
+  return *model;
+}
+
+auto PublishedExposureEv(const PipelineDocument& document) -> float {
+  return document.PrimaryGrade()
+      ->FindAdjustmentByType(type_ids::Exposure())
+      ->ToJson()
+      .at("exposure_ev")
+      .get<float>();
+}
+
+/**
+ * @brief One editor tick as EditorSessionService runs it: the owner writes one slider value on
+ *        the live document while the GUI still holds the last frozen document, then freezes the
+ *        live document and replaces (releases) the previous frozen document.
+ *
+ * Measures the tick, checks that each frozen document holds the value written before it and
+ * that the previous frozen document kept its own value, and requires the P0 limit.
+ */
+void RequireFreezeTickWithinLimit(std::string_view document_name, PipelineDocument document,
+                                  int iterations) {
+  auto  published = document.Freeze();
+  float value     = 0.0f;
+  auto  tick      = [&] {
+    value += 0.01f;
+    ExposureOf(document).SetValue(value);
+    published = document.Freeze();
+  };
+
+  // Correctness: the tick copies instead of writing through to a frozen document.
+  tick();
+  const auto held       = published;
+  const auto held_value = value;
+  tick();
+  ASSERT_FLOAT_EQ(PublishedExposureEv(*held), held_value);
+  ASSERT_FLOAT_EQ(PublishedExposureEv(*published), value);
+  ASSERT_EQ(published->Develop(), held->Develop());
+
+  const auto time        = MeasureMicros(iterations, tick);
+  const auto allocations = CountAllocations(tick);
+  std::cout << "[P2 cost] document=" << document_name
+            << " freeze+one slider median_us=" << time.median << " min_us=" << time.minimum
+            << " allocations=" << allocations << '\n';
+
+  EXPECT_LE(time.median, kFreezeTickMedianLimitMicros);
+  if (allocations >= 0) {
+    EXPECT_LE(static_cast<std::size_t>(allocations), kFreezeTickAllocationLimit);
+  }
+}
+
 }  // namespace
+
+TEST(PipelineDocumentCopyCost, DefaultDocumentFreezeAndOneSliderEditStayWithinLimit) {
+  RequireFreezeTickWithinLimit("default", CreateDefaultPipelineDocument(), 200);
+}
+
+TEST(PipelineDocumentCopyCost, ManyMaskDocumentFreezeAndOneSliderEditStayWithinLimit) {
+  RequireFreezeTickWithinLimit("many_masks", MakeManyMaskDocument(), 200);
+}
 
 TEST(PipelineDocumentCopyCost, DefaultDocumentCloneKeyAndPackingAreCorrectAndReported) {
   const auto document = CreateDefaultPipelineDocument();

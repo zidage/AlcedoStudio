@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -27,11 +28,36 @@ inline constexpr std::uint64_t kInitialNextColorGradeNameNumber = 2;
 /**
  * @brief Serializable pipeline: geometry plus DAG. Does not own a GPU workspace.
  *
- * Graph edits set topology_dirty. Parameter Model setters do not.
+ * Graph edits stamp @ref TopologyRevision. Parameter Model setters stamp their Models.
+ *
+ * Copy-on-write: nodes, adjustment Models, and Color Grade Mask lists are shared with the
+ * immutable documents that @ref Freeze returns. Every non-const accessor (@ref Develop,
+ * @ref PrimaryGrade, @ref Drt, `Graph().FindNode`, and the node and Model lookups under them)
+ * first copies the one part it returns when a frozen document shares it. So a frozen document
+ * keeps its values while this document changes, and a freeze costs O(nodes), not O(document).
+ *
+ * The document is movable. It is not copyable: use @ref Freeze for an immutable copy and
+ * @ref ClonePipelineDocument for an independent editable copy.
  */
 class PipelineDocument {
  public:
-  PipelineDocument() = default;
+  PipelineDocument()                                       = default;
+  PipelineDocument(PipelineDocument&&) noexcept            = default;
+  PipelineDocument& operator=(PipelineDocument&&) noexcept = default;
+  PipelineDocument& operator=(const PipelineDocument&)     = delete;
+  ~PipelineDocument()                                      = default;
+
+  /**
+   * @brief Immutable copy of the current values that shares every node with this document.
+   *
+   * Cost is one document object plus the node and edge vectors; no node, Model, or Mask is
+   * copied. Later writes to this document copy only the parts they change, so the returned
+   * document never changes. Readers on any thread may read it for as long as they hold it.
+   *
+   * @pre Called on the thread that writes this document (or under the lock that serializes its
+   *      writers). This document is the only writable holder of its parts.
+   */
+  [[nodiscard]] auto Freeze() const -> std::shared_ptr<const PipelineDocument>;
 
   [[nodiscard]] auto FormatVersion() const -> std::uint32_t { return format_version_; }
   [[nodiscard]] auto Geometry() -> ImageGeometryModel& { return geometry_; }
@@ -104,6 +130,9 @@ class PipelineDocument {
   static auto        FromJson(const nlohmann::json& json) -> PipelineDocument;
 
  private:
+  /// Shares every node with @p other. Only @ref Freeze calls this.
+  PipelineDocument(const PipelineDocument& other) = default;
+
   std::uint32_t       format_version_ = kPipelineDocumentFormatVersion;
   ImageGeometryModel  geometry_{};
   PipelineGraph       graph_{};
@@ -137,6 +166,16 @@ inline constexpr float kDefaultPipelineContrast   = 15.0f;
  * @return A document that satisfies graph Validate and ValidateImageBackbone.
  */
 [[nodiscard]] auto CreateDefaultPipelineDocument() -> PipelineDocument;
+
+/**
+ * @brief Hash of every change stamp in @p document.
+ *
+ * Covers the topology stamp, every Model's field stamps (Develop, DRT, and every adjustment),
+ * each Color Grade's mix stamp, and each Mask content revision. Two equal values mean that no
+ * stamped write happened in between. Display names and deletion protection have no stamp and
+ * are not covered.
+ */
+[[nodiscard]] auto DocumentRevisionFingerprint(const PipelineDocument& document) -> std::uint64_t;
 
 /**
  * @brief Deep copy via JSON round-trip. The clone does not share Model pointers.

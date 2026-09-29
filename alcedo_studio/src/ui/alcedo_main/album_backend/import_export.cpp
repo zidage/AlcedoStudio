@@ -978,7 +978,8 @@ auto ImportExportHandler::BuildExportQueue(
         throw std::runtime_error("Export pipeline service is unavailable");
       }
       auto live = pipes->LoadPipeline(elementId);
-      if (!live || !live->document_ || !live->document_->Drt() || !live->pipeline_) {
+      if (!live || !live->document_ || !std::as_const(*live->document_).Drt() ||
+          !live->pipeline_) {
         if (live) {
           pipes->ReleasePipelineUse(live);
         }
@@ -987,7 +988,7 @@ auto ImportExportHandler::BuildExportQueue(
       {
         std::lock_guard<std::mutex> render_lock(live->pipeline_->GetRenderLock());
         task.recipe_->output_color_ =
-            ExportColorProfileFromDrt(live->document_->Drt()->Params().Params());
+            ExportColorProfileFromDrt(std::as_const(*live->document_).Drt()->Params().Params());
       }
       pipes->ReleasePipelineUse(live);
 

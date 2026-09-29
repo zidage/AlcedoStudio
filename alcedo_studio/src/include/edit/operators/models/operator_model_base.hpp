@@ -9,6 +9,7 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <stdexcept>
 #include <utility>
@@ -37,7 +38,13 @@ class OperatorModelBase : public IOperatorModel {
     revision_ = revision;
   }
 
+  OperatorModelBase& operator=(const OperatorModelBase&) = delete;
+
   [[nodiscard]] auto Type() const -> OperatorTypeId override { return Derived::TypeId(); }
+
+  [[nodiscard]] auto Clone() const -> std::unique_ptr<IOperatorModel> override {
+    return std::make_unique<Derived>(static_cast<const Derived&>(*this));
+  }
 
   [[nodiscard]] auto Revision() const -> ParameterRevision override {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -89,6 +96,14 @@ class OperatorModelBase : public IOperatorModel {
 
  protected:
   static constexpr std::uint32_t kDataVersion = 1;
+
+  /// Copy payload and field stamps of @p other under its lock. Used only by @ref Clone.
+  OperatorModelBase(const OperatorModelBase& other) : IOperatorModel(other) {
+    std::lock_guard<std::mutex> lock(other.mutex_);
+    payload_         = other.payload_;
+    field_revisions_ = other.field_revisions_;
+    revision_        = other.revision_;
+  }
 
   template <class Fn>
   void Mutate(DirtyEnum bit, Fn&& fn) {

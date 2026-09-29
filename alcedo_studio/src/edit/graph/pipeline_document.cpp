@@ -5,9 +5,12 @@
 #include "edit/graph/pipeline_document.hpp"
 
 #include <cmath>
+#include <functional>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 #include "edit/operators/models/builtin_type_ids.hpp"
 
@@ -233,8 +236,15 @@ auto DefaultColorGradeDisplayName(std::uint64_t number) -> std::string {
   return "Color Grade " + std::to_string(number);
 }
 
+auto PipelineDocument::Freeze() const -> std::shared_ptr<const PipelineDocument> {
+  return std::shared_ptr<const PipelineDocument>(new PipelineDocument(*this));
+}
+
+// Each non-const accessor looks the node up read-only first, then asks the graph for write
+// access to that node alone, so a lookup never copies a node it does not return.
 auto PipelineDocument::Develop() -> DevelopNodeModel* {
-  return Downcast<DevelopNodeModel>(graph_.FindNode("develop"));
+  const auto* develop = std::as_const(*this).Develop();
+  return develop == nullptr ? nullptr : Downcast<DevelopNodeModel>(graph_.FindNode(develop->Id()));
 }
 
 auto PipelineDocument::Develop() const -> const DevelopNodeModel* {
@@ -242,15 +252,8 @@ auto PipelineDocument::Develop() const -> const DevelopNodeModel* {
 }
 
 auto PipelineDocument::PrimaryGrade() -> ColorGradeNodeModel* {
-  if (auto* named = Downcast<ColorGradeNodeModel>(graph_.FindNode("grade.primary"))) {
-    return named;
-  }
-  for (const auto& id : graph_.ImageBackboneNodeIds()) {
-    if (auto* grade = Downcast<ColorGradeNodeModel>(graph_.FindNode(id))) {
-      return grade;
-    }
-  }
-  return nullptr;
+  const auto* grade = std::as_const(*this).PrimaryGrade();
+  return grade == nullptr ? nullptr : Downcast<ColorGradeNodeModel>(graph_.FindNode(grade->Id()));
 }
 
 auto PipelineDocument::PrimaryGrade() const -> const ColorGradeNodeModel* {
@@ -266,7 +269,8 @@ auto PipelineDocument::PrimaryGrade() const -> const ColorGradeNodeModel* {
 }
 
 auto PipelineDocument::Drt() -> DrtNodeModel* {
-  return Downcast<DrtNodeModel>(graph_.FindNode("drt"));
+  const auto* drt = std::as_const(*this).Drt();
+  return drt == nullptr ? nullptr : Downcast<DrtNodeModel>(graph_.FindNode(drt->Id()));
 }
 
 auto PipelineDocument::Drt() const -> const DrtNodeModel* {
@@ -276,10 +280,10 @@ auto PipelineDocument::Drt() const -> const DrtNodeModel* {
 void PipelineDocument::InsertAdjustment(const NodeId& grade_id, std::size_t index,
                                         AdjustmentInstanceId instance_id,
                                         std::unique_ptr<IOperatorModel> model) {
-  auto* grade = Downcast<ColorGradeNodeModel>(graph_.FindNode(grade_id));
-  if (grade == nullptr) {
+  if (Downcast<ColorGradeNodeModel>(std::as_const(graph_).FindNode(grade_id)) == nullptr) {
     throw std::invalid_argument("InsertAdjustment: node is not a ColorGrade");
   }
+  auto* grade = Downcast<ColorGradeNodeModel>(graph_.FindNode(grade_id));
   grade->InsertAdjustment(index, std::move(instance_id), std::move(model));
   MarkTopologyChanged();
 }
@@ -372,20 +376,58 @@ void CopyCloneRevisions(const PipelineDocument& src, PipelineDocument& clone) {
       }
     }
   }
+  std::vector<NodeId> grade_ids;
   for (const auto& node : clone.Graph().Nodes()) {
-    auto* grade = Downcast<ColorGradeNodeModel>(node.get());
-    if (grade == nullptr) {
-      continue;
+    if (Downcast<ColorGradeNodeModel>(node.get()) != nullptr) {
+      grade_ids.push_back(node->Id());
     }
-    if (const auto* source = Downcast<ColorGradeNodeModel>(src.Graph().FindNode(grade->Id()));
+  }
+  for (const auto& id : grade_ids) {
+    if (const auto* source = Downcast<ColorGradeNodeModel>(src.Graph().FindNode(id));
         source != nullptr) {
-      grade->CopyRevisionsFrom(*source);
+      Downcast<ColorGradeNodeModel>(clone.Graph().FindNode(id))->CopyRevisionsFrom(*source);
     }
   }
   clone.CopyTopologyRevisionFrom(src);
 }
 
+void CombineFingerprint(std::uint64_t& hash, std::uint64_t value) {
+  // 64-bit FNV-1a over whole words; collisions only weaken a debug check.
+  hash ^= value;
+  hash *= 1099511628211ULL;
+}
+
+/// Every stamped field write also stamps @ref IOperatorModel::Revision.
+void CombineModelRevisions(std::uint64_t& hash, const IOperatorModel& model) {
+  CombineFingerprint(hash, model.Revision());
+}
+
 }  // namespace
+
+auto DocumentRevisionFingerprint(const PipelineDocument& document) -> std::uint64_t {
+  std::uint64_t hash = 14695981039346656037ULL;
+  CombineFingerprint(hash, document.TopologyRevision());
+  for (const auto& node : document.Graph().Nodes()) {
+    CombineFingerprint(hash, std::hash<std::string_view>{}(node->Id().Value()));
+    if (const auto* develop = Downcast<DevelopNodeModel>(node.get()); develop != nullptr) {
+      CombineModelRevisions(hash, develop->Params());
+    } else if (const auto* drt = Downcast<DrtNodeModel>(node.get()); drt != nullptr) {
+      CombineModelRevisions(hash, drt->Params());
+      for (std::size_t index = 0; index < drt->AdjustmentCount(); ++index) {
+        CombineModelRevisions(hash, drt->AdjustmentAt(index));
+      }
+    } else if (const auto* grade = Downcast<ColorGradeNodeModel>(node.get()); grade != nullptr) {
+      CombineFingerprint(hash, grade->MixRevision());
+      for (std::size_t index = 0; index < grade->AdjustmentCount(); ++index) {
+        CombineModelRevisions(hash, grade->AdjustmentAt(index));
+      }
+      for (const auto& mask : grade->Masks()) {
+        CombineFingerprint(hash, grade->MaskContentRevision(mask.id));
+      }
+    }
+  }
+  return hash;
+}
 
 auto ClonePipelineDocument(const PipelineDocument& src) -> PipelineDocument {
   auto        clone          = PipelineDocument::FromJson(src.ToJson());
