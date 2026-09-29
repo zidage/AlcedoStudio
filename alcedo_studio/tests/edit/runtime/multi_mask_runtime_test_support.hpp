@@ -102,7 +102,7 @@ inline auto EffectiveCoverageAt(const MaskModel& mask,
  *
  * A nonempty all-disabled list is zero coverage.
  */
-inline auto EvaluateEnabledUnionR8(std::span<const MaskModel> masks,
+inline auto EvaluateEnabledUnionR8(MaskListView masks,
                                    const ResolvedRenderGeometry& geometry)
     -> std::vector<std::uint8_t> {
   const auto width  = geometry.render_extent.width;

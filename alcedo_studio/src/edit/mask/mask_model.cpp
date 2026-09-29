@@ -445,7 +445,7 @@ auto HasDuplicateOrEmptyMaskId(const std::vector<MaskModel>& masks) -> bool {
   return false;
 }
 
-auto FirstEnabledMask(std::span<const MaskModel> masks) -> const MaskModel* {
+auto FirstEnabledMask(MaskListView masks) -> const MaskModel* {
   for (const auto& mask : masks) {
     if (mask.enabled) {
       return &mask;

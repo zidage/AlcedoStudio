@@ -437,7 +437,7 @@ auto ApplySetMaskField(PipelineDocument& document, const SetMaskFieldChange& cha
   if (grade == nullptr) {
     return false;
   }
-  auto* mask = grade->FindMask(change.mask_id);
+  const auto* mask = grade->FindMask(change.mask_id);
   if (mask == nullptr) {
     return SetError(error, "Mask is missing: " + std::string{change.mask_id.Value()});
   }
@@ -460,7 +460,7 @@ auto ApplySetMaskField(PipelineDocument& document, const SetMaskFieldChange& cha
     } else if (change.field_key == "opacity") {
       grade->SetMaskOpacity(change.mask_id, next.get<float>());
     } else {
-      mask->display_name = next.get<std::string>();
+      grade->SetMaskDisplayName(change.mask_id, next.get<std::string>());
     }
     return true;
   } catch (const std::exception& ex) {

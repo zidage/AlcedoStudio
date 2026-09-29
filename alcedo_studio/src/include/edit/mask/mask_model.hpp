@@ -4,8 +4,12 @@
 
 #pragma once
 
+#include <concepts>
+#include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <optional>
+#include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
@@ -172,6 +176,100 @@ void ValidateMaskModel(const MaskModel& mask);
 [[nodiscard]] auto MaskModelFromJson(const nlohmann::json& json) -> MaskModel;
 
 /**
+ * @brief Read-only view of an ordered Mask sequence, addressed by index.
+ *
+ * Does not own the Masks. Functions that read a Mask sequence take this one type, whether the
+ * Masks live in a Color Grade (@ref ColorGradeNodeModel::Masks, which stores each Mask behind its
+ * own pointer) or in a contiguous container (implicit conversion from `std::vector`, `std::span`,
+ * or an array of @ref MaskModel).
+ *
+ * Lifetime: a view of a Color Grade's Masks is valid until the next Mask write on that node; a
+ * view of a container is valid while the container is unchanged. Iterators copy the view's
+ * storage pointer, so they do not depend on the view object that produced them.
+ */
+class MaskListView {
+ public:
+  /// Return element @p index of @p storage. @p index is below the view size.
+  using ElementAccessor = auto (*)(const void* storage, std::size_t index) -> const MaskModel&;
+
+  class Iterator {
+   public:
+    using iterator_category = std::forward_iterator_tag;
+    using value_type        = MaskModel;
+    using difference_type   = std::ptrdiff_t;
+    using pointer           = const MaskModel*;
+    using reference         = const MaskModel&;
+
+    Iterator() = default;
+
+    auto operator*() const -> reference { return at_(storage_, index_); }
+    auto operator->() const -> pointer { return &at_(storage_, index_); }
+    auto operator++() -> Iterator& {
+      ++index_;
+      return *this;
+    }
+    auto operator++(int) -> Iterator {
+      auto previous = *this;
+      ++index_;
+      return previous;
+    }
+    friend auto operator==(const Iterator& left, const Iterator& right) -> bool {
+      return left.storage_ == right.storage_ && left.index_ == right.index_;
+    }
+
+   private:
+    friend class MaskListView;
+    Iterator(const void* storage, ElementAccessor at, std::size_t index)
+        : storage_(storage), at_(at), index_(index) {}
+
+    const void*     storage_ = nullptr;
+    ElementAccessor at_      = nullptr;
+    std::size_t     index_   = 0;
+  };
+
+  /// Empty view.
+  MaskListView() = default;
+
+  /**
+   * @brief View of a contiguous Mask container. Implicit so containers pass where a view is taken.
+   * @param masks Container that outlives the view and is not changed while the view is used.
+   */
+  template <class Range>
+    requires std::ranges::contiguous_range<const Range&> &&
+             std::same_as<std::ranges::range_value_t<Range>, MaskModel>
+  MaskListView(const Range& masks)  // NOLINT(google-explicit-constructor)
+      : storage_(std::ranges::data(masks)),
+        size_(std::ranges::size(masks)),
+        at_(&ContiguousElementAt) {}
+
+  /**
+   * @brief View of @p size Masks read through @p at from @p storage.
+   * @param storage Owner-defined storage; passed back to @p at unchanged.
+   * @param at Accessor for one element; must not be null when @p size is non-zero.
+   */
+  MaskListView(const void* storage, std::size_t size, ElementAccessor at)
+      : storage_(storage), size_(size), at_(at) {}
+
+  [[nodiscard]] auto size() const -> std::size_t { return size_; }
+  [[nodiscard]] auto empty() const -> bool { return size_ == 0; }
+  /// Mask @p index in display order. @pre @p index < size().
+  [[nodiscard]] auto operator[](std::size_t index) const -> const MaskModel& {
+    return at_(storage_, index);
+  }
+  [[nodiscard]] auto begin() const -> Iterator { return {storage_, at_, 0}; }
+  [[nodiscard]] auto end() const -> Iterator { return {storage_, at_, size_}; }
+
+ private:
+  static auto ContiguousElementAt(const void* storage, std::size_t index) -> const MaskModel& {
+    return static_cast<const MaskModel*>(storage)[index];
+  }
+
+  const void*     storage_ = nullptr;
+  std::size_t     size_    = 0;
+  ElementAccessor at_      = nullptr;
+};
+
+/**
  * @brief True when @p masks contains a duplicate or empty @ref MaskId.
  */
 [[nodiscard]] auto HasDuplicateOrEmptyMaskId(const std::vector<MaskModel>& masks) -> bool;
@@ -179,7 +277,7 @@ void ValidateMaskModel(const MaskModel& mask);
 /**
  * @brief First enabled Mask in display order, or null when none are enabled.
  */
-[[nodiscard]] auto FirstEnabledMask(std::span<const MaskModel> masks) -> const MaskModel*;
+[[nodiscard]] auto FirstEnabledMask(MaskListView masks) -> const MaskModel*;
 
 /**
  * @brief Packed Radial parameters for native analytic evaluators.

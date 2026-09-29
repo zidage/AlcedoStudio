@@ -92,13 +92,14 @@ TEST_F(EditorDocumentPasteTest, PasteCreatesOneRootRelativeVersionAndOneTypedCom
   const auto target_document   = alcedo::CanonicalPipelineDocumentJson(Working()->Document());
   source.PrimaryGrade()->SetDisplayName("Renamed source default");
   source.PrimaryGrade()->SetDeletionProtected(false);
-  auto& unlocked = alcedo::grade_mask_test::AddRadialMask(source, alcedo::MaskId{"mask.unlocked"});
-  unlocked.display_name       = "Unlocked source Mask";
-  unlocked.deletion_protected = false;
-  auto& locked =
-      alcedo::grade_mask_test::AddLinearGradientMask(source, alcedo::MaskId{"mask.locked"});
-  locked.display_name                   = "Locked source Mask";
-  locked.deletion_protected             = true;
+  const alcedo::MaskId unlocked{"mask.unlocked"};
+  const alcedo::MaskId locked{"mask.locked"};
+  alcedo::grade_mask_test::AddRadialMask(source, unlocked);
+  source.PrimaryGrade()->SetMaskDisplayName(unlocked, "Unlocked source Mask");
+  source.PrimaryGrade()->SetMaskDeletionProtected(unlocked, false);
+  alcedo::grade_mask_test::AddLinearGradientMask(source, locked);
+  source.PrimaryGrade()->SetMaskDisplayName(locked, "Locked source Mask");
+  source.PrimaryGrade()->SetMaskDeletionProtected(locked, true);
   const auto                    package = alcedo::CaptureDocumentTransfer(source);
 
   alcedo::AdjustmentPasteResult paste_result;

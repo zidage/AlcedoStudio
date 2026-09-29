@@ -118,8 +118,8 @@ TEST(PipelineDocumentCheckpointFormat, RoundTripPreservesDefaultIdentityAndIndep
   grade->SetDisplayName("Renamed default");
   grade->SetDeletionProtected(false);
   grade->SetMaskDeletionProtected(MaskId{"mask.radial"}, false);
-  auto& protected_mask = grade_mask_test::AddLinearGradientMask(document, MaskId{"mask.locked"});
-  protected_mask.deletion_protected = true;
+  grade_mask_test::AddLinearGradientMask(document, MaskId{"mask.locked"});
+  grade->SetMaskDeletionProtected(MaskId{"mask.locked"}, true);
   auto* ordinary = dynamic_cast<ColorGradeNodeModel*>(
       document.Graph().FindNode(NodeId{"grade.look"}));
   ASSERT_NE(ordinary, nullptr);

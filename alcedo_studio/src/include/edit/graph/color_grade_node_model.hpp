@@ -7,8 +7,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <map>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -89,6 +89,11 @@ class ColorGradeNodeModel final : public INodeModel {
   void SetDeletionProtected(bool value) { deletion_protected_ = value; }
   /// Update one Mask's metadata; throws for a missing ID, without changing content revision.
   void SetMaskDeletionProtected(const MaskId& mask_id, bool value);
+  /**
+   * @brief Replace one Mask's UI label. Metadata: does not change the content revision.
+   * @throws std::runtime_error when @p mask_id is missing. The Mask list is unchanged.
+   */
+  void SetMaskDisplayName(const MaskId& mask_id, std::string name);
 
   /**
    * @brief Stamp of the last change to enabled or mix (@ref NextParameterRevision).
@@ -99,19 +104,26 @@ class ColorGradeNodeModel final : public INodeModel {
   [[nodiscard]] auto MixRevision() const -> ParameterRevision { return mix_revision_; }
 
   /**
-   * @brief Copy the mix and adjustment stamps of @p source, a node with equal values.
+   * @brief Copy the mix, adjustment, and Mask content stamps of @p source, a node with equal
+   *        values.
    *
    * @pre @p source was serialized into this node (document clone). Adjustments are matched
-   *      by instance ID; an ID missing from @p source keeps its own stamps.
+   *      by instance ID and Masks by @ref MaskId; an ID missing from @p source keeps its own
+   *      stamps.
    */
   void               CopyRevisionsFrom(const ColorGradeNodeModel& source);
 
   /**
-   * @brief Monotonic Mask content revision. Zero when @p mask_id is absent.
+   * @brief Stamp of the last content write to the Mask @p mask_id (@ref NextParameterRevision).
    *
-   * Display-order moves do not change the revision. Not serialized.
+   * Every write that can change coverage (source, enabled, opacity, invert, insertion) takes a
+   * new process-wide stamp, so two Masks that report the same stamp hold the same content, even
+   * across documents. Display-order moves and metadata (display name, deletion protection) do
+   * not change it. Not serialized.
+   *
+   * @return @ref kNoParameterRevision when @p mask_id is absent.
    */
-  [[nodiscard]] auto MaskContentRevision(const MaskId& mask_id) const -> std::uint64_t;
+  [[nodiscard]] auto MaskContentRevision(const MaskId& mask_id) const -> ParameterRevision;
 
   [[nodiscard]] auto Enabled() const -> bool { return enabled_; }
   [[nodiscard]] auto Mix() const -> float { return mix_; }
@@ -233,44 +245,68 @@ class ColorGradeNodeModel final : public INodeModel {
   [[nodiscard]] auto BrushPlacementTranslation(const MaskId& mask_id) const -> Vector2;
 #endif
 
-  [[nodiscard]] auto MaskCount() const -> std::size_t { return mask_list_->masks.size(); }
-  [[nodiscard]] auto Masks() const -> std::span<const MaskModel> { return mask_list_->masks; }
-  /// Non-const Mask lookups copy the Mask list first when a frozen document shares it.
-  [[nodiscard]] auto MaskAt(std::size_t index) -> MaskModel&;
+  [[nodiscard]] auto MaskCount() const -> std::size_t { return mask_entries_->size(); }
+  /// Masks in display order. Valid until the next Mask write on this node (@ref MaskListView).
+  [[nodiscard]] auto Masks() const -> MaskListView;
+  /**
+   * @name Mask reads
+   * Masks are read-only outside this node: every write goes through a setter above, which
+   * validates the new value and stamps @ref MaskContentRevision. Returned references are valid
+   * until the next Mask write on this node.
+   * @{
+   */
   [[nodiscard]] auto MaskAt(std::size_t index) const -> const MaskModel&;
-  [[nodiscard]] auto FindMask(const MaskId& mask_id) -> MaskModel*;
   [[nodiscard]] auto FindMask(const MaskId& mask_id) const -> const MaskModel*;
+  /** @} */
 
  private:
   /**
-   * @brief Mask values and their content revisions, kept together because every Mask write
-   *        changes both.
+   * @brief One Mask and the stamp of its last content write.
    *
-   * Held through `shared_ptr<const>` and shared with frozen documents, so freezing and cloning
-   * this node do not copy Masks. Written only through @ref MutableMaskList.
+   * The Mask value is immutable once stored: a write builds a new value and replaces
+   * @ref mask (@ref StoreMask), so frozen documents that share the old value keep it.
    */
-  struct MaskList {
-    std::vector<MaskModel>          masks;
-    std::map<MaskId, std::uint64_t> content_revisions;
+  struct MaskEntry {
+    std::shared_ptr<const MaskModel> mask;
+    ParameterRevision                content_revision = kNoParameterRevision;
   };
+  using MaskEntryList = std::vector<MaskEntry>;
+
+  /// Whether a Mask write changes coverage (new content stamp) or only metadata.
+  enum class MaskWriteKind : std::uint8_t { Content, Metadata };
 
   /// Used only by @ref Clone. Copy assignment is deleted.
   ColorGradeNodeModel(const ColorGradeNodeModel& other)            = default;
   ColorGradeNodeModel& operator=(const ColorGradeNodeModel& other) = delete;
 
-  /// The Mask list that only this node holds (@ref UnshareForWrite).
-  auto MutableMaskList() -> MaskList&;
-  void TouchMask(const MaskId& mask_id);
+  static auto MaskAtEntry(const void* entries, std::size_t index) -> const MaskModel&;
+  /// The entry list that only this node holds (@ref UnshareForWrite). Copies pointers and stamps
+  /// only; Mask values stay shared.
+  auto MutableMaskEntries() -> MaskEntryList&;
+  [[nodiscard]] auto FindMaskIndex(const MaskId& mask_id) const -> std::optional<std::size_t>;
+  /// @throws std::runtime_error when @p mask_id is missing.
+  [[nodiscard]] auto RequireMaskIndex(const MaskId& mask_id) const -> std::size_t;
+  /**
+   * @brief Validate @p mask and store it as the value of entry @p index.
+   *
+   * The single write path for an existing Mask. @p mask is a changed copy of the current value
+   * with the same @ref MaskId. Validation runs before any change, so a rejected value leaves the
+   * list unchanged. @ref MaskWriteKind::Content takes a new content stamp.
+   *
+   * @throws std::runtime_error when @p mask fails @ref ValidateMaskModel.
+   */
+  void StoreMask(std::size_t index, MaskModel mask, MaskWriteKind kind);
 #ifdef ALCEDO_ENABLE_BRUSH_MASK
-  auto RequireBrushMask(const NodeId& node_id, const MaskId& mask_id,
-                        std::uint64_t expected_revision) -> MaskModel&;
+  /// Index of the Brush Mask a command targets, after its NodeId, Mask, and revision checks.
+  [[nodiscard]] auto RequireBrushMaskIndex(const NodeId& node_id, const MaskId& mask_id,
+                                           std::uint64_t expected_revision) const -> std::size_t;
 #endif
 
   NodeId id_;
   std::string display_name_ = "Color Grade";
   std::vector<AdjustmentModelEntry> adjustments_;
-  std::shared_ptr<const MaskList>   mask_list_;
-  std::uint64_t                     next_mask_revision_ = 1;
+  /// Shared with frozen documents; freezing and cloning this node do not copy it.
+  std::shared_ptr<const MaskEntryList> mask_entries_;
   bool  enabled_ = true;
   float mix_     = 1.0f;
   ParameterRevision                 mix_revision_       = NextParameterRevision();

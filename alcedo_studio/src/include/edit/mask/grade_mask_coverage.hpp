@@ -38,7 +38,7 @@ class GradeMaskCoverage {
    *
    * @throws std::runtime_error when geometry is unset or evaluation fails.
    */
-  void EvaluateFull(std::span<const MaskModel> masks);
+  void EvaluateFull(MaskListView masks);
 
   /**
    * @brief Rebuild Mix in @p dirty from the defined base using surviving sources.
@@ -48,7 +48,7 @@ class GradeMaskCoverage {
    *
    * @throws std::runtime_error when geometry is unset or evaluation fails.
    */
-  void ReplayRegion(std::span<const MaskModel> masks, RectI dirty);
+  void ReplayRegion(MaskListView masks, RectI dirty);
 
   [[nodiscard]] auto Pixels() const -> std::span<const std::uint8_t> { return mix_; }
   [[nodiscard]] auto Raster() const -> Extent2D { return raster_; }
@@ -57,7 +57,7 @@ class GradeMaskCoverage {
  private:
   void RequireGeometry() const;
   void FillMix(std::uint8_t value);
-  void ReplayClippedRegion(std::span<const MaskModel> masks, RectI dirty);
+  void ReplayClippedRegion(MaskListView masks, RectI dirty);
   void WriteEffectiveAnalytic(const MaskModel& mask, RectI region, std::span<std::uint8_t> dest);
   auto AnalyticCoverage(const MaskModel& mask, std::uint32_t x, std::uint32_t y) const -> float;
 

@@ -526,8 +526,7 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
       } else if (command.kind == EditorMaskCreationCommandKind::SetMaskField) {
         auto* node  = document_->Graph().FindNode(command.node_id);
         auto* grade = dynamic_cast<ColorGradeNodeModel*>(node);
-        auto* mask  = grade == nullptr ? nullptr : grade->FindMask(command.mask_id);
-        if (mask == nullptr) {
+        if (grade == nullptr || grade->FindMask(command.mask_id) == nullptr) {
           continue;
         }
         try {
@@ -538,7 +537,7 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
           } else if (command.field_key == "opacity") {
             grade->SetMaskOpacity(command.mask_id, command.field_value.get<float>());
           } else if (command.field_key == "display_name") {
-            mask->display_name = command.field_value.get<std::string>();
+            grade->SetMaskDisplayName(command.mask_id, command.field_value.get<std::string>());
           }
         } catch (const std::exception&) {
         }

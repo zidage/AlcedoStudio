@@ -14,6 +14,10 @@
 // The P2 tests measure one editor tick with the copy-on-write freeze (edit one slider, freeze,
 // release the previous frozen document) and require the limit that P0 set from the numbers
 // above: at most 0.2 ms median and at most 100 heap allocations in the debug build.
+//
+// The P2A test measures one Mask handle drag tick (replace one Mask source, freeze, release the
+// previous frozen document) and requires the same limit, with an allocation count that does not
+// depend on how many Masks the Grade holds.
 
 #include <gtest/gtest.h>
 
@@ -27,6 +31,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "edit/graph/color_grade_node_model.hpp"
@@ -320,7 +325,85 @@ void RequireFreezeTickWithinLimit(std::string_view document_name, PipelineDocume
   }
 }
 
+/// Default document whose primary Grade holds @p mask_count Radial Masks.
+auto MakePrimaryGradeMaskDocument(int mask_count) -> PipelineDocument {
+  auto  document = CreateDefaultPipelineDocument();
+  auto* grade    = document.PrimaryGrade();
+  for (int m = 0; m < mask_count; ++m) {
+    MaskModel mask;
+    mask.id     = MaskId{"mask.radial." + std::to_string(m)};
+    mask.source = RadialMaskSource{0.1f + 0.01f * m, 0.5f, 0.2f, 0.1f, 0.3f, 0.05f, 0.1f};
+    grade->AddMask(std::move(mask), grade->MaskCount());
+  }
+  document.MarkTopologyChanged();
+  return document;
+}
+
+auto RadialCenterX(const PipelineDocument& document, const MaskId& mask_id) -> float {
+  return std::get<RadialMaskSource>(document.PrimaryGrade()->FindMask(mask_id)->source).center_x;
+}
+
+struct MaskDragTickCost {
+  TimingMicros timing;
+  long long    allocations = -1;
+};
+
+/**
+ * @brief One tick of a Mask handle drag as the editor runs it: replace the source of the first
+ *        Mask of the primary Grade while the GUI holds the last frozen document, then freeze and
+ *        release the previous frozen document.
+ *
+ * Checks that each frozen document keeps the source written before it, then measures the tick.
+ */
+auto MeasureMaskDragTick(std::string_view document_name, PipelineDocument document,
+                         int iterations) -> MaskDragTickCost {
+  const auto mask_id   = document.PrimaryGrade()->MaskAt(0).id;
+  auto       published = document.Freeze();
+  auto       source    = std::get<RadialMaskSource>(document.PrimaryGrade()->MaskAt(0).source);
+  auto       tick      = [&] {
+    source.center_x = source.center_x > 0.8f ? 0.2f : source.center_x + 0.001f;
+    document.PrimaryGrade()->ReplaceMaskSource(mask_id, source);
+    published = document.Freeze();
+  };
+
+  // Correctness: the tick stores a new Mask value instead of writing through a frozen document.
+  tick();
+  const auto held       = published;
+  const auto held_value = source.center_x;
+  tick();
+  EXPECT_FLOAT_EQ(RadialCenterX(*held, mask_id), held_value);
+  EXPECT_FLOAT_EQ(RadialCenterX(*published, mask_id), source.center_x);
+  const auto* held_grade      = held->PrimaryGrade();
+  const auto* published_grade = published->PrimaryGrade();
+  for (std::size_t index = 1; index < published_grade->MaskCount(); ++index) {
+    EXPECT_EQ(&published_grade->MaskAt(index), &held_grade->MaskAt(index));
+  }
+
+  MaskDragTickCost cost;
+  cost.timing      = MeasureMicros(iterations, tick);
+  cost.allocations = CountAllocations(tick);
+  std::cout << "[P2A cost] document=" << document_name
+            << " masks=" << document.PrimaryGrade()->MaskCount()
+            << " mask drag tick median_us=" << cost.timing.median
+            << " min_us=" << cost.timing.minimum << " allocations=" << cost.allocations << '\n';
+  return cost;
+}
+
 }  // namespace
+
+TEST(PipelineDocumentCopyCost, MaskDragTickCostDoesNotGrowWithMaskCount) {
+  const auto eight      = MeasureMaskDragTick("8_masks", MakePrimaryGradeMaskDocument(8), 200);
+  const auto thirty_two = MeasureMaskDragTick("32_masks", MakePrimaryGradeMaskDocument(32), 200);
+  const auto many_masks = MeasureMaskDragTick("many_masks", MakeManyMaskDocument(), 200);
+
+  // Same document shape, 8 versus 32 Masks: the tick must allocate exactly the same. The many
+  // Mask document has four Grades and longer Mask IDs, so it is compared with the limit only.
+  if (eight.allocations >= 0) {
+    EXPECT_EQ(eight.allocations, thirty_two.allocations);
+    EXPECT_LE(static_cast<std::size_t>(many_masks.allocations), kFreezeTickAllocationLimit);
+  }
+  EXPECT_LE(many_masks.timing.median, kFreezeTickMedianLimitMicros);
+}
 
 TEST(PipelineDocumentCopyCost, DefaultDocumentFreezeAndOneSliderEditStayWithinLimit) {
   RequireFreezeTickWithinLimit("default", CreateDefaultPipelineDocument(), 200);
