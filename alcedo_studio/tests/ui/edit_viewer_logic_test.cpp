@@ -9,6 +9,7 @@
 #include "ui/edit_viewer/crop_geometry.hpp"
 #include "ui/edit_viewer/crop_interaction_controller.hpp"
 #include "ui/edit_viewer/edit_viewer_overlay_geometry.hpp"
+#include "ui/edit_viewer/mask_edit_geometry.hpp"
 #include "ui/edit_viewer/edit_viewer_surface.hpp"
 #include "ui/edit_viewer/view_transform_controller.hpp"
 #include "ui/edit_viewer/viewer_state.hpp"
@@ -25,6 +26,18 @@ auto                     WidgetPointForUv(const QPointF& uv) -> QPointF {
                                                                               QVector2D(0.0f, 0.0f));
   EXPECT_TRUE(point.has_value());
   return point.value_or(QPointF());
+}
+
+// Presented-frame mapping of an uncropped, unrotated image at fit.
+auto MakeMapping(const ViewportWidgetInfo& widget, const ViewportImageInfo& image)
+    -> MaskEditViewMapping {
+  MaskEditViewMapping mapping;
+  mapping.widget     = widget;
+  mapping.photograph = image;
+  mapping.geometry   = MaskEditGeometry::MakeIdentityPhotographGeometry(
+      Extent2D{static_cast<std::uint32_t>(image.image_width),
+               static_cast<std::uint32_t>(image.image_height)});
+  return mapping;
 }
 
 }  // namespace
@@ -133,26 +146,28 @@ TEST(EditViewerLogicTests, RoiFramesDoNotBecomeRenderReferenceFrames) {
       IsRenderReferenceFrame(FramePresentationMode::ViewportTransformed, FrameRole::DetailPatch));
 }
 
-TEST(EditViewerLogicTests, CropGeometryAspectLockedDiagonalPreservesRatio) {
-  const QRectF rect = CropGeometry::MakeAspectLockedRectFromDiagonal(
-      QPointF(0.2, 0.2), QPointF(0.7, 0.5), 4.0f / 3.0f, 16.0f / 9.0f);
-  ASSERT_GT(rect.width(), 0.0);
-  ASSERT_GT(rect.height(), 0.0);
-  EXPECT_NEAR(
-      (static_cast<float>(rect.width()) * (4.0f / 3.0f)) / static_cast<float>(rect.height()),
-      16.0f / 9.0f, 1e-4f);
+TEST(EditViewerLogicTests, CropGeometryAspectLockedBoxPreservesPixelRatio) {
+  const QRectF box = CropGeometry::MakeAspectLockedBoxFromDiagonal(QPointF(80.0, 60.0),
+                                                                   QPointF(280.0, 150.0),
+                                                                   16.0f / 9.0f);
+  ASSERT_GT(box.width(), 0.0);
+  ASSERT_GT(box.height(), 0.0);
+  EXPECT_NEAR(box.width() / box.height(), 16.0 / 9.0, 1e-4);
+  EXPECT_EQ(box.topLeft(), QPointF(80.0, 60.0));
 }
 
-TEST(EditViewerLogicTests, CropGeometryRotationClampKeepsCornersInsideNormalizedImage) {
-  const QRectF rect =
-      CropGeometry::ClampCropRectForRotation(QRectF(0.0, 0.0, 1.0, 1.0), 37.0f, 4.0f / 3.0f);
-  const auto corners = CropGeometry::RotatedCropCornersUv(rect, 37.0f, 4.0f / 3.0f);
-  for (const auto& corner : corners) {
-    EXPECT_GE(corner.x(), -1e-5);
-    EXPECT_LE(corner.x(), 1.0 + 1e-5);
-    EXPECT_GE(corner.y(), -1e-5);
-    EXPECT_LE(corner.y(), 1.0 + 1e-5);
-  }
+TEST(EditViewerLogicTests, CropGeometryFrameBoxRoundTripsThroughTheDocumentCrop) {
+  const Extent2D source{400, 300};
+  const QRectF   crop = CropGeometry::ClampCrop(QRectF(0.2, 0.3, 0.4, 0.3), 23.0f, source);
+  const QRectF   box  = CropGeometry::FrameBoxFromCrop(crop, 23.0f, source);
+  // The frame box has the crop's size in source pixels.
+  EXPECT_NEAR(box.width(), crop.width() * 400.0, 1e-3);
+  EXPECT_NEAR(box.height(), crop.height() * 300.0, 1e-3);
+  const QRectF back = CropGeometry::CropFromFrameBox(box, 23.0f, source);
+  EXPECT_NEAR(back.x(), crop.x(), 1e-5);
+  EXPECT_NEAR(back.y(), crop.y(), 1e-5);
+  EXPECT_NEAR(back.width(), crop.width(), 1e-5);
+  EXPECT_NEAR(back.height(), crop.height(), 1e-5);
 }
 
 TEST(EditViewerLogicTests, ViewTransformControllerCtrlWheelUpdatesZoomAndPan) {
@@ -315,17 +330,19 @@ TEST(EditViewerLogicTests, CropInteractionControllerCreatesAndFinalizesCropRect)
   crop_state.overlay_visible           = true;
   crop_state.rect                      = QRectF(0.25, 0.25, 0.5, 0.5);
   state.SetCropOverlayState(crop_state);
+  const auto mapping = MakeMapping(kWidgetInfo, kImageInfo);
 
   const QPointF start_point = WidgetPointForUv(QPointF(0.1, 0.1));
-  const auto    press       = controller.HandlePress(state, kWidgetInfo, kImageInfo, start_point);
+  const auto    press       = controller.HandlePress(state, mapping, start_point);
   EXPECT_TRUE(press.consumed);
-  EXPECT_TRUE(press.rect_changed.has_value());
+  // A press alone does not replace the crop.
+  EXPECT_FALSE(press.rect_changed.has_value());
 
   const QPointF end_point = WidgetPointForUv(QPointF(0.4, 0.45));
-  const auto    move =
-      controller.HandleMove(state, kWidgetInfo, kImageInfo, Qt::LeftButton, end_point);
+  const auto    move      = controller.HandleMove(state, mapping, Qt::LeftButton, end_point);
   EXPECT_TRUE(move.consumed);
   ASSERT_TRUE(move.rect_changed.has_value());
+  EXPECT_FALSE(move.rect_is_final);
   EXPECT_NEAR(move.rect_changed->x(), 0.1, 1e-3);
   EXPECT_NEAR(move.rect_changed->y(), 0.1, 1e-3);
   EXPECT_GT(move.rect_changed->width(), 0.25);
@@ -342,7 +359,6 @@ TEST(EditViewerLogicTests, CropInteractionControllerDoubleClickResetsCropAndRota
   auto                      crop_state = state.GetCropOverlay();
   crop_state.tool_enabled              = true;
   crop_state.overlay_visible           = true;
-  crop_state.metric_aspect             = 4.0f / 3.0f;
   crop_state.rect                      = QRectF(0.25, 0.25, 0.5, 0.5);
   crop_state.rotation_degrees          = -180.0f;
   state.SetCropOverlayState(crop_state);
@@ -363,18 +379,13 @@ TEST(EditViewerLogicTests, CropInteractionControllerDoubleClickResetsCropAndRota
 }
 
 TEST(EditViewerLogicTests, CropGeometryHitTestPrefersCornersOverEdges) {
-  const QRectF rect       = QRectF(0.2, 0.2, 0.4, 0.4);
-  const auto   corners_uv = CropGeometry::RotatedCropCornersUv(
-      rect, 0.0f, CropGeometry::SafeAspect(kImageInfo.image_width, kImageInfo.image_height));
-  std::array<QPointF, 4> corners_widget{};
-  for (size_t i = 0; i < corners_uv.size(); ++i) {
-    const auto point = ViewportMapper::ImageUvToWidgetPoint(corners_uv[i], kWidgetInfo, kImageInfo,
-                                                            1.0f, QVector2D(0.0f, 0.0f));
-    ASSERT_TRUE(point.has_value());
-    corners_widget[i] = *point;
-  }
+  CropOverlayState crop;
+  crop.rect          = QRectF(0.2, 0.2, 0.4, 0.4);
+  const auto corners = CropInteractionController::CropCornersWidget(
+      crop, MakeMapping(kWidgetInfo, kImageInfo));
+  ASSERT_TRUE(corners.has_value());
 
-  const auto hit = CropGeometry::HitTestWidgetGeometry(corners_widget, corners_widget[0]);
+  const auto hit = CropGeometry::HitTestWidgetGeometry(*corners, (*corners)[0]);
   EXPECT_EQ(hit.corner_index, 0);
   EXPECT_EQ(hit.edge, CropEdge::None);
   EXPECT_FALSE(hit.rotate_handle_hit);
@@ -389,8 +400,7 @@ TEST(EditViewerLogicTests, OverlayGeometryBuildsCropCornersAndRotateHandleAtMult
     snapshot.viewer_state.crop_overlay.overlay_visible = true;
     snapshot.viewer_state.crop_overlay.tool_enabled = true;
     snapshot.viewer_state.crop_overlay.rect = QRectF(0.2, 0.2, 0.5, 0.5);
-    snapshot.viewer_state.crop_overlay.metric_aspect =
-        CropGeometry::SafeAspect(kImageInfo.image_width, kImageInfo.image_height);
+    snapshot.mapping = MakeMapping(snapshot.widget_info, snapshot.image_info);
 
     const auto geometry = EditViewerOverlayGeometry::Build(snapshot);
     ASSERT_TRUE(geometry.image_rect_valid) << "dpr=" << dpr;
@@ -417,7 +427,7 @@ TEST(EditViewerLogicTests, OverlayGeometryBuildsCropCornersAndRotateHandleAtMult
   }
 }
 
-TEST(EditViewerLogicTests, OverlayGeometryGoldenMatchesLandscapePortraitSquareAndOddViewports) {
+TEST(EditViewerLogicTests, OverlayGeometryCropCornersStayInsideImageForAllViewportShapes) {
   struct Case {
     const char* name;
     int width;
@@ -441,14 +451,13 @@ TEST(EditViewerLogicTests, OverlayGeometryGoldenMatchesLandscapePortraitSquareAn
     snapshot.viewer_state.crop_overlay.overlay_visible = true;
     snapshot.viewer_state.crop_overlay.tool_enabled = true;
     snapshot.viewer_state.crop_overlay.rect = c.crop;
-    snapshot.viewer_state.crop_overlay.metric_aspect =
-        CropGeometry::SafeAspect(c.image_w, c.image_h);
+    snapshot.mapping = MakeMapping(snapshot.widget_info, snapshot.image_info);
 
     const auto geometry = EditViewerOverlayGeometry::Build(snapshot);
     ASSERT_TRUE(geometry.image_rect_valid) << c.name;
     ASSERT_TRUE(geometry.crop_corners_valid) << c.name;
 
-    // Golden: image UV corners map inside the letterboxed image rect, and
+    // Image UV corners map inside the letterboxed image rect, and
     // crop corners stay inside that rect for an unrotated full-frame view.
     for (const auto& corner : geometry.crop_corners_widget) {
       EXPECT_GE(corner.x(), geometry.image_rect.left() - 1.0) << c.name;

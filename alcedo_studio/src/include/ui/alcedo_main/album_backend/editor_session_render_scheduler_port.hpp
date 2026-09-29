@@ -56,7 +56,7 @@ struct EditorRenderSessionContext {
  * @brief Render description for one editor viewport request.
  *
  * Maps the intent to render type, viewport region, and frame metadata. Sets
- * `document_geometry_ = UncroppedSource` exactly when `intent.geometry_overlay_only` is true
+ * `document_geometry_ = RotatedUncroppedSource` exactly when `intent.geometry_overlay_only` is true
  * (Geometry panel open); otherwise the document crop and rotation apply. Pure value; reads no
  * pipeline state.
  */

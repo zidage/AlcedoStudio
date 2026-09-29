@@ -22,6 +22,7 @@ def_library(PipelineHistory
 # GPU-free render geometry: coordinate spaces, resolver, sampling plans. No CUDA.
 def_library(EditGeometry
     SOURCES
+        ${ALCEDO_SRC_ROOT}/edit/geometry/crop_frame.cpp
         ${ALCEDO_SRC_ROOT}/edit/geometry/render_geometry_resolver.cpp
         ${ALCEDO_SRC_ROOT}/edit/geometry/texture_sampling_plan.cpp
 )

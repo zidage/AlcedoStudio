@@ -33,8 +33,11 @@ namespace alcedo::editor_rhi {
 // Coordinate spaces (kept explicit):
 // - item / logical: QML item coordinates (input, overlay placement)
 // - physical pixels: item * devicePixelRatio (letterbox + render region)
-// - source-image UV: normalized 0..1 over the active image / render reference
-// - crop rect UV: normalized crop window in source-image UV
+// - image UV: normalized 0..1 over the displayed photograph (render reference)
+// - reference pixels: the uncropped source, mapped through the presented frame's
+//   ResolvedRenderGeometry (setDisplayedMaskGeometry). The crop frame and Mask
+//   input both use this mapping.
+// - crop rect: the document crop (ImageGeometryModel representation)
 class EditorInteractionController : public QObject {
   Q_OBJECT
   Q_PROPERTY(float zoom READ zoom NOTIFY viewChanged)
@@ -55,9 +58,9 @@ class EditorInteractionController : public QObject {
                  cropChanged)
   Q_PROPERTY(bool aspectLocked READ aspectLocked NOTIFY cropChanged)
   Q_PROPERTY(float aspectRatio READ aspectRatio NOTIFY cropChanged)
-  Q_PROPERTY(float metricAspect READ metricAspect NOTIFY cropChanged)
-  Q_PROPERTY(int imageWidth READ imageWidth NOTIFY imageGeometryChanged)
-  Q_PROPERTY(int imageHeight READ imageHeight NOTIFY imageGeometryChanged)
+  // Uncropped source size from the presented frame; 0 until a frame is presented.
+  Q_PROPERTY(int sourceImageWidth READ sourceImageWidth NOTIFY imageGeometryChanged)
+  Q_PROPERTY(int sourceImageHeight READ sourceImageHeight NOTIFY imageGeometryChanged)
   Q_PROPERTY(int renderReferenceWidth READ renderReferenceWidth NOTIFY imageGeometryChanged)
   Q_PROPERTY(int renderReferenceHeight READ renderReferenceHeight NOTIFY imageGeometryChanged)
   Q_PROPERTY(qreal viewportWidth READ viewportWidth NOTIFY viewportMetricsChanged)
@@ -86,7 +89,6 @@ class EditorInteractionController : public QObject {
   enum class ViewChangeKind {
     ZoomPan,        // zoom/pan transform (reuse or detail, decided downstream)
     Resize,         // viewport metrics (size/dpr) changed
-    CropRotate,     // crop rect or rotation changed (content change)
     DetailRefresh,  // ROI detail region/mode changed
   };
   Q_ENUM(ViewChangeKind)
@@ -104,9 +106,12 @@ class EditorInteractionController : public QObject {
   [[nodiscard]] auto cropRotationDegrees() const -> float;
   [[nodiscard]] auto aspectLocked() const -> bool;
   [[nodiscard]] auto aspectRatio() const -> float;
-  [[nodiscard]] auto metricAspect() const -> float;
-  [[nodiscard]] auto imageWidth() const -> int { return image_info_.image_width; }
-  [[nodiscard]] auto imageHeight() const -> int { return image_info_.image_height; }
+  [[nodiscard]] auto sourceImageWidth() const -> int {
+    return static_cast<int>(displayed_mask_geometry_.full_reference_extent.width);
+  }
+  [[nodiscard]] auto sourceImageHeight() const -> int {
+    return static_cast<int>(displayed_mask_geometry_.full_reference_extent.height);
+  }
   [[nodiscard]] auto renderReferenceWidth() const -> int {
     return viewer_state_.Snapshot().render_reference_width;
   }
@@ -138,13 +143,16 @@ class EditorInteractionController : public QObject {
 
   Q_INVOKABLE void setCropToolEnabled(bool enabled);
   Q_INVOKABLE void setCropOverlayVisible(bool visible);
+  // Crop setters show a document value on the overlay. They do not emit
+  // cropFrameEdited, which reports pointer edits only.
   Q_INVOKABLE void setCropRectNormalized(const QRectF& rect);
   Q_INVOKABLE void setCropRotationDegrees(float degrees);
+  // aspect_ratio is crop width / height in source pixels.
   Q_INVOKABLE void setCropAspectLock(bool enabled, float aspect_ratio);
-  // When false, crop/rotation/view setters still update state and overlay
-  // signals but do not emit viewChangeReported. Geometry panel enter/leave
-  // uses this so EditorSessionController owns the single source-frame refresh.
-  Q_INVOKABLE void setViewChangeRoutingEnabled(bool enabled);
+  // The crop the render uses for @p rect at @p degrees: rotated corners stay
+  // inside the source (ClampCropToRotatedSource). Returns @p rect unchanged
+  // until a frame has been presented.
+  Q_INVOKABLE QRectF clampCropRect(const QRectF& rect, float degrees) const;
   void setPresentationMode(int mode);
   void setDetailRoiVisible(bool visible);
   void setDetailRoiNormalized(const QRectF& rect_uv);
@@ -152,7 +160,6 @@ class EditorInteractionController : public QObject {
 
   // Item size is logical (QML) width/height; dpr converts to physical pixels.
   Q_INVOKABLE void setViewportMetrics(qreal width, qreal height, qreal devicePixelRatio);
-  Q_INVOKABLE void setImageSize(int width, int height);
   Q_INVOKABLE void setRenderReferenceSize(int width, int height);
   /// Force-apply render-reference size even when width/height match the previous
   /// values. Used when a new image/session generation reuses the same output size
@@ -191,17 +198,18 @@ class EditorInteractionController : public QObject {
   Q_INVOKABLE void zoomToActualPixels();
   Q_INVOKABLE void resetCropToFull();
 
-  // Logical → source-image UV. Empty when outside the letterboxed image.
+  // Logical → displayed-photograph UV. Empty when outside the letterboxed image.
   // Explicit return types (not auto) — moc cannot parse trailing-return invokables.
   Q_INVOKABLE QPointF itemPointToImageUv(qreal x, qreal y) const;
   Q_INVOKABLE QPointF imageUvToItemPoint(qreal u, qreal v) const;
   Q_INVOKABLE bool isItemPointInsideImage(qreal x, qreal y) const;
 
   /**
-   * @brief Set the displayed photograph's resolved geometry for Mask mapping.
+   * @brief Set the displayed photograph's resolved geometry for Mask and crop mapping.
    *
    * Must be the full-frame Interactive photograph, never a DetailPatch extent.
-   * Crop overlay drafts are not applied. Empty extents keep Mask mapping invalid.
+   * Its full_reference_extent is the source size the Geometry panel reads, and
+   * its edit_extent defines true zoom. Empty extents keep the mapping invalid.
    *
    * Thread: GUI. Does not submit pipeline work.
    */
@@ -248,8 +256,9 @@ class EditorInteractionController : public QObject {
   void viewChanged();
   void cropChanged();
   void cropToolChanged();
-  void cropRectCommitted(const QRectF& rect, bool isFinal);
-  void cropRotationCommitted(float degrees, bool isFinal);
+  // A pointer edit of the crop frame: the full crop and rotation after the
+  // edit. isFinal is true once, on release (or double-click reset).
+  void cropFrameEdited(const QRectF& rect, float degrees, bool isFinal);
   void overlayGeometryChanged();
   void cursorChanged();
   void imageGeometryChanged();
@@ -275,13 +284,14 @@ class EditorInteractionController : public QObject {
   static constexpr float kMaxTrueZoom = 16.0f;
 
   [[nodiscard]] auto widgetInfo() const -> ViewportWidgetInfo { return widget_info_; }
-  [[nodiscard]] auto imageInfo() const -> ViewportImageInfo { return image_info_; }
+  // Displayed photograph size (render reference); empty before the first frame.
   [[nodiscard]] auto interactionImageInfo() const -> ViewportImageInfo;
-  // fitFraction = physical screen pixels per source-image pixel at fit (zoom
-  // field 1.0). Uses the full image size (image_info_), not the 2K render
-  // reference, because 100% is defined against the real image. Letterbox scale
-  // is aspect-only so it is identical for the full image and the 2K reference
-  // (crop tool off).
+  // True while the Geometry crop frame is shown: the view stays at fit.
+  [[nodiscard]] auto viewLockedToFit() const -> bool;
+  // fitFraction = physical screen pixels per source pixel at fit (zoom field
+  // 1.0). Uses the presented frame's edit extent (the displayed photograph in
+  // source pixels), not the 2K render reference, because 100% is defined
+  // against real image pixels.
   [[nodiscard]] auto fitFraction() const -> float;
   // Zoom-field ceiling that maps to kMaxTrueZoom at the current image/viewport.
   [[nodiscard]] auto maxZoomField() const -> float;
@@ -311,7 +321,6 @@ class EditorInteractionController : public QObject {
   ViewTransformController view_transform_controller_{};
   CropInteractionController crop_interaction_controller_{};
   ViewportWidgetInfo             widget_info_{1, 1, 1.0f};
-  ViewportImageInfo              image_info_{0, 0};
   ResolvedRenderGeometry         displayed_mask_geometry_{};
   FramePresentationMode          presentation_mode_            = FramePresentationMode::FullFrame;
   // While a zoom animation is in progress, this also covers the synchronous

@@ -98,10 +98,6 @@ auto EditorInteractionController::aspectRatio() const -> float {
   return viewer_state_.GetCropOverlay().aspect_ratio;
 }
 
-auto EditorInteractionController::metricAspect() const -> float {
-  return viewer_state_.GetCropOverlay().metric_aspect;
-}
-
 auto EditorInteractionController::rotateHandleItemPos() const -> QPointF {
   const auto geometry = overlayGeometry();
   if (!geometry.crop_corners_valid) {
@@ -143,43 +139,24 @@ void EditorInteractionController::setCropOverlayVisible(bool visible) {
     applyCursor(std::nullopt, true);
   }
   viewer_state_.SetCropOverlayVisible(visible);
-  // Toggling the overlay switches the displayed image between the full source
-  // (panel open) and the committed cropped output (panel closed), so both the
-  // true-zoom readout and the zoom-field ceiling must refresh.
-  applyMaxZoomToController();
   emit cropChanged();
   emit overlayGeometryChanged();
   emit viewStateChanged();
-  emit zoomLabelChanged();
 }
 
 void EditorInteractionController::setCropRectNormalized(const QRectF& rect) {
-  auto         crop    = viewer_state_.GetCropOverlay();
-  const QRectF clamped = CropGeometry::ClampCropRect(rect);
-  // External setters must honor the active rotation so rotated corners stay inside
-  // the image (legacy SetCropOverlayRectNormalized behavior).
-  const QRectF adjusted =
-      CropGeometry::ClampCropRectForRotation(clamped, crop.rotation_degrees, crop.metric_aspect);
-  if (crop.rect == adjusted) {
+  auto         crop = viewer_state_.GetCropOverlay();
+  const QRectF next = rect.normalized();
+  if (crop.rect == next) {
     return;
   }
-  crop.rect = adjusted;
+  // Pointer drags own the rect until release; a document echo must not move it.
+  crop_interaction_controller_.Cancel();
+  crop.rect = next;
   viewer_state_.SetCropOverlayState(crop);
-  // The cropped-output size (and thus true zoom + the field ceiling) changes
-  // when the committed rect changes while the panel is closed. While the panel
-  // is open the effective image is the source, so this is a no-op then.
-  applyMaxZoomToController();
   emit cropChanged();
-  emit cropRectCommitted(adjusted, true);
   emit overlayGeometryChanged();
   emit viewStateChanged();
-  emit zoomLabelChanged();
-  // Geometry-panel draft: the crop rect is an on-screen overlay only. Pipeline
-  // content changes when the panel commits (leave / Enter), not on every draft
-  // write. Routing CropRotate here would thrash InteractivePrimary renders.
-  if (!crop.overlay_visible) {
-    emitViewChange(ViewChangeKind::CropRotate);
-  }
 }
 
 void EditorInteractionController::setCropRotationDegrees(float degrees) {
@@ -188,18 +165,20 @@ void EditorInteractionController::setCropRotationDegrees(float degrees) {
   if (std::abs(crop.rotation_degrees - normalized) < 1.0e-5f) {
     return;
   }
+  crop_interaction_controller_.Cancel();
   crop.rotation_degrees = normalized;
-  crop.rect =
-      CropGeometry::ClampCropRectForRotation(crop.rect, crop.rotation_degrees, crop.metric_aspect);
   viewer_state_.SetCropOverlayState(crop);
   emit cropChanged();
-  emit cropRotationCommitted(normalized, true);
   emit overlayGeometryChanged();
   emit viewStateChanged();
-  // Same draft rule as setCropRectNormalized: overlay-visible edits stay local.
-  if (!crop.overlay_visible) {
-    emitViewChange(ViewChangeKind::CropRotate);
+}
+
+QRectF EditorInteractionController::clampCropRect(const QRectF& rect, float degrees) const {
+  const Extent2D source = displayed_mask_geometry_.full_reference_extent;
+  if (source.Empty()) {
+    return rect.normalized();
   }
+  return CropGeometry::ClampCrop(rect, degrees, source);
 }
 
 void EditorInteractionController::setCropAspectLock(bool enabled, float aspect_ratio) {
@@ -214,10 +193,6 @@ void EditorInteractionController::setCropAspectLock(bool enabled, float aspect_r
   emit cropChanged();
   emit overlayGeometryChanged();
   emit viewStateChanged();
-}
-
-void EditorInteractionController::setViewChangeRoutingEnabled(bool enabled) {
-  suppress_view_change_routing_ = !enabled;
 }
 
 void EditorInteractionController::setPresentationMode(int mode) {
@@ -335,31 +310,6 @@ void EditorInteractionController::setViewportMetrics(qreal width, qreal height,
   emitViewChange(ViewChangeKind::Resize);
 }
 
-void EditorInteractionController::setImageSize(int width, int height) {
-  width  = std::max(0, width);
-  height = std::max(0, height);
-  if (image_info_.image_width == width && image_info_.image_height == height) {
-    return;
-  }
-  image_info_ = {width, height};
-  if (width > 0 && height > 0) {
-    auto crop          = viewer_state_.GetCropOverlay();
-    crop.metric_aspect = CropGeometry::SafeAspect(width, height);
-    viewer_state_.SetCropOverlayState(crop);
-  }
-  // The zoom-field ceiling depends on the full image size; update it before
-  // reconciling so a clamp uses the new ceiling.
-  applyMaxZoomToController();
-  reconcileViewTransformForRenderReference();
-  updateViewportRenderRegionCache();
-  emit imageGeometryChanged();
-  emit overlayGeometryChanged();
-  emit viewStateChanged();
-  // trueZoom depends on image size (fitFraction) even if the zoom field is
-  // unchanged, so the readout must refresh.
-  emit zoomLabelChanged();
-}
-
 void EditorInteractionController::setRenderReferenceSize(int width, int height) {
   width               = std::max(0, width);
   height              = std::max(0, height);
@@ -407,19 +357,15 @@ void EditorInteractionController::handlePress(qreal x, qreal y, int button) {
   const auto    qt_button = static_cast<Qt::MouseButton>(button);
 
   if (qt_button == Qt::LeftButton) {
-    const auto             snapshot = overlaySnapshot();
-    const auto             geometry = EditViewerOverlayGeometry::Build(snapshot);
-    const auto             hover = EditViewerOverlayGeometry::ComputeHover(snapshot, geometry, pos);
-    const CropPressContext press_context{pos, hover.image_uv, hover.crop_hit, hover.inside_image};
-    const auto             crop_result =
-        crop_interaction_controller_.HandlePress(viewer_state_, imageInfo(), press_context);
+    const auto crop_result =
+        crop_interaction_controller_.HandlePress(viewer_state_, maskEditViewMapping(), pos);
     if (crop_result.consumed) {
       applyCropInteractionResult(crop_result);
       return;
     }
   }
 
-  if (qt_button == Qt::LeftButton || qt_button == Qt::MiddleButton) {
+  if ((qt_button == Qt::LeftButton || qt_button == Qt::MiddleButton) && !viewLockedToFit()) {
     const auto crop_state = viewer_state_.GetCropOverlay();
     stopZoomAnimation();
     const auto result = view_transform_controller_.HandlePanPress(
@@ -439,8 +385,8 @@ void EditorInteractionController::handleMove(qreal x, qreal y, int buttons) {
   const QPointF pos(x, y);
   const auto    qt_buttons  = static_cast<Qt::MouseButtons>(buttons);
 
-  const auto    crop_result = crop_interaction_controller_.HandleMove(viewer_state_, widgetInfo(),
-                                                                      imageInfo(), qt_buttons, pos);
+  const auto    crop_result = crop_interaction_controller_.HandleMove(
+      viewer_state_, maskEditViewMapping(), qt_buttons, pos);
   if (crop_result.consumed) {
     applyCropInteractionResult(crop_result);
     return;
@@ -501,6 +447,9 @@ void EditorInteractionController::handleDoubleTap(qreal x, qreal y) {
     }
   }
 
+  if (viewLockedToFit()) {
+    return;
+  }
   stopZoomAnimation();
   const auto result = view_transform_controller_.HandleDoubleClick(
       viewer_state_, widgetInfo(), interactionImageInfo(), QPointF(x, y));
@@ -509,7 +458,7 @@ void EditorInteractionController::handleDoubleTap(qreal x, qreal y) {
 
 void EditorInteractionController::handleWheel(qreal x, qreal y, int angleDeltaY, int pixelDeltaX,
                                               int pixelDeltaY, int modifiers, bool synthesized) {
-  if (!interaction_enabled_) {
+  if (!interaction_enabled_ || viewLockedToFit()) {
     return;
   }
   const QPointF pos(x, y);
@@ -538,7 +487,7 @@ void EditorInteractionController::handleWheel(qreal x, qreal y, int angleDeltaY,
 }
 
 void EditorInteractionController::handlePinch(qreal x, qreal y, qreal scaleDelta) {
-  if (!interaction_enabled_) {
+  if (!interaction_enabled_ || viewLockedToFit()) {
     return;
   }
   interruptZoomAnimation();
@@ -552,7 +501,7 @@ void EditorInteractionController::handlePinch(qreal x, qreal y, qreal scaleDelta
 }
 
 void EditorInteractionController::handlePinchTo(qreal x, qreal y, qreal targetZoom) {
-  if (!interaction_enabled_) {
+  if (!interaction_enabled_ || viewLockedToFit()) {
     return;
   }
   interruptZoomAnimation();
@@ -589,7 +538,7 @@ void EditorInteractionController::resetView() {
 }
 
 void EditorInteractionController::zoomToActualPixels() {
-  if (!interaction_enabled_) {
+  if (!interaction_enabled_ || viewLockedToFit()) {
     return;
   }
   const float ff = fitFraction();
@@ -629,7 +578,7 @@ QPointF EditorInteractionController::itemPointToImageUv(qreal x, qreal y) const 
     pan  = QVector2D(0.0f, 0.0f);
   }
   const auto uv =
-      ViewportMapper::WidgetPointToImageUv(QPointF(x, y), widgetInfo(), imageInfo(), zoom, pan);
+      ViewportMapper::WidgetPointToImageUv(QPointF(x, y), widgetInfo(), interactionImageInfo(), zoom, pan);
   return uv.value_or(QPointF());
 }
 
@@ -642,7 +591,7 @@ QPointF EditorInteractionController::imageUvToItemPoint(qreal u, qreal v) const 
     pan  = QVector2D(0.0f, 0.0f);
   }
   const auto point =
-      ViewportMapper::ImageUvToWidgetPoint(QPointF(u, v), widgetInfo(), imageInfo(), zoom, pan);
+      ViewportMapper::ImageUvToWidgetPoint(QPointF(u, v), widgetInfo(), interactionImageInfo(), zoom, pan);
   return point.value_or(QPointF());
 }
 
@@ -654,7 +603,7 @@ bool EditorInteractionController::isItemPointInsideImage(qreal x, qreal y) const
     zoom = 1.0f;
     pan  = QVector2D(0.0f, 0.0f);
   }
-  return ViewportMapper::WidgetPointToImageUv(QPointF(x, y), widgetInfo(), imageInfo(), zoom, pan)
+  return ViewportMapper::WidgetPointToImageUv(QPointF(x, y), widgetInfo(), interactionImageInfo(), zoom, pan)
       .has_value();
 }
 
@@ -673,17 +622,28 @@ void EditorInteractionController::setDisplayedMaskGeometry(const ResolvedRenderG
   if (same) {
     return;
   }
-  displayed_mask_geometry_ = geometry;
-  // The Mask mapping basis changed with the presented frame; overlays holding
-  // mapped handles must rebuild even before the next pointer event.
+  const bool source_changed  = current.full_reference_extent != geometry.full_reference_extent;
+  const bool display_changed = current.edit_extent != geometry.edit_extent;
+  displayed_mask_geometry_   = geometry;
+  if (display_changed) {
+    // True zoom and the zoom-field ceiling are defined against the displayed
+    // photograph's source pixels.
+    applyMaxZoomToController();
+    reconcileViewTransformForRenderReference();
+    emit zoomLabelChanged();
+  }
+  if (source_changed) {
+    emit imageGeometryChanged();
+  }
+  // The Mask and crop mapping basis changed with the presented frame; overlays
+  // holding mapped handles must rebuild even before the next pointer event.
   emit overlayGeometryChanged();
 }
 
 auto EditorInteractionController::maskEditViewMapping() const -> MaskEditViewMapping {
   MaskEditViewMapping mapping;
   mapping.widget = widgetInfo();
-  // Crop overlay keeps uncropped source in image_info_. Mask mapping uses the
-  // displayed photograph (render-reference size when the viewport has one).
+  // The displayed photograph (render-reference size once a frame arrived).
   mapping.photograph = interactionImageInfo();
   mapping.geometry   = displayed_mask_geometry_;
   mapping.presentation = presentation_mode_;
@@ -722,7 +682,8 @@ auto EditorInteractionController::overlaySnapshot() const -> EditViewerOverlaySn
   EditViewerOverlaySnapshot snapshot;
   snapshot.viewer_state       = viewer_state_.Snapshot();
   snapshot.widget_info        = widget_info_;
-  snapshot.image_info         = image_info_;
+  snapshot.image_info         = interactionImageInfo();
+  snapshot.mapping            = maskEditViewMapping();
   snapshot.presentation_mode  = presentation_mode_;
   snapshot.detail_roi_visible = detail_roi_visible_;
   snapshot.detail_roi_uv      = detail_roi_uv_;
@@ -770,33 +731,24 @@ auto EditorInteractionController::interactionImageInfo() const -> ViewportImageI
   if (snapshot.render_reference_width > 0 && snapshot.render_reference_height > 0) {
     return {snapshot.render_reference_width, snapshot.render_reference_height};
   }
-  return image_info_;
+  return {0, 0};
+}
+
+auto EditorInteractionController::viewLockedToFit() const -> bool {
+  const auto crop = viewer_state_.GetCropOverlay();
+  return crop.tool_enabled && crop.overlay_visible;
 }
 
 auto EditorInteractionController::fitFraction() const -> float {
-  if (image_info_.image_width <= 0 || image_info_.image_height <= 0 ||
-      widget_info_.widget_width <= 0 || widget_info_.widget_height <= 0) {
+  const Extent2D displayed = displayed_mask_geometry_.edit_extent;
+  if (displayed.Empty() || widget_info_.widget_width <= 0 || widget_info_.widget_height <= 0) {
     return 0.0f;
   }
-  // Effective displayed image: the full source while the crop panel is open
-  // (CROP_ROTATE disabled — overlay only), or the committed cropped output once
-  // the panel closes (CropRotateOp bakes the crop). Cropped output px =
-  // round(src * crop_rect) per axis; rotation is un-baked into an axis-aligned
-  // frame so it does not change the output size. A full crop rect (0,0,1,1)
-  // reduces to the source, so this is safe even when no crop was ever committed.
-  const auto        crop      = viewer_state_.GetCropOverlay();
-  ViewportImageInfo effective = image_info_;
-  if (!crop.overlay_visible) {
-    effective.image_width =
-        std::max(1, static_cast<int>(std::lround(static_cast<float>(image_info_.image_width) *
-                                                 crop.rect.width())));
-    effective.image_height =
-        std::max(1, static_cast<int>(std::lround(static_cast<float>(image_info_.image_height) *
-                                                 crop.rect.height())));
-  }
-  // Letterbox scale is aspect-only, so it is identical whether computed from the
-  // effective image or its 2K render reference. Use the effective image so 100%
-  // is defined against the real pixels of what is actually displayed.
+  // The presented frame's edit extent is the displayed photograph in source
+  // pixels: the cropped output, or the rotated source while the Geometry panel
+  // is open. Letterbox scale is aspect-only, so it matches the render reference.
+  const ViewportImageInfo effective{static_cast<int>(displayed.width),
+                                    static_cast<int>(displayed.height)};
   const auto  scale      = ViewportMapper::ComputeLetterboxScale(widget_info_, effective);
   const float dpr        = std::max(widget_info_.device_pixel_ratio, 1e-4f);
   const float viewport_w = static_cast<float>(widget_info_.widget_width) * dpr;
@@ -894,25 +846,16 @@ void EditorInteractionController::applyViewTransformResult(const ViewTransformRe
 
 void EditorInteractionController::applyCropInteractionResult(const CropInteractionResult& result) {
   applyCursor(result.cursor, result.unset_cursor);
-  if (result.rect_changed.has_value()) {
-    emit cropRectCommitted(*result.rect_changed, result.rect_is_final);
+  if (result.rect_changed.has_value() || result.rotation_changed.has_value()) {
+    const auto crop     = viewer_state_.GetCropOverlay();
+    const bool is_final = result.rect_changed.has_value() ? result.rect_is_final
+                                                          : result.rotation_is_final;
     emit cropChanged();
-  }
-  if (result.rotation_changed.has_value()) {
-    emit cropRotationCommitted(*result.rotation_changed, result.rotation_is_final);
-    emit cropChanged();
+    emit cropFrameEdited(crop.rect, crop.rotation_degrees, is_final);
   }
   if (result.request_repaint) {
     emit overlayGeometryChanged();
     emit viewStateChanged();
-  }
-  // Crop-frame drag is pure UI while the geometry overlay is open: QSG redraws
-  // the handles over the source-frame preview. Pipeline bake happens only on
-  // geometry confirm (panel leave / Enter). When the overlay is closed a crop
-  // change is real content and must route CropRotate.
-  if ((result.rect_changed.has_value() || result.rotation_changed.has_value()) &&
-      !viewer_state_.GetCropOverlay().overlay_visible) {
-    emitViewChange(ViewChangeKind::CropRotate);
   }
 }
 
@@ -982,8 +925,7 @@ void EditorInteractionController::emitViewChange(ViewChangeKind kind) {
   // Phase 5D: report the view change for render routing. Emitted by callers
   // AFTER viewStateChanged so the QML push of the new view to the viewport (and
   // its DirectFrameSink region) lands before the session routes the intent.
-  // Suppress during zoom animation and panel-driven overlay state sync so the
-  // session controller remains the single owner of the source-frame refresh.
+  // Suppressed during a zoom animation; the settled transform reports once.
   if (suppress_view_change_routing_) {
     return;
   }

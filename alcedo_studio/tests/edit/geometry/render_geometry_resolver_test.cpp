@@ -4,6 +4,8 @@
 
 #include "edit/geometry/render_geometry_resolver.hpp"
 
+#include "edit/geometry/crop_frame.hpp"
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -27,7 +29,6 @@ TEST(GpuDagGeometry, RenderGeometryRoundTripsReferenceAndRenderPixelCenters) {
   ImageGeometryParams image;
   image.crop_rect        = NormalizedRect{0.10f, 0.15f, 0.70f, 0.60f};
   image.rotation_degrees = 23.0f;
-  image.expand_to_fit    = true;
   ViewRequest view;
   view.visible_rect_in_edit_space = NormalizedRect{0.20f, 0.10f, 0.50f, 0.60f};
   view.viewport_extent            = Extent2D{320, 240};
@@ -61,25 +62,93 @@ TEST(GpuDagGeometry, FullCropZeroRotationMapsReferenceCornersToRenderCorners) {
   EXPECT_NEAR(bottom_right.y, 47.5f, kPxEps);
 }
 
-TEST(GpuDagGeometry, RotatedCropBoundsContainAllFourTransformedCorners) {
+TEST(GpuDagGeometry, RotatedCropOutputIsTheCropFrameAndSamplesOnlyTheSource) {
   ImageGeometryParams image;
-  image.crop_rect         = NormalizedRect{0.25f, 0.25f, 0.50f, 0.50f};
-  image.rotation_degrees  = 35.0f;
-  image.expand_to_fit     = true;
-  const auto    geometry  = ResolveSimple(MakeSourceGeometry({200, 100}, {200, 100}), image);
+  image.crop_rect        = NormalizedRect{0.30f, 0.25f, 0.40f, 0.50f};
+  image.rotation_degrees = 10.0f;
+  const Extent2D source{200, 100};
+  const auto     geometry = ResolveSimple(MakeSourceGeometry(source, source), image);
 
-  const Vector2 corners[] = {{50.0f, 25.0f}, {150.0f, 25.0f}, {150.0f, 75.0f}, {50.0f, 75.0f}};
-  const float   edit_w    = static_cast<float>(geometry.edit_extent.width);
-  const float   edit_h    = static_cast<float>(geometry.edit_extent.height);
-  for (const auto& corner : corners) {
+  // The frame already fits inside the source at 10 degrees, so it is kept and the output is
+  // exactly the crop frame: 80 x 50 source pixels.
+  EXPECT_EQ(geometry.edit_extent, (Extent2D{80, 50}));
+
+  // Every output corner samples inside the source: a rotated crop has no border corners.
+  const float render_w = static_cast<float>(geometry.render_extent.width);
+  const float render_h = static_cast<float>(geometry.render_extent.height);
+  for (const Vector2 corner : {Vector2{0.0f, 0.0f}, Vector2{render_w, 0.0f},
+                               Vector2{render_w, render_h}, Vector2{0.0f, render_h}}) {
+    const auto reference = TransformPoint(geometry.render_to_reference, corner);
+    EXPECT_GE(reference.x, -1.0e-3f);
+    EXPECT_LE(reference.x, 200.0f + 1.0e-3f);
+    EXPECT_GE(reference.y, -1.0e-3f);
+    EXPECT_LE(reference.y, 100.0f + 1.0e-3f);
+  }
+}
+
+TEST(GpuDagGeometry, RotatedFullFrameCropShrinksSoCornersStayInsideSource) {
+  ImageGeometryParams image;
+  image.rotation_degrees = 12.0f;
+  const Extent2D source{300, 200};
+  const auto     geometry = ResolveSimple(MakeSourceGeometry(source, source), image);
+
+  EXPECT_LT(geometry.edit_extent.width, 300u);
+  EXPECT_LT(geometry.edit_extent.height, 200u);
+  // The crop aspect is kept while shrinking.
+  EXPECT_NEAR(static_cast<float>(geometry.edit_extent.width) /
+                  static_cast<float>(geometry.edit_extent.height),
+              1.5f, 0.02f);
+  const float render_w = static_cast<float>(geometry.render_extent.width);
+  const float render_h = static_cast<float>(geometry.render_extent.height);
+  for (const Vector2 corner : {Vector2{0.0f, 0.0f}, Vector2{render_w, 0.0f},
+                               Vector2{render_w, render_h}, Vector2{0.0f, render_h}}) {
+    const auto reference = TransformPoint(geometry.render_to_reference, corner);
+    EXPECT_GE(reference.x, -0.5f);
+    EXPECT_LE(reference.x, 300.5f);
+    EXPECT_GE(reference.y, -0.5f);
+    EXPECT_LE(reference.y, 200.5f);
+  }
+}
+
+TEST(GpuDagGeometry, RotatedSourceBoundsFrameContainsTheWholeRotatedSource) {
+  ImageGeometryParams image;
+  image.rotation_degrees = 30.0f;
+  image.output_frame     = GeometryOutputFrame::RotatedSourceBounds;
+  const auto geometry    = ResolveSimple(MakeSourceGeometry({200, 100}, {200, 100}), image);
+
+  const float edit_w     = static_cast<float>(geometry.edit_extent.width);
+  const float edit_h     = static_cast<float>(geometry.edit_extent.height);
+  EXPECT_GT(edit_w, 200.0f);
+  EXPECT_GT(edit_h, 100.0f);
+  for (const Vector2 corner : {Vector2{0.0f, 0.0f}, Vector2{200.0f, 0.0f},
+                               Vector2{200.0f, 100.0f}, Vector2{0.0f, 100.0f}}) {
     const auto edit = TransformPoint(geometry.reference_to_edit, corner);
     EXPECT_GE(edit.x, -1.0e-3f);
     EXPECT_LE(edit.x, edit_w + 1.0e-3f);
     EXPECT_GE(edit.y, -1.0e-3f);
     EXPECT_LE(edit.y, edit_h + 1.0e-3f);
   }
-  EXPECT_GT(geometry.edit_extent.width, 0u);
-  EXPECT_GT(geometry.edit_extent.height, 0u);
+}
+
+TEST(GpuDagGeometry, CropFrameCornersMapToOutputCornersForTheOverlay) {
+  ImageGeometryParams image;
+  image.crop_rect        = NormalizedRect{0.30f, 0.25f, 0.40f, 0.50f};
+  image.rotation_degrees = -8.0f;
+  const Extent2D source{400, 300};
+  const auto     geometry = ResolveSimple(MakeSourceGeometry(source, source), image);
+
+  // The overlay draws the frame from CropFrameCornersInReference; the render must put those
+  // points on the output corners, clockwise from the top-left.
+  const auto corners =
+      CropFrameCornersInReference(image.crop_rect, image.rotation_degrees, source);
+  const float edit_w = static_cast<float>(geometry.edit_extent.width);
+  const float edit_h = static_cast<float>(geometry.edit_extent.height);
+  const Vector2 expected[] = {{0.0f, 0.0f}, {edit_w, 0.0f}, {edit_w, edit_h}, {0.0f, edit_h}};
+  for (size_t i = 0; i < corners.size(); ++i) {
+    const auto edit = TransformPoint(geometry.reference_to_edit, corners[i]);
+    EXPECT_NEAR(edit.x, expected[i].x, 0.6f) << "corner " << i;
+    EXPECT_NEAR(edit.y, expected[i].y, 0.6f) << "corner " << i;
+  }
 }
 
 TEST(GpuDagGeometry, ViewportCropAndDynamicScaleProduceRequestedRenderExtent) {

@@ -7,8 +7,6 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QEventLoop>
-#include <QJsonDocument>
-#include <QJsonObject>
 #include <QQmlComponent>
 #include <QQmlContext>
 #include <QQmlEngine>
@@ -18,6 +16,7 @@
 #include <QQuickWindow>
 #include <QRectF>
 #include <QVariantMap>
+#include <cstdint>
 #include <exception>
 #include <filesystem>
 #include <memory>
@@ -27,6 +26,7 @@
 #include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
 #include "ui/alcedo_main/app_theme.hpp"
+#include "ui/edit_viewer/crop_geometry.hpp"
 
 namespace alcedo::ui::test {
 namespace {
@@ -106,34 +106,32 @@ class GeometrySession final : public QObject, public IEditorAdjustmentSubmitter 
   bool        can_edit_     = true;
 };
 
+// Stands in for EditorInteractionController: the source size comes from the
+// presented frame, crop setters only show values, and pointer edits arrive as
+// cropFrameEdited. clampCropRect uses the production constraint.
 class FakeGeometryInteraction final : public QObject {
   Q_OBJECT
   Q_PROPERTY(QRectF cropRectNormalized READ cropRectNormalized WRITE setCropRectNormalized NOTIFY
                  cropChanged)
   Q_PROPERTY(float cropRotationDegrees READ cropRotationDegrees WRITE setCropRotationDegrees NOTIFY
                  cropChanged)
-  Q_PROPERTY(float metricAspect READ metricAspect NOTIFY cropChanged)
+  Q_PROPERTY(int sourceImageWidth READ sourceImageWidth NOTIFY imageGeometryChanged)
+  Q_PROPERTY(int sourceImageHeight READ sourceImageHeight NOTIFY imageGeometryChanged)
 
  public:
   [[nodiscard]] auto cropRectNormalized() const -> QRectF { return crop_rect_; }
   [[nodiscard]] auto cropRotationDegrees() const -> float { return rotation_degrees_; }
-  [[nodiscard]] auto metricAspect() const -> float { return metric_aspect_; }
+  [[nodiscard]] auto sourceImageWidth() const -> int { return source_width_; }
+  [[nodiscard]] auto sourceImageHeight() const -> int { return source_height_; }
   [[nodiscard]] auto cropToolEnabled() const -> bool { return crop_tool_enabled_; }
   [[nodiscard]] auto cropOverlayVisible() const -> bool { return crop_overlay_visible_; }
-  [[nodiscard]] auto imageWidth() const -> int { return image_width_; }
-  [[nodiscard]] auto imageHeight() const -> int { return image_height_; }
+  [[nodiscard]] auto aspectLocked() const -> bool { return aspect_locked_; }
+  [[nodiscard]] auto aspectRatio() const -> float { return aspect_ratio_; }
 
-  Q_INVOKABLE void   setMetricAspectForTest(float aspect) {
-    metric_aspect_ = aspect;
-    emit cropChanged();
-  }
-  Q_INVOKABLE void setImageSize(int width, int height) {
-    image_width_  = width;
-    image_height_ = height;
-    if (width > 0 && height > 0) {
-      metric_aspect_ = static_cast<float>(width) / static_cast<float>(height);
-      emit cropChanged();
-    }
+  void               presentSource(int width, int height) {
+    source_width_  = width;
+    source_height_ = height;
+    emit imageGeometryChanged();
   }
   Q_INVOKABLE void setCropToolEnabled(bool enabled) { crop_tool_enabled_ = enabled; }
   Q_INVOKABLE void setCropOverlayVisible(bool visible) { crop_overlay_visible_ = visible; }
@@ -142,53 +140,43 @@ class FakeGeometryInteraction final : public QObject {
     aspect_ratio_  = aspectRatio;
     emit cropChanged();
   }
-  Q_INVOKABLE void setViewChangeRoutingEnabled(bool enabled) {
-    view_change_routing_enabled_ = enabled;
-  }
   Q_INVOKABLE void setCropRectNormalized(const QRectF& rect) {
     crop_rect_ = rect;
     emit cropChanged();
-    emit cropRectCommitted(crop_rect_, true);
-    if (view_change_routing_enabled_) {
-      ++view_change_count_;
-    }
   }
   Q_INVOKABLE void setCropRotationDegrees(float degrees) {
     rotation_degrees_ = degrees;
     emit cropChanged();
-    emit cropRotationCommitted(rotation_degrees_, true);
-    if (view_change_routing_enabled_) {
-      ++view_change_count_;
+  }
+  Q_INVOKABLE QRectF clampCropRect(const QRectF& rect, float degrees) const {
+    if (source_width_ <= 0 || source_height_ <= 0) {
+      return rect.normalized();
     }
+    return CropGeometry::ClampCrop(rect, degrees,
+                                   Extent2D{static_cast<std::uint32_t>(source_width_),
+                                            static_cast<std::uint32_t>(source_height_)});
   }
-  Q_INVOKABLE void publishCropRect(const QRectF& rect, bool isFinal) {
-    crop_rect_ = rect;
+  void editCropFrame(const QRectF& rect, float degrees, bool isFinal) {
+    crop_rect_        = rect;
+    rotation_degrees_ = degrees;
     emit cropChanged();
-    emit cropRectCommitted(crop_rect_, isFinal);
-  }
-
-  [[nodiscard]] auto viewChangeCount() const -> int { return view_change_count_; }
-  [[nodiscard]] auto viewChangeRoutingEnabled() const -> bool {
-    return view_change_routing_enabled_;
+    emit cropFrameEdited(rect, degrees, isFinal);
   }
 
  signals:
   void cropChanged();
-  void cropRectCommitted(const QRectF& rect, bool isFinal);
-  void cropRotationCommitted(float degrees, bool isFinal);
+  void imageGeometryChanged();
+  void cropFrameEdited(const QRectF& rect, float degrees, bool isFinal);
 
  private:
   QRectF crop_rect_{0.0, 0.0, 1.0, 1.0};
-  float  metric_aspect_               = 2.0F;
-  float  rotation_degrees_            = 0.0F;
-  float  aspect_ratio_                = 1.0F;
-  bool   aspect_locked_               = false;
-  bool   crop_tool_enabled_           = false;
-  bool   crop_overlay_visible_        = false;
-  bool   view_change_routing_enabled_ = true;
-  int    view_change_count_           = 0;
-  int    image_width_                 = 0;
-  int    image_height_                = 0;
+  float  rotation_degrees_     = 0.0F;
+  float  aspect_ratio_         = 1.0F;
+  bool   aspect_locked_        = false;
+  bool   crop_tool_enabled_    = false;
+  bool   crop_overlay_visible_ = false;
+  int    source_width_         = 6000;
+  int    source_height_        = 4000;
 };
 
 auto QmlDirectory() -> QString {
@@ -200,9 +188,9 @@ auto AdjustmentStackUrl() -> QUrl {
   return QUrl::fromLocalFile(QmlDirectory() + QStringLiteral("/EditorAdjustmentStack.qml"));
 }
 
+// The crop_rotate projection EditorPanelPresentation publishes.
 auto MakeSnapshot(const QString& preset, double x, double y, double width, double height,
-                  double angle, const QString& maker, const QString& model, int source_width = 6000,
-                  int source_height = 4000) -> QVariantMap {
+                  double angle) -> QVariantMap {
   QVariantMap cropRect;
   cropRect.insert(QStringLiteral("x"), x);
   cropRect.insert(QStringLiteral("y"), y);
@@ -214,29 +202,15 @@ auto MakeSnapshot(const QString& preset, double x, double y, double width, doubl
   aspect.insert(QStringLiteral("height"), 9.0);
 
   QVariantMap crop;
-  crop.insert(QStringLiteral("enabled"), true);
-  crop.insert(QStringLiteral("angle_degrees"), angle);
-  crop.insert(QStringLiteral("enable_crop"), true);
   crop.insert(QStringLiteral("crop_rect"), cropRect);
-  crop.insert(QStringLiteral("expand_to_fit"), false);
+  crop.insert(QStringLiteral("angle_degrees"), angle);
   crop.insert(QStringLiteral("aspect_ratio_preset"), preset);
   crop.insert(QStringLiteral("aspect_ratio"), aspect);
-  crop.insert(QStringLiteral("source_size"),
-              QVariantMap{{QStringLiteral("width"), source_width},
-                          {QStringLiteral("height"), source_height}});
   QVariantMap cropWrapper;
   cropWrapper.insert(QStringLiteral("crop_rotate"), crop);
 
-  QVariantMap lens;
-  lens.insert(QStringLiteral("enabled"), false);
-  lens.insert(QStringLiteral("lens_maker"), maker);
-  lens.insert(QStringLiteral("lens_model"), model);
-  QVariantMap lensWrapper;
-  lensWrapper.insert(QStringLiteral("lens_calib"), lens);
-
   QVariantMap snapshot;
   snapshot.insert(QStringLiteral("crop_rotate"), cropWrapper);
-  snapshot.insert(QStringLiteral("lens_calib"), lensWrapper);
   return snapshot;
 }
 
@@ -303,8 +277,27 @@ class AdjustmentStackHarness {
   QList<QQmlError>            errors_;
 };
 
-auto ParseParams(const GeometrySession::Call& call) -> QJsonObject {
-  return QJsonDocument::fromJson(call.params.toUtf8()).object();
+// The typed geometry write every submit carries (panel models submit typed
+// writes; overlay edits submit JSON that the session parses to the same type).
+auto GeometryOf(const GeometrySession::Call& call) -> alcedo::ImageGeometryUpdate {
+  const auto* geometry = std::get_if<alcedo::ImageGeometryUpdate>(&call.write);
+  EXPECT_NE(geometry, nullptr);
+  return geometry != nullptr ? *geometry : alcedo::ImageGeometryUpdate{};
+}
+
+auto RectOf(const GeometrySession::Call& call) -> QRectF {
+  const auto geometry = GeometryOf(call);
+  EXPECT_TRUE(geometry.crop_rect.has_value());
+  const auto rect = geometry.crop_rect.value_or(NormalizedRect{});
+  return QRectF(rect.x, rect.y, rect.w, rect.h);
+}
+
+auto AngleOf(const GeometrySession::Call& call) -> double {
+  return GeometryOf(call).rotation_degrees.value_or(0.0F);
+}
+
+auto PresetOf(const GeometrySession::Call& call) -> QString {
+  return QString::fromStdString(GeometryOf(call).aspect_preset.value_or(std::string()));
 }
 
 }  // namespace
@@ -323,58 +316,22 @@ TEST(EditorGeometryPanelQmlTest, GeometryPanelExposesTypedModelsAndEnablesOverla
             nullptr);
   EXPECT_TRUE(interaction.cropToolEnabled());
   EXPECT_TRUE(interaction.cropOverlayVisible());
+  EXPECT_TRUE(session.calls.empty());
 }
 
-TEST(EditorGeometryPanelQmlTest, PanelEnterSyncDoesNotRouteDuplicateCropViewChanges) {
-  GeometrySession session(MakeSnapshot(QStringLiteral("ratio_16_9"), 0.2, 0.25, 0.5, 0.4, 8.0,
-                                       QStringLiteral(""), QStringLiteral("")),
-                          2);
+TEST(EditorGeometryPanelQmlTest, SnapshotProjectsCropAndSourceSizeComesFromThePresentedFrame) {
+  GeometrySession session(MakeSnapshot(QStringLiteral("ratio_16_9"), 0.1, 0.2, 0.7, 0.6, 12.5), 4);
   FakeGeometryInteraction interaction;
   AdjustmentStackHarness  harness(&session, &interaction);
   ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
 
   auto* geometryPanel =
       harness.findObject<QObject>(QStringLiteral("editorAdjustmentPanel_geometry"));
-  ASSERT_NE(geometryPanel, nullptr);
-
-  // Re-enter the panel with a non-default crop so syncToInteraction writes
-  // rotation/rect. Session owns the source-frame refresh; panel sync must not
-  // count as additional view-change routing (the CUDA overlay race).
-  const int before = interaction.viewChangeCount();
-  geometryPanel->setProperty("panelActive", false);
-  QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
-  geometryPanel->setProperty("panelActive", true);
-  QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
-
-  EXPECT_TRUE(interaction.cropToolEnabled());
-  EXPECT_TRUE(interaction.cropOverlayVisible());
-  EXPECT_EQ(interaction.viewChangeCount(), before);
-  EXPECT_TRUE(interaction.viewChangeRoutingEnabled());
-}
-
-TEST(EditorGeometryPanelQmlTest, SnapshotProjectsCropAndDoesNotSubmit) {
-  GeometrySession session(
-      MakeSnapshot(QStringLiteral("ratio_16_9"), 0.1, 0.2, 0.7, 0.6, 12.5,
-                   QStringLiteral("Unknown Maker"), QStringLiteral("Unknown Model")),
-      4);
-  FakeGeometryInteraction interaction;
-  AdjustmentStackHarness  harness(&session, &interaction);
-
-  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
-  auto* geometryPanel =
-      harness.findObject<QObject>(QStringLiteral("editorAdjustmentPanel_geometry"));
-  ASSERT_FALSE(session.adjustmentSnapshot().isEmpty());
-  // Stack counts successful fan-outs; first bind applies once (content gate is
-  // AdjustmentSnapshotChanged on the controller, not a public revision property).
-  EXPECT_GE(harness.root()->property("lastAppliedRevision").toInt(), 0);
-  EXPECT_FALSE(geometryPanel->property("inputActive").toBool());
-  EXPECT_TRUE(QMetaObject::invokeMethod(
-      geometryPanel, "loadFromSnapshot",
-      Q_ARG(QVariant, QVariant::fromValue(session.adjustmentSnapshot()))));
   auto* xModel   = harness.findObject<QObject>(QStringLiteral("geometryCropXModel"));
   auto* wModel   = harness.findObject<QObject>(QStringLiteral("geometryCropWidthModel"));
   auto* rotation = harness.findObject<QObject>(QStringLiteral("geometryRotationModel"));
   auto* aspect   = harness.findObject<QObject>(QStringLiteral("geometryAspectModel"));
+  ASSERT_NE(geometryPanel, nullptr);
   ASSERT_NE(xModel, nullptr);
   ASSERT_NE(wModel, nullptr);
   ASSERT_NE(rotation, nullptr);
@@ -386,59 +343,52 @@ TEST(EditorGeometryPanelQmlTest, SnapshotProjectsCropAndDoesNotSubmit) {
   EXPECT_EQ(aspect->property("currentValue").toString(), QStringLiteral("ratio_16_9"));
   EXPECT_EQ(geometryPanel->property("sourceImageWidth").toInt(), 6000);
   EXPECT_EQ(geometryPanel->property("sourceImageHeight").toInt(), 4000);
-  EXPECT_EQ(interaction.imageWidth(), 6000);
-  EXPECT_EQ(interaction.imageHeight(), 4000);
-  EXPECT_TRUE(session.calls.empty());
   EXPECT_NEAR(interaction.cropRectNormalized().x(), 0.1, 1e-6);
+  EXPECT_NEAR(interaction.cropRotationDegrees(), 12.5f, 1e-5f);
+  EXPECT_TRUE(interaction.aspectLocked());
+  EXPECT_NEAR(interaction.aspectRatio(), 16.0 / 9.0, 1e-4);
+
+  // Another image's frame changes the source size; the snapshot never carries it.
+  interaction.presentSource(3000, 4500);
+  EXPECT_EQ(geometryPanel->property("sourceImageWidth").toInt(), 3000);
+  EXPECT_EQ(geometryPanel->property("sourceImageHeight").toInt(), 4500);
+  // Showing a snapshot is not an edit.
+  EXPECT_TRUE(session.calls.empty());
 }
 
-TEST(EditorGeometryPanelQmlTest, SliderEditIsDraftOnlyUntilConfirmPendingCrop) {
-  GeometrySession         session(MakeSnapshot(QStringLiteral("free"), 0.0, 0.0, 1.0, 1.0, 0.0,
-                                               QStringLiteral(""), QStringLiteral(""), 2731, 4096));
+TEST(EditorGeometryPanelQmlTest, SliderDragSubmitsInteractivePatchesThenOneSettledPatch) {
+  GeometrySession         session(MakeSnapshot(QStringLiteral("free"), 0.0, 0.0, 1.0, 1.0, 0.0));
   FakeGeometryInteraction interaction;
   AdjustmentStackHarness  harness(&session, &interaction);
   ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
 
-  auto* geometryPanel =
-      harness.findObject<QObject>(QStringLiteral("editorAdjustmentPanel_geometry"));
-  auto* xModel     = harness.findObject<QObject>(QStringLiteral("geometryCropXModel"));
   auto* widthModel = harness.findObject<QObject>(QStringLiteral("geometryCropWidthModel"));
-  ASSERT_NE(geometryPanel, nullptr);
-  ASSERT_NE(xModel, nullptr);
   ASSERT_NE(widthModel, nullptr);
+  ASSERT_TRUE(QMetaObject::invokeMethod(widthModel, "beginDrag"));
+  ASSERT_TRUE(QMetaObject::invokeMethod(widthModel, "updateDrag", Q_ARG(double, 0.6)));
+  ASSERT_TRUE(QMetaObject::invokeMethod(widthModel, "updateDrag", Q_ARG(double, 0.5)));
+  ASSERT_TRUE(QMetaObject::invokeMethod(widthModel, "finishDrag"));
 
-  widthModel->setProperty("value", 0.7);
-  ASSERT_TRUE(QMetaObject::invokeMethod(xModel, "editValue", Q_ARG(double, 0.25)));
-  EXPECT_NEAR(xModel->property("value").toDouble(), 0.25, 1e-6);
-  // Draft-only: slider motion must not touch the pipeline.
-  EXPECT_TRUE(session.calls.empty());
-  EXPECT_TRUE(geometryPanel->property("draftDirty").toBool());
-  EXPECT_NEAR(interaction.cropRectNormalized().x(), 0.25, 1e-6);
-
-  ASSERT_TRUE(QMetaObject::invokeMethod(geometryPanel, "confirmPendingCrop"));
-  ASSERT_EQ(session.calls.size(), 1u);
-  EXPECT_TRUE(session.calls.back().settled);
-  EXPECT_EQ(session.calls.back().field_key, QStringLiteral("crop_rotate"));
-  EXPECT_FALSE(geometryPanel->property("draftDirty").toBool());
-
-  const auto crop =
-      ParseParams(session.calls.back()).value(QStringLiteral("crop_rotate")).toObject();
-  EXPECT_DOUBLE_EQ(
-      crop.value(QStringLiteral("crop_rect")).toObject().value(QStringLiteral("x")).toDouble(),
-      0.25);
-  EXPECT_TRUE(crop.contains(QStringLiteral("angle_degrees")));
-  EXPECT_TRUE(crop.contains(QStringLiteral("aspect_ratio_preset")));
-  const auto source_size = crop.value(QStringLiteral("source_size")).toObject();
-  EXPECT_EQ(source_size.value(QStringLiteral("width")).toInt(), 2731);
-  EXPECT_EQ(source_size.value(QStringLiteral("height")).toInt(), 4096);
-  const auto* geometry =
-      std::get_if<alcedo::ImageGeometryUpdate>(&session.calls.back().write);
+  ASSERT_EQ(session.calls.size(), 3u);
+  EXPECT_FALSE(session.calls[0].settled);
+  EXPECT_FALSE(session.calls[1].settled);
+  EXPECT_TRUE(session.calls[2].settled);
+  for (const auto& call : session.calls) {
+    EXPECT_EQ(call.field_key, QStringLiteral("crop_rotate"));
+    EXPECT_TRUE(GeometryOf(call).crop_rect.has_value());
+  }
+  EXPECT_NEAR(RectOf(session.calls.back()).width(), 0.5, 1e-6);
+  const auto* geometry = std::get_if<alcedo::ImageGeometryUpdate>(&session.calls.back().write);
   ASSERT_NE(geometry, nullptr);
   ASSERT_TRUE(geometry->crop_rect.has_value());
-  EXPECT_NEAR(geometry->crop_rect->x, 0.25f, 1e-5f);
+  EXPECT_NEAR(geometry->crop_rect->w, 0.5f, 1e-5f);
+  ASSERT_TRUE(geometry->aspect_preset.has_value());
+  EXPECT_EQ(*geometry->aspect_preset, "free");
+  // The overlay shows the value being edited.
+  EXPECT_NEAR(interaction.cropRectNormalized().width(), 0.5, 1e-6);
 }
 
-TEST(EditorGeometryPanelQmlTest, OverlayDragIsDraftOnlyAndConfirmSubmitsOneSettledPatch) {
+TEST(EditorGeometryPanelQmlTest, OverlayDragSubmitsInteractivePatchesThenOneSettledPatch) {
   GeometrySession         session;
   FakeGeometryInteraction interaction;
   AdjustmentStackHarness  harness(&session, &interaction);
@@ -447,115 +397,117 @@ TEST(EditorGeometryPanelQmlTest, OverlayDragIsDraftOnlyAndConfirmSubmitsOneSettl
   auto* geometryPanel =
       harness.findObject<QObject>(QStringLiteral("editorAdjustmentPanel_geometry"));
   ASSERT_NE(geometryPanel, nullptr);
-
-  // Mid-drag (isFinal=false) and release (isFinal=true) stay pure UI.
-  interaction.publishCropRect(QRectF(0.2, 0.1, 0.4, 0.5), false);
-  interaction.publishCropRect(QRectF(0.3, 0.15, 0.5, 0.7), true);
-  auto* xModel = harness.findObject<QObject>(QStringLiteral("geometryCropXModel"));
-  auto* hModel = harness.findObject<QObject>(QStringLiteral("geometryCropHeightModel"));
-  ASSERT_NE(xModel, nullptr);
-  ASSERT_NE(hModel, nullptr);
-  EXPECT_DOUBLE_EQ(xModel->property("value").toDouble(), 0.3);
-  EXPECT_DOUBLE_EQ(hModel->property("value").toDouble(), 0.7);
-  EXPECT_TRUE(session.calls.empty());
-  EXPECT_TRUE(geometryPanel->property("draftDirty").toBool());
+  interaction.editCropFrame(QRectF(0.2, 0.1, 0.4, 0.5), 3.0F, false);
+  EXPECT_TRUE(geometryPanel->property("overlayInputActive").toBool());
+  interaction.editCropFrame(QRectF(0.3, 0.15, 0.5, 0.7), 5.0F, true);
   EXPECT_FALSE(geometryPanel->property("overlayInputActive").toBool());
 
-  ASSERT_TRUE(QMetaObject::invokeMethod(geometryPanel, "confirmPendingCrop"));
-  ASSERT_EQ(session.calls.size(), 1u);
-  EXPECT_TRUE(session.calls.back().settled);
-  EXPECT_EQ(session.calls.back().field_key, QStringLiteral("crop_rotate"));
-  EXPECT_FALSE(geometryPanel->property("draftDirty").toBool());
+  ASSERT_EQ(session.calls.size(), 2u);
+  EXPECT_FALSE(session.calls[0].settled);
+  EXPECT_TRUE(session.calls[1].settled);
+  EXPECT_NEAR(RectOf(session.calls[1]).x(), 0.3, 1e-6);
+  EXPECT_NEAR(AngleOf(session.calls[1]), 5.0, 1e-6);
+  auto* xModel        = harness.findObject<QObject>(QStringLiteral("geometryCropXModel"));
+  auto* rotationModel = harness.findObject<QObject>(QStringLiteral("geometryRotationModel"));
+  ASSERT_NE(xModel, nullptr);
+  ASSERT_NE(rotationModel, nullptr);
+  EXPECT_DOUBLE_EQ(xModel->property("value").toDouble(), 0.3);
+  EXPECT_NEAR(rotationModel->property("value").toDouble(), 5.0, 1e-6);
 }
 
-TEST(EditorGeometryPanelQmlTest, SelectingAspectPresetResizesDraftWithoutPipelineSubmit) {
-  GeometrySession         session;
+TEST(EditorGeometryPanelQmlTest, RotationSliderShrinksTheCropToStayInsideTheSource) {
+  GeometrySession         session(MakeSnapshot(QStringLiteral("free"), 0.0, 0.0, 1.0, 1.0, 0.0));
+  FakeGeometryInteraction interaction;
+  AdjustmentStackHarness  harness(&session, &interaction);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+
+  auto* rotationModel = harness.findObject<QObject>(QStringLiteral("geometryRotationModel"));
+  ASSERT_NE(rotationModel, nullptr);
+  ASSERT_TRUE(QMetaObject::invokeMethod(rotationModel, "beginDrag"));
+  ASSERT_TRUE(QMetaObject::invokeMethod(rotationModel, "updateDrag", Q_ARG(double, 10.0)));
+  ASSERT_TRUE(QMetaObject::invokeMethod(rotationModel, "finishDrag"));
+
+  ASSERT_EQ(session.calls.size(), 2u);
+  const QRectF rect = RectOf(session.calls.back());
+  EXPECT_LT(rect.width(), 1.0);
+  EXPECT_NEAR(rect.center().x(), 0.5, 1e-5);
+  EXPECT_NEAR(rect.center().y(), 0.5, 1e-5);
+  EXPECT_NEAR(AngleOf(session.calls.back()), 10.0, 1e-6);
+  const QRectF expected = interaction.clampCropRect(QRectF(0.0, 0.0, 1.0, 1.0), 10.0F);
+  EXPECT_NEAR(rect.width(), expected.width(), 1e-5);
+  EXPECT_NEAR(rect.height(), expected.height(), 1e-5);
+}
+
+TEST(EditorGeometryPanelQmlTest, SelectingAspectPresetSubmitsOneSettledCropOfThatShape) {
+  GeometrySession         session(MakeSnapshot(QStringLiteral("free"), 0.0, 0.0, 1.0, 1.0, 0.0));
   FakeGeometryInteraction interaction;
   AdjustmentStackHarness  harness(&session, &interaction);
   ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
 
   auto* aspect = harness.findObject<QObject>(QStringLiteral("geometryAspectModel"));
   ASSERT_NE(aspect, nullptr);
-  ASSERT_TRUE(QMetaObject::invokeMethod(aspect, "selectIndex", Q_ARG(int, 4)));
+  ASSERT_TRUE(QMetaObject::invokeMethod(aspect, "selectIndex", Q_ARG(int, 4)));  // 16:9
 
-  const QRectF rect = interaction.cropRectNormalized();
-  EXPECT_NEAR((rect.width() / rect.height()) * interaction.metricAspect(), 16.0 / 9.0, 1e-4);
+  ASSERT_EQ(session.calls.size(), 1u);
+  EXPECT_TRUE(session.calls.back().settled);
+  EXPECT_EQ(PresetOf(session.calls.back()), QStringLiteral("ratio_16_9"));
+  const QRectF rect = RectOf(session.calls.back());
+  EXPECT_NEAR((rect.width() * 6000.0) / (rect.height() * 4000.0), 16.0 / 9.0, 1e-4);
   EXPECT_NEAR(rect.center().x(), 0.5, 1e-4);
-  EXPECT_TRUE(session.calls.empty());
+  EXPECT_TRUE(interaction.aspectLocked());
 }
 
 TEST(EditorGeometryPanelQmlTest, SelectingLandscapePresetOrientsCropForPortraitImage) {
-  GeometrySession         session(MakeSnapshot(QStringLiteral("free"), 0.0, 0.0, 1.0, 1.0, 0.0,
-                                               QStringLiteral(""), QStringLiteral(""), 3000, 4000));
+  GeometrySession         session(MakeSnapshot(QStringLiteral("free"), 0.0, 0.0, 1.0, 1.0, 0.0));
   FakeGeometryInteraction interaction;
-  interaction.setMetricAspectForTest(1.5F);
+  interaction.presentSource(3000, 4000);
   AdjustmentStackHarness harness(&session, &interaction);
   ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
 
-  EXPECT_EQ(interaction.imageWidth(), 3000);
-  EXPECT_EQ(interaction.imageHeight(), 4000);
   auto* aspect = harness.findObject<QObject>(QStringLiteral("geometryAspectModel"));
   ASSERT_NE(aspect, nullptr);
   ASSERT_TRUE(QMetaObject::invokeMethod(aspect, "selectIndex", Q_ARG(int, 4)));
 
-  const QRectF rect = interaction.cropRectNormalized();
-  EXPECT_NEAR((rect.width() / rect.height()) * interaction.metricAspect(), 9.0 / 16.0, 1e-4);
+  ASSERT_EQ(session.calls.size(), 1u);
+  const QRectF rect = RectOf(session.calls.back());
+  EXPECT_NEAR((rect.width() * 3000.0) / (rect.height() * 4000.0), 9.0 / 16.0, 1e-4);
   EXPECT_NEAR(rect.center().x(), 0.5, 1e-4);
-  EXPECT_TRUE(session.calls.empty());
 }
 
-TEST(EditorGeometryPanelQmlTest, ConfirmAndReturnToToneQueuesPanelRefreshBeforeFinalCrop) {
-  GeometrySession         session;
+TEST(EditorGeometryPanelQmlTest, ResetSubmitsOneSettledFullFrameUnrotatedFreeCrop) {
+  GeometrySession session(MakeSnapshot(QStringLiteral("ratio_16_9"), 0.1, 0.2, 0.5, 0.3, 6.0));
   FakeGeometryInteraction interaction;
   AdjustmentStackHarness  harness(&session, &interaction);
   ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
 
-  auto* stack = harness.root();
   auto* geometryPanel =
       harness.findObject<QObject>(QStringLiteral("editorAdjustmentPanel_geometry"));
-  auto* xModel = harness.findObject<QObject>(QStringLiteral("geometryCropXModel"));
   ASSERT_NE(geometryPanel, nullptr);
-  ASSERT_NE(xModel, nullptr);
+  ASSERT_TRUE(QMetaObject::invokeMethod(geometryPanel, "resetGeometry"));
 
-  xModel->setProperty("value", 0.22);
-  EXPECT_TRUE(geometryPanel->property("draftDirty").toBool());
-  EXPECT_EQ(session.activeAdjustmentPanel(), QStringLiteral("geometry"));
-
-  ASSERT_TRUE(QMetaObject::invokeMethod(stack, "confirmGeometryAndReturnToTone"));
-  QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
   ASSERT_EQ(session.calls.size(), 1u);
   EXPECT_TRUE(session.calls.back().settled);
-  EXPECT_EQ(session.activeAdjustmentPanel(), QStringLiteral("tone"));
-  ASSERT_EQ(session.actions.size(), 2);
-  EXPECT_EQ(session.actions.at(0), QStringLiteral("panel:tone"));
-  EXPECT_EQ(session.actions.at(1), QStringLiteral("submit:crop_rotate"));
-  EXPECT_FALSE(geometryPanel->property("draftDirty").toBool());
-  EXPECT_FALSE(interaction.cropToolEnabled());
-  EXPECT_FALSE(interaction.cropOverlayVisible());
+  const QRectF rect = RectOf(session.calls.back());
+  EXPECT_DOUBLE_EQ(rect.x(), 0.0);
+  EXPECT_DOUBLE_EQ(rect.y(), 0.0);
+  EXPECT_DOUBLE_EQ(rect.width(), 1.0);
+  EXPECT_DOUBLE_EQ(rect.height(), 1.0);
+  EXPECT_DOUBLE_EQ(AngleOf(session.calls.back()), 0.0);
+  EXPECT_EQ(PresetOf(session.calls.back()), QStringLiteral("free"));
+  EXPECT_FALSE(interaction.aspectLocked());
 }
 
-TEST(EditorGeometryPanelQmlTest, LeavingGeometryQueuesPanelRefreshBeforeFinalCrop) {
+TEST(EditorGeometryPanelQmlTest, LeavingGeometryHidesTheOverlayWithoutSubmitting) {
   GeometrySession         session;
   FakeGeometryInteraction interaction;
   AdjustmentStackHarness  harness(&session, &interaction);
   ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
 
-  auto* stack  = harness.root();
-  auto* xModel = harness.findObject<QObject>(QStringLiteral("geometryCropXModel"));
-  ASSERT_NE(xModel, nullptr);
-  xModel->setProperty("value", 0.18);
-  EXPECT_TRUE(session.calls.empty());
-
-  ASSERT_TRUE(QMetaObject::invokeMethod(stack, "selectPanel",
-                                        Q_ARG(QVariant, QVariant(QStringLiteral("look")))));
+  ASSERT_TRUE(QMetaObject::invokeMethod(harness.root(), "returnFromGeometryToTone"));
   QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
-  ASSERT_EQ(session.calls.size(), 1u);
-  EXPECT_TRUE(session.calls.back().settled);
-  EXPECT_EQ(session.calls.back().field_key, QStringLiteral("crop_rotate"));
-  EXPECT_EQ(session.activeAdjustmentPanel(), QStringLiteral("look"));
-  ASSERT_EQ(session.actions.size(), 2);
-  EXPECT_EQ(session.actions.at(0), QStringLiteral("panel:look"));
-  EXPECT_EQ(session.actions.at(1), QStringLiteral("submit:crop_rotate"));
+  EXPECT_EQ(session.activeAdjustmentPanel(), QStringLiteral("tone"));
+  EXPECT_TRUE(session.calls.empty());
+  EXPECT_FALSE(interaction.cropToolEnabled());
   EXPECT_FALSE(interaction.cropOverlayVisible());
 }
 

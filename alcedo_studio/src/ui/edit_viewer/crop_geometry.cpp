@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include "edit/geometry/crop_frame.hpp"
+
 namespace alcedo {
 namespace {
 
@@ -24,165 +26,150 @@ auto VectorLengthSquared(const QPointF& vector) -> float { return Dot2(vector, v
 auto CropGeometry::Clamp01(float value) -> float { return std::clamp(value, 0.0f, 1.0f); }
 
 auto CropGeometry::NormalizeAngleDegrees(float angle_degrees) -> float {
-  if (!std::isfinite(angle_degrees)) {
-    return 0.0f;
-  }
-  angle_degrees = std::fmod(angle_degrees, 360.0f);
-  if (angle_degrees > 180.0f) {
-    angle_degrees -= 360.0f;
-  } else if (angle_degrees < -180.0f) {
-    angle_degrees += 360.0f;
-  }
-  return angle_degrees;
+  return NormalizeRotationDegrees(angle_degrees);
 }
-
-auto CropGeometry::ClampAspect(float aspect) -> float { return std::max(aspect, 1e-4f); }
 
 auto CropGeometry::ClampAspectRatio(float aspect_ratio) -> float {
   return std::max(aspect_ratio, kCropMinSize);
 }
 
-auto CropGeometry::SafeAspect(int image_width, int image_height) -> float {
-  if (image_width <= 0 || image_height <= 0) {
-    return 1.0f;
-  }
-  return ClampAspect(static_cast<float>(image_width) / static_cast<float>(image_height));
+auto CropGeometry::ToNormalizedRect(const QRectF& rect) -> NormalizedRect {
+  return NormalizedRect{static_cast<float>(rect.x()), static_cast<float>(rect.y()),
+                        static_cast<float>(rect.width()), static_cast<float>(rect.height())};
 }
 
-auto CropGeometry::UvToMetric(const QPointF& uv, float aspect) -> QPointF {
-  const float safe_aspect = ClampAspect(aspect);
-  return QPointF(static_cast<float>(uv.x()) * safe_aspect, static_cast<float>(uv.y()));
+auto CropGeometry::ToQRectF(const NormalizedRect& rect) -> QRectF {
+  return QRectF(rect.x, rect.y, rect.w, rect.h);
 }
 
-auto CropGeometry::MetricToUv(const QPointF& metric, float aspect) -> QPointF {
-  const float safe_aspect = ClampAspect(aspect);
-  return QPointF(static_cast<float>(metric.x()) / safe_aspect, static_cast<float>(metric.y()));
+auto CropGeometry::ClampCrop(const QRectF& crop, float angle_degrees, Extent2D source) -> QRectF {
+  return ToQRectF(ClampCropToRotatedSource(ToNormalizedRect(crop.normalized()), angle_degrees,
+                                           source));
 }
 
-auto CropGeometry::RotateVector(const QPointF& vector, float angle_degrees) -> QPointF {
-  const float radians = NormalizeAngleDegrees(angle_degrees) * (kPi / 180.0f);
-  const float cosine  = std::cos(radians);
-  const float sine    = std::sin(radians);
-  return QPointF(
-      (cosine * static_cast<float>(vector.x())) - (sine * static_cast<float>(vector.y())),
-      (sine * static_cast<float>(vector.x())) + (cosine * static_cast<float>(vector.y())));
+auto CropGeometry::CropCornersInReference(const QRectF& crop, float angle_degrees,
+                                          Extent2D source) -> std::array<Vector2, 4> {
+  return CropFrameCornersInReference(ToNormalizedRect(crop), angle_degrees, source);
 }
 
-auto CropGeometry::InverseRotateVector(const QPointF& vector, float angle_degrees) -> QPointF {
-  const float radians = NormalizeAngleDegrees(angle_degrees) * (kPi / 180.0f);
-  const float cosine  = std::cos(radians);
-  const float sine    = std::sin(radians);
-  return QPointF(
-      (cosine * static_cast<float>(vector.x())) + (sine * static_cast<float>(vector.y())),
-      (-sine * static_cast<float>(vector.x())) + (cosine * static_cast<float>(vector.y())));
+auto CropGeometry::ReferenceToFrame(Vector2 reference, float angle_degrees) -> QPointF {
+  const auto frame = TransformPoint(
+      Matrix3x3::Rotate(NormalizeAngleDegrees(angle_degrees) * (kPi / 180.0f)), reference);
+  return QPointF(frame.x, frame.y);
 }
 
-auto CropGeometry::MakeRectFromCenterSize(const QPointF& center, float width, float height)
+auto CropGeometry::FrameToReference(const QPointF& frame, float angle_degrees) -> Vector2 {
+  return TransformPoint(
+      Matrix3x3::Rotate(-NormalizeAngleDegrees(angle_degrees) * (kPi / 180.0f)),
+      Vector2{static_cast<float>(frame.x()), static_cast<float>(frame.y())});
+}
+
+auto CropGeometry::FrameBoxFromCrop(const QRectF& crop, float angle_degrees, Extent2D source)
     -> QRectF {
-  return QRectF(center.x() - (static_cast<qreal>(width) * 0.5),
-                center.y() - (static_cast<qreal>(height) * 0.5), width, height);
+  const float   full_w = static_cast<float>(source.width);
+  const float   full_h = static_cast<float>(source.height);
+  const Vector2 center_reference{static_cast<float>(crop.center().x()) * full_w,
+                                 static_cast<float>(crop.center().y()) * full_h};
+  const QPointF center = ReferenceToFrame(center_reference, angle_degrees);
+  const qreal   width  = crop.width() * full_w;
+  const qreal   height = crop.height() * full_h;
+  return QRectF(center.x() - width * 0.5, center.y() - height * 0.5, width, height);
 }
 
-auto CropGeometry::ClampCropRect(const QRectF& rect) -> QRectF {
-  QRectF normalized_rect = rect.normalized();
-  float  x               = Clamp01(static_cast<float>(normalized_rect.x()));
-  float  y               = Clamp01(static_cast<float>(normalized_rect.y()));
-  float  width  = std::clamp(static_cast<float>(normalized_rect.width()), kCropMinSize, 1.0f);
-  float  height = std::clamp(static_cast<float>(normalized_rect.height()), kCropMinSize, 1.0f);
-  x             = std::clamp(x, 0.0f, 1.0f - width);
-  y             = std::clamp(y, 0.0f, 1.0f - height);
-  return QRectF(x, y, width, height);
+auto CropGeometry::CropFromFrameBox(const QRectF& box, float angle_degrees, Extent2D source)
+    -> QRectF {
+  const QRectF  normalized_box = box.normalized();
+  const float   full_w         = static_cast<float>(source.width);
+  const float   full_h         = static_cast<float>(source.height);
+  const Vector2 center         = FrameToReference(normalized_box.center(), angle_degrees);
+  const qreal   width          = normalized_box.width() / full_w;
+  const qreal   height         = normalized_box.height() / full_h;
+  const QRectF  crop(center.x / full_w - width * 0.5, center.y / full_h - height * 0.5, width,
+                     height);
+  return ClampCrop(crop, angle_degrees, source);
 }
 
-auto CropGeometry::MakeAspectLockedRectFromDiagonal(const QPointF& anchor_uv,
-                                                    const QPointF& cursor_uv, float image_aspect,
-                                                    float aspect_ratio) -> QRectF {
-  const float   target_ratio  = ClampAspectRatio(aspect_ratio);
-  const QPointF anchor_metric = UvToMetric(anchor_uv, image_aspect);
-  const QPointF cursor_metric = UvToMetric(cursor_uv, image_aspect);
-  const QPointF delta_metric  = cursor_metric - anchor_metric;
-  const float   sign_x        = delta_metric.x() >= 0.0 ? 1.0f : -1.0f;
-  const float   sign_y        = delta_metric.y() >= 0.0 ? 1.0f : -1.0f;
-  const float   abs_width =
-      std::max(kCropMinSize * image_aspect, std::abs(static_cast<float>(delta_metric.x())));
-  const float   abs_height = std::max(kCropMinSize, std::abs(static_cast<float>(delta_metric.y())));
-  const bool    width_limited = (abs_width / std::max(abs_height, kCropMinSize)) <= target_ratio;
-  const float   rect_width_metric  = width_limited ? abs_width : (abs_height * target_ratio);
-  const float   rect_height_metric = width_limited ? (abs_width / target_ratio) : abs_height;
-  const QPointF corner_metric =
-      anchor_metric + QPointF(sign_x * rect_width_metric, sign_y * rect_height_metric);
-  return QRectF(MetricToUv(anchor_metric, image_aspect), MetricToUv(corner_metric, image_aspect))
+auto CropGeometry::MakeAspectLockedBoxFromDiagonal(const QPointF& anchor, const QPointF& cursor,
+                                                   float aspect_ratio) -> QRectF {
+  const float   ratio  = ClampAspectRatio(aspect_ratio);
+  const QPointF delta  = cursor - anchor;
+  const float   sign_x = delta.x() >= 0.0 ? 1.0f : -1.0f;
+  const float   sign_y = delta.y() >= 0.0 ? 1.0f : -1.0f;
+  float width  = std::max(kCropMinFramePixels, std::abs(static_cast<float>(delta.x())));
+  float height = std::max(kCropMinFramePixels, std::abs(static_cast<float>(delta.y())));
+  if (width / height <= ratio) {
+    height = width / ratio;
+  } else {
+    width = height * ratio;
+  }
+  return QRectF(anchor, anchor + QPointF(sign_x * width, sign_y * height)).normalized();
+}
+
+auto CropGeometry::ResizeBoxFromFixedCorner(const QPointF& fixed_corner, const QPointF& cursor,
+                                            bool aspect_locked, float aspect_ratio) -> QRectF {
+  if (aspect_locked) {
+    return MakeAspectLockedBoxFromDiagonal(fixed_corner, cursor, aspect_ratio);
+  }
+  const QPointF delta  = cursor - fixed_corner;
+  const qreal   sign_x = delta.x() >= 0.0 ? 1.0 : -1.0;
+  const qreal   sign_y = delta.y() >= 0.0 ? 1.0 : -1.0;
+  const qreal   width  = std::max<qreal>(kCropMinFramePixels, std::abs(delta.x()));
+  const qreal   height = std::max<qreal>(kCropMinFramePixels, std::abs(delta.y()));
+  return QRectF(fixed_corner, fixed_corner + QPointF(sign_x * width, sign_y * height))
       .normalized();
 }
 
-auto CropGeometry::ClampCropRectForRotation(const QRectF& rect, float angle_degrees, float aspect)
-    -> QRectF {
-  const float safe_aspect     = ClampAspect(aspect);
-  QRectF      normalized_rect = rect.normalized();
-  float       width  = std::clamp(static_cast<float>(normalized_rect.width()), kCropMinSize, 1.0f);
-  float       height = std::clamp(static_cast<float>(normalized_rect.height()), kCropMinSize, 1.0f);
-  QPointF     center_uv = normalized_rect.center();
-  center_uv.setX(Clamp01(static_cast<float>(center_uv.x())));
-  center_uv.setY(Clamp01(static_cast<float>(center_uv.y())));
-  QPointF     center_metric = UvToMetric(center_uv, safe_aspect);
-
-  float       half_width    = (width * safe_aspect) * 0.5f;
-  float       half_height   = height * 0.5f;
-
-  const float radians       = NormalizeAngleDegrees(angle_degrees) * (kPi / 180.0f);
-  const float cosine        = std::abs(std::cos(radians));
-  const float sine          = std::abs(std::sin(radians));
-
-  float       extent_x      = (cosine * half_width) + (sine * half_height);
-  float       extent_y      = (sine * half_width) + (cosine * half_height);
-  if (extent_x > (safe_aspect * 0.5f) || extent_y > 0.5f) {
-    const float scale_x = (extent_x > 0.0f) ? ((safe_aspect * 0.5f) / extent_x) : 1.0f;
-    const float scale_y = (extent_y > 0.0f) ? (0.5f / extent_y) : 1.0f;
-    const float scale   = std::clamp(std::min(scale_x, scale_y), 0.0f, 1.0f);
-    half_width          = std::max((kCropMinSize * safe_aspect) * 0.5f, half_width * scale);
-    half_height         = std::max(kCropMinSize * 0.5f, half_height * scale);
-    extent_x            = (cosine * half_width) + (sine * half_height);
-    extent_y            = (sine * half_width) + (cosine * half_height);
+auto CropGeometry::ResizeBoxEdge(const QRectF& box, CropEdge edge, const QPointF& cursor,
+                                 bool aspect_locked, float aspect_ratio) -> QRectF {
+  qreal left   = box.left();
+  qreal right  = box.right();
+  qreal top    = box.top();
+  qreal bottom = box.bottom();
+  switch (edge) {
+    case CropEdge::Left:
+      left = std::min(cursor.x(), right - kCropMinFramePixels);
+      break;
+    case CropEdge::Right:
+      right = std::max(cursor.x(), left + kCropMinFramePixels);
+      break;
+    case CropEdge::Top:
+      top = std::min(cursor.y(), bottom - kCropMinFramePixels);
+      break;
+    case CropEdge::Bottom:
+      bottom = std::max(cursor.y(), top + kCropMinFramePixels);
+      break;
+    case CropEdge::None:
+      return box;
   }
-
-  center_metric.setX(
-      std::clamp(static_cast<float>(center_metric.x()), extent_x, safe_aspect - extent_x));
-  center_metric.setY(std::clamp(static_cast<float>(center_metric.y()), extent_y, 1.0f - extent_y));
-
-  const QPointF final_center_uv = MetricToUv(center_metric, safe_aspect);
-  const float   final_width     = std::clamp((half_width * 2.0f) / safe_aspect, kCropMinSize, 1.0f);
-  const float   final_height    = std::clamp(half_height * 2.0f, kCropMinSize, 1.0f);
-  return MakeRectFromCenterSize(final_center_uv, final_width, final_height);
+  if (aspect_locked) {
+    const qreal ratio = ClampAspectRatio(aspect_ratio);
+    if (edge == CropEdge::Left || edge == CropEdge::Right) {
+      const qreal half_height = (right - left) / ratio * 0.5;
+      const qreal center_y    = box.center().y();
+      top                     = center_y - half_height;
+      bottom                  = center_y + half_height;
+    } else {
+      const qreal half_width = (bottom - top) * ratio * 0.5;
+      const qreal center_x   = box.center().x();
+      left                   = center_x - half_width;
+      right                  = center_x + half_width;
+    }
+  }
+  return QRectF(QPointF(left, top), QPointF(right, bottom));
 }
 
-auto CropGeometry::RotatedCropCornersUv(const QRectF& rect, float angle_degrees, float aspect)
-    -> std::array<QPointF, 4> {
-  const float   safe_aspect   = ClampAspect(aspect);
-  const QPointF center_metric = UvToMetric(rect.center(), safe_aspect);
-  const float   half_width    = std::max((kCropMinSize * safe_aspect) * 0.5f,
-                                         static_cast<float>(rect.width()) * safe_aspect * 0.5f);
-  const float half_height = std::max(kCropMinSize * 0.5f, static_cast<float>(rect.height()) * 0.5f);
-  const std::array<QPointF, 4> local = {
-      QPointF(-half_width, -half_height), QPointF(half_width, -half_height),
-      QPointF(half_width, half_height), QPointF(-half_width, half_height)};
-
-  std::array<QPointF, 4> corners{};
-  for (size_t i = 0; i < local.size(); ++i) {
-    corners[i] = MetricToUv(center_metric + RotateVector(local[i], angle_degrees), safe_aspect);
+auto CropGeometry::IsPointInsideQuad(const std::array<QPointF, 4>& corners, const QPointF& point)
+    -> bool {
+  bool has_negative = false;
+  bool has_positive = false;
+  for (size_t i = 0; i < corners.size(); ++i) {
+    const QPointF& a     = corners[i];
+    const QPointF& b     = corners[(i + 1) % corners.size()];
+    const qreal    cross = (b.x() - a.x()) * (point.y() - a.y()) - (b.y() - a.y()) * (point.x() - a.x());
+    has_negative         = has_negative || cross < 0.0;
+    has_positive         = has_positive || cross > 0.0;
   }
-  return corners;
-}
-
-auto CropGeometry::IsPointInsideRotatedCrop(const QPointF& point_uv, const QRectF& rect,
-                                            float angle_degrees, float aspect) -> bool {
-  const float   safe_aspect = ClampAspect(aspect);
-  const QPointF local       = InverseRotateVector(
-      UvToMetric(point_uv, safe_aspect) - UvToMetric(rect.center(), safe_aspect), angle_degrees);
-  const float half_width  = std::max((kCropMinSize * safe_aspect) * 0.5f,
-                                     static_cast<float>(rect.width()) * safe_aspect * 0.5f);
-  const float half_height = std::max(kCropMinSize * 0.5f, static_cast<float>(rect.height()) * 0.5f);
-  return std::abs(static_cast<float>(local.x())) <= half_width &&
-         std::abs(static_cast<float>(local.y())) <= half_height;
+  return !(has_negative && has_positive);
 }
 
 auto CropGeometry::PointSegmentDistanceSquared(const QPointF& point, const QPointF& a,
@@ -271,42 +258,6 @@ auto CropGeometry::OppositeCropCornerIndex(int corner_index) -> int {
     default:
       return -1;
   }
-}
-
-auto CropGeometry::ResizeRotatedCropFromFixedCorner(const QPointF& fixed_corner_uv,
-                                                    const QPointF& cursor_uv, float angle_degrees,
-                                                    float metric_aspect, bool aspect_locked,
-                                                    float aspect_ratio) -> QRectF {
-  const QPointF fixed_metric  = UvToMetric(fixed_corner_uv, metric_aspect);
-  const QPointF cursor_metric = UvToMetric(cursor_uv, metric_aspect);
-  const QPointF local_delta   = InverseRotateVector(cursor_metric - fixed_metric, angle_degrees);
-
-  const float   sign_x        = local_delta.x() >= 0.0 ? 1.0f : -1.0f;
-  const float   sign_y        = local_delta.y() >= 0.0 ? 1.0f : -1.0f;
-  float         width_metric =
-      std::max(kCropMinSize * metric_aspect, std::abs(static_cast<float>(local_delta.x())));
-  float height_metric = std::max(kCropMinSize, std::abs(static_cast<float>(local_delta.y())));
-
-  if (aspect_locked) {
-    const float locked_ratio = ClampAspectRatio(aspect_ratio);
-    const bool  width_limited =
-        (width_metric / std::max(height_metric, kCropMinSize)) <= locked_ratio;
-    if (width_limited) {
-      height_metric = std::max(kCropMinSize, width_metric / locked_ratio);
-    } else {
-      width_metric = std::max(kCropMinSize * metric_aspect, height_metric * locked_ratio);
-    }
-  }
-
-  const QPointF center_metric = fixed_metric + RotateVector(QPointF(sign_x * width_metric * 0.5f,
-                                                                    sign_y * height_metric * 0.5f),
-                                                            angle_degrees);
-  const QPointF center_uv     = MetricToUv(center_metric, metric_aspect);
-  const float   width_uv =
-      std::max(kCropMinSize, width_metric / std::max(metric_aspect, kCropMinSize));
-  const float height_uv = std::max(kCropMinSize, height_metric);
-  return ClampCropRectForRotation(MakeRectFromCenterSize(center_uv, width_uv, height_uv),
-                                  angle_degrees, metric_aspect);
 }
 
 auto CropGeometry::HitTestWidgetGeometry(const std::array<QPointF, 4>& corners_widget,

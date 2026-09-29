@@ -10,6 +10,7 @@
 #include <array>
 #include <utility>
 
+#include "edit/geometry/types.hpp"
 #include "ui/edit_viewer/overlay_cursor.hpp"
 
 namespace alcedo {
@@ -40,6 +41,16 @@ struct CropHitTestResult {
   QPointF  resize_axis{};
 };
 
+/**
+ * @brief Crop frame math for the Geometry overlay.
+ *
+ * The document crop (`QRectF` in source-normalized units, see ImageGeometryModel) is an
+ * axis-aligned rectangle of the output. Edits happen in *frame space*: source reference pixels
+ * rotated by the document rotation (`Rotate(theta)`, the rotation ResolveRenderGeometry applies).
+ * In frame space the crop frame is an axis-aligned box of `w * W` by `h * H` pixels, so create,
+ * move, resize, and aspect lock are plain rectangle operations. Every result is converted back and
+ * constrained with ClampCropToRotatedSource, the constraint the render applies.
+ */
 class CropGeometry {
  public:
   static constexpr float kCropMinSize                  = 1e-4f;
@@ -49,27 +60,41 @@ class CropGeometry {
   static constexpr float kCropRotateHandleOffsetPx     = 28.0f;
   static constexpr float kCropRotateHandleHitRadiusPx  = 14.0f;
   static constexpr float kCropRotateHandleDrawRadiusPx = 5.0f;
+  /// Smallest crop box side in frame-space (source) pixels while dragging.
+  static constexpr float kCropMinFramePixels           = 1.0f;
 
   static auto            Clamp01(float value) -> float;
   static auto            NormalizeAngleDegrees(float angle_degrees) -> float;
-  static auto            ClampAspect(float aspect) -> float;
   static auto            ClampAspectRatio(float aspect_ratio) -> float;
-  static auto            SafeAspect(int image_width, int image_height) -> float;
 
-  static auto            UvToMetric(const QPointF& uv, float aspect) -> QPointF;
-  static auto            MetricToUv(const QPointF& metric, float aspect) -> QPointF;
-  static auto            RotateVector(const QPointF& vector, float angle_degrees) -> QPointF;
-  static auto            InverseRotateVector(const QPointF& vector, float angle_degrees) -> QPointF;
-  static auto MakeRectFromCenterSize(const QPointF& center, float width, float height) -> QRectF;
-  static auto ClampCropRect(const QRectF& rect) -> QRectF;
-  static auto MakeAspectLockedRectFromDiagonal(const QPointF& anchor_uv, const QPointF& cursor_uv,
-                                               float image_aspect, float aspect_ratio) -> QRectF;
-  static auto ClampCropRectForRotation(const QRectF& rect, float angle_degrees, float aspect)
-      -> QRectF;
-  static auto RotatedCropCornersUv(const QRectF& rect, float angle_degrees, float aspect)
-      -> std::array<QPointF, 4>;
-  static auto IsPointInsideRotatedCrop(const QPointF& point_uv, const QRectF& rect,
-                                       float angle_degrees, float aspect) -> bool;
+  static auto            ToNormalizedRect(const QRectF& rect) -> NormalizedRect;
+  static auto            ToQRectF(const NormalizedRect& rect) -> QRectF;
+
+  /// Constrain @p crop so its rotated corners stay inside @p source (ClampCropToRotatedSource).
+  static auto ClampCrop(const QRectF& crop, float angle_degrees, Extent2D source) -> QRectF;
+  /// Crop frame corners in reference pixels, clockwise from the output's top-left.
+  static auto CropCornersInReference(const QRectF& crop, float angle_degrees, Extent2D source)
+      -> std::array<Vector2, 4>;
+  static auto ReferenceToFrame(Vector2 reference, float angle_degrees) -> QPointF;
+  static auto FrameToReference(const QPointF& frame, float angle_degrees) -> Vector2;
+  /// The crop frame as an axis-aligned frame-space box.
+  static auto FrameBoxFromCrop(const QRectF& crop, float angle_degrees, Extent2D source) -> QRectF;
+  /// Inverse of @ref FrameBoxFromCrop, followed by @ref ClampCrop.
+  static auto CropFromFrameBox(const QRectF& box, float angle_degrees, Extent2D source) -> QRectF;
+
+  /// Box spanned by @p anchor and @p cursor with width / height equal to @p aspect_ratio.
+  static auto MakeAspectLockedBoxFromDiagonal(const QPointF& anchor, const QPointF& cursor,
+                                              float aspect_ratio) -> QRectF;
+  /// Box between a fixed corner and the cursor, optionally aspect-locked.
+  static auto ResizeBoxFromFixedCorner(const QPointF& fixed_corner, const QPointF& cursor,
+                                       bool aspect_locked, float aspect_ratio) -> QRectF;
+  /// @p box with @p edge moved to @p cursor. With a lock, the other side follows about the
+  /// box's center line.
+  static auto ResizeBoxEdge(const QRectF& box, CropEdge edge, const QPointF& cursor,
+                            bool aspect_locked, float aspect_ratio) -> QRectF;
+
+  static auto IsPointInsideQuad(const std::array<QPointF, 4>& corners, const QPointF& point)
+      -> bool;
   static auto PointSegmentDistanceSquared(const QPointF& point, const QPointF& a, const QPointF& b)
       -> float;
   static auto LerpPoint(const QPointF& a, const QPointF& b, float t) -> QPointF;
@@ -80,10 +105,6 @@ class CropGeometry {
   /// Cursor for @p hit: rotate, a resize along its drag axis, or move inside.
   static auto CursorForCropHit(const CropHitTestResult& hit) -> OverlayCursor;
   static auto OppositeCropCornerIndex(int corner_index) -> int;
-  static auto ResizeRotatedCropFromFixedCorner(const QPointF& fixed_corner_uv,
-                                               const QPointF& cursor_uv, float angle_degrees,
-                                               float metric_aspect, bool aspect_locked,
-                                               float aspect_ratio) -> QRectF;
   static auto HitTestWidgetGeometry(const std::array<QPointF, 4>& corners_widget,
                                     const QPointF&                event_pos) -> CropHitTestResult;
 };

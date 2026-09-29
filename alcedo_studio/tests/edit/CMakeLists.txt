@@ -212,6 +212,7 @@ alcedo_register_test_target(PipelineDocumentCopyCostTest edit)
 
 # GPU DAG Phase G3: RenderGeometryResolver (CPU).
 add_executable(GpuDagGeometryTest
+  ${ALCEDO_TEST_ROOT}/edit/geometry/crop_frame_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/geometry/render_geometry_resolver_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/geometry/sampling_and_document_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/geometry/document_geometry_use_test.cpp)

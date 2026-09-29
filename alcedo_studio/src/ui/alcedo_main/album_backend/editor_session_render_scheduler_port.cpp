@@ -103,9 +103,9 @@ auto MakeEditorRenderDesc(const alcedo::EditorRenderRequest& request) -> alcedo:
   desc.viewport_region_                        = intent.view_region;
   desc.frame_metadata_                         = FrameRoleToPreviewMetadata(intent);
   desc.frame_metadata_.presentation_request_id = request.request_id;
-  desc.document_geometry_                      = intent.geometry_overlay_only
-                                                     ? alcedo::DocumentGeometryUse::UncroppedSource
-                                                     : alcedo::DocumentGeometryUse::ApplyCropAndRotation;
+  desc.document_geometry_ = intent.geometry_overlay_only
+                                ? alcedo::DocumentGeometryUse::RotatedUncroppedSource
+                                : alcedo::DocumentGeometryUse::ApplyCropAndRotation;
   return desc;
 }
 

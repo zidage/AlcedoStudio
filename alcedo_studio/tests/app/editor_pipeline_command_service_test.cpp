@@ -9,9 +9,11 @@
 #include <limits>
 #include <memory>
 #include <stdexcept>
+#include <string>
 
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/drt_node_model.hpp"
+#include "edit/graph/image_geometry_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/operators/models/color_wheel_model.hpp"
 #include "edit/operators/models/curve_model.hpp"
@@ -351,8 +353,8 @@ TEST(EditorPipelineCommandServiceTest, GeometryPatchUsesAliasesAndPreservesFocus
       {{"crop_rotate",
         {{"crop_rect", {{"x", 0.1}, {"y", 0.2}, {"w", 0.6}, {"h", 0.7}}},
          {"angle_degrees", 30.0},
-         {"enable_crop", true},
-         {"aspect_ratio_preset", "free"}}}},
+         {"aspect_ratio_preset", "custom"},
+         {"aspect_ratio", {{"width", 5.0}, {"height", 4.0}}}}}},
       &error))
       << error;
   const auto rect = document.Geometry().CropRect();
@@ -361,7 +363,66 @@ TEST(EditorPipelineCommandServiceTest, GeometryPatchUsesAliasesAndPreservesFocus
   EXPECT_FLOAT_EQ(rect.w, 0.6f);
   EXPECT_FLOAT_EQ(rect.h, 0.7f);
   EXPECT_FLOAT_EQ(document.Geometry().RotationDegrees(), 30.0f);
-  EXPECT_TRUE(document.Geometry().ExpandToFit());
+  EXPECT_EQ(document.Geometry().AspectPreset(), "custom");
+  EXPECT_EQ(document.Geometry().AspectRatio(), (CropAspectRatio{5.0f, 4.0f}));
+}
+
+TEST(EditorPipelineCommandServiceTest, GeometryWriteRejectsSourceSizeAndRemovedPanelFlags) {
+  EditorParameterTarget target;
+  target.owner_kind = EditorParameterOwnerKind::Document;
+  target.field_key  = "crop_rotate";
+  for (const char* key : {"source_size", "enabled", "enable_crop"}) {
+    auto           document = CreateDefaultPipelineDocument();
+    const auto     before   = document.ToJson();
+    nlohmann::json params   = {{"crop_rotate", {{"angle_degrees", 3.0}}}};
+    params["crop_rotate"][key] =
+        std::string(key) == "source_size" ? nlohmann::json{{"width", 10}, {"height", 10}}
+                                          : nlohmann::json(true);
+    std::string error;
+    EXPECT_FALSE(ApplyEditorParameterPatch(document, target, params, &error)) << key;
+    EXPECT_FALSE(error.empty()) << key;
+    EXPECT_EQ(document.ToJson(), before) << key;
+  }
+}
+
+TEST(EditorPipelineCommandServiceTest, StoredGeometryWithLegacyExpandToFitStillReplays) {
+  // History stored before the crop-frame semantics carries expand_to_fit.
+  auto                  document = CreateDefaultPipelineDocument();
+  EditorParameterTarget target;
+  target.owner_kind = EditorParameterOwnerKind::Document;
+  target.field_key  = "crop_rotate";
+  std::string error;
+  ASSERT_TRUE(ApplyEditorParameterPatch(document, target,
+                                        {{"crop_rect", {0.1, 0.1, 0.5, 0.5}},
+                                         {"rotation_degrees", 4.0},
+                                         {"expand_to_fit", true}},
+                                        &error))
+      << error;
+  EXPECT_FLOAT_EQ(document.Geometry().RotationDegrees(), 4.0f);
+  EXPECT_FALSE(document.Geometry().ToJson().contains("expand_to_fit"));
+}
+
+TEST(EditorPipelineCommandServiceTest, GeometryModelJsonRoundTripsAspectAndIgnoresLegacyKeys) {
+  ImageGeometryModel  model;
+  ImageGeometryUpdate update;
+  update.crop_rect        = NormalizedRect{-0.05f, 0.1f, 0.9f, 0.4f};
+  update.rotation_degrees = 12.0f;
+  update.aspect_preset    = std::string("ratio_16_9");
+  update.aspect_ratio     = CropAspectRatio{16.0f, 9.0f};
+  model.ApplyUpdate(update);
+
+  const auto restored = ImageGeometryModel::FromJson(model.ToJson());
+  EXPECT_FLOAT_EQ(restored.CropRect().x, -0.05f);
+  EXPECT_FLOAT_EQ(restored.RotationDegrees(), 12.0f);
+  EXPECT_EQ(restored.AspectPreset(), "ratio_16_9");
+  EXPECT_EQ(restored.AspectRatio(), (CropAspectRatio{16.0f, 9.0f}));
+
+  // A model stored by an earlier version has no aspect fields and an expand_to_fit key.
+  const auto legacy = ImageGeometryModel::FromJson(
+      {{"crop_rect", {0.0, 0.0, 1.0, 1.0}}, {"rotation_degrees", 2.0}, {"expand_to_fit", true}});
+  EXPECT_EQ(legacy.AspectPreset(), ImageGeometryModel::kFreeAspectPreset);
+  EXPECT_EQ(legacy.AspectRatio(), CropAspectRatio{});
+  EXPECT_FALSE(legacy.ToJson().contains("expand_to_fit"));
 }
 
 TEST(EditorPipelineCommandServiceTest, GeometryAndDevelopRejectInvalidValuesBeforeAnyWrite) {

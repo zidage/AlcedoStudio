@@ -22,7 +22,7 @@ auto EnsureCudaDevice() -> bool {
 }
 
 // The Geometry panel source frame is rendered by the GPU DAG with
-// DocumentGeometryUse::UncroppedSource (GpuDagCudaDrtProductTest and
+// DocumentGeometryUse::RotatedUncroppedSource (GpuDagCudaDrtProductTest and
 // GpuDagGeometryTest). The case below covers the CUDA geometry helper only.
 
 TEST(CudaGeometryOpsOverlayCases, ResizeLinearHandlesRoiAndEmptyWithoutAbort) {

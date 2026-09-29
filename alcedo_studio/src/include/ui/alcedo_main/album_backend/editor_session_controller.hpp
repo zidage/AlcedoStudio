@@ -67,7 +67,7 @@ namespace alcedo::ui {
 /// Phase 6A implements `IEditorAdjustmentSubmitter` so the typed adjustment
 /// models can submit one patch at a time without touching the pipeline scheduler.
 /// `canEdit` exposes whether the session is Interactive with an image so panels
-/// can gate control enablement.
+/// use to enable their controls.
 class EditorSessionController final : public QObject, public IEditorAdjustmentSubmitter {
   Q_OBJECT
   Q_PROPERTY(bool active READ active NOTIFY StateChanged)
@@ -391,10 +391,6 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void DesktopUiChanged();
   void PresentationBindingChanged();
   void LastEditedImageChanged();
-  /// Emitted synchronously before the session seals the open image (switch,
-  /// close, save, Version change). Panels holding an uncommitted draft (the
-  /// Geometry crop) submit it now so it becomes this image's history.
-  void panelDraftCommitRequested();
   // Phase 7A P1: emitted with the typed result of a history/Version operation.
   void HistoryOperationFinished();
 
@@ -415,8 +411,6 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void                     InstallBackendNotifier();
   void                     ApplyActionAvailability();
   void                     PublishRenderProgressIfChanged();
-  /// Ask panels to commit their drafts into the open image before a seal.
-  void                     RequestPanelDraftCommit();
   void                     SyncBackgroundActionRestrictions();
   void                     SetCloseInFlight(bool in_flight);
   void                     SetPersistInFlight(bool in_flight);

@@ -110,7 +110,7 @@ class MaskEditGeometry {
       -> ResolvedRenderGeometry;
 
   /**
-   * @brief Resolved photograph geometry from document crop, rotation, and expand-to-fit.
+   * @brief Resolved photograph geometry from document crop and rotation.
    *
    * @p full_reference is uncropped ReferenceSpace. Identity crop and zero rotation
    * return @ref MakeIdentityPhotographGeometry. Empty @p full_reference yields

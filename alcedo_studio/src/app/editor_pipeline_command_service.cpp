@@ -482,44 +482,6 @@ auto ParseLensCalibrationUpdate(const nlohmann::json& params) -> DevelopLensCali
   return update;
 }
 
-auto ParseNormalizedRect(const nlohmann::json& value, std::string_view context) -> NormalizedRect {
-  if (value.is_array()) {
-    if (value.size() != 4) {
-      throw std::invalid_argument(std::string{context} + " must contain four values");
-    }
-    return {ReadFiniteFloat(value.at(0), std::string{context} + "[0]"),
-            ReadFiniteFloat(value.at(1), std::string{context} + "[1]"),
-            ReadFiniteFloat(value.at(2), std::string{context} + "[2]"),
-            ReadFiniteFloat(value.at(3), std::string{context} + "[3]")};
-  }
-  const auto& object = RequireObject(value, context);
-  RejectUnknownKeys(object, {"x", "y", "w", "h"}, context);
-  if (!object.contains("x") || !object.contains("y") || !object.contains("w") ||
-      !object.contains("h")) {
-    throw std::invalid_argument(std::string{context} + " requires x, y, w, and h");
-  }
-  return {ReadFiniteFloat(object.at("x"), std::string{context} + ".x"),
-          ReadFiniteFloat(object.at("y"), std::string{context} + ".y"),
-          ReadFiniteFloat(object.at("w"), std::string{context} + ".w"),
-          ReadFiniteFloat(object.at("h"), std::string{context} + ".h")};
-}
-
-auto ParseGeometryUpdate(const nlohmann::json& params) -> ImageGeometryUpdate {
-  const auto& object = UnwrapObject(params, {"crop_rotate"}, "crop_rotate");
-  RejectUnknownKeys(object,
-                    {"crop_rect", "rotation_degrees", "angle_degrees", "expand_to_fit", "enabled",
-                     "enable_crop", "aspect_ratio_preset", "aspect_ratio", "source_size"},
-                    "crop_rotate");
-  ImageGeometryUpdate update;
-  if (object.contains("crop_rect")) {
-    update.crop_rect = ParseNormalizedRect(object.at("crop_rect"), "crop_rotate.crop_rect");
-  }
-  update.rotation_degrees =
-      ReadOptionalFloat(object, {"rotation_degrees", "angle_degrees"}, "crop_rotate");
-  update.expand_to_fit = ReadOptionalBool(object, {"expand_to_fit"}, "crop_rotate");
-  return update;
-}
-
 auto ParseSharpenUpdate(const nlohmann::json& params) -> SharpenUpdate {
   const auto& object = (params.contains("sharpen") && params.at("sharpen").is_object())
                            ? UnwrapObject(params, {"sharpen"}, "sharpen")

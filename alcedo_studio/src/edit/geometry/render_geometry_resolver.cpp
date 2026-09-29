@@ -9,6 +9,8 @@
 #include <stdexcept>
 #include <string>
 
+#include "edit/geometry/crop_frame.hpp"
+
 namespace alcedo {
 namespace {
 
@@ -30,19 +32,6 @@ auto ClampNormalizedRect(NormalizedRect rect, const char* name) -> NormalizedRec
   rect.x = std::clamp(rect.x, 0.0f, 1.0f - rect.w);
   rect.y = std::clamp(rect.y, 0.0f, 1.0f - rect.h);
   return rect;
-}
-
-auto NormalizeRotationDegrees(float degrees) -> float {
-  if (!std::isfinite(degrees)) {
-    return 0.0f;
-  }
-  degrees = std::fmod(degrees, 360.0f);
-  if (degrees > 180.0f) {
-    degrees -= 360.0f;
-  } else if (degrees < -180.0f) {
-    degrees += 360.0f;
-  }
-  return degrees;
 }
 
 auto RoundExtent(float width, float height) -> Extent2D {
@@ -172,7 +161,13 @@ auto ResolveRenderGeometry(const SourceGeometry& source, const ImageGeometryPara
     throw std::runtime_error("ResolveRenderGeometry: footprint radius must be finite and >= 0");
   }
 
-  const auto crop = ClampNormalizedRect(image.crop_rect, "crop_rect");
+  // The preview frame reads the whole source; only the product crop frame is constrained to
+  // keep its rotated corners inside the source.
+  const auto crop =
+      image.output_frame == GeometryOutputFrame::CropFrame
+          ? ClampCropToRotatedSource(image.crop_rect, image.rotation_degrees,
+                                     source.full_reference_extent)
+          : ClampNormalizedRect(image.crop_rect, "crop_rect");
   const auto visible =
       ClampNormalizedRect(view.visible_rect_in_edit_space, "visible_rect_in_edit_space");
   const float theta     = NormalizeRotationDegrees(image.rotation_degrees) * (kPi / 180.0f);
@@ -203,7 +198,7 @@ auto ResolveRenderGeometry(const SourceGeometry& source, const ImageGeometryPara
   geometry.decoded_to_reference =
       MakeDecodedToReference(source.decoded_extent, source.full_reference_extent);
 
-  if (image.expand_to_fit) {
+  if (image.output_frame == GeometryOutputFrame::RotatedSourceBounds) {
     geometry.edit_extent       = RoundExtent(aabb_w, aabb_h);
     const float sx             = static_cast<float>(geometry.edit_extent.width) / aabb_w;
     const float sy             = static_cast<float>(geometry.edit_extent.height) / aabb_h;

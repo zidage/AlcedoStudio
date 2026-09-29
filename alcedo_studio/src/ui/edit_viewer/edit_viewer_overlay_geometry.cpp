@@ -6,6 +6,8 @@
 
 #include <algorithm>
 
+#include "ui/edit_viewer/crop_interaction_controller.hpp"
+
 namespace alcedo {
 namespace {
 
@@ -66,18 +68,12 @@ auto EditViewerOverlayGeometry::Build(const EditViewerOverlaySnapshot& snapshot)
     return geometry;
   }
 
-  const auto crop_corners_uv = CropGeometry::RotatedCropCornersUv(
-      crop_state.rect, crop_state.rotation_degrees, crop_state.metric_aspect);
-  for (size_t i = 0; i < crop_corners_uv.size(); ++i) {
-    const auto corner_widget = ViewportMapper::ImageUvToWidgetPoint(
-        crop_corners_uv[i], snapshot.widget_info, snapshot.image_info, zoom, pan);
-    if (!corner_widget.has_value()) {
-      geometry.crop_corners_valid = false;
-      return geometry;
-    }
-    geometry.crop_corners_widget[i] = *corner_widget;
+  const auto crop_corners =
+      CropInteractionController::CropCornersWidget(crop_state, snapshot.mapping);
+  if (!crop_corners.has_value()) {
+    return geometry;
   }
-
+  geometry.crop_corners_widget = *crop_corners;
   geometry.crop_corners_valid = true;
   const auto handle_points =
       CropGeometry::CropRotateHandleWidgetPoint(geometry.crop_corners_widget);
@@ -112,9 +108,7 @@ auto EditViewerOverlayGeometry::ComputeHover(const EditViewerOverlaySnapshot& sn
   if (geometry.crop_corners_valid) {
     hover.crop_hit = CropGeometry::HitTestWidgetGeometry(geometry.crop_corners_widget, event_pos);
     hover.crop_hit.inside_crop =
-        CropGeometry::IsPointInsideRotatedCrop(*hover.image_uv, crop_state.rect,
-                                               crop_state.rotation_degrees,
-                                               crop_state.metric_aspect);
+        CropGeometry::IsPointInsideQuad(geometry.crop_corners_widget, event_pos);
 
     const auto cursor = OverlayCursorShape(CropGeometry::CursorForCropHit(hover.crop_hit));
     if (hover.crop_hit.rotate_handle_hit) {

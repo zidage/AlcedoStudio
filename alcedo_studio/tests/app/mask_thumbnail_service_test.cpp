@@ -86,7 +86,6 @@ auto IndependentPixel(const MaskThumbnailSpec& spec, int x, int y) -> std::uint8
   ImageGeometryParams image;
   image.crop_rect        = spec.geometry.crop_rect;
   image.rotation_degrees = spec.geometry.rotation_degrees;
-  image.expand_to_fit    = spec.geometry.expand_to_fit;
   ResolutionRequest resolution;
   resolution.render_scale = 1.0f;
   resolution.max_edge     = kMaskThumbnailSize;

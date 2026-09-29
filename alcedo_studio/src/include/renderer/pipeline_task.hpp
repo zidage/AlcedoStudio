@@ -45,7 +45,7 @@ struct RenderDesc {
   uint32_t             max_edge_            = 1024;       // max edge for thumbnail/export resize
   DecodeRes            decode_res_ = DecodeRes::QUARTER;  // RAW decode resolution for thumbnails
   // Copied unchanged into PipelineApplyRequest::geometry. Only the editor viewport port sets
-  // UncroppedSource (Geometry panel open); thumbnail, export, and analysis keep the default.
+  // RotatedUncroppedSource (Geometry panel open); thumbnail, export, and analysis keep the default.
   DocumentGeometryUse  document_geometry_ = DocumentGeometryUse::ApplyCropAndRotation;
 };
 
