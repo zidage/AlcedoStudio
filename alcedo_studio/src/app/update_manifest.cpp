@@ -11,9 +11,7 @@
 #include <cmath>
 #include <limits>
 
-extern "C" {
-#include <ed25519.h>
-}
+#include "app/detached_signature.hpp"
 
 namespace alcedo {
 namespace {
@@ -58,20 +56,15 @@ UpdateManifestResult VerifyUpdateManifest(const QByteArray& manifest_bytes,
                                           const QByteArray& public_key, const QString& platform_key,
                                           const QUrl& feed_url, quint64 minimum_sequence,
                                           const QDateTime& now_utc) {
-  if (public_key.size() != 32) {
-    return Failure(QStringLiteral("The update public key is not valid."));
-  }
-
-  const QByteArray signature =
-      QByteArray::fromBase64(signature_text.trimmed(), QByteArray::AbortOnBase64DecodingErrors);
-  if (signature.size() != 64) {
-    return Failure(QStringLiteral("The update signature has an invalid format."));
-  }
-  if (ed25519_verify(reinterpret_cast<const unsigned char*>(signature.constData()),
-                     reinterpret_cast<const unsigned char*>(manifest_bytes.constData()),
-                     static_cast<size_t>(manifest_bytes.size()),
-                     reinterpret_cast<const unsigned char*>(public_key.constData())) != 1) {
-    return Failure(QStringLiteral("The update signature is not valid."));
+  switch (VerifyDetachedSignature(manifest_bytes, signature_text, public_key)) {
+    case DetachedSignatureCheck::kValid:
+      break;
+    case DetachedSignatureCheck::kInvalidPublicKey:
+      return Failure(QStringLiteral("The update public key is not valid."));
+    case DetachedSignatureCheck::kInvalidSignatureFormat:
+      return Failure(QStringLiteral("The update signature has an invalid format."));
+    case DetachedSignatureCheck::kSignatureMismatch:
+      return Failure(QStringLiteral("The update signature is not valid."));
   }
 
   QJsonParseError     parse_error;

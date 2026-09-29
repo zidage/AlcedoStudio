@@ -50,3 +50,17 @@ def_library(StrConv
         ${ALCEDO_SRC_ROOT}/utils/string/search_text.cpp
     PUBLIC_DEPS utfcpp
 )
+
+# CUBE metadata comments, package inventory digests, and the local LUT library
+# scan (docs/lut-package-system.md).
+def_library(LutMetadata
+    SOURCES
+        ${ALCEDO_SRC_ROOT}/utils/lut/lut_metadata.cpp
+        ${ALCEDO_SRC_ROOT}/utils/lut/lut_inventory_digest.cpp
+        ${ALCEDO_SRC_ROOT}/utils/lut/lut_library_scan.cpp
+        ${ALCEDO_SRC_ROOT}/include/utils/lut/lut_metadata.hpp
+        ${ALCEDO_SRC_ROOT}/include/utils/lut/lut_inventory_digest.hpp
+        ${ALCEDO_SRC_ROOT}/include/utils/lut/lut_library_scan.hpp
+    PUBLIC_DEPS Qt6::Core
+    PRIVATE_DEPS JSON
+)

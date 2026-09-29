@@ -29,3 +29,12 @@ target_link_libraries(PreviewPerformanceTest
 gtest_discover_tests(PreviewPerformanceTest TEST_PREFIX "PreviewPerformanceTest."
   PROPERTIES LABELS "ci_core_flow;preview_performance")
 alcedo_register_test_target(PreviewPerformanceTest core)
+
+add_executable(LutMetadataTest ${ALCEDO_TEST_ROOT}/utils/lut_metadata_test.cpp)
+target_include_directories(LutMetadataTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_compile_definitions(LutMetadataTest PRIVATE
+  ALCEDO_LUT_METADATA_FIXTURE_DIR="${ALCEDO_TEST_ROOT}/resources/lut_metadata")
+target_link_libraries(LutMetadataTest PRIVATE LutMetadata JSON GTest::gtest_main)
+gtest_discover_tests(LutMetadataTest TEST_PREFIX "LutMetadataTest."
+  PROPERTIES LABELS "ci_core_flow")
+alcedo_register_test_target(LutMetadataTest core ci_core)

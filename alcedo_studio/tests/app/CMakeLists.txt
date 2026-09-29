@@ -10,6 +10,14 @@ gtest_discover_tests(UpdateManifestTest TEST_PREFIX "UpdateManifestTest."
     PROPERTIES LABELS "ci_core_flow")
 alcedo_register_test_target(UpdateManifestTest app ci_core)
 
+add_executable(LutPackageManifestTest ${ALCEDO_TEST_ROOT}/app/lut_package_manifest_test.cpp)
+target_include_directories(LutPackageManifestTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(LutPackageManifestTest PRIVATE LutPackageManifest
+    unofficial::ed25519::ed25519 GTest::gtest_main)
+gtest_discover_tests(LutPackageManifestTest TEST_PREFIX "LutPackageManifestTest."
+    PROPERTIES LABELS "ci_core_flow")
+alcedo_register_test_target(LutPackageManifestTest app ci_core)
+
 add_executable(DownloadServiceFakeAria2
     ${ALCEDO_TEST_ROOT}/app/download_service_fake_aria2.cpp)
 target_link_libraries(DownloadServiceFakeAria2 PRIVATE Qt6::Core)

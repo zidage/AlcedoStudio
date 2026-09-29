@@ -58,6 +58,15 @@ if(WIN32)
     )
 endif()
 
+# Exact-byte Ed25519 check shared by the software-update and LUT package feeds.
+def_library(DetachedSignature
+    SOURCES
+        "${ALCEDO_APP_ROOT}/detached_signature.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/detached_signature.hpp"
+    PUBLIC_DEPS Qt6::Core
+    PRIVATE_DEPS unofficial::ed25519::ed25519
+)
+
 def_library(UpdateService
     SOURCES
         "${ALCEDO_APP_ROOT}/update_manifest.cpp"
@@ -65,7 +74,7 @@ def_library(UpdateService
         "${ALCEDO_INCLUDE_ROOT}/app/update_manifest.hpp"
         "${ALCEDO_INCLUDE_ROOT}/app/update_service.hpp"
     PUBLIC_DEPS DownloadService Qt6::Core Qt6::Network
-    PRIVATE_DEPS unofficial::ed25519::ed25519 Qt6::Gui
+    PRIVATE_DEPS DetachedSignature Qt6::Gui
 )
 if(ALCEDO_UPDATE_ALLOW_INSTALL)
     set(_alcedo_update_allow_install 1)
@@ -81,6 +90,15 @@ target_compile_definitions(UpdateService PRIVATE
     ALCEDO_UPDATE_ALLOW_INSTALL=${_alcedo_update_allow_install}
 )
 unset(_alcedo_update_allow_install)
+
+# Signed LUT package feed (no expiry; see docs/lut-package-system.md).
+def_library(LutPackageManifest
+    SOURCES
+        "${ALCEDO_APP_ROOT}/lut_package_manifest.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/lut_package_manifest.hpp"
+    PUBLIC_DEPS Qt6::Core
+    PRIVATE_DEPS DetachedSignature
+)
 
 def_library(FSService
     SOURCES
