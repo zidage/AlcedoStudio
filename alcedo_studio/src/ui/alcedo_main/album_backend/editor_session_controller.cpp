@@ -540,19 +540,7 @@ void EditorSessionController::SyncViewportIdentity() {
   }
 }
 
-void EditorSessionController::RequestPanelDraftCommit() {
-  if (session_backend_ != nullptr && session_backend_->has_image()) {
-    emit panelDraftCommitRequested();
-  }
-}
-
 void EditorSessionController::Open(uint elementId, uint imageId) {
-  const bool leaves_open_image = session_backend_ != nullptr && session_backend_->has_image() &&
-                                 (session_backend_->identity().element_id != elementId ||
-                                  session_backend_->identity().image_id != imageId);
-  if (leaves_open_image) {
-    RequestPanelDraftCommit();
-  }
   // Remember the last real image so re-entering the editor from the library can
   // restore it (Phase 4A-Fix). Close/Finalize never touch this; only an explicit
   // clearLastEditedImage() (delete / project switch) forgets it.
@@ -622,7 +610,6 @@ void EditorSessionController::Open(uint elementId, uint imageId) {
 }
 
 void EditorSessionController::CheckoutVersion(const QString& versionId) {
-  RequestPanelDraftCommit();
   const QString action = QStringLiteral("checkoutVersion");
   if (!session_backend_) {
     PublishHistoryRejected(action, QStringLiteral("Editor session backend is unavailable"),
@@ -648,7 +635,6 @@ void EditorSessionController::CheckoutVersion(const QString& versionId) {
 }
 
 void EditorSessionController::CreateRootVersion(const QString& displayName) {
-  RequestPanelDraftCommit();
   const QString action = QStringLiteral("createRootVersion");
   if (!session_backend_) {
     PublishHistoryRejected(action, QStringLiteral("Editor session backend is unavailable"));
@@ -667,7 +653,6 @@ void EditorSessionController::CreateRootVersion(const QString& displayName) {
 
 void EditorSessionController::BranchFromCommit(const QString& commitId,
                                                const QString& displayName) {
-  RequestPanelDraftCommit();
   const QString action = QStringLiteral("branchFromCommit");
   if (!session_backend_) {
     PublishHistoryRejected(action, QStringLiteral("Editor session backend is unavailable"),
@@ -953,7 +938,6 @@ void EditorSessionController::OnBackendSessionResult(const alcedo::EditorSession
 }
 
 void EditorSessionController::Close() {
-  RequestPanelDraftCommit();
   if (scope_controller_) {
     scope_controller_->SetImageIdentity(0, 0);
   }
@@ -1005,9 +989,6 @@ void EditorSessionController::Finalize(bool persistChanges) {
   // PersistCurrentImage so re-entry stays immediate.
   // The navigation layer releases guards only after save and render-idle both
   // complete, so keep presentation available for the in-flight handoff.
-  if (persistChanges) {
-    RequestPanelDraftCommit();
-  }
   if (!session_backend_) {
     if (scope_controller_) {
       scope_controller_->SetImageIdentity(0, 0);
@@ -1063,7 +1044,6 @@ void EditorSessionController::PersistCurrentImage() {
   if (!session_backend_ || close_in_flight_ || persist_in_flight_ || !has_image()) {
     return;
   }
-  RequestPanelDraftCommit();
   persist_error_.clear();
   persist_observed_saving_ = false;
   const auto result        = session_backend_->PersistCurrentImage();
@@ -1433,9 +1413,6 @@ void EditorSessionController::submitViewChange(int kind) {
       break;
     case editor_rhi::EditorInteractionController::ViewChangeKind::Resize:
       reason = alcedo::EditorRenderReason::Resize;
-      break;
-    case editor_rhi::EditorInteractionController::ViewChangeKind::CropRotate:
-      reason = alcedo::EditorRenderReason::CropRotate;
       break;
     case editor_rhi::EditorInteractionController::ViewChangeKind::DetailRefresh:
       reason = alcedo::EditorRenderReason::DetailRefresh;

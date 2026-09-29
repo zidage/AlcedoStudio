@@ -39,7 +39,7 @@ enum class AdjustmentTransferItemKind : std::uint8_t {
   /// Develop `lens_calib` field: lens correction flags, scale, projection, and
   /// lens profile choice.
   LensCalibration,
-  /// Document geometry (`crop_rotate`): normalized crop, rotation, expand-to-fit.
+  /// Document geometry (`crop_rotate`): crop frame, rotation, and aspect constraint.
   Geometry,
 };
 

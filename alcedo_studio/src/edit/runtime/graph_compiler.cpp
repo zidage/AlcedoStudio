@@ -69,18 +69,19 @@ auto EstimatePeakTransientBytes(const DevelopCompileSource& source) -> std::size
 }
 
 /**
- * @brief User geometry that this frame binds. UncroppedSource keeps only expand_to_fit and uses an
- *        identity crop with zero rotation; the document is not changed.
+ * @brief User geometry that this frame binds. RotatedUncroppedSource keeps the document rotation,
+ *        uses a full-frame crop, and frames the bounding box of the rotated source; the document
+ *        is not changed.
  */
 auto ImageParamsForRequest(const PipelineDocument& document, DocumentGeometryUse use)
     -> ImageGeometryParams {
   ImageGeometryParams params;
-  params.expand_to_fit = document.Geometry().ExpandToFit();
-  if (use == DocumentGeometryUse::UncroppedSource) {
+  params.rotation_degrees = document.Geometry().RotationDegrees();
+  if (use == DocumentGeometryUse::RotatedUncroppedSource) {
+    params.output_frame = GeometryOutputFrame::RotatedSourceBounds;
     return params;
   }
-  params.crop_rect        = document.Geometry().CropRect();
-  params.rotation_degrees = document.Geometry().RotationDegrees();
+  params.crop_rect = document.Geometry().CropRect();
   return params;
 }
 

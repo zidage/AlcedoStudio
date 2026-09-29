@@ -11,12 +11,23 @@
 namespace alcedo {
 
 /**
+ * @brief Which rectangle of the rotated source becomes the edit space.
+ */
+enum class GeometryOutputFrame : std::uint8_t {
+  /// Product output: the crop frame, constrained so every corner lies inside the source.
+  CropFrame,
+  /// Geometry panel preview: the bounding box of the whole rotated source. Its corners outside
+  /// the source show the border color. Used only with a full-frame crop.
+  RotatedSourceBounds,
+};
+
+/**
  * @brief Document crop and rotation. Viewport and dynamic resolution are not stored here.
  */
 struct ImageGeometryParams {
-  NormalizedRect crop_rect{};
-  float          rotation_degrees = 0.0f;
-  bool           expand_to_fit    = true;
+  NormalizedRect      crop_rect{};
+  float               rotation_degrees = 0.0f;
+  GeometryOutputFrame output_frame     = GeometryOutputFrame::CropFrame;
 };
 
 /**
@@ -55,12 +66,12 @@ struct SamplingFootprint {
 /**
  * @brief How one render reads the document crop and rotation.
  *
- * Only editor viewport requests set @ref UncroppedSource, while the Geometry panel is open. The
- * document is never changed; the value selects which user geometry the frame binds.
+ * Only editor viewport requests set @ref RotatedUncroppedSource, while the Geometry panel is
+ * open. The document is never changed; the value selects which user geometry the frame binds.
  */
 enum class DocumentGeometryUse : std::uint8_t {
-  ApplyCropAndRotation,  ///< Default: every product render applies the document geometry.
-  UncroppedSource,       ///< Geometry panel open: identity crop and zero rotation for this frame.
+  ApplyCropAndRotation,    ///< Default: every product render applies the document geometry.
+  RotatedUncroppedSource,  ///< Geometry panel open: the whole source with the document rotation.
 };
 
 struct RenderRequest {

@@ -388,7 +388,8 @@ auto ReadGeometry(const PipelineDocument& document, const EditorParameterTarget&
   EditorPanelGeometryValue value;
   value.crop_rect         = geometry.CropRect();
   value.rotation_degrees  = geometry.RotationDegrees();
-  value.expand_to_fit     = geometry.ExpandToFit();
+  value.aspect_preset     = geometry.AspectPreset();
+  value.aspect_ratio      = geometry.AspectRatio();
   return FinishField(target, std::move(value), out);
 }
 

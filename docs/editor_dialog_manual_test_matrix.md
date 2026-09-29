@@ -71,16 +71,25 @@ Expected global behavior:
 
 ## Geometry Panel
 
+The output is the crop frame: an axis-aligned rectangle through which the source is seen rotated
+about the frame center. No frame corner may leave the source, so a rotated output has no border
+corners.
+
 | Test | Steps | Expected result |
 | --- | --- | --- |
-| Enter geometry panel | Switch to geometry panel. | Crop overlay appears. Pipeline preview remains pre-geometry for editable crop bounds. |
-| Crop sliders | Move x, y, width, and height sliders. | Overlay rect updates immediately; no crop transaction commits until apply or release behavior expected by current UI. |
-| Aspect preset | Select a fixed aspect preset. | Crop rect is adjusted to the locked aspect and overlay lock is enabled. |
-| Custom aspect | Edit width and height spin boxes. | Preset becomes custom and overlay lock uses the custom ratio. |
-| Rotation | Drag rotation. | Overlay rotation updates immediately. |
-| Apply geometry | Click apply. | One `CROP_ROTATE` transaction commits and a full-frame preview is marked required. |
-| Reset geometry | Use reset button or shortcut. | Crop and rotation return to defaults and preview behavior matches current implementation. |
-| Leave geometry panel | Switch away from geometry. | Overlay hides or returns to existing non-editing behavior; committed crop is used for pipeline render. |
+| Enter geometry panel | Zoom into an ROI, then switch to geometry. | The view returns to fit. The preview shows the whole source with the current rotation; the crop frame is drawn axis-aligned on it. |
+| View locked to fit | With geometry open, try Ctrl+wheel, pinch, double-click, `1`, and middle-button pan. | The view stays at fit. No detail patch renders. |
+| Source size | Crop an image, switch to another image and back, reopen geometry. | "Source" shows the image's own pixel size both times; the crop frame sits where it was. |
+| Crop sliders | Drag x, y, width, or height and release. | Overlay follows during the drag; one `Crop / Rotate` history entry is added on release. |
+| Overlay drag | Create, move, or resize the frame on the viewport. | Frame edges move along the screen axes; one history entry on release. |
+| Rotation | Drag the rotation slider or the rotate handle. | The image turns under the frame about the frame center; the frame shrinks when a corner would leave the source; one history entry on release. |
+| Rotate after crop | Crop a region, then rotate. | The cropped content turns with the rotation; the output never shows content from outside the source or black corners. |
+| Aspect preset | Select a fixed preset (for example 16:9) on a portrait image. | The frame takes the preset shape in the image's orientation (9:16) and stays locked; one history entry. |
+| Custom aspect | Edit custom width and height. | Preset becomes custom and the lock uses the custom ratio. |
+| Reset geometry | Click reset. | One history entry back to full frame, 0°, free. |
+| Undo / redo | Undo and redo crop and rotation edits with geometry open and closed. | Each entry restores both the render and the panel values. |
+| Leave geometry panel | Switch away or press Enter. | Overlay hides and the viewport shows the cropped output. Nothing new is committed. |
+| Export and thumbnail | Export and look at the thumbnail of a rotated crop. | Both match the viewport output. |
 
 ## Raw Decode Panel
 

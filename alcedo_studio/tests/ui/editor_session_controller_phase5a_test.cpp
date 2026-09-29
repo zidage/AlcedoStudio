@@ -629,10 +629,6 @@ TEST(EditorSessionControllerPhase5ATest, SubmitViewChangeRoutesThroughBackend) {
   EXPECT_EQ(backend.view_change_reason, alcedo::EditorRenderReason::DetailRefresh);
   EXPECT_FALSE(backend.view_change_region.has_value());  // no bound sink
 
-  controller.submitViewChange(static_cast<int>(VCK::CropRotate));
-  EXPECT_EQ(backend.view_change_reason, alcedo::EditorRenderReason::CropRotate);
-  EXPECT_FALSE(backend.view_change_region.has_value());
-
   controller.submitViewChange(static_cast<int>(VCK::Resize));
   EXPECT_EQ(backend.view_change_reason, alcedo::EditorRenderReason::Resize);
 
@@ -663,7 +659,8 @@ TEST(EditorSessionControllerPhase5ATest, BoundInteractionRoutesDetailRefreshWith
   controller.bindInteractionController(&interaction);
 
   interaction.setViewportMetrics(800, 600, 1.0);
-  interaction.setImageSize(1600, 1200);
+  interaction.setDisplayedMaskGeometry(
+      alcedo::MaskEditGeometry::MakeIdentityPhotographGeometry(alcedo::Extent2D{1600, 1200}));
   interaction.setRenderReferenceSize(1600, 1200);
   interaction.handleWheel(400, 300, 120, 0, 0, Qt::ControlModifier, false);
 
@@ -689,15 +686,15 @@ TEST(EditorSessionControllerPhase5ATest, SubmitViewChangeIsNoOpWithoutImage) {
   EXPECT_FALSE(backend.view_change_recorded);
 }
 
-TEST(EditorSessionControllerPhase5ATest, GeometryPanelSelectionUsesSourceFramePreview) {
+TEST(EditorSessionControllerPhase5ATest, GeometryPanelSelectionUsesRotatedSourcePreview) {
   FakeSessionBackend      backend;
   EditorSessionController controller(&backend);
 
   controller.Open(7, 8);
   EXPECT_FALSE(backend.geometry_overlay_active);
 
-  // Panel selection while still Loading only flips the overlay flag; the
-  // source-frame refresh waits for Interactive (see next assertion block).
+  // Panel selection while still Loading only flips the preview flag; the
+  // rotated-source refresh waits for Interactive (see next assertion block).
   controller.set_active_adjustment_panel(QStringLiteral("geometry"));
   EXPECT_TRUE(backend.geometry_overlay_active);
   EXPECT_FALSE(backend.view_change_recorded);

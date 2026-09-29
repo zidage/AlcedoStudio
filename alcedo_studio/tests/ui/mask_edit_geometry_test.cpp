@@ -130,7 +130,6 @@ TEST(MaskEditGeometryTest, MaskReferenceMappingRoundTripsAcrossZoomPanAndDpr) {
   ImageGeometryParams image;
   image.crop_rect        = NormalizedRect{0.10f, 0.15f, 0.70f, 0.60f};
   image.rotation_degrees = 23.0f;
-  image.expand_to_fit    = true;
   const auto cropped =
       ResolveRenderGeometry(MakeSourceGeometry({400, 300}, {400, 300}), image, {}, {}, {});
   MaskEditViewMapping crop_mapping = fit;
@@ -235,7 +234,7 @@ TEST(MaskEditGeometryTest, InvalidGeometryRejectsMaskPress) {
 
   editor_rhi::EditorInteractionController controller;
   controller.setViewportMetrics(800, 600, 1.0);
-  controller.setImageSize(400, 300);
+  controller.setRenderReferenceSize(400, 300);
   EXPECT_FALSE(controller.MapItemToMaskReference(400.0, 300.0, false).has_value());
   controller.setDisplayedMaskGeometry(
       MaskEditGeometry::MakeIdentityPhotographGeometry({400, 300}));
@@ -274,7 +273,6 @@ TEST(MaskEditGeometryTest, CroppedRotatedPhotographUsesResolvedGeometryNotIdenti
   ImageGeometryParams image;
   image.crop_rect        = NormalizedRect{0.10f, 0.15f, 0.55f, 0.60f};
   image.rotation_degrees = 18.0f;
-  image.expand_to_fit    = true;
   const Extent2D full{400, 300};
   const auto    resolved = MaskEditGeometry::MakeDocumentPhotographGeometry(full, image);
   const auto    identity = MaskEditGeometry::MakeIdentityPhotographGeometry(full);
@@ -302,7 +300,6 @@ TEST(MaskEditGeometryTest, CroppedRotatedPhotographUsesResolvedGeometryNotIdenti
 
   editor_rhi::EditorInteractionController controller;
   controller.setViewportMetrics(400, 300, 1.0);
-  controller.setImageSize(400, 300);
   controller.setDisplayedMaskGeometry(resolved);
   controller.setRenderReferenceSize(static_cast<int>(resolved.edit_extent.width),
                                      static_cast<int>(resolved.edit_extent.height));

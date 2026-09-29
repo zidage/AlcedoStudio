@@ -18,7 +18,7 @@ namespace alcedo {
  *
  * @param source Decoded and full-reference extents. @p decoded_to_reference is rebuilt
  *        from those extents.
- * @param image Document crop / rotation / expand_to_fit.
+ * @param image Document crop / rotation and the output frame (crop frame or preview bounds).
  * @param view Visible EditSpace rect and optional viewport size.
  * @param resolution Render scale, max edge, and filter quality.
  * @param footprint Source-pixel neighborhood. @p requires_full_reference forces full decoded

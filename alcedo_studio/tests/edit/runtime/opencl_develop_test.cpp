@@ -606,7 +606,6 @@ TEST_F(OpenClDevelopFixture, OpenClGeometryUsesOneResampleForCropRotationViewpor
   ImageGeometryParams image;
   image.crop_rect        = NormalizedRect{0.25f, 0.25f, 0.50f, 0.50f};
   image.rotation_degrees = 15.0f;
-  image.expand_to_fit    = true;
   ViewRequest view;
   view.visible_rect_in_edit_space = NormalizedRect{0.10f, 0.10f, 0.80f, 0.80f};
   view.viewport_extent            = Extent2D{40, 30};

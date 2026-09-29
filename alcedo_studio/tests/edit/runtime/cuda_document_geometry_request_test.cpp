@@ -130,9 +130,9 @@ class CudaDocumentGeometryRequestFixture : public ::testing::Test {
     return Render(*renderer_, *source_->Freeze(), request);
   }
 
-  static auto Uncropped() -> RenderRequest {
+  static auto GeometryPanelPreview() -> RenderRequest {
     RenderRequest request;
-    request.document_geometry = DocumentGeometryUse::UncroppedSource;
+    request.document_geometry = DocumentGeometryUse::RotatedUncroppedSource;
     return request;
   }
 
@@ -167,39 +167,78 @@ TEST_F(CudaDocumentGeometryRequestFixture, RotatedCropFastPreviewRoiMatchesFullF
 }
 
 TEST_F(CudaDocumentGeometryRequestFixture,
-       GeometryPanelFrameShowsUncroppedSourceAndReusesSensorDevelop) {
+       GeometryPanelFrameShowsRotatedUncroppedSourceAndReusesSensorDevelop) {
   const auto document_before = document_->ToJson();
   const auto cropped         = Render();
   ASSERT_FALSE(cropped.empty());
 
   renderer_->ResetStats();
-  const auto uncropped = Render(Uncropped());
-  ASSERT_FALSE(uncropped.empty());
+  const auto preview = Render(GeometryPanelPreview());
+  ASSERT_FALSE(preview.empty());
   const auto stats = renderer_->Stats();
   EXPECT_EQ(stats.pass.sensor_develop_execute, 0U);
   EXPECT_EQ(stats.pass.sensor_develop_skip, 1U);
   EXPECT_EQ(stats.pass.source_h2d_count, 0U);
   EXPECT_EQ(stats.pass.geometry_execute, 1U);
 
-  // Reference: the same source rendered from a document with identity geometry. Its extent is the
-  // developed source extent, so equal size means the frame has the uncropped source aspect ratio.
+  // Reference: a document with the same rotation and no crop. The preview ignores the crop.
+  auto rotated_only = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
+  gpu_dag_test::EnsureTestCameraProfile(*rotated_only);
+  rotated_only->Geometry().SetRotationDegrees(7.0f);
+  CudaProductRenderer reference_renderer(ExecutorRole::Interactive, MakeUnpacker());
+  const auto          expected = Render(reference_renderer,
+                                        *test::FreezeInNewLineage(*rotated_only),
+                                        GeometryPanelPreview());
+  ASSERT_FALSE(expected.empty());
+  EXPECT_EQ(preview.size(), expected.size());
+  EXPECT_FALSE(preview.size() == cropped.size());
+  // The preview frames the whole rotated source, so it is larger than the uncropped source.
   auto identity = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
   gpu_dag_test::EnsureTestCameraProfile(*identity);
   CudaProductRenderer identity_renderer(ExecutorRole::Interactive, MakeUnpacker());
-  const auto          expected =
+  const auto          uncropped =
       Render(identity_renderer, *test::FreezeInNewLineage(*identity), RenderRequest{});
-  ASSERT_FALSE(expected.empty());
-  EXPECT_EQ(uncropped.size(), expected.size());
-  EXPECT_FALSE(uncropped.size() == cropped.size());
-  EXPECT_LE(MaxRgbDifference(uncropped, expected), kPixelTolerance);
+  ASSERT_FALSE(uncropped.empty());
+  EXPECT_GT(preview.cols, uncropped.cols);
+  EXPECT_GT(preview.rows, uncropped.rows);
+  EXPECT_LE(MaxRgbDifference(preview, expected), kPixelTolerance);
 
   EXPECT_EQ(document_->ToJson(), document_before);
+}
+
+TEST_F(CudaDocumentGeometryRequestFixture, RotatedFullFrameCropHasNoBorderCorners) {
+  auto rotated = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
+  gpu_dag_test::EnsureTestCameraProfile(*rotated);
+  rotated->Geometry().SetRotationDegrees(7.0f);
+  CudaProductRenderer renderer(ExecutorRole::Interactive, MakeUnpacker());
+  const auto          pixels =
+      Render(renderer, *test::FreezeInNewLineage(*rotated), RenderRequest{});
+  ASSERT_FALSE(pixels.empty());
+  // The frame shrinks inside the rotated source, so the output is smaller than the source.
+  auto identity = std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument());
+  gpu_dag_test::EnsureTestCameraProfile(*identity);
+  CudaProductRenderer identity_renderer(ExecutorRole::Interactive, MakeUnpacker());
+  const auto          uncropped =
+      Render(identity_renderer, *test::FreezeInNewLineage(*identity), RenderRequest{});
+  ASSERT_FALSE(uncropped.empty());
+  EXPECT_LT(pixels.cols, uncropped.cols);
+  EXPECT_LT(pixels.rows, uncropped.rows);
+
+  // The synthetic source varies by a few percent; a border corner would be black.
+  const float center = pixels.at<cv::Vec4f>(pixels.rows / 2, pixels.cols / 2)[1];
+  ASSERT_GT(center, 0.0f);
+  for (const auto& [row, col] : {std::pair{0, 0}, std::pair{0, pixels.cols - 1},
+                                 std::pair{pixels.rows - 1, 0},
+                                 std::pair{pixels.rows - 1, pixels.cols - 1}}) {
+    EXPECT_GT(pixels.at<cv::Vec4f>(row, col)[1], 0.5f * center)
+        << "corner (" << row << ", " << col << ")";
+  }
 }
 
 TEST_F(CudaDocumentGeometryRequestFixture, ClosingGeometryPanelRendersDocumentCropAgain) {
   const auto first_cropped = Render();
   ASSERT_FALSE(first_cropped.empty());
-  ASSERT_FALSE(Render(Uncropped()).empty());
+  ASSERT_FALSE(Render(GeometryPanelPreview()).empty());
 
   const auto after_close = Render();
   EXPECT_EQ(after_close.size(), first_cropped.size());

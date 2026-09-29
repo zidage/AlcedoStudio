@@ -15,6 +15,7 @@
 
 #include "app/editor_adjustment_types.hpp"
 #include "edit/geometry/types.hpp"
+#include "edit/graph/image_geometry_model.hpp"
 #include "edit/operators/models/color_wheel_model.hpp"
 #include "edit/operators/models/curve_model.hpp"
 #include "edit/operators/models/hls_model.hpp"
@@ -93,9 +94,10 @@ struct EditorPanelLensValue {
 };
 
 struct EditorPanelGeometryValue {
-  NormalizedRect crop_rect{};
-  float          rotation_degrees = 0.0f;
-  bool           expand_to_fit    = true;
+  NormalizedRect  crop_rect{};
+  float           rotation_degrees = 0.0f;
+  std::string     aspect_preset;
+  CropAspectRatio aspect_ratio{};
 };
 
 using EditorPanelFieldValue =

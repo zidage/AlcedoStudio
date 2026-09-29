@@ -120,7 +120,11 @@ auto FieldMap(const alcedo::EditorPanelFieldPresentation& field) -> QVariantMap 
           QVariantMap crop;
           crop.insert(QStringLiteral("crop_rect"), rect);
           crop.insert(QStringLiteral("angle_degrees"), value.rotation_degrees);
-          crop.insert(QStringLiteral("expand_to_fit"), value.expand_to_fit);
+          crop.insert(QStringLiteral("aspect_ratio_preset"), String(value.aspect_preset));
+          QVariantMap aspect;
+          aspect.insert(QStringLiteral("width"), value.aspect_ratio.width);
+          aspect.insert(QStringLiteral("height"), value.aspect_ratio.height);
+          crop.insert(QStringLiteral("aspect_ratio"), aspect);
           map.insert(QStringLiteral("crop_rotate"), crop);
         }
       },

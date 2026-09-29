@@ -1256,27 +1256,6 @@ alcedo_ui_gtest_discover_tests(EditorRawDecodePanelQmlTest
     PROPERTIES LABELS "workspace_qml;raw_decode_panel")
 alcedo_register_test_target(EditorRawDecodePanelQmlTest ui)
 
-# Geometry overlay draft: crop-frame edits must not emit CropRotate view routing.
-add_executable(EditorGeometryOverlayDraftRoutingTest
-    ${ALCEDO_TEST_ROOT}/ui/editor_geometry_overlay_draft_routing_test.cpp
-    ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp
-)
-target_include_directories(EditorGeometryOverlayDraftRoutingTest
-    PUBLIC ${ALCEDO_INCLUDE_DIR}
-)
-target_link_libraries(EditorGeometryOverlayDraftRoutingTest
-    PRIVATE
-        EditorRhiViewport
-        GTest::gtest
-        Qt6::Core
-        Qt6::Gui
-        Qt6::Test
-)
-alcedo_ui_gtest_discover_tests(EditorGeometryOverlayDraftRoutingTest
-    TEST_PREFIX "EditorGeometryOverlayDraftRoutingTest."
-    PROPERTIES LABELS "geometry_overlay;interaction")
-alcedo_register_test_target(EditorGeometryOverlayDraftRoutingTest ui)
-
 add_executable(MaskEditGeometryTest
     ${ALCEDO_TEST_ROOT}/ui/mask_edit_geometry_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp
@@ -1347,6 +1326,32 @@ alcedo_ui_gtest_discover_tests(OverlayCursorTest
     TEST_PREFIX "OverlayCursorTest."
     PROPERTIES LABELS "mask_overlay;editor_rhi")
 alcedo_register_test_target(OverlayCursorTest ui)
+
+# Geometry crop frame (#221): presented-frame mapping, source size, frame-space
+# edits under the rotated preview, rotated-source constraint, and fit view lock.
+add_executable(EditorCropInteractionTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_crop_interaction_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(EditorCropInteractionTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorCropInteractionTest
+    PRIVATE
+        EditorRhiViewport
+        EditGeometry
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Test
+        Qt6::Quick
+        Qt6::Widgets
+)
+alcedo_ui_gtest_discover_tests(EditorCropInteractionTest
+    TEST_PREFIX "EditorCropInteractionTest."
+    PROPERTIES LABELS "geometry_overlay;interaction")
+alcedo_register_test_target(EditorCropInteractionTest ui)
 
 add_executable(AnalyticMaskCreationTest
     ${ALCEDO_TEST_ROOT}/ui/analytic_mask_creation_test.cpp

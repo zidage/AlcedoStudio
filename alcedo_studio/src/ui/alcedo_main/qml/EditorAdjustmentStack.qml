@@ -162,11 +162,11 @@ Item {
         return true
     }
 
-    function confirmGeometryAndReturnToTone() {
+    function returnFromGeometryToTone() {
         if (root.activePanel !== "geometry")
             return false
-        if (typeof geometryPanel.confirmAndReturnToTone === "function") {
-            geometryPanel.confirmAndReturnToTone()
+        if (typeof geometryPanel.returnToTone === "function") {
+            geometryPanel.returnToTone()
             return true
         }
         return false

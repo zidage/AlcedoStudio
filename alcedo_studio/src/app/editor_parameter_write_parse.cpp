@@ -493,19 +493,54 @@ auto ParseNormalizedRect(const nlohmann::json& value, std::string_view context) 
           ReadFiniteFloat(object.at("h"), std::string{context} + ".h")};
 }
 
+auto ParseCropAspectRatio(const nlohmann::json& value, std::string_view context)
+    -> CropAspectRatio {
+  CropAspectRatio ratio;
+  if (value.is_array()) {
+    if (value.size() != 2) {
+      throw std::invalid_argument(std::string{context} + " must contain two values");
+    }
+    ratio.width  = ReadFiniteFloat(value.at(0), std::string{context} + "[0]");
+    ratio.height = ReadFiniteFloat(value.at(1), std::string{context} + "[1]");
+  } else {
+    const auto& object = RequireObject(value, context);
+    RejectUnknownKeys(object, {"width", "height"}, context);
+    if (!object.contains("width") || !object.contains("height")) {
+      throw std::invalid_argument(std::string{context} + " requires width and height");
+    }
+    ratio.width  = ReadFiniteFloat(object.at("width"), std::string{context} + ".width");
+    ratio.height = ReadFiniteFloat(object.at("height"), std::string{context} + ".height");
+  }
+  if (ratio.width <= 0.0f || ratio.height <= 0.0f) {
+    throw std::invalid_argument(std::string{context} + " must be positive");
+  }
+  return ratio;
+}
+
 auto ParseGeometryUpdate(const nlohmann::json& params) -> ImageGeometryUpdate {
   const auto& object = UnwrapObject(params, {"crop_rotate"}, "crop_rotate");
+  // History commits replay stored ImageGeometryModel JSON through this parser. Models stored
+  // before the crop-frame semantics carry `expand_to_fit`; the key has no meaning now and is read
+  // as a known key so that history still loads.
   RejectUnknownKeys(object,
-                    {"crop_rect", "rotation_degrees", "angle_degrees", "expand_to_fit", "enabled",
-                     "enable_crop", "aspect_ratio_preset", "aspect_ratio", "source_size"},
+                    {"crop_rect", "rotation_degrees", "angle_degrees", "aspect_ratio_preset",
+                     "aspect_preset", "aspect_ratio", "expand_to_fit"},
                     "crop_rotate");
+  if (object.contains("expand_to_fit")) {
+    static_cast<void>(ReadBoolean(object.at("expand_to_fit"), "crop_rotate.expand_to_fit"));
+  }
   ImageGeometryUpdate update;
   if (object.contains("crop_rect")) {
     update.crop_rect = ParseNormalizedRect(object.at("crop_rect"), "crop_rotate.crop_rect");
   }
   update.rotation_degrees =
       ReadOptionalFloat(object, {"rotation_degrees", "angle_degrees"}, "crop_rotate");
-  update.expand_to_fit = ReadOptionalBool(object, {"expand_to_fit"}, "crop_rotate");
+  update.aspect_preset =
+      ReadOptionalString(object, {"aspect_ratio_preset", "aspect_preset"}, "crop_rotate");
+  if (object.contains("aspect_ratio")) {
+    update.aspect_ratio =
+        ParseCropAspectRatio(object.at("aspect_ratio"), "crop_rotate.aspect_ratio");
+  }
   return update;
 }
 

@@ -18,6 +18,7 @@
 #include "app/pipeline_history_applier.hpp"
 #include "edit/geometry/types.hpp"
 #include "edit/graph/adjustment_ownership.hpp"
+#include "edit/graph/image_geometry_model.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/graph_ids.hpp"
@@ -143,7 +144,6 @@ TEST(DocumentTransferTest, ImportRejectsMissingOrInvalidProtectionAndDefaultIden
 TEST(DocumentTransferTest, PasteAppliesDevelopFieldsAndGeometryButKeepsTargetCameraProfile) {
   auto target = CreateDefaultPipelineDocument();
   target.Geometry().SetRotationDegrees(27.0f);
-  target.Geometry().SetExpandToFit(true);
   auto develop_payload                                 = target.Develop()->Params().Params();
   develop_payload.highlights_reconstruct               = false;
   develop_payload.demosaic_method                      = "AMaZE";
@@ -159,6 +159,11 @@ TEST(DocumentTransferTest, PasteAppliesDevelopFieldsAndGeometryButKeepsTargetCam
 
   auto       source          = test::DocumentWithExposureEv(-0.5);
   source.Geometry().SetRotationDegrees(90.0f);
+  // The recorded aspect constraint travels with the geometry.
+  ImageGeometryUpdate source_aspect;
+  source_aspect.aspect_preset = std::string("ratio_4_3_35mm");
+  source_aspect.aspect_ratio  = CropAspectRatio{4.0f, 3.0f};
+  source.Geometry().ApplyUpdate(source_aspect);
   auto source_develop                   = source.Develop()->Params().Params();
   source_develop.highlights_reconstruct = true;
   source_develop.demosaic_method        = "default";

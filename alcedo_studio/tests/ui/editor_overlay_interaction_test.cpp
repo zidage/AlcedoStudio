@@ -23,6 +23,7 @@
 
 #include "ui/edit_viewer/crop_geometry.hpp"
 #include "ui/edit_viewer/edit_viewer_overlay_geometry.hpp"
+#include "ui/edit_viewer/mask_edit_geometry.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 #include "ui/edit_viewer/view_transform_controller.hpp"
 #include "ui/editor_rhi/direct_frame_sink.hpp"
@@ -48,8 +49,15 @@ const ViewportCase kDprCases[] = {
     {"dpr2", 800.0, 600.0, 2.0},
 };
 
+auto ExtentOf(int width, int height) -> Extent2D {
+  return Extent2D{static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height)};
+}
+
+// Presents an uncropped, unrotated frame of a width x height source, as the
+// session does when a frame reaches the viewport.
 void ConfigureImage(EditorInteractionController& controller, int width = 4000, int height = 3000) {
-  controller.setImageSize(width, height);
+  controller.setDisplayedMaskGeometry(
+      MaskEditGeometry::MakeIdentityPhotographGeometry(ExtentOf(width, height)));
   controller.setRenderReferenceSize(width, height);
 }
 
@@ -195,37 +203,6 @@ TEST(EditorOverlayInteractionTest, MaxZoomStillRoutesDetailRefreshAfterNoOpWheel
             static_cast<int>(EditorInteractionController::ViewChangeKind::DetailRefresh));
 }
 
-TEST(EditorOverlayInteractionTest, TrueZoomUsesCroppedOutputAfterCropCommit) {
-  EditorInteractionController controller;
-  controller.setViewportMetrics(800, 600, 1.0);
-  ConfigureImage(controller, 4000, 3000);  // source 4000x3000, fitFraction 0.2
-
-  // Editing a crop (overlay visible): CROP_ROTATE is disabled, so the displayed
-  // image is still the full source. Dragging the rect must NOT change true zoom.
-  controller.setCropOverlayVisible(true);
-  EXPECT_NEAR(controller.trueZoom(), 0.2f, 1.0e-5f);
-  controller.setCropRectNormalized(QRectF(0.25, 0.25, 0.5, 0.5));  // central 50% crop
-  EXPECT_NEAR(controller.trueZoom(), 0.2f, 1.0e-5f);               // still source-based
-
-  // Close the panel → crop commits (overlay hidden). Displayed image is now the
-  // cropped output (round(4000*0.5) x round(3000*0.5) = 2000x1500, same aspect),
-  // so fitFraction becomes 800/2000 = 0.4 and true zoom at fit is 40%.
-  controller.setCropOverlayVisible(false);
-  EXPECT_NEAR(controller.trueZoom(), 0.4f, 1.0e-5f);
-
-  // 1:1 is now 1 cropped-output pixel per screen pixel → field 1/0.4 = 2.5.
-  controller.zoomToActualPixels();
-  EXPECT_NEAR(controller.zoom(), 2.5f, 1.0e-4f);
-  EXPECT_NEAR(controller.trueZoom(), 1.0f, 1.0e-4f);
-
-  // Reopening the panel switches back to the full source (1:1 field 5.0).
-  controller.setCropOverlayVisible(true);
-  EXPECT_NEAR(controller.trueZoom(), 0.5f, 1.0e-4f);  // 0.2 * 2.5
-  controller.zoomToActualPixels();
-  EXPECT_NEAR(controller.zoom(), 5.0f, 1.0e-4f);
-  EXPECT_NEAR(controller.trueZoom(), 1.0f, 1.0e-4f);
-}
-
 TEST(EditorOverlayInteractionTest, PanDragMovesViewWhenCropToolDisabled) {
   EditorInteractionController controller;
   controller.setViewportMetrics(800, 600, 1.0);
@@ -275,7 +252,7 @@ TEST(EditorOverlayInteractionTest, CropCreateDragUpdatesNormalizedRectAndFinaliz
     ASSERT_FALSE(start.isNull()) << c.name;
     ASSERT_FALSE(end.isNull()) << c.name;
 
-    QSignalSpy rect_spy(&controller, &EditorInteractionController::cropRectCommitted);
+    QSignalSpy rect_spy(&controller, &EditorInteractionController::cropFrameEdited);
     controller.handlePress(start.x(), start.y(), static_cast<int>(Qt::LeftButton));
     controller.handleMove(end.x(), end.y(), static_cast<int>(Qt::LeftButton));
     controller.handleRelease(end.x(), end.y(), static_cast<int>(Qt::LeftButton));
@@ -314,26 +291,6 @@ TEST(EditorOverlayInteractionTest, DisablingCropToolCancelsInFlightDragWithoutCo
   EXPECT_NEAR(after.y(), initial.y(), 1.0e-3);
   EXPECT_NEAR(after.width(), initial.width(), 1.0e-3);
   EXPECT_NEAR(after.height(), initial.height(), 1.0e-3);
-}
-
-TEST(EditorOverlayInteractionTest, SetCropRectNormalizedHonorsActiveRotation) {
-  EditorInteractionController controller;
-  controller.setViewportMetrics(800, 600, 1.0);
-  ConfigureImage(controller, 400, 300);
-  controller.setCropOverlayVisible(true);
-  controller.setCropRotationDegrees(35.0f);
-  // A near-full rect would put rotated corners outside the image without clamp.
-  controller.setCropRectNormalized(QRectF(0.05, 0.05, 0.9, 0.9));
-
-  const auto crop = controller.viewerState().GetCropOverlay();
-  const auto corners =
-      CropGeometry::RotatedCropCornersUv(crop.rect, crop.rotation_degrees, crop.metric_aspect);
-  for (const auto& c : corners) {
-    EXPECT_GE(c.x(), -1e-4);
-    EXPECT_LE(c.x(), 1.0 + 1e-4);
-    EXPECT_GE(c.y(), -1e-4);
-    EXPECT_LE(c.y(), 1.0 + 1e-4);
-  }
 }
 
 TEST(EditorOverlayInteractionTest, DoubleTapResetsCropWhenToolEnabledAndTogglesFitZoomOtherwise) {
@@ -468,7 +425,7 @@ TEST(EditorOverlayInteractionTest, OverlaySceneGeometryBuildsMaskBorderGridAndHa
   EXPECT_FALSE(scene.detail_roi_triangles.empty());
 }
 
-TEST(EditorOverlayInteractionTest, OverlaySceneGeometryGoldenAcrossViewportAspects) {
+TEST(EditorOverlayInteractionTest, OverlaySceneGeometryKeepsCropFrameInsideImageAcrossViewportAspects) {
   struct Case {
     const char* name;
     qreal       w;
@@ -722,7 +679,8 @@ TEST(EditorOverlayInteractionTest, EqualOutputSizeImageSwitchResyncsRenderRefere
 
   EditorInteractionController controller;
   controller.setViewportMetrics(800, 600, 1.0);
-  controller.setImageSize(4000, 3000);
+  controller.setDisplayedMaskGeometry(
+      MaskEditGeometry::MakeIdentityPhotographGeometry(Extent2D{4000, 3000}));
   controller.forceRenderReferenceSize(800, 600);
   EXPECT_EQ(controller.renderReferenceWidth(), 800);
   EXPECT_EQ(controller.renderReferenceHeight(), 600);
@@ -731,8 +689,8 @@ TEST(EditorOverlayInteractionTest, EqualOutputSizeImageSwitchResyncsRenderRefere
   viewport.setImageIdentity(20);
   viewport.setSessionEpoch(2);
   controller.resetPresentationStateForNewImage();
-  controller.setImageSize(6000, 4000);
-  // Interim source-size fallback (production QML path).
+  controller.setDisplayedMaskGeometry(
+      MaskEditGeometry::MakeIdentityPhotographGeometry(Extent2D{6000, 4000}));
   controller.setRenderReferenceSize(6000, 4000);
   EXPECT_EQ(controller.renderReferenceWidth(), 6000);
 
@@ -755,7 +713,8 @@ TEST(EditorOverlayInteractionTest, EqualOutputSizeImageSwitchResyncsRenderRefere
 TEST(EditorOverlayInteractionTest, ForceRenderReferenceSizeReappliesEqualDimensions) {
   EditorInteractionController controller;
   controller.setViewportMetrics(640, 480, 1.0);
-  controller.setImageSize(1000, 800);
+  controller.setDisplayedMaskGeometry(
+      MaskEditGeometry::MakeIdentityPhotographGeometry(Extent2D{1000, 800}));
   controller.setRenderReferenceSize(512, 384);
   EXPECT_EQ(controller.renderReferenceWidth(), 512);
 
@@ -848,7 +807,8 @@ TEST(EditorOverlayInteractionTest, DetailPatchEnsureSizeDoesNotRewriteRenderRefe
 
   EditorInteractionController controller;
   controller.setViewportMetrics(800, 600, 1.0);
-  controller.setImageSize(4000, 3000);
+  controller.setDisplayedMaskGeometry(
+      MaskEditGeometry::MakeIdentityPhotographGeometry(Extent2D{4000, 3000}));
   controller.forceRenderReferenceSize(last_w, last_h);
   EXPECT_EQ(controller.renderReferenceWidth(), 2048);
   EXPECT_EQ(controller.renderReferenceHeight(), 1536);
@@ -1063,12 +1023,12 @@ TEST(EditorOverlayInteractionTest, DoubleTapZoomReportsDetailRefreshOnlyAfterAni
             static_cast<int>(EditorInteractionController::ViewChangeKind::DetailRefresh));
 }
 
-TEST(EditorOverlayInteractionTest, ViewChangeReportedForZoomPanCropRotateAndResize) {
+TEST(EditorOverlayInteractionTest, ViewChangeReportedForZoomPanDetailAndResize) {
   // Phase 5D D2: input handlers only report the new view via viewChangeReported;
   // they never choose or submit pipeline tasks. The kind tells the session how
-  // to route: ZoomPan/Resize reuse the current full frame; CropRotate needs a
-  // fresh InteractivePrimary; DetailRefresh (a zoomed viewport ROI) needs a
-  // DetailPatch. viewChangeReported is emitted AFTER viewStateChanged so the QML
+  // to route: ZoomPan/Resize reuse the current full frame; DetailRefresh (a
+  // zoomed viewport ROI) needs a DetailPatch. Crop edits are document writes and
+  // are never view changes. viewChangeReported is emitted AFTER viewStateChanged so the QML
   // view push (and sink region) lands before the session routes the intent.
   EditorInteractionController controller;
   controller.setViewportMetrics(800, 600, 1.0);
@@ -1110,17 +1070,11 @@ TEST(EditorOverlayInteractionTest, ViewChangeReportedForZoomPanCropRotateAndResi
   ASSERT_FALSE(spy.empty());
   EXPECT_EQ(last_kind(), static_cast<int>(EditorInteractionController::ViewChangeKind::ZoomPan));
 
-  // Crop rect change with overlay closed → baked content changes → CropRotate.
+  // Crop values shown on the overlay are not view changes.
   spy.clear();
   controller.setCropRectNormalized(QRectF(0.25, 0.25, 0.5, 0.5));
-  ASSERT_FALSE(spy.empty());
-  EXPECT_EQ(last_kind(), static_cast<int>(EditorInteractionController::ViewChangeKind::CropRotate));
-
-  // Crop rotation change with overlay closed → CropRotate.
-  spy.clear();
   controller.setCropRotationDegrees(15.0f);
-  ASSERT_FALSE(spy.empty());
-  EXPECT_EQ(last_kind(), static_cast<int>(EditorInteractionController::ViewChangeKind::CropRotate));
+  EXPECT_TRUE(spy.empty());
 
   // Viewport metrics change (resize) → Resize (rebuild render-pass QRhi objects,
   // reuse the current full frame).
@@ -1128,57 +1082,6 @@ TEST(EditorOverlayInteractionTest, ViewChangeReportedForZoomPanCropRotateAndResi
   controller.setViewportMetrics(1024, 768, 1.0);
   ASSERT_FALSE(spy.empty());
   EXPECT_EQ(last_kind(), static_cast<int>(EditorInteractionController::ViewChangeKind::Resize));
-}
-
-TEST(EditorOverlayInteractionTest, GeometryOverlayCropDraftDoesNotRouteCropRotateViewChanges) {
-  // While the geometry overlay is open, crop-frame edits are pure UI over the
-  // source-frame preview. Pipeline bake is owned by panel confirm (leave/Enter).
-  EditorInteractionController controller;
-  controller.setViewportMetrics(800, 600, 1.0);
-  ConfigureImage(controller, 400, 300);
-  controller.setCropToolEnabled(true);
-  controller.setCropOverlayVisible(true);
-
-  QSignalSpy spy(&controller, &EditorInteractionController::viewChangeReported);
-  ASSERT_TRUE(spy.isValid());
-  QSignalSpy rect_spy(&controller, &EditorInteractionController::cropRectCommitted);
-  ASSERT_TRUE(rect_spy.isValid());
-  QSignalSpy rot_spy(&controller, &EditorInteractionController::cropRotationCommitted);
-  ASSERT_TRUE(rot_spy.isValid());
-
-  controller.setCropRectNormalized(QRectF(0.25, 0.25, 0.5, 0.5));
-  EXPECT_NEAR(controller.cropRectNormalized().x(), 0.25, 1e-4);
-  EXPECT_GE(rect_spy.count(), 1);
-  EXPECT_TRUE(spy.empty()) << "draft overlay rect must not emit viewChangeReported";
-
-  spy.clear();
-  controller.setCropRotationDegrees(12.0f);
-  EXPECT_NEAR(controller.cropRotationDegrees(), 12.0f, 1e-4f);
-  EXPECT_GE(rot_spy.count(), 1);
-  EXPECT_TRUE(spy.empty()) << "draft overlay rotation must not emit viewChangeReported";
-
-  // Drag a new crop rect over the source frame; intermediate moves + release
-  // must stay local (no CropRotate routing).
-  spy.clear();
-  rect_spy.clear();
-  const QPointF start = controller.imageUvToItemPoint(0.1, 0.1);
-  const QPointF end   = controller.imageUvToItemPoint(0.4, 0.45);
-  ASSERT_FALSE(start.isNull());
-  ASSERT_FALSE(end.isNull());
-  controller.handlePress(start.x(), start.y(), static_cast<int>(Qt::LeftButton));
-  controller.handleMove(end.x(), end.y(), static_cast<int>(Qt::LeftButton));
-  controller.handleRelease(end.x(), end.y(), static_cast<int>(Qt::LeftButton));
-  EXPECT_GE(rect_spy.count(), 1);
-  EXPECT_TRUE(spy.empty()) << "crop-frame drag must not route pipeline view changes";
-
-  // Closing the overlay restores content routing for subsequent crop commits.
-  controller.setCropOverlayVisible(false);
-  controller.setCropToolEnabled(false);
-  spy.clear();
-  controller.setCropRectNormalized(QRectF(0.1, 0.1, 0.8, 0.8));
-  ASSERT_FALSE(spy.empty());
-  EXPECT_EQ(spy.takeLast().at(0).toInt(),
-            static_cast<int>(EditorInteractionController::ViewChangeKind::CropRotate));
 }
 
 }  // namespace alcedo::editor_rhi

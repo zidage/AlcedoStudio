@@ -1156,7 +1156,8 @@ TEST_F(WorkspaceShellTests, EditorViewportReceivesRealPointerAndWheelEvents) {
   EXPECT_TRUE(viewport_item->isVisible());
 
   // Seed non-zero image geometry so pan/zoom math is defined.
-  interaction->setImageSize(4000, 3000);
+  interaction->setDisplayedMaskGeometry(
+      alcedo::MaskEditGeometry::MakeIdentityPhotographGeometry(alcedo::Extent2D{4000, 3000}));
   interaction->setRenderReferenceSize(4000, 3000);
   interaction->setViewportMetrics(viewport_item->width(), viewport_item->height(), 1.0);
   interaction->applyViewTransformForTest(2.0f, 0.0f, 0.0f);

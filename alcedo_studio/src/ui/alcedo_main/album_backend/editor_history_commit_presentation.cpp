@@ -17,6 +17,7 @@
 #include "app/editor_adjustment_pipeline.hpp"
 #include "app/editor_history_types.hpp"
 #include "app/pipeline_document_history.hpp"
+#include "edit/graph/image_geometry_model.hpp"
 #include "json.hpp"
 
 namespace alcedo::ui {
@@ -344,27 +345,22 @@ auto OdtTargetLabel(const nlohmann::json& params) -> QString {
   return QStringLiteral("Output");
 }
 
-auto CropAreaPercent(const nlohmann::json& params) -> std::optional<double> {
-  const auto w = JsonNumberAtPath(params, {"crop_rotate", "crop_rect", "w"});
-  const auto h = JsonNumberAtPath(params, {"crop_rotate", "crop_rect", "h"});
-  if (!w.has_value() || !h.has_value()) {
-    return std::nullopt;
-  }
-  return std::clamp(*w * *h * 100.0, 0.0, 100.0);
+// Crop / Rotate commits store ImageGeometryModel::ToJson() for the before and after values.
+auto CropAreaPercent(const ImageGeometryModel& geometry) -> double {
+  const auto crop = geometry.CropRect();
+  return std::clamp(static_cast<double>(crop.w) * crop.h * 100.0, 0.0, 100.0);
 }
 
-auto FormatCropAspect(const nlohmann::json& params) -> QString {
-  const QString preset =
-      JsonStringAtPath(params, {"crop_rotate", "aspect_ratio_preset"}).value_or(QString());
-  if (!preset.isEmpty() && preset.compare(QStringLiteral("free"), Qt::CaseInsensitive) != 0) {
-    return PrettyToken(preset);
+auto FormatCropAspect(const ImageGeometryModel& geometry) -> QString {
+  const QString preset = QString::fromStdString(geometry.AspectPreset());
+  if (preset.compare(QStringLiteral("custom"), Qt::CaseInsensitive) == 0) {
+    const auto ratio = geometry.AspectRatio();
+    return QStringLiteral("%1:%2").arg(FormatNumber(ratio.width), FormatNumber(ratio.height));
   }
-  const auto w = JsonNumberAtPath(params, {"crop_rotate", "aspect_ratio", "width"});
-  const auto h = JsonNumberAtPath(params, {"crop_rotate", "aspect_ratio", "height"});
-  if (!w.has_value() || !h.has_value() || *w <= 0.0 || *h <= 0.0) {
+  if (preset.isEmpty() || preset.compare(QStringLiteral("free"), Qt::CaseInsensitive) == 0) {
     return QStringLiteral("Free");
   }
-  return QStringLiteral("%1:%2").arg(FormatNumber(*w), FormatNumber(*h));
+  return PrettyToken(preset);
 }
 
 auto CurvePointCount(const nlohmann::json& params) -> std::optional<std::size_t> {
@@ -586,28 +582,39 @@ auto SummarizeOdt(const nlohmann::json& after, const nlohmann::json& before) -> 
 
 auto SummarizeCropRotate(const nlohmann::json& after, const nlohmann::json& before)
     -> CommitSummary {
-  const auto angle     = JsonNumberAtPath(after, {"crop_rotate", "angle_degrees"});
-  const auto old_angle = JsonNumberAtPath(before, {"crop_rotate", "angle_degrees"});
-  if (angle.has_value() && (!old_angle.has_value() || std::fabs(*angle - *old_angle) > 1e-6)) {
-    return SignedScalar(old_angle, angle, QStringLiteral("\u00b0"));
+  if (!after.is_object()) {
+    return {QString(), QStringLiteral("Crop"), QStringLiteral("Geometry updated")};
   }
-  const bool crop_enabled = JsonBoolAtPath(after, {"crop_rotate", "enable_crop"}).value_or(false);
-  const bool old_crop     = JsonBoolAtPath(before, {"crop_rotate", "enable_crop"}).value_or(false);
-  const auto area         = CropAreaPercent(after);
-  const auto old_area     = CropAreaPercent(before);
-  if ((crop_enabled || old_crop) && area.has_value() &&
-      (!old_area.has_value() || std::fabs(*area - *old_area) > 1e-4 || crop_enabled != old_crop)) {
-    const QString after_text = QStringLiteral("%1%").arg(FormatNumber(*area));
+  const auto after_geometry  = ImageGeometryModel::FromJson(after);
+  const auto before_geometry = before.is_object() ? std::optional<ImageGeometryModel>(
+                                                        ImageGeometryModel::FromJson(before))
+                                                  : std::nullopt;
+  const std::optional<double> angle = after_geometry.RotationDegrees();
+  const std::optional<double> old_angle =
+      before_geometry.has_value() ? std::optional<double>(before_geometry->RotationDegrees())
+                                  : std::nullopt;
+  const bool angle_changed = old_angle.has_value() ? std::fabs(*angle - *old_angle) > 1e-6
+                                                   : std::fabs(*angle) > 1e-6;
+  if (angle_changed) {
+    return SignedScalar(old_angle, angle, QStringLiteral("°"));
+  }
+  const double area = CropAreaPercent(after_geometry);
+  const auto   old_area =
+      before_geometry.has_value() ? std::optional<double>(CropAreaPercent(*before_geometry))
+                                  : std::nullopt;
+  if (!old_area.has_value() || std::fabs(area - *old_area) > 1e-4) {
+    const QString after_text = QStringLiteral("%1%").arg(FormatNumber(area));
     const QString before_text =
         old_area.has_value() ? QStringLiteral("%1%").arg(FormatNumber(*old_area)) : QString();
     return {before_text, after_text,
             before_text.isEmpty() ? QStringLiteral("Crop area %1").arg(after_text)
-                                  : QStringLiteral("%1 \u2192 %2").arg(before_text, after_text)};
+                                  : QStringLiteral("%1 → %2").arg(before_text, after_text)};
   }
-  const QString aspect     = FormatCropAspect(after);
-  const QString old_aspect = FormatCropAspect(before);
-  if (!aspect.isEmpty() && aspect != old_aspect && !old_aspect.isEmpty()) {
-    return {old_aspect, aspect, QStringLiteral("%1 \u2192 %2").arg(old_aspect, aspect)};
+  const QString aspect = FormatCropAspect(after_geometry);
+  const QString old_aspect =
+      before_geometry.has_value() ? FormatCropAspect(*before_geometry) : QString();
+  if (aspect != old_aspect && !old_aspect.isEmpty()) {
+    return {old_aspect, aspect, QStringLiteral("%1 → %2").arg(old_aspect, aspect)};
   }
   return {QString(), QStringLiteral("Crop"), QStringLiteral("Geometry updated")};
 }

@@ -19,12 +19,17 @@ struct ViewTransformState {
   QVector2D pan  = {0.0f, 0.0f};
 };
 
+/**
+ * @brief Geometry panel crop frame shown on the viewport.
+ *
+ * @p rect and @p rotation_degrees use the document representation (ImageGeometryModel).
+ * @p aspect_ratio is width / height of the crop frame in source pixels.
+ */
 struct CropOverlayState {
   bool   tool_enabled       = false;
   bool   overlay_visible    = false;
   QRectF rect               = QRectF(0.0, 0.0, 1.0, 1.0);
   float  rotation_degrees   = 0.0f;
-  float  metric_aspect      = 1.0f;
   bool   aspect_locked      = false;
   float  aspect_ratio       = 1.0f;
 };
@@ -85,11 +90,6 @@ class ViewerState {
   void SetCropOverlayRotationDegrees(float angle_degrees) {
     std::lock_guard<std::mutex> lock(mutex_);
     state_.crop_overlay.rotation_degrees = angle_degrees;
-  }
-
-  void SetCropOverlayMetricAspect(float metric_aspect) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    state_.crop_overlay.metric_aspect = metric_aspect;
   }
 
   void SetCropOverlayAspectLock(bool enabled, float aspect_ratio) {

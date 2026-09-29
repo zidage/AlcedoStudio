@@ -208,16 +208,12 @@ Item {
                         // frame re-clamps pan/zoom and was causing FIT snaps after
                         // detail/quality handoff. Image switches clear ref via
                         // resetPresentationStateForNewImage before the first frame.
+                        // The source size comes from the presented frame's geometry
+                        // (EditorInteractionController::setDisplayedMaskGeometry), never
+                        // from a frame size.
                         onTargetSizeRequested: function (w, h) {
-                            if (w > 0 && h > 0) {
-                                // The crop operator snapshot normally provides source size.
-                                // Keep the first full frame as a fallback for legacy pipelines.
-                                if (editorInteraction.imageWidth <= 0
-                                        || editorInteraction.imageHeight <= 0) {
-                                    editorInteraction.setImageSize(w, h)
-                                }
+                            if (w > 0 && h > 0)
                                 editorInteraction.setRenderReferenceSize(w, h)
-                            }
                         }
                     }
 
@@ -639,9 +635,9 @@ Item {
                                 editorInteraction.zoomToActualPixels()
                                 event.accepted = true
                             } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-                                // Geometry confirm: bake draft crop and return to Tone.
-                                if (typeof adjustmentStack.confirmGeometryAndReturnToTone === "function"
-                                        && adjustmentStack.confirmGeometryAndReturnToTone()) {
+                                // Geometry: Enter leaves the panel for Tone.
+                                if (typeof adjustmentStack.returnFromGeometryToTone === "function"
+                                        && adjustmentStack.returnFromGeometryToTone()) {
                                     event.accepted = true
                                 }
                             }
@@ -692,13 +688,11 @@ Item {
                         ensurePresentationBinding()
                         if (!root.hasImage) {
                             editorInteraction.resetPresentationStateForNewImage()
-                            editorInteraction.setImageSize(0, 0)
                             editorInteraction.setRenderReferenceSize(0, 0)
                             return
                         }
                         // Drop previous image crop/ROI/mode before applying new geometry.
                         editorInteraction.resetPresentationStateForNewImage()
-                        editorInteraction.setImageSize(0, 0)
                     }
 
                     function pushViewToViewport() {
@@ -867,16 +861,16 @@ Item {
         }
     }
 
-    // Geometry confirm (legacy Enter / numpad Enter). Lives on the workspace so
-    // it still works when focus is on the right panel rather than the viewport.
+    // Geometry: Enter / numpad Enter leaves the panel for Tone. Lives on the
+    // workspace so it still works when focus is on the right panel.
     Shortcut {
         sequences: [ "Return", "Enter" ]
         enabled: root.editorControlsEnabled
                  && root.editorSession
                  && String(root.editorSession.activeAdjustmentPanel || "") === "geometry"
         onActivated: {
-            if (typeof adjustmentStack.confirmGeometryAndReturnToTone === "function")
-                adjustmentStack.confirmGeometryAndReturnToTone()
+            if (typeof adjustmentStack.returnFromGeometryToTone === "function")
+                adjustmentStack.returnFromGeometryToTone()
         }
     }
 }

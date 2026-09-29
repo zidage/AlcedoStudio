@@ -1107,18 +1107,34 @@ Suite totals:
 - **Open / Switch / Close still cancel Mask input** (P4 remaining gap), unchanged.
 - **`SleeveService` duplicates images without copying history** (P5 remaining gap): a copied image has no root, so after this phase it also cannot be opened in the editor (real error `has no edit history root`). Not fixed in this phase.
 
-### Geometry 面板缺陷（先于当前 P7 修复，方案待定）
+### Geometry 面板重构（#221，先于当前 P7）
 
-**状态：** 只记录现象，方案之后另行规划。缺陷记录：[#221](https://github.com/zidage/AlcedoStudio/issues/221)。
-这个面板可能需要彻底重构，作为 P7 进行；修复之后才进入当前的 P7（删除共享机制）。阶段编号在规划时调整。
+**状态：** 代码完成（2026-09-28），相关测试通过；手工 UI 验证未做。缺陷记录：[#221](https://github.com/zidage/AlcedoStudio/issues/221)。
 
-`ui/alcedo_main/qml/EditorGeometryPanel.qml`（裁切 / 旋转）现象：
+**原缺陷与根因：**
 
-1. **裁切后旋转，不是旋转裁切后的画面。** 裁切后旋转时，裁切框内的画面没有被当作新的"原图像"，而是变成以裁切框为视角去"看"原画面。
-2. **切换图像后 "Source Aspect" 变化，裁切失效。** 裁切并确认后切换图像，面板中的 "Source Aspect" 变成另一个值，可能是视口大小，而不是输入图像的源比例。此时复原裁切框，面板似乎把这个新的 aspect ratio 和对应的大小当作图像大小，裁切失效。
-3. **面板本应很简单。** 它只能在 full frame 视图中进入；从 ROI 视图进入时会自动回到 full frame。
+1. **裁切后旋转，不是旋转裁切后的画面。** 面板写死 `expand_to_fit=true`，输出是旋转后裁切框的外接框，四角采样到裁切框外的原图；叠加层又是"原图不动、框在转"。
+2. **切图后 "Source aspect" 变化，裁切失效。** 面板写入的 `source_size` 被解析器丢弃，面板于是退回 `interaction.metricAspect`，而它来自 `EditorWorkspace.qml` 用首帧尺寸调用 `setImageSize` 的回退（可能是已裁切输出或视口大小的帧）。
+3. **面板走独立的草稿通路**（Enter / 离开面板时确认、`panelDraftCommitRequested`、`setViewChangeRoutingEnabled`），与其他调整项不一致。
 
-相关代码事实（未做诊断）：面板的 `imageAspect` 取自已存 `crop_rotate` 条目中的 `source_size`；条目没有 `source_size` 时改用 `interaction.metricAspect`，"Source aspect" 标签显示的就是这个值。
+**语义（用户确认）：** Geometry 的输出就是裁切框这个长方形里的画面。裁切框在输出空间轴对齐，源图绕框中心旋转后由它取景；框的四个角不能超出源图，所以没有黑角。旋转时内容绕框中心转，框超出源图时按比例收缩。所有文档统一按此解释，`expand_to_fit` 删除。
+
+**主要改动：**
+
+- 管线：新增 `edit/geometry/crop_frame.{hpp,cpp}`（`ClampCropToRotatedSource`、`CropFrameCornersInReference`、`NormalizeRotationDegrees`），resolver 与 UI 共用同一个约束。`ImageGeometryParams.expand_to_fit` 换成 `GeometryOutputFrame`（`CropFrame` / 面板预览用的 `RotatedSourceBounds`）。`DocumentGeometryUse::UncroppedSource` 改为 `RotatedUncroppedSource`：整幅源图 + 文档旋转，外接框画布。GPU 重采样核不变。
+- 文档模型：`ImageGeometryModel` 删除 `expand_to_fit`，新增 `aspect_preset` / `aspect_ratio`（旧 JSON 缺省取默认）。解析器拒绝 `source_size` / `enabled` / `enable_crop`；历史回放仍接受旧键 `expand_to_fit` 并忽略。投影回传比例字段；历史摘要读模型真实键。命令服务里未使用的重复几何解析器删除。
+- 视口：裁切框以 presented frame 的 `ResolvedRenderGeometry` 为唯一坐标基准（与 Mask 共用 `MaskEditGeometry` 映射）；编辑在 frame space（reference 像素旋转 θ）里做轴对齐运算。源尺寸来自 `full_reference_extent`（`sourceImageWidth/Height`），删除 `setImageSize`、`metricAspect` 和 QML 首帧回退；真实缩放用 presented `edit_extent`。裁切工具打开时视图锁定在 fit（缩放、平移、双击、1:1 都不生效），不会出现 ROI detail patch。删除 `ViewChangeKind::CropRotate` 与 `setViewChangeRoutingEnabled`；指针编辑用一个信号 `cropFrameEdited(rect, degrees, isFinal)`。
+- 面板：`EditorGeometryPanel.qml` 重写，模型带 `submitter` + `paramsBuilder`（与 Display Transform 面板同一通路）：拖动发 interactive，松手 / 键入 / reset 发 settled，每次 settled 一次提交。删除草稿、确认与 `RequestPanelDraftCommit` / `panelDraftCommitRequested`。Enter 仍回到 Tone，但不再提交。
+
+**主调用链：**
+
+- 滑块：`AdjustmentSlider` → `EditorAdjustmentValueModel::updateDrag/finishDrag` → `paramsBuilder` = `paramsAfter(driver)`（比例锁 + `interaction.clampCropRect`）→ `EditorSessionController::submitWrite` → pending input → `ImageGeometryModel::ApplyUpdate` → 渲染（面板打开时 `geometry_overlay_only` → `RotatedUncroppedSource`）。
+- 叠加层：`EditorInteractionController::handlePress/Move/Release` → `CropInteractionController`（`maskEditViewMapping()`，frame space，`ClampCrop`）→ `cropFrameEdited` → 面板 `submitPatch("crop_rotate", …, isFinal)`。
+- 渲染：`GraphCompiler::BindFrameGeometry` → `ImageParamsForRequest` → `ResolveRenderGeometry`（`ClampCropToRotatedSource`，输出 = 裁切框）。
+
+**验证：** 相关测试目标 GpuDagGeometryTest、EditorCropInteractionTest（新）、OverlayCursorTest、MaskEditGeometryTest、EditorGeometryPanelQmlTest、EditorSessionControllerPhase5ATest、EditorPipelineCommandServiceTest、DocumentTransferTest、MaskThumbnailServiceTest、GpuDagCudaDocumentGeometryRequestTest、EditorPanelProjectionTest、EditorGeometryMathTest 全部通过。EditorSessionRenderSchedulerPortTest 有 5 个与几何无关的失败，在干净 HEAD 上同样失败。全量 ctest 未跑；OpenCL / Metal 未在本机运行；手工 UI 验证未做（见 `docs/editor_dialog_manual_test_matrix.md` 的 Geometry 一节）。
+
+**遗留：** `editor_overlay_interaction_test.cpp` 与 `edit_viewer_logic_test.cpp` 未登记在任何 CMake 目标中（已按新 API 改写，但不编译）。新增 QML 文案未进 `.ts` 翻译。面板打开时，只改裁切框的 interactive 编辑仍会触发一次渲染（预览画面不随裁切变化）。
 
 ### P7 删除共享机制，收窄 `PipelineMgmtService`
 
@@ -1191,6 +1207,6 @@ Suite totals:
 | P4 缩略图 / 分析池 | 完成（2026-09-28） |
 | P5 导出、导入、复制、粘贴 | 完成（2026-09-28） |
 | P6 编辑器独占 executor | 完成（2026-09-28，手工 UI 验证未做） |
-| Geometry 面板缺陷（#221，先于 P7） | 已记录现象，方案待定 |
-| P7 删除共享机制 | 未开始 |（等待 Geometry 面板修复）
+| Geometry 面板重构（#221，先于 P7） | 完成（2026-09-28，手工 UI 验证未做） |
+| P7 删除共享机制 | 未开始 |
 | P8 文档与决策更新 | 未开始 |

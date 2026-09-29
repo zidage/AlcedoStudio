@@ -28,7 +28,6 @@ struct MaskThumbnailGeometry {
   Extent2D       full_reference{};
   NormalizedRect crop_rect{};
   float          rotation_degrees = 0.0f;
-  bool           expand_to_fit    = true;
 
   [[nodiscard]] auto operator==(const MaskThumbnailGeometry& other) const -> bool;
 };

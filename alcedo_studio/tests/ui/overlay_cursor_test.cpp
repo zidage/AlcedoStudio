@@ -10,6 +10,7 @@
 #include <array>
 
 #include "ui/edit_viewer/crop_geometry.hpp"
+#include "ui/edit_viewer/mask_edit_geometry.hpp"
 #include "ui/edit_viewer/overlay_cursor.hpp"
 #include "ui/editor_rhi/editor_interaction_controller.hpp"
 #include "ui/editor_rhi/editor_overlay_item.hpp"
@@ -24,7 +25,8 @@ const QRectF    kCropRect(0.25, 0.25, 0.5, 0.5);
 void ConfigureCrop(editor_rhi::EditorInteractionController& controller, float rotation_degrees) {
   controller.setInteractionEnabled(true);
   controller.setViewportMetrics(800.0, 600.0, 1.0);
-  controller.setImageSize(kImageWidth, kImageHeight);
+  controller.setDisplayedMaskGeometry(
+      MaskEditGeometry::MakeIdentityPhotographGeometry(Extent2D{kImageWidth, kImageHeight}));
   controller.setRenderReferenceSize(kImageWidth, kImageHeight);
   controller.setCropToolEnabled(true);
   controller.setCropOverlayVisible(true);
@@ -32,15 +34,11 @@ void ConfigureCrop(editor_rhi::EditorInteractionController& controller, float ro
   controller.setCropRotationDegrees(rotation_degrees);
 }
 
-[[nodiscard]] auto CropCornersItem(const editor_rhi::EditorInteractionController& controller,
-                                   float rotation_degrees) -> std::array<QPointF, 4> {
-  const auto corners_uv = CropGeometry::RotatedCropCornersUv(
-      kCropRect, rotation_degrees, CropGeometry::SafeAspect(kImageWidth, kImageHeight));
-  std::array<QPointF, 4> corners{};
-  for (std::size_t i = 0; i < corners.size(); ++i) {
-    corners[i] = controller.imageUvToItemPoint(corners_uv[i].x(), corners_uv[i].y());
-  }
-  return corners;
+[[nodiscard]] auto CropCornersItem(const editor_rhi::EditorInteractionController& controller)
+    -> std::array<QPointF, 4> {
+  const auto geometry = controller.overlayGeometry();
+  EXPECT_TRUE(geometry.crop_corners_valid);
+  return geometry.crop_corners_widget;
 }
 
 }  // namespace
@@ -109,7 +107,7 @@ TEST(OverlayCursorTest, CropRotateHandleShowsBitmapCursorOnOverlayItem) {
   EXPECT_FALSE(overlay.cursor().pixmap().isNull());
 
   // Crop move and resize cursors stay with the viewport HoverHandler.
-  const auto corners = CropCornersItem(controller, 0.0f);
+  const auto corners = CropCornersItem(controller);
   controller.handleHoverMove(corners[0].x(), corners[0].y());
   EXPECT_EQ(controller.cursorShape(), static_cast<int>(Qt::SizeFDiagCursor));
   EXPECT_EQ(overlay.cursor().shape(), Qt::ArrowCursor);
@@ -122,7 +120,7 @@ TEST(OverlayCursorTest, RotatedCropCornerHoverFollowsScreenAxis) {
   editor_rhi::EditorInteractionController controller;
   // 45 degrees turns every corner onto a horizontal or vertical axis.
   ConfigureCrop(controller, 45.0f);
-  const auto corners = CropCornersItem(controller, 45.0f);
+  const auto corners = CropCornersItem(controller);
   const QPointF center = (corners[0] + corners[2]) * 0.5;
   for (const auto& corner : corners) {
     controller.handleHoverMove(corner.x(), corner.y());

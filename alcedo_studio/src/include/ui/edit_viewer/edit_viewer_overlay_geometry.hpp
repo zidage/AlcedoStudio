@@ -12,6 +12,7 @@
 #include <Qt>
 
 #include "ui/edit_viewer/crop_geometry.hpp"
+#include "ui/edit_viewer/mask_edit_geometry.hpp"
 #include "ui/edit_viewer/viewer_state.hpp"
 #include "ui/edit_viewer/viewport_mapper.hpp"
 
@@ -20,7 +21,11 @@ namespace alcedo {
 struct EditViewerOverlaySnapshot {
   ViewerStateSnapshot   viewer_state{};
   ViewportWidgetInfo    widget_info{};
+  // Displayed photograph size used for letterboxing (the render reference).
   ViewportImageInfo     image_info{};
+  // Presented-frame mapping between item points and source reference pixels. The crop frame
+  // is drawn and hit-tested through it.
+  MaskEditViewMapping   mapping{};
   FramePresentationMode presentation_mode = FramePresentationMode::FullFrame;
   // Optional detail-patch / ROI bounds in source-image UV (0..1). When valid,
   // overlay drawing may show a guide rectangle independent of crop handles.
