@@ -6,11 +6,9 @@
 
 #include <algorithm>
 #include <atomic>
-#include <condition_variable>
 #include <cstdint>
 #include <filesystem>
 #include <format>
-#include <iterator>
 #include <memory>
 #include <mutex>
 #include <opencv2/imgproc.hpp>
@@ -21,10 +19,10 @@
 #include <utility>
 #include <vector>
 
+#include "app/batch_executor_pool.hpp"
 #include "app/pipeline_service.hpp"
 #include "app/thumbnail_disk_cache_service.hpp"
 #include "concurrency/thread_pool.hpp"
-#include "edit/runtime/executor_role.hpp"
 #include "renderer/pipeline_scheduler.hpp"
 #include "renderer/pipeline_task.hpp"
 
@@ -136,57 +134,6 @@ constexpr ThumbnailResolution kAllThumbnailResolutions[] = {
     ThumbnailResolution::k512,
     ThumbnailResolution::k1024,
     ThumbnailResolution::k2048,
-};
-
-/**
- * @brief Fixed set of batch executors shared by the render workers of one ThumbnailService.
- *
- * A render takes an idle executor for the whole task and returns it afterwards, so no two renders
- * use one executor at a time. The pool has one executor per render worker, so a take never waits
- * in practice. Executors are created on first take with the accelerator preference captured at
- * construction; a preference whose backend is unavailable fails that render with the real error.
- */
-class BatchExecutorPool {
- public:
-  BatchExecutorPool(std::size_t count, AcceleratorBackendPreference preference)
-      : preference_(preference),
-        slots_(std::max<std::size_t>(1, count)),
-        idle_(slots_.size(), true) {}
-
-  [[nodiscard]] auto Size() const -> std::size_t { return slots_.size(); }
-
-  /// Take an idle executor, creating it on first use. Blocks while every executor renders.
-  auto               Take() -> std::pair<std::size_t, std::shared_ptr<PipelineExecutor>> {
-    std::unique_lock lock(mutex_);
-    std::size_t      index = 0;
-    cv_.wait(lock, [&] {
-      const auto it = std::find(idle_.begin(), idle_.end(), true);
-      index         = static_cast<std::size_t>(std::distance(idle_.begin(), it));
-      return it != idle_.end();
-    });
-    if (!slots_[index]) {
-      auto executor = std::make_shared<PipelineExecutor>(ExecutorRole::Batch);
-      executor->SetAcceleratorBackendPreference(preference_);
-      slots_[index] = std::move(executor);
-    }
-    idle_[index] = false;
-    return {index, slots_[index]};
-  }
-
-  void Return(std::size_t index) {
-    {
-      std::scoped_lock lock(mutex_);
-      idle_[index] = true;
-    }
-    cv_.notify_one();
-  }
-
- private:
-  AcceleratorBackendPreference                   preference_;
-  std::mutex                                     mutex_;
-  std::condition_variable                        cv_;
-  std::vector<std::shared_ptr<PipelineExecutor>> slots_;
-  std::vector<bool>                              idle_;
 };
 
 /**

@@ -25,7 +25,9 @@
 #include <vector>
 
 #include "app/project_package_backend.hpp"
+#include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
+#include "edit/graph/pipeline_document.hpp"
 #include "image/image.hpp"
 #include "sleeve/sleeve_element/sleeve_file.hpp"
 #include "ui/album_backend_test_fixture.hpp"
@@ -144,6 +146,12 @@ inline auto CreateSeededPackedProject(
     return std::nullopt;
   }
   project->SaveProject(meta_path);
+  // Import gives every image its history root; these images skip import, so create the roots
+  // the same way (default document, working-space profile for the synthetic sources).
+  PipelineMgmtService pipelines(project->GetStorage());
+  for (const auto& key : image_keys) {
+    pipelines.InitializeImageRoot(key.file_id_, CreateDefaultPipelineDocument(), nullptr);
+  }
 
   std::filesystem::path snapshot_path;
   if (!project_pack::BuildTempDbSnapshotPath(&snapshot_path, nullptr)) {

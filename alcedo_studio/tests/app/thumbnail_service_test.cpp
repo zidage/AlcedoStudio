@@ -2490,9 +2490,8 @@ TEST_F(ThumbnailServiceTests, DISABLED_FuzzCompositeKeyMultiResNoCrash) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Phase 2 tests: Cancellation robustness (Strategies A + C)
 //
-// NOTE: These tests share a global PipelineScheduler via
-// RenderService::GetThumbnailOrExportScheduler(). Cancelled renders may
-// continue running on worker threads. TearDown swallows DB-lock errors
+// NOTE: Each ThumbnailService owns its render scheduler. Cancelled renders may
+// continue running on its worker threads. TearDown swallows DB-lock errors
 // so test assertions are the source of truth.
 // ─────────────────────────────────────────────────────────────────────────────
 

@@ -17,6 +17,7 @@
 
 #include "app/committed_snapshot_cache.hpp"
 #include "app/image_pool_service.hpp"
+#include "app/pipeline_root_state.hpp"
 #include "decoders/processor/raw_color_context.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_snapshot.hpp"
@@ -59,7 +60,7 @@ struct PipelineGuard {
   sl_element_id_t                      id_;
   bool                                 dirty_     = false;
   /// Cache pin only: LoadPipeline / ReleasePipelineUse / SavePipeline refcount so
-  /// LRU eviction and "unpinned → re-init executor" do not drop a live editor/export
+  /// LRU eviction and "unpinned → re-init executor" do not drop a live editor
   /// guard. Live-pipeline *mutation* ownership is PipelineExecutor::render_lock_
   /// (held for the full render task including present); pin_count_ is not that.
   bool                                 pinned_    = false;
@@ -99,10 +100,10 @@ struct PipelineGuard {
   /**
    * @brief Freeze document_ into the snapshot that one render task passes to Apply.
    *
-   * Transitional until the editor and export own their executors: the snapshot is a preview (no
-   * HEAD, empty chain) because document_ may hold uncommitted editor values, and it is rendered by
-   * the users of pipeline_ (the editor and export; thumbnails and analysis render committed
-   * snapshots, see PipelineMgmtService::AcquireCommittedSnapshot). The chain is left empty because
+   * Transitional until the editor owns its executor: the snapshot is a preview (no HEAD, empty
+   * chain) because document_ may hold uncommitted editor values, and only the editor renders it
+   * (thumbnails, analysis, and export render committed snapshots, see
+   * PipelineMgmtService::AcquireCommittedSnapshot). The chain is left empty because
    * the render thread must not read commit_graph_, which the history owner replaces without this
    * lock.
    *
@@ -119,6 +120,22 @@ struct PipelineGuard {
     }
     return commit_graph_->ChainHashForHead(working_head_commit_hash());
   }
+};
+
+/**
+ * @brief Materialized history of one image, read from storage for a history user other than the
+ *        editor (the Copy source and the Paste targets in the library).
+ *
+ * Why a copy: the Copy dialog reads the graph after the call returns while other writers may
+ * change storage, and a Paste target edits its own graph and persists it only when the whole
+ * paste succeeded. Captured: the CommitGraph at its materialized state and the decoded immutable
+ * root with the image DNG profile bound. Both are immutable; a Paste copies graph_ into a private
+ * CommitGraph before it edits. Released with the last reference; nothing is written back except
+ * through @ref PipelineMgmtService::PersistHistory, which checks graph_ against storage first.
+ */
+struct ImageHistorySnapshot {
+  std::shared_ptr<const CommitGraph>     graph_;
+  std::shared_ptr<const LoadedRootState> root_;
 };
 
 class PipelineMgmtService final {
@@ -152,6 +169,9 @@ class PipelineMgmtService final {
   void                         CleanupIdlePipelineResources(const std::shared_ptr<PipelineGuard>& pipeline);
   /// Rebind the editor history + live document of a pinned guard from storage.
   void BindEditorStateFromStorage(const std::shared_ptr<PipelineGuard>& pipeline);
+  /// Editor open of an image that has no history root: create the root from the guard's live
+  /// document with the working-space camera profile. No effect when the root exists.
+  void CreateMissingRootForEditor(const std::shared_ptr<PipelineGuard>& pipeline);
 
  public:
   PipelineMgmtService() = delete;
@@ -166,7 +186,7 @@ class PipelineMgmtService final {
   /**
    * @brief Unpin a live pipeline without writing storage or clearing dirty.
    *
-   * Export and other borrowers of the live guard must call this instead of @ref SavePipeline.
+   * Callers that must not persist the live guard call this instead of @ref SavePipeline.
    * When other pins remain (the editor), GPU session caches stay. When this is
    * the last pin, the executor releases the resources of its binding (both
    * renderers) so unused LRU entries do not keep VRAM. Must not be called while holding
@@ -188,7 +208,7 @@ class PipelineMgmtService final {
 
   /**
    * @brief Committed pipeline graph snapshot of @p id, for renders that must not see
-   *        uncommitted editor values (thumbnails, analysis).
+   *        uncommitted editor values (thumbnails, analysis, export).
    *
    * For the image the editor holds, returns the snapshot the editor published last
    * (@ref PublishCommitted); when it has published none yet, the stored state. For every other
@@ -211,6 +231,40 @@ class PipelineMgmtService final {
    * @throws std::invalid_argument when @p snapshot is null or not committed.
    */
   void               PublishCommitted(std::shared_ptr<const PipelineGraphSnapshot> snapshot);
+
+  /**
+   * @brief Read the materialized history and the immutable root of @p id from storage.
+   *
+   * For history users other than the editor: the Copy source and the Paste targets in the
+   * library. Loads no PipelineGuard, constructs no executor, and changes no state.
+   *
+   * Thread: any thread; storage reads run on the calling thread.
+   * @throws std::runtime_error when the editor session holds @p id (its history may have commits
+   *         that storage does not have yet; read it through the session), when the image has no
+   *         history root, or when the stored history or root cannot be decoded or disagrees with
+   *         the active Version.
+   */
+  [[nodiscard]] auto LoadHistorySnapshot(sl_element_id_t id) -> ImageHistorySnapshot;
+
+  /**
+   * @brief Persist @p graph, an edited copy of @p base, as the history of its image in one
+   *        storage transaction, and publish its committed snapshot.
+   *
+   * Replays the document of the active Version of @p graph from the root of @p base, then writes
+   * the new commits, the Version refs, the image edit state, and the checkpoint of that document
+   * together. The returned snapshot is also stored in the committed snapshot cache, so the next
+   * thumbnail or export of the image renders it without a replay. Loads no PipelineGuard and
+   * constructs no executor. The element pipeline JSON is not written.
+   *
+   * Thread: any thread; storage writes run on the calling thread.
+   * @pre @p base came from @ref LoadHistorySnapshot for the same image as @p graph.
+   * @throws std::runtime_error when the editor session holds the image, when @p graph belongs to
+   *         another image or root, when replay fails, or when the stored history no longer equals
+   *         the materialized state of @p base (another writer changed it). Storage is unchanged
+   *         on every failure.
+   */
+  auto               PersistHistory(const ImageHistorySnapshot& base, const CommitGraph& graph)
+      -> std::shared_ptr<const PipelineGraphSnapshot>;
 
   /// Test/instrumentation: committed snapshots built from storage since construction.
   [[nodiscard]] auto CommittedSnapshotStorageLoadCount() const -> std::size_t {
@@ -242,12 +296,13 @@ class PipelineMgmtService final {
   /// Load editor document for `id` using history tip as authority.
   /// If checkpoint (document + root/head/chain labels) matches active Version tip, load the
   /// document (skip first-parent replay). Otherwise rebuild from root + first-parent typed
-  /// batches and mark write-back. Export uses LoadPipeline; thumbnails and analysis use
-  /// AcquireCommittedSnapshot.
+  /// batches and mark write-back. Thumbnails, analysis, and export use AcquireCommittedSnapshot;
+  /// Copy and Paste to library images use LoadHistorySnapshot and PersistHistory.
   ///
-  /// For non-editor history users (Paste to library targets). Throws when the editor session
-  /// owns `id`: the editor is the sole owner of an open image's history and live document, so
-  /// rebinding them from storage here would silently discard its unsaved history.
+  /// Caller: the editor session pipeline port (EditorSessionPipelinePort::EnsureLoaded); no
+  /// module other than the editor loads a guard. Throws when the editor session owns `id`: the
+  /// editor is the sole owner of an open image's history and live document, so rebinding them from
+  /// storage here would silently discard its unsaved history.
   auto               LoadEditorPipeline(sl_element_id_t id) -> std::shared_ptr<PipelineGuard>;
 
   /// Editor session entry: bind `id`'s history and live document from storage and take
@@ -267,13 +322,21 @@ class PipelineMgmtService final {
     editor_pipeline_history_rebuild_count_ = 0;
   }
 
-  /// Persist the current metadata-resolved document as the immutable root for a newly imported
-  /// image. When @p raw_color_context is null (non-RAW RGB files), Rec.709 XYZ→camera matrices
-  /// are bound onto the Develop node before the root is written. Calling this again for an image
-  /// that already has a root verifies and loads that root; it never replaces the stored root state
-  /// and does not change the camera profile of the live document.
-  void               InitializeImageRoot(const std::shared_ptr<PipelineGuard>& pipeline,
-                                         const RawRuntimeColorContext*         raw_color_context = nullptr);
+  /**
+   * @brief Create the immutable history root of a newly imported image from @p document.
+   *
+   * Binds the camera profile onto the caller's private document: the source DNG profile, then
+   * the RAW color context, or the Rec.709 working-space profile when @p raw_color_context is null
+   * (non-RAW RGB files). Then writes the root state, the default Version, and the image edit state
+   * in one storage transaction, and writes the document as the element pipeline JSON (kept for
+   * older versions of the application). Loads no PipelineGuard and constructs no executor.
+   *
+   * @throws std::runtime_error when the document is not a valid product graph or the image
+   *         already has a root (the stored root is never replaced). The element pipeline JSON is
+   *         written only after the root.
+   */
+  void               InitializeImageRoot(sl_element_id_t id, PipelineDocument document,
+                                         const RawRuntimeColorContext* raw_color_context);
 
   /// Switch the live editor document to another Version on the same image.
   ///

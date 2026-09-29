@@ -81,6 +81,64 @@ void SetPipelineHistoryState(PipelineGuard& guard, const CommitGraph& graph) {
   guard.commit_graph_                     = std::make_shared<CommitGraph>(graph);
 }
 
+/// True when storage still holds the materialized state that a writer read before its change.
+auto SameMaterializedState(const ImageEditState& stored, const ImageEditState& expected) -> bool {
+  return stored.element_id == expected.element_id && stored.root_id == expected.root_id &&
+         stored.active_version_id == expected.active_version_id &&
+         stored.materialized_head_commit_hash == expected.materialized_head_commit_hash &&
+         stored.materialized_transaction_chain_hash == expected.materialized_transaction_chain_hash;
+}
+
+/// Materialized history of one image and its decoded root, as storage holds them.
+struct StoredHistory {
+  CommitGraph     graph;
+  LoadedRootState root;
+};
+
+/**
+ * @brief Read the materialized history of @p id and its immutable root, and bind the image DNG
+ *        profile onto the root. The one storage read that the editor load, Copy, and Paste share.
+ * @pre The caller holds no database connection lock.
+ * @throws std::runtime_error when the image has no root, the root cannot be decoded, or the
+ *         materialized state does not match the active Version.
+ */
+auto ReadStoredHistory(Storage& storage, sl_element_id_t id) -> StoredHistory {
+  std::optional<CommitGraph>     graph;
+  std::optional<LoadedRootState> root_state;
+  {
+    auto             db_guard = storage.GetDatabase().GetConnectionGuard();
+    auto             db_lock  = db_guard.Lock();
+    CommitGraphStore graph_service(db_guard.conn_);
+    graph = graph_service.LoadGraph(id);
+    if (!graph.has_value()) {
+      throw std::runtime_error("PipelineMgmtService: image " + std::to_string(id) +
+                               " has no edit history root");
+    }
+    const auto root_encoded = graph_service.GetRootSerializedPipelineState(id, graph->GetRootId());
+    if (!root_encoded.has_value()) {
+      throw std::runtime_error("PipelineMgmtService: immutable root state is missing for image " +
+                               std::to_string(id));
+    }
+    root_state = TryDecodeRootState(*root_encoded, id, graph->GetRootId());
+    if (!root_state.has_value()) {
+      throw std::runtime_error("PipelineMgmtService: immutable root state is invalid for image " +
+                               std::to_string(id));
+    }
+
+    const auto& state          = graph->GetImageEditState();
+    const auto  expected_head  = graph->GetActiveVersionRef().head_commit_hash;
+    const auto  expected_chain = graph->ChainHashForHead(expected_head);
+    if (state.root_id != graph->GetRootId() ||
+        state.materialized_head_commit_hash != expected_head ||
+        state.materialized_transaction_chain_hash != expected_chain) {
+      throw std::runtime_error(
+          "PipelineMgmtService: stored image edit state does not match the active Version");
+    }
+  }
+  BindSourceDngProfiles(storage, id, *root_state);
+  return StoredHistory{std::move(*graph), std::move(*root_state)};
+}
+
 }  // namespace
 
 auto PipelineGuard::FreezeLiveSnapshot() const -> std::shared_ptr<const PipelineGraphSnapshot> {
@@ -394,6 +452,67 @@ void PipelineMgmtService::PublishCommitted(std::shared_ptr<const PipelineGraphSn
   committed_snapshots_.Publish(std::move(snapshot), EditorHoldsImage(id));
 }
 
+auto PipelineMgmtService::LoadHistorySnapshot(sl_element_id_t id) -> ImageHistorySnapshot {
+  if (EditorHoldsImage(id)) {
+    throw std::runtime_error("PipelineMgmtService: image " + std::to_string(id) +
+                             " is open in the editor; its history is owned by the editor session");
+  }
+  auto stored = ReadStoredHistory(*storage_, id);
+  return ImageHistorySnapshot{
+      .graph_ = std::make_shared<const CommitGraph>(std::move(stored.graph)),
+      .root_  = std::make_shared<const LoadedRootState>(std::move(stored.root)),
+  };
+}
+
+auto PipelineMgmtService::PersistHistory(const ImageHistorySnapshot& base, const CommitGraph& graph)
+    -> std::shared_ptr<const PipelineGraphSnapshot> {
+  if (!base.graph_ || !base.root_) {
+    throw std::invalid_argument("PipelineMgmtService: history snapshot is empty");
+  }
+  const auto id = graph.GetElementId();
+  if (id != base.graph_->GetElementId() || graph.GetRootId() != base.graph_->GetRootId()) {
+    throw std::runtime_error(
+        "PipelineMgmtService: the history to persist belongs to another image or root");
+  }
+  if (EditorHoldsImage(id)) {
+    throw std::runtime_error("PipelineMgmtService: image " + std::to_string(id) +
+                             " is open in the editor; its history is owned by the editor session");
+  }
+
+  // Build phase: storage is not touched until the document of the new history exists.
+  const auto  head = graph.GetActiveVersionRef().head_commit_hash;
+  std::string replay_error;
+  auto        document = BuildDocumentFromRoot(graph, *base.root_, head, &replay_error);
+  if (!document) {
+    throw std::runtime_error("PipelineMgmtService: replay of the new history of image " +
+                             std::to_string(id) + " failed: " + replay_error);
+  }
+  ValidateProductDocument(*document, id);
+  const auto materialization =
+      graph.CaptureMaterializationWithSerializedPipelineState(EncodePipelineDocumentCheckpoint(
+          graph.GetRootId(), head, graph.ChainHashForHead(head), *document));
+
+  {
+    auto             db_guard = storage_->GetDatabase().GetConnectionGuard();
+    auto             db_lock  = db_guard.Lock();
+    CommitGraphStore graph_service(db_guard.conn_);
+    const auto       stored_state = graph_service.GetImageEditState(id);
+    if (!stored_state.has_value() ||
+        !SameMaterializedState(*stored_state, base.graph_->GetImageEditState())) {
+      throw std::runtime_error("PipelineMgmtService: stored history of image " +
+                               std::to_string(id) + " changed before the new history was written");
+    }
+    graph_service.Materialize(materialization);
+  }
+
+  auto snapshot = PipelineGraphSnapshot::Committed(
+      std::move(document), id, PipelineLineageId::Next(),
+      materialization.image_state.materialized_head_commit_hash,
+      materialization.image_state.materialized_transaction_chain_hash);
+  committed_snapshots_.Publish(snapshot, EditorHoldsImage(id));
+  return snapshot;
+}
+
 void PipelineMgmtService::SyncPipelineDocument(const std::shared_ptr<PipelineGuard>& pipeline) {
   if (!pipeline || !pipeline->pipeline_ || !pipeline->document_) {
     throw std::invalid_argument("PipelineMgmtService: cannot save an incomplete PipelineDocument");
@@ -433,63 +552,48 @@ void PipelineMgmtService::SyncDirtyPipelineDocument(
   pipeline->dirty_ = false;
 }
 
-void PipelineMgmtService::InitializeImageRoot(const std::shared_ptr<PipelineGuard>& pipeline,
+void PipelineMgmtService::InitializeImageRoot(sl_element_id_t id, PipelineDocument document,
                                               const RawRuntimeColorContext* raw_color_context) {
-  if (!pipeline || !pipeline->pipeline_ || !pipeline->document_) {
-    throw std::runtime_error("PipelineMgmtService: cannot initialize a null pipeline root");
+  // The document is private to this call until the root is written, so binding needs no lock.
+  BindSourceDngColorProfile(*storage_, id, document);
+  std::optional<nlohmann::json> raw_json;
+  if (raw_color_context != nullptr) {
+    BindImportedCameraProfile(document, *raw_color_context);
+    raw_json = RawColorContextToJson(*raw_color_context);
+  } else {
+    BindWorkingSpaceDevelopData(document);
   }
+  ValidateProductDocument(document, id);
+  {
+    auto             db_guard = storage_->GetDatabase().GetConnectionGuard();
+    auto             db_lock  = db_guard.Lock();
+    CommitGraphStore graph_service(db_guard.conn_);
+    (void)graph_service.CreateRootPipelinePersisted(id, document, std::move(raw_json));
+  }
+  storage_->GetElementStore().UpdatePipelineJsonByElementId(id, document.ToJson());
+}
 
+void PipelineMgmtService::CreateMissingRootForEditor(
+    const std::shared_ptr<PipelineGuard>& pipeline) {
   auto             db_guard = storage_->GetDatabase().GetConnectionGuard();
   auto             db_lock  = db_guard.Lock();
   CommitGraphStore graph_service(db_guard.conn_);
-  auto             state = graph_service.GetImageEditState(pipeline->id_);
-  if (!state.has_value()) {
-    // Only a new root takes its camera profile from this call. An existing root already stores
-    // the profile, and the live document of a RAW image must never hold the working-space
-    // profile, even briefly: renders on the same guard would use the wrong colors.
-    db_lock.unlock();
-    std::optional<nlohmann::json> raw_json;
-    {
-      std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
-      if (raw_color_context != nullptr) {
-        BindImportedCameraProfile(*pipeline->document_, *raw_color_context);
-        raw_json = RawColorContextToJson(*raw_color_context);
-      } else {
-        BindWorkingSpaceDevelopData(*pipeline->document_);
-      }
-      ValidateProductDocument(*pipeline->document_, pipeline->id_);
-    }
-    db_lock.lock();
-    state = graph_service.GetImageEditState(pipeline->id_);
-    if (!state.has_value()) {
-      auto graph = graph_service.CreateRootPipelinePersisted(
-          pipeline->id_, *pipeline->document_, raw_json);
-      SetPipelineHistoryState(*pipeline, graph);
-      CacheRootDocument(*pipeline, *pipeline->document_);
-      return;
-    }
+  if (graph_service.GetImageEditState(pipeline->id_).has_value()) {
+    return;
   }
-
-  auto graph = graph_service.LoadGraph(pipeline->id_);
-  if (!graph.has_value()) {
-    throw std::runtime_error(
-        "PipelineMgmtService: image edit state disappeared while loading root");
-  }
-  const auto root_encoded =
-      graph_service.GetRootSerializedPipelineState(pipeline->id_, graph->GetRootId());
-  if (!root_encoded.has_value()) {
-    throw std::runtime_error("PipelineMgmtService: immutable root state is missing for image " +
-                             std::to_string(pipeline->id_));
-  }
-  auto root_state = TryDecodeRootState(*root_encoded, pipeline->id_, graph->GetRootId());
-  if (!root_state.has_value()) {
-    throw std::runtime_error("PipelineMgmtService: immutable root identity is invalid for image " +
-                             std::to_string(pipeline->id_));
-  }
+  // The live document may be rendered, so bind under the render lock, and never hold the render
+  // lock and the database lock together.
   db_lock.unlock();
-  BindSourceDngProfiles(*storage_, pipeline->id_, *root_state);
-  SetPipelineHistoryState(*pipeline, *graph);
-  CacheRootDocument(*pipeline, root_state->document);
+  {
+    std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
+    BindWorkingSpaceDevelopData(*pipeline->document_);
+    ValidateProductDocument(*pipeline->document_, pipeline->id_);
+  }
+  db_lock.lock();
+  if (!graph_service.GetImageEditState(pipeline->id_).has_value()) {
+    (void)graph_service.CreateRootPipelinePersisted(pipeline->id_, *pipeline->document_,
+                                                    std::nullopt);
+  }
 }
 
 auto PipelineMgmtService::LoadEditorPipeline(sl_element_id_t id) -> std::shared_ptr<PipelineGuard> {
@@ -549,59 +653,26 @@ void PipelineMgmtService::BindEditorStateFromStorage(
     const std::shared_ptr<PipelineGuard>& pipeline) {
   const auto id = pipeline->id_;
   try {
-    InitializeImageRoot(pipeline);
-
-    std::optional<CommitGraph>    graph;
-    std::optional<LoadedRootState> root_state;
-    {
-      auto             db_guard = storage_->GetDatabase().GetConnectionGuard();
-      auto             db_lock  = db_guard.Lock();
-      CommitGraphStore graph_service(db_guard.conn_);
-      graph = graph_service.LoadGraph(id);
-      if (!graph.has_value()) {
-        throw std::runtime_error(
-            "PipelineMgmtService: image edit state is missing after root setup");
-      }
-      const auto root_encoded_state =
-          graph_service.GetRootSerializedPipelineState(id, graph->GetRootId());
-      if (!root_encoded_state.has_value()) {
-        throw std::runtime_error("PipelineMgmtService: immutable root state is missing for image " +
-                                 std::to_string(id));
-      }
-      root_state = TryDecodeRootState(*root_encoded_state, id, graph->GetRootId());
-      if (!root_state.has_value()) {
-        throw std::runtime_error("PipelineMgmtService: immutable root state is invalid for image " +
-                                 std::to_string(id));
-      }
-
-      const auto& state          = graph->GetImageEditState();
-      const auto  expected_head  = graph->GetActiveVersionRef().head_commit_hash;
-      const auto  expected_chain = graph->ChainHashForHead(expected_head);
-      if (state.root_id != graph->GetRootId() ||
-          state.materialized_head_commit_hash != expected_head ||
-          state.materialized_transaction_chain_hash != expected_chain) {
-        throw std::runtime_error(
-            "PipelineMgmtService: stored image edit state does not match the active Version");
-      }
-    }
-
-    BindSourceDngProfiles(*storage_, id, *root_state);
+    CreateMissingRootForEditor(pipeline);
+    const auto  stored     = ReadStoredHistory(*storage_, id);
+    const auto& graph      = stored.graph;
+    const auto& root_state = stored.root;
 
     // History tip is sole authority. A checkpoint is used only when its root, head,
     // and chain labels match the active Version.
-    SetPipelineHistoryState(*pipeline, *graph);
-    CacheRootDocument(*pipeline, root_state->document);
-    const auto& state                     = graph->GetImageEditState();
-    const auto  expected_head             = graph->GetActiveVersionRef().head_commit_hash;
-    const auto  expected_chain            = graph->ChainHashForHead(expected_head);
+    SetPipelineHistoryState(*pipeline, graph);
+    CacheRootDocument(*pipeline, root_state.document);
+    const auto& state                     = graph.GetImageEditState();
+    const auto  expected_head             = graph.GetActiveVersionRef().head_commit_hash;
+    const auto  expected_chain            = graph.ChainHashForHead(expected_head);
     bool        accepted_serialized_state = false;
     if (state.serialized_pipeline_state.has_value()) {
-      const auto stored = TryDecodeCheckpoint(*state.serialized_pipeline_state);
-      if (stored.has_value() && stored->root_id == graph->GetRootId() &&
-          stored->head_commit_hash == expected_head &&
-          stored->transaction_chain_hash == expected_chain) {
+      const auto checkpoint = TryDecodeCheckpoint(*state.serialized_pipeline_state);
+      if (checkpoint.has_value() && checkpoint->root_id == graph.GetRootId() &&
+          checkpoint->head_commit_hash == expected_head &&
+          checkpoint->transaction_chain_hash == expected_chain) {
         try {
-          auto                         document = BuildDocumentFromCheckpoint(*stored, *root_state);
+          auto document = BuildDocumentFromCheckpoint(*checkpoint, root_state);
           std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
           pipeline->pipeline_->SetAcceleratorBackendPreference(accelerator_preference_);
           (void)BindLivePipelineDocument(*pipeline, std::move(document));
@@ -615,7 +686,7 @@ void PipelineMgmtService::BindEditorStateFromStorage(
     if (!accepted_serialized_state) {
       ++editor_pipeline_history_rebuild_count_;
       std::string replay_error;
-      auto document = BuildDocumentFromRoot(*graph, *root_state, expected_head, &replay_error);
+      auto        document = BuildDocumentFromRoot(graph, root_state, expected_head, &replay_error);
       if (!document) {
         throw std::runtime_error(replay_error);
       }
@@ -767,14 +838,7 @@ auto PipelineMgmtService::PersistEditorHistoryState(
       throw std::runtime_error("PipelineMgmtService: persisted editor graph is missing");
     }
 
-    const auto& stored_state = stored_graph->GetImageEditState();
-    if (stored_state.element_id != expected_materialized_state.element_id ||
-        stored_state.root_id != expected_materialized_state.root_id ||
-        stored_state.active_version_id != expected_materialized_state.active_version_id ||
-        stored_state.materialized_head_commit_hash !=
-            expected_materialized_state.materialized_head_commit_hash ||
-        stored_state.materialized_transaction_chain_hash !=
-            expected_materialized_state.materialized_transaction_chain_hash) {
+    if (!SameMaterializedState(stored_graph->GetImageEditState(), expected_materialized_state)) {
       throw std::runtime_error(
           "PipelineMgmtService: persisted history changed before editor history persistence");
     }

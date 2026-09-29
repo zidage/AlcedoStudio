@@ -10,6 +10,7 @@
 // enabled control test next to it runs the same steps without the conflicting consumer, so it
 // proves that the measurement itself is correct.
 
+#include <OpenImageIO/imageio.h>
 #include <gtest/gtest.h>
 
 #include <atomic>
@@ -23,7 +24,6 @@
 #include <map>
 #include <memory>
 #include <mutex>
-#include <OpenImageIO/imageio.h>
 #include <opencv2/core.hpp>
 #include <string>
 #include <thread>
@@ -37,7 +37,6 @@
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/pipeline/pipeline_executor.hpp"
-#include "edit/runtime/drt_display.hpp"
 #include "edit/runtime/executor_role.hpp"
 #include "edit/runtime/pipeline_apply_request.hpp"
 #include "edit/runtime/renderer.hpp"
@@ -262,9 +261,9 @@ class ExecutorIsolationTest : public ::testing::Test {
     return output ? HostPixels(*output) : cv::Mat{};
   }
 
-  /// Export @p ids through ExportService as a 256 px JPEG and read the pixels back.
+  /// Export @p ids through ExportService as a 256 px JPEG and read the pixels back. The output
+  /// color comes from the DRT of the committed snapshot the export renders.
   auto Export(ProjectService& project, const std::shared_ptr<PipelineMgmtService>& pipelines,
-              const std::shared_ptr<PipelineGuard>&         live,
               const std::pair<sl_element_id_t, image_id_t>& ids, const std::string& file_name)
       -> cv::Mat {
     ExportService export_service(project.GetSleeveService(), project.GetImagePoolService(),
@@ -277,11 +276,6 @@ class ExecutorIsolationTest : public ::testing::Test {
     task.options_.resize_enabled_  = true;
     task.options_.max_length_side_ = 256;
     task.recipe_                   = ExportRecipe::FromLegacyOptions(task.options_);
-    {
-      std::lock_guard<std::mutex> lock(live->pipeline_->GetRenderLock());
-      task.recipe_->output_color_ =
-          ExportColorProfileFromDrt(live->document_->Drt()->Params().Params());
-    }
     export_service.EnqueueExportTask(task);
     std::promise<std::shared_ptr<std::vector<ExportResult>>> done;
     auto                                                     done_future = done.get_future();
@@ -448,17 +442,17 @@ TEST_F(ExecutorIsolationTest, RepeatedExportOfEditorOwnedImageWithoutPreviewIsUn
   auto editor = pipelines->AcquireEditorPipeline(ids.first);
   ASSERT_NE(editor, nullptr);
 
-  const cv::Mat first  = Export(project, pipelines, editor, ids, "first.jpg");
-  const cv::Mat second = Export(project, pipelines, editor, ids, "second.jpg");
+  const cv::Mat first  = Export(project, pipelines, ids, "first.jpg");
+  const cv::Mat second = Export(project, pipelines, ids, "second.jpg");
   ASSERT_FALSE(first.empty());
   EXPECT_LE(MaxAbsDifference(first, second), 1.0);
   pipelines->ReleaseEditorPipeline(editor);
 }
 
-// Audit C6. Export borrows the editor's live document and does not check unsettled_preview_, so
-// an export of an open image during a slider drag writes the drag value. Export must use the
-// committed state. Enabled by P5 (export renders the committed snapshot).
-TEST_F(ExecutorIsolationTest, DISABLED_ExportDuringUnsettledEditorPreviewUsesCommittedState) {
+// Audit C6. Before P5, export borrowed the editor's live document and did not check
+// unsettled_preview_, so an export of an open image during a slider drag wrote the drag value.
+// Enabled by P5: export renders the committed snapshot captured at enqueue.
+TEST_F(ExecutorIsolationTest, ExportDuringUnsettledEditorPreviewUsesCommittedState) {
   ProjectService project(db_path_, meta_path_);
   auto           pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
   const auto     ids       = ImportLinearDng(project, pipelines);
@@ -468,7 +462,7 @@ TEST_F(ExecutorIsolationTest, DISABLED_ExportDuringUnsettledEditorPreviewUsesCom
   auto* exposure = PrimaryExposure(*editor->document_);
   ASSERT_NE(exposure, nullptr);
 
-  const cv::Mat committed = Export(project, pipelines, editor, ids, "committed.jpg");
+  const cv::Mat committed = Export(project, pipelines, ids, "committed.jpg");
   ASSERT_FALSE(committed.empty());
 
   // A slider drag writes the working value into the document and marks it unsettled.
@@ -478,7 +472,7 @@ TEST_F(ExecutorIsolationTest, DISABLED_ExportDuringUnsettledEditorPreviewUsesCom
     exposure->SetValue(committed_ev + 2.0f);
     editor->unsettled_preview_ = true;
   }
-  const cv::Mat during_drag = Export(project, pipelines, editor, ids, "during_drag.jpg");
+  const cv::Mat during_drag = Export(project, pipelines, ids, "during_drag.jpg");
   {
     std::lock_guard<std::mutex> render_lock(editor->pipeline_->GetRenderLock());
     exposure->SetValue(committed_ev);

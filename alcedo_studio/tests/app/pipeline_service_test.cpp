@@ -1283,12 +1283,20 @@ TEST_F(PipelineMapperTests, ImageRootStoresCompleteDefaultDocumentAndDevelopData
   raw_context.dng_warp_rectilinear_present_ = true;
   raw_context.dng_warp_rectilinear_applied_ = true;
 
-  auto initial                              = first.LoadPipeline(704);
-  ASSERT_NE(initial, nullptr);
-  first.InitializeImageRoot(initial, &raw_context);
-  const auto root_id         = initial->root_id_;
-  const auto persisted_dump  = initial->document_->ToJson().dump();
-  first.SavePipeline(initial);
+  first.InitializeImageRoot(704, CreateDefaultPipelineDocument(), &raw_context);
+  // The element pipeline JSON is the root document, written for older application versions.
+  const auto element_json = project.GetStorage()->GetElementStore().GetPipelineJsonByElementId(704);
+  ASSERT_TRUE(element_json.has_value());
+  const auto persisted_dump = PipelineDocument::FromJson(*element_json).ToJson().dump();
+  root_id_t  root_id{};
+  {
+    auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    auto             db_lock  = db_guard.Lock();
+    CommitGraphStore graph_service(db_guard.conn_);
+    const auto       state = graph_service.GetImageEditState(704);
+    ASSERT_TRUE(state.has_value());
+    root_id = state->root_id;
+  }
 
   auto changed_defaults = CreateDefaultPipelineDocument();
   dynamic_cast<ExposureModel*>(
@@ -1326,23 +1334,17 @@ TEST_F(PipelineMapperTests, NonRawImageRootBindsWorkingSpaceCameraProfile) {
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService first(project.GetStorage());
 
-  auto initial = first.LoadPipeline(711);
-  ASSERT_NE(initial, nullptr);
-  ASSERT_NE(initial->document_->Develop(), nullptr);
-  EXPECT_TRUE(initial->document_->Develop()->Params().Params().camera_profile.color_matrices_valid);
-  EXPECT_NEAR(initial->document_->Develop()->Params().Params().camera_profile.color_matrix_1[0],
-              3.2404542, 1e-6);
-  ASSERT_TRUE(
-      ResolveDevelopColorTransform(initial->document_->Develop()->Params().Params()).ok);
-
-  first.InitializeImageRoot(initial);
-  const auto payload = initial->document_->Develop()->Params().Params();
+  first.InitializeImageRoot(711, CreateDefaultPipelineDocument(), nullptr);
+  const auto root = first.LoadHistorySnapshot(711).root_;
+  ASSERT_NE(root, nullptr);
+  EXPECT_FALSE(root->raw_color_context.has_value());
+  ASSERT_NE(root->document.Develop(), nullptr);
+  const auto payload = root->document.Develop()->Params().Params();
   EXPECT_TRUE(payload.camera_profile.color_matrices_valid);
   EXPECT_NEAR(payload.camera_profile.color_matrix_1[0], 3.2404542, 1e-6);
   EXPECT_NEAR(payload.camera_profile.color_matrix_2[0], 3.2404542, 1e-6);
   ASSERT_TRUE(ResolveDevelopColorTransform(payload).ok);
   EXPECT_NE(payload.camera_profile.color_matrix_1[0], 0.625);
-  first.SavePipeline(initial);
 
   PipelineMgmtService reopened(project.GetStorage());
   auto                loaded = reopened.LoadEditorPipeline(711);
@@ -1413,10 +1415,10 @@ TEST_F(PipelineMapperTests, PersistedNonRawDocumentWithoutCameraMatricesBecomesR
   pipelines.SavePipeline(editor);
 }
 
-// The editor open path calls InitializeImageRoot without a RAW color context for an image that
-// already has a root. That call must not bind the working-space Rec.709 profile onto the live
-// document: a render on the same guard before the history replay would use the wrong colors.
-TEST_F(PipelineMapperTests, InitializeImageRootOnExistingRawRootLeavesLiveCameraProfileUnchanged) {
+// Editor open of an image whose RAW root exists must not bind the working-space Rec.709 profile
+// onto the live document: a render on the same guard would use the wrong colors. The live document
+// carries the RAW camera profile of the root, and the root stays as stored.
+TEST_F(PipelineMapperTests, EditorOpenOfExistingRawRootKeepsTheRawCameraProfile) {
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService pipelines(project.GetStorage());
 
@@ -1427,21 +1429,15 @@ TEST_F(PipelineMapperTests, InitializeImageRootOnExistingRawRootLeavesLiveCamera
   raw_context.color_matrix_1_[0]      = 0.625;
   raw_context.color_matrix_2_[0]      = 0.5;
 
-  auto live = pipelines.LoadPipeline(724);
+  pipelines.InitializeImageRoot(724, CreateDefaultPipelineDocument(), &raw_context);
+  const auto root_id = pipelines.LoadHistorySnapshot(724).graph_->GetRootId();
+
+  auto       live    = pipelines.LoadEditorPipeline(724);
   ASSERT_NE(live, nullptr);
-  pipelines.InitializeImageRoot(live, &raw_context);
-  const auto root_id     = live->root_id_;
-  const auto before_json = live->document_->ToJson();
-  ASSERT_DOUBLE_EQ(live->document_->Develop()->Params().Params().camera_profile.color_matrix_1[0],
-                   0.625);
-
-  pipelines.InitializeImageRoot(live);
-
   const auto profile = live->document_->Develop()->Params().Params().camera_profile;
   EXPECT_TRUE(profile.color_matrices_valid);
   EXPECT_DOUBLE_EQ(profile.color_matrix_1[0], 0.625);
   EXPECT_DOUBLE_EQ(profile.color_matrix_2[0], 0.5);
-  EXPECT_EQ(live->document_->ToJson(), before_json);
   EXPECT_EQ(live->root_id_, root_id);
   {
     auto             db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
@@ -1465,12 +1461,11 @@ TEST_F(PipelineMapperTests, PersistedRawRootWithoutMatricesDoesNotReceiveWorking
   raw_context.valid_                = true;
   raw_context.color_matrices_valid_ = false;
 
-  auto initial = first.LoadPipeline(723);
-  ASSERT_NE(initial, nullptr);
-  first.InitializeImageRoot(initial, &raw_context);
-  EXPECT_FALSE(initial->document_->Develop()->Params().Params().camera_profile.color_matrices_valid);
-  EXPECT_FALSE(ResolveDevelopColorTransform(initial->document_->Develop()->Params().Params()).ok);
-  first.SavePipeline(initial);
+  first.InitializeImageRoot(723, CreateDefaultPipelineDocument(), &raw_context);
+  const auto root = first.LoadHistorySnapshot(723).root_;
+  ASSERT_NE(root, nullptr);
+  EXPECT_FALSE(root->document.Develop()->Params().Params().camera_profile.color_matrices_valid);
+  EXPECT_FALSE(ResolveDevelopColorTransform(root->document.Develop()->Params().Params()).ok);
 
   PipelineMgmtService reopened(project.GetStorage());
   auto                loaded = reopened.LoadPipeline(723);

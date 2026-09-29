@@ -4,22 +4,21 @@
 
 #include "app/export_service.hpp"
 
+#include <OpenImageIO/imageio.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <chrono>
-#include <OpenImageIO/imageio.h>
 #include <exiv2/exiv2.hpp>
 #include <filesystem>
 #include <fstream>
 #include <future>
 #include <iostream>
 #include <memory>
-#include <mutex>
-#include <stdexcept>
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
+#include <stdexcept>
 #include <string>
 #include <vector>
 #if defined(ALCEDO_HAS_ULTRAHDR)
@@ -31,7 +30,6 @@
 #include "app/project_service.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/operators/utils/color_utils.hpp"
-#include "edit/runtime/drt_display.hpp"
 #include "image/image.hpp"
 #include "io/image/export_color_profile_config.hpp"
 #include "io/image/export_icc_profile_resolver.hpp"
@@ -54,21 +52,10 @@ auto SanitizeForPath(std::string s) -> std::string {
   return s;
 }
 
-void AttachResolvedExportColor(ExportTask& task, PipelineMgmtService& pipelines) {
-  auto recipe = task.recipe_.value_or(ExportRecipe::FromLegacyOptions(task.options_));
-  auto live   = pipelines.LoadPipeline(task.sleeve_id_);
-  if (!live || !live->document_ || !live->document_->Drt() || !live->pipeline_) {
-    if (live) {
-      pipelines.ReleasePipelineUse(live);
-    }
-    throw std::runtime_error("export test: document DRT is missing");
-  }
-  {
-    std::lock_guard<std::mutex> lock(live->pipeline_->GetRenderLock());
-    recipe.output_color_ = ExportColorProfileFromDrt(live->document_->Drt()->Params().Params());
-  }
-  pipelines.ReleasePipelineUse(live);
-  task.recipe_ = std::move(recipe);
+/// Give @p task the recipe of its flat options. The output color stays empty: ExportService reads
+/// it from the DRT of the committed snapshot it renders.
+void AttachLegacyRecipe(ExportTask& task) {
+  task.recipe_ = task.recipe_.value_or(ExportRecipe::FromLegacyOptions(task.options_));
 }
 
 auto CollectSupportedBatchImportImages(size_t max_count) -> std::vector<image_path_t> {
@@ -291,7 +278,7 @@ TEST_F(ExportServiceTests, ExportOneImage_WritesReadableFile) {
       std::ofstream old_destination(dst_path, std::ios::binary);
       old_destination << "old";
     }
-    AttachResolvedExportColor(task, *pipeline_service);
+    AttachLegacyRecipe(task);
     export_service.EnqueueExportTask(task);
 
     std::promise<std::shared_ptr<std::vector<ExportResult>>> done;
@@ -354,21 +341,6 @@ TEST_F(ExportServiceTests, DISABLED_ExportHdrJpeg_WritesUltraHdrFile) {
     const auto element_id     = snapshot.created_[0].element_id_;
     const auto image_id       = snapshot.created_[0].image_id_;
 
-    auto       pipeline_guard = pipeline_service->LoadPipeline(element_id);
-    ASSERT_NE(pipeline_guard, nullptr);
-    ASSERT_NE(pipeline_guard->document_, nullptr);
-    {
-      std::unique_lock lock(pipeline_guard->pipeline_->GetRenderLock());
-      auto drt = pipeline_guard->document_->Drt()->Params().Params();
-      drt.encoding_space = DrtColorSpace::Rec2020;
-      drt.encoding_eotf = DrtEotf::St2084;
-      drt.peak_luminance = 600.0f;
-      pipeline_guard->document_->Drt()->Params().ReplaceParams(drt);
-      // Stage defaults remain SDR: both pixels and export encoding must use the document.
-      pipeline_service->SyncPipelineDocument(pipeline_guard);
-    }
-    pipeline_service->SavePipeline(pipeline_guard);
-
     const auto src_path = image_pool->Read<std::filesystem::path>(
         image_id, [](std::shared_ptr<Image> img) { return img->image_path_; });
     std::filesystem::path dst_name = src_path.filename();
@@ -382,7 +354,10 @@ TEST_F(ExportServiceTests, DISABLED_ExportHdrJpeg_WritesUltraHdrFile) {
     task.image_id_             = image_id;
     task.options_.format_      = ImageFormatType::JPEG;
     task.options_.export_path_ = dst_path;
-    AttachResolvedExportColor(task, *pipeline_service);
+    AttachLegacyRecipe(task);
+    // Explicit HDR export target: both the pixels and the Ultra HDR encoding use it.
+    task.recipe_->output_color_ =
+        ExportColorProfileConfig{ColorUtils::ColorSpace::REC2020, ColorUtils::EOTF::ST2084, 600.0f};
     export_service.EnqueueExportTask(task);
 
     std::promise<std::shared_ptr<std::vector<ExportResult>>> done;
@@ -487,7 +462,7 @@ TEST_F(ExportServiceTests, DISABLED_BatchExport_LimitedCount_WritesReadableFiles
     task.image_id_             = image_id;
     task.options_.format_      = ImageFormatType::JPEG;
     task.options_.export_path_ = dst_path;
-    AttachResolvedExportColor(task, *pipeline_service);
+    AttachLegacyRecipe(task);
     export_service.EnqueueExportTask(task);
     expected_paths.push_back(dst_path);
   }
@@ -560,7 +535,7 @@ TEST_F(ExportServiceTests, DISABLED_Manual_KeepExportFiles) {
     task.image_id_             = image_id;
     task.options_.format_      = ImageFormatType::JPEG;
     task.options_.export_path_ = dst_path;
-    AttachResolvedExportColor(task, *pipeline_service);
+    AttachLegacyRecipe(task);
     export_service.EnqueueExportTask(task);
     expected_paths.push_back(dst_path);
   }
@@ -582,17 +557,28 @@ TEST_F(ExportServiceTests, DISABLED_Manual_KeepExportFiles) {
   std::cout << "[Manual Export] Kept export outputs under: " << export_dir_.string() << std::endl;
 }
 
-TEST_F(ExportServiceTests, ExportRecipeContainsResolvedOutputColorBeforeScheduling) {
+// Enqueue needs a recipe and a committed history; an explicit output color that is not valid is
+// refused. A refused task is not queued.
+TEST_F(ExportServiceTests, EnqueueRefusesTasksThatCannotResolveTheirCommittedState) {
   ProjectService project(db_path_, meta_path_);
   ExportService  export_service(project.GetSleeveService(), project.GetImagePoolService(),
                                 std::make_shared<PipelineMgmtService>(project.GetStorage()));
   ExportTask     task;
+  task.sleeve_id_       = 987654;
   task.options_.format_ = ImageFormatType::JPEG;
   EXPECT_THROW(export_service.EnqueueExportTask(task), std::runtime_error);
   task.recipe_ = ExportRecipe::FromLegacyOptions(task.options_);
+  // No history root for this element.
   EXPECT_THROW(export_service.EnqueueExportTask(task), std::runtime_error);
-  task.recipe_->output_color_ = ExportColorProfileConfig{};
-  EXPECT_NO_THROW(export_service.EnqueueExportTask(task));
+
+  std::promise<std::shared_ptr<std::vector<ExportResult>>> done;
+  auto                                                     done_fut = done.get_future();
+  export_service.ExportAll(
+      [&done](std::shared_ptr<std::vector<ExportResult>> results) { done.set_value(results); });
+  ASSERT_EQ(done_fut.wait_for(10s), std::future_status::ready);
+  const auto results = done_fut.get();
+  ASSERT_NE(results, nullptr);
+  EXPECT_TRUE(results->empty());
 }
 
 TEST_F(ExportServiceTests, ExportPixelsAndIccUseTheSameRecipeColorConfiguration) {
@@ -620,9 +606,8 @@ TEST_F(ExportServiceTests, ExportPixelsAndIccUseTheSameRecipeColorConfiguration)
   const auto snapshot   = import_job->import_log_->Snapshot();
   const auto element_id = snapshot.created_[0].element_id_;
   const auto image_id   = snapshot.created_[0].image_id_;
-  auto       live       = pipeline_service->LoadPipeline(element_id);
-  const auto document_before = live->document_->Drt()->Params().ToJson();
-  pipeline_service->ReleasePipelineUse(live);
+  const auto document_before =
+      pipeline_service->AcquireCommittedSnapshot(element_id)->Document().Drt()->Params().ToJson();
 
   auto run_export = [&](const std::filesystem::path& path, ExportColorProfileConfig color,
                         ExportIccPolicy icc) {
@@ -660,9 +645,9 @@ TEST_F(ExportServiceTests, ExportPixelsAndIccUseTheSameRecipeColorConfiguration)
   run_export(p3_path, p3, ExportIccPolicy::EMBED_OUTPUT_PROFILE);
   run_export(omit_path, p3, ExportIccPolicy::OMIT);
 
-  live = pipeline_service->LoadPipeline(element_id);
-  EXPECT_EQ(live->document_->Drt()->Params().ToJson(), document_before);
-  pipeline_service->ReleasePipelineUse(live);
+  EXPECT_EQ(
+      pipeline_service->AcquireCommittedSnapshot(element_id)->Document().Drt()->Params().ToJson(),
+      document_before);
 
   const auto rec709_icc = ExportIccProfileResolver::ResolveIccProfileBytes(rec709);
   const auto p3_icc     = ExportIccProfileResolver::ResolveIccProfileBytes(p3);

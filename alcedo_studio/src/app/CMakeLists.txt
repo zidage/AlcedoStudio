@@ -501,8 +501,8 @@ endif()
 
 def_library(ImportService
     SOURCES "${ALCEDO_APP_ROOT}/import_service.cpp"
-    # Import assembly calls LoadPipeline / SyncPipeline / InitializeImageRoot /
-    # SavePipeline on the PipelineMgmtService injected at construction.
+    # Import creates each image's history root through InitializeImageRoot on the
+    # PipelineMgmtService injected at construction; it constructs no executor.
     PUBLIC_DEPS SleeveManager ImageWriter ImagePoolService FSService PipelineMgmtService
 )
 

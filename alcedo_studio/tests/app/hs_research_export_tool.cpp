@@ -2,15 +2,13 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-#include <exiv2/exiv2.hpp>
-
 #include <chrono>
+#include <exiv2/exiv2.hpp>
 #include <filesystem>
 #include <future>
 #include <iomanip>
 #include <iostream>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -28,13 +26,14 @@
 #include <shellapi.h>
 #endif
 
+#include "app/adjustment_transfer_service.hpp"
 #include "app/export_service.hpp"
 #include "app/import_service.hpp"
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
 #include "edit/graph/pipeline_document.hpp"
+#include "edit/history/commit_graph.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
-#include "edit/runtime/drt_display.hpp"
 #include "type/supported_file_type.hpp"
 #include "utils/clock/time_provider.hpp"
 
@@ -357,18 +356,23 @@ auto RunHsResearchExportTool(int argc, char** argv) -> int {
           throw std::runtime_error("Failed to find imported entry for " + PathToUtf8(raw_path));
         }
 
-        auto pipeline_guard = pipeline_service->LoadPipeline(entry->element_id_);
-        if (!pipeline_guard || !pipeline_guard->pipeline_ || !pipeline_guard->document_) {
-          throw std::runtime_error("Failed to load pipeline for " + PathToUtf8(raw_path));
+        // Export renders the committed history, so the study adjustments are committed first:
+        // pasted as a root-relative Version, the same history write a library Paste makes.
+        const auto base           = pipeline_service->LoadHistorySnapshot(entry->element_id_);
+        auto       study_document = ClonePipelineDocument(
+            pipeline_service->AcquireCommittedSnapshot(entry->element_id_)->Document());
+        ApplyReferenceStudyAdjustments(study_document, options.shadow_slider,
+                                       options.highlight_slider, options.saturation_slider,
+                                       default_lut_path);
+        CommitGraph graph  = *base.graph_;
+        const auto  pasted = AdjustmentTransferService::PasteAsRootRelativeVersion(
+            graph, base.root_->document, AdjustmentTransferService::Capture(study_document),
+            "Reference study");
+        if (!pasted.pasted) {
+          throw std::runtime_error("Failed to commit the study adjustments for " +
+                                   PathToUtf8(raw_path) + ": " + pasted.error);
         }
-
-        {
-          std::lock_guard<std::mutex> lock(pipeline_guard->pipeline_->GetRenderLock());
-          ApplyReferenceStudyAdjustments(*pipeline_guard->document_, options.shadow_slider,
-                                         options.highlight_slider, options.saturation_slider,
-                                         default_lut_path);
-        }
-        pipeline_guard->dirty_ = true;
+        (void)pipeline_service->PersistHistory(base, graph);
 
         ExportTask task;
         task.sleeve_id_              = entry->element_id_;
@@ -380,19 +384,11 @@ auto RunHsResearchExportTool(int argc, char** argv) -> int {
                                      BuildOutputName(raw_path, options.shadow_slider,
                                                      options.highlight_slider);
         task.recipe_ = ExportRecipe::FromLegacyOptions(task.options_);
-        if (pipeline_guard->document_ && pipeline_guard->document_->Drt()) {
-          std::lock_guard<std::mutex> lock(pipeline_guard->pipeline_->GetRenderLock());
-          task.recipe_->output_color_ =
-              ExportColorProfileFromDrt(pipeline_guard->document_->Drt()->Params().Params());
-        }
-        pipeline_service->SavePipeline(pipeline_guard);
         export_service.EnqueueExportTask(task);
 
         std::cout << "[HsResearchExportTool] queued " << PathToUtf8(raw_path) << " -> "
                   << PathToUtf8(task.options_.export_path_) << '\n';
       }
-
-      pipeline_service->Sync();
 
       std::promise<std::shared_ptr<std::vector<ExportResult>>> done;
       auto                                                     future = done.get_future();

@@ -13,7 +13,7 @@
 
 #include "app/pipeline_service.hpp"
 #include "decoders/processor/raw_color_context.hpp"
-#include "edit/pipeline/pipeline_executor.hpp"
+#include "edit/graph/pipeline_document.hpp"
 #include "image/image.hpp"
 #include "image/metadata_extractor.hpp"
 #include "sleeve/sleeve_element/sleeve_element.hpp"
@@ -27,25 +27,13 @@ auto IsRootImportDestination(const image_path_t& dest) -> bool {
   return normalized.empty() || normalized == image_path_t{L"/"} || normalized == image_path_t{L"."};
 }
 
-void PersistAssembledImportPipeline(PipelineMgmtService& pipeline_service,
-                                    sl_element_id_t element_id, const std::shared_ptr<Image>& image) {
-  auto guard = pipeline_service.LoadPipeline(element_id);
-  if (!guard || !guard->pipeline_) {
-    throw std::runtime_error("ImportService: pipeline unavailable during import assembly");
-  }
-
-  guard->dirty_ = true;
-
-  // InitializeImageRoot binds the camera profile onto the document under the render lock (the
-  // RAW color context, or the working-space profile for non-RAW files) and creates the immutable
-  // history root. The product save below persists only the document graph.
+/// Create the immutable history root of a newly imported image on a private default document.
+/// No executor and no PipelineGuard: nothing renders the document before its root exists.
+void InitializeImportedImageRoot(PipelineMgmtService& pipeline_service, sl_element_id_t element_id,
+                                 const std::shared_ptr<Image>& image) {
   const RawRuntimeColorContext* ctx_ptr =
       image && image->HasRawColorContext() ? &image->GetRawColorContext() : nullptr;
-  pipeline_service.InitializeImageRoot(guard, ctx_ptr);
-
-  // Publish the prepared camera/profile data before background tasks can load the document.
-  pipeline_service.SyncPipelineDocument(guard);
-  pipeline_service.SavePipeline(guard);
+  pipeline_service.InitializeImageRoot(element_id, CreateDefaultPipelineDocument(), ctx_ptr);
 }
 
 }  // namespace
@@ -195,7 +183,7 @@ auto ImportServiceImpl::ImportToFolder(const std::vector<image_path_t>& paths,
       // Extract metadata, assemble full pipeline JSON, then mark success.
       try {
         MetadataExtractor::ExtractEXIF_ToImage(image_ptr->image_path_, *image_ptr);
-        PersistAssembledImportPipeline(*pipeline_service, element_id, image_ptr);
+        InitializeImportedImageRoot(*pipeline_service, element_id, image_ptr);
         if (import_log) {
           import_log->MarkMetadataSuccess(image_ptr->image_id_);
         }

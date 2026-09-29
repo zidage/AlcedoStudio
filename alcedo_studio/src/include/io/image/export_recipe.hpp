@@ -129,8 +129,9 @@ struct ExportRecipe {
   ExportCollisionPolicy                     collision_ = ExportCollisionPolicy::FAIL;
   ExportFileNameTemplate                    file_name_;
   /**
-   * Pixel encoding for this image. Required before enqueue. FromLegacyOptions
-   * leaves this empty; the app fills it from this image's DRT (or an explicit target).
+   * Pixel encoding for this image, used for both the rendered pixels and the ICC profile.
+   * Empty (FromLegacyOptions): ExportService reads it at enqueue from the DRT node of the
+   * committed snapshot it renders. Set: an explicit export target that replaces the DRT encoding.
    */
   std::optional<ExportColorProfileConfig>   output_color_;
 

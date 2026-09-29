@@ -165,41 +165,36 @@ auto DocumentLutPath(const std::shared_ptr<alcedo::PipelineGuard>& guard) -> std
   return value.has_value() && value->is_string() ? value->get<std::string>() : std::string{};
 }
 
-/// Mirrors AdjustmentTransferApplyCoordinator::ApplyToTargets: root-relative
-/// Version, rebuild live pipeline, persist graph, optionally request checkpoint
-/// writeback.
-auto LibraryPasteThenRelease(alcedo::PipelineMgmtService& pipeline_service,
-                             sl_element_id_t element_id,
-                             const alcedo::AdjustmentTransferPackage& package,
-                             bool writeback_after_persist, std::string* error) -> bool {
-  auto guard = pipeline_service.LoadEditorPipeline(element_id);
-  if (!guard || !guard->commit_graph_ || !guard->pipeline_ || !guard->root_document_) {
-    if (error) *error = "Library paste requires a loaded editor pipeline";
+/// Same steps as AdjustmentTransferApplyCoordinator::ApplyPackageToTargets for one library
+/// image: paste a root-relative Version on a private copy of the stored history, then persist it
+/// with the checkpoint of the replayed document in one transaction.
+auto LibraryPaste(alcedo::PipelineMgmtService& pipeline_service, sl_element_id_t element_id,
+                  const alcedo::AdjustmentTransferPackage& package, std::string* error) -> bool {
+  try {
+    const auto          base   = pipeline_service.LoadHistorySnapshot(element_id);
+    alcedo::CommitGraph graph  = *base.graph_;
+    const auto          pasted = alcedo::AdjustmentTransferService::PasteAsRootRelativeVersion(
+        graph, base.root_->document, package, "Pasted Adjustments");
+    if (!pasted.pasted) {
+      if (error) *error = pasted.error.empty() ? "Library paste failed" : pasted.error;
+      return false;
+    }
+    (void)pipeline_service.PersistHistory(base, graph);
+    return true;
+  } catch (const std::exception& e) {
+    if (error) *error = e.what();
     return false;
   }
-  const auto expected = guard->commit_graph_->GetImageEditState();
-  const auto pasted   = alcedo::AdjustmentTransferService::PasteAsRootRelativeVersion(
-      *guard->commit_graph_, *guard->root_document_, package, "Pasted Adjustments");
-  if (!pasted.pasted) {
-    if (error) *error = pasted.error.empty() ? "Library paste failed" : pasted.error;
-    pipeline_service.SavePipeline(guard);
-    return false;
-  }
-  if (!pipeline_service.RebuildActiveEditorPipeline(guard, error)) {
-    pipeline_service.SavePipeline(guard);
-    return false;
-  }
-  guard->serialized_state_needs_writeback_ = true;
-  if (!pipeline_service.PersistEditorHistoryState(guard, expected, error)) {
-    pipeline_service.SavePipeline(guard);
-    return false;
-  }
-  if (writeback_after_persist) {
-    guard->serialized_state_needs_writeback_ = true;
-  }
-  guard->dirty_ = false;
-  pipeline_service.SavePipeline(guard);
-  return true;
+}
+
+/// Clear the stored checkpoint of @p element_id so the next editor open replays its history.
+void ClearStoredCheckpoint(alcedo::ProjectService& project, sl_element_id_t element_id) {
+  auto                     db_guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+  auto                     db_lock  = db_guard.Lock();
+  alcedo::CommitGraphStore graph_service(db_guard.conn_);
+  const auto               graph = graph_service.LoadGraph(element_id);
+  ASSERT_TRUE(graph.has_value());
+  graph_service.Materialize(graph->CaptureMaterializationClearingSerializedPipelineState());
 }
 
 class EditorSessionHistoryPortTest : public ::testing::Test {
@@ -1823,9 +1818,11 @@ TEST(EditorSessionHistoryPortPersistTest,
   alcedo::ProjectService project(db_path, meta_path, alcedo::ProjectOpenMode::kCreateNew);
   {
     alcedo::PipelineMgmtService pipeline_service(project.GetStorage());
-    std::string                 error;
-    ASSERT_TRUE(LibraryPasteThenRelease(pipeline_service, element_id, MakeLutTransferPackage(lut_path),
-                                        true, &error))
+    pipeline_service.InitializeImageRoot(element_id, alcedo::CreateDefaultPipelineDocument(),
+                                         nullptr);
+    std::string error;
+    ASSERT_TRUE(
+        LibraryPaste(pipeline_service, element_id, MakeLutTransferPackage(lut_path), &error))
         << error;
   }
 
@@ -1866,7 +1863,7 @@ TEST(EditorSessionHistoryPortPersistTest,
 }
 
 TEST(EditorSessionHistoryPortPersistTest,
-     LibraryPasteWithoutSerializedCheckpointStillRestoresLutFieldInLiveDocument) {
+     LibraryPasteWithoutStoredCheckpointStillRestoresLutFieldInLiveDocument) {
   alcedo::TimeProvider::Refresh();
 
   const auto stamp =
@@ -1888,13 +1885,15 @@ TEST(EditorSessionHistoryPortPersistTest,
   alcedo::ProjectService project(db_path, meta_path, alcedo::ProjectOpenMode::kCreateNew);
   {
     alcedo::PipelineMgmtService pipeline_service(project.GetStorage());
-    std::string                 error;
-    // Old library-paste path: Persist clears the checkpoint and leaves writeback
-    // false, so SavePipeline does not store a document checkpoint.
-    ASSERT_TRUE(LibraryPasteThenRelease(pipeline_service, element_id, MakeLutTransferPackage(lut_path),
-                                        false, &error))
+    pipeline_service.InitializeImageRoot(element_id, alcedo::CreateDefaultPipelineDocument(),
+                                         nullptr);
+    std::string error;
+    ASSERT_TRUE(
+        LibraryPaste(pipeline_service, element_id, MakeLutTransferPackage(lut_path), &error))
         << error;
   }
+  // An editor history save clears the checkpoint; the next open must replay the history.
+  ClearStoredCheckpoint(project, element_id);
 
   {
     auto pipeline_service = std::make_shared<alcedo::PipelineMgmtService>(project.GetStorage());
