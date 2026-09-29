@@ -146,8 +146,7 @@ auto MakeHostRequest(std::uint32_t max_edge) -> PipelineApplyRequest {
 auto RunPipelineWithBackend(const std::filesystem::path& raw_path,
                             AcceleratorBackendPreference pref,
                             const BenchmarkScenario& scenario) -> PipelineBenchResult {
-
-  PipelineExecutor pipeline;
+  PipelineExecutor pipeline(ExecutorRole::Interactive);
   pipeline.SetAcceleratorBackendPreference(pref);
   const auto request =
       MakeHostRequest(scenario.full_res ? 0U : static_cast<std::uint32_t>(scenario.max_edge));
@@ -317,9 +316,8 @@ TEST(OpenClCudaFullPipelineBenchmark, RepeatedFrameTimingStability) {
     int    frames   = 0;
   };
 
-  auto measure_backend = [&](AcceleratorBackendPreference pref,
-                             const char* label) -> TimingStats {
-    PipelineExecutor pipeline;
+  auto measure_backend = [&](AcceleratorBackendPreference pref, const char* label) -> TimingStats {
+    PipelineExecutor pipeline(ExecutorRole::Interactive);
     pipeline.SetAcceleratorBackendPreference(pref);
     const auto request  = MakeHostRequest(static_cast<std::uint32_t>(kMaxEdge));
     const auto snapshot = MakeDefaultSnapshot();

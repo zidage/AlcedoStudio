@@ -68,15 +68,12 @@ struct PipelineTask {
   std::optional<std::function<void(ImageBuffer&)>>            callback_;  // used for callback tasks
   std::optional<std::function<void(ImageBuffer&, uint32_t)>>
                                                     seq_callback_;  // used for callback tasks
+  // Runs on the worker before the input is loaded and before the executor render lock is taken.
+  // The owner attaches its frame sink here; returning false drops the task without a result.
   std::optional<std::function<bool(PipelineTask&)>> prepare_;
-  // Request-specific executor configuration performed under the same render
-  // lock as Apply(). This is the only safe place to mutate a shared executor.
-  std::optional<std::function<bool(PipelineTask&)>> configure_under_render_lock_;
-  // Returns the pipeline graph snapshot this task renders. Called once per task by the scheduler
-  // while it holds the executor render lock, after configure_under_render_lock_ and before Apply,
-  // so a live document written under the same lock is frozen at a consistent point. Required for
-  // every task that renders; a missing source or a null result fails the task.
-  std::function<std::shared_ptr<const PipelineGraphSnapshot>()> snapshot_under_render_lock_;
+  // Immutable graph this task renders. The owner freezes it before it schedules the task. Required
+  // for every task that renders; a task without one fails.
+  std::shared_ptr<const PipelineGraphSnapshot>           snapshot_;
   std::function<bool()>                             cancel_requested_;
   // Optional control-plane completion (preview + export). Invoked once on every
   // terminal path so callers do not need a dedicated blocking worker thread.

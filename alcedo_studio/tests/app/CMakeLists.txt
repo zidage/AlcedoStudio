@@ -700,12 +700,14 @@ gtest_discover_tests(MaskThumbnailServiceTest TEST_PREFIX "MaskThumbnailServiceT
     PROPERTIES LABELS "ci_core_flow")
 alcedo_register_test_target(MaskThumbnailServiceTest app ci_core)
 
-add_executable(PipelineSharedUseTest ${ALCEDO_TEST_ROOT}/app/pipeline_shared_use_test.cpp)
-target_include_directories(PipelineSharedUseTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
-target_link_libraries(PipelineSharedUseTest ThumbnailService ExportService ProjectService
-  ImportService GTest::gtest_main ImageWriter ${ALCEDO_TEST_OPENCV_MIN_DEPS})
-gtest_discover_tests(PipelineSharedUseTest TEST_PREFIX "PipelineSharedUseTest.")
-alcedo_register_test_target(PipelineSharedUseTest app)
+# Executor ownership refactor P7: thumbnails, analysis, and export render on their own executors
+# and leave the editor executor, its working document, and storage unchanged.
+add_executable(BackgroundRenderIsolationTest ${ALCEDO_TEST_ROOT}/app/background_render_isolation_test.cpp)
+target_include_directories(BackgroundRenderIsolationTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(BackgroundRenderIsolationTest ThumbnailService ExportService ProjectService
+  ImportService EditorWorkingDocument GTest::gtest_main ImageWriter ${ALCEDO_TEST_OPENCV_MIN_DEPS})
+gtest_discover_tests(BackgroundRenderIsolationTest TEST_PREFIX "BackgroundRenderIsolationTest.")
+alcedo_register_test_target(BackgroundRenderIsolationTest app)
 
 # Executor ownership refactor P0: isolation requirements between the editor, one-shot renders,
 # and export. DISABLED_ tests name the phase that enables them.

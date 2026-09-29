@@ -26,9 +26,9 @@ namespace alcedo {
 // 1. Edit history owns HEAD.
 //    - CommitGraph + VersionRef.head_commit_hash is the only working tip.
 //    - Switching Version, undo, redo, and paste move history head only.
-//    - PipelineGuard must not store a parallel working_head field.
+//    - The editor working document must not store a parallel working_head field.
 //
-// 2. PipelineDocument is the live DAG (plus executor).
+// 2. PipelineDocument is the live DAG. It holds no executor.
 //    - Live mutations apply typed batches to the one writable document.
 //    - DuckDB serialized checkpoint JSON is that document labeled with the
 //      history tip, not a second editable universe and not a second head.

@@ -5,10 +5,11 @@
 // Isolation requirements for the executor ownership refactor
 // (docs/refactor/2026-09-27-executor-ownership-refactor-plan.md, phase P0).
 //
-// Each DISABLED_ test states a requirement that the shared PipelineGuard model breaks today. The
-// phase named in its comment enables it; an enabled test names the phase that fixed it. The
-// enabled control test next to it runs the same steps without the conflicting consumer, so it
-// proves that the measurement itself is correct.
+// Each test states a requirement that the shared per-image executor model broke before this
+// refactor, and its comment names the phase that fixed it. The control test next to it runs the
+// same steps without the conflicting consumer, so it proves that the measurement itself is
+// correct. The editor is modelled by what it owns since P6: the lease, an EditorWorkingDocument,
+// and a test-owned Interactive executor.
 
 #include <OpenImageIO/imageio.h>
 #include <gtest/gtest.h>
@@ -61,7 +62,6 @@
 namespace alcedo {
 namespace {
 using namespace std::chrono_literals;
-using raw_import_test::BindImportedRawColor;
 using raw_import_test::HostPixels;
 using raw_import_test::ImportLinearDng;
 using raw_import_test::LinearDngPath;
@@ -234,16 +234,14 @@ class ExecutorIsolationTest : public ::testing::Test {
     return request;
   }
 
-  /// Render @p input on @p guard's executor in @p role and return the host pixels. The guard
-  /// document is frozen under the render lock, as the scheduler does for a production task.
-  static auto Render(PipelineGuard& guard, const std::shared_ptr<ImageBuffer>& input,
-                     ExecutorRole role) -> cv::Mat {
+  /// Render @p snapshot on @p executor in @p role and return the host pixels.
+  static auto Render(PipelineExecutor& executor, const PipelineGraphSnapshot& snapshot,
+                     const std::shared_ptr<ImageBuffer>& input, ExecutorRole role) -> cv::Mat {
     const auto                   request = MakeRequest(role);
     std::shared_ptr<ImageBuffer> output;
     {
-      std::lock_guard<std::mutex> render_lock(guard.pipeline_->GetRenderLock());
-      const auto                  snapshot = guard.FreezeLiveSnapshot();
-      output                               = guard.pipeline_->Apply(*snapshot, input, request);
+      std::lock_guard<std::mutex> render_lock(executor.GetRenderLock());
+      output = executor.Apply(snapshot, input, request);
     }
     return output ? HostPixels(*output) : cv::Mat{};
   }
@@ -317,60 +315,64 @@ TEST_F(ExecutorIsolationTest, EditorSessionRenderShowsParameterChangeWithoutInte
   auto           pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
   const auto     ids       = ImportLinearDng(project, pipelines);
   ASSERT_NE(ids.first, 0u);
-  auto live = pipelines->LoadPipeline(ids.first);
-  ASSERT_NE(live, nullptr);
-  BindImportedRawColor(live, *project.GetImagePoolService(), ids.second);
-  const auto input = LoadEncodedInput(*project.GetImagePoolService(), ids.second);
+  const auto lease = pipelines->AcquireEditorLease(ids.first);
+  ASSERT_NE(lease.document_, nullptr);
+  EditorWorkingDocument working(ids.first, lease.document_);
+  PipelineExecutor      editor_executor(ExecutorRole::Interactive);
+  const auto            input = LoadEncodedInput(*project.GetImagePoolService(), ids.second);
   ASSERT_NE(input, nullptr);
-  auto* exposure = PrimaryExposure(*live->document_);
+  auto* exposure = PrimaryExposure(working.Document());
   ASSERT_NE(exposure, nullptr);
 
-  const cv::Mat before = Render(*live, input, ExecutorRole::Interactive);
+  const cv::Mat before =
+      Render(editor_executor, *working.CurrentPreview(), input, ExecutorRole::Interactive);
   ASSERT_FALSE(before.empty());
-  {
-    std::lock_guard<std::mutex> render_lock(live->pipeline_->GetRenderLock());
-    exposure->SetValue(exposure->Value() + 1.5f);
-  }
-  const cv::Mat after     = Render(*live, input, ExecutorRole::Interactive);
-  const cv::Mat reference = RenderOnNewExecutor(*live->document_, input);
+  exposure->SetValue(exposure->Value() + 1.5f);
+  (void)working.PublishPreview();
+  const cv::Mat after =
+      Render(editor_executor, *working.CurrentPreview(), input, ExecutorRole::Interactive);
+  const cv::Mat reference = RenderOnNewExecutor(working.Document(), input);
 
   EXPECT_GT(MeanOfAllChannels(after), MeanOfAllChannels(before) * 1.2);
   EXPECT_LE(MaxAbsDifference(after, reference), SameValuesTolerance(reference));
-  pipelines->ReleasePipelineUse(live);
+  pipelines->ReleaseEditorLease(ids.first);
 }
 
 // Audit R7. Before P1, a one-shot (thumbnail/export) render on the same document took the Model
 // dirty bits, so the editor session arena and invalidation state saw no change and kept the old
 // parameters. Enabled by P1: each render workspace compares Model revisions with its own record.
-// Since P3 the one-shot render is a batch-role render on the same shared executor; it reads a
-// snapshot frozen from the same live document between the edit and the editor frame.
+// Since P7 the one-shot render runs on its own Batch executor, as thumbnails and export do; it
+// reads a snapshot of the same working document between the edit and the editor frame.
 TEST_F(ExecutorIsolationTest, EditorSessionRenderShowsParameterChangeAfterInterleavedOneShot) {
   ProjectService project(db_path_, meta_path_);
   auto           pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
   const auto     ids       = ImportLinearDng(project, pipelines);
   ASSERT_NE(ids.first, 0u);
-  auto live = pipelines->LoadPipeline(ids.first);
-  ASSERT_NE(live, nullptr);
-  BindImportedRawColor(live, *project.GetImagePoolService(), ids.second);
-  const auto input = LoadEncodedInput(*project.GetImagePoolService(), ids.second);
+  const auto lease = pipelines->AcquireEditorLease(ids.first);
+  ASSERT_NE(lease.document_, nullptr);
+  EditorWorkingDocument working(ids.first, lease.document_);
+  PipelineExecutor      editor_executor(ExecutorRole::Interactive);
+  PipelineExecutor      one_shot_executor(ExecutorRole::Batch);
+  const auto            input = LoadEncodedInput(*project.GetImagePoolService(), ids.second);
   ASSERT_NE(input, nullptr);
-  auto* exposure = PrimaryExposure(*live->document_);
+  auto* exposure = PrimaryExposure(working.Document());
   ASSERT_NE(exposure, nullptr);
 
-  const cv::Mat before = Render(*live, input, ExecutorRole::Interactive);
+  const cv::Mat before =
+      Render(editor_executor, *working.CurrentPreview(), input, ExecutorRole::Interactive);
   ASSERT_FALSE(before.empty());
-  {
-    std::lock_guard<std::mutex> render_lock(live->pipeline_->GetRenderLock());
-    exposure->SetValue(exposure->Value() + 1.5f);
-  }
-  const cv::Mat one_shot = Render(*live, input, ExecutorRole::Batch);
+  exposure->SetValue(exposure->Value() + 1.5f);
+  (void)working.PublishPreview();
+  const cv::Mat one_shot =
+      Render(one_shot_executor, *working.CurrentPreview(), input, ExecutorRole::Batch);
   ASSERT_FALSE(one_shot.empty());
-  const cv::Mat after     = Render(*live, input, ExecutorRole::Interactive);
-  const cv::Mat reference = RenderOnNewExecutor(*live->document_, input);
+  const cv::Mat after =
+      Render(editor_executor, *working.CurrentPreview(), input, ExecutorRole::Interactive);
+  const cv::Mat reference = RenderOnNewExecutor(working.Document(), input);
 
   EXPECT_GT(MeanOfAllChannels(after), MeanOfAllChannels(before) * 1.2);
   EXPECT_LE(MaxAbsDifference(after, reference), SameValuesTolerance(reference));
-  pipelines->ReleasePipelineUse(live);
+  pipelines->ReleaseEditorLease(ids.first);
 }
 
 // P1 exit condition: the revision protocol must not turn editor incremental renders into full
@@ -381,35 +383,42 @@ TEST_F(ExecutorIsolationTest, EditorSessionEditSequenceReexecutesOnlyPassesDowns
   auto           pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
   const auto     ids       = ImportLinearDng(project, pipelines);
   ASSERT_NE(ids.first, 0u);
-  auto live = pipelines->LoadPipeline(ids.first);
-  ASSERT_NE(live, nullptr);
-  BindImportedRawColor(live, *project.GetImagePoolService(), ids.second);
-  const auto input = LoadEncodedInput(*project.GetImagePoolService(), ids.second);
+  const auto lease = pipelines->AcquireEditorLease(ids.first);
+  ASSERT_NE(lease.document_, nullptr);
+  EditorWorkingDocument working(ids.first, lease.document_);
+  const auto            input = LoadEncodedInput(*project.GetImagePoolService(), ids.second);
   ASSERT_NE(input, nullptr);
-  auto& document = *live->document_;
-  auto* exposure = PrimaryExposure(document);
-  auto* shadows  = dynamic_cast<ShadowsModel*>(
-      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Shadows()));
-  ASSERT_NE(exposure, nullptr);
-  ASSERT_NE(shadows, nullptr);
+  auto&      document   = working.Document();
+  // Each edit looks its model up through the working document, as the history does, so a node
+  // that a published preview shares is copied before the write.
+  const auto shadows_of = [&document] {
+    return dynamic_cast<ShadowsModel*>(
+        document.PrimaryGrade()->FindAdjustmentByType(type_ids::Shadows()));
+  };
+  ASSERT_NE(PrimaryExposure(document), nullptr);
+  ASSERT_NE(shadows_of(), nullptr);
 
-  auto&                                        executor = *live->pipeline_;
+  PipelineExecutor                             executor(ExecutorRole::Interactive);
   std::map<std::string, EditorFramePassCounts> frames;
   const auto render_frame = [&](const std::string& name, const std::function<void()>& edit) {
-    {
-      std::lock_guard<std::mutex> render_lock(executor.GetRenderLock());
-      edit();
-    }
-    const auto before = SessionRenderStats(executor);
-    ASSERT_FALSE(Render(*live, input, ExecutorRole::Interactive).empty()) << name;
+    edit();
+    const auto preview = working.PublishPreview();
+    const auto before  = SessionRenderStats(executor);
+    ASSERT_FALSE(Render(executor, *preview, input, ExecutorRole::Interactive).empty()) << name;
     frames[name] = FramePassCounts(before, SessionRenderStats(executor));
     std::cout << FormatFramePassCounts(name, frames[name]) << std::endl;
   };
 
   render_frame("0_first", [] {});
   render_frame("1_unchanged", [] {});
-  render_frame("2_exposure", [&] { exposure->SetValue(exposure->Value() + 0.5f); });
-  render_frame("3_shadows", [&] { shadows->SetValue(shadows->Value() + 20.0f); });
+  render_frame("2_exposure", [&] {
+    auto* exposure = PrimaryExposure(document);
+    exposure->SetValue(exposure->Value() + 0.5f);
+  });
+  render_frame("3_shadows", [&] {
+    auto* shadows = shadows_of();
+    shadows->SetValue(shadows->Value() + 20.0f);
+  });
   render_frame("4_grade_mix", [&] { document.PrimaryGrade()->SetMix(0.5f); });
   render_frame("5_white_balance", [&] {
     auto payload       = document.Develop()->Params().Params();
@@ -418,7 +427,7 @@ TEST_F(ExecutorIsolationTest, EditorSessionEditSequenceReexecutesOnlyPassesDowns
     document.Develop()->Params().ReplaceParams(payload);
   });
   render_frame("6_unchanged", [] {});
-  pipelines->ReleasePipelineUse(live);
+  pipelines->ReleaseEditorLease(ids.first);
   if (HasFatalFailure()) {
     return;
   }

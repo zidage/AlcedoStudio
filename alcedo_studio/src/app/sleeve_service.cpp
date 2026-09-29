@@ -119,9 +119,6 @@ auto SleeveServiceImpl::Sync() -> SyncResult {
     // TODO: This should be done periodically instead of every sync.
     for (auto& element : garbage_elements) {
       LogSyncElement("Deleted", element);
-      if (element && element->type_ == ElementType::FILE) {
-        storage_->ForgetLivePipeline(element->element_id_);
-      }
     }
     element_ctrl.RemoveElements(garbage_elements);
     result.elements_synced_ += static_cast<uint32_t>(garbage_elements.size());

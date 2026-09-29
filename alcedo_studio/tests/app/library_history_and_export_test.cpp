@@ -2,8 +2,8 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-// Executor ownership refactor P5: export, import, Copy, and Paste to library images never load a
-// PipelineGuard and never construct or borrow an executor other than their own.
+// Executor ownership refactor P5: export, import, Copy, and Paste to library images never
+// construct or borrow an executor other than their own; the pipeline service holds none.
 // - Export renders the committed snapshot captured at enqueue on the ExportService's own batch
 //   executor and reads the output color from the DRT of the same snapshot.
 // - Import creates the history root on a private document.
@@ -204,17 +204,14 @@ class LibraryHistoryAndExportTest : public ::testing::Test {
   std::filesystem::path export_dir_;
 };
 
-// Import builds the root on a private document: no PipelineGuard, no executor. The stored root
-// carries the RAW camera profile, and the element pipeline JSON (kept for older versions of the
-// application) is the same document.
-TEST_F(LibraryHistoryAndExportTest, ImportCreatesTheRootWithoutLoadingAPipelineGuard) {
+// Import builds the root on a private document, with no executor. The stored root carries the
+// RAW camera profile, and the element pipeline JSON (kept for older versions of the application)
+// is the same document.
+TEST_F(LibraryHistoryAndExportTest, ImportCreatesTheRootOnAPrivateDocument) {
   ProjectService project(db_path_, meta_path_);
   auto           pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
   const auto     ids       = ImportLinearDng(project, pipelines);
   ASSERT_NE(ids.first, 0u);
-
-  EXPECT_EQ(pipelines->PipelineConstructCount(), 0u);
-  EXPECT_EQ(pipelines->PipelineLoadCount(), 0u);
 
   const auto history = pipelines->LoadHistorySnapshot(ids.first);
   ASSERT_TRUE(history.root_ != nullptr);
@@ -244,9 +241,9 @@ TEST_F(LibraryHistoryAndExportTest, InitializeImageRootRefusesAnImageThatAlready
   EXPECT_EQ(pipelines->LoadHistorySnapshot(ids.first).graph_->GetRootId(), root_before);
 }
 
-// Copy source: the stored history is read without a PipelineGuard, and the snapshot does not
-// change when storage changes later.
-TEST_F(LibraryHistoryAndExportTest, HistorySnapshotIsReadWithoutAPipelineGuardAndStaysImmutable) {
+// Copy source: the stored history is read from storage, and the snapshot does not change when
+// storage changes later.
+TEST_F(LibraryHistoryAndExportTest, HistorySnapshotIsReadFromStorageAndStaysImmutable) {
   ProjectService project(db_path_, meta_path_);
   auto           pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
   const auto     ids       = ImportLinearDng(project, pipelines);
@@ -259,8 +256,6 @@ TEST_F(LibraryHistoryAndExportTest, HistorySnapshotIsReadWithoutAPipelineGuardAn
 
   EXPECT_EQ(copy_source.graph_->CommitCount(), commits);
   EXPECT_EQ(pipelines->LoadHistorySnapshot(ids.first).graph_->CommitCount(), commits + 1);
-  EXPECT_EQ(pipelines->PipelineConstructCount(), 0u);
-  EXPECT_EQ(pipelines->PipelineLoadCount(), 0u);
 }
 
 // The editor may hold commits that storage does not have yet, so storage is not a valid source
@@ -325,7 +320,6 @@ TEST_F(LibraryHistoryAndExportTest, PersistHistoryWritesTheNewStateAndPublishesI
   PipelineMgmtService reopened(project.GetStorage());
   EXPECT_EQ(reopened.AcquireCommittedSnapshot(ids.first)->Document().ToJson(),
             committed->Document().ToJson());
-  EXPECT_EQ(pipelines->PipelineConstructCount(), 0u);
 }
 
 // Two writers that read the same stored state: the second write is refused and storage keeps the
@@ -347,8 +341,9 @@ TEST_F(LibraryHistoryAndExportTest, PersistHistoryRejectsAStaleBaseAndLeavesStor
   EXPECT_EQ(pipelines->AcquireCommittedSnapshot(ids.first), written);
 }
 
-// Export loads no PipelineGuard and constructs no executor outside the ExportService.
-TEST_F(LibraryHistoryAndExportTest, ExportRendersWithoutLoadingAPipelineGuard) {
+// Export renders the committed snapshot of an imported image on the ExportService's own executor
+// and writes a readable image.
+TEST_F(LibraryHistoryAndExportTest, ExportOfAnImportedImageWritesAReadableImage) {
   ProjectService project(db_path_, meta_path_);
   auto           pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
   const auto     ids       = ImportLinearDng(project, pipelines);
@@ -361,8 +356,6 @@ TEST_F(LibraryHistoryAndExportTest, ExportRendersWithoutLoadingAPipelineGuard) {
   ASSERT_EQ(results.size(), 1u);
   EXPECT_TRUE(results[0].success_) << results[0].message_;
   EXPECT_FALSE(ReadExportedPixels(export_dir_ / "export.jpg").empty());
-  EXPECT_EQ(pipelines->PipelineConstructCount(), 0u);
-  EXPECT_EQ(pipelines->PipelineLoadCount(), 0u);
 }
 
 // An export renders the committed state at the time it was queued, not a state committed while

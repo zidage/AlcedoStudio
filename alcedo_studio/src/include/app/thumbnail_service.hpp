@@ -72,8 +72,8 @@ using AnalysisRenditionId     = std::uint64_t;
  * history label (head and chain).
  *
  * Owns its own renderers: a fixed pool of batch executors (@ref kDefaultBatchExecutorCount) and a
- * scheduler with one worker per executor. It never loads a PipelineGuard, never takes the
- * editor's render lock, and never renders on the editor's executor.
+ * scheduler with one worker per executor. It never takes the editor's render lock and never
+ * renders on the editor's executor.
  *
  * Request flow: memory cache (thumbnails only) → lookup worker (snapshot, disk cache read) →
  * batch render → RGBA8 display buffer → disk cache write → callback.

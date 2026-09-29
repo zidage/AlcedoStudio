@@ -4,7 +4,7 @@
 
 // The DNG color profile is runtime-only data (library_search_and_project_size_plan.md, Phase S2).
 // Project tables store the profile fingerprint only; PipelineMgmtService binds the profile tables
-// from the source file before a loaded document goes live.
+// from the source file before a document built from storage reaches a render or the editor.
 //
 // The cases import a copy of a CI DNG fixture into a scratch folder, so a case can delete or
 // replace the source file. They skip when the fixture is missing.
@@ -17,7 +17,6 @@
 #include <filesystem>
 #include <future>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -173,21 +172,14 @@ TEST_F(PipelineDngProfileBindingTest, ImportedDngStoresProfileFingerprintAndNoPr
       Fingerprint(), "PipelineRoot.serialized_pipeline_state");
 }
 
-TEST_F(PipelineDngProfileBindingTest, LoadPipelineBindsSourceProfileBeforeDocumentGoesLive) {
+// Thumbnails, analysis, and export render the committed snapshot, so it carries the bound profile.
+TEST_F(PipelineDngProfileBindingTest, CommittedSnapshotBindsSourceProfileBeforeAnyRender) {
   PipelineMgmtService pipelines(project_->GetStorage());
-  auto                guard = pipelines.LoadPipeline(element_id_);
-  ASSERT_NE(guard, nullptr);
-  ExpectBoundTo(*guard->document_, imported_profile_);
-  EXPECT_FALSE(guard->lineage_.Empty());
-  // Renders freeze the guard document, so the frozen graph carries the bound profile.
-  {
-    std::unique_lock<std::mutex> lock(guard->pipeline_->GetRenderLock());
-    const auto                   snapshot = guard->FreezeLiveSnapshot();
-    ASSERT_NE(snapshot, nullptr);
-    EXPECT_EQ(snapshot->Lineage(), guard->lineage_);
-    ExpectBoundTo(snapshot->Document(), imported_profile_);
-  }
-  pipelines.ReleasePipelineUse(guard);
+  const auto          snapshot = pipelines.AcquireCommittedSnapshot(element_id_);
+  ASSERT_NE(snapshot, nullptr);
+  EXPECT_TRUE(snapshot->IsCommitted());
+  EXPECT_FALSE(snapshot->Lineage().Empty());
+  ExpectBoundTo(snapshot->Document(), imported_profile_);
 }
 
 TEST_F(PipelineDngProfileBindingTest, EditorLeaseCheckpointAndReplayBindSourceProfile) {
@@ -225,12 +217,19 @@ TEST_F(PipelineDngProfileBindingTest, EditorLeaseCheckpointAndReplayBindSourcePr
   reopened.ReleaseEditorLease(element_id_);
 }
 
-TEST_F(PipelineDngProfileBindingTest, MissingSourceFileFailsPipelineLoad) {
+TEST_F(PipelineDngProfileBindingTest, MissingSourceFileFailsCommittedSnapshotAndEditorLease) {
   std::filesystem::remove(source_);
   PipelineMgmtService pipelines(project_->GetStorage());
   try {
-    (void)pipelines.LoadPipeline(element_id_);
-    FAIL() << "LoadPipeline must fail when the DNG profile source file is missing";
+    (void)pipelines.AcquireCommittedSnapshot(element_id_);
+    FAIL() << "the committed snapshot must fail when the DNG profile source file is missing";
+  } catch (const std::exception& error) {
+    EXPECT_NE(std::string(error.what()).find("source file is unavailable"), std::string::npos)
+        << error.what();
+  }
+  try {
+    (void)pipelines.AcquireEditorLease(element_id_);
+    FAIL() << "the editor lease must fail when the DNG profile source file is missing";
   } catch (const std::exception& error) {
     EXPECT_NE(std::string(error.what()).find("source file is unavailable"), std::string::npos)
         << error.what();
@@ -248,10 +247,13 @@ TEST_F(PipelineDngProfileBindingTest, SourceFileWithAnotherProfileWinsOnLoad) {
   ASSERT_NE(replaced->fingerprint, imported_profile_->fingerprint);
 
   PipelineMgmtService pipelines(project_->GetStorage());
-  auto                guard = pipelines.LoadPipeline(element_id_);
-  ASSERT_NE(guard, nullptr);
-  ExpectBoundTo(*guard->document_, replaced);
-  pipelines.ReleasePipelineUse(guard);
+  const auto          snapshot = pipelines.AcquireCommittedSnapshot(element_id_);
+  ASSERT_NE(snapshot, nullptr);
+  ExpectBoundTo(snapshot->Document(), replaced);
+  const auto lease = pipelines.AcquireEditorLease(element_id_);
+  ASSERT_NE(lease.document_, nullptr);
+  ExpectBoundTo(*lease.document_, replaced);
+  pipelines.ReleaseEditorLease(element_id_);
 }
 
 }  // namespace

@@ -28,7 +28,7 @@ auto IsRootImportDestination(const image_path_t& dest) -> bool {
 }
 
 /// Create the immutable history root of a newly imported image on a private default document.
-/// No executor and no PipelineGuard: nothing renders the document before its root exists.
+/// No executor: nothing renders the document before its root exists.
 void InitializeImportedImageRoot(PipelineMgmtService& pipeline_service, sl_element_id_t element_id,
                                  const std::shared_ptr<Image>& image) {
   const RawRuntimeColorContext* ctx_ptr =

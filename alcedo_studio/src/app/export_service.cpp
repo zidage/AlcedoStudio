@@ -192,7 +192,7 @@ auto ExportService::RunExportRenderTask(const QueuedExport& queued) -> ExportRes
     // To avoid reading too many images into memory at once, we let the pipeline load the image
     // So we create a dummy Image object with only the path set
     render_task.input_desc_           = std::make_shared<Image>(img_src_path, ImageType::DEFAULT);
-    render_task.snapshot_under_render_lock_ = [snapshot = queued.snapshot_] { return snapshot; };
+    render_task.snapshot_             = queued.snapshot_;
     // The render takes this service's executor for the whole task and returns it when the task
     // ends on any path.
     auto executor_index                     = std::make_shared<std::optional<std::size_t>>();

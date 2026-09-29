@@ -5,6 +5,7 @@
 #include "app/thumbnail_service.hpp"
 
 #include <gtest/gtest.h>
+#include <libraw/libraw.h>
 
 #include <atomic>
 #include <chrono>
@@ -20,6 +21,7 @@
 #include <mutex>
 #include <opencv2/core/mat.hpp>
 #include <random>
+#include <stdexcept>
 #include <thread>
 #include <unordered_set>
 #include <vector>
@@ -30,16 +32,17 @@
 #include "app/sleeve_service.hpp"
 #include "edit/graph/develop_color_transform.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
+#include "edit/graph/pipeline_graph_snapshot.hpp"
+#include "edit/history/commit_graph.hpp"
 #include "edit/history/edit_commit.hpp"
+#include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/pipeline/pipeline_executor.hpp"
 #include "edit/runtime/pipeline_apply_request.hpp"
-#include "image/metadata_extractor.hpp"
 #include "image/dng_color_profile_import.hpp"
+#include "image/metadata_extractor.hpp"
 #include "io/image/image_loader.hpp"
 #include "renderer/pipeline_scheduler.hpp"
-
-#include <libraw/libraw.h>
 #include "storage/store/edit_history/commit_graph_store.hpp"
 #include "type/type.hpp"
 #include "utils/cache/lru_cache.hpp"
@@ -150,6 +153,40 @@ static void ReleaseAllThumbnailsAggressively(
       service.ReleaseThumbnail(id);
     }
   }
+}
+
+/// Set the exposure of @p element_id to @p exposure_ev with one commit on its stored history, as a
+/// library edit does. Thumbnails render the stored history, so they see the new value.
+static void PersistExposureEv(PipelineMgmtService& pipelines, sl_element_id_t element_id,
+                              float exposure_ev) {
+  auto           base    = pipelines.LoadHistorySnapshot(element_id);
+  const auto     current = pipelines.AcquireCommittedSnapshot(element_id);
+  nlohmann::json before =
+      current->Document().PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure())->ToJson();
+  nlohmann::json after = before;
+  after["exposure_ev"] = exposure_ev;
+
+  PipelineEditBatch  batch;
+  SetParameterChange change;
+  change.target.owner_kind             = PipelineParameterOwnerKind::ColorGrade;
+  change.target.node_id                = NodeId{"grade.primary"};
+  change.target.adjustment_instance_id = AdjustmentInstanceId{"grade.primary.exposure"};
+  change.target.field_key              = "exposure";
+  change.before_value                  = std::move(before);
+  change.after_value                   = std::move(after);
+  change.before_enabled                = true;
+  change.after_enabled                 = true;
+  batch.operation_kind                 = PipelineEditOperationKind::SetParameter;
+  batch.presentation_key               = "history.operation.set_parameter";
+  batch.changes.push_back(std::move(change));
+
+  CommitGraph graph  = *base.graph_;
+  auto        commit = EditCommit::MakePipelineEdit(graph.GetRootId(),
+                                                    graph.GetActiveVersionRef().head_commit_hash, batch);
+  const auto  head   = commit.GetCommitHash();
+  ASSERT_TRUE(graph.InsertCommit(std::move(commit)));
+  graph.MoveWorkingHead(graph.GetActiveVersionId(), head);
+  ASSERT_NE(pipelines.PersistHistory(base, graph), nullptr);
 }
 
 static void DrainAndValidateFuture(ThumbnailService& service, sl_element_id_t element_id,
@@ -686,7 +723,7 @@ TEST(ThumbnailCacheUtilityTest, ResizeWithEvictDropsLruRecordsImmediately) {
 }
 
 TEST_F(ThumbnailServiceTests, ThumbnailApplyRequestCarriesRequestedDecodeResolution) {
-  auto         exec = std::make_shared<PipelineExecutor>();
+  auto         exec = std::make_shared<PipelineExecutor>(ExecutorRole::Batch);
 
   PipelineTask task;
   task.pipeline_executor_                 = exec;
@@ -886,21 +923,18 @@ TEST_F(ThumbnailServiceTests, MetalGeometryPipelineThumbnailStillRenders) {
   const auto image_id         = snapshot.created_.front().image_id_;
 
   auto       pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
-  auto       pipeline_guard   = pipeline_service->LoadPipeline(element_id);
-  ASSERT_NE(pipeline_guard, nullptr);
-  ASSERT_NE(pipeline_guard->pipeline_, nullptr);
-
-  {
-    std::unique_lock<std::mutex> render_lock(pipeline_guard->pipeline_->GetRenderLock());
-    pipeline_guard->document_->Geometry().SetCropRect({0.10f, 0.10f, 0.65f, 0.60f});
-  }
-
-  pipeline_guard->dirty_ = true;
-  pipeline_service->SavePipeline(pipeline_guard);
-  pipeline_service->Sync();
+  // Model the editor: hold the lease, crop its document, and publish it as the committed state.
+  auto       lease            = pipeline_service->AcquireEditorLease(element_id);
+  ASSERT_NE(lease.document_, nullptr);
+  lease.document_->Geometry().SetCropRect({0.10f, 0.10f, 0.65f, 0.60f});
+  const auto head = lease.graph_.GetActiveVersionRef().head_commit_hash;
+  pipeline_service->PublishCommitted(PipelineGraphSnapshot::Committed(
+      lease.document_->Freeze(), element_id, PipelineLineageId::Next(), head,
+      lease.graph_.ChainHashForHead(head)));
 
   ThumbnailService thumbnail_service(project.GetSleeveService(), img_pool, pipeline_service);
   auto             guard = GetThumbnailBlocking(thumbnail_service, element_id, image_id);
+  pipeline_service->ReleaseEditorLease(element_id);
 
   ASSERT_NE(guard, nullptr);
   ASSERT_NE(guard->thumbnail_buffer_, nullptr);
@@ -996,11 +1030,9 @@ TEST_F(ThumbnailServiceTests, ThumbnailRenderUsesInjectedRawMetadataForDng) {
   EXPECT_GT(HashImageBufferCpuBytes(*direct_result), 0u);
 }
 
-// Phase 3: an analysis rendition renders from a captured pipeline snapshot and
-// must NOT call SavePipeline on the live guard or clear the live guard's dirty
-// state. Verified by pinning + dirtying the live guard across the render and
-// asserting pin_count_/dirty_ are unchanged afterward.
-TEST_F(ThumbnailServiceTests, AnalysisRenditionRendersWithoutSavePipelineOnLiveGuard) {
+// An analysis rendition renders the committed snapshot. It must not release the editor lease or
+// change the editor's working document, which holds uncommitted values across the render.
+TEST_F(ThumbnailServiceTests, AnalysisRenditionLeavesTheEditorLeaseAndWorkingDocumentUntouched) {
   const auto raw_path = std::filesystem::path(TEST_IMG_PATH) / "raw" / "linear_dng" / "mfzoty.dng";
   if (!std::filesystem::exists(raw_path)) {
     GTEST_SKIP() << "Sample DNG file is missing: " << raw_path.string();
@@ -1041,14 +1073,15 @@ TEST_F(ThumbnailServiceTests, AnalysisRenditionRendersWithoutSavePipelineOnLiveG
 
   ThumbnailService thumbnail_service(project.GetSleeveService(), img_pool, pipeline_service);
 
-  // Pin the live guard and mark it dirty. A correct snapshot render must leave
-  // both untouched: it never calls SavePipeline on this guard, so the pin is not
-  // decremented and dirty state is not cleared.
-  auto             live_guard = pipeline_service->LoadPipeline(element_id);
-  ASSERT_NE(live_guard, nullptr);
-  ASSERT_NE(live_guard->pipeline_, nullptr);
-  live_guard->dirty_ = true;
-  ASSERT_EQ(live_guard->pin_count_, size_t{1});
+  // Hold the editor lease and change its working document without a commit. A correct analysis
+  // render leaves both untouched.
+  auto             lease = pipeline_service->AcquireEditorLease(element_id);
+  ASSERT_NE(lease.document_, nullptr);
+  lease.document_->PrimaryGrade()
+      ->FindAdjustmentByType(type_ids::Exposure())
+      ->LoadJson({{"exposure_ev", 2.0f}});
+  PipelineDocument* const              working_document = lease.document_.get();
+  const auto                           working_json     = lease.document_->ToJson();
 
   std::promise<ThumbnailRequestResult> done;
   auto                                 done_future = done.get_future();
@@ -1062,16 +1095,17 @@ TEST_F(ThumbnailServiceTests, AnalysisRenditionRendersWithoutSavePipelineOnLiveG
   ASSERT_NE(result.guard, nullptr);
   ASSERT_NE(result.guard->thumbnail_buffer_, nullptr);
 
-  // Acceptance: the live guard was not released or reset by the analysis render.
-  EXPECT_EQ(live_guard->pin_count_, size_t{1});  // no SavePipeline on the live guard
-  EXPECT_EQ(live_guard->dirty_, true);           // dirty not cleared
-  ASSERT_NE(live_guard->pipeline_, nullptr);     // executor still valid
+  // The editor still holds the image, and its uncommitted values were not replaced.
+  EXPECT_EQ(lease.document_.get(), working_document);
+  EXPECT_EQ(lease.document_->ToJson(), working_json);
+  EXPECT_THROW((void)pipeline_service->LoadHistorySnapshot(element_id), std::runtime_error)
+      << "the analysis render must not end the editor lease";
 
   thumbnail_service.ReleaseAnalysisRendition(rendition);
-  pipeline_service->SavePipeline(live_guard);  // release the test's pin
+  pipeline_service->ReleaseEditorLease(element_id);
 }
 
-TEST_F(ThumbnailServiceTests, ThumbnailRendersOnItsOwnExecutorAndLeavesTheLiveGuardUntouched) {
+TEST_F(ThumbnailServiceTests, ThumbnailRendersOnItsOwnExecutorAndLeavesTheEditorStateUntouched) {
   const auto raw_path = std::filesystem::path(TEST_IMG_PATH) / "raw" / "linear_dng" / "mfzoty.dng";
   if (!std::filesystem::exists(raw_path)) {
     GTEST_SKIP() << "Sample DNG file is missing: " << raw_path.string();
@@ -1102,39 +1136,40 @@ TEST_F(ThumbnailServiceTests, ThumbnailRendersOnItsOwnExecutorAndLeavesTheLiveGu
   const auto       element_id       = import_snapshot.created_.front().element_id_;
   const auto       image_id         = import_snapshot.created_.front().image_id_;
   ThumbnailService thumbnail_service(project.GetSleeveService(), img_pool, pipeline_service);
-  auto             live_guard = pipeline_service->LoadPipeline(element_id);
-  ASSERT_NE(live_guard, nullptr);
-  ASSERT_NE(live_guard->pipeline_, nullptr);
-  live_guard->dirty_ = true;
-  ASSERT_EQ(live_guard->pin_count_, size_t{1});
-  ASSERT_FALSE(live_guard->lineage_.Empty());
-  PipelineExecutor* const    live_executor = live_guard->pipeline_.get();
-  PipelineDocument* const    live_document = live_guard->document_.get();
-  const PipelineLineageId    live_lineage  = live_guard->lineage_;
+  // Model the editor: the lease, a working document with an uncommitted change, and the editor's
+  // own Interactive executor.
+  auto             lease = pipeline_service->AcquireEditorLease(element_id);
+  ASSERT_NE(lease.document_, nullptr);
+  lease.document_->PrimaryGrade()
+      ->FindAdjustmentByType(type_ids::Exposure())
+      ->LoadJson({{"exposure_ev", 2.0f}});
+  auto editor_executor = std::make_shared<PipelineExecutor>(ExecutorRole::Interactive);
+  PipelineDocument* const working_document = lease.document_.get();
+  const auto              working_json     = lease.document_->ToJson();
 
   auto thumbnail = GetThumbnailBlocking(thumbnail_service, element_id, image_id, true,
                                         ThumbnailResolution::k256);
   ASSERT_NE(thumbnail, nullptr);
   ASSERT_NE(thumbnail->thumbnail_buffer_, nullptr);
-  EXPECT_EQ(live_guard->pipeline_.get(), live_executor);
-  EXPECT_EQ(live_guard->document_.get(), live_document);
-  EXPECT_EQ(live_guard->lineage_, live_lineage) << "a thumbnail render must not rebind the guard";
-  EXPECT_EQ(live_guard->pin_count_, size_t{1});
-  EXPECT_TRUE(live_guard->dirty_);
-  // The render ran on the service's own batch executors: the guard executor never created a
+  EXPECT_EQ(lease.document_.get(), working_document);
+  EXPECT_EQ(lease.document_->ToJson(), working_json)
+      << "a thumbnail render must not change the editor's working document";
+  EXPECT_THROW((void)pipeline_service->LoadHistorySnapshot(element_id), std::runtime_error)
+      << "a thumbnail render must not end the editor lease";
+  // The render ran on the service's own batch executors: the editor executor never created a
   // batch renderer.
 #ifdef HAVE_CUDA
-  EXPECT_EQ(live_guard->pipeline_->DebugCudaBatchRenderer(), nullptr);
+  EXPECT_EQ(editor_executor->DebugCudaBatchRenderer(), nullptr);
 #endif
 #ifdef HAVE_METAL
-  EXPECT_EQ(live_guard->pipeline_->DebugMetalBatchRenderer(), nullptr);
+  EXPECT_EQ(editor_executor->DebugMetalBatchRenderer(), nullptr);
 #endif
 #ifdef HAVE_OPENCL
-  EXPECT_EQ(live_guard->pipeline_->DebugOpenClBatchRenderer(), nullptr);
+  EXPECT_EQ(editor_executor->DebugOpenClBatchRenderer(), nullptr);
 #endif
 
   thumbnail_service.ReleaseThumbnail(ThumbnailCacheKey{element_id, ThumbnailResolution::k256});
-  pipeline_service->SavePipeline(live_guard);
+  pipeline_service->ReleaseEditorLease(element_id);
 }
 
 TEST_F(ThumbnailServiceTests, DiskCacheTracksRootAndActiveHeadAndServesAfterPipelineIsRemoved) {
@@ -1386,29 +1421,20 @@ TEST_F(ThumbnailServiceTests, DISABLED_PipelineRestoredFromDBGeneratesCorrectThu
       default_hash = GetThumbnailHashBlocking(thumbnail_service, file_id, image_id);
       thumbnail_service.ReleaseThumbnail(file_id);
 
-      auto pipeline  = pipeline_service->LoadPipeline(file_id);
-      pipline_before = pipeline->document_->ToJson().dump();
-      pipeline_service->SavePipeline(pipeline);
+      pipline_before =
+          pipeline_service->AcquireCommittedSnapshot(file_id)->Document().ToJson().dump();
     }
 
     auto pipline_after = std::string{};
-    // Modify pipeline parameters and persist to DB.
-    {
-      auto guard = pipeline_service->LoadPipeline(file_id);
-      ASSERT_NE(guard, nullptr);
-      // Use a strong exposure change so the thumbnail content should differ.
-      guard->document_->PrimaryGrade()
-          ->FindAdjustmentByType(type_ids::Exposure())
-          ->LoadJson({{"exposure_ev", 3.0f}});
-      guard->dirty_ = true;
-      pipeline_service->SavePipeline(guard);
-    }
+    // Modify pipeline parameters and persist them to the stored history.
+    // Use a strong exposure change so the thumbnail content should differ.
+    PersistExposureEv(*pipeline_service, file_id, 3.0f);
 
     // New ThumbnailService instance to avoid serving the old cached thumbnail.
     {
       ThumbnailService thumbnail_service(project.GetSleeveService(), img_pool, pipeline_service);
-      auto             pipeline = pipeline_service->LoadPipeline(file_id);
-      pipline_after             = pipeline->document_->ToJson().dump();
+      pipline_after =
+          pipeline_service->AcquireCommittedSnapshot(file_id)->Document().ToJson().dump();
       ASSERT_NE(pipline_before, pipline_after)
           << "Pipeline parameters did not change after modification";
       modified_hash = GetThumbnailHashBlocking(thumbnail_service, file_id, image_id);

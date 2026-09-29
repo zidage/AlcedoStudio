@@ -508,7 +508,7 @@ void EditorSessionRenderSchedulerPort::DispatchPipelineFrame(Job job, alcedo::IF
     task.input_                      = context->input;
     task.input_desc_                 = context->image;
     task.pipeline_executor_          = EnsureExecutor();
-    task.snapshot_under_render_lock_ = [snapshot = std::move(snapshot)] { return snapshot; };
+    task.snapshot_                   = std::move(snapshot);
     task.options_.render_desc_       = MakeEditorRenderDesc(job.request);
     task.request_id_                 = job.request.request_id;
     task.options_.is_callback_       = false;

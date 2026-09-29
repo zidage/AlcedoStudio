@@ -4,8 +4,8 @@
 
 #pragma once
 
+#include <filesystem>
 #include <memory>
-#include <mutex>
 #include <unordered_map>
 
 #include "sleeve/sleeve_element/sleeve_element.hpp"
@@ -21,7 +21,6 @@
 #include "type/type.hpp"
 
 namespace alcedo {
-class PipelineExecutor;
 
 class NodeStorageHandler {
  private:
@@ -47,10 +46,7 @@ class Storage {
   SemanticEmbeddingStore                                                semantic_embeddings_;
   SemanticLabelStore                                                    semantic_labels_;
   SemanticVectorSearch                                                  semantic_vector_search_;
-  AiStore                                                       ai_store_;
-  std::mutex                                                                live_state_lock_;
-
-  std::unordered_map<sl_element_id_t, std::shared_ptr<PipelineExecutor>>    live_pipelines_;
+  AiStore                                                               ai_store_;
 
  public:
   Storage(std::filesystem::path db_path);
@@ -63,10 +59,5 @@ class Storage {
   auto GetSemanticLabelStore() -> SemanticLabelStore&;
   auto GetSemanticVectorSearch() -> SemanticVectorSearch&;
   auto GetAiStore() -> AiStore&;
-
-  void RememberLivePipeline(sl_element_id_t                             file_id,
-                            const std::shared_ptr<PipelineExecutor>& pipeline);
-  auto GetLivePipeline(sl_element_id_t file_id) -> std::shared_ptr<PipelineExecutor>;
-  void ForgetLivePipeline(sl_element_id_t file_id);
 };
 };  // namespace alcedo

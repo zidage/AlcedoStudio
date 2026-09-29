@@ -3,8 +3,8 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 // Executor ownership refactor P4: thumbnails and analysis renditions render committed pipeline
-// graph snapshots on the ThumbnailService's own batch executors. They never load a
-// PipelineGuard, never take the editor's render lock, and never see uncommitted editor values.
+// graph snapshots on the ThumbnailService's own batch executors. They never use the editor's
+// executor, never take its render lock, and never see uncommitted editor values.
 // Since P6 the editor session owns its working document and its Interactive executor; these tests
 // stand in for it with an EditorStandIn that owns the same objects.
 
@@ -436,7 +436,6 @@ TEST_F(ThumbnailCommittedRenderTest, ThumbnailRendersWhileTheEditorHoldsTheRende
   ASSERT_NE(ids.first, 0u);
   auto editor = OpenEditor(*pipelines, ids.first);
   (void)PublishWorkingAsCommitted(*pipelines, editor);
-  pipelines->ResetPipelineAcquireCountsForTesting();
   // One editor frame binds the editor executor to the image before the thumbnail request.
   {
     const auto input =
@@ -453,8 +452,8 @@ TEST_F(ThumbnailCommittedRenderTest, ThumbnailRendersWhileTheEditorHoldsTheRende
   }
 
   ThumbnailService thumbnails(project.GetSleeveService(), project.GetImagePoolService(), pipelines);
-  // An editor frame holds this lock from configure through present. Before P4 a thumbnail of
-  // the same image queued on it for the whole frame.
+  // An editor frame holds this lock from Apply through present. Before P4 a thumbnail of the
+  // same image queued on it for the whole frame.
   std::unique_lock<std::mutex>         editor_frame(editor.executor->GetRenderLock());
   std::promise<ThumbnailRequestResult> done;
   auto                                 done_future = done.get_future();
@@ -468,7 +467,6 @@ TEST_F(ThumbnailCommittedRenderTest, ThumbnailRendersWhileTheEditorHoldsTheRende
   editor_frame.unlock();
   EXPECT_EQ(result.status, ThumbnailRequestStatus::kReady) << result.message;
   EXPECT_FALSE(HasBatchRenderer(*editor.executor));
-  EXPECT_EQ(pipelines->PipelineLoadCount(), 0u);
 
   thumbnails.ReleaseThumbnail(ids.first);
   pipelines->ReleaseEditorLease(ids.first);
@@ -488,8 +486,10 @@ TEST_F(ThumbnailCommittedRenderTest, EditorFrameLatencyStaysUnchangedWhileThumbn
   PipelineScheduler editor_worker(1);
   const auto        run_editor_frame = [&]() -> double {
     PipelineTask task;
-    task.pipeline_executor_          = editor.executor;
-    task.snapshot_under_render_lock_ = [&editor]() { return editor.working->CurrentPreview(); };
+    // The editor render port hands each frame the preview published last; nothing is edited
+    // while this test renders, so every frame renders the same preview.
+    task.pipeline_executor_ = editor.executor;
+    task.snapshot_          = editor.working->CurrentPreview();
     task.input_desc_ = std::make_shared<Image>(LinearDngPath(), ImageType::DEFAULT);
     task.options_.render_desc_.render_type_ = RenderType::FAST_PREVIEW;
     task.options_.is_blocking_              = true;

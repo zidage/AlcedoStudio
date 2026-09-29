@@ -5,13 +5,15 @@
 // Executor that receives an immutable snapshot per request
 // (docs/refactor/2026-09-27-executor-ownership-refactor-plan.md, phase P3).
 //
-// These tests drive the real PipelineGuard executor with imported RAW files. They check:
-// - an executor serves only its roles, and each role has its own renderer;
+// These tests render imported RAW files on test-owned executors, one per role, from a test-owned
+// copy of the document the editor lease loads. They check:
+// - an executor serves only its role;
 // - the interactive renderer keeps sources, plans, and results for one binding (lineage +
 //   element), and releases all of them when the binding changes;
 // - a batch render releases its results and keeps its device;
-// - each render case gives the same pixels on the shared per-image executor as on a new
-//   executor of its role, so the interactive and batch renderers do not affect each other.
+// - each render case gives the same pixels on a long-lived executor of its role, where the cases
+//   interleave, as on a new executor of its role, so the renders of one executor do not change
+//   the renders of another.
 //
 // Set ALCEDO_RENDER_OUTPUT_DIR to a directory to also write the host pixels of every render case
 // (`<image>_<case>.pixels`: int32 rows, cols, OpenCV type, then the pixel bytes). The phase
@@ -49,6 +51,7 @@
 #include "renderer/pipeline_scheduler.hpp"
 #include "renderer/pipeline_task.hpp"
 #include "support/raw_import_pipeline_fixture.hpp"
+#include "support/render_snapshot_source.hpp"
 #include "type/type.hpp"
 #include "utils/clock/time_provider.hpp"
 #ifdef HAVE_CUDA
@@ -64,7 +67,6 @@
 namespace alcedo {
 namespace {
 using namespace std::chrono_literals;
-using raw_import_test::BindImportedRawColor;
 using raw_import_test::HostPixels;
 using raw_import_test::ImportRawFile;
 using raw_import_test::LinearDngPath;
@@ -256,18 +258,31 @@ void WritePixelsWhenRequested(const std::string& file_stem, const cv::Mat& pixel
             static_cast<std::streamsize>(continuous.total() * continuous.elemSize()));
 }
 
-void RaiseExposure(PipelineGuard& live, float value) {
-  std::lock_guard<std::mutex> render_lock(live.pipeline_->GetRenderLock());
+void RaiseExposure(PipelineDocument& document, float value) {
   auto* exposure = dynamic_cast<ExposureModel*>(
-      live.document_->PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
   ASSERT_NE(exposure, nullptr);
   exposure->SetValue(value);
 }
 
-auto FreezeUnderLock(PipelineGuard& live) -> std::shared_ptr<const PipelineGraphSnapshot> {
-  std::lock_guard<std::mutex> render_lock(live.pipeline_->GetRenderLock());
-  return live.FreezeLiveSnapshot();
+/// Role of the executor that owns renders of @p type: the editor port renders the preview types,
+/// ThumbnailService and ExportService render thumbnails and exports.
+auto RoleOf(RenderType type) -> ExecutorRole {
+  return type == RenderType::THUMBNAIL || type == RenderType::FULL_RES_EXPORT
+             ? ExecutorRole::Batch
+             : ExecutorRole::Interactive;
 }
+
+/// One long-lived executor per role, as the editor port and the background services own them.
+struct RoleExecutors {
+  std::shared_ptr<PipelineExecutor> interactive =
+      std::make_shared<PipelineExecutor>(ExecutorRole::Interactive);
+  std::shared_ptr<PipelineExecutor> batch = std::make_shared<PipelineExecutor>(ExecutorRole::Batch);
+
+  [[nodiscard]] auto For(RenderType type) const -> const std::shared_ptr<PipelineExecutor>& {
+    return RoleOf(type) == ExecutorRole::Interactive ? interactive : batch;
+  }
+};
 
 }  // namespace
 
@@ -292,26 +307,33 @@ class ExecutorSnapshotRenderTest : public ::testing::Test {
   }
 
   struct LoadedImage {
-    std::shared_ptr<PipelineGuard> live;
-    std::shared_ptr<ImageBuffer>   input;
+    std::optional<test::RenderSnapshotSource> source;
+    std::shared_ptr<ImageBuffer>              input;
   };
 
-  /// Import @p path, load its live guard with the imported RAW color bound, and read its bytes.
+  /// Import @p path, take the document the editor lease loads (camera profile of the image bound)
+  /// as the test's own working document, and read the encoded bytes.
   static auto Load(ProjectService& project, const std::shared_ptr<PipelineMgmtService>& pipelines,
                    const std::filesystem::path& path) -> LoadedImage {
     const auto ids = ImportRawFile(project, pipelines, path);
     if (ids.first == 0) {
       return {};
     }
-    auto live = pipelines->LoadPipeline(ids.first);
-    BindImportedRawColor(live, *project.GetImagePoolService(), ids.second);
-    return {live, LoadEncodedInput(*project.GetImagePoolService(), ids.second)};
+    auto document = pipelines->AcquireEditorLease(ids.first).document_;
+    pipelines->ReleaseEditorLease(ids.first);
+    if (!document) {
+      return {};
+    }
+    LoadedImage loaded;
+    loaded.source.emplace(std::move(document), ids.first);
+    loaded.input = LoadEncodedInput(*project.GetImagePoolService(), ids.second);
+    return loaded;
   }
 };
 
 // Every render case (three editor frame roles, four thumbnail tiers, SDR and HDR export) gives the
-// same pixels on the shared per-image executor, where the cases interleave, as on a new executor
-// of the case's role that renders only that case.
+// same pixels on the long-lived executor of its role, where the cases interleave, as on a new
+// executor of the case's role that renders only that case.
 TEST_F(ExecutorSnapshotRenderTest, EveryRenderCaseMatchesARenderOnANewExecutorOfItsRole) {
   ProjectService project(db_path_, meta_path_);
   auto           pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
@@ -321,16 +343,20 @@ TEST_F(ExecutorSnapshotRenderTest, EveryRenderCaseMatchesARenderOnANewExecutorOf
       ADD_FAILURE() << "Sample RAW file is missing: " << sample.path.string();
       continue;
     }
-    const auto loaded = Load(project, pipelines, sample.path);
-    ASSERT_NE(loaded.live, nullptr);
+    auto loaded = Load(project, pipelines, sample.path);
+    ASSERT_TRUE(loaded.source.has_value());
     ASSERT_NE(loaded.input, nullptr);
-    RaiseExposure(*loaded.live, 0.7f);
+    RaiseExposure(loaded.source->Document(), 0.7f);
+    ASSERT_FALSE(HasFatalFailure());
+    const RoleExecutors executors;
 
     for (const auto& render_case : RenderCases()) {
       SCOPED_TRACE(render_case.name);
-      const auto snapshot = FreezeUnderLock(*loaded.live);
-      const auto request  = MakeRequest(loaded.live->pipeline_, render_case);
-      const auto shared   = RenderPixels(*loaded.live->pipeline_, *snapshot, loaded.input, request);
+      const auto  snapshot   = loaded.source->Freeze();
+      const auto& long_lived = executors.For(render_case.type);
+      const auto  request    = MakeRequest(long_lived, render_case);
+      ASSERT_EQ(request.role, RoleOf(render_case.type));
+      const auto shared = RenderPixels(*long_lived, *snapshot, loaded.input, request);
       ASSERT_FALSE(shared.empty());
       if (render_case.type == RenderType::THUMBNAIL) {
         EXPECT_LE(std::max(shared.cols, shared.rows), static_cast<int>(render_case.max_edge));
@@ -341,11 +367,10 @@ TEST_F(ExecutorSnapshotRenderTest, EveryRenderCaseMatchesARenderOnANewExecutorOf
       const auto reference =
           RenderPixels(*isolated, *snapshot, loaded.input, MakeRequest(isolated, render_case));
       // Bayer and X-Trans renders of equal values vary by up to ~1e-5 between any two runs
-      // (measured on CUDA); state carried between roles would show as a much larger difference.
+      // (measured on CUDA); state carried between cases would show as a much larger difference.
       EXPECT_LE(MaxAbsDifference(shared, reference), SameValuesTolerance(shared))
-          << "shared executor output differs from a new " << render_case.name << " executor";
+          << "long-lived executor output differs from a new " << render_case.name << " executor";
     }
-    pipelines->ReleasePipelineUse(loaded.live);
   }
 }
 
@@ -355,25 +380,23 @@ TEST_F(ExecutorSnapshotRenderTest, EveryRenderCaseMatchesARenderOnANewExecutorOf
 TEST_F(ExecutorSnapshotRenderTest, InteractiveRendersOfOneLineageReuseSourceAndPlan) {
   ProjectService project(db_path_, meta_path_);
   auto           pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
-  const auto     loaded    = Load(project, pipelines, LinearDngPath());
-  ASSERT_NE(loaded.live, nullptr);
-  auto&      executor = *loaded.live->pipeline_;
+  auto           loaded    = Load(project, pipelines, LinearDngPath());
+  ASSERT_TRUE(loaded.source.has_value());
+  auto       executor = std::make_shared<PipelineExecutor>(ExecutorRole::Interactive);
   const auto frame    = RenderCases().front();
 
-  const auto first = FreezeUnderLock(*loaded.live);
-  ASSERT_FALSE(RenderPixels(executor, *first, loaded.input, MakeRequest(loaded.live->pipeline_,
-                                                                        frame))
-                   .empty());
-  const auto before = RendererStats(executor, ExecutorRole::Interactive);
+  const auto first    = loaded.source->Freeze();
+  ASSERT_FALSE(RenderPixels(*executor, *first, loaded.input, MakeRequest(executor, frame)).empty());
+  const auto before = RendererStats(*executor, ExecutorRole::Interactive);
 
-  RaiseExposure(*loaded.live, 1.0f);
-  const auto second = FreezeUnderLock(*loaded.live);
+  RaiseExposure(loaded.source->Document(), 1.0f);
+  ASSERT_FALSE(HasFatalFailure());
+  const auto second = loaded.source->Freeze();
   ASSERT_NE(&first->Document(), &second->Document());
   ASSERT_EQ(first->Lineage(), second->Lineage());
-  ASSERT_FALSE(RenderPixels(executor, *second, loaded.input, MakeRequest(loaded.live->pipeline_,
-                                                                         frame))
-                   .empty());
-  const auto after = RendererStats(executor, ExecutorRole::Interactive);
+  ASSERT_FALSE(
+      RenderPixels(*executor, *second, loaded.input, MakeRequest(executor, frame)).empty());
+  const auto after = RendererStats(*executor, ExecutorRole::Interactive);
 
   EXPECT_EQ(after.prepared_source_misses, before.prepared_source_misses);
   EXPECT_EQ(after.prepared_source_hits, before.prepared_source_hits + 1);
@@ -381,10 +404,9 @@ TEST_F(ExecutorSnapshotRenderTest, InteractiveRendersOfOneLineageReuseSourceAndP
   EXPECT_EQ(after.plan_cache_hits, before.plan_cache_hits + 1);
   EXPECT_EQ(after.pass.sensor_develop_execute, before.pass.sensor_develop_execute);
   EXPECT_EQ(after.pass.sensor_develop_skip, before.pass.sensor_develop_skip + 1);
-  const auto binding = InteractiveBinding(executor);
+  const auto binding = InteractiveBinding(*executor);
   ASSERT_TRUE(binding.has_value());
   EXPECT_EQ(binding->lineage, second->Lineage());
-  pipelines->ReleasePipelineUse(loaded.live);
 }
 
 // A snapshot of another lineage (reload, Version checkout, paste rebuild) releases every resource
@@ -393,29 +415,25 @@ TEST_F(ExecutorSnapshotRenderTest, InteractiveRendersOfOneLineageReuseSourceAndP
 TEST_F(ExecutorSnapshotRenderTest, InteractiveRenderOfAnotherLineageReleasesThePreviousBinding) {
   ProjectService project(db_path_, meta_path_);
   auto           pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
-  const auto     loaded    = Load(project, pipelines, LinearDngPath());
-  ASSERT_NE(loaded.live, nullptr);
-  auto&      executor = *loaded.live->pipeline_;
+  auto           loaded    = Load(project, pipelines, LinearDngPath());
+  ASSERT_TRUE(loaded.source.has_value());
+  auto       executor = std::make_shared<PipelineExecutor>(ExecutorRole::Interactive);
   const auto frame    = RenderCases().front();
 
-  const auto first = FreezeUnderLock(*loaded.live);
-  ASSERT_FALSE(RenderPixels(executor, *first, loaded.input, MakeRequest(loaded.live->pipeline_,
-                                                                        frame))
-                   .empty());
-  const auto before = RendererStats(executor, ExecutorRole::Interactive);
-  ASSERT_GT(RendererResources(executor, ExecutorRole::Interactive).published_result_count, 0u);
+  const auto first    = loaded.source->Freeze();
+  ASSERT_FALSE(RenderPixels(*executor, *first, loaded.input, MakeRequest(executor, frame)).empty());
+  const auto before = RendererStats(*executor, ExecutorRole::Interactive);
+  ASSERT_GT(RendererResources(*executor, ExecutorRole::Interactive).published_result_count, 0u);
 
-  {
-    std::lock_guard<std::mutex> render_lock(executor.GetRenderLock());
-    (void)BindLivePipelineDocument(*loaded.live, std::make_shared<PipelineDocument>(
-                                                     ClonePipelineDocument(*loaded.live->document_)));
-  }
-  const auto rebound = FreezeUnderLock(*loaded.live);
+  // The owner replaces its document with a rebuilt copy and takes a new lineage.
+  loaded.source->Rebind(
+      std::make_shared<PipelineDocument>(ClonePipelineDocument(loaded.source->Document())));
+  const auto rebound = loaded.source->Freeze();
   ASSERT_NE(rebound->Lineage(), first->Lineage());
   const auto frame_pixels =
-      RenderPixels(executor, *rebound, loaded.input, MakeRequest(loaded.live->pipeline_, frame));
+      RenderPixels(*executor, *rebound, loaded.input, MakeRequest(executor, frame));
   ASSERT_FALSE(frame_pixels.empty());
-  const auto after = RendererStats(executor, ExecutorRole::Interactive);
+  const auto after = RendererStats(*executor, ExecutorRole::Interactive);
 
   // The release resets the pass counters and clears the source and plan caches, so the rebound
   // frame is the first frame of a new binding.
@@ -425,96 +443,99 @@ TEST_F(ExecutorSnapshotRenderTest, InteractiveRenderOfAnotherLineageReleasesTheP
   EXPECT_EQ(after.pass.sensor_develop_execute, 1u);
   EXPECT_EQ(after.pass.sensor_develop_skip, 0u);
   EXPECT_EQ(after.pass.result_content_hits, 0u);
-  EXPECT_EQ(RendererResources(executor, ExecutorRole::Interactive).prepared_source_entry_count, 1u);
-  const auto binding = InteractiveBinding(executor);
+  EXPECT_EQ(RendererResources(*executor, ExecutorRole::Interactive).prepared_source_entry_count,
+            1u);
+  const auto binding = InteractiveBinding(*executor);
   ASSERT_TRUE(binding.has_value());
   EXPECT_EQ(binding->lineage, rebound->Lineage());
-  pipelines->ReleasePipelineUse(loaded.live);
 }
 
 // A batch render releases every result resource when it completes and keeps its device; it does
-// not change the interactive renderer of the same executor.
+// not change the interactive executor that renders the same snapshot.
 TEST_F(ExecutorSnapshotRenderTest, BatchRenderReleasesItsResultsAndKeepsItsDevice) {
   ProjectService project(db_path_, meta_path_);
   auto           pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
-  const auto     loaded    = Load(project, pipelines, LinearDngPath());
-  ASSERT_NE(loaded.live, nullptr);
-  auto&      executor = *loaded.live->pipeline_;
-  const auto cases    = RenderCases();
-  const auto frame    = cases[0];
-  const auto thumb    = cases[1];
+  auto           loaded    = Load(project, pipelines, LinearDngPath());
+  ASSERT_TRUE(loaded.source.has_value());
+  const RoleExecutors executors;
+  auto&               interactive = *executors.interactive;
+  auto&               batch_exec  = *executors.batch;
+  const auto          cases       = RenderCases();
+  const auto          frame       = cases[0];
+  const auto          thumb       = cases[1];
   ASSERT_EQ(thumb.type, RenderType::THUMBNAIL);
 
-  const auto snapshot = FreezeUnderLock(*loaded.live);
-  ASSERT_FALSE(RenderPixels(executor, *snapshot, loaded.input, MakeRequest(loaded.live->pipeline_,
-                                                                           frame))
-                   .empty());
-  const auto interactive_before = RendererResources(executor, ExecutorRole::Interactive);
-  const auto interactive_stats  = RendererStats(executor, ExecutorRole::Interactive);
+  const auto snapshot = loaded.source->Freeze();
+  ASSERT_FALSE(
+      RenderPixels(interactive, *snapshot, loaded.input, MakeRequest(executors.interactive, frame))
+          .empty());
+  const auto interactive_before = RendererResources(interactive, ExecutorRole::Interactive);
+  const auto interactive_stats  = RendererStats(interactive, ExecutorRole::Interactive);
 
-  const auto thumb_request = MakeRequest(loaded.live->pipeline_, thumb);
+  const auto thumb_request      = MakeRequest(executors.batch, thumb);
   ASSERT_EQ(thumb_request.role, ExecutorRole::Batch);
-  ASSERT_FALSE(RenderPixels(executor, *snapshot, loaded.input, thumb_request).empty());
-  const auto device = RendererDeviceIdentity(executor, ExecutorRole::Batch);
+  ASSERT_FALSE(RenderPixels(batch_exec, *snapshot, loaded.input, thumb_request).empty());
+  const auto device = RendererDeviceIdentity(batch_exec, ExecutorRole::Batch);
   ASSERT_NE(device, 0u);
-  ASSERT_FALSE(RenderPixels(executor, *snapshot, loaded.input, thumb_request).empty());
+  ASSERT_FALSE(RenderPixels(batch_exec, *snapshot, loaded.input, thumb_request).empty());
 
-  const auto batch = RendererResources(executor, ExecutorRole::Batch);
+  const auto batch = RendererResources(batch_exec, ExecutorRole::Batch);
   EXPECT_EQ(batch.published_result_count, 0u);
   EXPECT_EQ(batch.texture_pool_used_bytes, 0u);
   EXPECT_EQ(batch.transient_used_bytes, 0u);
   EXPECT_EQ(batch.prepared_source_entry_count, 0u);
-  EXPECT_EQ(RendererDeviceIdentity(executor, ExecutorRole::Batch), device);
-  EXPECT_NE(RendererDeviceIdentity(executor, ExecutorRole::Interactive), device);
+  EXPECT_EQ(RendererDeviceIdentity(batch_exec, ExecutorRole::Batch), device);
+  EXPECT_NE(RendererDeviceIdentity(interactive, ExecutorRole::Interactive), device);
 
-  const auto interactive_after = RendererResources(executor, ExecutorRole::Interactive);
+  const auto interactive_after = RendererResources(interactive, ExecutorRole::Interactive);
   EXPECT_EQ(interactive_after.published_result_count, interactive_before.published_result_count);
   EXPECT_EQ(interactive_after.session_value_ids, interactive_before.session_value_ids);
   EXPECT_EQ(interactive_after.prepared_source_entry_count,
             interactive_before.prepared_source_entry_count);
-  const auto stats_after = RendererStats(executor, ExecutorRole::Interactive);
+  const auto stats_after = RendererStats(interactive, ExecutorRole::Interactive);
   EXPECT_EQ(stats_after.prepared_source_misses, interactive_stats.prepared_source_misses);
   EXPECT_EQ(stats_after.plan_cache_misses, interactive_stats.plan_cache_misses);
-  pipelines->ReleasePipelineUse(loaded.live);
 }
 
-// ReleaseBinding drops every resource of every created renderer and keeps both devices, so the
-// next render starts a new binding on the same GPU streams.
-TEST_F(ExecutorSnapshotRenderTest, ReleaseBindingReleasesEveryRendererAndKeepsDevices) {
+// ReleaseBinding drops every resource the executor's renderer holds for the last rendered image
+// and keeps its device, so the next render starts a new binding on the same GPU streams.
+TEST_F(ExecutorSnapshotRenderTest, ReleaseBindingReleasesTheRendererResourcesAndKeepsItsDevice) {
   ProjectService project(db_path_, meta_path_);
   auto           pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
-  const auto     loaded    = Load(project, pipelines, LinearDngPath());
-  ASSERT_NE(loaded.live, nullptr);
-  auto&      executor = *loaded.live->pipeline_;
-  const auto cases    = RenderCases();
+  auto           loaded    = Load(project, pipelines, LinearDngPath());
+  ASSERT_TRUE(loaded.source.has_value());
+  const RoleExecutors executors;
+  auto&               interactive = *executors.interactive;
+  auto&               batch_exec  = *executors.batch;
+  const auto          cases       = RenderCases();
 
-  const auto snapshot = FreezeUnderLock(*loaded.live);
-  ASSERT_FALSE(RenderPixels(executor, *snapshot, loaded.input, MakeRequest(loaded.live->pipeline_,
-                                                                           cases[0]))
+  const auto          snapshot    = loaded.source->Freeze();
+  ASSERT_FALSE(RenderPixels(interactive, *snapshot, loaded.input,
+                            MakeRequest(executors.interactive, cases[0]))
                    .empty());
-  ASSERT_FALSE(RenderPixels(executor, *snapshot, loaded.input, MakeRequest(loaded.live->pipeline_,
-                                                                           cases[1]))
-                   .empty());
-  const auto interactive_device = RendererDeviceIdentity(executor, ExecutorRole::Interactive);
-  const auto batch_device       = RendererDeviceIdentity(executor, ExecutorRole::Batch);
+  ASSERT_FALSE(
+      RenderPixels(batch_exec, *snapshot, loaded.input, MakeRequest(executors.batch, cases[1]))
+          .empty());
+  const auto interactive_device = RendererDeviceIdentity(interactive, ExecutorRole::Interactive);
+  const auto batch_device       = RendererDeviceIdentity(batch_exec, ExecutorRole::Batch);
   ASSERT_NE(interactive_device, 0u);
   ASSERT_NE(batch_device, 0u);
+  ASSERT_GT(RendererResources(interactive, ExecutorRole::Interactive).published_result_count, 0u);
 
-  {
-    std::lock_guard<std::mutex> render_lock(executor.GetRenderLock());
-    executor.ReleaseBinding();
+  for (auto* executor : {&interactive, &batch_exec}) {
+    std::lock_guard<std::mutex> render_lock(executor->GetRenderLock());
+    executor->ReleaseBinding();
   }
 
-  const auto interactive = RendererResources(executor, ExecutorRole::Interactive);
-  EXPECT_EQ(interactive.published_result_count, 0u);
-  EXPECT_EQ(interactive.texture_pool_used_bytes, 0u);
-  EXPECT_EQ(interactive.prepared_source_entry_count, 0u);
-  EXPECT_EQ(interactive.prepared_source_host_bytes, 0u);
-  EXPECT_FALSE(InteractiveBinding(executor).has_value());
-  EXPECT_EQ(RendererResources(executor, ExecutorRole::Batch).published_result_count, 0u);
-  EXPECT_EQ(RendererDeviceIdentity(executor, ExecutorRole::Interactive), interactive_device);
-  EXPECT_EQ(RendererDeviceIdentity(executor, ExecutorRole::Batch), batch_device);
-  pipelines->ReleasePipelineUse(loaded.live);
+  const auto released = RendererResources(interactive, ExecutorRole::Interactive);
+  EXPECT_EQ(released.published_result_count, 0u);
+  EXPECT_EQ(released.texture_pool_used_bytes, 0u);
+  EXPECT_EQ(released.prepared_source_entry_count, 0u);
+  EXPECT_EQ(released.prepared_source_host_bytes, 0u);
+  EXPECT_FALSE(InteractiveBinding(interactive).has_value());
+  EXPECT_EQ(RendererResources(batch_exec, ExecutorRole::Batch).published_result_count, 0u);
+  EXPECT_EQ(RendererDeviceIdentity(interactive, ExecutorRole::Interactive), interactive_device);
+  EXPECT_EQ(RendererDeviceIdentity(batch_exec, ExecutorRole::Batch), batch_device);
 }
 
 // An executor constructed for one role rejects requests of the other role before it touches the
@@ -538,18 +559,14 @@ TEST(ExecutorRoleTest, ExecutorOfOneRoleRejectsRequestsOfTheOtherRole) {
   EXPECT_FALSE(interactive_executor.Serves(ExecutorRole::Batch));
   EXPECT_THROW((void)interactive_executor.Apply(*snapshot, input, batch_request),
                std::invalid_argument);
-
-  PipelineExecutor shared_executor;
-  EXPECT_TRUE(shared_executor.Serves(ExecutorRole::Interactive));
-  EXPECT_TRUE(shared_executor.Serves(ExecutorRole::Batch));
 }
 
-// A render task without a snapshot source fails; the scheduler does not render some other
-// document in its place.
-TEST(ExecutorRoleTest, SchedulerFailsARenderTaskWithoutASnapshotSource) {
+// A render task without a snapshot fails; the scheduler does not render some other document in
+// its place.
+TEST(ExecutorRoleTest, SchedulerFailsARenderTaskWithoutASnapshot) {
   PipelineScheduler scheduler;
   PipelineTask      task;
-  task.pipeline_executor_                 = std::make_shared<PipelineExecutor>();
+  task.pipeline_executor_                 = std::make_shared<PipelineExecutor>(ExecutorRole::Batch);
   task.input_                             = std::make_shared<ImageBuffer>();
   task.options_.is_blocking_              = true;
   task.options_.is_callback_              = false;

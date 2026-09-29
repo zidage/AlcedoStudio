@@ -132,8 +132,8 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
       result->workspace_to_cleanup_ = old_workspace;
 
       result->project_   = std::make_shared<ProjectService>(dbPath, metaPath, openMode);
-      result->pipeline_  = std::make_shared<PipelineMgmtService>(result->project_->GetStorage());
-      result->pipeline_->SetAcceleratorBackendPreference(accelerator_preference);
+      result->pipeline_ = std::make_shared<PipelineMgmtService>(result->project_->GetStorage(),
+                                                                accelerator_preference);
       qInfo("pipeline.accelerator backend=%s source=active-editor-backend",
             AcceleratorBackendPreferenceToString(accelerator_preference).data());
       result->thumbnail_ = std::make_shared<ThumbnailService>(

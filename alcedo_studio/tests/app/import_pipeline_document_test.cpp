@@ -8,13 +8,13 @@
 #include <filesystem>
 #include <future>
 #include <memory>
-#include <mutex>
 #include <string>
 
 #include "app/import_service.hpp"
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
 #include "edit/graph/develop_color_transform.hpp"
+#include "edit/pipeline/pipeline_executor.hpp"
 #include "edit/runtime/pipeline_apply_request.hpp"
 #include "image/dng_color_profile.hpp"
 #include "io/image/image_loader.hpp"
@@ -93,40 +93,38 @@ TEST(ImportPipelineDocumentTest, ImportCreatesRenderableDocumentWithoutStageMirr
   EXPECT_FALSE(expected.camera_profile.dng_profile.IsBound());
   EXPECT_EQ(ResolveDevelopColorTransform(expected).error, ColorTransformError::UnboundDngProfile);
 
-  PipelineMgmtService pipelines(project.GetStorage());
-  pipelines.SetAcceleratorBackendPreference(AcceleratorBackendPreference::CUDA);
-  auto loaded = pipelines.LoadPipeline(element_id);
-  ASSERT_NE(loaded, nullptr);
-  ASSERT_NE(loaded->document_, nullptr);
-  EXPECT_EQ(loaded->document_->Develop()->Params().Params(), expected);
-  // LoadPipeline binds the profile from the source file before the document goes live.
-  const auto bound = loaded->document_->Develop()->Params().Params();
+  PipelineMgmtService pipelines(project.GetStorage(), AcceleratorBackendPreference::CUDA);
+  const auto          snapshot = pipelines.AcquireCommittedSnapshot(element_id);
+  ASSERT_NE(snapshot, nullptr);
+  EXPECT_TRUE(snapshot->IsCommitted());
+  EXPECT_FALSE(snapshot->Lineage().Empty());
+  EXPECT_EQ(snapshot->Document().Develop()->Params().Params(), expected);
+  // The committed snapshot binds the profile from the source file before any render reads it.
+  const auto bound = snapshot->Document().Develop()->Params().Params();
   ASSERT_TRUE(bound.camera_profile.dng_profile.IsBound());
   EXPECT_EQ(bound.camera_profile.dng_profile->fingerprint, raw.dng_profile_->fingerprint);
   EXPECT_TRUE(ResolveDevelopColorTransform(bound).ok);
-  EXPECT_FALSE(loaded->lineage_.Empty());
-  const auto                   before = loaded->document_->ToJson();
+  const auto                   before = snapshot->Document().ToJson();
   auto                         bytes  = ByteBufferLoader::LoadByteBufferFromImage(image);
   auto                         input  = std::make_shared<ImageBuffer>(std::move(bytes));
   std::shared_ptr<ImageBuffer> output;
   {
-    std::unique_lock lock(loaded->pipeline_->GetRenderLock());
+    PipelineExecutor executor(ExecutorRole::Batch);
+    executor.SetAcceleratorBackendPreference(pipelines.GetAcceleratorBackendPreference());
     PipelineApplyRequest request;
+    request.role                         = ExecutorRole::Batch;
     request.geometry.resolution.max_edge = 256;
     request.geometry.resolution.quality  = RenderQuality::Export;
     request.decode_res                   = DecodeRes::FULL;
     request.require_host_output          = true;
-    const auto snapshot = loaded->FreezeLiveSnapshot();
-    ASSERT_NE(snapshot, nullptr);
-    output = loaded->pipeline_->Apply(*snapshot, input, request);
+    output                               = executor.Apply(*snapshot, input, request);
   }
   ASSERT_NE(output, nullptr);
   ASSERT_TRUE(output->cpu_data_valid_);
   const auto pixels = output->GetCPUData();
   EXPECT_TRUE(cv::checkRange(pixels));
   EXPECT_GT(cv::mean(pixels)[1], 0.01);
-  EXPECT_EQ(loaded->document_->ToJson(), before);
-  pipelines.SavePipeline(loaded);
+  EXPECT_EQ(snapshot->Document().ToJson(), before);
 }
 
 /** @brief Import binds the RAW camera profile on the document; no stage value is read. */

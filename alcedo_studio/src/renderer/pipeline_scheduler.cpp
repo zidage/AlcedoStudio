@@ -245,227 +245,154 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
   }
   thread_pool_.Submit([this, task = std::move(task)]() mutable {
     diag::PreviewPerformance::NoteWorkerStart(task.request_id_);
-    std::optional<bool> completion_result;
-    std::string         completion_message;
-    // Some render paths return from inside the render_lock scope. Record the
-    // result there, but invoke the external completion only when this outer
-    // guard is destroyed, after every inner lock and render parameter guard.
-    auto                completion_guard = std::unique_ptr<void, std::function<void(void*)>>(
-        reinterpret_cast<void*>(1), [&task, &completion_result, &completion_message](void*) {
-          if (!completion_result.has_value() || !task.on_complete_) {
-            return;
-          }
-          try {
-            task.on_complete_(*completion_result, std::move(completion_message));
-          } catch (...) {
-          }
-        });
-    const auto finish = [&completion_result, &completion_message](bool        success,
-                                                                  std::string message = {}) {
-      if (completion_result.has_value()) {
-        return;
-      }
-      completion_result  = success;
-      completion_message = std::move(message);
-    };
-
-    const auto set_blocking_value = [&task](std::shared_ptr<ImageBuffer> value) {
-      if (!task.options_.is_blocking_ || !task.result_) {
-        return;
-      }
+    // RunTask has returned, so the executor render lock and every render resource of the task
+    // are released before the owner's completion runs.
+    auto outcome = RunTask(task);
+    if (task.on_complete_) {
       try {
-        task.result_->set_value(std::move(value));
+        task.on_complete_(outcome.success, std::move(outcome.message));
       } catch (...) {
       }
-    };
-
-    const auto set_blocking_exception = [&task]() {
-      if (!task.options_.is_blocking_ || !task.result_) {
-        return;
-      }
-      try {
-        task.result_->set_exception(std::current_exception());
-      } catch (...) {
-      }
-    };
-
-    const auto task_cancelled = [&task]() {
-      if (!task.cancel_requested_) {
-        return false;
-      }
-      try {
-        return task.cancel_requested_();
-      } catch (...) {
-        return true;
-      }
-    };
-
-    try {
-      std::shared_ptr<ImageBuffer> result_copy;
-      {
-        if (task_cancelled()) {
-          set_blocking_value(nullptr);
-          finish(false);
-          return;
-        }
-        if (task.prepare_) {
-          bool prepared = false;
-          try {
-            prepared = (*task.prepare_)(task);
-          } catch (const std::exception& ex) {
-            set_blocking_exception();
-            finish(false, ex.what());
-            return;
-          } catch (...) {
-            set_blocking_exception();
-            finish(false, "Pipeline render failed");
-            return;
-          }
-          if (!prepared) {
-            set_blocking_value(nullptr);
-            finish(false);
-            return;
-          }
-        }
-        if (task_cancelled()) {
-          set_blocking_value(nullptr);
-          finish(false);
-          return;
-        }
-        if (task.input_desc_ && !task.input_) {
-          // Load image data into buffer
-          task.input_ = std::make_shared<ImageBuffer>(
-              ByteBufferLoader::LoadByteBufferFromImage(task.input_desc_));
-        }
-        if (task_cancelled()) {
-          set_blocking_value(nullptr);
-          finish(false);
-          return;
-        }
-        if (task.input_) {
-          // render_lock_ is sole live-pipeline ownership for the full task:
-          // configure + Apply + present handoff. History / structural rebuild
-          // queues on this lock (owner thread pumps events while waiting so
-          // present slot waits can complete without dropping ownership).
-          std::unique_lock<std::mutex> render_lock;
-          auto&                        render_desc = task.options_.render_desc_;
-          PipelineApplyRequest         apply_request;
-
-          if (task.pipeline_executor_) {
-            render_lock = std::unique_lock<std::mutex>(task.pipeline_executor_->GetRenderLock());
-
-            if (task.configure_under_render_lock_) {
-              bool prepared = false;
-              try {
-                prepared = (*task.configure_under_render_lock_)(task);
-              } catch (const std::exception& ex) {
-                set_blocking_exception();
-                finish(false, ex.what());
-                return;
-              } catch (...) {
-                set_blocking_exception();
-                finish(false, "Pipeline render failed");
-                return;
-              }
-              if (!prepared) {
-                set_blocking_value(nullptr);
-                finish(false);
-                return;
-              }
-            }
-
-            apply_request = task.MakeApplyRequest();
-          }
-
-          IFrameSink* output_sink = apply_request.sink;
-          if (IsStaleForSink(output_sink, task.request_id_)) {
-            set_blocking_value(nullptr);
-            finish(false);
-            return;
-          }
-
-          if (task_cancelled()) {
-            set_blocking_value(nullptr);
-            finish(false);
-            return;
-          }
-
-          if (IsStaleForSink(output_sink, task.request_id_)) {
-            std::cout << "PipelineScheduler: Stale for sink detected!\n";
-            set_blocking_value(nullptr);
-            finish(false);
-            return;
-          }
-
-          if (!task.snapshot_under_render_lock_) {
-            throw std::runtime_error("PipelineScheduler: render task has no snapshot source");
-          }
-          const auto snapshot = task.snapshot_under_render_lock_();
-          if (!snapshot) {
-            throw std::runtime_error("PipelineScheduler: render task snapshot is unavailable");
-          }
-
-          MarkSinkApplyStarted(output_sink, task.request_id_);
-
-          auto result = task.pipeline_executor_->Apply(*snapshot, task.input_, apply_request);
-          bool result_has_cpu = false;
-          if (result && result->cpu_data_valid_) {
-            try {
-              result_has_cpu = !result->GetCPUData().empty();
-            } catch (...) {
-              result_has_cpu = false;
-            }
-          }
-          const bool result_valid_for_copy = result && result_has_cpu;
-
-          if (IsStaleForSink(output_sink, task.request_id_)) {
-            std::cout << "PipelineScheduler: Stale for sink detected!\n";
-            set_blocking_value(nullptr);
-            finish(false);
-            return;
-          }
-
-          if (render_desc.render_type_ == RenderType::FAST_PREVIEW ||
-              render_desc.render_type_ == RenderType::QUALITY_BASE_PREVIEW ||
-              render_desc.render_type_ == RenderType::DETAIL_ROI_PREVIEW ||
-              render_desc.render_type_ == RenderType::FULL_RES_PREVIEW) {
-            const bool ok = result != nullptr;
-            set_blocking_value(result);
-            finish(ok);
-            return;
-          }
-          if (!result_valid_for_copy) {
-            // Batch renders exist to return host pixels; a result without them is a failure.
-            set_blocking_value(nullptr);
-            finish(false, "PipelineScheduler: render produced no host pixels");
-            return;
-          }
-
-          result_copy = std::make_shared<ImageBuffer>(result->GetCPUData());
-        }
-      }
-
-      if (result_copy) {
-        if (task.options_.is_callback_ && task.callback_) {
-          (*task.callback_)(*result_copy);
-        }
-        if (task.options_.is_seq_callback_ && task.seq_callback_) {
-          (*task.seq_callback_)(*result_copy, task.task_id_);
-        }
-        set_blocking_value(result_copy);
-        finish(true);
-      } else {
-        // In case of failure, set nullptr
-        set_blocking_value(nullptr);
-        finish(false);
-      }
-    } catch (const std::exception& ex) {
-      set_blocking_exception();
-      finish(false, ex.what());
-    } catch (...) {
-      set_blocking_exception();
-      finish(false, "Pipeline render failed");
     }
   });
 }
-}  // namespace alcedo
+
+auto PipelineScheduler::RunTask(PipelineTask& task) -> TaskOutcome {
+  const auto set_blocking_value = [&task](std::shared_ptr<ImageBuffer> value) {
+    if (!task.options_.is_blocking_ || !task.result_) {
+      return;
+    }
+    try {
+      task.result_->set_value(std::move(value));
+    } catch (...) {
+    }
+  };
+
+  const auto set_blocking_exception = [&task]() {
+    if (!task.options_.is_blocking_ || !task.result_) {
+      return;
+    }
+    try {
+      task.result_->set_exception(std::current_exception());
+    } catch (...) {
+    }
+  };
+
+  const auto task_cancelled = [&task]() {
+    if (!task.cancel_requested_) {
+      return false;
+    }
+    try {
+      return task.cancel_requested_();
+    } catch (...) {
+      return true;
+    }
+  };
+
+  const auto abandon = [&set_blocking_value]() {
+    set_blocking_value(nullptr);
+    return TaskOutcome{};
+  };
+
+  try {
+    if (task_cancelled()) {
+      return abandon();
+    }
+    if (task.prepare_) {
+      bool prepared = false;
+      try {
+        prepared = (*task.prepare_)(task);
+      } catch (const std::exception& ex) {
+        set_blocking_exception();
+        return {.success = false, .message = ex.what()};
+      } catch (...) {
+        set_blocking_exception();
+        return {.success = false, .message = "Pipeline render failed"};
+      }
+      if (!prepared) {
+        return abandon();
+      }
+    }
+    if (task_cancelled()) {
+      return abandon();
+    }
+    if (task.input_desc_ && !task.input_) {
+      task.input_ = std::make_shared<ImageBuffer>(
+          ByteBufferLoader::LoadByteBufferFromImage(task.input_desc_));
+    }
+    if (task_cancelled()) {
+      return abandon();
+    }
+    if (!task.input_ || !task.pipeline_executor_) {
+      return abandon();
+    }
+
+    std::shared_ptr<ImageBuffer> result_copy;
+    {
+      // The executor's own lock: this task has the executor to itself from Apply through the
+      // present handoff. Every executor belongs to one owner, so the lock is not shared with any
+      // other module.
+      std::unique_lock<std::mutex> render_lock(task.pipeline_executor_->GetRenderLock());
+      const auto&                  render_desc   = task.options_.render_desc_;
+      const PipelineApplyRequest   apply_request = task.MakeApplyRequest();
+
+      IFrameSink*                  output_sink   = apply_request.sink;
+      if (IsStaleForSink(output_sink, task.request_id_) || task_cancelled()) {
+        return abandon();
+      }
+
+      if (!task.snapshot_) {
+        throw std::runtime_error("PipelineScheduler: render task has no snapshot");
+      }
+
+      MarkSinkApplyStarted(output_sink, task.request_id_);
+
+      auto result = task.pipeline_executor_->Apply(*task.snapshot_, task.input_, apply_request);
+
+      if (IsStaleForSink(output_sink, task.request_id_)) {
+        std::cout << "PipelineScheduler: Stale for sink detected!\n";
+        return abandon();
+      }
+
+      if (render_desc.render_type_ == RenderType::FAST_PREVIEW ||
+          render_desc.render_type_ == RenderType::QUALITY_BASE_PREVIEW ||
+          render_desc.render_type_ == RenderType::DETAIL_ROI_PREVIEW ||
+          render_desc.render_type_ == RenderType::FULL_RES_PREVIEW) {
+        const bool ok = result != nullptr;
+        set_blocking_value(result);
+        return {.success = ok, .message = {}};
+      }
+
+      bool result_has_cpu = false;
+      if (result && result->cpu_data_valid_) {
+        try {
+          result_has_cpu = !result->GetCPUData().empty();
+        } catch (...) {
+          result_has_cpu = false;
+        }
+      }
+      if (!result_has_cpu) {
+        // Batch renders exist to return host pixels; a result without them is a failure.
+        set_blocking_value(nullptr);
+        return {.success = false, .message = "PipelineScheduler: render produced no host pixels"};
+      }
+      result_copy = std::make_shared<ImageBuffer>(result->GetCPUData());
+    }
+
+    if (task.options_.is_callback_ && task.callback_) {
+      (*task.callback_)(*result_copy);
+    }
+    if (task.options_.is_seq_callback_ && task.seq_callback_) {
+      (*task.seq_callback_)(*result_copy, task.task_id_);
+    }
+    set_blocking_value(result_copy);
+    return {.success = true, .message = {}};
+  } catch (const std::exception& ex) {
+    set_blocking_exception();
+    return {.success = false, .message = ex.what()};
+  } catch (...) {
+    set_blocking_exception();
+    return {.success = false, .message = "Pipeline render failed"};
+  }
+}
+};  // namespace alcedo
