@@ -18,7 +18,7 @@ namespace alcedo {
 template <>
 struct PassEncoder<MetalBackend, GpuPassKind::UploadRaw> {
   static void Encode(MetalRenderDevice& device, const ExecutionPlan& plan,
-                     const PreparedRawInput& input, PipelineDocument& document) {
+                     const PreparedRawInput& input, const PipelineDocument& document) {
     ExecuteMetalDevelop(device, plan, input, document);
   }
 };
@@ -26,7 +26,7 @@ struct PassEncoder<MetalBackend, GpuPassKind::UploadRaw> {
 template <>
 struct PassEncoder<MetalBackend, GpuPassKind::UploadRgb> {
   static void Encode(MetalRenderDevice& device, const ExecutionPlan& plan,
-                     const PreparedRawInput& input, PipelineDocument& document) {
+                     const PreparedRawInput& input, const PipelineDocument& document) {
     ExecuteMetalDevelop(device, plan, input, document);
   }
 };
@@ -34,7 +34,7 @@ struct PassEncoder<MetalBackend, GpuPassKind::UploadRgb> {
 template <>
 struct PassEncoder<MetalBackend, GpuPassKind::GeometryResample> {
   static void Encode(MetalRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
-                     PipelineDocument&) {
+                     const PipelineDocument&) {
     ExecuteMetalGeometryResample(device, plan);
   }
 };
@@ -42,7 +42,7 @@ struct PassEncoder<MetalBackend, GpuPassKind::GeometryResample> {
 template <>
 struct PassEncoder<MetalBackend, GpuPassKind::CameraToAp1> {
   static void Encode(MetalRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
-                     PipelineDocument& document) {
+                     const PipelineDocument& document) {
     ExecuteMetalCameraColor(device, plan, document);
   }
 };
@@ -50,7 +50,7 @@ struct PassEncoder<MetalBackend, GpuPassKind::CameraToAp1> {
 template <>
 struct PassEncoder<MetalBackend, GpuPassKind::MaskEvaluate> {
   static void Encode(MetalRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
-                     PipelineDocument& document, const CompiledGradeNode& compiled_grade,
+                     const PipelineDocument& document, const CompiledGradeNode& compiled_grade,
                      const CompiledMaskSource& source) {
     (void)ExecuteMetalMask(device, plan, document, compiled_grade, source);
   }
@@ -59,8 +59,7 @@ struct PassEncoder<MetalBackend, GpuPassKind::MaskEvaluate> {
 template <>
 struct PassEncoder<MetalBackend, GpuPassKind::MaskUnion> {
   static void Encode(MetalRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
-                     PipelineDocument& document,
-                     const CompiledGradeNode& compiled_grade) {
+                     const PipelineDocument& document, const CompiledGradeNode& compiled_grade) {
     (void)ExecuteMetalMaskUnion(device, plan, document, compiled_grade);
   }
 };
@@ -68,7 +67,7 @@ struct PassEncoder<MetalBackend, GpuPassKind::MaskUnion> {
 template <>
 struct PassEncoder<MetalBackend, GpuPassKind::PrimaryColorGrade> {
   static auto Encode(MetalRenderDevice& device, const ExecutionPlan& plan,
-                     const PreparedRawInput& input, PipelineDocument& document,
+                     const PreparedRawInput& input, const PipelineDocument& document,
                      const CompiledGradeNode& compiled_grade, const FrameSceneBinding& scene)
       -> FrameSceneBinding {
     return ExecuteMetalPrimaryGrade(device, plan, input, document, compiled_grade, scene)
@@ -79,7 +78,7 @@ struct PassEncoder<MetalBackend, GpuPassKind::PrimaryColorGrade> {
 template <>
 struct PassEncoder<MetalBackend, GpuPassKind::Drt> {
   static void Encode(MetalRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
-                     PipelineDocument& document, const FrameSceneBinding& scene) {
+                     const PipelineDocument& document, const FrameSceneBinding& scene) {
     (void)ExecuteMetalDrt(device, plan, document, scene);
   }
 };

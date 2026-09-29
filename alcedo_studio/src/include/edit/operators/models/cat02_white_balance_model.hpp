@@ -66,7 +66,7 @@ class Cat02WhiteBalanceModel final
   [[nodiscard]] auto                IsDefault() const -> bool override;
 
   /**
-   * @brief Apply validated CAT02 fields atomically and report only changed dirty fields.
+   * @brief Apply validated CAT02 fields atomically and report only changed fields.
    *
    * Temperature and tint are clamped to the RAW Custom WB ranges.
    */

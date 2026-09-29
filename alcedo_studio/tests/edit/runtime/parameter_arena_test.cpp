@@ -8,7 +8,6 @@
 #include <span>
 #include <stdexcept>
 
-#include "edit/operators/models/pending_parameter_patch.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 
 namespace alcedo {
@@ -17,7 +16,7 @@ namespace {
 using cuda_workspace_test::BindSharpen;
 using cuda_workspace_test::CudaWorkspaceFixture;
 using cuda_workspace_test::ExposureFieldBindings;
-using cuda_workspace_test::UploadPackedAndClearDirty;
+using cuda_workspace_test::UploadPackedModel;
 using cuda_workspace_test::WritePackedOwnerBytes;
 
 TEST_F(CudaWorkspaceFixture, ParameterArenaKeepsStableOffsetsAcrossRenders) {
@@ -43,18 +42,15 @@ TEST_F(CudaWorkspaceFixture, ParameterArenaWritePackedSlotUploadsBoundSlotOnce) 
   ParameterSlotKey key{NodeId{"grade.primary"}, AdjustmentInstanceId{"sharpen"}};
   SharpenModel     model;
   BindSharpen(device.Workspace().Parameters(), key);
-  ASSERT_TRUE(UploadPackedAndClearDirty(device, key, model));
+  ASSERT_TRUE(UploadPackedModel(device, key, model));
 
   model.SetAmount(12.0f);
-  auto pending = TakePendingDirtyFields(model);
-  ASSERT_TRUE(pending.has_value());
 
   auto& backend = device.Workspace().Device();
   backend.ResetCounters();
   WritePackedOwnerBytes(device.Workspace().Parameters(), key, model);
   device.Workspace().Parameters().UploadDirty(device.CommandContext());
   device.WaitIdle();
-  pending->Commit();
 
   ASSERT_EQ(backend.LastHostToDeviceRanges().size(), 1U);
   EXPECT_EQ(backend.LastHostToDeviceRanges().front().size, sizeof(SharpenPayload));
@@ -66,24 +62,21 @@ TEST_F(CudaWorkspaceFixture, ParameterArenaWritePackedSlotUploadsBoundSlotOnce) 
   EXPECT_EQ(backend.HostToDeviceCopyCount(), 0U);
 }
 
-TEST_F(CudaWorkspaceFixture, PackedSlotUploadCopiesBoundSlotOnceWhenTwoFieldsDirty) {
+TEST_F(CudaWorkspaceFixture, PackedSlotUploadCopiesBoundSlotOnceWhenTwoFieldsChange) {
   CudaRenderDevice device;
   ParameterSlotKey key{NodeId{"grade.primary"}, AdjustmentInstanceId{"sharpen"}};
   SharpenModel     model;
   BindSharpen(device.Workspace().Parameters(), key);
-  ASSERT_TRUE(UploadPackedAndClearDirty(device, key, model));
+  ASSERT_TRUE(UploadPackedModel(device, key, model));
 
   model.SetAmount(8.0f);
   model.SetRadius(5.0f);
-  auto pending = TakePendingDirtyFields(model);
-  ASSERT_TRUE(pending.has_value());
 
   auto& backend = device.Workspace().Device();
   backend.ResetCounters();
   WritePackedOwnerBytes(device.Workspace().Parameters(), key, model);
   device.Workspace().Parameters().UploadDirty(device.CommandContext());
   device.WaitIdle();
-  pending->Commit();
 
   ASSERT_EQ(backend.LastHostToDeviceRanges().size(), 1U);
   EXPECT_EQ(backend.LastHostToDeviceRanges().front().size, sizeof(SharpenPayload));
@@ -91,7 +84,7 @@ TEST_F(CudaWorkspaceFixture, PackedSlotUploadCopiesBoundSlotOnceWhenTwoFieldsDir
   EXPECT_EQ(backend.HostToDeviceBytes(), sizeof(SharpenPayload));
 }
 
-TEST_F(CudaWorkspaceFixture, RepeatedDirtyWritesUseLatestValue) {
+TEST_F(CudaWorkspaceFixture, RepeatedModelWritesUploadLatestValue) {
   CudaRenderDevice device;
   ParameterSlotKey key{NodeId{"grade.primary"}, AdjustmentInstanceId{"exposure"}};
   ExposureModel    model;
@@ -100,12 +93,9 @@ TEST_F(CudaWorkspaceFixture, RepeatedDirtyWritesUseLatestValue) {
 
   model.SetValue(0.25f);
   model.SetValue(1.5f);
-  auto pending = TakePendingDirtyFields(model);
-  ASSERT_TRUE(pending.has_value());
   WritePackedOwnerBytes(device.Workspace().Parameters(), key, model);
   device.Workspace().Parameters().UploadDirty(device.CommandContext());
   device.WaitIdle();
-  pending->Commit();
 
   float gpu_value = 0.0f;
   std::byte storage[4];
@@ -116,41 +106,13 @@ TEST_F(CudaWorkspaceFixture, RepeatedDirtyWritesUseLatestValue) {
   EXPECT_FLOAT_EQ(gpu_value, 1.5f);
 }
 
-TEST_F(CudaWorkspaceFixture, CancelledCudaParameterCopyRestoresDirtyFields) {
-  CudaRenderDevice device;
-  ParameterSlotKey key{NodeId{"grade.primary"}, AdjustmentInstanceId{"exposure"}};
-  ExposureModel    model;
-  const auto       fields = ExposureFieldBindings();
-  device.Workspace().Parameters().BindSlot(key, 4, fields);
-  ASSERT_TRUE(UploadPackedAndClearDirty(device, key, model));
-
-  model.SetValue(0.75f);
-  {
-    auto pending = TakePendingDirtyFields(model);
-    ASSERT_TRUE(pending.has_value());
-    device.Workspace().Device().FailNextUpload();
-    WritePackedOwnerBytes(device.Workspace().Parameters(), key, model);
-    EXPECT_THROW(device.Workspace().Parameters().UploadDirty(device.CommandContext()),
-                 std::runtime_error);
-  }
-  EXPECT_TRUE(model.IsDirty());
-
-  auto retry = TakePendingDirtyFields(model);
-  ASSERT_TRUE(retry.has_value());
-  WritePackedOwnerBytes(device.Workspace().Parameters(), key, model);
-  device.Workspace().Parameters().UploadDirty(device.CommandContext());
-  device.WaitIdle();
-  retry->Commit();
-  EXPECT_FALSE(model.IsDirty());
-}
-
 TEST_F(CudaWorkspaceFixture, UnchangedParametersIssueNoHostToDeviceCopy) {
   CudaRenderDevice device;
   ParameterSlotKey key{NodeId{"grade.primary"}, AdjustmentInstanceId{"exposure"}};
   ExposureModel    model;
   const auto       fields = ExposureFieldBindings();
   device.Workspace().Parameters().BindSlot(key, 4, fields);
-  ASSERT_TRUE(UploadPackedAndClearDirty(device, key, model));
+  ASSERT_TRUE(UploadPackedModel(device, key, model));
 
   auto& backend = device.Workspace().Device();
   backend.ResetCounters();
@@ -193,17 +155,15 @@ TEST_F(CudaWorkspaceFixture, SameAdjustmentTypeUsesDistinctNodeSlots) {
   EXPECT_FLOAT_EQ(gpu_b, 1.75f);
 }
 
-TEST_F(CudaWorkspaceFixture, ParameterUploadFailureRestoresPendingDirtyState) {
+TEST_F(CudaWorkspaceFixture, ParameterUploadFailureKeepsPackedBytesQueuedUntilRetry) {
   CudaRenderDevice device;
   ParameterSlotKey key{NodeId{"grade.primary"}, AdjustmentInstanceId{"exposure"}};
   ExposureModel    model;
   const auto       fields = ExposureFieldBindings();
   device.Workspace().Parameters().BindSlot(key, 4, fields);
-  ASSERT_TRUE(UploadPackedAndClearDirty(device, key, model));
+  ASSERT_TRUE(UploadPackedModel(device, key, model));
 
   model.SetValue(0.75f);
-  auto pending = TakePendingDirtyFields(model);
-  ASSERT_TRUE(pending.has_value());
   device.Workspace().Device().FailNextUpload();
   WritePackedOwnerBytes(device.Workspace().Parameters(), key, model);
   EXPECT_TRUE(device.Workspace().Parameters().HasPendingUpload());
@@ -211,10 +171,10 @@ TEST_F(CudaWorkspaceFixture, ParameterUploadFailureRestoresPendingDirtyState) {
                std::runtime_error);
   EXPECT_TRUE(device.Workspace().Parameters().HasPendingUpload());
 
+  EXPECT_EQ(device.Workspace().Parameters().AppliedRevision(key), model.Revision());
+
   device.Workspace().Parameters().UploadDirty(device.CommandContext());
   device.WaitIdle();
-  pending->Commit();
-  EXPECT_FALSE(model.IsDirty());
   EXPECT_FALSE(device.Workspace().Parameters().HasPendingUpload());
 
   float gpu_value = 0.0f;

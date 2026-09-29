@@ -15,7 +15,6 @@
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/graph/graph_ids.hpp"
 #include "edit/graph/pipeline_document.hpp"
-#include "edit/operators/models/pending_parameter_patch.hpp"
 #include "edit/runtime/adjustment_runtime.hpp"
 #include "edit/runtime/drt_post_schedule.hpp"
 #include "edit/runtime/execution_plan.hpp"
@@ -54,20 +53,19 @@ class DrtPostExecutor {
    * the free scene-work member. Parameter slots are uploaded before any GPU start.
    * A failed dispatch throws after Ops::CheckAfterEncode.
    */
-  static auto Execute(Device& device, const ExecutionPlan& plan, PipelineDocument& document,
+  static auto Execute(Device& device, const ExecutionPlan& plan, const PipelineDocument& document,
                       const FrameSceneBinding& scene) -> DrtPostExecutionResult {
     auto& workspace = device.Workspace();
     if (!workspace.IsRendering()) {
       throw std::runtime_error(std::string{Ops::kErrorPrefix} + ": BeginRender has not been called");
     }
-    auto* drt = document.Drt();
+    const auto* drt = document.Drt();
     if (drt == nullptr) {
       throw std::runtime_error(std::string{Ops::kErrorPrefix} + ": missing DRT endpoint");
     }
     const auto width  = Ops::BindingWidth(device, scene);
     const auto height = Ops::BindingHeight(device, scene);
 
-    std::vector<PendingParameterPatch> pending;
     std::vector<GradeNeighborParams>   compiled_order;
     std::vector<NeighborWork>          works;
     compiled_order.reserve(plan.drt.post_adjustments.size());
@@ -75,7 +73,7 @@ class DrtPostExecutor {
     std::vector<std::uint32_t> command_offsets;
     command_offsets.reserve(plan.drt.post_adjustments.size());
     for (const auto& compiled : plan.drt.post_adjustments) {
-      auto* model = drt->FindAdjustment(compiled.instance_id);
+      const auto* model = drt->FindAdjustment(compiled.instance_id);
       if (model == nullptr || model->Type() != compiled.type) {
         throw std::runtime_error(std::string{Ops::kErrorPrefix} +
                                  ": compiled DRT/Post adjustment no longer matches");
@@ -86,9 +84,7 @@ class DrtPostExecutor {
                                  ": DRT/Post adjustment is not a neighborhood operation");
       }
       const ParameterSlotKey key{drt->Id(), compiled.instance_id};
-      if (auto change = Ops::RefreshNeighborhoodAdjustment(device, *model, key, *behavior)) {
-        pending.push_back(std::move(*change));
-      }
+      Ops::RefreshNeighborhoodAdjustment(device, *model, key, *behavior);
       auto neighbor = MakeGradeNeighborParams(*model, *behavior, plan.geometry);
       compiled_order.push_back(neighbor);
       if (neighbor.enabled == 0U) {
@@ -105,11 +101,8 @@ class DrtPostExecutor {
       works.push_back(std::move(work));
     }
 
-    Ops::BindDisplayParams(device, plan, *drt, pending);
+    Ops::BindDisplayParams(device, plan, *drt);
     workspace.Parameters().UploadDirty(device.CommandContext());
-    for (auto& patch : pending) {
-      patch.Commit();
-    }
     Ops::PrepareNeighborCommands(device, drt->Id(), command_offsets);
 
     const auto schedule = MakeDrtPostSchedule(compiled_order);

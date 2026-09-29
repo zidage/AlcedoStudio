@@ -16,7 +16,6 @@
 
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/operators/models/i_operator_model.hpp"
-#include "edit/operators/models/pending_parameter_patch.hpp"
 #include "edit/runtime/adjustment_runtime.hpp"
 #include "edit/runtime/drt/drt_output_resolver.hpp"
 #include "edit/runtime/drt_post_executor.hpp"
@@ -128,10 +127,10 @@ struct MetalDrtOps {
 
   static constexpr const char* kErrorPrefix = "ExecuteMetalDrt";
 
-  static auto RefreshNeighborhoodAdjustment(MetalRenderDevice& device, IOperatorModel& model,
-                                            const ParameterSlotKey& key, AdjustmentBehavior behavior)
-      -> std::optional<PendingParameterPatch> {
-    return BindOrRefreshGradeRuntimeSlot(device.Workspace().Parameters(), key, model, behavior);
+  static void RefreshNeighborhoodAdjustment(MetalRenderDevice& device, const IOperatorModel& model,
+                                            const ParameterSlotKey& key,
+                                            AdjustmentBehavior      behavior) {
+    BindOrRefreshGradeRuntimeSlot(device.Workspace().Parameters(), key, model, behavior);
   }
 
   static void PrepareNeighborCommands(MetalRenderDevice&, const NodeId&,
@@ -178,22 +177,25 @@ struct MetalDrtOps {
     (void)device.Workspace().AcquireImageForWrite(id, {width, height, TextureFormat::Rgba32f});
   }
 
+  /**
+   * @brief Pack the display transform when the slot is missing, the DRT revision changed,
+   *        or this frame overrides the output color.
+   *
+   * An override is recorded without a revision, so the next plain frame packs again.
+   */
   static void BindDisplayParams(MetalRenderDevice& device, const ExecutionPlan& plan,
-                                DrtNodeModel& drt, std::vector<PendingParameterPatch>& pending) {
+                                const DrtNodeModel& drt) {
     auto&                  arena = device.Workspace().Parameters();
     const ParameterSlotKey key{drt.Id(), AdjustmentInstanceId{"drt.output"}};
-    auto                   display_pending = plan.output_color_override.has_value()
-                                                 ? decltype(TakePendingDirtyFields(drt.Params())){}
-                                                 : TakePendingDirtyFields(drt.Params());
-    const bool             needs_initialize = !arena.Contains(key);
-    if (needs_initialize || display_pending.has_value() || plan.output_color_override.has_value()) {
-      const auto runtime = PackMetalDrtGpuParams(
-          DrtOutputResolver::ResolveNode(drt, plan.output_color_override, kErrorPrefix));
-      arena.BindOrWritePackedSlot(key, DirtyFieldMask{kDrtDirtyBits}, runtime);
+    const bool             overridden = plan.output_color_override.has_value();
+    const auto             revision   = drt.Params().Revision();
+    if (!overridden && arena.Contains(key) && arena.AppliedRevision(key) == revision) {
+      return;
     }
-    if (display_pending) {
-      pending.push_back(std::move(*display_pending));
-    }
+    const auto runtime = PackMetalDrtGpuParams(
+        DrtOutputResolver::ResolveNode(drt, plan.output_color_override, kErrorPrefix));
+    arena.BindOrWritePackedSlot(key, DirtyFieldMask{kDrtDirtyBits}, runtime,
+                                overridden ? kNoParameterRevision : revision);
   }
 
   static void DispatchDisplayTransform(MetalRenderDevice& device, const FrameSceneBinding& scene,
@@ -227,7 +229,8 @@ void AppendMetalDrtWarmup(std::vector<MetalPipelineWarmup>& pipelines) {
 }
 
 auto ExecuteMetalDrt(MetalRenderDevice& device, const ExecutionPlan& plan,
-                     PipelineDocument& document, const FrameSceneBinding& scene) -> MetalDrtResult {
+                     const PipelineDocument& document, const FrameSceneBinding& scene)
+    -> MetalDrtResult {
   const auto executed = DrtPostExecutor<MetalDrtOps>::Execute(device, plan, document, scene);
   return {executed.output, executed.display_post, executed.post_neighborhood_count};
 }

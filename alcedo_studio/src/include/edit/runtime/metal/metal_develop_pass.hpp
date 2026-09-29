@@ -22,12 +22,12 @@ namespace alcedo {
  * product-path substitute. Output is camera scene-linear RGBA32F.
  */
 void ExecuteMetalDevelop(MetalRenderDevice& device, const ExecutionPlan& plan,
-                         const PreparedRawInput& input, PipelineDocument& document);
+                         const PreparedRawInput& input, const PipelineDocument& document);
 
 void ExecuteMetalGeometryResample(MetalRenderDevice& device, const ExecutionPlan& plan);
 
 void ExecuteMetalCameraColor(MetalRenderDevice& device, const ExecutionPlan& plan,
-                             PipelineDocument& document);
+                             const PipelineDocument& document);
 
 void WarmUpMetalDagPlan(MetalBackend& backend, const ExecutionPlan& plan);
 

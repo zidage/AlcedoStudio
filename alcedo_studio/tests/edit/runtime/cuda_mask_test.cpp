@@ -67,7 +67,7 @@ class CudaMaskFixture : public ::testing::Test {
       mask.source = LinearGradientMaskSource{};
     }
     auto& result = grade_mask_test::AddMask(*document_.PrimaryGrade(), std::move(mask));
-    document_.MarkTopologyDirty();
+    document_.MarkTopologyChanged();
     return result;
   }
 
@@ -450,7 +450,7 @@ TEST_F(CudaMaskFixture, CudaMultiMaskUnionMatchesReference) {
     gradient.transition_distance = 1.0f;
     grade_mask_test::AddMask(*extra, grade_mask_test::MakeLinearGradientMask(
                                          MaskId{"mask.second"}, gradient));
-    document_.MarkTopologyDirty();
+    document_.MarkTopologyChanged();
     Compile();
     ExecutePlan();
     ASSERT_EQ(plan_.grade_nodes.size(), 2U);

@@ -543,28 +543,35 @@ void PipelineMgmtService::InitializeImageRoot(const std::shared_ptr<PipelineGuar
     throw std::runtime_error("PipelineMgmtService: cannot initialize a null pipeline root");
   }
 
-  std::optional<nlohmann::json> raw_json;
-  {
-    std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
-    if (raw_color_context != nullptr) {
-      BindImportedCameraProfile(*pipeline->document_, *raw_color_context);
-      raw_json = RawColorContextToJson(*raw_color_context);
-    } else {
-      BindWorkingSpaceDevelopData(*pipeline->document_);
-    }
-    ValidateProductDocument(*pipeline->document_, pipeline->id_);
-  }
-
   auto             db_guard = storage_->GetDatabase().GetConnectionGuard();
   auto             db_lock  = db_guard.Lock();
   CommitGraphStore graph_service(db_guard.conn_);
   auto             state = graph_service.GetImageEditState(pipeline->id_);
   if (!state.has_value()) {
-    auto graph = graph_service.CreateRootPipelinePersisted(
-        pipeline->id_, *pipeline->document_, raw_json);
-    SetPipelineHistoryState(*pipeline, graph);
-    CacheRootDocument(*pipeline, *pipeline->document_);
-    return;
+    // Only a new root takes its camera profile from this call. An existing root already stores
+    // the profile, and the live document of a RAW image must never hold the working-space
+    // profile, even briefly: renders on the same guard would use the wrong colors.
+    db_lock.unlock();
+    std::optional<nlohmann::json> raw_json;
+    {
+      std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
+      if (raw_color_context != nullptr) {
+        BindImportedCameraProfile(*pipeline->document_, *raw_color_context);
+        raw_json = RawColorContextToJson(*raw_color_context);
+      } else {
+        BindWorkingSpaceDevelopData(*pipeline->document_);
+      }
+      ValidateProductDocument(*pipeline->document_, pipeline->id_);
+    }
+    db_lock.lock();
+    state = graph_service.GetImageEditState(pipeline->id_);
+    if (!state.has_value()) {
+      auto graph = graph_service.CreateRootPipelinePersisted(
+          pipeline->id_, *pipeline->document_, raw_json);
+      SetPipelineHistoryState(*pipeline, graph);
+      CacheRootDocument(*pipeline, *pipeline->document_);
+      return;
+    }
   }
 
   auto graph = graph_service.LoadGraph(pipeline->id_);

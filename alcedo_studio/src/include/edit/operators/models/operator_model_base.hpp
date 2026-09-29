@@ -4,7 +4,13 @@
 
 #pragma once
 
+#include <algorithm>
+#include <array>
+#include <bit>
+#include <cstddef>
+#include <cstdint>
 #include <mutex>
+#include <stdexcept>
 #include <utility>
 
 #include "edit/operators/models/i_operator_model.hpp"
@@ -12,59 +18,60 @@
 namespace alcedo {
 
 /**
- * @brief CRTP helper that owns payload, dirty mask, and the take/restore lock.
+ * @brief CRTP helper that owns payload, per-field revision stamps, and the Model lock.
  *
- * Derived must provide `static auto TypeId() -> const OperatorTypeId&` and a
- * Dirty enum with `All`. New instances start with All dirty so the first patch
- * can upload every field.
+ * Derived must provide `static auto TypeId() -> const OperatorTypeId&` and a field enum with
+ * `All`. Each bit of `All` is one field with its own stamp. A new instance stamps every field
+ * once, so the first renderer that reads it packs every field.
  *
  * @tparam Derived CRTP type.
  * @tparam Payload Copyable parameter struct stored in DTOs.
- * @tparam DirtyEnum Bit flags convertible to DirtyFieldMask.
+ * @tparam DirtyEnum Field bit flags convertible to DirtyFieldMask.
  */
 template <class Derived, class Payload, class DirtyEnum>
 class OperatorModelBase : public IOperatorModel {
  public:
-  [[nodiscard]] auto Type() const -> OperatorTypeId override { return Derived::TypeId(); }
-
-  [[nodiscard]] auto IsDirty() const -> bool override {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return dirty_.Any();
+  OperatorModelBase() {
+    const auto revision = NextParameterRevision();
+    field_revisions_.fill(revision);
+    revision_ = revision;
   }
 
-  [[nodiscard]] auto DirtyFields() const -> DirtyFieldMask override {
+  [[nodiscard]] auto Type() const -> OperatorTypeId override { return Derived::TypeId(); }
+
+  [[nodiscard]] auto Revision() const -> ParameterRevision override {
     std::lock_guard<std::mutex> lock(mutex_);
-    return dirty_;
+    return revision_;
+  }
+
+  [[nodiscard]] auto FieldsRevision(DirtyFieldMask fields) const -> ParameterRevision override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    ParameterRevision           latest = kNoParameterRevision;
+    for (std::size_t index = 0; index < kFieldCount; ++index) {
+      if ((fields.Bits() & (std::uint64_t{1} << index)) != 0) {
+        latest = std::max(latest, field_revisions_[index]);
+      }
+    }
+    return latest;
+  }
+
+  void CopyRevisionsFrom(const IOperatorModel& source) override {
+    const auto* typed = dynamic_cast<const Derived*>(&source);
+    if (typed == nullptr) {
+      throw std::invalid_argument("OperatorModelBase: revision source is another Model type");
+    }
+    if (typed == this) {
+      return;
+    }
+    std::scoped_lock lock(mutex_, typed->mutex_);
+    field_revisions_ = typed->field_revisions_;
+    revision_        = typed->revision_;
   }
 
   [[nodiscard]] auto MakeFullDto() const -> OperatorParamDto override {
     OperatorModelFullDtoCopyCount::Note();
     std::lock_guard<std::mutex> lock(mutex_);
     return MakeDtoLocked();
-  }
-
-  auto TakeDirtyPatch() -> std::optional<OperatorParamPatchDto> override {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (!dirty_.Any()) {
-      return std::nullopt;
-    }
-    OperatorParamPatchDto patch;
-    patch.type         = Derived::TypeId();
-    patch.dirty_fields = dirty_;
-    patch.payload      = std::make_shared<TypedOperatorParamPayload<Payload>>(Derived::TypeId(),
-                                                                              kDataVersion, payload_);
-    dirty_             = DirtyFieldMask{};
-    return patch;
-  }
-
-  auto TakeDirtyFields() -> std::optional<DirtyFieldMask> override {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (!dirty_.Any()) {
-      return std::nullopt;
-    }
-    const auto fields = dirty_;
-    dirty_            = DirtyFieldMask{};
-    return fields;
   }
 
   /**
@@ -80,16 +87,6 @@ class OperatorModelBase : public IOperatorModel {
     return fn(payload_);
   }
 
-  void RestoreDirty(DirtyFieldMask fields) override {
-    std::lock_guard<std::mutex> lock(mutex_);
-    dirty_ |= fields;
-  }
-
-  void MarkAllDirty() override {
-    std::lock_guard<std::mutex> lock(mutex_);
-    dirty_ = DirtyFieldMask{DirtyEnum::All};
-  }
-
  protected:
   static constexpr std::uint32_t kDataVersion = 1;
 
@@ -97,19 +94,20 @@ class OperatorModelBase : public IOperatorModel {
   void Mutate(DirtyEnum bit, Fn&& fn) {
     std::lock_guard<std::mutex> lock(mutex_);
     fn(payload_);
-    dirty_ |= DirtyFieldMask{bit};
+    StampLocked(DirtyFieldMask{bit});
   }
 
   /**
-   * @brief Apply one focused update while computing the changed dirty fields under the same lock.
+   * @brief Apply one focused update and stamp the fields it reports as changed, under one lock.
    *
-   * The callback must update only the supplied owner fields and return the dirty bits for fields
-   * that changed. Returning an empty mask makes an equivalent normalized update a no-op.
+   * The callback must update only the supplied owner fields and return the bits of the fields
+   * that changed. Returning an empty mask makes an equivalent normalized update a no-op, so the
+   * Model revision stays the same.
    */
   template <class Fn>
   void MutateWithDirtyFields(Fn&& fn) {
     std::lock_guard<std::mutex> lock(mutex_);
-    dirty_ |= fn(payload_);
+    StampLocked(fn(payload_));
   }
 
   [[nodiscard]] auto PayloadCopy() const -> Payload {
@@ -118,10 +116,26 @@ class OperatorModelBase : public IOperatorModel {
   }
 
   Payload            payload_{};
-  DirtyFieldMask     dirty_{DirtyEnum::All};
   mutable std::mutex mutex_;
 
  private:
+  static constexpr std::size_t kFieldCount =
+      static_cast<std::size_t>(std::bit_width(static_cast<std::uint64_t>(DirtyEnum::All)));
+  static_assert(kFieldCount > 0 && kFieldCount <= 64, "Model field enum must have 1 to 64 bits");
+
+  void StampLocked(DirtyFieldMask changed) {
+    if (!changed.Any()) {
+      return;
+    }
+    const auto revision = NextParameterRevision();
+    for (std::size_t index = 0; index < kFieldCount; ++index) {
+      if ((changed.Bits() & (std::uint64_t{1} << index)) != 0) {
+        field_revisions_[index] = revision;
+      }
+    }
+    revision_ = revision;
+  }
+
   [[nodiscard]] auto MakeDtoLocked() const -> OperatorParamDto {
     OperatorParamDto dto;
     dto.type         = Derived::TypeId();
@@ -130,6 +144,9 @@ class OperatorModelBase : public IOperatorModel {
                                                                             kDataVersion, payload_);
     return dto;
   }
+
+  std::array<ParameterRevision, kFieldCount> field_revisions_{};
+  ParameterRevision                          revision_ = kNoParameterRevision;
 };
 
 }  // namespace alcedo

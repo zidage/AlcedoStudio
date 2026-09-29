@@ -177,7 +177,7 @@ add_executable(GpuDagModelGraphTest
   ${ALCEDO_TEST_ROOT}/edit/graph/adjustment_ownership_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/graph_validation_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/pipeline_graph_command_test.cpp
-  ${ALCEDO_TEST_ROOT}/edit/graph/dirty_patch_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/graph/parameter_revision_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/json_roundtrip_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/color_grade_mask_model_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/header_hygiene_test.cpp
@@ -194,6 +194,19 @@ target_compile_definitions(GpuDagModelGraphTest PRIVATE
 gtest_discover_tests(GpuDagModelGraphTest TEST_PREFIX "GpuDagModelGraphTest."
   PROPERTIES LABELS "ci_core_flow;edit;graph")
 alcedo_register_test_target(GpuDagModelGraphTest edit)
+
+# Executor ownership refactor P0: cost of the whole-document copy, static plan key, and Grade
+# parameter packing, recorded before P2 replaces the copy with a copy-on-write freeze.
+add_executable(PipelineDocumentCopyCostTest
+  ${ALCEDO_TEST_ROOT}/edit/graph/pipeline_document_copy_cost_test.cpp)
+target_include_directories(PipelineDocumentCopyCostTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(PipelineDocumentCopyCostTest PRIVATE GTest::gtest_main EditGraph EditRuntime)
+if(ALCEDO_ENABLE_BRUSH_MASK)
+  target_link_libraries(PipelineDocumentCopyCostTest PRIVATE EditMaskBrush)
+endif()
+gtest_discover_tests(PipelineDocumentCopyCostTest TEST_PREFIX "PipelineDocumentCopyCostTest."
+  PROPERTIES LABELS "edit;graph;benchmark")
+alcedo_register_test_target(PipelineDocumentCopyCostTest edit)
 
 # GPU DAG Phase G3: RenderGeometryResolver (CPU).
 add_executable(GpuDagGeometryTest

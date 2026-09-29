@@ -26,7 +26,7 @@ auto Error(GraphValidationCode code, std::string message) -> GraphValidationErro
 /// Mark topology only after the graph accepted and completed a local edit.
 auto FinishEdit(PipelineDocument& document, std::vector<GraphValidationError> errors)
     -> std::vector<GraphValidationError> {
-  if (errors.empty()) document.MarkTopologyDirty();
+  if (errors.empty()) document.MarkTopologyChanged();
   return errors;
 }
 

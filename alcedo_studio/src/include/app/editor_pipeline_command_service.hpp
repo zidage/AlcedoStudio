@@ -19,7 +19,8 @@ namespace alcedo {
  * The JSON input is the application/history boundary only. Supplied keys, types, finite numbers,
  * and array dimensions are checked before a typed Model update is built; the update then reaches
  * the owning Model through its focused operation without a full Model JSON read/merge/reload.
- * Model operations normalize values and update dirty bits; topology and other Models stay intact.
+ * Model operations normalize values and stamp changed fields; topology and other Models stay
+ * intact.
  * Compound input is parsed completely before any owner field is changed.
  * @pre Caller holds the shared executor render lock; target is complete and is not Mask.
  * @param document Live document to mutate in place.

@@ -481,7 +481,7 @@ TEST_F(MetalGradeFixture, MetalSingleSliderEditUploadsOnlyItsParameterRange) {
   EXPECT_TRUE(std::ranges::any_of(ranges, [&](const ByteRange& range) {
     return range.offset == exposure_binding.offset && range.size == exposure_binding.size;
   }));
-  EXPECT_FALSE(exposure.IsDirty());
+  EXPECT_EQ(device_.Workspace().Parameters().AppliedRevision(exposure_key), exposure.Revision());
   EXPECT_EQ(device_.Workspace().Device().BufferCreateCount(), 0U);
   EXPECT_EQ(device_.Workspace().Device().PipelineCreateCount(), 0U);
   EXPECT_NE(device_.Workspace().Device().GradeCommandTopologyHash(), 0U);

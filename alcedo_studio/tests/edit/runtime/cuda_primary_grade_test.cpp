@@ -443,7 +443,7 @@ TEST_F(CudaPrimaryGradeFixture, CudaExposurePatchChangesOnlyExposureParameterRan
   EXPECT_TRUE(std::ranges::any_of(ranges, [&](const ByteRange& range) {
     return range.offset == exposure_binding.offset && range.size == exposure_binding.size;
   }));
-  EXPECT_FALSE(exposure.IsDirty());
+  EXPECT_EQ(device_.Workspace().Parameters().AppliedRevision(exposure_key), exposure.Revision());
 }
 
 TEST_F(CudaPrimaryGradeFixture, CudaGradeParameterBindDoesNotCopyFullDto) {
@@ -840,7 +840,7 @@ TEST_F(CudaPrimaryGradeFixture,
     return grade.AdjustmentCount();
   }();
   grade.MoveAdjustment(exposure_id, contrast_index + 1);
-  document_.MarkTopologyDirty();
+  document_.MarkTopologyChanged();
   plan_            = GraphCompiler::Compile(document_, prepared_.CompileSource(), RenderRequest{});
   const auto after = Download(Render().output);
   ASSERT_FALSE(before.empty());

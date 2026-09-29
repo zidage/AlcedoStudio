@@ -29,7 +29,7 @@ struct MetalDrtResult {
  * neighborhood operations consume its display-referred result.
  */
 [[nodiscard]] auto ExecuteMetalDrt(MetalRenderDevice& device, const ExecutionPlan& plan,
-                                   PipelineDocument& document, const FrameSceneBinding& scene)
+                                   const PipelineDocument& document, const FrameSceneBinding& scene)
     -> MetalDrtResult;
 
 void               AppendMetalDrtWarmup(std::vector<MetalPipelineWarmup>& pipelines);

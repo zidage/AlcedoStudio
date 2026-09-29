@@ -53,11 +53,11 @@ class PlanExecutor {
    * @throws std::exception from encode, upload, or submit after CancelRender.
    */
   template <class Device>
-  static auto Execute(Device& device, const ExecutionPlan& plan, const PreparedRawInput& input,
-                      PipelineDocument& document, bool publish_on_success,
-                      TransientAllocationPolicy transient_policy =
-                          TransientAllocationPolicy::SessionPacked,
-                      ResultPersistenceScope persistence = ResultPersistenceScope::AllCurrentResults)
+  static auto Execute(
+      Device& device, const ExecutionPlan& plan, const PreparedRawInput& input,
+      const PipelineDocument& document, bool publish_on_success,
+      TransientAllocationPolicy transient_policy = TransientAllocationPolicy::SessionPacked,
+      ResultPersistenceScope    persistence      = ResultPersistenceScope::AllCurrentResults)
       -> GraphValueId {
     try {
       auto& workspace = device.Workspace();

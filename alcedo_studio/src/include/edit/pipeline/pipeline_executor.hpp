@@ -62,7 +62,7 @@ class PipelineExecutor {
 
   IFrameSink*                  frame_sink_                   = nullptr;
 #if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
-  std::shared_ptr<PipelineDocument> pipeline_document_;
+  std::shared_ptr<const PipelineDocument> pipeline_document_;
 #endif
 #ifdef HAVE_CUDA
   std::shared_ptr<CudaRenderer> cuda_product_renderer_;
@@ -112,13 +112,14 @@ class PipelineExecutor {
   /**
    * @brief Select the document used by the GPU DAG product path.
    *
-   * @param document Graph owned by the caller; retains shared ownership without changing values.
+   * @param document Graph owned by the caller; retains shared ownership and only reads it.
+   *        Rendering finds parameter changes by revision and never writes the document.
    * @pre Caller holds GetRenderLock() or has exclusive access before publication.
    * @throws std::invalid_argument when document is null; retains the prior binding.
    */
-  void               SetPipelineDocument(std::shared_ptr<PipelineDocument> document);
+  void               SetPipelineDocument(std::shared_ptr<const PipelineDocument> document);
   [[nodiscard]] auto HasGpuDagDocument() const -> bool;
-  [[nodiscard]] auto GpuDagDocument() const -> std::shared_ptr<PipelineDocument>;
+  [[nodiscard]] auto GpuDagDocument() const -> std::shared_ptr<const PipelineDocument>;
 
   /// Attach the editor frame sink that later requests read. Caller must hold render_lock_.
   void AttachFrameSink(IFrameSink* frame_sink) { frame_sink_ = frame_sink; }

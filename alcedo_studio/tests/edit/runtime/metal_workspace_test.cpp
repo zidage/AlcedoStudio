@@ -21,7 +21,7 @@ namespace {
 using metal_workspace_test::BindSharpen;
 using metal_workspace_test::ExposureFieldBindings;
 using metal_workspace_test::MetalWorkspaceFixture;
-using metal_workspace_test::UploadPackedAndClearDirty;
+using metal_workspace_test::UploadPackedModel;
 using metal_workspace_test::WritePackedOwnerBytes;
 
 TEST_F(MetalWorkspaceFixture, MetalParameterArenaWritePackedSlotUploadsBoundSlotOnce) {
@@ -29,18 +29,15 @@ TEST_F(MetalWorkspaceFixture, MetalParameterArenaWritePackedSlotUploadsBoundSlot
   ParameterSlotKey  key{NodeId{"grade.primary"}, AdjustmentInstanceId{"sharpen"}};
   SharpenModel      model;
   BindSharpen(device.Workspace().Parameters(), key);
-  ASSERT_TRUE(UploadPackedAndClearDirty(device, key, model));
+  ASSERT_TRUE(UploadPackedModel(device, key, model));
 
   model.SetAmount(12.0f);
-  auto pending = TakePendingDirtyFields(model);
-  ASSERT_TRUE(pending.has_value());
 
   auto& backend = device.Workspace().Device();
   backend.ResetCounters();
   WritePackedOwnerBytes(device.Workspace().Parameters(), key, model);
   device.Workspace().Parameters().UploadDirty(device.CommandContext());
   device.WaitIdle();
-  pending->Commit();
 
   ASSERT_EQ(backend.LastHostToDeviceRanges().size(), 1U);
   EXPECT_EQ(backend.LastHostToDeviceRanges().front().size, sizeof(SharpenPayload));
@@ -203,24 +200,20 @@ TEST_F(MetalWorkspaceFixture, MetalSecondEmptyRenderCreatesNoBufferTextureHeapOr
   EXPECT_EQ(workspace.Device().HostToDeviceBytes(), 0U);
 }
 
-TEST_F(MetalWorkspaceFixture, MetalFailedUploadRestoresDirtyFieldsAndPublishesNoResult) {
+TEST_F(MetalWorkspaceFixture, MetalFailedUploadKeepsParametersQueuedAndPublishesNoResult) {
   MetalRenderDevice device;
   ParameterSlotKey  key{NodeId{"grade.primary"}, AdjustmentInstanceId{"exposure"}};
   ExposureModel     model;
   const auto        fields = ExposureFieldBindings();
   device.Workspace().Parameters().BindSlot(key, 4, fields);
-  ASSERT_TRUE(UploadPackedAndClearDirty(device, key, model));
+  ASSERT_TRUE(UploadPackedModel(device, key, model));
 
   model.SetValue(0.75f);
-  {
-    auto pending = TakePendingDirtyFields(model);
-    ASSERT_TRUE(pending.has_value());
-    device.Workspace().Device().FailNextUpload();
-    WritePackedOwnerBytes(device.Workspace().Parameters(), key, model);
-    EXPECT_THROW(device.Workspace().Parameters().UploadDirty(device.CommandContext()),
-                 std::runtime_error);
-  }
-  EXPECT_TRUE(model.IsDirty());
+  device.Workspace().Device().FailNextUpload();
+  WritePackedOwnerBytes(device.Workspace().Parameters(), key, model);
+  EXPECT_THROW(device.Workspace().Parameters().UploadDirty(device.CommandContext()),
+               std::runtime_error);
+  EXPECT_TRUE(device.Workspace().Parameters().HasPendingUpload());
 
   const GraphValueId    id{NodeId{"develop"}, PortId{"sensor_linear"}};
   constexpr RuntimeRevision content = 41;
@@ -251,17 +244,15 @@ TEST_F(MetalWorkspaceFixture, MetalRenderDeviceUsesThePresentationDevice) {
   EXPECT_GT(device.Workspace().Device().WorkingSetBudgetBytes(), 0U);
 }
 
-TEST_F(MetalWorkspaceFixture, ParameterUploadFailureRestoresPendingDirtyState) {
+TEST_F(MetalWorkspaceFixture, ParameterUploadFailureKeepsPackedBytesQueuedUntilRetry) {
   MetalRenderDevice device;
   ParameterSlotKey  key{NodeId{"grade.primary"}, AdjustmentInstanceId{"exposure"}};
   ExposureModel     model;
   const auto        fields = ExposureFieldBindings();
   device.Workspace().Parameters().BindSlot(key, 4, fields);
-  ASSERT_TRUE(UploadPackedAndClearDirty(device, key, model));
+  ASSERT_TRUE(UploadPackedModel(device, key, model));
 
   model.SetValue(0.75f);
-  auto pending = TakePendingDirtyFields(model);
-  ASSERT_TRUE(pending.has_value());
   device.Workspace().Device().FailNextUpload();
   WritePackedOwnerBytes(device.Workspace().Parameters(), key, model);
   EXPECT_TRUE(device.Workspace().Parameters().HasPendingUpload());
@@ -269,10 +260,10 @@ TEST_F(MetalWorkspaceFixture, ParameterUploadFailureRestoresPendingDirtyState) {
                std::runtime_error);
   EXPECT_TRUE(device.Workspace().Parameters().HasPendingUpload());
 
+  EXPECT_EQ(device.Workspace().Parameters().AppliedRevision(key), model.Revision());
+
   device.Workspace().Parameters().UploadDirty(device.CommandContext());
   device.WaitIdle();
-  pending->Commit();
-  EXPECT_FALSE(model.IsDirty());
   EXPECT_FALSE(device.Workspace().Parameters().HasPendingUpload());
 
   float     gpu_value = 0.0f;

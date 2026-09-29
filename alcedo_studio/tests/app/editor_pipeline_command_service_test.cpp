@@ -29,14 +29,15 @@ class SerializationCountingModel : public IOperatorModel {
   int         loads = 0;
   auto        Type() const -> OperatorTypeId override { return value_.Type(); }
   auto        IsDefault() const -> bool override { return value_.IsDefault(); }
-  auto        IsDirty() const -> bool override { return value_.IsDirty(); }
-  auto        DirtyFields() const -> DirtyFieldMask override { return value_.DirtyFields(); }
-  auto        MakeFullDto() const -> OperatorParamDto override { return value_.MakeFullDto(); }
-  auto        TakeDirtyPatch() -> std::optional<OperatorParamPatchDto> override {
-    return value_.TakeDirtyPatch();
+  auto        Revision() const -> ParameterRevision override { return value_.Revision(); }
+  auto        FieldsRevision(DirtyFieldMask fields) const -> ParameterRevision override {
+    return value_.FieldsRevision(fields);
   }
-  void RestoreDirty(DirtyFieldMask fields) override { value_.RestoreDirty(fields); }
-  void MarkAllDirty() override { value_.MarkAllDirty(); }
+  void CopyRevisionsFrom(const IOperatorModel& source) override {
+    const auto* typed = dynamic_cast<const SerializationCountingModel*>(&source);
+    value_.CopyRevisionsFrom(typed != nullptr ? typed->value_ : source);
+  }
+  auto MakeFullDto() const -> OperatorParamDto override { return value_.MakeFullDto(); }
   auto ToJson() const -> nlohmann::json override {
     ++reads;
     return value_.ToJson();
@@ -57,7 +58,7 @@ TEST(EditorPipelineCommandServiceTest, InvalidCurveInputLeavesTargetModelUnchang
       dynamic_cast<CurveModel*>(document.PrimaryGrade()->FindAdjustmentByType(type_ids::Curve()));
   ASSERT_NE(model, nullptr);
   const auto before = model->Points();
-  (void)model->TakeDirtyPatch();
+  const auto  model_revision = model->Revision();
 
   std::string error;
   EXPECT_FALSE(ApplyEditorParameterPatch(
@@ -66,7 +67,7 @@ TEST(EditorPipelineCommandServiceTest, InvalidCurveInputLeavesTargetModelUnchang
       &error));
   EXPECT_FALSE(error.empty());
   EXPECT_EQ(model->Points(), before);
-  EXPECT_FALSE(model->IsDirty());
+  EXPECT_EQ(model->Revision(), model_revision);
 }
 
 TEST(EditorPipelineCommandServiceTest, ParameterPatchPreservesUnchangedModels) {
@@ -81,11 +82,13 @@ TEST(EditorPipelineCommandServiceTest, ParameterPatchPreservesUnchangedModels) {
   auto* grade = document.PrimaryGrade();
   for (std::size_t i = 0; i < grade->AdjustmentCount(); ++i) {
     models.push_back(&grade->AdjustmentAt(i));
-    (void)grade->AdjustmentAt(i).TakeDirtyPatch();
   }
   const auto edges = document.ToJson().at("edges");
   observed->reads  = 0;
-  document.ClearTopologyDirty();
+  const auto topology_revision = document.TopologyRevision();
+  const auto observed_revision = observed->Revision();
+  const auto exposure_revision =
+      grade->FindAdjustment(AdjustmentInstanceId{"grade.primary.exposure"})->Revision();
   std::string error;
   for (int i = 0; i < 40; ++i) {
     ASSERT_TRUE(ApplyEditorParameterPatch(document, test::ColorGradeFieldTarget("exposure"),
@@ -93,16 +96,16 @@ TEST(EditorPipelineCommandServiceTest, ParameterPatchPreservesUnchangedModels) {
         << error;
   }
   EXPECT_EQ(observed->reads, 0);
-  EXPECT_FALSE(document.TopologyDirty());
+  EXPECT_EQ(document.TopologyRevision(), topology_revision);
   for (std::size_t i = 0; i < nodes.size(); ++i)
     EXPECT_EQ(document.Graph().Nodes()[i].get(), nodes[i]);
   for (std::size_t i = 0; i < models.size(); ++i) EXPECT_EQ(&grade->AdjustmentAt(i), models[i]);
-  EXPECT_FALSE(observed->IsDirty());
+  EXPECT_EQ(observed->Revision(), observed_revision);
   const auto* exposure = dynamic_cast<const ExposureModel*>(
       grade->FindAdjustment(AdjustmentInstanceId{"grade.primary.exposure"}));
   ASSERT_NE(exposure, nullptr);
   EXPECT_FLOAT_EQ(exposure->Value(), 9.75f);
-  EXPECT_TRUE(exposure->IsDirty());
+  EXPECT_NE(exposure->Revision(), exposure_revision);
   EXPECT_EQ(document.ToJson().at("edges"), edges);
 }
 
@@ -114,8 +117,8 @@ TEST(EditorPipelineCommandServiceTest, ApplyingScalarPatchUsesTypedModelOperatio
       document.PrimaryGrade()->FindAdjustmentByType(type_ids::Contrast()));
   ASSERT_NE(exposure, nullptr);
   ASSERT_NE(contrast, nullptr);
-  (void)exposure->TakeDirtyPatch();
-  (void)contrast->TakeDirtyPatch();
+  const auto  exposure_revision = exposure->Revision();
+  const auto  contrast_revision = contrast->Revision();
 
   std::string error;
   ASSERT_TRUE(ApplyEditorParameterPatch(document, test::ColorGradeFieldTarget("exposure"),
@@ -123,8 +126,8 @@ TEST(EditorPipelineCommandServiceTest, ApplyingScalarPatchUsesTypedModelOperatio
       << error;
 
   EXPECT_FLOAT_EQ(exposure->Value(), 2.5f);
-  EXPECT_TRUE(exposure->IsDirty());
-  EXPECT_FALSE(contrast->IsDirty());
+  EXPECT_NE(exposure->Revision(), exposure_revision);
+  EXPECT_EQ(contrast->Revision(), contrast_revision);
 }
 
 TEST(EditorPipelineCommandServiceTest,
@@ -150,12 +153,13 @@ TEST(EditorPipelineCommandServiceTest,
   EXPECT_GT(observed->reads, reads_after_projection);
 }
 
-TEST(EditorPipelineCommandServiceTest, InvalidCompoundParameterDoesNotPartiallyApplyOrDirtyModel) {
+TEST(EditorPipelineCommandServiceTest,
+     InvalidCompoundParameterDoesNotPartiallyApplyOrChangeModelRevision) {
   auto  document = CreateDefaultPipelineDocument();
   auto* model    = document.Drt()->FindAdjustmentByType(type_ids::Sharpen());
   ASSERT_NE(model, nullptr);
   const auto before = model->ToJson();
-  (void)model->TakeDirtyPatch();
+  const auto  model_revision = model->Revision();
   std::string error;
   for (const auto& patch :
        std::vector<nlohmann::json>{{{"amount", 12}, {"radius", "invalid"}},
@@ -166,28 +170,28 @@ TEST(EditorPipelineCommandServiceTest, InvalidCompoundParameterDoesNotPartiallyA
         ApplyEditorParameterPatch(document, test::DrtPostFieldTarget("sharpen"), patch, &error));
     EXPECT_FALSE(error.empty());
     EXPECT_EQ(model->ToJson(), before);
-    EXPECT_FALSE(model->IsDirty());
+    EXPECT_EQ(model->Revision(), model_revision);
   }
 }
 
-TEST(EditorPipelineCommandServiceTest, EquivalentNormalizedScalarDoesNotDirtyModel) {
+TEST(EditorPipelineCommandServiceTest, EquivalentNormalizedScalarKeepsModelRevision) {
   auto  document = CreateDefaultPipelineDocument();
   auto* exposure = dynamic_cast<ExposureModel*>(
       document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
   ASSERT_NE(exposure, nullptr);
-  (void)exposure->TakeDirtyPatch();
+  auto        exposure_revision = exposure->Revision();
   std::string error;
   ASSERT_TRUE(ApplyEditorParameterPatch(document, test::ColorGradeFieldTarget("exposure"),
                                           {{"exposure_ev", 100.0}}, &error))
       << error;
   EXPECT_FLOAT_EQ(exposure->Value(), 16.0f);
-  (void)exposure->TakeDirtyPatch();
+  exposure_revision = exposure->Revision();
 
   ASSERT_TRUE(ApplyEditorParameterPatch(document, test::ColorGradeFieldTarget("exposure"),
                                           {{"exposure_ev", 200.0}}, &error))
       << error;
   EXPECT_FLOAT_EQ(exposure->Value(), 16.0f);
-  EXPECT_FALSE(exposure->IsDirty());
+  EXPECT_EQ(exposure->Revision(), exposure_revision);
 }
 
 TEST(EditorPipelineCommandServiceTest, ApplyingCurvePatchPreservesUnrelatedModelState) {
@@ -198,8 +202,8 @@ TEST(EditorPipelineCommandServiceTest, ApplyingCurvePatchPreservesUnrelatedModel
       document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
   ASSERT_NE(curve, nullptr);
   ASSERT_NE(exposure, nullptr);
-  (void)curve->TakeDirtyPatch();
-  (void)exposure->TakeDirtyPatch();
+  const auto  curve_revision    = curve->Revision();
+  const auto  exposure_revision = exposure->Revision();
 
   std::string error;
   ASSERT_TRUE(ApplyEditorParameterPatch(
@@ -212,8 +216,8 @@ TEST(EditorPipelineCommandServiceTest, ApplyingCurvePatchPreservesUnrelatedModel
 
   ASSERT_EQ(curve->Points().size(), 3U);
   EXPECT_FLOAT_EQ(curve->Points()[1].y, 0.7f);
-  EXPECT_TRUE(curve->IsDirty());
-  EXPECT_FALSE(exposure->IsDirty());
+  EXPECT_NE(curve->Revision(), curve_revision);
+  EXPECT_EQ(exposure->Revision(), exposure_revision);
 }
 
 TEST(EditorPipelineCommandServiceTest, ApplyingHlsPatchUpdatesOneTypedTable) {
@@ -221,7 +225,7 @@ TEST(EditorPipelineCommandServiceTest, ApplyingHlsPatchUpdatesOneTypedTable) {
   auto* model =
       dynamic_cast<HlsModel*>(document.PrimaryGrade()->FindAdjustmentByType(type_ids::Hls()));
   ASSERT_NE(model, nullptr);
-  (void)model->TakeDirtyPatch();
+  auto           model_revision = model->Revision();
   nlohmann::json table = nlohmann::json::array();
   for (int index = 0; index < kHlsHueBinCount; ++index) {
     table.push_back({index == 0 ? 0.25f : 0.0f, 0.0f, 0.0f});
@@ -231,13 +235,13 @@ TEST(EditorPipelineCommandServiceTest, ApplyingHlsPatchUpdatesOneTypedTable) {
                                           {{"HLS", {{"hls_adj_table", table}}}}, &error))
       << error;
   EXPECT_FLOAT_EQ(model->AdjustmentTable()[0].h, 0.25f);
-  EXPECT_TRUE(model->IsDirty());
-  (void)model->TakeDirtyPatch();
+  EXPECT_NE(model->Revision(), model_revision);
+  model_revision = model->Revision();
 
   ASSERT_TRUE(ApplyEditorParameterPatch(document, test::ColorGradeFieldTarget("hls"),
                                           {{"HLS", {{"hls_adj_table", table}}}}, &error))
       << error;
-  EXPECT_FALSE(model->IsDirty());
+  EXPECT_EQ(model->Revision(), model_revision);
 }
 
 TEST(EditorPipelineCommandServiceTest, ApplyingColorWheelPatchUpdatesOneTypedControl) {
@@ -245,7 +249,7 @@ TEST(EditorPipelineCommandServiceTest, ApplyingColorWheelPatchUpdatesOneTypedCon
   auto* model    = dynamic_cast<ColorWheelModel*>(
       document.PrimaryGrade()->FindAdjustmentByType(type_ids::ColorWheel()));
   ASSERT_NE(model, nullptr);
-  (void)model->TakeDirtyPatch();
+  auto        model_revision = model->Revision();
   std::string error;
   ASSERT_TRUE(ApplyEditorParameterPatch(
       document, test::ColorGradeFieldTarget("color_wheel"),
@@ -253,14 +257,14 @@ TEST(EditorPipelineCommandServiceTest, ApplyingColorWheelPatchUpdatesOneTypedCon
       << error;
   EXPECT_FLOAT_EQ(model->Lift().disc.x, 0.25f);
   EXPECT_FLOAT_EQ(model->Gamma().color_offset.x, 1.0f);
-  EXPECT_TRUE(model->IsDirty());
-  (void)model->TakeDirtyPatch();
+  EXPECT_NE(model->Revision(), model_revision);
+  model_revision = model->Revision();
 
   ASSERT_TRUE(ApplyEditorParameterPatch(
       document, test::ColorGradeFieldTarget("color_wheel"),
       {{"color_wheel", {{"lift", {{"disc", {{"x", 0.25}, {"y", -0.1}}}}}}}}, &error))
       << error;
-  EXPECT_FALSE(model->IsDirty());
+  EXPECT_EQ(model->Revision(), model_revision);
 }
 
 TEST(EditorPipelineCommandServiceTest, DevelopAndOdtPatchesUseTypedOwnerFields) {
@@ -269,8 +273,8 @@ TEST(EditorPipelineCommandServiceTest, DevelopAndOdtPatchesUseTypedOwnerFields) 
   auto* drt      = document.Drt();
   ASSERT_NE(develop, nullptr);
   ASSERT_NE(drt, nullptr);
-  (void)develop->Params().TakeDirtyPatch();
-  (void)drt->Params().TakeDirtyPatch();
+  const auto            develop_revision = develop->Params().Revision();
+  const auto            drt_revision     = drt->Params().Revision();
 
   EditorParameterTarget raw;
   raw.owner_kind = EditorParameterOwnerKind::Develop;
@@ -283,7 +287,7 @@ TEST(EditorPipelineCommandServiceTest, DevelopAndOdtPatchesUseTypedOwnerFields) 
       << error;
   EXPECT_EQ(develop->Params().DemosaicMethod(), "neural_engine");
   EXPECT_FALSE(develop->Params().HighlightsReconstruct());
-  EXPECT_TRUE(develop->Params().IsDirty());
+  EXPECT_NE(develop->Params().Revision(), develop_revision);
 
   EditorParameterTarget color_temp = raw;
   color_temp.field_key             = "color_temp";
@@ -311,7 +315,7 @@ TEST(EditorPipelineCommandServiceTest, DevelopAndOdtPatchesUseTypedOwnerFields) 
   EXPECT_EQ(drt->Params().EncodingSpace(), DrtColorSpace::Rec2020);
   EXPECT_EQ(drt->Params().EncodingEotf(), DrtEotf::St2084);
   EXPECT_FLOAT_EQ(drt->Params().PeakLuminance(), 1600.0f);
-  EXPECT_TRUE(drt->Params().IsDirty());
+  EXPECT_NE(drt->Params().Revision(), drt_revision);
 }
 
 TEST(EditorPipelineCommandServiceTest, FullDevelopHistoryJsonUpdatesOnlySelectedOwnerFields) {
@@ -321,7 +325,6 @@ TEST(EditorPipelineCommandServiceTest, FullDevelopHistoryJsonUpdatesOnlySelected
   auto full_params               = develop->Params().ToJson();
   full_params["demosaic_method"] = "legacy";
   full_params["custom_cct"]      = 4900.0f;
-  (void)develop->Params().TakeDirtyPatch();
 
   EditorParameterTarget target;
   target.owner_kind = EditorParameterOwnerKind::Develop;

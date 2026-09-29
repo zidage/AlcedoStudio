@@ -140,7 +140,8 @@ void EnqueueGradeMix(MetalRenderDevice& device, const MetalBackend::Texture2D& s
   device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
 }
 
-auto LoadMetalGradeLut(MetalRenderDevice& device, ColorGradeNodeModel& grade) -> MetalLutBinding {
+auto LoadMetalGradeLut(MetalRenderDevice& device, const ColorGradeNodeModel& grade)
+    -> MetalLutBinding {
   const auto packed = TryPackGradeLut(grade);
   if (packed == nullptr) {
     return device.Workspace().Device().DummyLut();
@@ -148,7 +149,6 @@ auto LoadMetalGradeLut(MetalRenderDevice& device, ColorGradeNodeModel& grade) ->
   return device.Workspace().Device().AcquireLut(packed->key, packed->rgba, packed->edge,
                                                 device.CommandContext());
 }
-
 
 struct MetalGradeOps {
   using Device            = MetalRenderDevice;
@@ -204,7 +204,8 @@ struct MetalGradeOps {
     return 0;
   }
 
-  static auto LoadLut(MetalRenderDevice& device, ColorGradeNodeModel& grade) -> MetalLutBinding {
+  static auto LoadLut(MetalRenderDevice& device, const ColorGradeNodeModel& grade)
+      -> MetalLutBinding {
     return LoadMetalGradeLut(device, grade);
   }
 
@@ -297,7 +298,7 @@ void AppendMetalPrimaryGradeWarmup(std::vector<MetalPipelineWarmup>& pipelines) 
 }
 
 auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& plan,
-                              const PreparedRawInput& prepared, PipelineDocument& document,
+                              const PreparedRawInput& prepared, const PipelineDocument& document,
                               const CompiledGradeNode& compiled_grade_node,
                               const FrameSceneBinding& scene) -> MetalPrimaryGradeResult {
   const auto executed = GradeExecutor<MetalGradeOps>::Execute(device, plan, prepared, document,
@@ -317,7 +318,7 @@ auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& pl
 }
 
 auto ExecuteMetalPrimaryGrade(MetalRenderDevice& device, const ExecutionPlan& plan,
-                              const PreparedRawInput& prepared, PipelineDocument& document)
+                              const PreparedRawInput& prepared, const PipelineDocument& document)
     -> MetalPrimaryGradeResult {
   if (plan.grade_nodes.empty()) {
     throw std::runtime_error("ExecuteMetalPrimaryGrade: plan has no Color Grade");

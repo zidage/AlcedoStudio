@@ -18,7 +18,7 @@
 namespace alcedo {
 namespace {
 
-auto SensorDirtyMask() -> DirtyFieldMask {
+auto SensorFieldMask() -> DirtyFieldMask {
   return DirtyFieldMask{static_cast<std::uint64_t>(DevelopDirty::Demosaic) |
                         static_cast<std::uint64_t>(DevelopDirty::Highlights) |
                         static_cast<std::uint64_t>(DevelopDirty::Lens)};
@@ -28,7 +28,7 @@ auto SensorDirtyMask() -> DirtyFieldMask {
  * @brief True when @p id was compiled into the Local Laplacian stage.
  *
  * Compiled order places every non-local-tone adjustment before the LLF stage, so
- * any other dirty adjustment invalidates the canonical LLF source and result.
+ * any other changed adjustment invalidates the canonical LLF source and result.
  * An instance missing from the compiled list is treated as non-local-tone and
  * conservatively invalidates the LLF source chain.
  */
@@ -138,32 +138,40 @@ void RuntimeInvalidationState::CollectDevelopChanges(const ExecutionPlan& plan,
   if (develop == nullptr) {
     return;
   }
-  const auto dirty = develop->Params().DirtyFields();
-  if ((dirty & SensorDirtyMask()).Any()) {
+  const auto sensor_revision = develop->Params().FieldsRevision(SensorFieldMask());
+  const auto white_balance_revision =
+      develop->Params().FieldsRevision(DirtyFieldMask{DevelopDirty::WhiteBalance});
+  if (sensor_revision != last_sensor_revision_) {
     origins.push_back(plan.sensor_linear_output);
+    last_sensor_revision_ = sensor_revision;
   }
-  if ((dirty & DirtyFieldMask{DevelopDirty::WhiteBalance}).Any()) {
+  if (white_balance_revision != last_white_balance_revision_) {
     origins.push_back(plan.develop_output);
+    last_white_balance_revision_ = white_balance_revision;
   }
 }
 
-void RuntimeInvalidationState::CollectGradeChanges(const ExecutionPlan&       plan,
-                                                   const PipelineDocument&    document,
-                                                   std::vector<GraphValueId>& origins) {
+void RuntimeInvalidationState::CollectGradeChanges(
+    const ExecutionPlan& plan, const PipelineDocument& document,
+    std::map<AdjustmentKey, ParameterRevision>& seen_adjustments,
+    std::vector<GraphValueId>&                  origins) {
+  std::map<NodeId, ParameterRevision> seen_mix;
   for (const auto& compiled : plan.grade_nodes) {
     const auto* grade =
         dynamic_cast<const ColorGradeNodeModel*>(document.Graph().FindNode(compiled.node_id));
     if (grade == nullptr) {
       continue;
     }
-    if (grade->MixDirty()) {
+    if (ObserveRevision(last_mix_revision_, seen_mix, compiled.node_id, grade->MixRevision())) {
       origins.push_back(compiled.scene_output);
     }
     for (std::size_t index = 0; index < grade->AdjustmentCount(); ++index) {
-      if (!grade->AdjustmentAt(index).IsDirty()) {
+      const AdjustmentKey key{compiled.node_id, grade->AdjustmentIdAt(index)};
+      if (!ObserveRevision(last_adjustment_revision_, seen_adjustments, key,
+                           grade->AdjustmentAt(index).Revision())) {
         continue;
       }
-      origins.push_back(IsLocalToneCompiled(compiled, grade->AdjustmentIdAt(index))
+      origins.push_back(IsLocalToneCompiled(compiled, key.instance)
                             ? LocalToneResultId(compiled.node_id)
                             : LocalToneSourceId(compiled.node_id));
     }
@@ -180,30 +188,38 @@ void RuntimeInvalidationState::CollectGradeChanges(const ExecutionPlan&       pl
       }
     }
   }
+  last_mix_revision_ = std::move(seen_mix);
 }
 
-void RuntimeInvalidationState::CollectDrtChanges(const ExecutionPlan& plan,
-                                                 const PipelineDocument& document,
-                                                 std::vector<GraphValueId>& origins) {
+void RuntimeInvalidationState::CollectDrtChanges(
+    const ExecutionPlan& plan, const PipelineDocument& document,
+    std::map<AdjustmentKey, ParameterRevision>& seen_adjustments,
+    std::vector<GraphValueId>&                  origins) {
   const auto* drt = document.Drt();
   if (drt == nullptr) {
     return;
   }
-  if (drt->Params().IsDirty()) {
-    origins.push_back(plan.display_output);
+  bool       changed  = false;
+  const auto revision = drt->Params().Revision();
+  if (revision != last_drt_revision_) {
+    changed            = true;
+    last_drt_revision_ = revision;
   }
   for (std::size_t index = 0; index < drt->AdjustmentCount(); ++index) {
-    if (drt->AdjustmentAt(index).IsDirty()) {
-      origins.push_back(plan.display_output);
-      return;
-    }
+    const AdjustmentKey key{drt->Id(), drt->AdjustmentIdAt(index)};
+    changed = ObserveRevision(last_adjustment_revision_, seen_adjustments, key,
+                              drt->AdjustmentAt(index).Revision()) ||
+              changed;
+  }
+  if (changed) {
+    origins.push_back(plan.display_output);
   }
 }
 
 void RuntimeInvalidationState::CollectStructureChanges(const ExecutionPlan& plan,
                                                        std::vector<GraphValueId>& origins) {
   // New workspaces have required==0. Assign a revision so the first bind can
-  // miss and publish even when operator dirty was already consumed elsewhere.
+  // miss and publish even when no parameter revision changed since the last frame.
   auto collect_if_unassigned = [&](const GraphValueId& id) {
     if (Ensure(id).required == 0) {
       origins.push_back(id);
@@ -266,26 +282,19 @@ void RuntimeInvalidationState::CollectStructureChanges(const ExecutionPlan& plan
 }
 
 void RuntimeInvalidationState::CollectAndPropagate(const ExecutionPlan&    plan,
-                                                   PipelineDocument&       document,
+                                                   const PipelineDocument& document,
                                                    const PreparedRawInput& input) {
   BindCompiledPlan(plan);
   CaptureFrameRepresentations(plan, input);
 
-  std::vector<GraphValueId> origins;
+  std::vector<GraphValueId>                  origins;
+  std::map<AdjustmentKey, ParameterRevision> seen_adjustments;
   CollectStructureChanges(plan, origins);
-  if (document.TopologyDirty()) {
-    document.ClearTopologyDirty();
-  }
   CollectDevelopChanges(plan, document, origins);
-  CollectGradeChanges(plan, document, origins);
-  CollectDrtChanges(plan, document, origins);
-
-  for (const auto& compiled : plan.grade_nodes) {
-    auto* grade = dynamic_cast<ColorGradeNodeModel*>(document.Graph().FindNode(compiled.node_id));
-    if (grade != nullptr) {
-      grade->ClearMixDirty();
-    }
-  }
+  CollectGradeChanges(plan, document, seen_adjustments, origins);
+  CollectDrtChanges(plan, document, seen_adjustments, origins);
+  // Keep only instances present this frame, so a removed and re-added ID counts as changed.
+  last_adjustment_revision_ = std::move(seen_adjustments);
 
   if (origins.empty()) {
     return;
@@ -311,13 +320,22 @@ void RuntimeInvalidationState::AdvanceDocumentEpoch() {
     (void)id;
     record.required = change_version_;
   }
+  ClearLastSeenRevisions();
+}
+
+void RuntimeInvalidationState::ClearLastSeenRevisions() {
   last_mask_revision_.clear();
+  last_adjustment_revision_.clear();
+  last_mix_revision_.clear();
+  last_sensor_revision_        = kNoParameterRevision;
+  last_white_balance_revision_ = kNoParameterRevision;
+  last_drt_revision_           = kNoParameterRevision;
 }
 
 void RuntimeInvalidationState::Clear() {
   outgoing_.clear();
   records_.clear();
-  last_mask_revision_.clear();
+  ClearLastSeenRevisions();
   last_grade_bind_.clear();
   last_drt_input_     = {};
   bound_plan_         = {};

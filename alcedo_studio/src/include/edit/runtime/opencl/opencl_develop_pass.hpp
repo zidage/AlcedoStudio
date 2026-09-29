@@ -22,12 +22,12 @@ namespace alcedo {
  * CUDA, or Metal product-path substitute. Output is camera scene-linear RGBA32F.
  */
 void ExecuteOpenClDevelop(OpenClRenderDevice& device, const ExecutionPlan& plan,
-                          const PreparedRawInput& input, PipelineDocument& document);
+                          const PreparedRawInput& input, const PipelineDocument& document);
 
 void ExecuteOpenClGeometryResample(OpenClRenderDevice& device, const ExecutionPlan& plan);
 
 void ExecuteOpenClCameraColor(OpenClRenderDevice& device, const ExecutionPlan& plan,
-                              PipelineDocument& document);
+                              const PipelineDocument& document);
 
 /**
  * @brief Test hook: inject a model cache so Neural load failure can be asserted.

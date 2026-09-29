@@ -23,6 +23,7 @@
 #include "edit/mask/mask_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/i_operator_model.hpp"
+#include "edit/operators/models/parameter_revision.hpp"
 
 namespace alcedo {
 
@@ -88,13 +89,20 @@ class ColorGradeNodeModel final : public INodeModel {
   void SetMaskDeletionProtected(const MaskId& mask_id, bool value);
 
   /**
-   * @brief True when enabled or mix changed since the last @ref ClearMixDirty.
+   * @brief Stamp of the last change to enabled or mix (@ref NextParameterRevision).
    *
-   * Display-name edits do not set this. Runtime invalidation reads it without
-   * copying parameter values.
+   * Display-name edits do not change it. Runtime invalidation compares it with the stamp it
+   * saw last; it never clears it.
    */
-  [[nodiscard]] auto MixDirty() const -> bool { return mix_dirty_; }
-  void               ClearMixDirty() { mix_dirty_ = false; }
+  [[nodiscard]] auto MixRevision() const -> ParameterRevision { return mix_revision_; }
+
+  /**
+   * @brief Copy the mix and adjustment stamps of @p source, a node with equal values.
+   *
+   * @pre @p source was serialized into this node (document clone). Adjustments are matched
+   *      by instance ID; an ID missing from @p source keeps its own stamps.
+   */
+  void               CopyRevisionsFrom(const ColorGradeNodeModel& source);
 
   /**
    * @brief Monotonic Mask content revision. Zero when @p mask_id is absent.
@@ -242,7 +250,7 @@ class ColorGradeNodeModel final : public INodeModel {
   std::uint64_t                     next_mask_revision_ = 1;
   bool  enabled_ = true;
   float mix_     = 1.0f;
-  bool  mix_dirty_ = false;
+  ParameterRevision                 mix_revision_       = NextParameterRevision();
   bool  deletion_protected_ = false;
   std::array<PortDescriptor, 1> inputs_;
   std::array<PortDescriptor, 1> outputs_;

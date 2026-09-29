@@ -11,7 +11,6 @@
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
-#include "edit/operators/models/pending_parameter_patch.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/operators/models/sharpen_model.hpp"
 #include "edit/runtime/cuda/cuda_render_device.hpp"
@@ -58,21 +57,21 @@ inline auto BindSharpen(ParameterArena<CudaBackend>& arena, ParameterSlotKey key
 template <class Model>
 void WritePackedOwnerBytes(ParameterArena<CudaBackend>& arena, const ParameterSlotKey& key,
                            Model& model) {
-  model.Read([&](const auto& payload) { arena.WritePackedSlot(key, payload); });
+  // Read holds the Model lock, so take the revision first.
+  const auto revision = model.Revision();
+  model.Read([&](const auto& payload) { arena.WritePackedSlot(key, payload, revision); });
 }
 
+/**
+ * @brief Pack @p model into @p key and upload it.
+ * @return true when the slot records the Model's current revision after the upload.
+ */
 template <class Model>
-auto UploadPackedAndClearDirty(CudaRenderDevice& device, ParameterSlotKey key, Model& model)
-    -> bool {
+auto UploadPackedModel(CudaRenderDevice& device, ParameterSlotKey key, Model& model) -> bool {
   auto& arena = device.Workspace().Parameters();
   WritePackedOwnerBytes(arena, key, model);
   arena.UploadDirty(device.CommandContext());
-  auto pending = TakePendingDirtyFields(model);
-  if (!pending.has_value()) {
-    return false;
-  }
-  pending->Commit();
-  return true;
+  return arena.AppliedRevision(key) == model.Revision() && !arena.HasPendingUpload();
 }
 
 }  // namespace cuda_workspace_test

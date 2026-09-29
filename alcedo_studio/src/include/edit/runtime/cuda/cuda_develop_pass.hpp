@@ -22,7 +22,7 @@ namespace alcedo {
  * on RGB when enabled. Geometry and CameraColor are separate passes.
  */
 void ExecuteCudaDevelop(CudaRenderDevice& device, const ExecutionPlan& plan,
-                        const PreparedRawInput& input, PipelineDocument& document);
+                        const PreparedRawInput& input, const PipelineDocument& document);
 
 /**
  * @brief Write `geometry.scene_source` from `develop.sensor_linear`.
@@ -39,6 +39,6 @@ void ExecuteCudaGeometryResample(CudaRenderDevice& device, const ExecutionPlan& 
  * never substituted. Independently skippable from SensorDevelop and Geometry.
  */
 void ExecuteCudaCameraColor(CudaRenderDevice& device, const ExecutionPlan& plan,
-                            PipelineDocument& document);
+                            const PipelineDocument& document);
 
 }  // namespace alcedo

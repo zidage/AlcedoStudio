@@ -281,7 +281,7 @@ void PipelineDocument::InsertAdjustment(const NodeId& grade_id, std::size_t inde
     throw std::invalid_argument("InsertAdjustment: node is not a ColorGrade");
   }
   grade->InsertAdjustment(index, std::move(instance_id), std::move(model));
-  MarkTopologyDirty();
+  MarkTopologyChanged();
 }
 
 auto PipelineDocument::ToJson() const -> nlohmann::json {
@@ -328,8 +328,8 @@ auto PipelineDocument::FromJson(const nlohmann::json& json) -> PipelineDocument 
     throw std::runtime_error("Pipeline document requires null or nonempty default_grade_id");
   }
   document.SetDefaultGradeId(json.at("default_grade_id").is_null()
-                                ? NodeId{} : NodeId{json.at("default_grade_id").get<std::string>()});
-  document.topology_dirty_ = true;
+                                 ? NodeId{}
+                                 : NodeId{json.at("default_grade_id").get<std::string>()});
   return document;
 }
 
@@ -346,9 +346,46 @@ auto CreateDefaultPipelineDocument() -> PipelineDocument {
   document.Graph().Connect(NodeId{"develop"}, PortId{"image"}, NodeId{"grade.primary"},
                            PortId{"image"});
   document.Graph().Connect(NodeId{"grade.primary"}, PortId{"image"}, NodeId{"drt"}, PortId{"image"});
-  document.MarkTopologyDirty();
+  document.MarkTopologyChanged();
   return document;
 }
+
+namespace {
+
+/**
+ * @brief Give @p clone the parameter stamps of @p src after a JSON round trip.
+ *
+ * The round trip gives every Model new stamps. Values are equal, so the stamps of @p src
+ * are also true for @p clone, and a renderer that already applied @p src does not repack
+ * the clone. Nodes are matched by ID and adjustments by instance ID.
+ */
+void CopyCloneRevisions(const PipelineDocument& src, PipelineDocument& clone) {
+  if (const auto* develop = src.Develop(); develop != nullptr && clone.Develop() != nullptr) {
+    clone.Develop()->Params().CopyRevisionsFrom(develop->Params());
+  }
+  if (const auto* drt = src.Drt(); drt != nullptr && clone.Drt() != nullptr) {
+    auto& target = *clone.Drt();
+    target.Params().CopyRevisionsFrom(drt->Params());
+    for (std::size_t index = 0; index < target.AdjustmentCount(); ++index) {
+      if (const auto* model = drt->FindAdjustment(target.AdjustmentIdAt(index)); model != nullptr) {
+        target.AdjustmentAt(index).CopyRevisionsFrom(*model);
+      }
+    }
+  }
+  for (const auto& node : clone.Graph().Nodes()) {
+    auto* grade = Downcast<ColorGradeNodeModel>(node.get());
+    if (grade == nullptr) {
+      continue;
+    }
+    if (const auto* source = Downcast<ColorGradeNodeModel>(src.Graph().FindNode(grade->Id()));
+        source != nullptr) {
+      grade->CopyRevisionsFrom(*source);
+    }
+  }
+  clone.CopyTopologyRevisionFrom(src);
+}
+
+}  // namespace
 
 auto ClonePipelineDocument(const PipelineDocument& src) -> PipelineDocument {
   auto        clone          = PipelineDocument::FromJson(src.ToJson());
@@ -362,6 +399,7 @@ auto ClonePipelineDocument(const PipelineDocument& src) -> PipelineDocument {
       clone_develop->Params().BindDngColorProfile(source_profile.Profile());
     }
   }
+  CopyCloneRevisions(src, clone);
   return clone;
 }
 

@@ -21,7 +21,7 @@ namespace alcedo {
 template <>
 struct PassEncoder<CudaBackend, GpuPassKind::UploadRaw> {
   static void Encode(CudaRenderDevice& device, const ExecutionPlan& plan,
-                     const PreparedRawInput& input, PipelineDocument& document) {
+                     const PreparedRawInput& input, const PipelineDocument& document) {
     ExecuteCudaDevelop(device, plan, input, document);
   }
 };
@@ -29,7 +29,7 @@ struct PassEncoder<CudaBackend, GpuPassKind::UploadRaw> {
 template <>
 struct PassEncoder<CudaBackend, GpuPassKind::UploadRgb> {
   static void Encode(CudaRenderDevice& device, const ExecutionPlan& plan,
-                     const PreparedRawInput& input, PipelineDocument& document) {
+                     const PreparedRawInput& input, const PipelineDocument& document) {
     ExecuteCudaDevelop(device, plan, input, document);
   }
 };
@@ -37,7 +37,7 @@ struct PassEncoder<CudaBackend, GpuPassKind::UploadRgb> {
 template <>
 struct PassEncoder<CudaBackend, GpuPassKind::GeometryResample> {
   static void Encode(CudaRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
-                     PipelineDocument&) {
+                     const PipelineDocument&) {
     ExecuteCudaGeometryResample(device, plan);
   }
 };
@@ -45,7 +45,7 @@ struct PassEncoder<CudaBackend, GpuPassKind::GeometryResample> {
 template <>
 struct PassEncoder<CudaBackend, GpuPassKind::CameraToAp1> {
   static void Encode(CudaRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
-                     PipelineDocument& document) {
+                     const PipelineDocument& document) {
     ExecuteCudaCameraColor(device, plan, document);
   }
 };
@@ -53,7 +53,7 @@ struct PassEncoder<CudaBackend, GpuPassKind::CameraToAp1> {
 template <>
 struct PassEncoder<CudaBackend, GpuPassKind::MaskEvaluate> {
   static void Encode(CudaRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
-                     PipelineDocument& document, const CompiledGradeNode& compiled_grade,
+                     const PipelineDocument& document, const CompiledGradeNode& compiled_grade,
                      const CompiledMaskSource& source) {
     (void)ExecuteCudaMask(device, plan, document, compiled_grade, source);
   }
@@ -62,7 +62,7 @@ struct PassEncoder<CudaBackend, GpuPassKind::MaskEvaluate> {
 template <>
 struct PassEncoder<CudaBackend, GpuPassKind::MaskUnion> {
   static void Encode(CudaRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
-                     PipelineDocument& document, const CompiledGradeNode& compiled_grade) {
+                     const PipelineDocument& document, const CompiledGradeNode& compiled_grade) {
     (void)ExecuteCudaMaskUnion(device, plan, document, compiled_grade);
   }
 };
@@ -70,7 +70,7 @@ struct PassEncoder<CudaBackend, GpuPassKind::MaskUnion> {
 template <>
 struct PassEncoder<CudaBackend, GpuPassKind::PrimaryColorGrade> {
   static auto Encode(CudaRenderDevice& device, const ExecutionPlan& plan,
-                     const PreparedRawInput& input, PipelineDocument& document,
+                     const PreparedRawInput& input, const PipelineDocument& document,
                      const CompiledGradeNode& compiled_grade, const FrameSceneBinding& scene)
       -> FrameSceneBinding {
     return ExecuteCudaPrimaryGrade(device, plan, input, document, compiled_grade, scene)
@@ -81,7 +81,7 @@ struct PassEncoder<CudaBackend, GpuPassKind::PrimaryColorGrade> {
 template <>
 struct PassEncoder<CudaBackend, GpuPassKind::Drt> {
   static void Encode(CudaRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
-                     PipelineDocument& document, const FrameSceneBinding& scene) {
+                     const PipelineDocument& document, const FrameSceneBinding& scene) {
     (void)ExecuteCudaDrt(device, plan, document, scene);
   }
 };

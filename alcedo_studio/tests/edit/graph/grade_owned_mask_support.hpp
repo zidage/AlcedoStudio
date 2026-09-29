@@ -90,7 +90,7 @@ inline auto AddParameterizedBrushMask(PipelineDocument& document, MaskId id,
                                       Vector2 translation = {}) -> MaskModel& {
   auto& mask = AddMask(*document.PrimaryGrade(), MakeParameterizedBrushMask(
                                                      std::move(id), std::move(strokes), translation));
-  document.MarkTopologyDirty();
+  document.MarkTopologyChanged();
   return mask;
 }
 
@@ -99,7 +99,7 @@ inline auto AddBrushMask(PipelineDocument& document, MaskId id, MaskAssetKey key
                          bool invert = false) -> MaskModel& {
   auto& mask = AddMask(*document.PrimaryGrade(),
                        MakeBrushMask(std::move(id), std::move(key), descriptor, feather, invert));
-  document.MarkTopologyDirty();
+  document.MarkTopologyChanged();
   return mask;
 }
 #endif
@@ -108,7 +108,7 @@ inline auto AddRadialMask(PipelineDocument& document, MaskId id, RadialMaskSourc
                           bool invert = false) -> MaskModel& {
   auto& mask =
       AddMask(*document.PrimaryGrade(), MakeRadialMask(std::move(id), std::move(source), invert));
-  document.MarkTopologyDirty();
+  document.MarkTopologyChanged();
   return mask;
 }
 
@@ -117,7 +117,7 @@ inline auto AddLinearGradientMask(PipelineDocument& document, MaskId id,
     -> MaskModel& {
   auto& mask = AddMask(*document.PrimaryGrade(),
                        MakeLinearGradientMask(std::move(id), std::move(source), invert));
-  document.MarkTopologyDirty();
+  document.MarkTopologyChanged();
   return mask;
 }
 

@@ -13,6 +13,7 @@
 #include "edit/graph/graph_ids.hpp"
 #include "edit/input/prepared_raw_input.hpp"
 #include "edit/mask/mask_id.hpp"
+#include "edit/operators/models/parameter_revision.hpp"
 #include "edit/runtime/execution_plan.hpp"
 #include "edit/runtime/local_tone_cache_ids.hpp"
 #include "edit/runtime/result_representation.hpp"
@@ -27,8 +28,10 @@ class PipelineDocument;
  * @brief Owner-maintained result validity: revisions, compiled downstream edges,
  *        and representation identities.
  *
- * Does not copy node parameters. Operator dirty bits are read, not consumed.
- * GPU upload still uses @ref IOperatorModel::TakeDirtyPatch separately.
+ * Does not copy node parameters and never writes the document. Parameter changes are found
+ * by comparing Model, mix, and Mask revisions with the revisions this state saw at its last
+ * propagate, so each render workspace detects changes independently of other workspaces that
+ * read the same document.
  *
  * Not thread-safe. One in-flight propagate per owner mutation batch.
  */
@@ -48,15 +51,14 @@ class RuntimeInvalidationState {
   void BindCompiledPlan(const ExecutionPlan& plan);
 
   /**
-   * @brief Read dirty fields, Mask/mix revisions, and topology; assign one
+   * @brief Compare parameter, mix, and Mask revisions with the last propagate; assign one
    *        change version and propagate once.
    *
    * @pre @ref BindCompiledPlan has run for @p plan.
-   * Does not consume operator dirty bits. Mix dirty and last-seen Mask
-   * revisions are updated here so a failed GPU publish still keeps required
-   * ahead of completed.
+   * Reads @p document only. The last-seen revisions are updated here, before any GPU work,
+   * so a failed GPU publish still keeps required ahead of completed.
    */
-  void CollectAndPropagate(const ExecutionPlan& plan, PipelineDocument& document,
+  void CollectAndPropagate(const ExecutionPlan& plan, const PipelineDocument& document,
                            const PreparedRawInput& input);
 
   /**
@@ -74,7 +76,7 @@ class RuntimeInvalidationState {
    */
   void AdvanceDocumentEpoch();
 
-  /** @brief Drop revisions, adjacency, and last-seen Mask versions. */
+  /** @brief Drop revisions, adjacency, and all last-seen parameter, mix, and Mask revisions. */
   void Clear();
 
   [[nodiscard]] auto DocumentEpoch() const -> RuntimeRevision { return document_epoch_; }
@@ -146,6 +148,33 @@ class RuntimeInvalidationState {
   [[nodiscard]] auto Downstream(const GraphValueId& id) const -> std::vector<GraphValueId>;
 
  private:
+  /// One adjustment instance, owned by a Color Grade or by the DRT node.
+  struct AdjustmentKey {
+    NodeId               owner;
+    AdjustmentInstanceId instance;
+
+    friend auto          operator<(const AdjustmentKey& a, const AdjustmentKey& b) -> bool {
+      if (a.owner != b.owner) {
+        return a.owner < b.owner;
+      }
+      return a.instance < b.instance;
+    }
+  };
+
+  /**
+   * @brief Record @p revision for @p key in @p seen and report a change against the last frame.
+   *
+   * A key absent from the last frame counts as changed.
+   */
+  template <class Key>
+  [[nodiscard]] static auto ObserveRevision(const std::map<Key, ParameterRevision>& previous,
+                                            std::map<Key, ParameterRevision>& seen, const Key& key,
+                                            ParameterRevision revision) -> bool {
+    seen[key]     = revision;
+    const auto it = previous.find(key);
+    return it == previous.end() || it->second != revision;
+  }
+
   struct MaskKey {
     NodeId grade;
     MaskId mask;
@@ -159,14 +188,17 @@ class RuntimeInvalidationState {
   };
 
   void AddEdge(const GraphValueId& from, const GraphValueId& to);
+  void ClearLastSeenRevisions();
   void InvalidateFrom(const GraphValueId& id);
   auto Ensure(const GraphValueId& id) -> Record&;
   void CollectDevelopChanges(const ExecutionPlan& plan, const PipelineDocument& document,
                              std::vector<GraphValueId>& origins);
   void CollectGradeChanges(const ExecutionPlan& plan, const PipelineDocument& document,
-                           std::vector<GraphValueId>& origins);
+                           std::map<AdjustmentKey, ParameterRevision>& seen_adjustments,
+                           std::vector<GraphValueId>&                  origins);
   void CollectDrtChanges(const ExecutionPlan& plan, const PipelineDocument& document,
-                         std::vector<GraphValueId>& origins);
+                         std::map<AdjustmentKey, ParameterRevision>& seen_adjustments,
+                         std::vector<GraphValueId>&                  origins);
   void CollectStructureChanges(const ExecutionPlan& plan, std::vector<GraphValueId>& origins);
 
   struct GradeBindState {
@@ -177,6 +209,11 @@ class RuntimeInvalidationState {
   std::map<GraphValueId, std::vector<GraphValueId>> outgoing_;
   std::map<GraphValueId, Record>                    records_;
   std::map<MaskKey, std::uint64_t>                  last_mask_revision_;
+  std::map<AdjustmentKey, ParameterRevision>        last_adjustment_revision_;
+  std::map<NodeId, ParameterRevision>               last_mix_revision_;
+  ParameterRevision                                 last_sensor_revision_ = kNoParameterRevision;
+  ParameterRevision last_white_balance_revision_                          = kNoParameterRevision;
+  ParameterRevision last_drt_revision_                                    = kNoParameterRevision;
   std::map<NodeId, GradeBindState>                  last_grade_bind_;
   GraphValueId                                      last_drt_input_{};
   StaticPlanKey                                     bound_plan_{};

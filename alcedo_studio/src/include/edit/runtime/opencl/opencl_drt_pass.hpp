@@ -30,8 +30,8 @@ struct OpenClDrtResult {
  * then applies neighborhood operations to the workspace RGBA32F display image.
  */
 [[nodiscard]] auto ExecuteOpenClDrt(OpenClRenderDevice& device, const ExecutionPlan& plan,
-                                    PipelineDocument& document, const FrameSceneBinding& scene)
-    -> OpenClDrtResult;
+                                    const PipelineDocument&  document,
+                                    const FrameSceneBinding& scene) -> OpenClDrtResult;
 
 }  // namespace alcedo
 

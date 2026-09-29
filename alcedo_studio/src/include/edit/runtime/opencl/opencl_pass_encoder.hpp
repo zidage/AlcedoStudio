@@ -38,7 +38,7 @@ inline void CopyOpenClGraphImage(OpenClRenderDevice& device, const GraphValueId&
 template <>
 struct PassEncoder<OpenClBackend, GpuPassKind::UploadRaw> {
   static void Encode(OpenClRenderDevice& device, const ExecutionPlan& plan,
-                     const PreparedRawInput& input, PipelineDocument& document) {
+                     const PreparedRawInput& input, const PipelineDocument& document) {
     ExecuteOpenClDevelop(device, plan, input, document);
   }
 };
@@ -46,7 +46,7 @@ struct PassEncoder<OpenClBackend, GpuPassKind::UploadRaw> {
 template <>
 struct PassEncoder<OpenClBackend, GpuPassKind::UploadRgb> {
   static void Encode(OpenClRenderDevice& device, const ExecutionPlan& plan,
-                     const PreparedRawInput& input, PipelineDocument& document) {
+                     const PreparedRawInput& input, const PipelineDocument& document) {
     ExecuteOpenClDevelop(device, plan, input, document);
   }
 };
@@ -54,7 +54,7 @@ struct PassEncoder<OpenClBackend, GpuPassKind::UploadRgb> {
 template <>
 struct PassEncoder<OpenClBackend, GpuPassKind::GeometryResample> {
   static void Encode(OpenClRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
-                     PipelineDocument&) {
+                     const PipelineDocument&) {
     ExecuteOpenClGeometryResample(device, plan);
   }
 };
@@ -62,7 +62,7 @@ struct PassEncoder<OpenClBackend, GpuPassKind::GeometryResample> {
 template <>
 struct PassEncoder<OpenClBackend, GpuPassKind::CameraToAp1> {
   static void Encode(OpenClRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
-                     PipelineDocument& document) {
+                     const PipelineDocument& document) {
     ExecuteOpenClCameraColor(device, plan, document);
   }
 };
@@ -70,7 +70,7 @@ struct PassEncoder<OpenClBackend, GpuPassKind::CameraToAp1> {
 template <>
 struct PassEncoder<OpenClBackend, GpuPassKind::MaskEvaluate> {
   static void Encode(OpenClRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
-                     PipelineDocument& document, const CompiledGradeNode& compiled_grade,
+                     const PipelineDocument& document, const CompiledGradeNode& compiled_grade,
                      const CompiledMaskSource& source) {
     (void)ExecuteOpenClMask(device, plan, document, compiled_grade, source);
   }
@@ -79,8 +79,7 @@ struct PassEncoder<OpenClBackend, GpuPassKind::MaskEvaluate> {
 template <>
 struct PassEncoder<OpenClBackend, GpuPassKind::MaskUnion> {
   static void Encode(OpenClRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
-                     PipelineDocument& document,
-                     const CompiledGradeNode& compiled_grade) {
+                     const PipelineDocument& document, const CompiledGradeNode& compiled_grade) {
     (void)ExecuteOpenClMaskUnion(device, plan, document, compiled_grade);
   }
 };
@@ -88,7 +87,7 @@ struct PassEncoder<OpenClBackend, GpuPassKind::MaskUnion> {
 template <>
 struct PassEncoder<OpenClBackend, GpuPassKind::PrimaryColorGrade> {
   static auto Encode(OpenClRenderDevice& device, const ExecutionPlan& plan,
-                     const PreparedRawInput& prepared, PipelineDocument& document,
+                     const PreparedRawInput& prepared, const PipelineDocument& document,
                      const CompiledGradeNode& compiled_grade, const FrameSceneBinding& scene)
       -> FrameSceneBinding {
     return ExecuteOpenClPrimaryGrade(device, plan, prepared, document, compiled_grade, scene)
@@ -99,7 +98,7 @@ struct PassEncoder<OpenClBackend, GpuPassKind::PrimaryColorGrade> {
 template <>
 struct PassEncoder<OpenClBackend, GpuPassKind::Drt> {
   static void Encode(OpenClRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
-                     PipelineDocument& document, const FrameSceneBinding& scene) {
+                     const PipelineDocument& document, const FrameSceneBinding& scene) {
     (void)ExecuteOpenClDrt(device, plan, document, scene);
   }
 };

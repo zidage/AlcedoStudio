@@ -170,7 +170,7 @@ TEST(GpuDagModelGraph, GraphCommandFailureRestoresAffectedNodesAndEdges) {
   auto* exposure =
       dynamic_cast<ExposureModel*>(primary->FindAdjustmentByType(type_ids::Exposure()));
   exposure->SetValue(2.75f);
-  document.ClearTopologyDirty();
+  const auto topology_revision = document.TopologyRevision();
   const auto before      = document.ToJson();
   const auto exact_edges = document.Graph().Edges();
   EXPECT_FALSE(
@@ -181,7 +181,7 @@ TEST(GpuDagModelGraph, GraphCommandFailureRestoresAffectedNodesAndEdges) {
   EXPECT_EQ(primary->FindAdjustmentByType(type_ids::Exposure()), exposure);
   EXPECT_FLOAT_EQ(exposure->Value(), 2.75f);
   EXPECT_EQ(document.ToJson(), before);
-  EXPECT_FALSE(document.TopologyDirty());
+  EXPECT_EQ(document.TopologyRevision(), topology_revision);
   ASSERT_EQ(document.Graph().Edges().size(), exact_edges.size());
   for (std::size_t i = 0; i < exact_edges.size(); ++i) {
     EXPECT_EQ(document.Graph().Edges()[i].from_node, exact_edges[i].from_node);
@@ -200,7 +200,7 @@ TEST(GpuDagModelGraph, GraphCommandFailureRestoresAffectedNodesAndEdges) {
   EXPECT_EQ(document.Graph().FindNode("grade.failed"), nullptr);
   EXPECT_EQ(document.Graph().FindNode("grade.b"), extra);
   EXPECT_EQ(document.ToJson(), invalid_before);
-  EXPECT_FALSE(document.TopologyDirty());
+  EXPECT_EQ(document.TopologyRevision(), topology_revision);
 }
 
 TEST(GpuDagModelGraph, GraphMutationInverseRestoresCanonicalDocumentJson) {

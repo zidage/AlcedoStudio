@@ -69,15 +69,15 @@ class GradeExecutor {
    * stay unpublished. Grade scene_output is never acquired or published.
    */
   static auto Execute(Device& device, const ExecutionPlan& plan, const PreparedRawInput& prepared,
-                      PipelineDocument& document, const CompiledGradeNode& compiled_grade,
+                      const PipelineDocument& document, const CompiledGradeNode& compiled_grade,
                       const FrameSceneBinding& scene) -> GradeExecutionResult {
     (void)prepared;
     auto& workspace = device.Workspace();
     if (!workspace.IsRendering()) {
       throw std::runtime_error(std::string{Ops::kErrorPrefix} + ": BeginRender has not been called");
     }
-    auto* grade =
-        dynamic_cast<ColorGradeNodeModel*>(document.Graph().FindNode(compiled_grade.node_id));
+    const auto* grade =
+        dynamic_cast<const ColorGradeNodeModel*>(document.Graph().FindNode(compiled_grade.node_id));
     if (grade == nullptr) {
       throw std::runtime_error(std::string{Ops::kErrorPrefix} + ": compiled Color Grade is missing");
     }
@@ -93,9 +93,8 @@ class GradeExecutor {
     arena.Reserve(slot_count *
                   (kGradeRuntimeParamBytes + ParameterArena<typename Ops::Backend>::kSlotAlignment));
 
-    std::vector<PendingParameterPatch> pending;
     auto schedule =
-        BindAndScheduleGrade(arena, *grade, compiled_grade, plan.geometry, pending, Ops::kErrorPrefix);
+        BindAndScheduleGrade(arena, *grade, compiled_grade, plan.geometry, Ops::kErrorPrefix);
     result.trace = MakeGradeDecisionTrace(schedule);
     if (schedule.alias_to_input) {
       diag::PreviewPerformance::SetPassState(diag::PreviewExecutionState::Aliased);
@@ -104,9 +103,6 @@ class GradeExecutor {
 
     auto& context = device.CommandContext();
     arena.UploadDirty(context);
-    for (auto& patch : pending) {
-      patch.Commit();
-    }
 
     std::vector<std::uint32_t> fused_offsets;
     std::vector<std::uint32_t> fused_starts;

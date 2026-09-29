@@ -32,27 +32,6 @@ auto MakePrepared() -> PreparedRawInput {
                                        gpu_dag_test::FullSensor(16, 12));
 }
 
-void ConsumeOperatorDirty(PipelineDocument& document) {
-  if (auto* develop = document.Develop()) {
-    (void)develop->Params().TakeDirtyPatch();
-  }
-  if (auto* drt = document.Drt()) {
-    (void)drt->Params().TakeDirtyPatch();
-    for (std::size_t index = 0; index < drt->AdjustmentCount(); ++index) {
-      (void)drt->AdjustmentAt(index).TakeDirtyPatch();
-    }
-  }
-  for (const auto& node : document.Graph().Nodes()) {
-    auto* grade = dynamic_cast<ColorGradeNodeModel*>(document.Graph().FindNode(node->Id()));
-    if (grade == nullptr) {
-      continue;
-    }
-    for (std::size_t index = 0; index < grade->AdjustmentCount(); ++index) {
-      (void)grade->AdjustmentAt(index).TakeDirtyPatch();
-    }
-  }
-}
-
 struct ValidityHarness {
   PreparedRawInput           prepared = MakePrepared();
   PipelineDocument           document = CreateDefaultPipelineDocument();
@@ -100,7 +79,6 @@ struct ValidityHarness {
 
   void PublishCurrent() {
     Collect();
-    ConsumeOperatorDirty(document);
     Complete();
   }
 
@@ -117,21 +95,44 @@ struct ValidityHarness {
   [[nodiscard]] auto Primary() const -> const CompiledGradeNode& { return *plan.FirstGrade(); }
 };
 
-TEST(RuntimeInvalidation, FirstCollectAssignsRequiredRevisionsAndDirtyConsumeLeavesThemAhead) {
+TEST(RuntimeInvalidation, FirstCollectAssignsRequiredRevisionsAheadOfCompleted) {
   ValidityHarness harness;
   harness.Collect();
   EXPECT_GT(harness.Required(harness.plan.sensor_linear_output), 0U);
   EXPECT_EQ(harness.Completed(harness.plan.sensor_linear_output), 0U);
-  ConsumeOperatorDirty(harness.document);
-  EXPECT_GT(harness.Required(harness.plan.sensor_linear_output),
-            harness.Completed(harness.plan.sensor_linear_output));
-  EXPECT_FALSE(harness.document.Develop()->Params().IsDirty());
+  EXPECT_GT(harness.Required(harness.plan.display_output),
+            harness.Completed(harness.plan.display_output));
 }
 
-TEST(RuntimeInvalidation, FreshStateAssignsRequiredWhenOperatorDirtyAlreadyConsumed) {
+TEST(RuntimeInvalidation, CollectLeavesEveryDocumentRevisionUnchanged) {
+  ValidityHarness                harness;
+  const auto&                    document   = harness.document;
+  const auto                     develop    = document.Develop()->Params().Revision();
+  const auto                     drt        = document.Drt()->Params().Revision();
+  const auto                     mix        = document.PrimaryGrade()->MixRevision();
+  const auto                     topology   = document.TopologyRevision();
+  const auto                     serialized = document.ToJson();
+  std::vector<ParameterRevision> adjustments;
+  for (std::size_t index = 0; index < document.PrimaryGrade()->AdjustmentCount(); ++index) {
+    adjustments.push_back(document.PrimaryGrade()->AdjustmentAt(index).Revision());
+  }
+
+  harness.PublishCurrent();
+  harness.Collect();
+
+  EXPECT_EQ(document.Develop()->Params().Revision(), develop);
+  EXPECT_EQ(document.Drt()->Params().Revision(), drt);
+  EXPECT_EQ(document.PrimaryGrade()->MixRevision(), mix);
+  EXPECT_EQ(document.TopologyRevision(), topology);
+  EXPECT_EQ(document.ToJson(), serialized);
+  for (std::size_t index = 0; index < adjustments.size(); ++index) {
+    EXPECT_EQ(document.PrimaryGrade()->AdjustmentAt(index).Revision(), adjustments[index]) << index;
+  }
+}
+
+TEST(RuntimeInvalidation, FreshStateAssignsRequiredAfterAnotherStateCollectedTheSameDocument) {
   ValidityHarness first;
   first.PublishCurrent();
-  ASSERT_FALSE(first.document.Develop()->Params().IsDirty());
   ASSERT_GT(first.Required(first.plan.sensor_linear_output), 0U);
 
   RuntimeInvalidationState fresh;
@@ -139,6 +140,59 @@ TEST(RuntimeInvalidation, FreshStateAssignsRequiredWhenOperatorDirtyAlreadyConsu
   EXPECT_GT(fresh.RequiredRevision(first.plan.sensor_linear_output), 0U);
   EXPECT_EQ(fresh.CompletedRevision(first.plan.sensor_linear_output), 0U);
   EXPECT_GT(fresh.RequiredRevision(first.plan.display_output), 0U);
+}
+
+TEST(RuntimeInvalidation, ParameterChangeInvalidatesEveryStateThatReadsTheDocument) {
+  // An editor session workspace and a one-shot workspace read one document. The one-shot
+  // collect must not hide the edit from the session (audit R7).
+  ValidityHarness          session;
+  RuntimeInvalidationState one_shot;
+  session.PublishCurrent();
+  one_shot.CollectAndPropagate(session.plan, session.document, session.prepared);
+  const auto scene_output = session.Primary().scene_output;
+  ASSERT_TRUE(session.Current(scene_output));
+
+  auto* exposure = dynamic_cast<ExposureModel*>(
+      session.document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+  ASSERT_NE(exposure, nullptr);
+  exposure->SetValue(exposure->Value() + 1.5f);
+  const auto one_shot_before = one_shot.RequiredRevision(scene_output);
+  one_shot.CollectAndPropagate(session.plan, session.document, session.prepared);
+  EXPECT_GT(one_shot.RequiredRevision(scene_output), one_shot_before);
+
+  session.Collect();
+  EXPECT_FALSE(session.Current(scene_output));
+  EXPECT_GT(session.Required(scene_output), session.Completed(scene_output));
+}
+
+TEST(RuntimeInvalidation, ClonedDocumentWithEqualValuesKeepsPublishedResultsValid) {
+  ValidityHarness harness;
+  harness.PublishCurrent();
+  const auto display = harness.Required(harness.plan.display_output);
+  harness.document   = ClonePipelineDocument(harness.document);
+  harness.Collect();
+  EXPECT_EQ(harness.Required(harness.plan.display_output), display);
+  EXPECT_TRUE(harness.Current(harness.plan.display_output));
+  EXPECT_TRUE(harness.Current(harness.plan.sensor_linear_output));
+}
+
+TEST(RuntimeInvalidation, RestoredOlderDocumentInvalidatesChangedAdjustment) {
+  // History restore moves a pre-edit clone into the live document. Its older revision must
+  // count as a change, although it is smaller than the revision the state saw last.
+  ValidityHarness harness;
+  auto            before_edit = ClonePipelineDocument(harness.document);
+  auto*           exposure    = dynamic_cast<ExposureModel*>(
+      harness.document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+  ASSERT_NE(exposure, nullptr);
+  exposure->SetValue(exposure->Value() + 0.5f);
+  harness.PublishCurrent();
+  const auto scene_output = harness.Primary().scene_output;
+  ASSERT_TRUE(harness.Current(scene_output));
+
+  harness.document = std::move(before_edit);
+  harness.Collect();
+  EXPECT_FALSE(harness.Current(scene_output));
+  EXPECT_TRUE(harness.Current(harness.plan.sensor_linear_output));
 }
 
 TEST(RuntimeInvalidation, UnchangedSetValueAndSecondCollectKeepPublishedResultsValid) {

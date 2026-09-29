@@ -87,7 +87,7 @@ struct SessionState {
   std::size_t                   version_count        = 0;
   std::string                   live_document;
   std::string                   root_document;
-  bool                          live_topology_dirty  = false;
+  ParameterRevision             live_topology_revision = kNoParameterRevision;
   std::size_t                   journal_records      = 0;
   std::optional<std::uint64_t>  journal_last_sequence;
   std::uint64_t                 journal_next_sequence = 0;
@@ -105,7 +105,7 @@ void ExpectSessionUnchanged(const SessionState& before, const SessionState& afte
   EXPECT_EQ(after.version_count, before.version_count);
   EXPECT_EQ(after.live_document, before.live_document);
   EXPECT_EQ(after.root_document, before.root_document);
-  EXPECT_EQ(after.live_topology_dirty, before.live_topology_dirty);
+  EXPECT_EQ(after.live_topology_revision, before.live_topology_revision);
   EXPECT_EQ(after.journal_records, before.journal_records);
   EXPECT_EQ(after.journal_last_sequence, before.journal_last_sequence);
   EXPECT_EQ(after.journal_next_sequence, before.journal_next_sequence);
@@ -175,7 +175,7 @@ class AdjustmentTransferCatalogHistoryTest : public ::testing::Test {
     state.version_count         = graph_->GetAllVersionRefs().size();
     state.live_document         = CanonicalPipelineDocumentJson(live_document_);
     state.root_document         = CanonicalPipelineDocumentJson(root_document_);
-    state.live_topology_dirty   = live_document_.TopologyDirty();
+    state.live_topology_revision = live_document_.TopologyRevision();
     state.journal_records       = journal.records.size();
     state.journal_last_sequence = journal.last_sequence;
     state.journal_next_sequence = journal_->next_sequence();

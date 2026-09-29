@@ -10,10 +10,11 @@
 namespace alcedo {
 
 /**
- * @brief Bit mask of dirty parameter fields. A field is clean or dirty; there is
- * no write counter.
+ * @brief Bit mask that selects parameter fields of one Model.
  *
- * Combine with bitwise or. Empty mask means no dirty fields.
+ * Setters report changed fields with it and readers select the fields whose revision they
+ * compare (@ref IOperatorModel::FieldsRevision). Combine with bitwise or. Empty mask selects no
+ * field.
  */
 class DirtyFieldMask {
  public:

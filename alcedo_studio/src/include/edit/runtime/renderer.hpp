@@ -69,6 +69,9 @@ using CudaProductSessionResources = RenderSessionResources;
 /**
  * @brief Reusable product session for one opened PipelineDocument.
  *
+ * Reads the document only. Parameter changes are found by revision, so this renderer and
+ * any other renderer can read the same document.
+ *
  * Owns editor session caches/device plus a lazily created one-shot device for
  * thumbnail and export work. Not created per Apply. Only session renders reuse
  * prepared sources, static plans, and published GPU results.
@@ -81,14 +84,14 @@ class Renderer {
  public:
   using RenderDevice = typename RenderDeviceType<Backend>::Type;
 
-  explicit Renderer(std::shared_ptr<PipelineDocument> document);
-  Renderer(std::shared_ptr<PipelineDocument> document, PreparedSourceCache::UnpackFn unpack);
+  explicit Renderer(std::shared_ptr<const PipelineDocument> document);
+  Renderer(std::shared_ptr<const PipelineDocument> document, PreparedSourceCache::UnpackFn unpack);
   ~Renderer();
 
   Renderer(const Renderer&)                    = delete;
   auto operator=(const Renderer&) -> Renderer& = delete;
 
-  void SetDocument(std::shared_ptr<PipelineDocument> document);
+  void               SetDocument(std::shared_ptr<const PipelineDocument> document);
 
   /**
    * @brief Render one frame on the owning thread.
@@ -181,7 +184,7 @@ class Renderer {
   void EnsureOneShotDevice();
   void ConfigureDevice(RenderDevice& device, const char* error_label);
 
-  std::shared_ptr<PipelineDocument> document_;
+  std::shared_ptr<const PipelineDocument> document_;
   std::unique_ptr<RenderDevice>     device_;
   std::unique_ptr<RenderDevice>     one_shot_device_;
   PreparedSourceCache::UnpackFn     unpack_;
@@ -190,12 +193,12 @@ class Renderer {
 };
 
 template <class Backend>
-Renderer<Backend>::Renderer(std::shared_ptr<PipelineDocument> document)
+Renderer<Backend>::Renderer(std::shared_ptr<const PipelineDocument> document)
     : Renderer(std::move(document), PreparedSourceCache::UnpackFn{}) {}
 
 template <class Backend>
-Renderer<Backend>::Renderer(std::shared_ptr<PipelineDocument> document,
-                            PreparedSourceCache::UnpackFn     unpack)
+Renderer<Backend>::Renderer(std::shared_ptr<const PipelineDocument> document,
+                            PreparedSourceCache::UnpackFn           unpack)
     : document_(std::move(document)),
       device_(),
       one_shot_device_(),
@@ -245,7 +248,7 @@ void Renderer<Backend>::EnsureOneShotDevice() {
 }
 
 template <class Backend>
-void Renderer<Backend>::SetDocument(std::shared_ptr<PipelineDocument> document) {
+void Renderer<Backend>::SetDocument(std::shared_ptr<const PipelineDocument> document) {
   if (!document) {
     throw std::invalid_argument("Renderer: PipelineDocument is null");
   }

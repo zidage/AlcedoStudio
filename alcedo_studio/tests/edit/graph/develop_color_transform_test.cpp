@@ -371,9 +371,9 @@ TEST(GpuDagModelGraph, BindImportedCameraProfileKeepsUserEditsAndSkipsEqualWrite
   EXPECT_EQ(bound.lens_maker, "Fixture Lens Co");
   EXPECT_TRUE(bound.camera_profile.color_matrices_valid);
 
-  (void)document.Develop()->Params().TakeDirtyFields();
+  const auto revision = document.Develop()->Params().Revision();
   BindImportedCameraProfile(document, fixtures.front().context_);
-  EXPECT_FALSE(document.Develop()->Params().IsDirty());
+  EXPECT_EQ(document.Develop()->Params().Revision(), revision);
   EXPECT_EQ(document.Develop()->Params().Params(), bound);
 }
 

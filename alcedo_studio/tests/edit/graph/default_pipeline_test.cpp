@@ -187,9 +187,9 @@ TEST(GpuDagModelGraph, MaskProtectionFlagDoesNotBlockOwningGradeDeletion) {
   mask.id = MaskId{"mask.legacy_locked"};
   mask.deletion_protected = true;
   grade->AddMask(mask, 0);
-  document.ClearTopologyDirty();
-  grade->ClearMixDirty();
-  const auto revision = grade->MaskContentRevision(mask.id);
+  const auto topology_revision = document.TopologyRevision();
+  const auto mix_revision      = grade->MixRevision();
+  const auto revision          = grade->MaskContentRevision(mask.id);
   const auto before = document.ToJson();
 
   EXPECT_TRUE(document.ValidateUserDeletion(grade->Id(), mask.id).empty());
@@ -208,8 +208,8 @@ TEST(GpuDagModelGraph, MaskProtectionFlagDoesNotBlockOwningGradeDeletion) {
   grade->SetDeletionProtected(false);
   EXPECT_TRUE(document.ValidateUserDeletion(grade->Id()).empty());
   EXPECT_EQ(grade->MaskContentRevision(mask.id), revision);
-  EXPECT_FALSE(grade->MixDirty());
-  EXPECT_FALSE(document.TopologyDirty());
+  EXPECT_EQ(grade->MixRevision(), mix_revision);
+  EXPECT_EQ(document.TopologyRevision(), topology_revision);
 }
 
 }  // namespace alcedo

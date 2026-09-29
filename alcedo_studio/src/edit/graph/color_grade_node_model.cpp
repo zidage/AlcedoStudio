@@ -153,8 +153,8 @@ void ColorGradeNodeModel::SetEnabled(bool enabled) {
   if (enabled_ == enabled) {
     return;
   }
-  enabled_   = enabled;
-  mix_dirty_ = true;
+  enabled_      = enabled;
+  mix_revision_ = NextParameterRevision();
 }
 
 void ColorGradeNodeModel::SetDisplayName(std::string name) { display_name_ = std::move(name); }
@@ -164,8 +164,17 @@ void ColorGradeNodeModel::SetMix(float mix) {
   if (mix_ == clamped) {
     return;
   }
-  mix_       = clamped;
-  mix_dirty_ = true;
+  mix_          = clamped;
+  mix_revision_ = NextParameterRevision();
+}
+
+void ColorGradeNodeModel::CopyRevisionsFrom(const ColorGradeNodeModel& source) {
+  mix_revision_ = source.mix_revision_;
+  for (auto& entry : adjustments_) {
+    if (const auto* model = source.FindAdjustment(entry.instance_id); model != nullptr) {
+      entry.model->CopyRevisionsFrom(*model);
+    }
+  }
 }
 
 auto ColorGradeNodeModel::AdjustmentIdAt(std::size_t index) const -> const AdjustmentInstanceId& {

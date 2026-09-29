@@ -39,8 +39,8 @@ struct OpenClPrimaryGradeResult {
  * throw. No CPU substitute.
  */
 [[nodiscard]] auto ExecuteOpenClPrimaryGrade(OpenClRenderDevice& device, const ExecutionPlan& plan,
-                                             const PreparedRawInput& prepared,
-                                             PipelineDocument&       document,
+                                             const PreparedRawInput&  prepared,
+                                             const PipelineDocument&  document,
                                              const CompiledGradeNode& compiled_grade,
                                              const FrameSceneBinding& scene)
     -> OpenClPrimaryGradeResult;
@@ -52,7 +52,7 @@ struct OpenClPrimaryGradeResult {
  */
 [[nodiscard]] auto ExecuteOpenClPrimaryGrade(OpenClRenderDevice& device, const ExecutionPlan& plan,
                                              const PreparedRawInput& prepared,
-                                             PipelineDocument&       document)
+                                             const PipelineDocument& document)
     -> OpenClPrimaryGradeResult;
 
 }  // namespace alcedo
