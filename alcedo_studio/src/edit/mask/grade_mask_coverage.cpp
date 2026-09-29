@@ -64,7 +64,7 @@ constexpr float kAnalyticEpsilon = 1.0e-6f;
       std::clamp(coverage * 255.0f + 0.5f, 0.0f, 255.0f));
 }
 
-auto AnyEnabled(std::span<const MaskModel> masks) -> bool {
+auto AnyEnabled(MaskListView masks) -> bool {
   return std::any_of(masks.begin(), masks.end(),
                      [](const MaskModel& mask) { return mask.enabled; });
 }
@@ -176,7 +176,7 @@ void GradeMaskCoverage::WriteEffectiveAnalytic(const MaskModel& mask, RectI regi
   }
 }
 
-void GradeMaskCoverage::ReplayClippedRegion(std::span<const MaskModel> masks, RectI dirty) {
+void GradeMaskCoverage::ReplayClippedRegion(MaskListView masks, RectI dirty) {
   const auto previous = CopyRegion(mix_, dirty, raster_);
   try {
     for (std::int32_t y = dirty.y; y < dirty.Y1(); ++y) {
@@ -199,12 +199,12 @@ void GradeMaskCoverage::ReplayClippedRegion(std::span<const MaskModel> masks, Re
   }
 }
 
-void GradeMaskCoverage::EvaluateFull(std::span<const MaskModel> masks) {
+void GradeMaskCoverage::EvaluateFull(MaskListView masks) {
   RequireGeometry();
   ReplayRegion(masks, FullRect(raster_));
 }
 
-void GradeMaskCoverage::ReplayRegion(std::span<const MaskModel> masks, RectI dirty) {
+void GradeMaskCoverage::ReplayRegion(MaskListView masks, RectI dirty) {
   RequireGeometry();
   if (masks.empty()) {
     FillMix(255);

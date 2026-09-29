@@ -5,6 +5,16 @@ Updated: 2026-08-02 (final locked identity model)
 Status: WU1–WU6 complete; residual foot-binding clearance complete (2026-08-01); identity model locked 2026-08-02; WU7 remaining (grill evidence package)  
 Branch context: follows interim operator merge-policy work on `feature/pre_v28_fix`
 
+> **Superseded by 2026-09-27 executor ownership refactor**
+> ([plan](../../../refactor/2026-09-27-executor-ownership-refactor-plan.md), completed in P7 on
+> 2026-09-29). The parts of this plan that make the executor part of the live pipeline no longer
+> apply: acceptance criterion A1, the "Live pipeline (executor)" row in
+> [Roles](#roles), and the `PipelineGuard` code mirror. The editor session now owns its working
+> document and history. `PipelineMgmtService` holds only committed snapshots and the editor lease,
+> and each render owner (editor, thumbnail pool, export) owns its executors. The identity rules
+> still apply: HEAD lives only in `CommitGraph` / `VersionRef`, the chain hash advances once per
+> commit, and the checkpoint is a label, not a second head.
+
 Related documents (historical; this plan **supersedes** their transfer-candidate / dual-snapshot
 mutation model **and** any dual-pipeline-head / “same head after Version switch” wording where they
 conflict). **Authoritative identity semantics for new code and reviews are in
@@ -880,7 +890,10 @@ Do not rely on “second parent replay” for undo.
 ## Non-goals
 
 - Full split of `PipelineExecutor` into pure param graph vs GPU executor (nice later; not required
-  if session mutations stay on the command queue and tests pass).
+  if session mutations stay on the command queue and tests pass). *Done by the
+  [2026-09-27 executor ownership refactor](../../../refactor/2026-09-27-executor-ownership-refactor-plan.md):
+  the executor receives an immutable `PipelineGraphSnapshot` with each render (P3) and owns no
+  document.*
 - Changing transfer package schema version beyond what merge reverse needs.
 - Migrating pre-mini-Git projects (still destructive cutover world).
 - Redesigning QML merge dialog visuals.
@@ -891,7 +904,7 @@ Do not rely on “second parent replay” for undo.
 
 | ID | Criterion | Evidence required |
 |----|-----------|-------------------|
-| A1 | Exactly one live pipeline per open editor element is mutated by paste/merge/ordinary edit | Integration test reads pipeline after each |
+| A1 | Exactly one live pipeline per open editor element is mutated by paste/merge/ordinary edit | Integration test reads pipeline after each. *Superseded by 2026-09-27 executor ownership refactor: the single mutable document is now the editor session's working document; renders read frozen snapshots of it.* |
 | A2 | No production code path constructs `HistoryTransferCandidate` shadow graphs | Grep + link fails if reintroduced |
 | A3 | Paste cancel restores prior Version head params on live pipeline | Test 2.2 |
 | A4 | Merge undo restores pre-merge params on live pipeline | Test 3.3 |

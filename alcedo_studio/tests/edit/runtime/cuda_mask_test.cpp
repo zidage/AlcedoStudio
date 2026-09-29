@@ -58,7 +58,7 @@ class CudaMaskFixture : public ::testing::Test {
     gpu_dag_test::EnsureTestCameraProfile(document_);
   }
 
-  auto AttachAnalytic(MaskSourceKind kind) -> MaskModel& {
+  auto AttachAnalytic(MaskSourceKind kind) -> const MaskModel& {
     MaskModel mask;
     mask.id = MaskId{"mask.analytic"};
     if (kind == MaskSourceKind::Radial) {
@@ -66,7 +66,7 @@ class CudaMaskFixture : public ::testing::Test {
     } else {
       mask.source = LinearGradientMaskSource{};
     }
-    auto& result = grade_mask_test::AddMask(*document_.PrimaryGrade(), std::move(mask));
+    const auto& result = grade_mask_test::AddMask(*document_.PrimaryGrade(), std::move(mask));
     document_.MarkTopologyChanged();
     return result;
   }
@@ -160,11 +160,10 @@ class CudaMaskFixture : public ::testing::Test {
 };
 
 TEST_F(CudaMaskFixture, CudaRadialMaskMatchesReferenceSpaceEllipseAtPreviewScales) {
-  auto&            node = AttachAnalytic(MaskSourceKind::Radial);
-  auto             radial = std::get<RadialMaskSource>(node.source);
+  auto radial = std::get<RadialMaskSource>(AttachAnalytic(MaskSourceKind::Radial).source);
   radial.major_radius = 0.3f;
   radial.minor_radius = 0.2f;
-  node.source = radial;
+  document_.PrimaryGrade()->ReplaceMaskSource(MaskId{"mask.analytic"}, radial);
   Compile();
   RenderMask();
   const auto full = DownloadMask();
@@ -182,12 +181,12 @@ TEST_F(CudaMaskFixture, CudaRadialMaskMatchesReferenceSpaceEllipseAtPreviewScale
 }
 
 TEST_F(CudaMaskFixture, CudaLinearGradientMaskFollowsReferenceSpaceNormal) {
-  auto&                    node = AttachAnalytic(MaskSourceKind::LinearGradient);
+  AttachAnalytic(MaskSourceKind::LinearGradient);
   LinearGradientMaskSource params;
   params.normal_x            = 0.0f;
   params.normal_y            = 1.0f;
   params.transition_distance = 1.0f;
-  node.source = params;
+  document_.PrimaryGrade()->ReplaceMaskSource(MaskId{"mask.analytic"}, params);
   Compile();
   RenderMask();
   const auto pixels = DownloadMask();
@@ -321,8 +320,8 @@ TEST_F(CudaMaskFixture, EnabledMasksUseMaximumCoverage) {
   right.minor_radius = 0.2f;
   grade_mask_test::AddRadialMask(document_, MaskId{"mask.a"}, left);
   grade_mask_test::AddRadialMask(document_, MaskId{"mask.z"}, right);
-  document_.PrimaryGrade()->FindMask(MaskId{"mask.a"})->opacity = 180.0f / 255.0f;
-  document_.PrimaryGrade()->FindMask(MaskId{"mask.z"})->opacity = 200.0f / 255.0f;
+  document_.PrimaryGrade()->SetMaskOpacity(MaskId{"mask.a"}, 180.0f / 255.0f);
+  document_.PrimaryGrade()->SetMaskOpacity(MaskId{"mask.z"}, 200.0f / 255.0f);
   Compile();
   ExecutePlan();
   ExpectPrimaryUnionMatchesReference();
@@ -368,8 +367,8 @@ TEST_F(CudaMaskFixture, MaskOpacityAndInvertApplyBeforeUnion) {
   RadialMaskSource radial;
   radial.major_radius = 0.45f;
   radial.minor_radius = 0.45f;
-  auto& inverted = grade_mask_test::AddRadialMask(document_, MaskId{"mask.invert"}, radial, true);
-  inverted.opacity = 0.25f;
+  grade_mask_test::AddRadialMask(document_, MaskId{"mask.invert"}, radial, true);
+  document_.PrimaryGrade()->SetMaskOpacity(MaskId{"mask.invert"}, 0.25f);
   LinearGradientMaskSource flat;
   flat.start_value         = 128.0f / 255.0f;
   flat.end_value           = 128.0f / 255.0f;

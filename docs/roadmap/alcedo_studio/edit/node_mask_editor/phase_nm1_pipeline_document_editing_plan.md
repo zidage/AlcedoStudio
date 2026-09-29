@@ -548,6 +548,14 @@ Status: complete — 2026-08-31 实施完成；入口为当时 C 未提交工作
 
 1. **共享模型仍是目标。** 保留每图一个 live document/executor、普通 guard/pin、后台释放不保存。
    不恢复 PipelineSnapshot、后台专用加载链或独立参数副本。
+
+   > **Superseded by 2026-09-27 executor ownership refactor**
+   > （[方案](../../../../refactor/2026-09-27-executor-ownership-refactor-plan.md)，P7 于 2026-09-29 完成）。
+   > 本条已废止：guard/pin 共享与每图一个 executor 均已删除。executor 改为按所有者持有、数量固定
+   > （编辑器 1、缩略图/分析池 2、导出 1），渲染时接收不可变的 `PipelineGraphSnapshot`。
+   > 本条当初拒绝的 snapshot 是"每个快照克隆一个 executor、深拷贝参数、取自可变 live 状态"；
+   > 新快照不含 executor，节点写时复制共享，非编辑器消费者只读已提交快照。
+   > 废止理由见[审计](../../../../refactor/2026-09-27-executor-ownership-audit.md) §4。
 2. **缓存是纹理/中间结果缓存。** 不是 OperatorModel 参数表，也不是缩略图磁盘缓存。
    旧 DAG 曾忽略 task 的 cache 开关，后台因此污染或清空编辑器缓存；2026-08-23 GPU DAG 方案
    G7R.H 用独立 one-shot workspace 隔离。B 延续该实现。隔离效果必须保留，但两套长期 device
@@ -1014,6 +1022,12 @@ ReconnectColorGrade(PipelineDocument& document, node_id, predecessor, successor)
 以上为形态说明，不要求新增同名接口或通用命令类型。函数操作当前文档；锁和 WAL/history 由 app 边界协调。
 共享生命周期使用现有 guard/pin 机制，缺少无保存 release 时只补最小对称释放能力。
 不新增 snapshot registry、租约服务、发布 token 或每消费者一个 executor。
+
+> **Superseded by 2026-09-27 executor ownership refactor**
+> （[方案](../../../../refactor/2026-09-27-executor-ownership-refactor-plan.md)）。上面两句所有权约束已废止：
+> guard/pin 已删除；`PipelineMgmtService` 现在持有已提交快照缓存与编辑器单写者租约，
+> 编辑器会话在每次 commit 时发布已提交快照；每个渲染所有者持有固定数量的 executor。
+> 领域函数形态（直接修改 `PipelineDocument`，由 app 边界协调锁与 history）仍然有效。
 
 ## 13. 验证方式与证据
 

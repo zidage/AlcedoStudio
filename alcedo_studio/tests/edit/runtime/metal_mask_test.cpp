@@ -114,7 +114,7 @@ class MetalMaskFixture : public ::testing::Test {
     gpu_dag_test::EnsureTestCameraProfile(document_);
   }
 
-  auto AttachAnalytic(MaskSourceKind kind) -> MaskModel& {
+  auto AttachAnalytic(MaskSourceKind kind) -> const MaskModel& {
     MaskModel mask;
     mask.id = MaskId{"mask.analytic"};
     if (kind == MaskSourceKind::Radial) {
@@ -122,7 +122,7 @@ class MetalMaskFixture : public ::testing::Test {
     } else {
       mask.source = LinearGradientMaskSource{};
     }
-    auto& result = grade_mask_test::AddMask(*document_.PrimaryGrade(), std::move(mask));
+    const auto& result = grade_mask_test::AddMask(*document_.PrimaryGrade(), std::move(mask));
     document_.MarkTopologyChanged();
     return result;
   }
@@ -223,11 +223,11 @@ class MetalMaskFixture : public ::testing::Test {
 };
 
 TEST_F(MetalMaskFixture, MetalMaskSamplingMatchesCudaAtCropRotationAndDynamicResolution) {
-  auto& node          = AttachAnalytic(MaskSourceKind::Radial);
-  auto  radial        = std::get<RadialMaskSource>(node.source);
+  auto radial = std::get<RadialMaskSource>(AttachAnalytic(MaskSourceKind::Radial).source);
   radial.major_radius = 0.35f;
   radial.minor_radius = 0.25f;
-  node.source         = radial;
+  document_.PrimaryGrade()->ReplaceMaskSource(MaskId{"mask.analytic"}, radial);
+  const auto& node = *document_.PrimaryGrade()->FindMask(MaskId{"mask.analytic"});
   document_.Geometry().SetCropRect({0.1f, 0.1f, 0.8f, 0.8f});
   document_.Geometry().SetRotationDegrees(15.0f);
   Compile();
@@ -422,8 +422,8 @@ TEST_F(MetalMaskFixture, EnabledMasksUseMaximumCoverage) {
   right.minor_radius = 0.2f;
   grade_mask_test::AddRadialMask(document_, MaskId{"mask.a"}, left);
   grade_mask_test::AddRadialMask(document_, MaskId{"mask.z"}, right);
-  document_.PrimaryGrade()->FindMask(MaskId{"mask.a"})->opacity = 180.0f / 255.0f;
-  document_.PrimaryGrade()->FindMask(MaskId{"mask.z"})->opacity = 200.0f / 255.0f;
+  document_.PrimaryGrade()->SetMaskOpacity(MaskId{"mask.a"}, 180.0f / 255.0f);
+  document_.PrimaryGrade()->SetMaskOpacity(MaskId{"mask.z"}, 200.0f / 255.0f);
   Compile();
   ASSERT_TRUE(plan_.FirstGrade()->mask_stack.has_value());
   ASSERT_EQ(plan_.FirstGrade()->mask_stack->sources.size(), 2U);
@@ -511,8 +511,8 @@ TEST_F(MetalMaskFixture, MaskOpacityAndInvertApplyBeforeUnion) {
   RadialMaskSource radial;
   radial.major_radius = 0.45f;
   radial.minor_radius = 0.45f;
-  auto& inverted = grade_mask_test::AddRadialMask(document_, MaskId{"mask.invert"}, radial, true);
-  inverted.opacity = 0.25f;
+  grade_mask_test::AddRadialMask(document_, MaskId{"mask.invert"}, radial, true);
+  document_.PrimaryGrade()->SetMaskOpacity(MaskId{"mask.invert"}, 0.25f);
   LinearGradientMaskSource flat;
   flat.start_value         = 128.0f / 255.0f;
   flat.end_value           = 128.0f / 255.0f;

@@ -530,8 +530,7 @@ auto EditorMaskCreationController::ApplyLiveMaskField(ColorGradeNodeModel*  grad
   if (grade == nullptr) {
     return false;
   }
-  auto* mask = grade->FindMask(mask_id);
-  if (mask == nullptr) {
+  if (grade->FindMask(mask_id) == nullptr) {
     return false;
   }
   try {
@@ -542,7 +541,7 @@ auto EditorMaskCreationController::ApplyLiveMaskField(ColorGradeNodeModel*  grad
     } else if (field_key == kMaskFieldOpacity) {
       grade->SetMaskOpacity(mask_id, value.get<float>());
     } else if (field_key == kMaskFieldDisplayName) {
-      mask->display_name = value.get<std::string>();
+      grade->SetMaskDisplayName(mask_id, value.get<std::string>());
     } else {
       return false;
     }
@@ -882,10 +881,13 @@ auto EditorMaskCreationController::PublishAddMask() -> EditorMaskCreationResult 
                                        : settle_error);
   }
   ClearOpenOperation();
-  creating_                = false;
-  inserted_                = false;
-  before_source_           = MaskModelToJson(*mask).at("source");
-  draft_source_            = mask->source;
+  creating_ = false;
+  inserted_ = false;
+  // Look the Mask up again: a Mask write during publish would replace the value read above.
+  if (const auto* settled = grade->FindMask(mask_id_)) {
+    before_source_ = MaskModelToJson(*settled).at("source");
+    draft_source_  = settled->source;
+  }
   state_                   = EditorMaskCreationState::Settling;
   auto result              = Ok();
   result.mask_id           = mask_id_;

@@ -522,6 +522,95 @@ Suite totals：
 - 冻结文档在全部蒙版写入口之后内容不变。
 - 蒙版渲染与失效测试（CUDA / OpenCL）全绿。
 
+##### Phase P2A completion record (2026-09-29)
+
+**Status:** complete — `ColorGradeNodeModel` 的蒙版改为逐项共享：列表元素为 `{shared_ptr<const MaskModel>, ParameterRevision}`，
+列表本身仍以 `shared_ptr<const>` 共享。蒙版写入只复制指针列表（被共享时）并存入一个新的蒙版值；其余蒙版与冻结文档仍是同一对象。
+内容 revision 改为进程级戳。Branch: `refactor/mask-per-item-copy-on-write`（基于 `062ab0c4b`）。
+
+**实现要点（与计划条目的对应）：**
+
+| 计划条目 | 实现 |
+|---|---|
+| 列表元素 `{mask, content_revision}`，写一个蒙版只复制指针列表 + 被写蒙版 | 私有 `MaskEntry` / `MaskEntryList`，经 `MutableMaskEntries()`（`UnshareForWrite`）取得可写列表。蒙版值**从不原地写**：所有写入走唯一的私有入口 `StoreMask(index, candidate, kind)`——先 `ValidateMaskModel`，再以 `make_shared<const MaskModel>` 替换该元素。计划写的是"克隆被写的那个 `MaskModel` 再写"；实际每次写入本来就要先构造一个候选值做校验，直接把候选值存为新对象，比"克隆 + 再写"少一次复制，且蒙版对象成为真正的不可变对象（不需要 `const_cast`）。代价：未被冻结文档共享时每次写入仍分配一次新蒙版（旧实现原地写）。 |
+| 增删、移动只改元素 vector | `AddMask` / `RemoveMask` / `MoveMaskForDisplay` 只操作 `MaskEntryList`，不复制任何 `MaskModel` |
+| 删除 `std::map<MaskId, uint64_t>` | 删除；revision 存在元素里，按 `MaskId` 线性查找（`FindMaskIndex`） |
+| 进程级戳 | `next_mask_revision_` 删除；插入与内容写入取 `NextParameterRevision()`。`MaskContentRevision` 返回 `ParameterRevision`；`RuntimeInvalidationState::last_mask_revision_` 同步改类型。笔刷命令的 `expected_revision` 仍是相等比较 |
+| `Masks()` 不再要求连续存储 | 新 `MaskListView`（`edit/mask/mask_model.hpp`）：按下标访问的只读前向视图，可由 grade 的元素列表构造，也可由任何连续 `MaskModel` 容器隐式构造。所有读蒙版序列的函数（`GradeMaskCoverage`、`MakeGroupMaskThumbnailSpec`、`FirstEnabledMask`、测试的 `EvaluateEnabledUnionR8`）改为接收它，因此 grade 与测试里的 `std::vector<MaskModel>` 走同一个函数，不需要为调用而复制蒙版 |
+
+**调查出的不合理路径（按"没有特殊性就应走通用逻辑"处理）：**
+
+1. **非 const `FindMask` / `MaskAt` 返回可写 `MaskModel&`。** 经它写入绕过 `TouchMask`，内容 revision 不变，渲染失效会漏掉这次写入；同时大量只读调用方只因手里的 `grade` 是非 const 指针就命中非 const 重载，在 P2 下每次纯读都触发一次整列表复制。生产代码里经它写入的只有 `display_name`（`EditorMaskCreationController::ApplyLiveMaskField`、`ApplySetMaskField`），它与 `deletion_protected` 一样是元数据，本该有 setter。没有任何特殊性要求这条旁路：删除两个非 const 重载，新增 `SetMaskDisplayName`（元数据，不盖内容戳）。现在蒙版在节点外只读，**唯一写入口是 setter，每个内容写入都经 `StoreMask` 校验并盖戳**。测试里经 `FindMask(...)->opacity = …`、`node.source = …` 直接写的 12 处改为调用 setter（其中 `result_content_key_test` 原本改了 source 却没有盖戳）。
+2. **`ColorGradeNodeModel::CopyRevisionsFrom` 复制 mix 与调整的戳，却不复制蒙版的戳。** `ClonePipelineDocument` 的约定是"克隆值与戳一起复制，渲染器不会因克隆而重算"，蒙版原先只是碰巧（节点内计数从 1 开始，克隆可能得到相同数值，也可能与别的文档撞号）。改为进程级戳后必须显式复制：按 `MaskId` 复制源节点的内容戳（`ClonedDocumentKeepsMaskContentRevisions` 断言克隆后 `DocumentRevisionFingerprint` 相等）。
+3. **no-op 写入**：`SetMaskDeletionProtected` 原先相同值也写；与 `SetMaskEnabled` / `SetMaskInvert` 统一为相同值直接返回，不复制、不盖戳。
+
+**主调用链（成功路径，拖动蒙版手柄的一个 tick）：**
+
+```text
+叠加层拖动 → EditorMaskCreationController（owner 线程）
+  -> ColorGradeNodeModel::ReplaceMaskSource(mask_id, source)
+       -> RequireMaskIndex（const 查找，不复制）
+       -> candidate = MaskAt(index) 的副本；candidate.source = source
+       -> StoreMask：ValidateMaskModel(candidate)
+            -> MutableMaskEntries()   // 列表被上次 Freeze 共享：复制 N 个指针 + 戳，一次分配
+            -> entry.mask = make_shared<const MaskModel>(candidate)；entry.content_revision = NextParameterRevision()
+  -> PublishDocumentSnapshot → PipelineDocument::Freeze()   // 共享全部节点；Grade 节点共享新列表
+  -> 旧冻结文档随最后一个持有者释放；只由它持有的旧蒙版值一并释放
+渲染：RuntimeInvalidationState 比较 MaskContentRevision（进程级戳，`!=`）→ 只重算该蒙版下游
+```
+
+**失败路径：**
+
+```text
+候选值校验失败（如 opacity 超出 [0,1]）/ MaskId 不存在 / 重复 MaskId
+  -> StoreMask / AddMask 在任何修改之前抛 std::runtime_error
+  -> 蒙版对象、内容戳、列表与 JSON 均不变（RejectedMaskWriteKeepsTheMaskAndItsRevision）
+分配失败 → MutableMaskEntries 或 make_shared 在替换前抛出；复制出的私有列表与原列表值相同，不可见
+持有 FindMask / MaskAt 的指针跨过一次蒙版写入 → 指向被替换的旧值（与旧实现 vector 重分配同类约束，
+  写在 `Mask reads` 文档注释里）。已审计生产与测试全部调用点，没有写后使用；
+  `EditorMaskCreationController::PublishAddMask` 在 publish 之后读旧指针（当前 publish 不写文档，安全但脆弱），改为重新查找
+```
+
+**What was proven (executed tests)：**
+
+| 名称 / 条目 | 目标 | 结果 |
+|---|---|---|
+| `MaskEditCopiesOnlyTheEditedMask` | `GpuDagModelGraphTest` | PASS |
+| `MaskDragTickCostDoesNotGrowWithMaskCount`：8 与 32 个蒙版分配次数相等；多蒙版文档中位 ≤ 0.2 ms、分配 ≤ 100 | `PipelineDocumentCopyCostTest` | PASS。8 / 32 个蒙版：62 / 62 次分配，中位 17.6 / 17.4 µs；多蒙版文档（4 个 Grade、ID 超出短字符串长度）：75 次、20.4 µs。同一测试在 HEAD 源码上：8 / 32 个蒙版 91 / 187 次、25.6 / 75.1 µs，多蒙版文档 264 次（超限） |
+| `MaskContentRevisionIsUniqueAcrossDocuments`（含两文档做相同写入后仍不相等） | `GpuDagModelGraphTest` | PASS |
+| 计划外新增：`MaskInsertMoveAndRemoveShareEveryRemainingMask`、`ClonedDocumentKeepsMaskContentRevisions`、`MaskMetadataAndNoOpWritesKeepTheContentRevision`、`RejectedMaskWriteKeepsTheMaskAndItsRevision` | `GpuDagModelGraphTest` | PASS |
+| P2 的 `FrozenDocumentKeepsMasksAfterEveryWorkingDocumentMaskWrite`（直接写改为 `SetMaskDisplayName`）、`ParameterEditCopiesOnlyTheEditedNodeAndModel`、`WorkingDocumentWritesInPlaceWhenNoFrozenDocumentSharesIt`（`Masks().data()` 比较改为逐蒙版对象比较） | `GpuDagModelGraphTest` | PASS |
+| 蒙版渲染与失效：`GpuDagCudaMaskTest`、`GpuDagOpenClGradeTest`（含 OpenCL 蒙版）、`GpuDagResultContentKey*`、`RuntimeInvalidation*`、`AnalyticMask*`、`EditorMask*` | 各自目标 | PASS |
+
+Commands（PowerShell，PATH 前置 `build\debug\vcpkg_installed\x64-windows\debug\bin`）：
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 8          # 全量构建，0 错误
+ctest --test-dir build/debug -j 1 -R "^(GpuDagModelGraphTest|PipelineDocumentCopyCostTest|ExecutorIsolationTest|GpuDagRawInputTest|GraphImageCacheRetentionTest|GpuDagCuda(Workspace|Develop|Mask|PrimaryGrade)Test|GpuDagOpenCl(Grade|Workspace)Test|AdjustmentTransfer.*|EditorAdjustmentContextTest|EditorPanelProjectionTest|EditorPipelineCommandServiceTest|EditorNodeGraph.*|EditorMask.*|EditorSession.*|EditorHistory.*|EditorParameterWrite.*|EditorAdjustmentPipelineTest|PipelineMapperTest|PipelineGraph.*|PipelineDocument.*|PipelineHistory.*|PipelineEditBatchTest|PipelineDngProfileBindingTest|PipelineDocumentRenderTest|ImportPipelineDocumentTest|ExportServiceTest|ImportServiceTest|MiniGit.*|DocumentTransfer.*|AnalyticMask.*|MaskThumbnail.*|GpuDagResultContentKey.*|RuntimeInvalidation.*|ColorGradeMask.*)\."
+PipelineDocumentCopyCostTest.exe --gtest_filter=*MaskDrag*                   # 读取 [P2A cost] 行
+基线：git stash → 只恢复新的 cost 测试文件 → 重编 3 个目标 → 运行 → stash pop → 全量重编
+```
+
+Suite totals：
+
+- 定向回归集 1175 个（另 3 个 `DISABLED_`）：1162 通过，13 失败，全部预存：
+  - P2 记录过的 9 个（`EditorSessionRenderSchedulerPortTest` 5 个、`EditorSessionCommandQueueBaselineTest` 1 个、`EditorSessionActionPolicyCq3Test` 1 个、`GpuDagOpenClWorkspaceTest` 2 个）。
+  - `PipelineDocumentCheckpointFormat` 3 个（expected serialized 字节不符）与 `EditorHistoryCommitPresentationTest.FormatsNumericBooleanPathEnumAndCompoundAdjustments`（Crop 呈现）：在 HEAD（`062ab0c4b`）源码上重编这两个目标后同样 4 个失败，与蒙版无关（发生在 Geometry 重构之后）。
+- 最后一处改动（`PublishAddMask` 重新查找）之后全量重编，并复跑受影响的目标：359 个中 355 通过，4 个失败即上面的预存 4 个。
+- 完整 ctest 按 AGENTS.md 未运行。
+- macOS（Apple Silicon，macOS 27.0，`build/macos-debug`，tests ON，Brush OFF，提交 `62fca136`）：全量构建 0 错误。`GpuDagMetal*` 与上面同一组定向套件共 1046 个，1026 通过，20 失败，全部预存：在同一台机器上切到 P8（`062ab0c4b`）重编这 9 个目标后，同样这 20 个失败——Windows 上的 13 个预存失败中的 11 个（`GpuDagOpenClWorkspaceTest` 不在 Mac 上），`GpuDagMetalDevelopTest` 2 个、`GpuDagMetalGradeTest` 5 个（含 `MetalMaskFixture` 的 `MetalDisconnectedMaskUsesConstantOneCoverage`、`MetalNormalMixMatchesCudaReferenceWithinTolerance`）、`GpuDagMetalRendererTest.InteractiveQualityBaseInteractiveReuses2560PixelResults`（与 P3 记录的 8 个 Metal 预存失败相同），以及 QML 的 `EditorHistoryTransactionsPanelQmlTest.EachTransactionCardShowsItsOwnCommitHash`。`MaskDragTickCostDoesNotGrowWithMaskCount` 在 Mac 上通过（分配计数只在 Windows Debug CRT 上可用；8 / 32 / 多蒙版中位 0.29 / 0.38 / 0.38 µs）。
+
+**Checklist / exit condition：**
+- [x] 蒙版拖动 tick 的分配次数与蒙版数量无关，并满足 P0 门槛（测试断言：8 与 32 个蒙版相等；多蒙版文档 75 次 ≤ 100、20 µs ≤ 200 µs）
+- [x] 冻结文档在全部蒙版写入口之后内容不变（P2 的写入口测试 + 增删移动 + 拒绝写入）
+- [x] 蒙版渲染与失效测试（CUDA / OpenCL）全绿
+
+**LOC note：** 生产代码 11 个文件 +333 / −199，测试 12 个文件 +279 / −70。改动文件均低于 1000 行（最大 `color_grade_node_model.cpp` 560 行，`pipeline_document_freeze_test.cpp` 448 行）。
+
+**Remaining gaps：**
+- **笔刷模块未编译：** 本机 `ALCEDO_ENABLE_BRUSH_MASK=OFF`。四个笔刷命令改为经 `RequireBrushMaskIndex` + `StoreMask`，只做了文本检查，需要在开启该选项的构建上编译并运行 `brush_parameterized_source_test` 等。
+- `RuntimeInvalidationState::AdvanceDocumentEpoch` 没有生产调用方；它原本兜住节点内蒙版计数撞号的问题，现已不需要。未在本阶段删除，另起任务处理。
+
 ### P3 `PipelineExecutor` 改为"按请求接收快照"
 
 **目标：** executor 不再绑定文档，也不再有一个两种世界共用的 Renderer。
@@ -1296,6 +1385,48 @@ Suite totals:
   - G10 中两个 pin 计数相关的 flaky 测试记录。
 - 更新 `docs/technical/app/` 中涉及服务职责的说明。
 
+##### Phase P8 completion record (2026-09-29)
+
+**Status:** complete — documentation only. Every conflicting decision the plan lists now has a "Superseded by 2026-09-27 executor ownership refactor" note that links here; the three open items are closed or updated; `docs/technical/app/` has a current note on service responsibilities. No code changed.
+Branch: `refactor/executor-ownership-p8` (based on `73326e822` of `refactor/executor-ownership-p7`).
+
+**Changes by plan item:**
+
+| Plan item | File | Change |
+|---|---|---|
+| single-live-pipeline plan A1 | `docs/roadmap/alcedo_studio/ui/editor_single_live_pipeline_wal_checkpoint_plan.md` | Note under the header: A1, the "Live pipeline (executor)" role row, and the `PipelineGuard` code mirror no longer apply; the identity rules (HEAD only in history, chain once per commit, checkpoint is a label) still apply. The A1 row carries the same note. The non-goal "split `PipelineExecutor` into param graph and GPU executor" is marked done (P3) |
+| NM1 §10.5 background 1 and §12 | `docs/roadmap/alcedo_studio/edit/node_mask_editor/phase_nm1_pipeline_document_editing_plan.md` | Note after background 1 with the reason, referring to audit §4: the rejected snapshot cloned an executor per snapshot, deep-copied parameters, and read mutable live state; the new snapshot has no executor, shares nodes by copy-on-write, and non-editor consumers read only committed snapshots. Note after §12: the guard/pin and "no lease service, no per-consumer executor" constraints are withdrawn; the domain function form still applies |
+| G10 §6.1 and §16.4 | `docs/roadmap/alcedo_studio/edit/gpu_dag_final_removal_phase_plan.md` | §6.1: the `PipelineDocument`, `PipelineMgmtService`, and `PipelineExecutor` rows no longer describe the code; current owners listed. §16.4: the rule "executor API stays source-compatible" is withdrawn (P3 snapshot argument, P6/P7 single-role executors) |
+| Phase 6C / 7A "PMS owns the live executor" | `docs/roadmap/alcedo_studio/ui/phase_6c_mini_git_history_and_pipeline_snapshot_plan.md`, `phase_7a_history_versions_repair_and_ui_refactor_plan.md` | 6C: note under the status (the **Pipeline snapshot** definition, Section 5, and the chains that return a live snapshot to the service are historical; the checkpoint compare in Section 5 still applies and now runs in `AcquireEditorLease`), plus a pointer at Section 5. 7A: note under the related documents (no "rebuild live executor" on checkout; rollback restores document and history only) |
+| 2026-05-24 frame sink remaining item | `docs/refactor/2026-05-24-pipeline-frame-sink-thumbnail-lifecycle.md` | New section "Resolution: 2026-09-29": closed. Only the editor's interactive executor has a `frame_sink_`, attached in each task's `prepare_` on the single editor worker; batch executors never get one. `frame_sink_` stays an executor member rather than a per-invocation context, because one owner and one worker per executor leave nothing for that to protect |
+| Issue #113 (disk cache label) | `docs/issues/thumbnail_disk_cache_writeback.md` | Status set to resolved by P4, with a "Resolution" section: the key and pixels come from the same committed snapshot; the removed helpers and state are listed (checked by grep over `src/` and `tests/`: none remain). The acceptance criteria are marked one by one; two are not met: no test of concurrent thumbnail + analysis writes or write failure during a render, and the parallel task count changed on purpose (pool of 2) |
+| G10 two pin-count flaky tests | `gpu_dag_final_removal_phase_plan.md` status line and §17.12 | Closed: both read `PipelineGuard::pin_count_`, which no longer exists. `OrdinaryThumbnailReusesLiveEditorExecutorAndDocument` → `ThumbnailRendersOnItsOwnExecutorAndLeavesTheEditorStateUntouched` (P4, P7); `AnalysisRenditionRendersWithoutSavePipelineOnLiveGuard` → `AnalysisRenditionLeavesTheEditorLeaseAndWorkingDocumentUntouched` (P7). The `pin_count_` still read in `ThumbnailServiceTest` belongs to `ThumbnailGuard` (memory cache) |
+| `docs/technical/app/` service responsibilities | new `docs/technical/app/pipeline_services.md`; banners on `image_pool_service.md`, `import_service.md` | The existing files are archived design chats with no current service description, so a new note holds the ownership table, the `PipelineMgmtService` operation groups, executor rules, and the editor / thumbnail / export / import-copy-paste call chains. The two chats that discuss RenderService and pipeline state get a banner pointing to it. `sleeve_service.md` and `architecture_details.md` do not mention pipelines or executors and are unchanged |
+
+**Primary chain documented (the state these notes point to):**
+
+```text
+Editor commit -> MiniGitWorkingHistory -> PipelineMgmtService::PublishCommitted(committed snapshot)
+Thumbnail / analysis / export -> PipelineMgmtService::AcquireCommittedSnapshot
+  -> owner's batch executor (pool 2 / export 1) -> PipelineExecutor::Apply(snapshot)
+  -> thumbnail: disk cache written under the key built from the same snapshot
+```
+
+**Failure chain:** not applicable (no code change).
+
+**What was proven:** every statement in the notes was checked against the code on this branch: `PipelineMgmtService` API (`pipeline_service.hpp`), `kDefaultBatchExecutorCount` = 2 and the default used by `ProjectHandler`, `kExportExecutorCount` = 1, `BatchExecutorPool` creating `ExecutorRole::Batch` executors, the editor sink attached in `prepare_` (`editor_session_render_scheduler_port.cpp`), `BuildDiskCacheKey` / `kDiskCacheSchemaVersion` = 3, and the test renames (`git log -S`). Tests were not run, per the user's instruction; the change touches only Markdown. Relative links were written for each file's directory; they were not checked by a link tool.
+
+**Checklist / exit condition:**
+- [x] Superseded notes with a link to this plan: single-live-pipeline A1; NM1 §10.5 background 1 and §12; G10 §6.1 and §16.4; Phase 6C / 7A.
+- [x] Closed or updated: the 2026-05-24 frame sink item; Issue #113; the two G10 pin-count flaky records.
+- [x] `docs/technical/app/` updated.
+
+**Remaining gaps:**
+- `docs/technical/` is ignored by git (`.gitignore:1112`, `/docs/technical`), so the new `pipeline_services.md` and the two banners exist only in the working copy and are not in the commit. Tracking them needs the ignore rule changed or the note moved, which is the user's decision.
+- GitHub issue [#113](https://github.com/zidage/AlcedoStudio/issues/113) itself is not closed; the document says it can be closed with a link to its resolution section.
+- The audit ([2026-09-27-executor-ownership-audit.md](2026-09-27-executor-ownership-audit.md)) is left unchanged as the pre-refactor record.
+- P2A (mask copy-on-write per item) was still not started at the time of P8; it was completed later on 2026-09-29 (see its completion record).
+
 ---
 
 ## 5. 风险与对策
@@ -1326,11 +1457,11 @@ Suite totals:
 | P0 基线与保护网 | 完成（2026-09-28） |
 | P1 revision 协议 | 完成（2026-09-28） |
 | P2 快照与 COW | 完成（2026-09-28） |
-| P2A 蒙版逐项写时复制 | 未开始 |
+| P2A 蒙版逐项写时复制 | 完成（2026-09-29，Windows + macOS 验证；笔刷模块未编译） |
 | P3 executor 按请求接收快照 | 完成（2026-09-28） |
 | P4 缩略图 / 分析池 | 完成（2026-09-28） |
 | P5 导出、导入、复制、粘贴 | 完成（2026-09-28） |
 | P6 编辑器独占 executor | 完成（2026-09-28，手工 UI 验证未做） |
 | Geometry 面板重构（#221，先于 P7） | 完成（2026-09-28，手工 UI 验证未做） |
 | P7 删除共享机制 | 完成（2026-09-29，手工 UI 验证未做） |
-| P8 文档与决策更新 | 未开始 |
+| P8 文档与决策更新 | 完成（2026-09-29） |

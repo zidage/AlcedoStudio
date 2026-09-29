@@ -91,7 +91,7 @@ struct MaskThumbnailSpec {
  * no Masks at all.
  */
 [[nodiscard]] auto MakeGroupMaskThumbnailSpec(const MaskThumbnailGeometry& geometry,
-                                              std::span<const MaskModel>   masks)
+                                              MaskListView                 masks)
     -> MaskThumbnailSpec;
 
 }  // namespace alcedo

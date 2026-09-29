@@ -4,10 +4,11 @@
 
 // Copy-on-write freeze of PipelineDocument (executor ownership refactor, phase P2).
 //
-// A frozen document shares nodes, adjustment Models, and Mask lists with the working document.
-// These tests prove the two halves of that design: every write path of the working document
-// leaves an earlier frozen document unchanged, and a write copies only the parts it changes
-// (and nothing at all when no frozen document shares them).
+// A frozen document shares nodes, adjustment Models, and individual Masks with the working
+// document (phase P2A made Mask sharing per item). These tests prove the two halves of that
+// design: every write path of the working document leaves an earlier frozen document unchanged,
+// and a write copies only the parts it changes (and nothing at all when no frozen document shares
+// them; a written Mask is the exception, since Mask values are never written in place).
 
 #include <gtest/gtest.h>
 
@@ -111,8 +112,7 @@ TEST(PipelineDocumentFreeze, FrozenDocumentKeepsMasksAfterEveryWorkingDocumentMa
   grade->MoveMaskForDisplay(MaskId{"mask.a"}, 1);
   grade->AddMask(MakeRadialMask("mask.c", 0.5f), 0);
   grade->RemoveMask(MaskId{"mask.b"});
-  grade->FindMask(MaskId{"mask.a"})->display_name = "Edited through FindMask";
-  grade->MaskAt(0).opacity                        = 0.1f;
+  grade->SetMaskDisplayName(MaskId{"mask.a"}, "Renamed mask");
 
   EXPECT_NE(document.ToJson(), frozen_json);
   EXPECT_EQ(frozen->ToJson(), frozen_json);
@@ -164,21 +164,26 @@ TEST(PipelineDocumentFreeze, ParameterEditCopiesOnlyTheEditedNodeAndModel) {
     }
   }
   EXPECT_EQ(copied_models, 1u);
-  // The Mask list was not written, so its storage is still shared.
-  EXPECT_EQ(grade->Masks().data(), frozen_grade->Masks().data());
+  // No Mask was written, so every Mask is still shared.
+  ASSERT_EQ(grade->MaskCount(), frozen_grade->MaskCount());
+  for (std::size_t index = 0; index < grade->MaskCount(); ++index) {
+    EXPECT_EQ(&grade->MaskAt(index), &frozen_grade->MaskAt(index));
+  }
 }
 
 TEST(PipelineDocumentFreeze, WorkingDocumentWritesInPlaceWhenNoFrozenDocumentSharesIt) {
   auto        document = MakeDocumentWithMasks();
   const auto* grade    = std::as_const(document).PrimaryGrade();
   const auto* exposure = &MutableExposure(document);
-  const auto* masks    = grade->Masks().data();
+  const auto* mask_b   = grade->FindMask(MaskId{"mask.b"});
 
   MutableExposure(document).SetValue(0.25f);
   document.PrimaryGrade()->SetMaskOpacity(MaskId{"mask.a"}, 0.5f);
   EXPECT_EQ(std::as_const(document).PrimaryGrade(), grade);
   EXPECT_EQ(&MutableExposure(document), exposure);
-  EXPECT_EQ(grade->Masks().data(), masks);
+  // A Mask value is never written in place; the write stores a new value for mask.a only.
+  EXPECT_EQ(grade->FindMask(MaskId{"mask.b"}), mask_b);
+  EXPECT_FLOAT_EQ(grade->FindMask(MaskId{"mask.a"})->opacity, 0.5f);
 
   // After the last frozen holder releases its document, writes are in place again.
   {
@@ -230,6 +235,126 @@ TEST(PipelineDocumentFreeze, CopiedNodesKeepTheChangeStampsOfTheirSource) {
   MutableExposure(document).SetValue(ExposureEv(document) + 1.0f);
   EXPECT_NE(DocumentRevisionFingerprint(document), fingerprint);
   EXPECT_EQ(DocumentRevisionFingerprint(*frozen), fingerprint);
+}
+
+// P2A: a Mask write copies the list of Mask pointers and stores one new Mask value. Every other
+// Mask stays shared with the frozen document.
+TEST(PipelineDocumentFreeze, MaskEditCopiesOnlyTheEditedMask) {
+  auto document = MakeDocumentWithMasks();
+  document.PrimaryGrade()->AddMask(MakeRadialMask("mask.c", 0.5f), 2);
+  const auto  frozen       = document.Freeze();
+  const auto* frozen_grade = frozen->PrimaryGrade();
+  const MaskId a{"mask.a"};
+  const MaskId b{"mask.b"};
+  const MaskId c{"mask.c"};
+
+  document.PrimaryGrade()->SetMaskOpacity(b, 0.4f);
+
+  const auto* grade = std::as_const(document).PrimaryGrade();
+  EXPECT_EQ(grade->FindMask(a), frozen_grade->FindMask(a));
+  EXPECT_EQ(grade->FindMask(c), frozen_grade->FindMask(c));
+  ASSERT_NE(grade->FindMask(b), frozen_grade->FindMask(b));
+  EXPECT_FLOAT_EQ(grade->FindMask(b)->opacity, 0.4f);
+  EXPECT_FLOAT_EQ(frozen_grade->FindMask(b)->opacity, 1.0f);
+  EXPECT_NE(grade->MaskContentRevision(b), frozen_grade->MaskContentRevision(b));
+  EXPECT_EQ(grade->MaskContentRevision(a), frozen_grade->MaskContentRevision(a));
+  EXPECT_EQ(grade->MaskContentRevision(c), frozen_grade->MaskContentRevision(c));
+}
+
+TEST(PipelineDocumentFreeze, MaskInsertMoveAndRemoveShareEveryRemainingMask) {
+  auto document = MakeDocumentWithMasks();
+  document.PrimaryGrade()->AddMask(MakeRadialMask("mask.c", 0.5f), 2);
+  const auto  frozen       = document.Freeze();
+  const auto* frozen_grade = frozen->PrimaryGrade();
+  const auto  frozen_json  = frozen->ToJson();
+
+  auto* grade = document.PrimaryGrade();
+  grade->AddMask(MakeRadialMask("mask.d", 0.4f), 0);
+  grade->MoveMaskForDisplay(MaskId{"mask.a"}, 3);
+  grade->RemoveMask(MaskId{"mask.b"});
+
+  const auto* working = std::as_const(document).PrimaryGrade();
+  ASSERT_EQ(working->MaskCount(), 3u);
+  EXPECT_EQ(working->MaskAt(0).id, MaskId{"mask.d"});
+  EXPECT_EQ(working->MaskAt(1).id, MaskId{"mask.c"});
+  EXPECT_EQ(working->MaskAt(2).id, MaskId{"mask.a"});
+  for (const char* id : {"mask.a", "mask.c"}) {
+    EXPECT_EQ(working->FindMask(MaskId{id}), frozen_grade->FindMask(MaskId{id})) << id;
+    EXPECT_EQ(working->MaskContentRevision(MaskId{id}),
+              frozen_grade->MaskContentRevision(MaskId{id}))
+        << id;
+  }
+  EXPECT_EQ(frozen->ToJson(), frozen_json);
+  EXPECT_EQ(frozen_grade->MaskCount(), 3u);
+  EXPECT_EQ(frozen_grade->MaskAt(0).id, MaskId{"mask.a"});
+}
+
+TEST(PipelineDocumentFreeze, MaskContentRevisionIsUniqueAcrossDocuments) {
+  auto first  = MakeDocumentWithMasks();
+  auto second = MakeDocumentWithMasks();
+  const MaskId a{"mask.a"};
+  EXPECT_NE(first.PrimaryGrade()->MaskContentRevision(a),
+            second.PrimaryGrade()->MaskContentRevision(a));
+
+  // The same write on both documents still takes two different stamps.
+  first.PrimaryGrade()->SetMaskOpacity(a, 0.3f);
+  second.PrimaryGrade()->SetMaskOpacity(a, 0.3f);
+  EXPECT_NE(first.PrimaryGrade()->MaskContentRevision(a),
+            second.PrimaryGrade()->MaskContentRevision(a));
+  EXPECT_NE(first.PrimaryGrade()->MaskContentRevision(a), kNoParameterRevision);
+}
+
+TEST(PipelineDocumentFreeze, ClonedDocumentKeepsMaskContentRevisions) {
+  auto document = MakeDocumentWithMasks();
+  document.PrimaryGrade()->SetMaskOpacity(MaskId{"mask.b"}, 0.6f);
+  const auto clone = ClonePipelineDocument(document);
+
+  for (const char* id : {"mask.a", "mask.b"}) {
+    EXPECT_EQ(clone.PrimaryGrade()->MaskContentRevision(MaskId{id}),
+              std::as_const(document).PrimaryGrade()->MaskContentRevision(MaskId{id}))
+        << id;
+  }
+  // Equal values and equal stamps: a renderer that applied the source does not redo the clone.
+  EXPECT_EQ(DocumentRevisionFingerprint(clone), DocumentRevisionFingerprint(document));
+}
+
+TEST(PipelineDocumentFreeze, MaskMetadataAndNoOpWritesKeepTheContentRevision) {
+  auto         document = MakeDocumentWithMasks();
+  auto*        grade    = document.PrimaryGrade();
+  const MaskId a{"mask.a"};
+  const auto   revision = grade->MaskContentRevision(a);
+
+  grade->SetMaskDisplayName(a, "Sky");
+  grade->SetMaskDeletionProtected(a, true);
+  EXPECT_EQ(grade->FindMask(a)->display_name, "Sky");
+  EXPECT_TRUE(grade->FindMask(a)->deletion_protected);
+  EXPECT_EQ(grade->MaskContentRevision(a), revision);
+
+  // Writing the current value stores nothing: same Mask object, same stamp.
+  const auto* stored = grade->FindMask(a);
+  grade->SetMaskEnabled(a, true);
+  grade->SetMaskInvert(a, false);
+  grade->SetMaskDisplayName(a, "Sky");
+  grade->SetMaskDeletionProtected(a, true);
+  EXPECT_EQ(grade->FindMask(a), stored);
+  EXPECT_EQ(grade->MaskContentRevision(a), revision);
+}
+
+TEST(PipelineDocumentFreeze, RejectedMaskWriteKeepsTheMaskAndItsRevision) {
+  auto         document = MakeDocumentWithMasks();
+  auto*        grade    = document.PrimaryGrade();
+  const MaskId a{"mask.a"};
+  const auto*  stored   = grade->FindMask(a);
+  const auto   revision = grade->MaskContentRevision(a);
+  const auto   json     = document.ToJson();
+
+  EXPECT_THROW(grade->SetMaskOpacity(a, 2.0f), std::runtime_error);
+  EXPECT_THROW(grade->SetMaskDisplayName(MaskId{"mask.missing"}, "x"), std::runtime_error);
+  EXPECT_THROW(grade->AddMask(MakeRadialMask("mask.a", 0.1f), 0), std::runtime_error);
+
+  EXPECT_EQ(grade->FindMask(a), stored);
+  EXPECT_EQ(grade->MaskContentRevision(a), revision);
+  EXPECT_EQ(document.ToJson(), json);
 }
 
 TEST(PipelineDocumentFreeze, RevisionFingerprintChangesWithEveryStampedWrite) {

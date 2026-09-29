@@ -208,7 +208,7 @@ class RuntimeInvalidationState {
 
   std::map<GraphValueId, std::vector<GraphValueId>> outgoing_;
   std::map<GraphValueId, Record>                    records_;
-  std::map<MaskKey, std::uint64_t>                  last_mask_revision_;
+  std::map<MaskKey, ParameterRevision>              last_mask_revision_;
   std::map<AdjustmentKey, ParameterRevision>        last_adjustment_revision_;
   std::map<NodeId, ParameterRevision>               last_mix_revision_;
   ParameterRevision                                 last_sensor_revision_ = kNoParameterRevision;

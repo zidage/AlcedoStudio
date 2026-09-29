@@ -16,7 +16,8 @@ criteria pass, except failures that exist before this phase (Section 15.12). G10
 services, and history presentation have no stage table; targeted suites pass; full `ctest` not
 run by user decision and manual check pending (Section 16.12). G10.8: complete. The executor is
 `PipelineExecutor` in `pipeline_executor.{hpp,cpp}`; targeted suites give the G10.7 counts except for
-two known flaky thumbnail pin-count cases (Section 17.12). G10.9: shared, CUDA, CPU, and operator
+two known flaky thumbnail pin-count cases (Section 17.12; both closed by the 2026-09-27 executor
+ownership refactor, see the note there). G10.9: shared, CUDA, CPU, and operator
 legacy files are archived and out of the Windows and macOS builds; the six source checks and the
 targeted suites pass on both platforms, except failures that exist before this phase; the full
 `ctest` run did not run (only the user starts it) (Section 18.12). G10.10: OpenCL, Metal, and
@@ -415,6 +416,16 @@ build. Do not create a new test with that word.
 ## 6. Target architecture
 
 ### 6.1 Owners after G10
+
+> **Superseded by 2026-09-27 executor ownership refactor**
+> ([plan](../../../refactor/2026-09-27-executor-ownership-refactor-plan.md), completed in P7 on
+> 2026-09-29). The `PipelineDocument`, `PipelineMgmtService`, and `PipelineExecutor` rows below no
+> longer describe the code. `PipelineGuard` is deleted. The editor session owns the one writable
+> document of the open image and publishes a committed `PipelineGraphSnapshot` at each commit.
+> `PipelineMgmtService` holds only the committed snapshot cache and the editor lease. Each render
+> owner holds its executors (editor 1, thumbnail and analysis pool 2, export 1), and each render
+> receives an immutable snapshot. The `Renderer<Backend>` row now reads "owned by an executor, bound
+> to one snapshot lineage"; the other rows still apply.
 
 | Owner | Input | Output | Changes | Reads only | Lifetime | Errors |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -2730,6 +2741,13 @@ defaults. History row presentation uses a `field_key` table.
 - The executor's public API used by services, scheduler, thumbnail, export, and editor stays
   source-compatible except for deleted legacy methods.
 
+> **Superseded by 2026-09-27 executor ownership refactor**
+> ([plan](../../../refactor/2026-09-27-executor-ownership-refactor-plan.md)). The second rule no
+> longer holds and is not a constraint on later work. The executor API was changed on purpose:
+> `Apply` takes a `PipelineGraphSnapshot` with each request (P3), every executor is constructed
+> with one role (P6, P7), and the services no longer reach an executor through `PipelineGuard`
+> (P4–P7).
+
 ### 16.5 Implementation steps
 
 1. Capture the history row title and icon for every field key on the unchanged branch into a
@@ -3166,6 +3184,18 @@ count changed between the comparison and the message. That is a timing race in t
 unsynchronized read of the pin count. A rename cannot cause it. The other 8 failures are the G10.7
 list: 5 `EditorSessionRenderSchedulerPortTest` sink-bind cases, `DiskCacheTracks...` (timeout),
 `MissingPipelineThrows`, and `MissingImageThrows`.
+
+> **Closed by 2026-09-27 executor ownership refactor**
+> ([plan](../../../refactor/2026-09-27-executor-ownership-refactor-plan.md)). Both flaky cases read
+> `PipelineGuard::pin_count_` without synchronization, and that field no longer exists.
+> `OrdinaryThumbnailReusesLiveEditorExecutorAndDocument` became
+> `ThumbnailRendersOnItsOwnExecutorAndLeavesTheLiveGuardUntouched` in P4 and
+> `ThumbnailRendersOnItsOwnExecutorAndLeavesTheEditorStateUntouched` in P7.
+> `AnalysisRenditionRendersWithoutSavePipelineOnLiveGuard` became
+> `AnalysisRenditionLeavesTheEditorLeaseAndWorkingDocumentUntouched` in P7. Neither reads a pin
+> count. The `pin_count_` that `ThumbnailServiceTest` still reads belongs to `ThumbnailGuard` in the
+> thumbnail memory cache, which is a different mechanism. The same note covers the G10.3 record
+> (Section 12.12) and the G10.9 run (Section 18.12).
 
 **Checklist / exit condition (Section 17.10)**
 

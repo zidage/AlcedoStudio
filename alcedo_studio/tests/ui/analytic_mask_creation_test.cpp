@@ -721,8 +721,8 @@ TEST(AnalyticMaskCreationTest, DeletingLastMaskRestoresFullGradeCoverage) {
   RadialMaskSource        radial;
   radial.major_radius = 0.20f;
   radial.minor_radius = 0.14f;
-  auto& mask   = grade_mask_test::AddRadialMask(harness.document, MaskId{"mask.last"}, radial);
-  mask.enabled = false;
+  grade_mask_test::AddRadialMask(harness.document, MaskId{"mask.last"}, radial);
+  harness.document.PrimaryGrade()->SetMaskEnabled(MaskId{"mask.last"}, false);
   harness.mix.EvaluateFull(harness.document.PrimaryGrade()->Masks());
   EXPECT_EQ(MixAt(harness.mix, 1, 1), 0);
   ASSERT_TRUE(

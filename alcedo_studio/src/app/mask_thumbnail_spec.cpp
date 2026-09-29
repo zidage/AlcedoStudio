@@ -268,7 +268,7 @@ auto MakeSingleMaskThumbnailSpec(const MaskThumbnailGeometry& geometry, const Ma
 }
 
 auto MakeGroupMaskThumbnailSpec(const MaskThumbnailGeometry& geometry,
-                                std::span<const MaskModel>   masks) -> MaskThumbnailSpec {
+                                MaskListView                 masks) -> MaskThumbnailSpec {
   MaskThumbnailSpec spec;
   spec.kind     = MaskThumbnailKind::Group;
   spec.geometry = geometry;

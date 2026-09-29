@@ -77,18 +77,17 @@ inline auto MakeLinearGradientMask(MaskId id, LinearGradientMaskSource source = 
   return mask;
 }
 
-inline auto AddMask(ColorGradeNodeModel& grade, MaskModel mask) -> MaskModel& {
+inline auto AddMask(ColorGradeNodeModel& grade, MaskModel mask) -> const MaskModel& {
   const auto id = mask.id;
   grade.AddMask(std::move(mask), grade.MaskCount());
-  auto* found = grade.FindMask(id);
-  return *found;
+  return *grade.FindMask(id);
 }
 
 #ifdef ALCEDO_ENABLE_BRUSH_MASK
 inline auto AddParameterizedBrushMask(PipelineDocument& document, MaskId id,
                                       std::vector<BrushStroke> strokes = {},
-                                      Vector2 translation = {}) -> MaskModel& {
-  auto& mask = AddMask(*document.PrimaryGrade(), MakeParameterizedBrushMask(
+                                      Vector2 translation = {}) -> const MaskModel& {
+  const auto& mask = AddMask(*document.PrimaryGrade(), MakeParameterizedBrushMask(
                                                      std::move(id), std::move(strokes), translation));
   document.MarkTopologyChanged();
   return mask;
@@ -96,8 +95,8 @@ inline auto AddParameterizedBrushMask(PipelineDocument& document, MaskId id,
 
 inline auto AddBrushMask(PipelineDocument& document, MaskId id, MaskAssetKey key,
                          MaskAssetDescriptor descriptor = {}, float feather = 0.0f,
-                         bool invert = false) -> MaskModel& {
-  auto& mask = AddMask(*document.PrimaryGrade(),
+                         bool invert = false) -> const MaskModel& {
+  const auto& mask = AddMask(*document.PrimaryGrade(),
                        MakeBrushMask(std::move(id), std::move(key), descriptor, feather, invert));
   document.MarkTopologyChanged();
   return mask;
@@ -105,8 +104,8 @@ inline auto AddBrushMask(PipelineDocument& document, MaskId id, MaskAssetKey key
 #endif
 
 inline auto AddRadialMask(PipelineDocument& document, MaskId id, RadialMaskSource source = {},
-                          bool invert = false) -> MaskModel& {
-  auto& mask =
+                          bool invert = false) -> const MaskModel& {
+  const auto& mask =
       AddMask(*document.PrimaryGrade(), MakeRadialMask(std::move(id), std::move(source), invert));
   document.MarkTopologyChanged();
   return mask;
@@ -114,8 +113,8 @@ inline auto AddRadialMask(PipelineDocument& document, MaskId id, RadialMaskSourc
 
 inline auto AddLinearGradientMask(PipelineDocument& document, MaskId id,
                                   LinearGradientMaskSource source = {}, bool invert = false)
-    -> MaskModel& {
-  auto& mask = AddMask(*document.PrimaryGrade(),
+    -> const MaskModel& {
+  const auto& mask = AddMask(*document.PrimaryGrade(),
                        MakeLinearGradientMask(std::move(id), std::move(source), invert));
   document.MarkTopologyChanged();
   return mask;
