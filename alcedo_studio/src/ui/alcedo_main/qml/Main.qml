@@ -533,6 +533,10 @@ ApplicationWindow {
         appDialogs.openBackgroundTasksDialog()
     }
 
+    function openLutImportDialog() {
+        appDialogs.openLutImportDialog()
+    }
+
     function openUpdateSettings() {
         appDialogs.openSettingsDialog(6)
     }

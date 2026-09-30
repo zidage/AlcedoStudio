@@ -119,9 +119,9 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   /// the image EXIF carries no lens maker/model. Same lifetime as exifLineText.
   Q_PROPERTY(QString exifLensMake READ exif_lens_make NOTIFY ImageExifChanged)
   Q_PROPERTY(QString exifLensModel READ exif_lens_model NOTIFY ImageExifChanged)
-  // Left tool rail page: empty string = collapsed; "history", "versions", or
-  // "nodes" = expanded. Survives workspace round-trips within the process
-  // (not persisted across application restart).
+  // Left tool rail page: empty string = collapsed; "history", "versions", "nodes",
+  // "maskgroups", or "luts" (LUT browser) = expanded. Survives workspace round-trips within the
+  // process (not persisted across application restart).
   Q_PROPERTY(QString editorToolPanelPage READ editor_tool_panel_page WRITE
                  set_editor_tool_panel_page NOTIFY DesktopUiChanged)
   Q_PROPERTY(bool presentationViewportBound READ presentation_viewport_bound NOTIFY

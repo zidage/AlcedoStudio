@@ -1,15 +1,15 @@
 # LUT Library and Package Management Plan
 
 Date: 2026-09-29  
-Status: L1, L2, and L3 complete (2026-09-29); L4 complete on Windows CUDA/OpenCL, Metal pixel tests written but not run (2026-09-29); L5 complete (2026-09-29; old panel model removal moves with L6); L6 not started; panel visual design intentionally blank  
+Status: L1, L2, and L3 complete (2026-09-29); L4 complete on Windows CUDA/OpenCL, Metal pixel tests written but not run (2026-09-29); L5 complete (2026-09-29; old panel model removal moves with L6A); L6 split into L6A (LUT browser) and L6B (LUT Settings and payload-free installers) on 2026-09-29; L6A implemented with automated evidence on Windows, manual visual checks pending (2026-09-29); L6B not started  
 Source revision: `dc73591020ef917fed089db7e4f454839d82051f`  
 Primary area: Alcedo Studio UI and application services  
 Parent: Standalone feature plan, indexed by the [roadmap index](../../README.md)  
 Issues: [#213](https://github.com/zidage/AlcedoStudio/issues/213) and
 [#215](https://github.com/zidage/AlcedoStudio/issues/215)
 
-This document defines six implementation phases. No phase is implemented by this plan.
-The panel visual design is intentionally blank. Live LUT image previews are outside this release.
+This document defines seven implementation phases (L6 is split into L6A and L6B). No phase is implemented by this plan.
+Section 6.5 records the L6A browser design; the Settings page design belongs to L6B. Live LUT image previews are outside this release.
 
 ## 1. Product decisions
 
@@ -87,7 +87,31 @@ These user decisions refine sections 4.2, 4.3, and 6.3. Later phases apply them.
    print option of a film. The browser shows only the film name; the print is an option of it.
 5. Header parsing and official-file hashing run on a bounded worker set, not one thread.
 
-### 1.4 Related work
+### 1.4 Decisions made for L6A (2026-09-29)
+
+These user decisions refine requirements 23-26 and sections 6.4 and 6.5. L6A and L6B apply them.
+
+1. L6 is split. **L6A** delivers the LUT browser and the small Editor LUT control.
+   **L6B** delivers LUT Settings (root selection and migration, package check, download, repair,
+   cancel, and retry) and removes LUT payloads from the installers. Payload removal stays with L6B
+   because the Settings download replaces the bundled files.
+2. The LUT browser is a **left-rail page of the Editor**, like History and Versions, not a
+   separate application route. It shares the Editor space, so the viewport stays visible and shows
+   the result of an applied LUT at once. This replaces the "separate LUT workspace" wording of
+   requirement 23; the browser is still one retained surface over one library model.
+3. The browser has **no target column**. A compact target indicator names the Color Grade that
+   receives a LUT, or the reason none can receive it.
+4. The browser has two cards. The **filter card** follows the Album inspector (uppercase section
+   titles and count bars). The **result card** shows the filtered LUTs as a grid of tiles with the
+   user-supplied Tabler `cube` icon as the image placeholder (no LUT image previews).
+5. Tile names are shown in full (wrapped, never elided). An official film simulation is titled
+   by film brand and stock (`Kodak Vision3 250D`); its print is not part of the title and is shown
+   as a separate line.
+6. Choosing a tile applies it to the target as one settled edit, so the Editor viewport shows it.
+   The design goal is the product's: a clear hierarchy, one obvious purpose per part, and a short
+   learning curve.
+
+### 1.5 Related work
 
 | Plan | Relationship |
 | --- | --- |
@@ -547,9 +571,46 @@ Revisit hidden editor presentation handling. Applying a LUT from its workspace m
 hidden `EditorViewportItem` acknowledgement. Use the existing session's hidden-workspace behavior and request
 the current frame when Editor becomes visible again. Verify this through the scheduler/service tests.
 
+L6A amendment (section 1.4): the browser is an Editor left-rail page, so opening it changes only
+`EditorSessionController::editorToolPanelPage`. It does not change the route, the image, the node
+selection, or viewport visibility. The hidden-viewport case above does not arise from the browser,
+and no route or shortcut audit is required for it.
+
 ### 6.5 Panel visual design
 
-<!-- Intentionally blank at the user's request. -->
+**L6A LUT browser (approved 2026-09-29, section 1.4).** Tokens and states follow
+`alcedo_studio/src/ui/alcedo_main/DESIGN.md`; this section records the composition.
+
+- **Placement.** Editor left rail button `LUTs` (existing `box.svg`) opens page `luts`. The page is
+  wider than History/Versions (`editorLutBrowserPanelWidth`) and never takes the viewport below
+  its minimum width. The rail panel shell is transparent for this page; the page paints two cards.
+- **Filter card** (`editorLutBrowserFilterWidth`): uppercase section titles, one count bar per
+  choice (Album inspector `StatsCard` bars). Sections: Category, Source, Brand, Print (With print /
+  No print), and a Favorites row. The chosen row has a 1 px outline over its count bar (no fill).
+  Choosing the selected bar again returns that dimension to All.
+  Brand and Print hide when the category is General or no candidate declares a print.
+  A Clear action appears when any predicate is active.
+- **Result card.** Top row: search field (native text input), sort menu, Import, Refresh, and
+  Open folder actions. Below it the target indicator: `Applies to` and the node name, and the
+  current LUT and its print on separate lines; without a target, the reason in muted text. The
+  indicator has no remove button.
+  Then the tile grid, and a footer with the result count.
+- **Tiles.** Cube icon placeholder, full wrapped title, optional print line, and a favorite star.
+  The applied tile has a 1 px outline (`graphSelectionOutlineColor`/`Width`) and no fill; hover
+  and keyboard focus use the quiet hover well. Invalid or 1D entries are muted and show their
+  status line. No pills, badges, or status dots. (Revised 2026-09-29 at the user's request: an
+  outline, not a filled well.)
+- **Input.** Click applies to the target (or only focuses when there is none); clicking the
+  applied tile again removes the LUT. Arrow keys move focus by one tile or one row and apply the
+  new tile; at a grid edge they do nothing. Enter or Space toggles the focused tile, Ctrl+F
+  focuses search.
+- **States.** Loading (library busy), empty library (Import and Open folder actions), zero
+  results (Clear filters action), error (`dangerColor` line with the service error), and a
+  rejected application (the controller's reason under the indicator).
+- **Editor LUT control** (right adjustment stack, `lut` page): current LUT name, print line,
+  Missing state, the 0-100 % strength slider, `Browse LUTs` (opens the rail page), and Remove.
+
+**L6B Settings page.** Not designed yet; ask the user before composing it.
 
 ## 7. File and module map
 
@@ -562,7 +623,8 @@ All paths below are repository-relative unless a drive is specified. Listed new 
 | L3 | `src/app/CMakeLists.txt`; root dependency setup; existing download/signature integration | `src/app/lut_package_install.cpp`; `src/app/lut_package_service.cpp`; matching headers; `LutPackageServiceTest`; `LutPackageManifestTest`; platform dependency instructions |
 | L4 | `src/edit/operators/models/lmt_model.cpp` and header; `src/app/editor_parameter_write*`; `src/app/editor_pipeline_command_service.cpp`; `src/app/editor_panel_projection.cpp`; pipeline construction; `src/edit/runtime/grade_lut.cpp`; `src/edit/runtime/adjustment_runtime.cpp`; three grade backends and shaders | `src/include/edit/runtime/lut_resource_resolver.hpp`; focused reference serialization helpers if needed; changes to existing model, history, transfer, cache, and GPU tests |
 | L5 | `src/ui/alcedo_main/album_backend/editor_lut_catalog_model.cpp` and header; panel presentation; session and application composition | `src/ui/alcedo_main/album_backend/lut_library_model.cpp`, `lut_library_controller.cpp`, `editor_lut_adjustment_model.cpp` and matching headers; `LutLibraryModelTest` |
-| L6 | `src/ui/alcedo_main/qml/LUTPanel.qml`, `EditorAdjustmentStack.qml`, `WorkspaceHost.qml`, `SettingDialog.qml`; `workspace_router.cpp` and header; application navigation; UI CMake; root CMake package rules; translations and relevant VI docs | `LutWorkspace.qml`; `LutSettingsPanel.qml`; focused router/service integration tests; artifact inspection script if existing packaging checks cannot express the assertion |
+| L6A | `src/ui/alcedo_main/qml/LUTPanel.qml` (removed), `EditorAdjustmentStack.qml`, `EditorWorkspaceRail.qml`, `EditorWorkspace.qml`; `editor_lut_catalog_model.*` and `editor_support/modules/lut_catalog.*` (removed); `editor_session_controller.cpp`; `lut_library_controller.*`; `utils/lut/lut_metadata.cpp`; AppTheme; UI CMake and resources; translations; `DESIGN.md` and `docs/VI` | `EditorLutBrowserPanel.qml`, `EditorLutFilterCard.qml`, `EditorLutResultCard.qml`, `EditorLutControlPanel.qml`; `panel_icons/lut-cube.svg`; `EditorLutBrowserPanelQmlTest` replacing `EditorLutPanelQmlTest` |
+| L6B | `SettingDialog.qml`; root CMake package rules; packaging scripts; translations and relevant VI docs | `LutSettingsPanel.qml`; focused Settings lifecycle tests; artifact inspection script if existing packaging checks cannot express the assertion |
 
 The `src/` prefix in this table means `alcedo_studio/src/`. Matching headers live under its `include/` tree.
 New class headers include defining headers. Do not copy existing forward declarations without an allowed reason.
@@ -578,15 +640,16 @@ Count the resulting maintenance changes in the phase estimate. Keep unrelated ed
 | L3 | Independent signed package checking, 7z installation, repair and cancellation | L1, L2 | 1500-1950 | Complete 2026-09-29; actual size exceeded the estimate (see its record). Settings QML stays in L6. |
 | L4 | Stable runtime references, missing-file behavior and LUT strength on all backends | L1, L2 | 1500-1950 | Complete on Windows 2026-09-29; Metal not run; actual size exceeded the estimate (see its record). |
 | L5 | Indexed classification, fuzzy search, favorites and exact-node application | L2, L4 | 1200-1750 | Complete 2026-09-29; no visual layout work; actual size exceeded the estimate (see its record). |
-| L6 | Independent navigation, Settings, small editor control and payload-free installers | L1-L5; separate visual design input | 1300-1900 | No preview worker. Not started. |
+| L6A | Editor left-rail LUT browser, target indicator, small Editor control, removal of the old panel and catalog | L1-L5; section 6.5 design | 1500-1950 | Implemented 2026-09-29; manual visual checks pending (see its record). |
+| L6B | LUT Settings (root, migration, package actions) and payload-free installers | L1-L5, L6A; Settings design input | 900-1400 | Not started. |
 
 Estimates include production code, tests, build files, resources, and documentation across repositories.
 Generated LUT tables and temporary evidence are excluded. These estimates are not implementation evidence.
-Count removed lines too. In particular, the existing `LUTPanel.qml` is about 1000 lines; L6 must
+Count removed lines too. In particular, the existing `LUTPanel.qml` is about 1000 lines; L6A must
 include its removal in the estimate. Its range assumes compact views backed by the completed L5 models.
 Recount before each phase and after visual design is supplied. Split a phase before implementation
 if its upper estimate can exceed 2000 lines. Do not compress tests or omit a backend to meet the limit.
-The sixth phase specifies behavior now; its visual composition remains intentionally undefined.
+L6A's composition is recorded in section 6.5; L6B's Settings composition still needs user input.
 
 ## 9. Detailed implementation phases
 
@@ -1609,63 +1672,247 @@ largest new file is `lut_library_model.cpp` (about 600 lines). `lut_library_serv
   not updated (lupdate is not run casually).
 - `GeometryWriteRejectedWhenColorGradeIsSelected` fails on the clean L4 commit and was not changed.
 
-### L6. Workspace integration and distribution change
+### L6A. LUT browser in the Editor
 
-**Objective and deliverables.** Integrate the independent LUT workspace, LUT Settings, and small Editor
-control. Ship both platforms without LUT payloads in the application.
+**Objective and deliverables.** Replace the old LUT panel with the section 6.5 browser: an Editor
+left-rail page with a filter card and a tile grid over the L5 model, a target indicator, and a
+small Editor LUT control. Remove the copied catalog (`EditorLutCatalogModel`, `lut_catalog`) and
+`LUTPanel.qml`.
 
-**Inputs and modules.** L1-L5 and the L6 file map. Complete the deliberately blank visual design in a
-separate user discussion before writing visual composition. This plan does not authorize an invented layout.
+**Inputs and modules.** L5 `LutLibraryModel`, `LutLibraryController`, and
+`EditorLutAdjustmentModel` (`appModules.lutBrowser`, `appModules.lutTarget`); section 1.4 decisions;
+section 6.5 design; the L6A file map.
 
-**Data rules.** Keep the editor session alive across LUT navigation. One Settings-open transition starts
-one remote check. A render request must not wait on a hidden editor presentation acknowledgement.
+**Data rules.** The rail page is Editor UI state (`editorToolPanelPage`); opening it never submits
+and never changes the image, node selection, or route. The browser owns no entry copies: tiles read
+model roles. A tile application is one settled edit through `LutLibraryController::applyEntry`.
+Official titles come from one metadata function so the browser, the indicator, and the stored LMT
+display name agree.
 
 **Implementation steps.**
 
-1. Add a LUT route that retains the current image and selected Color Grade. Add its left-navigation entry.
-2. Add the workspace using the L5 model and controller. Expose loading, empty, missing, invalid, and error states.
-3. Reduce the Editor LUT surface to association, strength, missing-state information, and Open LUT library.
-4. Add root selection/migration, Open folder, Refresh, two independent package actions, progress, cancel,
-   and retry to LUT Settings. Trigger the remote check from Settings opening, not panel construction.
-5. Register QML, resources, translations, and scoped keyboard behavior. Apply existing Basic style and AppTheme rules.
-6. Remove `alcedo_collect_packaged_luts`, `alcedo_install_packaged_luts`, and their two install call sites.
-   Inspect all broad config/resource copies so another install rule cannot reintroduce cube payloads.
-7. Preserve existing installed user data across application update and uninstall. Do not delete the home library.
-8. Inspect real Windows and macOS artifacts, then verify the signed package workflow from a clean user library.
+1. Add the `luts` Editor tool page and its rail button. Keep image, node, and target unchanged
+   across page changes.
+2. Add the browser page (filter card, result card, tiles) on the shared `lutBrowser` and
+   `lutTarget`. Expose loading, empty, zero-result, invalid, missing, and error states.
+3. Title official film simulations by brand and stock; show the print as a separate line in tiles,
+   the indicator, and the Editor control.
+4. Replace the `lut` adjustment page with the small control: association, print, Missing, strength,
+   Browse LUTs, and Remove.
+5. Remove `LUTPanel.qml`, `EditorLutCatalogModel`, and `lut_catalog` with their registrations and
+   tests; replace their QML test with a browser loading test.
+6. Register QML, the cube icon, AppTheme tokens, DESIGN.md/VI entries, and zh_CN translations.
+   Keep search as native text input and add scoped keyboard browsing.
 
-**Success chain.** Left navigation -> retained LUT workspace -> exact target application -> Editor strength
-adjustment -> Settings package install -> current resource invalidation -> correct rendered result.
+**Success chain.** Rail `LUTs` -> browser page -> filter/search -> tile -> exact target
+application -> viewport shows the result -> Editor control adjusts strength.
 
-**Failure and restore chain.** Invalid target or failed folder opening -> visible error with browsing preserved.
-Failed package download -> existing library remains usable. Application update -> home library survives.
-An empty first-run library offers download/import actions and does not silently choose a default LUT.
+**Failure and restore chain.** No or invalid target -> indicator reason, tile click only focuses,
+browsing preserved. Invalid entry or rejected write -> reason shown, document unchanged. Missing
+file -> Missing state in the indicator and Editor control; reference and strength kept.
+Empty library -> Import and Open folder actions; nothing is applied automatically.
 
 **Tests and evidence.**
 
-- `LutRoutePreservesImageAndNode`: owner/router test verifies image and target on round trips.
-- `HiddenEditorDoesNotBlockLutApplication`: service/scheduler test completes edits while the viewport is hidden.
+- `LutPagePreservesImageAndNode`: session owner test; switching to and from `luts` keeps the image,
+  the primary node, and the LUT target, and submits nothing.
+- `EditorLutControlReloadDoesNotCommit`: owner test; target reloads, node changes, and a missing
+  file restore strength and Missing state without submits.
+- `OfficialFilmTitleCombinesBrandAndStockWithoutPrint`: metadata test for the title rule.
+- `AssociationShowsPrintAsSeparateLine`: controller test for the print line of the association.
+- `EditorLutBrowserPanelQmlTest`: loads the browser and control from source with the real model and
+  controller; asserts no QML warnings, tile count equals the filtered count, full titles are not
+  elided, a filter bar changes the model predicate, and a tile activation reaches `applyEntry`.
+- Manual Windows: browse, filter, search, apply to different grades, strength, missing and
+  restored files, Import, Refresh, Open folder, both themes, narrow window, keyboard-only use.
+
+**Build and run.** Build `alcedo_main` and the focused targets that hold these tests
+(`LutLibraryModelTest`, `EditorNodeSelectionLayoutTest`, the LUT metadata test target,
+`EditorAdjustmentHeaderQmlTest`, `EditorLutBrowserPanelQmlTest`). Do not rely on
+`WorkspaceShellTest` for input delivery.
+
+**Exit criteria.**
+
+- [x] The browser page opens from the Editor rail and keeps image, node, and target.
+- [x] Filters, search, and tiles work over the shared model; titles are complete and exclude print.
+- [x] A tile applies to exactly the target; without a target, browsing works and nothing applies.
+- [x] The small Editor control loads current state without producing edits.
+- [x] The old panel, catalog model, and catalog module are removed.
+- [ ] Section 6.5 records the design; manual visual checks are recorded. (Design recorded; manual
+  checks not yet performed.)
+
+**Expected diff.** 1500-1950 lines including the removal of `LUTPanel.qml` (about 1000 lines).
+
+##### Phase L6A completion record (2026-09-29)
+
+**Status:** partial. Implementation and automated evidence are complete on Windows (debug).
+The manual visual, keyboard, and theme checks of section 6.5 and `docs/VI/README.md` have not
+been performed, so the last exit criterion stays open. No macOS build or run.
+
+**Source revision and branch.** `pu-erh_lab`, base `716ba5500` (L5), branch
+`feature/lut-browser-editor-panel`, uncommitted working tree.
+
+**Implemented modules.**
+
+| Module | Change |
+| --- | --- |
+| `qml/EditorLutBrowserPanel.qml` (new) | Rail page `luts`: filter card and result card over `appModules.lutBrowser`, `lutTarget`, `lutLibrary` |
+| `qml/EditorLutFilterCard.qml` (new) | Category, Source, Brand, Print facet rows with counts; choosing the selected row returns to All; Brand/Print hidden for General or when no candidate declares a print; Favorites only; Clear |
+| `qml/EditorLutResultCard.qml` (new) | Search (native `TextInput`), sort popup, Import/Refresh/Open folder, target indicator (node, LUT, print line, Missing, rejection reason; no remove button), tile grid in rows of `columns` (row height = tallest tile, full wrapped titles), loading/empty/zero-result states, count footer, registry-driven keyboard browsing |
+| `qml/EditorLutControlPanel.qml` (new) | Adjustment page `lut`: LUT name, print, Missing, strength slider (`EditorLutAdjustmentModel`), Browse LUTs, Remove |
+| `EditorWorkspaceRail.qml`, `EditorWorkspace.qml` | `LUTs` rail button and page; page width is `editorLutBrowserPanelWidth` capped by the space left after the viewport minimum; transparent shell for the two-card page |
+| `EditorAdjustmentStack.qml`, `EditorLookPanel.qml` | Old catalog model and `LUTPanel` replaced by the control |
+| `AppDialogs.qml`, `Main.qml` | `openLutImportDialog()` file dialog calling `lutLibrary.importFiles` |
+| `EditorSessionController::NormalizeToolPanelPage` | Accepts `luts` |
+| `LutDisplayName` (`utils/lut/lut_metadata`) | Official film title = brand + stock (brand not repeated); the print stays `LutPrintOptionName` |
+| `LutLibraryController` | `associationPrintName` (read from the listed entry; not persisted) |
+| Shortcut registry | `editor.lut`: Left/Right previous/next (were Up/Down); new `lut.selectAbove`/`lut.selectBelow` on Up/Down |
+| AppTheme, `DESIGN.md`, `docs/VI/README.md` | `editorLutBrowserPanelWidth` 640, `editorLutBrowserFilterWidth` 208, `editorLutTileMinWidth` 128, `editorLutTileIconSize` 36; LUT browser VI entries |
+| Resources | `panel_icons/lut-cube.svg` (user-supplied Tabler `cube`, stroke 1.5) |
+| Removed | `LUTPanel.qml`, `EditorLutCatalogModel`, `editor_support/modules/lut_catalog`, `EditorLutPanelQmlTest`, the catalog cases of `EditorLookModelTest` (their package-reference case moved to `LutLibraryControllerTest`) |
+| Tests support | `tests/ui/lut_target_test_support.hpp` (document-backed target source shared by the controller and QML tests); `TemporaryLutLibrary` root-preparation hook |
+| Translations | zh_CN entries for the new QML contexts, the rail, the import dialog, and the L5 target/choice strings (manual edit; lupdate not run); `LUTPanel` context removed |
+
+Decisions made during L6A, beyond section 1.4:
+
+1. A tile click, or an arrow key in the grid, applies to the target at once (one settled edit),
+   as selection did in the old panel. Choosing the applied tile again removes the LUT (one
+   clearing edit that keeps the strength); the browser has no separate remove button. An arrow
+   key at a grid edge does nothing. Without a target a click only moves focus.
+2. Tiles read model roles by row (`LutLibraryModel::data`) with a revision counter bumped on
+   model signals, so each row can take its tallest tile's height. No entry copies are kept.
+3. The filter rows follow the Album inspector layout but stay monochrome. Selection on tiles,
+   filter rows, and the sort menu is a 1 px outline with no fill (user revision, 2026-09-29).
+
+**Primary success call chain:**
+
+```text
+Editor rail "LUTs" -> editorSession.editorToolPanelPage = "luts" (UI state only)
+  -> EditorWorkspaceRail loads EditorLutBrowserPanel (lutBrowser, lutTarget, lutLibrary)
+facet row / search -> LutLibraryModel.setCategory|setSource|setBrand|setPrint|setQueryText
+  -> refilter / rerank -> modelReset -> result card rowCount -> visible tile rows
+  -> tile roles via LutLibraryModel::data -> LutLibraryService::ReadEntry
+tile click / arrow key -> EditorLutResultCard.activateEntry -> LutLibraryModel.focusEntry
+  -> (applied tile: LutLibraryController::clearAssociation) LutLibraryController::applyEntry
+  -> ReadTarget -> EditorLutWrite{reference, name}
+  -> EditorSessionController::SubmitTargetedWrite -> settled history commit
+  -> visible viewport renders the LUT -> AdjustmentSnapshotChanged -> controller reload
+  -> associationChanged -> applied tile outline, indicator name + print line, Editor control
+Editor control strength drag -> EditorLutAdjustmentModel -> strength-only lut writes
+Editor control "Browse LUTs" -> editorToolPanelPage = "luts"
+```
+
+**Primary failure call chain:**
+
+```text
+no photo / RAW or DRT / mask / not editable -> targetState != ready -> indicator shows
+  targetMessage; tile click focuses only; nothing submitted; browsing continues
+invalid or 1D entry -> muted tile with status line; applyEntry rejects -> lastError in red
+missing file -> association kept; indicator and control show the Missing line; restored on refresh
+empty library -> "No LUTs in the library" with Import and Open folder; nothing applied
+zero results -> "No LUTs match" with Clear search and filters
+Open folder / import failure -> lutLibrary.lastError shown under the grid
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `LutPagePreservesImageAndNode` | `EditorNodeSelectionLayoutTest` | PASS |
+| `EditorSessionToolPanelPage.AcceptsOnlyEmptyHistoryVersionsNodesAndLuts` | `EditorNodeSelectionLayoutTest` | PASS |
+| `EditorLutControlReloadDoesNotCommit` | `LutLibraryModelTest` (`LutLibraryControllerTest`) | PASS |
+| `AssociationShowsPrintAsSeparateLine` | `LutLibraryModelTest` (`LutLibraryControllerTest`) | PASS |
+| `ApplyingAPackageEntrySubmitsItsOfficialReference` (moved from the removed catalog tests) | `LutLibraryModelTest` | PASS |
+| `OfficialFilmTitleCombinesBrandAndStockWithoutPrint` | `LutMetadataTest` | PASS |
+| `BrowserLoadsFilterCardAndOneTilePerResultWithoutWarnings` | `EditorLutBrowserPanelQmlTest` | PASS |
+| `TileTitlesAreCompleteAndExcludeThePrint` (multi-line, not truncated) | `EditorLutBrowserPanelQmlTest` | PASS |
+| `FacetRowSelectsItsChoiceAndSecondChoiceReturnsToAll` | `EditorLutBrowserPanelQmlTest` | PASS |
+| `TileActivationTogglesTheTargetLutOnlyWhenATargetExists` (apply; outline on the applied tile; re-click clears; edge key is a no-op; no target only focuses) | `EditorLutBrowserPanelQmlTest` | PASS |
+| `LutControlLoadsWithoutSubmitAndOpensTheBrowserPage` | `EditorAdjustmentHeaderQmlTest` | PASS |
+| `QmlLoadFromTypedProjectionDoesNotSubmit` (updated) | `EditorAdjustmentSnapshotQmlTest` | PASS |
+| `RegisteredDefaultsResolveOnlyInsideTheirDeclaredScopes` (grid keys) | `ShortcutRegistryTest` | PASS |
+| `HiddenEditorDoesNotBlockLutApplication` | not applicable: the browser shares the visible Editor (section 1.4) | not written |
+
+Commands:
+
+```powershell
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target LutMetadataTest LutLibraryModelTest EditorNodeSelectionLayoutTest ShortcutRegistryTest EditorAdjustmentSnapshotQmlTest EditorAdjustmentHeaderQmlTest EditorLookModelTest EditorLutBrowserPanelQmlTest MainQmlWorkflowTest alcedo_main --parallel 4
+$env:PATH = "D:/Projects/pu-erh_lab/build/debug/vcpkg_installed/x64-windows/debug/bin;" + $env:PATH
+ctest --test-dir build/debug -R "^(LutMetadataTest|LutLibraryModelTest|EditorNodeSelectionLayoutTest|ShortcutRegistryTest|EditorAdjustmentSnapshotQmlTest|EditorAdjustmentHeaderQmlTest|EditorLookModelTest|EditorLutBrowserPanelQmlTest|MainQmlWorkflowTest)\." -j 4 --output-on-failure
+```
+
+Suite totals: build exit 0 (including `alcedo_main`); 190 discovered, 188 passed, 2 failed.
+`EditorNodeController.GeometryWriteRejectedWhenColorGradeIsSelected` also fails on the clean L4
+commit (L5 record). `MainQmlWorkflowTests.ProductionWindowLoadsAndRoutesCoreWorkspaceActions`
+fails only its no-warning assertion, on the `AppDialogs.qml` `Connections { onPasteFinished }`
+block for `adjustmentTransfer`, which this phase did not change (only its line number moved); it
+was not re-run on clean HEAD. The full suite and `WorkspaceShellTest` were not run (repository
+rule). No macOS build, no Release build, no manual run of the application.
+
+**Checklist / exit condition:** implementation steps 1-6 done; five of six exit criteria met; the
+manual visual checks remain.
+
+**LOC note (grill-code-review):** +2772/-3039 over 47 files (QML +1395/-1045, tests +680/-1142,
+zh_CN +349). Excluding translations and removed code, the new work is about 2400 lines, above the
+1500-1950 estimate, mainly the result card and the rewritten tests. The largest new file is
+`EditorLutResultCard.qml` (about 800 lines: toolbar, indicator, tile grid, states, and the tile
+component); moving the tile component into its own file is a possible follow-up.
+
+**Remaining gaps:**
+
+- Manual Windows checks (both themes, DPR 1.0/1.5, narrow window, keyboard-only, long names,
+  Missing file, Import, Open folder with Unicode/spaces) are not done.
+- `en.ts` was not updated (English falls back to source text); lupdate was not run.
+- The browser's empty state offers Import and Open folder only; the link to LUT Settings is L6B.
+- L6B (Settings page, remote check on Settings open, payload-free installers) is not started.
+
+### L6B. LUT Settings and payload-free installers
+
+**Objective and deliverables.** Integrate LUT Settings and ship both platforms without LUT payloads
+in the application.
+
+**Inputs and modules.** L1-L5, L6A, and the L6B file map. Obtain the Settings page design from the
+user before writing its visual composition.
+
+**Data rules.** One Settings-open transition starts one remote check. No check at startup or when
+the browser opens.
+
+**Implementation steps.**
+
+1. Add root selection/migration, Open folder, Refresh, two independent package actions, progress,
+   cancel, and retry to LUT Settings. Trigger the remote check from Settings opening.
+2. Link the browser's empty state to the LUT Settings page.
+3. Register QML, resources, and translations. Apply existing Basic style and AppTheme rules.
+4. Remove `alcedo_collect_packaged_luts`, `alcedo_install_packaged_luts`, and their two install call sites.
+   Inspect all broad config/resource copies so another install rule cannot reintroduce cube payloads.
+5. Preserve existing installed user data across application update and uninstall. Do not delete the home library.
+6. Inspect real Windows and macOS artifacts, then verify the signed package workflow from a clean user library.
+
+**Success chain.** Settings open -> one feed check -> package install -> current resource
+invalidation -> the browser lists the package -> correct rendered result.
+
+**Failure and restore chain.** Failed folder opening -> visible error. Failed package download ->
+existing library remains usable. Application update -> home library survives.
+
+**Tests and evidence.**
+
 - `SettingsOpenChecksOnceAndStartupDoesNotCheck`: lifecycle tests count feed requests.
-- `EditorLutControlReloadDoesNotCommit`: owner test verifies strength and missing-state restoration.
 - `PackagedApplicationContainsNoLutPayloads`: inspect `.app`, Windows install tree, and update archives for cubes.
 - `ApplicationUpdatePreservesHomeLutLibrary`: compare inventory and user bytes across a real update.
 - Manual Windows/macOS: open folder with Unicode/spaces; download either package; cancel/retry; migrate roots;
-  remove/restore the associated file; select different grades; search a 10,000-entry library; reopen a project.
-- Manual UI: keyboard-only operation, accessible names, both themes, narrow windows, no scroll jump, and no hidden target.
+  search a 10,000-entry library; reopen a project.
 
-**Build and run.** Build `alcedo_main` and the focused model/router/scheduler test targets actually used.
-Use the standard release packaging scripts and inspect their install trees. Record package inspection results
-separately from compilation. Do not enlarge or rely on `WorkspaceShellTest` for input-delivery evidence.
-Focused QML loading checks may supplement C++ owner tests after visual design exists.
+**Build and run.** Build `alcedo_main` and the focused Settings/service tests. Use the standard
+release packaging scripts and inspect their install trees. Record package inspection results
+separately from compilation.
 
 **Exit criteria.**
 
 - [ ] Both real platform packages contain no LUT payloads and can install either signed LUT package.
-- [ ] The LUT workspace preserves the exact editor target and works without a photo in browse-only mode.
-- [ ] The small Editor control loads current state without producing edits.
 - [ ] Settings trigger, folder opening, migration, cancellation, and error reporting pass manual checks.
-- [ ] Visual design and its manual evidence are recorded; section 6.5 is no longer blank when implementation completes.
+- [ ] The Settings design and its manual evidence are recorded in section 6.5.
 
-**Expected diff.** 1300-1900 lines. **Completion record:** Not started; fill section 12 for L6.
+**Expected diff.** 900-1400 lines. **Completion record:** Not started.
 
 ## 10. Build and evidence requirements
 
@@ -1723,7 +1970,7 @@ the visible library. Revisit an estimate before introducing a larger index or wo
 
 | Behavior | Observable result | Main phase |
 | --- | --- | --- |
-| Fresh install, no network | Empty local library; rendering without a chosen LUT works; no startup feed request | L2, L6 |
+| Fresh install, no network | Empty local library; rendering without a chosen LUT works; no startup feed request | L2, L6A, L6B |
 | Nested user folders | Every regular CUBE appears once with its full relative location | L2 |
 | Duplicate basenames and metadata IDs | Distinct user entries; no automatic cross-file selection | L2, L5 |
 | Signed old feed without expiry | Accepted when its sequence is trusted | L1, L3 |
@@ -1739,9 +1986,9 @@ the visible library. Revisit an estimate before introducing a larger index or wo
 | Strength boundaries and invalid numbers | 0/0.5/1 produce expected pixels; NaN and out-of-range writes are rejected atomically | L4 |
 | Undo/Redo, checkout, transfer, reopen | Exact reference and strength return without browser-generated commits | L4, L5 |
 | New generator with print metadata | All / With print / No print work; print film and paper share With print | L1, L5 |
-| No valid Color Grade | Search and browse work; apply is unavailable | L5, L6 |
-| Hidden Editor workspace | LUT edit completes and returning Editor shows the current result | L6 |
-| Packaged application and update | No LUT payloads inside; external library remains available | L6 |
+| No valid Color Grade | Search and browse work; apply is unavailable | L5, L6A |
+| LUT browser in the Editor | Browsing keeps image and target; an applied LUT shows in the visible viewport | L6A |
+| Packaged application and update | No LUT payloads inside; external library remains available | L6B |
 
 ## 11. Risks and implementation stop conditions
 
@@ -1754,14 +2001,14 @@ the visible library. Revisit an estimate before introducing a larger index or wo
 - The print export's display assumptions are real. Preserve and expose them; do not alter DRT selection as a hidden side effect.
 - Existing source files may use CRLF. If a file needs changes, follow the repository's separate LF-conversion commit rule.
 - Keep official classification when only content bytes change. Do not reopen the confirmed replacement policy in section 3.
-- Keep section 6.5 blank during this planning task. Ask for visual design before implementing visual composition.
+- Ask for visual design before implementing visual composition. Section 6.5 records the approved L6A design; L6B's Settings design is still open.
 - Split a phase if the expected diff can exceed 2000 lines, including terminology cleanup and tests.
 - Do not add a consistency protocol without the required production interleaving and executable test.
 - If current sources no longer match this audit, update affected owners and call chains before implementation.
 
 ## 12. Completion records
 
-L1, L2, L3, L4, and L5 are recorded under their phases. L6 is not started. Copy this record into the relevant phase after implementation:
+L1-L5 are recorded under their phases. L6A is recorded under its phase; L6B is not started. Copy this record into the relevant phase after implementation:
 
 ```text
 Phase / date / status:

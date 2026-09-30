@@ -48,6 +48,23 @@ Item {
         }
     }
 
+    // LUT browser Import (LUT library plan L6A): the library copies the files into its
+    // user folder and reports conflicts or failures through lutLibrary.lastError.
+    FileDialog {
+        id: lutImportDialogObj
+        title: qsTr("Import LUTs")
+        fileMode: FileDialog.OpenFiles
+        nameFilters: [qsTr("CUBE LUTs (*.cube *.CUBE)"), qsTr("All Files (*)")]
+        onAccepted: {
+            const files = []
+            for (let i = 0; i < selectedFiles.length; ++i) {
+                files.push(selectedFiles[i].toString())
+            }
+            if (appModules.lutLibrary)
+                appModules.lutLibrary.importFiles(files)
+        }
+    }
+
     FolderDialog {
         id: importFolderDialogObj
         title: qsTr("Select Folder to Import")
@@ -399,6 +416,10 @@ Item {
 
     function openBackgroundTasksDialog() {
         backgroundTasksDialogObj.open()
+    }
+
+    function openLutImportDialog() {
+        lutImportDialogObj.open()
     }
 
 }

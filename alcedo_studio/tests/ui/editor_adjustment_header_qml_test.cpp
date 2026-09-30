@@ -172,6 +172,8 @@ class HeaderSession final : public QObject, public IEditorAdjustmentSubmitter {
   Q_PROPERTY(QString exifApertureText READ exifApertureText NOTIFY ImageExifChanged)
   Q_PROPERTY(QString exifFocalText READ exifFocalText NOTIFY ImageExifChanged)
   Q_PROPERTY(QObject* maskCreation READ maskCreation CONSTANT)
+  // Editor left-rail page; the LUT control opens the `luts` page through it.
+  Q_PROPERTY(QString editorToolPanelPage MEMBER tool_panel_page_ NOTIFY toolPanelPageChanged)
 
  public:
   explicit HeaderSession(QObject* mask_creation = nullptr) : mask_creation_(mask_creation) {
@@ -221,6 +223,7 @@ class HeaderSession final : public QObject, public IEditorAdjustmentSubmitter {
   auto exifApertureText() const -> QString { return aperture_; }
   auto exifFocalText() const -> QString { return focal_; }
   auto maskCreation() const -> QObject* { return mask_creation_; }
+  auto toolPanelPage() const -> QString { return tool_panel_page_; }
 
   void setExif(const QString& shutter, const QString& iso, const QString& aperture,
                const QString& focal) {
@@ -267,8 +270,10 @@ class HeaderSession final : public QObject, public IEditorAdjustmentSubmitter {
   void AdjustmentSnapshotChanged();
   void activeAdjustmentPanelChanged();
   void ImageExifChanged();
+  void toolPanelPageChanged();
 
  private:
+  QString     tool_panel_page_;
   QVariantMap snapshot_;
   quint64     revision_               = 0;
   QString     panel_                  = QStringLiteral("tone");
@@ -388,57 +393,6 @@ class FakeAppModules final : public QObject {
 
  private:
   FakeEditorBehavior behavior_;
-};
-
-class FakeLutCatalogModel final : public QObject {
-  Q_OBJECT
-  Q_PROPERTY(QVariantList entries READ entries NOTIFY entriesChanged)
-  Q_PROPERTY(
-      QString selectedPath READ selectedPath WRITE setSelectedPath NOTIFY selectedPathChanged)
-  Q_PROPERTY(int selectedIndex READ selectedIndex NOTIFY selectedPathChanged)
-
- public:
-  FakeLutCatalogModel() {
-    QVariantList rows;
-    for (int i = 0; i < 40; ++i) {
-      QVariantMap row;
-      row.insert(QStringLiteral("kind"), QStringLiteral("file"));
-      row.insert(QStringLiteral("path"),
-                 QStringLiteral("D:/fake/lut_%1.cube").arg(i, 2, 10, QChar('0')));
-      row.insert(QStringLiteral("name"), QStringLiteral("LUT %1").arg(i, 2, 10, QChar('0')));
-      row.insert(QStringLiteral("valid"), true);
-      rows.push_back(row);
-    }
-    entries_ = rows;
-  }
-
-  auto entries() const -> QVariantList { return entries_; }
-  auto selectedPath() const -> QString { return selected_path_; }
-  void setSelectedPath(const QString& path) {
-    if (selected_path_ == path) {
-      return;
-    }
-    selected_path_ = path;
-    emit selectedPathChanged();
-  }
-  auto selectedIndex() const -> int {
-    for (int i = 0; i < entries_.size(); ++i) {
-      if (entries_[i].toMap().value(QStringLiteral("path")).toString() == selected_path_) {
-        return i;
-      }
-    }
-    return -1;
-  }
-  Q_INVOKABLE void refresh(bool /*force*/) {}
-  Q_INVOKABLE bool isFavoritePath(const QString&) const { return false; }
-
- signals:
-  void entriesChanged();
-  void selectedPathChanged();
-
- private:
-  QVariantList entries_;
-  QString      selected_path_;
 };
 
 auto QmlDirectory() -> QString {
@@ -854,29 +808,24 @@ TEST(EditorAdjustmentHeaderQmlTest, RawDecodeHostsWhiteBalanceAndLoadDoesNotSubm
   EXPECT_EQ(session.submitCount(), submits);
 }
 
-TEST(EditorAdjustmentHeaderQmlTest, LutSelectionAndScrollSurviveStackLoadWithoutSubmit) {
+// LUT library plan L6A: the `lut` page is the small LUT control. A snapshot load with a LUT field
+// does not submit, and Browse LUTs opens the Editor rail's LUT browser page.
+TEST(EditorAdjustmentHeaderQmlTest, LutControlLoadsWithoutSubmitAndOpensTheBrowserPage) {
   HeaderSession      session;
   FakeNodeController nodes;
   StackHarness       harness(&session, &nodes, 320);
   ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
 
-  auto* lut_panel = harness.find(QStringLiteral("editorAdjustmentPanel_lut"));
-  ASSERT_NE(lut_panel, nullptr);
-  auto lut_model = std::make_unique<FakeLutCatalogModel>();
-  lut_panel->setProperty("lutModel", QVariant::fromValue(static_cast<QObject*>(lut_model.get())));
-  ProcessEvents(80);
-
-  lut_model->setSelectedPath(QStringLiteral("D:/fake/lut_12.cube"));
   session.setActiveAdjustmentPanel(QStringLiteral("lut"));
   ProcessEvents(40);
-  auto* list = harness.find(QStringLiteral("editorLutListView"));
-  ASSERT_NE(list, nullptr);
-  if (list->property("contentHeight").toReal() > list->height() + 8.0) {
-    list->setProperty("contentY", 80.0);
-    ProcessEvents(20);
-  }
-  const qreal y_before = list->property("contentY").toReal();
-  const int   submits  = session.submitCount();
+  auto* lut_panel = harness.find(QStringLiteral("editorAdjustmentPanel_lut"));
+  ASSERT_NE(lut_panel, nullptr);
+  EXPECT_NE(harness.find(QStringLiteral("editorLutBrowseButton")), nullptr);
+  auto* name = harness.find(QStringLiteral("editorLutControlName"));
+  ASSERT_NE(name, nullptr);
+  // Without the application target the control shows no association.
+  EXPECT_FALSE(name->property("text").toString().isEmpty());
+  const int   submits = session.submitCount();
 
   QVariantMap lut_entry;
   lut_entry.insert(QStringLiteral("path"), QStringLiteral("D:/fake/lut_12.cube"));
@@ -885,8 +834,10 @@ TEST(EditorAdjustmentHeaderQmlTest, LutSelectionAndScrollSurviveStackLoadWithout
   ASSERT_TRUE(QMetaObject::invokeMethod(harness.root(), "loadFromSnapshot",
                                         Q_ARG(QVariant, QVariant::fromValue(snapshot))));
   ProcessEvents(40);
-  EXPECT_EQ(lut_model->selectedPath(), QStringLiteral("D:/fake/lut_12.cube"));
-  EXPECT_NEAR(list->property("contentY").toReal(), y_before, 1.5);
+  EXPECT_EQ(session.submitCount(), submits);
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(lut_panel, "openBrowser"));
+  EXPECT_EQ(session.toolPanelPage(), QStringLiteral("luts"));
   EXPECT_EQ(session.submitCount(), submits);
 }
 

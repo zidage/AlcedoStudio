@@ -1648,20 +1648,22 @@ alcedo_ui_gtest_discover_tests(DateCommitGraphQmlTest
 )
 alcedo_register_test_target(DateCommitGraphQmlTest ui)
 
-# LUT panel QML: selection scroll contract, favorites, filter, appTheme VI tokens.
-add_executable(EditorLutPanelQmlTest
-    ${ALCEDO_TEST_ROOT}/ui/editor_lut_panel_qml_test.cpp
+# LUT browser rail page QML (LUT library plan L6A): tiles, full titles, filter rows, and tile
+# application over the real LUT library model and target controller.
+add_executable(EditorLutBrowserPanelQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_lut_browser_panel_qml_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
 )
-target_include_directories(EditorLutPanelQmlTest
+target_include_directories(EditorLutBrowserPanelQmlTest
     PUBLIC ${ALCEDO_INCLUDE_DIR}
     PRIVATE ${ALCEDO_TEST_DIR}
 )
-target_link_libraries(EditorLutPanelQmlTest
+target_link_libraries(EditorLutBrowserPanelQmlTest
     PRIVATE
         AlbumBackendLib
         AppTheme
         GTest::gtest
+        JSON
         Qt6::Core
         Qt6::Test
         Qt6::Qml
@@ -1670,15 +1672,15 @@ target_link_libraries(EditorLutPanelQmlTest
         Qt6::Svg
         Qt6::Widgets
 )
-target_compile_definitions(EditorLutPanelQmlTest
+target_compile_definitions(EditorLutBrowserPanelQmlTest
     PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
 )
-set_target_properties(EditorLutPanelQmlTest PROPERTIES AUTOMOC ON)
-alcedo_ui_gtest_discover_tests(EditorLutPanelQmlTest
-    TEST_PREFIX "EditorLutPanelQmlTest."
+set_target_properties(EditorLutBrowserPanelQmlTest PROPERTIES AUTOMOC ON)
+alcedo_ui_gtest_discover_tests(EditorLutBrowserPanelQmlTest
+    TEST_PREFIX "EditorLutBrowserPanelQmlTest."
     PROPERTIES LABELS "workspace_qml;lut_panel"
 )
-alcedo_register_test_target(EditorLutPanelQmlTest ui)
+alcedo_register_test_target(EditorLutBrowserPanelQmlTest ui)
 
 # Export naming editor: pattern validity, ordered-field preview, and QML loading.
 add_executable(ExportNamingEditorQmlTest

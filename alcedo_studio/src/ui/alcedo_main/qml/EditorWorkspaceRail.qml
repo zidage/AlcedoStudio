@@ -28,6 +28,9 @@ Item {
     property real historyListContentY: 0
     property real versionsListContentY: 0
     property real maskGroupsListContentY: 0
+    property real lutsListContentY: 0
+    // Widest the expanded panel may be; the workspace keeps its viewport minimum.
+    property real maximumPanelWidth: appTheme.editorLutBrowserPanelWidth
     property string _lastBodyPage: ""
 
     readonly property bool versionCheckoutEnabled: editorSession
@@ -49,14 +52,17 @@ Item {
     readonly property string activePage: editorSession
                                          ? String(editorSession.editorToolPanelPage || "")
                                          : ""
-    readonly property bool panelExpanded: activePage === "history"
-                                          || activePage === "versions"
-                                          || activePage === "nodes"
-                                          || activePage === "maskgroups"
+    readonly property bool panelExpanded: isPanelPage(activePage)
     readonly property int railWidth: 68
     readonly property int expandedPanelWidth: {
         if (activePage === "nodes" || activePage === "maskgroups")
             return nodesLayoutStore.preferredPanelWidth
+        // LUT browser: filter card + tile grid (LUT library plan L6A), capped so the
+        // viewport keeps its minimum width, and never narrower than the other pages.
+        if (activePage === "luts")
+            return Math.round(Math.max(appTheme.editorSidePanelWidth,
+                                       Math.min(appTheme.editorLutBrowserPanelWidth,
+                                                root.maximumPanelWidth)))
         return appTheme.editorSidePanelWidth
     }
     readonly property int panelGap: appTheme.spaceSm
@@ -71,11 +77,11 @@ Item {
     readonly property bool layoutExpanded: root.panelOpenProgress > 0.001
     readonly property real panelRevealWidth: (panelGap + expandedPanelWidth) * panelOpenProgress
     readonly property real totalWidth: railWidth + panelRevealWidth
-    readonly property string bodyPage: {
-        if (activePage === "history" || activePage === "versions" || activePage === "nodes"
-                || activePage === "maskgroups")
-            return activePage
-        return _lastBodyPage
+    readonly property string bodyPage: isPanelPage(activePage) ? activePage : _lastBodyPage
+
+    function isPanelPage(page) {
+        return page === "history" || page === "versions" || page === "nodes"
+                || page === "maskgroups" || page === "luts"
     }
 
     readonly property string statusMessage: {
@@ -150,6 +156,8 @@ Item {
             versionsListContentY = y
         else if (_lastBodyPage === "maskgroups")
             maskGroupsListContentY = y
+        else if (_lastBodyPage === "luts")
+            lutsListContentY = y
     }
 
     function applyBodyScrollRestore() {
@@ -163,6 +171,8 @@ Item {
             y = versionsListContentY
         else if (bodyPage === "maskgroups")
             y = maskGroupsListContentY
+        else if (bodyPage === "luts")
+            y = lutsListContentY
         body.restoreListContentY(y)
     }
 
@@ -171,8 +181,7 @@ Item {
         // Keep the last non-empty page so a closing fold can clip that body
         // until panelOpenProgress reaches 0.
         captureBodyScroll()
-        if (activePage === "history" || activePage === "versions" || activePage === "nodes"
-                || activePage === "maskgroups")
+        if (isPanelPage(activePage))
             _lastBodyPage = activePage
     }
 
@@ -265,6 +274,16 @@ Item {
                 onClicked: root.selectPage("maskgroups")
             }
 
+            RailButton {
+                id: lutsRailButton
+                objectName: "editorLutsRailButton"
+                selected: root.activePage === "luts"
+                iconSrc: "qrc:/panel_icons/box.svg"
+                label: qsTr("LUTs")
+                actionName: selected ? qsTr("Hide LUT Browser") : qsTr("Show LUT Browser")
+                onClicked: root.selectPage("luts")
+            }
+
             // Separates the panel toggles above from the dialog launcher below.
             Rectangle {
                 width: parent.width
@@ -305,8 +324,9 @@ Item {
             height: parent.height
             x: 0
             radius: root.panelRadius
-            color: root.colCardSurface
-            border.width: 1
+            // The LUT browser paints its own two cards; its shell stays transparent.
+            color: root.bodyPage === "luts" ? "transparent" : root.colCardSurface
+            border.width: root.bodyPage === "luts" ? 0 : 1
             border.color: root.colCardBorder
 
             Loader {
@@ -315,9 +335,7 @@ Item {
                 anchors.fill: parent
                 // Keep the last body mounted while a close fold is in flight.
                 // A fully closed rail (progress ≈ 0) owns no list or graph delegates.
-                active: root.layoutExpanded
-                        && (root.bodyPage === "history" || root.bodyPage === "versions"
-                            || root.bodyPage === "nodes" || root.bodyPage === "maskgroups")
+                active: root.layoutExpanded && root.isPanelPage(root.bodyPage)
                 asynchronous: false
                 sourceComponent: {
                     if (root.bodyPage === "history")
@@ -328,6 +346,8 @@ Item {
                         return nodesBodyComponent
                     if (root.bodyPage === "maskgroups")
                         return maskGroupsBodyComponent
+                    if (root.bodyPage === "luts")
+                        return lutsBodyComponent
                     return null
                 }
 
@@ -397,6 +417,21 @@ Item {
             Component.onDestruction: {
                 if (root._lastBodyPage === "maskgroups" && listContentY !== undefined)
                     root.maskGroupsListContentY = Number(listContentY || 0)
+                root._panelBodyDestroyCount += 1
+            }
+        }
+    }
+
+    Component {
+        id: lutsBodyComponent
+        // One browser over the application-wide LUT model and target.
+        EditorLutBrowserPanel {
+            theme: root.theme
+            editorSession: root.editorSession
+            host: root.host
+            Component.onDestruction: {
+                if (root._lastBodyPage === "luts" && listContentY !== undefined)
+                    root.lutsListContentY = Number(listContentY || 0)
                 root._panelBodyDestroyCount += 1
             }
         }

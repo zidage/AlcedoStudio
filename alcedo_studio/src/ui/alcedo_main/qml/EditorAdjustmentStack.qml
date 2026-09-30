@@ -110,12 +110,6 @@ Item {
     }
 
     property int lastAppliedRevision: -1
-    EditorLutCatalogModel {
-        id: lutModel
-        objectName: "adjustmentStackLutModel"
-        submitter: root.editorSession
-        library: typeof appModules !== "undefined" && appModules ? appModules.lutLibrary : null
-    }
 
     function loadFromSnapshot(snapshot) {
         if (!editorSession)
@@ -299,15 +293,15 @@ Item {
                         theme: root.theme
                         editorSession: root.editorSession
                         controlsEnabled: root.controlsEnabled
-                        lutModel: lutModel
                     }
 
-                    LUTPanel {
+                    // Strength and association only; choosing a LUT is the Editor rail's
+                    // LUT browser page (LUT library plan L6A).
+                    EditorLutControlPanel {
                         id: lutPanel
                         objectName: "editorAdjustmentPanel_lut"
                         theme: root.theme
                         editorSession: root.editorSession
-                        lutModel: lutModel
                         controlsEnabled: root.controlsEnabled
                     }
 

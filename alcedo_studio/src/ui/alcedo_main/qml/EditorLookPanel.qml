@@ -6,14 +6,14 @@ import Alcedo.Main 1.0
 // Color Grade Look panel: global color amount, selective HSL, CDL
 // trackballs (Gamma top / Lift+Gain bottom), plus Detail and Texture.
 // Camera white balance lives on the RAW Decode page; the Color section holds the
-// CAT02 grade white balance. LUT is LUTPanel.qml.
+// CAT02 grade white balance. LUT strength is EditorLutControlPanel.qml; choosing a LUT is
+// the Editor rail's LUT browser (EditorLutBrowserPanel.qml).
 Item {
     id: root
     objectName: "editorAdjustmentPanel_look"
 
     property var theme: null
     property var editorSession: null
-    property var lutModel: null
     property bool controlsEnabled: true
 
     readonly property color colText: theme ? theme.colText : appTheme.textColor

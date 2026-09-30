@@ -215,9 +215,11 @@ void LutLibraryController::LoadAssociation(const TargetRead& read) {
   }
   const QString entry_id = EntryIdForReference(value.reference);
   QString       name     = ToQString(value.display_name);
-  if (name.isEmpty() && library_ && !entry_id.isEmpty()) {
+  QString       print_name;
+  if (library_ && !entry_id.isEmpty()) {
     library_->ReadEntryById(ToUtf8(entry_id), [&](const LutLibraryEntry& entry) {
-      name = ToQString(entry.DisplayName());
+      if (name.isEmpty()) name = ToQString(entry.DisplayName());
+      print_name = ToQString(entry.PrintOptionName());
     });
   }
   if (name.isEmpty()) {
@@ -230,13 +232,14 @@ void LutLibraryController::LoadAssociation(const TargetRead& read) {
     }
   }
   if (value.reference == reference_ && entry_id == association_entry_id_ &&
-      name == association_name_ && static_cast<double>(value.strength) == strength_ &&
-      missing == missing_) {
+      name == association_name_ && print_name == association_print_name_ &&
+      static_cast<double>(value.strength) == strength_ && missing == missing_) {
     return;
   }
-  reference_            = std::move(value.reference);
-  association_entry_id_ = entry_id;
-  association_name_     = name;
+  reference_              = std::move(value.reference);
+  association_entry_id_   = entry_id;
+  association_name_       = name;
+  association_print_name_ = print_name;
   strength_             = static_cast<double>(value.strength);
   missing_              = missing;
   emit associationChanged();

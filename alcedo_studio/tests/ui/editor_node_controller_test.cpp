@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 
 #include <QCoreApplication>
+#include <QSignalSpy>
 #include <QTranslator>
 #include <algorithm>
 #include <optional>
@@ -28,13 +29,13 @@
 #include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "grade_owned_mask_support.hpp"
+#include "lut_library_model_test_support.hpp"
 #include "type/type.hpp"
 #include "ui/alcedo_main/album_backend/alcedo_qan_graph.hpp"
 #include "ui/alcedo_main/album_backend/editor_node_graph_presentation.hpp"
 #include "ui/alcedo_main/album_backend/editor_node_layout_store.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
 #include "ui/alcedo_main/album_backend/lut_library_controller.hpp"
-#include "lut_library_model_test_support.hpp"
 
 namespace {
 
@@ -376,6 +377,41 @@ TEST(EditorNodeController, LutTargetFollowsSelectionAndQueuesTheCapturedGrade) {
   EXPECT_EQ(target.state(), alcedo::ui::LutTargetState::kNotColorGrade);
   EXPECT_FALSE(target.applyEntry(QStringLiteral("library:looks/teal.cube")));
   EXPECT_EQ(backend.enqueue_count(), 1);
+}
+
+// Plan L6A: the LUT browser is an Editor left-rail page. Opening it, switching to another page,
+// and closing it are UI state only: the image, the primary node, and the LUT target stay, and
+// nothing is submitted.
+TEST(EditorNodeController, LutPagePreservesImageAndNode) {
+  alcedo::ui::test::TemporaryLutLibrary library(
+      {{"looks/teal.cube", alcedo::ui::test::CubeWithMetadata({})}});
+  DocumentSessionBackend backend;
+  ASSERT_TRUE(
+      alcedo::AddCleanColorGrade(backend.Document(), NodeId{"drt"}, NodeId{"grade.extra"}).empty());
+  EditorSessionController session(&backend);
+  EditorNodeController    nodes;
+  nodes.set_editor_session(&session);
+  alcedo::ui::LutLibraryController target;
+  target.setLibrary(library.Service());
+  target.setEditorSession(&session);
+  nodes.selectNode(QStringLiteral("grade.extra"));
+  ASSERT_TRUE(target.canApply()) << target.targetMessage().toStdString();
+  const bool has_image = session.has_image();
+  const uint image_id  = session.image_id();
+  QSignalSpy target_changes(&target, &alcedo::ui::LutLibraryController::targetChanged);
+
+  for (const QString& page :
+       {QStringLiteral("luts"), QStringLiteral("nodes"), QStringLiteral("LUTS"), QString()}) {
+    session.set_editor_tool_panel_page(page);
+    EXPECT_EQ(session.editor_tool_panel_page(), page.toLower());
+    EXPECT_EQ(session.has_image(), has_image);
+    EXPECT_EQ(session.image_id(), image_id);
+    EXPECT_EQ(nodes.selected_node_id(), NodeId{"grade.extra"});
+    EXPECT_EQ(target.targetNodeId(), QStringLiteral("grade.extra"));
+    EXPECT_TRUE(target.canApply());
+  }
+  EXPECT_EQ(target_changes.count(), 0);
+  EXPECT_EQ(backend.enqueue_count(), 0);
 }
 
 TEST(EditorNodeController, TopologyEditSelectsTheSurvivingDownstreamNode) {
@@ -941,8 +977,10 @@ TEST(EditorNodeController, KnownDraftIssuesArePresentedAndUnknownFailuresKeepExa
   QCoreApplication::removeTranslator(&translator);
 }
 
-TEST(EditorSessionToolPanelPage, AcceptsOnlyEmptyHistoryVersionsAndNodes) {
+TEST(EditorSessionToolPanelPage, AcceptsOnlyEmptyHistoryVersionsNodesAndLuts) {
   EditorSessionController session;
+  session.set_editor_tool_panel_page(QStringLiteral("luts"));
+  EXPECT_EQ(session.editor_tool_panel_page(), QStringLiteral("luts"));
   session.set_editor_tool_panel_page(QStringLiteral("history"));
   EXPECT_EQ(session.editor_tool_panel_page(), QStringLiteral("history"));
   session.set_editor_tool_panel_page(QStringLiteral("versions"));

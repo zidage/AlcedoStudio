@@ -255,7 +255,7 @@ When changing adjustment / catalog panels:
 
 1. **Model unit tests** — load-only vs submit, no spurious `entriesChanged` on
    select, favorites, filter.
-2. **QML harness tests** (see `editor_lut_panel_qml_test.cpp` pattern):
+2. **QML harness tests** (see `editor_lut_browser_panel_qml_test.cpp` pattern):
    - Load production QML via `Loader` + `appTheme` context
    - Controllable fake model when filesystem catalog is unnecessary
    - Assert `selectedPath` after `loadFromSnapshot`
@@ -302,7 +302,8 @@ When changing adjustment / catalog panels:
 - Style: `alcedo_studio/src/ui/alcedo_main/main.cpp` (`QQuickStyle::Basic`)
 - Icon action: `qml/IconActionButton.qml`
 - Stack fan-out: `qml/EditorAdjustmentStack.qml`
-- Example panel: `qml/LUTPanel.qml`
-- Example tests: `tests/ui/editor_lut_panel_qml_test.cpp`,
+- Example panels: `qml/EditorLutBrowserPanel.qml` (rail page over a C++ list model),
+  `qml/EditorTonePanel.qml` (adjustment page)
+- Example tests: `tests/ui/editor_lut_browser_panel_qml_test.cpp`,
   `tests/ui/editor_look_model_test.cpp`
 )

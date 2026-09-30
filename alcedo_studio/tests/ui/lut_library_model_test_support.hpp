@@ -14,6 +14,7 @@
 #include <QTest>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <random>
@@ -85,14 +86,18 @@ class FixedLutRootPreferences final : public LutLibraryPreferences {
 /// A started LutLibraryService over a temporary root under the test working directory.
 class TemporaryLutLibrary {
  public:
-  /// @p files are root-relative paths and their file contents.
-  explicit TemporaryLutLibrary(const std::vector<std::pair<std::string, std::string>>& files,
-                               const LutLibraryInventory* persisted_inventory = nullptr) {
+  /// @p files are root-relative paths and their file contents. @p prepare_root runs after the
+  /// files are written and before the service starts (for example, to write package receipts).
+  explicit TemporaryLutLibrary(
+      const std::vector<std::pair<std::string, std::string>>&  files,
+      const LutLibraryInventory*                               persisted_inventory = nullptr,
+      const std::function<void(const std::filesystem::path&)>& prepare_root        = {}) {
     std::random_device device;
     root_ = std::filesystem::current_path() / "lut_library_model_test" / std::to_string(device());
     std::filesystem::create_directories(root_);
     root_ = std::filesystem::weakly_canonical(root_);
     for (const auto& [relative, contents] : files) Write(relative, contents);
+    if (prepare_root) prepare_root(root_);
     if (persisted_inventory != nullptr) {
       EXPECT_TRUE(WriteLutLibraryInventoryFile(root_, *persisted_inventory).empty());
     }

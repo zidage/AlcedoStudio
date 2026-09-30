@@ -137,10 +137,14 @@ TEST_F(ShortcutRegistryTest, RegisteredDefaultsResolveOnlyInsideTheirDeclaredSco
             QLatin1String(shortcut_id::kFilmstripSelectAll));
   EXPECT_EQ(registry->commandIdForKey(versions, Qt::Key_A, Qt::ControlModifier),
             QLatin1String(shortcut_id::kVersionsCreateDefaultFromRoot));
-  EXPECT_EQ(registry->commandIdForKey(lut, Qt::Key_Up, Qt::NoModifier),
+  EXPECT_EQ(registry->commandIdForKey(lut, Qt::Key_Left, Qt::NoModifier),
             QLatin1String(shortcut_id::kLutSelectPrevious));
-  EXPECT_EQ(registry->commandIdForKey(lut, Qt::Key_Down, Qt::NoModifier),
+  EXPECT_EQ(registry->commandIdForKey(lut, Qt::Key_Right, Qt::NoModifier),
             QLatin1String(shortcut_id::kLutSelectNext));
+  EXPECT_EQ(registry->commandIdForKey(lut, Qt::Key_Up, Qt::NoModifier),
+            QLatin1String(shortcut_id::kLutSelectAbove));
+  EXPECT_EQ(registry->commandIdForKey(lut, Qt::Key_Down, Qt::NoModifier),
+            QLatin1String(shortcut_id::kLutSelectBelow));
   EXPECT_EQ(registry->commandIdForKey(mask, Qt::Key_Escape, Qt::NoModifier),
             QLatin1String(shortcut_id::kMaskFinishEdit));
   EXPECT_EQ(registry->commandIdForKey(mask, Qt::Key_Delete, Qt::NoModifier),
@@ -153,7 +157,7 @@ TEST_F(ShortcutRegistryTest, RegisteredDefaultsResolveOnlyInsideTheirDeclaredSco
             QLatin1String(shortcut_id::kNodesDeleteSelection));
 
   // Bindings never leak into a scope that did not declare them.
-  EXPECT_EQ(registry->commandIdForKey(lut, Qt::Key_Left, Qt::NoModifier), QString());
+  EXPECT_EQ(registry->commandIdForKey(lut, Qt::Key_Delete, Qt::NoModifier), QString());
   EXPECT_EQ(registry->commandIdForKey(library, Qt::Key_Z, Qt::ControlModifier), QString());
   EXPECT_EQ(registry->commandIdForKey(editor, Qt::Key_A, Qt::ControlModifier), QString());
   EXPECT_EQ(registry->commandIdForKey(nodes, Qt::Key_S, Qt::ControlModifier), QString());

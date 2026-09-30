@@ -223,7 +223,7 @@ parallel palette to satisfy the policy.
 | **List favorite idle on selected** | **`editorListFavoriteIdleOnSelectedColor`** | **Unstarred glyph inverted on the light well** |
 | **List favorite active on selected** | **`editorListFavoriteActiveOnSelectedColor`** | **Starred glyph inverted on the light well** (full ink) |
 
-**Monochrome inverted list selection:** dense catalogs (LUT panel first) keep a
+**Monochrome inverted list selection:** dense catalogs (the LUT browser first) keep a
 black-and-white row language — sunken `bgBaseColor` track, light
 `editorListSelectedFillColor` bar, `editorListSelectedInkColor` for title and
 secondary copy. Favorite stars **invert with the row**: muted light idle + the
@@ -250,14 +250,14 @@ LUT and is unchanged by the History/Versions refactor.
 sunken track border. Use `spaceXs` as list track padding (`ListView` margins)
 and as inter-row gap (`ListView.spacing`) so track color frames every well.
 
-**LUT selection chrome (required):** one sliding `editorLutSelectionChrome`
-rectangle parented to `ListView.contentItem` paints the light well. Do **not**
-per-row `opacity` fills — recycled delegates start already selected so
-`Behavior on opacity` never runs. Nearby selection moves animate `y`
-(`motionFoldOpenMs`, `OutCubic`); long jumps (distance > viewport height) snap
-`y` and fade opacity in. Snapshot echo must **not** call catalog `refresh`
-when the path is already in the model (that reassigns the list and hitch
-`contentY`). Hover wells use the same inset geometry.
+**LUT browser tiles (LUT library plan L6A):** the LUT browser is an Editor
+rail page with a filter card and a tile grid (see `docs/VI/README.md`). It is
+an outline-selection surface: the applied tile, the chosen filter row, and the
+current sort order draw a 1 px `graphSelectionOutlineColor` outline
+(`graphSelectionOutlineWidth`) with no fill and no ink inversion. Hover and
+keyboard focus use the quiet `buttonHoveredFillColor` well. Tiles sit inside a
+sunken `bgBaseColor` well with `spaceXs` gaps. Selecting or starring a tile
+never resets the tile rows or moves the scroll position.
 
 **Monochrome segmented controls (family):** four chrome sites share one language:
 
@@ -392,6 +392,10 @@ the two side columns read as one family.
 | `editorSidePanelWidthMax` | 460 | Adjustment stack maximum |
 | `editorScopeHeight` | 192 | Histogram / waveform slot preferred height |
 | `editorScopeHeightMin` | 160 | Histogram / waveform slot minimum height |
+| `editorLutBrowserPanelWidth` | 640 | LUT browser rail page (filter card + tile grid); capped so the viewport keeps its minimum width |
+| `editorLutBrowserFilterWidth` | 208 | LUT browser filter card width |
+| `editorLutTileMinWidth` | 128 | Minimum LUT tile width; the grid fits as many columns as this allows |
+| `editorLutTileIconSize` | 36 | LUT tile cube placeholder icon |
 | `editorAdjustmentHeaderMinHeight` | 58 | Node-name / EXIF header under the scope: EXIF caption line, `spaceXs` gap, compact Mask-tool row |
 | `collectionsSidebarWidth` | 276 | Persistent left collections column |
 
@@ -821,6 +825,9 @@ Visible strings are product language only. Ban developer placeholders such as
 | Nodes pending command | “Updating node graph” |
 | Adjustment empty (no image) | “Select an image to enable adjustments” |
 | Adjustment empty (has image) | “No adjustments yet” |
+| LUT browser, empty library | “No LUTs in the library” / “Import .cube files, or copy them into the LUT folder and refresh.” |
+| LUT browser, no results | “No LUTs match” / “Change the search or the filters to see more LUTs.” |
+| LUT browser, loading | “Loading LUT library” |
 
 ---
 
@@ -833,7 +840,7 @@ blocking. Session identity is never recreated by a fold.
 | --- | --- | --- |
 | `motionFoldOpenMs` | 200 | Opening fold (emphasized); also capsule thumb slide floor |
 | `motionFoldCloseMs` | 160 | Closing fold (slightly faster) |
-| `motionFadeMs` | 120 | Short fades — **LUT list selected well opacity**; project-load overlay hold before fade-out |
+| `motionFadeMs` | 120 | Short fades; project-load overlay hold before fade-out |
 | `motionEasing` | `QEasingCurve::OutCubic` (QML `Easing.OutCubic`) | Fold and fade easing. Bind `easing.type: appTheme.motionEasing` |
 | `backgroundTaskAutoCollapseMs` | 3000 | Time the task summary remains expanded after a task state changes |
 | `reduceMotion` | `QSettings("ui/reduceMotion")` | When true, all fold/fade/slide durations resolve to **0**; final state unchanged |
@@ -842,7 +849,6 @@ blocking. Session identity is never recreated by a fold.
 
 | Surface | Motion | Notes |
 | --- | --- | --- |
-| LUT list selected well | Single sliding chrome: nearby `y` slide (`motionFoldOpenMs`); long jump snaps + opacity fade-in | Never per-delegate opacity; never flush to track; no catalog refresh on same-path snapshot echo |
 | Workspace + adjustment thumbs | Slide on `x` (OutBack, land scale pulse) | Documented capsule exception to “no overshoot” for mechanical feel |
 | Display method segments | Instant fill swap (optional future fade) | Title-only wells inside shared track |
 | Project loading overlay | Snap on immediately; after load, hold `motionFadeMs` then fade out `motionFoldCloseMs` | No fade-in — that flashed the empty library after Welcome closed |

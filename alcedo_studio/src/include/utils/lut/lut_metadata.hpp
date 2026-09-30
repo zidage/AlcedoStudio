@@ -117,8 +117,10 @@ inline constexpr std::size_t kLutMetadataLineLimitBytes = 16 * 1024;
 
 /// Return the browser name of a LUT.
 ///
-/// An `origin: alcedo` film simulation shows only its film name; its print is a
-/// separate option (`LutPrintOptionName`). Every other file shows @p file_stem.
+/// An `origin: alcedo` film simulation is titled by film brand and stock
+/// (`Kodak Vision3 250D`; the brand is not repeated when the film name already
+/// starts with it). Its print is not part of the title; it is a separate option
+/// (`LutPrintOptionName`). Every other file shows @p file_stem.
 [[nodiscard]] auto LutDisplayName(const LutHeader& header, std::string_view file_stem)
     -> std::string;
 

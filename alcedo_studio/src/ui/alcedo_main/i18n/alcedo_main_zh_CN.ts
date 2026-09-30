@@ -1267,6 +1267,111 @@ Alcedo 将改用 %1。</translation>
         <source>Failed to save rating reason.</source>
         <translation>保存评分理由失败。</translation>
     </message>
+    <message>
+        <location line="+1"/>
+        <source>1D LUTs cannot be applied by the grade stage.</source>
+        <translation>1D LUT 无法在调色阶段应用。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>A mask is selected. Select its Color Grade node to apply a LUT.</source>
+        <translation>当前选中了蒙版。请选择它所属的调色节点来应用 LUT。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>All</source>
+        <translation>全部</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Film simulation</source>
+        <translation>胶片模拟</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>General</source>
+        <translation>通用</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Invalid</source>
+        <translation>无效</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>LUTs apply to Color Grade nodes. Select a Color Grade node.</source>
+        <translation>LUT 只能应用到调色节点。请选择一个调色节点。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Missing: %1</source>
+        <translation>缺失：%1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>No LUT</source>
+        <translation>无 LUT</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>No print</source>
+        <translation>无印片</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Open a photo to apply a LUT.</source>
+        <translation>打开一张照片以应用 LUT。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Select a Color Grade node to apply a LUT.</source>
+        <translation>选择一个调色节点以应用 LUT。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>The LUT file is invalid: %1</source>
+        <translation>LUT 文件无效：%1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>The LUT is no longer in the library. Refresh the library.</source>
+        <translation>该 LUT 已不在库中。请刷新 LUT 库。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>The LUT library is unavailable.</source>
+        <translation>LUT 库不可用。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>The editor did not accept the LUT change.</source>
+        <translation>编辑器未接受此 LUT 更改。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>The favorite cannot be changed.</source>
+        <translation>无法更改收藏。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>The photo cannot be edited right now.</source>
+        <translation>当前无法编辑这张照片。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>The selected Color Grade has no LUT adjustment.</source>
+        <translation>所选调色节点没有 LUT 调整项。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Unsupported</source>
+        <translation>不支持</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>With print</source>
+        <translation>含印片</translation>
+    </message>
 </context>
 <context>
     <name>AppDialogs</name>
@@ -1319,6 +1424,16 @@ Alcedo 将改用 %1。</translation>
         <location line="+212"/>
         <source>Select at least one image to analyze.</source>
         <translation>请至少选择一张图像进行分析。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Import LUTs</source>
+        <translation>导入 LUT</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>CUBE LUTs (*.cube *.CUBE)</source>
+        <translation>CUBE LUT (*.cube *.CUBE)</translation>
     </message>
 </context>
 <context>
@@ -2601,6 +2716,225 @@ Original source files on disk will be kept.</source>
     </message>
 </context>
 <context>
+    <name>EditorLutControlPanel</name>
+    <message>
+        <location filename="../qml/EditorLutControlPanel.qml" line="+1"/>
+        <source>Strength</source>
+        <translation>强度</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>LUT</source>
+        <translation>LUT</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>No LUT applied</source>
+        <translation>未应用 LUT</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>The LUT file is missing. The photo renders without it until the file returns.</source>
+        <translation>LUT 文件缺失。在文件恢复之前，照片会在不应用该 LUT 的情况下渲染。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Browse LUTs</source>
+        <translation>浏览 LUT</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Remove</source>
+        <translation>移除</translation>
+    </message>
+</context>
+<context>
+    <name>EditorLutFilterCard</name>
+    <message>
+        <location filename="../qml/EditorLutFilterCard.qml" line="+1"/>
+        <source>Show less</source>
+        <translation>收起</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Show all %1</source>
+        <translation>显示全部 %1 项</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Filters</source>
+        <translation>筛选</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Clear</source>
+        <translation>清除</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Clear filters</source>
+        <translation>清除筛选</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Category</source>
+        <translation>类别</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Source</source>
+        <translation>来源</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Brand</source>
+        <translation>品牌</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Print</source>
+        <translation>印片</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Favorites only</source>
+        <translation>仅显示收藏</translation>
+    </message>
+</context>
+<context>
+    <name>EditorLutResultCard</name>
+    <message>
+        <location filename="../qml/EditorLutResultCard.qml" line="+1"/>
+        <source>Search LUTs</source>
+        <translation>搜索 LUT</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Sort LUTs</source>
+        <translation>排序 LUT</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Search results are ordered by relevance.</source>
+        <translation>搜索结果按相关度排序。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Sort by</source>
+        <translation>排序方式</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Name</source>
+        <translation>名称</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Modified time</source>
+        <translation>修改时间</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Import LUTs</source>
+        <translation>导入 LUT</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Refresh LUT library</source>
+        <translation>刷新 LUT 库</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Open LUT folder</source>
+        <translation>打开 LUT 文件夹</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Applies to</source>
+        <translation>应用到</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>No LUT applied</source>
+        <translation>未应用 LUT</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>The LUT file is missing. The photo renders without it until the file returns.</source>
+        <translation>LUT 文件缺失。在文件恢复之前，照片会在不应用该 LUT 的情况下渲染。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Remove LUT</source>
+        <translation>移除 LUT</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>LUTs</source>
+        <translation>LUT</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Loading LUT library</source>
+        <translation>正在加载 LUT 库</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>No LUTs in the library</source>
+        <translation>LUT 库中还没有 LUT</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>No LUTs match</source>
+        <translation>没有匹配的 LUT</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Import .cube files, or copy them into the LUT folder and refresh.</source>
+        <translation>导入 .cube 文件，或将其复制到 LUT 文件夹后刷新。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Change the search or the filters to see more LUTs.</source>
+        <translation>修改搜索或筛选条件以查看更多 LUT。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Clear search and filters</source>
+        <translation>清除搜索和筛选</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Refreshing LUT library</source>
+        <translation>正在刷新 LUT 库</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>%1 of %2 LUTs</source>
+        <translation>%1 / %2 个 LUT</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>1 LUT</source>
+        <translation>1 个 LUT</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>%1 LUTs</source>
+        <translation>%1 个 LUT</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Remove from favorites</source>
+        <translation>取消收藏</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Add to favorites</source>
+        <translation>加入收藏</translation>
+    </message>
+</context>
+<context>
     <name>EditorMaskGroupDelegate</name>
     <message>
         <location filename="../qml/EditorMaskGroupDelegate.qml" line="+88"/>
@@ -3548,6 +3882,21 @@ Original source files on disk will be kept.</source>
         <source>Tasks</source>
         <translation>后台任务</translation>
     </message>
+    <message>
+        <location line="+1"/>
+        <source>LUTs</source>
+        <translation>LUT</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Hide LUT Browser</source>
+        <translation>隐藏 LUT 浏览器</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Show LUT Browser</source>
+        <translation>显示 LUT 浏览器</translation>
+    </message>
 </context>
 <context>
     <name>ExportInspectorPanel</name>
@@ -4437,74 +4786,6 @@ Original source files on disk will be kept.</source>
         <location line="+22"/>
         <source>Conflicting scope: %1</source>
         <translation>冲突作用域：%1</translation>
-    </message>
-</context>
-<context>
-    <name>LUTPanel</name>
-    <message>
-        <location filename="../qml/LUTPanel.qml" line="+115"/>
-        <source>No LUTs found</source>
-        <translation>未找到 LUT</translation>
-    </message>
-    <message>
-        <location line="+2"/>
-        <source>1 LUT found</source>
-        <translation>找到 1 个 LUT</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source> LUTs found</source>
-        <translation> 个 LUT</translation>
-    </message>
-    <message>
-        <location line="+328"/>
-        <source>LUT</source>
-        <translation>LUT</translation>
-    </message>
-    <message>
-        <location line="+63"/>
-        <source>Filter LUTs</source>
-        <translation>筛选 LUT</translation>
-    </message>
-    <message>
-        <location line="+36"/>
-        <source>Sort options</source>
-        <translation>排序选项</translation>
-    </message>
-    <message>
-        <location line="+26"/>
-        <source>Sort by</source>
-        <translation>排序方式</translation>
-    </message>
-    <message>
-        <location line="+9"/>
-        <source>Name</source>
-        <translation>名称</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Modified time</source>
-        <translation>修改时间</translation>
-    </message>
-    <message>
-        <location line="+65"/>
-        <source>Show all LUTs</source>
-        <translation>显示所有 LUT</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Show favorites only</source>
-        <translation>仅显示收藏项</translation>
-    </message>
-    <message>
-        <location line="+17"/>
-        <source>Refresh LUT catalog</source>
-        <translation>刷新 LUT 目录</translation>
-    </message>
-    <message>
-        <location line="+12"/>
-        <source>Open LUT folder</source>
-        <translation>打开 LUT 文件夹</translation>
     </message>
 </context>
 <context>

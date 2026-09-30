@@ -248,8 +248,10 @@ registry model.
 | `filmstrip.nextImage` | Next image | Right | `editor.filmstrip` | Yes | Key chord |
 | `filmstrip.selectAll` | Select all filmstrip images | Ctrl+A | `editor.filmstrip` | No | Key chord |
 | `versions.createDefaultFromRoot` | Create default version from root | Ctrl+A | `editor.versions` | No | Key chord |
-| `lut.selectPrevious` | Select previous LUT | Up | `editor.lut` | Yes | Key chord |
-| `lut.selectNext` | Select next LUT | Down | `editor.lut` | Yes | Key chord |
+| `lut.selectPrevious` | Select previous LUT | Left (Up before LUT plan L6A) | `editor.lut` | Yes | Key chord |
+| `lut.selectNext` | Select next LUT | Right (Down before LUT plan L6A) | `editor.lut` | Yes | Key chord |
+| `lut.selectAbove` | Select LUT above (added by LUT plan L6A) | Up | `editor.lut` | Yes | Key chord |
+| `lut.selectBelow` | Select LUT below (added by LUT plan L6A) | Down | `editor.lut` | Yes | Key chord |
 | `mask.finishEdit` | Finish mask edit | Escape | `editor.maskEdit` | No | Key chord |
 | `mask.deleteSelection` | Delete selected mask item | Delete | `editor.maskEdit` | No | Key chord |
 | `mask.confirmEdit` | Confirm mask edit | Return, Enter | `editor.maskEdit` | No | Key chord |

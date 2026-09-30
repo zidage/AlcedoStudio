@@ -188,13 +188,14 @@ TEST(EditorAdjustmentSnapshotQmlTest, QmlLoadFromTypedProjectionDoesNotSubmit) {
   auto* tone_exposure = harness.root()->findChild<QObject*>(QStringLiteral("toneExposureModel"));
   auto* look_saturation =
       harness.root()->findChild<QObject*>(QStringLiteral("lookSaturationModel"));
-  auto* lut_model = harness.root()->findChild<QObject*>(QStringLiteral("adjustmentStackLutModel"));
+  // The LUT field is read by the shared LUT target (LUT library plan L6A), not by the stack.
+  auto* lut_panel =
+      harness.root()->findChild<QObject*>(QStringLiteral("editorAdjustmentPanel_lut"));
   ASSERT_NE(tone_exposure, nullptr);
   ASSERT_NE(look_saturation, nullptr);
-  ASSERT_NE(lut_model, nullptr);
+  ASSERT_NE(lut_panel, nullptr);
   EXPECT_DOUBLE_EQ(tone_exposure->property("value").toDouble(), -1.5);
   EXPECT_NEAR(look_saturation->property("value").toDouble(), 40.0, 1.0e-5);
-  EXPECT_EQ(lut_model->property("selectedPath").toString(), QStringLiteral("D:/luts/look.cube"));
   EXPECT_EQ(session.submitCount(), 0);
 }
 

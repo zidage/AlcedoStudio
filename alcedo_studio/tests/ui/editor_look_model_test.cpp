@@ -2,33 +2,26 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-// Phase 6D unit tests for Look typed models: white balance, HSL, CDL trackball,
-// and LUT catalog. Asserts operator-shaped params JSON, interactive + one
+// Phase 6D unit tests for Look typed models: white balance, HSL, and CDL trackball
+// (LUT selection is covered by LutLibraryModelTest since LUT library plan L6A).
+// Asserts operator-shaped params JSON, interactive + one
 // settled commit per completed drag, load-only setters, and the canEdit check.
 // No QML / GPU.
 
 #include <gtest/gtest.h>
 
-#include <QElapsedTimer>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QSignalSpy>
 #include <QString>
-#include <QTest>
 #include <QVariantList>
 #include <algorithm>
-#include <filesystem>
-#include <fstream>
 #include <memory>
-#include <optional>
-#include <random>
 #include <string>
 #include <variant>
 #include <vector>
 
 #include "app/editor_panel_projection.hpp"
-#include "app/lut_library_inventory.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/operators/models/cat02_white_balance_model.hpp"
 #include "json.hpp"
@@ -38,7 +31,6 @@
 #include "ui/alcedo_main/album_backend/editor_color_temp_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_grade_white_balance_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_hls_model.hpp"
-#include "ui/alcedo_main/album_backend/editor_lut_catalog_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_panel_presentation.hpp"
 #include "ui/alcedo_main/editor_support/modules/color_temp.hpp"
 #include "ui/alcedo_main/editor_support/modules/hls.hpp"
@@ -48,84 +40,6 @@ namespace {
 
 auto ParseObject(const QString& params) -> QJsonObject {
   return QJsonDocument::fromJson(params.toUtf8()).object();
-}
-
-class FixedRootPreferences final : public alcedo::LutLibraryPreferences {
- public:
-  [[nodiscard]] auto LoadRoot() const -> std::optional<std::filesystem::path> override {
-    return std::nullopt;
-  }
-  [[nodiscard]] auto SaveRoot(const std::filesystem::path&) -> bool override { return true; }
-  [[nodiscard]] auto LoadLegacyFavoritePaths() const -> QStringList override { return {}; }
-  void               SaveLegacyFavoritePaths(const QStringList&) override {}
-};
-
-/// A started LutLibraryService over a temporary root under the working directory.
-class TemporaryLutLibrary {
- public:
-  explicit TemporaryLutLibrary(bool open_succeeds = true, bool official_package = false) {
-    std::random_device device;
-    root_ =
-        std::filesystem::current_path() / "editor_look_model_test_luts" / std::to_string(device());
-    std::filesystem::create_directories(root_);
-    root_ = std::filesystem::weakly_canonical(root_);
-    Write("kodak/look.cube");
-    Write("fuji/look.cube");
-    if (official_package) {
-      // Active content of an installed package: its receipt names the content directory.
-      Write(kOfficialContent, R"(# ALCEDO_LUT {"schema":1,"id":"kodak-5207","origin":"alcedo",)"
-                              R"("category":"general","input_space":"ACEScc",)"
-                              R"("output_space":"ACEScc"})"
-                              "\n");
-      alcedo::LutPackageReceipt receipt;
-      receipt.package_id        = "spectral_film_lut";
-      receipt.content_directory = "packages/spectral_film_lut/content/a";
-      EXPECT_TRUE(alcedo::WriteLutPackageReceiptFile(root_, receipt).empty());
-    }
-    alcedo::LutLibraryServiceOptions options;
-    options.preferences  = std::make_unique<FixedRootPreferences>();
-    options.default_root = root_;
-    options.open_url     = [open_succeeds](const QUrl&) { return open_succeeds; };
-    service_             = std::make_unique<alcedo::LutLibraryService>(std::move(options));
-    service_->Start();
-    QElapsedTimer timer;
-    timer.start();
-    while (service_->busy() && timer.elapsed() < 20000) QTest::qWait(5);
-  }
-  ~TemporaryLutLibrary() {
-    service_.reset();
-    std::error_code error;
-    std::filesystem::remove_all(root_, error);
-  }
-  TemporaryLutLibrary(const TemporaryLutLibrary&)            = delete;
-  TemporaryLutLibrary& operator=(const TemporaryLutLibrary&) = delete;
-
-  [[nodiscard]] auto   Service() -> alcedo::LutLibraryService* { return service_.get(); }
-  [[nodiscard]] auto   PathOf(const char* relative) const -> QString {
-    return QString::fromStdString(alcedo::LutPathToUtf8(root_ / relative));
-  }
-
-  static constexpr const char* kOfficialContent =
-      "packages/spectral_film_lut/content/a/kodak-5207.cube";
-
- private:
-  void Write(const char* relative, const char* header = "") const {
-    const std::filesystem::path path = root_ / relative;
-    std::filesystem::create_directories(path.parent_path());
-    std::ofstream output(path, std::ios::binary);
-    output << header << "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
-  }
-
-  std::filesystem::path                      root_;
-  std::unique_ptr<alcedo::LutLibraryService> service_;
-};
-
-auto EntryPaths(const EditorLutCatalogModel& model) -> QStringList {
-  QStringList paths;
-  for (const QVariant& entry : model.entries()) {
-    paths.push_back(entry.toMap().value(QStringLiteral("path")).toString());
-  }
-  return paths;
 }
 
 }  // namespace
@@ -512,204 +426,6 @@ TEST(EditorLookModelTest, CdlLoadOnlyDoesNotSubmit) {
   model.setWheelMaster(QStringLiteral("lift"), 0.05);
   EXPECT_TRUE(sub.calls.empty());
   EXPECT_NEAR(model.liftX(), 0.1, 1e-6);
-}
-
-// ── LUT catalog ─────────────────────────────────────────────────────────────
-
-TEST(EditorLookModelTest, LutSelectPathSubmitsSelectionAndKeepsStrength) {
-  RecordingSubmitter    sub;
-  EditorLutCatalogModel model;
-  model.setSubmitter(&sub);
-
-  model.selectPath(QStringLiteral("D:/fake/look.cube"));
-  EXPECT_EQ(sub.settledCount(), 1);
-  ASSERT_NE(sub.lastSettledWrite(), nullptr);
-  const auto* update = std::get_if<alcedo::EditorLutWrite>(sub.lastSettledWrite());
-  ASSERT_NE(update, nullptr);
-  ASSERT_TRUE(update->reference.has_value());
-  EXPECT_EQ(*update->reference,
-            alcedo::LutReference{alcedo::FileLutReference{"D:/fake/look.cube"}});
-  // A selection does not carry a strength, so the configured strength is kept.
-  EXPECT_FALSE(update->strength.has_value());
-}
-
-TEST(EditorLookModelTest, LutSelectionOfPackageFileSubmitsOfficialReference) {
-  TemporaryLutLibrary   library(true, true);
-  RecordingSubmitter    sub;
-  EditorLutCatalogModel model;
-  model.setSubmitter(&sub);
-  model.setLibrary(library.Service());
-
-  model.selectPath(library.PathOf(TemporaryLutLibrary::kOfficialContent));
-  const auto* official = std::get_if<alcedo::EditorLutWrite>(sub.lastSettledWrite());
-  ASSERT_NE(official, nullptr);
-  ASSERT_TRUE(official->reference.has_value());
-  EXPECT_EQ(
-      *official->reference,
-      (alcedo::LutReference{alcedo::OfficialLutReference{"spectral_film_lut", "kodak-5207"}}));
-  EXPECT_FALSE(official->display_name.empty());
-  EXPECT_FALSE(official->strength.has_value());
-
-  model.selectPath(library.PathOf("kodak/look.cube"));
-  const auto* loose = std::get_if<alcedo::EditorLutWrite>(sub.lastSettledWrite());
-  ASSERT_NE(loose, nullptr);
-  EXPECT_EQ(*loose->reference,
-            alcedo::LutReference{alcedo::LibraryLutReference{"kodak/look.cube"}});
-}
-
-TEST(EditorLookModelTest, LutLoadSelectionResolvesReferencesWithoutSubmitting) {
-  TemporaryLutLibrary   library(true, true);
-  RecordingSubmitter    sub;
-  EditorLutCatalogModel model;
-  model.setSubmitter(&sub);
-  model.setLibrary(library.Service());
-
-  model.loadSelection(
-      QVariantMap{{QStringLiteral("referenceKind"), QStringLiteral("official")},
-                  {QStringLiteral("packageId"), QStringLiteral("spectral_film_lut")},
-                  {QStringLiteral("lutId"), QStringLiteral("kodak-5207")},
-                  {QStringLiteral("lutName"), QStringLiteral("Vision3 250D")}});
-  EXPECT_EQ(model.selectedPath(), library.PathOf(TemporaryLutLibrary::kOfficialContent));
-  EXPECT_GT(model.selectedIndex(), 0);
-
-  model.loadSelection(
-      QVariantMap{{QStringLiteral("referenceKind"), QStringLiteral("library")},
-                  {QStringLiteral("libraryPath"), QStringLiteral("fuji/look.cube")}});
-  EXPECT_EQ(model.selectedPath(), library.PathOf("fuji/look.cube"));
-
-  // An official LUT that no installed package lists stays visible as missing, by its name.
-  model.loadSelection(
-      QVariantMap{{QStringLiteral("referenceKind"), QStringLiteral("official")},
-                  {QStringLiteral("packageId"), QStringLiteral("spectral_film_lut")},
-                  {QStringLiteral("lutId"), QStringLiteral("retired-stock")},
-                  {QStringLiteral("lutName"), QStringLiteral("Retired Stock")}});
-  ASSERT_EQ(model.selectedIndex(), 1);
-  const auto row = model.entries()[1].toMap();
-  EXPECT_EQ(row.value(QStringLiteral("kind")).toString(), QStringLiteral("missing"));
-  EXPECT_EQ(row.value(QStringLiteral("displayName")).toString(), QStringLiteral("Retired Stock"));
-  EXPECT_TRUE(sub.calls.empty());
-}
-
-TEST(EditorLookModelTest, LutSetSelectedPathIsLoadOnly) {
-  RecordingSubmitter    sub;
-  EditorLutCatalogModel model;
-  model.setSubmitter(&sub);
-  model.setSelectedPath(QStringLiteral("D:/fake/load_only.cube"));
-  EXPECT_TRUE(sub.calls.empty());
-  EXPECT_EQ(model.selectedPath(), QStringLiteral("D:/fake/load_only.cube"));
-}
-
-TEST(EditorLookModelTest, LutClearSelectionCommitsEmptyPath) {
-  RecordingSubmitter    sub;
-  EditorLutCatalogModel model;
-  model.setSubmitter(&sub);
-  model.setSelectedPath(QStringLiteral("D:/fake/a.cube"));
-  model.clearSelection();
-  EXPECT_EQ(sub.settledCount(), 1);
-  EXPECT_TRUE(model.selectedPath().isEmpty());
-}
-
-TEST(EditorLookModelTest, LutSelectPathDoesNotEmitEntriesChanged) {
-  // Selection must not rebuild the catalog entry list. Emitting entriesChanged
-  // on every click forces QML ListViews to reset contentY and pin the selected
-  // row to the bottom of the viewport.
-  EditorLutCatalogModel model;
-  QSignalSpy            entries_spy(&model, &EditorLutCatalogModel::entriesChanged);
-  QSignalSpy            selected_spy(&model, &EditorLutCatalogModel::selectedPathChanged);
-  ASSERT_TRUE(entries_spy.isValid());
-  ASSERT_TRUE(selected_spy.isValid());
-
-  model.selectPath(QStringLiteral("D:/fake/look.cube"));
-  EXPECT_EQ(selected_spy.count(), 1);
-  EXPECT_EQ(entries_spy.count(), 0);
-  EXPECT_EQ(model.selectedPath(), QStringLiteral("D:/fake/look.cube"));
-
-  // Second select of a different path still must not rebuild entries.
-  model.selectPath(QStringLiteral("D:/fake/other.cube"));
-  EXPECT_EQ(selected_spy.count(), 2);
-  EXPECT_EQ(entries_spy.count(), 0);
-}
-
-TEST(EditorLookModelTest, LutSetSelectedPathDoesNotEmitEntriesChanged) {
-  EditorLutCatalogModel model;
-  QSignalSpy            entries_spy(&model, &EditorLutCatalogModel::entriesChanged);
-  model.setSelectedPath(QStringLiteral("D:/fake/load_only.cube"));
-  EXPECT_EQ(entries_spy.count(), 0);
-  EXPECT_EQ(model.selectedPath(), QStringLiteral("D:/fake/load_only.cube"));
-}
-
-TEST(EditorLookModelTest, LutFavoriteToggleStoresEntryInLibrary) {
-  TemporaryLutLibrary   library;
-  EditorLutCatalogModel model;
-  model.setLibrary(library.Service());
-  const QString path = library.PathOf("kodak/look.cube");
-  EXPECT_FALSE(model.isFavoritePath(path));
-  EXPECT_FALSE(model.isFavoritePath(QString()));
-  EXPECT_FALSE(model.isFavoritePath(QStringLiteral("   ")));
-
-  QSignalSpy fav_spy(&model, &EditorLutCatalogModel::favoritePathsChanged);
-  ASSERT_TRUE(fav_spy.isValid());
-
-  model.toggleFavoritePath(path);
-  EXPECT_EQ(fav_spy.count(), 1);
-  EXPECT_TRUE(model.isFavoritePath(path));
-  EXPECT_FALSE(model.isFavoritePath(library.PathOf("fuji/look.cube")));
-  EXPECT_EQ(model.favoritePaths(), QStringList{path});
-  EXPECT_EQ(library.Service()->FavoriteEntryIds(),
-            std::vector<std::string>{"library:kodak/look.cube"});
-
-  model.toggleFavoritePath(path);
-  EXPECT_EQ(fav_spy.count(), 2);
-  EXPECT_FALSE(model.isFavoritePath(path));
-  EXPECT_TRUE(model.favoritePaths().isEmpty());
-
-  // A path outside the library cannot become a favorite.
-  model.toggleFavoritePath(QStringLiteral("D:/fake/favorite.cube"));
-  EXPECT_EQ(fav_spy.count(), 2);
-}
-
-TEST(EditorLookModelTest, LutCatalogListsLibraryEntriesWithoutBasenameMatching) {
-  TemporaryLutLibrary   library;
-  EditorLutCatalogModel model;
-  model.setLibrary(library.Service());
-  EXPECT_EQ(EntryPaths(model), (QStringList{QString(), library.PathOf("fuji/look.cube"),
-                                            library.PathOf("kodak/look.cube")}));
-
-  model.setSelectedPath(library.PathOf("kodak/look.cube"));
-  EXPECT_EQ(model.selectedIndex(), 2);
-
-  // A missing file with the same name in another folder selects neither listed file.
-  model.setSelectedPath(library.PathOf("agfa/look.cube"));
-  model.refresh(false);
-  ASSERT_EQ(model.selectedIndex(), 1);
-  EXPECT_EQ(model.entries()[1].toMap().value(QStringLiteral("kind")).toString(),
-            QStringLiteral("missing"));
-  EXPECT_EQ(model.entries().size(), 4);
-}
-
-TEST(EditorLookModelTest, LutOpenDirectoryFailureIsShownInStatusText) {
-  TemporaryLutLibrary   library(false);
-  EditorLutCatalogModel model;
-  model.setLibrary(library.Service());
-  QSignalSpy failed_spy(&model, &EditorLutCatalogModel::openFolderFailed);
-
-  EXPECT_FALSE(model.openDirectory());
-  ASSERT_EQ(failed_spy.count(), 1);
-  EXPECT_FALSE(model.statusText().isEmpty());
-  EXPECT_EQ(model.statusText(), failed_spy.at(0).at(0).toString());
-  EXPECT_TRUE(model.statusText().contains(library.Service()->root_path()));
-}
-
-TEST(EditorLookModelTest, LutFilterRebuildsEntriesAndEmitsEntriesChanged) {
-  EditorLutCatalogModel model;
-  QSignalSpy            entries_spy(&model, &EditorLutCatalogModel::entriesChanged);
-  model.setFilterText(QStringLiteral("no-match-zzzz"));
-  EXPECT_GE(entries_spy.count(), 1);
-  // Filter is applied; selection is independent of the filtered view size.
-  model.selectPath(QStringLiteral("D:/fake/still_select.cube"));
-  const int after_filter = entries_spy.count();
-  model.selectPath(QStringLiteral("D:/fake/still_select_2.cube"));
-  EXPECT_EQ(entries_spy.count(), after_filter);
 }
 
 TEST(EditorLookModelTest, HlsModelLoadFromTablesRestoresUiValues) {
