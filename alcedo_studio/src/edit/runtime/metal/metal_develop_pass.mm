@@ -3,6 +3,7 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 #include "edit/runtime/metal/metal_develop_pass.hpp"
+#include "edit/runtime/metal/metal_diffusion_filter_pass.hpp"
 #include "edit/runtime/metal/metal_drt_pass.hpp"
 #include "edit/runtime/metal/metal_mask_pass.hpp"
 #include "edit/runtime/metal/metal_primary_grade_pass.hpp"
@@ -396,6 +397,7 @@ void WarmUpMetalDagPlan(MetalBackend& backend, const ExecutionPlan& plan) {
 #endif
   AppendMetalPrimaryGradeWarmup(pipelines);
   AppendMetalMaskWarmup(pipelines);
+  AppendMetalDiffusionFilterWarmup(pipelines);
   AppendMetalDrtWarmup(pipelines);
   (void)plan;
   backend.WarmUpPipelines(pipelines);

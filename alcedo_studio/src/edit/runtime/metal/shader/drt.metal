@@ -445,4 +445,218 @@ kernel void diffusion_filter_decode(texture2d<float, access::read> input [[textu
                gid);
 }
 
+// === DiffusionFilter scatter ==================================================
+// Mirrors cuda_diffusion_filter_pass.cu. Texel `i` covers [i, i + 1); every read clamps to edge.
+
+/// Mirrors `ReduceParams` in metal_diffusion_filter_pass.mm.
+struct DiffusionReduceParams {
+  int   src_width;
+  int   src_height;
+  int   dst_width;
+  int   dst_height;
+  int   samples;
+  float gain;
+  float knee;
+  float pad0;
+  float base_to_render[12];
+};
+
+/// Mirrors `MixParams` in metal_diffusion_filter_pass.mm.
+struct DiffusionMixParams {
+  int   width;
+  int   height;
+  float scatter_fraction;
+  float transmission;
+  float render_to_base[12];
+};
+
+static inline float2 DiffusionTransform(constant float* m, float x, float y) {
+  return float2(m[0] * x + m[1] * y + m[2], m[3] * x + m[4] * y + m[5]);
+}
+
+static inline float4 DiffusionDecode(float4 value) {
+  return float4(acescc_decode(value.x), acescc_decode(value.y), acescc_decode(value.z), value.w);
+}
+
+static inline float4 DiffusionFetch(texture2d<float, access::read> image, int x, int y) {
+  const int width  = int(image.get_width());
+  const int height = int(image.get_height());
+  return image.read(uint2(uint(clamp(x, 0, width - 1)), uint(clamp(y, 0, height - 1))));
+}
+
+/// Bilinear sample with clamp-to-edge addressing.
+static inline float4 DiffusionBilinear(texture2d<float, access::read> image, float px, float py) {
+  const float  fx     = px - 0.5f;
+  const float  fy     = py - 0.5f;
+  const float  x0     = floor(fx);
+  const float  y0     = floor(fy);
+  const float  ax     = fx - x0;
+  const float  ay     = fy - y0;
+  const int    ix     = int(x0);
+  const int    iy     = int(y0);
+  const float4 a      = DiffusionFetch(image, ix, iy);
+  const float4 b      = DiffusionFetch(image, ix + 1, iy);
+  const float4 c      = DiffusionFetch(image, ix, iy + 1);
+  const float4 d      = DiffusionFetch(image, ix + 1, iy + 1);
+  const float4 top    = a * (1.0f - ax) + b * ax;
+  const float4 bottom = c * (1.0f - ax) + d * ax;
+  return top * (1.0f - ay) + bottom * ay;
+}
+
+/// Bilinear sample of the ACEScc scene, decoded to linear AP1 per tap before interpolation.
+static inline float4 DiffusionBilinearDecoded(texture2d<float, access::read> image, float px,
+                                              float py) {
+  const float  fx     = px - 0.5f;
+  const float  fy     = py - 0.5f;
+  const float  x0     = floor(fx);
+  const float  y0     = floor(fy);
+  const float  ax     = fx - x0;
+  const float  ay     = fy - y0;
+  const int    ix     = int(x0);
+  const int    iy     = int(y0);
+  const float4 a      = DiffusionDecode(DiffusionFetch(image, ix, iy));
+  const float4 b      = DiffusionDecode(DiffusionFetch(image, ix + 1, iy));
+  const float4 c      = DiffusionDecode(DiffusionFetch(image, ix, iy + 1));
+  const float4 d      = DiffusionDecode(DiffusionFetch(image, ix + 1, iy + 1));
+  const float4 top    = a * (1.0f - ax) + b * ax;
+  const float4 bottom = c * (1.0f - ax) + d * ax;
+  return top * (1.0f - ay) + bottom * ay;
+}
+
+static inline float4 DiffusionBSplineWeights(float t) {
+  const float t2 = t * t;
+  const float t3 = t2 * t;
+  const float u  = 1.0f - t;
+  return float4(u * u * u / 6.0f, (3.0f * t3 - 6.0f * t2 + 4.0f) / 6.0f,
+                (-3.0f * t3 + 3.0f * t2 + 3.0f * t + 1.0f) / 6.0f, t3 / 6.0f);
+}
+
+/// Cubic B-spline sample; smooth magnification of the coarse scatter image.
+static inline float4 DiffusionSampleBSpline(texture2d<float, access::read> image, float px,
+                                            float py) {
+  const float  fx  = px - 0.5f;
+  const float  fy  = py - 0.5f;
+  const float  x0  = floor(fx);
+  const float  y0  = floor(fy);
+  const float4 wx  = DiffusionBSplineWeights(fx - x0);
+  const float4 wy  = DiffusionBSplineWeights(fy - y0);
+  const int    ix  = int(x0) - 1;
+  const int    iy  = int(y0) - 1;
+  float4       sum = float4(0.0f);
+  for (int j = 0; j < 4; ++j) {
+    float4 row = float4(0.0f);
+    for (int i = 0; i < 4; ++i) {
+      row += DiffusionFetch(image, ix + i, iy + j) * wx[i];
+    }
+    sum += row * wy[j];
+  }
+  return sum;
+}
+
+/// Linear AP1 with the near-clip highlight boost. Negative (out-of-gamut) light does not scatter.
+static inline float3 DiffusionBoostHighlights(float4 linear, float gain, float knee) {
+  const float r    = fmax(linear.x, 0.0f);
+  const float g    = fmax(linear.y, 0.0f);
+  const float b    = fmax(linear.z, 0.0f);
+  const float peak = fmax(r, fmax(g, b));
+  const float t    = fmin(fmax((peak - knee) / (1.0f - knee), 0.0f), 1.0f);
+  const float lift = 1.0f + gain * t * t * (3.0f - 2.0f * t);
+  return float3(r * lift, g * lift, b * lift);
+}
+
+/// Base level: average of samples x samples decoded, boosted render samples inside the footprint
+/// of one base texel. base_to_render maps base texel coordinates to the render.
+kernel void diffusion_filter_reduce_boost(texture2d<float, access::read> src [[texture(0)]],
+                                          texture2d<float, access::write> dst [[texture(1)]],
+                                          constant DiffusionReduceParams& params [[buffer(0)]],
+                                          uint2 gid [[thread_position_in_grid]]) {
+  const int x = int(gid.x);
+  const int y = int(gid.y);
+  if (x >= params.dst_width || y >= params.dst_height) {
+    return;
+  }
+  const float step = 1.0f / float(params.samples);
+  float3      sum  = float3(0.0f);
+  for (int j = 0; j < params.samples; ++j) {
+    const float by = float(y) + (float(j) + 0.5f) * step;
+    for (int i = 0; i < params.samples; ++i) {
+      const float  bx     = float(x) + (float(i) + 0.5f) * step;
+      const float2 render = DiffusionTransform(params.base_to_render, bx, by);
+      const float4 linear = DiffusionBilinearDecoded(src, render.x, render.y);
+      sum += DiffusionBoostHighlights(linear, params.gain, params.knee);
+    }
+  }
+  const float inv = step * step;
+  dst.write(float4(sum * inv, 1.0f), gid);
+}
+
+/// 13-tap downsample (Jimenez, SIGGRAPH 2014). Destination texel `x` spans source [2x, 2x + 2).
+kernel void diffusion_filter_downsample(texture2d<float, access::read> src [[texture(0)]],
+                                        texture2d<float, access::write> dst [[texture(1)]],
+                                        uint2 gid [[thread_position_in_grid]]) {
+  if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) {
+    return;
+  }
+  const float  cx      = 2.0f * (float(gid.x) + 0.5f);
+  const float  cy      = 2.0f * (float(gid.y) + 0.5f);
+  const float4 center  = DiffusionBilinear(src, cx, cy);
+  const float4 corners = DiffusionBilinear(src, cx - 2.0f, cy - 2.0f) +
+                         DiffusionBilinear(src, cx + 2.0f, cy - 2.0f) +
+                         DiffusionBilinear(src, cx - 2.0f, cy + 2.0f) +
+                         DiffusionBilinear(src, cx + 2.0f, cy + 2.0f);
+  const float4 edges   = DiffusionBilinear(src, cx, cy - 2.0f) +
+                         DiffusionBilinear(src, cx - 2.0f, cy) +
+                         DiffusionBilinear(src, cx + 2.0f, cy) +
+                         DiffusionBilinear(src, cx, cy + 2.0f);
+  const float4 inner   = DiffusionBilinear(src, cx - 1.0f, cy - 1.0f) +
+                         DiffusionBilinear(src, cx + 1.0f, cy - 1.0f) +
+                         DiffusionBilinear(src, cx - 1.0f, cy + 1.0f) +
+                         DiffusionBilinear(src, cx + 1.0f, cy + 1.0f);
+  dst.write(center * 0.125f + corners * 0.03125f + edges * 0.0625f + inner * 0.125f, gid);
+}
+
+/// dst = level_weight * level + coarse_weight * tent_upsample(coarse) at the level extent.
+kernel void diffusion_filter_upsample_accumulate(
+    texture2d<float, access::read> coarse [[texture(0)]],
+    texture2d<float, access::read> level [[texture(1)]],
+    texture2d<float, access::write> dst [[texture(2)]], constant float& coarse_weight [[buffer(0)]],
+    constant float& level_weight [[buffer(1)]], uint2 gid [[thread_position_in_grid]]) {
+  if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) {
+    return;
+  }
+  const float  cx      = (float(gid.x) + 0.5f) * 0.5f;
+  const float  cy      = (float(gid.y) + 0.5f) * 0.5f;
+  const float4 center  = DiffusionBilinear(coarse, cx, cy);
+  const float4 edges   = DiffusionBilinear(coarse, cx - 1.0f, cy) +
+                         DiffusionBilinear(coarse, cx + 1.0f, cy) +
+                         DiffusionBilinear(coarse, cx, cy - 1.0f) +
+                         DiffusionBilinear(coarse, cx, cy + 1.0f);
+  const float4 corners = DiffusionBilinear(coarse, cx - 1.0f, cy - 1.0f) +
+                         DiffusionBilinear(coarse, cx + 1.0f, cy - 1.0f) +
+                         DiffusionBilinear(coarse, cx - 1.0f, cy + 1.0f) +
+                         DiffusionBilinear(coarse, cx + 1.0f, cy + 1.0f);
+  const float4 tent    = (center * 4.0f + edges * 2.0f + corners) * (1.0f / 16.0f);
+  dst.write(level.read(gid) * level_weight + tent * coarse_weight, gid);
+}
+
+/// out = T * ((1 - s) * I + s * B); B is the scatter image at the reference position of the
+/// render pixel, so every render of the same frame reads the same glow.
+kernel void diffusion_filter_mix(texture2d<float, access::read> input [[texture(0)]],
+                                 texture2d<float, access::write> output [[texture(1)]],
+                                 texture2d<float, access::read> scatter [[texture(2)]],
+                                 constant DiffusionMixParams& params [[buffer(0)]],
+                                 uint2 gid [[thread_position_in_grid]]) {
+  if (int(gid.x) >= params.width || int(gid.y) >= params.height) {
+    return;
+  }
+  const float4 linear = DiffusionDecode(input.read(gid));
+  const float2 base =
+      DiffusionTransform(params.render_to_base, float(gid.x) + 0.5f, float(gid.y) + 0.5f);
+  const float4 glow   = DiffusionSampleBSpline(scatter, base.x, base.y);
+  const float  direct = 1.0f - params.scatter_fraction;
+  const float  t      = params.transmission;
+  const float  s      = params.scatter_fraction;
+  output.write(float4(t * (direct * linear.xyz + s * glow.xyz), linear.w), gid);
+}
+
 #include "drt_neighbor.metal"

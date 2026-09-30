@@ -8,6 +8,7 @@
 
 #include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/metal/metal_develop_pass.hpp"
+#include "edit/runtime/metal/metal_diffusion_filter_pass.hpp"
 #include "edit/runtime/metal/metal_drt_pass.hpp"
 #include "edit/runtime/metal/metal_mask_pass.hpp"
 #include "edit/runtime/metal/metal_primary_grade_pass.hpp"
@@ -77,10 +78,10 @@ struct PassEncoder<MetalBackend, GpuPassKind::PrimaryColorGrade> {
 
 template <>
 struct PassEncoder<MetalBackend, GpuPassKind::DiffusionFilter> {
-  static auto Encode(MetalRenderDevice& device, const ExecutionPlan&, const PreparedRawInput&,
-                     const PipelineDocument& document, const FrameSceneBinding& scene)
-      -> FrameSceneBinding {
-    return ExecuteMetalDiffusionFilter(device, document, scene);
+  static auto Encode(MetalRenderDevice& device, const ExecutionPlan& plan,
+                     const PreparedRawInput&, const PipelineDocument& document,
+                     const FrameSceneBinding& scene) -> FrameSceneBinding {
+    return ExecuteMetalDiffusionFilter(device, plan, document, scene);
   }
 };
 

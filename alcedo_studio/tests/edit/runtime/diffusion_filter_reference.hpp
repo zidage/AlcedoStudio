@@ -4,7 +4,7 @@
 
 #pragma once
 
-/// CPU reference and fixtures shared by the CUDA and OpenCL diffusion filter tests.
+/// CPU reference and fixtures shared by the CUDA, OpenCL, and Metal diffusion filter tests.
 
 #include <gtest/gtest.h>
 
@@ -62,7 +62,7 @@ inline auto Apply(const Matrix3x3& matrix, double x, double y) -> std::pair<doub
           matrix.m[3] * x + matrix.m[4] * y + matrix.m[5]};
 }
 
-/// Double-precision reference of the scatter kernels (CUDA and OpenCL) on one linear render.
+/// Double-precision reference of the scatter kernels (CUDA, OpenCL, and Metal) on one linear render.
 class ScatterReference {
  public:
   ScatterReference(std::vector<Rgb> linear, std::uint32_t width, std::uint32_t height,
