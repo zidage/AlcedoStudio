@@ -308,6 +308,7 @@ if(ALCEDO_OPENCL_ENABLED)
         SOURCES
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_backend.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_develop_pass.cpp
+            ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_diffusion_filter_pass.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_drt_params.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_drt_pass.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_frame_presenter.cpp

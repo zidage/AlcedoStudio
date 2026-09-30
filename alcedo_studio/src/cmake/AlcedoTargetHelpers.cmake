@@ -105,4 +105,25 @@ function(alcedo_copy_linked_runtime_dlls target_name)
     COMMENT "Alcedo: copy linked runtime DLLs for ${target_name}"
     VERBATIM
   )
+
+  # POST_BUILD runs only when the executable relinks. A change inside a linked DLL that keeps
+  # its exports relinks the DLL but not the executable, so the copy beside the executable
+  # stays stale. This step copies the linked DLLs again whenever one is newer than the stamp.
+  set(_alcedo_runtime_stamp
+    "${CMAKE_CURRENT_BINARY_DIR}/${target_name}_runtime_dlls.stamp")
+  add_custom_command(
+    OUTPUT "${_alcedo_runtime_stamp}"
+    COMMAND ${CMAKE_COMMAND}
+      "-DALCEDO_RUNTIME_DLLS=$<JOIN:$<TARGET_RUNTIME_DLLS:${target_name}>,,>"
+      "-DALCEDO_RUNTIME_DEST=$<TARGET_FILE_DIR:${target_name}>"
+      -P "${CMAKE_SOURCE_DIR}/scripts/cmake/copy_linked_runtime_dlls.cmake"
+    COMMAND ${CMAKE_COMMAND} -E touch "${_alcedo_runtime_stamp}"
+    DEPENDS
+      $<TARGET_RUNTIME_DLLS:${target_name}>
+      "${CMAKE_SOURCE_DIR}/scripts/cmake/copy_linked_runtime_dlls.cmake"
+    COMMENT "Alcedo: refresh linked runtime DLLs for ${target_name}"
+    VERBATIM
+  )
+  add_custom_target(${target_name}_runtime_dlls DEPENDS "${_alcedo_runtime_stamp}")
+  add_dependencies(${target_name} ${target_name}_runtime_dlls)
 endfunction()

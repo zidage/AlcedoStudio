@@ -9,6 +9,7 @@
 #include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/opencl/opencl_backend.hpp"
 #include "edit/runtime/opencl/opencl_develop_pass.hpp"
+#include "edit/runtime/opencl/opencl_diffusion_filter_pass.hpp"
 #include "edit/runtime/opencl/opencl_drt_pass.hpp"
 #include "edit/runtime/opencl/opencl_mask_pass.hpp"
 #include "edit/runtime/opencl/opencl_primary_grade_pass.hpp"
@@ -97,10 +98,10 @@ struct PassEncoder<OpenClBackend, GpuPassKind::PrimaryColorGrade> {
 
 template <>
 struct PassEncoder<OpenClBackend, GpuPassKind::DiffusionFilter> {
-  static auto Encode(OpenClRenderDevice& device, const ExecutionPlan&, const PreparedRawInput&,
-                     const PipelineDocument& document, const FrameSceneBinding& scene)
-      -> FrameSceneBinding {
-    return ExecuteOpenClDiffusionFilter(device, document, scene);
+  static auto Encode(OpenClRenderDevice& device, const ExecutionPlan& plan,
+                     const PreparedRawInput&, const PipelineDocument& document,
+                     const FrameSceneBinding& scene) -> FrameSceneBinding {
+    return ExecuteOpenClDiffusionFilter(device, plan, document, scene);
   }
 };
 
