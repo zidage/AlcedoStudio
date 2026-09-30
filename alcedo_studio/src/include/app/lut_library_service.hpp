@@ -9,21 +9,21 @@
 #include <QStringList>
 #include <QUrl>
 #include <QVariantMap>
+#include <atomic>
 #include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <set>
-#include <stop_token>
 #include <string>
 #include <string_view>
-#include <thread>
 #include <vector>
 
 #include "app/lut_library_inventory.hpp"
 #include "app/lut_library_migration.hpp"
 #include "app/lut_library_publication.hpp"
 #include "app/lut_package_install.hpp"
+#include "concurrency/thread_pool.hpp"
 #include "edit/operators/models/lut_reference.hpp"
 #include "edit/runtime/lut_resource_resolver.hpp"
 #include "utils/lut/lut_library_scan.hpp"
@@ -322,7 +322,8 @@ class LutLibraryService final : public QObject {
 
   /// Start @p operation on the worker. @p work runs on the worker thread and
   /// returns the owner-thread completion that publishes its result.
-  auto Begin(Operation operation, std::function<Completion(std::stop_token)> work) -> Status;
+  auto Begin(Operation operation, std::function<Completion(const std::atomic<bool>&)> work)
+      -> Status;
   void Finish(OperationResult result);
   /// Replace the published inventory (and, when given, the package receipts it
   /// was scanned with) and announce the changed entry paths.
@@ -352,7 +353,10 @@ class LutLibraryService final : public QObject {
   /// An installation replaced package content that is retired when no operation runs.
   bool                                   pending_content_retirement_ = false;
   bool                               shut_down_ = false;
-  std::jthread                       worker_;
+  /// User cancellation is read by the running operation at its existing cancellation points.
+  std::atomic<bool>                      cancel_requested_{false};
+  /// One operation at a time; Shutdown joins before owner state is destroyed.
+  ThreadPool                             worker_{1};
 };
 
 }  // namespace alcedo

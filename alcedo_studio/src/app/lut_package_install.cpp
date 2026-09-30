@@ -12,6 +12,7 @@
 #include <QString>
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <map>
 #include <memory>
 #include <set>
@@ -100,7 +101,8 @@ struct ExtractedFile {
 
 /// Stream one regular entry into a new file and hash it. The file must not exist.
 auto WriteEntry(archive* reader, const fs::path& target, std::uint64_t* budget_left,
-                std::stop_token stop, ExtractedFile* output, bool* canceled) -> std::string {
+                const std::atomic<bool>& stop, ExtractedFile* output, bool* canceled)
+    -> std::string {
   std::error_code error;
   fs::create_directories(target.parent_path(), error);
   if (error) return "cannot create " + LutPathToUtf8(target.parent_path()) + ": " + error.message();
@@ -111,7 +113,7 @@ auto WriteEntry(archive* reader, const fs::path& target, std::uint64_t* budget_l
   QCryptographicHash                hash(QCryptographicHash::Sha256);
   std::array<char, kCopyBlockBytes> buffer{};
   while (true) {
-    if (stop.stop_requested()) {
+    if (stop.load()) {
       *canceled = true;
       return "the installation was canceled";
     }
@@ -279,7 +281,7 @@ void RetireContentDirectory(const fs::path& root, std::string_view package_id,
 }  // namespace
 
 auto ExtractLutPackageArchive(const fs::path& archive_path, const fs::path& destination,
-                              const LutPackageReceipt& expected, std::stop_token stop)
+                              const LutPackageReceipt& expected, const std::atomic<bool>& stop)
     -> LutPackageExtraction {
   LutPackageExtraction result;
   std::error_code      error;
@@ -296,7 +298,7 @@ auto ExtractLutPackageArchive(const fs::path& archive_path, const fs::path& dest
   const std::uint64_t max_files   = expected.file_count + kMaxAuxiliaryFiles + 1;
   archive_entry*      entry       = nullptr;
   while (true) {
-    if (stop.stop_requested()) {
+    if (stop.load()) {
       result.canceled = true;
       result.error    = "the installation was canceled";
       return result;
@@ -359,7 +361,7 @@ auto ExtractLutPackageArchive(const fs::path& archive_path, const fs::path& dest
 }
 
 auto InstallLutPackageArchive(const fs::path& root, const LutPackageInstallRequest& request,
-                              const LutPackageInstallSteps& steps, std::stop_token stop,
+                              const LutPackageInstallSteps& steps, const std::atomic<bool>& stop,
                               const std::function<void(LutPackageInstallStage)>& on_stage)
     -> LutPackageInstallOutcome {
   LutPackageInstallOutcome outcome;
@@ -385,7 +387,7 @@ auto InstallLutPackageArchive(const fs::path& root, const LutPackageInstallReque
     outcome.error = "the downloaded package archive does not match its signed size and SHA-256";
     return outcome;
   }
-  if (stop.stop_requested()) {
+  if (stop.load()) {
     outcome.canceled = true;
     outcome.error    = "the installation was canceled";
     return outcome;
@@ -424,7 +426,7 @@ auto InstallLutPackageArchive(const fs::path& root, const LutPackageInstallReque
     }
   }
   // Last cancellation point. Activation completes as one operation once started.
-  if (stop.stop_requested()) return abandon("the installation was canceled", true);
+  if (stop.load()) return abandon("the installation was canceled", true);
 
   // 5. Replacing the receipt is the persistent commit point.
   LutPackageReceipt receipt = expected;

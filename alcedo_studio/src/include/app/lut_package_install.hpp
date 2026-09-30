@@ -4,13 +4,13 @@
 
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
-#include <stop_token>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -90,8 +90,8 @@ struct LutPackageExtraction {
 /// Blocks; must not run on the GUI thread. Stops early when @p stop is requested.
 [[nodiscard]] auto ExtractLutPackageArchive(const std::filesystem::path& archive_path,
                                             const std::filesystem::path& destination,
-                                            const LutPackageReceipt& expected, std::stop_token stop)
-    -> LutPackageExtraction;
+                                            const LutPackageReceipt&     expected,
+                                            const std::atomic<bool>& stop) -> LutPackageExtraction;
 
 /// Verify, extract, and activate one downloaded package in the library at @p root.
 ///
@@ -107,7 +107,7 @@ struct LutPackageExtraction {
 /// the calling thread. Blocks; must not run on the GUI thread.
 [[nodiscard]] auto InstallLutPackageArchive(
     const std::filesystem::path& root, const LutPackageInstallRequest& request,
-    const LutPackageInstallSteps& steps, std::stop_token stop,
+    const LutPackageInstallSteps& steps, const std::atomic<bool>& stop,
     const std::function<void(LutPackageInstallStage)>& on_stage) -> LutPackageInstallOutcome;
 
 struct LutPackageContentRetirement {
