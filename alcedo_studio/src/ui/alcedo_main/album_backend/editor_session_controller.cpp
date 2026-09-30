@@ -1466,27 +1466,14 @@ auto EditorSessionController::can_discard_current_commit() const -> bool {
 
 bool EditorSessionController::submitWrite(QString fieldKey, alcedo::EditorParameterWrite write,
                                           bool settled) {
-  auto* viewport = qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data());
-  if (!can_edit()) {
-    if (settled && viewport) {
-      viewport->endInteractivePresentLoop();
-    }
-    return false;
-  }
-  if (session_backend_ == nullptr) {
-    return false;
-  }
   alcedo::EditorAdjustmentPatch patch;
   patch.field_key = fieldKey.toStdString();
   patch.write     = std::move(write);
   patch.settled   = settled;
-  if (node_controller_ != nullptr) {
+  if (can_edit() && session_backend_ != nullptr && node_controller_ != nullptr) {
     const auto document = pipeline_document();
     if (!document) {
-      if (settled && viewport) {
-        viewport->endInteractivePresentLoop();
-      }
-      return false;
+      return EnqueueAdjustmentPatch(std::nullopt, settled);
     }
     std::string error;
     auto        target = alcedo::CompleteSelectedNodeParameterTarget(
@@ -1495,12 +1482,39 @@ bool EditorSessionController::submitWrite(QString fieldKey, alcedo::EditorParame
                                            patch.field_key),
         patch.field_key, &error);
     if (!target.has_value()) {
-      if (settled && viewport) {
-        viewport->endInteractivePresentLoop();
-      }
-      return false;
+      return EnqueueAdjustmentPatch(std::nullopt, settled);
     }
     patch.target = std::move(*target);
+  }
+  return EnqueueAdjustmentPatch(std::move(patch), settled);
+}
+
+auto EditorSessionController::SubmitTargetedWrite(const alcedo::EditorParameterTarget& target,
+                                                  alcedo::EditorParameterWrite         write,
+                                                  bool settled) -> bool {
+  if (!alcedo::DescribeEditorParameterTargetError(target, target.field_key).empty()) {
+    return EnqueueAdjustmentPatch(std::nullopt, settled);
+  }
+  alcedo::EditorAdjustmentPatch patch;
+  patch.field_key = target.field_key;
+  patch.write     = std::move(write);
+  patch.settled   = settled;
+  patch.target    = target;
+  return EnqueueAdjustmentPatch(std::move(patch), settled);
+}
+
+auto EditorSessionController::selected_node_id() const -> alcedo::NodeId {
+  return node_controller_ != nullptr ? node_controller_->selected_node_id() : alcedo::NodeId{};
+}
+
+auto EditorSessionController::EnqueueAdjustmentPatch(
+    std::optional<alcedo::EditorAdjustmentPatch> patch, bool settled) -> bool {
+  auto* viewport = qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data());
+  if (!patch.has_value() || !can_edit() || session_backend_ == nullptr) {
+    if (settled && viewport) {
+      viewport->endInteractivePresentLoop();
+    }
+    return false;
   }
   if (viewport) {
     if (settled) {
@@ -1511,9 +1525,9 @@ bool EditorSessionController::submitWrite(QString fieldKey, alcedo::EditorParame
     viewport->prepareForAdjustmentFrame();
   }
   if (alcedo::diag::PreviewPerformanceEnabled()) {
-    patch.qml_write_ns = alcedo::diag::PreviewPerformance::NowNs();
+    patch->qml_write_ns = alcedo::diag::PreviewPerformance::NowNs();
   }
-  const auto result = session_backend_->EnqueueAdjustmentInput(std::move(patch));
+  const auto result = session_backend_->EnqueueAdjustmentInput(std::move(*patch));
   return result.kind != alcedo::EditorSessionResultKind::Rejected &&
          result.kind != alcedo::EditorSessionResultKind::Failed;
 }
@@ -1545,7 +1559,19 @@ bool EditorSessionController::enqueueNodeSwitchBoundary() {
 }
 
 void EditorSessionController::BindNodeSelectionSource(EditorNodeController* nodes) {
+  if (node_controller_ == nodes) {
+    return;
+  }
+  if (node_controller_ != nullptr) {
+    disconnect(node_controller_, &EditorNodeController::SelectionChanged, this,
+               &EditorSessionController::NodeSelectionChanged);
+  }
   node_controller_ = nodes;
+  if (node_controller_ != nullptr) {
+    connect(node_controller_, &EditorNodeController::SelectionChanged, this,
+            &EditorSessionController::NodeSelectionChanged);
+  }
+  emit NodeSelectionChanged();
 }
 
 auto EditorSessionController::EnqueueMaskCreation(alcedo::EditorMaskCreationCommand command)

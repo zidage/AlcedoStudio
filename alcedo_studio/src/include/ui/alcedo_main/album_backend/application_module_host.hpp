@@ -31,6 +31,8 @@ class QQmlEngine;
 #include "ui/alcedo_main/album_backend/import_export.hpp"
 #include "ui/alcedo_main/album_backend/interaction_policy_controller.hpp"
 #include "ui/alcedo_main/album_backend/library_module.hpp"
+#include "ui/alcedo_main/album_backend/lut_library_controller.hpp"
+#include "ui/alcedo_main/album_backend/lut_library_model.hpp"
 #include "ui/alcedo_main/album_backend/model_download_controller.hpp"
 #include "ui/alcedo_main/album_backend/nikon_he_recovery_controller.hpp"
 #include "ui/alcedo_main/album_backend/project_db_write_barrier.hpp"
@@ -61,6 +63,10 @@ class ApplicationModuleHost final : public QObject {
   Q_PROPERTY(alcedo::UpdateService* updates READ updates CONSTANT)
   Q_PROPERTY(alcedo::LutLibraryService* lutLibrary READ lut_library CONSTANT)
   Q_PROPERTY(alcedo::LutPackageService* lutPackages READ lut_packages CONSTANT)
+  /// LUT browser rows over lutLibrary; one instance shared by every LUT surface (plan 6.4).
+  Q_PROPERTY(LutLibraryModel* lutBrowser READ lut_browser CONSTANT)
+  /// The Color Grade target of LUT application, read from editorSession.
+  Q_PROPERTY(LutLibraryController* lutTarget READ lut_target CONSTANT)
   Q_PROPERTY(SemanticGenerationController* semanticGeneration READ semantic_generation CONSTANT)
   Q_PROPERTY(
       alcedo::AiProviderProfileController* aiProviderProfiles READ ai_provider_profiles CONSTANT)
@@ -125,6 +131,8 @@ class ApplicationModuleHost final : public QObject {
   }
 
   [[nodiscard]] auto editor_session() -> EditorSessionController* { return editor_session_.get(); }
+  [[nodiscard]] auto lut_browser() -> LutLibraryModel* { return lut_browser_.get(); }
+  [[nodiscard]] auto lut_target() -> LutLibraryController* { return lut_target_.get(); }
   [[nodiscard]] auto workspace_router() -> WorkspaceRouter* { return workspace_router_.get(); }
   [[nodiscard]] auto editor_behavior() -> EditorBehaviorPreferences* {
     return editor_behavior_.get();
@@ -181,6 +189,8 @@ class ApplicationModuleHost final : public QObject {
   std::unique_ptr<alcedo::EditorSessionRuntime>        editor_session_runtime_;
   std::shared_ptr<EditorSessionRenderSchedulerPort>    editor_session_scheduler_;
   std::unique_ptr<EditorSessionController>             editor_session_;
+  std::unique_ptr<LutLibraryModel>                     lut_browser_;
+  std::unique_ptr<LutLibraryController>                lut_target_;
   std::unique_ptr<WorkspaceRouter>                     workspace_router_;
   std::unique_ptr<EditorBehaviorPreferences>           editor_behavior_;
 

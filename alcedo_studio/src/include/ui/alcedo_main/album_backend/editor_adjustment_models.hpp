@@ -172,6 +172,12 @@ class EditorAdjustmentValueModel : public EditorAdjustmentModelBase {
   /// or commitImmediately). Tests QSignalSpy::wait on this.
   void settledCommitted();
 
+ protected:
+  /// Typed Model operation for the UI value @p v (used when paramsBuilder is unset). The
+  /// default writes a scalar, or a Sharpen amount for `sharpen`; a field whose Model takes
+  /// another operation overrides it.
+  [[nodiscard]] virtual auto valueWrite(double v) const -> alcedo::EditorParameterWrite;
+
  private:
   [[nodiscard]] auto clamp(double v) const -> double;
   // Clamp + set + clear invalid + emit valueChanged. Returns whether the value

@@ -1,7 +1,7 @@
 # LUT Library and Package Management Plan
 
 Date: 2026-09-29  
-Status: L1, L2, and L3 complete (2026-09-29); L4 complete on Windows CUDA/OpenCL, Metal pixel tests written but not run (2026-09-29); L5-L6 not started; panel visual design intentionally blank  
+Status: L1, L2, and L3 complete (2026-09-29); L4 complete on Windows CUDA/OpenCL, Metal pixel tests written but not run (2026-09-29); L5 complete (2026-09-29; old panel model removal moves with L6); L6 not started; panel visual design intentionally blank  
 Source revision: `dc73591020ef917fed089db7e4f454839d82051f`  
 Primary area: Alcedo Studio UI and application services  
 Parent: Standalone feature plan, indexed by the [roadmap index](../../README.md)  
@@ -577,7 +577,7 @@ Count the resulting maintenance changes in the phase estimate. Keep unrelated ed
 | L2 | Service-owned recursive inventory, user import, root selection and migration | L1 metadata | 1450-1950 | Complete 2026-09-29; actual size exceeded the estimate (see its record). |
 | L3 | Independent signed package checking, 7z installation, repair and cancellation | L1, L2 | 1500-1950 | Complete 2026-09-29; actual size exceeded the estimate (see its record). Settings QML stays in L6. |
 | L4 | Stable runtime references, missing-file behavior and LUT strength on all backends | L1, L2 | 1500-1950 | Complete on Windows 2026-09-29; Metal not run; actual size exceeded the estimate (see its record). |
-| L5 | Indexed classification, fuzzy search, favorites and exact-node application | L2, L4 | 1200-1750 | No visual layout work. Not started. |
+| L5 | Indexed classification, fuzzy search, favorites and exact-node application | L2, L4 | 1200-1750 | Complete 2026-09-29; no visual layout work; actual size exceeded the estimate (see its record). |
 | L6 | Independent navigation, Settings, small editor control and payload-free installers | L1-L5; separate visual design input | 1300-1900 | No preview worker. Not started. |
 
 Estimates include production code, tests, build files, resources, and documentation across repositories.
@@ -1430,12 +1430,184 @@ Record query p50/p95, GUI-thread time, and process memory for both library sizes
 
 **Exit criteria.**
 
-- [ ] Filter semantics match the approved metadata dimensions.
-- [ ] Search ranking is deterministic and bounded.
-- [ ] Applying an entry changes only the explicit target.
-- [ ] Selection does not rebuild the catalog or move the scroll position.
+- [x] Filter semantics match the approved metadata dimensions.
+- [x] Search ranking is deterministic and bounded.
+- [x] Applying an entry changes only the explicit target.
+- [x] Selection does not rebuild the catalog or move the scroll position.
 
-**Expected diff.** 1200-1750 lines. **Completion record:** Not started; fill section 12 for L5.
+**Expected diff.** 1200-1750 lines. **Completion record:** see below.
+
+##### Phase L5 completion record (2026-09-29)
+
+**Status:** complete, with one step deferred by its own condition. The browser has an indexed
+list model over the library, metadata filters with All/With print/No print, bounded
+Unicode-aware ranking, favorites stored by entry identity, and a separate controller. That
+controller binds the browser to exactly one Color Grade, and a small Editor strength model uses
+the same target. The old `EditorLutCatalogModel` still backs the current `LUTPanel.qml`. Step 7
+removes its copied catalog only "after its callers move to the new model"; that caller is the
+L6 panel, which waits for the visual design.
+
+**Source revisions and branches.**
+
+| Repository | Base | Branch | State |
+| --- | --- | --- | --- |
+| `pu-erh_lab` | `b6a50ddca` (L4 commit on `feature/lut-stable-references-strength`) | `feature/lut-browser-queries-target-binding` | Uncommitted working tree |
+
+**Implemented modules.**
+
+| Module | Responsibility |
+| --- | --- |
+| `album_backend/lut_library_query.{hpp,cpp}` | `LutSearchKeys` (derived keys: NFKC + case fold, name/alias tokens, field tokens for source, brands, stock, print, path; facet values); `ParseLutSearchQuery` (256 characters, 16 tokens); `RankLutSearchKeys` (whole name, then weakest token match exact < prefix < substring < edit, then match sum, then name before other fields); short tokens exact/prefix only, one edit for 4-7 characters, two for 8+; `LutEditDistanceMemo` per ranking pass; `LutKeysPassFilter` |
+| `album_backend/lut_library_model.{hpp,cpp}` | `LutLibraryModel` (`QAbstractListModel`): row indices over service entries; row values read through `LutLibraryService::ReadEntry` at `data()` time; keys rebuilt only for entries in `InventoryChanged`; category/source/brand/print/favorites predicates; choices with counts from the other predicates and the query; General clears brand and print; 100 ms typing delay; name/modified order without a query; focus, applied entry, and favorite changes emit `dataChanged` only |
+| `album_backend/lut_library_controller.{hpp,cpp}` | `LutLibraryController`: `LutTargetSource` port (session adapter in production); target states `ready`, `noImage`, `noNode`, `notColorGrade`, `maskSelected`, `noLutAdjustment`, `notEditable`; association (entry ID, last known name, strength, Missing through the library resolver) read without submitting; `applyEntry`/`clearAssociation` capture the target from the current document and submit one settled reference write without strength |
+| `album_backend/editor_lut_adjustment_model.{hpp,cpp}` | `EditorLutAdjustmentModel`: 0-100 % strength on the existing value-model input rules, strength-only `lut` writes, association name / Missing / "No LUT" status from the controller, no load during a pointer drag |
+| `editor_adjustment_models.{hpp,cpp}` | `EditorAdjustmentValueModel::valueWrite` extension point (existing scalar/Sharpen writes moved into it) |
+| `editor_session_controller.{hpp,cpp}` | `SubmitTargetedWrite` (captured target, owner revalidates at apply), `selected_node_id`, `NodeSelectionChanged`; `submitWrite` shares one enqueue path |
+| `app/lut_library_inventory`, `lut_library_publication`, `lut_library_service` | Favorites are entry IDs (`official:<package>/<lut id>` or `library:<path>`, `LutLibraryPublication::EntryIdOf`); `lut-library.json` writes `favorite_entries`, reads the earlier `favorites` paths and converts them after load and `UseRoot`; `ReadEntryById` |
+| `ApplicationModuleHost` | One `lutBrowser` and one `lutTarget`, bound to `lutLibrary` and `editorSession`; the target's association marks the browser's applied row; destroyed before the session |
+| QML registration | `LutLibraryModel`, `LutLibraryController`, `EditorLutAdjustmentModel` in `Alcedo.Main` |
+
+Decisions made during L5:
+
+1. **Entry identity.** A package-owned official LUT is identified by package ID and metadata ID,
+   and every other entry by its root-relative path. These are the texts `DescribeLutReference`
+   already produces for the reference that selects the entry. A favorite therefore survives a
+   package update that changes the content directory. It also survives root migration.
+2. **Captured target through an explicit port.** The controller reads the image, published
+   document, primary node, mask selection, and editability through `LutTargetSource`. A write
+   goes through `EditorSessionController::SubmitTargetedWrite`. The pending input keeps that
+   target, and `ApplyEditorParameterWrite` validates it again. A deleted node or LMT instance
+   rejects the write. Nothing resolves to PrimaryGrade.
+3. **Strength through the existing adjustment path.** The Editor control submits
+   strength-only `lut` writes through the existing submitter. That submitter resolves the same
+   primary selected node that the controller shows.
+4. **Ranking stays on the GUI thread.** Release measurements (below) are about 8x under the
+   budget, so no worker or larger index was added. The only added structure is the per-pass
+   edit-distance memo. It reduced the debug 10,000-entry p95 from 335 ms to 171 ms.
+5. **Choice lists.** Source and brand choices list every value the library declares, with
+   counts that may be zero. A chosen value stays listed. No filter changes silently.
+
+**Primary success call chain:**
+
+```text
+typing -> LutLibraryModel::setQueryText -> 100 ms timer -> applyQueryNow -> rerank
+  (RankLutSearchKeys per LutSearchKeys, LutEditDistanceMemo) -> refilter (LutKeysPassFilter,
+  order by rank then entry ID) -> model reset -> ListView instantiates visible delegates
+  -> data() -> LutLibraryService::ReadEntry (scoped read)
+filter choice -> setCategory/setSource/setBrand/setPrint/setFavoritesOnly -> refilter
+  -> rebuildChoices (counts without the dimension's own predicate)
+row focus -> focusEntry -> dataChanged(FocusedRole) for two rows (no reset, no document change)
+apply -> LutLibraryController::applyEntry(entry ID) -> ReadEntryById (valid 3D entry)
+  -> ReadTarget (image, published document, primary node, no mask, Color Grade, LMT instance,
+     editable) -> EditorLutWrite{reference, name} -> LutTargetSource::SubmitLutWrite
+  -> EditorSessionController::SubmitTargetedWrite -> EnqueueAdjustmentInput (captured target)
+  -> session owner ApplyEditorParameterWrite -> settled history commit
+  -> AdjustmentSnapshotChanged -> LutLibraryController::reload (load-only)
+  -> associationChanged -> LutLibraryModel::setAppliedEntryId, EditorLutAdjustmentModel value
+strength drag -> EditorLutAdjustmentModel (valueWrite: LmtUpdate{strength}) -> submitWrite
+  -> selected Color Grade -> interactive previews and one settled commit
+```
+
+**Primary failure call chain:**
+
+```text
+no photo / no or deleted node / Develop (RAW) / DRT (Output) / mask selected / no LMT instance
+  / not editable -> ReadTarget state != ready -> applyEntry/clearAssociation return false
+  -> applyRejected(targetMessage), lastError; no submit; browsing and search keep working
+invalid or 1D-only entry, entry no longer listed -> rejected before a write with the reason
+node deleted after capture -> ApplyEditorParameterWrite fails -> document unchanged
+selection changes after capture -> queued write still targets the captured node
+missing file -> association keeps reference, name, and strength; associationMissing,
+  "Missing: <name>"; a later inventory publication restores it
+zero matches -> count 0; the chosen filters and query stay as set
+favorite write failure -> favoriteFailed(message); favorites unchanged
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `FiltersUseIntersectionAndAllRemovesOnePredicate` (360 combinations compared with independent entry facts; facet counts) | `LutLibraryModelTest` | PASS |
+| `PrintPresenceCombinesPrintFilmAndPaper` (brand and source still intersect) | `LutLibraryModelTest` | PASS |
+| `ThirdPartyPrintMetadataAddsPresenceFilter` (new source; no-print library) | `LutLibraryModelTest` | PASS |
+| `GeneralCategoryClearsFilmPredicates` (zero-result choice kept) | `LutLibraryModelTest` | PASS |
+| `FuzzySearchRanksExactNameBeforeTypo` (tier order, full-width and umlaut folding, aliases, typo, entry-ID ties, short tokens, bounds) | `LutLibraryModelTest` | PASS |
+| `TenThousandEntriesKeepVisibleRowsBounded` (same delegate count at 1,000 and 10,000; measurements) | `LutLibraryModelTest` (debug and Release) | PASS |
+| `SelectionChangeDoesNotResetRows` (focus, applied, favorite: `dataChanged` only; unfavorite under the favorites filter removes one row) | `LutLibraryModelTest` | PASS |
+| `QueryAppliesAfterTypingDelay` | `LutLibraryModelTest` | PASS |
+| `ApplyLutChangesOnlyCapturedColorGrade` (three grades; selection moves before apply; other nodes and other adjustments byte-equal; strength kept; deleted node rejects; invalid entries rejected; clear keeps strength) | `LutLibraryModelTest` (`LutLibraryControllerTest`) | PASS |
+| `NonGradeSelectionAllowsBrowseButRejectsApply` (no photo, no node, deleted node, RAW, Output, Mask, not editable) | `LutLibraryModelTest` | PASS |
+| `TargetProjectionReloadDoesNotSubmitHistory` (node changes, rebinding, second controller: no submits, document JSON unchanged) | `LutLibraryModelTest` | PASS |
+| `MissingAssociationKeepsReferenceNameAndStrength`, `StrengthControlWritesOnlyStrength` | `LutLibraryModelTest` | PASS |
+| `LutTargetFollowsSelectionAndQueuesTheCapturedGrade` (real `EditorSessionController` + `EditorNodeController`; pending field target and write) | `EditorNodeSelectionLayoutTest` | PASS |
+| `OfficialFavoriteFollowsItsPackageAcrossContentDirectories` (stored path favorites convert; malformed ID rejected) | `LutLibraryServiceTest` | PASS |
+| Host exposes `lutBrowser`/`lutTarget`, binds library and session, destroys them before the session | `ApplicationModuleHostLifecycleTest` | PASS |
+| Existing callers: `EditorPipelineCommandServiceTest`, `EditorLookModelTest`, `EditorLutPanelQmlTest`, `EditorSerialInputBoundaryTest`, `LutPackageServiceTest`, `ApplicationModuleHostShutdownTest` | respective targets | PASS |
+
+Measurements (`TenThousandEntriesKeepVisibleRowsBounded`; synthetic persisted inventories, no
+CUBE file reads; one Windows development machine; each query timing includes ranking, filtering,
+sorting, choice counts, and the model reset on the GUI thread):
+
+| Build | Entries | Index build | Query p50 | Query p95 | Focus change | Working-set increase |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Release | 1,000 | 11-13 ms | 0.5 ms | 0.9 ms | 0.001 ms | 1-2 MiB |
+| Release | 10,000 | 113-115 ms | 5-7 ms | 12-14 ms | 0.001 ms | 22 MiB |
+| Debug | 10,000 | 1.2 s | 109 ms | 171 ms | 0.007 ms | 36 MiB |
+
+The Release values meet the section 10.1 targets: 100 ms query p95, 16 ms GUI selection, and
+64 MiB. The Release build asserts the query and focus targets (`NDEBUG`). The index build runs
+once when the library is bound, and then only for changed entries.
+
+Commands:
+
+```powershell
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target LutLibraryModelTest LutLibraryServiceTest LutPackageServiceTest EditorLookModelTest EditorLutPanelQmlTest EditorSerialInputBoundaryTest EditorNodeSelectionLayoutTest ApplicationModuleHostLifecycleTest ApplicationModuleHostShutdownTest EditorPipelineCommandServiceTest alcedo_main --parallel 4
+$env:PATH = "D:/Projects/pu-erh_lab/build/debug/vcpkg_installed/x64-windows/debug/bin;" + $env:PATH
+ctest --test-dir build/debug -R "^(LutLibraryModelTest|LutLibraryServiceTest|LutPackageServiceTest|EditorLookModelTest|EditorLutPanelQmlTest|EditorSerialInputBoundaryTest|EditorNodeSelectionLayoutTest|ApplicationModuleHostLifecycleTest|ApplicationModuleHostShutdownTest|EditorPipelineCommandServiceTest)\." -j 4 --output-on-failure
+# Release measurement (the release tree was configured with tests on, then switched back off)
+cmd /c scripts\msvc_env.cmd --preset win_release -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake" -DALCEDO_BUILD_TESTS=ON
+cmd /c scripts\msvc_env.cmd --build --preset win_release --target LutLibraryModelTest --parallel 4
+build/release/alcedo_studio/tests/ui/LutLibraryModelTest_runtime/LutLibraryModelTest.exe
+```
+
+Suite totals: 216 discovered in the ten targets, 215 passed, 1 failed (below); build of the ten targets plus `alcedo_main` exited 0. Release `LutLibraryModelTest` 13/13.
+`EditorNodeSelectionLayoutTest.EditorNodeController.GeometryWriteRejectedWhenColorGradeIsSelected`
+fails before and after this phase. It also fails on the clean L4 commit `b6a50ddca` (stash,
+rebuild, rerun). The full suite was not run (repository rule). No macOS build or run.
+
+**Checklist / exit condition:**
+
+- [x] Filter semantics match the approved metadata dimensions.
+- [x] Search ranking is deterministic and bounded.
+- [x] Applying an entry changes only the explicit target.
+- [x] Selection does not rebuild the catalog or move the scroll position (no reset, move, or
+  layout change on focus, applied-entry, or favorite changes; scroll position itself is a view
+  property checked in L6).
+
+Implementation steps 1-6 and 8 are done. For step 7, the small Editor model exists. The
+`EditorLutCatalogModel` removal waits for its only caller, `LUTPanel.qml`, to move to the new
+models in L6.
+
+**LOC note (grill-code-review):** about +3380/-100 lines. Production is about +2140 (new files
+about 1900), and tests are about +1240, including the shared
+`lut_library_model_test_support.hpp`. This exceeds the 1200-1750 estimate. The main causes are the
+360-combination filter test, the measurement harness, and entry-ID favorites in the service. The
+largest new file is `lut_library_model.cpp` (about 600 lines). `lut_library_service.cpp` is about
+750 lines. `editor_session_controller.cpp` was already about 1850 lines and grew by about 40.
+
+**Remaining gaps:**
+
+- `EditorLutCatalogModel`, `lut_catalog`, and `LUTPanel.qml` still hold the old copied row list
+  and JavaScript filtering. They are removed when L6 moves the panel to `lutBrowser`, `lutTarget`,
+  and `EditorLutAdjustmentModel`. Until then, two browser models exist, but only one catalog owner
+  exists (the service).
+- No QML surface uses the new models yet (L6). Scroll-position preservation in a real view, keyboard
+  input, and the hidden-editor behavior are L6 checks.
+- The measurements use synthetic inventories on one development machine. The section 10.1 large
+  CUBE refresh and 10,000 real files belong to the L6 manual checks.
+- New user-visible strings (target reasons, choice labels, status) are English; translations are
+  not updated (lupdate is not run casually).
+- `GeometryWriteRejectedWhenColorGradeIsSelected` fails on the clean L4 commit and was not changed.
 
 ### L6. Workspace integration and distribution change
 
@@ -1589,7 +1761,7 @@ the visible library. Revisit an estimate before introducing a larger index or wo
 
 ## 12. Completion records
 
-L1, L2, L3, and L4 are recorded under their phases. L5 and L6 are not started. Copy this record into the relevant phase after implementation:
+L1, L2, L3, L4, and L5 are recorded under their phases. L6 is not started. Copy this record into the relevant phase after implementation:
 
 ```text
 Phase / date / status:

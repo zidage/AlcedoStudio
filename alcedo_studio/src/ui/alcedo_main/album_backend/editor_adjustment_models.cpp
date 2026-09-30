@@ -22,10 +22,13 @@
 #include "ui/alcedo_main/album_backend/editor_grade_white_balance_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_hls_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_lens_catalog_model.hpp"
+#include "ui/alcedo_main/album_backend/editor_lut_adjustment_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_lut_catalog_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_scope_item.hpp"
 #include "ui/alcedo_main/album_backend/editor_tone_curve_item.hpp"
 #include "ui/alcedo_main/album_backend/editor_tone_curve_model.hpp"
+#include "ui/alcedo_main/album_backend/lut_library_controller.hpp"
+#include "ui/alcedo_main/album_backend/lut_library_model.hpp"
 
 namespace alcedo::ui {
 
@@ -312,16 +315,19 @@ auto EditorAdjustmentValueModel::applyValue(double v) -> bool {
   return true;
 }
 
+auto EditorAdjustmentValueModel::valueWrite(double v) const -> alcedo::EditorParameterWrite {
+  if (fieldKey() == QLatin1String("sharpen")) {
+    return alcedo::SharpenUpdate{static_cast<float>(v), std::nullopt, std::nullopt};
+  }
+  return alcedo::EditorScalarWrite{UiValueToModelValue(fieldKey(), v)};
+}
+
 void EditorAdjustmentValueModel::submitInteractive(double v) {
   if (paramsBuilder().isCallable()) {
     submitJsonBoundary(resolveParams(QJSValue(v), numericParamsJson(v)), false);
     return;
   }
-  if (fieldKey() == QLatin1String("sharpen")) {
-    submitNow(alcedo::SharpenUpdate{static_cast<float>(v), std::nullopt, std::nullopt}, false);
-    return;
-  }
-  submitNow(alcedo::EditorScalarWrite{UiValueToModelValue(fieldKey(), v)}, false);
+  submitNow(valueWrite(v), false);
 }
 
 void EditorAdjustmentValueModel::submitSettled(double v) {
@@ -329,11 +335,7 @@ void EditorAdjustmentValueModel::submitSettled(double v) {
     submitJsonBoundary(resolveParams(QJSValue(v), numericParamsJson(v)), true);
     return;
   }
-  if (fieldKey() == QLatin1String("sharpen")) {
-    submitNow(alcedo::SharpenUpdate{static_cast<float>(v), std::nullopt, std::nullopt}, true);
-    return;
-  }
-  submitNow(alcedo::EditorScalarWrite{UiValueToModelValue(fieldKey(), v)}, true);
+  submitNow(valueWrite(v), true);
 }
 
 void EditorAdjustmentValueModel::onDebounceTimeout() {
@@ -471,6 +473,9 @@ void RegisterEditorAdjustmentQmlTypes() {
   qmlRegisterType<EditorCdlTrackballModel>("Alcedo.Main", 1, 0, "EditorCdlTrackballModel");
   qmlRegisterType<EditorCdlTrackballItem>("Alcedo.Main", 1, 0, "EditorCdlTrackballItem");
   qmlRegisterType<EditorLutCatalogModel>("Alcedo.Main", 1, 0, "EditorLutCatalogModel");
+  qmlRegisterType<EditorLutAdjustmentModel>("Alcedo.Main", 1, 0, "EditorLutAdjustmentModel");
+  qmlRegisterType<LutLibraryModel>("Alcedo.Main", 1, 0, "LutLibraryModel");
+  qmlRegisterType<LutLibraryController>("Alcedo.Main", 1, 0, "LutLibraryController");
   qmlRegisterType<EditorGeometryMath>("Alcedo.Main", 1, 0, "EditorGeometryMath");
   qmlRegisterType<EditorLensCatalogModel>("Alcedo.Main", 1, 0, "EditorLensCatalogModel");
   EditorScopeItem::RegisterQmlType();

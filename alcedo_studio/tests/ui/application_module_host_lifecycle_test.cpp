@@ -31,6 +31,13 @@ TEST_F(ApplicationModuleHostLifecycleTests,
       return event.kind == ApplicationModuleHost::LifecycleEvent::Kind::Constructed;
     }));
     EXPECT_NE(host.editor_session(), nullptr);
+    // One LUT browser and target, bound to the library and the editor session (plan L5).
+    ASSERT_NE(host.lut_browser(), nullptr);
+    ASSERT_NE(host.lut_target(), nullptr);
+    EXPECT_EQ(host.lut_browser()->library(), host.lut_library());
+    EXPECT_EQ(host.lut_target()->library(), host.lut_library());
+    EXPECT_EQ(host.lut_target()->editorSession(), host.editor_session());
+    EXPECT_FALSE(host.lut_target()->canApply());
     EXPECT_NE(host.workspace_router(), nullptr);
   }
 
@@ -123,6 +130,8 @@ TEST_F(ApplicationModuleHostLifecycleTests,
         {"updates", "alcedo::UpdateService*"},
         {"lutLibrary", "alcedo::LutLibraryService*"},
         {"lutPackages", "alcedo::LutPackageService*"},
+        {"lutBrowser", "alcedo::ui::LutLibraryModel*"},
+        {"lutTarget", "alcedo::ui::LutLibraryController*"},
         {"semanticGeneration", "alcedo::ui::SemanticGenerationController*"},
         {"aiProviderProfiles", "alcedo::AiProviderProfileController*"},
         {"imageAnalysis", "alcedo::ui::ImageAnalysisController*"},

@@ -259,6 +259,19 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
       return editor_session_ ? editor_session_->presentation_frame_sink() : nullptr;
     });
   }
+  lut_browser_ = std::make_unique<LutLibraryModel>();
+  lut_browser_->setLibrary(lut_library_.get());
+  RecordConstruction("LutLibraryModel", lut_browser_.get());
+  lut_target_ = std::make_unique<LutLibraryController>();
+  lut_target_->setLibrary(lut_library_.get());
+  lut_target_->setEditorSession(editor_session_.get());
+  RecordConstruction("LutLibraryController", lut_target_.get());
+  // The browser marks the entry the target applies; the two stay separate owners.
+  QObject::connect(lut_target_.get(), &LutLibraryController::associationChanged,
+                   lut_browser_.get(), [browser = lut_browser_.get(), target = lut_target_.get()] {
+                     browser->setAppliedEntryId(target->associationEntryId());
+                   });
+  lut_browser_->setAppliedEntryId(lut_target_->associationEntryId());
   workspace_router_ = std::make_unique<WorkspaceRouter>(editor_session_.get(), this);
   RecordConstruction("WorkspaceRouter", workspace_router_.get());
   editor_behavior_ = std::make_unique<EditorBehaviorPreferences>(this);
@@ -496,6 +509,8 @@ ApplicationModuleHost::~ApplicationModuleHost() {
   };
   destroy(editor_behavior_, "EditorBehaviorPreferences");
   destroy(workspace_router_, "WorkspaceRouter");
+  destroy(lut_target_, "LutLibraryController");
+  destroy(lut_browser_, "LutLibraryModel");
   destroy(editor_session_, "EditorSessionController");
   if (editor_session_runtime_) {
     if (editor_session_runtime_->save_coordinator) {

@@ -282,27 +282,32 @@ void LutLibraryService::ResumeSourceCleanup() {
 }
 
 void LutLibraryService::ConvertLegacyFavorites() {
-  const QStringList legacy = options_.preferences->LoadLegacyFavoritePaths();
-  if (legacy.isEmpty()) return;
-  QStringList         remaining;
-  LutLibraryUserState updated = publication_->UserState();
+  const QStringList   legacy   = options_.preferences->LoadLegacyFavoritePaths();
+  LutLibraryUserState updated  = publication_->UserState();
+  std::vector<std::string> paths = std::move(updated.legacy_favorite_paths);
+  updated.legacy_favorite_paths.clear();
+  QStringList remaining;
   for (const QString& path : legacy) {
-    const std::optional<std::string> relative = RelativePathInRoot(FromQString(path));
-    if (!relative) {
+    if (std::optional<std::string> relative = RelativePathInRoot(FromQString(path))) {
+      paths.push_back(std::move(*relative));
+    } else {
       remaining.push_back(path);
-      continue;
-    }
-    if (!std::binary_search(updated.favorite_paths.begin(), updated.favorite_paths.end(),
-                            *relative)) {
-      updated.favorite_paths.insert(
-          std::lower_bound(updated.favorite_paths.begin(), updated.favorite_paths.end(), *relative),
-          *relative);
     }
   }
-  if (remaining.size() == legacy.size()) return;
+  if (paths.empty()) return;
+  for (const std::string& relative : paths) {
+    const LutLibraryEntry* entry = FindLutLibraryEntry(publication_->Inventory(), relative);
+    std::string id = entry != nullptr ? LutLibraryPublication::EntryIdOf(*entry)
+                                      : DescribeLutReference(LibraryLutReference{relative});
+    auto position  = std::lower_bound(updated.favorite_entry_ids.begin(),
+                                      updated.favorite_entry_ids.end(), id);
+    if (position == updated.favorite_entry_ids.end() || *position != id) {
+      updated.favorite_entry_ids.insert(position, std::move(id));
+    }
+  }
   if (!options_.file_operations.write_user_state(Root(), updated).empty()) return;
   publication_->SetUserState(std::move(updated));
-  options_.preferences->SaveLegacyFavoritePaths(remaining);
+  if (remaining.size() != legacy.size()) options_.preferences->SaveLegacyFavoritePaths(remaining);
   emit FavoritesChanged();
 }
 
@@ -361,25 +366,46 @@ auto LutLibraryService::LocateEntry(std::string_view relative_path) -> Location 
   return location;
 }
 
-auto LutLibraryService::IsFavorite(std::string_view relative_path) const -> bool {
-  const auto& favorites = publication_->UserState().favorite_paths;
-  return std::binary_search(favorites.begin(), favorites.end(), relative_path);
+auto LutLibraryService::ReadEntryById(
+    std::string_view entry_id, const std::function<void(const LutLibraryEntry&)>& visitor) const
+    -> bool {
+  constexpr std::string_view kLibraryPrefix = "library:";
+  if (entry_id.starts_with(kLibraryPrefix)) {
+    const LutLibraryEntry* entry =
+        FindLutLibraryEntry(publication_->Inventory(), entry_id.substr(kLibraryPrefix.size()));
+    // A path of package-owned official content is selected by its official ID instead.
+    if (entry == nullptr || LutLibraryPublication::EntryIdOf(*entry) != entry_id) return false;
+    visitor(*entry);
+    return true;
+  }
+  for (const LutLibraryEntry& entry : publication_->Inventory().entries) {
+    if (!entry.managed_package_id.empty() && LutLibraryPublication::EntryIdOf(entry) == entry_id) {
+      visitor(entry);
+      return true;
+    }
+  }
+  return false;
 }
 
-auto LutLibraryService::SetFavorite(std::string_view relative_path, bool favorite) -> Status {
+auto LutLibraryService::IsFavorite(std::string_view entry_id) const -> bool {
+  const auto& favorites = publication_->UserState().favorite_entry_ids;
+  return std::binary_search(favorites.begin(), favorites.end(), entry_id);
+}
+
+auto LutLibraryService::SetFavorite(std::string_view entry_id, bool favorite) -> Status {
   if (operation_ == Operation::kLoad || operation_ == Operation::kUseRoot ||
       operation_ == Operation::kMigrateRoot) {
     return Status::kBusy;
   }
-  if (!IsSafeLutRelativePath(relative_path)) return Status::kInvalidRequest;
-  if (IsFavorite(relative_path) == favorite) return Status::kOk;
-  LutLibraryUserState updated = publication_->UserState();
-  auto                position =
-      std::lower_bound(updated.favorite_paths.begin(), updated.favorite_paths.end(), relative_path);
+  if (!IsValidLutLibraryEntryId(entry_id)) return Status::kInvalidRequest;
+  if (IsFavorite(entry_id) == favorite) return Status::kOk;
+  LutLibraryUserState updated  = publication_->UserState();
+  auto&               ids      = updated.favorite_entry_ids;
+  auto                position = std::lower_bound(ids.begin(), ids.end(), entry_id);
   if (favorite) {
-    updated.favorite_paths.insert(position, std::string(relative_path));
+    ids.insert(position, std::string(entry_id));
   } else {
-    updated.favorite_paths.erase(position);
+    ids.erase(position);
   }
   if (std::string error = options_.file_operations.write_user_state(Root(), updated);
       !error.empty()) {
@@ -537,6 +563,7 @@ auto LutLibraryService::UseRoot(const fs::path& root) -> Status {
       emit RootChanged();
       emit FavoritesChanged();
       Finish(std::move(result));
+      ConvertLegacyFavorites();
       ResumeSourceCleanup();
     };
   });

@@ -1568,6 +1568,31 @@ target_link_libraries(EditorLookModelTest
 alcedo_ui_gtest_discover_tests(EditorLookModelTest TEST_PREFIX "EditorLookModelTest.")
 alcedo_register_test_target(EditorLookModelTest ui)
 
+# LUT browser queries and Color Grade target binding (LUT library plan L5).
+add_executable(LutLibraryModelTest
+    ${ALCEDO_TEST_ROOT}/ui/lut_library_model_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/lut_library_controller_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(LutLibraryModelTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(LutLibraryModelTest
+  PRIVATE
+    AlbumBackendLib
+    GTest::gtest
+    JSON
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Qml
+    Qt6::Quick
+    Qt6::Test
+    Qt6::Widgets
+)
+if(WIN32)
+  target_link_libraries(LutLibraryModelTest PRIVATE psapi)
+endif()
+alcedo_ui_gtest_discover_tests(LutLibraryModelTest TEST_PREFIX "LutLibraryModelTest.")
+alcedo_register_test_target(LutLibraryModelTest ui)
+
 # Phase 6D: pure CDL trackball disc geometry (no QQuickWindow / GPU).
 add_executable(EditorCdlTrackballGeometryTest
     ${ALCEDO_TEST_ROOT}/ui/editor_cdl_trackball_geometry_test.cpp

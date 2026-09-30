@@ -80,19 +80,32 @@ auto EditorLutCatalogModel::favoritePaths() const -> QStringList {
   if (!library_) {
     return paths;
   }
-  for (const std::string& relative : library_->FavoritePaths()) {
-    paths.push_back(QString::fromStdString(
-        alcedo::LutPathToUtf8(library_->Root() / alcedo::LutPathFromUtf8(relative))));
-  }
+  library_->ForEachEntry([&](const alcedo::LutLibraryEntry& entry) {
+    if (library_->IsFavorite(alcedo::LutLibraryPublication::EntryIdOf(entry))) {
+      paths.push_back(QString::fromStdString(
+          alcedo::LutPathToUtf8(library_->Root() / alcedo::LutPathFromUtf8(entry.relative_path))));
+    }
+  });
   return paths;
 }
 
-void EditorLutCatalogModel::toggleFavoritePath(const QString& path) {
+auto EditorLutCatalogModel::entryIdOf(const QString& path) const -> std::optional<std::string> {
   const std::optional<std::string> relative = relativePathOf(path);
-  if (!relative) {
+  std::optional<std::string>       entry_id;
+  if (relative) {
+    library_->ReadEntry(*relative, [&](const alcedo::LutLibraryEntry& entry) {
+      entry_id = alcedo::LutLibraryPublication::EntryIdOf(entry);
+    });
+  }
+  return entry_id;
+}
+
+void EditorLutCatalogModel::toggleFavoritePath(const QString& path) {
+  const std::optional<std::string> entry_id = entryIdOf(path);
+  if (!entry_id) {
     return;
   }
-  if (library_->SetFavorite(*relative, !library_->IsFavorite(*relative)) !=
+  if (library_->SetFavorite(*entry_id, !library_->IsFavorite(*entry_id)) !=
       alcedo::LutLibraryService::Status::kOk) {
     statusText_ = library_->last_error();
     emit catalogChanged();
@@ -100,8 +113,8 @@ void EditorLutCatalogModel::toggleFavoritePath(const QString& path) {
 }
 
 bool EditorLutCatalogModel::isFavoritePath(const QString& path) const {
-  const std::optional<std::string> relative = relativePathOf(path);
-  return relative && library_->IsFavorite(*relative);
+  const std::optional<std::string> entry_id = entryIdOf(path);
+  return entry_id && library_->IsFavorite(*entry_id);
 }
 
 auto EditorLutCatalogModel::referenceForPath(const QString& path) const -> alcedo::LutReference {

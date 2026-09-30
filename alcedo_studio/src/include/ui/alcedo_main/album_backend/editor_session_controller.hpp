@@ -19,6 +19,7 @@
 
 #include "app/adjustment_transfer_types.hpp"
 #include "app/editor_adjustment_context.hpp"
+#include "app/editor_adjustment_types.hpp"
 #include "app/editor_history_types.hpp"
 #include "app/editor_node_graph_projection.hpp"
 #include "app/editor_pending_input.hpp"
@@ -247,7 +248,20 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   /// Queue a node-switch seal so later writes start a new sequence. Old
   /// sequence ids keep their captured target. No live mutation.
   Q_INVOKABLE bool enqueueNodeSwitchBoundary();
+  /**
+   * @brief Enqueue one write for a target the caller captured from the current document.
+   *
+   * Unlike submitWrite, the target is not derived from the node selection at submit time.
+   * The session owner validates it again when it applies the write: a deleted node or
+   * adjustment instance rejects the write and leaves the document unchanged.
+   * @return false for an incomplete target, a session that cannot edit, or a rejected enqueue.
+   */
+  auto             SubmitTargetedWrite(const alcedo::EditorParameterTarget& target,
+                                       alcedo::EditorParameterWrite write, bool settled) -> bool;
+  /// Primary selected node of the bound Nodes-page selection; empty when none is bound.
+  [[nodiscard]] auto selected_node_id() const -> alcedo::NodeId;
   /// Bind the Nodes-page selection owner used to stamp submit targets.
+  /// Emits NodeSelectionChanged now and whenever its selection changes.
   void             BindNodeSelectionSource(EditorNodeController* nodes);
   /**
    * @brief Install the Image-owner EXIF reader used by the adjustment header.
@@ -399,6 +413,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void LastEditedImageChanged();
   // Phase 7A P1: emitted with the typed result of a history/Version operation.
   void HistoryOperationFinished();
+  /// The bound node selection source or its primary selection changed.
+  void NodeSelectionChanged();
 
  private:
   void                     LoadFilmstripUiPrefs();
@@ -409,6 +425,10 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void                     RefreshImageExifDisplay();
   void                     ApplyExifRowText(const alcedo::EditorExifRowText& text);
   void                     ApplyExifLensIdentity(const alcedo::EditorImageExifDisplay& display);
+  /// Enqueue @p patch (std::nullopt means the write was rejected before enqueueing) and keep
+  /// the viewport's interactive present loop in step with @p settled.
+  auto EnqueueAdjustmentPatch(std::optional<alcedo::EditorAdjustmentPatch> patch, bool settled)
+      -> bool;
   void                     ApplyOpenLocal(uint elementId, uint imageId);
   void                     ApplyCloseLocal();
   void                     SyncViewportIdentity();

@@ -33,6 +33,8 @@
 #include "ui/alcedo_main/album_backend/editor_node_graph_presentation.hpp"
 #include "ui/alcedo_main/album_backend/editor_node_layout_store.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
+#include "ui/alcedo_main/album_backend/lut_library_controller.hpp"
+#include "lut_library_model_test_support.hpp"
 
 namespace {
 
@@ -331,6 +333,49 @@ TEST(EditorNodeController, PublishDocumentSelectsPrimaryColorGrade) {
   EXPECT_EQ(controller.selected_node_id(), NodeId{"grade.primary"});
   EXPECT_EQ(controller.backbone_node_ids().size(), 3);
   EXPECT_FALSE(controller.can_add_color_grade());
+}
+
+// Plan L5: the LUT target follows the session's node selection and submits the captured
+// Color Grade target through EditorSessionController::SubmitTargetedWrite.
+TEST(EditorNodeController, LutTargetFollowsSelectionAndQueuesTheCapturedGrade) {
+  alcedo::ui::test::TemporaryLutLibrary library(
+      {{"looks/teal.cube", alcedo::ui::test::CubeWithMetadata({})}});
+  DocumentSessionBackend backend;
+  ASSERT_TRUE(
+      alcedo::AddCleanColorGrade(backend.Document(), NodeId{"drt"}, NodeId{"grade.extra"}).empty());
+  EditorSessionController session(&backend);
+  EditorNodeController    nodes;
+  nodes.set_editor_session(&session);
+  alcedo::ui::LutLibraryController target;
+  target.setLibrary(library.Service());
+  target.setEditorSession(&session);
+
+  nodes.selectNode(QStringLiteral("grade.extra"));
+  EXPECT_EQ(target.targetNodeId(), QStringLiteral("grade.extra"));
+  ASSERT_TRUE(target.canApply()) << target.targetMessage().toStdString();
+  ASSERT_TRUE(target.applyEntry(QStringLiteral("library:looks/teal.cube")));
+  EXPECT_EQ(backend.enqueue_count(), 1);
+  const auto  pending = backend.PeekPendingInput();
+  const auto* field   = alcedo::FindPendingField(pending, "lut");
+  ASSERT_NE(field, nullptr);
+  EXPECT_EQ(field->target.owner_kind, EditorParameterOwnerKind::ColorGrade);
+  EXPECT_EQ(field->target.node_id, NodeId{"grade.extra"});
+  const auto* extra = dynamic_cast<const alcedo::ColorGradeNodeModel*>(
+      backend.Document().Graph().FindNode(NodeId{"grade.extra"}));
+  ASSERT_NE(extra, nullptr);
+  EXPECT_EQ(field->target.adjustment_instance_id,
+            *extra->FindAdjustmentIdByType(alcedo::type_ids::Lmt()));
+  const auto* write = std::get_if<alcedo::EditorLutWrite>(&field->write);
+  ASSERT_NE(write, nullptr);
+  EXPECT_EQ(write->reference,
+            std::optional<alcedo::LutReference>(alcedo::LibraryLutReference{"looks/teal.cube"}));
+  EXPECT_FALSE(write->strength.has_value());
+
+  // Output and RAW selections browse only.
+  nodes.selectNode(QStringLiteral("drt"));
+  EXPECT_EQ(target.state(), alcedo::ui::LutTargetState::kNotColorGrade);
+  EXPECT_FALSE(target.applyEntry(QStringLiteral("library:looks/teal.cube")));
+  EXPECT_EQ(backend.enqueue_count(), 1);
 }
 
 TEST(EditorNodeController, TopologyEditSelectsTheSurvivingDownstreamNode) {

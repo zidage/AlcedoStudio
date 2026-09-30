@@ -62,9 +62,9 @@ TEST_F(LutLibraryServiceTest, EqualBasenamesRemainSeparateEntries) {
   const Service::Location other = service->LocateEntry("agfa/look.cube");
   EXPECT_EQ(other.status, Service::LocateStatus::kNotInInventory);
   ASSERT_TRUE(WaitUntilIdle(*service));
-  ASSERT_TRUE(service->SetFavorite("kodak/look.cube", true) == Service::Status::kOk);
-  EXPECT_TRUE(service->IsFavorite("kodak/look.cube"));
-  EXPECT_FALSE(service->IsFavorite("fuji/look.cube"));
+  ASSERT_TRUE(service->SetFavorite("library:kodak/look.cube", true) == Service::Status::kOk);
+  EXPECT_TRUE(service->IsFavorite("library:kodak/look.cube"));
+  EXPECT_FALSE(service->IsFavorite("library:fuji/look.cube"));
 }
 
 TEST_F(LutLibraryServiceTest, HeaderClaimDoesNotGrantPackageOwnership) {
@@ -250,10 +250,56 @@ TEST_F(LutLibraryServiceTest, LegacyFavoritesConvertThroughExactPaths) {
 
   const auto service             = StartService();
 
-  EXPECT_EQ(service->FavoritePaths(), (std::vector<std::string>{"films/portra.cube"}));
+  EXPECT_EQ(service->FavoriteEntryIds(), (std::vector<std::string>{"library:films/portra.cube"}));
   EXPECT_EQ(preferences_->legacy_favorites, QStringList{outside});
-  EXPECT_EQ(ReadLutLibraryUserStateFile(library_root_).state->favorite_paths,
-            (std::vector<std::string>{"films/portra.cube"}));
+  EXPECT_EQ(ReadLutLibraryUserStateFile(library_root_).state->favorite_entry_ids,
+            (std::vector<std::string>{"library:films/portra.cube"}));
+}
+
+// Plan L5 step 3: favorites are stored by entry identity. An official LUT keeps its favorite
+// when a package update moves it to another content directory; paths stored by earlier
+// versions convert to entry IDs on load.
+TEST_F(LutLibraryServiceTest, OfficialFavoriteFollowsItsPackageAcrossContentDirectories) {
+  const std::string file_name = "kodak_vision3_250d_5207.cube";
+  const std::string content_a = "packages/spectral_film_lut/content/a";
+  WriteBytes(library_root_ / fs::path(content_a) / file_name, OfficialCube());
+  WriteBytes(library_root_ / "user" / "look.cube", UserCube("look"));
+  LutPackageReceipt receipt;
+  receipt.package_id        = "spectral_film_lut";
+  receipt.content_directory = content_a;
+  ASSERT_TRUE(WriteLutPackageReceiptFile(library_root_, receipt).empty());
+  LutLibraryUserState stored;
+  stored.legacy_favorite_paths = {content_a + "/" + file_name, "user/look.cube"};
+  ASSERT_TRUE(WriteLutLibraryUserStateFile(library_root_, stored).empty());
+
+  const auto        service  = StartService();
+  const std::string official = "official:spectral_film_lut/spectral_film_lut:kodak_vision3_250d_5207";
+  EXPECT_EQ(service->FavoriteEntryIds(),
+            (std::vector<std::string>{"library:user/look.cube", official}));
+  const auto persisted = ReadLutLibraryUserStateFile(library_root_);
+  ASSERT_TRUE(persisted.state.has_value());
+  EXPECT_EQ(persisted.state->favorite_entry_ids, service->FavoriteEntryIds());
+  EXPECT_TRUE(persisted.state->legacy_favorite_paths.empty());
+
+  // A package update activates new content in another directory.
+  const std::string content_b = "packages/spectral_film_lut/content/b";
+  WriteBytes(library_root_ / fs::path(content_b) / file_name, OfficialCube());
+  receipt.content_directory = content_b;
+  ASSERT_TRUE(WriteLutPackageReceiptFile(library_root_, receipt).empty());
+  ASSERT_EQ(service->RefreshInventory(), Service::Status::kOk);
+  ASSERT_TRUE(WaitUntilIdle(*service));
+
+  std::string listed_path;
+  ASSERT_TRUE(service->ReadEntryById(
+      official, [&](const LutLibraryEntry& entry) { listed_path = entry.relative_path; }));
+  EXPECT_EQ(listed_path, content_b + "/" + file_name);
+  EXPECT_TRUE(service->IsFavorite(official));
+  // The content path of official package content is not a separate library entry.
+  EXPECT_FALSE(service->ReadEntryById("library:" + listed_path, [](const LutLibraryEntry&) {}));
+
+  EXPECT_EQ(service->SetFavorite("user/look.cube", true), Service::Status::kInvalidRequest);
+  EXPECT_EQ(service->SetFavorite(official, false), Service::Status::kOk);
+  EXPECT_EQ(service->FavoriteEntryIds(), (std::vector<std::string>{"library:user/look.cube"}));
 }
 
 TEST_F(LutLibraryServiceTest, MigrationPreservesEntryIdsAndFavorites) {
@@ -262,7 +308,7 @@ TEST_F(LutLibraryServiceTest, MigrationPreservesEntryIdsAndFavorites) {
   WriteBytes(library_root_ / "notes" / "readme.txt", "user notes");
   WriteBytes(library_root_ / ".downloads" / "partial.7z", "partial");
   const auto service = StartService();
-  ASSERT_EQ(service->SetFavorite(U8(u8"nested/片/look.cube"), true), Service::Status::kOk);
+  ASSERT_EQ(service->SetFavorite(U8(u8"library:nested/片/look.cube"), true), Service::Status::kOk);
   const std::vector<std::string> before = EntryPaths(*service);
   const std::string              hash = FindEntry(*service, "kodak_vision3_250d_5207.cube")->sha256;
 
@@ -274,7 +320,8 @@ TEST_F(LutLibraryServiceTest, MigrationPreservesEntryIdsAndFavorites) {
   EXPECT_EQ(preferences_->root, destination);
   EXPECT_EQ(EntryPaths(*service), before);
   EXPECT_EQ(FindEntry(*service, "kodak_vision3_250d_5207.cube")->sha256, hash);
-  EXPECT_EQ(service->FavoritePaths(), (std::vector<std::string>{U8(u8"nested/片/look.cube")}));
+  EXPECT_EQ(service->FavoriteEntryIds(),
+            (std::vector<std::string>{U8(u8"library:nested/片/look.cube")}));
   EXPECT_EQ(service->PreviousRoots(), (std::vector<std::string>{LutPathToUtf8(library_root_)}));
   EXPECT_EQ(service->LocateEntry(U8(u8"nested/片/look.cube")).status,
             Service::LocateStatus::kFound);
@@ -290,7 +337,7 @@ TEST_F(LutLibraryServiceTest, MigrationPreservesEntryIdsAndFavorites) {
   auto restarted = StartService();
   EXPECT_EQ(restarted->Root(), destination);
   EXPECT_EQ(EntryPaths(*restarted), before);
-  EXPECT_TRUE(restarted->IsFavorite(U8(u8"nested/片/look.cube")));
+  EXPECT_TRUE(restarted->IsFavorite(U8(u8"library:nested/片/look.cube")));
 }
 
 TEST_F(LutLibraryServiceTest, MigrationFailureKeepsPreviousRoot) {
