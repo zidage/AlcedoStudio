@@ -2,7 +2,8 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-// Env-gated live smoke for the Phase 5d/5e/5f image-analysis module. Opens a real packed `.alcd`
+// Environment-dependent live provider check for the Phase 5d/5e/5f image-analysis module.
+// Opens a real packed `.alcd`
 // project, materializes one k1024 thumbnail, starts the real Rust sidecar (no CLIP model —
 // `describe`/`score` use the HTTP provider path), registers a real provider credential read from
 // `.env.test`, and asks the live LLM to describe AND score the image through `ImageAnalysisService`.
@@ -247,7 +248,7 @@ auto BuildAiRating(const ImageAnalysisRatingResult& r, sl_element_id_t element_i
 // Owns every resource for one live run (project, thumbnail stack, sidecar, wired analysis seams)
 // plus the temp paths that must be cleaned up. Destroyed in reverse order; the sidecar is
 // stopped in the dtor so a test that returns early still tears the process down.
-struct LiveSmokeEnv {
+struct LiveProviderEnv {
   std::filesystem::path                        workspace_dir;
   std::filesystem::path                        db_path;
   std::filesystem::path                        meta_path;
@@ -259,11 +260,11 @@ struct LiveSmokeEnv {
   std::shared_ptr<AiSidecarRuntimeService>     runtime;
   std::shared_ptr<ThumbnailServiceAnalysisRenditionProvider> thumb_provider;
   std::shared_ptr<AiSidecarRuntimeImageAnalysisClient>    analysis_client;
-  std::shared_ptr<ImageAnalysisInFlightGate>             gate;
+  std::shared_ptr<ImageAnalysisConcurrencyLimit>             concurrency_limit;
   std::unique_ptr<ProjectService>                        project;
   ImageAnalysisItem                                      view_item{};  // the analyzed image
 
-  ~LiveSmokeEnv() {
+  ~LiveProviderEnv() {
     if (runtime) {
       runtime->Stop();
     }
@@ -279,9 +280,9 @@ struct LiveSmokeEnv {
 // whether that is a skip (missing env vars are checked before calling this) or a FAIL. No
 // ASSERT/GTEST_* inside — those macros `return;` void and cannot be used in a value-returning
 // helper.
-auto BuildLiveSmokeEnv(const char* runtime_env, const char* project_env,
-                       std::string* err) -> std::unique_ptr<LiveSmokeEnv> {
-  auto env = std::make_unique<LiveSmokeEnv>();
+auto BuildLiveProviderEnv(const char* runtime_env, const char* project_env,
+                       std::string* err) -> std::unique_ptr<LiveProviderEnv> {
+  auto env = std::make_unique<LiveProviderEnv>();
 
   // (1) Unpack the packed .alcd into a temp workspace.
   ProjectPackageService package_service;
@@ -290,14 +291,14 @@ auto BuildLiveSmokeEnv(const char* runtime_env, const char* project_env,
     return nullptr;
   }
   QString workspace_err;
-  if (!package_service.CreateProjectWorkspace(QString::fromUtf8("ia_live_smoke"),
+  if (!package_service.CreateProjectWorkspace(QString::fromUtf8("ia_live_provider"),
                                               &env->workspace_dir, &workspace_err)) {
     *err = workspace_err.toStdString();
     return nullptr;
   }
   QString unpack_err;
   if (!package_service.UnpackProjectToWorkspace(project_env, env->workspace_dir,
-                                                QString::fromUtf8("ia_live_smoke"), &env->db_path,
+                                                QString::fromUtf8("ia_live_provider"), &env->db_path,
                                                 &env->meta_path, &unpack_err)) {
     *err = unpack_err.toStdString();
     return nullptr;
@@ -325,7 +326,7 @@ auto BuildLiveSmokeEnv(const char* runtime_env, const char* project_env,
 
   // (3) Thumbnail materialization stack (mirrors thumbnail_service_test.cpp:753-755).
   env->thumbnail_cache_root =
-      std::filesystem::temp_directory_path() / "alcedo_ia_live_smoke_thumbcache";
+      std::filesystem::temp_directory_path() / "alcedo_ia_live_provider_thumbcache";
   std::filesystem::create_directories(env->thumbnail_cache_root);
   env->pipeline_service = std::make_shared<PipelineMgmtService>(env->project->GetStorage());
   env->thumbnail_service = std::make_shared<ThumbnailService>(
@@ -337,7 +338,8 @@ auto BuildLiveSmokeEnv(const char* runtime_env, const char* project_env,
   env->runtime = std::make_shared<AiSidecarRuntimeService>();
   AiSidecarRuntimeOptions options;
   options.runtime_binary        = std::filesystem::path(runtime_env);
-  options.model_root            = std::filesystem::temp_directory_path() / "alcedo_ia_live_smoke_modelroot";
+  options.model_root =
+      std::filesystem::temp_directory_path() / "alcedo_ia_live_provider_modelroot";
   std::filesystem::create_directories(options.model_root);
   env->model_root                = options.model_root;
   options.model_id              = "plhery/mobileclip2-onnx:s2";
@@ -356,11 +358,12 @@ auto BuildLiveSmokeEnv(const char* runtime_env, const char* project_env,
     return nullptr;
   }
 
-  // (5) Wire the image-analysis module: real thumbnail provider + real sidecar client + gate.
+  // (5) Wire the image-analysis module: real thumbnail provider + real sidecar client +
+  // concurrency limit.
   env->thumb_provider =
       std::make_shared<ThumbnailServiceAnalysisRenditionProvider>(env->thumbnail_service);
   env->analysis_client  = std::make_shared<AiSidecarRuntimeImageAnalysisClient>(env->runtime);
-  env->gate             = std::make_shared<ImageAnalysisInFlightGate>();
+  env->concurrency_limit             = std::make_shared<ImageAnalysisConcurrencyLimit>();
   return env;
 }
 
@@ -383,11 +386,11 @@ auto MakeAnalysisOptions(ImageAnalysisTask task, const std::string& provider_id,
 
 // Reads the three required env vars plus the provider id and the provider's API key (from
 // .env.test, falling back to the process env). Returns std::nullopt when the env vars are not
-// set — the caller GTEST_SKIPs in that case (this is a smoke test; CI without creds skips).
+// set — the caller GTEST_SKIPs in that case (this is a provider check test; CI without creds skips).
 // The API key is read here so the caller can ASSERT it non-empty in the test body itself
 // (ASSERT_* in a helper would return from the helper, not the test). The key value is never
 // logged.
-struct LiveSmokeInputs {
+struct LiveProviderInputs {
   const char* runtime_env;
   const char* project_env;
   const char* envtest_env;
@@ -395,14 +398,14 @@ struct LiveSmokeInputs {
   std::string api_key;
 };
 
-auto ReadLiveSmokeInputs() -> std::optional<LiveSmokeInputs> {
+auto ReadLiveProviderInputs() -> std::optional<LiveProviderInputs> {
   const char* runtime_env = std::getenv("ALCEDO_IA_LIVE_RUNTIME_PATH");
   const char* project_env = std::getenv("ALCEDO_TEST_PACKED_PROJECT_PATH");
   const char* envtest_env = std::getenv("ALCEDO_IA_LIVE_ENV_TEST_PATH");
   if (runtime_env == nullptr || project_env == nullptr || envtest_env == nullptr) {
     return std::nullopt;
   }
-  LiveSmokeInputs out;
+  LiveProviderInputs out;
   out.runtime_env  = runtime_env;
   out.project_env = project_env;
   out.envtest_env = envtest_env;
@@ -419,11 +422,11 @@ auto ReadLiveSmokeInputs() -> std::optional<LiveSmokeInputs> {
   return out;
 }
 
-TEST(ImageAnalysisLiveSmokeTest, DescribesOneImageFromPackedProject) {
-  auto inputs = ReadLiveSmokeInputs();
+TEST(ImageAnalysisLiveProviderTest, DescribesOneImageFromPackedProject) {
+  auto inputs = ReadLiveProviderInputs();
   if (!inputs.has_value()) {
     GTEST_SKIP() << "Set ALCEDO_IA_LIVE_RUNTIME_PATH, ALCEDO_TEST_PACKED_PROJECT_PATH, and "
-                    "ALCEDO_IA_LIVE_ENV_TEST_PATH to run the live image-analysis smoke.";
+                    "ALCEDO_IA_LIVE_ENV_TEST_PATH to run the live image-analysis provider check.";
   }
   ASSERT_FALSE(inputs->api_key.empty())
       << "No API key for provider '" << inputs->provider_id << "' in .env.test at "
@@ -432,11 +435,11 @@ TEST(ImageAnalysisLiveSmokeTest, DescribesOneImageFromPackedProject) {
   const auto& api_key     = inputs->api_key;
 
   std::string build_err;
-  auto        env = BuildLiveSmokeEnv(inputs->runtime_env, inputs->project_env, &build_err);
+  auto        env = BuildLiveProviderEnv(inputs->runtime_env, inputs->project_env, &build_err);
   ASSERT_NE(env, nullptr) << build_err;
 
-  ImageAnalysisService ia_service(env->thumb_provider, env->analysis_client, env->gate);
-  env->enc_temp_dir = std::filesystem::temp_directory_path() / "alcedo_ia_live_smoke_enc";
+  ImageAnalysisService ia_service(env->thumb_provider, env->analysis_client, env->concurrency_limit);
+  env->enc_temp_dir = std::filesystem::temp_directory_path() / "alcedo_ia_live_provider_enc";
   std::filesystem::create_directories(env->enc_temp_dir);
   auto opts = MakeAnalysisOptions(ImageAnalysisTask::kDescribe, provider_id, api_key, env->enc_temp_dir);
 
@@ -532,11 +535,11 @@ TEST(ImageAnalysisLiveSmokeTest, DescribesOneImageFromPackedProject) {
   }
 }
 
-TEST(ImageAnalysisLiveSmokeTest, RatesOneImageFromPackedProject) {
-  auto inputs = ReadLiveSmokeInputs();
+TEST(ImageAnalysisLiveProviderTest, RatesOneImageFromPackedProject) {
+  auto inputs = ReadLiveProviderInputs();
   if (!inputs.has_value()) {
     GTEST_SKIP() << "Set ALCEDO_IA_LIVE_RUNTIME_PATH, ALCEDO_TEST_PACKED_PROJECT_PATH, and "
-                    "ALCEDO_IA_LIVE_ENV_TEST_PATH to run the live image-analysis smoke.";
+                    "ALCEDO_IA_LIVE_ENV_TEST_PATH to run the live image-analysis provider check.";
   }
   ASSERT_FALSE(inputs->api_key.empty())
       << "No API key for provider '" << inputs->provider_id << "' in .env.test at "
@@ -545,11 +548,11 @@ TEST(ImageAnalysisLiveSmokeTest, RatesOneImageFromPackedProject) {
   const auto& api_key     = inputs->api_key;
 
   std::string build_err;
-  auto        env = BuildLiveSmokeEnv(inputs->runtime_env, inputs->project_env, &build_err);
+  auto        env = BuildLiveProviderEnv(inputs->runtime_env, inputs->project_env, &build_err);
   ASSERT_NE(env, nullptr) << build_err;
 
-  ImageAnalysisService ia_service(env->thumb_provider, env->analysis_client, env->gate);
-  env->enc_temp_dir = std::filesystem::temp_directory_path() / "alcedo_ia_live_smoke_enc_score";
+  ImageAnalysisService ia_service(env->thumb_provider, env->analysis_client, env->concurrency_limit);
+  env->enc_temp_dir = std::filesystem::temp_directory_path() / "alcedo_ia_live_provider_enc_score";
   std::filesystem::create_directories(env->enc_temp_dir);
   auto opts = MakeAnalysisOptions(ImageAnalysisTask::kScore, provider_id, api_key, env->enc_temp_dir);
 
