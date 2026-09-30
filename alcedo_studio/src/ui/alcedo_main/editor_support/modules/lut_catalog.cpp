@@ -46,12 +46,15 @@ auto MakeNoneEntry() -> LutCatalogEntry {
   return entry;
 }
 
-auto MakeMissingCurrentEntry(const std::string& current_lut_path) -> LutCatalogEntry {
+auto MakeMissingCurrentEntry(const std::string& current_lut_path,
+                             const std::string& current_lut_name) -> LutCatalogEntry {
   LutCatalogEntry entry;
   entry.kind_ = LutCatalogEntryKind::MissingCurrent;
   entry.path_ = current_lut_path;
-  entry.display_name_ =
-      QString::fromStdU16String(alcedo::LutPathFromUtf8(current_lut_path).filename().u16string());
+  entry.display_name_   = current_lut_name.empty()
+                              ? QString::fromStdU16String(
+                                  alcedo::LutPathFromUtf8(current_lut_path).filename().u16string())
+                              : QString::fromStdString(current_lut_name);
   entry.secondary_text_ = Tr("Current LUT is missing from the LUT library.");
   entry.status_text_    = Tr("Missing");
   entry.valid_          = false;
@@ -93,8 +96,8 @@ auto MakeFileEntry(const std::filesystem::path& root, const alcedo::LutLibraryEn
 
 }  // namespace
 
-auto BuildCatalog(const alcedo::LutLibraryService* library, const std::string& current_lut_path)
-    -> LutCatalog {
+auto BuildCatalog(const alcedo::LutLibraryService* library, const std::string& current_lut_path,
+                  const std::string& current_lut_name) -> LutCatalog {
   LutCatalog catalog;
   catalog.entries_.push_back(MakeNoneEntry());
   if (library != nullptr) {
@@ -109,7 +112,7 @@ auto BuildCatalog(const alcedo::LutLibraryService* library, const std::string& c
   }
   if (!current_lut_path.empty() && FindEntryIndexForPath(catalog, current_lut_path) < 0) {
     catalog.entries_.insert(catalog.entries_.begin() + 1,
-                            MakeMissingCurrentEntry(current_lut_path));
+                            MakeMissingCurrentEntry(current_lut_path, current_lut_name));
   }
   return catalog;
 }

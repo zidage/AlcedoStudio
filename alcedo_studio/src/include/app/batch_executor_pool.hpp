@@ -16,6 +16,7 @@
 #include "edit/pipeline/pipeline_accelerator.hpp"
 #include "edit/pipeline/pipeline_executor.hpp"
 #include "edit/runtime/executor_role.hpp"
+#include "edit/runtime/lut_resource_resolver.hpp"
 
 namespace alcedo {
 
@@ -28,14 +29,16 @@ namespace alcedo {
  * Executors are created on first take with the accelerator preference captured at construction; a
  * preference whose backend is unavailable fails that render with the real error. Each batch render
  * releases its resources when it ends (ExecutorRole::Batch), so an idle executor holds only its
- * device.
+ * device. Every executor resolves Color Grade LUT references through the resolver given here.
  *
  * Thread: Take and Return are safe to call from any thread.
  */
 class BatchExecutorPool {
  public:
-  BatchExecutorPool(std::size_t count, AcceleratorBackendPreference preference)
+  BatchExecutorPool(std::size_t count, AcceleratorBackendPreference preference,
+                    std::shared_ptr<const LutResourceResolver> lut_resources = nullptr)
       : preference_(preference),
+        lut_resources_(std::move(lut_resources)),
         slots_(std::max<std::size_t>(1, count)),
         idle_(slots_.size(), true) {}
 
@@ -51,7 +54,7 @@ class BatchExecutorPool {
       return it != idle_.end();
     });
     if (!slots_[index]) {
-      auto executor = std::make_shared<PipelineExecutor>(ExecutorRole::Batch);
+      auto executor = std::make_shared<PipelineExecutor>(ExecutorRole::Batch, lut_resources_);
       executor->SetAcceleratorBackendPreference(preference_);
       slots_[index] = std::move(executor);
     }
@@ -70,6 +73,7 @@ class BatchExecutorPool {
 
  private:
   AcceleratorBackendPreference                   preference_;
+  std::shared_ptr<const LutResourceResolver>     lut_resources_;
   std::mutex                                     mutex_;
   std::condition_variable                        cv_;
   std::vector<std::shared_ptr<PipelineExecutor>> slots_;

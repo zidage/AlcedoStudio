@@ -73,6 +73,9 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   RecordConstruction("LutPackageService", lut_packages_.get());
   project_ = std::make_unique<ProjectModule>(this);
   RecordConstruction("ProjectModule", project_.get());
+  // Every project's editor, thumbnail, and export executors resolve LUT references through
+  // the library (plan L4).
+  project_->SetLutResources(lut_library_->Resources());
   library_ = std::make_unique<LibraryModule>(project_.get(), this);
   RecordConstruction("LibraryModule", library_.get());
   folders_ =
@@ -95,8 +98,8 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
       project_.get(), library_.get(), model_download_.get(), background_tasks_.get(),
       project_.get(), ai_provider_profiles_.get(), this);
   RecordConstruction("SemanticGenerationController", semantic_generation_.get());
-  image_analysis_gate_ = std::make_shared<alcedo::ImageAnalysisInFlightGate>();
-  RecordConstruction("ImageAnalysisInFlightGate", image_analysis_gate_.get());
+  image_analysis_concurrency_limit_ = std::make_shared<alcedo::ImageAnalysisConcurrencyLimit>();
+  RecordConstruction("ImageAnalysisConcurrencyLimit", image_analysis_concurrency_limit_.get());
   db_write_barrier_ = std::make_unique<ProjectDbWriteBarrier>();
   RecordConstruction("ProjectDbWriteBarrier", db_write_barrier_.get());
   image_analysis_sink_ = MakeAlbumImageAnalysisSink(project_.get(), images_.get(), stats_.get(),
@@ -104,7 +107,8 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   RecordConstruction("ImageAnalysisSink", image_analysis_sink_.get());
   image_analysis_ = std::make_unique<ImageAnalysisController>(
       MakeAlbumImageAnalysisEnvironment(project_.get(), semantic_generation_.get(),
-                                        ai_provider_profiles_.get(), image_analysis_gate_),
+                                        ai_provider_profiles_.get(),
+                                        image_analysis_concurrency_limit_),
       ai_provider_profiles_.get(), image_analysis_sink_, background_tasks_.get());
   RecordConstruction("ImageAnalysisController", image_analysis_.get());
   import_export_ =
@@ -215,6 +219,10 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   editor_session_ =
       std::make_unique<EditorSessionController>(editor_session_runtime_->service.get(), this);
   RecordConstruction("EditorSessionController", editor_session_.get());
+  // A published inventory or root can change which LUT bytes the open image renders.
+  QObject::connect(lut_library_.get(), &alcedo::LutLibraryService::InventoryChanged,
+                   editor_session_.get(),
+                   [session = editor_session_.get()] { session->NotifyLutResourcesChanged(); });
   editor_session_->SetInteractionPolicy(interaction_policy_.get());
   editor_session_->SetAlbumCatalog(library_.get());
   editor_session_->SetImageExifReader([this](uint image_id) -> alcedo::EditorImageExifDisplay {
@@ -505,7 +513,7 @@ ApplicationModuleHost::~ApplicationModuleHost() {
   destroy(image_analysis_, "ImageAnalysisController");
   destroy_shared(image_analysis_sink_, "ImageAnalysisSink");
   destroy(db_write_barrier_, "ProjectDbWriteBarrier");
-  destroy_shared(image_analysis_gate_, "ImageAnalysisInFlightGate");
+  destroy_shared(image_analysis_concurrency_limit_, "ImageAnalysisConcurrencyLimit");
   destroy(semantic_generation_, "SemanticGenerationController");
   destroy(ai_provider_profiles_, "AiProviderProfileController");
   destroy(model_download_, "ModelDownloadController");

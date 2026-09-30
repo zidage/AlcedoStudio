@@ -119,9 +119,9 @@ class ApplicationModuleHost final : public QObject {
   [[nodiscard]] auto image_analysis_sink() -> IImageAnalysisSink* {
     return image_analysis_sink_.get();
   }
-  [[nodiscard]] auto image_analysis_gate()
-      -> const std::shared_ptr<alcedo::ImageAnalysisInFlightGate>& {
-    return image_analysis_gate_;
+  [[nodiscard]] auto image_analysis_concurrency_limit()
+      -> const std::shared_ptr<alcedo::ImageAnalysisConcurrencyLimit>& {
+    return image_analysis_concurrency_limit_;
   }
 
   [[nodiscard]] auto editor_session() -> EditorSessionController* { return editor_session_.get(); }
@@ -171,7 +171,7 @@ class ApplicationModuleHost final : public QObject {
   std::unique_ptr<ModelDownloadController>             model_download_;
   std::unique_ptr<alcedo::AiProviderProfileController> ai_provider_profiles_;
   std::unique_ptr<SemanticGenerationController>        semantic_generation_;
-  std::shared_ptr<alcedo::ImageAnalysisInFlightGate>   image_analysis_gate_;
+  std::shared_ptr<alcedo::ImageAnalysisConcurrencyLimit> image_analysis_concurrency_limit_;
   std::unique_ptr<ProjectDbWriteBarrier>               db_write_barrier_;
   std::shared_ptr<IImageAnalysisSink>                  image_analysis_sink_;
   std::unique_ptr<ImageAnalysisController>             image_analysis_;

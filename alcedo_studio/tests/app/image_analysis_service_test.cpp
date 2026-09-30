@@ -504,11 +504,11 @@ auto BaseDescribeOpts(const std::string& tag) -> ImageAnalysisOptions {
   return opts;
 }
 
-auto RunDescribe(std::shared_ptr<IAnalysisRenditionProvider> provider,
-                 std::shared_ptr<IImageAnalysisClient>       client,
-                 std::shared_ptr<ImageAnalysisInFlightGate> gate, const std::string& tag)
-    -> std::vector<ImageAnalysisItemResult> {
-  ImageAnalysisService service(provider, client, gate);
+auto RunDescribe(std::shared_ptr<IAnalysisRenditionProvider>    provider,
+                 std::shared_ptr<IImageAnalysisClient>          client,
+                 std::shared_ptr<ImageAnalysisConcurrencyLimit> concurrency_limit,
+                 const std::string& tag) -> std::vector<ImageAnalysisItemResult> {
+  ImageAnalysisService service(provider, client, concurrency_limit);
   auto                 opts = BaseDescribeOpts(tag);
   auto                 job  = service.StartAnalysis({ImageAnalysisItem{1, 100}}, opts, {}, {});
   job->Wait();
@@ -516,8 +516,8 @@ auto RunDescribe(std::shared_ptr<IAnalysisRenditionProvider> provider,
 }
 
 // Bounded wait: returns true if the job finishes within `timeout`. On timeout it cancels
-// the job (waking any blocked Acquire) so a leaked gate does not hang the test process,
-// then returns false. The async future's destructor blocks until Wait() returns, which the
+// the job (waking any blocked Acquire) so a leaked concurrency limit does not hang the test
+// process, then returns false. The async future's destructor blocks until Wait() returns, which the
 // Cancel guarantees, so no thread is leaked either.
 auto WaitWithTimeout(const std::shared_ptr<ImageAnalysisJob>& job,
                      std::chrono::milliseconds                timeout) -> bool {
@@ -548,17 +548,17 @@ TEST(ImageAnalysisServiceTest, ThrowingRpcReleasesGateAndFinishesJob) {
   auto provider = std::make_shared<FakeThumbnailProvider>();
   auto client   = std::make_shared<FakeImageAnalysisClient>();
   client->SetThrowOnDescribe(true);
-  auto gate = std::make_shared<ImageAnalysisInFlightGate>();
+  auto                 concurrency_limit = std::make_shared<ImageAnalysisConcurrencyLimit>();
 
-  ImageAnalysisService service(provider, client, gate);
+  ImageAnalysisService service(provider, client, concurrency_limit);
   auto                 opts = BaseDescribeOpts("throw");
   // Two items: the second can only enter Acquire (and reach the provider) if the first
-  // item's thrown RPC released the slot. A leaked gate would block the second item
+  // item's thrown RPC released the slot. A leaked concurrency limit would block the second item
   // forever and WaitWithTimeout would time out.
   auto job = service.StartAnalysis({ImageAnalysisItem{1, 100}, ImageAnalysisItem{2, 200}},
                                    opts, {}, {});
   ASSERT_TRUE(WaitWithTimeout(job, std::chrono::seconds(10)))
-      << "job did not finish; in-flight gate was likely not released after the throw";
+      << "job did not finish; in-flight concurrency_limit was likely not released after the throw";
 
   auto results = job->Results();
   ASSERT_EQ(results.size(), 2u);
@@ -566,10 +566,10 @@ TEST(ImageAnalysisServiceTest, ThrowingRpcReleasesGateAndFinishesJob) {
     EXPECT_EQ(r.status, ImageAnalysisItemStatus::kError);
     EXPECT_NE(r.error.find("image analysis rpc failed"), std::string::npos);
   }
-  // Both items reached the provider — the second proves the gate was released after the
-  // first throw, and the slot is not stuck.
+  // Both items reached the provider — the second proves the concurrency limit was released after
+  // the first throw, and the slot is not stuck.
   EXPECT_EQ(client->DescribeCalls(), 2);
-  EXPECT_TRUE(gate->CurrentRequestId().empty());
+  EXPECT_TRUE(concurrency_limit->CurrentRequestId().empty());
   std::filesystem::remove_all(ScratchDir("throw"));
 }
 
@@ -594,9 +594,9 @@ TEST(ImageAnalysisServiceTest, DescribeSuccessReturnsAnalyzedResult) {
 TEST(ImageAnalysisServiceTest, AnalyzeSuccessUsesSingleCombinedProviderCall) {
   auto provider = std::make_shared<FakeThumbnailProvider>();
   auto client   = std::make_shared<FakeImageAnalysisClient>();
-  auto gate     = std::make_shared<ImageAnalysisInFlightGate>();
+  auto                 concurrency_limit = std::make_shared<ImageAnalysisConcurrencyLimit>();
 
-  ImageAnalysisService service(provider, client, gate);
+  ImageAnalysisService service(provider, client, concurrency_limit);
   auto                 opts = BaseDescribeOpts("analyze-combined");
   opts.task                = ImageAnalysisTask::kAnalyze;
   opts.rubric_id           = "general";
@@ -623,9 +623,9 @@ TEST(ImageAnalysisServiceTest, AnalyzeSuccessUsesSingleCombinedProviderCall) {
 TEST(ImageAnalysisServiceTest, AnalyzeBatchesThreeImagesPerRemoteCall) {
   auto provider = std::make_shared<FakeThumbnailProvider>();
   auto client   = std::make_shared<FakeImageAnalysisClient>();
-  auto gate     = std::make_shared<ImageAnalysisInFlightGate>();
+  auto                 concurrency_limit = std::make_shared<ImageAnalysisConcurrencyLimit>();
 
-  ImageAnalysisService service(provider, client, gate);
+  ImageAnalysisService service(provider, client, concurrency_limit);
   auto                 opts = BaseDescribeOpts("analyze-batch-three");
   opts.task                = ImageAnalysisTask::kAnalyze;
   opts.rubric_id           = "general";
@@ -674,9 +674,9 @@ TEST(ImageAnalysisServiceTest, OversizedImageBytesRejectedBeforeProviderCall) {
   // never an analyzed result.
   auto provider = std::make_shared<FakeThumbnailProvider>();
   auto client   = std::make_shared<FakeImageAnalysisClient>();
-  auto gate     = std::make_shared<ImageAnalysisInFlightGate>();
+  auto                 concurrency_limit = std::make_shared<ImageAnalysisConcurrencyLimit>();
 
-  ImageAnalysisService service(provider, client, gate);
+  ImageAnalysisService service(provider, client, concurrency_limit);
   auto                 opts = BaseDescribeOpts("oversized");
   opts.max_image_bytes      = 1;  // smaller than any real encoded JPEG
   auto job = service.StartAnalysis({ImageAnalysisItem{1, 100}}, opts, {}, {});
@@ -685,7 +685,7 @@ TEST(ImageAnalysisServiceTest, OversizedImageBytesRejectedBeforeProviderCall) {
   ASSERT_EQ(results.size(), 1u);
   EXPECT_EQ(results[0].status, ImageAnalysisItemStatus::kError);
   EXPECT_NE(results[0].error.find("exceeds preset limit"), std::string::npos);
-  // The provider was never called — the cap rejects before the gate/RPC.
+  // The provider was never called — the cap rejects before the concurrency limit/RPC.
   EXPECT_EQ(client->DescribeCalls(), 0);
   std::filesystem::remove_all(ScratchDir("oversized"));
 }
@@ -785,16 +785,16 @@ TEST(ImageAnalysisServiceTest, CancelRunningJobCallsCancelTaskAndDiscardsResult)
 }
 
 TEST(ImageAnalysisServiceTest, TwoJobsSharingGateRunSerially) {
-  auto gate = std::make_shared<ImageAnalysisInFlightGate>();
+  auto concurrency_limit = std::make_shared<ImageAnalysisConcurrencyLimit>();
 
   auto provider_a = std::make_shared<FakeThumbnailProvider>();
   auto client_a   = std::make_shared<FakeImageAnalysisClient>();
   client_a->SetBlockMode(true);
-  ImageAnalysisService service_a(provider_a, client_a, gate);
+  ImageAnalysisService service_a(provider_a, client_a, concurrency_limit);
 
   auto provider_b = std::make_shared<FakeThumbnailProvider>();
   auto client_b   = std::make_shared<FakeImageAnalysisClient>();
-  ImageAnalysisService service_b(provider_b, client_b, gate);
+  ImageAnalysisService service_b(provider_b, client_b, concurrency_limit);
 
   auto opts = BaseDescribeOpts("queue-serial");
   auto job_a = service_a.StartAnalysis({ImageAnalysisItem{1, 100}}, opts, {}, {});
@@ -802,7 +802,7 @@ TEST(ImageAnalysisServiceTest, TwoJobsSharingGateRunSerially) {
   EXPECT_EQ(client_a->DescribeCalls(), 1);
 
   auto job_b = service_b.StartAnalysis({ImageAnalysisItem{2, 200}}, opts, {}, {});
-  // B must wait for A to release the gate: its provider call must not start.
+  // B must wait for A to release the concurrency limit: its provider call must not start.
   std::this_thread::sleep_for(std::chrono::milliseconds(150));
   EXPECT_EQ(client_b->DescribeCalls(), 0);
 
@@ -822,16 +822,16 @@ TEST(ImageAnalysisServiceTest, TwoJobsSharingGateRunSerially) {
 }
 
 TEST(ImageAnalysisServiceTest, CancelQueuedJobDoesNotStartProviderCall) {
-  auto gate = std::make_shared<ImageAnalysisInFlightGate>();
+  auto concurrency_limit = std::make_shared<ImageAnalysisConcurrencyLimit>();
 
   auto provider_a = std::make_shared<FakeThumbnailProvider>();
   auto client_a   = std::make_shared<FakeImageAnalysisClient>();
   client_a->SetBlockMode(true);
-  ImageAnalysisService service_a(provider_a, client_a, gate);
+  ImageAnalysisService service_a(provider_a, client_a, concurrency_limit);
 
   auto provider_b = std::make_shared<FakeThumbnailProvider>();
   auto client_b   = std::make_shared<FakeImageAnalysisClient>();
-  ImageAnalysisService service_b(provider_b, client_b, gate);
+  ImageAnalysisService service_b(provider_b, client_b, concurrency_limit);
 
   auto opts = BaseDescribeOpts("cancel-queued");
   auto job_a = service_a.StartAnalysis({ImageAnalysisItem{1, 100}}, opts, {}, {});
@@ -991,7 +991,7 @@ TEST(ImageAnalysisServiceLiveTest, ValidateConnectionDiscoversOpencodeModels) {
       EnvOrFileValue(env_path, {"ALCEDO_OPENCODE_API_KEY", "OPENCODE_API_KEY"});
   if (api_key.empty()) {
     GTEST_SKIP() << "Set ALCEDO_OPENCODE_API_KEY or OPENCODE_API_KEY in " << env_path
-                 << " to run the live Opencode validate-connection smoke.";
+                 << " to run the live Opencode validate-connection check.";
   }
 
   std::filesystem::path runtime_path =
@@ -1063,8 +1063,8 @@ TEST(ImageAnalysisServiceTest, PrefillPipelinePreparesImage2WhileImage1BlockedIn
   auto provider = std::make_shared<FakeThumbnailProvider>();
   auto client   = std::make_shared<FakeImageAnalysisClient>();
   client->SetBlockMode(true);
-  auto gate = std::make_shared<ImageAnalysisInFlightGate>();
-  ImageAnalysisService service(provider, client, gate);
+  auto                 concurrency_limit = std::make_shared<ImageAnalysisConcurrencyLimit>();
+  ImageAnalysisService service(provider, client, concurrency_limit);
 
   auto opts  = BaseDescribeOpts("prefill-overlap");
   opts.prefetch = 1;
@@ -1094,8 +1094,8 @@ TEST(ImageAnalysisServiceTest, PrefetchBoundedQueueDoesNotRequestWholeAlbum) {
   auto provider = std::make_shared<FakeThumbnailProvider>();
   auto client   = std::make_shared<FakeImageAnalysisClient>();
   client->SetBlockMode(true);
-  auto gate = std::make_shared<ImageAnalysisInFlightGate>();
-  ImageAnalysisService service(provider, client, gate);
+  auto                 concurrency_limit = std::make_shared<ImageAnalysisConcurrencyLimit>();
+  ImageAnalysisService service(provider, client, concurrency_limit);
 
   auto opts  = BaseDescribeOpts("prefill-bound");
   opts.prefetch = 2;
@@ -1133,8 +1133,8 @@ TEST(ImageAnalysisServiceTest, OversizedPrefetchClampedToUpperBound) {
   auto provider = std::make_shared<FakeThumbnailProvider>();
   auto client   = std::make_shared<FakeImageAnalysisClient>();
   client->SetBlockMode(true);
-  auto gate = std::make_shared<ImageAnalysisInFlightGate>();
-  ImageAnalysisService service(provider, client, gate);
+  auto                 concurrency_limit = std::make_shared<ImageAnalysisConcurrencyLimit>();
+  ImageAnalysisService service(provider, client, concurrency_limit);
 
   auto opts  = BaseDescribeOpts("prefetch-clamp");
   opts.prefetch = 1000;  // far above kMaxImageAnalysisPrefetch; must be clamped down
@@ -1171,13 +1171,13 @@ TEST(ImageAnalysisServiceTest, OversizedPrefetchClampedToUpperBound) {
 // Pin lifetime: with prefetch=2 and image 1 in flight, the producer encodes+releases images
 // 2 and 3 (ReleaseCount == 3) while only image 1 has reached the provider (DescribeCalls ==
 // 1). The gap proves the pin is released after encode and BEFORE the encoded item waits
-// behind the remote gate — images 2 and 3 are released but have not yet been sent.
+// behind the remote concurrency limit — images 2 and 3 are released but have not yet been sent.
 TEST(ImageAnalysisServiceTest, PinReleasedAfterEncodeBeforeWaitingBehindGate) {
   auto provider = std::make_shared<FakeThumbnailProvider>();
   auto client   = std::make_shared<FakeImageAnalysisClient>();
   client->SetBlockMode(true);
-  auto gate = std::make_shared<ImageAnalysisInFlightGate>();
-  ImageAnalysisService service(provider, client, gate);
+  auto                 concurrency_limit = std::make_shared<ImageAnalysisConcurrencyLimit>();
+  ImageAnalysisService service(provider, client, concurrency_limit);
 
   auto opts  = BaseDescribeOpts("pin-lifetime");
   opts.prefetch = 2;
@@ -1206,8 +1206,8 @@ TEST(ImageAnalysisServiceTest, CancelWhileConsumerWaitsForEncodedItem) {
   auto provider = std::make_shared<FakeThumbnailProvider>();
   provider->SetBlockMode(true);  // stall the producer; never deliver a thumbnail
   auto client = std::make_shared<FakeImageAnalysisClient>();
-  auto gate   = std::make_shared<ImageAnalysisInFlightGate>();
-  ImageAnalysisService service(provider, client, gate);
+  auto                 concurrency_limit = std::make_shared<ImageAnalysisConcurrencyLimit>();
+  ImageAnalysisService service(provider, client, concurrency_limit);
 
   auto opts  = BaseDescribeOpts("cancel-wait-item");
   opts.prefetch = 1;
@@ -1235,8 +1235,8 @@ TEST(ImageAnalysisServiceTest, CancelWhileProducerWaitsForQueueCapacity) {
   auto provider = std::make_shared<FakeThumbnailProvider>();
   auto client   = std::make_shared<FakeImageAnalysisClient>();
   client->SetBlockMode(true);
-  auto gate = std::make_shared<ImageAnalysisInFlightGate>();
-  ImageAnalysisService service(provider, client, gate);
+  auto                 concurrency_limit = std::make_shared<ImageAnalysisConcurrencyLimit>();
+  ImageAnalysisService service(provider, client, concurrency_limit);
 
   auto opts  = BaseDescribeOpts("cancel-queue-capacity");
   opts.prefetch = 1;
@@ -1267,8 +1267,8 @@ TEST(ImageAnalysisServiceTest, CancelWhileRemoteRequestInFlightDiscardsResult) {
   auto provider = std::make_shared<FakeThumbnailProvider>();
   auto client   = std::make_shared<FakeImageAnalysisClient>();
   client->SetBlockMode(true);
-  auto gate = std::make_shared<ImageAnalysisInFlightGate>();
-  ImageAnalysisService service(provider, client, gate);
+  auto                 concurrency_limit = std::make_shared<ImageAnalysisConcurrencyLimit>();
+  ImageAnalysisService service(provider, client, concurrency_limit);
 
   auto opts  = BaseDescribeOpts("cancel-in-flight");
   opts.prefetch = 1;
@@ -1298,8 +1298,8 @@ TEST(ImageAnalysisServiceTest, CancelAfterPrefilledNotSentItemsDropsQueuedRendit
   auto provider = std::make_shared<FakeThumbnailProvider>();
   auto client   = std::make_shared<FakeImageAnalysisClient>();
   client->SetBlockMode(true);
-  auto gate = std::make_shared<ImageAnalysisInFlightGate>();
-  ImageAnalysisService service(provider, client, gate);
+  auto                 concurrency_limit = std::make_shared<ImageAnalysisConcurrencyLimit>();
+  ImageAnalysisService service(provider, client, concurrency_limit);
 
   auto opts  = BaseDescribeOpts("cancel-prefilled");
   opts.prefetch = 2;
@@ -1323,36 +1323,37 @@ TEST(ImageAnalysisServiceTest, CancelAfterPrefilledNotSentItemsDropsQueuedRendit
   std::filesystem::remove_all(ScratchDir("cancel-prefilled"));
 }
 
-// Regression: two jobs sharing one ImageAnalysisInFlightGate still serialize remote RPCs even
-// when both locally prefill their queues. While A holds the gate in a blocked RPC, B locally
-// prepares renditions (RequestCount_b >= 1) but makes ZERO remote calls; B only runs after A
-// releases the slot.
+// Regression: two jobs sharing one ImageAnalysisConcurrencyLimit still serialize remote RPCs even
+// when both locally prefill their queues. While A holds the concurrency limit in a blocked RPC, B
+// locally prepares renditions (RequestCount_b >= 1) but makes ZERO remote calls; B only runs after
+// A releases the slot.
 TEST(ImageAnalysisServiceTest, TwoJobsSharingGateSerializeRpcsWithPrefill) {
-  auto gate = std::make_shared<ImageAnalysisInFlightGate>();
+  auto concurrency_limit = std::make_shared<ImageAnalysisConcurrencyLimit>();
 
   auto provider_a = std::make_shared<FakeThumbnailProvider>();
   auto client_a   = std::make_shared<FakeImageAnalysisClient>();
-  client_a->SetBlockMode(true);  // A holds the gate in a blocked RPC
-  ImageAnalysisService service_a(provider_a, client_a, gate);
+  client_a->SetBlockMode(true);  // A holds the concurrency limit in a blocked RPC
+  ImageAnalysisService service_a(provider_a, client_a, concurrency_limit);
 
   auto provider_b = std::make_shared<FakeThumbnailProvider>();
   auto client_b   = std::make_shared<FakeImageAnalysisClient>();
-  ImageAnalysisService service_b(provider_b, client_b, gate);
+  ImageAnalysisService service_b(provider_b, client_b, concurrency_limit);
 
-  auto opts   = BaseDescribeOpts("gate-prefill-regression");
+  auto                 opts              = BaseDescribeOpts("concurrency_limit-prefill-regression");
   opts.prefetch = 2;
   std::vector<ImageAnalysisItem> items_a = {{1, 100}, {2, 200}, {3, 300}};
   std::vector<ImageAnalysisItem> items_b = {{4, 400}, {5, 500}, {6, 600}};
 
   auto job_a = service_a.StartAnalysis(items_a, opts, {}, {});
-  ASSERT_TRUE(client_a->WaitForDescribeEntered(std::chrono::seconds(2)));  // A holds gate
+  ASSERT_TRUE(
+      client_a->WaitForDescribeEntered(std::chrono::seconds(2)));  // A holds concurrency limit
 
   auto job_b = service_b.StartAnalysis(items_b, opts, {}, {});
   // B prefills locally but its consumer must block in Acquire behind A: zero B remote calls.
   ASSERT_TRUE(SpinWaitFor([&] { return provider_b->RequestCount() >= 1; }, std::chrono::seconds(3)));
   std::this_thread::sleep_for(std::chrono::milliseconds(100));  // settle: prove B does not slip in
   EXPECT_EQ(client_b->DescribeCalls(), 0);
-  EXPECT_GE(provider_b->RequestCount(), 1);  // B did local prep despite the held gate
+  EXPECT_GE(provider_b->RequestCount(), 1);  // B did local prep despite the held concurrency limit
 
   client_a->ReleaseBlock();  // A finishes and releases the slot
   ASSERT_TRUE(WaitWithTimeout(job_a, std::chrono::seconds(10)));
@@ -1371,7 +1372,7 @@ TEST(ImageAnalysisServiceTest, TwoJobsSharingGateSerializeRpcsWithPrefill) {
   }
   EXPECT_EQ(client_a->DescribeCalls(), 3);
   EXPECT_EQ(client_b->DescribeCalls(), 3);
-  std::filesystem::remove_all(ScratchDir("gate-prefill-regression"));
+  std::filesystem::remove_all(ScratchDir("concurrency_limit-prefill-regression"));
 }
 
 }  // namespace

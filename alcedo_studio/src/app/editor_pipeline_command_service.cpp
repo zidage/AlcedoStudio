@@ -223,17 +223,6 @@ auto ParseCurvePoints(const nlohmann::json& params) -> std::optional<std::vector
   return points;
 }
 
-auto ParseLmtPath(const nlohmann::json& params) -> std::optional<std::string> {
-  RequireObject(params, "lut");
-  const auto& object = (params.contains("lut") && params.at("lut").is_object())
-                           ? UnwrapObject(params, {"lut"}, "lut")
-                       : (params.contains("ocio_lmt") && params.at("ocio_lmt").is_object())
-                           ? UnwrapObject(params, {"ocio_lmt"}, "lut")
-                           : params;
-  RejectUnknownKeys(object, {"cube_path", "ocio_lmt", "lut", "value"}, "lut");
-  return ReadOptionalString(object, {"cube_path", "ocio_lmt", "lut", "value"}, "lut");
-}
-
 auto ParseHlsVec3(const nlohmann::json& value, std::string_view context) -> HlsVec3 {
   if (!value.is_array() || value.size() != 3) {
     throw std::invalid_argument(std::string{context} + " must contain three numbers");
@@ -817,14 +806,11 @@ void ApplyColorGradeModelPatch(IOperatorModel& model, std::string_view field,
     return;
   }
   if (field == "lut" || field == "ocio_lmt") {
-    const auto path  = ParseLmtPath(params);
-    auto*      typed = dynamic_cast<LmtModel*>(&model);
+    auto* typed = dynamic_cast<LmtModel*>(&model);
     if (typed == nullptr) {
       throw std::invalid_argument("Adjustment Model type does not match field lut");
     }
-    if (path.has_value()) {
-      typed->SetCubePath(*path);
-    }
+    typed->ApplyUpdate(LmtUpdateFromModelJson(params));
     return;
   }
   throw std::invalid_argument("Unsupported Color Grade parameter field: " + std::string{field});

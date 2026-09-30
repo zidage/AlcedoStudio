@@ -410,7 +410,8 @@ auto EditorSessionRenderSchedulerPort::EnsureExecutor()
   // The backend preference is fixed at construction; a preference change takes effect after the
   // application restarts, like every other executor.
   const auto service = pipeline_port ? pipeline_port->PipelineMapper() : nullptr;
-  auto executor = std::make_shared<alcedo::PipelineExecutor>(alcedo::ExecutorRole::Interactive);
+  auto       executor = std::make_shared<alcedo::PipelineExecutor>(
+      alcedo::ExecutorRole::Interactive, service ? service->LutResources() : nullptr);
   if (service) {
     executor->SetAcceleratorBackendPreference(service->GetAcceleratorBackendPreference());
   }

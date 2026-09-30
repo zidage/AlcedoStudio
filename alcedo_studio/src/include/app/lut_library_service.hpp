@@ -21,7 +21,10 @@
 
 #include "app/lut_library_inventory.hpp"
 #include "app/lut_library_migration.hpp"
+#include "app/lut_library_publication.hpp"
 #include "app/lut_package_install.hpp"
+#include "edit/operators/models/lut_reference.hpp"
+#include "edit/runtime/lut_resource_resolver.hpp"
 #include "utils/lut/lut_library_scan.hpp"
 
 namespace alcedo {
@@ -76,7 +79,7 @@ struct LutLibraryServiceOptions {
 /// object (the GUI thread). Scans, imports, root loads, migration, and source
 /// cleanup run one at a time on a worker thread and never touch owner state;
 /// their results are published on the owner thread after persistence succeeds.
-/// A running worker may read `inventory_` and `user_state_` because they change
+/// A running worker may read the published inventory and user state because they change
 /// only on the owner thread when an operation completes, and root-changing
 /// operations reject favorite changes while they run.
 class LutLibraryService final : public QObject {
@@ -95,7 +98,10 @@ class LutLibraryService final : public QObject {
     kUseRoot,
     kMigrateRoot,
     kSourceCleanup,
-    kInstallPackage
+    kInstallPackage,
+    /// Remove package content that an installation replaced, after the new inventory is
+    /// published and no render reads the old files (plan 4.5).
+    kRetirePackageContent
   };
   Q_ENUM(Operation)
 
@@ -145,10 +151,12 @@ class LutLibraryService final : public QObject {
   /// Stop the running operation and join the worker. Idempotent.
   void               Shutdown();
 
-  [[nodiscard]] auto Root() const -> const std::filesystem::path& { return root_; }
+  [[nodiscard]] auto Root() const -> const std::filesystem::path& { return publication_->Root(); }
   [[nodiscard]] auto root_path() const -> QString;
   [[nodiscard]] auto busy() const -> bool { return operation_ != Operation::kNone; }
-  [[nodiscard]] auto inventory_complete() const -> bool { return inventory_.Complete(); }
+  [[nodiscard]] auto inventory_complete() const -> bool {
+    return publication_->Inventory().Complete();
+  }
   [[nodiscard]] auto last_error() const -> QString { return last_error_; }
   [[nodiscard]] auto CurrentOperation() const -> Operation { return operation_; }
   [[nodiscard]] auto LastResult() const -> const OperationResult& { return last_result_; }
@@ -162,9 +170,11 @@ class LutLibraryService final : public QObject {
   /// Scoped const read of every entry in an installed package's active content.
   void               ForEachPackageEntry(std::string_view                                   package_id,
                                          const std::function<void(const LutLibraryEntry&)>& visitor) const;
-  [[nodiscard]] auto EntryCount() const -> std::size_t { return inventory_.entries.size(); }
+  [[nodiscard]] auto EntryCount() const -> std::size_t {
+    return publication_->Inventory().entries.size();
+  }
   [[nodiscard]] auto Diagnostics() const -> const std::vector<LutScanDiagnostic>& {
-    return inventory_.diagnostics;
+    return publication_->Inventory().diagnostics;
   }
 
   /// Root-relative path of @p absolute_path when it lies inside the root.
@@ -178,7 +188,7 @@ class LutLibraryService final : public QObject {
   auto               LocateEntry(std::string_view relative_path) -> Location;
 
   [[nodiscard]] auto FavoritePaths() const -> const std::vector<std::string>& {
-    return user_state_.favorite_paths;
+    return publication_->UserState().favorite_paths;
   }
   [[nodiscard]] auto IsFavorite(std::string_view relative_path) const -> bool;
   /// Add or remove a favorite and persist it. Rejected (kBusy) while a root
@@ -188,12 +198,30 @@ class LutLibraryService final : public QObject {
   /// inventory, sorted by package ID. Invalid receipts are absent (and reported
   /// as inventory diagnostics).
   [[nodiscard]] auto PackageReceipts() const -> const std::vector<LutPackageReceipt>& {
-    return package_receipts_;
+    return publication_->Receipts();
   }
   /// Previous roots this library was migrated from (absolute UTF-8 paths).
   [[nodiscard]] auto PreviousRoots() const -> const std::vector<std::string>& {
-    return user_state_.previous_roots;
+    return publication_->UserState().previous_roots;
   }
+
+  /**
+   * @brief The resolver that render executors use for LUT references.
+   *
+   * It reads this library's published state with its own synchronization and stays valid
+   * after the service is destroyed (it then resolves the last published state). A Missing
+   * resolution requests one inventory refresh per reference on this object's thread; later
+   * lookups of the same reference do not request again until a user-requested refresh.
+   */
+  [[nodiscard]] auto Resources() const -> std::shared_ptr<const LutResourceResolver> {
+    return publication_;
+  }
+
+  /// Reference that selects the entry at @p absolute_path: its official package ID and LUT ID
+  /// for package-owned official content, else its library path. std::nullopt when no listed
+  /// entry has that path.
+  [[nodiscard]] auto ReferenceForPath(const std::filesystem::path& absolute_path) const
+      -> std::optional<LutReference>;
 
   /// User-requested rescan. Coalesced into a running refresh; kBusy during
   /// another operation. Publishes only after `lut-inventory.json` is written.
@@ -254,19 +282,24 @@ class LutLibraryService final : public QObject {
                         std::optional<std::vector<LutPackageReceipt>> receipts = std::nullopt)
       -> std::vector<std::string>;
   void ResumeSourceCleanup();
+  /// Start kRetirePackageContent: under the content lock, remove package content no receipt
+  /// names, then rescan and publish when user-declared files were relocated.
+  void                                   RetireReplacedPackageContent();
+  /// Request one refresh for an unresolved LUT reference (owner thread).
+  void                                   RequestRefreshForMissing(const std::string& reference_key);
   void ConvertLegacyFavorites();
   auto RequestRefresh(bool user_requested) -> Status;
 
   LutLibraryServiceOptions           options_;
-  std::filesystem::path              root_;
-  LutLibraryInventory                inventory_;
-  LutLibraryUserState                user_state_;
-  std::vector<LutPackageReceipt>     package_receipts_;
+  /// Root, published inventory, receipts, and user state; shared with render executors.
+  std::shared_ptr<LutLibraryPublication> publication_;
   Operation                          operation_ = Operation::kNone;
   OperationResult                    last_result_;
   QString                            last_error_;
   /// Paths for which a lookup already requested a refresh (plan 4.3).
   std::set<std::string, std::less<>> refresh_requested_paths_;
+  /// An installation replaced package content that is retired when no operation runs.
+  bool                                   pending_content_retirement_ = false;
   bool                               shut_down_ = false;
   std::jthread                       worker_;
 };

@@ -257,11 +257,14 @@ static inline float3 ApplyAdjustment(float3 c, __global const GradeAdjustmentPar
         copysign(pow(fabs(c.y + p->values[1] + p->values[3]), 1.0f / gamma_y), c.y) * p->values[9];
     c.z =
         copysign(pow(fabs(c.z + p->values[2] + p->values[3]), 1.0f / gamma_z), c.z) * p->values[10];
-  } else if (behavior == 12u && value != 0.0f && lut_edge > 1u) {
-    const float scale  = (float)(lut_edge - 1u) / (float)lut_edge;
-    const float offset = 1.0f / (2.0f * (float)lut_edge);
-    c                  = SampleLut3d(lut, lut_edge, c.x * scale + offset, c.y * scale + offset,
-                                     c.z * scale + offset);
+  } else if (behavior == 12u && value > 0.0f && lut_edge > 1u) {
+    // value is the LUT strength a in (0, 1]: c + a * (L(c) - c) in ACEScc; a = 1 is L(c).
+    // An empty LUT (edge 0) means the referenced file is missing: the operation is skipped.
+    const float  scale   = (float)(lut_edge - 1u) / (float)lut_edge;
+    const float  offset  = 1.0f / (2.0f * (float)lut_edge);
+    const float3 sampled = SampleLut3d(lut, lut_edge, c.x * scale + offset, c.y * scale + offset,
+                                       c.z * scale + offset);
+    c = value >= 1.0f ? sampled : c + value * (sampled - c);
   }
   return c;
 }

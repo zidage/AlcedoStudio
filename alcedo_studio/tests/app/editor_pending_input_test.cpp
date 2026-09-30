@@ -226,7 +226,9 @@ TEST(EditorPendingInputTest, OpenSequenceHoldsIndependentTypedWritesUntilMovedOn
                                                                            {1.0f, 1.0f}}}))
                   .accepted);
   ASSERT_TRUE(
-      queue.AdmitFieldChange(TestIdentity(), TypedPatch("lut", EditorLutWrite{"looks/film.cube"}))
+      queue
+          .AdmitFieldChange(TestIdentity(),
+                            TypedPatch("lut", EditorLutWrite{FileLutReference{"looks/film.cube"}}))
           .accepted);
   DevelopRawDecodeUpdate raw;
   raw.demosaic_method = "neural_engine";

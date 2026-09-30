@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 
+#include <filesystem>
 #include <memory>
 #include <span>
 #include <vector>
@@ -16,12 +17,14 @@
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/raw_input_loader.hpp"
+#include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/local_tone_cache_ids.hpp"
 #include "edit/runtime/result_content_key.hpp"
 #include "edit/runtime/result_persistence.hpp"
 #include "edit/runtime/texture_format.hpp"
+#include "lut_resource_runtime_test_support.hpp"
 #include "multi_grade_runtime_test_support.hpp"
 
 namespace alcedo {
@@ -610,6 +613,55 @@ TEST(RuntimeInvalidation, CanonicalIdentityIgnoresViewportAndFollowsCrop) {
   document.Geometry().SetCropRect({0.1f, 0.1f, 0.8f, 0.8f});
   GraphCompiler::BindFrameGeometry(plan, document, viewport);
   EXPECT_NE(HashCanonicalReferenceIdentity(plan, prepared), base_canonical);
+}
+
+TEST(RuntimeInvalidation, LutResourceChangeInvalidatesGradeWithoutModelRevision) {
+  ValidityHarness harness;
+  const auto directory = lut_resource_test::FixtureDirectory("validity", "lut_resource_change");
+  const auto first     = directory / "a" / "look.cube";
+  const auto second    = directory / "b" / "look.cube";
+  lut_resource_test::WriteConstantCube(first, {0.1f, 0.2f, 0.3f});
+  lut_resource_test::WriteConstantCube(second, {0.4f, 0.5f, 0.6f});
+  const LutReference official = OfficialLutReference{"spektrafilm_lut", "portra-400"};
+  lut_resource_test::SwitchableLutResolver resolver;
+  resolver.Map(official, first);
+  auto* lmt = dynamic_cast<LmtModel*>(
+      harness.document.PrimaryGrade()->FindAdjustmentByType(type_ids::Lmt()));
+  ASSERT_NE(lmt, nullptr);
+  lmt->SetReference(official);
+  const auto revision = lmt->Revision();
+  const auto publish  = [&] {
+    harness.invalidation.CollectAndPropagate(harness.plan, harness.document, harness.prepared,
+                                              resolver);
+    harness.Complete();
+  };
+  publish();
+  const auto source_id = LocalToneSourceId(harness.Primary().node_id);
+  const auto collect   = [&] {
+    harness.invalidation.CollectAndPropagate(harness.plan, harness.document, harness.prepared,
+                                               resolver);
+  };
+  collect();
+  EXPECT_TRUE(harness.Current(harness.Primary().scene_output)) << "an unchanged resource is reused";
+
+  // A package update resolves the same official ID to other content.
+  resolver.Map(official, second);
+  collect();
+  EXPECT_TRUE(harness.Current(harness.plan.develop_output));
+  EXPECT_GT(harness.Required(source_id), harness.Completed(source_id));
+  EXPECT_GT(harness.Required(harness.Primary().scene_output),
+            harness.Completed(harness.Primary().scene_output));
+  harness.Complete();
+
+  // The file disappears, then returns: each availability change invalidates the Grade.
+  std::filesystem::rename(second, directory / "parked.cube");
+  collect();
+  EXPECT_FALSE(harness.Current(harness.Primary().scene_output));
+  harness.Complete();
+  std::filesystem::rename(directory / "parked.cube", second);
+  collect();
+  EXPECT_FALSE(harness.Current(harness.Primary().scene_output));
+  EXPECT_EQ(lmt->Revision(), revision);
 }
 
 }  // namespace

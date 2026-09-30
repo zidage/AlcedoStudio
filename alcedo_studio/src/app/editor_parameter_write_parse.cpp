@@ -214,6 +214,10 @@ auto ParseCurveWrite(const nlohmann::json& params) -> EditorCurveWrite {
   return EditorCurveWrite{std::move(points)};
 }
 
+/// Parse the complete LMT state: the Model JSON (`cube_path` or a tagged `reference`,
+/// optional `name` and `strength`) or a legacy panel object whose path is under `ocio_lmt`,
+/// `lut`, or `value`. A missing strength is the 100% default, so replaying a stored state
+/// restores it exactly.
 auto ParseLutWrite(const nlohmann::json& params) -> EditorLutWrite {
   RequireObject(params, "lut");
   const auto& object = (params.contains("lut") && params.at("lut").is_object())
@@ -221,9 +225,17 @@ auto ParseLutWrite(const nlohmann::json& params) -> EditorLutWrite {
                        : (params.contains("ocio_lmt") && params.at("ocio_lmt").is_object())
                            ? UnwrapObject(params, {"ocio_lmt"}, "lut")
                            : params;
-  RejectUnknownKeys(object, {"cube_path", "ocio_lmt", "lut", "value"}, "lut");
-  return EditorLutWrite{
-      ReadOptionalString(object, {"cube_path", "ocio_lmt", "lut", "value"}, "lut").value_or("")};
+  RejectUnknownKeys(
+      object, {"cube_path", "ocio_lmt", "lut", "value", "reference", "name", "strength"}, "lut");
+  nlohmann::json model = nlohmann::json::object();
+  for (const char* key : {"reference", "name", "strength"}) {
+    if (object.contains(key)) model[key] = object.at(key);
+  }
+  if (const auto path =
+          ReadOptionalString(object, {"cube_path", "ocio_lmt", "lut", "value"}, "lut")) {
+    model["cube_path"] = *path;
+  }
+  return LmtUpdateFromModelJson(model);
 }
 
 auto ParseHlsVec3(const nlohmann::json& value, std::string_view context) -> HlsVec3 {

@@ -414,8 +414,8 @@ void ImageAnalysisController::StartForTargets(const QVariantList&       targetEn
 
   auto thumbnail_provider = env_->ThumbnailProvider();
   auto analysis_client    = env_->AnalysisClient();
-  auto gate               = env_->Gate();
-  if (!thumbnail_provider || !analysis_client || !gate) {
+  auto concurrency_limit  = env_->ConcurrencyLimit();
+  if (!thumbnail_provider || !analysis_client || !concurrency_limit) {
     ClearSecret(&secret);
     sidecar_lease_.reset();
     SetError(Tr("Image analysis runtime is unavailable. Open a project first."));
@@ -448,9 +448,9 @@ void ImageAnalysisController::StartForTargets(const QVariantList&       targetEn
                      : PL_TEXT("Scoring %1 image(s)...", total_);
   emit StateChanged();
 
-  // Build a fresh service per job, passing the SHARED gate so remote calls
+  // Build a fresh service per job, passing the SHARED concurrency limit so remote calls
   // serialize app-wide across every controller/service instance.
-  alcedo::ImageAnalysisService      service(thumbnail_provider, analysis_client, gate);
+  alcedo::ImageAnalysisService      service(thumbnail_provider, analysis_client, concurrency_limit);
 
   QPointer<ImageAnalysisController> self(this);
   auto                              job = service.StartAnalysis(
@@ -589,8 +589,8 @@ void ImageAnalysisController::ValidateConnectionForProfile(const QString& profil
   }
   auto thumbnail_provider = env_->ThumbnailProvider();
   auto analysis_client    = env_->AnalysisClient();
-  auto gate               = env_->Gate();
-  if (!thumbnail_provider || !analysis_client || !gate) {
+  auto concurrency_limit  = env_->ConcurrencyLimit();
+  if (!thumbnail_provider || !analysis_client || !concurrency_limit) {
     SetError(Tr("Image analysis runtime is unavailable."));
     return;
   }
@@ -600,9 +600,9 @@ void ImageAnalysisController::ValidateConnectionForProfile(const QString& profil
   const QString                     profile_id  = profile.uuid;
   QPointer<ImageAnalysisController> self(this);
   std::thread([self, provider_id, profile_id, slot, timeout_ms, requires_credential,
-               thumbnail_provider, analysis_client, gate, store,
+               thumbnail_provider, analysis_client, concurrency_limit, store,
                sidecar_lease = std::move(sidecar_lease)]() {
-    alcedo::ImageAnalysisService service(thumbnail_provider, analysis_client, gate);
+    alcedo::ImageAnalysisService service(thumbnail_provider, analysis_client, concurrency_limit);
     alcedo::ImageAnalysisConnectionValidationOptions opts;
     opts.provider_id         = provider_id;
     opts.credential_slot     = slot;

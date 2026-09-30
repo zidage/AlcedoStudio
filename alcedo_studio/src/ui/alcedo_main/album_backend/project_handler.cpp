@@ -54,6 +54,7 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
 
   const auto request_id = ++project_load_request_id_;
   const auto accelerator_preference = project_module_.accelerator_preference();
+  auto                    lut_resources          = project_module_.lut_resources();
 
   auto old_project   = project_;
   auto old_pipeline  = pipeline_service_;
@@ -64,11 +65,11 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
 
   QPointer<ProjectModule> self(&project_module_);
   std::thread([self, request_id, old_project = std::move(old_project),
-               old_pipeline = std::move(old_pipeline),
-               old_thumbnail = std::move(old_thumbnail), old_meta = std::move(old_meta),
-               old_package = std::move(old_package), old_workspace = std::move(old_workspace),
-               dbPath, metaPath, packagePath, workspaceDir, recentProjectPath, openMode,
-               accelerator_preference]() mutable {
+               old_pipeline = std::move(old_pipeline), old_thumbnail = std::move(old_thumbnail),
+               old_meta = std::move(old_meta), old_package = std::move(old_package),
+               old_workspace = std::move(old_workspace), dbPath, metaPath, packagePath,
+               workspaceDir, recentProjectPath, openMode, accelerator_preference,
+               lut_resources = std::move(lut_resources)]() mutable {
     struct LoadResult {
       bool                                    success_ = false;
       QString                                 error_{};
@@ -132,8 +133,8 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
       result->workspace_to_cleanup_ = old_workspace;
 
       result->project_   = std::make_shared<ProjectService>(dbPath, metaPath, openMode);
-      result->pipeline_ = std::make_shared<PipelineMgmtService>(result->project_->GetStorage(),
-                                                                accelerator_preference);
+      result->pipeline_             = std::make_shared<PipelineMgmtService>(
+          result->project_->GetStorage(), accelerator_preference, lut_resources);
       qInfo("pipeline.accelerator backend=%s source=active-editor-backend",
             AcceleratorBackendPreferenceToString(accelerator_preference).data());
       result->thumbnail_ = std::make_shared<ThumbnailService>(

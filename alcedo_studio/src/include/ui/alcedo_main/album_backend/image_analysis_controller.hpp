@@ -34,14 +34,14 @@ class StatsEngine;
 /// The production implementation (`AlbumImageAnalysisEnvironment`, in the .cpp)
 /// resolves these lazily from the open project's services at call time, exactly
 /// as `SemanticGenerationController` does. Tests pass a fake that returns fake
-/// thumbnail/client/credential-store seams and a shared gate.
+/// thumbnail/client/credential-store seams and a shared concurrency limit.
 class IImageAnalysisEnvironment {
  public:
   virtual ~IImageAnalysisEnvironment()                                                    = default;
   virtual auto ThumbnailProvider() -> std::shared_ptr<IAnalysisRenditionProvider>          = 0;
   virtual auto AnalysisClient() -> std::shared_ptr<IImageAnalysisClient>                  = 0;
   virtual auto CredentialStore() -> std::shared_ptr<IAiCredentialStore>                   = 0;
-  virtual auto Gate() -> std::shared_ptr<ImageAnalysisInFlightGate>                       = 0;
+  virtual auto ConcurrencyLimit() -> std::shared_ptr<ImageAnalysisConcurrencyLimit>        = 0;
   /// Optional per-image context for remote analysis. Production reads non-secret
   /// EXIF/camera metadata; tests may return any deterministic string. The
   /// controller only requests and forwards it for gear-sensitive rating/analyze
@@ -84,7 +84,7 @@ class IImageAnalysisEnvironment {
 /// and failed/canceled items are never counted as `analyzed`. The sidecar is
 /// started on demand with `require_model_info=false` so ordinary album
 /// browsing/search requires neither a running sidecar nor an API key. Remote calls
-/// are serialized through one shared `ImageAnalysisInFlightGate` (Phase 6d mandate)
+/// are serialized through one shared `ImageAnalysisConcurrencyLimit` (Phase 6d mandate)
 /// passed via the environment, so jobs serialize app-wide, not per service instance.
 class ImageAnalysisController final : public QObject {
   Q_OBJECT
@@ -209,11 +209,11 @@ class ImageAnalysisController final : public QObject {
 };
 
 /// Production environment: resolves runtime seams from ProjectModule / semantic
-/// generation / AI profiles / gate at call time (no host dependency).
+/// generation / AI profiles / concurrency limit at call time (no host dependency).
 std::shared_ptr<IImageAnalysisEnvironment> MakeAlbumImageAnalysisEnvironment(
     ProjectModule* project, SemanticGenerationController* semantic,
-    alcedo::AiProviderProfileController* profiles,
-    std::shared_ptr<alcedo::ImageAnalysisInFlightGate> gate);
+    alcedo::AiProviderProfileController*                   profiles,
+    std::shared_ptr<alcedo::ImageAnalysisConcurrencyLimit> concurrency_limit);
 
 /// Production Phase 7a sink. Delegates to AiStore, ImageController,
 /// and StatsEngine. Queues writes behind ProjectDbWriteBarrier when held.

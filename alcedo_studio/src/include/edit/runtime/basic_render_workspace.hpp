@@ -7,10 +7,12 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <memory>
 #include <span>
 #include <stdexcept>
 
 #include "edit/runtime/graph_image_cache.hpp"
+#include "edit/runtime/lut_resource_resolver.hpp"
 #include "edit/runtime/node_result_cache.hpp"
 #include "edit/runtime/parameter_arena.hpp"
 #include "edit/runtime/result_persistence.hpp"
@@ -67,6 +69,22 @@ class BasicRenderWorkspace {
   }
 
   /**
+   * @brief LUT resolver that Color Grade LMT packing and result validity use.
+   *
+   * Injected once by the owning Renderer from its executor's construction; defaults to
+   * the file-path-only DefaultLutResourceResolver. A null argument restores the default.
+   * @pre Not rendering.
+   */
+  void SetLutResources(std::shared_ptr<const LutResourceResolver> resources) {
+    if (rendering_) {
+      throw std::runtime_error(
+          "BasicRenderWorkspace::SetLutResources: cannot change while rendering");
+    }
+    lut_resources_ = resources ? std::move(resources) : DefaultLutResourceResolver();
+  }
+  [[nodiscard]] auto LutResources() const -> const LutResourceResolver& { return *lut_resources_; }
+
+  /**
    * @brief Persistence used by the current @ref BeginRender until End/Cancel.
    *
    * QualityBase sets @ref ResultPersistenceScope::SensorDevelopOnly so Geometry
@@ -95,7 +113,7 @@ class BasicRenderWorkspace {
     if (validity_prepared_) {
       return;
     }
-    invalidation_.CollectAndPropagate(plan, document, input);
+    invalidation_.CollectAndPropagate(plan, document, input, *lut_resources_);
     // BeginRender waited for the previous submission. Retire invalid results
     // even when sensor Develop is a cache hit; matching allocations remain reusable.
     DropUnusablePublishedImages();
@@ -334,6 +352,7 @@ class BasicRenderWorkspace {
   GraphImageCache<Backend>       images_{};
   SceneWorkImagePair<Backend>    scene_work_{};
   RuntimeInvalidationState       invalidation_{};
+  std::shared_ptr<const LutResourceResolver> lut_resources_ = DefaultLutResourceResolver();
   GraphValueId                   persist_sensor_{};
   std::uint64_t                  parameter_layout_hash_ = 0;
   ResultPersistenceScope         persistence_scope_     = ResultPersistenceScope::AllCurrentResults;

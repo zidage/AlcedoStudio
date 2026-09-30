@@ -61,6 +61,7 @@ set(EDIT_GRAPH_SRCS
     ${ALCEDO_SRC_ROOT}/edit/operators/models/curve_model.cpp
     ${ALCEDO_SRC_ROOT}/edit/operators/models/hls_model.cpp
     ${ALCEDO_SRC_ROOT}/edit/operators/models/lmt_model.cpp
+    ${ALCEDO_SRC_ROOT}/edit/operators/models/lut_reference.cpp
     ${ALCEDO_SRC_ROOT}/edit/operators/models/parameter_revision.cpp
     ${ALCEDO_SRC_ROOT}/edit/operators/models/sharpen_model.cpp
     ${ALCEDO_SRC_ROOT}/edit/graph/adjustment_ownership.cpp
@@ -212,9 +213,15 @@ if(ALCEDO_OPENCL_ENABLED)
     target_link_libraries(EditScope PUBLIC OpenClContext PRIVATE OpenClProgramLibrary)
 endif()
 
+# LUT reference resolution port shared by render runtimes and the application LUT library.
+def_library(EditLutResources
+    SOURCES ${ALCEDO_SRC_ROOT}/edit/runtime/lut_resource_resolver.cpp
+    PUBLIC_DEPS EditGraph
+)
+
 def_library(EditRuntime
     SOURCES ${EDIT_RUNTIME_SRCS}
-    PUBLIC_DEPS EditGraph EditGeometry EditInput EditRuntimeDrt
+    PUBLIC_DEPS EditGraph EditLutResources EditGeometry EditInput EditRuntimeDrt
     PRIVATE_DEPS PreviewPerformance
 )
 if(ALCEDO_ENABLE_BRUSH_MASK)

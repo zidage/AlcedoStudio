@@ -392,8 +392,12 @@ auto InstallLutPackageArchive(const fs::path& root, const LutPackageInstallReque
   }
 
   // 2. Remove content left by an interrupted installation before adding more.
-  LutPackageContentRetirement earlier = RetireInactiveLutPackageContent(root);
-  outcome.relocated_user_paths        = std::move(earlier.relocated_user_paths);
+  {
+    std::unique_lock<std::shared_mutex> removal;
+    if (steps.lock_content_for_removal) removal = steps.lock_content_for_removal();
+    LutPackageContentRetirement earlier = RetireInactiveLutPackageContent(root);
+    outcome.relocated_user_paths        = std::move(earlier.relocated_user_paths);
+  }
 
   // 3. Extract and verify into a new, inactive content directory.
   stage(LutPackageInstallStage::kInstalling);
@@ -428,15 +432,8 @@ auto InstallLutPackageArchive(const fs::path& root, const LutPackageInstallReque
   if (std::string error = steps.write_receipt(root, receipt); !error.empty()) {
     return abandon("the package receipt cannot be saved: " + error, false);
   }
-  outcome.committed                   = true;
-  outcome.content_directory           = content_directory;
-
-  // 6. Retire the previous content (and relocate explicitly reclassified user files).
-  LutPackageContentRetirement retired = RetireInactiveLutPackageContent(root);
-  outcome.relocated_user_paths.insert(outcome.relocated_user_paths.end(),
-                                      retired.relocated_user_paths.begin(),
-                                      retired.relocated_user_paths.end());
-  outcome.retirement_problems = std::move(retired.problems);
+  outcome.committed         = true;
+  outcome.content_directory = content_directory;
   return outcome;
 }
 

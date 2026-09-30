@@ -230,6 +230,19 @@ void EditorSessionController::SetMaskThumbnailService(
   mask_thumbnail_service_ = std::move(service);
 }
 
+void EditorSessionController::NotifyLutResourcesChanged() {
+  if (!session_backend_ || !has_image() ||
+      session_backend_->state() != alcedo::EditorSessionState::Interactive) {
+    return;
+  }
+  std::optional<alcedo::ViewportRenderRegion> region;
+  if (auto* sink = presentation_frame_sink()) {
+    region = sink->GetViewportRenderRegion();
+  }
+  session_backend_->RequestViewChange(alcedo::EditorRenderReason::ResourceChanged,
+                                      std::move(region));
+}
+
 auto EditorSessionController::mask_thumbnail_service() const
     -> std::shared_ptr<alcedo::MaskThumbnailService> {
   return mask_thumbnail_service_;
@@ -1315,6 +1328,10 @@ auto ReasonName(alcedo::EditorRenderReason reason) -> const char* {
       return "SettledMaskEdit";
     case R::VersionDocumentChanged:
       return "VersionDocumentChanged";
+    case R::PastedPipelineDocument:
+      return "PastedPipelineDocument";
+    case R::ResourceChanged:
+      return "ResourceChanged";
   }
   return "Unknown";
 }

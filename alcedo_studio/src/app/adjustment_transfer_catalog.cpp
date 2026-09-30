@@ -18,6 +18,7 @@
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/operators/models/adjustment_catalog.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
+#include "edit/operators/models/lmt_model.hpp"
 #include "json.hpp"
 
 namespace alcedo {
@@ -108,7 +109,18 @@ auto AdjustmentDisplayValue(const IOperatorModel& model) -> std::string {
     return model.IsDefault() ? "Default" : "Adjusted";
   }
   if (type == type_ids::Lmt()) {
-    return PathTail(params.value("cube_path", std::string{}));
+    const auto* lmt = dynamic_cast<const LmtModel*>(&model);
+    if (lmt == nullptr || IsEmptyLutReference(lmt->Reference())) {
+      return "None";
+    }
+    std::string text = lmt->DisplayName().empty() ? PathTail(lmt->CubePath()) : lmt->DisplayName();
+    if (text.empty() || text == "None") {
+      text = DescribeLutReference(lmt->Reference());
+    }
+    if (lmt->Strength() != kDefaultLutStrength) {
+      text += ", " + FixedNumber(static_cast<double>(lmt->Strength()) * 100.0, 0) + "%";
+    }
+    return text;
   }
   if (type == type_ids::Sharpen()) {
     return FixedNumber(params.value("amount", 0.0));

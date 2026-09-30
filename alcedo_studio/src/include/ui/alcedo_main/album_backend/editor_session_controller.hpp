@@ -164,6 +164,12 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   /// Album catalog used to mirror ODT HDR EOTF into the library HDR badge.
   void                     SetAlbumCatalog(IAlbumCatalog* album_catalog);
   void SetMaskThumbnailService(std::shared_ptr<alcedo::MaskThumbnailService> service);
+  /// A LUT resource the open document may reference changed: the LUT library published a new
+  /// inventory or root. Requests one Quality render of the current document without an edit;
+  /// result validity resolves every LMT reference again, so a returned file restores its
+  /// effect at the configured strength and a removed one is skipped. No history change.
+  /// No-op without an interactive image.
+  void               NotifyLutResourcesChanged();
   [[nodiscard]] auto mask_thumbnail_service() const
       -> std::shared_ptr<alcedo::MaskThumbnailService>;
 

@@ -95,6 +95,9 @@ TEST_F(ApplicationModuleHostLifecycleTests,
     // Constructing the application modules makes no LUT feed request (plan L3).
     EXPECT_FALSE(host.lut_packages()->checking());
     EXPECT_FALSE(host.lut_packages()->checked());
+    // Projects opened later render LUT references through the library (plan L4).
+    ASSERT_NE(host.project(), nullptr);
+    EXPECT_EQ(host.project()->lut_resources(), host.lut_library()->Resources());
     EXPECT_NE(host.semantic_generation(), nullptr);
     EXPECT_NE(host.ai_provider_profiles(), nullptr);
     EXPECT_NE(host.image_analysis(), nullptr);

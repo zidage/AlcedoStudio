@@ -264,9 +264,12 @@ auto MakeGradeRuntimeParams(const IOperatorModel& model, AdjustmentBehavior beha
       });
     case AdjustmentBehavior::Lmt:
       return RequireModel<LmtModel>(model).Read([behavior](const LmtPayload& payload) {
+        // values[0]: configured LUT strength, 0 when no LUT is referenced. Whether the
+        // resource is available is expressed by the bound LUT: a missing file binds an
+        // empty (edge 0) LUT and the kernels skip the operation without a parameter change.
         GradeAdjustmentParams packed;
         packed.behavior  = static_cast<std::uint32_t>(behavior);
-        packed.values[0] = payload.cube_path.empty() ? 0.0f : 1.0f;
+        packed.values[0] = IsEmptyLutReference(payload.reference) ? 0.0f : payload.strength;
         return packed;
       });
     default:

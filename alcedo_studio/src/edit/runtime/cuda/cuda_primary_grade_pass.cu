@@ -56,7 +56,7 @@ auto AcquireCudaScratch(CudaRenderWorkspace& workspace, std::uint32_t width, std
 
 auto LoadCudaGradeLut(CudaRenderDevice& device, const ColorGradeNodeModel& grade)
     -> CudaLutBinding {
-  const auto packed = TryPackGradeLut(grade);
+  const auto packed = TryPackGradeLut(grade, device.Workspace().LutResources());
   if (packed == nullptr) {
     return device.Workspace().Device().DummyLut();
   }
@@ -311,12 +311,18 @@ __device__ auto ApplyAdjustment(float3 c, const CudaAdjustmentParams& p, const f
         copysignf(powf(fabsf(c.y + p.values[1] + p.values[3]), 1.0f / gamma_y), c.y) * p.values[9];
     c.z =
         copysignf(powf(fabsf(c.z + p.values[2] + p.values[3]), 1.0f / gamma_z), c.z) * p.values[10];
-  } else if (behavior == CudaAdjustmentBehavior::Lmt && value != 0.0f && lut_edge > 1U &&
+  } else if (behavior == CudaAdjustmentBehavior::Lmt && value > 0.0f && lut_edge > 1U &&
              lut != nullptr) {
-    const float scale  = static_cast<float>(lut_edge - 1U) / static_cast<float>(lut_edge);
-    const float offset = 1.0f / (2.0f * static_cast<float>(lut_edge));
-    c                  = SampleLut3d(lut, lut_edge, c.x * scale + offset, c.y * scale + offset,
-                                     c.z * scale + offset);
+    // value is the LUT strength a in (0, 1]: c + a * (L(c) - c) in ACEScc; a = 1 is L(c).
+    // An empty LUT (edge 0) means the referenced file is missing: the operation is skipped.
+    const float  scale   = static_cast<float>(lut_edge - 1U) / static_cast<float>(lut_edge);
+    const float  offset  = 1.0f / (2.0f * static_cast<float>(lut_edge));
+    const float3 sampled = SampleLut3d(lut, lut_edge, c.x * scale + offset, c.y * scale + offset,
+                                       c.z * scale + offset);
+    c                    = value >= 1.0f
+                               ? sampled
+                               : make_float3(c.x + value * (sampled.x - c.x), c.y + value * (sampled.y - c.y),
+                                             c.z + value * (sampled.z - c.z));
   }
   return c;
 }

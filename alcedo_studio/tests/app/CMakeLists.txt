@@ -20,6 +20,7 @@ alcedo_register_test_target(LutPackageManifestTest app ci_core)
 
 add_executable(LutLibraryServiceTest
     ${ALCEDO_TEST_ROOT}/app/lut_library_service_test.cpp
+    ${ALCEDO_TEST_ROOT}/app/lut_resource_resolution_test.cpp
     ${ALCEDO_TEST_ROOT}/app/download_service_test_main.cpp)
 target_include_directories(LutLibraryServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(LutLibraryServiceTest PRIVATE LutLibraryService GTest::gtest Qt6::Test)
@@ -708,13 +709,13 @@ alcedo_register_test_target(ImageAnalysisControllerTest app ci_core)
 # ALCEDO_IA_LIVE_ENV_TEST_PATH are set. ProjectService
 # transitively provides ProjectPackageService (unpack), AlbumBrowseService (enumerate), and
 # AiSidecarRuntimeService (sidecar); ThumbnailService provides the k1024 materialization.
-add_executable(ImageAnalysisLiveSmokeTest ${ALCEDO_TEST_ROOT}/app/image_analysis_live_smoke_test.cpp)
-target_include_directories(ImageAnalysisLiveSmokeTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(ImageAnalysisLiveSmokeTest ImageAnalysisService ProjectService
+add_executable(ImageAnalysisLiveProviderTest ${ALCEDO_TEST_ROOT}/app/image_analysis_live_provider_test.cpp)
+target_include_directories(ImageAnalysisLiveProviderTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(ImageAnalysisLiveProviderTest ImageAnalysisService ProjectService
   GTest::gtest_main)
-gtest_discover_tests(ImageAnalysisLiveSmokeTest TEST_PREFIX "ImageAnalysisLiveSmokeTest."
+gtest_discover_tests(ImageAnalysisLiveProviderTest TEST_PREFIX "ImageAnalysisLiveProviderTest."
   PROPERTIES LABELS "ci_raw_flow")
-alcedo_register_test_target(ImageAnalysisLiveSmokeTest app ci_raw)
+alcedo_register_test_target(ImageAnalysisLiveProviderTest app ci_raw)
 
 add_executable(ThumbnailServiceTest ${ALCEDO_TEST_ROOT}/app/thumbnail_service_test.cpp)
 target_include_directories(ThumbnailServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})

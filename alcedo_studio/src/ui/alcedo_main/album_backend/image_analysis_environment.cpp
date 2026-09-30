@@ -130,10 +130,14 @@ auto BuildCameraContext(const ExifDisplayMetaData& exif) -> std::string {
 
 class AlbumImageAnalysisEnvironment final : public IImageAnalysisEnvironment {
  public:
-  AlbumImageAnalysisEnvironment(ProjectModule* project, SemanticGenerationController* semantic,
-                                alcedo::AiProviderProfileController* profiles,
-                                std::shared_ptr<alcedo::ImageAnalysisInFlightGate> gate)
-      : project_(project), semantic_(semantic), profiles_(profiles), gate_(std::move(gate)) {}
+  AlbumImageAnalysisEnvironment(
+      ProjectModule* project, SemanticGenerationController* semantic,
+      alcedo::AiProviderProfileController*                   profiles,
+      std::shared_ptr<alcedo::ImageAnalysisConcurrencyLimit> concurrency_limit)
+      : project_(project),
+        semantic_(semantic),
+        profiles_(profiles),
+        concurrency_limit_(std::move(concurrency_limit)) {}
 
   auto ThumbnailProvider() -> std::shared_ptr<IAnalysisRenditionProvider> override {
     if (thumbnail_provider_) {
@@ -169,7 +173,9 @@ class AlbumImageAnalysisEnvironment final : public IImageAnalysisEnvironment {
     return profiles_ ? profiles_->CredentialStore() : nullptr;
   }
 
-  auto Gate() -> std::shared_ptr<ImageAnalysisInFlightGate> override { return gate_; }
+  auto ConcurrencyLimit() -> std::shared_ptr<ImageAnalysisConcurrencyLimit> override {
+    return concurrency_limit_;
+  }
 
   auto CameraContextForItem(const ImageAnalysisItem& item) -> std::string override {
     if (!project_ || item.image_id == 0) {
@@ -278,16 +284,16 @@ class AlbumImageAnalysisEnvironment final : public IImageAnalysisEnvironment {
   ProjectModule*                                   project_  = nullptr;
   SemanticGenerationController*                    semantic_ = nullptr;
   alcedo::AiProviderProfileController*             profiles_ = nullptr;
-  std::shared_ptr<alcedo::ImageAnalysisInFlightGate> gate_;
+  std::shared_ptr<alcedo::ImageAnalysisConcurrencyLimit> concurrency_limit_;
   std::shared_ptr<IAnalysisRenditionProvider>        thumbnail_provider_;
 };
 
 std::shared_ptr<IImageAnalysisEnvironment> MakeAlbumImageAnalysisEnvironment(
     ProjectModule* project, SemanticGenerationController* semantic,
-    alcedo::AiProviderProfileController* profiles,
-    std::shared_ptr<alcedo::ImageAnalysisInFlightGate> gate) {
+    alcedo::AiProviderProfileController*                   profiles,
+    std::shared_ptr<alcedo::ImageAnalysisConcurrencyLimit> concurrency_limit) {
   return std::make_shared<AlbumImageAnalysisEnvironment>(project, semantic, profiles,
-                                                         std::move(gate));
+                                                         std::move(concurrency_limit));
 }
 
 }  // namespace alcedo::ui

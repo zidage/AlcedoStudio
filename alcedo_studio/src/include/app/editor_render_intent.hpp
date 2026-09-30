@@ -43,6 +43,10 @@ enum class EditorRenderReason : std::uint8_t {
   // Typed Paste replaced transferable Grades, Masks, and DRT/Post on a new
   // root-relative Version. Quality rebuild of the live DAG.
   PastedPipelineDocument,
+  // An external resource of the current document changed without a document edit: a
+  // referenced LUT file was updated, went missing, or became available again. Quality
+  // rebuild of the live DAG; result validity finds the affected Grades. No history change.
+  ResourceChanged,
 };
 
 enum class EditorRenderQuality : std::uint8_t {
@@ -157,6 +161,7 @@ struct EditorRenderResult {
     case EditorRenderReason::SettledMaskEdit:
     case EditorRenderReason::VersionDocumentChanged:
     case EditorRenderReason::PastedPipelineDocument:
+    case EditorRenderReason::ResourceChanged:
       return EditorRenderPriority::Normal;
   }
   return EditorRenderPriority::Normal;
@@ -173,6 +178,7 @@ struct EditorRenderResult {
     case EditorRenderReason::SettledMaskEdit:
     case EditorRenderReason::VersionDocumentChanged:
     case EditorRenderReason::PastedPipelineDocument:
+    case EditorRenderReason::ResourceChanged:
       return EditorRenderQuality::Quality;
     case EditorRenderReason::InitialFrame:
     case EditorRenderReason::InteractiveAdjustment:

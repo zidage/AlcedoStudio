@@ -17,6 +17,7 @@
 #include "edit/operators/models/color_wheel_model.hpp"
 #include "edit/operators/models/curve_model.hpp"
 #include "edit/operators/models/hls_model.hpp"
+#include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/sharpen_model.hpp"
 #include "json.hpp"
 
@@ -68,11 +69,14 @@ struct EditorCurveWrite {
 };
 
 /**
- * @brief LUT cube path for one LMT Model. Empty path is identity.
+ * @brief LUT selection and/or strength for one LMT Model.
+ *
+ * A selection sets the reference and its display name and keeps the strength; a strength
+ * change keeps the selection. The JSON boundary (history replay, project load) always
+ * produces a complete value: a missing strength reads as the 100% default. An empty
+ * reference is identity.
  */
-struct EditorLutWrite {
-  std::string cube_path;
-};
+using EditorLutWrite       = LmtUpdate;
 
 /**
  * @brief One field write as a concrete Model operation.

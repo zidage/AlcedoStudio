@@ -5,7 +5,7 @@
 // Phase 6d — album image-analysis job controller. Drives ImageAnalysisController
 // with fakes (IImageAnalysisEnvironment + AiProviderProfileController on temp
 // files) so the 6d-required cases (empty selection, one/multi success, cancel,
-// retry, provider error, schema error, missing credential, score, shared-gate
+// retry, provider error, schema error, missing credential, score, shared-concurrency limit
 // serialization) run without a live project or sidecar.
 
 #include "ui/alcedo_main/album_backend/image_analysis_controller.hpp"
@@ -442,11 +442,11 @@ class FakeSink : public IImageAnalysisSink {
 class FakeEnv : public IImageAnalysisEnvironment {
  public:
   FakeEnv(std::shared_ptr<FakeThumbProvider> thumbs, std::shared_ptr<FakeClient> client,
-          std::shared_ptr<alcedo::ImageAnalysisInFlightGate> gate,
-          std::shared_ptr<alcedo::IAiCredentialStore>        store)
+          std::shared_ptr<alcedo::ImageAnalysisConcurrencyLimit> concurrency_limit,
+          std::shared_ptr<alcedo::IAiCredentialStore>            store)
       : thumbs_(std::move(thumbs)),
         client_(std::move(client)),
-        gate_(std::move(gate)),
+        concurrency_limit_(std::move(concurrency_limit)),
         store_(std::move(store)) {}
 
   auto ThumbnailProvider() -> std::shared_ptr<alcedo::IAnalysisRenditionProvider> override {
@@ -456,7 +456,9 @@ class FakeEnv : public IImageAnalysisEnvironment {
     return client_;
   }
   auto CredentialStore() -> std::shared_ptr<alcedo::IAiCredentialStore> override { return store_; }
-  auto Gate() -> std::shared_ptr<alcedo::ImageAnalysisInFlightGate> override { return gate_; }
+  auto ConcurrencyLimit() -> std::shared_ptr<alcedo::ImageAnalysisConcurrencyLimit> override {
+    return concurrency_limit_;
+  }
   auto CameraContextForItem(const alcedo::ImageAnalysisItem& item) -> std::string override {
     const auto it = camera_contexts_.find(item.image_id);
     return it == camera_contexts_.end() ? std::string{} : it->second;
@@ -484,7 +486,7 @@ class FakeEnv : public IImageAnalysisEnvironment {
  private:
   std::shared_ptr<FakeThumbProvider>                 thumbs_;
   std::shared_ptr<FakeClient>                        client_;
-  std::shared_ptr<alcedo::ImageAnalysisInFlightGate> gate_;
+  std::shared_ptr<alcedo::ImageAnalysisConcurrencyLimit> concurrency_limit_;
   std::shared_ptr<alcedo::IAiCredentialStore>        store_;
   std::unordered_map<uint32_t, std::string>          camera_contexts_;
   std::atomic<bool>                                  sidecar_ensured_{false};
@@ -540,8 +542,8 @@ struct EnvBundle {
   alcedo::AiProviderProfileController      profiles;
   std::shared_ptr<FakeThumbProvider>       thumbs = std::make_shared<FakeThumbProvider>();
   std::shared_ptr<FakeClient>              client = std::make_shared<FakeClient>();
-  std::shared_ptr<alcedo::ImageAnalysisInFlightGate> gate =
-      std::make_shared<alcedo::ImageAnalysisInFlightGate>();
+  std::shared_ptr<alcedo::ImageAnalysisConcurrencyLimit> concurrency_limit =
+      std::make_shared<alcedo::ImageAnalysisConcurrencyLimit>();
   std::shared_ptr<FakeSink> sink = std::make_shared<FakeSink>();
   std::shared_ptr<FakeEnv>  env;
 
@@ -559,7 +561,7 @@ struct EnvBundle {
     profiles.SetDiscoveredModels(id, QVariantList{discovered});
     profiles.SetProfileField(id, QStringLiteral("modelId"), QStringLiteral("qwen3.7-plus"));
     store->SaveCredential(ActiveCredentialSlot(), "sk-fake-test-key", nullptr);
-    env = std::make_shared<FakeEnv>(thumbs, client, gate, store);
+    env = std::make_shared<FakeEnv>(thumbs, client, concurrency_limit, store);
   }
 
   auto ActiveCredentialSlot() const -> std::string {
@@ -708,7 +710,7 @@ TEST_F(ImageAnalysisControllerTest, CancelRunningAnalysisDiscardsResult) {
   auto controller = MakeController();
   last_bundle_->client->SetBlockMode(true);
   controller->StartDescribeForTargets(Targets({{1, 100}}));
-  // Wait until the provider call has started (the item holds the gate).
+  // Wait until the provider call has started (the item holds the concurrency limit).
   ASSERT_TRUE(SpinWaitFor([&] { return last_bundle_->client->DescribeCalls() >= 1; },
                           std::chrono::seconds(5)));
   controller->CancelAnalysis();
@@ -844,7 +846,7 @@ TEST_F(ImageAnalysisControllerTest, AnalyzeTaskUsesSingleCallAndPersistsBothOutp
 }
 
 TEST_F(ImageAnalysisControllerTest, SharedGateSerializesTwoConcurrentRuns) {
-  // Two controllers over ONE shared env (shared gate + shared fake client). The
+  // Two controllers over ONE shared env (shared concurrency limit + shared fake client). The
   // Phase 6d mandate: remote calls serialize app-wide, not per service instance.
   auto bundle = std::make_shared<EnvBundle>();
   bundles_.push_back(bundle);
@@ -854,12 +856,12 @@ TEST_F(ImageAnalysisControllerTest, SharedGateSerializesTwoConcurrentRuns) {
 
   bundle->client->SetBlockMode(true);
   a.StartDescribeForTargets(Targets({{1, 100}}));
-  // Wait until A's provider call is in flight (A holds the shared gate).
+  // Wait until A's provider call is in flight (A holds the shared concurrency limit).
   ASSERT_TRUE(
       SpinWaitFor([&] { return bundle->client->DescribeCalls() >= 1; }, std::chrono::seconds(5)));
 
   b.StartDescribeForTargets(Targets({{2, 200}}));
-  // B must NOT reach the provider while A holds the gate.
+  // B must NOT reach the provider while A holds the concurrency limit.
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
   QCoreApplication::processEvents();
   EXPECT_EQ(bundle->client->DescribeCalls(), 1);

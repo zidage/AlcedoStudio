@@ -20,6 +20,7 @@
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/commit_types.hpp"
 #include "edit/pipeline/pipeline_accelerator.hpp"
+#include "edit/runtime/lut_resource_resolver.hpp"
 #include "sleeve/storage.hpp"
 #include "type/type.hpp"
 
@@ -79,6 +80,10 @@ class PipelineMgmtService final {
   /// project. Owners read it when they construct their executors.
   const AcceleratorBackendPreference  accelerator_preference_;
 
+  /// Resolver for Color Grade LUT references, fixed for the life of the service. Owners pass it
+  /// to the executors they construct, like the accelerator preference.
+  const std::shared_ptr<const LutResourceResolver> lut_resources_;
+
   std::uint64_t                       editor_pipeline_history_rebuild_count_ = 0;
 
   CommittedSnapshotCache              committed_snapshots_;
@@ -99,12 +104,16 @@ class PipelineMgmtService final {
   /**
    * @param storage_service Project storage; shared with the other project services.
    * @param accelerator_preference Backend that the executors of this project use.
+   * @param lut_resources LUT resolver that the executors of this project use (the application
+   *        LUT library); null selects the file-path-only DefaultLutResourceResolver.
    */
   explicit PipelineMgmtService(
       std::shared_ptr<Storage>     storage_service,
-      AcceleratorBackendPreference accelerator_preference = AcceleratorBackendPreference::Auto)
+      AcceleratorBackendPreference accelerator_preference      = AcceleratorBackendPreference::Auto,
+      std::shared_ptr<const LutResourceResolver> lut_resources = nullptr)
       : storage_(storage_service),
         accelerator_preference_(accelerator_preference),
+        lut_resources_(lut_resources ? std::move(lut_resources) : DefaultLutResourceResolver()),
         committed_snapshots_(storage_service) {}
 
   /**
@@ -247,6 +256,10 @@ class PipelineMgmtService final {
   void               DeletePipeline(sl_element_id_t id);
   void               DeletePipelines(std::span<const sl_element_id_t> ids);
 
+  /// LUT resolver for the executors of this project; never null.
+  [[nodiscard]] auto LutResources() const -> const std::shared_ptr<const LutResourceResolver>& {
+    return lut_resources_;
+  }
   [[nodiscard]] auto GetAcceleratorBackendPreference() const -> AcceleratorBackendPreference {
     return accelerator_preference_;
   }

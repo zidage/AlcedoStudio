@@ -20,7 +20,7 @@ namespace alcedo {
 namespace {
 
 // Generic RAII scope-exit: invokes `fn` on destruction. Used to guarantee the
-// in-flight gate is released (and am_in_flight_ / the published request_id are
+// in-flight concurrency limit is released (and am_in_flight_ / the published request_id are
 // cleared) even if a provider RPC throws between Acquire and Release.
 template <typename F>
 class ScopeExit {
@@ -290,10 +290,10 @@ auto ToString(ImageAnalysisItemStatus status) -> const char* {
   return "unknown";
 }
 
-// --- ImageAnalysisInFlightGate ---
+// --- ImageAnalysisConcurrencyLimit ---
 
-auto ImageAnalysisInFlightGate::AcquireAndPublish(const std::string& request_id,
-                                                  std::function<bool()> is_canceled) -> bool {
+auto ImageAnalysisConcurrencyLimit::AcquireAndPublish(const std::string&    request_id,
+                                                      std::function<bool()> is_canceled) -> bool {
   std::unique_lock lk(mutex_);
   cv_.wait(lk, [&] { return !in_flight_ || is_canceled(); });
   if (is_canceled()) {
@@ -304,7 +304,7 @@ auto ImageAnalysisInFlightGate::AcquireAndPublish(const std::string& request_id,
   return true;
 }
 
-void ImageAnalysisInFlightGate::Release() {
+void ImageAnalysisConcurrencyLimit::Release() {
   {
     std::unique_lock lk(mutex_);
     in_flight_ = false;
@@ -312,17 +312,17 @@ void ImageAnalysisInFlightGate::Release() {
   cv_.notify_all();
 }
 
-void ImageAnalysisInFlightGate::ClearRequestId() {
+void ImageAnalysisConcurrencyLimit::ClearRequestId() {
   std::unique_lock lk(mutex_);
   in_flight_request_id_.clear();
 }
 
-auto ImageAnalysisInFlightGate::CurrentRequestId() const -> std::string {
+auto ImageAnalysisConcurrencyLimit::CurrentRequestId() const -> std::string {
   std::unique_lock lk(mutex_);
   return in_flight_request_id_;
 }
 
-void ImageAnalysisInFlightGate::NotifyAll() { cv_.notify_all(); }
+void ImageAnalysisConcurrencyLimit::NotifyAll() { cv_.notify_all(); }
 
 // --- AiSidecarRuntimeImageAnalysisClient ---
 
@@ -524,18 +524,18 @@ ImageAnalysisJob::~ImageAnalysisJob() {
 
 void ImageAnalysisJob::Cancel() {
   canceled_.store(true);
-  if (gate_) {
-    gate_->NotifyAll();
+  if (concurrency_limit_) {
+    concurrency_limit_->NotifyAll();
   }
   // Best-effort server-side cancel of THIS job's in-flight RPC. am_in_flight_ is true
-  // only while this job occupies the gate slot, and AcquireAndPublish publishes this
-  // job's request_id atomically with the slot, so while am_in_flight_ is true the gate's
-  // current id is this job's (non-empty) request_id. CancelTask returning cancelled=false
+  // only while this job occupies the concurrency limit slot, and AcquireAndPublish publishes this
+  // job's request_id atomically with the slot, so while am_in_flight_ is true the concurrency
+  // limit's current id is this job's (non-empty) request_id. CancelTask returning cancelled=false
   // (already finished / unknown) is harmless; the pre-RPC re-check + post-RPC
   // IsCanceled() discard in RunJob are the guarantees that no paid RPC is honored after
   // cancel.
-  if (am_in_flight_.load() && client_ && gate_) {
-    const auto id = gate_->CurrentRequestId();
+  if (am_in_flight_.load() && client_ && concurrency_limit_) {
+    const auto id = concurrency_limit_->CurrentRequestId();
     if (!id.empty()) {
       bool cancelled = false;
       client_->CancelTask(id, std::chrono::milliseconds(2000), &cancelled, nullptr);
@@ -586,8 +586,9 @@ void ImageAnalysisJob::Finish() {
   finished_cv_.notify_all();
 }
 
-void ImageAnalysisJob::SetGate(std::shared_ptr<ImageAnalysisInFlightGate> gate) {
-  gate_ = std::move(gate);
+void ImageAnalysisJob::SetConcurrencyLimit(
+    std::shared_ptr<ImageAnalysisConcurrencyLimit> concurrency_limit) {
+  concurrency_limit_ = std::move(concurrency_limit);
 }
 
 void ImageAnalysisJob::SetClient(std::shared_ptr<IImageAnalysisClient> client) {
@@ -597,13 +598,13 @@ void ImageAnalysisJob::SetClient(std::shared_ptr<IImageAnalysisClient> client) {
 // --- ImageAnalysisService ---
 
 ImageAnalysisService::ImageAnalysisService(
-    std::shared_ptr<IAnalysisRenditionProvider> thumbnail_provider,
-    std::shared_ptr<IImageAnalysisClient>       analysis_client,
-    std::shared_ptr<ImageAnalysisInFlightGate>  in_flight_gate)
+    std::shared_ptr<IAnalysisRenditionProvider>    thumbnail_provider,
+    std::shared_ptr<IImageAnalysisClient>          analysis_client,
+    std::shared_ptr<ImageAnalysisConcurrencyLimit> concurrency_limit)
     : thumbnail_provider_(std::move(thumbnail_provider)),
       analysis_client_(std::move(analysis_client)),
-      in_flight_gate_(in_flight_gate ? in_flight_gate
-                                     : std::make_shared<ImageAnalysisInFlightGate>()) {
+      concurrency_limit_(concurrency_limit ? concurrency_limit
+                                           : std::make_shared<ImageAnalysisConcurrencyLimit>()) {
   if (!thumbnail_provider_) {
     throw std::invalid_argument("ImageAnalysisService requires a thumbnail provider");
   }
@@ -620,20 +621,21 @@ auto ImageAnalysisService::StartAnalysis(std::vector<ImageAnalysisItem> items,
   auto job = std::make_shared<ImageAnalysisJob>();
   job->UpdateProgress(
       [total = items.size()](ImageAnalysisProgress& p) { p.total = total; });
-  job->SetGate(in_flight_gate_);
+  job->SetConcurrencyLimit(concurrency_limit_);
   job->SetClient(analysis_client_);
 
   auto thumbnail_provider = thumbnail_provider_;
   auto analysis_client    = analysis_client_;
-  auto gate               = in_flight_gate_;
-  auto worker             = std::thread(
-      [job, items = std::move(items), options = std::move(options),
-       on_progress = std::move(on_progress), on_finished = std::move(on_finished),
-       thumbnail_provider = std::move(thumbnail_provider),
-       analysis_client = std::move(analysis_client), gate = std::move(gate)]() mutable {
-        RunJob(job, items, options, std::move(on_progress), std::move(on_finished),
-               std::move(thumbnail_provider), std::move(analysis_client), std::move(gate));
-      });
+  auto concurrency_limit  = concurrency_limit_;
+  auto worker = std::thread([job, items = std::move(items), options = std::move(options),
+                             on_progress        = std::move(on_progress),
+                             on_finished        = std::move(on_finished),
+                             thumbnail_provider = std::move(thumbnail_provider),
+                             analysis_client    = std::move(analysis_client),
+                             concurrency_limit  = std::move(concurrency_limit)]() mutable {
+    RunJob(job, items, options, std::move(on_progress), std::move(on_finished),
+           std::move(thumbnail_provider), std::move(analysis_client), std::move(concurrency_limit));
+  });
   qCInfo(diag::semanticLog).noquote()
       << QStringLiteral("image_analysis.start total=%1 task=%2 provider=%3 model=%4")
              .arg(static_cast<qulonglong>(job->SnapshotProgress().total))
@@ -723,14 +725,13 @@ auto ImageAnalysisService::ValidateConnection(
   return result;
 }
 
-void ImageAnalysisService::RunJob(const std::shared_ptr<ImageAnalysisJob>&    job,
-                                  const std::vector<ImageAnalysisItem>&       items,
-                                  ImageAnalysisOptions                        options,
-                                  ImageAnalysisProgressCallback               on_progress,
-                                  ImageAnalysisFinishedCallback               on_finished,
-                                  std::shared_ptr<IAnalysisRenditionProvider> thumbnail_provider,
-                                  std::shared_ptr<IImageAnalysisClient>       analysis_client,
-                                  std::shared_ptr<ImageAnalysisInFlightGate>  in_flight_gate) {
+void ImageAnalysisService::RunJob(
+    const std::shared_ptr<ImageAnalysisJob>& job, const std::vector<ImageAnalysisItem>& items,
+    ImageAnalysisOptions options, ImageAnalysisProgressCallback on_progress,
+    ImageAnalysisFinishedCallback                  on_finished,
+    std::shared_ptr<IAnalysisRenditionProvider>    thumbnail_provider,
+    std::shared_ptr<IImageAnalysisClient>          analysis_client,
+    std::shared_ptr<ImageAnalysisConcurrencyLimit> concurrency_limit) {
   auto dispatch_progress = [&](const ImageAnalysisProgress& p) {
     if (on_progress) {
       on_progress(p);
@@ -793,7 +794,7 @@ void ImageAnalysisService::RunJob(const std::shared_ptr<ImageAnalysisJob>&    jo
 
   // Clamp the prefill depth: describe/score need one ready image; analyze needs one full
   // batch ready, and the default/cap allow the next batch to fill while the current
-  // batch is in flight. The gate still caps remote at one provider call.
+  // batch is in flight. The concurrency limit still caps remote at one provider call.
   const int min_prefetch = (options.task == ImageAnalysisTask::kAnalyze) ? kImageAnalysisBatchSize
                                                                          : 1;
   const int effective_prefetch =
@@ -817,7 +818,7 @@ void ImageAnalysisService::RunJob(const std::shared_ptr<ImageAnalysisJob>&    jo
   // in-flight remote call. It prepares items in order, releases each ThumbnailGuard
   // immediately after encoding, and pushes a self-contained encoded item (bytes +
   // rendition + request identity; never a thumbnail pin) into the bounded ready queue.
-  // The gate is NOT touched here — the consumer remains the sole remote-call boundary.
+  // The concurrency limit is NOT touched here — the consumer remains the sole remote-call boundary.
   // On cancel the producer stops requesting/encoding; the consumer finalizes un-produced
   // items. The ScopeExit guarantees MarkProducerDone on every exit so the consumer is
   // never stranded waiting for an item that will never come.
@@ -857,7 +858,7 @@ void ImageAnalysisService::RunJob(const std::shared_ptr<ImageAnalysisJob>&    jo
           *thumb.guard, options.jpeg_quality, static_cast<uint32_t>(resolution), temp_dir,
           &encode_error);
       // Release the thumbnail pin immediately after encode — BEFORE the encoded item
-      // waits in the queue / behind the remote gate. The queue holds bytes, not a pin.
+      // waits in the queue / behind the remote concurrency limit. The queue holds bytes, not a pin.
       thumbnail_provider->ReleaseRendition(thumb.key);
 
       if (!encoded.ok) {
@@ -949,8 +950,8 @@ void ImageAnalysisService::RunJob(const std::shared_ptr<ImageAnalysisJob>&    jo
         continue;
       }
       const auto batch_request_id = requests.front().request_id + "-batch";
-      if (!in_flight_gate->AcquireAndPublish(batch_request_id,
-                                             [job]() { return job->IsCanceled(); })) {
+      if (!concurrency_limit->AcquireAndPublish(batch_request_id,
+                                                [job]() { return job->IsCanceled(); })) {
         for (size_t i = 0; i < requests.size(); ++i) {
           ImageAnalysisItemResult r;
           r.item      = encoded_entries[i].item;
@@ -965,9 +966,9 @@ void ImageAnalysisService::RunJob(const std::shared_ptr<ImageAnalysisJob>&    jo
       }
       job->am_in_flight_.store(true);
       if (job->IsCanceled()) {
-        in_flight_gate->ClearRequestId();
+        concurrency_limit->ClearRequestId();
         job->am_in_flight_.store(false);
-        in_flight_gate->Release();
+        concurrency_limit->Release();
         for (size_t i = 0; i < requests.size(); ++i) {
           ImageAnalysisItemResult r;
           r.item      = encoded_entries[i].item;
@@ -986,8 +987,8 @@ void ImageAnalysisService::RunJob(const std::shared_ptr<ImageAnalysisJob>&    jo
       {
         ScopeExit slot_guard([&] {
           job->am_in_flight_.store(false);
-          in_flight_gate->ClearRequestId();
-          in_flight_gate->Release();
+          concurrency_limit->ClearRequestId();
+          concurrency_limit->Release();
         });
         try {
           rpc_results = analysis_client->BatchAnalyzeImage(requests, options.timeout);
@@ -1102,7 +1103,7 @@ void ImageAnalysisService::RunJob(const std::shared_ptr<ImageAnalysisJob>&    jo
     }
 
     // Encoded item. If the job was canceled while it sat in the queue, discard it as
-    // canceled without touching the provider or the in-flight gate.
+    // canceled without touching the provider or the in-flight concurrency limit.
     if (job->IsCanceled()) {
       ImageAnalysisItemResult r;
       r.item      = e.item;
@@ -1132,14 +1133,14 @@ void ImageAnalysisService::RunJob(const std::shared_ptr<ImageAnalysisJob>&    jo
     req.camera_context    = std::move(e.camera_context);
 
     // Acquire the service-wide in-flight slot (max one remote analysis at a time across
-    // all services sharing this gate) AND publish this request_id atomically with the
+    // all services sharing this concurrency limit) AND publish this request_id atomically with the
     // slot. If canceled while queued, AcquireAndPublish returns false and we exit without
     // ever calling the provider. Atomic acquire+publish (rather than Acquire then a
     // separate PublishRequestId) closes the narrow cancel race where Cancel() could
     // observe a held slot with an empty id and skip CancelTask while the worker was still
     // about to issue the paid provider RPC.
-    if (!in_flight_gate->AcquireAndPublish(req.request_id,
-                                           [job]() { return job->IsCanceled(); })) {
+    if (!concurrency_limit->AcquireAndPublish(req.request_id,
+                                              [job]() { return job->IsCanceled(); })) {
       ImageAnalysisItemResult r;
       r.item      = e.item;
       r.request_id = req.request_id;
@@ -1156,13 +1157,13 @@ void ImageAnalysisService::RunJob(const std::shared_ptr<ImageAnalysisJob>&    jo
     // window between AcquireAndPublish's internal IsCanceled check and this store, it saw
     // am_in_flight_ == false and sent no CancelTask - this re-check (after the store,
     // before the RPC) is what prevents the paid provider call from going out after a
-    // cancel that sent no CancelTask. The seq_cst atomics + the gate mutex make the store
-    // happen-after the atomic publish and the re-check observe a cancel that preceded it.
+    // cancel that sent no CancelTask. The seq_cst atomics + the concurrency limit mutex make the
+    // store happen-after the atomic publish and the re-check observe a cancel that preceded it.
     job->am_in_flight_.store(true);
     if (job->IsCanceled()) {
-      in_flight_gate->ClearRequestId();
+      concurrency_limit->ClearRequestId();
       job->am_in_flight_.store(false);
-      in_flight_gate->Release();
+      concurrency_limit->Release();
       ImageAnalysisItemResult r;
       r.item      = e.item;
       r.request_id = req.request_id;
@@ -1182,7 +1183,7 @@ void ImageAnalysisService::RunJob(const std::shared_ptr<ImageAnalysisJob>&    jo
     // request can return both understanding and rating. The in-flight slot is held across
     // the call; an RAII guard releases it (and clears the published request_id +
     // am_in_flight_) on scope exit — including if the provider throws, which would
-    // otherwise leave the service-wide gate locked and the job stuck in-flight. The
+    // otherwise leave the service-wide concurrency limit locked and the job stuck in-flight. The
     // provider call is wrapped so a thrown RPC becomes an item error instead of escaping.
     ImageAnalysisItemResult r;
     r.item      = e.item;
@@ -1191,8 +1192,8 @@ void ImageAnalysisService::RunJob(const std::shared_ptr<ImageAnalysisJob>&    jo
     {
       ScopeExit slot_guard([&] {
         job->am_in_flight_.store(false);
-        in_flight_gate->ClearRequestId();
-        in_flight_gate->Release();
+        concurrency_limit->ClearRequestId();
+        concurrency_limit->Release();
       });
       try {
         if (options.task == ImageAnalysisTask::kAnalyze) {

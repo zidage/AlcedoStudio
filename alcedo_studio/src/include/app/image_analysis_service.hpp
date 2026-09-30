@@ -135,13 +135,13 @@ using ImageAnalysisProgressCallback  = std::function<void(const ImageAnalysisPro
 using ImageAnalysisFinishedCallback  = std::function<void(std::vector<ImageAnalysisItemResult>)>;
 
 // Serializes remote image-analysis calls to at most one in flight across ALL
-// ImageAnalysisService instances that share the same gate. Phase 5d mandates a
+// ImageAnalysisService instances that share the same concurrency limit. Phase 5d mandates a
 // host-boundary in-flight limit of one (provider calls are non-idempotent / paid).
-// Injectable so the album backend (Phase 6) can share one gate app-wide even if the
+// Injectable so the album backend (Phase 6) can share one concurrency limit app-wide even if the
 // service is constructed per-use; if none is passed the service creates a private one.
-class ImageAnalysisInFlightGate {
+class ImageAnalysisConcurrencyLimit {
  public:
-  ImageAnalysisInFlightGate() = default;
+  ImageAnalysisConcurrencyLimit() = default;
 
   // Blocks until the slot is free or `is_canceled()` returns true. On success the slot
   // is acquired AND `request_id` is published under the same lock, so an observer can
@@ -236,7 +236,7 @@ class ImageAnalysisJob final {
   ImageAnalysisJob(const ImageAnalysisJob&)            = delete;
   ImageAnalysisJob& operator=(const ImageAnalysisJob&) = delete;
 
-  // Sets the cooperative cancel flag, wakes any queued wait on the in-flight gate, and
+  // Sets the cooperative cancel flag, wakes any queued wait on the in-flight concurrency limit, and
   // best-effort calls CancelTask on this job's in-flight RPC (if any). The correctness
   // guarantee is the post-RPC discard in RunJob, not CancelTask: a long provider call
   // may still complete and its result is dropped.
@@ -253,7 +253,7 @@ class ImageAnalysisJob final {
   void               AppendResult(ImageAnalysisItemResult result);
   void               SetWorkerThread(std::thread worker);
   void               Finish();
-  void               SetGate(std::shared_ptr<ImageAnalysisInFlightGate> gate);
+  void SetConcurrencyLimit(std::shared_ptr<ImageAnalysisConcurrencyLimit> concurrency_limit);
   void               SetClient(std::shared_ptr<IImageAnalysisClient> client);
 
   mutable std::mutex lock_;
@@ -266,15 +266,15 @@ class ImageAnalysisJob final {
   std::thread                                producer_;  // Phase 5e prefill producer
   bool                                       finished_ = false;
 
-  std::shared_ptr<ImageAnalysisInFlightGate> gate_;
+  std::shared_ptr<ImageAnalysisConcurrencyLimit> concurrency_limit_;
   std::shared_ptr<IImageAnalysisClient>      client_;
 };
 
 class ImageAnalysisService final {
  public:
-  ImageAnalysisService(std::shared_ptr<IAnalysisRenditionProvider> thumbnail_provider,
-                       std::shared_ptr<IImageAnalysisClient>       analysis_client,
-                       std::shared_ptr<ImageAnalysisInFlightGate>  in_flight_gate = nullptr);
+  ImageAnalysisService(std::shared_ptr<IAnalysisRenditionProvider>    thumbnail_provider,
+                       std::shared_ptr<IImageAnalysisClient>          analysis_client,
+                       std::shared_ptr<ImageAnalysisConcurrencyLimit> concurrency_limit = nullptr);
 
   auto StartAnalysis(std::vector<ImageAnalysisItem> items, ImageAnalysisOptions options = {},
                      ImageAnalysisProgressCallback on_progress = {},
@@ -285,17 +285,17 @@ class ImageAnalysisService final {
       -> ImageAnalysisConnectionValidationResult;
 
  private:
-  static void RunJob(const std::shared_ptr<ImageAnalysisJob>& job,
-                     const std::vector<ImageAnalysisItem>& items, ImageAnalysisOptions options,
-                     ImageAnalysisProgressCallback               on_progress,
-                     ImageAnalysisFinishedCallback               on_finished,
-                     std::shared_ptr<IAnalysisRenditionProvider> thumbnail_provider,
-                     std::shared_ptr<IImageAnalysisClient>       analysis_client,
-                     std::shared_ptr<ImageAnalysisInFlightGate>  in_flight_gate);
+  static void                                 RunJob(const std::shared_ptr<ImageAnalysisJob>& job,
+                                                     const std::vector<ImageAnalysisItem>& items, ImageAnalysisOptions options,
+                                                     ImageAnalysisProgressCallback                  on_progress,
+                                                     ImageAnalysisFinishedCallback                  on_finished,
+                                                     std::shared_ptr<IAnalysisRenditionProvider>    thumbnail_provider,
+                                                     std::shared_ptr<IImageAnalysisClient>          analysis_client,
+                                                     std::shared_ptr<ImageAnalysisConcurrencyLimit> concurrency_limit);
 
   std::shared_ptr<IAnalysisRenditionProvider> thumbnail_provider_;
   std::shared_ptr<IImageAnalysisClient>       analysis_client_;
-  std::shared_ptr<ImageAnalysisInFlightGate>  in_flight_gate_;
+  std::shared_ptr<ImageAnalysisConcurrencyLimit> concurrency_limit_;
 };
 
 auto ToString(ImageAnalysisItemStatus status) -> const char*;

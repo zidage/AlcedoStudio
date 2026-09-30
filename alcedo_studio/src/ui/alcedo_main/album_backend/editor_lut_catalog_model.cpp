@@ -4,12 +4,14 @@
 
 #include "ui/alcedo_main/album_backend/editor_lut_catalog_model.hpp"
 
-#include <QJsonDocument>
-#include <QJsonObject>
 #include <QVariantMap>
-
 #include <algorithm>
 #include <system_error>
+#include <utility>
+#include <variant>
+
+#include "edit/operators/models/lmt_model.hpp"
+#include "edit/runtime/lut_resource_resolver.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -102,7 +104,23 @@ bool EditorLutCatalogModel::isFavoritePath(const QString& path) const {
   return relative && library_->IsFavorite(*relative);
 }
 
-void EditorLutCatalogModel::setSelectedPath(const QString& path) {
+auto EditorLutCatalogModel::referenceForPath(const QString& path) const -> alcedo::LutReference {
+  const std::string utf8 = QStringToUtf8(path.trimmed());
+  if (utf8.empty()) {
+    return std::monostate{};
+  }
+  if (library_) {
+    if (auto reference = library_->ReferenceForPath(alcedo::LutPathFromUtf8(utf8))) {
+      return *reference;
+    }
+  }
+  return alcedo::FileLutReference{utf8};
+}
+
+void EditorLutCatalogModel::setSelection(const QString& path, alcedo::LutReference reference,
+                                         std::string name) {
+  selectedReference_ = std::move(reference);
+  selectedName_      = std::move(name);
   // Load-only path writes often re-apply the same snapshot value after a
   // settled select. Skip work and signals so QML does not rebuild or twitch.
   if (path == selectedPath_) {
@@ -112,6 +130,41 @@ void EditorLutCatalogModel::setSelectedPath(const QString& path) {
   selectedPathUtf8_ = QStringToUtf8(path);
   applySelectionHighlight();
   emit selectedPathChanged();
+}
+
+void EditorLutCatalogModel::setSelectedPath(const QString& path) {
+  setSelection(path, referenceForPath(path), {});
+}
+
+void EditorLutCatalogModel::loadSelection(const QVariantMap& lutField) {
+  const QString kind = lutField.value(QStringLiteral("referenceKind")).toString();
+  const auto    text = [&lutField](const char* key) {
+    return QStringToUtf8(lutField.value(QString::fromLatin1(key)).toString());
+  };
+  alcedo::LutReference reference;
+  if (kind == QStringLiteral("official")) {
+    reference = alcedo::OfficialLutReference{text("packageId"), text("lutId")};
+  } else if (kind == QStringLiteral("library")) {
+    reference = alcedo::LibraryLutReference{text("libraryPath")};
+  } else if (kind == QStringLiteral("file") || !text("path").empty()) {
+    reference = alcedo::FileLutReference{text("path")};
+  }
+  QString path;
+  if (!alcedo::IsEmptyLutReference(reference)) {
+    const auto resolution = library_ ? library_->Resources()->Resolve(reference)
+                                     : alcedo::DefaultLutResourceResolver()->Resolve(reference);
+    path                  = QString::fromStdString(alcedo::LutPathToUtf8(resolution.path));
+    if (path.isEmpty()) {
+      // No file location is known (an official LUT that no installed package lists).
+      path = QString::fromStdString("lut:" + alcedo::DescribeLutReference(reference));
+    }
+  }
+  const bool changed = path != selectedPath_;
+  setSelection(path, std::move(reference), text("lutName"));
+  if (changed && !path.isEmpty() &&
+      lut_catalog::FindEntryIndexForPath(catalog_, selectedPathUtf8_) < 0) {
+    refresh(false);
+  }
 }
 
 void EditorLutCatalogModel::setFilterText(const QString& text) {
@@ -127,7 +180,7 @@ void EditorLutCatalogModel::refresh(bool force) {
   if (force && library_) {
     library_->RefreshInventory();
   }
-  catalog_          = lut_catalog::BuildCatalog(library_.data(), selectedPathUtf8_);
+  catalog_          = lut_catalog::BuildCatalog(library_.data(), selectedPathUtf8_, selectedName_);
   directoryText_    = lut_catalog::FormatDirectoryDisplayText(catalog_.directory_);
   statusText_       = lut_catalog::CatalogStatusText(catalog_);
   canOpenDirectory_ = catalog_.directory_exists_;
@@ -158,10 +211,15 @@ void EditorLutCatalogModel::selectPath(const QString& path) {
   if (path == selectedPath_) {
     return;
   }
-  selectedPath_     = path;
-  selectedPathUtf8_ = QStringToUtf8(path);
-  applySelectionHighlight();
-  emit selectedPathChanged();
+  std::string name;
+  for (const auto& entry : catalog_.entries_) {
+    if (entry.kind_ == lut_catalog::LutCatalogEntryKind::File &&
+        entry.path_ == QStringToUtf8(path)) {
+      name = QStringToUtf8(entry.display_name_);
+      break;
+    }
+  }
+  setSelection(path, referenceForPath(path), std::move(name));
   submitSettled();
   emit settledCommitted();
 }
@@ -268,13 +326,17 @@ void EditorLutCatalogModel::applySelectionHighlight() {
 }
 
 void EditorLutCatalogModel::submitSettled() {
-  submitNow(alcedo::EditorLutWrite{selectedPathUtf8_}, true);
+  // A selection keeps the configured strength: the write carries no strength.
+  alcedo::EditorLutWrite write;
+  write.reference    = selectedReference_;
+  write.display_name = selectedName_;
+  submitNow(write, true);
 }
 
 auto EditorLutCatalogModel::buildParamsJson() const -> QString {
-  QJsonObject root;
-  root.insert(QStringLiteral("ocio_lmt"), selectedPath_);
-  return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
+  alcedo::LmtModel model;
+  model.SetReference(selectedReference_, selectedName_);
+  return QString::fromStdString(model.ToJson().dump());
 }
 
 }  // namespace alcedo::ui

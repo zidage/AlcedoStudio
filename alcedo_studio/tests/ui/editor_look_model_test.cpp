@@ -28,6 +28,7 @@
 #include <vector>
 
 #include "app/editor_panel_projection.hpp"
+#include "app/lut_library_inventory.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/operators/models/cat02_white_balance_model.hpp"
 #include "json.hpp"
@@ -62,7 +63,7 @@ class FixedRootPreferences final : public alcedo::LutLibraryPreferences {
 /// A started LutLibraryService over a temporary root under the working directory.
 class TemporaryLutLibrary {
  public:
-  explicit TemporaryLutLibrary(bool open_succeeds = true) {
+  explicit TemporaryLutLibrary(bool open_succeeds = true, bool official_package = false) {
     std::random_device device;
     root_ =
         std::filesystem::current_path() / "editor_look_model_test_luts" / std::to_string(device());
@@ -70,6 +71,17 @@ class TemporaryLutLibrary {
     root_ = std::filesystem::weakly_canonical(root_);
     Write("kodak/look.cube");
     Write("fuji/look.cube");
+    if (official_package) {
+      // Active content of an installed package: its receipt names the content directory.
+      Write(kOfficialContent, R"(# ALCEDO_LUT {"schema":1,"id":"kodak-5207","origin":"alcedo",)"
+                              R"("category":"general","input_space":"ACEScc",)"
+                              R"("output_space":"ACEScc"})"
+                              "\n");
+      alcedo::LutPackageReceipt receipt;
+      receipt.package_id        = "spectral_film_lut";
+      receipt.content_directory = "packages/spectral_film_lut/content/a";
+      EXPECT_TRUE(alcedo::WriteLutPackageReceiptFile(root_, receipt).empty());
+    }
     alcedo::LutLibraryServiceOptions options;
     options.preferences  = std::make_unique<FixedRootPreferences>();
     options.default_root = root_;
@@ -93,12 +105,15 @@ class TemporaryLutLibrary {
     return QString::fromStdString(alcedo::LutPathToUtf8(root_ / relative));
   }
 
+  static constexpr const char* kOfficialContent =
+      "packages/spectral_film_lut/content/a/kodak-5207.cube";
+
  private:
-  void Write(const char* relative) const {
+  void Write(const char* relative, const char* header = "") const {
     const std::filesystem::path path = root_ / relative;
     std::filesystem::create_directories(path.parent_path());
     std::ofstream output(path, std::ios::binary);
-    output << "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
+    output << header << "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
   }
 
   std::filesystem::path                      root_;
@@ -501,7 +516,7 @@ TEST(EditorLookModelTest, CdlLoadOnlyDoesNotSubmit) {
 
 // ── LUT catalog ─────────────────────────────────────────────────────────────
 
-TEST(EditorLookModelTest, LutSelectPathCommitsOcioLmtShape) {
+TEST(EditorLookModelTest, LutSelectPathSubmitsSelectionAndKeepsStrength) {
   RecordingSubmitter    sub;
   EditorLutCatalogModel model;
   model.setSubmitter(&sub);
@@ -511,7 +526,68 @@ TEST(EditorLookModelTest, LutSelectPathCommitsOcioLmtShape) {
   ASSERT_NE(sub.lastSettledWrite(), nullptr);
   const auto* update = std::get_if<alcedo::EditorLutWrite>(sub.lastSettledWrite());
   ASSERT_NE(update, nullptr);
-  EXPECT_EQ(update->cube_path, "D:/fake/look.cube");
+  ASSERT_TRUE(update->reference.has_value());
+  EXPECT_EQ(*update->reference,
+            alcedo::LutReference{alcedo::FileLutReference{"D:/fake/look.cube"}});
+  // A selection does not carry a strength, so the configured strength is kept.
+  EXPECT_FALSE(update->strength.has_value());
+}
+
+TEST(EditorLookModelTest, LutSelectionOfPackageFileSubmitsOfficialReference) {
+  TemporaryLutLibrary   library(true, true);
+  RecordingSubmitter    sub;
+  EditorLutCatalogModel model;
+  model.setSubmitter(&sub);
+  model.setLibrary(library.Service());
+
+  model.selectPath(library.PathOf(TemporaryLutLibrary::kOfficialContent));
+  const auto* official = std::get_if<alcedo::EditorLutWrite>(sub.lastSettledWrite());
+  ASSERT_NE(official, nullptr);
+  ASSERT_TRUE(official->reference.has_value());
+  EXPECT_EQ(
+      *official->reference,
+      (alcedo::LutReference{alcedo::OfficialLutReference{"spectral_film_lut", "kodak-5207"}}));
+  EXPECT_FALSE(official->display_name.empty());
+  EXPECT_FALSE(official->strength.has_value());
+
+  model.selectPath(library.PathOf("kodak/look.cube"));
+  const auto* loose = std::get_if<alcedo::EditorLutWrite>(sub.lastSettledWrite());
+  ASSERT_NE(loose, nullptr);
+  EXPECT_EQ(*loose->reference,
+            alcedo::LutReference{alcedo::LibraryLutReference{"kodak/look.cube"}});
+}
+
+TEST(EditorLookModelTest, LutLoadSelectionResolvesReferencesWithoutSubmitting) {
+  TemporaryLutLibrary   library(true, true);
+  RecordingSubmitter    sub;
+  EditorLutCatalogModel model;
+  model.setSubmitter(&sub);
+  model.setLibrary(library.Service());
+
+  model.loadSelection(
+      QVariantMap{{QStringLiteral("referenceKind"), QStringLiteral("official")},
+                  {QStringLiteral("packageId"), QStringLiteral("spectral_film_lut")},
+                  {QStringLiteral("lutId"), QStringLiteral("kodak-5207")},
+                  {QStringLiteral("lutName"), QStringLiteral("Vision3 250D")}});
+  EXPECT_EQ(model.selectedPath(), library.PathOf(TemporaryLutLibrary::kOfficialContent));
+  EXPECT_GT(model.selectedIndex(), 0);
+
+  model.loadSelection(
+      QVariantMap{{QStringLiteral("referenceKind"), QStringLiteral("library")},
+                  {QStringLiteral("libraryPath"), QStringLiteral("fuji/look.cube")}});
+  EXPECT_EQ(model.selectedPath(), library.PathOf("fuji/look.cube"));
+
+  // An official LUT that no installed package lists stays visible as missing, by its name.
+  model.loadSelection(
+      QVariantMap{{QStringLiteral("referenceKind"), QStringLiteral("official")},
+                  {QStringLiteral("packageId"), QStringLiteral("spectral_film_lut")},
+                  {QStringLiteral("lutId"), QStringLiteral("retired-stock")},
+                  {QStringLiteral("lutName"), QStringLiteral("Retired Stock")}});
+  ASSERT_EQ(model.selectedIndex(), 1);
+  const auto row = model.entries()[1].toMap();
+  EXPECT_EQ(row.value(QStringLiteral("kind")).toString(), QStringLiteral("missing"));
+  EXPECT_EQ(row.value(QStringLiteral("displayName")).toString(), QStringLiteral("Retired Stock"));
+  EXPECT_TRUE(sub.calls.empty());
 }
 
 TEST(EditorLookModelTest, LutSetSelectedPathIsLoadOnly) {

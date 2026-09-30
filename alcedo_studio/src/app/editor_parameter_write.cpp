@@ -150,7 +150,7 @@ void ApplyColorGradeWrite(IOperatorModel& model, std::string_view field,
     if (typed == nullptr) {
       throw std::invalid_argument("Adjustment Model type does not match field lut");
     }
-    typed->SetCubePath(RequireWrite<EditorLutWrite>(write, field).cube_path);
+    typed->ApplyUpdate(RequireWrite<EditorLutWrite>(write, field));
     return;
   }
   throw std::invalid_argument("Unsupported Color Grade parameter field: " + std::string{field});

@@ -102,18 +102,21 @@ def_library(LutPackageManifest
 
 # Owner of the local LUT library: root choice, inventory, favorites, import,
 # and root migration (lut_library_and_package_management_plan.md, L2).
-# Package extraction and activation (L3) run as a library operation.
+# Package extraction and activation (L3) run as a library operation. The published state is
+# the render-side LUT resolver (L4).
 def_library(LutLibraryService
     SOURCES
         "${ALCEDO_APP_ROOT}/lut_library_inventory.cpp"
         "${ALCEDO_APP_ROOT}/lut_library_migration.cpp"
+        "${ALCEDO_APP_ROOT}/lut_library_publication.cpp"
         "${ALCEDO_APP_ROOT}/lut_library_service.cpp"
         "${ALCEDO_APP_ROOT}/lut_package_install.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/lut_library_inventory.hpp"
         "${ALCEDO_INCLUDE_ROOT}/app/lut_library_migration.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/lut_library_publication.hpp"
         "${ALCEDO_INCLUDE_ROOT}/app/lut_library_service.hpp"
         "${ALCEDO_INCLUDE_ROOT}/app/lut_package_install.hpp"
-    PUBLIC_DEPS LutMetadata Qt6::Core
+    PUBLIC_DEPS LutMetadata EditLutResources Qt6::Core
     PRIVATE_DEPS JSON Qt6::Gui LibArchive::LibArchive
 )
 
@@ -324,7 +327,7 @@ def_library(PipelineMgmtService
             "${ALCEDO_APP_ROOT}/pipeline_root_state.cpp"
             "${ALCEDO_APP_ROOT}/committed_snapshot_cache.cpp"
             "${ALCEDO_APP_ROOT}/source_dng_profile_binding.cpp"
-    PUBLIC_DEPS ProjectService EditPipeline EditGraph
+    PUBLIC_DEPS ProjectService EditPipeline EditGraph EditLutResources
 )
 
 def_library(AdjustmentTransferService

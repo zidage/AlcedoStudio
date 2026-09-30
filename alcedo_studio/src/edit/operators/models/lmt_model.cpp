@@ -4,32 +4,174 @@
 
 #include "edit/operators/models/lmt_model.hpp"
 
-#include "edit/operators/models/json_read.hpp"
+#include <cmath>
+#include <stdexcept>
+#include <utility>
 
 namespace alcedo {
+namespace {
 
-auto LmtModel::IsDefault() const -> bool {
-  return Read([](const LmtPayload& payload) { return payload.cube_path.empty(); });
+void RequireValid(const LmtUpdate& update) {
+  if (update.reference.has_value()) {
+    if (auto error = ValidateLutReference(*update.reference); !error.empty()) {
+      throw std::invalid_argument(error);
+    }
+  }
+  if (update.strength.has_value()) {
+    if (auto error = ValidateLutStrength(*update.strength); !error.empty()) {
+      throw std::invalid_argument(error);
+    }
+  }
 }
 
-void LmtModel::SetCubePath(std::string path) {
-  MutateWithDirtyFields([path = std::move(path)](LmtPayload& payload) mutable {
-    if (payload.cube_path == path) {
-      return DirtyFieldMask{};
+auto ReadReference(const nlohmann::json& json) -> LutReference {
+  std::string cube_path;
+  if (json.contains("cube_path")) {
+    if (!json.at("cube_path").is_string()) {
+      throw std::invalid_argument("LMT cube_path must be a string");
     }
-    payload.cube_path = std::move(path);
-    return DirtyFieldMask{LmtDirty::Path};
+    cube_path = json.at("cube_path").get<std::string>();
+  }
+  if (json.contains("reference") && !json.at("reference").is_null()) {
+    if (!cube_path.empty()) {
+      throw std::invalid_argument("LMT has both a cube_path and a tagged reference");
+    }
+    return TaggedLutReferenceFromJson(json.at("reference"));
+  }
+  if (cube_path.empty()) {
+    return std::monostate{};
+  }
+  return FileLutReference{std::move(cube_path)};
+}
+
+}  // namespace
+
+auto ValidateLutStrength(float strength) -> std::string {
+  if (!std::isfinite(strength) || strength < 0.0f || strength > 1.0f) {
+    return "LUT strength must be a finite value from 0 to 1";
+  }
+  return {};
+}
+
+auto LmtUpdateFromModelJson(const nlohmann::json& json) -> LmtUpdate {
+  if (json.is_null()) {
+    return LmtUpdateFromModelJson(nlohmann::json::object());
+  }
+  if (!json.is_object()) {
+    throw std::invalid_argument("LMT parameters must be an object");
+  }
+  for (const auto& [key, value] : json.items()) {
+    (void)value;
+    if (key != "cube_path" && key != "reference" && key != "strength" && key != "name") {
+      throw std::invalid_argument("LMT parameters have unknown key '" + key + "'");
+    }
+  }
+  LmtUpdate update;
+  update.reference = ReadReference(json);
+  if (json.contains("name")) {
+    if (!json.at("name").is_string()) {
+      throw std::invalid_argument("LMT name must be a string");
+    }
+    update.display_name = json.at("name").get<std::string>();
+  }
+  float strength = kDefaultLutStrength;
+  if (json.contains("strength")) {
+    if (!json.at("strength").is_number()) {
+      throw std::invalid_argument("LMT strength must be a number");
+    }
+    strength = json.at("strength").get<float>();
+  }
+  update.strength = strength;
+  RequireValid(update);
+  return update;
+}
+
+auto LmtModel::IsDefault() const -> bool {
+  return Read([](const LmtPayload& payload) {
+    return IsEmptyLutReference(payload.reference) && payload.strength == kDefaultLutStrength;
   });
 }
 
+void LmtModel::SetReference(LutReference reference, std::string display_name) {
+  LmtUpdate update;
+  update.reference    = std::move(reference);
+  update.display_name = std::move(display_name);
+  ApplyUpdate(update);
+}
+
+void LmtModel::SetStrength(float strength) {
+  LmtUpdate update;
+  update.strength = strength;
+  ApplyUpdate(update);
+}
+
+void LmtModel::ApplyUpdate(const LmtUpdate& update) {
+  RequireValid(update);
+  MutateWithDirtyFields([&update](LmtPayload& payload) {
+    DirtyFieldMask changed{};
+    if (update.reference.has_value()) {
+      // An empty reference keeps no name: nothing is associated.
+      const std::string name =
+          IsEmptyLutReference(*update.reference) ? std::string{} : update.display_name;
+      if (payload.reference != *update.reference || payload.display_name != name) {
+        payload.reference    = *update.reference;
+        payload.display_name = name;
+        changed |= LmtDirty::Reference;
+      }
+    }
+    if (update.strength.has_value() && payload.strength != *update.strength) {
+      payload.strength = *update.strength;
+      changed |= LmtDirty::Strength;
+    }
+    return changed;
+  });
+}
+
+void LmtModel::SetCubePath(std::string path) {
+  if (path.empty()) {
+    SetReference(std::monostate{});
+    return;
+  }
+  SetReference(FileLutReference{std::move(path)});
+}
+
+auto LmtModel::Reference() const -> LutReference {
+  return Read([](const LmtPayload& payload) { return payload.reference; });
+}
+
+auto LmtModel::DisplayName() const -> std::string {
+  return Read([](const LmtPayload& payload) { return payload.display_name; });
+}
+
+auto LmtModel::Strength() const -> float {
+  return Read([](const LmtPayload& payload) { return payload.strength; });
+}
+
 auto LmtModel::CubePath() const -> std::string {
-  return Read([](const LmtPayload& payload) { return payload.cube_path; });
+  return Read([](const LmtPayload& payload) {
+    const auto* file = std::get_if<FileLutReference>(&payload.reference);
+    return file == nullptr ? std::string{} : file->path;
+  });
 }
 
-auto LmtModel::ToJson() const -> nlohmann::json { return {{"cube_path", CubePath()}}; }
-
-void LmtModel::LoadJson(const nlohmann::json& json) {
-  SetCubePath(json_util::ReadString(json, "cube_path", {}));
+auto LmtModel::ToJson() const -> nlohmann::json {
+  return Read([](const LmtPayload& payload) {
+    const auto*    file = std::get_if<FileLutReference>(&payload.reference);
+    nlohmann::json json{{"cube_path", file == nullptr ? std::string{} : file->path}};
+    if (std::holds_alternative<OfficialLutReference>(payload.reference) ||
+        std::holds_alternative<LibraryLutReference>(payload.reference)) {
+      json["reference"] = TaggedLutReferenceToJson(payload.reference);
+    }
+    if (!payload.display_name.empty()) {
+      json["name"] = payload.display_name;
+    }
+    if (payload.strength != kDefaultLutStrength) {
+      json["strength"] = payload.strength;
+    }
+    return json;
+  });
 }
+
+void LmtModel::LoadJson(const nlohmann::json& json) { ApplyUpdate(LmtUpdateFromModelJson(json)); }
 
 }  // namespace alcedo

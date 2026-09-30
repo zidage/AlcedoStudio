@@ -23,6 +23,7 @@
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/runtime/executor_role.hpp"
 #include "edit/runtime/gpu_node_pass_stats.hpp"
+#include "edit/runtime/lut_resource_resolver.hpp"
 #include "edit/runtime/pipeline_apply_request.hpp"
 #include "edit/runtime/render_device_type.hpp"
 #include "edit/runtime/static_execution_plan_cache.hpp"
@@ -89,7 +90,12 @@ class Renderer {
  public:
   using RenderDevice = typename RenderDeviceType<Backend>::Type;
 
-  explicit Renderer(ExecutorRole role, PreparedSourceCache::UnpackFn unpack = {});
+  /**
+   * @param lut_resources Resolver for Color Grade LUT references, shared with the device
+   *        workspace. Null selects the file-path-only DefaultLutResourceResolver.
+   */
+  explicit Renderer(ExecutorRole role, PreparedSourceCache::UnpackFn unpack = {},
+                    std::shared_ptr<const LutResourceResolver> lut_resources = nullptr);
   ~Renderer();
 
   Renderer(const Renderer&)                    = delete;
@@ -179,10 +185,12 @@ class Renderer {
   PreparedSourceCache             source_cache_;
   StaticExecutionPlanCache        plan_cache_{Backend::kCapabilityVersion};
   std::optional<RenderBindingKey> binding_;
+  std::shared_ptr<const LutResourceResolver> lut_resources_;
 };
 
 template <class Backend>
-Renderer<Backend>::Renderer(ExecutorRole role, PreparedSourceCache::UnpackFn unpack)
+Renderer<Backend>::Renderer(ExecutorRole role, PreparedSourceCache::UnpackFn unpack,
+                            std::shared_ptr<const LutResourceResolver> lut_resources)
     : role_(role),
       device_(),
       unpack_(unpack ? std::move(unpack)
@@ -191,7 +199,8 @@ Renderer<Backend>::Renderer(ExecutorRole role, PreparedSourceCache::UnpackFn unp
                          return RawInputLoader::LoadEncoded(encoded, decode_res);
                        }}),
       source_cache_(unpack_),
-      plan_cache_(Backend::kCapabilityVersion) {}
+      plan_cache_(Backend::kCapabilityVersion),
+      lut_resources_(lut_resources ? std::move(lut_resources) : DefaultLutResourceResolver()) {}
 
 template <class Backend>
 Renderer<Backend>::~Renderer() = default;
@@ -202,6 +211,7 @@ void Renderer<Backend>::EnsureDevice() {
     return;
   }
   device_ = std::make_unique<RenderDevice>();
+  device_->Workspace().SetLutResources(lut_resources_);
   if (role_ == ExecutorRole::Batch) {
     if constexpr (requires {
                     { device_->Workspace().Device().UseDedicatedQueue() };

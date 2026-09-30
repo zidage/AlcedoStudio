@@ -8,6 +8,7 @@
 #include <QVariant>
 #include <QVariantList>
 #include <type_traits>
+#include <variant>
 
 namespace alcedo::ui {
 namespace {
@@ -37,9 +38,28 @@ auto FieldMap(const alcedo::EditorPanelFieldPresentation& field) -> QVariantMap 
           inner.insert(String(value.value_key), value.value);
           map.insert(String(value.object_key), inner);
         } else if constexpr (std::is_same_v<T, alcedo::EditorPanelLutValue>) {
-          const auto path = String(value.cube_path);
+          // `path`/`ocio_lmt` carry a file reference's path; official and library references
+          // are resolved to their current file by the LUT library model (loadSelection).
+          QString kind = QStringLiteral("none");
+          QString path;
+          if (const auto* file = std::get_if<alcedo::FileLutReference>(&value.reference)) {
+            kind = QStringLiteral("file");
+            path = String(file->path);
+          } else if (const auto* official =
+                         std::get_if<alcedo::OfficialLutReference>(&value.reference)) {
+            kind = QStringLiteral("official");
+            map.insert(QStringLiteral("packageId"), String(official->package_id));
+            map.insert(QStringLiteral("lutId"), String(official->lut_id));
+          } else if (const auto* library =
+                         std::get_if<alcedo::LibraryLutReference>(&value.reference)) {
+            kind = QStringLiteral("library");
+            map.insert(QStringLiteral("libraryPath"), String(library->relative_path));
+          }
+          map.insert(QStringLiteral("referenceKind"), kind);
           map.insert(QStringLiteral("ocio_lmt"), path);
           map.insert(QStringLiteral("path"), path);
+          map.insert(QStringLiteral("lutName"), String(value.display_name));
+          map.insert(QStringLiteral("strength"), value.strength);
         } else if constexpr (std::is_same_v<T, alcedo::EditorPanelCurveValue>) {
           QVariantList points;
           points.reserve(static_cast<int>(value.points.size()));

@@ -176,7 +176,7 @@ TEST(EditorAdjustmentSnapshotQmlTest, QmlLoadFromTypedProjectionDoesNotSubmit) {
   saturation.value     = alcedo::EditorPanelScalarValue{"saturation", 1.4f};
   alcedo::EditorPanelFieldPresentation lut;
   lut.field_key = "lut";
-  lut.value     = alcedo::EditorPanelLutValue{"D:/luts/look.cube"};
+  lut.value     = alcedo::EditorPanelLutValue{alcedo::FileLutReference{"D:/luts/look.cube"}};
   projection.fields.push_back(std::move(exposure));
   projection.fields.push_back(std::move(saturation));
   projection.fields.push_back(std::move(lut));

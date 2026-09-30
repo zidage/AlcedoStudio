@@ -104,6 +104,19 @@ TEST_F(EditorRenderCoordinatorTest, AcceptsIntentAndSchedulesThroughSingleOwner)
   EXPECT_TRUE(coordinator_->has_inflight());
 }
 
+TEST_F(EditorRenderCoordinatorTest, ResourceChangedSchedulesQualityRenderInsteadOfReuse) {
+  // A changed LUT resource alters content without a document edit (plan L4).
+  EXPECT_EQ(DefaultQualityForReason(EditorRenderReason::ResourceChanged),
+            EditorRenderQuality::Quality);
+  EXPECT_FALSE(ReasonReusesCurrentFrame(EditorRenderReason::ResourceChanged));
+  EXPECT_TRUE(ScopeUpdateAllowedForReason(EditorRenderReason::ResourceChanged));
+  const auto accepted = coordinator_->Submit(
+      MakeViewIntent(EditorRenderReason::ResourceChanged, EditorRenderQuality::Quality));
+  EXPECT_EQ(accepted.kind, EditorRenderResultKind::RequestAccepted);
+  ASSERT_EQ(scheduler_->scheduled_.size(), 1u);
+  EXPECT_EQ(scheduler_->scheduled_.front().request_id, accepted.request_id);
+}
+
 TEST_F(EditorRenderCoordinatorTest, RejectsStaleImageLoadRequest) {
   // MakeIntent's first generation arg stamps image_load_request_id; active is 1.
   const auto rejected = coordinator_->Submit(
