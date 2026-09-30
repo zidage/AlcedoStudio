@@ -6,7 +6,9 @@
 
 #include <cuda_runtime.h>
 
+#include <algorithm>
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <vector>
 
@@ -17,6 +19,7 @@
 #include "edit/runtime/cuda/cuda_backend.hpp"
 #include "edit/runtime/cuda/cuda_scene_work.hpp"
 #include "edit/runtime/diffusion_filter_plan.hpp"
+#include "edit/runtime/runtime_invalidation.hpp"
 #include "edit/runtime/texture_format.hpp"
 #include "edit/runtime/texture_pool.hpp"
 
@@ -49,6 +52,11 @@ __device__ __forceinline__ auto Fetch(const float4* image, int width, int height
   return image[y * width + x];
 }
 
+__device__ __forceinline__ auto Transform(const Matrix3x3& matrix, float x, float y) -> float2 {
+  return make_float2(matrix.m[0] * x + matrix.m[1] * y + matrix.m[2],
+                     matrix.m[3] * x + matrix.m[4] * y + matrix.m[5]);
+}
+
 /// Bilinear sample with clamp-to-edge addressing. Texel `i` covers [i, i + 1).
 __device__ __forceinline__ auto SampleBilinear(const float4* image, int width, int height, float px,
                                                float py) -> float4 {
@@ -64,6 +72,26 @@ __device__ __forceinline__ auto SampleBilinear(const float4* image, int width, i
   const auto  b  = Fetch(image, width, height, ix + 1, iy);
   const auto  c  = Fetch(image, width, height, ix, iy + 1);
   const auto  d  = Fetch(image, width, height, ix + 1, iy + 1);
+  const auto  top    = Add(Scale(a, 1.0f - ax), Scale(b, ax));
+  const auto  bottom = Add(Scale(c, 1.0f - ax), Scale(d, ax));
+  return Add(Scale(top, 1.0f - ay), Scale(bottom, ay));
+}
+
+/// Bilinear sample of the ACEScc scene, decoded to linear AP1 per tap before interpolation.
+__device__ auto SampleBilinearDecoded(const float4* image, int width, int height, float px,
+                                      float py) -> float4 {
+  const float fx = px - 0.5f;
+  const float fy = py - 0.5f;
+  const float x0 = floorf(fx);
+  const float y0 = floorf(fy);
+  const float ax = fx - x0;
+  const float ay = fy - y0;
+  const int   ix = static_cast<int>(x0);
+  const int   iy = static_cast<int>(y0);
+  const auto  a  = DecodeAcescc(Fetch(image, width, height, ix, iy));
+  const auto  b  = DecodeAcescc(Fetch(image, width, height, ix + 1, iy));
+  const auto  c  = DecodeAcescc(Fetch(image, width, height, ix, iy + 1));
+  const auto  d  = DecodeAcescc(Fetch(image, width, height, ix + 1, iy + 1));
   const auto  top    = Add(Scale(a, 1.0f - ax), Scale(b, ax));
   const auto  bottom = Add(Scale(c, 1.0f - ax), Scale(d, ax));
   return Add(Scale(top, 1.0f - ay), Scale(bottom, ay));
@@ -120,27 +148,29 @@ __global__ void DecodeKernel(const float4* src, float4* dst, std::uint32_t pixel
   dst[index] = DecodeAcescc(src[index]);
 }
 
-/// Base level: box average of @p block x @p block decoded, boosted render pixels.
+/// Base level: average of @p samples x @p samples decoded, boosted render samples inside the
+/// footprint of one base texel. @p base_to_render maps base texel coordinates to the render.
 __global__ void ReduceBoostKernel(const float4* src, int src_width, int src_height, float4* dst,
-                                  int dst_width, int dst_height, int block, float gain,
-                                  float knee) {
+                                  int dst_width, int dst_height, Matrix3x3 base_to_render,
+                                  int samples, float gain, float knee) {
   const int x = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
   const int y = static_cast<int>(blockIdx.y * blockDim.y + threadIdx.y);
   if (x >= dst_width || y >= dst_height) return;
-  const int x0  = x * block;
-  const int y0  = y * block;
-  const int x1  = min(x0 + block, src_width);
-  const int y1  = min(y0 + block, src_height);
-  float3    sum = make_float3(0.0f, 0.0f, 0.0f);
-  for (int sy = y0; sy < y1; ++sy) {
-    for (int sx = x0; sx < x1; ++sx) {
-      const auto boosted = BoostHighlights(DecodeAcescc(src[sy * src_width + sx]), gain, knee);
+  const float step = 1.0f / static_cast<float>(samples);
+  float3      sum  = make_float3(0.0f, 0.0f, 0.0f);
+  for (int j = 0; j < samples; ++j) {
+    const float by = static_cast<float>(y) + (static_cast<float>(j) + 0.5f) * step;
+    for (int i = 0; i < samples; ++i) {
+      const float  bx      = static_cast<float>(x) + (static_cast<float>(i) + 0.5f) * step;
+      const float2 render  = Transform(base_to_render, bx, by);
+      const auto   linear  = SampleBilinearDecoded(src, src_width, src_height, render.x, render.y);
+      const auto   boosted = BoostHighlights(linear, gain, knee);
       sum.x += boosted.x;
       sum.y += boosted.y;
       sum.z += boosted.z;
     }
   }
-  const float inv   = 1.0f / static_cast<float>((x1 - x0) * (y1 - y0));
+  const float inv        = step * step;
   dst[y * dst_width + x] = make_float4(sum.x * inv, sum.y * inv, sum.z * inv, 1.0f);
 }
 
@@ -184,19 +214,19 @@ __global__ void UpsampleAccumulateKernel(const float4* coarse, int coarse_width,
   dst[index]      = Add(Scale(level[index], level_weight), Scale(tent, coarse_weight));
 }
 
-/// out = T * ((1 - s) * I + s * B); B is the scatter image sampled at the render pixel.
+/// out = T * ((1 - s) * I + s * B); B is the scatter image at the reference position of the
+/// render pixel, so every render of the same frame reads the same glow.
 __global__ void MixKernel(const float4* src, float4* dst, int width, int height,
                           const float4* scatter, int scatter_width, int scatter_height,
-                          float inverse_base_scale, float scatter_fraction, float transmission) {
+                          Matrix3x3 render_to_base, float scatter_fraction, float transmission) {
   const int x = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
   const int y = static_cast<int>(blockIdx.y * blockDim.y + threadIdx.y);
   if (x >= width || y >= height) return;
-  const int  index  = y * width + x;
-  const auto linear = DecodeAcescc(src[index]);
-  const auto glow =
-      SampleBSpline(scatter, scatter_width, scatter_height,
-                    (static_cast<float>(x) + 0.5f) * inverse_base_scale,
-                    (static_cast<float>(y) + 0.5f) * inverse_base_scale);
+  const int    index  = y * width + x;
+  const auto   linear = DecodeAcescc(src[index]);
+  const float2 base =
+      Transform(render_to_base, static_cast<float>(x) + 0.5f, static_cast<float>(y) + 0.5f);
+  const auto  glow   = SampleBSpline(scatter, scatter_width, scatter_height, base.x, base.y);
   const float direct = 1.0f - scatter_fraction;
   dst[index] = make_float4(transmission * (direct * linear.x + scatter_fraction * glow.x),
                            transmission * (direct * linear.y + scatter_fraction * glow.y),
@@ -206,6 +236,63 @@ __global__ void MixKernel(const float4* src, float4* dst, int width, int height,
 
 auto Pointer(ResourceLease<CudaBackend>& lease) -> float4* {
   return static_cast<float4*>(lease.Texture().DevicePointer());
+}
+
+/**
+ * @brief Build the scatter image of @p layout from the render @p src into @p target.
+ *
+ * @p target has the base-level extent. Pyramid levels are pooled scratch leases, returned at
+ * scope exit; later users run on the same stream, so these kernels finish before any reuse.
+ */
+void BuildScatter(CudaRenderWorkspace& workspace, cudaStream_t stream, const float4* src,
+                  std::uint32_t width, std::uint32_t height, const DiffusionFilterLayout& layout,
+                  const DiffusionScatterMapping& mapping, float4* target) {
+  const auto                              count = layout.level_count;
+  std::vector<ResourceLease<CudaBackend>> leases;
+  leases.reserve(2U * count);
+  auto acquire = [&](ImageExtent extent) {
+    leases.push_back(
+        workspace.Textures().Acquire({extent.width, extent.height, TextureFormat::Rgba32f}));
+    return Pointer(leases.back());
+  };
+  // With one level the reduction is the scatter image. Otherwise the level-0 accumulation is.
+  std::vector<float4*> levels(count, nullptr);
+  std::vector<float4*> accumulated(count, nullptr);
+  for (std::uint32_t index = 0; index < count; ++index) {
+    levels[index] = count == 1 ? target : acquire(layout.extents[index]);
+    if (index + 1 < count) {
+      accumulated[index] = index == 0 ? target : acquire(layout.extents[index]);
+    }
+  }
+
+  const dim3 block{kBlock, kBlock};
+  const auto base = layout.extents[0];
+  ReduceBoostKernel<<<GridFor(base.width, base.height), block, 0, stream>>>(
+      src, static_cast<int>(width), static_cast<int>(height), levels[0],
+      static_cast<int>(base.width), static_cast<int>(base.height), mapping.base_to_render,
+      static_cast<int>(mapping.reduce_samples), layout.highlight_gain, layout.highlight_knee);
+  for (std::uint32_t index = 1; index < count; ++index) {
+    const auto from = layout.extents[index - 1];
+    const auto to   = layout.extents[index];
+    DownsampleKernel<<<GridFor(to.width, to.height), block, 0, stream>>>(
+        levels[index - 1], static_cast<int>(from.width), static_cast<int>(from.height),
+        levels[index], static_cast<int>(to.width), static_cast<int>(to.height));
+  }
+
+  // Accumulate from the coarsest level. The coarsest level enters with its own weight.
+  const float4* coarse        = levels[count - 1];
+  float         coarse_weight = layout.weights[count - 1];
+  for (std::uint32_t index = count - 1; index-- > 0;) {
+    const auto coarse_extent = layout.extents[index + 1];
+    const auto extent        = layout.extents[index];
+    UpsampleAccumulateKernel<<<GridFor(extent.width, extent.height), block, 0, stream>>>(
+        coarse, static_cast<int>(coarse_extent.width), static_cast<int>(coarse_extent.height),
+        coarse_weight, levels[index], accumulated[index], static_cast<int>(extent.width),
+        static_cast<int>(extent.height), layout.weights[index]);
+    coarse        = accumulated[index];
+    coarse_weight = 1.0f;
+  }
+  cuda::CheckCuda(::cudaGetLastError(), "ExecuteCudaDiffusionFilter: scatter launch");
 }
 
 }  // namespace
@@ -241,62 +328,65 @@ auto ExecuteCudaDiffusionFilter(CudaRenderDevice& device, const ExecutionPlan& p
     return output;
   }
 
-  const auto layout = MakeDiffusionFilterLayout({width, height},
-                                                DiffusionShortSideRenderPixels(plan.geometry),
-                                                ResolveDiffusionFilterShape(strength));
-  const auto count  = layout.level_count;
-  // Scratch is returned to the pool at scope exit. Later users run on the same stream, so the
-  // kernels below finish before any reuse.
-  std::vector<ResourceLease<CudaBackend>> levels;
-  std::vector<ResourceLease<CudaBackend>> accumulated;
-  levels.reserve(count);
-  accumulated.reserve(count);
-  for (std::uint32_t index = 0; index < count; ++index) {
-    const auto extent = layout.extents[index];
-    levels.push_back(
-        workspace.Textures().Acquire({extent.width, extent.height, TextureFormat::Rgba32f}));
-    if (index + 1 < count) {
-      accumulated.push_back(
-          workspace.Textures().Acquire({extent.width, extent.height, TextureFormat::Rgba32f}));
+  const auto& geometry = plan.geometry;
+  const auto  layout   = MakeDiffusionFilterLayout(
+      DiffusionCanvasExtent(geometry.full_reference_extent), ResolveDiffusionFilterShape(strength));
+  const auto mapping = MakeDiffusionScatterMapping(geometry, layout);
+  const auto base    = layout.extents[0];
+
+  // The scatter image covers the full frame. A full-edit render builds and publishes it; an
+  // ROI render samples the published image, so light outside the viewport still scatters in.
+  auto&      invalidation = workspace.ResultInvalidation();
+  const auto scatter_id   = DiffusionScatterId(plan.drt.node_id);
+  const bool persist      = workspace.PersistsResult(scatter_id);
+  const bool full_edit    = CoversFullEditSpace(geometry);
+  const auto long_edge    = (std::max)(width, height);
+  ResourceLease<CudaBackend>* canonical = nullptr;
+  if (persist) {
+    const auto needed = invalidation.MakeImageRepresentation(
+        scatter_id, base, TextureFormat::Rgba32f,
+        DiffusionScatterRequiredDetail(full_edit, long_edge));
+    canonical = workspace.Images().BindValidResult(
+        scatter_id, invalidation.RequiredRevision(scatter_id), needed,
+        workspace.Device().CompletedSubmission());
+  } else {
+    ++device.PassStats().result_policy_bypass;
+  }
+  const auto decision = DecideDiffusionScatter(persist, canonical != nullptr, full_edit, long_edge);
+
+  const float4*                             scatter = nullptr;
+  std::optional<ResourceLease<CudaBackend>> transient_scatter;
+  if (decision.action == DiffusionScatterAction::SampleCanonical) {
+    scatter = Pointer(*canonical);
+    ++device.PassStats().diffusion_scatter_sample;
+  } else {
+    float4* target = nullptr;
+    if (decision.persist_canonical) {
+      target = Pointer(workspace.AcquireImageForWrite(
+          scatter_id, {base.width, base.height, TextureFormat::Rgba32f}));
+    } else {
+      transient_scatter.emplace(
+          workspace.Textures().Acquire({base.width, base.height, TextureFormat::Rgba32f}));
+      target = Pointer(*transient_scatter);
     }
+    BuildScatter(workspace, stream, src, width, height, layout, mapping, target);
+    if (decision.persist_canonical) {
+      const auto published = invalidation.MakeImageRepresentation(
+          scatter_id, base, TextureFormat::Rgba32f, decision.current_long_edge);
+      workspace.Images().RecordUnpublished(scatter_id, invalidation.RequiredRevision(scatter_id),
+                                           published, device.CommandContext().SubmissionId(),
+                                           decision.current_long_edge);
+    }
+    scatter = target;
+    ++device.PassStats().diffusion_scatter_rebuild;
   }
 
   const dim3 block{kBlock, kBlock};
-  const auto base = layout.extents[0];
-  ReduceBoostKernel<<<GridFor(base.width, base.height), block, 0, stream>>>(
-      src, static_cast<int>(width), static_cast<int>(height), Pointer(levels[0]),
-      static_cast<int>(base.width), static_cast<int>(base.height), 1 << layout.base_level,
-      layout.highlight_gain, layout.highlight_knee);
-  for (std::uint32_t index = 1; index < count; ++index) {
-    const auto from = layout.extents[index - 1];
-    const auto to   = layout.extents[index];
-    DownsampleKernel<<<GridFor(to.width, to.height), block, 0, stream>>>(
-        Pointer(levels[index - 1]), static_cast<int>(from.width), static_cast<int>(from.height),
-        Pointer(levels[index]), static_cast<int>(to.width), static_cast<int>(to.height));
-  }
-
-  // Accumulate from the coarsest level. The coarsest level enters with its own weight.
-  const float4* scatter        = Pointer(levels[0]);
-  const float4* coarse         = Pointer(levels[count - 1]);
-  float         coarse_weight  = layout.weights[count - 1];
-  for (std::uint32_t index = count - 1; index-- > 0;) {
-    const auto coarse_extent = layout.extents[index + 1];
-    const auto extent        = layout.extents[index];
-    UpsampleAccumulateKernel<<<GridFor(extent.width, extent.height), block, 0, stream>>>(
-        coarse, static_cast<int>(coarse_extent.width), static_cast<int>(coarse_extent.height),
-        coarse_weight, Pointer(levels[index]), Pointer(accumulated[index]),
-        static_cast<int>(extent.width), static_cast<int>(extent.height), layout.weights[index]);
-    coarse        = Pointer(accumulated[index]);
-    coarse_weight = 1.0f;
-    scatter       = coarse;
-  }
-
   MixKernel<<<GridFor(width, height), block, 0, stream>>>(
       src, dst, static_cast<int>(width), static_cast<int>(height), scatter,
-      static_cast<int>(base.width), static_cast<int>(base.height),
-      1.0f / static_cast<float>(1U << layout.base_level), layout.scatter_fraction,
-      layout.transmission);
-  cuda::CheckCuda(::cudaGetLastError(), "ExecuteCudaDiffusionFilter: kernel launch");
+      static_cast<int>(base.width), static_cast<int>(base.height), mapping.render_to_base,
+      layout.scatter_fraction, layout.transmission);
+  cuda::CheckCuda(::cudaGetLastError(), "ExecuteCudaDiffusionFilter: mix launch");
   return output;
 }
 

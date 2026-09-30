@@ -28,6 +28,10 @@ struct GpuNodePassStats {
   std::uint64_t primary_grade_skip     = 0;
   std::uint64_t diffusion_filter_execute = 0;
   std::uint64_t diffusion_filter_skip    = 0;
+  /// Active diffusion encodes that sampled the published full-frame scatter image.
+  std::uint64_t diffusion_scatter_sample  = 0;
+  /// Active diffusion encodes that built the scatter image from the current render.
+  std::uint64_t diffusion_scatter_rebuild = 0;
   std::uint64_t drt_execute            = 0;
   std::uint64_t drt_skip               = 0;
   std::uint64_t source_h2d_count       = 0;

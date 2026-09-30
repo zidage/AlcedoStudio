@@ -63,23 +63,48 @@ All source paths in this plan are relative to `alcedo_studio/src/` unless the pa
 
 ### 0.3 Runtime
 
-- `MakeDiffusionFilterLayout` (`include/edit/runtime/diffusion_filter_plan.hpp`) computes the
-  pyramid of section 3.2 in render pixels. The short side is the full-reference short side times
-  the render scale (`NeighborhoodRenderScale`), so preview, detail, and export renders use the
-  same image-space glow size.
+- The scatter image lives on a full-frame canvas, not on the render. `DiffusionCanvasExtent`
+  (`include/edit/runtime/diffusion_filter_plan.hpp`) is the full reference frame scaled down to a
+  long edge of at most 2048 (`kDiffusionCanvasMaxLongEdge`, the same limit as the LLF canonical
+  reference, `local_tone_mapping::kReferenceMaskMaxLongEdge`). The limit applies to preview,
+  detail, and export renders alike.
+- `MakeDiffusionFilterLayout(canvas, shape)` computes the pyramid of section 3.2 in canvas
+  texels. Every sigma is a fraction of the canvas short side, so one frame always has one
+  pyramid, whatever the render resolution, zoom, or viewport.
+- `MakeDiffusionScatterMapping(geometry, layout)` maps the render onto the base level:
+  `render_to_base` for the mix, `base_to_render` for the reduction. Both go through
+  `render_to_reference`, like the LLF sampling plan. The reduction averages `reduce_samples`
+  squared bilinear render samples per base texel; the count follows the texel footprint in render
+  pixels (at most 16 per axis), so a full-resolution export averages more samples into the same
+  texel than a preview does.
+- The scatter image is a published result, `DiffusionScatterId(drt)` =
+  `drt:diffusion.scatter.0`, with the canonical (viewport-free) representation identity of the
+  LLF ports. Result invalidation adds the edges DRT scene input -> scatter -> display and marks the
+  scatter stale when `DrtDirty::Diffusion` changes or the DRT scene input changes.
+- `DecideDiffusionScatter` chooses per encode. A render that covers the full edit space samples
+  the published image when it was built from a render with at least its own long edge; otherwise
+  it rebuilds and publishes. A viewport ROI render samples any current published image, so the
+  glow at a pixel does not change with zoom and light outside the viewport still scatters in.
+  Without a current published image an ROI render builds a submission-local image from its own
+  pixels and does not publish it. QualityBase renders do not read or publish it.
 - `PlanExecutor` runs DiffusionFilter and then the DRT only when the display result misses. The
   pass writes the scene-work member that `DestinationWorkMember` selects.
-- The CUDA pass (`edit/runtime/cuda/cuda_diffusion_filter_pass.cu`): box reduction with the
-  highlight boost at the base level, 13-tap downsample, 9-tap tent upsample and accumulate,
-  then a mix that samples the scatter image with a cubic B-spline.
+- The CUDA pass (`edit/runtime/cuda/cuda_diffusion_filter_pass.cu`): the boosted reduction onto
+  the base level, 13-tap downsample, 9-tap tent upsample and accumulate into the scatter image,
+  then a mix that samples the scatter image with a cubic B-spline at `render_to_base`.
+  Intermediate pyramid levels are pooled scratch textures no larger than the canvas. A canvas
+  with a short side of 707 texels or more starts at level 1 (for a 3:2 frame, 1024 x 683).
 - `kDrtImplementationVersion` is 5.
 
 ### 0.4 Known limits of the implemented design
 
-- The scatter reads the render-resolution Color Grade output, not the Develop output. The
-  highlight boost is not linear, so a reduced-resolution preview differs a little from an export
-  (section 1.4 measured this error). The user accepted this placement.
-- A Detail ROI render does not see light outside the ROI.
+- The scatter reads the Color Grade output of the render that builds it, not the Develop output.
+  The highlight boost is not linear, so a scatter image built from a reduced-resolution preview
+  differs a little from one built at export resolution (section 1.4 measured this error). The
+  user accepted this placement. A later full-edit render with a longer edge rebuilds the image.
+- An ROI render with no current published scatter image (for example when it runs before the
+  first full-frame render of a new revision) sees only its own pixels. The next full-frame render
+  publishes the image.
 - Adjustment Transfer does not copy the strength yet.
 
 ---

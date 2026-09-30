@@ -118,8 +118,8 @@ class RuntimeInvalidationState {
   /**
    * @brief Frame representation for an image result of @p id.
    *
-   * Sensor uses source identity. Canonical LLF ports use the crop/reference
-   * identity. Other image values use the viewport-inclusive frame identity.
+   * Sensor uses source identity. Canonical LLF ports and the canonical diffusion
+   * scatter image use the crop/reference identity. Other image values use the viewport-inclusive frame identity.
    */
   [[nodiscard]] auto MakeImageRepresentation(const GraphValueId& id, ImageExtent extent,
                                              TextureFormat format,
@@ -228,6 +228,7 @@ class RuntimeInvalidationState {
   ParameterRevision                                 last_sensor_revision_ = kNoParameterRevision;
   ParameterRevision last_white_balance_revision_                          = kNoParameterRevision;
   ParameterRevision last_drt_revision_                                    = kNoParameterRevision;
+  ParameterRevision last_diffusion_revision_                              = kNoParameterRevision;
   std::map<NodeId, GradeBindState>                  last_grade_bind_;
   GraphValueId                                      last_drt_input_{};
   StaticPlanKey                                     bound_plan_{};

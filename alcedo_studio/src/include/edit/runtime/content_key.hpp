@@ -29,7 +29,8 @@ inline constexpr std::uint32_t kPrimaryGradeImplementationVersion  = 6;
 inline constexpr std::uint32_t kLlfReferenceImplementationVersion  = 2;
 /// Bumped when DRT pixel rules change, including the DiffusionFilter pass and the
 /// DiffusionFilterShape constants. Version 5 decodes ACEScc in the DiffusionFilter pass and
-/// applies the diffusion filter before the display transform.
+/// applies the diffusion filter, built on the full-frame scatter canvas, before the display
+/// transform.
 inline constexpr std::uint32_t kDrtImplementationVersion           = 5;
 /// Bumped when mask raster sampling or Union key structure changes. Version 3 is per-source Union.
 inline constexpr std::uint32_t kMaskImplementationVersion          = 3;

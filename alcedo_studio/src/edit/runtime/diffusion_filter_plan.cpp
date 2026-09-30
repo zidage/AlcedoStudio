@@ -8,43 +8,42 @@
 #include <cmath>
 #include <stdexcept>
 
-#include "edit/runtime/adjustment_runtime.hpp"
-
 namespace alcedo {
 namespace {
 
-constexpr std::uint32_t kMaxBaseLevel = 20;
+constexpr std::uint32_t kMaxBaseLevel = 12;
 
-auto LevelExtent(ImageExtent render_extent, std::uint32_t level) -> ImageExtent {
+auto LevelExtent(ImageExtent canvas_extent, std::uint32_t level) -> ImageExtent {
   const auto scale = std::uint64_t{1} << level;
-  return {static_cast<std::uint32_t>((render_extent.width + scale - 1) / scale),
-          static_cast<std::uint32_t>((render_extent.height + scale - 1) / scale)};
+  return {static_cast<std::uint32_t>((canvas_extent.width + scale - 1) / scale),
+          static_cast<std::uint32_t>((canvas_extent.height + scale - 1) / scale)};
 }
 
 }  // namespace
 
-auto DiffusionShortSideRenderPixels(const ResolvedRenderGeometry& geometry) -> float {
-  const auto short_side = (std::min)(geometry.full_reference_extent.width,
-                                     geometry.full_reference_extent.height);
-  return static_cast<float>(short_side) * NeighborhoodRenderScale(geometry);
+auto DiffusionCanvasExtent(Extent2D full_reference_extent) -> ImageExtent {
+  const auto dims = local_tone_mapping::ComputeMaskDimensions(
+      static_cast<int>(full_reference_extent.width),
+      static_cast<int>(full_reference_extent.height), kDiffusionCanvasMaxLongEdge);
+  return {static_cast<std::uint32_t>(dims.width), static_cast<std::uint32_t>(dims.height)};
 }
 
-auto MakeDiffusionFilterLayout(ImageExtent render_extent, float short_side_render_pixels,
-                               const DiffusionFilterShape& shape) -> DiffusionFilterLayout {
-  if (render_extent.width == 0 || render_extent.height == 0) {
-    throw std::invalid_argument("MakeDiffusionFilterLayout: render extent is empty");
-  }
-  if (!std::isfinite(short_side_render_pixels) || !(short_side_render_pixels > 0.0f)) {
-    throw std::invalid_argument("MakeDiffusionFilterLayout: short side must be positive");
+auto MakeDiffusionFilterLayout(ImageExtent canvas_extent, const DiffusionFilterShape& shape)
+    -> DiffusionFilterLayout {
+  if (canvas_extent.width == 0 || canvas_extent.height == 0) {
+    throw std::invalid_argument("MakeDiffusionFilterLayout: canvas extent is empty");
   }
 
-  const double sigma_base = (std::max)(
-      static_cast<double>(shape.base_sigma_fraction) * short_side_render_pixels, 1.0);
+  const double short_side =
+      static_cast<double>((std::min)(canvas_extent.width, canvas_extent.height));
+  const double sigma_base =
+      (std::max)(static_cast<double>(shape.base_sigma_fraction) * short_side, 1.0);
   const double sigma_max =
-      (std::max)(static_cast<double>(shape.glow_radius) * short_side_render_pixels, sigma_base);
+      (std::max)(static_cast<double>(shape.glow_radius) * short_side, sigma_base);
 
   DiffusionFilterLayout layout;
-  layout.base_level = static_cast<std::uint32_t>(
+  layout.canvas_extent = canvas_extent;
+  layout.base_level    = static_cast<std::uint32_t>(
       std::clamp(std::lround(std::log2(sigma_base)), 0L, static_cast<long>(kMaxBaseLevel)));
   const auto requested_levels =
       static_cast<std::uint32_t>(std::ceil(std::log2(sigma_max / sigma_base) - 1e-9)) + 1U;
@@ -53,8 +52,8 @@ auto MakeDiffusionFilterLayout(ImageExtent render_extent, float short_side_rende
   // Stop at the first 1 x 1 level; coarser levels hold the same value.
   std::uint32_t level_count = 0;
   for (std::uint32_t index = 0; index < max_levels; ++index) {
-    const auto extent            = LevelExtent(render_extent, layout.base_level + index);
-    layout.extents[level_count]  = extent;
+    const auto extent           = LevelExtent(canvas_extent, layout.base_level + index);
+    layout.extents[level_count] = extent;
     ++level_count;
     if (extent.width == 1 && extent.height == 1) {
       break;
@@ -84,6 +83,35 @@ auto MakeDiffusionFilterLayout(ImageExtent render_extent, float short_side_rende
   layout.highlight_gain = shape.highlight_glow;
   layout.highlight_knee = shape.highlight_knee;
   return layout;
+}
+
+auto MakeDiffusionScatterMapping(const ResolvedRenderGeometry& geometry,
+                                 const DiffusionFilterLayout&  layout)
+    -> DiffusionScatterMapping {
+  const auto reference = geometry.full_reference_extent;
+  const auto base      = layout.extents[0];
+  if (reference.Empty() || base.width == 0 || base.height == 0) {
+    throw std::invalid_argument("MakeDiffusionScatterMapping: empty reference or base extent");
+  }
+  // The base level covers the full reference frame; texel edges are the frame edges.
+  const auto reference_to_base =
+      Matrix3x3::Scale(static_cast<float>(base.width) / static_cast<float>(reference.width),
+                       static_cast<float>(base.height) / static_cast<float>(reference.height));
+  const auto base_to_reference =
+      Matrix3x3::Scale(static_cast<float>(reference.width) / static_cast<float>(base.width),
+                       static_cast<float>(reference.height) / static_cast<float>(base.height));
+
+  DiffusionScatterMapping mapping;
+  mapping.render_to_base = reference_to_base * geometry.render_to_reference;
+  mapping.base_to_render = geometry.reference_to_render * base_to_reference;
+
+  // Render pixels covered by one base texel along each base axis.
+  const auto& m          = mapping.base_to_render.m;
+  const float footprint  = (std::max)(std::hypot(m[0], m[3]), std::hypot(m[1], m[4]));
+  const float samples    = std::isfinite(footprint) ? std::ceil(footprint) : 1.0f;
+  mapping.reduce_samples = static_cast<std::uint32_t>(
+      std::clamp(samples, 1.0f, static_cast<float>(kDiffusionMaxReduceSamples)));
+  return mapping;
 }
 
 }  // namespace alcedo
