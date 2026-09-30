@@ -14,6 +14,7 @@
 #include <thread>
 #include <utility>
 
+#include "concurrency/thread_pool.hpp"
 #include "utils/lut/lut_inventory_digest.hpp"
 
 namespace alcedo {
@@ -280,7 +281,7 @@ auto ScanLutLibrary(const std::filesystem::path& root, const LutLibraryScanOptio
             });
 
   // Each worker writes only the slots it claimed through `next`, so the result
-  // vector needs no lock; joining the threads publishes every slot.
+  // vector needs no lock; draining the pool publishes every slot.
   inventory.entries.resize(candidates.size());
   unsigned worker_count = options.worker_count;
   if (worker_count == 0) {
@@ -296,9 +297,10 @@ auto ScanLutLibrary(const std::filesystem::path& root, const LutLibraryScanOptio
     }
   };
   {
-    std::vector<std::jthread> workers;
-    workers.reserve(worker_count > 0 ? worker_count - 1 : 0);
-    for (unsigned index = 1; index < worker_count; ++index) workers.emplace_back(work);
+    // The caller also processes files. The pool drains and joins before the
+    // referenced candidates, output slots, and work counter leave scope.
+    ThreadPool workers(worker_count - 1);
+    for (unsigned index = 1; index < worker_count; ++index) workers.Submit(work);
     work();
   }
   return inventory;

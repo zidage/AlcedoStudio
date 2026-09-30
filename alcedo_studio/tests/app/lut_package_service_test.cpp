@@ -15,6 +15,7 @@
 #include <QTimer>
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -681,7 +682,7 @@ TEST_F(LutPackageServiceTest, ArchiveTraversalAndLinksAreRejected) {
     const fs::path destination = base_ / "extract" / archive.stem();
     Write7z(archive, items);
     const LutPackageExtraction result =
-        ExtractLutPackageArchive(archive, destination, expected, std::stop_token{});
+        ExtractLutPackageArchive(archive, destination, expected, std::atomic<bool>{false});
     EXPECT_NE(result.error.find(bad.expected_error), std::string::npos)
         << bad.label << ": " << result.error;
     EXPECT_FALSE(result.inventory.has_value()) << bad.label;
@@ -691,14 +692,14 @@ TEST_F(LutPackageServiceTest, ArchiveTraversalAndLinksAreRejected) {
 
   // Extraction never writes into an existing directory.
   fs::create_directories(base_ / "existing");
-  const LutPackageExtraction existing =
-      ExtractLutPackageArchive(valid.archive, base_ / "existing", expected, std::stop_token{});
+  const LutPackageExtraction existing = ExtractLutPackageArchive(
+      valid.archive, base_ / "existing", expected, std::atomic<bool>{false});
   EXPECT_FALSE(existing.error.empty());
   EXPECT_TRUE(fs::is_empty(base_ / "existing"));
 
   // The same archive extracts completely into a new directory.
-  const LutPackageExtraction accepted =
-      ExtractLutPackageArchive(valid.archive, base_ / "accepted", expected, std::stop_token{});
+  const LutPackageExtraction accepted = ExtractLutPackageArchive(
+      valid.archive, base_ / "accepted", expected, std::atomic<bool>{false});
   ASSERT_TRUE(accepted.error.empty()) << accepted.error;
   ASSERT_TRUE(accepted.inventory.has_value());
   for (const auto& [path, bytes] : valid.luts) {
@@ -722,7 +723,7 @@ TEST_F(LutPackageServiceTest, PublishingToolArchiveExtractsWithBundledLibarchive
   const std::string bytes   = ReadBytes(archive);
   EXPECT_EQ(Sha256Hex(bytes), descriptor["artifact"]["sha256"].get<std::string>());
   const LutPackageExtraction result =
-      ExtractLutPackageArchive(archive, base_ / "py7zr", expected, std::stop_token{});
+      ExtractLutPackageArchive(archive, base_ / "py7zr", expected, std::atomic<bool>{false});
   ASSERT_TRUE(result.error.empty()) << result.error;
   ASSERT_TRUE(result.inventory.has_value());
   EXPECT_EQ(result.inventory->luts.size(), 2u);
@@ -826,8 +827,8 @@ TEST_F(LutPackageServiceTest, CancelBeforeActivationKeepsInstalledPackage) {
   EXPECT_EQ(Receipt(kSpectral)->revision, "r1");
 
   // Cancel during verification and extraction (the stop is observed before the commit).
-  std::stop_source stop;
-  stop.request_stop();
+  std::atomic<bool> stop{false};
+  stop.store(true);
   LutPackageInstallRequest request;
   request.archive_path              = r2.archive;
   request.expected.package_id       = std::string(kSpectral);
@@ -838,7 +839,7 @@ TEST_F(LutPackageServiceTest, CancelBeforeActivationKeepsInstalledPackage) {
   request.expected.artifact_size    = r2.descriptor["artifact"]["size"].get<std::uint64_t>();
   request.expected.artifact_sha256  = r2.descriptor["artifact"]["sha256"].get<std::string>();
   const LutPackageInstallOutcome outcome =
-      InstallLutPackageArchive(root_, request, LutPackageInstallSteps{}, stop.get_token(), {});
+      InstallLutPackageArchive(root_, request, LutPackageInstallSteps{}, stop, {});
   EXPECT_TRUE(outcome.canceled);
   EXPECT_FALSE(outcome.committed);
   std::vector<LutPackageReceipt> on_disk;

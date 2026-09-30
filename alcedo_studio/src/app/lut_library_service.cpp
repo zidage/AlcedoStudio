@@ -9,6 +9,7 @@
 #include <QMetaObject>
 #include <QSettings>
 #include <algorithm>
+#include <atomic>
 #include <system_error>
 #include <utility>
 
@@ -168,10 +169,8 @@ LutLibraryService::~LutLibraryService() { Shutdown(); }
 void LutLibraryService::Shutdown() {
   shut_down_ = true;
   publication_->SetMissingObserver({});
-  if (worker_.joinable()) {
-    worker_.request_stop();
-    worker_.join();
-  }
+  cancel_requested_.store(true);
+  worker_.Shutdown();
 }
 
 void LutLibraryService::Start() {
@@ -181,7 +180,7 @@ void LutLibraryService::Start() {
   }
   const fs::path root    = Root();
   const unsigned workers = options_.scan_worker_count;
-  Begin(Operation::kLoad, [this, root, workers](std::stop_token) -> Completion {
+  Begin(Operation::kLoad, [this, root, workers](const std::atomic<bool>&) -> Completion {
     OperationResult result{.operation = Operation::kLoad};
     std::error_code error;
     if (!fs::is_directory(root, error)) {
@@ -215,16 +214,17 @@ void LutLibraryService::Start() {
   });
 }
 
-auto LutLibraryService::Begin(Operation operation, std::function<Completion(std::stop_token)> work)
-    -> Status {
+auto LutLibraryService::Begin(Operation                                           operation,
+                              std::function<Completion(const std::atomic<bool>&)> work) -> Status {
   if (shut_down_) return Status::kCanceled;
   if (operation_ != Operation::kNone) return Status::kBusy;
   operation_ = operation;
   last_error_.clear();
+  // The previous operation finished its work before posting the owner completion.
+  cancel_requested_.store(false);
   emit OperationStateChanged();
-  // Move-assignment joins the previous worker, which has already posted its completion.
-  worker_ = std::jthread([this, work = std::move(work)](std::stop_token stop) {
-    Completion completion = work(stop);
+  worker_.Submit([this, work = std::move(work)] {
+    Completion completion = work(cancel_requested_);
     QMetaObject::invokeMethod(
         this,
         [this, completion = std::move(completion)] {
@@ -263,7 +263,7 @@ void LutLibraryService::ResumeSourceCleanup() {
   std::error_code error;
   if (!fs::exists(Root() / LutPathFromUtf8(kLutMigrationCleanupFileName), error)) return;
   const fs::path root = Root();
-  Begin(Operation::kSourceCleanup, [this, root](std::stop_token stop) -> Completion {
+  Begin(Operation::kSourceCleanup, [this, root](const std::atomic<bool>& stop) -> Completion {
     // A render may still read a source file it resolved before the root switch; each
     // deletion waits for such reads (plan 4.6). Hash checks run without the lock.
     LutLibraryFileOperations io = options_.file_operations;
@@ -433,7 +433,7 @@ auto LutLibraryService::RequestRefresh(bool user_requested) -> Status {
   if (operation_ == Operation::kRefresh) return Status::kOk;  // Coalesced into the running scan.
   const fs::path root    = Root();
   const unsigned workers = options_.scan_worker_count;
-  return Begin(Operation::kRefresh, [this, root, workers](std::stop_token) -> Completion {
+  return Begin(Operation::kRefresh, [this, root, workers](const std::atomic<bool>&) -> Completion {
     auto        scanned  = std::make_shared<LutLibraryInventory>(ScanLutLibraryRoot(root, workers));
     auto        receipts = std::make_shared<std::vector<LutPackageReceipt>>(ReadReceipts(root));
     std::string error    = options_.file_operations.write_inventory(root, *scanned);
@@ -455,7 +455,7 @@ auto LutLibraryService::RequestRefresh(bool user_requested) -> Status {
 auto LutLibraryService::ImportFiles(std::vector<fs::path> sources) -> Status {
   if (sources.empty()) return Status::kInvalidRequest;
   const fs::path root = Root();
-  return Begin(Operation::kImport, [this, root, sources](std::stop_token) -> Completion {
+  return Begin(Operation::kImport, [this, root, sources](const std::atomic<bool>&) -> Completion {
     OperationResult          result{.operation = Operation::kImport};
     std::vector<std::string> targets;
     std::vector<std::string> problems;
@@ -534,7 +534,8 @@ auto LutLibraryService::UseRoot(const fs::path& root) -> Status {
   if (root.empty()) return Status::kInvalidRequest;
   const fs::path target  = NormalizedRoot(root);
   const unsigned workers = options_.scan_worker_count;
-  return Begin(Operation::kUseRoot, [this, target, workers](std::stop_token) -> Completion {
+  return Begin(
+      Operation::kUseRoot, [this, target, workers](const std::atomic<bool>&) -> Completion {
     OperationResult result{.operation = Operation::kUseRoot};
     std::error_code error;
     const auto      fail = [&](Status status, std::string message) -> Completion {
@@ -579,7 +580,8 @@ auto LutLibraryService::MigrateRoot(const fs::path& destination) -> Status {
   if (destination.empty()) return Status::kInvalidRequest;
   const fs::path source = Root();
   const fs::path target = NormalizedRoot(destination);
-  return Begin(Operation::kMigrateRoot, [this, source, target](std::stop_token stop) -> Completion {
+  return Begin(
+      Operation::kMigrateRoot, [this, source, target](const std::atomic<bool>& stop) -> Completion {
     auto preparation = std::make_shared<LutLibraryMigrationPreparation>(
         PrepareLutLibraryMigration(source, target, publication_->Inventory(),
                                    publication_->UserState(), options_.file_operations, stop));
@@ -622,7 +624,8 @@ auto LutLibraryService::InstallPackage(LutPackageInstallRequest request) -> Stat
   const unsigned workers = options_.scan_worker_count;
   return Begin(
       Operation::kInstallPackage,
-      [this, root, workers, request = std::move(request)](std::stop_token stop) -> Completion {
+      [this, root, workers,
+       request = std::move(request)](const std::atomic<bool>& stop) -> Completion {
         OperationResult result{.operation = Operation::kInstallPackage};
         const QString   package_id = QString::fromStdString(request.expected.package_id);
         // The stage is announced on the owner thread; this object outlives the worker.
@@ -669,7 +672,8 @@ auto LutLibraryService::InstallPackage(LutPackageInstallRequest request) -> Stat
 void LutLibraryService::RetireReplacedPackageContent() {
   const fs::path root    = Root();
   const unsigned workers = options_.scan_worker_count;
-  Begin(Operation::kRetirePackageContent, [this, root, workers](std::stop_token) -> Completion {
+  Begin(Operation::kRetirePackageContent,
+        [this, root, workers](const std::atomic<bool>&) -> Completion {
     OperationResult             result{.operation = Operation::kRetirePackageContent};
     LutPackageContentRetirement retired;
     {
@@ -720,8 +724,8 @@ auto LutLibraryService::ReferenceForPath(const fs::path& absolute_path) const
 }
 
 auto LutLibraryService::CancelOperation() -> bool {
-  if (!cancelable() || !worker_.joinable()) return false;
-  worker_.request_stop();
+  if (!cancelable()) return false;
+  cancel_requested_.store(true);
   return true;
 }
 

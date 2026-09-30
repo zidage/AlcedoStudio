@@ -455,7 +455,7 @@ TEST_F(LutLibraryServiceTest, MigrationDoesNotDeleteChangedSourceFile) {
   EXPECT_FALSE(fs::exists(library_root_ / "stable.cube"));
 }
 
-TEST_F(LutLibraryServiceTest, CanceledMigrationKeepsCurrentRootAndRemovesStaging) {
+TEST_F(LutLibraryServiceTest, CanceledMigrationKeepsCurrentRootAndAllowsRetry) {
   WriteBytes(library_root_ / "a.cube", UserCube("a"));
   WriteBytes(library_root_ / "b.cube", UserCube("b"));
   std::atomic<bool> copying{false};
@@ -495,6 +495,14 @@ TEST_F(LutLibraryServiceTest, CanceledMigrationKeepsCurrentRootAndRemovesStaging
   EXPECT_FALSE(fs::exists(base_ / ".destination.alcedo-migration"));
   // Refresh and load are not cancelable.
   EXPECT_FALSE(service->CancelOperation());
+
+  // A new operation must not retain the preceding cancellation request.
+  ASSERT_EQ(service->MigrateRoot(destination), Service::Status::kOk);
+  ASSERT_TRUE(WaitUntilIdle(*service));
+  EXPECT_EQ(service->LastResult().status, Service::Status::kOk);
+  EXPECT_EQ(service->Root(), destination);
+  EXPECT_EQ(ReadBytes(destination / "a.cube"), UserCube("a"));
+  EXPECT_EQ(ReadBytes(destination / "b.cube"), UserCube("b"));
 }
 
 TEST_F(LutLibraryServiceTest, RootChoiceCheckNamesTheReasonBeforeStarting) {

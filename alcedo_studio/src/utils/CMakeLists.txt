@@ -62,5 +62,5 @@ def_library(LutMetadata
         ${ALCEDO_SRC_ROOT}/include/utils/lut/lut_inventory_digest.hpp
         ${ALCEDO_SRC_ROOT}/include/utils/lut/lut_library_scan.hpp
     PUBLIC_DEPS Qt6::Core
-    PRIVATE_DEPS JSON
+    PRIVATE_DEPS JSON ThreadPool
 )

@@ -4,11 +4,11 @@
 
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <optional>
-#include <stop_token>
 #include <string>
 #include <vector>
 
@@ -85,10 +85,13 @@ struct LutLibraryMigrationPreparation {
 /// stop request the staging directory is removed and @p destination is left as
 /// it was. The caller persists the root choice afterwards; that write is the
 /// commit point. Blocks; must not run on the GUI thread.
-[[nodiscard]] auto PrepareLutLibraryMigration(
-    const std::filesystem::path& source, const std::filesystem::path& destination,
-    const LutLibraryInventory& inventory, LutLibraryUserState user_state,
-    const LutLibraryFileOperations& io, std::stop_token stop) -> LutLibraryMigrationPreparation;
+[[nodiscard]] auto PrepareLutLibraryMigration(const std::filesystem::path&    source,
+                                              const std::filesystem::path&    destination,
+                                              const LutLibraryInventory&      inventory,
+                                              LutLibraryUserState             user_state,
+                                              const LutLibraryFileOperations& io,
+                                              const std::atomic<bool>&        stop)
+    -> LutLibraryMigrationPreparation;
 
 /// Remove a destination that PrepareLutLibraryMigration created when the root
 /// choice could not be persisted. The previous root stays active.
@@ -110,7 +113,7 @@ struct LutLibraryMigrationCleanup {
 /// Blocks; must not run on the GUI thread.
 [[nodiscard]] auto CleanLutLibraryMigrationSource(const std::filesystem::path&    root,
                                                   const LutLibraryFileOperations& io,
-                                                  std::stop_token                 stop)
+                                                  const std::atomic<bool>&        stop)
     -> LutLibraryMigrationCleanup;
 
 }  // namespace alcedo

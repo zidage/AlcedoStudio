@@ -116,7 +116,7 @@ def_library(LutLibraryService
         "${ALCEDO_INCLUDE_ROOT}/app/lut_library_publication.hpp"
         "${ALCEDO_INCLUDE_ROOT}/app/lut_library_service.hpp"
         "${ALCEDO_INCLUDE_ROOT}/app/lut_package_install.hpp"
-    PUBLIC_DEPS LutMetadata EditLutResources Qt6::Core
+    PUBLIC_DEPS LutMetadata EditLutResources Qt6::Core ThreadPool
     PRIVATE_DEPS JSON Qt6::Gui LibArchive::LibArchive
 )
 

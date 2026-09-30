@@ -8,6 +8,7 @@
 #include <QSaveFile>
 #include <QString>
 #include <algorithm>
+#include <atomic>
 #include <cwctype>
 #include <json.hpp>
 #include <system_error>
@@ -221,7 +222,7 @@ auto ValidateLutLibraryMigrationDestination(const fs::path& source, const fs::pa
 auto PrepareLutLibraryMigration(const fs::path& source, const fs::path& destination,
                                 const LutLibraryInventory& inventory,
                                 LutLibraryUserState user_state, const LutLibraryFileOperations& io,
-                                std::stop_token stop) -> LutLibraryMigrationPreparation {
+                                const std::atomic<bool>& stop) -> LutLibraryMigrationPreparation {
   LutLibraryMigrationPreparation result;
   const SourceTree               tree = EnumerateSource(source);
   if (!tree.error.empty()) {
@@ -252,7 +253,7 @@ auto PrepareLutLibraryMigration(const fs::path& source, const fs::path& destinat
   LutMigrationCleanupJournal journal;
   journal.source_root = LutPathToUtf8(ComparablePath(source));
   for (const std::string& relative : tree.files) {
-    if (stop.stop_requested()) {
+    if (stop.load()) {
       result.canceled = true;
       return fail("The migration was canceled.");
     }
@@ -283,7 +284,7 @@ auto PrepareLutLibraryMigration(const fs::path& source, const fs::path& destinat
       !write_error.empty()) {
     return fail("The migration record cannot be written: " + write_error);
   }
-  if (stop.stop_requested()) {
+  if (stop.load()) {
     result.canceled = true;
     return fail("The migration was canceled.");
   }
@@ -309,14 +310,14 @@ void DiscardPreparedLutLibraryMigration(const fs::path& destination) {
 }
 
 auto CleanLutLibraryMigrationSource(const fs::path& root, const LutLibraryFileOperations& io,
-                                    std::stop_token stop) -> LutLibraryMigrationCleanup {
+                                    const std::atomic<bool>& stop) -> LutLibraryMigrationCleanup {
   LutLibraryMigrationCleanup                      result;
   const std::optional<LutMigrationCleanupJournal> journal = ReadLutMigrationCleanupJournal(root);
   if (!journal) return result;
   const fs::path        source = LutPathFromUtf8(journal->source_root);
   std::vector<fs::path> directories;
   for (const LutMigrationCopiedFile& file : journal->files) {
-    if (stop.stop_requested()) {
+    if (stop.load()) {
       result.error = "Source cleanup was stopped; it resumes on the next start.";
       return result;
     }
