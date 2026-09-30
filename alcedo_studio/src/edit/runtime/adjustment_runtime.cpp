@@ -75,11 +75,6 @@ auto RenderAxisScale(const ResolvedRenderGeometry& geometry, bool horizontal) ->
   return std::clamp(1.0f / reference_pixels_per_render_pixel, 1.0e-4f, 1.0f);
 }
 
-/** @brief Mean of the X/Y render-to-reference scales, clamped like the per-axis helper. */
-auto NeighborhoodRenderScale(const ResolvedRenderGeometry& geometry) -> float {
-  return 0.5f * (RenderAxisScale(geometry, true) + RenderAxisScale(geometry, false));
-}
-
 void CopyRenderMapping(const ResolvedRenderGeometry& geometry, GradeNeighborParams& result) {
   const auto& matrix               = geometry.render_to_reference.m;
   result.render_to_reference[0]    = matrix[0];
@@ -94,6 +89,10 @@ void CopyRenderMapping(const ResolvedRenderGeometry& geometry, GradeNeighborPara
 }
 
 }  // namespace
+
+auto NeighborhoodRenderScale(const ResolvedRenderGeometry& geometry) -> float {
+  return 0.5f * (RenderAxisScale(geometry, true) + RenderAxisScale(geometry, false));
+}
 
 auto TryResolveAdjustmentBehavior(const OperatorTypeId& type) -> std::optional<AdjustmentBehavior> {
   using enum AdjustmentBehavior;

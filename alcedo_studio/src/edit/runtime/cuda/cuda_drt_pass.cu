@@ -12,7 +12,6 @@
 #include <vector>
 
 #include "cuda/cuda_check.hpp"
-#include "cuda_acescc.cuh"
 #include "cuda_neighbor_grade.hpp"
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
@@ -44,9 +43,8 @@ __global__ void         DrtKernel(const float4* input, float4* output, std::uint
   if (index >= pixel_count) return;
   auto         runtime = *params;
   const float4 source  = input[index];
-  const AcesRgcRgb compressed =
-      AcesReferenceGamutCompress(cuda_acescc::Decode(source.x), cuda_acescc::Decode(source.y),
-                                 cuda_acescc::Decode(source.z));
+  // Input is linear AP1; the DiffusionFilter pass already decoded ACEScc.
+  const AcesRgcRgb compressed = AcesReferenceGamutCompress(source.x, source.y, source.z);
   const float3 scene = make_float3(compressed.r, compressed.g, compressed.b);
   float3       display_linear;
   if (runtime.method_ == CudaDrtMethod::ACES_2_0) {

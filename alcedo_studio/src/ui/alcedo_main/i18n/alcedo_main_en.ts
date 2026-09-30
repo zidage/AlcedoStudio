@@ -1834,6 +1834,11 @@ Original source files on disk will be kept.</source>
         <source>No adjustments yet</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <location line="+1"/>
+        <source>Post Processing</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>EditorCloseConfirmDialog</name>
@@ -1869,9 +1874,9 @@ Original source files on disk will be kept.</source>
     </message>
 </context>
 <context>
-    <name>EditorDetailPanel</name>
+    <name>EditorPostProcessPanel</name>
     <message>
-        <location filename="../qml/EditorDetailPanel.qml" line="+109"/>
+        <location filename="../qml/EditorPostProcessPanel.qml" line="+109"/>
         <source>Clarity</source>
         <translation type="unfinished"></translation>
     </message>
@@ -1891,6 +1896,16 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
+        <location line="+12"/>
+        <source>Strength</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+57"/>
+        <source>Diffusion</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
         <location line="+57"/>
         <location line="+9"/>
         <source>Detail</source>
@@ -1899,6 +1914,11 @@ Original source files on disk will be kept.</source>
     <message>
         <location line="+37"/>
         <source>Texture</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Post Processing</source>
         <translation type="unfinished"></translation>
     </message>
 </context>
@@ -2483,26 +2503,6 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+22"/>
-        <source>Clarity</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+12"/>
-        <source>Sharpen</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+12"/>
-        <source>Film Grain</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+12"/>
-        <source>Halation</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
         <location line="+287"/>
         <source>Master</source>
         <translation type="unfinished"></translation>
@@ -2570,16 +2570,6 @@ Original source files on disk will be kept.</source>
     <message>
         <location line="+12"/>
         <source>Reset wheels</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+9"/>
-        <source>Detail</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+28"/>
-        <source>Texture</source>
         <translation type="unfinished"></translation>
     </message>
 </context>

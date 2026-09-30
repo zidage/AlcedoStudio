@@ -6,8 +6,8 @@ import Alcedo.Main 1.0
 // Right-side editor tools: histogram/waveform scope slot, selected-node
 // name/EXIF header, a stable adjustment navbar, and stacked panel bodies.
 // The navbar does not hide pages when the selected node changes. Color Grade,
-// Develop, and geometry writes still require the owning node. Look-panel
-// Clarity, Sharpen, Halation, and Film Grain always write the document DRT node.
+// Develop, and geometry writes still require the owning node. Post Processing
+// (Diffusion, Clarity, Sharpen, Film Grain, Halation) always writes the document DRT node.
 //
 // Surfaces use opaque named theme colors. The outer shell always uses the
 // shared card surface so the right column matches History/Versions, the
@@ -54,6 +54,8 @@ Item {
         { key: "display", icon: "qrc:/panel_icons/color-filter.svg",
           label: qsTr("Display Transform"),
           itemObjectName: "editorAdjustmentNav_display" },
+        { key: "post", icon: "qrc:/panel_icons/sparkle.svg",
+          label: qsTr("Post Processing"), itemObjectName: "editorAdjustmentNav_post" },
         { key: "geometry", icon: "qrc:/panel_icons/crop.svg",
           label: qsTr("Geometry"), itemObjectName: "editorAdjustmentNav_geometry" },
         { key: "raw", icon: "qrc:/panel_icons/aperture.svg",
@@ -125,6 +127,8 @@ Item {
             lutPanel.loadFromSnapshot(snapshot)
         if (typeof displayPanel.loadFromSnapshot === "function")
             displayPanel.loadFromSnapshot(snapshot)
+        if (typeof postPanel.loadFromSnapshot === "function")
+            postPanel.loadFromSnapshot(snapshot)
         if (typeof geometryPanel.loadFromSnapshot === "function")
             geometryPanel.loadFromSnapshot(snapshot)
         if (typeof rawPanel.loadFromSnapshot === "function")
@@ -172,6 +176,7 @@ Item {
         case "look": return qsTr("Look")
         case "lut": return qsTr("LUT")
         case "display": return qsTr("Display Transform")
+        case "post": return qsTr("Post Processing")
         case "geometry": return qsTr("Geometry")
         case "raw": return qsTr("RAW Decode")
         case "masks": return qsTr("Mask")
@@ -272,9 +277,10 @@ Item {
                         case "look": return 1
                         case "lut": return 2
                         case "display": return 3
-                        case "geometry": return 4
-                        case "raw": return 5
-                        case "masks": return 6
+                        case "post": return 4
+                        case "geometry": return 5
+                        case "raw": return 6
+                        case "masks": return 7
                         default: return 0
                         }
                     }
@@ -308,6 +314,14 @@ Item {
                     EditorDisplayTransformPanel {
                         id: displayPanel
                         objectName: "editorAdjustmentPanel_display"
+                        theme: root.theme
+                        editorSession: root.editorSession
+                        controlsEnabled: root.controlsEnabled
+                    }
+
+                    EditorPostProcessPanel {
+                        id: postPanel
+                        objectName: "editorAdjustmentPanel_post"
                         theme: root.theme
                         editorSession: root.editorSession
                         controlsEnabled: root.controlsEnabled

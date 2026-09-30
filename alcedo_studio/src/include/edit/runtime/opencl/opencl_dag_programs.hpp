@@ -48,6 +48,8 @@ inline constexpr const char* kMaskFillZeroKernelName              = "mask_fill_z
 inline constexpr const char* kMaskUnionMaxKernelName              = "mask_union_max_r8";
 inline constexpr const char* kDrtKernelName                       = "drt_display_rgba32f";
 inline constexpr const char* kDrtSceneKernelName                  = "drt_display_scene_rgba32f";
+inline constexpr const char* kDiffusionFilterDecodeSceneKernelName =
+    "diffusion_filter_decode_scene_rgba32f";
 
 }  // namespace alcedo::OpenCL::GpuDag
 

@@ -1971,6 +1971,11 @@ Original source files on disk will be kept.</source>
         <source>No adjustments yet</source>
         <translation>尚无调整</translation>
     </message>
+    <message>
+        <location line="+1"/>
+        <source>Post Processing</source>
+        <translation>后期处理</translation>
+    </message>
 </context>
 <context>
     <name>EditorCloseConfirmDialog</name>
@@ -2006,9 +2011,9 @@ Original source files on disk will be kept.</source>
     </message>
 </context>
 <context>
-    <name>EditorDetailPanel</name>
+    <name>EditorPostProcessPanel</name>
     <message>
-        <location filename="../qml/EditorDetailPanel.qml" line="+109"/>
+        <location filename="../qml/EditorPostProcessPanel.qml" line="+109"/>
         <source>Clarity</source>
         <translation>清晰度</translation>
     </message>
@@ -2028,6 +2033,16 @@ Original source files on disk will be kept.</source>
         <translation>光晕</translation>
     </message>
     <message>
+        <location line="+12"/>
+        <source>Strength</source>
+        <translation>强度</translation>
+    </message>
+    <message>
+        <location line="+57"/>
+        <source>Diffusion</source>
+        <translation>柔光</translation>
+    </message>
+    <message>
         <location line="+57"/>
         <location line="+9"/>
         <source>Detail</source>
@@ -2037,6 +2052,11 @@ Original source files on disk will be kept.</source>
         <location line="+37"/>
         <source>Texture</source>
         <translation>纹理</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Post Processing</source>
+        <translation>后期处理</translation>
     </message>
 </context>
 <context>
@@ -2620,26 +2640,6 @@ Original source files on disk will be kept.</source>
         <translation>自然饱和度</translation>
     </message>
     <message>
-        <location line="+22"/>
-        <source>Clarity</source>
-        <translation>清晰度</translation>
-    </message>
-    <message>
-        <location line="+12"/>
-        <source>Sharpen</source>
-        <translation>锐化</translation>
-    </message>
-    <message>
-        <location line="+12"/>
-        <source>Film Grain</source>
-        <translation>胶片颗粒</translation>
-    </message>
-    <message>
-        <location line="+12"/>
-        <source>Halation</source>
-        <translation>光晕</translation>
-    </message>
-    <message>
         <location line="+287"/>
         <source>Master</source>
         <translation>主控</translation>
@@ -2708,16 +2708,6 @@ Original source files on disk will be kept.</source>
         <location line="+12"/>
         <source>Reset wheels</source>
         <translation>重置色轮</translation>
-    </message>
-    <message>
-        <location line="+9"/>
-        <source>Detail</source>
-        <translation>细节</translation>
-    </message>
-    <message>
-        <location line="+28"/>
-        <source>Texture</source>
-        <translation>纹理</translation>
     </message>
 </context>
 <context>

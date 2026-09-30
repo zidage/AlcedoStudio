@@ -1100,7 +1100,8 @@ TEST(EditorNodeController, PanelNavigationSelectsOwnersAndReturnsToLastGradeWith
   nodes.set_editor_session(&session);
   nodes.selectNode(QStringLiteral("grade.b"));
   const int views_before = backend.view_change_count();
-  for (const auto& panel : {"display", "raw", "tone", "look", "lut"}) {
+  // "post" writes the document DRT from any Grade selection, so it keeps the last Grade.
+  for (const auto& panel : {"display", "raw", "tone", "look", "lut", "post"}) {
     session.set_active_adjustment_panel(QString::fromLatin1(panel));
     const NodeId expected{std::string(panel) == "display" ? "drt"
                           : std::string(panel) == "raw"   ? "develop"

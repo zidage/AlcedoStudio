@@ -14,6 +14,7 @@
 
 #include <alcedo/metal/Metal.hpp>
 
+#include "edit/graph/diffusion_filter_model.hpp"
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/operators/models/i_operator_model.hpp"
 #include "edit/runtime/adjustment_runtime.hpp"
@@ -223,9 +224,43 @@ void AppendMetalDrtWarmup(std::vector<MetalPipelineWarmup>& pipelines) {
   pipelines.push_back(MetalPipelineWarmup{ALCEDO_METAL_DRT_METALLIB_PATH,
                                           "drt_neighbor_apply_vertical",
                                           "Metal DRT Post Vertical"});
+  pipelines.push_back(MetalPipelineWarmup{ALCEDO_METAL_DRT_METALLIB_PATH,
+                                          "diffusion_filter_decode",
+                                          "Metal DiffusionFilter Decode"});
 #else
   (void)pipelines;
 #endif
+}
+
+auto ExecuteMetalDiffusionFilter(MetalRenderDevice& device, const PipelineDocument& document,
+                                 const FrameSceneBinding& scene) -> FrameSceneBinding {
+  const auto* drt = document.Drt();
+  if (drt == nullptr) {
+    throw std::runtime_error("ExecuteMetalDiffusionFilter: missing DRT endpoint");
+  }
+  if (IsDiffusionFilterActive(drt->Params().DiffusionStrength())) {
+    throw std::runtime_error("Metal DiffusionFilter scatter is not implemented");
+  }
+  const auto output = FrameSceneBinding::WorkImage(DestinationWorkMember(scene));
+  auto&      src    = MetalSceneTexture(device, scene);
+  auto&      dst    = MetalSceneTexture(device, output);
+  if (dst.Width() != src.Width() || dst.Height() != src.Height()) {
+    throw std::runtime_error(
+        "ExecuteMetalDiffusionFilter: scene-work extent does not match scene");
+  }
+  auto pipeline =
+      NeighborPipeline("diffusion_filter_decode", "Metal DiffusionFilter Decode");
+  auto* encoder = static_cast<MTL::ComputeCommandEncoder*>(
+      device.Workspace().Device().EnsureComputeCommandEncoder(device.CommandContext()));
+  if (encoder == nullptr) {
+    throw std::runtime_error("ExecuteMetalDiffusionFilter: compute encoder is missing");
+  }
+  encoder->setComputePipelineState(pipeline.get());
+  encoder->setTexture(static_cast<MTL::Texture*>(src.Native()), 0);
+  encoder->setTexture(static_cast<MTL::Texture*>(dst.Native()), 1);
+  DispatchThreads(encoder, pipeline.get(), src.Width(), src.Height());
+  device.Workspace().Device().NoteComputeDispatch(device.CommandContext());
+  return output;
 }
 
 auto ExecuteMetalDrt(MetalRenderDevice& device, const ExecutionPlan& plan,

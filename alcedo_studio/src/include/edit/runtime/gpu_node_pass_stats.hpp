@@ -26,6 +26,8 @@ struct GpuNodePassStats {
   std::uint64_t mask_union_skip        = 0;
   std::uint64_t primary_grade_execute  = 0;
   std::uint64_t primary_grade_skip     = 0;
+  std::uint64_t diffusion_filter_execute = 0;
+  std::uint64_t diffusion_filter_skip    = 0;
   std::uint64_t drt_execute            = 0;
   std::uint64_t drt_skip               = 0;
   std::uint64_t source_h2d_count       = 0;

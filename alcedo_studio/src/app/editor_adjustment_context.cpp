@@ -22,10 +22,11 @@ namespace {
 
 constexpr std::array<std::string_view, 2> kDevelopPanels{kAdjustmentPanelRaw,
                                                          kAdjustmentPanelGeometry};
-constexpr std::array<std::string_view, 4> kColorGradePanels{
-    kAdjustmentPanelTone, kAdjustmentPanelLook, kAdjustmentPanelLut, kAdjustmentPanelMasks};
+constexpr std::array<std::string_view, 5> kColorGradePanels{
+    kAdjustmentPanelTone, kAdjustmentPanelLook, kAdjustmentPanelLut, kAdjustmentPanelPost,
+    kAdjustmentPanelMasks};
 constexpr std::array<std::string_view, 2> kDrtPanels{kAdjustmentPanelDisplay,
-                                                     kAdjustmentPanelDetail};
+                                                     kAdjustmentPanelPost};
 
 auto SetError(std::string* error, std::string message) -> bool {
   if (error != nullptr) {
@@ -224,10 +225,12 @@ auto AdjustmentFieldIsSupported(EditorNodeKind kind, std::string_view field_key)
     case EditorNodeKind::Develop:
       return IsDevelopField(field_key);
     case EditorNodeKind::ColorGrade:
-      // Look panel is Color Grade owned and also hosts the four DRT/Post sliders.
-      return IsColorGradeField(field_key) || IsDrtPostField(field_key);
+      // A Grade selection also shows the Post Processing page, whose DRT/Post sliders and
+      // diffusion filter write the document DRT node.
+      return IsColorGradeField(field_key) || IsDrtPostField(field_key) ||
+             field_key == "diffusion";
     case EditorNodeKind::Drt:
-      return field_key == "odt" || IsDrtPostField(field_key);
+      return field_key == "odt" || field_key == "diffusion" || IsDrtPostField(field_key);
   }
   return false;
 }
@@ -286,6 +289,17 @@ auto CompleteSelectedNodeParameterTarget(const PipelineDocument& document,
     }
     target.owner_kind = EditorParameterOwnerKind::DrtPost;
     target.node_id    = selected_node_id;
+    return target;
+  }
+  if (target.field_key == "diffusion") {
+    // The diffusion filter always targets the document DRT, like the DRT/Post sliders.
+    const auto* drt = document.Drt();
+    if (drt == nullptr) {
+      SetError(error, "DRT node is missing");
+      return std::nullopt;
+    }
+    target.owner_kind = EditorParameterOwnerKind::DrtPost;
+    target.node_id    = drt->Id();
     return target;
   }
   const auto* type = OperatorTypeForField(target.field_key);

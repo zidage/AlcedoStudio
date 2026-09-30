@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 
+#include "edit/graph/diffusion_filter_model.hpp"
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/operators/models/i_operator_model.hpp"
 #include "edit/runtime/adjustment_runtime.hpp"
@@ -191,6 +192,45 @@ struct OpenClDrtOps {
 };
 
 }  // namespace
+
+auto ExecuteOpenClDiffusionFilter(OpenClRenderDevice& device, const PipelineDocument& document,
+                                  const FrameSceneBinding& scene) -> FrameSceneBinding {
+  const auto* drt = document.Drt();
+  if (drt == nullptr) {
+    throw std::runtime_error("ExecuteOpenClDiffusionFilter: missing DRT endpoint");
+  }
+  if (IsDiffusionFilterActive(drt->Params().DiffusionStrength())) {
+    throw std::runtime_error("OpenCL DiffusionFilter scatter is not implemented");
+  }
+  const auto output = FrameSceneBinding::WorkImage(DestinationWorkMember(scene));
+  const auto width  = OpenClSceneWidth(device, scene);
+  const auto height = OpenClSceneHeight(device, scene);
+  if (OpenClSceneWidth(device, output) != width || OpenClSceneHeight(device, output) != height) {
+    throw std::runtime_error(
+        "ExecuteOpenClDiffusionFilter: scene-work extent does not match scene");
+  }
+  auto  kernel  = OpenClKernelCache::Instance().GetKernel(
+      OpenCL::GpuDag::kDrtProgramName, OpenCL::GpuDag::kDiffusionFilterDecodeSceneKernelName);
+  auto& backend = device.Workspace().Device();
+  BindOpenClSceneView(kernel, 0, OpenClBindScene(device, scene), backend,
+                      "OpenCL DiffusionFilter source", OpenClSceneArgAccess::Read);
+  BindOpenClSceneView(kernel, 3, OpenClBindScene(device, output), backend,
+                      "OpenCL DiffusionFilter destination", OpenClSceneArgAccess::Write);
+  CheckOpenCl(clSetKernelArg(kernel, 6, sizeof(width), &width),
+              "ExecuteOpenClDiffusionFilter: width");
+  CheckOpenCl(clSetKernelArg(kernel, 7, sizeof(height), &height),
+              "ExecuteOpenClDiffusionFilter: height");
+  const std::size_t local[2]  = {16, 16};
+  const std::size_t global[2] = {((static_cast<std::size_t>(width) + 15) / 16) * 16,
+                                 ((static_cast<std::size_t>(height) + 15) / 16) * 16};
+  cl_event          event     = nullptr;
+  CheckOpenCl(clEnqueueNDRangeKernel(backend.NativeQueue(), kernel, 2, nullptr, global, local, 0,
+                                     nullptr, &event),
+              "ExecuteOpenClDiffusionFilter: clEnqueueNDRangeKernel");
+  NoteOpenClEnqueueNdRange();
+  backend.TrackKernelEvent(device.CommandContext(), event);
+  return output;
+}
 
 auto ExecuteOpenClDrt(OpenClRenderDevice& device, const ExecutionPlan& plan,
                       const PipelineDocument& document, const FrameSceneBinding& scene)

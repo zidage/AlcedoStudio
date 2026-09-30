@@ -149,6 +149,31 @@ TEST(PipelineHistoryApplierTest, ParameterForwardInverseRestoresDocumentHash) {
   RoundTripOwner(&document, test::DrtPostFieldTarget("clarity"), {{"clarity", 18.0}});
 }
 
+TEST(PipelineHistoryApplierTest, DiffusionStrengthRoundTripsWithoutEnteringOdtHistoryJson) {
+  auto        document = CreateDefaultPipelineDocument();
+  std::string error;
+  auto        diffusion = CompleteCurrentPanelParameterTarget(document, "diffusion", &error);
+  ASSERT_TRUE(diffusion.has_value()) << error;
+  EXPECT_EQ(diffusion->owner_kind, EditorParameterOwnerKind::DrtPost);
+  EXPECT_EQ(diffusion->node_id, document.Drt()->Id());
+  RoundTripOwner(&document, *diffusion, {{"strength", 0.4}});
+
+  ASSERT_TRUE(ApplyEditorParameterPatch(document, *diffusion, {{"strength", 0.4}}, &error))
+      << error;
+  nlohmann::json diffusion_json;
+  ASSERT_TRUE(ReadEditorParameterJson(document, *diffusion, &diffusion_json, &error)) << error;
+  EXPECT_EQ(diffusion_json, (nlohmann::json{{"strength", 0.4f}}));
+
+  // The output transform field owns only its own keys, so ODT undo never resets the filter.
+  auto odt = CompleteCurrentPanelParameterTarget(document, "odt", &error);
+  ASSERT_TRUE(odt.has_value()) << error;
+  nlohmann::json odt_json;
+  ASSERT_TRUE(ReadEditorParameterJson(document, *odt, &odt_json, &error)) << error;
+  EXPECT_FALSE(odt_json.contains("diffusion")) << odt_json.dump();
+  RoundTripOwner(&document, *odt, {{"peak_luminance", 400.0}});
+  EXPECT_EQ(document.Drt()->Params().DiffusionStrength(), 0.4f);
+}
+
 TEST(PipelineHistoryApplierTest, LaterChangeFailureReversesEarlierBatchChanges) {
   auto        document = CreateDefaultPipelineDocument();
   const auto  start    = CanonicalPipelineDocumentJson(document);

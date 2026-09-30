@@ -3,10 +3,12 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import Alcedo.Main 1.0
 
-// DRT/Post Detail page: Clarity, Sharpen, Halation, and Film Grain.
+// Post Processing page. Every control writes the document DRT node, whichever node is
+// selected: the scene-linear Diffusion filter (before the display transform), then the
+// display-referred Clarity, Sharpen, Film Grain, and Halation adjustments.
 Item {
     id: root
-    objectName: "editorAdjustmentPanel_detail"
+    objectName: "editorAdjustmentPanel_post"
 
     property var theme: null
     property var editorSession: null
@@ -21,6 +23,7 @@ Item {
 
     function wireEnabled() {
         const on = root.controlsEnabled
+        diffusionModel.enabled = on
         clarityModel.enabled = on
         sharpenModel.enabled = on
         filmGrainModel.enabled = on
@@ -30,16 +33,19 @@ Item {
     onControlsEnabledChanged: wireEnabled()
     Component.onCompleted: {
         wireEnabled()
+        // Bootstrap when the stack has not yet projected. Settled fan-out still
+        // owns ongoing echoes via EditorAdjustmentStack.
         loadFromSnapshot(root.editorSession ? root.editorSession.adjustmentSnapshot : null)
     }
 
     function loadFromSnapshot(snapshot) {
         if (snapshot === undefined || snapshot === null)
             return
+        loadNestedPercent(diffusionModel, "diffusion", "strength", snapshot)
         loadModelFromSnapshot(clarityModel, "clarity", snapshot)
         loadSharpenFromSnapshot(snapshot)
-        loadNestedStrength(filmGrainModel, "film_grain", "strength", snapshot)
-        loadNestedStrength(halationModel, "halation", "strength", snapshot)
+        loadNestedPercent(filmGrainModel, "film_grain", "strength", snapshot)
+        loadNestedPercent(halationModel, "halation", "strength", snapshot)
     }
 
     function loadModelFromSnapshot(model, fieldKey, snapshot) {
@@ -53,14 +59,15 @@ Item {
         const val = entry[fieldKey] !== undefined ? entry[fieldKey] : entry.value
         if (val === undefined)
             return
-        var num = Number(val)
+        const num = Number(val)
         if (isNaN(num))
             return
         if (Math.abs(model.value - num) > (model.step * 0.1))
             model.value = num
     }
 
-    function loadNestedStrength(model, fieldKey, nestedKey, snapshot) {
+    /// Stored 0..1 strengths show as 0..100 on the slider.
+    function loadNestedPercent(model, fieldKey, nestedKey, snapshot) {
         if (!model || !snapshot)
             return
         if (model.dragActive)
@@ -73,11 +80,9 @@ Item {
                   : (entry[nestedKey] !== undefined ? entry[nestedKey] : undefined)
         if (val === undefined)
             return
-        var num = Number(val)
+        const num = Number(val) * 100.0
         if (isNaN(num))
             return
-        if (fieldKey === "film_grain" || fieldKey === "halation")
-            num *= 100.0
         if (Math.abs(model.value - num) > (model.step * 0.1))
             model.value = num
     }
@@ -103,8 +108,20 @@ Item {
     }
 
     EditorAdjustmentValueModel {
+        id: diffusionModel
+        objectName: "postDiffusionModel"
+        fieldKey: "diffusion"
+        label: qsTr("Strength")
+        minimum: 0
+        maximum: 100
+        defaultValue: 0
+        step: 1
+        precision: 0
+        submitter: root.editorSession
+    }
+    EditorAdjustmentValueModel {
         id: clarityModel
-        objectName: "detailClarityModel"
+        objectName: "postClarityModel"
         fieldKey: "clarity"
         label: qsTr("Clarity")
         minimum: -100
@@ -116,7 +133,7 @@ Item {
     }
     EditorAdjustmentValueModel {
         id: sharpenModel
-        objectName: "detailSharpenModel"
+        objectName: "postSharpenModel"
         fieldKey: "sharpen"
         label: qsTr("Sharpen")
         minimum: 0
@@ -128,7 +145,7 @@ Item {
     }
     EditorAdjustmentValueModel {
         id: filmGrainModel
-        objectName: "detailFilmGrainModel"
+        objectName: "postFilmGrainModel"
         fieldKey: "film_grain"
         label: qsTr("Film Grain")
         minimum: 0
@@ -140,7 +157,7 @@ Item {
     }
     EditorAdjustmentValueModel {
         id: halationModel
-        objectName: "detailHalationModel"
+        objectName: "postHalationModel"
         fieldKey: "halation"
         label: qsTr("Halation")
         minimum: 0
@@ -151,12 +168,25 @@ Item {
         submitter: root.editorSession
     }
 
+    component SectionShell: CollapsibleSection {
+        Layout.fillWidth: true
+        expanded: true
+        controlsEnabled: root.controlsEnabled
+        surfaceColor: root.colCardSurface
+        disabledSurfaceColor: root.colCardSurface
+        borderColor: root.colCardBorder
+        textColor: root.colText
+        mutedColor: root.colMuted
+        hoverColor: root.colHover
+        accentColor: root.colAccent
+    }
+
     Flickable {
-        id: detailScroll
-        objectName: "editorDetailPanelScroll"
+        id: postScroll
+        objectName: "editorPostProcessPanelScroll"
         anchors.fill: parent
         contentWidth: width
-        contentHeight: detailColumn.implicitHeight
+        contentHeight: postColumn.implicitHeight
         clip: true
         boundsBehavior: Flickable.StopAtBounds
         flickableDirection: Flickable.VerticalFlick
@@ -186,38 +216,49 @@ Item {
                 var step = event.pixelDelta.y !== 0
                            ? event.pixelDelta.y
                            : event.angleDelta.y / 120 * 48
-                var maxY = Math.max(0, detailScroll.contentHeight - detailScroll.height)
-                detailScroll.contentY = Math.max(0, Math.min(maxY, detailScroll.contentY - step))
+                var maxY = Math.max(0, postScroll.contentHeight - postScroll.height)
+                postScroll.contentY = Math.max(0, Math.min(maxY, postScroll.contentY - step))
                 event.accepted = true
             }
         }
 
         ColumnLayout {
-            id: detailColumn
-            width: detailScroll.width
+            id: postColumn
+            width: postScroll.width
             spacing: appTheme.spaceSm
 
             Label {
                 Layout.fillWidth: true
-                text: qsTr("Detail")
+                text: qsTr("Post Processing")
                 color: root.colText
                 font.pixelSize: appTheme.fontSizeTitle
                 font.weight: appTheme.fontWeightHeading
             }
 
-            CollapsibleSection {
-                objectName: "editorAdjustmentGroupShell_detail"
-                Layout.fillWidth: true
+            SectionShell {
+                objectName: "editorAdjustmentGroupShell_post_diffusion"
+                title: qsTr("Diffusion")
+                bodyContentHeight: diffusionBody.implicitHeight + appTheme.spaceSm
+
+                ColumnLayout {
+                    id: diffusionBody
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.margins: appTheme.spaceXs
+                    spacing: appTheme.spaceSm
+                    AdjustmentSlider {
+                        objectName: "postDiffusionSlider"
+                        Layout.fillWidth: true
+                        model: diffusionModel
+                        flickable: postScroll
+                    }
+                }
+            }
+
+            SectionShell {
+                objectName: "editorAdjustmentGroupShell_post_detail"
                 title: qsTr("Detail")
-                expanded: true
-                controlsEnabled: root.controlsEnabled
-                surfaceColor: root.colCardSurface
-                disabledSurfaceColor: root.colCardSurface
-                borderColor: root.colCardBorder
-                textColor: root.colText
-                mutedColor: root.colMuted
-                hoverColor: root.colHover
-                accentColor: root.colAccent
                 bodyContentHeight: detailBody.implicitHeight + appTheme.spaceSm
 
                 ColumnLayout {
@@ -228,33 +269,23 @@ Item {
                     anchors.margins: appTheme.spaceXs
                     spacing: appTheme.spaceSm
                     AdjustmentSlider {
-                        objectName: "detailClaritySlider"
+                        objectName: "postClaritySlider"
                         Layout.fillWidth: true
                         model: clarityModel
-                        flickable: detailScroll
+                        flickable: postScroll
                     }
                     AdjustmentSlider {
-                        objectName: "detailSharpenSlider"
+                        objectName: "postSharpenSlider"
                         Layout.fillWidth: true
                         model: sharpenModel
-                        flickable: detailScroll
+                        flickable: postScroll
                     }
                 }
             }
 
-            CollapsibleSection {
-                objectName: "editorAdjustmentGroupShell_detail_texture"
-                Layout.fillWidth: true
+            SectionShell {
+                objectName: "editorAdjustmentGroupShell_post_texture"
                 title: qsTr("Texture")
-                expanded: true
-                controlsEnabled: root.controlsEnabled
-                surfaceColor: root.colCardSurface
-                disabledSurfaceColor: root.colCardSurface
-                borderColor: root.colCardBorder
-                textColor: root.colText
-                mutedColor: root.colMuted
-                hoverColor: root.colHover
-                accentColor: root.colAccent
                 bodyContentHeight: textureBody.implicitHeight + appTheme.spaceSm
 
                 ColumnLayout {
@@ -265,16 +296,16 @@ Item {
                     anchors.margins: appTheme.spaceXs
                     spacing: appTheme.spaceSm
                     AdjustmentSlider {
-                        objectName: "detailFilmGrainSlider"
+                        objectName: "postFilmGrainSlider"
                         Layout.fillWidth: true
                         model: filmGrainModel
-                        flickable: detailScroll
+                        flickable: postScroll
                     }
                     AdjustmentSlider {
-                        objectName: "detailHalationSlider"
+                        objectName: "postHalationSlider"
                         Layout.fillWidth: true
                         model: halationModel
-                        flickable: detailScroll
+                        flickable: postScroll
                     }
                 }
             }

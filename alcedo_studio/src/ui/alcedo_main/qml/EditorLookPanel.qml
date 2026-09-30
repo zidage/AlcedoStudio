@@ -4,7 +4,8 @@ import QtQuick.Layouts
 import Alcedo.Main 1.0
 
 // Color Grade Look panel: global color amount, selective HSL, CDL
-// trackballs (Gamma top / Lift+Gain bottom), plus Detail and Texture.
+// trackballs (Gamma top / Lift+Gain bottom). Clarity, Sharpen, Film Grain, Halation, and
+// Diffusion live on the Post Processing page (EditorPostProcessPanel.qml).
 // Camera white balance lives on the RAW Decode page; the Color section holds the
 // CAT02 grade white balance. LUT strength is EditorLutControlPanel.qml; choosing a LUT is
 // the Editor rail's LUT browser (EditorLutBrowserPanel.qml).
@@ -38,10 +39,6 @@ Item {
         vibranceModel.enabled = on
         hlsModel.enabled = on
         cdlModel.enabled = on
-        clarityModel.enabled = on
-        sharpenModel.enabled = on
-        filmGrainModel.enabled = on
-        halationModel.enabled = on
     }
 
     onControlsEnabledChanged: wireEnabled()
@@ -61,10 +58,6 @@ Item {
         loadModelFromSnapshot(vibranceModel, "vibrance", snapshot)
         loadHlsFromSnapshot(snapshot)
         loadCdlFromSnapshot(snapshot)
-        loadModelFromSnapshot(clarityModel, "clarity", snapshot)
-        loadSharpenFromSnapshot(snapshot)
-        loadNestedStrength(filmGrainModel, "film_grain", "strength", snapshot)
-        loadNestedStrength(halationModel, "halation", "strength", snapshot)
     }
 
     function loadModelFromSnapshot(model, fieldKey, snapshot) {
@@ -140,49 +133,6 @@ Item {
         applyWheel("gain", cw.gain)
     }
 
-    function loadNestedStrength(model, fieldKey, nestedKey, snapshot) {
-        if (!model || !snapshot)
-            return
-        if (model.dragActive)
-            return
-        const entry = snapshot[fieldKey]
-        if (entry === undefined)
-            return
-        const nested = entry[fieldKey]
-        const val = (nested && nested[nestedKey] !== undefined) ? nested[nestedKey]
-                  : (entry[nestedKey] !== undefined ? entry[nestedKey] : undefined)
-        if (val === undefined)
-            return
-        var num = Number(val)
-        if (isNaN(num))
-            return
-        if (fieldKey === "film_grain" || fieldKey === "halation")
-            num *= 100.0
-        if (Math.abs(model.value - num) > (model.step * 0.1))
-            model.value = num
-    }
-
-    function loadSharpenFromSnapshot(snapshot) {
-        if (!snapshot)
-            return
-        if (sharpenModel.dragActive)
-            return
-        const entry = snapshot.sharpen
-        if (entry === undefined)
-            return
-        const nested = entry.sharpen
-        const val = (nested && nested.offset !== undefined) ? nested.offset
-                  : (entry.offset !== undefined ? entry.offset : undefined)
-        if (val === undefined)
-            return
-        const num = Number(val)
-        if (isNaN(num))
-            return
-        if (Math.abs(sharpenModel.value - num) > 0.1)
-            sharpenModel.value = num
-    }
-
-
     EditorGradeWhiteBalanceModel {
         id: gradeWhiteBalanceModel
         objectName: "lookGradeWhiteBalanceModel"
@@ -223,55 +173,6 @@ Item {
         objectName: "lookCdlModel"
         submitter: root.editorSession
     }
-    EditorAdjustmentValueModel {
-        id: clarityModel
-        objectName: "lookClarityModel"
-        fieldKey: "clarity"
-        label: qsTr("Clarity")
-        minimum: -100
-        maximum: 100
-        defaultValue: 0
-        step: 1
-        precision: 0
-        submitter: root.editorSession
-    }
-    EditorAdjustmentValueModel {
-        id: sharpenModel
-        objectName: "lookSharpenModel"
-        fieldKey: "sharpen"
-        label: qsTr("Sharpen")
-        minimum: 0
-        maximum: 100
-        defaultValue: 0
-        step: 1
-        precision: 0
-        submitter: root.editorSession
-    }
-    EditorAdjustmentValueModel {
-        id: filmGrainModel
-        objectName: "lookFilmGrainModel"
-        fieldKey: "film_grain"
-        label: qsTr("Film Grain")
-        minimum: 0
-        maximum: 100
-        defaultValue: 0
-        step: 1
-        precision: 0
-        submitter: root.editorSession
-    }
-    EditorAdjustmentValueModel {
-        id: halationModel
-        objectName: "lookHalationModel"
-        fieldKey: "halation"
-        label: qsTr("Halation")
-        minimum: 0
-        maximum: 100
-        defaultValue: 0
-        step: 1
-        precision: 0
-        submitter: root.editorSession
-    }
-
     component SectionShell: CollapsibleSection {
         Layout.fillWidth: true
         controlsEnabled: root.controlsEnabled
@@ -915,62 +816,6 @@ Item {
                         label: qsTr("Reset wheels")
                         chipEnabled: root.controlsEnabled
                         onActivated: cdlModel.resetAll()
-                    }
-                }
-            }
-
-            SectionShell {
-                objectName: "editorAdjustmentGroupShell_look_detail"
-                title: qsTr("Detail")
-                expanded: false
-                bodyContentHeight: detailBody.implicitHeight + 8
-
-                ColumnLayout {
-                    id: detailBody
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.top: parent.top
-                    anchors.margins: 6
-                    spacing: 8
-                    AdjustmentSlider {
-                        objectName: "lookClaritySlider"
-                        Layout.fillWidth: true
-                        model: clarityModel
-                        flickable: lookScroll
-                    }
-                    AdjustmentSlider {
-                        objectName: "lookSharpenSlider"
-                        Layout.fillWidth: true
-                        model: sharpenModel
-                        flickable: lookScroll
-                    }
-                }
-            }
-
-            SectionShell {
-                objectName: "editorAdjustmentGroupShell_look_texture"
-                title: qsTr("Texture")
-                expanded: false
-                bodyContentHeight: textureBody.implicitHeight + 8
-
-                ColumnLayout {
-                    id: textureBody
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.top: parent.top
-                    anchors.margins: 6
-                    spacing: 8
-                    AdjustmentSlider {
-                        objectName: "lookFilmGrainSlider"
-                        Layout.fillWidth: true
-                        model: filmGrainModel
-                        flickable: lookScroll
-                    }
-                    AdjustmentSlider {
-                        objectName: "lookHalationSlider"
-                        Layout.fillWidth: true
-                        model: halationModel
-                        flickable: lookScroll
                     }
                 }
             }

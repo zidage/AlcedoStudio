@@ -297,6 +297,22 @@ auto ReadHalation(const PipelineDocument& document, const EditorParameterTarget&
   return ReadDrtNestedScalar<HalationModel>(document, target, "halation", "strength", out, error);
 }
 
+auto ReadDiffusion(const PipelineDocument& document, const EditorParameterTarget& target,
+                   EditorPanelFieldPresentation* out, std::string* error) -> bool {
+  if (target.owner_kind != EditorParameterOwnerKind::DrtPost) {
+    return SetError(error, "Diffusion panel field requires a DRT target");
+  }
+  const auto* drt = document.Drt();
+  if (drt == nullptr || drt->Id() != target.node_id) {
+    return SetError(error, "DRT node is missing: " + std::string(target.node_id.Value()));
+  }
+  EditorPanelNestedScalarValue nested;
+  nested.object_key = "diffusion";
+  nested.value_key  = "strength";
+  nested.value      = drt->Params().DiffusionStrength();
+  return FinishField(target, std::move(nested), out);
+}
+
 auto ReadFilmGrain(const PipelineDocument& document, const EditorParameterTarget& target,
                    EditorPanelFieldPresentation* out, std::string* error) -> bool {
   return ReadDrtNestedScalar<FilmGrainModel>(document, target, "film_grain", "strength", out, error);
@@ -460,6 +476,7 @@ auto EditorPanelAdapterTable::Production() -> EditorPanelAdapterTable {
     table.Add({"sharpen", "look", &ReadSharpen});
     table.Add({"film_grain", "look", &ReadFilmGrain});
     table.Add({"halation", "look", &ReadHalation});
+    table.Add({"diffusion", "look", &ReadDiffusion});
     table.Add({"odt", "display", &ReadOdt});
     table.Add({"raw_decode", "raw", &ReadRawDecode});
     table.Add({"color_temp", "look", &ReadColorTemp});

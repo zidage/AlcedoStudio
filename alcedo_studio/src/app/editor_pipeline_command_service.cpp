@@ -901,7 +901,11 @@ auto ReadEditorParameterJson(const PipelineDocument& document, const EditorParam
           *json = model->ToJson();
           return true;
         }
-        *json = drt->Params().ToJson();
+        if (target.field_key == "diffusion") {
+          *json = {{"strength", drt->Params().DiffusionStrength()}};
+          return true;
+        }
+        *json = drt->Params().OutputTransformJson();
         return true;
       }
       default:
@@ -947,7 +951,7 @@ auto CompleteCurrentPanelParameterTarget(const PipelineDocument& document, std::
     target.node_id    = develop->Id();
     return target;
   }
-  if (target.field_key == "odt") {
+  if (target.field_key == "odt" || target.field_key == "diffusion") {
     const auto* drt = document.Drt();
     if (drt == nullptr) {
       SetError(error, "DRT node is missing");

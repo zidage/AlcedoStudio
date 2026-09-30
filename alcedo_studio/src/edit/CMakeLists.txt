@@ -96,6 +96,7 @@ def_library(EditInput
 # GPU-agnostic DAG runtime (parameter arena, texture LRU, KV cache). No CUDA headers.
 set(EDIT_RUNTIME_SRCS
     ${ALCEDO_SRC_ROOT}/edit/runtime/adjustment_runtime.cpp
+    ${ALCEDO_SRC_ROOT}/edit/runtime/diffusion_filter_plan.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/edit_runtime.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/grade_lut.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/grade_schedule.cpp
@@ -284,6 +285,7 @@ if(ALCEDO_CUDA_ENABLED)
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_gpu_timestamp_pool.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_camera_color_pass.cu
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_develop_pass.cpp
+            ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_diffusion_filter_pass.cu
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_render_device.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_sensor_demosaic.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_drt_pass.cu

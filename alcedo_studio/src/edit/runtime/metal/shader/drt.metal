@@ -418,9 +418,8 @@ kernel void drt_display(texture2d<float, access::read> input [[texture(0)]],
     return;
   }
   const float4 source = input.read(gid);
-  const AcesRgcRgb compressed =
-      AcesReferenceGamutCompress(acescc_decode(source.x), acescc_decode(source.y),
-                                 acescc_decode(source.z));
+  // Input is linear AP1; the DiffusionFilter pass already decoded ACEScc.
+  const AcesRgcRgb compressed = AcesReferenceGamutCompress(source.x, source.y, source.z);
   const float3 scene = float3(compressed.r, compressed.g, compressed.b);
   float3 display_linear;
   if (params.method_ == kMetalOdtMethodAces20) {
@@ -431,6 +430,19 @@ kernel void drt_display(texture2d<float, access::read> input [[texture(0)]],
   const float3 encoded = DisplayEncoding(display_linear, params.limit_to_display_matx, params.eotf_,
                                          params.display_linear_scale_);
   output.write(float4(encoded, source.w), gid);
+}
+
+/// DiffusionFilter with strength 0: decode the ACEScc AP1 scene to linear AP1 for the DRT.
+kernel void diffusion_filter_decode(texture2d<float, access::read> input [[texture(0)]],
+                                    texture2d<float, access::write> output [[texture(1)]],
+                                    uint2 gid [[thread_position_in_grid]]) {
+  if (gid.x >= input.get_width() || gid.y >= input.get_height()) {
+    return;
+  }
+  const float4 source = input.read(gid);
+  output.write(float4(acescc_decode(source.x), acescc_decode(source.y), acescc_decode(source.z),
+                      source.w),
+               gid);
 }
 
 #include "drt_neighbor.metal"

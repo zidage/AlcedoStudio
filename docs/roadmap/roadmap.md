@@ -50,6 +50,9 @@
 - [ ] Reintroduce Brush in the following release through binary stroke objects, Mini-Git references,
       verified tiled R8 materialization, and batched native raster execution; see the
       [Brush Mask Architecture, History, and Raster Materialization master plan](alcedo_studio/edit/brush_mask_architecture_master_plan.md).
+- [ ] Add a scene-linear Black Pro-Mist diffusion filter simulation to the Develop pipeline on
+      CUDA, OpenCL, and Metal; see the
+      [Black Pro-Mist Diffusion Filter Simulation Plan](alcedo_studio/edit/black_pro_mist_diffusion_plan.md).
 - [ ] Extend HDR workflow and output.
 - [ ] Continue semantic search and AI-assisted tagging work; see the
       [semantic generation plan](alcedo_studio/ai/semantic_generation_search_plan.md) and

@@ -4,6 +4,8 @@
 
 #include "edit/graph/drt_node_model.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <stdexcept>
 #include <string>
@@ -230,13 +232,38 @@ void DetailedFromJson(const nlohmann::json& json, OpenDrtDetailedParams& params)
 #undef ALCEDO_READ_ODRT
 }
 
+/// Missing object or key reads as 0. A present invalid value fails the load; it is not clamped.
+auto ReadDiffusionStrength(const nlohmann::json& json) -> float {
+  if (!json.contains("diffusion")) {
+    return kDiffusionStrengthMin;
+  }
+  const auto& diffusion = json.at("diffusion");
+  if (!diffusion.is_object()) {
+    throw std::runtime_error("DRT params: diffusion must be an object");
+  }
+  if (!diffusion.contains("strength")) {
+    return kDiffusionStrengthMin;
+  }
+  const auto& value = diffusion.at("strength");
+  if (!value.is_number()) {
+    throw std::runtime_error("DRT params: diffusion.strength must be a number");
+  }
+  const auto strength = value.get<double>();
+  if (!std::isfinite(strength) || strength < kDiffusionStrengthMin ||
+      strength > kDiffusionStrengthMax) {
+    throw std::runtime_error("DRT params: diffusion.strength must be in [0, 1]");
+  }
+  return static_cast<float>(strength);
+}
+
 }  // namespace
 
 auto DrtParamsModel::IsDefault() const -> bool {
   return Read([](const DrtPayload& payload) {
     return payload.method == DrtMethod::OpenDrt &&
            payload.encoding_space == DrtColorSpace::Rec709 &&
-           payload.encoding_eotf == DrtEotf::Gamma22 && payload.peak_luminance == 100.0f;
+           payload.encoding_eotf == DrtEotf::Gamma22 && payload.peak_luminance == 100.0f &&
+           payload.diffusion_strength == kDiffusionStrengthMin;
   });
 }
 
@@ -286,6 +313,24 @@ auto DrtParamsModel::HdrGreyBoost() const -> float {
 
 auto DrtParamsModel::HdrPurity() const -> float {
   return Read([](const DrtPayload& payload) { return payload.hdr_purity; });
+}
+
+auto DrtParamsModel::DiffusionStrength() const -> float {
+  return Read([](const DrtPayload& payload) { return payload.diffusion_strength; });
+}
+
+void DrtParamsModel::ApplyDiffusionStrength(float strength) {
+  if (!std::isfinite(strength)) {
+    throw std::invalid_argument("diffusion.strength must be finite");
+  }
+  const float clamped = std::clamp(strength, kDiffusionStrengthMin, kDiffusionStrengthMax);
+  MutateWithDirtyFields([clamped](DrtPayload& payload) {
+    if (payload.diffusion_strength == clamped) {
+      return DirtyFieldMask{};
+    }
+    payload.diffusion_strength = clamped;
+    return DirtyFieldMask{DrtDirty::Diffusion};
+  });
 }
 
 void DrtParamsModel::ApplyUpdate(DrtParameterUpdate update) {
@@ -351,6 +396,15 @@ void DrtParamsModel::ApplyUpdate(DrtParameterUpdate update) {
 }
 
 auto DrtParamsModel::ToJson() const -> nlohmann::json {
+  auto       json     = OutputTransformJson();
+  const auto strength = DiffusionStrength();
+  if (strength != kDiffusionStrengthMin) {
+    json["diffusion"] = {{"strength", strength}};
+  }
+  return json;
+}
+
+auto DrtParamsModel::OutputTransformJson() const -> nlohmann::json {
   const auto payload = PayloadCopy();
   return {{"method", MethodToString(payload.method)},
           {"encoding_space", SpaceToString(payload.encoding_space)},
@@ -396,6 +450,7 @@ void DrtParamsModel::LoadJson(const nlohmann::json& json) {
         DetailedFromJson(open_drt["parameters"], payload.parameters);
       }
     }
+    payload.diffusion_strength = ReadDiffusionStrength(json);
   });
 }
 

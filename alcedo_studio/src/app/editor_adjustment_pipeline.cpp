@@ -14,7 +14,7 @@ namespace alcedo {
 namespace {
 
 // Every accepted field key, including the aliases that panels and older history rows use.
-constexpr std::array<std::pair<std::string_view, EditorAdjustmentField>, 26> kFieldKeys = {{
+constexpr std::array<std::pair<std::string_view, EditorAdjustmentField>, 27> kFieldKeys = {{
     {"exposure", EditorAdjustmentField::Exposure},
     {"contrast", EditorAdjustmentField::Contrast},
     {"white", EditorAdjustmentField::Whites},
@@ -41,6 +41,7 @@ constexpr std::array<std::pair<std::string_view, EditorAdjustmentField>, 26> kFi
     {"raw_decode", EditorAdjustmentField::RawDecode},
     {"lens_calib", EditorAdjustmentField::LensCalibration},
     {"color_temp", EditorAdjustmentField::ColorTemperature},
+    {"diffusion", EditorAdjustmentField::Diffusion},
 }};
 
 void RenameJsonKeyIfAbsent(nlohmann::json& params, const char* from, const char* to) {

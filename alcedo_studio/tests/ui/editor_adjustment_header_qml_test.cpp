@@ -478,7 +478,8 @@ class StackHarness {
 
 void ExpectNavPresent(const StackHarness& harness) {
   for (const auto& panel : {QStringLiteral("tone"), QStringLiteral("look"), QStringLiteral("lut"),
-                            QStringLiteral("display"), QStringLiteral("geometry"),
+                            QStringLiteral("display"), QStringLiteral("post"),
+                            QStringLiteral("geometry"),
                             QStringLiteral("raw"), QStringLiteral("masks")}) {
     ASSERT_NE(harness.find(QStringLiteral("editorAdjustmentNav_") + panel), nullptr)
         << panel.toStdString();
@@ -703,7 +704,7 @@ TEST(EditorAdjustmentHeaderQmlTest, NavbarKeepsAllPagesWhenSelectedNodeKindChang
   ExpectNavPresent(harness);
 
   nodes.setSelection(QStringLiteral("DRT"), QStringLiteral("drt"),
-                     {QStringLiteral("display"), QStringLiteral("detail")});
+                     {QStringLiteral("display"), QStringLiteral("post")});
   ProcessEvents(40);
   ExpectNavPresent(harness);
 

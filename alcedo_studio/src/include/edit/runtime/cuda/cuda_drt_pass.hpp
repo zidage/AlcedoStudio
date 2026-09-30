@@ -23,7 +23,7 @@ struct CudaDrtResult {
 /**
  * @brief Run the selected display transform, then display-referred DRT/Post operations.
  *
- * The display kernel decodes the compiled ACEScc input before ACES 2.0 or OpenDRT. Neighborhood
+ * The display kernel reads the linear AP1 output of the DiffusionFilter pass. Neighborhood
  * operations consume that display-referred result and write the final display output. Grade mix
  * and masks do not suppress these endpoint operations. Reads the document only; a failed
  * parameter upload stays queued in the workspace arena.

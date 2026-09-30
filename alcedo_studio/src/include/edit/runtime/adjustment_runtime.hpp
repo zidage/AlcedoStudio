@@ -123,6 +123,12 @@ inline constexpr std::uint32_t kGradeRuntimeParamBytes =
     -> GradeNeighborParams;
 
 /**
+ * @brief Render pixels per full-reference pixel: mean of the X/Y scales of
+ *        `render_to_reference`, clamped to [1e-4, 1]. Neighborhood radii use this scale.
+ */
+[[nodiscard]] auto NeighborhoodRenderScale(const ResolvedRenderGeometry& geometry) -> float;
+
+/**
  * @brief Vertical shared-memory radius for a separable neighborhood pass.
  *
  * Halation uses a 3-sigma window of @p params.sigma_y. Other operators use @p params.radius.

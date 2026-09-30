@@ -171,13 +171,17 @@ struct CompiledDrtStep {
 };
 
 /**
- * @brief Compiled DRT/Post node: neighborhood steps then display transform.
+ * @brief Compiled DRT/Post node: diffusion filter, display transform, then neighborhood steps.
  *
- * @ref scene_input is Develop output when the backbone has no Color Grade.
+ * @ref scene_input is the ACEScc AP1 Develop output when the backbone has no Color Grade.
+ * The DiffusionFilter pass always decodes @ref scene_input to linear AP1 in @ref scene_linear
+ * (and applies the filter when its strength is not 0). The display transform reads only
+ * @ref scene_linear.
  */
 struct CompiledDrtNode {
   NodeId                          node_id{NodeId{"drt"}};
   GraphValueId                    scene_input{NodeId{"develop"}, PortId{"image"}};
+  GraphValueId                    scene_linear{NodeId{"drt"}, PortId{"runtime.scene_linear"}};
   GraphValueId                    scene_output{NodeId{"drt"}, PortId{"runtime.display_base"}};
   GraphValueId                    display_output{NodeId{"drt"}, PortId{"display"}};
   std::vector<CompiledAdjustment> post_adjustments;
