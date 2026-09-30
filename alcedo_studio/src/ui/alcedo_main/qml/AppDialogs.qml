@@ -406,6 +406,14 @@ Item {
         settingsDialogObj.open()
     }
 
+    function openUpdateSettings() {
+        openSettingsDialog(settingsDialogObj.updatesCategory)
+    }
+
+    function openLutSettings() {
+        openSettingsDialog(settingsDialogObj.lutCategory)
+    }
+
     function openAdvancedAnalysisDialog() {
         const targets = root.selectionState.currentSelectedItems()
         advancedContentAnalysisDialogObj.openWithTargets(targets)

@@ -131,9 +131,21 @@ ApplicationWindow {
 }
 )";
 
+/// The shell functions the browser calls on its `host` (Main.qml); counts the calls.
+class BrowserHost final : public QObject {
+  Q_OBJECT
+
+ public:
+  Q_INVOKABLE void openLutImportDialog() { ++import_dialogs; }
+  Q_INVOKABLE void openLutSettings() { ++lut_settings; }
+
+  int              import_dialogs = 0;
+  int              lut_settings   = 0;
+};
+
 /// The browser page in a window over a temporary library and a document target.
 struct BrowserHarness {
-  TemporaryLutLibrary   library{LibraryFiles()};
+  TemporaryLutLibrary   library;
   DocumentTargetSource  source;
   LutLibraryModel       browser;
   LutLibraryController  target;
@@ -144,7 +156,8 @@ struct BrowserHarness {
   QQuickItem*           result = nullptr;
   QStringList           warnings;
 
-  BrowserHarness() {
+  explicit BrowserHarness(std::vector<std::pair<std::string, std::string>> files = LibraryFiles())
+      : library(std::move(files)) {
     browser.setLibrary(library.Service());
     target.setLibrary(library.Service());
     target.SetTargetSource(&source);
@@ -352,6 +365,28 @@ TEST(EditorLutBrowserPanelQmlTest, TileActivationTogglesTheTargetLutOnlyWhenATar
   ASSERT_NE(message, nullptr);
   EXPECT_TRUE(message->isVisible());
   EXPECT_EQ(message->property("text").toString(), h.target.targetMessage());
+  EXPECT_TRUE(h.warnings.isEmpty()) << h.Warnings();
+}
+
+TEST(EditorLutBrowserPanelQmlTest, EmptyLibraryLinksToLutSettings) {
+  BrowserHarness h({});
+  ASSERT_NE(h.panel, nullptr) << h.Warnings();
+  ASSERT_NE(h.result, nullptr) << h.Warnings();
+  BrowserHost host;
+  h.panel->setProperty("host", QVariant::fromValue(static_cast<QObject*>(&host)));
+  ASSERT_TRUE(WaitUntil([&] { return !h.library.Service()->busy(); }, 3000));
+  ProcessEvents(50);
+
+  EXPECT_TRUE(h.Tiles().isEmpty());
+  QQuickItem* settings = h.Find(QStringLiteral("editorLutEmptySettingsButton"));
+  ASSERT_NE(settings, nullptr);
+  EXPECT_TRUE(settings->isVisible());
+  EXPECT_TRUE(h.Find(QStringLiteral("editorLutEmptyImportButton"))->isVisible());
+  ASSERT_TRUE(QMetaObject::invokeMethod(settings, "clicked"));
+  EXPECT_EQ(host.lut_settings, 1);
+  EXPECT_EQ(host.import_dialogs, 0);
+  // Nothing was applied to the target.
+  EXPECT_EQ(h.source.submit_count, 0);
   EXPECT_TRUE(h.warnings.isEmpty()) << h.Warnings();
 }
 

@@ -22,6 +22,9 @@ struct LutPackageArtifact {
 /// One official LUT package listed by the signed feed.
 struct LutPackageDescriptor {
   QString            id;
+  /// Optional display name (1-128 characters, no control characters); empty when
+  /// the feed omits it.
+  QString            name;
   QString            revision;
   quint64            file_count = 0;
   /// Canonical inventory digest (32 raw bytes); see ComputeLutInventoryDigest.

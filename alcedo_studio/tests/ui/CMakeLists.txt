@@ -617,6 +617,40 @@ alcedo_ui_gtest_discover_tests(ShortcutSettingsQmlTest
 )
 alcedo_register_test_target(ShortcutSettingsQmlTest ui)
 
+# LUT library plan L6B: Settings > LUTs on the production SettingDialog and module
+# host with a temporary library root, a counted local signed feed, and a held
+# downloader (feed checks per Settings opening, package actions, folder choices).
+add_executable(LutSettingsQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/lut_settings_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(LutSettingsQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(LutSettingsQmlTest
+    PRIVATE
+        AlbumBackendLib
+        unofficial::ed25519::ed25519
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(LutSettingsQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+alcedo_ui_gtest_discover_tests(LutSettingsQmlTest
+    TEST_PREFIX "LutSettingsQmlTest."
+    PROPERTIES LABELS "workspace_qml;lut_settings"
+)
+alcedo_register_test_target(LutSettingsQmlTest ui)
+
 # Phase 6A: typed adjustment models (no GPU/QML rendering; QSignalSpy drives the
 # debounce timer deterministically via the event loop).
 add_executable(EditorAdjustmentModelTest

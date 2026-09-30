@@ -141,5 +141,32 @@ TEST(LutPackageManifestTest, LutManifestRejectsInvalidPackageFields) {
   EXPECT_FALSE(Verify(SignFeed({})));
 }
 
+TEST(LutPackageManifestTest, OptionalPackageNameIsReadAndValidated) {
+  const QString valid = PackageJson(QStringLiteral("spectral_film_lut"));
+  const QString named =
+      QString(valid).replace(QStringLiteral("\"revision\""),
+                             QStringLiteral("\"name\":\"Spectral Film LUT\",\"revision\""));
+  const LutPackageManifestResult unnamed_result = Verify(SignFeed(valid));
+  ASSERT_TRUE(unnamed_result) << unnamed_result.error.toStdString();
+  EXPECT_TRUE(unnamed_result.manifest->packages.front().name.isEmpty());
+
+  const LutPackageManifestResult named_result = Verify(SignFeed(named));
+  ASSERT_TRUE(named_result) << named_result.error.toStdString();
+  EXPECT_EQ(named_result.manifest->packages.front().name, QStringLiteral("Spectral Film LUT"));
+
+  const QStringList invalid_names = {
+      QStringLiteral("\"name\":\"\","), QStringLiteral("\"name\":\"   \","),
+      QStringLiteral("\"name\":7,"), QStringLiteral("\"name\":\"Tab\\there\",")};  // JSON "\t"
+  for (const QString& field : invalid_names) {
+    const QString package = QString(valid).replace(QStringLiteral("\"revision\""),
+                                                   field + QStringLiteral("\"revision\""));
+    EXPECT_FALSE(Verify(SignFeed(package))) << package.toStdString();
+  }
+  const QString long_name = QString(valid).replace(
+      QStringLiteral("\"revision\""),
+      QStringLiteral("\"name\":\"%1\",\"revision\"").arg(QString(129, QLatin1Char('n'))));
+  EXPECT_FALSE(Verify(SignFeed(long_name)));
+}
+
 }  // namespace
 }  // namespace alcedo::test

@@ -596,6 +596,7 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/WelcomeDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/UpdateNotice.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/UpdatesSettingsPanel.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/LutSettingsPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/CacheSettingsPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/NikonHeRecoveryDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/SemanticGenerationDialog.qml"

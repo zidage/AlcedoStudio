@@ -38,7 +38,8 @@ namespace alcedo::ui {
 
 // ── ApplicationModuleHost ───────────────────────────────────────────────────
 
-ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver observer)
+ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver observer,
+                                             LutServiceFactories lut_services)
     : QObject(parent), lifecycle_observer_(std::move(observer)) {
   alcedo::editor_rhi::RegisterEditorViewportQmlTypes();
   alcedo::ui::RegisterEditorAdjustmentQmlTypes();
@@ -57,16 +58,21 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   updates_ = std::make_unique<alcedo::UpdateService>(*download_service_, this);
   RecordConstruction("UpdateService", updates_.get());
   // Loads the persisted LUT inventory without network access (plan 4.3).
-  lut_library_ = std::make_unique<alcedo::LutLibraryService>(alcedo::LutLibraryServiceOptions{});
+  lut_library_ = std::make_unique<alcedo::LutLibraryService>(
+      lut_services.library_options ? lut_services.library_options()
+                                   : alcedo::LutLibraryServiceOptions{});
   RecordConstruction("LutLibraryService", lut_library_.get());
   lut_library_->Start();
   // Constructing the package service makes no network request; Settings starts
   // the signed feed check (plan L3). Archives use the shared download admission.
   {
     alcedo::LutPackageServiceOptions lut_package_options =
-        alcedo::LutPackageServiceOptions::FromBuildConfiguration();
-    lut_package_options.downloader =
-        std::make_unique<alcedo::DownloadServiceLutArchiveDownloader>(*download_service_);
+        lut_services.package_options ? lut_services.package_options()
+                                     : alcedo::LutPackageServiceOptions::FromBuildConfiguration();
+    if (!lut_package_options.downloader) {
+      lut_package_options.downloader =
+          std::make_unique<alcedo::DownloadServiceLutArchiveDownloader>(*download_service_);
+    }
     lut_packages_ =
         std::make_unique<alcedo::LutPackageService>(std::move(lut_package_options), *lut_library_);
   }

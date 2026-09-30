@@ -43,9 +43,11 @@ endif()
 set(ALCEDO_UPDATE_MANIFEST_URL
     "${ALCEDO_UPDATE_BASE_URL}/v1/${ALCEDO_UPDATE_CHANNEL}/${_alcedo_update_platform}/manifest.json")
 # Signed LUT package feed (docs/lut-package-system.md). It is signed with the
-# update key and has no expiry. The release operator supplies the deployed URL;
-# empty disables LUT package checks and downloads in this build.
-set(ALCEDO_LUT_PACKAGE_FEED_URL ""
+# update key and has no expiry. The application ships no LUTs, so Settings
+# downloads the official packages from this feed. Empty disables LUT package
+# checks and downloads in this build. A build directory configured before this
+# default existed keeps its cached value; pass -DALCEDO_LUT_PACKAGE_FEED_URL=...
+set(ALCEDO_LUT_PACKAGE_FEED_URL "https://static.aoraw.org/luts/v1/manifest.json"
     CACHE STRING "HTTPS URL of the signed LUT package manifest. Empty disables LUT packages.")
 if(NOT "${ALCEDO_LUT_PACKAGE_FEED_URL}" STREQUAL "" AND
    NOT "${ALCEDO_LUT_PACKAGE_FEED_URL}" MATCHES "^https://[^/@]+/.+")
@@ -773,30 +775,14 @@ endif()
 
 include(GNUInstallDirs)
 
-function(alcedo_collect_packaged_luts out_var config_dir)
-    set(_lut_dir "${config_dir}/LUTs")
-    set(_packaged_luts "")
-    if(EXISTS "${_lut_dir}")
-        # Ship the curated film-stock LUT set only. This intentionally skips
-        # spektrafilm and the older generic LUT samples in the source tree.
-        file(GLOB _packaged_luts CONFIGURE_DEPENDS
-            "${_lut_dir}/Agfa_*.cube"
-            "${_lut_dir}/Fuji_*.cube"
-            "${_lut_dir}/Kodak_*.cube"
-        )
-        list(SORT _packaged_luts)
-    endif()
-    set(${out_var} ${_packaged_luts} PARENT_SCOPE)
-endfunction()
-
-function(alcedo_install_packaged_luts config_dir destination)
-    alcedo_collect_packaged_luts(_alcedo_packaged_luts "${config_dir}")
+# LUTs are not part of the application: official LUTs are signed packages that
+# Settings downloads into the user's library (~/.alcedo/luts by default; see
+# docs/lut-package-system.md). An install prefix reused from an older build can
+# still hold the previously bundled LUT folder, so the install removes it.
+function(alcedo_remove_installed_lut_payloads destination)
     install(CODE
         "file(REMOVE_RECURSE \"\${CMAKE_INSTALL_PREFIX}/${destination}\")"
     )
-    if(_alcedo_packaged_luts)
-        install(FILES ${_alcedo_packaged_luts} DESTINATION "${destination}")
-    endif()
 endfunction()
 
 function(alcedo_install_duckdb_extensions destination)
@@ -936,7 +922,7 @@ if(TARGET ${ALCEDO_MAIN_BIN})
         install(DIRECTORY "${_config_dir}/nikon_lens/" DESTINATION "${_bundle_macos_dest}/config/nikon_lens")
         alcedo_install_legal_notices("${_bundle_resources_dest}")
         alcedo_install_demosaicnet_models("${_config_dir}" "${_bundle_macos_dest}")
-        alcedo_install_packaged_luts("${_config_dir}" "${_bundle_macos_dest}/LUTs")
+        alcedo_remove_installed_lut_payloads("${_bundle_macos_dest}/LUTs")
         if(ALCEDO_OPENCL_ENABLED)
             install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/decoders/processor/operators/gpu/opencl_shader/"
                 DESTINATION "${_bundle_macos_dest}/opencl/decoders/processor/operators/gpu/opencl_shader")
@@ -1055,7 +1041,7 @@ if(TARGET ${ALCEDO_MAIN_BIN})
         alcedo_install_legal_notices("${CMAKE_INSTALL_BINDIR}")
         alcedo_install_demosaicnet_models("${_config_dir}" "${CMAKE_INSTALL_BINDIR}")
 
-        alcedo_install_packaged_luts("${_config_dir}" "${CMAKE_INSTALL_BINDIR}/LUTs")
+        alcedo_remove_installed_lut_payloads("${CMAKE_INSTALL_BINDIR}/LUTs")
         if(ALCEDO_OPENCL_ENABLED)
             install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/decoders/processor/operators/gpu/opencl_shader/"
                 DESTINATION "${CMAKE_INSTALL_BINDIR}/opencl/decoders/processor/operators/gpu/opencl_shader")

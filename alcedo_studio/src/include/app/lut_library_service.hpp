@@ -8,6 +8,7 @@
 #include <QString>
 #include <QStringList>
 #include <QUrl>
+#include <QVariantMap>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -87,7 +88,15 @@ class LutLibraryService final : public QObject {
   Q_PROPERTY(QString rootPath READ root_path NOTIFY RootChanged)
   Q_PROPERTY(bool busy READ busy NOTIFY OperationStateChanged)
   Q_PROPERTY(bool inventoryComplete READ inventory_complete NOTIFY InventoryChanged)
+  Q_PROPERTY(int entryCount READ entry_count NOTIFY InventoryChanged)
   Q_PROPERTY(QString lastError READ last_error NOTIFY OperationStateChanged)
+  /// Name of the running operation (OperationName), empty when idle.
+  Q_PROPERTY(QString operation READ operation_name NOTIFY OperationStateChanged)
+  /// True while CancelOperation() can stop the running operation.
+  Q_PROPERTY(bool cancelable READ cancelable NOTIFY OperationStateChanged)
+  /// Source files that a migration kept because they changed after copying
+  /// (from the last completed operation; empty for other operations).
+  Q_PROPERTY(QStringList keptSourcePaths READ kept_source_paths NOTIFY OperationStateChanged)
 
  public:
   enum class Operation {
@@ -158,6 +167,12 @@ class LutLibraryService final : public QObject {
     return publication_->Inventory().Complete();
   }
   [[nodiscard]] auto last_error() const -> QString { return last_error_; }
+  [[nodiscard]] auto entry_count() const -> int { return static_cast<int>(EntryCount()); }
+  [[nodiscard]] auto operation_name() const -> QString;
+  [[nodiscard]] auto cancelable() const -> bool {
+    return operation_ == Operation::kInstallPackage || operation_ == Operation::kMigrateRoot;
+  }
+  [[nodiscard]] auto kept_source_paths() const -> QStringList;
   [[nodiscard]] auto CurrentOperation() const -> Operation { return operation_; }
   [[nodiscard]] auto LastResult() const -> const OperationResult& { return last_result_; }
 
@@ -244,6 +259,13 @@ class LutLibraryService final : public QObject {
   /// Copy the library to an absent or empty @p destination, verify it, switch
   /// the root, then delete only verified, unchanged source files.
   auto             MigrateRoot(const std::filesystem::path& destination) -> Status;
+  /// Check @p folder as the target of UseRoot (@p migrate false) or MigrateRoot
+  /// (@p migrate true) before the user confirms it. Returns an empty string when the
+  /// operation can start, else the reason. The operation checks the folder again on
+  /// its worker; this check only lets Settings show the reason before starting.
+  /// Reads folder status on the calling thread (a few metadata reads, no scan).
+  [[nodiscard]] auto CheckRootChoice(const std::filesystem::path& folder, bool migrate) const
+      -> std::string;
   /// Open the root in the platform file manager. Returns false and sets
   /// lastError when the operating system rejects the request.
   auto             OpenRootDirectory() -> bool;
@@ -255,16 +277,23 @@ class LutLibraryService final : public QObject {
   /// kPersistenceError and `committed_package_id` set; the next Start rebuilds
   /// the inventory from the receipt. kBusy while another operation runs.
   auto             InstallPackage(LutPackageInstallRequest request) -> Status;
-  /// Request cancellation of a running package installation. Returns false when
-  /// no cancelable operation runs. The operation stops at its next cancellation
-  /// point before the receipt commit, or completes if it already committed.
+  /// Request cancellation of a running package installation or root migration.
+  /// Returns false when no cancelable operation runs. An installation stops at its
+  /// next cancellation point before the receipt commit, or completes if it already
+  /// committed. A migration stops before its copied destination is moved into place;
+  /// the current root stays active and the staging copy is removed. After that point
+  /// the migration completes.
   auto             CancelOperation() -> bool;
 
   Q_INVOKABLE bool refresh() { return RefreshInventory() == Status::kOk; }
   Q_INVOKABLE bool openRootDirectory() { return OpenRootDirectory(); }
+  Q_INVOKABLE bool        cancelOperation() { return CancelOperation(); }
+  /// @p paths and @p folder accept native paths and local-file URLs (file dialogs).
   Q_INVOKABLE bool importFiles(const QStringList& paths);
-  Q_INVOKABLE bool useRoot(const QString& path);
-  Q_INVOKABLE bool migrateRoot(const QString& path);
+  Q_INVOKABLE bool        useRoot(const QString& folder);
+  Q_INVOKABLE bool        migrateRoot(const QString& folder);
+  /// CheckRootChoice for QML: `{path: native folder path, error: reason or ""}`.
+  Q_INVOKABLE QVariantMap checkRootChoice(const QString& folder, bool migrate) const;
 
  signals:
   /// A new inventory is published; @p affected_paths lists changed entries.

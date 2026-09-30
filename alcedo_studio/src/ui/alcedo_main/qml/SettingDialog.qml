@@ -42,6 +42,10 @@ Dialog {
     property string pendingAcceleratorBackend: appModules.project.acceleratorBackend
     property string pendingLockedNodeMaskAction: appModules.editorBehavior.lockedNodeMaskAction
     property int requestedCategory: 0
+    // Category indices used by callers outside this dialog.
+    readonly property int updatesCategory: 6
+    readonly property int lutCategory: 8
+    readonly property int aboutCategory: 9
     readonly property bool canCompleteSettings: appModules.interactionPolicy.canRunSemanticGeneration
     readonly property bool acceleratorRestartHintVisible:
         pendingAcceleratorBackend.length > 0
@@ -54,6 +58,10 @@ Dialog {
         if (visible) {
             resetPendingValues()
             currentCategory = requestedCategory
+            // Each Settings opening checks the signed LUT package list once; the
+            // application never checks it at startup (plan L6B).
+            if (appModules.lutPackages)
+                appModules.lutPackages.checkPackages()
         }
     }
 
@@ -142,6 +150,9 @@ Dialog {
         }
         if (currentCategory === 7) {
             return qsTr("Keyboard")
+        }
+        if (currentCategory === lutCategory) {
+            return qsTr("LUTs")
         }
         return qsTr("About")
     }
@@ -345,7 +356,7 @@ Dialog {
                             // delegate-model never completes under an
                             // offscreen test window, so nav items would never
                             // materialize for QML tests (and this list is
-                            // fixed at nine entries, so eager creation is
+                            // fixed at ten entries, so eager creation is
                             // equivalent in production).
                             Instantiator {
                                 model: [
@@ -357,6 +368,7 @@ Dialog {
                                     { label: qsTr("Acceleration"), icon: "qrc:/panel_icons/cpu.svg" },
                                     { label: qsTr("Updates"), icon: "qrc:/panel_icons/update.svg" },
                                     { label: qsTr("Keyboard"), icon: "qrc:/panel_icons/keyboard.svg" },
+                                    { label: qsTr("LUTs"), icon: "qrc:/panel_icons/lut-cube.svg" },
                                     { label: qsTr("About"), icon: "qrc:/panel_icons/aperture.svg" }
                                 ]
 
@@ -408,7 +420,7 @@ Dialog {
                                             Layout.preferredHeight: 8
                                             Layout.alignment: Qt.AlignVCenter
                                             radius: 4
-                                            visible: index === 6
+                                            visible: index === dialog.updatesCategory
                                                      && appModules.updates
                                                      && (appModules.updates.updateDeferred
                                                          || appModules.updates.updateAvailable)
@@ -839,6 +851,24 @@ Dialog {
                                 dividerColor: dialog.dividerColor
                                 panelBorderColor: dialog.panelBorderColor
                                 hoverColor: dialog.hoverColor
+                                dangerColor: dialog.dangerColor
+                                dataFontFamily: dialog.dataFontFamily
+                            }
+                        }
+
+                        ScrollView {
+                            id: lutScroll
+                            objectName: "lutSettingsScroll"
+                            contentWidth: availableWidth
+                            clip: true
+
+                            LutSettingsPanel {
+                                width: lutScroll.availableWidth
+                                library: appModules.lutLibrary
+                                packageService: appModules.lutPackages
+                                textColor: dialog.textColor
+                                mutedTextColor: dialog.mutedTextColor
+                                dividerColor: dialog.dividerColor
                                 dangerColor: dialog.dangerColor
                                 dataFontFamily: dialog.dataFontFamily
                             }

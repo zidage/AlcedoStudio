@@ -62,6 +62,27 @@ auto StatusName(LutPackageStatus status) -> QString {
   return {};
 }
 
+auto ActionName(LutPackageAction action) -> QString {
+  switch (action) {
+    case LutPackageAction::kNone:
+      return {};
+    case LutPackageAction::kInstall:
+      return QStringLiteral("install");
+    case LutPackageAction::kUpdate:
+      return QStringLiteral("update");
+    case LutPackageAction::kRepair:
+      return QStringLiteral("repair");
+    case LutPackageAction::kRetry:
+      return QStringLiteral("retry");
+  }
+  return {};
+}
+
+auto IsTransferStage(LutPackageStatus status) -> bool {
+  return status == LutPackageStatus::kDownloading || status == LutPackageStatus::kVerifying ||
+         status == LutPackageStatus::kInstalling;
+}
+
 /// Expected receipt fields of a verified descriptor; the installation chooses
 /// the content directory.
 auto ExpectedReceipt(const LutPackageDescriptor& descriptor, quint64 sequence)
@@ -144,6 +165,26 @@ auto LutPackageServiceOptions::FromBuildConfiguration() -> LutPackageServiceOpti
 }
 
 // ── Comparison ───────────────────────────────────────────────────────────────
+
+auto LutPackageActionFor(LutPackageStatus status) -> LutPackageAction {
+  switch (status) {
+    case LutPackageStatus::kNotInstalled:
+      return LutPackageAction::kInstall;
+    case LutPackageStatus::kUpdateAvailable:
+      return LutPackageAction::kUpdate;
+    case LutPackageStatus::kRepairRequired:
+      return LutPackageAction::kRepair;
+    case LutPackageStatus::kError:
+      return LutPackageAction::kRetry;
+    case LutPackageStatus::kCurrent:
+    case LutPackageStatus::kChecking:
+    case LutPackageStatus::kDownloading:
+    case LutPackageStatus::kVerifying:
+    case LutPackageStatus::kInstalling:
+      return LutPackageAction::kNone;
+  }
+  return LutPackageAction::kNone;
+}
 
 auto CompareLutPackage(const LutPackageDescriptor& descriptor, const LutLibraryService& library)
     -> LutPackageComparison {
@@ -242,14 +283,23 @@ auto LutPackageService::packages() const -> QVariantList {
     const auto  receipt  = std::find_if(receipts.begin(), receipts.end(), [&](const auto& item) {
       return item.package_id == package.descriptor.id.toStdString();
     });
+    const bool  active   = package.descriptor.id == active_package_id_;
     list.push_back(QVariantMap{
         {QStringLiteral("id"), package.descriptor.id},
+        {QStringLiteral("name"),
+         package.descriptor.name.isEmpty() ? package.descriptor.id : package.descriptor.name},
         {QStringLiteral("revision"), package.descriptor.revision},
         {QStringLiteral("installedRevision"),
          receipt != receipts.end() ? QString::fromStdString(receipt->revision) : QString()},
         {QStringLiteral("fileCount"), QVariant::fromValue(package.descriptor.file_count)},
+        {QStringLiteral("installedFileCount"),
+         QVariant::fromValue(package.comparison.local_file_count)},
         {QStringLiteral("archiveBytes"), QVariant::fromValue(package.descriptor.artifact.size)},
         {QStringLiteral("status"), StatusName(package.status)},
+        {QStringLiteral("action"),
+         active || checking_ ? QString() : ActionName(LutPackageActionFor(package.status))},
+        {QStringLiteral("busy"), active || IsTransferStage(package.status)},
+        {QStringLiteral("cancelable"), active},
         {QStringLiteral("localVerificationComplete"),
          package.comparison.local_verification_complete},
         {QStringLiteral("progress"), package.progress},

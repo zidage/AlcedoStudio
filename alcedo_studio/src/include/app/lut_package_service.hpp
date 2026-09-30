@@ -121,6 +121,13 @@ struct LutPackageComparison {
   bool             local_verification_complete = false;
 };
 
+/// The one package action Settings offers for a package row.
+enum class LutPackageAction { kNone, kInstall, kUpdate, kRepair, kRetry };
+
+/// Action offered for a package in @p status. Current, Checking, and the transfer
+/// stages offer none; Error offers Retry, which starts the same installation again.
+[[nodiscard]] auto      LutPackageActionFor(LutPackageStatus status) -> LutPackageAction;
+
 /// Compare @p descriptor with the installed package, using only the published
 /// inventory of @p library (no file is read or hashed).
 ///
@@ -172,6 +179,11 @@ class LutPackageService final : public QObject {
   [[nodiscard]] auto checking() const -> bool { return checking_; }
   [[nodiscard]] auto checked() const -> bool { return !feed_manifest_.isEmpty(); }
   [[nodiscard]] auto last_error() const -> QString { return last_error_; }
+  /// One map per listed package for Settings: `id`, `name` (feed name, else the ID),
+  /// `revision`, `installedRevision`, `fileCount`, `installedFileCount`, `archiveBytes`,
+  /// `status` (LutPackageStatus name), `action` ("", "install", "update", "repair",
+  /// "retry"), `busy` (a transfer stage runs), `cancelable`, `localVerificationComplete`,
+  /// `progress` (0-1, download), and `error`.
   [[nodiscard]] auto packages() const -> QVariantList;
   /// Scoped const read of one package; nullptr when the feed does not list it.
   [[nodiscard]] auto Package(const QString& package_id) const -> const PackageState*;

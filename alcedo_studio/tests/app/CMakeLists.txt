@@ -42,6 +42,18 @@ gtest_discover_tests(LutPackageServiceTest TEST_PREFIX "LutPackageServiceTest."
     PROPERTIES LABELS "ci_core_flow")
 alcedo_register_test_target(LutPackageServiceTest app ci_core)
 
+# Live checks of the deployed LUT feed (network, aria2c). Every case skips unless
+# ALCEDO_LUT_LIVE_FEED_URL and ALCEDO_ARIA2C_BINARY are set.
+add_executable(LutPackageLiveFeedTest
+    ${ALCEDO_TEST_ROOT}/app/lut_package_live_feed_test.cpp
+    ${ALCEDO_TEST_ROOT}/app/download_service_test_main.cpp)
+target_include_directories(LutPackageLiveFeedTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(LutPackageLiveFeedTest PRIVATE LutPackageService unofficial::ed25519::ed25519
+    GTest::gtest Qt6::Test)
+gtest_discover_tests(LutPackageLiveFeedTest TEST_PREFIX "LutPackageLiveFeedTest."
+    PROPERTIES LABELS "live_network")
+alcedo_register_test_target(LutPackageLiveFeedTest app)
+
 add_executable(DownloadServiceFakeAria2
     ${ALCEDO_TEST_ROOT}/app/download_service_fake_aria2.cpp)
 target_link_libraries(DownloadServiceFakeAria2 PRIVATE Qt6::Core)
