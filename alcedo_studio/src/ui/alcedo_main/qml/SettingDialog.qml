@@ -870,7 +870,6 @@ Dialog {
                                 mutedTextColor: dialog.mutedTextColor
                                 dividerColor: dialog.dividerColor
                                 dangerColor: dialog.dangerColor
-                                dataFontFamily: dialog.dataFontFamily
                             }
                         }
 

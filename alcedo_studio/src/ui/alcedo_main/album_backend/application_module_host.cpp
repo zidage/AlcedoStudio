@@ -32,6 +32,7 @@
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
 #include "ui/alcedo_main/album_backend/thumbnail_image_provider.hpp"
 #include "ui/alcedo_main/album_backend/mask_thumbnail_image_provider.hpp"
+#include "ui/alcedo_main/album_backend/system_icon_image_provider.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
 
 namespace alcedo::ui {
@@ -562,6 +563,8 @@ void ApplicationModuleHost::AttachQmlEngine(QQmlEngine* engine) {
 
   engine->addImageProvider(QString::fromUtf8(kMaskThumbnailImageProviderId),
                            new MaskThumbnailImageProvider(SharedMaskThumbnailImageStore()));
+  engine->addImageProvider(QString::fromUtf8(kSystemIconImageProviderId),
+                           new SystemIconImageProvider());
 
   if (library_ == nullptr) {
     return;

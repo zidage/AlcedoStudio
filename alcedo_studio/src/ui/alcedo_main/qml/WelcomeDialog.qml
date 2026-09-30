@@ -798,69 +798,14 @@ Dialog {
                                     font.weight: 700
                                 }
 
-                                RowLayout {
+                                FolderPathField {
                                     Layout.fillWidth: true
-                                    spacing: 16
-
-                                    Rectangle {
-                                        id: storageLocationField
-                                        Layout.fillWidth: true
-                                        Layout.preferredHeight: Math.max(56, storageLocationLabel.implicitHeight
-                                                                         + appTheme.spaceMd)
-                                        radius: 10
-                                        color: Qt.rgba(1, 1, 1, 0.10)
-                                        border.width: 1
-                                        border.color: Qt.rgba(dialog.textColor.r, dialog.textColor.g, dialog.textColor.b, 0.12)
-
-                                        Label {
-                                            id: storageLocationLabel
-                                            anchors.fill: parent
-                                            anchors.leftMargin: 16
-                                            anchors.rightMargin: 16
-                                            text: dialog.storageLocation.length > 0
-                                                  ? dialog.storageLocation
-                                                  : qsTr("Select a parent folder...")
-                                            wrapMode: Text.Wrap
-                                            verticalAlignment: Text.AlignVCenter
-                                            color: dialog.storageLocation.length > 0
-                                                   ? dialog.textColor
-                                                   : dialog.mutedTextColor
-                                            font.family: dialog.dataFontFamily
-                                            font.pixelSize: 19
-                                        }
-                                    }
-
-                                    Rectangle {
-                                        id: browseButton
-                                        Layout.preferredWidth: 56
-                                        Layout.preferredHeight: 56
-                                        radius: 10
-                                        color: browseMouse.pressed
-                                               ? Qt.rgba(1, 1, 1, 0.06)
-                                               : (browseMouse.containsMouse
-                                                  ? Qt.rgba(1, 1, 1, 0.12)
-                                                  : Qt.rgba(1, 1, 1, 0.07))
-                                        border.width: 1
-                                        border.color: Qt.rgba(dialog.textColor.r, dialog.textColor.g, dialog.textColor.b, 0.14)
-
-                                        Image {
-                                            anchors.centerIn: parent
-                                            width: 24
-                                            height: 24
-                                            source: "qrc:/panel_icons/folder-open.svg"
-                                            sourceSize.width: 24
-                                            sourceSize.height: 24
-                                            asynchronous: true
-                                        }
-
-                                        MouseArea {
-                                            id: browseMouse
-                                            anchors.fill: parent
-                                            hoverEnabled: true
-                                            cursorShape: Qt.PointingHandCursor
-                                            onClicked: projectFolderDialog.open()
-                                        }
-                                    }
+                                    path: dialog.storageLocation
+                                    placeholderText: qsTr("Select a parent folder...")
+                                    textColor: dialog.textColor
+                                    mutedTextColor: dialog.mutedTextColor
+                                    pathFontFamily: dialog.dataFontFamily
+                                    onBrowseRequested: projectFolderDialog.open()
                                 }
                             }
 

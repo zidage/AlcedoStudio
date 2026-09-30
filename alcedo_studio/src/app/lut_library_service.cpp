@@ -749,6 +749,17 @@ auto LutLibraryService::operation_name() const -> QString {
   return {};
 }
 
+auto LutLibraryService::film_simulation_count() const -> int {
+  int count = 0;
+  for (const LutLibraryEntry& entry : publication_->Inventory().entries) {
+    if (entry.header_error == LutHeaderError::kNone && entry.header.metadata &&
+        entry.header.metadata->category == LutCategory::kFilmSimulation) {
+      ++count;
+    }
+  }
+  return count;
+}
+
 auto LutLibraryService::kept_source_paths() const -> QStringList {
   return ToQStringList(last_result_.kept_source_paths);
 }
@@ -774,6 +785,22 @@ auto LutLibraryService::checkRootChoice(const QString& folder, bool migrate) con
   const fs::path path = FolderFromQml(folder);
   return {{QStringLiteral("path"),
            path.empty() ? QString() : QDir::toNativeSeparators(ToQString(NormalizedRoot(path)))},
+          {QStringLiteral("error"), QString::fromStdString(CheckRootChoice(path, migrate))}};
+}
+
+auto LutLibraryService::RootChangeMigrates(const fs::path& folder) const -> bool {
+  const fs::path  target = NormalizedRoot(folder);
+  std::error_code error;
+  if (!fs::exists(target, error)) return true;
+  return fs::is_directory(target, error) && fs::is_empty(target, error) && !error;
+}
+
+auto LutLibraryService::checkRootChange(const QString& folder) const -> QVariantMap {
+  const fs::path path    = FolderFromQml(folder);
+  const bool     migrate = !path.empty() && RootChangeMigrates(path);
+  return {{QStringLiteral("path"),
+           path.empty() ? QString() : QDir::toNativeSeparators(ToQString(NormalizedRoot(path)))},
+          {QStringLiteral("migrate"), migrate},
           {QStringLiteral("error"), QString::fromStdString(CheckRootChoice(path, migrate))}};
 }
 

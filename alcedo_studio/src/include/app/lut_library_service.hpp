@@ -89,6 +89,8 @@ class LutLibraryService final : public QObject {
   Q_PROPERTY(bool busy READ busy NOTIFY OperationStateChanged)
   Q_PROPERTY(bool inventoryComplete READ inventory_complete NOTIFY InventoryChanged)
   Q_PROPERTY(int entryCount READ entry_count NOTIFY InventoryChanged)
+  /// Entries whose metadata declares the film simulation category.
+  Q_PROPERTY(int filmSimulationCount READ film_simulation_count NOTIFY InventoryChanged)
   Q_PROPERTY(QString lastError READ last_error NOTIFY OperationStateChanged)
   /// Name of the running operation (OperationName), empty when idle.
   Q_PROPERTY(QString operation READ operation_name NOTIFY OperationStateChanged)
@@ -168,6 +170,7 @@ class LutLibraryService final : public QObject {
   }
   [[nodiscard]] auto last_error() const -> QString { return last_error_; }
   [[nodiscard]] auto entry_count() const -> int { return static_cast<int>(EntryCount()); }
+  [[nodiscard]] auto film_simulation_count() const -> int;
   [[nodiscard]] auto operation_name() const -> QString;
   [[nodiscard]] auto cancelable() const -> bool {
     return operation_ == Operation::kInstallPackage || operation_ == Operation::kMigrateRoot;
@@ -266,6 +269,10 @@ class LutLibraryService final : public QObject {
   /// Reads folder status on the calling thread (a few metadata reads, no scan).
   [[nodiscard]] auto CheckRootChoice(const std::filesystem::path& folder, bool migrate) const
       -> std::string;
+  /// Settings offers one "change folder" choice: an absent or empty @p folder receives
+  /// the library (MigrateRoot, returns true); a folder that already holds files becomes
+  /// the library in place (UseRoot, returns false) and the current files stay where they are.
+  [[nodiscard]] auto RootChangeMigrates(const std::filesystem::path& folder) const -> bool;
   /// Open the root in the platform file manager. Returns false and sets
   /// lastError when the operating system rejects the request.
   auto             OpenRootDirectory() -> bool;
@@ -294,6 +301,9 @@ class LutLibraryService final : public QObject {
   Q_INVOKABLE bool        migrateRoot(const QString& folder);
   /// CheckRootChoice for QML: `{path: native folder path, error: reason or ""}`.
   Q_INVOKABLE QVariantMap checkRootChoice(const QString& folder, bool migrate) const;
+  /// RootChangeMigrates and CheckRootChoice for QML:
+  /// `{path: native folder path, migrate: bool, error: reason or ""}`.
+  Q_INVOKABLE QVariantMap checkRootChange(const QString& folder) const;
 
  signals:
   /// A new inventory is published; @p affected_paths lists changed entries.

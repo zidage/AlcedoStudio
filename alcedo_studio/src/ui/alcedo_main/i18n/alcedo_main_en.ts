@@ -4631,6 +4631,33 @@ Create a new layer above it and draw the Mask there?</source>
     </message>
 </context>
 <context>
+    <name>LutSettingsPanel</name>
+    <message numerus="yes">
+        <location filename="../qml/LutSettingsPanel.qml" line="+1"/>
+        <source>The folder already holds files, so its LUTs become the library. The %n LUT(s) in the current folder are not moved and stay where they are.</source>
+        <translation>
+            <numerusform>The folder already holds files, so its LUTs become the library. The %n LUT in the current folder is not moved and stays where it is.</numerusform>
+            <numerusform>The folder already holds files, so its LUTs become the library. The %n LUTs in the current folder are not moved and stay where they are.</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <location line="+1"/>
+        <source>%n LUT(s)</source>
+        <translation>
+            <numerusform>%n LUT</numerusform>
+            <numerusform>%n LUTs</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <location line="+1"/>
+        <source>%n file(s) changed after copying and stayed in the previous folder: %1</source>
+        <translation>
+            <numerusform>%n file changed after copying and stayed in the previous folder: %1</numerusform>
+            <numerusform>%n files changed after copying and stayed in the previous folder: %1</numerusform>
+        </translation>
+    </message>
+</context>
+<context>
     <name>Main</name>
     <message>
         <location filename="../qml/Main.qml" line="+48"/>

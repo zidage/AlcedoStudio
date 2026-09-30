@@ -5162,7 +5162,7 @@ Create a new layer above it and draw the Mask there?</source>
     </message>
     <message>
         <location line="+1"/>
-        <source>Official LUT packages</source>
+        <source>Official LUT Packages</source>
         <translation>官方 LUT 包</translation>
     </message>
     <message>
@@ -5222,6 +5222,78 @@ Create a new layer above it and draw the Mask there?</source>
         <translation>
             <numerusform>%n 个文件在复制后被修改，已保留在原文件夹中：%1</numerusform>
         </translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>The folder that holds every LUT available for color grading.</source>
+        <translation>存放所有可用于调色的 LUT 的文件夹。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Change folder…</source>
+        <translation>更换文件夹…</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Choose a folder for the LUT library</source>
+        <translation>为 LUT 库选择文件夹</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>The folder is empty, so the library moves into it. Every file is copied and verified first. The current folder stays in use until the copy is complete; then the copied files are removed from it.</source>
+        <translation>该文件夹为空，LUT 库将移动到这里。所有文件会先复制并校验；复制完成前继续使用当前文件夹，之后会从当前文件夹删除已复制的文件。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Total</source>
+        <translation>总计</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Categories</source>
+        <translation>分类构成</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Film simulation</source>
+        <translation>胶片模拟</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Custom</source>
+        <translation>用户自定义</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>%1 → %2</source>
+        <translation>%1 → %2</translation>
+    </message>
+    <message numerus="yes">
+        <location line="+1"/>
+        <source>The folder already holds files, so its LUTs become the library. The %n LUT(s) in the current folder are not moved and stay where they are.</source>
+        <translation>
+            <numerusform>该文件夹中已有文件，其中的 LUT 将成为 LUT 库。当前文件夹中的 %n 个 LUT 不会被移动，仍保留在原处。</numerusform>
+        </translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Open in Finder</source>
+        <translation>在访达中打开</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Open in File Explorer</source>
+        <translation>在文件资源管理器中打开</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Based on %1</source>
+        <translation>基于 %1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>View the original project on GitHub</source>
+        <translation>在 GitHub 上查看原项目</translation>
     </message>
 </context>
 <context>

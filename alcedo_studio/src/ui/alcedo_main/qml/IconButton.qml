@@ -36,6 +36,8 @@ Item {
     property bool bordered: true
     property color borderColor: Qt.rgba(1, 1, 1, 0.12)
     property string tooltipText: ""
+    // Turns the icon while an operation runs (for example a refresh arrow).
+    property bool spinning: false
     signal clicked()
 
     implicitWidth: control.buttonWidth
@@ -83,6 +85,7 @@ Item {
     }
 
     ColorImage {
+        id: iconImage
         anchors.centerIn: parent
         width: control.iconSize
         height: control.iconSize
@@ -94,6 +97,18 @@ Item {
         visible: control.iconSrc.length > 0
         color: control.enabled ? control.iconColor : appTheme.textMutedColor
         opacity: control.enabled ? 1.0 : 0.55
+
+        RotationAnimator on rotation {
+            running: control.spinning && !appTheme.reduceMotion
+            from: 0
+            to: 360
+            duration: 900
+            loops: Animation.Infinite
+            onRunningChanged: {
+                if (!running)
+                    iconImage.rotation = 0
+            }
+        }
     }
 
     MouseArea {

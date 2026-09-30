@@ -30,6 +30,7 @@
 #include <QUrl>
 #include <array>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -422,8 +423,7 @@ TEST(LutSettingsQmlTest, FolderOpenFailureAndFolderChoiceAreVisibleBeforeAnyChan
   // Choosing the current root is refused before anything starts.
   QObject*      panel    = harness.item(QStringLiteral("lutSettingsPanel"));
   const QString root_url = alcedo::LutLibraryDirectoryUrl(harness.root_).toString();
-  ASSERT_TRUE(QMetaObject::invokeMethod(panel, "reviewFolder", Q_ARG(QVariant, root_url),
-                                        Q_ARG(QVariant, true)));
+  ASSERT_TRUE(QMetaObject::invokeMethod(panel, "reviewFolder", Q_ARG(QVariant, root_url)));
   ProcessEvents();
   EXPECT_TRUE(harness.item(QStringLiteral("lutSettingsFolderConfirmation"))->isVisible());
   EXPECT_TRUE(harness.item(QStringLiteral("lutSettingsPendingError"))->isVisible());
@@ -435,9 +435,11 @@ TEST(LutSettingsQmlTest, FolderOpenFailureAndFolderChoiceAreVisibleBeforeAnyChan
   const fs::path destination = harness.base_ / "moved library";
   const QString  destination_url =
       QUrl::fromLocalFile(QString::fromStdWString(destination.wstring())).toString();
-  ASSERT_TRUE(QMetaObject::invokeMethod(panel, "reviewFolder", Q_ARG(QVariant, destination_url),
-                                        Q_ARG(QVariant, true)));
+  ASSERT_TRUE(QMetaObject::invokeMethod(panel, "reviewFolder", Q_ARG(QVariant, destination_url)));
   ProcessEvents();
+  EXPECT_TRUE(panel->property("pendingMigrate").toBool());
+  EXPECT_EQ(Text(harness.item(QStringLiteral("lutSettingsConfirmFolderButton"))),
+            PanelText("Move library"));
   EXPECT_FALSE(harness.item(QStringLiteral("lutSettingsPendingError"))->isVisible());
   EXPECT_TRUE(Text(harness.item(QStringLiteral("lutSettingsPendingPath")))
                   .contains(QStringLiteral("moved library")));
@@ -450,6 +452,39 @@ TEST(LutSettingsQmlTest, FolderOpenFailureAndFolderChoiceAreVisibleBeforeAnyChan
   EXPECT_TRUE(Text(harness.item(QStringLiteral("lutSettingsRootPath")))
                   .contains(QStringLiteral("moved library")));
   EXPECT_FALSE(harness.item(QStringLiteral("lutSettingsFolderConfirmation"))->isVisible());
+  EXPECT_TRUE(harness.warnings_.isEmpty()) << harness.warnings_.join('\n').toStdString();
+}
+
+TEST(LutSettingsQmlTest, ChangeFolderSwitchesToAFolderThatAlreadyHoldsFiles) {
+  LutSettingsHarness harness;
+  ASSERT_NE(harness.dialog(), nullptr) << harness.warnings_.join('\n').toStdString();
+  harness.Open(kLutCategory);
+  ASSERT_TRUE(harness.WaitForCheck());
+
+  // One "Change folder" button replaces the separate use/move buttons.
+  EXPECT_NE(harness.item(QStringLiteral("lutSettingsChangeFolderButton")), nullptr);
+  EXPECT_EQ(harness.item(QStringLiteral("lutSettingsUseFolderButton")), nullptr);
+  EXPECT_EQ(harness.item(QStringLiteral("lutSettingsMoveButton")), nullptr);
+  EXPECT_EQ(Text(harness.item(QStringLiteral("lutSettingsTotalCount"))), QStringLiteral("0"));
+
+  // A folder that holds files becomes the library in place; nothing is moved into it.
+  const fs::path existing = harness.base_ / "existing luts";
+  fs::create_directories(existing);
+  std::ofstream(existing / "notes.txt") << "kept";
+  QObject*      panel = harness.item(QStringLiteral("lutSettingsPanel"));
+  const QString url = QUrl::fromLocalFile(QString::fromStdWString(existing.wstring())).toString();
+  ASSERT_TRUE(QMetaObject::invokeMethod(panel, "reviewFolder", Q_ARG(QVariant, url)));
+  ProcessEvents();
+  EXPECT_FALSE(panel->property("pendingMigrate").toBool());
+  EXPECT_FALSE(harness.item(QStringLiteral("lutSettingsPendingError"))->isVisible());
+  EXPECT_TRUE(harness.item(QStringLiteral("lutSettingsPendingDescription"))->isVisible());
+  EXPECT_EQ(Text(harness.item(QStringLiteral("lutSettingsConfirmFolderButton"))),
+            PanelText("Use folder"));
+
+  LutSettingsHarness::Press(harness.item(QStringLiteral("lutSettingsConfirmFolderButton")));
+  ASSERT_TRUE(WaitUntil([&] { return !harness.library()->busy(); }));
+  EXPECT_EQ(harness.library()->Root(), existing);
+  EXPECT_TRUE(fs::exists(harness.root_));
   EXPECT_TRUE(harness.warnings_.isEmpty()) << harness.warnings_.join('\n').toStdString();
 }
 
