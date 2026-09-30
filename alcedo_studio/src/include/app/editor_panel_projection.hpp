@@ -19,6 +19,7 @@
 #include "edit/operators/models/color_wheel_model.hpp"
 #include "edit/operators/models/curve_model.hpp"
 #include "edit/operators/models/hls_model.hpp"
+#include "edit/operators/models/lut_reference.hpp"
 
 namespace alcedo {
 
@@ -37,8 +38,12 @@ struct EditorPanelNestedScalarValue {
   float       value = 0.0f;
 };
 
+/// The LMT association of the exact Color Grade: user intent only. Whether the referenced
+/// file is currently available is resolved by the LUT library, not by the document.
 struct EditorPanelLutValue {
-  std::string cube_path;
+  LutReference reference;
+  std::string  display_name;
+  float        strength = 1.0f;
 };
 
 struct EditorPanelCurveValue {

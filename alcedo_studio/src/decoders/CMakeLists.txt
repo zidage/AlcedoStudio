@@ -79,7 +79,7 @@ endif()
 # backend. The legacy stage pipeline is archived (G10.9).
 def_cuda_library(EditPipeline
     SOURCES ${ALCEDO_SRC_ROOT}/edit/pipeline/pipeline_executor.cpp
-    PUBLIC_DEPS ImageBuffer EditGraph
+    PUBLIC_DEPS ImageBuffer EditGraph EditLutResources
     PRIVATE_DEPS ThreadPool CudaDriverRequirements AcceleratorBackend
 )
 

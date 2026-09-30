@@ -20,6 +20,7 @@ alcedo_register_test_target(LutPackageManifestTest app ci_core)
 
 add_executable(LutLibraryServiceTest
     ${ALCEDO_TEST_ROOT}/app/lut_library_service_test.cpp
+    ${ALCEDO_TEST_ROOT}/app/lut_resource_resolution_test.cpp
     ${ALCEDO_TEST_ROOT}/app/download_service_test_main.cpp)
 target_include_directories(LutLibraryServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(LutLibraryServiceTest PRIVATE LutLibraryService GTest::gtest Qt6::Test)

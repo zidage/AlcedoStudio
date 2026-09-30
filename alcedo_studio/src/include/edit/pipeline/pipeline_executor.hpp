@@ -11,6 +11,7 @@
 #include "edit/graph/pipeline_graph_snapshot.hpp"
 #include "edit/pipeline/pipeline_accelerator.hpp"
 #include "edit/runtime/executor_role.hpp"
+#include "edit/runtime/lut_resource_resolver.hpp"
 #include "edit/runtime/pipeline_apply_request.hpp"
 #include "image/image_buffer.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
@@ -66,6 +67,9 @@ class PipelineExecutor {
 
   IFrameSink*                  frame_sink_                   = nullptr;
 
+  /// Resolver every renderer of this executor uses for Color Grade LUT references.
+  std::shared_ptr<const LutResourceResolver> lut_resources_;
+
   /// Renderers of one backend, one per served role; each is created by its first Apply.
   template <class RendererType>
   struct RoleRenderers {
@@ -83,8 +87,14 @@ class PipelineExecutor {
 #endif
 
  public:
-  /// Executor that serves only @p role. Resolves the Auto accelerator preference.
-  explicit PipelineExecutor(ExecutorRole role);
+  /**
+   * @brief Executor that serves only @p role. Resolves the Auto accelerator preference.
+   * @param lut_resources Resolver for Color Grade LUT references, handed to every renderer this
+   *        executor creates. The application passes the LUT library; null selects the
+   *        file-path-only DefaultLutResourceResolver.
+   */
+  explicit PipelineExecutor(ExecutorRole                               role,
+                            std::shared_ptr<const LutResourceResolver> lut_resources = nullptr);
 
   [[nodiscard]] auto Serves(ExecutorRole role) const -> bool {
     return role == ExecutorRole::Interactive ? serves_interactive_ : serves_batch_;

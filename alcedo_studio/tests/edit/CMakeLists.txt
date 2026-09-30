@@ -181,6 +181,7 @@ add_executable(GpuDagModelGraphTest
   ${ALCEDO_TEST_ROOT}/edit/graph/pipeline_document_freeze_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/pipeline_graph_snapshot_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/json_roundtrip_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/graph/lmt_model_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/color_grade_mask_model_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/header_hygiene_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/develop_color_transform_test.cpp
@@ -352,6 +353,7 @@ if(ALCEDO_CUDA_ENABLED)
   add_executable(GpuDagCudaPrimaryGradeTest
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_primary_grade_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_multi_grade_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_lut_resource_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_scene_work_pair_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_preview_gpu_timing_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_preview_interactive_baseline_test.cpp)
@@ -449,7 +451,8 @@ if(ALCEDO_METAL_ENABLED)
     ${ALCEDO_TEST_ROOT}/edit/runtime/metal_grade_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/metal_llf_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/metal_mask_test.cpp
-    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_multi_grade_test.cpp)
+    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_multi_grade_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_lut_resource_test.cpp)
   target_include_directories(GpuDagMetalGradeTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagMetalGradeTest PRIVATE
     GTest::gtest_main EditRuntimeMetal EditInput RawProcessorOp MetalDemosaicNetEntry)
@@ -528,7 +531,8 @@ if(ALCEDO_OPENCL_ENABLED)
   add_executable(GpuDagOpenClGradeTest
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_grade_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_mask_test.cpp
-    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_multi_grade_test.cpp)
+    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_multi_grade_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_lut_resource_test.cpp)
   target_include_directories(GpuDagOpenClGradeTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagOpenClGradeTest PRIVATE
     GTest::gtest_main EditRuntimeOpenCl EditInput OpenClProgramLibrary)

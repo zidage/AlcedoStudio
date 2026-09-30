@@ -73,6 +73,9 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   RecordConstruction("LutPackageService", lut_packages_.get());
   project_ = std::make_unique<ProjectModule>(this);
   RecordConstruction("ProjectModule", project_.get());
+  // Every project's editor, thumbnail, and export executors resolve LUT references through
+  // the library (plan L4).
+  project_->SetLutResources(lut_library_->Resources());
   library_ = std::make_unique<LibraryModule>(project_.get(), this);
   RecordConstruction("LibraryModule", library_.get());
   folders_ =
@@ -216,6 +219,10 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   editor_session_ =
       std::make_unique<EditorSessionController>(editor_session_runtime_->service.get(), this);
   RecordConstruction("EditorSessionController", editor_session_.get());
+  // A published inventory or root can change which LUT bytes the open image renders.
+  QObject::connect(lut_library_.get(), &alcedo::LutLibraryService::InventoryChanged,
+                   editor_session_.get(),
+                   [session = editor_session_.get()] { session->NotifyLutResourcesChanged(); });
   editor_session_->SetInteractionPolicy(interaction_policy_.get());
   editor_session_->SetAlbumCatalog(library_.get());
   editor_session_->SetImageExifReader([this](uint image_id) -> alcedo::EditorImageExifDisplay {

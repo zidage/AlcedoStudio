@@ -7,7 +7,9 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <mutex>
 #include <optional>
+#include <shared_mutex>
 #include <stop_token>
 #include <string>
 #include <string_view>
@@ -53,17 +55,19 @@ struct LutPackageInstallOutcome {
   bool                     committed = false;
   /// Root-relative path of the new active content directory.
   std::string              content_directory;
-  /// Root-relative paths of user-declared files moved out of retired content.
+  /// Root-relative paths of user-declared files moved out of content left by an earlier
+  /// interrupted installation.
   std::vector<std::string> relocated_user_paths;
-  /// Retired content that could not be removed; the next installation or
-  /// start removes it again.
-  std::vector<std::string> retirement_problems;
 };
 
 /// Steps with real file-system effects that a test can replace.
 struct LutPackageInstallSteps {
   std::function<std::string(const std::filesystem::path& root, const LutPackageReceipt&)>
       write_receipt = WriteLutPackageReceiptFile;
+  /// Lock held while inactive package content is removed, so no LUT resource read sees
+  /// a file disappear. The library passes LutLibraryPublication::LockContentForRemoval;
+  /// empty means no concurrent reader exists.
+  std::function<std::unique_lock<std::shared_mutex>()> lock_content_for_removal;
 };
 
 /// Result of reading and verifying an archive's entries against its descriptor.
@@ -92,12 +96,13 @@ struct LutPackageExtraction {
 /// Verify, extract, and activate one downloaded package in the library at @p root.
 ///
 /// Order: archive size and SHA-256 check -> retire content left by an earlier
-/// interrupted installation -> extract into a new `packages/<id>/content/<name>`
-/// directory -> verify -> store the feed evidence -> replace the receipt (the
-/// commit point) -> retire the previous content. Before the commit point every
-/// failure or cancellation removes the new directory and keeps the previous
-/// receipt and content active. After it, the installation always completes;
-/// retirement problems are reported, not treated as failures.
+/// interrupted installation (under steps.lock_content_for_removal) -> extract into a
+/// new `packages/<id>/content/<name>` directory -> verify -> store the feed evidence ->
+/// replace the receipt (the commit point). Before the commit point every failure or
+/// cancellation removes the new directory and keeps the previous receipt and content
+/// active. The previous content stays in place after the commit: renders may still
+/// resolve to it until the caller publishes the new inventory, so the caller retires it
+/// afterwards with RetireInactiveLutPackageContent under its content lock.
 /// The other packages and loose user files are never touched. @p on_stage runs on
 /// the calling thread. Blocks; must not run on the GUI thread.
 [[nodiscard]] auto InstallLutPackageArchive(

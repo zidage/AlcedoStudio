@@ -206,7 +206,8 @@ TEST(EditorPanelProjectionTest, ProjectsToneLookLutRawOdtAndGeometryFromExplicit
   EXPECT_EQ(lut->source.adjustment_instance_id.Value(), "grade.primary.lmt");
   const auto* lut_value = std::get_if<EditorPanelLutValue>(&lut->value);
   ASSERT_NE(lut_value, nullptr);
-  EXPECT_EQ(lut_value->cube_path, "D:/luts/look.cube");
+  EXPECT_EQ(lut_value->reference, LutReference{FileLutReference{"D:/luts/look.cube"}});
+  EXPECT_FLOAT_EQ(lut_value->strength, 1.0f);
 
   const auto* curve = FindField(projection, "curve");
   ASSERT_NE(curve, nullptr);

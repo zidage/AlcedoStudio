@@ -41,9 +41,10 @@ struct LutCatalog {
 
 /// Build the list from the library's published inventory. Without a library the
 /// list holds only the None row. A current path that no row matches exactly is
-/// shown as a missing row; file names are never matched across folders.
-auto BuildCatalog(const alcedo::LutLibraryService* library, const std::string& current_lut_path)
-    -> LutCatalog;
+/// shown as a missing row named @p current_lut_name (or the file name when empty);
+/// file names are never matched across folders.
+auto BuildCatalog(const alcedo::LutLibraryService* library, const std::string& current_lut_path,
+                  const std::string& current_lut_name = {}) -> LutCatalog;
 /// Index of the row whose path equals @p lut_path exactly, 0 for an empty path, else -1.
 auto FindEntryIndexForPath(const LutCatalog& catalog, const std::string& lut_path) -> int;
 auto FormatDirectoryDisplayText(const std::filesystem::path& directory) -> QString;

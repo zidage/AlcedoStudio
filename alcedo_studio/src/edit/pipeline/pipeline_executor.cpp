@@ -28,13 +28,15 @@ namespace {
 /** @brief Render on the renderer of the request role; create it on first use. */
 template <class RendererType, class Renderers>
 auto ApplyOnRoleRenderer(Renderers& renderers, const PipelineGraphSnapshot& snapshot,
-                         const std::shared_ptr<ImageBuffer>& input,
-                         const PipelineApplyRequest&         request)
+                         const std::shared_ptr<ImageBuffer>&               input,
+                         const PipelineApplyRequest&                       request,
+                         const std::shared_ptr<const LutResourceResolver>& lut_resources)
     -> std::shared_ptr<ImageBuffer> {
   auto& renderer =
       request.role == ExecutorRole::Interactive ? renderers.interactive : renderers.batch;
   if (!renderer) {
-    renderer = std::make_shared<RendererType>(request.role);
+    renderer = std::make_shared<RendererType>(request.role, PreparedSourceCache::UnpackFn{},
+                                              lut_resources);
   }
   return renderer->Render(snapshot, input, request);
 }
@@ -52,10 +54,12 @@ void ReleaseRoleRenderers(Renderers& renderers) {
 
 }  // namespace
 
-PipelineExecutor::PipelineExecutor(ExecutorRole role)
+PipelineExecutor::PipelineExecutor(ExecutorRole                               role,
+                                   std::shared_ptr<const LutResourceResolver> lut_resources)
     : serves_interactive_(role == ExecutorRole::Interactive),
       serves_batch_(role == ExecutorRole::Batch),
-      resolved_accelerator_backend_(alcedo::ResolveAcceleratorBackend(accelerator_preference_)) {}
+      resolved_accelerator_backend_(alcedo::ResolveAcceleratorBackend(accelerator_preference_)),
+      lut_resources_(lut_resources ? std::move(lut_resources) : DefaultLutResourceResolver()) {}
 
 auto PipelineExecutor::Apply(const PipelineGraphSnapshot& snapshot,
                              std::shared_ptr<ImageBuffer> input,
@@ -65,17 +69,20 @@ auto PipelineExecutor::Apply(const PipelineGraphSnapshot& snapshot,
   }
 #ifdef HAVE_CUDA
   if (resolved_accelerator_backend_ == GpuBackendKind::CUDA) {
-    return ApplyOnRoleRenderer<CudaRenderer>(cuda_renderers_, snapshot, input, request);
+    return ApplyOnRoleRenderer<CudaRenderer>(cuda_renderers_, snapshot, input, request,
+                                             lut_resources_);
   }
 #endif
 #ifdef HAVE_METAL
   if (resolved_accelerator_backend_ == GpuBackendKind::Metal) {
-    return ApplyOnRoleRenderer<MetalRenderer>(metal_renderers_, snapshot, input, request);
+    return ApplyOnRoleRenderer<MetalRenderer>(metal_renderers_, snapshot, input, request,
+                                              lut_resources_);
   }
 #endif
 #ifdef HAVE_OPENCL
   if (resolved_accelerator_backend_ == GpuBackendKind::OpenCL) {
-    return ApplyOnRoleRenderer<OpenClRenderer>(opencl_renderers_, snapshot, input, request);
+    return ApplyOnRoleRenderer<OpenClRenderer>(opencl_renderers_, snapshot, input, request,
+                                               lut_resources_);
   }
 #endif
   (void)snapshot;

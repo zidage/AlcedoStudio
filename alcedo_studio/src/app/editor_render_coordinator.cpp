@@ -44,6 +44,8 @@ auto ReasonLabel(const EditorRenderReason reason) -> const char* {
       return "VersionDocumentChanged";
     case EditorRenderReason::PastedPipelineDocument:
       return "PastedPipelineDocument";
+    case EditorRenderReason::ResourceChanged:
+      return "ResourceChanged";
   }
   return "?";
 }

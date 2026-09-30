@@ -7,21 +7,24 @@
 #include <QPointer>
 #include <QStringList>
 #include <QVariantList>
+#include <QVariantMap>
 #include <optional>
 #include <string>
 
 #include "app/lut_library_service.hpp"
+#include "edit/operators/models/lut_reference.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
 #include "ui/alcedo_main/editor_support/modules/lut_catalog.hpp"
 
 namespace alcedo::ui {
 
 /// Phase 6D LUT catalog model. Lists the entries of the application's
-/// LutLibraryService, tracks selection, and submits operator-shaped params
-/// matching ParamsForField (Lut): {"ocio_lmt":"<path-or-empty>"}. Relative
-/// selection supports Look-panel keyboard shortcuts (prev/next). Load via
-/// setSelectedPath does not submit. Favorites are stored by the library as
-/// root-relative entry paths; this model exposes them as absolute paths.
+/// LutLibraryService, tracks selection, and submits a typed LUT selection: the
+/// official package/LUT ID of package-owned official files, else the library path
+/// (plan L4). A selection keeps the configured strength. Relative selection supports
+/// Look-panel keyboard shortcuts (prev/next). Loading (setSelectedPath, loadSelection)
+/// does not submit. Favorites are stored by the library as root-relative entry paths;
+/// this model exposes them as absolute paths.
 class EditorLutCatalogModel : public EditorAdjustmentModelBase {
   Q_OBJECT
   Q_PROPERTY(alcedo::LutLibraryService* library READ library WRITE setLibrary NOTIFY libraryChanged)
@@ -46,6 +49,10 @@ class EditorLutCatalogModel : public EditorAdjustmentModelBase {
   [[nodiscard]] auto                selectedPath() const -> QString { return selectedPath_; }
   /// Load-only selection: updates selectedPath/selectedIndex without submitting.
   void                              setSelectedPath(const QString& path);
+  /// Load-only selection from the panel's `lut` field (referenceKind, packageId, lutId,
+  /// libraryPath, path, lutName). The reference is resolved through the library to its
+  /// current file; an unresolved reference is shown as a missing row with its last known name.
+  Q_INVOKABLE void                  loadSelection(const QVariantMap& lutField);
   [[nodiscard]] auto                selectedIndex() const -> int { return selectedIndex_; }
   [[nodiscard]] auto                directoryText() const -> QString { return directoryText_; }
   [[nodiscard]] auto                statusText() const -> QString { return statusText_; }
@@ -89,6 +96,9 @@ class EditorLutCatalogModel : public EditorAdjustmentModelBase {
   void                    submitSettled();
   [[nodiscard]] auto      buildParamsJson() const -> QString;
   [[nodiscard]] auto      relativePathOf(const QString& path) const -> std::optional<std::string>;
+  /// Reference that selecting the list row at @p path submits.
+  [[nodiscard]] auto      referenceForPath(const QString& path) const -> alcedo::LutReference;
+  void setSelection(const QString& path, alcedo::LutReference reference, std::string name);
 
   QPointer<alcedo::LutLibraryService> library_;
   lut_catalog::LutCatalog catalog_{};
@@ -100,6 +110,8 @@ class EditorLutCatalogModel : public EditorAdjustmentModelBase {
   bool                    canOpenDirectory_ = false;
   QString                 filterText_;
   std::string             selectedPathUtf8_;
+  alcedo::LutReference                selectedReference_;
+  std::string                         selectedName_;
 };
 
 }  // namespace alcedo::ui

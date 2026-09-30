@@ -2,6 +2,8 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
+#include "app/pipeline_history_applier.hpp"
+
 #include <gtest/gtest.h>
 
 #include <chrono>
@@ -19,7 +21,6 @@
 
 #include "app/editor_pipeline_command_service.hpp"
 #include "app/pipeline_document_history.hpp"
-#include "app/pipeline_history_applier.hpp"
 #include "edit/geometry/types.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/graph_ids.hpp"
@@ -27,9 +28,11 @@
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/edit_commit.hpp"
 #include "edit/history/mini_git_working_history.hpp"
+#include "edit/history/pipeline_document_checkpoint.hpp"
 #include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/mask/mask_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
+#include "edit/operators/models/lmt_model.hpp"
 #include "grade_owned_mask_support.hpp"
 #include "json.hpp"
 #include "support/editor_parameter_target_test.hpp"
@@ -257,6 +260,82 @@ TEST(PipelineHistoryApplierTest, ReplayAppliesTypedBatchExposureOntoDefaultDocum
       << error;
   ASSERT_TRUE(exposure.contains("exposure_ev"));
   EXPECT_NEAR(exposure.at("exposure_ev").get<double>(), 0.85, 1e-5);
+}
+
+TEST(PipelineHistoryApplierTest, LutReferenceAndStrengthRoundTripThroughHistory) {
+  auto        root = CreateDefaultPipelineDocument();
+  std::string error;
+  const auto  target = CompleteCurrentPanelParameterTarget(root, "lut", &error);
+  ASSERT_TRUE(target.has_value()) << error;
+  const nlohmann::json official = {
+      {"reference",
+       {{"kind", "official"}, {"package_id", "spectral_film_lut"}, {"lut_id", "kodak-5207"}}},
+      {"name", "Vision3 250D"},
+      {"strength", 0.5}};
+
+  // Undo and Redo: forward/inverse restore the exact document, including the default strength.
+  auto document = CreateDefaultPipelineDocument();
+  RoundTripOwner(&document, *target, official);
+  ASSERT_TRUE(
+      ApplyEditorParameterPatch(document, *target, {{"cube_path", "D:/luts/a.cube"}}, &error))
+      << error;
+  RoundTripOwner(&document, *target, {{"cube_path", "D:/luts/a.cube"}, {"strength", 0.25}});
+
+  // Reopen from stored history: replaying the commit from the root restores intent.
+  nlohmann::json before;
+  ASSERT_TRUE(ReadEditorParameterJson(root, *target, &before, &error)) << error;
+  SetParameterChange change;
+  change.target         = ToPipelineParameterTarget(*target);
+  change.before_value   = before;
+  change.after_value    = official;
+  change.before_enabled = true;
+  change.after_enabled  = true;
+  PipelineEditBatch batch;
+  batch.operation_kind   = PipelineEditOperationKind::SetParameter;
+  batch.presentation_key = "history.operation.set_parameter";
+  batch.changes.push_back(std::move(change));
+  auto       graph = CommitGraph::CreateEmpty(31);
+  const auto commit =
+      EditCommit::MakePipelineEdit(graph.GetRootId(), std::nullopt, std::move(batch));
+  auto replayed = ReplayPipelineDocumentFromRoot(root, {commit}, &error);
+  ASSERT_TRUE(replayed.has_value()) << error;
+  const auto* lmt = dynamic_cast<const LmtModel*>(
+      replayed->PrimaryGrade()->FindAdjustmentByType(type_ids::Lmt()));
+  ASSERT_NE(lmt, nullptr);
+  EXPECT_EQ(lmt->Reference(),
+            (LutReference{OfficialLutReference{"spectral_film_lut", "kodak-5207"}}));
+  EXPECT_EQ(lmt->DisplayName(), "Vision3 250D");
+  EXPECT_FLOAT_EQ(lmt->Strength(), 0.5f);
+
+  // Save and reopen: the serialized document reloads to the same state and root identity.
+  const auto reopened = PipelineDocument::FromJson(replayed->ToJson());
+  EXPECT_EQ(CanonicalPipelineDocumentJson(reopened), CanonicalPipelineDocumentJson(*replayed));
+  EXPECT_EQ(ComputeRootId(7, reopened, std::nullopt), ComputeRootId(7, *replayed, std::nullopt));
+
+  // Adjustment transfer loads the source Model JSON into the target Model (document_transfer).
+  auto           target_document = CreateDefaultPipelineDocument();
+  nlohmann::json transferred;
+  ASSERT_TRUE(ReadEditorParameterJson(*replayed, *target, &transferred, &error)) << error;
+  auto* transfer_lmt = dynamic_cast<LmtModel*>(
+      target_document.PrimaryGrade()->FindAdjustmentByType(type_ids::Lmt()));
+  ASSERT_NE(transfer_lmt, nullptr);
+  transfer_lmt->LoadJson(transferred);
+  EXPECT_EQ(transfer_lmt->ToJson().dump(), lmt->ToJson().dump());
+}
+
+TEST(PipelineHistoryApplierTest, InvalidLutStrengthPatchLeavesDocumentUnchanged) {
+  auto        document = CreateDefaultPipelineDocument();
+  std::string error;
+  const auto  target = CompleteCurrentPanelParameterTarget(document, "lut", &error);
+  ASSERT_TRUE(target.has_value()) << error;
+  const auto before = CanonicalPipelineDocumentJson(document);
+  EXPECT_FALSE(ApplyEditorParameterPatch(
+      document, *target,
+      {{"reference", {{"kind", "library"}, {"path", "user/a.cube"}}}, {"strength", 1.5}}, &error));
+  EXPECT_FALSE(error.empty());
+  EXPECT_FALSE(ApplyEditorParameterPatch(
+      document, *target, {{"reference", {{"kind", "library"}, {"path", "../a.cube"}}}}, &error));
+  EXPECT_EQ(CanonicalPipelineDocumentJson(document), before);
 }
 
 TEST(PipelineHistoryApplierTest, ReplayRejectsNonBatchPayload) {

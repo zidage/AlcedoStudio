@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <string>
 
+#include "app/editor_parameter_write.hpp"
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/graph/image_geometry_model.hpp"
@@ -18,6 +19,7 @@
 #include "edit/operators/models/color_wheel_model.hpp"
 #include "edit/operators/models/curve_model.hpp"
 #include "edit/operators/models/hls_model.hpp"
+#include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/operators/models/sharpen_model.hpp"
 #include "support/editor_parameter_target_test.hpp"
@@ -134,6 +136,40 @@ TEST(EditorPipelineCommandServiceTest, ApplyingScalarPatchUsesTypedModelOperatio
   EXPECT_FLOAT_EQ(exposure->Value(), 2.5f);
   EXPECT_NE(exposure->Revision(), exposure_revision);
   EXPECT_EQ(contrast->Revision(), contrast_revision);
+}
+
+TEST(EditorPipelineCommandServiceTest, LutSelectionAndStrengthWritesChangeOnlyTheirOwnField) {
+  auto        document = CreateDefaultPipelineDocument();
+  std::string error;
+  const auto  target = CompleteCurrentPanelParameterTarget(document, "lut", &error);
+  ASSERT_TRUE(target.has_value()) << error;
+  auto* lmt =
+      dynamic_cast<LmtModel*>(document.PrimaryGrade()->FindAdjustmentByType(type_ids::Lmt()));
+  auto* exposure = dynamic_cast<ExposureModel*>(
+      document.PrimaryGrade()->FindAdjustmentByType(type_ids::Exposure()));
+  ASSERT_NE(lmt, nullptr);
+  ASSERT_NE(exposure, nullptr);
+  const auto     exposure_revision = exposure->Revision();
+
+  EditorLutWrite strength;
+  strength.strength = 0.3f;
+  ASSERT_TRUE(ApplyEditorParameterWrite(document, *target, strength, &error)) << error;
+  EditorLutWrite selection;
+  selection.reference    = OfficialLutReference{"spectral_film_lut", "kodak-5207"};
+  selection.display_name = "Vision3 250D";
+  ASSERT_TRUE(ApplyEditorParameterWrite(document, *target, selection, &error)) << error;
+  EXPECT_FLOAT_EQ(lmt->Strength(), 0.3f);
+  EXPECT_EQ(lmt->DisplayName(), "Vision3 250D");
+
+  const auto     revision = lmt->Revision();
+  EditorLutWrite invalid;
+  invalid.reference = LibraryLutReference{"user/b.cube"};
+  invalid.strength  = std::numeric_limits<float>::quiet_NaN();
+  EXPECT_FALSE(ApplyEditorParameterWrite(document, *target, invalid, &error));
+  EXPECT_EQ(lmt->Revision(), revision);
+  EXPECT_EQ(lmt->Reference(),
+            (LutReference{OfficialLutReference{"spectral_film_lut", "kodak-5207"}}));
+  EXPECT_EQ(exposure->Revision(), exposure_revision);
 }
 
 TEST(EditorPipelineCommandServiceTest,

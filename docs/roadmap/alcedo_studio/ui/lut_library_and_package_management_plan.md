@@ -1,7 +1,7 @@
 # LUT Library and Package Management Plan
 
 Date: 2026-09-29  
-Status: L1, L2, and L3 complete (2026-09-29); L4-L6 not started; panel visual design intentionally blank  
+Status: L1, L2, and L3 complete (2026-09-29); L4 complete on Windows CUDA/OpenCL, Metal pixel tests written but not run (2026-09-29); L5-L6 not started; panel visual design intentionally blank  
 Source revision: `dc73591020ef917fed089db7e4f454839d82051f`  
 Primary area: Alcedo Studio UI and application services  
 Parent: Standalone feature plan, indexed by the [roadmap index](../../README.md)  
@@ -576,7 +576,7 @@ Count the resulting maintenance changes in the phase estimate. Keep unrelated ed
 | L1 | Metadata, exporter annotations, package schema, signing and publication tools | Confirmed data specification | 1300-1850 | Complete 2026-09-29; actual size exceeded the estimate (see its record). |
 | L2 | Service-owned recursive inventory, user import, root selection and migration | L1 metadata | 1450-1950 | Complete 2026-09-29; actual size exceeded the estimate (see its record). |
 | L3 | Independent signed package checking, 7z installation, repair and cancellation | L1, L2 | 1500-1950 | Complete 2026-09-29; actual size exceeded the estimate (see its record). Settings QML stays in L6. |
-| L4 | Stable runtime references, missing-file behavior and LUT strength on all backends | L1, L2 | 1500-1950 | Reuse existing typed writes and grade parameters. Not started. |
+| L4 | Stable runtime references, missing-file behavior and LUT strength on all backends | L1, L2 | 1500-1950 | Complete on Windows 2026-09-29; Metal not run; actual size exceeded the estimate (see its record). |
 | L5 | Indexed classification, fuzzy search, favorites and exact-node application | L2, L4 | 1200-1750 | No visual layout work. Not started. |
 | L6 | Independent navigation, Settings, small editor control and payload-free installers | L1-L5; separate visual design input | 1300-1900 | No preview worker. Not started. |
 
@@ -1211,13 +1211,174 @@ to confirm discovery before execution. GPU tests run with `-j 1`.
 
 **Exit criteria.**
 
-- [ ] Missing LUTs skip only the authorized operation in all render consumers.
-- [ ] Strength passes independent pixel assertions on CUDA, OpenCL, and Metal.
-- [ ] Warm cached results update after package replacement and file loss.
-- [ ] A returned valid resource automatically restores its configured effect without an enable action or history edit.
-- [ ] Reopen, migration, Undo/Redo, and transfer preserve the intended reference and strength.
+- [x] Missing LUTs skip only the authorized operation in all render consumers.
+- [ ] Strength passes independent pixel assertions on CUDA, OpenCL, and Metal. (CUDA and OpenCL pass; the Metal cases are written but not built or run.)
+- [x] Warm cached results update after package replacement and file loss.
+- [x] A returned valid resource automatically restores its configured effect without an enable action or history edit.
+- [x] Reopen, migration, Undo/Redo, and transfer preserve the intended reference and strength.
 
-**Expected diff.** 1500-1950 lines. **Completion record:** Not started; fill section 12 for L4.
+**Expected diff.** 1500-1950 lines. **Completion record:** see below.
+
+##### Phase L4 completion record (2026-09-29)
+
+**Status:** complete on Windows (CUDA and OpenCL); partial for the exit criterion that includes Metal.
+The LMT Model stores a tagged LUT reference (official package and LUT ID, library path, or legacy
+file path), a last known name, and a strength in [0, 1]. A render-side `LutResourceResolver` port,
+implemented by the LUT library, resolves references on render threads. Resolved content identity
+drives result invalidation, a missing file skips only the LUT operation, and all three kernels blend
+`c + a * (L(c) - c)` at the LMT position. A library publication or root change re-renders the open image.
+
+**Source revisions and branches.**
+
+| Repository | Base | Branch | State |
+| --- | --- | --- | --- |
+| `pu-erh_lab` | `14abaca3d` (L3 commit on `feature/lut-package-install`) | `feature/lut-stable-references-strength` | Uncommitted working tree |
+
+**Implemented modules.**
+
+| Module | Responsibility |
+| --- | --- |
+| `edit/operators/models/lut_reference.{hpp,cpp}` (EditGraph) | `LutReference` variant (none, `OfficialLutReference`, `LibraryLutReference`, `FileLutReference`); validation; tagged JSON for official and library forms |
+| `edit/operators/models/lmt_model.{hpp,cpp}` | Payload reference, display name, strength; `SetReference`, `SetStrength`, `ApplyUpdate` (validate all parts, one mutation, separate dirty fields); JSON that keeps legacy `{"cube_path": ...}` byte-identical |
+| `edit/runtime/lut_resource_resolver.{hpp,cpp}` (new `EditLutResources` library) | Port interface, `LutResourceResolution::ContentIdentity`, `FileLutResourceResolver` default (exact file paths only) |
+| `edit/runtime/grade_lut.{hpp,cpp}` | `TryPackGradeLut(grade, resolver)` packs inside `ReadResource`; memo keyed by path, stamp, and inventory SHA-256; Missing and zero strength bind no LUT; `GradeLutResourceIdentity` |
+| `edit/runtime/runtime_invalidation.{hpp,cpp}` | Per-Grade last resolved LUT identity; a change invalidates from the LLF source without a Model revision |
+| `basic_render_workspace.hpp`, `renderer.hpp`, `pipeline_executor.{hpp,cpp}`, `batch_executor_pool.hpp`, `pipeline_service.hpp` | Resolver injected at executor construction and handed to every renderer's workspace; `PipelineMgmtService` carries it to editor, thumbnail, and export executors |
+| `adjustment_runtime.cpp`, CUDA/OpenCL/Metal primary grade kernels | `values[0]` is the strength; the kernels skip at 0 or with an empty LUT, return `L(c)` at 1, and blend otherwise |
+| `app/lut_library_publication.{hpp,cpp}` | Single owner of root, published inventory, receipts, and user state behind a state lock; render-thread `Resolve`/`ReadResource`; content lock for file removal; Missing observer |
+| `app/lut_library_service.{hpp,cpp}` | Holds the publication; `Resources()`, `ReferenceForPath`; one refresh per missing reference; new `kRetirePackageContent` operation after installation publication; migration cleanup deletions under the content lock |
+| `app/lut_package_install.{hpp,cpp}` | Post-commit retirement removed from the installation; leftover removal under the content lock |
+| Typed writes, projection, transfer display | `EditorLutWrite` is `LmtUpdate`; the JSON boundary parses complete state (missing strength is 100%); panel value carries reference, name, strength |
+| `EditorRenderReason::ResourceChanged`, `EditorSessionController::NotifyLutResourcesChanged`, host wiring | Library `InventoryChanged` requests one Quality render without an edit; `ProjectModule` hands the library resolver to every project |
+| `EditorLutCatalogModel`, `lut_catalog`, `LUTPanel.qml` | Row selection submits an official or library reference without strength; `loadSelection` resolves the panel reference; a missing reference shows its last known name |
+
+Decisions made during L4:
+
+1. **Byte-stable legacy form.** `TryDecodeRootState` recomputes a stored root ID from re-serialized
+   document JSON. The writer therefore keeps `{"cube_path": ...}` for file references and the default
+   state, and adds `reference`, `name`, and `strength` only when present. The plan's "writers emit the
+   new tagged reference" applies to official and library references; a legacy path stays a file reference.
+2. **Library reference identity** is the root-relative path (L2 decision 1). Official files are selected
+   by package ID and metadata ID, so an installation that changes the content directory keeps the reference.
+3. **Availability in the bound LUT, not in parameters.** Grade parameter slots upload by Model revision, so
+   availability is expressed by binding an empty LUT (edge 0). `values[0]` carries only the strength.
+4. **Retirement after publication.** A render could otherwise resolve the old content directory from the
+   still-published inventory after it was deleted. The executable interleaving is a render worker in
+   `TryPackGradeLut` against the library worker's retirement. The fix is ordering (publish, then retire)
+   plus a content lock held by `ReadResource` and taken by every removal. Its test is
+   `RetiredPackageContentWaitsForActiveResourceRead`. No version, epoch, or token was added.
+5. **Missing status in the panel** is resolved by the LUT list model through the library, not carried in
+   render completions. Both read the same owner.
+6. **Terminology.** Touching `application_module_host.cpp` required renaming the image-analysis
+   in-flight limit type to `ImageAnalysisConcurrencyLimit`, with its identifiers, in 10 image-analysis
+   files. The touched live provider test file was renamed to `image_analysis_live_provider_test.cpp`
+   (target `ImageAnalysisLiveProviderTest`), and its references in `ai_sidecar_backend_plan.md` were
+   updated. This mechanical rename is kept separate from the L4 logic.
+
+**Primary success call chain:**
+
+```text
+LUT list row -> EditorLutCatalogModel::selectPath -> LutLibraryService::ReferenceForPath
+  -> EditorLutWrite{reference, name} (no strength) -> submitNow -> ApplyEditorParameterWrite
+  -> LmtModel::ApplyUpdate (validate, one mutation) -> settled history commit (full Model JSON)
+Render (editor, thumbnail, export executor; resolver from PipelineMgmtService)
+  -> BasicRenderWorkspace::PrepareResultValidity -> RuntimeInvalidationState::CollectAndPropagate
+     -> GradeLutResourceIdentity -> LutLibraryPublication::Resolve (state lock: candidates; stat outside)
+     -> identity changed -> InvalidateFrom(LLF source) -> Grade, display re-execute
+  -> GradeExecutor::Execute -> Ops::LoadLut -> TryPackGradeLut -> ReadResource (content lock)
+     -> PackResolvedCube (memo: path, stamp, SHA-256) -> backend AcquireLut
+  -> kernel: c + strength * (L(c) - c) -> published frame
+Package installation commit -> PublishInventory -> InventoryChanged
+  -> EditorSessionController::NotifyLutResourcesChanged -> RequestViewChange(ResourceChanged)
+  -> Quality render resolves the same official ID to the new content
+  -> kRetirePackageContent (content lock) removes the replaced directory
+```
+
+**Primary failure call chain:**
+
+```text
+file missing -> Resolve returns kMissing (reference, name, strength unchanged)
+  -> identity change invalidates the Grade -> empty LUT bound -> LMT skipped, other operations render
+  -> Missing observer -> one RefreshInventory per reference (no retry loop)
+file returns -> refresh or availability check -> identity change -> effect restored at the configured
+  strength; no history edit; a cleared reference stays cleared
+invalid or unreadable CUBE -> ParseCubeFile fails -> std::runtime_error -> render fails with the path
+  (no identity substitute, no backend switch)
+invalid write (NaN, out-of-range strength, unsafe library path, unknown kind) -> std::invalid_argument
+  before mutation -> write rejected, Model revision unchanged
+render reading old package content during retirement -> removal waits on the content lock
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `LegacyLutPathLoadsWithFullStrength` (and byte-identical re-serialization; default form) | `GpuDagModelGraphTest` (`LutReferenceModel`) | PASS |
+| `LutReferenceAndStrengthRoundTripThroughHistory` (Undo/Redo forward/inverse, replay from root, reopen with equal root ID, transfer through Model JSON) | `PipelineHistoryApplierTest` | PASS |
+| `MissingLutKeepsOtherGradeAdjustments` (two Grades, equal to the graph without a LUT) | `GpuDagCudaPrimaryGradeTest`, `GpuDagOpenClGradeTest` | PASS |
+| `InvalidCubeRemainsAnError` | CUDA and OpenCL targets; `GpuDagRawInputTest` (`GradeLutCacheTest`) | PASS |
+| `OfficialUpdateChangesPixelsWithWarmResultCache` (new directory; same path, size, and write time with a new digest; unchanged resource reuses the cached display) | CUDA and OpenCL targets | PASS |
+| `RootMigrationPreservesRenderedLutSelection` (library and legacy absolute references after migration and source cleanup) | `LutLibraryServiceTest` (`LutResourceResolutionTest`) | PASS |
+| `LutStrengthZeroHalfAndOneMatchExpectedPixels` (affine cube, independent arithmetic, tolerance `1e-5`) | CUDA and OpenCL targets | PASS |
+| `LutStrengthDoesNotScaleOtherAdjustments` (exposure before, Grade mix after) | CUDA and OpenCL targets | PASS |
+| `MissingLutDoesNotMutateHistory` (document JSON, Model revision, strength, and path unchanged by a render) | asserted inside `MissingLutKeepsOtherGradeAdjustments` | PASS |
+| `ReturnedLutRestoresConfiguredStrengthWithoutHistoryEdit` | CUDA and OpenCL targets | PASS |
+| `ReturnedFileDoesNotRestoreClearedLut` | CUDA and OpenCL targets | PASS |
+| `ReturnedLutAtZeroStrengthRemainsVisuallyInactive` | CUDA and OpenCL targets | PASS |
+| Metal versions of the eight GPU cases (`metal_lut_resource_test.cpp`) | `GpuDagMetalGradeTest` | NOT RUN (no macOS host) |
+| Model rules: `SelectionKeepsStrengthAndStrengthKeepsSelection`, `InvalidLutUpdateIsRejectedWithoutMutation`, `OfficialAndLibraryReferencesRoundTripThroughDocumentJson` | `GpuDagModelGraphTest` | PASS |
+| Invalidation: `LutResourceChangeInvalidatesGradeWithoutModelRevision` | `GpuDagRawInputTest` | PASS |
+| LUT memo: `MissingCubeFileIsSkippedAndReturnedFileIsPacked`, `ZeroStrengthSkipsCubeLoading`, `ChangedDigestReparsesCubeWithUnchangedStamp`, `ResourceIdentityFollowsAvailabilityAndClearedReference`; strength packing in `GpuDagAdjustmentRuntime` | `GpuDagRawInputTest` | PASS |
+| Resolution: `OfficialReferenceResolvesToActivePackageContent`, `OfficialUpdateResolvesSameIdToNewContent`, `MissingReferenceRequestsOneRefreshWithoutRetries`, `RetiredPackageContentWaitsForActiveResourceRead`, `ResolverOutlivesTheLibraryService` | `LutLibraryServiceTest` | PASS |
+| Typed writes: `LutSelectionAndStrengthWritesChangeOnlyTheirOwnField`; `InvalidLutStrengthPatchLeavesDocumentUnchanged` | `EditorPipelineCommandServiceTest`, `PipelineHistoryApplierTest` | PASS |
+| UI owner: `LutSelectPathSubmitsSelectionAndKeepsStrength`, `LutSelectionOfPackageFileSubmitsOfficialReference`, `LutLoadSelectionResolvesReferencesWithoutSubmitting` | `EditorLookModelTest` | PASS |
+| `ResourceChangedSchedulesQualityRenderInsteadOfReuse`; host injects the library resolver into `ProjectModule` | `EditorRenderCoordinatorTest`, `ApplicationModuleHostLifecycleTest` | PASS |
+| Guard check: disabling the LUT identity invalidation failed `LutResourceChangeInvalidatesGradeWithoutModelRevision`, `OfficialUpdateChangesPixelsWithWarmResultCache`, and `ReturnedLutRestoresConfiguredStrengthWithoutHistoryEdit`; removing the content lock around retirement failed `RetiredPackageContentWaitsForActiveResourceRead`; code restored and rerun | respective targets | 4 expected failures, then 15/15 PASS |
+
+Commands:
+
+```powershell
+cmd /c scripts\msvc_env.cmd --preset win_debug -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake"
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4
+$env:PATH = "D:/Projects/pu-erh_lab/vcpkg/installed/x64-windows/debug/bin;" + $env:PATH
+ctest --test-dir build/debug -R "^(GpuDagModelGraphTest|GpuDagRawInputTest|PipelineHistoryApplierTest|EditorPipelineCommandServiceTest|EditorPanelProjectionTest|EditorPendingInputTest|EditorRenderCoordinatorTest|LutLibraryServiceTest|LutPackageServiceTest|LutMetadataTest|LutPackageManifestTest|DownloadServiceTest|UpdateManifestTest|AdjustmentTransferCatalogTest|GraphImageCacheRetentionTest|EditorLookModelTest|EditorLutPanelQmlTest|EditorAdjustmentSnapshotQmlTest|ApplicationModuleHostLifecycleTest|ApplicationModuleHostShutdownTest|ImageAnalysisServiceTest|ImageAnalysisControllerTest|ImageAnalysisLiveProviderTest|EditorSessionRenderSchedulerPortTest|AdjustmentTransferServiceTest)\." -j 4
+ctest --test-dir build/debug -R "^(GpuDagCudaPrimaryGradeTest|GpuDagOpenClGradeTest|GpuDagCudaDrtProductTest|GpuDagOpenClDrtProductTest|GpuDagCudaMaskTest)\." -j 1
+```
+
+Suite totals: the full debug build (all targets, including `alcedo_main`) exited 0. App, UI, and
+caller suites: 594 discovered, 586 passed, 3 skipped (credential-dependent live image-analysis
+tests), 5 failed. The 5 failures are `EditorSessionRenderSchedulerPortTest` cases
+(`ProductionPipelinePathSchedulesInstalledContextWithoutAdapterBind`,
+`ViewDrivenReasonsDisableScopeFrameReplacement`, `ScopeRefreshMarksFrameAsRequestedScopeInput`,
+`SessionDoesNotStampPreviewGenerationFromIntent`, `InstalledContextAllowsScheduleWithoutImagePoolService`).
+The same 5 fail on the clean L3 commit `14abaca3d` (stash, rebuild, rerun). GPU suites: 262 passed,
+1 skipped (opt-in `InteractiveDagBaselinesDumpCurrentExecutionGpuTimes`). The full suite was not run
+(repository rule). No macOS build or run.
+
+**Checklist / exit condition:** four of five exit criteria are checked. The strength criterion lacks
+Metal evidence. The render-consumer criterion rests on one resolver that every executor receives
+from `PipelineMgmtService`, on the plan-level GPU tests, and on the host injection test. No thumbnail or
+export end-to-end LUT render test was added.
+
+**LOC note (grill-code-review):** about +3280/-440 lines for L4 across production, tests, and CMake
+(tests about +2390/-225, including the extracted `lut_library_test_support.hpp` and the shared GPU
+`lut_resource_runtime_test_support.hpp`). The image-analysis terminology rename adds about 150 changed
+lines. This exceeds the 1500-1950 estimate mainly through tests and the resolver ownership split.
+The largest touched production file is `lut_library_service.cpp` (about 730 lines); no file approaches 1000.
+
+**Remaining gaps:**
+
+- Metal: the shader blend and `metal_lut_resource_test.cpp` are written but not compiled or run.
+- Thumbnail disk caches are keyed by committed history, so a package update or a returned file does not
+  refresh stored library thumbnails. The editor re-renders on `InventoryChanged`; export renders fresh.
+- The Editor strength control, the missing-association presentation beyond the list's missing row, and
+  the hidden-editor behavior belong to L5/L6. There is no QML strength slider yet.
+- Official favorites are still stored by root-relative path (L3 gap); L5 moves them to references.
+- Legacy bundled official files are not mapped; no verified release records exist. They stay Missing
+  when their exact path is gone.
+- `ai_sidecar_backend_plan.md` still contains other prohibited terms; only the renamed file and target
+  references were updated.
+- `EditorSessionRenderSchedulerPortTest` has 5 failures that predate this phase.
 
 ### L5. Browser queries and target binding
 
@@ -1428,7 +1589,7 @@ the visible library. Revisit an estimate before introducing a larger index or wo
 
 ## 12. Completion records
 
-L1, L2, and L3 are recorded under their phases. L4-L6 are not started. Copy this record into the relevant phase after implementation:
+L1, L2, L3, and L4 are recorded under their phases. L5 and L6 are not started. Copy this record into the relevant phase after implementation:
 
 ```text
 Phase / date / status:

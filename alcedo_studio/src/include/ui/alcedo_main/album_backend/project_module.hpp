@@ -17,6 +17,7 @@
 
 #include "app/semantic_generation_service.hpp"
 #include "edit/pipeline/pipeline_accelerator.hpp"
+#include "edit/runtime/lut_resource_resolver.hpp"
 #include "ui/alcedo_main/album_backend/project_handler.hpp"
 #include "ui/alcedo_main/album_backend/ui_status_sink.hpp"
 #include "ui/alcedo_main/i18n.hpp"
@@ -72,6 +73,14 @@ class ProjectModule final : public QObject, public IUiStatusSink {
     return accelerator_preference_;
   }
   void         SetRuntimeAcceleratorPreference(AcceleratorBackendPreference preference);
+  /// LUT resolver (the application LUT library) that projects opened later pass to their
+  /// render executors. Set once by the application module host before any project opens.
+  void         SetLutResources(std::shared_ptr<const LutResourceResolver> resources) {
+    lut_resources_ = std::move(resources);
+  }
+  [[nodiscard]] auto lut_resources() const -> const std::shared_ptr<const LutResourceResolver>& {
+    return lut_resources_;
+  }
   // ── Q_PROPERTY getters ─────────────────────────────────────────────────
   bool         ServiceReady() const { return service_ready_; }
   QString      ServiceMessage() const { return service_message_text_.Render(); }
@@ -150,6 +159,7 @@ class ProjectModule final : public QObject, public IUiStatusSink {
   bool                         service_ready_ = false;
   QVariantList                 recent_projects_{};
   AcceleratorBackendPreference accelerator_preference_ = AcceleratorBackendPreference::Auto;
+  std::shared_ptr<const LutResourceResolver> lut_resources_;
   QString                      accelerator_backend_key_{};
   QString                      accelerator_warning_id_{};
   QVariantList                 accelerator_options_{};

@@ -288,10 +288,14 @@ static inline float3 ApplyAdjustment(float3 c, device const GradeAdjustmentParam
     c.x += noise;
     c.y += noise;
     c.z += noise;
-  } else if (behavior == 12u && value != 0.0f && lut_edge > 1u) {
-    const float scale  = float(lut_edge - 1u) / float(lut_edge);
-    const float offset = 1.0f / (2.0f * float(lut_edge));
-    c = SampleLut3d(lut, lut_edge, c.x * scale + offset, c.y * scale + offset, c.z * scale + offset);
+  } else if (behavior == 12u && value > 0.0f && lut_edge > 1u) {
+    // value is the LUT strength a in (0, 1]: c + a * (L(c) - c) in ACEScc; a = 1 is L(c).
+    // An empty LUT (edge 0) means the referenced file is missing: the operation is skipped.
+    const float  scale   = float(lut_edge - 1u) / float(lut_edge);
+    const float  offset  = 1.0f / (2.0f * float(lut_edge));
+    const float3 sampled =
+        SampleLut3d(lut, lut_edge, c.x * scale + offset, c.y * scale + offset, c.z * scale + offset);
+    c = value >= 1.0f ? sampled : c + value * (sampled - c);
   }
   return c;
 }

@@ -278,6 +278,11 @@ TEST(GpuDagAdjustmentRuntime, PackedGradeParamsMatchOwnerFieldsWithoutFullDtoCop
   lmt.SetCubePath("C:/looks/test.cube");
   const auto packed_lmt = MakeGradeRuntimeParams(lmt, AdjustmentBehavior::Lmt);
   EXPECT_FLOAT_EQ(packed_lmt.values[0], 1.0f);
+  // values[0] carries the configured strength; no reference packs 0 whatever the strength.
+  lmt.SetStrength(0.35f);
+  EXPECT_FLOAT_EQ(MakeGradeRuntimeParams(lmt, AdjustmentBehavior::Lmt).values[0], 0.35f);
+  lmt.SetReference(std::monostate{});
+  EXPECT_FLOAT_EQ(MakeGradeRuntimeParams(lmt, AdjustmentBehavior::Lmt).values[0], 0.0f);
 
   EXPECT_EQ(OperatorModelFullDtoCopyCount::Peek(), 0);
 }

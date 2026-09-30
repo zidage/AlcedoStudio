@@ -229,6 +229,14 @@ Item {
         // inside a JS function does not always track nested keys, so a pasted
         // LUT path would parse as empty and leave "None" highlighted.
         const entry = snapshot["lut"] !== undefined ? snapshot["lut"] : snapshot["ocio_lmt"]
+        // Official and library references resolve to their current file in the model.
+        if (entry !== undefined && entry !== null && typeof entry === "object"
+                && entry["referenceKind"] !== undefined
+                && typeof root.lutModel.loadSelection === "function") {
+            root.lutModel.loadSelection(entry)
+            root.syncSelectionChrome()
+            return
+        }
         var path = ""
         if (entry === undefined || entry === null) {
             path = ""

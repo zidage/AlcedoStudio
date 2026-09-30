@@ -223,7 +223,7 @@ void EnqueueGradeMix(OpenClRenderDevice& device, const OpenClBackend::Texture2D&
 
 auto LoadOpenClGradeLut(OpenClRenderDevice& device, const ColorGradeNodeModel& grade)
     -> OpenClLutBinding {
-  const auto packed = TryPackGradeLut(grade);
+  const auto packed = TryPackGradeLut(grade, device.Workspace().LutResources());
   if (packed == nullptr) {
     return device.Workspace().Device().DummyLut();
   }

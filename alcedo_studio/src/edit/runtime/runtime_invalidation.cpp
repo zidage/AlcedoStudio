@@ -13,6 +13,7 @@
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/operators/models/dirty_field_mask.hpp"
+#include "edit/runtime/grade_lut.hpp"
 #include "edit/runtime/result_content_key.hpp"
 
 namespace alcedo {
@@ -153,9 +154,11 @@ void RuntimeInvalidationState::CollectDevelopChanges(const ExecutionPlan& plan,
 
 void RuntimeInvalidationState::CollectGradeChanges(
     const ExecutionPlan& plan, const PipelineDocument& document,
+    const LutResourceResolver&                  lut_resources,
     std::map<AdjustmentKey, ParameterRevision>& seen_adjustments,
     std::vector<GraphValueId>&                  origins) {
   std::map<NodeId, ParameterRevision> seen_mix;
+  std::map<NodeId, std::uint64_t>     seen_lut;
   for (const auto& compiled : plan.grade_nodes) {
     const auto* grade =
         dynamic_cast<const ColorGradeNodeModel*>(document.Graph().FindNode(compiled.node_id));
@@ -164,6 +167,14 @@ void RuntimeInvalidationState::CollectGradeChanges(
     }
     if (ObserveRevision(last_mix_revision_, seen_mix, compiled.node_id, grade->MixRevision())) {
       origins.push_back(compiled.scene_output);
+    }
+    // The LMT is a pointwise operation before the Local Laplacian stage, so a changed LUT
+    // resource invalidates from the LLF source like any other pointwise adjustment.
+    const auto lut_identity    = GradeLutResourceIdentity(*grade, lut_resources);
+    seen_lut[compiled.node_id] = lut_identity;
+    if (const auto it = last_lut_identity_.find(compiled.node_id);
+        it != last_lut_identity_.end() && it->second != lut_identity) {
+      origins.push_back(LocalToneSourceId(compiled.node_id));
     }
     for (std::size_t index = 0; index < grade->AdjustmentCount(); ++index) {
       const AdjustmentKey key{compiled.node_id, grade->AdjustmentIdAt(index)};
@@ -189,6 +200,7 @@ void RuntimeInvalidationState::CollectGradeChanges(
     }
   }
   last_mix_revision_ = std::move(seen_mix);
+  last_lut_identity_ = std::move(seen_lut);
 }
 
 void RuntimeInvalidationState::CollectDrtChanges(
@@ -281,9 +293,10 @@ void RuntimeInvalidationState::CollectStructureChanges(const ExecutionPlan& plan
   }
 }
 
-void RuntimeInvalidationState::CollectAndPropagate(const ExecutionPlan&    plan,
-                                                   const PipelineDocument& document,
-                                                   const PreparedRawInput& input) {
+void RuntimeInvalidationState::CollectAndPropagate(const ExecutionPlan&       plan,
+                                                   const PipelineDocument&    document,
+                                                   const PreparedRawInput&    input,
+                                                   const LutResourceResolver& lut_resources) {
   BindCompiledPlan(plan);
   CaptureFrameRepresentations(plan, input);
 
@@ -291,7 +304,7 @@ void RuntimeInvalidationState::CollectAndPropagate(const ExecutionPlan&    plan,
   std::map<AdjustmentKey, ParameterRevision> seen_adjustments;
   CollectStructureChanges(plan, origins);
   CollectDevelopChanges(plan, document, origins);
-  CollectGradeChanges(plan, document, seen_adjustments, origins);
+  CollectGradeChanges(plan, document, lut_resources, seen_adjustments, origins);
   CollectDrtChanges(plan, document, seen_adjustments, origins);
   // Keep only instances present this frame, so a removed and re-added ID counts as changed.
   last_adjustment_revision_ = std::move(seen_adjustments);
@@ -327,6 +340,7 @@ void RuntimeInvalidationState::ClearLastSeenRevisions() {
   last_mask_revision_.clear();
   last_adjustment_revision_.clear();
   last_mix_revision_.clear();
+  last_lut_identity_.clear();
   last_sensor_revision_        = kNoParameterRevision;
   last_white_balance_revision_ = kNoParameterRevision;
   last_drt_revision_           = kNoParameterRevision;
