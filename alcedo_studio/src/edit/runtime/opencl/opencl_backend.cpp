@@ -986,6 +986,11 @@ void OpenClBackend::WarmUpPlan(const ExecutionPlan& plan) {
   }
   if (plan.Contains(GpuPassKind::DiffusionFilter)) {
     add(OpenCL::GpuDag::kDrtProgramName, OpenCL::GpuDag::kDiffusionFilterDecodeSceneKernelName);
+    add(OpenCL::GpuDag::kDrtProgramName, OpenCL::GpuDag::kDiffusionFilterReduceBoostKernelName);
+    add(OpenCL::GpuDag::kDrtProgramName, OpenCL::GpuDag::kDiffusionFilterDownsampleKernelName);
+    add(OpenCL::GpuDag::kDrtProgramName,
+        OpenCL::GpuDag::kDiffusionFilterUpsampleAccumulateKernelName);
+    add(OpenCL::GpuDag::kDrtProgramName, OpenCL::GpuDag::kDiffusionFilterMixSceneKernelName);
   }
   if (plan.Contains(GpuPassKind::Drt)) {
     add(OpenCL::GpuDag::kDrtProgramName, OpenCL::GpuDag::kDrtKernelName);

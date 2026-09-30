@@ -2,44 +2,39 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-#include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
-#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <span>
-#include <utility>
 #include <vector>
 
+#include "diffusion_filter_reference.hpp"
 #include "edit/graph/diffusion_filter_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/prepared_raw_input.hpp"
-#include "edit/runtime/cuda/cuda_diffusion_filter_pass.hpp"
-#include "edit/runtime/cuda/cuda_render_device.hpp"
-#include "edit/runtime/cuda/cuda_scene_work.hpp"
 #include "edit/runtime/diffusion_filter_plan.hpp"
 #include "edit/runtime/execution_plan.hpp"
 #include "edit/runtime/frame_scene_binding.hpp"
+#include "edit/runtime/opencl/opencl_diffusion_filter_pass.hpp"
 #include "edit/runtime/texture_format.hpp"
-
-#include "diffusion_filter_reference.hpp"
+#include "opencl/opencl_context.hpp"
+#include "opencl/opencl_runtime.hpp"
 
 namespace alcedo {
 namespace {
 
 using namespace diffusion_filter_test;
 
-auto HasCudaDevice() -> bool {
-  int count = 0;
-  return ::cudaGetDeviceCount(&count) == cudaSuccess && count > 0;
-}
-
-class CudaDiffusionFilterFixture : public ::testing::Test {
+class OpenClDiffusionFilterFixture : public ::testing::Test {
  protected:
   void SetUp() override {
-    if (!HasCudaDevice()) GTEST_SKIP() << "No CUDA device available.";
+    if (!TryInitializeOpenClRuntime() || !OpenClContext::Instance().Capabilities().image_support) {
+      GTEST_SKIP() << "No OpenCL image device available.";
+    }
+    device_ = std::make_unique<OpenClRenderDevice>();
   }
 
   /// Render the full reference frame at its own resolution.
@@ -69,16 +64,17 @@ class CudaDiffusionFilterFixture : public ::testing::Test {
    */
   auto Render(const PipelineDocument& document, const std::vector<Rgb>& linear, bool publish)
       -> std::vector<Rgba> {
-    const auto width  = plan_.geometry.render_extent.width;
-    const auto height = plan_.geometry.render_extent.height;
+    const auto        width  = plan_.geometry.render_extent.width;
+    const auto        height = plan_.geometry.render_extent.height;
     std::vector<Rgba> encoded(linear.size());
     for (std::size_t i = 0; i < linear.size(); ++i) {
-      encoded[i] = {AcesccEncode(linear[i].r), AcesccEncode(linear[i].g),
-                    AcesccEncode(linear[i].b), 0.75f};
+      encoded[i] = {AcesccEncode(linear[i].r), AcesccEncode(linear[i].g), AcesccEncode(linear[i].b),
+                    0.75f};
     }
-    device_.ResetPassStats();
-    device_.BeginRender();
-    auto& workspace = device_.Workspace();
+    auto& device = *device_;
+    device.ResetPassStats();
+    device.BeginRender();
+    auto& workspace = device.Workspace();
     workspace.PrepareResultValidity(plan_, document, input_);
     const GraphValueId scene_id{NodeId{"grade.primary"}, PortId{"image"}};
     auto& lease = workspace.AcquireImageForWrite(scene_id, {width, height, TextureFormat::Rgba32f});
@@ -86,23 +82,24 @@ class CudaDiffusionFilterFixture : public ::testing::Test {
         lease.Texture(),
         std::span<const std::byte>(reinterpret_cast<const std::byte*>(encoded.data()),
                                    encoded.size() * sizeof(Rgba)),
-        device_.CommandContext());
+        device.CommandContext());
     workspace.EnsureSceneWorkImages({width, height});
-    const auto output = ExecuteCudaDiffusionFilter(device_, plan_, document,
-                                                   FrameSceneBinding::CachedImage(scene_id));
+    const auto output = ExecuteOpenClDiffusionFilter(device, plan_, document,
+                                                     FrameSceneBinding::CachedImage(scene_id));
     EXPECT_TRUE(output.IsWorkImage());
-    auto&             texture = CudaSceneTexture(device_, output);
+    auto&             image = workspace.SceneWork().Member(output.member);
     std::vector<Rgba> pixels(static_cast<std::size_t>(width) * height);
-    workspace.Device().DownloadTexture2D(
-        texture,
+    workspace.Device().DownloadBufferRange(
+        image.Storage(), 0,
         std::span<std::byte>(reinterpret_cast<std::byte*>(pixels.data()),
                              pixels.size() * sizeof(Rgba)),
-        device_.CommandContext());
+        device.CommandContext());
     if (publish) {
-      device_.EndRender();
-      device_.PublishResults();
+      device.EndRender();
+      device.WaitIdle();
+      device.PublishResults();
     } else {
-      device_.CancelRender();
+      device.CancelRender();
     }
     return pixels;
   }
@@ -128,12 +125,14 @@ class CudaDiffusionFilterFixture : public ::testing::Test {
                             MakeDiffusionScatterMapping(plan_.geometry, layout));
   }
 
+  auto             Stats() const -> const GpuNodePassStats& { return device_->PassStats(); }
+
   ExecutionPlan    plan_;
   PreparedRawInput input_;
-  CudaRenderDevice device_;
+  std::unique_ptr<OpenClRenderDevice> device_;
 };
 
-TEST_F(CudaDiffusionFilterFixture, ZeroStrengthDecodesAcesccToLinearAp1) {
+TEST_F(OpenClDiffusionFilterFixture, ZeroStrengthDecodesAcesccToLinearAp1) {
   constexpr std::uint32_t kWidth  = 37;
   constexpr std::uint32_t kHeight = 23;
   std::vector<Rgb>        linear(static_cast<std::size_t>(kWidth) * kHeight);
@@ -151,15 +150,15 @@ TEST_F(CudaDiffusionFilterFixture, ZeroStrengthDecodesAcesccToLinearAp1) {
     EXPECT_NEAR(pixels[i].b, AcesccDecode(encoded.b), 1.0e-5 * (1.0 + AcesccDecode(encoded.b)));
     EXPECT_EQ(pixels[i].a, 0.75f);
   }
-  EXPECT_EQ(device_.PassStats().diffusion_scatter_rebuild, 0U);
-  EXPECT_EQ(device_.PassStats().diffusion_scatter_sample, 0U);
+  EXPECT_EQ(Stats().diffusion_scatter_rebuild, 0U);
+  EXPECT_EQ(Stats().diffusion_scatter_sample, 0U);
 }
 
-TEST_F(CudaDiffusionFilterFixture, ActiveFilterMatchesCpuReferenceWithinTolerance) {
-  constexpr std::uint32_t kWidth    = 173;
-  constexpr std::uint32_t kHeight   = 97;
-  constexpr float         kStrength = 0.6f;
-  auto                    linear    = PointLightField(kWidth, kHeight, 60, 40);
+TEST_F(OpenClDiffusionFilterFixture, ActiveFilterMatchesCpuReferenceWithinTolerance) {
+  constexpr std::uint32_t kWidth                      = 173;
+  constexpr std::uint32_t kHeight                     = 97;
+  constexpr float         kStrength                   = 0.6f;
+  auto                    linear                      = PointLightField(kWidth, kHeight, 60, 40);
   linear[static_cast<std::size_t>(80) * kWidth + 150] = Rgb{0.9, 1.4, 0.7};
   for (std::size_t i = 0; i < linear.size(); i += 7) {
     linear[i] = linear[i] + Rgb{0.05, 0.1, 0.02};
@@ -168,15 +167,15 @@ TEST_F(CudaDiffusionFilterFixture, ActiveFilterMatchesCpuReferenceWithinToleranc
   ASSERT_GT(Layout(kStrength).level_count, 2U);
   const auto expected = Reference(linear, kStrength).Mix();
   ExpectMatchesReference(Run(linear, kWidth, kHeight, kStrength), expected);
-  EXPECT_EQ(device_.PassStats().diffusion_scatter_rebuild, 1U);
+  EXPECT_EQ(Stats().diffusion_scatter_rebuild, 1U);
 }
 
-TEST_F(CudaDiffusionFilterFixture, CappedCanvasMatchesCpuReferenceWithinTolerance) {
+TEST_F(OpenClDiffusionFilterFixture, CappedCanvasMatchesCpuReferenceWithinTolerance) {
   // The long edge exceeds the canvas limit, so one base texel averages several render pixels.
-  constexpr std::uint32_t kWidth    = 2200;
-  constexpr std::uint32_t kHeight   = 240;
-  constexpr float         kStrength = 0.8f;
-  auto                    linear    = PatchField(kWidth, kHeight, 1203, 117, 5);
+  constexpr std::uint32_t kWidth                       = 2200;
+  constexpr std::uint32_t kHeight                      = 240;
+  constexpr float         kStrength                    = 0.8f;
+  auto                    linear                       = PatchField(kWidth, kHeight, 1203, 117, 5);
   linear[static_cast<std::size_t>(40) * kWidth + 2100] = Rgb{3.0, 2.0, 1.0};
   SetFullFrame(kWidth, kHeight);
   const auto layout = Layout(kStrength);
@@ -186,7 +185,7 @@ TEST_F(CudaDiffusionFilterFixture, CappedCanvasMatchesCpuReferenceWithinToleranc
   ExpectMatchesReference(Run(linear, kWidth, kHeight, kStrength), expected);
 }
 
-TEST_F(CudaDiffusionFilterFixture, ActiveFilterSpreadsPointLightIntoItsSurroundings) {
+TEST_F(OpenClDiffusionFilterFixture, ActiveFilterSpreadsPointLightIntoItsSurroundings) {
   constexpr std::uint32_t kWidth  = 256;
   constexpr std::uint32_t kHeight = 192;
   const auto              linear  = PointLightField(kWidth, kHeight, 128, 96);
@@ -205,16 +204,16 @@ TEST_F(CudaDiffusionFilterFixture, ActiveFilterSpreadsPointLightIntoItsSurroundi
   EXPECT_GT(at(misted, 132, 96).r, at(misted, 158, 96).r);
 }
 
-TEST_F(CudaDiffusionFilterFixture, ActiveFilterKeepsEnergyOfBoostedLight) {
+TEST_F(OpenClDiffusionFilterFixture, ActiveFilterKeepsEnergyOfBoostedLight) {
   constexpr std::uint32_t kWidth    = 256;
   constexpr std::uint32_t kHeight   = 192;
   constexpr float         kStrength = 0.75f;
   const auto              linear    = PointLightField(kWidth, kHeight, 128, 96);
   SetFullFrame(kWidth, kHeight);
-  const auto   layout         = Layout(kStrength);
-  const auto   reference      = Reference(linear, kStrength);
-  double       direct_energy  = 0.0;
-  double       boosted_energy = 0.0;
+  const auto layout         = Layout(kStrength);
+  const auto reference      = Reference(linear, kStrength);
+  double     direct_energy  = 0.0;
+  double     boosted_energy = 0.0;
   for (const auto& value : linear) {
     direct_energy += value.r;
     boosted_energy += reference.Boost(value).r;
@@ -229,20 +228,20 @@ TEST_F(CudaDiffusionFilterFixture, ActiveFilterKeepsEnergyOfBoostedLight) {
   EXPECT_NEAR(energy, expected, expected * 0.01);
 }
 
-TEST_F(CudaDiffusionFilterFixture, RoiRenderSamplesThePublishedFullFrameScatter) {
+TEST_F(OpenClDiffusionFilterFixture, RoiRenderSamplesThePublishedFullFrameScatter) {
   constexpr std::uint32_t kWidth   = 256;
   constexpr std::uint32_t kHeight  = 192;
   constexpr std::uint32_t kRoiX    = 96;
   constexpr std::uint32_t kRoiY    = 40;
   constexpr std::uint32_t kRoiSize = 128;
   // The bright patch sits left of the ROI; its glow must still reach into the ROI.
-  const auto linear   = PatchField(kWidth, kHeight, 76, 90, 8);
-  auto       document = CreateDefaultPipelineDocument();
+  const auto              linear   = PatchField(kWidth, kHeight, 76, 90, 8);
+  auto                    document = CreateDefaultPipelineDocument();
   document.Drt()->Params().ApplyDiffusionStrength(0.8f);
 
   SetFullFrame(kWidth, kHeight);
   const auto full = Render(document, linear, true);
-  EXPECT_EQ(device_.PassStats().diffusion_scatter_rebuild, 1U);
+  EXPECT_EQ(Stats().diffusion_scatter_rebuild, 1U);
 
   std::vector<Rgb> roi(static_cast<std::size_t>(kRoiSize) * kRoiSize);
   for (std::uint32_t y = 0; y < kRoiSize; ++y) {
@@ -254,8 +253,8 @@ TEST_F(CudaDiffusionFilterFixture, RoiRenderSamplesThePublishedFullFrameScatter)
   SetView({kWidth, kHeight}, {kRoiSize, kRoiSize},
           Matrix3x3::Translate(static_cast<float>(kRoiX), static_cast<float>(kRoiY)));
   const auto detail = Render(document, roi, true);
-  EXPECT_EQ(device_.PassStats().diffusion_scatter_sample, 1U);
-  EXPECT_EQ(device_.PassStats().diffusion_scatter_rebuild, 0U);
+  EXPECT_EQ(Stats().diffusion_scatter_sample, 1U);
+  EXPECT_EQ(Stats().diffusion_scatter_rebuild, 0U);
 
   for (std::uint32_t y = 0; y < kRoiSize; ++y) {
     for (std::uint32_t x = 0; x < kRoiSize; ++x) {
@@ -271,31 +270,31 @@ TEST_F(CudaDiffusionFilterFixture, RoiRenderSamplesThePublishedFullFrameScatter)
   EXPECT_GT(detail[static_cast<std::size_t>(94 - kRoiY) * kRoiSize].r, background * 1.05);
 }
 
-TEST_F(CudaDiffusionFilterFixture, RoiRenderWithoutPublishedScatterDoesNotPublishOne) {
-  constexpr std::uint32_t kWidth  = 128;
-  constexpr std::uint32_t kHeight = 96;
+TEST_F(OpenClDiffusionFilterFixture, RoiRenderWithoutPublishedScatterDoesNotPublishOne) {
+  constexpr std::uint32_t kWidth   = 128;
+  constexpr std::uint32_t kHeight  = 96;
   auto                    document = CreateDefaultPipelineDocument();
   document.Drt()->Params().ApplyDiffusionStrength(0.5f);
   const auto linear = PatchField(64, 64, 20, 20, 4);
   SetView({kWidth, kHeight}, {64, 64}, Matrix3x3::Translate(32.0f, 16.0f));
   (void)Render(document, linear, true);
-  EXPECT_EQ(device_.PassStats().diffusion_scatter_rebuild, 1U);
+  EXPECT_EQ(Stats().diffusion_scatter_rebuild, 1U);
   (void)Render(document, linear, true);
-  EXPECT_EQ(device_.PassStats().diffusion_scatter_rebuild, 1U)
+  EXPECT_EQ(Stats().diffusion_scatter_rebuild, 1U)
       << "an ROI-built scatter image must not become the full-frame image";
-  EXPECT_EQ(device_.PassStats().diffusion_scatter_sample, 0U);
+  EXPECT_EQ(Stats().diffusion_scatter_sample, 0U);
 }
 
-TEST_F(CudaDiffusionFilterFixture, PreviewAndFullResolutionReadTheSameGlow) {
-  constexpr std::uint32_t kWidth  = 256;
-  constexpr std::uint32_t kHeight = 192;
+TEST_F(OpenClDiffusionFilterFixture, PreviewAndFullResolutionReadTheSameGlow) {
+  constexpr std::uint32_t kWidth   = 256;
+  constexpr std::uint32_t kHeight  = 192;
   // The patch is aligned to the 2 x 2 preview blocks, so the preview input is exact.
-  const auto linear   = PatchField(kWidth, kHeight, 124, 92, 8);
-  auto       document = CreateDefaultPipelineDocument();
+  const auto              linear   = PatchField(kWidth, kHeight, 124, 92, 8);
+  auto                    document = CreateDefaultPipelineDocument();
   document.Drt()->Params().ApplyDiffusionStrength(1.0f);
 
   SetFullFrame(kWidth, kHeight);
-  const auto full = Render(document, linear, false);
+  const auto       full = Render(document, linear, false);
 
   std::vector<Rgb> half(static_cast<std::size_t>(kWidth / 2) * (kHeight / 2));
   for (std::uint32_t y = 0; y < kHeight / 2; ++y) {

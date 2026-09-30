@@ -2,7 +2,8 @@
 
 Date: 2026-09-30
 
-Status: **CUDA MVP implemented** on `feature/black-pro-mist`. The implemented design differs
+Status: **CUDA MVP implemented** on `feature/black-pro-mist`; **OpenCL parity** on
+`feature/black-pro-mist-opencl`. Metal still decodes only. The implemented design differs
 from this plan by user decision on 2026-09-30. Section 0 records the implemented design. It
 replaces sections 1.3, 1.4 (the "DRT-owned scene-referred step" item), 3.3, 3.4, 6, and the phase
 split in sections 10 to 17. The algorithm of section 3.1 and the pyramid of section 3.2 apply,
@@ -38,8 +39,8 @@ All source paths in this plan are relative to `alcedo_studio/src/` unless the pa
   transform. The pass is in every compiled plan. With strength 0 it only decodes ACEScc to linear
   AP1. The DRT display kernels read linear AP1 and do not decode ACEScc. The transfer function is
   therefore decoded once per frame, by the DiffusionFilter pass.
-- CUDA implements the scatter. OpenCL and Metal implement the decode. A positive strength on
-  OpenCL or Metal throws `"<Backend> DiffusionFilter scatter is not implemented"`.
+- CUDA and OpenCL implement the scatter. Metal implements the decode only. A positive strength
+  on Metal throws `"Metal DiffusionFilter scatter is not implemented"`.
 
 ### 0.2 Storage and Model
 
@@ -95,6 +96,12 @@ All source paths in this plan are relative to `alcedo_studio/src/` unless the pa
   then a mix that samples the scatter image with a cubic B-spline at `render_to_base`.
   Intermediate pyramid levels are pooled scratch textures no larger than the canvas. A canvas
   with a short side of 707 texels or more starts at level 1 (for a 3:2 frame, 1024 x 683).
+- The OpenCL pass (`edit/runtime/opencl/opencl_diffusion_filter_pass.cpp`, kernels appended to
+  the `opencl_dag_drt` program in `shader/drt.cl`) runs the same kernels, the same
+  sample/rebuild/publish decision, and the same `DiffusionScatterId` result. Pyramid levels and
+  the scatter image are pooled `Rgba32f` images; the scene input and output keep the
+  dual-storage (image or scene-work buffer) binding. `GpuDagOpenClGradeTest` runs the CUDA test
+  cases against the shared CPU reference (`tests/edit/runtime/diffusion_filter_reference.hpp`).
 - `kDrtImplementationVersion` is 5.
 
 ### 0.4 Known limits of the implemented design

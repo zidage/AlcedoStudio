@@ -50,6 +50,12 @@ inline constexpr const char* kDrtKernelName                       = "drt_display
 inline constexpr const char* kDrtSceneKernelName                  = "drt_display_scene_rgba32f";
 inline constexpr const char* kDiffusionFilterDecodeSceneKernelName =
     "diffusion_filter_decode_scene_rgba32f";
+inline constexpr const char* kDiffusionFilterReduceBoostKernelName = "diffusion_filter_reduce_boost";
+inline constexpr const char* kDiffusionFilterDownsampleKernelName  = "diffusion_filter_downsample";
+inline constexpr const char* kDiffusionFilterUpsampleAccumulateKernelName =
+    "diffusion_filter_upsample_accumulate";
+inline constexpr const char* kDiffusionFilterMixSceneKernelName =
+    "diffusion_filter_mix_scene_rgba32f";
 
 }  // namespace alcedo::OpenCL::GpuDag
 

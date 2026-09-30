@@ -533,6 +533,7 @@ if(ALCEDO_OPENCL_ENABLED)
 
   add_executable(GpuDagOpenClGradeTest
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_grade_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_diffusion_filter_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_mask_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_multi_grade_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_lut_resource_test.cpp)
