@@ -84,6 +84,15 @@ class EditorSessionRenderSchedulerPort final : public alcedo::IEditorPipelineSch
       std::shared_ptr<alcedo::PipelineScheduler> pipeline_scheduler = nullptr);
   ~EditorSessionRenderSchedulerPort() override;
 
+  /**
+   * @brief Reject new frames, cancel the in-flight frame, and wait until it completes.
+   *
+   * The in-flight frame presents to the viewport sink resolved at submit. Call this before the
+   * sink owners (the editor session controller and the QML viewport) are destroyed. A GUI-thread
+   * caller keeps delivering events while it waits. Idempotent; the destructor calls it.
+   */
+  void Shutdown();
+
   void SetSinkResolver(EditorSessionFrameSinkResolver resolver);
   void SetPipelinePort(std::shared_ptr<EditorSessionPipelinePort> pipeline_port);
   void SetServices(EditorSessionSchedulerServices services);

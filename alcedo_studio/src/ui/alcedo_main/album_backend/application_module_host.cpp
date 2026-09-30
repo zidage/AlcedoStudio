@@ -461,6 +461,11 @@ void ApplicationModuleHost::ShutdownModules() {
     if (editor_session_) {
       editor_session_->Shutdown();
     }
+    // The in-flight editor frame presents to the viewport sink or the scope sink of the editor
+    // session. Wait for it before either sink owner is destroyed.
+    if (editor_session_scheduler_) {
+      editor_session_scheduler_->Shutdown();
+    }
     if (import_export_) {
       import_export_->CancelImport();
     }

@@ -381,6 +381,9 @@ int main(int argc, char* argv[]) {
   }
 
   const int exit_code = app.exec();
+  // The QML engine owns the editor viewport and its frame sink, and it is destroyed before
+  // app_modules. Shut the modules down (and drain the in-flight editor frame) while it lives.
+  app_modules.Shutdown();
   qCInfo(alcedo::diag::appLog) << "app.exit code=" << exit_code;
   alcedo::diag::PreviewPerformance::Shutdown();
   alcedo::diag::ShutdownApplicationLogging();
