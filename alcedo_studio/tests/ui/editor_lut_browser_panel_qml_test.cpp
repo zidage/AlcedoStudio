@@ -368,6 +368,55 @@ TEST(EditorLutBrowserPanelQmlTest, TileActivationTogglesTheTargetLutOnlyWhenATar
   EXPECT_TRUE(h.warnings.isEmpty()) << h.Warnings();
 }
 
+TEST(EditorLutBrowserPanelQmlTest, FavoritesFacetListLayoutAndFilterFold) {
+  BrowserHarness h;
+  ASSERT_NE(h.panel, nullptr) << h.Warnings();
+  ASSERT_NE(h.result, nullptr) << h.Warnings();
+
+  // Starring through the page updates the Favorites facet; the facet is a filter choice.
+  const QString teal = QStringLiteral("library:general/teal.cube");
+  QVariant      starred;
+  ASSERT_TRUE(QMetaObject::invokeMethod(h.result, "toggleFavorite",
+                                        Q_RETURN_ARG(QVariant, starred), Q_ARG(QVariant, teal)));
+  ASSERT_TRUE(starred.toBool());
+  EXPECT_TRUE(h.browser.isFavorite(teal));
+  EXPECT_EQ(h.Find(QStringLiteral("editorLutFavoritesOnly")), nullptr);
+  auto* favorites = h.Find(QStringLiteral("editorLutFacet_favorites_favorites"));
+  ASSERT_NE(favorites, nullptr);
+  ASSERT_TRUE(QMetaObject::invokeMethod(favorites, "activate"));
+  EXPECT_TRUE(h.browser.favoritesOnly());
+  ASSERT_TRUE(WaitUntil([&] { return h.Tiles().size() == 1; }, 2000));
+  EXPECT_EQ(h.Tiles().front()->property("entryId").toString(), teal);
+  favorites = h.Find(QStringLiteral("editorLutFacet_favorites_favorites"));
+  ASSERT_NE(favorites, nullptr);
+  ASSERT_TRUE(QMetaObject::invokeMethod(favorites, "activate"));
+  EXPECT_FALSE(h.browser.favoritesOnly());
+  ASSERT_TRUE(WaitUntil([&] { return h.Tiles().size() == 5; }, 2000));
+
+  // The list layout keeps one column of rows without the cube placeholder.
+  h.panel->setProperty("viewMode", QStringLiteral("list"));
+  ASSERT_TRUE(WaitUntil([&] { return h.result->property("columns").toInt() == 1; }, 2000));
+  ASSERT_TRUE(WaitUntil([&] { return h.Tiles().size() == 5; }, 2000));
+  for (QQuickItem* tile : h.Tiles()) {
+    QQuickItem* cube = ChildNamed(tile, QStringLiteral("editorLutTileCube"));
+    ASSERT_NE(cube, nullptr);
+    EXPECT_FALSE(cube->isVisible());
+    EXPECT_TRUE(ChildNamed(tile, QStringLiteral("editorLutFavoriteStar"))->isVisible());
+  }
+  h.panel->setProperty("viewMode", QStringLiteral("grid"));
+  ASSERT_TRUE(WaitUntil([&] { return h.result->property("columns").toInt() >= 2; }, 2000));
+
+  // Folding the filters gives the results the full width.
+  auto* filter_host = h.Find(QStringLiteral("editorLutFilterHost"));
+  ASSERT_NE(filter_host, nullptr);
+  const qreal docked_width = h.result->width();
+  h.panel->setProperty("filtersVisible", false);
+  ASSERT_TRUE(WaitUntil([&] { return !filter_host->isVisible(); }, 2000));
+  EXPECT_GT(h.result->width(), docked_width);
+  EXPECT_NEAR(h.result->x(), 0.0, 0.5);
+  EXPECT_TRUE(h.warnings.isEmpty()) << h.Warnings();
+}
+
 TEST(EditorLutBrowserPanelQmlTest, EmptyLibraryLinksToLutSettings) {
   BrowserHarness h({});
   ASSERT_NE(h.panel, nullptr) << h.Warnings();

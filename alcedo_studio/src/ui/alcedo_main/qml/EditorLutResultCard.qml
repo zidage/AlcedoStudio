@@ -4,8 +4,10 @@ import QtQuick.Controls.impl
 import QtQuick.Layouts
 import Alcedo.Main 1.0
 
-// LUT browser result card (LUT library plan L6A, section 6.5): search and
-// library actions, the target indicator, and the filtered LUTs as tiles.
+// LUT browser results (LUT library plan L6A, section 6.5): the target
+// indicator, the filtered LUTs as a grid of tiles or a compact list, and a
+// footer with the count and the library actions. Search, order, and the layout
+// switch live in the page toolbar (EditorLutBrowserPanel).
 //
 // Data ownership: LutLibraryModel (browser) owns rows, query, and focus;
 // LutLibraryController (target) owns the Color Grade target and its current
@@ -14,13 +16,14 @@ import Alcedo.Main 1.0
 //
 // Layout: tiles are laid out in rows of `columns` by a ListView over row
 // indices, so every row takes the height of its tallest tile and titles are
-// shown in full. Only visible rows instantiate tiles.
+// shown in full. Only visible rows instantiate tiles. The list layout is the
+// same view with one column and rows without the cube placeholder.
 //
 // Input: choosing a tile applies it to the target as one settled edit (the
 // Editor viewport shows the result); without a target it only moves focus.
 // Arrow keys move through the grid the same way (ShortcutRegistry scope
-// `editor.lut`); the search field keeps native text input.
-Rectangle {
+// `editor.lut`); Ctrl+F asks the page to focus its search field.
+Item {
     id: root
     objectName: "editorLutResultCard"
 
@@ -28,20 +31,23 @@ Rectangle {
     property var target: null
     property var library: null
     property var host: null
+    // "grid" or "list".
+    property string viewMode: "grid"
+    readonly property bool listMode: viewMode === "list"
+
+    signal searchRequested()
 
     readonly property color colText: appTheme.textColor
     readonly property color colMuted: appTheme.textMutedColor
     readonly property color colBase: appTheme.bgBaseColor
     readonly property color colCardBorder: appTheme.cardBorderColor
-    readonly property color colSelectedFill: appTheme.editorListSelectedFillColor
-    readonly property color colSelectedInk: appTheme.editorListSelectedInkColor
     // Selection is an outline (graph selection tokens), never a filled well.
     readonly property color colSelectionOutline: appTheme.graphSelectionOutlineColor
     readonly property int selectionOutlineWidth: appTheme.graphSelectionOutlineWidth
     readonly property int toolbarChrome: Math.max(
         appTheme.iconOpticalSizeCompact + appTheme.spaceSm,
         appTheme.iconButtonHitSizeCompact - appTheme.spaceSm)
-    readonly property int tileGap: appTheme.spaceXs
+    readonly property int tileGap: listMode ? appTheme.spaceXs / 2 : appTheme.spaceXs
 
     readonly property int totalCount: browser ? Number(browser.totalCount) : 0
     readonly property int resultCount: browser ? Number(browser.count) : 0
@@ -51,13 +57,16 @@ Rectangle {
     readonly property string appliedEntryId: target ? String(target.associationEntryId || "") : ""
 
     // Grid geometry: as many columns of at least editorLutTileMinWidth as fit.
-    readonly property int columns: Math.max(1, Math.floor((tileRows.width + tileGap)
-                                                         / (appTheme.editorLutTileMinWidth + tileGap)))
+    readonly property int columns: listMode ? 1
+                                            : Math.max(1, Math.floor((tileRows.width + tileGap)
+                                                                     / (appTheme.editorLutTileMinWidth + tileGap)))
     readonly property real tileWidth: (tileRows.width - (columns - 1) * tileGap) / columns
     readonly property int rowCount: Math.ceil(resultCount / columns)
 
     // Bumped on every model change so tile bindings re-read their roles.
     property int dataRevision: 0
+    // Last rejected favorite change (shown in the footer until the next success).
+    property string favoriteError: ""
 
     // Diagnostics / tests and the rail's scroll restore.
     readonly property alias tileRowsView: tileRows
@@ -66,11 +75,6 @@ Rectangle {
         tileRows.contentY = Math.max(0, Math.min(Number(y || 0),
                                                  Math.max(0, tileRows.contentHeight - tileRows.height)))
     }
-
-    radius: appTheme.panelRadius
-    color: appTheme.cardSurfaceColor
-    border.width: 1
-    border.color: appTheme.cardBorderColor
 
     function roleAt(row, role) {
         const _revision = root.dataRevision
@@ -117,9 +121,17 @@ Rectangle {
         tileRows.positionViewAtIndex(Math.floor(row / root.columns), ListView.Contain)
     }
 
-    function focusSearch() {
-        searchInput.forceActiveFocus()
-        searchInput.selectAll()
+    function focusResults() {
+        tileRows.forceActiveFocus()
+    }
+
+    function toggleFavorite(entryId) {
+        if (!browser || entryId.length === 0)
+            return false
+        const ok = browser.toggleFavorite(entryId)
+        if (ok)
+            root.favoriteError = ""
+        return ok
     }
 
     Connections {
@@ -130,6 +142,7 @@ Rectangle {
         function onRowsRemoved() { root.dataRevision += 1 }
         function onRowsInserted() { root.dataRevision += 1 }
         function onLayoutChanged() { root.dataRevision += 1 }
+        function onFavoriteFailed(message) { root.favoriteError = String(message || "") }
     }
 
     // One chrome recipe for every toolbar SVG action.
@@ -137,238 +150,18 @@ Rectangle {
         compact: true
         iconColorDefault: appTheme.iconColor
         iconColorMuted: root.colMuted
-        fillIdle: root.colBase
+        fillIdle: "transparent"
         fillHover: appTheme.buttonHoveredFillColor
         fillSelected: appTheme.buttonSelectedFillColor
         Layout.preferredWidth: root.toolbarChrome
         Layout.preferredHeight: root.toolbarChrome
+        Layout.minimumWidth: Layout.preferredWidth
+        Layout.minimumHeight: Layout.preferredHeight
     }
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: appTheme.spaceMd
         spacing: appTheme.spaceSm
-
-        // ── Search and library actions (sunken track) ─────────────────────
-        Rectangle {
-            objectName: "editorLutToolbar"
-            Layout.fillWidth: true
-            Layout.preferredHeight: root.toolbarChrome + appTheme.spaceXs * 2
-            radius: appTheme.controlRadiusSmall
-            color: root.colBase
-            border.width: 1
-            border.color: root.colCardBorder
-
-            RowLayout {
-                anchors.fill: parent
-                anchors.margins: appTheme.spaceXs / 2
-                spacing: appTheme.spaceXs
-
-                ColorImage {
-                    Layout.leftMargin: appTheme.spaceXs
-                    Layout.preferredWidth: appTheme.iconOpticalSizeCompact
-                    Layout.preferredHeight: appTheme.iconOpticalSizeCompact
-                    source: "qrc:/panel_icons/search.svg"
-                    sourceSize.width: appTheme.iconSourceSizeCompact
-                    sourceSize.height: appTheme.iconSourceSizeCompact
-                    color: appTheme.iconColor
-                }
-
-                Item {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-
-                    TextInput {
-                        id: searchInput
-                        objectName: "editorLutSearchInput"
-                        anchors.fill: parent
-                        verticalAlignment: TextInput.AlignVCenter
-                        color: root.colText
-                        selectionColor: root.colSelectedFill
-                        selectedTextColor: root.colSelectedInk
-                        font.family: appTheme.uiFontFamily
-                        font.pixelSize: appTheme.fontSizeCaption
-                        font.weight: appTheme.fontWeightRegular
-                        clip: true
-                        text: root.browser ? String(root.browser.queryText) : ""
-                        Accessible.role: Accessible.EditableText
-                        Accessible.name: qsTr("Search LUTs")
-                        onTextEdited: {
-                            if (root.browser)
-                                root.browser.queryText = text
-                        }
-                        Keys.onReturnPressed: {
-                            if (root.browser)
-                                root.browser.applyQueryNow()
-                            tileRows.forceActiveFocus()
-                        }
-                        Keys.onEscapePressed: {
-                            if (text.length > 0 && root.browser) {
-                                root.browser.queryText = ""
-                                root.browser.applyQueryNow()
-                            } else {
-                                tileRows.forceActiveFocus()
-                            }
-                        }
-                    }
-
-                    Text {
-                        anchors.fill: searchInput
-                        verticalAlignment: Text.AlignVCenter
-                        visible: searchInput.text.length === 0 && !searchInput.activeFocus
-                        text: qsTr("Search LUTs")
-                        color: root.colMuted
-                        elide: Text.ElideRight
-                        font.family: appTheme.uiFontFamily
-                        font.pixelSize: appTheme.fontSizeCaption
-                        font.weight: appTheme.fontWeightRegular
-                    }
-                }
-
-                Item {
-                    Layout.preferredWidth: root.toolbarChrome
-                    Layout.preferredHeight: root.toolbarChrome
-
-                    ToolbarButton {
-                        anchors.fill: parent
-                        objectName: "editorLutSortButton"
-                        iconSrc: "qrc:/panel_icons/sort.svg"
-                        actionName: qsTr("Sort LUTs")
-                        onClicked: sortPopup.open()
-                    }
-
-                    Popup {
-                        id: sortPopup
-                        objectName: "editorLutSortPopup"
-                        y: parent.height + appTheme.spaceXs
-                        x: parent.width - width
-                        width: appTheme.editorLutBrowserFilterWidth
-                        padding: appTheme.spaceXs
-                        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-                        background: Rectangle {
-                            color: appTheme.cardSurfaceColor
-                            border.width: 1
-                            border.color: root.colCardBorder
-                            radius: appTheme.controlRadiusSmall
-                        }
-
-                        ColumnLayout {
-                            width: sortPopup.availableWidth
-                            spacing: appTheme.spaceXs / 2
-
-                            Text {
-                                Layout.fillWidth: true
-                                Layout.leftMargin: appTheme.spaceSm
-                                Layout.rightMargin: appTheme.spaceSm
-                                Layout.topMargin: appTheme.spaceXs
-                                text: root.browser && String(root.browser.queryText).length > 0
-                                      ? qsTr("Search results are ordered by relevance.")
-                                      : qsTr("Sort by")
-                                color: root.colMuted
-                                wrapMode: Text.Wrap
-                                font.family: appTheme.uiFontFamily
-                                font.pixelSize: appTheme.fontSizeCaption
-                                font.weight: appTheme.fontWeightStrong
-                            }
-
-                            Repeater {
-                                model: [
-                                    { label: qsTr("Name"), key: "name" },
-                                    { label: qsTr("Modified time"), key: "modified" }
-                                ]
-                                delegate: Rectangle {
-                                    id: sortRow
-                                    required property var modelData
-                                    readonly property bool current: !!root.browser
-                                        && String(root.browser.sortKey) === modelData.key
-
-                                    Layout.fillWidth: true
-                                    Layout.preferredHeight: appTheme.lineHeightBody + appTheme.spaceSm
-                                    radius: appTheme.badgeRadius
-                                    color: sortHover.hovered ? appTheme.buttonHoveredFillColor
-                                                             : "transparent"
-                                    border.width: current ? root.selectionOutlineWidth : 0
-                                    border.color: root.colSelectionOutline
-
-                                    Text {
-                                        anchors.left: parent.left
-                                        anchors.leftMargin: appTheme.spaceSm
-                                        anchors.verticalCenter: parent.verticalCenter
-                                        text: sortRow.modelData.label
-                                        color: root.colText
-                                        font.family: appTheme.uiFontFamily
-                                        font.pixelSize: appTheme.fontSizeCaption
-                                        font.weight: sortRow.current ? appTheme.fontWeightStrong
-                                                                     : appTheme.fontWeightRegular
-                                    }
-
-                                    Text {
-                                        anchors.right: parent.right
-                                        anchors.rightMargin: appTheme.spaceSm
-                                        anchors.verticalCenter: parent.verticalCenter
-                                        visible: sortRow.current
-                                        text: root.browser && root.browser.sortAscending ? "▲" : "▼"
-                                        color: root.colText
-                                        font.family: appTheme.uiFontFamily
-                                        font.pixelSize: appTheme.fontSizeCaption
-                                    }
-
-                                    HoverHandler {
-                                        id: sortHover
-                                        cursorShape: Qt.PointingHandCursor
-                                    }
-                                    TapHandler {
-                                        onTapped: {
-                                            if (!root.browser)
-                                                return
-                                            if (sortRow.current) {
-                                                root.browser.sortAscending = !root.browser.sortAscending
-                                            } else {
-                                                root.browser.sortKey = sortRow.modelData.key
-                                                root.browser.sortAscending = true
-                                            }
-                                            sortPopup.close()
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                Rectangle {
-                    Layout.preferredWidth: 1
-                    Layout.preferredHeight: appTheme.iconOpticalSizeCompact
-                    color: root.colCardBorder
-                }
-
-                ToolbarButton {
-                    objectName: "editorLutImportButton"
-                    enabled: !!root.library && !root.libraryBusy && !!root.host
-                    iconSrc: "qrc:/panel_icons/import.svg"
-                    actionName: qsTr("Import LUTs")
-                    onClicked: root.host.openLutImportDialog()
-                }
-
-                ToolbarButton {
-                    objectName: "editorLutRefreshButton"
-                    enabled: !!root.library && !root.libraryBusy
-                    iconSrc: "qrc:/panel_icons/retry.svg"
-                    actionName: qsTr("Refresh LUT library")
-                    onClicked: root.library.refresh()
-                }
-
-                ToolbarButton {
-                    objectName: "editorLutOpenFolderButton"
-                    Layout.rightMargin: appTheme.spaceXs
-                    enabled: !!root.library
-                    iconSrc: "qrc:/panel_icons/folder-open.svg"
-                    actionName: qsTr("Open LUT folder")
-                    // A rejected dispatch sets the library's lastError (shown below).
-                    onClicked: root.library.openRootDirectory()
-                }
-            }
-        }
 
         // ── Target indicator ──────────────────────────────────────────────
         ColumnLayout {
@@ -514,7 +307,7 @@ Rectangle {
                                 || event.key === Qt.Key_Space) && root.browser) {
                         root.activateEntry(String(root.browser.focusedEntryId))
                     } else if (event.key === Qt.Key_F && (event.modifiers & Qt.ControlModifier)) {
-                        root.focusSearch()
+                        root.searchRequested()
                     } else {
                         return
                     }
@@ -630,39 +423,74 @@ Rectangle {
             }
         }
 
-        // ── Footer: result count and library errors ──────────────────────
+        // ── Footer: errors, result count, and library actions ─────────────
         Label {
             objectName: "editorLutLibraryError"
             Layout.fillWidth: true
             visible: text.length > 0
-            text: root.libraryError
+            text: root.libraryError.length > 0 ? root.libraryError : root.favoriteError
             color: appTheme.dangerColor
             wrapMode: Text.Wrap
             font.family: appTheme.uiFontFamily
             font.pixelSize: appTheme.fontSizeCaption
         }
 
-        Label {
-            objectName: "editorLutCountText"
+        RowLayout {
+            objectName: "editorLutFooter"
             Layout.fillWidth: true
-            text: root.libraryBusy
-                  ? qsTr("Refreshing LUT library")
-                  : (root.resultCount !== root.totalCount
-                     ? qsTr("%1 of %2 LUTs").arg(root.resultCount).arg(root.totalCount)
-                     : (root.totalCount === 1 ? qsTr("1 LUT")
-                                              : qsTr("%1 LUTs").arg(root.totalCount)))
-            color: root.colMuted
-            wrapMode: Text.Wrap
-            font.family: appTheme.dataFontFamily
-            font.pixelSize: appTheme.fontSizeCaption
+            spacing: appTheme.spaceXs
+
+            Label {
+                objectName: "editorLutCountText"
+                Layout.fillWidth: true
+                Layout.leftMargin: appTheme.spaceXs
+                text: root.libraryBusy
+                      ? qsTr("Refreshing LUT library")
+                      : (root.resultCount !== root.totalCount
+                         ? qsTr("%1 of %2 LUTs").arg(root.resultCount).arg(root.totalCount)
+                         : (root.totalCount === 1 ? qsTr("1 LUT")
+                                                  : qsTr("%1 LUTs").arg(root.totalCount)))
+                color: root.colMuted
+                elide: Text.ElideRight
+                font.family: appTheme.dataFontFamily
+                font.pixelSize: appTheme.fontSizeCaption
+            }
+
+            ToolbarButton {
+                objectName: "editorLutImportButton"
+                enabled: !!root.library && !root.libraryBusy && !!root.host
+                iconSrc: "qrc:/panel_icons/import.svg"
+                actionName: qsTr("Import LUTs")
+                onClicked: root.host.openLutImportDialog()
+            }
+
+            ToolbarButton {
+                objectName: "editorLutRefreshButton"
+                enabled: !!root.library && !root.libraryBusy
+                iconSrc: "qrc:/panel_icons/retry.svg"
+                actionName: qsTr("Refresh LUT library")
+                onClicked: root.library.refresh()
+            }
+
+            ToolbarButton {
+                objectName: "editorLutOpenFolderButton"
+                enabled: !!root.library
+                iconSrc: "qrc:/panel_icons/folder-open.svg"
+                actionName: qsTr("Open LUT folder")
+                // A rejected dispatch sets the library's lastError (shown above).
+                onClicked: root.library.openRootDirectory()
+            }
         }
     }
 
-    // One LUT tile: placeholder cube, full title, print line, status, favorite.
+    // One LUT: a grid tile (placeholder cube, centered title, print line, status,
+    // hover star) or, in the list layout, a compact row (title and print left,
+    // star right, no cube). Both keep one data contract and one chrome.
     component EditorLutTile: Item {
         id: tile
 
         property int row: -1
+        readonly property bool listMode: root.listMode
         readonly property bool present: row >= 0 && row < root.resultCount
         readonly property string entryId: present ? String(root.roleAt(row, LutLibraryModel.EntryIdRole)) : ""
         readonly property string title: present ? String(root.roleAt(row, LutLibraryModel.DisplayNameRole) || "") : ""
@@ -675,10 +503,16 @@ Rectangle {
         readonly property bool applied: present && root.roleAt(row, LutLibraryModel.AppliedRole) === true
         readonly property color inkColor: root.colText
         readonly property color mutedInkColor: root.colMuted
+        readonly property int textAlignment: listMode ? Text.AlignLeft : Text.AlignHCenter
+        // Room the text leaves for the star (always shown in the list layout).
+        readonly property int starReserve: appTheme.iconOpticalSizeCompact + appTheme.spaceXs
+        // The star's own area sits above the tile's; either one counts as hovering the tile.
+        readonly property bool hovered: tileHover.containsMouse || starArea.containsMouse
 
         objectName: "editorLutTile"
         visible: present
-        implicitHeight: tileColumn.implicitHeight + appTheme.spaceSm * 2
+        implicitHeight: tileColumn.implicitHeight
+                        + (listMode ? appTheme.spaceSm + appTheme.spaceXs : appTheme.spaceSm * 2)
         Accessible.role: Accessible.CheckBox
         Accessible.checkable: true
         Accessible.checked: applied
@@ -690,7 +524,7 @@ Rectangle {
             objectName: "editorLutTileChrome"
             anchors.fill: parent
             radius: appTheme.controlRadiusSmall
-            color: tileHover.hovered || (tile.focused && tileRows.activeFocus)
+            color: tile.hovered || (tile.focused && tileRows.activeFocus)
                    ? appTheme.buttonHoveredFillColor : "transparent"
             border.width: tile.applied ? root.selectionOutlineWidth : 0
             border.color: root.colSelectionOutline
@@ -700,11 +534,16 @@ Rectangle {
             id: tileColumn
             anchors.left: parent.left
             anchors.right: parent.right
-            anchors.top: parent.top
-            anchors.margins: appTheme.spaceSm
-            spacing: appTheme.spaceXs
+            anchors.verticalCenter: tile.listMode ? parent.verticalCenter : undefined
+            anchors.top: tile.listMode ? undefined : parent.top
+            anchors.leftMargin: appTheme.spaceSm
+            anchors.rightMargin: tile.listMode ? appTheme.spaceSm + tile.starReserve : appTheme.spaceSm
+            anchors.topMargin: appTheme.spaceSm
+            spacing: tile.listMode ? 0 : appTheme.spaceXs
 
             ColorImage {
+                objectName: "editorLutTileCube"
+                visible: !tile.listMode
                 Layout.alignment: Qt.AlignHCenter
                 Layout.topMargin: appTheme.spaceXs
                 Layout.preferredWidth: appTheme.editorLutTileIconSize
@@ -719,12 +558,12 @@ Rectangle {
             Label {
                 objectName: "editorLutTileTitle"
                 Layout.fillWidth: true
-                horizontalAlignment: Text.AlignHCenter
+                horizontalAlignment: tile.textAlignment
                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                 text: tile.title
                 color: tile.selectable ? tile.inkColor : tile.mutedInkColor
                 font.family: appTheme.uiFontFamily
-                font.pixelSize: appTheme.fontSizeCaption
+                font.pixelSize: tile.listMode ? appTheme.fontSizeBody : appTheme.fontSizeCaption
                 font.weight: tile.applied ? appTheme.fontWeightStrong : appTheme.fontWeightRegular
             }
 
@@ -732,7 +571,7 @@ Rectangle {
                 objectName: "editorLutTilePrint"
                 Layout.fillWidth: true
                 visible: tile.printName.length > 0
-                horizontalAlignment: Text.AlignHCenter
+                horizontalAlignment: tile.textAlignment
                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                 text: tile.printName
                 color: tile.mutedInkColor
@@ -743,7 +582,7 @@ Rectangle {
             Label {
                 Layout.fillWidth: true
                 visible: tile.statusText.length > 0
-                horizontalAlignment: Text.AlignHCenter
+                horizontalAlignment: tile.textAlignment
                 wrapMode: Text.Wrap
                 text: tile.statusText
                 color: appTheme.dangerColor
@@ -754,7 +593,6 @@ Rectangle {
 
         MouseArea {
             id: tileHover
-            readonly property bool hovered: containsMouse
             anchors.fill: parent
             hoverEnabled: true
             cursorShape: tile.selectable ? Qt.PointingHandCursor : Qt.ArrowCursor
@@ -764,20 +602,23 @@ Rectangle {
             }
         }
 
-        ToolTip.visible: tileHover.hovered && tile.detailText.length > 0
+        ToolTip.visible: tile.hovered && tile.detailText.length > 0
         ToolTip.delay: 600
         ToolTip.text: tile.detailText
 
-        // Favorite star: glyph only.
+        // Favorite star: glyph only. Grid tiles show it when starred or hovered;
+        // list rows always keep it in their star column.
         ColorImage {
             id: favoriteStar
             objectName: "editorLutFavoriteStar"
-            anchors.top: parent.top
+            anchors.top: tile.listMode ? undefined : parent.top
+            anchors.verticalCenter: tile.listMode ? parent.verticalCenter : undefined
             anchors.right: parent.right
-            anchors.margins: appTheme.spaceXs
+            anchors.topMargin: appTheme.spaceXs
+            anchors.rightMargin: tile.listMode ? appTheme.spaceSm : appTheme.spaceXs
             width: appTheme.iconOpticalSizeCompact
             height: appTheme.iconOpticalSizeCompact
-            visible: tile.favorite || tileHover.hovered
+            visible: tile.present && (tile.listMode || tile.favorite || tile.hovered)
             source: "qrc:/panel_icons/star.svg"
             sourceSize.width: appTheme.iconSourceSizeCompact
             sourceSize.height: appTheme.iconSourceSizeCompact
@@ -789,10 +630,12 @@ Rectangle {
 
             // Above the tile's MouseArea, so a star click never applies the tile.
             MouseArea {
+                id: starArea
                 anchors.fill: parent
                 anchors.margins: -appTheme.spaceXs
+                hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
-                onClicked: root.browser.toggleFavorite(tile.entryId)
+                onClicked: root.toggleFavorite(tile.entryId)
             }
         }
     }

@@ -1167,8 +1167,9 @@ auto AppTheme::editorScopeHeightMin() const -> int { return 160; }
 // EXIF caption line + spaceXs + compact Mask-tool hit row (DESIGN.md).
 auto AppTheme::editorAdjustmentHeaderMinHeight() const -> int { return 58; }
 // LUT browser rail page (DESIGN.md "LUT browser"): filter card + tile grid card.
-auto AppTheme::editorLutBrowserPanelWidth() const -> int { return 640; }
-auto AppTheme::editorLutBrowserFilterWidth() const -> int { return 208; }
+auto AppTheme::editorLutBrowserPanelWidth() const -> int { return 560; }
+auto AppTheme::editorLutBrowserPanelWidthMin() const -> int { return 280; }
+auto AppTheme::editorLutBrowserFilterWidth() const -> int { return 184; }
 auto AppTheme::editorLutTileMinWidth() const -> int { return 128; }
 auto AppTheme::editorLutTileIconSize() const -> int { return 36; }
 auto AppTheme::collectionsSidebarWidth() const -> int { return 276; }

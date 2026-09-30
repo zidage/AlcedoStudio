@@ -392,8 +392,9 @@ the two side columns read as one family.
 | `editorSidePanelWidthMax` | 460 | Adjustment stack maximum |
 | `editorScopeHeight` | 192 | Histogram / waveform slot preferred height |
 | `editorScopeHeightMin` | 160 | Histogram / waveform slot minimum height |
-| `editorLutBrowserPanelWidth` | 640 | LUT browser rail page (filter card + tile grid); capped so the viewport keeps its minimum width |
-| `editorLutBrowserFilterWidth` | 208 | LUT browser filter card width |
+| `editorLutBrowserPanelWidth` | 560 | LUT browser rail page default width (drag-resizable; double click restores it); capped so the viewport keeps its minimum width |
+| `editorLutBrowserPanelWidthMin` | 280 | Narrowest drag-resized LUT browser page |
+| `editorLutBrowserFilterWidth` | 184 | LUT browser filter sidebar width |
 | `editorLutTileMinWidth` | 128 | Minimum LUT tile width; the grid fits as many columns as this allows |
 | `editorLutTileIconSize` | 36 | LUT tile cube placeholder icon |
 | `editorAdjustmentHeaderMinHeight` | 58 | Node-name / EXIF header under the scope: EXIF caption line, `spaceXs` gap, compact Mask-tool row |

@@ -29,6 +29,11 @@ Item {
     property real versionsListContentY: 0
     property real maskGroupsListContentY: 0
     property real lutsListContentY: 0
+    // LUT browser view state, kept here because the page body unloads on close.
+    // The width is the user's drag-resized choice; expandedPanelWidth clamps it.
+    property real lutPanelWidth: appTheme.editorLutBrowserPanelWidth
+    property bool lutFiltersVisible: true
+    property string lutViewMode: "grid"
     // Widest the expanded panel may be; the workspace keeps its viewport minimum.
     property real maximumPanelWidth: appTheme.editorLutBrowserPanelWidth
     property string _lastBodyPage: ""
@@ -57,13 +62,16 @@ Item {
     readonly property int expandedPanelWidth: {
         if (activePage === "nodes" || activePage === "maskgroups")
             return nodesLayoutStore.preferredPanelWidth
-        // LUT browser: filter card + tile grid (LUT library plan L6A), capped so the
-        // viewport keeps its minimum width, and never narrower than the other pages.
+        // LUT browser (LUT library plan L6A): the drag-resized width, capped so the
+        // viewport keeps its minimum width.
         if (activePage === "luts")
-            return Math.round(Math.max(appTheme.editorSidePanelWidth,
-                                       Math.min(appTheme.editorLutBrowserPanelWidth,
-                                                root.maximumPanelWidth)))
+            return clampLutPanelWidth(root.lutPanelWidth)
         return appTheme.editorSidePanelWidth
+    }
+
+    function clampLutPanelWidth(width) {
+        return Math.round(Math.max(appTheme.editorLutBrowserPanelWidthMin,
+                                   Math.min(width, root.maximumPanelWidth)))
     }
     readonly property int panelGap: appTheme.spaceSm
 
@@ -324,9 +332,8 @@ Item {
             height: parent.height
             x: 0
             radius: root.panelRadius
-            // The LUT browser paints its own two cards; its shell stays transparent.
-            color: root.bodyPage === "luts" ? "transparent" : root.colCardSurface
-            border.width: root.bodyPage === "luts" ? 0 : 1
+            color: root.colCardSurface
+            border.width: 1
             border.color: root.colCardBorder
 
             Loader {
@@ -356,6 +363,64 @@ Item {
                     root.applyBodyScrollRestore()
                 }
             }
+        }
+    }
+
+    // LUT browser width grip on the panel's trailing edge. Dragging resizes the
+    // page live (the viewport reflows as it does during the fold); a double
+    // click restores the default width.
+    Item {
+        id: lutResizeHandle
+        objectName: "editorLutPanelResizeHandle"
+        readonly property bool active: lutResizeDrag.active
+        property real startWidth: 0
+
+        visible: root.activePage === "luts" && root.panelOpenProgress > 0.999
+        x: historyPanelHost.x + historyPanelHost.width - width / 2
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        width: appTheme.spaceSm
+        z: 2
+
+        Rectangle {
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            anchors.topMargin: root.panelRadius
+            anchors.bottomMargin: root.panelRadius
+            width: 1
+            color: root.colMuted
+            opacity: lutResizeHover.hovered || lutResizeHandle.active ? 1 : 0
+            Behavior on opacity {
+                enabled: !appTheme.reduceMotion
+                NumberAnimation { duration: appTheme.motionFadeMs }
+            }
+        }
+
+        HoverHandler {
+            id: lutResizeHover
+            cursorShape: Qt.SizeHorCursor
+        }
+
+        DragHandler {
+            id: lutResizeDrag
+            target: null
+            xAxis.enabled: true
+            yAxis.enabled: false
+            cursorShape: Qt.SizeHorCursor
+            onActiveChanged: {
+                if (active)
+                    lutResizeHandle.startWidth = root.expandedPanelWidth
+            }
+            onTranslationChanged: {
+                if (active)
+                    root.lutPanelWidth = root.clampLutPanelWidth(lutResizeHandle.startWidth
+                                                                 + translation.x)
+            }
+        }
+
+        TapHandler {
+            onDoubleTapped: root.lutPanelWidth = appTheme.editorLutBrowserPanelWidth
         }
     }
 
@@ -429,6 +494,10 @@ Item {
             theme: root.theme
             editorSession: root.editorSession
             host: root.host
+            filtersVisible: root.lutFiltersVisible
+            viewMode: root.lutViewMode
+            onFiltersVisibleChanged: root.lutFiltersVisible = filtersVisible
+            onViewModeChanged: root.lutViewMode = viewMode
             Component.onDestruction: {
                 if (root._lastBodyPage === "luts" && listContentY !== undefined)
                     root.lutsListContentY = Number(listContentY || 0)
