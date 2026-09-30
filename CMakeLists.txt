@@ -42,6 +42,15 @@ else()
 endif()
 set(ALCEDO_UPDATE_MANIFEST_URL
     "${ALCEDO_UPDATE_BASE_URL}/v1/${ALCEDO_UPDATE_CHANNEL}/${_alcedo_update_platform}/manifest.json")
+# Signed LUT package feed (docs/lut-package-system.md). It is signed with the
+# update key and has no expiry. The release operator supplies the deployed URL;
+# empty disables LUT package checks and downloads in this build.
+set(ALCEDO_LUT_PACKAGE_FEED_URL ""
+    CACHE STRING "HTTPS URL of the signed LUT package manifest. Empty disables LUT packages.")
+if(NOT "${ALCEDO_LUT_PACKAGE_FEED_URL}" STREQUAL "" AND
+   NOT "${ALCEDO_LUT_PACKAGE_FEED_URL}" MATCHES "^https://[^/@]+/.+")
+    message(FATAL_ERROR "ALCEDO_LUT_PACKAGE_FEED_URL must be an HTTPS URL without user info.")
+endif()
 set(ALCEDO_UPDATE_PUBLIC_KEY_FILE
     "${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/update_public_key.txt"
     CACHE FILEPATH "File containing the canonical Base64 Ed25519 update public key.")
@@ -193,6 +202,7 @@ alcedo_append_existing_prefix("/opt/homebrew/opt/libraw")
 alcedo_append_existing_prefix("/opt/homebrew/opt/xxhash")
 alcedo_append_existing_prefix("/opt/homebrew/opt/duckdb")
 alcedo_append_existing_prefix("/opt/homebrew/opt/little-cms2")
+alcedo_append_existing_prefix("/opt/homebrew/opt/libarchive")
 alcedo_append_existing_prefix("/opt/homebrew/opt/highway")
 alcedo_append_existing_prefix("/opt/homebrew/opt/openblas")
 alcedo_append_existing_prefix("/opt/homebrew/opt/gcc")
@@ -208,6 +218,7 @@ alcedo_append_existing_prefix("/usr/local/opt/libraw")
 alcedo_append_existing_prefix("/usr/local/opt/xxhash")
 alcedo_append_existing_prefix("/usr/local/opt/duckdb")
 alcedo_append_existing_prefix("/usr/local/opt/little-cms2")
+alcedo_append_existing_prefix("/usr/local/opt/libarchive")
 alcedo_append_existing_prefix("/usr/local/opt/highway")
 alcedo_append_existing_prefix("/usr/local/opt/openblas")
 alcedo_append_existing_prefix("/usr/local/opt/gcc")
@@ -445,6 +456,11 @@ endif()
 # add_compile_definitions(HAS_EASY_PROFILER)
 # endif()
 find_package(hwy CONFIG REQUIRED)
+
+# LibArchive reads the 7z (LZMA2) LUT packages in process. Windows: vcpkg
+# `libarchive[lzma]`. macOS: Homebrew `libarchive` (keg-only; its prefix is in the
+# search hints above). The macOS system library has no public headers.
+find_package(LibArchive 3.6 REQUIRED)
 
 if (WIN32)
 find_package(lcms2 CONFIG REQUIRED)

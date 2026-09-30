@@ -52,6 +52,41 @@ auto ToQStringList(const std::vector<std::string>& values) -> QStringList {
   return list;
 }
 
+auto ReadReceipts(const fs::path& root) -> std::vector<LutPackageReceipt> {
+  std::vector<LutPackageReceipt> receipts;
+  std::vector<LutScanDiagnostic> diagnostics;
+  ReadLutPackageReceipts(root, &receipts, &diagnostics);
+  return receipts;
+}
+
+/// Inventory and receipts of an existing root, without network access.
+///
+/// Content retired by an interrupted installation is removed first. The persisted
+/// inventory is used when it agrees with the receipts; a missing, damaged, or
+/// outdated inventory (for example after a receipt commit that was not followed
+/// by an inventory write) is rebuilt from local files and written back.
+struct LoadedLibrary {
+  LutLibraryInventory            inventory;
+  std::vector<LutPackageReceipt> receipts;
+  std::string                    write_error;
+};
+
+auto LoadLibraryRoot(const fs::path& root, unsigned workers, const LutLibraryFileOperations& io)
+    -> LoadedLibrary {
+  LoadedLibrary                     loaded;
+  const LutPackageContentRetirement retired = RetireInactiveLutPackageContent(root);
+  loaded.receipts                           = ReadReceipts(root);
+  LutLibraryInventoryParseResult persisted  = ReadLutLibraryInventoryFile(root);
+  if (persisted && retired.relocated_user_paths.empty() &&
+      LutInventoryMatchesPackageReceipts(*persisted.inventory, loaded.receipts)) {
+    loaded.inventory = std::move(*persisted.inventory);
+    return loaded;
+  }
+  loaded.inventory   = ScanLutLibraryRoot(root, workers);
+  loaded.write_error = io.write_inventory(root, loaded.inventory);
+  return loaded;
+}
+
 auto NormalizedRoot(const fs::path& path) -> fs::path {
   std::error_code error;
   fs::path        normalized = fs::weakly_canonical(fs::absolute(path, error), error);
@@ -134,17 +169,12 @@ void LutLibraryService::Start() {
       result.message = "The LUT library folder is unavailable: " + LutPathToUtf8(root);
       return [this, result] { Finish(result); };
     }
-    auto inventory = std::make_shared<LutLibraryInventory>();
-    if (LutLibraryInventoryParseResult persisted = ReadLutLibraryInventoryFile(root); persisted) {
-      *inventory = std::move(*persisted.inventory);
-    } else {
-      // A missing or damaged inventory is rebuilt from local files (plan 4.3).
-      *inventory = ScanLutLibraryRoot(root, workers);
-      if (std::string write_error = options_.file_operations.write_inventory(root, *inventory);
-          !write_error.empty()) {
-        result.status  = Status::kPersistenceError;
-        result.message = "The rebuilt LUT inventory cannot be saved: " + write_error;
-      }
+    // A missing, damaged, or outdated inventory is rebuilt from local files (plan 4.3).
+    auto loaded =
+        std::make_shared<LoadedLibrary>(LoadLibraryRoot(root, workers, options_.file_operations));
+    if (!loaded->write_error.empty()) {
+      result.status  = Status::kPersistenceError;
+      result.message = "The rebuilt LUT inventory cannot be saved: " + loaded->write_error;
     }
     LutLibraryUserStateReadResult state = ReadLutLibraryUserStateFile(root);
     if (!state.state && result.status == Status::kOk) {
@@ -153,9 +183,10 @@ void LutLibraryService::Start() {
     }
     auto user_state =
         std::make_shared<LutLibraryUserState>(state.state.value_or(LutLibraryUserState{}));
-    return [this, result, inventory, user_state]() mutable {
-      user_state_           = std::move(*user_state);
-      result.affected_paths = PublishInventory(std::move(*inventory));
+    return [this, result, loaded, user_state]() mutable {
+      user_state_ = std::move(*user_state);
+      result.affected_paths =
+          PublishInventory(std::move(loaded->inventory), std::move(loaded->receipts));
       emit FavoritesChanged();
       Finish(std::move(result));
       ConvertLegacyFavorites();
@@ -193,10 +224,12 @@ void LutLibraryService::Finish(OperationResult result) {
   emit OperationFinished(last_result_.operation, last_result_.status);
 }
 
-auto LutLibraryService::PublishInventory(LutLibraryInventory inventory)
+auto LutLibraryService::PublishInventory(LutLibraryInventory                           inventory,
+                                         std::optional<std::vector<LutPackageReceipt>> receipts)
     -> std::vector<std::string> {
   std::vector<std::string> affected = ChangedLutLibraryEntryPaths(inventory_, inventory);
   inventory_                        = std::move(inventory);
+  if (receipts) package_receipts_ = std::move(*receipts);
   emit InventoryChanged(ToQStringList(affected));
   return affected;
 }
@@ -343,16 +376,17 @@ auto LutLibraryService::RequestRefresh(bool user_requested) -> Status {
   const fs::path root    = root_;
   const unsigned workers = options_.scan_worker_count;
   return Begin(Operation::kRefresh, [this, root, workers](std::stop_token) -> Completion {
-    auto        scanned = std::make_shared<LutLibraryInventory>(ScanLutLibraryRoot(root, workers));
-    std::string error   = options_.file_operations.write_inventory(root, *scanned);
-    return [this, scanned, error] {
+    auto        scanned  = std::make_shared<LutLibraryInventory>(ScanLutLibraryRoot(root, workers));
+    auto        receipts = std::make_shared<std::vector<LutPackageReceipt>>(ReadReceipts(root));
+    std::string error    = options_.file_operations.write_inventory(root, *scanned);
+    return [this, scanned, receipts, error] {
       OperationResult result{.operation = Operation::kRefresh};
       if (!error.empty()) {
         // Keep the previous inventory; its verification is now out of date.
         result.status  = Status::kPersistenceError;
         result.message = "The LUT inventory cannot be saved: " + error;
       } else {
-        result.affected_paths = PublishInventory(std::move(*scanned));
+        result.affected_paths = PublishInventory(std::move(*scanned), std::move(*receipts));
         if (!inventory_.Complete()) result.message = "Some LUT folders or files could not be read.";
       }
       Finish(std::move(result));
@@ -453,21 +487,16 @@ auto LutLibraryService::UseRoot(const fs::path& root) -> Status {
     if (!fs::is_directory(target, error)) {
       return fail(Status::kRootUnavailable, "The folder does not exist: " + LutPathToUtf8(target));
     }
-    auto inventory = std::make_shared<LutLibraryInventory>();
-    if (LutLibraryInventoryParseResult persisted = ReadLutLibraryInventoryFile(target); persisted) {
-      *inventory = std::move(*persisted.inventory);
-    } else {
-      *inventory = ScanLutLibraryRoot(target, workers);
-      if (std::string write_error = options_.file_operations.write_inventory(target, *inventory);
-          !write_error.empty()) {
-        return fail(Status::kPersistenceError,
-                    "The LUT inventory cannot be saved in the folder: " + write_error);
-      }
+    auto loaded =
+        std::make_shared<LoadedLibrary>(LoadLibraryRoot(target, workers, options_.file_operations));
+    if (!loaded->write_error.empty()) {
+      return fail(Status::kPersistenceError,
+                  "The LUT inventory cannot be saved in the folder: " + loaded->write_error);
     }
     LutLibraryUserStateReadResult state = ReadLutLibraryUserStateFile(target);
     if (!state.state) return fail(Status::kPersistenceError, state.error);
     auto user_state = std::make_shared<LutLibraryUserState>(std::move(*state.state));
-    return [this, result, target, inventory, user_state]() mutable {
+    return [this, result, target, loaded, user_state]() mutable {
       if (!options_.preferences->SaveRoot(target)) {
         result.status  = Status::kPreferenceError;
         result.message = "The LUT library folder choice cannot be saved.";
@@ -477,7 +506,8 @@ auto LutLibraryService::UseRoot(const fs::path& root) -> Status {
       root_       = target;
       user_state_ = std::move(*user_state);
       refresh_requested_paths_.clear();
-      result.affected_paths = PublishInventory(std::move(*inventory));
+      result.affected_paths =
+          PublishInventory(std::move(loaded->inventory), std::move(loaded->receipts));
       emit RootChanged();
       emit FavoritesChanged();
       Finish(std::move(result));
@@ -519,6 +549,63 @@ auto LutLibraryService::MigrateRoot(const fs::path& destination) -> Status {
       ResumeSourceCleanup();
     };
   });
+}
+
+auto LutLibraryService::InstallPackage(LutPackageInstallRequest request) -> Status {
+  if (!IsLutPackageId(request.expected.package_id) || request.archive_path.empty()) {
+    return Status::kInvalidRequest;
+  }
+  const fs::path root    = root_;
+  const unsigned workers = options_.scan_worker_count;
+  return Begin(
+      Operation::kInstallPackage,
+      [this, root, workers, request = std::move(request)](std::stop_token stop) -> Completion {
+        OperationResult result{.operation = Operation::kInstallPackage};
+        const QString   package_id = QString::fromStdString(request.expected.package_id);
+        // The stage is announced on the owner thread; this object outlives the worker.
+        const auto      on_stage   = [this, package_id](LutPackageInstallStage stage) {
+          QMetaObject::invokeMethod(
+              this,
+              [this, package_id, stage] {
+                if (!shut_down_) emit PackageInstallStageChanged(package_id, stage);
+              },
+              Qt::QueuedConnection);
+        };
+        LutPackageInstallSteps steps;
+        steps.write_receipt = options_.file_operations.write_package_receipt;
+        const LutPackageInstallOutcome outcome =
+            InstallLutPackageArchive(root, request, steps, stop, on_stage);
+        if (!outcome.committed) {
+          result.status  = outcome.canceled ? Status::kCanceled : Status::kIoError;
+          result.message = "The LUT package was not installed: " + outcome.error;
+          return [this, result] { Finish(result); };
+        }
+        result.committed_package_id = request.expected.package_id;
+        // The receipt is committed; the rescan lists the new content.
+        auto scanned  = std::make_shared<LutLibraryInventory>(ScanLutLibraryRoot(root, workers));
+        auto receipts = std::make_shared<std::vector<LutPackageReceipt>>(ReadReceipts(root));
+        std::string error = options_.file_operations.write_inventory(root, *scanned);
+        if (!error.empty()) {
+          result.status = Status::kPersistenceError;
+          result.message =
+              "The LUT package is installed; an inventory refresh is required: " + error;
+          return [this, result] { Finish(result); };
+        }
+        if (!outcome.retirement_problems.empty()) {
+          result.message = "The previous package content could not be removed completely: " +
+                           outcome.retirement_problems.front();
+        }
+        return [this, result, scanned, receipts]() mutable {
+          result.affected_paths = PublishInventory(std::move(*scanned), std::move(*receipts));
+          Finish(std::move(result));
+        };
+      });
+}
+
+auto LutLibraryService::CancelOperation() -> bool {
+  if (operation_ != Operation::kInstallPackage || !worker_.joinable()) return false;
+  worker_.request_stop();
+  return true;
 }
 
 auto LutLibraryService::OpenRootDirectory() -> bool {

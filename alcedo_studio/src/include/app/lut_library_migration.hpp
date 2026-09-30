@@ -29,6 +29,9 @@ struct LutLibraryFileOperations {
       write_inventory;
   std::function<std::string(const std::filesystem::path& root, const LutLibraryUserState&)>
                             write_user_state;
+  /// Replace a package receipt; this write is a package installation's commit point.
+  std::function<std::string(const std::filesystem::path& root, const LutPackageReceipt&)>
+                            write_package_receipt;
 
   /// Real file-system implementations of every step.
   [[nodiscard]] static auto Default() -> LutLibraryFileOperations;

@@ -40,11 +40,47 @@ auto ReadSmallFile(const std::filesystem::path& path, std::size_t limit, std::st
   return {};
 }
 
-auto IsPackageId(std::string_view id) -> bool {
-  return !id.empty() && id.size() <= 64 && std::all_of(id.begin(), id.end(), [](char value) {
-    return (value >= 'a' && value <= 'z') || (value >= '0' && value <= '9') || value == '_' ||
-           value == '-';
-  });
+auto IsLowerHexSha256(std::string_view text) -> bool {
+  return text.size() == 64 && std::all_of(text.begin(), text.end(), [](char value) {
+           return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f');
+         });
+}
+
+auto ReadUnsigned(const Json& object, const char* key, std::uint64_t* output) -> bool {
+  const auto found = object.find(key);
+  if (found == object.end()) return true;
+  if (!found->is_number_unsigned()) return false;
+  *output = found->get<std::uint64_t>();
+  return true;
+}
+
+auto ReadString(const Json& object, const char* key, std::string* output) -> bool {
+  const auto found = object.find(key);
+  if (found == object.end()) return true;
+  if (!found->is_string()) return false;
+  *output = found->get<std::string>();
+  return true;
+}
+
+/// Descriptor fields are optional (receipts written before L3 lack them), but a
+/// present field must be well formed.
+auto ReadReceiptDescriptor(const Json& receipt, LutPackageReceipt* output) -> bool {
+  const Json empty_artifact = Json::object();
+  const auto artifact_found = receipt.find("artifact");
+  if (artifact_found != receipt.end() && !artifact_found->is_object()) return false;
+  const Json& artifact = artifact_found != receipt.end() ? *artifact_found : empty_artifact;
+  if (!ReadString(receipt, "revision", &output->revision) ||
+      !ReadUnsigned(receipt, "file_count", &output->file_count) ||
+      !ReadString(receipt, "inventory_sha256", &output->inventory_sha256) ||
+      !ReadUnsigned(receipt, "unpacked_bytes", &output->unpacked_bytes) ||
+      !ReadUnsigned(receipt, "feed_sequence", &output->feed_sequence) ||
+      !ReadString(artifact, "url", &output->artifact_url) ||
+      !ReadUnsigned(artifact, "size", &output->artifact_size) ||
+      !ReadString(artifact, "sha256", &output->artifact_sha256)) {
+    return false;
+  }
+  return (output->inventory_sha256.empty() || IsLowerHexSha256(output->inventory_sha256)) &&
+         (output->artifact_sha256.empty() || IsLowerHexSha256(output->artifact_sha256));
 }
 
 auto StringList(const Json& root, const char* key, std::vector<std::string>* output) -> bool {
@@ -173,12 +209,18 @@ void ReadLutPackageReceipts(const std::filesystem::path&    root,
     const std::string content     = receipt.value("content_directory", std::string{});
     const std::string prefix =
         std::string(kLutPackagesDirectoryName) + "/" + package_id + "/content/";
-    if (declared_id != package_id || !IsPackageId(package_id) || !IsSafeLutRelativePath(content) ||
-        !content.starts_with(prefix) || content.find('/', prefix.size()) != std::string::npos) {
+    if (declared_id != package_id || !IsLutPackageId(package_id) ||
+        !IsSafeLutRelativePath(content) || !content.starts_with(prefix) ||
+        content.find('/', prefix.size()) != std::string::npos) {
       fail("package receipt names an invalid package or content directory");
       continue;
     }
-    receipts->push_back({package_id, content});
+    LutPackageReceipt parsed{.package_id = package_id, .content_directory = content};
+    if (!ReadReceiptDescriptor(receipt, &parsed)) {
+      fail("package receipt descriptor fields are invalid");
+      continue;
+    }
+    receipts->push_back(std::move(parsed));
   }
   if (error) {
     diagnostics->push_back({LutScanDiagnosticKind::kUnreadableDirectory,
@@ -188,6 +230,69 @@ void ReadLutPackageReceipts(const std::filesystem::path&    root,
             [](const LutPackageReceipt& left, const LutPackageReceipt& right) {
               return left.package_id < right.package_id;
             });
+}
+
+auto IsLutPackageId(std::string_view id) -> bool {
+  return !id.empty() && id.size() <= 64 && std::all_of(id.begin(), id.end(), [](char value) {
+    return (value >= 'a' && value <= 'z') || (value >= '0' && value <= '9') || value == '_' ||
+           value == '-';
+  });
+}
+
+auto SerializeLutPackageReceipt(const LutPackageReceipt& receipt) -> std::string {
+  const Json root = {{"schema", 1},
+                     {"kind", kReceiptKind},
+                     {"package_id", receipt.package_id},
+                     {"content_directory", receipt.content_directory},
+                     {"revision", receipt.revision},
+                     {"file_count", receipt.file_count},
+                     {"inventory_sha256", receipt.inventory_sha256},
+                     {"unpacked_bytes", receipt.unpacked_bytes},
+                     {"feed_sequence", receipt.feed_sequence},
+                     {"artifact",
+                      {{"url", receipt.artifact_url},
+                       {"size", receipt.artifact_size},
+                       {"sha256", receipt.artifact_sha256}}}};
+  return root.dump(1);
+}
+
+auto WriteLutPackageReceiptFile(const std::filesystem::path& root, const LutPackageReceipt& receipt)
+    -> std::string {
+  if (!IsLutPackageId(receipt.package_id)) return "the package ID is not valid";
+  const std::string bytes = SerializeLutPackageReceipt(receipt);
+  QSaveFile         output(ToQString(root / LutPathFromUtf8(kLutPackagesDirectoryName) /
+                                     LutPathFromUtf8(receipt.package_id) /
+                                     LutPathFromUtf8(kLutPackageReceiptFileName)));
+  if (!output.open(QIODevice::WriteOnly)) return output.errorString().toStdString();
+  if (output.write(bytes.data(), static_cast<qint64>(bytes.size())) !=
+      static_cast<qint64>(bytes.size())) {
+    std::string error = output.errorString().toStdString();
+    output.cancelWriting();
+    return error;
+  }
+  if (!output.commit()) return output.errorString().toStdString();
+  return {};
+}
+
+auto LutInventoryMatchesPackageReceipts(const LutLibraryInventory&            inventory,
+                                        const std::vector<LutPackageReceipt>& receipts) -> bool {
+  std::vector<bool> receipt_has_entry(receipts.size(), false);
+  for (const LutLibraryEntry& entry : inventory.entries) {
+    if (entry.managed_package_id.empty()) continue;
+    const auto found =
+        std::find_if(receipts.begin(), receipts.end(), [&](const LutPackageReceipt& receipt) {
+          return receipt.package_id == entry.managed_package_id;
+        });
+    if (found == receipts.end() ||
+        !entry.relative_path.starts_with(found->content_directory + "/")) {
+      return false;
+    }
+    receipt_has_entry[static_cast<std::size_t>(found - receipts.begin())] = true;
+  }
+  for (std::size_t index = 0; index < receipts.size(); ++index) {
+    if (receipts[index].file_count > 0 && !receipt_has_entry[index]) return false;
+  }
+  return true;
 }
 
 auto ScanLutLibraryRoot(const std::filesystem::path& root, unsigned worker_count)
