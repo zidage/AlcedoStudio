@@ -37,7 +37,8 @@ auto UiValueToModelValue(const QString& field_key, double value) -> float {
   if (field_key == QLatin1String("saturation")) {
     return static_cast<float>(std::max(0.0, 1.0 + value / 100.0));
   }
-  if (field_key == QLatin1String("film_grain") || field_key == QLatin1String("halation")) {
+  if (field_key == QLatin1String("film_grain") || field_key == QLatin1String("halation") ||
+      field_key == QLatin1String("diffusion")) {
     return static_cast<float>(std::clamp(value / 100.0, 0.0, 1.0));
   }
   return static_cast<float>(value);

@@ -769,6 +769,9 @@ auto ParseWriteOrThrow(std::string_view field, const nlohmann::json& params)
   if (field == "film_grain") {
     return ParseScalarWrite(params, field, "strength");
   }
+  if (field == "diffusion") {
+    return ParseScalarWrite(params, field, "strength");
+  }
   if (field == "curve") {
     return ParseCurveWrite(params);
   }

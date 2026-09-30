@@ -31,7 +31,8 @@ inline constexpr std::string_view kAdjustmentPanelMasks    = "masks";
 inline constexpr std::string_view kAdjustmentPanelRaw      = "raw";
 inline constexpr std::string_view kAdjustmentPanelGeometry = "geometry";
 inline constexpr std::string_view kAdjustmentPanelDisplay  = "display";
-inline constexpr std::string_view kAdjustmentPanelDetail   = "detail";
+/// Post Processing page. Its fields write the document DRT node from any Grade or DRT selection.
+inline constexpr std::string_view kAdjustmentPanelPost     = "post";
 
 /**
  * @brief Image-owned EXIF fields shown in the adjustment header.

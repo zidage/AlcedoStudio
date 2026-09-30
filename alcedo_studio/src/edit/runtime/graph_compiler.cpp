@@ -364,6 +364,7 @@ auto CompileDrt(const DrtNodeModel& drt, GraphValueId scene_input, ExecutionPlan
   CompiledDrtNode compiled;
   compiled.node_id        = drt.Id();
   compiled.scene_input    = scene_input;
+  compiled.scene_linear   = GraphValueId{drt.Id(), PortId{"runtime.scene_linear"}};
   compiled.scene_output   = GraphValueId{drt.Id(), PortId{"runtime.display_base"}};
   compiled.display_output = GraphValueId{drt.Id(), PortId{"display"}};
 
@@ -375,7 +376,7 @@ auto CompileDrt(const DrtNodeModel& drt, GraphValueId scene_input, ExecutionPlan
   compiled.steps.push_back(CompiledDrtStep{CompiledDrtStepKind::DisplayTransform,
                                            {},
                                            OperatorTypeId{},
-                                           scene_input,
+                                           compiled.scene_linear,
                                            compiled.scene_output});
   GraphValueId step_input = compiled.scene_output;
   for (std::size_t index = 0; index < drt.AdjustmentCount(); ++index) {
@@ -399,8 +400,13 @@ auto CompileDrt(const DrtNodeModel& drt, GraphValueId scene_input, ExecutionPlan
     compiled.steps.back().output = compiled.display_output;
   }
 
-  PushPass(plan, GpuPassKind::Drt, drt.Id(),
+  // Always compiled: strength 0 still decodes ACEScc to linear, so a strength edit never
+  // recompiles and the DRT never repeats the transfer-function decode.
+  PushPass(plan, GpuPassKind::DiffusionFilter, drt.Id(),
            {{PortId{"image"}, compiled.scene_input, CompiledValueKind::SceneImage}},
+           {{compiled.scene_linear, CompiledValueKind::SceneImage}});
+  PushPass(plan, GpuPassKind::Drt, drt.Id(),
+           {{PortId{"image"}, compiled.scene_linear, CompiledValueKind::SceneImage}},
            {{compiled.scene_output, CompiledValueKind::DisplayImage},
             {compiled.display_output, CompiledValueKind::DisplayImage}},
            {}, std::move(parameters));

@@ -181,6 +181,7 @@ add_executable(GpuDagModelGraphTest
   ${ALCEDO_TEST_ROOT}/edit/graph/pipeline_document_freeze_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/pipeline_graph_snapshot_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/json_roundtrip_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/graph/drt_diffusion_filter_model_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/lmt_model_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/color_grade_mask_model_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/graph/header_hygiene_test.cpp
@@ -316,6 +317,7 @@ add_executable(GpuDagRawInputTest
   ${ALCEDO_TEST_ROOT}/edit/runtime/scene_work_image_pair_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/drt_post_executor_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/local_tone_plan_test.cpp
+  ${ALCEDO_TEST_ROOT}/edit/runtime/diffusion_filter_plan_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/graph_compiler_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/renderer_metal_instantiate_test.cpp
   ${ALCEDO_TEST_ROOT}/edit/runtime/result_content_key_test.cpp
@@ -371,6 +373,7 @@ if(ALCEDO_CUDA_ENABLED)
   add_executable(GpuDagCudaDrtProductTest
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_drt_product_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_drt_expected_output_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_diffusion_filter_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_product_plan_cache_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_result_cache_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_product_scope_present_test.cpp

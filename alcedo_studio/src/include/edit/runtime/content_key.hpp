@@ -14,7 +14,7 @@ namespace alcedo {
 inline constexpr std::uint64_t kContentHashOffset                  = 14695981039346656037ull;
 inline constexpr std::uint64_t kContentHashPrime                   = 1099511628211ull;
 
-/// Bumped when SensorDevelop pixel rules change. 2: method-aware demosaic + HLR-gated Clamp01.
+/// Bumped when SensorDevelop pixel rules change. 2: method-aware demosaic + Clamp01 applied only with HLR.
 inline constexpr std::uint32_t kSensorDevelopImplementationVersion = 2;
 /// Bumped when GeometryResample sampling rules change.
 inline constexpr std::uint32_t kGeometryImplementationVersion      = 1;
@@ -27,8 +27,11 @@ inline constexpr std::uint32_t kPrimaryGradeImplementationVersion  = 6;
 /// Bumped when the canonical LLF reference identity or sampling rules change.
 /// Version 2 makes the canonical LLF source the post-Basic Tone + Color image.
 inline constexpr std::uint32_t kLlfReferenceImplementationVersion  = 2;
-/// Bumped when DRT pixel rules change. Version 3 decodes AP1/ACEScc before the DRT.
-inline constexpr std::uint32_t kDrtImplementationVersion           = 4;
+/// Bumped when DRT pixel rules change, including the DiffusionFilter pass and the
+/// DiffusionFilterShape constants. Version 5 decodes ACEScc in the DiffusionFilter pass and
+/// applies the diffusion filter, built on the full-frame scatter canvas, before the display
+/// transform.
+inline constexpr std::uint32_t kDrtImplementationVersion           = 5;
 /// Bumped when mask raster sampling or Union key structure changes. Version 3 is per-source Union.
 inline constexpr std::uint32_t kMaskImplementationVersion          = 3;
 

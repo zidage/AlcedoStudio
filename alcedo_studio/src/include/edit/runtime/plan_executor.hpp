@@ -185,9 +185,8 @@ class PlanExecutor {
         }
       }
 
-      if (!plan.grade_nodes.empty() || !plan.drt.post_adjustments.empty()) {
-        workspace.EnsureSceneWorkImages(geometry_extent);
-      }
+      // The DiffusionFilter pass writes linear AP1 into a scene-work member in every plan.
+      workspace.EnsureSceneWorkImages(geometry_extent);
 
       FrameSceneBinding scene = FrameSceneBinding::CachedImage(plan.develop_output);
       bool released_key_stage = false;
@@ -264,15 +263,32 @@ class PlanExecutor {
       }
 
       {
+        // The display result covers both passes: a valid display skips the scene decode too.
+        const bool display_valid = BindOrMiss(workspace, invalidation, plan.display_output,
+                                              geometry_extent, completed, stats);
+        FrameSceneBinding linear_scene = scene;
+        {
+          diag::PreviewPassInterval diffusion_pass(plan.drt.node_id.Value(),
+                                                   diag::PreviewPassKind::DiffusionFilter);
+          if (display_valid) {
+            diffusion_pass.SetState(diag::PreviewExecutionState::Skipped);
+            ++stats.diffusion_filter_skip;
+          } else {
+            GpuWorkSample<Device> gpu(device);
+            linear_scene = PassEncoder<Backend, GpuPassKind::DiffusionFilter>::Encode(
+                device, plan, input, document, scene);
+            ++stats.diffusion_filter_execute;
+          }
+        }
         diag::PreviewPassInterval drt_pass(plan.display_output.producer.Value(),
                                            diag::PreviewPassKind::Drt);
-        if (BindOrMiss(workspace, invalidation, plan.display_output, geometry_extent, completed,
-                       stats)) {
+        if (display_valid) {
           drt_pass.SetState(diag::PreviewExecutionState::Skipped);
           ++stats.drt_skip;
         } else {
           GpuWorkSample<Device> gpu(device);
-          PassEncoder<Backend, GpuPassKind::Drt>::Encode(device, plan, input, document, scene);
+          PassEncoder<Backend, GpuPassKind::Drt>::Encode(device, plan, input, document,
+                                                         linear_scene);
           Record(device, invalidation, plan.display_output, geometry_extent);
           ++stats.drt_execute;
         }

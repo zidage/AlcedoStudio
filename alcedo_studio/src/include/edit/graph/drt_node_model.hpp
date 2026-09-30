@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "edit/graph/adjustment_ownership.hpp"
+#include "edit/graph/diffusion_filter_model.hpp"
 #include "edit/graph/i_node_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/operator_model_base.hpp"
@@ -112,14 +113,17 @@ struct DrtPayload {
   float                 hdr_grey_boost         = 0.13f;
   float                 hdr_purity             = 0.5f;
   OpenDrtDetailedParams parameters{};
+  /// Stored diffusion filter strength in [0, 1]. See @ref ResolveDiffusionFilterShape.
+  float                 diffusion_strength = 0.0f;
 };
 
 enum class DrtDirty : std::uint32_t {
-  None     = 0,
-  Method   = 1U << 0,
-  Encoding = 1U << 1,
-  OpenDrt  = 1U << 2,
-  All      = Method | Encoding | OpenDrt,
+  None      = 0,
+  Method    = 1U << 0,
+  Encoding  = 1U << 1,
+  OpenDrt   = 1U << 2,
+  Diffusion = 1U << 3,
+  All       = Method | Encoding | OpenDrt | Diffusion,
 };
 
 /**
@@ -165,12 +169,32 @@ class DrtParamsModel final : public OperatorModelBase<DrtParamsModel, DrtPayload
   [[nodiscard]] auto DisplayGreyLuminance() const -> float;
   [[nodiscard]] auto HdrGreyBoost() const -> float;
   [[nodiscard]] auto HdrPurity() const -> float;
+  [[nodiscard]] auto DiffusionStrength() const -> float;
 
   /**
    * @brief Apply validated DRT/ODT fields atomically and mark changed groups dirty.
    */
   void               ApplyUpdate(DrtParameterUpdate update);
 
+  /**
+   * @brief Set the diffusion filter strength and mark @ref DrtDirty::Diffusion when it changes.
+   *
+   * The value is clamped to [@ref kDiffusionStrengthMin, @ref kDiffusionStrengthMax].
+   * @throws std::invalid_argument for a non-finite value. No field changes.
+   */
+  void               ApplyDiffusionStrength(float strength);
+
+  /**
+   * @brief Output-transform fields only (method, encoding, OpenDRT). Excludes the diffusion
+   *        filter, which the editor writes through its own `diffusion` field.
+   */
+  [[nodiscard]] auto OutputTransformJson() const -> nlohmann::json;
+
+  /**
+   * @brief @ref OutputTransformJson plus `diffusion.strength` when the strength is not 0.
+   *
+   * A document without the filter keeps its previous serialized bytes.
+   */
   [[nodiscard]] auto ToJson() const -> nlohmann::json override;
   void               LoadJson(const nlohmann::json& json) override;
 
@@ -182,8 +206,9 @@ class DrtParamsModel final : public OperatorModelBase<DrtParamsModel, DrtPayload
  * @brief Display-referred endpoint. One scene-image input; display output is not
  * a scene graph port.
  *
- * Owns output-transform parameters and the four DRT/Post adjustments (Clarity,
- * Sharpen, Halation, Film Grain) that run in ACEScc before the display transform.
+ * Owns output-transform parameters, the scene-linear diffusion filter that runs before the
+ * display transform, and the four display-referred DRT/Post adjustments (Clarity, Sharpen,
+ * Halation, Film Grain) that run after it.
  */
 class DrtNodeModel final : public INodeModel {
  public:

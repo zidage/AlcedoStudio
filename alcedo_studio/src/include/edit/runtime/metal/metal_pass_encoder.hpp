@@ -76,6 +76,15 @@ struct PassEncoder<MetalBackend, GpuPassKind::PrimaryColorGrade> {
 };
 
 template <>
+struct PassEncoder<MetalBackend, GpuPassKind::DiffusionFilter> {
+  static auto Encode(MetalRenderDevice& device, const ExecutionPlan&, const PreparedRawInput&,
+                     const PipelineDocument& document, const FrameSceneBinding& scene)
+      -> FrameSceneBinding {
+    return ExecuteMetalDiffusionFilter(device, document, scene);
+  }
+};
+
+template <>
 struct PassEncoder<MetalBackend, GpuPassKind::Drt> {
   static void Encode(MetalRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
                      const PipelineDocument& document, const FrameSceneBinding& scene) {

@@ -218,6 +218,8 @@ auto DisplayName(std::optional<EditorAdjustmentField> field) -> QString {
       return QStringLiteral("Lens Profile");
     case EditorAdjustmentField::ColorTemperature:
       return QStringLiteral("Color Temp");
+    case EditorAdjustmentField::Diffusion:
+      return QStringLiteral("Diffusion");
   }
   return QStringLiteral("Edit");
 }
@@ -233,6 +235,7 @@ auto IconResource(std::optional<EditorAdjustmentField> field) -> QString {
       return QStringLiteral(":/history_icons/contrast.svg");
     case EditorAdjustmentField::Whites:
     case EditorAdjustmentField::Halation:
+    case EditorAdjustmentField::Diffusion:
       return QStringLiteral(":/history_icons/sun.svg");
     case EditorAdjustmentField::Blacks:
       return QStringLiteral(":/history_icons/moon.svg");
@@ -659,6 +662,9 @@ auto BuildSummary(std::optional<EditorAdjustmentField> field, const nlohmann::js
     case EditorAdjustmentField::Halation:
       return SignedScalar(JsonNumberAtPath(before, {"halation", "strength"}),
                           JsonNumberAtPath(after, {"halation", "strength"}));
+    case EditorAdjustmentField::Diffusion:
+      return SignedScalar(JsonNumberAtPath(before, {"strength"}),
+                          JsonNumberAtPath(after, {"strength"}));
     case EditorAdjustmentField::RawDecode:
       return SummarizeRawDecode(after, before);
     case EditorAdjustmentField::LensCalibration:

@@ -25,12 +25,27 @@ struct MetalDrtResult {
 /**
  * @brief Run ACES 2.0 or OpenDRT, then display-referred DRT/Post operations.
  *
- * Input is the compiled DRT scene-input ACEScc image. The display transform runs first, and
+ * Input is the linear AP1 output of the DiffusionFilter pass. The display transform runs first,
+ * and
  * neighborhood operations consume its display-referred result.
  */
 [[nodiscard]] auto ExecuteMetalDrt(MetalRenderDevice& device, const ExecutionPlan& plan,
                                    const PipelineDocument& document, const FrameSceneBinding& scene)
     -> MetalDrtResult;
+
+/**
+ * @brief DiffusionFilter pass: decode the ACEScc AP1 @p scene to linear AP1.
+ *
+ * Writes the scene-work member that @ref DestinationWorkMember selects for @p scene.
+ *
+ * @return The work-image binding that holds linear AP1.
+ * @throws std::runtime_error when the diffusion filter strength is not 0; the Metal scatter
+ *         kernels do not exist yet. No other backend or substitute runs.
+ */
+[[nodiscard]] auto ExecuteMetalDiffusionFilter(MetalRenderDevice&       device,
+                                               const PipelineDocument&  document,
+                                               const FrameSceneBinding& scene)
+    -> FrameSceneBinding;
 
 void               AppendMetalDrtWarmup(std::vector<MetalPipelineWarmup>& pipelines);
 

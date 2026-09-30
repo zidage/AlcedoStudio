@@ -241,6 +241,11 @@ auto ApplyEditorParameterWrite(PipelineDocument& document, const EditorParameter
           ApplyDrtPostWrite(*model, target.field_key, write);
           return true;
         }
+        if (target.field_key == "diffusion") {
+          drt->Params().ApplyDiffusionStrength(
+              RequireWrite<EditorScalarWrite>(write, target.field_key).value);
+          return true;
+        }
         if (target.field_key != "odt") {
           return SetError(error, "Unsupported DRT parameter field: " + target.field_key);
         }

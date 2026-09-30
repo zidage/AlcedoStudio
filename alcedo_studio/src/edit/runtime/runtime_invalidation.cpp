@@ -13,6 +13,7 @@
 #include "edit/graph/drt_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/operators/models/dirty_field_mask.hpp"
+#include "edit/runtime/diffusion_filter_plan.hpp"
 #include "edit/runtime/grade_lut.hpp"
 #include "edit/runtime/result_content_key.hpp"
 
@@ -106,6 +107,11 @@ void RuntimeInvalidationState::BindCompiledPlan(const ExecutionPlan& plan) {
     AddEdge(grade.mask_output, grade.scene_output);
     Ensure(grade.mask_output);
   }
+  // The canonical scatter image reads the DRT scene input and feeds the display result.
+  const auto scatter = DiffusionScatterId(plan.drt.node_id);
+  AddEdge(plan.SceneInputForDrt(), scatter);
+  AddEdge(scatter, plan.display_output);
+  Ensure(scatter);
   Ensure(plan.sensor_linear_output);
   Ensure(plan.geometry_output);
   Ensure(plan.develop_output);
@@ -217,6 +223,12 @@ void RuntimeInvalidationState::CollectDrtChanges(
     changed            = true;
     last_drt_revision_ = revision;
   }
+  const auto diffusion_revision =
+      drt->Params().FieldsRevision(DirtyFieldMask{DrtDirty::Diffusion});
+  if (diffusion_revision != last_diffusion_revision_) {
+    origins.push_back(DiffusionScatterId(plan.drt.node_id));
+    last_diffusion_revision_ = diffusion_revision;
+  }
   for (std::size_t index = 0; index < drt->AdjustmentCount(); ++index) {
     const AdjustmentKey key{drt->Id(), drt->AdjustmentIdAt(index)};
     changed = ObserveRevision(last_adjustment_revision_, seen_adjustments, key,
@@ -241,6 +253,7 @@ void RuntimeInvalidationState::CollectStructureChanges(const ExecutionPlan& plan
   collect_if_unassigned(plan.geometry_output);
   collect_if_unassigned(plan.develop_output);
   collect_if_unassigned(plan.display_output);
+  collect_if_unassigned(DiffusionScatterId(plan.drt.node_id));
 
   std::set<NodeId> current_grades;
   for (const auto& grade : plan.grade_nodes) {
@@ -288,6 +301,7 @@ void RuntimeInvalidationState::CollectStructureChanges(const ExecutionPlan& plan
   }
   const auto drt_input = plan.SceneInputForDrt();
   if (last_drt_input_ != drt_input) {
+    origins.push_back(DiffusionScatterId(plan.drt.node_id));
     origins.push_back(plan.display_output);
     last_drt_input_ = drt_input;
   }
@@ -344,6 +358,7 @@ void RuntimeInvalidationState::ClearLastSeenRevisions() {
   last_sensor_revision_        = kNoParameterRevision;
   last_white_balance_revision_ = kNoParameterRevision;
   last_drt_revision_           = kNoParameterRevision;
+  last_diffusion_revision_     = kNoParameterRevision;
 }
 
 void RuntimeInvalidationState::Clear() {
@@ -404,7 +419,7 @@ auto RuntimeInvalidationState::MakeImageRepresentation(const GraphValueId& id, I
   repr.source_detail  = source_detail;
   if (id == sensor_output_) {
     repr.identity = sensor_identity_;
-  } else if (IsLocalTonePort(id)) {
+  } else if (IsLocalTonePort(id) || IsDiffusionScatterPort(id)) {
     repr.identity = canonical_identity_;
   } else {
     repr.identity = frame_identity_;

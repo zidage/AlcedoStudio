@@ -30,6 +30,9 @@ enum class GpuPassKind : std::uint8_t {
   PrimaryColorGrade = 12,
   Drt               = 13,
   MaskUnion         = 14,
+  /// Decodes the last ACEScc scene value to linear AP1 before the DRT. Applies the diffusion
+  /// filter when its strength is not 0. Present in every plan; DRT reads linear AP1 only.
+  DiffusionFilter   = 15,
 };
 
 [[nodiscard]] inline auto GpuPassKindName(GpuPassKind kind) -> const char* {
@@ -62,6 +65,8 @@ enum class GpuPassKind : std::uint8_t {
       return "Drt";
     case GpuPassKind::MaskUnion:
       return "MaskUnion";
+    case GpuPassKind::DiffusionFilter:
+      return "DiffusionFilter";
   }
   return "Unknown";
 }

@@ -140,6 +140,8 @@ Rectangle {
             NavButton { itemIndex: 4 }
             NavButton { itemIndex: 5 }
             NavButton { itemIndex: 6 }
+            NavButton { itemIndex: 7 }
+            NavButton { itemIndex: 8 }
         }
     }
 }

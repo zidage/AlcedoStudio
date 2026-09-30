@@ -36,6 +36,7 @@ enum class EditorAdjustmentField {
   RawDecode,
   LensCalibration,
   ColorTemperature,
+  Diffusion,
 };
 
 /// Resolve a stable QML field key (or one of its aliases) to the adjustment it controls.

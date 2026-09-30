@@ -6,6 +6,7 @@
 
 #include "edit/runtime/cuda/cuda_backend.hpp"
 #include "edit/runtime/cuda/cuda_develop_pass.hpp"
+#include "edit/runtime/cuda/cuda_diffusion_filter_pass.hpp"
 #include "edit/runtime/cuda/cuda_drt_pass.hpp"
 #include "edit/runtime/cuda/cuda_mask_pass.hpp"
 #include "edit/runtime/cuda/cuda_primary_grade_pass.hpp"
@@ -75,6 +76,15 @@ struct PassEncoder<CudaBackend, GpuPassKind::PrimaryColorGrade> {
       -> FrameSceneBinding {
     return ExecuteCudaPrimaryGrade(device, plan, input, document, compiled_grade, scene)
         .output_binding;
+  }
+};
+
+template <>
+struct PassEncoder<CudaBackend, GpuPassKind::DiffusionFilter> {
+  static auto Encode(CudaRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
+                     const PipelineDocument& document, const FrameSceneBinding& scene)
+      -> FrameSceneBinding {
+    return ExecuteCudaDiffusionFilter(device, plan, document, scene);
   }
 };
 

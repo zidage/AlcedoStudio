@@ -326,10 +326,36 @@ TEST(GpuDagGraphCompiler, ZeroGradesFeedDevelopIntoDrtPost) {
   EXPECT_EQ(plan.drt.scene_input, plan.develop_output);
   ASSERT_FALSE(plan.drt.steps.empty());
   EXPECT_EQ(plan.drt.steps.front().kind, CompiledDrtStepKind::DisplayTransform);
-  EXPECT_EQ(plan.drt.steps.front().input, plan.develop_output);
+  EXPECT_EQ(plan.drt.steps.front().input, plan.drt.scene_linear);
   EXPECT_EQ(plan.drt.steps.front().output, plan.drt.scene_output);
   EXPECT_EQ(plan.drt.steps.back().kind, CompiledDrtStepKind::Neighborhood);
   EXPECT_EQ(plan.drt.steps.back().output, plan.display_output);
+  const auto diffusion = plan.PassesOfKind(GpuPassKind::DiffusionFilter);
+  ASSERT_EQ(diffusion.size(), 1U);
+  ASSERT_EQ(diffusion.front()->inputs.size(), 1U);
+  EXPECT_EQ(diffusion.front()->inputs.front().source, plan.develop_output);
+}
+
+TEST(GpuDagGraphCompiler, DiffusionFilterDecodesLastGradeOutputBeforeEveryDrt) {
+  // The pass is compiled for a document without a stored diffusion strength, so the DRT never
+  // decodes ACEScc itself and a strength edit never recompiles the plan.
+  auto       document = CreateDefaultPipelineDocument();
+  const auto plan     = GraphCompiler::CompileStatic(document, DirectRgbSource());
+  const auto diffusion_index = plan.IndexOf(GpuPassKind::DiffusionFilter);
+  const auto drt_index       = plan.IndexOf(GpuPassKind::Drt);
+  ASSERT_GE(diffusion_index, 0);
+  EXPECT_EQ(diffusion_index + 1, drt_index);
+  const auto& diffusion = plan.passes[static_cast<std::size_t>(diffusion_index)];
+  const auto& drt       = plan.passes[static_cast<std::size_t>(drt_index)];
+  ASSERT_EQ(diffusion.inputs.size(), 1U);
+  EXPECT_EQ(diffusion.inputs.front().source, plan.SceneInputForDrt());
+  ASSERT_EQ(diffusion.outputs.size(), 1U);
+  EXPECT_EQ(diffusion.outputs.front().value, plan.drt.scene_linear);
+  ASSERT_EQ(drt.inputs.size(), 1U);
+  EXPECT_EQ(drt.inputs.front().source, plan.drt.scene_linear);
+
+  document.Drt()->Params().ApplyDiffusionStrength(0.5f);
+  EXPECT_FALSE(GraphCompiler::NeedsRecompile(plan, document, DirectRgbSource()));
 }
 
 TEST(GpuDagGraphCompiler, GradeWithoutPrimaryIdRendersItsParameters) {

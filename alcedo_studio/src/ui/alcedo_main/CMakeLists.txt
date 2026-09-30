@@ -655,7 +655,7 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorWhiteBalanceSection.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorWhiteBalanceSliders.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorInfoHint.qml"
-    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorDetailPanel.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorPostProcessPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMasksContextPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorScopePanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorTonePanel.qml"

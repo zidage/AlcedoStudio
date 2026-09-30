@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <memory>
 #include <optional>
 #include <string>
@@ -384,7 +385,9 @@ TEST(EditorAdjustmentContextTest, CapabilityRegistryMatchesNodeKind) {
   EXPECT_FALSE(AdjustmentPanelIsSupported(EditorNodeKind::ColorGrade, kAdjustmentPanelGeometry));
   EXPECT_FALSE(AdjustmentPanelIsSupported(EditorNodeKind::Drt, kAdjustmentPanelGeometry));
   EXPECT_TRUE(AdjustmentPanelIsSupported(EditorNodeKind::ColorGrade, kAdjustmentPanelMasks));
-  EXPECT_TRUE(AdjustmentPanelIsSupported(EditorNodeKind::Drt, kAdjustmentPanelDetail));
+  EXPECT_TRUE(AdjustmentPanelIsSupported(EditorNodeKind::Drt, kAdjustmentPanelPost));
+  EXPECT_TRUE(AdjustmentPanelIsSupported(EditorNodeKind::ColorGrade, kAdjustmentPanelPost));
+  EXPECT_FALSE(AdjustmentPanelIsSupported(EditorNodeKind::Develop, kAdjustmentPanelPost));
   EXPECT_TRUE(AdjustmentFieldIsSupported(EditorNodeKind::Develop, "crop_rotate"));
   EXPECT_FALSE(AdjustmentFieldIsSupported(EditorNodeKind::ColorGrade, "crop_rotate"));
   EXPECT_TRUE(AdjustmentFieldIsSupported(EditorNodeKind::ColorGrade, "exposure"));
@@ -394,6 +397,39 @@ TEST(EditorAdjustmentContextTest, CapabilityRegistryMatchesNodeKind) {
   EXPECT_TRUE(AdjustmentFieldIsSupported(EditorNodeKind::ColorGrade, "film_grain"));
   EXPECT_FALSE(AdjustmentFieldIsSupported(EditorNodeKind::Develop, "clarity"));
   EXPECT_TRUE(AdjustmentFieldIsSupported(EditorNodeKind::Drt, "odt"));
+  EXPECT_TRUE(AdjustmentFieldIsSupported(EditorNodeKind::Drt, "diffusion"));
+  EXPECT_TRUE(AdjustmentFieldIsSupported(EditorNodeKind::ColorGrade, "diffusion"));
+  EXPECT_FALSE(AdjustmentFieldIsSupported(EditorNodeKind::Develop, "diffusion"));
+}
+
+TEST(EditorAdjustmentContextTest, DiffusionFieldTargetsDocumentDrtAndProjectsStrength) {
+  auto document = CreateDefaultPipelineDocument();
+  document.Drt()->Params().ApplyDiffusionStrength(0.3f);
+  std::string error;
+  const auto  target =
+      CompleteSelectedNodeParameterTarget(document, NodeId{"grade.primary"}, "diffusion", &error);
+  ASSERT_TRUE(target.has_value()) << error;
+  EXPECT_EQ(target->owner_kind, EditorParameterOwnerKind::DrtPost);
+  EXPECT_EQ(target->node_id, document.Drt()->Id());
+  EXPECT_TRUE(target->adjustment_instance_id.Empty());
+
+  EditorPanelProjection projection;
+  ASSERT_TRUE(
+      ProjectSelectedNodePanelFields(document, NodeId{"grade.primary"}, 3, &projection, &error))
+      << error;
+  const auto field = std::find_if(projection.fields.begin(), projection.fields.end(),
+                                  [](const auto& f) { return f.field_key == "diffusion"; });
+  ASSERT_NE(field, projection.fields.end());
+  const auto* nested = std::get_if<EditorPanelNestedScalarValue>(&field->value);
+  ASSERT_NE(nested, nullptr);
+  EXPECT_EQ(nested->object_key, "diffusion");
+  EXPECT_EQ(nested->value_key, "strength");
+  EXPECT_FLOAT_EQ(nested->value, 0.3f);
+
+  const auto write = ParseEditorParameterWrite("diffusion", {{"strength", 0.8}}, &error);
+  ASSERT_TRUE(write.has_value()) << error;
+  ASSERT_TRUE(ApplyEditorParameterWrite(document, *target, *write, &error)) << error;
+  EXPECT_FLOAT_EQ(document.Drt()->Params().DiffusionStrength(), 0.8f);
 }
 
 TEST(EditorAdjustmentContextTest, ColorGradeLookPanelFieldsTargetDocumentDrtNode) {

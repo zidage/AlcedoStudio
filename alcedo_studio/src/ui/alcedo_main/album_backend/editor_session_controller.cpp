@@ -1717,8 +1717,9 @@ auto EditorSessionController::NormalizeAdjustmentPanel(const QString& panel) -> 
   if (key == QLatin1String("masks") || key == QLatin1String("mask")) {
     return QStringLiteral("masks");
   }
-  if (key == QLatin1String("detail")) {
-    return QStringLiteral("detail");
+  // "detail" is the id of the removed Detail page; stored preferences may still hold it.
+  if (key == QLatin1String("post") || key == QLatin1String("detail")) {
+    return QStringLiteral("post");
   }
   return QStringLiteral("tone");
 }

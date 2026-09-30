@@ -16,9 +16,8 @@ __kernel void drt_display_rgba32f(__read_only image2d_t src, __write_only image2
   const __global OpenClToOutputParams* params =
       (__global const OpenClToOutputParams*)(params_bytes + params_offset_bytes);
   const float4 source = read_imagef(src, kNearestClamp, gid);
-  const AcesRgcRgb compressed =
-      AcesReferenceGamutCompress(opencl_acescc_decode(source.x), opencl_acescc_decode(source.y),
-                                 opencl_acescc_decode(source.z));
+  // Input is linear AP1; the DiffusionFilter pass already decoded ACEScc.
+  const AcesRgcRgb compressed = AcesReferenceGamutCompress(source.x, source.y, source.z);
   const float3 scene = (float3)(compressed.r, compressed.g, compressed.b);
   float3 display_linear;
   if (params->method_ == 0) {
@@ -45,9 +44,8 @@ __kernel void drt_display_scene_rgba32f(__read_only image2d_t src_image,
   const float4 source = src_is_buffer != 0
                             ? src_buffer[(uint)gid.y * width + (uint)gid.x]
                             : read_imagef(src_image, kNearestClamp, gid);
-  const AcesRgcRgb compressed =
-      AcesReferenceGamutCompress(opencl_acescc_decode(source.x), opencl_acescc_decode(source.y),
-                                 opencl_acescc_decode(source.z));
+  // Input is linear AP1; the DiffusionFilter pass already decoded ACEScc.
+  const AcesRgcRgb compressed = AcesReferenceGamutCompress(source.x, source.y, source.z);
   const float3 scene = (float3)(compressed.r, compressed.g, compressed.b);
   float3 display_linear;
   if (params->method_ == 0) {
@@ -62,5 +60,28 @@ __kernel void drt_display_scene_rgba32f(__read_only image2d_t src_image,
     dst_buffer[(uint)gid.y * width + (uint)gid.x] = outp;
   } else {
     write_imagef(dst_image, gid, outp);
+  }
+}
+
+/// DiffusionFilter with strength 0: decode the ACEScc AP1 scene to linear AP1 for the DRT.
+__kernel void diffusion_filter_decode_scene_rgba32f(__read_only image2d_t src_image,
+                                                    __global const float4* src_buffer,
+                                                    int src_is_buffer,
+                                                    __write_only image2d_t dst_image,
+                                                    __global float4* dst_buffer, int dst_is_buffer,
+                                                    uint width, uint height) {
+  const int2 gid = (int2)((int)get_global_id(0), (int)get_global_id(1));
+  if (gid.x >= (int)width || gid.y >= (int)height) {
+    return;
+  }
+  const float4 source = src_is_buffer != 0
+                            ? src_buffer[(uint)gid.y * width + (uint)gid.x]
+                            : read_imagef(src_image, kNearestClamp, gid);
+  const float4 linear = (float4)(opencl_acescc_decode(source.x), opencl_acescc_decode(source.y),
+                                 opencl_acescc_decode(source.z), source.w);
+  if (dst_is_buffer != 0) {
+    dst_buffer[(uint)gid.y * width + (uint)gid.x] = linear;
+  } else {
+    write_imagef(dst_image, gid, linear);
   }
 }
