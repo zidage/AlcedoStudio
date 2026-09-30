@@ -23,8 +23,8 @@ namespace alcedo::ui {
 /// official package/LUT ID of package-owned official files, else the library path
 /// (plan L4). A selection keeps the configured strength. Relative selection supports
 /// Look-panel keyboard shortcuts (prev/next). Loading (setSelectedPath, loadSelection)
-/// does not submit. Favorites are stored by the library as root-relative entry paths;
-/// this model exposes them as absolute paths.
+/// does not submit. Favorites are stored by the library as entry IDs; this model exposes
+/// the favorite entries by their absolute paths.
 class EditorLutCatalogModel : public EditorAdjustmentModelBase {
   Q_OBJECT
   Q_PROPERTY(alcedo::LutLibraryService* library READ library WRITE setLibrary NOTIFY libraryChanged)
@@ -96,6 +96,8 @@ class EditorLutCatalogModel : public EditorAdjustmentModelBase {
   void                    submitSettled();
   [[nodiscard]] auto      buildParamsJson() const -> QString;
   [[nodiscard]] auto      relativePathOf(const QString& path) const -> std::optional<std::string>;
+  /// Entry ID of the listed library entry at the absolute @p path.
+  [[nodiscard]] auto      entryIdOf(const QString& path) const -> std::optional<std::string>;
   /// Reference that selecting the list row at @p path submits.
   [[nodiscard]] auto      referenceForPath(const QString& path) const -> alcedo::LutReference;
   void setSelection(const QString& path, alcedo::LutReference reference, std::string name);

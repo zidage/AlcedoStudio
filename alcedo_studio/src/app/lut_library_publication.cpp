@@ -58,6 +58,10 @@ auto LutLibraryPublication::ReferenceForEntry(const LutLibraryEntry& entry) -> L
   return LibraryLutReference{entry.relative_path};
 }
 
+auto LutLibraryPublication::EntryIdOf(const LutLibraryEntry& entry) -> std::string {
+  return DescribeLutReference(ReferenceForEntry(entry));
+}
+
 auto LutLibraryPublication::LockContentForRemoval() const -> std::unique_lock<std::shared_mutex> {
   return std::unique_lock(content_mutex_);
 }

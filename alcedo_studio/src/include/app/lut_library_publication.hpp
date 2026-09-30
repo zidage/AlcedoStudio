@@ -62,6 +62,9 @@ class LutLibraryPublication final : public LutResourceResolver {
   /// Reference that selects @p entry: its official ID when the entry is package-owned official
   /// content with a metadata ID, else its library path.
   [[nodiscard]] static auto ReferenceForEntry(const LutLibraryEntry& entry) -> LutReference;
+  /// Stable identity of @p entry for favorites and browser rows: the DescribeLutReference text
+  /// of ReferenceForEntry (`official:<package>/<lut id>` or `library:<relative path>`).
+  [[nodiscard]] static auto EntryIdOf(const LutLibraryEntry& entry) -> std::string;
 
   /// Exclusive content lock; hold it while deleting or moving library files that a published
   /// resolution may name. Blocks until running ReadResource visitors return.

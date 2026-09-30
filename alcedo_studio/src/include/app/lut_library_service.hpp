@@ -187,13 +187,22 @@ class LutLibraryService final : public QObject {
   /// not request again until a user-requested refresh.
   auto               LocateEntry(std::string_view relative_path) -> Location;
 
-  [[nodiscard]] auto FavoritePaths() const -> const std::vector<std::string>& {
-    return publication_->UserState().favorite_paths;
+  /// Scoped const read of the entry whose LutLibraryPublication::EntryIdOf is @p entry_id.
+  /// Returns false when no listed entry has that ID.
+  auto               ReadEntryById(std::string_view                                   entry_id,
+                                   const std::function<void(const LutLibraryEntry&)>& visitor) const
+      -> bool;
+
+  /// Sorted favorite entry IDs (IsValidLutLibraryEntryId). Official package LUTs keep their
+  /// favorite across package updates; absent entries stay listed.
+  [[nodiscard]] auto FavoriteEntryIds() const -> const std::vector<std::string>& {
+    return publication_->UserState().favorite_entry_ids;
   }
-  [[nodiscard]] auto IsFavorite(std::string_view relative_path) const -> bool;
-  /// Add or remove a favorite and persist it. Rejected (kBusy) while a root
-  /// operation runs, because that operation carries the favorites to a new root.
-  auto               SetFavorite(std::string_view relative_path, bool favorite) -> Status;
+  [[nodiscard]] auto IsFavorite(std::string_view entry_id) const -> bool;
+  /// Add or remove a favorite entry ID and persist it. kInvalidRequest for a malformed ID.
+  /// Rejected (kBusy) while a root operation runs, because that operation carries the
+  /// favorites to a new root. Emits FavoritesChanged after the file is written.
+  auto               SetFavorite(std::string_view entry_id, bool favorite) -> Status;
   /// Scoped const read of the package receipts read with the published
   /// inventory, sorted by package ID. Invalid receipts are absent (and reported
   /// as inventory diagnostics).
@@ -287,6 +296,9 @@ class LutLibraryService final : public QObject {
   void                                   RetireReplacedPackageContent();
   /// Request one refresh for an unresolved LUT reference (owner thread).
   void                                   RequestRefreshForMissing(const std::string& reference_key);
+  /// Convert favorites stored as paths (previous panel settings with absolute paths, and
+  /// `lut-library.json` files with root-relative paths) to entry IDs of the published
+  /// inventory. A path the inventory does not list becomes its `library:` ID.
   void ConvertLegacyFavorites();
   auto RequestRefresh(bool user_requested) -> Status;
 

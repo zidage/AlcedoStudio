@@ -120,11 +120,26 @@ auto LutPathFromUtf8(std::string_view utf8) -> std::filesystem::path {
   return std::filesystem::path(std::u8string(begin, begin + utf8.size()));
 }
 
+auto IsValidLutLibraryEntryId(std::string_view entry_id) -> bool {
+  constexpr std::string_view kOfficial = "official:";
+  constexpr std::string_view kLibrary  = "library:";
+  if (entry_id.starts_with(kLibrary)) {
+    return IsSafeLutRelativePath(entry_id.substr(kLibrary.size()));
+  }
+  if (!entry_id.starts_with(kOfficial)) return false;
+  const std::string_view ids       = entry_id.substr(kOfficial.size());
+  const std::size_t      separator = ids.find('/');
+  return separator != std::string_view::npos && separator > 0 && separator + 1 < ids.size() &&
+         ids.find_first_of(std::string_view("\0\r\n", 3)) == std::string_view::npos;
+}
+
 auto SerializeLutLibraryUserState(const LutLibraryUserState& state) -> std::string {
-  const Json root = {{"schema", 1},
-                     {"kind", kUserStateKind},
-                     {"favorites", state.favorite_paths},
-                     {"previous_roots", state.previous_roots}};
+  Json root = {{"schema", 1},
+               {"kind", kUserStateKind},
+               {"favorite_entries", state.favorite_entry_ids},
+               {"previous_roots", state.previous_roots}};
+  // Paths not yet converted to entry IDs keep their original key.
+  if (!state.legacy_favorite_paths.empty()) root["favorites"] = state.legacy_favorite_paths;
   return root.dump(1);
 }
 
@@ -135,15 +150,19 @@ auto ParseLutLibraryUserState(std::string_view json_bytes) -> LutLibraryUserStat
     return {std::nullopt, "LUT library state schema or kind is not supported"};
   }
   LutLibraryUserState state;
-  if (!StringList(root, "favorites", &state.favorite_paths) ||
+  if (!StringList(root, "favorite_entries", &state.favorite_entry_ids) ||
+      !StringList(root, "favorites", &state.legacy_favorite_paths) ||
       !StringList(root, "previous_roots", &state.previous_roots) ||
-      !std::all_of(state.favorite_paths.begin(), state.favorite_paths.end(),
+      !std::all_of(state.favorite_entry_ids.begin(), state.favorite_entry_ids.end(),
+                   [](const std::string& id) { return IsValidLutLibraryEntryId(id); }) ||
+      !std::all_of(state.legacy_favorite_paths.begin(), state.legacy_favorite_paths.end(),
                    [](const std::string& path) { return IsSafeLutRelativePath(path); })) {
     return {std::nullopt, "LUT library state lists are invalid"};
   }
-  std::sort(state.favorite_paths.begin(), state.favorite_paths.end());
-  state.favorite_paths.erase(std::unique(state.favorite_paths.begin(), state.favorite_paths.end()),
-                             state.favorite_paths.end());
+  for (std::vector<std::string>* list : {&state.favorite_entry_ids, &state.legacy_favorite_paths}) {
+    std::sort(list->begin(), list->end());
+    list->erase(std::unique(list->begin(), list->end()), list->end());
+  }
   return {std::move(state), {}};
 }
 

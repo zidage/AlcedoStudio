@@ -655,7 +655,8 @@ TEST(EditorLookModelTest, LutFavoriteToggleStoresEntryInLibrary) {
   EXPECT_TRUE(model.isFavoritePath(path));
   EXPECT_FALSE(model.isFavoritePath(library.PathOf("fuji/look.cube")));
   EXPECT_EQ(model.favoritePaths(), QStringList{path});
-  EXPECT_EQ(library.Service()->FavoritePaths(), std::vector<std::string>{"kodak/look.cube"});
+  EXPECT_EQ(library.Service()->FavoriteEntryIds(),
+            std::vector<std::string>{"library:kodak/look.cube"});
 
   model.toggleFavoritePath(path);
   EXPECT_EQ(fav_spy.count(), 2);
