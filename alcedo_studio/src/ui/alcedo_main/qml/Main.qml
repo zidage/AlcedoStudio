@@ -538,7 +538,11 @@ ApplicationWindow {
     }
 
     function openUpdateSettings() {
-        appDialogs.openSettingsDialog(6)
+        appDialogs.openUpdateSettings()
+    }
+
+    function openLutSettings() {
+        appDialogs.openLutSettings()
     }
 
 

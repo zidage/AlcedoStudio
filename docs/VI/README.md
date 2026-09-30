@@ -231,9 +231,47 @@ Classic themes, and at DPR 1.0, 1.5, and 2.0:
   name, its print line, the Missing line, the shared `AdjustmentSlider` for
   strength, then `Browse LUTs` and `Remove` as compact `DialogActionButton`s.
 
+### Empty state link to Settings (L6B)
+
+- The empty-library state adds `Download official LUTs` (`DialogActionButton`),
+  which opens Settings on the LUTs page.
+
 ### Manual review
 
 Check both themes at 1.0 and 1.5 DPR: empty library, loading, many results,
 zero results, long names, applied tile, focused tile, favorite on applied and
 idle tiles, no target (RAW or DRT selected), Missing LUT, and a narrow window
 where the page shrinks to one tile column.
+
+## LUT Settings (LUT library plan L6B)
+
+### `LutSettingsPanel.qml` (Settings > LUTs)
+
+- The page follows the other Settings pages: `SettingsSection` titles
+  (`fontSizeSection`, `fontWeightHeading`) with a divider, a 160 px label
+  column, and a 176 px indent for detail lines under it. The nav entry uses
+  `panel_icons/lut-cube.svg`.
+- `LUT library`: the root path in `dataFontFamily` (wraps anywhere), the LUT
+  count and verification state in muted caption text, then four compact
+  `DialogActionButton`s (Open folder, Refresh, Use another folder, Move
+  library) in a wrapping row.
+- A chosen folder opens an inline confirmation card (`dividerColor` 1 px
+  border, `panelRadius`, no fill): the question, the folder path, and what the
+  operation does, or the reason it cannot start in `dangerColor`. Only the
+  confirm button (`accent`) starts the operation.
+- A running library operation shows its name and an indeterminate
+  `ThemedProgressBar`; a move adds Cancel. Library errors use `dangerColor`;
+  files kept after a move are listed in muted caption text.
+- `Official LUT packages`: the check state line (muted, or `dangerColor` on a
+  failed check) with `Check again`, then one bordered row per package: name,
+  status, `%n LUTs · size download · revision` in `dataFontFamily`, a
+  determinate `ThemedProgressBar` while downloading (indeterminate while
+  verifying and installing), the row error in `dangerColor`, and at most one
+  action button (`accent`; `Retry` uses the normal kind) plus Cancel for the
+  running row. No pills, badges, or status dots.
+
+### Manual review
+
+Check both themes: package rows in every status, a failed check, a long
+Unicode root path, the move confirmation with and without an error, and a
+running move with Cancel.

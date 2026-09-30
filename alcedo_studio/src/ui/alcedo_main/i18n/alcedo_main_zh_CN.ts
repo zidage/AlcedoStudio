@@ -2890,8 +2890,13 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <location line="+1"/>
-        <source>Import .cube files, or copy them into the LUT folder and refresh.</source>
-        <translation>导入 .cube 文件，或将其复制到 LUT 文件夹后刷新。</translation>
+        <source>Download the official LUT packages in Settings, import .cube files, or copy them into the LUT folder and refresh.</source>
+        <translation>在设置中下载官方 LUT 包，导入 .cube 文件，或将其复制到 LUT 文件夹后刷新。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Download official LUTs</source>
+        <translation>下载官方 LUT</translation>
     </message>
     <message>
         <location line="+1"/>
@@ -4939,6 +4944,359 @@ Create a new layer above it and draw the Mask there?</source>
     </message>
 </context>
 <context>
+    <name>LutSettingsPanel</name>
+    <message>
+        <location filename="../qml/LutSettingsPanel.qml" line="+1"/>
+        <source>Another LUT library operation is running. Try again when it finishes.</source>
+        <translation>另一项 LUT 库操作正在运行。请在其完成后重试。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Loading the LUT library…</source>
+        <translation>正在加载 LUT 库…</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Refreshing the LUT inventory…</source>
+        <translation>正在刷新 LUT 清单…</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Importing LUTs…</source>
+        <translation>正在导入 LUT…</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Indexing the LUT folder…</source>
+        <translation>正在索引 LUT 文件夹…</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Moving the LUT library…</source>
+        <translation>正在移动 LUT 库…</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Removing copied files from the previous folder…</source>
+        <translation>正在从原文件夹删除已复制的文件…</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Installing a LUT package…</source>
+        <translation>正在安装 LUT 包…</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Removing replaced package files…</source>
+        <translation>正在删除被替换的包文件…</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Not installed</source>
+        <translation>未安装</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Installed and current</source>
+        <translation>已安装，为最新版本</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Update available</source>
+        <translation>有可用更新</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Repair required: installed files differ from the package</source>
+        <translation>需要修复：已安装的文件与包不一致</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Checking…</source>
+        <translation>正在检查…</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Downloading… %1%</source>
+        <translation>正在下载… %1%</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Verifying…</source>
+        <translation>正在校验…</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Installing…</source>
+        <translation>正在安装…</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Not completed</source>
+        <translation>未完成</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Download</source>
+        <translation>下载</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Update</source>
+        <translation>更新</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Repair</source>
+        <translation>修复</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Retry</source>
+        <translation>重试</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>%1 GB</source>
+        <translation>%1 GB</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>%1 MB</source>
+        <translation>%1 MB</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>%1 KB</source>
+        <translation>%1 KB</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>%1 download</source>
+        <translation>下载 %1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>installed %1, available %2</source>
+        <translation>已安装 %1，可用 %2</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>revision %1</source>
+        <translation>版本 %1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Choose a new folder for the LUT library</source>
+        <translation>为 LUT 库选择新文件夹</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Choose an existing LUT folder</source>
+        <translation>选择现有的 LUT 文件夹</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>LUT library</source>
+        <translation>LUT 库</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Folder</source>
+        <translation>文件夹</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Open folder</source>
+        <translation>打开文件夹</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Refresh</source>
+        <translation>刷新</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Use another folder…</source>
+        <translation>使用其他文件夹…</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Move library…</source>
+        <translation>移动 LUT 库…</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Move the LUT library to this folder?</source>
+        <translation>将 LUT 库移动到此文件夹？</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Use this folder as the LUT library?</source>
+        <translation>将此文件夹用作 LUT 库？</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Every file is copied and verified first. The current folder stays in use until the copy is complete; then the copied files are removed from it.</source>
+        <translation>所有文件会先复制并校验。复制完成前仍使用当前文件夹；完成后从中删除已复制的文件。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>The LUTs in this folder are indexed. The current folder and its files are not changed.</source>
+        <translation>将索引此文件夹中的 LUT。当前文件夹及其文件不会改变。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Move library</source>
+        <translation>移动 LUT 库</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Use folder</source>
+        <translation>使用此文件夹</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Cancel</source>
+        <translation>取消</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Official LUT Packages</source>
+        <translation>官方 LUT 包</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Official LUT package downloads are not available in this build.</source>
+        <translation>此版本不提供官方 LUT 包下载。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Checking the signed package list…</source>
+        <translation>正在检查已签名的包列表…</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>The package check failed: %1</source>
+        <translation>包检查失败：%1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Package list checked. Downloads start only when you choose one.</source>
+        <translation>包列表已检查。只有在你选择某个包后才会开始下载。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>The package list has not been checked.</source>
+        <translation>尚未检查包列表。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Check again</source>
+        <translation>重新检查</translation>
+    </message>
+    <message numerus="yes">
+        <location line="+1"/>
+        <source>%n LUT(s)</source>
+        <translation>
+            <numerusform>%n 个 LUT</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <location line="+1"/>
+        <source>%n LUT(s) in the inventory</source>
+        <translation>
+            <numerusform>清单中有 %n 个 LUT</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <location line="+1"/>
+        <source>%n LUT(s) in the inventory · verification incomplete, refresh to verify</source>
+        <translation>
+            <numerusform>清单中有 %n 个 LUT · 校验未完成，请刷新以校验</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <location line="+1"/>
+        <source>%n file(s) changed after copying and stayed in the previous folder: %1</source>
+        <translation>
+            <numerusform>%n 个文件在复制后被修改，已保留在原文件夹中：%1</numerusform>
+        </translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>The folder that holds every LUT available for color grading.</source>
+        <translation>存放所有可用于调色的 LUT 的文件夹。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Change folder…</source>
+        <translation>更换文件夹…</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Choose a folder for the LUT library</source>
+        <translation>为 LUT 库选择文件夹</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>The folder is empty, so the library moves into it. Every file is copied and verified first. The current folder stays in use until the copy is complete; then the copied files are removed from it.</source>
+        <translation>该文件夹为空，LUT 库将移动到这里。所有文件会先复制并校验；复制完成前继续使用当前文件夹，之后会从当前文件夹删除已复制的文件。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Total</source>
+        <translation>总计</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Categories</source>
+        <translation>分类构成</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Film simulation</source>
+        <translation>胶片模拟</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Custom</source>
+        <translation>用户自定义</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>%1 → %2</source>
+        <translation>%1 → %2</translation>
+    </message>
+    <message numerus="yes">
+        <location line="+1"/>
+        <source>The folder already holds files, so its LUTs become the library. The %n LUT(s) in the current folder are not moved and stay where they are.</source>
+        <translation>
+            <numerusform>该文件夹中已有文件，其中的 LUT 将成为 LUT 库。当前文件夹中的 %n 个 LUT 不会被移动，仍保留在原处。</numerusform>
+        </translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Open in Finder</source>
+        <translation>在访达中打开</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Open in File Explorer</source>
+        <translation>在文件资源管理器中打开</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Based on %1</source>
+        <translation>基于 %1</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>View the original project on GitHub</source>
+        <translation>在 GitHub 上查看原项目</translation>
+    </message>
+</context>
+<context>
     <name>Main</name>
     <message>
         <location filename="../qml/Main.qml" line="+48"/>
@@ -5385,6 +5743,11 @@ Create a new layer above it and draw the Mask there?</source>
 </context>
 <context>
     <name>SettingDialog</name>
+    <message>
+        <location filename="../qml/SettingDialog.qml" line="+1"/>
+        <source>LUTs</source>
+        <translation>LUT</translation>
+    </message>
     <message>
         <location filename="../qml/SettingDialog.qml" line="+164"/>
         <source>Settings applied</source>

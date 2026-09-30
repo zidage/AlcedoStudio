@@ -92,6 +92,12 @@ auto LoadLibraryRoot(const fs::path& root, unsigned workers, const LutLibraryFil
   return loaded;
 }
 
+/// A native path or a local-file URL (QML file dialogs return URLs).
+auto FolderFromQml(const QString& text) -> fs::path {
+  const QUrl url(text);
+  return FromQString(url.isLocalFile() ? url.toLocalFile() : text);
+}
+
 auto NormalizedRoot(const fs::path& path) -> fs::path {
   std::error_code error;
   fs::path        normalized = fs::weakly_canonical(fs::absolute(path, error), error);
@@ -714,9 +720,88 @@ auto LutLibraryService::ReferenceForPath(const fs::path& absolute_path) const
 }
 
 auto LutLibraryService::CancelOperation() -> bool {
-  if (operation_ != Operation::kInstallPackage || !worker_.joinable()) return false;
+  if (!cancelable() || !worker_.joinable()) return false;
   worker_.request_stop();
   return true;
+}
+
+auto LutLibraryService::operation_name() const -> QString {
+  switch (operation_) {
+    case Operation::kNone:
+      return {};
+    case Operation::kLoad:
+      return QStringLiteral("load");
+    case Operation::kRefresh:
+      return QStringLiteral("refresh");
+    case Operation::kImport:
+      return QStringLiteral("import");
+    case Operation::kUseRoot:
+      return QStringLiteral("useRoot");
+    case Operation::kMigrateRoot:
+      return QStringLiteral("migrateRoot");
+    case Operation::kSourceCleanup:
+      return QStringLiteral("sourceCleanup");
+    case Operation::kInstallPackage:
+      return QStringLiteral("installPackage");
+    case Operation::kRetirePackageContent:
+      return QStringLiteral("retirePackageContent");
+  }
+  return {};
+}
+
+auto LutLibraryService::film_simulation_count() const -> int {
+  int count = 0;
+  for (const LutLibraryEntry& entry : publication_->Inventory().entries) {
+    if (entry.header_error == LutHeaderError::kNone && entry.header.metadata &&
+        entry.header.metadata->category == LutCategory::kFilmSimulation) {
+      ++count;
+    }
+  }
+  return count;
+}
+
+auto LutLibraryService::kept_source_paths() const -> QStringList {
+  return ToQStringList(last_result_.kept_source_paths);
+}
+
+auto LutLibraryService::CheckRootChoice(const fs::path& folder, bool migrate) const -> std::string {
+  if (folder.empty()) return "No folder is selected.";
+  const fs::path target = NormalizedRoot(folder);
+  if (target == Root()) return "This folder is already the LUT library.";
+  if (migrate) {
+    // The worker checks the free space against the enumerated source bytes again.
+    std::uint64_t bytes = 0;
+    for (const LutLibraryEntry& entry : publication_->Inventory().entries) bytes += entry.size;
+    return ValidateLutLibraryMigrationDestination(Root(), target, bytes);
+  }
+  std::error_code error;
+  if (!fs::is_directory(target, error)) {
+    return "The folder does not exist: " + LutPathToUtf8(target);
+  }
+  return {};
+}
+
+auto LutLibraryService::checkRootChoice(const QString& folder, bool migrate) const -> QVariantMap {
+  const fs::path path = FolderFromQml(folder);
+  return {{QStringLiteral("path"),
+           path.empty() ? QString() : QDir::toNativeSeparators(ToQString(NormalizedRoot(path)))},
+          {QStringLiteral("error"), QString::fromStdString(CheckRootChoice(path, migrate))}};
+}
+
+auto LutLibraryService::RootChangeMigrates(const fs::path& folder) const -> bool {
+  const fs::path  target = NormalizedRoot(folder);
+  std::error_code error;
+  if (!fs::exists(target, error)) return true;
+  return fs::is_directory(target, error) && fs::is_empty(target, error) && !error;
+}
+
+auto LutLibraryService::checkRootChange(const QString& folder) const -> QVariantMap {
+  const fs::path path    = FolderFromQml(folder);
+  const bool     migrate = !path.empty() && RootChangeMigrates(path);
+  return {{QStringLiteral("path"),
+           path.empty() ? QString() : QDir::toNativeSeparators(ToQString(NormalizedRoot(path)))},
+          {QStringLiteral("migrate"), migrate},
+          {QStringLiteral("error"), QString::fromStdString(CheckRootChoice(path, migrate))}};
 }
 
 auto LutLibraryService::OpenRootDirectory() -> bool {
@@ -732,19 +817,16 @@ auto LutLibraryService::OpenRootDirectory() -> bool {
 
 auto LutLibraryService::importFiles(const QStringList& paths) -> bool {
   std::vector<fs::path> sources;
-  for (const QString& path : paths) {
-    const QUrl url(path);
-    sources.push_back(FromQString(url.isLocalFile() ? url.toLocalFile() : path));
-  }
+  for (const QString& path : paths) sources.push_back(FolderFromQml(path));
   return ImportFiles(std::move(sources)) == Status::kOk;
 }
 
-auto LutLibraryService::useRoot(const QString& path) -> bool {
-  return UseRoot(FromQString(path)) == Status::kOk;
+auto LutLibraryService::useRoot(const QString& folder) -> bool {
+  return UseRoot(FolderFromQml(folder)) == Status::kOk;
 }
 
-auto LutLibraryService::migrateRoot(const QString& path) -> bool {
-  return MigrateRoot(FromQString(path)) == Status::kOk;
+auto LutLibraryService::migrateRoot(const QString& folder) -> bool {
+  return MigrateRoot(FolderFromQml(folder)) == Status::kOk;
 }
 
 }  // namespace alcedo

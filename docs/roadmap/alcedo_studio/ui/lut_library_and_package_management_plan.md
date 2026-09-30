@@ -1,7 +1,7 @@
 # LUT Library and Package Management Plan
 
 Date: 2026-09-29  
-Status: L1, L2, and L3 complete (2026-09-29); L4 complete on Windows CUDA/OpenCL, Metal pixel tests written but not run (2026-09-29); L5 complete (2026-09-29; old panel model removal moves with L6A); L6 split into L6A (LUT browser) and L6B (LUT Settings and payload-free installers) on 2026-09-29; L6A implemented with automated evidence on Windows, manual visual checks pending (2026-09-29); L6B not started  
+Status: L1, L2, and L3 complete (2026-09-29); L4 complete on Windows CUDA/OpenCL, Metal pixel tests written but not run (2026-09-29); L5 complete (2026-09-29; old panel model removal moves with L6A); L6 split into L6A (LUT browser) and L6B (LUT Settings and payload-free installers) on 2026-09-29; L6A implemented with automated evidence on Windows, manual visual checks pending (2026-09-29); L6B implemented on Windows with automated and live-feed evidence, feed published to R2, manual and macOS checks pending (2026-09-30)  
 Source revision: `dc73591020ef917fed089db7e4f454839d82051f`  
 Primary area: Alcedo Studio UI and application services  
 Parent: Standalone feature plan, indexed by the [roadmap index](../../README.md)  
@@ -9,7 +9,7 @@ Issues: [#213](https://github.com/zidage/AlcedoStudio/issues/213) and
 [#215](https://github.com/zidage/AlcedoStudio/issues/215)
 
 This document defines seven implementation phases (L6 is split into L6A and L6B). No phase is implemented by this plan.
-Section 6.5 records the L6A browser design; the Settings page design belongs to L6B. Live LUT image previews are outside this release.
+Section 6.5 records the L6A browser design and the L6B Settings page design. Live LUT image previews are outside this release.
 
 ## 1. Product decisions
 
@@ -111,7 +111,27 @@ These user decisions refine requirements 23-26 and sections 6.4 and 6.5. L6A and
    The design goal is the product's: a clear hierarchy, one obvious purpose per part, and a short
    learning curve.
 
-### 1.5 Related work
+### 1.5 Decisions made for L6B (2026-09-30)
+
+The user asked to complete L6B, publish once to R2 with the AWS CLI, and test the related parts in
+the real environment. No separate Settings design was supplied, so L6B composes the page from the
+existing Settings pages and records it in section 6.5.
+
+1. Settings gets a `LUTs` category (index 8, `lut-cube.svg`); About moves to index 9. The dialog
+   exposes `updatesCategory`, `lutCategory`, and `aboutCategory` so callers stop using literals.
+2. The signed feed check runs on each Settings opening transition (`SettingDialog.onVisibleChanged`),
+   not when the LUT page is shown, so the package list is current when the user reaches it.
+3. A chosen folder is checked by the library owner (`CheckRootChoice`) and confirmed inline before
+   Use folder or Move library starts. A running move can be canceled until its staging copy is
+   moved into place.
+4. The feed gains an optional package `name` (display text), written by `prepare_lut_packages.py`
+   from the packages' `source.name`.
+5. The first published packages are the spectral_film_lut negative set (`negative-lmt
+   --alcedo-package`, 44 LUTs) and the spektrafilm print-chain set (`bake_alcedo_set.sh` without
+   options, 36 LUTs), both 65^3, revision `2026.09.30`. They replace the removed installer payload.
+6. `ALCEDO_LUT_PACKAGE_FEED_URL` defaults to the deployed `https://static.aoraw.org/luts/v1/manifest.json`.
+
+### 1.6 Related work
 
 | Plan | Relationship |
 | --- | --- |
@@ -610,7 +630,20 @@ and no route or shortcut audit is required for it.
 - **Editor LUT control** (right adjustment stack, `lut` page): current LUT name, print line,
   Missing state, the 0-100 % strength slider, `Browse LUTs` (opens the rail page), and Remove.
 
-**L6B Settings page.** Not designed yet; ask the user before composing it.
+**L6B Settings page (composed 2026-09-30, section 1.5).** `LutSettingsPanel.qml` in the Settings
+dialog's `LUTs` category; the full token list is in `docs/VI/README.md`.
+
+- **LUT library section.** Folder label column, the root path (data font), the LUT count with the
+  verification state, and four compact actions: Open folder, Refresh, Use another folder, Move
+  library. A chosen folder opens an inline confirmation card (path, what the operation does, or
+  the reason it cannot start). A running operation shows its name and an indeterminate bar; a move
+  adds Cancel. Errors use `dangerColor`; files kept after a move are listed.
+- **Official LUT packages section.** The check state line and `Check again`, then one bordered row
+  per package: name, status, `%n LUTs · size download · revision`, a progress bar while
+  downloading, the row error, one action (Download, Update, Repair, or Retry) and Cancel for the
+  running row. A build without a feed shows that downloads are unavailable.
+- **Browser link.** The browser's empty-library state adds `Download official LUTs`, which opens
+  this page.
 
 ## 7. File and module map
 
@@ -624,7 +657,7 @@ All paths below are repository-relative unless a drive is specified. Listed new 
 | L4 | `src/edit/operators/models/lmt_model.cpp` and header; `src/app/editor_parameter_write*`; `src/app/editor_pipeline_command_service.cpp`; `src/app/editor_panel_projection.cpp`; pipeline construction; `src/edit/runtime/grade_lut.cpp`; `src/edit/runtime/adjustment_runtime.cpp`; three grade backends and shaders | `src/include/edit/runtime/lut_resource_resolver.hpp`; focused reference serialization helpers if needed; changes to existing model, history, transfer, cache, and GPU tests |
 | L5 | `src/ui/alcedo_main/album_backend/editor_lut_catalog_model.cpp` and header; panel presentation; session and application composition | `src/ui/alcedo_main/album_backend/lut_library_model.cpp`, `lut_library_controller.cpp`, `editor_lut_adjustment_model.cpp` and matching headers; `LutLibraryModelTest` |
 | L6A | `src/ui/alcedo_main/qml/LUTPanel.qml` (removed), `EditorAdjustmentStack.qml`, `EditorWorkspaceRail.qml`, `EditorWorkspace.qml`; `editor_lut_catalog_model.*` and `editor_support/modules/lut_catalog.*` (removed); `editor_session_controller.cpp`; `lut_library_controller.*`; `utils/lut/lut_metadata.cpp`; AppTheme; UI CMake and resources; translations; `DESIGN.md` and `docs/VI` | `EditorLutBrowserPanel.qml`, `EditorLutFilterCard.qml`, `EditorLutResultCard.qml`, `EditorLutControlPanel.qml`; `panel_icons/lut-cube.svg`; `EditorLutBrowserPanelQmlTest` replacing `EditorLutPanelQmlTest` |
-| L6B | `SettingDialog.qml`; root CMake package rules; packaging scripts; translations and relevant VI docs | `LutSettingsPanel.qml`; focused Settings lifecycle tests; artifact inspection script if existing packaging checks cannot express the assertion |
+| L6B | `SettingDialog.qml`, `AppDialogs.qml`, `Main.qml`, `EditorLutResultCard.qml`; `lut_library_service.*`, `lut_package_service.*`, `lut_package_manifest.*`, `application_module_host.*`; root CMake package rules; `prepare_lut_packages.py`; translations, VI and package docs | `LutSettingsPanel.qml`; `LutSettingsQmlTest`; `LutPackageLiveFeedTest`; `scripts/luts/inspect_application_payloads.py` and its tests |
 
 The `src/` prefix in this table means `alcedo_studio/src/`. Matching headers live under its `include/` tree.
 New class headers include defining headers. Do not copy existing forward declarations without an allowed reason.
@@ -641,7 +674,7 @@ Count the resulting maintenance changes in the phase estimate. Keep unrelated ed
 | L4 | Stable runtime references, missing-file behavior and LUT strength on all backends | L1, L2 | 1500-1950 | Complete on Windows 2026-09-29; Metal not run; actual size exceeded the estimate (see its record). |
 | L5 | Indexed classification, fuzzy search, favorites and exact-node application | L2, L4 | 1200-1750 | Complete 2026-09-29; no visual layout work; actual size exceeded the estimate (see its record). |
 | L6A | Editor left-rail LUT browser, target indicator, small Editor control, removal of the old panel and catalog | L1-L5; section 6.5 design | 1500-1950 | Implemented 2026-09-29; manual visual checks pending (see its record). |
-| L6B | LUT Settings (root, migration, package actions) and payload-free installers | L1-L5, L6A; Settings design input | 900-1400 | Not started. |
+| L6B | LUT Settings (root, migration, package actions) and payload-free installers | L1-L5, L6A; Settings design input | 900-1400 | Implemented 2026-09-30 on Windows; feed published; manual, macOS, and installer checks partly pending (see its record). |
 
 Estimates include production code, tests, build files, resources, and documentation across repositories.
 Generated LUT tables and temporary evidence are excluded. These estimates are not implementation evidence.
@@ -649,7 +682,7 @@ Count removed lines too. In particular, the existing `LUTPanel.qml` is about 100
 include its removal in the estimate. Its range assumes compact views backed by the completed L5 models.
 Recount before each phase and after visual design is supplied. Split a phase before implementation
 if its upper estimate can exceed 2000 lines. Do not compress tests or omit a backend to meet the limit.
-L6A's composition is recorded in section 6.5; L6B's Settings composition still needs user input.
+Section 6.5 records the L6A and L6B compositions.
 
 ## 9. Detailed implementation phases
 
@@ -1909,10 +1942,174 @@ separately from compilation.
 **Exit criteria.**
 
 - [ ] Both real platform packages contain no LUT payloads and can install either signed LUT package.
+  (Windows install tree and NSIS installer contain no LUTs; the published packages install through
+  the production client components. macOS was not built, and the packaged application's own UI
+  install was not run.)
 - [ ] Settings trigger, folder opening, migration, cancellation, and error reporting pass manual checks.
-- [ ] The Settings design and its manual evidence are recorded in section 6.5.
+  (Automated QML and owner tests pass; manual checks not performed.)
+- [ ] The Settings design and its manual evidence are recorded in section 6.5. (Design recorded;
+  manual evidence not yet.)
 
-**Expected diff.** 900-1400 lines. **Completion record:** Not started.
+**Expected diff.** 900-1400 lines. **Completion record:** see below.
+
+##### Phase L6B completion record (2026-09-30)
+
+**Status:** partial. Settings > LUTs, the per-opening feed check, the folder and package actions,
+the browser link, and payload-free Windows installers are implemented and pass automated tests.
+The signed feed is published to R2 and the live feed passes robustness tests with the production
+client components. Manual visual checks, macOS, and an installed-application update run remain.
+
+**Source revision and branch.** `pu-erh_lab`, base `bc306d543` (L6A), branch
+`feature/lut-settings-panel`, uncommitted working tree. The external generators were run as they
+are on disk (their L1 changes are still uncommitted there); no external repository was changed.
+
+**Implemented modules.**
+
+| Module | Change |
+| --- | --- |
+| `qml/LutSettingsPanel.qml` (new) | Library section (root path, count and verification, Open folder, Refresh, Use another folder, Move library, inline confirmation, running operation with Cancel for a move, errors, kept files) and Official LUT packages section (check state, Check again, one row per package with status, details, progress, error, one action, Cancel) |
+| `SettingDialog.qml` | `LUTs` category (index 8; About is 9); `updatesCategory`/`lutCategory`/`aboutCategory`; one `lutPackages.checkPackages()` per opening transition |
+| `AppDialogs.qml`, `Main.qml` | `openUpdateSettings()` and `openLutSettings()` through the named category indices |
+| `EditorLutResultCard.qml` | Empty-library `Download official LUTs` action and text that names Settings |
+| `LutLibraryService` | `entryCount`, `operation`, `cancelable`, `keptSourcePaths` properties; `CheckRootChoice`/`checkRootChoice` (reuses `ValidateLutLibraryMigrationDestination`); `CancelOperation` also stops a migration before its staging copy is moved into place; `useRoot`/`migrateRoot`/`importFiles` accept folder URLs |
+| `LutPackageService` | `LutPackageAction` and `LutPackageActionFor`; package rows add `name`, `installedFileCount`, `action`, `busy`, `cancelable` |
+| `LutPackageDescriptor` / manifest parser | Optional `name` (1-128 characters, no control characters) |
+| `ApplicationModuleHost` | `LutServiceFactories` construction options for the two LUT services (tests; production uses the defaults) |
+| Root `CMakeLists.txt` | `alcedo_collect_packaged_luts` and `alcedo_install_packaged_luts` removed; both install sites call `alcedo_remove_installed_lut_payloads` (removes a stale `LUTs` folder); `ALCEDO_LUT_PACKAGE_FEED_URL` defaults to the deployed feed |
+| `scripts/luts/prepare_lut_packages.py` | Writes the feed `name` from the packages' `source.name`; rejects different names in one package |
+| `scripts/luts/inspect_application_payloads.py` (new) | Lists install trees, `.zip`/`.7z` archives, and installers (7-Zip); exit 1 on any `.cube`, 2 on an unreadable artifact |
+| Tests | `LutSettingsQmlTest` (new target), `LutPackageLiveFeedTest` (new target, skipped unless its environment is set), new cases in `LutLibraryServiceTest`, `LutPackageServiceTest`, `LutPackageManifestTest`, `EditorLutBrowserPanelQmlTest`, `scripts/luts/tests`; About index updated in `ShortcutSettingsQmlTest` and `MainQmlWorkflowTest` |
+| Documentation and translations | `docs/lut-package-system.md` section 7 and feed `name`; `docs/VI/README.md` LUT Settings entries; zh_CN strings (manual edit; lupdate not run; `en.ts` not updated) |
+
+**Primary success call chain:**
+
+```text
+Settings opens -> SettingDialog.onVisibleChanged -> LutPackageService::CheckPackages (once)
+  -> FetchSmallFile(manifest.json, manifest.json.sig) over HTTPS on the feed host
+  -> VerifyLutPackageManifest (Ed25519 update key, trusted sequence, optional name)
+  -> CompareLutPackage per package (published inventory only) -> package rows (action per status)
+LUTs page row "Download" -> LutPackageService::InstallPackage(id)
+  -> DownloadServiceLutArchiveDownloader -> DownloadService (aria2c, size + SHA-256)
+  -> LutLibraryService::InstallPackage -> InstallLutPackageArchive (libarchive 7z, verify, receipt commit)
+  -> rescan -> PublishInventory -> InventoryChanged -> editor LUT resources invalidated,
+     LutLibraryModel rows, LutPackageService::RecomputeComparisons -> row "Installed and current"
+"Move library…" -> FolderDialog -> reviewFolder -> LutLibraryService::checkRootChoice (reason or path)
+  -> confirm -> migrateRoot -> PrepareLutLibraryMigration (worker) -> SaveRoot commit -> RootChanged
+  -> ResumeSourceCleanup -> keptSourcePaths
+Browser empty state "Download official LUTs" -> host.openLutSettings -> SettingDialog (lutCategory)
+```
+
+**Primary failure call chain:**
+
+```text
+feed unreachable / bad signature / older sequence -> FailCheck -> lastError shown in dangerColor,
+  rows keep their previous state; "Check again" retries
+download canceled -> DownloadService cancel -> row error + "Retry"; no receipt, library unchanged
+shared transfer busy (application or model download) -> row error "Another download is running"
+edited official file -> refresh -> Repair required -> "Repair" reinstalls verified bytes, no user copy
+folder open rejected -> LutLibraryService::lastError shown under the library actions
+chosen folder invalid (current root, inside the library, not empty, missing) -> confirmation card
+  shows the reason; no operation starts
+move canceled before the staging rename -> kCanceled, current root active, staging removed
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `SettingsOpenChecksOnceAndStartupDoesNotCheck` (0 requests after host construction and dialog load; 1 per opening; none per page change) | `LutSettingsQmlTest` | PASS |
+| `PackageRowsStartOnlyTheChosenDownloadAndOfferCancelAndRetry` | `LutSettingsQmlTest` | PASS |
+| `FolderOpenFailureAndFolderChoiceAreVisibleBeforeAnyChange` (open failure visible; rejected choice; confirmed move) | `LutSettingsQmlTest` | PASS |
+| `EmptyLibraryLinksToLutSettings` | `EditorLutBrowserPanelQmlTest` | PASS |
+| `SettingsRowsFollowDownloadCancelAndRetry`, `FeedPackageNameIsShownInsteadOfTheId`, `LutPackageActionTest.EachStatusOffersOneSettingsAction` | `LutPackageServiceTest` | PASS |
+| `CanceledMigrationKeepsCurrentRootAndRemovesStaging`, `RootChoiceCheckNamesTheReasonBeforeStarting` | `LutLibraryServiceTest` | PASS |
+| `OptionalPackageNameIsReadAndValidated` | `LutPackageManifestTest` | PASS |
+| `PackagedApplicationContainsNoLutPayloads` (script: clean tree, nested `.CUBE`, `.zip`/`.7z`, unreadable artifact) | `scripts/luts/tests/test_application_payloads.py` | PASS |
+| Feed name written from `source.name` | `scripts/luts/tests/test_lut_packages.py` | PASS |
+| `LiveFeedInstallsEachPackageIndependentlyAndRechecksCurrent` (both Not installed; each installs to Current in turn; 44 and 36 official entries; recheck without download) | `LutPackageLiveFeedTest` (live R2) | PASS |
+| `LiveDownloadCancelKeepsLibraryAndRetryInstalls` (76 MB archive canceled during transfer; no receipt; retry Current) | `LutPackageLiveFeedTest` (live R2) | PASS |
+| `LiveRepairReplacesAnEditedOfficialFile` (Repair required; repair restores bytes; no user copy) | `LutPackageLiveFeedTest` (live R2) | PASS |
+| `LiveFeedRejectsForeignKeyAndOlderSequenceWithoutChanges` (exact signature and sequence errors) | `LutPackageLiveFeedTest` (live R2) | PASS |
+| Windows install tree: stale `bin/LUTs` removed; 684 entries, no `.cube`; `plugins/tls` present | `cmake --install build/release` + inspection script | PASS |
+| Windows NSIS installer `AlcedoStudio-0.3.0-Windows-AMD64.exe`: 376 entries, no `.cube` | CPack NSIS + inspection script (7-Zip listing) | PASS |
+| Previous install tree (2026-09-26), for comparison | inspection script | 41 `.cube` payloads (expected before L6B) |
+| `ApplicationUpdatePreservesHomeLutLibrary` | inspection only: the NSIS script deletes only `$INSTDIR` files, shortcuts, and `Software\Alcedo Studio` keys; QSettings uses `HKCU\Software\Alcedo\Alcedo`; the library is `~/.alcedo/luts` | not run as a real update |
+
+Publication (AWS CLI 2.36.20 through `publish_lut_packages.py --upload`): feed sequence
+`20260930054001`, revision `2026.09.30`; `spectral_film_lut` 44 LUTs, inventory `1ebf0fbb…ee8c`,
+archive 13,280,058 bytes; `spektrafilm_lut` 36 LUTs, inventory `93b28d2f…70d6`, archive
+76,157,493 bytes. Every object was verified after upload. `https://static.aoraw.org/luts/v1/manifest.json`
+and its `.sig` return HTTP 200 with bytes identical to the signed files.
+
+Commands:
+
+```powershell
+cmd /c scripts\msvc_env.cmd --preset win_debug -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake"
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target LutPackageManifestTest LutLibraryServiceTest LutPackageServiceTest LutSettingsQmlTest LutPackageLiveFeedTest EditorLutBrowserPanelQmlTest ShortcutSettingsQmlTest MainQmlWorkflowTest LutLibraryModelTest LutMetadataTest alcedo_main --parallel 4
+$env:PATH = "D:/Projects/pu-erh_lab/build/debug/vcpkg_installed/x64-windows/debug/bin;" + $env:PATH
+ctest --test-dir build/debug -R "^(LutPackageManifestTest|LutLibraryServiceTest|LutPackageServiceTest|LutSettingsQmlTest|EditorLutBrowserPanelQmlTest|ShortcutSettingsQmlTest|MainQmlWorkflowTest|LutLibraryModelTest|LutMetadataTest)\." -j 4 --output-on-failure
+$env:ALCEDO_LUT_LIVE_FEED_URL = "https://static.aoraw.org/luts/v1/manifest.json"
+$env:ALCEDO_ARIA2C_BINARY = "D:/Projects/pu-erh_lab/build/debug/alcedo_studio/src/aria2c.exe"
+$env:QT_PLUGIN_PATH = "D:/misc/Qt/6.9.3/msvc2022_64/plugins"
+ctest --test-dir build/debug -R "^LutPackageLiveFeedTest\." -j 1 --output-on-failure
+python -m unittest discover -s scripts/luts/tests
+# spectral_film_lut: venv/Scripts/python.exe -m spectral_film_lut negative-lmt --output-dir <dir> --alcedo-package --workers 4
+# spektrafilm_lut:   PYTHON=.venv/Scripts/python.exe bash scripts/aces_lmt/bake_alcedo_set.sh <dir>
+python scripts/luts/prepare_lut_packages.py --package spectral_film_lut=<dir> --package spektrafilm_lut=<dir> --revision 2026.09.30 --output-dir <feed> --private-key D:/secure/alcedo-update-private.seed
+python scripts/luts/publish_lut_packages.py --output-dir <feed> --upload
+cmd /c scripts\msvc_env.cmd --preset win_release -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake" -DALCEDO_LUT_PACKAGE_FEED_URL="https://static.aoraw.org/luts/v1/manifest.json"
+cmd /c scripts\msvc_env.cmd --build --preset win_release --parallel 4
+cmd /c scripts\msvc_env.cmd --install build/release --prefix <absolute temporary prefix>
+cpack --config build/release/CPackConfig.cmake -G NSIS -B <temporary directory>
+python scripts/luts/inspect_application_payloads.py <install prefix> <installer .exe>
+```
+
+Suite totals: focused ctest 106/107 (1 failure, below); live 4/4; `scripts/luts/tests` 19/19.
+`MainQmlWorkflowTests.ProductionWindowLoadsAndRoutesCoreWorkspaceActions` fails only its
+no-warning assertion on the `AppDialogs.qml` `Connections { onPasteFinished }` block for
+`adjustmentTransfer`; that block and the C++ `PasteFinished` signal both come from `0580db1e4`
+(2026-09-27), before this branch (also listed in the L6A record). The full suite,
+`WorkspaceShellTest`, macOS, and a manual application run were not run.
+
+**Findings from the real environment.**
+
+1. **Long paths break package classification on Windows.** With a library root of about 150
+   characters, the spektrafilm package installed but stayed Repair required: two content paths
+   were 291 characters. Extraction uses `QFile` (long paths work), but the header reader
+   (`lut_metadata.cpp`) and the hasher (`lut_inventory_digest.cpp`) use `std::ifstream`, and the
+   executables have no `longPathAware` manifest, so those files lost their official
+   classification (this machine has `LongPathsEnabled=1`). The same limit applies to the other
+   `std::filesystem` sites of the library, migration, and runtime loader. Package content adds
+   about 160 characters to the root (`packages/<id>/content/<64 hex>/<file>`), so roots longer
+   than about 100 characters are affected; the default `~/.alcedo/luts` is not. Not fixed in L6B:
+   the fix spans the L2/L4 readers (long-path-capable opens, or an application manifest plus a
+   root length check in `CheckRootChoice`). The live tests use a default-depth root.
+2. **Debug test runtimes have no TLS backend.** `*_runtime/` folders copy the Qt DLLs without
+   `plugins/tls`, so HTTPS fails with "TLS initialization failed" unless `QT_PLUGIN_PATH` names
+   the Qt plugins. The installed application ships `plugins/tls` (verified above).
+3. **Generator output needed one header fix.** The spectral negative export writes `TITLE` with
+   the absolute output path; the published files carry the file stem instead (numeric rows and
+   metadata unchanged). The generator itself still writes the path.
+4. The spektrafilm set's still-film runs without `--print` write the same file names as the
+   `--print kodak_portra_endura` runs, so the set has 36 LUTs, not 38.
+
+**Checklist / exit condition:** implementation steps 1-5 done; step 6 done on Windows only. None of
+the three exit criteria is fully met (see the notes under them).
+
+**LOC note (grill-code-review):** +2501/-69 over 33 files, including 295 lines of zh_CN
+translations and the 307-line live test. Without translations the change is about 2200 lines,
+above the 900-1400 estimate, mainly the Settings page (588 lines), its QML test (455), and the live
+test. The largest new file is `LutSettingsPanel.qml`; its package row is an inline component.
+
+**Remaining gaps:**
+
+- Manual Windows checks of the Settings page (both themes, a long Unicode root, the folder
+  dialogs, a real move with Cancel) and of Open folder with Unicode and spaces.
+- macOS: build, `.app` and update-archive inspection, and package installation.
+- A real application update over an installed build with a populated home library.
+- The long-path defect (finding 1). Existing build directories keep an empty cached
+  `ALCEDO_LUT_PACKAGE_FEED_URL`; the release tree was reconfigured with the URL.
+- `en.ts` not updated; lupdate not run. Nothing is committed.
 
 ## 10. Build and evidence requirements
 
@@ -2001,14 +2198,14 @@ the visible library. Revisit an estimate before introducing a larger index or wo
 - The print export's display assumptions are real. Preserve and expose them; do not alter DRT selection as a hidden side effect.
 - Existing source files may use CRLF. If a file needs changes, follow the repository's separate LF-conversion commit rule.
 - Keep official classification when only content bytes change. Do not reopen the confirmed replacement policy in section 3.
-- Ask for visual design before implementing visual composition. Section 6.5 records the approved L6A design; L6B's Settings design is still open.
+- Ask for visual design before implementing visual composition. Section 6.5 records the approved L6A design and the L6B Settings design composed from the existing Settings pages (section 1.5).
 - Split a phase if the expected diff can exceed 2000 lines, including terminology cleanup and tests.
 - Do not add a consistency protocol without the required production interleaving and executable test.
 - If current sources no longer match this audit, update affected owners and call chains before implementation.
 
 ## 12. Completion records
 
-L1-L5 are recorded under their phases. L6A is recorded under its phase; L6B is not started. Copy this record into the relevant phase after implementation:
+L1-L6B are recorded under their phases. Copy this record into the relevant phase after implementation:
 
 ```text
 Phase / date / status:

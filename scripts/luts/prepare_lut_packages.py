@@ -20,6 +20,7 @@ import sys
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
+from alcedo_lut_metadata import LutMetadataError, read_cube_header_file
 from lut_inventory import LutInventoryError, build_package_inventory, hash_file
 from lut_package_archive import verify_package_archive, write_package_archive
 
@@ -35,6 +36,25 @@ def archive_key(prefix: str, package_id: str, revision: str) -> str:
     return f"{prefix}/packages/{package_id}/{revision}/{package_id}-{revision}.7z"
 
 
+def package_display_name(source: Path, inventory: dict) -> str | None:
+    """The ``source.name`` its film simulations declare, for the feed's optional ``name``.
+
+    Every film simulation of a package declares ``source.id`` equal to the package ID
+    (checked by the inventory). Different ``source.name`` values are an error.
+    """
+    names: set[str] = set()
+    for record in inventory["luts"]:
+        try:
+            metadata = read_cube_header_file(source / record["path"]).metadata
+        except LutMetadataError as error:
+            raise LutInventoryError(f"{record['path']}: {error}") from error
+        if metadata and metadata["category"] == "film_simulation":
+            names.add(metadata["source"]["name"])
+    if len(names) > 1:
+        raise LutInventoryError(f"the package declares different source names: {sorted(names)}")
+    return next(iter(names), None)
+
+
 def build_package(package_id: str, source: Path, revision: str, output_dir: Path, prefix: str,
                   public_base: str, workers: int | None) -> dict:
     """Validate ``source``, write its archive, re-read it, and return its feed descriptor."""
@@ -42,8 +62,11 @@ def build_package(package_id: str, source: Path, revision: str, output_dir: Path
     archive_path = output_dir / "packages" / f"{package_id}-{revision}.7z"
     write_package_archive(source, inventory, archive_path)
     sha256, size = hash_file(archive_path)
-    descriptor = {
-        "id": package_id,
+    descriptor = {"id": package_id}
+    name = package_display_name(source, inventory)
+    if name is not None:
+        descriptor["name"] = name
+    descriptor |= {
         "revision": revision,
         "file_count": inventory["file_count"],
         "inventory_sha256": inventory["inventory_sha256"],

@@ -590,7 +590,7 @@ Rectangle {
                     wrapMode: Text.Wrap
                     visible: !(root.libraryBusy && root.totalCount === 0)
                     text: root.totalCount === 0
-                          ? qsTr("Import .cube files, or copy them into the LUT folder and refresh.")
+                          ? qsTr("Download the official LUT packages in Settings, import .cube files, or copy them into the LUT folder and refresh.")
                           : qsTr("Change the search or the filters to see more LUTs.")
                     color: root.colMuted
                     font.family: appTheme.uiFontFamily
@@ -613,6 +613,12 @@ Rectangle {
                         visible: root.totalCount === 0 && !!root.library
                         text: qsTr("Open LUT folder")
                         onClicked: root.library.openRootDirectory()
+                    }
+                    DialogActionButton {
+                        objectName: "editorLutEmptySettingsButton"
+                        visible: root.totalCount === 0 && !!root.host
+                        text: qsTr("Download official LUTs")
+                        onClicked: root.host.openLutSettings()
                     }
                     DialogActionButton {
                         objectName: "editorLutClearSearchButton"

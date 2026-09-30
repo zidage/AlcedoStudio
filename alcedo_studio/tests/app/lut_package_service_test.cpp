@@ -855,6 +855,92 @@ TEST_F(LutPackageServiceTest, CancelBeforeActivationKeepsInstalledPackage) {
   EXPECT_EQ(InstalledFiles(kSpectral), r2.luts);
 }
 
+// ── Settings package rows ───────────────────────────────────────────────────
+
+TEST(LutPackageActionTest, EachStatusOffersOneSettingsAction) {
+  EXPECT_EQ(LutPackageActionFor(LutPackageStatus::kNotInstalled), LutPackageAction::kInstall);
+  EXPECT_EQ(LutPackageActionFor(LutPackageStatus::kUpdateAvailable), LutPackageAction::kUpdate);
+  EXPECT_EQ(LutPackageActionFor(LutPackageStatus::kRepairRequired), LutPackageAction::kRepair);
+  EXPECT_EQ(LutPackageActionFor(LutPackageStatus::kError), LutPackageAction::kRetry);
+  for (const LutPackageStatus status :
+       {LutPackageStatus::kCurrent, LutPackageStatus::kChecking, LutPackageStatus::kDownloading,
+        LutPackageStatus::kVerifying, LutPackageStatus::kInstalling}) {
+    EXPECT_EQ(LutPackageActionFor(status), LutPackageAction::kNone);
+  }
+}
+
+auto RowFor(const LutPackageService& service, std::string_view package_id) -> QVariantMap {
+  for (const QVariant& row : service.packages()) {
+    const QVariantMap map = row.toMap();
+    if (map.value(QStringLiteral("id")).toString().toStdString() == package_id) return map;
+  }
+  return {};
+}
+
+TEST_F(LutPackageServiceTest, SettingsRowsFollowDownloadCancelAndRetry) {
+  StartLibrary();
+  StartPackages();
+  const BuiltPackage spectral    = Publish(kSpectral, "r1", 0);
+  const BuiltPackage spektrafilm = Publish(kSpektrafilm, "r1", 1);
+  ServeFeed({&spectral, &spektrafilm});
+  Check();
+
+  QVariantMap row = RowFor(*packages_, kSpectral);
+  EXPECT_EQ(row.value(QStringLiteral("name")).toString(), QString::fromLatin1(kSpectral));
+  EXPECT_EQ(row.value(QStringLiteral("action")).toString(), QStringLiteral("install"));
+  EXPECT_FALSE(row.value(QStringLiteral("busy")).toBool());
+  EXPECT_FALSE(row.value(QStringLiteral("cancelable")).toBool());
+  EXPECT_EQ(row.value(QStringLiteral("installedFileCount")).toULongLong(), 0u);
+
+  // A held transfer: only the chosen package is busy and cancelable.
+  downloads_->hold = true;
+  ASSERT_TRUE(packages_->InstallPackage(QString::fromLatin1(kSpectral)));
+  row = RowFor(*packages_, kSpectral);
+  EXPECT_EQ(row.value(QStringLiteral("status")).toString(), QStringLiteral("downloading"));
+  EXPECT_TRUE(row.value(QStringLiteral("action")).toString().isEmpty());
+  EXPECT_TRUE(row.value(QStringLiteral("busy")).toBool());
+  EXPECT_TRUE(row.value(QStringLiteral("cancelable")).toBool());
+  const QVariantMap other = RowFor(*packages_, kSpektrafilm);
+  EXPECT_EQ(other.value(QStringLiteral("action")).toString(), QStringLiteral("install"));
+  EXPECT_FALSE(other.value(QStringLiteral("busy")).toBool());
+  EXPECT_FALSE(other.value(QStringLiteral("cancelable")).toBool());
+  // A second package action is refused while the first runs; the first keeps running.
+  EXPECT_FALSE(packages_->InstallPackage(QString::fromLatin1(kSpektrafilm)));
+  EXPECT_EQ(downloads_->starts, 1);
+
+  ASSERT_TRUE(packages_->CancelInstall(QString::fromLatin1(kSpectral)));
+  ASSERT_TRUE(WaitUntil([&] { return Status(kSpectral) == LutPackageStatus::kError; }));
+  row = RowFor(*packages_, kSpectral);
+  EXPECT_EQ(row.value(QStringLiteral("action")).toString(), QStringLiteral("retry"));
+  EXPECT_FALSE(row.value(QStringLiteral("busy")).toBool());
+  EXPECT_FALSE(row.value(QStringLiteral("error")).toString().isEmpty());
+  EXPECT_TRUE(library_->PackageReceipts().empty());
+
+  // Retry runs the same installation and ends Current with no action.
+  downloads_->hold = false;
+  ASSERT_TRUE(Install(kSpectral));
+  row = RowFor(*packages_, kSpectral);
+  EXPECT_EQ(row.value(QStringLiteral("status")).toString(), QStringLiteral("current"));
+  EXPECT_TRUE(row.value(QStringLiteral("action")).toString().isEmpty());
+  EXPECT_TRUE(row.value(QStringLiteral("error")).toString().isEmpty());
+  EXPECT_EQ(row.value(QStringLiteral("installedRevision")).toString(), QStringLiteral("r1"));
+  EXPECT_EQ(row.value(QStringLiteral("installedFileCount")).toULongLong(), spectral.luts.size());
+}
+
+TEST_F(LutPackageServiceTest, FeedPackageNameIsShownInsteadOfTheId) {
+  StartLibrary();
+  StartPackages();
+  BuiltPackage spectral          = Publish(kSpectral, "r1", 0);
+  spectral.descriptor["name"]    = "Spectral Film LUT";
+  const BuiltPackage spektrafilm = Publish(kSpektrafilm, "r1", 1);
+  ServeFeed({&spectral, &spektrafilm});
+  Check();
+  EXPECT_EQ(RowFor(*packages_, kSpectral).value(QStringLiteral("name")).toString(),
+            QStringLiteral("Spectral Film LUT"));
+  EXPECT_EQ(RowFor(*packages_, kSpektrafilm).value(QStringLiteral("name")).toString(),
+            QString::fromLatin1(kSpektrafilm));
+}
+
 // ── Replacement policy (plan section 3) ─────────────────────────────────────
 
 TEST_F(LutPackageServiceTest, OfficialHashMismatchDoesNotChangeOwnership) {

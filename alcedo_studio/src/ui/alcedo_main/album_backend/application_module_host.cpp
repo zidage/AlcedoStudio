@@ -32,13 +32,15 @@
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
 #include "ui/alcedo_main/album_backend/thumbnail_image_provider.hpp"
 #include "ui/alcedo_main/album_backend/mask_thumbnail_image_provider.hpp"
+#include "ui/alcedo_main/album_backend/system_icon_image_provider.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
 
 namespace alcedo::ui {
 
 // ── ApplicationModuleHost ───────────────────────────────────────────────────
 
-ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver observer)
+ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver observer,
+                                             LutServiceFactories lut_services)
     : QObject(parent), lifecycle_observer_(std::move(observer)) {
   alcedo::editor_rhi::RegisterEditorViewportQmlTypes();
   alcedo::ui::RegisterEditorAdjustmentQmlTypes();
@@ -57,16 +59,21 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   updates_ = std::make_unique<alcedo::UpdateService>(*download_service_, this);
   RecordConstruction("UpdateService", updates_.get());
   // Loads the persisted LUT inventory without network access (plan 4.3).
-  lut_library_ = std::make_unique<alcedo::LutLibraryService>(alcedo::LutLibraryServiceOptions{});
+  lut_library_ = std::make_unique<alcedo::LutLibraryService>(
+      lut_services.library_options ? lut_services.library_options()
+                                   : alcedo::LutLibraryServiceOptions{});
   RecordConstruction("LutLibraryService", lut_library_.get());
   lut_library_->Start();
   // Constructing the package service makes no network request; Settings starts
   // the signed feed check (plan L3). Archives use the shared download admission.
   {
     alcedo::LutPackageServiceOptions lut_package_options =
-        alcedo::LutPackageServiceOptions::FromBuildConfiguration();
-    lut_package_options.downloader =
-        std::make_unique<alcedo::DownloadServiceLutArchiveDownloader>(*download_service_);
+        lut_services.package_options ? lut_services.package_options()
+                                     : alcedo::LutPackageServiceOptions::FromBuildConfiguration();
+    if (!lut_package_options.downloader) {
+      lut_package_options.downloader =
+          std::make_unique<alcedo::DownloadServiceLutArchiveDownloader>(*download_service_);
+    }
     lut_packages_ =
         std::make_unique<alcedo::LutPackageService>(std::move(lut_package_options), *lut_library_);
   }
@@ -556,6 +563,8 @@ void ApplicationModuleHost::AttachQmlEngine(QQmlEngine* engine) {
 
   engine->addImageProvider(QString::fromUtf8(kMaskThumbnailImageProviderId),
                            new MaskThumbnailImageProvider(SharedMaskThumbnailImageStore()));
+  engine->addImageProvider(QString::fromUtf8(kSystemIconImageProviderId),
+                           new SystemIconImageProvider());
 
   if (library_ == nullptr) {
     return;

@@ -172,6 +172,7 @@ after an interruption.
   "packages": [
     {
       "id": "spectral_film_lut",
+      "name": "Spectral Film LUT",
       "revision": "2026.09.1",
       "file_count": 42,
       "inventory_sha256": "<64 lowercase hex>",
@@ -185,6 +186,11 @@ after an interruption.
   ]
 }
 ```
+
+`name` is optional display text for Settings (1-128 characters, no control characters).
+`prepare_lut_packages.py` writes the `source.name` that the package's film simulations declare;
+a package whose files declare different source names is rejected. Settings shows the package ID
+when the feed has no name.
 
 The feed has no expiration field. It is signed with the software-update Ed25519
 key (`alcedo_update_signer sign`) as a detached base64 signature over the exact
@@ -224,7 +230,8 @@ operator.
 ## 6. Client check and installation
 
 The build reads the feed URL from the CMake cache value `ALCEDO_LUT_PACKAGE_FEED_URL` (HTTPS,
-empty by default) and verifies it with the software-update public key. An empty value disables
+default `https://static.aoraw.org/luts/v1/manifest.json`, deployed 2026-09-30; an existing build
+directory keeps its cached value) and verifies it with the software-update public key. An empty value disables
 package checks and downloads. The highest accepted feed sequence is stored in the setting
 `lut/packages/highestTrustedSequence`, separate from the update sequence.
 
@@ -267,3 +274,23 @@ the previous receipt and content active. After it, the installation completes; i
 cannot be written, the result reports that the package is installed and an inventory refresh is
 required, and the next start rebuilds the inventory because it no longer agrees with the receipts.
 The next start also retires content directories that no receipt names.
+
+## 7. Settings and application packages
+
+Settings > LUTs shows the library folder and the two official packages. Each opening of the
+Settings dialog calls `CheckPackages()` once; moving between Settings pages, opening the LUT
+browser, and application startup do not. Each package row offers one action from its status
+(`LutPackageActionFor`): Not installed -> Download, Update available -> Update, Repair required ->
+Repair, a failed or canceled action -> Retry; Current and the transfer stages offer none. The row
+of the running action offers Cancel. `Check again` repeats the feed check.
+
+The library folder actions are Open folder, Refresh, Use another folder, and Move library. A chosen
+folder is checked first (`LutLibraryService::CheckRootChoice`) and shown with the operation before
+the user confirms it. A running move can be canceled until its copied destination is moved into
+place; the current root stays active.
+
+The application, its installers, and its update archives contain no LUT files. The install removes
+a `LUTs` folder that an older build left in a reused install prefix. The user library
+(`~/.alcedo/luts` by default) is outside the installation, so application updates and uninstallation
+do not change it. `scripts/luts/inspect_application_payloads.py` lists install trees, `.zip`/`.7z`
+update archives, and (with 7-Zip) installers, and fails when any contains a `.cube` file.

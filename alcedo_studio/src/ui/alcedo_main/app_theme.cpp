@@ -351,8 +351,10 @@ void AppTheme::RegisterFonts() {
   families.data =
       RegisterFontResource(QStringLiteral(":/fonts/main_IBM.ttf"), QStringLiteral("IBM Plex Sans"));
   // Minigit / diagnostic monospace only (Versions commit ids, transaction
-  // timeline hashes and before/after lines). Do not use for general metrics —
-  // those stay on dataFontFamily (IBM Plex Sans).
+  // timeline hashes and before/after lines). Do not use for general metrics.
+  // Data display (counts, sizes, revisions, paths) moves to headlineFontFamily
+  // (Manrope, variable weight 200-800); dataFontFamily (IBM Plex Sans) is being
+  // retired page by page, so new or redesigned pages must not use it.
   families.mono =
       RegisterFontResource(QStringLiteral(":/fonts/data_DMMono.ttf"), QStringLiteral("DM Mono"));
   // Chinese fallback for the Manrope headline font. The struct default is

@@ -11,6 +11,8 @@
 #include <QSignalSpy>
 #include <QTest>
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -18,6 +20,7 @@
 #include <random>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 #include "lut_library_test_support.hpp"
@@ -450,6 +453,77 @@ TEST_F(LutLibraryServiceTest, MigrationDoesNotDeleteChangedSourceFile) {
   EXPECT_EQ(ReadBytes(library_root_ / "user" / "changed.cube"), UserCube("edited"));
   EXPECT_EQ(ReadBytes(destination / "user" / "changed.cube"), UserCube("before"));
   EXPECT_FALSE(fs::exists(library_root_ / "stable.cube"));
+}
+
+TEST_F(LutLibraryServiceTest, CanceledMigrationKeepsCurrentRootAndRemovesStaging) {
+  WriteBytes(library_root_ / "a.cube", UserCube("a"));
+  WriteBytes(library_root_ / "b.cube", UserCube("b"));
+  std::atomic<bool> copying{false};
+  std::atomic<bool> release{false};
+  auto              io   = LutLibraryFileOperations::Default();
+  auto              copy = io.copy_file;
+  // The first copy waits until the owner thread has requested cancellation.
+  io.copy_file           = [&, copy](const fs::path& from, const fs::path& to) -> std::string {
+    copying = true;
+    while (!release) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    return copy(from, to);
+  };
+  const auto     service     = StartService(io);
+  const fs::path destination = base_ / "destination";
+  EXPECT_FALSE(service->cancelable());
+  ASSERT_EQ(service->MigrateRoot(destination), Service::Status::kOk);
+  EXPECT_EQ(service->operation_name(), QStringLiteral("migrateRoot"));
+  EXPECT_TRUE(service->cancelable());
+  QElapsedTimer timer;
+  timer.start();
+  while (!copying && timer.elapsed() < 10000) QTest::qWait(1);
+  ASSERT_TRUE(copying);
+  EXPECT_TRUE(service->CancelOperation());
+  release = true;
+  ASSERT_TRUE(WaitUntilIdle(*service));
+
+  EXPECT_EQ(service->LastResult().operation, Service::Operation::kMigrateRoot);
+  EXPECT_EQ(service->LastResult().status, Service::Status::kCanceled);
+  EXPECT_FALSE(service->last_error().isEmpty());
+  EXPECT_TRUE(service->operation_name().isEmpty());
+  EXPECT_FALSE(service->cancelable());
+  EXPECT_EQ(service->Root(), library_root_);
+  EXPECT_FALSE(preferences_->root.has_value());
+  EXPECT_EQ(ReadBytes(library_root_ / "a.cube"), UserCube("a"));
+  EXPECT_EQ(ReadBytes(library_root_ / "b.cube"), UserCube("b"));
+  EXPECT_FALSE(fs::exists(destination));
+  EXPECT_FALSE(fs::exists(base_ / ".destination.alcedo-migration"));
+  // Refresh and load are not cancelable.
+  EXPECT_FALSE(service->CancelOperation());
+}
+
+TEST_F(LutLibraryServiceTest, RootChoiceCheckNamesTheReasonBeforeStarting) {
+  WriteBytes(library_root_ / "a.cube", UserCube("a"));
+  const auto service = StartService();
+  EXPECT_FALSE(service->CheckRootChoice(library_root_, false).empty());
+  EXPECT_FALSE(service->CheckRootChoice(library_root_, true).empty());
+  EXPECT_FALSE(service->CheckRootChoice(library_root_ / "inside", true).empty());
+  WriteBytes(base_ / "occupied" / "other.txt", "other");
+  EXPECT_FALSE(service->CheckRootChoice(base_ / "occupied", true).empty());
+  EXPECT_TRUE(service->CheckRootChoice(base_ / "occupied", false).empty());
+  EXPECT_FALSE(service->CheckRootChoice(base_ / "absent", false).empty());
+  EXPECT_TRUE(service->CheckRootChoice(base_ / "absent", true).empty());
+  // Checking never changes the library.
+  EXPECT_EQ(service->Root(), library_root_);
+  EXPECT_FALSE(fs::exists(base_ / "absent"));
+
+  // QML passes folder URLs; the check reports the native path it will use.
+  const fs::path other = base_ / U8(u8"other root 胶片");
+  fs::create_directories(other);
+  const QString     url   = LutLibraryDirectoryUrl(other).toString();
+  const QVariantMap check = service->checkRootChoice(url, false);
+  EXPECT_TRUE(check.value(QStringLiteral("error")).toString().isEmpty());
+  EXPECT_EQ(
+      QDir::cleanPath(QDir::fromNativeSeparators(check.value(QStringLiteral("path")).toString())),
+      QDir::cleanPath(QString::fromStdString(LutPathToUtf8(other))));
+  ASSERT_TRUE(service->useRoot(url));
+  ASSERT_TRUE(WaitUntilIdle(*service));
+  EXPECT_EQ(service->Root(), other);
 }
 
 TEST_F(LutLibraryServiceTest, OpenRootUsesEncodedLocalFileUrl) {

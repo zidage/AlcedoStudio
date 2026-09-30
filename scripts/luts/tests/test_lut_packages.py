@@ -145,6 +145,8 @@ class LutPackagePreparationTest(unittest.TestCase):
                 inventory = verify_package_archive(archive, package, work / "verify")
                 self.assertEqual(inventory["package_id"], package["id"])
                 self.assertEqual(package["file_count"], 3)
+                # The feed name is the source name its film simulations declare.
+                self.assertEqual(package["name"], package["id"])
 
     def test_ChangedArchiveBytesFailVerification(self) -> None:
         with TemporaryDirectory() as work:

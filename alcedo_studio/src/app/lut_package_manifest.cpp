@@ -21,6 +21,7 @@ constexpr quint64 kMaximumArtifactSize  = 4ULL * 1024ULL * 1024ULL * 1024ULL;
 constexpr quint64 kMaximumUnpackedBytes = 16ULL * 1024ULL * 1024ULL * 1024ULL;
 constexpr int     kMaximumPackages      = 64;
 constexpr int     kMaximumRevisionChars = 64;
+constexpr int     kMaximumNameChars     = 128;
 
 auto              Failure(QString message) -> LutPackageManifestResult {
   return LutPackageManifestResult{std::nullopt, std::move(message)};
@@ -60,6 +61,14 @@ auto ParsePackage(const QJsonValue& value, const QUrl& feed_url, LutPackageDescr
   package->id = object.value(QStringLiteral("id")).toString();
   if (package->id.size() > 96 || !kSlug.match(package->id).hasMatch()) {
     return QStringLiteral("A LUT package ID is not valid.");
+  }
+  if (const QJsonValue name = object.value(QStringLiteral("name")); !name.isUndefined()) {
+    static const QRegularExpression kControl(QStringLiteral("[\\x00-\\x1f\\x7f]"));
+    package->name = name.toString();
+    if (!name.isString() || package->name.trimmed().isEmpty() ||
+        package->name.size() > kMaximumNameChars || kControl.match(package->name).hasMatch()) {
+      return QStringLiteral("The name of LUT package %1 is not valid.").arg(package->id);
+    }
   }
   package->revision = object.value(QStringLiteral("revision")).toString().trimmed();
   if (package->revision.isEmpty() || package->revision.size() > kMaximumRevisionChars) {

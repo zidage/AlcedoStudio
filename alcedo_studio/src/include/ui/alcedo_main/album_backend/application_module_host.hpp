@@ -85,7 +85,17 @@ class ApplicationModuleHost final : public QObject {
   };
   using LifecycleObserver = std::function<void(const LifecycleEvent&)>;
 
-  explicit ApplicationModuleHost(QObject* parent = nullptr, LifecycleObserver observer = {});
+  /// Construction options of the two LUT services. An empty factory selects the production
+  /// options: the home library root and the build-configured signed feed. When the package
+  /// options have no downloader, the host supplies the shared DownloadService admission.
+  /// Tests use these factories to point the services at a temporary root and a local feed.
+  struct LutServiceFactories {
+    std::function<alcedo::LutLibraryServiceOptions()> library_options;
+    std::function<alcedo::LutPackageServiceOptions()> package_options;
+  };
+
+  explicit ApplicationModuleHost(QObject* parent = nullptr, LifecycleObserver observer = {},
+                                 LutServiceFactories lut_services = {});
   ~ApplicationModuleHost() override;
 
   // Typed accessors (C++ / tests).
