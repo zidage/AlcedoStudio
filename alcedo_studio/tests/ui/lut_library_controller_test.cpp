@@ -27,77 +27,13 @@
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/lmt_model.hpp"
 #include "lut_library_model_test_support.hpp"
+#include "lut_target_test_support.hpp"
 #include "support/recording_adjustment_submitter.hpp"
 #include "ui/alcedo_main/album_backend/editor_lut_adjustment_model.hpp"
 #include "ui/alcedo_main/album_backend/lut_library_model.hpp"
 
 namespace alcedo::ui::test {
 namespace {
-
-const NodeId kPrimary{"grade.primary"};
-const NodeId kGradeB{"grade.b"};
-const NodeId kGradeC{"grade.c"};
-
-/**
- * Target source over a real PipelineDocument. Writes are queued like the session's pending
- * input and applied later with ApplyEditorParameterWrite, the owner operation that validates
- * the target again, so a selection change between submit and apply is observable.
- */
-class DocumentTargetSource final : public LutTargetSource {
- public:
-  DocumentTargetSource() : document_(std::make_shared<PipelineDocument>(CreateDefaultPipelineDocument())) {
-    EXPECT_TRUE(AddCleanColorGrade(*document_, document_->Drt()->Id(), kGradeB).empty());
-    EXPECT_TRUE(AddCleanColorGrade(*document_, document_->Drt()->Id(), kGradeC).empty());
-  }
-
-  [[nodiscard]] auto ImageId() const -> std::uint64_t override { return image_id; }
-  [[nodiscard]] auto Document() const -> std::shared_ptr<const PipelineDocument> override {
-    return image_id == 0 ? nullptr : document_;
-  }
-  [[nodiscard]] auto SelectedNodeId() const -> NodeId override { return selected; }
-  [[nodiscard]] auto SelectedMaskId() const -> std::string override { return mask; }
-  [[nodiscard]] auto CanEdit() const -> bool override { return can_edit; }
-  auto SubmitLutWrite(const EditorParameterTarget& target, EditorLutWrite write) -> bool override {
-    ++submit_count;
-    queued.emplace_back(target, std::move(write));
-    return true;
-  }
-
-  /// Apply queued writes in order; returns the number the owner accepted.
-  auto ApplyQueued() -> int {
-    int accepted = 0;
-    while (!queued.empty()) {
-      auto [target, write] = std::move(queued.front());
-      queued.pop_front();
-      std::string error;
-      if (ApplyEditorParameterWrite(*document_, target, write, &error)) ++accepted;
-    }
-    return accepted;
-  }
-
-  [[nodiscard]] auto Mutable() -> PipelineDocument& { return *document_; }
-  [[nodiscard]] auto Lmt(const NodeId& node) const -> const LmtModel* {
-    const auto* grade = dynamic_cast<const ColorGradeNodeModel*>(document_->Graph().FindNode(node));
-    if (grade == nullptr) return nullptr;
-    const auto* id = grade->FindAdjustmentIdByType(type_ids::Lmt());
-    return id == nullptr ? nullptr : dynamic_cast<const LmtModel*>(grade->FindAdjustment(*id));
-  }
-  [[nodiscard]] auto LmtInstance(const NodeId& node) const -> std::string {
-    const auto* grade = dynamic_cast<const ColorGradeNodeModel*>(document_->Graph().FindNode(node));
-    const auto* id    = grade->FindAdjustmentIdByType(type_ids::Lmt());
-    return std::string(id->Value());
-  }
-
-  std::uint64_t image_id = 7;
-  NodeId        selected = kGradeB;
-  std::string   mask;
-  bool          can_edit     = true;
-  int           submit_count = 0;
-  std::deque<std::pair<EditorParameterTarget, EditorLutWrite>> queued;
-
- private:
-  std::shared_ptr<PipelineDocument> document_;
-};
 
 auto NodeJson(const PipelineDocument& document, const NodeId& node) -> nlohmann::json {
   return document.Graph().FindNode(node)->ToJson();
@@ -135,6 +71,16 @@ auto SetStrength(DocumentTargetSource& source, const NodeId& node, float strengt
   write.strength = strength;
   std::string error;
   return ApplyEditorParameterWrite(source.Mutable(), target, write, &error);
+}
+
+/// An official (`origin: alcedo`) film simulation with a print, stored as a loose library file.
+auto OfficialFilmWithPrint() -> std::string {
+  return CubeWithMetadata(
+      R"({"schema":1,"id":"spectral_film_lut:kodak_vision3_250d:kodak_vision_2383","origin":"alcedo",)"
+      R"("category":"film_simulation","source":{"id":"spectral_film_lut","name":"Spectral Film LUT"},)"
+      R"("film":{"id":"kodak_vision3_250d","name":"Vision3 250D","brand":"Kodak"},)"
+      R"("print":{"id":"kodak_vision_2383","name":"Vision 2383","brand":"Kodak","kind":"film"},)"
+      R"("input_space":"ACEScc","output_space":"ACEScc"})");
 }
 
 }  // namespace
@@ -400,6 +346,144 @@ TEST(LutLibraryControllerTest, StrengthControlWritesOnlyStrength) {
   controller.reload();
   EXPECT_EQ(source.Lmt(kGradeB)->Reference(), LutReference{LibraryLutReference{"general/teal.cube"}});
   EXPECT_NEAR(strength.value(), 35.0, 1e-4);
+}
+
+// Plan 1.4 (L6A): the browser row, the stored association name, and the indicator show the film
+// brand and stock as the title and the print on a separate line.
+TEST(LutLibraryControllerTest, AssociationShowsPrintAsSeparateLine) {
+  TemporaryLutLibrary library(
+      {{"films/kodak_vision3_250d__kodak_vision_2383.cube", OfficialFilmWithPrint()}});
+  const QString entry_id =
+      QStringLiteral("library:films/kodak_vision3_250d__kodak_vision_2383.cube");
+  LutLibraryModel browser;
+  browser.setLibrary(library.Service());
+  ASSERT_EQ(browser.count(), 1);
+  const QModelIndex row = browser.index(0);
+  EXPECT_EQ(browser.entryIdAt(0), entry_id);
+  EXPECT_EQ(browser.data(row, LutLibraryModel::DisplayNameRole).toString(),
+            QStringLiteral("Kodak Vision3 250D"));
+  EXPECT_EQ(browser.data(row, LutLibraryModel::PrintNameRole).toString(),
+            QStringLiteral("Vision 2383"));
+
+  DocumentTargetSource source;
+  LutLibraryController controller;
+  controller.setLibrary(library.Service());
+  controller.SetTargetSource(&source);
+  EXPECT_TRUE(controller.associationPrintName().isEmpty());
+  QSignalSpy association_changes(&controller, &LutLibraryController::associationChanged);
+  ASSERT_TRUE(controller.applyEntry(entry_id));
+  ASSERT_EQ(source.ApplyQueued(), 1);
+  controller.reload();
+  EXPECT_GE(association_changes.count(), 1);
+  EXPECT_EQ(source.Lmt(kGradeB)->DisplayName(), "Kodak Vision3 250D");
+  EXPECT_EQ(controller.associationName(), QStringLiteral("Kodak Vision3 250D"));
+  EXPECT_EQ(controller.associationPrintName(), QStringLiteral("Vision 2383"));
+  EXPECT_EQ(controller.associationEntryId(), entry_id);
+
+  // Clearing the association clears the print line with the name.
+  ASSERT_TRUE(controller.clearAssociation());
+  ASSERT_EQ(source.ApplyQueued(), 1);
+  controller.reload();
+  EXPECT_FALSE(controller.hasAssociation());
+  EXPECT_TRUE(controller.associationPrintName().isEmpty());
+}
+
+// Plan L6A: the small Editor control only loads. Target reloads, node changes, and a missing file
+// that returns restore its strength and Missing state without a single submit.
+TEST(LutLibraryControllerTest, EditorLutControlReloadDoesNotCommit) {
+  TemporaryLutLibrary  library(LibraryFiles());
+  DocumentTargetSource source;
+  LutLibraryController controller;
+  controller.setLibrary(library.Service());
+  controller.SetTargetSource(&source);
+  ASSERT_TRUE(controller.applyEntry(QStringLiteral("library:general/teal.cube")));
+  source.selected = kGradeC;
+  controller.reload();
+  ASSERT_TRUE(controller.applyEntry(QStringLiteral("library:kodak/portra_400.cube")));
+  ASSERT_EQ(source.ApplyQueued(), 2);
+  ASSERT_TRUE(SetStrength(source, kGradeB, 0.4f));
+  ASSERT_TRUE(SetStrength(source, kGradeC, 0.8f));
+  const int                submits_after_setup = source.submit_count;
+
+  RecordingSubmitter       submitter;
+  EditorLutAdjustmentModel control;
+  control.setSubmitter(&submitter);
+  control.setTarget(&controller);
+
+  source.selected = kGradeB;
+  controller.reload();
+  EXPECT_NEAR(control.value(), 40.0, 1e-4);
+  EXPECT_EQ(control.statusText(), QStringLiteral("teal"));
+  EXPECT_FALSE(control.missing());
+
+  source.selected = kGradeC;
+  controller.reload();
+  controller.reload();
+  EXPECT_NEAR(control.value(), 80.0, 1e-4);
+  EXPECT_EQ(control.associationName(), QStringLiteral("portra_400"));
+
+  std::filesystem::remove(library.Root() / "kodak" / "portra_400.cube");
+  ASSERT_EQ(library.Service()->RefreshInventory(), LutLibraryService::Status::kOk);
+  ASSERT_TRUE(library.WaitUntilIdle());
+  controller.reload();
+  EXPECT_TRUE(control.missing());
+  EXPECT_EQ(control.statusText(), QStringLiteral("Missing: portra_400"));
+  EXPECT_NEAR(control.value(), 80.0, 1e-4);
+
+  library.Write(
+      "kodak/portra_400.cube",
+      CubeWithMetadata(FilmMetadata("user:portra", "spectral_film_lut", "Spectral Film LUT",
+                                    "portra-400", "Portra 400", "Kodak")));
+  ASSERT_EQ(library.Service()->RefreshInventory(), LutLibraryService::Status::kOk);
+  ASSERT_TRUE(library.WaitUntilIdle());
+  EXPECT_FALSE(control.missing());
+  EXPECT_NEAR(control.value(), 80.0, 1e-4);
+
+  EXPECT_TRUE(submitter.calls.empty());
+  EXPECT_EQ(source.submit_count, submits_after_setup);
+  EXPECT_TRUE(source.queued.empty());
+  EXPECT_FLOAT_EQ(source.Lmt(kGradeB)->Strength(), 0.4f);
+  EXPECT_FLOAT_EQ(source.Lmt(kGradeC)->Strength(), 0.8f);
+}
+
+// A LUT from an installed package is applied by its official reference, so the photo follows the
+// package across content updates; a loose file is applied by its library path. (Moved from the
+// removed EditorLutCatalogModel tests in L6A.)
+TEST(LutLibraryControllerTest, ApplyingAPackageEntrySubmitsItsOfficialReference) {
+  TemporaryLutLibrary library(
+      {{"packages/spectral_film_lut/content/a/kodak-5207.cube",
+        CubeWithMetadata(R"({"schema":1,"id":"kodak-5207","origin":"alcedo","category":"general",)"
+                         R"("input_space":"ACEScc","output_space":"ACEScc"})")},
+       {"kodak/look.cube", CubeWithMetadata({})}},
+      nullptr, [](const std::filesystem::path& root) {
+        // Active content of an installed package: its receipt names the content directory.
+        LutPackageReceipt receipt;
+        receipt.package_id        = "spectral_film_lut";
+        receipt.content_directory = "packages/spectral_film_lut/content/a";
+        EXPECT_TRUE(WriteLutPackageReceiptFile(root, receipt).empty());
+      });
+  LutLibraryModel browser;
+  browser.setLibrary(library.Service());
+  ASSERT_TRUE(
+      RowEntryIds(browser).contains(QStringLiteral("official:spectral_film_lut/kodak-5207")))
+      << RowEntryIds(browser).join(QLatin1Char(' ')).toStdString();
+
+  DocumentTargetSource source;
+  LutLibraryController controller;
+  controller.setLibrary(library.Service());
+  controller.SetTargetSource(&source);
+  ASSERT_TRUE(controller.applyEntry(QStringLiteral("official:spectral_film_lut/kodak-5207")))
+      << controller.lastError().toStdString();
+  ASSERT_TRUE(controller.applyEntry(QStringLiteral("library:kodak/look.cube")));
+  ASSERT_EQ(source.queued.size(), 2u);
+  const EditorLutWrite& official = source.queued[0].second;
+  ASSERT_TRUE(official.reference.has_value());
+  EXPECT_EQ(*official.reference,
+            (LutReference{OfficialLutReference{"spectral_film_lut", "kodak-5207"}}));
+  EXPECT_FALSE(official.display_name.empty());
+  EXPECT_FALSE(official.strength.has_value());
+  const EditorLutWrite& loose = source.queued[1].second;
+  EXPECT_EQ(*loose.reference, LutReference{LibraryLutReference{"kodak/look.cube"}});
 }
 
 }  // namespace alcedo::ui::test

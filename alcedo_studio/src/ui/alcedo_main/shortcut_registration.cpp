@@ -101,8 +101,12 @@ void RegisterLutShortcuts(ShortcutRegistry* registry) {
     AddSpec(registry, id, "LUT", description, std::move(defaults), shortcut_scope::kEditorLut,
             ShortcutInputKind::KeyChord, true);
   };
-  add(shortcut_id::kLutSelectPrevious, "Select previous LUT", {Chord(Qt::Key_Up)});
-  add(shortcut_id::kLutSelectNext, "Select next LUT", {Chord(Qt::Key_Down)});
+  // The LUT browser is a tile grid (LUT library plan L6A): Left/Right step one tile,
+  // Up/Down one row.
+  add(shortcut_id::kLutSelectPrevious, "Select previous LUT", {Chord(Qt::Key_Left)});
+  add(shortcut_id::kLutSelectNext, "Select next LUT", {Chord(Qt::Key_Right)});
+  add(shortcut_id::kLutSelectAbove, "Select LUT above", {Chord(Qt::Key_Up)});
+  add(shortcut_id::kLutSelectBelow, "Select LUT below", {Chord(Qt::Key_Down)});
 }
 
 void RegisterMaskShortcuts(ShortcutRegistry* registry) {

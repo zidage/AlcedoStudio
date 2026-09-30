@@ -1734,6 +1734,10 @@ auto EditorSessionController::NormalizeToolPanelPage(const QString& page) -> QSt
   if (key == QLatin1String("nodes")) {
     return QStringLiteral("nodes");
   }
+  // LUT browser page (LUT library plan L6A): a left-rail page like History and Versions.
+  if (key == QLatin1String("luts")) {
+    return QStringLiteral("luts");
+  }
   if (key == QLatin1String("maskgroups") || key == QLatin1String("groups") ||
       key == QLatin1String("mask_groups") || key == QLatin1String("mask-groups")) {
     return QStringLiteral("maskgroups");

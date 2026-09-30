@@ -55,6 +55,8 @@ inline constexpr const char* kVersionsCreateDefaultFromRoot = "versions.createDe
 
 inline constexpr const char* kLutSelectPrevious             = "lut.selectPrevious";
 inline constexpr const char* kLutSelectNext                 = "lut.selectNext";
+inline constexpr const char* kLutSelectAbove                = "lut.selectAbove";
+inline constexpr const char* kLutSelectBelow                = "lut.selectBelow";
 
 inline constexpr const char* kMaskFinishEdit                = "mask.finishEdit";
 inline constexpr const char* kMaskDeleteSelection           = "mask.deleteSelection";

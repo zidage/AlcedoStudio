@@ -35,6 +35,20 @@ auto Trim(std::string_view text) -> std::string_view {
   return text;
 }
 
+auto AsciiLower(char value) -> char {
+  return value >= 'A' && value <= 'Z' ? static_cast<char>(value - 'A' + 'a') : value;
+}
+
+/// True when @p name already begins with the word @p brand (ASCII case-insensitive), so a
+/// film named "Kodak Gold 200" is not titled "Kodak Kodak Gold 200".
+auto StartsWithBrand(std::string_view name, std::string_view brand) -> bool {
+  if (name.size() < brand.size()) return false;
+  for (std::size_t i = 0; i < brand.size(); ++i) {
+    if (AsciiLower(name[i]) != AsciiLower(brand[i])) return false;
+  }
+  return name.size() == brand.size() || IsSpace(name[brand.size()]);
+}
+
 auto IsSlugChar(char value) -> bool {
   return (value >= 'a' && value <= 'z') || (value >= '0' && value <= '9');
 }
@@ -374,7 +388,9 @@ auto ReadLutHeaderFile(const std::filesystem::path& path) -> LutHeaderReadResult
 
 auto LutDisplayName(const LutHeader& header, std::string_view file_stem) -> std::string {
   if (header.metadata && header.metadata->origin == LutOrigin::kAlcedo && header.metadata->film) {
-    return header.metadata->film->name;
+    const LutFilmInfo& film = *header.metadata->film;
+    if (film.brand.empty() || StartsWithBrand(film.name, film.brand)) return film.name;
+    return film.brand + " " + film.name;
   }
   return std::string(file_stem);
 }

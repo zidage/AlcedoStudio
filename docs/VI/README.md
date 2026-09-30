@@ -173,3 +173,67 @@ Classic themes, and at DPR 1.0, 1.5, and 2.0:
    actions, and that Space / Enter behave as documented.
 6. Paste mode: confirm read-only node and item panes with no selection
    controls and no numeric footer.
+
+## LUT browser (LUT library plan L6A)
+
+### `EditorWorkspaceRail.qml`
+
+- The `LUTs` rail entry uses the existing `qrc:/panel_icons/box.svg`, the same
+  LUT icon as the adjustment navbar. It uses the shared compact rail treatment.
+- The `luts` page is wider than History/Versions (`editorLutBrowserPanelWidth`)
+  and is capped so the viewport keeps its minimum width. Its panel shell is
+  transparent and borderless; the page paints its own two cards.
+
+### `EditorLutFilterCard.qml`
+
+- One `cardSurfaceColor` card with the standard border and `panelRadius`.
+- Title `Filters` uses the panel title style (`fontSizeSection`,
+  `fontWeightHeading`). A `Clear` caption action appears only when a predicate
+  is active.
+- Sections follow the Album inspector layout: uppercase caption title
+  (`fontSizeCaption`, `fontWeightStrong`, muted), then one row per choice with
+  a quiet count bar (`editorListSelectedFillColor` at low alpha) behind the
+  label and count. The selected row keeps its count bar and adds a 1 px outline
+  (`graphSelectionOutlineColor`, `graphSelectionOutlineWidth`); it has no fill
+  and no ink change. Hover and keyboard focus use `buttonHoveredFillColor`.
+  There is no accent color, side stripe, pill, or dot. Choosing the selected
+  row again returns that dimension to All.
+- `Favorites only` uses `ThemeCheckBox`.
+
+### `EditorLutResultCard.qml`
+
+- One `cardSurfaceColor` card. The top toolbar is the sunken `bgBaseColor`
+  track of the former LUT panel: search glyph, native text input, then compact
+  `IconActionButton` actions (sort, import, refresh, open folder).
+- The target indicator is plain text: muted `Applies to` label and the node
+  name, the current LUT on its own line, its print on a separate muted line,
+  and the Missing explanation in `dangerColor`. It has no remove button: choosing
+  the applied tile again removes the LUT. Without a target it shows only the
+  controller's reason in muted text. The sort menu marks the current order with
+  the same 1 px outline.
+- Tiles sit in a sunken `bgBaseColor` well with `spaceXs` gaps. A tile shows the
+  approved Tabler `cube` icon (`panel_icons/lut-cube.svg`,
+  `editorLutTileIconSize`), the full title (wrapped, never elided), the print on
+  its own line, and the status line for invalid or 1D entries. Every tile in a
+  row takes the height of the row's tallest tile.
+- The applied tile has a 1 px outline (`graphSelectionOutlineColor`,
+  `graphSelectionOutlineWidth`) and no fill; its text, icon, and star keep their
+  normal colors. Hover and keyboard focus use `buttonHoveredFillColor`.
+  Unselectable tiles are muted.
+- The favorite star is a glyph only (no hover well), shown when starred or while
+  the tile is hovered, with the `editorListFavorite*` tokens.
+- Empty, loading, and zero-result states are centered text with
+  `DialogActionButton` actions; library errors use `dangerColor`.
+
+### `EditorLutControlPanel.qml`
+
+- Adjustment page title `LUT` (`fontSizeTitle`, `fontWeightHeading`), the LUT
+  name, its print line, the Missing line, the shared `AdjustmentSlider` for
+  strength, then `Browse LUTs` and `Remove` as compact `DialogActionButton`s.
+
+### Manual review
+
+Check both themes at 1.0 and 1.5 DPR: empty library, loading, many results,
+zero results, long names, applied tile, focused tile, favorite on applied and
+idle tiles, no target (RAW or DRT selected), Missing LUT, and a narrow window
+where the page shrinks to one tile column.

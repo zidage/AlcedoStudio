@@ -95,6 +95,9 @@ class LutLibraryController : public QObject {
   /// Library entry ID the association resolves to; empty when none is listed.
   Q_PROPERTY(QString associationEntryId READ associationEntryId NOTIFY associationChanged)
   Q_PROPERTY(QString associationName READ associationName NOTIFY associationChanged)
+  /// Print option of the associated official film simulation, shown on its own line; empty
+  /// when the LUT has no print or is not listed.
+  Q_PROPERTY(QString associationPrintName READ associationPrintName NOTIFY associationChanged)
   /// Configured strength in [0, 1].
   Q_PROPERTY(double associationStrength READ associationStrength NOTIFY associationChanged)
   /// True when the associated LUT file is missing; the reference and strength are kept.
@@ -125,6 +128,7 @@ class LutLibraryController : public QObject {
   [[nodiscard]] auto associationReference() const -> const LutReference& { return reference_; }
   [[nodiscard]] auto associationEntryId() const -> QString { return association_entry_id_; }
   [[nodiscard]] auto associationName() const -> QString { return association_name_; }
+  [[nodiscard]] auto associationPrintName() const -> QString { return association_print_name_; }
   [[nodiscard]] auto associationStrength() const -> double { return strength_; }
   [[nodiscard]] auto associationMissing() const -> bool { return missing_; }
   [[nodiscard]] auto lastError() const -> QString { return last_error_; }
@@ -174,6 +178,7 @@ class LutLibraryController : public QObject {
   LutReference                        reference_;
   QString                             association_entry_id_;
   QString                             association_name_;
+  QString                             association_print_name_;
   double                              strength_ = 1.0;
   bool                                missing_  = false;
   QString                             last_error_;

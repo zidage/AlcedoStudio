@@ -80,6 +80,12 @@ class AppTheme final : public QObject {
   Q_PROPERTY(int editorScopeHeight READ editorScopeHeight CONSTANT)
   Q_PROPERTY(int editorScopeHeightMin READ editorScopeHeightMin CONSTANT)
   Q_PROPERTY(int editorAdjustmentHeaderMinHeight READ editorAdjustmentHeaderMinHeight CONSTANT)
+  // LUT browser rail page (LUT library plan L6A): preferred page width, filter card width,
+  // minimum tile width, and the tile placeholder icon size. See DESIGN.md.
+  Q_PROPERTY(int editorLutBrowserPanelWidth READ editorLutBrowserPanelWidth CONSTANT)
+  Q_PROPERTY(int editorLutBrowserFilterWidth READ editorLutBrowserFilterWidth CONSTANT)
+  Q_PROPERTY(int editorLutTileMinWidth READ editorLutTileMinWidth CONSTANT)
+  Q_PROPERTY(int editorLutTileIconSize READ editorLutTileIconSize CONSTANT)
   // Persistent left collections column in the application shell (see DESIGN.md).
   Q_PROPERTY(int collectionsSidebarWidth READ collectionsSidebarWidth CONSTANT)
   // Line heights (px) for QML Label lineHeight when using fixed pixel sizes.
@@ -302,6 +308,10 @@ class AppTheme final : public QObject {
   auto        editorScopeHeight() const -> int;
   auto        editorScopeHeightMin() const -> int;
   auto        editorAdjustmentHeaderMinHeight() const -> int;
+  auto        editorLutBrowserPanelWidth() const -> int;
+  auto        editorLutBrowserFilterWidth() const -> int;
+  auto        editorLutTileMinWidth() const -> int;
+  auto        editorLutTileIconSize() const -> int;
   auto        collectionsSidebarWidth() const -> int;
   auto        lineHeightCaption() const -> int;
   auto        lineHeightBody() const -> int;

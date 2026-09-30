@@ -23,7 +23,6 @@
 #include "ui/alcedo_main/album_backend/editor_hls_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_lens_catalog_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_lut_adjustment_model.hpp"
-#include "ui/alcedo_main/album_backend/editor_lut_catalog_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_scope_item.hpp"
 #include "ui/alcedo_main/album_backend/editor_tone_curve_item.hpp"
 #include "ui/alcedo_main/album_backend/editor_tone_curve_model.hpp"
@@ -472,7 +471,6 @@ void RegisterEditorAdjustmentQmlTypes() {
   qmlRegisterType<EditorHlsModel>("Alcedo.Main", 1, 0, "EditorHlsModel");
   qmlRegisterType<EditorCdlTrackballModel>("Alcedo.Main", 1, 0, "EditorCdlTrackballModel");
   qmlRegisterType<EditorCdlTrackballItem>("Alcedo.Main", 1, 0, "EditorCdlTrackballItem");
-  qmlRegisterType<EditorLutCatalogModel>("Alcedo.Main", 1, 0, "EditorLutCatalogModel");
   qmlRegisterType<EditorLutAdjustmentModel>("Alcedo.Main", 1, 0, "EditorLutAdjustmentModel");
   qmlRegisterType<LutLibraryModel>("Alcedo.Main", 1, 0, "LutLibraryModel");
   qmlRegisterType<LutLibraryController>("Alcedo.Main", 1, 0, "LutLibraryController");

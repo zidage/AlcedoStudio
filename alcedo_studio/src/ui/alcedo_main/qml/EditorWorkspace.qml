@@ -106,6 +106,12 @@ Item {
                 adjustmentTransfer: appModules.adjustmentTransfer
                 recoveryPending: root.recoveryPending
                 blurSource: root.blurSource
+                // The LUT browser page is wide; it never takes the viewport below its minimum.
+                // Uses the stack's preferred width, not its laid-out width, so the two
+                // side columns cannot resize each other in a loop.
+                maximumPanelWidth: editorDesktopRow.width - historyVersionsRail.railWidth
+                                   - historyVersionsRail.panelGap - root.minimumViewportWidth
+                                   - adjustmentStack.stackWidth - editorDesktopRow.spacing * 2
             }
 
             // Center column: viewport + filmstrip

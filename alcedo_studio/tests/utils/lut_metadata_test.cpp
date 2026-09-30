@@ -102,15 +102,27 @@ TEST(LutMetadataTest, MetadataClassifiesUserFilmWithPrint) {
   EXPECT_EQ(LutPrintOptionName(result.header), "");
 }
 
-TEST(LutMetadataTest, OfficialFilmShowsFilmNameWithPrintAsOption) {
+// Plan 1.4 (L6A): an official film is titled by brand and stock; the print is a separate option.
+TEST(LutMetadataTest, OfficialFilmTitleCombinesBrandAndStockWithoutPrint) {
   const LutHeaderReadResult result = ReadLutHeader(CubeWith(kOfficialFilmWithPrint));
   ASSERT_TRUE(result.Ok()) << result.message;
   EXPECT_EQ(result.header.Origin(), LutOrigin::kAlcedo);
   EXPECT_EQ(LutDisplayName(result.header, "kodak_vision3_250d_5207__kodak_vision_2383"),
-            "Vision3 250D 5207");
+            "Kodak Vision3 250D 5207");
   EXPECT_EQ(LutPrintOptionName(result.header), "Vision 2383");
   EXPECT_EQ(CanonicalLutFileStem(*result.header.metadata),
             "kodak_vision3_250d_5207__kodak_vision_2383");
+
+  // A film name that already starts with its brand word is not prefixed again; a longer
+  // first word that merely begins with the brand text still is.
+  LutHeader prefixed            = result.header;
+  prefixed.metadata->film->name = "kodak Gold 200";
+  EXPECT_EQ(LutDisplayName(prefixed, "stem"), "kodak Gold 200");
+  prefixed.metadata->film->name = "Kodakchrome 64";
+  EXPECT_EQ(LutDisplayName(prefixed, "stem"), "Kodak Kodakchrome 64");
+  // Without a brand, the film name alone is the title.
+  prefixed.metadata->film->brand.clear();
+  EXPECT_EQ(LutDisplayName(prefixed, "stem"), "Kodakchrome 64");
 }
 
 TEST(LutMetadataTest, SerializedMetadataParsesToTheSameFields) {
@@ -290,7 +302,7 @@ TEST(LutMetadataTest, ScanHashesOnlyOfficialLutsAndKeepsEqualNamesSeparate) {
   EXPECT_TRUE(official_entry->IsOfficial());
   EXPECT_EQ(official_entry->sha256, Sha256Hex(official));
   EXPECT_EQ(official_entry->size, official.size());
-  EXPECT_EQ(official_entry->DisplayName(), "Vision3 250D 5207");
+  EXPECT_EQ(official_entry->DisplayName(), "Kodak Vision3 250D 5207");
   EXPECT_EQ(official_entry->PrintOptionName(), "Vision 2383");
 
   const LutLibraryEntry* user_entry = FindEntry(inventory, "\xE8\x83\xB6\xE7\x89\x87/my look.CUBE");
