@@ -3,7 +3,8 @@
 Date: 2026-09-30
 
 Status: **CUDA MVP implemented** on `feature/black-pro-mist`; **OpenCL parity** on
-`feature/black-pro-mist-opencl`. Metal still decodes only. The implemented design differs
+`feature/black-pro-mist-opencl`; **Metal parity** on `feature/black-pro-mist-metal`. The
+implemented design differs
 from this plan by user decision on 2026-09-30. Section 0 records the implemented design. It
 replaces sections 1.3, 1.4 (the "DRT-owned scene-referred step" item), 3.3, 3.4, 6, and the phase
 split in sections 10 to 17. The algorithm of section 3.1 and the pyramid of section 3.2 apply,
@@ -39,8 +40,7 @@ All source paths in this plan are relative to `alcedo_studio/src/` unless the pa
   transform. The pass is in every compiled plan. With strength 0 it only decodes ACEScc to linear
   AP1. The DRT display kernels read linear AP1 and do not decode ACEScc. The transfer function is
   therefore decoded once per frame, by the DiffusionFilter pass.
-- CUDA and OpenCL implement the scatter. Metal implements the decode only. A positive strength
-  on Metal throws `"Metal DiffusionFilter scatter is not implemented"`.
+- CUDA, OpenCL, and Metal implement the scatter with the same kernels and results.
 
 ### 0.2 Storage and Model
 
@@ -102,6 +102,13 @@ All source paths in this plan are relative to `alcedo_studio/src/` unless the pa
   the scatter image are pooled `Rgba32f` images; the scene input and output keep the
   dual-storage (image or scene-work buffer) binding. `GpuDagOpenClGradeTest` runs the CUDA test
   cases against the shared CPU reference (`tests/edit/runtime/diffusion_filter_reference.hpp`).
+- The Metal pass (`edit/runtime/metal/metal_diffusion_filter_pass.mm`, kernels appended to
+  `shader/drt.metal` in the DRT metallib) runs the same kernels, the same sample/rebuild/publish
+  decision, and the same `DiffusionScatterId` result. Pyramid levels and the scatter image are
+  pooled `Rgba32f` textures; every dispatch goes into the frame's serial compute encoder, and
+  the tracked textures order each level after the level it reads. Pipeline states come from the
+  Metal pipeline cache and are warmed with the DRT pipelines. `GpuDagMetalDrtTest` runs the CUDA
+  test cases against the shared CPU reference.
 - `kDrtImplementationVersion` is 5.
 
 ### 0.4 Known limits of the implemented design

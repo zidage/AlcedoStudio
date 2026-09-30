@@ -469,7 +469,8 @@ if(ALCEDO_METAL_ENABLED)
   alcedo_register_test_target(GpuDagMetalGradeTest gpu ci_metal)
 
   add_executable(GpuDagMetalDrtTest
-    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_drt_test.cpp)
+    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_drt_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_diffusion_filter_test.cpp)
   target_include_directories(GpuDagMetalDrtTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(GpuDagMetalDrtTest PRIVATE
     GTest::gtest_main EditRuntimeMetal EditInput RawProcessorOp MetalDemosaicNetEntry)

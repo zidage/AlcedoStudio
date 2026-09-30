@@ -33,20 +33,6 @@ struct MetalDrtResult {
                                    const PipelineDocument& document, const FrameSceneBinding& scene)
     -> MetalDrtResult;
 
-/**
- * @brief DiffusionFilter pass: decode the ACEScc AP1 @p scene to linear AP1.
- *
- * Writes the scene-work member that @ref DestinationWorkMember selects for @p scene.
- *
- * @return The work-image binding that holds linear AP1.
- * @throws std::runtime_error when the diffusion filter strength is not 0; the Metal scatter
- *         kernels do not exist yet. No other backend or substitute runs.
- */
-[[nodiscard]] auto ExecuteMetalDiffusionFilter(MetalRenderDevice&       device,
-                                               const PipelineDocument&  document,
-                                               const FrameSceneBinding& scene)
-    -> FrameSceneBinding;
-
 void               AppendMetalDrtWarmup(std::vector<MetalPipelineWarmup>& pipelines);
 
 }  // namespace alcedo

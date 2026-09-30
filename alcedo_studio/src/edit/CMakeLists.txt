@@ -234,6 +234,7 @@ if(ALCEDO_METAL_ENABLED)
         SOURCES
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_backend.mm
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_develop_pass.mm
+            ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_diffusion_filter_pass.mm
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_drt_params.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_drt_pass.mm
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_frame_presenter.mm
@@ -262,6 +263,7 @@ if(ALCEDO_METAL_ENABLED)
     set_source_files_properties(
         ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_backend.mm
         ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_develop_pass.mm
+        ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_diffusion_filter_pass.mm
         ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_drt_pass.mm
         ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_frame_presenter.mm
         ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_local_tone_pass.mm
