@@ -180,16 +180,41 @@ Classic themes, and at DPR 1.0, 1.5, and 2.0:
 
 - The `LUTs` rail entry uses the existing `qrc:/panel_icons/box.svg`, the same
   LUT icon as the adjustment navbar. It uses the shared compact rail treatment.
-- The `luts` page is wider than History/Versions (`editorLutBrowserPanelWidth`)
-  and is capped so the viewport keeps its minimum width. Its panel shell is
-  transparent and borderless; the page paints its own two cards.
+- The `luts` page opens at `editorLutBrowserPanelWidth` in the standard card
+  shell and is capped so the viewport keeps its minimum width. A grip on the
+  panel's trailing edge (`SizeHorCursor`; a 1 px `textMutedColor` line fades in
+  on hover or drag) resizes it live down to `editorLutBrowserPanelWidthMin`; a
+  double click restores the default. The rail keeps the width, the filter
+  sidebar state, and the grid/list choice while the page unloads.
+
+### `EditorLutBrowserPanel.qml`
+
+- The toolbar spans the top of the page: the filter sidebar toggle (the
+  existing `layout-sidebar` / `layout-sidebar-inactive` glyphs), the sunken
+  `bgBaseColor` search track (search glyph, native text input, a compact clear
+  action while text is present), sort, and the grid/list segments.
+- Grid/list segments follow the monochrome segmented family at toolbar height:
+  `bgBaseColor` track, `editorListSelectedFillColor` well under the current
+  segment, `editorListSelectedInkColor` glyph. Icons are the user-provided
+  Tabler `layout-grid` and `layout-list` (`panel_icons/view-grid.svg`,
+  `panel_icons/view-list.svg`).
+- Below the toolbar the filter sidebar sits beside the results. It folds to
+  zero width with `motionFoldOpenMs` / `motionFoldCloseMs` and `motionEasing`
+  (`reduceMotion` resolves them to zero); a 1 px `cardBorderColor` divider
+  separates the docked sidebar. When the page is too narrow for the sidebar and
+  two tile columns, the open sidebar floats over the results with the card
+  border instead of squeezing them.
 
 ### `EditorLutFilterCard.qml`
 
-- One `cardSurfaceColor` card with the standard border and `panelRadius`.
-- Title `Filters` uses the panel title style (`fontSizeSection`,
-  `fontWeightHeading`). A `Clear` caption action appears only when a predicate
-  is active.
+- Docked, the sidebar has no chrome of its own; floating, it adds the standard
+  card border and `controlRadiusSmall`.
+- Title `Filters` uses `fontSizeTitle`, `fontWeightHeading`. A `Clear` caption
+  action appears only when a predicate is active.
+- `Favorites` is the first choice, above the sections: one row with the star
+  glyph (`editorListFavoriteActiveColor` while the filter is on), its count,
+  and a count bar scaled to every candidate. It behaves like every other
+  choice; choosing it again shows every LUT.
 - Sections follow the Album inspector layout: uppercase caption title
   (`fontSizeCaption`, `fontWeightStrong`, muted), then one row per choice with
   a quiet count bar (`editorListSelectedFillColor` at low alpha) behind the
@@ -198,13 +223,11 @@ Classic themes, and at DPR 1.0, 1.5, and 2.0:
   and no ink change. Hover and keyboard focus use `buttonHoveredFillColor`.
   There is no accent color, side stripe, pill, or dot. Choosing the selected
   row again returns that dimension to All.
-- `Favorites only` uses `ThemeCheckBox`.
-
 ### `EditorLutResultCard.qml`
 
-- One `cardSurfaceColor` card. The top toolbar is the sunken `bgBaseColor`
-  track of the former LUT panel: search glyph, native text input, then compact
-  `IconActionButton` actions (sort, import, refresh, open folder).
+- No card chrome of its own. The footer holds the muted count and the compact
+  `IconActionButton` library actions (import, refresh, open folder); library
+  and favorite errors appear above it in `dangerColor`.
 - The target indicator is plain text: muted `Applies to` label and the node
   name, the current LUT on its own line, its print on a separate muted line,
   and the Missing explanation in `dangerColor`. It has no remove button: choosing
@@ -222,6 +245,10 @@ Classic themes, and at DPR 1.0, 1.5, and 2.0:
   Unselectable tiles are muted.
 - The favorite star is a glyph only (no hover well), shown when starred or while
   the tile is hovered, with the `editorListFavorite*` tokens.
+- The list layout is the same view with one column: compact rows without the
+  cube placeholder, title (`fontSizeBody`) and print left-aligned, and the star
+  always shown in its trailing column. Selection, hover, and muted states match
+  the tiles.
 - Empty, loading, and zero-result states are centered text with
   `DialogActionButton` actions; library errors use `dangerColor`.
 
@@ -240,8 +267,9 @@ Classic themes, and at DPR 1.0, 1.5, and 2.0:
 
 Check both themes at 1.0 and 1.5 DPR: empty library, loading, many results,
 zero results, long names, applied tile, focused tile, favorite on applied and
-idle tiles, no target (RAW or DRT selected), Missing LUT, and a narrow window
-where the page shrinks to one tile column.
+idle tiles, no target (RAW or DRT selected), Missing LUT, grid and list
+layouts, the filter fold, the floating sidebar on a narrow page, and a drag
+resize down to the minimum width.
 
 ## LUT Settings (LUT library plan L6B)
 

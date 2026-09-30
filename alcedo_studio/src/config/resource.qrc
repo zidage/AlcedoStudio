@@ -69,6 +69,8 @@
     <file>panel_icons/collections-folder.svg</file>
     <file>panel_icons/box.svg</file>
     <file>panel_icons/lut-cube.svg</file>
+    <file>panel_icons/view-grid.svg</file>
+    <file>panel_icons/view-list.svg</file>
     <file>panel_icons/masks.svg</file>
     <file>panel_icons/detail.svg</file>
     <file>panel_icons/cpu.svg</file>

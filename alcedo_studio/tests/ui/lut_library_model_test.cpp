@@ -365,9 +365,14 @@ TEST(LutLibraryModelTest, SelectionChangeDoesNotResetRows) {
   }
   EXPECT_EQ(RowEntryIds(model), rows_before);
 
+  // The Favorites facet counts the starred candidates and follows the favorites filter.
+  EXPECT_EQ(ChoiceCount(model.favoriteChoices(), QStringLiteral("all")), model.count());
+  EXPECT_EQ(ChoiceCount(model.favoriteChoices(), QStringLiteral("favorites")), 1);
+
   // With the favorites filter on, removing a favorite removes only that row.
   model.setFavoritesOnly(true);
   ASSERT_EQ(RowEntryIds(model), QStringList{second});
+  EXPECT_TRUE(model.favoriteChoices().at(1).toMap().value(QStringLiteral("selected")).toBool());
   ASSERT_TRUE(model.toggleFavorite(first));
   const QStringList favorites_before = RowEntryIds(model);
   reset_spy.clear();

@@ -83,6 +83,7 @@ class AppTheme final : public QObject {
   // LUT browser rail page (LUT library plan L6A): preferred page width, filter card width,
   // minimum tile width, and the tile placeholder icon size. See DESIGN.md.
   Q_PROPERTY(int editorLutBrowserPanelWidth READ editorLutBrowserPanelWidth CONSTANT)
+  Q_PROPERTY(int editorLutBrowserPanelWidthMin READ editorLutBrowserPanelWidthMin CONSTANT)
   Q_PROPERTY(int editorLutBrowserFilterWidth READ editorLutBrowserFilterWidth CONSTANT)
   Q_PROPERTY(int editorLutTileMinWidth READ editorLutTileMinWidth CONSTANT)
   Q_PROPERTY(int editorLutTileIconSize READ editorLutTileIconSize CONSTANT)
@@ -309,6 +310,7 @@ class AppTheme final : public QObject {
   auto        editorScopeHeightMin() const -> int;
   auto        editorAdjustmentHeaderMinHeight() const -> int;
   auto        editorLutBrowserPanelWidth() const -> int;
+  auto        editorLutBrowserPanelWidthMin() const -> int;
   auto        editorLutBrowserFilterWidth() const -> int;
   auto        editorLutTileMinWidth() const -> int;
   auto        editorLutTileIconSize() const -> int;

@@ -1,18 +1,24 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Controls.impl
 import QtQuick.Layouts
 
-// LUT browser filter card (LUT library plan L6A, section 6.5). Album-inspector
+// LUT browser filter sidebar (LUT library plan L6A, section 6.5). Album-inspector
 // layout: uppercase section titles and one count bar per choice. Every choice
 // writes one LutLibraryModel predicate; choosing the selected bar again returns
-// that dimension to All. The model owns the choices, their counts, and which
-// dimensions apply (Brand and Print only outside General, Print only when a
-// candidate declares one). This card keeps no filter state of its own.
+// that dimension to All. Favorites is the first choice, above the sections.
+// The model owns the choices, their counts, and which dimensions apply (Brand
+// and Print only outside General, Print only when a candidate declares one).
+// This sidebar keeps no filter state of its own.
+//
+// Docked, it sits on the browser's card surface with no chrome; `floating`
+// (the page is too narrow to dock it) adds the card border above the results.
 Rectangle {
     id: root
     objectName: "editorLutFilterCard"
 
     property var browser: null
+    property bool floating: false
 
     readonly property color colText: appTheme.textColor
     readonly property color colMuted: appTheme.textMutedColor
@@ -31,9 +37,9 @@ Rectangle {
                                                 || String(browser.print) !== "all"
                                                 || browser.favoritesOnly === true)
 
-    radius: appTheme.panelRadius
+    radius: appTheme.controlRadiusSmall
     color: appTheme.cardSurfaceColor
-    border.width: 1
+    border.width: floating ? 1 : 0
     border.color: appTheme.cardBorderColor
 
     function withAlpha(colorValue, alphaValue) {
@@ -56,7 +62,9 @@ Rectangle {
     function toggleChoice(dimension, value, allValue) {
         if (!browser)
             return
-        const current = String(browser[dimension])
+        const current = dimension === "favorites"
+                        ? (browser.favoritesOnly ? "favorites" : allValue)
+                        : String(browser[dimension])
         const next = current === String(value) ? allValue : String(value)
         if (dimension === "category")
             browser.category = next
@@ -66,6 +74,8 @@ Rectangle {
             browser.brand = next
         else if (dimension === "print")
             browser.print = next
+        else if (dimension === "favorites")
+            browser.favoritesOnly = next === "favorites"
     }
 
     // One filter dimension: an uppercase title and a count bar per choice.
@@ -73,12 +83,19 @@ Rectangle {
         id: section
 
         property string title: ""
+        // Optional glyph before every row label.
+        property url iconSrc: ""
+        property color iconColor: appTheme.iconColor
         property string dimension: ""
         property string allValue: ""
         property var choices: []
         property bool showAll: false
+        // Count the bars are scaled to; 0 scales them to the largest choice.
+        property int barTotal: 0
 
         readonly property int maxCount: {
+            if (barTotal > 0)
+                return barTotal
             let m = 1
             for (let i = 0; i < choices.length; ++i)
                 m = Math.max(m, Number(choices[i].count))
@@ -92,6 +109,7 @@ Rectangle {
         Label {
             Layout.fillWidth: true
             Layout.bottomMargin: appTheme.spaceXs
+            visible: text.length > 0
             text: section.title
             color: root.colMuted
             font.family: appTheme.uiFontFamily
@@ -165,6 +183,16 @@ Rectangle {
                     anchors.rightMargin: appTheme.spaceSm
                     spacing: appTheme.spaceSm
 
+                    ColorImage {
+                        visible: String(section.iconSrc).length > 0
+                        Layout.preferredWidth: appTheme.iconOpticalSizeCompact
+                        Layout.preferredHeight: appTheme.iconOpticalSizeCompact
+                        source: section.iconSrc
+                        sourceSize.width: appTheme.iconSourceSizeCompact
+                        sourceSize.height: appTheme.iconSourceSizeCompact
+                        color: section.iconColor
+                    }
+
                     Label {
                         Layout.fillWidth: true
                         text: facetRow.choice ? String(facetRow.choice.label) : ""
@@ -212,8 +240,8 @@ Rectangle {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: appTheme.spaceMd
-        spacing: appTheme.spaceMd
+        anchors.margins: root.floating ? appTheme.spaceSm : 0
+        spacing: appTheme.spaceSm
 
         RowLayout {
             Layout.fillWidth: true
@@ -225,7 +253,7 @@ Rectangle {
                 text: qsTr("Filters")
                 color: root.colText
                 font.family: appTheme.uiFontFamily
-                font.pixelSize: appTheme.fontSizeSection
+                font.pixelSize: appTheme.fontSizeTitle
                 font.weight: appTheme.fontWeightHeading
                 wrapMode: Text.Wrap
             }
@@ -263,6 +291,22 @@ Rectangle {
             ColumnLayout {
                 width: facetScroll.availableWidth
                 spacing: appTheme.spaceLg
+
+                // Favorites: one row with the star; choosing it again shows every LUT.
+                FacetSection {
+                    objectName: "editorLutFavoritesSection"
+                    Layout.fillWidth: true
+                    dimension: "favorites"
+                    allValue: "all"
+                    iconSrc: "qrc:/panel_icons/star.svg"
+                    iconColor: root.browser && root.browser.favoritesOnly
+                               ? appTheme.editorListFavoriteActiveColor : appTheme.iconColor
+                    // The lone row's bar shows the starred share of every candidate.
+                    barTotal: root.browser && root.browser.favoriteChoices.length > 0
+                              ? Number(root.browser.favoriteChoices[0].count) : 0
+                    choices: root.specificChoices(root.browser ? root.browser.favoriteChoices : [],
+                                                  "all")
+                }
 
                 FacetSection {
                     objectName: "editorLutCategorySection"
@@ -304,18 +348,6 @@ Rectangle {
                     dimension: "print"
                     allValue: "all"
                     choices: root.specificChoices(root.browser ? root.browser.printChoices : [], "all")
-                }
-
-                ThemeCheckBox {
-                    objectName: "editorLutFavoritesOnly"
-                    Layout.fillWidth: true
-                    text: qsTr("Favorites only")
-                    checked: !!root.browser && root.browser.favoritesOnly === true
-                    enabled: !!root.browser
-                    onToggled: function(checked) {
-                        if (root.browser)
-                            root.browser.favoritesOnly = checked
-                    }
                 }
             }
         }

@@ -1289,6 +1289,11 @@ Alcedo 将改用 %1。</translation>
     </message>
     <message>
         <location line="+1"/>
+        <source>Favorites</source>
+        <translation>收藏</translation>
+    </message>
+    <message>
+        <location line="+1"/>
         <source>General</source>
         <translation>通用</translation>
     </message>
@@ -2716,6 +2721,64 @@ Original source files on disk will be kept.</source>
     </message>
 </context>
 <context>
+    <name>EditorLutBrowserPanel</name>
+    <message>
+        <location filename="../qml/EditorLutBrowserPanel.qml" line="+1"/>
+        <source>Hide filters</source>
+        <translation>隐藏筛选</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Show filters</source>
+        <translation>显示筛选</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Search LUTs</source>
+        <translation>搜索 LUT</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Clear search</source>
+        <translation>清除搜索</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Sort LUTs</source>
+        <translation>排序 LUT</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Search results are ordered by relevance.</source>
+        <translation>搜索结果按相关度排序。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Sort by</source>
+        <translation>排序方式</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Name</source>
+        <translation>名称</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Modified time</source>
+        <translation>修改时间</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Grid view</source>
+        <translation>网格视图</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>List view</source>
+        <translation>列表视图</translation>
+    </message>
+</context>
+<context>
     <name>EditorLutControlPanel</name>
     <message>
         <location filename="../qml/EditorLutControlPanel.qml" line="+1"/>
@@ -2794,11 +2857,6 @@ Original source files on disk will be kept.</source>
         <location line="+1"/>
         <source>Print</source>
         <translation>印片</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>Favorites only</source>
-        <translation>仅显示收藏</translation>
     </message>
 </context>
 <context>

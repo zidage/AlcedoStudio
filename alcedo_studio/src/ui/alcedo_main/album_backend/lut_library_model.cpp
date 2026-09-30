@@ -436,6 +436,16 @@ void LutLibraryModel::rebuildChoices() {
                       filter_.print == LutPrintFilter::kWithPrint),
       Choice(QStringLiteral("no_print"), Tr("No print"), no_print,
                       filter_.print == LutPrintFilter::kNoPrint)};
+
+  int candidates = 0;
+  int favorites  = 0;
+  count_where(LutFacetDimension::kFavorites, [&](const LutSearchKeys& keys) {
+    ++candidates;
+    if (keysFavorite(keys)) ++favorites;
+  });
+  favorite_choices_ = {
+      Choice(QStringLiteral("all"), Tr("All"), candidates, !filter_.favorites_only),
+      Choice(QStringLiteral("favorites"), Tr("Favorites"), favorites, filter_.favorites_only)};
   emit choicesChanged();
 }
 

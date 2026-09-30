@@ -65,6 +65,8 @@ class LutLibraryModel : public QAbstractListModel {
   Q_PROPERTY(QVariantList sourceChoices READ sourceChoices NOTIFY choicesChanged)
   Q_PROPERTY(QVariantList brandChoices READ brandChoices NOTIFY choicesChanged)
   Q_PROPERTY(QVariantList printChoices READ printChoices NOTIFY choicesChanged)
+  /// `all` and `favorites`; `favorites` is selected while favoritesOnly is on.
+  Q_PROPERTY(QVariantList favoriteChoices READ favoriteChoices NOTIFY choicesChanged)
   /// Brand and print choices apply only outside the General category.
   Q_PROPERTY(bool filmFiltersAvailable READ filmFiltersAvailable NOTIFY choicesChanged)
   /// True when some candidate declares a print, so print presence can narrow the results.
@@ -141,6 +143,7 @@ class LutLibraryModel : public QAbstractListModel {
   [[nodiscard]] auto sourceChoices() const -> QVariantList { return source_choices_; }
   [[nodiscard]] auto brandChoices() const -> QVariantList { return brand_choices_; }
   [[nodiscard]] auto printChoices() const -> QVariantList { return print_choices_; }
+  [[nodiscard]] auto favoriteChoices() const -> QVariantList { return favorite_choices_; }
   [[nodiscard]] auto filmFiltersAvailable() const -> bool {
     return filter_.category != LutCategoryFilter::kGeneral;
   }
@@ -209,6 +212,7 @@ class LutLibraryModel : public QAbstractListModel {
   QVariantList                         source_choices_;
   QVariantList                         brand_choices_;
   QVariantList                         print_choices_;
+  QVariantList                         favorite_choices_;
   bool                                 print_filter_available_ = false;
   QString                              focused_entry_id_;
   QString                              applied_entry_id_;
