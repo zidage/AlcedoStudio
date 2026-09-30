@@ -50,9 +50,10 @@ All source paths in this plan are relative to `alcedo_studio/src/` unless the pa
 - `DrtDirty::Diffusion` marks a strength change. The display content key already hashes the DRT
   params JSON, and a DRT revision change already invalidates the display output.
 - `ResolveDiffusionFilterShape(strength)` (`include/edit/graph/diffusion_filter_model.hpp`)
-  gives `scatter_fraction = 0.4 * strength` and fixed values for glow radius (0.12), base sigma
+  gives `scatter_fraction = 0.16 * strength` and fixed values for glow radius (0.12), base sigma
   (0.002), power-law exponent (2.6), black mist (0.5), absorption (0.1), highlight gain (6.0),
-  and highlight knee (0.8).
+  and highlight knee (0.8). The first calibration used 0.4; slider 100 now gives the look of its
+  slider 40.
 - The editor field key is `diffusion` (`EditorScalarWrite`, JSON `{"strength": s}`), owned by the
   document DRT node. The `odt` field reads `DrtParamsModel::OutputTransformJson`, which excludes
   the strength, so ODT history rows keep their format.

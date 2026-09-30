@@ -41,8 +41,8 @@ Item {
     /// Hit radius around the handle center for starting a drag (px).
     readonly property int handleHitPad: 12
     /// Pointer gain for handle drag. Full-track mouse travel maps to this fraction
-    /// of the value range (0.32 ≈ 3× slower than absolute 1:1 mapping).
-    readonly property real pointerGain: 0.52
+    /// of the value range (1 = the handle follows the pointer without deceleration).
+    readonly property real pointerGain: 1.0
 
     // Double-click detection without TapHandler (TapHandler steals the grab and
     // breaks continuous drag + real double-clicks on some styles).
@@ -145,8 +145,8 @@ Item {
         return v
     }
 
-    /// Relative drag from press with pointerGain: full-track mouse travel only
-    /// spans `pointerGain` of the value range (decelerated feel).
+    /// Relative drag from press with pointerGain: full-track mouse travel spans
+    /// `pointerGain` of the value range.
     function valueFromDragDelta(localX) {
         var trackW = Math.max(1e-6, slider.availableWidth - root.handleSize)
         var dx = localX - root._pressLocalX

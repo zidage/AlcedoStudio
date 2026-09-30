@@ -218,7 +218,7 @@ Item {
     // Generic monochrome slider for Look-only controls (CCT/tint/HSL/master).
     // Owns its value during press (no model→value binding fight). Double-click
     // without movement resets. Locks lookScroll while pressed. Pointer drag uses
-    // the same decelerated relative mapping as AdjustmentSlider (pointerGain).
+    // the same relative mapping as AdjustmentSlider (pointerGain).
     component MonoSlider: Slider {
         id: mono
         property var gradientStops: null
@@ -229,7 +229,7 @@ Item {
         // External load value; applied only when not pressed.
         property real externalValue: 0
         /// Full-track mouse travel maps to this fraction of the value range.
-        property real pointerGain: 0.32
+        property real pointerGain: 1.0
 
         property bool _pointerMoved: false
         property real _pressValue: 0

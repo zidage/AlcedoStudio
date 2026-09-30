@@ -17,7 +17,7 @@ Slider {
     property string accessibleName: ""
     property real externalValue: 0
     /// Full-track mouse travel maps to this fraction of the value range.
-    property real pointerGain: 0.32
+    property real pointerGain: 1.0
     property int handleSize: 22
     property int rowHeight: 32
     property color trackColor: appTheme.editorSliderTrackColor

@@ -39,8 +39,9 @@ struct DiffusionFilterShape {
   float highlight_knee      = 0.8f;
 };
 
-/// Scatter fraction at the maximum stored strength.
-inline constexpr float kDiffusionMaxScatterFraction = 0.4f;
+/// Scatter fraction at the maximum stored strength. Strength 1 equals the 0.4 strength of the
+/// first calibration (0.4 * 0.4).
+inline constexpr float kDiffusionMaxScatterFraction = 0.16f;
 
 /**
  * @brief Resolve the filter shape for a stored strength.
