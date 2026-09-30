@@ -169,11 +169,15 @@ class FakeLutCatalogModel final : public QObject {
   Q_INVOKABLE bool isFavoritePath(const QString& path) const {
     return favorite_paths_.contains(path.trimmed());
   }
-  Q_INVOKABLE QString directoryPath() const { return QStringLiteral("D:/fake/LUTs"); }
+  Q_INVOKABLE bool openDirectory() {
+    ++open_directory_count_;
+    return true;
+  }
   Q_INVOKABLE QString paramsJson() const {
     return QStringLiteral("{\"ocio_lmt\":\"%1\"}").arg(selected_path_);
   }
 
+  int     open_directory_count_ = 0;
   int     select_count_  = 0;
   int     refresh_count_ = 0;
   QString last_selected_path_;

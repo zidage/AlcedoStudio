@@ -23,15 +23,20 @@ inline constexpr std::string_view kLutLibraryInventoryFileName = "lut-inventory.
 /// `name` is the file stem and `relative_path` the root-relative `/` path; the
 /// render pipeline refers to the file path, so equal names in different folders
 /// are separate entries. `sha256` is set only for files that declare
-/// `origin: alcedo`; user LUTs are never hashed.
+/// `origin: alcedo`; user LUTs are never hashed. `managed_package_id` names the
+/// installed package whose active content directory holds the file; it is empty
+/// for loose files, including loose files that declare `origin: alcedo`.
 struct LutLibraryEntry {
   std::string        name;
   std::string        relative_path;
   std::uint64_t      size         = 0;
+  /// File-clock write time ticks, used only to order entries by modification.
+  std::int64_t       modified_time = 0;
   LutHeaderError     header_error = LutHeaderError::kNone;
   std::string        header_message;
   LutHeader          header;
   std::string        sha256;
+  std::string        managed_package_id;
 
   [[nodiscard]] auto IsOfficial() const -> bool {
     return header_error == LutHeaderError::kNone && header.Origin() == LutOrigin::kAlcedo;
@@ -40,7 +45,12 @@ struct LutLibraryEntry {
   [[nodiscard]] auto PrintOptionName() const -> std::string { return LutPrintOptionName(header); }
 };
 
-enum class LutScanDiagnosticKind { kSkippedLink, kUnreadableDirectory, kUnreadableFile };
+enum class LutScanDiagnosticKind {
+  kSkippedLink,
+  kUnreadableDirectory,
+  kUnreadableFile,
+  kInvalidPackageReceipt
+};
 
 struct LutScanDiagnostic {
   LutScanDiagnosticKind kind = LutScanDiagnosticKind::kSkippedLink;
@@ -62,6 +72,11 @@ struct LutLibraryInventory {
 struct LutLibraryScanOptions {
   /// Directory names skipped at any depth, compared exactly.
   std::vector<std::string> excluded_directory_names = {".downloads"};
+  /// Root-relative `/` directory paths skipped exactly (for example `packages`).
+  std::vector<std::string> excluded_relative_directories;
+  /// Root-relative directories scanned even when they lie inside an excluded
+  /// directory (for example the active content directory of each package).
+  std::vector<std::string> additional_relative_directories;
   /// Parallel header/hash workers. 0 selects the hardware thread count, capped at 8.
   unsigned                 worker_count             = 0;
 };
@@ -75,6 +90,12 @@ struct LutLibraryScanOptions {
 /// The result is deterministic for a given tree regardless of the worker count.
 [[nodiscard]] auto ScanLutLibrary(const std::filesystem::path& root,
                                   const LutLibraryScanOptions& options = {}) -> LutLibraryInventory;
+
+/// Classify the single file `<root>/<relative_path>` exactly as a scan does:
+/// read its bounded header and hash it only when it declares `origin: alcedo`.
+/// Must not run on the GUI thread.
+[[nodiscard]] auto ClassifyLutLibraryFile(const std::filesystem::path& root,
+                                          std::string_view relative_path) -> LutLibraryEntry;
 
 /// Serialize @p inventory as `lut-inventory.json` (schema 1).
 [[nodiscard]] auto SerializeLutLibraryInventory(const LutLibraryInventory& inventory)

@@ -90,6 +90,7 @@ TEST_F(ApplicationModuleHostLifecycleTests,
     EXPECT_NE(host.interaction_policy(), nullptr);
     EXPECT_NE(host.model_download(), nullptr);
     EXPECT_NE(host.updates(), nullptr);
+    EXPECT_NE(host.lut_library(), nullptr);
     EXPECT_NE(host.semantic_generation(), nullptr);
     EXPECT_NE(host.ai_provider_profiles(), nullptr);
     EXPECT_NE(host.image_analysis(), nullptr);
@@ -113,6 +114,7 @@ TEST_F(ApplicationModuleHostLifecycleTests,
         {"interactionPolicy", "alcedo::ui::InteractionPolicyController*"},
         {"modelDownload", "alcedo::ui::ModelDownloadController*"},
         {"updates", "alcedo::UpdateService*"},
+        {"lutLibrary", "alcedo::LutLibraryService*"},
         {"semanticGeneration", "alcedo::ui::SemanticGenerationController*"},
         {"aiProviderProfiles", "alcedo::AiProviderProfileController*"},
         {"imageAnalysis", "alcedo::ui::ImageAnalysisController*"},

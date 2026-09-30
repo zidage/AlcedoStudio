@@ -674,9 +674,11 @@ Item {
                     enabled: root.lutModel ? root.lutModel.canOpenDirectory : false
                     iconSrc: "qrc:/panel_icons/folder-open.svg"
                     actionName: qsTr("Open LUT folder")
+                    // The library builds the native local-file URL and reports a
+                    // rejected dispatch through statusText.
                     onClicked: {
-                        if (root.lutModel && root.lutModel.directoryPath())
-                            Qt.openUrlExternally("file:///" + root.lutModel.directoryPath())
+                        if (root.lutModel)
+                            root.lutModel.openDirectory()
                     }
                 }
             }

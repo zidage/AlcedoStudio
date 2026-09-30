@@ -1,7 +1,7 @@
 # LUT Library and Package Management Plan
 
 Date: 2026-09-29  
-Status: L1 complete (2026-09-29); L2-L6 not started; panel visual design intentionally blank  
+Status: L1 and L2 complete (2026-09-29); L3-L6 not started; panel visual design intentionally blank  
 Source revision: `dc73591020ef917fed089db7e4f454839d82051f`  
 Primary area: Alcedo Studio UI and application services  
 Parent: Standalone feature plan, indexed by the [roadmap index](../../README.md)  
@@ -574,7 +574,7 @@ Count the resulting maintenance changes in the phase estimate. Keep unrelated ed
 | Phase | Deliverable | Depends on | Expected changed lines | Size boundary and status |
 | --- | --- | --- | ---: | --- |
 | L1 | Metadata, exporter annotations, package schema, signing and publication tools | Confirmed data specification | 1300-1850 | Complete 2026-09-29; actual size exceeded the estimate (see its record). |
-| L2 | Service-owned recursive inventory, user import, root selection and migration | L1 metadata | 1450-1950 | Keep query presentation in L5. Not started. |
+| L2 | Service-owned recursive inventory, user import, root selection and migration | L1 metadata | 1450-1950 | Complete 2026-09-29; actual size exceeded the estimate (see its record). |
 | L3 | Independent signed package checking, 7z installation, repair and cancellation | L1, L2 | 1500-1950 | Keep Settings QML in L6. Not started. |
 | L4 | Stable runtime references, missing-file behavior and LUT strength on all backends | L1, L2 | 1500-1950 | Reuse existing typed writes and grade parameters. Not started. |
 | L5 | Indexed classification, fuzzy search, favorites and exact-node application | L2, L4 | 1200-1750 | No visual layout work. Not started. |
@@ -810,12 +810,141 @@ directory. Inspect real Finder/Explorer opening manually with an installed build
 
 **Exit criteria.**
 
-- [ ] Recursive inventory persists and rebuilds with exact identities.
-- [ ] Migration survives injected failures on both sides of the root commit point.
-- [ ] Missing file lookups request refresh without repeated retries.
-- [ ] Import and migration preserve unrelated user files.
+- [x] Recursive inventory persists and rebuilds with exact identities.
+- [x] Migration survives injected failures on both sides of the root commit point.
+- [x] Missing file lookups request refresh without repeated retries.
+- [x] Import and migration preserve unrelated user files.
 
-**Expected diff.** 1450-1950 lines. **Completion record:** Not started; fill section 12 for L2.
+**Expected diff.** 1450-1950 lines. **Completion record:** see below.
+
+##### Phase L2 completion record (2026-09-29)
+
+**Status:** complete. `LutLibraryService` is the single owner of the LUT library root, the published
+inventory, favorites, and the one running library operation. It loads the persisted inventory at start,
+rebuilds a missing or damaged one, rescans on request, imports files, switches roots, migrates roots with
+staged copy and verified source cleanup, and opens the root through a native local-file URL.
+The editor LUT list now reads the service. The static catalog cache, the application `LUTs` folder
+lookup, basename matching, the `5207.cube` default, and the QML `"file:///" + path` URL are removed.
+
+**Source revisions and branches.**
+
+| Repository | Base | Branch | State |
+| --- | --- | --- | --- |
+| `pu-erh_lab` | `9c623d12d` (L1 commit on `feature/lut-metadata-package-publication`) | `feature/lut-library-inventory-migration` | Uncommitted working tree |
+
+**Implemented modules.**
+
+| Module | Responsibility |
+| --- | --- |
+| `app/lut_library_inventory.{hpp,cpp}` | Root layout names; `lut-library.json` user state (favorites, previous roots); package receipt reader; `ScanLutLibraryRoot` (loose files plus each receipt's active content directory, package ownership tag); path lookup; changed-path diff |
+| `app/lut_library_migration.{hpp,cpp}` | Destination checks (inside/outside, empty, leftover staging, free space); staged copy with SHA-256 verification; state and cleanup-record writes; staging rename; post-commit source cleanup that deletes only unchanged files and resumes from `lut-migration-cleanup.json`; replaceable file-operation steps for failure tests |
+| `app/lut_library_service.{hpp,cpp}` | Owner `QObject`: `LutLibraryPreferences` (QSettings `lut/libraryRoot`), default root `~/.alcedo/luts`, one `std::jthread` operation at a time, owner-thread publication after persistence, refresh coalescing, one refresh per unresolved lookup, favorites, legacy favorite conversion, folder URL dispatch with a visible error |
+| `utils/lut/lut_library_scan.{hpp,cpp}` (L1 module, extended) | `managed_package_id`, `modified_time`, exact-path exclusions and additional scan directories, `kInvalidPackageReceipt`, `ClassifyLutLibraryFile` for imports |
+| `ui/.../modules/lut_catalog.{hpp,cpp}` | Projection of service entries into editor rows; exact path identity only; 1D-only files shown and not selectable |
+| `ui/.../editor_lut_catalog_model.{hpp,cpp}`, `EditorAdjustmentStack.qml`, `LUTPanel.qml` | `library` property bound to `appModules.lutLibrary`; favorites through the service; `openDirectory()` replaces URL concatenation |
+| `ApplicationModuleHost` | Constructs and starts the service; `lutLibrary` property; shutdown joins the worker |
+
+Decisions made during L2:
+
+1. Entry identity is the root-relative `/` path (decision 1.3 item 3). Root migration preserves relative
+   paths, so entry IDs and favorites stay linked. L4 still reconciles this with the reference forms in section 4.2.
+2. Favorites and previous roots are stored in a separate small `<root>/lut-library.json`, not inside
+   `lut-inventory.json` as section 4.3 proposes. A favorite change then writes a small file on the owner thread,
+   and a rescan never rewrites user choices. The service owns both files.
+3. A migration destination must be absent or empty. An existing library with files is opened with `UseRoot`;
+   the service does not merge two libraries.
+4. Import copies into `<root>/user/` with the source file name. Any conflict rejects the whole request before a copy.
+
+**Primary success call chain:**
+
+```text
+ApplicationModuleHost ctor -> LutLibraryService::Start
+  -> worker: ReadLutLibraryInventoryFile | (missing/damaged) ScanLutLibraryRoot + write_inventory
+  -> ReadLutLibraryUserStateFile -> owner thread: PublishInventory -> InventoryChanged
+  -> ConvertLegacyFavorites (exact paths under the root) -> ResumeSourceCleanup (if a record exists)
+LUTPanel refresh button -> EditorLutCatalogModel::refresh(true) -> RefreshInventory
+  -> worker: ScanLutLibraryRoot (ReadLutPackageReceipts, ScanLutLibrary workers) -> write_inventory
+  -> owner thread: PublishInventory(changed paths) -> model refresh(false) -> BuildCatalog -> rows
+ImportFiles -> worker: validate every source and target -> copy_file -> ClassifyLutLibraryFile
+  -> replacement inventory -> write_inventory -> owner thread: PublishInventory
+MigrateRoot -> worker: PrepareLutLibraryMigration (enumerate, validate, copy + verify SHA-256,
+  write inventory/state/cleanup record, rename staging) -> owner thread: SaveRoot (commit point)
+  -> root_ = destination, RootChanged, FavoritesChanged -> ResumeSourceCleanup
+  -> worker: CleanLutLibraryMigrationSource (delete unchanged sources, remove record)
+LUTPanel open-folder button -> EditorLutCatalogModel::openDirectory -> OpenRootDirectory
+  -> QUrl::fromLocalFile -> QDesktopServices::openUrl
+```
+
+**Primary failure call chain:**
+
+```text
+copy, verification, inventory-write, or state-write failure before the commit
+  -> staging directory removed -> previous root and inventory stay published -> kIoError + lastError
+preference write fails after the prepared rename -> DiscardPreparedLutLibraryMigration -> kPreferenceError
+process stop or delete failure after the commit -> cleanup record stays in the new root
+  -> next Start/UseRoot resumes cleanup; changed source files are kept and reported
+refresh write failure -> previous inventory kept -> kPersistenceError
+unreadable subtree or invalid receipt -> diagnostic -> inventory_complete() == false (no package equality claim)
+lookup of a missing or unlisted path -> one refresh per path; no retry until a user refresh
+import conflict -> nothing copied -> kConflict; inventory-write failure -> copied files removed
+OS rejects the folder URL, or the root is missing -> false, lastError names the folder,
+  model statusText and openFolderFailed show it
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `RecursiveScanFindsUnicodeAndUppercaseCubeFiles` | `LutLibraryServiceTest` | PASS |
+| `EqualBasenamesRemainSeparateEntries` | `LutLibraryServiceTest`; model level `LutCatalogListsLibraryEntriesWithoutBasenameMatching` in `EditorLookModelTest` | PASS |
+| `HeaderClaimDoesNotGrantPackageOwnership` (active vs inactive content, invalid receipt) | `LutLibraryServiceTest` | PASS |
+| `RefreshDetectsChangedBytesWithUnchangedStamp` (plus refresh coalescing) | `LutLibraryServiceTest` | PASS |
+| `MigrationPreservesEntryIdsAndFavorites` (Unicode destination, restart from the new root) | `LutLibraryServiceTest` | PASS |
+| `MigrationFailureKeepsPreviousRoot` (copy, inventory-write, and preference-write failures; destination inside source; non-empty destination; retry) | `LutLibraryServiceTest` | PASS |
+| After the commit point: `SourceCleanupResumesAfterStopFollowingRootSwitch` | `LutLibraryServiceTest` | PASS |
+| `MigrationDoesNotDeleteChangedSourceFile` | `LutLibraryServiceTest` | PASS |
+| `OpenRootUsesEncodedLocalFileUrl` (space, `#`, `%`, Chinese) | `LutLibraryServiceTest` | PASS |
+| `FolderOpenFailureIsVisible` (service) and `LutOpenDirectoryFailureIsShownInStatusText` (model) | `LutLibraryServiceTest`, `EditorLookModelTest` | PASS |
+| Persist and rebuild: `PersistedInventoryLoadsWithoutRescanAndDamagedFileIsRebuilt` | `LutLibraryServiceTest` | PASS |
+| Missing lookup: `MissingFileLookupRequestsOneRefreshWithoutRetries` | `LutLibraryServiceTest` | PASS |
+| Import: `ImportRejectsConflictsBeforeCopyingAndKeepsUserFiles` | `LutLibraryServiceTest` | PASS |
+| Root selection: `UseRootIndexesExistingLibraryAndFailuresKeepCurrentRoot` | `LutLibraryServiceTest` | PASS |
+| Favorite conversion: `LegacyFavoritesConvertThroughExactPaths`; model `LutFavoriteToggleStoresEntryInLibrary` | `LutLibraryServiceTest`, `EditorLookModelTest` | PASS |
+| Host exposes `lutLibrary` with its concrete type; reverse-order destruction | `ApplicationModuleHostLifecycleTest`, `ApplicationModuleHostShutdownTest` | PASS |
+| Guard check: disabling the one-refresh-per-path guard and the unchanged-source hash check each failed exactly the matching test (`MissingFileLookupRequestsOneRefreshWithoutRetries`, `MigrationDoesNotDeleteChangedSourceFile`); code restored | `LutLibraryServiceTest` | 2 expected failures, then PASS |
+
+Commands:
+
+```powershell
+cmd /c scripts\msvc_env.cmd --preset win_debug -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake"
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target LutLibraryServiceTest LutMetadataTest LutPackageManifestTest EditorLookModelTest EditorLutPanelQmlTest ApplicationModuleHostLifecycleTest ApplicationModuleHostShutdownTest alcedo_main --parallel 4
+$env:PATH = "D:/Projects/pu-erh_lab/build/debug/vcpkg_installed/x64-windows/debug/bin;" + $env:PATH
+ctest --test-dir build/debug -R "^(LutLibraryServiceTest|LutMetadataTest|LutPackageManifestTest|EditorLookModelTest|EditorLutPanelQmlTest|ApplicationModuleHostLifecycleTest|ApplicationModuleHostShutdownTest)\." --output-on-failure
+```
+
+Suite totals: 86/86 (LutLibraryServiceTest 15, LutMetadataTest 16, LutPackageManifestTest 5,
+EditorLookModelTest 32, EditorLutPanelQmlTest 14, ApplicationModuleHost lifecycle and shutdown 4).
+Build exit code 0, including `alcedo_main`. The full suite was not run (repository rule). No macOS build or run.
+
+**Checklist / exit condition:** all four L2 exit criteria are checked above.
+
+**LOC note:** +2554/-538 across 24 files, above the 1450-1950 estimate. Production C++ is about 1650 lines
+(service 790, migration 470, inventory 350), tests about 690, and the rest is CMake, QML, and the removed
+unregistered `tests/ui/lut_catalog_test.cpp` (143 lines, which encoded basename matching). The largest file
+is `lut_library_service.cpp` (552 lines); no file approaches 1000 lines.
+
+**Remaining gaps:**
+
+- Interim behavior: the editor list shows only the library root (`~/.alcedo/luts` by default). LUTs bundled in
+  the application `LUTs` folder are no longer listed; existing projects still render them by absolute path.
+  Package installation (L3) and root selection UI (L6) make content available again.
+- Root selection, migration, and import have service and QML-invokable APIs but no Settings UI (L6).
+- `ScanLutLibrary` has no stop check, so shutdown waits for a running scan to finish.
+- Service and new catalog messages are English; translations were not added (lupdate is not run casually).
+- A stop between the staging rename and the preference commit leaves a complete copy at the destination.
+  A later migration to that folder is rejected as non-empty; the user can open it with `UseRoot`.
+- Real Explorer/Finder opening is a manual L6 check. No 10,000-entry measurement (L5 budget).
+- The editor model still copies rows into a `QVariantList`; L5 replaces it.
 
 ### L3. Independent package checking and installation
 
@@ -1154,7 +1283,7 @@ the visible library. Revisit an estimate before introducing a larger index or wo
 
 ## 12. Completion records
 
-L1 is recorded under its phase. L2-L6 are not started. Copy this record into the relevant phase after implementation:
+L1 and L2 are recorded under their phases. L3-L6 are not started. Copy this record into the relevant phase after implementation:
 
 ```text
 Phase / date / status:

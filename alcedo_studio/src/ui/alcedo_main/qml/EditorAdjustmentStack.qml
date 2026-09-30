@@ -114,6 +114,7 @@ Item {
         id: lutModel
         objectName: "adjustmentStackLutModel"
         submitter: root.editorSession
+        library: typeof appModules !== "undefined" && appModules ? appModules.lutLibrary : null
     }
 
     function loadFromSnapshot(snapshot) {

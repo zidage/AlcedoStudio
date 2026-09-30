@@ -42,8 +42,8 @@ constexpr std::array<HeaderErrorName, 10> kHeaderErrorNames{{
     {LutHeaderError::kInvalidMetadataField, "invalid_metadata_field"},
 }};
 
-constexpr std::array<std::string_view, 3> kDiagnosticNames{"skipped_link", "unreadable_directory",
-                                                           "unreadable_file"};
+constexpr std::array<std::string_view, 4> kDiagnosticNames{
+    "skipped_link", "unreadable_directory", "unreadable_file", "invalid_package_receipt"};
 
 auto HeaderErrorToName(LutHeaderError error) -> std::string_view {
   for (const HeaderErrorName& item : kHeaderErrorNames) {
@@ -100,6 +100,10 @@ void Enumerate(const std::filesystem::path& root, const LutLibraryScanOptions& o
                std::vector<ScanCandidate>*     candidates,
                std::vector<LutScanDiagnostic>* diagnostics) {
   std::vector<std::filesystem::path> pending{std::filesystem::path{}};
+  for (const std::string& additional : options.additional_relative_directories) {
+    const auto* begin = reinterpret_cast<const char8_t*>(additional.data());
+    pending.emplace_back(std::u8string(begin, begin + additional.size()));
+  }
   while (!pending.empty()) {
     const std::filesystem::path relative_dir = std::move(pending.back());
     pending.pop_back();
@@ -127,9 +131,11 @@ void Enumerate(const std::filesystem::path& root, const LutLibraryScanOptions& o
       }
       if (std::filesystem::is_directory(status)) {
         const std::string name = ToUtf8(relative.filename());
-        if (std::find(options.excluded_directory_names.begin(),
-                      options.excluded_directory_names.end(),
-                      name) == options.excluded_directory_names.end()) {
+        const auto excluded = [](const std::vector<std::string>& list, const std::string& value) {
+          return std::find(list.begin(), list.end(), value) != list.end();
+        };
+        if (!excluded(options.excluded_directory_names, name) &&
+            !excluded(options.excluded_relative_directories, ToUtf8(relative))) {
           pending.push_back(relative);
         }
         continue;
@@ -153,6 +159,8 @@ auto ClassifyCandidate(const ScanCandidate& candidate) -> LutLibraryEntry {
   std::error_code size_error;
   entry.size = std::filesystem::file_size(candidate.absolute_path, size_error);
   if (size_error) entry.size = 0;
+  const auto write_time = std::filesystem::last_write_time(candidate.absolute_path, size_error);
+  if (!size_error) entry.modified_time = write_time.time_since_epoch().count();
 
   LutHeaderReadResult header = ReadLutHeaderFile(candidate.absolute_path);
   entry.header_error         = header.error;
@@ -175,6 +183,7 @@ auto EntryToJson(const LutLibraryEntry& entry) -> Json {
   Json item = {{"name", entry.name},
                {"path", entry.relative_path},
                {"size", entry.size},
+               {"modified", entry.modified_time},
                {"status", HeaderErrorToName(entry.header_error)}};
   if (entry.header_error != LutHeaderError::kNone) {
     item["error"] = entry.header_message;
@@ -187,6 +196,7 @@ auto EntryToJson(const LutLibraryEntry& entry) -> Json {
     item["metadata"] = Json::parse(SerializeLutMetadataJson(*entry.header.metadata));
   }
   if (!entry.sha256.empty()) item["sha256"] = entry.sha256;
+  if (!entry.managed_package_id.empty()) item["package"] = entry.managed_package_id;
   return item;
 }
 
@@ -211,6 +221,7 @@ auto EntryFromJson(const Json& item, std::string* error) -> std::optional<LutLib
     return std::nullopt;
   }
   entry.size              = size->get<std::uint64_t>();
+  entry.modified_time     = item.value("modified", std::int64_t{0});
   const auto header_error = HeaderErrorFromName(status);
   if (!header_error) {
     *error = "inventory entry status is unknown: " + status;
@@ -234,6 +245,7 @@ auto EntryFromJson(const Json& item, std::string* error) -> std::optional<LutLib
     }
   }
   text("sha256", &entry.sha256);
+  text("package", &entry.managed_package_id);
   if (entry.IsOfficial() != !entry.sha256.empty()) {
     *error = "inventory entry hash does not match its declared origin: " + entry.relative_path;
     return std::nullopt;
@@ -290,6 +302,13 @@ auto ScanLutLibrary(const std::filesystem::path& root, const LutLibraryScanOptio
     work();
   }
   return inventory;
+}
+
+auto ClassifyLutLibraryFile(const std::filesystem::path& root, std::string_view relative_path)
+    -> LutLibraryEntry {
+  const auto*                 begin = reinterpret_cast<const char8_t*>(relative_path.data());
+  const std::filesystem::path relative(std::u8string(begin, begin + relative_path.size()));
+  return ClassifyCandidate({root / relative, std::string(relative_path), ToUtf8(relative.stem())});
 }
 
 auto SerializeLutLibraryInventory(const LutLibraryInventory& inventory) -> std::string {
