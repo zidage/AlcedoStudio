@@ -1,0 +1,30 @@
+{
+  "description": "Package inventory records in non-canonical order and the SHA-256 of their canonical encoding (id NUL path NUL size NUL sha256 LF, sorted by path bytes then id bytes). Checked by LutMetadataTest.PythonAndCppInventoryDigestsMatch and scripts/luts/tests.",
+  "records": [
+    {
+      "id": "spectral_film_lut:kodak_vision3_250d_5207:kodak_vision_2383",
+      "path": "kodak_vision3_250d_5207__kodak_vision_2383.cube",
+      "size": 7189127,
+      "sha256": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb"
+    },
+    {
+      "id": "spectral_film_lut:kodak_vision3_250d_5207",
+      "path": "kodak_vision3_250d_5207.cube",
+      "size": 7188990,
+      "sha256": "3e23e8160039594a33894f6564e1b1348bbd7a0088d42c4acb73eeaed59c009d"
+    },
+    {
+      "id": "spectral_film_lut:fujifilm_eterna_500_8573",
+      "path": "nested/fujifilm_eterna_500_8573.cube",
+      "size": 12,
+      "sha256": "2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6"
+    },
+    {
+      "id": "spectral_film_lut:kodak_portra_400:fujifilm_crystal_archive",
+      "path": "胶片/kodak portra 400.cube",
+      "size": 0,
+      "sha256": "18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4"
+    }
+  ],
+  "expected_inventory_sha256": "e22e065b1a08608fa1a508bd0bf54fc98905c0fdabe7d05e9ad613f5e0ef54a4"
+}

@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "kind": "alcedo-lut-package-inventory",
+  "package_id": "spectral_film_lut",
+  "revision": "r1",
+  "file_count": 3,
+  "inventory_sha256": "a55a78b24371b41a1d20c29439b8e6b8be9aef7ef760e2dd8aa48182f9c38eb3",
+  "unpacked_bytes": 1409,
+  "luts": [
+    {
+      "id": "spectral_film_lut:kodak_portra_400:kodak_endura",
+      "path": "kodak_portra_400__kodak_endura.cube",
+      "size": 497,
+      "sha256": "f6bf764125de41bd5e5a67d2ecea50b3c2c2866ff206c3abc1c63a613b98ee4c"
+    },
+    {
+      "id": "spectral_film_lut:kodak_vision3_250d",
+      "path": "kodak_vision3_250d.cube",
+      "size": 408,
+      "sha256": "3f88cbd3f83bf8404a32410e4563c2163dc92248a579d647694ec4515f3547eb"
+    },
+    {
+      "id": "spectral_film_lut:kodak_vision3_250d:kodak_2383",
+      "path": "kodak_vision3_250d__kodak_2383.cube",
+      "size": 497,
+      "sha256": "f597542577b640a7762b14034e2a138fb09b2d807a4a2a8179546366e5e3bbae"
+    }
+  ],
+  "auxiliary_files": [
+    {
+      "path": "LICENSE.txt",
+      "size": 7,
+      "sha256": "cc1d3b0234846714b0aeda6cc34b057b4305bb83dd447fb88f816efeb59a4e96"
+    }
+  ]
+}
