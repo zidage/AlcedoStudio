@@ -679,6 +679,46 @@ TEST(EditorSessionRenderSchedulerPortTest,
   EXPECT_EQ(completed.load(), 1);
 }
 
+// Application exit destroys the viewport sink after Shutdown returns. Shutdown must cancel the
+// in-flight frame and wait for it, so that the frame never presents to a destroyed sink.
+TEST(EditorSessionRenderSchedulerPortTest, ShutdownCancelsAndWaitsForTheInFlightFrame) {
+  HeldImage held = HoldImageInMemory(22);
+  ASSERT_TRUE(held.lease.has_value()) << held.error;
+  auto pipeline_scheduler = std::make_shared<alcedo::PipelineScheduler>(1);
+  auto scheduler          = std::make_shared<EditorSessionRenderSchedulerPort>(pipeline_scheduler);
+  scheduler->SetPipelinePort(held.pipeline_port);
+  RecordingFrameSink sink;
+  scheduler->SetSinkResolver([&sink] { return static_cast<alcedo::IFrameSink*>(&sink); });
+  scheduler->InstallSessionContext(MakeReadyContext(8, 22, 11));
+
+  // Occupy the single worker so that the frame stays in flight until the test releases it.
+  auto release  = std::make_shared<std::promise<void>>();
+  auto released = release->get_future().share();
+  pipeline_scheduler->ScheduleWork([released] { released.wait(); });
+
+  auto request                = MakeRequest(88, 8);
+  request.intent.cancellation = std::make_shared<alcedo::EditorRenderCancellationToken>();
+  auto       done             = std::make_shared<std::promise<FrameCompletion>>();
+  auto       frame            = done->get_future();
+  const auto job_id = scheduler->Schedule(request, [done](bool success, std::string message) {
+    done->set_value(FrameCompletion{success, std::move(message)});
+  });
+  ASSERT_NE(job_id, 0u);
+
+  auto shutdown = std::async(std::launch::async, [scheduler] { scheduler->Shutdown(); });
+  EXPECT_EQ(shutdown.wait_for(200ms), std::future_status::timeout);
+  EXPECT_TRUE(request.intent.cancellation->IsCancelled());
+  release->set_value();
+  ASSERT_EQ(shutdown.wait_for(kFrameTimeout), std::future_status::ready);
+
+  ASSERT_EQ(frame.wait_for(kFrameTimeout), std::future_status::ready);
+  EXPECT_FALSE(frame.get().success);
+  EXPECT_EQ(sink.bind_count(), 0);
+  EXPECT_EQ(sink.ready_count(), 0);
+  EXPECT_EQ(scheduler->Schedule(MakeRequest(89, 8)), 0u);
+  scheduler->Shutdown();
+}
+
 TEST(EditorSessionRenderSchedulerPortTest,
      GeometryOverlayIntentSetsRotatedUncroppedSourceOnlyForEditorRequests) {
   auto overlay                         = MakeRequest(91, 5);

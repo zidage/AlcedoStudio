@@ -113,7 +113,9 @@ EditorSessionRenderSchedulerPort::EditorSessionRenderSchedulerPort(
     std::shared_ptr<alcedo::PipelineScheduler> pipeline_scheduler)
     : pipeline_scheduler_(std::move(pipeline_scheduler)) {}
 
-EditorSessionRenderSchedulerPort::~EditorSessionRenderSchedulerPort() {
+EditorSessionRenderSchedulerPort::~EditorSessionRenderSchedulerPort() { Shutdown(); }
+
+void EditorSessionRenderSchedulerPort::Shutdown() {
   std::shared_ptr<alcedo::EditorRenderCancellationToken> running_cancellation;
   {
     std::scoped_lock lock(mutex_);
