@@ -8,6 +8,7 @@
 #include <map>
 #include <set>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -233,19 +234,31 @@ void AppendDrtParameterChanges(const PipelineDocument& root, const TransferDrtPo
   }
   std::string error;
   if (drt_post.params.has_value()) {
-    nlohmann::json        before_params;
-    EditorParameterTarget odt_target;
-    odt_target.owner_kind = EditorParameterOwnerKind::DrtPost;
-    odt_target.node_id    = drt->Id();
-    odt_target.field_key  = "odt";
-    if (!ReadEditorParameterJson(root, odt_target, &before_params, &error)) {
-      Fail(error.empty() ? "Failed to read target DRT params" : error);
-    }
-    if (before_params.dump() != drt_post.params->dump()) {
+    // The package holds the stored DRT params: the output transform plus the diffusion strength.
+    // History records them as two editor fields, "odt" (output transform only) and "diffusion"
+    // ({"strength"}), so each field gets its own change.
+    DrtParamsModel package_params;
+    package_params.LoadJson(*drt_post.params);
+    const std::pair<std::string, nlohmann::json> fields[] = {
+        {"odt", package_params.OutputTransformJson()},
+        {"diffusion", nlohmann::json{{"strength", package_params.DiffusionStrength()}}},
+    };
+    for (const auto& [field_key, after_value] : fields) {
+      EditorParameterTarget target;
+      target.owner_kind = EditorParameterOwnerKind::DrtPost;
+      target.node_id    = drt->Id();
+      target.field_key  = field_key;
+      nlohmann::json before_value;
+      if (!ReadEditorParameterJson(root, target, &before_value, &error)) {
+        Fail(error.empty() ? "Failed to read target DRT " + field_key : error);
+      }
+      if (before_value.dump() == after_value.dump()) {
+        continue;
+      }
       SetParameterChange change;
-      change.target         = ToPipelineParameterTarget(odt_target);
-      change.before_value   = before_params;
-      change.after_value    = *drt_post.params;
+      change.target         = ToPipelineParameterTarget(target);
+      change.before_value   = std::move(before_value);
+      change.after_value    = after_value;
       change.before_enabled = true;
       change.after_enabled  = true;
       changes->push_back(std::move(change));

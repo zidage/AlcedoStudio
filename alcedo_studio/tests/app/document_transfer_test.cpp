@@ -760,6 +760,47 @@ TEST(DocumentTransferTest, DrtOnlyPasteKeepsTargetRootGrades) {
   EXPECT_EQ(working.Drt()->Params().ToJson().dump(), source_drt_json.dump());
 }
 
+// Regression: the stored DRT params carry diffusion.strength, which the "odt" field rejects.
+// Pasting DRT params from an image with a diffusion filter failed replay with
+// "Unknown parameter: odt.diffusion".
+TEST(DocumentTransferTest, DrtPasteAppliesSourceDiffusionStrengthAndOutputTransform) {
+  auto source                = CreateDefaultPipelineDocument();
+  auto drt_payload           = source.Drt()->Params().Params();
+  drt_payload.peak_luminance = 250.0f;
+  source.Drt()->Params().ReplaceParams(drt_payload);
+  source.Drt()->Params().ApplyDiffusionStrength(0.4f);
+  const auto source_drt_json = source.Drt()->Params().ToJson();
+  ASSERT_TRUE(source_drt_json.contains("diffusion"));
+
+  AdjustmentTransferSelection selection;
+  selection.nodes.push_back(
+      {source.Drt()->Id(), {{AdjustmentTransferItemKind::DrtParameters, std::nullopt}}});
+  const auto package = AdjustmentTransferPackageBuilder::Build(source, selection);
+
+  const auto target  = CreateDefaultPipelineDocument();
+  const auto working = ApplyPasteToClone(PlanSelectivePaste(package, target), target);
+  EXPECT_EQ(working.Drt()->Params().ToJson().dump(), source_drt_json.dump());
+  EXPECT_FLOAT_EQ(working.Drt()->Params().DiffusionStrength(), 0.4f);
+}
+
+TEST(DocumentTransferTest, DrtPasteFromSourceWithoutDiffusionClearsTargetDiffusion) {
+  auto source                = CreateDefaultPipelineDocument();
+  auto drt_payload           = source.Drt()->Params().Params();
+  drt_payload.peak_luminance = 250.0f;
+  source.Drt()->Params().ReplaceParams(drt_payload);
+
+  AdjustmentTransferSelection selection;
+  selection.nodes.push_back(
+      {source.Drt()->Id(), {{AdjustmentTransferItemKind::DrtParameters, std::nullopt}}});
+  const auto package = AdjustmentTransferPackageBuilder::Build(source, selection);
+
+  auto       target  = CreateDefaultPipelineDocument();
+  target.Drt()->Params().ApplyDiffusionStrength(0.6f);
+  const auto working = ApplyPasteToClone(PlanSelectivePaste(package, target), target);
+  EXPECT_EQ(working.Drt()->Params().ToJson().dump(), source.Drt()->Params().ToJson().dump());
+  EXPECT_FLOAT_EQ(working.Drt()->Params().DiffusionStrength(), 0.0f);
+}
+
 TEST(DocumentTransferTest, PartialDrtPasteKeepsUnselectedTargetRootValues) {
   auto source = CreateDefaultPipelineDocument();
   test::PatchDocumentField(&source, test::DrtPostFieldTarget("clarity"),
