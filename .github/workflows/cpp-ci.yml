@@ -37,6 +37,13 @@ jobs:
       - name: Install dependencies
         run: |
           brew update
+          # The runner image ships openssl@1.1 linked at /opt/homebrew/bin/openssl.
+          # openimageio/grpc pull in an openssl@3 upgrade whose `brew link` collides
+          # with that symlink, which makes `brew install` exit 1 right after the
+          # opencolorio caveats. Unlink the stale keg first so the link succeeds.
+          if brew list --formula openssl@1.1 >/dev/null 2>&1; then
+            brew unlink openssl@1.1
+          fi
           # grpc + protobuf: required by the semantic search proto codegen under
           # PUERHLAB_USE_SYSTEM_GRPC_PROTOBUF=ON (see alcedo_studio/src/third_party/CMakeLists.txt).
           brew install cmake ninja qt opencv opencolorio duckdb exiv2 glib little-cms2 highway openimageio pkg-config xxhash eigen libomp grpc protobuf
