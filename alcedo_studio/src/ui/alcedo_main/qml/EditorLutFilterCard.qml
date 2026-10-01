@@ -8,7 +8,8 @@ import QtQuick.Layouts
 // writes one LutLibraryModel predicate; choosing the selected bar again returns
 // that dimension to All. Favorites is the first choice, above the sections.
 // The model owns the choices, their counts, and which dimensions apply (Brand
-// and Print only outside General, Print only when a candidate declares one).
+// and Print only outside General, Print only when the library declares a print
+// film or paper; each print is one choice).
 // This sidebar keeps no filter state of its own.
 //
 // Docked, it sits on the browser's card surface with no chrome; `floating`
@@ -34,7 +35,7 @@ Rectangle {
                                             && (String(browser.category) !== "all"
                                                 || String(browser.source) !== ""
                                                 || String(browser.brand) !== ""
-                                                || String(browser.print) !== "all"
+                                                || String(browser.print) !== ""
                                                 || browser.favoritesOnly === true)
 
     radius: appTheme.controlRadiusSmall
@@ -346,8 +347,8 @@ Rectangle {
                              && root.browser.printFilterAvailable
                     title: qsTr("Print")
                     dimension: "print"
-                    allValue: "all"
-                    choices: root.specificChoices(root.browser ? root.browser.printChoices : [], "all")
+                    allValue: ""
+                    choices: root.specificChoices(root.browser ? root.browser.printChoices : [], "")
                 }
             }
         }

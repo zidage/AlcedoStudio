@@ -2,7 +2,7 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-// LUT browser model (plan L5): metadata filters, print presence, search ranking, favorites,
+// LUT browser model (plan L5): metadata filters, print choices, search ranking, favorites,
 // selection without resets, and bounded row instantiation at 1,000 and 10,000 entries.
 
 #include "ui/alcedo_main/album_backend/lut_library_model.hpp"
@@ -42,17 +42,19 @@ struct EntryFacts {
   const char* category;  // "general" or "film_simulation"
   const char* source;    // source ID or ""
   const char* brand;     // normalized film brand or ""
-  bool        has_print;
+  const char* print;     // print ID or ""
 };
 
 const std::vector<EntryFacts> kFacts = {
-    {"library:kodak/portra_400.cube", "film_simulation", "spectral_film_lut", "kodak", false},
-    {"library:kodak/vision3_2383.cube", "film_simulation", "spectral_film_lut", "kodak", true},
-    {"library:fuji/eterna_archive.cube", "film_simulation", "spektrafilm_lut", "fujifilm", true},
-    {"library:fuji/provia.cube", "film_simulation", "spektrafilm_lut", "fujifilm", false},
-    {"library:third/acme_paper.cube", "film_simulation", "acme_lut", "acme", true},
-    {"library:general/teal.cube", "general", "", "", false},
-    {"library:general/mono.cube", "general", "my_tool", "", false},
+    {"library:kodak/portra_400.cube", "film_simulation", "spectral_film_lut", "kodak", ""},
+    {"library:kodak/vision3_2383.cube", "film_simulation", "spectral_film_lut", "kodak",
+     "kodak-2383"},
+    {"library:fuji/eterna_archive.cube", "film_simulation", "spektrafilm_lut", "fujifilm",
+     "crystal-archive"},
+    {"library:fuji/provia.cube", "film_simulation", "spektrafilm_lut", "fujifilm", ""},
+    {"library:third/acme_paper.cube", "film_simulation", "acme_lut", "acme", "acme-paper"},
+    {"library:general/teal.cube", "general", "", "", ""},
+    {"library:general/mono.cube", "general", "my_tool", "", ""},
 };
 
 auto ClassifiedLibraryFiles() -> std::vector<std::pair<std::string, std::string>> {
@@ -90,8 +92,7 @@ auto Expected(const std::string& category, const std::string& source, const std:
     if (category != "all" && facts.category != category) continue;
     if (!source.empty() && facts.source != source) continue;
     if (film && !brand.empty() && facts.brand != brand) continue;
-    if (film && print == "with_print" && !facts.has_print) continue;
-    if (film && print == "no_print" && facts.has_print) continue;
+    if (film && !print.empty() && facts.print != print) continue;
     if (favorites_only && favorites.count(facts.entry_id) == 0) continue;
     ids.push_back(QString::fromUtf8(facts.entry_id));
   }
@@ -127,7 +128,8 @@ TEST(LutLibraryModelTest, FiltersUseIntersectionAndAllRemovesOnePredicate) {
   const std::vector<std::string> sources    = {"", "spectral_film_lut", "spektrafilm_lut",
                                                "acme_lut", "my_tool"};
   const std::vector<std::string> brands     = {"", "kodak", "fujifilm", "acme"};
-  const std::vector<std::string> prints     = {"all", "with_print", "no_print"};
+  const std::vector<std::string> prints     = {"", "kodak-2383", "crystal-archive",
+                                               "acme-paper"};
   int                            checked    = 0;
   for (const std::string& category : categories) {
     for (const std::string& source : sources) {
@@ -151,7 +153,7 @@ TEST(LutLibraryModelTest, FiltersUseIntersectionAndAllRemovesOnePredicate) {
       }
     }
   }
-  EXPECT_EQ(checked, 3 * 5 * 4 * 3 * 2);
+  EXPECT_EQ(checked, 3 * 5 * 4 * 4 * 2);
 
   // Facet counts apply every other predicate: with the Kodak brand, the source choice counts
   // only Kodak entries, and each brand count ignores the chosen brand.
@@ -164,39 +166,49 @@ TEST(LutLibraryModelTest, FiltersUseIntersectionAndAllRemovesOnePredicate) {
   EXPECT_EQ(ChoiceCount(model.brandChoices(), QString()), 5);
 }
 
-TEST(LutLibraryModelTest, PrintPresenceCombinesPrintFilmAndPaper) {
+TEST(LutLibraryModelTest, PrintChoicesListEveryPrintFilmAndPaper) {
   TemporaryLutLibrary library(ClassifiedLibraryFiles());
   LutLibraryModel     model;
   model.setLibrary(library.Service());
   model.setCategory(QStringLiteral("film_simulation"));
   ASSERT_TRUE(model.printFilterAvailable());
 
-  model.setPrint(QStringLiteral("with_print"));
-  // Print film (2383) and photographic paper (Crystal Archive, Acme Paper) both count.
-  EXPECT_EQ(SortedRowEntryIds(model),
-            (QStringList{"library:fuji/eterna_archive.cube", "library:kodak/vision3_2383.cube",
-                         "library:third/acme_paper.cube"}));
-  model.setPrint(QStringLiteral("no_print"));
-  EXPECT_EQ(SortedRowEntryIds(model),
-            (QStringList{"library:fuji/provia.cube", "library:kodak/portra_400.cube"}));
-  model.setPrint(QStringLiteral("all"));
-  EXPECT_EQ(model.count(), 5);
-  EXPECT_EQ(ChoiceCount(model.printChoices(), QStringLiteral("with_print")), 3);
-  EXPECT_EQ(ChoiceCount(model.printChoices(), QStringLiteral("no_print")), 2);
-  EXPECT_EQ(ChoiceCount(model.printChoices(), QStringLiteral("all")), 5);
+  // Each print film (2383) and photographic paper (Crystal Archive, Acme Paper) is a choice,
+  // named by the print and counted by the entries that declare it.
+  EXPECT_EQ(ChoiceCount(model.printChoices(), QString()), 5);
+  EXPECT_EQ(ChoiceCount(model.printChoices(), QStringLiteral("kodak-2383")), 1);
+  EXPECT_EQ(ChoiceCount(model.printChoices(), QStringLiteral("crystal-archive")), 1);
+  EXPECT_EQ(ChoiceCount(model.printChoices(), QStringLiteral("acme-paper")), 1);
+  QStringList labels;
+  for (const QVariant& choice : model.printChoices()) {
+    labels.push_back(choice.toMap().value(QStringLiteral("label")).toString());
+  }
+  EXPECT_EQ(labels, (QStringList{"All", "Acme Paper", "Crystal Archive", "2383"}));
 
-  // Brand and source still intersect the print presence.
-  model.setPrint(QStringLiteral("with_print"));
-  model.setBrand(QStringLiteral("Kodak"));
+  model.setPrint(QStringLiteral("crystal-archive"));
+  EXPECT_EQ(RowEntryIds(model), QStringList{"library:fuji/eterna_archive.cube"});
+  EXPECT_EQ(model.print(), QStringLiteral("crystal-archive"));
+  // Print keys are normalized like brands.
+  model.setPrint(QStringLiteral("KODAK-2383"));
+  EXPECT_EQ(model.print(), QStringLiteral("kodak-2383"));
   EXPECT_EQ(RowEntryIds(model), QStringList{"library:kodak/vision3_2383.cube"});
+  model.setPrint({});
+  EXPECT_EQ(model.count(), 5);
+
+  // Brand and source still intersect the print, and print counts follow them.
+  model.setBrand(QStringLiteral("Kodak"));
+  EXPECT_EQ(ChoiceCount(model.printChoices(), QStringLiteral("kodak-2383")), 1);
+  EXPECT_EQ(ChoiceCount(model.printChoices(), QStringLiteral("crystal-archive")), 0);
+  model.setPrint(QStringLiteral("crystal-archive"));
+  EXPECT_EQ(model.count(), 0);
   model.setBrand({});
   model.setSource(QStringLiteral("spektrafilm_lut"));
   EXPECT_EQ(RowEntryIds(model), QStringList{"library:fuji/eterna_archive.cube"});
 }
 
-TEST(LutLibraryModelTest, ThirdPartyPrintMetadataAddsPresenceFilter) {
+TEST(LutLibraryModelTest, ThirdPartyPrintMetadataAddsPrintChoice) {
   {
-    // A source the application has never seen: print presence works without source code.
+    // A source the application has never seen: its print is a choice without source code.
     TemporaryLutLibrary library(
         {{"new/with_paper.cube",
           CubeWithMetadata(FilmMetadata("new:a", "new_generator", "New Generator", "stock-a",
@@ -208,11 +220,10 @@ TEST(LutLibraryModelTest, ThirdPartyPrintMetadataAddsPresenceFilter) {
     LutLibraryModel model;
     model.setLibrary(library.Service());
     EXPECT_TRUE(model.printFilterAvailable());
-    EXPECT_EQ(ChoiceCount(model.printChoices(), QStringLiteral("all")), 2);
-    EXPECT_EQ(ChoiceCount(model.printChoices(), QStringLiteral("with_print")), 1);
-    EXPECT_EQ(ChoiceCount(model.printChoices(), QStringLiteral("no_print")), 1);
+    EXPECT_EQ(ChoiceCount(model.printChoices(), QString()), 2);
+    EXPECT_EQ(ChoiceCount(model.printChoices(), QStringLiteral("paper-x")), 1);
     EXPECT_EQ(ChoiceCount(model.sourceChoices(), QStringLiteral("new_generator")), 2);
-    model.setPrint(QStringLiteral("with_print"));
+    model.setPrint(QStringLiteral("paper-x"));
     EXPECT_EQ(RowEntryIds(model), QStringList{"library:new/with_paper.cube"});
   }
   {
@@ -230,23 +241,23 @@ TEST(LutLibraryModelTest, GeneralCategoryClearsFilmPredicates) {
   model.setLibrary(library.Service());
   model.setCategory(QStringLiteral("film_simulation"));
   model.setBrand(QStringLiteral("Kodak"));
-  model.setPrint(QStringLiteral("with_print"));
+  model.setPrint(QStringLiteral("kodak-2383"));
   ASSERT_EQ(RowEntryIds(model), QStringList{"library:kodak/vision3_2383.cube"});
 
   QSignalSpy filter_spy(&model, &LutLibraryModel::filterChanged);
   model.setCategory(QStringLiteral("general"));
   EXPECT_EQ(filter_spy.count(), 1);
   EXPECT_EQ(model.brand(), QString());
-  EXPECT_EQ(model.print(), QStringLiteral("all"));
+  EXPECT_EQ(model.print(), QString());
   EXPECT_FALSE(model.filmFiltersAvailable());
   // General entries have no film metadata and stay reachable.
   EXPECT_EQ(SortedRowEntryIds(model),
             (QStringList{"library:general/mono.cube", "library:general/teal.cube"}));
   // Film predicates do not apply to General; the source predicate still does.
   model.setBrand(QStringLiteral("Kodak"));
-  model.setPrint(QStringLiteral("no_print"));
+  model.setPrint(QStringLiteral("kodak-2383"));
   EXPECT_EQ(model.brand(), QString());
-  EXPECT_EQ(model.print(), QStringLiteral("all"));
+  EXPECT_EQ(model.print(), QString());
   model.setSource(QStringLiteral("my_tool"));
   EXPECT_EQ(RowEntryIds(model), QStringList{"library:general/mono.cube"});
 

@@ -417,6 +417,82 @@ TEST(EditorLutBrowserPanelQmlTest, FavoritesFacetListLayoutAndFilterFold) {
   EXPECT_TRUE(h.warnings.isEmpty()) << h.Warnings();
 }
 
+TEST(EditorLutBrowserPanelQmlTest, NarrowPageShrinksTilesThenClosesTheFilters) {
+  BrowserHarness h;
+  ASSERT_NE(h.panel, nullptr) << h.Warnings();
+  auto* filter_host = h.Find(QStringLiteral("editorLutFilterHost"));
+  ASSERT_NE(filter_host, nullptr);
+  const int min_tile = AppTheme::Instance().editorLutTileMinWidth();
+  auto tiles_have_width = [&](qreal below) {
+    const QList<QQuickItem*> tiles = h.Tiles();
+    if (tiles.isEmpty()) return false;
+    for (QQuickItem* tile : tiles) {
+      if (tile->width() <= 0.0 || tile->width() >= below) return false;
+    }
+    return true;
+  };
+
+  // Narrower than one full tile column beside the sidebar: the sidebar stays docked and the
+  // single column shrinks instead of being covered.
+  h.window->setWidth(340);
+  ASSERT_TRUE(WaitUntil([&] { return tiles_have_width(min_tile); }, 2000));
+  EXPECT_TRUE(h.panel->property("filterDocked").toBool());
+  EXPECT_TRUE(h.panel->property("filtersOpen").toBool());
+  EXPECT_TRUE(filter_host->isVisible());
+  EXPECT_EQ(h.result->property("columns").toInt(), 1);
+  EXPECT_GE(h.result->x(), filter_host->width());
+
+  // Narrower still: the sidebar closes and the results take the whole page. The user's
+  // choice is kept, so the sidebar returns once the page is wide enough.
+  h.window->setWidth(280);
+  ASSERT_TRUE(WaitUntil([&] { return !filter_host->isVisible(); }, 2000));
+  EXPECT_FALSE(h.panel->property("filtersOpen").toBool());
+  EXPECT_TRUE(h.panel->property("filtersVisible").toBool());
+  EXPECT_NEAR(h.result->x(), 0.0, 0.5);
+  EXPECT_TRUE(tiles_have_width(h.result->width()));
+  h.window->setWidth(660);
+  ASSERT_TRUE(WaitUntil([&] { return filter_host->isVisible(); }, 2000));
+  EXPECT_TRUE(h.panel->property("filtersOpen").toBool());
+
+  // Opened by hand on a narrow page, the sidebar floats over the results; narrowing the
+  // page again after it docks closes it.
+  h.window->setWidth(280);
+  ASSERT_TRUE(WaitUntil([&] { return !filter_host->isVisible(); }, 2000));
+  ASSERT_TRUE(QMetaObject::invokeMethod(h.panel, "toggleFilters"));
+  ASSERT_TRUE(WaitUntil([&] { return filter_host->isVisible(); }, 2000));
+  auto* filter_card = h.Find(QStringLiteral("editorLutFilterCard"));
+  ASSERT_NE(filter_card, nullptr);
+  EXPECT_TRUE(filter_card->property("floating").toBool());
+  ASSERT_TRUE(QMetaObject::invokeMethod(h.panel, "toggleFilters"));
+  ASSERT_TRUE(WaitUntil([&] { return !filter_host->isVisible(); }, 2000));
+  EXPECT_FALSE(h.panel->property("filtersVisible").toBool());
+  EXPECT_TRUE(h.warnings.isEmpty()) << h.Warnings();
+}
+
+TEST(EditorLutBrowserPanelQmlTest, PrintSectionListsEachPrintFilm) {
+  BrowserHarness h;
+  ASSERT_NE(h.panel, nullptr) << h.Warnings();
+  auto* section = h.Find(QStringLiteral("editorLutPrintSection"));
+  ASSERT_NE(section, nullptr);
+  EXPECT_TRUE(section->isVisible());
+  EXPECT_EQ(h.Find(QStringLiteral("editorLutFacet_print_with_print")), nullptr);
+  auto* print = h.Find(QStringLiteral("editorLutFacet_print_kodak_vision_2383"));
+  ASSERT_NE(print, nullptr);
+  ASSERT_TRUE(QMetaObject::invokeMethod(print, "activate"));
+  EXPECT_EQ(h.browser.print(), QStringLiteral("kodak_vision_2383"));
+  ASSERT_TRUE(WaitUntil([&] { return h.Tiles().size() == 1; }, 2000));
+  EXPECT_EQ(h.Tiles().front()->property("entryId").toString(),
+            QStringLiteral("library:films/kodak_vision3_250d__kodak_vision_2383.cube"));
+  EXPECT_TRUE(h.Find(QStringLiteral("editorLutClearFilters"))->isVisible());
+
+  print = h.Find(QStringLiteral("editorLutFacet_print_kodak_vision_2383"));
+  ASSERT_NE(print, nullptr);
+  ASSERT_TRUE(QMetaObject::invokeMethod(print, "activate"));
+  EXPECT_EQ(h.browser.print(), QString());
+  ASSERT_TRUE(WaitUntil([&] { return h.Tiles().size() == 5; }, 2000));
+  EXPECT_TRUE(h.warnings.isEmpty()) << h.Warnings();
+}
+
 TEST(EditorLutBrowserPanelQmlTest, EmptyLibraryLinksToLutSettings) {
   BrowserHarness h({});
   ASSERT_NE(h.panel, nullptr) << h.Warnings();

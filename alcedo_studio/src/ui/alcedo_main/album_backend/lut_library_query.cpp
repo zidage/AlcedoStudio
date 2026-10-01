@@ -193,7 +193,11 @@ auto BuildLutSearchKeys(const LutLibraryEntry& entry, std::string entry_id) -> L
       add_field(metadata->film->id);
     }
     if (metadata->print) {
-      keys.has_print = true;
+      keys.has_print   = true;
+      keys.print_label = ToQString(metadata->print->name.empty() ? metadata->print->id
+                                                                 : metadata->print->name);
+      keys.print_key   = NormalizeLutSearchText(
+          metadata->print->id.empty() ? keys.print_label : ToQString(metadata->print->id));
       add_field(metadata->print->brand);
       add_field(metadata->print->name);
       add_field(metadata->print->id);
@@ -263,9 +267,9 @@ auto LutKeysPassFilter(const LutSearchKeys& keys, bool favorite, const LutFacetF
       keys.brand_key != filter.brand_key) {
     return false;
   }
-  if (film_predicates && applies(LutFacetDimension::kPrint)) {
-    if (filter.print == LutPrintFilter::kWithPrint && !keys.has_print) return false;
-    if (filter.print == LutPrintFilter::kNoPrint && keys.has_print) return false;
+  if (film_predicates && applies(LutFacetDimension::kPrint) && !filter.print_key.isEmpty() &&
+      keys.print_key != filter.print_key) {
+    return false;
   }
   if (applies(LutFacetDimension::kFavorites) && filter.favorites_only && !favorite) return false;
   return true;

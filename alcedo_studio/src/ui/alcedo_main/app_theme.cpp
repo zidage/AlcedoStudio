@@ -1171,6 +1171,8 @@ auto AppTheme::editorLutBrowserPanelWidth() const -> int { return 560; }
 auto AppTheme::editorLutBrowserPanelWidthMin() const -> int { return 280; }
 auto AppTheme::editorLutBrowserFilterWidth() const -> int { return 184; }
 auto AppTheme::editorLutTileMinWidth() const -> int { return 128; }
+// Narrowest single tile column the docked filter sidebar leaves beside it.
+auto AppTheme::editorLutTileCompactWidth() const -> int { return 88; }
 auto AppTheme::editorLutTileIconSize() const -> int { return 36; }
 auto AppTheme::collectionsSidebarWidth() const -> int { return 276; }
 auto AppTheme::lineHeightCaption() const -> int { return 14; }
