@@ -90,6 +90,17 @@ class AppTheme final : public QObject {
   Q_PROPERTY(int editorLutTileIconSize READ editorLutTileIconSize CONSTANT)
   // Persistent left collections column in the application shell (see DESIGN.md).
   Q_PROPERTY(int collectionsSidebarWidth READ collectionsSidebarWidth CONSTANT)
+  // Welcome surface card geometry and the skeleton placeholder cycle (see DESIGN.md
+  // "Welcome surface").
+  Q_PROPERTY(int welcomeCardWidth READ welcomeCardWidth CONSTANT)
+  Q_PROPERTY(int welcomeCardHeight READ welcomeCardHeight CONSTANT)
+  Q_PROPERTY(int welcomeSidebarWidth READ welcomeSidebarWidth CONSTANT)
+  Q_PROPERTY(int welcomeCoverWidth READ welcomeCoverWidth CONSTANT)
+  Q_PROPERTY(int welcomeCoverCompactWidth READ welcomeCoverCompactWidth CONSTANT)
+  Q_PROPERTY(int welcomeCoverHeight READ welcomeCoverHeight CONSTANT)
+  Q_PROPERTY(int welcomeInfoMinWidth READ welcomeInfoMinWidth CONSTANT)
+  Q_PROPERTY(int welcomeEmptyContentWidth READ welcomeEmptyContentWidth CONSTANT)
+  Q_PROPERTY(int skeletonCycleMs READ skeletonCycleMs CONSTANT)
   // Line heights (px) for QML Label lineHeight when using fixed pixel sizes.
   Q_PROPERTY(int lineHeightCaption READ lineHeightCaption CONSTANT)
   Q_PROPERTY(int lineHeightBody READ lineHeightBody CONSTANT)
@@ -317,6 +328,15 @@ class AppTheme final : public QObject {
   auto        editorLutTileCompactWidth() const -> int;
   auto        editorLutTileIconSize() const -> int;
   auto        collectionsSidebarWidth() const -> int;
+  auto        welcomeCardWidth() const -> int;
+  auto        welcomeCardHeight() const -> int;
+  auto        welcomeSidebarWidth() const -> int;
+  auto        welcomeCoverWidth() const -> int;
+  auto        welcomeCoverCompactWidth() const -> int;
+  auto        welcomeCoverHeight() const -> int;
+  auto        welcomeInfoMinWidth() const -> int;
+  auto        welcomeEmptyContentWidth() const -> int;
+  auto        skeletonCycleMs() const -> int;
   auto        lineHeightCaption() const -> int;
   auto        lineHeightBody() const -> int;
   auto        lineHeightTitle() const -> int;

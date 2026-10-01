@@ -6358,38 +6358,208 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     </message>
 </context>
 <context>
+    <name>WelcomeCoverMosaic</name>
+    <message>
+        <location filename="../qml/WelcomeCoverMosaic.qml" line="82"/>
+        <source>Project cover</source>
+        <translation>项目封面</translation>
+    </message>
+</context>
+<context>
     <name>WelcomeDialog</name>
     <message>
-        <location filename="../qml/WelcomeDialog.qml" line="+168"/>
+        <location filename="../qml/WelcomeDialog.qml" line="163"/>
+        <source>CUDA unavailable</source>
+        <translation>CUDA 不可用</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="315"/>
+        <source>Welcome</source>
+        <translation>欢迎</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="338"/>
+        <source>Alcedo Studio</source>
+        <translation>Alcedo Studio</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="341"/>
+        <source>Alcedo</source>
+        <translation>Alcedo</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="357"/>
+        <source>Studio</source>
+        <translation>Studio</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="369"/>
+        <source>Each project is one .alcd file that holds the photo references, the edit history and the versions.</source>
+        <translation>每个项目是一个 .alcd 文件，照片引用、编辑记录和版本都在里面。</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="391"/>
+        <source>Open Project…</source>
+        <translation>打开项目…</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="402"/>
+        <location line="+101"/>
+        <source>New Project…</source>
+        <translation>新建项目…</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="470"/>
+        <source>Create your first project</source>
+        <translation>新建第一个项目</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="481"/>
+        <source>Choose a folder for the project file, then import your photos. Alcedo does not move or change the original photos.</source>
+        <translation>选一个文件夹存放项目文件，然后导入照片。Alcedo 不会移动或改写原始照片。</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="513"/>
+        <source>Open Existing Project…</source>
+        <translation>打开已有项目…</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="571"/>
+        <source>Interface language</source>
+        <translation>界面语言</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="667"/>
+        <source>Quit</source>
+        <translation>退出</translation>
+    </message>
+</context>
+<context>
+    <name>WelcomeNewProjectForm</name>
+    <message>
+        <location filename="../qml/WelcomeNewProjectForm.qml" line="16"/>
+        <location line="+13"/>
+        <source>Untitled Project</source>
+        <translation>未命名项目</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeNewProjectForm.qml" line="40"/>
+        <location line="+110"/>
+        <source>Select Project Storage Location</source>
+        <translation>选择项目存储位置</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeNewProjectForm.qml" line="52"/>
+        <source>Back</source>
+        <translation>返回</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeNewProjectForm.qml" line="62"/>
+        <source>New Project</source>
+        <translation>新建项目</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeNewProjectForm.qml" line="73"/>
+        <source>Configure your workspace settings.</source>
+        <translation>配置你的工作区设置。</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeNewProjectForm.qml" line="94"/>
+        <location line="+22"/>
+        <source>Project Name</source>
+        <translation>项目名称</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeNewProjectForm.qml" line="133"/>
+        <source>Storage Location</source>
+        <translation>存储位置</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeNewProjectForm.qml" line="143"/>
+        <source>Select a parent folder...</source>
+        <translation>选择父文件夹...</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeNewProjectForm.qml" line="174"/>
+        <source>Create Project</source>
+        <translation>创建项目</translation>
+    </message>
+</context>
+<context>
+    <name>WelcomeProjectOverview</name>
+    <message>
+        <location filename="../qml/WelcomeProjectOverview.qml" line="37"/>
+        <source>Continue your last project</source>
+        <translation>继续上次的项目</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeProjectOverview.qml" line="120"/>
+        <source>Photos</source>
+        <translation>照片</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeProjectOverview.qml" line="129"/>
+        <source>Edited</source>
+        <translation>已编辑</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeProjectOverview.qml" line="138"/>
+        <source>Capture dates</source>
+        <translation>拍摄日期</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeProjectOverview.qml" line="155"/>
+        <source>Continue Editing</source>
+        <translation>继续编辑</translation>
+    </message>
+</context>
+<context>
+    <name>WelcomeProjectPreviewAdapter</name>
+    <message>
+        <location filename="../qml/WelcomeProjectPreviewAdapter.qml" line="98"/>
+        <source>No capture dates</source>
+        <translation>无拍摄日期</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeProjectPreviewAdapter.qml" line="104"/>
+        <location line="+1"/>
+        <source>%1 to %2</source>
+        <translation>%1 至 %2</translation>
+    </message>
+</context>
+<context>
+    <name>WelcomeRecentProjectList</name>
+    <message>
+        <location filename="../qml/WelcomeRecentProjectList.qml" line="25"/>
         <source>Opened recently</source>
         <translation>最近打开</translation>
     </message>
     <message>
-        <location line="+5"/>
+        <location filename="../qml/WelcomeRecentProjectList.qml" line="30"/>
         <source>Opened just now</source>
         <translation>刚刚打开</translation>
     </message>
     <message numerus="yes">
-        <location line="+3"/>
+        <location filename="../qml/WelcomeRecentProjectList.qml" line="33"/>
         <source>Opened %n minute(s) ago</source>
         <translation>
             <numerusform>%n 分钟前打开</numerusform>
         </translation>
     </message>
     <message numerus="yes">
-        <location line="+5"/>
+        <location filename="../qml/WelcomeRecentProjectList.qml" line="38"/>
         <source>Opened %n hour(s) ago</source>
         <translation>
             <numerusform>%n 小时前打开</numerusform>
         </translation>
     </message>
     <message>
-        <location line="+5"/>
+        <location filename="../qml/WelcomeRecentProjectList.qml" line="43"/>
         <source>Opened yesterday</source>
         <translation>昨天打开</translation>
     </message>
     <message numerus="yes">
-        <location line="+3"/>
+        <location filename="../qml/WelcomeRecentProjectList.qml" line="46"/>
         <location line="+5"/>
         <source>Opened %n day(s) ago</source>
         <translation>
@@ -6397,101 +6567,19 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         </translation>
     </message>
     <message>
-        <location line="-2"/>
+        <location filename="../qml/WelcomeRecentProjectList.qml" line="49"/>
         <source>Opened last week</source>
         <translation>上周打开</translation>
     </message>
     <message>
-        <location line="-147"/>
-        <location line="+17"/>
-        <source>Untitled Project</source>
-        <translation>未命名项目</translation>
+        <location filename="../qml/WelcomeRecentProjectList.qml" line="56"/>
+        <source>Other recent projects</source>
+        <translation>其他最近项目</translation>
     </message>
     <message>
-        <location line="+14"/>
-        <source>Select Project Storage Location</source>
-        <translation>选择项目存储位置</translation>
-    </message>
-    <message>
-        <location line="+11"/>
-        <source>CUDA unavailable</source>
-        <translation>CUDA 不可用</translation>
-    </message>
-    <message>
-        <location line="+204"/>
-        <source>Alcedo</source>
-        <translation>Alcedo</translation>
-    </message>
-    <message>
-        <location line="+8"/>
-        <source>Studio</source>
-        <translation>Studio</translation>
-    </message>
-    <message>
-        <location line="+17"/>
-        <source>Load Project</source>
-        <translation>加载项目</translation>
-    </message>
-    <message>
-        <location line="+66"/>
-        <location line="+523"/>
-        <source>Create Project</source>
-        <translation>创建项目</translation>
-    </message>
-    <message>
-        <location line="-420"/>
-        <source>Exit Application</source>
-        <translation>退出应用</translation>
-    </message>
-    <message>
-        <location line="+48"/>
-        <source>Recent Projects</source>
-        <translation>最近项目</translation>
-    </message>
-    <message>
-        <location line="+14"/>
-        <source>Collapse</source>
-        <translation>收起</translation>
-    </message>
-    <message>
-        <location line="+0"/>
-        <source>View All</source>
-        <translation>查看全部</translation>
-    </message>
-    <message>
-        <location line="+23"/>
-        <source>No recent projects yet</source>
-        <translation>暂无最近项目</translation>
-    </message>
-    <message>
-        <location line="+9"/>
-        <source>Projects you open or create here will appear in this list.</source>
-        <translation>你在这里打开或创建的项目会显示在此列表中。</translation>
-    </message>
-    <message>
-        <location line="+144"/>
-        <source>New Project</source>
-        <translation>新建项目</translation>
-    </message>
-    <message>
-        <location line="+8"/>
-        <source>Configure your workspace settings.</source>
-        <translation>配置你的工作区设置。</translation>
-    </message>
-    <message>
-        <location line="+28"/>
-        <source>Project Name</source>
-        <translation>项目名称</translation>
-    </message>
-    <message>
-        <location line="+35"/>
-        <source>Storage Location</source>
-        <translation>存储位置</translation>
-    </message>
-    <message>
-        <location line="+28"/>
-        <source>Select a parent folder...</source>
-        <translation>选择父文件夹...</translation>
+        <location filename="../qml/WelcomeRecentProjectList.qml" line="75"/>
+        <source>No other recent projects</source>
+        <translation>没有其他最近项目</translation>
     </message>
 </context>
 <context>

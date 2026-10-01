@@ -303,3 +303,61 @@ resize down to the minimum width.
 Check both themes: package rows in every status, a failed check, a long
 Unicode root path, the move confirmation with and without an error, and a
 running move with Cancel.
+
+## Welcome surface (welcome overview plan Phase 2)
+
+### `WelcomeDialog.qml`
+
+- Owns the modal shell (blur backdrop + `overlayColor`), the card, the left
+  column, and the right column switch: overview, no-recent-project well, or
+  the new-project form. It reads project data only from
+  `WelcomeProjectPreviewAdapter` and `recentProjects` and reports every action
+  through a signal.
+- The items are declared in Tab order: Open Project…, New Project…, the right
+  column, the language selector, Quit. Do not reorder them for layout reasons;
+  the footer is positioned with anchors.
+- `serviceMessage` shows only after the user starts an open or create action
+  on the surface. The startup preview messages never show.
+- The language selector is a dark sunken `ComboBox` (`bgBaseColor`, 1 px
+  `cardBorderColor`) with the monochrome selected well in its popup.
+
+### `WelcomeProjectOverview.qml`
+
+- Heading, cover block, information block (name, path elided in the middle,
+  statistics, Continue Editing). Statistics are separate caption labels and
+  Manrope values; the capture-date value spans both columns.
+- Loading: skeleton bars in place of the values. Failed: the statistics hide and
+  the real error text shows in `dangerColor`; Continue Editing is disabled.
+
+### `WelcomeCoverMosaic.qml`
+
+- Three tiles under one rounded mask. A tile with a cover row shows an
+  animated skeleton until its thumbnail is ready. A tile without a photo, and
+  every tile in the failed state, is a static `bgBaseColor` tile.
+
+### `WelcomeRecentProjectList.qml`
+
+- Sunken `bgBaseColor` well, `spaceXs` inset and row gap. A row shows the
+  name, the folder path, and the relative time (Manrope, right aligned). No
+  photo count. Hover is `hoverColor`; keyboard focus is a 1 px
+  `textMutedColor` outline.
+
+### `WelcomeNewProjectForm.qml`
+
+- Back (quiet), title, name field (`bgBaseColor` field, `cardBorderColor`
+  outline, `textMutedColor` outline on focus), storage folder
+  (`FolderPathField`), and the primary Create Project action.
+
+### Manual review
+
+Review at 1280 x 800 and at the minimum window size, in both Alcedo and
+Classic themes, in Simplified Chinese and English:
+
+1. Ready state with three cover thumbnails, with fewer than three photos, and
+   with no capture date.
+2. Loading state after a row click: skeleton tiles and bars move; with
+   `reduceMotion` on they are static.
+3. Failed state with a damaged package.
+4. No recent project: the well with New Project… and Open Existing Project….
+5. New-project form: Back restores the previous column; Create shows the ring.
+6. Tab order and Enter / Space on rows and on Continue Editing.

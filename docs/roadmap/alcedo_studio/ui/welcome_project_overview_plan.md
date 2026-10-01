@@ -3,8 +3,10 @@
 Date: 2026-10-01
 
 Status: Phase 1 implemented and tested on Windows (2026-10-01). The two Phase 1
-manual app checks and the macOS verification are not run yet. Phase 2 and
-Phase 3 planned.
+manual app checks and the macOS verification are not run yet. Phase 2
+implemented on Windows (2026-10-01, branch `feature/welcome-surface-ui`):
+`alcedo_main` builds and starts; one of the nine manual checks is recorded;
+macOS not run. Phase 3 planned.
 
 Branch: `feature/welcome-project-overview`, created from
 `refact/project-open-speed` at `94d77d092`.
@@ -540,7 +542,7 @@ confirms this in the current header.
 | Phase | Result | Main modules | Dependency | Expected diff | Status |
 | --- | --- | --- | --- | ---: | --- |
 | 1 | Backend and QML glue: overview query, entry mode, preview load, persist skip, welcome visibility by entry state, startup preview, continue flow, preview adapter | storage, app, album_backend, launch QML | base branch | 900-1400 | implemented; manual checks open |
-| 2 | Welcome surface UI: new layout, cover, statistics, skeleton, list, empty state, form in the right column, DESIGN.md, translations | `WelcomeDialog.qml` and new QML components, DESIGN.md, `.ts` | Phase 1 | 1200-1800 | planned |
+| 2 | Welcome surface UI: new layout, cover, statistics, skeleton, list, empty state, form in the right column, DESIGN.md, translations | `WelcomeDialog.qml` and new QML components, DESIGN.md, `.ts` | Phase 1 | 1200-1800 | implemented; manual checks 1-4 and 6-9 open |
 | 3 | Runtime workspace removal at exit: remove the unpacked project workspace after the project services close the DuckDB file | `application_module_host`, shutdown tests | Phase 1 | 80-160 | planned |
 
 Every phase is verified on Windows (`win_debug`) and on macOS
@@ -1045,12 +1047,12 @@ cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target alc
 
 **Exit criteria**
 
-- [ ] `alcedo_main` builds and starts.
-- [ ] All nine manual checks are recorded with screenshots.
-- [ ] No literal color, space or font size in the new QML. A search for `#`
+- [x] `alcedo_main` builds and starts.
+- [ ] All nine manual checks are recorded with screenshots. (Check 5 only.)
+- [x] No literal color, space or font size in the new QML. A search for `#`
       color literals in the changed files finds none.
-- [ ] DESIGN.md and the `.ts` file are updated in the same change.
-- [ ] The terminology check finds no prohibited term in changed files.
+- [x] DESIGN.md and the `.ts` file are updated in the same change.
+- [x] The terminology check finds no prohibited term in changed files.
 - [ ] macOS: `alcedo_main` builds in `macos_debug`, and the nine manual checks
       are recorded on macOS with screenshots.
 
@@ -1076,6 +1078,141 @@ Manual verification:
 Evidence path:
 Remaining defects or unavailable platforms:
 ```
+
+##### Phase 2 completion record (2026-10-01)
+
+**Status:** partial. The welcome surface UI is implemented, `alcedo_main`
+builds and starts on Windows, and the empty state (manual check 5) is
+recorded. Manual checks 1-4 and 6-9 are not run: this machine has no recent
+project in the debug app settings, and the session cannot drive the desktop
+window safely (a synthetic click during the capture reached another
+application window, so desktop input was stopped). macOS is not built.
+
+**Source revision and branch:** `feature/welcome-surface-ui`, created from
+`feature/welcome-project-overview` at `94d77d092` with the uncommitted Phase 1
+working tree. Phase 2 is uncommitted on top of it.
+
+**Actual changed modules:**
+
+| Module | Files |
+| --- | --- |
+| Welcome view | `qml/WelcomeDialog.qml` (rewrite, 885 -> 674 lines), new `SkeletonBlock.qml`, `WelcomeActionButton.qml`, `WelcomeCoverMosaic.qml`, `WelcomeProjectOverview.qml`, `WelcomeRecentProjectList.qml`, `WelcomeNewProjectForm.qml` |
+| Wiring | `qml/AppDialogs.qml` (new signals), `qml/WelcomeProjectPreviewAdapter.qml` (`projectPath` uses the first recent entry before the startup preview starts) |
+| Theme | `app_theme.{hpp,cpp}`: geometry tokens `welcomeCardWidth`, `welcomeCardHeight`, `welcomeSidebarWidth`, `welcomeCoverWidth`, `welcomeCoverCompactWidth`, `welcomeCoverHeight`, `welcomeInfoMinWidth`, `welcomeEmptyContentWidth`, and the motion token `skeletonCycleMs`. No color token. |
+| Docs | `DESIGN.md` ("Welcome surface" section, Motion row and token for `SkeletonBlock`, shared component entry, one existing prohibited term renamed), `docs/VI/README.md` ("Welcome surface") |
+| Translations | `i18n/alcedo_main_zh_CN.ts`, `i18n/alcedo_main_en.ts`: contexts `WelcomeCoverMosaic`, `WelcomeDialog`, `WelcomeNewProjectForm`, `WelcomeProjectOverview`, `WelcomeProjectPreviewAdapter`, `WelcomeRecentProjectList` written by hand (no `lupdate`). Obsolete `WelcomeDialog` messages removed. |
+| Build | `CMakeLists.txt`: six new files in `ALCEDO_MAIN_QML_FILES` |
+
+**Implemented behavior:** section 3: the two-column card, the cover mosaic
+with the section 3.3 tile rules, the statistics in Manrope, the four
+upper-area states, the recent list without the previewed project, the empty
+layout, the form in the right column with Back, the section 3.7 focus order
+(items declared in Tab order; Enter and Return activate actions and rows), and
+accessible names. Production style stays Basic. The new files import no
+Material module.
+
+**Deviations from the plan (mapping):**
+
+- The recent list well and the empty-state well use `bgBaseColor`, not
+  `bgPanelColor`. `cardSurfaceColor` is an alias of `bgPanelColor`, so a
+  `bgPanelColor` well is not visible on the card. `bgBaseColor` is the
+  sunken-track token (`alcedo-qml-ui`). Row hover is `hoverColor`, because
+  `buttonHoveredFillColor` equals `bgBaseColor` in the Alcedo theme.
+- Section 3.8: the compact cover width applies when the right column is
+  narrower than `welcomeCoverWidth + spaceXl + welcomeInfoMinWidth`, not at a
+  fixed 880 px card width. With the 880 px rule the information block
+  overflows for card widths from 880 to 903. At the 960 px window minimum the
+  full cover width fits.
+- The signal is `createRequested(storageLocation, projectName)`.
+- A shared `WelcomeActionButton.qml` (primary, secondary, quiet) holds the
+  button chrome. `DialogActionButton` has white ink and an accent fill that
+  section 3.6 does not use. Button heights use `iconButtonHitSize` (44) and
+  `iconButtonHitSizeCompact` (40) in place of the design values 46 and 36.
+- Icons reuse `folder-open.svg` and `folder-plus.svg`. Quit and Back have no
+  icon: the repository has no approved exit or back SVG, and DESIGN.md bans
+  self-drawn SVG.
+- `serviceMessage` shows only after the user starts Open or Create on the
+  welcome surface. Every load writes it (including "Loading project..." and
+  the success text with the database path), so the startup preview would
+  otherwise show developer text.
+- The surface keeps the right column mode when it opens again after a failed
+  enter-mode launch, so a failed create returns to the filled form.
+- Strings not in section 3: "No other recent projects" (list well when only
+  the previewed project exists), and the accessible names "Welcome",
+  "Alcedo Studio" and "Interface language".
+- Remaining color literals in `WelcomeDialog.qml`: the two `"white"` backdrop
+  mask rectangles from the previous file (alpha masks that are not drawn).
+
+**Primary success call chain:**
+
+```text
+ProjectLaunchController.start() -> welcome open -> adapter.state "loading"
+ -> WelcomeProjectOverview: skeleton tiles (WelcomeCoverMosaic) + skeleton bars
+ -> PreviewProject completes -> adapter.state "ready" -> Manrope values
+ -> adapter.coverItems rows 0-2 -> CoverTile Image ready -> skeleton hides
+ -> 继续编辑 (WelcomeActionButton primary) -> WelcomeDialog.requestContinue
+ -> continueRequested -> AppDialogs -> host.continueWelcomeProject()
+ -> EnterLoadedProject -> projectEntered -> welcome closes -> Library reveal
+Row click -> WelcomeRecentProjectList.projectRequested -> requestPreview
+ -> previewRequested -> appModules.project.PreviewProject(path) -> "loading"
+新建项目… -> rightColumnMode "form" -> Create -> requestCreate
+ -> createRequested -> beginProjectLaunch(CreateProjectInFolderNamed) -> ring
+```
+
+**Primary failure and restore call chain:**
+
+```text
+previewErrorMessage set -> adapter.state "failed"
+ -> mosaic: static bgBaseColor tiles; overview: statistics hidden,
+    error text in dangerColor; 继续编辑 disabled (continueEnabled false)
+ -> rows enabled (selectionEnabled) -> row click -> PreviewProject -> "loading"
+Open or Create launch fails -> welcome opens again (Phase 1 rule)
+ -> launchMessage (serviceMessage) shows the real error under the actions,
+    or in the form when the create started from the form
+```
+
+**Build and test commands with exit codes** (PowerShell tool, repository root):
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target alcedo_main   -> 0 (two runs)
+lrelease (in the build): en 320 generated, 94 unfinished; zh_CN 1277 generated, 14 unfinished
+qmllint (Qt 6.9.3) on the 7 new or changed welcome files and AppDialogs.qml -> exit 0;
+  no type or syntax warning; only unqualified-access warnings for the
+  appTheme / appModules context properties and for outer ids used inside
+  delegates and layer effects (same category as Phase 1)
+```
+
+**Discovered / passed / failed / skipped counts:** no test target changed. No
+offscreen QML test (AGENTS.md). The Phase 1 C++ suites were not run again: the
+Phase 2 change touches only QML, translations, documentation and constant
+AppTheme getters.
+
+**Manual verification (Windows):**
+
+| Check | Result |
+| --- | --- |
+| 5. Empty state with no recent project | PASS. `alcedo_main` started with an empty recent list. The left column shows only the wordmark, the description, the language selector and 退出. The right well shows 新建第一个项目, the explanation, 新建项目… (primary) and 打开已有项目… (secondary). The Simplified Chinese strings load. |
+| 1-4, 6-9 | not run |
+
+**Evidence path:** `build/tmp/welcome_overview_phase2/` (build logs, qmllint
+log, `01_startup.png` for check 5, the translation script). Remove it when the
+manual checks are recorded.
+
+**LOC note:** Phase 2 alone is about +1833 / -855 lines: new QML 868 lines,
+`WelcomeDialog.qml` 674 lines, `.ts` about +340 / -170 (the relative-time
+strings move to a new context), DESIGN.md +61, VI catalog +58. Counted with
+the removed lines (the section 8 rule), the change is about 2690 lines and
+passes the 2000-line stop limit. The extra size is the `.ts` context move and
+the `WelcomeDialog.qml` removal, not new behavior. No changed file passes 1000
+lines.
+
+**Remaining defects or unavailable platforms:**
+
+- Manual checks 1-4 and 6-9 need a person at the desktop, with at least two
+  recent projects, a damaged package, `reduceMotion` on, and a narrow window.
+- The language `ComboBox` popup sets its `z` above the welcome dialog. No
+  manual check covers it yet.
+- macOS was not built or tested.
 
 ### Phase 3 — Runtime workspace removal at exit
 

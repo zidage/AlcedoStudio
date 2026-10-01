@@ -1175,6 +1175,18 @@ auto AppTheme::editorLutTileMinWidth() const -> int { return 128; }
 auto AppTheme::editorLutTileCompactWidth() const -> int { return 88; }
 auto AppTheme::editorLutTileIconSize() const -> int { return 36; }
 auto AppTheme::collectionsSidebarWidth() const -> int { return 276; }
+// Welcome surface (DESIGN.md "Welcome surface"): card, columns, and cover block.
+auto AppTheme::welcomeCardWidth() const -> int { return 1040; }
+auto AppTheme::welcomeCardHeight() const -> int { return 600; }
+auto AppTheme::welcomeSidebarWidth() const -> int { return 260; }
+auto AppTheme::welcomeCoverWidth() const -> int { return 300; }
+auto AppTheme::welcomeCoverCompactWidth() const -> int { return 240; }
+auto AppTheme::welcomeCoverHeight() const -> int { return 224; }
+auto AppTheme::welcomeInfoMinWidth() const -> int { return 260; }
+auto AppTheme::welcomeEmptyContentWidth() const -> int { return 400; }
+// One sweep of the SkeletonBlock highlight band. Not scaled by reduceMotion:
+// under reduceMotion the band does not run at all.
+auto AppTheme::skeletonCycleMs() const -> int { return 1200; }
 auto AppTheme::lineHeightCaption() const -> int { return 14; }
 auto AppTheme::lineHeightBody() const -> int { return 16; }
 auto AppTheme::lineHeightTitle() const -> int { return 18; }

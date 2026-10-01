@@ -1,10 +1,19 @@
 import QtQuick
 import QtQuick.Controls
-import QtQuick.Controls.Material
-import QtQuick.Dialogs
 import QtQuick.Layouts
 import QtQuick.Effects
 
+// Welcome surface (DESIGN.md "Welcome surface", welcome overview plan section 3).
+// A modal two-column card over the blurred shell:
+//   left   - wordmark, description, Open Project…, New Project…; at the bottom
+//            the language selector and Quit.
+//   right  - "overview": the previewed project (WelcomeProjectOverview) and the
+//            other recent projects (WelcomeRecentProjectList);
+//            "empty": the first-project well when no recent project exists;
+//            "form": the new-project form (WelcomeNewProjectForm).
+// The view reads project data only from `adapter` (WelcomeProjectPreviewAdapter)
+// and `recentProjects`, and reports every action through a signal. AppDialogs
+// routes the signals to appModules.project and the launch controller.
 Dialog {
     id: dialog
     font.family: appTheme.uiFontFamily
@@ -20,6 +29,7 @@ Dialog {
     y: 0
 
     property Item blurSource: null
+    property var adapter: null
     property var recentProjects: []
     property var languageOptions: []
     property int currentLanguageIndex: 0
@@ -27,42 +37,66 @@ Dialog {
     property bool acceleratorWarningShown: false
     property string serviceMessage: ""
     property var updateService: null
-    property string headlineFontFamily: appTheme.headlineFontFamily
-    readonly property string dataFontFamily: appTheme.dataFontFamily
-    property color primaryAccent: "#6D93B7"
-    property color secondaryAccent: "#9FC7D8"
-    property color textColor: "#F5F1EA"
-    property color mutedTextColor: "#B6B0A7"
-    property color panelColor: "#1C1C1D"
-    property color panelBorderColor: Qt.rgba(1, 1, 1, 0.08)
-    property color overlayColor: Qt.rgba(11 / 255, 12 / 255, 14 / 255, 0.60)
-    property color baseColor: "#111214"
-    property color exitColor: "#D3D0CB"
     // Match the host window's corner radius so the modal backdrop doesn't bleed past rounded corners.
     property real cornerRadius: 0
-    property bool showAllRecent: false
-    property int currentPage: 0
-    property string projectName: qsTr("Untitled Project")
-    property string storageLocation: ""
-    readonly property int collapsedRecentCount: 4
+    // "overview" or "form". The empty layout follows from the adapter state.
+    property string rightColumnMode: "overview"
+    // serviceMessage reports every project load, including the startup preview.
+    // The welcome surface shows it only after the user started an open or create
+    // action here: the message then holds the result of that action (for example
+    // the error of a failed open). The preview error has its own place.
+    property bool launchMessageVisible: false
+    readonly property string launchMessage: dialog.launchMessageVisible ? dialog.serviceMessage : ""
 
-    signal loadRequested()
-    signal createRequested(string projectName, string storageLocation)
+    readonly property string previewState: dialog.adapter ? dialog.adapter.state : "empty"
+    readonly property bool hasRecentProjects: dialog.previewState !== "empty"
+    // One load at a time: rows, Open Project… and New Project… wait for the running load.
+    readonly property bool selectionEnabled: dialog.adapter ? dialog.adapter.selectionEnabled : true
+    readonly property string previewedPath: dialog.adapter ? dialog.adapter.projectPath : ""
+    // The recent list holds every entry except the previewed project.
+    readonly property var otherRecentProjects: {
+        const recent = dialog.recentProjects || []
+        const previewed = dialog.previewedPath
+        const others = []
+        for (let i = 0; i < recent.length; ++i) {
+            if (String(recent[i].path || "") !== previewed)
+                others.push(recent[i])
+        }
+        return others
+    }
+
+    signal previewRequested(string projectPath)
+    signal continueRequested()
+    signal openRequested()
+    signal createRequested(string storageLocation, string projectName)
     signal exitRequested()
     signal languageRequested(string languageCode)
     signal acceleratorWarningAcknowledged()
-    signal recentProjectRequested(string projectPath)
 
+    // The surface closes for an enter-mode launch and opens again when that
+    // launch fails, so it keeps the right column mode and the form values.
     onVisibleChanged: {
         if (visible) {
-            showAllRecent = false
-            currentPage = 0
-            pager.currentIndex = 0
-            if (projectName.length === 0) {
-                projectName = qsTr("Untitled Project")
-            }
             maybeShowAcceleratorWarning()
         }
+    }
+
+    // True from open until the initial control of section 3.7 has focus. At
+    // startup Continue Editing is disabled until the preview load starts, so the
+    // focus moves to it when the preview state changes.
+    property bool initialFocusPending: false
+
+    onOpened: {
+        dialog.initialFocusPending = true
+        Qt.callLater(dialog.focusInitialControl)
+    }
+    onRightColumnModeChanged: {
+        dialog.initialFocusPending = true
+        Qt.callLater(dialog.focusInitialControl)
+    }
+    onPreviewStateChanged: {
+        if (dialog.initialFocusPending)
+            Qt.callLater(dialog.focusInitialControl)
     }
 
     onAcceleratorWarningChanged: {
@@ -71,10 +105,52 @@ Dialog {
         }
     }
 
-    FolderDialog {
-        id: projectFolderDialog
-        title: qsTr("Select Project Storage Location")
-        onAccepted: dialog.storageLocation = selectedFolder.toString()
+    // Section 3.7: Continue Editing when a preview is ready or loading, the
+    // project name in the form, New Project… in the empty layout.
+    function focusInitialControl() {
+        if (!dialog.visible)
+            return
+        if (dialog.rightColumnMode === "form") {
+            dialog.initialFocusPending = false
+            newProjectForm.nameField.forceActiveFocus()
+            return
+        }
+        if (!dialog.hasRecentProjects) {
+            dialog.initialFocusPending = false
+            emptyNewProjectButton.forceActiveFocus()
+            return
+        }
+        if (projectOverview.continueButton.enabled) {
+            dialog.initialFocusPending = false
+            projectOverview.continueButton.forceActiveFocus()
+        } else if (openProjectButton.enabled) {
+            openProjectButton.forceActiveFocus()
+        }
+    }
+
+    function requestPreview(projectPath) {
+        dialog.launchMessageVisible = false
+        dialog.previewRequested(projectPath)
+    }
+
+    function requestContinue() {
+        dialog.launchMessageVisible = false
+        dialog.continueRequested()
+    }
+
+    function requestOpen() {
+        dialog.launchMessageVisible = true
+        dialog.openRequested()
+    }
+
+    function requestCreate(storageLocation, projectName) {
+        dialog.launchMessageVisible = true
+        dialog.createRequested(storageLocation, projectName)
+    }
+
+    function showNewProjectForm() {
+        newProjectForm.reset()
+        dialog.rightColumnMode = "form"
     }
 
     Dialog {
@@ -85,7 +161,8 @@ Dialog {
         closePolicy: Popup.CloseOnEscape
         standardButtons: Dialog.Ok
         title: qsTr("CUDA unavailable")
-        width: Math.min((parent ? parent.width : 560) - 72, 520)
+        width: Math.min((parent ? parent.width : appTheme.welcomeCardWidth) - 2 * appTheme.spaceXl,
+                        appTheme.welcomeCardWidth / 2)
         x: parent ? Math.round((parent.width - width) / 2) : 0
         y: parent ? Math.round((parent.height - height) / 2) : 0
         onClosed: dialog.acceleratorWarningAcknowledged()
@@ -124,7 +201,7 @@ Dialog {
 
                 Rectangle {
                     anchors.fill: parent
-                    color: dialog.overlayColor
+                    color: appTheme.overlayColor
                 }
             }
 
@@ -135,19 +212,20 @@ Dialog {
         }
 
         background: Rectangle {
-            radius: 14
-            color: Qt.rgba(dialog.panelColor.r, dialog.panelColor.g, dialog.panelColor.b, 0.98)
+            radius: appTheme.panelRadius
+            color: appTheme.cardSurfaceColor
             border.width: 1
-            border.color: dialog.panelBorderColor
+            border.color: appTheme.cardBorderColor
         }
 
         contentItem: Label {
             text: dialog.acceleratorWarning
             wrapMode: Text.WordWrap
-            color: dialog.textColor
-            font.family: dialog.font.family
-            font.pixelSize: 14
-            lineHeight: 1.2
+            color: appTheme.textColor
+            font.family: appTheme.uiFontFamily
+            font.pixelSize: appTheme.fontSizeSection
+            lineHeight: appTheme.lineHeightSection
+            lineHeightMode: Text.FixedHeight
         }
     }
 
@@ -160,38 +238,6 @@ Dialog {
                 }
             })
         }
-    }
-
-    function relativeTimeLabel(lastOpenedMs) {
-        const value = Number(lastOpenedMs)
-        if (!isFinite(value) || value <= 0) {
-            return qsTr("Opened recently")
-        }
-
-        const deltaMinutes = Math.max(0, Math.floor((Date.now() - value) / 60000))
-        if (deltaMinutes < 1) {
-            return qsTr("Opened just now")
-        }
-        if (deltaMinutes < 60) {
-            return qsTr("Opened %n minute(s) ago", "", deltaMinutes)
-        }
-
-        const deltaHours = Math.floor(deltaMinutes / 60)
-        if (deltaHours < 24) {
-            return qsTr("Opened %n hour(s) ago", "", deltaHours)
-        }
-
-        const deltaDays = Math.floor(deltaHours / 24)
-        if (deltaDays === 1) {
-            return qsTr("Opened yesterday")
-        }
-        if (deltaDays < 7) {
-            return qsTr("Opened %n day(s) ago", "", deltaDays)
-        }
-        if (deltaDays < 14) {
-            return qsTr("Opened last week")
-        }
-        return qsTr("Opened %n day(s) ago", "", deltaDays)
     }
 
     Overlay.modal: Item {
@@ -228,7 +274,7 @@ Dialog {
 
             Rectangle {
                 anchors.fill: parent
-                color: dialog.overlayColor
+                color: appTheme.overlayColor
             }
         }
 
@@ -238,648 +284,391 @@ Dialog {
         }
     }
 
-    background: Rectangle {
-        radius: 0
-        color: "transparent"
-    }
+    background: Item {}
 
     contentItem: Item {
         implicitWidth: dialog.width
         implicitHeight: dialog.height
 
+        Timer {
+            interval: 700
+            repeat: false
+            running: dialog.visible
+                     && dialog.updateService
+                     && dialog.updateService.enabled
+                     && dialog.updateService.unchecked
+            onTriggered: dialog.updateService.CheckForUpdates()
+        }
+
         Rectangle {
             id: shell
+            objectName: "welcomeCard"
             anchors.centerIn: parent
-            width: Math.min(parent.width - 56, 980)
-            height: Math.min(parent.height - 72, 560)
-            radius: 22
-            color: Qt.rgba(dialog.panelColor.r, dialog.panelColor.g, dialog.panelColor.b, 0.90)
+            width: Math.min(parent.width - 2 * appTheme.spaceXl, appTheme.welcomeCardWidth)
+            height: Math.min(parent.height - 2 * appTheme.spaceXl, appTheme.welcomeCardHeight)
+            radius: appTheme.panelRadius
+            color: appTheme.cardSurfaceColor
             border.width: 1
-            border.color: dialog.panelBorderColor
+            border.color: appTheme.cardBorderColor
+            clip: true
+            Accessible.role: Accessible.Dialog
+            Accessible.name: qsTr("Welcome")
 
-            SwipeView {
-                id: pager
-                anchors.fill: parent
-                interactive: false
-                clip: true
-                currentIndex: dialog.currentPage
-                onCurrentIndexChanged: dialog.currentPage = currentIndex
+            // Section 3.8: when the right column cannot hold the full cover block and
+            // the minimum information block, the cover block uses its compact width.
+            readonly property bool compact: rightColumn.width < appTheme.welcomeCoverWidth
+                                                                + appTheme.spaceXl
+                                                                + appTheme.welcomeInfoMinWidth
+            readonly property real sidebarWidth: appTheme.welcomeSidebarWidth
+            readonly property real columnGap: appTheme.spaceXl + appTheme.spaceXs
 
-                Item {
-                    RowLayout {
-                        anchors.fill: parent
-                        anchors.margins: 22
-                        spacing: 20
+            // The items are declared in Tab order (section 3.7): left column
+            // actions, the right column, then the language selector and Quit.
 
-                        Item {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            Layout.preferredWidth: shell.width * 0.44
+            // Left column, upper part: wordmark, description, project actions.
+            ColumnLayout {
+                id: sidebarTop
+                x: appTheme.spaceXl + appTheme.spaceXs
+                y: appTheme.spaceXl + appTheme.spaceXs
+                width: shell.sidebarWidth - appTheme.spaceXs
+                spacing: 0
 
-                            ColumnLayout {
-                                anchors.fill: parent
-                                spacing: 18
+                Row {
+                    Accessible.role: Accessible.Heading
+                    Accessible.name: qsTr("Alcedo Studio")
 
-                                ColumnLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 0
+                    Label {
+                        text: qsTr("Alcedo")
+                        color: appTheme.accentColor
+                        font.family: appTheme.headlineFontFamily
+                        font.pixelSize: appTheme.fontSizeHeadline
+                        font.weight: appTheme.fontWeightHeading
+                        Accessible.ignored: true
+                    }
 
-                                    Row {
-                                        spacing: 10
+                    Label {
+                        text: " "
+                        font.family: appTheme.headlineFontFamily
+                        font.pixelSize: appTheme.fontSizeHeadline
+                        Accessible.ignored: true
+                    }
 
-                                        Label {
-                                            text: qsTr("Alcedo")
-                                            color: dialog.primaryAccent
-                                            font.family: dialog.headlineFontFamily
-                                            font.pixelSize: 44
-                                            font.weight: 800
-                                        }
+                    Label {
+                        text: qsTr("Studio")
+                        color: appTheme.textColor
+                        font.family: appTheme.headlineFontFamily
+                        font.pixelSize: appTheme.fontSizeHeadline
+                        font.weight: appTheme.fontWeightHeading
+                        Accessible.ignored: true
+                    }
+                }
 
-                                        Label {
-                                            text: qsTr("Studio")
-                                            color: dialog.textColor
-                                            font.family: dialog.headlineFontFamily
-                                            font.pixelSize: 44
-                                            font.weight: 800
-                                        }
-                                    }
-                                }
+                Label {
+                    Layout.fillWidth: true
+                    Layout.topMargin: appTheme.spaceSm
+                    text: qsTr("Each project is one .alcd file that holds the photo references, the edit history and the versions.")
+                    color: appTheme.textMutedColor
+                    font.family: appTheme.uiFontFamily
+                    font.pixelSize: appTheme.fontSizeBody
+                    font.weight: appTheme.fontWeightRegular
+                    lineHeight: appTheme.lineHeightBody
+                    lineHeightMode: Text.FixedHeight
+                    wrapMode: Text.Wrap
+                }
 
-                                Item {
-                                    Layout.preferredHeight: 2
-                                }
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    Layout.topMargin: appTheme.spaceXl + appTheme.spaceSm
+                    visible: dialog.hasRecentProjects
+                    spacing: appTheme.spaceSm
 
-                                Button {
-                                    id: loadButton
-                                    Layout.fillWidth: true
-                                    Layout.preferredHeight: 64
-                                    text: qsTr("Load Project")
-                                    icon.source: "qrc:/panel_icons/import.svg"
-                                    icon.width: 22
-                                    icon.height: 22
-                                    icon.color: dialog.textColor
-                                    display: AbstractButton.TextBesideIcon
-                                    font.family: dialog.font.family
-                                    font.pixelSize: 23
-                                    font.weight: 700
-                                    leftPadding: 24
-                                    rightPadding: 24
-                                    spacing: 14
-                                    Material.foreground: dialog.textColor
-                                    onClicked: dialog.loadRequested()
+                    WelcomeActionButton {
+                        id: openProjectButton
+                        objectName: "welcomeOpenProjectButton"
+                        Layout.fillWidth: true
+                        kind: "secondary"
+                        iconSource: "qrc:/panel_icons/folder-open.svg"
+                        text: qsTr("Open Project…")
+                        enabled: dialog.selectionEnabled
+                        onClicked: dialog.requestOpen()
+                    }
 
-                                    background: Rectangle {
-                                        radius: 20
-                                        color: loadButton.down
-                                               ? Qt.darker(dialog.primaryAccent, 1.18)
-                                               : (loadButton.hovered
-                                                  ? Qt.lighter(dialog.primaryAccent, 1.06)
-                                                  : dialog.primaryAccent)
-                                        border.width: 1
-                                        border.color: Qt.rgba(dialog.secondaryAccent.r, dialog.secondaryAccent.g, dialog.secondaryAccent.b, 0.16)
-                                    }
+                    WelcomeActionButton {
+                        id: newProjectButton
+                        objectName: "welcomeNewProjectButton"
+                        Layout.fillWidth: true
+                        kind: "secondary"
+                        iconSource: "qrc:/panel_icons/folder-plus.svg"
+                        text: qsTr("New Project…")
+                        enabled: dialog.selectionEnabled && dialog.rightColumnMode !== "form"
+                        onClicked: dialog.showNewProjectForm()
+                    }
+                }
 
-                                    contentItem: RowLayout {
-                                        spacing: loadButton.spacing
+                Label {
+                    Layout.fillWidth: true
+                    Layout.topMargin: appTheme.spaceMd
+                    visible: dialog.launchMessage.length > 0 && dialog.rightColumnMode !== "form"
+                    text: dialog.launchMessage
+                    color: appTheme.textMutedColor
+                    font.family: appTheme.uiFontFamily
+                    font.pixelSize: appTheme.fontSizeCaption
+                    font.weight: appTheme.fontWeightRegular
+                    wrapMode: Text.Wrap
+                    maximumLineCount: 6
+                    elide: Text.ElideRight
+                }
+            }
 
-                                        Item {
-                                            Layout.preferredWidth: 30
-                                            Layout.preferredHeight: 30
+            // Right column.
+            StackLayout {
+                id: rightColumn
+                x: sidebarTop.x + shell.sidebarWidth + shell.columnGap - appTheme.spaceXs
+                y: appTheme.spaceXl
+                width: shell.width - x - appTheme.spaceXl
+                height: shell.height - 2 * appTheme.spaceXl
+                currentIndex: dialog.rightColumnMode === "form" ? 2 : (dialog.hasRecentProjects ? 0 : 1)
 
-                                            Image {
-                                                id: loadIconSource
-                                                anchors.centerIn: parent
-                                                width: loadButton.icon.width
-                                                height: loadButton.icon.height
-                                                source: loadButton.icon.source
-                                                visible: false
-                                                asynchronous: true
-                                            }
+                ColumnLayout {
+                    spacing: appTheme.spaceXl + appTheme.spaceXs
 
-                                            MultiEffect {
-                                                anchors.fill: loadIconSource
-                                                source: loadIconSource
-                                                colorization: 1.0
-                                                colorizationColor: loadButton.icon.color
-                                            }
-                                        }
+                    WelcomeProjectOverview {
+                        id: projectOverview
+                        Layout.fillWidth: true
+                        adapter: dialog.adapter
+                        compact: shell.compact
+                        onContinueRequested: dialog.requestContinue()
+                    }
 
-                                        Label {
-                                            Layout.fillWidth: true
-                                            text: loadButton.text
-                                            color: dialog.textColor
-                                            font: loadButton.font
-                                            verticalAlignment: Text.AlignVCenter
-                                        }
-
-                                    }
-                                }
-
-                                Button {
-                                    id: createButton
-                                    Layout.fillWidth: true
-                                    Layout.preferredHeight: 64
-                                    text: qsTr("Create Project")
-                                    display: AbstractButton.TextBesideIcon
-                                    font.family: dialog.font.family
-                                    font.pixelSize: 23
-                                    font.weight: 700
-                                    leftPadding: 24
-                                    rightPadding: 24
-                                    spacing: 14
-                                    Material.foreground: dialog.textColor
-                                    onClicked: pager.currentIndex = 1
-
-                                    background: Rectangle {
-                                        radius: 20
-                                        color: createButton.down
-                                               ? Qt.rgba(1, 1, 1, 0.14)
-                                               : (createButton.hovered
-                                                  ? Qt.rgba(1, 1, 1, 0.10)
-                                                  : Qt.rgba(dialog.panelColor.r, dialog.panelColor.g, dialog.panelColor.b, 0.80))
-                                        border.width: 1
-                                        border.color: Qt.rgba(dialog.textColor.r, dialog.textColor.g, dialog.textColor.b, 0.16)
-                                    }
-
-                                    contentItem: RowLayout {
-                                        spacing: createButton.spacing
-
-                                        Rectangle {
-                                            Layout.preferredWidth: 30
-                                            Layout.preferredHeight: 30
-                                            radius: 15
-                                            color: Qt.rgba(dialog.secondaryAccent.r, dialog.secondaryAccent.g, dialog.secondaryAccent.b, 0.90)
-
-                                            Label {
-                                                anchors.centerIn: parent
-                                                text: "\u2192"
-                                                color: dialog.baseColor
-                                                font.family: dialog.headlineFontFamily
-                                                font.pixelSize: 22
-                                                font.weight: 800
-                                            }
-                                        }
-
-                                        Label {
-                                            Layout.fillWidth: true
-                                            text: createButton.text
-                                            color: dialog.textColor
-                                            font: createButton.font
-                                            verticalAlignment: Text.AlignVCenter
-                                        }
-                                    }
-                                }
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    visible: dialog.serviceMessage.length > 0
-                                    text: dialog.serviceMessage
-                                    wrapMode: Text.WordWrap
-                                    color: dialog.mutedTextColor
-                                    font.family: dialog.font.family
-                                    font.pixelSize: 13
-                                    lineHeight: 1.2
-                                }
-
-                                Timer {
-                                    interval: 700
-                                    repeat: false
-                                    running: dialog.visible
-                                             && dialog.updateService
-                                             && dialog.updateService.enabled
-                                             && dialog.updateService.unchecked
-                                    onTriggered: dialog.updateService.CheckForUpdates()
-                                }
-
-                                Item {
-                                    Layout.fillHeight: true
-                                }
-
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 12
-
-                                    ComboBox {
-                                        id: languageCombo
-                                        Layout.preferredWidth: 168
-                                        model: dialog.languageOptions
-                                        textRole: "label"
-                                        currentIndex: dialog.currentLanguageIndex
-                                        font.family: dialog.font.family
-                                        onActivated: function(index) {
-                                            const item = model[index]
-                                            if (item) {
-                                                dialog.languageRequested(item.code)
-                                            }
-                                        }
-                                        Material.background: Qt.rgba(dialog.panelColor.r, dialog.panelColor.g, dialog.panelColor.b, 0.92)
-                                        Material.foreground: dialog.textColor
-                                    }
-
-                                    Item {
-                                        Layout.fillWidth: true
-                                    }
-
-                                    Button {
-                                        id: exitButton
-                                        text: qsTr("Exit Application")
-                                        flat: true
-                                        font.family: dialog.font.family
-                                        font.pixelSize: 16
-                                        font.weight: 600
-                                        Material.foreground: exitButton.hovered
-                                                             ? dialog.textColor
-                                                             : dialog.exitColor
-                                        onClicked: dialog.exitRequested()
-
-                                        contentItem: RowLayout {
-                                            spacing: 8
-
-                                            Label {
-                                                text: "\u21AA"
-                                                color: exitButton.Material.foreground
-                                                font.pixelSize: 18
-                                            }
-
-                                            Label {
-                                                text: exitButton.text
-                                                color: exitButton.Material.foreground
-                                                font: exitButton.font
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        Rectangle {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            Layout.preferredWidth: shell.width * 0.50
-                            radius: 18
-                            color: Qt.rgba(0, 0, 0, 0.12)
-                            border.width: 1
-                            border.color: Qt.rgba(1, 1, 1, 0.04)
-
-                            ColumnLayout {
-                                anchors.fill: parent
-                                anchors.margins: 18
-                                spacing: 14
-
-                                RowLayout {
-                                    Layout.fillWidth: true
-
-                                    Label {
-                                        text: qsTr("Recent Projects")
-                                        color: dialog.textColor
-                                        font.family: dialog.font.family
-                                        font.pixelSize: 24
-                                        font.weight: 800
-                                    }
-
-                                    Item {
-                                        Layout.fillWidth: true
-                                    }
-
-                                    Button {
-                                        visible: dialog.recentProjects.length > dialog.collapsedRecentCount
-                                        flat: true
-                                        text: dialog.showAllRecent ? qsTr("Collapse") : qsTr("View All")
-                                        font.family: dialog.font.family
-                                        font.pixelSize: 14
-                                        font.weight: 600
-                                        Material.foreground: dialog.primaryAccent
-                                        onClicked: dialog.showAllRecent = !dialog.showAllRecent
-                                    }
-                                }
-
-                                Loader {
-                                    Layout.fillWidth: true
-                                    active: dialog.recentProjects.length === 0
-                                    visible: active
-                                    Layout.fillHeight: active
-
-                                    sourceComponent: Item {
-                                        Column {
-                                            anchors.top: parent.top
-                                            anchors.left: parent.left
-                                            anchors.right: parent.right
-                                            spacing: 8
-
-                                            Label {
-                                                text: qsTr("No recent projects yet")
-                                                color: dialog.textColor
-                                                font.family: dialog.font.family
-                                                font.pixelSize: 20
-                                                font.weight: 700
-                                            }
-
-                                            Label {
-                                                Layout.fillWidth: true
-                                                text: qsTr("Projects you open or create here will appear in this list.")
-                                                color: dialog.mutedTextColor
-                                                font.family: dialog.font.family
-                                                font.pixelSize: 14
-                                                wrapMode: Text.WordWrap
-                                            }
-                                        }
-                                    }
-                                }
-
-                                ListView {
-                                    id: recentList
-                                    Layout.fillWidth: true
-                                    visible: dialog.recentProjects.length > 0
-                                    Layout.fillHeight: visible
-                                    Layout.alignment: Qt.AlignTop
-                                    clip: true
-                                    boundsBehavior: Flickable.StopAtBounds
-                                    spacing: 12
-                                    model: dialog.showAllRecent
-                                           ? dialog.recentProjects
-                                           : dialog.recentProjects.slice(0, dialog.collapsedRecentCount)
-
-                                    delegate: Item {
-                                        required property string name
-                                        required property string path
-                                        required property string folderPath
-                                        required property double lastOpenedMs
-
-                                        width: ListView.view.width
-                                        height: Math.max(72, projectCardColumn.implicitHeight
-                                                         + appTheme.spaceLg)
-                                        readonly property bool hovered: rowMouse.containsMouse
-
-                                        Rectangle {
-                                            anchors.fill: parent
-                                            radius: 18
-                                            color: hovered
-                                                   ? Qt.rgba(1, 1, 1, 0.055)
-                                                   : Qt.rgba(0, 0, 0, 0.22)
-                                            border.width: 1
-                                            border.color: hovered
-                                                          ? Qt.rgba(dialog.textColor.r, dialog.textColor.g, dialog.textColor.b, 0.08)
-                                                          : Qt.rgba(1, 1, 1, 0.04)
-
-                                            RowLayout {
-                                                anchors.fill: parent
-                                                anchors.leftMargin: 18
-                                                anchors.rightMargin: 18
-                                                spacing: 14
-
-                                                Image {
-                                                    Layout.preferredWidth: 24
-                                                    Layout.preferredHeight: 24
-                                                    source: "qrc:/panel_icons/project-file.svg"
-                                                    sourceSize.width: 24
-                                                    sourceSize.height: 24
-                                                    asynchronous: true
-                                                    opacity: rowMouse.containsMouse ? 0.96 : 0.72
-                                                }
-
-                                                ColumnLayout {
-                                                    id: projectCardColumn
-                                                    Layout.fillWidth: true
-                                                    spacing: 2
-
-                                                    Label {
-                                                        Layout.fillWidth: true
-                                                        text: name
-                                                        wrapMode: Text.Wrap
-                                                        color: dialog.textColor
-                                                        font.family: dialog.dataFontFamily
-                                                        font.pixelSize: 17
-                                                        font.weight: 700
-                                                    }
-
-                                                    Label {
-                                                        Layout.fillWidth: true
-                                                        text: dialog.relativeTimeLabel(lastOpenedMs)
-                                                        color: dialog.mutedTextColor
-                                                        font.family: dialog.dataFontFamily
-                                                        font.pixelSize: 12
-                                                        wrapMode: Text.Wrap
-                                                    }
-
-                                                    Label {
-                                                        Layout.fillWidth: true
-                                                        text: folderPath
-                                                        color: Qt.rgba(dialog.mutedTextColor.r, dialog.mutedTextColor.g, dialog.mutedTextColor.b, 0.74)
-                                                        font.family: dialog.dataFontFamily
-                                                        font.pixelSize: 11
-                                                        wrapMode: Text.Wrap
-                                                    }
-                                                }
-                                            }
-                                        }
-
-                                        MouseArea {
-                                            id: rowMouse
-                                            anchors.fill: parent
-                                            hoverEnabled: true
-                                            cursorShape: Qt.PointingHandCursor
-                                            onClicked: dialog.recentProjectRequested(path)
-                                        }
-                                    }
-                                }
-                            }
+                    WelcomeRecentProjectList {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        projects: dialog.otherRecentProjects
+                        selectionEnabled: dialog.selectionEnabled
+                        onProjectRequested: function(projectPath) {
+                            dialog.requestPreview(projectPath)
                         }
                     }
                 }
 
-                Item {
+                // Section 3.4: no recent project.
+                Rectangle {
+                    radius: appTheme.controlRadiusSmall
+                    color: appTheme.bgBaseColor
+
                     ColumnLayout {
-                        anchors.fill: parent
-                        spacing: 0
-
-                        Rectangle {
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: 126
-                            color: "transparent"
-
-                            RowLayout {
-                                anchors.fill: parent
-                                anchors.leftMargin: 36
-                                anchors.rightMargin: 36
-                                spacing: 18
-
-                                Button {
-                                    id: headerBackButton
-                                    Layout.preferredWidth: 42
-                                    Layout.preferredHeight: 42
-                                    flat: true
-                                    text: "\u2190"
-                                    font.family: dialog.headlineFontFamily
-                                    font.pixelSize: 31
-                                    Material.foreground: headerBackButton.hovered ? dialog.textColor : dialog.mutedTextColor
-                                    onClicked: pager.currentIndex = 0
-                                }
-
-                                ColumnLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 6
-
-                                    Label {
-                                        text: qsTr("New Project")
-                                        color: dialog.textColor
-                                        font.family: dialog.headlineFontFamily
-                                        font.pixelSize: 32
-                                        font.weight: 800
-                                    }
-
-                                    Label {
-                                        text: qsTr("Configure your workspace settings.")
-                                        color: dialog.mutedTextColor
-                                        font.family: dialog.font.family
-                                        font.pixelSize: 18
-                                    }
-                                }
-                            }
-                        }
-
-                        Rectangle {
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: 1
-                            color: Qt.rgba(dialog.textColor.r, dialog.textColor.g, dialog.textColor.b, 0.08)
-                        }
+                        anchors.centerIn: parent
+                        width: Math.min(parent.width - 2 * appTheme.spaceXl, appTheme.welcomeEmptyContentWidth)
+                        spacing: appTheme.spaceXl
 
                         ColumnLayout {
                             Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            Layout.leftMargin: 36
-                            Layout.rightMargin: 36
-                            Layout.topMargin: 34
-                            spacing: 24
+                            spacing: appTheme.spaceSm
 
-                            ColumnLayout {
+                            Label {
                                 Layout.fillWidth: true
-                                spacing: 12
-
-                                Label {
-                                    text: qsTr("Project Name")
-                                    color: dialog.textColor
-                                    font.family: dialog.font.family
-                                    font.pixelSize: 18
-                                    font.weight: 700
-                                }
-
-                                TextField {
-                                    id: projectNameField
-                                    Layout.fillWidth: true
-                                    Layout.preferredHeight: 56
-                                    text: dialog.projectName
-                                    selectByMouse: true
-                                    font.family: dialog.dataFontFamily
-                                    font.pixelSize: 19
-                                    color: dialog.textColor
-                                    onTextChanged: dialog.projectName = text
-                                    Material.foreground: dialog.textColor
-                                    Material.accent: dialog.primaryAccent
-                                    background: Rectangle {
-                                        radius: 10
-                                        color: Qt.rgba(1, 1, 1, 0.10)
-                                        border.width: 1
-                                        border.color: projectNameField.activeFocus
-                                                      ? Qt.rgba(dialog.primaryAccent.r, dialog.primaryAccent.g, dialog.primaryAccent.b, 0.62)
-                                                      : Qt.rgba(dialog.textColor.r, dialog.textColor.g, dialog.textColor.b, 0.12)
-                                    }
-                                }
-                            }
-
-                            ColumnLayout {
-                                Layout.fillWidth: true
-                                spacing: 12
-
-                                Label {
-                                    text: qsTr("Storage Location")
-                                    color: dialog.textColor
-                                    font.family: dialog.font.family
-                                    font.pixelSize: 18
-                                    font.weight: 700
-                                }
-
-                                FolderPathField {
-                                    Layout.fillWidth: true
-                                    path: dialog.storageLocation
-                                    placeholderText: qsTr("Select a parent folder...")
-                                    textColor: dialog.textColor
-                                    mutedTextColor: dialog.mutedTextColor
-                                    pathFontFamily: dialog.dataFontFamily
-                                    onBrowseRequested: projectFolderDialog.open()
-                                }
+                                text: qsTr("Create your first project")
+                                color: appTheme.textColor
+                                font.family: appTheme.uiFontFamily
+                                font.pixelSize: appTheme.fontSizeHeadline
+                                font.weight: appTheme.fontWeightHeading
+                                wrapMode: Text.Wrap
+                                Accessible.role: Accessible.Heading
                             }
 
                             Label {
                                 Layout.fillWidth: true
-                                visible: dialog.serviceMessage.length > 0
-                                text: dialog.serviceMessage
-                                wrapMode: Text.WordWrap
-                                color: dialog.mutedTextColor
-                                font.family: dialog.font.family
-                                font.pixelSize: 13
+                                text: qsTr("Choose a folder for the project file, then import your photos. Alcedo does not move or change the original photos.")
+                                color: appTheme.textMutedColor
+                                font.family: appTheme.uiFontFamily
+                                font.pixelSize: appTheme.fontSizeBody
+                                font.weight: appTheme.fontWeightRegular
+                                lineHeight: appTheme.lineHeightBody
+                                lineHeightMode: Text.FixedHeight
+                                wrapMode: Text.Wrap
                             }
                         }
 
-                        Rectangle {
+                        ColumnLayout {
                             Layout.fillWidth: true
-                            Layout.preferredHeight: 1
-                            color: Qt.rgba(dialog.textColor.r, dialog.textColor.g, dialog.textColor.b, 0.08)
-                        }
+                            spacing: appTheme.spaceSm
 
-                        RowLayout {
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: 104
-                            Layout.leftMargin: 36
-                            Layout.rightMargin: 36
-                            spacing: 18
-
-                            Item {
+                            WelcomeActionButton {
+                                id: emptyNewProjectButton
+                                objectName: "welcomeEmptyNewProjectButton"
                                 Layout.fillWidth: true
+                                kind: "primary"
+                                centered: false
+                                iconSource: "qrc:/panel_icons/folder-plus.svg"
+                                text: qsTr("New Project…")
+                                enabled: dialog.selectionEnabled
+                                onClicked: dialog.showNewProjectForm()
                             }
 
-                            Button {
-                                id: submitCreateButton
-                                Layout.preferredWidth: 230
-                                Layout.preferredHeight: 58
-                                topPadding: 0
-                                bottomPadding: 0
-                                leftPadding: 0
-                                rightPadding: 0
-                                enabled: dialog.projectName.trim().length > 0
-                                         && dialog.storageLocation.length > 0
-                                text: qsTr("Create Project")
-                                font.family: dialog.font.family
-                                font.pixelSize: 17
-                                font.weight: 800
-                                Material.foreground: dialog.textColor
-                                onClicked: dialog.createRequested(dialog.projectName.trim(),
-                                                                  dialog.storageLocation)
-                                background: Rectangle {
-                                    radius: 10
-                                    color: submitCreateButton.enabled
-                                           ? (submitCreateButton.down
-                                              ? Qt.darker(dialog.primaryAccent, 1.16)
-                                              : (submitCreateButton.hovered
-                                                 ? Qt.lighter(dialog.primaryAccent, 1.06)
-                                                 : dialog.primaryAccent))
-                                           : Qt.rgba(dialog.primaryAccent.r, dialog.primaryAccent.g, dialog.primaryAccent.b, 0.42)
-                                    border.width: 1
-                                    border.color: Qt.rgba(dialog.secondaryAccent.r, dialog.secondaryAccent.g, dialog.secondaryAccent.b, 0.16)
-                                }
-
-                                contentItem: Label {
-                                    text: submitCreateButton.text
-                                    horizontalAlignment: Text.AlignHCenter
-                                    verticalAlignment: Text.AlignVCenter
-                                    color: submitCreateButton.Material.foreground
-                                    font: submitCreateButton.font
-                                }
+                            WelcomeActionButton {
+                                objectName: "welcomeEmptyOpenProjectButton"
+                                Layout.fillWidth: true
+                                kind: "secondary"
+                                iconSource: "qrc:/panel_icons/folder-open.svg"
+                                text: qsTr("Open Existing Project…")
+                                enabled: dialog.selectionEnabled
+                                onClicked: dialog.requestOpen()
                             }
                         }
+
+                        Label {
+                            Layout.fillWidth: true
+                            visible: dialog.launchMessage.length > 0
+                            text: dialog.launchMessage
+                            color: appTheme.textMutedColor
+                            font.family: appTheme.uiFontFamily
+                            font.pixelSize: appTheme.fontSizeCaption
+                            font.weight: appTheme.fontWeightRegular
+                            wrapMode: Text.Wrap
+                        }
+                    }
+                }
+
+                WelcomeNewProjectForm {
+                    id: newProjectForm
+                    serviceMessage: dialog.launchMessage
+                    actionsEnabled: dialog.selectionEnabled
+                    onBackRequested: dialog.rightColumnMode = "overview"
+                    onCreateRequested: function(storageLocation, projectName) {
+                        dialog.requestCreate(storageLocation, projectName)
                     }
                 }
             }
 
+            // Left column, footer: divider, language selector, Quit.
+            ColumnLayout {
+                x: sidebarTop.x
+                width: sidebarTop.width
+                anchors.bottom: parent.bottom
+                anchors.bottomMargin: appTheme.spaceXl
+                spacing: appTheme.spaceMd
+
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 1
+                    color: appTheme.dividerColor
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: appTheme.spaceSm
+
+                    ComboBox {
+                        id: languageCombo
+                        objectName: "welcomeLanguageCombo"
+                        Layout.preferredWidth: shell.sidebarWidth / 2
+                        Layout.preferredHeight: appTheme.iconButtonHitSizeCompact
+                        model: dialog.languageOptions
+                        textRole: "label"
+                        currentIndex: dialog.currentLanguageIndex
+                        font.family: appTheme.uiFontFamily
+                        font.pixelSize: appTheme.fontSizeBody
+                        Accessible.name: qsTr("Interface language")
+                        onActivated: function(index) {
+                            const item = model[index]
+                            if (item) {
+                                dialog.languageRequested(item.code)
+                            }
+                        }
+
+                        background: Rectangle {
+                            radius: appTheme.controlRadiusSmall
+                            color: appTheme.bgBaseColor
+                            border.width: 1
+                            border.color: languageCombo.visualFocus || languageCombo.hovered
+                                          ? appTheme.textMutedColor
+                                          : appTheme.cardBorderColor
+                        }
+
+                        contentItem: Label {
+                            leftPadding: appTheme.spaceMd
+                            rightPadding: appTheme.spaceXl + appTheme.spaceSm
+                            text: languageCombo.displayText
+                            color: appTheme.textColor
+                            font: languageCombo.font
+                            verticalAlignment: Text.AlignVCenter
+                            elide: Text.ElideRight
+                        }
+
+                        indicator: Label {
+                            x: languageCombo.width - width - appTheme.spaceMd
+                            y: Math.round((languageCombo.height - height) / 2)
+                            text: "▾"
+                            color: appTheme.textMutedColor
+                            font.pixelSize: appTheme.fontSizeCaption
+                        }
+
+                        popup: Popup {
+                            // The welcome dialog sits above the default popup layer.
+                            z: dialog.z + 1
+                            y: languageCombo.height + appTheme.spaceXs
+                            width: languageCombo.width
+                            implicitHeight: contentItem.implicitHeight + 2 * appTheme.spaceXs
+                            padding: appTheme.spaceXs
+
+                            background: Rectangle {
+                                radius: appTheme.controlRadiusSmall
+                                color: appTheme.bgBaseColor
+                                border.width: 1
+                                border.color: appTheme.cardBorderColor
+                            }
+
+                            contentItem: ListView {
+                                clip: true
+                                implicitHeight: contentHeight
+                                spacing: appTheme.spaceXs
+                                model: languageCombo.popup.visible ? languageCombo.delegateModel : null
+                                currentIndex: languageCombo.highlightedIndex
+                            }
+                        }
+
+                        delegate: ItemDelegate {
+                            id: languageOption
+                            required property var modelData
+                            required property int index
+                            width: languageCombo.width - 2 * appTheme.spaceXs
+                            height: appTheme.iconButtonHitSizeCompact - appTheme.spaceSm
+                            highlighted: languageCombo.highlightedIndex === languageOption.index
+
+                            background: Rectangle {
+                                radius: appTheme.controlRadiusSmall
+                                color: languageOption.highlighted
+                                       ? appTheme.editorListSelectedFillColor
+                                       : (languageOption.hovered ? appTheme.hoverColor : "transparent")
+                            }
+
+                            contentItem: Label {
+                                leftPadding: appTheme.spaceSm
+                                text: String(languageOption.modelData.label || "")
+                                color: languageOption.highlighted
+                                       ? appTheme.editorListSelectedInkColor
+                                       : appTheme.textColor
+                                font.family: appTheme.uiFontFamily
+                                font.pixelSize: appTheme.fontSizeBody
+                                verticalAlignment: Text.AlignVCenter
+                                elide: Text.ElideRight
+                            }
+                        }
+                    }
+
+                    Item {
+                        Layout.fillWidth: true
+                    }
+
+                    WelcomeActionButton {
+                        objectName: "welcomeQuitButton"
+                        kind: "quiet"
+                        compact: true
+                        text: qsTr("Quit")
+                        onClicked: dialog.exitRequested()
+                    }
+                }
+            }
         }
     }
 }

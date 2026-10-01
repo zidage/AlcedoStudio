@@ -20,7 +20,13 @@ QtObject {
     // False while the welcome surface is closed.
     property bool active: true
 
-    readonly property string projectPath: root.projectModule ? String(root.projectModule.welcomeProjectPath || "") : ""
+    readonly property string welcomeProjectPath: root.projectModule ? String(root.projectModule.welcomeProjectPath || "") : ""
+    // Path that the upper area describes. Before the startup preview starts, the
+    // first recent entry (the project that the preview will load).
+    readonly property string projectPath: root.welcomeProjectPath.length > 0
+                                          ? root.welcomeProjectPath
+                                          : (root.recentProjects && root.recentProjects.length > 0
+                                             ? String(root.recentProjects[0].path || "") : "")
     readonly property string errorText: root.projectModule ? String(root.projectModule.previewErrorMessage || "") : ""
     readonly property var recentProjects: root.projectModule ? root.projectModule.recentProjects : []
     readonly property bool loadRunning: !!root.projectModule && root.projectModule.projectLoading
@@ -33,8 +39,8 @@ QtObject {
     readonly property string state: {
         if (root.errorText.length > 0)
             return "failed"
-        if (root.projectPath.length === 0)
-            return root.recentProjects && root.recentProjects.length > 0 ? "loading" : "empty"
+        if (root.welcomeProjectPath.length === 0)
+            return root.projectPath.length > 0 ? "loading" : "empty"
         if (root.loadRunning)
             return "loading"
         if (root.projectModule && root.projectModule.serviceReady
