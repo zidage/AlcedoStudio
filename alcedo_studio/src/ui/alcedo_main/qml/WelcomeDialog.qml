@@ -435,6 +435,8 @@ Dialog {
                     WelcomeProjectOverview {
                         id: projectOverview
                         Layout.fillWidth: true
+                        // The recent list takes the remaining height.
+                        Layout.fillHeight: false
                         adapter: dialog.adapter
                         compact: shell.compact
                         onContinueRequested: dialog.requestContinue()

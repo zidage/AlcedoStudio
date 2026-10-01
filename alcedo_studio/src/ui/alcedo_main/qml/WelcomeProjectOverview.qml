@@ -43,8 +43,15 @@ ColumnLayout {
         Accessible.role: Accessible.Heading
     }
 
+    // The row is exactly as tall as the cover block. The spacer in the
+    // information block has Layout.fillHeight, which a layout passes up to its
+    // parents; without the fixed heights the overview takes the height that
+    // the recent list needs.
     RowLayout {
         Layout.fillWidth: true
+        Layout.fillHeight: false
+        Layout.preferredHeight: appTheme.welcomeCoverHeight
+        Layout.maximumHeight: appTheme.welcomeCoverHeight
         spacing: appTheme.spaceXl
 
         WelcomeCoverMosaic {
@@ -59,7 +66,10 @@ ColumnLayout {
         ColumnLayout {
             Layout.fillWidth: true
             Layout.minimumWidth: appTheme.welcomeInfoMinWidth
+            // Continue Editing ends on the bottom edge of the cover block.
+            Layout.fillHeight: false
             Layout.preferredHeight: appTheme.welcomeCoverHeight
+            Layout.maximumHeight: appTheme.welcomeCoverHeight
             Layout.alignment: Qt.AlignTop
             spacing: 0
 

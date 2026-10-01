@@ -5690,32 +5690,32 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     </message>
     <message>
         <location filename="../qml/WelcomeDialog.qml" line="402"/>
-        <location line="+101"/>
+        <location line="+103"/>
         <source>New Project…</source>
         <translation>New Project…</translation>
     </message>
     <message>
-        <location filename="../qml/WelcomeDialog.qml" line="470"/>
+        <location filename="../qml/WelcomeDialog.qml" line="472"/>
         <source>Create your first project</source>
         <translation>Create your first project</translation>
     </message>
     <message>
-        <location filename="../qml/WelcomeDialog.qml" line="481"/>
+        <location filename="../qml/WelcomeDialog.qml" line="483"/>
         <source>Choose a folder for the project file, then import your photos. Alcedo does not move or change the original photos.</source>
         <translation>Choose a folder for the project file, then import your photos. Alcedo does not move or change the original photos.</translation>
     </message>
     <message>
-        <location filename="../qml/WelcomeDialog.qml" line="513"/>
+        <location filename="../qml/WelcomeDialog.qml" line="515"/>
         <source>Open Existing Project…</source>
         <translation>Open Existing Project…</translation>
     </message>
     <message>
-        <location filename="../qml/WelcomeDialog.qml" line="571"/>
+        <location filename="../qml/WelcomeDialog.qml" line="573"/>
         <source>Interface language</source>
         <translation>Interface language</translation>
     </message>
     <message>
-        <location filename="../qml/WelcomeDialog.qml" line="667"/>
+        <location filename="../qml/WelcomeDialog.qml" line="669"/>
         <source>Quit</source>
         <translation>Quit</translation>
     </message>
@@ -5779,22 +5779,22 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>Continue your last project</translation>
     </message>
     <message>
-        <location filename="../qml/WelcomeProjectOverview.qml" line="120"/>
+        <location filename="../qml/WelcomeProjectOverview.qml" line="130"/>
         <source>Photos</source>
         <translation>Photos</translation>
     </message>
     <message>
-        <location filename="../qml/WelcomeProjectOverview.qml" line="129"/>
+        <location filename="../qml/WelcomeProjectOverview.qml" line="139"/>
         <source>Edited</source>
         <translation>Edited</translation>
     </message>
     <message>
-        <location filename="../qml/WelcomeProjectOverview.qml" line="138"/>
+        <location filename="../qml/WelcomeProjectOverview.qml" line="148"/>
         <source>Capture dates</source>
         <translation>Capture dates</translation>
     </message>
     <message>
-        <location filename="../qml/WelcomeProjectOverview.qml" line="155"/>
+        <location filename="../qml/WelcomeProjectOverview.qml" line="165"/>
         <source>Continue Editing</source>
         <translation>Continue Editing</translation>
     </message>
