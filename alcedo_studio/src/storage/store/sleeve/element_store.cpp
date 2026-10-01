@@ -681,6 +681,35 @@ auto ElementStore::CountFilesInFolder(sl_element_id_t                           
       RunScalarInt64(conn, std::format("SELECT COUNT(*) {}", scope.from_where_), scope.binds_));
 }
 
+auto ElementStore::ReadProjectOverview() const -> ProjectOverviewCounts {
+  auto       db_lock = guard_.Lock();
+  const auto scope   = BuildScopedFileQuery(0);
+  // Import writes the edit history root and an empty Version head but no EditCommit row, so a
+  // file counts as edited only when its root has at least one commit.
+  const auto sql = std::format(
+      "SELECT COUNT(*), "
+      "COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM ImageEditState s JOIN EditCommit c "
+      "ON c.root_id = s.root_id WHERE s.element_id = e.id)), "
+      "CAST(MIN(i.capture_date) AS VARCHAR), CAST(MAX(i.capture_date) AS VARCHAR) {}",
+      scope.from_where_);
+
+  duckdb_result result;
+  ExecuteQueryOrThrow(guard_.conn_, sql, scope.binds_, &result);
+  ProjectOverviewCounts out;
+  if (duckdb_row_count(&result) > 0) {
+    out.photo_count_        = static_cast<uint64_t>(duckdb_value_int64(&result, 0, 0));
+    out.edited_photo_count_ = static_cast<uint64_t>(duckdb_value_int64(&result, 1, 0));
+    if (!duckdb_value_is_null(&result, 2, 0)) {
+      out.earliest_capture_date_ = ReadVarchar(&result, 2, 0);
+    }
+    if (!duckdb_value_is_null(&result, 3, 0)) {
+      out.latest_capture_date_ = ReadVarchar(&result, 3, 0);
+    }
+  }
+  duckdb_destroy_result(&result);
+  return out;
+}
+
 auto ElementStore::ListSearchResultPage(
     sl_element_id_t folder_id, size_t offset, size_t limit,
     const std::optional<duckorm::SqlFragment>& extra_filter) const -> SearchResultPage {

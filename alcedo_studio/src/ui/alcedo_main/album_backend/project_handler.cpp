@@ -31,16 +31,37 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
                                         ProjectOpenMode              openMode,
                                         const std::filesystem::path& packagePath,
                                         const std::filesystem::path& workspaceDir,
-                                        const std::filesystem::path& recentProjectPath) {
+                                        const std::filesystem::path& recentProjectPath,
+                                        ProjectEntryMode             entryMode) {
   return StartProjectLoad(dbPath, metaPath, openMode, packagePath, workspaceDir, recentProjectPath,
-                          std::nullopt);
+                          std::nullopt, entryMode);
 }
 
 bool ProjectHandler::OpenPackedProject(const std::filesystem::path& packagePath,
                                        const std::filesystem::path& workspaceDir,
-                                       const QString&               projectName) {
+                                       const QString&               projectName,
+                                       ProjectEntryMode             entryMode) {
   return StartProjectLoad({}, {}, ProjectOpenMode::kLoadExisting, packagePath, workspaceDir,
-                          packagePath, projectName);
+                          packagePath, projectName, entryMode);
+}
+
+bool ProjectHandler::RequestEnterLoadedProject() {
+  if (project_loading_) {
+    if (load_entry_mode_ != ProjectEntryMode::kPreview) {
+      return false;
+    }
+    // The completion runs on this thread too, so it reads the changed mode.
+    load_entry_mode_ = ProjectEntryMode::kEnter;
+    project_module_.NotifyProjectLoadStateChanged();
+    return true;
+  }
+  if (!project_ || project_entered_) {
+    return false;
+  }
+  project_entered_ = true;
+  project_module_.RegisterRecentProject(recent_project_path_);
+  project_module_.NotifyProjectEntryStateChanged();
+  return true;
 }
 
 bool ProjectHandler::StartProjectLoad(const std::filesystem::path& dbPath,
@@ -49,7 +70,8 @@ bool ProjectHandler::StartProjectLoad(const std::filesystem::path& dbPath,
                                       const std::filesystem::path& packagePath,
                                       const std::filesystem::path& workspaceDir,
                                       const std::filesystem::path& recentProjectPath,
-                                      std::optional<QString>       unpackProjectName) {
+                                      std::optional<QString>       unpackProjectName,
+                                      ProjectEntryMode             entryMode) {
   if (project_loading_) {
     project_module_.SetServiceMessageForCurrentProject(PL_TEXT("A project load is already in progress."));
     return false;
@@ -62,6 +84,8 @@ bool ProjectHandler::StartProjectLoad(const std::filesystem::path& dbPath,
   }
 
   project_module_.FinalizeEditorSession();
+
+  load_entry_mode_ = entryMode;
 
   project_module_.SetServiceMessageForCurrentProject((openMode == ProjectOpenMode::kCreateNew)
                                                   ? PL_TEXT("Creating project...")
@@ -81,12 +105,16 @@ bool ProjectHandler::StartProjectLoad(const std::filesystem::path& dbPath,
   auto old_meta      = meta_path_;
   auto old_package   = project_package_path_;
   auto old_workspace = project_workspace_dir_;
+  // A project that the user did not enter has no user changes. Its package stays as it is on
+  // disk, so the loader skips the persist sequence for it.
+  const bool old_project_entered = project_entered_;
 
   QPointer<ProjectModule> self(&project_module_);
   std::thread([self, request_id, old_project = std::move(old_project),
                old_pipeline = std::move(old_pipeline), old_thumbnail = std::move(old_thumbnail),
                old_meta = std::move(old_meta), old_package = std::move(old_package),
-               old_workspace = std::move(old_workspace), dbPath = std::filesystem::path(dbPath),
+               old_workspace = std::move(old_workspace), old_project_entered,
+               started_as_preview = entryMode == ProjectEntryMode::kPreview, dbPath = std::filesystem::path(dbPath),
                metaPath = std::filesystem::path(metaPath), packagePath, workspaceDir,
                recentProjectPath, openMode, accelerator_preference,
                lut_resources     = std::move(lut_resources),
@@ -105,14 +133,16 @@ bool ProjectHandler::StartProjectLoad(const std::filesystem::path& dbPath,
       std::filesystem::path                   workspace_dir_{};
       std::filesystem::path                   recent_project_path_{};
       std::filesystem::path                   workspace_to_cleanup_{};
+      ProjectOverviewCounts                   overview_{};
     };
 
     auto result = std::make_shared<LoadResult>();
 
     try {
-      if (old_pipeline) {
+      if (old_pipeline && old_project_entered) {
         old_pipeline->Sync();
       }
+      // The thumbnail cache index is not part of the project package; flush it for every project.
       if (old_thumbnail) {
         auto stats = old_thumbnail->GetDiskCacheStats();
         if (stats.enabled) {
@@ -120,7 +150,7 @@ bool ProjectHandler::StartProjectLoad(const std::filesystem::path& dbPath,
         }
       }
 
-      if (old_project && !old_meta.empty()) {
+      if (old_project && old_project_entered && !old_meta.empty()) {
         old_project->GetSleeveService()->Sync();
         old_project->GetImagePoolService()->SyncWithStorage();
         old_project->SaveProject(old_meta);
@@ -187,6 +217,8 @@ bool ProjectHandler::StartProjectLoad(const std::filesystem::path& dbPath,
         result->project_->SaveProject(metaPath);
       }
 
+      result->overview_ = result->project_->GetAlbumBrowseService()->ReadProjectOverview();
+
       result->db_path_   = result->project_->GetDBPath();
       result->meta_path_ = result->project_->GetMetaPath();
       if (result->meta_path_.empty()) {
@@ -214,7 +246,8 @@ bool ProjectHandler::StartProjectLoad(const std::filesystem::path& dbPath,
 
     QMetaObject::invokeMethod(
         self,
-        [self, request_id, result]() mutable {
+        [self, request_id, result, started_as_preview,
+         failed_project_path = recentProjectPath]() mutable {
           if (!self || request_id != self->handler().project_load_request_id()) {
             return;
           }
@@ -227,6 +260,11 @@ bool ProjectHandler::StartProjectLoad(const std::filesystem::path& dbPath,
                 ph.project_ ? PL_TEXT("Requested project failed to open: %1", result->error_)
                             : PL_TEXT("Project open failed: %1", result->error_));
             self->SetTaskState(PL_TEXT("Project open failed."), 0, false);
+            // A load that PreviewProject started reports the failure on the welcome surface,
+            // also when the user changed it to kEnter while it ran.
+            if (started_as_preview) {
+              self->HandlePreviewLoadFailed(failed_project_path, result->error_);
+            }
             return;
           }
 
@@ -240,6 +278,13 @@ bool ProjectHandler::StartProjectLoad(const std::filesystem::path& dbPath,
           ph.project_package_path_  = std::move(result->package_path_);
           ph.project_workspace_dir_ = std::move(result->workspace_dir_);
           ph.mask_thumbnail_service_ = std::make_shared<alcedo::MaskThumbnailService>();
+          ph.recent_project_path_    = result->recent_project_path_.empty()
+                                           ? (!ph.project_package_path_.empty()
+                                                  ? ph.project_package_path_
+                                                  : ph.meta_path_)
+                                           : result->recent_project_path_;
+          ph.project_overview_       = std::move(result->overview_);
+          ph.project_entered_        = ph.load_entry_mode_ == ProjectEntryMode::kEnter;
 
           if (ph.project_) {
             (void)ph.project_->GetAiSidecarRuntimeService();
@@ -257,12 +302,12 @@ bool ProjectHandler::StartProjectLoad(const std::filesystem::path& dbPath,
                         : PL_TEXT("Loaded packed project: %1 (DB temp: %2)",
                                   album_util::PathToQString(ph.project_package_path_),
                                   album_util::PathToQString(ph.db_path_)));
-          self->RegisterRecentProject(result->recent_project_path_.empty()
-                                          ? (!ph.project_package_path_.empty() ? ph.project_package_path_
-                                                                               : ph.meta_path_)
-                                          : result->recent_project_path_);
+          if (ph.project_entered_) {
+            self->RegisterRecentProject(ph.recent_project_path_);
+          }
           emit self->ProjectChanged();
           emit self->projectChanged();
+          self->NotifyProjectEntryStateChanged();
           ph.SetProjectLoadingState(false, {});
 
           if (!result->workspace_to_cleanup_.empty() &&

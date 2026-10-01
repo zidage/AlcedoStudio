@@ -4,6 +4,7 @@
 
 #include "ui/alcedo_main/album_backend/project_module.hpp"
 
+#include <QDate>
 #include <QDateTime>
 #include <QDir>
 #include <QFileDialog>
@@ -243,6 +244,44 @@ void ProjectModule::SetServiceMessage(const i18n::LocalizedText& message) {
 }
 
 void ProjectModule::NotifyProjectLoadStateChanged() { emit ProjectLoadStateChanged(); }
+
+void ProjectModule::NotifyProjectEntryStateChanged() {
+  emit ProjectEnteredChanged();
+  emit WelcomeProjectChanged();
+}
+
+void ProjectModule::HandlePreviewLoadFailed(const std::filesystem::path& projectPath,
+                                            const QString&               errorMessage) {
+  RemoveRecentProject(projectPath);
+  welcome_project_path_  = NormalizeRecentProjectPath(projectPath);
+  preview_error_message_ = errorMessage;
+  emit WelcomeProjectChanged();
+}
+
+auto ProjectModule::ProjectLoadEntryMode() const -> QString {
+  if (!handler_.project_loading()) {
+    return {};
+  }
+  return handler_.load_entry_mode() == ProjectEntryMode::kPreview ? QStringLiteral("preview")
+                                                                  : QStringLiteral("enter");
+}
+
+auto ProjectModule::ProjectOverview() const -> QVariantMap {
+  const auto& overview = handler_.project_overview();
+  if (!overview.has_value()) {
+    return {};
+  }
+  const auto to_date = [](const std::optional<std::string>& value) {
+    return value.has_value() ? QDate::fromString(QString::fromStdString(*value), Qt::ISODate)
+                             : QDate{};
+  };
+  return QVariantMap{
+      {QStringLiteral("photoCount"), static_cast<qulonglong>(overview->photo_count_)},
+      {QStringLiteral("editedPhotoCount"), static_cast<qulonglong>(overview->edited_photo_count_)},
+      {QStringLiteral("earliestCaptureDate"), to_date(overview->earliest_capture_date_)},
+      {QStringLiteral("latestCaptureDate"), to_date(overview->latest_capture_date_)},
+  };
+}
 
 void ProjectModule::SetAcceleratorPreparationState(bool                       preparing,
                                                    const i18n::LocalizedText& status) {
@@ -523,43 +562,106 @@ bool ProjectModule::LoadProject(const QString& metaFileUrlOrPath) {
     return false;
   }
 
-  const auto      project_path = project_path_opt.value();
+  i18n::LocalizedText error;
+  bool                file_rejected = false;
+  if (StartPackedProjectLoad(*project_path_opt, ProjectEntryMode::kEnter, &error,
+                             &file_rejected)) {
+    return true;
+  }
+  if (file_rejected) {
+    RemoveRecentProject(*project_path_opt);
+  }
+  if (!error.IsEmpty()) {
+    SetServiceMessageForCurrentProject(error);
+  }
+  return false;
+}
+
+bool ProjectModule::PreviewProject(const QString& projectUrlOrPath) {
+  if (handler_.project_loading() || !ProjectSwitchBlockReason().isEmpty()) {
+    return false;
+  }
+  const auto project_path_opt = InputToPath(projectUrlOrPath);
+  if (!project_path_opt.has_value()) {
+    return false;
+  }
+
+  const QString normalized_path = NormalizeRecentProjectPath(*project_path_opt);
+  const QString previous_path   = welcome_project_path_;
+  const QString previous_error  = preview_error_message_;
+  welcome_project_path_         = normalized_path;
+  preview_error_message_.clear();
+
+  const bool already_previewed =
+      handler_.project() && !handler_.project_entered() &&
+      NormalizeRecentProjectPath(handler_.recent_project_path()) == normalized_path;
+  if (already_previewed) {
+    emit WelcomeProjectChanged();
+    return true;
+  }
+
+  i18n::LocalizedText error;
+  bool                file_rejected = false;
+  if (StartPackedProjectLoad(*project_path_opt, ProjectEntryMode::kPreview, &error,
+                             &file_rejected)) {
+    emit WelcomeProjectChanged();
+    return true;
+  }
+  if (error.IsEmpty()) {
+    // ProjectHandler refused the load; nothing started, so the welcome state stays as it was.
+    welcome_project_path_  = previous_path;
+    preview_error_message_ = previous_error;
+    return false;
+  }
+  if (file_rejected) {
+    HandlePreviewLoadFailed(*project_path_opt, error.Render());
+  } else {
+    preview_error_message_ = error.Render();
+    emit WelcomeProjectChanged();
+  }
+  return false;
+}
+
+bool ProjectModule::EnterLoadedProject() { return handler_.RequestEnterLoadedProject(); }
+
+bool ProjectModule::StartPackedProjectLoad(const std::filesystem::path& projectPath,
+                                           const ProjectEntryMode       entryMode,
+                                           i18n::LocalizedText* error, bool* fileRejected) {
   std::error_code ec;
-  if (!std::filesystem::is_regular_file(project_path, ec) || ec) {
-    RemoveRecentProject(project_path);
-    SetServiceMessageForCurrentProject(PL_TEXT("Project file was not found."));
+  if (!std::filesystem::is_regular_file(projectPath, ec) || ec) {
+    *fileRejected = true;
+    *error        = PL_TEXT("Project file was not found.");
     return false;
   }
 
   ProjectPackageService package_service;
-  if (!package_service.IsSupportedProjectFile(project_path)) {
-    RemoveRecentProject(project_path);
-    SetServiceMessageForCurrentProject(
-        PL_TEXT("Unsupported or damaged project package. Choose a valid .alcd file."));
+  if (!package_service.IsSupportedProjectFile(projectPath)) {
+    *fileRejected = true;
+    *error = PL_TEXT("Unsupported or damaged project package. Choose a valid .alcd file.");
     return false;
   }
 
-  if (package_service.IsPackedProjectPath(project_path)) {
-    const QString         project_name = QFileInfo(PathToQString(project_path)).completeBaseName();
-    std::filesystem::path workspace_dir;
-    QString               workspace_error;
-    if (!package_service.CreateProjectWorkspace(project_name, &workspace_dir, &workspace_error)) {
-      SetServiceMessageForCurrentProject(workspace_error.isEmpty()
-                                             ? PL_TEXT("Failed to prepare project temp workspace.")
-                                             : PL_TEXT("%1", workspace_error));
-      return false;
-    }
-
-    // The loader thread unpacks the package, so the UI shows the loading state meanwhile.
-    const bool started = handler_.OpenPackedProject(project_path, workspace_dir, project_name);
-    if (!started) {
-      CleanupWorkspaceDirectory(workspace_dir);
-    }
-    return started;
+  if (!package_service.IsPackedProjectPath(projectPath)) {
+    *error = PL_TEXT("Unsupported project format. Choose a .alcd file.");
+    return false;
   }
 
-  SetServiceMessageForCurrentProject(PL_TEXT("Unsupported project format. Choose a .alcd file."));
-  return false;
+  const QString         project_name = QFileInfo(PathToQString(projectPath)).completeBaseName();
+  std::filesystem::path workspace_dir;
+  QString               workspace_error;
+  if (!package_service.CreateProjectWorkspace(project_name, &workspace_dir, &workspace_error)) {
+    *error = workspace_error.isEmpty() ? PL_TEXT("Failed to prepare project temp workspace.")
+                                       : PL_TEXT("%1", workspace_error);
+    return false;
+  }
+
+  // The loader thread unpacks the package, so the UI shows the loading state meanwhile.
+  const bool started =
+      handler_.OpenPackedProject(projectPath, workspace_dir, project_name, entryMode);
+  if (!started) {
+    CleanupWorkspaceDirectory(workspace_dir);
+  }
+  return started;
 }
 
 bool ProjectModule::CreateProjectInFolder(const QString& folderUrlOrPath) {
@@ -604,7 +706,7 @@ bool ProjectModule::CreateProjectInFolderNamed(const QString& folderUrlOrPath,
   const auto runtime_pair = package_service.BuildRuntimeProjectPair(workspace_dir, projectName);
   const bool started      = handler_.InitializeServices(
       runtime_pair.first, runtime_pair.second, ProjectOpenMode::kCreateNew, packed_path_opt.value(),
-      workspace_dir, packed_path_opt.value());
+      workspace_dir, packed_path_opt.value(), ProjectEntryMode::kEnter);
   if (!started) {
     CleanupWorkspaceDirectory(workspace_dir);
   }

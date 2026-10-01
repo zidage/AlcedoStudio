@@ -62,6 +62,10 @@ Item {
         - contentRowSpacingTotal
         - 5)
     readonly property int defaultGridZoomLevel: 4
+    // Thumbnail tier of the grid view; 0 when the grid view is not loaded.
+    readonly property int thumbnailMaxEdge: contentViewLoader.item
+                                            && contentViewLoader.item.desiredMaxEdge !== undefined
+                                            ? contentViewLoader.item.desiredMaxEdge : 0
     property int gridZoomLevel: defaultGridZoomLevel
     property bool _viewStateReady: false
     property real libraryGridRevealOpacity: 1

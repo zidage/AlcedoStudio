@@ -14,6 +14,7 @@
 #include "app/sleeve_filter_service.hpp"
 #include "app/sleeve_service.hpp"
 #include "storage/mapper/duckorm/duckdb_expr.hpp"
+#include "storage/store/sleeve/element_store.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -64,6 +65,10 @@ class AlbumBrowseService {
   [[nodiscard]] auto CountFilesInFolderById(
       sl_element_id_t                            folder_id,
       const std::optional<duckorm::SqlFragment>& extra_filter = std::nullopt) const -> size_t;
+  /// Photo count, edited photo count, and capture date range of the whole project. Reads only.
+  /// Unlike the listing reads, it does not hide a failure: it throws std::runtime_error when the
+  /// sleeve service is absent or the statement fails.
+  [[nodiscard]] auto ReadProjectOverview() const -> ProjectOverviewCounts;
 
   [[nodiscard]] auto CreateFolder(const std::filesystem::path& parent_folder_path,
                                   const file_name_t& name) -> std::optional<AlbumFolderView>;

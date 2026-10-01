@@ -86,6 +86,10 @@ class AlbumThumbnailModel : public QAbstractListModel {
   /// QML helper: return selection payloads for the loaded rows inside an index range.
   Q_INVOKABLE QVariantList getItemsInRange(int firstIndex, int lastIndex) const;
 
+  /// QML helper: return `{elementId, imageId, thumbUrl, thumbLoading}` for the loaded rows
+  /// inside an index range. Reads the thumbnail state that the grid delegates show.
+  Q_INVOKABLE QVariantList getThumbnailStatesInRange(int firstIndex, int lastIndex) const;
+
   /// Lookup row index by elementId. Returns -1 if not found.
   Q_INVOKABLE int rowByElementId(uint elementId) const;
 

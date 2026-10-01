@@ -56,6 +56,12 @@ class ProjectModule final : public QObject, public IUiStatusSink {
   Q_PROPERTY(bool projectLoading READ ProjectLoading NOTIFY ProjectLoadStateChanged)
   Q_PROPERTY(
       QString projectLoadingMessage READ ProjectLoadingMessage NOTIFY ProjectLoadStateChanged)
+  Q_PROPERTY(bool projectEntered READ ProjectEntered NOTIFY ProjectEnteredChanged)
+  Q_PROPERTY(
+      QString projectLoadEntryMode READ ProjectLoadEntryMode NOTIFY ProjectLoadStateChanged)
+  Q_PROPERTY(QString welcomeProjectPath READ WelcomeProjectPath NOTIFY WelcomeProjectChanged)
+  Q_PROPERTY(QVariantMap projectOverview READ ProjectOverview NOTIFY WelcomeProjectChanged)
+  Q_PROPERTY(QString previewErrorMessage READ PreviewErrorMessage NOTIFY WelcomeProjectChanged)
   Q_PROPERTY(QString taskStatus READ TaskStatus NOTIFY TaskStateChanged)
   Q_PROPERTY(int taskProgress READ TaskProgress NOTIFY TaskStateChanged)
   Q_PROPERTY(bool taskCancelVisible READ TaskCancelVisible NOTIFY TaskStateChanged)
@@ -96,6 +102,17 @@ class ProjectModule final : public QObject, public IUiStatusSink {
   }
   bool    ProjectLoading() const { return handler_.project_loading(); }
   QString ProjectLoadingMessage() const { return handler_.project_loading_message(); }
+  bool    ProjectEntered() const { return handler_.project_entered(); }
+  /// `"preview"` or `"enter"` for the running load; empty when no load runs.
+  QString ProjectLoadEntryMode() const;
+  /// Normalized path of the project that the welcome surface describes.
+  QString WelcomeProjectPath() const { return welcome_project_path_; }
+  /// `{photoCount, editedPhotoCount, earliestCaptureDate, latestCaptureDate}` of the loaded
+  /// project; an empty map when no project is loaded. A date is an invalid QDate when no file
+  /// has a capture date.
+  QVariantMap ProjectOverview() const;
+  /// Error text of the last failed preview load; cleared by the next PreviewProject.
+  QString PreviewErrorMessage() const { return preview_error_message_; }
   QString TaskStatus() const { return task_status_text_.Render(); }
   int     TaskProgress() const { return task_progress_; }
   bool    TaskCancelVisible() const { return task_cancel_visible_; }
@@ -119,6 +136,14 @@ class ProjectModule final : public QObject, public IUiStatusSink {
   Q_INVOKABLE bool   CreateProjectInFolderNamed(const QString& folderUrlOrPath,
                                                 const QString& projectName);
   Q_INVOKABLE bool   SaveProject();
+  /// Loads the project at @p projectUrlOrPath in preview mode for the welcome surface.
+  /// Returns false and changes nothing when a load runs or a project switch is blocked. When
+  /// the project is already loaded and not entered, only sets the welcome project path.
+  /// A pre-check failure or a load failure removes the recent entry and sets
+  /// previewErrorMessage; the loaded project stays loaded.
+  Q_INVOKABLE bool   PreviewProject(const QString& projectUrlOrPath);
+  /// Enters the previewed project (ProjectHandler::RequestEnterLoadedProject).
+  Q_INVOKABLE bool   EnterLoadedProject();
 
   // ── Internals used by ProjectHandler / host ────────────────────────────
   void               InitializeAcceleratorSettings();
@@ -127,6 +152,12 @@ class ProjectModule final : public QObject, public IUiStatusSink {
   void               RegisterRecentProject(const std::filesystem::path& projectPath);
   void               RemoveRecentProject(const std::filesystem::path& projectPath);
   void               NotifyProjectLoadStateChanged();
+  /// Publishes projectEntered, the overview, and the welcome project state after a change.
+  void               NotifyProjectEntryStateChanged();
+  /// Applies the preview failure rules: removes the recent entry of @p projectPath and shows
+  /// @p errorMessage for it on the welcome surface.
+  void               HandlePreviewLoadFailed(const std::filesystem::path& projectPath,
+                                             const QString&               errorMessage);
   void               HandleProjectOpened();
   void               ClearProjectUiState();
   [[nodiscard]] auto ProjectSwitchBlockReason() const -> QString;
@@ -142,6 +173,8 @@ class ProjectModule final : public QObject, public IUiStatusSink {
   void ProjectChanged();
   void projectChanged();
   void ProjectLoadStateChanged();
+  void ProjectEnteredChanged();
+  void WelcomeProjectChanged();
 
  private:
   void           StartOpenClPreparationIfNeeded();
@@ -150,6 +183,13 @@ class ProjectModule final : public QObject, public IUiStatusSink {
   bool           IsAcceleratorWarningAcknowledged() const;
   void           PersistAcceleratorWarningAcknowledgement() const;
   void           PersistRecentProjects() const;
+  // Checks that @p projectPath is a supported packed project and starts its load. Returns
+  // false on failure. A pre-check failure writes its reason to @p error and sets
+  // @p fileRejected when the file itself is the cause. A refusal by ProjectHandler leaves
+  // @p error empty; the handler already set the service message.
+  bool           StartPackedProjectLoad(const std::filesystem::path& projectPath,
+                                        ProjectEntryMode entryMode, i18n::LocalizedText* error,
+                                        bool* fileRejected);
 
   ProjectHandler handler_;
 
@@ -158,6 +198,8 @@ class ProjectModule final : public QObject, public IUiStatusSink {
   i18n::LocalizedText          service_message_text_{};
   bool                         service_ready_ = false;
   QVariantList                 recent_projects_{};
+  QString                      welcome_project_path_{};
+  QString                      preview_error_message_{};
   AcceleratorBackendPreference accelerator_preference_ = AcceleratorBackendPreference::Auto;
   std::shared_ptr<const LutResourceResolver> lut_resources_;
   QString                      accelerator_backend_key_{};

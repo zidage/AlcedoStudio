@@ -6,12 +6,16 @@
 /// @brief Project lifecycle tests for ApplicationModuleHost.
 ///
 /// Covers: create project, load project (valid/invalid), save project,
-/// pack/unpack integrity, data_summary diagnostics, and initial service
-/// state.
+/// pack/unpack integrity, data_summary diagnostics, initial service state, and
+/// the welcome surface preview (entry mode, overview, recent list, persist skip).
 
 #include "ui/album_backend_test_fixture.hpp"
+#include "ui/welcome_project_test_support.hpp"
 
+#include <QDate>
 #include <QSignalSpy>
+#include <QVariantList>
+#include <QVariantMap>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -171,7 +175,7 @@ TEST_F(ProjectTests, CreateProject_EmptyName_Fails) {
 
 TEST_F(ProjectTests, SemanticActivationManifestRequiresListedFilesOnDisk) {
   // Production validation checks every catalog-listed asset under the profile
-  // root, not just the subset written into alcedo_model_manifest.json. Seed a
+  // root, not just the subset written into alcedo_model_manifest.json. Populate a
   // complete stub tree, then delete one asset and confirm activation fails.
   const auto base_dir  = temp_dir_ / "model";
   const auto model_dir = base_dir / "mobileclip2-s2-en";
@@ -720,6 +724,354 @@ TEST_F(ProjectTests, CreateProjectInFolder_DefaultName_Succeeds) {
   WaitForSignal(projSpy, 15000);
   ProcessEvents(500);
   EXPECT_TRUE(backend.project()->ServiceReady());
+}
+
+
+// ── Welcome surface preview ─────────────────────────────────────────────────
+
+using WelcomePreviewTests = ApplicationModuleHostTestFixture;
+
+auto RecentEntryIndex(const ProjectModule& project, const std::filesystem::path& path) -> int {
+  const auto entries = project.RecentProjects();
+  for (int i = 0; i < entries.size(); ++i) {
+    std::error_code ec;
+    const auto      entry_path =
+        std::filesystem::path(entries[i].toMap().value("path").toString().toStdWString());
+    if (std::filesystem::equivalent(entry_path, path, ec)) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+auto RecentEntryLastOpenedMs(const ProjectModule& project, const std::filesystem::path& path)
+    -> qint64 {
+  const int index = RecentEntryIndex(project, path);
+  return index < 0 ? -1
+                   : project.RecentProjects()[index].toMap().value("lastOpenedMs").toLongLong();
+}
+
+bool IsLoadedPackage(const ApplicationModuleHost& host, const std::filesystem::path& path) {
+  std::error_code ec;
+  return std::filesystem::equivalent(host.project()->handler().package_path(), path, ec);
+}
+
+bool IsWelcomeProject(const ApplicationModuleHost& host, const std::filesystem::path& path) {
+  std::error_code ec;
+  return std::filesystem::equivalent(
+      std::filesystem::path(host.project()->WelcomeProjectPath().toStdWString()), path, ec);
+}
+
+// Registers @p older and then @p newer, so the recent list is [newer, older] with distinct
+// last-opened times.
+void RegisterRecentPair(ProjectModule& project, const std::filesystem::path& older,
+                        const std::filesystem::path& newer) {
+  project.RegisterRecentProject(older);
+  ProcessEvents(20);
+  project.RegisterRecentProject(newer);
+}
+
+auto CorruptPackageCopy(const std::filesystem::path& source, const std::filesystem::path& target)
+    -> std::filesystem::path {
+  std::filesystem::copy_file(source, target, std::filesystem::copy_options::overwrite_existing);
+  std::fstream file(target, std::ios::binary | std::ios::in | std::ios::out);
+  file.seekg(-1, std::ios::end);
+  char byte = 0;
+  file.read(&byte, 1);
+  file.clear();
+  file.seekp(-1, std::ios::end);
+  byte ^= 0x01;
+  file.write(&byte, 1);
+  return target;
+}
+
+TEST_F(WelcomePreviewTests, PreviewProjectLoadsWithoutEnteringAndKeepsRecentOrder) {
+  ScopedRecentProjectSettings settings(temp_dir_);
+  const auto                  older = BuildPackedProject(temp_dir_, "older_project");
+  const auto                  newer = BuildPackedProject(temp_dir_, "newer_project");
+
+  ApplicationModuleHost host;
+  RegisterRecentPair(*host.project(), older, newer);
+  const QVariantList recent_before = host.project()->RecentProjects();
+  ASSERT_EQ(recent_before.size(), 2);
+
+  ASSERT_TRUE(host.project()->PreviewProject(PathToQString(older)));
+  EXPECT_EQ(host.project()->ProjectLoadEntryMode(), QStringLiteral("preview"));
+  EXPECT_TRUE(IsWelcomeProject(host, older));
+  ASSERT_TRUE(WaitForProjectLoadIdle(host));
+
+  EXPECT_TRUE(host.project()->ServiceReady());
+  EXPECT_FALSE(host.project()->ProjectEntered());
+  EXPECT_TRUE(IsLoadedPackage(host, older));
+  EXPECT_TRUE(host.project()->PreviewErrorMessage().isEmpty());
+  EXPECT_TRUE(host.project()->ProjectLoadEntryMode().isEmpty());
+  EXPECT_EQ(host.project()->RecentProjects(), recent_before);
+}
+
+TEST_F(WelcomePreviewTests, EnterLoadedProjectRegistersRecentEntry) {
+  ScopedRecentProjectSettings settings(temp_dir_);
+  const auto                  older = BuildPackedProject(temp_dir_, "older_project");
+  const auto                  newer = BuildPackedProject(temp_dir_, "newer_project");
+
+  ApplicationModuleHost host;
+  RegisterRecentPair(*host.project(), older, newer);
+  const qint64 older_ms_before = RecentEntryLastOpenedMs(*host.project(), older);
+  ASSERT_EQ(RecentEntryIndex(*host.project(), older), 1);
+
+  ASSERT_TRUE(host.project()->PreviewProject(PathToQString(older)));
+  ASSERT_TRUE(WaitForProjectLoadIdle(host));
+  ASSERT_FALSE(host.project()->ProjectEntered());
+  ProcessEvents(20);
+
+  QSignalSpy entered_spy(host.project(), &ProjectModule::ProjectEnteredChanged);
+  ASSERT_TRUE(host.project()->EnterLoadedProject());
+
+  EXPECT_TRUE(host.project()->ProjectEntered());
+  EXPECT_EQ(entered_spy.count(), 1);
+  EXPECT_EQ(RecentEntryIndex(*host.project(), older), 0);
+  EXPECT_GT(RecentEntryLastOpenedMs(*host.project(), older), older_ms_before);
+  // A second enter has nothing to do.
+  EXPECT_FALSE(host.project()->EnterLoadedProject());
+}
+
+TEST_F(WelcomePreviewTests, EnterDuringPreviewLoadEntersOnCompletion) {
+  ScopedRecentProjectSettings settings(temp_dir_);
+  const auto                  older = BuildPackedProject(temp_dir_, "older_project");
+  const auto                  newer = BuildPackedProject(temp_dir_, "newer_project");
+
+  ApplicationModuleHost host;
+  RegisterRecentPair(*host.project(), older, newer);
+
+  ASSERT_TRUE(host.project()->PreviewProject(PathToQString(older)));
+  ASSERT_TRUE(host.project()->ProjectLoading());
+  EXPECT_TRUE(host.project()->EnterLoadedProject());
+  EXPECT_EQ(host.project()->ProjectLoadEntryMode(), QStringLiteral("enter"));
+  EXPECT_FALSE(host.project()->ProjectEntered());
+
+  ASSERT_TRUE(WaitForProjectLoadIdle(host));
+  EXPECT_TRUE(host.project()->ServiceReady());
+  EXPECT_TRUE(host.project()->ProjectEntered());
+  EXPECT_TRUE(IsLoadedPackage(host, older));
+  EXPECT_EQ(RecentEntryIndex(*host.project(), older), 0);
+}
+
+TEST_F(WelcomePreviewTests, PreviewSwitchLeavesUnenteredPackageBytesUnchanged) {
+  ScopedRecentProjectSettings settings(temp_dir_);
+  const auto                  project_a = BuildPackedProject(temp_dir_, "project_a");
+  const auto                  project_b = BuildPackedProject(temp_dir_, "project_b");
+
+  ApplicationModuleHost host;
+  ASSERT_TRUE(host.project()->PreviewProject(PathToQString(project_a)));
+  ASSERT_TRUE(WaitForProjectLoadIdle(host));
+  ASSERT_TRUE(IsLoadedPackage(host, project_a));
+  const auto package_a_before = CapturePackageFileState(project_a);
+
+  ASSERT_TRUE(host.project()->PreviewProject(PathToQString(project_b)));
+  ASSERT_TRUE(WaitForProjectLoadIdle(host));
+
+  ASSERT_TRUE(IsLoadedPackage(host, project_b));
+  EXPECT_FALSE(host.project()->ProjectEntered());
+  EXPECT_TRUE(host.project()->PreviewErrorMessage().isEmpty())
+      << host.project()->PreviewErrorMessage().toStdString();
+  EXPECT_EQ(ReadFileBytes(project_a), package_a_before.bytes_);
+  EXPECT_EQ(std::filesystem::last_write_time(project_a), package_a_before.write_time_);
+}
+
+TEST_F(WelcomePreviewTests, EnteredProjectSwitchRepacksPreviousPackage) {
+  ScopedRecentProjectSettings settings(temp_dir_);
+  const auto                  project_a = BuildPackedProject(temp_dir_, "project_a");
+  const auto                  project_b = BuildPackedProject(temp_dir_, "project_b");
+
+  ApplicationModuleHost host;
+  ASSERT_TRUE(host.project()->LoadProject(PathToQString(project_a)));
+  EXPECT_EQ(host.project()->ProjectLoadEntryMode(), QStringLiteral("enter"));
+  ASSERT_TRUE(WaitForProjectLoadIdle(host));
+  ASSERT_TRUE(host.project()->ProjectEntered());
+  const auto package_a_before = CapturePackageFileState(project_a);
+
+  ASSERT_TRUE(host.project()->LoadProject(PathToQString(project_b)));
+  ASSERT_TRUE(WaitForProjectLoadIdle(host));
+
+  ASSERT_TRUE(IsLoadedPackage(host, project_b));
+  EXPECT_TRUE(host.project()->ProjectEntered());
+  EXPECT_NE(std::filesystem::last_write_time(project_a), package_a_before.write_time_);
+}
+
+TEST_F(WelcomePreviewTests, PreviewFailureRemovesRecentEntryAndKeepsLoadedProject) {
+  ScopedRecentProjectSettings settings(temp_dir_);
+  const auto                  project_a = BuildPackedProject(temp_dir_, "project_a");
+  const auto                  corrupt_c =
+      CorruptPackageCopy(BuildPackedProject(temp_dir_, "project_c_source"),
+                         temp_dir_ / "project_c.alcd");
+
+  ApplicationModuleHost host;
+  RegisterRecentPair(*host.project(), project_a, corrupt_c);
+  ASSERT_TRUE(host.project()->PreviewProject(PathToQString(project_a)));
+  ASSERT_TRUE(WaitForProjectLoadIdle(host));
+  ASSERT_TRUE(IsLoadedPackage(host, project_a));
+
+  // The header is valid, so the load starts; the loader thread fails on the checksum.
+  ASSERT_TRUE(host.project()->PreviewProject(PathToQString(corrupt_c)));
+  ASSERT_TRUE(WaitForProjectLoadIdle(host));
+
+  EXPECT_TRUE(host.project()->ServiceReady());
+  EXPECT_TRUE(IsLoadedPackage(host, project_a));
+  EXPECT_FALSE(host.project()->ProjectEntered());
+  EXPECT_EQ(RecentEntryIndex(*host.project(), corrupt_c), -1);
+  EXPECT_GE(RecentEntryIndex(*host.project(), project_a), 0);
+  EXPECT_TRUE(IsWelcomeProject(host, corrupt_c));
+  EXPECT_NE(host.project()->PreviewErrorMessage().indexOf(QStringLiteral("checksum")), -1)
+      << host.project()->PreviewErrorMessage().toStdString();
+
+  // The loaded project becomes the preview again without a reload.
+  ASSERT_TRUE(host.project()->PreviewProject(PathToQString(project_a)));
+  EXPECT_FALSE(host.project()->ProjectLoading());
+  EXPECT_TRUE(IsWelcomeProject(host, project_a));
+  EXPECT_TRUE(host.project()->PreviewErrorMessage().isEmpty());
+}
+
+TEST_F(WelcomePreviewTests, PreviewOfMissingFileRemovesRecentEntryWithoutLoad) {
+  ScopedRecentProjectSettings settings(temp_dir_);
+  const auto                  project_a = BuildPackedProject(temp_dir_, "project_a");
+  const auto                  removed_b = BuildPackedProject(temp_dir_, "project_b");
+
+  ApplicationModuleHost host;
+  RegisterRecentPair(*host.project(), project_a, removed_b);
+  std::filesystem::remove(removed_b);
+
+  EXPECT_FALSE(host.project()->PreviewProject(PathToQString(removed_b)));
+  EXPECT_FALSE(host.project()->ProjectLoading());
+  EXPECT_EQ(RecentEntryIndex(*host.project(), project_a), 0);
+  EXPECT_EQ(host.project()->RecentProjects().size(), 1);
+  EXPECT_FALSE(host.project()->PreviewErrorMessage().isEmpty());
+}
+
+TEST_F(WelcomePreviewTests, PreviewOfLoadedProjectDoesNotReload) {
+  ScopedRecentProjectSettings settings(temp_dir_);
+  const auto                  project_a = BuildPackedProject(temp_dir_, "project_a");
+
+  ApplicationModuleHost host;
+  ASSERT_TRUE(host.project()->PreviewProject(PathToQString(project_a)));
+  ASSERT_TRUE(WaitForProjectLoadIdle(host));
+
+  QSignalSpy load_spy(host.project(), &ProjectModule::ProjectLoadStateChanged);
+  QSignalSpy project_spy(host.project(), &ProjectModule::ProjectChanged);
+  ASSERT_TRUE(host.project()->PreviewProject(PathToQString(project_a)));
+  ProcessEvents(200);
+
+  EXPECT_FALSE(host.project()->ProjectLoading());
+  EXPECT_EQ(load_spy.count(), 0);
+  EXPECT_EQ(project_spy.count(), 0);
+  EXPECT_TRUE(IsLoadedPackage(host, project_a));
+}
+
+TEST_F(WelcomePreviewTests, SecondPreviewWhileLoadingIsRejected) {
+  ScopedRecentProjectSettings settings(temp_dir_);
+  const auto                  project_a = BuildPackedProject(temp_dir_, "project_a");
+  const auto                  project_b = BuildPackedProject(temp_dir_, "project_b");
+
+  ApplicationModuleHost host;
+  ASSERT_TRUE(host.project()->PreviewProject(PathToQString(project_a)));
+  ASSERT_TRUE(host.project()->ProjectLoading());
+
+  EXPECT_FALSE(host.project()->PreviewProject(PathToQString(project_b)));
+  EXPECT_TRUE(IsWelcomeProject(host, project_a));
+
+  ASSERT_TRUE(WaitForProjectLoadIdle(host));
+  EXPECT_TRUE(IsLoadedPackage(host, project_a));
+}
+
+TEST_F(WelcomePreviewTests, PreviewOverviewCountsPhotosEditedAndCaptureRange) {
+  ScopedRecentProjectSettings settings(temp_dir_);
+  const auto package = BuildPackedProject(temp_dir_, "overview", [](ProjectService& project) {
+    const auto first = AddSyntheticPhoto(project, {L"first.dng", "2026-08-12 10:00:00"});
+    const auto last  = AddSyntheticPhoto(project, {L"last.dng", "2026-08-20 18:30:00"});
+    AddSyntheticPhoto(project, {L"undated.dng", ""});
+    project.GetSleeveService()->Sync();
+    // Two commits on one root count as one edited photo; a root without a commit is not edited.
+    AddEditHistoryRows(project, first, 2);
+    AddEditHistoryRows(project, last, 0);
+  });
+
+  ApplicationModuleHost host;
+  ASSERT_TRUE(host.project()->PreviewProject(PathToQString(package)));
+  ASSERT_TRUE(WaitForProjectLoadIdle(host));
+  ASSERT_TRUE(host.project()->ServiceReady()) << host.project()->ServiceMessage().toStdString();
+
+  const QVariantMap overview = host.project()->ProjectOverview();
+  EXPECT_EQ(overview.value("photoCount").toULongLong(), 3U);
+  EXPECT_EQ(overview.value("editedPhotoCount").toULongLong(), 1U);
+  EXPECT_EQ(overview.value("earliestCaptureDate").toDate(), QDate(2026, 8, 12));
+  EXPECT_EQ(overview.value("latestCaptureDate").toDate(), QDate(2026, 8, 20));
+}
+
+TEST_F(WelcomePreviewTests, PreviewOverviewOfEmptyProjectHasNoCaptureRange) {
+  ScopedRecentProjectSettings settings(temp_dir_);
+  const auto                  package = BuildPackedProject(temp_dir_, "empty_overview");
+
+  ApplicationModuleHost host;
+  EXPECT_TRUE(host.project()->ProjectOverview().isEmpty());
+  ASSERT_TRUE(host.project()->PreviewProject(PathToQString(package)));
+  ASSERT_TRUE(WaitForProjectLoadIdle(host));
+
+  const QVariantMap overview = host.project()->ProjectOverview();
+  ASSERT_FALSE(overview.isEmpty());
+  EXPECT_EQ(overview.value("photoCount").toULongLong(), 0U);
+  EXPECT_EQ(overview.value("editedPhotoCount").toULongLong(), 0U);
+  EXPECT_FALSE(overview.value("earliestCaptureDate").toDate().isValid());
+  EXPECT_FALSE(overview.value("latestCaptureDate").toDate().isValid());
+}
+
+TEST_F(WelcomePreviewTests, ProjectOverviewExcludesImagesWithoutFileBinding) {
+  ScopedRecentProjectSettings settings(temp_dir_);
+  const auto package = BuildPackedProject(temp_dir_, "unbound", [](ProjectService& project) {
+    AddSyntheticPhoto(project, {L"bound_a.dng", "2025-01-02 03:04:05"});
+    AddSyntheticPhoto(project, {L"bound_b.dng", "2025-01-03 03:04:05"});
+    AddUnboundImage(project, L"unbound.dng");
+    const auto image_rows = project.GetStorage()->GetDatabase().GetConnectionGuard();
+    duckdb_result result;
+    ASSERT_EQ(duckdb_query(image_rows.conn_, "SELECT COUNT(*) FROM Image;", &result),
+              DuckDBSuccess);
+    EXPECT_EQ(duckdb_value_int64(&result, 0, 0), 3);
+    duckdb_destroy_result(&result);
+  });
+
+  ApplicationModuleHost host;
+  ASSERT_TRUE(host.project()->PreviewProject(PathToQString(package)));
+  ASSERT_TRUE(WaitForProjectLoadIdle(host));
+
+  EXPECT_EQ(host.project()->ProjectOverview().value("photoCount").toULongLong(), 2U);
+}
+
+TEST_F(WelcomePreviewTests, PreviewPopulatesFirstThumbnailRowsInLibraryOrder) {
+  ScopedRecentProjectSettings settings(temp_dir_);
+  const auto package = BuildPackedProject(temp_dir_, "cover_order", [](ProjectService& project) {
+    AddSyntheticPhoto(project, {L"photo_1.dng", "2025-01-01 00:00:00"});
+    AddSyntheticPhoto(project, {L"photo_2.dng", "2025-01-02 00:00:00"});
+    AddSyntheticPhoto(project, {L"photo_3.dng", "2025-01-03 00:00:00"});
+    AddSyntheticPhoto(project, {L"photo_4.dng", "2025-01-04 00:00:00"});
+  });
+
+  ApplicationModuleHost host;
+  ASSERT_TRUE(host.project()->PreviewProject(PathToQString(package)));
+  ASSERT_TRUE(WaitForProjectLoadIdle(host));
+
+  const auto root_id = host.folders()->CurrentFolderElementId();
+  ASSERT_TRUE(root_id.has_value());
+  const auto expected =
+      host.project()->handler().project()->GetAlbumBrowseService()->ListFilesInFolderById(
+          *root_id, 0, 3);
+  ASSERT_EQ(expected.size(), 3U);
+
+  const auto& model = host.library()->model();
+  ASSERT_GE(model.rowCount(), 3);
+  const QVariantList cover_rows = model.getThumbnailStatesInRange(0, 2);
+  ASSERT_EQ(cover_rows.size(), 3);
+  for (int row = 0; row < 3; ++row) {
+    EXPECT_EQ(model.getItemAt(row).value("elementId").toUInt(), expected[row].element_id_);
+    EXPECT_EQ(cover_rows[row].toMap().value("elementId").toUInt(), expected[row].element_id_);
+    EXPECT_EQ(cover_rows[row].toMap().value("imageId").toUInt(), expected[row].image_id_);
+  }
 }
 
 }  // namespace
