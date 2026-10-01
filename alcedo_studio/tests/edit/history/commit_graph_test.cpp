@@ -21,14 +21,15 @@
 
 #include "app/project_package_backend.hpp"
 #include "app/project_service.hpp"
+#include "edit/graph/pipeline_document.hpp"
 #include "edit/history/commit_clock_test_access.hpp"
 #include "edit/history/commit_types.hpp"
 #include "edit/history/edit_commit.hpp"
 #include "edit/history/mini_git_working_history.hpp"
-#include "edit/graph/pipeline_document.hpp"
 #include "edit/history/pipeline_document_checkpoint.hpp"
 #include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/history/version_ref.hpp"
+#include "storage/mapper/duckorm/duckdb_orm.hpp"
 #include "storage/store/database.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
 #include "type/type.hpp"
@@ -1076,6 +1077,83 @@ TEST_F(ProjectSchemaBoundaryTests, NewProjectMetadataWritesCurrentSchemaVersion)
   in >> metadata;
   EXPECT_EQ(metadata.at("project_file_version").get<std::string>(),
             std::string(project_pack::kProjectFileVersion));
+}
+
+TEST_F(CommitGraphPersistenceTests, BatchedRootInsertStoresEveryImageLikeSingleRootInsert) {
+  auto                             guard = db_->GetConnectionGuard();
+  auto                             lock  = guard.Lock();
+  CommitGraphStore                 service(guard.conn_);
+
+  // More roots than one multi-row statement holds, so the batch spans several statements.
+  constexpr sl_element_id_t        kFirstId = 8000;
+  constexpr std::size_t            kCount   = duckorm::kMultiRowStatementRows + 44;
+  std::vector<EncodedRootPipeline> roots;
+  for (std::size_t index = 0; index < kCount; ++index) {
+    roots.push_back(
+        CommitGraphStore::EncodeRootPipeline(kFirstId + static_cast<sl_element_id_t>(index),
+                                             CreateDefaultPipelineDocument(), std::nullopt));
+  }
+  ASSERT_NO_THROW(service.InsertRootPipelines(roots));
+
+  for (const auto& root : roots) {
+    auto loaded = service.LoadGraph(root.element_id);
+    ASSERT_TRUE(loaded.has_value()) << root.element_id;
+    EXPECT_EQ(loaded->GetRootId(), root.root_id);
+    EXPECT_EQ(loaded->GetAllVersionRefs().size(), 1u);
+    EXPECT_EQ(loaded->GetActiveVersionId(), root.materialization.image_state.active_version_id);
+    EXPECT_TRUE(service.GetRootSerializedPipelineState(root.element_id, root.root_id).has_value());
+  }
+
+  // The batched rows equal the rows of the single-image path for the same document.
+  auto single =
+      service.CreateRootPipelinePersisted(kFirstId + kCount, CreateDefaultPipelineDocument());
+  const auto single_state =
+      service.GetRootSerializedPipelineState(kFirstId + kCount, single.GetRootId());
+  const auto batched_state =
+      service.GetRootSerializedPipelineState(kFirstId, roots.front().root_id);
+  ASSERT_TRUE(single_state.has_value());
+  ASSERT_TRUE(batched_state.has_value());
+  EXPECT_EQ(single_state->size(), batched_state->size());
+}
+
+TEST_F(CommitGraphPersistenceTests, BatchedRootInsertWritesNothingWhenOneImageAlreadyHasARoot) {
+  auto             guard = db_->GetConnectionGuard();
+  auto             lock  = guard.Lock();
+  CommitGraphStore service(guard.conn_);
+
+  (void)service.CreateRootPipelinePersisted(7001, CreateDefaultPipelineDocument());
+  std::vector<EncodedRootPipeline> roots;
+  for (const sl_element_id_t id : {7002u, 7001u, 7003u}) {
+    roots.push_back(
+        CommitGraphStore::EncodeRootPipeline(id, CreateDefaultPipelineDocument(), std::nullopt));
+  }
+  EXPECT_THROW(service.InsertRootPipelines(roots), std::runtime_error);
+  EXPECT_FALSE(service.GetImageEditState(7002).has_value());
+  EXPECT_FALSE(service.GetImageEditState(7003).has_value());
+  EXPECT_TRUE(service.ListVersionRefsForElement(7002).empty());
+  EXPECT_TRUE(service.GetImageEditState(7001).has_value());
+}
+
+TEST_F(CommitGraphPersistenceTests, BatchedRootInsertRollsBackRootsWhenCallerRowsFail) {
+  auto                             guard = db_->GetConnectionGuard();
+  auto                             lock  = guard.Lock();
+  CommitGraphStore                 service(guard.conn_);
+
+  std::vector<EncodedRootPipeline> roots;
+  for (const sl_element_id_t id : {7101u, 7102u}) {
+    roots.push_back(
+        CommitGraphStore::EncodeRootPipeline(id, CreateDefaultPipelineDocument(), std::nullopt));
+  }
+  EXPECT_THROW(service.InsertRootPipelines(
+                   roots, []() { throw std::runtime_error("element row write failed"); }),
+               std::runtime_error);
+  EXPECT_FALSE(service.GetImageEditState(7101).has_value());
+  EXPECT_FALSE(service.GetImageEditState(7102).has_value());
+  EXPECT_FALSE(service.GetRootSerializedPipelineState(7101, roots[0].root_id).has_value());
+
+  // The connection is usable afterwards: the same roots insert cleanly.
+  ASSERT_NO_THROW(service.InsertRootPipelines(roots));
+  EXPECT_TRUE(service.GetImageEditState(7101).has_value());
 }
 
 }  // namespace alcedo

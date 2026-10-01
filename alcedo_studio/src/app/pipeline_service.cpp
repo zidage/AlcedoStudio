@@ -22,6 +22,7 @@
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/edit_commit.hpp"
 #include "edit/history/pipeline_document_checkpoint.hpp"
+#include "storage/mapper/pipeline/pipeline_mapper.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
 #include "type/type.hpp"
 
@@ -175,6 +176,14 @@ auto PipelineMgmtService::PersistHistory(const ImageHistorySnapshot& base, const
 
 void PipelineMgmtService::InitializeImageRoot(sl_element_id_t id, PipelineDocument document,
                                               const RawRuntimeColorContext* raw_color_context) {
+  std::vector<EncodedImageRoot> roots;
+  roots.push_back(EncodeImageRoot(id, std::move(document), raw_color_context));
+  WriteImageRoots(std::move(roots));
+}
+
+auto PipelineMgmtService::EncodeImageRoot(sl_element_id_t id, PipelineDocument document,
+                                          const RawRuntimeColorContext* raw_color_context) const
+    -> EncodedImageRoot {
   // The document is private to this call until the root is written, so binding needs no lock.
   BindSourceDngColorProfile(*storage_, id, document);
   std::optional<nlohmann::json> raw_json;
@@ -185,13 +194,36 @@ void PipelineMgmtService::InitializeImageRoot(sl_element_id_t id, PipelineDocume
     BindWorkingSpaceDevelopData(document);
   }
   ValidateProductDocument(document, id);
-  {
-    auto             db_guard = storage_->GetDatabase().GetConnectionGuard();
-    auto             db_lock  = db_guard.Lock();
-    CommitGraphStore graph_service(db_guard.conn_);
-    (void)graph_service.CreateRootPipelinePersisted(id, document, std::move(raw_json));
+  return EncodedImageRoot{
+      .root                  = CommitGraphStore::EncodeRootPipeline(id, document, raw_json),
+      .element_pipeline_json = document.ToJson().dump(),
+  };
+}
+
+void PipelineMgmtService::WriteImageRoots(std::vector<EncodedImageRoot> roots) {
+  if (roots.empty()) {
+    return;
   }
-  storage_->GetElementStore().UpdatePipelineJsonByElementId(id, document.ToJson());
+  std::vector<EncodedRootPipeline> root_rows;
+  root_rows.reserve(roots.size());
+  for (auto& root : roots) {
+    root_rows.push_back(std::move(root.root));
+  }
+  auto                              db_guard = storage_->GetDatabase().GetConnectionGuard();
+  auto                              db_lock  = db_guard.Lock();
+  CommitGraphStore                  graph_store(db_guard.conn_);
+  PipelineMapper                    pipeline_mapper(db_guard.conn_);
+  // The element pipeline JSON commits in the same transaction as the root rows.
+  std::vector<PipelineMapperParams> pipeline_rows;
+  pipeline_rows.reserve(roots.size());
+  for (std::size_t index = 0; index < roots.size(); ++index) {
+    pipeline_rows.push_back(PipelineMapperParams{
+        root_rows[index].element_id,
+        std::make_unique<std::string>(std::move(roots[index].element_pipeline_json))});
+  }
+  graph_store.InsertRootPipelines(root_rows, [&pipeline_rows, &pipeline_mapper]() {
+    pipeline_mapper.UpsertParamsRows(pipeline_rows);
+  });
 }
 
 auto PipelineMgmtService::AcquireEditorLease(sl_element_id_t id) -> EditorHistoryLease {

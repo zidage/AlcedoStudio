@@ -6,7 +6,9 @@
 
 #include <duckdb.h>
 
+#include <functional>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -14,6 +16,7 @@
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/edit_commit.hpp"
 #include "edit/history/version_ref.hpp"
+#include "json.hpp"
 #include "storage/mapper/sleeve/edit_history/edit_commit_mapper.hpp"
 #include "storage/mapper/sleeve/edit_history/image_edit_state_mapper.hpp"
 #include "storage/mapper/sleeve/edit_history/version_ref_mapper.hpp"
@@ -31,6 +34,22 @@ struct MaterializedHistoryLabel {
   root_id_t                root_id{};
   head_commit_hash_t       head_commit_hash;
   transaction_chain_hash_t transaction_chain_hash{};
+};
+
+/**
+ * @brief Rows of the immutable history root of one image, encoded without storage access.
+ *
+ * Produced by CommitGraphStore::EncodeRootPipeline so the CPU work (root id, checkpoint and root
+ * state JSON) runs before the database lock. CommitGraphStore::InsertRootPipelines writes it. The
+ * value is algorithm output for a root that does not exist yet; nothing else owns this state.
+ */
+struct EncodedRootPipeline {
+  sl_element_id_t            element_id = 0;
+  root_id_t                  root_id{};
+  /// Serialized EncodePipelineRootState document stored in PipelineRoot.
+  std::string                root_state_json;
+  /// Default Version and ImageEditState of the new root, validated at encode time.
+  CommitGraphMaterialization materialization;
 };
 
 /**
@@ -103,6 +122,19 @@ class CommitGraphStore {
                                    std::optional<nlohmann::json> raw_color_context = std::nullopt,
                                    std::string default_display_name = "Default") -> CommitGraph;
 
+  /// Encode the root rows of a new image without touching storage (see EncodedRootPipeline).
+  static auto EncodeRootPipeline(sl_element_id_t element_id, const PipelineDocument& root_document,
+                                 const std::optional<nlohmann::json>& raw_color_context,
+                                 std::string default_display_name = "Default")
+      -> EncodedRootPipeline;
+
+  /// Write the root state, default Version and ImageEditState of every image in @p roots in
+  /// one transaction, then run @p write_rows in the same transaction so rows that must exist
+  /// only together with the roots commit with them. Throws, and writes nothing, when any of the
+  /// images already has a root or when a write fails.
+  void InsertRootPipelines(std::span<const EncodedRootPipeline> roots,
+                           const std::function<void()>&         write_rows = {});
+
  private:
   duckdb_connection&   conn_;
   EditCommitMapper     commit_mapper_;
@@ -111,8 +143,11 @@ class CommitGraphStore {
 
   void UpsertVersionRef(const VersionRef& version_ref);
   void UpsertImageEditState(const ImageEditState& state);
-  void InsertRootSerializedPipelineState(const root_id_t& root_id, sl_element_id_t element_id,
-                                         const nlohmann::json& serialized_pipeline_state);
+  void        InsertRootSerializedPipelineStates(std::span<const EncodedRootPipeline> roots);
+  static auto EncodeRootPipelineForGraph(const CommitGraph&                   graph,
+                                         const PipelineDocument&              root_document,
+                                         const std::optional<nlohmann::json>& raw_color_context)
+      -> EncodedRootPipeline;
 
   static auto ToCommitParams(const EditCommit& commit) -> EditCommitMapperParams;
   static auto FromCommitParams(EditCommitMapperParams&& params) -> EditCommit;

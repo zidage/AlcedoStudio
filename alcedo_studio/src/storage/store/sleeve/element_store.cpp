@@ -301,11 +301,30 @@ void ElementStore::AddElements(std::span<const std::shared_ptr<SleeveElement>> e
   if (elements.empty()) {
     return;
   }
+  // Element and file binding rows go in multi-row statements; one prepared insert per row
+  // dominated the project sync after an import.
+  std::vector<ElementMapperParams> element_rows;
+  std::vector<FileMapperParams>    file_rows;
+  element_rows.reserve(elements.size());
+  file_rows.reserve(elements.size());
+  for (const auto& element : elements) {
+    element_rows.push_back(ElementMapper::ToParams(element));
+    if (element->type_ == ElementType::FILE) {
+      const auto file = std::static_pointer_cast<SleeveFile>(element);
+      file_rows.push_back(FileMapper::ToParams({file->element_id_, file->image_id_}));
+    }
+  }
+
   auto db_lock = guard_.Lock();
   duckorm::begin_transaction(guard_.conn_);
   try {
+    element_mapper_.InsertParamsRows(element_rows);
+    file_mapper_.InsertParamsRows(file_rows);
     for (const auto& element : elements) {
-      InsertElementRows(element);
+      if (element->type_ == ElementType::FOLDER) {
+        const auto folder = std::static_pointer_cast<SleeveFolder>(element);
+        folder_mapper_.InsertFolderContents(folder->element_id_, folder->ListElements());
+      }
     }
     duckorm::commit_transaction(guard_.conn_);
   } catch (...) {

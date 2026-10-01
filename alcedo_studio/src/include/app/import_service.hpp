@@ -4,12 +4,14 @@
 
 #pragma once
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
 #include <stdexcept>
+#include <thread>
 #include <utility>
 
 #include "app/sleeve_service.hpp"
@@ -128,7 +130,9 @@ class ImportServiceImpl final : public ImportService {
   /// the image's history root after metadata extraction succeeds.
   std::shared_ptr<PipelineMgmtService> pipeline_service_ = nullptr;
 
-  ThreadPool                            thread_pool_{8};
+  /// Metadata workers: open RAW headers, read the HDR probe bytes and encode history roots.
+  /// The work is short file reads plus CPU, so it scales with the logical core count.
+  ThreadPool thread_pool_{std::max<size_t>(8, std::thread::hardware_concurrency())};
 
   auto ImportToFolder(const std::vector<image_path_t>& paths, const image_path_t& dest,
                       const ImportOptions& options = {}, std::shared_ptr<ImportJob> job = nullptr)

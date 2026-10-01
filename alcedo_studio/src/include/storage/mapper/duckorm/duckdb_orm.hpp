@@ -43,6 +43,29 @@ duckdb_state update(duckdb_connection& conn, const char* table, const void* obj,
                     std::span<const DuckFieldDesc> fields, size_t field_count,
                     const SqlFragment& where_clause);
 
+/**
+ * @brief Upsert several rows with one multi-row INSERT ... ON CONFLICT DO UPDATE statement.
+ *
+ * Each pointer in @p rows addresses one object laid out as @p fields describes. The rows must
+ * not share a conflict key: DuckDB rejects a statement that updates one row twice. One prepared
+ * statement for the whole set replaces one prepare and execute per row.
+ */
+duckdb_state            upsert_rows(duckdb_connection& conn, const char* table,
+                                    std::span<const void* const> rows, std::span<const DuckFieldDesc> fields,
+                                    size_t field_count);
+
+/**
+ * @brief Insert several rows with one multi-row INSERT statement. Fails like a single-row
+ *        insert on a constraint violation.
+ */
+duckdb_state            insert_rows(duckdb_connection& conn, const char* table,
+                                    std::span<const void* const> rows, std::span<const DuckFieldDesc> fields,
+                                    size_t field_count);
+
+/// Rows per multi-row statement used by the batch helpers. Larger statements cost more to
+/// parse and bind than they save.
+inline constexpr size_t kMultiRowStatementRows = 256;
+
 duckdb_state remove(duckdb_connection& conn, const char* table, const char* where_clause);
 
 /**

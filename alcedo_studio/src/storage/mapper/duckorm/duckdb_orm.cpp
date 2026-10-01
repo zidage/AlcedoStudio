@@ -454,6 +454,69 @@ duckdb_state update(duckdb_connection& conn, const char* table, const void* obj,
   return state;
 }
 
+namespace {
+duckdb_state run_multi_row_insert(duckdb_connection& conn, const char* table,
+                                  std::span<const void* const>   rows,
+                                  std::span<const DuckFieldDesc> fields, size_t field_count,
+                                  bool update_on_conflict) {
+  if (rows.empty()) {
+    return DuckDBSuccess;
+  }
+  std::ostringstream sql;
+  sql << "INSERT INTO " << table << " (";
+  for (size_t i = 0; i < field_count; ++i) {
+    sql << fields[i].name_;
+    if (i < field_count - 1) {
+      sql << ",";
+    }
+  }
+  sql << ") VALUES ";
+  for (size_t row = 0; row < rows.size(); ++row) {
+    sql << (row == 0 ? "(" : ",(");
+    for (size_t i = 0; i < field_count; ++i) {
+      sql << (i == 0 ? "?" : ",?");
+    }
+    sql << ")";
+  }
+  if (update_on_conflict) {
+    sql << " ON CONFLICT DO UPDATE SET ";
+    for (size_t i = 0; i < field_count; ++i) {
+      sql << fields[i].name_ << " = EXCLUDED." << fields[i].name_;
+      if (i < field_count - 1) {
+        sql << ",";
+      }
+    }
+  }
+  sql << ";";
+
+  PreparedStatement statement(conn, sql.str());
+  idx_t             index = 1;
+  for (const void* row : rows) {
+    for (size_t i = 0; i < field_count; ++i) {
+      bind_field(statement.stmt_, index++, row, fields[i]);
+    }
+  }
+  duckdb_state state = duckdb_execute_prepared(statement.stmt_, &statement.result_);
+  if (state != DuckDBSuccess) {
+    const char* error_message = duckdb_result_error(&statement.result_);
+    throw std::runtime_error(error_message ? error_message : "DuckDB multi-row insert failed");
+  }
+  return state;
+}
+}  // namespace
+
+duckdb_state upsert_rows(duckdb_connection& conn, const char* table,
+                         std::span<const void* const> rows, std::span<const DuckFieldDesc> fields,
+                         size_t field_count) {
+  return run_multi_row_insert(conn, table, rows, fields, field_count, true);
+}
+
+duckdb_state insert_rows(duckdb_connection& conn, const char* table,
+                         std::span<const void* const> rows, std::span<const DuckFieldDesc> fields,
+                         size_t field_count) {
+  return run_multi_row_insert(conn, table, rows, fields, field_count, false);
+}
+
 /**
  * @brief Remove an object from a DuckDB table based on a where clause.
  *

@@ -4,11 +4,16 @@
 
 #include "app/import_service.hpp"
 
+#include <atomic>
+#include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <filesystem>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include "app/pipeline_service.hpp"
@@ -27,14 +32,74 @@ auto IsRootImportDestination(const image_path_t& dest) -> bool {
   return normalized.empty() || normalized == image_path_t{L"/"} || normalized == image_path_t{L"."};
 }
 
-/// Create the immutable history root of a newly imported image on a private default document.
+/// Encode the immutable history root of a newly imported image on a private default document.
 /// No executor: nothing renders the document before its root exists.
-void InitializeImportedImageRoot(PipelineMgmtService& pipeline_service, sl_element_id_t element_id,
-                                 const std::shared_ptr<Image>& image) {
+auto EncodeImportedImageRoot(const PipelineMgmtService& pipeline_service,
+                             sl_element_id_t element_id, const std::shared_ptr<Image>& image)
+    -> EncodedImageRoot {
   const RawRuntimeColorContext* ctx_ptr =
       image && image->HasRawColorContext() ? &image->GetRawColorContext() : nullptr;
-  pipeline_service.InitializeImageRoot(element_id, CreateDefaultPipelineDocument(), ctx_ptr);
+  return pipeline_service.EncodeImageRoot(element_id, CreateDefaultPipelineDocument(), ctx_ptr);
 }
+
+/// Number of encoded roots committed in one storage transaction. A commit flushes the DuckDB
+/// write-ahead log, so one transaction per image made the database lock the import bottleneck.
+constexpr std::size_t kImportRootWriteBatchSize = 64;
+
+/// Collects the encoded roots of one import job and commits them in batches.
+///
+/// Workers encode roots in parallel and Add them here. The worker whose Add fills a batch
+/// writes it; the last outstanding encode after submission closes writes the remainder. An
+/// image counts as imported only after its root commits.
+class ImportRootBatchWriter {
+ public:
+  struct PendingRoot {
+    image_id_t       image_id_ = 0;
+    EncodedImageRoot root_;
+  };
+
+  /// Called once per submitted metadata task before it is queued.
+  void AddOutstandingEncode() { outstanding_encodes_.fetch_add(1); }
+
+  /// Queue @p root. Returns a full batch for the caller to write, or an empty vector.
+  auto Add(image_id_t image_id, EncodedImageRoot root) -> std::vector<PendingRoot> {
+    std::lock_guard<std::mutex> lock(mutex_);
+    pending_.push_back(PendingRoot{image_id, std::move(root)});
+    if (pending_.size() < kImportRootWriteBatchSize) {
+      return {};
+    }
+    return TakePendingLocked();
+  }
+
+  /// Record that one metadata task finished encoding (successfully or not). Returns true when
+  /// submission is closed and no encode is outstanding, so the caller must write the remainder.
+  auto FinishEncode(const std::shared_ptr<ImportJob>& job) -> bool {
+    return outstanding_encodes_.fetch_sub(1) == 1 && IsSubmissionClosed(job);
+  }
+
+  /// Returns true when the submitter must write the remainder after closing submission.
+  auto NoOutstandingEncode() const -> bool { return outstanding_encodes_.load() == 0; }
+
+  auto TakePending() -> std::vector<PendingRoot> {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return TakePendingLocked();
+  }
+
+ private:
+  static auto IsSubmissionClosed(const std::shared_ptr<ImportJob>& job) -> bool {
+    return !job || job->submission_closed_.load();
+  }
+
+  auto TakePendingLocked() -> std::vector<PendingRoot> {
+    std::vector<PendingRoot> batch;
+    batch.swap(pending_);
+    return batch;
+  }
+
+  std::mutex               mutex_;
+  std::vector<PendingRoot> pending_;
+  std::atomic<uint32_t>    outstanding_encodes_{0};
+};
 
 }  // namespace
 
@@ -61,6 +126,57 @@ static void TryFinishImportJob(const std::shared_ptr<ImportJob>&      job,
                   progress->failed_.load());
 }
 
+/// Commit one batch of encoded roots, then count each image as imported or failed.
+static void WriteImportRootBatch(std::vector<ImportRootBatchWriter::PendingRoot> batch,
+                                 PipelineMgmtService&                            pipeline_service,
+                                 const std::shared_ptr<ImportJob>&               job,
+                                 const std::shared_ptr<ImportLog>&               import_log,
+                                 const std::shared_ptr<ImportProgress>&          progress) {
+  if (batch.empty()) {
+    return;
+  }
+  std::vector<image_id_t>       image_ids;
+  std::vector<EncodedImageRoot> roots;
+  image_ids.reserve(batch.size());
+  roots.reserve(batch.size());
+  for (auto& pending : batch) {
+    image_ids.push_back(pending.image_id_);
+    roots.push_back(std::move(pending.root_));
+  }
+
+  std::string error;
+  bool        written = false;
+  try {
+    pipeline_service.WriteImageRoots(std::move(roots));
+    written = true;
+  } catch (const std::exception& e) {
+    error = e.what();
+  } catch (...) {
+    error = "unknown storage error";
+  }
+
+  for (const auto image_id : image_ids) {
+    if (written) {
+      if (import_log) {
+        import_log->MarkMetadataSuccess(image_id);
+      }
+      progress->metadata_done_.fetch_add(1);
+    } else {
+      if (import_log) {
+        import_log->MarkMetadataFailure(image_id, ImportErrorCode::DB_WRITE_FAILED, error);
+      }
+      progress->failed_.fetch_add(1);
+    }
+  }
+  if (job && job->on_progress_) {
+    job->on_progress_(*progress);
+  }
+  if (job) {
+    job->metadata_tasks_finished_.fetch_add(static_cast<uint32_t>(image_ids.size()));
+  }
+  TryFinishImportJob(job, progress);
+}
+
 auto ImportServiceImpl::ImportToFolder(const std::vector<image_path_t>& paths,
                                        const image_path_t& dest, const ImportOptions& options,
                                        std::shared_ptr<ImportJob> job)
@@ -74,6 +190,7 @@ auto ImportServiceImpl::ImportToFolder(const std::vector<image_path_t>& paths,
   }
   std::shared_ptr<ImportProgress> progress_ptr = std::make_shared<ImportProgress>();
   progress_ptr->total_                         = static_cast<uint32_t>(paths.size());
+  auto root_writer                             = std::make_shared<ImportRootBatchWriter>();
 
   if (paths.empty()) {
     // Immediately finish
@@ -160,15 +277,42 @@ auto ImportServiceImpl::ImportToFolder(const std::vector<image_path_t>& paths,
     if (job) {
       job->metadata_tasks_submitted_.fetch_add(1);
     }
+    root_writer->AddOutstandingEncode();
 
     const auto element_id       = sleeve_file->element_id_;
     const auto pipeline_service = pipeline_service_;
 
-    // Submit the metadata extraction task to thread pool
+    // Extract metadata and encode the history root on the pool; roots commit in batches.
     thread_pool_.Submit([image_handler_ptr, progress_ptr, job, import_log, element_id,
-                         pipeline_service]() {
+                         pipeline_service, root_writer]() {
       auto image_ptr = image_handler_ptr ? image_handler_ptr->Get() : nullptr;
-      if (!image_ptr) {
+      std::vector<ImportRootBatchWriter::PendingRoot> full_batch;
+      bool                                            encoded = false;
+      if (image_ptr) {
+        try {
+          MetadataExtractor::ExtractEXIF_ToImage(image_ptr->image_path_, *image_ptr);
+          full_batch =
+              root_writer->Add(image_ptr->image_id_,
+                               EncodeImportedImageRoot(*pipeline_service, element_id, image_ptr));
+          encoded = true;
+        } catch (const MetadataExtractionError& e) {
+          if (import_log) {
+            import_log->MarkMetadataFailure(image_ptr->image_id_, e.code(), e.message());
+          }
+        } catch (const std::exception& e) {
+          if (import_log) {
+            import_log->MarkMetadataFailure(image_ptr->image_id_,
+                                            ImportErrorCode::METADATA_EXTRACTION_FAILED, e.what());
+          }
+        } catch (...) {
+          if (import_log) {
+            import_log->MarkMetadataFailure(image_ptr->image_id_,
+                                            ImportErrorCode::METADATA_EXTRACTION_FAILED);
+          }
+        }
+      }
+
+      if (!encoded) {
         progress_ptr->failed_.fetch_add(1);
         if (job && job->on_progress_) {
           job->on_progress_(*progress_ptr);
@@ -176,45 +320,11 @@ auto ImportServiceImpl::ImportToFolder(const std::vector<image_path_t>& paths,
         if (job) {
           job->metadata_tasks_finished_.fetch_add(1);
         }
-        TryFinishImportJob(job, progress_ptr);
-        return;
       }
-
-      // Extract metadata, assemble full pipeline JSON, then mark success.
-      try {
-        MetadataExtractor::ExtractEXIF_ToImage(image_ptr->image_path_, *image_ptr);
-        InitializeImportedImageRoot(*pipeline_service, element_id, image_ptr);
-        if (import_log) {
-          import_log->MarkMetadataSuccess(image_ptr->image_id_);
-        }
-        // Update progress
-        progress_ptr->metadata_done_.fetch_add(1);
-
-      } catch (const MetadataExtractionError& e) {
-        if (import_log) {
-          import_log->MarkMetadataFailure(image_ptr->image_id_, e.code(), e.message());
-        }
-        progress_ptr->failed_.fetch_add(1);
-      } catch (const std::exception& e) {
-        if (import_log) {
-          import_log->MarkMetadataFailure(image_ptr->image_id_,
-                                          ImportErrorCode::METADATA_EXTRACTION_FAILED, e.what());
-        }
-        progress_ptr->failed_.fetch_add(1);
-      } catch (...) {
-        if (import_log) {
-          import_log->MarkMetadataFailure(image_ptr->image_id_,
-                                          ImportErrorCode::METADATA_EXTRACTION_FAILED);
-        }
-        progress_ptr->failed_.fetch_add(1);
-      }
-
-      if (job && job->on_progress_) {
-        job->on_progress_(*progress_ptr);
-      }
-
-      if (job) {
-        job->metadata_tasks_finished_.fetch_add(1);
+      WriteImportRootBatch(std::move(full_batch), *pipeline_service, job, import_log, progress_ptr);
+      if (root_writer->FinishEncode(job)) {
+        WriteImportRootBatch(root_writer->TakePending(), *pipeline_service, job, import_log,
+                             progress_ptr);
       }
       TryFinishImportJob(job, progress_ptr);
     });
@@ -233,6 +343,16 @@ auto ImportServiceImpl::ImportToFolder(const std::vector<image_path_t>& paths,
       }
     }
     job->submission_closed_.store(true);
+  }
+  if (root_writer->NoOutstandingEncode()) {
+    // Every encode finished before submission closed: write the remainder on the pool, not on
+    // the calling (UI) thread.
+    const auto pipeline_service = pipeline_service_;
+    thread_pool_.Submit([root_writer, pipeline_service, job, import_log, progress_ptr]() {
+      WriteImportRootBatch(root_writer->TakePending(), *pipeline_service, job, import_log,
+                           progress_ptr);
+      TryFinishImportJob(job, progress_ptr);
+    });
   }
   TryFinishImportJob(job, progress_ptr);
   return job;

@@ -8,6 +8,7 @@
 #include <libraw/libraw.h>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
@@ -27,7 +28,6 @@
 #include <vector>
 
 #include "decoders/dng_default_crop.hpp"
-#include "decoders/libraw_unpack_guard.hpp"
 #include "edit/operators/basic/camera_matrices.hpp"
 #include "image/dng_camera_matrix.hpp"
 #include "image/dng_color_profile_import.hpp"
@@ -43,7 +43,16 @@
 #endif
 #include <Windows.h>
 #elif defined(__APPLE__)
+#include <fcntl.h>
 #include <mach-o/dyld.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#else
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #endif
 
 namespace alcedo {
@@ -144,22 +153,98 @@ auto ContainsAny(const std::string& text, const std::initializer_list<std::strin
   return false;
 }
 
+/// Read-only memory mapping of a whole file.
+///
+/// The DNG tag parser reads a few IFDs and tag values that can sit anywhere in the file. Mapping
+/// the file lets the OS read only those pages; copying the file read 40-100 MB per DNG and held
+/// it per import worker.
+class ReadOnlyFileMapping {
+ public:
+  explicit ReadOnlyFileMapping(const std::filesystem::path& path) {
+#if defined(_WIN32)
+    file_ = CreateFileW(path.wstring().c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file_ == INVALID_HANDLE_VALUE) {
+      return;
+    }
+    LARGE_INTEGER file_size{};
+    if (!GetFileSizeEx(file_, &file_size) || file_size.QuadPart <= 0) {
+      return;
+    }
+    mapping_ = CreateFileMappingW(file_, nullptr, PAGE_READONLY, 0, 0, nullptr);
+    if (mapping_ == nullptr) {
+      return;
+    }
+    const void* view = MapViewOfFile(mapping_, FILE_MAP_READ, 0, 0, 0);
+    if (view == nullptr) {
+      return;
+    }
+    data_ = static_cast<const uint8_t*>(view);
+    size_ = static_cast<size_t>(file_size.QuadPart);
+#else
+    fd_ = ::open(path.c_str(), O_RDONLY);
+    if (fd_ < 0) {
+      return;
+    }
+    struct stat file_stat{};
+    if (::fstat(fd_, &file_stat) != 0 || file_stat.st_size <= 0) {
+      return;
+    }
+    void* view =
+        ::mmap(nullptr, static_cast<size_t>(file_stat.st_size), PROT_READ, MAP_PRIVATE, fd_, 0);
+    if (view == MAP_FAILED) {
+      return;
+    }
+    data_ = static_cast<const uint8_t*>(view);
+    size_ = static_cast<size_t>(file_stat.st_size);
+#endif
+  }
+
+  ~ReadOnlyFileMapping() {
+#if defined(_WIN32)
+    if (data_ != nullptr) {
+      UnmapViewOfFile(data_);
+    }
+    if (mapping_ != nullptr) {
+      CloseHandle(mapping_);
+    }
+    if (file_ != INVALID_HANDLE_VALUE) {
+      CloseHandle(file_);
+    }
+#else
+    if (data_ != nullptr) {
+      ::munmap(const_cast<uint8_t*>(data_), size_);
+    }
+    if (fd_ >= 0) {
+      ::close(fd_);
+    }
+#endif
+  }
+
+  ReadOnlyFileMapping(const ReadOnlyFileMapping&)            = delete;
+  ReadOnlyFileMapping& operator=(const ReadOnlyFileMapping&) = delete;
+
+  /// Empty when the file cannot be opened or mapped, or is empty.
+  auto                 Bytes() const -> std::span<const uint8_t> { return {data_, size_}; }
+
+ private:
+#if defined(_WIN32)
+  HANDLE file_    = INVALID_HANDLE_VALUE;
+  HANDLE mapping_ = nullptr;
+#else
+  int fd_ = -1;
+#endif
+  const uint8_t* data_ = nullptr;
+  size_t         size_ = 0;
+};
+
 auto ExtractDngGeometryMetadataFromFile(const std::filesystem::path& path)
     -> std::optional<dng::Metadata> {
-  std::ifstream ifs(path, std::ios::binary | std::ios::ate);
-  if (!ifs.is_open()) {
+  const ReadOnlyFileMapping mapping(path);
+  if (mapping.Bytes().empty()) {
     return std::nullopt;
   }
-  const auto size = ifs.tellg();
-  if (size <= 0) {
-    return std::nullopt;
-  }
-  std::vector<uint8_t> buffer(static_cast<size_t>(size));
-  ifs.seekg(0, std::ios::beg);
-  if (!ifs.read(reinterpret_cast<char*>(buffer.data()), size)) {
-    return std::nullopt;
-  }
-  return dng::ExtractMetadata(std::span<const uint8_t>(buffer.data(), buffer.size()));
+  return dng::ExtractMetadata(mapping.Bytes());
 }
 
 // ---------------------------------------------------------------------------
@@ -1092,6 +1177,38 @@ auto OiioMetadataSuggestsHdr(const ImageSpec& spec) -> bool {
   return false;
 }
 
+/// HDR gain-map signatures searched in the first bytes of a file, lower case.
+constexpr std::array<std::string_view, 10> kHdrFileSignatures = {"http://ns.adobe.com/hdr-gain-map",
+                                                                 "hdrgm:version",
+                                                                 "hdrgm:gainmapmin",
+                                                                 "gainmap:version",
+                                                                 "ultrahdr",
+                                                                 "ultra hdr",
+                                                                 "iso 21496",
+                                                                 "iso:ts:21496",
+                                                                 "urn:iso:std:iso:ts:21496",
+                                                                 "gain map"};
+
+/// Every signature contains one of these anchors, so a probe without an anchor has no signature
+/// and the full list is searched only after an anchor hit.
+constexpr std::array<std::string_view, 4>  kHdrSignatureAnchors = {"gain", "hdrgm", "ultra",
+                                                                   "21496"};
+
+static_assert(
+    [] {
+      for (const auto signature : kHdrFileSignatures) {
+        bool anchored = false;
+        for (const auto anchor : kHdrSignatureAnchors) {
+          anchored = anchored || signature.find(anchor) != std::string_view::npos;
+        }
+        if (!anchored) {
+          return false;
+        }
+      }
+      return true;
+    }(),
+    "every HDR file signature must contain an anchor");
+
 auto FileSignaturesSuggestHdr(const image_path_t& image_path) -> bool {
   std::ifstream ifs(image_path, std::ios::binary);
   if (!ifs.is_open()) {
@@ -1099,17 +1216,35 @@ auto FileSignaturesSuggestHdr(const image_path_t& image_path) -> bool {
   }
 
   constexpr size_t kMaxProbeBytes = 4 * 1024 * 1024;
-  std::string      bytes(kMaxProbeBytes, '\0');
-  ifs.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-  bytes.resize(static_cast<size_t>(std::max<std::streamsize>(0, ifs.gcount())));
-  if (bytes.empty()) {
+  std::string      text(kMaxProbeBytes, '\0');
+  ifs.read(text.data(), static_cast<std::streamsize>(text.size()));
+  text.resize(static_cast<size_t>(std::max<std::streamsize>(0, ifs.gcount())));
+  if (text.empty()) {
     return false;
   }
 
-  const std::string text = ToLowerAscii(std::move(bytes));
-  return ContainsAny(text, {"http://ns.adobe.com/hdr-gain-map", "hdrgm:version", "hdrgm:gainmapmin",
-                            "gainmap:version", "ultrahdr", "ultra hdr", "iso 21496", "iso:ts:21496",
-                            "urn:iso:std:iso:ts:21496", "gain map"});
+  // ASCII fold without a branch so the loop vectorizes. The signatures are ASCII and no byte
+  // above 0x7F folds to ASCII, so this matches per-byte std::tolower for the search below.
+  // Per-byte std::tolower plus ten std::string::find calls cost ~17 ms per file, most of the
+  // import time per RAW file once LibRaw unpack was gone.
+  auto* bytes = reinterpret_cast<unsigned char*>(text.data());
+  for (size_t index = 0; index < text.size(); ++index) {
+    const unsigned char byte = bytes[index];
+    bytes[index] =
+        static_cast<unsigned char>(byte | (static_cast<unsigned char>(byte - 'A') < 26 ? 0x20 : 0));
+  }
+
+  const std::string_view folded(text);
+  const bool             anchored = std::any_of(
+      kHdrSignatureAnchors.begin(), kHdrSignatureAnchors.end(),
+      [folded](std::string_view anchor) { return folded.find(anchor) != std::string_view::npos; });
+  if (!anchored) {
+    return false;
+  }
+  return std::any_of(kHdrFileSignatures.begin(), kHdrFileSignatures.end(),
+                     [folded](std::string_view signature) {
+                       return folded.find(signature) != std::string_view::npos;
+                     });
 }
 
 auto DetectHdrMetadata(const image_path_t& image_path, const Exiv2::Image* exif_image = nullptr)
@@ -1291,7 +1426,8 @@ auto ExtractDngMetadataToImageFast(const image_path_t& image_path, Image& image)
     // only as a last-resort size probe if LibRaw open_file did not expose it.
     PopulateDisplayDimensionsFromOiio(image_path, display);
   }
-  display.is_hdr_ = DetectHdrMetadata(image_path, exif_image.get());
+  // RAW import reads no HDR marker: is_hdr_ stays false until an HDR edit output sets it
+  // (PersistImageHdrFlag). The OIIO and 4 MiB signature probes read 4 MiB of every RAW file.
 
   image.SetExifDisplayMetaData(std::move(display));
   image.SetRawColorContext(std::move(ctx));
@@ -1318,11 +1454,12 @@ void PopulateAsShotNeutralFromLibRawCamMul(const libraw_colordata_t& color,
                   [](double value) { return std::isfinite(value) && value > 0.0; });
 }
 
-/// Populate a RawRuntimeColorContext directly from libraw's open-but-not-processed state.
-/// Only requires open_file / unpack to have been called so that imgdata.rawdata.color,
-/// imgdata.idata, imgdata.other, imgdata.lens are populated.
+/// Populate a RawRuntimeColorContext from LibRaw's opened state. open_file sets every field read
+/// here: imgdata.color (cam_mul, pre_mul, cam_xyz, rgb_cam), imgdata.idata, imgdata.other and
+/// imgdata.lens. unpack() only copies imgdata.color into imgdata.rawdata.color after it decodes
+/// the sensor data, so the metadata path never needs it.
 void PopulateMetadataRuntimeContext(LibRaw& raw_processor, RawRuntimeColorContext& ctx) {
-  const auto& color = raw_processor.imgdata.rawdata.color;
+  const auto& color = raw_processor.imgdata.color;
   for (int i = 0; i < 3; ++i) {
     ctx.cam_mul_[i] = color.cam_mul[i];
     ctx.pre_mul_[i] = color.pre_mul[i];
@@ -1659,7 +1796,7 @@ auto MetadataExtractor::ReadDngColorProfileFromSource(const image_path_t& image_
 
 void MetadataExtractor::ExtractEXIF_ToImage(const image_path_t& image_path, Image& image) {
   // Import accepts RAW files only, decided by content (never by extension): the only render
-  // input is the RAW decoder, so a file LibRaw cannot open and unpack could not render.
+  // input is the RAW decoder, so a file LibRaw cannot open could not render.
   // Exiv2 still adds metadata to RAW files inside ExtractRawMetadata_ToImage.
   if (ExtractRawMetadata_ToImage(image_path, image)) {
     return;
@@ -1688,14 +1825,8 @@ auto MetadataExtractor::ExtractRawMetadata_ToImage(const image_path_t& image_pat
     return false;
   }
 
-  ret = libraw_guard::Unpack(*raw_processor);
-  if (ret != LIBRAW_SUCCESS) {
-    std::cerr << "MetadataExtractor: libraw unpack failed for '" << image_path.string()
-              << "' (error " << ret << ")" << std::endl;
-    raw_processor->recycle();
-    return false;
-  }
-
+  // Metadata only: open_file has parsed every field read below. unpack() would decode the whole
+  // sensor image (most of the import time) and contributes no metadata.
   RawRuntimeColorContext ctx{};
   PopulateMetadataRuntimeContext(*raw_processor, ctx);
 
@@ -1713,7 +1844,8 @@ auto MetadataExtractor::ExtractRawMetadata_ToImage(const image_path_t& image_pat
 
   ExifDisplayMetaData display{};
   PopulateDisplayMetadataFromLibRaw(*raw_processor, ctx, display);
-  display.is_hdr_ = DetectHdrMetadata(image_path);
+  // RAW import reads no HDR marker: is_hdr_ stays false until an HDR edit output sets it
+  // (PersistImageHdrFlag).
 
   raw_processor->recycle();
 
