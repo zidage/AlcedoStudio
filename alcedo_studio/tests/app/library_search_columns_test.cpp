@@ -25,6 +25,7 @@
 #include <vector>
 
 #include "ai/ai_description.hpp"
+#include "app/album_browse_service.hpp"
 #include "app/project_service.hpp"
 #include "app/sleeve_filter_service.hpp"
 #include "image/image.hpp"
@@ -601,17 +602,17 @@ TEST_F(LibrarySearchColumnsTest, FuzzySearchWhereRunsNoCatalogQuery) {
     observed_operations.emplace_back(operation);
   });
 
-  // First build: the index exists from the project open, and no semantic model is active.
-  ASSERT_TRUE(project.GetStorage()->GetAiStore().HasUnderstandingFtsIndex())
-      << "the test runtime ships the DuckDB fts extension";
+  // First build: the project has no AI documents, so the open loads no BM25 index and the
+  // WHERE has no BM25 term. No semantic model is active.
+  EXPECT_FALSE(project.GetStorage()->GetAiStore().HasUnderstandingFtsIndex());
   const auto first = BuildWhereWhileDatabaseIsLocked(project, filter_service, L"lighthouses");
   ASSERT_TRUE(first.has_value() && first->raw_sql_.has_value());
-  EXPECT_NE(first->raw_sql_->find(L"fts_main_AiImageFtsDocument.match_bm25"), std::wstring::npos);
+  EXPECT_EQ(first->raw_sql_->find(L"fts_main_AiImageFtsDocument.match_bm25"), std::wstring::npos);
   EXPECT_EQ(first->raw_sql_->find(L"SemanticImageLabel"), std::wstring::npos);
   EXPECT_EQ(observed_operations, (std::vector<std::string>{"BuildFuzzySearchWhere"}));
   EXPECT_EQ(filter_service.ListSearchResultPage(folder_id, first, 0, 10).total_, 0u);
 
-  // An upsert rebuilds the index. `lighthouses` is not in the folded caption
+  // The first upsert builds the index. `lighthouses` is not in the folded caption
   // (`lighthouseonacliff`), so only the rebuilt BM25 index (stemming) can match the file.
   AiDescription description;
   description.file_id_     = file_ids[0];
@@ -620,7 +621,8 @@ TEST_F(LibrarySearchColumnsTest, FuzzySearchWhereRunsNoCatalogQuery) {
   description.model_id_    = "test_model";
   description.caption_     = "Lighthouse on a cliff";
   ASSERT_TRUE(project.GetStorage()->GetAiStore().UpsertUnderstanding(description));
-  EXPECT_TRUE(project.GetStorage()->GetAiStore().HasUnderstandingFtsIndex());
+  ASSERT_TRUE(project.GetStorage()->GetAiStore().HasUnderstandingFtsIndex())
+      << "the test runtime ships the DuckDB fts extension";
   const auto after_rebuild =
       BuildWhereWhileDatabaseIsLocked(project, filter_service, L"lighthouses");
   const auto rebuilt_page = filter_service.ListSearchResultPage(folder_id, after_rebuild, 0, 10);
@@ -759,6 +761,73 @@ TEST_F(LibrarySearchColumnsTest, AiSearchTextRowFollowsUpsertAndRemove) {
   EXPECT_EQ(row_count(project), (std::vector<std::string>{"1"}));
   SleeveFilterService filter_service(project.GetStorage());
   EXPECT_EQ(filter_service.CountSearchResults(LibraryRootFolderId(project), L"nightsky"), 1u);
+}
+
+// A project open loads the stored BM25 index when the AI documents are unchanged and rebuilds
+// it when the understandings changed outside AiStore. `lighthouses` and `glaciers` match only
+// through the BM25 index (stemming); the folded caption text does not contain them.
+TEST_F(LibrarySearchColumnsTest, ProjectOpenRebuildsBm25IndexOnlyWhenAiDocumentsChanged) {
+  {
+    ProjectService          project(db_path_, meta_path_);
+    SyntheticLibraryBuilder builder(project);
+    const auto              file_ids = builder.AddFiles(TwoFileSpecs());
+    ASSERT_EQ(file_ids.size(), 2u);
+    AiDescription description;
+    description.file_id_     = file_ids[0];
+    description.task_id_     = "describe";
+    description.provider_id_ = "test_provider";
+    description.model_id_    = "test_model";
+    description.caption_     = "Lighthouse on a cliff";
+    ASSERT_TRUE(project.GetStorage()->GetAiStore().UpsertUnderstanding(description));
+    project.SaveProject(meta_path_);
+  }
+  {
+    ProjectService project(db_path_, meta_path_);
+    ASSERT_TRUE(project.GetStorage()->GetAiStore().HasUnderstandingFtsIndex())
+        << "the test runtime ships the DuckDB fts extension";
+    SleeveFilterService filter_service(project.GetStorage());
+    EXPECT_EQ(filter_service.CountSearchResults(LibraryRootFolderId(project), L"lighthouses"), 1u);
+    // Change the understanding without AiStore: the stored documents and index keep the old
+    // caption until the next open.
+    RunStatement(project, "UPDATE AiImageUnderstanding SET caption = 'Glacier near the fjord'");
+    project.SaveProject(meta_path_);
+  }
+  ProjectService project(db_path_, meta_path_);
+  ASSERT_TRUE(project.GetStorage()->GetAiStore().HasUnderstandingFtsIndex());
+  SleeveFilterService filter_service(project.GetStorage());
+  const auto          folder_id = LibraryRootFolderId(project);
+  EXPECT_EQ(filter_service.CountSearchResults(folder_id, L"glaciers"), 1u);
+  EXPECT_EQ(filter_service.CountSearchResults(folder_id, L"lighthouses"), 0u);
+}
+
+// Reopening a project loads the children of a folder in one batch. Every file comes back with
+// its name and its FileImage binding, as the per-element load returned them.
+TEST_F(LibrarySearchColumnsTest, ReopenedFolderListsFilesWithTheirBoundImages) {
+  std::vector<sl_element_id_t> file_ids;
+  {
+    ProjectService          project(db_path_, meta_path_);
+    SyntheticLibraryBuilder builder(project);
+    file_ids = builder.AddFiles(TwoFileSpecs());
+    ASSERT_EQ(file_ids.size(), 2u);
+    project.SaveProject(meta_path_);
+  }
+
+  ProjectService project(db_path_, meta_path_);
+  const auto     files = project.GetAlbumBrowseService()->ListFilesInFolder(L"/");
+  ASSERT_EQ(files.size(), 2u);
+  std::map<sl_element_id_t, AlbumFileView> files_by_id;
+  for (const auto& file : files) {
+    files_by_id.emplace(file.file_id_, file);
+  }
+  const std::vector<std::wstring> expected_names{L"Nikon-D810-raw00011.NEF", L"IMG_0067.CR3"};
+  for (size_t index = 0; index < file_ids.size(); ++index) {
+    const auto it = files_by_id.find(file_ids[index]);
+    ASSERT_NE(it, files_by_id.end()) << "file " << file_ids[index];
+    EXPECT_EQ(it->second.file_name_, expected_names[index]);
+    EXPECT_NE(it->second.image_id_, 0u);
+    EXPECT_EQ(it->second.image_id_, ImageIdOfFile(project, file_ids[index]));
+  }
+  EXPECT_TRUE(project.GetAlbumBrowseService()->ListFolders(L"/").empty());
 }
 
 /// Rows passed to the `count_predicate_rows` SQL function since the last reset.
