@@ -46,6 +46,10 @@ struct LutSearchKeys {
   QString              brand_label;
   /// True when the metadata declares a print (film or paper).
   bool                 has_print = false;
+  /// Normalized print ID (its name when the ID is empty) and the print's name; empty
+  /// without print metadata.
+  QString              print_key;
+  QString              print_label;
   /// Normalized display name, compared whole with the normalized query.
   QString              name_key;
   /// Tokens of the display name, file stem, and aliases.
@@ -125,20 +129,19 @@ class LutEditDistanceMemo {
     -> std::optional<LutSearchRank>;
 
 enum class LutCategoryFilter : std::uint8_t { kAll, kGeneral, kFilmSimulation };
-enum class LutPrintFilter : std::uint8_t { kAll, kWithPrint, kNoPrint };
 enum class LutFacetDimension : std::uint8_t { kCategory, kSource, kBrand, kPrint, kFavorites };
 
 /**
  * @brief The browser's filter predicates; an empty key or kAll removes that predicate.
  *
- * Brand and print presence are film predicates: they do not apply while the category is
- * General. Print presence treats print film and photographic paper alike.
+ * Brand and print are film predicates: they do not apply while the category is General.
+ * The print predicate matches one print (print film or photographic paper) by its key.
  */
 struct LutFacetFilter {
   LutCategoryFilter category = LutCategoryFilter::kAll;
   QString           source_id;
   QString           brand_key;
-  LutPrintFilter    print          = LutPrintFilter::kAll;
+  QString           print_key;
   bool              favorites_only = false;
 };
 

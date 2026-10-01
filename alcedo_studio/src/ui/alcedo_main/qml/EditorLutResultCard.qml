@@ -57,10 +57,11 @@ Item {
     readonly property string appliedEntryId: target ? String(target.associationEntryId || "") : ""
 
     // Grid geometry: as many columns of at least editorLutTileMinWidth as fit.
+    // Narrower than one such column, the single column shrinks with the well.
     readonly property int columns: listMode ? 1
                                             : Math.max(1, Math.floor((tileRows.width + tileGap)
                                                                      / (appTheme.editorLutTileMinWidth + tileGap)))
-    readonly property real tileWidth: (tileRows.width - (columns - 1) * tileGap) / columns
+    readonly property real tileWidth: Math.max(0, (tileRows.width - (columns - 1) * tileGap) / columns)
     readonly property int rowCount: Math.ceil(resultCount / columns)
 
     // Bumped on every model change so tile bindings re-read their roles.

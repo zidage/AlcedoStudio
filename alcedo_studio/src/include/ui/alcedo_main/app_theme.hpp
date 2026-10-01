@@ -86,6 +86,7 @@ class AppTheme final : public QObject {
   Q_PROPERTY(int editorLutBrowserPanelWidthMin READ editorLutBrowserPanelWidthMin CONSTANT)
   Q_PROPERTY(int editorLutBrowserFilterWidth READ editorLutBrowserFilterWidth CONSTANT)
   Q_PROPERTY(int editorLutTileMinWidth READ editorLutTileMinWidth CONSTANT)
+  Q_PROPERTY(int editorLutTileCompactWidth READ editorLutTileCompactWidth CONSTANT)
   Q_PROPERTY(int editorLutTileIconSize READ editorLutTileIconSize CONSTANT)
   // Persistent left collections column in the application shell (see DESIGN.md).
   Q_PROPERTY(int collectionsSidebarWidth READ collectionsSidebarWidth CONSTANT)
@@ -313,6 +314,7 @@ class AppTheme final : public QObject {
   auto        editorLutBrowserPanelWidthMin() const -> int;
   auto        editorLutBrowserFilterWidth() const -> int;
   auto        editorLutTileMinWidth() const -> int;
+  auto        editorLutTileCompactWidth() const -> int;
   auto        editorLutTileIconSize() const -> int;
   auto        collectionsSidebarWidth() const -> int;
   auto        lineHeightCaption() const -> int;

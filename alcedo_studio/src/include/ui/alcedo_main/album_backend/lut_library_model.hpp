@@ -53,7 +53,7 @@ class LutLibraryModel : public QAbstractListModel {
   Q_PROPERTY(QString source READ source WRITE setSource NOTIFY filterChanged)
   /// Normalized film brand key (a `value` of brandChoices), or empty for All.
   Q_PROPERTY(QString brand READ brand WRITE setBrand NOTIFY filterChanged)
-  /// `all`, `with_print`, or `no_print`.
+  /// Normalized print key (a `value` of printChoices), or empty for All.
   Q_PROPERTY(QString print READ print WRITE setPrint NOTIFY filterChanged)
   Q_PROPERTY(bool favoritesOnly READ favoritesOnly WRITE setFavoritesOnly NOTIFY filterChanged)
   /// `name` or `modified`; used when the query is empty.
@@ -69,7 +69,7 @@ class LutLibraryModel : public QAbstractListModel {
   Q_PROPERTY(QVariantList favoriteChoices READ favoriteChoices NOTIFY choicesChanged)
   /// Brand and print choices apply only outside the General category.
   Q_PROPERTY(bool filmFiltersAvailable READ filmFiltersAvailable NOTIFY choicesChanged)
-  /// True when some candidate declares a print, so print presence can narrow the results.
+  /// True when the library declares a print, so the print choices can narrow the results.
   Q_PROPERTY(bool printFilterAvailable READ printFilterAvailable NOTIFY choicesChanged)
   Q_PROPERTY(int count READ count NOTIFY countChanged)
   Q_PROPERTY(int totalCount READ totalCount NOTIFY countChanged)
@@ -127,8 +127,8 @@ class LutLibraryModel : public QAbstractListModel {
   void               setSource(const QString& source_id);
   [[nodiscard]] auto brand() const -> QString { return filter_.brand_key; }
   void               setBrand(const QString& brand_key);
-  [[nodiscard]] auto print() const -> QString;
-  void               setPrint(const QString& print);
+  [[nodiscard]] auto print() const -> QString { return filter_.print_key; }
+  void               setPrint(const QString& print_key);
   [[nodiscard]] auto favoritesOnly() const -> bool { return filter_.favorites_only; }
   void               setFavoritesOnly(bool favorites_only);
   /// Remove every filter predicate and the query.

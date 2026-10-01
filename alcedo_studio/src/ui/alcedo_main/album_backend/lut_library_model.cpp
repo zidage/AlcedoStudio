@@ -38,18 +38,6 @@ auto CategoryText(LutCategoryFilter category) -> QString {
   return QStringLiteral("all");
 }
 
-auto PrintText(LutPrintFilter print) -> QString {
-  switch (print) {
-    case LutPrintFilter::kWithPrint:
-      return QStringLiteral("with_print");
-    case LutPrintFilter::kNoPrint:
-      return QStringLiteral("no_print");
-    case LutPrintFilter::kAll:
-      break;
-  }
-  return QStringLiteral("all");
-}
-
 auto Choice(const QString& value, const QString& label, int count, bool selected) -> QVariant {
   QVariantMap map;
   map.insert(QStringLiteral("value"), value);
@@ -418,24 +406,14 @@ void LutLibraryModel::rebuildChoices() {
   if (filmFiltersAvailable()) {
     brand_choices_ = dimension_choices(LutFacetDimension::kBrand, filter_.brand_key,
                                        &LutSearchKeys::brand_key, &LutSearchKeys::brand_label);
+    print_choices_ = dimension_choices(LutFacetDimension::kPrint, filter_.print_key,
+                                       &LutSearchKeys::print_key, &LutSearchKeys::print_label);
   } else {
     brand_choices_ = {Choice({}, Tr("All"), 0, true)};
+    print_choices_ = {Choice({}, Tr("All"), 0, true)};
   }
-
-  int with_print = 0;
-  int no_print   = 0;
-  if (filmFiltersAvailable()) {
-    count_where(LutFacetDimension::kPrint,
-                [&](const LutSearchKeys& keys) { ++(keys.has_print ? with_print : no_print); });
-  }
-  print_filter_available_ = with_print > 0;
-  print_choices_          = {
-      Choice(QStringLiteral("all"), Tr("All"), with_print + no_print,
-                      filter_.print == LutPrintFilter::kAll),
-      Choice(QStringLiteral("with_print"), Tr("With print"), with_print,
-                      filter_.print == LutPrintFilter::kWithPrint),
-      Choice(QStringLiteral("no_print"), Tr("No print"), no_print,
-                      filter_.print == LutPrintFilter::kNoPrint)};
+  // All is always the first choice; any other means some print can be chosen.
+  print_filter_available_ = print_choices_.size() > 1;
 
   int candidates = 0;
   int favorites  = 0;
@@ -475,10 +453,10 @@ void LutLibraryModel::setCategory(const QString& category) {
   if (category == QStringLiteral("film_simulation")) value = LutCategoryFilter::kFilmSimulation;
   if (value == filter_.category) return;
   filter_.category = value;
-  // Brand and print presence do not apply to General LUTs: clear them to All.
+  // Brand and print do not apply to General LUTs: clear them to All.
   if (value == LutCategoryFilter::kGeneral) {
     filter_.brand_key.clear();
-    filter_.print = LutPrintFilter::kAll;
+    filter_.print_key.clear();
   }
   emit filterChanged();
   refilter();
@@ -499,14 +477,10 @@ void LutLibraryModel::setBrand(const QString& brand_key) {
   refilter();
 }
 
-auto LutLibraryModel::print() const -> QString { return PrintText(filter_.print); }
-
-void LutLibraryModel::setPrint(const QString& print) {
-  LutPrintFilter value = LutPrintFilter::kAll;
-  if (print == QStringLiteral("with_print")) value = LutPrintFilter::kWithPrint;
-  if (print == QStringLiteral("no_print")) value = LutPrintFilter::kNoPrint;
-  if (value == filter_.print || !filmFiltersAvailable()) return;
-  filter_.print = value;
+void LutLibraryModel::setPrint(const QString& print_key) {
+  const QString key = NormalizeLutSearchText(print_key);
+  if (filter_.print_key == key || !filmFiltersAvailable()) return;
+  filter_.print_key = key;
   emit filterChanged();
   refilter();
 }

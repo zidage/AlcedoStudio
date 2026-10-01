@@ -12,8 +12,10 @@ import QtQuick.Layouts
 // the image, the node selection, or the route.
 //
 // Space: the filter sidebar folds to zero width with the rail's fold motion.
-// When the page is too narrow for the sidebar and two tile columns, the open
-// sidebar floats over the results instead of squeezing them.
+// It stays docked while the results keep one compact tile column beside it;
+// the tiles shrink to fit. When the page narrows past that, the sidebar closes
+// by itself and reopens once the page is wide enough again. Opened by hand on
+// a page that narrow, it floats over the results until it is closed.
 Item {
     id: root
     objectName: "editorLutBrowserPanel"
@@ -27,6 +29,7 @@ Item {
     property var library: modules && modules.lutLibrary ? modules.lutLibrary : null
 
     // View state. The rail owns the lasting copy (this page is unloaded on close).
+    // filtersVisible is the user's choice; filtersOpen is what the page shows.
     property bool filtersVisible: true
     // "grid" or "list".
     property string viewMode: "grid"
@@ -39,20 +42,26 @@ Item {
         appTheme.iconOpticalSizeCompact + appTheme.spaceSm,
         appTheme.iconButtonHitSizeCompact - appTheme.spaceSm)
     readonly property int filterWidth: appTheme.editorLutBrowserFilterWidth
-    // Docked only when the results keep at least two tile columns beside the sidebar.
+    // Docked while the results keep one compact tile column beside the sidebar
+    // (the column plus the tile well's margins).
     readonly property bool filterDocked: body.width >= filterWidth + appTheme.spaceSm
-                                                     + 2 * appTheme.editorLutTileMinWidth
-                                                     + appTheme.spaceXs * 3
+                                                     + appTheme.editorLutTileCompactWidth
+                                                     + appTheme.spaceXs * 2
+    // Opened by hand while the page is too narrow to dock; cleared by any resize
+    // across the dock width, so narrowing the page always closes the sidebar.
+    property bool _openedUndocked: false
+    readonly property bool filtersOpen: filtersVisible && (filterDocked || _openedUndocked)
     readonly property bool anyFilterActive: filterCard.anyFilterActive
+    onFilterDockedChanged: _openedUndocked = false
 
     // Fold progress of the filter sidebar (0 folded → 1 open).
-    property real filterOpenProgress: filtersVisible ? 1 : 0
+    property real filterOpenProgress: filtersOpen ? 1 : 0
     property bool _motionArmed: false
     Behavior on filterOpenProgress {
         enabled: root._motionArmed
         NumberAnimation {
             duration: appTheme.reduceMotion ? 0
-                                            : (root.filtersVisible ? appTheme.motionFoldOpenMs
+                                            : (root.filtersOpen ? appTheme.motionFoldOpenMs
                                                                    : appTheme.motionFoldCloseMs)
             easing.type: appTheme.motionEasing
         }
@@ -69,7 +78,13 @@ Item {
         searchInput.selectAll()
     }
     function toggleFilters() {
-        filtersVisible = !filtersVisible
+        if (filtersOpen) {
+            filtersVisible = false
+            _openedUndocked = false
+        } else {
+            filtersVisible = true
+            _openedUndocked = !filterDocked
+        }
     }
 
     // One chrome recipe for every toolbar SVG action.
@@ -99,9 +114,9 @@ Item {
 
             ToolbarButton {
                 objectName: "editorLutFilterToggle"
-                iconSrc: root.filtersVisible ? "qrc:/panel_icons/layout-sidebar.svg"
-                                             : "qrc:/panel_icons/layout-sidebar-inactive.svg"
-                actionName: root.filtersVisible ? qsTr("Hide filters") : qsTr("Show filters")
+                iconSrc: root.filtersOpen ? "qrc:/panel_icons/layout-sidebar.svg"
+                                          : "qrc:/panel_icons/layout-sidebar-inactive.svg"
+                actionName: root.filtersOpen ? qsTr("Hide filters") : qsTr("Show filters")
                 onClicked: root.toggleFilters()
             }
 
