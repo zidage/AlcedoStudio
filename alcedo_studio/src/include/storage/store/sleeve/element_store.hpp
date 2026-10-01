@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <span>
@@ -89,6 +90,18 @@ struct SearchResultPage {
 struct SearchResultPageWithStats {
   SearchResultPage page_{};
   FolderStatsView  stats_{};
+};
+
+/// Whole-project counts that the welcome surface shows for a loaded project. A query result
+/// read by ElementStore::ReadProjectOverview; the scope equals `CountFilesInFolder(0)`.
+struct ProjectOverviewCounts {
+  uint64_t                   photo_count_        = 0;
+  /// Files whose edit history root has at least one `EditCommit` row, in any Version.
+  uint64_t                   edited_photo_count_ = 0;
+  /// `YYYY-MM-DD` of the earliest `Image.capture_date`; empty when no file has a capture date.
+  std::optional<std::string> earliest_capture_date_{};
+  /// `YYYY-MM-DD` of the latest `Image.capture_date`; empty when no file has a capture date.
+  std::optional<std::string> latest_capture_date_{};
 };
 
 class ElementStore {
@@ -176,6 +189,12 @@ class ElementStore {
   auto CountFilesInFolder(
       sl_element_id_t                            folder_id,
       const std::optional<duckorm::SqlFragment>& extra_filter = std::nullopt) const -> size_t;
+
+  /// Photo count, edited photo count, and capture date range of every file in the project,
+  /// from one statement on the `BuildScopedFileQuery(0)` scope. Reads only; takes the
+  /// connection lock and is safe to call from any thread. Throws std::runtime_error with the
+  /// DuckDB message when the statement fails.
+  auto ReadProjectOverview() const -> ProjectOverviewCounts;
 
   /// Return one page of files that match @p extra_filter, ordered by element id, with the
   /// display columns and the total match count from one statement (`COUNT(*) OVER ()`).

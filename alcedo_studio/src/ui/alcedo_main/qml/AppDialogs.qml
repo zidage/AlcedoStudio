@@ -31,6 +31,7 @@ Item {
     property alias deleteConfirmDialog: deleteConfirmDialogObj
     property alias editorCloseConfirmDialog: editorCloseConfirmDialogObj
     property alias welcomeDialog: welcomeDialogObj
+    property alias welcomePreviewAdapter: welcomePreviewAdapterObj
     property alias globalSearchDialog: globalSearchDialogObj
     property alias backgroundTasksDialog: backgroundTasksDialogObj
 
@@ -161,7 +162,7 @@ Item {
 
     // The editor filmstrip shares this menu; Discard appears only when the
     // menu was opened from the filmstrip on the image currently loaded in the
-    // editor, and stays gated by the session's discard eligibility.
+    // editor, and requires the session's discard eligibility.
     function filmstripDiscardActions() {
         if (root.imageActionsController.menuOrigin !== "editor-filmstrip") {
             return []
@@ -328,33 +329,38 @@ Item {
         onCancelled: root.host.cancelEditorCloseConfirm()
     }
 
+    // Overview data of the previewed project for the welcome surface.
+    WelcomeProjectPreviewAdapter {
+        id: welcomePreviewAdapterObj
+        active: welcomeDialogObj.visible
+        thumbnailMaxEdge: host.libraryThumbnailMaxEdge
+    }
+
     WelcomeDialog {
         id: welcomeDialogObj
         objectName: "welcomeDialog"
         z: 30
         blurSource: root.blurSource
         cornerRadius: host.windowCornerRadius
+        adapter: welcomePreviewAdapterObj
         recentProjects: appModules.project.recentProjects
         languageOptions: host.languageOptions
         currentLanguageIndex: host.languageIndexForCode(languageManager.currentLanguageCode)
         acceleratorWarning: appModules.project.acceleratorWarning
         serviceMessage: appModules.project.serviceMessage
         updateService: appModules.updates
-        headlineFontFamily: host.headlineFontFamily
-        primaryAccent: host.colButtonPrimary
-        secondaryAccent: host.colAccentSecondary
-        textColor: host.colText
-        mutedTextColor: host.colTextMuted
-        panelColor: host.colBgPanel
-        panelBorderColor: host.withAlpha(host.colText, 0.08)
-        overlayColor: host.colOverlay
-        baseColor: host.colBgCanvas
-        onLoadRequested: {
+        // A row previews that project under the welcome surface; the upper
+        // area shows the skeleton until the load completes.
+        onPreviewRequested: function(projectPath) {
+            appModules.project.PreviewProject(projectPath)
+        }
+        onContinueRequested: host.continueWelcomeProject()
+        onOpenRequested: {
             host.beginProjectLaunch(function() {
                 return appModules.project.PromptAndLoadProject()
             })
         }
-        onCreateRequested: function(projectName, storageLocation) {
+        onCreateRequested: function(storageLocation, projectName) {
             host.beginProjectLaunch(function() {
                 return appModules.project.CreateProjectInFolderNamed(storageLocation, projectName)
             })
@@ -364,11 +370,6 @@ Item {
             languageManager.setLanguage(languageCode)
         }
         onAcceleratorWarningAcknowledged: appModules.project.AcknowledgeAcceleratorWarning()
-        onRecentProjectRequested: function(projectPath) {
-            host.beginProjectLaunch(function() {
-                return appModules.project.LoadProject(projectPath)
-            })
-        }
         onClosed: host.startPendingProjectLaunch()
     }
 
@@ -383,7 +384,7 @@ Item {
     }
 
     // True while any modal dialog/menu is open — used by Main's Select-All
-    // shortcut gate (formerly selectionShortcutBlocked).
+    // shortcut admission check (formerly selectionShortcutBlocked).
     function anyDialogOpened() {
         return settingsDialogObj.opened
                || adjustmentTransferDialogObj.opened

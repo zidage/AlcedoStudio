@@ -5,6 +5,7 @@
 #include "app/album_browse_service.hpp"
 
 #include <algorithm>
+#include <stdexcept>
 #include <unordered_set>
 
 #include "utils/string/convert.hpp"
@@ -146,6 +147,13 @@ auto AlbumBrowseService::CountFilesInFolderById(
   } catch (...) {
     return 0;
   }
+}
+
+auto AlbumBrowseService::ReadProjectOverview() const -> ProjectOverviewCounts {
+  if (!sleeve_service_) {
+    throw std::runtime_error("Project overview read requires a sleeve service.");
+  }
+  return sleeve_service_->GetStorage()->GetElementStore().ReadProjectOverview();
 }
 
 auto AlbumBrowseService::CreateFolder(const std::filesystem::path& parent_folder_path,

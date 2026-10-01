@@ -260,6 +260,25 @@ QVariantList AlbumThumbnailModel::getItemsInRange(int firstIndex, int lastIndex)
   return result;
 }
 
+QVariantList AlbumThumbnailModel::getThumbnailStatesInRange(int firstIndex, int lastIndex) const {
+  QVariantList result;
+  if (rows_.empty()) return result;
+
+  const int first = std::clamp(std::min(firstIndex, lastIndex), 0, static_cast<int>(rows_.size()) - 1);
+  const int last  = std::clamp(std::max(firstIndex, lastIndex), 0, static_cast<int>(rows_.size()) - 1);
+  result.reserve(last - first + 1);
+  for (int idx = first; idx <= last; ++idx) {
+    const auto& item = rows_[static_cast<size_t>(idx)];
+    result.push_back(QVariantMap{
+        {"elementId", static_cast<uint>(item.element_id)},
+        {"imageId", static_cast<uint>(item.image_id)},
+        {"thumbUrl", item.thumb_data_url},
+        {"thumbLoading", item.thumb_loading},
+    });
+  }
+  return result;
+}
+
 int AlbumThumbnailModel::rowByElementId(uint elementId) const {
   const auto it = element_id_to_row_.find(elementId);
   return it != element_id_to_row_.end() ? it->second : -1;

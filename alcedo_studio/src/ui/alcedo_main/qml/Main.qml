@@ -247,7 +247,7 @@ ApplicationWindow {
     property alias contentY: root.globalContentY
     property alias contentX: root.globalContentX
 
-    // Application close gate: when the editor has an open image, caption/X and
+    // Application close check: when the editor has an open image, caption/X and
     // OS close are intercepted so the user can Save (Finalize true) or Discard
     // (Finalize false) before the process exits. Async save must finish first —
     // quitting during Saving aborts the checkpoint.
@@ -399,7 +399,7 @@ ApplicationWindow {
             return
         }
         const state = String(session.sessionState || "")
-        // Same in-flight seal gate as EditorFilmstrip. A queued owner-thread
+        // Same in-flight seal check as EditorFilmstrip. A queued owner-thread
         // Close or persist still reports Interactive until the reducer runs,
         // so wait on closeInFlight / persistInFlight as well as Saving/Switching.
         if (state === "Saving" || state === "Switching"
@@ -565,6 +565,14 @@ ApplicationWindow {
         projectLaunchController.updateWelcomeDialogVisibility()
     }
 
+    function requestStartupPreview() {
+        projectLaunchController.requestStartupPreview()
+    }
+
+    function continueWelcomeProject() {
+        return projectLaunchController.continueWelcomeProject()
+    }
+
     function setFocusedImage(item) {
         imageActionsController.setFocusedImage(item)
     }
@@ -639,6 +647,10 @@ ApplicationWindow {
     }
 
     readonly property alias workspaceLayer: workspaceHost
+    // Thumbnail tier of the Library grid; the welcome cover pins share it.
+    readonly property int libraryThumbnailMaxEdge: workspaceHost.libraryItem
+                                                   && workspaceHost.libraryItem.thumbnailMaxEdge !== undefined
+                                                   ? workspaceHost.libraryItem.thumbnailMaxEdge : 0
     readonly property alias exportQueueState: exportQueueStateObj
     readonly property alias selectionState: selectionStateObj
     readonly property var importDialog: appDialogs.importDialog

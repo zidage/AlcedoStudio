@@ -6,6 +6,7 @@
 
 #include <QVariantList>
 
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -18,10 +19,17 @@
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
 #include "app/thumbnail_service.hpp"
+#include "storage/store/sleeve/element_store.hpp"
 
 namespace alcedo::ui {
 
 class ProjectModule;
+
+/// How the user reaches the project of one load request.
+/// - kPreview: the welcome surface stays visible and shows the project overview. The user has
+///   not entered the project, so the project has no user changes.
+/// - kEnter: the welcome surface closes and the Library shows the project.
+enum class ProjectEntryMode : uint8_t { kPreview, kEnter };
 
 /// Owns all back-end services and manages lifetime of a single project.
 class ProjectHandler {
@@ -31,14 +39,22 @@ class ProjectHandler {
   bool InitializeServices(const std::filesystem::path& dbPath,
                           const std::filesystem::path& metaPath,
                           ProjectOpenMode              openMode,
-                          const std::filesystem::path& packagePath = {},
-                          const std::filesystem::path& workspaceDir = {},
-                          const std::filesystem::path& recentProjectPath = {});
+                          const std::filesystem::path& packagePath,
+                          const std::filesystem::path& workspaceDir,
+                          const std::filesystem::path& recentProjectPath,
+                          ProjectEntryMode             entryMode);
   // Opens the packed project at @p packagePath: the loader thread unpacks it into
   // @p workspaceDir (created by the caller) and then starts the services as
   // InitializeServices does for an existing project.
   bool OpenPackedProject(const std::filesystem::path& packagePath,
-                         const std::filesystem::path& workspaceDir, const QString& projectName);
+                         const std::filesystem::path& workspaceDir, const QString& projectName,
+                         ProjectEntryMode entryMode);
+  /// Enters the previewed project. UI thread only.
+  /// - Loaded, unentered project and no running load: sets the entered state and registers the
+  ///   recent entry.
+  /// - Running kPreview load: changes the load to kEnter; the completion enters the project.
+  /// Returns false and changes nothing in every other state.
+  bool RequestEnterLoadedProject();
   bool PersistCurrentProjectState();
   bool PackageCurrentProjectFiles(QString* errorOut = nullptr) const;
   void SetProjectLoadingState(bool loading, const i18n::LocalizedText& message);
@@ -82,6 +98,19 @@ class ProjectHandler {
   [[nodiscard]] auto project_load_request_id() const -> uint64_t {
     return project_load_request_id_;
   }
+  /// True when the user entered the loaded project. False for a preview and with no project.
+  [[nodiscard]] bool project_entered() const { return project_entered_; }
+  /// Entry mode of the running load, or of the last load when no load runs.
+  [[nodiscard]] auto load_entry_mode() const -> ProjectEntryMode { return load_entry_mode_; }
+  /// Overview counts of the loaded project, read on the loader thread at load time. The value
+  /// stays valid while the project is not entered because no user edit can run in that state.
+  [[nodiscard]] auto project_overview() const -> const std::optional<ProjectOverviewCounts>& {
+    return project_overview_;
+  }
+  /// Path that the recent-project list uses for the loaded project.
+  [[nodiscard]] auto recent_project_path() const -> const std::filesystem::path& {
+    return recent_project_path_;
+  }
 
  private:
   // Shared by InitializeServices and OpenPackedProject. With @p unpackProjectName, the loader
@@ -91,7 +120,7 @@ class ProjectHandler {
                         ProjectOpenMode openMode, const std::filesystem::path& packagePath,
                         const std::filesystem::path& workspaceDir,
                         const std::filesystem::path& recentProjectPath,
-                        std::optional<QString>       unpackProjectName);
+                        std::optional<QString> unpackProjectName, ProjectEntryMode entryMode);
 
   ProjectModule& project_module_;
 
@@ -106,10 +135,16 @@ class ProjectHandler {
   std::filesystem::path meta_path_{};
   std::filesystem::path project_package_path_{};
   std::filesystem::path project_workspace_dir_{};
+  std::filesystem::path recent_project_path_{};
 
   bool                project_loading_ = false;
   i18n::LocalizedText project_loading_message_text_{};
   uint64_t            project_load_request_id_ = 0;
+  // Written on the UI thread only: at load start, at load completion, and in
+  // RequestEnterLoadedProject.
+  bool                                 project_entered_ = false;
+  ProjectEntryMode                     load_entry_mode_ = ProjectEntryMode::kEnter;
+  std::optional<ProjectOverviewCounts> project_overview_{};
 };
 
 }  // namespace alcedo::ui

@@ -483,7 +483,15 @@ void ApplicationModuleHost::ShutdownModules() {
     if (image_analysis_sink_ && (!db_write_barrier_ || !db_write_barrier_->IsHeld())) {
       image_analysis_sink_->FlushPendingWrites();
     }
-    if (project_) {
+    if (project_ && !project_->handler().project_entered()) {
+      // The user did not enter the loaded project (welcome surface preview), so it has no user
+      // changes. Keep its package as it is on disk; flush only the thumbnail cache index.
+      if (const auto& thumbnails = project_->handler().thumbnail_service();
+          thumbnails && thumbnails->GetDiskCacheStats().enabled) {
+        thumbnails->FlushDiskCacheMetadata();
+      }
+      album_util::CleanupWorkspaceDirectory(project_->handler().workspace_dir());
+    } else if (project_) {
       auto psvc = project_->handler().pipeline_service();
       if (psvc) {
         psvc->Sync();

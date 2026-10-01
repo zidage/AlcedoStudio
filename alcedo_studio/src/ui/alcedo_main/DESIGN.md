@@ -9,7 +9,8 @@ Implementation source of truth: `AppTheme` (`app_theme.hpp` / `app_theme.cpp`)
 Shared components: `IconActionButton.qml`, `CollapsibleSection.qml`,
 `DialogActionButton.qml`, `IconButton.qml`, `SegmentedCardSwitcher.qml`,
 `SlidingIconNav.qml`, `DateFilterSection.qml`, `DateCommitGraph.qml`,
-`AdjustmentSlider.qml`, `ThemedProgressBar.qml`, `ThemeCheckBox.qml`
+`AdjustmentSlider.qml`, `ThemedProgressBar.qml`, `ThemeCheckBox.qml`,
+`SkeletonBlock.qml`
 
 Per-file decisions: `docs/VI/README.md`. That catalog specializes this global
 system for individual QML files and is updated with each approved visual change.
@@ -378,6 +379,58 @@ beside it so workspace routing remains available while the sidebar is folded.
 
 ---
 
+## Welcome surface
+
+The welcome surface (`WelcomeDialog.qml`) is the modal start screen. It shows
+the project that the app previews at startup and the other recent projects.
+Product specification: `docs/roadmap/alcedo_studio/ui/welcome_project_overview_plan.md`
+section 3. Per-file decisions: `docs/VI/README.md`, "Welcome surface".
+
+`Vertical(blur backdrop, Card(Horizontal(Left column, Right column)))`
+
+| Token | px | Use |
+| --- | --- | --- |
+| `welcomeCardWidth` | 1040 | Card width; the card shrinks to the window minus `spaceXl` on each side |
+| `welcomeCardHeight` | 600 | Card height; same shrink rule |
+| `welcomeSidebarWidth` | 260 | Left column (wordmark, actions, language, Quit) |
+| `welcomeCoverWidth` | 300 | Cover block width |
+| `welcomeCoverCompactWidth` | 240 | Cover block width when the right column cannot hold `welcomeCoverWidth + spaceXl + welcomeInfoMinWidth` |
+| `welcomeCoverHeight` | 224 | Cover block height; also the information block height |
+| `welcomeInfoMinWidth` | 260 | Information block minimum width |
+| `welcomeEmptyContentWidth` | 400 | Text block width of the no-recent-project well |
+
+Color and type map (the design canvas values map to existing tokens; the
+welcome surface adds no color token):
+
+| Role | Token |
+| --- | --- |
+| Backdrop | blurred shell + `overlayColor` (same modal shell as Settings) |
+| Card | `cardSurfaceColor`, 1 px `cardBorderColor`, `panelRadius` |
+| Recent list well, no-recent-project well | `bgBaseColor`, `controlRadiusSmall` (sunken track rule) |
+| Recent row hover | `hoverColor` (the well is `bgBaseColor`, so `buttonHoveredFillColor` would not show in the Alcedo theme) |
+| Primary action (Continue Editing, Create Project, empty-state New Project…) | `editorListSelectedFillColor` fill, `editorListSelectedInkColor` ink |
+| Secondary action (Open Project…, New Project…) | `cardSurfaceColor` fill, 1 px `cardBorderColor`, hover `buttonHoveredFillColor` |
+| Quiet action (Back, Quit) | no fill, `textMutedColor`; hover `buttonHoveredFillColor` + `textColor` |
+| Keyboard focus | 1 px `textMutedColor` outline on the focused action or row |
+| "Alcedo" in the wordmark | `accentColor` (the wordmark is the documented accent use) |
+| Preview error | `dangerColor` body text |
+| Cover tile without a photo, skeleton base | `bgBaseColor` |
+| Wordmark | `headlineFontFamily`, `fontSizeHeadline`, `fontWeightHeading` |
+| Numeric values (photos, edited, capture dates, relative time) | `headlineFontFamily` (Manrope). Do not use `dataFontFamily` here |
+
+Rules:
+
+- The cover block is one large tile (two parts of the width, both rows) and two
+  small tiles, `spaceXs` apart. One `controlRadiusSmall` mask rounds the outer
+  corners. Thumbnails use `PreserveAspectCrop`.
+- The welcome actions use `WelcomeActionButton.qml` (`primary` / `secondary` /
+  `quiet`). Height is `iconButtonHitSize` (compact: `iconButtonHitSizeCompact`).
+  Icons reuse `folder-open.svg` and `folder-plus.svg`.
+- No pill, badge, status dot, or compound `xx · xx` label. The statistics are
+  a caption label above a value.
+- While a project load runs, the recent rows, Open Project… and New Project…
+  are disabled (one load at a time).
+
 ## Editor panel geometry
 
 Side-panel and scope sizing for the editor desktop. Values are logical px; Qt
@@ -403,7 +456,7 @@ the two side columns read as one family.
 **Editor close confirm:** `EditorCloseConfirmDialog` uses the same blur +
 `overlayColor` modal shell and `DialogActionButton` actions (Cancel / Discard /
 Save). Save explicitly calls `Finalize(true)`, routes to Library, then waits on
-`sessionState` (`Saving` / `Switching`, same gate as the filmstrip) until
+`sessionState` (`Saving` / `Switching`, same check as the filmstrip) until
 `NoImage` before quitting. Discard uses `Finalize(false)`. Ordinary Library /
 Editor workspace navigation only changes visibility; it preserves the editor
 session, retained QML tree, viewport, and presentation sink.
@@ -835,7 +888,8 @@ Visible strings are product language only. Ban developer placeholders such as
 ## Motion
 
 Quiet desktop language. No bounce, overshoot, perpetual animation, or input
-blocking. Session identity is never recreated by a fold.
+blocking. Session identity is never recreated by a fold. The one approved
+perpetual animation is the `SkeletonBlock` content placeholder (table below).
 
 | Token | Value | Use |
 | --- | --- | --- |
@@ -844,6 +898,7 @@ blocking. Session identity is never recreated by a fold.
 | `motionFadeMs` | 120 | Short fades; project-load overlay hold before fade-out |
 | `motionEasing` | `QEasingCurve::OutCubic` (QML `Easing.OutCubic`) | Fold and fade easing. Bind `easing.type: appTheme.motionEasing` |
 | `backgroundTaskAutoCollapseMs` | 3000 | Time the task summary remains expanded after a task state changes |
+| `skeletonCycleMs` | 1200 | One sweep of the `SkeletonBlock` highlight band (`Easing.InOutSine`) |
 | `reduceMotion` | `QSettings("ui/reduceMotion")` | When true, all fold/fade/slide durations resolve to **0**; final state unchanged |
 
 **Monochrome selection motion:**
@@ -852,6 +907,7 @@ blocking. Session identity is never recreated by a fold.
 | --- | --- | --- |
 | Workspace + adjustment thumbs | Slide on `x` (OutBack, land scale pulse) | Documented capsule exception to “no overshoot” for mechanical feel |
 | Display method segments | Instant fill swap (optional future fade) | Title-only wells inside shared track |
+| Content placeholder (`SkeletonBlock`) | A `hoverColor` band moves on `x` from left to right inside the clipped `bgBaseColor` block, `skeletonCycleMs` per sweep, `Easing.InOutSine`, repeated while the content loads | Approved exception to "no perpetual animation", for content placeholders only. The band stops when the block is invisible. Under `reduceMotion` the band does not run and the block is static |
 | Project loading overlay | Snap on immediately; after load, hold `motionFadeMs` then fade out `motionFoldCloseMs` | No fade-in — that flashed the empty library after Welcome closed |
 | Library first reveal | Grid Loader fades in `motionFoldOpenMs` with `spaceMd` translateY | Prepared hidden while the overlay is up; plays as the overlay starts to fade; skipped under `reduceMotion` |
 | Window maximize / restore / minimize | Native `QWindow` state transition (`showMaximized`, `showNormal`, `showMinimized`) | Windows keeps the standard resizable HWND styles and extends the client area through `WindowsFramelessWindow`. macOS keeps the system traffic lights over the leading side of the full-width toolbar and hides the title-bar surface with `Qt.ExpandedClientAreaHint` + `Qt.NoTitleBarBackgroundHint`; toolbar content reserves that leading region. Other platforms use Qt frameless behavior plus drawn caption buttons. The platform owns animation and geometry; QML never fades, snapshots, or interpolates the top-level window |
@@ -930,6 +986,7 @@ row delegate and arrow affordance automatically.
 | `AppContextMenu.qml` | Shared dark popup menu shell (`Menu` + `AppMenuItem` delegate, fade transition, `openAt`) |
 | `AppMenuItem.qml` | Shared dark menu row (state gutter, wrapping label, sub-menu arrow, hover wash) |
 | `AppMenuSeparator.qml` | Shared 1 px menu group divider |
+| `SkeletonBlock.qml` | Content placeholder: `bgBaseColor` block with the moving `hoverColor` band (Motion); `animated: false` draws a static tile |
 
 ---
 

@@ -72,6 +72,16 @@ Item {
                 root.host.updateWelcomeDialogVisibility()
             }
         }
+        function onProjectEnteredChanged() {
+            if (root.host) {
+                root.host.updateWelcomeDialogVisibility()
+            }
+        }
+        function onAcceleratorPreparationStateChanged() {
+            if (root.host && !appModules.project.acceleratorPreparing) {
+                root.host.requestStartupPreview()
+            }
+        }
         function onProjectLoadStateChanged() {
             if (root.host) {
                 root.host.projectLaunchPending = false

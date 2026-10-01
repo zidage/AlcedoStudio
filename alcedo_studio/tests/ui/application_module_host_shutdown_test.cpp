@@ -3,17 +3,20 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 /// @file application_module_host_shutdown_test.cpp
-/// @brief Verifies host shutdown waits for every registered task and drains
-/// analysis writes released by an export barrier.
+/// @brief Verifies host shutdown waits for every registered task, drains
+/// analysis writes released by an export barrier, and repacks the project
+/// package only when the user entered the project.
 
 #include "ui/album_backend_test_fixture.hpp"
 
 #include <QTimer>
 
 #include <array>
+#include <filesystem>
 #include <memory>
 
 #include "ui/alcedo_main/album_backend/background_task_controller.hpp"
+#include "ui/welcome_project_test_support.hpp"
 
 namespace alcedo::ui::test {
 namespace {
@@ -83,6 +86,40 @@ TEST_F(ApplicationModuleHostShutdownTests,
   EXPECT_EQ(tasks->RunningCount(), 0);
   EXPECT_FALSE(host.db_write_barrier().IsHeld());
   EXPECT_FALSE(sink->HasPendingWrites());
+}
+
+TEST_F(ApplicationModuleHostShutdownTests, ShutdownWithUnenteredProjectSkipsRepack) {
+  ScopedRecentProjectSettings settings(temp_dir_);
+  const auto                  package = BuildPackedProject(temp_dir_, "unentered_project");
+
+  ApplicationModuleHost host;
+  ASSERT_TRUE(host.project()->PreviewProject(PathToQString(package)));
+  ASSERT_TRUE(WaitForProjectLoadIdle(host));
+  ASSERT_TRUE(host.project()->ServiceReady());
+  ASSERT_FALSE(host.project()->ProjectEntered());
+  const auto package_before = CapturePackageFileState(package);
+
+  host.Shutdown();
+
+  // The workspace directory is not checked: on Windows the open DuckDB file blocks its removal
+  // during ShutdownModules for every project, entered or not.
+  EXPECT_EQ(ReadFileBytes(package), package_before.bytes_);
+  EXPECT_EQ(std::filesystem::last_write_time(package), package_before.write_time_);
+}
+
+TEST_F(ApplicationModuleHostShutdownTests, ShutdownWithEnteredProjectRepacks) {
+  ScopedRecentProjectSettings settings(temp_dir_);
+  const auto                  package = BuildPackedProject(temp_dir_, "entered_project");
+
+  ApplicationModuleHost host;
+  ASSERT_TRUE(host.project()->PreviewProject(PathToQString(package)));
+  ASSERT_TRUE(WaitForProjectLoadIdle(host));
+  ASSERT_TRUE(host.project()->EnterLoadedProject());
+  const auto package_before = CapturePackageFileState(package);
+
+  host.Shutdown();
+
+  EXPECT_NE(std::filesystem::last_write_time(package), package_before.write_time_);
 }
 
 }  // namespace

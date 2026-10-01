@@ -5644,19 +5644,189 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     </message>
 </context>
 <context>
+    <name>WelcomeCoverMosaic</name>
+    <message>
+        <location filename="../qml/WelcomeCoverMosaic.qml" line="82"/>
+        <source>Project cover</source>
+        <translation>Project cover</translation>
+    </message>
+</context>
+<context>
     <name>WelcomeDialog</name>
     <message>
-        <location filename="../qml/WelcomeDialog.qml" line="+168"/>
+        <location filename="../qml/WelcomeDialog.qml" line="163"/>
+        <source>CUDA unavailable</source>
+        <translation>CUDA unavailable</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="315"/>
+        <source>Welcome</source>
+        <translation>Welcome</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="338"/>
+        <source>Alcedo Studio</source>
+        <translation>Alcedo Studio</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="341"/>
+        <source>Alcedo</source>
+        <translation>Alcedo</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="357"/>
+        <source>Studio</source>
+        <translation>Studio</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="369"/>
+        <source>Each project is one .alcd file that holds the photo references, the edit history and the versions.</source>
+        <translation>Each project is one .alcd file that holds the photo references, the edit history and the versions.</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="391"/>
+        <source>Open Project…</source>
+        <translation>Open Project…</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="402"/>
+        <location line="+103"/>
+        <source>New Project…</source>
+        <translation>New Project…</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="472"/>
+        <source>Create your first project</source>
+        <translation>Create your first project</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="483"/>
+        <source>Choose a folder for the project file, then import your photos. Alcedo does not move or change the original photos.</source>
+        <translation>Choose a folder for the project file, then import your photos. Alcedo does not move or change the original photos.</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="515"/>
+        <source>Open Existing Project…</source>
+        <translation>Open Existing Project…</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="573"/>
+        <source>Interface language</source>
+        <translation>Interface language</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeDialog.qml" line="669"/>
+        <source>Quit</source>
+        <translation>Quit</translation>
+    </message>
+</context>
+<context>
+    <name>WelcomeNewProjectForm</name>
+    <message>
+        <location filename="../qml/WelcomeNewProjectForm.qml" line="16"/>
+        <location line="+13"/>
+        <source>Untitled Project</source>
+        <translation>Untitled Project</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeNewProjectForm.qml" line="40"/>
+        <location line="+110"/>
+        <source>Select Project Storage Location</source>
+        <translation>Select Project Storage Location</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeNewProjectForm.qml" line="52"/>
+        <source>Back</source>
+        <translation>Back</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeNewProjectForm.qml" line="62"/>
+        <source>New Project</source>
+        <translation>New Project</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeNewProjectForm.qml" line="73"/>
+        <source>Configure your workspace settings.</source>
+        <translation>Configure your workspace settings.</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeNewProjectForm.qml" line="94"/>
+        <location line="+22"/>
+        <source>Project Name</source>
+        <translation>Project Name</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeNewProjectForm.qml" line="133"/>
+        <source>Storage Location</source>
+        <translation>Storage Location</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeNewProjectForm.qml" line="143"/>
+        <source>Select a parent folder...</source>
+        <translation>Select a parent folder...</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeNewProjectForm.qml" line="174"/>
+        <source>Create Project</source>
+        <translation>Create Project</translation>
+    </message>
+</context>
+<context>
+    <name>WelcomeProjectOverview</name>
+    <message>
+        <location filename="../qml/WelcomeProjectOverview.qml" line="36"/>
+        <source>Continue your last project</source>
+        <translation>Continue your last project</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeProjectOverview.qml" line="129"/>
+        <source>Photos</source>
+        <translation>Photos</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeProjectOverview.qml" line="138"/>
+        <source>Edited</source>
+        <translation>Edited</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeProjectOverview.qml" line="147"/>
+        <source>Capture dates</source>
+        <translation>Capture dates</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeProjectOverview.qml" line="164"/>
+        <source>Continue Editing</source>
+        <translation>Continue Editing</translation>
+    </message>
+</context>
+<context>
+    <name>WelcomeProjectPreviewAdapter</name>
+    <message>
+        <location filename="../qml/WelcomeProjectPreviewAdapter.qml" line="96"/>
+        <source>No capture dates</source>
+        <translation>No capture dates</translation>
+    </message>
+    <message>
+        <location filename="../qml/WelcomeProjectPreviewAdapter.qml" line="102"/>
+        <location line="+1"/>
+        <source>%1 to %2</source>
+        <translation>%1 to %2</translation>
+    </message>
+</context>
+<context>
+    <name>WelcomeRecentProjectList</name>
+    <message>
+        <location filename="../qml/WelcomeRecentProjectList.qml" line="25"/>
         <source>Opened recently</source>
         <translation>Opened recently</translation>
     </message>
     <message>
-        <location line="+5"/>
+        <location filename="../qml/WelcomeRecentProjectList.qml" line="30"/>
         <source>Opened just now</source>
         <translation>Opened just now</translation>
     </message>
     <message numerus="yes">
-        <location line="+3"/>
+        <location filename="../qml/WelcomeRecentProjectList.qml" line="33"/>
         <source>Opened %n minute(s) ago</source>
         <translation>
             <numerusform>Opened %n minute ago</numerusform>
@@ -5664,7 +5834,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         </translation>
     </message>
     <message numerus="yes">
-        <location line="+5"/>
+        <location filename="../qml/WelcomeRecentProjectList.qml" line="38"/>
         <source>Opened %n hour(s) ago</source>
         <translation>
             <numerusform>Opened %n hour ago</numerusform>
@@ -5672,12 +5842,12 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         </translation>
     </message>
     <message>
-        <location line="+5"/>
+        <location filename="../qml/WelcomeRecentProjectList.qml" line="43"/>
         <source>Opened yesterday</source>
         <translation>Opened yesterday</translation>
     </message>
     <message numerus="yes">
-        <location line="+3"/>
+        <location filename="../qml/WelcomeRecentProjectList.qml" line="46"/>
         <location line="+5"/>
         <source>Opened %n day(s) ago</source>
         <translation>
@@ -5686,101 +5856,19 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         </translation>
     </message>
     <message>
-        <location line="-2"/>
+        <location filename="../qml/WelcomeRecentProjectList.qml" line="49"/>
         <source>Opened last week</source>
         <translation>Opened last week</translation>
     </message>
     <message>
-        <location line="-147"/>
-        <location line="+17"/>
-        <source>Untitled Project</source>
-        <translation type="unfinished"></translation>
+        <location filename="../qml/WelcomeRecentProjectList.qml" line="56"/>
+        <source>Other recent projects</source>
+        <translation>Other recent projects</translation>
     </message>
     <message>
-        <location line="+14"/>
-        <source>Select Project Storage Location</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+11"/>
-        <source>CUDA unavailable</source>
-        <translation>CUDA unavailable</translation>
-    </message>
-    <message>
-        <location line="+204"/>
-        <source>Alcedo</source>
-        <translation type="unfinished">Alcedo</translation>
-    </message>
-    <message>
-        <location line="+8"/>
-        <source>Studio</source>
-        <translation>Studio</translation>
-    </message>
-    <message>
-        <location line="+17"/>
-        <source>Load Project</source>
-        <translation>Load Project</translation>
-    </message>
-    <message>
-        <location line="+66"/>
-        <location line="+523"/>
-        <source>Create Project</source>
-        <translation>Create Project</translation>
-    </message>
-    <message>
-        <location line="-420"/>
-        <source>Exit Application</source>
-        <translation>Exit Application</translation>
-    </message>
-    <message>
-        <location line="+48"/>
-        <source>Recent Projects</source>
-        <translation>Recent Projects</translation>
-    </message>
-    <message>
-        <location line="+14"/>
-        <source>Collapse</source>
-        <translation>Collapse</translation>
-    </message>
-    <message>
-        <location line="+0"/>
-        <source>View All</source>
-        <translation>View All</translation>
-    </message>
-    <message>
-        <location line="+23"/>
-        <source>No recent projects yet</source>
-        <translation>No recent projects yet</translation>
-    </message>
-    <message>
-        <location line="+9"/>
-        <source>Projects you open or create here will appear in this list.</source>
-        <translation>Projects you open or create here will appear in this list.</translation>
-    </message>
-    <message>
-        <location line="+144"/>
-        <source>New Project</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+8"/>
-        <source>Configure your workspace settings.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+28"/>
-        <source>Project Name</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+35"/>
-        <source>Storage Location</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+28"/>
-        <source>Select a parent folder...</source>
-        <translation type="unfinished"></translation>
+        <location filename="../qml/WelcomeRecentProjectList.qml" line="75"/>
+        <source>No other recent projects</source>
+        <translation>No other recent projects</translation>
     </message>
 </context>
 <context>
