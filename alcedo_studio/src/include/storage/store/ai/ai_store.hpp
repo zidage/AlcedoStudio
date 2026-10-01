@@ -50,10 +50,13 @@ class AiStore {
 
  public:
   // Rebuilds `AiImageSearchText` and `AiImageFtsDocument` from the active understandings in
-  // one transaction, then (re)creates the BM25 index and records whether it exists. Throws
-  // when the search text rows cannot be written, so a project never opens with AI search
-  // text that does not match its understandings. The FTS index is best-effort: without the
-  // DuckDB fts extension, `HasUnderstandingFtsIndex()` is false and search omits BM25.
+  // one transaction. Throws when the search text rows cannot be written, so a project never
+  // opens with AI search text that does not match its understandings. Then prepares the BM25
+  // index and records whether it exists: with no documents it loads neither the fts extension
+  // nor the index (`HasUnderstandingFtsIndex()` is false until the first upsert); with
+  // unchanged documents and an existing index it only loads the extension; otherwise it
+  // recreates the index. The FTS index is best-effort: without the DuckDB fts extension,
+  // `HasUnderstandingFtsIndex()` is false and search omits BM25.
   explicit AiStore(Database& db_ctrl);
 
   // Persist a successful image-understanding result. `insert_or_replace` on the table's

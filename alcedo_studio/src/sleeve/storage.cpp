@@ -5,6 +5,8 @@
 #include "sleeve/storage.hpp"
 
 #include <exception>
+#include <memory>
+#include <unordered_map>
 
 namespace alcedo {
 NodeStorageHandler::NodeStorageHandler(
@@ -34,8 +36,22 @@ void NodeStorageHandler::EnsureChildrenLoaded(std::shared_ptr<SleeveFolder> fold
 
   try {
     auto folder_content = element_store_.GetFolderContent(folder->element_id_);
+    // Load the children that are not in memory with one query for the folder instead of
+    // one GetElementById per child. Elements already in memory keep their live state.
+    std::unordered_map<sl_element_id_t, std::shared_ptr<SleeveElement>> loaded_children;
+    for (auto& child : element_store_.GetFolderChildren(folder->element_id_)) {
+      if (!storage_.contains(child->element_id_)) {
+        loaded_children.emplace(child->element_id_, std::move(child));
+      }
+    }
     for (auto& content_id : folder_content) {
-      auto content = GetElement(content_id);
+      std::shared_ptr<SleeveElement> content;
+      if (auto it = loaded_children.find(content_id); it != loaded_children.end()) {
+        content              = it->second;
+        storage_[content_id] = content;
+      } else {
+        content = GetElement(content_id);
+      }
       if (!content || content->sync_flag_ == SyncFlag::DELETED) {
         continue;
       }

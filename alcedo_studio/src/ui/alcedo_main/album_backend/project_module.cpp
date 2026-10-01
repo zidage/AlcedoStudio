@@ -550,22 +550,12 @@ bool ProjectModule::LoadProject(const QString& metaFileUrlOrPath) {
       return false;
     }
 
-    std::filesystem::path unpacked_db_path;
-    std::filesystem::path unpacked_meta_path;
-    QString               unpack_error;
-    if (!package_service.UnpackProjectToWorkspace(project_path, workspace_dir, project_name,
-                                                  &unpacked_db_path, &unpacked_meta_path,
-                                                  &unpack_error)) {
+    // The loader thread unpacks the package, so the UI shows the loading state meanwhile.
+    const bool started = handler_.OpenPackedProject(project_path, workspace_dir, project_name);
+    if (!started) {
       CleanupWorkspaceDirectory(workspace_dir);
-      SetServiceMessageForCurrentProject(unpack_error.isEmpty()
-                                             ? PL_TEXT("Failed to unpack project package.")
-                                             : PL_TEXT("%1", unpack_error));
-      return false;
     }
-
-    return handler_.InitializeServices(unpacked_db_path, unpacked_meta_path,
-                                       ProjectOpenMode::kLoadExisting, project_path, workspace_dir,
-                                       project_path);
+    return started;
   }
 
   SetServiceMessageForCurrentProject(PL_TEXT("Unsupported project format. Choose a .alcd file."));

@@ -134,6 +134,9 @@ constexpr const char* kUnderstandingTable = "AiImageUnderstanding";
 constexpr const char* kRatingTable        = "AiImageRating";
 constexpr const char* kFtsDocumentTable   = "AiImageFtsDocument";
 constexpr const char* kSearchTextTable    = "AiImageSearchText";
+// BM25 body of one file: its active understandings in task_id order.
+constexpr const char* kFtsDocumentBodyExpr =
+    "string_agg(caption || ' ' || tags_json || ' ' || scene, ' ' ORDER BY task_id)";
 
 auto MapUnderstanding(const std::vector<duckorm::VarTypes>& row) -> AiDescription {
   AiDescription d;
@@ -245,11 +248,58 @@ void RewriteSearchDocuments(duckdb_connection                                con
   ExecuteFtsStatement(conn, statement(std::format("DELETE FROM {}", kFtsDocumentTable),
                                       files_where(" WHERE "), ";"));
   ExecuteFtsStatement(
-      conn, statement(std::format("INSERT INTO {} (file_id, body) SELECT file_id, "
-                                  "string_agg(caption || ' ' || tags_json || ' ' || scene, ' ') "
+      conn, statement(std::format("INSERT INTO {} (file_id, body) SELECT file_id, {} "
                                   "FROM {} WHERE active = TRUE",
-                                  kFtsDocumentTable, kUnderstandingTable),
+                                  kFtsDocumentTable, kFtsDocumentBodyExpr, kUnderstandingTable),
                       files_where(" AND "), " GROUP BY file_id;"));
+}
+
+/**
+ * @brief True when `AiImageFtsDocument` does not hold exactly the documents that
+ * RewriteSearchDocuments writes for all files.
+ *
+ * The constructor calls it before the rewrite: when the documents are unchanged, the BM25
+ * index that the last writer built still matches them. A missing table or a failed query
+ * counts as changed.
+ */
+auto FtsDocumentsDifferFromUnderstandings(duckdb_connection conn) -> bool {
+  const auto derived =
+      std::format("SELECT file_id, {} AS body FROM {} WHERE active = TRUE GROUP BY file_id",
+                  kFtsDocumentBodyExpr, kUnderstandingTable);
+  const auto stored = std::format("SELECT file_id, body FROM {}", kFtsDocumentTable);
+  try {
+    const auto difference = duckorm::select_int64(
+        conn, duckorm::expr::raw(
+                  std::format("SELECT COUNT(*) FROM (({} EXCEPT {}) UNION ALL ({} EXCEPT {}));",
+                              stored, derived, derived, stored)));
+    return difference.value_or(1) != 0;
+  } catch (const std::runtime_error&) {
+    return true;
+  }
+}
+
+/// True when `AiImageFtsDocument` holds at least one document. A failed query counts as empty.
+auto HasFtsDocuments(duckdb_connection conn) -> bool {
+  try {
+    return duckorm::select_int64(conn, duckorm::expr::raw(std::format("SELECT 1 FROM {} LIMIT 1;",
+                                                                      kFtsDocumentTable)))
+        .has_value();
+  } catch (const std::runtime_error&) {
+    return false;
+  }
+}
+
+/// True when `create_fts_index` has built the index schema of `AiImageFtsDocument`.
+auto FtsIndexExists(duckdb_connection conn) -> bool {
+  try {
+    return duckorm::select_int64(
+               conn, duckorm::expr::raw(std::format(
+                         "SELECT 1 FROM duckdb_schemas() WHERE schema_name = 'fts_main_{}';",
+                         kFtsDocumentTable)))
+        .has_value();
+  } catch (const std::runtime_error&) {
+    return false;
+  }
 }
 
 /**
@@ -274,6 +324,24 @@ auto RebuildFtsIndex(duckdb_connection conn) -> bool {
                 kFtsDocumentTable)));
 }
 
+/**
+ * @brief Make the BM25 index usable after the constructor rewrote the documents.
+ *
+ * Without documents there is nothing to index or match, so neither the fts extension nor the
+ * index is loaded and the result is false; the first UpsertUnderstandings builds the index.
+ * When the documents are unchanged and the index exists, only the extension is loaded
+ * (`match_bm25` calls its functions). Otherwise the index is rebuilt.
+ */
+auto OpenFtsIndex(duckdb_connection conn, bool fts_documents_changed) -> bool {
+  if (!HasFtsDocuments(conn)) {
+    return false;
+  }
+  if (!fts_documents_changed && FtsIndexExists(conn)) {
+    return LoadPackagedDuckDbExtension(conn, "fts");
+  }
+  return RebuildFtsIndex(conn);
+}
+
 // Enforce the "file_id is a foreign key into Element(id)" rule at the write boundary. The
 // AiImageUnderstanding / AiImageRating DDL declares file_id NOT NULL but, like the semantic
 // embedding tables, does NOT add a SQL-level REFERENCES Element(id) constraint: a DDL foreign
@@ -294,12 +362,14 @@ auto FileExists(duckdb_connection conn, sl_element_id_t file_id) -> bool {
 AiStore::AiStore(Database& db_ctrl) : database_(db_ctrl) {
   auto guard = database_.GetConnectionGuard();
   auto lock  = guard.Lock();
+  bool fts_documents_changed = false;
   {
     duckorm::Transaction transaction(guard.conn_);
+    fts_documents_changed = FtsDocumentsDifferFromUnderstandings(guard.conn_);
     RewriteSearchDocuments(guard.conn_, std::nullopt);
     transaction.commit();
   }
-  understanding_fts_index_ready_.store(RebuildFtsIndex(guard.conn_));
+  understanding_fts_index_ready_.store(OpenFtsIndex(guard.conn_, fts_documents_changed));
 }
 
 auto AiStore::UpsertUnderstanding(const AiDescription& description) const -> bool {

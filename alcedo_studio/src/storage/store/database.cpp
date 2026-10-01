@@ -92,25 +92,30 @@ void Database::InitializeDB() {
 
 void Database::PopulateSemanticLabelQueries(duckdb_connection conn) {
   namespace expr = duckorm::expr;
-  duckorm::Transaction transaction(conn);
-  const auto           insert_label_queries = [&conn](SemanticLabelLanguage language) {
+  // One statement for all default rows of both languages: a prepared statement per row costs
+  // a round trip each on every project open.
+  auto statement = expr::raw(
+      "INSERT OR REPLACE INTO SemanticLabelQuery (prompt_config_hash, label, query_text) VALUES ");
+  bool       first_row            = true;
+  const auto append_label_queries = [&statement, &first_row](SemanticLabelLanguage language) {
     const std::string prompt_hash = SemanticPromptConfigHashForLanguage(language);
     for (const auto& label_query : DefaultSemanticPhotographyLabelQueries(language)) {
-      auto statement = expr::raw(
-          "INSERT OR REPLACE INTO SemanticLabelQuery (prompt_config_hash, label, query_text) "
-          "VALUES (");
+      statement.append(expr::raw(first_row ? "(" : ", ("));
       statement.append(expr::param(prompt_hash));
       statement.append(expr::raw(", "));
       statement.append(expr::param(std::string(label_query.label)));
       statement.append(expr::raw(", "));
       statement.append(expr::param(std::string(label_query.query)));
       statement.append(expr::raw(")"));
-      duckorm::execute(conn, statement);
+      first_row = false;
     }
   };
-  insert_label_queries(SemanticLabelLanguage::kEnglish);
-  insert_label_queries(SemanticLabelLanguage::kChinese);
-  transaction.commit();
+  append_label_queries(SemanticLabelLanguage::kEnglish);
+  append_label_queries(SemanticLabelLanguage::kChinese);
+  if (first_row) {
+    return;
+  }
+  duckorm::execute(conn, statement);
 }
 
 };  // namespace alcedo
