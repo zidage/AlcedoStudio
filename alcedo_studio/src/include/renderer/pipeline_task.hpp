@@ -21,6 +21,8 @@
 #include "ui/edit_viewer/frame_sink.hpp"
 
 namespace alcedo {
+struct PreparedRawInput;
+
 enum class RenderType {
   FAST_PREVIEW,
   QUALITY_BASE_PREVIEW,
@@ -63,6 +65,9 @@ struct PipelineTask {
   std::shared_ptr<PipelineExecutor>                           pipeline_executor_;
   std::shared_ptr<ImageBuffer>                                input_;
   std::shared_ptr<Image>                                      input_desc_;
+  // Batch only: a source already decoded at the task's decode resolution. A task that has it
+  // needs neither input_ nor input_desc_.
+  std::shared_ptr<const PreparedRawInput>                     prepared_input_;
 
   std::shared_ptr<std::promise<std::shared_ptr<ImageBuffer>>> result_;    // used for blocking tasks
   std::optional<std::function<void(ImageBuffer&)>>            callback_;  // used for callback tasks

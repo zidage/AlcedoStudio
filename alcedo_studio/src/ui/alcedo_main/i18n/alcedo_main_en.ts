@@ -1547,8 +1547,8 @@ Alcedo will use %1 instead.</translation>
     </message>
     <message>
         <location line="+16"/>
-        <source>Max entries</source>
-        <translation>Max entries</translation>
+        <source>Max entries per project</source>
+        <translation>Max entries per project</translation>
     </message>
     <message>
         <location line="+24"/>

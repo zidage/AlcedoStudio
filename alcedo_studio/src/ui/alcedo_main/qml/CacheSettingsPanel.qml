@@ -272,7 +272,7 @@ ColumnLayout {
 
             Label {
                 Layout.preferredWidth: 180
-                text: qsTr("Max entries")
+                text: qsTr("Max entries per project")
                 color: panel.textColor
                 font.pixelSize: 15
                 font.weight: 600

@@ -408,12 +408,26 @@ auto DownsampleRgba2x(const cv::Mat& src) -> cv::Mat {
   return dst;
 }
 
+/// U16 CFA plane of @p cfa after @p passes 2x downsample steps. The steps only read @p cfa, so
+/// it can be LibRaw's own buffer; only the downsampled result is copied.
+auto DownsampleCfaToPlane(const cv::Mat& cfa, RawCfaPattern& pattern, std::uint8_t passes)
+    -> HostImagePlane {
+  cv::Mat current = cfa;
+  for (std::uint8_t i = 0; i < passes; ++i) {
+    if (current.cols < 2 || current.rows < 2) {
+      throw std::runtime_error("RawInputLoader: CFA too small to downsample");
+    }
+    current = DownsampleRaw2x(current, pattern);
+  }
+  return CopyPlane(current, HostPixelFormat::U16Cfa);
+}
+
 void DownsampleInPlace(PreparedRawInput& input, std::uint8_t passes) {
   if (passes == 0) {
     return;
   }
   if (input.input_kind == RawInputKind::DebayeredRgb) {
-    cv::Mat current = WrapF32Rgba(input.pixels).clone();
+    cv::Mat current = WrapF32Rgba(input.pixels);
     for (std::uint8_t i = 0; i < passes; ++i) {
       current = DownsampleRgba2x(current);
     }
@@ -422,14 +436,7 @@ void DownsampleInPlace(PreparedRawInput& input, std::uint8_t passes) {
     input.downsample_passes = passes;
     return;
   }
-  cv::Mat current = WrapU16Cfa(input.pixels).clone();
-  for (std::uint8_t i = 0; i < passes; ++i) {
-    if (current.cols < 2 || current.rows < 2) {
-      throw std::runtime_error("RawInputLoader: CFA too small to downsample");
-    }
-    current = DownsampleRaw2x(current, input.cfa_pattern);
-  }
-  input.pixels            = CopyPlane(current, HostPixelFormat::U16Cfa);
+  input.pixels            = DownsampleCfaToPlane(WrapU16Cfa(input.pixels), input.cfa_pattern, passes);
   input.host_extent       = input.pixels.extent;
   input.downsample_passes = passes;
 }
@@ -532,7 +539,10 @@ void FillColorContext(LibRaw& raw, RawRuntimeColorContext& ctx) {
 auto FinishPrepared(PreparedRawInput input, DecodeRes decode_res, std::uint64_t encoded_hash,
                     std::uint64_t encoded_byte_count) -> PreparedRawInput {
   const auto passes = DecodeResToDownsamplePasses(decode_res);
-  DownsampleInPlace(input, passes);
+  // LoadEncoded downsamples a CFA while it reads LibRaw's buffer.
+  if (input.downsample_passes != passes) {
+    DownsampleInPlace(input, passes);
+  }
   FillOutputGeometry(input, DecodeRes::FULL);
   FillSourceKey(input, encoded_hash, encoded_byte_count);
   input.working_space = SceneWorkingSpace::CameraRgb;
@@ -695,10 +705,11 @@ auto RawInputLoader::LoadEncoded(std::span<const std::byte> encoded, DecodeRes d
                sizes.raw_pitch != 0
                        ? static_cast<std::size_t>(sizes.raw_pitch)
                        : static_cast<std::size_t>(sizes.raw_width) * sizeof(std::uint16_t));
-  input.pixels      = CopyPlane(view, HostPixelFormat::U16Cfa);
+  input.cfa_pattern       = pattern;
+  input.downsample_passes = DecodeResToDownsamplePasses(decode_res);
+  input.pixels      = DownsampleCfaToPlane(view, input.cfa_pattern, input.downsample_passes);
   input.host_extent = input.pixels.extent;
   input.input_kind  = RawInputKind::BayerRaw;
-  input.cfa_pattern = pattern;
   raw->recycle();
   return FinishPrepared(std::move(input), decode_res, HashContentBytes(encoded), encoded.size());
 }

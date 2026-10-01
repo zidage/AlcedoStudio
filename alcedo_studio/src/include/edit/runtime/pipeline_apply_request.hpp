@@ -5,6 +5,7 @@
 #pragma once
 
 #include <functional>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -15,6 +16,8 @@
 #include "ui/edit_viewer/frame_sink.hpp"
 
 namespace alcedo {
+
+struct PreparedRawInput;
 
 /**
  * @brief One product DAG Apply/Render invocation. Owned by the task, not the executor.
@@ -37,6 +40,9 @@ struct PipelineApplyRequest {
   FrameCompletionSubmission                   submission{};
   std::optional<ExportColorProfileConfig>     output_color;
   std::function<bool()>                       cancel_requested;
+  /// Batch only: the source the owner already decoded at decode_res, off the render lock. The
+  /// renderer uses it in place of the encoded bytes; null means the renderer decodes them.
+  std::shared_ptr<const PreparedRawInput>     prepared_input;
 };
 
 }  // namespace alcedo

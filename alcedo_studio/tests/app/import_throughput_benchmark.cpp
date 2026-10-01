@@ -14,7 +14,11 @@
 #include <libraw/libraw.h>
 
 #include <algorithm>
+#include <span>
+#include <thread>
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdlib>
 #include <exiv2/exiv2.hpp>
 #include <filesystem>
@@ -22,6 +26,7 @@
 #include <future>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -32,16 +37,21 @@
 #include <windows.h>
 #endif
 
+#include "app/album_browse_service.hpp"
+#include "app/export_service.hpp"
 #include "app/import_service.hpp"
 #include "app/pipeline_service.hpp"
 #include "app/project_package_service.hpp"
 #include "app/project_service.hpp"
+#include "app/thumbnail_service.hpp"
 #include "decoders/dng_default_crop.hpp"
 #include "edit/graph/pipeline_document.hpp"
+#include "edit/input/raw_input_loader.hpp"
 #include "image/image.hpp"
 #include "image/metadata_extractor.hpp"
 #include "sleeve/sleeve_filesystem.hpp"
 #include "type/type.hpp"
+#include "utils/string/convert.hpp"
 #include "utils/clock/time_provider.hpp"
 
 namespace alcedo {
@@ -383,6 +393,306 @@ TEST(ImportThroughputBenchmark, MappedDngGeometryMatchesWholeFileRead) {
             << " with WarpRectilinear\n";
   if (compared == 0) {
     GTEST_SKIP() << "no DNG files in ALCEDO_IMPORT_BENCH_DIRS";
+  }
+}
+
+
+// Project open, step by step, as ProjectModule::LoadProject + ProjectHandler::InitializeServices
+// run it, then the first library page query and project close. Opens
+// ALCEDO_IMPORT_BENCH_OPEN_PACKAGE when it is set (unpacked into a temp workspace and never
+// written back); otherwise imports the first folder of ALCEDO_IMPORT_BENCH_DIRS and packs it.
+// The thumbnail service opens a temporary copy of the project's directory in the user's
+// thumbnail cache, so it reads an index of the real size and never writes the user's cache.
+TEST(ImportThroughputBenchmark, OpensProjectAndReportsStepTimings) {
+  TimeProvider::Refresh();
+  Exiv2::LogMsg::setLevel(Exiv2::LogMsg::Level::mute);
+  const auto work_dir = std::filesystem::temp_directory_path() / "alcedo_open_benchmark";
+  std::filesystem::remove_all(work_dir);
+  std::filesystem::create_directories(work_dir);
+
+  std::filesystem::path package_path;
+#if defined(_WIN32)
+  if (const wchar_t* raw = _wgetenv(L"ALCEDO_IMPORT_BENCH_OPEN_PACKAGE")) {
+    package_path = raw;
+  }
+#else
+  if (const char* raw = std::getenv("ALCEDO_IMPORT_BENCH_OPEN_PACKAGE")) {
+    package_path = raw;
+  }
+#endif
+  if (package_path.empty()) {
+    const auto folders = ReadBenchFolders();
+    if (folders.empty()) {
+      GTEST_SKIP() << "ALCEDO_IMPORT_BENCH_DIRS and ALCEDO_IMPORT_BENCH_OPEN_PACKAGE are not set";
+    }
+    package_path   = work_dir / "imported.alcd";
+    const auto db  = work_dir / "imported.db";
+    const auto meta = work_dir / "imported.json";
+    auto project   = std::make_shared<ProjectService>(db, meta);
+    auto pipeline  = std::make_shared<PipelineMgmtService>(project->GetStorage());
+    auto importer  = std::make_unique<ImportServiceImpl>(project->GetSleeveService(),
+                                                        project->GetImagePoolService(), pipeline);
+    auto job       = std::make_shared<ImportJob>();
+    std::promise<void> finished;
+    job->on_finished_ = [&finished](const ImportResult&) { finished.set_value(); };
+    job               = importer->ImportToFolder(CollectFolderFiles(folders.front()), L"", {}, job);
+    finished.get_future().wait();
+    importer->SyncImports(job->import_log_->Snapshot(), L"");
+    project->GetSleeveService()->Sync();
+    project->GetImagePoolService()->SyncWithStorage();
+    project->SaveProject(meta);
+    QString error;
+    const auto snapshot = work_dir / "imported_snapshot.db";
+    ASSERT_TRUE(project->GetProjectPackageService()->CreateLiveDbSnapshot(project, snapshot, &error))
+        << error.toStdString();
+    ASSERT_TRUE(
+        project->GetProjectPackageService()->WritePackedProject(package_path, meta, snapshot, &error))
+        << error.toStdString();
+    importer.reset();
+    pipeline.reset();
+    project.reset();
+  }
+  ASSERT_TRUE(std::filesystem::is_regular_file(package_path)) << package_path;
+
+  for (int round = 0; round < 2; ++round) {
+    ProjectPackageService package_service;
+    const auto            open_start = BenchClock::now();
+    auto                  step_start = open_start;
+    std::filesystem::path workspace;
+    QString               error;
+    ASSERT_TRUE(package_service.CreateProjectWorkspace(QStringLiteral("open_benchmark"),
+                                                       &workspace, &error))
+        << error.toStdString();
+    std::filesystem::path db_path;
+    std::filesystem::path meta_path;
+    ASSERT_TRUE(package_service.UnpackProjectToWorkspace(package_path, workspace,
+                                                         QStringLiteral("open_benchmark"),
+                                                         &db_path, &meta_path, &error))
+        << error.toUtf8().constData();
+    const auto unpack_ms = ElapsedMs(step_start);
+
+    step_start = BenchClock::now();
+    auto project =
+        std::make_shared<ProjectService>(db_path, meta_path, ProjectOpenMode::kLoadExisting);
+    const auto project_ms = ElapsedMs(step_start);
+
+    step_start    = BenchClock::now();
+    auto pipeline = std::make_shared<PipelineMgmtService>(project->GetStorage());
+    const auto pipeline_ms = ElapsedMs(step_start);
+
+    // Open-path time so far; the cache copy below is test setup and is not counted.
+    const auto open_without_copy_ms = ElapsedMs(open_start);
+    const auto cache_root = work_dir / ("cache_" + std::to_string(round));
+    std::filesystem::create_directories(cache_root);
+    if (const char* local_app_data = std::getenv("LOCALAPPDATA")) {
+      const auto user_cache = std::filesystem::path(local_app_data) / "alcedo" / "thumbnails" /
+                              project->GetProjectUUID();
+      if (std::filesystem::is_directory(user_cache)) {
+        std::filesystem::copy(user_cache, cache_root / project->GetProjectUUID(),
+                              std::filesystem::copy_options::recursive);
+      }
+    }
+
+    step_start     = BenchClock::now();
+    auto thumbnail = std::make_shared<ThumbnailService>(
+        project->GetSleeveService(), project->GetImagePoolService(), pipeline,
+        project->GetStorage(), project->GetProjectUUID(), cache_root);
+    const auto thumbnail_ms = ElapsedMs(step_start);
+
+    step_start    = BenchClock::now();
+    auto importer = std::make_unique<ImportServiceImpl>(project->GetSleeveService(),
+                                                        project->GetImagePoolService(), pipeline);
+    auto exporter = std::make_shared<ExportService>(project->GetSleeveService(),
+                                                    project->GetImagePoolService(), pipeline);
+    const auto import_export_ms = ElapsedMs(step_start);
+    const auto services_ms      = open_without_copy_ms + thumbnail_ms + import_export_ms;
+
+    step_start         = BenchClock::now();
+    auto       browse  = project->GetAlbumBrowseService();
+    const auto count   = browse->CountFilesInFolderById(0, std::nullopt);
+    const auto page    = browse->ListFilesInFolderById(0, 0, 200);
+    const auto page_ms = ElapsedMs(step_start);
+
+    step_start = BenchClock::now();
+    exporter.reset();
+    importer.reset();
+    thumbnail.reset();
+    pipeline.reset();
+    project.reset();
+    const auto close_ms = ElapsedMs(step_start);
+
+    std::cout << "\n[open-benchmark] round " << round << " package: " << package_path.string()
+              << " (" << std::filesystem::file_size(package_path) << " bytes, " << count
+              << " files in root)\n"
+              << "  workspace + unpack  : " << unpack_ms << " ms\n"
+              << "  ProjectService load : " << project_ms << " ms\n"
+              << "  PipelineMgmtService : " << pipeline_ms << " ms\n"
+              << "  ThumbnailService    : " << thumbnail_ms << " ms\n"
+              << "  Import + Export svc : " << import_export_ms << " ms\n"
+              << "  services ready      : " << services_ms << " ms\n"
+              << "  root count + page   : " << page_ms << " ms (" << page.size() << " rows)\n"
+              << "  close               : " << close_ms << " ms\n"
+              << "  peak working set    : " << PeakWorkingSetMiB() << " MiB\n";
+    std::error_code ec;
+    std::filesystem::remove_all(workspace, ec);
+  }
+  std::filesystem::remove_all(work_dir);
+}
+
+
+// First library page after project open: request the thumbnails of the first
+// ALCEDO_IMPORT_BENCH_THUMBNAILS files (default 60) at k512 and time each until it is ready.
+// Opens the project twice on one temporary disk cache: first with the cache empty (cold), then
+// again with the thumbnails the first open wrote (second open). The user's cache is not used.
+// Needs ALCEDO_IMPORT_BENCH_OPEN_PACKAGE.
+TEST(ImportThroughputBenchmark, ReportsFirstPageThumbnailTimings) {
+  std::filesystem::path package_path;
+#if defined(_WIN32)
+  if (const wchar_t* raw = _wgetenv(L"ALCEDO_IMPORT_BENCH_OPEN_PACKAGE")) {
+    package_path = raw;
+  }
+#endif
+  if (package_path.empty()) {
+    GTEST_SKIP() << "ALCEDO_IMPORT_BENCH_OPEN_PACKAGE is not set";
+  }
+  size_t request_count = 60;
+  if (const char* raw = std::getenv("ALCEDO_IMPORT_BENCH_THUMBNAILS")) {
+    request_count = static_cast<size_t>(std::max(1, std::atoi(raw)));
+  }
+  TimeProvider::Refresh();
+  Exiv2::LogMsg::setLevel(Exiv2::LogMsg::Level::mute);
+  const auto work_dir = std::filesystem::temp_directory_path() / "alcedo_thumbnail_benchmark";
+  std::filesystem::remove_all(work_dir);
+  std::filesystem::create_directories(work_dir);
+
+  const auto cache_root = work_dir / "cache";
+  std::filesystem::create_directories(cache_root);
+  for (const bool warm : {false, true}) {
+    ProjectPackageService package_service;
+    std::filesystem::path workspace;
+    QString               error;
+    ASSERT_TRUE(package_service.CreateProjectWorkspace(QStringLiteral("thumbnail_benchmark"),
+                                                       &workspace, &error));
+    std::filesystem::path db_path;
+    std::filesystem::path meta_path;
+    ASSERT_TRUE(package_service.UnpackProjectToWorkspace(package_path, workspace,
+                                                         QStringLiteral("thumbnail_benchmark"),
+                                                         &db_path, &meta_path, &error))
+        << error.toUtf8().constData();
+    auto project =
+        std::make_shared<ProjectService>(db_path, meta_path, ProjectOpenMode::kLoadExisting);
+    auto pipeline = std::make_shared<PipelineMgmtService>(project->GetStorage());
+
+    size_t cached_files = 0;
+    if (std::filesystem::is_directory(cache_root / project->GetProjectUUID())) {
+      for (const auto& entry : std::filesystem::recursive_directory_iterator(
+               cache_root / project->GetProjectUUID())) {
+        cached_files += entry.is_regular_file() ? 1 : 0;
+      }
+    }
+
+    const auto service_start = BenchClock::now();
+    auto       thumbnail     = std::make_shared<ThumbnailService>(
+        project->GetSleeveService(), project->GetImagePoolService(), pipeline,
+        project->GetStorage(), project->GetProjectUUID(), cache_root);
+    const auto service_ms = ElapsedMs(service_start);
+
+    const auto page = project->GetAlbumBrowseService()->ListFilesInFolderById(0, 0, request_count);
+    ASSERT_FALSE(page.empty());
+
+    std::mutex              mutex;
+    std::condition_variable done_cv;
+    size_t                  done = 0, ready = 0;
+    std::vector<double>     latencies;
+    const auto              request_start = BenchClock::now();
+    for (const auto& file : page) {
+      thumbnail->GetThumbnailDetailed(
+          file.element_id_, file.image_id_,
+          [&](ThumbnailRequestResult result) {
+            std::lock_guard lock(mutex);
+            latencies.push_back(ElapsedMs(request_start));
+            ready += result.status == ThumbnailRequestStatus::kReady && result.guard ? 1 : 0;
+            if (!(result.status == ThumbnailRequestStatus::kReady && result.guard) && done < 3) {
+              std::cout << "  request error: " << result.message << "\n";
+            }
+            ++done;
+            done_cv.notify_all();
+          },
+          false, nullptr, ThumbnailResolution::k512);
+    }
+    {
+      std::unique_lock lock(mutex);
+      done_cv.wait(lock, [&] { return done == page.size(); });
+    }
+    const auto total_ms = ElapsedMs(request_start);
+    std::sort(latencies.begin(), latencies.end());
+    std::cout << "\n[thumbnail-benchmark] " << (warm ? "second open" : "cold") << " ("
+              << cached_files << " files in the project cache), " << page.size()
+              << " thumbnails at k512\n"
+              << "  ThumbnailService ctor : " << service_ms << " ms\n"
+              << "  first ready           : " << latencies.front() << " ms\n"
+              << "  median ready          : " << latencies[latencies.size() / 2] << " ms\n"
+              << "  all ready             : " << total_ms << " ms (" << ready << " ready)\n"
+              << "  per thumbnail         : " << total_ms / static_cast<double>(page.size())
+              << " ms\n"
+              << "  peak working set      : " << PeakWorkingSetMiB() << " MiB\n";
+    thumbnail.reset();
+    pipeline.reset();
+    project.reset();
+    std::error_code ec;
+    std::filesystem::remove_all(workspace, ec);
+  }
+  std::filesystem::remove_all(work_dir);
+}
+
+
+// Thumbnail RAW decode cost alone: read the file and RawInputLoader::LoadEncoded at the
+// decode resolution of each thumbnail tier, on 1 thread and on all logical cores.
+TEST(ImportThroughputBenchmark, ReportsThumbnailRawDecodeCost) {
+  const auto folders = ReadBenchFolders();
+  if (folders.empty()) {
+    GTEST_SKIP() << "ALCEDO_IMPORT_BENCH_DIRS is not set";
+  }
+  for (const auto& folder : folders) {
+    const auto paths = CollectRawFiles(folder, 40);
+    ASSERT_FALSE(paths.empty());
+    for (const auto decode_res : {DecodeRes::EIGHTH, DecodeRes::QUARTER}) {
+      for (const unsigned threads : {1u, std::max(2u, std::thread::hardware_concurrency())}) {
+        std::atomic<size_t>      next{0};
+        std::atomic<long long>   read_us{0}, decode_us{0};
+        std::vector<std::thread> workers;
+        const auto               start = BenchClock::now();
+        for (unsigned t = 0; t < threads; ++t) {
+          workers.emplace_back([&]() {
+            for (size_t index = next.fetch_add(1); index < paths.size();
+                 index         = next.fetch_add(1)) {
+              auto              step = BenchClock::now();
+              std::ifstream     in(paths[index], std::ios::binary | std::ios::ate);
+              std::vector<char> bytes(static_cast<size_t>(in.tellg()));
+              in.seekg(0);
+              in.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+              read_us += static_cast<long long>(ElapsedMs(step) * 1000.0);
+              step = BenchClock::now();
+              const auto prepared = RawInputLoader::LoadEncoded(
+                  std::span<const std::byte>(reinterpret_cast<const std::byte*>(bytes.data()),
+                                             bytes.size()),
+                  decode_res);
+              (void)prepared;
+              decode_us += static_cast<long long>(ElapsedMs(step) * 1000.0);
+            }
+          });
+        }
+        for (auto& worker : workers) {
+          worker.join();
+        }
+        const double n = static_cast<double>(paths.size());
+        std::cout << "[thumbnail-decode] " << folder.filename().string() << " "
+                  << (decode_res == DecodeRes::EIGHTH ? "EIGHTH" : "QUARTER") << ", " << threads
+                  << " threads: wall " << ElapsedMs(start) / n << " ms/file, read "
+                  << static_cast<double>(read_us) / 1000.0 / n << " ms/file, LoadEncoded "
+                  << static_cast<double>(decode_us) / 1000.0 / n << " ms/file\n";
+      }
+    }
   }
 }
 

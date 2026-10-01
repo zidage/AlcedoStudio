@@ -215,7 +215,8 @@ alcedo_register_test_target(ImportServiceTest app)
 add_executable(ImportThroughputBenchmark ${ALCEDO_TEST_ROOT}/app/import_throughput_benchmark.cpp)
 target_include_directories(ImportThroughputBenchmark PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(ImportThroughputBenchmark
-  ImportService ProjectService PipelineMgmtService GTest::gtest_main)
+  ImportService ProjectService PipelineMgmtService ThumbnailService ExportService
+  EditInput GTest::gtest_main)
 alcedo_copy_duckdb_fts_extension(ImportThroughputBenchmark)
 alcedo_register_test_target(ImportThroughputBenchmark app)
 
