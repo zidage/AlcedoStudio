@@ -6,6 +6,7 @@
 
 #include <QCoreApplication>
 #include <QDeadlineTimer>
+#include <QDebug>
 #include <QEventLoop>
 #include <QMetaObject>
 #include <QPointer>
@@ -17,6 +18,7 @@
 #include <filesystem>
 #include <functional>
 #include <string>
+#include <system_error>
 
 #include "app/editor_adjustment_context.hpp"
 #include "app/image_pool_service.hpp"
@@ -29,7 +31,6 @@
 #include "ui/alcedo_main/album_backend/editor_session_history_port.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_task_port.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_thumbnail_port.hpp"
-#include "ui/alcedo_main/album_backend/path_utils.hpp"
 #include "ui/alcedo_main/album_backend/thumbnail_image_provider.hpp"
 #include "ui/alcedo_main/album_backend/mask_thumbnail_image_provider.hpp"
 #include "ui/alcedo_main/album_backend/system_icon_image_provider.hpp"
@@ -483,6 +484,11 @@ void ApplicationModuleHost::ShutdownModules() {
     if (image_analysis_sink_ && (!db_write_barrier_ || !db_write_barrier_->IsHeld())) {
       image_analysis_sink_->FlushPendingWrites();
     }
+    // The runtime workspace is removed in the destructor, after ProjectModule closes the
+    // project database (RemovePendingWorkspace).
+    if (project_) {
+      pending_workspace_removal_ = project_->handler().workspace_dir();
+    }
     if (project_ && !project_->handler().project_entered()) {
       // The user did not enter the loaded project (welcome surface preview), so it has no user
       // changes. Keep its package as it is on disk; flush only the thumbnail cache index.
@@ -490,7 +496,6 @@ void ApplicationModuleHost::ShutdownModules() {
           thumbnails && thumbnails->GetDiskCacheStats().enabled) {
         thumbnails->FlushDiskCacheMetadata();
       }
-      album_util::CleanupWorkspaceDirectory(project_->handler().workspace_dir());
     } else if (project_) {
       auto psvc = project_->handler().pipeline_service();
       if (psvc) {
@@ -505,7 +510,6 @@ void ApplicationModuleHost::ShutdownModules() {
         QString ignored_error;
         (void)project_->handler().PackageCurrentProjectFiles(&ignored_error);
       }
-      album_util::CleanupWorkspaceDirectory(project_->handler().workspace_dir());
     }
   } catch (...) {
   }
@@ -558,6 +562,7 @@ ApplicationModuleHost::~ApplicationModuleHost() {
   destroy(folders_, "FolderController");
   destroy(library_, "LibraryModule");
   destroy(project_, "ProjectModule");
+  RemovePendingWorkspace();
   destroy(lut_packages_, "LutPackageService");
   destroy(lut_library_, "LutLibraryService");
   destroy(updates_, "UpdateService");
@@ -568,6 +573,20 @@ ApplicationModuleHost::~ApplicationModuleHost() {
 }
 
 void ApplicationModuleHost::Shutdown() { ShutdownModules(); }
+
+void ApplicationModuleHost::RemovePendingWorkspace() {
+  if (pending_workspace_removal_.empty()) {
+    return;
+  }
+  std::error_code ec;
+  std::filesystem::remove_all(pending_workspace_removal_, ec);
+  if (ec) {
+    qWarning().noquote() << "Runtime workspace removal failed:"
+                         << QString::fromStdWString(pending_workspace_removal_.wstring())
+                         << QString::fromStdString(ec.message());
+  }
+  pending_workspace_removal_.clear();
+}
 
 void ApplicationModuleHost::AttachQmlEngine(QQmlEngine* engine) {
   if (engine == nullptr) {

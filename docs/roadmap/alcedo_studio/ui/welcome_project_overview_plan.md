@@ -6,7 +6,10 @@ Status: Phase 1 implemented and tested on Windows (2026-10-01). The two Phase 1
 manual app checks and the macOS verification are not run yet. Phase 2
 implemented on Windows (2026-10-01, branch `feature/welcome-surface-ui`):
 `alcedo_main` builds and starts; one of the nine manual checks is recorded;
-macOS not run. Phase 3 planned.
+macOS not run. Phase 3 implemented and tested on Windows and macOS
+(2026-10-01, branch `fix/runtime-workspace-removal-at-exit`); its manual
+checks are not run. On macOS (`build/macos-debug`, 2026-10-01) the Phase 1
+and Phase 3 test cases pass and `alcedo_main` builds with Phases 1-3.
 
 Branch: `feature/welcome-project-overview`, created from
 `refact/project-open-speed` at `94d77d092`.
@@ -549,7 +552,7 @@ confirms this in the current header.
 | --- | --- | --- | --- | ---: | --- |
 | 1 | Backend and QML glue: overview query, entry mode, preview load, persist skip, welcome visibility by entry state, startup preview, continue flow, preview adapter | storage, app, album_backend, launch QML | base branch | 900-1400 | implemented; manual checks open |
 | 2 | Welcome surface UI: new layout, cover, statistics, skeleton, list, empty state, form in the right column, DESIGN.md, translations | `WelcomeDialog.qml` and new QML components, DESIGN.md, `.ts` | Phase 1 | 1200-1800 | implemented; manual checks 1-4 and 6-9 open |
-| 3 | Runtime workspace removal at exit: remove the unpacked project workspace after the project services close the DuckDB file | `application_module_host`, shutdown tests | Phase 1 | 80-160 | planned |
+| 3 | Runtime workspace removal at exit: remove the unpacked project workspace after the project services close the DuckDB file | `application_module_host`, shutdown tests | Phase 1 | 80-160 | implemented; manual checks open |
 
 Every phase is verified on Windows (`win_debug`) and on macOS
 (`macos_debug_tests` for tests, `macos_debug` for the app). A phase is complete
@@ -1407,10 +1410,10 @@ on both platforms that the new tests are discovered before you report a pass.
 
 **Exit criteria**
 
-- [ ] The five Phase 3 tests are discovered and pass on Windows.
-- [ ] The five Phase 3 tests are discovered and pass on macOS.
-- [ ] The Phase 1 cases of both suites still pass on both platforms.
-- [ ] `alcedo_main` builds on both platforms.
+- [x] The five Phase 3 tests are discovered and pass on Windows.
+- [x] The five Phase 3 tests are discovered and pass on macOS.
+- [x] The Phase 1 cases of both suites still pass on both platforms.
+- [x] `alcedo_main` builds on both platforms.
 - [ ] The two manual checks are recorded on Windows and on macOS.
 - [ ] The terminology check finds no prohibited term in changed files.
 
@@ -1434,6 +1437,117 @@ Manual verification (Windows, macOS):
 Evidence path:
 Remaining defects or unavailable platforms:
 ```
+
+##### Phase 3 completion record (2026-10-01)
+
+**Status:** partial. The implementation and all automated Phase 3 tests are
+complete on Windows and on macOS. The two manual checks are not run on either
+platform: the Windows debug app has no recent project, so no preview loads at
+startup, and the Mac was used only through SSH (no desktop session).
+
+**Source revision and branch:** `fix/runtime-workspace-removal-at-exit`,
+created from `feature/welcome-surface-ui` at `2cc24b1a0`. On the Mac
+(`yurunmac.local`, macOS 27.0, arm64) the same change was applied as a patch
+on `origin/feature/welcome-surface-ui` in `~/Projects/PuerhLab`.
+
+**Actual changed modules:**
+
+| Module | Files |
+| --- | --- |
+| album_backend | `application_module_host.hpp`: `pending_workspace_removal_`, `RemovePendingWorkspace()`. `application_module_host.cpp`: `ShutdownModules` records the workspace path in place of the two `CleanupWorkspaceDirectory` calls; the destructor calls `RemovePendingWorkspace()` directly after `destroy(project_, "ProjectModule")`; the unused `path_utils.hpp` include is removed |
+| tests | `application_module_host_shutdown_test.cpp`: four new cases and a scoped `qWarning` capture; `album_backend_project_test.cpp`: `ProjectSwitchRemovesPreviousWorkspace` |
+
+**Implemented behavior:** as specified. `ShutdownModules` keeps all other
+steps and their order. The removal runs once, in the destructor, also after
+repeated `Shutdown()` calls. A failure writes
+`Runtime workspace removal failed: <path> <OS error>` with `qWarning` and is
+not retried.
+
+**Primary success call chain:**
+
+```text
+退出 or window close -> main.cpp app_modules.Shutdown()
+ -> ApplicationModuleHost::ShutdownModules
+    -> cancel tasks, finalize editor, (entered: Sync, persist, pack)
+    -> pending_workspace_removal_ = project_->handler().workspace_dir()
+ -> end of main -> ~ApplicationModuleHost
+    -> destroy modules ... destroy(project_) -> ProjectService closes DuckDB
+    -> RemovePendingWorkspace() -> remove_all(workspace) -> directory gone
+```
+
+**Primary failure and restore call chain:**
+
+```text
+remove_all fails (another process holds a workspace file)
+ -> RemovePendingWorkspace: qWarning("Runtime workspace removal failed:", path, ec.message())
+ -> pending_workspace_removal_ cleared -> process exit continues
+ -> the package is already written (entered) or unchanged (unentered)
+```
+
+**What was proven (executed tests):**
+
+| Required name | Target | Windows | macOS |
+| --- | --- | --- | --- |
+| `ShutdownRemovesUnenteredProjectWorkspace` | `ApplicationModuleHostShutdownTest` | PASS | PASS |
+| `ShutdownRemovesEnteredProjectWorkspace` | `ApplicationModuleHostShutdownTest` | PASS | PASS |
+| `ShutdownWithoutProjectRemovesNothing` | `ApplicationModuleHostShutdownTest` | PASS | PASS |
+| `RepeatedShutdownRemovesWorkspaceOnce` | `ApplicationModuleHostShutdownTest` | PASS | PASS |
+| `ProjectSwitchRemovesPreviousWorkspace` | `AlbumBackendProjectTest` | PASS | PASS |
+| Phase 1 cases (15) of both suites | both | PASS | PASS |
+
+Regression proof on Windows: with the Phase 3 host change removed (tests
+kept), `ShutdownRemovesUnenteredProjectWorkspace`,
+`ShutdownRemovesEnteredProjectWorkspace` and
+`RepeatedShutdownRemovesWorkspaceOnce` fail (the workspace still exists after
+the host is destroyed); `ShutdownWithoutProjectRemovesNothing` passes. With the
+change restored, all 8 shutdown cases pass.
+
+`ProjectSwitchRemovesPreviousWorkspace` passes on both platforms, so the
+existing switch cleanup is not a separate defect.
+
+**Build and test commands with exit codes:**
+
+```text
+Windows (PowerShell tool, repository root):
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target AlbumBackendProjectTest ApplicationModuleHostShutdownTest alcedo_main   -> 0
+ctest --test-dir build/debug -N -R "ShutdownRemoves|ShutdownWithoutProject|RepeatedShutdown|ProjectSwitchRemovesPreviousWorkspace"   -> 5 tests listed
+ctest --test-dir build/debug -R "AlbumBackendProjectTest|ApplicationModuleHostShutdownTest" --output-on-failure   -> 0
+
+macOS (ssh yurunmac.local, ~/Projects/PuerhLab, build/macos-debug with ALCEDO_BUILD_TESTS=ON;
+the macos_debug_tests preset was not used, per AGENTS.md):
+cmake --build --preset macos_debug --target AlbumBackendProjectTest ApplicationModuleHostShutdownTest alcedo_main   -> 0
+ctest --test-dir build/macos-debug -N -R "<same pattern>"   -> 5 tests listed
+ctest --test-dir build/macos-debug -R "AlbumBackendProjectTest|ApplicationModuleHostShutdownTest" --output-on-failure   -> 8 (2 failures, see below)
+```
+
+**Discovered / passed / failed / skipped counts:**
+
+- Windows: 48 discovered, 45 passed, 0 failed, 3 skipped (the existing
+  `LoadProject_ExternalPackedProjectFromEnv_*` cases need an environment variable).
+- macOS: 48 discovered, 43 passed, 2 failed, 3 skipped (same three).
+  The failures are `ModelAssetCatalogTests.NativeCoreMlProfileIsOnlyAvailableOnMacos`
+  and `ProjectTests.SemanticActivationManifestRequiresListedFilesOnDisk`. Both
+  expect the `mobileclip2-s2-en`, `jina-clip-v2-int8-multilingual` and
+  `siglip2-b32-256-multilingual` profiles, which commit `c840749a5`
+  ("Remove unsupported models from macos") removed from the macOS
+  `model_asset_catalog.cpp`. This branch does not change the model catalog.
+  These failures are not caused by this plan.
+
+**Manual verification:** not run on Windows or macOS (see Status).
+
+**Evidence path:** Windows `build/tmp/welcome_overview_phase3/` (build and
+ctest logs, the baseline run without the fix, the patch sent to the Mac); Mac
+`~/Projects/PuerhLab/build/tmp/welcome_overview_phase3/` (build and ctest
+logs).
+
+**LOC note:** +191 / -7 in 4 files, above the 80-160 estimate. The extra lines
+are the scoped `qWarning` capture that `ShutdownWithoutProjectRemovesNothing`
+needs and the per-case package checks. Host change: +31 / -3.
+
+**Remaining defects or unavailable platforms:**
+
+- The two manual checks (Windows and macOS).
+- The two macOS model-catalog test failures above (outside this plan).
 
 ## 10. Cross-phase acceptance matrix
 

@@ -4,12 +4,17 @@
 
 /// @file application_module_host_shutdown_test.cpp
 /// @brief Verifies host shutdown waits for every registered task, drains
-/// analysis writes released by an export barrier, and repacks the project
-/// package only when the user entered the project.
+/// analysis writes released by an export barrier, repacks the project
+/// package only when the user entered the project, and removes the runtime
+/// workspace after the host closes the project database.
 
 #include "ui/album_backend_test_fixture.hpp"
 
+#include <QMutex>
+#include <QMutexLocker>
+#include <QStringList>
 #include <QTimer>
+#include <QtLogging>
 
 #include <array>
 #include <filesystem>
@@ -22,6 +27,52 @@ namespace alcedo::ui::test {
 namespace {
 
 using ApplicationModuleHostShutdownTests = ApplicationModuleHostTestFixture;
+
+// Collects the qWarning messages of all threads while it is alive.
+class ScopedWarningCapture {
+ public:
+  ScopedWarningCapture() {
+    {
+      QMutexLocker lock(&Mutex());
+      Messages().clear();
+    }
+    previous_ = qInstallMessageHandler(&ScopedWarningCapture::Capture);
+  }
+  ~ScopedWarningCapture() { qInstallMessageHandler(previous_); }
+  ScopedWarningCapture(const ScopedWarningCapture&)                    = delete;
+  auto operator=(const ScopedWarningCapture&) -> ScopedWarningCapture& = delete;
+
+  [[nodiscard]] auto CountContaining(const QString& text) const -> int {
+    QMutexLocker lock(&Mutex());
+    int          count = 0;
+    for (const auto& message : Messages()) {
+      if (message.contains(text)) {
+        ++count;
+      }
+    }
+    return count;
+  }
+
+ private:
+  static auto Mutex() -> QMutex& {
+    static QMutex mutex;
+    return mutex;
+  }
+  static auto Messages() -> QStringList& {
+    static QStringList messages;
+    return messages;
+  }
+  static void Capture(QtMsgType type, const QMessageLogContext&, const QString& message) {
+    if (type == QtWarningMsg) {
+      QMutexLocker lock(&Mutex());
+      Messages().push_back(message);
+    }
+  }
+
+  QtMessageHandler previous_ = nullptr;
+};
+
+constexpr auto kWorkspaceRemovalWarning = "Runtime workspace removal failed";
 
 auto RunningTask(BackgroundTaskKind kind, bool cancelable,
                  BackgroundTaskShutdownPolicy policy) -> BackgroundTaskSnapshot {
@@ -101,8 +152,8 @@ TEST_F(ApplicationModuleHostShutdownTests, ShutdownWithUnenteredProjectSkipsRepa
 
   host.Shutdown();
 
-  // The workspace directory is not checked: on Windows the open DuckDB file blocks its removal
-  // during ShutdownModules for every project, entered or not.
+  // The workspace removal runs in the host destructor; see
+  // ShutdownRemovesUnenteredProjectWorkspace.
   EXPECT_EQ(ReadFileBytes(package), package_before.bytes_);
   EXPECT_EQ(std::filesystem::last_write_time(package), package_before.write_time_);
 }
@@ -120,6 +171,90 @@ TEST_F(ApplicationModuleHostShutdownTests, ShutdownWithEnteredProjectRepacks) {
   host.Shutdown();
 
   EXPECT_NE(std::filesystem::last_write_time(package), package_before.write_time_);
+}
+
+TEST_F(ApplicationModuleHostShutdownTests, ShutdownRemovesUnenteredProjectWorkspace) {
+  ScopedRecentProjectSettings settings(temp_dir_);
+  const auto                  package = BuildPackedProject(temp_dir_, "unentered_workspace");
+  ScopedWarningCapture        warnings;
+  std::filesystem::path       workspace;
+  PackageFileState            package_before;
+  {
+    ApplicationModuleHost host;
+    ASSERT_TRUE(host.project()->PreviewProject(PathToQString(package)));
+    ASSERT_TRUE(WaitForProjectLoadIdle(host));
+    ASSERT_FALSE(host.project()->ProjectEntered());
+    workspace = host.project()->handler().workspace_dir();
+    ASSERT_FALSE(workspace.empty());
+    ASSERT_TRUE(std::filesystem::exists(workspace));
+    package_before = CapturePackageFileState(package);
+    host.Shutdown();
+  }
+
+  EXPECT_FALSE(std::filesystem::exists(workspace)) << workspace.string();
+  EXPECT_EQ(warnings.CountContaining(kWorkspaceRemovalWarning), 0);
+  EXPECT_EQ(ReadFileBytes(package), package_before.bytes_);
+  EXPECT_EQ(std::filesystem::last_write_time(package), package_before.write_time_);
+}
+
+TEST_F(ApplicationModuleHostShutdownTests, ShutdownRemovesEnteredProjectWorkspace) {
+  ScopedRecentProjectSettings settings(temp_dir_);
+  const auto                  package = BuildPackedProject(temp_dir_, "entered_workspace");
+  ScopedWarningCapture        warnings;
+  std::filesystem::path       workspace;
+  PackageFileState            package_before;
+  {
+    ApplicationModuleHost host;
+    ASSERT_TRUE(host.project()->PreviewProject(PathToQString(package)));
+    ASSERT_TRUE(WaitForProjectLoadIdle(host));
+    ASSERT_TRUE(host.project()->EnterLoadedProject());
+    workspace = host.project()->handler().workspace_dir();
+    ASSERT_FALSE(workspace.empty());
+    ASSERT_TRUE(std::filesystem::exists(workspace));
+    package_before = CapturePackageFileState(package);
+    host.Shutdown();
+  }
+
+  EXPECT_FALSE(std::filesystem::exists(workspace)) << workspace.string();
+  EXPECT_EQ(warnings.CountContaining(kWorkspaceRemovalWarning), 0);
+  EXPECT_NE(std::filesystem::last_write_time(package), package_before.write_time_);
+}
+
+TEST_F(ApplicationModuleHostShutdownTests, ShutdownWithoutProjectRemovesNothing) {
+  ScopedWarningCapture warnings;
+  {
+    ApplicationModuleHost host;
+    ASSERT_FALSE(host.project()->ServiceReady());
+    EXPECT_TRUE(host.project()->handler().workspace_dir().empty());
+    EXPECT_NO_THROW(host.Shutdown());
+  }
+
+  EXPECT_EQ(warnings.CountContaining(kWorkspaceRemovalWarning), 0);
+  EXPECT_TRUE(std::filesystem::exists(temp_dir_));
+}
+
+TEST_F(ApplicationModuleHostShutdownTests, RepeatedShutdownRemovesWorkspaceOnce) {
+  ScopedRecentProjectSettings settings(temp_dir_);
+  const auto                  package = BuildPackedProject(temp_dir_, "repeated_shutdown");
+  ScopedWarningCapture        warnings;
+  std::filesystem::path       workspace;
+  PackageFileState            package_before;
+  {
+    ApplicationModuleHost host;
+    ASSERT_TRUE(host.project()->PreviewProject(PathToQString(package)));
+    ASSERT_TRUE(WaitForProjectLoadIdle(host));
+    workspace = host.project()->handler().workspace_dir();
+    ASSERT_FALSE(workspace.empty());
+    package_before = CapturePackageFileState(package);
+    host.Shutdown();
+    host.Shutdown();
+    // The removal waits for the destructor: the project database is still open here.
+    EXPECT_TRUE(std::filesystem::exists(workspace)) << workspace.string();
+  }
+
+  EXPECT_FALSE(std::filesystem::exists(workspace)) << workspace.string();
+  EXPECT_EQ(warnings.CountContaining(kWorkspaceRemovalWarning), 0);
+  EXPECT_EQ(ReadFileBytes(package), package_before.bytes_);
 }
 
 }  // namespace

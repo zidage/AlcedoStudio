@@ -5,6 +5,7 @@
 #pragma once
 
 #include <QObject>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <string>
@@ -171,6 +172,12 @@ class ApplicationModuleHost final : public QObject {
   void RecordConstruction(const char* type_name, const void* object);
   void RecordDestruction(const char* type_name, const void* object);
   void ShutdownModules();
+  /// Removes the runtime workspace that ShutdownModules recorded in
+  /// pending_workspace_removal_. Called by the destructor after ProjectModule (the last owner
+  /// of the project services and their DuckDB file) is destroyed, because Windows cannot
+  /// delete an open file. A failure is written with qWarning (path and OS error) and is not
+  /// retried. Clears pending_workspace_removal_.
+  void RemovePendingWorkspace();
 
   // Owned in construction dependency order. Destroyed in reverse.
   std::unique_ptr<BackgroundTaskController>            background_tasks_;
@@ -206,6 +213,8 @@ class ApplicationModuleHost final : public QObject {
 
   LifecycleObserver                                    lifecycle_observer_{};
   bool                                                 shutting_down_ = false;
+  // Runtime workspace of the loaded project at shutdown; the destructor removes it.
+  std::filesystem::path                                pending_workspace_removal_{};
 };
 
 }  // namespace alcedo::ui
