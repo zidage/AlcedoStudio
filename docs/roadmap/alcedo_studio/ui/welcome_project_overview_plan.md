@@ -1445,10 +1445,12 @@ complete on Windows and on macOS. The two manual checks are not run on either
 platform: the Windows debug app has no recent project, so no preview loads at
 startup, and the Mac was used only through SSH (no desktop session).
 
-**Source revision and branch:** `fix/runtime-workspace-removal-at-exit`,
-created from `feature/welcome-surface-ui` at `2cc24b1a0`. On the Mac
-(`yurunmac.local`, macOS 27.0, arm64) the same change was applied as a patch
-on `origin/feature/welcome-surface-ui` in `~/Projects/PuerhLab`.
+**Source revision and branch:** `fix/runtime-workspace-removal-at-exit` at
+`1bcf8ed94` (created from `feature/welcome-surface-ui` at `2cc24b1a0`). Both
+platforms checked out this same pushed commit with a clean tree: Windows in
+`D:\Projects\pu-erh_lab`, the Mac (`yurunmac.local`, macOS 27.0, arm64) in
+`~/Projects/PuerhLab` (fast-forward to `origin/fix/runtime-workspace-removal-at-exit`).
+The results below are from that commit on both platforms.
 
 **Actual changed modules:**
 
@@ -1537,8 +1539,8 @@ ctest --test-dir build/macos-debug -R "AlbumBackendProjectTest|ApplicationModule
 
 **Evidence path:** Windows `build/tmp/welcome_overview_phase3/` (build and
 ctest logs, the baseline run without the fix, the patch sent to the Mac); Mac
-`~/Projects/PuerhLab/build/tmp/welcome_overview_phase3/` (build and ctest
-logs).
+`~/Projects/PuerhLab/build/tmp/welcome_overview_phase3/` (`mac_build2.log`,
+`mac_ctest2.log` are the runs at `1bcf8ed94`).
 
 **LOC note:** +191 / -7 in 4 files, above the 80-160 estimate. The extra lines
 are the scoped `qWarning` capture that `ShutdownWithoutProjectRemovesNothing`
