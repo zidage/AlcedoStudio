@@ -877,6 +877,28 @@ TEST_F(WelcomePreviewTests, PreviewSwitchLeavesUnenteredPackageBytesUnchanged) {
   EXPECT_EQ(std::filesystem::last_write_time(project_a), package_a_before.write_time_);
 }
 
+// Records the switch cleanup: the loader removes the previous runtime workspace after the swap
+// closes the previous project services.
+TEST_F(WelcomePreviewTests, ProjectSwitchRemovesPreviousWorkspace) {
+  ScopedRecentProjectSettings settings(temp_dir_);
+  const auto                  project_a = BuildPackedProject(temp_dir_, "project_a");
+  const auto                  project_b = BuildPackedProject(temp_dir_, "project_b");
+
+  ApplicationModuleHost       host;
+  ASSERT_TRUE(host.project()->PreviewProject(PathToQString(project_a)));
+  ASSERT_TRUE(WaitForProjectLoadIdle(host));
+  const std::filesystem::path workspace_a = host.project()->handler().workspace_dir();
+  ASSERT_FALSE(workspace_a.empty());
+  ASSERT_TRUE(std::filesystem::exists(workspace_a));
+
+  ASSERT_TRUE(host.project()->PreviewProject(PathToQString(project_b)));
+  ASSERT_TRUE(WaitForProjectLoadIdle(host));
+
+  ASSERT_TRUE(IsLoadedPackage(host, project_b));
+  EXPECT_NE(host.project()->handler().workspace_dir(), workspace_a);
+  EXPECT_FALSE(std::filesystem::exists(workspace_a)) << workspace_a.string();
+}
+
 TEST_F(WelcomePreviewTests, EnteredProjectSwitchRepacksPreviousPackage) {
   ScopedRecentProjectSettings settings(temp_dir_);
   const auto                  project_a = BuildPackedProject(temp_dir_, "project_a");
