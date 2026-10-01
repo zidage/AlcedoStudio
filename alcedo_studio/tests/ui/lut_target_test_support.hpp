@@ -9,6 +9,7 @@
 
 #include <gtest/gtest.h>
 
+#include <QString>
 #include <cstdint>
 #include <deque>
 #include <memory>
@@ -48,6 +49,8 @@ class DocumentTargetSource final : public LutTargetSource {
   }
   [[nodiscard]] auto SelectedNodeId() const -> NodeId override { return selected; }
   [[nodiscard]] auto SelectedMaskId() const -> std::string override { return mask; }
+  [[nodiscard]] auto ActiveAdjustmentPanel() const -> QString override { return panel; }
+  [[nodiscard]] auto LutPanelNodeId() const -> NodeId override { return lut_panel_node; }
   [[nodiscard]] auto CanEdit() const -> bool override { return can_edit; }
   auto SubmitLutWrite(const EditorParameterTarget& target, EditorLutWrite write) -> bool override {
     ++submit_count;
@@ -83,6 +86,8 @@ class DocumentTargetSource final : public LutTargetSource {
   std::uint64_t                                                image_id = 7;
   NodeId                                                       selected = kGradeB;
   std::string                                                  mask;
+  QString                                                      panel = QStringLiteral("tone");
+  NodeId                                                       lut_panel_node = kPrimary;
   bool                                                         can_edit     = true;
   int                                                          submit_count = 0;
   std::deque<std::pair<EditorParameterTarget, EditorLutWrite>> queued;

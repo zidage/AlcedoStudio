@@ -200,6 +200,72 @@ TEST(LutLibraryControllerTest, NonGradeSelectionAllowsBrowseButRejectsApply) {
   }
 }
 
+TEST(LutLibraryControllerTest, DevelopAndDrtPanelsApplyToLutPanelColorGrade) {
+  TemporaryLutLibrary  library(LibraryFiles());
+  DocumentTargetSource source;
+  LutLibraryController controller;
+  controller.setLibrary(library.Service());
+  controller.SetTargetSource(&source);
+
+  const PipelineDocument& document = source.Mutable();
+  const NodeId            develop  = document.Develop()->Id();
+  const NodeId            drt      = document.Drt()->Id();
+  source.lut_panel_node            = kGradeC;
+
+  struct Case {
+    const char* panel;
+    NodeId      selected;
+  };
+  const std::vector<Case> cases = {{"display", drt}, {"post", drt}, {"raw", develop}};
+  const char*             entries[] = {"library:kodak/portra_400.cube",
+                                       "library:general/teal.cube",
+                                       "library:kodak/portra_400.cube"};
+  for (std::size_t index = 0; index < cases.size(); ++index) {
+    const Case& test_case = cases[index];
+    SCOPED_TRACE(test_case.panel);
+    source.panel    = QString::fromLatin1(test_case.panel);
+    source.selected = test_case.selected;
+    controller.reload();
+    ASSERT_EQ(controller.state(), LutTargetState::kReady);
+    EXPECT_EQ(controller.targetNodeId(), QStringLiteral("grade.c"));
+
+    const nlohmann::json develop_json = NodeJson(document, develop);
+    const nlohmann::json drt_json     = NodeJson(document, drt);
+    ASSERT_TRUE(controller.applyEntry(QString::fromLatin1(entries[index])));
+    ASSERT_EQ(source.ApplyQueued(), 1);
+    const std::string expected_path = index == 1 ? "general/teal.cube" : "kodak/portra_400.cube";
+    EXPECT_EQ(source.Lmt(kGradeC)->Reference(),
+              LutReference{LibraryLutReference{expected_path}});
+    EXPECT_TRUE(IsEmptyLutReference(source.Lmt(kGradeB)->Reference()));
+    EXPECT_EQ(NodeJson(document, develop), develop_json);
+    EXPECT_EQ(NodeJson(document, drt), drt_json);
+  }
+
+  // A selected Color Grade stays the target on those panels.
+  source.panel    = QStringLiteral("display");
+  source.selected = kGradeB;
+  controller.reload();
+  EXPECT_EQ(controller.targetNodeId(), QStringLiteral("grade.b"));
+
+  // No Color Grade for the LUT panel: the apply is rejected.
+  source.selected       = drt;
+  source.lut_panel_node = NodeId{};
+  controller.reload();
+  EXPECT_EQ(controller.state(), LutTargetState::kNoNode);
+  EXPECT_FALSE(controller.canApply());
+
+  // Geometry keeps the Develop node as the target and rejects LUT changes.
+  source.panel          = QStringLiteral("geometry");
+  source.selected       = develop;
+  source.lut_panel_node = kGradeC;
+  controller.reload();
+  EXPECT_EQ(controller.state(), LutTargetState::kNotColorGrade);
+  EXPECT_FALSE(controller.canApply());
+  const int submits = source.submit_count;
+  EXPECT_FALSE(controller.applyEntry(QStringLiteral("library:general/teal.cube")));
+  EXPECT_EQ(source.submit_count, submits);
+}
+
 TEST(LutLibraryControllerTest, TargetProjectionReloadDoesNotSubmitHistory) {
   TemporaryLutLibrary  library(LibraryFiles());
   DocumentTargetSource source;

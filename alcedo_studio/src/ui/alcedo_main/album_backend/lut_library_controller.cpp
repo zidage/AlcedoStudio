@@ -29,6 +29,13 @@ auto ToUtf8(const QString& text) -> std::string {
   return {bytes.constData(), static_cast<std::size_t>(bytes.size())};
 }
 
+/// Panels whose own node (Develop or DRT) is not a Color Grade, but which still let the LUT
+/// browser apply to the Color Grade that the LUT panel edits. Geometry is not in this set.
+auto PanelTargetsLutPanelNode(const QString& panel) -> bool {
+  return panel == QLatin1String("raw") || panel == QLatin1String("display") ||
+         panel == QLatin1String("post");
+}
+
 /// Production target source: the editor session and its bound node selection.
 class EditorSessionLutTargetSource final : public LutTargetSource {
  public:
@@ -47,6 +54,12 @@ class EditorSessionLutTargetSource final : public LutTargetSource {
     const EditorMaskCreationAdapter* masks = session_ ? session_->mask_creation() : nullptr;
     if (masks == nullptr || !masks->mask_controls_active()) return {};
     return ToUtf8(masks->selected_mask_id());
+  }
+  [[nodiscard]] auto ActiveAdjustmentPanel() const -> QString override {
+    return session_ ? session_->active_adjustment_panel() : QString{};
+  }
+  [[nodiscard]] auto LutPanelNodeId() const -> NodeId override {
+    return session_ ? session_->lut_panel_node_id() : NodeId{};
   }
   [[nodiscard]] auto CanEdit() const -> bool override { return session_ && session_->can_edit(); }
   auto SubmitLutWrite(const EditorParameterTarget& target, EditorLutWrite write) -> bool override {
@@ -77,9 +90,11 @@ void LutLibraryController::setEditorSession(EditorSessionController* session) {
   if (session_) {
     session_source_ = std::make_unique<EditorSessionLutTargetSource>(session_);
     source_         = session_source_.get();
+    // DesktopUiChanged carries active adjustment panel changes, which can move the target.
     for (auto signal : {&EditorSessionController::StateChanged,
                         &EditorSessionController::AdjustmentSnapshotChanged,
-                        &EditorSessionController::NodeSelectionChanged}) {
+                        &EditorSessionController::NodeSelectionChanged,
+                        &EditorSessionController::DesktopUiChanged}) {
       connect(session_, signal, this, &LutLibraryController::reload);
     }
     if (session_->mask_creation() != nullptr) {
@@ -159,8 +174,13 @@ auto LutLibraryController::ReadTarget() const -> TargetRead {
   if (source_ == nullptr || source_->ImageId() == 0) return read;
   read.document = source_->Document();
   if (!read.document) return read;
-  const NodeId node_id = source_->SelectedNodeId();
-  const auto*  node    = node_id.Empty() ? nullptr : read.document->Graph().FindNode(node_id);
+  NodeId      node_id = source_->SelectedNodeId();
+  const auto* node    = node_id.Empty() ? nullptr : read.document->Graph().FindNode(node_id);
+  if (node != nullptr && dynamic_cast<const ColorGradeNodeModel*>(node) == nullptr &&
+      PanelTargetsLutPanelNode(source_->ActiveAdjustmentPanel())) {
+    node_id = source_->LutPanelNodeId();
+    node    = node_id.Empty() ? nullptr : read.document->Graph().FindNode(node_id);
+  }
   if (node == nullptr) {
     read.state = LutTargetState::kNoNode;
     return read;
