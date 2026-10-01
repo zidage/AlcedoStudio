@@ -90,10 +90,18 @@ auto Renderer<Backend>::Render(const PipelineGraphSnapshot&        snapshot,
   if (request.role != role_) {
     throw std::invalid_argument("Renderer: request role does not match the renderer role");
   }
-  if (!input || !input->buffer_valid_) {
+  const bool interactive = role_ == ExecutorRole::Interactive;
+  if (request.prepared_input) {
+    if (interactive) {
+      throw std::invalid_argument("Renderer: an interactive render takes encoded bytes only");
+    }
+    if (request.prepared_input->downsample_passes !=
+        DecodeResToDownsamplePasses(request.decode_res)) {
+      throw std::invalid_argument("Renderer: prepared input does not match the decode resolution");
+    }
+  } else if (!input || !input->buffer_valid_) {
     throw std::runtime_error("Renderer: product path requires encoded image bytes");
   }
-  const bool interactive = role_ == ExecutorRole::Interactive;
   if (interactive) {
     const auto key = RenderBindingKey::Of(snapshot);
     if (binding_.has_value() && *binding_ != key) {
@@ -103,13 +111,17 @@ auto Renderer<Backend>::Render(const PipelineGraphSnapshot&        snapshot,
   }
   const PipelineDocument& document = snapshot.Document();
 
-  auto&      encoded           = input->GetBuffer();
-  const auto encoded_bytes     = std::span<const std::byte>{
-      reinterpret_cast<const std::byte*>(encoded.data()), encoded.size()};
+  // Encoded bytes; empty when the request carries a prepared input.
+  std::span<const std::byte> encoded_bytes;
+  if (input && input->buffer_valid_) {
+    auto& encoded = input->GetBuffer();
+    encoded_bytes = std::span<const std::byte>{reinterpret_cast<const std::byte*>(encoded.data()),
+                                               encoded.size()};
+  }
   EnsureDevice();
 
   std::optional<PreparedSourceCache::Lease> prepared_lease;
-  std::optional<PreparedRawInput>           batch_prepared;
+  std::shared_ptr<const PreparedRawInput>   batch_prepared;
   ExecutionPlan                             plan;
   RenderDevice* const                       render_device = device_.get();
   struct BoundPreviewRequest {
@@ -123,7 +135,10 @@ auto Renderer<Backend>::Render(const PipelineGraphSnapshot&        snapshot,
     prepared_lease.emplace(source_cache_.AcquireEncoded(encoded_bytes, request.decode_res));
     plan = plan_cache_.GetOrCompile(document, prepared_lease->Get().CompileSource());
   } else {
-    batch_prepared.emplace(unpack_(encoded_bytes, request.decode_res));
+    batch_prepared = request.prepared_input
+                         ? request.prepared_input
+                         : std::make_shared<const PreparedRawInput>(
+                               unpack_(encoded_bytes, request.decode_res));
     diag::PreviewCpuInterval compile(diag::PreviewCpuStage::PlanCompile);
     plan = GraphCompiler::CompileStatic(document, batch_prepared->CompileSource(),
                                         Backend::kCapabilityVersion);

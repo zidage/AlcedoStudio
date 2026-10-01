@@ -6,6 +6,7 @@
 
 #include <duckdb.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <format>
 #include <memory>
@@ -62,16 +63,27 @@ class Mapper {
     duckorm::insert(conn_, Derived::TableName(), &obj, Derived::FieldDesc(), Derived::FieldCount());
   }
 
+  /// Insert @p rows with multi-row statements inside the caller's transaction.
+  void InsertParamsRows(std::span<const RowParams> rows) {
+    std::vector<const void*> pointers;
+    for (size_t begin = 0; begin < rows.size(); begin += duckorm::kMultiRowStatementRows) {
+      const size_t end = std::min(rows.size(), begin + duckorm::kMultiRowStatementRows);
+      pointers.clear();
+      for (size_t index = begin; index < end; ++index) {
+        pointers.push_back(&rows[index]);
+      }
+      duckorm::insert_rows(conn_, Derived::TableName(), pointers, Derived::FieldDesc(),
+                           Derived::FieldCount());
+    }
+  }
+
   void InsertParamsBatch(std::span<const RowParams> objects) {
     if (objects.empty()) {
       return;
     }
     duckorm::begin_transaction(conn_);
     try {
-      for (const auto& obj : objects) {
-        duckorm::insert(conn_, Derived::TableName(), &obj, Derived::FieldDesc(),
-                        Derived::FieldCount());
-      }
+      InsertParamsRows(objects);
       duckorm::commit_transaction(conn_);
     } catch (...) {
       duckorm::rollback_transaction(conn_);
@@ -178,6 +190,21 @@ class Mapper {
     std::string where_clause = std::format(Derived::PrimeKeyClause(), target_id);
     duckorm::update(conn_, Derived::TableName(), &updated, Derived::FieldDesc(),
                     Derived::FieldCount(), where_clause.c_str());
+  }
+
+  /// Upsert @p rows with one statement inside the caller's transaction. The rows must have
+  /// distinct primary keys.
+  void UpsertParamsRows(std::span<const RowParams> rows) {
+    std::vector<const void*> pointers;
+    for (size_t begin = 0; begin < rows.size(); begin += duckorm::kMultiRowStatementRows) {
+      const size_t end = std::min(rows.size(), begin + duckorm::kMultiRowStatementRows);
+      pointers.clear();
+      for (size_t index = begin; index < end; ++index) {
+        pointers.push_back(&rows[index]);
+      }
+      duckorm::upsert_rows(conn_, Derived::TableName(), pointers, Derived::FieldDesc(),
+                           Derived::FieldCount());
+    }
   }
 
   void UpdateParamsBatch(std::span<const std::pair<Id, RowParams>> updates) {

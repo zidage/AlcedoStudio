@@ -15,6 +15,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "sleeve/sleeve_element/sleeve_element.hpp"
@@ -301,11 +302,30 @@ void ElementStore::AddElements(std::span<const std::shared_ptr<SleeveElement>> e
   if (elements.empty()) {
     return;
   }
+  // Element and file binding rows go in multi-row statements; one prepared insert per row
+  // dominated the project sync after an import.
+  std::vector<ElementMapperParams> element_rows;
+  std::vector<FileMapperParams>    file_rows;
+  element_rows.reserve(elements.size());
+  file_rows.reserve(elements.size());
+  for (const auto& element : elements) {
+    element_rows.push_back(ElementMapper::ToParams(element));
+    if (element->type_ == ElementType::FILE) {
+      const auto file = std::static_pointer_cast<SleeveFile>(element);
+      file_rows.push_back(FileMapper::ToParams({file->element_id_, file->image_id_}));
+    }
+  }
+
   auto db_lock = guard_.Lock();
   duckorm::begin_transaction(guard_.conn_);
   try {
+    element_mapper_.InsertParamsRows(element_rows);
+    file_mapper_.InsertParamsRows(file_rows);
     for (const auto& element : elements) {
-      InsertElementRows(element);
+      if (element->type_ == ElementType::FOLDER) {
+        const auto folder = std::static_pointer_cast<SleeveFolder>(element);
+        folder_mapper_.InsertFolderContents(folder->element_id_, folder->ListElements());
+      }
     }
     duckorm::commit_transaction(guard_.conn_);
   } catch (...) {
@@ -353,6 +373,38 @@ auto ElementStore::GetElementById(const sl_element_id_t id) -> std::shared_ptr<S
   }
   result->SetSyncFlag(SyncFlag::SYNCED);
   return result;
+}
+
+auto ElementStore::GetFolderChildren(const sl_element_id_t folder_id)
+    -> std::vector<std::shared_ptr<SleeveElement>> {
+  auto       db_lock  = guard_.Lock();
+  auto       children = element_mapper_.GetByQuery(std::format(
+      "SELECT e.id, e.type, e.element_name, e.added_time, e.modified_time, e.ref_count "
+            "FROM Element e JOIN FolderContent fc ON fc.element_id = e.id WHERE fc.folder_id = {}",
+      folder_id));
+  const auto bindings = file_mapper_.GetByQuery(
+      std::format("SELECT fi.file_id, fi.image_id FROM FileImage fi "
+                  "JOIN FolderContent fc ON fc.element_id = fi.file_id WHERE fc.folder_id = {}",
+                  folder_id));
+
+  // GetElementById binds an image only when the file has exactly one FileImage row.
+  std::unordered_map<sl_element_id_t, std::pair<image_id_t, size_t>> image_by_file;
+  image_by_file.reserve(bindings.size());
+  for (const auto& [file_id, image_id] : bindings) {
+    auto& entry = image_by_file[file_id];
+    entry.first = image_id;
+    ++entry.second;
+  }
+  for (const auto& child : children) {
+    if (child->type_ == ElementType::FILE) {
+      auto       file = std::static_pointer_cast<SleeveFile>(child);
+      const auto it   = image_by_file.find(file->element_id_);
+      file->image_id_ =
+          (it != image_by_file.end() && it->second.second == 1) ? it->second.first : 0;
+    }
+    child->SetSyncFlag(SyncFlag::SYNCED);
+  }
+  return children;
 }
 
 /**

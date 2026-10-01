@@ -11,6 +11,7 @@
 #include <span>
 #include <string>
 #include <unordered_set>
+#include <vector>
 
 #include "app/committed_snapshot_cache.hpp"
 #include "app/pipeline_root_state.hpp"
@@ -22,6 +23,7 @@
 #include "edit/pipeline/pipeline_accelerator.hpp"
 #include "edit/runtime/lut_resource_resolver.hpp"
 #include "sleeve/storage.hpp"
+#include "storage/store/edit_history/commit_graph_store.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -37,6 +39,19 @@ namespace alcedo {
  * CommitGraph before it edits. Released with the last reference; nothing is written back except
  * through @ref PipelineMgmtService::PersistHistory, which checks graph_ against storage first.
  */
+/**
+ * @brief Rows of the history root of one newly imported image and its element pipeline JSON.
+ *
+ * Produced by PipelineMgmtService::EncodeImageRoot without the database lock so import workers
+ * encode in parallel; PipelineMgmtService::WriteImageRoots writes many of them in one
+ * transaction. The image has no stored root yet, so this value duplicates no stored state.
+ */
+struct EncodedImageRoot {
+  EncodedRootPipeline root;
+  /// PipelineDocument::ToJson of the bound document, kept for older application versions.
+  std::string         element_pipeline_json;
+};
+
 struct ImageHistorySnapshot {
   std::shared_ptr<const CommitGraph>     graph_;
   std::shared_ptr<const LoadedRootState> root_;
@@ -246,6 +261,22 @@ class PipelineMgmtService final {
    */
   void               InitializeImageRoot(sl_element_id_t id, PipelineDocument document,
                                          const RawRuntimeColorContext* raw_color_context);
+
+  /**
+   * @brief Bind and validate @p document like InitializeImageRoot and encode its rows; writes
+   *        nothing. Safe to call from several threads at once.
+   * @throws std::runtime_error when the document is not a valid product graph.
+   */
+  auto               EncodeImageRoot(sl_element_id_t id, PipelineDocument document,
+                                     const RawRuntimeColorContext* raw_color_context) const -> EncodedImageRoot;
+
+  /**
+   * @brief Write the roots, default Versions, image edit states and element pipeline JSON of
+   *        @p roots in one storage transaction.
+   * @throws std::runtime_error when any image already has a root or a write fails; then nothing
+   *         of @p roots is written.
+   */
+  void               WriteImageRoots(std::vector<EncodedImageRoot> roots);
 
   /// Clean project-exit garbage collection: mark from every Version head through first-parent
   /// reachability and delete unreachable EditCommit rows. Must run only after the final

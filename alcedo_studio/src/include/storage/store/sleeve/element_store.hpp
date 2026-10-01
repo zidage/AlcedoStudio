@@ -139,6 +139,11 @@ class ElementStore {
   // Bulk-update a batch of elements in a single transaction.
   void UpdateElements(std::span<const std::shared_ptr<SleeveElement>> elements);
   auto GetElementById(const sl_element_id_t id) -> std::shared_ptr<SleeveElement>;
+  // Every element that FolderContent lists under @p folder_id, loaded as GetElementById loads
+  // one element (SYNCED, file image binding read), with two queries for the whole folder.
+  // Order is unspecified.
+  auto GetFolderChildren(const sl_element_id_t folder_id)
+      -> std::vector<std::shared_ptr<SleeveElement>>;
 
   auto GetElementsInFolderByFilter(const std::shared_ptr<FilterCombo> filter,
                                    const sl_element_id_t              folder_id)

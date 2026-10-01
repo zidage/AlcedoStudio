@@ -268,14 +268,42 @@ auto CommitGraphStore::GetMaterializedHistoryLabel(sl_element_id_t element_id)
   return label;
 }
 
-void CommitGraphStore::InsertRootSerializedPipelineState(
-    const root_id_t& root_id, sl_element_id_t element_id,
-    const nlohmann::json& serialized_pipeline_state) {
-  ExecuteOrThrow(conn_, std::format("INSERT INTO PipelineRoot "
-                                    "(root_id, element_id, serialized_pipeline_state) "
-                                    "VALUES ({}, {}, CAST({} AS JSON));",
-                                    SqlQuote(root_id.ToString()), element_id,
-                                    SqlQuote(serialized_pipeline_state.dump())));
+void CommitGraphStore::InsertRootSerializedPipelineStates(
+    std::span<const EncodedRootPipeline> roots) {
+  std::string sql =
+      "INSERT INTO PipelineRoot (root_id, element_id, serialized_pipeline_state) VALUES ";
+  for (std::size_t index = 0; index < roots.size(); ++index) {
+    sql += index == 0 ? "(?, ?, CAST(? AS JSON))" : ", (?, ?, CAST(? AS JSON))";
+  }
+  sql += ";";
+
+  duckdb_prepared_statement statement = nullptr;
+  if (duckdb_prepare(conn_, sql.c_str(), &statement) != DuckDBSuccess) {
+    const char*       error   = duckdb_prepare_error(statement);
+    const std::string message = error ? error : "CommitGraphStore root insert prepare failed";
+    duckdb_destroy_prepare(&statement);
+    throw std::runtime_error(message);
+  }
+  std::vector<std::string> root_ids;
+  root_ids.reserve(roots.size());
+  idx_t parameter = 1;
+  for (const auto& root : roots) {
+    root_ids.push_back(root.root_id.ToString());
+    duckdb_bind_varchar(statement, parameter++, root_ids.back().c_str());
+    duckdb_bind_int64(statement, parameter++, static_cast<int64_t>(root.element_id));
+    duckdb_bind_varchar_length(statement, parameter++, root.root_state_json.data(),
+                               static_cast<idx_t>(root.root_state_json.size()));
+  }
+  duckdb_result result;
+  if (duckdb_execute_prepared(statement, &result) != DuckDBSuccess) {
+    const char*       error   = duckdb_result_error(&result);
+    const std::string message = error ? error : "CommitGraphStore root insert failed";
+    duckdb_destroy_result(&result);
+    duckdb_destroy_prepare(&statement);
+    throw std::runtime_error(message);
+  }
+  duckdb_destroy_result(&result);
+  duckdb_destroy_prepare(&statement);
 }
 
 auto CommitGraphStore::GetRootSerializedPipelineState(sl_element_id_t  element_id,
@@ -434,37 +462,84 @@ auto CommitGraphStore::CreateRootPipelinePersisted(
     sl_element_id_t element_id, const PipelineDocument& root_document,
     std::optional<nlohmann::json> raw_color_context, std::string default_display_name)
     -> CommitGraph {
-  if (GetImageEditState(element_id).has_value()) {
+  const auto root_id = ComputeRootId(element_id, root_document, raw_color_context);
+  auto       graph =
+      CommitGraph::CreateEmptyWithRootId(element_id, root_id, std::move(default_display_name));
+  const auto encoded = EncodeRootPipelineForGraph(graph, root_document, raw_color_context);
+  InsertRootPipelines(std::span<const EncodedRootPipeline>(&encoded, 1));
+  graph.ApplyMaterializedState(encoded.materialization.image_state);
+  return graph;
+}
+
+auto CommitGraphStore::EncodeRootPipeline(sl_element_id_t                      element_id,
+                                          const PipelineDocument&              root_document,
+                                          const std::optional<nlohmann::json>& raw_color_context,
+                                          std::string default_display_name) -> EncodedRootPipeline {
+  const auto root_id = ComputeRootId(element_id, root_document, raw_color_context);
+  const auto graph =
+      CommitGraph::CreateEmptyWithRootId(element_id, root_id, std::move(default_display_name));
+  return EncodeRootPipelineForGraph(graph, root_document, raw_color_context);
+}
+
+auto CommitGraphStore::EncodeRootPipelineForGraph(
+    const CommitGraph& graph, const PipelineDocument& root_document,
+    const std::optional<nlohmann::json>& raw_color_context) -> EncodedRootPipeline {
+  const auto& state      = graph.GetImageEditState();
+  const auto  root_id    = graph.GetRootId();
+  const auto  checkpoint = EncodePipelineDocumentCheckpoint(
+      root_id, std::nullopt, ComputeRootChainHash(root_id), root_document);
+  EncodedRootPipeline encoded;
+  encoded.element_id = state.element_id;
+  encoded.root_id    = root_id;
+  encoded.root_state_json =
+      EncodePipelineRootState(state.element_id, root_document, raw_color_context).dump();
+  encoded.materialization = graph.CaptureMaterializationWithSerializedPipelineState(checkpoint);
+  encoded.materialization.Validate();
+  return encoded;
+}
+
+void CommitGraphStore::InsertRootPipelines(std::span<const EncodedRootPipeline> roots,
+                                           const std::function<void()>&         write_rows) {
+  if (roots.empty()) {
+    return;
+  }
+  // One existence query for the whole batch: the stored root of an image is never replaced.
+  std::string element_ids;
+  for (std::size_t index = 0; index < roots.size(); ++index) {
+    if (index != 0) element_ids += ",";
+    element_ids += std::to_string(roots[index].element_id);
+  }
+  if (QueryUint64(conn_,
+                  std::format("SELECT COUNT(*) FROM ImageEditState WHERE element_id IN ({});",
+                              element_ids)) != 0) {
     throw std::runtime_error("CommitGraphStore: image root already exists");
   }
 
-  const auto root_id =
-      ComputeRootId(element_id, root_document, raw_color_context);
-  auto graph = CommitGraph::CreateEmptyWithRootId(element_id, root_id,
-                                                  std::move(default_display_name));
-  const auto checkpoint = EncodePipelineDocumentCheckpoint(
-      root_id, std::nullopt, ComputeRootChainHash(root_id), root_document);
-  auto materialization =
-      graph.CaptureMaterializationWithSerializedPipelineState(checkpoint);
-  materialization.Validate();
+  // One multi-row statement per table: a prepare and execute per row made the database lock the
+  // import bottleneck.
+  std::vector<VersionRefMapperParams>     version_ref_rows;
+  std::vector<ImageEditStateMapperParams> image_edit_state_rows;
+  image_edit_state_rows.reserve(roots.size());
+  for (const auto& root : roots) {
+    for (const auto& ref : root.materialization.version_refs) {
+      version_ref_rows.push_back(ToVersionRefParams(ref));
+    }
+    image_edit_state_rows.push_back(ToImageEditStateParams(root.materialization.image_state));
+  }
 
   duckorm::begin_transaction(conn_);
   try {
-    InsertRootSerializedPipelineState(
-        graph.GetRootId(), element_id,
-        EncodePipelineRootState(element_id, root_document, raw_color_context));
-    for (const auto& ref : materialization.version_refs) {
-      UpsertVersionRef(ref);
+    InsertRootSerializedPipelineStates(roots);
+    version_ref_mapper_.UpsertParamsRows(version_ref_rows);
+    image_edit_state_mapper_.UpsertParamsRows(image_edit_state_rows);
+    if (write_rows) {
+      write_rows();
     }
-    UpsertImageEditState(materialization.image_state);
     duckorm::commit_transaction(conn_);
   } catch (...) {
     duckorm::rollback_transaction(conn_);
     throw;
   }
-
-  graph.ApplyMaterializedState(materialization.image_state);
-  return graph;
 }
 
 }  // namespace alcedo

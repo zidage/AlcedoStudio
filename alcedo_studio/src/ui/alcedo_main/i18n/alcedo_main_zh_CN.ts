@@ -1683,8 +1683,8 @@ Alcedo 将改用 %1。</translation>
     </message>
     <message>
         <location line="+16"/>
-        <source>Max entries</source>
-        <translation>最大条目数</translation>
+        <source>Max entries per project</source>
+        <translation>每个项目最大条目数</translation>
     </message>
     <message>
         <location line="+24"/>

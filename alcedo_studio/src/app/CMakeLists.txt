@@ -569,8 +569,9 @@ def_library(ImportService
 
 def_library(ThumbnailService
     SOURCES "${ALCEDO_APP_ROOT}/thumbnail_service.cpp"
-    PUBLIC_DEPS EditPipeline ThreadPool StrConv ImagePoolService PipelineMgmtService
-                ThumbnailDiskCacheService Storage
+    # Thumbnails decode RAW sources (EditInput, ImageLoader) on their own CPU workers.
+    PUBLIC_DEPS EditPipeline EditInput ImageLoader ThreadPool StrConv ImagePoolService
+                PipelineMgmtService ThumbnailDiskCacheService Storage
 )
 
 def_library(MaskThumbnailService

@@ -8,6 +8,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "ui/alcedo_main/i18n.hpp"
@@ -33,6 +34,11 @@ class ProjectHandler {
                           const std::filesystem::path& packagePath = {},
                           const std::filesystem::path& workspaceDir = {},
                           const std::filesystem::path& recentProjectPath = {});
+  // Opens the packed project at @p packagePath: the loader thread unpacks it into
+  // @p workspaceDir (created by the caller) and then starts the services as
+  // InitializeServices does for an existing project.
+  bool OpenPackedProject(const std::filesystem::path& packagePath,
+                         const std::filesystem::path& workspaceDir, const QString& projectName);
   bool PersistCurrentProjectState();
   bool PackageCurrentProjectFiles(QString* errorOut = nullptr) const;
   void SetProjectLoadingState(bool loading, const i18n::LocalizedText& message);
@@ -78,6 +84,15 @@ class ProjectHandler {
   }
 
  private:
+  // Shared by InitializeServices and OpenPackedProject. With @p unpackProjectName, the loader
+  // thread first unpacks @p packagePath into @p workspaceDir and opens the unpacked files
+  // instead of @p dbPath and @p metaPath.
+  bool StartProjectLoad(const std::filesystem::path& dbPath, const std::filesystem::path& metaPath,
+                        ProjectOpenMode openMode, const std::filesystem::path& packagePath,
+                        const std::filesystem::path& workspaceDir,
+                        const std::filesystem::path& recentProjectPath,
+                        std::optional<QString>       unpackProjectName);
+
   ProjectModule& project_module_;
 
   std::shared_ptr<ProjectService>         project_{};

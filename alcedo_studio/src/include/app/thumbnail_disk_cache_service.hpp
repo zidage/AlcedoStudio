@@ -61,6 +61,13 @@ struct std::hash<alcedo::ThumbnailDiskCacheKey> {
 
 namespace alcedo {
 
+/**
+ * @brief On-disk thumbnail cache of one project at a time.
+ *
+ * Each project has its own directory under the cache root, with its own index file
+ * (cache_metadata.json) and its own LRU budget of max entries. Opening a project reads only that
+ * project's index, and one project's writes never evict another project's thumbnails.
+ */
 class ThumbnailDiskCacheService {
  public:
   struct Stats {
@@ -100,6 +107,7 @@ class ThumbnailDiskCacheService {
   bool  IsEnabled() const;
   void  SetCacheRoot(const std::filesystem::path& cache_root);
   const std::filesystem::path& GetCacheRoot() const;
+  /// Entry budget of the open project.
   void                         SetMaxEntries(size_t max_entries);
   size_t                       GetMaxEntries() const;
   void                         SetJpegQuality(int quality);
@@ -108,6 +116,7 @@ class ThumbnailDiskCacheService {
   int                          GetWebPQuality() const;
 
   // ── Phase 4: Operations ───────────────────────────────────────────────
+  /// Remove everything under the cache root: every project's directory and any file left there.
   void                         ClearAll();
   void                         ClearProject(const std::string& project_uuid);
   void                         FlushMetadata();
@@ -138,12 +147,12 @@ class ThumbnailDiskCacheService {
   std::filesystem::path  DeriveFilePath(const std::string&   key_hash,
                                         ThumbnailCacheFormat format) const;
   void                   WriterThreadLoop();
-  void                   LoadGlobalMetadata();
+  /// Encode and store one queued write. True when the index changed.
+  bool                   WriteEntry(WriteTask& task);
   void                   LoadMetadata();
   void                   RecordLruAccessLocked(const std::string& key_hash);
   void                   RemoveEntryFromIndexLocked(const std::string& key_hash);
   void                   EvictLruLocked(size_t target_count);
-  void                   RebuildFromDirectoryScan();
   void                   ReopenWithCacheRoot(const std::filesystem::path& cache_root);
   void                   BumpClearGenerationLocked();
   int64_t                CurrentTimeSeconds() const;

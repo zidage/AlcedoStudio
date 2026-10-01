@@ -211,6 +211,24 @@ target_link_libraries(ImportServiceTest ImportService ProjectService GTest::gtes
 
 alcedo_register_test_target(ImportServiceTest app)
 
+# Benchmark only: reads ALCEDO_IMPORT_BENCH_DIRS and is not registered with ctest.
+add_executable(ImportThroughputBenchmark ${ALCEDO_TEST_ROOT}/app/import_throughput_benchmark.cpp)
+target_include_directories(ImportThroughputBenchmark PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(ImportThroughputBenchmark
+  ImportService ProjectService PipelineMgmtService ThumbnailService ExportService
+  EditInput GTest::gtest_main)
+alcedo_copy_duckdb_fts_extension(ImportThroughputBenchmark)
+alcedo_register_test_target(ImportThroughputBenchmark app)
+
+# Benchmark only: reads ALCEDO_PROJECT_OPEN_BENCH_FILE and is not registered with ctest.
+add_executable(ProjectOpenBenchmark ${ALCEDO_TEST_ROOT}/app/project_open_benchmark.cpp)
+target_include_directories(ProjectOpenBenchmark PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(ProjectOpenBenchmark
+  ImportService ProjectService PipelineMgmtService ThumbnailService ExportService
+  SleeveFilterService GTest::gtest_main)
+alcedo_copy_duckdb_fts_extension(ProjectOpenBenchmark)
+alcedo_register_test_target(ProjectOpenBenchmark app)
+
 add_executable(ImportRawOnlyTest ${ALCEDO_TEST_ROOT}/app/import_raw_only_test.cpp)
 target_include_directories(ImportRawOnlyTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(ImportRawOnlyTest

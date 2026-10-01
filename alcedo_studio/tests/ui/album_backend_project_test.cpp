@@ -329,9 +329,14 @@ TEST_F(ProjectTests, LoadProject_CorruptPackedProjectPayload_Fails) {
     file.write(&byte, 1);
   }
 
+  // The loader thread unpacks the package, so the checksum failure ends the started load.
   ApplicationModuleHost backend;
-  EXPECT_FALSE(backend.project()->LoadProject(PathToQString(*packedProjectPath)));
+  ASSERT_TRUE(backend.project()->LoadProject(PathToQString(*packedProjectPath)));
+  ASSERT_TRUE(WaitForProjectLoadToFinish(backend));
   EXPECT_FALSE(backend.project()->ServiceReady());
+  EXPECT_FALSE(backend.project()->ProjectLoading());
+  EXPECT_NE(backend.project()->ServiceMessage().indexOf(QStringLiteral("checksum")), -1)
+      << backend.project()->ServiceMessage().toStdString();
 }
 
 TEST_F(ProjectTests, LoadProject_ValidMetadataProject_Fails) {

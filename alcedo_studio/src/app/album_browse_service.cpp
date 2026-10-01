@@ -5,7 +5,6 @@
 #include "app/album_browse_service.hpp"
 
 #include <algorithm>
-#include <iostream>
 #include <unordered_set>
 
 #include "utils/string/convert.hpp"
@@ -49,9 +48,6 @@ auto AlbumBrowseService::ListFolders(const std::filesystem::path& folder_path) c
     const auto entries = sleeve_service_->ListFolderEntries(folder_path);
     folders.reserve(entries.size());
     for (const auto& entry : entries) {
-      std::cout << "[LOG] AlbumBrowseService: Found file/folder "
-                << conv::ToBytes(entry->element_name_) << " in " << folder_path.string()
-                << " with size " << entries.size() << std::endl;
       if (!entry || entry->type_ != ElementType::FOLDER || entry->sync_flag_ == SyncFlag::DELETED) {
         continue;
       }

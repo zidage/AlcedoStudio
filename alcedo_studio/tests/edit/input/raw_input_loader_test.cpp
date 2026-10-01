@@ -515,6 +515,43 @@ TEST(GpuDagRawInput, LoadEncodedUnpacksLinearDngAsDirectRgbAndHonorsDecodeRes) {
   EXPECT_LT(eighth.host_extent.width, full.host_extent.width);
   EXPECT_FALSE(eighth.host_extent.Empty());
 }
+
+// LoadEncoded downsamples a CFA directly from LibRaw's buffer. The result must be the same bytes,
+// pattern, and geometry as the full-size CFA copy downsampled afterwards.
+TEST(GpuDagRawInput, LoadEncodedCfaDownsampleMatchesDownsampleOfFullCopy) {
+  const auto root = std::filesystem::path(TEST_IMG_PATH) / "raw";
+  for (const auto& relative :
+       {std::filesystem::path("airplane") / "_DSC1704.NEF",
+        std::filesystem::path("xtrans_edge") / "DSCF0019.RAF"}) {
+    const auto encoded = ReadBytes(root / relative);
+    if (encoded.empty()) {
+      GTEST_SKIP() << "CFA fixture is missing: " << (root / relative).string();
+    }
+    const auto full = RawInputLoader::LoadEncoded(encoded, DecodeRes::FULL);
+    ASSERT_EQ(full.input_kind, RawInputKind::BayerRaw) << relative;
+    for (const auto decode_res : {DecodeRes::HALF, DecodeRes::QUARTER, DecodeRes::EIGHTH}) {
+      const auto  passes   = DecodeResToDownsamplePasses(decode_res);
+      auto        expected = RawInputLoader::FromUnpackedCfa(
+          full.pixels, full.cfa_pattern, full.linearization, full.sensor, decode_res);
+      const auto  actual   = RawInputLoader::LoadEncoded(encoded, decode_res);
+      SCOPED_TRACE(relative.string() + " passes " + std::to_string(passes));
+      EXPECT_EQ(actual.downsample_passes, passes);
+      EXPECT_EQ(actual.host_extent, expected.host_extent);
+      EXPECT_EQ(actual.pixels.stride_bytes, expected.pixels.stride_bytes);
+      ASSERT_EQ(actual.pixels.ByteCount(), expected.pixels.ByteCount());
+      EXPECT_EQ(std::memcmp(actual.pixels.bytes.get(), expected.pixels.bytes.get(),
+                            actual.pixels.ByteCount()),
+                0);
+      EXPECT_EQ(std::memcmp(&actual.cfa_pattern, &expected.cfa_pattern,
+                            sizeof(actual.cfa_pattern)),
+                0);
+      EXPECT_EQ(actual.develop_output_extent, expected.develop_output_extent);
+      EXPECT_EQ(actual.full_reference_extent, expected.full_reference_extent);
+      EXPECT_EQ(actual.sensor_active_area, expected.sensor_active_area);
+      EXPECT_EQ(actual.demosaic_output_crop, expected.demosaic_output_crop);
+    }
+  }
+}
 #endif
 
 #if defined(__APPLE__)

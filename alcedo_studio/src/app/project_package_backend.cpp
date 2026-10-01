@@ -11,12 +11,16 @@
 #include <QStandardPaths>
 
 #include <algorithm>
+#include <array>
+#include <cstdint>
 #include <cstdlib>
 #include <cwctype>
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <optional>
 #include <sstream>
+#include <string_view>
 #include <vector>
 
 #include <duckdb.h>
@@ -134,6 +138,44 @@ auto PackedProjectHeaderIsSupported(const std::filesystem::path& path) -> bool {
 
   uint32_t version = 0;
   return ReadU32Le(in, &version) && version == kPackedProjectVersion;
+}
+
+/**
+ * @brief Checksum stored in the packed project header.
+ *
+ * XXH3-64 of magic (8B) || version (4B LE) || meta_size (8B LE) || db_size (8B LE) ||
+ * meta bytes || db bytes. The parts are streamed into one hash state, so the payloads are not
+ * copied into a concatenated buffer. Returns std::nullopt when XXH3 cannot allocate its state.
+ */
+auto PackedProjectChecksum(std::string_view meta_bytes, std::string_view db_bytes)
+    -> std::optional<uint64_t> {
+  XXH3_state_t* state = XXH3_createState();
+  if (state == nullptr) {
+    return std::nullopt;
+  }
+  std::array<unsigned char, 4 + 8 + 8> sizes{};
+  for (size_t i = 0; i < 4; ++i) {
+    sizes[i] = static_cast<unsigned char>((kPackedProjectVersion >> (i * 8U)) & 0xFFU);
+  }
+  const auto meta_size = static_cast<uint64_t>(meta_bytes.size());
+  const auto db_size   = static_cast<uint64_t>(db_bytes.size());
+  for (size_t i = 0; i < 8; ++i) {
+    sizes[4 + i]  = static_cast<unsigned char>((meta_size >> (i * 8ULL)) & 0xFFULL);
+    sizes[12 + i] = static_cast<unsigned char>((db_size >> (i * 8ULL)) & 0xFFULL);
+  }
+  const bool hashed =
+      XXH3_64bits_reset(state) != XXH_ERROR &&
+      XXH3_64bits_update(state, kPackedProjectMagic.data(), kPackedProjectMagic.size()) !=
+          XXH_ERROR &&
+      XXH3_64bits_update(state, sizes.data(), sizes.size()) != XXH_ERROR &&
+      XXH3_64bits_update(state, meta_bytes.data(), meta_bytes.size()) != XXH_ERROR &&
+      XXH3_64bits_update(state, db_bytes.data(), db_bytes.size()) != XXH_ERROR;
+  const uint64_t checksum = hashed ? XXH3_64bits_digest(state) : 0;
+  XXH3_freeState(state);
+  if (!hashed) {
+    return std::nullopt;
+  }
+  return checksum;
 }
 
 }  // namespace
@@ -635,38 +677,14 @@ auto WritePackedProject(const std::filesystem::path& packedPath,
   const uint64_t meta_size = static_cast<uint64_t>(meta_bytes.size());
   const uint64_t db_size   = static_cast<uint64_t>(db_bytes.size());
 
-  // Build the fixed-width header prefix for checksum computation:
-  //   magic (8B) || version (4B LE) || meta_size (8B LE) || db_size (8B LE)
-  // The checksum covers this prefix plus both payloads.
-  std::string hash_input;
-  hash_input.reserve(kPackedProjectMagic.size() + 4 + 8 + 8 + meta_bytes.size() +
-                     db_bytes.size());
-  hash_input.append(kPackedProjectMagic.data(), kPackedProjectMagic.size());
-  {
-    std::array<unsigned char, 4> bytes{};
-    bytes[0] = static_cast<unsigned char>(kPackedProjectVersion & 0xFFU);
-    bytes[1] = static_cast<unsigned char>((kPackedProjectVersion >> 8U) & 0xFFU);
-    bytes[2] = static_cast<unsigned char>((kPackedProjectVersion >> 16U) & 0xFFU);
-    bytes[3] = static_cast<unsigned char>((kPackedProjectVersion >> 24U) & 0xFFU);
-    hash_input.append(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-  }
-  {
-    std::array<unsigned char, 8> bytes{};
-    for (size_t i = 0; i < bytes.size(); ++i) {
-      bytes[i] = static_cast<unsigned char>((meta_size >> (i * 8ULL)) & 0xFFULL);
+  const auto     checksum_opt = PackedProjectChecksum(meta_bytes, db_bytes);
+  if (!checksum_opt.has_value()) {
+    if (errorOut) {
+      *errorOut = Tr("Failed to compute packed project checksum.");
     }
-    hash_input.append(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    return false;
   }
-  {
-    std::array<unsigned char, 8> bytes{};
-    for (size_t i = 0; i < bytes.size(); ++i) {
-      bytes[i] = static_cast<unsigned char>((db_size >> (i * 8ULL)) & 0xFFULL);
-    }
-    hash_input.append(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-  }
-  hash_input.append(meta_bytes);
-  hash_input.append(db_bytes);
-  const uint64_t checksum = XXH3_64bits(hash_input.data(), hash_input.size());
+  const uint64_t checksum = *checksum_opt;
 
   if (!album_util::EnsureDirectoryExists(packedPath.parent_path())) {
     if (errorOut) {
@@ -813,39 +831,8 @@ auto ReadPackedProject(const std::filesystem::path& packedPath,
     return false;
   }
 
-  // Rebuild the same hash input used during WritePackedProject:
-  //   magic (8B) || version (4B LE) || meta_size (8B LE) || db_size (8B LE)
-  //   || meta_bytes || db_bytes
-  std::string hash_input;
-  hash_input.reserve(kPackedProjectMagic.size() + 4 + 8 + 8 + metaBytes->size() +
-                     dbBytes->size());
-  hash_input.append(magic.data(), magic.size());
-  {
-    std::array<unsigned char, 4> bytes{};
-    bytes[0] = static_cast<unsigned char>(version & 0xFFU);
-    bytes[1] = static_cast<unsigned char>((version >> 8U) & 0xFFU);
-    bytes[2] = static_cast<unsigned char>((version >> 16U) & 0xFFU);
-    bytes[3] = static_cast<unsigned char>((version >> 24U) & 0xFFU);
-    hash_input.append(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-  }
-  {
-    std::array<unsigned char, 8> bytes{};
-    for (size_t i = 0; i < bytes.size(); ++i) {
-      bytes[i] = static_cast<unsigned char>((meta_size >> (i * 8ULL)) & 0xFFULL);
-    }
-    hash_input.append(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-  }
-  {
-    std::array<unsigned char, 8> bytes{};
-    for (size_t i = 0; i < bytes.size(); ++i) {
-      bytes[i] = static_cast<unsigned char>((db_size >> (i * 8ULL)) & 0xFFULL);
-    }
-    hash_input.append(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-  }
-  hash_input.append(*metaBytes);
-  hash_input.append(*dbBytes);
-
-  if (XXH3_64bits(hash_input.data(), hash_input.size()) != checksum) {
+  const auto actual_checksum = PackedProjectChecksum(*metaBytes, *dbBytes);
+  if (!actual_checksum.has_value() || *actual_checksum != checksum) {
     if (errorOut) {
       *errorOut = Tr("Packed project checksum verification failed.");
     }

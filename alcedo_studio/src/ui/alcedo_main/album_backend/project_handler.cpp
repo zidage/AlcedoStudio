@@ -7,6 +7,7 @@
 #include <QMetaObject>
 #include <QPointer>
 
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -31,6 +32,24 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
                                         const std::filesystem::path& packagePath,
                                         const std::filesystem::path& workspaceDir,
                                         const std::filesystem::path& recentProjectPath) {
+  return StartProjectLoad(dbPath, metaPath, openMode, packagePath, workspaceDir, recentProjectPath,
+                          std::nullopt);
+}
+
+bool ProjectHandler::OpenPackedProject(const std::filesystem::path& packagePath,
+                                       const std::filesystem::path& workspaceDir,
+                                       const QString&               projectName) {
+  return StartProjectLoad({}, {}, ProjectOpenMode::kLoadExisting, packagePath, workspaceDir,
+                          packagePath, projectName);
+}
+
+bool ProjectHandler::StartProjectLoad(const std::filesystem::path& dbPath,
+                                      const std::filesystem::path& metaPath,
+                                      ProjectOpenMode              openMode,
+                                      const std::filesystem::path& packagePath,
+                                      const std::filesystem::path& workspaceDir,
+                                      const std::filesystem::path& recentProjectPath,
+                                      std::optional<QString>       unpackProjectName) {
   if (project_loading_) {
     project_module_.SetServiceMessageForCurrentProject(PL_TEXT("A project load is already in progress."));
     return false;
@@ -67,9 +86,11 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
   std::thread([self, request_id, old_project = std::move(old_project),
                old_pipeline = std::move(old_pipeline), old_thumbnail = std::move(old_thumbnail),
                old_meta = std::move(old_meta), old_package = std::move(old_package),
-               old_workspace = std::move(old_workspace), dbPath, metaPath, packagePath,
-               workspaceDir, recentProjectPath, openMode, accelerator_preference,
-               lut_resources = std::move(lut_resources)]() mutable {
+               old_workspace = std::move(old_workspace), dbPath = std::filesystem::path(dbPath),
+               metaPath = std::filesystem::path(metaPath), packagePath, workspaceDir,
+               recentProjectPath, openMode, accelerator_preference,
+               lut_resources     = std::move(lut_resources),
+               unpackProjectName = std::move(unpackProjectName)]() mutable {
     struct LoadResult {
       bool                                    success_ = false;
       QString                                 error_{};
@@ -131,6 +152,19 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
       }
 
       result->workspace_to_cleanup_ = old_workspace;
+
+      if (unpackProjectName.has_value()) {
+        ProjectPackageService package_service;
+        QString               unpack_error;
+        if (!package_service.UnpackProjectToWorkspace(packagePath, workspaceDir, *unpackProjectName,
+                                                      &dbPath, &metaPath, &unpack_error)) {
+          const QByteArray err =
+              (unpack_error.isEmpty() ? PL_TEXT("Failed to unpack project package.").Render()
+                                      : unpack_error)
+                  .toUtf8();
+          throw std::runtime_error(err.constData());
+        }
+      }
 
       result->project_   = std::make_shared<ProjectService>(dbPath, metaPath, openMode);
       result->pipeline_             = std::make_shared<PipelineMgmtService>(

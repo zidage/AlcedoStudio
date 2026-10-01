@@ -104,6 +104,7 @@ auto PipelineTask::MakeApplyRequest() const -> PipelineApplyRequest {
     return request;
   }
   request.cancel_requested = cancel_requested_;
+  request.prepared_input   = prepared_input_;
   auto&      desc          = options_.render_desc_;
   const auto requested_render_type        = desc.render_type_;
 
@@ -316,14 +317,14 @@ auto PipelineScheduler::RunTask(PipelineTask& task) -> TaskOutcome {
     if (task_cancelled()) {
       return abandon();
     }
-    if (task.input_desc_ && !task.input_) {
+    if (task.input_desc_ && !task.input_ && !task.prepared_input_) {
       task.input_ = std::make_shared<ImageBuffer>(
           ByteBufferLoader::LoadByteBufferFromImage(task.input_desc_));
     }
     if (task_cancelled()) {
       return abandon();
     }
-    if (!task.input_ || !task.pipeline_executor_) {
+    if ((!task.input_ && !task.prepared_input_) || !task.pipeline_executor_) {
       return abandon();
     }
 

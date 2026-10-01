@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <filesystem>
 #include <format>
@@ -13,8 +14,10 @@
 #include <mutex>
 #include <opencv2/imgproc.hpp>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -23,6 +26,8 @@
 #include "app/pipeline_service.hpp"
 #include "app/thumbnail_disk_cache_service.hpp"
 #include "concurrency/thread_pool.hpp"
+#include "edit/input/raw_input_loader.hpp"
+#include "io/image/image_loader.hpp"
 #include "renderer/pipeline_scheduler.hpp"
 #include "renderer/pipeline_task.hpp"
 
@@ -51,6 +56,14 @@ constexpr DecodeRes ResolutionToDecodeRes(ThumbnailResolution res) {
 
 /// Disk cache schema. 3: entries are keyed by the committed snapshot's head and chain.
 constexpr uint32_t kDiskCacheSchemaVersion = 3;
+
+/// RAW decode workers. Decode is CPU work, so it runs here and not on the render executors.
+/// Each decode holds the encoded file and LibRaw's full-size CFA (about 75 MB for 20 MP), so the
+/// count stays small.
+auto ThumbnailDecodeWorkerCount() -> std::size_t {
+  const std::size_t cores = std::max(1U, std::thread::hardware_concurrency());
+  return std::clamp<std::size_t>(cores / 2, 2, 6);
+}
 
 void DispatchThumbnailResultCallback(const ThumbnailResultCallback& callback,
                                      const CallbackDispatcher&      dispatcher,
@@ -209,6 +222,16 @@ struct ThumbnailService::State {
   PipelineScheduler                              render_scheduler_;
   // Snapshot acquisition and disk cache reads, off the caller's thread.
   ThreadPool                                     lookup_thread_pool_;
+  // RAW decode of disk cache misses, ahead of the render workers.
+  ThreadPool                                     decode_thread_pool_;
+
+  // Decoded sources from the start of their decode to the end of their render. The limit keeps
+  // decode from running far ahead of the render executors and holding many sources in memory.
+  std::mutex                                     decode_slot_mutex_;
+  std::condition_variable                        decode_slot_cv_;
+  std::size_t                                    decode_slots_in_use_ = 0;
+  std::size_t                                    decode_slot_limit_   = 0;
+  bool                                           stopping_            = false;
 
   std::mutex                                     cache_lock_;
 
@@ -243,6 +266,8 @@ struct ThumbnailService::State {
                    pipeline_service_ ? pipeline_service_->LutResources() : nullptr),
         render_scheduler_(executors_.Size()),
         lookup_thread_pool_(2),
+        decode_thread_pool_(ThumbnailDecodeWorkerCount()),
+        decode_slot_limit_(ThumbnailDecodeWorkerCount() + 2 * executors_.Size()),
         thumbnail_cache_(default_cache_size_) {
     if (storage_ && !project_uuid_.empty()) {
       if (thumbnail_cache_root.empty()) {
@@ -293,17 +318,51 @@ struct ThumbnailService::State {
   /// Lookup stage: committed snapshot, then the disk cache, then a render.
   static void LookUpRendition(const std::shared_ptr<State>&            st,
                               const std::shared_ptr<RenditionRequest>& request);
+  /// Decode stage on a decode worker: read the file and decode the RAW at the tier's resolution.
+  static void DecodeRenditionSource(const std::shared_ptr<State>&                st,
+                                    const std::shared_ptr<RenditionRequest>&     request,
+                                    std::shared_ptr<const PipelineGraphSnapshot> snapshot,
+                                    std::optional<ThumbnailDiskCacheKey>         disk_key);
   /// Render stage on a render worker and one batch executor of the pool.
   static void ScheduleRenditionRender(const std::shared_ptr<State>&                st,
                                       const std::shared_ptr<RenditionRequest>&     request,
                                       std::shared_ptr<const PipelineGraphSnapshot> snapshot,
-                                      std::optional<ThumbnailDiskCacheKey>         disk_key);
+                                      std::optional<ThumbnailDiskCacheKey>         disk_key,
+                                      std::shared_ptr<const PreparedRawInput>      source,
+                                      std::shared_ptr<void>                        decode_slot);
 
-  /// Stop both worker pools while every member is still alive: queued work is dropped and
-  /// running work finishes. Each queued task holds the State, so the owner calls this before it
-  /// drops its reference; otherwise the last task would destroy the pools from their own thread.
+  /// Wait for a decode slot. Returns null when the service is stopping. The slot is free again
+  /// when the last copy of the returned handle is destroyed.
+  static auto AcquireDecodeSlot(const std::shared_ptr<State>& st) -> std::shared_ptr<void> {
+    std::unique_lock lock(st->decode_slot_mutex_);
+    st->decode_slot_cv_.wait(lock, [&st] {
+      return st->stopping_ || st->decode_slots_in_use_ < st->decode_slot_limit_;
+    });
+    if (st->stopping_) {
+      return nullptr;
+    }
+    ++st->decode_slots_in_use_;
+    // Non-null so the handle tests true; the deleter only frees the slot.
+    return std::shared_ptr<void>(st.get(), [st](void*) {
+      {
+        std::lock_guard release_lock(st->decode_slot_mutex_);
+        --st->decode_slots_in_use_;
+      }
+      st->decode_slot_cv_.notify_one();
+    });
+  }
+
+  /// Stop the worker pools while every member is still alive: queued work is dropped and running
+  /// work finishes. Each queued task holds the State, so the owner calls this before it drops its
+  /// reference; otherwise the last task would destroy the pools from their own thread.
   void        StopWorkers() {
+    {
+      std::lock_guard lock(decode_slot_mutex_);
+      stopping_ = true;
+    }
+    decode_slot_cv_.notify_all();
     lookup_thread_pool_.Shutdown();
+    decode_thread_pool_.Shutdown();
     render_scheduler_.Shutdown();
   }
 
@@ -357,13 +416,62 @@ void ThumbnailService::State::LookUpRendition(const std::shared_ptr<State>&     
     }
   }
 
-  ScheduleRenditionRender(st, request, std::move(snapshot), disk_key);
+  DecodeRenditionSource(st, request, std::move(snapshot), disk_key);
+}
+
+void ThumbnailService::State::DecodeRenditionSource(
+    const std::shared_ptr<State>& st, const std::shared_ptr<RenditionRequest>& request,
+    std::shared_ptr<const PipelineGraphSnapshot> snapshot,
+    std::optional<ThumbnailDiskCacheKey>         disk_key) {
+  st->decode_thread_pool_.Submit([st, request, snapshot = std::move(snapshot),
+                                  disk_key = std::move(disk_key)]() mutable {
+    try {
+      if (request->IsCanceled()) {
+        request->Fail(ThumbnailRequestStatus::kCanceled, "Request was canceled.");
+        return;
+      }
+      auto decode_slot = AcquireDecodeSlot(st);
+      if (!decode_slot) {
+        request->Fail(ThumbnailRequestStatus::kCanceled, "Thumbnail service is stopping.");
+        return;
+      }
+      if (request->IsCanceled()) {
+        request->Fail(ThumbnailRequestStatus::kCanceled, "Request was canceled.");
+        return;
+      }
+      auto image = st->image_pool_service_->Read<std::shared_ptr<Image>>(
+          request->image_id, [](const std::shared_ptr<Image>& img) { return img; });
+      if (!image) {
+        throw std::runtime_error(
+            std::format("[ERROR] ThumbnailService: image {} of element {} is not in the pool.",
+                        request->image_id, request->element_id));
+      }
+      std::shared_ptr<const PreparedRawInput> source;
+      {
+        const auto encoded = ByteBufferLoader::LoadByteBufferFromImage(std::move(image));
+        if (request->IsCanceled()) {
+          request->Fail(ThumbnailRequestStatus::kCanceled, "Request was canceled.");
+          return;
+        }
+        source = std::make_shared<const PreparedRawInput>(RawInputLoader::LoadEncoded(
+            std::as_bytes(std::span<const uint8_t>(encoded)),
+            ResolutionToDecodeRes(request->resolution)));
+      }
+      ScheduleRenditionRender(st, request, std::move(snapshot), std::move(disk_key),
+                              std::move(source), std::move(decode_slot));
+    } catch (const std::exception& e) {
+      request->FailCanceledOr(e.what());
+    } catch (...) {
+      request->FailCanceledOr("[ERROR] ThumbnailService: decode failed with an unknown error.");
+    }
+  });
 }
 
 void ThumbnailService::State::ScheduleRenditionRender(
     const std::shared_ptr<State>& st, const std::shared_ptr<RenditionRequest>& request,
     std::shared_ptr<const PipelineGraphSnapshot> snapshot,
-    std::optional<ThumbnailDiskCacheKey>         disk_key) {
+    std::optional<ThumbnailDiskCacheKey> disk_key, std::shared_ptr<const PreparedRawInput> source,
+    std::shared_ptr<void> decode_slot) {
   // The executor a render takes from the pool, returned when the task completes.
   struct ExecutorLease {
     std::optional<std::size_t> index;
@@ -379,19 +487,12 @@ void ThumbnailService::State::ScheduleRenditionRender(
   task.options_.is_seq_callback_          = false;
   task.cancel_requested_                  = [request] { return request->IsCanceled(); };
   task.snapshot_                          = std::move(snapshot);
+  task.prepared_input_                    = std::move(source);
 
-  task.prepare_                           = [st, request, lease](PipelineTask& prepared) -> bool {
-    auto image = st->image_pool_service_->Read<std::shared_ptr<Image>>(
-        request->image_id, [](const std::shared_ptr<Image>& img) { return img; });
-    if (!image) {
-      throw std::runtime_error(
-          std::format("[ERROR] ThumbnailService: image {} of element {} is not in the pool.",
-                                                request->image_id, request->element_id));
-    }
+  task.prepare_                           = [st, lease](PipelineTask& prepared) -> bool {
     auto [index, executor]      = st->executors_.Take();
     lease->index                = index;
     prepared.pipeline_executor_ = std::move(executor);
-    prepared.input_desc_        = std::move(image);
     return true;
   };
 
@@ -416,7 +517,9 @@ void ThumbnailService::State::ScheduleRenditionRender(
 
   // Runs once on every terminal path, after the render released the executor's lock. A request
   // that delivered pixels ignores the failure below.
-  task.on_complete_ = [st, request, lease](bool success, std::string message) {
+  // The decode slot is free once the render ends and the task drops this handler.
+  task.on_complete_ = [st, request, lease, decode_slot = std::move(decode_slot)](
+                          bool success, std::string message) {
     if (lease->index.has_value()) {
       st->executors_.Return(*lease->index);
     }
