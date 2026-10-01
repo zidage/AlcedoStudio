@@ -77,9 +77,10 @@ for a second load.
 6. **One load at a time.** While a load runs, the recent-project rows, "打开项目…"
    and "新建项目…" are disabled.
 7. **Continue (继续编辑).** "继续编辑" enters the previewed project and shows the
-   Library. When the preview load is still running, the click shows the
-   existing blocking project-loading ring overlay. The overlay stays until the
-   load completes and the Library is visible.
+   Library. While a project load runs, "继续编辑" is disabled (grey); it is
+   available only when the preview is ready. (Changed 2026-10-01 by user
+   decision. Before, a click during the preview load showed the ring overlay
+   and entered when the load completed.)
 8. **Open project (打开项目…).** The file dialog result loads the project in
    enter mode. The loading ring overlay shows until the Library is visible.
    The project does not go through preview.
@@ -199,7 +200,7 @@ for a second load.
 
 | State | Condition | Cover block | Information block | 继续编辑 |
 | --- | --- | --- | --- | --- |
-| Loading | a preview load runs for `welcomeProjectPath` | skeleton tiles | name and path from the recent entry; skeleton bars for values | enabled; click shows the ring overlay and enters when the load completes |
+| Loading | a preview load runs for `welcomeProjectPath` | skeleton tiles | name and path from the recent entry; skeleton bars for values | disabled (grey) until the load completes |
 | Ready | preview loaded, `welcomeProjectPath` equals the loaded path | thumbnails; a tile whose thumbnail is not ready shows a skeleton tile | values | enabled |
 | Ready, fewer than 3 photos | `photoCount < 3` | tiles without a photo show a plain `bgBaseColor` tile without animation | values | enabled |
 | Failed | the last preview load failed | plain `bgBaseColor` tiles | name from the failed path, error text in `dangerColor` | disabled |
@@ -252,7 +253,8 @@ calls `CreateProjectInFolderNamed` (enter mode).
 
 ### 3.7 Focus and keyboard
 
-- Initial focus: "继续编辑" when a preview is ready or loading; "新建项目…"
+- Initial focus: "继续编辑" when a preview is ready (focus moves to it when a
+  load completes); "新建项目…"
   in the empty state.
 - Tab order: left column buttons, "继续编辑", list rows, language selector,
   "退出".
@@ -425,6 +427,10 @@ Main.qml Component.onCompleted
 ```
 
 ### 6.4 Continue while the preview load runs
+
+The welcome view no longer starts this chain: decision 7 disables "继续编辑"
+while a load runs. `ProjectHandler::RequestEnterLoadedProject` keeps the
+behavior below, and `EnterDuringPreviewLoadEntersOnCompletion` still covers it.
 
 ```text
 user clicks 继续编辑 while projectLoading && mode == kPreview
@@ -1034,7 +1040,8 @@ previewErrorMessage set -> adapter.state "failed"
   4. Failed state with a corrupt package.
   5. Empty state with no recent project.
   6. New-project form, back action, and create.
-  7. Continue during loading shows the ring, then the Library.
+  7. During a load "继续编辑" is grey and does not react; it becomes available
+     when the preview is ready.
   8. Keyboard: Tab order and Enter on a row and on 继续编辑.
   9. Narrow window: the card does not scroll horizontally.
 
@@ -1205,6 +1212,16 @@ the removed lines (the section 8 rule), the change is about 2690 lines and
 passes the 2000-line stop limit. The extra size is the `.ts` context move and
 the `WelcomeDialog.qml` removal, not new behavior. No changed file passes 1000
 lines.
+
+**Amendment (2026-10-01, after the record):** two follow-up commits on the
+same branch. (1) The overview row and its information block have the cover
+height (`welcomeCoverHeight`): the `Layout.fillHeight` spacer in the
+information block had made the overview take the height of the recent list.
+"继续编辑" now ends on the bottom edge of the cover block. (2) By user decision,
+`WelcomeProjectPreviewAdapter.continueEnabled` is `state === "ready" &&
+!loadRunning`: "继续编辑" is grey while any load runs (decision 7, section
+3.3). Both changes build (`alcedo_main`, exit 0); neither is checked in the
+ready state by hand yet.
 
 **Remaining defects or unavailable platforms:**
 
@@ -1427,7 +1444,7 @@ Remaining defects or unavailable platforms:
 | Select another project | Skeleton, then overview; previous project in the list; old package unchanged | `PreviewSwitchLeavesUnenteredPackageBytesUnchanged`, manual 2 |
 | Click during a running load | Rows and actions disabled; `PreviewProject` returns `false` | `SecondPreviewWhileLoadingIsRejected` |
 | Continue when ready | Enters at once; recent entry updated | `EnterLoadedProjectRegistersRecentEntry` |
-| Continue while loading | Ring until the Library is visible | `EnterDuringPreviewLoadEntersOnCompletion`, manual 7 |
+| Continue while loading | "继续编辑" disabled until the preview is ready | manual 7 |
 | Open project | Direct load with ring; no preview | manual |
 | New project | Form in the right column; create enters with ring | manual 6 |
 | Preview failure | Error text; entry removed; previous project stays loaded | `PreviewFailureRemovesRecentEntryAndKeepsLoadedProject`, manual 4 |

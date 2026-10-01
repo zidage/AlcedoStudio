@@ -6488,27 +6488,27 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 <context>
     <name>WelcomeProjectOverview</name>
     <message>
-        <location filename="../qml/WelcomeProjectOverview.qml" line="37"/>
+        <location filename="../qml/WelcomeProjectOverview.qml" line="36"/>
         <source>Continue your last project</source>
         <translation>继续上次的项目</translation>
     </message>
     <message>
-        <location filename="../qml/WelcomeProjectOverview.qml" line="130"/>
+        <location filename="../qml/WelcomeProjectOverview.qml" line="129"/>
         <source>Photos</source>
         <translation>照片</translation>
     </message>
     <message>
-        <location filename="../qml/WelcomeProjectOverview.qml" line="139"/>
+        <location filename="../qml/WelcomeProjectOverview.qml" line="138"/>
         <source>Edited</source>
         <translation>已编辑</translation>
     </message>
     <message>
-        <location filename="../qml/WelcomeProjectOverview.qml" line="148"/>
+        <location filename="../qml/WelcomeProjectOverview.qml" line="147"/>
         <source>Capture dates</source>
         <translation>拍摄日期</translation>
     </message>
     <message>
-        <location filename="../qml/WelcomeProjectOverview.qml" line="165"/>
+        <location filename="../qml/WelcomeProjectOverview.qml" line="164"/>
         <source>Continue Editing</source>
         <translation>继续编辑</translation>
     </message>
@@ -6516,12 +6516,12 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 <context>
     <name>WelcomeProjectPreviewAdapter</name>
     <message>
-        <location filename="../qml/WelcomeProjectPreviewAdapter.qml" line="98"/>
+        <location filename="../qml/WelcomeProjectPreviewAdapter.qml" line="96"/>
         <source>No capture dates</source>
         <translation>无拍摄日期</translation>
     </message>
     <message>
-        <location filename="../qml/WelcomeProjectPreviewAdapter.qml" line="104"/>
+        <location filename="../qml/WelcomeProjectPreviewAdapter.qml" line="102"/>
         <location line="+1"/>
         <source>%1 to %2</source>
         <translation>%1 至 %2</translation>

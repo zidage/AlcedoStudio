@@ -61,11 +61,9 @@ QtObject {
     // Up to 3 entries {elementId, imageId, thumbUrl, thumbLoading}.
     property var coverItems: []
 
-    // "继续编辑" is available for a ready preview and for a running preview load
-    // (the click changes the load to enter mode).
-    readonly property bool continueEnabled: root.state === "ready"
-                                            || (root.state === "loading" && root.loadRunning
-                                                && root.projectModule.projectLoadEntryMode === "preview")
+    // "继续编辑" is available only for a ready preview. It is disabled while any
+    // project load runs and in the failed state.
+    readonly property bool continueEnabled: root.state === "ready" && !root.loadRunning
     // One load at a time: recent rows, open and create wait for the running load.
     readonly property bool selectionEnabled: !root.loadRunning
 

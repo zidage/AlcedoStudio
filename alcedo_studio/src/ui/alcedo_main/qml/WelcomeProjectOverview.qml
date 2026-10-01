@@ -7,8 +7,7 @@ import QtQuick.Layouts
 // WelcomeProjectPreviewAdapter and reports the continue action through
 // continueRequested(). States (welcome overview plan, section 3.3):
 //   "loading" - skeleton tiles and skeleton value bars; name and path from the
-//               recent entry; Continue stays enabled (the click enters when the
-//               load completes).
+//               recent entry; Continue is disabled until the load completes.
 //   "ready"   - cover thumbnails and values.
 //   "failed"  - plain tiles, the real error text in dangerColor, Continue disabled.
 ColumnLayout {
