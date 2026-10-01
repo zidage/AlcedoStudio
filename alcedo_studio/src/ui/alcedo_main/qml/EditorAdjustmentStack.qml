@@ -44,25 +44,28 @@ Item {
                                           ? String(editorSession.activeAdjustmentPanel || "tone")
                                           : "tone"
 
+    // Pipeline order on page 0. Mask sits on page 1 of the nav and scrolls into
+    // the track only while mask editing owns the panel (activeAdjustmentPanel is
+    // "masks"); finishing the edit scrolls page 0 back.
     readonly property var navItems: [
+        { key: "raw", icon: "qrc:/panel_icons/aperture.svg",
+          label: qsTr("RAW Decode"), itemObjectName: "editorAdjustmentNav_raw" },
+        { key: "geometry", icon: "qrc:/panel_icons/crop.svg",
+          label: qsTr("Geometry"), itemObjectName: "editorAdjustmentNav_geometry" },
         { key: "tone", icon: "qrc:/panel_icons/adjustments.svg",
           label: qsTr("Tone"), itemObjectName: "editorAdjustmentNav_tone" },
         { key: "look", icon: "qrc:/panel_icons/palette.svg",
           label: qsTr("Look"), itemObjectName: "editorAdjustmentNav_look" },
         { key: "lut", icon: "qrc:/panel_icons/box.svg",
           label: qsTr("LUT"), itemObjectName: "editorAdjustmentNav_lut" },
-        { key: "display", icon: "qrc:/panel_icons/color-filter.svg",
+        { key: "display", icon: "qrc:/panel_icons/polaroid.svg",
           label: qsTr("Display Transform"),
           itemObjectName: "editorAdjustmentNav_display" },
         { key: "post", icon: "qrc:/panel_icons/sparkle.svg",
           label: qsTr("Post Processing"), itemObjectName: "editorAdjustmentNav_post" },
-        { key: "geometry", icon: "qrc:/panel_icons/crop.svg",
-          label: qsTr("Geometry"), itemObjectName: "editorAdjustmentNav_geometry" },
-        { key: "raw", icon: "qrc:/panel_icons/aperture.svg",
-          label: qsTr("RAW Decode"), itemObjectName: "editorAdjustmentNav_raw" },
-        { key: "masks", icon: "qrc:/panel_icons/masks.svg",
+        { key: "masks", icon: "qrc:/panel_icons/mask.svg",
           label: qsTr("Mask"), itemObjectName: "editorAdjustmentNav_masks",
-          enabled: root.maskPanelAvailable }
+          enabled: root.maskPanelAvailable, page: 1 }
     ]
 
     readonly property int preferredPanelWidth: appTheme.editorSidePanelWidth

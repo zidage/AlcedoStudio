@@ -4,6 +4,10 @@ import QtQuick.Layouts
 // Shared compact icon navigation used by editor tool groups. The model entries
 // provide key, icon, label, and itemObjectName fields; selection stays owned by the
 // caller so it can survive Loader teardown.
+//
+// Entries may set an optional integer page (default 0). The track shows one page
+// at a time: the page holding currentKey. Changing page scrolls the icon strip
+// horizontally, so a page-1 entry stays out of view until it becomes current.
 Rectangle {
     id: root
     objectName: "slidingIconNav"
@@ -30,12 +34,50 @@ Rectangle {
         }
         return 0
     }
+    readonly property int navSlotStride: navHit + navSpacing
+    // Widest page in slots; every page scrolls by this width.
+    readonly property int pageSlotCount: {
+        let counts = []
+        let widest = 0
+        for (let index = 0; index < root.items.length; ++index) {
+            const page = root.itemPage(index)
+            counts[page] = (counts[page] || 0) + 1
+            widest = Math.max(widest, counts[page])
+        }
+        return widest
+    }
+    readonly property real pageWidth: Math.max(0, pageSlotCount * navSlotStride - navSpacing)
+    readonly property real pageStride: pageWidth + navSpacing
+    readonly property int currentPage: root.itemPage(root.navIndex)
+    readonly property int lastPage: {
+        let page = 0
+        for (let index = 0; index < root.items.length; ++index)
+            page = Math.max(page, root.itemPage(index))
+        return page
+    }
     readonly property int thumbSize: Math.min(
         navHit - navTrackInset,
         Math.max(appTheme.iconOpticalSizeCompact + appTheme.spaceSm,
                  navHit - appTheme.spaceSm - navTrackInset))
 
-    implicitWidth: navRow.implicitWidth + 2 * navTrackInset
+    function itemPage(index) {
+        if (index < 0 || index >= root.items.length)
+            return 0
+        return Math.max(0, Math.floor(Number(root.items[index].page || 0)))
+    }
+
+    // Strip-space x of an entry: its page offset plus its slot within that page.
+    function slotX(index) {
+        const page = root.itemPage(index)
+        let slot = 0
+        for (let other = 0; other < index && other < root.items.length; ++other) {
+            if (root.itemPage(other) === page)
+                ++slot
+        }
+        return page * root.pageStride + slot * root.navSlotStride
+    }
+
+    implicitWidth: pageWidth + 2 * navTrackInset
     implicitHeight: navHit + appTheme.spaceXs
     radius: appTheme.controlRadiusSmall
     color: trackColor
@@ -45,103 +87,149 @@ Rectangle {
     Item {
         id: navHost
         anchors.centerIn: parent
-        width: navRow.width
+        width: root.pageWidth
         height: root.navHit
         opacity: root.controlsEnabled ? 1.0 : 0.55
+        clip: true
 
-        Rectangle {
-            id: navThumb
-            objectName: root.thumbObjectName
-            z: 0
-            width: root.thumbSize
-            height: root.thumbSize
-            radius: Math.max(4, appTheme.controlRadiusSmall - 2)
-            color: root.selectedFillColor
-            y: (parent.height - height) / 2
-            x: root.navIndex * (root.navHit + root.navSpacing)
-               + (root.navHit - width) / 2
+        Item {
+            id: navStrip
+            objectName: "slidingIconNavStrip"
+            readonly property real targetX: -root.currentPage * root.pageStride
+            readonly property bool scrolling: Math.abs(x - targetX) > 0.5
+
+            width: (root.lastPage + 1) * root.pageStride
+            height: parent.height
+            x: targetX
 
             Behavior on x {
                 enabled: !appTheme.reduceMotion
                 NumberAnimation {
                     duration: Math.max(appTheme.motionFoldOpenMs, 240)
-                    easing.type: Easing.OutBack
-                    easing.overshoot: 1.18
+                    easing.type: appTheme.motionEasing
                 }
             }
 
-            transformOrigin: Item.Center
+            Rectangle {
+                id: navThumb
+                objectName: root.thumbObjectName
+                z: 0
+                width: root.thumbSize
+                height: root.thumbSize
+                radius: Math.max(4, appTheme.controlRadiusSmall - 2)
+                color: root.selectedFillColor
+                y: (parent.height - height) / 2
 
-            Connections {
-                target: root
-                function onNavIndexChanged() {
-                    if (appTheme.reduceMotion) {
-                        navThumb.scale = 1.0
-                        return
+                // Page the thumb sits on. Within a page the thumb slides between
+                // entries; on a page change it jumps to the new entry in strip space
+                // and enters the track with it as the strip scrolls.
+                property int shownPage: 0
+                property bool slideEnabled: true
+
+                function place() {
+                    const page = root.itemPage(root.navIndex)
+                    slideEnabled = page === shownPage
+                    shownPage = page
+                    x = root.slotX(root.navIndex) + (root.navHit - width) / 2
+                    slideEnabled = true
+                }
+
+                onWidthChanged: place()
+                Component.onCompleted: {
+                    shownPage = root.itemPage(root.navIndex)
+                    place()
+                }
+
+                Behavior on x {
+                    enabled: !appTheme.reduceMotion && navThumb.slideEnabled
+                    NumberAnimation {
+                        duration: Math.max(appTheme.motionFoldOpenMs, 240)
+                        easing.type: Easing.OutBack
+                        easing.overshoot: 1.18
                     }
-                    thumbLandAnim.restart()
+                }
+
+                transformOrigin: Item.Center
+
+                Connections {
+                    target: root
+                    function onItemsChanged() { navThumb.place() }
+                    function onPageStrideChanged() { navThumb.place() }
+                    function onNavIndexChanged() {
+                        navThumb.place()
+                        if (appTheme.reduceMotion) {
+                            navThumb.scale = 1.0
+                            return
+                        }
+                        thumbLandAnim.restart()
+                    }
+                }
+
+                SequentialAnimation {
+                    id: thumbLandAnim
+                    NumberAnimation {
+                        target: navThumb
+                        property: "scale"
+                        to: 0.90
+                        duration: 70
+                        easing.type: Easing.OutQuad
+                    }
+                    NumberAnimation {
+                        target: navThumb
+                        property: "scale"
+                        to: 1.0
+                        duration: 200
+                        easing.type: Easing.OutBack
+                        easing.overshoot: 1.4
+                    }
                 }
             }
 
-            SequentialAnimation {
-                id: thumbLandAnim
-                NumberAnimation {
-                    target: navThumb
-                    property: "scale"
-                    to: 0.90
-                    duration: 70
-                    easing.type: Easing.OutQuad
+            Item {
+                id: navRow
+                z: 1
+                anchors.fill: parent
+
+                component NavButton: IconActionButton {
+                    required property int itemIndex
+                    readonly property var entry: itemIndex < root.items.length
+                                                         ? root.items[itemIndex] : ({})
+                    readonly property int page: root.itemPage(itemIndex)
+
+                    objectName: String(entry.itemObjectName || "")
+                    x: root.slotX(itemIndex)
+                    // Off-page entries stay hidden (and out of tab order) except while the
+                    // strip scrolls them in or out.
+                    visible: itemIndex < root.items.length
+                             && (page === root.currentPage || navStrip.scrolling)
+                    compact: true
+                    enabled: root.controlsEnabled && entry.enabled !== false
+                    selected: root.currentKey === String(entry.key || "")
+                    showHoverFill: false
+                    showFocusRing: false
+                    iconSrc: entry.icon || ""
+                    actionName: entry.label || ""
+                    iconColorDefault: selected ? root.selectedInkColor : root.idleIconColor
+                    iconColorMuted: root.idleIconColor
+                    iconColorSelected: root.selectedInkColor
+                    fillIdle: "transparent"
+                    fillSelected: "transparent"
+                    onClicked: root.activated(String(entry.key || ""))
                 }
-                NumberAnimation {
-                    target: navThumb
-                    property: "scale"
-                    to: 1.0
-                    duration: 200
-                    easing.type: Easing.OutBack
-                    easing.overshoot: 1.4
-                }
+
+                // Explicit instances preserve QObject parentage for accessibility
+                // discovery and UI automation; a Repeater's delegates are visual
+                // children but are not found by QObject::findChild.
+                NavButton { itemIndex: 0 }
+                NavButton { itemIndex: 1 }
+                NavButton { itemIndex: 2 }
+                NavButton { itemIndex: 3 }
+                NavButton { itemIndex: 4 }
+                NavButton { itemIndex: 5 }
+                NavButton { itemIndex: 6 }
+                NavButton { itemIndex: 7 }
+                NavButton { itemIndex: 8 }
             }
-        }
-
-        Row {
-            id: navRow
-            z: 1
-            spacing: root.navSpacing
-
-            component NavButton: IconActionButton {
-                required property int itemIndex
-                readonly property var entry: itemIndex < root.items.length
-                                                     ? root.items[itemIndex] : ({})
-
-                objectName: String(entry.itemObjectName || "")
-                visible: itemIndex < root.items.length
-                compact: true
-                enabled: root.controlsEnabled && entry.enabled !== false
-                selected: root.currentKey === String(entry.key || "")
-                showHoverFill: false
-                showFocusRing: false
-                iconSrc: entry.icon || ""
-                actionName: entry.label || ""
-                iconColorDefault: selected ? root.selectedInkColor : root.idleIconColor
-                iconColorMuted: root.idleIconColor
-                iconColorSelected: root.selectedInkColor
-                fillIdle: "transparent"
-                fillSelected: "transparent"
-                onClicked: root.activated(String(entry.key || ""))
-            }
-
-            // Explicit instances preserve QObject parentage for accessibility
-            // discovery and UI automation; a Repeater's delegates are visual
-            // children but are not found by QObject::findChild.
-            NavButton { itemIndex: 0 }
-            NavButton { itemIndex: 1 }
-            NavButton { itemIndex: 2 }
-            NavButton { itemIndex: 3 }
-            NavButton { itemIndex: 4 }
-            NavButton { itemIndex: 5 }
-            NavButton { itemIndex: 6 }
-            NavButton { itemIndex: 7 }
-            NavButton { itemIndex: 8 }
         }
     }
 }

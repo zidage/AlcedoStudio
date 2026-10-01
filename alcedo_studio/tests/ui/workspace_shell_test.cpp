@@ -2056,8 +2056,8 @@ TEST_F(WorkspaceShellTests, AdjustmentPanelsSwitchAndSurviveWorkspaceRoundTrip) 
                                       static_cast<uint>(image.image_id_)));
   EXPECT_EQ(session->active_adjustment_panel(), QStringLiteral("tone"));
 
-  // Order matches EditorAdjustmentStack navbar + StackLayout indices:
-  // tone=0, look=1, lut=2, display=3, geometry=4, raw=5.
+  // Page-0 entries of the EditorAdjustmentStack navbar (Mask lives on the hidden
+  // page and only scrolls in during mask editing).
   const QStringList panels = {QStringLiteral("tone"),     QStringLiteral("look"),
                               QStringLiteral("lut"),      QStringLiteral("display"),
                               QStringLiteral("geometry"), QStringLiteral("raw")};

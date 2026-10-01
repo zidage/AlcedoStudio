@@ -752,6 +752,73 @@ TEST(EditorAdjustmentHeaderQmlTest, MaskPageActivatesOnlyForSelectedOrCreatingMa
   EXPECT_FALSE(nav->isEnabled());
 }
 
+TEST(EditorAdjustmentHeaderQmlTest, NavKeepsPipelineOrderAndScrollsMaskPageDuringMaskEdit) {
+  FakeMaskCreation   mask_creation;
+  HeaderSession      session(&mask_creation);
+  FakeNodeController nodes;
+  StackHarness       harness(&session, &nodes, 320);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  EXPECT_EQ(session.activeAdjustmentPanel(), QStringLiteral("tone"));
+
+  auto* nav = harness.find(QStringLiteral("editorAdjustmentNav"));
+  ASSERT_NE(nav, nullptr);
+  const auto nav_x = [&](const QString& panel) {
+    auto* item = harness.find(QStringLiteral("editorAdjustmentNav_") + panel);
+    EXPECT_NE(item, nullptr) << panel.toStdString();
+    return item ? item->mapToItem(nav, QPointF(0, 0)).x() : 0.0;
+  };
+  const QStringList page_zero = {QStringLiteral("raw"),  QStringLiteral("geometry"),
+                                 QStringLiteral("tone"), QStringLiteral("look"),
+                                 QStringLiteral("lut"),  QStringLiteral("display"),
+                                 QStringLiteral("post")};
+  for (qsizetype index = 1; index < page_zero.size(); ++index) {
+    EXPECT_LT(nav_x(page_zero[index - 1]), nav_x(page_zero[index]))
+        << page_zero[index].toStdString();
+  }
+  auto* display = harness.find(QStringLiteral("editorAdjustmentNav_display"));
+  auto* masks   = harness.find(QStringLiteral("editorAdjustmentNav_masks"));
+  auto* thumb   = harness.find(QStringLiteral("editorAdjustmentNavThumb"));
+  ASSERT_NE(display, nullptr);
+  ASSERT_NE(masks, nullptr);
+  ASSERT_NE(thumb, nullptr);
+  EXPECT_EQ(display->property("iconSrc").toUrl(),
+            QUrl(QStringLiteral("qrc:/panel_icons/polaroid.svg")));
+  EXPECT_EQ(masks->property("iconSrc").toUrl(), QUrl(QStringLiteral("qrc:/panel_icons/mask.svg")));
+  // Mask is on the hidden page while no mask edit is active.
+  EXPECT_FALSE(masks->isVisible());
+  EXPECT_TRUE(harness.find(QStringLiteral("editorAdjustmentNav_tone"))->isVisible());
+
+  const auto thumb_center_x = [&] {
+    return thumb->mapToItem(nav, QPointF(thumb->width() / 2, 0)).x();
+  };
+  const auto button_center_x = [&](QQuickItem* button) {
+    return button->mapToItem(nav, QPointF(button->width() / 2, 0)).x();
+  };
+
+  const qreal first_slot_x = nav_x(QStringLiteral("raw"));
+  mask_creation.beginRadial();
+  ProcessEvents(20);
+  EXPECT_EQ(session.activeAdjustmentPanel(), QStringLiteral("masks"));
+  EXPECT_TRUE(masks->isVisible());
+  for (const auto& panel : page_zero) {
+    EXPECT_FALSE(harness.find(QStringLiteral("editorAdjustmentNav_") + panel)->isVisible())
+        << panel.toStdString();
+  }
+  // The mask entry takes the first slot of the track and holds the thumb.
+  EXPECT_NEAR(masks->mapToItem(nav, QPointF(0, 0)).x(), first_slot_x, 0.5);
+  EXPECT_NEAR(thumb_center_x(), button_center_x(masks), 0.5);
+  EXPECT_GE(masks->mapToItem(nav, QPointF(0, 0)).x(), 0.0);
+  EXPECT_LE(masks->mapToItem(nav, QPointF(masks->width(), 0)).x(), nav->width());
+
+  mask_creation.finishBody();
+  ProcessEvents(20);
+  EXPECT_EQ(session.activeAdjustmentPanel(), QStringLiteral("tone"));
+  EXPECT_FALSE(masks->isVisible());
+  auto* tone = harness.find(QStringLiteral("editorAdjustmentNav_tone"));
+  EXPECT_TRUE(tone->isVisible());
+  EXPECT_NEAR(thumb_center_x(), button_center_x(tone), 0.5);
+}
+
 TEST(EditorAdjustmentHeaderQmlTest, EnterEquivalentFinishesMaskEditAndRestoresPanel) {
   FakeMaskCreation   mask_creation;
   HeaderSession      session(&mask_creation);
