@@ -110,6 +110,7 @@ TEST_F(ApplicationModuleHostLifecycleTests,
     EXPECT_NE(host.image_analysis(), nullptr);
     EXPECT_NE(host.adjustment_transfer(), nullptr);
     EXPECT_NE(host.editor_session(), nullptr);
+    EXPECT_NE(host.editor_comparison(), nullptr);
     EXPECT_NE(host.workspace_router(), nullptr);
     EXPECT_NE(host.editor_behavior(), nullptr);
     EXPECT_FALSE(host.project()->ServiceReady());
@@ -138,6 +139,7 @@ TEST_F(ApplicationModuleHostLifecycleTests,
         {"adjustmentTransfer", "alcedo::ui::AdjustmentTransferController*"},
         {"workspaceRouter", "alcedo::ui::WorkspaceRouter*"},
         {"editorSession", "alcedo::ui::EditorSessionController*"},
+        {"editorComparison", "alcedo::ui::EditorComparisonController*"},
         {"editorBehavior", "alcedo::ui::EditorBehaviorPreferences*"},
     };
     for (const auto& [name, type_name] : property_types) {

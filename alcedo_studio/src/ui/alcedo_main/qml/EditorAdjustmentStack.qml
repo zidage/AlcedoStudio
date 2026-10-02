@@ -25,6 +25,8 @@ Item {
     property var editorSession: null
     property var interaction: null
     property var nodeController: null
+    // EditorComparisonController; its Compare page is in the nav only while a comparison is open.
+    property var comparison: null
     property bool controlsEnabled: true
 
     // ── Opaque semantic colors (no alpha derivations) ─────────────────────
@@ -43,10 +45,12 @@ Item {
     readonly property string activePanel: editorSession
                                           ? String(editorSession.activeAdjustmentPanel || "tone")
                                           : "tone"
+    readonly property bool comparisonActive: !!(root.comparison && root.comparison.active)
 
     // Pipeline order on page 0. Mask sits on page 1 of the nav and scrolls into
     // the track only while mask editing owns the panel (activeAdjustmentPanel is
-    // "masks"); finishing the edit scrolls page 0 back.
+    // "masks"); finishing the edit scrolls page 0 back. Compare sits on page 2 the
+    // same way, only while a comparison is open.
     readonly property var navItems: [
         { key: "raw", icon: "qrc:/panel_icons/aperture.svg",
           label: qsTr("RAW Decode"), itemObjectName: "editorAdjustmentNav_raw" },
@@ -65,7 +69,10 @@ Item {
           label: qsTr("Post Processing"), itemObjectName: "editorAdjustmentNav_post" },
         { key: "masks", icon: "qrc:/panel_icons/mask.svg",
           label: qsTr("Mask"), itemObjectName: "editorAdjustmentNav_masks",
-          enabled: root.maskPanelAvailable, page: 1 }
+          enabled: root.maskPanelAvailable, page: 1 },
+        { key: "compare", icon: "qrc:/panel_icons/compare.svg",
+          label: qsTr("Compare"), itemObjectName: "editorAdjustmentNav_compare",
+          enabled: root.comparisonActive, page: 2 }
     ]
 
     readonly property int preferredPanelWidth: appTheme.editorSidePanelWidth
@@ -154,6 +161,8 @@ Item {
             return
         if (panel === "masks" && !root.maskPanelAvailable)
             return
+        if (panel === "compare" && !root.comparisonActive)
+            return
         editorSession.activeAdjustmentPanel = panel
     }
 
@@ -183,6 +192,7 @@ Item {
         case "geometry": return qsTr("Geometry")
         case "raw": return qsTr("RAW Decode")
         case "masks": return qsTr("Mask")
+        case "compare": return qsTr("Compare")
         default: return qsTr("Tone")
         }
     }
@@ -258,7 +268,9 @@ Item {
                 objectName: "editorAdjustmentNav"
                 Layout.fillWidth: true
                 currentKey: root.activePanel
-                controlsEnabled: root.controlsEnabled
+                // Image adjustments are disabled while comparing; the nav still reaches the
+                // Compare page and shows the other pages read-only.
+                controlsEnabled: root.controlsEnabled || root.comparisonActive
                 trackColor: root.colBase
                 trackBorderColor: root.colCardBorder
                 idleIconColor: root.colMuted
@@ -284,6 +296,7 @@ Item {
                         case "geometry": return 5
                         case "raw": return 6
                         case "masks": return 7
+                        case "compare": return 8
                         default: return 0
                         }
                     }
@@ -356,6 +369,26 @@ Item {
                         nodeController: root.nodeController
                         maskCreation: root.maskCreation
                         controlsEnabled: root.controlsEnabled && root.maskPanelAvailable
+                    }
+
+                    // Compare controls follow the comparison, not image-edit availability.
+                    EditorComparisonPanel {
+                        id: comparePanel
+                        objectName: "editorAdjustmentPanel_compare"
+                        sourceOptions: root.comparison ? root.comparison.sourceOptions : []
+                        aSourceValue: root.comparison ? root.comparison.aSourceValue : ""
+                        bSourceValue: root.comparison ? root.comparison.bSourceValue : ""
+                        displayMode: root.comparison ? root.comparison.displayMode : "divider"
+                        orientation: root.comparison ? root.comparison.orientation : "horizontal"
+                        status: root.comparison ? root.comparison.status : "idle"
+                        errorText: root.comparison ? root.comparison.errorText : ""
+                        onASourceRequested: value => root.comparison.selectASource(value)
+                        onBSourceRequested: value => root.comparison.selectBSource(value)
+                        onDisplayModeRequested: value => root.comparison.setDisplayMode(value)
+                        onOrientationRequested: value => root.comparison.setOrientation(value)
+                        onSwapRequested: root.comparison.swap()
+                        onRetryRequested: root.comparison.retry()
+                        onCloseRequested: root.comparison.close()
                     }
                 }
             }

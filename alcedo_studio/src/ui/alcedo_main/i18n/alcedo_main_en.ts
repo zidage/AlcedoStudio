@@ -1891,6 +1891,10 @@ Original source files on disk will be kept.</source>
         <source>Post Processing</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <source>Compare</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>EditorCloseConfirmDialog</name>
@@ -1971,6 +1975,92 @@ Original source files on disk will be kept.</source>
     <message>
         <location line="+1"/>
         <source>Post Processing</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>EditorComparisonPanel</name>
+    <message>
+        <source>A</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>B</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Compare</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Complete images</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Divider</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Left/right</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Top/bottom</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Swap A and B</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Close</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Comparison is unavailable for HDR output.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Rendering comparison images</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Retry</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Both images use the current demosaic, highlight reconstruction, and lens settings. Each image keeps its own white balance and adjustments. Unadjusted is the imported image with these settings.</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>EditorComparisonView</name>
+    <message>
+        <source>A</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>B</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Comparison divider</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Move left or right to reveal A or B.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Move up or down to reveal A or B.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>The comparison images could not be loaded.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Rendering comparison images</source>
         <translation type="unfinished"></translation>
     </message>
 </context>
@@ -3383,6 +3473,14 @@ Original source files on disk will be kept.</source>
         <source>No versions yet</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <source>Compare</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Compare Versions</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>EditorWhiteBalanceSection</name>
@@ -3472,6 +3570,14 @@ Original source files on disk will be kept.</source>
     <message>
         <location line="+1"/>
         <source>FIT</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Compare</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Compare before and after</source>
         <translation type="unfinished"></translation>
     </message>
 </context>
@@ -6089,6 +6195,21 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     <message>
         <location line="-12"/>
         <source>Alcedo Studio will close and install the update.</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>alcedo::ui::EditorComparisonController</name>
+    <message>
+        <source>Unadjusted</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Current working state</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>%1 (working state)</source>
         <translation type="unfinished"></translation>
     </message>
 </context>

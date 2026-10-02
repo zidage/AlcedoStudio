@@ -289,6 +289,57 @@ class HeaderSession final : public QObject, public IEditorAdjustmentSubmitter {
   bool        mask_panel_transition_  = false;
 };
 
+/// Comparison projection with the properties the Compare page binds; records its requests.
+class FakeComparison final : public QObject {
+  Q_OBJECT
+  Q_PROPERTY(bool active READ active NOTIFY changed)
+  Q_PROPERTY(QVariantList sourceOptions READ sourceOptions NOTIFY changed)
+  Q_PROPERTY(QString aSourceValue READ aSourceValue NOTIFY changed)
+  Q_PROPERTY(QString bSourceValue READ bSourceValue NOTIFY changed)
+  Q_PROPERTY(QString comparisonKind READ comparisonKind NOTIFY changed)
+  Q_PROPERTY(QString displayMode READ displayMode NOTIFY changed)
+  Q_PROPERTY(QString orientation READ orientation NOTIFY changed)
+  Q_PROPERTY(QString status READ status NOTIFY changed)
+  Q_PROPERTY(QString errorText READ errorText NOTIFY changed)
+
+ public:
+  auto active() const -> bool { return active_; }
+  auto sourceOptions() const -> QVariantList {
+    return {QVariantMap{{QStringLiteral("value"), QStringLiteral("root")},
+                        {QStringLiteral("label"), QStringLiteral("Unadjusted")}},
+            QVariantMap{{QStringLiteral("value"), QStringLiteral("current")},
+                        {QStringLiteral("label"), QStringLiteral("Current working state")}}};
+  }
+  auto aSourceValue() const -> QString { return QStringLiteral("root"); }
+  auto bSourceValue() const -> QString { return QStringLiteral("current"); }
+  auto comparisonKind() const -> QString { return QStringLiteral("beforeAfter"); }
+  auto displayMode() const -> QString { return QStringLiteral("divider"); }
+  auto orientation() const -> QString { return QStringLiteral("horizontal"); }
+  auto status() const -> QString { return QStringLiteral("ready"); }
+  auto errorText() const -> QString { return {}; }
+  void SetActive(bool active) {
+    active_ = active;
+    emit changed();
+  }
+
+  Q_INVOKABLE void close() { requests.push_back(QStringLiteral("close")); }
+  Q_INVOKABLE void swap() { requests.push_back(QStringLiteral("swap")); }
+  Q_INVOKABLE void retry() { requests.push_back(QStringLiteral("retry")); }
+  Q_INVOKABLE void selectASource(const QString& value) { requests.push_back(QStringLiteral("a:") + value); }
+  Q_INVOKABLE void selectBSource(const QString& value) { requests.push_back(QStringLiteral("b:") + value); }
+  Q_INVOKABLE void selectKind(const QString& value) { requests.push_back(QStringLiteral("kind:") + value); }
+  Q_INVOKABLE void setDisplayMode(const QString& value) { requests.push_back(QStringLiteral("mode:") + value); }
+  Q_INVOKABLE void setOrientation(const QString& value) { requests.push_back(QStringLiteral("orientation:") + value); }
+
+  QStringList requests;
+
+ signals:
+  void changed();
+
+ private:
+  bool active_ = false;
+};
+
 class FakeNodeController final : public QObject {
   Q_OBJECT
   Q_PROPERTY(QString selectedNodeName READ selectedNodeName NOTIFY SelectionChanged)
@@ -817,6 +868,58 @@ TEST(EditorAdjustmentHeaderQmlTest, NavKeepsPipelineOrderAndScrollsMaskPageDurin
   auto* tone = harness.find(QStringLiteral("editorAdjustmentNav_tone"));
   EXPECT_TRUE(tone->isVisible());
   EXPECT_NEAR(thumb_center_x(), button_center_x(tone), 0.5);
+}
+
+TEST(EditorAdjustmentHeaderQmlTest, CompareNavPageAppearsOnlyWhileComparingAndRoutesPanelRequests) {
+  HeaderSession      session;
+  FakeNodeController nodes;
+  FakeComparison     comparison;
+  session.setActiveAdjustmentPanel(QStringLiteral("look"));
+  StackHarness harness(&session, &nodes, 320);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+  harness.root()->setProperty("comparison", QVariant::fromValue(static_cast<QObject*>(&comparison)));
+  ProcessEvents(20);
+
+  auto* compare = harness.find(QStringLiteral("editorAdjustmentNav_compare"));
+  auto* panel   = harness.find(QStringLiteral("editorAdjustmentPanel_compare"));
+  auto* nav     = harness.find(QStringLiteral("editorAdjustmentNav"));
+  ASSERT_NE(compare, nullptr);
+  ASSERT_NE(panel, nullptr);
+  ASSERT_NE(nav, nullptr);
+  EXPECT_EQ(compare->property("iconSrc").toUrl(),
+            QUrl(QStringLiteral("qrc:/panel_icons/compare.svg")));
+  EXPECT_FALSE(compare->isVisible()) << "hidden page outside a comparison";
+  EXPECT_FALSE(compare->isEnabled());
+  QMetaObject::invokeMethod(harness.root(), "selectPanel", Q_ARG(QVariant, QStringLiteral("compare")));
+  EXPECT_EQ(session.activeAdjustmentPanel(), QStringLiteral("look"));
+
+  // The session owner shows the Compare page when the comparison opens; image adjustments are
+  // disabled, but the nav and the Compare controls stay usable.
+  harness.root()->setProperty("controlsEnabled", false);
+  comparison.SetActive(true);
+  session.SetPanel(QStringLiteral("compare"));
+  ProcessEvents(20);
+  EXPECT_TRUE(compare->isVisible());
+  EXPECT_TRUE(compare->isEnabled());
+  EXPECT_TRUE(panel->isVisible());
+  EXPECT_FALSE(harness.find(QStringLiteral("editorAdjustmentNav_tone"))->isVisible());
+  EXPECT_TRUE(nav->property("controlsEnabled").toBool());
+  auto* close = harness.find(QStringLiteral("editorComparisonCloseButton"));
+  auto* swap  = harness.find(QStringLiteral("editorComparisonSwapButton"));
+  ASSERT_NE(close, nullptr);
+  ASSERT_NE(swap, nullptr);
+  EXPECT_TRUE(close->isEnabled());
+  QMetaObject::invokeMethod(swap, "clicked");
+  QMetaObject::invokeMethod(close, "clicked");
+  EXPECT_EQ(comparison.requests, (QStringList{QStringLiteral("swap"), QStringLiteral("close")}));
+
+  // Close: the owner restores the earlier panel and the page leaves the nav.
+  comparison.SetActive(false);
+  session.SetPanel(QStringLiteral("look"));
+  ProcessEvents(20);
+  EXPECT_FALSE(compare->isVisible());
+  EXPECT_FALSE(panel->isVisible());
+  EXPECT_TRUE(harness.find(QStringLiteral("editorAdjustmentNav_look"))->isVisible());
 }
 
 TEST(EditorAdjustmentHeaderQmlTest, EnterEquivalentFinishesMaskEditAndRestoresPanel) {

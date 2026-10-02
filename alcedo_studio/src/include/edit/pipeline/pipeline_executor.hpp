@@ -13,6 +13,7 @@
 #include "edit/runtime/executor_role.hpp"
 #include "edit/runtime/lut_resource_resolver.hpp"
 #include "edit/runtime/pipeline_apply_request.hpp"
+#include "edit/runtime/rendered_pipeline_image.hpp"
 #include "image/image_buffer.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 
@@ -86,6 +87,10 @@ class PipelineExecutor {
   RoleRenderers<OpenClRenderer> opencl_renderers_;
 #endif
 
+  /// Shared body of Apply and ApplyImage: the renderer of the resolved backend and request role.
+  auto Render(const PipelineGraphSnapshot& snapshot, const std::shared_ptr<ImageBuffer>& input,
+              const PipelineApplyRequest& request) -> RenderedPipelineImage;
+
  public:
   /**
    * @brief Executor that serves only @p role. Resolves the Auto accelerator preference.
@@ -132,6 +137,23 @@ class PipelineExecutor {
    */
   auto Apply(const PipelineGraphSnapshot& snapshot, std::shared_ptr<ImageBuffer> input,
              const PipelineApplyRequest& request) -> std::shared_ptr<ImageBuffer>;
+
+  /**
+   * @brief Render @p snapshot to host pixels and return them with the exact geometry and display
+   *        encoding of the executed plan.
+   *
+   * Same renderer, binding rule, and failure behavior as @ref Apply; @ref Apply returns the
+   * `pixels` member of the same render. The request's own sink is used: a null sink presents
+   * nothing, whatever sink is attached to the executor.
+   *
+   * @pre Caller holds GetRenderLock() or has exclusive access; `request.require_host_output`.
+   * @throws std::invalid_argument when this executor does not serve `request.role` or host
+   *         output is not requested.
+   * @throws std::runtime_error for missing backend, decode, GPU, presentation, or download
+   *         failure. Nothing is returned for a failed render.
+   */
+  auto ApplyImage(const PipelineGraphSnapshot& snapshot, std::shared_ptr<ImageBuffer> input,
+                  const PipelineApplyRequest& request) -> RenderedPipelineImage;
 
   /// Attach the editor frame sink that later requests read. Caller holds render_lock_ or has
   /// exclusive access.

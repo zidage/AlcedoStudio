@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "app/adjustment_transfer_types.hpp"
+#include "app/editor_comparison_types.hpp"
 #include "app/editor_render_intent.hpp"
 #include "app/editor_session_render_controller.hpp"
 #include "app/editor_session_request_ids.hpp"
@@ -71,6 +72,14 @@ enum class EditorSessionCommandKind : std::uint8_t {
   /// Mask Groups: remove one Color Grade and bridge its backbone neighbors.
   RemoveColorGradeAndBridge,
   PersistCurrent,
+  /// Open the editor comparison: capture the working values and render the default pair.
+  OpenComparison,
+  /// Select the kind and both sources of the open comparison and render the new pair.
+  SelectComparisonSources,
+  /// Render the selected pair of the open comparison again.
+  RetryComparison,
+  /// Close the open comparison and release its documents and images.
+  CloseComparison,
 };
 
 /// Worker messages that are delivered back to the session owner.
@@ -126,6 +135,12 @@ struct EditorSessionCommand {
   /// never insert above a predecessor that changed after submission.
   NodeId                                  expected_predecessor_id;
   NodeGraphTopologyChange                 topology_change{};
+  /// OpenComparison / SelectComparisonSources: comparison kind and sources.
+  EditorComparisonKind                    comparison_kind = EditorComparisonKind::BeforeAfter;
+  EditorComparisonSource                  comparison_a    = EditorComparisonSource::Root();
+  EditorComparisonSource                  comparison_b    = EditorComparisonSource::Current();
+  /// CloseComparison: refresh the current document with @ref view_region after the close.
+  bool                                    comparison_refresh = false;
 };
 
 /// Typed worker completion. Payload-specific values are kept as

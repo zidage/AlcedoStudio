@@ -25,20 +25,18 @@ namespace alcedo {
 namespace {
 
 #if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
-/** @brief Render on the renderer of the request role; create it on first use. */
+/** @brief Renderer of the request role; created on first use. */
 template <class RendererType, class Renderers>
-auto ApplyOnRoleRenderer(Renderers& renderers, const PipelineGraphSnapshot& snapshot,
-                         const std::shared_ptr<ImageBuffer>&               input,
-                         const PipelineApplyRequest&                       request,
-                         const std::shared_ptr<const LutResourceResolver>& lut_resources)
-    -> std::shared_ptr<ImageBuffer> {
+auto RoleRenderer(Renderers& renderers, const PipelineApplyRequest& request,
+                  const std::shared_ptr<const LutResourceResolver>& lut_resources)
+    -> RendererType& {
   auto& renderer =
       request.role == ExecutorRole::Interactive ? renderers.interactive : renderers.batch;
   if (!renderer) {
     renderer = std::make_shared<RendererType>(request.role, PreparedSourceCache::UnpackFn{},
                                               lut_resources);
   }
-  return renderer->Render(snapshot, input, request);
+  return *renderer;
 }
 
 template <class Renderers>
@@ -64,25 +62,40 @@ PipelineExecutor::PipelineExecutor(ExecutorRole                               ro
 auto PipelineExecutor::Apply(const PipelineGraphSnapshot& snapshot,
                              std::shared_ptr<ImageBuffer> input,
                              const PipelineApplyRequest&  request) -> std::shared_ptr<ImageBuffer> {
+  return Render(snapshot, input, request).pixels;
+}
+
+auto PipelineExecutor::ApplyImage(const PipelineGraphSnapshot& snapshot,
+                                  std::shared_ptr<ImageBuffer> input,
+                                  const PipelineApplyRequest&  request) -> RenderedPipelineImage {
+  if (!request.require_host_output) {
+    throw std::invalid_argument("PipelineExecutor: an image render requires host output");
+  }
+  return Render(snapshot, input, request);
+}
+
+auto PipelineExecutor::Render(const PipelineGraphSnapshot&        snapshot,
+                              const std::shared_ptr<ImageBuffer>& input,
+                              const PipelineApplyRequest& request) -> RenderedPipelineImage {
   if (!Serves(request.role)) {
     throw std::invalid_argument("PipelineExecutor: this executor does not serve the request role");
   }
 #ifdef HAVE_CUDA
   if (resolved_accelerator_backend_ == GpuBackendKind::CUDA) {
-    return ApplyOnRoleRenderer<CudaRenderer>(cuda_renderers_, snapshot, input, request,
-                                             lut_resources_);
+    return RoleRenderer<CudaRenderer>(cuda_renderers_, request, lut_resources_)
+        .RenderImage(snapshot, input, request);
   }
 #endif
 #ifdef HAVE_METAL
   if (resolved_accelerator_backend_ == GpuBackendKind::Metal) {
-    return ApplyOnRoleRenderer<MetalRenderer>(metal_renderers_, snapshot, input, request,
-                                              lut_resources_);
+    return RoleRenderer<MetalRenderer>(metal_renderers_, request, lut_resources_)
+        .RenderImage(snapshot, input, request);
   }
 #endif
 #ifdef HAVE_OPENCL
   if (resolved_accelerator_backend_ == GpuBackendKind::OpenCL) {
-    return ApplyOnRoleRenderer<OpenClRenderer>(opencl_renderers_, snapshot, input, request,
-                                               lut_resources_);
+    return RoleRenderer<OpenClRenderer>(opencl_renderers_, request, lut_resources_)
+        .RenderImage(snapshot, input, request);
   }
 #endif
   (void)snapshot;

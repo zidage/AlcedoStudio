@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -44,5 +45,39 @@ struct PipelineApplyRequest {
   /// renderer uses it in place of the encoded bytes; null means the renderer decodes them.
   std::shared_ptr<const PreparedRawInput>     prepared_input;
 };
+
+/// Long-edge limit, in output pixels, of the editor's full-image Quality Base render.
+inline constexpr std::uint32_t kQualityBaseMaxLongEdge = 4096;
+
+/**
+ * @brief Full-image Quality Base request for the editor's Interactive executor.
+ *
+ * FULL decode, the whole edit space resampled with Preview quality to at most
+ * @ref kQualityBaseMaxLongEdge pixels on the long edge, and frame role QualityBase, so the render
+ * reuses and keeps only the sensor result (ResultPersistenceScope::SensorDevelopOnly). The
+ * editor viewport's Quality Base frame and the editor's one-shot host images both start from this
+ * request; neither defines its own quality values.
+ *
+ * Pure value. The result has no sink, no host output, and no cancel callback; the caller sets
+ * those for its use.
+ *
+ * @param metadata Frame metadata of the caller; frame role and source ROI are replaced.
+ * @param document_geometry How the render reads the document crop and rotation.
+ */
+[[nodiscard]] inline auto      MakeQualityBaseApplyRequest(FramePreviewMetadata metadata,
+                                                           DocumentGeometryUse  document_geometry)
+    -> PipelineApplyRequest {
+  metadata.frame_role      = FrameRole::QualityBase;
+  metadata.source_roi_norm = {};
+  PipelineApplyRequest request;
+  request.geometry.resolution.max_edge = kQualityBaseMaxLongEdge;
+  request.geometry.resolution.quality  = RenderQuality::Preview;
+  request.geometry.document_geometry   = document_geometry;
+  request.decode_res                   = DecodeRes::FULL;
+  request.role                         = ExecutorRole::Interactive;
+  request.submission                   = FrameCompletionSubmission{
+                        .metadata = metadata, .mode = FramePresentationMode::ViewportTransformed};
+  return request;
+}
 
 }  // namespace alcedo

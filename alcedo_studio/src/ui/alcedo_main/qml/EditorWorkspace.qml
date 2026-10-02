@@ -49,6 +49,8 @@ Item {
                                                      && editorSession.actions.canEdit)
     readonly property var maskCreation: editorSession ? editorSession.maskCreation : null
     readonly property bool maskOwnsLeftButton: !!(maskCreation && maskCreation.ownsLeftButton)
+    property var comparison: appModules.editorComparison
+    readonly property bool comparisonActive: !!(comparison && comparison.active)
 
     function bindMaskOverlay() {
         if (maskCreation && editorOverlayItem)
@@ -619,6 +621,66 @@ Item {
                         }
                     }
 
+                    // Viewport action row: opens unadjusted vs. current. Hidden while comparing; the
+                    // Compare panel then owns the comparison controls.
+                    Item {
+                        id: viewportCompareAction
+                        objectName: "editorViewportCompareAction"
+                        anchors.left: parent.left
+                        anchors.top: parent.top
+                        anchors.margins: appTheme.spaceSm
+                        width: viewportCompareButton.implicitWidth
+                        height: viewportCompareButton.implicitHeight
+                        visible: root.hasImage && !root.comparisonActive
+                        z: 6
+
+                        DialogActionButton {
+                            id: viewportCompareButton
+                            objectName: "editorViewportCompareButton"
+                            anchors.fill: parent
+                            buttonHeight: appTheme.iconButtonHitSizeCompact
+                            buttonWidth: contentItem.implicitWidth + 2 * appTheme.spaceMd
+                            font.pixelSize: appTheme.fontSizeBody
+                            text: qsTr("Compare")
+                            enabled: !!(root.comparison && root.comparison.canOpen)
+                            Accessible.name: qsTr("Compare before and after")
+                            Accessible.description: compareReason.reason
+                            onClicked: root.comparison.openBeforeAfter()
+                        }
+
+                        // A disabled button gets no hover; the wrapper shows why entry is off.
+                        HoverHandler {
+                            id: compareReason
+                            readonly property string reason: root.comparison
+                                                             ? String(root.comparison.openUnavailableReason || "")
+                                                             : ""
+                        }
+                        ToolTip.visible: compareReason.hovered && !viewportCompareButton.enabled
+                                         && compareReason.reason.length > 0
+                        ToolTip.text: compareReason.reason
+                    }
+
+                    // Opaque comparison surface. The viewport item stays alive, bound, and
+                    // visible underneath so normal frames keep completing.
+                    EditorComparisonView {
+                        id: comparisonView
+                        objectName: "editorComparisonOverlay"
+                        anchors.fill: parent
+                        visible: root.comparisonActive
+                        z: 20
+                        pair: root.comparison && root.comparison.pair ? root.comparison.pair : null
+                        status: root.comparison ? root.comparison.status : "idle"
+                        errorText: root.comparison ? root.comparison.errorText : ""
+                        displayMode: root.comparison ? root.comparison.displayMode : "divider"
+                        orientation: root.comparison ? root.comparison.orientation : "horizontal"
+                        dividerPosition: root.comparison ? root.comparison.dividerPosition : 0.5
+                        swapped: root.comparison ? root.comparison.swapped : false
+                        aLabel: root.comparison ? root.comparison.aLabel : ""
+                        bLabel: root.comparison ? root.comparison.bLabel : ""
+                        onDividerPositionRequested: position => root.comparison.setDividerPosition(position)
+                        onImageLoadFailed: message => root.comparison.reportImageLoadFailed(message)
+                    }
+
                     // Invisible focus/input owner for keyboard shortcuts (Phase 6G).
                     Item {
                         id: viewportInteractionLayer
@@ -820,6 +882,7 @@ Item {
                 editorSession: root.editorSession
                 interaction: editorInteraction
                 nodeController: historyVersionsRail.nodeController
+                comparison: root.comparison
                 controlsEnabled: root.editorControlsEnabled
                 expanded: !root.host || root.host.editorAdjustmentStackExpanded !== false
             }
@@ -865,6 +928,15 @@ Item {
             if (typeof adjustmentStack.confirmMaskEditAndReturn === "function")
                 adjustmentStack.confirmMaskEditAndReturn()
         }
+    }
+
+    // Escape closes the comparison from anywhere in the editor. A focused text field keeps its
+    // own Escape (RegisteredShortcut.suppressWhileEditing).
+    RegisteredShortcut {
+        objectName: "comparisonCloseShortcut"
+        commandId: "comparison.close"
+        activeScope: root.comparisonActive ? "editor.comparison" : ""
+        onActivated: root.comparison.close()
     }
 
     // Geometry: Enter / numpad Enter leaves the panel for Tone. Lives on the

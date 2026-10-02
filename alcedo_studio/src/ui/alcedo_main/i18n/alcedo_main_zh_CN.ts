@@ -2028,6 +2028,10 @@ Original source files on disk will be kept.</source>
         <source>Post Processing</source>
         <translation>后期处理</translation>
     </message>
+    <message>
+        <source>Compare</source>
+        <translation>对比</translation>
+    </message>
 </context>
 <context>
     <name>EditorCloseConfirmDialog</name>
@@ -2109,6 +2113,92 @@ Original source files on disk will be kept.</source>
         <location line="+1"/>
         <source>Post Processing</source>
         <translation>后期处理</translation>
+    </message>
+</context>
+<context>
+    <name>EditorComparisonPanel</name>
+    <message>
+        <source>A</source>
+        <translation>A</translation>
+    </message>
+    <message>
+        <source>B</source>
+        <translation>B</translation>
+    </message>
+    <message>
+        <source>Compare</source>
+        <translation>对比</translation>
+    </message>
+    <message>
+        <source>Complete images</source>
+        <translation>完整图像</translation>
+    </message>
+    <message>
+        <source>Divider</source>
+        <translation>分割线</translation>
+    </message>
+    <message>
+        <source>Left/right</source>
+        <translation>左右</translation>
+    </message>
+    <message>
+        <source>Top/bottom</source>
+        <translation>上下</translation>
+    </message>
+    <message>
+        <source>Swap A and B</source>
+        <translation>交换 A 和 B</translation>
+    </message>
+    <message>
+        <source>Close</source>
+        <translation>关闭</translation>
+    </message>
+    <message>
+        <source>Comparison is unavailable for HDR output.</source>
+        <translation>HDR 输出无法进行对比。</translation>
+    </message>
+    <message>
+        <source>Rendering comparison images</source>
+        <translation>正在渲染对比图像</translation>
+    </message>
+    <message>
+        <source>Retry</source>
+        <translation>重试</translation>
+    </message>
+    <message>
+        <source>Both images use the current demosaic, highlight reconstruction, and lens settings. Each image keeps its own white balance and adjustments. Unadjusted is the imported image with these settings.</source>
+        <translation>两张图像都使用当前的去马赛克、高光重建和镜头设置。每张图像保留各自的白平衡和调整。“未调整”是使用这些设置的导入图像。</translation>
+    </message>
+</context>
+<context>
+    <name>EditorComparisonView</name>
+    <message>
+        <source>A</source>
+        <translation>A</translation>
+    </message>
+    <message>
+        <source>B</source>
+        <translation>B</translation>
+    </message>
+    <message>
+        <source>Comparison divider</source>
+        <translation>对比分割线</translation>
+    </message>
+    <message>
+        <source>Move left or right to reveal A or B.</source>
+        <translation>向左或向右移动以显示 A 或 B。</translation>
+    </message>
+    <message>
+        <source>Move up or down to reveal A or B.</source>
+        <translation>向上或向下移动以显示 A 或 B。</translation>
+    </message>
+    <message>
+        <source>The comparison images could not be loaded.</source>
+        <translation>无法加载对比图像。</translation>
+    </message>
+    <message>
+        <source>Rendering comparison images</source>
+        <translation>正在渲染对比图像</translation>
     </message>
 </context>
 <context>
@@ -3805,6 +3895,14 @@ Original source files on disk will be kept.</source>
         <source>Paste failed</source>
         <translation>粘贴失败</translation>
     </message>
+    <message>
+        <source>Compare</source>
+        <translation>对比</translation>
+    </message>
+    <message>
+        <source>Compare Versions</source>
+        <translation>对比版本</translation>
+    </message>
 </context>
 <context>
     <name>EditorWhiteBalanceSection</name>
@@ -3895,6 +3993,14 @@ Original source files on disk will be kept.</source>
         <location line="+1"/>
         <source>FIT</source>
         <translation>适合</translation>
+    </message>
+    <message>
+        <source>Compare</source>
+        <translation>对比</translation>
+    </message>
+    <message>
+        <source>Compare before and after</source>
+        <translation>对比前后</translation>
     </message>
 </context>
 <context>
@@ -6801,6 +6907,21 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <location line="-12"/>
         <source>Alcedo Studio will close and install the update.</source>
         <translation>Alcedo Studio 将关闭并安装更新。</translation>
+    </message>
+</context>
+<context>
+    <name>alcedo::ui::EditorComparisonController</name>
+    <message>
+        <source>Unadjusted</source>
+        <translation>未调整</translation>
+    </message>
+    <message>
+        <source>Current working state</source>
+        <translation>当前工作状态</translation>
+    </message>
+    <message>
+        <source>%1 (working state)</source>
+        <translation>%1（工作状态）</translation>
     </message>
 </context>
 <context>

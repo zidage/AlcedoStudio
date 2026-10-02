@@ -118,6 +118,8 @@ Record the source icon name, source URL, and license in every newly added SVG.
 Normalization may change the source stroke color, viewBox formatting, and an
 explicitly approved stroke width, but it must not redesign the approved path
 geometry. The pipeline icon added on 2026-09-17 is user-provided and approved.
+The Compare page icon `panel_icons/compare.svg` (Tabler `columns-2`, stroke
+width normalized to 1.5) was approved by the user on 2026-10-01.
 
 ### Text truncation policy
 
@@ -898,6 +900,13 @@ Visible strings are product language only. Ban developer placeholders such as
 | LUT browser, empty library | “No LUTs in the library” / “Import .cube files, or copy them into the LUT folder and refresh.” |
 | LUT browser, no results | “No LUTs match” / “Change the search or the filters to see more LUTs.” |
 | LUT browser, loading | “Loading LUT library” |
+| Comparison, rendering | “Rendering comparison images” |
+| Comparison, image load failure | “The comparison images could not be loaded.” |
+| Comparison, HDR output | “Comparison is unavailable for HDR output.” |
+| Comparison, entry action (viewport and Versions header) | “Compare” |
+| Comparison, Root source | “Before (imported)” |
+| Comparison, current source | “Current working state” |
+| Comparison, active Version source | “<Version name> (working state)” |
 
 ---
 

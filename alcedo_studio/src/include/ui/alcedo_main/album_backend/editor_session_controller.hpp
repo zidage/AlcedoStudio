@@ -104,8 +104,9 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
                  set_filmstrip_expanded_height NOTIFY FilmstripUiChanged)
   Q_PROPERTY(double filmstripScrollPosition READ filmstrip_scroll_position WRITE
                  set_filmstrip_scroll_position NOTIFY FilmstripUiChanged)
-  // Active right-side adjustment panel. One of: tone, look, display, geometry, raw.
-  // Survives workspace Loader teardown and application restart (QSettings).
+  // Active right-side adjustment panel. One of: tone, look, lut, display, post, geometry, raw,
+  // masks (only while Mask editing), or compare (only while a comparison is open). Survives
+  // workspace Loader teardown; application restart restores it except masks and compare.
   Q_PROPERTY(QString activeAdjustmentPanel READ active_adjustment_panel WRITE
                  set_active_adjustment_panel NOTIFY DesktopUiChanged)
   /// Image-owned EXIF readout for the adjustment header. Updated when the open
@@ -333,6 +334,14 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   /// Materialize the open image and refresh its album thumbnail without
   /// closing the session. Used when routing from Editor to Library.
   Q_INVOKABLE void   PersistCurrentImage();
+  /**
+   * @brief Close the editor comparison through the session backend.
+   *
+   * With @p refresh_current_view, the backend renders the current document once with the
+   * viewport's current region afterwards. The backend accepts the request when no comparison is
+   * open, so leaving the editor can always send it.
+   */
+  void               CloseComparison(bool refresh_current_view);
   // Forget the last-edited image so re-entering the editor does not resurrect a
   // deleted image or one from a prior project (Phase 4A-Fix).
   Q_INVOKABLE void   clearLastEditedImage();
@@ -457,6 +466,9 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void OnBackendSessionResult(const alcedo::EditorSessionResult& result);
   void SetActiveAdjustmentPanel(const QString& panel, bool request_view);
   void SyncMaskAdjustmentPanel();
+  /// Show the Compare page while the backend comparison is open, and restore the panel that was
+  /// active before it when the comparison closes.
+  void SyncComparisonAdjustmentPanel();
   [[nodiscard]] static auto       NormalizeAdjustmentPanel(const QString& panel) -> QString;
   [[nodiscard]] static auto       NormalizeToolPanelPage(const QString& page) -> QString;
 
@@ -503,6 +515,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   QString                         active_adjustment_panel_       = QStringLiteral("tone");
   QString                         panel_before_mask_edit_        = QStringLiteral("tone");
   bool                            mask_edit_was_active_          = false;
+  QString                         panel_before_comparison_       = QStringLiteral("tone");
+  bool                            comparison_was_active_         = false;
   bool                            mask_panel_transition_         = false;
   QString                         editor_tool_panel_page_;
   std::function<alcedo::EditorImageExifDisplay(uint)> image_exif_reader_;

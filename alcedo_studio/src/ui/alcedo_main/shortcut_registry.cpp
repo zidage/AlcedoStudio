@@ -194,7 +194,8 @@ auto IsWellFormed(const ShortcutInput& input) -> bool {
 auto IsExclusiveScope(const ShortcutScope& scope) -> bool {
   return scope == QLatin1String(shortcut_scope::kShortcutCapture) ||
          scope == QLatin1String(shortcut_scope::kTextInput) ||
-         scope == QLatin1String(shortcut_scope::kEditorMaskEdit);
+         scope == QLatin1String(shortcut_scope::kEditorMaskEdit) ||
+         scope == QLatin1String(shortcut_scope::kEditorComparison);
 }
 
 auto IsEditorLocalScope(const ShortcutScope& scope) -> bool {
@@ -216,10 +217,16 @@ auto ScopesCanCoactivate(const ShortcutScope& first, const ShortcutScope& second
   if (first == application || second == application) {
     return true;
   }
-  const QString editor    = QLatin1String(shortcut_scope::kWorkspaceEditor);
-  const QString mask_edit = QLatin1String(shortcut_scope::kEditorMaskEdit);
-  const auto    pair_with = [&editor, &mask_edit](const ShortcutScope& scope) {
-    return IsEditorLocalScope(scope) || scope == mask_edit;
+  const QString editor     = QLatin1String(shortcut_scope::kWorkspaceEditor);
+  const QString mask_edit  = QLatin1String(shortcut_scope::kEditorMaskEdit);
+  const QString comparison = QLatin1String(shortcut_scope::kEditorComparison);
+  // Mask edit and the comparison are editor modes; each rides on top of the editor workspace
+  // and a focused local surface. The two modes never run together.
+  const auto    is_mode    = [&mask_edit, &comparison](const ShortcutScope& scope) {
+    return scope == mask_edit || scope == comparison;
+  };
+  const auto pair_with = [&is_mode](const ShortcutScope& scope) {
+    return IsEditorLocalScope(scope) || is_mode(scope);
   };
   if (first == editor && pair_with(second)) {
     return true;
@@ -227,11 +234,10 @@ auto ScopesCanCoactivate(const ShortcutScope& first, const ShortcutScope& second
   if (second == editor && pair_with(first)) {
     return true;
   }
-  // Mask edit rides on top of a focused local surface (the Nodes panel).
-  if (first == mask_edit && IsEditorLocalScope(second)) {
+  if (is_mode(first) && IsEditorLocalScope(second)) {
     return true;
   }
-  return second == mask_edit && IsEditorLocalScope(first);
+  return is_mode(second) && IsEditorLocalScope(first);
 }
 
 auto MayShareScopes(const ShortcutScope& first, const ShortcutScope& second) -> bool {

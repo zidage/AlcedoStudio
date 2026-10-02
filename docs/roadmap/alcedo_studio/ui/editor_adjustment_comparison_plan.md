@@ -1,9 +1,9 @@
 # Editor Adjustment and Version Comparison Plan
 
 Date: 2026-10-01
-Status: Phase 1 complete (2026-10-01, branch `feature/editor-comparison-inputs`); Phases 2-4 planned.
+Status: Phase 1 complete (2026-10-01, branch `feature/editor-comparison-inputs`); Phase 2 complete on CUDA (2026-10-01, branch `feature/editor-comparison-pair-render`); Phase 3 partial (2026-10-01, branch `feature/editor-comparison-image-presentation`: implemented and tested; the manual pointer and focus check waits for the Phase 4 entry action); Phase 4 partial (2026-10-01, branch `feature/editor-comparison-entry-and-restore`: implemented and tested; the manual check in the real application is open); Phase 5 planned. Phase 5 proves the Phase 2 image job on OpenCL and Metal.
 Source revision: `deeb8901881b5aae41680299f75b735ed4d01c3c` on `main`.
-Parent plan: none. This is a four-phase feature plan.
+Parent plan: none. This is a five-phase feature plan.
 
 ## 1. Confirmed product decisions
 
@@ -253,20 +253,22 @@ All source paths below are relative to `alcedo_studio/src/`. Proposed files do n
 | Phase | Current files to inspect or change | Proposed files |
 | --- | --- | --- |
 | 1 | `app/pipeline_root_state.*`; `include/app/editor_session_ports.hpp`; `ui/alcedo_main/album_backend/editor_session_history_port.*`; `editor_history_state_detail.*`; `edit/graph/pipeline_document.*`; `pipeline_graph.*`; `develop_node_model.*` | `include/app/editor_comparison_inputs.hpp`; `app/editor_comparison_inputs.cpp` |
-| 2 | `edit/pipeline/pipeline_executor.*`; `include/edit/runtime/renderer.hpp`; `detail/renderer.inl.hpp`; `renderer/pipeline_scheduler.*`; `include/renderer/pipeline_task.hpp`; `editor_session_render_scheduler_port.*`; module CMake files | `include/edit/pipeline/rendered_pipeline_image.hpp`; `include/app/editor_image_render_port.hpp` |
+| 2 | `edit/pipeline/pipeline_executor.*`; `include/edit/runtime/renderer.hpp`; `detail/renderer.inl.hpp`; `renderer/pipeline_scheduler.*`; `include/renderer/pipeline_task.hpp`; `editor_session_render_scheduler_port.*`; module CMake files | `include/edit/runtime/rendered_pipeline_image.hpp`; `include/app/editor_image_render_port.hpp` |
 | 3 | `ui/alcedo_main/album_backend/path_utils.*`; `ui/alcedo_main/CMakeLists.txt`; `DESIGN.md`; `docs/VI/README.md` | `ui/alcedo_main/album_backend/comparison_image_provider.*` and matching include headers; `qml/EditorComparisonCanvas.qml`; `qml/EditorComparisonView.qml`; `qml/EditorComparisonPanel.qml` |
 | 4 | `app/editor_session_service.*`; `editor_session_command_queue.*`; `editor_action_policy.*`; `ui/alcedo_main/album_backend/editor_session_controller.*`; `application_module_host.cpp`; `qml/EditorWorkspace.qml`; `EditorAdjustmentStack.qml`; `EditorVersionsPanel.qml`; shortcut and translation registrations | `include/app/editor_comparison_service.hpp`; `app/editor_comparison_service.cpp`; `ui/alcedo_main/album_backend/editor_comparison_controller.*` and matching include header |
+| 5 | `tests/ui/editor_session_render_scheduler_port_test.cpp`; `tests/ui/CMakeLists.txt`; `tests/edit/pipeline/pipeline_document_render_test.cpp`; `tests/edit/runtime/opencl_drt_product_test.cpp`; `tests/edit/runtime/metal_renderer_test.cpp`; `tests/edit/CMakeLists.txt`; backend renderer, workspace, or presenter files only when a test finds a defect | `tests/ui/support/editor_render_port_gpu_fixture.hpp`; `tests/ui/editor_session_render_scheduler_port_image_job_test.cpp` |
 
 Register all new QML in `ALCEDO_MAIN_QML_FILES`. Add the `compare` key to `NormalizeAdjustmentPanel`. Keep application-layer interfaces independent of QML and native GPU types. Add dependencies to the owning target directly.
 
-## 7. Four-phase summary
+## 7. Phase summary
 
 | Phase | Result | Main modules | Prerequisite | Expected changed lines | Status |
 | --- | --- | --- | --- | ---: | --- |
 | 1 | Read-only comparison documents with current sensor settings and selected white balance | History port, document/Model owners | Current source audit | 700-1300 | Complete (2026-10-01) |
-| 2 | Consecutive one-shot image jobs on the current editor worker and executor | Executor, renderer, scheduler port | Phase 1 | 900-1700 | Planned |
-| 3 | Memory-image presentation with source alignment and all four layouts | Provider, QML canvas/view/panel | Phase 2 result schema | 850-1600 | Planned |
-| 4 | Product entry, Version selection, restrictions, close, and restore | Comparison service/controller, session, workspace | Phases 1-3 | 1000-1900 | Planned |
+| 2 | Consecutive one-shot image jobs on the current editor worker and executor | Executor, renderer, scheduler port | Phase 1 | 900-1700 | Complete (2026-10-01) |
+| 3 | Memory-image presentation with source alignment and all four layouts | Provider, QML canvas/view/panel | Phase 2 result schema | 850-1600 | Partial (2026-10-01): manual check open |
+| 4 | Product entry, Version selection, restrictions, close, and restore | Comparison service/controller, session, workspace | Phases 1-3 | 1000-1900 | Partial (2026-10-01): manual check open |
+| 5 | Phase 2 image job proven on OpenCL and Metal | Port test fixture, backend renderer tests, backend corrections | Phase 2 | 500-1100 | Planned |
 
 Each range includes production code, tests, registration, resources, and phase completion documentation. No phase needs splitting at this estimate. Split before implementation if its expected diff can exceed 2000 lines. Split because of actual scope growth, not to omit an approved behavior.
 
@@ -456,14 +458,130 @@ Extend `PipelineDocumentRenderTest` and `EditorSessionRenderSchedulerPortTest`. 
 
 **Exit criteria.**
 
-- [ ] One existing executor/worker runs A/B consecutively and never presents them to the sink.
-- [ ] Warm real-RAW evidence shows no new unpack or sensor-develop execution.
-- [ ] Pixel comparisons cover different white balance and topology.
-- [ ] Cancel, failure, and shutdown preserve ownership and permit normal rendering.
+- [x] One existing executor/worker runs A/B consecutively and never presents them to the sink.
+- [x] Warm real-RAW evidence shows no new unpack or sensor-develop execution.
+- [x] Pixel comparisons cover different white balance and topology.
+- [x] Cancel, failure, and shutdown preserve ownership and permit normal rendering.
 
 **Expected diff.** 900-1700 lines.
 
-**Completion record.** Not started. Fill section 11 after implementation.
+**Completion record.** See the Phase 2 record below.
+
+##### Phase 2 completion record (2026-10-01)
+
+**Status:** complete. The editor render port renders one image, or A then B, as host pixels on its existing Interactive executor and single worker. It uses the shared full-image Quality Base request with no sink. A job publishes all of its images or none. Close and shutdown cancel it, and a normal frame renders correctly after the job.
+
+**Source revision and branch:** based on `bf74bf8ac` (Phase 1); branch `feature/editor-comparison-pair-render`. Not committed when this record was written.
+
+**Implemented behavior and APIs:**
+
+| Owner | Change |
+| --- | --- |
+| `RenderedPipelineImage` (`include/edit/runtime/rendered_pipeline_image.hpp`) | Host pixels, the exact `ResolvedRenderGeometry` of the executed plan, and its `ViewerDisplayConfig`. No document, history, or executor state. |
+| `Renderer<Backend>::RenderImage` | The former `Render` body. It returns the pixels with `plan.geometry` and the display configuration. `Render` returns its `pixels` member, so existing callers are unchanged. |
+| `PipelineExecutor::ApplyImage` | Requires `require_host_output`. `Apply` and `ApplyImage` share one private `Render` that selects the backend and role renderer. The request's own sink is used; a null sink presents nothing, although the viewport sink stays attached. |
+| `MakeQualityBaseApplyRequest` and `kQualityBaseMaxLongEdge` (`pipeline_apply_request.hpp`) | The one source of the full-image Quality Base values: FULL decode, Interactive role, 4096 long edge, Preview resampling, frame role QualityBase (`SensorDevelopOnly`). `PipelineTask::MakeApplyRequest` (QUALITY_BASE_PREVIEW) now uses it. The scheduler's private 4096 constant is removed. |
+| `IEditorImageRenderPort`, `EditorImageRenderRequest`, `EditorImageRenderResult` (`include/app/editor_image_render_port.hpp`) | Application seam: the held image identity, one or two immutable snapshots, and the geometry (default: full-image Quality Base). Status Completed, Failed, or Cancelled. Images are published all together or not at all. No executor or GPU types. |
+| `EditorSessionRenderSchedulerPort::ScheduleImages` / `CancelImages` | Accepts one image job at a time. It requires the bound context of the requested image, a held lease, and the binding (lineage and element) of the current preview on every snapshot. It reuses the bound encoded input. The job is one `ScheduleWork` item that holds the executor render lock for all of its documents. It checks cancellation before each document and calls `ApplyImage` with a null sink, host output, and `scope_update_allowed = false`. A failure discards earlier images. The completion runs before the job is cleared, so `Shutdown` waits for it. |
+| `EditorSessionRenderSchedulerPort::Shutdown` | Also cancels the accepted image job and waits until its completion has returned. |
+| `EnsureContext` / `ContextMatches` | The context lookup of `EnsureContextForRequest`, factored to take identity values so that the image job and frames share it. |
+
+**Deviation from the plan:** the plan asked for a "composite pair" operation. `ScheduleImages` accepts one or two documents (`kMaxEditorImagesPerJob = 2`), so the same narrow operation serves a later single-image request. It is not a general render queue: one job is accepted at a time.
+
+**Primary success call chain:**
+
+```text
+IEditorImageRenderPort::ScheduleImages(request{element, image, epoch, [A, B]}, on_complete)
+  -> EditorSessionRenderSchedulerPort (caller thread)
+       -> bound context == request identity; CurrentPreview(element) held
+       -> RenderBindingKey::Of(A) == Of(B) == Of(current preview)
+       -> EnsureContext (bound encoded input, no reload) -> EnsureExecutor (the port's executor)
+       -> image_job_ = {id}; PipelineScheduler(1)::ScheduleWork(one item)
+  -> editor worker: RunImageJob
+       -> lock the executor render lock for the whole job
+       -> MakeQualityBaseApplyRequest + host output, sink = nullptr, no scope update
+       -> PipelineExecutor::ApplyImage(A) -> Renderer::RenderImage
+            -> prepared source hit, sensor_linear lookup hit (SensorDevelopOnly)
+            -> Download(A) -> DiscardUnpublished -> {pixels, plan.geometry, display}
+       -> cancellation check -> ApplyImage(B) -> Download(B)
+       -> unlock the render lock
+  -> FinishImageJob: on_complete(Completed, [A, B]) -> clear image_job_
+```
+
+**Primary failure and restore call chain:**
+
+```text
+B render error (example: corrupted CUBE in the root's LUT)
+  -> PlanExecutor failure cleanup -> Renderer catch path -> exception to RunImageJob
+  -> status Failed, real error text, A's host pixels released -> on_complete(Failed, [])
+  -> editor results, binding, and viewport sink unchanged -> next frame renders as before
+
+CancelImages(id) while queued or during A | Shutdown during A
+  -> image_job_.cancelled -> a document that has not started is skipped (B never runs)
+  -> the finished A is dropped in FinishImageJob -> on_complete(Cancelled, [])
+  -> Shutdown returns only after that completion returned
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `WarmComparisonPairReusesEditorSensorResult` (0 LibRaw unpacks, 0 prepared-source misses, 0 sensor develops, 2 sensor skips, no new published result; the next frame equals the frame before, with no sensor work) | `EditorSessionRenderSchedulerPortTest` (GPU, CUDA) | PASS |
+| `WhiteBalanceDifferenceChangesPairPixelsWithoutSensorExecution` (mean channel difference > 0.01; each side within `2e-5` of a fresh executor) | same | PASS |
+| `ComparisonHostRequestsKeepEditorExecutorAndQueueIdentity` (same executor, renderer, device, queue, and binding; no batch renderer; 0 sink presentations; viewport sink still attached; pixel size equals `render_extent`; long edge at most 4096; display equals the document DRT) | same | PASS |
+| `ComparisonPairDoesNotInterleaveAAndBWithNormalFrames` (observed order frame-1, pair, frame-2; one presentation before the pair completed) | same | PASS |
+| `DifferentVersionTopologyRendersCorrectPixelsWithSharedSensor` (extra Grade, crop, rotation, white balance, highlights; each side within `2e-5` of a fresh executor; 0 sensor develops; same full reference extent) | same | PASS |
+| `AResultRemainsValidAfterBAndTransientRelease` (published count, value ids, and prepared-source entries unchanged; 0 unpublished results; A within `2e-5` of a fresh render after B) | same | PASS |
+| `ComparisonCloseDuringARenderSkipsBAndCannotPublish` (cancel while A's LUT lookup holds the worker; Cancelled with no image; one prepared-source acquire; the next job completes) | same | PASS |
+| `ComparisonFailureAllowsNormalCurrentDocumentRender` (corrupted CUBE on the root side; Failed with the error and no image; 0 unpublished results; the next frame equals the frame before, with no sensor work and the same binding) | same | PASS |
+| `ShutdownDuringAImageCancelsAndWaitsForTheJob` (added; Shutdown blocks while A renders and returns after the Cancelled completion; B never starts; later jobs are rejected) | same | PASS |
+| `QualityBaseFrameAndImageJobShareOneRequestBuilder` (added) | same (no GPU) | PASS |
+| `ImageJobRejectsDocumentsThatWouldRebindOrOverlap` (added; unbound image, wrong epoch, 0 or 3 documents, foreign lineage, second job, after shutdown; rejected jobs never complete) | same (no GPU) | PASS |
+| `QueuedImageJobCancelledBeforeItStartsRendersNothing` (added; no renderer was created) | same (no GPU) | PASS |
+| `ImageJobFailureReportsTheRenderErrorWithoutImages` (added) | same (no GPU) | PASS |
+| `ApplyImageReturnsExecutedGeometryWithoutPresentingToTheSink` (added; geometry equals the presented frame's geometry; pixels within `2e-5` of the presented pixels and of `Apply`; no host output throws) | `PipelineDocumentRenderTest` (GPU, CUDA) | PASS |
+
+The close-during-A and shutdown-during-A tests use a real production callback on the worker: the executor's `LutResourceResolver`. The test resolver is given to `PipelineMgmtService`. It holds the worker inside A's LUT lookup until the test thread has acted. The production code has no test branch.
+
+Commands (PowerShell, repository root):
+
+```powershell
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target EditorSessionRenderSchedulerPortTest PipelineDocumentRenderTest PipelineFrameSinkTest GraphImageCacheRetentionTest GpuDagCudaDrtProductTest --parallel 4
+$env:PATH = "D:/Projects/pu-erh_lab/vcpkg/installed/x64-windows/debug/bin;$env:PATH"
+ctest --test-dir build/debug -R '^(EditorSessionRenderSchedulerPortTest|PipelineDocumentRenderTest)\.' --output-on-failure -j 1
+ctest --test-dir build/debug -R '^(PipelineDocumentRenderTest|PipelineFrameSinkTest|GraphImageCacheRetentionTest|GpuDagCudaDrtProductTest)\.' --output-on-failure -j 1
+```
+
+The build exited with code 0. The first CTest command exited with code 8 because of the 5 failures below. The second exited with code 0.
+
+| Suite | Discovered | Passed | Failed | Skipped |
+| --- | ---: | ---: | ---: | ---: |
+| `EditorSessionRenderSchedulerPortTest` | 34 | 29 | 5 | 0 |
+| `PipelineDocumentRenderTest` (CUDA) | 13 | 13 | 0 | 0 |
+| `PipelineFrameSinkTest` | 23 | 23 | 0 | 0 |
+| `GraphImageCacheRetentionTest` | 17 | 17 | 0 | 0 |
+| `GpuDagCudaDrtProductTest` (renderer and Quality Base cache tests) | 85 | 85 | 0 | 0 |
+
+The 5 port failures predate this phase: `ProductionPipelinePathSchedulesInstalledContextWithoutAdapterBind`, `ViewDrivenReasonsDisableScopeFrameReplacement`, `ScopeRefreshMarksFrameAsRequestedScopeInput`, `SessionDoesNotStampPreviewGenerationFromIntent`, and `InstalledContextAllowsScheduleWithoutImagePoolService`. Each expects a sink presentation from a fixture context that has no encoded bytes. They also fail on clean `bf74bf8ac` with only the link fix below (Phase 2 changes stashed, target rebuilt, CTest run).
+
+**Test build fix:** `EditorSessionRenderSchedulerPortTest` had not linked in this build tree. Its GPU fixture calls `LibRaw::unpack`. The test found the vcpkg `libraw/libraw.h` before the bundled LibRaw headers, so it imported a symbol that the bundled static library does not export. `tests/ui/CMakeLists.txt` now links `libraw::raw_r` directly and puts the bundled LibRaw include directory first (only when the `puerhlab_libraw` target exists).
+
+**Manual verification:** none needed; Phase 2 has no UI.
+
+**Cache counters, resources, and timing:** sample `raw/linear_dng/mfzoty.dng` (a linear DNG read through LibRaw), CUDA, Debug build. After one warm viewport frame, a pair adds 0 LibRaw unpacks, 0 prepared-source misses, 2 prepared-source hits, 0 sensor-develop executions, and 2 sensor-develop skips. It adds no published result, no session value id, and no unpublished result. Wall times were not measured separately. Each GPU test case takes 9-18 s in this Debug build, including device creation and the fresh reference renders. Large-RAW pair timing is a Phase 4 exit criterion.
+
+**Checklist / exit condition:** all four boxes are checked. The warm-cache evidence uses a linear DNG, the real RAW sample of the existing GPU fixtures. It is not a Bayer CFA file.
+
+**LOC note:** 1,379 lines added and 54 removed in 13 files, including two new headers of 146 lines. The test file `editor_session_render_scheduler_port_test.cpp` grew from 819 to 1,609 lines, so it is now over 1,000 lines. Before Phase 4 adds tests to it, move the image job tests and their fixture helpers into a separate test file with a shared fixture header. The largest production file is `editor_session_render_scheduler_port.cpp` at 811 lines.
+
+**Remaining gaps:**
+
+- The full test suite was not run. Per `AGENTS.md`, only the user starts a full run.
+- `alcedo_main` was not built. `AlbumBackendLib`, which compiles the port, was built through the port test.
+- Nothing in production calls `ScheduleImages` yet. The Phase 4 comparison service will call it.
+- OpenCL: `win_debug` compiles it (`HAVE_OPENCL`), so `Renderer<OpenClBackend>::RenderImage` and the OpenCL branch of `PipelineExecutor::Render` were compiled and linked. No Phase 2 test ran on OpenCL; every GPU test selects CUDA.
+- Metal: not compiled. `ALCEDO_ENABLE_METAL` is OFF on Windows; only the macOS presets compile it.
+- Phase 5 runs the Phase 2 tests on OpenCL and Metal.
 
 ### Phase 3: Display SDR pairs in aligned Qt image canvases
 
@@ -506,14 +624,124 @@ Add proposed `EditorComparisonImageProviderTest`, `EditorComparisonGeometryTest`
 
 **Exit criteria.**
 
-- [ ] All four layouts display a completed pair.
-- [ ] Original reference alignment preserves crop footprints and empty areas.
-- [ ] SDR quantization, channel order, and lifetime assertions pass.
+- [x] All four layouts display a completed pair.
+- [x] Original reference alignment preserves crop footprints and empty areas.
+- [x] SDR quantization, channel order, and lifetime assertions pass.
 - [ ] Pointer/keyboard divider behavior and focus are manually verified.
 
 **Expected diff.** 850-1600 lines.
 
-**Completion record.** Not started. Fill section 11 after implementation.
+**Completion record.** See the Phase 3 record below.
+
+##### Phase 3 completion record (2026-10-01)
+
+**Status:** partial. All Phase 3 code and tests are complete and pass. The last exit item, a manual check of divider drag and focus in the real application, is open: no production path opens the comparison view until Phase 4 adds the entry action. Keyboard steps, Home, and End were tested through the production QML item.
+
+**Source revision and branch:** based on `56e172bfe` (Phase 2); branch `feature/editor-comparison-image-presentation`. Not committed when this record was written.
+
+**Implemented behavior and APIs:**
+
+| Owner | Change |
+| --- | --- |
+| `ComparisonImagePlacement`, `ComparisonPlacementFromGeometry` (`comparison_presentation_image.*`) | Reads the full reference extent, render extent, and `render_to_reference` of the executed render. Rejects an empty extent and a non-finite, projective, or singular map. `ToVariantMap` gives QML the extents and the six affine terms. |
+| `ConvertRenderedImageForComparison` | Requires host RGBA32F pixels whose size equals `render_extent`, a valid placement, a non-HDR output encoding, and finite values. Then quantizes once with the existing `album_util::MatRgba32fToQImageCopy` (saturating round to nearest, RGBA order kept, deep copy) to `Format_RGBA8888`. No DRT, gamma, or gamut operation. |
+| `ComparisonImageStore` (`comparison_image_provider.*`) | Holds one pair (operation id, A, B) under one mutex. `PublishPair` replaces both sides in one locked write; `Clear` releases both. URL `image://alcedo-comparison/<operation>/<a or b>`; a request for another operation returns a null image. Released images are dropped outside the lock. |
+| `PublishComparisonPair` | Converts A and B before the store changes, requires equal reference extents, then publishes both. A failure names the side and leaves the previous pair in the store. |
+| `ComparisonImageProvider`, `SharedComparisonImageStore` | Serves stored QImages only (no decode or render) and ignores the requested size. Registered in `ApplicationModuleHost::AttachQmlEngine`. |
+| `EditorComparisonCanvas.qml` | Fits the reference extent into the canvas (aspect ratio kept, centered). Draws an ordinary `Image` whose local size is the render extent, with one `Matrix4x4` transform: fit * `render_to_reference`. `cache: false`, asynchronous. Uncovered areas stay empty. |
+| `EditorComparisonView.qml` | Opaque `cardSurfaceColor` surface that takes all pointer and wheel input. One canvas per side for the life of a pair; complete left/right, complete top/bottom, divider left/right, and divider top/bottom only move and clip the two regions. The divider position is relative to the fitted reference canvas; arrow keys step 0.01 (Shift: 0.1), Home and End reach the bounds. The view reports `dividerPositionRequested` and owns no state. The pair shows only when `status` is ready and both `Image` items are Ready. |
+| `EditorComparisonPanel.qml` | Compare title, Before/After or Versions, A and B selectors (`AdjustmentCombo`), display mode, orientation, Swap, Close, Retry, status and HDR text, and the fixed-sensor-settings explanation. Every control reports a request signal. Source and kind choices are disabled while a pair renders or for HDR; view choices and Close stay available. |
+| `DESIGN.md`, `docs/VI/README.md` | Product copy rows and per-file VI entries for the three QML files. No new AppTheme token. |
+
+**Deviations from the plan:**
+
+- `path_utils.*` is unchanged. The existing `MatRgba32fToQImageCopy` already gives the approved quantization; validation is in the new conversion function.
+- The conversion and placement code is in `comparison_presentation_image.*`, separate from the store and provider in `comparison_image_provider.*`.
+- The Compare page is not yet in `EditorAdjustmentStack.qml`, and `compare` is not yet in `NormalizeAdjustmentPanel`. Both belong to Phase 4 step 5, with the session owner that opens the page.
+- Escape handling and translations are Phase 4 items (steps 7 and 9). The new strings use `qsTr`; the `.ts` catalog is unchanged.
+
+**Primary success call chain:**
+
+```text
+(Phase 4 owner, GUI thread) completed IEditorImageRenderPort result [A, B]
+  -> PublishComparisonPair(SharedComparisonImageStore(), operation_id, A, B)
+       -> ConvertRenderedImageForComparison(A), then (B)
+            -> validate pixels / render_extent / placement / SDR encoding / finite values
+            -> MatRgba32fToQImageCopy -> RGBA8888 QImage (own pixels)
+       -> equal reference extents -> ComparisonImageStore::PublishPair (one locked write)
+  -> ComparisonPairPublication::ToVariantMap -> EditorComparisonView.pair, status "ready"
+  -> two EditorComparisonCanvas Images load image://alcedo-comparison/<op>/a and /b
+       -> ComparisonImageProvider::requestImage -> ComparisonImageStore::Get (Qt reader thread)
+  -> both Image.status Ready -> pairReady -> regions visible
+  -> fit * render_to_reference places each image in the common reference canvas
+```
+
+**Primary failure and restore call chain:**
+
+```text
+invalid pixels | size != render_extent | bad placement | ST 2084/HLG | NaN/Inf | different reference extents
+  -> std::invalid_argument that names the side -> the store keeps its previous pair; nothing is published
+  -> (Phase 4 owner) status "failed", errorText -> the view shows the error and no images;
+     the panel shows Retry and Close
+
+Image load error -> view status text; imageLoadFailed(message) to the owner
+
+Close or replacement
+  -> ComparisonImageStore::Clear (pixels dropped outside the lock); view pair = null
+  -> both Image sources empty, status Null; a provider read in progress keeps a valid image
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `SdrPairConversionMatchesRoundedClampedRgbaValues` (channel order in raw bytes, alpha, fractions, clamp below 0 and above 1, float buffer released after conversion) | `EditorComparisonImageProviderTest` | PASS |
+| `ConversionRejectsInvalidPixelsGeometryAndHdrOutput` (added; no pixels, RGB32F, size mismatch, NaN, Inf, ST 2084, HLG, singular map, empty reference) | `EditorComparisonImageProviderTest` | PASS |
+| `PairProviderNeverPublishesOneNewSideWithOneOldSide` (invalid B keeps the old pair; different reference extents rejected; a replacement replaces both; a concurrent reader during 600 replacements sees no image of another operation) | `EditorComparisonImageProviderTest` | PASS |
+| `ProviderServesOnlyTheStoredOperationAtItsRenderExtent` (added) | `EditorComparisonImageProviderTest` | PASS |
+| `ClearedStoreKeepsImagesAlreadyReadByTheProvider` (added; shared before Clear, sole owner and intact after) | `EditorComparisonImageProviderTest` | PASS |
+| `SourceAlignmentPlacesHalfCropInHalfOfReferenceCanvas` (left and right half crop; 8000 x 6000 source with a 1024 long-edge limit) | `EditorComparisonGeometryTest` | PASS |
+| `RotatedCropCornersMatchRendererReferenceGeometry` (real `ResolveRenderGeometry`, crop offset, 10 degrees; canvas corners equal fit * renderer map within 1e-3 px) | `EditorComparisonGeometryTest` | PASS |
+| `PlacementRejectsEmptyOrNonInvertibleGeometry` (added) | `EditorComparisonGeometryTest` | PASS |
+| `PairRemainsHiddenUntilBothImagesAreReady` (both completion orders, held through the provider; failed status) | `EditorComparisonViewQmlTest` | PASS |
+| `LayoutAndDividerChangesDoNotSubmitRenderJobs` (2 modes x 2 orientations x swap x 3 divider positions; provider reads stay at 2, sources unchanged, regions do not overlap) | `EditorComparisonViewQmlTest` | PASS |
+| `BothDividerOrientationsRevealTheSameReferencePoint` (A and B draw one reference point at one position; the region clip and the divider follow the position; keyboard steps, Home, End) | `EditorComparisonViewQmlTest` | PASS |
+| `ClosingComparisonClearsProviderAndItemReferences` (close during a held B read; the read image stays valid; sources and status cleared; no new read; store empty) | `EditorComparisonViewQmlTest` | PASS |
+| `PanelReportsRequestsAndDisablesSelectionWhileRendering` (added) | `EditorComparisonViewQmlTest` | PASS |
+
+The QML tests load the production QML from the source tree and use the production store and provider. The test provider wraps `ComparisonImageProvider` as an asynchronous provider so that it can count reads and hold one side. Qt's pixmap reader serves synchronous provider reads one at a time, so a held synchronous read would also block the other side.
+
+Commands (PowerShell, repository root):
+
+```powershell
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target EditorComparisonImageProviderTest EditorComparisonGeometryTest EditorComparisonViewQmlTest ApplicationModuleHostLifecycleTest ApplicationModuleHostShutdownTest alcedo_main --parallel 4
+$env:PATH = "D:/Projects/pu-erh_lab/vcpkg/installed/x64-windows/debug/bin;$env:PATH"
+ctest --test-dir build/debug -R '^(EditorComparisonImageProviderTest|EditorComparisonGeometryTest|EditorComparisonViewQmlTest|ApplicationModuleHostLifecycleTest|ApplicationModuleHostShutdownTest)\.' --output-on-failure -j 1
+```
+
+The build exited with code 0; qmlcachegen compiled the three QML files into `alcedo_main`. CTest exited with code 0.
+
+| Suite | Discovered | Passed | Failed | Skipped |
+| --- | ---: | ---: | ---: | ---: |
+| `EditorComparisonImageProviderTest` | 5 | 5 | 0 | 0 |
+| `EditorComparisonGeometryTest` | 3 | 3 | 0 | 0 |
+| `EditorComparisonViewQmlTest` | 5 | 5 | 0 | 0 |
+| `ApplicationModuleHostLifecycleTest` (caller that registers the provider) | 2 | 2 | 0 | 0 |
+| `ApplicationModuleHostShutdownTest` | 8 | 8 | 0 | 0 |
+
+**Manual verification:** not done. The view and panel have no production entry until Phase 4. Check divider drag, focus order, both themes, narrow windows, and display scaling in the application after Phase 4 adds the overlay (see the manual review list in `docs/VI/README.md`).
+
+**Cache counters, resources, and timing:** not applicable; Phase 3 renders nothing. One pair holds two RGBA8 images (about 21.3 MiB for two uncropped 4096 x 2731 images).
+
+**Checklist / exit condition:** three of four boxes are checked. The manual pointer and focus check is open.
+
+**LOC note:** about 2,430 lines: 153 added in 5 tracked files and 2,277 lines in 11 new files. Production: 456 C++ lines and 650 QML lines. Tests: 1,171 lines. This is above the 850-1600 estimate, mostly because of tests. No file is over 1,000 lines; the largest is `editor_comparison_view_qml_test.cpp` at 486 lines.
+
+**Remaining gaps:**
+
+- Manual pointer, focus, theme, and scaling check (Phase 4 provides the entry).
+- Compare nav page, `compare` panel key, Escape, and translations: Phase 4.
+- The full test suite was not run. Per `AGENTS.md`, only the user starts a full run. `WorkspaceShellTest` was not used.
 
 ### Phase 4: Add source selection, entry, restrictions, and restore
 
@@ -558,13 +786,239 @@ Add proposed `EditorComparisonServiceTest` and `EditorComparisonControllerTest`.
 
 **Exit criteria.**
 
-- [ ] Both entry actions and all selectors follow the confirmed state semantics.
-- [ ] Edit/history restrictions work at the owner and QML boundaries.
-- [ ] Normal checkout still applies historical sensor settings.
-- [ ] Close, image switch, exit, and shutdown release temporary state without stale publication.
-- [ ] Real large-RAW warm-pair resource and timing evidence exists.
+- [x] Both entry actions and all selectors follow the confirmed state semantics.
+- [x] Edit/history restrictions work at the owner and QML boundaries.
+- [x] Normal checkout still applies historical sensor settings.
+- [x] Close, image switch, exit, and shutdown release temporary state without stale publication.
+- [x] Real large-RAW warm-pair resource and timing evidence exists.
 
 **Expected diff.** 1000-1900 lines.
+
+**Completion record.** See the Phase 4 record below.
+
+##### Phase 4 completion record (2026-10-01)
+
+**Status:** partial. All Phase 4 code and tests are complete and pass. The manual check in the real application (the build/run list above, and the open Phase 3 pointer and focus item) is not done: this session could not operate the desktop application.
+
+**Source revision and branch:** based on `d842aa0ce` (Phase 3); branch `feature/editor-comparison-entry-and-restore`, stacked on `feature/editor-comparison-image-presentation`. Not committed when this record was written.
+
+**Implemented behavior and APIs:**
+
+| Owner | Change |
+| --- | --- |
+| `EditorComparisonKind`, `EditorComparisonStatus`, `EditorComparisonState` (`editor_comparison_types.hpp`) | Kind (Before/After, Versions), status (Inactive, Rendering, Ready, Failed), and the GUI read of the open comparison: sources, opening command id, pair id (the image job id), and the real error. |
+| `EditorActionPolicy` | New action `OpenComparison` (Interactive image; denied for HDR output with "Comparison is unavailable for HDR output.", and while a Mask edit owns input). New lease `Comparison`: blocks adjustments, commits, Undo, Redo, head moves, discard, every Version write, Paste, view changes, and a second comparison; Select Image, Close Editor, and Shutdown stay admissible. Every other lease also blocks `OpenComparison`. New inputs `current_output_is_hdr` (DRT of the published working preview) and `mask_input_open`. |
+| `EditorComparisonService` (new library `EditorComparisonService`) | Owner-thread collaborator of the session. Holds the working preview captured once at entry, the kind and sources, the image job of the selected pair, and the Ready pair until the GUI takes it. Builds inputs only through `IEditorHistoryPort::BuildComparisonInputs` and renders only through `IEditorImageRenderPort`. A completion is reduced on the owner and is ignored unless its job id is the job of the selected pair, so a closed or replaced comparison never publishes. A failure keeps the comparison open with the real error. |
+| `EditorSessionService` | Commands `OpenComparison`, `SelectComparisonSources`, `RetryComparison`, `CloseComparison`. Open settles pending parameter input through the existing seal, captures `CurrentPreview`, takes the `Comparison` lease, and saves nothing. Open, Switch, editor Close, and Shutdown close the comparison before they release the image. Close removes the lease and routes one `EditorRenderReason::ComparisonClosed` Quality render with the viewport region. Queued slider and Mask input is refused at its own admission while comparing. `PostOwnerTask` reduces image-job completions inside one publication. |
+| `EditorSessionRuntime::CreateWithPorts`, `ApplicationModuleHost` | New `image_render` port argument; production passes the editor render scheduler port, so pairs render on the editor executor and worker. |
+| `EditorRenderReason::ComparisonClosed` | Quality, normal priority, no frame reuse; coordinator name `ComparisonClosed`. |
+| `EditorActionAvailabilityModel` | `canOpenComparison`, `openComparisonReason`. |
+| `EditorSessionController` | `compare` panel key. The Compare page opens with the comparison and the earlier panel returns on close (Mask falls back to Tone). `compare` is never stored as the startup panel. `CloseComparison(refresh)` sends the viewport region. |
+| `WorkspaceRouter::OpenLibrary` | Closes the comparison (no refresh) before it persists the image. |
+| `EditorComparisonController` (QML `appModules.editorComparison`) | Projects the backend state, builds source choices (Root, Current, named Versions from the projection of the history owner), and routes Compare actions. On the GUI thread it takes a Ready pair, converts and publishes it with `PublishComparisonPair`, and drops the float images. Display mode, orientation, divider, and swap are local view state; a new comparison resets them. Conversion and image-load failures show their reason; Retry renders again. |
+| QML | Viewport text action `Compare` (Before/After) and Versions header `Compare` (Version comparison); the comparison view covers the viewport at z 20 while the viewport item stays alive and visible; the Compare page is nav page 2 (`panel_icons/compare.svg`, Tabler `columns-2`, user-approved); Escape (`comparison.close` in the exclusive `editor.comparison` scope) closes. |
+| Translations, VI | `en` and `zh_CN` catalog entries for the comparison panel, view, controller, and entry actions (added by hand; lupdate was not run). DESIGN.md product copy and icon approval; `docs/VI/README.md` Phase 4 entries and manual-review items. |
+
+**Deviations from the plan:**
+
+- The editor has no viewport toolbar. The Before/After action is a text button at the top left of the viewport, hidden while comparing.
+- The plan placed the policy assertions in `EditorSessionActionPolicyCq3Test` and history assertions in `EditorSessionHistoryPortTest`. The pure policy test is in Cq3; the owner tests run the production session facade over the real history port in the new `EditorComparisonServiceTest` (`tests/app/`, registered in `tests/ui/CMakeLists.txt` with the history port sources, as `EditorComparisonInputsTest` is). `EditorSessionHistoryPortTest` is unchanged because the history port is unchanged.
+- `CompareNavPageRestoresPreviousPanelAfterClose` tests the production `EditorSessionController`; the QML nav fixture of PR #244 has the added `CompareNavPageAppearsOnlyWhileComparingAndRoutesPanelRequests`.
+- `RepeatedOpenSelectCloseKeepsOneExecutorAndReleasesTemporaryImages` proves the GUI side (one backend for every pair, store emptied, float buffers released). Executor, device, and queue identity of the pair job is the Phase 2 test `ComparisonHostRequestsKeepEditorExecutorAndQueueIdentity`.
+- The timing evidence is a new target `EditorComparisonLargeRawPairTest`, so `editor_session_render_scheduler_port_test.cpp` (1,609 lines) gets no new test before the Phase 5 split. Its small CUDA fixture repeats part of the port test fixture; Phase 5 step 1 can move both onto the shared fixture header.
+- Shortcut registry labels are not in the `.ts` catalogs (no existing registry label is); the new command follows that.
+
+**Primary success call chain:**
+
+```text
+Viewport "Compare" | Versions header "Compare"
+  -> EditorComparisonController::openBeforeAfter / openVersions
+  -> EditorSessionService::OpenComparison (command, session owner)
+       -> EditorActionPolicy::Evaluate(OpenComparison): Interactive, SDR, no Mask edit, no lease
+       -> SettlePendingParameterInputForBoundary (normal seal; no save)
+       -> IEditorPipelinePort::CurrentPreview (captured once) -> AcquireLease(Comparison)
+       -> EditorComparisonService::Open -> RenderSelectedPair
+            -> IEditorHistoryPort::BuildComparisonInputs (Phase 1)
+            -> IEditorImageRenderPort::ScheduleImages (Phase 2) -> state Rendering
+  -> editor worker: ApplyImage(A), ApplyImage(B) -> completion -> PostOwnerTask
+  -> owner: HandleImagesFinished(job id of the selected pair) -> state Ready
+  -> change notification -> EditorSessionController::OnBackendChanged
+       -> SyncComparisonAdjustmentPanel (Compare page; earlier panel kept)
+       -> StateChanged -> EditorComparisonController::Refresh
+            -> TakeComparisonImages -> PublishComparisonPair (Phase 3 SDR) -> pair
+  -> EditorComparisonView over the viewport -> both Images Ready -> pair shown
+Close (panel Close | Escape)
+  -> EditorSessionController::CloseComparison(true, viewport region)
+  -> owner: CloseComparisonOnOwner -> EditorComparisonService::Close (cancel job, release
+     capture, documents, and images) -> release Comparison lease
+     -> RouteViewChange(ComparisonClosed, region) -> one Quality render of the current document
+  -> GUI: earlier panel restored, store cleared, overlay hidden, zoom/pan unchanged
+```
+
+**Primary failure and restore call chain:**
+
+```text
+HDR current output -> OpenComparison denied by policy -> actions disabled; tooltip states why
+Missing Version | selected HDR Version | replay failure | ScheduleImages rejected | job Failed
+  -> EditorComparisonService state Failed (real error); restriction stays
+  -> Compare panel error, Retry or Close; working document and active Version unchanged
+SDR conversion failure | Image load error -> controller marks that pair failed -> Retry
+Image switch | Open | editor Close | Shutdown -> CloseComparisonOnOwner first (CancelImages)
+  -> a completion queued behind it carries an old job id -> ignored; no pair is published
+Leave the editor (WorkspaceRouter::OpenLibrary) -> CloseComparison(false) before persist
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `ComparisonAdmissionBlocksEditsAndHistoryButAllowsCloseAndImageSelection` (projected decisions, command admission, queued slider and Mask input, no commit; image selection closes the comparison) | `EditorComparisonServiceTest` | PASS |
+| `CurrentVersionComparisonIncludesCapturedWorkingValuesWithoutSaving` (unreleased drag value in B, one commit of the user edit, 0 materializations, the same capture on a later selection) | `EditorComparisonServiceTest` | PASS |
+| `ComparingVersionDoesNotCheckoutAndCheckoutStillAppliesItsSensorSettings` | `EditorComparisonServiceTest` | PASS |
+| `ClosePreservesViewTransformAndRefreshesCurrentDocument` (region of the current view, `ComparisonClosed` Quality render, active Version unchanged; no render when nothing is open) | `EditorComparisonServiceTest` | PASS |
+| `QueuedPairCompletionAfterImageSwitchCannotReopenComparison` | `EditorComparisonServiceTest` | PASS |
+| `HdrDocumentDisablesEntryAndSelectedHdrVersionReportsReason` (ST 2084 current; HLG Version selected) | `EditorComparisonServiceTest` | PASS |
+| `ShutdownDuringPairCancelsTheJobAndIgnoresItsCompletion` (added) | `EditorComparisonServiceTest` | PASS |
+| `PairPublishesOnceAndRenderFailureKeepsComparisonOpen` (added) | `EditorComparisonServiceTest` | PASS |
+| `ComparisonLeaseBlocksWritesHistoryAndViewButKeepsSelectionCloseAndShutdown` (added) | `EditorSessionActionPolicyCq3Test` | PASS |
+| `CompareNavPageRestoresPreviousPanelAfterClose` (production controller; compare not stored) | `EditorComparisonControllerTest` | PASS |
+| `RepeatedOpenSelectCloseKeepsOneExecutorAndReleasesTemporaryImages` (3 cycles; see deviations) | `EditorComparisonControllerTest` | PASS |
+| `LeavingTheEditorClosesTheComparisonWithoutARefresh` (added) | `EditorComparisonControllerTest` | PASS |
+| `ConversionAndImageLoadFailuresShowTheErrorAndRetryRenders` (added) | `EditorComparisonControllerTest` | PASS |
+| `SourceChoicesComeFromTheVersionListAndMapToBackendSources` (added) | `EditorComparisonControllerTest` | PASS |
+| `CompareNavPageAppearsOnlyWhileComparingAndRoutesPanelRequests` (added) | `EditorAdjustmentHeaderQmlTest` | PASS |
+| `ComparisonCloseOwnsEscapeOnlyInsideTheComparisonScope` (added) | `ShortcutRegistryTest` | PASS |
+| `LargeRawPairReusesTheSensorResultAndRecordsTiming` (added) | `EditorComparisonLargeRawPairTest` (CUDA) | PASS |
+
+Commands (PowerShell, repository root):
+
+```powershell
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target EditorComparisonServiceTest EditorSessionActionPolicyCq3Test EditorRenderCoordinatorTest EditorComparisonControllerTest EditorAdjustmentHeaderQmlTest ShortcutRegistryTest ApplicationModuleHostLifecycleTest EditorComparisonLargeRawPairTest EditorSessionControllerPhase5ATest --parallel 4
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target alcedo_main EditorComparisonViewQmlTest EditorComparisonImageProviderTest ApplicationModuleHostShutdownTest --parallel 4
+$env:PATH = "D:/Projects/pu-erh_lab/vcpkg/installed/x64-windows/debug/bin;$env:PATH"
+ctest --test-dir build/debug -R '^(EditorComparisonServiceTest|EditorSessionActionPolicyCq3Test|EditorRenderCoordinatorTest|EditorComparisonControllerTest|EditorAdjustmentHeaderQmlTest|ShortcutRegistryTest|ApplicationModuleHostLifecycleTest|EditorSessionControllerPhase5ATest)\.' --output-on-failure -j 1
+ctest --test-dir build/debug -R '^(EditorComparisonViewQmlTest|EditorComparisonImageProviderTest|ApplicationModuleHostShutdownTest|EditorComparisonLargeRawPairTest)\.' --output-on-failure -j 1
+```
+
+Both builds exited with code 0; qmlcachegen compiled the changed QML into `alcedo_main`. The first CTest command exited with code 8 because of one failure that predates this phase; the second exited with code 0.
+
+| Suite | Discovered | Passed | Failed | Skipped |
+| --- | ---: | ---: | ---: | ---: |
+| `EditorComparisonServiceTest` | 8 | 8 | 0 | 0 |
+| `EditorComparisonControllerTest` | 5 | 5 | 0 | 0 |
+| `EditorSessionActionPolicyCq3Test` | 13 | 12 | 1 | 0 |
+| `EditorRenderCoordinatorTest` | 33 | 33 | 0 | 0 |
+| `EditorAdjustmentHeaderQmlTest` | 24 | 24 | 0 | 0 |
+| `ShortcutRegistryTest` | 18 | 18 | 0 | 0 |
+| `ApplicationModuleHostLifecycleTest` | 2 | 2 | 0 | 0 |
+| `EditorSessionControllerPhase5ATest` | 52 | 52 | 0 | 0 |
+| `EditorComparisonViewQmlTest`, `EditorComparisonImageProviderTest`, `ApplicationModuleHostShutdownTest` | 18 | 18 | 0 | 0 |
+| `EditorComparisonLargeRawPairTest` (CUDA) | 1 | 1 | 0 | 0 |
+
+The failure is `EditorSessionActionPolicyCq3Test.AdjustmentPanelsReloadOnlyWhenCommittedContentChanges` (`history_revision` stays 1 after a settled commit through the fake history port). It also fails on clean `d842aa0ce` (Phase 4 changes stashed, target rebuilt, test run directly), so this phase did not cause it.
+
+**Manual verification:** not done. Exercise in the real application: Before/After and Version selection, all layouts, divider drag and focus (the open Phase 3 item), close during render, Escape, image switching, editor re-entry, both themes, display scaling, and application shutdown during a render.
+
+**Cache counters, resources, and timing** (`EditorComparisonLargeRawPairTest`): `raw/camera/sony/a7rv/DSC00064.ARW`, 9728 x 6656 raw (Bayer), reference 9496 x 6328, output 4096 x 2730, CUDA, Debug build, current white balance different from the root.
+
+| Measurement | Value |
+| --- | --- |
+| Cold pair (first work on the binding) | 4,581 ms; 1 LibRaw unpack, 1 sensor develop |
+| Warm pair (after one viewport frame) | 842 ms; 0 unpacks, 0 prepared-source misses, 0 sensor develops, 2 sensor skips |
+| SDR conversion of both images (GUI) | 461 ms |
+| Live comparison images (RGBA8, two) | 89,456,640 bytes (85.3 MiB) |
+| Prepared sources / published results / transient bytes after the warm pair | 1 (129,499,136 host bytes) / 4, unchanged by the pair / 0 |
+
+The 21.3 MiB figure for two RGBA8 images in section 9 and in the Phase 3 record is wrong: two uncropped 4096 x 2731 RGBA8 images use about 85.3 MiB (two RGBA32F images about 341 MiB). Separate A and B GPU and download times and the QML image-ready time were not measured; the pair time includes both renders and both downloads.
+
+**Checklist / exit condition:** all five boxes are checked from executed tests. The manual application check of the build/run list is open, so the status is partial.
+
+**LOC note:** about 3,300 changed lines: about 1,200 added and 20 removed in 34 tracked files (258 of them translations), plus about 2,100 lines in 8 new files (1,211 of them tests). This is above the 1000-1900 estimate and the 2000-line split guideline, mostly because of tests and translations; production code is about 1,300 lines. New files are below 400 lines. Existing files over 1,000 lines grew: `editor_session_service.cpp` (2,527 to 2,703), `editor_session_controller.cpp` (1,881 to 1,936), and `editor_adjustment_header_qml_test.cpp` (1,183 to 1,286). The comparison logic is in its own owner; splitting those files is not part of this phase.
+
+**Remaining gaps:**
+
+- Manual application check (above).
+- The full test suite was not run. Per `AGENTS.md`, only the user starts a full run. `WorkspaceShellTest` was not used.
+- Phase 5: OpenCL and Metal for the image job, and the port test split.
+
+### Phase 5: Prove the image job on the OpenCL and Metal backends
+
+**Objective and deliverables.** Make the Phase 2 image job a proven behavior of every product backend, not only CUDA. Run the Phase 2 acceptance tests on OpenCL (Windows) and Metal (macOS). Correct each backend defect that they find.
+
+**Inputs and prerequisites.** Phase 2 is complete. The image operation (`Renderer<Backend>::RenderImage`, `PipelineExecutor::ApplyImage`) is one backend-independent template, and `PipelineExecutor` dispatches all three backends to it. Phase 2 evidence has these limits:
+
+| Backend | Compiled in the Phase 2 build | Phase 2 tests executed |
+| --- | --- | --- |
+| CUDA | Yes (`win_debug`) | Yes: all GPU tests in `EditorSessionRenderSchedulerPortTest` and `PipelineDocumentRenderTest` |
+| OpenCL | Yes (`win_debug` defines `HAVE_OPENCL`; `Renderer<OpenClBackend>::RenderImage` is compiled into the executor) | No. Every Phase 2 GPU test selects CUDA. |
+| Metal | No (`ALCEDO_ENABLE_METAL` is OFF on Windows; only `macos_debug` and `macos_release` compile it) | No |
+
+Phase 5 does not depend on Phases 3 and 4. It can run before or after them. It must complete before the feature is reported as available on Metal or OpenCL.
+
+**Modules and APIs.** No new production API. Test changes, and the backend corrections that the tests require. Use the Phase 5 file map.
+
+**Data invariants.** Each Phase 2 invariant holds on each backend:
+
+- The port's one Interactive executor, device, queue, and binding render A and B consecutively on the single worker.
+- A null request sink presents nothing; the attached viewport sink stays attached.
+- A warm pair causes 0 LibRaw unpacks, 0 prepared-source misses, and 0 sensor-develop executions. It adds no published or unpublished result.
+- `RenderedPipelineImage::geometry` equals the geometry of the presented frame for the same request. The pixel extent equals `render_extent`.
+- A failure or cancellation publishes no image and leaves the editor results usable.
+
+No backend gets another decode, resolution, operator, or backend in place of the requested path. A backend that cannot satisfy an invariant fails with its real error, and the defect is corrected in that backend.
+
+**Steps.**
+
+1. Split the port test file first. `editor_session_render_scheduler_port_test.cpp` has 1,609 lines (Phase 2 LOC note). Move the GPU fixture, `BlockingLutResolver`, and the image-job helpers into `tests/ui/support/editor_render_port_gpu_fixture.hpp`. Move the image-job tests into `tests/ui/editor_session_render_scheduler_port_image_job_test.cpp`. Register the new source in the same `EditorSessionRenderSchedulerPortTest` target. Keep test names unchanged.
+2. Make the GPU fixture backend-parameterized. Use a gtest value parameter of `AcceleratorBackendPreference` with the compiled backends (`HAVE_CUDA`, `HAVE_OPENCL`, `HAVE_METAL`). Skip a backend only when its device is unavailable, and report that skip by name. Give `PipelineMgmtService` the parameter backend. Replace the CUDA-only reads (`DebugCudaRenderer`, `InteractiveCudaBinding`) with a test helper that reads `Stats`, `Resources`, `Binding`, `DebugDeviceIdentity`, `DebugQueueIdentity`, and the unpublished-result count from the executor's interactive renderer of the selected backend. Use only the const `Device()` accessor; the test target does not link the backend runtime libraries.
+3. Build `FreshImage` from a new `PipelineExecutor` with the parameter backend. Each backend's pixels must match a fresh render on the same backend. Declare the float tolerance per backend at the fixture. Start from `2e-5`. A larger tolerance needs a stated reason from the existing backend tests (for example, the tolerance that `GpuDagOpenClDrtProductTest` already uses for the same output).
+4. Run the nine Phase 2 GPU port tests on each backend, without changes to their assertions.
+5. Add the executor-level check to each backend's existing renderer target. In `GpuDagOpenClDrtProductTest` (`opencl_drt_product_test.cpp`) and `GpuDagMetalRendererTest` (`metal_renderer_test.cpp`), add `RenderImageReturnsExecutedGeometryWithoutPresentingToTheSink`. Use their existing Quality Base fixtures. Assert the same items as the CUDA `ApplyImageReturnsExecutedGeometryWithoutPresentingToTheSink`.
+6. Make `PipelineDocumentRenderTest` cover OpenCL as well. Today it is registered only under `ALCEDO_CUDA_ENABLED` and selects CUDA. Either parameterize it by backend and register it when any GPU backend is enabled, or add the same `ApplyImage` case to the OpenCL and Metal targets in step 5. Record the choice in the completion record.
+7. Build Metal on macOS with `macos_debug` and `-DALCEDO_BUILD_TESTS=ON`. Run the same filtered suites there. `AlbumBackendLib` and the port test must build on macOS; correct any platform build defect in the changed files.
+8. For each failed invariant, find the backend cause, correct it in that backend's renderer, workspace, or presenter, and add or keep a test that shows the failure before the correction.
+
+**Success chain.** Backend parameter -> port executor with that backend -> warm frame -> `ScheduleImages(A, B)` -> `ApplyImage(A)` and `ApplyImage(B)` on that backend's interactive renderer -> both images -> each matches a fresh render on that backend; sensor result reused.
+
+**Failure chain.** A backend invariant fails -> the test reports the backend name and the real error or counter -> the backend defect is corrected, or the phase stays partial with that backend listed as not supported for comparison. No backend runs another backend's path in its place.
+
+**Tests and observable assertions.**
+
+- The nine Phase 2 GPU port tests, unchanged in name and assertion, for each compiled and available backend: `WarmComparisonPairReusesEditorSensorResult`, `WhiteBalanceDifferenceChangesPairPixelsWithoutSensorExecution`, `ComparisonHostRequestsKeepEditorExecutorAndQueueIdentity`, `ComparisonPairDoesNotInterleaveAAndBWithNormalFrames`, `DifferentVersionTopologyRendersCorrectPixelsWithSharedSensor`, `AResultRemainsValidAfterBAndTransientRelease`, `ComparisonCloseDuringARenderSkipsBAndCannotPublish`, `ComparisonFailureAllowsNormalCurrentDocumentRender`, and `ShutdownDuringAImageCancelsAndWaitsForTheJob`.
+- `RenderImageReturnsExecutedGeometryWithoutPresentingToTheSink` in `GpuDagOpenClDrtProductTest` and `GpuDagMetalRendererTest`.
+- The existing Quality Base cache tests of each backend target stay green: `QualityBaseBypassesEveryResultCacheAfterSensorDevelop` and `QualityBasePixelsMatchFreshExecutionWithinDeclaredTolerance`.
+
+**Build/run.**
+
+Windows (`win_debug`, CUDA and OpenCL):
+
+```powershell
+Set-Location D:\Projects\pu-erh_lab
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target EditorSessionRenderSchedulerPortTest PipelineDocumentRenderTest GpuDagOpenClDrtProductTest GpuDagCudaDrtProductTest --parallel 4
+$env:PATH = "D:/Projects/pu-erh_lab/vcpkg/installed/x64-windows/debug/bin;$env:PATH"
+ctest --test-dir build/debug -R '^(EditorSessionRenderSchedulerPortTest|PipelineDocumentRenderTest|GpuDagOpenClDrtProductTest|GpuDagCudaDrtProductTest)\.' --output-on-failure -j 1
+```
+
+macOS (`macos_debug`, Metal):
+
+```bash
+cmake --preset macos_debug -DALCEDO_BUILD_TESTS=ON
+cmake --build --preset macos_debug --target EditorSessionRenderSchedulerPortTest GpuDagMetalRendererTest
+ctest --test-dir build/macos-debug -R '^(EditorSessionRenderSchedulerPortTest|GpuDagMetalRendererTest)\.' --output-on-failure -j 1
+```
+
+Report the counts per backend. A backend skipped because no device was found counts as not verified.
+
+**Exit criteria.**
+
+- [ ] The nine Phase 2 GPU port tests pass on OpenCL.
+- [ ] The nine Phase 2 GPU port tests pass on Metal.
+- [ ] `RenderImageReturnsExecutedGeometryWithoutPresentingToTheSink` passes on OpenCL and Metal.
+- [ ] Each backend's warm pair shows 0 LibRaw unpacks and 0 sensor-develop executions.
+- [ ] The port test file is split, and no touched test file is over 1,000 lines.
+- [ ] Each backend defect found is corrected with a test; no backend substitution was added.
+
+**Expected diff.** 500-1100 lines, mostly the test split and backend parameterization. Backend corrections add to this. If they would take the phase over 2000 lines, split them into a separate phase before implementation.
 
 **Completion record.** Not started. Fill section 11 after implementation.
 
@@ -624,7 +1078,7 @@ Full test suite: not run unless the user explicitly requests it. Offscreen works
 
 ## 11. Completion records and stop conditions
 
-Phase 1's record is under Phase 1 in section 8.
+The Phase 1, Phase 2, Phase 3, and Phase 4 records are under their phases in section 8.
 
 Fill one record for each phase after implementation:
 

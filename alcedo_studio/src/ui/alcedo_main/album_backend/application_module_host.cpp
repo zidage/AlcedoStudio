@@ -32,6 +32,7 @@
 #include "ui/alcedo_main/album_backend/editor_session_task_port.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_thumbnail_port.hpp"
 #include "ui/alcedo_main/album_backend/thumbnail_image_provider.hpp"
+#include "ui/alcedo_main/album_backend/comparison_image_provider.hpp"
 #include "ui/alcedo_main/album_backend/mask_thumbnail_image_provider.hpp"
 #include "ui/alcedo_main/album_backend/system_icon_image_provider.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
@@ -211,10 +212,13 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     // The session owner runs on a dedicated worker so parameter reduction,
     // pacing deadlines, and serial frame consumption never wait on the GUI
     // thread's event loop or window-update waits.
+    // The scheduler port is also the comparison's image port: comparison pairs render on the
+    // editor's own executor and worker. ShutdownModules shuts it down (waiting for an image job)
+    // before the session service is destroyed.
     editor_session_runtime_ = alcedo::EditorSessionRuntime::CreateWithPorts(
         session_pipeline, session_history, session_tasks, session_scheduler,
         session_checkpoint, session_thumbnail, save_coordinator,
-        std::make_shared<alcedo::EditorSessionThreadedCommandExecutor>());
+        std::make_shared<alcedo::EditorSessionThreadedCommandExecutor>(), session_scheduler);
     // Completion is forward: coordinator installs on_complete at Schedule.
     editor_session_scheduler_ = std::move(session_scheduler);
   }
@@ -227,6 +231,9 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   editor_session_ =
       std::make_unique<EditorSessionController>(editor_session_runtime_->service.get(), this);
   RecordConstruction("EditorSessionController", editor_session_.get());
+  editor_comparison_ = std::make_unique<EditorComparisonController>(
+      editor_session_.get(), SharedComparisonImageStore(), this);
+  RecordConstruction("EditorComparisonController", editor_comparison_.get());
   // A published inventory or root can change which LUT bytes the open image renders.
   QObject::connect(lut_library_.get(), &alcedo::LutLibraryService::InventoryChanged,
                    editor_session_.get(),
@@ -535,6 +542,7 @@ ApplicationModuleHost::~ApplicationModuleHost() {
   destroy(workspace_router_, "WorkspaceRouter");
   destroy(lut_target_, "LutLibraryController");
   destroy(lut_browser_, "LutLibraryModel");
+  destroy(editor_comparison_, "EditorComparisonController");
   destroy(editor_session_, "EditorSessionController");
   if (editor_session_runtime_) {
     if (editor_session_runtime_->save_coordinator) {
@@ -597,6 +605,8 @@ void ApplicationModuleHost::AttachQmlEngine(QQmlEngine* engine) {
                            new MaskThumbnailImageProvider(SharedMaskThumbnailImageStore()));
   engine->addImageProvider(QString::fromUtf8(kSystemIconImageProviderId),
                            new SystemIconImageProvider());
+  engine->addImageProvider(QString::fromUtf8(kComparisonImageProviderId),
+                           new ComparisonImageProvider(SharedComparisonImageStore()));
 
   if (library_ == nullptr) {
     return;

@@ -331,6 +331,7 @@ void EditorSessionController::OnBackendChanged() {
       mask_creation_->SyncFromSession();
     }
   }
+  SyncComparisonAdjustmentPanel();
   emit       StateChanged();
   PublishRenderProgressIfChanged();
   // Phase 7A R2: emit the dedicated history signal only when the backend's
@@ -1723,6 +1724,9 @@ auto EditorSessionController::NormalizeAdjustmentPanel(const QString& panel) -> 
   if (key == QLatin1String("masks") || key == QLatin1String("mask")) {
     return QStringLiteral("masks");
   }
+  if (key == QLatin1String("compare") || key == QLatin1String("comparison")) {
+    return QStringLiteral("compare");
+  }
   // "detail" is the id of the removed Detail page; stored preferences may still hold it.
   if (key == QLatin1String("post") || key == QLatin1String("detail")) {
     return QStringLiteral("post");
@@ -1774,6 +1778,9 @@ void EditorSessionController::set_active_adjustment_panel(const QString& panel) 
       (!mask_creation_ || !mask_creation_->mask_controls_active())) {
     return;
   }
+  if (normalized == QLatin1String("compare") && !comparison_was_active_) {
+    return;
+  }
   if (normalized != QLatin1String("masks") && mask_creation_ &&
       mask_creation_->mask_controls_active()) {
     mask_panel_transition_ = true;
@@ -1808,6 +1815,48 @@ void EditorSessionController::SyncMaskAdjustmentPanel() {
   }
 }
 
+void EditorSessionController::SyncComparisonAdjustmentPanel() {
+  const bool active = session_backend_ != nullptr && session_backend_->comparison_state().active();
+  if (active == comparison_was_active_) {
+    return;
+  }
+  comparison_was_active_ = active;
+  const QString compare  = QStringLiteral("compare");
+  if (active) {
+    if (active_adjustment_panel_ != compare) {
+      panel_before_comparison_ = active_adjustment_panel_;
+      // No view request: the comparison blocks view changes until it closes.
+      SetActiveAdjustmentPanel(compare, false);
+    }
+    return;
+  }
+  if (active_adjustment_panel_ != compare) {
+    return;
+  }
+  QString restored = panel_before_comparison_;
+  if (restored == QLatin1String("masks") &&
+      (!mask_creation_ || !mask_creation_->mask_controls_active())) {
+    restored = QStringLiteral("tone");
+  }
+  SetActiveAdjustmentPanel(restored, true);
+  if (node_controller_) {
+    node_controller_->SelectNodeForAdjustmentPanel(active_adjustment_panel_);
+  }
+}
+
+void EditorSessionController::CloseComparison(bool refresh_current_view) {
+  if (!session_backend_) {
+    return;
+  }
+  std::optional<alcedo::ViewportRenderRegion> region;
+  if (refresh_current_view) {
+    if (auto* sink = presentation_frame_sink()) {
+      region = sink->GetViewportRenderRegion();
+    }
+  }
+  (void)session_backend_->CloseComparison(refresh_current_view, std::move(region));
+}
+
 void EditorSessionController::SetActiveAdjustmentPanel(const QString& panel, bool request_view) {
   const QString normalized = NormalizeAdjustmentPanel(panel);
   if (active_adjustment_panel_ == normalized) {
@@ -1840,12 +1889,18 @@ void EditorSessionController::LoadDesktopUiPrefs() {
   QSettings settings;
   active_adjustment_panel_ = NormalizeAdjustmentPanel(
       settings.value(QLatin1String(kActiveAdjustmentPanelKey), QStringLiteral("tone")).toString());
+  if (active_adjustment_panel_ == QLatin1String("masks") ||
+      active_adjustment_panel_ == QLatin1String("compare")) {
+    active_adjustment_panel_ = QStringLiteral("tone");
+  }
   // editorToolPanelPage is intentionally not restored from disk: collapsed on
   // cold start, but kept in memory across library/editor workspace switches.
 }
 
 void EditorSessionController::SaveDesktopUiPrefs() const {
-  if (active_adjustment_panel_ == QLatin1String("masks")) {
+  // Mask and Compare pages exist only while their mode is active; never restore them at startup.
+  if (active_adjustment_panel_ == QLatin1String("masks") ||
+      active_adjustment_panel_ == QLatin1String("compare")) {
     return;
   }
   QSettings settings;

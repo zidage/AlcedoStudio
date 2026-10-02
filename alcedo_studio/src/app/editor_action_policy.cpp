@@ -93,6 +93,8 @@ auto EditorActionName(EditorAction action) -> const char* {
       return "Shutdown";
     case EditorAction::RequestViewChange:
       return "RequestViewChange";
+    case EditorAction::OpenComparison:
+      return "OpenComparison";
     case EditorAction::Count:
       break;
   }
@@ -111,7 +113,7 @@ auto EditorActionPolicy::DefaultBlockedActions(EditorOperationLeaseKind kind)
           EditorAction::Redo,              EditorAction::MoveHead,          EditorAction::DiscardChanges,
           EditorAction::CheckoutVersion,   EditorAction::CreateRootVersion, EditorAction::BranchVersion,
           EditorAction::RenameVersion,     EditorAction::RemoveVersion,     EditorAction::ApplyPaste,
-          EditorAction::RequestViewChange,
+          EditorAction::RequestViewChange, EditorAction::OpenComparison,
       };
     case EditorOperationLeaseKind::SaveCheckpoint:
       return {
@@ -119,6 +121,7 @@ auto EditorActionPolicy::DefaultBlockedActions(EditorOperationLeaseKind kind)
           EditorAction::Redo,              EditorAction::MoveHead,          EditorAction::DiscardChanges,
           EditorAction::CheckoutVersion,   EditorAction::CreateRootVersion, EditorAction::BranchVersion,
           EditorAction::RenameVersion,     EditorAction::RemoveVersion,     EditorAction::ApplyPaste,
+          EditorAction::OpenComparison,
       };
     case EditorOperationLeaseKind::PasteMaterialization:
       return {
@@ -129,6 +132,7 @@ auto EditorActionPolicy::DefaultBlockedActions(EditorOperationLeaseKind kind)
           EditorAction::CreateRootVersion, EditorAction::BranchVersion,
           EditorAction::RenameVersion,     EditorAction::RemoveVersion,
           EditorAction::ApplyPaste,        EditorAction::RequestViewChange,
+          EditorAction::OpenComparison,
       };
     case EditorOperationLeaseKind::FailureRecovery:
       return {
@@ -139,6 +143,19 @@ auto EditorActionPolicy::DefaultBlockedActions(EditorOperationLeaseKind kind)
           EditorAction::CreateRootVersion, EditorAction::BranchVersion,
           EditorAction::RenameVersion,     EditorAction::RemoveVersion,
           EditorAction::ApplyPaste,        EditorAction::RequestViewChange,
+          EditorAction::OpenComparison,
+      };
+    case EditorOperationLeaseKind::Comparison:
+      // Image selection, leaving the editor, and shutdown stay available: each closes the
+      // comparison first.
+      return {
+          EditorAction::PreviewAdjustment, EditorAction::CommitAdjustment,
+          EditorAction::Undo,              EditorAction::Redo,
+          EditorAction::MoveHead,          EditorAction::DiscardChanges,
+          EditorAction::CheckoutVersion,   EditorAction::CreateRootVersion,
+          EditorAction::BranchVersion,     EditorAction::RenameVersion,
+          EditorAction::RemoveVersion,     EditorAction::ApplyPaste,
+          EditorAction::RequestViewChange, EditorAction::OpenComparison,
       };
   }
   return {};
@@ -193,6 +210,13 @@ auto EditorActionPolicy::ActionForCommand(EditorSessionCommandKind kind)
       return EditorAction::CancelPendingNavigation;
     case EditorSessionCommandKind::RequestViewChange:
       return EditorAction::RequestViewChange;
+    case EditorSessionCommandKind::OpenComparison:
+      return EditorAction::OpenComparison;
+    // The comparison service accepts these only while a comparison is open.
+    case EditorSessionCommandKind::SelectComparisonSources:
+    case EditorSessionCommandKind::RetryComparison:
+    case EditorSessionCommandKind::CloseComparison:
+      return std::nullopt;
     case EditorSessionCommandKind::SetPresentationTarget:
     case EditorSessionCommandKind::SetPresentationSize:
     case EditorSessionCommandKind::SetGeometryOverlay:
@@ -333,6 +357,18 @@ auto EditorActionPolicy::Evaluate(EditorAction action, const EditorCommandContex
       return Allow();
 
     case EditorAction::Shutdown:
+      return Allow();
+
+    case EditorAction::OpenComparison:
+      if (inputs.session_state != EditorSessionState::Interactive || !inputs.has_image) {
+        return Deny("Comparison requires an interactive image");
+      }
+      if (inputs.current_output_is_hdr) {
+        return Deny("Comparison is unavailable for HDR output.");
+      }
+      if (inputs.mask_input_open) {
+        return Deny("Finish the Mask edit before comparing");
+      }
       return Allow();
 
     case EditorAction::Count:
