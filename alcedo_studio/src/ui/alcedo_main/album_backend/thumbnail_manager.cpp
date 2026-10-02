@@ -99,6 +99,34 @@ auto ThumbnailManager::ResolveThumbnailSourcePath(sl_element_id_t elementId,
 
 ThumbnailManager::ThumbnailManager(LibraryModule& library) : library_(library) {}
 
+void ThumbnailManager::SetOccurrenceThumbnailVisible(const std::string& group_key,
+                                                     sl_element_id_t elementId, image_id_t imageId,
+                                                     bool visible, uint32_t maxEdge) {
+  if (elementId == 0 || imageId == 0) {
+    return;
+  }
+  const auto occurrence = std::make_tuple(group_key, elementId, maxEdge);
+  if (visible) {
+    if (visible_occurrences_.insert(occurrence).second) {
+      SetThumbnailVisible(elementId, imageId, true, maxEdge);
+    }
+    return;
+  }
+  if (visible_occurrences_.erase(occurrence) > 0) {
+    SetThumbnailVisible(elementId, imageId, false, maxEdge);
+  }
+}
+
+auto ThumbnailManager::VisibleOccurrenceCount(sl_element_id_t elementId) const -> size_t {
+  size_t count = 0;
+  for (const auto& occurrence : visible_occurrences_) {
+    if (std::get<1>(occurrence) == elementId) {
+      ++count;
+    }
+  }
+  return count;
+}
+
 void ThumbnailManager::SetThumbnailVisible(sl_element_id_t elementId, image_id_t imageId,
                                            bool visible, uint32_t maxEdge) {
   if (elementId == 0 || imageId == 0) {
@@ -539,6 +567,7 @@ void ThumbnailManager::RemoveThumbnailState(sl_element_id_t elementId, image_id_
 }
 
 void ThumbnailManager::ReleaseVisibleThumbnailPins() {
+  visible_occurrences_.clear();
   if (thumbnail_pins_.empty()) {
     return;
   }

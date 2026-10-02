@@ -32,6 +32,9 @@
     <file>panel_icons/aperture.svg</file>
     <file>panel_icons/camera.svg</file>
     <file>panel_icons/calendar.svg</file>
+    <file>panel_icons/sort-ascending.svg</file>
+    <file>panel_icons/sort-descending.svg</file>
+    <file>panel_icons/category-plus.svg</file>
     <file>panel_icons/star.svg</file>
     <file>panel_icons/sparkles.svg</file>
     <file>panel_icons/git-branch.svg</file>

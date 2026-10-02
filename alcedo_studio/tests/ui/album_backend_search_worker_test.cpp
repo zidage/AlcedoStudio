@@ -199,15 +199,16 @@ TEST_F(SearchWorkerTests, RapidPreviewRequestsDeliverOnlyTheNewestResponse) {
   EXPECT_EQ(RowFileNames(args.at(2).toMap()), (std::vector<std::string>{"album-delete-11.dng"}));
 }
 
-TEST_F(SearchWorkerTests, ApplyFuzzySearchQueriesOnTheWorkerAndCommitsGridAndStats) {
+TEST_F(SearchWorkerTests, ApplyFuzzySearchQueriesOnTheWorkerAndKeepsInspectorFilters) {
   ApplicationModuleHost backend;
   LoadedSeededProject   project;
   ASSERT_TRUE(project.Load(temp_dir_, backend, kSyntheticImageCount));
   auto* search = backend.search();
   auto* stats  = backend.stats();
 
-  // A stats filter that the applied search clears.
+  // An Inspector filter that the applied search keeps (it matches every seeded file).
   stats->ToggleStatsFilter(QStringLiteral("camera"), QStringLiteral("Synthetic Album Camera"));
+  ASSERT_TRUE(WaitForLibraryQuery(backend));
   ASSERT_TRUE(stats->HasActiveFilter());
 
   SearchQueryThreadRecorder recorder(project.filter_service());
@@ -218,17 +219,16 @@ TEST_F(SearchWorkerTests, ApplyFuzzySearchQueriesOnTheWorkerAndCommitsGridAndSta
 
   ASSERT_TRUE(WaitUntil([&]() { return search->HasActiveSearchFilter(); }, 10000));
   EXPECT_EQ(search->active_search_query(), QStringLiteral("album-delete-1"));
-  EXPECT_FALSE(stats->HasActiveFilter());
+  EXPECT_TRUE(stats->HasActiveFilter());
   EXPECT_EQ(backend.library()->TotalCount(), 3);
   EXPECT_EQ(backend.library()->ShownCount(), 3);
   EXPECT_EQ(stats->TotalPhotoCount(), 3);
   ASSERT_EQ(stats->CameraStats().size(), 1);
   EXPECT_EQ(stats->CameraStats().front().toMap().value("count").toInt(), 3);
 
-  // Phase S8: the WHERE build, then one query that reads the grid page, the total, and the
-  // stats from one evaluation of the search predicate.
-  EXPECT_EQ(recorder.Operations(),
-            (std::vector<std::string>{"BuildFuzzySearchWhere", "ListSearchResultPageWithStats"}))
+  // The WHERE build on the filter service; the library read (grid page, total, groups, and
+  // stats from one evaluation of the merged predicate) runs through AlbumBrowseService.
+  EXPECT_EQ(recorder.Operations(), (std::vector<std::string>{"BuildFuzzySearchWhere"}))
       << JoinOperations(recorder.Operations());
   EXPECT_TRUE(recorder.UiThreadOperations().empty())
       << JoinOperations(recorder.UiThreadOperations());
@@ -296,7 +296,7 @@ TEST_F(SearchWorkerTests, SearchSqlNeverRunsOnTheUiThread) {
   search->SetSearchFieldExifEnabled(true);
   ProcessEvents(300);
 
-  EXPECT_GE(recorder.QueryCount(), 9);
+  EXPECT_GE(recorder.QueryCount(), 6);
   EXPECT_TRUE(recorder.UiThreadOperations().empty())
       << JoinOperations(recorder.UiThreadOperations());
 }

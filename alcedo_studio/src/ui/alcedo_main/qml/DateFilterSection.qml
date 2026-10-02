@@ -17,6 +17,13 @@ ColumnLayout {
     property color accentColor: appTheme.toneSteel
     property bool expanded: true
     property string styleKey: "calendar"
+    /// False shows only the calendar tiles, without the activity graph and the style switch.
+    property bool activityAvailable: true
+    /// Optional actions beside the title (see StatsCard.headerActions).
+    property Component headerActions: null
+    readonly property bool stackHeaderActions: headerActions !== null
+        && width < titleMetrics.advanceWidth + appTheme.inspectorHeaderActionSize * 6
+                   + appTheme.spaceLg * 2
     signal dayClicked(string label)
 
     readonly property var styleItems: [
@@ -34,6 +41,14 @@ ColumnLayout {
         }
     ]
 
+    TextMetrics {
+        id: titleMetrics
+        text: section.title.toUpperCase()
+        font.pixelSize: 10
+        font.weight: 700
+        font.letterSpacing: 1.6
+    }
+
     RowLayout {
         Layout.fillWidth: true
         spacing: appTheme.spaceXs
@@ -44,10 +59,17 @@ ColumnLayout {
             font.pixelSize: 10
             font.weight: 700
             font.letterSpacing: 1.6
+            wrapMode: Text.Wrap
+            Layout.fillWidth: true
             Layout.alignment: Qt.AlignVCenter
         }
 
-        Item { Layout.fillWidth: true }
+        Loader {
+            active: section.headerActions !== null && !section.stackHeaderActions
+            visible: active
+            sourceComponent: section.headerActions
+            Layout.alignment: Qt.AlignVCenter
+        }
 
         Label {
             text: section.expanded ? "▲" : "▼"
@@ -62,10 +84,17 @@ ColumnLayout {
         }
     }
 
+    Loader {
+        Layout.fillWidth: true
+        active: section.headerActions !== null && section.stackHeaderActions
+        visible: active
+        sourceComponent: section.headerActions
+    }
+
     SlidingIconNav {
         id: styleNav
         objectName: "dateFilterStyleNav"
-        visible: section.expanded
+        visible: section.expanded && section.activityAvailable
         Layout.alignment: Qt.AlignLeft
         currentKey: section.styleKey
         items: section.styleItems
@@ -79,7 +108,8 @@ ColumnLayout {
         id: calendarLoader
         objectName: "dateFilterCalendarLoader"
         Layout.fillWidth: true
-        active: section.expanded && section.styleKey === "calendar"
+        active: section.expanded
+                && (section.styleKey === "calendar" || !section.activityAvailable)
         visible: status === Loader.Ready
         Layout.preferredHeight: (status === Loader.Ready && item) ? item.implicitHeight : 0
         sourceComponent: calendarComponent
@@ -89,7 +119,8 @@ ColumnLayout {
         id: graphLoader
         objectName: "dateFilterGraphLoader"
         Layout.fillWidth: true
-        active: section.expanded && section.styleKey === "activity"
+        active: section.expanded && section.activityAvailable
+                && section.styleKey === "activity"
         asynchronous: true
         visible: status === Loader.Ready
         Layout.preferredHeight: (status === Loader.Ready && item) ? item.implicitHeight : 0

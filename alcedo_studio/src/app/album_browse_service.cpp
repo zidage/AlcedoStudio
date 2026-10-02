@@ -5,8 +5,11 @@
 #include "app/album_browse_service.hpp"
 
 #include <algorithm>
+#include <mutex>
 #include <stdexcept>
+#include <string_view>
 #include <unordered_set>
+#include <utility>
 
 #include "utils/string/convert.hpp"
 
@@ -154,6 +157,67 @@ auto AlbumBrowseService::ReadProjectOverview() const -> ProjectOverviewCounts {
     throw std::runtime_error("Project overview read requires a sleeve service.");
   }
   return sleeve_service_->GetStorage()->GetElementStore().ReadProjectOverview();
+}
+
+void AlbumBrowseService::SetQueryThreadObserver(QueryThreadObserver observer) {
+  std::lock_guard lock(query_thread_observer_mutex_);
+  query_thread_observer_ = std::move(observer);
+}
+
+auto AlbumBrowseService::ElementStoreForRead(std::string_view operation) const -> ElementStore& {
+  QueryThreadObserver observer;
+  {
+    std::lock_guard lock(query_thread_observer_mutex_);
+    observer = query_thread_observer_;
+  }
+  if (observer) {
+    observer(operation);
+  }
+  if (!sleeve_service_) {
+    throw std::runtime_error("Album query requires an open project.");
+  }
+  const auto storage = sleeve_service_->GetStorage();
+  if (!storage) {
+    throw std::runtime_error("Album query requires project storage.");
+  }
+  return storage->GetElementStore();
+}
+
+auto AlbumBrowseService::ReadAlbumQuery(sl_element_id_t                  folder_id,
+                                        const std::optional<FilterNode>& filter,
+                                        const AlbumQueryOptions&         options,
+                                        const std::string&               active_semantic_model_key,
+                                        const AlbumQueryRead& read) const -> AlbumQueryResult {
+  auto& store = ElementStoreForRead("ReadAlbumQuery");
+  return store.ReadAlbumQuery(folder_id, CompileFilterPredicate(filter), options,
+                              active_semantic_model_key, read);
+}
+
+auto AlbumBrowseService::ReadAlbumFilePosition(
+    sl_element_id_t folder_id, const std::optional<FilterNode>& filter,
+    const AlbumQueryOptions& options, const std::string& active_semantic_model_key,
+    sl_element_id_t file_id, const std::optional<AlbumGroupKey>& preferred_group) const
+    -> std::optional<AlbumFilePosition> {
+  auto& store = ElementStoreForRead("ReadAlbumFilePosition");
+  return store.ReadAlbumFilePosition(folder_id, CompileFilterPredicate(filter), options,
+                                     active_semantic_model_key, file_id, preferred_group);
+}
+
+auto AlbumBrowseService::ReadAlbumFileIds(sl_element_id_t                  folder_id,
+                                          const std::optional<FilterNode>& filter,
+                                          const AlbumQueryOptions&         options,
+                                          const std::string& active_semantic_model_key,
+                                          int64_t begin, int64_t end) const
+    -> std::vector<sl_element_id_t> {
+  auto& store = ElementStoreForRead("ReadAlbumFileIds");
+  return store.ReadAlbumFileIds(folder_id, CompileFilterPredicate(filter), options,
+                                active_semantic_model_key, begin, end);
+}
+
+auto AlbumBrowseService::ReadAlbumFileRows(std::span<const sl_element_id_t> file_ids) const
+    -> std::vector<SearchResultRow> {
+  auto& store = ElementStoreForRead("ReadAlbumFileRows");
+  return store.ListSearchResultRows(file_ids);
 }
 
 auto AlbumBrowseService::CreateFolder(const std::filesystem::path& parent_folder_path,

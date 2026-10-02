@@ -4,10 +4,10 @@
 
 #include "storage/mapper/sleeve/element/element_mapper.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <ctime>
 #include <format>
-#include <iomanip>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
@@ -22,6 +22,47 @@
 #include "utils/string/convert.hpp"
 
 namespace alcedo {
+namespace {
+
+/// `YYYY-MM-DD HH:MM:SS` text of @p value in UTC. The Element time columns are plain DuckDB
+/// TIMESTAMP values that hold UTC by application convention. Calendar arithmetic only, so it
+/// does not use the shared std::gmtime buffer.
+auto FormatUtcTimestamp(std::time_t value) -> std::string {
+  using namespace std::chrono;
+  const sys_seconds    time_point{seconds{value}};
+  const auto           day = floor<days>(time_point);
+  const year_month_day date{day};
+  const hh_mm_ss       time{time_point - day};
+  return std::format("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", static_cast<int>(date.year()),
+                     static_cast<unsigned>(date.month()), static_cast<unsigned>(date.day()),
+                     time.hours().count(), time.minutes().count(), time.seconds().count());
+}
+
+/// The instant of `YYYY-MM-DD HH:MM:SS[.ffffff]` UTC text, independent of the process time
+/// zone. Text that does not parse reads as 0.
+auto ParseUtcTimestamp(const std::string& text) -> std::time_t {
+  int                year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0;
+  char               separator_1 = 0, separator_2 = 0, separator_3 = 0, separator_4 = 0;
+  std::istringstream stream(text);
+  stream >> year >> separator_1 >> month >> separator_2 >> day >> hour >> separator_3 >> minute >>
+      separator_4 >> second;
+  if (stream.fail() || separator_1 != '-' || separator_2 != '-' || separator_3 != ':' ||
+      separator_4 != ':') {
+    return 0;
+  }
+  using namespace std::chrono;
+  const year_month_day date{std::chrono::year{year},
+                            std::chrono::month{static_cast<unsigned>(month)},
+                            std::chrono::day{static_cast<unsigned>(day)}};
+  if (!date.ok()) {
+    return 0;
+  }
+  const auto time_point = sys_days{date} + hours{hour} + minutes{minute} + seconds{second};
+  return static_cast<std::time_t>(time_point.time_since_epoch().count());
+}
+
+}  // namespace
+
 auto ElementMapper::FromRawData(std::vector<duckorm::VarTypes>&& data) -> ElementMapperParams {
   if (data.size() != FieldCount()) {
     throw std::runtime_error("Invalid DuckFieldDesc for SleeveElement");
@@ -43,37 +84,19 @@ auto ElementMapper::FromRawData(std::vector<duckorm::VarTypes>&& data) -> Elemen
 }
 
 auto ElementMapper::ToParams(const std::shared_ptr<SleeveElement>& source) -> ElementMapperParams {
-  char added_time[32];
-  char modified_time[32];
-  std::strftime(added_time, sizeof(added_time), "%Y-%m-%d %H:%M:%S",
-                std::gmtime(&source->added_time_));
-  std::strftime(modified_time, sizeof(modified_time), "%Y-%m-%d %H:%M:%S",
-                std::gmtime(&source->last_modified_time_));
-
   std::string utf_8_str = conv::ToBytes(source->element_name_);
   return {source->element_id_,
           static_cast<uint32_t>(source->type_),
           std::make_unique<std::string>(utf_8_str),
-          std::make_unique<std::string>(added_time),
-          std::make_unique<std::string>(modified_time),
+          std::make_unique<std::string>(FormatUtcTimestamp(source->added_time_)),
+          std::make_unique<std::string>(FormatUtcTimestamp(source->last_modified_time_)),
           source->ref_count_};
 }
 
 auto ElementMapper::FromParams(ElementMapperParams&& param) -> std::shared_ptr<SleeveElement> {
-  auto               id                = param.id;
-  auto               type              = static_cast<ElementType>(param.type);
-  auto               element_name      = conv::FromBytes(std::move(*param.element_name));
-  auto               added_time_str    = std::move(*param.added_time);
-  auto               modified_time_str = std::move(*param.modified_time);
-  auto               ref_count         = param.ref_count;
-
-  std::tm            tm_added{};
-  std::tm            tm_modified{};
-
-  std::istringstream a_ss(added_time_str);
-  std::istringstream m_ss(modified_time_str);
-  a_ss >> std::get_time(&tm_added, "%Y-%m-%d %H:%M:%S");
-  m_ss >> std::get_time(&tm_modified, "%Y-%m-%d %H:%M:%S");
+  auto                           id           = param.id;
+  auto                           type         = static_cast<ElementType>(param.type);
+  auto                           element_name = conv::FromBytes(std::move(*param.element_name));
   std::shared_ptr<SleeveElement> element;
   if (type == ElementType::FILE) {
     element = std::make_shared<SleeveFile>(id, element_name);
@@ -83,9 +106,9 @@ auto ElementMapper::FromParams(ElementMapperParams&& param) -> std::shared_ptr<S
     throw std::runtime_error("ElementMapper: Invalid ElementMapperParams");
   }
 
-  element->added_time_         = std::mktime(&tm_added);
-  element->last_modified_time_ = std::mktime(&tm_modified);
-  element->ref_count_          = ref_count;
+  element->added_time_         = param.added_time ? ParseUtcTimestamp(*param.added_time) : 0;
+  element->last_modified_time_ = param.modified_time ? ParseUtcTimestamp(*param.modified_time) : 0;
+  element->ref_count_          = param.ref_count;
 
   return element;
 }

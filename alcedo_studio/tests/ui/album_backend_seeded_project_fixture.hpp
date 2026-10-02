@@ -16,22 +16,24 @@
 #include <QSignalSpy>
 #include <QString>
 #include <QVariantList>
-
 #include <algorithm>
+#include <chrono>
+#include <ctime>
 #include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
-#include "app/project_package_backend.hpp"
 #include "app/pipeline_service.hpp"
+#include "app/project_package_backend.hpp"
 #include "app/project_service.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "image/image.hpp"
 #include "sleeve/sleeve_element/sleeve_file.hpp"
 #include "ui/album_backend_test_fixture.hpp"
 #include "ui/alcedo_main/album_backend/import_export.hpp"
+#include "ui/alcedo_main/album_backend/library_module.hpp"
 #include "ui/alcedo_main/album_backend/project_module.hpp"
 
 namespace alcedo::ui::test {
@@ -83,22 +85,33 @@ inline auto FindFolderId(const QVariantList& folders, const QString& name) -> ui
   return 0;
 }
 
+/// Typed metadata and import time of one synthetic image (library sort and group tests).
+struct LibraryPhotoSpec {
+  std::string                model_     = "Synthetic Album Camera";
+  std::string                lens_      = "Synthetic 50mm";
+  std::string                date_time_ = "2026-05-25 10:00:00";
+  int                        rating_    = 0;
+  std::optional<std::time_t> added_time_{};  ///< Element.added_time; creation time when empty.
+};
+
 /// Build a packed project with one synthetic DNG image (no real pixels, no GPU),
 /// or with the supplied RAW files when editor interaction is required.
+/// @p specs, when set, gives the number of synthetic images and their metadata.
 /// Returns the packed path and the image element/file + image ids on success.
 inline auto CreateSeededPackedProject(
     const std::filesystem::path&              tempDir,
     const std::vector<std::filesystem::path>& sourceImagePaths = {},
-    std::size_t                               synthetic_image_count = 1)
+    std::size_t synthetic_image_count = 1, const std::vector<LibraryPhotoSpec>& specs = {})
     -> std::optional<SeededProject> {
   const auto db_path     = tempDir / "album_delete_seed.db";
   const auto meta_path   = tempDir / "album_delete_seed.json";
   const auto packed_path = tempDir / "album_delete_seed.alcd";
 
   auto project = std::make_shared<ProjectService>(db_path, meta_path, ProjectOpenMode::kCreateNew);
-  const std::size_t image_count =
-      sourceImagePaths.empty() ? std::max<std::size_t>(1, synthetic_image_count)
-                               : sourceImagePaths.size();
+  const std::size_t                    image_count = !specs.empty() ? specs.size()
+                                                     : sourceImagePaths.empty()
+                                                         ? std::max<std::size_t>(1, synthetic_image_count)
+                                                         : sourceImagePaths.size();
   std::vector<SeededProject::ImageKey> image_keys;
   image_keys.reserve(image_count);
 
@@ -122,16 +135,21 @@ inline auto CreateSeededPackedProject(
     }
     image->image_type_ = ImageType::DNG;
 
-    ExifDisplayMetaData metadata;
-    metadata.model_         = "Synthetic Album Camera";
-    metadata.lens_          = "Synthetic 50mm";
-    metadata.date_time_str_ = "2026-05-25 10:00:00";
+    const LibraryPhotoSpec spec = index < specs.size() ? specs[index] : LibraryPhotoSpec{};
+    ExifDisplayMetaData   metadata;
+    metadata.model_         = spec.model_;
+    metadata.lens_          = spec.lens_;
+    metadata.date_time_str_ = spec.date_time_;
+    metadata.rating_        = spec.rating_;
     image->SetExifDisplayMetaData(std::move(metadata));
 
     auto file = project->GetSleeveService()->Write<std::shared_ptr<SleeveFile>>(
-        [image](FileSystem& fs) -> std::shared_ptr<SleeveFile> {
+        [image, &spec](FileSystem& fs) -> std::shared_ptr<SleeveFile> {
           auto created       = fs.CreateFileInLibrary(image->image_name_);
           created->image_id_ = image->image_id_;
+          if (spec.added_time_.has_value()) {
+            created->added_time_ = *spec.added_time_;
+          }
           return created;
         });
     if (!file.second.success_ || !file.first) {
@@ -172,7 +190,18 @@ inline auto CreateSeededPackedProject(
                        std::move(image_keys)};
 }
 
-/// Load a packed .alcd project into @p backend and wait for ServiceReady.
+/// Pump events until the library query worker accepted the requested refresh (or timeout).
+inline auto WaitForLibraryQuery(ApplicationModuleHost& backend, int timeoutMs = 15000) -> bool {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+  ProcessEvents(10);
+  while (backend.library()->QueryUpdating() && std::chrono::steady_clock::now() < deadline) {
+    ProcessEvents(10);
+  }
+  return !backend.library()->QueryUpdating();
+}
+
+/// Load a packed .alcd project into @p backend and wait for ServiceReady and the first
+/// accepted library result.
 inline auto LoadPackedProject(ApplicationModuleHost& backend,
                               const std::filesystem::path& packedPath) -> bool {
   QSignalSpy project_spy(backend.project(), &ProjectModule::ProjectChanged);
@@ -181,6 +210,7 @@ inline auto LoadPackedProject(ApplicationModuleHost& backend,
   }
   WaitForSignal(project_spy, 15000);
   ProcessEvents(500);
+  WaitForLibraryQuery(backend);
   return backend.project()->ServiceReady();
 }
 

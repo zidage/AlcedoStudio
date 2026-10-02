@@ -345,12 +345,55 @@ RowLayout {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
 
+                // Query state: the last accepted view stays visible while a read runs; a
+                // failure keeps it and offers Retry.
+                RowLayout {
+                    id: libraryQueryStateRow
+                    objectName: "libraryQueryStateRow"
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    z: 2
+                    visible: appModules.library.queryError.length > 0
+                             || appModules.library.queryUpdating
+                    spacing: appTheme.spaceSm
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: appModules.library.queryError.length > 0
+                              ? qsTr("Library query failed: %1").arg(appModules.library.queryError)
+                              : qsTr("Updating")
+                        color: appModules.library.queryError.length > 0
+                               ? appTheme.dangerColor : appTheme.textMutedColor
+                        font.family: appTheme.uiFontFamily
+                        font.pixelSize: appTheme.fontSizeCaption
+                        wrapMode: Text.Wrap
+                        Accessible.role: Accessible.StaticText
+                        Accessible.name: text
+                    }
+
+                    DialogActionButton {
+                        id: libraryQueryRetryButton
+                        objectName: "libraryQueryRetryButton"
+                        visible: appModules.library.queryError.length > 0
+                        buttonWidth: 96
+                        buttonHeight: appTheme.iconButtonHitSizeCompact
+                        text: qsTr("Retry")
+                        Accessible.name: qsTr("Retry the library query")
+                        onClicked: appModules.library.RetryLibraryQuery()
+                    }
+                }
+
                 Loader {
                     id: contentViewLoader
                     objectName: "libraryContentViewLoader"
                     anchors.fill: parent
-                    active: appModules.library.shownCount > 0
-                    sourceComponent: gridComp
+                    anchors.topMargin: libraryQueryStateRow.visible
+                                       ? libraryQueryStateRow.implicitHeight + appTheme.spaceXs : 0
+                    active: appModules.library.grouped
+                            ? appModules.library.sectionModel.groupCount > 0
+                            : appModules.library.shownCount > 0
+                    sourceComponent: appModules.library.grouped ? sectionComp : gridComp
                     opacity: root.libraryGridRevealOpacity
                     transform: Translate { y: root.libraryGridRevealShift }
                     onLoaded: {
@@ -382,20 +425,35 @@ RowLayout {
                 }
 
                 Column {
+                    readonly property bool hasLibraryFilter:
+                        appModules.search.activeSearchQuery.length > 0
+                        || appModules.stats.statsFilterDate.length > 0
+                        || appModules.stats.statsFilterImportDate.length > 0
+                        || appModules.stats.statsFilterCamera.length > 0
+                        || appModules.stats.statsFilterLens.length > 0
+                        || appModules.stats.statsFilterLabel.length > 0
+                        || appModules.stats.statsFilterRating.length > 0
+                    readonly property bool noMatchingPhotos: appModules.project.serviceReady
+                                                             && hasLibraryFilter
                     anchors.left: parent.left
                     anchors.right: parent.right
                     anchors.top: parent.top
+                    anchors.topMargin: contentViewLoader.anchors.topMargin
                     visible: appModules.library.shownCount === 0
+                             && appModules.library.queryError.length === 0
                     spacing: 8
                     Label {
-                        text: appModules.project.serviceReady ? qsTr("No Photos Yet") : qsTr("Open or Create a Project")
+                        text: parent.noMatchingPhotos ? qsTr("No Matching Photos")
+                              : appModules.project.serviceReady ? qsTr("No Photos Yet") : qsTr("Open or Create a Project")
                         font.family: root.headlineFontFamily
                         color: root.colText
                         font.pixelSize: 22
                         font.weight: 700
                     }
                     Label {
-                        text: appModules.project.serviceReady
+                        text: parent.noMatchingPhotos
+                              ? qsTr("Change the filters or the search to show photos.")
+                              : appModules.project.serviceReady
                               ? qsTr("Import your images for RAW adjustments.")
                               : qsTr("Use File > Load Project or File > Create Project to choose .alcd files.")
                         color: root.colTextMuted
@@ -598,6 +656,36 @@ RowLayout {
     }
 }
 
+
+    Component {
+        id: sectionComp
+        AlbumSectionView {
+            objectName: "libraryAlbumSectionView"
+            zoomLevel: root.gridZoomLevel
+            selectedImagesById: host.selectedImagesById
+            exportQueueById: host.exportQueueById
+            onZoomChanged: function(level) { root.gridZoomLevel = level }
+            onImageSelectionChanged: function(elementId, imageId, fileName, isHdr, selected) {
+                host.selectionState.setImageSelected(elementId, imageId, fileName, isHdr, selected)
+            }
+            onReplaceSelection: function(items) {
+                host.selectionState.replaceSelectedImages(items)
+                if (items && items.length > 0) {
+                    const index = appModules.library.thumbnailModel.rowByElementId(
+                        Number(items[0].elementId))
+                    root.focusLibraryItem(items[0], index)
+                } else {
+                    host.setFocusedImage(null)
+                }
+            }
+            onImageFocused: function(item, index) {
+                root.focusLibraryItem(item, index)
+            }
+            onContextMenuRequested: function(item, sceneX, sceneY) {
+                host.openImageContextMenu(item, sceneX, sceneY)
+            }
+        }
+    }
 
     Component {
         id: gridComp

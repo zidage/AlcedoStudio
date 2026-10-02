@@ -6,6 +6,7 @@ def_library(DuckORM
         "${ALCEDO_SRC_ROOT}/storage/mapper/duckorm/duckdb_orm.cpp"
         "${ALCEDO_SRC_ROOT}/storage/mapper/duckorm/duckdb_types.cpp"
         "${ALCEDO_SRC_ROOT}/storage/mapper/duckorm/duckdb_expr.cpp"
+        "${ALCEDO_SRC_ROOT}/storage/mapper/duckorm/duckdb_select.cpp"
     PUBLIC_DEPS DuckDB
 )
 
@@ -47,6 +48,7 @@ set(STORAGE_SRCS
     "${ALCEDO_SRC_ROOT}/storage/store/semantic/semantic_tables.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/ai/ai_store.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/sleeve/element_store.cpp"
+    "${ALCEDO_SRC_ROOT}/storage/store/sleeve/album_query.cpp"
     "${ALCEDO_SRC_ROOT}/storage/store/edit_history/commit_graph_store.cpp"
 )
 

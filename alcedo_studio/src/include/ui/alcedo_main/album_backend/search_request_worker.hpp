@@ -17,8 +17,10 @@ namespace alcedo::ui {
 /// Kind of a search request. A request replaces the pending request of its own kind only, so
 /// a dialog preview never drops a pending apply and the reverse.
 enum class SearchRequestKind : std::uint8_t {
-  kPreview = 0,  ///< Search dialog page: typing preview, paging, and explicit submit.
-  kApply   = 1,  ///< Thumbnail grid page and stats for the applied search.
+  kPreview     = 0,  ///< Search dialog page: typing preview, paging, and explicit submit.
+  kApply       = 1,  ///< Library refresh: first page, groups, and stats of the applied query.
+  kLibraryPage = 2,  ///< Later page of the accepted library query (scroll or section jump).
+  kLibraryIds  = 3,  ///< Position or ordered-id read of the accepted library query.
 };
 
 /// One worker thread that runs search requests in submit order with latest-wins coalescing.
@@ -57,6 +59,9 @@ class SearchRequestWorker {
   void                 Invalidate(SearchRequestKind kind);
   /// True when @p generation is the newest request of @p kind and was not invalidated.
   [[nodiscard]] auto   IsCurrent(SearchRequestKind kind, std::uint64_t generation) const -> bool;
+  /// Invalidate @p kind (see Invalidate) and block until no job of that kind runs. An owner
+  /// whose jobs post results to it calls this before it is destroyed while the worker lives on.
+  void                 InvalidateAndWait(SearchRequestKind kind);
 
  private:
   struct PendingRequest {
@@ -71,9 +76,12 @@ class SearchRequestWorker {
   mutable std::mutex           mutex_;
   std::condition_variable      wake_;
   std::deque<PendingRequest>   pending_{};
-  std::array<std::uint64_t, 2> newest_generation_{};
+  std::condition_variable      idle_;
+  std::array<std::uint64_t, 4> newest_generation_{};
   std::uint64_t                last_generation_ = 0;
   bool                         stopping_        = false;
+  bool                         running_         = false;
+  SearchRequestKind            running_kind_    = SearchRequestKind::kPreview;
   std::thread                  thread_;  // Last member: starts after the state above exists.
 };
 

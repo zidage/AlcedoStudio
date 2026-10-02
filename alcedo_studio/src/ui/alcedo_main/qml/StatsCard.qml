@@ -15,6 +15,12 @@ Item {
     property string selectedLabel: ""
     property string displayMode: "bars"
     property bool showHeader: true
+    /// Optional actions beside the title (Album Inspector sort and Group). Loaded apart from
+    /// the content, so a collapsed card keeps them; activating them never toggles expansion.
+    property Component headerActions: null
+    readonly property bool stackHeaderActions: headerActions !== null
+        && width < titleMetrics.advanceWidth + appTheme.inspectorHeaderActionSize * 6
+                   + appTheme.spaceLg * 2
     property var yearExpansion: ({})
     signal barClicked(string label)
 
@@ -163,18 +169,32 @@ Item {
         anchors.right: parent.right
         spacing: 8
 
+        TextMetrics {
+            id: titleMetrics
+            text: card.title.toUpperCase()
+            font.pixelSize: 10
+            font.weight: 700
+            font.letterSpacing: 1.6
+        }
+
         RowLayout {
             Layout.fillWidth: true
             visible: card.showHeader
 
             Label {
+                Layout.fillWidth: true
                 text: card.title.toUpperCase()
                 color: appTheme.textMutedColor
                 font.pixelSize: 10
                 font.weight: 700
                 font.letterSpacing: 1.6
+                wrapMode: Text.Wrap
             }
-            Item { Layout.fillWidth: true }
+            Loader {
+                active: card.headerActions !== null && !card.stackHeaderActions
+                visible: active
+                sourceComponent: card.headerActions
+            }
             Label {
                 text: card.expanded ? "▲" : "▼"
                 color: appTheme.textMutedColor
@@ -185,6 +205,13 @@ Item {
                     onClicked: card.expanded = !card.expanded
                 }
             }
+        }
+
+        Loader {
+            Layout.fillWidth: true
+            active: card.showHeader && card.headerActions !== null && card.stackHeaderActions
+            visible: active
+            sourceComponent: card.headerActions
         }
 
         // --- bars ---
