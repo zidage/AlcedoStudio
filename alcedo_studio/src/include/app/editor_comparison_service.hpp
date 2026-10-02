@@ -17,7 +17,7 @@
 #include "app/editor_session_ports.hpp"
 #include "app/editor_session_request_ids.hpp"
 #include "edit/graph/pipeline_graph_snapshot.hpp"
-#include "edit/pipeline/rendered_pipeline_image.hpp"
+#include "edit/runtime/rendered_pipeline_image.hpp"
 #include "type/type.hpp"
 
 /**

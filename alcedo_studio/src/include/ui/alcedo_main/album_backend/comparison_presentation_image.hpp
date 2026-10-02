@@ -8,7 +8,7 @@
 #include <QVariantMap>
 
 #include "edit/geometry/types.hpp"
-#include "edit/pipeline/rendered_pipeline_image.hpp"
+#include "edit/runtime/rendered_pipeline_image.hpp"
 
 namespace alcedo::ui {
 

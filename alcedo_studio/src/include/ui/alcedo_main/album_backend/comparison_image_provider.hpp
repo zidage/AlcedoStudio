@@ -13,7 +13,7 @@
 #include <memory>
 #include <mutex>
 
-#include "edit/pipeline/rendered_pipeline_image.hpp"
+#include "edit/runtime/rendered_pipeline_image.hpp"
 #include "ui/alcedo_main/album_backend/comparison_presentation_image.hpp"
 
 namespace alcedo::ui {

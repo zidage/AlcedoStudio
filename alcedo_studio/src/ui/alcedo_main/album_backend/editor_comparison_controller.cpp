@@ -13,7 +13,7 @@
 
 #include "app/editor_history_types.hpp"
 #include "app/editor_session_service.hpp"
-#include "edit/pipeline/rendered_pipeline_image.hpp"
+#include "edit/runtime/rendered_pipeline_image.hpp"
 #include "type/hash_type.hpp"
 
 namespace alcedo::ui {
