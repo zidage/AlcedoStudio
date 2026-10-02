@@ -267,6 +267,43 @@ alcedo_ui_gtest_discover_tests(EditorComparisonInputsTest
   PROPERTIES LABELS "editor_history;editor_session;editor_comparison")
 alcedo_register_test_target(EditorComparisonInputsTest ui)
 
+# The editor comparison through the production session facade over the real history port: entry
+# admission, action restriction, captured working values, Version sources, close, and image switch.
+add_executable(EditorComparisonServiceTest
+    ${ALCEDO_TEST_ROOT}/app/editor_comparison_service_test.cpp
+    ${ALCEDO_EDITOR_HISTORY_PORT_SOURCES})
+target_include_directories(EditorComparisonServiceTest
+  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
+target_link_libraries(EditorComparisonServiceTest
+  EditorSessionService
+  EditorComparisonService
+  EditorComparisonInputs
+  AdjustmentTransferService
+  EditorWorkingDocument
+  EditorSessionEditController
+  EditorNodeGraphDraft
+  EditorNodeGraphProjection
+  EditorAdjustmentPipeline
+  EditorPipelineCommandService
+  EditorPanelProjection
+  PipelineHistoryApplier
+  EditGraph
+  EditMaskCore
+  EditorMiniGitMaterializer
+  PipelineMgmtService
+  ProjectService
+  PipelineHistory
+  EditPipeline
+  GTest::gtest_main)
+set_target_properties(EditorComparisonServiceTest PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/alcedo_studio/tests"
+  RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/alcedo_studio/tests"
+  RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/alcedo_studio/tests")
+alcedo_ui_gtest_discover_tests(EditorComparisonServiceTest
+  TEST_PREFIX "EditorComparisonServiceTest."
+  PROPERTIES LABELS "editor_session;editor_comparison")
+alcedo_register_test_target(EditorComparisonServiceTest ui)
+
 # Checkpoint storage owns Mini-Git materialization and recovery.
 # Same direct-adapter link rule as history port: avoid AlbumBackendLib for unit runs.
 add_executable(EditorSessionCheckpointStoreTest
@@ -343,6 +380,24 @@ alcedo_ui_gtest_discover_tests(EditorSessionRenderSchedulerPortTest
   TEST_PREFIX "EditorSessionRenderSchedulerPortTest."
   PROPERTIES LABELS "editor_session")
 alcedo_register_test_target(EditorSessionRenderSchedulerPortTest ui)
+
+# Resource and timing evidence of a comparison pair of a large Bayer RAW on the editor executor
+# (CUDA). Same LibRaw include order as the port test.
+add_executable(EditorComparisonLargeRawPairTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_comparison_large_raw_pair_test.cpp)
+target_include_directories(EditorComparisonLargeRawPairTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+if(TARGET puerhlab_libraw)
+  target_include_directories(EditorComparisonLargeRawPairTest BEFORE PRIVATE
+    $<TARGET_PROPERTY:puerhlab_libraw,INTERFACE_INCLUDE_DIRECTORIES>)
+endif()
+target_link_libraries(EditorComparisonLargeRawPairTest
+  AlbumBackendLib
+  libraw::raw_r
+  GTest::gtest_main)
+alcedo_ui_gtest_discover_tests(EditorComparisonLargeRawPairTest
+  TEST_PREFIX "EditorComparisonLargeRawPairTest."
+  PROPERTIES LABELS "editor_session;editor_comparison")
+alcedo_register_test_target(EditorComparisonLargeRawPairTest ui)
 
 def_ui_test(AlbumBackendImportTest   album_backend_import_test.cpp)
 alcedo_register_test_target(AlbumBackendImportTest ui)
@@ -1285,6 +1340,36 @@ alcedo_ui_gtest_discover_tests(EditorComparisonGeometryTest
     TEST_PREFIX "EditorComparisonGeometryTest."
     PROPERTIES LABELS "editor_comparison")
 alcedo_register_test_target(EditorComparisonGeometryTest ui)
+
+add_executable(EditorComparisonControllerTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_comparison_controller_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(EditorComparisonControllerTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorComparisonControllerTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(EditorComparisonControllerTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+set_target_properties(EditorComparisonControllerTest PROPERTIES AUTOMOC ON)
+alcedo_ui_gtest_discover_tests(EditorComparisonControllerTest
+    TEST_PREFIX "EditorComparisonControllerTest."
+    PROPERTIES LABELS "editor_session;editor_comparison")
+alcedo_register_test_target(EditorComparisonControllerTest ui)
 
 add_executable(EditorComparisonViewQmlTest
     ${ALCEDO_TEST_ROOT}/ui/editor_comparison_view_qml_test.cpp

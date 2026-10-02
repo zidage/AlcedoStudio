@@ -25,6 +25,9 @@ Item {
     property var adjustmentTransfer: null
     property bool versionCheckoutEnabled: true
     property string versionCheckoutDisabledReason: ""
+    // EditorComparisonController; the header Compare action opens Version comparison.
+    property var comparison: typeof appModules !== "undefined" && appModules
+                             ? appModules.editorComparison : null
 
     // Inline draft state shared by create branch / create fork / rename. The
     // header field edits create drafts; the target card's title field edits a
@@ -443,6 +446,19 @@ Item {
                 font.family: appTheme.uiFontFamily
                 font.pixelSize: appTheme.fontSizeSection
                 font.weight: appTheme.fontWeightHeading
+            }
+
+            DialogActionButton {
+                objectName: "editorVersionsCompareButton"
+                buttonHeight: appTheme.iconButtonHitSizeCompact
+                buttonWidth: contentItem.implicitWidth + 2 * appTheme.spaceMd
+                font.pixelSize: appTheme.fontSizeBody
+                text: qsTr("Compare")
+                enabled: !!(root.comparison && root.comparison.canOpen)
+                Accessible.name: qsTr("Compare Versions")
+                Accessible.description: root.comparison
+                                        ? String(root.comparison.openUnavailableReason || "") : ""
+                onClicked: root.comparison.openVersions()
             }
 
             IconActionButton {

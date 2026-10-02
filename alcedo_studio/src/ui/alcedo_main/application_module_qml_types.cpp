@@ -52,6 +52,8 @@ void RegisterApplicationModuleTypes() {
       "Owned by AdjustmentTransferController");
   qmlRegisterUncreatableType<EditorSessionController>(
       "Alcedo.Main", 1, 0, "EditorSessionController", "Owned by ApplicationModuleHost");
+  qmlRegisterUncreatableType<EditorComparisonController>(
+      "Alcedo.Main", 1, 0, "EditorComparisonController", "Owned by ApplicationModuleHost");
   qmlRegisterUncreatableType<EditorMaskCreationAdapter>(
       "Alcedo.Main", 1, 0, "EditorMaskCreationAdapter", "Owned by EditorSessionController");
   qmlRegisterUncreatableType<EditorScopeController>("Alcedo.Main", 1, 0, "EditorScopeController",

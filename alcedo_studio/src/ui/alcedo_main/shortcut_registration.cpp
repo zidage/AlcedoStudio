@@ -123,6 +123,15 @@ void RegisterMaskShortcuts(ShortcutRegistry* registry) {
       {Chord(Qt::Key_Return), Chord(Qt::Key_Enter)});
 }
 
+void RegisterComparisonShortcuts(ShortcutRegistry* registry) {
+  if (registry == nullptr) {
+    return;
+  }
+  AddSpec(registry, shortcut_id::kComparisonClose, "Comparison", "Close comparison",
+          {Chord(Qt::Key_Escape)}, shortcut_scope::kEditorComparison, ShortcutInputKind::KeyChord,
+          false);
+}
+
 void RegisterNodesPanelShortcuts(ShortcutRegistry* registry) {
   if (registry == nullptr) {
     return;
@@ -161,6 +170,7 @@ void RegisterBuiltinShortcuts(ShortcutRegistry* registry) {
   RegisterVersionsShortcuts(registry);
   RegisterLutShortcuts(registry);
   RegisterMaskShortcuts(registry);
+  RegisterComparisonShortcuts(registry);
   RegisterNodesPanelShortcuts(registry);
 }
 

@@ -212,6 +212,25 @@ TEST_F(ShortcutRegistryTest, OverlappingScopesRejectDuplicateBindingWithoutChang
                   .toBool());
 }
 
+TEST_F(ShortcutRegistryTest, ComparisonCloseOwnsEscapeOnlyInsideTheComparisonScope) {
+  auto registry = MakeRegistry();
+  // Escape is also the Mask finish and the Nodes cancel key; the exclusive comparison scope
+  // shadows Nodes and never runs together with Mask edit, so registration reports no conflict.
+  ASSERT_TRUE(registry->FinalizeRegistration().isEmpty());
+
+  EXPECT_EQ(registry->scopeForCommand(QLatin1String(shortcut_id::kComparisonClose)),
+            QLatin1String(shortcut_scope::kEditorComparison));
+  EXPECT_EQ(registry->commandIdForKey(QLatin1String(shortcut_scope::kEditorComparison),
+                                      Qt::Key_Escape, Qt::NoModifier),
+            QLatin1String(shortcut_id::kComparisonClose));
+  EXPECT_EQ(registry->commandIdForKey(QLatin1String(shortcut_scope::kEditorNodes), Qt::Key_Escape,
+                                      Qt::NoModifier),
+            QLatin1String(shortcut_id::kNodesCancel));
+  EXPECT_EQ(registry->commandIdForKey(QLatin1String(shortcut_scope::kWorkspaceEditor),
+                                      Qt::Key_Escape, Qt::NoModifier),
+            QString());
+}
+
 TEST_F(ShortcutRegistryTest, MaskExclusiveScopeMayUseNodesDeleteBinding) {
   auto registry = MakeRegistry();
   ASSERT_TRUE(registry->FinalizeRegistration().isEmpty());

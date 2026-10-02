@@ -47,6 +47,9 @@ enum class EditorRenderReason : std::uint8_t {
   // referenced LUT file was updated, went missing, or became available again. Quality
   // rebuild of the live DAG; result validity finds the affected Grades. No history change.
   ResourceChanged,
+  // The editor comparison closed. One Quality render of the current document with the current
+  // view reconciles the downstream runtime state; no history change.
+  ComparisonClosed,
 };
 
 enum class EditorRenderQuality : std::uint8_t {
@@ -162,6 +165,7 @@ struct EditorRenderResult {
     case EditorRenderReason::VersionDocumentChanged:
     case EditorRenderReason::PastedPipelineDocument:
     case EditorRenderReason::ResourceChanged:
+    case EditorRenderReason::ComparisonClosed:
       return EditorRenderPriority::Normal;
   }
   return EditorRenderPriority::Normal;
@@ -179,6 +183,7 @@ struct EditorRenderResult {
     case EditorRenderReason::VersionDocumentChanged:
     case EditorRenderReason::PastedPipelineDocument:
     case EditorRenderReason::ResourceChanged:
+    case EditorRenderReason::ComparisonClosed:
       return EditorRenderQuality::Quality;
     case EditorRenderReason::InitialFrame:
     case EditorRenderReason::InteractiveAdjustment:

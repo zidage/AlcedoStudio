@@ -15,6 +15,9 @@
 
 #include "app/adjustment_transfer_types.hpp"
 #include "app/editor_action_policy.hpp"
+#include "app/editor_comparison_service.hpp"
+#include "app/editor_comparison_types.hpp"
+#include "app/editor_image_render_port.hpp"
 #include "app/editor_mask_creation_controller.hpp"
 #include "app/editor_panel_projection.hpp"
 #include "app/editor_pending_input.hpp"
@@ -435,6 +438,44 @@ class IEditorSessionBackend {
     result.message = "View change not supported by this backend";
     return result;
   }
+  /**
+   * @brief Open the editor comparison of the open image and render Root and Current.
+   *
+   * Admitted through EditorAction::OpenComparison. Settles pending parameter input, captures the
+   * working values once, and blocks image writes, history movement, Version writes, Paste, and
+   * view changes until the comparison closes. Saves nothing. Default backends reject.
+   */
+  virtual auto OpenComparison(EditorComparisonKind /*kind*/) -> EditorSessionResult {
+    return RejectComparison("Comparison is not supported by this backend");
+  }
+  /// Select the kind and sources of the open comparison; renders a new pair when a source changed.
+  virtual auto SelectComparisonSources(EditorComparisonKind /*kind*/,
+                                       EditorComparisonSource /*a*/, EditorComparisonSource /*b*/)
+      -> EditorSessionResult {
+    return RejectComparison("Comparison is not supported by this backend");
+  }
+  /// Render the selected pair of the open comparison again.
+  virtual auto RetryComparison() -> EditorSessionResult {
+    return RejectComparison("Comparison is not supported by this backend");
+  }
+  /**
+   * @brief Close the open comparison and release its documents and images.
+   *
+   * With @p refresh_current_view, routes one Quality render of the current document with
+   * @p region afterwards. Accepted without a change when no comparison is open.
+   */
+  virtual auto CloseComparison(bool /*refresh_current_view*/,
+                               std::optional<ViewportRenderRegion> /*region*/)
+      -> EditorSessionResult {
+    return RejectComparison("Comparison is not supported by this backend");
+  }
+  /// Published state of the open comparison; Inactive when none is open. Any thread.
+  [[nodiscard]] virtual auto comparison_state() const -> EditorComparisonState { return {}; }
+  /// Move the Ready pair @p pair_id (A, B) out of the backend; empty when it is not Ready.
+  virtual auto TakeComparisonImages(std::uint64_t /*pair_id*/)
+      -> std::vector<RenderedPipelineImage> {
+    return {};
+  }
   [[nodiscard]] virtual auto render_busy() const -> bool { return false; }
   [[nodiscard]] virtual auto action_availability() const -> EditorActionAvailability { return {}; }
   [[nodiscard]] virtual auto active_image_load_request() const -> ImageLoadRequestId { return {}; }
@@ -452,6 +493,15 @@ class IEditorSessionBackend {
   [[nodiscard]] virtual auto first_frame_time_ms() const -> double { return -1.0; }
 
  protected:
+  [[nodiscard]] auto RejectComparison(std::string message) const -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Rejected;
+    result.state    = state();
+    result.identity = identity();
+    result.message  = std::move(message);
+    return result;
+  }
+
   void NotifyChange() {
     ChangeNotifier notifier;
     {
@@ -514,6 +564,9 @@ class EditorSessionService final : public IEditorSessionBackend {
     /// Delivery port for the thread that owns the session reducer. When null,
     /// the runtime uses a deterministic manual executor.
     std::shared_ptr<IEditorSessionCommandExecutor>   command_executor;
+    /// One-shot host images of the held image (editor comparison). Null disables comparison
+    /// rendering; an opened comparison then reports that reason.
+    std::shared_ptr<IEditorImageRenderPort>          images;
   };
 
   explicit EditorSessionService(Dependencies dependencies);
@@ -668,6 +721,18 @@ class EditorSessionService final : public IEditorSessionBackend {
   auto Shutdown() -> EditorSessionResult override;
   auto RequestViewChange(EditorRenderReason reason, std::optional<ViewportRenderRegion> region)
       -> EditorSessionResult override;
+  auto OpenComparison(EditorComparisonKind kind) -> EditorSessionResult override;
+  auto SelectComparisonSources(EditorComparisonKind kind, EditorComparisonSource a,
+                               EditorComparisonSource b) -> EditorSessionResult override;
+  auto RetryComparison() -> EditorSessionResult override;
+  auto CloseComparison(bool refresh_current_view, std::optional<ViewportRenderRegion> region)
+      -> EditorSessionResult override;
+  [[nodiscard]] auto comparison_state() const -> EditorComparisonState override {
+    return comparison_.state();
+  }
+  auto TakeComparisonImages(std::uint64_t pair_id) -> std::vector<RenderedPipelineImage> override {
+    return comparison_.TakeImages(pair_id);
+  }
   [[nodiscard]] auto render_diagnostics() const -> EditorRenderCoordinatorDiagnostics override {
     return render_.render_diagnostics();
   }
@@ -700,6 +765,19 @@ class EditorSessionService final : public IEditorSessionBackend {
   void BeginPublication();
   void EndPublication();
   void PostCompletion(EditorSessionCompletion completion);
+  /// Post @p task to the owner thread inside one publication: action availability and the
+  /// change notification are published after it runs. Never runs the task inline.
+  void PostOwnerTask(std::function<void()> task);
+  /**
+   * @brief Close the open comparison on the owner thread and remove its action restriction.
+   *
+   * Image selection, editor close, and shutdown call this before they release the image. With
+   * @p refresh_current_view, routes one Quality render (EditorRenderReason::ComparisonClosed) of
+   * the current document with @p region, so the downstream runtime state follows the current
+   * document again. Returns true when a comparison was open.
+   */
+  auto CloseComparisonOnOwner(bool refresh_current_view, std::optional<ViewportRenderRegion> region)
+      -> bool;
   void HandleRenderEvent(const EditorRenderEvent& event);
   void HandleNavigationCompletion(const NavigationCompletion& completion);
   void HandleImageAcquiredCompletion(const EditorSessionCompletion& completion);
@@ -841,6 +919,10 @@ class EditorSessionService final : public IEditorSessionBackend {
   EditorPendingInputQueue                        pending_input_;
   EditorSerialFrameAdmission                     serial_admission_;
   EditorMaskCreationController                   mask_creation_;
+  /// Open editor comparison. Its action restriction is the Comparison operation lease.
+  EditorComparisonService                        comparison_;
+  /// True from comparison entry to close. Read by input admission off the owner thread.
+  std::atomic<bool>                              comparison_active_{false};
   std::vector<EditorMaskCreationCommand>         pending_mask_commands_;
   mutable std::mutex                             mask_command_mutex_;
   bool                                           reducing_command_     = false;

@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 
 #include "edit/graph/pipeline_graph_snapshot.hpp"
 #include "edit/history/commit_types.hpp"
@@ -42,6 +43,11 @@ struct EditorComparisonSource {
   [[nodiscard]] static auto Version(version_ref_id_t id) -> EditorComparisonSource {
     return {EditorComparisonSourceKind::Version, id};
   }
+
+  [[nodiscard]] auto operator==(const EditorComparisonSource& other) const -> bool {
+    return kind == other.kind &&
+           (kind != EditorComparisonSourceKind::Version || version_id == other.version_id);
+  }
 };
 
 /**
@@ -69,6 +75,50 @@ struct EditorComparisonInput {
 struct EditorComparisonInputPair {
   EditorComparisonInput a;
   EditorComparisonInput b;
+};
+
+/// Entry action of a comparison: the Before/After or Versions choice of the Compare panel.
+enum class EditorComparisonKind : std::uint8_t {
+  /// A is the imported root, B the captured working values.
+  BeforeAfter,
+  /// A and B are any two of Root, the captured working values, and the named Versions.
+  Versions,
+};
+
+/// Stage of the open comparison.
+enum class EditorComparisonStatus : std::uint8_t {
+  /// No comparison is open.
+  Inactive,
+  /// The selected pair renders on the editor worker; no pair is shown.
+  Rendering,
+  /// Both images of the selected pair are rendered and wait for the GUI to take them.
+  Ready,
+  /// Building or rendering the selected pair failed; @ref EditorComparisonState::error says why.
+  Failed,
+};
+
+/**
+ * @brief GUI read of the open comparison, published by the session owner.
+ *
+ * Holds only selection and status values; the documents and images stay with the comparison
+ * service. Updated on the session owner thread before the session change notification.
+ */
+struct EditorComparisonState {
+  EditorComparisonStatus status = EditorComparisonStatus::Inactive;
+  EditorComparisonKind   kind   = EditorComparisonKind::BeforeAfter;
+  EditorComparisonSource a      = EditorComparisonSource::Root();
+  EditorComparisonSource b      = EditorComparisonSource::Current();
+  /// Session command that opened the comparison; 0 when none is open.
+  std::uint64_t          operation_id = 0;
+  /// Image job of the selected pair while Rendering or Ready; 0 otherwise. The GUI takes the
+  /// Ready images with this id and uses it in their provider URLs.
+  std::uint64_t          pair_id      = 0;
+  /// Real failure reason when Failed; empty otherwise.
+  std::string            error;
+
+  [[nodiscard]] auto     active() const -> bool {
+    return status != EditorComparisonStatus::Inactive;
+  }
 };
 
 }  // namespace alcedo

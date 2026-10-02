@@ -16,6 +16,7 @@
 #include "app/editor_session_lifecycle.hpp"
 #include "app/editor_session_navigation_controller.hpp"
 #include "app/editor_session_render_controller.hpp"
+#include "edit/graph/drt_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/history/mini_git_working_history.hpp"
 #include "utils/diagnostics/preview_performance.hpp"
@@ -73,7 +74,10 @@ EditorSessionService::EditorSessionService(Dependencies dependencies)
           }}),
       edit_(EditorSessionEditController::Dependencies{dependencies_.history}),
       navigation_(lifecycle_, save_service_, render_, dependencies_.checkpoint_store.get(),
-                  dependencies_.history.get(), &navigation_state_) {
+                  dependencies_.history.get(), &navigation_state_),
+      comparison_(EditorComparisonService::Dependencies{
+          dependencies_.history.get(), dependencies_.images,
+          [this](std::function<void()> task) { PostOwnerTask(std::move(task)); }}) {
   // Session mutations must run on the command-queue owner thread, not on the
   // thread that constructed the facade.
   lifecycle_.SetOwnerCheck([this] { return command_queue_.IsOwnerThread(); });
@@ -234,6 +238,20 @@ void EditorSessionService::PostCompletion(EditorSessionCompletion completion) {
       default:
         break;
     }
+    EndPublication();
+    reducing_command_     = previous_reducing;
+    current_operation_id_ = previous_operation;
+  });
+}
+
+void EditorSessionService::PostOwnerTask(std::function<void()> task) {
+  command_queue_.PostCompletion([this, task = std::move(task)]() {
+    const auto previous_operation = current_operation_id_;
+    const auto previous_reducing  = reducing_command_;
+    reducing_command_             = true;
+    BeginPublication();
+    task();
+    publication_dirty_ = true;
     EndPublication();
     reducing_command_     = previous_reducing;
     current_operation_id_ = previous_operation;
@@ -489,6 +507,7 @@ auto EditorSessionService::Open(sl_element_id_t element_id, image_id_t image_id)
     });
   }
   AbortMaskCreation();
+  (void)CloseComparisonOnOwner(false, std::nullopt);
   const auto outcome = navigation_.RequestOpenOrSwitch(element_id, image_id, false);
   if (outcome.rejected) {
     return Reject(outcome.message);
@@ -980,6 +999,7 @@ auto EditorSessionService::Switch(sl_element_id_t element_id, image_id_t image_i
     });
   }
   AbortMaskCreation();
+  (void)CloseComparisonOnOwner(false, std::nullopt);
   const auto outcome = navigation_.RequestOpenOrSwitch(element_id, image_id, true);
   if (outcome.rejected) {
     return Reject(outcome.message);
@@ -1065,6 +1085,7 @@ auto EditorSessionService::Close(bool persist_changes) -> EditorSessionResult {
     });
   }
   AbortMaskCreation();
+  (void)CloseComparisonOnOwner(false, std::nullopt);
   if (persist_changes && pending_history_checkpoint_.has_value()) {
     pending_close_after_persist_ = true;
     EditorSessionResult waiting;
@@ -1205,6 +1226,9 @@ auto EditorSessionService::EnqueueAdjustmentInput(EditorAdjustmentPatch patch)
   if (!lifecycle_.has_image()) {
     return Reject("Queued adjustment input requires an open image");
   }
+  if (comparison_active_.load(std::memory_order_acquire)) {
+    return Reject("Close the comparison before editing");
+  }
   const auto identity = lifecycle_.identity();
   const auto admitted = pending_input_.AdmitFieldChange(identity, patch);
   if (!admitted.accepted) {
@@ -1226,6 +1250,9 @@ auto EditorSessionService::EnqueuePendingInputBoundary(EditorPendingInputBoundar
   }
   if (!lifecycle_.has_image()) {
     return Reject("Queued adjustment input requires an open image");
+  }
+  if (comparison_active_.load(std::memory_order_acquire)) {
+    return Reject("Close the comparison before editing");
   }
   const auto identity = lifecycle_.identity();
   const auto admitted = pending_input_.AdmitBoundary(identity, kind);
@@ -1266,6 +1293,12 @@ auto EditorSessionService::EnqueueMaskCreation(EditorMaskCreationCommand command
   }
   if (!lifecycle_.has_image()) {
     return Reject("Queued Mask creation requires an open image");
+  }
+  // Cancel commands stay admissible: they only end a Mask mode and write nothing.
+  if (comparison_active_.load(std::memory_order_acquire) &&
+      command.kind != EditorMaskCreationCommandKind::Cancel &&
+      command.kind != EditorMaskCreationCommandKind::CancelMode) {
+    return Reject("Close the comparison before editing Masks");
   }
   {
     std::scoped_lock lock(mask_command_mutex_);
@@ -2184,6 +2217,8 @@ auto EditorSessionService::Shutdown() -> EditorSessionResult {
   if (lifecycle_.state() == EditorSessionState::ShuttingDown) {
     return Reject("Already shutting down");
   }
+  // Cancel the comparison image job; the render port's own shutdown waits for it.
+  (void)CloseComparisonOnOwner(false, std::nullopt);
   // Cancel outstanding save work. Each in-flight checkpoint publishes one
   // terminal cancellation through the posted completion path; navigation keeps
   // image A on that failure path and clears the pending action.
@@ -2349,6 +2384,135 @@ auto EditorSessionService::RequestViewChange(EditorRenderReason                 
   return Emit(std::move(result));
 }
 
+auto EditorSessionService::OpenComparison(EditorComparisonKind kind) -> EditorSessionResult {
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind            = EditorSessionCommandKind::OpenComparison;
+    command.comparison_kind = kind;
+    return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
+      return OpenComparison(queued.comparison_kind);
+    });
+  }
+  if (comparison_.active()) {
+    return Reject("A comparison is already open");
+  }
+  if (!dependencies_.pipeline || !lifecycle_.has_history_guard()) {
+    return Reject("Comparison requires an open image history");
+  }
+  // Earlier accepted writes are reduced already (queue order). A parameter input that is still
+  // open settles through the normal seal path, so the capture includes it; nothing is saved.
+  std::string error;
+  if (!SettlePendingParameterInputForBoundary(&error)) {
+    return Reject(error.empty() ? "Pending edits could not be settled before comparing" : error);
+  }
+  const auto identity     = lifecycle_.identity();
+  const auto load_request = lifecycle_.active_image_load_request();
+  auto       captured     = dependencies_.pipeline->CurrentPreview(identity.element_id);
+  if (!captured) {
+    return Reject("The working state of the image is not available");
+  }
+  AcquireLease(EditorOperationLeaseKind::Comparison, current_operation_id_, identity.element_id,
+               identity.image_id, load_request, "Close the comparison first");
+  comparison_active_.store(true, std::memory_order_release);
+  comparison_.Open(current_operation_id_,
+                   EditorComparisonService::ImageTarget{identity.element_id, identity.image_id,
+                                                        load_request, lifecycle_.history_guard()},
+                   std::move(captured), kind);
+  EditorSessionResult result;
+  result.kind     = EditorSessionResultKind::Accepted;
+  result.state    = lifecycle_.state();
+  result.identity = identity;
+  result.message  = "Comparison opened";
+  return Emit(std::move(result));
+}
+
+auto EditorSessionService::SelectComparisonSources(EditorComparisonKind kind, EditorComparisonSource a,
+                                                   EditorComparisonSource b) -> EditorSessionResult {
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind            = EditorSessionCommandKind::SelectComparisonSources;
+    command.comparison_kind = kind;
+    command.comparison_a    = a;
+    command.comparison_b    = b;
+    return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
+      return SelectComparisonSources(queued.comparison_kind, queued.comparison_a,
+                                     queued.comparison_b);
+    });
+  }
+  std::string error;
+  if (!comparison_.SelectSources(kind, a, b, &error)) {
+    return Reject(std::move(error));
+  }
+  EditorSessionResult result;
+  result.kind     = EditorSessionResultKind::Accepted;
+  result.state    = lifecycle_.state();
+  result.identity = lifecycle_.identity();
+  result.message  = "Comparison sources selected";
+  return Emit(std::move(result));
+}
+
+auto EditorSessionService::RetryComparison() -> EditorSessionResult {
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind = EditorSessionCommandKind::RetryComparison;
+    return SubmitCommand(std::move(command),
+                         [this](const EditorSessionCommand&) { return RetryComparison(); });
+  }
+  std::string error;
+  if (!comparison_.Retry(&error)) {
+    return Reject(std::move(error));
+  }
+  EditorSessionResult result;
+  result.kind     = EditorSessionResultKind::Accepted;
+  result.state    = lifecycle_.state();
+  result.identity = lifecycle_.identity();
+  result.message  = "Comparison render started again";
+  return Emit(std::move(result));
+}
+
+auto EditorSessionService::CloseComparison(bool                                refresh_current_view,
+                                           std::optional<ViewportRenderRegion> region)
+    -> EditorSessionResult {
+  if (!InOwnerReduction()) {
+    EditorSessionCommand command;
+    command.kind               = EditorSessionCommandKind::CloseComparison;
+    command.comparison_refresh = refresh_current_view;
+    command.view_region        = std::move(region);
+    return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
+      return CloseComparison(queued.comparison_refresh, queued.view_region);
+    });
+  }
+  const bool          closed = CloseComparisonOnOwner(refresh_current_view, std::move(region));
+  EditorSessionResult result;
+  result.kind     = EditorSessionResultKind::Accepted;
+  result.state    = lifecycle_.state();
+  result.identity = lifecycle_.identity();
+  result.message  = closed ? "Comparison closed" : "No comparison is open";
+  return Emit(std::move(result));
+}
+
+auto EditorSessionService::CloseComparisonOnOwner(bool refresh_current_view,
+                                                  std::optional<ViewportRenderRegion> region)
+    -> bool {
+  const bool was_open = comparison_.Close();
+  ReleaseLeasesByKind(EditorOperationLeaseKind::Comparison);
+  comparison_active_.store(false, std::memory_order_release);
+  if (!was_open) {
+    return false;
+  }
+  publication_dirty_ = true;
+  if (refresh_current_view && lifecycle_.state() == EditorSessionState::Interactive &&
+      lifecycle_.has_image()) {
+    EditorRenderCommand command;
+    command.operation_id = current_operation_id_;
+    command.reason       = EditorRenderReason::ComparisonClosed;
+    command.view_region  = std::move(region);
+    (void)render_.RouteViewChange(command, lifecycle_.identity(),
+                                  lifecycle_.active_image_load_request(), lifecycle_.state());
+  }
+  return true;
+}
+
 void EditorSessionService::NotifyImageAcquired(ImageLoadRequestId image_load_request, bool success,
                                                std::string message) {
   EditorSessionCompletion completion;
@@ -2462,6 +2626,18 @@ auto EditorSessionService::BuildActionInputs() -> EditorActionInputs {
     }
   }
   inputs.has_unmaterialized_changes = has_unmaterialized_changes();
+  if (dependencies_.pipeline && lifecycle_.has_image()) {
+    if (const auto preview =
+            dependencies_.pipeline->CurrentPreview(lifecycle_.identity().element_id)) {
+      const auto* drt              = preview->Document().Drt();
+      inputs.current_output_is_hdr = drt != nullptr && IsHdrExportEncoding(*drt);
+    }
+  }
+  const auto mask_state  = mask_creation_.state();
+  inputs.mask_input_open = mask_creation_.HasOpenOperation() || mask_creation_commands_pending() ||
+                           mask_state == EditorMaskCreationState::Creating ||
+                           mask_state == EditorMaskCreationState::Editing ||
+                           mask_state == EditorMaskCreationState::Settling;
   return inputs;
 }
 

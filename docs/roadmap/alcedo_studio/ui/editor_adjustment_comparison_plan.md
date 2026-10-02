@@ -1,7 +1,7 @@
 # Editor Adjustment and Version Comparison Plan
 
 Date: 2026-10-01
-Status: Phase 1 complete (2026-10-01, branch `feature/editor-comparison-inputs`); Phase 2 complete on CUDA (2026-10-01, branch `feature/editor-comparison-pair-render`); Phase 3 partial (2026-10-01, branch `feature/editor-comparison-image-presentation`: implemented and tested; the manual pointer and focus check waits for the Phase 4 entry action); Phases 4-5 planned. Phase 5 proves the Phase 2 image job on OpenCL and Metal.
+Status: Phase 1 complete (2026-10-01, branch `feature/editor-comparison-inputs`); Phase 2 complete on CUDA (2026-10-01, branch `feature/editor-comparison-pair-render`); Phase 3 partial (2026-10-01, branch `feature/editor-comparison-image-presentation`: implemented and tested; the manual pointer and focus check waits for the Phase 4 entry action); Phase 4 partial (2026-10-01, branch `feature/editor-comparison-entry-and-restore`: implemented and tested; the manual check in the real application is open); Phase 5 planned. Phase 5 proves the Phase 2 image job on OpenCL and Metal.
 Source revision: `deeb8901881b5aae41680299f75b735ed4d01c3c` on `main`.
 Parent plan: none. This is a five-phase feature plan.
 
@@ -267,7 +267,7 @@ Register all new QML in `ALCEDO_MAIN_QML_FILES`. Add the `compare` key to `Norma
 | 1 | Read-only comparison documents with current sensor settings and selected white balance | History port, document/Model owners | Current source audit | 700-1300 | Complete (2026-10-01) |
 | 2 | Consecutive one-shot image jobs on the current editor worker and executor | Executor, renderer, scheduler port | Phase 1 | 900-1700 | Complete (2026-10-01) |
 | 3 | Memory-image presentation with source alignment and all four layouts | Provider, QML canvas/view/panel | Phase 2 result schema | 850-1600 | Partial (2026-10-01): manual check open |
-| 4 | Product entry, Version selection, restrictions, close, and restore | Comparison service/controller, session, workspace | Phases 1-3 | 1000-1900 | Planned |
+| 4 | Product entry, Version selection, restrictions, close, and restore | Comparison service/controller, session, workspace | Phases 1-3 | 1000-1900 | Partial (2026-10-01): manual check open |
 | 5 | Phase 2 image job proven on OpenCL and Metal | Port test fixture, backend renderer tests, backend corrections | Phase 2 | 500-1100 | Planned |
 
 Each range includes production code, tests, registration, resources, and phase completion documentation. No phase needs splitting at this estimate. Split before implementation if its expected diff can exceed 2000 lines. Split because of actual scope growth, not to omit an approved behavior.
@@ -786,15 +786,160 @@ Add proposed `EditorComparisonServiceTest` and `EditorComparisonControllerTest`.
 
 **Exit criteria.**
 
-- [ ] Both entry actions and all selectors follow the confirmed state semantics.
-- [ ] Edit/history restrictions work at the owner and QML boundaries.
-- [ ] Normal checkout still applies historical sensor settings.
-- [ ] Close, image switch, exit, and shutdown release temporary state without stale publication.
-- [ ] Real large-RAW warm-pair resource and timing evidence exists.
+- [x] Both entry actions and all selectors follow the confirmed state semantics.
+- [x] Edit/history restrictions work at the owner and QML boundaries.
+- [x] Normal checkout still applies historical sensor settings.
+- [x] Close, image switch, exit, and shutdown release temporary state without stale publication.
+- [x] Real large-RAW warm-pair resource and timing evidence exists.
 
 **Expected diff.** 1000-1900 lines.
 
-**Completion record.** Not started. Fill section 11 after implementation.
+**Completion record.** See the Phase 4 record below.
+
+##### Phase 4 completion record (2026-10-01)
+
+**Status:** partial. All Phase 4 code and tests are complete and pass. The manual check in the real application (the build/run list above, and the open Phase 3 pointer and focus item) is not done: this session could not operate the desktop application.
+
+**Source revision and branch:** based on `d842aa0ce` (Phase 3); branch `feature/editor-comparison-entry-and-restore`, stacked on `feature/editor-comparison-image-presentation`. Not committed when this record was written.
+
+**Implemented behavior and APIs:**
+
+| Owner | Change |
+| --- | --- |
+| `EditorComparisonKind`, `EditorComparisonStatus`, `EditorComparisonState` (`editor_comparison_types.hpp`) | Kind (Before/After, Versions), status (Inactive, Rendering, Ready, Failed), and the GUI read of the open comparison: sources, opening command id, pair id (the image job id), and the real error. |
+| `EditorActionPolicy` | New action `OpenComparison` (Interactive image; denied for HDR output with "Comparison is unavailable for HDR output.", and while a Mask edit owns input). New lease `Comparison`: blocks adjustments, commits, Undo, Redo, head moves, discard, every Version write, Paste, view changes, and a second comparison; Select Image, Close Editor, and Shutdown stay admissible. Every other lease also blocks `OpenComparison`. New inputs `current_output_is_hdr` (DRT of the published working preview) and `mask_input_open`. |
+| `EditorComparisonService` (new library `EditorComparisonService`) | Owner-thread collaborator of the session. Holds the working preview captured once at entry, the kind and sources, the image job of the selected pair, and the Ready pair until the GUI takes it. Builds inputs only through `IEditorHistoryPort::BuildComparisonInputs` and renders only through `IEditorImageRenderPort`. A completion is reduced on the owner and is ignored unless its job id is the job of the selected pair, so a closed or replaced comparison never publishes. A failure keeps the comparison open with the real error. |
+| `EditorSessionService` | Commands `OpenComparison`, `SelectComparisonSources`, `RetryComparison`, `CloseComparison`. Open settles pending parameter input through the existing seal, captures `CurrentPreview`, takes the `Comparison` lease, and saves nothing. Open, Switch, editor Close, and Shutdown close the comparison before they release the image. Close removes the lease and routes one `EditorRenderReason::ComparisonClosed` Quality render with the viewport region. Queued slider and Mask input is refused at its own admission while comparing. `PostOwnerTask` reduces image-job completions inside one publication. |
+| `EditorSessionRuntime::CreateWithPorts`, `ApplicationModuleHost` | New `image_render` port argument; production passes the editor render scheduler port, so pairs render on the editor executor and worker. |
+| `EditorRenderReason::ComparisonClosed` | Quality, normal priority, no frame reuse; coordinator name `ComparisonClosed`. |
+| `EditorActionAvailabilityModel` | `canOpenComparison`, `openComparisonReason`. |
+| `EditorSessionController` | `compare` panel key. The Compare page opens with the comparison and the earlier panel returns on close (Mask falls back to Tone). `compare` is never stored as the startup panel. `CloseComparison(refresh)` sends the viewport region. |
+| `WorkspaceRouter::OpenLibrary` | Closes the comparison (no refresh) before it persists the image. |
+| `EditorComparisonController` (QML `appModules.editorComparison`) | Projects the backend state, builds source choices (Root, Current, named Versions from the projection of the history owner), and routes Compare actions. On the GUI thread it takes a Ready pair, converts and publishes it with `PublishComparisonPair`, and drops the float images. Display mode, orientation, divider, and swap are local view state; a new comparison resets them. Conversion and image-load failures show their reason; Retry renders again. |
+| QML | Viewport text action `Compare` (Before/After) and Versions header `Compare` (Version comparison); the comparison view covers the viewport at z 20 while the viewport item stays alive and visible; the Compare page is nav page 2 (`panel_icons/compare.svg`, Tabler `columns-2`, user-approved); Escape (`comparison.close` in the exclusive `editor.comparison` scope) closes. |
+| Translations, VI | `en` and `zh_CN` catalog entries for the comparison panel, view, controller, and entry actions (added by hand; lupdate was not run). DESIGN.md product copy and icon approval; `docs/VI/README.md` Phase 4 entries and manual-review items. |
+
+**Deviations from the plan:**
+
+- The editor has no viewport toolbar. The Before/After action is a text button at the top left of the viewport, hidden while comparing.
+- The plan placed the policy assertions in `EditorSessionActionPolicyCq3Test` and history assertions in `EditorSessionHistoryPortTest`. The pure policy test is in Cq3; the owner tests run the production session facade over the real history port in the new `EditorComparisonServiceTest` (`tests/app/`, registered in `tests/ui/CMakeLists.txt` with the history port sources, as `EditorComparisonInputsTest` is). `EditorSessionHistoryPortTest` is unchanged because the history port is unchanged.
+- `CompareNavPageRestoresPreviousPanelAfterClose` tests the production `EditorSessionController`; the QML nav fixture of PR #244 has the added `CompareNavPageAppearsOnlyWhileComparingAndRoutesPanelRequests`.
+- `RepeatedOpenSelectCloseKeepsOneExecutorAndReleasesTemporaryImages` proves the GUI side (one backend for every pair, store emptied, float buffers released). Executor, device, and queue identity of the pair job is the Phase 2 test `ComparisonHostRequestsKeepEditorExecutorAndQueueIdentity`.
+- The timing evidence is a new target `EditorComparisonLargeRawPairTest`, so `editor_session_render_scheduler_port_test.cpp` (1,609 lines) gets no new test before the Phase 5 split. Its small CUDA fixture repeats part of the port test fixture; Phase 5 step 1 can move both onto the shared fixture header.
+- Shortcut registry labels are not in the `.ts` catalogs (no existing registry label is); the new command follows that.
+
+**Primary success call chain:**
+
+```text
+Viewport "Compare" | Versions header "Compare"
+  -> EditorComparisonController::openBeforeAfter / openVersions
+  -> EditorSessionService::OpenComparison (command, session owner)
+       -> EditorActionPolicy::Evaluate(OpenComparison): Interactive, SDR, no Mask edit, no lease
+       -> SettlePendingParameterInputForBoundary (normal seal; no save)
+       -> IEditorPipelinePort::CurrentPreview (captured once) -> AcquireLease(Comparison)
+       -> EditorComparisonService::Open -> RenderSelectedPair
+            -> IEditorHistoryPort::BuildComparisonInputs (Phase 1)
+            -> IEditorImageRenderPort::ScheduleImages (Phase 2) -> state Rendering
+  -> editor worker: ApplyImage(A), ApplyImage(B) -> completion -> PostOwnerTask
+  -> owner: HandleImagesFinished(job id of the selected pair) -> state Ready
+  -> change notification -> EditorSessionController::OnBackendChanged
+       -> SyncComparisonAdjustmentPanel (Compare page; earlier panel kept)
+       -> StateChanged -> EditorComparisonController::Refresh
+            -> TakeComparisonImages -> PublishComparisonPair (Phase 3 SDR) -> pair
+  -> EditorComparisonView over the viewport -> both Images Ready -> pair shown
+Close (panel Close | Escape)
+  -> EditorSessionController::CloseComparison(true, viewport region)
+  -> owner: CloseComparisonOnOwner -> EditorComparisonService::Close (cancel job, release
+     capture, documents, and images) -> release Comparison lease
+     -> RouteViewChange(ComparisonClosed, region) -> one Quality render of the current document
+  -> GUI: earlier panel restored, store cleared, overlay hidden, zoom/pan unchanged
+```
+
+**Primary failure and restore call chain:**
+
+```text
+HDR current output -> OpenComparison denied by policy -> actions disabled; tooltip states why
+Missing Version | selected HDR Version | replay failure | ScheduleImages rejected | job Failed
+  -> EditorComparisonService state Failed (real error); restriction stays
+  -> Compare panel error, Retry or Close; working document and active Version unchanged
+SDR conversion failure | Image load error -> controller marks that pair failed -> Retry
+Image switch | Open | editor Close | Shutdown -> CloseComparisonOnOwner first (CancelImages)
+  -> a completion queued behind it carries an old job id -> ignored; no pair is published
+Leave the editor (WorkspaceRouter::OpenLibrary) -> CloseComparison(false) before persist
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `ComparisonAdmissionBlocksEditsAndHistoryButAllowsCloseAndImageSelection` (projected decisions, command admission, queued slider and Mask input, no commit; image selection closes the comparison) | `EditorComparisonServiceTest` | PASS |
+| `CurrentVersionComparisonIncludesCapturedWorkingValuesWithoutSaving` (unreleased drag value in B, one commit of the user edit, 0 materializations, the same capture on a later selection) | `EditorComparisonServiceTest` | PASS |
+| `ComparingVersionDoesNotCheckoutAndCheckoutStillAppliesItsSensorSettings` | `EditorComparisonServiceTest` | PASS |
+| `ClosePreservesViewTransformAndRefreshesCurrentDocument` (region of the current view, `ComparisonClosed` Quality render, active Version unchanged; no render when nothing is open) | `EditorComparisonServiceTest` | PASS |
+| `QueuedPairCompletionAfterImageSwitchCannotReopenComparison` | `EditorComparisonServiceTest` | PASS |
+| `HdrDocumentDisablesEntryAndSelectedHdrVersionReportsReason` (ST 2084 current; HLG Version selected) | `EditorComparisonServiceTest` | PASS |
+| `ShutdownDuringPairCancelsTheJobAndIgnoresItsCompletion` (added) | `EditorComparisonServiceTest` | PASS |
+| `PairPublishesOnceAndRenderFailureKeepsComparisonOpen` (added) | `EditorComparisonServiceTest` | PASS |
+| `ComparisonLeaseBlocksWritesHistoryAndViewButKeepsSelectionCloseAndShutdown` (added) | `EditorSessionActionPolicyCq3Test` | PASS |
+| `CompareNavPageRestoresPreviousPanelAfterClose` (production controller; compare not stored) | `EditorComparisonControllerTest` | PASS |
+| `RepeatedOpenSelectCloseKeepsOneExecutorAndReleasesTemporaryImages` (3 cycles; see deviations) | `EditorComparisonControllerTest` | PASS |
+| `LeavingTheEditorClosesTheComparisonWithoutARefresh` (added) | `EditorComparisonControllerTest` | PASS |
+| `ConversionAndImageLoadFailuresShowTheErrorAndRetryRenders` (added) | `EditorComparisonControllerTest` | PASS |
+| `SourceChoicesComeFromTheVersionListAndMapToBackendSources` (added) | `EditorComparisonControllerTest` | PASS |
+| `CompareNavPageAppearsOnlyWhileComparingAndRoutesPanelRequests` (added) | `EditorAdjustmentHeaderQmlTest` | PASS |
+| `ComparisonCloseOwnsEscapeOnlyInsideTheComparisonScope` (added) | `ShortcutRegistryTest` | PASS |
+| `LargeRawPairReusesTheSensorResultAndRecordsTiming` (added) | `EditorComparisonLargeRawPairTest` (CUDA) | PASS |
+
+Commands (PowerShell, repository root):
+
+```powershell
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target EditorComparisonServiceTest EditorSessionActionPolicyCq3Test EditorRenderCoordinatorTest EditorComparisonControllerTest EditorAdjustmentHeaderQmlTest ShortcutRegistryTest ApplicationModuleHostLifecycleTest EditorComparisonLargeRawPairTest EditorSessionControllerPhase5ATest --parallel 4
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target alcedo_main EditorComparisonViewQmlTest EditorComparisonImageProviderTest ApplicationModuleHostShutdownTest --parallel 4
+$env:PATH = "D:/Projects/pu-erh_lab/vcpkg/installed/x64-windows/debug/bin;$env:PATH"
+ctest --test-dir build/debug -R '^(EditorComparisonServiceTest|EditorSessionActionPolicyCq3Test|EditorRenderCoordinatorTest|EditorComparisonControllerTest|EditorAdjustmentHeaderQmlTest|ShortcutRegistryTest|ApplicationModuleHostLifecycleTest|EditorSessionControllerPhase5ATest)\.' --output-on-failure -j 1
+ctest --test-dir build/debug -R '^(EditorComparisonViewQmlTest|EditorComparisonImageProviderTest|ApplicationModuleHostShutdownTest|EditorComparisonLargeRawPairTest)\.' --output-on-failure -j 1
+```
+
+Both builds exited with code 0; qmlcachegen compiled the changed QML into `alcedo_main`. The first CTest command exited with code 8 because of one failure that predates this phase; the second exited with code 0.
+
+| Suite | Discovered | Passed | Failed | Skipped |
+| --- | ---: | ---: | ---: | ---: |
+| `EditorComparisonServiceTest` | 8 | 8 | 0 | 0 |
+| `EditorComparisonControllerTest` | 5 | 5 | 0 | 0 |
+| `EditorSessionActionPolicyCq3Test` | 13 | 12 | 1 | 0 |
+| `EditorRenderCoordinatorTest` | 33 | 33 | 0 | 0 |
+| `EditorAdjustmentHeaderQmlTest` | 24 | 24 | 0 | 0 |
+| `ShortcutRegistryTest` | 18 | 18 | 0 | 0 |
+| `ApplicationModuleHostLifecycleTest` | 2 | 2 | 0 | 0 |
+| `EditorSessionControllerPhase5ATest` | 52 | 52 | 0 | 0 |
+| `EditorComparisonViewQmlTest`, `EditorComparisonImageProviderTest`, `ApplicationModuleHostShutdownTest` | 18 | 18 | 0 | 0 |
+| `EditorComparisonLargeRawPairTest` (CUDA) | 1 | 1 | 0 | 0 |
+
+The failure is `EditorSessionActionPolicyCq3Test.AdjustmentPanelsReloadOnlyWhenCommittedContentChanges` (`history_revision` stays 1 after a settled commit through the fake history port). It also fails on clean `d842aa0ce` (Phase 4 changes stashed, target rebuilt, test run directly), so this phase did not cause it.
+
+**Manual verification:** not done. Exercise in the real application: Before/After and Version selection, all layouts, divider drag and focus (the open Phase 3 item), close during render, Escape, image switching, editor re-entry, both themes, display scaling, and application shutdown during a render.
+
+**Cache counters, resources, and timing** (`EditorComparisonLargeRawPairTest`): `raw/camera/sony/a7rv/DSC00064.ARW`, 9728 x 6656 raw (Bayer), reference 9496 x 6328, output 4096 x 2730, CUDA, Debug build, current white balance different from the root.
+
+| Measurement | Value |
+| --- | --- |
+| Cold pair (first work on the binding) | 4,581 ms; 1 LibRaw unpack, 1 sensor develop |
+| Warm pair (after one viewport frame) | 842 ms; 0 unpacks, 0 prepared-source misses, 0 sensor develops, 2 sensor skips |
+| SDR conversion of both images (GUI) | 461 ms |
+| Live comparison images (RGBA8, two) | 89,456,640 bytes (85.3 MiB) |
+| Prepared sources / published results / transient bytes after the warm pair | 1 (129,499,136 host bytes) / 4, unchanged by the pair / 0 |
+
+The 21.3 MiB figure for two RGBA8 images in section 9 and in the Phase 3 record is wrong: two uncropped 4096 x 2731 RGBA8 images use about 85.3 MiB (two RGBA32F images about 341 MiB). Separate A and B GPU and download times and the QML image-ready time were not measured; the pair time includes both renders and both downloads.
+
+**Checklist / exit condition:** all five boxes are checked from executed tests. The manual application check of the build/run list is open, so the status is partial.
+
+**LOC note:** about 3,300 changed lines: about 1,200 added and 20 removed in 34 tracked files (258 of them translations), plus about 2,100 lines in 8 new files (1,211 of them tests). This is above the 1000-1900 estimate and the 2000-line split guideline, mostly because of tests and translations; production code is about 1,300 lines. New files are below 400 lines. Existing files over 1,000 lines grew: `editor_session_service.cpp` (2,527 to 2,703), `editor_session_controller.cpp` (1,881 to 1,936), and `editor_adjustment_header_qml_test.cpp` (1,183 to 1,286). The comparison logic is in its own owner; splitting those files is not part of this phase.
+
+**Remaining gaps:**
+
+- Manual application check (above).
+- The full test suite was not run. Per `AGENTS.md`, only the user starts a full run. `WorkspaceShellTest` was not used.
+- Phase 5: OpenCL and Metal for the image job, and the port test split.
 
 ### Phase 5: Prove the image job on the OpenCL and Metal backends
 
@@ -933,7 +1078,7 @@ Full test suite: not run unless the user explicitly requests it. Offscreen works
 
 ## 11. Completion records and stop conditions
 
-The Phase 1, Phase 2, and Phase 3 records are under their phases in section 8.
+The Phase 1, Phase 2, Phase 3, and Phase 4 records are under their phases in section 8.
 
 Fill one record for each phase after implementation:
 

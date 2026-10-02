@@ -5,6 +5,7 @@
 #pragma once
 
 #include <QObject>
+#include <QString>
 
 #include "app/editor_action_policy.hpp"
 
@@ -32,6 +33,9 @@ class EditorActionAvailabilityModel final : public QObject {
                  AvailabilityChanged)
   Q_PROPERTY(bool canCloseEditor READ can_close_editor NOTIFY AvailabilityChanged)
   Q_PROPERTY(bool canSwitchWorkspace READ can_switch_workspace NOTIFY AvailabilityChanged)
+  Q_PROPERTY(bool canOpenComparison READ can_open_comparison NOTIFY AvailabilityChanged)
+  /// Why the comparison cannot open (for example HDR output); empty when it can.
+  Q_PROPERTY(QString openComparisonReason READ open_comparison_reason NOTIFY AvailabilityChanged)
 
  public:
   explicit EditorActionAvailabilityModel(QObject* parent = nullptr) : QObject(parent) {}
@@ -89,6 +93,12 @@ class EditorActionAvailabilityModel final : public QObject {
   }
   /// Workspace leave uses CloseEditor admission (same decision as closing).
   [[nodiscard]] bool can_switch_workspace() const { return can_close_editor(); }
+  [[nodiscard]] bool can_open_comparison() const {
+    return Allowed(alcedo::EditorAction::OpenComparison);
+  }
+  [[nodiscard]] QString open_comparison_reason() const {
+    return QString::fromStdString(availability_.For(alcedo::EditorAction::OpenComparison).reason);
+  }
 
  signals:
   void AvailabilityChanged();

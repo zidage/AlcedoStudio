@@ -28,6 +28,7 @@ namespace shortcut_scope {
 inline constexpr const char* kShortcutCapture  = "shortcut.capture";
 inline constexpr const char* kTextInput        = "text.input";
 inline constexpr const char* kEditorMaskEdit   = "editor.maskEdit";
+inline constexpr const char* kEditorComparison = "editor.comparison";
 inline constexpr const char* kEditorFilmstrip  = "editor.filmstrip";
 inline constexpr const char* kEditorVersions   = "editor.versions";
 inline constexpr const char* kEditorLut        = "editor.lut";
@@ -61,6 +62,8 @@ inline constexpr const char* kLutSelectBelow                = "lut.selectBelow";
 inline constexpr const char* kMaskFinishEdit                = "mask.finishEdit";
 inline constexpr const char* kMaskDeleteSelection           = "mask.deleteSelection";
 inline constexpr const char* kMaskConfirmEdit               = "mask.confirmEdit";
+
+inline constexpr const char* kComparisonClose               = "comparison.close";
 
 inline constexpr const char* kNodesAddColorGrade            = "nodes.addColorGrade";
 inline constexpr const char* kNodesFitGraph                 = "nodes.fitGraph";
@@ -260,6 +263,7 @@ void RegisterFilmstripShortcuts(ShortcutRegistry* registry);
 void RegisterVersionsShortcuts(ShortcutRegistry* registry);
 void RegisterLutShortcuts(ShortcutRegistry* registry);
 void RegisterMaskShortcuts(ShortcutRegistry* registry);
+void RegisterComparisonShortcuts(ShortcutRegistry* registry);
 void RegisterNodesPanelShortcuts(ShortcutRegistry* registry);
 /// Registers every built-in command group. Call FinalizeRegistration() after.
 void RegisterBuiltinShortcuts(ShortcutRegistry* registry);
