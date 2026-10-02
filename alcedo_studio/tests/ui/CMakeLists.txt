@@ -1224,6 +1224,98 @@ alcedo_ui_gtest_discover_tests(EditorAdjustmentHeaderQmlTest
     PROPERTIES LABELS "workspace_qml;adjustment_header")
 alcedo_register_test_target(EditorAdjustmentHeaderQmlTest ui)
 
+# Editor comparison presentation: SDR conversion and pair store/provider, source-space
+# alignment of the production canvas, and the production view and panel QML.
+add_executable(EditorComparisonImageProviderTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_comparison_image_provider_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(EditorComparisonImageProviderTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorComparisonImageProviderTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(EditorComparisonImageProviderTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+set_target_properties(EditorComparisonImageProviderTest PROPERTIES AUTOMOC ON)
+alcedo_ui_gtest_discover_tests(EditorComparisonImageProviderTest
+    TEST_PREFIX "EditorComparisonImageProviderTest."
+    PROPERTIES LABELS "editor_comparison")
+alcedo_register_test_target(EditorComparisonImageProviderTest ui)
+
+add_executable(EditorComparisonGeometryTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_comparison_geometry_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(EditorComparisonGeometryTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorComparisonGeometryTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(EditorComparisonGeometryTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+set_target_properties(EditorComparisonGeometryTest PROPERTIES AUTOMOC ON)
+alcedo_ui_gtest_discover_tests(EditorComparisonGeometryTest
+    TEST_PREFIX "EditorComparisonGeometryTest."
+    PROPERTIES LABELS "editor_comparison")
+alcedo_register_test_target(EditorComparisonGeometryTest ui)
+
+add_executable(EditorComparisonViewQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_comparison_view_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(EditorComparisonViewQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorComparisonViewQmlTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(EditorComparisonViewQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+set_target_properties(EditorComparisonViewQmlTest PROPERTIES AUTOMOC ON)
+alcedo_ui_gtest_discover_tests(EditorComparisonViewQmlTest
+    TEST_PREFIX "EditorComparisonViewQmlTest."
+    PROPERTIES LABELS "workspace_qml;editor_comparison")
+alcedo_register_test_target(EditorComparisonViewQmlTest ui)
+
 # Display Transform QML snapshot: verifies ODT params populate the
 # Display Transform panel on first bind and method/space/EOTF changes.
 add_executable(EditorDisplayTransformSnapshotQmlTest

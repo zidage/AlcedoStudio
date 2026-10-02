@@ -361,3 +361,51 @@ Classic themes, in Simplified Chinese and English:
 4. No recent project: the well with New Project… and Open Existing Project….
 5. New-project form: Back restores the previous column; Create shows the ring.
 6. Tab order and Enter / Space on rows and on Continue Editing.
+
+## Editor comparison (comparison plan Phase 3)
+
+### `EditorComparisonView.qml`
+
+- One opaque `cardSurfaceColor` surface covers the editor viewport, its
+  photograph, and its overlays. It takes every pointer and wheel event. The
+  viewport item stays alive and bound underneath.
+- Areas of the reference canvas without image pixels show the same
+  `cardSurfaceColor`. Do not add a frame, shadow, or checkerboard around a
+  cropped image: the empty area shows the crop footprint.
+- Side captions are plain text: a muted `fontWeightStrong` side name (`A` or
+  `B`) and the source label in `textColor`, both `fontSizeCaption`. The first
+  side is at the top left. The second side is at the top right (left/right) or
+  bottom left (top/bottom). Source labels wrap. No pill, badge, or dot.
+- Complete images: the two regions are separated by a `spaceXs` gap. Divider:
+  a 1 px `textColor` line with a centered grip. The grip is a `bgBaseColor`
+  well with a 1 px `textColor` outline and `controlRadiusSmall`; hover, drag,
+  and keyboard focus change only its fill to `buttonHoveredFillColor`. The grip
+  hit area is `iconButtonHitSizeCompact`.
+- Loading text is muted `fontSizeBody`. Error text uses `dangerColor`. No
+  partial pair is shown while one image is loading.
+
+### `EditorComparisonCanvas.qml`
+
+- No chrome. The image is drawn with the placement transform and clipped to
+  the canvas. The canvas never stretches an image to the reference rectangle.
+
+### `EditorComparisonPanel.qml`
+
+- Adjustment page title `Compare` (`fontSizeTitle`, `fontWeightHeading`).
+- Comparison kind, display mode, and orientation use `SegmentedCardSwitcher`
+  (monochrome selected well). The A and B selectors use `AdjustmentCombo`
+  without a reset action.
+- `Swap A and B`, `Close`, and `Retry` are `DialogActionButton`s of the normal
+  kind. Retry appears only after a failure.
+- Status text is muted for loading and HDR-unavailable reasons and uses
+  `dangerColor` for errors. The fixed-sensor-settings explanation is muted
+  `fontSizeCaption` and wraps.
+
+### Manual review
+
+Check both themes at 1.0 and 1.5 DPR, at the minimum window width and a wide
+window: each layout (complete left/right, complete top/bottom, divider
+left/right, divider top/bottom), a half crop and a rotated crop on one side,
+swap, divider drag to both ends, keyboard focus on the divider (arrows, Shift
+arrows, Home, End), loading, error with Retry, HDR unavailable, and long source
+labels.

@@ -1,7 +1,7 @@
 # Editor Adjustment and Version Comparison Plan
 
 Date: 2026-10-01
-Status: Phase 1 complete (2026-10-01, branch `feature/editor-comparison-inputs`); Phase 2 complete on CUDA (2026-10-01, branch `feature/editor-comparison-pair-render`); Phases 3-5 planned. Phase 5 proves the Phase 2 image job on OpenCL and Metal.
+Status: Phase 1 complete (2026-10-01, branch `feature/editor-comparison-inputs`); Phase 2 complete on CUDA (2026-10-01, branch `feature/editor-comparison-pair-render`); Phase 3 partial (2026-10-01, branch `feature/editor-comparison-image-presentation`: implemented and tested; the manual pointer and focus check waits for the Phase 4 entry action); Phases 4-5 planned. Phase 5 proves the Phase 2 image job on OpenCL and Metal.
 Source revision: `deeb8901881b5aae41680299f75b735ed4d01c3c` on `main`.
 Parent plan: none. This is a five-phase feature plan.
 
@@ -266,7 +266,7 @@ Register all new QML in `ALCEDO_MAIN_QML_FILES`. Add the `compare` key to `Norma
 | --- | --- | --- | --- | ---: | --- |
 | 1 | Read-only comparison documents with current sensor settings and selected white balance | History port, document/Model owners | Current source audit | 700-1300 | Complete (2026-10-01) |
 | 2 | Consecutive one-shot image jobs on the current editor worker and executor | Executor, renderer, scheduler port | Phase 1 | 900-1700 | Complete (2026-10-01) |
-| 3 | Memory-image presentation with source alignment and all four layouts | Provider, QML canvas/view/panel | Phase 2 result schema | 850-1600 | Planned |
+| 3 | Memory-image presentation with source alignment and all four layouts | Provider, QML canvas/view/panel | Phase 2 result schema | 850-1600 | Partial (2026-10-01): manual check open |
 | 4 | Product entry, Version selection, restrictions, close, and restore | Comparison service/controller, session, workspace | Phases 1-3 | 1000-1900 | Planned |
 | 5 | Phase 2 image job proven on OpenCL and Metal | Port test fixture, backend renderer tests, backend corrections | Phase 2 | 500-1100 | Planned |
 
@@ -624,14 +624,124 @@ Add proposed `EditorComparisonImageProviderTest`, `EditorComparisonGeometryTest`
 
 **Exit criteria.**
 
-- [ ] All four layouts display a completed pair.
-- [ ] Original reference alignment preserves crop footprints and empty areas.
-- [ ] SDR quantization, channel order, and lifetime assertions pass.
+- [x] All four layouts display a completed pair.
+- [x] Original reference alignment preserves crop footprints and empty areas.
+- [x] SDR quantization, channel order, and lifetime assertions pass.
 - [ ] Pointer/keyboard divider behavior and focus are manually verified.
 
 **Expected diff.** 850-1600 lines.
 
-**Completion record.** Not started. Fill section 11 after implementation.
+**Completion record.** See the Phase 3 record below.
+
+##### Phase 3 completion record (2026-10-01)
+
+**Status:** partial. All Phase 3 code and tests are complete and pass. The last exit item, a manual check of divider drag and focus in the real application, is open: no production path opens the comparison view until Phase 4 adds the entry action. Keyboard steps, Home, and End were tested through the production QML item.
+
+**Source revision and branch:** based on `56e172bfe` (Phase 2); branch `feature/editor-comparison-image-presentation`. Not committed when this record was written.
+
+**Implemented behavior and APIs:**
+
+| Owner | Change |
+| --- | --- |
+| `ComparisonImagePlacement`, `ComparisonPlacementFromGeometry` (`comparison_presentation_image.*`) | Reads the full reference extent, render extent, and `render_to_reference` of the executed render. Rejects an empty extent and a non-finite, projective, or singular map. `ToVariantMap` gives QML the extents and the six affine terms. |
+| `ConvertRenderedImageForComparison` | Requires host RGBA32F pixels whose size equals `render_extent`, a valid placement, a non-HDR output encoding, and finite values. Then quantizes once with the existing `album_util::MatRgba32fToQImageCopy` (saturating round to nearest, RGBA order kept, deep copy) to `Format_RGBA8888`. No DRT, gamma, or gamut operation. |
+| `ComparisonImageStore` (`comparison_image_provider.*`) | Holds one pair (operation id, A, B) under one mutex. `PublishPair` replaces both sides in one locked write; `Clear` releases both. URL `image://alcedo-comparison/<operation>/<a or b>`; a request for another operation returns a null image. Released images are dropped outside the lock. |
+| `PublishComparisonPair` | Converts A and B before the store changes, requires equal reference extents, then publishes both. A failure names the side and leaves the previous pair in the store. |
+| `ComparisonImageProvider`, `SharedComparisonImageStore` | Serves stored QImages only (no decode or render) and ignores the requested size. Registered in `ApplicationModuleHost::AttachQmlEngine`. |
+| `EditorComparisonCanvas.qml` | Fits the reference extent into the canvas (aspect ratio kept, centered). Draws an ordinary `Image` whose local size is the render extent, with one `Matrix4x4` transform: fit * `render_to_reference`. `cache: false`, asynchronous. Uncovered areas stay empty. |
+| `EditorComparisonView.qml` | Opaque `cardSurfaceColor` surface that takes all pointer and wheel input. One canvas per side for the life of a pair; complete left/right, complete top/bottom, divider left/right, and divider top/bottom only move and clip the two regions. The divider position is relative to the fitted reference canvas; arrow keys step 0.01 (Shift: 0.1), Home and End reach the bounds. The view reports `dividerPositionRequested` and owns no state. The pair shows only when `status` is ready and both `Image` items are Ready. |
+| `EditorComparisonPanel.qml` | Compare title, Before/After or Versions, A and B selectors (`AdjustmentCombo`), display mode, orientation, Swap, Close, Retry, status and HDR text, and the fixed-sensor-settings explanation. Every control reports a request signal. Source and kind choices are disabled while a pair renders or for HDR; view choices and Close stay available. |
+| `DESIGN.md`, `docs/VI/README.md` | Product copy rows and per-file VI entries for the three QML files. No new AppTheme token. |
+
+**Deviations from the plan:**
+
+- `path_utils.*` is unchanged. The existing `MatRgba32fToQImageCopy` already gives the approved quantization; validation is in the new conversion function.
+- The conversion and placement code is in `comparison_presentation_image.*`, separate from the store and provider in `comparison_image_provider.*`.
+- The Compare page is not yet in `EditorAdjustmentStack.qml`, and `compare` is not yet in `NormalizeAdjustmentPanel`. Both belong to Phase 4 step 5, with the session owner that opens the page.
+- Escape handling and translations are Phase 4 items (steps 7 and 9). The new strings use `qsTr`; the `.ts` catalog is unchanged.
+
+**Primary success call chain:**
+
+```text
+(Phase 4 owner, GUI thread) completed IEditorImageRenderPort result [A, B]
+  -> PublishComparisonPair(SharedComparisonImageStore(), operation_id, A, B)
+       -> ConvertRenderedImageForComparison(A), then (B)
+            -> validate pixels / render_extent / placement / SDR encoding / finite values
+            -> MatRgba32fToQImageCopy -> RGBA8888 QImage (own pixels)
+       -> equal reference extents -> ComparisonImageStore::PublishPair (one locked write)
+  -> ComparisonPairPublication::ToVariantMap -> EditorComparisonView.pair, status "ready"
+  -> two EditorComparisonCanvas Images load image://alcedo-comparison/<op>/a and /b
+       -> ComparisonImageProvider::requestImage -> ComparisonImageStore::Get (Qt reader thread)
+  -> both Image.status Ready -> pairReady -> regions visible
+  -> fit * render_to_reference places each image in the common reference canvas
+```
+
+**Primary failure and restore call chain:**
+
+```text
+invalid pixels | size != render_extent | bad placement | ST 2084/HLG | NaN/Inf | different reference extents
+  -> std::invalid_argument that names the side -> the store keeps its previous pair; nothing is published
+  -> (Phase 4 owner) status "failed", errorText -> the view shows the error and no images;
+     the panel shows Retry and Close
+
+Image load error -> view status text; imageLoadFailed(message) to the owner
+
+Close or replacement
+  -> ComparisonImageStore::Clear (pixels dropped outside the lock); view pair = null
+  -> both Image sources empty, status Null; a provider read in progress keeps a valid image
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `SdrPairConversionMatchesRoundedClampedRgbaValues` (channel order in raw bytes, alpha, fractions, clamp below 0 and above 1, float buffer released after conversion) | `EditorComparisonImageProviderTest` | PASS |
+| `ConversionRejectsInvalidPixelsGeometryAndHdrOutput` (added; no pixels, RGB32F, size mismatch, NaN, Inf, ST 2084, HLG, singular map, empty reference) | `EditorComparisonImageProviderTest` | PASS |
+| `PairProviderNeverPublishesOneNewSideWithOneOldSide` (invalid B keeps the old pair; different reference extents rejected; a replacement replaces both; a concurrent reader during 600 replacements sees no image of another operation) | `EditorComparisonImageProviderTest` | PASS |
+| `ProviderServesOnlyTheStoredOperationAtItsRenderExtent` (added) | `EditorComparisonImageProviderTest` | PASS |
+| `ClearedStoreKeepsImagesAlreadyReadByTheProvider` (added; shared before Clear, sole owner and intact after) | `EditorComparisonImageProviderTest` | PASS |
+| `SourceAlignmentPlacesHalfCropInHalfOfReferenceCanvas` (left and right half crop; 8000 x 6000 source with a 1024 long-edge limit) | `EditorComparisonGeometryTest` | PASS |
+| `RotatedCropCornersMatchRendererReferenceGeometry` (real `ResolveRenderGeometry`, crop offset, 10 degrees; canvas corners equal fit * renderer map within 1e-3 px) | `EditorComparisonGeometryTest` | PASS |
+| `PlacementRejectsEmptyOrNonInvertibleGeometry` (added) | `EditorComparisonGeometryTest` | PASS |
+| `PairRemainsHiddenUntilBothImagesAreReady` (both completion orders, held through the provider; failed status) | `EditorComparisonViewQmlTest` | PASS |
+| `LayoutAndDividerChangesDoNotSubmitRenderJobs` (2 modes x 2 orientations x swap x 3 divider positions; provider reads stay at 2, sources unchanged, regions do not overlap) | `EditorComparisonViewQmlTest` | PASS |
+| `BothDividerOrientationsRevealTheSameReferencePoint` (A and B draw one reference point at one position; the region clip and the divider follow the position; keyboard steps, Home, End) | `EditorComparisonViewQmlTest` | PASS |
+| `ClosingComparisonClearsProviderAndItemReferences` (close during a held B read; the read image stays valid; sources and status cleared; no new read; store empty) | `EditorComparisonViewQmlTest` | PASS |
+| `PanelReportsRequestsAndDisablesSelectionWhileRendering` (added) | `EditorComparisonViewQmlTest` | PASS |
+
+The QML tests load the production QML from the source tree and use the production store and provider. The test provider wraps `ComparisonImageProvider` as an asynchronous provider so that it can count reads and hold one side. Qt's pixmap reader serves synchronous provider reads one at a time, so a held synchronous read would also block the other side.
+
+Commands (PowerShell, repository root):
+
+```powershell
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target EditorComparisonImageProviderTest EditorComparisonGeometryTest EditorComparisonViewQmlTest ApplicationModuleHostLifecycleTest ApplicationModuleHostShutdownTest alcedo_main --parallel 4
+$env:PATH = "D:/Projects/pu-erh_lab/vcpkg/installed/x64-windows/debug/bin;$env:PATH"
+ctest --test-dir build/debug -R '^(EditorComparisonImageProviderTest|EditorComparisonGeometryTest|EditorComparisonViewQmlTest|ApplicationModuleHostLifecycleTest|ApplicationModuleHostShutdownTest)\.' --output-on-failure -j 1
+```
+
+The build exited with code 0; qmlcachegen compiled the three QML files into `alcedo_main`. CTest exited with code 0.
+
+| Suite | Discovered | Passed | Failed | Skipped |
+| --- | ---: | ---: | ---: | ---: |
+| `EditorComparisonImageProviderTest` | 5 | 5 | 0 | 0 |
+| `EditorComparisonGeometryTest` | 3 | 3 | 0 | 0 |
+| `EditorComparisonViewQmlTest` | 5 | 5 | 0 | 0 |
+| `ApplicationModuleHostLifecycleTest` (caller that registers the provider) | 2 | 2 | 0 | 0 |
+| `ApplicationModuleHostShutdownTest` | 8 | 8 | 0 | 0 |
+
+**Manual verification:** not done. The view and panel have no production entry until Phase 4. Check divider drag, focus order, both themes, narrow windows, and display scaling in the application after Phase 4 adds the overlay (see the manual review list in `docs/VI/README.md`).
+
+**Cache counters, resources, and timing:** not applicable; Phase 3 renders nothing. One pair holds two RGBA8 images (about 21.3 MiB for two uncropped 4096 x 2731 images).
+
+**Checklist / exit condition:** three of four boxes are checked. The manual pointer and focus check is open.
+
+**LOC note:** about 2,430 lines: 153 added in 5 tracked files and 2,277 lines in 11 new files. Production: 456 C++ lines and 650 QML lines. Tests: 1,171 lines. This is above the 850-1600 estimate, mostly because of tests. No file is over 1,000 lines; the largest is `editor_comparison_view_qml_test.cpp` at 486 lines.
+
+**Remaining gaps:**
+
+- Manual pointer, focus, theme, and scaling check (Phase 4 provides the entry).
+- Compare nav page, `compare` panel key, Escape, and translations: Phase 4.
+- The full test suite was not run. Per `AGENTS.md`, only the user starts a full run. `WorkspaceShellTest` was not used.
 
 ### Phase 4: Add source selection, entry, restrictions, and restore
 
@@ -823,7 +933,7 @@ Full test suite: not run unless the user explicitly requests it. Offscreen works
 
 ## 11. Completion records and stop conditions
 
-The Phase 1 and Phase 2 records are under their phases in section 8.
+The Phase 1, Phase 2, and Phase 3 records are under their phases in section 8.
 
 Fill one record for each phase after implementation:
 

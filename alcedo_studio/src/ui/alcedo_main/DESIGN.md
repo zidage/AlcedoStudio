@@ -882,6 +882,9 @@ Visible strings are product language only. Ban developer placeholders such as
 | LUT browser, empty library | “No LUTs in the library” / “Import .cube files, or copy them into the LUT folder and refresh.” |
 | LUT browser, no results | “No LUTs match” / “Change the search or the filters to see more LUTs.” |
 | LUT browser, loading | “Loading LUT library” |
+| Comparison, rendering | “Rendering comparison images” |
+| Comparison, image load failure | “The comparison images could not be loaded.” |
+| Comparison, HDR output | “Comparison is unavailable for HDR output.” |
 
 ---
 

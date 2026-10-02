@@ -32,6 +32,7 @@
 #include "ui/alcedo_main/album_backend/editor_session_task_port.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_thumbnail_port.hpp"
 #include "ui/alcedo_main/album_backend/thumbnail_image_provider.hpp"
+#include "ui/alcedo_main/album_backend/comparison_image_provider.hpp"
 #include "ui/alcedo_main/album_backend/mask_thumbnail_image_provider.hpp"
 #include "ui/alcedo_main/album_backend/system_icon_image_provider.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
@@ -597,6 +598,8 @@ void ApplicationModuleHost::AttachQmlEngine(QQmlEngine* engine) {
                            new MaskThumbnailImageProvider(SharedMaskThumbnailImageStore()));
   engine->addImageProvider(QString::fromUtf8(kSystemIconImageProviderId),
                            new SystemIconImageProvider());
+  engine->addImageProvider(QString::fromUtf8(kComparisonImageProviderId),
+                           new ComparisonImageProvider(SharedComparisonImageStore()));
 
   if (library_ == nullptr) {
     return;
