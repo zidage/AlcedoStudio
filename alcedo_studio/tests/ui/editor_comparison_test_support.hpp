@@ -27,7 +27,7 @@
 
 #include "edit/geometry/render_geometry_resolver.hpp"
 #include "edit/geometry/source_geometry.hpp"
-#include "edit/pipeline/rendered_pipeline_image.hpp"
+#include "edit/runtime/rendered_pipeline_image.hpp"
 #include "image/image_buffer.hpp"
 #include "ui/alcedo_main/album_backend/comparison_image_provider.hpp"
 

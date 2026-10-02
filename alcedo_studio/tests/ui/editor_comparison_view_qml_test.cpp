@@ -411,7 +411,6 @@ EditorComparisonPanel {
 
   QSignalSpy a_requests(panel, SIGNAL(aSourceRequested(QString)));
   QSignalSpy b_requests(panel, SIGNAL(bSourceRequested(QString)));
-  QSignalSpy kind_requests(panel, SIGNAL(comparisonKindRequested(QString)));
   QSignalSpy mode_requests(panel, SIGNAL(displayModeRequested(QString)));
   QSignalSpy orientation_requests(panel, SIGNAL(orientationRequested(QString)));
   QSignalSpy swap_requests(panel, SIGNAL(swapRequested()));
@@ -420,14 +419,17 @@ EditorComparisonPanel {
 
   auto*      combo_a = harness.find<QObject>(QStringLiteral("editorComparisonSourceACombo"));
   auto*      combo_b = harness.find<QObject>(QStringLiteral("editorComparisonSourceBCombo"));
-  auto*      kind    = harness.find(QStringLiteral("editorComparisonKindSwitcher"));
   auto*      mode    = harness.find(QStringLiteral("editorComparisonDisplayModeSwitcher"));
   auto*      orient  = harness.find(QStringLiteral("editorComparisonOrientationSwitcher"));
   auto*      swap    = harness.find(QStringLiteral("editorComparisonSwapButton"));
   auto*      close   = harness.find(QStringLiteral("editorComparisonCloseButton"));
   auto*      retry   = harness.find(QStringLiteral("editorComparisonRetryButton"));
   auto*      status  = harness.find(QStringLiteral("editorComparisonStatusLabel"));
-  ASSERT_TRUE(combo_a && combo_b && kind && mode && orient && swap && close && retry && status);
+  auto*      info    = harness.find<QObject>(QStringLiteral("editorComparisonSensorInfoHint"));
+  ASSERT_TRUE(combo_a && combo_b && mode && orient && swap && close && retry && status && info);
+  // The comparison kind is not a panel choice; the sensor explanation is a hover hint.
+  EXPECT_EQ(harness.find<QObject>(QStringLiteral("editorComparisonKindSwitcher")), nullptr);
+  EXPECT_FALSE(info->property("text").toString().isEmpty());
 
   EXPECT_EQ(combo_a->property("currentIndex").toInt(), 0);
   EXPECT_EQ(combo_b->property("currentIndex").toInt(), 1);
@@ -443,7 +445,7 @@ EditorComparisonPanel {
   EXPECT_EQ(orientation_requests.at(0).at(0).toString(), QStringLiteral("vertical"));
   EXPECT_EQ(swap_requests.count(), 1);
   EXPECT_EQ(
-      a_requests.count() + b_requests.count() + kind_requests.count() + retry_requests.count(), 0);
+      a_requests.count() + b_requests.count() + retry_requests.count(), 0);
 
   // Selecting a source reports its value.
   QMetaObject::invokeMethod(combo_b, "activated", Q_ARG(int, 2));
@@ -455,7 +457,6 @@ EditorComparisonPanel {
   panel->setProperty("status", QStringLiteral("loading"));
   EXPECT_FALSE(combo_a->property("enabled").toBool());
   EXPECT_FALSE(combo_b->property("enabled").toBool());
-  EXPECT_FALSE(kind->property("enabled").toBool());
   EXPECT_TRUE(mode->property("enabled").toBool());
   EXPECT_TRUE(orient->property("enabled").toBool());
   EXPECT_TRUE(swap->property("enabled").toBool());

@@ -39,6 +39,8 @@ enum class EditorAction : std::uint8_t {
   CloseEditor,
   Shutdown,
   RequestViewChange,
+  /// Open the editor comparison of two states of the open image.
+  OpenComparison,
   Count,
 };
 
@@ -63,6 +65,9 @@ enum class EditorOperationLeaseKind : std::uint8_t {
   SaveCheckpoint,
   PasteMaterialization,
   FailureRecovery,
+  /// An open editor comparison: blocks every image write, history movement, Version write,
+  /// Paste, and view change until the comparison closes.
+  Comparison,
 };
 
 /// Queue-owned lease describing which actions an accepted operation blocks.
@@ -94,6 +99,10 @@ struct EditorActionInputs {
   bool               recovery_allows_retry           = false;
   bool               recovery_allows_discard_continue = false;
   bool               recovery_allows_cancel          = false;
+  /// The current working document encodes HDR output (ST 2084 or HLG).
+  bool               current_output_is_hdr           = false;
+  /// Mask drawing or editing owns the editor input.
+  bool               mask_input_open                 = false;
 };
 
 /// Minimal queue-owned execution context visible to the evaluator. Not a

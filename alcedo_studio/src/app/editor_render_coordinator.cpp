@@ -46,6 +46,8 @@ auto ReasonLabel(const EditorRenderReason reason) -> const char* {
       return "PastedPipelineDocument";
     case EditorRenderReason::ResourceChanged:
       return "ResourceChanged";
+    case EditorRenderReason::ComparisonClosed:
+      return "ComparisonClosed";
   }
   return "?";
 }

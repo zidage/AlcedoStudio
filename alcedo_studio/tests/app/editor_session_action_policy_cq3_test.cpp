@@ -8,6 +8,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <set>
@@ -130,6 +131,59 @@ TEST_F(EditorSessionActionPolicyCq3Test,
   EXPECT_TRUE(published.For(EditorAction::SelectImage).allowed);
   EXPECT_TRUE(published.For(EditorAction::PreviewAdjustment).allowed);
   EXPECT_TRUE(published.For(EditorAction::ApplyPaste).allowed);
+}
+
+TEST(EditorSessionComparisonPolicy,
+     ComparisonLeaseBlocksWritesHistoryAndViewButKeepsSelectionCloseAndShutdown) {
+  EditorActionInputs inputs;
+  inputs.session_state     = EditorSessionState::Interactive;
+  inputs.has_image         = true;
+  inputs.can_undo          = true;
+  inputs.can_redo          = true;
+  inputs.package_available = true;
+  EditorOperationLease lease;
+  lease.operation.command_id = 7;
+  lease.kind                 = EditorOperationLeaseKind::Comparison;
+  lease.blocked_actions = EditorActionPolicy::DefaultBlockedActions(EditorOperationLeaseKind::Comparison);
+  lease.blocking_reason = "Close the comparison first";
+  const auto availability = EditorActionPolicy::EvaluateAll(EditorCommandContext{{lease}}, inputs);
+
+  const std::set<EditorAction> allowed = {EditorAction::SelectImage, EditorAction::CloseEditor,
+                                          EditorAction::Shutdown};
+  for (std::size_t i = 0; i < EditorActionCount(); ++i) {
+    const auto action = static_cast<EditorAction>(i);
+    // Recovery actions have their own facts and are off without a pending recovery.
+    if (action == EditorAction::RetrySave || action == EditorAction::DiscardAndContinue ||
+        action == EditorAction::CancelPendingNavigation) {
+      continue;
+    }
+    EXPECT_EQ(availability.For(action).allowed, allowed.contains(action))
+        << EditorActionName(action);
+  }
+  EXPECT_EQ(availability.For(EditorAction::Undo).reason, "Close the comparison first");
+
+  // Comparison commands are admitted by the open comparison itself, Open by its own action.
+  EXPECT_EQ(EditorActionPolicy::ActionForCommand(EditorSessionCommandKind::OpenComparison),
+            EditorAction::OpenComparison);
+  EXPECT_FALSE(EditorActionPolicy::ActionForCommand(EditorSessionCommandKind::CloseComparison));
+  EXPECT_FALSE(
+      EditorActionPolicy::ActionForCommand(EditorSessionCommandKind::SelectComparisonSources));
+  // Every other in-flight operation refuses a new comparison.
+  for (const auto kind :
+       {EditorOperationLeaseKind::ImageLoad, EditorOperationLeaseKind::ImageSwitch,
+        EditorOperationLeaseKind::SaveCheckpoint, EditorOperationLeaseKind::PasteMaterialization,
+        EditorOperationLeaseKind::FailureRecovery}) {
+    const auto blocked = EditorActionPolicy::DefaultBlockedActions(kind);
+    EXPECT_NE(std::find(blocked.begin(), blocked.end(), EditorAction::OpenComparison),
+              blocked.end());
+  }
+  // Entry facts: HDR output and an open Mask edit refuse it with their reason.
+  inputs.current_output_is_hdr = true;
+  EXPECT_EQ(EditorActionPolicy::Evaluate(EditorAction::OpenComparison, {}, inputs).reason,
+            "Comparison is unavailable for HDR output.");
+  inputs.current_output_is_hdr = false;
+  inputs.mask_input_open       = true;
+  EXPECT_FALSE(EditorActionPolicy::Evaluate(EditorAction::OpenComparison, {}, inputs).allowed);
 }
 
 TEST(EditorSessionNodeCommandPolicy,

@@ -10,10 +10,10 @@
 
 #include "edit/graph/pipeline_graph_snapshot.hpp"
 #include "edit/pipeline/pipeline_accelerator.hpp"
-#include "edit/pipeline/rendered_pipeline_image.hpp"
 #include "edit/runtime/executor_role.hpp"
 #include "edit/runtime/lut_resource_resolver.hpp"
 #include "edit/runtime/pipeline_apply_request.hpp"
+#include "edit/runtime/rendered_pipeline_image.hpp"
 #include "image/image_buffer.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 

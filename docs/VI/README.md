@@ -401,10 +401,29 @@ Classic themes, in Simplified Chinese and English:
   `dangerColor` for errors. The fixed-sensor-settings explanation is muted
   `fontSizeCaption` and wraps.
 
+### Comparison entry and Compare page (comparison plan Phase 4)
+
+- `EditorWorkspace.qml`: one text action `Compare` at the top left of the
+  viewport (`spaceSm` margin), a `DialogActionButton` of the normal kind with
+  `iconButtonHitSizeCompact` height and `fontSizeBody` text. It is hidden while a
+  comparison is open. When entry is not admitted (for example HDR output), the
+  action is disabled and its tooltip states the reason. The comparison view
+  covers the viewport above every viewport overlay; the viewport stays visible
+  underneath.
+- `EditorVersionsPanel.qml`: the header has the same text action `Compare`
+  before the icon actions. It opens Version comparison.
+- `EditorAdjustmentStack.qml`: the Compare page is the only entry on nav page 2,
+  like Mask on page 1. Its icon is `panel_icons/compare.svg` (Tabler
+  `columns-2`, MIT, stroke-width 1.5, approved by the user on 2026-10-01). The
+  entry is enabled and scrolled into the track only while a comparison is open.
+  While comparing, the nav stays enabled so the other pages can be read; their
+  controls are disabled.
+
 ### Manual review
 
 Check both themes at 1.0 and 1.5 DPR, at the minimum window width and a wide
-window: each layout (complete left/right, complete top/bottom, divider
+window: the viewport and Versions Compare actions, the HDR-disabled action
+tooltip, Escape closing the comparison (and not a focused text field), each layout (complete left/right, complete top/bottom, divider
 left/right, divider top/bottom), a half crop and a rotated crop on one side,
 swap, divider drag to both ends, keyboard focus on the divider (arrows, Shift
 arrows, Home, End), loading, error with Retry, HDR unavailable, and long source

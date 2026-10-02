@@ -361,6 +361,16 @@ def_library(EditorComparisonInputs
     PUBLIC_DEPS PipelineMgmtService EditGraph PipelineHistory
 )
 
+# The open editor comparison: captured working values, selected sources, and the image job of the
+# selected pair. A collaborator of the session facade; reads history and renders only through ports.
+def_library(EditorComparisonService
+    SOURCES
+        "${ALCEDO_APP_ROOT}/editor_comparison_service.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_comparison_service.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_image_render_port.hpp"
+    PUBLIC_DEPS EditGraph ${ALCEDO_OPENCV_CORE_DEPS}
+)
+
 def_library(EditorSaveCheckpointCoordinator
     SOURCES "${ALCEDO_APP_ROOT}/editor_save_checkpoint_coordinator.cpp"
 )
@@ -413,6 +423,7 @@ def_library(EditorSessionRenderController
 # Session headers pull image_buffer.hpp -> metal_image.hpp under HAVE_METAL.
 # Provide metal-cpp include/link deps the same way ThreadPool does.
 if(ALCEDO_METAL_ENABLED)
+    target_link_libraries(EditorComparisonService PUBLIC alcedo::metal_cpp)
     target_link_libraries(EditorSessionCommandQueue PUBLIC alcedo::metal_cpp)
     target_link_libraries(EditorSessionLifecycle PUBLIC alcedo::metal_cpp)
     target_link_libraries(EditorSessionRenderController PUBLIC alcedo::metal_cpp)
@@ -558,7 +569,7 @@ def_library(EditorSessionService
                  PipelineHistory EditorMiniGitMaterializer EditorSaveCheckpointService EditorSessionLifecycle
                  EditorSessionNavigationController EditorSessionRenderController
                  EditorSessionEditController EditorSessionCommandQueue EditorActionPolicy
-                 EditorSerialFrameAdmission EditorMaskCreationController
+                 EditorSerialFrameAdmission EditorMaskCreationController EditorComparisonService
 )
 
 # Facade consumers (tests/UI) include session headers that pull metal_image.hpp
