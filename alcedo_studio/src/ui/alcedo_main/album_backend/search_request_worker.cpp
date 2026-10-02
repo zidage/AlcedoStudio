@@ -56,6 +56,13 @@ auto SearchRequestWorker::IsCurrent(SearchRequestKind kind, std::uint64_t genera
   return generation != 0 && newest_generation_[KindIndex(kind)] == generation;
 }
 
+void SearchRequestWorker::InvalidateAndWait(SearchRequestKind kind) {
+  std::unique_lock lock(mutex_);
+  newest_generation_[KindIndex(kind)] = ++last_generation_;
+  RemovePendingLocked(kind);
+  idle_.wait(lock, [this, kind]() { return !running_ || running_kind_ != kind; });
+}
+
 void SearchRequestWorker::RemovePendingLocked(SearchRequestKind kind) {
   pending_.erase(
       std::remove_if(pending_.begin(), pending_.end(),
@@ -74,8 +81,15 @@ void SearchRequestWorker::Run() {
       }
       request = std::move(pending_.front());
       pending_.pop_front();
+      running_      = true;
+      running_kind_ = request.kind_;
     }
     request.job_(request.generation_);
+    {
+      std::lock_guard lock(mutex_);
+      running_ = false;
+    }
+    idle_.notify_all();
   }
 }
 

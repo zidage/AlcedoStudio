@@ -101,79 +101,49 @@ void StatsEngine::BindCollaborators(SearchController* search,
 
 void StatsEngine::ToggleStatsFilter(const QString& category, const QString& label) {
   ToggleFilter(category, label);
-  RebuildThumbnailView();
-  // The stats panel must apply the same merged predicate as the thumbnail
-  // grid so both surfaces stay consistent for one UI filter state.
-  RefreshStats();
+  // The grid, the groups, and the statistics apply the same merged predicate in one read.
+  library_->RequestLibraryRefresh();
   emit StatsFilterChanged();
 }
 
 void StatsEngine::ClearStatsFilter() {
   ClearFilters();
-  RebuildThumbnailView();
-  RefreshStats();
+  library_->RequestLibraryRefresh();
   emit StatsFilterChanged();
 }
 
-void StatsEngine::RebuildThumbnailView() {
-  library_->LoadThumbnailWindow(BuildStatsFilterNode(), true);
-}
+void StatsEngine::RebuildThumbnailView() { library_->RequestLibraryRefresh(); }
 
-bool StatsEngine::LoadMoreThumbnailView() {
-  return library_->LoadThumbnailWindow(BuildStatsFilterNode(), false);
-}
+bool StatsEngine::LoadMoreThumbnailView() { return library_->LoadMoreThumbnails(); }
 
-void StatsEngine::RefreshStats() {
-  auto proj = project_->handler().project();
-  if (!proj) {
-    date_stats_.clear();
-    camera_stats_.clear();
-    lens_stats_.clear();
-    label_stats_.clear();
-    rating_stats_.clear();
-    total_photo_count_ = 0;
-    emit StatsChanged();
-    return;
-  }
+void StatsEngine::RefreshStats() { library_->RequestLibraryRefresh(); }
 
-  auto filter_service = proj->GetSleeveFilterService();
-  if (!filter_service) {
-    emit StatsChanged();
-    return;
-  }
-
-  try {
-    const auto folder_id = folders_->CurrentFolderElementId();
-    if (!folder_id.has_value()) {
-      date_stats_.clear();
-      camera_stats_.clear();
-      lens_stats_.clear();
-      label_stats_.clear();
-      rating_stats_.clear();
-      total_photo_count_ = 0;
-      emit StatsChanged();
-      return;
-    }
-
-    const auto merged_filter =
-        MergeFilterNodes(BuildStatsFilterNode(), search_->ActiveSearchFilterNode());
-    ApplyFolderStats(filter_service->BuildFolderStats(folder_id.value(), merged_filter));
-    return;
-  } catch (...) {
-    // Keep previous stats if service query failed.
-  }
-
+void StatsEngine::ClearStats() {
+  date_stats_.clear();
+  camera_stats_.clear();
+  lens_stats_.clear();
+  label_stats_.clear();
+  rating_stats_.clear();
+  import_date_stats_.clear();
+  total_photo_count_ = 0;
   emit StatsChanged();
 }
 
-void StatsEngine::ApplyFolderStats(const AlbumStatsView& stats) {
+auto StatsEngine::ActiveSemanticModelKey() const -> std::string {
+  return semantic_ ? semantic_->ActiveModelKey() : std::string{};
+}
+
+void StatsEngine::ApplyFolderStats(const AlbumStatsView& stats, bool emit_changed) {
   total_photo_count_ = stats.total_photo_count_;
   date_stats_        = ToStatsRows(stats.date_stats_);
   camera_stats_      = ToStatsRows(stats.camera_stats_);
   lens_stats_        = ToStatsRows(stats.lens_stats_);
   label_stats_       = ToStatsRows(stats.label_stats_, true, true);
   rating_stats_      = ToStatsRows(stats.rating_stats_);
-  emit StatsChanged();
+  import_date_stats_ = ToStatsRows(stats.import_date_stats_);
+  if (emit_changed) {
+    emit StatsChanged();
+  }
 }
 
 auto StatsEngine::FormatPhotoInfo(int shown, int total) const -> QString {
@@ -240,6 +210,8 @@ void StatsEngine::ToggleFilter(const QString& category, const QString& label) {
     filter_label_ = (filter_label_ == label) ? QString{} : label;
   } else if (category == u"rating") {
     filter_rating_ = (filter_rating_ == label) ? QString{} : label;
+  } else if (category == u"import") {
+    filter_import_date_ = (filter_import_date_ == label) ? QString{} : label;
   }
 }
 
@@ -249,11 +221,12 @@ void StatsEngine::ClearFilters() {
   filter_lens_.clear();
   filter_label_.clear();
   filter_rating_.clear();
+  filter_import_date_.clear();
 }
 
 bool StatsEngine::HasActiveFilter() const {
   return !filter_date_.isEmpty() || !filter_camera_.isEmpty() || !filter_lens_.isEmpty() ||
-         !filter_label_.isEmpty() || !filter_rating_.isEmpty();
+         !filter_label_.isEmpty() || !filter_rating_.isEmpty() || !filter_import_date_.isEmpty();
 }
 
 auto StatsEngine::BuildStatsFilterNode() const -> std::optional<FilterNode> {
@@ -286,6 +259,15 @@ auto StatsEngine::BuildStatsFilterNode() const -> std::optional<FilterNode> {
 
   if (!filter_rating_.isEmpty()) {
     children.push_back(sleeve_filter::BuildRatingBucketFilter(filter_rating_.toStdWString()));
+  }
+
+  if (!filter_import_date_.isEmpty()) {
+    if (filter_import_date_ == PL_TEXT("(unknown)").Render()) {
+      children.push_back(sleeve_filter::BuildImportDateUnknownFilter());
+    } else {
+      children.push_back(sleeve_filter::BuildImportDateBucketFilter(
+          filter_import_date_.toStdWString(), CurrentImportDayTimeZone()));
+    }
   }
 
   if (children.empty()) {

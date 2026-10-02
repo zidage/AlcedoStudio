@@ -138,6 +138,32 @@ void AlbumThumbnailModel::resetModel(const std::vector<AlbumItem>& items, size_t
   }
 }
 
+void AlbumThumbnailModel::beginReplace() {
+  if (replacing_) {
+    return;
+  }
+  replacing_ = true;
+  beginResetModel();
+}
+
+void AlbumThumbnailModel::endReplace(std::vector<AlbumItem> items, size_t totalCount,
+                                     bool hasMore) {
+  if (!replacing_) {
+    beginResetModel();
+  }
+  const bool total_count_changed = total_count_ != totalCount;
+  rows_                          = std::move(items);
+  total_count_                   = totalCount;
+  rebuildElementIdIndex();
+  replacing_ = false;
+  endResetModel();
+  setHasMore(hasMore);
+  emit countChanged();
+  if (total_count_changed) {
+    emit totalCountChanged();
+  }
+}
+
 void AlbumThumbnailModel::appendPage(const std::vector<AlbumItem>& newItems) {
   if (newItems.empty()) return;
   const int oldCount = static_cast<int>(rows_.size());

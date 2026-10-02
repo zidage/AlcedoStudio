@@ -181,52 +181,6 @@ auto RunSearchPageRequest(const SearchPageRequest& request) -> SearchPageResult 
   return result;
 }
 
-/// Input of one applied search, captured on the UI thread. Exactly one of `query_w` (fuzzy
-/// search, parsed on the worker because the WHERE build reads the active semantic model and
-/// the AI index state) and `filter_node` (exact file) is set.
-struct SearchApplyRequest {
-  QString                              display_query;
-  std::optional<std::wstring>          query_w;
-  std::optional<FilterNode>            filter_node;
-  SearchFieldMask                      field_mask = kAllSearchFields;
-  sl_element_id_t                      folder_id  = 0;
-  std::shared_ptr<SleeveFilterService> filter_service;
-};
-
-/// Output of one applied search: the filter, the first thumbnail page, and the stats, all
-/// queried with the search filter and no stats filter (applying a search clears the stats
-/// filters). `filter_node` empty means the query parsed to no terms.
-struct SearchApplyResult {
-  std::optional<FilterNode> filter_node;
-  SearchResultPage          page;
-  AlbumStatsView            stats;
-  QString                   error_text;
-};
-
-/// Runs on the search worker: the WHERE build, then the thumbnail page, its total, and the
-/// stats, all read from one evaluation of the search filter.
-auto RunSearchApplyRequest(const SearchApplyRequest& request) -> SearchApplyResult {
-  SearchApplyResult result;
-  try {
-    result.filter_node = request.filter_node.has_value()
-                             ? request.filter_node
-                             : request.filter_service->BuildFuzzySearchWhere(
-                                   request.query_w.value_or(L""), request.field_mask);
-    if (!result.filter_node.has_value()) {
-      return result;
-    }
-    auto page_and_stats = request.filter_service->ListSearchResultPageWithStats(
-        request.folder_id, result.filter_node, 0, LibraryModule::SearchWindowPageSize());
-    result.page  = std::move(page_and_stats.page_);
-    result.stats = std::move(page_and_stats.stats_);
-  } catch (const std::exception& e) {
-    result.error_text = QString::fromUtf8(e.what());
-  } catch (...) {
-    result.error_text = QStringLiteral("Unknown search error.");
-  }
-  return result;
-}
-
 }  // namespace
 
 SearchController::SearchController(ProjectModule* project, LibraryModule* library,
@@ -236,7 +190,7 @@ SearchController::SearchController(ProjectModule* project, LibraryModule* librar
       library_(library),
       folders_(folders),
       stats_(stats),
-      worker_(std::make_unique<SearchRequestWorker>()) {
+      worker_(&library->query_worker()) {
   QSettings settings;
   if (!settings.contains(QLatin1String(kNaturalLanguageSearchEnabledKey))) {
     // One-time migration: carry over the pre-rename "Semantic" toggle so
@@ -252,8 +206,8 @@ SearchController::SearchController(ProjectModule* project, LibraryModule* librar
 }
 
 SearchController::~SearchController() {
-  // Join the worker first: a running job posts its result to `this`.
-  worker_.reset();
+  // A running preview job posts its result to `this`; wait for it before teardown.
+  worker_->InvalidateAndWait(SearchRequestKind::kPreview);
   CancelSearchPreviewThumbnails();
 }
 
@@ -440,7 +394,11 @@ void SearchController::ApplyFuzzySearch(const QString& query) {
     ClearFuzzySearch();
     return;
   }
-  SubmitApplyRequest(trimmed, trimmed.toStdWString(), std::nullopt);
+  pending_search_ = LibrarySearchInput{.display_query_ = trimmed,
+                                       .pending_text_  = trimmed.toStdWString(),
+                                       .pending_       = true,
+                                       .field_mask_    = BuildSearchFieldMask()};
+  library_->RequestLibraryRefresh();
 }
 
 void SearchController::ApplyExactSearch(uint elementId) {
@@ -455,86 +413,56 @@ void SearchController::ApplyExactSearch(uint elementId) {
   if (!filter_service) {
     return;
   }
-  SubmitApplyRequest(
-      SEARCH_TEXT("Image %1", QString::number(static_cast<qulonglong>(elementId))).Render(),
-      std::nullopt, filter_service->BuildExactFileWhere(static_cast<sl_element_id_t>(elementId)));
+  pending_search_ = LibrarySearchInput{
+      .display_query_ =
+          SEARCH_TEXT("Image %1", QString::number(static_cast<qulonglong>(elementId))).Render(),
+      .filter_     = filter_service->BuildExactFileWhere(static_cast<sl_element_id_t>(elementId)),
+      .pending_    = true,
+      .field_mask_ = BuildSearchFieldMask()};
+  library_->RequestLibraryRefresh();
 }
 
-void SearchController::SubmitApplyRequest(const QString&              display_query,
-                                          std::optional<std::wstring> query_w,
-                                          std::optional<FilterNode>   filter_node) {
-  auto proj = project_->handler().project();
-  if (!proj) {
-    return;
+auto SearchController::LibrarySearch() const -> LibrarySearchInput {
+  if (pending_search_.has_value()) {
+    return *pending_search_;
   }
-  auto filter_service = proj->GetSleeveFilterService();
-  if (!filter_service) {
-    return;
-  }
-  const auto folder_id = folders_->CurrentFolderElementId();
-  if (!folder_id.has_value()) {
-    return;
-  }
-
-  SearchApplyRequest request{
-      .display_query  = display_query,
-      .query_w        = std::move(query_w),
-      .filter_node    = std::move(filter_node),
-      .field_mask     = BuildSearchFieldMask(),
-      .folder_id      = folder_id.value(),
-      .filter_service = std::move(filter_service),
-  };
-  worker_->Submit(SearchRequestKind::kApply, [this, request = std::move(request)](
-                                                 std::uint64_t request_generation) {
-    auto result = RunSearchApplyRequest(request);
-    QMetaObject::invokeMethod(
-        this,
-        [this, request_generation, display_query = request.display_query,
-         folder_id = request.folder_id, result = std::move(result)]() mutable {
-          if (!worker_->IsCurrent(SearchRequestKind::kApply, request_generation)) {
-            return;
-          }
-          CommitAppliedSearch(display_query, folder_id, std::move(result.filter_node), result.page,
-                              result.stats, result.error_text);
-        },
-        Qt::QueuedConnection);
-  });
+  return LibrarySearchInput{.display_query_ = active_search_query_,
+                            .filter_        = active_search_filter_node_,
+                            .pending_       = false,
+                            .field_mask_    = BuildSearchFieldMask()};
 }
 
-void SearchController::CommitAppliedSearch(const QString& display_query, sl_element_id_t folder_id,
-                                           std::optional<FilterNode> filter_node,
-                                           const SearchResultPage&   page,
-                                           const AlbumStatsView& stats, const QString& error_text) {
-  if (!error_text.isEmpty()) {
-    // The grid, stats, and active query stay as they were; the failure is reported, not
-    // replaced by another result.
-    qWarning().noquote() << "Search apply failed:" << error_text;
-    return;
+auto SearchController::AcceptLibrarySearch(const LibrarySearchInput&        used,
+                                           const std::optional<FilterNode>& filter) -> bool {
+  if (!used.pending_) {
+    return false;
   }
-  if (!filter_node.has_value()) {
-    ClearFuzzySearch();
-    return;
+  // A search applied after this refresh was submitted stays pending for its own refresh.
+  if (pending_search_.has_value() && pending_search_->display_query_ == used.display_query_ &&
+      pending_search_->pending_text_ == used.pending_text_) {
+    pending_search_.reset();
   }
-
-  active_search_query_       = display_query;
-  active_search_filter_node_ = std::move(filter_node);
-  stats_->ClearFilters();
-  library_->ApplySearchWindow(folder_id, page);
-  stats_->ApplyFolderStats(stats);
-  emit stats_->StatsFilterChanged();
-  emit SearchStateChanged();
+  if (!filter.has_value()) {
+    // The query parsed to no terms: no search is active.
+    const bool changed = !active_search_query_.isEmpty() || active_search_filter_node_.has_value();
+    active_search_query_.clear();
+    active_search_filter_node_.reset();
+    return changed;
+  }
+  active_search_query_       = used.display_query_;
+  active_search_filter_node_ = filter;
+  return true;
 }
 
 void SearchController::ClearFuzzySearch() {
-  // An apply that is still on the worker was requested before this clear; it must not
-  // install its filter afterwards.
-  worker_->Invalidate(SearchRequestKind::kApply);
-  if (active_search_query_.isEmpty() && !active_search_filter_node_.has_value()) {
+  const bool had_search = pending_search_.has_value() || !active_search_query_.isEmpty() ||
+                          active_search_filter_node_.has_value();
+  if (!had_search) {
     return;
   }
   ClearSearchState(true);
-  stats_->RebuildThumbnailView();
-  stats_->RefreshStats();
+  // The Inspector filters stay; only the search term leaves the library query.
+  library_->RequestLibraryRefresh();
 }
 
 void SearchController::CancelSearchRequests() {
@@ -813,7 +741,7 @@ void SearchController::CancelSearchPreviewThumbnails() {
 }
 
 void SearchController::ClearSearchState(bool emitSignal) {
-  worker_->Invalidate(SearchRequestKind::kApply);
+  pending_search_.reset();
   active_search_query_.clear();
   active_search_filter_node_.reset();
   if (emitSignal) {

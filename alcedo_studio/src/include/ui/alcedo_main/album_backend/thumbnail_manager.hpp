@@ -9,6 +9,9 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <set>
+#include <string>
+#include <tuple>
 #include <unordered_map>
 
 #include "app/thumbnail_service.hpp"
@@ -26,6 +29,13 @@ class ThumbnailManager {
 
   void SetThumbnailVisible(sl_element_id_t elementId, image_id_t imageId, bool visible,
                            uint32_t maxEdge = 1024);
+  /// Visibility of one occurrence of a photo in a grouped view, identified by
+  /// `(group_key, elementId, tier)`. Repeated notifications for the same occurrence change
+  /// nothing; the photo stays pinned while at least one of its occurrences is visible.
+  void SetOccurrenceThumbnailVisible(const std::string& group_key, sl_element_id_t elementId,
+                                     image_id_t imageId, bool visible, uint32_t maxEdge = 1024);
+  /// Number of visible occurrences registered for @p elementId (all tiers).
+  [[nodiscard]] auto VisibleOccurrenceCount(sl_element_id_t elementId) const -> size_t;
   void RequestThumbnail(sl_element_id_t elementId, image_id_t imageId, uint32_t maxEdge = 1024,
                         int retryAttempt = 0);
   [[nodiscard]] bool RefreshCurrentThumbnail(sl_element_id_t elementId, image_id_t imageId);
@@ -66,6 +76,8 @@ class ThumbnailManager {
   // TODO: Move pin ref-count tracking into ThumbnailService.
   std::unordered_map<ThumbnailCacheKey, PinnedThumbnailState> thumbnail_pins_{};
   std::unordered_map<sl_element_id_t, ThumbnailCacheKey>      current_visible_thumbnail_keys_{};
+  /// Visible grouped-view occurrences: (group key, element id, tier edge).
+  std::set<std::tuple<std::string, sl_element_id_t, uint32_t>> visible_occurrences_{};
   // Strategy B: active flags for in-flight thumbnail requests.
   std::unordered_map<ThumbnailCacheKey, std::shared_ptr<std::atomic<bool>>>
       thumbnail_active_flags_{};

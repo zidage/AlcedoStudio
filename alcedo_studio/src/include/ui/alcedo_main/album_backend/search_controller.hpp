@@ -27,6 +27,21 @@ class LibraryModule;
 class ProjectModule;
 class StatsEngine;
 
+/**
+ * @brief Search part of one library refresh, read on the UI thread by LibraryModule.
+ *
+ * @details The accepted search filter, or the pending applied search that the refresh must
+ * install when it succeeds: query text that the worker parses with the field mask, or the
+ * filter of one exact file. Values only; the worker never reads SearchController.
+ */
+struct LibrarySearchInput {
+  QString                     display_query_{};
+  std::optional<std::wstring> pending_text_{};
+  std::optional<FilterNode>   filter_{};
+  bool                        pending_    = false;
+  SearchFieldMask             field_mask_ = kAllSearchFields;
+};
+
 class SearchController final : public QObject {
   Q_OBJECT
   Q_PROPERTY(QString activeSearchQuery READ active_search_query NOTIFY SearchStateChanged)
@@ -76,9 +91,10 @@ class SearchController final : public QObject {
   Q_INVOKABLE void         SetSearchFieldExifEnabled(bool enabled);
   Q_INVOKABLE void         SetSearchFieldAiDescriptionEnabled(bool enabled);
   Q_INVOKABLE void         SetSearchFieldAiTagsEnabled(bool enabled);
-  /// Queue the search for the thumbnail grid and stats panel. The worker builds the filter
-  /// and queries the first grid page and the stats; the UI thread then installs the filter,
-  /// clears the stats filters, and replaces the grid and stats. An empty query clears.
+  /// Request a library refresh with this search as a pending change. The library worker
+  /// parses the query, combines it with the Inspector filters and the presentation options,
+  /// and the search becomes active only when that refresh is accepted. Inspector filters stay.
+  /// An empty query clears the search.
   Q_INVOKABLE void         ApplyFuzzySearch(const QString& query);
   /// Same as ApplyFuzzySearch with a filter that matches one file.
   Q_INVOKABLE void         ApplyExactSearch(uint elementId);
@@ -92,6 +108,15 @@ class SearchController final : public QObject {
   void ClearSearchState(bool emitSignal = true);
   /// Drop every pending search request and every result still on the way (shutdown).
   void                     CancelSearchRequests();
+  /// Search part of the next library refresh: the pending applied search when one exists,
+  /// else the accepted search filter.
+  [[nodiscard]] auto       LibrarySearch() const -> LibrarySearchInput;
+  /// Install the search of an accepted library refresh without emitting. @p used is the input
+  /// that refresh read; @p filter is the filter it built (empty: the query has no terms, so
+  /// no search is active). Returns true when the search state changed; the caller emits
+  /// SearchStateChanged after every owner of the result is installed.
+  auto AcceptLibrarySearch(const LibrarySearchInput& used, const std::optional<FilterNode>& filter)
+      -> bool;
 
  signals:
   void SearchStateChanged();
@@ -109,11 +134,6 @@ class SearchController final : public QObject {
   QVariantList BuildResultRows(const std::vector<SearchResultRow>& result_rows);
   qulonglong   RequestSearchPage(const QString& query, int offset, int limit, const QString& mode,
                                  bool submit);
-  void         SubmitApplyRequest(const QString& display_query, std::optional<std::wstring> query_w,
-                                  std::optional<FilterNode> filter_node);
-  void         CommitAppliedSearch(const QString& display_query, sl_element_id_t folder_id,
-                                   std::optional<FilterNode> filter_node, const SearchResultPage& page,
-                                   const AlbumStatsView& stats, const QString& error_text);
   SearchFieldMask BuildSearchFieldMask() const;
   void            ApplySearchFieldEnabled(const char* key, bool enabled);
 
@@ -124,13 +144,16 @@ class SearchController final : public QObject {
 
   QString                   active_search_query_{};
   std::optional<FilterNode> active_search_filter_node_{};
+  /// Applied search that waits for its library refresh; the change description only.
+  std::optional<LibrarySearchInput> pending_search_{};
   bool                      natural_language_search_enabled_  = false;
   std::uint64_t             search_preview_generation_        = 0;
   std::uint64_t             search_preview_request_sequence_  = 0;
   std::unordered_map<ThumbnailCacheKey, image_id_t>    search_preview_visible_thumbnails_{};
   std::unordered_map<ThumbnailCacheKey, std::uint64_t> search_preview_thumbnail_requests_{};
-  /// Runs every search SQL statement of this controller. Destroyed first in the destructor.
-  std::unique_ptr<SearchRequestWorker>                 worker_;
+  /// The library query worker owned by LibraryModule. Preview requests run there; the
+  /// destructor waits until no preview job runs.
+  SearchRequestWorker*                                 worker_ = nullptr;
 };
 
 }  // namespace alcedo::ui

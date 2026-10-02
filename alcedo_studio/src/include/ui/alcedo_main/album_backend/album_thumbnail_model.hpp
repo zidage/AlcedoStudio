@@ -67,6 +67,13 @@ class AlbumThumbnailModel : public QAbstractListModel {
   /// Full reset — emits modelReset. Use for folder/filter/language changes.
   void resetModel(const std::vector<AlbumItem>& items, size_t totalCount);
 
+  /// Start a reset whose rows are installed later by endReplace. Between the two calls the
+  /// model keeps exposing the old rows to views; other owners of the same accepted result
+  /// install their data in that window.
+  void                    beginReplace();
+  /// Install @p items and end the reset that beginReplace started. @p hasMore says whether
+  /// later rows exist (it is not derived from @p totalCount in the grouped mode).
+  void                    endReplace(std::vector<AlbumItem> items, size_t totalCount, bool hasMore);
   /// Append one page — emits beginInsertRows/endInsertRows.
   void appendPage(const std::vector<AlbumItem>& newItems);
 
@@ -114,6 +121,7 @@ class AlbumThumbnailModel : public QAbstractListModel {
   size_t total_count_ = 0;
   bool has_more_ = false;
   bool loading_ = false;
+  bool                                     replacing_   = false;
 };
 
 }  // namespace alcedo::ui

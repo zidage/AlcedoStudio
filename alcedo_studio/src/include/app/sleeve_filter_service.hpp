@@ -79,7 +79,12 @@ struct AlbumStatsView {
   std::vector<StatsBucket> lens_stats_{};
   std::vector<StatsBucket> label_stats_{};
   std::vector<StatsBucket> rating_stats_{};
+  /// Local import-day buckets; read only when the library query names a time zone.
+  std::vector<StatsBucket> import_date_stats_{};
 };
+
+/// The statistics of one storage read in the application form.
+[[nodiscard]] auto ToAlbumStatsView(const FolderStatsView& stats) -> AlbumStatsView;
 
 /// One page of the files that match a filter and the stats of all matching files.
 struct SearchResultPageAndStats {
