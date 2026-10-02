@@ -992,6 +992,50 @@
         <source>Filtered by search</source>
         <translation>按搜索筛选</translation>
     </message>
+    <message>
+        <source>capture time</source>
+        <translation>拍摄时间</translation>
+    </message>
+    <message>
+        <source>oldest first</source>
+        <translation>最早优先</translation>
+    </message>
+    <message>
+        <source>newest first</source>
+        <translation>最新优先</translation>
+    </message>
+    <message>
+        <source>By Import Time</source>
+        <translation>按导入时间</translation>
+    </message>
+    <message>
+        <source>import time</source>
+        <translation>导入时间</translation>
+    </message>
+    <message>
+        <source>camera model</source>
+        <translation>相机型号</translation>
+    </message>
+    <message>
+        <source>labels</source>
+        <translation>标签</translation>
+    </message>
+    <message>
+        <source>rating</source>
+        <translation>评分</translation>
+    </message>
+    <message>
+        <source>lowest first</source>
+        <translation>最低优先</translation>
+    </message>
+    <message>
+        <source>highest first</source>
+        <translation>最高优先</translation>
+    </message>
+    <message>
+        <source>lens</source>
+        <translation>镜头</translation>
+    </message>
 </context>
 <context>
     <name>Alcedo</name>
@@ -1376,6 +1420,14 @@ Alcedo 将改用 %1。</translation>
         <location line="+1"/>
         <source>With print</source>
         <translation>含印片</translation>
+    </message>
+    <message>
+        <source>Unknown sort field: %1</source>
+        <translation>未知的排序字段：%1</translation>
+    </message>
+    <message>
+        <source>Unknown group field: %1</source>
+        <translation>未知的分组字段：%1</translation>
     </message>
 </context>
 <context>
@@ -4955,6 +5007,30 @@ Original source files on disk will be kept.</source>
         <source>Export %1 Files</source>
         <translation>导出 %1 个文件</translation>
     </message>
+    <message>
+        <source>Library query failed: %1</source>
+        <translation>图库查询失败：%1</translation>
+    </message>
+    <message>
+        <source>Updating</source>
+        <translation>正在更新</translation>
+    </message>
+    <message>
+        <source>Retry</source>
+        <translation>重试</translation>
+    </message>
+    <message>
+        <source>Retry the library query</source>
+        <translation>重试图库查询</translation>
+    </message>
+    <message>
+        <source>No Matching Photos</source>
+        <translation>没有匹配的照片</translation>
+    </message>
+    <message>
+        <source>Change the filters or the search to show photos.</source>
+        <translation>更改筛选条件或搜索以显示照片。</translation>
+    </message>
 </context>
 <context>
     <name>LockedNodeMaskPromptDialog</name>
@@ -6902,6 +6978,120 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <location line="+0"/>
         <source>Project name</source>
         <translation>项目名称</translation>
+    </message>
+</context>
+<context>
+    <name>InspectorFieldActions</name>
+    <message>
+        <source>Ascending</source>
+        <translation>升序</translation>
+    </message>
+    <message>
+        <source>Descending</source>
+        <translation>降序</translation>
+    </message>
+    <message>
+        <source>Sort photos by %1: %2.</source>
+        <translation>按%1排序照片：%2。</translation>
+    </message>
+    <message>
+        <source>Inside each day, the full time orders the photos.</source>
+        <translation>每天内按完整时间排列照片。</translation>
+    </message>
+    <message>
+        <source>Equal values inside a day keep the newest time first.</source>
+        <translation>同一天内的相同值按最新时间优先。</translation>
+    </message>
+    <message>
+        <source>Equal values follow file ID order.</source>
+        <translation>相同值按文件 ID 顺序排列。</translation>
+    </message>
+    <message>
+        <source>Text sorts by character code, not by language rules.</source>
+        <translation>文本按字符编码排序，不按语言规则。</translation>
+    </message>
+    <message>
+        <source>Select it again to clear the sort.</source>
+        <translation>再次选择可清除排序。</translation>
+    </message>
+    <message>
+        <source>Sort by %1, %2</source>
+        <translation>按%1排序，%2</translation>
+    </message>
+    <message>
+        <source>Group</source>
+        <translation>分组</translation>
+    </message>
+    <message>
+        <source>Group photos by %1</source>
+        <translation>按%1分组照片</translation>
+    </message>
+    <message>
+        <source>Stop grouping photos by %1.</source>
+        <translation>停止按%1分组照片。</translation>
+    </message>
+</context>
+<context>
+    <name>AlbumSectionView</name>
+    <message>
+        <source>Grouped photos</source>
+        <translation>分组照片</translation>
+    </message>
+    <message>
+        <source>(unnamed)</source>
+        <translation>（未命名）</translation>
+    </message>
+    <message>
+        <source>Unlabelled</source>
+        <translation>未标注</translation>
+    </message>
+    <message>
+        <source>Unknown</source>
+        <translation>未知</translation>
+    </message>
+    <message>
+        <source>Unrated</source>
+        <translation>未评分</translation>
+    </message>
+    <message numerus="yes">
+        <source>%n star(s)</source>
+        <translation>
+            <numerusform>%n 星</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Loading photo</source>
+        <translation>正在载入照片</translation>
+    </message>
+    <message>
+        <source>Expand all</source>
+        <translation>全部展开</translation>
+    </message>
+    <message>
+        <source>Expand all groups</source>
+        <translation>展开所有分组</translation>
+    </message>
+    <message>
+        <source>Collapse all</source>
+        <translation>全部折叠</translation>
+    </message>
+    <message>
+        <source>Collapse all groups</source>
+        <translation>折叠所有分组</translation>
+    </message>
+    <message>
+        <source>Expand %1</source>
+        <translation>展开%1</translation>
+    </message>
+    <message>
+        <source>Collapse %1</source>
+        <translation>折叠%1</translation>
+    </message>
+    <message numerus="yes">
+        <source>%n photo(s)</source>
+        <translation>
+            <numerusform>%n 张照片</numerusform>
+        </translation>
     </message>
 </context>
 </TS>

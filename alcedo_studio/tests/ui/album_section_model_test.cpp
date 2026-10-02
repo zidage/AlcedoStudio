@@ -149,6 +149,27 @@ TEST(AlbumSectionModelTest, RowOffsetsUseDocumentedHeaderAndPhotoRowHeights) {
   }
 }
 
+TEST(AlbumSectionModelTest, RowInfoDescribesRowsTheViewHasNotCreated) {
+  AlbumSectionModel model;
+  model.ResetGroups(ThreeGroups(), 9, 9, false);
+  model.SetColumnCount(2);
+  const auto header = model.RowInfo(4);
+  EXPECT_EQ(header.value("kind").toInt(), 0);
+  EXPECT_EQ(header.value("groupIndex").toInt(), 1);
+  EXPECT_EQ(header.value("firstOccurrence").toLongLong(), 5);
+  const auto photos = model.RowInfo(7);
+  EXPECT_EQ(photos.value("kind").toInt(), 1);
+  EXPECT_EQ(photos.value("firstOccurrence").toLongLong(), 6);
+  EXPECT_EQ(photos.value("occurrenceCount").toLongLong(), 2);
+  EXPECT_EQ(model.RowInfo(9).value("kind").toInt(), -1);
+  // Role data carries the separate header roles a view needs for accessible names.
+  EXPECT_EQ(model.data(model.index(4), AlbumSectionModel::GroupTitle).toString(),
+            QStringLiteral("2026-06-06"));
+  EXPECT_EQ(model.data(model.index(4), AlbumSectionModel::RowKind).toInt(), 0);
+  EXPECT_EQ(model.data(model.index(5), AlbumSectionModel::RowOccurrenceCount).toLongLong(), 1);
+  EXPECT_TRUE(model.roleNames().contains(AlbumSectionModel::Collapsed));
+}
+
 TEST(AlbumSectionModelTest, DistantPageStoresKeepRetainedPagesBounded) {
   AlbumSectionModel model;
   // One group of 100,000 photos read in pages of 1000.

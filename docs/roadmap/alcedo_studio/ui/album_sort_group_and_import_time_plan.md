@@ -4,7 +4,7 @@ Date: 2026-10-02
 
 Last revised: 2026-10-02 after the user selected direct Inspector controls and allowed the same field for grouping and photo sorting.
 
-Status: Phases 1 and 2 complete (2026-10-02); Phase 3 planned.
+Status: Phases 1, 2, and 3 implemented and tested (2026-10-02); the Phase 3 manual visual review in the real application is open.
 
 Source audit revision: `a03728184`. The worktree was clean before this plan was added.
 
@@ -26,14 +26,14 @@ The image's status, environment, PR, and custom-group controls are not product r
 Confirmed interaction requirements:
 
 - Put ascending and descending sort actions beside each Inspector field title.
-- Put a grouping checkbox beside those actions.
+- Put a Group icon action beside those actions.
 - Keep at most one active grouping field.
 - Keep at most one active photo sort field. It can be the same field as the active grouping field.
 - Keep every Inspector filter category available while grouping and sorting are active.
 - Use the same backend interfaces for these operations and the existing filters.
 
-The checkbox means GROUP BY. The ascending and descending actions mean ORDER BY.
-Use Group as the checkbox label. Do not label a grouping action Order by.
+The Group action means GROUP BY. The ascending and descending actions mean ORDER BY.
+Name the grouping action Group in its accessible name and tooltip. Do not label a grouping action Order by.
 
 The following details are design proposals selected for this plan. They are not prior user approvals:
 
@@ -244,9 +244,9 @@ Unknown                                                30 photos
 Each field header invokes the same focused LibraryModule operations.
 Bind arrow selection and checkbox state to its accepted settings.
 QML does not keep another copy of those settings.
-Use compact up/down text actions with full accessible names and tooltips.
+Use compact icon actions with full accessible names and tooltips.
 The layout above spells out their meaning, not their final pixel width.
-Use ThemeCheckBox for Group and existing Basic button behavior for sort actions.
+Use one toggle icon action behavior for Group and for the sort actions.
 Keep section expansion separate from sorting and grouping.
 Activating a header action must not toggle section expansion or a filter bucket.
 Keep the actions available when their filter section is collapsed.
@@ -263,11 +263,11 @@ Group headers contain separate title, count, and disclosure roles.
 Do not add new pills, status dots, colored selection frames, or compound title/count strings.
 Use the existing Basic style and AppTheme tokens.
 Use neutral selected rows and a visible neutral keyboard focus treatment.
-Use text glyphs for the requested sort arrows. This design requires no new SVG asset.
-Do not invent or assign a new SVG during implementation without the approval required by DESIGN.md.
+Use the approved SVG assets `sort-ascending.svg`, `sort-descending.svg`, and `category-plus.svg` for the sort and Group actions.
+Do not invent or assign another SVG during implementation without the approval required by DESIGN.md.
 
-The import filter reuses DateFilterSection and its calendar/activity choices.
-Give it independent day-selection and view-style state from the capture filter.
+The import filter reuses DateFilterSection with the calendar tiles only. It has no activity graph and no style switch.
+Give it independent day-selection state from the capture filter.
 Share the renderer, not the selected value.
 New strings use `qsTr` or the existing C++ localization helpers.
 Update the existing translation catalogs and `docs/VI/README.md` in the UI phase.
@@ -753,7 +753,7 @@ Do not reformat entire existing source files as part of a feature edit.
 | --- | --- | --- | --- | ---: | --- |
 | 1 | DuckORM SELECT support and storage query semantics, including real import time | DuckORM, filter factories, ElementStore, mapper, storage tests | Current source audit | 1400-1850 lines | Complete |
 | 2 | One application query path and tested section projection | App services, LibraryModule, existing worker, models, owner tests | Phase 1 | 1500-1900 lines | Complete |
-| 3 | Direct Inspector field actions, import filtering, and virtualized album sections | QML, theme documentation, translations, integration checks | Phase 2 | 1200-1800 lines | Planned |
+| 3 | Direct Inspector field actions, import filtering, and virtualized album sections | QML, theme documentation, translations, integration checks | Phase 2 | 1200-1800 lines | Implemented; manual review open |
 
 The estimates include code, tests, build registration, resources, and documentation changed by each phase.
 They exclude generated files and temporary evidence.
@@ -1265,7 +1265,84 @@ Launch alcedo_main for the manual cases. Record the project, query choices, expe
 
 **Expected diff**: 1200-1800 lines.
 
-**Completion record**: use Section 13. No implementation evidence exists yet.
+**Completion record**:
+
+##### Phase 3 completion record (2026-10-02)
+
+```text
+Phase / date / status: Phase 3 / 2026-10-02 / implemented and tested; the manual visual
+  review in the real application (both themes, narrow layout, pointer and wheel input) is
+  not done by the agent and stays open for the user (no display access in this session).
+Source revision and branch: stacked on feature/album-query-library-module (Phase 2);
+  branch feature/album-inspector-sections.
+Actual changed modules and diff size: Inspector field actions (new InspectorFieldActions.qml),
+  header-action slot of StatsCard / DateFilterSection / StarRatingFilter, AlbumInspectorPanel
+  (import-time section, actions on six headers), grouped photo view (new AlbumSectionView.qml),
+  LibraryWorkspace (view switch, Updating / error and Retry / No Matching Photos states),
+  AppTheme tokens (librarySectionHeaderHeight, inspectorHeaderActionSize), DESIGN.md,
+  docs/VI/README.md, zh_CN and en catalogs, AlbumBrowseService row read for selections,
+  LibraryModule selection items and lowercase QML signal twins, AlbumSectionModel RowInfo,
+  AlbumSectionQmlTest (new), AlbumSectionModelTest. About 1970 added lines (24 files) including
+  374 catalog lines, inside the 1200-1800 code estimate when the catalogs are excluded.
+Implemented behavior:
+  - Each Inspector field header (capture date, import time, camera model, labels, rating,
+    lens) shows ascending and descending text actions and a Group ThemeCheckBox bound to the
+    accepted LibraryModule options. One arrow and one checkbox at most; both can name the same
+    field; the actions never change a filter or the section expansion; they stay available
+    when the section is collapsed. Tooltips explain full-time order inside a day, the
+    newest-first tie order inside date groups, the file id tie order, and code-point text order.
+  - Import-day filter section with its own day selection and style; "import" filter category.
+  - AlbumSectionView: one ListView with recycled header and photo rows, at most columnCount
+    cells per row, fixed header height and zoom-derived photo row height (scroll offsets from
+    AlbumSectionModel.RowOffset), visible rows request their occurrence pages, Expand all /
+    Collapse all, separate disclosure / title / count roles, arrow-key focus over photo cells
+    (headers skipped), Shift range and Ctrl+A through ordered id reads of the worker (collapsed
+    groups included for Ctrl+A, skipped for Shift), Enter and double click open the editor,
+    context menu and selection through the same LibraryWorkspace handlers as the grid.
+  - Occurrence pins: cells register (group, file, tier) visibility; pooling, collapse, and
+    teardown release them.
+  - Error state with Retry, Updating caption, and No Matching Photos empty state.
+Explicitly unimplemented items: restore of the scroll position from (file id, group key,
+  offset) across a mode switch uses the focus position read only; a separate group-direction
+  control is out of the product design.
+Primary success call chain:
+  InspectorFieldActions sort action / Group checkbox -> LibraryModule::ToggleInspectorSort /
+  SetInspectorGrouping -> shared async read -> PublishRefresh -> sortField / groupField /
+  sectionModel notifications -> AlbumSectionView rows -> RequestSectionRows and
+  SetOccurrenceThumbnailVisible -> selection / editor / export through LibraryWorkspace handlers
+Primary failure and restore call chain:
+  read fails -> LibraryModule.queryError -> LibraryWorkspace error caption and Retry ->
+  RetryLibraryQuery; the accepted rows and options stay visible
+Build and test commands with exit codes:
+  cmd /c scripts\msvc_env.cmd --build --preset win_debug --target alcedo_main
+    AlbumSectionModelTest AlbumSectionQmlTest AlbumBackendLibraryQueryTest
+    AlbumBackendStatsFilterTest AlbumBackendThumbnailTest AlbumBackendSearchWorkerTest
+    AlbumBackendI18nTest AlbumBackendProjectTest AlbumBackendImageDeleteTest
+    AlbumBackendRatingTest AlbumQueryTest --parallel 4 -> 0
+  ctest --test-dir build/debug --output-on-failure -j 1 -R '^(<the same test targets>)\.' -> 0
+  MainQmlWorkflowTest: ProductionWindowLoadsAndRoutesCoreWorkspaceActions fails on a Qt
+    Material/Dialog.qml warning; the same failure occurs on the Phase 2 head without this
+    phase (stash, rebuild, rerun), so it is pre-existing.
+Discovered / passed / failed / skipped counts: 117 / 112 / 0 / 5 (three env-gated external
+  project cases, one Metal-only case on Windows, the opt-in measurement).
+Import-time and timezone evidence: import-day section binds importDateStats and the "import"
+  filter category; storage and owner evidence in the Phase 1 and Phase 2 records.
+SQL plans, linked DuckDB version, and latency measurements: see Phase 2 record.
+Loaded metadata and visible-cell measurements: LargeSectionTraversalKeepsCellsAndLoadedRowsBounded,
+  400 photos, 1000 x 828 view, six columns, five scroll positions: at most 132 photo cells
+  (viewport plus one viewport of cache buffer above and below), at most 2 loaded occurrence
+  pages, at most 240 photo rows in the model.
+Manual verification in both themes: not performed by the agent (no access to the desktop
+  display). Required by the user: Alcedo and Classic themes, narrow Inspector, Inspector
+  closed, collapsed groups, failed query, empty filtered result, real pointer, wheel, focus,
+  keyboard, zoom, editor return, export of a range selection.
+Unavailable platforms or UI coverage: macOS not built or run. WorkspaceShellTest not used
+  (unreliable offscreen input; AGENTS.md). AlbumSectionQmlTest calls component functions and
+  does not deliver synthetic pointer input.
+Durable evidence record and temporary evidence path: this record;
+  build/tmp/album_sort_group/phase3/ (removed after the phase).
+Remaining defects: the manual review items above are open.
+```
 
 ## 10. Cross-phase acceptance matrix
 

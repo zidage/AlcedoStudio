@@ -123,6 +123,10 @@ class AlbumSectionModel final : public QAbstractListModel {
   /// Row that shows @p occurrence: its photo row, or its header row when the group is collapsed.
   /// -1 when the occurrence is out of range.
   [[nodiscard]] Q_INVOKABLE int          RowForOccurrence(qint64 occurrence) const;
+  /// `{kind, groupIndex, firstOccurrence, occurrenceCount}` of @p row (kind 0 header, 1
+  /// photos; -1 out of range). Reads the prefix table, so it works for rows a view has not
+  /// created (keyboard navigation).
+  [[nodiscard]] Q_INVOKABLE QVariantMap  RowInfo(int row) const;
   /// Group index of @p occurrence; -1 when it is out of range.
   [[nodiscard]] Q_INVOKABLE int          GroupForOccurrence(qint64 occurrence) const;
   /// `{begin, end}` occurrences shown by the photo rows in [@p first_row, @p last_row]; an empty

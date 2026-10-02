@@ -11,8 +11,13 @@ Item {
 
     readonly property int starCount: 5
     property int hoveredRating: 0
+    /// Optional actions beside the title (see StatsCard.headerActions).
+    property Component headerActions: null
+    readonly property bool stackHeaderActions: headerActions !== null
+        && width < titleMetrics.advanceWidth + appTheme.inspectorHeaderActionSize * 6
+                   + appTheme.spaceLg * 2
 
-    implicitHeight: starRow.implicitHeight + 24
+    implicitHeight: ratingColumn.implicitHeight + appTheme.spaceSm
 
     function starColor(starIndex) {
         const r = starIndex + 1;
@@ -51,16 +56,45 @@ Item {
     }
 
     ColumnLayout {
+        id: ratingColumn
         anchors.left: parent.left
         anchors.right: parent.right
         spacing: 6
 
-        Label {
+        TextMetrics {
+            id: titleMetrics
             text: qsTr("BY RATING")
-            color: appTheme.textMutedColor
             font.pixelSize: 10
             font.weight: 700
             font.letterSpacing: 1.6
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: appTheme.spaceXs
+
+            Label {
+                Layout.fillWidth: true
+                text: qsTr("BY RATING")
+                color: appTheme.textMutedColor
+                font.pixelSize: 10
+                font.weight: 700
+                font.letterSpacing: 1.6
+                wrapMode: Text.Wrap
+            }
+
+            Loader {
+                active: root.headerActions !== null && !root.stackHeaderActions
+                visible: active
+                sourceComponent: root.headerActions
+            }
+        }
+
+        Loader {
+            Layout.fillWidth: true
+            active: root.headerActions !== null && root.stackHeaderActions
+            visible: active
+            sourceComponent: root.headerActions
         }
 
         RowLayout {

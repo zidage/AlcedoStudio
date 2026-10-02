@@ -335,6 +335,18 @@ int AlbumSectionModel::RowForOccurrence(qint64 occurrence) const {
   return static_cast<int>(start + 1 + local / column_count_);
 }
 
+QVariantMap AlbumSectionModel::RowInfo(int row) const {
+  if (row < 0 || row >= row_count_) {
+    return QVariantMap{{QStringLiteral("kind"), -1}};
+  }
+  const auto info = RowAt(row);
+  return QVariantMap{
+      {QStringLiteral("kind"), static_cast<int>(info.type_)},
+      {QStringLiteral("groupIndex"), info.group_index_},
+      {QStringLiteral("firstOccurrence"), static_cast<qint64>(info.first_occurrence_)},
+      {QStringLiteral("occurrenceCount"), static_cast<qint64>(info.occurrence_count_)}};
+}
+
 int AlbumSectionModel::GroupForOccurrence(qint64 occurrence) const {
   return GroupOfOccurrence(occurrence);
 }

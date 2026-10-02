@@ -11,6 +11,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -106,6 +107,11 @@ class AlbumBrowseService {
                                       const AlbumQueryOptions&         options,
                                       const std::string& active_semantic_model_key, int64_t begin,
                                       int64_t end) const -> std::vector<sl_element_id_t>;
+
+  /// Display rows (file and image ids, name, typed metadata) of @p file_ids in that order.
+  /// Reads typed columns only, no thumbnail and no image pool data. Throws like ReadAlbumQuery.
+  [[nodiscard]] auto ReadAlbumFileRows(std::span<const sl_element_id_t> file_ids) const
+      -> std::vector<SearchResultRow>;
 
   /// Receives the operation name at the start of each album query read, on the thread that
   /// runs it. Tests install one to prove that album SQL leaves the UI thread. Thread-safe.

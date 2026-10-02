@@ -116,6 +116,10 @@ class AppTheme final : public QObject {
   Q_PROPERTY(int dateGraphCellMinSize READ dateGraphCellMinSize CONSTANT)
   Q_PROPERTY(int dateGraphCellGap READ dateGraphCellGap CONSTANT)
   Q_PROPERTY(int dateGraphCellRadius READ dateGraphCellRadius CONSTANT)
+  // Library grouped sections: fixed header row height (scroll geometry) and the compact
+  // Inspector field header actions (sort arrows, Group checkbox row).
+  Q_PROPERTY(int librarySectionHeaderHeight READ librarySectionHeaderHeight CONSTANT)
+  Q_PROPERTY(int inspectorHeaderActionSize READ inspectorHeaderActionSize CONSTANT)
   Q_PROPERTY(int motionFoldOpenMs READ motionFoldOpenMs CONSTANT)
   Q_PROPERTY(int motionFoldCloseMs READ motionFoldCloseMs CONSTANT)
   Q_PROPERTY(int motionFadeMs READ motionFadeMs CONSTANT)
@@ -350,6 +354,8 @@ class AppTheme final : public QObject {
   auto        dateGraphCellMinSize() const -> int;
   auto        dateGraphCellGap() const -> int;
   auto        dateGraphCellRadius() const -> int;
+  auto        librarySectionHeaderHeight() const -> int;
+  auto        inspectorHeaderActionSize() const -> int;
   auto        motionFoldOpenMs() const -> int;
   auto        motionFoldCloseMs() const -> int;
   auto        motionFadeMs() const -> int;

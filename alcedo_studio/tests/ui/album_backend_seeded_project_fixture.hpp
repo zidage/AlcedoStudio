@@ -86,7 +86,7 @@ inline auto FindFolderId(const QVariantList& folders, const QString& name) -> ui
 }
 
 /// Typed metadata and import time of one synthetic image (library sort and group tests).
-struct SeededImageSpec {
+struct LibraryPhotoSpec {
   std::string                model_     = "Synthetic Album Camera";
   std::string                lens_      = "Synthetic 50mm";
   std::string                date_time_ = "2026-05-25 10:00:00";
@@ -101,7 +101,7 @@ struct SeededImageSpec {
 inline auto CreateSeededPackedProject(
     const std::filesystem::path&              tempDir,
     const std::vector<std::filesystem::path>& sourceImagePaths = {},
-    std::size_t synthetic_image_count = 1, const std::vector<SeededImageSpec>& specs = {})
+    std::size_t synthetic_image_count = 1, const std::vector<LibraryPhotoSpec>& specs = {})
     -> std::optional<SeededProject> {
   const auto db_path     = tempDir / "album_delete_seed.db";
   const auto meta_path   = tempDir / "album_delete_seed.json";
@@ -135,7 +135,7 @@ inline auto CreateSeededPackedProject(
     }
     image->image_type_ = ImageType::DNG;
 
-    const SeededImageSpec spec = index < specs.size() ? specs[index] : SeededImageSpec{};
+    const LibraryPhotoSpec spec = index < specs.size() ? specs[index] : LibraryPhotoSpec{};
     ExifDisplayMetaData   metadata;
     metadata.model_         = spec.model_;
     metadata.lens_          = spec.lens_;
