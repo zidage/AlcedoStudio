@@ -890,23 +890,30 @@ void EditorNodeController::OnSessionHistoryChanged() {
 }
 
 void EditorNodeController::SelectNodeForAdjustmentPanel(const QString& panel) {
-  const auto  key      = panel.toStdString();
   const auto* selected = NodeFor(selected_node_id_);
-  if (selected != nullptr && AdjustmentPanelIsSupported(selected->node_kind, key)) {
+  if (selected != nullptr && AdjustmentPanelIsSupported(selected->node_kind, panel.toStdString())) {
     return;
   }
+  const NodeId owner = AdjustmentPanelOwnerCandidate(panel);
+  if (owner.Empty()) {
+    SetLastError(tr("No node supports the selected adjustment panel"));
+    return;
+  }
+  selectNode(NodeIdToQString(owner));
+}
+
+auto EditorNodeController::AdjustmentPanelOwnerCandidate(const QString& panel) const -> NodeId {
+  const auto key = panel.toStdString();
   if (IsColorGrade(last_selected_color_grade_id_) &&
       AdjustmentPanelIsSupported(EditorNodeKind::ColorGrade, key)) {
-    selectNode(NodeIdToQString(last_selected_color_grade_id_));
-    return;
+    return last_selected_color_grade_id_;
   }
   for (const auto& node : ActiveNodes()) {
     if (AdjustmentPanelIsSupported(node.node_kind, key)) {
-      selectNode(NodeIdToQString(node.node_id));
-      return;
+      return node.node_id;
     }
   }
-  SetLastError(tr("No node supports the selected adjustment panel"));
+  return {};
 }
 
 void EditorNodeController::selectNode(const QString& node_id) {

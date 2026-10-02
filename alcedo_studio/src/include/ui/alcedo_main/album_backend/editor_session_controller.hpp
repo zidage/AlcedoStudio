@@ -260,6 +260,9 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
                                        alcedo::EditorParameterWrite write, bool settled) -> bool;
   /// Primary selected node of the bound Nodes-page selection; empty when none is bound.
   [[nodiscard]] auto selected_node_id() const -> alcedo::NodeId;
+  /// Color Grade the LUT adjustment panel edits when it becomes active: the last live Color
+  /// Grade, else the first active one. Empty when no node selection is bound or none exists.
+  [[nodiscard]] auto lut_panel_node_id() const -> alcedo::NodeId;
   /// Bind the Nodes-page selection owner used to stamp submit targets.
   /// Emits NodeSelectionChanged now and whenever its selection changes.
   void             BindNodeSelectionSource(EditorNodeController* nodes);

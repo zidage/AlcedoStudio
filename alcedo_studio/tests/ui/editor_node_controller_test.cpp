@@ -372,8 +372,17 @@ TEST(EditorNodeController, LutTargetFollowsSelectionAndQueuesTheCapturedGrade) {
             std::optional<alcedo::LutReference>(alcedo::LibraryLutReference{"looks/teal.cube"}));
   EXPECT_FALSE(write->strength.has_value());
 
-  // Output and RAW selections browse only.
-  nodes.selectNode(QStringLiteral("drt"));
+  // Selecting DRT or Develop opens its panel; the LUT still goes to the last Grade.
+  for (const auto& node : {QStringLiteral("drt"), QStringLiteral("develop")}) {
+    nodes.selectNode(node);
+    ASSERT_NE(session.active_adjustment_panel(), QStringLiteral("geometry"));
+    EXPECT_EQ(target.targetNodeId(), QStringLiteral("grade.extra")) << node.toStdString();
+    EXPECT_TRUE(target.canApply()) << node.toStdString();
+  }
+
+  // The Geometry panel keeps Develop as the target and rejects LUT changes.
+  session.set_active_adjustment_panel(QStringLiteral("geometry"));
+  ASSERT_EQ(nodes.selected_node_id(), NodeId{"develop"});
   EXPECT_EQ(target.state(), alcedo::ui::LutTargetState::kNotColorGrade);
   EXPECT_FALSE(target.applyEntry(QStringLiteral("library:looks/teal.cube")));
   EXPECT_EQ(backend.enqueue_count(), 1);
@@ -1109,6 +1118,8 @@ TEST(EditorNodeController, PanelNavigationSelectsOwnersAndReturnsToLastGradeWith
     EXPECT_EQ(nodes.selected_node_id(), expected);
     EXPECT_EQ(backend.last_projection_node(), expected);
     EXPECT_EQ(session.active_adjustment_panel(), QString::fromLatin1(panel));
+    // The LUT browser target on Develop and DRT panels: the Grade the LUT panel returns to.
+    EXPECT_EQ(session.lut_panel_node_id(), NodeId{"grade.b"});
   }
   EXPECT_EQ(backend.view_change_count(), views_before);
   EXPECT_EQ(backend.enqueue_count(), 0);

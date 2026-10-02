@@ -1507,6 +1507,12 @@ auto EditorSessionController::selected_node_id() const -> alcedo::NodeId {
   return node_controller_ != nullptr ? node_controller_->selected_node_id() : alcedo::NodeId{};
 }
 
+auto EditorSessionController::lut_panel_node_id() const -> alcedo::NodeId {
+  return node_controller_ != nullptr
+             ? node_controller_->AdjustmentPanelOwnerCandidate(QStringLiteral("lut"))
+             : alcedo::NodeId{};
+}
+
 auto EditorSessionController::EnqueueAdjustmentPatch(
     std::optional<alcedo::EditorAdjustmentPatch> patch, bool settled) -> bool {
   auto* viewport = qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data());

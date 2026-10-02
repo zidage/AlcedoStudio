@@ -177,6 +177,10 @@ class EditorNodeController : public QObject {
   Q_INVOKABLE bool isNodeSelected(const QString& node_id) const;
   /// Select the panel owner, returning to the last live Color Grade when possible.
   void             SelectNodeForAdjustmentPanel(const QString& panel);
+  /// Node that SelectNodeForAdjustmentPanel selects for @p panel when the current selection
+  /// does not support it: the last live Color Grade, else the first active node that supports
+  /// @p panel. Empty when no node supports it.
+  [[nodiscard]] auto AdjustmentPanelOwnerCandidate(const QString& panel) const -> NodeId;
   Q_INVOKABLE void selectPreviousBackboneNode();
   Q_INVOKABLE void selectNextBackboneNode();
   Q_INVOKABLE void selectDevelop();

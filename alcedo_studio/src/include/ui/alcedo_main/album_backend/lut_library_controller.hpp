@@ -40,6 +40,11 @@ class LutTargetSource {
   [[nodiscard]] virtual auto SelectedNodeId() const -> NodeId                           = 0;
   /// Mask being edited on the selected node; empty when the node itself is selected.
   [[nodiscard]] virtual auto SelectedMaskId() const -> std::string                      = 0;
+  /// Active right-side adjustment panel key (tone, look, lut, display, post, geometry, raw,
+  /// masks).
+  [[nodiscard]] virtual auto ActiveAdjustmentPanel() const -> QString                   = 0;
+  /// Color Grade the LUT adjustment panel edits when it becomes active; empty when none.
+  [[nodiscard]] virtual auto LutPanelNodeId() const -> NodeId                           = 0;
   /// True when the session accepts edits (a photo is open and interactive).
   [[nodiscard]] virtual auto CanEdit() const -> bool                                    = 0;
   /// Enqueue one settled LUT write for @p target, which the caller captured from Document().
@@ -61,6 +66,11 @@ enum class LutTargetState : std::uint8_t {
 
 /**
  * @brief Binds the LUT browser to exactly one Color Grade: the primary selected node.
+ *
+ * Exception: while the RAW Decode, Display Transform, or Post Processing panel is active, the
+ * selected node is Develop or DRT. The target is then the Color Grade that the LUT panel edits
+ * (LutTargetSource::LutPanelNodeId), so the user can change the LUT without leaving the panel.
+ * The Geometry panel has no such target: a LUT apply stays rejected there.
  *
  * Reads: the target (node identity and name) and its current association (reference, last
  * known name, strength, and availability through the library) are read from the published
