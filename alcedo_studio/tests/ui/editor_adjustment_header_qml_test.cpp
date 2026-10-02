@@ -306,7 +306,7 @@ class FakeComparison final : public QObject {
   auto active() const -> bool { return active_; }
   auto sourceOptions() const -> QVariantList {
     return {QVariantMap{{QStringLiteral("value"), QStringLiteral("root")},
-                        {QStringLiteral("label"), QStringLiteral("Before (imported)")}},
+                        {QStringLiteral("label"), QStringLiteral("Unadjusted")}},
             QVariantMap{{QStringLiteral("value"), QStringLiteral("current")},
                         {QStringLiteral("label"), QStringLiteral("Current working state")}}};
   }

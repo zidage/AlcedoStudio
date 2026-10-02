@@ -4,9 +4,9 @@ import QtQuick.Layouts
 
 // Compare page of the adjustment stack.
 //
-// Shows the A and B source selectors, the comparison kind, the display mode, the divider
-// orientation, Swap, Close, the fixed-sensor-settings explanation, and the loading, error,
-// Retry, and HDR-unavailable states.
+// Shows the A and B source selectors, the display mode, the divider orientation, Swap, Close,
+// the fixed-sensor-settings info hint, and the loading, error, Retry, and HDR-unavailable states.
+// A comparison opens as unadjusted against current; the user picks other sources in A and B.
 //
 // The panel owns no comparison state. Every control reports a request signal; the owner
 // changes its state and binds the result back. Selections that need new images are disabled
@@ -20,8 +20,6 @@ Item {
     property var sourceOptions: []
     property string aSourceValue: ""
     property string bSourceValue: ""
-    // "beforeAfter" | "versions"
-    property string comparisonKind: "beforeAfter"
     // "complete" | "divider"
     property string displayMode: "divider"
     // "horizontal" (left/right) | "vertical" (top/bottom)
@@ -38,7 +36,6 @@ Item {
 
     signal aSourceRequested(string value)
     signal bSourceRequested(string value)
-    signal comparisonKindRequested(string value)
     signal displayModeRequested(string value)
     signal orientationRequested(string value)
     signal swapRequested()
@@ -88,28 +85,24 @@ Item {
         anchors.margins: appTheme.spaceMd
         spacing: appTheme.spaceMd
 
-        Label {
+        RowLayout {
             Layout.fillWidth: true
-            text: qsTr("Compare")
-            color: appTheme.textColor
-            font.family: appTheme.uiFontFamily
-            font.pixelSize: appTheme.fontSizeTitle
-            font.weight: appTheme.fontWeightHeading
-            wrapMode: Text.Wrap
-        }
+            spacing: appTheme.spaceSm
 
-        SegmentedCardSwitcher {
-            objectName: "editorComparisonKindSwitcher"
-            Layout.fillWidth: true
-            enabled: root.selectionEnabled
-            currentValue: root.comparisonKind
-            entries: [
-                { value: "beforeAfter", label: qsTr("Before/After") },
-                { value: "versions", label: qsTr("Versions") }
-            ]
-            onSelected: function (index, value) {
-                if (value !== root.comparisonKind)
-                    root.comparisonKindRequested(value)
+            Label {
+                Layout.fillWidth: true
+                text: qsTr("Compare")
+                color: appTheme.textColor
+                font.family: appTheme.uiFontFamily
+                font.pixelSize: appTheme.fontSizeTitle
+                font.weight: appTheme.fontWeightHeading
+                wrapMode: Text.Wrap
+            }
+
+            EditorInfoHint {
+                objectName: "editorComparisonSensorInfoHint"
+                Layout.alignment: Qt.AlignVCenter
+                text: qsTr("Both images use the current demosaic, highlight reconstruction, and lens settings. Each image keeps its own white balance and adjustments. Unadjusted is the imported image with these settings.")
             }
         }
 
@@ -205,16 +198,6 @@ Item {
             visible: root.status === "failed" && !root.hdrUnavailable
             text: qsTr("Retry")
             onClicked: root.retryRequested()
-        }
-
-        Label {
-            objectName: "editorComparisonSensorExplanation"
-            Layout.fillWidth: true
-            wrapMode: Text.Wrap
-            color: appTheme.textMutedColor
-            font.family: appTheme.uiFontFamily
-            font.pixelSize: appTheme.fontSizeCaption
-            text: qsTr("Both images use the current demosaic, highlight reconstruction, and lens settings. Each image keeps its own white balance and adjustments. Before is the imported image with these settings.")
         }
     }
 }

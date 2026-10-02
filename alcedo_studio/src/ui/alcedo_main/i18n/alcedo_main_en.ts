@@ -1941,14 +1941,6 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>Before/After</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <source>Versions</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
         <source>Complete images</source>
         <translation type="unfinished"></translation>
     </message>
@@ -1985,7 +1977,7 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>Both images use the current demosaic, highlight reconstruction, and lens settings. Each image keeps its own white balance and adjustments. Before is the imported image with these settings.</source>
+        <source>Both images use the current demosaic, highlight reconstruction, and lens settings. Each image keeps its own white balance and adjustments. Unadjusted is the imported image with these settings.</source>
         <translation type="unfinished"></translation>
     </message>
 </context>
@@ -6133,7 +6125,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 <context>
     <name>alcedo::ui::EditorComparisonController</name>
     <message>
-        <source>Before (imported)</source>
+        <source>Unadjusted</source>
         <translation type="unfinished"></translation>
     </message>
     <message>

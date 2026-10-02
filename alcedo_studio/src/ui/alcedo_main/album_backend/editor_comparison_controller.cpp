@@ -287,7 +287,7 @@ void EditorComparisonController::RebuildSourceOptions() {
     option.insert(QStringLiteral("label"), std::move(label));
     source_options_.push_back(option);
   };
-  add(QString::fromLatin1(kRootValue), tr("Before (imported)"));
+  add(QString::fromLatin1(kRootValue), tr("Unadjusted"));
   add(QString::fromLatin1(kCurrentValue), tr("Current working state"));
   if (session_ == nullptr) {
     return;

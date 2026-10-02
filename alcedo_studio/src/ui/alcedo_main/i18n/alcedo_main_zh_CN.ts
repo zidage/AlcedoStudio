@@ -2078,14 +2078,6 @@ Original source files on disk will be kept.</source>
         <translation>对比</translation>
     </message>
     <message>
-        <source>Before/After</source>
-        <translation>前后对比</translation>
-    </message>
-    <message>
-        <source>Versions</source>
-        <translation>版本</translation>
-    </message>
-    <message>
         <source>Complete images</source>
         <translation>完整图像</translation>
     </message>
@@ -2122,8 +2114,8 @@ Original source files on disk will be kept.</source>
         <translation>重试</translation>
     </message>
     <message>
-        <source>Both images use the current demosaic, highlight reconstruction, and lens settings. Each image keeps its own white balance and adjustments. Before is the imported image with these settings.</source>
-        <translation>两张图像都使用当前的去马赛克、高光重建和镜头设置。每张图像保留各自的白平衡和调整。“之前”是使用这些设置的导入图像。</translation>
+        <source>Both images use the current demosaic, highlight reconstruction, and lens settings. Each image keeps its own white balance and adjustments. Unadjusted is the imported image with these settings.</source>
+        <translation>两张图像都使用当前的去马赛克、高光重建和镜头设置。每张图像保留各自的白平衡和调整。“未调整”是使用这些设置的导入图像。</translation>
     </message>
 </context>
 <context>
@@ -6844,8 +6836,8 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 <context>
     <name>alcedo::ui::EditorComparisonController</name>
     <message>
-        <source>Before (imported)</source>
-        <translation>之前（导入）</translation>
+        <source>Unadjusted</source>
+        <translation>未调整</translation>
     </message>
     <message>
         <source>Current working state</source>

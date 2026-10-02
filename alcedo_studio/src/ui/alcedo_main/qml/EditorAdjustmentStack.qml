@@ -378,15 +378,12 @@ Item {
                         sourceOptions: root.comparison ? root.comparison.sourceOptions : []
                         aSourceValue: root.comparison ? root.comparison.aSourceValue : ""
                         bSourceValue: root.comparison ? root.comparison.bSourceValue : ""
-                        comparisonKind: root.comparison ? root.comparison.comparisonKind
-                                                        : "beforeAfter"
                         displayMode: root.comparison ? root.comparison.displayMode : "divider"
                         orientation: root.comparison ? root.comparison.orientation : "horizontal"
                         status: root.comparison ? root.comparison.status : "idle"
                         errorText: root.comparison ? root.comparison.errorText : ""
                         onASourceRequested: value => root.comparison.selectASource(value)
                         onBSourceRequested: value => root.comparison.selectBSource(value)
-                        onComparisonKindRequested: value => root.comparison.selectKind(value)
                         onDisplayModeRequested: value => root.comparison.setDisplayMode(value)
                         onOrientationRequested: value => root.comparison.setOrientation(value)
                         onSwapRequested: root.comparison.swap()

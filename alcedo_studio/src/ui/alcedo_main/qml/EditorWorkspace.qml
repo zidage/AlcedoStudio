@@ -621,7 +621,7 @@ Item {
                         }
                     }
 
-                    // Viewport action row: opens Before/After. Hidden while comparing; the
+                    // Viewport action row: opens unadjusted vs. current. Hidden while comparing; the
                     // Compare panel then owns the comparison controls.
                     Item {
                         id: viewportCompareAction
