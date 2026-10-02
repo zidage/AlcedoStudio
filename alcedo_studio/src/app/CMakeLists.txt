@@ -423,6 +423,7 @@ def_library(EditorSessionRenderController
 # Session headers pull image_buffer.hpp -> metal_image.hpp under HAVE_METAL.
 # Provide metal-cpp include/link deps the same way ThreadPool does.
 if(ALCEDO_METAL_ENABLED)
+    target_link_libraries(EditorComparisonService PUBLIC alcedo::metal_cpp)
     target_link_libraries(EditorSessionCommandQueue PUBLIC alcedo::metal_cpp)
     target_link_libraries(EditorSessionLifecycle PUBLIC alcedo::metal_cpp)
     target_link_libraries(EditorSessionRenderController PUBLIC alcedo::metal_cpp)
