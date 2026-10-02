@@ -1,9 +1,10 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Controls.impl
 import QtQuick.Layouts
 
 // Album Inspector field header actions: ascending and descending photo-sort actions and the
-// Group checkbox of one field. The arrows mean ORDER BY; the checkbox means GROUP BY. Both
+// Group action of one field. The sort icons mean ORDER BY; the group icon means GROUP BY. Both
 // bind to LibraryModule's accepted options and call its focused operations; this component
 // keeps no copy of the choices and never changes a filter or the section expansion.
 RowLayout {
@@ -44,13 +45,13 @@ RowLayout {
         return tip
     }
 
-    component SortAction: Item {
+    component FieldAction: Item {
         id: action
-        property bool descending: false
         property bool selected: false
-        property string glyph: ""
+        property url iconSource: ""
         property string accessibleText: ""
         property string tip: ""
+        signal triggered()
 
         implicitWidth: appTheme.inspectorHeaderActionSize
         implicitHeight: appTheme.inspectorHeaderActionSize
@@ -59,16 +60,12 @@ RowLayout {
         Accessible.name: accessibleText
         Accessible.checkable: true
         Accessible.checked: selected
-        Accessible.onPressAction: activate()
-
-        function activate() {
-            root.library.ToggleInspectorSort(root.field, action.descending)
-        }
+        Accessible.onPressAction: action.triggered()
 
         Keys.onPressed: function(event) {
             if (event.key === Qt.Key_Space || event.key === Qt.Key_Return
                     || event.key === Qt.Key_Enter) {
-                action.activate()
+                action.triggered()
                 event.accepted = true
             }
         }
@@ -83,15 +80,18 @@ RowLayout {
             border.color: appTheme.textMutedColor
         }
 
-        Text {
+        ColorImage {
             anchors.centerIn: parent
-            text: action.glyph
+            width: appTheme.iconOpticalSizeCompact
+            height: appTheme.iconOpticalSizeCompact
+            source: action.iconSource
+            sourceSize.width: appTheme.iconSourceSizeCompact
+            sourceSize.height: appTheme.iconSourceSizeCompact
+            fillMode: Image.PreserveAspectFit
+            smooth: true
             color: action.selected ? appTheme.editorListSelectedInkColor
                                    : (hit.containsMouse ? appTheme.textColor
                                                         : appTheme.textMutedColor)
-            font.family: appTheme.uiFontFamily
-            font.pixelSize: appTheme.fontSizeBody
-            font.weight: appTheme.fontWeightStrong
         }
 
         MouseArea {
@@ -99,7 +99,7 @@ RowLayout {
             anchors.fill: parent
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
-            onClicked: action.activate()
+            onClicked: action.triggered()
         }
 
         ToolTip.visible: hit.containsMouse && action.tip.length > 0
@@ -107,33 +107,36 @@ RowLayout {
         ToolTip.text: action.tip
     }
 
-    SortAction {
+    FieldAction {
+        id: ascendingAction
         objectName: "inspectorSortAscending_" + root.field
-        glyph: "↑"
-        descending: false
+        iconSource: "qrc:/panel_icons/sort-ascending.svg"
         selected: root.sortedAscending
         accessibleText: qsTr("Sort by %1, %2").arg(root.fieldTitle).arg(root.ascendingTitle)
         tip: root.sortTip(false)
+        function activate() { root.library.ToggleInspectorSort(root.field, false) }
+        onTriggered: activate()
     }
 
-    SortAction {
+    FieldAction {
+        id: descendingAction
         objectName: "inspectorSortDescending_" + root.field
-        glyph: "↓"
-        descending: true
+        iconSource: "qrc:/panel_icons/sort-descending.svg"
         selected: root.sortedDescending
         accessibleText: qsTr("Sort by %1, %2").arg(root.fieldTitle).arg(root.descendingTitle)
         tip: root.sortTip(true)
+        function activate() { root.library.ToggleInspectorSort(root.field, true) }
+        onTriggered: activate()
     }
 
-    ThemeCheckBox {
-        objectName: "inspectorGroupCheckBox_" + root.field
-        Layout.fillWidth: false
-        text: qsTr("Group")
+    FieldAction {
+        objectName: "inspectorGroupButton_" + root.field
+        iconSource: "qrc:/panel_icons/category-plus.svg"
+        selected: root.grouped
         accessibleText: qsTr("Group photos by %1").arg(root.fieldTitle)
-        checked: root.grouped
-        alwaysPrimaryText: false
-        onToggled: function(checked) {
-            root.library.SetInspectorGrouping(root.field, checked)
-        }
+        tip: root.grouped ? qsTr("Stop grouping photos by %1.").arg(root.fieldTitle)
+                          : qsTr("Group photos by %1").arg(root.fieldTitle)
+        function activate() { root.library.SetInspectorGrouping(root.field, !root.grouped) }
+        onTriggered: activate()
     }
 }

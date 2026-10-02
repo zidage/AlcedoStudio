@@ -209,6 +209,13 @@ TEST_F(AlbumSectionQmlTests, InspectorFieldActionsApplyOneSortAndOneGroupWithout
   auto* import_section = inspector.Find("importDateFilterSection");
   ASSERT_NE(import_section, nullptr);
   EXPECT_TRUE(import_section->property("expanded").toBool());
+  EXPECT_FALSE(import_section->property("activityAvailable").toBool());
+  QObject* import_style_nav = nullptr;
+  for (auto* child : import_section->findChildren<QObject*>()) {
+    if (child->objectName() == QStringLiteral("dateFilterStyleNav")) import_style_nav = child;
+  }
+  ASSERT_NE(import_style_nav, nullptr);
+  EXPECT_FALSE(import_style_nav->property("visible").toBool());
 
   // Sort action of the rating header: one active arrow, the filter stays.
   QObject* descending = nullptr;
@@ -225,18 +232,18 @@ TEST_F(AlbumSectionQmlTests, InspectorFieldActionsApplyOneSortAndOneGroupWithout
   EXPECT_EQ(backend.stats()->StatsFilterCamera(), QStringLiteral("Canon R5"));
   EXPECT_TRUE(import_section->property("expanded").toBool());
 
-  // Group checkboxes: one checked at a time; grouping the sorted field keeps its sort.
-  auto* group_camera = inspector.Find("inspectorGroupCheckBox_camera");
-  auto* group_rating = inspector.Find("inspectorGroupCheckBox_rating");
+  // Group actions: one selected at a time; grouping the sorted field keeps its sort.
+  auto* group_camera = inspector.Find("inspectorGroupButton_camera");
+  auto* group_rating = inspector.Find("inspectorGroupButton_rating");
   ASSERT_NE(group_camera, nullptr);
   ASSERT_NE(group_rating, nullptr);
-  ASSERT_TRUE(QMetaObject::invokeMethod(group_camera, "toggle"));
+  ASSERT_TRUE(QMetaObject::invokeMethod(group_camera, "activate"));
   ASSERT_TRUE(WaitForLibraryQuery(backend));
-  EXPECT_TRUE(group_camera->property("checked").toBool());
-  ASSERT_TRUE(QMetaObject::invokeMethod(group_rating, "toggle"));
+  EXPECT_TRUE(group_camera->property("selected").toBool());
+  ASSERT_TRUE(QMetaObject::invokeMethod(group_rating, "activate"));
   ASSERT_TRUE(WaitForLibraryQuery(backend));
-  EXPECT_FALSE(group_camera->property("checked").toBool());
-  EXPECT_TRUE(group_rating->property("checked").toBool());
+  EXPECT_FALSE(group_camera->property("selected").toBool());
+  EXPECT_TRUE(group_rating->property("selected").toBool());
   EXPECT_EQ(library->GroupFieldName(), QStringLiteral("rating"));
   EXPECT_EQ(library->SortFieldName(), QStringLiteral("rating"));
   EXPECT_EQ(backend.stats()->StatsFilterCamera(), QStringLiteral("Canon R5"));

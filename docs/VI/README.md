@@ -366,18 +366,19 @@ Classic themes, in Simplified Chinese and English:
 
 ### `InspectorFieldActions.qml`
 
-- One row per Album Inspector field header: an ascending and a descending text
-  action (`↑`, `↓`) and a `ThemeCheckBox` labelled Group. The arrows mean
-  photo sort; the checkbox means group. Do not label the checkbox Order by.
+- One row per Album Inspector field header: an ascending and a descending sort
+  action (`sort-ascending.svg`, `sort-descending.svg`) and a Group action
+  (`category-plus.svg`). The sort icons mean photo sort; the Group icon means
+  group. Do not name the Group action Order by.
 - Each action is `inspectorHeaderActionSize` square with `badgeRadius` corners.
-  The selected arrow uses `editorListSelectedFillColor` with
-  `editorListSelectedInkColor` ink; idle arrows use `textMutedColor` ink, hover
+  A selected action uses `editorListSelectedFillColor` with
+  `editorListSelectedInkColor` ink; idle actions use `textMutedColor` ink, hover
   uses `buttonHoveredFillColor` and `textColor` ink. Keyboard focus is a 1 px
   `textMutedColor` outline. No accent fill, outline, or side stripe.
-- The glyphs are text, not SVG assets. Every action has a full accessible name
-  and a tooltip; date tooltips explain the full-time order inside a day.
-- Bind to the accepted LibraryModule options only. At most one arrow and one
-  checkbox are active across the Inspector.
+- Icons are `iconOpticalSizeCompact` tinted through `ColorImage`. Every action
+  has a full accessible name and a tooltip; date tooltips explain the full-time order inside a day.
+- Bind to the accepted LibraryModule options only. At most one sort action and one
+  Group action are active across the Inspector.
 
 ### `StatsCard.qml`, `DateFilterSection.qml`, `StarRatingFilter.qml`
 
@@ -389,8 +390,9 @@ Classic themes, in Simplified Chinese and English:
 ### `AlbumInspectorPanel.qml`
 
 - Field order: capture date, import time, camera model, labels, rating, lens.
-- The import-time section reuses `DateFilterSection` with its own day selection
-  and calendar/activity style; it shares the renderer, not the selected value.
+- The import-time section reuses `DateFilterSection` with `activityAvailable:
+  false`: calendar tiles only, no activity graph and no style switch. It has its
+  own day selection; it shares the renderer, not the selected value.
 
 ### `AlbumSectionView.qml`
 

@@ -7026,6 +7026,10 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <source>Group photos by %1</source>
         <translation>按%1分组照片</translation>
     </message>
+    <message>
+        <source>Stop grouping photos by %1.</source>
+        <translation>停止按%1分组照片。</translation>
+    </message>
 </context>
 <context>
     <name>AlbumSectionView</name>

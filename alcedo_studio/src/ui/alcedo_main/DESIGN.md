@@ -337,12 +337,15 @@ picker reuses `AdjustmentCombo`. The day hover tip follows the pointer.
 | Token | px | Use |
 | --- | --- | --- |
 | `librarySectionHeaderHeight` | 40 | Fixed height of a grouped Library header row; scroll offsets use it |
-| `inspectorHeaderActionSize` | 24 | Square of the Album Inspector sort arrows, the grouped-view disclosure, and caption text actions |
+| `inspectorHeaderActionSize` | 24 | Square of the Album Inspector sort and Group icon actions, the grouped-view disclosure, and caption text actions |
 
 The 24 px header actions are a documented compact exception to the 40-44 px hit
-band: they are text glyph actions in dense Inspector headers, not structural SVG
+band: they are compact icon actions in dense Inspector headers, not structural SVG
 actions. They stay keyboard reachable with accessible names and tooltips.
-Selected arrows use the monochrome list well (`editorListSelectedFillColor` /
+The sort and Group icons are the user-provided Tabler `sort-ascending`,
+`sort-descending`, and `category-plus` assets (approved 2026-10-02), kept at the
+upstream 2 px stroke and drawn at `iconOpticalSizeCompact`.
+Selected actions use the monochrome list well (`editorListSelectedFillColor` /
 `editorListSelectedInkColor`). Per-file details: `docs/VI/README.md`.
 
 ---
@@ -776,8 +779,8 @@ on a 24×24 viewBox. At the compact 18 px optical size this resolves to roughly
 1.125 logical pixels before antialiasing, keeping dense navigation crisp rather
 than visually bold. Do not mix the upstream Tabler 2 px default with locally
 normalized icons in the same navigation group. The user-approved Nodes pipeline
-icon, Mask Groups layer icon, and Gradient and Radial Mask icons are documented
-2 px exceptions.
+icon, Mask Groups layer icon, Gradient and Radial Mask icons, and the Album Inspector sort and
+Group icons are documented 2 px exceptions.
 
 **Every SVG action must:**
 

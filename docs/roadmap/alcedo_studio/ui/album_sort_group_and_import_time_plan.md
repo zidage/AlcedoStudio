@@ -26,14 +26,14 @@ The image's status, environment, PR, and custom-group controls are not product r
 Confirmed interaction requirements:
 
 - Put ascending and descending sort actions beside each Inspector field title.
-- Put a grouping checkbox beside those actions.
+- Put a Group icon action beside those actions.
 - Keep at most one active grouping field.
 - Keep at most one active photo sort field. It can be the same field as the active grouping field.
 - Keep every Inspector filter category available while grouping and sorting are active.
 - Use the same backend interfaces for these operations and the existing filters.
 
-The checkbox means GROUP BY. The ascending and descending actions mean ORDER BY.
-Use Group as the checkbox label. Do not label a grouping action Order by.
+The Group action means GROUP BY. The ascending and descending actions mean ORDER BY.
+Name the grouping action Group in its accessible name and tooltip. Do not label a grouping action Order by.
 
 The following details are design proposals selected for this plan. They are not prior user approvals:
 
@@ -244,9 +244,9 @@ Unknown                                                30 photos
 Each field header invokes the same focused LibraryModule operations.
 Bind arrow selection and checkbox state to its accepted settings.
 QML does not keep another copy of those settings.
-Use compact up/down text actions with full accessible names and tooltips.
+Use compact icon actions with full accessible names and tooltips.
 The layout above spells out their meaning, not their final pixel width.
-Use ThemeCheckBox for Group and existing Basic button behavior for sort actions.
+Use one toggle icon action behavior for Group and for the sort actions.
 Keep section expansion separate from sorting and grouping.
 Activating a header action must not toggle section expansion or a filter bucket.
 Keep the actions available when their filter section is collapsed.
@@ -263,11 +263,11 @@ Group headers contain separate title, count, and disclosure roles.
 Do not add new pills, status dots, colored selection frames, or compound title/count strings.
 Use the existing Basic style and AppTheme tokens.
 Use neutral selected rows and a visible neutral keyboard focus treatment.
-Use text glyphs for the requested sort arrows. This design requires no new SVG asset.
-Do not invent or assign a new SVG during implementation without the approval required by DESIGN.md.
+Use the approved SVG assets `sort-ascending.svg`, `sort-descending.svg`, and `category-plus.svg` for the sort and Group actions.
+Do not invent or assign another SVG during implementation without the approval required by DESIGN.md.
 
-The import filter reuses DateFilterSection and its calendar/activity choices.
-Give it independent day-selection and view-style state from the capture filter.
+The import filter reuses DateFilterSection with the calendar tiles only. It has no activity graph and no style switch.
+Give it independent day-selection state from the capture filter.
 Share the renderer, not the selected value.
 New strings use `qsTr` or the existing C++ localization helpers.
 Update the existing translation catalogs and `docs/VI/README.md` in the UI phase.

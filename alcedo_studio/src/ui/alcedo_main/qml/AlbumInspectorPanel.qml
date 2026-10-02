@@ -138,6 +138,7 @@ ScrollView {
                 model: appModules.stats.importDateStats
                 selectedLabel: appModules.stats.statsFilterImportDate
                 folderKey: appModules.folders.currentFolderId
+                activityAvailable: false
                 onDayClicked: function(label) { appModules.stats.ToggleStatsFilter("import", label) }
                 headerActions: Component {
                     InspectorFieldActions {
