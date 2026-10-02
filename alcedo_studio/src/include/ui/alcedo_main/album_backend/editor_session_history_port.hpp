@@ -113,6 +113,11 @@ class EditorSessionHistoryPort final : public alcedo::IEditorHistoryPort {
                              std::shared_ptr<const alcedo::CommitGraph>*      graph,
                              std::shared_ptr<const alcedo::PipelineDocument>* root_document,
                              std::string* error) -> bool override;
+  auto BuildComparisonInputs(
+      const alcedo::EditorHistoryGuardHandle&                     guard,
+      const std::shared_ptr<const alcedo::PipelineGraphSnapshot>& captured_current,
+      const alcedo::EditorComparisonSource& a, const alcedo::EditorComparisonSource& b,
+      alcedo::EditorComparisonInputPair* pair, std::string* error) -> bool override;
   auto HasUnmaterializedChanges(const alcedo::EditorHistoryGuardHandle& guard,
                                 std::string* error) -> bool override;
   auto DiscardUnmaterializedChanges(const alcedo::EditorHistoryGuardHandle& guard,

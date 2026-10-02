@@ -277,6 +277,29 @@ auto PipelineDocument::Drt() const -> const DrtNodeModel* {
   return Downcast<DrtNodeModel>(graph_.FindNode("drt"));
 }
 
+void PipelineDocument::UseSensorSettingsFrom(const PipelineDocument& current) {
+  const auto* own_develop     = std::as_const(*this).Develop();
+  const auto* current_develop = current.Develop();
+  if (own_develop == nullptr || current_develop == nullptr) {
+    throw std::invalid_argument(
+        "PipelineDocument: sensor settings need a Develop node in both documents");
+  }
+  if (own_develop->Id() != current_develop->Id()) {
+    throw std::invalid_argument("PipelineDocument: Develop node " +
+                                std::string{own_develop->Id().Value()} + " differs from " +
+                                std::string{current_develop->Id().Value()});
+  }
+  const auto camera_profile = [](const DevelopNodeModel& develop) {
+    return develop.Params().Read(
+        [](const DevelopPayload& payload) { return payload.camera_profile; });
+  };
+  if (camera_profile(*own_develop) != camera_profile(*current_develop)) {
+    throw std::invalid_argument(
+        "PipelineDocument: the camera profiles differ, so the documents are not of one image");
+  }
+  Develop()->Params().UseSensorSettingsFrom(current_develop->Params());
+}
+
 void PipelineDocument::InsertAdjustment(const NodeId& grade_id, std::size_t index,
                                         AdjustmentInstanceId instance_id,
                                         std::unique_ptr<IOperatorModel> model) {

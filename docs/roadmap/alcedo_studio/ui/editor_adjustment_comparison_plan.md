@@ -1,0 +1,653 @@
+# Editor Adjustment and Version Comparison Plan
+
+Date: 2026-10-01
+Status: Phase 1 complete (2026-10-01, branch `feature/editor-comparison-inputs`); Phases 2-4 planned.
+Source revision: `deeb8901881b5aae41680299f75b735ed4d01c3c` on `main`.
+Parent plan: none. This is a four-phase feature plan.
+
+## 1. Confirmed product decisions
+
+The editor must show two adjustment states of the same image without changing its working document or active Version.
+
+The user confirmed these requirements:
+
+1. Before/After uses the image's imported root and the working values captured when comparison opens.
+2. Version comparison permits two named Versions of the open image.
+3. The active Version uses those captured working values. Other Versions use their saved heads.
+4. Both inputs use the current demosaic, highlight reconstruction, and lens settings.
+5. Each input retains its own white balance. Geometry, Color Grades, Masks, DRT, and post-processing also come from that input.
+6. The existing editor executor and its single scheduler worker render A and B consecutively.
+7. Each render uses full RAW decode and the Quality Base long-edge limit of 4096 pixels.
+8. The pair appears together after both renders succeed and both Qt images load.
+9. The UI supports two complete images side by side or stacked. It also supports a draggable left/right or top/bottom reveal.
+10. Both images align in the full source reference space. Different crop boundaries leave empty areas.
+11. Comparison disables image adjustments, Undo, Redo, Version checkout, zoom, and pan.
+12. A/B selection, display mode, divider position, swapping A/B, and closing remain available.
+13. Selecting another image or leaving the editor closes comparison automatically.
+14. HDR output disables comparison. Do not convert HDR to SDR to make comparison available.
+15. The user accepts 8-bit SDR presentation through ordinary Qt Quick `Image` items and an in-memory image provider.
+16. The normal viewport remains underneath the comparison surface. Closing comparison reveals it again.
+17. Compare controls use the paged adjustment navigation introduced by PR #244.
+
+The fixed sensor settings change the meaning of the two labels. Before means the imported root with current sensor settings. A named Version means its adjustments and white balance with current sensor settings. Show this explanation in plain text in the Compare panel. Do not describe these images as exact historical RAW renditions.
+
+These decisions replace the earlier proposal for a separate temporary executor and native-resolution pair. HDR support and floating-point Qt presentation are outside this feature's scope.
+
+## 2. Related work and repository requirements
+
+Read `AGENTS.md` and applicable skills again before implementation.
+
+| Reference | Relationship |
+| --- | --- |
+| [Executor ownership refactor](../../../refactor/2026-09-27-executor-ownership-refactor-plan.md) | Keep the document/executor split. The render port remains the sole editor executor owner. |
+| [Editor render path simplification](editor_render_path_simplification_plan.md) | Keep one execution pool. Add no private worker thread or blocking future bridge. |
+| [Session command queue](editor_session_command_queue_and_lock_simplification_plan.md) | Capture source states and reduce completion on the session owner. Project action decisions from the same policy used for admission. |
+| [Single working document and history identity](editor_single_live_pipeline_wal_checkpoint_plan.md) | Retain current HEAD, WAL, checkpoint, and lease rules. Its older executor ownership sections are superseded. |
+| [History and Versions UI](phase_7a_history_versions_repair_and_ui_refactor_plan.md) | Reuse Version identity and lists. Comparing a Version does not check it out. |
+| [QML visual identity](../../../../alcedo_studio/src/ui/alcedo_main/DESIGN.md) | Use Basic style, theme tokens, shared controls, and the per-file VI catalog. |
+| [PR #244](https://github.com/zidage/AlcedoStudio/pull/244) | Reuse `SlidingIconNav` pages. Compare has its own hidden page. |
+
+Use `alcedo-qml-ui`, `qt-qml`, `qt-cmake-project`, and `alcedo-msvc-cmake` during the relevant implementation phases. Write plan updates in simple English.
+
+Use existing owners for reads and mutations. Do not copy `CommitGraph`, editor state, or complete parameter objects into a second model. The independent comparison documents and image outputs below have a specific lifetime and purpose. They never write back to live state.
+
+Use LF files. Convert an existing CRLF file in a separate commit before its content edit. Include defining headers. Include only required OpenCV modules. Format only changed lines in existing files. Use a functional branch name. Keep temporary work under `build/tmp/editor_comparison/` and remove it after completion.
+
+Run focused tests and direct caller tests only. Do not start the full test suite. Do not use `WorkspaceShellTest` as completion evidence. Verify QML input in the real application when an offscreen harness cannot deliver it.
+
+## 3. Current source audit
+
+These are source observations, not results from a build or test run for this plan.
+
+| Area | Current source | Observed behavior | Required change |
+| --- | --- | --- | --- |
+| Working values | `app/editor_working_document.*` | `CurrentPreview()` returns an immutable publication. `Freeze()` shares unchanged nodes. | Capture the publication on comparison entry through the session owner. |
+| Historical state | `app/pipeline_root_state.*`; `ui/alcedo_main/album_backend/editor_history_state_detail.*` | `BuildDocumentFromRoot()` replays any first-parent head and binds the camera profile. | Add a focused read operation for the held editor history. Do not checkout or copy the graph. |
+| Runtime stamps | `edit/operators/models/parameter_revision.*`; `operator_model_base.hpp` | Writes use process-wide stamps. Clone copies values and stamps together. | Preserve current sensor stamps while retaining input-specific white balance. Equal JSON values alone are insufficient. |
+| Sensor invalidation | `edit/runtime/runtime_invalidation.cpp` | `SensorFieldMask()` includes Demosaic, Highlights, and Lens. WhiteBalance invalidates from `develop_output`. | Reuse this distinction. Do not suppress real invalidation. |
+| Executor binding | `edit/runtime/executor_role.hpp`; `detail/renderer.inl.hpp` | Interactive bindings use lineage and element identity. A different binding releases cached resources. | Give comparison derivatives the captured editor lineage and element identity. |
+| Quality Base | `renderer/pipeline_scheduler.cpp`; `edit/runtime/result_persistence.hpp` | Quality Base uses full decode, 4096 pixels, Preview resampling, and `SensorDevelopOnly` persistence. | Reuse these settings for host image requests. Factor the existing request builder to avoid separate quality constants. |
+| Host pixels | `edit/pipeline/pipeline_executor.*`; `detail/renderer.inl.hpp` | `require_host_output=true` downloads the result. A null request sink skips presentation. | Add an output operation that returns pixels with the exact resolved geometry and display configuration. |
+| Worker | `ui/alcedo_main/album_backend/editor_session_render_scheduler_port.*` | The port owns one Interactive executor and `PipelineScheduler(1)`. Normal dispatch reads the latest current preview and requires a sink. | Add explicit immutable-input image jobs on this same worker. Keep executor access private. |
+| Cache retention | `basic_render_workspace.hpp`; `graph_image_cache.hpp` | Quality Base publishes only sensor output. Downstream storage is submission-local. | Retain this behavior for A and B. Download A before starting B. |
+| Display pixels | `ui/editor_rhi/editor_viewport_item.cpp`; `shaders/editor_viewport.frag` | The viewport uses RGBA32F and samples pipeline output. | The user-authorized SDR image path quantizes the same output values once. |
+| Qt images | `ui/alcedo_main/album_backend/path_utils.cpp`; `thumbnail_image_provider.*` | The RGBA conversion and image-provider pattern already exist. | Reuse the conversion and provider pattern with a comparison-owned store. Do not use the persistent thumbnail store. |
+| HDR | `edit/graph/drt_node_model.*` | `IsHdrExportEncoding()` recognizes ST 2084 and HLG through the DRT owner. | Reject comparison for the current document or either selected input when this returns true. |
+| UI | `EditorWorkspace.qml`; `EditorAdjustmentStack.qml`; `EditorVersionsPanel.qml`; `SlidingIconNav.qml` | The viewport binds the sink independently of the tool panel. The nav supports hidden pages. | Add an overlay and dedicated Compare page. Retain the underlying viewport item and binding. |
+
+Existing test targets include `PipelineDocumentRenderTest`, `PipelineFrameSinkTest`, `GraphImageCacheRetentionTest`, `EditorSessionHistoryPortTest`, `EditorSessionRenderSchedulerPortTest`, `EditorRenderCoordinatorTest`, `EditorSessionActionPolicyCq3Test`, and `EditorAdjustmentHeaderQmlTest`. `PipelineDocumentRenderTest` is CUDA-dependent. Inspect current registration before building backend-specific tests.
+
+The existing `HostBatchRendersReuseBatchDeviceAndLeaveInteractiveCacheUntouched` test documents a separate Batch executor. This feature uses the Interactive executor instead. Existing Quality Base cache tests provide the closer reference behavior.
+
+## 4. Product specification
+
+### Entry and controls
+
+Add a labeled Compare action to the editor viewport toolbar and a labeled Compare action to the Versions header. Use text actions unless an appropriate approved repository icon is available. A new icon needs the approval required by `DESIGN.md` during implementation.
+
+The viewport action opens Before/After. The Versions action opens Version comparison with A set to the root and B set to the captured current working state. Both selectors can choose Root, Current working state, or a named Version. Restrict the list to the open image.
+
+On entry, retain the current published working document before any comparison rendering. Resolve the input pair after all earlier accepted writes reach the owner. An active parameter input must settle through the existing input-seal path. Do not cancel its value or force a save for comparison. Refuse entry while mask drawing, a Version operation, save recovery, or another incompatible session operation owns input.
+
+Activate a `compare` adjustment panel on a separate nav page, distinct from Mask. Outside comparison, this page stays hidden. Record the previous adjustment-panel key. Restore that key on close when it is still valid.
+
+The panel contains:
+
+- A and B source selectors and separate source labels;
+- a Before/After or Versions choice;
+- separate controls for Complete images or Divider, and Left/right or Top/bottom;
+- a Swap action and a Close action;
+- a plain explanation of fixed current sensor settings and input-specific white balance;
+- loading, error, retry, and HDR-unavailable text.
+
+Start in Divider mode with a left/right line at the midpoint. Keep the selected mode and orientation during the current comparison. New comparison entry starts from these defaults. Do not persist comparison choices into the pipeline document.
+
+Disable selectors and mode-changing requests that require new documents while a pair is rendering. Close remains available. Changing layout, divider orientation, divider position, or swapping an already-ready pair does not rerender.
+
+### Spatial layout
+
+```text
+Complete images, left/right      Complete images, top/bottom
++-------------+-------------+    +---------------------------+
+| A canvas    | B canvas    |    | A canvas                  |
+| same source | same source |    +---------------------------+
+| coordinates | coordinates |    | B canvas                  |
++-------------+-------------+    +---------------------------+
+
+Divider, left/right              Divider, top/bottom
++-------------+-------------+    +---------------------------+
+| A revealed  | B revealed  |    | A revealed                |
+|             |             |    +------ movable line -------+
+|       movable line       |    | B revealed                |
++-------------+-------------+    +---------------------------+
+```
+
+Each complete-image region fits the full reference canvas independently. Both use the same reference bounds. Divider mode fits one common reference canvas and clips two identically placed images along the movable line.
+
+Let `F` map reference pixels into the fitted canvas. Place an output image with `F * render_to_reference`. Use its actual render pixel extent as local image size. Qt applies the resulting affine transform. Clip the final canvas to its bounds. Do not stretch a cropped output into the full source rectangle.
+
+For example, a crop of the left half appears only in the left half of the reference canvas. Its right half remains empty. A rotated crop maps to its source-space quadrilateral. This alignment removes the user rotation from the displayed content orientation; it preserves the rotated crop footprint. It is not automatic feature matching or nonlinear image registration.
+
+Use the same neutral theme surface for empty areas. Preserve aspect ratio. Allow labels to wrap. Retain the existing minimum viewport width and side-panel placement. A narrow window must not switch comparison mode automatically.
+
+### Input, loading, and close behavior
+
+Comparison blocks image writes, graph and mask writes, history movement, Version mutation, Paste, and viewport zoom/pan. Enforce this at command admission and in the UI. Do not rely only on an overlay intercepting the pointer.
+
+The divider accepts pointer drag and keyboard arrow steps. Home and End reach its bounds. Tab reaches selectors, layout controls, divider, and Close. Escape closes comparison without consuming an active text-field edit first.
+
+Keep the `EditorViewportItem` alive, bound, and visible beneath an opaque comparison overlay. Cover its photograph and input overlays visually. Do not set its visibility false or destroy its Loader. This lets already-accepted normal frames complete without leaving a hidden sink waiting for scenegraph consumption.
+
+During initial loading, show no partial pair. For a new A/B selection, clear the previous pair from display and show loading. Publish a pair only after both renders succeed. Show the images only when both `Image.status` values are Ready. Keep the normal viewport underneath during failure. Show the actual error and permit Retry or Close.
+
+Close releases documents, pending outputs, provider entries, URLs, and Qt image references. It restores the previous panel and removes the comparison action restriction. Retain the existing view transform. Ask the normal render coordinator to refresh the current document with its current view. This reconciles downstream runtime state without changing the live document or releasing sensor resources.
+
+Select-image and leave-editor paths close comparison before releasing the image lease or viewport. Shutdown cancels accepted comparison work and waits for the scheduler before destroying its owners. Do not block the GUI on a render future.
+
+### HDR and SDR
+
+Disable entry when the captured current DRT uses ST 2084 or HLG. Validate both selected documents before scheduling. A selected HDR Version reports that HDR comparison is unavailable. Do not replace its DRT or tone-map it into SDR.
+
+Quantize finite float RGBA output to `QImage::Format_RGBA8888` once. Preserve output channel order. Clamp at the conversion boundary as required by the user-approved 8-bit SDR format. Do not apply another DRT, gamma operation, gamut conversion, or thumbnail render recipe.
+
+The provider only serves completed memory images. It never decodes or renders. Use `cache: false` and URLs that include the existing comparison operation identity and A/B side. Qt caches provider images by default; changing the URL makes a new pair load. Release item sources as well as store entries on close.
+
+Qt 6.9.3's [default texture factory source](https://raw.githubusercontent.com/qt/qtdeclarative/v6.9.3/src/quick/util/qquickpixmapcache.cpp) converts other QImage formats to ARGB32 for ordinary image loading. The [Qt image-provider documentation](https://doc.qt.io/archives/qt-6.9/qquickimageprovider.html) describes provider loading and cache behavior. The user's explicit SDR decision permits this precision boundary.
+
+## 5. Owners, APIs, and data flow
+
+Names below are proposed. Put implementation in existing module directories. Do not create another editor engine or persistence format.
+
+| Owner or proposed API | Responsibility and lifetime |
+| --- | --- |
+| Session owner / history port: `BuildComparisonInputs` | Resolve Root, Current, or Version head under current owner access. Capture both together. Return existing immutable `PipelineGraphSnapshot` representations. |
+| `PipelineDocument::UseSensorSettingsFrom` | Focused operation on a private comparison document. Preserve its white balance and all downstream state. Adopt current Demosaic, Highlights, and Lens values with their matching field stamps. Validate backbone IDs and image origin before mutation. |
+| `EditorComparisonService` | Own source selection, captured current publication, comparison activity, and pair publication on the session owner. Read history through its port. Call an image-render port without seeing GPU internals. |
+| `IEditorImageRenderPort` | Application-facing seam for one image or a consecutive pair. Accept immutable inputs and `RenderRequest`; complete with image results or the real error. |
+| `EditorSessionRenderSchedulerPort` | Implement the seam with its private current executor and existing scheduler. Keep all Apply calls on its single worker. Track accepted image work for cancel and shutdown. |
+| `PipelineExecutor::ApplyImage` and matching renderer operation | Return host pixels, exact `ResolvedRenderGeometry`, and `ViewerDisplayConfig` from the executed plan. Keep existing `Apply` compatible by returning the pixel member. |
+| `RenderedPipelineImage` | Minimal result: one existing image-buffer owner, exact geometry, and display configuration. It contains no document, history, or executor state. |
+| `EditorComparisonController` | Project service state to QML on the GUI thread. Convert outputs and publish both URLs together. It owns no second copy of session/history state. |
+| `ComparisonImageStore` / `ComparisonImageProvider` | Retain one ready pair for the active comparison. Serve `QImage` values under a store lock. Use QImage sharing rather than extra pixel copies. |
+| `EditorComparisonCanvas.qml` | Fit reference space, transform an ordinary Image, and leave uncovered areas empty. It does no rendering or history work. |
+| `EditorComparisonView.qml` / `EditorComparisonPanel.qml` | Display two canvases, clip divider regions, and offer controls. State survives QML panel recreation through the controller/service. |
+
+### Independent documents and runtime stamps
+
+Independent historical documents are necessary because both states must remain fixed while the executor runs later. Reusing the current mutable document or checking out A then B would change editor state. Use existing replay and Freeze representations. Do not serialize the current document just to capture it.
+
+Capture the current preview once on entry. Retain it until close. Replay a non-current Version from the held root and graph on the owner thread. Do not call `LoadHistorySnapshot` for an image already held by the editor lease.
+
+For a comparison-only document, retain the selected state's WhiteBalance fields: `use_camera_wb`, `user_wb`, `wb_mode`, custom CCT/tint, and as-shot CCT/tint. Keep image-bound camera data valid. Adopt current demosaic, highlights, and all lens/projection fields.
+
+An implementation can clone the current Develop node, which preserves its sensor field stamps. It can then apply only the selected white-balance fields through focused Model operations. Install that node through a validated document/graph owner operation with the same Develop NodeId. Do not copy all revisions from a Model whose values differ. Do not add a mode that ignores invalidation comparisons.
+
+Freeze the completed private document. Wrap it as an editor Preview with the captured current lineage and element identity. It is a derivative of the current loaded image, not a checkout. Do not label it Committed: its pinned sensor settings can differ from the selected historical head. Retain the selected Version/head only as source provenance for labels.
+
+Use a new normal parameter stamp for changed white balance. Preserve sensor field stamps. Different branch topology and downstream adjustments keep their actual stamps. Existing process-wide stamps already distinguish their writes; add no second generation counter.
+
+### Pair execution
+
+Build a host request with these values:
+
+```text
+role = Interactive
+decode_res = FULL
+geometry = existing full-image Quality Base request
+geometry.resolution.max_edge = 4096
+geometry.resolution.quality = Preview
+geometry.document_geometry = ApplyCropAndRotation
+submission.metadata.frame_role = QualityBase
+submission.metadata.scope_update_allowed = false
+require_host_output = true
+sink = nullptr
+output_color = no override
+```
+
+Keep the attached live sink on the executor. The explicit request has a null sink; it must not inherit the executor's sink. This uses `SensorDevelopOnly` persistence and downloads the final 4K output before submission-local results are released.
+
+Submit one composite work item to the existing scheduler. Inside it, run the reusable image operation for A, retain A's host result, then run it for B. Hold the same exclusive executor access throughout. Never enqueue B on that worker and wait for its future from A.
+
+The render port remains the only component that invokes its executor. A reusable synchronous image helper is enough for future single-image requests. The composite pair is a narrow scheduling operation, not another general render queue.
+
+```text
+Compare action -> session owner -> comparison activity restriction
+  -> capture current + resolve A/B from held history
+  -> private sensor-setting derivatives -> freeze with current binding
+  -> image-render port -> existing PipelineScheduler(1)
+  -> existing Interactive executor: ApplyImage(A), then ApplyImage(B)
+  -> owner completion -> GUI conversion -> publish both memory images
+  -> both Qt Images Ready -> show comparison overlay
+```
+
+```text
+Replay / validation / HDR / GPU / download / conversion failure
+  -> discard incomplete pair -> owner reports the exact failure
+  -> comparison error controls remain usable -> Retry or Close
+  -> Close reveals normal viewport and requests a current-document refresh
+```
+
+### Cancellation and actual event ordering
+
+Reuse existing session operation identity, image identity, and explicit cancellation support. A pair permits one active render. Disable new source-selection submissions while it runs. Do not add a replacement queue or new epoch protocol.
+
+Test these real asynchronous sequences through production boundaries:
+
+1. A runs on the scheduler worker. Close runs on the session owner before B starts. Cancellation skips B and owner completion cannot reopen comparison.
+2. B finishes and queues completion. Image selection closes comparison and replaces the image lease before completion is reduced. The closed operation cannot publish into the new image.
+3. The provider starts reading a ready QImage. Close clears its entry. Its shared image value remains valid until that read finishes.
+4. Shutdown starts during A. The scheduler owner cancels image work and waits before service, executor, or callback storage is destroyed.
+
+These queue and callback boundaries justify operation correlation and existing cancellation. They do not justify more versioning mechanisms. Add deterministic tests that drive the boundaries, rather than injecting impossible identity values.
+
+### Future Detail reuse
+
+Keep the image operation independent of Compare UI and source-pair selection. It accepts one immutable graph and the existing `RenderRequest`. It returns pixels with exact geometry. A later Detail service can map a source-reference selection into the selected document's edit space and request that region.
+
+Do not implement a Detail panel in these phases. Do not assume a requested region permits partial RAW processing or small neighborhood support. Existing sampling footprints and full-reference processing requirements remain authoritative. Detail images must not replace the main viewport's reference geometry.
+
+## 6. File map
+
+All source paths below are relative to `alcedo_studio/src/`. Proposed files do not exist at plan creation.
+
+| Phase | Current files to inspect or change | Proposed files |
+| --- | --- | --- |
+| 1 | `app/pipeline_root_state.*`; `include/app/editor_session_ports.hpp`; `ui/alcedo_main/album_backend/editor_session_history_port.*`; `editor_history_state_detail.*`; `edit/graph/pipeline_document.*`; `pipeline_graph.*`; `develop_node_model.*` | `include/app/editor_comparison_inputs.hpp`; `app/editor_comparison_inputs.cpp` |
+| 2 | `edit/pipeline/pipeline_executor.*`; `include/edit/runtime/renderer.hpp`; `detail/renderer.inl.hpp`; `renderer/pipeline_scheduler.*`; `include/renderer/pipeline_task.hpp`; `editor_session_render_scheduler_port.*`; module CMake files | `include/edit/pipeline/rendered_pipeline_image.hpp`; `include/app/editor_image_render_port.hpp` |
+| 3 | `ui/alcedo_main/album_backend/path_utils.*`; `ui/alcedo_main/CMakeLists.txt`; `DESIGN.md`; `docs/VI/README.md` | `ui/alcedo_main/album_backend/comparison_image_provider.*` and matching include headers; `qml/EditorComparisonCanvas.qml`; `qml/EditorComparisonView.qml`; `qml/EditorComparisonPanel.qml` |
+| 4 | `app/editor_session_service.*`; `editor_session_command_queue.*`; `editor_action_policy.*`; `ui/alcedo_main/album_backend/editor_session_controller.*`; `application_module_host.cpp`; `qml/EditorWorkspace.qml`; `EditorAdjustmentStack.qml`; `EditorVersionsPanel.qml`; shortcut and translation registrations | `include/app/editor_comparison_service.hpp`; `app/editor_comparison_service.cpp`; `ui/alcedo_main/album_backend/editor_comparison_controller.*` and matching include header |
+
+Register all new QML in `ALCEDO_MAIN_QML_FILES`. Add the `compare` key to `NormalizeAdjustmentPanel`. Keep application-layer interfaces independent of QML and native GPU types. Add dependencies to the owning target directly.
+
+## 7. Four-phase summary
+
+| Phase | Result | Main modules | Prerequisite | Expected changed lines | Status |
+| --- | --- | --- | --- | ---: | --- |
+| 1 | Read-only comparison documents with current sensor settings and selected white balance | History port, document/Model owners | Current source audit | 700-1300 | Complete (2026-10-01) |
+| 2 | Consecutive one-shot image jobs on the current editor worker and executor | Executor, renderer, scheduler port | Phase 1 | 900-1700 | Planned |
+| 3 | Memory-image presentation with source alignment and all four layouts | Provider, QML canvas/view/panel | Phase 2 result schema | 850-1600 | Planned |
+| 4 | Product entry, Version selection, restrictions, close, and restore | Comparison service/controller, session, workspace | Phases 1-3 | 1000-1900 | Planned |
+
+Each range includes production code, tests, registration, resources, and phase completion documentation. No phase needs splitting at this estimate. Split before implementation if its expected diff can exceed 2000 lines. Split because of actual scope growth, not to omit an approved behavior.
+
+## 8. Detailed phases
+
+### Phase 1: Build independent comparison inputs through their owners
+
+**Objective and deliverables.** Produce A and B without moving history, mutating working values, or rebuilding the executor. Retain actual white balance and downstream differences while sharing current sensor settings.
+
+**Inputs and prerequisites.** Read the held history lease, imported root, selected Version identities, and captured current preview. Recheck `BuildDocumentFromRoot`, model revision rules, and stable Develop IDs.
+
+**Modules and APIs.** Add the focused history read operation and minimal source selectors. Add `UseSensorSettingsFrom` through the document/Model owner. Keep provenance labels separate from Preview/Committed identity. Use the Phase 1 file map.
+
+**Data invariants.** Both inputs belong to the current image and loaded lineage. Sensor values and field stamps equal the captured current publication. White balance remains selected-state data. No new history record, WAL write, save, checkpoint, active-Version move, or dirty-state change occurs.
+
+**Steps.**
+
+1. Resolve Root, Current, and Version selectors on the session owner. Reject a missing Version or a foreign image.
+2. Use current immutable publication directly when its requested state needs no sensor derivative.
+3. Replay other states from the held graph and root. Keep graph reads on their owner; do not retain graph references in worker callbacks.
+4. Validate graph, camera binding, Develop identity, and HDR status before rendering.
+5. Build the private Develop variant with current sensor values/stamps and selected white balance. Publish only after the full operation succeeds.
+6. Freeze each private result as a Preview under current binding. Document its purpose and release on pair replacement or close.
+
+**Success chain.** Selector -> history owner -> root replay/current publication -> focused sensor application -> Freeze -> immutable input pair.
+
+**Failure chain.** Missing source, invalid backbone, unbound required camera data, or HDR -> error -> discard private results -> original history and document remain visible.
+
+**Tests and observable assertions.**
+
+- `RootAndCurrentInputsKeepHistoryAndWorkingDocumentUnchanged`: compare head, active Version, dirty state, journal sequence, and working values before/after.
+- `VersionInputsRetainOwnWhiteBalanceAndUseCurrentSensorSettings`: include different demosaic, highlights, lens, CCT, tint, geometry, and Grade values.
+- `SensorSettingsDerivativeKeepsCurrentSensorFieldRevisions`: assert Demosaic/Highlights/Lens stamps exactly match current; changed white balance remains distinguishable.
+- `ReplayOfDifferentGradeTopologyKeepsStableDevelopIdentity`: add/remove Grade nodes and Masks; confirm correct target topology.
+- `ComparisonInputFailureDoesNotPublishPartialPair`: drive invalid Version and replay failure through the real owner API.
+- `HdrCurrentOrSelectedVersionRejectsComparisonWithoutSdrRewrite`: cover PQ and HLG on either source.
+
+Add a proposed `EditorComparisonInputsTest` in `tests/app/`. Extend existing document/history tests when their ownership fixtures already exercise the changed API.
+
+**Build/run.** Use the common Windows commands below with `EditorComparisonInputsTest` and `EditorSessionHistoryPortTest`. Inspect and run direct document-owner tests that registration includes. Use matching filtered CTest prefixes.
+
+**Exit criteria.**
+
+- [x] All source selectors produce the specified state.
+- [x] Sensor values and field stamps match current; white balance remains source-specific.
+- [x] Failure and successful reads leave live and persistent state unchanged.
+- [x] No independent CommitGraph or whole parameter mirror was added.
+
+**Expected diff.** 700-1300 lines.
+
+**Completion record.** See the Phase 1 record below.
+
+##### Phase 1 completion record (2026-10-01)
+
+**Status:** complete. Both comparison inputs are built from the held history through the history port. Each input has the current sensor settings and stamps and keeps its own white balance and downstream state. History, the working document, and persistent state stay unchanged.
+
+**Source revision and branch:** based on `deeb8901881b5aae41680299f75b735ed4d01c3c`; branch `feature/editor-comparison-inputs`. Not committed when this record was written.
+
+**Implemented behavior and APIs:**
+
+| Owner | Change |
+| --- | --- |
+| `OperatorModelBase::TakeFieldsFromThenMutate` (protected) | Copies the payload and all field stamps of a source Model, then applies one focused write-back, under both Model locks. Changed fields get one new stamp. |
+| `DevelopParamsModel::UseSensorSettingsFrom` | Takes demosaic, highlights, lens/projection, and camera profile with their stamps from current. Keeps `use_camera_wb`, `user_wb`, `wb_mode`, and custom/as-shot CCT/tint. Equal white balance keeps current's stamp; different white balance gets one new stamp. |
+| `PipelineDocument::UseSensorSettingsFrom` | Checks Develop presence, Develop NodeId, and equal camera profile (same image) before it writes. Changes no geometry, Grade, Mask, DRT, or topology. |
+| `EditorComparisonSource`, `EditorComparisonInput`, `EditorComparisonInputPair` (`app/editor_comparison_types.hpp`) | Root, Current, or Version selectors. Provenance (`source`, `source_head`) is separate from the preview identity. |
+| `BuildEditorComparisonInputs` (`app/editor_comparison_inputs.*`, library `EditorComparisonInputs`) | Current, and the active Version, return the captured preview unchanged. Root and other Versions replay with `BuildDocumentFromRoot`, validate the product graph, reject HDR, apply current sensor settings, require a bound DNG profile, and freeze as a Preview with the captured lineage and image. Returns both inputs or none. |
+| `IEditorHistoryPort::BuildComparisonInputs` / `EditorSessionHistoryPort` | Reads the held graph and root under the port lock. Rejects an invalid guard, a missing state, or a preview captured from an earlier lineage. Writes nothing. |
+
+**Deviation from the file map:** the selector and result types are in `include/app/editor_comparison_types.hpp`. `editor_comparison_inputs.hpp` includes `pipeline_root_state.hpp`, which includes Storage/DuckDB headers; the separate types header keeps `editor_session_ports.hpp` free of them. The `EditorComparisonInputsTest` source is in `tests/app/`, but it is registered in `tests/ui/CMakeLists.txt` because it compiles the history port sources directly. Both history port test binaries share the `ALCEDO_EDITOR_HISTORY_PORT_SOURCES` list.
+
+**Primary success call chain:**
+
+```text
+IEditorHistoryPort::BuildComparisonInputs(guard, captured_current, a, b)
+  -> EditorSessionHistoryPort (port lock) -> EditorHistoryState::EnsureWorkingState
+  -> lineage check: captured_current.Lineage == working document Lineage
+  -> BuildEditorComparisonInputs(graph, root, captured_current, element_id, a, b)
+       -> reject HDR / unbound DNG profile on captured_current
+       -> per side: ResolveSource (Root | Current | Version head; active Version -> captured)
+            Current/active Version -> captured preview, unchanged
+            otherwise -> BuildDocumentFromRoot -> ValidateProductDocument -> RejectHdr
+                      -> PipelineDocument::UseSensorSettingsFrom
+                           -> DevelopParamsModel::UseSensorSettingsFrom
+                           -> OperatorModelBase::TakeFieldsFromThenMutate
+                      -> RequireBound -> Freeze -> PipelineGraphSnapshot::Preview(current lineage)
+  -> EditorComparisonInputPair written to the caller only when both sides succeed
+```
+
+**Primary failure call chain:**
+
+```text
+missing/foreign Version | replay failure | invalid graph | camera profile mismatch
+| unbound DNG profile | ST 2084/HLG on current or selected | earlier-lineage capture
+  -> exception inside BuildEditorComparisonInputs, or port check -> error text names the side
+  -> private replay documents are dropped; the output pair is not written
+  -> history head, active Version, commits, WAL, dirty state, working document,
+     lineage, and published preview stay unchanged
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `RootAndCurrentInputsKeepHistoryAndWorkingDocumentUnchanged` | `EditorComparisonInputsTest` | PASS |
+| `VersionInputsRetainOwnWhiteBalanceAndUseCurrentSensorSettings` | `EditorComparisonInputsTest` | PASS |
+| `SensorSettingsDerivativeKeepsCurrentSensorFieldRevisions` | `EditorComparisonInputsTest` | PASS |
+| `ReplayOfDifferentGradeTopologyKeepsStableDevelopIdentity` | `EditorComparisonInputsTest` | PASS |
+| `ComparisonInputFailureDoesNotPublishPartialPair` (missing Version, replay failure, earlier-lineage capture) | `EditorComparisonInputsTest` | PASS |
+| `HdrCurrentOrSelectedVersionRejectsComparisonWithoutSdrRewrite` (ST 2084 and HLG; current and selected) | `EditorComparisonInputsTest` | PASS |
+| `ActiveVersionUsesCapturedWorkingValues` (added) | `EditorComparisonInputsTest` | PASS |
+| `DevelopModelTakesSensorStampsAndKeepsOwnWhiteBalance` (added; equal and different white balance, self-source rejection) | `EditorComparisonInputsTest` | PASS |
+| `DocumentOfAnotherImageRejectsSensorSettingsUnchanged` (added) | `EditorComparisonInputsTest` | PASS |
+
+The unchanged-state assertions compare the active head, active Version, commit count, Version count, unmaterialized flag, WAL file size, canonical working JSON, `DocumentRevisionFingerprint`, lineage, and the identity of the published preview pointer.
+
+Commands (PowerShell, repository root):
+
+```powershell
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target GpuDagModelGraphTest EditorSessionHistoryPortTest EditorComparisonInputsTest AlbumBackendLib --parallel 4
+$env:PATH = "$PWD/build/debug/vcpkg_installed/x64-windows/debug/bin;$env:PATH"
+ctest --test-dir build/debug -R '^(EditorComparisonInputsTest|EditorSessionHistoryPortTest|GpuDagModelGraphTest)\.' --output-on-failure -j 1
+```
+
+The build exited with code 0. CTest exited with code 8 because of one failure that predates this phase:
+
+| Suite | Discovered | Passed | Failed | Skipped |
+| --- | ---: | ---: | ---: | ---: |
+| `EditorComparisonInputsTest` | 9 | 9 | 0 | 0 |
+| `EditorSessionHistoryPortTest` | 107 | 106 | 1 | 0 |
+| `GpuDagModelGraphTest` (document/Model owners, header rules) | 115 | 115 | 0 | 0 |
+
+The failure is `EditorHistoryCommitPresentationTest.FormatsNumericBooleanPathEnumAndCompoundAdjustments`: a crop commit label gives `"Crop"` where the test expects `"+12°"`. It also fails on clean `deeb89018` (tracked changes stashed, target rebuilt, test run directly), so this phase did not cause it.
+
+**Manual verification:** none needed; Phase 1 has no UI or render path.
+
+**Cache counters, resources, and timing:** not applicable to Phase 1. Equal sensor stamps are the precondition for cache reuse, and the tests check them directly. Renderer counters are recorded in Phase 2.
+
+**Checklist / exit condition:** all four boxes are checked.
+
+**LOC note:** about 1,060 changed lines: 223 added and 8 removed in tracked files, plus 839 lines in new files (577 of them in the test). The largest touched production file is `pipeline_document.cpp` at 483 lines. No touched file is over 1,000 lines.
+
+**Remaining gaps:**
+
+- The full test suite was not run. Per `AGENTS.md`, only the user starts a full run.
+- `alcedo_main` was not built. `AlbumBackendLib` built successfully; it compiles the production history port and links the new library.
+- Nothing in production calls `BuildComparisonInputs` yet. The Phase 4 comparison service will call it.
+
+### Phase 2: Render a pair on the existing editor worker
+
+**Objective and deliverables.** Run A then B on the same existing Interactive executor. Return host pixels and exact geometry without calling the viewport sink.
+
+**Inputs and prerequisites.** Use Phase 1 frozen inputs. Recheck Quality Base geometry, persistence, host-download order, and port shutdown.
+
+**Modules and APIs.** Add `RenderedPipelineImage`, the compatible `ApplyImage` operation, the application image-render seam, and one composite pair job in the existing scheduler port. Factor the shared full-image Quality Base request builder. Use the Phase 2 file map.
+
+**Data invariants.** The current executor, backend, source identity, Develop NodeId, and binding stay the same. All renders use the existing single worker. Comparison requests have a null sink and disabled scope updates. A's host buffer survives B. Transient GPU output does not become another persistent result cache.
+
+**Steps.**
+
+1. Return image metadata from the actual executed plan. Keep the existing Apply return behavior for existing callers.
+2. Build the comparison host request from the common Quality Base builder. Use full decode, 4096 pixels, Preview resampling, and `FrameRole::QualityBase`.
+3. Resolve the port's already-bound input once. Reuse its buffer; do not load source bytes separately for A and B.
+4. Submit A/B as one consecutive worker operation. Download A before B begins. Do not expose an executor getter for feature code.
+5. Publish only a complete pair. Forward GPU and download errors without alternate backend, decode, operator, or resolution.
+6. Extend explicit cancel and shutdown to cover accepted image jobs, including queued jobs. Preserve callbacks and input lifetimes until the worker stops.
+7. Verify that downstream invalidation is still observed when normal rendering resumes. Never restore an old document copy onto live state.
+
+**Success chain.** Frozen inputs -> existing scheduler worker -> current executor A download -> current executor B download -> one complete pair -> owner callback.
+
+**Failure/restore chain.** A or B failure/cancel -> release submission-local resources and incomplete host outputs -> report failure -> normal sink and current binding remain owned by the editor -> normal current-document render can proceed.
+
+**Tests and observable assertions.**
+
+- `WarmComparisonPairReusesEditorSensorResult`: warm a real RAW editor frame; assert the pair adds zero LibRaw unpack and zero sensor-develop executions.
+- `WhiteBalanceDifferenceChangesPairPixelsWithoutSensorExecution`: assert image differences and zero sensor work after warm-up.
+- `ComparisonHostRequestsKeepEditorExecutorAndQueueIdentity`: assert one executor/device/queue, unchanged binding, and no sink-ready notification for the pair.
+- `ComparisonPairDoesNotInterleaveAAndBWithNormalFrames`: submit work before and after the composite item and record actual worker order.
+- `DifferentVersionTopologyRendersCorrectPixelsWithSharedSensor`: compare each side against an independent fresh execution of its derived document.
+- `AResultRemainsValidAfterBAndTransientRelease`: verify A pixels after B completes and submission-local storage is released.
+- `ComparisonCloseDuringARenderSkipsBAndCannotPublish`: drive real explicit cancellation.
+- `ComparisonFailureAllowsNormalCurrentDocumentRender`: fail a download or GPU pass, then run the normal request and verify expected pixels.
+
+Extend `PipelineDocumentRenderTest` and `EditorSessionRenderSchedulerPortTest`. Use the existing Quality Base cache fixtures where applicable. Declare float pixel tolerance per fixture; use `2e-5` only when the current fixture already supports it. Do not substitute a fake renderer for cache-reuse evidence.
+
+**Build/run.** Build those two targets plus `PipelineFrameSinkTest` and `GraphImageCacheRetentionTest`. Run filtered tests with GPU concurrency set to one. Record unavailable backends separately.
+
+**Exit criteria.**
+
+- [ ] One existing executor/worker runs A/B consecutively and never presents them to the sink.
+- [ ] Warm real-RAW evidence shows no new unpack or sensor-develop execution.
+- [ ] Pixel comparisons cover different white balance and topology.
+- [ ] Cancel, failure, and shutdown preserve ownership and permit normal rendering.
+
+**Expected diff.** 900-1700 lines.
+
+**Completion record.** Not started. Fill section 11 after implementation.
+
+### Phase 3: Display SDR pairs in aligned Qt image canvases
+
+**Objective and deliverables.** Show completed in-memory pairs with source-coordinate alignment, complete-image layouts, and both divider orientations.
+
+**Inputs and prerequisites.** Use Phase 2 result metadata. Use real production QML and AppTheme. Read the VI rules and the existing conversion/provider pattern.
+
+**Modules and APIs.** Add the pair image store/provider, the canvas, view, and controls panel. Register QML and the provider. Use the Phase 3 file map. A focused test fixture supplies completed images without adding test branches to production code.
+
+**Data invariants.** One ready pair owns two QImages and their actual geometry. Both URLs publish together. Images and documents stay independent. Mode/divider movement does not call the renderer. QML uses one reference transform per canvas and preserves each crop footprint.
+
+**Steps.**
+
+1. Validate nonempty finite float pixels and matching dimensions against render geometry. Reuse the RGBA conversion for the approved SDR output.
+2. Publish both QImages into the comparison store in one focused operation. Use existing operation identity in URLs and disable QML image caching.
+3. Implement the reference-to-canvas fit transform and compose it with each `render_to_reference` matrix. Do not guess reference extent from texture dimensions.
+4. Implement complete-image and divider layouts with ordinary Image items, parent clipping, and affine transforms.
+5. Add accessible divider input, orientation, Swap, loading, and error presentation. Display only a pair whose two Image items are Ready.
+6. Clear source references and store entries on close/replacement. Verify QImage values already handed to provider callers remain valid.
+7. Record per-file VI decisions. Add AppTheme/DESIGN values only if an existing token cannot express the approved geometry.
+
+**Success chain.** Complete rendered pair -> validated SDR conversion -> atomic store publication -> both Images Ready -> fitted and aligned comparison view.
+
+**Failure/restore chain.** Invalid pixels, geometry, conversion, or image load -> pair stays hidden -> real error -> Retry/Close -> release references and reveal normal viewport.
+
+**Tests and observable assertions.**
+
+- `SdrPairConversionMatchesRoundedClampedRgbaValues`: cover channel order, alpha, fractional values, and output-buffer lifetime.
+- `PairProviderNeverPublishesOneNewSideWithOneOldSide`: inspect publication through the real store API.
+- `SourceAlignmentPlacesHalfCropInHalfOfReferenceCanvas`: assert mapped corners and empty-area coverage.
+- `RotatedCropCornersMatchRendererReferenceGeometry`: use actual resolved geometry with nonzero crop offsets and rotation.
+- `BothDividerOrientationsRevealTheSameReferencePoint`: verify both source transforms stay equal while clipping changes.
+- `LayoutAndDividerChangesDoNotSubmitRenderJobs`: assert zero render calls for ready-pair view operations.
+- `PairRemainsHiddenUntilBothImagesAreReady`: drive differing image-load completion order.
+- `ClosingComparisonClearsProviderAndItemReferences`: check entry count and released image ownership after pending reads finish.
+
+Add proposed `EditorComparisonImageProviderTest`, `EditorComparisonGeometryTest`, and `EditorComparisonViewQmlTest`. Keep input checks small. Use manual application testing for divider drag and focus when offscreen delivery is unreliable.
+
+**Build/run.** Build the three proposed targets and `alcedo_main`. Run their filtered suites. Check both themes, narrow windows, and representative display scaling in the real application.
+
+**Exit criteria.**
+
+- [ ] All four layouts display a completed pair.
+- [ ] Original reference alignment preserves crop footprints and empty areas.
+- [ ] SDR quantization, channel order, and lifetime assertions pass.
+- [ ] Pointer/keyboard divider behavior and focus are manually verified.
+
+**Expected diff.** 850-1600 lines.
+
+**Completion record.** Not started. Fill section 11 after implementation.
+
+### Phase 4: Add source selection, entry, restrictions, and restore
+
+**Objective and deliverables.** Complete the user workflow from editor entry to close. Connect the first three phases without changing normal Version checkout behavior.
+
+**Inputs and prerequisites.** Use Phase 1 inputs, Phase 2 image jobs, and Phase 3 presentation. Recheck session admission, pending input, navigation, panel ownership, and shutdown order.
+
+**Modules and APIs.** Add the comparison service and GUI controller. Use existing queue-owned action restriction representation and completion identities. Extend workspace, Versions header, and adjustment nav. Use the Phase 4 file map.
+
+**Data invariants.** Current working values capture once per open comparison. All later A/B selections use that capture for Current/active Version. Only the session owner controls comparison activity and admission. Ordinary checkout still applies every stored RAW and white-balance field.
+
+**Steps.**
+
+1. Add entry actions and HDR-unavailable reasons. Seal earlier accepted parameter input before capture; refuse conflicting mask/session operations.
+2. Activate a comparison activity restriction through existing policy evaluation. Include adjustments, graph/mask writes, history movement, Version writes, Paste, and view changes.
+3. Supply selectors from the existing Version list through its owner. Do not create another persistent Version catalog.
+4. Resolve the selected pair, submit one image job, and reduce its result on the session owner. Convert/publish on the GUI boundary without worker calls into QML.
+5. Add the hidden Compare nav page and panel key. Restore the previous panel after close.
+6. Cover the viewport and editing overlays while keeping the real viewport item alive underneath. Keep ready-pair view controls independent of session edit availability.
+7. Add Close, Escape, Retry, image-switch, workspace-exit, and shutdown paths. Correlate completion with the existing operation identity and closed activity.
+8. Remove the restriction on close. Submit the normal current-document/view render to reconcile downstream runtime state. Preserve zoom/pan and active Version.
+9. Add translated UI copy and shortcut registration through existing systems. Test normal checkout with differing sensor parameters to prove the temporary policy did not spread into it.
+
+**Success chain.** Entry action -> owner capture/restriction -> source selection -> render pair -> Compare panel/view -> Close -> release -> prior panel and current viewport refresh.
+
+**Failure/restore chain.** Source/render/presentation error -> owner error state -> Retry retains fixed capture or Close releases it -> original working document/Version stay unchanged. Image switch or shutdown closes first and ignores any completed closed operation.
+
+**Tests and observable assertions.**
+
+- `ComparisonAdmissionBlocksEditsAndHistoryButAllowsCloseAndImageSelection`: test command admission and projected action decisions together.
+- `CurrentVersionComparisonIncludesCapturedWorkingValuesWithoutSaving`: verify pending-value inclusion, no extra commit, and fixed capture across selector changes.
+- `ComparingVersionDoesNotCheckoutAndCheckoutStillAppliesItsSensorSettings`: inspect both production operations.
+- `CompareNavPageRestoresPreviousPanelAfterClose`: reuse the PR #244 nav fixture.
+- `ClosePreservesViewTransformAndRefreshesCurrentDocument`: verify original zoom/pan, active Version, and normal render request.
+- `QueuedPairCompletionAfterImageSwitchCannotReopenComparison`: drive worker completion and owner/navigation ordering.
+- `HdrDocumentDisablesEntryAndSelectedHdrVersionReportsReason`: cover current and non-current Version inputs.
+- `RepeatedOpenSelectCloseKeepsOneExecutorAndReleasesTemporaryImages`: assert executor/device identity, store size, and bounded ownership.
+
+Add proposed `EditorComparisonServiceTest` and `EditorComparisonControllerTest`. Extend `EditorSessionActionPolicyCq3Test`, `EditorSessionHistoryPortTest`, and `EditorAdjustmentHeaderQmlTest`. Run focused direct caller tests; skip `WorkspaceShellTest` explicitly.
+
+**Build/run.** Build those proposed and existing targets plus `alcedo_main`. Run only their filtered suites. Manually exercise Before/After, A/B selection, all layouts, close during render, image switching, editor re-entry, and application shutdown.
+
+**Exit criteria.**
+
+- [ ] Both entry actions and all selectors follow the confirmed state semantics.
+- [ ] Edit/history restrictions work at the owner and QML boundaries.
+- [ ] Normal checkout still applies historical sensor settings.
+- [ ] Close, image switch, exit, and shutdown release temporary state without stale publication.
+- [ ] Real large-RAW warm-pair resource and timing evidence exists.
+
+**Expected diff.** 1000-1900 lines.
+
+**Completion record.** Not started. Fill section 11 after implementation.
+
+## 9. Acceptance and resource evidence
+
+| Behavior | Required evidence |
+| --- | --- |
+| Root/current and two Versions | Correct white balance/downstream parameters with current sensor values and stamps; unchanged live history |
+| Warm cache | Zero additional LibRaw unpack and sensor-develop executions for A/B after warming the current image |
+| Cold cache | At most one successful sensor computation for a pair on an otherwise valid cold current binding; never lower decode quality |
+| Different topology | Each side matches a fresh execution of its derived document within its declared float tolerance |
+| Quality Base | FULL decode, 4096 long edge, Preview resample, SensorDevelopOnly, null sink, and no scope publication |
+| Spatial alignment | Common full reference bounds, exact crop/rotation mapping, empty uncovered areas |
+| Temporary images | One ready pair; close clears provider/items; incomplete results release on failure |
+| Runtime restore | Normal current-document render produces correct pixels after A/B without sensor recomputation when valid |
+| HDR | PQ/HLG disables or rejects comparison; no SDR substitute |
+| SDR | Explicit 8-bit quantization assertion; no second color transform |
+| Session behavior | No save, commit, checkout, dirty-state change, or persistence schema change from comparison |
+| Async behavior | Tested close, queued completion, switch, and shutdown through actual worker/owner boundaries |
+| Qt UI | Both themes, all layouts, divider endpoints/keyboard, narrow window, and focus verified in the application |
+
+Measure a real large RAW with the configured RAW method and lens settings. Record cold and warm pair wall time. Separate A/B GPU execution, downloads, SDR conversion, and image-ready time. Record source dimensions, backend, build mode, and output dimensions. A 4K limit reduces downstream work; it does not prove that every operator is fast.
+
+Use the same already-landed renderer counters for cache evidence. Do not add a profiler framework. Record prepared-source entries, sensor pass count, GPU transient bytes, and live comparison image bytes before, during, and after repeated open/close cycles.
+
+For an uncropped 4096 x 2731 output, two RGBA32F host images use about 85.3 MiB. Two RGBA8 images use about 21.3 MiB. Process sides consecutively and release float outputs after conversion. Qt upload storage is additional. Do not retain floats merely to support divider movement or mode switching.
+
+## 10. Build and verification commands
+
+These are commands for implementation. Plan creation runs no build or product test.
+
+Use PowerShell at the repository root. Read actual CMake target registration before running a command. Proposed targets must be added in their phase. Use one build at a time. Start each build with at least a 20-minute allowance and poll the same process without restarting healthy compiler/linker work.
+
+```powershell
+Set-Location D:\Projects\pu-erh_lab
+cmd /c scripts\msvc_env.cmd --preset win_debug -DCMAKE_PREFIX_PATH="D:/misc/Qt/6.9.3/msvc2022_64/lib/cmake"
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target <phase-targets> --parallel 4
+$env:PATH = "$PWD/build/debug/vcpkg_installed/x64-windows/debug/bin;$env:PATH"
+ctest --test-dir build/debug -N -R '<phase-prefixes>'
+ctest --test-dir build/debug -R '<phase-prefixes>' --output-on-failure -j 1
+```
+
+Use the phase-specific targets listed above. Put logs under `build/tmp/editor_comparison/`. Refresh stale test-runtime DLL copies if a changed first-party DLL did not relink its caller. Do not run CTest while a build copies DLLs.
+
+For release application integration:
+
+```powershell
+Set-Location D:\Projects\pu-erh_lab
+cmd /c scripts\msvc_env.cmd --build --preset win_release --target alcedo_main --parallel 4
+```
+
+On macOS, use `macos_debug` in `build/macos-debug` with `-DALCEDO_BUILD_TESTS=ON` when tests are needed. Build the corresponding registered targets. Record unavailable platform/backend results rather than inferring them from CUDA. Keep shader and RAW algorithms unchanged unless source evidence requires a reviewed change.
+
+Search touched source and all roadmap filenames for prohibited terminology. Search roadmap content and review matches against current rules. Keep unrelated historical wording outside the feature diff. Verify source links, new-file LF endings, QML registrations, direct dependencies, and final diff scope.
+
+Full test suite: not run unless the user explicitly requests it. Offscreen workspace input coverage: skipped where unreliable, with manual evidence stated separately.
+
+## 11. Completion records and stop conditions
+
+Phase 1's record is under Phase 1 in section 8.
+
+Fill one record for each phase after implementation:
+
+```text
+Phase / date / status:
+Source revision and branch:
+Actual changed modules and changed-line count:
+Implemented behavior:
+Unimplemented required items:
+Primary success call chain:
+Primary failure and restore call chain:
+Build and test commands with exit codes:
+Discovered / passed / failed / skipped counts:
+Manual verification and exact build:
+Cache counters, resource measurements, and timing:
+Evidence location:
+Unavailable platforms or remaining defects:
+```
+
+Stop and revise the design when sensor stamps or binding identity cannot remain consistent. Do not fake cache hits. Stop when derived graphs have different source/Develop identities or camera bindings. Reject the input with the real reason.
+
+Stop when the port exposes its executor to another owner, adds another worker, or changes normal checkout behavior. Correct the ownership boundary before continuing.
+
+Stop when a phase can exceed 2000 changed lines. Split it before implementation. Stop when a new consistency mechanism has no executable production ordering test. Stop when a failure path needs an unapproved backend, quality, or SDR substitution.
+
+Keep evidence of real failures and skipped coverage. Do not mark a phase complete from source inspection alone.

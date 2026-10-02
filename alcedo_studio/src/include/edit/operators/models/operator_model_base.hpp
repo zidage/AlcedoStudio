@@ -125,6 +125,33 @@ class OperatorModelBase : public IOperatorModel {
     StampLocked(fn(payload_));
   }
 
+  /**
+   * @brief Take the payload and every field stamp of @p source, then apply one focused update,
+   *        under both Model locks.
+   *
+   * After the copy, this Model reports the same value and stamp as @p source for every field.
+   * @p fn then receives the copied payload and this Model's payload from before the copy. It must
+   * write back only the fields it keeps from the previous payload and return the bits of the
+   * fields whose value now differs from @p source; those fields get one new stamp. Returning an
+   * empty mask keeps every stamp of @p source, which is valid because every value then equals
+   * @p source.
+   *
+   * @throws std::invalid_argument when @p source is this Model; this Model is unchanged.
+   */
+  template <class Fn>
+  void TakeFieldsFromThenMutate(const Derived& source, Fn&& fn) {
+    const auto& typed_source = static_cast<const OperatorModelBase&>(source);
+    if (&typed_source == this) {
+      throw std::invalid_argument("OperatorModelBase: a Model cannot take fields from itself");
+    }
+    std::scoped_lock lock(mutex_, typed_source.mutex_);
+    Payload          previous = std::move(payload_);
+    payload_                  = typed_source.payload_;
+    field_revisions_          = typed_source.field_revisions_;
+    revision_                 = typed_source.revision_;
+    StampLocked(fn(payload_, std::as_const(previous)));
+  }
+
   [[nodiscard]] auto PayloadCopy() const -> Payload {
     std::lock_guard<std::mutex> lock(mutex_);
     return payload_;

@@ -245,6 +245,7 @@ target_link_libraries(AlbumBackendLib
         PipelineMgmtService
         AdjustmentTransferService
         AdjustmentTransferCatalog
+        EditorComparisonInputs
         EditorSessionService
         EditorMaskCreationController
         EditorAdjustmentPipeline

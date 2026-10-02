@@ -179,14 +179,8 @@ alcedo_register_test_target(UiFuzzAutomationTest ui)
 # Editor session history owns Mini-Git working state and immutable captures.
 # Link the production adapters directly (not AlbumBackendLib) so the binary does
 # not pull the full QML/Qt shell graph into a unit-test process.
-add_executable(EditorSessionHistoryPortTest
-    ${ALCEDO_TEST_ROOT}/edit/history/editor_session_history_port_test.cpp
-    ${ALCEDO_TEST_ROOT}/edit/history/editor_document_history_test.cpp
-    ${ALCEDO_TEST_ROOT}/edit/history/editor_version_checkout_test.cpp
-    ${ALCEDO_TEST_ROOT}/edit/history/editor_node_topology_history_test.cpp
-    ${ALCEDO_TEST_ROOT}/edit/history/editor_document_paste_test.cpp
-    ${ALCEDO_TEST_ROOT}/edit/history/editor_committed_snapshot_publication_test.cpp
-    ${ALCEDO_TEST_ROOT}/edit/history/editor_working_document_test.cpp
+# Production sources of the editor history port, shared by the binaries that drive it directly.
+set(ALCEDO_EDITOR_HISTORY_PORT_SOURCES
     ${CMAKE_SOURCE_DIR}/alcedo_studio/src/ui/alcedo_main/album_backend/editor_session_history_port.cpp
     ${CMAKE_SOURCE_DIR}/alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_state_detail.cpp
     ${CMAKE_SOURCE_DIR}/alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_shared_helpers.cpp
@@ -197,10 +191,20 @@ add_executable(EditorSessionHistoryPortTest
     ${CMAKE_SOURCE_DIR}/alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_checkpoint.cpp
     ${CMAKE_SOURCE_DIR}/alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_commit_presentation.cpp
     ${CMAKE_SOURCE_DIR}/alcedo_studio/src/ui/alcedo_main/album_backend/editor_session_pipeline_port.cpp)
+add_executable(EditorSessionHistoryPortTest
+    ${ALCEDO_TEST_ROOT}/edit/history/editor_session_history_port_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/history/editor_document_history_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/history/editor_version_checkout_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/history/editor_node_topology_history_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/history/editor_document_paste_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/history/editor_committed_snapshot_publication_test.cpp
+    ${ALCEDO_TEST_ROOT}/edit/history/editor_working_document_test.cpp
+    ${ALCEDO_EDITOR_HISTORY_PORT_SOURCES})
 target_include_directories(EditorSessionHistoryPortTest
   PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
 target_link_libraries(EditorSessionHistoryPortTest
   AdjustmentTransferService
+  EditorComparisonInputs
   EditorWorkingDocument
   EditorSessionEditController
   EditorNodeGraphDraft
@@ -227,6 +231,41 @@ alcedo_ui_gtest_discover_tests(EditorSessionHistoryPortTest
   PROPERTIES LABELS "editor_history;editor_session;ci_core_flow")
 # Lands in the shared tests/ dir; still overwrite vcpkg applocal lensfun there.
 alcedo_register_test_target(EditorSessionHistoryPortTest ui)
+
+# Editor comparison inputs read the held history through the real history port; same direct
+# adapter link rule as EditorSessionHistoryPortTest.
+add_executable(EditorComparisonInputsTest
+    ${ALCEDO_TEST_ROOT}/app/editor_comparison_inputs_test.cpp
+    ${ALCEDO_EDITOR_HISTORY_PORT_SOURCES})
+target_include_directories(EditorComparisonInputsTest
+  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
+target_link_libraries(EditorComparisonInputsTest
+  EditorComparisonInputs
+  AdjustmentTransferService
+  EditorWorkingDocument
+  EditorSessionEditController
+  EditorNodeGraphDraft
+  EditorNodeGraphProjection
+  EditorAdjustmentPipeline
+  EditorPipelineCommandService
+  EditorPanelProjection
+  PipelineHistoryApplier
+  EditGraph
+  EditMaskCore
+  EditorMiniGitMaterializer
+  PipelineMgmtService
+  ProjectService
+  PipelineHistory
+  EditPipeline
+  GTest::gtest_main)
+set_target_properties(EditorComparisonInputsTest PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/alcedo_studio/tests"
+  RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/alcedo_studio/tests"
+  RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/alcedo_studio/tests")
+alcedo_ui_gtest_discover_tests(EditorComparisonInputsTest
+  TEST_PREFIX "EditorComparisonInputsTest."
+  PROPERTIES LABELS "editor_history;editor_session;editor_comparison")
+alcedo_register_test_target(EditorComparisonInputsTest ui)
 
 # Checkpoint storage owns Mini-Git materialization and recovery.
 # Same direct-adapter link rule as history port: avoid AlbumBackendLib for unit runs.

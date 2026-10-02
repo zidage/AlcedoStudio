@@ -6,7 +6,9 @@
 
 #include <functional>
 #include <optional>
+#include <utility>
 
+#include "app/editor_comparison_inputs.hpp"
 #include "app/editor_session_types.hpp"
 #include "app/pipeline_service.hpp"
 #include "edit/history/commit_graph.hpp"
@@ -258,6 +260,37 @@ auto EditorSessionHistoryPort::SnapshotHistorySource(
   // The root is immutable; the caller shares it rather than copying it.
   *root_document =
       std::shared_ptr<const alcedo::PipelineDocument>(state->root, &state->root->document);
+  return true;
+}
+
+auto EditorSessionHistoryPort::BuildComparisonInputs(
+    const alcedo::EditorHistoryGuardHandle&                     guard,
+    const std::shared_ptr<const alcedo::PipelineGraphSnapshot>& captured_current,
+    const alcedo::EditorComparisonSource& a, const alcedo::EditorComparisonSource& b,
+    alcedo::EditorComparisonInputPair* pair, std::string* error) -> bool {
+  if (pair == nullptr) {
+    if (error) *error = "Comparison inputs require output storage";
+    return false;
+  }
+  if (!guard.valid) {
+    if (error) *error = "Editor history guard is invalid";
+    return false;
+  }
+  std::scoped_lock lock(mutex_);
+  auto             state = state_->EnsureWorkingState(guard.element_id, error);
+  if (!state) return false;
+  if (!state->graph || !state->root || !state->document) {
+    if (error) *error = "Editor history root is unavailable for comparison";
+    return false;
+  }
+  if (captured_current && captured_current->Lineage() != state->document->Lineage()) {
+    if (error) *error = "The captured working state belongs to an earlier load of this history";
+    return false;
+  }
+  auto built = alcedo::BuildEditorComparisonInputs(*state->graph, *state->root, captured_current,
+                                                   guard.element_id, a, b, error);
+  if (!built.has_value()) return false;
+  *pair = std::move(*built);
   return true;
 }
 
