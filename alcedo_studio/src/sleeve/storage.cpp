@@ -81,7 +81,7 @@ void NodeStorageHandler::GarbageCollect() {
 
 Storage::Storage(std::filesystem::path db_path)
     : database_(db_path),
-      element_store_(database_.GetConnectionGuard()),
+      element_store_(database_),
       image_store_(database_.GetConnectionGuard()),
       semantic_models_(database_),
       semantic_embeddings_(database_),

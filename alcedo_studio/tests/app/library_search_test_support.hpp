@@ -11,8 +11,10 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <ctime>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
@@ -47,6 +49,8 @@ struct SyntheticImageSpec {
   int          rating_          = 0;
   bool         is_raw_file_     = true;   ///< Attach a RAW color context (matrices only).
   bool         has_dng_profile_ = false;  ///< Also attach the large DNG profile.
+  /// Import time (`Element.added_time`) as Unix seconds; the creation time when empty.
+  std::optional<std::time_t> added_time_{};
 };
 
 /// Build a DNG profile whose JSON form has the size of a real embedded camera profile
@@ -156,6 +160,9 @@ class SyntheticLibraryBuilder {
           for (std::size_t i = begin; i < end; ++i) {
             auto file       = fs.CreateFileInLibrary(specs[i].file_name_);
             file->image_id_ = image_ids[i - begin];
+            if (specs[i].added_time_.has_value()) {
+              file->added_time_ = *specs[i].added_time_;
+            }
             ids.push_back(file->element_id_);
           }
           return ids;

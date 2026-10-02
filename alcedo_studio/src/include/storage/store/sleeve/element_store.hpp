@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 
+#include "sleeve/album_query.hpp"
 #include "sleeve/sleeve_element/sleeve_element.hpp"
 #include "sleeve/sleeve_filter/filter_combo.hpp"
 #include "storage/mapper/duckorm/duckdb_expr.hpp"
@@ -20,7 +21,7 @@
 #include "storage/mapper/sleeve/element/element_mapper.hpp"
 #include "storage/mapper/sleeve/element/file_mapper.hpp"
 #include "storage/mapper/sleeve/element/folder_mapper.hpp"
-#include "storage/store/store_types.hpp"
+#include "storage/store/database.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -36,6 +37,9 @@ struct FolderStatsView {
   std::vector<StorageStatsBucket> lens_stats_{};
   std::vector<StorageStatsBucket> label_stats_{};
   std::vector<StorageStatsBucket> rating_stats_{};
+  /// Local import-day buckets (`YYYY-MM-DD`; an empty label for no import time). Read only by
+  /// ElementStore::ReadAlbumQuery when the options name an import-day time zone.
+  std::vector<StorageStatsBucket> import_date_stats_{};
 };
 
 /**
@@ -77,6 +81,9 @@ struct SearchResultRow {
   std::string     lens_{};          ///< Empty when unknown.
   std::string     capture_date_{};  ///< `YYYY-MM-DD`; empty when unknown.
   int             rating_ = 0;
+  /// `Element.added_time` (the file's import time, stored as UTC) as Unix seconds; empty when
+  /// the row has no import time.
+  std::optional<int64_t> added_time_{};
 };
 
 /// One page of search results and the number of rows that match the whole query.
@@ -92,6 +99,47 @@ struct SearchResultPageWithStats {
   FolderStatsView  stats_{};
 };
 
+/// One photo occurrence of an album query: the photo's display columns and the key of the group
+/// that holds this occurrence (std::monostate in the flat mode and for the unknown group).
+struct AlbumQueryRow {
+  SearchResultRow photo_{};
+  AlbumGroupKey   group_key_{};
+};
+
+/// One group of an album query: its key, its photo count, and the position of its first
+/// occurrence in the ordered occurrence stream. It does not hold the photos.
+struct AlbumGroupDescriptor {
+  AlbumGroupKey key_{};
+  int64_t       photo_count_      = 0;
+  int64_t       first_occurrence_ = 0;
+};
+
+/// Parts of one album query read. A read without groups and statistics is a scroll page.
+struct AlbumQueryRead {
+  int64_t offset_          = 0;  ///< First occurrence of the page.
+  int64_t limit_           = 0;  ///< Occurrences in the page; 0 reads no photo row.
+  bool    read_groups_     = false;
+  bool    read_statistics_ = false;
+};
+
+/// Result of ElementStore::ReadAlbumQuery: counts, the requested groups and statistics, and one
+/// bounded page of the ordered occurrence stream.
+struct AlbumQueryResult {
+  /// Matching unique files. The occurrence count can be larger in the label group.
+  int64_t                           unique_file_count_ = 0;
+  int64_t                           occurrence_count_  = 0;
+  std::vector<AlbumGroupDescriptor> groups_{};
+  int64_t                           first_occurrence_ = 0;
+  std::vector<AlbumQueryRow>        rows_{};
+  std::optional<FolderStatsView>    statistics_{};
+};
+
+/// Position of one file's occurrence in the ordered occurrence stream.
+struct AlbumFilePosition {
+  int64_t       occurrence_index_ = 0;
+  AlbumGroupKey group_key_{};
+};
+
 /// Whole-project counts that the welcome surface shows for a loaded project. A query result
 /// read by ElementStore::ReadProjectOverview; the scope equals `CountFilesInFolder(0)`.
 struct ProjectOverviewCounts {
@@ -104,35 +152,32 @@ struct ProjectOverviewCounts {
   std::optional<std::string> latest_capture_date_{};
 };
 
+/**
+ * @brief Element, file binding, folder content, and pipeline rows of one project, and the
+ *        scoped library reads over them.
+ *
+ * @details Every public operation requests its own connection from the Database owner and holds
+ * the database lock for the whole operation, so connection lifetime and transaction scope stay
+ * inside that operation. Reads are safe to call from any thread.
+ */
 class ElementStore {
  private:
-  ConnectionGuard       guard_;
+  Database&   database_;
 
-  ElementMapper         element_mapper_;
-  ElementIdMapper       element_id_mapper_;
-
-  FileMapper            file_mapper_;
-  FolderMapper          folder_mapper_;
-  PipelineMapper        pipeline_mapper_;
-
-  // Insert the element row plus its child rows (file binding / folder content).
+  // Insert the element row plus its child rows (file binding / folder content) on @p conn.
   // Does not touch sync_flag_ and does not manage a transaction, so it can run
   // either autocommit (AddElement) or inside a shared transaction (AddElements).
-  void                  InsertElementRows(const std::shared_ptr<SleeveElement>& element);
+  static void InsertElementRows(duckdb_connection&                    conn,
+                                const std::shared_ptr<SleeveElement>& element);
   // Update the element row plus its child rows. For a folder, only the FolderContent rows of
   // the children added or removed since the last sync are written. Same
-  // transaction-neutrality contract as InsertElementRows; the caller clears the folder's
+  // transaction-neutrality behavior as InsertElementRows; the caller clears the folder's
   // pending content changes after the commit.
-  void                  UpdateElementRows(const std::shared_ptr<SleeveElement>& element);
-  // Write the rows that match @p extra_filter into the temporary match set table, then read
-  // the stats (and, when @p page is set, one page) from it. The caller holds the lock.
-  auto                  ReadMatchSet(sl_element_id_t                            folder_id,
-                                     const std::optional<duckorm::SqlFragment>& extra_filter,
-                                     const std::string& active_semantic_model_key, SearchResultPage* page,
-                                     size_t offset, size_t limit) const -> FolderStatsView;
+  static void UpdateElementRows(duckdb_connection&                    conn,
+                                const std::shared_ptr<SleeveElement>& element);
 
  public:
-  ElementStore(ConnectionGuard&& guard);
+  explicit ElementStore(Database& database);
 
   void AddElement(const std::shared_ptr<SleeveElement> element);
   // Bulk-insert a batch of elements (and their file/folder-content child
@@ -214,6 +259,52 @@ class ElementStore {
   auto ListFilteredFileIds(sl_element_id_t                            folder_id,
                            const std::optional<duckorm::SqlFragment>& extra_filter =
                                std::nullopt) const -> std::vector<sl_element_id_t>;
+
+  /**
+   * @brief Read the matching files of a scope with the presentation @p options: counts, the
+   *        groups and the Inspector statistics when @p read asks for them, and one bounded
+   *        page of the ordered occurrence stream.
+   *
+   * @details The filter is evaluated once into a temporary match set inside one read
+   * transaction; every count, group, statistic, and row of the call comes from that set. The
+   * set is dropped before the connection is released. The label group and the label sort use
+   * the canonical labels of @p active_semantic_model_key only.
+   *
+   * @throws std::invalid_argument for invalid options or page bounds (a limit above
+   *         kMaxAlbumQueryPageRows or a negative offset).
+   * @throws std::runtime_error with the DuckDB message when a statement fails.
+   */
+  auto ReadAlbumQuery(sl_element_id_t                            folder_id,
+                      const std::optional<duckorm::SqlFragment>& extra_filter,
+                      const AlbumQueryOptions&                   options,
+                      const std::string&                         active_semantic_model_key,
+                      const AlbumQueryRead&                      read) const -> AlbumQueryResult;
+
+  /**
+   * @brief Position of @p file_id in the ordered occurrence stream of the same query.
+   *
+   * @param preferred_group In the label group a file can occur more than once; the occurrence
+   *        in this group is returned when it exists, else the first occurrence.
+   * @return std::nullopt when the file does not match.
+   * @throws Same as ReadAlbumQuery.
+   */
+  auto ReadAlbumFilePosition(sl_element_id_t                            folder_id,
+                             const std::optional<duckorm::SqlFragment>& extra_filter,
+                             const AlbumQueryOptions&                   options,
+                             const std::string& active_semantic_model_key, sl_element_id_t file_id,
+                             const std::optional<AlbumGroupKey>& preferred_group) const
+      -> std::optional<AlbumFilePosition>;
+
+  /**
+   * @brief Unique file ids of the occurrences in [@p occurrence_begin, @p occurrence_end), in
+   *        the order of each file's first occurrence in that range. Reads no photo metadata.
+   * @throws Same as ReadAlbumQuery; std::invalid_argument for an invalid range.
+   */
+  auto               ReadAlbumFileIds(sl_element_id_t                            folder_id,
+                                      const std::optional<duckorm::SqlFragment>& extra_filter,
+                                      const AlbumQueryOptions&                   options,
+                                      const std::string& active_semantic_model_key, int64_t occurrence_begin,
+                                      int64_t occurrence_end) const -> std::vector<sl_element_id_t>;
 
   void EnsureChildrenLoaded(sl_element_id_t folder_id);
 
