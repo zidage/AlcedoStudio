@@ -221,6 +221,27 @@ void DevelopParamsModel::ApplyLensCalibrationUpdate(DevelopLensCalibrationUpdate
   });
 }
 
+void DevelopParamsModel::UseSensorSettingsFrom(const DevelopParamsModel& current) {
+  TakeFieldsFromThenMutate(current, [](DevelopPayload& payload, const DevelopPayload& own) {
+    const bool white_balance_differs =
+        payload.use_camera_wb != own.use_camera_wb || payload.user_wb != own.user_wb ||
+        payload.wb_mode != own.wb_mode || payload.custom_cct != own.custom_cct ||
+        payload.custom_tint != own.custom_tint || payload.as_shot_cct != own.as_shot_cct ||
+        payload.as_shot_tint != own.as_shot_tint;
+    if (!white_balance_differs) {
+      return DirtyFieldMask{};
+    }
+    payload.use_camera_wb = own.use_camera_wb;
+    payload.user_wb       = own.user_wb;
+    payload.wb_mode       = own.wb_mode;
+    payload.custom_cct    = own.custom_cct;
+    payload.custom_tint   = own.custom_tint;
+    payload.as_shot_cct   = own.as_shot_cct;
+    payload.as_shot_tint  = own.as_shot_tint;
+    return DirtyFieldMask{DevelopDirty::WhiteBalance};
+  });
+}
+
 auto DevelopParamsModel::DngProfile() const -> DngColorProfileRef {
   return Read([](const DevelopPayload& payload) { return payload.camera_profile.dng_profile; });
 }

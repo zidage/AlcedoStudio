@@ -351,6 +351,16 @@ def_library(AdjustmentTransferCatalog
     PUBLIC_DEPS PipelineHistoryApplier EditGraph PipelineHistory
 )
 
+# Read-only inputs of the editor comparison. Replays a selected state from the held history and
+# gives it the current sensor settings; never writes history or the working document.
+def_library(EditorComparisonInputs
+    SOURCES
+        "${ALCEDO_APP_ROOT}/editor_comparison_inputs.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_comparison_inputs.hpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_comparison_types.hpp"
+    PUBLIC_DEPS PipelineMgmtService EditGraph PipelineHistory
+)
+
 def_library(EditorSaveCheckpointCoordinator
     SOURCES "${ALCEDO_APP_ROOT}/editor_save_checkpoint_coordinator.cpp"
 )

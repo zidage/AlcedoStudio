@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "app/adjustment_transfer_types.hpp"
+#include "app/editor_comparison_types.hpp"
 #include "app/editor_history_types.hpp"
 #include "app/editor_panel_projection.hpp"
 #include "app/editor_render_intent.hpp"
@@ -254,6 +255,30 @@ class IEditorHistoryPort {
                                      std::string* error) -> bool {
     if (error != nullptr) {
       *error = "History source snapshot is not supported by this history port";
+    }
+    return false;
+  }
+
+  /**
+   * @brief Build both comparison inputs of the held image without changing its history.
+   *
+   * Resolves @p a and @p b against the held CommitGraph and immutable root, and gives every
+   * replayed state the sensor settings of @p captured_current (BuildEditorComparisonInputs).
+   * Moves no head, writes no commit, WAL record, or checkpoint, and does not touch the working
+   * document, its dirty state, or the published previews. Session owner thread.
+   *
+   * @param captured_current Preview of the working values captured when the comparison opened.
+   *        It must belong to the held image and to the lineage of its working document.
+   * @return true with @p pair set to both inputs; false with @p error set and @p pair unchanged.
+   *         Default ports reject.
+   */
+  virtual auto BuildComparisonInputs(
+      const EditorHistoryGuardHandle& /*guard*/,
+      const std::shared_ptr<const PipelineGraphSnapshot>& /*captured_current*/,
+      const EditorComparisonSource& /*a*/, const EditorComparisonSource& /*b*/,
+      EditorComparisonInputPair* /*pair*/, std::string* error) -> bool {
+    if (error != nullptr) {
+      *error = "Comparison inputs are not supported by this history port";
     }
     return false;
   }

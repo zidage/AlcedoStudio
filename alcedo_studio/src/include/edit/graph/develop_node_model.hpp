@@ -213,6 +213,22 @@ class DevelopParamsModel final
    */
   void               ApplyLensCalibrationUpdate(DevelopLensCalibrationUpdate update);
 
+  /**
+   * @brief Take every field except white balance, with its stamp, from @p current, and keep the
+   *        white balance of this Model.
+   *
+   * Afterwards demosaic, highlight reconstruction, lens/projection, and the camera profile equal
+   * @p current with the same field stamps, so a renderer that applied @p current reuses its
+   * sensor result. The white-balance fields (`use_camera_wb`, `user_wb`, `wb_mode`, custom and
+   * as-shot CCT/tint) keep this Model's values. When they differ from @p current they get one new
+   * stamp; when they are equal they keep the stamp of @p current. Runs under both Model locks.
+   *
+   * Used for documents of the editor comparison, which render a selected state with the current
+   * sensor settings. Never call it on a Model of the working document.
+   * @throws std::invalid_argument when @p current is this Model; this Model is unchanged.
+   */
+  void               UseSensorSettingsFrom(const DevelopParamsModel& current);
+
   /// Current DNG profile reference, read under the Model lock.
   [[nodiscard]] auto DngProfile() const -> DngColorProfileRef;
 

@@ -121,6 +121,20 @@ class PipelineDocument {
   [[nodiscard]] auto Drt() const -> const DrtNodeModel*;
 
   /**
+   * @brief Give this document the sensor settings of @p current and keep its own white balance
+   *        and every downstream node (DevelopParamsModel::UseSensorSettingsFrom).
+   *
+   * For a private document of the editor comparison: a replay of one state of the image that
+   * @p current shows. Geometry, Color Grades, Masks, DRT, and topology stay unchanged. Checks
+   * every precondition before it writes.
+   *
+   * @throws std::invalid_argument when either document has no Develop node, the Develop node IDs
+   *         differ, or the camera profiles differ (the documents are not of the same image). This
+   *         document is unchanged.
+   */
+  void               UseSensorSettingsFrom(const PipelineDocument& current);
+
+  /**
    * @brief Insert an adjustment on a ColorGrade node and record a topology change.
    */
   void InsertAdjustment(const NodeId& grade_id, std::size_t index, AdjustmentInstanceId instance_id,
