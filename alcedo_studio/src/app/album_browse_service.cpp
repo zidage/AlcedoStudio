@@ -214,6 +214,12 @@ auto AlbumBrowseService::ReadAlbumFileIds(sl_element_id_t                  folde
                                 active_semantic_model_key, begin, end);
 }
 
+auto AlbumBrowseService::ReadAlbumFileRows(std::span<const sl_element_id_t> file_ids) const
+    -> std::vector<SearchResultRow> {
+  auto& store = ElementStoreForRead("ReadAlbumFileRows");
+  return store.ListSearchResultRows(file_ids);
+}
+
 auto AlbumBrowseService::CreateFolder(const std::filesystem::path& parent_folder_path,
                                       const file_name_t& name) -> std::optional<AlbumFolderView> {
   if (!sleeve_service_) {

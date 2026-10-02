@@ -57,7 +57,7 @@ auto WaitUntil(const std::function<bool()>& predicate, int timeoutMs = 15000) ->
 }
 
 /// Six photos: three cameras, equal ratings, one unknown capture date, distinct import days.
-auto SixPhotoSpecs() -> std::vector<SeededImageSpec> {
+auto SixPhotoSpecs() -> std::vector<LibraryPhotoSpec> {
   return {
       {.model_      = "Canon R5",
        .date_time_  = "2026-06-07 09:00:00",
@@ -150,7 +150,7 @@ class WorkerHold {
 class LoadedLibrary {
  public:
   auto Load(const std::filesystem::path& temp_dir, ApplicationModuleHost& backend,
-            const std::vector<SeededImageSpec>& specs, std::size_t count = 0) -> bool {
+            const std::vector<LibraryPhotoSpec>& specs, std::size_t count = 0) -> bool {
     const auto packed = CreateSeededPackedProject(temp_dir, {}, count, specs);
     if (!packed.has_value() || !LoadPackedProject(backend, packed->packed_path_)) {
       return false;
@@ -457,7 +457,7 @@ TEST_F(LibraryQueryTests, OrderedFileIdsAreUniqueAndFollowTheAcceptedOrder) {
   EXPECT_EQ(args.at(0).toULongLong(), request);
   std::vector<sl_element_id_t> all;
   for (const auto& value : args.at(1).toList()) {
-    all.push_back(value.toUInt());
+    all.push_back(value.toMap().value("elementId").toUInt());
   }
   EXPECT_EQ(all, ModelIds(*module));
 
@@ -467,7 +467,7 @@ TEST_F(LibraryQueryTests, OrderedFileIdsAreUniqueAndFollowTheAcceptedOrder) {
   ASSERT_TRUE(WaitUntil([&]() { return ids.count() == 1; }));
   std::vector<sl_element_id_t> visible;
   for (const auto& value : ids.takeFirst().at(1).toList()) {
-    visible.push_back(value.toUInt());
+    visible.push_back(value.toMap().value("elementId").toUInt());
   }
   const auto& id = library.ids();
   EXPECT_EQ(visible, (std::vector<sl_element_id_t>{id[1], id[0], id[4], id[5]}));
@@ -613,7 +613,7 @@ TEST_F(LibraryQueryTests, QueryFailureKeepsAcceptedContentAndRetryRepeatsTheRequ
 TEST_F(LibraryQueryTests, QueuedPageCannotAppendAfterFilterRefresh) {
   ApplicationModuleHost        backend;
   LoadedLibrary                library;
-  std::vector<SeededImageSpec> specs(130);
+  std::vector<LibraryPhotoSpec> specs(130);
   for (size_t index = 0; index < specs.size(); ++index) {
     specs[index].rating_ = index % 2 == 0 ? 5 : 1;
   }
@@ -644,7 +644,7 @@ TEST_F(LibraryQueryTests, QueuedPageCannotAppendAfterFilterRefresh) {
 TEST_F(LibraryQueryTests, DistantSectionReadKeepsMetadataPagesBounded) {
   ApplicationModuleHost        backend;
   LoadedLibrary                library;
-  std::vector<SeededImageSpec> specs(600);
+  std::vector<LibraryPhotoSpec> specs(600);
   for (size_t index = 0; index < specs.size(); ++index) {
     specs[index].model_ = index < 500 ? "Canon R5" : "Camera " + std::to_string(index % 20);
   }

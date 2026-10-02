@@ -1200,6 +1200,8 @@ auto AppTheme::spaceXl() const -> int { return 20; }
 auto AppTheme::dateGraphCellMinSize() const -> int { return 10; }
 auto AppTheme::dateGraphCellGap() const -> int { return 3; }
 auto AppTheme::dateGraphCellRadius() const -> int { return 2; }
+auto AppTheme::librarySectionHeaderHeight() const -> int { return 40; }
+auto AppTheme::inspectorHeaderActionSize() const -> int { return 24; }
 auto AppTheme::motionFoldOpenMs() const -> int { return 200; }
 auto AppTheme::motionFoldCloseMs() const -> int { return 160; }
 auto AppTheme::motionFadeMs() const -> int { return 120; }

@@ -2,10 +2,9 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-// Album inspector page: library overview hero, capture/camera/label/lens/rating
-// stats, and the active-search filter card. This is the content that used to
-// live directly in InspectorPanel.qml before Frontend 3 split the inspector
-// into a shell + page stack. The content is intentionally unchanged.
+// Album inspector page: library overview hero, capture/import/camera/label/rating/lens
+// filters, and the active-search filter card. Each field header carries the photo-sort
+// arrows and the Group checkbox (InspectorFieldActions) of the library query.
 ScrollView {
     id: root
     contentWidth: availableWidth
@@ -120,6 +119,35 @@ ScrollView {
                 selectedLabel: appModules.stats.statsFilterDate
                 folderKey: appModules.folders.currentFolderId
                 onDayClicked: function(label) { appModules.stats.ToggleStatsFilter("date", label) }
+                headerActions: Component {
+                    InspectorFieldActions {
+                        field: "date"
+                        fieldTitle: qsTr("capture time")
+                        timeField: true
+                        ascendingTitle: qsTr("oldest first")
+                        descendingTitle: qsTr("newest first")
+                    }
+                }
+            }
+
+            DateFilterSection {
+                objectName: "importDateFilterSection"
+                Layout.fillWidth: true
+                title: qsTr("By Import Time")
+                accentColor: appTheme.toneSteel
+                model: appModules.stats.importDateStats
+                selectedLabel: appModules.stats.statsFilterImportDate
+                folderKey: appModules.folders.currentFolderId
+                onDayClicked: function(label) { appModules.stats.ToggleStatsFilter("import", label) }
+                headerActions: Component {
+                    InspectorFieldActions {
+                        field: "import"
+                        fieldTitle: qsTr("import time")
+                        timeField: true
+                        ascendingTitle: qsTr("oldest first")
+                        descendingTitle: qsTr("newest first")
+                    }
+                }
             }
 
             StatsCard {
@@ -130,6 +158,12 @@ ScrollView {
                 selectedLabel: appModules.stats.statsFilterCamera
                 displayMode: "chips"
                 onBarClicked: function(label) { appModules.stats.ToggleStatsFilter("camera", label) }
+                headerActions: Component {
+                    InspectorFieldActions {
+                        field: "camera"
+                        fieldTitle: qsTr("camera model")
+                    }
+                }
             }
 
             StatsCard {
@@ -140,6 +174,12 @@ ScrollView {
                 selectedLabel: appModules.stats.statsFilterLabel
                 displayMode: "chips"
                 onBarClicked: function(label) { appModules.stats.ToggleStatsFilter("label", label) }
+                headerActions: Component {
+                    InspectorFieldActions {
+                        field: "label"
+                        fieldTitle: qsTr("labels")
+                    }
+                }
             }
 
             StarRatingFilter {
@@ -148,6 +188,14 @@ ScrollView {
                 accentColor: appTheme.toneGold
                 onStarClicked: function(rating) {
                     appModules.stats.ToggleStatsFilter("rating", rating);
+                }
+                headerActions: Component {
+                    InspectorFieldActions {
+                        field: "rating"
+                        fieldTitle: qsTr("rating")
+                        ascendingTitle: qsTr("lowest first")
+                        descendingTitle: qsTr("highest first")
+                    }
                 }
             }
 
@@ -159,6 +207,12 @@ ScrollView {
                 selectedLabel: appModules.stats.statsFilterLens
                 displayMode: "dots"
                 onBarClicked: function(label) { appModules.stats.ToggleStatsFilter("lens", label) }
+                headerActions: Component {
+                    InspectorFieldActions {
+                        field: "lens"
+                        fieldTitle: qsTr("lens")
+                    }
+                }
             }
 
             Item {

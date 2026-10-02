@@ -786,15 +786,24 @@ auto LibraryModule::RequestOrderedFileIds(const QVariantList& ranges) -> qulongl
         QString      error;
         try {
           std::unordered_set<sl_element_id_t> seen;
+          std::vector<sl_element_id_t>        ordered;
           const auto filter = MergeFilterNodes(input->stats_filter_, input->search_.filter_);
           for (const auto& [begin, end] : occurrence_ranges) {
             for (const auto id :
                  input->browse_->ReadAlbumFileIds(input->folder_id_, filter, input->options_,
                                                   input->active_model_key_, begin, end)) {
               if (seen.insert(id).second) {
-                ids.push_back(static_cast<uint>(id));
+                ordered.push_back(id);
               }
             }
+          }
+          // Selection items: ids and names from typed columns, no thumbnail metadata.
+          for (const auto& row : input->browse_->ReadAlbumFileRows(ordered)) {
+            ids.push_back(QVariantMap{
+                {QStringLiteral("elementId"), static_cast<uint>(row.file_id_)},
+                {QStringLiteral("fileId"), static_cast<uint>(row.file_id_)},
+                {QStringLiteral("imageId"), static_cast<uint>(row.image_id_)},
+                {QStringLiteral("fileName"), QString::fromUtf8(row.file_name_.c_str())}});
           }
         } catch (const std::exception& e) {
           error = QString::fromUtf8(e.what());
@@ -810,6 +819,7 @@ auto LibraryModule::RequestOrderedFileIds(const QVariantList& ranges) -> qulongl
                 return;
               }
               emit OrderedFileIdsReady(static_cast<qulonglong>(generation), ids);
+              emit orderedFileIdsReady(static_cast<qulonglong>(generation), ids);
             },
             Qt::QueuedConnection);
       });
@@ -863,11 +873,14 @@ void LibraryModule::RequestFocusPosition(uint fileId, const QString& preferredGr
           }
           if (!position.has_value()) {
             emit FocusPositionReady(fileId, -1, -1);
+            emit focusPositionReady(fileId, -1, -1);
             return;
           }
           const auto occurrence = position->occurrence_index_;
           LoadThumbnailsThroughIndex(static_cast<int>(occurrence));
-          emit FocusPositionReady(fileId, occurrence, section_model_.RowForOccurrence(occurrence));
+          const int row = section_model_.RowForOccurrence(occurrence);
+          emit      FocusPositionReady(fileId, occurrence, row);
+          emit      focusPositionReady(fileId, occurrence, row);
         },
         Qt::QueuedConnection);
   });

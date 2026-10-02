@@ -332,6 +332,19 @@ selection is not color-only. Month names sit above the week columns; there is
 no weekday gutter. Calendar / activity uses `SlidingIconNav`; the year
 picker reuses `AdjustmentCombo`. The day hover tip follows the pointer.
 
+### Library sort, group, and sections
+
+| Token | px | Use |
+| --- | --- | --- |
+| `librarySectionHeaderHeight` | 40 | Fixed height of a grouped Library header row; scroll offsets use it |
+| `inspectorHeaderActionSize` | 24 | Square of the Album Inspector sort arrows, the grouped-view disclosure, and caption text actions |
+
+The 24 px header actions are a documented compact exception to the 40-44 px hit
+band: they are text glyph actions in dense Inspector headers, not structural SVG
+actions. They stay keyboard reachable with accessible names and tooltips.
+Selected arrows use the monochrome list well (`editorListSelectedFillColor` /
+`editorListSelectedInkColor`). Per-file details: `docs/VI/README.md`.
+
 ---
 
 ## Radii

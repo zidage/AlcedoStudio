@@ -188,8 +188,9 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
   /// Load the occurrence pages that the section rows [@p firstRow, @p lastRow] show, with a
   /// margin; pages far from them are released (bounded retention).
   Q_INVOKABLE void       RequestSectionRows(int firstRow, int lastRow);
-  /// Read the ordered unique file ids of the occurrence ranges (`[{begin, end}]`) on the worker.
-  /// The ids arrive with OrderedFileIdsReady. Reads no photo metadata.
+  /// Read the ordered unique files of the occurrence ranges (`[{begin, end}]`) on the worker.
+  /// They arrive with OrderedFileIdsReady as selection items `{elementId, fileId, imageId,
+  /// fileName}`. Reads ids and typed columns only, no thumbnail metadata.
   Q_INVOKABLE qulonglong RequestOrderedFileIds(const QVariantList& ranges);
   /// Same as RequestOrderedFileIds for every occurrence of the accepted result (Ctrl+A: all
   /// unique files, also those of collapsed groups).
@@ -241,7 +242,9 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
   void PresentationChanged();
   void QueryStateChanged();
   void OrderedFileIdsReady(qulonglong requestId, const QVariantList& fileIds);
+  void orderedFileIdsReady(qulonglong requestId, const QVariantList& fileIds);
   void FocusPositionReady(uint fileId, qint64 occurrence, int sectionRow);
+  void focusPositionReady(uint fileId, qint64 occurrence, int sectionRow);
 
  private:
   void SaveThumbnailDiskCacheSettings();

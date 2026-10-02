@@ -984,6 +984,50 @@
         <source>Filtered by search</source>
         <translation>Filtered by search</translation>
     </message>
+    <message>
+        <source>capture time</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>oldest first</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>newest first</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>By Import Time</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>import time</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>camera model</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>labels</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>rating</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>lowest first</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>highest first</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>lens</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>Alcedo</name>
@@ -1258,6 +1302,14 @@ Alcedo will use %1 instead.</translation>
         <location line="+1"/>
         <source>Failed to save rating reason.</source>
         <translation>Failed to save rating reason.</translation>
+    </message>
+    <message>
+        <source>Unknown sort field: %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Unknown group field: %1</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
@@ -4586,6 +4638,30 @@ Original source files on disk will be kept.</source>
         <source>Export %1 Files</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <source>Library query failed: %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Updating</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Retry</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Retry the library query</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>No Matching Photos</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Change the filters or the search to show photos.</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>LockedNodeMaskPromptDialog</name>
@@ -6191,6 +6267,118 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <location line="+0"/>
         <source>Project name</source>
         <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>InspectorFieldActions</name>
+    <message>
+        <source>Ascending</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Descending</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Sort photos by %1: %2.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Inside each day, the full time orders the photos.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Equal values inside a day keep the newest time first.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Equal values follow file ID order.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Text sorts by character code, not by language rules.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Select it again to clear the sort.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Sort by %1, %2</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Group</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Group photos by %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>AlbumSectionView</name>
+    <message>
+        <source>Grouped photos</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>(unnamed)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Unlabelled</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Unknown</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Unrated</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message numerus="yes">
+        <source>%n star(s)</source>
+        <translation>
+            <numerusform>%n star</numerusform>
+            <numerusform>%n stars</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Loading photo</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Expand all</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Expand all groups</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Collapse all</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Collapse all groups</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Expand %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Collapse %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message numerus="yes">
+        <source>%n photo(s)</source>
+        <translation>
+            <numerusform>%n photo</numerusform>
+            <numerusform>%n photos</numerusform>
+        </translation>
     </message>
 </context>
 </TS>

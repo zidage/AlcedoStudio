@@ -361,3 +361,62 @@ Classic themes, in Simplified Chinese and English:
 4. No recent project: the well with New Project… and Open Existing Project….
 5. New-project form: Back restores the previous column; Create shows the ring.
 6. Tab order and Enter / Space on rows and on Continue Editing.
+
+## Library sort, group, and sections (album sort and group plan, Phase 3)
+
+### `InspectorFieldActions.qml`
+
+- One row per Album Inspector field header: an ascending and a descending text
+  action (`↑`, `↓`) and a `ThemeCheckBox` labelled Group. The arrows mean
+  photo sort; the checkbox means group. Do not label the checkbox Order by.
+- Each action is `inspectorHeaderActionSize` square with `badgeRadius` corners.
+  The selected arrow uses `editorListSelectedFillColor` with
+  `editorListSelectedInkColor` ink; idle arrows use `textMutedColor` ink, hover
+  uses `buttonHoveredFillColor` and `textColor` ink. Keyboard focus is a 1 px
+  `textMutedColor` outline. No accent fill, outline, or side stripe.
+- The glyphs are text, not SVG assets. Every action has a full accessible name
+  and a tooltip; date tooltips explain the full-time order inside a day.
+- Bind to the accepted LibraryModule options only. At most one arrow and one
+  checkbox are active across the Inspector.
+
+### `StatsCard.qml`, `DateFilterSection.qml`, `StarRatingFilter.qml`
+
+- Optional `headerActions` slot beside the title, loaded apart from the content,
+  so a collapsed section keeps its actions. The slot is empty for other callers.
+- Titles wrap. When the title and the actions do not fit on one line, the whole
+  action row moves below the title. Do not clip the checkbox hit area.
+
+### `AlbumInspectorPanel.qml`
+
+- Field order: capture date, import time, camera model, labels, rating, lens.
+- The import-time section reuses `DateFilterSection` with its own day selection
+  and calendar/activity style; it shares the renderer, not the selected value.
+
+### `AlbumSectionView.qml`
+
+- One vertical `ListView`: full-width group header rows of
+  `librarySectionHeaderHeight` and photo rows whose height follows the zoom
+  column metrics of `ThumbnailGridView.qml`.
+- Headers have separate disclosure (`▸`/`▾` text action), title, and count
+  roles. The title is one elided line with the full text as accessible name;
+  the count is muted `dataFontFamily` caption text. No pill, badge, or dot.
+- Photo cells use `cardSurfaceColor`, `hoverColor` on hover, and a neutral
+  selection outline (2 px `textColor`); keyboard focus without selection is a
+  1 px `textMutedColor` outline. No blue frame or tint.
+- Expand all and Collapse all are muted caption text actions above the list.
+
+### `LibraryWorkspace.qml`
+
+- The grouped mode loads `AlbumSectionView`; the flat mode keeps
+  `ThumbnailGridView`.
+- A running query shows a muted Updating caption above the kept content. A
+  failed query shows the error in `dangerColor` with a compact Retry
+  `DialogActionButton`. A successful empty filtered result shows No Matching
+  Photos.
+
+### Manual review
+
+Review in Alcedo and Classic themes, at a narrow Inspector width, with the
+Inspector closed, with collapsed groups, with a failed query, and with an empty
+filtered result.
+

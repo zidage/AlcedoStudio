@@ -17,6 +17,11 @@ ColumnLayout {
     property color accentColor: appTheme.toneSteel
     property bool expanded: true
     property string styleKey: "calendar"
+    /// Optional actions beside the title (see StatsCard.headerActions).
+    property Component headerActions: null
+    readonly property bool stackHeaderActions: headerActions !== null
+        && width < titleMetrics.advanceWidth + appTheme.inspectorHeaderActionSize * 6
+                   + appTheme.spaceLg * 2
     signal dayClicked(string label)
 
     readonly property var styleItems: [
@@ -34,6 +39,14 @@ ColumnLayout {
         }
     ]
 
+    TextMetrics {
+        id: titleMetrics
+        text: section.title.toUpperCase()
+        font.pixelSize: 10
+        font.weight: 700
+        font.letterSpacing: 1.6
+    }
+
     RowLayout {
         Layout.fillWidth: true
         spacing: appTheme.spaceXs
@@ -44,10 +57,17 @@ ColumnLayout {
             font.pixelSize: 10
             font.weight: 700
             font.letterSpacing: 1.6
+            wrapMode: Text.Wrap
+            Layout.fillWidth: true
             Layout.alignment: Qt.AlignVCenter
         }
 
-        Item { Layout.fillWidth: true }
+        Loader {
+            active: section.headerActions !== null && !section.stackHeaderActions
+            visible: active
+            sourceComponent: section.headerActions
+            Layout.alignment: Qt.AlignVCenter
+        }
 
         Label {
             text: section.expanded ? "▲" : "▼"
@@ -60,6 +80,13 @@ ColumnLayout {
                 onClicked: section.expanded = !section.expanded
             }
         }
+    }
+
+    Loader {
+        Layout.fillWidth: true
+        active: section.headerActions !== null && section.stackHeaderActions
+        visible: active
+        sourceComponent: section.headerActions
     }
 
     SlidingIconNav {

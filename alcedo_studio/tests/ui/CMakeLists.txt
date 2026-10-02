@@ -461,6 +461,34 @@ target_compile_definitions(GlobalSearchDialogQmlTest
 alcedo_ui_gtest_discover_tests(GlobalSearchDialogQmlTest TEST_PREFIX "GlobalSearchDialogQmlTest.")
 alcedo_register_test_target(GlobalSearchDialogQmlTest ui)
 
+# Library sort, group, and section view QML (album_sort_group_and_import_time_plan.md, Phase 3).
+add_executable(AlbumSectionQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/album_section_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(AlbumSectionQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(AlbumSectionQmlTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(AlbumSectionQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+alcedo_ui_gtest_discover_tests(AlbumSectionQmlTest TEST_PREFIX "AlbumSectionQmlTest.")
+alcedo_register_test_target(AlbumSectionQmlTest ui)
+
 add_executable(MainQmlWorkflowTest
     ${ALCEDO_TEST_ROOT}/ui/main_qml_workflow_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
