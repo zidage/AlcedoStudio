@@ -21,6 +21,7 @@
 #include "edit/graph/pipeline_graph_snapshot.hpp"
 #include "edit/input/prepared_source_cache.hpp"
 #include "edit/input/raw_input_loader.hpp"
+#include "edit/pipeline/rendered_pipeline_image.hpp"
 #include "edit/runtime/executor_role.hpp"
 #include "edit/runtime/gpu_node_pass_stats.hpp"
 #include "edit/runtime/lut_resource_resolver.hpp"
@@ -116,6 +117,24 @@ class Renderer {
   [[nodiscard]] auto Render(const PipelineGraphSnapshot&        snapshot,
                             const std::shared_ptr<ImageBuffer>& input,
                             const PipelineApplyRequest& request) -> std::shared_ptr<ImageBuffer>;
+
+  /**
+   * @brief Render one frame of @p snapshot like @ref Render, and also return the exact geometry
+   *        and display encoding of the executed plan.
+   *
+   * @ref Render returns the `pixels` member of this result. `pixels` holds the host download
+   * when `request.require_host_output` is true, and an empty buffer otherwise. An interactive
+   * request with frame role QualityBase keeps only the sensor result and releases every
+   * downstream result of this render after presentation and download.
+   *
+   * @pre No other render runs on this renderer.
+   * @throws std::invalid_argument when `request.role` differs from @ref Role.
+   * @throws std::runtime_error for invalid input, GPU execution, presentation, or download
+   *         failure. Nothing is returned for a failed render.
+   */
+  [[nodiscard]] auto RenderImage(const PipelineGraphSnapshot&        snapshot,
+                                 const std::shared_ptr<ImageBuffer>& input,
+                                 const PipelineApplyRequest& request) -> RenderedPipelineImage;
 
   /**
    * @brief Render one frame from explicit arguments; the request role is this renderer's role.

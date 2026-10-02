@@ -329,8 +329,15 @@ alcedo_register_test_target(EditorSessionTaskPortTest ui)
 add_executable(EditorSessionRenderSchedulerPortTest
     ${ALCEDO_TEST_ROOT}/ui/editor_session_render_scheduler_port_test.cpp)
 target_include_directories(EditorSessionRenderSchedulerPortTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+# The GPU fixture reads the sample DNG profile through LibRaw itself. The project LibRaw headers
+# must come before the vcpkg include directory, which also has a libraw/libraw.h.
+if(TARGET puerhlab_libraw)
+  target_include_directories(EditorSessionRenderSchedulerPortTest BEFORE PRIVATE
+    $<TARGET_PROPERTY:puerhlab_libraw,INTERFACE_INCLUDE_DIRECTORIES>)
+endif()
 target_link_libraries(EditorSessionRenderSchedulerPortTest
   AlbumBackendLib
+  libraw::raw_r
   GTest::gtest_main)
 alcedo_ui_gtest_discover_tests(EditorSessionRenderSchedulerPortTest
   TEST_PREFIX "EditorSessionRenderSchedulerPortTest."

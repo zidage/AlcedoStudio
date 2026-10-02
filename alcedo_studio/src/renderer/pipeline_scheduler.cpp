@@ -24,7 +24,6 @@ namespace alcedo {
 namespace {
 constexpr float kFullFrameRegionEpsilon        = 1e-4f;
 constexpr int   kFastPreviewMaxLongEdge        = 2560;
-constexpr int   kQualityBasePreviewMaxLongEdge = 4096;
 constexpr int   kFullResPreviewMaxLongEdge     = 8192;
 
 auto BuildSourceRoiRect(const std::optional<ViewportRenderRegion>& viewport_region, int region_x,
@@ -162,12 +161,11 @@ auto PipelineTask::MakeApplyRequest() const -> PipelineApplyRequest {
     return request;
   }
   if (requested_render_type == RenderType::QUALITY_BASE_PREVIEW) {
-    frame_metadata.frame_role      = FrameRole::QualityBase;
-    frame_metadata.source_roi_norm = {};
-    presentation_mode              = FramePresentationMode::ViewportTransformed;
-    finish(DecodeRes::FULL, false, ExecutorRole::Interactive,
-           kQualityBasePreviewMaxLongEdge, false, std::nullopt);
-    return request;
+    auto quality             = MakeQualityBaseApplyRequest(frame_metadata, desc.document_geometry_);
+    quality.sink             = pipeline_executor_->GetFrameSink();
+    quality.cancel_requested = request.cancel_requested;
+    quality.prepared_input   = request.prepared_input;
+    return quality;
   }
   if (requested_render_type == RenderType::DETAIL_ROI_PREVIEW) {
     frame_metadata.frame_role = (region_scale_x < (1.0f - 1e-4f) || region_scale_y < (1.0f - 1e-4f))

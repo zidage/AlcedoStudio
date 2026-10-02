@@ -87,6 +87,13 @@ auto Renderer<Backend>::Render(const PipelineGraphSnapshot&        snapshot,
                                const std::shared_ptr<ImageBuffer>& input,
                                const PipelineApplyRequest&         request)
     -> std::shared_ptr<ImageBuffer> {
+  return RenderImage(snapshot, input, request).pixels;
+}
+
+template <class Backend>
+auto Renderer<Backend>::RenderImage(const PipelineGraphSnapshot&        snapshot,
+                                    const std::shared_ptr<ImageBuffer>& input,
+                                    const PipelineApplyRequest& request) -> RenderedPipelineImage {
   if (request.role != role_) {
     throw std::invalid_argument("Renderer: request role does not match the renderer role");
   }
@@ -266,7 +273,7 @@ auto Renderer<Backend>::Render(const PipelineGraphSnapshot&        snapshot,
     if (request.require_host_output) {
       auto host = FramePresenter<Backend>::Download(*render_device, output_id);
       finish_successful_session();
-      return host;
+      return {.pixels = std::move(host), .geometry = plan.geometry, .display = display_config};
     }
     finish_successful_session();
   } catch (const std::exception& ex) {
@@ -289,7 +296,9 @@ auto Renderer<Backend>::Render(const PipelineGraphSnapshot&        snapshot,
     render_device->ReportError(ex.what());
     throw;
   }
-  return std::make_shared<ImageBuffer>();
+  return {.pixels   = std::make_shared<ImageBuffer>(),
+          .geometry = plan.geometry,
+          .display  = display_config};
 }
 
 }  // namespace alcedo

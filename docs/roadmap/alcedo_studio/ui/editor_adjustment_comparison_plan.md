@@ -1,9 +1,9 @@
 # Editor Adjustment and Version Comparison Plan
 
 Date: 2026-10-01
-Status: Phase 1 complete (2026-10-01, branch `feature/editor-comparison-inputs`); Phases 2-4 planned.
+Status: Phase 1 complete (2026-10-01, branch `feature/editor-comparison-inputs`); Phase 2 complete on CUDA (2026-10-01, branch `feature/editor-comparison-pair-render`); Phases 3-5 planned. Phase 5 proves the Phase 2 image job on OpenCL and Metal.
 Source revision: `deeb8901881b5aae41680299f75b735ed4d01c3c` on `main`.
-Parent plan: none. This is a four-phase feature plan.
+Parent plan: none. This is a five-phase feature plan.
 
 ## 1. Confirmed product decisions
 
@@ -256,17 +256,19 @@ All source paths below are relative to `alcedo_studio/src/`. Proposed files do n
 | 2 | `edit/pipeline/pipeline_executor.*`; `include/edit/runtime/renderer.hpp`; `detail/renderer.inl.hpp`; `renderer/pipeline_scheduler.*`; `include/renderer/pipeline_task.hpp`; `editor_session_render_scheduler_port.*`; module CMake files | `include/edit/pipeline/rendered_pipeline_image.hpp`; `include/app/editor_image_render_port.hpp` |
 | 3 | `ui/alcedo_main/album_backend/path_utils.*`; `ui/alcedo_main/CMakeLists.txt`; `DESIGN.md`; `docs/VI/README.md` | `ui/alcedo_main/album_backend/comparison_image_provider.*` and matching include headers; `qml/EditorComparisonCanvas.qml`; `qml/EditorComparisonView.qml`; `qml/EditorComparisonPanel.qml` |
 | 4 | `app/editor_session_service.*`; `editor_session_command_queue.*`; `editor_action_policy.*`; `ui/alcedo_main/album_backend/editor_session_controller.*`; `application_module_host.cpp`; `qml/EditorWorkspace.qml`; `EditorAdjustmentStack.qml`; `EditorVersionsPanel.qml`; shortcut and translation registrations | `include/app/editor_comparison_service.hpp`; `app/editor_comparison_service.cpp`; `ui/alcedo_main/album_backend/editor_comparison_controller.*` and matching include header |
+| 5 | `tests/ui/editor_session_render_scheduler_port_test.cpp`; `tests/ui/CMakeLists.txt`; `tests/edit/pipeline/pipeline_document_render_test.cpp`; `tests/edit/runtime/opencl_drt_product_test.cpp`; `tests/edit/runtime/metal_renderer_test.cpp`; `tests/edit/CMakeLists.txt`; backend renderer, workspace, or presenter files only when a test finds a defect | `tests/ui/support/editor_render_port_gpu_fixture.hpp`; `tests/ui/editor_session_render_scheduler_port_image_job_test.cpp` |
 
 Register all new QML in `ALCEDO_MAIN_QML_FILES`. Add the `compare` key to `NormalizeAdjustmentPanel`. Keep application-layer interfaces independent of QML and native GPU types. Add dependencies to the owning target directly.
 
-## 7. Four-phase summary
+## 7. Phase summary
 
 | Phase | Result | Main modules | Prerequisite | Expected changed lines | Status |
 | --- | --- | --- | --- | ---: | --- |
 | 1 | Read-only comparison documents with current sensor settings and selected white balance | History port, document/Model owners | Current source audit | 700-1300 | Complete (2026-10-01) |
-| 2 | Consecutive one-shot image jobs on the current editor worker and executor | Executor, renderer, scheduler port | Phase 1 | 900-1700 | Planned |
+| 2 | Consecutive one-shot image jobs on the current editor worker and executor | Executor, renderer, scheduler port | Phase 1 | 900-1700 | Complete (2026-10-01) |
 | 3 | Memory-image presentation with source alignment and all four layouts | Provider, QML canvas/view/panel | Phase 2 result schema | 850-1600 | Planned |
 | 4 | Product entry, Version selection, restrictions, close, and restore | Comparison service/controller, session, workspace | Phases 1-3 | 1000-1900 | Planned |
+| 5 | Phase 2 image job proven on OpenCL and Metal | Port test fixture, backend renderer tests, backend corrections | Phase 2 | 500-1100 | Planned |
 
 Each range includes production code, tests, registration, resources, and phase completion documentation. No phase needs splitting at this estimate. Split before implementation if its expected diff can exceed 2000 lines. Split because of actual scope growth, not to omit an approved behavior.
 
@@ -456,14 +458,130 @@ Extend `PipelineDocumentRenderTest` and `EditorSessionRenderSchedulerPortTest`. 
 
 **Exit criteria.**
 
-- [ ] One existing executor/worker runs A/B consecutively and never presents them to the sink.
-- [ ] Warm real-RAW evidence shows no new unpack or sensor-develop execution.
-- [ ] Pixel comparisons cover different white balance and topology.
-- [ ] Cancel, failure, and shutdown preserve ownership and permit normal rendering.
+- [x] One existing executor/worker runs A/B consecutively and never presents them to the sink.
+- [x] Warm real-RAW evidence shows no new unpack or sensor-develop execution.
+- [x] Pixel comparisons cover different white balance and topology.
+- [x] Cancel, failure, and shutdown preserve ownership and permit normal rendering.
 
 **Expected diff.** 900-1700 lines.
 
-**Completion record.** Not started. Fill section 11 after implementation.
+**Completion record.** See the Phase 2 record below.
+
+##### Phase 2 completion record (2026-10-01)
+
+**Status:** complete. The editor render port renders one image, or A then B, as host pixels on its existing Interactive executor and single worker. It uses the shared full-image Quality Base request with no sink. A job publishes all of its images or none. Close and shutdown cancel it, and a normal frame renders correctly after the job.
+
+**Source revision and branch:** based on `bf74bf8ac` (Phase 1); branch `feature/editor-comparison-pair-render`. Not committed when this record was written.
+
+**Implemented behavior and APIs:**
+
+| Owner | Change |
+| --- | --- |
+| `RenderedPipelineImage` (`include/edit/pipeline/rendered_pipeline_image.hpp`) | Host pixels, the exact `ResolvedRenderGeometry` of the executed plan, and its `ViewerDisplayConfig`. No document, history, or executor state. |
+| `Renderer<Backend>::RenderImage` | The former `Render` body. It returns the pixels with `plan.geometry` and the display configuration. `Render` returns its `pixels` member, so existing callers are unchanged. |
+| `PipelineExecutor::ApplyImage` | Requires `require_host_output`. `Apply` and `ApplyImage` share one private `Render` that selects the backend and role renderer. The request's own sink is used; a null sink presents nothing, although the viewport sink stays attached. |
+| `MakeQualityBaseApplyRequest` and `kQualityBaseMaxLongEdge` (`pipeline_apply_request.hpp`) | The one source of the full-image Quality Base values: FULL decode, Interactive role, 4096 long edge, Preview resampling, frame role QualityBase (`SensorDevelopOnly`). `PipelineTask::MakeApplyRequest` (QUALITY_BASE_PREVIEW) now uses it. The scheduler's private 4096 constant is removed. |
+| `IEditorImageRenderPort`, `EditorImageRenderRequest`, `EditorImageRenderResult` (`include/app/editor_image_render_port.hpp`) | Application seam: the held image identity, one or two immutable snapshots, and the geometry (default: full-image Quality Base). Status Completed, Failed, or Cancelled. Images are published all together or not at all. No executor or GPU types. |
+| `EditorSessionRenderSchedulerPort::ScheduleImages` / `CancelImages` | Accepts one image job at a time. It requires the bound context of the requested image, a held lease, and the binding (lineage and element) of the current preview on every snapshot. It reuses the bound encoded input. The job is one `ScheduleWork` item that holds the executor render lock for all of its documents. It checks cancellation before each document and calls `ApplyImage` with a null sink, host output, and `scope_update_allowed = false`. A failure discards earlier images. The completion runs before the job is cleared, so `Shutdown` waits for it. |
+| `EditorSessionRenderSchedulerPort::Shutdown` | Also cancels the accepted image job and waits until its completion has returned. |
+| `EnsureContext` / `ContextMatches` | The context lookup of `EnsureContextForRequest`, factored to take identity values so that the image job and frames share it. |
+
+**Deviation from the plan:** the plan asked for a "composite pair" operation. `ScheduleImages` accepts one or two documents (`kMaxEditorImagesPerJob = 2`), so the same narrow operation serves a later single-image request. It is not a general render queue: one job is accepted at a time.
+
+**Primary success call chain:**
+
+```text
+IEditorImageRenderPort::ScheduleImages(request{element, image, epoch, [A, B]}, on_complete)
+  -> EditorSessionRenderSchedulerPort (caller thread)
+       -> bound context == request identity; CurrentPreview(element) held
+       -> RenderBindingKey::Of(A) == Of(B) == Of(current preview)
+       -> EnsureContext (bound encoded input, no reload) -> EnsureExecutor (the port's executor)
+       -> image_job_ = {id}; PipelineScheduler(1)::ScheduleWork(one item)
+  -> editor worker: RunImageJob
+       -> lock the executor render lock for the whole job
+       -> MakeQualityBaseApplyRequest + host output, sink = nullptr, no scope update
+       -> PipelineExecutor::ApplyImage(A) -> Renderer::RenderImage
+            -> prepared source hit, sensor_linear lookup hit (SensorDevelopOnly)
+            -> Download(A) -> DiscardUnpublished -> {pixels, plan.geometry, display}
+       -> cancellation check -> ApplyImage(B) -> Download(B)
+       -> unlock the render lock
+  -> FinishImageJob: on_complete(Completed, [A, B]) -> clear image_job_
+```
+
+**Primary failure and restore call chain:**
+
+```text
+B render error (example: corrupted CUBE in the root's LUT)
+  -> PlanExecutor failure cleanup -> Renderer catch path -> exception to RunImageJob
+  -> status Failed, real error text, A's host pixels released -> on_complete(Failed, [])
+  -> editor results, binding, and viewport sink unchanged -> next frame renders as before
+
+CancelImages(id) while queued or during A | Shutdown during A
+  -> image_job_.cancelled -> a document that has not started is skipped (B never runs)
+  -> the finished A is dropped in FinishImageJob -> on_complete(Cancelled, [])
+  -> Shutdown returns only after that completion returned
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `WarmComparisonPairReusesEditorSensorResult` (0 LibRaw unpacks, 0 prepared-source misses, 0 sensor develops, 2 sensor skips, no new published result; the next frame equals the frame before, with no sensor work) | `EditorSessionRenderSchedulerPortTest` (GPU, CUDA) | PASS |
+| `WhiteBalanceDifferenceChangesPairPixelsWithoutSensorExecution` (mean channel difference > 0.01; each side within `2e-5` of a fresh executor) | same | PASS |
+| `ComparisonHostRequestsKeepEditorExecutorAndQueueIdentity` (same executor, renderer, device, queue, and binding; no batch renderer; 0 sink presentations; viewport sink still attached; pixel size equals `render_extent`; long edge at most 4096; display equals the document DRT) | same | PASS |
+| `ComparisonPairDoesNotInterleaveAAndBWithNormalFrames` (observed order frame-1, pair, frame-2; one presentation before the pair completed) | same | PASS |
+| `DifferentVersionTopologyRendersCorrectPixelsWithSharedSensor` (extra Grade, crop, rotation, white balance, highlights; each side within `2e-5` of a fresh executor; 0 sensor develops; same full reference extent) | same | PASS |
+| `AResultRemainsValidAfterBAndTransientRelease` (published count, value ids, and prepared-source entries unchanged; 0 unpublished results; A within `2e-5` of a fresh render after B) | same | PASS |
+| `ComparisonCloseDuringARenderSkipsBAndCannotPublish` (cancel while A's LUT lookup holds the worker; Cancelled with no image; one prepared-source acquire; the next job completes) | same | PASS |
+| `ComparisonFailureAllowsNormalCurrentDocumentRender` (corrupted CUBE on the root side; Failed with the error and no image; 0 unpublished results; the next frame equals the frame before, with no sensor work and the same binding) | same | PASS |
+| `ShutdownDuringAImageCancelsAndWaitsForTheJob` (added; Shutdown blocks while A renders and returns after the Cancelled completion; B never starts; later jobs are rejected) | same | PASS |
+| `QualityBaseFrameAndImageJobShareOneRequestBuilder` (added) | same (no GPU) | PASS |
+| `ImageJobRejectsDocumentsThatWouldRebindOrOverlap` (added; unbound image, wrong epoch, 0 or 3 documents, foreign lineage, second job, after shutdown; rejected jobs never complete) | same (no GPU) | PASS |
+| `QueuedImageJobCancelledBeforeItStartsRendersNothing` (added; no renderer was created) | same (no GPU) | PASS |
+| `ImageJobFailureReportsTheRenderErrorWithoutImages` (added) | same (no GPU) | PASS |
+| `ApplyImageReturnsExecutedGeometryWithoutPresentingToTheSink` (added; geometry equals the presented frame's geometry; pixels within `2e-5` of the presented pixels and of `Apply`; no host output throws) | `PipelineDocumentRenderTest` (GPU, CUDA) | PASS |
+
+The close-during-A and shutdown-during-A tests use a real production callback on the worker: the executor's `LutResourceResolver`. The test resolver is given to `PipelineMgmtService`. It holds the worker inside A's LUT lookup until the test thread has acted. The production code has no test branch.
+
+Commands (PowerShell, repository root):
+
+```powershell
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target EditorSessionRenderSchedulerPortTest PipelineDocumentRenderTest PipelineFrameSinkTest GraphImageCacheRetentionTest GpuDagCudaDrtProductTest --parallel 4
+$env:PATH = "D:/Projects/pu-erh_lab/vcpkg/installed/x64-windows/debug/bin;$env:PATH"
+ctest --test-dir build/debug -R '^(EditorSessionRenderSchedulerPortTest|PipelineDocumentRenderTest)\.' --output-on-failure -j 1
+ctest --test-dir build/debug -R '^(PipelineDocumentRenderTest|PipelineFrameSinkTest|GraphImageCacheRetentionTest|GpuDagCudaDrtProductTest)\.' --output-on-failure -j 1
+```
+
+The build exited with code 0. The first CTest command exited with code 8 because of the 5 failures below. The second exited with code 0.
+
+| Suite | Discovered | Passed | Failed | Skipped |
+| --- | ---: | ---: | ---: | ---: |
+| `EditorSessionRenderSchedulerPortTest` | 34 | 29 | 5 | 0 |
+| `PipelineDocumentRenderTest` (CUDA) | 13 | 13 | 0 | 0 |
+| `PipelineFrameSinkTest` | 23 | 23 | 0 | 0 |
+| `GraphImageCacheRetentionTest` | 17 | 17 | 0 | 0 |
+| `GpuDagCudaDrtProductTest` (renderer and Quality Base cache tests) | 85 | 85 | 0 | 0 |
+
+The 5 port failures predate this phase: `ProductionPipelinePathSchedulesInstalledContextWithoutAdapterBind`, `ViewDrivenReasonsDisableScopeFrameReplacement`, `ScopeRefreshMarksFrameAsRequestedScopeInput`, `SessionDoesNotStampPreviewGenerationFromIntent`, and `InstalledContextAllowsScheduleWithoutImagePoolService`. Each expects a sink presentation from a fixture context that has no encoded bytes. They also fail on clean `bf74bf8ac` with only the link fix below (Phase 2 changes stashed, target rebuilt, CTest run).
+
+**Test build fix:** `EditorSessionRenderSchedulerPortTest` had not linked in this build tree. Its GPU fixture calls `LibRaw::unpack`. The test found the vcpkg `libraw/libraw.h` before the bundled LibRaw headers, so it imported a symbol that the bundled static library does not export. `tests/ui/CMakeLists.txt` now links `libraw::raw_r` directly and puts the bundled LibRaw include directory first (only when the `puerhlab_libraw` target exists).
+
+**Manual verification:** none needed; Phase 2 has no UI.
+
+**Cache counters, resources, and timing:** sample `raw/linear_dng/mfzoty.dng` (a linear DNG read through LibRaw), CUDA, Debug build. After one warm viewport frame, a pair adds 0 LibRaw unpacks, 0 prepared-source misses, 2 prepared-source hits, 0 sensor-develop executions, and 2 sensor-develop skips. It adds no published result, no session value id, and no unpublished result. Wall times were not measured separately. Each GPU test case takes 9-18 s in this Debug build, including device creation and the fresh reference renders. Large-RAW pair timing is a Phase 4 exit criterion.
+
+**Checklist / exit condition:** all four boxes are checked. The warm-cache evidence uses a linear DNG, the real RAW sample of the existing GPU fixtures. It is not a Bayer CFA file.
+
+**LOC note:** 1,379 lines added and 54 removed in 13 files, including two new headers of 146 lines. The test file `editor_session_render_scheduler_port_test.cpp` grew from 819 to 1,609 lines, so it is now over 1,000 lines. Before Phase 4 adds tests to it, move the image job tests and their fixture helpers into a separate test file with a shared fixture header. The largest production file is `editor_session_render_scheduler_port.cpp` at 811 lines.
+
+**Remaining gaps:**
+
+- The full test suite was not run. Per `AGENTS.md`, only the user starts a full run.
+- `alcedo_main` was not built. `AlbumBackendLib`, which compiles the port, was built through the port test.
+- Nothing in production calls `ScheduleImages` yet. The Phase 4 comparison service will call it.
+- OpenCL: `win_debug` compiles it (`HAVE_OPENCL`), so `Renderer<OpenClBackend>::RenderImage` and the OpenCL branch of `PipelineExecutor::Render` were compiled and linked. No Phase 2 test ran on OpenCL; every GPU test selects CUDA.
+- Metal: not compiled. `ALCEDO_ENABLE_METAL` is OFF on Windows; only the macOS presets compile it.
+- Phase 5 runs the Phase 2 tests on OpenCL and Metal.
 
 ### Phase 3: Display SDR pairs in aligned Qt image canvases
 
@@ -568,6 +686,87 @@ Add proposed `EditorComparisonServiceTest` and `EditorComparisonControllerTest`.
 
 **Completion record.** Not started. Fill section 11 after implementation.
 
+### Phase 5: Prove the image job on the OpenCL and Metal backends
+
+**Objective and deliverables.** Make the Phase 2 image job a proven behavior of every product backend, not only CUDA. Run the Phase 2 acceptance tests on OpenCL (Windows) and Metal (macOS). Correct each backend defect that they find.
+
+**Inputs and prerequisites.** Phase 2 is complete. The image operation (`Renderer<Backend>::RenderImage`, `PipelineExecutor::ApplyImage`) is one backend-independent template, and `PipelineExecutor` dispatches all three backends to it. Phase 2 evidence has these limits:
+
+| Backend | Compiled in the Phase 2 build | Phase 2 tests executed |
+| --- | --- | --- |
+| CUDA | Yes (`win_debug`) | Yes: all GPU tests in `EditorSessionRenderSchedulerPortTest` and `PipelineDocumentRenderTest` |
+| OpenCL | Yes (`win_debug` defines `HAVE_OPENCL`; `Renderer<OpenClBackend>::RenderImage` is compiled into the executor) | No. Every Phase 2 GPU test selects CUDA. |
+| Metal | No (`ALCEDO_ENABLE_METAL` is OFF on Windows; only `macos_debug` and `macos_release` compile it) | No |
+
+Phase 5 does not depend on Phases 3 and 4. It can run before or after them. It must complete before the feature is reported as available on Metal or OpenCL.
+
+**Modules and APIs.** No new production API. Test changes, and the backend corrections that the tests require. Use the Phase 5 file map.
+
+**Data invariants.** Each Phase 2 invariant holds on each backend:
+
+- The port's one Interactive executor, device, queue, and binding render A and B consecutively on the single worker.
+- A null request sink presents nothing; the attached viewport sink stays attached.
+- A warm pair causes 0 LibRaw unpacks, 0 prepared-source misses, and 0 sensor-develop executions. It adds no published or unpublished result.
+- `RenderedPipelineImage::geometry` equals the geometry of the presented frame for the same request. The pixel extent equals `render_extent`.
+- A failure or cancellation publishes no image and leaves the editor results usable.
+
+No backend gets another decode, resolution, operator, or backend in place of the requested path. A backend that cannot satisfy an invariant fails with its real error, and the defect is corrected in that backend.
+
+**Steps.**
+
+1. Split the port test file first. `editor_session_render_scheduler_port_test.cpp` has 1,609 lines (Phase 2 LOC note). Move the GPU fixture, `BlockingLutResolver`, and the image-job helpers into `tests/ui/support/editor_render_port_gpu_fixture.hpp`. Move the image-job tests into `tests/ui/editor_session_render_scheduler_port_image_job_test.cpp`. Register the new source in the same `EditorSessionRenderSchedulerPortTest` target. Keep test names unchanged.
+2. Make the GPU fixture backend-parameterized. Use a gtest value parameter of `AcceleratorBackendPreference` with the compiled backends (`HAVE_CUDA`, `HAVE_OPENCL`, `HAVE_METAL`). Skip a backend only when its device is unavailable, and report that skip by name. Give `PipelineMgmtService` the parameter backend. Replace the CUDA-only reads (`DebugCudaRenderer`, `InteractiveCudaBinding`) with a test helper that reads `Stats`, `Resources`, `Binding`, `DebugDeviceIdentity`, `DebugQueueIdentity`, and the unpublished-result count from the executor's interactive renderer of the selected backend. Use only the const `Device()` accessor; the test target does not link the backend runtime libraries.
+3. Build `FreshImage` from a new `PipelineExecutor` with the parameter backend. Each backend's pixels must match a fresh render on the same backend. Declare the float tolerance per backend at the fixture. Start from `2e-5`. A larger tolerance needs a stated reason from the existing backend tests (for example, the tolerance that `GpuDagOpenClDrtProductTest` already uses for the same output).
+4. Run the nine Phase 2 GPU port tests on each backend, without changes to their assertions.
+5. Add the executor-level check to each backend's existing renderer target. In `GpuDagOpenClDrtProductTest` (`opencl_drt_product_test.cpp`) and `GpuDagMetalRendererTest` (`metal_renderer_test.cpp`), add `RenderImageReturnsExecutedGeometryWithoutPresentingToTheSink`. Use their existing Quality Base fixtures. Assert the same items as the CUDA `ApplyImageReturnsExecutedGeometryWithoutPresentingToTheSink`.
+6. Make `PipelineDocumentRenderTest` cover OpenCL as well. Today it is registered only under `ALCEDO_CUDA_ENABLED` and selects CUDA. Either parameterize it by backend and register it when any GPU backend is enabled, or add the same `ApplyImage` case to the OpenCL and Metal targets in step 5. Record the choice in the completion record.
+7. Build Metal on macOS with `macos_debug` and `-DALCEDO_BUILD_TESTS=ON`. Run the same filtered suites there. `AlbumBackendLib` and the port test must build on macOS; correct any platform build defect in the changed files.
+8. For each failed invariant, find the backend cause, correct it in that backend's renderer, workspace, or presenter, and add or keep a test that shows the failure before the correction.
+
+**Success chain.** Backend parameter -> port executor with that backend -> warm frame -> `ScheduleImages(A, B)` -> `ApplyImage(A)` and `ApplyImage(B)` on that backend's interactive renderer -> both images -> each matches a fresh render on that backend; sensor result reused.
+
+**Failure chain.** A backend invariant fails -> the test reports the backend name and the real error or counter -> the backend defect is corrected, or the phase stays partial with that backend listed as not supported for comparison. No backend runs another backend's path in its place.
+
+**Tests and observable assertions.**
+
+- The nine Phase 2 GPU port tests, unchanged in name and assertion, for each compiled and available backend: `WarmComparisonPairReusesEditorSensorResult`, `WhiteBalanceDifferenceChangesPairPixelsWithoutSensorExecution`, `ComparisonHostRequestsKeepEditorExecutorAndQueueIdentity`, `ComparisonPairDoesNotInterleaveAAndBWithNormalFrames`, `DifferentVersionTopologyRendersCorrectPixelsWithSharedSensor`, `AResultRemainsValidAfterBAndTransientRelease`, `ComparisonCloseDuringARenderSkipsBAndCannotPublish`, `ComparisonFailureAllowsNormalCurrentDocumentRender`, and `ShutdownDuringAImageCancelsAndWaitsForTheJob`.
+- `RenderImageReturnsExecutedGeometryWithoutPresentingToTheSink` in `GpuDagOpenClDrtProductTest` and `GpuDagMetalRendererTest`.
+- The existing Quality Base cache tests of each backend target stay green: `QualityBaseBypassesEveryResultCacheAfterSensorDevelop` and `QualityBasePixelsMatchFreshExecutionWithinDeclaredTolerance`.
+
+**Build/run.**
+
+Windows (`win_debug`, CUDA and OpenCL):
+
+```powershell
+Set-Location D:\Projects\pu-erh_lab
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target EditorSessionRenderSchedulerPortTest PipelineDocumentRenderTest GpuDagOpenClDrtProductTest GpuDagCudaDrtProductTest --parallel 4
+$env:PATH = "D:/Projects/pu-erh_lab/vcpkg/installed/x64-windows/debug/bin;$env:PATH"
+ctest --test-dir build/debug -R '^(EditorSessionRenderSchedulerPortTest|PipelineDocumentRenderTest|GpuDagOpenClDrtProductTest|GpuDagCudaDrtProductTest)\.' --output-on-failure -j 1
+```
+
+macOS (`macos_debug`, Metal):
+
+```bash
+cmake --preset macos_debug -DALCEDO_BUILD_TESTS=ON
+cmake --build --preset macos_debug --target EditorSessionRenderSchedulerPortTest GpuDagMetalRendererTest
+ctest --test-dir build/macos-debug -R '^(EditorSessionRenderSchedulerPortTest|GpuDagMetalRendererTest)\.' --output-on-failure -j 1
+```
+
+Report the counts per backend. A backend skipped because no device was found counts as not verified.
+
+**Exit criteria.**
+
+- [ ] The nine Phase 2 GPU port tests pass on OpenCL.
+- [ ] The nine Phase 2 GPU port tests pass on Metal.
+- [ ] `RenderImageReturnsExecutedGeometryWithoutPresentingToTheSink` passes on OpenCL and Metal.
+- [ ] Each backend's warm pair shows 0 LibRaw unpacks and 0 sensor-develop executions.
+- [ ] The port test file is split, and no touched test file is over 1,000 lines.
+- [ ] Each backend defect found is corrected with a test; no backend substitution was added.
+
+**Expected diff.** 500-1100 lines, mostly the test split and backend parameterization. Backend corrections add to this. If they would take the phase over 2000 lines, split them into a separate phase before implementation.
+
+**Completion record.** Not started. Fill section 11 after implementation.
+
 ## 9. Acceptance and resource evidence
 
 | Behavior | Required evidence |
@@ -624,7 +823,7 @@ Full test suite: not run unless the user explicitly requests it. Offscreen works
 
 ## 11. Completion records and stop conditions
 
-Phase 1's record is under Phase 1 in section 8.
+The Phase 1 and Phase 2 records are under their phases in section 8.
 
 Fill one record for each phase after implementation:
 

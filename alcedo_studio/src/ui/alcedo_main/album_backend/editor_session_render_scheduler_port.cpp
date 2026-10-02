@@ -13,15 +13,18 @@
 #include <string>
 #include <utility>
 
+#include "app/editor_image_render_port.hpp"
 #include "app/pipeline_service.hpp"
 #include "edit/frame_presentation_types.hpp"
 #include "edit/pipeline/pipeline_executor.hpp"
 #include "edit/runtime/executor_role.hpp"
+#include "edit/runtime/pipeline_apply_request.hpp"
 #include "image/image.hpp"
 #include "image/image_buffer.hpp"
 #include "io/image/image_loader.hpp"
 #include "renderer/pipeline_task.hpp"
 #include "ui/alcedo_main/editor_support/controllers/image_controller.hpp"
+#include "ui/edit_viewer/frame_sink.hpp"
 #include "utils/diagnostics/app_logging.hpp"
 
 namespace alcedo::ui {
@@ -124,6 +127,10 @@ void EditorSessionRenderSchedulerPort::Shutdown() {
       running_job_->cancelled = true;
       running_cancellation    = running_job_->request.intent.cancellation;
     }
+    if (image_job_) {
+      // A document that has not started is skipped; a running one finishes and is dropped.
+      image_job_->cancelled = true;
+    }
     sink_resolver_ = {};
   }
   if (running_cancellation) {
@@ -133,15 +140,15 @@ void EditorSessionRenderSchedulerPort::Shutdown() {
   // Drain in-flight pool work before tearing down this port: its completion calls back into this
   // object. The in-flight frame may wait for the scene graph to hand over a present slot, which
   // needs the GUI thread, so a GUI-thread caller keeps delivering events while it waits.
+  const auto drained = [this] { return !running_job_.has_value() && !image_job_.has_value(); };
   for (;;) {
     {
       std::unique_lock lock(mutex_);
-      if (!running_job_) {
+      if (drained()) {
         return;
       }
-      jobs_changed_.wait_for(lock, std::chrono::milliseconds(16),
-                             [this] { return !running_job_.has_value(); });
-      if (!running_job_) {
+      jobs_changed_.wait_for(lock, std::chrono::milliseconds(16), drained);
+      if (drained()) {
         return;
       }
     }
@@ -226,12 +233,18 @@ auto EditorSessionRenderSchedulerPort::sink_resolve_count() const -> std::uint64
   return sink_resolve_count_;
 }
 
+auto EditorSessionRenderSchedulerPort::ContextMatches(const EditorRenderSessionContext& context,
+                                                      std::uint64_t                     epoch,
+                                                      sl_element_id_t                   element_id,
+                                                      image_id_t image_id) -> bool {
+  return context.epoch == epoch && context.element_id == element_id && context.image_id == image_id;
+}
+
 auto EditorSessionRenderSchedulerPort::ContextMatchesRequest(
     const EditorRenderSessionContext& context, const alcedo::EditorRenderRequest& request) const
     -> bool {
-  return context.epoch == request.intent.image_load_request_id.value &&
-         context.element_id == request.intent.element_id &&
-         context.image_id == request.intent.image_id;
+  return ContextMatches(context, request.intent.image_load_request_id.value,
+                        request.intent.element_id, request.intent.image_id);
 }
 
 auto EditorSessionRenderSchedulerPort::ContextPayloadReady(
@@ -293,9 +306,17 @@ auto EditorSessionRenderSchedulerPort::CanProduceFrame(
 auto EditorSessionRenderSchedulerPort::EnsureContextForRequest(
     const alcedo::EditorRenderRequest& request, std::string* error)
     -> std::optional<EditorRenderSessionContext> {
+  return EnsureContext(request.intent.image_load_request_id.value, request.intent.element_id,
+                       request.intent.image_id, request.intent.presentation_sink_id, error);
+}
+
+auto EditorSessionRenderSchedulerPort::EnsureContext(
+    std::uint64_t epoch, sl_element_id_t element_id, image_id_t image_id,
+    alcedo::PresentationSinkId presentation_sink_id, std::string* error)
+    -> std::optional<EditorRenderSessionContext> {
   {
     std::scoped_lock lock(mutex_);
-    if (session_context_ && ContextMatchesRequest(*session_context_, request) &&
+    if (session_context_ && ContextMatches(*session_context_, epoch, element_id, image_id) &&
         ContextPayloadReady(*session_context_)) {
       return session_context_;
     }
@@ -308,12 +329,12 @@ auto EditorSessionRenderSchedulerPort::EnsureContextForRequest(
     pipeline_port       = pipeline_port_;
     image_pool_resolver = services_.image_pool;
     // Align identity with this request when open/switch bind was skipped.
-    if (!session_context_ || !ContextMatchesRequest(*session_context_, request)) {
+    if (!session_context_ || !ContextMatches(*session_context_, epoch, element_id, image_id)) {
       EditorRenderSessionContext context;
-      context.epoch                = request.intent.image_load_request_id.value;
-      context.element_id           = request.intent.element_id;
-      context.image_id             = request.intent.image_id;
-      context.presentation_sink_id = request.intent.presentation_sink_id;
+      context.epoch                = epoch;
+      context.element_id           = element_id;
+      context.image_id             = image_id;
+      context.presentation_sink_id = presentation_sink_id;
       session_context_             = std::move(context);
     }
   }
@@ -328,7 +349,7 @@ auto EditorSessionRenderSchedulerPort::EnsureContextForRequest(
   // Rendering only reads the image the editor session holds. A request for an image the
   // session no longer (or not yet) holds is stale; loading here would rebind that image's
   // history and working document behind the session.
-  if (!pipeline_port->CurrentPreview(request.intent.element_id)) {
+  if (!pipeline_port->CurrentPreview(element_id)) {
     if (error) {
       *error = "Editor pipeline is not held for this image; the render request is stale";
     }
@@ -353,14 +374,14 @@ auto EditorSessionRenderSchedulerPort::EnsureContextForRequest(
   std::shared_ptr<alcedo::ImageBuffer> input;
   try {
     image_desc = image_pool->Read<std::shared_ptr<alcedo::Image>>(
-        request.intent.image_id, [](const std::shared_ptr<alcedo::Image>& image) { return image; });
+        image_id, [](const std::shared_ptr<alcedo::Image>& image) { return image; });
     if (!image_desc || image_desc->image_path_.empty()) {
       if (error) {
         *error = "Image descriptor is missing or has an empty path";
       }
       return std::nullopt;
     }
-    input = controllers::LoadImageInputBuffer(image_pool, request.intent.image_id);
+    input = controllers::LoadImageInputBuffer(image_pool, image_id);
   } catch (const std::exception& ex) {
     if (error) {
       *error = ex.what();
@@ -375,7 +396,7 @@ auto EditorSessionRenderSchedulerPort::EnsureContextForRequest(
 
   std::scoped_lock lock(mutex_);
   // Another bind/switch may have replaced the identity while we loaded.
-  if (!session_context_ || !ContextMatchesRequest(*session_context_, request)) {
+  if (!session_context_ || !ContextMatches(*session_context_, epoch, element_id, image_id)) {
     if (error) {
       *error = "Session render context was replaced during load";
     }
@@ -572,6 +593,164 @@ void EditorSessionRenderSchedulerPort::Cancel(std::uint64_t scheduler_job_id) {
     cancellation->Cancel();
   }
   // Completion arrives from the pipeline pool via on_complete_ / FinishJob.
+}
+
+auto EditorSessionRenderSchedulerPort::ScheduleImages(
+    alcedo::EditorImageRenderRequest request, alcedo::EditorImageRenderCompletion on_complete,
+    std::string* error) -> std::uint64_t {
+  const auto reject = [error](std::string message) -> std::uint64_t {
+    if (error) {
+      *error = std::move(message);
+    }
+    return 0;
+  };
+  if (request.snapshots.empty() || request.snapshots.size() > alcedo::kMaxEditorImagesPerJob) {
+    return reject("An image job renders one or two documents");
+  }
+  for (const auto& snapshot : request.snapshots) {
+    if (!snapshot) {
+      return reject("An image job document is missing");
+    }
+  }
+
+  std::shared_ptr<EditorSessionPipelinePort> pipeline_port;
+  {
+    std::scoped_lock lock(mutex_);
+    if (shutting_down_) {
+      return reject("The editor render port is shutting down");
+    }
+    if (image_job_) {
+      return reject("Another image job is running");
+    }
+    // An image job renders the image the session bound; it never binds another one.
+    if (!session_context_ || !ContextMatches(*session_context_, request.image_load_request_id.value,
+                                             request.element_id, request.image_id)) {
+      return reject("The requested image is not the bound editor image");
+    }
+    pipeline_port = pipeline_port_;
+  }
+
+  // Every document must keep the executor binding of the held image (its lineage and element);
+  // another binding would release the image's prepared source and sensor result.
+  const auto current = pipeline_port ? pipeline_port->CurrentPreview(request.element_id) : nullptr;
+  if (!current) {
+    return reject("Editor pipeline is not held for this image; the image job is stale");
+  }
+  const auto binding = alcedo::RenderBindingKey::Of(*current);
+  for (const auto& snapshot : request.snapshots) {
+    if (alcedo::RenderBindingKey::Of(*snapshot) != binding) {
+      return reject("An image job document does not belong to the loaded editor image");
+    }
+  }
+
+  std::string context_error;
+  const auto  context =
+      EnsureContext(request.image_load_request_id.value, request.element_id, request.image_id,
+                    alcedo::PresentationSinkId{0}, &context_error);
+  if (!context) {
+    return reject(context_error.empty() ? "Session render context is unavailable"
+                                        : std::move(context_error));
+  }
+
+  auto          executor  = EnsureExecutor();
+  auto          scheduler = EnsurePipelineScheduler();
+  std::uint64_t job_id    = 0;
+  {
+    std::scoped_lock lock(mutex_);
+    if (shutting_down_) {
+      return reject("The editor render port is shutting down");
+    }
+    if (image_job_) {
+      return reject("Another image job is running");
+    }
+    job_id     = ++next_image_job_id_;
+    image_job_ = ImageJob{.job_id = job_id};
+  }
+  // One work item for the whole job: the single worker runs no frame between its documents.
+  scheduler->ScheduleWork([this, job_id, executor = std::move(executor), input = context->input,
+                           request     = std::move(request),
+                           on_complete = std::move(on_complete)]() mutable {
+    RunImageJob(job_id, executor, input, request, std::move(on_complete));
+  });
+  return job_id;
+}
+
+void EditorSessionRenderSchedulerPort::CancelImages(std::uint64_t job_id) {
+  std::scoped_lock lock(mutex_);
+  if (image_job_ && image_job_->job_id == job_id) {
+    image_job_->cancelled = true;
+  }
+}
+
+void EditorSessionRenderSchedulerPort::RunImageJob(
+    std::uint64_t job_id, const std::shared_ptr<alcedo::PipelineExecutor>& executor,
+    const std::shared_ptr<alcedo::ImageBuffer>& input,
+    const alcedo::EditorImageRenderRequest&     request,
+    alcedo::EditorImageRenderCompletion         on_complete) {
+  alcedo::EditorImageRenderResult result;
+  try {
+    alcedo::FramePreviewMetadata metadata;
+    metadata.image_identity       = static_cast<std::uint64_t>(request.image_id);
+    metadata.session_epoch        = request.image_load_request_id.value;
+    // A one-shot image is not a viewport frame; scope analysis must not read it.
+    metadata.scope_update_allowed = false;
+    auto apply = alcedo::MakeQualityBaseApplyRequest(metadata, request.geometry.document_geometry);
+    apply.geometry            = request.geometry;
+    apply.require_host_output = true;
+    // The request's own sink: null, so the executor's viewport sink is never presented to.
+    apply.sink                = nullptr;
+
+    // The executor render lock for the whole job, as a frame holds it for its whole task.
+    std::unique_lock render_lock(executor->GetRenderLock());
+    for (const auto& snapshot : request.snapshots) {
+      if (ImageJobIsCancelled(job_id)) {
+        break;
+      }
+      // ApplyImage downloads this image before it returns, so the next document starts only after
+      // the host pixels of this one exist.
+      result.images.push_back(executor->ApplyImage(*snapshot, input, apply));
+    }
+    result.status = alcedo::EditorImageRenderStatus::Completed;
+  } catch (const std::exception& ex) {
+    result.status  = alcedo::EditorImageRenderStatus::Failed;
+    result.message = ex.what();
+  } catch (...) {
+    result.status  = alcedo::EditorImageRenderStatus::Failed;
+    result.message = "Image render failed";
+  }
+  if (result.status == alcedo::EditorImageRenderStatus::Failed) {
+    // A partial job publishes nothing; the host pixels of earlier documents are released here.
+    result.images.clear();
+  }
+  FinishImageJob(job_id, std::move(result), on_complete);
+}
+
+void EditorSessionRenderSchedulerPort::FinishImageJob(
+    std::uint64_t job_id, alcedo::EditorImageRenderResult result,
+    const alcedo::EditorImageRenderCompletion& on_complete) {
+  if (ImageJobIsCancelled(job_id)) {
+    result.status  = alcedo::EditorImageRenderStatus::Cancelled;
+    result.message = "Image job was cancelled";
+    result.images.clear();
+  }
+  // The job stays accepted until its completion returns: Shutdown waits for the completion,
+  // which calls into the owner that requested the job.
+  if (on_complete) {
+    try {
+      on_complete(std::move(result));
+    } catch (...) {
+    }
+  }
+  std::scoped_lock lock(mutex_);
+  if (image_job_ && image_job_->job_id == job_id) {
+    image_job_.reset();
+  }
+  jobs_changed_.notify_all();
+}
+
+auto EditorSessionRenderSchedulerPort::ImageJobIsCancelled(std::uint64_t job_id) const -> bool {
+  std::scoped_lock lock(mutex_);
+  return shutting_down_ || !image_job_ || image_job_->job_id != job_id || image_job_->cancelled;
 }
 
 auto EditorSessionRenderSchedulerPort::last_scheduled() const

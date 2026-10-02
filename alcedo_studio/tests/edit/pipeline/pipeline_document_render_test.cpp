@@ -15,11 +15,13 @@
 #include <vector>
 
 #include "edit/graph/develop_color_transform.hpp"
+#include "edit/graph/drt_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
 #include "edit/graph/pipeline_graph_snapshot.hpp"
 #include "edit/pipeline/pipeline_executor.hpp"
 #include "edit/runtime/cuda/cuda_product_renderer.hpp"
+#include "edit/runtime/drt_display.hpp"
 #include "edit/runtime/executor_role.hpp"
 #include "edit/runtime/pipeline_apply_request.hpp"
 #include "image/dng_color_profile_import.hpp"
@@ -44,12 +46,16 @@ class PixelFrameSink final : public IFrameSink {
     return mapping;
   }
   void    UnmapResource() override {}
-  void    NotifyFrameReady(const FrameCompletionSubmission&) override { ++ready_count; }
+  void    NotifyFrameReady(const FrameCompletionSubmission& submission) override {
+    ++ready_count;
+    last_geometry = submission.geometry;
+  }
   void    SubmitHostFrame(const ViewerFrame&) override { ++host_frame_count; }
   auto    GetWidth() const -> int override { return pixels.cols; }
   auto    GetHeight() const -> int override { return pixels.rows; }
 
   cv::Mat pixels;
+  ResolvedRenderGeometry last_geometry{};
   int     ready_count      = 0;
   int     host_frame_count = 0;
   bool    reject_mapping   = false;
@@ -251,6 +257,53 @@ TEST_F(PipelineDocumentRenderTest,
   EXPECT_EQ(renderer->Stats().libraw_open_unpack_count, 0U);
   EXPECT_EQ(renderer->Stats().pass.sensor_develop_execute, 0U);
   EXPECT_LT(cv::norm(editor, editor2, cv::NORM_INF), 2e-5);
+}
+
+// ApplyImage returns the host pixels of Apply together with the geometry the executed plan
+// resolved, and uses the request's own sink: a null sink presents nothing, although the editor's
+// viewport sink stays attached to the executor.
+TEST_F(PipelineDocumentRenderTest, ApplyImageReturnsExecutedGeometryWithoutPresentingToTheSink) {
+  document_->Geometry().SetCropRect({0.1f, 0.2f, 0.5f, 0.6f});
+  document_->Geometry().SetRotationDegrees(3.0f);
+  executor_->AttachFrameSink(&sink_);
+  std::unique_lock lock(executor_->GetRenderLock());
+  const auto       snapshot = source_->Freeze();
+
+  auto presented = MakeQualityBaseApplyRequest({}, DocumentGeometryUse::ApplyCropAndRotation);
+  presented.geometry.resolution.max_edge = max_edge_;
+  presented.sink                         = &sink_;
+  (void)executor_->Apply(*snapshot, input_, presented);
+  ASSERT_EQ(sink_.ready_count, 1);
+
+  auto host = MakeQualityBaseApplyRequest({}, DocumentGeometryUse::ApplyCropAndRotation);
+  host.geometry.resolution.max_edge = max_edge_;
+  host.require_host_output          = true;
+  const auto image                  = executor_->ApplyImage(*snapshot, input_, host);
+  EXPECT_EQ(sink_.ready_count, 1);
+  EXPECT_EQ(executor_->GetFrameSink(), &sink_);
+  ASSERT_NE(image.pixels, nullptr);
+  const cv::Mat pixels = image.pixels->GetCPUData();
+  EXPECT_EQ(pixels.type(), CV_32FC4);
+  EXPECT_EQ(static_cast<std::uint32_t>(pixels.cols), image.geometry.render_extent.width);
+  EXPECT_EQ(static_cast<std::uint32_t>(pixels.rows), image.geometry.render_extent.height);
+  EXPECT_EQ(image.geometry.render_extent, sink_.last_geometry.render_extent);
+  EXPECT_EQ(image.geometry.full_reference_extent, sink_.last_geometry.full_reference_extent);
+  for (int index = 0; index < 9; ++index) {
+    EXPECT_FLOAT_EQ(image.geometry.render_to_reference.m[index],
+                    sink_.last_geometry.render_to_reference.m[index]);
+  }
+  EXPECT_LT(cv::norm(pixels, sink_.pixels, cv::NORM_INF), 2e-5);
+  EXPECT_EQ(image.display, ViewerDisplayConfigFromDrt(document_->Drt()->Params().Params()));
+
+  // Apply of the same request returns the same host pixels.
+  const auto applied = executor_->Apply(*snapshot, input_, host);
+  ASSERT_NE(applied, nullptr);
+  EXPECT_LT(cv::norm(applied->GetCPUData(), pixels, cv::NORM_INF), 2e-5);
+
+  // An image render without host output is a caller error and renders nothing.
+  host.require_host_output = false;
+  EXPECT_THROW((void)executor_->ApplyImage(*snapshot, input_, host), std::invalid_argument);
+  EXPECT_EQ(sink_.ready_count, 1);
 }
 
 TEST_F(PipelineDocumentRenderTest, RenderLeavesPersistentDocumentParametersUnchanged) {
