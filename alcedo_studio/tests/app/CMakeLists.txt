@@ -291,6 +291,16 @@ gtest_discover_tests(LibrarySearchRecallTest TEST_PREFIX "LibrarySearchRecallTes
 alcedo_copy_duckdb_fts_extension(LibrarySearchRecallTest)
 alcedo_register_test_target(LibrarySearchRecallTest app ci_core)
 
+# Library sort, group, and import-time reads (album_sort_group_and_import_time_plan.md).
+add_executable(AlbumQueryTest ${ALCEDO_TEST_ROOT}/app/album_query_test.cpp)
+target_include_directories(AlbumQueryTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(AlbumQueryTest
+  ImportService ProjectService OpenImageIO::OpenImageIO GTest::gtest_main)
+gtest_discover_tests(AlbumQueryTest TEST_PREFIX "AlbumQueryTest."
+  PROPERTIES LABELS "ci_core_flow")
+alcedo_copy_duckdb_fts_extension(AlbumQueryTest)
+alcedo_register_test_target(AlbumQueryTest app ci_core)
+
 # Typed Image and AI search columns and the SQL that reads them (same plan, Phase S3).
 add_executable(LibrarySearchColumnsTest ${ALCEDO_TEST_ROOT}/app/library_search_columns_test.cpp)
 target_include_directories(LibrarySearchColumnsTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})

@@ -45,6 +45,25 @@ namespace alcedo::sleeve_filter {
 [[nodiscard]] auto BuildCaptureDateUnknownFilter() -> FilterNode;
 
 /**
+ * @brief Build a filter node for one local import day.
+ *
+ * @param date_yyyy_mm_dd Local calendar day in `YYYY-MM-DD` form.
+ * @param time_zone IANA time zone of that day, the same zone as the import-day groups.
+ * @return Half-open range `e.added_time >= start AND e.added_time < next` on the stored UTC
+ *         import time. Both bounds are that zone's local midnights converted to UTC
+ *         independently, so a daylight-saving day keeps its real length.
+ * @throws std::invalid_argument when the date is not a valid `YYYY-MM-DD` day or the zone is
+ *         empty. DuckDB reports an unknown zone when the predicate runs.
+ */
+[[nodiscard]] auto BuildImportDateBucketFilter(const std::wstring& date_yyyy_mm_dd,
+                                               const std::string&  time_zone) -> FilterNode;
+
+/**
+ * @brief Build a filter node that matches files with no import time (`e.added_time` NULL).
+ */
+[[nodiscard]] auto BuildImportDateUnknownFilter() -> FilterNode;
+
+/**
  * @brief Build a filter node for a rating stats-bar bucket label.
  *
  * @param label Bucket label. A numeric label becomes an integer equality;
