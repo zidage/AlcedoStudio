@@ -4,7 +4,7 @@ Date: 2026-10-02
 
 Last revised: 2026-10-02 after the user selected direct Inspector controls and allowed the same field for grouping and photo sorting.
 
-Status: Phase 1 complete (2026-10-02); Phases 2 and 3 planned.
+Status: Phases 1 and 2 complete (2026-10-02); Phase 3 planned.
 
 Source audit revision: `a03728184`. The worktree was clean before this plan was added.
 
@@ -752,7 +752,7 @@ Do not reformat entire existing source files as part of a feature edit.
 | Phase | Result | Main modules | Dependency | Expected diff | Status |
 | --- | --- | --- | --- | ---: | --- |
 | 1 | DuckORM SELECT support and storage query semantics, including real import time | DuckORM, filter factories, ElementStore, mapper, storage tests | Current source audit | 1400-1850 lines | Complete |
-| 2 | One application query path and tested section projection | App services, LibraryModule, existing worker, models, owner tests | Phase 1 | 1500-1900 lines | Planned |
+| 2 | One application query path and tested section projection | App services, LibraryModule, existing worker, models, owner tests | Phase 1 | 1500-1900 lines | Complete |
 | 3 | Direct Inspector field actions, import filtering, and virtualized album sections | QML, theme documentation, translations, integration checks | Phase 2 | 1200-1800 lines | Planned |
 
 The estimates include code, tests, build registration, resources, and documentation changed by each phase.
@@ -1062,7 +1062,113 @@ Use a single running build or test operation in the build directory.
 
 **Expected diff**: 1500-1900 lines.
 
-**Completion record**: use Section 13. No implementation evidence exists yet.
+**Completion record**:
+
+##### Phase 2 completion record (2026-10-02)
+
+```text
+Phase / date / status: Phase 2 / 2026-10-02 / complete.
+Source revision and branch: stacked on feature/album-query-storage (Phase 1);
+  branch feature/album-query-library-module.
+Actual changed modules and diff size: AlbumBrowseService facade, SleeveFilterService stats
+  conversion, LibraryModule query owner, AlbumSectionModel (new), AlbumThumbnailModel split
+  reset, SearchRequestWorker kinds and idle wait, SearchController pending search, StatsEngine
+  import filter and refresh routing, ThumbnailManager occurrence visibility, seeded-project
+  fixture, AlbumSectionModelTest (new), AlbumBackendLibraryQueryTest (new), search worker test,
+  AlbumQueryTest measurement case. About 2800 added and 430 removed lines (25 files), above the
+  1500-1900 estimate: the LibraryModule query rework replaces its window loads (806 changed
+  lines) and the two new test files are 860 lines.
+Implemented behavior:
+  - AlbumBrowseService::ReadAlbumQuery / ReadAlbumFilePosition / ReadAlbumFileIds compile the
+    merged filter tree once, throw on every failure, and report each read to a query observer.
+  - LibraryModule owns one accepted AlbumQueryOptions value and one optional pending change.
+    ToggleInspectorSort and SetInspectorGrouping implement the exclusive choices of Section
+    2.2.1; both keep every filter; group and sort can name the same field.
+  - Every library refresh (Inspector filter, search apply and clear, sort, group, folder
+    change, import, membership, rating, deletion, active model, language) is one coalesced
+    request on the one SearchRequestWorker, now owned by LibraryModule. A refresh reads the
+    first page, the groups, and the statistics in one read. Later pages, positions, and id
+    reads use kinds kLibraryPage and kLibraryIds and read the accepted query interpretation.
+  - Publication begins the thumbnail-model and section-model resets, installs the photos, the
+    sections, the options, the statistics, and the search state, then ends the resets and
+    emits the notifications. A newer pending change survives the publication of an older read.
+  - Search apply keeps the Inspector filters and the presentation options; clear search
+    removes only the search term. The applied search becomes active only with its result.
+  - Album items take file name, camera, lens, rating, capture date, and import date from the
+    SQL row; QDate::currentDate() is no longer an import date.
+  - AlbumSectionModel: groups with prefix row starts, 1 + ceil(n / c) rows per expanded group,
+    collapse state per group key, column count >= 1, occurrence ranges for rows, visible
+    occurrence ranges without collapsed groups, documented row geometry (RowOffset,
+    RowAtOffset), and at most 3 retained occurrence pages (file ids only).
+  - Grouped mode keeps the unique files of the retained pages in the thumbnail model in
+    occurrence order, so the editor filmstrip shows the same order without headers.
+  - ThumbnailManager counts visible occurrences by (group key, file id, tier); repeated
+    notifications are idempotent and the pin is released with the last occurrence.
+  - Query failure: the error is published, the accepted content and options stay, the
+    pending change stays, and RetryLibraryQuery resubmits it.
+  - Import-day Inspector filter category "import" with local-day buckets (importDateStats).
+Explicitly unimplemented items: QML controls, grouped view, and translations (Phase 3).
+Primary success call chain:
+  Inspector / search / presentation change -> StatsEngine / SearchController /
+  LibraryModule focused operation -> LibraryModule::RequestLibraryRefresh (one per turn)
+  -> SubmitPendingRefresh: LibraryQueryInput (scope, filter tree, search part, options,
+     model key, services) -> SearchRequestWorker kApply
+  -> RunLibraryQuery: BuildFuzzySearchWhere (pending text) -> AlbumBrowseService::ReadAlbumQuery
+     -> ElementStore -> DuckDB
+  -> QMetaObject::invokeMethod(QueuedConnection) -> IsCurrent check -> PublishRefresh
+  -> thumbnail model, section model, StatsEngine, SearchController -> notifications
+Primary failure and restore call chain:
+  ReadAlbumQuery throws -> LibraryQueryOutput.error_ -> PublishRefresh keeps accepted state,
+  publishes queryError -> RetryLibraryQuery -> same pending change resubmitted
+Build and test commands with exit codes:
+  cmd /c scripts\msvc_env.cmd --build --preset win_debug --target AlbumQueryTest
+    AlbumSectionModelTest AlbumBackendLibraryQueryTest FilterServiceTest
+    AlbumBackendStatsFilterTest AlbumBackendSearchWorkerTest AlbumBackendThumbnailTest
+    AlbumBackendRatingTest AlbumBackendImageDeleteTest --parallel 4 -> 0
+  ctest --test-dir build/debug --output-on-failure -j 1 -R '^(<the same targets>)\.' -> 0
+  Direct callers: AlbumBackendImportTest AlbumBackendProjectTest AlbumBackendFolderTest
+    AlbumBackendImageDetailsTest AlbumBackendI18nTest AlbumBackendCiWorkflowTest
+    AlbumBackendBackgroundTaskTest AlbumBackendInteractionPolicyTest
+    AlbumBackendDbWriteBarrierTest AdjustmentTransferControllerTest GlobalSearchDialogQmlTest
+    -> build 0, ctest 0 after the fix below.
+Discovered / passed / failed / skipped counts: Phase 2 list 116 / 114 / 0 / 2 (a Metal-only
+  thumbnail case on Windows, and the opt-in measurement); direct callers 113 / 113 / 0 / 0
+  (first run: 1 failure, ProjectSwitchRemovesPreviousWorkspace, caused by this phase: the
+  accepted query input held the closed project's services and its database file. Fixed: the
+  accepted input keeps no service; each read takes the open project's services.)
+Import-time and timezone evidence: ReopenDisplaysPersistedImportDate (the displayed import
+  date is the local date of the persisted UTC time for every photo).
+SQL plans, linked DuckDB version, and latency measurements: Linked DuckDB v1.2.1. Release build (win_release, tests enabled for this
+  run only, then set back to OFF), AlbumQueryTest.LargeLibraryPagesStayBoundedAndRecordTimings,
+  10 warm runs after one cold run, page limit 1000. Camera groups (202) with rating DESC;
+  label groups (12 canonical labels plus unlabelled, one active-model label per file) with
+  capture time DESC.
+  100,000 files: scalar initial (groups + statistics + page) p50 130.0 / p95 146.2 ms
+  (cold 150.2); shallow page p50 73.5 / p95 91.2; middle page p50 76.2 / p95 84.4; deep page
+  (offset 99000) p50 74.7 / p95 76.4; focus position p50 67.6 / p95 72.7; label initial
+  p50 174.7 / p95 199.1 (cold 199.8); label deep page p50 146.4 / p95 159.9.
+  10,000 files: scalar initial p95 42.4; pages p95 11.6-17.0; focus p95 10.7; label initial
+  p95 71.9; label deep page p95 31.7.
+  Budgets of Section 6: scalar initial 146 <= 500 ms, scalar page 91 <= 150 ms (deep
+  included), label initial 199 <= 750 ms: all met. The label deep page (160 ms) has no
+  separate budget. EXPLAIN ANALYZE of the 100,000-file deep page: TOP_N (Top 1000, Offset
+  99000) over a sequential scan of the match set; deep OFFSET costs the same as a shallow
+  page because each read re-evaluates the match set (about 70 ms), not because of the offset.
+  Measured GUI-thread publication was not instrumented separately; AlbumQuerySqlRunsOnWorkerThread
+  proves that no album SQL of the refresh, page, position, and id paths runs on the UI thread.
+Loaded metadata and visible-cell measurements: DistantSectionReadKeepsMetadataPagesBounded:
+  600 photos, pages of 120, six distant jumps: at most 3 loaded pages and at most 360 photo
+  rows in the model (never all 600). Visible-cell counts belong to the Phase 3 view.
+Manual verification in both themes: not applicable (no QML change).
+Unavailable platforms or UI coverage: macOS not built or run.
+Durable evidence record and temporary evidence path: this record;
+  build/tmp/album_sort_group/phase2/ (removed after the phase).
+Remaining defects: IndexOfElementInCurrentView (editor restore, synchronous QML call) runs one
+  scalar ReadAlbumFilePosition on the UI thread when the file is not loaded; its page then
+  loads on the worker. Multi-label occurrences of one file cannot occur with the current
+  SemanticImageLabel key (one label per file and model); occurrence pins and unique ids are
+  tested through the owner API.
+```
 
 ### Phase 3 - Inspector field actions and virtualized album sections
 
