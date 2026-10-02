@@ -473,15 +473,15 @@ TEST_F(AlbumQueryTest, ImportDayFilterUsesLocalMidnightBoundaries) {
 }
 
 TEST_F(AlbumQueryTest, ImportDayFilterRejectsInvalidDaysAndEmptyZones) {
-  EXPECT_THROW(sleeve_filter::BuildImportDateBucketFilter(L"2026-02-30", kNewYork),
+  EXPECT_THROW((void)sleeve_filter::BuildImportDateBucketFilter(L"2026-02-30", kNewYork),
                std::invalid_argument);
-  EXPECT_THROW(sleeve_filter::BuildImportDateBucketFilter(L"2026-6-1", kNewYork),
+  EXPECT_THROW((void)sleeve_filter::BuildImportDateBucketFilter(L"2026-6-1", kNewYork),
                std::invalid_argument);
-  EXPECT_THROW(sleeve_filter::BuildImportDateBucketFilter(L"not a day", kNewYork),
+  EXPECT_THROW((void)sleeve_filter::BuildImportDateBucketFilter(L"not a day", kNewYork),
                std::invalid_argument);
-  EXPECT_THROW(sleeve_filter::BuildImportDateBucketFilter(L"2026-06-01", ""),
+  EXPECT_THROW((void)sleeve_filter::BuildImportDateBucketFilter(L"2026-06-01", ""),
                std::invalid_argument);
-  EXPECT_NO_THROW(sleeve_filter::BuildImportDateBucketFilter(L"2024-02-29", kNewYork));
+  EXPECT_NO_THROW((void)sleeve_filter::BuildImportDateBucketFilter(L"2024-02-29", kNewYork));
 }
 
 TEST_F(AlbumQueryTest, UnknownImportTimeFormsTheLastImportDayGroup) {
@@ -897,17 +897,19 @@ auto Percentile(std::vector<double> values, double fraction) -> double {
   return values[std::min(index, values.size() - 1)];
 }
 
-// Opt-in measurement (set ALCEDO_ALBUM_QUERY_PROFILE=1): a 10,000-file library with repeated
-// timestamps, unknown fields, one large and many small groups. Records the warm read timings
-// and the physical plan of the page statement, and checks that every page stays bounded and
-// that the stream holds every file once.
-TEST_F(AlbumQueryTest, TenThousandFilePagesStayBoundedAndRecordTimings) {
-  if (std::getenv("ALCEDO_ALBUM_QUERY_PROFILE") == nullptr) {
-    GTEST_SKIP() << "Set ALCEDO_ALBUM_QUERY_PROFILE=1 to record album query timings";
+// Opt-in measurement (ALCEDO_ALBUM_QUERY_PROFILE=<file count>, 1 means 10,000): a library with
+// repeated timestamps, unknown fields, one large and many small camera groups, and one active
+// model label per file. Records the warm read timings and the physical plan of the deep page,
+// and checks that every page stays bounded and that the stream holds every file once.
+TEST_F(AlbumQueryTest, LargeLibraryPagesStayBoundedAndRecordTimings) {
+  const char* profile = std::getenv("ALCEDO_ALBUM_QUERY_PROFILE");
+  if (profile == nullptr) {
+    GTEST_SKIP() << "Set ALCEDO_ALBUM_QUERY_PROFILE=<file count> to record album query timings";
   }
-  constexpr int                   kFiles = 10000;
+  const int                       requested = std::atoi(profile);
+  const int                       kFiles    = requested >= 1000 ? requested : 10000;
   std::vector<SyntheticImageSpec> specs;
-  specs.reserve(kFiles);
+  specs.reserve(static_cast<size_t>(kFiles));
   for (int index = 0; index < kFiles; ++index) {
     const bool        large_group = index % 2 == 0;
     const std::string camera =
@@ -928,54 +930,74 @@ TEST_F(AlbumQueryTest, TenThousandFilePagesStayBoundedAndRecordTimings) {
   ProjectService          project(db_path_, meta_path_);
   SyntheticLibraryBuilder builder(project);
   ASSERT_EQ(builder.AddFiles(specs).size(), static_cast<size_t>(kFiles));
-  auto&                   store = Store(project);
+  // One label of the active model per file (the SemanticImageLabel key allows one), taken from
+  // twelve taxonomy labels and their Chinese aliases; every 9th file has none.
+  RunStatement(project,
+               "INSERT INTO SemanticImageLabel (file_id, model_key, label, score, confident) "
+               "SELECT e.id, 'model-active', (['portrait', 'landscape', 'street', 'sports', "
+               "'wedding', 'forest', 'mountain', 'interior', 'family', 'event', 'concert', "
+               "'\xE4\xBA\xBA\xE5\x83\x8F'])[1 + e.id % 12], 0.9, TRUE FROM Element e "
+               "WHERE e.type = 0 AND e.id % 9 <> 0");
+  auto&      store   = Store(project);
 
-  const AlbumQueryOptions options{.sort_field_     = AlbumSortField::kRating,
-                                  .sort_direction_ = SortDirection::kDescending,
-                                  .group_field_    = AlbumGroupField::kCameraModel};
-  const auto              time_ms = [](const std::function<void()>& run) {
+  const auto time_ms = [](const std::function<void()>& run) {
     const auto start = std::chrono::steady_clock::now();
     run();
     return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
         .count();
   };
-  std::vector<double> initial, shallow, deep, position;
-  AlbumQueryResult    first;
-  for (int run = 0; run < 6; ++run) {
-    const auto initial_ms  = time_ms([&] {
-      first = store.ReadAlbumQuery(
-          0, std::nullopt, options, kActiveModel,
-          AlbumQueryRead{
-               .offset_ = 0, .limit_ = 1000, .read_groups_ = true, .read_statistics_ = true});
-    });
-    const auto shallow_ms  = time_ms([&] {
-      EXPECT_EQ(store
-                     .ReadAlbumQuery(0, std::nullopt, options, kActiveModel,
-                                     AlbumQueryRead{.offset_ = 1000, .limit_ = 1000})
-                     .rows_.size(),
-                 1000u);
-    });
-    const auto deep_ms     = time_ms([&] {
-      EXPECT_EQ(store
-                        .ReadAlbumQuery(0, std::nullopt, options, kActiveModel,
-                                        AlbumQueryRead{.offset_ = kFiles - 1000, .limit_ = 1000})
-                        .rows_.size(),
-                    1000u);
-    });
-    const auto position_ms = time_ms([&] {
-      EXPECT_TRUE(store
-                      .ReadAlbumFilePosition(0, std::nullopt, options, kActiveModel,
-                                             first.rows_.back().photo_.file_id_, std::nullopt)
-                      .has_value());
-    });
-    if (run > 0) {  // the first run is the cold read
-      initial.push_back(initial_ms);
-      shallow.push_back(shallow_ms);
-      deep.push_back(deep_ms);
-      position.push_back(position_ms);
-    } else {
-      std::cout << "cold initial read ms: " << initial_ms << "\n";
+  const AlbumQueryOptions scalar{.sort_field_     = AlbumSortField::kRating,
+                                 .sort_direction_ = SortDirection::kDescending,
+                                 .group_field_    = AlbumGroupField::kCameraModel};
+  const AlbumQueryOptions labels{.sort_field_     = AlbumSortField::kCaptureTime,
+                                 .sort_direction_ = SortDirection::kDescending,
+                                 .group_field_    = AlbumGroupField::kLabels};
+  const AlbumQueryRead    initial_read{
+         .offset_ = 0, .limit_ = 1000, .read_groups_ = true, .read_statistics_ = true};
+  std::map<std::string, std::vector<double>> samples;
+  AlbumQueryResult                           first;
+  AlbumQueryResult                           first_labels;
+  for (int run = 0; run < 11; ++run) {
+    const bool warm   = run > 0;  // the first run is the cold read
+    const auto record = [&](const std::string& name, double value) {
+      if (warm) {
+        samples[name].push_back(value);
+      } else {
+        std::cout << "cold " << name << " ms: " << value << "\n";
+      }
+    };
+    record("scalar initial (groups+stats+page)", time_ms([&] {
+             first = store.ReadAlbumQuery(0, std::nullopt, scalar, kActiveModel, initial_read);
+           }));
+    for (const auto& [name, offset] : {std::pair{"scalar shallow page", int64_t{1000}},
+                                       std::pair{"scalar middle page", int64_t{kFiles / 2}},
+                                       std::pair{"scalar deep page", int64_t{kFiles - 1000}}}) {
+      record(name, time_ms([&] {
+               EXPECT_EQ(store
+                             .ReadAlbumQuery(0, std::nullopt, scalar, kActiveModel,
+                                             AlbumQueryRead{.offset_ = offset, .limit_ = 1000})
+                             .rows_.size(),
+                         1000u);
+             }));
     }
+    record(
+        "scalar focus position", time_ms([&] {
+          EXPECT_TRUE(store
+                          .ReadAlbumFilePosition(0, std::nullopt, scalar, kActiveModel,
+                                                 first.rows_.back().photo_.file_id_, std::nullopt)
+                          .has_value());
+        }));
+    record("label initial (groups+stats+page)", time_ms([&] {
+             first_labels =
+                 store.ReadAlbumQuery(0, std::nullopt, labels, kActiveModel, initial_read);
+           }));
+    record("label deep page", time_ms([&] {
+             EXPECT_EQ(store
+                           .ReadAlbumQuery(0, std::nullopt, labels, kActiveModel,
+                                           AlbumQueryRead{.offset_ = kFiles - 1000, .limit_ = 1000})
+                           .rows_.size(),
+                       1000u);
+           }));
   }
   EXPECT_EQ(first.unique_file_count_, kFiles);
   EXPECT_EQ(first.rows_.size(), 1000u);
@@ -984,14 +1006,14 @@ TEST_F(AlbumQueryTest, TenThousandFilePagesStayBoundedAndRecordTimings) {
     counted += group.photo_count_;
   }
   EXPECT_EQ(counted, kFiles);
-  const auto all_ids = store.ReadAlbumFileIds(0, std::nullopt, options, kActiveModel, 0, kFiles);
+  EXPECT_EQ(first_labels.occurrence_count_, kFiles);
+  const auto all_ids = store.ReadAlbumFileIds(0, std::nullopt, scalar, kActiveModel, 0, kFiles);
   EXPECT_EQ(std::set<sl_element_id_t>(all_ids.begin(), all_ids.end()).size(),
             static_cast<size_t>(kFiles));
 
-  std::cout << "groups: " << first.groups_.size() << "\n";
-  for (const auto& [name, values] :
-       {std::pair{"initial (groups+stats+page)", initial}, std::pair{"shallow page", shallow},
-        std::pair{"deep page", deep}, std::pair{"focus position", position}}) {
+  std::cout << "files: " << kFiles << ", camera groups: " << first.groups_.size()
+            << ", label groups: " << first_labels.groups_.size() << "\n";
+  for (const auto& [name, values] : samples) {
     std::cout << name << " ms p50 " << Percentile(values, 0.5) << " p95 "
               << Percentile(values, 0.95) << "\n";
   }
@@ -1005,7 +1027,8 @@ TEST_F(AlbumQueryTest, TenThousandFilePagesStayBoundedAndRecordTimings) {
                                "EXPLAIN ANALYZE SELECT s.file_id, s.image_id, s.file_name, "
                                "CAST(NULLIF(s.camera_model, '') AS VARCHAR) FROM SearchMatchSet s "
                                "ORDER BY NULLIF(s.camera_model, '') ASC NULLS LAST, s.rating DESC "
-                               "NULLS LAST, s.file_id ASC NULLS LAST LIMIT 1000 OFFSET 9000",
+                               "NULLS LAST, s.file_id ASC NULLS LAST LIMIT 1000 OFFSET " +
+                                   std::to_string(kFiles - 1000),
                                1);
 }
 

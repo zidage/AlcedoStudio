@@ -414,16 +414,17 @@ auto ToStatsBuckets(const std::vector<StorageStatsBucket>& buckets) -> std::vect
   return out;
 }
 
+}  // namespace
+
 auto ToAlbumStatsView(const FolderStatsView& stats) -> AlbumStatsView {
   return {.total_photo_count_ = stats.total_photo_count_,
           .date_stats_        = ToStatsBuckets(stats.date_stats_),
           .camera_stats_      = ToStatsBuckets(stats.camera_stats_),
           .lens_stats_        = ToStatsBuckets(stats.lens_stats_),
           .label_stats_       = ToStatsBuckets(stats.label_stats_),
-          .rating_stats_      = ToStatsBuckets(stats.rating_stats_)};
+          .rating_stats_      = ToStatsBuckets(stats.rating_stats_),
+          .import_date_stats_ = ToStatsBuckets(stats.import_date_stats_)};
 }
-
-}  // namespace
 
 auto SleeveFilterService::CreateFilterCombo(const FilterNode& root) -> filter_id_t {
   filter_id_t new_id = filter_id_generator_.GenerateID();
