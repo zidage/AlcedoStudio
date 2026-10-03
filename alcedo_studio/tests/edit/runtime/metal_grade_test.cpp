@@ -219,12 +219,15 @@ auto CpuApplyAdjustment(Rgba c, const GradeAdjustmentParams& p, std::uint32_t pi
     const float gamma_x = std::max(p.values[4] + p.values[7], 1.0e-4f);
     const float gamma_y = std::max(p.values[5] + p.values[7], 1.0e-4f);
     const float gamma_z = std::max(p.values[6] + p.values[7], 1.0e-4f);
-    c.r = std::copysign(std::pow(std::fabs(c.r + p.values[0] + p.values[3]), 1.0f / gamma_x), c.r) *
-          p.values[8];
-    c.g = std::copysign(std::pow(std::fabs(c.g + p.values[1] + p.values[3]), 1.0f / gamma_y), c.g) *
-          p.values[9];
-    c.b = std::copysign(std::pow(std::fabs(c.b + p.values[2] + p.values[3]), 1.0f / gamma_z), c.b) *
-          p.values[10];
+    const float gain_x  = p.values[8] + p.values[11];
+    const float gain_y  = p.values[9] + p.values[11];
+    const float gain_z  = p.values[10] + p.values[11];
+    c.r = std::copysign(std::pow(std::fabs(c.r + p.values[0] + p.values[3]), gamma_x), c.r) *
+          gain_x;
+    c.g = std::copysign(std::pow(std::fabs(c.g + p.values[1] + p.values[3]), gamma_y), c.g) *
+          gain_y;
+    c.b = std::copysign(std::pow(std::fabs(c.b + p.values[2] + p.values[3]), gamma_z), c.b) *
+          gain_z;
   } else if (behavior == AdjustmentBehavior::Sharpen) {
     const float l     = Luma(c);
     const float scale = 1.0f + value * 0.0025f;
