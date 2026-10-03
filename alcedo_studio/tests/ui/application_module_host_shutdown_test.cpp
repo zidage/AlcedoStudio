@@ -6,19 +6,24 @@
 /// @brief Verifies host shutdown waits for every registered task, drains
 /// analysis writes released by an export barrier, repacks the project
 /// package only when the user entered the project, and removes the runtime
-/// workspace after the host closes the project database.
+/// workspace after the host closes the project database. On Windows a workspace file that
+/// stays locked is reported with the process that holds it.
 
 #include "ui/album_backend_test_fixture.hpp"
 
 #include <QMutex>
 #include <QMutexLocker>
+#include <QSignalSpy>
 #include <QStringList>
 #include <QTimer>
 #include <QtLogging>
 
+#include <algorithm>
 #include <array>
 #include <filesystem>
+#include <fstream>
 #include <memory>
+#include <vector>
 
 #include "ui/alcedo_main/album_backend/background_task_controller.hpp"
 #include "ui/welcome_project_test_support.hpp"
@@ -256,6 +261,89 @@ TEST_F(ApplicationModuleHostShutdownTests, RepeatedShutdownRemovesWorkspaceOnce)
   EXPECT_EQ(warnings.CountContaining(kWorkspaceRemovalWarning), 0);
   EXPECT_EQ(ReadFileBytes(package), package_before.bytes_);
 }
+
+// A thumbnail request that is still pending at shutdown must not keep the thumbnail service, its
+// pipeline, and the project database alive after ProjectModule is destroyed.
+TEST_F(ApplicationModuleHostShutdownTests, ShutdownWithPendingThumbnailsRemovesWorkspace) {
+  const std::filesystem::path        raw_root{std::string(TEST_IMG_PATH) + "/ci_rawfiles"};
+  std::vector<std::filesystem::path> images;
+  if (std::filesystem::exists(raw_root)) {
+    for (const auto& entry : std::filesystem::directory_iterator(raw_root)) {
+      if (entry.is_regular_file() && is_supported_file(entry.path())) {
+        images.push_back(entry.path());
+      }
+    }
+  }
+  if (images.empty()) {
+    GTEST_SKIP() << "CI RAW fixtures missing under TEST_IMG_PATH/ci_rawfiles";
+  }
+  std::sort(images.begin(), images.end());
+  images.resize(std::min<std::size_t>(images.size(), 2));
+
+  ScopedWarningCapture  warnings;
+  std::filesystem::path workspace;
+  {
+    ApplicationModuleHost host;
+    ASSERT_TRUE(CreateTestProject(host, QStringLiteral("pending_thumbnails")));
+    workspace = host.project()->handler().workspace_dir();
+    ASSERT_FALSE(workspace.empty());
+
+    host.import_export()->StartImport(PathsToQStringList(images));
+    QSignalSpy import_state(host.import_export(), &ImportExportHandler::ImportStateChanged);
+    for (int waited = 0; host.import_export()->ImportRunning() && waited < 120000; waited += 200) {
+      import_state.wait(200);
+    }
+    ASSERT_FALSE(host.import_export()->ImportRunning());
+    ProcessEvents(200);
+    const auto thumbnails = host.library()->Thumbnails();
+    ASSERT_FALSE(thumbnails.isEmpty());
+
+    // Request every thumbnail and shut down without waiting for the renders.
+    for (const auto& value : thumbnails) {
+      const auto item = value.toMap();
+      host.library()->SetThumbnailVisible(item.value(QStringLiteral("elementId")).toUInt(),
+                                          item.value(QStringLiteral("imageId")).toUInt(), true);
+    }
+    host.Shutdown();
+  }
+
+  EXPECT_EQ(warnings.CountContaining(QStringLiteral("outlived ProjectModule")), 0);
+  EXPECT_EQ(warnings.CountContaining(kWorkspaceRemovalWarning), 0);
+  EXPECT_FALSE(std::filesystem::exists(workspace)) << workspace.string();
+}
+
+#ifdef _WIN32
+TEST_F(ApplicationModuleHostShutdownTests, LockedWorkspaceFileIsReportedWithItsHolder) {
+  ScopedRecentProjectSettings settings(temp_dir_);
+  const auto                  package = BuildPackedProject(temp_dir_, "locked_workspace");
+  ScopedWarningCapture        warnings;
+  std::filesystem::path       workspace;
+  std::ofstream               holder;
+  {
+    ApplicationModuleHost host;
+    ASSERT_TRUE(host.project()->PreviewProject(PathToQString(package)));
+    ASSERT_TRUE(WaitForProjectLoadIdle(host));
+    workspace = host.project()->handler().workspace_dir();
+    ASSERT_FALSE(workspace.empty());
+    // The MSVC runtime opens the file without FILE_SHARE_DELETE, so it cannot be removed
+    // while this stream is open.
+    holder.open(workspace / "held_by_test.bin", std::ios::binary);
+    ASSERT_TRUE(holder.is_open());
+    host.Shutdown();
+  }
+
+  EXPECT_EQ(warnings.CountContaining(kWorkspaceRemovalWarning), 1);
+  EXPECT_EQ(warnings.CountContaining(QStringLiteral("Runtime workspace file is locked:")), 1);
+  EXPECT_EQ(warnings.CountContaining(QStringLiteral("held_by_test.bin")), 1);
+  EXPECT_EQ(warnings.CountContaining(QStringLiteral("(this process)")), 1);
+  EXPECT_EQ(warnings.CountContaining(QStringLiteral("outlived ProjectModule")), 0);
+
+  holder.close();
+  std::error_code ec;
+  std::filesystem::remove_all(workspace, ec);
+  EXPECT_FALSE(ec) << ec.message();
+}
+#endif
 
 }  // namespace
 }  // namespace alcedo::ui::test
