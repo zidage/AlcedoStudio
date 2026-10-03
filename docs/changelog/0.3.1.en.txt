@@ -1,0 +1,76 @@
+Alcedo Studio 0.3.1
+
+Before you upgrade
+------------------
+- The installers no longer include LUT files. Download the official LUT packages in
+  Settings > LUTs. A project keeps its LUT choice. If a LUT file is missing, the photo
+  renders without that LUT until the file is available again.
+- Crop and rotation work in a new way. Old photos with a rotated crop can look
+  different after the upgrade.
+- The Gamma color wheel and its master slider now move in the correct direction, and
+  the Gain master slider now has an effect. Old photos with these adjustments can look
+  different after the upgrade.
+
+New
+---
+- LUT browser: a LUTs page in the editor tool rail shows your LUT library as a grid or
+  a list. Filter by category, source, film brand, print film, and favorites. Search
+  accepts small typing errors. Click a LUT to apply it to the selected Color Grade, and
+  click it again to remove it. A new strength setting (0-100%) controls each LUT.
+- LUT library: LUTs in nested folders are found, and you can import your own LUTs.
+  Settings > LUTs lets you choose, open, refresh, and move the library folder, and
+  download, update, or repair each official LUT package. Packages are signature-checked
+  before they are installed.
+- Diffusion filter: a black diffusion filter effect gives bright lights a soft glow and
+  keeps midtone detail sharp. It is on the new Post Processing page, together with
+  Clarity, Sharpen, Film Grain, and Halation. It works on CUDA, OpenCL, and Metal.
+- Compare: compare Before and After, or two Versions, from the viewport or the Versions
+  panel. Show two full images or use a movable divider, left/right or top/bottom, and
+  swap the sides. Both sides use the current demosaic, highlight, and lens settings.
+- Library sort and group: each Album Inspector field has sort ascending, sort
+  descending, and Group actions. Groups show as sections that you can collapse and
+  expand. A new Import Time section filters photos by import day.
+- Welcome screen: the most recent project shows as a preview with a cover of its first
+  photos, the photo count, the count of edited photos, and the capture date range.
+  Click another recent project to preview it. A project that you only preview is not
+  saved.
+- Rating: a rating from the context menu now applies to all selected photos. The
+  ratings save in the background, and the task bar shows the progress.
+
+Editor and library
+------------------
+- Copy Adjustments can now copy RAW Decode, White Balance, Lens Correction, and Crop and
+  Rotate. Paste to many photos runs in the background and shows its progress. Paste to
+  the open photo shows the new Version in the Versions panel at once. The Paste action
+  moved from History to the Versions panel.
+- Crop: the crop frame is now the output image, so rotation after a crop rotates the
+  cropped image. The crop frame stays inside the photo, so a rotated crop has no empty
+  corners. Each crop change is one History step, and the aspect setting is saved with
+  the photo.
+- When the RAW Decode, Display Transform, or Post Processing panel is open, a LUT from
+  the browser applies to the last selected Color Grade. The browser shows its name.
+- The adjustment panel order is now RAW Decode, Geometry, Tone, Color, LUT, Display
+  Transform, Post Processing. Mask and Compare show only while they are in use.
+
+Performance
+-----------
+- RAW import is much faster. In a test with 639 RAW photos, import took 1.1 seconds
+  instead of 31.6 seconds, and peak memory fell from 485 MB to 149 MB.
+- Projects open faster. In a test with 641 photos, open took about 0.12 seconds
+  instead of about 0.7 seconds. The loading indicator shows while a packed project
+  unpacks.
+- The first thumbnails after project open appear sooner. Each project keeps its own
+  thumbnails in the disk cache, so other projects no longer remove them.
+- Thumbnails and export use their own GPU resources. Thumbnails no longer slow down
+  the editor preview, and an export during a slider drag uses the saved value.
+
+Fixed
+-----
+- A click on Crop could remove all edit history of a photo. A crop could be missing
+  from History, so Undo could not return to the full frame.
+- After Paste, the LUT panel shows the pasted values. A LUT change applies at once
+  after you change photos in the filmstrip. Cancel in the Paste dialog no longer
+  clears the copied adjustments.
+- The application sometimes did not close, or stopped with an error after it closed.
+- Windows: temporary project files no longer stay in the temp folder after exit.
+- The application no longer writes preview performance log files by default.
