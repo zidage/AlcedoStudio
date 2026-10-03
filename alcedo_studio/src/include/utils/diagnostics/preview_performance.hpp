@@ -49,8 +49,9 @@ namespace detail {
  * ring; a background thread writes one app-log duration line per second. A full ring
  * drops the diagnostic event, counts the loss, and leaves render unblocked.
  *
- * Process start turns Detail on. Tests call SetMode(Off) or ResetForTesting.
- * Optional `ALCEDO_PREVIEW_PERF_LOG` sets the output path. The log writes durations
+ * Initialize turns Detail on. The app calls Initialize only when
+ * `ALCEDO_PREVIEW_PERF_LOG` is set; that value sets the output path. Without it,
+ * the mode stays Off. Tests call SetMode(Off) or ResetForTesting. The log writes durations
  * in milliseconds. It does not write absolute monotonic clock values.
  *
  * @thread_safety Notes may run on the session owner, render worker, and Qt render

@@ -305,12 +305,12 @@ __device__ auto ApplyAdjustment(float3 c, const CudaAdjustmentParams& p, const f
     const float gamma_x = fmaxf(p.values[4] + p.values[7], 1.0e-4f);
     const float gamma_y = fmaxf(p.values[5] + p.values[7], 1.0e-4f);
     const float gamma_z = fmaxf(p.values[6] + p.values[7], 1.0e-4f);
-    c.x =
-        copysignf(powf(fabsf(c.x + p.values[0] + p.values[3]), 1.0f / gamma_x), c.x) * p.values[8];
-    c.y =
-        copysignf(powf(fabsf(c.y + p.values[1] + p.values[3]), 1.0f / gamma_y), c.y) * p.values[9];
-    c.z =
-        copysignf(powf(fabsf(c.z + p.values[2] + p.values[3]), 1.0f / gamma_z), c.z) * p.values[10];
+    const float gain_x  = p.values[8] + p.values[11];
+    const float gain_y  = p.values[9] + p.values[11];
+    const float gain_z  = p.values[10] + p.values[11];
+    c.x = copysignf(powf(fabsf(c.x + p.values[0] + p.values[3]), gamma_x), c.x) * gain_x;
+    c.y = copysignf(powf(fabsf(c.y + p.values[1] + p.values[3]), gamma_y), c.y) * gain_y;
+    c.z = copysignf(powf(fabsf(c.z + p.values[2] + p.values[3]), gamma_z), c.z) * gain_z;
   } else if (behavior == CudaAdjustmentBehavior::Lmt && value > 0.0f && lut_edge > 1U &&
              lut != nullptr) {
     // value is the LUT strength a in (0, 1]: c + a * (L(c) - c) in ACEScc; a = 1 is L(c).

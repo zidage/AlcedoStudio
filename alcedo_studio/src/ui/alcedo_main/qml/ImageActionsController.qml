@@ -19,6 +19,9 @@ Item {
 
     property var pendingDeleteTargets: []
     property var pendingRatingTarget: ({})
+    // Every image the context menu acts on. A rating picked from the menu goes
+    // to all of them when more than one is selected.
+    property var pendingRatingTargets: []
     property var pendingAdjustmentSource: ({})
     property var pendingAdjustmentPasteTargets: []
     property var focusedImageTarget: ({})
@@ -228,6 +231,7 @@ Item {
                     ? Number(ratingResult.rating)
                     : Number(clickedItem.rating || 0)
         }
+        root.pendingRatingTargets = targets
         root.pendingAdjustmentSource = {
             elementId: Number(clickedItem.elementId),
             fileId: Number(clickedItem.fileId || clickedItem.elementId),
@@ -464,6 +468,10 @@ Item {
             return
         }
         const normalizedRating = Math.max(0, Math.min(5, Number(rating)))
+        if (root.pendingRatingTargets && root.pendingRatingTargets.length > 1) {
+            root.requestSetImageRatings(normalizedRating)
+            return
+        }
         const result = appModules.images.SetImageRating(
             Number(root.pendingRatingTarget.elementId),
             Number(root.pendingRatingTarget.imageId),
@@ -479,6 +487,42 @@ Item {
         }
         if (result && result.message) {
             host.showSnackbar(result.message)
+        }
+    }
+
+    // Batch path: the library shows the new stars at once; the save runs as a
+    // background task and onImageRatingsFinished reports the result.
+    function requestSetImageRatings(normalizedRating) {
+        const started = appModules.images.StartSetImageRatings(root.pendingRatingTargets,
+                                                               normalizedRating)
+        if (started && started.started === true) {
+            root.pendingRatingTarget = Object.assign({}, root.pendingRatingTarget, {
+                rating: normalizedRating
+            })
+            return
+        }
+        if (started && started.message) {
+            host.showSnackbar(started.message)
+        }
+    }
+
+    Connections {
+        target: appModules.images
+        ignoreUnknownSignals: true
+        function onImageRatingsFinished(result) {
+            const focusedElementId = Number(root.focusedImageTarget.elementId || 0)
+            const ratedIds = result && result.ratedElementIds ? result.ratedElementIds : []
+            const failedIds = result && result.failedElementIds ? result.failedElementIds : []
+            const touched = ratedIds.concat(failedIds)
+            for (let i = 0; i < touched.length; ++i) {
+                if (focusedElementId > 0 && Number(touched[i]) === focusedElementId) {
+                    root.refreshFocusedImageInspection()
+                    break
+                }
+            }
+            if (result && result.message) {
+                host.showSnackbar(result.message)
+            }
         }
     }
 

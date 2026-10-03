@@ -21,8 +21,6 @@
 #include <QQuickWindow>
 #include <QSGRendererInterface>
 #include <QWindow>
-#include <QDir>
-#include <QFileInfo>
 #include <QSettings>
 #include <QString>
 #include <QtGlobal>
@@ -248,13 +246,10 @@ int main(int argc, char* argv[]) {
 
   QApplication app(argc, argv);
   const QString log_path = alcedo::diag::InitializeApplicationLogging();
-  alcedo::diag::PreviewPerformance::Initialize();
-  if (qEnvironmentVariableIsEmpty("ALCEDO_PREVIEW_PERF_LOG") && !log_path.isEmpty()) {
-    const QFileInfo info(log_path);
-    alcedo::diag::PreviewPerformance::SetOutputPath(
-        QDir(info.absolutePath())
-            .filePath(QStringLiteral("alcedo_preview_perf_%1.log").arg(info.completeBaseName()))
-            .toStdString());
+  // Preview timing is a developer diagnostic. Turn it on only when
+  // ALCEDO_PREVIEW_PERF_LOG names an output file.
+  if (!qEnvironmentVariableIsEmpty("ALCEDO_PREVIEW_PERF_LOG")) {
+    alcedo::diag::PreviewPerformance::Initialize();
   }
   qCInfo(alcedo::diag::appLog).noquote()
       << QStringLiteral("app.start log_path=%1").arg(log_path);

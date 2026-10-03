@@ -28,6 +28,8 @@ enum class BackgroundTaskKind {
   EditorSave,
   /// Adjustment Transfer Paste into library targets that are not open in the editor.
   AdjustmentPaste,
+  /// Star ratings written to several library images and saved to the project.
+  RatingUpdate,
 };
 
 /// Lifecycle state of a single background task record.

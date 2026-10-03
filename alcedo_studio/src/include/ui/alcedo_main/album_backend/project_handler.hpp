@@ -8,7 +8,9 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <vector>
 
@@ -57,6 +59,10 @@ class ProjectHandler {
   bool RequestEnterLoadedProject();
   bool PersistCurrentProjectState();
   bool PackageCurrentProjectFiles(QString* errorOut = nullptr) const;
+  /// Returns a job that saves the project metadata and then packs the project file. The job
+  /// keeps its own references to the project and paths, so a worker thread can run it
+  /// without this handler. It packs under the same lock as PackageCurrentProjectFiles.
+  [[nodiscard]] auto MakeSaveAndPackageJob() const -> std::function<bool(QString*)>;
   void SetProjectLoadingState(bool loading, const i18n::LocalizedText& message);
   void ClearProjectData();
 
@@ -136,6 +142,8 @@ class ProjectHandler {
   std::filesystem::path project_package_path_{};
   std::filesystem::path project_workspace_dir_{};
   std::filesystem::path recent_project_path_{};
+  // Two packers would share the same "<package>.tmp" file, so packing is serialized.
+  std::shared_ptr<std::mutex> package_mutex_ = std::make_shared<std::mutex>();
 
   bool                project_loading_ = false;
   i18n::LocalizedText project_loading_message_text_{};
