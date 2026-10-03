@@ -190,7 +190,8 @@ SearchController::SearchController(ProjectModule* project, LibraryModule* librar
       library_(library),
       folders_(folders),
       stats_(stats),
-      worker_(&library->query_worker()) {
+      // Lifecycle tests construct the controller without a LibraryModule.
+      worker_(library != nullptr ? &library->query_worker() : nullptr) {
   QSettings settings;
   if (!settings.contains(QLatin1String(kNaturalLanguageSearchEnabledKey))) {
     // One-time migration: carry over the pre-rename "Semantic" toggle so
@@ -207,7 +208,9 @@ SearchController::SearchController(ProjectModule* project, LibraryModule* librar
 
 SearchController::~SearchController() {
   // A running preview job posts its result to `this`; wait for it before teardown.
-  worker_->InvalidateAndWait(SearchRequestKind::kPreview);
+  if (worker_ != nullptr) {
+    worker_->InvalidateAndWait(SearchRequestKind::kPreview);
+  }
   CancelSearchPreviewThumbnails();
 }
 
@@ -466,6 +469,9 @@ void SearchController::ClearFuzzySearch() {
 }
 
 void SearchController::CancelSearchRequests() {
+  if (worker_ == nullptr) {
+    return;
+  }
   worker_->Invalidate(SearchRequestKind::kPreview);
   worker_->Invalidate(SearchRequestKind::kApply);
 }
