@@ -100,6 +100,7 @@ Dialog {
         if (kind === "import") return qsTr("Import")
         if (kind === "export") return qsTr("Export")
         if (kind === "adjustmentPaste") return qsTr("Paste Adjustments")
+        if (kind === "ratingUpdate") return qsTr("Ratings")
         return qsTr("Task")
     }
 

@@ -435,7 +435,7 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
       });
   folders_->BindCollaborators(stats_.get(), search_.get(), import_export_.get());
   images_->BindCollaborators(stats_.get(), import_export_.get(), semantic_generation_.get(),
-                             interaction_policy_.get());
+                             interaction_policy_.get(), background_tasks_.get());
   stats_->BindCollaborators(search_.get(), semantic_generation_.get());
   semantic_generation_->BindCollaborators(nikon_he_recovery_.get());
   import_export_->BindCollaborators(stats_.get(), nikon_he_recovery_.get(),

@@ -482,6 +482,7 @@ void ProjectService::SaveProject(const std::filesystem::path& meta_path) {
     throw std::runtime_error("SleeveService is not initialized");
   }
 
+  std::lock_guard lock(save_project_mutex_);
   meta_path_ = meta_path;
 
   nlohmann::json metadata;
