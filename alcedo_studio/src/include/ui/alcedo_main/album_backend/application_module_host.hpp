@@ -181,8 +181,9 @@ class ApplicationModuleHost final : public QObject {
   /// Removes the runtime workspace that ShutdownModules recorded in
   /// pending_workspace_removal_. Called by the destructor after ProjectModule (the last owner
   /// of the project services and their DuckDB file) is destroyed, because Windows cannot
-  /// delete an open file. A failure is written with qWarning (path and OS error) and is not
-  /// retried. Clears pending_workspace_removal_.
+  /// delete an open file. A failure is written with qWarning (path and OS error), followed by
+  /// one qWarning per file that still cannot be removed (on Windows with the processes that
+  /// hold it). It is not retried. Clears pending_workspace_removal_.
   void RemovePendingWorkspace();
 
   // Owned in construction dependency order. Destroyed in reverse.

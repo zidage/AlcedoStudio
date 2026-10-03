@@ -327,6 +327,10 @@ target_link_libraries(AlcedoQanGraph
 # the native project and Nikon recovery file dialogs.
 target_link_libraries(AlbumBackendLib PRIVATE Qt6::Widgets)
 target_link_libraries(AlbumBackendLib PUBLIC AlcedoQanGraph)
+if(WIN32)
+    # Restart Manager names the processes that hold a runtime workspace file open.
+    target_link_libraries(AlbumBackendLib PRIVATE Rstrtmgr)
+endif()
 
 set(ALCEDO_MAIN_SOURCES
     "${ALCEDO_UI_SHELL_ROOT}/main.cpp"

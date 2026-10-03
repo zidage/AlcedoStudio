@@ -324,67 +324,72 @@ int main(int argc, char* argv[]) {
   // backgrounds; Basic leaves those custom surfaces alone.
   QQuickStyle::setStyle("Basic");
 
-  alcedo::ui::ApplicationModuleHost app_modules;
-  app_modules.project()->SetRuntimeAcceleratorPreference(
-      ToAcceleratorPreference(editor_backend));
-  alcedo::ui::RegisterApplicationModuleTypes();
-  alcedo::editor_rhi::RegisterEditorViewportQmlTypes();
+  int exit_code = 0;
+  {
+    alcedo::ui::ApplicationModuleHost app_modules;
+    app_modules.project()->SetRuntimeAcceleratorPreference(
+        ToAcceleratorPreference(editor_backend));
+    alcedo::ui::RegisterApplicationModuleTypes();
+    alcedo::editor_rhi::RegisterEditorViewportQmlTypes();
 
-  QQmlApplicationEngine engine;
-  engine.addImportPath("qrc:/");
-  QuickQanava::initialize(&engine);
-  language_manager.AttachEngine(&engine);
-  app_modules.AttachQmlEngine(&engine);
-  engine.rootContext()->setContextProperty("appModules", &app_modules);
-  engine.rootContext()->setContextProperty("appTheme", &alcedo::ui::AppTheme::Instance());
-  engine.rootContext()->setContextProperty("languageManager", &language_manager);
-  engine.rootContext()->setContextProperty("automationMode", false);
+    QQmlApplicationEngine engine;
+    engine.addImportPath("qrc:/");
+    QuickQanava::initialize(&engine);
+    language_manager.AttachEngine(&engine);
+    app_modules.AttachQmlEngine(&engine);
+    engine.rootContext()->setContextProperty("appModules", &app_modules);
+    engine.rootContext()->setContextProperty("appTheme", &alcedo::ui::AppTheme::Instance());
+    engine.rootContext()->setContextProperty("languageManager", &language_manager);
+    engine.rootContext()->setContextProperty("automationMode", false);
 #ifdef Q_OS_WIN
-  engine.rootContext()->setContextProperty("nativeFrameManaged", true);
+    engine.rootContext()->setContextProperty("nativeFrameManaged", true);
 #else
-  engine.rootContext()->setContextProperty("nativeFrameManaged", false);
+    engine.rootContext()->setContextProperty("nativeFrameManaged", false);
 #endif
-  // Production starts as the real maximized app. Tests and the automation host
-  // leave this unset so they keep the declared 1200x760 windowed geometry.
-  engine.rootContext()->setContextProperty("startMaximized", true);
+    // Production starts as the real maximized app. Tests and the automation host
+    // leave this unset so they keep the declared 1200x760 windowed geometry.
+    engine.rootContext()->setContextProperty("startMaximized", true);
 
-  QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app,
-                   []() { QCoreApplication::exit(-1); }, Qt::QueuedConnection);
+    QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app,
+                     []() { QCoreApplication::exit(-1); }, Qt::QueuedConnection);
 
-  engine.loadFromModule("Alcedo.Main", "Main");
+    engine.loadFromModule("Alcedo.Main", "Main");
 
 #ifdef Q_OS_WIN
-  alcedo::ui::WindowsFramelessWindow native_window_frame;
+    alcedo::ui::WindowsFramelessWindow native_window_frame;
 #endif
 #ifdef Q_OS_MACOS
-  alcedo::ui::MacosFramelessWindow native_window_frame;
+    alcedo::ui::MacosFramelessWindow native_window_frame;
 #endif
 
-  // Install platform frame behavior before the hidden production window is
-  // shown, then bind the editor renderer to that final native window.
-  if (!engine.rootObjects().isEmpty()) {
-    if (auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().constFirst())) {
+    // Install platform frame behavior before the hidden production window is
+    // shown, then bind the editor renderer to that final native window.
+    if (!engine.rootObjects().isEmpty()) {
+      if (auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().constFirst())) {
 #ifdef Q_OS_WIN
-      if (!native_window_frame.Install(window)) {
-        qWarning("Could not install the native Windows frame integration");
-      }
+        if (!native_window_frame.Install(window)) {
+          qWarning("Could not install the native Windows frame integration");
+        }
 #endif
 #ifdef Q_OS_MACOS
-      if (!native_window_frame.Install(window)) {
-        qWarning("Could not install the native macOS traffic-light integration");
-      }
+        if (!native_window_frame.Install(window)) {
+          qWarning("Could not install the native macOS traffic-light integration");
+        }
 #endif
-      alcedo::editor_rhi::BindEditorGraphicsToWindow(window, startup);
-      window->setProperty("nativeFrameReady", true);
-      window->showMaximized();
+        alcedo::editor_rhi::BindEditorGraphicsToWindow(window, startup);
+        window->setProperty("nativeFrameReady", true);
+        window->showMaximized();
+      }
     }
-  }
 
-  const int exit_code = app.exec();
-  // The QML engine owns the editor viewport and its frame sink, and it is destroyed before
-  // app_modules. Shut the modules down (and drain the in-flight editor frame) while it lives.
-  app_modules.Shutdown();
-  qCInfo(alcedo::diag::appLog) << "app.exit code=" << exit_code;
+    exit_code = app.exec();
+    // The QML engine owns the editor viewport and its frame sink, and it is destroyed before
+    // app_modules. Shut the modules down (and drain the in-flight editor frame) while it lives.
+    app_modules.Shutdown();
+    qCInfo(alcedo::diag::appLog) << "app.exit code=" << exit_code;
+  }
+  // The modules are destroyed above, after the QML engine. The host destructor removes the
+  // runtime workspace and writes a removal failure with qWarning, so logging stays up until then.
   alcedo::diag::PreviewPerformance::Shutdown();
   alcedo::diag::ShutdownApplicationLogging();
   return exit_code;

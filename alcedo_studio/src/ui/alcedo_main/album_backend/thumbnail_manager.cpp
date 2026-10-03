@@ -245,8 +245,11 @@ void ThumbnailManager::RequestThumbnail(sl_element_id_t elementId, image_id_t im
     thumbnail_active_flags_[key] = is_active;
   }
 
-  auto                   service = thumb_svc;
-  QPointer<LibraryModule> self(&library_);
+  // The service stores this callback in its pending requests until the render answers, and the
+  // dispatcher queues it on the application. A strong reference would keep the service, its
+  // pipeline, and the project database alive after the project closes, so capture a weak one.
+  std::weak_ptr<ThumbnailService> weak_service = thumb_svc;
+  QPointer<LibraryModule>         self(&library_);
 
   CallbackDispatcher dispatcher = [](std::function<void()> fn) {
     auto* app = QCoreApplication::instance();
@@ -258,9 +261,9 @@ void ThumbnailManager::RequestThumbnail(sl_element_id_t elementId, image_id_t im
   };
 
   try {
-    service->GetThumbnailDetailed(
+    thumb_svc->GetThumbnailDetailed(
         elementId, imageId,
-        [self, service, elementId, imageId, maxEdge, key, retryAttempt,
+        [self, weak_service, elementId, imageId, maxEdge, key, retryAttempt,
          is_active](ThumbnailRequestResult result) {
         // Strategy B: skip QImage conversion if this request was cancelled.
         if (!is_active || !is_active->load()) {
@@ -295,9 +298,11 @@ void ThumbnailManager::RequestThumbnail(sl_element_id_t elementId, image_id_t im
             self->thumbs().UpdateThumbnailState(elementId, QString(), false, missing_source,
                                               error_text);
           }
-          if (self && !self->thumbs().IsThumbnailPinned(key) && service) {
+          if (self && !self->thumbs().IsThumbnailPinned(key)) {
             try {
-              service->ReleaseThumbnail(key);
+              if (auto service = weak_service.lock()) {
+                service->ReleaseThumbnail(key);
+              }
             } catch (...) {
             }
           }
@@ -305,7 +310,7 @@ void ThumbnailManager::RequestThumbnail(sl_element_id_t elementId, image_id_t im
         }
         if (!self) {
           try {
-            if (service) {
+            if (auto service = weak_service.lock()) {
               service->ReleaseThumbnail(key);
             }
           } catch (...) {
@@ -314,7 +319,7 @@ void ThumbnailManager::RequestThumbnail(sl_element_id_t elementId, image_id_t im
         }
 
         auto image_store = self->thumbs().image_store();
-        std::thread([self, service, elementId, maxEdge, key, is_active, image_store,
+        std::thread([self, weak_service, elementId, maxEdge, key, is_active, image_store,
                      guard = std::move(guard)]() mutable {
           // Strategy B: re-check before expensive conversion.
           if (!is_active || !is_active->load()) {
@@ -361,7 +366,7 @@ void ThumbnailManager::RequestThumbnail(sl_element_id_t elementId, image_id_t im
           if (self) {
             QMetaObject::invokeMethod(
                 self,
-                [self, service, elementId, key, thumbUrl, errorText, is_active]() {
+                [self, weak_service, elementId, key, thumbUrl, errorText, is_active]() {
                   if (!self) {
                     return;
                   }
@@ -385,9 +390,11 @@ void ThumbnailManager::RequestThumbnail(sl_element_id_t elementId, image_id_t im
                     self->thumbs().image_store()->RemoveElement(elementId);
                     self->thumbs().UpdateThumbnailState(elementId, QString(), false, false);
                   }
-                  if (!pinned && service) {
+                  if (!pinned) {
                     try {
-                      service->ReleaseThumbnail(key);
+                      if (auto service = weak_service.lock()) {
+                        service->ReleaseThumbnail(key);
+                      }
                     } catch (...) {
                     }
                   }

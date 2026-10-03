@@ -11,17 +11,21 @@
 #include <QMetaObject>
 #include <QPointer>
 #include <QQmlEngine>
+#include <QStringList>
 #include <QThread>
 #include <chrono>
 #include <cstdint>
 #include <exception>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <string>
 #include <system_error>
+#include <vector>
 
 #include "app/editor_adjustment_context.hpp"
 #include "app/image_pool_service.hpp"
+#include "app/project_service.hpp"
 #include "image/image.hpp"
 #include "app/editor_session_bootstrap.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
@@ -37,7 +41,139 @@
 #include "ui/alcedo_main/album_backend/system_icon_image_provider.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+// RestartManager.h needs the Windows types above.
+#include <RestartManager.h>
+#endif
+
 namespace alcedo::ui {
+namespace {
+
+// Weak references to the project services that keep the DuckDB file open. The destructor
+// takes them before ProjectModule is destroyed and reports every service that outlives it.
+struct ProjectServiceWatch {
+  std::weak_ptr<alcedo::ProjectService>       project_;
+  std::weak_ptr<alcedo::Storage>              storage_;
+  std::weak_ptr<alcedo::ImagePoolService>     image_pool_;
+  std::weak_ptr<alcedo::PipelineMgmtService>  pipeline_;
+  std::weak_ptr<alcedo::ThumbnailService>     thumbnails_;
+  std::weak_ptr<alcedo::MaskThumbnailService> mask_thumbnails_;
+  std::weak_ptr<alcedo::ExportService>        export_;
+};
+
+auto WatchProjectServices(const ProjectModule* project) -> ProjectServiceWatch {
+  ProjectServiceWatch watch;
+  if (project == nullptr) {
+    return watch;
+  }
+  const auto& handler = project->handler();
+  if (const auto& service = handler.project()) {
+    watch.project_    = service;
+    watch.storage_    = service->GetStorage();
+    watch.image_pool_ = service->GetImagePoolService();
+  }
+  watch.pipeline_        = handler.pipeline_service();
+  watch.thumbnails_      = handler.thumbnail_service();
+  watch.mask_thumbnails_ = handler.mask_thumbnail_service();
+  watch.export_          = handler.export_service();
+  return watch;
+}
+
+void ReportSurvivingProjectServices(const ProjectServiceWatch& watch) {
+  const auto report = [](const char* name, long use_count) {
+    if (use_count > 0) {
+      qWarning().noquote() << "Project service outlived ProjectModule:" << name
+                           << "use_count=" << use_count;
+    }
+  };
+  report("ProjectService", watch.project_.use_count());
+  report("Storage", watch.storage_.use_count());
+  report("ImagePoolService", watch.image_pool_.use_count());
+  report("PipelineMgmtService", watch.pipeline_.use_count());
+  report("ThumbnailService", watch.thumbnails_.use_count());
+  report("MaskThumbnailService", watch.mask_thumbnails_.use_count());
+  report("ExportService", watch.export_.use_count());
+}
+
+auto PathText(const std::filesystem::path& path) -> QString {
+  return QString::fromStdWString(path.wstring());
+}
+
+#ifdef _WIN32
+// Names the processes that hold @p file open, as Restart Manager reports them.
+auto DescribeFileHolders(const std::filesystem::path& file) -> QString {
+  DWORD session                             = 0;
+  WCHAR session_key[CCH_RM_SESSION_KEY + 1] = {};
+  if (RmStartSession(&session, 0, session_key) != ERROR_SUCCESS) {
+    return QStringLiteral("holders unknown (RmStartSession failed)");
+  }
+  const std::wstring           file_text = file.wstring();
+  LPCWSTR                      files[]   = {file_text.c_str()};
+  std::vector<RM_PROCESS_INFO> holders;
+  DWORD status = RmRegisterResources(session, 1, files, 0, nullptr, 0, nullptr);
+  if (status == ERROR_SUCCESS) {
+    UINT  needed  = 0;
+    UINT  count   = 0;
+    DWORD reasons = 0;
+    status        = RmGetList(session, &needed, &count, nullptr, &reasons);
+    if (status == ERROR_MORE_DATA) {
+      holders.resize(needed);
+      count  = needed;
+      status = RmGetList(session, &needed, &count, holders.data(), &reasons);
+      holders.resize(status == ERROR_SUCCESS ? count : 0);
+    }
+  }
+  RmEndSession(session);
+  if (status != ERROR_SUCCESS) {
+    return QStringLiteral("holders unknown (Restart Manager error %1)").arg(status);
+  }
+  if (holders.empty()) {
+    return QStringLiteral("no process holds it");
+  }
+  const DWORD self = GetCurrentProcessId();
+  QStringList names;
+  for (const auto& holder : holders) {
+    names << QStringLiteral("%1 pid=%2%3")
+                 .arg(QString::fromWCharArray(holder.strAppName))
+                 .arg(holder.Process.dwProcessId)
+                 .arg(holder.Process.dwProcessId == self ? QStringLiteral(" (this process)")
+                                                         : QString());
+  }
+  return QStringLiteral("held by ") + names.join(QStringLiteral(", "));
+}
+#endif
+
+// Removes the files that remove_all left in @p root one by one and writes each file that
+// still cannot be removed, with the OS error and (on Windows) the processes that hold it.
+void ReportUnremovableWorkspaceFiles(const std::filesystem::path& root) {
+  std::error_code iterate_error;
+  for (auto it = std::filesystem::recursive_directory_iterator(root, iterate_error);
+       !iterate_error && it != std::filesystem::recursive_directory_iterator();
+       it.increment(iterate_error)) {
+    std::error_code type_error;
+    if (it->is_directory(type_error)) {
+      continue;
+    }
+    std::error_code remove_error;
+    if (std::filesystem::remove(it->path(), remove_error) || !remove_error) {
+      continue;
+    }
+    QString detail = QString::fromStdString(remove_error.message());
+#ifdef _WIN32
+    detail += QStringLiteral("; ") + DescribeFileHolders(it->path());
+#endif
+    qWarning().noquote() << "Runtime workspace file is locked:" << PathText(it->path()) << detail;
+  }
+}
+
+}  // namespace
 
 // ── ApplicationModuleHost ───────────────────────────────────────────────────
 
@@ -569,7 +705,9 @@ ApplicationModuleHost::~ApplicationModuleHost() {
   destroy(images_, "ImageController");
   destroy(folders_, "FolderController");
   destroy(library_, "LibraryModule");
+  const auto project_services = WatchProjectServices(project_.get());
   destroy(project_, "ProjectModule");
+  ReportSurvivingProjectServices(project_services);
   RemovePendingWorkspace();
   destroy(lut_packages_, "LutPackageService");
   destroy(lut_library_, "LutLibraryService");
@@ -590,8 +728,9 @@ void ApplicationModuleHost::RemovePendingWorkspace() {
   std::filesystem::remove_all(pending_workspace_removal_, ec);
   if (ec) {
     qWarning().noquote() << "Runtime workspace removal failed:"
-                         << QString::fromStdWString(pending_workspace_removal_.wstring())
+                         << PathText(pending_workspace_removal_)
                          << QString::fromStdString(ec.message());
+    ReportUnremovableWorkspaceFiles(pending_workspace_removal_);
   }
   pending_workspace_removal_.clear();
 }
