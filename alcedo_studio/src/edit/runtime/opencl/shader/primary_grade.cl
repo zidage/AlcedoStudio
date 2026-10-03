@@ -251,12 +251,12 @@ static inline float3 ApplyAdjustment(float3 c, __global const GradeAdjustmentPar
     const float gamma_x = max(p->values[4] + p->values[7], 1.0e-4f);
     const float gamma_y = max(p->values[5] + p->values[7], 1.0e-4f);
     const float gamma_z = max(p->values[6] + p->values[7], 1.0e-4f);
-    c.x =
-        copysign(pow(fabs(c.x + p->values[0] + p->values[3]), 1.0f / gamma_x), c.x) * p->values[8];
-    c.y =
-        copysign(pow(fabs(c.y + p->values[1] + p->values[3]), 1.0f / gamma_y), c.y) * p->values[9];
-    c.z =
-        copysign(pow(fabs(c.z + p->values[2] + p->values[3]), 1.0f / gamma_z), c.z) * p->values[10];
+    const float gain_x  = p->values[8] + p->values[11];
+    const float gain_y  = p->values[9] + p->values[11];
+    const float gain_z  = p->values[10] + p->values[11];
+    c.x = copysign(pow(fabs(c.x + p->values[0] + p->values[3]), gamma_x), c.x) * gain_x;
+    c.y = copysign(pow(fabs(c.y + p->values[1] + p->values[3]), gamma_y), c.y) * gain_y;
+    c.z = copysign(pow(fabs(c.z + p->values[2] + p->values[3]), gamma_z), c.z) * gain_z;
   } else if (behavior == 12u && value > 0.0f && lut_edge > 1u) {
     // value is the LUT strength a in (0, 1]: c + a * (L(c) - c) in ACEScc; a = 1 is L(c).
     // An empty LUT (edge 0) means the referenced file is missing: the operation is skipped.

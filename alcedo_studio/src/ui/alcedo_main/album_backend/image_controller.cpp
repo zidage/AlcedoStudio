@@ -6,6 +6,8 @@
 
 #include <QCoreApplication>
 #include <QDesktopServices>
+#include <QMetaObject>
+#include <QPointer>
 #include <QStringList>
 #include <QUrl>
 #include <algorithm>
@@ -14,8 +16,11 @@
 #include <cstdint>
 #include <exception>
 #include <json.hpp>
+#include <memory>
 #include <numeric>
 #include <optional>
+#include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
@@ -23,6 +28,7 @@
 #include "ai/ai_rating.hpp"
 #include "image/image.hpp"
 #include "sleeve/storage.hpp"
+#include "ui/alcedo_main/album_backend/background_task_controller.hpp"
 #include "ui/alcedo_main/album_backend/folder_controller.hpp"
 #include "ui/alcedo_main/album_backend/image_controller.hpp"
 #include "ui/alcedo_main/album_backend/import_export.hpp"
@@ -507,11 +513,13 @@ ImageController::ImageController(ProjectModule* project, LibraryModule* library,
 
 void ImageController::BindCollaborators(StatsEngine* stats, ImportExportHandler* import_export,
                                         SemanticGenerationController* semantic,
-                                        InteractionPolicyController*  policy) {
-  stats_         = stats;
-  import_export_ = import_export;
-  semantic_      = semantic;
-  policy_        = policy;
+                                        InteractionPolicyController*  policy,
+                                        BackgroundTaskController*     background_tasks) {
+  stats_            = stats;
+  import_export_    = import_export;
+  semantic_         = semantic;
+  policy_           = policy;
+  background_tasks_ = background_tasks;
 }
 
 auto ImageController::SaveProjectSnapshot() -> bool {
@@ -1239,6 +1247,314 @@ auto ImageController::SetImageRating(uint elementId, uint imageId, int rating) -
     result["message"] = msg.Render();
     return result;
   }
+}
+
+auto ImageController::PrepareRatingBatch(const QVariantList& targetEntries, int rating,
+                                         QVariantMap* error_result)
+    -> std::optional<RatingBatch> {
+  auto fail = [&](const QString& message, bool show_status) -> std::optional<RatingBatch> {
+    if (show_status) {
+      status_->SetTaskState(PL_TEXT("%1", message), 0, false);
+    }
+    error_result->insert("message", message);
+    return std::nullopt;
+  };
+
+  if (rating < ExifDisplayMetaData::kMinRating || rating > ExifDisplayMetaData::kMaxRating) {
+    return fail(PL_TEXT("Rating must be between 0 and 5.").Render(), false);
+  }
+
+  // An AI scoring run, or a rating batch that is still saving, holds EditImageRating
+  // locks. A batch that touches any locked image is refused as a whole, like a batch
+  // delete.
+  if (policy_) {
+    const QVariantMap policy = policy_->EvaluateEditImageRatings(targetEntries);
+    if (!policy.value(QStringLiteral("allowed")).toBool()) {
+      QString reason = policy.value(QStringLiteral("reason")).toString();
+      if (reason.isEmpty()) {
+        reason = PL_TEXT("These images cannot be rated right now.").Render();
+      }
+      return fail(reason, true);
+    }
+  }
+
+  auto& ph = project_->handler();
+  if (ph.project_loading()) {
+    return fail(PL_TEXT("Project is loading. Please wait.").Render(), true);
+  }
+  if (!ph.project()) {
+    return fail(PL_TEXT("No project is loaded.").Render(), true);
+  }
+  if (!ph.project()->GetImagePoolService()) {
+    return fail(PL_TEXT("Image service is unavailable.").Render(), true);
+  }
+
+  RatingBatch                    batch;
+  std::unordered_set<image_id_t> seen_image_ids;
+  batch.rating_ = rating;
+  batch.targets_.reserve(static_cast<size_t>(targetEntries.size()));
+  seen_image_ids.reserve(static_cast<size_t>(targetEntries.size()) * 2 + 1);
+  for (const QVariant& row_var : targetEntries) {
+    const QVariantMap  row    = row_var.toMap();
+    const RatingTarget target = ResolveRatingTarget(row.value("elementId").toUInt(),
+                                                    row.value("imageId").toUInt());
+    if (target.image_id_ == 0) {
+      if (target.element_id_ != 0) {
+        batch.unresolved_element_ids_.push_back(target.element_id_);
+      }
+      continue;
+    }
+    if (seen_image_ids.insert(target.image_id_).second) {
+      batch.targets_.push_back(target);
+    }
+  }
+  if (batch.targets_.empty()) {
+    return fail(PL_TEXT("No valid image was selected.").Render(), true);
+  }
+  return batch;
+}
+
+auto ImageController::SetViewRatings(const std::vector<RatingTarget>& targets,
+                                     const std::vector<int>& ratings) -> std::vector<int> {
+  std::vector<int>                                previous(targets.size(), -1);
+  std::unordered_map<sl_element_id_t, size_t>     index_by_element;
+  std::unordered_map<image_id_t, size_t>          index_by_image;
+  for (size_t i = 0; i < targets.size(); ++i) {
+    if (targets[i].element_id_ != 0) {
+      index_by_element.emplace(targets[i].element_id_, i);
+    } else {
+      index_by_image.emplace(targets[i].image_id_, i);
+    }
+  }
+
+  // One pass over the view state for the whole batch.
+  for (auto& item : library_->view_state().all_images_) {
+    auto index_it = index_by_element.find(item.element_id);
+    if (index_it == index_by_element.end()) {
+      index_it = index_by_image.find(item.image_id);
+      if (index_it == index_by_image.end()) {
+        continue;
+      }
+    }
+    const size_t index = index_it->second;
+    if (previous[index] < 0) {
+      previous[index] = item.rating;
+    }
+    item.rating = ratings[index];
+  }
+  for (size_t i = 0; i < targets.size(); ++i) {
+    library_->model().updateRating(targets[i].element_id_, targets[i].image_id_, ratings[i]);
+  }
+  return previous;
+}
+
+auto ImageController::PersistRatingBatch(const std::shared_ptr<ProjectService>& project,
+                                         const RatingBatch&                     batch,
+                                         const std::function<bool(QString*)>&   save_job)
+    -> RatingBatchOutcome {
+  RatingBatchOutcome outcome;
+  outcome.rated_.assign(batch.targets_.size(), false);
+  auto image_pool = project ? project->GetImagePoolService() : nullptr;
+  if (!image_pool) {
+    return outcome;
+  }
+
+  const int rating = batch.rating_;
+  try {
+    // Mark every image MODIFIED in memory first. The single SyncWithStorage below
+    // writes all of them in one batched UpdateImages transaction.
+    for (size_t i = 0; i < batch.targets_.size(); ++i) {
+      try {
+        image_pool->Write_NoSync<void>(
+            batch.targets_[i].image_id_, [rating](const std::shared_ptr<Image>& image) {
+              if (!image) {
+                return;
+              }
+              ExifDisplayMetaData metadata;
+              if (image->has_exif_display_.load()) {
+                metadata = image->exif_display_;
+              } else if (image->has_exif_json_.load()) {
+                metadata.FromJson(image->exif_json_);
+              }
+              metadata.rating_ = ExifDisplayMetaData::NormalizeRating(rating);
+              image->SetExifDisplayMetaData(std::move(metadata));
+            });
+        outcome.rated_[i] = true;
+      } catch (...) {
+      }
+    }
+
+    const auto sync_status = image_pool->SyncWithStorage();
+    if (!sync_status.failed_images_.empty()) {
+      std::unordered_set<image_id_t> sync_failed_image_ids;
+      for (const auto& error : sync_status.failed_images_) {
+        sync_failed_image_ids.insert(error.image_id_);
+      }
+      for (size_t i = 0; i < batch.targets_.size(); ++i) {
+        if (sync_failed_image_ids.count(batch.targets_[i].image_id_) > 0) {
+          outcome.rated_[i] = false;
+        }
+      }
+    }
+  } catch (...) {
+    outcome.rated_.assign(batch.targets_.size(), false);
+    return outcome;
+  }
+
+  if (std::find(outcome.rated_.begin(), outcome.rated_.end(), true) != outcome.rated_.end()) {
+    QString ignored_error;
+    outcome.save_ok_ = save_job ? save_job(&ignored_error) : true;
+  }
+  return outcome;
+}
+
+auto ImageController::FinishRatingBatch(const RatingBatch&        batch,
+                                        const RatingBatchOutcome& outcome) -> QVariantMap {
+  std::vector<sl_element_id_t> rated_ids;
+  std::vector<sl_element_id_t> failed_ids = batch.unresolved_element_ids_;
+  std::vector<RatingTarget>    revert_targets;
+  std::vector<int>             revert_ratings;
+  for (size_t i = 0; i < batch.targets_.size(); ++i) {
+    const auto& target = batch.targets_[i];
+    if (outcome.rated_[i]) {
+      rated_ids.push_back(target.element_id_);
+      continue;
+    }
+    failed_ids.push_back(target.element_id_);
+    if (i < batch.previous_view_ratings_.size() && batch.previous_view_ratings_[i] >= 0) {
+      revert_targets.push_back(target);
+      revert_ratings.push_back(batch.previous_view_ratings_[i]);
+    }
+  }
+  // The view already shows the new rating. Put the old one back where the write failed.
+  if (!revert_targets.empty()) {
+    (void)SetViewRatings(revert_targets, revert_ratings);
+  }
+
+  QVariantMap result{{"success", false},
+                     {"rating", batch.rating_},
+                     {"ratedCount", static_cast<int>(rated_ids.size())},
+                     {"failedCount", static_cast<int>(failed_ids.size())},
+                     {"ratedElementIds", ToVariantIdList(rated_ids)},
+                     {"failedElementIds", ToVariantIdList(failed_ids)}};
+
+  if (rated_ids.empty()) {
+    const auto msg = PL_TEXT("Failed to save image rating.");
+    status_->SetTaskState(msg, 0, false);
+    result["message"] = msg.Render();
+    return result;
+  }
+
+  stats_->RefreshStats();
+
+  const int count = static_cast<int>(rated_ids.size());
+  auto      msg   = batch.rating_ == 0
+                        ? PL_TEXT("Rating cleared for %1 images.", count)
+                        : PL_TEXT("Rating set to %1/5 for %2 images.", batch.rating_, count);
+  if (!failed_ids.empty()) {
+    msg = PL_TEXT("%1 %2 images failed.", msg.Render(), static_cast<int>(failed_ids.size()));
+  }
+  if (!outcome.save_ok_) {
+    msg = PL_TEXT("%1 Project state save failed.", msg.Render());
+  }
+  status_->SetServiceMessage(msg);
+  status_->SetTaskState(msg, outcome.save_ok_ ? 100 : 0, false);
+  if (outcome.save_ok_) {
+    status_->ScheduleIdleTaskStateReset(1200);
+  }
+
+  result["success"] = true;
+  result["message"] = msg.Render();
+  return result;
+}
+
+auto ImageController::SetImageRatings(const QVariantList& targetEntries, int rating)
+    -> QVariantMap {
+  QVariantMap error_result{{"success", false}, {"message", QString{}}, {"rating", 0},
+                           {"ratedCount", 0},  {"failedCount", 0}};
+  auto        batch = PrepareRatingBatch(targetEntries, rating, &error_result);
+  if (!batch.has_value()) {
+    return error_result;
+  }
+  batch->previous_view_ratings_ =
+      SetViewRatings(batch->targets_, std::vector<int>(batch->targets_.size(), rating));
+  const auto& ph      = project_->handler();
+  const auto  outcome = PersistRatingBatch(ph.project(), *batch, ph.MakeSaveAndPackageJob());
+  return FinishRatingBatch(*batch, outcome);
+}
+
+auto ImageController::StartSetImageRatings(const QVariantList& targetEntries, int rating)
+    -> QVariantMap {
+  QVariantMap result{{"started", false}, {"message", QString{}}};
+  if (rating_batch_running_) {
+    result["message"] = PL_TEXT("Ratings are still being saved.").Render();
+    return result;
+  }
+  auto batch = PrepareRatingBatch(targetEntries, rating, &result);
+  if (!batch.has_value()) {
+    return result;
+  }
+
+  // The library shows the new stars right away; FinishRatingBatch puts back the old
+  // rating of any image whose write fails.
+  batch->previous_view_ratings_ =
+      SetViewRatings(batch->targets_, std::vector<int>(batch->targets_.size(), rating));
+
+  rating_batch_running_ = true;
+  if (background_tasks_ != nullptr) {
+    const QString          reason = PL_TEXT("Ratings are being saved.").Render();
+    BackgroundTaskSnapshot snapshot;
+    snapshot.kind_  = BackgroundTaskKind::RatingUpdate;
+    snapshot.state_ = BackgroundTaskState::Running;
+    snapshot.title_ = rating == 0 ? PL_TEXT("Clearing ratings").Render()
+                                  : PL_TEXT("Setting ratings to %1/5", rating).Render();
+    snapshot.detail_ =
+        PL_TEXT("%1 images", static_cast<int>(batch->targets_.size())).Render();
+    snapshot.progress_percent_ = -1;
+    snapshot.cancelable_       = false;
+    snapshot.shutdown_policy_  = BackgroundTaskShutdownPolicy::WaitForFinish;
+    snapshot.locks_            = {
+        {InteractionCapability::EditImageRating, 0, reason},
+        {InteractionCapability::CloseProject, 0, reason},
+    };
+    for (const auto& target : batch->targets_) {
+      snapshot.affected_targets_.push_back(static_cast<quint64>(target.element_id_));
+      snapshot.locks_.push_back(
+          {InteractionCapability::DeleteImages, static_cast<quint64>(target.element_id_), reason});
+    }
+    rating_task_id_ = background_tasks_->RegisterTask(snapshot);
+  }
+
+  const auto&               ph = project_->handler();
+  QPointer<ImageController> self(this);
+  std::thread([self, project = ph.project(), save_job = ph.MakeSaveAndPackageJob(),
+               batch = std::move(*batch)]() mutable {
+    auto outcome = std::make_shared<RatingBatchOutcome>(
+        PersistRatingBatch(project, batch, save_job));
+    auto finished_batch = std::make_shared<RatingBatch>(std::move(batch));
+    QMetaObject::invokeMethod(
+        self.data(),
+        [self, outcome, finished_batch]() {
+          if (!self) {
+            return;
+          }
+          const QVariantMap result = self->FinishRatingBatch(*finished_batch, *outcome);
+          if (self->background_tasks_ != nullptr && !self->rating_task_id_.isEmpty()) {
+            self->background_tasks_->FinishTask(self->rating_task_id_,
+                                                result.value("success").toBool()
+                                                    ? BackgroundTaskState::Succeeded
+                                                    : BackgroundTaskState::Failed,
+                                                result.value("message").toString());
+            self->rating_task_id_.clear();
+          }
+          self->rating_batch_running_ = false;
+          emit self->ImageRatingsFinished(result);
+        },
+        Qt::QueuedConnection);
+  }).detach();
+
+  result["started"] = true;
+  return result;
 }
 
 auto ImageController::SetImageDescription(uint elementId, const QString& caption) -> QVariantMap {

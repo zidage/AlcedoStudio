@@ -130,6 +130,7 @@ class InteractionPolicyController final : public QObject {
   // no parameters and a different return type would be an illegal overload.
   Q_INVOKABLE QVariantMap EvaluateEditImageDescription(uint elementId) const;
   Q_INVOKABLE QVariantMap EvaluateEditImageRating(uint elementId) const;
+  Q_INVOKABLE QVariantMap EvaluateEditImageRatings(const QVariantList& targets) const;
   Q_INVOKABLE QVariantMap EvaluateEditImageRatingReason(uint elementId) const;
   Q_INVOKABLE QVariantMap EvaluateRunImageAnalysis(const QVariantList& targets) const;
   Q_INVOKABLE QVariantMap EvaluateDeleteImages(const QVariantList& targets) const;
@@ -158,8 +159,8 @@ class InteractionPolicyController final : public QObject {
   Answer Eval(InteractionCapability capability, quint64 elementId) const;
   // Global capability (blocks if any lock with this capability is held).
   Answer EvalGlobal(InteractionCapability capability) const;
-  // Target-list capability (RunImageAnalysis / DeleteImages): blocked if ANY
-  // target elementId is covered by a matching lock.
+  // Target-list capability (RunImageAnalysis / DeleteImages / EditImageRating):
+  // blocked if ANY target elementId is covered by a matching lock.
   Answer EvalTargets(InteractionCapability  capability,
                     const QVariantList&    targets) const;
   static auto ToVariantMap(const Answer& answer) -> QVariantMap;

@@ -24,6 +24,7 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/models/cat02_white_balance_model.hpp"
+#include "edit/operators/models/color_wheel_model.hpp"
 #include "edit/operators/models/hls_model.hpp"
 #include "edit/operators/models/i_operator_model.hpp"
 #include "edit/operators/models/lmt_model.hpp"
@@ -290,12 +291,15 @@ auto CpuApplyAdjustment(Rgba c, const GradeAdjustmentParams& p) -> Rgba {
     const float gamma_x = std::max(p.values[4] + p.values[7], 1.0e-4f);
     const float gamma_y = std::max(p.values[5] + p.values[7], 1.0e-4f);
     const float gamma_z = std::max(p.values[6] + p.values[7], 1.0e-4f);
-    c.r = std::copysign(std::pow(std::fabs(c.r + p.values[0] + p.values[3]), 1.0f / gamma_x), c.r) *
-          p.values[8];
-    c.g = std::copysign(std::pow(std::fabs(c.g + p.values[1] + p.values[3]), 1.0f / gamma_y), c.g) *
-          p.values[9];
-    c.b = std::copysign(std::pow(std::fabs(c.b + p.values[2] + p.values[3]), 1.0f / gamma_z), c.b) *
-          p.values[10];
+    const float gain_x  = p.values[8] + p.values[11];
+    const float gain_y  = p.values[9] + p.values[11];
+    const float gain_z  = p.values[10] + p.values[11];
+    c.r = std::copysign(std::pow(std::fabs(c.r + p.values[0] + p.values[3]), gamma_x), c.r) *
+          gain_x;
+    c.g = std::copysign(std::pow(std::fabs(c.g + p.values[1] + p.values[3]), gamma_y), c.g) *
+          gain_y;
+    c.b = std::copysign(std::pow(std::fabs(c.b + p.values[2] + p.values[3]), gamma_z), c.b) *
+          gain_z;
   }
   return c;
 }
@@ -807,6 +811,48 @@ TEST_F(OpenClGradeFixture, OpenClHlsHueAdjustmentChangesGradePixels) {
     }
   }
   EXPECT_TRUE(changed);
+}
+
+TEST_F(OpenClGradeFixture, OpenClColorWheelGammaAndGainMasterFollowWheelDirection) {
+  (void)RenderGrade();
+  const auto identity = last_output_pixels_;
+  ASSERT_FALSE(identity.empty());
+
+  // The wheel UI stores gamma as 1 - delta: pulling toward red lowers the red exponent, which
+  // must brighten red mid-tones (legacy pow(c, power) direction).
+  auto&                   wheel = ModelByType<ColorWheelModel>(type_ids::ColorWheel());
+  ColorWheelUpdate        gamma_update;
+  ColorWheelControlUpdate gamma;
+  gamma.color_offset = Vec3f{0.8f, 1.0f, 1.0f};
+  gamma_update.gamma = gamma;
+  wheel.ApplyUpdate(gamma_update);
+  (void)RenderGrade();
+  const auto gamma_adjusted = last_output_pixels_;
+  ASSERT_EQ(identity.size(), gamma_adjusted.size());
+
+  // A positive gain master scales every channel up on top of the per-channel gain.
+  ColorWheelUpdate        gain_update;
+  ColorWheelControlUpdate gain;
+  gain.luminance_offset = 0.25f;
+  gain_update.gain      = gain;
+  wheel.ApplyUpdate(gain_update);
+  (void)RenderGrade();
+  const auto& gain_adjusted = last_output_pixels_;
+  ASSERT_EQ(identity.size(), gain_adjusted.size());
+
+  int checked = 0;
+  for (std::size_t i = 0; i < identity.size(); ++i) {
+    const auto& base = identity[i];
+    if (base.r <= 0.02f || base.r >= 0.98f || base.g <= 0.02f) {
+      continue;
+    }
+    ++checked;
+    EXPECT_GT(gamma_adjusted[i].r, base.r + 1.0e-4f) << i;
+    EXPECT_NEAR(gamma_adjusted[i].g, base.g, 1.0e-4f) << i;
+    EXPECT_NEAR(gain_adjusted[i].r, gamma_adjusted[i].r * 1.25f, 1.0e-3f) << i;
+    EXPECT_NEAR(gain_adjusted[i].g, gamma_adjusted[i].g * 1.25f, 1.0e-3f) << i;
+  }
+  EXPECT_GT(checked, 0);
 }
 
 TEST_F(OpenClGradeFixture, OpenClPointwiseAdjustmentsFuseIntoOnePassBeforeLlf) {

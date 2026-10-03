@@ -369,12 +369,17 @@ bool ProjectHandler::PersistCurrentProjectState() {
   }
 }
 
-bool ProjectHandler::PackageCurrentProjectFiles(QString* errorOut) const {
-  if (!project_ || db_path_.empty() || meta_path_.empty() || project_package_path_.empty()) {
+namespace {
+
+auto PackageProjectFiles(const std::shared_ptr<ProjectService>& project,
+                         const std::filesystem::path&           db_path,
+                         const std::filesystem::path&           meta_path,
+                         const std::filesystem::path& package_path, QString* errorOut) -> bool {
+  if (!project || db_path.empty() || meta_path.empty() || package_path.empty()) {
     return true;
   }
 
-  auto package_service = project_->GetProjectPackageService();
+  auto package_service = project->GetProjectPackageService();
   if (!package_service) {
     if (errorOut) {
       *errorOut = QStringLiteral("Project package service is unavailable.");
@@ -387,7 +392,7 @@ bool ProjectHandler::PackageCurrentProjectFiles(QString* errorOut) const {
     return false;
   }
 
-  const bool snapshot_ok = package_service->CreateLiveDbSnapshot(project_, snapshot_path, errorOut);
+  const bool snapshot_ok = package_service->CreateLiveDbSnapshot(project, snapshot_path, errorOut);
   if (!snapshot_ok) {
     std::error_code ec;
     std::filesystem::remove(snapshot_path, ec);
@@ -395,10 +400,35 @@ bool ProjectHandler::PackageCurrentProjectFiles(QString* errorOut) const {
   }
 
   const bool packed_ok =
-      package_service->WritePackedProject(project_package_path_, meta_path_, snapshot_path, errorOut);
+      package_service->WritePackedProject(package_path, meta_path, snapshot_path, errorOut);
   std::error_code ec;
   std::filesystem::remove(snapshot_path, ec);
   return packed_ok;
+}
+
+}  // namespace
+
+bool ProjectHandler::PackageCurrentProjectFiles(QString* errorOut) const {
+  std::lock_guard lock(*package_mutex_);
+  return PackageProjectFiles(project_, db_path_, meta_path_, project_package_path_, errorOut);
+}
+
+auto ProjectHandler::MakeSaveAndPackageJob() const -> std::function<bool(QString*)> {
+  return [project = project_, db_path = db_path_, meta_path = meta_path_,
+          package_path = project_package_path_, mutex = package_mutex_](QString* errorOut) {
+    if (!project) {
+      return false;
+    }
+    try {
+      if (!meta_path.empty()) {
+        project->SaveProject(meta_path);
+      }
+    } catch (...) {
+      return false;
+    }
+    std::lock_guard lock(*mutex);
+    return PackageProjectFiles(project, db_path, meta_path, package_path, errorOut);
+  };
 }
 
 void ProjectHandler::SetProjectLoadingState(bool loading, const i18n::LocalizedText& message) {

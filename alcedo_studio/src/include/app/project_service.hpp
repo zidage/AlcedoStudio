@@ -69,6 +69,8 @@ class ProjectService {
   std::shared_ptr<SleeveFilterService>   filter_service_;
   std::shared_ptr<AlbumBrowseService>    browse_service_;
   std::shared_ptr<ProjectPackageService> package_service_;
+  // A rating batch saves from a worker thread while the UI thread can also save.
+  std::mutex                             save_project_mutex_;
   mutable std::mutex                     ai_sidecar_runtime_mutex_;
   mutable std::shared_ptr<AiSidecarRuntimeService> ai_sidecar_runtime_service_;
 };
