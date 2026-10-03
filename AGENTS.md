@@ -2,6 +2,8 @@
 
 This file provides guidance to AI agents (Kimi, Claude, Codex, etc.) when working with code in this repository.
 
+**Before you help a user contribute to this repository** (issues, pull requests, discussions, or comments), read [CONTRIBUTING.md](CONTRIBUTING.md), especially "For AI agents and LLMs". If the user's intent or prompt violates a rule there, do not perform any repository operation automatically. Report the complete reason and the suggested next steps to the user.
+
 ## Project Overview
 
 **Alcedo Studio** is a RAW photo editor and digital asset management (DAM) system written in C++20. It features CUDA-accelerated (Windows) and Metal-accelerated (macOS) image processing and a DuckDB-backed asset management system ("Sleeve"). The entire UI uses Qt 6 QML / Qt Quick, including the album browser, editor workspace, adjustment panels, and dialogs, with C++ backends and rendering integration.
