@@ -1134,3 +1134,6 @@ skills-lock.json
 /docs/social_media_pub/
 
 nul
+
+# Abandoned UI fuzz platform (kept locally, untracked)
+/tools/ui_fuzz_platform/
