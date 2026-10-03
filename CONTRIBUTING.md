@@ -14,14 +14,23 @@ can be closed without review.
 These rules apply to all content: code, identifiers, comments, documentation, commit
 messages, issue and pull request text, and all communication.
 
-- Do not use the prohibited terms in
-  [Naming and Terminology](AGENTS.md#naming-and-terminology) in `AGENTS.md`. The
-  most common ones are `gate` (and `gated`, `gating`, `InFlightGate`), `hydrate`,
-  `gesture`, `golden`, `smoke`, `envelope`, and `contract` in roadmap documents. The
-  table in `AGENTS.md` gives the required replacement for each term.
-- Use the narrowest term that a human reader can understand. For example, write
-  "lock", "concurrency limit", or "precondition", not "gate"; write "drag" or
-  "pinch", not "gesture".
+- Current LLMs often use the terms below as jargon in code and in text about code.
+  This repository prohibits them everywhere in their jargon sense. Use a term only in
+  its ordinary, literal sense, and only when the text really means that sense. Check
+  all content for these terms before you submit it, also when you wrote it yourself.
+
+  | Term | Prohibited jargon sense | Write the exact item instead, for example | Allowed literal sense |
+  | --- | --- | --- | --- |
+  | `gate` (`gated`, `gating`, `InFlightGate`) | A checkpoint that admits or blocks something | acceptance criteria, blocking item, precondition, check, lock, admission rule, concurrency limit | A physical gate: "open the gate", the Golden Gate Bridge |
+  | `contract` | An agreement between software parts | function signature, interface, API specification, schema, protocol, invariant, compatibility requirement | A legal contract; the verb "to contract"; contraction |
+  | `golden` | The trusted expected output: golden file, golden test, golden image | expected pixel values, expected serialized output, reference image with a stated tolerance | The color gold; the Golden Gate Bridge |
+  | `smoke` | A quick check that something runs: smoke test | the behavior that the test checks and the expected result | Smoke from a fire |
+  | `envelope` | A wrapper or a bounding range: message envelope, performance envelope | the object or the operation: the edit batch, the request header, the payload, peak throughput | A paper envelope for mail |
+
+  The full list of prohibited terms is in
+  [Naming and Terminology](AGENTS.md#naming-and-terminology) in `AGENTS.md`.
+- Use the narrowest term that a human reader can understand. A replacement that is
+  only another vague label does not obey this rule.
 - For technical communication, use
   [ASD-STE100](https://www.asd-ste100.org/) (Simplified Technical English) where
   possible.
