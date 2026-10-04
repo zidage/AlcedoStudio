@@ -13,6 +13,7 @@
 #include <memory>
 #include <stdexcept>
 #include <unordered_set>
+#include <vector>
 
 #include "sleeve/sleeve_element/sleeve_element.hpp"
 #include "sleeve/sleeve_element/sleeve_element_factory.hpp"
@@ -252,6 +253,8 @@ auto FileSystem::DeleteFilesEverywhere(std::span<const sl_element_id_t> file_ids
   deleted_ids.reserve(file_ids.size());
   std::unordered_set<sl_element_id_t> seen;
   seen.reserve(file_ids.size() * 2 + 1);
+  std::vector<std::shared_ptr<SleeveElement>> live_files;
+  live_files.reserve(file_ids.size());
 
   for (const auto file_id : file_ids) {
     if (file_id == 0 || !seen.insert(file_id).second) {
@@ -266,18 +269,32 @@ auto FileSystem::DeleteFilesEverywhere(std::span<const sl_element_id_t> file_ids
     if (!file || file->type_ != ElementType::FILE || file->sync_flag_ == SyncFlag::DELETED) {
       continue;
     }
-    for (auto& [_, element] : storage_) {
-      if (!element || element->type_ != ElementType::FOLDER ||
-          element->sync_flag_ == SyncFlag::DELETED) {
-        continue;
-      }
-      auto folder = std::static_pointer_cast<SleeveFolder>(element);
-      if (folder->ChildrenLoaded()) {
-        folder->RemoveElementById(file_id);
-      }
+    live_files.push_back(std::move(file));
+  }
+  if (live_files.empty()) {
+    return deleted_ids;
+  }
+
+  // One pass over the folders removes every deleted file. Scanning every element of storage_
+  // once per file made deleting the rejected files of a large import quadratic.
+  std::unordered_set<sl_element_id_t> live_file_ids;
+  live_file_ids.reserve(live_files.size() * 2 + 1);
+  for (const auto& file : live_files) {
+    live_file_ids.insert(file->element_id_);
+  }
+  for (auto& [_, element] : storage_) {
+    if (!element || element->type_ != ElementType::FOLDER ||
+        element->sync_flag_ == SyncFlag::DELETED) {
+      continue;
     }
+    auto folder = std::static_pointer_cast<SleeveFolder>(element);
+    if (folder->ChildrenLoaded()) {
+      folder->RemoveElementsById(live_file_ids);
+    }
+  }
+  for (const auto& file : live_files) {
     file->SetSyncFlag(SyncFlag::DELETED);
-    deleted_ids.push_back(file_id);
+    deleted_ids.push_back(file->element_id_);
   }
 
   return deleted_ids;

@@ -16,8 +16,11 @@
 #include <vector>
 
 #include "app/album_browse_service.hpp"
+#include "app/image_pool_service.hpp"
 #include "app/sleeve_filter_service.hpp"
 #include "sleeve/album_query.hpp"
+#include "sleeve/storage.hpp"
+#include "storage/store/semantic/semantic_label_config.hpp"
 #include "storage/store/sleeve/element_store.hpp"
 #include "ui/alcedo_main/album_backend/album_catalog.hpp"
 #include "ui/alcedo_main/album_backend/album_section_model.hpp"
@@ -55,6 +58,10 @@ struct LibraryQueryInput {
   int64_t                              page_size_ = 0;
   std::shared_ptr<AlbumBrowseService>  browse_{};
   std::shared_ptr<SleeveFilterService> filter_service_{};
+  /// Read on the query worker for the display values of each row (see LibraryQueryOutput).
+  std::shared_ptr<ImagePoolService>    image_pool_{};
+  std::shared_ptr<Storage>             storage_{};
+  SemanticLabelLanguage                label_language_ = SemanticLabelLanguage::kEnglish;
 };
 
 /// Result of one library read, moved once into the queued UI completion.
@@ -63,6 +70,11 @@ struct LibraryQueryOutput {
   /// Search filter the read used (built on the worker for a pending query text).
   std::optional<FilterNode> search_filter_{};
   QString                   error_{};
+  /// Display values of result_.rows_ (same order) that SQL does not return: extension, ISO,
+  /// aperture, focal length, HDR flag (from the image pool) and the semantic label text. The
+  /// query worker reads them, so publishing a page runs no per-row database read on the UI
+  /// thread.
+  std::vector<AlbumItem>    row_display_{};
 };
 
 /// IANA id of the system time zone. Import-day filters, groups, and statistics use it.
@@ -262,7 +274,13 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
   /// Load the next missing page of the requested section rows or flat range, if any.
   void               ContinuePaging();
   /// Album item of one query row: SQL display values, plus the image pool fields SQL lacks.
-  auto               ItemFromRow(const SearchResultRow& row, sl_element_id_t folderId) -> AlbumItem;
+  auto               ItemFromRow(const SearchResultRow& row, const AlbumItem& display,
+                                 sl_element_id_t folderId) -> AlbumItem;
+  /// Find or append the item of @p elementId and set its identity and path.
+  auto               UpsertAlbumItem(sl_element_id_t elementId, image_id_t imageId,
+                                     sl_element_id_t folderId, const QString& scopeType,
+                                     const file_name_t&           fallbackName,
+                                     const std::filesystem::path& filePath) -> AlbumItem&;
   void               SetQueryError(const QString& message);
   void               RunAfterRefresh(std::function<void()> action);
 

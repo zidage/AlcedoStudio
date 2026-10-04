@@ -10,12 +10,15 @@
 /// edge-case inputs.  All tests run headlessly via QCoreApplication.
 
 #include "ui/album_backend_test_fixture.hpp"
+#include "ui/alcedo_main/album_backend/folder_import_scan_model.hpp"
+#include "ui/alcedo_main/album_backend/import_export.hpp"
 #include "ui/alcedo_main/album_backend/search_controller.hpp"
 
 #include <QSignalSpy>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <string>
 
 namespace alcedo::ui::test {
 namespace {
@@ -420,10 +423,12 @@ TEST_F(ImportTests, Import_UnsupportedExtension_Ignored) {
   QStringList list;
   list << PathToQString(fakePath);
   backend.import_export()->StartImport(list);
-  ProcessEvents(200);
+  WaitForImportFinished(backend, 15000);
 
-  // The file should be silently skipped (not a supported extension).
+  // The file is skipped as not RAW; the import finishes without importing it.
   EXPECT_FALSE(backend.import_export()->ImportRunning());
+  EXPECT_EQ(backend.import_export()->ImportCompleted(), 0);
+  EXPECT_EQ(backend.import_export()->ImportUnsupported(), 1);
 }
 
 // ── Corrupted file with valid extension — no crash ─────────────────────────
@@ -503,6 +508,144 @@ TEST_F(ImportTests, ImportIntoSubfolder_PersistsAcrossFreshProjectLoad) {
 
   const QVariantMap imported = reloaded_backend.library()->Thumbnails().front().toMap();
   EXPECT_EQ(imported.value("fileName").toString(), expected_name);
+}
+
+// ── Folder import ──────────────────────────────────────────────────────────
+
+void WriteTextFiles(const std::filesystem::path& dir, const std::string& prefix, int count) {
+  std::filesystem::create_directories(dir);
+  for (int i = 0; i < count; ++i) {
+    std::ofstream(dir / (prefix + std::to_string(i) + ".txt")) << "not a raw file";
+  }
+}
+
+void WaitForScanFinished(FolderImportScanModel& scan, int timeoutMs = 30000) {
+  QSignalSpy spy(&scan, &FolderImportScanModel::ScanStateChanged);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+  while (!scan.ScanFinished() && std::chrono::steady_clock::now() < deadline) {
+    spy.wait(100);
+  }
+}
+
+TEST_F(ImportTests, FolderScanListsNestedFilesAndFolderImportSkipsNonRawFiles) {
+  ApplicationModuleHost backend;
+  ASSERT_TRUE(CreateTestProject(backend));
+
+  const auto source = temp_dir_ / "folder_import_source";
+  WriteTextFiles(source, "top_", 20);
+  WriteTextFiles(source / "a", "a_", 40);
+  WriteTextFiles(source / "b" / "c", "c_", 60);
+  constexpr int kTextFiles = 120;
+  int           raw_files  = 0;
+  for (const auto& raw : CollectRawTestImages("airplane", 2)) {
+    std::filesystem::copy_file(raw, source / "b" / raw.filename());
+    ++raw_files;
+  }
+
+  auto* scan = backend.import_export()->FolderScan();
+  ASSERT_NE(scan, nullptr);
+  scan->Start(PathToQString(source));
+  // Start returns before the tree is read.
+  EXPECT_TRUE(scan->Scanning());
+  WaitForScanFinished(*scan);
+  ASSERT_TRUE(scan->ScanFinished());
+  EXPECT_TRUE(scan->FolderValid());
+  EXPECT_FALSE(scan->Scanning());
+  ASSERT_EQ(scan->FileCount(), kTextFiles + raw_files);
+  ASSERT_EQ(scan->rowCount(), kTextFiles + raw_files);
+
+  // Rows are sorted by path once the scan ends and name each file and its folder.
+  const auto expected_nested_dir =
+      PathToQString((std::filesystem::path("b") / "c").make_preferred());
+  int nested_rows = 0;
+  for (int row = 0; row < scan->rowCount(); ++row) {
+    const auto index = scan->index(row);
+    const auto name  = scan->data(index, FolderImportScanModel::FileNameRole).toString();
+    const auto dir = scan->data(index, FolderImportScanModel::RelativeDirectoryRole).toString();
+    if (name.startsWith("top_")) {
+      EXPECT_TRUE(dir.isEmpty()) << name.toStdString();
+    }
+    if (name.startsWith("c_")) {
+      EXPECT_EQ(dir, expected_nested_dir);
+      ++nested_rows;
+    }
+  }
+  EXPECT_EQ(nested_rows, 60);
+
+  QStringList phases;
+  QObject::connect(backend.import_export(), &ImportExportHandler::ImportStateChanged,
+                   [&phases, &backend]() {
+                     const auto phase = backend.import_export()->ImportPhase();
+                     if (phases.isEmpty() || phases.back() != phase) phases.push_back(phase);
+                   });
+  backend.import_export()->StartFolderImport();
+  EXPECT_TRUE(backend.import_export()->ImportRunning());
+  EXPECT_EQ(backend.import_export()->ImportTotal(), kTextFiles + raw_files);
+  // The scanned paths moved into the import.
+  EXPECT_EQ(scan->FileCount(), 0);
+  EXPECT_FALSE(scan->ScanFinished());
+
+  WaitForImportFinished(backend, 120000);
+  ASSERT_FALSE(backend.import_export()->ImportRunning());
+  EXPECT_EQ(backend.import_export()->ImportCompleted(), raw_files);
+  EXPECT_EQ(backend.import_export()->ImportFailed(), kTextFiles);
+  EXPECT_EQ(backend.import_export()->ImportUnsupported(), kTextFiles);
+  EXPECT_TRUE(backend.import_export()->ImportPhase().isEmpty());
+  ASSERT_FALSE(phases.isEmpty());
+  EXPECT_EQ(phases.front(), QStringLiteral("preparing"));
+  EXPECT_TRUE(phases.contains(QStringLiteral("finalizing")));
+  EXPECT_TRUE(phases.back().isEmpty());
+}
+
+TEST_F(ImportTests, FolderScanRestartAfterCancelListsOnlyTheNewFolder) {
+  ApplicationModuleHost backend;
+  ASSERT_TRUE(CreateTestProject(backend));
+
+  const auto large_folder = temp_dir_ / "large_folder";
+  for (int dir = 0; dir < 20; ++dir) {
+    WriteTextFiles(large_folder / ("d" + std::to_string(dir)), "large_", 100);
+  }
+  const auto small_folder = temp_dir_ / "small_folder";
+  WriteTextFiles(small_folder, "small_", 5);
+
+  auto* scan = backend.import_export()->FolderScan();
+  scan->Start(PathToQString(large_folder));
+  ProcessEvents(5);
+  scan->Cancel();
+  EXPECT_FALSE(scan->Scanning());
+  EXPECT_EQ(scan->FileCount(), 0);
+  scan->Start(PathToQString(small_folder));
+  WaitForScanFinished(*scan);
+  // Let any batch the cancelled scan queued be delivered.
+  ProcessEvents(200);
+
+  ASSERT_TRUE(scan->ScanFinished());
+  ASSERT_EQ(scan->FileCount(), 5);
+  for (int row = 0; row < scan->rowCount(); ++row) {
+    EXPECT_TRUE(scan->data(scan->index(row), FolderImportScanModel::FileNameRole)
+                    .toString()
+                    .startsWith("small_"));
+  }
+}
+
+TEST_F(ImportTests, FolderImportBeforeScanFinishesDoesNotStartAndMissingFolderIsInvalid) {
+  ApplicationModuleHost backend;
+  ASSERT_TRUE(CreateTestProject(backend));
+
+  const auto folder = temp_dir_ / "pending_folder";
+  WriteTextFiles(folder, "pending_", 50);
+  auto* scan = backend.import_export()->FolderScan();
+  scan->Start(PathToQString(folder));
+  backend.import_export()->StartFolderImport();
+  EXPECT_FALSE(backend.import_export()->ImportRunning());
+  WaitForScanFinished(*scan);
+  EXPECT_EQ(scan->FileCount(), 50);
+
+  scan->Start(PathToQString(temp_dir_ / "does_not_exist"));
+  WaitForScanFinished(*scan);
+  EXPECT_TRUE(scan->ScanFinished());
+  EXPECT_FALSE(scan->FolderValid());
+  EXPECT_EQ(scan->FileCount(), 0);
 }
 
 }  // namespace

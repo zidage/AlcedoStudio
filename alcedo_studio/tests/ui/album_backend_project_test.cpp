@@ -877,8 +877,8 @@ TEST_F(WelcomePreviewTests, PreviewSwitchLeavesUnenteredPackageBytesUnchanged) {
   EXPECT_EQ(std::filesystem::last_write_time(project_a), package_a_before.write_time_);
 }
 
-// Records the switch cleanup: the loader removes the previous runtime workspace after the swap
-// closes the previous project services.
+// Records the switch cleanup: after the swap, the retirement thread closes the previous project
+// services and then removes the previous runtime workspace, off the UI thread.
 TEST_F(WelcomePreviewTests, ProjectSwitchRemovesPreviousWorkspace) {
   ScopedRecentProjectSettings settings(temp_dir_);
   const auto                  project_a = BuildPackedProject(temp_dir_, "project_a");
@@ -896,6 +896,10 @@ TEST_F(WelcomePreviewTests, ProjectSwitchRemovesPreviousWorkspace) {
 
   ASSERT_TRUE(IsLoadedPackage(host, project_b));
   EXPECT_NE(host.project()->handler().workspace_dir(), workspace_a);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+  while (std::filesystem::exists(workspace_a) && std::chrono::steady_clock::now() < deadline) {
+    ProcessEvents(50);
+  }
   EXPECT_FALSE(std::filesystem::exists(workspace_a)) << workspace_a.string();
 }
 

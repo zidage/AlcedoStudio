@@ -489,3 +489,43 @@ Review in Alcedo and Classic themes, at a narrow Inspector width, with the
 Inspector closed, with collapsed groups, with a failed query, and with an empty
 filtered result.
 
+
+## Folder import (large folder import refactor)
+
+### `FolderImportConfirmDialog.qml`
+
+- The dialog opens as soon as a folder is chosen and starts
+  `ImportExportHandler.folderScan` on a worker thread. It never waits for the
+  scan before it appears.
+- While the scan runs: a strong `dataFontFamily` summary with the live file
+  count, the folder being read on one muted caption line (`ElideMiddle`, the
+  documented exception: the text changes several times a second and must not
+  change the dialog height), and an indeterminate `ThemedProgressBar`.
+- Until the first batch of files arrives, the list well shows `SkeletonBlock`
+  rows. Rows show the file name and, in a separate muted caption, the folder
+  relative to the chosen folder. Rows are uniform-height, so both labels elide.
+- After the scan: `%1 file(s) found` plus the muted note that only RAW files
+  are imported. An empty or unreadable folder shows its message in the summary
+  line and keeps the Import action disabled.
+- The accent action reads `Scanning...` and stays disabled while the scan runs.
+
+### `ImportProgressOverlay.qml`
+
+- Ring and large count measure photos imported out of photos expected
+  (`importTotal - importFailed`); rejected files leave the expected total, so
+  the total shrinks as the import runs.
+- The phase caption and the `ThemedProgressBar` below it measure files checked
+  out of all files. Phases: `Preparing files... a of b`, `Reading photos... a of
+  b files checked`, `Saving to the library...`.
+- The ring is indeterminate (render-thread `RotationAnimator`) at the start of
+  preparing and while saving; the progress track is indeterminate while saving.
+- Files that are not RAW are reported in a muted caption as skipped; only real
+  failures use `dangerColor`. Cancel is hidden while saving.
+
+### Manual review
+
+Import a folder with tens of thousands of files of which most are not RAW, in
+Alcedo and Classic themes: the dialog appears at once, the count and folder
+line move while scanning, Import is available only after the scan, the overlay
+appears immediately after Import, the expected total shrinks, the track keeps
+moving, and the saving phase shows a spinning ring.

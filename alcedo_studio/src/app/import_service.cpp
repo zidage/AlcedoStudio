@@ -13,6 +13,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -45,6 +46,10 @@ auto EncodeImportedImageRoot(const PipelineMgmtService& pipeline_service,
 /// Number of encoded roots committed in one storage transaction. A commit flushes the DuckDB
 /// write-ahead log, so one transaction per image made the database lock the import bottleneck.
 constexpr std::size_t kImportRootWriteBatchSize = 64;
+
+/// The placeholder loop reports progress after this many placeholders, so the caller can show how
+/// far the preparation of a large import has come without one report per file.
+constexpr uint32_t kPlaceholderProgressInterval = 256;
 
 /// Collects the encoded roots of one import job and commits them in batches.
 ///
@@ -104,11 +109,12 @@ class ImportRootBatchWriter {
 }  // namespace
 
 static void SetImportResult(std::shared_ptr<ImportJob> job, uint32_t requested, uint32_t imported,
-                            uint32_t failed) {
+                            uint32_t failed, uint32_t unsupported) {
   ImportResult result;
-  result.requested_ = requested;
-  result.imported_  = imported;
-  result.failed_    = failed;
+  result.requested_   = requested;
+  result.imported_    = imported;
+  result.failed_      = failed;
+  result.unsupported_ = unsupported;
   if (job && job->on_finished_ && !job->cancelation_acked_.exchange(true)) {
     job->on_finished_(result);
   }
@@ -123,7 +129,7 @@ static void TryFinishImportJob(const std::shared_ptr<ImportJob>&      job,
     return;
   }
   SetImportResult(job, progress->total_, progress->metadata_done_.load(),
-                  progress->failed_.load());
+                  progress->failed_.load(), progress->unsupported_.load());
 }
 
 /// Commit one batch of encoded roots, then count each image as imported or failed.
@@ -182,21 +188,40 @@ auto ImportServiceImpl::ImportToFolder(const std::vector<image_path_t>& paths,
                                        std::shared_ptr<ImportJob> job)
     -> std::shared_ptr<ImportJob> {
   (void)options;
-  // TODO: Use sleeve service to interact with FS
-  // The current implementation is a temporary solution
   auto import_log = std::make_shared<ImportLog>();
   if (job) {
     job->import_log_ = import_log;
   }
   std::shared_ptr<ImportProgress> progress_ptr = std::make_shared<ImportProgress>();
   progress_ptr->total_                         = static_cast<uint32_t>(paths.size());
-  auto root_writer                             = std::make_shared<ImportRootBatchWriter>();
+  if (job) {
+    job->progress_ = progress_ptr;
+  }
 
   if (paths.empty()) {
     // Immediately finish
-    SetImportResult(job, 0, 0, 0);
+    SetImportResult(job, 0, 0, 0, 0);
     return job;
   }
+
+  submission_thread_.Submit([this, paths, dest, job, import_log, progress_ptr]() {
+    CreatePlaceholdersAndSubmit(paths, dest, job, import_log, progress_ptr);
+  });
+  return job;
+}
+
+void ImportServiceImpl::CreatePlaceholdersAndSubmit(
+    const std::vector<image_path_t>& paths, const image_path_t& dest,
+    const std::shared_ptr<ImportJob>& job, const std::shared_ptr<ImportLog>& import_log,
+    const std::shared_ptr<ImportProgress>& progress_ptr) {
+  // TODO: Use sleeve service to interact with FS
+  // The current implementation is a temporary solution
+  auto       root_writer     = std::make_shared<ImportRootBatchWriter>();
+  const auto report_progress = [&job, &progress_ptr]() {
+    if (job && job->on_progress_) {
+      job->on_progress_(*progress_ptr);
+    }
+  };
 
   for (const auto& image_path : paths) {
     if (job && job->IsCancelled()) {
@@ -205,11 +230,10 @@ auto ImportServiceImpl::ImportToFolder(const std::vector<image_path_t>& paths,
     // Validate that the path is a regular file. File-type detection is deferred
     // to metadata extraction, which accepts RAW content only; other files are
     // marked failed and SyncImports removes their element and Image.
-    if (!std::filesystem::is_regular_file(image_path)) {
+    std::error_code file_ec;
+    if (!std::filesystem::is_regular_file(image_path, file_ec) || file_ec) {
       progress_ptr->failed_.fetch_add(1);
-      if (job && job->on_progress_) {
-        job->on_progress_(*progress_ptr);
-      }
+      report_progress();
       continue;
     }
     const std::wstring file_name = image_path.filename().wstring();
@@ -233,29 +257,22 @@ auto ImportServiceImpl::ImportToFolder(const std::vector<image_path_t>& paths,
           });
     } catch (...) {
       progress_ptr->failed_.fetch_add(1);
-      if (job && job->on_progress_) {
-        job->on_progress_(*progress_ptr);
-      }
+      report_progress();
       continue;
     }
     if (!element) {
       progress_ptr->failed_.fetch_add(1);
-      if (job && job->on_progress_) {
-        job->on_progress_(*progress_ptr);
-      }
+      report_progress();
       continue;
     }
     // Create the corresponding image file
     auto sleeve_file   = std::static_pointer_cast<SleeveFile>(element);
 
-    // auto image_ptr   = image_pool_manager_->InsertEmpty();
     auto image_handler = image_pool_service_->CreateAndReturnPinnedEmpty();
 
     if (!image_handler) {
       progress_ptr->failed_.fetch_add(1);
-      if (job && job->on_progress_) {
-        job->on_progress_(*progress_ptr);
-      }
+      report_progress();
       continue;
     }
 
@@ -268,7 +285,7 @@ auto ImportServiceImpl::ImportToFolder(const std::vector<image_path_t>& paths,
 
     // Link the image to the SleeveFile
     sleeve_file->SetImage(image_ptr);
-    progress_ptr->placeholders_created_.fetch_add(1);
+    const auto placeholders_created = progress_ptr->placeholders_created_.fetch_add(1) + 1;
     if (import_log) {
       import_log->AddPlaceholder(image_ptr->image_id_, sleeve_file->element_id_, file_name,
                                  image_path);
@@ -287,7 +304,8 @@ auto ImportServiceImpl::ImportToFolder(const std::vector<image_path_t>& paths,
                          pipeline_service, root_writer]() {
       auto image_ptr = image_handler_ptr ? image_handler_ptr->Get() : nullptr;
       std::vector<ImportRootBatchWriter::PendingRoot> full_batch;
-      bool                                            encoded = false;
+      bool                                            encoded     = false;
+      bool                                            unsupported = false;
       if (image_ptr) {
         try {
           MetadataExtractor::ExtractEXIF_ToImage(image_ptr->image_path_, *image_ptr);
@@ -296,6 +314,7 @@ auto ImportServiceImpl::ImportToFolder(const std::vector<image_path_t>& paths,
                                EncodeImportedImageRoot(*pipeline_service, element_id, image_ptr));
           encoded = true;
         } catch (const MetadataExtractionError& e) {
+          unsupported = e.code() == ImportErrorCode::UNSUPPORTED_FORMAT;
           if (import_log) {
             import_log->MarkMetadataFailure(image_ptr->image_id_, e.code(), e.message());
           }
@@ -313,7 +332,12 @@ auto ImportServiceImpl::ImportToFolder(const std::vector<image_path_t>& paths,
       }
 
       if (!encoded) {
+        // failed_ first: unsupported_ is a subset, so a reader that loads unsupported_ before
+        // failed_ never sees more unsupported files than failed ones.
         progress_ptr->failed_.fetch_add(1);
+        if (unsupported) {
+          progress_ptr->unsupported_.fetch_add(1);
+        }
         if (job && job->on_progress_) {
           job->on_progress_(*progress_ptr);
         }
@@ -328,7 +352,12 @@ auto ImportServiceImpl::ImportToFolder(const std::vector<image_path_t>& paths,
       }
       TryFinishImportJob(job, progress_ptr);
     });
+
+    if (placeholders_created % kPlaceholderProgressInterval == 0) {
+      report_progress();
+    }
   }
+  report_progress();
 
   if (job) {
     if (job->IsCancelled()) {
@@ -337,16 +366,13 @@ auto ImportServiceImpl::ImportToFolder(const std::vector<image_path_t>& paths,
           (job->metadata_tasks_submitted_.load() - job->metadata_tasks_finished_.load());
       if (accounted < progress_ptr->total_) {
         progress_ptr->failed_.fetch_add(progress_ptr->total_ - accounted);
-        if (job->on_progress_) {
-          job->on_progress_(*progress_ptr);
-        }
+        report_progress();
       }
     }
     job->submission_closed_.store(true);
   }
   if (root_writer->NoOutstandingEncode()) {
-    // Every encode finished before submission closed: write the remainder on the pool, not on
-    // the calling (UI) thread.
+    // Every encode finished before submission closed: write the remainder on the pool.
     const auto pipeline_service = pipeline_service_;
     thread_pool_.Submit([root_writer, pipeline_service, job, import_log, progress_ptr]() {
       WriteImportRootBatch(root_writer->TakePending(), *pipeline_service, job, import_log,
@@ -355,7 +381,6 @@ auto ImportServiceImpl::ImportToFolder(const std::vector<image_path_t>& paths,
     });
   }
   TryFinishImportJob(job, progress_ptr);
-  return job;
 }
 
 void ImportServiceImpl::SyncImports(const ImportLogSnapshot& log_snapshot,
@@ -366,18 +391,21 @@ void ImportServiceImpl::SyncImports(const ImportLogSnapshot& log_snapshot,
   }
 
   // A failed import leaves no trace: its element is deleted and its placeholder Image is
-  // marked deleted in the pool, so the sync below never writes it as an Image row.
-  std::vector<image_id_t> failed_image_ids;
+  // marked deleted in the pool, so the sync below never writes it as an Image row. The elements
+  // are deleted in one batch, because a folder import can reject most of its files.
+  std::vector<sl_element_id_t> failed_element_ids;
+  std::vector<image_id_t>      failed_image_ids;
+  failed_element_ids.reserve(log_snapshot.metadata_failed_.size());
   failed_image_ids.reserve(log_snapshot.metadata_failed_.size());
   for (const auto& entry : log_snapshot.metadata_failed_) {
     if (entry.element_id_ != 0) {
-      try {
-        fs_service_->Write_NoSync<void>(
-            [&entry](FileSystem& fs) { fs.DeleteFileEverywhere(entry.element_id_); });
-      } catch (...) {
-      }
+      failed_element_ids.push_back(entry.element_id_);
     }
     failed_image_ids.push_back(entry.image_id_);
+  }
+  if (!failed_element_ids.empty()) {
+    fs_service_->Write_NoSync<void>(
+        [&failed_element_ids](FileSystem& fs) { fs.DeleteFilesEverywhere(failed_element_ids); });
   }
   image_pool_service_->RemoveBatch(failed_image_ids);
   image_pool_service_->SyncWithStorage();

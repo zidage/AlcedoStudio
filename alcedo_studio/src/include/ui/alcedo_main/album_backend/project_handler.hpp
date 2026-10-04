@@ -21,6 +21,7 @@
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
 #include "app/thumbnail_service.hpp"
+#include "concurrency/thread_pool.hpp"
 #include "storage/store/sleeve/element_store.hpp"
 
 namespace alcedo::ui {
@@ -119,6 +120,21 @@ class ProjectHandler {
   }
 
  private:
+  /// Services of a project that a load replaced, and its unpacked workspace to remove.
+  struct RetiredProject {
+    std::shared_ptr<ProjectService>       project_{};
+    std::shared_ptr<PipelineMgmtService>  pipeline_service_{};
+    std::shared_ptr<ThumbnailService>     thumbnail_service_{};
+    std::shared_ptr<MaskThumbnailService> mask_thumbnail_service_{};
+    std::unique_ptr<ImportServiceImpl>    import_service_{};
+    std::shared_ptr<ExportService>        export_service_{};
+    std::filesystem::path                 workspace_dir_{};
+  };
+
+  /// Stop @p retired's AI sidecar on this (UI) thread, then destroy its services and remove its
+  /// workspace on project_retirement_thread_.
+  void RetireProject(std::shared_ptr<RetiredProject> retired);
+
   // Shared by InitializeServices and OpenPackedProject. With @p unpackProjectName, the loader
   // thread first unpacks @p packagePath into @p workspaceDir and opens the unpacked files
   // instead of @p dbPath and @p metaPath.
@@ -153,6 +169,14 @@ class ProjectHandler {
   bool                                 project_entered_ = false;
   ProjectEntryMode                     load_entry_mode_ = ProjectEntryMode::kEnter;
   std::optional<ProjectOverviewCounts> project_overview_{};
+
+  /// Destroys the services of a project replaced by a load (closing its database and stopping
+  /// its workers) and then removes its unpacked workspace, off the UI thread: both scale with
+  /// the project size and ran on the UI thread after every Welcome preview switch. The AI
+  /// sidecar is stopped on the UI thread before the handoff, so a retirement never waits for
+  /// the UI thread and the destructor can drain this pool from it. Declared last: destroyed
+  /// first.
+  ThreadPool project_retirement_thread_{1};
 };
 
 }  // namespace alcedo::ui

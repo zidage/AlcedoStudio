@@ -5,11 +5,13 @@
 #include "sleeve/sleeve_element/sleeve_folder.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <memory>
 #include <optional>
 #include <set>
 #include <stdexcept>
 #include <type_traits>
+#include <unordered_set>
 #include <vector>
 
 #include "sleeve/sleeve_element/sleeve_element.hpp"
@@ -225,6 +227,41 @@ auto SleeveFolder::RemoveElementById(sl_element_id_t element_id) -> bool {
     sync_flag_ = SyncFlag::MODIFIED;
   }
   return removed;
+}
+
+auto SleeveFolder::RemoveElementsById(const std::unordered_set<sl_element_id_t>& element_ids)
+    -> size_t {
+  if (element_ids.empty()) {
+    return 0;
+  }
+  std::unordered_set<sl_element_id_t> removed_ids;
+  for (auto it = contents_.begin(); it != contents_.end();) {
+    if (element_ids.contains(it->second)) {
+      removed_ids.insert(it->second);
+      it = contents_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+
+  auto&       default_index = indicies_cache_[default_filter_];
+  std::size_t kept          = 0;
+  for (const auto element_id : default_index) {
+    if (element_ids.contains(element_id)) {
+      removed_ids.insert(element_id);
+    } else {
+      default_index[kept++] = element_id;
+    }
+  }
+  default_index.resize(kept);
+
+  for (const auto element_id : removed_ids) {
+    RecordContentRemoved(element_id);
+  }
+  if (!removed_ids.empty() && sync_flag_ == SyncFlag::SYNCED) {
+    sync_flag_ = SyncFlag::MODIFIED;
+  }
+  return removed_ids.size();
 }
 
 void SleeveFolder::CreateIndex(const std::vector<std::shared_ptr<SleeveElement>>& filtered_elements,

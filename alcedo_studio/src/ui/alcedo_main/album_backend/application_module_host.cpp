@@ -444,8 +444,10 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
 
   ProjectLifecycleHooks lifecycle_hooks;
   lifecycle_hooks.project_switch_block_reason = [import_export = import_export_.get()] {
-    if (import_export && import_export->current_import_job() &&
-        !import_export->current_import_job()->IsCancelationAcked()) {
+    // ImportRunning() stays true while the finished import is written to the project.
+    if (import_export && (import_export->ImportRunning() ||
+                          (import_export->current_import_job() &&
+                           !import_export->current_import_job()->IsCancelationAcked()))) {
       return QStringLiteral("Cannot switch project while an import is running.");
     }
     if (import_export && import_export->export_inflight()) {

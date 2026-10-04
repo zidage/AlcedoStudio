@@ -50,6 +50,10 @@ class ProjectService {
     return package_service_;
   }
   auto GetAiSidecarRuntimeService() const -> std::shared_ptr<AiSidecarRuntimeService>;
+  /// Stop and release the AI sidecar runtime of this project. The runtime stops on its owner
+  /// (UI) thread, so a caller that destroys the project on another thread calls this on the UI
+  /// thread first; the destructor then has no UI-thread work left.
+  void StopAiSidecarRuntime();
 
   auto GetDBPath() const -> const std::filesystem::path& { return db_path_; }
   auto GetMetaPath() const -> const std::filesystem::path& { return meta_path_; }

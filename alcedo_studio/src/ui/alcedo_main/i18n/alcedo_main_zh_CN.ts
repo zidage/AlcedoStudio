@@ -1429,6 +1429,26 @@ Alcedo 将改用 %1。</translation>
         <source>Unknown group field: %1</source>
         <translation>未知的分组字段：%1</translation>
     </message>
+    <message>
+        <source>The folder is still being scanned.</source>
+        <translation>文件夹仍在扫描中。</translation>
+    </message>
+    <message>
+        <source>Preparing %1 file(s)...</source>
+        <translation>正在准备 %1 个文件…</translation>
+    </message>
+    <message>
+        <source>Importing... %1/%2 (failed %3)</source>
+        <translation>正在导入… %1/%2（失败 %3）</translation>
+    </message>
+    <message>
+        <source>Saving %1 imported photo(s) to the library...</source>
+        <translation>正在将 %1 张导入的照片保存到图库…</translation>
+    </message>
+    <message>
+        <source>Import complete: %1 imported, %2 skipped, %3 failed</source>
+        <translation>导入完成：已导入 %1 张，跳过 %2 个，失败 %3 个</translation>
+    </message>
 </context>
 <context>
     <name>AppDialogs</name>
@@ -4578,6 +4598,30 @@ Original source files on disk will be kept.</source>
         <source>Import %1 File(s)</source>
         <translation>导入 %1 个文件</translation>
     </message>
+    <message>
+        <source>The folder could not be read.</source>
+        <translation>无法读取该文件夹。</translation>
+    </message>
+    <message>
+        <source>Scanning folder... %1 file(s) found</source>
+        <translation>正在扫描文件夹… 已找到 %1 个文件</translation>
+    </message>
+    <message>
+        <source>No files found in this folder.</source>
+        <translation>此文件夹中没有文件。</translation>
+    </message>
+    <message>
+        <source>%1 file(s) found</source>
+        <translation>找到 %1 个文件</translation>
+    </message>
+    <message>
+        <source>Only RAW files are imported. Other files are skipped.</source>
+        <translation>仅导入 RAW 文件，其他文件将被跳过。</translation>
+    </message>
+    <message>
+        <source>Scanning...</source>
+        <translation>正在扫描…</translation>
+    </message>
 </context>
 <context>
     <name>GlobalSearchDialog</name>
@@ -4898,6 +4942,26 @@ Original source files on disk will be kept.</source>
         <location line="+9"/>
         <source>Cancel</source>
         <translation>取消</translation>
+    </message>
+    <message>
+        <source>Saving to the library...</source>
+        <translation>正在保存到图库…</translation>
+    </message>
+    <message>
+        <source>Preparing files... %1 of %2</source>
+        <translation>正在准备文件… %1 / %2</translation>
+    </message>
+    <message>
+        <source>Reading photos... %1 of %2 files checked</source>
+        <translation>正在读取照片… 已检查 %1 / %2 个文件</translation>
+    </message>
+    <message>
+        <source>photos imported</source>
+        <translation>张照片已导入</translation>
+    </message>
+    <message>
+        <source>%1 file(s) skipped because they are not RAW files</source>
+        <translation>已跳过 %1 个非 RAW 文件</translation>
     </message>
 </context>
 <context>

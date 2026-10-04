@@ -459,8 +459,7 @@ ProjectService::ProjectService(const std::filesystem::path& db_path,
   create_new_project();
 }
 
-ProjectService::~ProjectService() {
-  package_service_.reset();
+void ProjectService::StopAiSidecarRuntime() {
   std::shared_ptr<AiSidecarRuntimeService> runtime;
   {
     std::lock_guard lock(ai_sidecar_runtime_mutex_);
@@ -470,6 +469,11 @@ ProjectService::~ProjectService() {
     runtime->StopForProjectClose();
     runtime.reset();
   }
+}
+
+ProjectService::~ProjectService() {
+  package_service_.reset();
+  StopAiSidecarRuntime();
   browse_service_.reset();
   filter_service_.reset();
   pool_service_.reset();
