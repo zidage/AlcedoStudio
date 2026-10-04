@@ -1137,3 +1137,7 @@ nul
 
 # Abandoned UI fuzz platform (kept locally, untracked)
 /tools/ui_fuzz_platform/
+
+# AMD OpenCL compile check: driver packages, extracted amdocl folders, ROCm SDK and the
+# built harness. Downloaded and used by scripts/amd_opencl/amd_opencl_check.py.
+/.amd_opencl/
