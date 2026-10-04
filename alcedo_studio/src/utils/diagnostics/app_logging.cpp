@@ -205,6 +205,14 @@ void ShutdownApplicationLogging() {
   g_buffered_bytes = 0;
 }
 
+void FlushApplicationLog() {
+  std::lock_guard lock(g_log_lock);
+  if (g_log_file && g_log_file->isOpen()) {
+    g_log_file->flush();
+    g_buffered_bytes = 0;
+  }
+}
+
 auto CurrentLogFilePath() -> QString {
   std::lock_guard lock(g_log_lock);
   return g_log_file_path;

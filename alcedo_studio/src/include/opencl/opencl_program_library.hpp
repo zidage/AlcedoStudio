@@ -8,6 +8,7 @@
 
 #include <condition_variable>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -42,6 +43,13 @@ class OpenClProgramLibrary {
 
   mutable std::mutex                                            mutex_;
   std::unordered_map<std::string, std::shared_ptr<ProgramSlot>> programs_;
+  // Held around every clCreateProgramWithSource/clBuildProgram so that only one program
+  // compiles at a time in the process. The OpenCL warm-up thread and render threads both
+  // build programs on demand, and AMD's Windows compiler (amd_comgr) crashed with an
+  // access violation when several programs compiled at once.
+  std::mutex                                                    build_mutex_;
+  std::mutex                                                    trace_mutex_;
+  std::function<void(std::string_view)>                         build_trace_sink_;
 
   OpenClProgramLibrary() = default;
 
@@ -52,6 +60,7 @@ class OpenClProgramLibrary {
       -> std::vector<std::string>;
   static auto GetBuildLog(cl_program program, cl_device_id device) -> std::string;
   auto        BuildProgram(const std::shared_ptr<ProgramSlot>& slot) -> cl_program;
+  void        TraceBuild(std::string_view message);
 
  public:
   OpenClProgramLibrary(const OpenClProgramLibrary&)                      = delete;
@@ -64,6 +73,11 @@ class OpenClProgramLibrary {
   // Registration stays backend-local. Higher layers should trigger warm-up,
   // but should not know how OpenCL programs are sourced or built.
   void        RegisterProgram(OpenClProgramDescriptor descriptor);
+
+  // Receives one line before and one line after each program build. The line before the
+  // build is what remains in the log when the driver's compiler crashes the process, so the
+  // sink must write it out before returning.
+  void        SetBuildTraceSink(std::function<void(std::string_view)> sink);
 
   void        WarmUpRequiredPrograms();
   void        WarmUpAllPrograms();

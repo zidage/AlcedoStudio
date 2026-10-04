@@ -27,6 +27,9 @@ Q_DECLARE_LOGGING_CATEGORY(editorPresentLog)
 auto InitializeApplicationLogging(const QString& preferred_directory = {}) -> QString;
 void ShutdownApplicationLogging();
 auto CurrentLogFilePath() -> QString;
+/// Write buffered info/debug lines to the log file now. For a line that must survive a crash
+/// in the next call, such as one written before a driver call that may take the process down.
+void FlushApplicationLog();
 
 /// Test-only snapshot of internal write/flush counters. Production code never
 /// reads these; they exist so logging tests can assert the buffered-flush policy

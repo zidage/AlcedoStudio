@@ -7,6 +7,7 @@
 #include "opencl/opencl_program_library.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <exception>
 #include <fstream>
 #include <iterator>
@@ -202,11 +203,17 @@ auto OpenClProgramLibrary::BuildProgram(const std::shared_ptr<ProgramSlot>& slot
     source_lengths.push_back(source.size());
   }
 
+  std::lock_guard<std::mutex> build_lock(build_mutex_);
+  TraceBuild("opencl.program.build.begin " + build_diagnostic_prefix());
+  const auto build_start = std::chrono::steady_clock::now();
+
   cl_int     error = CL_SUCCESS;
   cl_program program =
       clCreateProgramWithSource(context.Context(), static_cast<cl_uint>(source_ptrs.size()),
                                 source_ptrs.data(), source_lengths.data(), &error);
   if (error != CL_SUCCESS || program == nullptr) {
+    TraceBuild("opencl.program.build.end program='" + slot->descriptor.name +
+               "' create_error=" + std::to_string(error));
     throw std::runtime_error(build_diagnostic_prefix() +
                              ": failed to create program (OpenCL error " +
                              std::to_string(error) + ").");
@@ -217,6 +224,11 @@ auto OpenClProgramLibrary::BuildProgram(const std::shared_ptr<ProgramSlot>& slot
   const cl_device_id device = context.Device();
   error = clBuildProgram(program, 1, &device, build_options_arg, nullptr, nullptr);
   NoteOpenClProgramBuild();
+  const auto build_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - build_start)
+                            .count();
+  TraceBuild("opencl.program.build.end program='" + slot->descriptor.name +
+             "' error=" + std::to_string(error) + " ms=" + std::to_string(build_ms));
   if (error != CL_SUCCESS) {
     const auto build_log = GetBuildLog(program, device);
     clReleaseProgram(program);
@@ -231,6 +243,18 @@ auto OpenClProgramLibrary::BuildProgram(const std::shared_ptr<ProgramSlot>& slot
   }
 
   return program;
+}
+
+void OpenClProgramLibrary::SetBuildTraceSink(std::function<void(std::string_view)> sink) {
+  std::lock_guard<std::mutex> lock(trace_mutex_);
+  build_trace_sink_ = std::move(sink);
+}
+
+void OpenClProgramLibrary::TraceBuild(std::string_view message) {
+  std::lock_guard<std::mutex> lock(trace_mutex_);
+  if (build_trace_sink_) {
+    build_trace_sink_(message);
+  }
 }
 
 void OpenClProgramLibrary::RegisterProgram(OpenClProgramDescriptor descriptor) {

@@ -20,12 +20,14 @@
 
 #include "app/project_package_service.hpp"
 #ifdef HAVE_OPENCL
+#include "opencl/opencl_program_library.hpp"
 #include "opencl/opencl_runtime.hpp"
 #endif
 #include "ui/alcedo_main/album_backend/folder_controller.hpp"
 #include "ui/alcedo_main/album_backend/library_module.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
 #include "utils/cuda/cuda_driver_requirements.hpp"
+#include "utils/diagnostics/app_logging.hpp"
 
 namespace alcedo::ui {
 
@@ -299,6 +301,13 @@ void ProjectModule::StartOpenClPreparationIfNeeded() {
   accelerator_prepare_started_ = true;
 
 #ifdef HAVE_OPENCL
+  // A driver compiler crash ends the process inside clBuildProgram, so the program name has to
+  // be on disk before the call. Flush after each line instead of waiting for the log buffer.
+  OpenClProgramLibrary::Instance().SetBuildTraceSink([](std::string_view message) {
+    qCInfo(diag::appLog).noquote() << QString::fromUtf8(message.data(),
+                                                        static_cast<qsizetype>(message.size()));
+    diag::FlushApplicationLog();
+  });
   SetAcceleratorPreparationState(true,
                                  PL_TEXT("Compiling OpenCL kernels. This happens every launch."));
   QPointer<ProjectModule> self(this);
