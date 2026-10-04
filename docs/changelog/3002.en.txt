@@ -6,6 +6,14 @@ Before you update
   not use the in-app updater. Download this build from the official website or from
   GitHub Releases and install it manually.
 
+Import and projects
+-------------------
+- Import From Folder opens its file list at once and adds files while it scans a large
+  folder. The window no longer freezes before, during, or after the import.
+- The import progress shows the expected photo count, which gets smaller when files
+  cannot be imported. Files that are not RAW show as skipped, not as errors.
+- A switch between projects on the Welcome screen no longer freezes the window.
+
 Fixed
 -----
 - Windows: the application no longer stops after it shows two or three thumbnails.
