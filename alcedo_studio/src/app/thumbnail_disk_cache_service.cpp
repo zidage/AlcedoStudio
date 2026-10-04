@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <limits>
 #include <mutex>
 #include <opencv2/core/mat.hpp>
@@ -42,7 +43,9 @@ constexpr auto        kProjectMetadataFilename = "cache_metadata.json";
 
 std::filesystem::path GetDefaultCacheRoot() {
 #if defined(_WIN32)
-  const char* local_app_data = std::getenv("LOCALAPPDATA");
+  // The narrow getenv result is in the ANSI code page and loses characters it cannot represent,
+  // which a non-ASCII user name needs.
+  const wchar_t* local_app_data = _wgetenv(L"LOCALAPPDATA");
   if (local_app_data) {
     return std::filesystem::path(local_app_data) / "alcedo" / "thumbnails";
   }
@@ -93,9 +96,15 @@ std::string MakeElementInvalidationKey(const std::string& project_uuid,
   return oss.str();
 }
 
+// path::string() converts through the ANSI code page on Windows. That code page is GBK on most
+// Chinese systems, so it can throw, and it never yields the UTF-8 that nlohmann::json requires.
 std::string PathToUtf8(const std::filesystem::path& path) {
   auto u8 = path.u8string();
   return std::string(u8.begin(), u8.end());
+}
+
+std::filesystem::path Utf8ToPath(const std::string& utf8) {
+  return std::filesystem::path(std::u8string(utf8.begin(), utf8.end()));
 }
 
 cv::Mat PrepareForOiioEncoding(const cv::Mat& src) {
@@ -466,7 +475,7 @@ auto ThumbnailDiskCacheService::GetStats() const -> Stats {
     return s;
   }
 
-  s.cache_root_path = state_->cache_root_.string();
+  s.cache_root_path = PathToUtf8(state_->cache_root_);
   s.enabled         = state_->enabled_;
   s.max_entries     = state_->max_entries_;
 
@@ -597,7 +606,15 @@ void ThumbnailDiskCacheService::WriterThreadLoop() {
       break;
     }
 
-    index_changed = WriteEntry(task) || index_changed;
+    // An exception escaping this thread function terminates the whole app, and a lost cache
+    // entry only costs a re-render.
+    try {
+      index_changed = WriteEntry(task) || index_changed;
+    } catch (const std::exception& e) {
+      std::cerr << "[ThumbnailDiskCache] Failed to write cache entry: " << e.what() << '\n';
+    } catch (...) {
+      std::cerr << "[ThumbnailDiskCache] Failed to write cache entry\n";
+    }
     // Save once per burst of writes, not once per thumbnail.
     if (--state_->pending_writes_ == 0 && index_changed) {
       FlushMetadata();
@@ -735,6 +752,18 @@ bool ThumbnailDiskCacheService::WriteEntry(WriteTask& task) {
 }
 
 void ThumbnailDiskCacheService::FlushMetadata() {
+  // Runs on the writer thread and from the destructor, so it must not throw. An unsaved index
+  // only means the cache starts empty next time.
+  try {
+    FlushMetadataOrThrow();
+  } catch (const std::exception& e) {
+    std::cerr << "[ThumbnailDiskCache] Failed to save cache index: " << e.what() << '\n';
+  } catch (...) {
+    std::cerr << "[ThumbnailDiskCache] Failed to save cache index\n";
+  }
+}
+
+void ThumbnailDiskCacheService::FlushMetadataOrThrow() {
   auto make_entry_json = [](const std::string& hash_str, const EntryMeta& meta) {
     nlohmann::json entry;
     entry["key_hash"]             = hash_str;
@@ -745,7 +774,7 @@ void ThumbnailDiskCacheService::FlushMetadata() {
     entry["edit_version_hash"]    = meta.key.edit_version_hash;
     entry["cache_schema_version"] = meta.key.cache_schema_version;
     entry["file_size_bytes"]      = meta.file_size_bytes;
-    entry["file_path"]            = meta.file_path.string();
+    entry["file_path"]            = PathToUtf8(meta.file_path);
     entry["last_access_time"]     = meta.last_access_time;
     return entry;
   };
@@ -773,11 +802,12 @@ void ThumbnailDiskCacheService::FlushMetadata() {
     std::error_code ec;
     std::filesystem::create_directories(state_->metadata_file_path_.parent_path(), ec);
     if (!ec) {
-      const auto tmp_path = state_->metadata_file_path_.string() + ".tmp";
+      auto tmp_path = state_->metadata_file_path_;
+      tmp_path += ".tmp";
       {
         std::ofstream file(tmp_path, std::ios::trunc);
         if (file) {
-          file << j.dump(2);
+          file << j.dump(2, ' ', false, nlohmann::json::error_handler_t::replace);
         }
       }
       // Windows rename fails when the destination already exists; replace atomically.
@@ -826,7 +856,7 @@ void ThumbnailDiskCacheService::LoadMetadata() {
       if (file_path_str.empty()) {
         continue;
       }
-      meta.file_path        = file_path_str;
+      meta.file_path        = Utf8ToPath(file_path_str);
       meta.file_size_bytes  = entry.value("file_size_bytes", size_t{0});
       meta.last_access_time = entry.value("last_access_time", int64_t{0});
       meta.key.project_uuid = entry.value("project_uuid", std::string{});

@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <memory>
 #include <opencv2/core.hpp>
 #include <string>
@@ -1093,6 +1094,47 @@ TEST_F(ThumbnailDiskCacheServiceTest, UnreadableProjectIndexStartsEmptyAndRemove
   ImageBuffer buf(mat);
   reopened.EnqueueWrite(key, std::move(buf));
   ASSERT_TRUE(WaitForEntryCount(reopened, 1, std::chrono::seconds(2)));
+  reopened.Shutdown();
+}
+
+// A non-ASCII cache root, such as %LOCALAPPDATA% under a Chinese user name, used to crash the
+// app on systems whose ANSI code page is GBK: the index stored path::string() bytes, which
+// nlohmann::json refuses to dump, and the exception escaped the writer thread. The index must
+// hold UTF-8 whatever the code page is. U+011F has no GBK mapping at all.
+TEST_F(ThumbnailDiskCacheServiceTest, NonAsciiCacheRootKeepsUtf8IndexAcrossRestarts) {
+  const std::u8string   root_name = u8"缩略图_ğ";
+  const auto            root      = temp_dir_ / std::filesystem::path(root_name);
+  const std::string     root_name_utf8(root_name.begin(), root_name.end());
+  auto key = MakeTestKey("non-ascii-project", 1, ThumbnailResolution::k256, "hash");
+
+  {
+    ThumbnailDiskCacheService service(root);
+    service.Initialize("non-ascii-project");
+    cv::Mat     mat = CreateTestImage(32, 32, 1, 2, 3);
+    ImageBuffer buf(mat);
+    service.EnqueueWrite(key, std::move(buf));
+    ASSERT_TRUE(WaitForEntryCount(service, 1, std::chrono::seconds(2)));
+    const auto cache_root_path = service.GetStats().cache_root_path;
+    EXPECT_NE(cache_root_path.find(root_name_utf8), std::string::npos);
+    service.Shutdown();
+  }
+
+  const auto metadata_path = root / "non-ascii-project" / "cache_metadata.json";
+  ASSERT_TRUE(std::filesystem::exists(metadata_path));
+  std::string metadata;
+  {
+    std::ifstream file(metadata_path, std::ios::binary);
+    metadata.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+  }
+  EXPECT_NE(metadata.find(root_name_utf8), std::string::npos);
+
+  ThumbnailDiskCacheService reopened(root);
+  reopened.Initialize("non-ascii-project");
+  EXPECT_EQ(reopened.GetStats().total_entries, 1u);
+  EXPECT_TRUE(reopened.Lookup(key));
+  auto read = reopened.Read(key);
+  ASSERT_NE(read, nullptr);
+  EXPECT_EQ(read->GetCPUData().rows, 32);
   reopened.Shutdown();
 }
 
