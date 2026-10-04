@@ -131,6 +131,11 @@ inline float2 lens_thoby_to_erect(float2 in) {
   return (float2)(atan2(vy, vx), atan(s * theta * sin(phi) / sqrt(vx * vx + vy * vy)));
 }
 
+// lens_sincos_note: the erect_to_* functions below fold theta and x into range inside if-branches
+// and then need both sin and cos of the folded values. Written as separate sin() and cos() calls,
+// AMD's Windows OpenCL compiler (amd_comgr_3.dll in Adrenalin 26.6.2, gfx1100) crashes the process
+// with an access violation while building this program. Calling sincos() directly builds on every
+// driver and gives the same values.
 inline float2 lens_erect_to_rect(float2 in) {
   float theta = -in.y + 1.5707963267948966f;
   float x     = in.x;
@@ -157,11 +162,14 @@ inline float2 lens_erect_to_fisheye(float2 in) {
     theta = 6.2831853071795864f - theta;
     x += 3.1415926535897932f;
   }
-  const float s     = sin(theta);
-  const float vx    = s * sin(x);
-  const float vy    = cos(theta);
+  // Explicit sincos: see lens_sincos_note above lens_erect_to_rect.
+  float       cos_theta;
+  float       cos_x;
+  const float s     = sincos(theta, &cos_theta);
+  const float vx    = s * sincos(x, &cos_x);
+  const float vy    = cos_theta;
   const float r     = sqrt(vx * vx + vy * vy);
-  theta             = atan2(r, s * cos(x));
+  theta             = atan2(r, s * cos_x);
   const float inv_r = (r <= 1.0e-8f) ? 0.0f : (1.0f / r);
   return (float2)(theta * vx * inv_r, theta * vy * inv_r);
 }
@@ -180,10 +188,13 @@ inline float2 lens_erect_to_orthographic(float2 in) {
     theta = 6.2831853071795864f - theta;
     x += 3.1415926535897932f;
   }
-  const float s      = sin(theta);
-  const float vx     = s * sin(x);
-  const float vy     = cos(theta);
-  const float theta2 = atan2(sqrt(vx * vx + vy * vy), s * cos(x));
+  // Explicit sincos: see lens_sincos_note above lens_erect_to_rect.
+  float       cos_theta;
+  float       cos_x;
+  const float s      = sincos(theta, &cos_theta);
+  const float vx     = s * sincos(x, &cos_x);
+  const float vy     = cos_theta;
+  const float theta2 = atan2(sqrt(vx * vx + vy * vy), s * cos_x);
   const float phi2   = atan2(vy, vx);
   const float rho    = sin(theta2);
   return (float2)(rho * cos(phi2), rho * sin(phi2));
@@ -215,10 +226,13 @@ inline float2 lens_erect_to_thoby(float2 in) {
     theta = 6.2831853071795864f - theta;
     x += 3.1415926535897932f;
   }
-  const float s      = sin(theta);
-  const float vx     = s * sin(x);
-  const float vy     = cos(theta);
-  const float theta2 = atan2(sqrt(vx * vx + vy * vy), s * cos(x));
+  // Explicit sincos: see lens_sincos_note above lens_erect_to_rect.
+  float       cos_theta;
+  float       cos_x;
+  const float s      = sincos(theta, &cos_theta);
+  const float vx     = s * sincos(x, &cos_x);
+  const float vy     = cos_theta;
+  const float theta2 = atan2(sqrt(vx * vx + vy * vy), s * cos_x);
   const float phi2   = atan2(vy, vx);
   const float rho    = 1.47f * sin(theta2 * 0.713f);
   return (float2)(rho * cos(phi2), rho * sin(phi2));
