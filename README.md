@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="https://aoraw.org/">Project website</a> · <a href="https://aoraw.org/zh-cn/">项目网页</a> · <a href="https://zidage.github.io/AlcedoStudio_docs/docs/intro">Documentation</a> · <a href="https://github.com/zidage/AlcedoStudio/releases/tag/v0.2.9">Download v0.2.9</a>
+  <a href="https://aoraw.org/">Project website</a> · <a href="https://aoraw.org/zh-cn/">项目网页</a> · <a href="https://zidage.github.io/AlcedoStudio_docs/docs/intro">Documentation</a> · <a href="https://github.com/zidage/AlcedoStudio/releases/tag/v0.3.1">Download v0.3.1</a>
 </p>
 
 <p align="right"><a href="./README.md"><strong>English</strong></a> | <a href="./README.zh-CN.md">简体中文</a></p>
@@ -34,6 +34,30 @@ Library
 https://github.com/user-attachments/assets/ae0d9773-220e-4901-90f6-1989f58b0462
 
 </details>
+
+## Design from first principles (TL;DR)
+
+People who love photography tend to have a keen eye for color, yet editing tools often wear them down. Many of today's applications keep piling features onto technical foundations laid decades ago, and grow more bloated every year. I did not want to make a plugin or a throwaway vibe-coded app. Instead, I went back to first principles: if you built a RAW editor from scratch today, this is perhaps how it should work.
+
+🎨 **The processing pipeline should be transparent and follow industry standards**
+
+Alcedo uses node-based editing. You can freely reorder edits and organize mask hierarchies, so the thread of every step is clear at a glance. A built-in ACES workflow with customizable color science frees you from the tangle of vendor profiles and the endless, almost mystical debates about the "Leica look": every camera finally stands on equal footing. 113 updatable film LUTs, together with halation, grain, and black-mist effects, give you a striking cinematic look in one click.
+
+🖼 **It should be as easy to use as the photo gallery on your phone**
+
+With tens of thousands of photos, traditional catalogs often slow to a crawl, and tagging by hand is a chore. Alcedo does not set out to build yet another complex asset-management service. It aims for the lightness of a modern phone gallery: import and go, with no extra setup. Its asset module, Sleeve, embeds the lightweight analytical engine DuckDB to support complex filters, and a local CLIP semantic model tags your photos automatically so you can sort them quickly.
+
+🧵 **Edit history should be kept forever**
+
+Alcedo introduces a Git-like branching version tree, so you can always go back to any change. You can also apply adjustments to many photos at once and finish a whole set in one click.
+
+🖥 **Performance should be as efficient as possible**
+
+High-resolution files with complex masks often strain memory and disk, and with storage and compute prices soaring, the efficiency of an application matters more than ever. Alcedo's processing pipeline runs on the GPU and, with incremental local recomputation and careful memory management, gives responsive real-time feedback. It also uses deep-learning-based joint demosaicing and denoising (JDD) to decode RAW files on par with commercial software.
+
+📖 **Users should not carry the complexity that comes with powerful features**
+
+Say goodbye to the oppressive walls of tiny sliders and deeply nested menus from twenty years ago. Alcedo aims for the gentlest possible learning curve: each area has a clear job, and advanced features never get in your way too early. Beginners can get great results by intuition, and professionals no longer have to jump between several applications to build a workflow that should never have been this complicated.
 
 ## A closer look
 
@@ -123,7 +147,7 @@ User guides and developer notes are on the [documentation site](https://zidage.g
 
 Alcedo Studio is based on the work of many open-source projects and their authors.
 
-- Film-emulation LUTs from [JanLohse/spectral_film_lut](https://github.com/JanLohse/spectral_film_lut).
+- Film-emulation LUTs from [JanLohse/spectral_film_lut](https://github.com/JanLohse/spectral_film_lut) and [andreavolpato/spektrafilm](https://github.com/andreavolpato/spektrafilm).
 - Some camera color matrices from [rawtoaces-data](https://github.com/AcademySoftwareFoundation/rawtoaces-data).
 - Neural demosaic models distilled from [mgharbi/demosaicnet](https://github.com/mgharbi/demosaicnet) ([Gharbi et al., 2016](https://groups.csail.mit.edu/graphics/demosaicnet/)).
 - Inpaint-opposed highlight reconstruction adapted from [darktable](https://github.com/darktable-org/darktable/blob/master/src/iop/hlreconstruct/opposed.c) and [RawTherapee](https://github.com/RawTherapee/RawTherapee/blob/dev/rtengine/hilite_recon.cc).
