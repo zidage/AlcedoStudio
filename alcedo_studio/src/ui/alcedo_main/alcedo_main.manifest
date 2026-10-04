@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!-- Run with UTF-8 as the ANSI code page (Windows 10 1903 and later), so std::filesystem::path
+     narrow conversions, getenv and the C runtime see UTF-8 on every system rather than GBK or
+     another legacy code page. Older Windows versions ignore the setting. -->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
+    </windowsSettings>
+  </application>
+</assembly>

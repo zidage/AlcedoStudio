@@ -267,8 +267,10 @@ list(REMOVE_DUPLICATES ALCEDO_INCLUDE_HINTS)
 
 
 if (MSVC)
-    set(CMAKE_CXX_FLAGS_DEBUG "/Zi /arch:AVX /bigobj /W4 /external:anglebrackets /external:W0 /D_DEBUG /EHsc /openmp /Zc:preprocessor")
-    set(CMAKE_CXX_FLAGS_RELEASE "/O2 /arch:AVX2 /bigobj /W4 /external:anglebrackets /external:W0 /EHsc /openmp /GL /Zc:preprocessor /MP")
+    # /utf-8: read every source as UTF-8 and store literals as UTF-8, whatever the code page of
+    # the machine that builds the package.
+    set(CMAKE_CXX_FLAGS_DEBUG "/Zi /utf-8 /arch:AVX /bigobj /W4 /external:anglebrackets /external:W0 /D_DEBUG /EHsc /openmp /Zc:preprocessor")
+    set(CMAKE_CXX_FLAGS_RELEASE "/O2 /utf-8 /arch:AVX2 /bigobj /W4 /external:anglebrackets /external:W0 /EHsc /openmp /GL /Zc:preprocessor /MP")
     # add_link_options(/DEBUG)
     set(CMAKE_VS_USE_DEBUG_LIBRARIES "$<CONFIG:Debug,Custom>")
     # FIXME: Hardcoded Qt path for Windows, consider making it configurable
@@ -330,6 +332,7 @@ if (ALCEDO_ENABLE_CUDA AND CUDAToolkit_FOUND)
     add_compile_options($<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Release>>:--extra-device-vectorization>)
     add_compile_options($<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Debug>>:-G>)
     if(MSVC)
+        add_compile_options($<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/utf-8>)
         list(APPEND CMAKE_CUDA_HOST_COMPILER_OPTIONS /W4 /external:anglebrackets /external:W0 /D_DEBUG /EHsc /arch:AVX2 /openmp)
     endif()
     set(ALCEDO_CUDA_ENABLED ON)

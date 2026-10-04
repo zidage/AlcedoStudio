@@ -149,6 +149,8 @@ class ThumbnailDiskCacheService {
   void                   WriterThreadLoop();
   /// Encode and store one queued write. True when the index changed.
   bool                   WriteEntry(WriteTask& task);
+  /// FlushMetadata() is the non-throwing wrapper around this.
+  void                   FlushMetadataOrThrow();
   void                   LoadMetadata();
   void                   RecordLruAccessLocked(const std::string& key_hash);
   void                   RemoveEntryFromIndexLocked(const std::string& key_hash);

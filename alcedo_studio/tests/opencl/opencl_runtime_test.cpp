@@ -12,6 +12,7 @@
 #include <iostream>
 #include <numeric>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "decoders/processor/operators/gpu/opencl_demosaicnet_programs.hpp"
@@ -295,6 +296,42 @@ __kernel void write_one(__global int* output) {
 
   const auto program = BuildProgramFromSource("unicode_path", source_path, true);
   EXPECT_NE(program.program, nullptr);
+}
+
+TEST(OpenClRuntimeTest, BuildTraceSinkGetsBeginAndEndLineForEachBuild) {
+  auto& context = OpenClContext::Instance();
+  if (!TryEnsureOpenClContext()) {
+    GTEST_SKIP() << context.LastInitializationError();
+  }
+
+  TempDirectory temp_directory;
+  const auto    name        = UniqueProgramName("build_trace");
+  const auto    source_path = temp_directory.Path() / (name + ".cl");
+  WriteTextFile(source_path, R"(
+__kernel void write_two(__global int* output) {
+  output[get_global_id(0)] = 2;
+}
+)");
+  OpenClProgramLibrary::Instance().RegisterProgram(OpenClProgramDescriptor{
+      .name                = name,
+      .source_paths        = {source_path},
+      .build_options       = "-cl-std=CL1.2",
+      .required_at_startup = false,
+  });
+
+  std::vector<std::string> lines;
+  OpenClProgramLibrary::Instance().SetBuildTraceSink(
+      [&](std::string_view message) { lines.emplace_back(message); });
+  (void)OpenClProgramLibrary::Instance().GetProgram(name);
+  OpenClProgramLibrary::Instance().SetBuildTraceSink({});
+
+  ASSERT_EQ(lines.size(), 2U);
+  EXPECT_TRUE(lines[0].starts_with("opencl.program.build.begin"));
+  EXPECT_NE(lines[0].find("program='" + name + "'"), std::string::npos);
+  EXPECT_NE(lines[0].find("device='"), std::string::npos);
+  EXPECT_TRUE(lines[1].starts_with("opencl.program.build.end"));
+  EXPECT_NE(lines[1].find("program='" + name + "'"), std::string::npos);
+  EXPECT_NE(lines[1].find("error=0"), std::string::npos);
 }
 
 TEST(OpenClRuntimeTest, NoLegacyOpenClFusedProgramIsRegisteredOrPackaged) {

@@ -488,6 +488,9 @@ if(APPLE)
 endif()
 
 if(WIN32)
+    # MSVC merges a .manifest source into the default linker manifest.
+    target_sources(alcedo_main PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/alcedo_main.manifest")
+
     # Brand icon pipeline (Windows + macOS):
     #   scripts/build_app_icons.ps1  ->  cargo tauri icon
     # writes config/ICON/alcedo_icon.{png,ico,icns}. Explorer / Start Menu /

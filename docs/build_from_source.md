@@ -163,6 +163,20 @@ cmake --preset macos_release -DALCEDO_QT_PREFIX=/path/to/Qt/6.x/macos
 | Run preset-based tests: `ctest --preset win_release_test` or `ctest --preset macos_debug_tests`. | 使用 preset 运行测试：`ctest --preset win_release_test` 或 `ctest --preset macos_debug_tests`。 |
 | Traditional debug test command also works: `ctest --test-dir build/debug --output-on-failure`. | 传统命令同样可用：`ctest --test-dir build/debug --output-on-failure`。 |
 
+### 5.1 AMD OpenCL compile check (Windows) / AMD OpenCL 编译检查（Windows）
+
+| English | 中文 |
+| --- | --- |
+| NVIDIA and Intel OpenCL accept kernels that crash AMD's Windows compiler (`amd_comgr_*.dll`). After changing a `.cl` file, build every registered OpenCL program with AMD's driver compiler. It uses offline devices, so no AMD GPU is needed. | NVIDIA 和 Intel 的 OpenCL 能编译通过的内核，可能让 AMD Windows 驱动的编译器（`amd_comgr_*.dll`）崩溃。修改 `.cl` 文件后，用 AMD 驱动编译器把所有已注册的 OpenCL 程序编译一遍。它使用离线设备，不需要 AMD 显卡。 |
+| Driver packages, the extracted OpenCL runtime and the compiled harness go to `.amd_opencl/` at the repository root, which is gitignored. Needs 7-Zip and Visual Studio. | 驱动包、解出的 OpenCL 运行时和编译好的测试程序放在仓库根目录的 `.amd_opencl/` 下，该目录已加入 gitignore。需要 7-Zip 和 Visual Studio。 |
+
+```powershell
+python scripts\amd_opencl\amd_opencl_check.py fetch 26.6.2   # download an Adrenalin package once (~1.6 GB)
+python scripts\amd_opencl\amd_opencl_check.py check          # all programs x all fetched drivers; RDNA2-4 (gfx1030/1100/1103/1201) and RDNA1 (gfx1010)
+python scripts\amd_opencl\amd_opencl_check.py check --program edit_geometry_lens_calib --gbk   # one program, GBK code page
+python scripts\amd_opencl\amd_opencl_check.py list           # programs read from the OpenClProgramDescriptor registrations
+```
+
 ## 6) Formatting and Tidy / 格式化与静态检查
 
 Windows:
