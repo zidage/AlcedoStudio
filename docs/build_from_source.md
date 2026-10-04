@@ -172,7 +172,7 @@ cmake --preset macos_release -DALCEDO_QT_PREFIX=/path/to/Qt/6.x/macos
 
 ```powershell
 python scripts\amd_opencl\amd_opencl_check.py fetch 26.6.2   # download an Adrenalin package once (~1.6 GB)
-python scripts\amd_opencl\amd_opencl_check.py check          # all programs x all fetched drivers x gfx1030/1100/1103/1201
+python scripts\amd_opencl\amd_opencl_check.py check          # all programs x all fetched drivers; RDNA2-4 (gfx1030/1100/1103/1201) and RDNA1 (gfx1010)
 python scripts\amd_opencl\amd_opencl_check.py check --program edit_geometry_lens_calib --gbk   # one program, GBK code page
 python scripts\amd_opencl\amd_opencl_check.py list           # programs read from the OpenClProgramDescriptor registrations
 ```

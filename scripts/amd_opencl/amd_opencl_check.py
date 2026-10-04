@@ -8,7 +8,7 @@ show. The program list is read from the OpenClProgramDescriptor registrations in
 tree, so it follows the code.
 
 Everything downloaded or built lives in <repo>/.amd_opencl/ (gitignored):
-  installers/   Adrenalin packages        drivers/<version>/   extracted amdocl folder
+  installers/   Adrenalin packages        drivers/<version>[-legacy]/   extracted amdocl folders
   bin/          ocl_probe(.exe, _gbk.exe) runs/                per-program manifests and logs
 
 Typical use:
@@ -41,8 +41,15 @@ INSTALLERS = WORK / "installers"
 BIN = WORK / "bin"
 RUNS = WORK / "runs"
 
+# Adrenalin ships two OpenCL runtimes. Display/ (drivers/<version>) serves RDNA2 and newer;
+# Display2/ (drivers/<version>-legacy) serves Polaris, Vega, the Vega iGPU of Ryzen APUs and RDNA1.
+DRIVER_BRANCHES = {"": "Display", "-legacy": "Display2"}
 # RDNA2, RDNA3, RDNA3 iGPU (780M), RDNA4.
 DEFAULT_DEVICES = ["gfx1030", "gfx1100", "gfx1103", "gfx1201"]
+# RX 5700 (RDNA1). The legacy runtime also lists gfx8/gfx9 (Polaris, Vega, Ryzen APU iGPUs), but
+# it compiles those through HSAIL, and offline HSAIL builds fail for every kernel ("The instruction
+# set architecture name is invalid"), so they cannot be checked this way.
+DEFAULT_LEGACY_DEVICES = ["gfx1010:xnack-"]
 CRASH_CODE = 0xC0000005
 VSWHERE = Path(r"C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe")
 BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130 Safari/537.36"
@@ -144,9 +151,9 @@ def _seven_zip() -> str:
 
 
 def fetch(version: str) -> None:
-    target = DRIVERS / version
-    if (target / "amdocl64.dll").exists():
-        print(f"{target} already present")
+    targets = {DRIVERS / f"{version}{suffix}": folder for suffix, folder in DRIVER_BRANCHES.items()}
+    if all((target / "amdocl64.dll").exists() for target in targets):
+        print(f"{', '.join(map(str, targets))} already present")
         return
     INSTALLERS.mkdir(parents=True, exist_ok=True)
     installer = INSTALLERS / f"adrenalin-{version}.exe"
@@ -161,13 +168,16 @@ def fetch(version: str) -> None:
         request = urllib.request.Request(links[0], headers={"User-Agent": BROWSER_UA, "Referer": "https://www.amd.com/"})
         with urllib.request.urlopen(request, timeout=3600) as response, open(installer, "wb") as out:
             shutil.copyfileobj(response, out, length=8 << 20)
-    extract = WORK / "extract_tmp"
-    subprocess.run([_seven_zip(), "x", "-y", f"-o{extract}", str(installer),
-                    "Packages/Drivers/Display/WT6A_INF/amdocl/*"], check=True, stdout=subprocess.DEVNULL)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(extract / "Packages/Drivers/Display/WT6A_INF/amdocl"), str(target))
-    shutil.rmtree(extract, ignore_errors=True)
-    print(f"extracted {target}")
+    for target, folder in targets.items():
+        if (target / "amdocl64.dll").exists():
+            continue
+        extract = WORK / "extract_tmp"
+        subprocess.run([_seven_zip(), "x", "-y", f"-o{extract}", str(installer),
+                        f"Packages/Drivers/{folder}/WT6A_INF/amdocl/*"], check=True, stdout=subprocess.DEVNULL)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(extract / f"Packages/Drivers/{folder}/WT6A_INF/amdocl"), str(target))
+        shutil.rmtree(extract, ignore_errors=True)
+        print(f"extracted {target}")
 
 
 def _vs_dev_cmd() -> Path:
@@ -245,29 +255,29 @@ def check(args: argparse.Namespace) -> int:
                 raise SystemExit("no matching program; see: amd_opencl_check.py list")
 
     RUNS.mkdir(parents=True, exist_ok=True)
-    devices = args.device or DEFAULT_DEVICES
     failures = 0
     for driver in drivers:
-        for device in devices:
+        legacy = driver.name.endswith("-legacy")
+        for device in args.device or (DEFAULT_LEGACY_DEVICES if legacy else DEFAULT_DEVICES):
             if args.threads > 1:
-                manifest = RUNS / f"{driver.name}-{device}-all.txt"
+                manifest = RUNS / f"{driver.name}-{device.replace(':', '_')}-all.txt"
                 manifest.write_text("".join(f"{p.name}\t{p.options}\t{';'.join(map(str, p.sources))}\n"
                                             for p in programs), encoding="utf-8")
                 status, detail = _run(exe, driver, device, args.threads, manifest, manifest.with_suffix(".log"))
-                print(f"{driver.name:8s} {device:8s} {args.threads} threads, {len(programs)} programs: {status} {detail}")
+                print(f"{driver.name:15s} {device:15s} {args.threads} threads, {len(programs)} programs: {status} {detail}")
                 failures += status != "OK"
                 continue
             for program in programs:
                 # One process per program: a compiler crash ends the process.
-                manifest = RUNS / f"{driver.name}-{device}-{program.name}.txt"
+                manifest = RUNS / f"{driver.name}-{device.replace(':', '_')}-{program.name}.txt"
                 manifest.write_text(f"{program.name}\t{program.options}\t{';'.join(map(str, program.sources))}\n",
                                     encoding="utf-8")
                 status, detail = _run(exe, driver, device, 1, manifest, manifest.with_suffix(".log"))
                 if status != "OK" or args.verbose:
-                    print(f"{driver.name:8s} {device:8s} {program.name:32s} {status} {detail}")
+                    print(f"{driver.name:15s} {device:15s} {program.name:32s} {status} {detail}")
                 failures += status != "OK"
             if not args.verbose:
-                print(f"{driver.name:8s} {device:8s} {len(programs)} programs checked")
+                print(f"{driver.name:15s} {device:15s} {len(programs)} programs checked")
     print("all programs built" if failures == 0 else f"{failures} failed build(s)")
     return 0 if failures == 0 else 1
 
@@ -281,7 +291,8 @@ def main() -> int:
     sub.add_parser("list", help="print the OpenCL programs registered in the source tree")
     check_parser = sub.add_parser("check", help="build programs with every fetched driver")
     check_parser.add_argument("--driver", nargs="*", help="driver versions (default: all fetched)")
-    check_parser.add_argument("--device", nargs="*", help=f"offline devices (default: {' '.join(DEFAULT_DEVICES)})")
+    check_parser.add_argument("--device", nargs="*", help=f"offline devices (default: {' '.join(DEFAULT_DEVICES)}; "
+                              f"{' '.join(DEFAULT_LEGACY_DEVICES)} for -legacy drivers)")
     check_parser.add_argument("--program", nargs="*", help="registered program names (default: all)")
     check_parser.add_argument("--source", help="build this .cl file instead of the registered programs")
     check_parser.add_argument("--options", default="-cl-std=CL1.2", help="build options for --source")
