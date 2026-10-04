@@ -285,7 +285,10 @@ TEST_F(ImportServiceTests, BatchCancelTest) {
   ImportResult final_result_value = final_result_future.get();
   EXPECT_EQ(final_result_value.requested_, static_cast<uint32_t>(paths.size()));
   EXPECT_LT(final_result_value.imported_, static_cast<uint32_t>(paths.size()));
-  EXPECT_EQ(final_result_value.failed_, 0);
+  // ImportToFolder returns before its placeholder loop ends, so the cancel can stop files that
+  // were not submitted yet; those count as failed. Every requested file is accounted for.
+  EXPECT_EQ(final_result_value.imported_ + final_result_value.failed_,
+            static_cast<uint32_t>(paths.size()));
   std::cout << "This test may fail occasionally in Release mode due to fast imports." << std::endl;
 
   auto snapshot = import_job->import_log_->Snapshot();

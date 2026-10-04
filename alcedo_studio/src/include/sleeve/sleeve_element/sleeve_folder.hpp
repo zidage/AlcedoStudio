@@ -72,6 +72,9 @@ class SleeveFolder : public SleeveElement {
   auto Contains(const file_name_t& name) const -> bool;
   void RemoveNameFromMap(const file_name_t& name);
   auto RemoveElementById(sl_element_id_t element_id) -> bool;
+  /// Remove every child whose id is in @p element_ids with one pass over the folder content.
+  /// Same result as calling RemoveElementById for each id. Returns the number of ids removed.
+  auto RemoveElementsById(const std::unordered_set<sl_element_id_t>& element_ids) -> size_t;
 
   void CreateIndex(const std::vector<std::shared_ptr<SleeveElement>>& filtered_elements,
                    const filter_id_t                                  filter_id);

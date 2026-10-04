@@ -268,6 +268,15 @@ bool ProjectHandler::StartProjectLoad(const std::filesystem::path& dbPath,
             return;
           }
 
+          // The replaced project's services are retired after the new project is installed.
+          auto retired = std::make_shared<RetiredProject>();
+          retired->project_                = std::move(ph.project_);
+          retired->pipeline_service_       = std::move(ph.pipeline_service_);
+          retired->thumbnail_service_      = std::move(ph.thumbnail_service_);
+          retired->mask_thumbnail_service_ = std::move(ph.mask_thumbnail_service_);
+          retired->import_service_         = std::move(ph.import_service_);
+          retired->export_service_         = std::move(ph.export_service_);
+
           ph.project_               = std::move(result->project_);
           ph.pipeline_service_      = std::move(result->pipeline_);
           ph.thumbnail_service_     = std::move(result->thumbnail_);
@@ -312,13 +321,37 @@ bool ProjectHandler::StartProjectLoad(const std::filesystem::path& dbPath,
 
           if (!result->workspace_to_cleanup_.empty() &&
               result->workspace_to_cleanup_ != ph.project_workspace_dir_) {
-            album_util::CleanupWorkspaceDirectory(result->workspace_to_cleanup_);
+            retired->workspace_dir_ = result->workspace_to_cleanup_;
           }
+          ph.RetireProject(std::move(retired));
         },
         Qt::QueuedConnection);
   }).detach();
 
   return true;
+}
+
+void ProjectHandler::RetireProject(std::shared_ptr<RetiredProject> retired) {
+  if (!retired) {
+    return;
+  }
+  // The sidecar runtime stops on the UI thread (its owner). Everything left runs without it.
+  if (retired->project_) {
+    retired->project_->StopAiSidecarRuntime();
+  }
+  project_retirement_thread_.Submit([retired]() {
+    // Services first, then the project that owns the database they use. A service another
+    // module still holds is destroyed by that module's last release instead.
+    retired->import_service_.reset();
+    retired->export_service_.reset();
+    retired->thumbnail_service_.reset();
+    retired->mask_thumbnail_service_.reset();
+    retired->pipeline_service_.reset();
+    retired->project_.reset();
+    if (!retired->workspace_dir_.empty()) {
+      album_util::CleanupWorkspaceDirectory(retired->workspace_dir_);
+    }
+  });
 }
 
 bool ProjectHandler::PurgeUninstalledSemanticModels() {

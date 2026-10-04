@@ -80,8 +80,8 @@ ImportExportHandler::ImportExportHandler(ProjectModule* project, LibraryModule* 
       library_(library),
       folders_(folders),
       status_(status),
-      barrier_(barrier) {
-  // default export folder init continues below
+      barrier_(barrier),
+      folder_scan_(new FolderImportScanModel(this)) {
 
   const QString pictures = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
   if (!pictures.isEmpty()) {
@@ -89,6 +89,8 @@ ImportExportHandler::ImportExportHandler(ProjectModule* project, LibraryModule* 
   }
   export_status_text_ = PL_TEXT("Ready to export.");
 }
+
+ImportExportHandler::~ImportExportHandler() { JoinFinalizeThread(); }
 
 void ImportExportHandler::BindCollaborators(StatsEngine* stats, NikonHeRecoveryController* nikon,
                                             SemanticGenerationController* semantic) {
@@ -125,41 +127,12 @@ void ImportExportHandler::StartImport(const QStringList& fileUrlsOrPaths) {
   StartImportResolvedPaths(std::move(paths), false);
 }
 
-QStringList ImportExportHandler::CollectFolderFiles(const QString& folderUrlOrPath) {
-  QStringList result;
-  const auto  folder_opt = InputToPath(folderUrlOrPath);
-  if (!folder_opt.has_value()) {
-    return result;
+void ImportExportHandler::StartFolderImport() {
+  if (!folder_scan_->ScanFinished()) {
+    status_->SetTaskState(PL_TEXT("The folder is still being scanned."), 0, false);
+    return;
   }
-  std::error_code ec;
-  if (!std::filesystem::is_directory(folder_opt.value(), ec) || ec) {
-    return result;
-  }
-
-  std::vector<std::filesystem::path> files;
-  for (auto it = std::filesystem::recursive_directory_iterator(
-           folder_opt.value(), std::filesystem::directory_options::skip_permission_denied, ec);
-       it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
-    if (ec) {
-      ec.clear();
-      continue;
-    }
-    std::error_code file_ec;
-    if (it->is_regular_file(file_ec) && !file_ec) {
-      files.push_back(it->path());
-    }
-  }
-
-  std::sort(files.begin(), files.end());
-  result.reserve(static_cast<int>(files.size()));
-  for (const auto& f : files) {
-#if defined(_WIN32)
-    result.append(QString::fromStdWString(f.wstring()));
-#else
-    result.append(QString::fromStdString(f.string()));
-#endif
-  }
-  return result;
+  StartImportPaths(folder_scan_->TakeFilePaths(), false);
 }
 
 void ImportExportHandler::StartImportPaths(const std::vector<image_path_t>& paths,
@@ -195,7 +168,8 @@ void ImportExportHandler::StartImportResolvedPaths(std::vector<image_path_t> pat
     status_->SetTaskState(PL_TEXT("Import service is unavailable."), 0, false);
     return;
   }
-  if (current_import_job_ && !current_import_job_->IsCancelationAcked()) {
+  // import_running_ also covers the finalize step, which runs after the job has finished.
+  if (import_running_ || (current_import_job_ && !current_import_job_->IsCancelationAcked())) {
     status_->SetTaskState(PL_TEXT("Import already running."), 0, true);
     return;
   }
@@ -209,39 +183,31 @@ void ImportExportHandler::StartImportResolvedPaths(std::vector<image_path_t> pat
   current_import_job_ = job;
 
   import_running_     = true;
+  import_phase_       = ImportPhaseState::Preparing;
   import_total_       = static_cast<int>(paths.size());
+  import_prepared_    = 0;
   import_completed_   = 0;
   import_failed_      = 0;
-  import_status_text_ = PL_TEXT("Importing %1 file(s)...", import_total_);
+  import_unsupported_ = 0;
+  import_status_text_ = PL_TEXT("Preparing %1 file(s)...", import_total_);
+  import_progress_queued_->store(false);
   emit ImportStateChanged();
   emit importStateChanged();
 
   status_->SetTaskState(import_status_text_, 0, true);
 
   QPointer<ImportExportHandler> self(this);
-  job->on_progress_ = [self](const ImportProgress& progress) {
-    if (!self) return;
-    const uint32_t total        = std::max<uint32_t>(progress.total_, 1);
-    const uint32_t metadataDone = progress.metadata_done_.load();
-    const uint32_t failed       = progress.failed_.load();
-    const uint32_t done         = metadataDone + failed;
-    const int      pct          = static_cast<int>((done * 100U) / total);
-
+  job->on_progress_ = [self, queued = import_progress_queued_](const ImportProgress&) {
+    // At most one queued update: it reads the latest counters when it runs.
+    if (queued->exchange(true)) {
+      return;
+    }
     QMetaObject::invokeMethod(
         self,
-        [self, metadataDone, total, failed, pct]() {
-          if (!self) return;
-          self->import_completed_ = static_cast<int>(metadataDone);
-          self->import_failed_    = static_cast<int>(failed);
-          self->import_status_text_ =
-              PL_TEXT("Importing... %1/%2 (failed %3)", metadataDone, total, failed);
-          emit self->ImportStateChanged();
-          emit self->importStateChanged();
-          if (self->status_) {
-            self->status_->SetTaskState(self->import_status_text_, pct, true);
-          }
-          if (self->nikon_ && self->nikon_->is_reimporting()) {
-            self->nikon_->UpdateReimportProgress(metadataDone, total, failed);
+        [self, queued]() {
+          queued->store(false);
+          if (self) {
+            self->ApplyImportProgress();
           }
         },
         Qt::QueuedConnection);
@@ -264,6 +230,7 @@ void ImportExportHandler::StartImportResolvedPaths(std::vector<image_path_t> pat
   } catch (const std::exception& e) {
     current_import_job_.reset();
     import_running_     = false;
+    import_phase_       = ImportPhaseState::Idle;
     import_status_text_ = PL_TEXT("Import failed: %1", QString::fromUtf8(e.what()));
     emit ImportStateChanged();
     emit importStateChanged();
@@ -271,8 +238,54 @@ void ImportExportHandler::StartImportResolvedPaths(std::vector<image_path_t> pat
   }
 }
 
+void ImportExportHandler::ApplyImportProgress() {
+  const auto job = current_import_job_;
+  if (!job || !job->progress_ || import_phase_ == ImportPhaseState::Finalizing) {
+    return;
+  }
+  const ImportProgress& progress = *job->progress_;
+  // unsupported_ is a subset of failed_ and is incremented after it, so it is read first.
+  const uint32_t        unsupported = progress.unsupported_.load();
+  const uint32_t        failed      = progress.failed_.load();
+  const uint32_t        imported    = progress.metadata_done_.load();
+  const uint32_t        prepared    = progress.placeholders_created_.load();
+  const uint32_t        total       = std::max<uint32_t>(progress.total_, 1);
+
+  import_prepared_    = static_cast<int>(prepared);
+  import_completed_   = static_cast<int>(imported);
+  import_failed_      = static_cast<int>(failed);
+  import_unsupported_ = static_cast<int>(unsupported);
+  import_phase_       = job->submission_closed_.load() ? ImportPhaseState::Reading
+                                                       : ImportPhaseState::Preparing;
+  if (!job->IsCancelled()) {
+    import_status_text_ = PL_TEXT("Importing... %1/%2 (failed %3)", imported, total, failed);
+  }
+  emit ImportStateChanged();
+  emit importStateChanged();
+
+  const int processed_percent = static_cast<int>(((imported + failed) * 100U) / total);
+  status_->SetTaskState(import_status_text_, processed_percent, true);
+  if (nikon_ && nikon_->is_reimporting()) {
+    nikon_->UpdateReimportProgress(imported, total, failed);
+  }
+}
+
+auto ImportExportHandler::ImportPhase() const -> QString {
+  switch (import_phase_) {
+    case ImportPhaseState::Preparing:
+      return QStringLiteral("preparing");
+    case ImportPhaseState::Reading:
+      return QStringLiteral("reading");
+    case ImportPhaseState::Finalizing:
+      return QStringLiteral("finalizing");
+    case ImportPhaseState::Idle:
+      break;
+  }
+  return {};
+}
+
 void ImportExportHandler::CancelImport() {
-  if (!current_import_job_) return;
+  if (!current_import_job_ || import_phase_ == ImportPhaseState::Finalizing) return;
   current_import_job_->canceled_.store(true);
   import_status_text_ = PL_TEXT("Cancelling import...");
   emit ImportStateChanged();
@@ -602,36 +615,74 @@ void ImportExportHandler::FinishImport(const ImportResult& result) {
   current_import_job_.reset();
 
   if (!importJob || !importJob->import_log_) {
-    status_->SetTaskState(PL_TEXT("Import finished but no log snapshot is available."), 0, false);
+    import_running_     = false;
+    import_phase_       = ImportPhaseState::Idle;
+    import_status_text_ = PL_TEXT("Import finished but no log snapshot is available.");
+    emit ImportStateChanged();
+    emit importStateChanged();
+    status_->SetTaskState(import_status_text_, 0, false);
     return;
   }
 
-  const auto snapshot                    = importJob->import_log_->Snapshot();
+  auto snapshot =
+      std::make_shared<const ImportLogSnapshot>(importJob->import_log_->Snapshot());
+  import_phase_       = ImportPhaseState::Finalizing;
+  import_completed_   = static_cast<int>(result.imported_);
+  import_failed_      = static_cast<int>(result.failed_);
+  import_unsupported_ = static_cast<int>(result.unsupported_);
+  import_status_text_ = PL_TEXT("Saving %1 imported photo(s) to the library...", result.imported_);
+  emit ImportStateChanged();
+  emit importStateChanged();
+  status_->SetTaskState(import_status_text_, 0, false);
+
+  // Removing the rejected placeholders and writing the imported Images, elements, project file
+  // and package take seconds for a large folder; they run off the UI thread. import_running_
+  // stays true until CompleteImport, which keeps the import overlay, the project switch block
+  // and the shutdown wait in place for the whole write.
+  JoinFinalizeThread();
+  QPointer<ImportExportHandler> self(this);
+  finalize_thread_ = std::thread([self, result, snapshot,
+                                  import_service = project_->handler().import_service(),
+                                  project        = project_->handler().project(),
+                                  save_and_package = project_->handler().MakeSaveAndPackageJob(),
+                                  dest             = import_target_folder_path_]() {
+    ImportFinalizeOutcome outcome;
+    try {
+      if (import_service) {
+        import_service->SyncImports(*snapshot, dest);
+      }
+      if (project) {
+        project->GetSleeveService()->Sync();
+        project->GetImagePoolService()->SyncWithStorage();
+      }
+    } catch (...) {
+      outcome.state_saved_ = false;
+    }
+    if (outcome.state_saved_ && project) {
+      outcome.package_saved_ = save_and_package(&outcome.package_error_);
+      // The job reports a failed SaveProject without a message.
+      if (!outcome.package_saved_ && outcome.package_error_.isEmpty()) {
+        outcome.state_saved_ = false;
+      }
+    }
+    QMetaObject::invokeMethod(
+        self.data(),
+        [self, result, snapshot, outcome]() {
+          if (self) {
+            self->CompleteImport(result, snapshot, outcome);
+          }
+        },
+        Qt::QueuedConnection);
+  });
+}
+
+void ImportExportHandler::CompleteImport(const ImportResult&                             result,
+                                         const std::shared_ptr<const ImportLogSnapshot>& snapshot,
+                                         const ImportFinalizeOutcome&                    outcome) {
+  JoinFinalizeThread();
   const bool reimporting_nikon_he        = nikon_ && nikon_->is_reimporting();
   const auto recovery_target_folder_id   = import_target_folder_id_;
   const auto recovery_target_folder_path = import_target_folder_path_;
-
-  bool       state_saved                 = true;
-  try {
-    auto* isvc = project_->handler().import_service();
-    if (isvc) {
-      isvc->SyncImports(snapshot, import_target_folder_path_);
-    }
-    auto proj = project_->handler().project();
-    if (proj) {
-      proj->GetSleeveService()->Sync();
-      proj->GetImagePoolService()->SyncWithStorage();
-      proj->SaveProject(project_->handler().meta_path());
-    }
-  } catch (...) {
-    state_saved = false;
-  }
-
-  QString package_error;
-  bool    package_saved = true;
-  if (state_saved) {
-    package_saved = project_->handler().PackageCurrentProjectFiles(&package_error);
-  }
 
   library_->ReloadCurrentFolder();
   stats_->ClearFilters();
@@ -640,18 +691,21 @@ void ImportExportHandler::FinishImport(const ImportResult& result) {
   import_target_folder_id_   = folders_->CurrentFolderElementId().value_or(0);
   import_target_folder_path_ = folders_->CurrentFolderFsPath();
 
-  auto task_text =
-      PL_TEXT("Import complete: %1 imported, %2 failed", result.imported_, result.failed_);
-  if (!state_saved) {
+  const uint32_t errors = result.failed_ - std::min(result.failed_, result.unsupported_);
+  auto task_text = PL_TEXT("Import complete: %1 imported, %2 skipped, %3 failed", result.imported_,
+                           result.unsupported_, errors);
+  if (!outcome.state_saved_) {
     status_->SetServiceMessage(PL_TEXT("Import finished, but saving project state failed."));
-  } else if (!package_saved) {
-    status_->SetServiceMessage(package_error.isEmpty()
+  } else if (!outcome.package_saved_) {
+    status_->SetServiceMessage(outcome.package_error_.isEmpty()
                                    ? PL_TEXT("Import finished, but project packing failed.")
-                                   : PL_TEXT("%1", package_error));
+                                   : PL_TEXT("%1", outcome.package_error_));
   }
   import_running_     = false;
+  import_phase_       = ImportPhaseState::Idle;
   import_completed_   = static_cast<int>(result.imported_);
   import_failed_      = static_cast<int>(result.failed_);
+  import_unsupported_ = static_cast<int>(result.unsupported_);
   import_status_text_ = task_text;
   emit ImportStateChanged();
   emit importStateChanged();
@@ -662,8 +716,8 @@ void ImportExportHandler::FinishImport(const ImportResult& result) {
   // Only files whose metadata import succeeded are in the library. Failed entries were
   // deleted by SyncImports, and unsupported Nikon HE files wait for recovery.
   std::vector<SemanticGenerationItem> semantic_items;
-  semantic_items.reserve(snapshot.metadata_ok_.size());
-  for (const auto& created : snapshot.created_) {
+  semantic_items.reserve(snapshot->metadata_ok_.size());
+  for (const auto& created : snapshot->created_) {
     if (!created.metadata_ok_ || created.element_id_ == 0 || created.image_id_ == 0) {
       continue;
     }
@@ -678,9 +732,16 @@ void ImportExportHandler::FinishImport(const ImportResult& result) {
     return;
   }
 
-  if (!snapshot.unsupported_nikon_he_.empty() && nikon_) {
-    nikon_->BeginRecovery(snapshot.unsupported_nikon_he_, recovery_target_folder_id,
+  if (!snapshot->unsupported_nikon_he_.empty() && nikon_) {
+    nikon_->BeginRecovery(snapshot->unsupported_nikon_he_, recovery_target_folder_id,
                           recovery_target_folder_path);
+  }
+}
+
+void ImportExportHandler::JoinFinalizeThread() {
+  if (finalize_thread_.joinable() &&
+      finalize_thread_.get_id() != std::this_thread::get_id()) {
+    finalize_thread_.join();
   }
 }
 

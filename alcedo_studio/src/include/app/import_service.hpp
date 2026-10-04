@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #include "app/sleeve_service.hpp"
 #include "concurrency/thread_pool.hpp"
@@ -51,6 +52,10 @@ struct ImportProgress {
   std::atomic<uint32_t> metadata_done_        = 0;
 
   std::atomic<uint32_t> failed_               = 0;
+
+  /// Subset of failed_: files whose content is not a supported RAW file. These are expected in
+  /// a folder import (sidecars, JPEG copies, videos) and are reported as skipped, not as errors.
+  std::atomic<uint32_t> unsupported_          = 0;
 };
 
 struct ImportError {
@@ -63,6 +68,8 @@ struct ImportResult {
   uint32_t requested_ = 0;
   uint32_t imported_  = 0;
   uint32_t failed_    = 0;
+  /// Subset of failed_: files that are not a supported RAW file.
+  uint32_t unsupported_ = 0;
 };
 
 class ImportJob {
@@ -81,6 +88,10 @@ class ImportJob {
   FinishedCallback           on_finished_{};
 
   std::shared_ptr<ImportLog> import_log_ = nullptr;
+
+  /// Live counters of this job, set by ImportToFolder. A caller that coalesces on_progress_
+  /// reports reads the latest counts here instead of keeping its own copy.
+  std::shared_ptr<ImportProgress> progress_ = nullptr;
 
   ~ImportJob()                           = default;
 
@@ -134,10 +145,26 @@ class ImportServiceImpl final : public ImportService {
   /// The work is short file reads plus CPU, so it scales with the logical core count.
   ThreadPool thread_pool_{std::max<size_t>(8, std::thread::hardware_concurrency())};
 
+  /// Runs the placeholder loop of each import (sleeve element + pinned Image per file, then one
+  /// metadata task on thread_pool_), so ImportToFolder returns without walking the file list on
+  /// the caller's (UI) thread. Declared after thread_pool_: it is destroyed first, and its
+  /// destructor finishes a running loop while thread_pool_ still accepts the loop's tasks.
+  ThreadPool submission_thread_{1};
+
+  /// Start an import and return @p job (or a new job) without waiting for the placeholders: the
+  /// placeholder loop runs on submission_thread_, metadata extraction on thread_pool_.
+  /// job->on_progress_ reports the placeholder count while the loop runs, and job->on_finished_
+  /// fires once every file is imported or failed.
   auto ImportToFolder(const std::vector<image_path_t>& paths, const image_path_t& dest,
                       const ImportOptions& options = {}, std::shared_ptr<ImportJob> job = nullptr)
       -> std::shared_ptr<ImportJob> override;
 
   void SyncImports(const ImportLogSnapshot& log_snapshot, const image_path_t& dest) override;
+
+ private:
+  void CreatePlaceholdersAndSubmit(const std::vector<image_path_t>& paths, const image_path_t& dest,
+                                   const std::shared_ptr<ImportJob>&      job,
+                                   const std::shared_ptr<ImportLog>&      import_log,
+                                   const std::shared_ptr<ImportProgress>& progress);
 };
 };  // namespace alcedo

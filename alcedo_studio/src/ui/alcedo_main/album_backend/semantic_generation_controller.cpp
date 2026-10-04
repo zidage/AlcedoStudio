@@ -97,16 +97,6 @@ auto FindProfileByModel(const std::string& profile_id, const std::string& model_
   return nullptr;
 }
 
-auto CurrentUiSemanticLabelLanguage() -> SemanticLabelLanguage {
-  QString code =
-      QSettings{}.value(QStringLiteral("ui/language"), QStringLiteral("system")).toString();
-  if (code.compare(QStringLiteral("system"), Qt::CaseInsensitive) == 0) {
-    code = QLocale::system().bcp47Name();
-  }
-  return code.startsWith(QStringLiteral("zh"), Qt::CaseInsensitive)
-             ? SemanticLabelLanguage::kChinese
-             : SemanticLabelLanguage::kEnglish;
-}
 
 auto ModelLabelLanguage(const AiSidecarRuntimeModelInfo& info) -> SemanticLabelLanguage {
   return SemanticLabelLanguageForModel(info.profile_id.empty() ? info.model_id : info.profile_id,
@@ -754,40 +744,8 @@ auto SemanticGenerationController::LabelDisplayText(sl_element_id_t elementId) c
   if (!project) {
     return {};
   }
-  std::string error;
-  const auto  label =
-      project->GetStorage()->GetSemanticLabelStore().GetImageLabelForFile(
-          elementId, model_key, &error);
-  if (!label.has_value()) {
-    return {};
-  }
-  const auto display_language = CurrentUiSemanticLabelLanguage();
-  const auto display_label    = [&](const std::string& value) {
-    return QString::fromUtf8(::alcedo::SemanticLabelDisplayText(value, display_language).c_str());
-  };
-  // top_scores_json_ is already elbow-truncated at assignment time, so it holds exactly
-  // the tags worth showing for this image (a single entry when top-1 dominates, several
-  // when the score distribution supports them). Display them as-is rather than
-  // re-filtering against a fixed margin here.
-  const QJsonDocument doc =
-      QJsonDocument::fromJson(QByteArray::fromStdString(label->top_scores_json_));
-  if (!doc.isArray()) {
-    return display_label(label->label_);
-  }
-  const auto  array = doc.array();
-  QStringList labels;
-  for (const auto& value : array) {
-    const auto object = value.toObject();
-    const auto name   = object.value(QStringLiteral("label")).toString();
-    if (name.isEmpty()) {
-      continue;
-    }
-    labels.push_back(display_label(name.toStdString()));
-    if (labels.size() >= static_cast<qsizetype>(kMaxSemanticImageLabelCount)) {
-      break;
-    }
-  }
-  return labels.isEmpty() ? display_label(label->label_) : labels.join(QStringLiteral(", "));
+  return ReadSemanticLabelDisplayText(*project->GetStorage(), elementId, model_key,
+                                      CurrentUiSemanticLabelLanguage());
 }
 
 void SemanticGenerationController::StartGenerationForItems(
@@ -1229,6 +1187,57 @@ auto SemanticGenerationController::RegisterActivationTask() -> QString {
   // Non-cancelable: no cancel callback. The activation finish callback
   // (hopped back to the UI thread) calls FinishTask on this id.
   return background_tasks_->RegisterTask(snapshot);
+}
+
+auto CurrentUiSemanticLabelLanguage() -> SemanticLabelLanguage {
+  QString code =
+      QSettings{}.value(QStringLiteral("ui/language"), QStringLiteral("system")).toString();
+  if (code.compare(QStringLiteral("system"), Qt::CaseInsensitive) == 0) {
+    code = QLocale::system().bcp47Name();
+  }
+  return code.startsWith(QStringLiteral("zh"), Qt::CaseInsensitive)
+             ? SemanticLabelLanguage::kChinese
+             : SemanticLabelLanguage::kEnglish;
+}
+
+auto ReadSemanticLabelDisplayText(Storage& storage, sl_element_id_t file_id,
+                                  const std::string& model_key, SemanticLabelLanguage language)
+    -> QString {
+  if (model_key.empty()) {
+    return {};
+  }
+  std::string error;
+  const auto  label =
+      storage.GetSemanticLabelStore().GetImageLabelForFile(file_id, model_key, &error);
+  if (!label.has_value()) {
+    return {};
+  }
+  const auto display_label = [&](const std::string& value) {
+    return QString::fromUtf8(::alcedo::SemanticLabelDisplayText(value, language).c_str());
+  };
+  // top_scores_json_ is already elbow-truncated at assignment time, so it holds exactly
+  // the tags worth showing for this image (a single entry when top-1 dominates, several
+  // when the score distribution supports them). Display them as-is rather than
+  // re-filtering against a fixed margin here.
+  const QJsonDocument doc =
+      QJsonDocument::fromJson(QByteArray::fromStdString(label->top_scores_json_));
+  if (!doc.isArray()) {
+    return display_label(label->label_);
+  }
+  const auto  array = doc.array();
+  QStringList labels;
+  for (const auto& value : array) {
+    const auto object = value.toObject();
+    const auto name   = object.value(QStringLiteral("label")).toString();
+    if (name.isEmpty()) {
+      continue;
+    }
+    labels.push_back(display_label(name.toStdString()));
+    if (labels.size() >= static_cast<qsizetype>(kMaxSemanticImageLabelCount)) {
+      break;
+    }
+  }
+  return labels.isEmpty() ? display_label(label->label_) : labels.join(QStringLiteral(", "));
 }
 
 }  // namespace alcedo::ui

@@ -5,17 +5,21 @@
 #pragma once
 
 #include <QObject>
+#include <QString>
 #include <QStringList>
 #include <QVariantList>
 #include <QVariantMap>
+#include <atomic>
 #include <filesystem>
 #include <memory>
+#include <thread>
 #include <vector>
 
 #include "app/export_service.hpp"
 #include "app/import_service.hpp"
 #include "type/supported_file_type.hpp"
 #include "ui/alcedo_main/album_backend/album_types.hpp"
+#include "ui/alcedo_main/album_backend/folder_import_scan_model.hpp"
 #include "ui/alcedo_main/album_backend/nikon_he_recovery_types.hpp"
 #include "ui/alcedo_main/i18n.hpp"
 
@@ -34,10 +38,17 @@ class IUiStatusSink;
 class ImportExportHandler final : public QObject {
   Q_OBJECT
   Q_PROPERTY(QString defaultExportFolder READ DefaultExportFolder CONSTANT)
+  Q_PROPERTY(FolderImportScanModel* folderScan READ FolderScan CONSTANT)
   Q_PROPERTY(bool importRunning READ ImportRunning NOTIFY ImportStateChanged)
+  /// "preparing" while the import service registers the files, "reading" while metadata is read,
+  /// "finalizing" while the result is written to the project; empty when no import runs.
+  Q_PROPERTY(QString importPhase READ ImportPhase NOTIFY ImportStateChanged)
   Q_PROPERTY(int importTotal READ ImportTotal NOTIFY ImportStateChanged)
+  Q_PROPERTY(int importPrepared READ ImportPrepared NOTIFY ImportStateChanged)
   Q_PROPERTY(int importCompleted READ ImportCompleted NOTIFY ImportStateChanged)
   Q_PROPERTY(int importFailed READ ImportFailed NOTIFY ImportStateChanged)
+  /// Subset of importFailed: files that are not a supported RAW file.
+  Q_PROPERTY(int importUnsupported READ ImportUnsupported NOTIFY ImportStateChanged)
   Q_PROPERTY(QString importStatus READ ImportStatus NOTIFY ImportStateChanged)
   Q_PROPERTY(bool exportInFlight READ ExportInFlight NOTIFY ExportStateChanged)
   Q_PROPERTY(QString exportStatus READ ExportStatus NOTIFY ExportStateChanged)
@@ -53,12 +64,14 @@ class ImportExportHandler final : public QObject {
   ImportExportHandler(ProjectModule* project, LibraryModule* library, FolderController* folders,
                       IUiStatusSink* status, ProjectDbWriteBarrier* barrier,
                       QObject* parent = nullptr);
+  ~ImportExportHandler() override;
 
   void                    BindCollaborators(StatsEngine* stats, NikonHeRecoveryController* nikon,
                                             SemanticGenerationController* semantic);
 
   Q_INVOKABLE void        StartImport(const QStringList& fileUrlsOrPaths);
-  Q_INVOKABLE QStringList CollectFolderFiles(const QString& folderUrlOrPath);
+  /// Import the files of the finished folder scan (folderScan) into the current folder.
+  Q_INVOKABLE void        StartFolderImport();
   Q_INVOKABLE void        CancelImport();
   Q_INVOKABLE void        StartExport(const QString& outputDirUrlOrPath);
   Q_INVOKABLE void        StartExportWithOptions(const QString& outputDirUrlOrPath,
@@ -110,7 +123,11 @@ class ImportExportHandler final : public QObject {
                                       const QVariantMap& recipeOptions = QVariantMap{}) -> ExportQueueBuildResult;
 
   [[nodiscard]] bool export_inflight() const { return export_inflight_; }
+  [[nodiscard]] auto FolderScan() const -> FolderImportScanModel* { return folder_scan_; }
   [[nodiscard]] bool ImportRunning() const { return import_running_; }
+  [[nodiscard]] auto ImportPhase() const -> QString;
+  [[nodiscard]] int  ImportPrepared() const { return import_prepared_; }
+  [[nodiscard]] int  ImportUnsupported() const { return import_unsupported_; }
   [[nodiscard]] bool import_running() const { return import_running_; }
   [[nodiscard]] int  ImportTotal() const { return import_total_; }
   [[nodiscard]] int  import_total() const { return import_total_; }
@@ -171,7 +188,22 @@ class ImportExportHandler final : public QObject {
   void exportStateChanged();
 
  private:
+  enum class ImportPhaseState { Idle, Preparing, Reading, Finalizing };
+
+  /// Result of writing a finished import to the project on finalize_thread_.
+  struct ImportFinalizeOutcome {
+    bool    state_saved_   = true;
+    bool    package_saved_ = true;
+    QString package_error_{};
+  };
+
   void              StartImportResolvedPaths(std::vector<image_path_t> paths, bool preserveTarget);
+  /// Publish the live counters of current_import_job_ (read through ImportJob::progress_).
+  void              ApplyImportProgress();
+  void              CompleteImport(const ImportResult& result,
+                                   const std::shared_ptr<const ImportLogSnapshot>& snapshot,
+                                   const ImportFinalizeOutcome&                    outcome);
+  void              JoinFinalizeThread();
   void              ResetExportProgressState(const i18n::LocalizedText& status);
   void              SetExportFailureState(const i18n::LocalizedText& message);
 
@@ -184,11 +216,23 @@ class ImportExportHandler final : public QObject {
   NikonHeRecoveryController*    nikon_    = nullptr;
   SemanticGenerationController* semantic_ = nullptr;
 
+  FolderImportScanModel*        folder_scan_ = nullptr;
   std::shared_ptr<ImportJob>    current_import_job_{};
-  bool                          import_running_   = false;
-  int                           import_total_     = 0;
-  int                           import_completed_ = 0;
-  int                           import_failed_    = 0;
+  /// True while a queued ApplyImportProgress has not run yet. Worker progress reports queue at
+  /// most one UI update; that update reads the latest counters, so a folder import that rejects
+  /// thousands of files does not flood the event loop with one queued call per file.
+  std::shared_ptr<std::atomic<bool>> import_progress_queued_ =
+      std::make_shared<std::atomic<bool>>(false);
+  /// Writes a finished import to the project (SyncImports, storage sync, save and package) off
+  /// the UI thread. Joined before the next finalize and in the destructor.
+  std::thread                   finalize_thread_{};
+  bool                          import_running_     = false;
+  ImportPhaseState              import_phase_       = ImportPhaseState::Idle;
+  int                           import_total_       = 0;
+  int                           import_prepared_    = 0;
+  int                           import_completed_   = 0;
+  int                           import_failed_      = 0;
+  int                           import_unsupported_ = 0;
   i18n::LocalizedText           import_status_text_{};
   bool                          export_inflight_ = false;
   QString                       default_export_folder_{};

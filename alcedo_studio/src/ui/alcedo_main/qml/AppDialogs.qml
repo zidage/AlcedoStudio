@@ -69,15 +69,7 @@ Item {
     FolderDialog {
         id: importFolderDialogObj
         title: qsTr("Select Folder to Import")
-        onAccepted: {
-            const folderUrl = selectedFolder.toString()
-            const files = appModules.importExport.CollectFolderFiles(folderUrl)
-            if (!files || files.length === 0) {
-                host.showSnackbar(qsTr("No files found in the selected folder."))
-                return
-            }
-            folderImportConfirmDialogObj.openWith(folderUrl, files)
-        }
+        onAccepted: folderImportConfirmDialogObj.openWith(selectedFolder.toString())
     }
 
     FolderImportConfirmDialog {
@@ -86,9 +78,7 @@ Item {
         theme: host
         host: root.host
         blurSource: root.blurSource
-        onConfirmed: function(filePaths) {
-            appModules.importExport.StartImport(filePaths)
-        }
+        onConfirmed: appModules.importExport.StartFolderImport()
     }
 
     SettingDialog {

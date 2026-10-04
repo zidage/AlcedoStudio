@@ -10,6 +10,7 @@
 #include <QSettings>
 #include <QTimeZone>
 #include <algorithm>
+#include <cstddef>
 #include <limits>
 #include <stdexcept>
 #include <unordered_set>
@@ -24,6 +25,7 @@
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
 #include "ui/alcedo_main/album_backend/project_module.hpp"
 #include "ui/alcedo_main/album_backend/search_controller.hpp"
+#include "ui/alcedo_main/album_backend/semantic_generation_controller.hpp"
 #include "ui/alcedo_main/album_backend/stats_engine.hpp"
 #include "utils/string/convert.hpp"
 
@@ -349,6 +351,45 @@ auto GroupFieldFromName(const QString& name) -> std::optional<AlbumGroupField> {
 }
 
 /// Runs on the query worker: the pending search WHERE build, then one library read.
+/// Fill output.row_display_ for the rows of output.result_ on the query worker: the image pool
+/// fields that SQL does not return and the semantic label text. A cold image pool reads each
+/// Image from the database, so doing this on the UI thread stalled the window for large folders.
+void ReadRowDisplayValues(const LibraryQueryInput& input, LibraryQueryOutput& output) {
+  const auto& rows = output.result_.rows_;
+  output.row_display_.assign(rows.size(), AlbumItem{});
+  for (std::size_t i = 0; i < rows.size(); ++i) {
+    const auto& row     = rows[i].photo_;
+    auto&       display = output.row_display_[i];
+    if (row.file_id_ == 0 || row.image_id_ == 0) {
+      continue;
+    }
+    if (input.image_pool_) {
+      try {
+        input.image_pool_->Read<void>(row.image_id_, [&display](std::shared_ptr<Image> image) {
+          if (!image) return;
+          if (!image->image_path_.empty()) {
+            display.extension = ExtensionUpper(image->image_path_);
+          }
+          const auto& exif     = image->exif_display_;
+          display.iso          = static_cast<int>(exif.iso_);
+          display.aperture     = static_cast<double>(exif.aperture_);
+          display.focal_length = static_cast<double>(exif.focal_);
+          display.is_hdr       = exif.is_hdr_;
+        });
+      } catch (...) {
+      }
+    }
+    if (input.storage_ && !input.active_model_key_.empty()) {
+      try {
+        display.tags = ReadSemanticLabelDisplayText(*input.storage_, row.file_id_,
+                                                    input.active_model_key_,
+                                                    input.label_language_);
+      } catch (...) {
+      }
+    }
+  }
+}
+
 auto RunLibraryQuery(const LibraryQueryInput& input) -> LibraryQueryOutput {
   LibraryQueryOutput output;
   try {
@@ -363,6 +404,7 @@ auto RunLibraryQuery(const LibraryQueryInput& input) -> LibraryQueryOutput {
     output.result_ = input.browse_->ReadAlbumQuery(
         input.folder_id_, MergeFilterNodes(input.stats_filter_, output.search_filter_),
         input.options_, input.active_model_key_, input.read_);
+    ReadRowDisplayValues(input, output);
   } catch (const std::exception& e) {
     output.error_ = QString::fromUtf8(e.what());
   } catch (...) {
@@ -501,6 +543,9 @@ void LibraryModule::SubmitPendingRefresh() {
            .offset_ = 0, .limit_ = input->page_size_, .read_groups_ = true, .read_statistics_ = true};
   input->browse_         = std::move(browse);
   input->filter_service_ = proj->GetSleeveFilterService();
+  input->image_pool_     = proj->GetImagePoolService();
+  input->storage_        = proj->GetStorage();
+  input->label_language_ = CurrentUiSemanticLabelLanguage();
 
   // A different scope must not show the previous scope's photos while the new read runs.
   if (accepted_input_ && accepted_input_->folder_id_ != input->folder_id_) {
@@ -526,27 +571,34 @@ void LibraryModule::SubmitPendingRefresh() {
   });
 }
 
-auto LibraryModule::ItemFromRow(const SearchResultRow& row, sl_element_id_t folderId) -> AlbumItem {
+auto LibraryModule::ItemFromRow(const SearchResultRow& row, const AlbumItem& display,
+                                sl_element_id_t folderId) -> AlbumItem {
   const QString scope_type  = folderId == 0 ? QStringLiteral("root") : QStringLiteral("album");
   const auto    folder_path = folders_ ? folders_->CurrentFolderFsPath() : std::filesystem::path{};
   const auto    file_name   = conv::FromBytes(row.file_name_);
-  AddOrUpdateAlbumItem(row.file_id_, row.image_id_, folderId, scope_type, file_name,
-                       folder_path / file_name);
-  auto* item = FindAlbumItem(row.file_id_);
-  if (item == nullptr) {
-    return {};
-  }
-  // SQL supplies these display values; the image pool read above supplies the rest.
-  item->file_name    = QString::fromUtf8(row.file_name_.c_str());
-  item->camera_model = QString::fromUtf8(row.camera_model_.c_str());
-  item->lens         = QString::fromUtf8(row.lens_.c_str());
-  item->rating       = row.rating_;
-  item->capture_date = QDate::fromString(QString::fromUtf8(row.capture_date_.c_str()), Qt::ISODate);
-  item->import_date =
+  auto& item = UpsertAlbumItem(row.file_id_, row.image_id_, folderId, scope_type, file_name,
+                               folder_path / file_name);
+  // The query worker read these from the image pool and the label store (row_display_).
+  item.extension    = display.extension;
+  item.iso          = display.iso;
+  item.aperture     = display.aperture;
+  item.focal_length = display.focal_length;
+  item.is_hdr       = display.is_hdr;
+  item.tags         = display.tags;
+  // SQL supplies these display values.
+  item.file_name    = QString::fromUtf8(row.file_name_.c_str());
+  item.camera_model = QString::fromUtf8(row.camera_model_.c_str());
+  item.lens         = QString::fromUtf8(row.lens_.c_str());
+  item.rating       = row.rating_;
+  item.capture_date = QDate::fromString(QString::fromUtf8(row.capture_date_.c_str()), Qt::ISODate);
+  item.import_date =
       row.added_time_.has_value()
           ? QDateTime::fromSecsSinceEpoch(*row.added_time_, QTimeZone::utc()).toLocalTime().date()
           : QDate{};
-  return *item;
+  if (item.extension.isEmpty()) {
+    item.extension = ExtensionFromFileName(item.file_name);
+  }
+  return item;
 }
 
 void LibraryModule::PublishRefresh(const LibraryQueryInput& input, LibraryQueryOutput output) {
@@ -572,13 +624,14 @@ void LibraryModule::PublishRefresh(const LibraryQueryInput& input, LibraryQueryO
   page_ids.reserve(result.rows_.size());
   std::vector<AlbumItem>              items;
   std::unordered_set<sl_element_id_t> seen;
-  for (const auto& row : result.rows_) {
+  for (std::size_t i = 0; i < result.rows_.size(); ++i) {
+    const auto& row = result.rows_[i];
     page_ids.push_back(row.photo_.file_id_);
     if (row.photo_.file_id_ == 0 || row.photo_.image_id_ == 0 ||
         !seen.insert(row.photo_.file_id_).second) {
       continue;
     }
-    items.push_back(ItemFromRow(row.photo_, input.folder_id_));
+    items.push_back(ItemFromRow(row.photo_, output.row_display_[i], input.folder_id_));
   }
 
   accepted_options_ = input.options_;
@@ -649,6 +702,9 @@ auto LibraryModule::AcceptedReadInput(AlbumQueryRead read) const
   input->read_           = read;
   input->browse_         = proj->GetAlbumBrowseService();
   input->filter_service_ = proj->GetSleeveFilterService();
+  input->image_pool_     = proj->GetImagePoolService();
+  input->storage_        = proj->GetStorage();
+  input->label_language_ = CurrentUiSemanticLabelLanguage();
   if (!input->browse_) {
     return nullptr;
   }
@@ -689,12 +745,13 @@ void LibraryModule::PublishPage(const LibraryQueryInput& input, LibraryQueryOutp
     // Flat mode: append the next part of the ordered unique stream.
     std::vector<AlbumItem> batch;
     batch.reserve(rows.size());
-    for (const auto& row : rows) {
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+      const auto& row = rows[i];
       if (row.photo_.file_id_ == 0 || row.photo_.image_id_ == 0 ||
           FindAlbumItem(row.photo_.file_id_) != nullptr) {
         continue;
       }
-      batch.push_back(ItemFromRow(row.photo_, input.folder_id_));
+      batch.push_back(ItemFromRow(row.photo_, output.row_display_[i], input.folder_id_));
     }
     loaded_occurrence_end_ = input.read_.offset_ + static_cast<int64_t>(rows.size());
     if (!batch.empty()) {
@@ -712,10 +769,11 @@ void LibraryModule::PublishPage(const LibraryQueryInput& input, LibraryQueryOutp
   // files of those pages in occurrence order.
   std::vector<sl_element_id_t> ids;
   ids.reserve(rows.size());
-  for (const auto& row : rows) {
+  for (std::size_t i = 0; i < rows.size(); ++i) {
+    const auto& row = rows[i];
     ids.push_back(row.photo_.file_id_);
     if (row.photo_.file_id_ != 0 && row.photo_.image_id_ != 0) {
-      (void)ItemFromRow(row.photo_, input.folder_id_);
+      (void)ItemFromRow(row.photo_, output.row_display_[i], input.folder_id_);
     }
   }
   section_model_.StorePage(input.read_.offset_, ids, kMaxRetainedSectionPages);
@@ -895,10 +953,10 @@ void LibraryModule::SetOccurrenceThumbnailVisible(const QString& groupTitle, boo
       visible, maxEdge);
 }
 
-void LibraryModule::AddOrUpdateAlbumItem(sl_element_id_t elementId, image_id_t imageId,
-                                        sl_element_id_t folderId, const QString& scopeType,
-                                        const file_name_t&           fallbackName,
-                                        const std::filesystem::path& filePath) {
+auto LibraryModule::UpsertAlbumItem(sl_element_id_t elementId, image_id_t imageId,
+                                    sl_element_id_t folderId, const QString& scopeType,
+                                    const file_name_t&           fallbackName,
+                                    const std::filesystem::path& filePath) -> AlbumItem& {
   AlbumItem* item = FindAlbumItem(elementId);
 
   if (!item) {
@@ -917,14 +975,21 @@ void LibraryModule::AddOrUpdateAlbumItem(sl_element_id_t elementId, image_id_t i
     item = &view_state_.all_images_.back();
   }
 
-  if (!item) return;
-
   item->element_id = elementId;
   item->file_id    = elementId;
   item->image_id   = imageId;
   item->folder_id  = folderId;
   item->scope_type = scopeType;
   item->file_path_ = filePath;
+  return *item;
+}
+
+void LibraryModule::AddOrUpdateAlbumItem(sl_element_id_t elementId, image_id_t imageId,
+                                        sl_element_id_t folderId, const QString& scopeType,
+                                        const file_name_t&           fallbackName,
+                                        const std::filesystem::path& filePath) {
+  AlbumItem* item =
+      &UpsertAlbumItem(elementId, imageId, folderId, scopeType, fallbackName, filePath);
 
   auto proj        = project_->handler().project();
   if (proj) {

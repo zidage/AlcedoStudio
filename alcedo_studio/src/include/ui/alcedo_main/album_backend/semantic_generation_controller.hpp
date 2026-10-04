@@ -13,6 +13,8 @@
 
 #include "app/ai_provider_profile.hpp"
 #include "app/semantic_generation_service.hpp"
+#include "sleeve/storage.hpp"
+#include "storage/store/semantic/semantic_label_config.hpp"
 #include "ui/alcedo_main/i18n.hpp"
 
 namespace alcedo::ui {
@@ -179,5 +181,15 @@ class SemanticGenerationController final : public QObject {
   int                                    album_labeled_count_      = 0;
   int                                    album_unlabeled_count_    = 0;
 };
+
+/// Semantic label display language of the current UI language setting.
+auto CurrentUiSemanticLabelLanguage() -> SemanticLabelLanguage;
+
+/// Display text of the semantic labels stored for @p file_id under @p model_key: the stored top
+/// labels joined by ", ", or empty when there is no label. Reads only @p storage, so the library
+/// query worker calls it for the rows it reads.
+auto ReadSemanticLabelDisplayText(Storage& storage, sl_element_id_t file_id,
+                                  const std::string& model_key, SemanticLabelLanguage language)
+    -> QString;
 
 }  // namespace alcedo::ui
