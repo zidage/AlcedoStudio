@@ -1,0 +1,17 @@
+Alcedo Studio 0.3.1 (Build 3002)
+
+Before you update
+-----------------
+- If Alcedo Studio stopped soon after launch or after it showed a few thumbnails, do
+  not use the in-app updater. Download this build from the official website or from
+  GitHub Releases and install it manually.
+
+Fixed
+-----
+- Windows: the application no longer stops after it shows two or three thumbnails.
+  This affected systems with a Chinese or other non-UTF-8 system language, or a user
+  name with non-English characters.
+- Windows: the application now uses UTF-8 for file paths and environment values on
+  Windows 10 version 1903 and later, so it behaves the same on all system languages.
+- Windows with an AMD GPU: the application no longer stops at launch when it prepares
+  the OpenCL back end. Lens correction now builds with AMD's OpenCL driver.

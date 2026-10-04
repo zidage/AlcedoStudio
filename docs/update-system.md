@@ -144,7 +144,8 @@ Markdown headings/fences, URLs, files larger than 16 KiB, and missing final
 newlines are rejected. Do not put download links in these files. The GitHub
 archive job appends official update URLs when it composes the GitHub body.
 
-The root `CHANGELOG.md` only points to this tracked directory.
+The repository root has no `CHANGELOG.md`. This directory is the only source of
+release notes.
 
 The skill runs this evidence command internally:
 
