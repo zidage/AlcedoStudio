@@ -5,17 +5,14 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
-#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <mutex>
 #include <numeric>
 #include <string>
 #include <string_view>
-#include <thread>
 #include <vector>
 
 #include "decoders/processor/operators/gpu/opencl_demosaicnet_programs.hpp"
@@ -301,80 +298,40 @@ __kernel void write_one(__global int* output) {
   EXPECT_NE(program.program, nullptr);
 }
 
-TEST(OpenClRuntimeTest, ConcurrentGetProgramBuildsOneProgramAtATime) {
+TEST(OpenClRuntimeTest, BuildTraceSinkGetsBeginAndEndLineForEachBuild) {
   auto& context = OpenClContext::Instance();
   if (!TryEnsureOpenClContext()) {
     GTEST_SKIP() << context.LastInitializationError();
   }
 
-  // Distinct sources per run so that a driver-side binary cache cannot skip the compile.
-  const auto run_token =
-      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
-  constexpr int            kProgramCount = 4;
-  TempDirectory            temp_directory;
-  std::vector<std::string> program_names;
-  for (int i = 0; i < kProgramCount; ++i) {
-    const auto name        = UniqueProgramName("concurrent_build");
-    const auto source_path = temp_directory.Path() / (name + ".cl");
-    WriteTextFile(source_path,
-                  "// " + run_token + " " + std::to_string(i) + "\n" +
-                      "__kernel void concurrent_build_" + std::to_string(i) +
-                      "(__global float* data) {\n"
-                      "  const int id = get_global_id(0);\n"
-                      "  float v = data[id];\n"
-                      "  for (int k = 0; k < 64; ++k) { v = native_sin(v) * 0.5f + (float)k; }\n"
-                      "  data[id] = v;\n"
-                      "}\n");
-    OpenClProgramLibrary::Instance().RegisterProgram(OpenClProgramDescriptor{
-        .name                = name,
-        .source_paths        = {source_path},
-        .build_options       = "-cl-std=CL1.2",
-        .required_at_startup = false,
-    });
-    program_names.push_back(name);
-  }
-
-  std::mutex trace_lock;
-  int        in_flight     = 0;
-  int        max_in_flight = 0;
-  int        begin_count   = 0;
-  int        end_count     = 0;
-  OpenClProgramLibrary::Instance().SetBuildTraceSink([&](std::string_view message) {
-    std::lock_guard<std::mutex> lock(trace_lock);
-    if (message.starts_with("opencl.program.build.begin")) {
-      ++begin_count;
-      max_in_flight = std::max(max_in_flight, ++in_flight);
-    } else if (message.starts_with("opencl.program.build.end")) {
-      ++end_count;
-      --in_flight;
-    }
+  TempDirectory temp_directory;
+  const auto    name        = UniqueProgramName("build_trace");
+  const auto    source_path = temp_directory.Path() / (name + ".cl");
+  WriteTextFile(source_path, R"(
+__kernel void write_two(__global int* output) {
+  output[get_global_id(0)] = 2;
+}
+)");
+  OpenClProgramLibrary::Instance().RegisterProgram(OpenClProgramDescriptor{
+      .name                = name,
+      .source_paths        = {source_path},
+      .build_options       = "-cl-std=CL1.2",
+      .required_at_startup = false,
   });
 
-  std::atomic<int>         ready{0};
-  std::atomic<int>         failures{0};
-  std::vector<std::thread> threads;
-  for (const auto& name : program_names) {
-    threads.emplace_back([&, name]() {
-      ready.fetch_add(1);
-      while (ready.load() < kProgramCount) {
-        std::this_thread::yield();
-      }
-      try {
-        (void)OpenClProgramLibrary::Instance().GetProgram(name);
-      } catch (...) {
-        failures.fetch_add(1);
-      }
-    });
-  }
-  for (auto& thread : threads) {
-    thread.join();
-  }
+  std::vector<std::string> lines;
+  OpenClProgramLibrary::Instance().SetBuildTraceSink(
+      [&](std::string_view message) { lines.emplace_back(message); });
+  (void)OpenClProgramLibrary::Instance().GetProgram(name);
   OpenClProgramLibrary::Instance().SetBuildTraceSink({});
 
-  EXPECT_EQ(failures.load(), 0);
-  EXPECT_EQ(begin_count, kProgramCount);
-  EXPECT_EQ(end_count, kProgramCount);
-  EXPECT_EQ(max_in_flight, 1);
+  ASSERT_EQ(lines.size(), 2U);
+  EXPECT_TRUE(lines[0].starts_with("opencl.program.build.begin"));
+  EXPECT_NE(lines[0].find("program='" + name + "'"), std::string::npos);
+  EXPECT_NE(lines[0].find("device='"), std::string::npos);
+  EXPECT_TRUE(lines[1].starts_with("opencl.program.build.end"));
+  EXPECT_NE(lines[1].find("program='" + name + "'"), std::string::npos);
+  EXPECT_NE(lines[1].find("error=0"), std::string::npos);
 }
 
 TEST(OpenClRuntimeTest, NoLegacyOpenClFusedProgramIsRegisteredOrPackaged) {

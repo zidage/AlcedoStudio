@@ -203,7 +203,6 @@ auto OpenClProgramLibrary::BuildProgram(const std::shared_ptr<ProgramSlot>& slot
     source_lengths.push_back(source.size());
   }
 
-  std::lock_guard<std::mutex> build_lock(build_mutex_);
   TraceBuild("opencl.program.build.begin " + build_diagnostic_prefix());
   const auto build_start = std::chrono::steady_clock::now();
 

@@ -43,11 +43,6 @@ class OpenClProgramLibrary {
 
   mutable std::mutex                                            mutex_;
   std::unordered_map<std::string, std::shared_ptr<ProgramSlot>> programs_;
-  // Held around every clCreateProgramWithSource/clBuildProgram so that only one program
-  // compiles at a time in the process. The OpenCL warm-up thread and render threads both
-  // build programs on demand, and AMD's Windows compiler (amd_comgr) crashed with an
-  // access violation when several programs compiled at once.
-  std::mutex                                                    build_mutex_;
   std::mutex                                                    trace_mutex_;
   std::function<void(std::string_view)>                         build_trace_sink_;
 
