@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="https://aoraw.org/zh-cn/">项目网站</a> · <a href="https://aoraw.org/">Project website</a> · <a href="https://zidage.github.io/AlcedoStudio_docs/docs/intro">文档</a> · <a href="https://github.com/zidage/AlcedoStudio/releases/tag/v0.2.9">下载 v0.2.9</a>
+  <a href="https://aoraw.org/zh-cn/">项目网站</a> · <a href="https://aoraw.org/">Project website</a> · <a href="https://zidage.github.io/AlcedoStudio_docs/docs/intro">文档</a> · <a href="https://github.com/zidage/AlcedoStudio/releases/tag/v0.3.1">下载 v0.3.1</a>
 </p>
 
 <p align="right"><a href="./README.md">English</a> | <a href="./README.zh-CN.md"><strong>简体中文</strong></a></p>
@@ -34,6 +34,30 @@ https://github.com/user-attachments/assets/d70cd10d-2045-42f3-a67d-97ab3ef9874b
 https://github.com/user-attachments/assets/ae0d9773-220e-4901-90f6-1989f58b0462
 
 </details>
+
+## 从第一性原理出发的设计（TL;DR）
+
+热爱摄影的人往往对色彩敏锐，却常在修图时被工具消耗——现有的许多软件，都是在数十年前的技术底座上层层加码，日渐臃肿。我不想做一个插件，或是一次性的vibe coding软件，而是选择回到第一性原理：如果今天从零构建一款 RAW 编辑器，也许应该这样做：
+
+🎨 **处理流程应尽量透明并且符合行业标准**
+
+Alcedo采用节点式编辑，自由调整编辑顺序，组织蒙版层级，让每一步操作的脉络一目了然；内置ACES流程及可自定义的色彩科学效果，无需纠结厂商配置文件的盘根错节与玄学德味的无尽争论，设备平权自此实现；内置113款可更新的胶片LUT，配合Halation，颗粒，黑柔效果，一键做出电影级的惊人效果。
+
+🖼 **应该具有手机相册般的易用**
+
+面对数万张照片，传统目录常陷于卡顿，手动打标也是负担。Alcedo 无意再造一个复杂的资产管理服务，而是追求现代手机相册那般导入即用、零额外配置的轻盈。资产模块 Sleeve 内嵌轻量分析引擎 DuckDB，支持复杂的筛选条件；结合本地 CLIP 语义模型，可为图片自动生成对应标签，快捷分类。
+
+🧵 **编辑历史应被永久保留**
+
+Alcedo引入了类似Git的分支化版本树：每一次修改都可永久回溯。并且支持批量应用调整项目，一键出片。
+
+🖥 **性能应该尽量高效**
+
+高像素文件叠上复杂蒙版，内存磁盘往往受累不堪，尤其在存储计算价格飙高的今天，一个软件的效率成为重中之重。Alcedo的处理管线由GPU驱动，配合增量局部重算与精细的内存管理，换取跟手的实时反馈；同时引入基于深度学习的联合去马赛克与降噪（JDD），实现比肩商业软件的RAW解码效果
+
+📖 **功能强大所伴随的复杂度不应被用户承担**
+
+告别二十年前满屏细碎滑块与层层嵌套菜单的压迫感。Alcedo追求最为平缓地学习曲线：区域职责清晰，深度功能从不过早打扰，初学者可凭直觉成片，专业用户也无需在多个软件中来回切换来构建本不该如此复杂的工作流程。
 
 ## 功能一览
 
@@ -123,7 +147,7 @@ Alcedo 可以导出 JPEG、PNG、TIFF、OpenEXR 和 Ultra HDR JPEG，并根据�
 
 Alcedo Studio 基于许多开源项目及其作者的工作。
 
-- 胶片模拟 LUT 来自 [JanLohse/spectral_film_lut](https://github.com/JanLohse/spectral_film_lut)。
+- 胶片模拟 LUT 来自 [JanLohse/spectral_film_lut](https://github.com/JanLohse/spectral_film_lut) 和 [andreavolpato/spektrafilm](https://github.com/andreavolpato/spektrafilm)。
 - 部分相机色彩矩阵来自 [rawtoaces-data](https://github.com/AcademySoftwareFoundation/rawtoaces-data)。
 - 神经网络去马赛克模型蒸馏自 [mgharbi/demosaicnet](https://github.com/mgharbi/demosaicnet)（[Gharbi 等，2016](https://groups.csail.mit.edu/graphics/demosaicnet/)）。
 - Inpaint-opposed 高光重建改编自 [darktable](https://github.com/darktable-org/darktable/blob/master/src/iop/hlreconstruct/opposed.c) 和 [RawTherapee](https://github.com/RawTherapee/RawTherapee/blob/dev/rtengine/hilite_recon.cc)。
