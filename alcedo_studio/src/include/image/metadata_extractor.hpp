@@ -15,6 +15,7 @@
 #include "decoders/processor/raw_color_context.hpp"
 #include "image.hpp"
 #include "image/dng_color_profile.hpp"
+#include "type/supported_file_type.hpp"
 #include "type/type.hpp"
 #include "utils/import/import_error_code.hpp"
 
@@ -90,9 +91,11 @@ class MetadataExtractor {
    * camera data, OpenEXR) gets display metadata, `ImageType`, the HDR flag and its source color
    * description. Any other file is accepted only when LibRaw (or the DNG fast path) opens it.
    * Sidecars, containers and CMYK images throw MetadataExtractionError with
-   * ImportErrorCode::UNSUPPORTED_FORMAT.
+   * ImportErrorCode::UNSUPPORTED_FORMAT. A supported file whose content category is not in
+   * @p allowed_categories throws ImportErrorCode::EXCLUDED_TYPE.
    */
-  static void ExtractEXIF_ToImage(const image_path_t& image_path, Image& image);
+  static void ExtractEXIF_ToImage(const image_path_t& image_path, Image& image,
+                                  ImportCategoryMask allowed_categories = kAllImportCategories);
 
   /// Raster container of the file at @p image_path, or std::nullopt for RAW or other content.
   static auto ClassifyRasterFile(const image_path_t& image_path) -> std::optional<RasterFileKind>;

@@ -1446,8 +1446,8 @@ Alcedo 将改用 %1。</translation>
         <translation>正在将 %1 张导入的照片保存到图库…</translation>
     </message>
     <message>
-        <source>Import complete: %1 imported, %2 skipped, %3 failed</source>
-        <translation>导入完成：已导入 %1 张，跳过 %2 个，失败 %3 个</translation>
+        <source>Import complete: %1 imported, %2 not selected, %3 unsupported, %4 failed</source>
+        <translation>导入完成：已导入 %1 张，未选择类型 %2 个，不受支持 %3 个，失败 %4 个</translation>
     </message>
 </context>
 <context>
@@ -1511,6 +1511,10 @@ Alcedo 将改用 %1。</translation>
         <location line="+1"/>
         <source>CUBE LUTs (*.cube *.CUBE)</source>
         <translation>CUBE LUT (*.cube *.CUBE)</translation>
+    </message>
+    <message>
+        <source>Supported images (%1)</source>
+        <translation>支持的图像 (%1)</translation>
     </message>
 </context>
 <context>
@@ -4699,12 +4703,44 @@ Original source files on disk will be kept.</source>
         <translation>找到 %1 个文件</translation>
     </message>
     <message>
-        <source>Only RAW files are imported. Other files are skipped.</source>
-        <translation>仅导入 RAW 文件，其他文件将被跳过。</translation>
+        <source>Files of other types are skipped.</source>
+        <translation>其他类型的文件会被跳过。</translation>
     </message>
     <message>
         <source>Scanning...</source>
         <translation>正在扫描…</translation>
+    </message>
+    <message>
+        <source>File types</source>
+        <translation>文件类型</translation>
+    </message>
+    <message>
+        <source>RAW</source>
+        <translation>RAW</translation>
+    </message>
+    <message>
+        <source>JPEG</source>
+        <translation>JPEG</translation>
+    </message>
+    <message>
+        <source>TIFF</source>
+        <translation>TIFF</translation>
+    </message>
+    <message>
+        <source>PNG</source>
+        <translation>PNG</translation>
+    </message>
+    <message>
+        <source>OpenEXR</source>
+        <translation>OpenEXR</translation>
+    </message>
+    <message>
+        <source>Other</source>
+        <translation>其他</translation>
+    </message>
+    <message>
+        <source>%1 (%2)</source>
+        <translation>%1 (%2)</translation>
     </message>
 </context>
 <context>
@@ -5044,8 +5080,12 @@ Original source files on disk will be kept.</source>
         <translation>张照片已导入</translation>
     </message>
     <message>
-        <source>%1 file(s) skipped because they are not RAW files</source>
-        <translation>已跳过 %1 个非 RAW 文件</translation>
+        <source>%1 file(s) skipped because they are not supported images</source>
+        <translation>已跳过 %1 个不受支持的文件</translation>
+    </message>
+    <message>
+        <source>%1 file(s) skipped because their type is not selected</source>
+        <translation>已跳过 %1 个未选择类型的文件</translation>
     </message>
 </context>
 <context>

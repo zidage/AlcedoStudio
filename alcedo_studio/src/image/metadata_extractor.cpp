@@ -1615,6 +1615,20 @@ auto ImageTypeFor(RasterFileKind kind) -> ImageType {
   throw std::invalid_argument("unknown raster file kind");
 }
 
+auto ImportCategoryFor(RasterFileKind kind) -> ImportFileCategory {
+  switch (kind) {
+    case RasterFileKind::Jpeg:
+      return ImportFileCategory::Jpeg;
+    case RasterFileKind::Png:
+      return ImportFileCategory::Png;
+    case RasterFileKind::Tiff:
+      return ImportFileCategory::Tiff;
+    case RasterFileKind::OpenExr:
+      return ImportFileCategory::OpenExr;
+  }
+  throw std::invalid_argument("unknown raster file kind");
+}
+
 auto TransferIsHdr(const RasterColorDescription& description) -> bool {
   for (const auto& transfer : description.transfer_) {
     if (transfer.kind_ == RasterTransferKind::St2084 || transfer.kind_ == RasterTransferKind::Hlg) {
@@ -1943,15 +1957,29 @@ auto MetadataExtractor::ReadDngColorProfileFromSource(const image_path_t& image_
   return context.dng_profile_.Profile();
 }
 
-void MetadataExtractor::ExtractEXIF_ToImage(const image_path_t& image_path, Image& image) {
+void MetadataExtractor::ExtractEXIF_ToImage(const image_path_t& image_path, Image& image,
+                                            ImportCategoryMask allowed_categories) {
+  const auto exclude = [&image_path](ImportFileCategory category) {
+    throw MetadataExtractionError(ImportErrorCode::EXCLUDED_TYPE, image_path,
+                                  "the content category " +
+                                      std::to_string(static_cast<int>(category)) +
+                                      " is not selected for import");
+  };
   // The content decides RAW or raster, never the extension (raster_image_input_plan.md,
   // section 8). The decision is the one LoadEncodedImage makes at render time.
   if (const auto raster_kind = ClassifyRasterFile(image_path); raster_kind.has_value()) {
+    const auto category = ImportCategoryFor(*raster_kind);
+    if (!CategoryAllowed(allowed_categories, category)) {
+      exclude(category);
+    }
     ExtractRasterMetadata_ToImage(image_path, *raster_kind, image);
     return;
   }
   // Exiv2 still adds metadata to RAW files inside ExtractRawMetadata_ToImage.
   if (ExtractRawMetadata_ToImage(image_path, image)) {
+    if (!CategoryAllowed(allowed_categories, ImportFileCategory::Raw)) {
+      exclude(ImportFileCategory::Raw);
+    }
     return;
   }
   throw MetadataExtractionError(ImportErrorCode::UNSUPPORTED_FORMAT, image_path,

@@ -33,6 +33,7 @@
 #include "library_search_test_support.hpp"
 #include "storage/image_pool/image_pool_manager.hpp"
 #include "support/non_raw_import_files.hpp"
+#include "type/supported_file_type.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "utils/import/import_error_code.hpp"
 #include "utils/import/import_log.hpp"
@@ -136,14 +137,15 @@ struct ImportOutcome {
 /// @p before_sync runs after every metadata task finished and before SyncImports, the window
 /// in which the library UI keeps reading the image pool.
 auto ImportToLibraryRoot(ProjectService& project, const std::vector<image_path_t>& paths,
-                         const std::function<void()>& before_sync = {}) -> ImportOutcome {
+                         const std::function<void()>& before_sync = {},
+                         const ImportOptions&         options     = {}) -> ImportOutcome {
   ImportServiceImpl import_service(project.GetSleeveService(), project.GetImagePoolService(),
                                    std::make_shared<PipelineMgmtService>(project.GetStorage()));
   auto              job = std::make_shared<ImportJob>();
   std::promise<ImportResult> finished;
   auto                       finished_future = finished.get_future();
   job->on_finished_ = [&finished](const ImportResult& result) { finished.set_value(result); };
-  job               = import_service.ImportToFolder(paths, L"", {}, job);
+  job = import_service.ImportToFolder(paths, L"", options, job);
   ImportOutcome outcome;
   outcome.result_   = finished_future.get();
   outcome.snapshot_ = job->import_log_->Snapshot();
@@ -327,6 +329,55 @@ TEST_F(ImportContentClassificationTest, ImportedExrIsSceneLinearAndHdr) {
   const auto input = root->document.Develop()->Params().RasterInput();
   ASSERT_TRUE(input.has_value());
   EXPECT_EQ(input->source_color_.referral_, RasterReferral::SceneLinear);
+}
+
+TEST(ImportFileCategoryTest, CategoryForExtensionIgnoresCaseAndKnowsEveryImportType) {
+  EXPECT_EQ(CategoryForExtension(".Nef"), ImportFileCategory::Raw);
+  EXPECT_EQ(CategoryForExtension(".DNG"), ImportFileCategory::Raw);
+  EXPECT_EQ(CategoryForExtension(".x3f"), ImportFileCategory::Raw);
+  EXPECT_EQ(CategoryForExtension(".JPEG"), ImportFileCategory::Jpeg);
+  EXPECT_EQ(CategoryForExtension(".jfif"), ImportFileCategory::Jpeg);
+  EXPECT_EQ(CategoryForExtension(".TIF"), ImportFileCategory::Tiff);
+  EXPECT_EQ(CategoryForExtension(".png"), ImportFileCategory::Png);
+  EXPECT_EQ(CategoryForExtension(".exr"), ImportFileCategory::OpenExr);
+  EXPECT_EQ(CategoryForExtension(".xmp"), ImportFileCategory::Other);
+  EXPECT_EQ(CategoryForExtension(""), ImportFileCategory::Other);
+  EXPECT_EQ(CategoryForPath(std::filesystem::path(L"photo.\u00e9jpg")), ImportFileCategory::Other);
+  EXPECT_EQ(ImportCategoryBit(ImportFileCategory::Other), 0);
+  EXPECT_EQ(ImportFileCategory::Raw | ImportFileCategory::Jpeg, 0x03);
+  EXPECT_TRUE(CategoryAllowed(kAllImportCategories, ImportFileCategory::OpenExr));
+  EXPECT_FALSE(CategoryAllowed(kAllImportCategories, ImportFileCategory::Other));
+}
+
+// Section 9.1: the content category decides. A JPEG renamed .nef with only RAW allowed is an
+// excluded type, not an unsupported file, and leaves no Image row.
+TEST_F(ImportContentClassificationTest, ContentOutsideTheAllowedCategoriesIsCountedAsExcludedType) {
+  const auto jpeg_as_nef = scratch_dir_ / "jpeg_content.nef";
+  const auto png         = scratch_dir_ / "graphic.png";
+  const auto blob        = scratch_dir_ / "blob.dat";
+  test_support::WriteRgbRaster(jpeg_as_nef, ".jpg");
+  test_support::WriteRgbRaster(png, ".png");
+  test_support::WriteUnknownBinary(blob);
+
+  ImportOptions options;
+  options.allowed_categories_ =
+      ImportCategoryBit(ImportFileCategory::Raw) | ImportFileCategory::Png;
+  ProjectService project(db_path_, meta_path_);
+  const auto     outcome = ImportToLibraryRoot(project, {jpeg_as_nef, png, blob}, {}, options);
+
+  EXPECT_EQ(outcome.result_.imported_, 1u);
+  EXPECT_EQ(outcome.result_.failed_, 2u);
+  EXPECT_EQ(outcome.result_.excluded_type_, 1u);
+  EXPECT_EQ(outcome.result_.unsupported_, 1u);
+  std::set<std::string> excluded;
+  for (const auto& entry : outcome.snapshot_.metadata_failed_) {
+    if (entry.error_code_ == ImportErrorCode::EXCLUDED_TYPE) {
+      excluded.insert(conv::ToBytes(entry.file_name_));
+    }
+  }
+  EXPECT_EQ(excluded, std::set<std::string>{"jpeg_content.nef"});
+  EXPECT_EQ(LibraryFileNames(project), std::set<std::string>{"graphic.png"});
+  EXPECT_EQ(CountRows(project, "Image"), 1);
 }
 
 TEST_F(ImportContentClassificationTest, CmykJpegIsUnsupportedAndLeavesNoImageRow) {
