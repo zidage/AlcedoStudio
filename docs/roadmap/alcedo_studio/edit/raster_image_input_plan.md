@@ -1269,6 +1269,42 @@ note under Tests.
 `alcedo_main` builds. The dialog was not checked by hand in the application: the tests check the
 scan model, the handler and the import, not the QML layout of the File types row.
 
+#### macOS verification record (2026-10-05)
+
+The Metal code of R2 to R4 was compiled and run on an Apple silicon Mac (macOS 26, debug,
+`build/macos-debug` with `ALCEDO_BUILD_TESTS=ON`). The first run found three defects; each fix is
+on the branch of the phase that introduced the code and is merged forward:
+
+- **R2, table build:** Apple clang fuses `a * b + c` into an FMA by default. With that rounding the
+  ACES 2.0 inverse tables move the result outside the section 5.7 tolerance near a display
+  channel of 0, on the host and on Metal (which uses the host tables). `aces2_inverse_runtime.cpp`
+  is now built with `#pragma clang fp contract(off)`. MSVC does not contract, so Windows did not
+  show it.
+- **R3, Metal upload:** `MTL::Buffer::contents()` returns `0x1000`, not null, for a private heap
+  buffer on macOS 26. `MetalBackend` took that as a host address, and the raster upload into a
+  work scratch buffer crashed. The storage mode now decides (`HostContents`), in the buffer
+  upload, download and device-memory upload paths.
+- **R3, test comparison:** one dark HLG pixel differed by 1e-3 in ACEScc, which is 1e-7 in linear
+  light. `ExpectAcesccNear` also accepts values that match within 1e-6 in linear light, where
+  ACEScc is steep near black.
+- **R4, test expectation:** libpng on macOS writes an sRGB chunk into a PNG that has no color
+  tag, so the origin is `png_srgb_chunk`. The test accepts both sRGB origins and checks the
+  primaries and the transfer.
+- **R4, compatibility test:** the recorded render hash is a CUDA render, so only CUDA builds
+  compare it. Every build checks that the project opens with the same document and renders.
+
+Result after the fixes: `RasterColorDescriptionTest`, `Aces2InverseTest`,
+`GpuDagMetalDisplayToAp1Test`, `GpuDagMetalRasterDevelopTest`, `GpuDagMetalDevelopTest`,
+`GpuDagRawInputTest`, `GpuDagModelGraphTest`, `PipelineDocumentCheckpointTest`,
+`MetadataExtractorTest`, `ImportContentClassificationTest`, `ProjectCompatibilityTest` and
+`EditorPanelProjectionTest` pass, except five tests that also fail at `abdb000c8`: the three
+expected-file tests of `PipelineDocumentCheckpointTest`, and
+`MetalGeometryUsesOneResampleForCropRotationViewportAndScale` and
+`MetalCameraColorConsumesSharedDualIlluminantTransform` of `GpuDagMetalDevelopTest` (built and
+run at `abdb000c8` on the same Mac). The Metal raster develop suite passed 4 of 4 and the Metal
+DisplayToAp1 suite 3 of 3. The editor panel and the folder import dialog were not checked by hand
+on macOS.
+
 **Order:** R1 → R2 → R3 → R4. R5 needs only the R1 classification, so it can run in parallel with
 R2 and R3.
 
