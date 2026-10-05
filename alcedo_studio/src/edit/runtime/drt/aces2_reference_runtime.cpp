@@ -8,7 +8,7 @@
 //  Copyright Contributors to the OpenColorIO Project. SPDX-License-Identifier: BSD-3-Clause.
 //  See THIRD_PARTY_NOTICE.txt.
 
-#include "edit/runtime/drt/aces2_inverse_runtime.hpp"
+#include "edit/runtime/drt/aces2_reference_runtime.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -77,11 +77,11 @@ constexpr int      kMaxSortedCorners     = 2 * kCuspCornerCount;
 constexpr float    kReachCuspTolerance   = 1e-3f;
 constexpr float    kDisplayCuspTolerance = 1e-7f;
 
-constexpr unsigned kTableSize            = ALCEDO_D2A_TABLE_SIZE;
+constexpr unsigned kTableSize            = ALCEDO_A2R_TABLE_SIZE;
 constexpr unsigned kNominalSize          = 360;
-constexpr unsigned kBaseIndex            = ALCEDO_D2A_TABLE_BASE_INDEX;
-constexpr unsigned kLowerWrapIndex       = ALCEDO_D2A_TABLE_LOWER_WRAP_INDEX;
-constexpr unsigned kUpperWrapIndex       = ALCEDO_D2A_TABLE_UPPER_WRAP_INDEX;
+constexpr unsigned kBaseIndex            = ALCEDO_A2R_TABLE_BASE_INDEX;
+constexpr unsigned kLowerWrapIndex       = ALCEDO_A2R_TABLE_LOWER_WRAP_INDEX;
+constexpr unsigned kUpperWrapIndex       = ALCEDO_A2R_TABLE_UPPER_WRAP_INDEX;
 constexpr unsigned kFirstNominalIndex    = kBaseIndex;
 constexpr unsigned kLastNominalIndex     = kUpperWrapIndex - 1;
 
@@ -727,8 +727,8 @@ auto CacheMutex() -> std::mutex& {
   return mutex;
 }
 
-auto Cache() -> std::map<CacheKey, std::shared_ptr<const Aces2InverseRuntime>>& {
-  static std::map<CacheKey, std::shared_ptr<const Aces2InverseRuntime>> cache;
+auto Cache() -> std::map<CacheKey, std::shared_ptr<const Aces2ReferenceRuntime>>& {
+  static std::map<CacheKey, std::shared_ptr<const Aces2ReferenceRuntime>> cache;
   return cache;
 }
 
@@ -736,21 +736,21 @@ std::atomic<std::uint64_t> g_build_count{0};
 
 }  // namespace
 
-auto Aces2InverseRuntime::ReachMTable() const -> std::span<const float> {
-  return {packed_.data() + ALCEDO_D2A_REACH_TABLE, ALCEDO_D2A_TABLE_SIZE};
+auto Aces2ReferenceRuntime::ReachMTable() const -> std::span<const float> {
+  return {packed_.data() + ALCEDO_A2R_REACH_TABLE, ALCEDO_A2R_TABLE_SIZE};
 }
 
-auto Aces2InverseRuntime::HueTable() const -> std::span<const float> {
-  return {packed_.data() + ALCEDO_D2A_HUE_TABLE, ALCEDO_D2A_TABLE_SIZE};
+auto Aces2ReferenceRuntime::HueTable() const -> std::span<const float> {
+  return {packed_.data() + ALCEDO_A2R_HUE_TABLE, ALCEDO_A2R_TABLE_SIZE};
 }
 
-auto Aces2InverseRuntime::CuspTable() const -> std::span<const float> {
-  return {packed_.data() + ALCEDO_D2A_CUSP_TABLE, 3 * ALCEDO_D2A_TABLE_SIZE};
+auto Aces2ReferenceRuntime::CuspTable() const -> std::span<const float> {
+  return {packed_.data() + ALCEDO_A2R_CUSP_TABLE, 3 * ALCEDO_A2R_TABLE_SIZE};
 }
 
-auto SourcePrimariesInsideAp1(const std::array<float, 8>& source_primaries_xy) -> bool {
+auto DisplayPrimariesInsideAp1(const std::array<float, 8>& display_primaries_xy) -> bool {
   for (int i = 0; i < 3; ++i) {
-    if (!PrimaryInside(source_primaries_xy[i * 2], source_primaries_xy[i * 2 + 1],
+    if (!PrimaryInside(display_primaries_xy[i * 2], display_primaries_xy[i * 2 + 1],
                        Ap1Primaries())) {
       return false;
     }
@@ -758,16 +758,16 @@ auto SourcePrimariesInsideAp1(const std::array<float, 8>& source_primaries_xy) -
   return true;
 }
 
-auto BuildAces2InverseRuntime(const std::array<float, 8>& source_primaries_xy,
-                              float peak_luminance_nits) -> Aces2InverseRuntime {
+auto BuildAces2ReferenceRuntime(const std::array<float, 8>& display_primaries_xy,
+                                float peak_luminance_nits) -> Aces2ReferenceRuntime {
   if (!std::isfinite(peak_luminance_nits) || peak_luminance_nits <= 0.0f) {
-    throw std::invalid_argument("ACES 2.0 inverse: peak luminance must be positive");
+    throw std::invalid_argument("ACES 2.0 reference: peak luminance must be positive");
   }
-  Aces2InverseRuntime runtime;
-  runtime.source_primaries_xy_    = source_primaries_xy;
+  Aces2ReferenceRuntime runtime;
+  runtime.display_primaries_xy_   = display_primaries_xy;
   runtime.peak_luminance_nits_    = peak_luminance_nits;
-  runtime.limiting_is_ap1_        = !SourcePrimariesInsideAp1(source_primaries_xy);
-  runtime.limiting_primaries_xy_  = runtime.limiting_is_ap1_ ? Ap1Primaries() : source_primaries_xy;
+  runtime.limiting_is_ap1_        = !DisplayPrimariesInsideAp1(display_primaries_xy);
+  runtime.limiting_primaries_xy_ = runtime.limiting_is_ap1_ ? Ap1Primaries() : display_primaries_xy;
   const float     peak            = peak_luminance_nits;
 
   // OCIO Renderer_ACES_OutputTransform20: input AP0, reach AP1, limiting = output primaries.
@@ -806,60 +806,72 @@ auto BuildAces2InverseRuntime(const std::array<float, 8>& source_primaries_xy,
                      lower_hull_gamma_inv, limit_params);
 
   auto& packed = runtime.packed_;
-  packed.assign(ALCEDO_D2A_PACKED_SIZE, 0.0f);
-  packed[ALCEDO_D2A_BRANCH] = 0.0f;
-  PutMatrix(packed, ALCEDO_D2A_SOURCE_TO_TARGET,
+  packed.assign(ALCEDO_A2R_PACKED_SIZE, 0.0f);
+  packed[ALCEDO_A2R_RESERVED] = 0.0f;
+  constexpr M33f kIdentity    = {1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f};
+  PutMatrix(packed, ALCEDO_A2R_DISPLAY_TO_LIMIT,
             runtime.limiting_is_ap1_
-                ? ToFloat(color::RgbToRgbMatrix(source_primaries_xy, Ap1Primaries(),
+                ? ToFloat(color::RgbToRgbMatrix(display_primaries_xy, Ap1Primaries(),
                                                 color::ChromaticAdaptation::Cat02))
-                : M33f{1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f});
-  PutMatrix(packed, ALCEDO_D2A_LIMIT_RGB_TO_CAM16, limit_params.rgb_to_cam16_c_);
-  PutMatrix(packed, ALCEDO_D2A_LIMIT_CONE_TO_AAB, limit_params.cone_to_aab_);
-  PutMatrix(packed, ALCEDO_D2A_AP0_AAB_TO_CONE, input_params.aab_to_cone_);
-  PutMatrix(packed, ALCEDO_D2A_AP0_CAM16_TO_RGB, input_params.cam16_c_to_rgb_);
+                : kIdentity);
+  PutMatrix(packed, ALCEDO_A2R_LIMIT_TO_DISPLAY,
+            runtime.limiting_is_ap1_
+                ? ToFloat(color::RgbToRgbMatrix(Ap1Primaries(), display_primaries_xy,
+                                                color::ChromaticAdaptation::Cat02))
+                : kIdentity);
+  // Forward direction: AP0 into the CAM and the limiting gamut out of it.
+  PutMatrix(packed, ALCEDO_A2R_AP0_RGB_TO_CAM16, input_params.rgb_to_cam16_c_);
+  PutMatrix(packed, ALCEDO_A2R_AP0_CONE_TO_AAB, input_params.cone_to_aab_);
+  PutMatrix(packed, ALCEDO_A2R_LIMIT_AAB_TO_CONE, limit_params.aab_to_cone_);
+  PutMatrix(packed, ALCEDO_A2R_LIMIT_CAM16_TO_RGB, limit_params.cam16_c_to_rgb_);
+  PutMatrix(packed, ALCEDO_A2R_LIMIT_RGB_TO_CAM16, limit_params.rgb_to_cam16_c_);
+  PutMatrix(packed, ALCEDO_A2R_LIMIT_CONE_TO_AAB, limit_params.cone_to_aab_);
+  PutMatrix(packed, ALCEDO_A2R_AP0_AAB_TO_CONE, input_params.aab_to_cone_);
+  PutMatrix(packed, ALCEDO_A2R_AP0_CAM16_TO_RGB, input_params.cam16_c_to_rgb_);
   PutMatrix(
-      packed, ALCEDO_D2A_AP0_TO_AP1,
+      packed, ALCEDO_A2R_AP0_TO_AP1,
       ToFloat(color::MultiplyMatrices(color::InvertMatrix(color::RgbToXyzMatrix(Ap1Primaries())),
                                       color::RgbToXyzMatrix(Ap0Primaries()))));
-  packed[ALCEDO_D2A_INPUT_MAX]             = peak / kReferenceLuminance;
-  packed[ALCEDO_D2A_AP1_MAX]               = tonescale.forward_limit_;
-  packed[ALCEDO_D2A_CZ]                    = input_params.cz_;
-  packed[ALCEDO_D2A_INV_CZ]                = input_params.inv_cz_;
-  packed[ALCEDO_D2A_AP0_A_W_J]             = input_params.a_w_j_;
-  packed[ALCEDO_D2A_AP0_INV_A_W_J]         = input_params.inv_a_w_j_;
-  packed[ALCEDO_D2A_AP0_F_L_N]             = input_params.f_l_n_;
-  packed[ALCEDO_D2A_TS_INVERSE_LIMIT]      = tonescale.inverse_limit_;
-  packed[ALCEDO_D2A_TS_T_1]                = tonescale.t_1_;
-  packed[ALCEDO_D2A_TS_S_2]                = tonescale.s_2_;
-  packed[ALCEDO_D2A_TS_M_2]                = tonescale.m_2_;
-  packed[ALCEDO_D2A_TS_G]                  = tonescale.g_;
-  packed[ALCEDO_D2A_LIMIT_J_MAX]           = limit_j_max;
-  packed[ALCEDO_D2A_MODEL_GAMMA_INV]       = model_gamma_inv;
-  packed[ALCEDO_D2A_SAT]                   = sat;
-  packed[ALCEDO_D2A_SAT_THR]               = sat_thr;
-  packed[ALCEDO_D2A_COMPR]                 = compr;
-  packed[ALCEDO_D2A_CHROMA_COMPRESS_SCALE] = chroma_compress_scale;
-  packed[ALCEDO_D2A_MID_J]                 = mid_j;
-  packed[ALCEDO_D2A_FOCUS_DIST]            = focus_dist;
-  packed[ALCEDO_D2A_LOWER_HULL_GAMMA_INV]  = lower_hull_gamma_inv;
-  packed[ALCEDO_D2A_HUE_SEARCH_LO] = static_cast<float>(runtime.hue_linearity_search_range_[0]);
-  packed[ALCEDO_D2A_HUE_SEARCH_HI] = static_cast<float>(runtime.hue_linearity_search_range_[1]);
+  packed[ALCEDO_A2R_INPUT_MAX]             = peak / kReferenceLuminance;
+  packed[ALCEDO_A2R_AP1_MAX]               = tonescale.forward_limit_;
+  packed[ALCEDO_A2R_CZ]                    = input_params.cz_;
+  packed[ALCEDO_A2R_INV_CZ]                = input_params.inv_cz_;
+  packed[ALCEDO_A2R_AP0_A_W_J]             = input_params.a_w_j_;
+  packed[ALCEDO_A2R_AP0_INV_A_W_J]         = input_params.inv_a_w_j_;
+  packed[ALCEDO_A2R_AP0_F_L_N]             = input_params.f_l_n_;
+  packed[ALCEDO_A2R_TS_INVERSE_LIMIT]      = tonescale.inverse_limit_;
+  packed[ALCEDO_A2R_TS_T_1]                = tonescale.t_1_;
+  packed[ALCEDO_A2R_TS_S_2]                = tonescale.s_2_;
+  packed[ALCEDO_A2R_TS_M_2]                = tonescale.m_2_;
+  packed[ALCEDO_A2R_TS_G]                  = tonescale.g_;
+  packed[ALCEDO_A2R_TS_N_R]                = tonescale.n_r_;
+  packed[ALCEDO_A2R_LIMIT_J_MAX]           = limit_j_max;
+  packed[ALCEDO_A2R_MODEL_GAMMA_INV]       = model_gamma_inv;
+  packed[ALCEDO_A2R_SAT]                   = sat;
+  packed[ALCEDO_A2R_SAT_THR]               = sat_thr;
+  packed[ALCEDO_A2R_COMPR]                 = compr;
+  packed[ALCEDO_A2R_CHROMA_COMPRESS_SCALE] = chroma_compress_scale;
+  packed[ALCEDO_A2R_MID_J]                 = mid_j;
+  packed[ALCEDO_A2R_FOCUS_DIST]            = focus_dist;
+  packed[ALCEDO_A2R_LOWER_HULL_GAMMA_INV]  = lower_hull_gamma_inv;
+  packed[ALCEDO_A2R_HUE_SEARCH_LO] = static_cast<float>(runtime.hue_linearity_search_range_[0]);
+  packed[ALCEDO_A2R_HUE_SEARCH_HI] = static_cast<float>(runtime.hue_linearity_search_range_[1]);
   for (unsigned i = 0; i < kTableSize; ++i) {
-    packed[ALCEDO_D2A_REACH_TABLE + i]        = reach_m[i];
-    packed[ALCEDO_D2A_HUE_TABLE + i]          = hue_table[i];
-    packed[ALCEDO_D2A_CUSP_TABLE + 3 * i]     = cusp_table[i][0];
-    packed[ALCEDO_D2A_CUSP_TABLE + 3 * i + 1] = cusp_table[i][1];
-    packed[ALCEDO_D2A_CUSP_TABLE + 3 * i + 2] = cusp_table[i][2];
+    packed[ALCEDO_A2R_REACH_TABLE + i]        = reach_m[i];
+    packed[ALCEDO_A2R_HUE_TABLE + i]          = hue_table[i];
+    packed[ALCEDO_A2R_CUSP_TABLE + 3 * i]     = cusp_table[i][0];
+    packed[ALCEDO_A2R_CUSP_TABLE + 3 * i + 1] = cusp_table[i][1];
+    packed[ALCEDO_A2R_CUSP_TABLE + 3 * i + 2] = cusp_table[i][2];
   }
   return runtime;
 }
 
-auto ResolveAces2InverseRuntime(const std::array<float, 8>& source_primaries_xy,
-                                float                       peak_luminance_nits)
-    -> std::shared_ptr<const Aces2InverseRuntime> {
+auto ResolveAces2ReferenceRuntime(const std::array<float, 8>& display_primaries_xy,
+                                  float                       peak_luminance_nits)
+    -> std::shared_ptr<const Aces2ReferenceRuntime> {
   CacheKey key;
   for (std::size_t i = 0; i < 8; ++i) {
-    key.bits_[i] = std::bit_cast<uint32_t>(source_primaries_xy[i]);
+    key.bits_[i] = std::bit_cast<uint32_t>(display_primaries_xy[i]);
   }
   key.bits_[8] = std::bit_cast<uint32_t>(peak_luminance_nits);
   std::lock_guard<std::mutex> lock(CacheMutex());
@@ -867,14 +879,14 @@ auto ResolveAces2InverseRuntime(const std::array<float, 8>& source_primaries_xy,
   if (const auto it = cache.find(key); it != cache.end()) {
     return it->second;
   }
-  auto runtime = std::make_shared<const Aces2InverseRuntime>(
-      BuildAces2InverseRuntime(source_primaries_xy, peak_luminance_nits));
+  auto runtime = std::make_shared<const Aces2ReferenceRuntime>(
+      BuildAces2ReferenceRuntime(display_primaries_xy, peak_luminance_nits));
   g_build_count.fetch_add(1, std::memory_order_relaxed);
   cache.emplace(key, runtime);
   return runtime;
 }
 
-auto Aces2InverseRuntimeBuildCount() -> std::uint64_t {
+auto Aces2ReferenceRuntimeBuildCount() -> std::uint64_t {
   return g_build_count.load(std::memory_order_relaxed);
 }
 

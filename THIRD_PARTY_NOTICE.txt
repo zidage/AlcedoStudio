@@ -189,8 +189,8 @@ C) File-level adaptation pointers in this repository
 - alcedo/src/include/edit/runtime/cuda/drt/*.cuh
   ACES core links are referenced in comments for ported formulas.
 
-- alcedo_studio/src/include/edit/runtime/display_to_ap1_math.h
-- alcedo_studio/src/edit/runtime/drt/aces2_inverse_runtime.cpp
+- alcedo_studio/src/include/edit/runtime/aces2_reference_math.h
+- alcedo_studio/src/edit/runtime/drt/aces2_reference_runtime.cpp
   Include the OpenColorIO copyright notice (BSD-3-Clause) for the ported ACES 2.0 code.
 
 D) Redistribution reminder

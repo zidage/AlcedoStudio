@@ -13,9 +13,9 @@
 #include <span>
 #include <vector>
 
-#include "aces2_inverse_ocio_reference.hpp"
+#include "aces2_ocio_reference.hpp"
 #include "edit/runtime/display_to_ap1_math.h"
-#include "edit/runtime/drt/aces2_inverse_runtime.hpp"
+#include "edit/runtime/drt/aces2_reference_runtime.hpp"
 #include "edit/runtime/metal/metal_display_to_ap1_pass.hpp"
 #include "edit/runtime/metal/metal_renderer.hpp"
 #include "image/raster_color_description.hpp"
@@ -81,11 +81,11 @@ auto RunOnMetal(MetalRenderDevice& device, MetalDisplayToAp1Parameters& paramete
 TEST_F(MetalDisplayToAp1Test, Aces2InverseMatchesOcioCpuProcessor) {
   MetalRenderDevice           device;
   MetalDisplayToAp1Parameters parameters;
-  for (const auto& c : aces2_inverse_test::InverseCases()) {
+  for (const auto& c : aces2_ocio_reference::Aces2Cases()) {
     SCOPED_TRACE(c.name_);
-    const auto runtime = ResolveAces2InverseRuntime(c.primaries_, c.peak_nits_);
-    const auto grid    = aces2_inverse_test::DisplayGrid(c.peak_nits_);
-    aces2_inverse_test::ExpectMatchesOcio(
+    const auto runtime = ResolveAces2ReferenceRuntime(c.primaries_, c.peak_nits_);
+    const auto grid    = aces2_ocio_reference::DisplayGrid(c.peak_nits_);
+    aces2_ocio_reference::ExpectMatchesOcio(
         c, grid,
         RunOnMetal(device, parameters, runtime->packed_, grid, DisplayToAp1Output::LinearAp0));
   }
@@ -94,9 +94,9 @@ TEST_F(MetalDisplayToAp1Test, Aces2InverseMatchesOcioCpuProcessor) {
 TEST_F(MetalDisplayToAp1Test, Aces2InverseReturnsBlackForBlackAndNeutralForSourceWhite) {
   MetalRenderDevice           device;
   MetalDisplayToAp1Parameters parameters;
-  for (const auto& c : aces2_inverse_test::InverseCases()) {
+  for (const auto& c : aces2_ocio_reference::Aces2Cases()) {
     SCOPED_TRACE(c.name_);
-    const auto         runtime = ResolveAces2InverseRuntime(c.primaries_, c.peak_nits_);
+    const auto         runtime = ResolveAces2ReferenceRuntime(c.primaries_, c.peak_nits_);
     const float        peak    = c.peak_nits_ / 100.0f;
     std::vector<float> rgb     = {0.0f, 0.0f, 0.0f};
     for (const float fraction : {0.0005f, 0.05f, 0.5f, 0.9f}) {
@@ -119,7 +119,7 @@ TEST_F(MetalDisplayToAp1Test, AcesccOutputMatchesHostEvaluationForBothBranches) 
   MetalRenderDevice           device;
   MetalDisplayToAp1Parameters parameters;
   const auto                  display =
-      ResolveAces2InverseRuntime(color::GamutPrimariesXy(color::ColorGamutId::P3D65), 100.0f);
+      ResolveAces2ReferenceRuntime(color::GamutPrimariesXy(color::ColorGamutId::P3D65), 100.0f);
   const auto scene = PackSceneLinearToAp1(color::GamutPrimariesXy(color::ColorGamutId::Ap0));
   std::vector<float> rgb;
   for (int i = 0; i < 64; ++i) {
@@ -134,7 +134,7 @@ TEST_F(MetalDisplayToAp1Test, AcesccOutputMatchesHostEvaluationForBothBranches) 
     // bits.
     for (std::size_t p = 0; p < rgb.size() / 3; ++p) {
       const auto host =
-          D2aSourceToAcesccAp1(D2aMake3(rgb[p * 3], rgb[p * 3 + 1], rgb[p * 3 + 2]), packed.data());
+          D2aSourceToAcesccAp1(A2rMake3(rgb[p * 3], rgb[p * 3 + 1], rgb[p * 3 + 2]), packed.data());
       EXPECT_NEAR(gpu[p * 3], host.x, 2e-4f) << "pixel " << p;
       EXPECT_NEAR(gpu[p * 3 + 1], host.y, 2e-4f) << "pixel " << p;
       EXPECT_NEAR(gpu[p * 3 + 2], host.z, 2e-4f) << "pixel " << p;

@@ -94,7 +94,7 @@ auto ResolveDisplayToAp1Block(const RasterColorDescription& description) -> Disp
     block.scene_ = PackSceneLinearToAp1(description.primaries_xy_);
   } else {
     block.inverse_ =
-        ResolveAces2InverseRuntime(description.primaries_xy_, description.peak_luminance_nits_);
+        ResolveAces2ReferenceRuntime(description.primaries_xy_, description.peak_luminance_nits_);
   }
   return block;
 }

@@ -102,7 +102,7 @@ inline auto HostReferenceDevelopOutput(const PreparedRawInput&       input,
   for (std::size_t i = 0; i < pixels; ++i) {
     const auto linear = RlLinearize(HostCode(input, i, 0), HostCode(input, i, 1),
                                     HostCode(input, i, 2), linearize.data());
-    const auto cc     = D2aSourceToAcesccAp1(D2aMake3(linear.r, linear.g, linear.b), packed.data());
+    const auto cc     = D2aSourceToAcesccAp1(A2rMake3(linear.r, linear.g, linear.b), packed.data());
     out[i]            = Rgba{cc.x, cc.y, cc.z, 1.0f};
   }
   return out;

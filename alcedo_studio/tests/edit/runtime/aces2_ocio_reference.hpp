@@ -2,8 +2,9 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-// OpenColorIO 2.5.1 reference for the ACES 2.0 output transform inverse
-// (raster_image_input_plan.md, section 5.7). Only test targets link OpenColorIO.
+// OpenColorIO 2.5.1 reference for the ACES 2.0 output transform, both directions
+// (raster_image_input_plan.md, section 5.7; lut_color_encoding_plan.md, phase L2). Only test
+// targets link OpenColorIO.
 
 #pragma once
 
@@ -19,18 +20,18 @@
 
 #include "image/raster_color_description.hpp"
 
-namespace alcedo::aces2_inverse_test {
+namespace alcedo::aces2_ocio_reference {
 
 namespace OCIO = OCIO_NAMESPACE;
 
-/// One limiting space of the section 5.7 accuracy test.
-struct InverseCase {
+/// One display gamut and peak luminance of the OCIO accuracy tests.
+struct Aces2Case {
   const char*          name_;
   std::array<float, 8> primaries_;
   float                peak_nits_;
 };
 
-inline auto InverseCases() -> std::vector<InverseCase> {
+inline auto Aces2Cases() -> std::vector<Aces2Case> {
   return {
       {"rec709_100", color::GamutPrimariesXy(color::ColorGamutId::Rec709), 100.0f},
       {"p3d65_100", color::GamutPrimariesXy(color::ColorGamutId::P3D65), 100.0f},
@@ -41,7 +42,7 @@ inline auto InverseCases() -> std::vector<InverseCase> {
 }
 
 /// OCIO processor of FixedFunctionTransform ACES_OUTPUT_TRANSFORM_20, inverse direction.
-inline auto MakeInverseProcessor(const InverseCase& c) -> OCIO::ConstProcessorRcPtr {
+inline auto MakeInverseProcessor(const Aces2Case& c) -> OCIO::ConstProcessorRcPtr {
   const double params[9] = {c.peak_nits_,    c.primaries_[0], c.primaries_[1],
                             c.primaries_[2], c.primaries_[3], c.primaries_[4],
                             c.primaries_[5], c.primaries_[6], c.primaries_[7]};
@@ -70,7 +71,7 @@ inline auto DisplayGrid(float peak_nits) -> std::vector<float> {
 }
 
 /// Apply the OCIO CPU processor (no optimization) to interleaved RGB.
-inline auto OcioInverse(const InverseCase& c, std::vector<float> rgb) -> std::vector<float> {
+inline auto OcioInverse(const Aces2Case& c, std::vector<float> rgb) -> std::vector<float> {
   const auto cpu = MakeInverseProcessor(c)->getOptimizedCPUProcessor(OCIO::OPTIMIZATION_NONE);
   OCIO::PackedImageDesc image(rgb.data(), static_cast<long>(rgb.size() / 3), 1, 3);
   cpu->apply(image);
@@ -89,7 +90,7 @@ inline auto WithinInverseTolerance(float actual, float expected) -> bool {
 }
 
 /// OCIO processor of the forward ACES 2.0 output transform for the same case.
-inline auto OcioForward(const InverseCase& c, std::vector<float> rgb) -> std::vector<float> {
+inline auto OcioForward(const Aces2Case& c, std::vector<float> rgb) -> std::vector<float> {
   const double params[9] = {c.peak_nits_,    c.primaries_[0], c.primaries_[1],
                             c.primaries_[2], c.primaries_[3], c.primaries_[4],
                             c.primaries_[5], c.primaries_[6], c.primaries_[7]};
@@ -113,7 +114,7 @@ inline auto OcioForward(const InverseCase& c, std::vector<float> rgb) -> std::ve
  * error at most that tolerance above OCIO's own round-trip error at that point. At least
  * 99.9 percent of all channels must meet the AP0 tolerance directly.
  */
-inline void ExpectMatchesOcio(const InverseCase& c, const std::vector<float>& input,
+inline void ExpectMatchesOcio(const Aces2Case& c, const std::vector<float>& input,
                               const std::vector<float>& actual_ap0) {
   const auto expected = OcioInverse(c, input);
   ASSERT_EQ(actual_ap0.size(), expected.size());
@@ -181,7 +182,7 @@ struct OcioInverseTables {
   std::array<int, 2> hue_search_range_{};
 };
 
-inline auto ExtractOcioInverseTables(const InverseCase& c) -> OcioInverseTables {
+inline auto ExtractOcioInverseTables(const Aces2Case& c) -> OcioInverseTables {
   const auto gpu  = MakeInverseProcessor(c)->getOptimizedGPUProcessor(OCIO::OPTIMIZATION_NONE);
   auto       desc = OCIO::GpuShaderDesc::CreateShaderDesc();
   desc->setLanguage(OCIO::GPU_LANGUAGE_GLSL_4_0);
@@ -239,4 +240,4 @@ inline auto ExtractOcioInverseTables(const InverseCase& c) -> OcioInverseTables 
   return tables;
 }
 
-}  // namespace alcedo::aces2_inverse_test
+}  // namespace alcedo::aces2_ocio_reference

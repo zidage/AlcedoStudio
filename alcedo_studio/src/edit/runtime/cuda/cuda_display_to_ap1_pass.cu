@@ -30,7 +30,7 @@ __global__ void DisplayToAp1AcesccKernel(const float4* input, float4* output,
     return;
   }
   const float4    source = input[index];
-  const D2aFloat3 result = D2aSourceToAcesccAp1(D2aMake3(source.x, source.y, source.z), params);
+  const A2rFloat3 result = D2aSourceToAcesccAp1(A2rMake3(source.x, source.y, source.z), params);
   output[index]          = make_float4(result.x, result.y, result.z, source.w);
 }
 
@@ -41,7 +41,7 @@ __global__ void DisplayToAp0LinearKernel(const float4* input, float4* output,
     return;
   }
   const float4    source = input[index];
-  const D2aFloat3 result = D2aDisplayToAp0(D2aMake3(source.x, source.y, source.z), params);
+  const A2rFloat3 result = A2rDisplayToAp0(A2rMake3(source.x, source.y, source.z), params);
   output[index]          = make_float4(result.x, result.y, result.z, source.w);
 }
 

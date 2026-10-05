@@ -52,6 +52,7 @@ void RegisterOpenClGpuDagPrograms() {
                     .name                = OpenCL::GpuDag::kDisplayToAp1ProgramName,
                     .source_paths        = {ALCEDO_OPENCL_COLOR_ENCODING_MATH_H,
                                             ALCEDO_OPENCL_RASTER_LINEARIZE_MATH_H,
+                                            ALCEDO_OPENCL_ACES2_REFERENCE_MATH_H,
                                             ALCEDO_OPENCL_DISPLAY_TO_AP1_MATH_H,
                                             ALCEDO_OPENCL_DAG_DISPLAY_TO_AP1_CL},
                     .build_options       = "-cl-std=CL1.2",

@@ -78,7 +78,7 @@ alcedo_register_test_target(EditorMiniGitMaterializerTest edit)
 
 # Local-tone constants and helpers in edit/runtime/local_tone_mapping.hpp that the DAG runtime
 # uses.
-# ACES 2.0 inverse tables and host evaluation against OpenColorIO 2.5.1 (raster input). Only test
+# ACES 2.0 reference tables and host inverse against OpenColorIO 2.5.1 (raster input). Only test
 # targets link OpenColorIO.
 add_executable(Aces2InverseTest ${ALCEDO_TEST_ROOT}/edit/runtime/aces2_inverse_test.cpp)
 target_include_directories(Aces2InverseTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
@@ -87,6 +87,16 @@ target_link_libraries(Aces2InverseTest PRIVATE GTest::gtest_main EditRuntimeDrt 
 gtest_discover_tests(Aces2InverseTest TEST_PREFIX "Aces2InverseTest."
   PROPERTIES LABELS "edit;runtime;color")
 alcedo_register_test_target(Aces2InverseTest edit)
+
+# OCIO ACES 2.0 reference forward and the forward/inverse pair against OpenColorIO 2.5.1 (LUT
+# color encodings). Only test targets link OpenColorIO.
+add_executable(Aces2ForwardTest ${ALCEDO_TEST_ROOT}/edit/runtime/aces2_forward_test.cpp)
+target_include_directories(Aces2ForwardTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(Aces2ForwardTest PRIVATE GTest::gtest_main EditRuntimeDrt Image
+  OpenColorIO::OpenColorIO)
+gtest_discover_tests(Aces2ForwardTest TEST_PREFIX "Aces2ForwardTest."
+  PROPERTIES LABELS "edit;runtime;color")
+alcedo_register_test_target(Aces2ForwardTest edit)
 
 add_executable(LocalToneMappingConstantsMatchRuntimeTest
     ${ALCEDO_TEST_ROOT}/edit/runtime/local_tone_mapping_constants_test.cpp)

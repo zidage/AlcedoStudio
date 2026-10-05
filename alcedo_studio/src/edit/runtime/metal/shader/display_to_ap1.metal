@@ -9,6 +9,7 @@
 
 using namespace metal;
 #include "../../../../include/color/color_encoding_math.h"
+#include "../../../../include/edit/runtime/aces2_reference_math.h"
 #include "../../../../include/edit/runtime/display_to_ap1_math.h"
 #include "../../../../include/edit/runtime/raster_linearize_math.h"
 
@@ -51,7 +52,7 @@ kernel void display_to_ap1_acescc(texture2d<float, access::read>  src [[texture(
     return;
   }
   const float4    source = src.read(gid);
-  const D2aFloat3 result = D2aSourceToAcesccAp1(D2aMake3(source.x, source.y, source.z), params);
+  const A2rFloat3 result = D2aSourceToAcesccAp1(A2rMake3(source.x, source.y, source.z), params);
   dst.write(float4(result.x, result.y, result.z, source.w), gid);
 }
 
@@ -63,6 +64,6 @@ kernel void display_to_ap0_linear(texture2d<float, access::read>  src [[texture(
     return;
   }
   const float4    source = src.read(gid);
-  const D2aFloat3 result = D2aDisplayToAp0(D2aMake3(source.x, source.y, source.z), params);
+  const A2rFloat3 result = A2rDisplayToAp0(A2rMake3(source.x, source.y, source.z), params);
   dst.write(float4(result.x, result.y, result.z, source.w), gid);
 }

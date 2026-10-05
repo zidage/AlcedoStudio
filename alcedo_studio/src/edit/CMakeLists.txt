@@ -122,7 +122,7 @@ def_library(EditRuntimeDrt
     SOURCES
         ${ALCEDO_SRC_ROOT}/edit/runtime/drt/drt_output_resolver.cpp
         ${ALCEDO_SRC_ROOT}/edit/runtime/drt/aces_odt_runtime.cpp
-        ${ALCEDO_SRC_ROOT}/edit/runtime/drt/aces2_inverse_runtime.cpp
+        ${ALCEDO_SRC_ROOT}/edit/runtime/drt/aces2_reference_runtime.cpp
         ${ALCEDO_SRC_ROOT}/edit/runtime/drt/open_drt_runtime.cpp
     PUBLIC_DEPS EditGraph ColorEncodingCatalog ${ALCEDO_OPENCV_CORE_DEPS}
 )

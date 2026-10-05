@@ -1,7 +1,9 @@
 # LUT Input and Output Color Encoding Plan
 
 Status: L1 partial (2026-10-05): the color encoding catalog landed; D-Log M is blocked (no DJI
-definition) and Metal is not built or tested. L2 to L4 not started.
+definition) and Metal is not built or tested. L2 complete on host, CUDA and OpenCL (2026-10-05):
+OCIO ACES 2.0 reference forward and the `aces2_reference_*` rename; Metal not built. L3 and L4
+not started.
 
 Depends on the raster image input stack (`raster_image_input_plan.md`, phases R1 to R5) being on
 `main`. This plan uses the OCIO ACES 2.0 port from Phase R2 (`display_to_ap1_math.h`,
@@ -470,6 +472,112 @@ Acceptance criteria:
 - `inverse(forward(x))` returns `x` within 1e-3 for scene values inside the forward limit, and
   `forward(inverse(d))` returns `d` within 1e-4 for display values in [0, 1].
 - All R2 tests still pass on every backend after the move and rename.
+
+##### Phase L2 completion record (2026-10-05)
+
+**Status:** complete on host, CUDA and OpenCL. The OCIO ACES 2.0 stage functions now live in
+`aces2_reference_math.h` together with the new forward stages, and the runtime is renamed to
+`aces2_reference_*`. The Metal shader sources were edited but not compiled (Windows machine).
+
+**Primary success call chain (forward, used by the L3 bake):**
+
+```text
+caller (L3 bake, tests)
+  -> ResolveAces2ReferenceRuntime(display primaries, peak)     aces2_reference_runtime.cpp
+       process-wide cache, BuildAces2ReferenceRuntime once per key
+       packs the inverse block (unchanged), the forward matrices and TS_N_R
+  -> A2rAp0ToDisplay(ap0, runtime->packed_)                    aces2_reference_math.h
+       AP0 -> Aab -> JMh -> tonescale (A to J) -> chroma compress fwd
+       -> gamut compress fwd (closed-form boundary, Reinhard) -> limiting RGB
+       -> limiting-to-display matrix
+  -> display-linear RGB, 1.0 = 100 nits, no clamp
+```
+
+**Primary success call chain (inverse, raster input, behavior unchanged):**
+
+```text
+raster render -> ResolveDisplayToAp1Block -> ResolveAces2ReferenceRuntime
+  -> backend uploads packed_ (ALCEDO_D2A_PACKED_SIZE = ALCEDO_A2R_PACKED_SIZE)
+  -> CUDA / OpenCL / Metal kernel -> D2aSourceToAcesccAp1      display_to_ap1_math.h
+       -> A2rDisplayToAp0 (moved, same arithmetic)             aces2_reference_math.h
+  -> AP0 to AP1, clamp to [0, forward limit], ACEScc encode
+```
+
+**Primary failure call chain:**
+
+```text
+non-positive or non-finite peak -> BuildAces2ReferenceRuntime throws std::invalid_argument
+                                   (nothing is cached)
+AP0 color with a non-positive achromatic response -> A2rAp0ToDisplay returns black
+                                   (OCIO returns NaN there; no point of the 33^3 grid reaches it)
+display value outside [0, peak] -> A2rDisplayToAp0 clamps the limiting RGB (as in R2)
+```
+
+**Decisions taken during L2 (deviations from section 7):**
+
+| Item | Plan text | Implemented | Reason |
+|---|---|---|---|
+| Forward data | "Forward-only scalars go into the unused slots ... No new tables are needed." | One scalar (`ALCEDO_A2R_TS_N_R`) goes in a free slot. Five 3×3 matrices (AP0 RGB to CAM16, AP0 cone to Aab, limiting Aab to cone, limiting CAM16 to RGB, limiting to display) are appended after the cusp table. No new tables. | The inverse block holds only the matrices of the other direction. Appending keeps every existing offset unchanged. |
+| Layout names | — | The block layout is `ALCEDO_A2R_*` in `aces2_reference_math.h`. `display_to_ap1_math.h` keeps `ALCEDO_D2A_BRANCH`, `ALCEDO_D2A_SOURCE_TO_TARGET`, `ALCEDO_D2A_SCENE_PACKED_SIZE` and `ALCEDO_D2A_PACKED_SIZE` as raster-pass names defined on the reference layout. Slot 0 is reserved and is 0 in a reference block. | The block now belongs to the reference transform, and the raster pass is one of its users. |
+| Shared types | — | `D2aFloat3` / `D2aMake3` / `D2aDisplayToAp0` were renamed to `A2rFloat3` / `A2rMake3` / `A2rDisplayToAp0`. The CUDA, OpenCL and Metal kernels and the tests were updated. | Each function has one name. |
+| Runtime names | `ResolveAces2ReferenceRuntime` | The rename also covers `Aces2ReferenceRuntime`, `BuildAces2ReferenceRuntime`, `Aces2ReferenceRuntimeBuildCount`, `DisplayPrimariesInsideAp1` and the field `display_primaries_xy_` (was `source_primaries_xy_`). | The whole API uses one name. |
+| OCIO test helper | — | `aces2_inverse_ocio_reference.hpp` → `aces2_ocio_reference.hpp`, namespace `aces2_ocio_reference`, `InverseCase(s)` → `Aces2Case(s)`. The R2 test targets and test names do not change. | The helper now serves both directions. |
+| Round-trip criteria | `inverse(forward(x))` within 1e-3 for scene values inside the forward limit; `forward(inverse(d))` within 1e-4 for d in [0, 1] | Both are checked as stated, with R2's test structure. A point that misses the tolerance passes only if its error is at most OCIO's own forward/inverse error at that point plus R2's 1e-3. At least 99.5 % of the points must meet the tolerance directly. "Inside the forward limit" means: an AP1 grid value at most the forward limit whose forward result lies inside the display cube and below 99 % of the peak. | OCIO's own pair is not invertible everywhere. Within 1 % of the peak the tonescale is flat, and OCIO's own scene round trip errs by up to 2e8 there. At some Rec.2020 100-nit gamut corners outside the reach gamut, OCIO's pair errs by 0.2 (scene) and 0.129 of peak (display). The port reproduces OCIO's errors at those points. |
+
+**Measured (host, debug build):**
+
+| Case | Scene round trip: carried / within 1e-3 / worst (OCIO pair worst) | Display round trip: within 1e-4 of peak / worst (OCIO pair worst) |
+|---|---|---|
+| Rec.709 100 | 3397 / 3397 / 2.4e-4 (2.1e-4) | 35920 of 35937 / 2.9e-4 (2.9e-4) |
+| P3-D65 100 | 4193 / 4193 / 1.8e-4 (1.8e-4) | 35867 of 35937 / 1.8e-3 (1.8e-3) |
+| Rec.2020 100 | 5543 / 5529 / 0.2 (0.2) | 35803 of 35937 / 0.129 (0.129) |
+| Adobe RGB 100 | 4343 / 4343 / 6.0e-5 (8.0e-5) | 35902 of 35937 / 2.7e-3 (2.7e-3) |
+| Rec.2020 1000 | 8988 / 8988 / 1.6e-4 (1.2e-4) | 35928 of 35937 / 1.5e-3 (7.9e-4) |
+
+One Rec.2020 1000-nit display point, (9.6875, 10, 10), has an error above OCIO's own. The cause is
+the R2 inverse near the peak: there the port's forward and OCIO's forward agree to 1e-5 on both
+inverse results, and the R2 inverse differs from OCIO's by table rounding, which R2 accepted.
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+|---|---|---|
+| Host forward vs OCIO CPU forward on a 33³ AP0 grid (0, then ACEScc codes over (0, 1] decoded) for Rec.709, P3-D65, Rec.2020 and Adobe RGB at 100 nits and Rec.2020 at 1000 nits, R2 tolerance (1e-3 relative, 1e-5 absolute below 1e-2) on every channel | `Aces2ForwardTest.Aces2ForwardHostReferenceMatchesOcioCpuProcessor` | PASS (0 OCIO NaN points) |
+| `inverse(forward(x))` within 1e-3 inside the forward limit | `Aces2ForwardTest.InverseOfForwardReturnsSceneValueWithin1e3InsideTheForwardLimit` | PASS (table above) |
+| `forward(inverse(d))` within 1e-4 for d in [0, 1] | `Aces2ForwardTest.ForwardOfInverseReturnsDisplayValueWithin1e4` | PASS (table above) |
+| Black maps to black; AP0 neutral maps to a display neutral that rises with level | `Aces2ForwardTest.Aces2ForwardMapsBlackToBlackAndAp0NeutralToRisingDisplayNeutral` | PASS |
+| Forward matrices are the inverses of the inverse-direction matrices (Rec.709; ProPhoto with AP1 limiting) | `Aces2ForwardTest.ForwardMatricesAreInversesOfTheInverseDirectionMatrices` | PASS |
+| A display outside AP1 (ProPhoto, AP1 limiting) round-trips neutrals | `Aces2ForwardTest.DisplayOutsideAp1RoundTripsNeutralsThroughAp1Limiting` | PASS |
+| R2 tests after the move and rename: host | `Aces2InverseTest` (8) | PASS |
+| R2 tests: CUDA | `GpuDagCudaDisplayToAp1Test` (5), `GpuDagCudaRasterDevelopTest` (9) | PASS |
+| R2 tests: OpenCL (the program now lists `aces2_reference_math.h`) | `GpuDagOpenClDisplayToAp1Test` (4), `GpuDagOpenClRasterDevelopTest` (4) | PASS |
+| R2 tests: Metal | `GpuDagMetalDisplayToAp1Test`, `GpuDagMetalRasterDevelopTest` | NOT RUN (Windows machine; shader and CMake edited, not compiled) |
+| Raster description and DRT program sources | `RasterColorDescriptionTest` (27), `GpuDagOpenClDrtProductTest` (28, including the L1 program-source test that L1 did not re-run) | PASS |
+
+Commands: `cmd /c scripts\msvc_env.cmd --build --preset win_debug --target Aces2ForwardTest
+Aces2InverseTest GpuDagCudaDisplayToAp1Test GpuDagOpenClDisplayToAp1Test
+GpuDagCudaRasterDevelopTest GpuDagOpenClRasterDevelopTest RasterColorDescriptionTest
+GpuDagOpenClDrtProductTest` and `ctest --test-dir build/debug -R
+"^(Aces2ForwardTest|Aces2InverseTest|GpuDagCudaDisplayToAp1Test|GpuDagOpenClDisplayToAp1Test|GpuDagCudaRasterDevelopTest|GpuDagOpenClRasterDevelopTest|RasterColorDescriptionTest|GpuDagOpenClDrtProductTest)\." -j 1`
+(vcpkg debug bin on `PATH`). Suite totals: 91/91, run again after `clang-format`.
+
+**Checklist / exit condition:** the host forward matches OCIO. Both round trips meet the stated
+tolerances under the OCIO-pair rule above. The R2 tests pass on host, CUDA and OpenCL. Metal was
+not built.
+
+**LOC note (grill-code-review):** `aces2_reference_math.h` 499 (new; about 330 of its lines moved
+from `display_to_ap1_math.h`, which is now 122), `aces2_reference_runtime.cpp` 903 (was 891),
+`aces2_reference_runtime.hpp` 84, `aces2_forward_test.cpp` 313 (new). No file is above 1000 lines.
+
+**Remaining gaps:**
+- Metal: `display_to_ap1.metal` includes the new header and the Metal CMake lists it as a
+  dependency. It was not compiled, and no Metal test was run.
+- The forward is evaluated only on the host (section 7), and no GPU test evaluates
+  `A2rAp0ToDisplay`. It compiles into the CUDA and OpenCL DisplayToAp1 programs, which the
+  passing GPU tests build.
+- Pre-existing (L1 remaining gaps): the install rules do not package the OpenCL headers of the
+  DisplayToAp1 program, and `aces2_reference_math.h` adds one more header to that list.
+- Bake timing and accuracy are L3 items.
 
 ### Phase L3 — LMT encodings, bake and LUT loading
 
