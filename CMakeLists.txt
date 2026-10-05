@@ -483,6 +483,9 @@ if(UNIX AND NOT APPLE)
     find_package(lcms2 REQUIRED)
 endif()
 
+# zlib inflates PNG iCCP profiles for the raster color description reader.
+find_package(ZLIB REQUIRED)
+
 # OpenColorIO
 find_package(OpenColorIO CONFIG REQUIRED)
 if (TARGET OpenColorIO::OpenColorIO)

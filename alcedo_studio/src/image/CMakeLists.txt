@@ -73,9 +73,13 @@ def_library(Image
     ${ALCEDO_SRC_ROOT}/image/metadata_extractor.cpp
     ${ALCEDO_SRC_ROOT}/image/dng_color_profile_import.cpp
     ${ALCEDO_SRC_ROOT}/image/dng_color_profile_cache.cpp
+    ${ALCEDO_SRC_ROOT}/image/raster_color_description.cpp
+    ${ALCEDO_SRC_ROOT}/image/raster_container_reader.cpp
+    ${ALCEDO_SRC_ROOT}/image/icc_profile_reader.cpp
     PUBLIC_DEPS ImageBuffer
 )
-target_link_libraries(Image PRIVATE OpenImageIO::OpenImageIO)
+target_link_libraries(Image PRIVATE OpenImageIO::OpenImageIO lcms2::lcms2 ZLIB::ZLIB
+    Sha256Digest)
 
 # Image Pool
 def_library(ImagePool

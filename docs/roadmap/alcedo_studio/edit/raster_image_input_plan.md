@@ -2,7 +2,7 @@
 
 Date: 2026-10-04
 
-Status: **Planned; decisions recorded.** No code has changed. Section 12 records the product
+Status: **In progress.** Phase R1 is complete (2026-10-04). Section 12 records the product
 owner's decisions of 2026-10-04, and the plan follows them.
 
 Parent: [Roadmap](../../roadmap.md).
@@ -823,6 +823,77 @@ target (`ctest -R`), never the full suite.
   - `ExportedIccProfilesReimportWithSamePrimariesAndTransfer`
   - `DescriptionJsonRoundTripsAndOmitsAbsentFields`
 - Done when: every fixture in section 10 resolves to its documented description.
+
+##### Phase R1 completion record (2026-10-04)
+
+**Status:** complete — source color description types, resolution rules for the four formats,
+LittleCMS ICC reader, container readers, JSON form and the fixture generator.
+
+**Primary success call chain:**
+
+```text
+ResolveRasterColorDescription(file_bytes, kind)
+  -> ResolveJpeg / ResolvePng / ResolveTiff / ResolveOpenExr      (rules of section 4.2, in order)
+  -> ReadJpegContainer / ReadPngContainer / ReadTiffContainer / ReadExrHeader
+  -> DescribeCicp (PNG cICP, ICC cicp tag) | DescribeIcc -> ReadIccProfile (lcms2)
+  -> FindRasterColorDescriptionDefect (triangle, white inside, monotonic curves)
+  -> RasterColorDescription (+ icc_sha256_ via ComputeSha256Hex)
+  -> RasterColorDescriptionToJson (section 7.3 `source_color`, absent keys omitted)
+```
+
+**Primary failure call chain:**
+
+```text
+CMYK JPEG/TIFF or CMYK ICC  -> RasterColorDescriptionError(UnsupportedCmyk)
+truncated or malformed header -> RasterContainerError -> RasterColorDescriptionError(MalformedContainer)
+unusable description (degenerate primaries, white outside, non-monotonic curve, unknown CICP)
+  -> reason appended -> next rule -> documented default (sRGB, or Rec.709 linear for
+     scene-linear files) with default_reason_
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `IccMatrixShaperYieldsNativePrimariesAfterChadInverse` | `RasterColorDescriptionTest` | PASS |
+| `IccV44CicpTagOverridesTrc` | `RasterColorDescriptionTest` | PASS |
+| `PngCicpOverridesIccpAndSrgbChunk` | `RasterColorDescriptionTest` | PASS |
+| `PngGamaWithoutChrmUsesSrgbPrimaries` | `RasterColorDescriptionTest` | PASS |
+| `JpegExifR03WithoutIccResolvesAdobeRgb` | `RasterColorDescriptionTest` | PASS |
+| `ExrWithoutChromaticitiesResolvesRec709Linear` | `RasterColorDescriptionTest` | PASS |
+| `Float32TiffWithoutIccIsSceneLinear` | `RasterColorDescriptionTest` | PASS |
+| `LutBasedRgbIccResolvesToLinearRec2020Converted` | `RasterColorDescriptionTest` | PASS |
+| `CmykIccIsRejected` | `RasterColorDescriptionTest` | PASS |
+| `UnusableIccFallsBackToSrgbAndRecordsReason` | `RasterColorDescriptionTest` | PASS |
+| `ExportedIccProfilesReimportWithSamePrimariesAndTransfer` (all 11 `config/icc` profiles) | `RasterColorDescriptionTest` | PASS |
+| `DescriptionJsonRoundTripsAndOmitsAbsentFields` | `RasterColorDescriptionTest` | PASS |
+| Every other section 10 fixture (v2 ICC without `chad`, gray ICC, iCCP, sRGB chunk, gAMA + cHRM, palette, RGBA, float TIFF with linear and sRGB ICC, integer TIFF, EXR chromaticities and ACES flag, malformed PNG, ICC parametric type 3, transfer evaluation, defect checks, SHA-256 FIPS 180 vectors) | `RasterColorDescriptionTest`, `Sha256Test` | PASS |
+
+Commands: `cmd /c scripts\msvc_env.cmd --build --preset win_debug --target RasterColorDescriptionTest`,
+`ctest --test-dir build/debug -R "RasterColorDescriptionTest|Sha256Test"`. Totals: 27/27.
+
+**Checklist / exit condition:** every fixture of section 10 that R1 covers resolves to its
+documented description. The compatibility project fixture belongs to R3 and R4.
+
+**Notes on the implementation:**
+
+- The struct has `icc_sha256_`, which section 7.3 serializes.
+- Tabulated ICC curves within 2e-4 of ST 2084 or the 1000-nit HLG display curve canonicalize to
+  `St2084` / `Hlg`. The shipped `p3_d65_pq`, `rec2020_pq` and `rec2020_hlg` export profiles store
+  those curves as 4096-entry tables, so without this rule an Alcedo HDR export would re-import as
+  an SDR sampled curve with a 100-nit peak.
+- The OpenEXR default and the float-TIFF default use origin `DefaultSrgb` with `default_reason_`;
+  their transfer is `Linear` and their referral is scene-linear.
+- LittleCMS 2.17 `cmsReadTag` does not return the `cicp` tag of the test profile, so the tag is
+  read from its raw bytes.
+- Extra fixtures beyond section 10: `gama_without_chrm.png`, `degenerate_primaries_icc_8bit.jpg`,
+  `float32_srgb_icc.tif`, `icc_v44_cicp_rec2020_pq_16bit.tif` and one `alcedo_export_*.tif` per
+  bundled profile.
+- Observation: the shipped `config/icc/xyz_gamma26.icc` states red (0.9642, 0.0001) and green
+  (0.0001, 0.8249), not CIE XYZ unit primaries (its `chrm` tag agrees). The re-import reproduces
+  what the profile states. Correcting that export profile is a separate change.
+
+**Residual gaps:** none for R1.
 
 ### Phase R2 — OCIO-reference inverse runtime
 

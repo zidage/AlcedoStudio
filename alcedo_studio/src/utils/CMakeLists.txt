@@ -44,6 +44,11 @@ def_library(CudaDriverRequirements
     SOURCES ${ALCEDO_SRC_ROOT}/utils/cuda/cuda_driver_requirements.cpp
 )
 
+# SHA-256 digests of in-memory data (ICC profile identity for raster input).
+def_library(Sha256Digest
+    SOURCES ${ALCEDO_SRC_ROOT}/utils/hash/sha256.cpp
+)
+
 def_library(StrConv
     SOURCES
         ${ALCEDO_SRC_ROOT}/utils/string/converter.cpp
