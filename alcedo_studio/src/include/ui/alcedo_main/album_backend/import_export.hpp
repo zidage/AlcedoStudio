@@ -47,8 +47,10 @@ class ImportExportHandler final : public QObject {
   Q_PROPERTY(int importPrepared READ ImportPrepared NOTIFY ImportStateChanged)
   Q_PROPERTY(int importCompleted READ ImportCompleted NOTIFY ImportStateChanged)
   Q_PROPERTY(int importFailed READ ImportFailed NOTIFY ImportStateChanged)
-  /// Subset of importFailed: files that are not a supported RAW file.
+  /// Subset of importFailed: files that are not a supported RAW or raster image.
   Q_PROPERTY(int importUnsupported READ ImportUnsupported NOTIFY ImportStateChanged)
+  /// Subset of importFailed: supported files whose type was not selected for the import.
+  Q_PROPERTY(int importExcluded READ ImportExcluded NOTIFY ImportStateChanged)
   Q_PROPERTY(QString importStatus READ ImportStatus NOTIFY ImportStateChanged)
   Q_PROPERTY(bool exportInFlight READ ExportInFlight NOTIFY ExportStateChanged)
   Q_PROPERTY(QString exportStatus READ ExportStatus NOTIFY ExportStateChanged)
@@ -106,7 +108,8 @@ class ImportExportHandler final : public QObject {
                                                     const QString& replacedName);
   Q_INVOKABLE bool         DeleteExportFileNamePreset(const QString& name);
 
-  void StartImportPaths(const std::vector<image_path_t>& paths, bool preserveTarget = false);
+  void StartImportPaths(const std::vector<image_path_t>& paths, bool preserveTarget = false,
+                        ImportCategoryMask allowedCategories = kAllImportCategories);
   void FinishImport(const ImportResult& result);
   void FinishExport(const std::shared_ptr<std::vector<ExportResult>>& results, int skippedCount);
   void AddImportedEntries(const ImportLogSnapshot& snapshot);
@@ -128,6 +131,7 @@ class ImportExportHandler final : public QObject {
   [[nodiscard]] auto ImportPhase() const -> QString;
   [[nodiscard]] int  ImportPrepared() const { return import_prepared_; }
   [[nodiscard]] int  ImportUnsupported() const { return import_unsupported_; }
+  [[nodiscard]] int  ImportExcluded() const { return import_excluded_; }
   [[nodiscard]] bool import_running() const { return import_running_; }
   [[nodiscard]] int  ImportTotal() const { return import_total_; }
   [[nodiscard]] int  import_total() const { return import_total_; }
@@ -197,7 +201,8 @@ class ImportExportHandler final : public QObject {
     QString package_error_{};
   };
 
-  void              StartImportResolvedPaths(std::vector<image_path_t> paths, bool preserveTarget);
+  void              StartImportResolvedPaths(std::vector<image_path_t> paths, bool preserveTarget,
+                                             ImportCategoryMask allowedCategories);
   /// Publish the live counters of current_import_job_ (read through ImportJob::progress_).
   void              ApplyImportProgress();
   void              CompleteImport(const ImportResult& result,
@@ -233,6 +238,7 @@ class ImportExportHandler final : public QObject {
   int                           import_completed_   = 0;
   int                           import_failed_      = 0;
   int                           import_unsupported_ = 0;
+  int                           import_excluded_    = 0;
   i18n::LocalizedText           import_status_text_{};
   bool                          export_inflight_ = false;
   QString                       default_export_folder_{};

@@ -1211,6 +1211,64 @@ long fuzz tests, was stopped before it finished.
 - Done when the tests pass and the dialog is checked by hand. The offscreen QML harness is not a
   reliable check (`AGENTS.md`), so the report says the check was manual.
 
+#### R5 completion record
+
+**Status:** complete on Windows. The dialog was not checked by hand in the application; see the
+note under Tests.
+
+**Implemented:**
+
+- `ImportFileCategory`, `ImportCategoryMask`, `ImportCategoryBit`, `CategoryForExtension` and
+  `CategoryForPath` in `type/supported_file_type.hpp`, with explicit mask operators. Matching
+  ignores ASCII case, so `.Nef` is RAW. The old RAW extension set is gone; `is_supported_file`
+  now means "regular file with a RAW extension". The header was CRLF and is converted to LF in
+  its own commit.
+- `ImportOptions.allowed_categories_` (default: all five). `ImportToFolder` no longer discards the
+  options. `ExtractEXIF_ToImage` throws the new `ImportErrorCode::EXCLUDED_TYPE` when the content
+  category is not allowed; CMYK and undecodable content stay `UNSUPPORTED_FORMAT`.
+- `ImportProgress` and `ImportResult` count `excluded_type_` beside `unsupported_`, both subsets
+  of `failed_`. The handler exposes `importExcluded`; the overlay and the final status text report
+  both counts.
+- `FolderImportScanModel` stores a category per path and a count per category, and exposes
+  `allowedCategories`, `categoryCounts`, `allowedFileCount`, a `category` role and
+  `SetCategoryAllowed`. The rows are the files of the allowed categories, rebuilt by
+  `BuildAllowedRows` without a rescan. `TakeFilePaths` returns only those files.
+- The dialog has a **File types** row: one checkbox per category with its count; Other is counted
+  and cannot be checked. The note is "Files of other types are skipped." Import is enabled when
+  the scan has finished and the allowed count is greater than 0.
+- The selection is stored in the QSettings key `import/folderAllowedCategories`. Folder import
+  passes it; the file picker allows all five and filters on "Supported images" first.
+- Texts in both `.ts` files, edited by hand. The three RAW-only texts are replaced.
+- `docs/supported_raw_formats.md` lists the RAW table of `supported_file_type.hpp` and the raster
+  types.
+
+**Deviations from the plan:**
+
+- The test `FolderScanListsNestedFilesAndFolderImportSkipsNonRawFiles` is
+  `FolderScanListsNestedFilesAndFolderImportTakesOnlySelectedTypes`: text files are Other, so the
+  list no longer shows them and the import does not receive them.
+- The filter-rebuild measurement is `FilterRebuildOver200kPathsTakesAtMost30Milliseconds`, which
+  times `BuildAllowedRows` over 200,000 categories: 2.9 ms in a debug build (target at most
+  30 ms).
+
+**Tests:**
+
+| Test | Target | Result |
+| --- | --- | --- |
+| `FolderScanCountsFilesPerCategory` | `AlbumBackendImportTest` | PASS |
+| `FolderImportImportsOnlyCheckedCategories` | `AlbumBackendImportTest` | PASS |
+| `OtherCategoryCannotBeEnabled` | `AlbumBackendImportTest` | PASS |
+| `RenamedJpegWithOnlyRawAllowedIsReportedAsExcludedType` | `AlbumBackendImportTest` | PASS |
+| `AllowedCategoriesAreRestoredFromSettings` | `AlbumBackendImportTest` | PASS |
+| `FilterRebuildOver200kPathsTakesAtMost30Milliseconds` | `AlbumBackendImportTest` | PASS (2.9 ms) |
+| `CategoryForExtensionIgnoresCaseAndKnowsEveryImportType` | `ImportContentClassificationTest` | PASS |
+| `ContentOutsideTheAllowedCategoriesIsCountedAsExcludedType` | `ImportContentClassificationTest` | PASS |
+
+`AlbumBackendImportTest` passed 24 of 24 (run directly), and `MetadataExtractorTest`,
+`ImportContentClassificationTest` and `ImportServiceTest` passed 29 of 29 with `ctest -j 1`.
+`alcedo_main` builds. The dialog was not checked by hand in the application: the tests check the
+scan model, the handler and the import, not the QML layout of the File types row.
+
 **Order:** R1 → R2 → R3 → R4. R5 needs only the R1 classification, so it can run in parallel with
 R2 and R3.
 
