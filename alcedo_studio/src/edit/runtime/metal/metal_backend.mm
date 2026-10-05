@@ -396,6 +396,16 @@ class MetalBackendImpl {
       buffer->didModifyRange(NS::Range(offset, bytes));
     }
   }
+
+  /// CPU address of a shared or managed buffer, or null for a private one. contents() of a
+  /// private heap buffer is not null on macOS 26 (it returns 0x1000), so the storage mode
+  /// decides.
+  static auto HostContents(MTL::Buffer* buffer) -> std::byte* {
+    if (buffer->storageMode() == MTL::StorageModePrivate) {
+      return nullptr;
+    }
+    return static_cast<std::byte*>(buffer->contents());
+  }
 };
 
 MetalBackend::Buffer::Buffer(MetalBackend* owner, void* native, void* device_pointer,
@@ -579,8 +589,8 @@ void MetalBackend::UploadBufferRange(Buffer& buffer, std::uint32_t offset,
     throw std::runtime_error("MetalBackend::UploadBufferRange: range exceeds buffer");
   }
   auto* native = static_cast<MTL::Buffer*>(buffer.Native());
-  if (native->contents() != nullptr) {
-    std::memcpy(static_cast<std::byte*>(native->contents()) + offset, bytes.data(), bytes.size());
+  if (auto* host = MetalBackendImpl::HostContents(native); host != nullptr) {
+    std::memcpy(host + offset, bytes.data(), bytes.size());
     MetalBackendImpl::MarkDidModifyIfManaged(native, offset, bytes.size());
   } else {
     MetalBackendImpl::AttachGpu(*gpu_);
@@ -607,10 +617,11 @@ void MetalBackend::DownloadBufferRange(const Buffer& buffer, std::uint32_t offse
     Wait(command_context);
   }
   auto* native = static_cast<MTL::Buffer*>(buffer.Native());
-  if (native->contents() == nullptr) {
+  const auto* host = MetalBackendImpl::HostContents(native);
+  if (host == nullptr) {
     throw std::runtime_error("MetalBackend::DownloadBufferRange: private buffer host map missing");
   }
-  std::memcpy(out.data(), static_cast<const std::byte*>(native->contents()) + offset, out.size());
+  std::memcpy(out.data(), host + offset, out.size());
 }
 
 void MetalBackend::UploadTexture2D(Texture2D& texture, std::span<const std::byte> bytes,
@@ -749,9 +760,8 @@ void MetalBackend::UploadDeviceMemory(void* dst, std::span<const std::byte> byte
     throw std::runtime_error("MetalBackend::UploadDeviceMemory: destination is not a live buffer");
   }
   const auto offset = static_cast<std::uint32_t>(address - found->gpu_address);
-  if (found->native->contents() != nullptr) {
-    std::memcpy(static_cast<std::byte*>(found->native->contents()) + offset, bytes.data(),
-                bytes.size());
+  if (auto* host = MetalBackendImpl::HostContents(found->native); host != nullptr) {
+    std::memcpy(host + offset, bytes.data(), bytes.size());
     MetalBackendImpl::MarkDidModifyIfManaged(found->native, offset, bytes.size());
   } else {
     const auto staging = MetalBackendImpl::ReserveStaging(*this, *gpu_, bytes.size());

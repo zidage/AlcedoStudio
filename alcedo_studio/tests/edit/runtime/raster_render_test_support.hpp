@@ -108,16 +108,32 @@ inline auto HostReferenceDevelopOutput(const PreparedRawInput&       input,
   return out;
 }
 
+/// Linear AP1 value of an ACEScc code value (ACES S-2014-003).
+inline auto AcesccToLinear(float cc) -> float {
+  if (cc < (9.72f - 15.0f) / 17.52f) {
+    return (std::exp2(cc * 17.52f - 9.72f) - std::exp2(-16.0f)) * 2.0f;
+  }
+  return std::exp2(cc * 17.52f - 9.72f);
+}
+
+/// True when two ACEScc values match: within @p tolerance in ACEScc, or within 1e-6 in linear
+/// light. Below about 2^-15 linear, ACEScc is steep, and a linear difference far under 16-bit
+/// quantization becomes a large ACEScc difference.
+inline auto AcesccValuesMatch(float actual, float expected, float tolerance) -> bool {
+  return std::abs(actual - expected) <= tolerance ||
+         std::abs(AcesccToLinear(actual) - AcesccToLinear(expected)) <= 1e-6f;
+}
+
 /// Compare two ACEScc images. 3e-4 in ACEScc is 0.4 percent in linear light.
 inline void ExpectAcesccNear(const std::vector<Rgba>& actual, const std::vector<Rgba>& expected,
                              const char* label, float tolerance = 3e-4f) {
   ASSERT_EQ(actual.size(), expected.size()) << label;
   int failures = 0;
   for (std::size_t i = 0; i < expected.size(); ++i) {
-    const float diff =
-        std::max({std::abs(actual[i].r - expected[i].r), std::abs(actual[i].g - expected[i].g),
-                  std::abs(actual[i].b - expected[i].b)});
-    if (!(diff <= tolerance) && ++failures <= 5) {
+    const bool match = AcesccValuesMatch(actual[i].r, expected[i].r, tolerance) &&
+                       AcesccValuesMatch(actual[i].g, expected[i].g, tolerance) &&
+                       AcesccValuesMatch(actual[i].b, expected[i].b, tolerance);
+    if (!match && ++failures <= 5) {
       ADD_FAILURE() << label << " pixel " << i << " actual (" << actual[i].r << ", " << actual[i].g
                     << ", " << actual[i].b << ") expected (" << expected[i].r << ", "
                     << expected[i].g << ", " << expected[i].b << ")";
