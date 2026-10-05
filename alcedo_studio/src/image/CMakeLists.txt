@@ -86,8 +86,10 @@ def_library(Image
     ${ALCEDO_SRC_ROOT}/image/image_content_class.cpp
     PUBLIC_DEPS ImageBuffer RasterColorModel
 )
-target_link_libraries(Image PRIVATE OpenImageIO::OpenImageIO lcms2::lcms2 ZLIB::ZLIB
-    Sha256Digest)
+# The bundled gRPC builds a static zlib with the same symbols. When it exists, Image uses it,
+# so that a target that links both gRPC and Image has one zlib.
+target_link_libraries(Image PRIVATE OpenImageIO::OpenImageIO lcms2::lcms2
+    $<IF:$<TARGET_EXISTS:zlibstatic>,zlibstatic,ZLIB::ZLIB> Sha256Digest)
 
 # Image Pool
 def_library(ImagePool
