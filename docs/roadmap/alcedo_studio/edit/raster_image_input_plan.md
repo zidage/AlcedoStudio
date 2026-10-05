@@ -2,7 +2,7 @@
 
 Date: 2026-10-04
 
-Status: **In progress.** Phase R1 is complete (2026-10-04). Section 12 records the product
+Status: **In progress.** Phases R1 and R2 are complete (2026-10-04); Metal is not verified. Section 12 records the product
 owner's decisions of 2026-10-04, and the plan follows them.
 
 Parent: [Roadmap](../../roadmap.md).
@@ -906,6 +906,98 @@ documented description. The compatibility project fixture belongs to R3 and R4.
 - Done when:
   - The tests pass on CUDA and OpenCL on Windows, and on Metal on macOS.
   - The section 5.4 performance figures are measured and written into this document.
+
+##### Phase R2 completion record (2026-10-04)
+
+**Status:** complete on CUDA and OpenCL (Windows); Metal code and test are written but were not
+compiled or run, because no macOS machine was available. The forward-DRT ratio of section 5.4
+is measured in R3, where both passes run in one render.
+
+**Design notes:**
+
+- The per-pixel code is one portable C header, `include/edit/runtime/display_to_ap1_math.h`,
+  compiled by the host, CUDA, OpenCL C and Metal (the pattern of
+  `aces_reference_gamut_compression.h`). The CUDA `.cuh` of section 6.2 is not needed.
+- All parameters and tables are one packed float block (1902 floats) in one device buffer on
+  every backend, not CUDA texture objects or Metal constant arrays. Each backend's
+  `*DisplayToAp1Parameters` uploads the block only when its contents change, so a cached runtime
+  goes to the device once per key.
+- The display-referred inverse writes AP0 (`DisplayToAp1Output::LinearAp0`) for the OCIO tests
+  and ACEScc AP1 (`AcesccAp1`) for the develop graph. The scene-linear branch is in the same
+  kernel and is selected by the packed block.
+- A source with a primary outside AP1 uses AP1 as the limiting gamut; its pixels are converted
+  to AP1 with a CAT02 adaptation of the source white, so the source white stays neutral.
+- The Metal shader compiles with `-fno-fast-math`. CUDA release builds keep the project-wide
+  `--use_fast_math`; the OCIO accuracy test passes with it.
+
+**Primary success call chain:**
+
+```text
+ResolveAces2InverseRuntime(source primaries, peak)          (process-wide cache, mutex)
+  -> BuildAces2InverseRuntime -> InitJmhParams / InitToneScaleParams / MakeReachMTable
+     -> FindReachCorners / BuildLimitingCuspCorners / BuildHueTable / BuildCuspTable
+     -> DetermineHueLinearitySearchRange -> MakeUpperHullGamma (warm start)
+  -> packed_ (display_to_ap1_math.h layout)
+CudaDisplayToAp1Parameters::Upload | OpenClDisplayToAp1Parameters::Upload | MetalDisplayToAp1Parameters::Upload
+  -> LaunchCudaDisplayToAp1 | EnqueueOpenClDisplayToAp1 | EncodeMetalDisplayToAp1
+  -> D2aSourceToAcesccAp1 -> D2aDisplayToAp0 (OCIO inverse) -> AP0->AP1 -> clamp -> ACEScc
+```
+
+**Primary failure call chain:**
+
+```text
+non-positive peak -> std::invalid_argument from BuildAces2InverseRuntime
+singular matrix   -> std::runtime_error from InverseD
+device error      -> std::runtime_error from Upload / launch (CUDA, OpenCL) or the Metal encoder
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `Aces2InverseHostTablesMatchOcioWithinTolerance` | `Aces2InverseTest` | PASS |
+| `Aces2InverseMatchesOcioCpuProcessor` (host evaluation) | `Aces2InverseTest` | PASS |
+| `Aces2InverseMatchesOcioCpuProcessor` | `GpuDagCudaDisplayToAp1Test` (debug and release) | PASS |
+| `Aces2InverseMatchesOcioCpuProcessor` | `GpuDagOpenClDisplayToAp1Test` | PASS |
+| `Aces2InverseReturnsBlackForBlackAndNeutralForSourceWhite` | host, CUDA, OpenCL | PASS |
+| `Aces2InverseRuntimeIsBuiltOncePerPrimariesAndPeak` | `Aces2InverseTest` | PASS |
+| ProPhoto source uses AP1 limiting and keeps white neutral; ACEScc output equals the clamped AP1; scene-linear matrix keeps the source white neutral | `Aces2InverseTest` | PASS |
+| ACEScc output of both branches equals the host evaluation; parameter block uploads once per change | CUDA, OpenCL | PASS |
+| Metal versions of the four GPU tests | `GpuDagMetalDisplayToAp1Test` | NOT RUN (no macOS machine) |
+
+Commands: `cmd /c scripts\msvc_env.cmd --build --preset win_debug --target Aces2InverseTest
+GpuDagCudaDisplayToAp1Test GpuDagOpenClDisplayToAp1Test`, then
+`ctest --test-dir build/debug -j 1 -R "Aces2InverseTest|GpuDagCudaDisplayToAp1Test|GpuDagOpenClDisplayToAp1Test"`:
+17/17. The release figures below come from the same two targets built in `build/release`.
+
+**Accuracy findings and the refined criteria:**
+
+- Cusp J and M match OCIO to about 1e-6 relative, and the hue table to the digits that OCIO
+  prints into its shader text. The upper hull gamma differs by up to 2.7e-4 relative. That
+  table comes from a threshold search ("does the boundary estimate leave the display cube?"),
+  which turns float rounding differences into a gamma difference; the same difference occurs
+  with OCIO's cold search, so the warm start does not cause it. The test allows 5e-4 for that
+  column and 1e-5 for J and M.
+- Near the top of the tonescale the inverse is ill-conditioned, and those gamma differences move
+  the AP0 result of a few grid points by more than 1e-3 (for example display (1, 1, 0.969) in
+  Rec.709). The accuracy test therefore requires: at least 99.9 % of all channels within the
+  section 5.7 AP0 tolerance, and at every other grid point the OCIO forward of our AP0 reproduces
+  the display input within that tolerance, or no worse than OCIO's own inverse round-trips by
+  more than the tolerance. Observed: 9 of 107,811 channels outside the AP0 tolerance for Rec.709
+  100 nits, 1 for Adobe RGB, 6 for Rec.2020 1000 nits, 0 for P3 and Rec.2020 100 nits.
+- Neutrality: the source white maps to `max/min - 1 < 1e-4` from 0.05 % to 90 % of peak. Exactly
+  peak white maps within 2.4e-4 of neutral (OCIO's own result is neutral), which the test checks
+  against OCIO within the section 5.7 tolerance.
+
+**Section 5.4 measurements (release, NVIDIA GeForce RTX 3080 Laptop GPU):**
+
+| Figure | Target | Measured |
+| --- | --- | --- |
+| Table build for a new key (Adobe RGB, 1000 nits) | at most 20 ms | 4.6 ms (debug: 9.2 ms) |
+| `DisplayToAp1` CUDA pass at 3840 x 2160 | at most 1.25 x the forward `Drt` pass | 0.85 ms; ratio measured in R3 |
+
+**Residual gaps:** Metal is not compiled or run. The 1.25x ratio to the forward DRT pass is
+measured in R3 with the pass statistics.
 
 ### Phase R3 — Decoder and graph
 

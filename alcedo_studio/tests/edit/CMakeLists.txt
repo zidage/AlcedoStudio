@@ -78,6 +78,16 @@ alcedo_register_test_target(EditorMiniGitMaterializerTest edit)
 
 # Local-tone constants and helpers in edit/runtime/local_tone_mapping.hpp that the DAG runtime
 # uses.
+# ACES 2.0 inverse tables and host evaluation against OpenColorIO 2.5.1 (raster input). Only test
+# targets link OpenColorIO.
+add_executable(Aces2InverseTest ${ALCEDO_TEST_ROOT}/edit/runtime/aces2_inverse_test.cpp)
+target_include_directories(Aces2InverseTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(Aces2InverseTest PRIVATE GTest::gtest_main EditRuntimeDrt Image
+  OpenColorIO::OpenColorIO)
+gtest_discover_tests(Aces2InverseTest TEST_PREFIX "Aces2InverseTest."
+  PROPERTIES LABELS "edit;runtime;color")
+alcedo_register_test_target(Aces2InverseTest edit)
+
 add_executable(LocalToneMappingConstantsMatchRuntimeTest
     ${ALCEDO_TEST_ROOT}/edit/runtime/local_tone_mapping_constants_test.cpp)
 target_include_directories(LocalToneMappingConstantsMatchRuntimeTest PUBLIC ${ALCEDO_INCLUDE_DIR})
@@ -390,6 +400,17 @@ if(ALCEDO_CUDA_ENABLED)
     PROPERTIES LABELS "gpu;edit;runtime;product")
   alcedo_register_test_target(GpuDagCudaDrtProductTest gpu)
 
+  # CUDA DisplayToAp1 kernels against OpenColorIO 2.5.1 (raster input). Only test targets link
+  # OpenColorIO.
+  add_executable(GpuDagCudaDisplayToAp1Test
+    ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_display_to_ap1_test.cpp)
+  target_include_directories(GpuDagCudaDisplayToAp1Test PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+  target_link_libraries(GpuDagCudaDisplayToAp1Test PRIVATE
+    GTest::gtest_main EditRuntimeCuda EditRuntimeDrt Image OpenColorIO::OpenColorIO)
+  gtest_discover_tests(GpuDagCudaDisplayToAp1Test TEST_PREFIX "GpuDagCudaDisplayToAp1Test."
+    PROPERTIES LABELS "gpu;edit;runtime;color")
+  alcedo_register_test_target(GpuDagCudaDisplayToAp1Test gpu)
+
   # Geometry panel render requests through PipelineScheduler and the executor (G10.1).
   add_executable(GpuDagCudaDocumentGeometryRequestTest
     ${ALCEDO_TEST_ROOT}/edit/runtime/cuda_document_geometry_request_test.cpp)
@@ -482,6 +503,18 @@ if(ALCEDO_METAL_ENABLED)
     PROPERTIES LABELS "gpu;edit;runtime;metal")
   alcedo_register_test_target(GpuDagMetalDrtTest gpu ci_metal)
 
+  # Metal DisplayToAp1 kernels against OpenColorIO 2.5.1 (raster input). Only test targets link
+  # OpenColorIO.
+  add_executable(GpuDagMetalDisplayToAp1Test
+    ${ALCEDO_TEST_ROOT}/edit/runtime/metal_display_to_ap1_test.cpp)
+  target_include_directories(GpuDagMetalDisplayToAp1Test PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+  target_link_libraries(GpuDagMetalDisplayToAp1Test PRIVATE
+    GTest::gtest_main EditRuntimeMetal EditRuntimeDrt Image OpenColorIO::OpenColorIO)
+  add_dependencies(GpuDagMetalDisplayToAp1Test GpuDagMetalShaders)
+  gtest_discover_tests(GpuDagMetalDisplayToAp1Test TEST_PREFIX "GpuDagMetalDisplayToAp1Test."
+    PROPERTIES LABELS "gpu;edit;runtime;metal;color")
+  alcedo_register_test_target(GpuDagMetalDisplayToAp1Test gpu ci_metal)
+
   add_executable(GpuDagMetalRendererTest
     ${ALCEDO_TEST_ROOT}/edit/runtime/metal_renderer_test.cpp
     ${ALCEDO_TEST_ROOT}/edit/runtime/metal_nm2_qualification_test.cpp)
@@ -546,6 +579,18 @@ if(ALCEDO_OPENCL_ENABLED)
   gtest_discover_tests(GpuDagOpenClGradeTest TEST_PREFIX "GpuDagOpenClGradeTest."
     PROPERTIES LABELS "gpu;edit;runtime;opencl")
   alcedo_register_test_target(GpuDagOpenClGradeTest gpu)
+
+  # OpenCL DisplayToAp1 kernels against OpenColorIO 2.5.1 (raster input). Only test targets link
+  # OpenColorIO.
+  add_executable(GpuDagOpenClDisplayToAp1Test
+    ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_display_to_ap1_test.cpp)
+  target_include_directories(GpuDagOpenClDisplayToAp1Test PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+  target_link_libraries(GpuDagOpenClDisplayToAp1Test PRIVATE
+    GTest::gtest_main EditRuntimeOpenCl EditRuntimeDrt OpenClProgramLibrary Image
+    OpenColorIO::OpenColorIO)
+  gtest_discover_tests(GpuDagOpenClDisplayToAp1Test TEST_PREFIX "GpuDagOpenClDisplayToAp1Test."
+    PROPERTIES LABELS "gpu;edit;runtime;opencl;color")
+  alcedo_register_test_target(GpuDagOpenClDisplayToAp1Test gpu)
 
   add_executable(GpuDagOpenClDrtProductTest
     ${ALCEDO_TEST_ROOT}/edit/runtime/opencl_drt_product_test.cpp

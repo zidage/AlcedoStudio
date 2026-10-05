@@ -68,6 +68,10 @@ if(ALCEDO_METAL_ENABLED)
     set(METAL_MASK_AIR "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/mask.air")
     set(METAL_MASK_METALLIB "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/mask.metallib"
         CACHE INTERNAL "Metal DAG mask metallib path" FORCE)
+    set(METAL_DISPLAY_TO_AP1_SRC "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/display_to_ap1.metal")
+    set(METAL_DISPLAY_TO_AP1_AIR "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/display_to_ap1.air")
+    set(METAL_DISPLAY_TO_AP1_METALLIB "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/display_to_ap1.metallib"
+        CACHE INTERNAL "Metal DAG DisplayToAp1 metallib path" FORCE)
     set(METAL_DRT_SRC "${ALCEDO_SRC_ROOT}/edit/runtime/metal/shader/drt.metal")
     set(METAL_DRT_AIR "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/drt.air")
     set(METAL_DRT_METALLIB "${ALCEDO_BINARY_ROOT}/edit/runtime/metal/shader/drt.metallib"
@@ -139,7 +143,7 @@ if(ALCEDO_METAL_ENABLED)
              link_comment)
         set(options)
         set(oneValueArgs)
-        set(multiValueArgs DEPENDS)
+        set(multiValueArgs DEPENDS COMPILE_FLAGS)
         cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
         get_filename_component(_air_dir "${air_file}" DIRECTORY)
@@ -153,6 +157,7 @@ if(ALCEDO_METAL_ENABLED)
                     ${ALCEDO_METAL_COMMON_COMPILE_FLAGS}
                     ${ALCEDO_METAL_PLATFORM_COMPILE_FLAGS}
                     ${ALCEDO_METAL_CONFIG_COMPILE_FLAGS}
+                    ${ARG_COMPILE_FLAGS}
                     -fmodules-cache-path="${ALCEDO_METAL_MODULE_CACHE_DIR}"
                     -MF "${_depfile}"
                     -c "${source_file}"
@@ -327,7 +332,20 @@ if(ALCEDO_METAL_ENABLED)
             "${ALCEDO_INCLUDE_ROOT}/edit/runtime/aces_reference_gamut_compression.h"
     )
 
+    # The ACES 2.0 inverse is checked against OpenColorIO within 1e-3; fast math is off.
+    alcedo_add_metal_library(
+        GpuDagDisplayToAp1Shaders
+        "${METAL_DISPLAY_TO_AP1_SRC}"
+        "${METAL_DISPLAY_TO_AP1_AIR}"
+        "${METAL_DISPLAY_TO_AP1_METALLIB}"
+        "Compiling Metal DAG DisplayToAp1 shader"
+        "Linking Metal DAG DisplayToAp1 library"
+        DEPENDS "${ALCEDO_INCLUDE_ROOT}/edit/runtime/display_to_ap1_math.h"
+        COMPILE_FLAGS -fno-fast-math
+    )
+
     add_custom_target(GpuDagMetalShaders DEPENDS
+        "${METAL_DISPLAY_TO_AP1_METALLIB}"
         "${METAL_GEOMETRY_RESAMPLE_METALLIB}"
         "${METAL_CAMERA_COLOR_METALLIB}"
         "${METAL_PRIMARY_GRADE_METALLIB}"

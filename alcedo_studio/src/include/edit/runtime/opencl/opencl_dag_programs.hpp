@@ -15,6 +15,7 @@ inline constexpr const char* kPrimaryGradeProgramName         = "opencl_dag_prim
 inline constexpr const char* kLocalToneProgramName            = "opencl_dag_local_tone";
 inline constexpr const char* kMaskProgramName                 = "opencl_dag_mask";
 inline constexpr const char* kDrtProgramName                  = "opencl_dag_drt";
+inline constexpr const char* kDisplayToAp1ProgramName         = "opencl_dag_display_to_ap1";
 
 inline constexpr const char* kGeometryResampleKernelName      = "geometry_resample_rgba32f";
 inline constexpr const char* kCameraColorKernelName           = "camera_color_acescc";
@@ -47,6 +48,8 @@ inline constexpr const char* kMaskAnalyticKernelName              = "mask_analyt
 inline constexpr const char* kMaskFillZeroKernelName              = "mask_fill_zero_r8";
 inline constexpr const char* kMaskUnionMaxKernelName              = "mask_union_max_r8";
 inline constexpr const char* kDrtKernelName                       = "drt_display_rgba32f";
+inline constexpr const char* kDisplayToAp1KernelName              = "display_to_ap1_acescc";
+inline constexpr const char* kDisplayToAp0LinearKernelName        = "display_to_ap0_linear";
 inline constexpr const char* kDrtSceneKernelName                  = "drt_display_scene_rgba32f";
 inline constexpr const char* kDiffusionFilterDecodeSceneKernelName =
     "diffusion_filter_decode_scene_rgba32f";

@@ -47,6 +47,13 @@ void RegisterOpenClGpuDagPrograms() {
                     .required_at_startup = false,
                 },
                 OpenClProgramDescriptor{
+                    .name                = OpenCL::GpuDag::kDisplayToAp1ProgramName,
+                    .source_paths        = {ALCEDO_OPENCL_DISPLAY_TO_AP1_MATH_H,
+                                            ALCEDO_OPENCL_DAG_DISPLAY_TO_AP1_CL},
+                    .build_options       = "-cl-std=CL1.2",
+                    .required_at_startup = false,
+                },
+                OpenClProgramDescriptor{
                     .name                = OpenCL::GpuDag::kDrtProgramName,
                     .source_paths        = {ALCEDO_OPENCL_ACES_RGC_H,
                                             ALCEDO_OPENCL_DAG_DRT_PARAMS_CL,

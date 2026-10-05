@@ -118,6 +118,7 @@ def_library(EditRuntimeDrt
     SOURCES
         ${ALCEDO_SRC_ROOT}/edit/runtime/drt/drt_output_resolver.cpp
         ${ALCEDO_SRC_ROOT}/edit/runtime/drt/aces_odt_runtime.cpp
+        ${ALCEDO_SRC_ROOT}/edit/runtime/drt/aces2_inverse_runtime.cpp
         ${ALCEDO_SRC_ROOT}/edit/runtime/drt/open_drt_runtime.cpp
     PUBLIC_DEPS EditGraph ${ALCEDO_OPENCV_CORE_DEPS}
 )
@@ -235,6 +236,7 @@ if(ALCEDO_METAL_ENABLED)
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_backend.mm
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_develop_pass.mm
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_diffusion_filter_pass.mm
+            ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_display_to_ap1_pass.mm
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_drt_params.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_drt_pass.mm
             ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_frame_presenter.mm
@@ -258,12 +260,14 @@ if(ALCEDO_METAL_ENABLED)
         ALCEDO_METAL_LOCAL_TONE_METALLIB_PATH="${METAL_LOCAL_TONE_METALLIB}"
         ALCEDO_METAL_MASK_METALLIB_PATH="${METAL_MASK_METALLIB}"
         ALCEDO_METAL_DRT_METALLIB_PATH="${METAL_DRT_METALLIB}"
+        ALCEDO_METAL_DISPLAY_TO_AP1_METALLIB_PATH="${METAL_DISPLAY_TO_AP1_METALLIB}"
         ALCEDO_METAL_DEMOSAICNET_IO_METALLIB_PATH="${METAL_DEMOSAICNET_IO_METALLIB}"
     )
     set_source_files_properties(
         ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_backend.mm
         ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_develop_pass.mm
         ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_diffusion_filter_pass.mm
+        ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_display_to_ap1_pass.mm
         ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_drt_pass.mm
         ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_frame_presenter.mm
         ${ALCEDO_SRC_ROOT}/edit/runtime/metal/metal_local_tone_pass.mm
@@ -288,6 +292,7 @@ if(ALCEDO_CUDA_ENABLED)
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_camera_color_pass.cu
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_develop_pass.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_diffusion_filter_pass.cu
+            ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_display_to_ap1_pass.cu
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_render_device.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_sensor_demosaic.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_drt_pass.cu
@@ -311,6 +316,7 @@ if(ALCEDO_OPENCL_ENABLED)
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_backend.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_develop_pass.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_diffusion_filter_pass.cpp
+            ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_display_to_ap1_pass.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_drt_params.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_drt_pass.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/opencl/opencl_frame_presenter.cpp

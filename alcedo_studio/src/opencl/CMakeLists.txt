@@ -23,6 +23,7 @@ if(ALCEDO_OPENCL_ENABLED)
     set(OPENCL_DAG_DRT_PARAMS_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/drt_params.cl")
     set(OPENCL_DAG_COMMON_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/common.cl")
     set(OPENCL_DAG_CST_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/cst.cl")
+    set(OPENCL_DAG_DISPLAY_TO_AP1_CL "${ALCEDO_SRC_ROOT}/edit/runtime/opencl/shader/display_to_ap1.cl")
 
     # On Windows, first-party CUDA pipeline targets (RawProcessorOp, EditRuntimeLens,
     # EditPipeline, …) are SHARED by default. If OpenCL context/program runtime
@@ -118,6 +119,8 @@ if(ALCEDO_OPENCL_ENABLED)
         ALCEDO_OPENCL_DAG_DRT_PARAMS_CL="${OPENCL_DAG_DRT_PARAMS_CL}"
         ALCEDO_OPENCL_DAG_COMMON_CL="${OPENCL_DAG_COMMON_CL}"
         ALCEDO_OPENCL_DAG_CST_CL="${OPENCL_DAG_CST_CL}"
+        ALCEDO_OPENCL_DAG_DISPLAY_TO_AP1_CL="${OPENCL_DAG_DISPLAY_TO_AP1_CL}"
+        ALCEDO_OPENCL_DISPLAY_TO_AP1_MATH_H="${ALCEDO_INCLUDE_ROOT}/edit/runtime/display_to_ap1_math.h"
         ALCEDO_OPENCL_SHADER_SOURCE_ROOT="${ALCEDO_OPENCL_SHADER_SOURCE_ROOT}"
     )
 endif()
