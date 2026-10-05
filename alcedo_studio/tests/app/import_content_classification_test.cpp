@@ -2,11 +2,12 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-// Import accepts RAW files only and leaves no orphan rows
-// (library_search_and_project_size_plan.md, Phase S1).
+// Import classifies files by content into RAW and raster images and leaves no orphan rows
+// (library_search_and_project_size_plan.md, Phase S1; raster_image_input_plan.md, Phase R4).
 //
 // The RAW cases use the smallest CI RAW fixture under TEST_IMG_PATH/ci_rawfiles and skip when
-// it is missing. The image pool and project-load cases need no RAW file.
+// it is missing. The raster cases use tests/resources/raster. The image pool and project-load
+// cases need no RAW file.
 
 #include <duckdb.h>
 #include <gtest/gtest.h>
@@ -26,6 +27,9 @@
 #include "app/import_service.hpp"
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
+#include "edit/graph/develop_node_model.hpp"
+#include "edit/graph/pipeline_document.hpp"
+#include "image/raster_color_description.hpp"
 #include "library_search_test_support.hpp"
 #include "storage/image_pool/image_pool_manager.hpp"
 #include "support/non_raw_import_files.hpp"
@@ -57,6 +61,38 @@ auto QueryCount(ProjectService& project, const std::string& sql) -> int64_t {
   const auto count = duckdb_value_int64(&result, 0, 0);
   duckdb_destroy_result(&result);
   return count;
+}
+
+/// Image.type and Image.metadata of the row whose file name is @p file_name.
+struct ImageRow {
+  int64_t        type_ = -1;
+  nlohmann::json metadata_;
+};
+
+auto QueryImageRow(ProjectService& project, const std::string& file_name) -> ImageRow {
+  auto          guard = project.GetStorage()->GetDatabase().GetConnectionGuard();
+  auto          lock  = guard.Lock();
+  duckdb_result result;
+  ImageRow      row;
+  const auto    sql =
+      "SELECT type, CAST(metadata AS VARCHAR) FROM Image WHERE file_name = '" + file_name + "'";
+  if (duckdb_query(guard.conn_, sql.c_str(), &result) != DuckDBSuccess) {
+    ADD_FAILURE() << "Query failed: " << sql << ": " << duckdb_result_error(&result);
+    duckdb_destroy_result(&result);
+    return row;
+  }
+  if (duckdb_row_count(&result) == 1) {
+    row.type_      = duckdb_value_int64(&result, 0, 0);
+    char* metadata = duckdb_value_varchar(&result, 1, 0);
+    row.metadata_  = nlohmann::json::parse(metadata);
+    duckdb_free(metadata);
+  }
+  duckdb_destroy_result(&result);
+  return row;
+}
+
+auto RasterFixturePath(const char* name) -> std::filesystem::path {
+  return std::filesystem::path(ALCEDO_RASTER_FIXTURE_DIR) / name;
 }
 
 auto CountRows(ProjectService& project, const std::string& table) -> int64_t {
@@ -116,16 +152,16 @@ auto ImportToLibraryRoot(ProjectService& project, const std::vector<image_path_t
   return outcome;
 }
 
-class ImportRawOnlyTest : public ::testing::Test {
+class ImportContentClassificationTest : public ::testing::Test {
  protected:
   void SetUp() override {
     TimeProvider::Refresh();
     Exiv2::LogMsg::setLevel(Exiv2::LogMsg::Level::mute);
     const auto* test_name = ::testing::UnitTest::GetInstance()->current_test_info()->name();
     const auto  temp_dir  = std::filesystem::temp_directory_path();
-    db_path_              = temp_dir / (std::string("import_raw_only_") + test_name + ".db");
-    meta_path_            = temp_dir / (std::string("import_raw_only_") + test_name + ".json");
-    scratch_dir_          = temp_dir / (std::string("import_raw_only_") + test_name);
+    db_path_              = temp_dir / (std::string("import_content_class_") + test_name + ".db");
+    meta_path_            = temp_dir / (std::string("import_content_class_") + test_name + ".json");
+    scratch_dir_          = temp_dir / (std::string("import_content_class_") + test_name);
     RemoveTestFiles();
     std::filesystem::create_directories(scratch_dir_);
   }
@@ -138,6 +174,16 @@ class ImportRawOnlyTest : public ::testing::Test {
     std::filesystem::remove(db_path_.string() + ".wal", ec);
     std::filesystem::remove(meta_path_, ec);
     std::filesystem::remove_all(scratch_dir_, ec);
+  }
+
+  /// Element id of the imported file @p file_name.
+  static auto ElementOf(const ImportOutcome& outcome, const std::string& file_name)
+      -> sl_element_id_t {
+    for (const auto& entry : outcome.snapshot_.created_) {
+      if (conv::ToBytes(entry.file_name_) == file_name) return entry.element_id_;
+    }
+    ADD_FAILURE() << "No import entry for " << file_name;
+    return 0;
   }
 
   /// Copy the CI RAW fixture into the scratch folder as @p file_name.
@@ -153,7 +199,8 @@ class ImportRawOnlyTest : public ::testing::Test {
   std::filesystem::path scratch_dir_;
 };
 
-TEST_F(ImportRawOnlyTest, MixedFolderImportsOnlyRawFilesAndLeavesNoOrphanImageRows) {
+TEST_F(ImportContentClassificationTest,
+       MixedFolderImportsRawAndRasterFilesAndLeavesNoOrphanImageRows) {
   if (!std::filesystem::exists(RawFixturePath())) {
     GTEST_SKIP() << "CI RAW fixture is missing: " << RawFixturePath().string();
   }
@@ -173,9 +220,9 @@ TEST_F(ImportRawOnlyTest, MixedFolderImportsOnlyRawFilesAndLeavesNoOrphanImageRo
   const auto     outcome = ImportToLibraryRoot(project, {raw_path, jpeg, tiff, xmp, mov, unknown});
 
   EXPECT_EQ(outcome.result_.requested_, 6u);
-  EXPECT_EQ(outcome.result_.imported_, 1u);
-  EXPECT_EQ(outcome.result_.failed_, 5u);
-  ASSERT_EQ(outcome.snapshot_.metadata_failed_.size(), 5u);
+  EXPECT_EQ(outcome.result_.imported_, 3u);
+  EXPECT_EQ(outcome.result_.failed_, 3u);
+  ASSERT_EQ(outcome.snapshot_.metadata_failed_.size(), 3u);
   for (const auto& entry : outcome.snapshot_.metadata_failed_) {
     EXPECT_EQ(entry.error_code_, ImportErrorCode::UNSUPPORTED_FORMAT)
         << conv::ToBytes(entry.file_name_);
@@ -186,43 +233,120 @@ TEST_F(ImportRawOnlyTest, MixedFolderImportsOnlyRawFilesAndLeavesNoOrphanImageRo
   for (const auto& entry : outcome.snapshot_.created_) {
     if (entry.metadata_ok_) ok_entries.insert(conv::ToBytes(entry.file_name_));
   }
-  EXPECT_EQ(ok_entries, std::set<std::string>{"camera_raw.ARW"});
+  const std::set<std::string> imported{"camera_raw.ARW", "photo.jpg", "scan.tif"};
+  EXPECT_EQ(ok_entries, imported);
 
-  EXPECT_EQ(CountRows(project, "FileImage"), 1);
-  EXPECT_EQ(CountRows(project, "Image"), 1) << "A failed import must not write an Image row";
+  EXPECT_EQ(CountRows(project, "FileImage"), 3);
+  EXPECT_EQ(CountRows(project, "Image"), 3) << "A failed import must not write an Image row";
   EXPECT_EQ(CountFileImageRowsWithoutImage(project), 0);
-  EXPECT_EQ(LibraryFileNames(project), std::set<std::string>{"camera_raw.ARW"});
+  EXPECT_EQ(LibraryFileNames(project), imported);
 }
 
-TEST_F(ImportRawOnlyTest, ImportDecidesRawByContentNotByFileExtension) {
+TEST_F(ImportContentClassificationTest, ImportDecidesKindByContentNotByFileExtension) {
   if (!std::filesystem::exists(RawFixturePath())) {
     GTEST_SKIP() << "CI RAW fixture is missing: " << RawFixturePath().string();
   }
   const auto raw_as_bin  = CopyRawFixture("raw_content.bin");
   const auto jpeg_as_nef = scratch_dir_ / "jpeg_content.nef";
-  const auto jpeg_as_dng = scratch_dir_ / "jpeg_content.dng";
+  const auto tiff_as_dng = scratch_dir_ / "tiff_content.dng";
   test_support::WriteRgbRaster(jpeg_as_nef, ".jpg");
-  test_support::WriteRgbRaster(jpeg_as_dng, ".jpg");
+  test_support::WriteRgbRaster(tiff_as_dng, ".tif");
 
   ProjectService project(db_path_, meta_path_);
-  const auto     outcome = ImportToLibraryRoot(project, {raw_as_bin, jpeg_as_nef, jpeg_as_dng});
+  const auto     outcome = ImportToLibraryRoot(project, {raw_as_bin, jpeg_as_nef, tiff_as_dng});
 
-  EXPECT_EQ(outcome.result_.imported_, 1u);
-  EXPECT_EQ(outcome.result_.failed_, 2u);
-  std::set<std::string> failed_names;
-  for (const auto& entry : outcome.snapshot_.metadata_failed_) {
-    EXPECT_EQ(entry.error_code_, ImportErrorCode::UNSUPPORTED_FORMAT);
-    failed_names.insert(conv::ToBytes(entry.file_name_));
+  EXPECT_EQ(outcome.result_.imported_, 3u);
+  EXPECT_EQ(outcome.result_.failed_, 0u);
+  EXPECT_EQ(CountRows(project, "Image"), 3);
+
+  const auto raw_row = QueryImageRow(project, "raw_content.bin");
+  EXPECT_EQ(raw_row.type_, static_cast<int64_t>(ImageType::DEFAULT));
+  EXPECT_TRUE(raw_row.metadata_.contains("RawRuntimeColorContext"));
+  EXPECT_FALSE(raw_row.metadata_.contains("RasterColorDescription"));
+
+  const auto jpeg_row = QueryImageRow(project, "jpeg_content.nef");
+  EXPECT_EQ(jpeg_row.type_, static_cast<int64_t>(ImageType::JPEG));
+  EXPECT_TRUE(jpeg_row.metadata_.contains("RasterColorDescription"));
+  EXPECT_FALSE(jpeg_row.metadata_.contains("RawRuntimeColorContext"));
+
+  EXPECT_EQ(QueryImageRow(project, "tiff_content.dng").type_,
+            static_cast<int64_t>(ImageType::TIFF));
+}
+
+TEST_F(ImportContentClassificationTest,
+       ImportedJpegStoresDescriptionInDevelopInputAndRatingFromExif) {
+  const auto jpeg = scratch_dir_ / "display_p3.jpg";
+  std::filesystem::copy_file(RasterFixturePath("display_p3_icc_8bit.jpg"), jpeg);
+  {
+    // The vcpkg Exiv2 build has no XMP toolkit, so ratings come from EXIF.
+    auto exiv = Exiv2::ImageFactory::open(jpeg.string());
+    exiv->readMetadata();
+    exiv->exifData()["Exif.Image.Rating"] = static_cast<uint16_t>(4);
+    exiv->writeMetadata();
   }
-  EXPECT_EQ(failed_names, (std::set<std::string>{"jpeg_content.dng", "jpeg_content.nef"}));
-  EXPECT_EQ(LibraryFileNames(project), std::set<std::string>{"raw_content.bin"});
-  EXPECT_EQ(CountRows(project, "Image"), 1);
+
+  ProjectService project(db_path_, meta_path_);
+  const auto     outcome = ImportToLibraryRoot(project, {jpeg});
+  ASSERT_EQ(outcome.result_.imported_, 1u);
+
+  const auto row = QueryImageRow(project, "display_p3.jpg");
+  EXPECT_EQ(row.type_, static_cast<int64_t>(ImageType::JPEG));
+  EXPECT_EQ(row.metadata_.value("Rating", 0), 4);
+  EXPECT_FALSE(row.metadata_.value("IsHDR", false));
+  ASSERT_TRUE(row.metadata_.contains("RasterColorDescription"));
+
+  PipelineMgmtService pipelines(project.GetStorage());
+  const auto root = pipelines.LoadHistorySnapshot(ElementOf(outcome, "display_p3.jpg")).root_;
+  ASSERT_NE(root, nullptr);
+  EXPECT_FALSE(root->raw_color_context.has_value());
+  ASSERT_NE(root->document.Develop(), nullptr);
+  const auto input = root->document.Develop()->Params().RasterInput();
+  ASSERT_TRUE(input.has_value());
+  EXPECT_EQ(input->profile_override_, "auto");
+  EXPECT_EQ(RasterColorDescriptionToJson(input->source_color_),
+            row.metadata_["RasterColorDescription"]);
+  EXPECT_EQ(root->document.ToJson(),
+            CreateDefaultRasterPipelineDocument(input->source_color_).ToJson());
+}
+
+TEST_F(ImportContentClassificationTest, ImportedExrIsSceneLinearAndHdr) {
+  const auto exr = scratch_dir_ / "render.exr";
+  std::filesystem::copy_file(RasterFixturePath("chromaticities_p3_half.exr"), exr);
+
+  ProjectService project(db_path_, meta_path_);
+  const auto     outcome = ImportToLibraryRoot(project, {exr});
+  ASSERT_EQ(outcome.result_.imported_, 1u);
+
+  const auto row = QueryImageRow(project, "render.exr");
+  EXPECT_EQ(row.type_, static_cast<int64_t>(ImageType::EXR));
+  EXPECT_TRUE(row.metadata_.value("IsHDR", false));
+
+  PipelineMgmtService pipelines(project.GetStorage());
+  const auto          root = pipelines.LoadHistorySnapshot(ElementOf(outcome, "render.exr")).root_;
+  ASSERT_NE(root, nullptr);
+  const auto input = root->document.Develop()->Params().RasterInput();
+  ASSERT_TRUE(input.has_value());
+  EXPECT_EQ(input->source_color_.referral_, RasterReferral::SceneLinear);
+}
+
+TEST_F(ImportContentClassificationTest, CmykJpegIsUnsupportedAndLeavesNoImageRow) {
+  const auto cmyk = scratch_dir_ / "print.jpg";
+  std::filesystem::copy_file(RasterFixturePath("cmyk_icc.jpg"), cmyk);
+
+  ProjectService project(db_path_, meta_path_);
+  const auto     outcome = ImportToLibraryRoot(project, {cmyk});
+  EXPECT_EQ(outcome.result_.imported_, 0u);
+  ASSERT_EQ(outcome.snapshot_.metadata_failed_.size(), 1u);
+  EXPECT_EQ(outcome.snapshot_.metadata_failed_.front().error_code_,
+            ImportErrorCode::UNSUPPORTED_FORMAT);
+  EXPECT_EQ(CountRows(project, "Image"), 0);
 }
 
 // An import larger than the image pool capacity (1024) must not lose a finished Image before
 // SyncImports writes it. The loss needs one more pool insert after the metadata tasks release
 // their pins: here the library grid reads the Image of a file imported earlier.
-TEST_F(ImportRawOnlyTest, ImportLargerThanImagePoolCapacityWritesAnImageRowForEveryFile) {
+TEST_F(ImportContentClassificationTest,
+       ImportLargerThanImagePoolCapacityWritesAnImageRowForEveryFile) {
   if (!std::filesystem::exists(RawFixturePath())) {
     GTEST_SKIP() << "CI RAW fixture is missing: " << RawFixturePath().string();
   }
@@ -274,7 +398,7 @@ TEST_F(ImportRawOnlyTest, ImportLargerThanImagePoolCapacityWritesAnImageRowForEv
 
 // The pool-level rule behind the large import: an Image with a pending write stays in the pool
 // past its capacity until SyncWithStorage writes it.
-TEST_F(ImportRawOnlyTest, ImagePoolKeepsUnwrittenImagesPastCapacityUntilSync) {
+TEST_F(ImportContentClassificationTest, ImagePoolKeepsUnwrittenImagesPastCapacityUntilSync) {
   constexpr uint32_t kImageCount = ImagePoolManager::kDefaultPoolCapacity + 76;
   ProjectService     project(db_path_, meta_path_);
   auto               pool = project.GetImagePoolService();
@@ -290,7 +414,7 @@ TEST_F(ImportRawOnlyTest, ImagePoolKeepsUnwrittenImagesPastCapacityUntilSync) {
   EXPECT_EQ(CountRows(project, "Image"), kImageCount);
 }
 
-TEST_F(ImportRawOnlyTest, ProjectLoadRemovesImageRowsWithoutLibraryFile) {
+TEST_F(ImportContentClassificationTest, ProjectLoadRemovesImageRowsWithoutLibraryFile) {
   {
     ProjectService          project(db_path_, meta_path_);
     SyntheticLibraryBuilder builder(project);

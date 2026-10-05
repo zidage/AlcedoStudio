@@ -4,6 +4,7 @@
 
 #include "app/thumbnail_service.hpp"
 
+#include <OpenImageIO/imageio.h>
 #include <gtest/gtest.h>
 #include <libraw/libraw.h>
 
@@ -1028,6 +1029,76 @@ TEST_F(ThumbnailServiceTests, ThumbnailRenderUsesInjectedRawMetadataForDng) {
   // paths produce valid non-empty pixels rather than bit-identical hashes.
   EXPECT_GT(thumbnail_hash, 0u);
   EXPECT_GT(HashImageBufferCpuBytes(*direct_result), 0u);
+}
+
+// A raster image renders its thumbnail through the raster decoder and DisplayToAp1
+// (raster_image_input_plan.md, Phase R4). The decoder uses the scaled JPEG decode for the
+// thumbnail decode resolution.
+TEST_F(ThumbnailServiceTests, RasterThumbnailUsesScaledJpegDecode) {
+  const auto jpeg_dir = std::filesystem::temp_directory_path() / "thumbnail_raster_jpeg";
+  std::filesystem::remove_all(jpeg_dir);
+  std::filesystem::create_directories(jpeg_dir);
+  const auto jpeg_path = jpeg_dir / "landscape.jpg";
+  {
+    constexpr int             kWidth = 2400, kHeight = 1600;
+    std::vector<std::uint8_t> pixels(static_cast<std::size_t>(kWidth) * kHeight * 3);
+    for (int y = 0; y < kHeight; ++y) {
+      for (int x = 0; x < kWidth; ++x) {
+        auto* px = &pixels[(static_cast<std::size_t>(y) * kWidth + x) * 3];
+        px[0]    = static_cast<std::uint8_t>(x * 255 / kWidth);
+        px[1]    = static_cast<std::uint8_t>(y * 255 / kHeight);
+        px[2]    = 96;
+      }
+    }
+    auto output = OIIO::ImageOutput::create(jpeg_path.string());
+    ASSERT_TRUE(output);
+    const OIIO::ImageSpec spec(kWidth, kHeight, 3, OIIO::TypeDesc::UINT8);
+    ASSERT_TRUE(output->open(jpeg_path.string(), spec));
+    ASSERT_TRUE(output->write_image(OIIO::TypeDesc::UINT8, pixels.data()));
+    ASSERT_TRUE(output->close());
+  }
+
+  ProjectService    project(db_path_, meta_path_);
+  auto              img_pool         = project.GetImagePoolService();
+  auto              import_pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  ImportServiceImpl import_service(project.GetSleeveService(), img_pool, import_pipelines);
+
+  std::shared_ptr<ImportJob> import_job = std::make_shared<ImportJob>();
+  std::promise<ImportResult> final_result;
+  auto                       final_result_future = final_result.get_future();
+  import_job->on_finished_                       = [&final_result](const ImportResult& result) {
+    final_result.set_value(result);
+  };
+  import_job = import_service.ImportToFolder({jpeg_path}, L"", {}, import_job);
+  ASSERT_EQ(final_result_future.wait_for(60s), std::future_status::ready);
+  ASSERT_EQ(final_result_future.get().imported_, 1u);
+  const auto snapshot = import_job->import_log_->Snapshot();
+  import_service.SyncImports(snapshot, L"");
+  project.GetSleeveService()->Sync();
+  img_pool->SyncWithStorage();
+
+  const auto       element_id       = snapshot.created_.front().element_id_;
+  const auto       image_id         = snapshot.created_.front().image_id_;
+  auto             pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  ThumbnailService thumbnail_service(project.GetSleeveService(), img_pool, pipeline_service);
+
+  auto             guard = GetThumbnailBlocking(thumbnail_service, element_id, image_id);
+  ASSERT_NE(guard, nullptr);
+  ASSERT_NE(guard->thumbnail_buffer_, nullptr);
+  auto* buffer = guard->thumbnail_buffer_.get();
+  if (!buffer->cpu_data_valid_ && buffer->gpu_data_valid_) {
+    buffer->SyncToCPU();
+  }
+  const auto& mat = buffer->GetCPUData();
+  ASSERT_FALSE(mat.empty());
+  EXPECT_GT(mat.cols, mat.rows) << "the landscape source keeps its orientation";
+  EXPECT_LT(mat.cols, 2400) << "a thumbnail is smaller than the source";
+  EXPECT_NE(HashMatBytes(mat), 0u);
+  guard.reset();
+  thumbnail_service.ReleaseThumbnail(element_id);
+
+  std::error_code ec;
+  std::filesystem::remove_all(jpeg_dir, ec);
 }
 
 // An analysis rendition renders the committed snapshot. It must not release the editor lease or

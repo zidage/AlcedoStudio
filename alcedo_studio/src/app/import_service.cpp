@@ -34,10 +34,17 @@ auto IsRootImportDestination(const image_path_t& dest) -> bool {
 }
 
 /// Encode the immutable history root of a newly imported image on a private default document.
-/// No executor: nothing renders the document before its root exists.
+/// A raster image gets the raster default document, which holds its color description in the
+/// Develop `input` object and has no RAW color context. No executor: nothing renders the
+/// document before its root exists.
 auto EncodeImportedImageRoot(const PipelineMgmtService& pipeline_service,
                              sl_element_id_t element_id, const std::shared_ptr<Image>& image)
     -> EncodedImageRoot {
+  if (image && image->HasRasterColorDescription()) {
+    return pipeline_service.EncodeImageRoot(
+        element_id, CreateDefaultRasterPipelineDocument(image->GetRasterColorDescription()),
+        nullptr);
+  }
   const RawRuntimeColorContext* ctx_ptr =
       image && image->HasRawColorContext() ? &image->GetRawColorContext() : nullptr;
   return pipeline_service.EncodeImageRoot(element_id, CreateDefaultPipelineDocument(), ctx_ptr);
@@ -281,7 +288,7 @@ void ImportServiceImpl::CreatePlaceholdersAndSubmit(
     auto image_ptr = image_handler_ptr->Get();
     image_ptr->image_path_ = image_path;
     image_ptr->image_name_ = file_name;
-    // TODO: Parse image type for future use
+    // MetadataExtractor sets image_type_ from the file content.
 
     // Link the image to the SleeveFile
     sleeve_file->SetImage(image_ptr);

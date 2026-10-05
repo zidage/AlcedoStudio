@@ -5,6 +5,8 @@ add_executable(MetadataExtractorTest ${ALCEDO_TEST_ROOT}/image/metadata_extracto
 target_include_directories(MetadataExtractorTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(MetadataExtractorTest PRIVATE GTest::gtest_main Image EditGraph
     OpenImageIO::OpenImageIO)
+target_compile_definitions(MetadataExtractorTest PRIVATE
+    ALCEDO_RASTER_FIXTURE_DIR="${ALCEDO_TEST_ROOT}/resources/raster")
 gtest_discover_tests(MetadataExtractorTest TEST_PREFIX "MetadataExtractorTest.")
 alcedo_register_test_target(MetadataExtractorTest image)
 

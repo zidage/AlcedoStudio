@@ -3262,6 +3262,90 @@ Original source files on disk will be kept.</source>
         <source>Lens Model</source>
         <translation type="unfinished">Lens Model</translation>
     </message>
+    <message>
+        <source>Input</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Input Color</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Input Profile</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Auto (from file)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>sRGB</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Display P3</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Adobe RGB</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Rec.2020</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>ProPhoto</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Linear Rec.709</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>embedded ICC</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>embedded ICC, converted on import</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>PNG cICP</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>PNG sRGB chunk</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>PNG gamma and chromaticities</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>EXR chromaticities</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>EXR ACES container</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>EXIF Adobe RGB tag</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>no profile, assumed</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Scene linear</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Display referred</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>EditorSaveRecoveryBar</name>

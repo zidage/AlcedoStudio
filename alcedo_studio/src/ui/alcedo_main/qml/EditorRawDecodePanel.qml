@@ -5,7 +5,9 @@ import Alcedo.Main 1.0
 
 // RAW Decode panel. Import already asked LibRaw whether the file is
 // decodable; this panel only presents controls and submits complete operator
-// parameter objects through the typed adjustment models.
+// parameter objects through the typed adjustment models. For a raster image
+// (JPEG, PNG, TIFF, OpenEXR) it hides white balance and the RAW decode
+// controls and shows the input color and the input profile menu instead.
 Item {
     id: root
     objectName: "editorAdjustmentPanel_raw"
@@ -15,6 +17,10 @@ Item {
     property bool controlsEnabled: true
     property bool restoring: false
     property var rawParams: ({})
+    // Develop `input` object of a raster document, from the "input_profile"
+    // projection. rasterInput is false for a RAW document.
+    property bool rasterInput: false
+    property var inputInfo: ({})
     property var lensBrandEntries: []
     property var lensModelEntries: []
     // Auto-recognition checkbox state. Checked = submit the detected catalog
@@ -35,6 +41,61 @@ Item {
         { value: "legacy", label: qsTr("Legacy") },
         { value: "neural_engine", label: qsTr("Neural Engine") }
     ]
+
+    // Decision D5: Auto keeps the description read from the file.
+    readonly property var inputProfileEntries: [
+        { value: "auto", label: qsTr("Auto (from file)") },
+        { value: "srgb", label: qsTr("sRGB") },
+        { value: "display_p3", label: qsTr("Display P3") },
+        { value: "adobe_rgb", label: qsTr("Adobe RGB") },
+        { value: "rec2020", label: qsTr("Rec.2020") },
+        { value: "prophoto", label: qsTr("ProPhoto") },
+        { value: "linear_rec709", label: qsTr("Linear Rec.709") }
+    ]
+
+    function inputOriginText(origin) {
+        switch (String(origin)) {
+        case "icc_matrix_shaper":
+        case "icc_cicp":
+            return qsTr("embedded ICC")
+        case "icc_lut_converted":
+            return qsTr("embedded ICC, converted on import")
+        case "png_cicp":
+            return qsTr("PNG cICP")
+        case "png_srgb_chunk":
+            return qsTr("PNG sRGB chunk")
+        case "png_gama_chrm":
+            return qsTr("PNG gamma and chromaticities")
+        case "exr_chromaticities":
+            return qsTr("EXR chromaticities")
+        case "exr_aces_container":
+            return qsTr("EXR ACES container")
+        case "exif_interop_adobe_rgb":
+            return qsTr("EXIF Adobe RGB tag")
+        default:
+            return qsTr("no profile, assumed")
+        }
+    }
+
+    // "Display P3 — embedded ICC", "sRGB — no profile, assumed".
+    function inputColorText(info) {
+        if (!info)
+            return ""
+        var name = info.profile_description ? String(info.profile_description) : ""
+        if (name.length === 0) {
+            if (info.origin === "default_srgb")
+                name = qsTr("sRGB")
+            else if (info.referral === "scene_linear")
+                name = qsTr("Scene linear")
+            else
+                name = qsTr("Display referred")
+        }
+        return name + " \u2014 " + root.inputOriginText(info.origin)
+    }
+
+    function buildInputProfileParams() {
+        return JSON.stringify({ profile_override: String(inputProfileModel.currentValue || "auto") })
+    }
 
     readonly property color colText: theme ? theme.colText : appTheme.textColor
     readonly property color colMuted: theme ? theme.colTextMuted : appTheme.textMutedColor
@@ -300,6 +361,15 @@ Item {
         if (!root.lensBrandEntries.length)
             root.refreshLensBrandEntries()
         root.loadLensSnapshot(snapshot)
+        var inputWrapper = snapshot ? snapshot["input_profile"] : undefined
+        var inputEntry = inputWrapper && inputWrapper["input"] !== undefined
+                ? inputWrapper["input"] : inputWrapper
+        root.rasterInput = Boolean(inputEntry && inputEntry.raster)
+        root.inputInfo = inputEntry ? inputEntry : ({})
+        root.setEnumValue(inputProfileModel,
+                          inputEntry && inputEntry.profile_override !== undefined
+                          ? String(inputEntry.profile_override) : "auto",
+                          inputProfileModel.defaultIndex)
         root.restoring = false
     }
 
@@ -352,14 +422,65 @@ Item {
             Label {
                 objectName: "rawDecodeTitle"
                 Layout.fillWidth: true
-                text: qsTr("RAW Decode")
+                text: root.rasterInput ? qsTr("Input") : qsTr("RAW Decode")
                 color: root.colText
                 font.pixelSize: appTheme.fontSizeTitle
                 font.weight: appTheme.fontWeightHeading
             }
 
+            CollapsibleSection {
+                id: inputColorSection
+                objectName: "editorAdjustmentGroupShell_raw_input"
+                Layout.fillWidth: true
+                visible: root.rasterInput
+                title: qsTr("Input Color")
+                expanded: true
+                controlsEnabled: root.controlsEnabled
+                surfaceColor: root.colCardSurface
+                disabledSurfaceColor: root.colCardSurface
+                borderColor: root.colCardBorder
+                textColor: root.colText
+                mutedColor: root.colMuted
+                hoverColor: root.colHover
+                accentColor: root.colAccent
+                bodyContentHeight: inputBody.implicitHeight + appTheme.spaceSm
+
+                ColumnLayout {
+                    id: inputBody
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.margins: appTheme.spaceXs
+                    spacing: appTheme.spaceSm
+
+                    Label {
+                        objectName: "rawInputColorLabel"
+                        Layout.fillWidth: true
+                        text: root.inputColorText(root.inputInfo)
+                        color: root.colText
+                        wrapMode: Text.WordWrap
+                        font.pixelSize: appTheme.fontSizeBody
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: qsTr("Input Profile")
+                        color: root.colMuted
+                        font.pixelSize: appTheme.fontSizeCaption
+                        font.weight: appTheme.fontWeightStrong
+                    }
+
+                    AdjustmentCombo {
+                        objectName: "rawInputProfileCombo"
+                        Layout.fillWidth: true
+                        model: inputProfileModel
+                    }
+                }
+            }
+
             EditorWhiteBalanceSection {
                 id: whiteBalanceSection
+                visible: !root.rasterInput
                 Layout.fillWidth: true
                 theme: root.theme
                 editorSession: root.editorSession
@@ -459,6 +580,7 @@ Item {
                 id: rawSection
                 objectName: "editorAdjustmentGroupShell_raw_decode"
                 Layout.fillWidth: true
+                visible: !root.rasterInput
                 title: qsTr("RAW Decode")
                 expanded: true
                 controlsEnabled: root.controlsEnabled
@@ -532,6 +654,18 @@ Item {
         enabled: root.controlsEnabled
         submitter: root.editorSession
         paramsBuilder: root.buildRawParams
+    }
+
+    EditorAdjustmentEnumModel {
+        id: inputProfileModel
+        objectName: "rawInputProfileModel"
+        fieldKey: "input_profile"
+        label: qsTr("Input Profile")
+        entries: root.inputProfileEntries
+        defaultIndex: 0
+        enabled: root.controlsEnabled && root.rasterInput
+        submitter: root.editorSession
+        paramsBuilder: function (value) { return root.buildInputProfileParams() }
     }
 
     EditorAdjustmentToggleModel {

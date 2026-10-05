@@ -3696,6 +3696,90 @@ Original source files on disk will be kept.</source>
         <source>Lens Model</source>
         <translation>镜头型号</translation>
     </message>
+    <message>
+        <source>Input</source>
+        <translation>输入</translation>
+    </message>
+    <message>
+        <source>Input Color</source>
+        <translation>输入色彩</translation>
+    </message>
+    <message>
+        <source>Input Profile</source>
+        <translation>输入配置文件</translation>
+    </message>
+    <message>
+        <source>Auto (from file)</source>
+        <translation>自动（来自文件）</translation>
+    </message>
+    <message>
+        <source>sRGB</source>
+        <translation>sRGB</translation>
+    </message>
+    <message>
+        <source>Display P3</source>
+        <translation>Display P3</translation>
+    </message>
+    <message>
+        <source>Adobe RGB</source>
+        <translation>Adobe RGB</translation>
+    </message>
+    <message>
+        <source>Rec.2020</source>
+        <translation>Rec.2020</translation>
+    </message>
+    <message>
+        <source>ProPhoto</source>
+        <translation>ProPhoto</translation>
+    </message>
+    <message>
+        <source>Linear Rec.709</source>
+        <translation>线性 Rec.709</translation>
+    </message>
+    <message>
+        <source>embedded ICC</source>
+        <translation>内嵌 ICC</translation>
+    </message>
+    <message>
+        <source>embedded ICC, converted on import</source>
+        <translation>内嵌 ICC，导入时转换</translation>
+    </message>
+    <message>
+        <source>PNG cICP</source>
+        <translation>PNG cICP</translation>
+    </message>
+    <message>
+        <source>PNG sRGB chunk</source>
+        <translation>PNG sRGB 块</translation>
+    </message>
+    <message>
+        <source>PNG gamma and chromaticities</source>
+        <translation>PNG 伽马与色度</translation>
+    </message>
+    <message>
+        <source>EXR chromaticities</source>
+        <translation>EXR 色度</translation>
+    </message>
+    <message>
+        <source>EXR ACES container</source>
+        <translation>EXR ACES 容器</translation>
+    </message>
+    <message>
+        <source>EXIF Adobe RGB tag</source>
+        <translation>EXIF Adobe RGB 标记</translation>
+    </message>
+    <message>
+        <source>no profile, assumed</source>
+        <translation>无配置文件，按默认</translation>
+    </message>
+    <message>
+        <source>Scene linear</source>
+        <translation>场景线性</translation>
+    </message>
+    <message>
+        <source>Display referred</source>
+        <translation>显示参考</translation>
+    </message>
 </context>
 <context>
     <name>EditorSaveRecoveryBar</name>

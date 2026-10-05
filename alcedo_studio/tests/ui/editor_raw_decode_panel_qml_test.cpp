@@ -45,10 +45,10 @@ class RawDecodeSession final : public QObject, public IEditorAdjustmentSubmitter
 
  public:
   struct Call {
-    QString field_key;
-    QString params_json;
-    bool    settled = false;
-    alcedo::EditorParameterWrite write = alcedo::EditorScalarWrite{};
+    QString                      field_key;
+    QString                      params_json;
+    bool                         settled = false;
+    alcedo::EditorParameterWrite write   = alcedo::EditorScalarWrite{};
   };
 
   explicit RawDecodeSession(QVariantMap snapshot, QObject* parent = nullptr)
@@ -66,15 +66,14 @@ class RawDecodeSession final : public QObject, public IEditorAdjustmentSubmitter
   }
   [[nodiscard]] auto canEdit() const -> bool override { return true; }
 
-  auto submitWrite(QString fieldKey, alcedo::EditorParameterWrite write, bool settled)
+  auto               submitWrite(QString fieldKey, alcedo::EditorParameterWrite write, bool settled)
       -> bool override {
     calls.push_back({fieldKey, QString(), settled, write});
     if (settled) {
       if (const auto* raw = std::get_if<alcedo::DevelopRawDecodeUpdate>(&write)) {
         QVariantMap raw_map;
         if (raw->demosaic_method.has_value()) {
-          raw_map.insert(QStringLiteral("method"),
-                         QString::fromStdString(*raw->demosaic_method));
+          raw_map.insert(QStringLiteral("method"), QString::fromStdString(*raw->demosaic_method));
         }
         if (raw->highlights_reconstruct.has_value()) {
           raw_map.insert(QStringLiteral("highlights_reconstruct"), *raw->highlights_reconstruct);
@@ -95,7 +94,7 @@ class RawDecodeSession final : public QObject, public IEditorAdjustmentSubmitter
     return true;
   }
 
-  bool               submitPatch(QString fieldKey, QString paramsJson, bool settled) override {
+  bool submitPatch(QString fieldKey, QString paramsJson, bool settled) override {
     nlohmann::json parsed;
     try {
       parsed = paramsJson.isEmpty() ? nlohmann::json::object()
@@ -252,9 +251,9 @@ auto ScrollItemIntoView(AdjustmentStackHarness& harness, QQuickItem* item) -> bo
   if (flick == nullptr || item == nullptr) {
     return false;
   }
-  const QPointF view_pos   = item->mapToItem(flick, QPointF(0, 0));
-  const qreal   bottom     = view_pos.y() + item->height();
-  qreal         content_y  = flick->property("contentY").toReal();
+  const QPointF view_pos  = item->mapToItem(flick, QPointF(0, 0));
+  const qreal   bottom    = view_pos.y() + item->height();
+  qreal         content_y = flick->property("contentY").toReal();
   if (view_pos.y() < 0) {
     content_y += view_pos.y() - 8;
   } else if (bottom > flick->height()) {
@@ -359,8 +358,8 @@ TEST(EditorRawDecodePanelQmlTest, UserChangesSubmitCompleteRawOperatorParams) {
 
 TEST(EditorRawDecodePanelQmlTest,
      SnapshotReplayVersionReconstructionImageSwitchAndReopenAreLoadOnly) {
-  const auto image_a = Snapshot(QStringLiteral("legacy"), false);
-  const auto image_b = Snapshot(QStringLiteral("default"), true);
+  const auto             image_a = Snapshot(QStringLiteral("legacy"), false);
+  const auto             image_b = Snapshot(QStringLiteral("default"), true);
   RawDecodeSession       session(image_a);
   AdjustmentStackHarness harness(&session);
 
@@ -409,8 +408,7 @@ TEST(EditorRawDecodePanelQmlTest, EnablingLensCalibrationSubmitsEnabledUpdate) {
   ASSERT_NE(enabled, nullptr);
   ASSERT_TRUE(QMetaObject::invokeMethod(enabled, "toggle"));
   ASSERT_EQ(session.calls.size(), 1u);
-  const auto* lens =
-      std::get_if<alcedo::DevelopLensCalibrationUpdate>(&session.calls.back().write);
+  const auto* lens = std::get_if<alcedo::DevelopLensCalibrationUpdate>(&session.calls.back().write);
   ASSERT_NE(lens, nullptr);
   ASSERT_TRUE(lens->lens_enabled.has_value());
   EXPECT_TRUE(*lens->lens_enabled);
@@ -435,8 +433,7 @@ TEST(EditorRawDecodePanelQmlTest, LensSelectionKeepsLegacyDefaultsAndIsAvailable
 
   ASSERT_TRUE(QMetaObject::invokeMethod(brand, "selectIndex", Q_ARG(int, 1)));
   ASSERT_EQ(session.calls.size(), 1u);
-  const auto* lens =
-      std::get_if<alcedo::DevelopLensCalibrationUpdate>(&session.calls.back().write);
+  const auto* lens = std::get_if<alcedo::DevelopLensCalibrationUpdate>(&session.calls.back().write);
   ASSERT_NE(lens, nullptr);
   EXPECT_TRUE(lens->apply_distortion.has_value());
   EXPECT_TRUE(lens->lens_profile_db_path.has_value());
@@ -473,6 +470,61 @@ TEST(EditorRawDecodePanelQmlTest, LensSnapshotRestoresMakerModelWithoutSubmittin
   EXPECT_EQ(brand->property("currentValue").toString(), QStringLiteral("Unknown Maker"));
   EXPECT_EQ(model->property("currentValue").toString(), QStringLiteral("Unknown Model"));
   EXPECT_TRUE(session.calls.empty());
+}
+
+auto RasterSnapshot(const QString& profile_override) -> QVariantMap {
+  QVariantMap input;
+  input.insert(QStringLiteral("raster"), true);
+  input.insert(QStringLiteral("profile_override"), profile_override);
+  input.insert(QStringLiteral("profile_description"), QStringLiteral("Display P3"));
+  input.insert(QStringLiteral("origin"), QStringLiteral("icc_matrix_shaper"));
+  input.insert(QStringLiteral("referral"), QStringLiteral("display_referred"));
+  auto snapshot = Snapshot(QStringLiteral("default"), true);
+  snapshot.insert(QStringLiteral("input_profile"), QVariantMap{{QStringLiteral("input"), input}});
+  return snapshot;
+}
+
+// Raster input (raster_image_input_plan.md, section 6.6): the panel hides white balance and the
+// RAW decode controls, shows the input color, and writes the input profile through history.
+TEST(EditorRawDecodePanelQmlTest, RasterImageShowsInputColorAndSubmitsInputProfile) {
+  RawDecodeSession       session(RasterSnapshot(QStringLiteral("auto")));
+  AdjustmentStackHarness harness(&session);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+
+  auto* input_section =
+      harness.findObject<QQuickItem>(QStringLiteral("editorAdjustmentGroupShell_raw_input"));
+  auto* raw_section =
+      harness.findObject<QQuickItem>(QStringLiteral("editorAdjustmentGroupShell_raw_decode"));
+  auto* white_balance = harness.findObject<QQuickItem>(QStringLiteral("editorWhiteBalanceSection"));
+  auto* color_label   = harness.findObject<QQuickItem>(QStringLiteral("rawInputColorLabel"));
+  auto* profile_model = harness.findObject<QObject>(QStringLiteral("rawInputProfileModel"));
+  ASSERT_NE(input_section, nullptr);
+  ASSERT_NE(raw_section, nullptr);
+  ASSERT_NE(white_balance, nullptr);
+  ASSERT_NE(color_label, nullptr);
+  ASSERT_NE(profile_model, nullptr);
+  EXPECT_TRUE(input_section->isVisible());
+  EXPECT_FALSE(raw_section->isVisible());
+  EXPECT_FALSE(white_balance->isVisible());
+  EXPECT_TRUE(color_label->property("text").toString().startsWith(QStringLiteral("Display P3")));
+  EXPECT_EQ(profile_model->property("currentValue").toString(), QStringLiteral("auto"));
+  EXPECT_TRUE(session.calls.empty());
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(profile_model, "selectIndex", Q_ARG(int, 3)));
+  ProcessEvents(80);
+  ASSERT_FALSE(session.calls.empty());
+  EXPECT_EQ(session.calls.back().field_key, QStringLiteral("input_profile"));
+  EXPECT_TRUE(session.calls.back().settled);
+  const auto* update = std::get_if<alcedo::DevelopInputProfileUpdate>(&session.calls.back().write);
+  ASSERT_NE(update, nullptr);
+  EXPECT_EQ(update->profile_override, "adobe_rgb");
+
+  // Switching to a RAW image brings the RAW controls back.
+  session.SwitchImage(Snapshot(QStringLiteral("default"), true));
+  ProcessEvents(80);
+  EXPECT_FALSE(input_section->isVisible());
+  EXPECT_TRUE(raw_section->isVisible());
+  EXPECT_TRUE(white_balance->isVisible());
 }
 
 }  // namespace alcedo::ui::test

@@ -1115,6 +1115,86 @@ OpenCL test skips itself because its 100-megapixel fixtures are not present).
   `ImportContentClassificationTest`), `MetadataExtractorTest`, `ThumbnailServiceTest` (run
   directly) and `ExportServiceTest`, plus the compatibility tests.
 
+#### R4 completion record
+
+**Status:** complete on Windows (CUDA). The editor panel is checked with the QML panel test
+(offscreen); see the note under Tests.
+
+**Implemented:**
+
+- `MetadataExtractor::ExtractEXIF_ToImage` classifies the content first. A raster file (JPEG,
+  PNG, TIFF without camera data, OpenEXR) gets display metadata from Exiv2 (EXR: header
+  attributes), the dimensions of the oriented image from the decoder header, `Image.type`, the
+  HDR flag and its source color description. Other content goes to the RAW path as before. CMYK
+  is `UNSUPPORTED_FORMAT`; an unreadable header or container is `METADATA_EXTRACTION_FAILED`.
+- `ImageType::EXR` (9), and the `Image.metadata` key `"RasterColorDescription"`. The key is
+  written only for raster images, read back by `JsonToExif`, and erased by
+  `ExifDisplayToJson`.
+- Import encodes a raster root with `CreateDefaultRasterPipelineDocument` and
+  `raw_color_context = null`.
+- HDR: PQ or HLG source transfer, or OpenEXR, sets `IsHDR`, in addition to the existing gain-map
+  and Rec.2100 markers.
+- Thumbnails decode through `LoadEncodedImage`, so a raster thumbnail uses the scaled JPEG
+  decode.
+- Editor (section 6.6): the panel field `input_profile` projects the Develop `input` object. The
+  RAW Decode panel hides white balance and the RAW decode controls for a raster image and shows
+  the input color ("Display P3 — embedded ICC") and the input profile menu, which writes
+  `input_profile` through history. The new texts are in both `.ts` files, edited by hand.
+- The `ImportRawOnlyTest` target is now `ImportContentClassificationTest`, with its RAW-only
+  cases rewritten for content classification.
+- `Image` links the zlib of the bundled gRPC when that target exists. The zlib that R1 added
+  conflicted with it in every target that links gRPC and `Image` (LNK2005). The fix is on the
+  R1 branch and merged forward.
+
+**Deviations from the plan:**
+
+- Ratings come from EXIF, not XMP. The vcpkg Exiv2 build has no XMP toolkit
+  (`EXV_HAVE_XMP_TOOLKIT` is not defined), so `Xmp.xmp.Rating` cannot be read for RAW or raster
+  files. The test is `ImportedJpegStoresDescriptionInDevelopInputAndRatingFromExif`. Enabling the
+  Exiv2 `xmp` feature is a separate change.
+- `RasterThumbnailUsesScaledJpegDecode` checks that a 2400 x 1600 JPEG thumbnail renders through
+  the raster decoder and keeps its orientation. The scaled decode itself is checked by the R3
+  test `JpegDecodesAtNativeDepthAndScalesWithDecodeRes`; the thumbnail service has no hook that
+  shows the decode extent.
+- The test `MixedFolderImportsRawAndSelectedRasterTypesAndLeavesNoOrphanImageRows` is
+  `MixedFolderImportsRawAndRasterFilesAndLeavesNoOrphanImageRows` in R4, because the type
+  selection arrives in R5.
+- The compatibility fixture of section 7.4 is `tests/resources/compat/raw_project_abdb000c8.alcd`
+  with `raw_project_abdb000c8.json`. A temporary generator test, built and run at `abdb000c8` and
+  not committed, imported the CI RAW `_DSC0135.ARW`, committed one exposure edit, packed the
+  project and recorded the committed document and the render hash
+  (`support/project_compat_render.hpp`, 512 px, CUDA, NVIDIA GeForce RTX 3080 Laptop GPU). The
+  test rewrites the stored RAW path to this checkout before it opens the project.
+
+**Tests:**
+
+| Test | Target | Result |
+| --- | --- | --- |
+| `RasterFilesImportByContentWhateverTheExtension` | `MetadataExtractorTest` | PASS |
+| `RasterJpegKeepsIccDescriptionAndReadsRatingFromExif` | `MetadataExtractorTest` | PASS |
+| `ExrIsSceneLinearAndHdr`, `PqPngIsHdrAndSrgbPngIsNot` | `MetadataExtractorTest` | PASS |
+| `OrientationSixSwapsDisplayDimensions`, `CmykJpegIsUnsupportedFormat` | `MetadataExtractorTest` | PASS |
+| `ImageRowsWithoutRasterKeyLoadAsRaw`, `RasterKeyIsOmittedFromRawImageMetadataJson` | `MetadataExtractorTest` | PASS |
+| `MixedFolderImportsRawAndRasterFilesAndLeavesNoOrphanImageRows` | `ImportContentClassificationTest` | PASS |
+| `ImportDecidesKindByContentNotByFileExtension` | `ImportContentClassificationTest` | PASS |
+| `ImportedJpegStoresDescriptionInDevelopInputAndRatingFromExif` | `ImportContentClassificationTest` | PASS |
+| `ImportedExrIsSceneLinearAndHdr`, `CmykJpegIsUnsupportedAndLeavesNoImageRow` | `ImportContentClassificationTest` | PASS |
+| `ReexportedRasterUsesExportProfileNotSourceIcc` | `ExportServiceTest` | PASS |
+| `RasterThumbnailUsesScaledJpegDecode` | `ThumbnailServiceTest` (run directly, filtered) | PASS |
+| `InputProfileProjectsRasterDescriptionAndRawDocumentsAreNotRaster` | `EditorPanelProjectionTest` | PASS |
+| `RasterImageShowsInputColorAndSubmitsInputProfile` | `EditorRawDecodePanelQmlTest` | PASS |
+| `ProjectWrittenByCurrentMainOpensAndRendersUnchanged` | `ProjectCompatibilityTest` | PASS |
+
+The test set `MetadataExtractorTest`, `ImportContentClassificationTest`, `ImportServiceTest`,
+`ExportServiceTest`, `EditorPanelProjectionTest`, `EditorRawDecodePanelQmlTest`,
+`PipelineMapperTest`, `EditorAdjustmentContextTest`, `GpuDagCudaRasterDevelopTest` and
+`ProjectCompatibilityTest` passed 105 of 105 with `ctest -j 1`. `alcedo_main` builds.
+`EditorRawDecodePanelQmlTest` runs the production panel offscreen; the panel was not checked by
+hand in the application.
+`ThumbnailServiceTest` was run directly with a filter (`RasterThumbnailUsesScaledJpegDecode`
+and `ThumbnailRenderUsesInjectedRawMetadataForDng`, 2 of 2). The full run, which includes the
+long fuzz tests, was stopped before it finished.
+
 ### Phase R5 — Folder import file-type selection
 
 - Work:

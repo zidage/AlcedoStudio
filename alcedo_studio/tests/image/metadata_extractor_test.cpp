@@ -2,11 +2,14 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
+#include "image/metadata_extractor.hpp"
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <exiv2/exiv2.hpp>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -16,12 +19,16 @@
 #include "edit/graph/develop_node_model.hpp"
 #include "image/dng_camera_matrix.hpp"
 #include "image/image.hpp"
-#include "image/metadata_extractor.hpp"
+#include "image/raster_color_description.hpp"
 #include "support/non_raw_import_files.hpp"
 #include "utils/import/import_error_code.hpp"
 
 namespace alcedo {
 namespace {
+
+auto RasterFixturePath(const char* name) -> std::filesystem::path {
+  return std::filesystem::path(ALCEDO_RASTER_FIXTURE_DIR) / name;
+}
 
 auto BadDngSamplePath() -> std::filesystem::path {
   return std::filesystem::path(TEST_IMG_PATH) / "raw" / "bad_dng" / "bad_color_dng.dng";
@@ -375,39 +382,144 @@ TEST(MetadataExtractorTest, XmpSidecarIsRejectedAsUnsupportedImportFormat) {
   std::filesystem::remove_all(dir, ec);
 }
 
-// Decision D2a: import accepts a file only when LibRaw (or the DNG fast path) opens it.
-// Rasters that Exiv2 and OpenImageIO read are rejected, whatever their extension says.
-TEST(MetadataExtractorTest, NonRawRastersAreRejectedAsUnsupportedRawWhateverTheExtension) {
-  const auto dir = std::filesystem::temp_directory_path() / "alcedo_metadata_non_raw_reject";
+// Import decides RAW or raster from the content (raster_image_input_plan.md, section 8):
+// rasters import whatever their extension says, with a color description and no RAW context.
+TEST(MetadataExtractorTest, RasterFilesImportByContentWhateverTheExtension) {
+  const auto dir = std::filesystem::temp_directory_path() / "alcedo_metadata_raster_import";
   std::filesystem::remove_all(dir);
   std::filesystem::create_directories(dir);
 
   struct RasterCase {
     std::string file_name_;
     std::string encoded_as_;
+    ImageType   type_;
   };
-  const std::vector<RasterCase> cases = {{"photo.jpg", ".jpg"},
-                                         {"scan.tif", ".tif"},
-                                         {"renamed_jpeg.nef", ".jpg"},
-                                         {"renamed_jpeg.dng", ".jpg"},
-                                         {"renamed_tiff.dng", ".tif"}};
+  const std::vector<RasterCase> cases = {{"photo.jpg", ".jpg", ImageType::JPEG},
+                                         {"scan.tif", ".tif", ImageType::TIFF},
+                                         {"graphic.png", ".png", ImageType::PNG},
+                                         {"renamed_jpeg.nef", ".jpg", ImageType::JPEG},
+                                         {"renamed_tiff.dng", ".tif", ImageType::TIFF}};
   for (const auto& raster : cases) {
     const auto path = dir / raster.file_name_;
     test_support::WriteRgbRaster(path, raster.encoded_as_);
     Image image(7, path, ImageType::DEFAULT);
-    try {
-      MetadataExtractor::ExtractEXIF_ToImage(path, image);
-      ADD_FAILURE() << "Expected MetadataExtractionError for " << raster.file_name_;
-    } catch (const MetadataExtractionError& e) {
-      EXPECT_EQ(e.code(), ImportErrorCode::UNSUPPORTED_FORMAT) << raster.file_name_;
-      EXPECT_NE(e.message().find("not a supported RAW file"), std::string::npos)
-          << raster.file_name_ << ": " << e.message();
-    }
+    ASSERT_NO_THROW(MetadataExtractor::ExtractEXIF_ToImage(path, image)) << raster.file_name_;
+    EXPECT_EQ(image.image_type_, raster.type_) << raster.file_name_;
     EXPECT_FALSE(image.HasRawColorContext()) << raster.file_name_;
+    ASSERT_TRUE(image.HasRasterColorDescription()) << raster.file_name_;
+    EXPECT_EQ(image.GetRasterColorDescription().origin_, RasterColorOrigin::DefaultSrgb)
+        << raster.file_name_;
+    const auto display = image.ExifDisplayToJson();
+    EXPECT_EQ(display.value("ImageWidth", 0u), 32u) << raster.file_name_;
+    EXPECT_EQ(display.value("ImageHeight", 0u), 24u) << raster.file_name_;
   }
 
   std::error_code ec;
   std::filesystem::remove_all(dir, ec);
+}
+
+// The vcpkg Exiv2 build has no XMP toolkit, so the rating comes from EXIF for RAW and raster
+// files alike.
+TEST(MetadataExtractorTest, RasterJpegKeepsIccDescriptionAndReadsRatingFromExif) {
+  const auto dir = std::filesystem::temp_directory_path() / "alcedo_metadata_raster_rating";
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+  const auto path = dir / "display_p3.jpg";
+  std::filesystem::copy_file(RasterFixturePath("display_p3_icc_8bit.jpg"), path);
+  {
+    auto exiv = Exiv2::ImageFactory::open(path.string());
+    exiv->readMetadata();
+    exiv->exifData()["Exif.Image.Rating"] = static_cast<uint16_t>(4);
+    exiv->writeMetadata();
+  }
+
+  Image image(8, path, ImageType::DEFAULT);
+  MetadataExtractor::ExtractEXIF_ToImage(path, image);
+  EXPECT_EQ(image.image_type_, ImageType::JPEG);
+  ASSERT_TRUE(image.HasRasterColorDescription());
+  EXPECT_EQ(image.GetRasterColorDescription().origin_, RasterColorOrigin::IccMatrixShaper);
+  EXPECT_NEAR(image.GetRasterColorDescription().primaries_xy_[0], kRasterPrimariesDisplayP3[0],
+              2e-3f);
+  EXPECT_EQ(image.ExifDisplayToJson().value("Rating", 0), 4);
+  EXPECT_FALSE(image.ExifDisplayToJson().value("IsHDR", false));
+
+  std::error_code ec;
+  std::filesystem::remove_all(dir, ec);
+}
+
+TEST(MetadataExtractorTest, ExrIsSceneLinearAndHdr) {
+  const auto path = RasterFixturePath("chromaticities_p3_half.exr");
+  Image      image(9, path, ImageType::DEFAULT);
+  MetadataExtractor::ExtractEXIF_ToImage(path, image);
+  EXPECT_EQ(image.image_type_, ImageType::EXR);
+  ASSERT_TRUE(image.HasRasterColorDescription());
+  EXPECT_EQ(image.GetRasterColorDescription().referral_, RasterReferral::SceneLinear);
+  EXPECT_TRUE(image.ExifDisplayToJson().value("IsHDR", false));
+}
+
+TEST(MetadataExtractorTest, PqPngIsHdrAndSrgbPngIsNot) {
+  const auto pq_path = RasterFixturePath("cicp_rec2020_pq_16bit.png");
+  Image      pq(10, pq_path, ImageType::DEFAULT);
+  MetadataExtractor::ExtractEXIF_ToImage(pq_path, pq);
+  EXPECT_TRUE(pq.ExifDisplayToJson().value("IsHDR", false));
+
+  const auto srgb_path = RasterFixturePath("srgb_chunk.png");
+  Image      srgb(11, srgb_path, ImageType::DEFAULT);
+  MetadataExtractor::ExtractEXIF_ToImage(srgb_path, srgb);
+  EXPECT_EQ(srgb.image_type_, ImageType::PNG);
+  EXPECT_FALSE(srgb.ExifDisplayToJson().value("IsHDR", false));
+}
+
+TEST(MetadataExtractorTest, OrientationSixSwapsDisplayDimensions) {
+  const auto path = RasterFixturePath("srgb_orientation6_8bit.jpg");
+  Image      image(12, path, ImageType::DEFAULT);
+  MetadataExtractor::ExtractEXIF_ToImage(path, image);
+  const auto display = image.ExifDisplayToJson();
+  EXPECT_LT(display.value("ImageWidth", 0u), display.value("ImageHeight", 0u))
+      << "the fixture is stored landscape and displays portrait";
+}
+
+TEST(MetadataExtractorTest, CmykJpegIsUnsupportedFormat) {
+  const auto path = RasterFixturePath("cmyk_icc.jpg");
+  Image      image(13, path, ImageType::DEFAULT);
+  try {
+    MetadataExtractor::ExtractEXIF_ToImage(path, image);
+    FAIL() << "Expected MetadataExtractionError for a CMYK JPEG";
+  } catch (const MetadataExtractionError& e) {
+    EXPECT_EQ(e.code(), ImportErrorCode::UNSUPPORTED_FORMAT);
+  }
+  EXPECT_FALSE(image.HasRasterColorDescription());
+}
+
+// Section 7.4: rows written before this change, and RAW rows written after it, carry no raster
+// key. The key round-trips for raster rows and is not part of the display JSON.
+TEST(MetadataExtractorTest, ImageRowsWithoutRasterKeyLoadAsRaw) {
+  Image image(14, std::filesystem::path("legacy.ARW"), ImageType::DEFAULT);
+  image.JsonToExif(R"({"Make":"Sony","Model":"ILCE-7CM2","ImageWidth":7008,"ImageHeight":4672})");
+  EXPECT_FALSE(image.HasRasterColorDescription());
+  EXPECT_EQ(image.image_type_, ImageType::DEFAULT);
+}
+
+TEST(MetadataExtractorTest, RasterKeyIsOmittedFromRawImageMetadataJson) {
+  Image raw(15, std::filesystem::path("camera.ARW"), ImageType::DEFAULT);
+  raw.SetRawColorContext(RawRuntimeColorContext{});
+  const auto raw_json = nlohmann::json::parse(raw.ExifToJson());
+  EXPECT_FALSE(raw_json.contains("RasterColorDescription"));
+
+  const auto path = RasterFixturePath("display_p3_icc_8bit.jpg");
+  Image      raster(16, path, ImageType::DEFAULT);
+  MetadataExtractor::ExtractEXIF_ToImage(path, raster);
+  const auto raster_json = nlohmann::json::parse(raster.ExifToJson());
+  ASSERT_TRUE(raster_json.contains("RasterColorDescription"));
+  EXPECT_FALSE(raster_json.contains("RawRuntimeColorContext"));
+  EXPECT_FALSE(raster.ExifDisplayToJson().contains("RasterColorDescription"));
+
+  Image reloaded(16, path, ImageType::JPEG);
+  reloaded.JsonToExif(raster.ExifToJson());
+  ASSERT_TRUE(reloaded.HasRasterColorDescription());
+  EXPECT_EQ(RasterColorDescriptionToJson(reloaded.GetRasterColorDescription()),
+            RasterColorDescriptionToJson(raster.GetRasterColorDescription()));
+  EXPECT_FALSE(reloaded.ExifDisplayToJson().contains("RasterColorDescription"));
 }
 
 }  // namespace
