@@ -1032,33 +1032,37 @@ TEST_F(ThumbnailServiceTests, ThumbnailRenderUsesInjectedRawMetadataForDng) {
 }
 
 // A raster image renders its thumbnail through the raster decoder and DisplayToAp1
-// (raster_image_input_plan.md, Phase R4). The decoder uses the scaled JPEG decode for the
-// thumbnail decode resolution.
-TEST_F(ThumbnailServiceTests, RasterThumbnailUsesScaledJpegDecode) {
-  const auto jpeg_dir = std::filesystem::temp_directory_path() / "thumbnail_raster_jpeg";
-  std::filesystem::remove_all(jpeg_dir);
-  std::filesystem::create_directories(jpeg_dir);
-  const auto jpeg_path = jpeg_dir / "landscape.jpg";
+// (raster_image_input_plan.md, Phase R4). A 2400 x 1600 landscape @p file_name, written by
+// OpenImageIO in @p file_format, is imported and must give a smaller landscape thumbnail.
+namespace {
+void ExpectRasterThumbnailRenders(const std::filesystem::path& db_path,
+                                  const std::filesystem::path& meta_path,
+                                  const std::string& file_name, OIIO::TypeDesc file_format) {
+  const auto raster_dir =
+      std::filesystem::temp_directory_path() / ("thumbnail_raster_" + file_name);
+  std::filesystem::remove_all(raster_dir);
+  std::filesystem::create_directories(raster_dir);
+  const auto raster_path = raster_dir / file_name;
   {
-    constexpr int             kWidth = 2400, kHeight = 1600;
-    std::vector<std::uint8_t> pixels(static_cast<std::size_t>(kWidth) * kHeight * 3);
+    constexpr int              kWidth = 2400, kHeight = 1600;
+    std::vector<std::uint16_t> pixels(static_cast<std::size_t>(kWidth) * kHeight * 3);
     for (int y = 0; y < kHeight; ++y) {
       for (int x = 0; x < kWidth; ++x) {
         auto* px = &pixels[(static_cast<std::size_t>(y) * kWidth + x) * 3];
-        px[0]    = static_cast<std::uint8_t>(x * 255 / kWidth);
-        px[1]    = static_cast<std::uint8_t>(y * 255 / kHeight);
-        px[2]    = 96;
+        px[0]    = static_cast<std::uint16_t>(x * 65535 / kWidth);
+        px[1]    = static_cast<std::uint16_t>(y * 65535 / kHeight);
+        px[2]    = 24672;
       }
     }
-    auto output = OIIO::ImageOutput::create(jpeg_path.string());
+    auto output = OIIO::ImageOutput::create(raster_path.string());
     ASSERT_TRUE(output);
-    const OIIO::ImageSpec spec(kWidth, kHeight, 3, OIIO::TypeDesc::UINT8);
-    ASSERT_TRUE(output->open(jpeg_path.string(), spec));
-    ASSERT_TRUE(output->write_image(OIIO::TypeDesc::UINT8, pixels.data()));
+    const OIIO::ImageSpec spec(kWidth, kHeight, 3, file_format);
+    ASSERT_TRUE(output->open(raster_path.string(), spec));
+    ASSERT_TRUE(output->write_image(OIIO::TypeDesc::UINT16, pixels.data()));
     ASSERT_TRUE(output->close());
   }
 
-  ProjectService    project(db_path_, meta_path_);
+  ProjectService    project(db_path, meta_path);
   auto              img_pool         = project.GetImagePoolService();
   auto              import_pipelines = std::make_shared<PipelineMgmtService>(project.GetStorage());
   ImportServiceImpl import_service(project.GetSleeveService(), img_pool, import_pipelines);
@@ -1069,7 +1073,7 @@ TEST_F(ThumbnailServiceTests, RasterThumbnailUsesScaledJpegDecode) {
   import_job->on_finished_                       = [&final_result](const ImportResult& result) {
     final_result.set_value(result);
   };
-  import_job = import_service.ImportToFolder({jpeg_path}, L"", {}, import_job);
+  import_job = import_service.ImportToFolder({raster_path}, L"", {}, import_job);
   ASSERT_EQ(final_result_future.wait_for(60s), std::future_status::ready);
   ASSERT_EQ(final_result_future.get().imported_, 1u);
   const auto snapshot = import_job->import_log_->Snapshot();
@@ -1098,7 +1102,19 @@ TEST_F(ThumbnailServiceTests, RasterThumbnailUsesScaledJpegDecode) {
   thumbnail_service.ReleaseThumbnail(element_id);
 
   std::error_code ec;
-  std::filesystem::remove_all(jpeg_dir, ec);
+  std::filesystem::remove_all(raster_dir, ec);
+}
+}  // namespace
+
+// The decoder uses the scaled JPEG decode for the thumbnail decode resolution.
+TEST_F(ThumbnailServiceTests, RasterThumbnailUsesScaledJpegDecode) {
+  ExpectRasterThumbnailRenders(db_path_, meta_path_, "landscape.jpg", OIIO::TypeDesc::UINT8);
+}
+
+// TIFF decodes at full size at every decode resolution; the renderer must accept the full-size
+// prepared input for the reduced thumbnail decode resolution and scale it on the device.
+TEST_F(ThumbnailServiceTests, RasterTiffThumbnailRendersFromTheFullSizeDecode) {
+  ExpectRasterThumbnailRenders(db_path_, meta_path_, "landscape.tif", OIIO::TypeDesc::UINT16);
 }
 
 // An analysis rendition renders the committed snapshot. It must not release the editor lease or
