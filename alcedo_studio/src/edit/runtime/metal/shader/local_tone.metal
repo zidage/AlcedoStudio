@@ -5,6 +5,7 @@
 #include <metal_stdlib>
 
 using namespace metal;
+#include "../../../../include/color/color_encoding_math.h"
 
 struct ExtractParams {
   int input_width;
@@ -73,44 +74,14 @@ struct ApplyParams {
   float render_to_uv[12];
 };
 
-static inline float AcesccEncode(float value) {
-  constexpr float kA          = 9.72f;
-  constexpr float kB          = 17.52f;
-  constexpr float kOffset     = 0.0000152587890625f;
-  constexpr float kTransition = 0.000030517578125f;
-  constexpr float kFloor      = (-16.0f + kA) / kB;
-  if (value < 0.0f) {
-    return kFloor + value;
-  }
-  if (value < kTransition) {
-    return (log2(kOffset + value * 0.5f) + kA) / kB;
-  }
-  return (log2(value) + kA) / kB;
-}
-
-static inline float AcesccDecode(float value) {
-  constexpr float kA         = 9.72f;
-  constexpr float kB         = 17.52f;
-  constexpr float kOffset    = 0.0000152587890625f;
-  constexpr float kFloor     = (-16.0f + kA) / kB;
-  constexpr float kThreshold = (-15.0f + kA) / kB;
-  if (value < kFloor) {
-    return value - kFloor;
-  }
-  if (value <= kThreshold) {
-    return (exp2(value * kB - kA) - kOffset) * 2.0f;
-  }
-  return exp2(value * kB - kA);
-}
-
 static inline float Ap1Intensity(float4 pixel) {
   return 0.272229f * pixel.x + 0.674082f * pixel.y + 0.053689f * pixel.z;
 }
 
 static inline float LogIntensity(float4 acescc) {
   const float4 linear =
-      float4(AcesccDecode(acescc.x), AcesccDecode(acescc.y), AcesccDecode(acescc.z), acescc.w);
-  return AcesccEncode(max(Ap1Intensity(linear), 1.0e-6f));
+      float4(CeAcesccDecode(acescc.x), CeAcesccDecode(acescc.y), CeAcesccDecode(acescc.z), acescc.w);
+  return CeAcesccEncode(max(Ap1Intensity(linear), 1.0e-6f));
 }
 
 static inline float4 ReadRgbaBilinear(texture2d<float, access::read> input, int width, int height,
@@ -319,12 +290,12 @@ kernel void local_tone_apply(texture2d<float, access::read> src [[texture(0)]],
   const float adjusted_l = Bilinear(adjusted, params.adjusted_width, params.adjusted_height, ax, ay);
   const float4 pixel     = src.read(gid);
   const float  source_l  = LogIntensity(pixel);
-  const float  source_intensity = max(AcesccDecode(source_l), 1.0e-5f);
-  const float  target_intensity = AcesccDecode(source_l + adjusted_l - reference_l);
+  const float  source_intensity = max(CeAcesccDecode(source_l), 1.0e-5f);
+  const float  target_intensity = CeAcesccDecode(source_l + adjusted_l - reference_l);
   const float  ratio            = min(max(target_intensity / source_intensity, 0.0f), 32.0f);
-  float        r                = AcesccDecode(pixel.x) * ratio;
-  float        g                = AcesccDecode(pixel.y) * ratio;
-  float        b                = AcesccDecode(pixel.z) * ratio;
+  float        r                = CeAcesccDecode(pixel.x) * ratio;
+  float        g                = CeAcesccDecode(pixel.y) * ratio;
+  float        b                = CeAcesccDecode(pixel.z) * ratio;
   constexpr float kLower        = -1.0e-5f;
   float           gamut_scale   = 1.0f;
   if (r < kLower && target_intensity > r) {
@@ -340,7 +311,7 @@ kernel void local_tone_apply(texture2d<float, access::read> src [[texture(0)]],
   r           = target_intensity + (r - target_intensity) * gamut_scale;
   g           = target_intensity + (g - target_intensity) * gamut_scale;
   b           = target_intensity + (b - target_intensity) * gamut_scale;
-  float4 tone = float4(AcesccEncode(r), AcesccEncode(g), AcesccEncode(b), pixel.w);
+  float4 tone = float4(CeAcesccEncode(r), CeAcesccEncode(g), CeAcesccEncode(b), pixel.w);
   if (apply_mix != 0u) {
     const float4 original = mix_source.read(gid);
     float mix = grade_mix;

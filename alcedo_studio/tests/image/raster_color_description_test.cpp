@@ -92,7 +92,7 @@ TEST(RasterColorDescriptionTest, IccMatrixShaperYieldsNativePrimariesAfterChadIn
   EXPECT_EQ(description.origin_, RasterColorOrigin::IccMatrixShaper);
   EXPECT_EQ(description.referral_, RasterReferral::DisplayReferred);
   // The colorants are stored D50-adapted; the chad inverse restores the D65 native white.
-  ExpectPrimariesNear(description, kRasterPrimariesDisplayP3);
+  ExpectPrimariesNear(description, color::GamutPrimariesXy(color::ColorGamutId::P3D65));
   ExpectAllChannels(description, RasterTransferKind::SrgbPiecewise);
   EXPECT_EQ(description.profile_description_, "Display P3");
   EXPECT_TRUE(IsLowerHexSha256(description.icc_sha256_)) << description.icc_sha256_;
@@ -103,12 +103,12 @@ TEST(RasterColorDescriptionTest, IccMatrixShaperYieldsNativePrimariesAfterChadIn
 TEST(RasterColorDescriptionTest, IccV2WithoutChadAdaptsFromMediaWhiteWithBradford) {
   const auto rec2020 = Resolve("rec2020_icc_16bit.tif", RasterFileKind::Tiff);
   EXPECT_EQ(rec2020.origin_, RasterColorOrigin::IccMatrixShaper);
-  ExpectPrimariesNear(rec2020, kRasterPrimariesRec2020);
+  ExpectPrimariesNear(rec2020, color::GamutPrimariesXy(color::ColorGamutId::Rec2020));
   ExpectGamma(rec2020, 2.4f);
 
   const auto prophoto = Resolve("prophoto_icc_16bit.tif", RasterFileKind::Tiff);
   EXPECT_EQ(prophoto.referral_, RasterReferral::DisplayReferred);
-  ExpectPrimariesNear(prophoto, kRasterPrimariesProPhoto);
+  ExpectPrimariesNear(prophoto, color::GamutPrimariesXy(color::ColorGamutId::ProPhoto));
   ExpectGamma(prophoto, 1.8f);
 }
 
@@ -116,7 +116,7 @@ TEST(RasterColorDescriptionTest, IccV44CicpTagOverridesTrc) {
   // The profile's TRC tags say gamma 2.2 with sRGB colorants; its cicp tag says Rec.2020 PQ.
   const auto description = Resolve("icc_v44_cicp_rec2020_pq_16bit.tif", RasterFileKind::Tiff);
   EXPECT_EQ(description.origin_, RasterColorOrigin::IccCicp);
-  ExpectPrimariesNear(description, kRasterPrimariesRec2020);
+  ExpectPrimariesNear(description, color::GamutPrimariesXy(color::ColorGamutId::Rec2020));
   ExpectAllChannels(description, RasterTransferKind::St2084);
   EXPECT_FLOAT_EQ(description.peak_luminance_nits_, 1000.0f);
   EXPECT_TRUE(IsLowerHexSha256(description.icc_sha256_));
@@ -126,7 +126,7 @@ TEST(RasterColorDescriptionTest, LutBasedRgbIccResolvesToLinearRec2020Converted)
   const auto description = Resolve("lut_based_rgb_icc.tif", RasterFileKind::Tiff);
   EXPECT_EQ(description.origin_, RasterColorOrigin::IccLutConverted);
   EXPECT_EQ(description.referral_, RasterReferral::DisplayReferred);
-  ExpectPrimariesNear(description, kRasterPrimariesRec2020, 1e-6f);
+  ExpectPrimariesNear(description, color::GamutPrimariesXy(color::ColorGamutId::Rec2020), 1e-6f);
   ExpectAllChannels(description, RasterTransferKind::Linear);
   EXPECT_EQ(description.profile_description_, "Synthetic LUT sRGB");
   // The decoder checks this hash before it runs the profile conversion.
@@ -136,7 +136,7 @@ TEST(RasterColorDescriptionTest, LutBasedRgbIccResolvesToLinearRec2020Converted)
 TEST(RasterColorDescriptionTest, GrayIccOnSingleChannelImageUsesSrgbPrimariesAndGrayCurve) {
   const auto description = Resolve("gray_gamma22.png", RasterFileKind::Png);
   EXPECT_EQ(description.origin_, RasterColorOrigin::IccMatrixShaper);
-  ExpectPrimariesNear(description, kRasterPrimariesRec709);
+  ExpectPrimariesNear(description, color::GamutPrimariesXy(color::ColorGamutId::Rec709));
   ExpectGamma(description, 2.2f);
 }
 
@@ -154,7 +154,7 @@ TEST(RasterColorDescriptionTest, UnusableIccFallsBackToSrgbAndRecordsReason) {
   // The ICC colorants of red and green are equal, so the primaries form no triangle.
   const auto description = Resolve("degenerate_primaries_icc_8bit.jpg", RasterFileKind::Jpeg);
   EXPECT_EQ(description.origin_, RasterColorOrigin::DefaultSrgb);
-  ExpectPrimariesNear(description, kRasterPrimariesRec709, 1e-6f);
+  ExpectPrimariesNear(description, color::GamutPrimariesXy(color::ColorGamutId::Rec709), 1e-6f);
   ExpectAllChannels(description, RasterTransferKind::SrgbPiecewise);
   EXPECT_NE(description.default_reason_.find("degenerate"), std::string::npos)
       << description.default_reason_;
@@ -180,7 +180,7 @@ TEST(RasterColorDescriptionTest, MalformedPngIsReportedAsMalformedContainer) {
 TEST(RasterColorDescriptionTest, PngCicpOverridesIccpAndSrgbChunk) {
   const auto description = Resolve("cicp_rec2020_pq_16bit.png", RasterFileKind::Png);
   EXPECT_EQ(description.origin_, RasterColorOrigin::PngCicp);
-  ExpectPrimariesNear(description, kRasterPrimariesRec2020, 1e-6f);
+  ExpectPrimariesNear(description, color::GamutPrimariesXy(color::ColorGamutId::Rec2020), 1e-6f);
   ExpectAllChannels(description, RasterTransferKind::St2084);
   // mDCv states a 4000-nit mastering display.
   EXPECT_FLOAT_EQ(description.peak_luminance_nits_, 4000.0f);
@@ -190,28 +190,28 @@ TEST(RasterColorDescriptionTest, PngCicpOverridesIccpAndSrgbChunk) {
 TEST(RasterColorDescriptionTest, PngIccpWinsOverMissingCicp) {
   const auto description = Resolve("iccp_display_p3.png", RasterFileKind::Png);
   EXPECT_EQ(description.origin_, RasterColorOrigin::IccMatrixShaper);
-  ExpectPrimariesNear(description, kRasterPrimariesDisplayP3);
+  ExpectPrimariesNear(description, color::GamutPrimariesXy(color::ColorGamutId::P3D65));
   ExpectAllChannels(description, RasterTransferKind::SrgbPiecewise);
 }
 
 TEST(RasterColorDescriptionTest, PngSrgbChunkResolvesSrgb) {
   const auto description = Resolve("srgb_chunk.png", RasterFileKind::Png);
   EXPECT_EQ(description.origin_, RasterColorOrigin::PngSrgbChunk);
-  ExpectPrimariesNear(description, kRasterPrimariesRec709, 1e-6f);
+  ExpectPrimariesNear(description, color::GamutPrimariesXy(color::ColorGamutId::Rec709), 1e-6f);
   ExpectAllChannels(description, RasterTransferKind::SrgbPiecewise);
 }
 
 TEST(RasterColorDescriptionTest, PngGamaAndChrmGivePrimariesAndGamma) {
   const auto description = Resolve("gama_chrm_only.png", RasterFileKind::Png);
   EXPECT_EQ(description.origin_, RasterColorOrigin::PngGamaChrm);
-  ExpectPrimariesNear(description, kRasterPrimariesRec2020, 1e-5f);
+  ExpectPrimariesNear(description, color::GamutPrimariesXy(color::ColorGamutId::Rec2020), 1e-5f);
   ExpectGamma(description, 1.8f, 1e-3f);
 }
 
 TEST(RasterColorDescriptionTest, PngGamaWithoutChrmUsesSrgbPrimaries) {
   const auto description = Resolve("gama_without_chrm.png", RasterFileKind::Png);
   EXPECT_EQ(description.origin_, RasterColorOrigin::PngGamaChrm);
-  ExpectPrimariesNear(description, kRasterPrimariesRec709, 1e-6f);
+  ExpectPrimariesNear(description, color::GamutPrimariesXy(color::ColorGamutId::Rec709), 1e-6f);
   ExpectGamma(description, 2.2f, 1e-3f);
 }
 
@@ -232,21 +232,21 @@ TEST(RasterColorDescriptionTest, UntaggedPaletteAndAlphaPngUseTheirChunksOrSrgbD
 TEST(RasterColorDescriptionTest, JpegExifR03WithoutIccResolvesAdobeRgb) {
   const auto description = Resolve("adobe_rgb_exif_r03_no_icc.jpg", RasterFileKind::Jpeg);
   EXPECT_EQ(description.origin_, RasterColorOrigin::ExifInteropAdobeRgb);
-  ExpectPrimariesNear(description, kRasterPrimariesAdobeRgb, 1e-6f);
-  ExpectGamma(description, kAdobeRgbGamma, 1e-6f);
+  ExpectPrimariesNear(description, color::GamutPrimariesXy(color::ColorGamutId::AdobeRgb), 1e-6f);
+  ExpectGamma(description, CE_ADOBE_RGB_GAMMA, 1e-6f);
   EXPECT_EQ(description.referral_, RasterReferral::DisplayReferred);
 }
 
 TEST(RasterColorDescriptionTest, JpegIccAndUntaggedJpegResolve) {
   const auto srgb = Resolve("srgb_icc_8bit.jpg", RasterFileKind::Jpeg);
   EXPECT_EQ(srgb.origin_, RasterColorOrigin::IccMatrixShaper);
-  ExpectPrimariesNear(srgb, kRasterPrimariesRec709);
+  ExpectPrimariesNear(srgb, color::GamutPrimariesXy(color::ColorGamutId::Rec709));
   ExpectAllChannels(srgb, RasterTransferKind::SrgbPiecewise);
 
   const auto untagged = Resolve("untagged_8bit.jpg", RasterFileKind::Jpeg);
   EXPECT_EQ(untagged.origin_, RasterColorOrigin::DefaultSrgb);
   EXPECT_FALSE(untagged.default_reason_.empty());
-  ExpectPrimariesNear(untagged, kRasterPrimariesRec709, 1e-6f);
+  ExpectPrimariesNear(untagged, color::GamutPrimariesXy(color::ColorGamutId::Rec709), 1e-6f);
 }
 
 // -------------------------------------------------------------------------------------------
@@ -257,7 +257,7 @@ TEST(RasterColorDescriptionTest, Float32TiffWithoutIccIsSceneLinear) {
   const auto description = Resolve("float32_no_icc.tif", RasterFileKind::Tiff);
   EXPECT_EQ(description.referral_, RasterReferral::SceneLinear);
   EXPECT_EQ(description.origin_, RasterColorOrigin::DefaultSrgb);
-  ExpectPrimariesNear(description, kRasterPrimariesRec709, 1e-6f);
+  ExpectPrimariesNear(description, color::GamutPrimariesXy(color::ColorGamutId::Rec709), 1e-6f);
   ExpectAllChannels(description, RasterTransferKind::Linear);
   EXPECT_FALSE(description.default_reason_.empty());
 }
@@ -284,7 +284,7 @@ TEST(RasterColorDescriptionTest, ExrWithoutChromaticitiesResolvesRec709Linear) {
   const auto description = Resolve("no_chromaticities_float.exr", RasterFileKind::OpenExr);
   EXPECT_EQ(description.referral_, RasterReferral::SceneLinear);
   EXPECT_EQ(description.origin_, RasterColorOrigin::DefaultSrgb);
-  ExpectPrimariesNear(description, kRasterPrimariesRec709, 1e-6f);
+  ExpectPrimariesNear(description, color::GamutPrimariesXy(color::ColorGamutId::Rec709), 1e-6f);
   ExpectAllChannels(description, RasterTransferKind::Linear);
 }
 
@@ -292,12 +292,12 @@ TEST(RasterColorDescriptionTest, ExrChromaticitiesAndAcesContainerFlagGivePrimar
   const auto p3 = Resolve("chromaticities_p3_half.exr", RasterFileKind::OpenExr);
   EXPECT_EQ(p3.origin_, RasterColorOrigin::ExrChromaticities);
   EXPECT_EQ(p3.referral_, RasterReferral::SceneLinear);
-  ExpectPrimariesNear(p3, kRasterPrimariesDisplayP3, 1e-6f);
+  ExpectPrimariesNear(p3, color::GamutPrimariesXy(color::ColorGamutId::P3D65), 1e-6f);
   ExpectAllChannels(p3, RasterTransferKind::Linear);
 
   const auto aces = Resolve("aces_container_flag.exr", RasterFileKind::OpenExr);
   EXPECT_EQ(aces.origin_, RasterColorOrigin::ExrAcesContainer);
-  ExpectPrimariesNear(aces, kRasterPrimariesAp0, 1e-6f);
+  ExpectPrimariesNear(aces, color::GamutPrimariesXy(color::ColorGamutId::Ap0), 1e-6f);
   ExpectAllChannels(aces, RasterTransferKind::Linear);
 }
 
@@ -323,18 +323,26 @@ constexpr std::array<float, 8> kXyzExportProfile = {0.9642f, 0.0001f, 0.0001f, 0
 TEST(RasterColorDescriptionTest, ExportedIccProfilesReimportWithSamePrimariesAndTransfer) {
   const std::array<ExportProfileExpectation, 12> expectations = {{
       {"p3_d60_gamma26", kP3D60, RasterTransferKind::Gamma, 2.6f, 100.0f},
-      {"p3_d65_gamma22", kRasterPrimariesDisplayP3, RasterTransferKind::Gamma, 2.2f, 100.0f},
-      {"p3_d65_pq", kRasterPrimariesDisplayP3, RasterTransferKind::St2084, 0.0f, 1000.0f},
-      {"p3_dci_gamma26", kRasterPrimariesDciP3, RasterTransferKind::Gamma, 2.6f, 100.0f},
-      {"rec2020_hlg", kRasterPrimariesRec2020, RasterTransferKind::Hlg, 0.0f, 1000.0f},
-      {"rec2020_pq", kRasterPrimariesRec2020, RasterTransferKind::St2084, 0.0f, 1000.0f},
-      {"rec709_bt1886", kRasterPrimariesRec709, RasterTransferKind::Gamma, 2.4f, 100.0f},
-      {"rec709_gamma22", kRasterPrimariesRec709, RasterTransferKind::Gamma, 2.2f, 100.0f},
-      {"srgb_piecewise", kRasterPrimariesRec709, RasterTransferKind::SrgbPiecewise, 0.0f, 100.0f},
-      {"upstream_displayp3_compat_v4", kRasterPrimariesDisplayP3, RasterTransferKind::SrgbPiecewise,
-       0.0f, 100.0f},
-      {"upstream_rec2020_v4", kRasterPrimariesRec2020, RasterTransferKind::IccParametric, 0.0f,
-       100.0f},
+      {"p3_d65_gamma22", color::GamutPrimariesXy(color::ColorGamutId::P3D65),
+       RasterTransferKind::Gamma, 2.2f, 100.0f},
+      {"p3_d65_pq", color::GamutPrimariesXy(color::ColorGamutId::P3D65), RasterTransferKind::St2084,
+       0.0f, 1000.0f},
+      {"p3_dci_gamma26", color::GamutPrimariesXy(color::ColorGamutId::P3Dci),
+       RasterTransferKind::Gamma, 2.6f, 100.0f},
+      {"rec2020_hlg", color::GamutPrimariesXy(color::ColorGamutId::Rec2020),
+       RasterTransferKind::Hlg, 0.0f, 1000.0f},
+      {"rec2020_pq", color::GamutPrimariesXy(color::ColorGamutId::Rec2020),
+       RasterTransferKind::St2084, 0.0f, 1000.0f},
+      {"rec709_bt1886", color::GamutPrimariesXy(color::ColorGamutId::Rec709),
+       RasterTransferKind::Gamma, 2.4f, 100.0f},
+      {"rec709_gamma22", color::GamutPrimariesXy(color::ColorGamutId::Rec709),
+       RasterTransferKind::Gamma, 2.2f, 100.0f},
+      {"srgb_piecewise", color::GamutPrimariesXy(color::ColorGamutId::Rec709),
+       RasterTransferKind::SrgbPiecewise, 0.0f, 100.0f},
+      {"upstream_displayp3_compat_v4", color::GamutPrimariesXy(color::ColorGamutId::P3D65),
+       RasterTransferKind::SrgbPiecewise, 0.0f, 100.0f},
+      {"upstream_rec2020_v4", color::GamutPrimariesXy(color::ColorGamutId::Rec2020),
+       RasterTransferKind::IccParametric, 0.0f, 100.0f},
       {"xyz_gamma26", kXyzExportProfile, RasterTransferKind::Gamma, 2.6f, 100.0f},
   }};
   for (const auto& expected : expectations) {
@@ -393,7 +401,7 @@ TEST(RasterColorDescriptionTest, TransferEvaluationMatchesReferenceCurves) {
 
 TEST(RasterColorDescriptionTest, DefectCheckRejectsWhiteOutsidePrimariesAndNonMonotonicCurve) {
   RasterColorDescription description;
-  description.primaries_xy_ = kRasterPrimariesRec709;
+  description.primaries_xy_ = color::GamutPrimariesXy(color::ColorGamutId::Rec709);
   EXPECT_FALSE(FindRasterColorDescriptionDefect(description).has_value());
 
   auto outside             = description;
@@ -412,7 +420,7 @@ TEST(RasterColorDescriptionTest, DefectCheckRejectsWhiteOutsidePrimariesAndNonMo
 
 TEST(RasterColorDescriptionTest, DescriptionJsonRoundTripsAndOmitsAbsentFields) {
   RasterColorDescription defaulted;
-  defaulted.primaries_xy_   = kRasterPrimariesRec709;
+  defaulted.primaries_xy_   = color::GamutPrimariesXy(color::ColorGamutId::Rec709);
   defaulted.origin_         = RasterColorOrigin::DefaultSrgb;
   defaulted.default_reason_ = "no color description in the file";
   const auto default_json   = RasterColorDescriptionToJson(defaulted);
@@ -426,7 +434,7 @@ TEST(RasterColorDescriptionTest, DescriptionJsonRoundTripsAndOmitsAbsentFields) 
   EXPECT_EQ(RasterColorDescriptionFromJson(default_json), defaulted);
 
   RasterColorDescription icc;
-  icc.primaries_xy_                     = kRasterPrimariesDisplayP3;
+  icc.primaries_xy_                     = color::GamutPrimariesXy(color::ColorGamutId::P3D65);
   icc.origin_                           = RasterColorOrigin::IccMatrixShaper;
   icc.profile_description_              = "Display P3";
   icc.icc_sha256_                       = std::string(64, 'a');

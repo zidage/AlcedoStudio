@@ -142,7 +142,8 @@ if (-not $SkipOpenCLAssetCheck) {
         'opencl\edit\runtime\opencl\shader\primary_grade.cl',
         'opencl\edit\runtime\opencl\shader\primary_grade_neighbor.cl',
         'opencl\include\edit\runtime\dng_profile_gpu_math.h',
-        'opencl\include\edit\runtime\aces_reference_gamut_compression.h'
+        'opencl\include\edit\runtime\aces_reference_gamut_compression.h',
+        'opencl\include\color\color_encoding_math.h'
     )
     foreach ($file in $openClFiles) {
         Assert-File (Join-Path $binDir $file)

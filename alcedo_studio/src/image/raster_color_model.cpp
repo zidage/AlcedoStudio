@@ -11,6 +11,7 @@
 #include <string_view>
 #include <utility>
 
+#include "color/color_encoding_math.h"
 #include "image/raster_color_description.hpp"
 
 namespace alcedo {
@@ -178,21 +179,6 @@ auto EvaluateIccParametric(const RasterTransfer& transfer, double x) -> double {
   }
 }
 
-auto EvaluatePq(double encoded) -> double {
-  constexpr double m1 = 0.1593017578125, m2 = 78.84375;
-  constexpr double c1 = 0.8359375, c2 = 18.8515625, c3 = 18.6875;
-  const double     p   = SafePow(encoded, 1.0 / m2);
-  const double     num = std::max(p - c1, 0.0);
-  return SafePow(num / (c2 - c3 * p), 1.0 / m1);
-}
-
-auto EvaluateHlgGray(double encoded) -> double {
-  constexpr double a = 0.17883277, b = 0.28466892, c = 0.55991073;
-  const double     scene =
-      encoded <= 0.5 ? encoded * encoded / 3.0 : (std::exp((encoded - c) / a) + b) / 12.0;
-  return SafePow(scene, 1.2);
-}
-
 }  // namespace
 
 auto EvaluateRasterTransfer(const RasterTransfer& transfer, float encoded) -> float {
@@ -201,11 +187,11 @@ auto EvaluateRasterTransfer(const RasterTransfer& transfer, float encoded) -> fl
     case RasterTransferKind::Linear:
       return encoded;
     case RasterTransferKind::SrgbPiecewise:
-      return static_cast<float>(x <= 0.04045 ? x / 12.92 : SafePow((x + 0.055) / 1.055, 2.4));
+      return CeSrgbDecode(encoded);
     case RasterTransferKind::Gamma:
-      return static_cast<float>(SafePow(x, transfer.gamma_));
+      return CeGammaDecode(encoded, transfer.gamma_);
     case RasterTransferKind::Bt1886:
-      return static_cast<float>(SafePow(x, 2.4));
+      return CeGammaDecode(encoded, CE_BT1886_GAMMA);
     case RasterTransferKind::IccParametric:
       return static_cast<float>(EvaluateIccParametric(transfer, x));
     case RasterTransferKind::IccSampled: {
@@ -221,9 +207,10 @@ auto EvaluateRasterTransfer(const RasterTransfer& transfer, float encoded) -> fl
                                 transfer.sampled_[upper] * t);
     }
     case RasterTransferKind::St2084:
-      return static_cast<float>(EvaluatePq(std::clamp(x, 0.0, 1.0)));
+      return CePqDecode(std::min(encoded, 1.0f));
     case RasterTransferKind::Hlg:
-      return static_cast<float>(EvaluateHlgGray(std::clamp(x, 0.0, 1.0)));
+      // Gray axis of the 1000-nit reference display: OOTF gain of a neutral signal.
+      return CeGammaDecode(CeHlgDecode(std::min(encoded, 1.0f)), CE_HLG_OOTF_GAMMA);
   }
   return encoded;
 }

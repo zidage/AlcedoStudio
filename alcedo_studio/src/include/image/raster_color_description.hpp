@@ -18,6 +18,8 @@
 #include <string>
 #include <vector>
 
+#include "color/color_encoding_catalog.hpp"
+
 namespace alcedo {
 
 /// Container format of a raster file. The caller classifies the file content.
@@ -89,25 +91,6 @@ struct RasterColorDescription {
 
   auto                          operator==(const RasterColorDescription&) const -> bool = default;
 };
-
-/// Nominal chromaticities (Rx Ry Gx Gy Bx By Wx Wy).
-inline constexpr std::array<float, 8> kRasterPrimariesRec709    = {0.64f, 0.33f, 0.30f,   0.60f,
-                                                                   0.15f, 0.06f, 0.3127f, 0.3290f};
-inline constexpr std::array<float, 8> kRasterPrimariesDisplayP3 = {
-    0.680f, 0.320f, 0.265f, 0.690f, 0.150f, 0.060f, 0.3127f, 0.3290f};
-inline constexpr std::array<float, 8> kRasterPrimariesDciP3    = {0.680f, 0.320f, 0.265f, 0.690f,
-                                                                  0.150f, 0.060f, 0.314f, 0.351f};
-inline constexpr std::array<float, 8> kRasterPrimariesRec2020  = {0.708f, 0.292f, 0.170f,  0.797f,
-                                                                  0.131f, 0.046f, 0.3127f, 0.3290f};
-inline constexpr std::array<float, 8> kRasterPrimariesAdobeRgb = {0.64f, 0.33f, 0.21f,   0.71f,
-                                                                  0.15f, 0.06f, 0.3127f, 0.3290f};
-inline constexpr std::array<float, 8> kRasterPrimariesProPhoto = {
-    0.7347f, 0.2653f, 0.1596f, 0.8404f, 0.0366f, 0.0001f, 0.3457f, 0.3585f};
-inline constexpr std::array<float, 8> kRasterPrimariesAp0 = {0.7347f, 0.2653f,  0.0f,     1.0f,
-                                                             0.0001f, -0.0770f, 0.32168f, 0.33767f};
-
-/// Adobe RGB (1998) transfer exponent, 2 + 51/256.
-inline constexpr float                kAdobeRgbGamma      = 563.0f / 256.0f;
 
 /// The import step cannot use the file: its content is CMYK, or its container structure is
 /// malformed.

@@ -15,10 +15,9 @@
 #include <string>
 #include <vector>
 
-#include "cuda_acescc.cuh"
+#include "color/color_encoding_math.h"
 #include "cuda_neighbor_grade.hpp"
 #include "edit/graph/color_grade_node_model.hpp"
-#include "edit/runtime/local_tone_mapping.hpp"
 #include "edit/runtime/adjustment_runtime.hpp"
 #include "edit/runtime/content_key.hpp"
 #include "edit/runtime/cuda/cuda_adjustment_runtime.hpp"
@@ -30,6 +29,7 @@
 #include "edit/runtime/grade_lut.hpp"
 #include "edit/runtime/grade_parameter_slot.hpp"
 #include "edit/runtime/local_tone_executor.hpp"
+#include "edit/runtime/local_tone_mapping.hpp"
 #include "edit/runtime/neighbor_executor.hpp"
 #include "edit/runtime/parameter_binding.hpp"
 #include "edit/runtime/result_content_key.hpp"
@@ -109,16 +109,16 @@ __device__ auto ApplyOkLabContrast(const float3& acescc, float contrast) -> floa
   constexpr float kPivotLightness  = 0.5646216f;  // cbrt(0.18)
   constexpr float kCurveWidthStops = 2.5f;
   const float     slope            = exp2f(contrast * 0.01f);
-  float3          lab              = LinearAp1ToOkLab(make_float3(
-      cuda_acescc::Decode(acescc.x), cuda_acescc::Decode(acescc.y), cuda_acescc::Decode(acescc.z)));
+  float3          lab              = LinearAp1ToOkLab(
+      make_float3(CeAcesccDecode(acescc.x), CeAcesccDecode(acescc.y), CeAcesccDecode(acescc.z)));
   const float     shape =
       lab.x > 0.0f ? tanhf(3.0f * log2f(lab.x / kPivotLightness) / kCurveWidthStops) : -1.0f;
   const float gain         = exp2f((slope - 1.0f) * kCurveWidthStops * shape / 3.0f);
   const float chroma_scale = sqrtf(slope) * fminf(gain, 1.0f);
   lab                      = make_float3(lab.x * gain, lab.y * chroma_scale, lab.z * chroma_scale);
   const float3 linear_ap1  = OkLabToLinearAp1(lab);
-  return make_float3(cuda_acescc::Encode(linear_ap1.x), cuda_acescc::Encode(linear_ap1.y),
-                     cuda_acescc::Encode(linear_ap1.z));
+  return make_float3(CeAcesccEncode(linear_ap1.x), CeAcesccEncode(linear_ap1.y),
+                     CeAcesccEncode(linear_ap1.z));
 }
 
 __device__ auto ExtrapolateCurve(float value, const CudaAdjustmentParams& p, std::uint32_t a,
@@ -252,14 +252,14 @@ __device__ auto ApplyAdjustment(float3 c, const CudaAdjustmentParams& p, const f
   const float value    = p.values[0];
   if (behavior == CudaAdjustmentBehavior::Cat02WhiteBalance && value != 0.0f) {
     // values[1..9]: row-major CAT02 adaptation in linear AP1 (resolved on the CPU).
-    const float3 linear = make_float3(cuda_acescc::Decode(c.x), cuda_acescc::Decode(c.y),
-                                      cuda_acescc::Decode(c.z));
+    const float3 linear =
+        make_float3(CeAcesccDecode(c.x), CeAcesccDecode(c.y), CeAcesccDecode(c.z));
     const float* m      = p.values + 1;
-    c = make_float3(cuda_acescc::Encode(m[0] * linear.x + m[1] * linear.y + m[2] * linear.z),
-                    cuda_acescc::Encode(m[3] * linear.x + m[4] * linear.y + m[5] * linear.z),
-                    cuda_acescc::Encode(m[6] * linear.x + m[7] * linear.y + m[8] * linear.z));
+    c = make_float3(CeAcesccEncode(m[0] * linear.x + m[1] * linear.y + m[2] * linear.z),
+                    CeAcesccEncode(m[3] * linear.x + m[4] * linear.y + m[5] * linear.z),
+                    CeAcesccEncode(m[6] * linear.x + m[7] * linear.y + m[8] * linear.z));
   } else if (behavior == CudaAdjustmentBehavior::Exposure) {
-    const float offset = value / 17.52f;
+    const float offset = value / CE_ACESCC_B;
     c.x += offset;
     c.y += offset;
     c.z += offset;

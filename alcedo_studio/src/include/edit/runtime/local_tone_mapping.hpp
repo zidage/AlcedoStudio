@@ -11,6 +11,8 @@
 #include <cstring>
 #include <vector>
 
+#include "color/color_encoding_math.h"
+
 namespace alcedo::local_tone_mapping {
 
 constexpr int   kMaxLevels                = 12;
@@ -24,8 +26,8 @@ constexpr float kGammaStepScale           = 1.35f;
 constexpr float kMinSampleStep            = 0.045f;
 constexpr float kHighlightStrengthScale   = 1.5f;
 constexpr float kBackendAmountLimit       = 1.5f;
-constexpr float kAcesccMiddleGray         = 0.41358840f;
-constexpr float kAcesccCodePerEv          = 1.0f / 17.52f;
+constexpr float kAcesccMiddleGray         = CE_ACESCC_MIDDLE_GREY;
+constexpr float kAcesccCodePerEv          = CE_ACESCC_CODE_PER_STOP;
 constexpr float kToneBetaEps              = 0.035f;
 constexpr float kToneBetaMin              = 0.08f;
 constexpr float kToneBetaMax              = 1.70f;

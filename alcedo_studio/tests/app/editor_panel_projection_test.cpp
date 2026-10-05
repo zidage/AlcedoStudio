@@ -430,7 +430,7 @@ TEST(EditorPanelProjectionTest, ParseApplyProjectsLensCatalogIdentityOntoRawPane
 
 TEST(EditorPanelProjectionTest, InputProfileProjectsRasterDescriptionAndRawDocumentsAreNotRaster) {
   RasterColorDescription source_color;
-  source_color.primaries_xy_        = kRasterPrimariesDisplayP3;
+  source_color.primaries_xy_        = color::GamutPrimariesXy(color::ColorGamutId::P3D65);
   source_color.origin_              = RasterColorOrigin::IccMatrixShaper;
   source_color.profile_description_ = "Display P3";
   source_color.icc_sha256_          = std::string(64, 'a');

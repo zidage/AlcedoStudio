@@ -5,14 +5,17 @@
 #define ALCEDO_DNG_PROFILE_GPU_MATH_H
 
 // One implementation for the host reference, CUDA, OpenCL C and Metal.
+// The sRGB value axis comes from color/color_encoding_math.h. OpenCL programs list it before this
+// file; Metal shaders include it first.
+#if !defined(__OPENCL_VERSION__) && !defined(__OPENCL_C_VERSION__) && !defined(__METAL_VERSION__)
+#include "color/color_encoding_math.h"
+#endif
 #if defined(__OPENCL_VERSION__) || defined(__OPENCL_C_VERSION__)
 #define DNG_GLOBAL __global
 #define DNG_INLINE static inline
-#define DNG_POW    pow
 #elif defined(__METAL_VERSION__)
 #define DNG_GLOBAL device
 #define DNG_INLINE static inline
-#define DNG_POW    pow
 #else
 #include <cmath>
 #define DNG_GLOBAL
@@ -21,7 +24,6 @@
 #else
 #define DNG_INLINE static inline
 #endif
-#define DNG_POW powf
 #endif
 
 typedef struct {
@@ -36,13 +38,7 @@ DNG_INLINE DngRgb DngMakeRgb(float r, float g, float b) {
 }
 DNG_INLINE float DngMin(float a, float b) { return a < b ? a : b; }
 DNG_INLINE float DngMax(float a, float b) { return a > b ? a : b; }
-DNG_INLINE float DngClamp(float x, float lo, float hi) { return DngMin(hi, DngMax(lo, x)); }
-DNG_INLINE float DngSrgbEncode(float x) {
-  return x <= 0.0031308f ? 12.92f * x : 1.055f * DNG_POW(x, 1.0f / 2.4f) - 0.055f;
-}
-DNG_INLINE float DngSrgbDecode(float x) {
-  return x <= 0.04045f ? x / 12.92f : DNG_POW((x + 0.055f) / 1.055f, 2.4f);
-}
+DNG_INLINE float  DngClamp(float x, float lo, float hi) { return DngMin(hi, DngMax(lo, x)); }
 DNG_INLINE DngRgb DngMatrixRgb(DngRgb c, DNG_GLOBAL const float* m) {
   return DngMakeRgb(m[0] * c.r + m[1] * c.g + m[2] * c.b, m[3] * c.r + m[4] * c.g + m[5] * c.b,
                     m[6] * c.r + m[7] * c.g + m[8] * c.b);
@@ -73,7 +69,7 @@ DNG_INLINE DngRgb DngApplyHueSatMap(DngRgb rgb, DNG_GLOBAL const float* data, un
       h = 4.0f + (rgb.r - rgb.g) / delta;
     if (h < 0.0f) h += 6.0f;
   }
-  const float    encoded_v = encoding ? DngSrgbEncode(v) : v;
+  const float    encoded_v = encoding ? CeSrgbEncode(v) : v;
   const float    hx = h * ((float)hd / 6.0f), sx = DngClamp(s, 0.0f, 1.0f) * (float)(sd - 1);
   const float    vx = DngClamp(encoded_v, 0.0f, 1.0f) * (float)(vd - 1);
   const unsigned h0 = (unsigned)hx % hd, h1 = (h0 + 1) % hd;
@@ -94,7 +90,7 @@ DNG_INLINE DngRgb DngApplyHueSatMap(DngRgb rgb, DNG_GLOBAL const float* data, un
   h += correction[0] / 60.0f;
   h -= 6.0f * (float)floor(h / 6.0f);
   s                     = DngClamp(s * correction[1], 0.0f, 1.0f);
-  v                     = encoding ? DngSrgbDecode(encoded_v * correction[2]) : v * correction[2];
+  v                     = encoding ? CeSrgbDecode(encoded_v * correction[2]) : v * correction[2];
   const unsigned sector = (unsigned)h;
   const float    f = h - (float)sector, p = v * (1.0f - s), q = v * (1.0f - s * f),
               t = v * (1.0f - s * (1.0f - f));
@@ -127,5 +123,4 @@ DNG_INLINE DngRgb DngApplyColorProfile(DngRgb ap1, DNG_GLOBAL const float* data)
 }
 #undef DNG_GLOBAL
 #undef DNG_INLINE
-#undef DNG_POW
 #endif

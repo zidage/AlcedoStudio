@@ -118,8 +118,9 @@ TEST_F(MetalDisplayToAp1Test, Aces2InverseReturnsBlackForBlackAndNeutralForSourc
 TEST_F(MetalDisplayToAp1Test, AcesccOutputMatchesHostEvaluationForBothBranches) {
   MetalRenderDevice           device;
   MetalDisplayToAp1Parameters parameters;
-  const auto         display = ResolveAces2InverseRuntime(kRasterPrimariesDisplayP3, 100.0f);
-  const auto         scene   = PackSceneLinearToAp1(kRasterPrimariesAp0);
+  const auto                  display =
+      ResolveAces2InverseRuntime(color::GamutPrimariesXy(color::ColorGamutId::P3D65), 100.0f);
+  const auto scene = PackSceneLinearToAp1(color::GamutPrimariesXy(color::ColorGamutId::Ap0));
   std::vector<float> rgb;
   for (int i = 0; i < 64; ++i) {
     rgb.push_back(static_cast<float>(i % 4) / 3.0f);

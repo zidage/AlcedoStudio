@@ -21,6 +21,12 @@
 // All parameters and tables live in one float buffer with the layout below. The host fills it
 // (aces2_inverse_runtime.cpp) and each backend uploads it as one device buffer.
 
+// ACEScc comes from color/color_encoding_math.h. OpenCL programs list it before this file; Metal
+// shaders include it first.
+#if !defined(__OPENCL_VERSION__) && !defined(__OPENCL_C_VERSION__) && !defined(__METAL_VERSION__)
+#include "color/color_encoding_math.h"
+#endif
+
 #if defined(__OPENCL_VERSION__) || defined(__OPENCL_C_VERSION__)
 #define D2A_GLOBAL __global
 #define D2A_INLINE static inline
@@ -29,7 +35,6 @@
 #define D2A_ATAN2  atan2
 #define D2A_COS    cos
 #define D2A_SIN    sin
-#define D2A_LOG2   log2
 #define D2A_LOG10  log10
 #define D2A_FABS   fabs
 #define D2A_FLOOR  floor
@@ -41,7 +46,6 @@
 #define D2A_ATAN2  atan2
 #define D2A_COS    cos
 #define D2A_SIN    sin
-#define D2A_LOG2   log2
 #define D2A_LOG10  log10
 #define D2A_FABS   fabs
 #define D2A_FLOOR  floor
@@ -58,7 +62,6 @@
 #define D2A_ATAN2 atan2f
 #define D2A_COS   cosf
 #define D2A_SIN   sinf
-#define D2A_LOG2  log2f
 #define D2A_LOG10 log10f
 #define D2A_FABS  fabsf
 #define D2A_FLOOR floorf
@@ -140,18 +143,6 @@ D2A_INLINE float     D2aLerp(float a, float b, float t) { return (b - a) * t + a
 D2A_INLINE D2aFloat3 D2aMul(D2A_GLOBAL const float* m, D2aFloat3 v) {
   return D2aMake3(m[0] * v.x + m[1] * v.y + m[2] * v.z, m[3] * v.x + m[4] * v.y + m[5] * v.z,
                   m[6] * v.x + m[7] * v.y + m[8] * v.z);
-}
-
-/// ACEScc encoding, identical to the CameraToAp1 pass.
-D2A_INLINE float D2aAcesccEncode(float value) {
-  const float a          = 9.72f;
-  const float b          = 17.52f;
-  const float offset     = 0.0000152587890625f;
-  const float transition = 0.000030517578125f;
-  const float floor_cc   = (-16.0f + a) / b;
-  if (value < 0.0f) return floor_cc + value;
-  if (value < transition) return (D2A_LOG2(offset + value * 0.5f) + a) / b;
-  return (D2A_LOG2(value) + a) / b;
 }
 
 // ACES 1.3 reference gamut compression, identical to aces_reference_gamut_compression.h.
@@ -444,7 +435,7 @@ D2A_INLINE D2aFloat3 D2aSourceToAcesccAp1(D2aFloat3 source_rgb, D2A_GLOBAL const
     ap1 = D2aMake3(D2aClamp(linear.x, 0.0f, ap1_max), D2aClamp(linear.y, 0.0f, ap1_max),
                    D2aClamp(linear.z, 0.0f, ap1_max));
   }
-  return D2aMake3(D2aAcesccEncode(ap1.x), D2aAcesccEncode(ap1.y), D2aAcesccEncode(ap1.z));
+  return D2aMake3(CeAcesccEncode(ap1.x), CeAcesccEncode(ap1.y), CeAcesccEncode(ap1.z));
 }
 
 #undef D2A_GLOBAL
@@ -454,7 +445,6 @@ D2A_INLINE D2aFloat3 D2aSourceToAcesccAp1(D2aFloat3 source_rgb, D2A_GLOBAL const
 #undef D2A_ATAN2
 #undef D2A_COS
 #undef D2A_SIN
-#undef D2A_LOG2
 #undef D2A_LOG10
 #undef D2A_FABS
 #undef D2A_FLOOR

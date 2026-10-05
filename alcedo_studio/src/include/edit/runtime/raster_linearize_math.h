@@ -11,17 +11,21 @@
 // The host packs the parameters into one float buffer (raster_linearize_params.cpp):
 //   header (ALCEDO_RL_HEADER_SIZE floats), then the 4096-entry sampled curves it references.
 
+// The curves come from color/color_encoding_math.h. OpenCL programs list it before this file;
+// Metal shaders include it first.
+#if !defined(__OPENCL_VERSION__) && !defined(__OPENCL_C_VERSION__) && !defined(__METAL_VERSION__)
+#include "color/color_encoding_math.h"
+#endif
+
 #if defined(__OPENCL_VERSION__) || defined(__OPENCL_C_VERSION__)
 #define RL_GLOBAL __global
 #define RL_INLINE static inline
 #define RL_POW    pow
-#define RL_EXP    exp
 #define RL_FLOOR  floor
 #elif defined(__METAL_VERSION__)
 #define RL_GLOBAL device
 #define RL_INLINE static inline
 #define RL_POW    pow
-#define RL_EXP    exp
 #define RL_FLOOR  floor
 #else
 #include <cmath>
@@ -32,7 +36,6 @@
 #define RL_INLINE static inline
 #endif
 #define RL_POW   powf
-#define RL_EXP   expf
 #define RL_FLOOR floorf
 #endif
 
@@ -78,19 +81,8 @@ RL_INLINE float RlPow0(float base, float exponent) {
   return base <= 0.0f ? 0.0f : RL_POW(base, exponent);
 }
 
-RL_INLINE float RlHlgInverseOetf(float v) {
-  const float a = 0.17883277f, b = 0.28466892f, c = 0.55991073f;
-  v = RlMin(RlMax(v, 0.0f), 1.0f);
-  return v <= 0.5f ? v * v / 3.0f : (RL_EXP((v - c) / a) + b) / 12.0f;
-}
-
-RL_INLINE float RlPq(float v) {
-  const float m1 = 0.1593017578125f, m2 = 78.84375f;
-  const float c1 = 0.8359375f, c2 = 18.8515625f, c3 = 18.6875f;
-  v             = RlMin(RlMax(v, 0.0f), 1.0f);
-  const float p = RL_POW(v, 1.0f / m2);
-  return RlPow0(RlMax(p - c1, 0.0f) / (c2 - c3 * p), 1.0f / m1);
-}
+/// HLG inverse OETF of a signal clamped to [0, 1].
+RL_INLINE float RlHlgInverseOetf(float v) { return CeHlgDecode(RlMin(v, 1.0f)); }
 
 RL_INLINE float RlIccParametric(float x, RL_GLOBAL const float* c) {
   const float g = c[3], a = c[4], b = c[5], cc = c[6], d = c[7], e = c[8], f = c[9];
@@ -126,20 +118,20 @@ RL_INLINE float RlEvaluateChannel(float x, RL_GLOBAL const float* p, int channel
     case ALCEDO_RL_LINEAR:
       return x;
     case ALCEDO_RL_SRGB:
-      return x <= 0.04045f ? x / 12.92f : RlPow0((x + 0.055f) / 1.055f, 2.4f);
+      return CeSrgbDecode(x);
     case ALCEDO_RL_GAMMA:
-      return RlPow0(x, c[1]);
+      return CeGammaDecode(x, c[1]);
     case ALCEDO_RL_BT1886:
-      return RlPow0(x, 2.4f);
+      return CeGammaDecode(x, CE_BT1886_GAMMA);
     case ALCEDO_RL_ICC_PARAMETRIC:
       return RlIccParametric(x, c);
     case ALCEDO_RL_ICC_SAMPLED:
       return RlSampled(x, p, c);
     case ALCEDO_RL_ST2084:
-      return RlPq(x);
+      return CePqDecode(RlMin(x, 1.0f));
     case ALCEDO_RL_HLG: {
       // Gray-axis form; the luminance form is applied in RlLinearize when all channels are HLG.
-      return RlPow0(RlHlgInverseOetf(x), 1.2f);
+      return CeGammaDecode(RlHlgInverseOetf(x), CE_HLG_OOTF_GAMMA);
     }
     default:
       return x;
@@ -161,8 +153,8 @@ RL_INLINE RlRgb RlLinearize(float r, float g, float b, RL_GLOBAL const float* p)
   const float out_scale = p[ALCEDO_RL_OUTPUT_SCALE];
   if (p[ALCEDO_RL_HLG_LUMINANCE] != 0.0f) {
     const float sr = RlHlgInverseOetf(r), sg = RlHlgInverseOetf(g), sb = RlHlgInverseOetf(b);
-    const float ys = 0.2627f * sr + 0.6780f * sg + 0.0593f * sb;
-    const float k  = ys > 0.0f ? RL_POW(ys, 0.2f) : 0.0f;
+    const float ys = CE_BT2100_LUMA_R * sr + CE_BT2100_LUMA_G * sg + CE_BT2100_LUMA_B * sb;
+    const float k  = CeHlgOotfGain(ys);
     return RlMakeRgb(sr * k * out_scale, sg * k * out_scale, sb * k * out_scale);
   }
   // Display-referred code values below 0 have no light.
@@ -174,6 +166,5 @@ RL_INLINE RlRgb RlLinearize(float r, float g, float b, RL_GLOBAL const float* p)
 #undef RL_GLOBAL
 #undef RL_INLINE
 #undef RL_POW
-#undef RL_EXP
 #undef RL_FLOOR
 #endif

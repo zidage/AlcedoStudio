@@ -32,11 +32,11 @@ struct InverseCase {
 
 inline auto InverseCases() -> std::vector<InverseCase> {
   return {
-      {"rec709_100", kRasterPrimariesRec709, 100.0f},
-      {"p3d65_100", kRasterPrimariesDisplayP3, 100.0f},
-      {"rec2020_100", kRasterPrimariesRec2020, 100.0f},
-      {"adobe_rgb_100", kRasterPrimariesAdobeRgb, 100.0f},
-      {"rec2020_1000", kRasterPrimariesRec2020, 1000.0f},
+      {"rec709_100", color::GamutPrimariesXy(color::ColorGamutId::Rec709), 100.0f},
+      {"p3d65_100", color::GamutPrimariesXy(color::ColorGamutId::P3D65), 100.0f},
+      {"rec2020_100", color::GamutPrimariesXy(color::ColorGamutId::Rec2020), 100.0f},
+      {"adobe_rgb_100", color::GamutPrimariesXy(color::ColorGamutId::AdobeRgb), 100.0f},
+      {"rec2020_1000", color::GamutPrimariesXy(color::ColorGamutId::Rec2020), 1000.0f},
   };
 }
 

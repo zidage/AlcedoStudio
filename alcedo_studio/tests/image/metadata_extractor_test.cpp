@@ -413,7 +413,8 @@ TEST(MetadataExtractorTest, RasterFilesImportByContentWhateverTheExtension) {
     EXPECT_TRUE(description.origin_ == RasterColorOrigin::DefaultSrgb ||
                 description.origin_ == RasterColorOrigin::PngSrgbChunk)
         << raster.file_name_;
-    EXPECT_EQ(description.primaries_xy_, kRasterPrimariesRec709) << raster.file_name_;
+    EXPECT_EQ(description.primaries_xy_, color::GamutPrimariesXy(color::ColorGamutId::Rec709))
+        << raster.file_name_;
     EXPECT_EQ(description.transfer_[0].kind_, RasterTransferKind::SrgbPiecewise)
         << raster.file_name_;
     const auto display = image.ExifDisplayToJson();
@@ -445,8 +446,8 @@ TEST(MetadataExtractorTest, RasterJpegKeepsIccDescriptionAndReadsRatingFromExif)
   EXPECT_EQ(image.image_type_, ImageType::JPEG);
   ASSERT_TRUE(image.HasRasterColorDescription());
   EXPECT_EQ(image.GetRasterColorDescription().origin_, RasterColorOrigin::IccMatrixShaper);
-  EXPECT_NEAR(image.GetRasterColorDescription().primaries_xy_[0], kRasterPrimariesDisplayP3[0],
-              2e-3f);
+  EXPECT_NEAR(image.GetRasterColorDescription().primaries_xy_[0],
+              color::GamutPrimariesXy(color::ColorGamutId::P3D65)[0], 2e-3f);
   EXPECT_EQ(image.ExifDisplayToJson().value("Rating", 0), 4);
   EXPECT_FALSE(image.ExifDisplayToJson().value("IsHDR", false));
 

@@ -126,8 +126,9 @@ TEST_F(OpenClDisplayToAp1Test, Aces2InverseReturnsBlackForBlackAndNeutralForSour
 
 TEST_F(OpenClDisplayToAp1Test, AcesccOutputMatchesHostEvaluationForBothBranches) {
   OpenClDisplayToAp1Parameters parameters;
-  const auto         display = ResolveAces2InverseRuntime(kRasterPrimariesDisplayP3, 100.0f);
-  const auto         scene   = PackSceneLinearToAp1(kRasterPrimariesAp0);
+  const auto                   display =
+      ResolveAces2InverseRuntime(color::GamutPrimariesXy(color::ColorGamutId::P3D65), 100.0f);
+  const auto scene = PackSceneLinearToAp1(color::GamutPrimariesXy(color::ColorGamutId::Ap0));
   std::vector<float> rgb;
   for (int i = 0; i < 64; ++i) {
     rgb.push_back(static_cast<float>(i % 4) / 3.0f);
@@ -152,8 +153,10 @@ TEST_F(OpenClDisplayToAp1Test, AcesccOutputMatchesHostEvaluationForBothBranches)
 TEST_F(OpenClDisplayToAp1Test, ParameterBlockIsUploadedOnlyWhenItChanges) {
   auto&                        cl = OpenClContext::Instance();
   OpenClDisplayToAp1Parameters parameters;
-  const auto                   a = ResolveAces2InverseRuntime(kRasterPrimariesRec709, 100.0f);
-  const auto                   b = ResolveAces2InverseRuntime(kRasterPrimariesRec2020, 100.0f);
+  const auto                   a =
+      ResolveAces2InverseRuntime(color::GamutPrimariesXy(color::ColorGamutId::Rec709), 100.0f);
+  const auto b =
+      ResolveAces2InverseRuntime(color::GamutPrimariesXy(color::ColorGamutId::Rec2020), 100.0f);
   (void)parameters.Upload(cl.Context(), cl.Queue(), a->packed_);
   (void)parameters.Upload(cl.Context(), cl.Queue(), a->packed_);
   EXPECT_EQ(parameters.UploadCount(), 1u);

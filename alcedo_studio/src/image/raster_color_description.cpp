@@ -9,6 +9,7 @@
 #include <string_view>
 #include <utility>
 
+#include "color/color_encoding_catalog.hpp"
 #include "image/icc_profile_reader.hpp"
 #include "image/raster_container_reader.hpp"
 #include "utils/hash/sha256.hpp"
@@ -48,16 +49,17 @@ void AppendReason(std::string& reasons, std::string_view reason) {
 
 auto SrgbDefault(std::string reason) -> RasterColorDescription {
   auto description =
-      MakeDescription(kRasterPrimariesRec709, MakeTransfer(RasterTransferKind::SrgbPiecewise),
+      MakeDescription(color::GamutPrimariesXy(color::ColorGamutId::Rec709),
+                      MakeTransfer(RasterTransferKind::SrgbPiecewise),
                       RasterColorOrigin::DefaultSrgb, RasterReferral::DisplayReferred);
   description.default_reason_ = std::move(reason);
   return description;
 }
 
 auto LinearRec709Default(std::string reason) -> RasterColorDescription {
-  auto description =
-      MakeDescription(kRasterPrimariesRec709, MakeTransfer(RasterTransferKind::Linear),
-                      RasterColorOrigin::DefaultSrgb, RasterReferral::SceneLinear);
+  auto description = MakeDescription(color::GamutPrimariesXy(color::ColorGamutId::Rec709),
+                                     MakeTransfer(RasterTransferKind::Linear),
+                                     RasterColorOrigin::DefaultSrgb, RasterReferral::SceneLinear);
   description.default_reason_ = std::move(reason);
   return description;
 }
@@ -108,22 +110,22 @@ auto DescribeCicp(const std::array<uint8_t, 4>& cicp, RasterColorOrigin origin,
   std::array<float, 8> primaries{};
   switch (primaries_code) {
     case 1:
-      primaries = kRasterPrimariesRec709;
+      primaries = color::GamutPrimariesXy(color::ColorGamutId::Rec709);
       break;
     case 5:
-      primaries = {0.64f, 0.33f, 0.29f, 0.60f, 0.15f, 0.06f, 0.3127f, 0.3290f};
+      primaries = color::GamutPrimariesXy(color::ColorGamutId::Bt601_625);
       break;
     case 6:
-      primaries = {0.630f, 0.340f, 0.310f, 0.595f, 0.155f, 0.070f, 0.3127f, 0.3290f};
+      primaries = color::GamutPrimariesXy(color::ColorGamutId::Bt601_525);
       break;
     case 9:
-      primaries = kRasterPrimariesRec2020;
+      primaries = color::GamutPrimariesXy(color::ColorGamutId::Rec2020);
       break;
     case 11:
-      primaries = kRasterPrimariesDciP3;
+      primaries = color::GamutPrimariesXy(color::ColorGamutId::P3Dci);
       break;
     case 12:
-      primaries = kRasterPrimariesDisplayP3;
+      primaries = color::GamutPrimariesXy(color::ColorGamutId::P3D65);
       break;
     default:
       AppendReason(reasons,
@@ -204,14 +206,15 @@ auto DescribeIcc(std::span<const std::byte> profile_bytes, bool gray_image, std:
         description->transfer_ = readout.transfer_;
         break;
       case IccProfileLayout::Gray:
-        description =
-            MakeDescription(kRasterPrimariesRec709, readout.transfer_[0],
-                            RasterColorOrigin::IccMatrixShaper, RasterReferral::DisplayReferred);
+        description = MakeDescription(color::GamutPrimariesXy(color::ColorGamutId::Rec709),
+                                      readout.transfer_[0], RasterColorOrigin::IccMatrixShaper,
+                                      RasterReferral::DisplayReferred);
         break;
       case IccProfileLayout::RgbLut:
         // The decoder converts the pixels to linear Rec.2020 with LittleCMS.
         description =
-            MakeDescription(kRasterPrimariesRec2020, MakeTransfer(RasterTransferKind::Linear),
+            MakeDescription(color::GamutPrimariesXy(color::ColorGamutId::Rec2020),
+                            MakeTransfer(RasterTransferKind::Linear),
                             RasterColorOrigin::IccLutConverted, RasterReferral::DisplayReferred);
         break;
       default:
@@ -260,9 +263,10 @@ auto ResolveJpeg(std::span<const std::byte> bytes) -> RasterColorDescription {
   }
   const auto exif = ReadExifColorTags(info.exif_tiff_);
   if (exif.color_space_ == 0xFFFF && exif.interop_index_ == "R03") {
-    auto description = MakeDescription(
-        kRasterPrimariesAdobeRgb, MakeTransfer(RasterTransferKind::Gamma, kAdobeRgbGamma),
-        RasterColorOrigin::ExifInteropAdobeRgb, RasterReferral::DisplayReferred);
+    auto description =
+        MakeDescription(color::GamutPrimariesXy(color::ColorGamutId::AdobeRgb),
+                        MakeTransfer(RasterTransferKind::Gamma, CE_ADOBE_RGB_GAMMA),
+                        RasterColorOrigin::ExifInteropAdobeRgb, RasterReferral::DisplayReferred);
     return description;
   }
   if (exif.color_space_ == 1) {
@@ -296,7 +300,8 @@ auto ResolvePng(std::span<const std::byte> bytes) -> RasterColorDescription {
     }
   }
   if (info.has_srgb_) {
-    return MakeDescription(kRasterPrimariesRec709, MakeTransfer(RasterTransferKind::SrgbPiecewise),
+    return MakeDescription(color::GamutPrimariesXy(color::ColorGamutId::Rec709),
+                           MakeTransfer(RasterTransferKind::SrgbPiecewise),
                            RasterColorOrigin::PngSrgbChunk, RasterReferral::DisplayReferred);
   }
   if (info.gama_) {
@@ -306,8 +311,8 @@ auto ResolvePng(std::span<const std::byte> bytes) -> RasterColorDescription {
       const auto transfer =
           GammaOrLinear(SnapExponent(100000.0 / static_cast<double>(*info.gama_), 1e-3));
       auto description =
-          MakeDescription(kRasterPrimariesRec709, transfer, RasterColorOrigin::PngGamaChrm,
-                          RasterReferral::DisplayReferred);
+          MakeDescription(color::GamutPrimariesXy(color::ColorGamutId::Rec709), transfer,
+                          RasterColorOrigin::PngGamaChrm, RasterReferral::DisplayReferred);
       if (info.chrm_) {
         const auto& chrm        = *info.chrm_;
         auto        with_chrm   = description;
@@ -387,7 +392,8 @@ auto ResolveOpenExr(std::span<const std::byte> bytes) -> RasterColorDescription 
     }
   }
   if (header.aces_container_) {
-    return MakeDescription(kRasterPrimariesAp0, MakeTransfer(RasterTransferKind::Linear),
+    return MakeDescription(color::GamutPrimariesXy(color::ColorGamutId::Ap0),
+                           MakeTransfer(RasterTransferKind::Linear),
                            RasterColorOrigin::ExrAcesContainer, RasterReferral::SceneLinear);
   }
   AppendReason(reasons,

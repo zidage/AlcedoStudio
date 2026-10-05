@@ -1,6 +1,7 @@
 # LUT Input and Output Color Encoding Plan
 
-Status: draft, 2026-10-05. Not started.
+Status: L1 partial (2026-10-05): the color encoding catalog landed; D-Log M is blocked (no DJI
+definition) and Metal is not built or tested. L2 to L4 not started.
 
 Depends on the raster image input stack (`raster_image_input_plan.md`, phases R1 to R5) being on
 `main`. This plan uses the OCIO ACES 2.0 port from Phase R2 (`display_to_ap1_math.h`,
@@ -338,6 +339,125 @@ Acceptance criteria:
   through Develop, Color Grade and ACES 2.0 / OpenDRT DRT before and after the migration differ by
   at most 2⁻¹⁶ per channel, and the serialized DRT node and raster `input` JSON are byte-identical.
 - The BT.1886 decode question of section 5.3 is answered in the completion record.
+
+##### Phase L1 completion record (2026-10-05)
+
+**Status:** partial — catalog, curves, gamut matrices and the move of the section 5.3 copies are
+done on host, CUDA, OpenCL and Metal sources. Open: `dji_dlogm_dgamut` (blocking item below),
+Metal not compiled or run, 3 pixels of the render comparison above 2⁻¹⁶ (PQ source, see below).
+
+**Primary success call chain (curves):**
+
+```text
+GPU pass (CUDA .cu / OpenCL program / Metal shader) or host code
+  -> color/color_encoding_math.h  (CeAcesccEncode/Decode, CeEncode/CeDecode(tf, v),
+                                   CeDisplayEncodeChannel for the DRT output)
+     OpenCL: opencl_gpu_dag_programs.cpp lists the header first in every program that uses it
+     Metal: shaders include it by relative path; CE_* map to precise:: functions
+  -> same float result on every backend (host vs CUDA <= 2.2e-7, host vs OpenCL <= 8.0e-7)
+```
+
+**Primary success call chain (gamuts):**
+
+```text
+caller (aces2_inverse_runtime, raster description, ColorUtils, raster_input_loader)
+  -> color::GamutPrimariesXy(ColorGamutId)          one constexpr table
+  -> color::RgbToXyzMatrix / InvertMatrix / GamutConversionMatrix / RgbToRgbMatrix
+     (OCIO double-precision construction, moved unchanged from aces2_inverse_runtime.cpp)
+  -> Matrix33d, rounded to float by the caller
+```
+
+**Primary failure call chain:**
+
+```text
+unknown encoding id  -> FindColorEncoding returns nullptr (L3 turns it into std::invalid_argument)
+unknown gamut id     -> FindColorGamut throws std::invalid_argument
+degenerate primaries -> InvertMatrix throws std::runtime_error (no substitute matrix)
+unknown tf id        -> CeEncode/CeDecode return the input (only reachable with ids outside
+                        CE_TF_*; DrtEotf / EOTF / CudaDrtEotf are tied to CE_TF_* by static_assert)
+```
+
+**Decisions taken during L1 (deviations from the text above):**
+
+| Item | Plan text | Implemented | Reason |
+|---|---|---|---|
+| Chromatic adaptation | CAT02 for every gamut | Per gamut: Bradford for Rec.709, Rec.2020, P3, Adobe RGB, ProPhoto, BT.601, V-Gamut, REDWideGamutRGB; CAT02 for the other camera gamuts | The OCIO 2.5.1 matrices for V-Gamut, REDWideGamutRGB, the utility spaces and the Apple Log Rec.2020 use Bradford; CAT02 differs by 4e-3 |
+| sRGB | one curve | IEC 61966-2-1 (12.92 / 0.04045) | Raster decode, DNG profiles and Ultra HDR already used it; the DRT encode moved from the moncurve form by at most 9.8e-6 |
+| One matrix builder | double-precision builder for every user | The forward ACES 2.0 DRT and its `limit_to_display` keep the single-precision `ColorUtils::RGB_TO_XYZ_f33`, now fed from the catalog primaries | The double matrices moved gamut-boundary pixels by up to 1.3e-3 at gamma 2.6 and broke the 2⁻¹⁶ criterion; section 7 keeps the forward DRT unchanged |
+| PQ | textbook formula | Cancellation-free form (Kahan expm1/log1p) | The textbook form lost 5e-5 relative near 10000 nits in single precision; now within 1e-5 of OCIO |
+| ProPhoto primaries | — | ISO 22028-2 values (0.7347, 0.2653, ...) for the DRT enum and raster | Two different ProPhoto copies existed; ProPhoto is not a DRT encoding space |
+| Log-camera decode | — | Multiplies by reciprocal constants | OpenCL C does not round float division correctly by default (LogC4 was 1.5e-6 off the host) |
+
+**Blocking item — D-Log M:** DJI publishes a D-Log and D-Gamut white paper (2017, X9 2022) but
+no D-Log M formula or code value table. `dji_dlogm_dgamut` is not in the catalog (25 encodings, not
+the 26 of section 5.2). Adding it needs a DJI document.
+
+**BT.1886 decode question (section 5.3):** answered. The 2.6 decode lived in `eotf()` and
+`DisplayDecoding` in `disp_enc_funcs.cuh`; neither had a caller on any backend. Both are deleted.
+BT.1886 is gamma 2.4 in both directions.
+
+**OCIO builtin list recorded at the start of L1** (studio-config-v4.0.0_aces-v2.0_ocio-v2.5):
+ACEScc, ACEScct, ARRI LogC3 (EI 800), ARRI LogC4, Sony S-Log3, Panasonic V-Log, Canon Log 2,
+Canon Log 3, RED Log3G10, Blackmagic Film Gen 5, DaVinci Intermediate, Apple Log, DJI D-Log,
+ST 2084. No OCIO builtin: Fujifilm F-Log, F-Log2 and Nikon N-Log (checked against the vendor
+documents), HLG (checked against ITU-R BT.2100 in double precision).
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+|---|---|---|
+| Camera curves vs OCIO builtins on 4096 code values, 1e-5 relative (absolute 1e-7 below linear 1e-2) | `ColorEncodingCatalogTest.CurvesMatchOcioBuiltinsOn4096CodeValues` | PASS |
+| Vendor code values (F-Log 95/470/705, F-Log2 95/400/570, N-Log formula and 372 at 18%, D-Log 408/586), within 1/4096 of the document formula | `ColorEncodingCatalogTest.CurvesWithoutOcioBuiltinMatchVendorCodeValues` | PASS |
+| HLG vs BT.2100 | `ColorEncodingCatalogTest.HlgMatchesBt2100InverseOetfOn4096CodeValues` | PASS |
+| Round trip within 1e-6 on [0, 1], every curve | `ColorEncodingCatalogTest.EncodeAfterDecodeReturnsCodeValueWithin1e6ForEveryCurve` | PASS (N-Log: codes below 0.01 and the band between its two documented breakpoints are excluded; the test states why) |
+| Gamut to AP1 vs OCIO within 1e-6 (15 gamuts) | `ColorEncodingCatalogTest.GamutToAp1MatricesMatchOcioWithin1e6` | PASS |
+| Rec.2020 vs the OCIO Apple Log IDT | `ColorEncodingCatalogTest.Rec2020ToAp0MatrixMatchesOcioAppleLogInputTransform` | PASS (1e-5, includes the curve) |
+| Host vs CUDA within 1e-6, every curve | `ColorEncodingCudaTest` (2 tests) | PASS (worst 2.2e-7) |
+| Host vs OpenCL within 1e-6, every curve | `ColorEncodingOpenClTest` (2 tests) | PASS (worst 8.0e-7) |
+| Host vs Metal | — | NOT RUN (Windows machine; Metal sources edited, not compiled) |
+| Catalog table, ids, ACEScc middle grey, display encode | 5 more `ColorEncodingCatalogTest` tests | PASS |
+| R2 still matches OCIO after the move | `Aces2InverseTest`, `GpuDagCudaDisplayToAp1Test`, `GpuDagOpenClDisplayToAp1Test` | PASS |
+| Serialized DRT node and raster `input` JSON unchanged | `GpuDagModelGraphTest`, `RasterColorDescriptionTest`, `ImportPipelineDocumentTest`, `EditorPanelProjectionTest` (stored JSON); enum strings and serialization code are not changed | PASS |
+| OpenCL DRT program sources | `GpuDagOpenClDrtProductTest.OpenClDrtProgramBuildsFromRuntimeShaderDirectory` (updated to 6 sources) | NOT RE-RUN after the update |
+
+Render before/after (temporary harness, not committed): one RAW (`om1.dng`), 7 raster fixtures
+(sRGB, Display P3, Adobe RGB, PQ, HLG, BT.1886, float linear) and a synthetic HDR ramp, each
+through Develop, Color Grade (exposure, contrast, saturation, shadows, highlights) and 10 DRT
+settings (ACES 2.0 sRGB / BT.1886 / 2.2 / 1.8 / P3 2.6 / Rec.2020 PQ 1000 / HLG 1000; OpenDRT
+2.2 / BT.1886 / PQ 1000), on CUDA and OpenCL: 180 renders, `HEAD` against the change. 178 are within
+2⁻¹⁶ per channel. 2 renders (the PQ fixture at P3 gamma 2.6, CUDA and OpenCL) exceed it at 3
+pixels, max 3.2e-5; the cause is the PQ decode correction above. RAW renders differ by at most
+7.8e-6.
+
+Suite totals: host suites 239/239 (`ColorEncoding*`, `Aces2InverseTest`,
+`RasterColorDescriptionTest`, `MetadataExtractorTest`, `LocalToneMappingConstantsMatchRuntimeTest`,
+`DngColorProfileTest`, `GpuDagModelGraphTest`, `EditorPanelProjectionTest`,
+`ImportPipelineDocumentTest`, `ImageWriterTest`). GPU suites (`GpuDagCuda{Develop,PrimaryGrade,
+DrtProduct,RasterDevelop,DisplayToAp1}Test`, `GpuDagOpenCl{Develop,Grade,RasterDevelop,
+DisplayToAp1,DrtProduct}Test`): 319/336. 16 failures (CUDA and OpenCL multi-grade, scene-work
+pair, neighbor grade, LUT timing) fail the same way on clean `HEAD`; the 17th was the
+program-source test updated above.
+
+Commands: `cmd /c scripts\msvc_env.cmd --build --preset win_debug --target <targets>` and
+`ctest --test-dir build/debug -R "<pattern>" -j 1 --output-on-failure` (vcpkg debug bin on PATH).
+The final rebuild after `clang-format` was stopped before it completed; formatting changed no code.
+
+**Checklist / exit condition:** catalog and the section 5.3 move are done; D-Log M is blocked;
+Metal evaluation not run; render criterion met except 3 PQ pixels.
+
+**LOC note (grill-code-review):** `color_encoding_math.h` 612, `color_encoding_catalog.cpp` 354,
+`color_encoding_catalog.hpp` 178, tests 599. Net change of the existing files: -1207 lines (copies
+deleted).
+
+**Remaining gaps:**
+- D-Log M (needs a DJI document).
+- Metal: shaders and CMake edited, not compiled; no Metal curve test run.
+- Constants outside the section 5.3 list stay in place: `develop_color_transform.cpp`
+  (XYZ to Rec.709, XYZ D60 to AP1, D50 and D60 whites) and the CICP transfer exponents.
+- Pre-existing, found during L1: the install rules do not package `display_to_ap1_math.h` and
+  `raster_linearize_math.h` for OpenCL, so the packaged raster OpenCL program cannot load.
+- `AGENTS.md` says public members have no trailing `_`; `.clang-tidy` requires it. The catalog
+  follows `.clang-tidy` and the neighbouring raster types.
 
 ### Phase L2 — OCIO ACES 2.0 reference forward
 

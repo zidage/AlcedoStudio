@@ -104,8 +104,9 @@ TEST_F(CudaDisplayToAp1Test, Aces2InverseReturnsBlackForBlackAndNeutralForSource
 
 TEST_F(CudaDisplayToAp1Test, AcesccOutputMatchesHostEvaluationForBothBranches) {
   CudaDisplayToAp1Parameters parameters;
-  const auto         display = ResolveAces2InverseRuntime(kRasterPrimariesDisplayP3, 100.0f);
-  const auto         scene   = PackSceneLinearToAp1(kRasterPrimariesAp0);
+  const auto                 display =
+      ResolveAces2InverseRuntime(color::GamutPrimariesXy(color::ColorGamutId::P3D65), 100.0f);
+  const auto scene = PackSceneLinearToAp1(color::GamutPrimariesXy(color::ColorGamutId::Ap0));
   std::vector<float> rgb;
   for (int i = 0; i < 64; ++i) {
     rgb.push_back(static_cast<float>(i % 4) / 3.0f);
@@ -129,8 +130,10 @@ TEST_F(CudaDisplayToAp1Test, AcesccOutputMatchesHostEvaluationForBothBranches) {
 
 TEST_F(CudaDisplayToAp1Test, ParameterBlockIsUploadedOnlyWhenItChanges) {
   CudaDisplayToAp1Parameters parameters;
-  const auto                 a = ResolveAces2InverseRuntime(kRasterPrimariesRec709, 100.0f);
-  const auto                 b = ResolveAces2InverseRuntime(kRasterPrimariesRec2020, 100.0f);
+  const auto                 a =
+      ResolveAces2InverseRuntime(color::GamutPrimariesXy(color::ColorGamutId::Rec709), 100.0f);
+  const auto b =
+      ResolveAces2InverseRuntime(color::GamutPrimariesXy(color::ColorGamutId::Rec2020), 100.0f);
   (void)parameters.Upload(a->packed_, nullptr);
   (void)parameters.Upload(a->packed_, nullptr);
   EXPECT_EQ(parameters.UploadCount(), 1u);
@@ -144,7 +147,8 @@ TEST_F(CudaDisplayToAp1Test, InverseKernelTimeIsMeasuredAtUhdExtent) {
   // pass statistics once the pass runs in the develop graph.
   constexpr std::uint32_t    kPixels = 3840u * 2160u;
   CudaDisplayToAp1Parameters parameters;
-  const auto runtime = ResolveAces2InverseRuntime(kRasterPrimariesDisplayP3, 100.0f);
+  const auto                 runtime =
+      ResolveAces2InverseRuntime(color::GamutPrimariesXy(color::ColorGamutId::P3D65), 100.0f);
   float4*    input   = nullptr;
   float4*    output  = nullptr;
   ASSERT_EQ(::cudaMalloc(reinterpret_cast<void**>(&input), kPixels * sizeof(float4)), cudaSuccess);

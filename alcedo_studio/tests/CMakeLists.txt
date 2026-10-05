@@ -60,6 +60,7 @@ include("${ALCEDO_TEST_ROOT}/cmake/AlcedoTestRegistration.cmake")
 # Phase 3D test domain manifests
 # ==============================================================================
 add_subdirectory(utils)
+add_subdirectory(color)
 add_subdirectory(ui)
 add_subdirectory(sleeve)
 add_subdirectory(raw)

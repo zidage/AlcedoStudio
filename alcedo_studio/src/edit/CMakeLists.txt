@@ -124,7 +124,7 @@ def_library(EditRuntimeDrt
         ${ALCEDO_SRC_ROOT}/edit/runtime/drt/aces_odt_runtime.cpp
         ${ALCEDO_SRC_ROOT}/edit/runtime/drt/aces2_inverse_runtime.cpp
         ${ALCEDO_SRC_ROOT}/edit/runtime/drt/open_drt_runtime.cpp
-    PUBLIC_DEPS EditGraph ${ALCEDO_OPENCV_CORE_DEPS}
+    PUBLIC_DEPS EditGraph ColorEncodingCatalog ${ALCEDO_OPENCV_CORE_DEPS}
 )
 
 # Lens calibration shared by the CUDA, OpenCL, and Metal Develop passes: the Lensfun resolver and the

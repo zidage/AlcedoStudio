@@ -130,12 +130,16 @@ TEST(Aces2InverseTest, Aces2InverseReturnsBlackForBlackAndNeutralForSourceWhite)
 TEST(Aces2InverseTest, Aces2InverseRuntimeIsBuiltOncePerPrimariesAndPeak) {
   // Unusual peaks keep these keys out of every other test in the process.
   const auto before = Aces2InverseRuntimeBuildCount();
-  const auto a      = ResolveAces2InverseRuntime(kRasterPrimariesDisplayP3, 123.0f);
-  const auto b      = ResolveAces2InverseRuntime(kRasterPrimariesDisplayP3, 123.0f);
+  const auto a =
+      ResolveAces2InverseRuntime(color::GamutPrimariesXy(color::ColorGamutId::P3D65), 123.0f);
+  const auto b =
+      ResolveAces2InverseRuntime(color::GamutPrimariesXy(color::ColorGamutId::P3D65), 123.0f);
   EXPECT_EQ(a.get(), b.get());
   EXPECT_EQ(Aces2InverseRuntimeBuildCount(), before + 1);
-  const auto other_peak  = ResolveAces2InverseRuntime(kRasterPrimariesDisplayP3, 124.0f);
-  const auto other_space = ResolveAces2InverseRuntime(kRasterPrimariesRec709, 123.0f);
+  const auto other_peak =
+      ResolveAces2InverseRuntime(color::GamutPrimariesXy(color::ColorGamutId::P3D65), 124.0f);
+  const auto other_space =
+      ResolveAces2InverseRuntime(color::GamutPrimariesXy(color::ColorGamutId::Rec709), 123.0f);
   EXPECT_NE(other_peak.get(), a.get());
   EXPECT_NE(other_space.get(), a.get());
   EXPECT_EQ(Aces2InverseRuntimeBuildCount(), before + 3);
@@ -143,11 +147,12 @@ TEST(Aces2InverseTest, Aces2InverseRuntimeIsBuiltOncePerPrimariesAndPeak) {
 }
 
 TEST(Aces2InverseTest, SourceOutsideAp1UsesAp1LimitingAndKeepsSourceWhiteNeutral) {
-  EXPECT_TRUE(SourcePrimariesInsideAp1(kRasterPrimariesRec2020));
-  EXPECT_TRUE(SourcePrimariesInsideAp1(kRasterPrimariesAdobeRgb));
-  EXPECT_FALSE(SourcePrimariesInsideAp1(kRasterPrimariesProPhoto));
+  EXPECT_TRUE(SourcePrimariesInsideAp1(color::GamutPrimariesXy(color::ColorGamutId::Rec2020)));
+  EXPECT_TRUE(SourcePrimariesInsideAp1(color::GamutPrimariesXy(color::ColorGamutId::AdobeRgb)));
+  EXPECT_FALSE(SourcePrimariesInsideAp1(color::GamutPrimariesXy(color::ColorGamutId::ProPhoto)));
 
-  const auto runtime = BuildAces2InverseRuntime(kRasterPrimariesProPhoto, 100.0f);
+  const auto runtime =
+      BuildAces2InverseRuntime(color::GamutPrimariesXy(color::ColorGamutId::ProPhoto), 100.0f);
   EXPECT_TRUE(runtime.limiting_is_ap1_);
   EXPECT_FLOAT_EQ(runtime.limiting_primaries_xy_[0], 0.713f);
   // ProPhoto white (D50) is adapted to the AP1 white before the inverse, so it stays neutral.
@@ -163,7 +168,8 @@ TEST(Aces2InverseTest, SourceOutsideAp1UsesAp1LimitingAndKeepsSourceWhiteNeutral
 }
 
 TEST(Aces2InverseTest, AcesccOutputClampsAp1AndEncodesLikeCameraToAp1) {
-  const auto  runtime = BuildAces2InverseRuntime(kRasterPrimariesRec709, 100.0f);
+  const auto runtime =
+      BuildAces2InverseRuntime(color::GamutPrimariesXy(color::ColorGamutId::Rec709), 100.0f);
   const auto& p       = runtime.packed_;
   for (const auto& rgb :
        {std::array<float, 3>{0.18f, 0.18f, 0.18f}, std::array<float, 3>{1.0f, 0.0f, 0.0f},
@@ -184,8 +190,10 @@ TEST(Aces2InverseTest, AcesccOutputClampsAp1AndEncodesLikeCameraToAp1) {
 }
 
 TEST(Aces2InverseTest, SceneLinearMatrixMapsSourceWhiteToAp1Neutral) {
-  for (const auto& primaries : {kRasterPrimariesRec709, kRasterPrimariesDisplayP3,
-                                kRasterPrimariesProPhoto, kRasterPrimariesAp0}) {
+  for (const auto& primaries : {color::GamutPrimariesXy(color::ColorGamutId::Rec709),
+                                color::GamutPrimariesXy(color::ColorGamutId::P3D65),
+                                color::GamutPrimariesXy(color::ColorGamutId::ProPhoto),
+                                color::GamutPrimariesXy(color::ColorGamutId::Ap0)}) {
     const auto packed = PackSceneLinearToAp1(primaries);
     EXPECT_EQ(packed[ALCEDO_D2A_BRANCH], 1.0f);
     const auto cc = D2aSourceToAcesccAp1(D2aMake3(0.18f, 0.18f, 0.18f), packed.data());
@@ -195,7 +203,7 @@ TEST(Aces2InverseTest, SceneLinearMatrixMapsSourceWhiteToAp1Neutral) {
   }
   // AP0 red lies outside AP1; the reference gamut compression keeps the result finite and
   // bounded below.
-  const auto ap0 = PackSceneLinearToAp1(kRasterPrimariesAp0);
+  const auto ap0 = PackSceneLinearToAp1(color::GamutPrimariesXy(color::ColorGamutId::Ap0));
   const auto red = D2aSourceToAcesccAp1(D2aMake3(1.0f, 0.0f, 0.0f), ap0.data());
   EXPECT_GT(AcesccDecode(red.y), -0.1f);
   EXPECT_GT(AcesccDecode(red.z), -0.1f);
@@ -205,7 +213,8 @@ TEST(Aces2InverseTest, TableBuildTimeIsMeasured) {
   // Section 5.4 target: at most 20 ms per new key in a release build. A debug build only
   // reports the time.
   const auto start   = std::chrono::steady_clock::now();
-  const auto runtime = BuildAces2InverseRuntime(kRasterPrimariesAdobeRgb, 1000.0f);
+  const auto runtime =
+      BuildAces2InverseRuntime(color::GamutPrimariesXy(color::ColorGamutId::AdobeRgb), 1000.0f);
   const auto elapsed =
       std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
   RecordProperty("table_build_ms", std::to_string(elapsed));

@@ -20,6 +20,7 @@
 #include <thread>
 #include <vector>
 
+#include "color/color_encoding_math.h"
 #include "io/image/export_icc_profile_resolver.hpp"
 #include "io/image/jpeg_exif_app1.hpp"
 
@@ -93,42 +94,13 @@ auto MakeSdrBaseColorProfile(const ExportColorProfileConfig& color_profile)
   return base_profile;
 }
 
-float DecodePq(float value) {
-  constexpr float kPqM1   = 2610.0f / 16384.0f;
-  constexpr float kPqM2   = 2523.0f / 4096.0f * 128.0f;
-  constexpr float kPqC1   = 3424.0f / 4096.0f;
-  constexpr float kPqC2   = 2413.0f / 4096.0f * 32.0f;
-  constexpr float kPqC3   = 2392.0f / 4096.0f * 32.0f;
+float DecodePq(float value) { return CePqDecode(std::clamp(value, 0.0f, 1.0f)); }
 
-  const float     clamped = std::clamp(value, 0.0f, 1.0f);
-  const float     powered = std::pow(clamped, 1.0f / kPqM2);
-  const float     numer   = std::max(powered - kPqC1, 0.0f);
-  const float     denom   = kPqC2 - kPqC3 * powered;
-  if (denom <= 0.0f) {
-    return 0.0f;
-  }
-  return std::pow(numer / denom, 1.0f / kPqM1);
-}
+float EncodeSrgb(float value) { return CeSrgbEncode(std::clamp(value, 0.0f, 1.0f)); }
 
-float EncodeSrgb(float value) {
-  const float clamped = std::clamp(value, 0.0f, 1.0f);
-  if (clamped <= 0.0031308f) {
-    return 12.92f * clamped;
-  }
-  return 1.055f * std::pow(clamped, 1.0f / 2.4f) - 0.055f;
-}
-
+/// Gray axis of the 1000-nit HLG reference display.
 float DecodeHlg(float value) {
-  constexpr float kHlgA        = 0.17883277f;
-  constexpr float kHlgB        = 0.28466892f;
-  constexpr float kHlgC        = 0.55991073f;
-  constexpr float kOotfGamma   = 1.2f;
-
-  const float     clamped      = std::clamp(value, 0.0f, 1.0f);
-  const float     scene_linear = clamped <= 0.5f
-                                     ? (clamped * clamped) / 3.0f
-                                     : (std::exp((clamped - kHlgC) / kHlgA) + kHlgB) / 12.0f;
-  return std::pow(scene_linear, kOotfGamma);
+  return CeGammaDecode(CeHlgDecode(std::clamp(value, 0.0f, 1.0f)), CE_HLG_OOTF_GAMMA);
 }
 
 auto LinearScaleFor(ColorUtils::EOTF eotf) -> float {

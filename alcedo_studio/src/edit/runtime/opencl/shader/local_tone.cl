@@ -71,44 +71,14 @@ typedef struct {
   float render_to_uv[12];
 } ApplyParams;
 
-static inline float AcesccEncode(float value) {
-  const float kA          = 9.72f;
-  const float kB          = 17.52f;
-  const float kOffset     = 0.0000152587890625f;
-  const float kTransition = 0.000030517578125f;
-  const float kFloor      = (-16.0f + kA) / kB;
-  if (value < 0.0f) {
-    return kFloor + value;
-  }
-  if (value < kTransition) {
-    return (log2(kOffset + value * 0.5f) + kA) / kB;
-  }
-  return (log2(value) + kA) / kB;
-}
-
-static inline float AcesccDecode(float value) {
-  const float kA         = 9.72f;
-  const float kB         = 17.52f;
-  const float kOffset    = 0.0000152587890625f;
-  const float kFloor     = (-16.0f + kA) / kB;
-  const float kThreshold = (-15.0f + kA) / kB;
-  if (value < kFloor) {
-    return value - kFloor;
-  }
-  if (value <= kThreshold) {
-    return (exp2(value * kB - kA) - kOffset) * 2.0f;
-  }
-  return exp2(value * kB - kA);
-}
-
 static inline float Ap1Intensity(float4 pixel) {
   return 0.272229f * pixel.x + 0.674082f * pixel.y + 0.053689f * pixel.z;
 }
 
 static inline float LogIntensity(float4 acescc) {
-  const float4 linear = (float4)(AcesccDecode(acescc.x), AcesccDecode(acescc.y),
-                                 AcesccDecode(acescc.z), acescc.w);
-  return AcesccEncode(fmax(Ap1Intensity(linear), 1.0e-6f));
+  const float4 linear = (float4)(CeAcesccDecode(acescc.x), CeAcesccDecode(acescc.y),
+                                 CeAcesccDecode(acescc.z), acescc.w);
+  return CeAcesccEncode(fmax(Ap1Intensity(linear), 1.0e-6f));
 }
 
 static inline float4 ReadRgbaBilinear(__read_only image2d_t input, int width, int height, float x,
@@ -332,12 +302,12 @@ __kernel void local_tone_apply(__read_only image2d_t src, __write_only image2d_t
       Bilinear(adjusted, adjusted_offset, params.adjusted_width, params.adjusted_height, ax, ay);
   const float4 pixel = read_imagef(src, kNearestClamp, (int2)(x, y));
   const float  source_l = LogIntensity(pixel);
-  const float  source_intensity = fmax(AcesccDecode(source_l), 1.0e-5f);
-  const float  target_intensity = AcesccDecode(source_l + adjusted_l - reference_l);
+  const float  source_intensity = fmax(CeAcesccDecode(source_l), 1.0e-5f);
+  const float  target_intensity = CeAcesccDecode(source_l + adjusted_l - reference_l);
   const float  ratio = fmin(fmax(target_intensity / source_intensity, 0.0f), 32.0f);
-  float        r = AcesccDecode(pixel.x) * ratio;
-  float        g = AcesccDecode(pixel.y) * ratio;
-  float        b = AcesccDecode(pixel.z) * ratio;
+  float        r = CeAcesccDecode(pixel.x) * ratio;
+  float        g = CeAcesccDecode(pixel.y) * ratio;
+  float        b = CeAcesccDecode(pixel.z) * ratio;
   const float  kLower = -1.0e-5f;
   float        gamut_scale = 1.0f;
   if (r < kLower && target_intensity > r) {
@@ -353,7 +323,7 @@ __kernel void local_tone_apply(__read_only image2d_t src, __write_only image2d_t
   r = target_intensity + (r - target_intensity) * gamut_scale;
   g = target_intensity + (g - target_intensity) * gamut_scale;
   b = target_intensity + (b - target_intensity) * gamut_scale;
-  write_imagef(dst, (int2)(x, y), (float4)(AcesccEncode(r), AcesccEncode(g), AcesccEncode(b),
+  write_imagef(dst, (int2)(x, y), (float4)(CeAcesccEncode(r), CeAcesccEncode(g), CeAcesccEncode(b),
                                              pixel.w));
 }
 
@@ -439,12 +409,12 @@ __kernel void local_tone_apply_scene(__global float4* working,
   const uint   index = (uint)y * (uint)params.width + (uint)x;
   const float4 pixel = working[index];
   const float  source_l = LogIntensity(pixel);
-  const float  source_intensity = fmax(AcesccDecode(source_l), 1.0e-5f);
-  const float  target_intensity = AcesccDecode(source_l + adjusted_l - reference_l);
+  const float  source_intensity = fmax(CeAcesccDecode(source_l), 1.0e-5f);
+  const float  target_intensity = CeAcesccDecode(source_l + adjusted_l - reference_l);
   const float  ratio = fmin(fmax(target_intensity / source_intensity, 0.0f), 32.0f);
-  float        r = AcesccDecode(pixel.x) * ratio;
-  float        g = AcesccDecode(pixel.y) * ratio;
-  float        b = AcesccDecode(pixel.z) * ratio;
+  float        r = CeAcesccDecode(pixel.x) * ratio;
+  float        g = CeAcesccDecode(pixel.y) * ratio;
+  float        b = CeAcesccDecode(pixel.z) * ratio;
   const float  kLower = -1.0e-5f;
   float        gamut_scale = 1.0f;
   if (r < kLower && target_intensity > r) {
@@ -460,7 +430,7 @@ __kernel void local_tone_apply_scene(__global float4* working,
   r = target_intensity + (r - target_intensity) * gamut_scale;
   g = target_intensity + (g - target_intensity) * gamut_scale;
   b = target_intensity + (b - target_intensity) * gamut_scale;
-  float4 tone = (float4)(AcesccEncode(r), AcesccEncode(g), AcesccEncode(b), pixel.w);
+  float4 tone = (float4)(CeAcesccEncode(r), CeAcesccEncode(g), CeAcesccEncode(b), pixel.w);
   if (mix_is_buffer >= 0) {
     const float4 original = SceneReadRgbaAt(mix_image, mix_buffer, mix_is_buffer, (int2)(x, y),
                                             params.width, params.height);

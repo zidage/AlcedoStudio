@@ -14,14 +14,14 @@
 #include <utility>
 #include <vector>
 
-#include "cuda_acescc.cuh"
-#include "edit/runtime/local_tone_mapping.hpp"
+#include "color/color_encoding_math.h"
 #include "edit/runtime/cuda/cuda_local_tone_pass.hpp"
 #include "edit/runtime/cuda/cuda_render_device.hpp"
 #include "edit/runtime/cuda/cuda_scene_work.hpp"
 #include "edit/runtime/frame_scene_binding.hpp"
 #include "edit/runtime/local_tone_cache_ids.hpp"
 #include "edit/runtime/local_tone_executor.hpp"
+#include "edit/runtime/local_tone_mapping.hpp"
 #include "edit/runtime/local_tone_plan.hpp"
 #include "edit/runtime/runtime_invalidation.hpp"
 #include "edit/runtime/texture_format.hpp"
@@ -36,9 +36,9 @@ __device__ auto Ap1Intensity(const float4& pixel) -> float {
 }
 
 __device__ auto LogIntensity(const float4& acescc) -> float {
-  const float4 linear = make_float4(cuda_acescc::Decode(acescc.x), cuda_acescc::Decode(acescc.y),
-                                    cuda_acescc::Decode(acescc.z), acescc.w);
-  return cuda_acescc::Encode(fmaxf(Ap1Intensity(linear), 1.0e-6f));
+  const float4 linear = make_float4(CeAcesccDecode(acescc.x), CeAcesccDecode(acescc.y),
+                                    CeAcesccDecode(acescc.z), acescc.w);
+  return CeAcesccEncode(fmaxf(Ap1Intensity(linear), 1.0e-6f));
 }
 
 __device__ auto ReadRgbaBilinear(const float4* input, int width, int height, float x, float y)
@@ -218,12 +218,12 @@ __global__ void ApplyKernel(const float4* input, const float4* original, const f
   const float     adjusted_l  = Bilinear(adjusted, adjusted_width, adjusted_height, ax, ay);
   const float4    pixel       = input[index];
   const float     source_l    = LogIntensity(pixel);
-  const float     source_intensity = fmaxf(cuda_acescc::Decode(source_l), 1.0e-5f);
-  const float     target_intensity = cuda_acescc::Decode(source_l + adjusted_l - reference_l);
+  const float     source_intensity = fmaxf(CeAcesccDecode(source_l), 1.0e-5f);
+  const float     target_intensity = CeAcesccDecode(source_l + adjusted_l - reference_l);
   const float     ratio            = fminf(fmaxf(target_intensity / source_intensity, 0.0f), 32.0f);
-  float           r                = cuda_acescc::Decode(pixel.x) * ratio;
-  float           g                = cuda_acescc::Decode(pixel.y) * ratio;
-  float           b                = cuda_acescc::Decode(pixel.z) * ratio;
+  float           r                = CeAcesccDecode(pixel.x) * ratio;
+  float           g                = CeAcesccDecode(pixel.y) * ratio;
+  float           b                = CeAcesccDecode(pixel.z) * ratio;
   constexpr float kLower           = -1.0e-5f;
   float           gamut_scale      = 1.0f;
   if (r < kLower && target_intensity > r) {
@@ -239,8 +239,7 @@ __global__ void ApplyKernel(const float4* input, const float4* original, const f
   r           = target_intensity + (r - target_intensity) * gamut_scale;
   g           = target_intensity + (g - target_intensity) * gamut_scale;
   b           = target_intensity + (b - target_intensity) * gamut_scale;
-  const float4 tone =
-      make_float4(cuda_acescc::Encode(r), cuda_acescc::Encode(g), cuda_acescc::Encode(b), pixel.w);
+  const float4 tone = make_float4(CeAcesccEncode(r), CeAcesccEncode(g), CeAcesccEncode(b), pixel.w);
   if (grade_mix == 1.0f && mask == nullptr) {
     output[index] = tone;
     return;

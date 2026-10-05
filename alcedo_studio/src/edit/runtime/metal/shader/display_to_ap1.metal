@@ -8,6 +8,7 @@
 #include <metal_stdlib>
 
 using namespace metal;
+#include "../../../../include/color/color_encoding_math.h"
 #include "../../../../include/edit/runtime/display_to_ap1_math.h"
 #include "../../../../include/edit/runtime/raster_linearize_math.h"
 

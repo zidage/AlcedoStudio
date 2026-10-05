@@ -19,6 +19,8 @@
 #include <mutex>
 #include <stdexcept>
 
+#include "color/color_encoding_catalog.hpp"
+
 // The tables are compared with OpenColorIO within the tolerance of raster_image_input_plan.md,
 // section 5.7. Apple clang fuses a * b + c into one FMA by default; with that rounding the table
 // build moves the inverse outside the tolerance near a display channel of 0 (seen on Apple
@@ -36,7 +38,14 @@ namespace {
 using F2                                 = std::array<float, 2>;
 using F3                                 = std::array<float, 3>;
 using M33f                               = std::array<float, 9>;  // Row major; Mul(v, m) is m * v.
-using M33d                               = std::array<double, 9>;
+using M33d                               = color::Matrix33d;
+
+auto Ap0Primaries() -> const color::PrimariesXy& {
+  return color::GamutPrimariesXy(color::ColorGamutId::Ap0);
+}
+auto Ap1Primaries() -> const color::PrimariesXy& {
+  return color::GamutPrimariesXy(color::ColorGamutId::Ap1);
+}
 
 constexpr float    kPi                   = 3.14159265358979f;
 constexpr float    kHueLimit             = 360.0f;
@@ -79,79 +88,9 @@ constexpr unsigned kLastNominalIndex     = kUpperWrapIndex - 1;
 using Table1D                            = std::array<float, kTableSize>;
 using Table3D                            = std::array<F3, kTableSize>;
 
-constexpr std::array<float, 8> kCam16Primaries = {0.8336f, 0.1735f, 2.3854f, -1.4659f,
-                                                  0.087f,  -0.125f, 0.333f,  0.333f};
-constexpr std::array<float, 8> kAp0Primaries   = {0.7347f, 0.2653f,  0.0f,     1.0f,
-                                                  0.0001f, -0.0770f, 0.32168f, 0.33767f};
-constexpr std::array<float, 8> kAp1Primaries   = {0.713f, 0.293f, 0.165f,   0.830f,
-                                                  0.128f, 0.044f, 0.32168f, 0.33767f};
-
 // -------------------------------------------------------------------------------------------
-// Matrices (OCIO ColorMatrixHelpers: double precision, then single)
+// Matrices: the catalog's OCIO construction in double precision, then single
 // -------------------------------------------------------------------------------------------
-
-auto                           MulD(const M33d& a, const M33d& b) -> M33d {
-  M33d out{};
-  for (int r = 0; r < 3; ++r) {
-    for (int c = 0; c < 3; ++c) {
-      out[r * 3 + c] = a[r * 3] * b[c] + a[r * 3 + 1] * b[3 + c] + a[r * 3 + 2] * b[6 + c];
-    }
-  }
-  return out;
-}
-
-/// Gauss-Jordan inverse with partial pivoting, in the operation order of OCIO
-/// MatrixOpData::MatrixArray::inverse (from Imath gjInverse), so that the single-precision
-/// matrices match OCIO's bit for bit.
-auto InverseD(const M33d& m) -> M33d {
-  M33d t = m;
-  M33d s = {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
-  for (int i = 0; i < 3; ++i) {
-    int    pivot     = i;
-    double pivotsize = std::abs(t[i * 3 + i]);
-    for (int j = i + 1; j < 3; ++j) {
-      const double tmp = std::abs(t[j * 3 + i]);
-      if (tmp > pivotsize) {
-        pivot     = j;
-        pivotsize = tmp;
-      }
-    }
-    if (pivotsize == 0.0) {
-      throw std::runtime_error("ACES 2.0 inverse: singular matrix");
-    }
-    if (pivot != i) {
-      for (int j = 0; j < 3; ++j) {
-        std::swap(t[i * 3 + j], t[pivot * 3 + j]);
-        std::swap(s[i * 3 + j], s[pivot * 3 + j]);
-      }
-    }
-    for (int j = i + 1; j < 3; ++j) {
-      const double f = t[j * 3 + i] / t[i * 3 + i];
-      for (int k = 0; k < 3; ++k) {
-        t[j * 3 + k] -= f * t[i * 3 + k];
-        s[j * 3 + k] -= f * s[i * 3 + k];
-      }
-    }
-  }
-  for (int i = 2; i >= 0; --i) {
-    const double f = t[i * 3 + i];
-    if (f == 0.0) {
-      throw std::runtime_error("ACES 2.0 inverse: singular matrix");
-    }
-    for (int j = 0; j < 3; ++j) {
-      t[i * 3 + j] /= f;
-      s[i * 3 + j] /= f;
-    }
-    for (int j = 0; j < i; ++j) {
-      const double g = t[j * 3 + i];
-      for (int k = 0; k < 3; ++k) {
-        t[j * 3 + k] -= g * t[i * 3 + k];
-        s[j * 3 + k] -= g * s[i * 3 + k];
-      }
-    }
-  }
-  return s;
-}
 
 auto ToFloat(const M33d& m) -> M33f {
   M33f out{};
@@ -159,51 +98,6 @@ auto ToFloat(const M33d& m) -> M33f {
     out[i] = static_cast<float>(m[i]);
   }
   return out;
-}
-
-/// RGB to XYZ with Y(white) = 1 (OCIO rgb2xyz_from_xy).
-auto RgbToXyzD(const std::array<float, 8>& p) -> M33d {
-  const double rx = p[0], ry = p[1], gx = p[2], gy = p[3], bx = p[4], by = p[5];
-  const double wx = p[6], wy = p[7];
-  const M33d   xyz      = {rx, gx, bx, ry, gy, by, 1.0 - rx - ry, 1.0 - gx - gy, 1.0 - bx - by};
-  const M33d   inv      = InverseD(xyz);
-  const double white[3] = {wx / wy, 1.0, (1.0 - wx - wy) / wy};
-  M33d         out{};
-  for (int i = 0; i < 3; ++i) {
-    const double gain =
-        white[0] * inv[i * 3] + white[1] * inv[i * 3 + 1] + white[2] * inv[i * 3 + 2];
-    for (int j = 0; j < 3; ++j) {
-      out[j * 3 + i] = gain * xyz[j * 3 + i];
-    }
-  }
-  return out;
-}
-
-/// CAT02 adaptation from @p source_white to @p target_white (xy).
-auto Cat02D(double sx, double sy, double tx, double ty) -> M33d {
-  constexpr M33d kCat02 = {0.7328, 0.4296, -0.1624, -0.7036, 1.6975,
-                           0.0061, 0.0030, 0.0136,  0.9834};
-  const double   src[3] = {sx / sy, 1.0, (1.0 - sx - sy) / sy};
-  const double   dst[3] = {tx / ty, 1.0, (1.0 - tx - ty) / ty};
-  double         src_lms[3]{}, dst_lms[3]{};
-  for (int r = 0; r < 3; ++r) {
-    src_lms[r] = kCat02[r * 3] * src[0] + kCat02[r * 3 + 1] * src[1] + kCat02[r * 3 + 2] * src[2];
-    dst_lms[r] = kCat02[r * 3] * dst[0] + kCat02[r * 3 + 1] * dst[1] + kCat02[r * 3 + 2] * dst[2];
-  }
-  const M33d scale = {dst_lms[0] / src_lms[0], 0, 0, 0, dst_lms[1] / src_lms[1], 0, 0, 0,
-                      dst_lms[2] / src_lms[2]};
-  return MulD(InverseD(kCat02), MulD(scale, kCat02));
-}
-
-/// Source RGB to target RGB through XYZ with a CAT02 adaptation between the two whites.
-auto RgbToRgbAdaptedD(const std::array<float, 8>& source, const std::array<float, 8>& target)
-    -> M33d {
-  const M33d to_xyz   = RgbToXyzD(source);
-  const M33d from_xyz = InverseD(RgbToXyzD(target));
-  if (source[6] == target[6] && source[7] == target[7]) {
-    return MulD(from_xyz, to_xyz);
-  }
-  return MulD(from_xyz, MulD(Cat02D(source[6], source[7], target[6], target[7]), to_xyz));
 }
 
 auto MulF(const M33f& a, const M33f& b) -> M33f {
@@ -265,8 +159,9 @@ auto InitJmhParams(const std::array<float, 8>& primaries) -> JmhParams {
   const M33f base_cone_to_aab = {2.0f,        1.0f,           1.0f / 20.0f,
                                  1.0f,        -12.0f / 11.0f, 1.0f / 11.0f,
                                  1.0f / 9.0f, 1.0f / 9.0f,    -2.0f / 9.0f};
-  const M33f matrix_16        = ToFloat(InverseD(RgbToXyzD(kCam16Primaries)));
-  const M33f rgb_to_xyz       = ToFloat(RgbToXyzD(primaries));
+  const M33f matrix_16 =
+      ToFloat(color::InvertMatrix(color::RgbToXyzMatrix(color::kAces2Cam16Primaries)));
+  const M33f rgb_to_xyz = ToFloat(color::RgbToXyzMatrix(primaries));
   const F3 xyz_w = Mul({kReferenceLuminance, kReferenceLuminance, kReferenceLuminance}, rgb_to_xyz);
   const float     y_w   = xyz_w[1];
   const F3        rgb_w = Mul(xyz_w, matrix_16);
@@ -296,16 +191,18 @@ auto InitJmhParams(const std::array<float, 8>& primaries) -> JmhParams {
 
   JmhParams  p;
   p.rgb_to_cam16_c_ = rgb_to_cam16_c;
-  p.cam16_c_to_rgb_ = ToFloat(InverseD({rgb_to_cam16_c[0], rgb_to_cam16_c[1], rgb_to_cam16_c[2],
-                                        rgb_to_cam16_c[3], rgb_to_cam16_c[4], rgb_to_cam16_c[5],
-                                        rgb_to_cam16_c[6], rgb_to_cam16_c[7], rgb_to_cam16_c[8]}));
+  p.cam16_c_to_rgb_ =
+      ToFloat(color::InvertMatrix({rgb_to_cam16_c[0], rgb_to_cam16_c[1], rgb_to_cam16_c[2],
+                                   rgb_to_cam16_c[3], rgb_to_cam16_c[4], rgb_to_cam16_c[5],
+                                   rgb_to_cam16_c[6], rgb_to_cam16_c[7], rgb_to_cam16_c[8]}));
   const float s     = 43.f * kSurround[2];
   p.cone_to_aab_    = {cone_to_aab[0] / a_w, cone_to_aab[1] / a_w, cone_to_aab[2] / a_w,
                        cone_to_aab[3] * s,   cone_to_aab[4] * s,   cone_to_aab[5] * s,
                        cone_to_aab[6] * s,   cone_to_aab[7] * s,   cone_to_aab[8] * s};
-  p.aab_to_cone_    = ToFloat(InverseD({p.cone_to_aab_[0], p.cone_to_aab_[1], p.cone_to_aab_[2],
-                                        p.cone_to_aab_[3], p.cone_to_aab_[4], p.cone_to_aab_[5],
-                                        p.cone_to_aab_[6], p.cone_to_aab_[7], p.cone_to_aab_[8]}));
+  p.aab_to_cone_ =
+      ToFloat(color::InvertMatrix({p.cone_to_aab_[0], p.cone_to_aab_[1], p.cone_to_aab_[2],
+                                   p.cone_to_aab_[3], p.cone_to_aab_[4], p.cone_to_aab_[5],
+                                   p.cone_to_aab_[6], p.cone_to_aab_[7], p.cone_to_aab_[8]}));
   p.f_l_n_          = f_l_n;
   p.cz_             = cz;
   p.inv_cz_         = 1.0f / cz;
@@ -853,7 +750,8 @@ auto Aces2InverseRuntime::CuspTable() const -> std::span<const float> {
 
 auto SourcePrimariesInsideAp1(const std::array<float, 8>& source_primaries_xy) -> bool {
   for (int i = 0; i < 3; ++i) {
-    if (!PrimaryInside(source_primaries_xy[i * 2], source_primaries_xy[i * 2 + 1], kAp1Primaries)) {
+    if (!PrimaryInside(source_primaries_xy[i * 2], source_primaries_xy[i * 2 + 1],
+                       Ap1Primaries())) {
       return false;
     }
   }
@@ -869,13 +767,13 @@ auto BuildAces2InverseRuntime(const std::array<float, 8>& source_primaries_xy,
   runtime.source_primaries_xy_    = source_primaries_xy;
   runtime.peak_luminance_nits_    = peak_luminance_nits;
   runtime.limiting_is_ap1_        = !SourcePrimariesInsideAp1(source_primaries_xy);
-  runtime.limiting_primaries_xy_  = runtime.limiting_is_ap1_ ? kAp1Primaries : source_primaries_xy;
+  runtime.limiting_primaries_xy_  = runtime.limiting_is_ap1_ ? Ap1Primaries() : source_primaries_xy;
   const float     peak            = peak_luminance_nits;
 
   // OCIO Renderer_ACES_OutputTransform20: input AP0, reach AP1, limiting = output primaries.
-  const JmhParams input_params    = InitJmhParams(kAp0Primaries);
+  const JmhParams input_params    = InitJmhParams(Ap0Primaries());
   const JmhParams limit_params    = InitJmhParams(runtime.limiting_primaries_xy_);
-  const JmhParams reach_params    = InitJmhParams(kAp1Primaries);
+  const JmhParams reach_params    = InitJmhParams(Ap1Primaries());
   const auto      tonescale       = InitToneScaleParams(peak);
   const float     limit_j_max     = YToJ(peak, input_params);
   const float     model_gamma_inv = 1.f / ModelGamma();
@@ -911,14 +809,18 @@ auto BuildAces2InverseRuntime(const std::array<float, 8>& source_primaries_xy,
   packed.assign(ALCEDO_D2A_PACKED_SIZE, 0.0f);
   packed[ALCEDO_D2A_BRANCH] = 0.0f;
   PutMatrix(packed, ALCEDO_D2A_SOURCE_TO_TARGET,
-            runtime.limiting_is_ap1_ ? ToFloat(RgbToRgbAdaptedD(source_primaries_xy, kAp1Primaries))
-                                     : M33f{1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f});
+            runtime.limiting_is_ap1_
+                ? ToFloat(color::RgbToRgbMatrix(source_primaries_xy, Ap1Primaries(),
+                                                color::ChromaticAdaptation::Cat02))
+                : M33f{1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f});
   PutMatrix(packed, ALCEDO_D2A_LIMIT_RGB_TO_CAM16, limit_params.rgb_to_cam16_c_);
   PutMatrix(packed, ALCEDO_D2A_LIMIT_CONE_TO_AAB, limit_params.cone_to_aab_);
   PutMatrix(packed, ALCEDO_D2A_AP0_AAB_TO_CONE, input_params.aab_to_cone_);
   PutMatrix(packed, ALCEDO_D2A_AP0_CAM16_TO_RGB, input_params.cam16_c_to_rgb_);
-  PutMatrix(packed, ALCEDO_D2A_AP0_TO_AP1,
-            ToFloat(MulD(InverseD(RgbToXyzD(kAp1Primaries)), RgbToXyzD(kAp0Primaries))));
+  PutMatrix(
+      packed, ALCEDO_D2A_AP0_TO_AP1,
+      ToFloat(color::MultiplyMatrices(color::InvertMatrix(color::RgbToXyzMatrix(Ap1Primaries())),
+                                      color::RgbToXyzMatrix(Ap0Primaries()))));
   packed[ALCEDO_D2A_INPUT_MAX]             = peak / kReferenceLuminance;
   packed[ALCEDO_D2A_AP1_MAX]               = tonescale.forward_limit_;
   packed[ALCEDO_D2A_CZ]                    = input_params.cz_;
@@ -980,7 +882,8 @@ auto PackSceneLinearToAp1(const std::array<float, 8>& source_primaries_xy)
     -> std::array<float, ALCEDO_D2A_SCENE_PACKED_SIZE> {
   std::array<float, ALCEDO_D2A_SCENE_PACKED_SIZE> packed{};
   packed[ALCEDO_D2A_BRANCH] = 1.0f;
-  const M33f m              = ToFloat(RgbToRgbAdaptedD(source_primaries_xy, kAp1Primaries));
+  const M33f m              = ToFloat(color::RgbToRgbMatrix(source_primaries_xy, Ap1Primaries(),
+                                                            color::ChromaticAdaptation::Cat02));
   std::copy(m.begin(), m.end(), packed.begin() + ALCEDO_D2A_SOURCE_TO_TARGET);
   return packed;
 }

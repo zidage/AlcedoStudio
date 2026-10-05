@@ -44,10 +44,11 @@ auto BuildCacheKey(ColorUtils::ColorSpace limiting_space, float peak_luminance) 
   return ACESODTCacheKey{limiting_space, std::bit_cast<std::uint32_t>(peak_luminance)};
 }
 
-auto InitJMhParams(const ColorUtils::ColorSpacePrimaries& prims) -> ColorUtils::JMhParams {
+auto InitJMhParams(const color::PrimariesXy& prims) -> ColorUtils::JMhParams {
   using namespace ColorUtils;
 
-  const cv::Matx33f RGB_to_XYZ = RGB_TO_XYZ_f33(prims, 1.f);
+  const cv::Matx33f RGB_to_XYZ = RGB_TO_XYZ_f33(prims);
+  const cv::Matx33f MATRIX_16  = XYZ_TO_RGB_f33(CAM16_PRI);
   const cv::Matx13f XYZ_w      = cv::Matx13f(ref_lum, ref_lum, ref_lum) * RGB_to_XYZ;
 
   const float       Y_w        = XYZ_w(1);
@@ -157,9 +158,10 @@ auto ResolveACESODTRuntime(ColorUtils::ColorSpace limiting_space,
 
   ODTParams runtime;
   runtime.peak_luminance_ = peak_luminance;
-  runtime.input_params_   = InitJMhParams(AP0_PRIMARY);
-  runtime.reach_params_   = InitJMhParams(REACH_PRIMARY);
-  runtime.limit_params_   = InitJMhParams(SpaceEnumToPrimary(limiting_space));
+  runtime.input_params_   = InitJMhParams(color::GamutPrimariesXy(color::ColorGamutId::Ap0));
+  runtime.reach_params_   = InitJMhParams(color::GamutPrimariesXy(color::ColorGamutId::Ap1));
+  runtime.limit_params_ =
+      InitJMhParams(color::GamutPrimariesXy(ColorSpaceToGamutId(limiting_space)));
   InitTSParams(peak_luminance, &runtime);
 
   TSParams& ts            = runtime.ts_params_;
