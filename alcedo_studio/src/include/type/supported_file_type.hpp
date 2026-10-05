@@ -4,9 +4,11 @@
 
 #pragma once
 
+#include <array>
+#include <cstdint>
 #include <filesystem>
 #include <string>
-#include <unordered_set>
+#include <string_view>
 
 namespace fs = std::filesystem;
 
@@ -56,14 +58,82 @@ struct ExportFormatOptions {
   bool                  ultra_hdr_dither_enabled_ = true;
 };
 
-static const std::unordered_set<std::wstring> supported_extensions = {
-    L".raw", L".cr2", L".nef", L".dng", L".arw", L".cr3", L".raf", L".3fr", L".rw2",
-    L".RAW", L".CR2", L".NEF", L".DNG", L".ARW", L".CR3", L".RAF", L".3FR", L".RW2", L".fff", L".FFF"};
+/// Import file categories (raster_image_input_plan.md, section 9.1). The extension decides which
+/// files a folder scan lists; the file content decides whether import accepts the file.
+enum class ImportFileCategory : uint8_t { Raw, Jpeg, Tiff, Png, OpenExr, Other };
 
+/// One bit per category except Other, which is never imported.
+using ImportCategoryMask                                                 = uint8_t;
+
+inline constexpr std::array<ImportFileCategory, 5> kImportableCategories = {
+    ImportFileCategory::Raw, ImportFileCategory::Jpeg, ImportFileCategory::Tiff,
+    ImportFileCategory::Png, ImportFileCategory::OpenExr};
+
+[[nodiscard]] constexpr auto ImportCategoryBit(ImportFileCategory category) -> ImportCategoryMask {
+  return category == ImportFileCategory::Other
+             ? ImportCategoryMask{0}
+             : static_cast<ImportCategoryMask>(1u << static_cast<uint8_t>(category));
+}
+
+inline constexpr ImportCategoryMask kAllImportCategories = 0x1F;
+
+[[nodiscard]] constexpr auto        operator|(ImportFileCategory lhs, ImportFileCategory rhs)
+    -> ImportCategoryMask {
+  return static_cast<ImportCategoryMask>(ImportCategoryBit(lhs) | ImportCategoryBit(rhs));
+}
+
+[[nodiscard]] constexpr auto operator|(ImportCategoryMask lhs, ImportFileCategory rhs)
+    -> ImportCategoryMask {
+  return static_cast<ImportCategoryMask>(lhs | ImportCategoryBit(rhs));
+}
+
+[[nodiscard]] constexpr auto CategoryAllowed(ImportCategoryMask mask, ImportFileCategory category)
+    -> bool {
+  return (mask & ImportCategoryBit(category)) != 0;
+}
+
+/// RAW extensions, also listed in docs/supported_raw_formats.md.
+inline constexpr std::array<std::string_view, 26> kRawExtensions = {
+    ".3fr", ".arw", ".cr2", ".cr3", ".crw", ".dcr", ".dng", ".erf", ".fff",
+    ".iiq", ".kdc", ".mef", ".mos", ".mrw", ".nef", ".nrw", ".orf", ".pef",
+    ".raf", ".raw", ".rw2", ".rwl", ".sr2", ".srf", ".srw", ".x3f"};
+
+/// Category of the extension @p ext, with its leading dot. Matching ignores ASCII case.
+[[nodiscard]] inline auto CategoryForExtension(std::string_view ext) -> ImportFileCategory {
+  if (ext.size() > 8) {
+    return ImportFileCategory::Other;
+  }
+  std::string lower(ext);
+  for (auto& c : lower) {
+    if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+  }
+  if (lower == ".jpg" || lower == ".jpeg" || lower == ".jpe" || lower == ".jfif") {
+    return ImportFileCategory::Jpeg;
+  }
+  if (lower == ".tif" || lower == ".tiff") return ImportFileCategory::Tiff;
+  if (lower == ".png") return ImportFileCategory::Png;
+  if (lower == ".exr") return ImportFileCategory::OpenExr;
+  for (const auto raw : kRawExtensions) {
+    if (lower == raw) return ImportFileCategory::Raw;
+  }
+  return ImportFileCategory::Other;
+}
+
+/// Category of the extension of @p path. A non-ASCII extension is Other.
+[[nodiscard]] inline auto CategoryForPath(const fs::path& path) -> ImportFileCategory {
+  const auto  wide = path.extension().wstring();
+  std::string ext;
+  ext.reserve(wide.size());
+  for (const wchar_t c : wide) {
+    if (c > 0x7F) return ImportFileCategory::Other;
+    ext.push_back(static_cast<char>(c));
+  }
+  return CategoryForExtension(ext);
+}
+
+/// True for a regular file with a RAW extension.
 inline bool is_supported_file(const fs::path& path) {
   if (!fs::is_regular_file(path)) return false;
-
-  std::wstring ext = path.extension().wstring();
-  return supported_extensions.count(ext) > 0;
+  return CategoryForPath(path) == ImportFileCategory::Raw;
 }
 };  // namespace alcedo

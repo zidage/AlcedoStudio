@@ -4,7 +4,12 @@ Alcedo Studio can import the RAW and general image formats listed below. The RAW
 
 ## Import File Extensions
 
-The following extensions are recognized at import time (case-insensitive):
+A folder scan lists files by extension (case-insensitive). The file content then decides whether
+import accepts a file: a JPEG renamed `.nef` imports as a JPEG, or is skipped when JPEG is not a
+selected type. The table is the same as `ImportFileCategory` in
+`alcedo_studio/src/include/type/supported_file_type.hpp`.
+
+### RAW
 
 | Extension | Format |
 | --- | --- |
@@ -12,12 +17,41 @@ The following extensions are recognized at import time (case-insensitive):
 | `.arw` | Sony α RAW |
 | `.cr2` | Canon RAW 2 |
 | `.cr3` | Canon RAW 3 |
+| `.crw` | Canon RAW (CIFF) |
+| `.dcr` | Kodak RAW |
 | `.dng` | Adobe Digital Negative |
+| `.erf` | Epson RAW |
 | `.fff` | Hasselblad 3F / Imacon RAW |
+| `.iiq` | Phase One RAW |
+| `.kdc` | Kodak RAW |
+| `.mef` | Mamiya RAW |
+| `.mos` | Leaf RAW |
+| `.mrw` | Minolta RAW |
 | `.nef` | Nikon Electronic Format |
+| `.nrw` | Nikon RAW (compact cameras) |
+| `.orf` | Olympus / OM System RAW |
+| `.pef` | Pentax RAW |
 | `.raf` | Fujifilm RAW |
 | `.raw` | Generic / Panasonic / Leica RAW |
 | `.rw2` | Panasonic RAW |
+| `.rwl` | Leica RAW |
+| `.sr2` | Sony RAW 2 |
+| `.srf` | Sony RAW |
+| `.srw` | Samsung RAW |
+| `.x3f` | Sigma RAW |
+
+### Raster images
+
+| Extensions | Format | Notes |
+| --- | --- | --- |
+| `.jpg` `.jpeg` `.jpe` `.jfif` | JPEG | 8-bit; CMYK is not supported |
+| `.tif` `.tiff` | TIFF | 8/16-bit and float; a TIFF with camera data imports as RAW |
+| `.png` | PNG | 8/16-bit; alpha is discarded |
+| `.exr` | OpenEXR | Scene-linear; imported as HDR |
+
+The source color (embedded ICC profile, PNG and EXR color tags) is read at import and converted
+to the working space through the inverse ACES 2.0 output transform. The editor can override it
+with the input profile menu.
 
 ## Underlying RAW Decoder Support
 

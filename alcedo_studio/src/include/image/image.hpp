@@ -16,9 +16,12 @@
 #include "decoders/processor/raw_color_context.hpp"
 #include "image/image_buffer.hpp"
 #include "image/metadata.hpp"
+#include "image/raster_color_description.hpp"
 
 namespace alcedo {
-enum class ImageType { DEFAULT, JPEG, PNG, TIFF, ARW, CR2, CR3, NEF, DNG };
+/// Stored in `Image.type`. DEFAULT is RAW, or any image imported before raster input. New values
+/// are appended so that no stored integer changes meaning.
+enum class ImageType { DEFAULT, JPEG, PNG, TIFF, ARW, CR2, CR3, NEF, DNG, EXR };
 enum class ThumbState : uint8_t { NOT_PRESENT = 0, PENDING, READY, FAILED };
 enum class ImageSyncState : uint8_t { SYNCED, UNSYNCED, MODIFIED, DELETED };
 
@@ -39,6 +42,10 @@ class Image {
   ExifDisplayMetaData         exif_display_;
   RawRuntimeColorContext      raw_color_context_;
   std::atomic<bool>           has_raw_color_context_{false};
+  /// Source color description of a raster image, written once at import. Never present together
+  /// with the RAW color context.
+  RasterColorDescription      raster_color_description_;
+  std::atomic<bool>           has_raster_color_description_{false};
 
   ImageBuffer                 image_data_;
   ImageBuffer                 thumbnail_;
@@ -84,12 +91,16 @@ class Image {
   void                  SetRawColorContext(RawRuntimeColorContext&& ctx);
   auto                  GetRawColorContext() const -> const RawRuntimeColorContext&;
   auto                  HasRawColorContext() const -> bool;
+  void                  SetRasterColorDescription(RasterColorDescription&& description);
+  auto                  GetRasterColorDescription() const -> const RasterColorDescription&;
+  auto                  HasRasterColorDescription() const -> bool;
 
   void                  ClearData();
   void                  ClearThumbnail();
   void                  ComputeChecksum();
   auto                  ExifToJson() -> std::string;
-  /// Display metadata only (capture, gear, exposure fields), without the RAW color context.
+  /// Display metadata only (capture, gear, exposure fields), without the RAW color context or
+  /// the raster color description.
   /// For UI readers such as the EXIF details panel.
   auto                  ExifDisplayToJson() const -> nlohmann::json;
   void                  JsonToExif(std::string json_str);

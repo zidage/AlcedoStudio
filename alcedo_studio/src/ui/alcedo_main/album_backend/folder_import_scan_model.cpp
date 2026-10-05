@@ -34,21 +34,36 @@ auto RelativeDirectoryText(const std::filesystem::path& directory,
 
 }  // namespace
 
+auto BuildAllowedRows(std::span<const ImportFileCategory> categories, ImportCategoryMask allowed)
+    -> std::vector<uint32_t> {
+  std::vector<uint32_t> rows;
+  rows.reserve(categories.size());
+  for (std::size_t index = 0; index < categories.size(); ++index) {
+    if (CategoryAllowed(allowed, categories[index])) {
+      rows.push_back(static_cast<uint32_t>(index));
+    }
+  }
+  return rows;
+}
+
 FolderImportScanModel::FolderImportScanModel(QObject* parent) : QAbstractListModel(parent) {}
 
 FolderImportScanModel::~FolderImportScanModel() { StopWorker(); }
 
 int FolderImportScanModel::rowCount(const QModelIndex& parent) const {
-  return parent.isValid() ? 0 : static_cast<int>(file_paths_.size());
+  return parent.isValid() ? 0 : static_cast<int>(rows_.size());
 }
 
 auto FolderImportScanModel::data(const QModelIndex& index, int role) const -> QVariant {
   if (!index.isValid() || index.row() < 0 ||
-      static_cast<std::size_t>(index.row()) >= file_paths_.size()) {
+      static_cast<std::size_t>(index.row()) >= rows_.size()) {
     return {};
   }
-  const auto& path = file_paths_[static_cast<std::size_t>(index.row())];
+  const auto  file = rows_[static_cast<std::size_t>(index.row())];
+  const auto& path = file_paths_[file];
   switch (role) {
+    case CategoryRole:
+      return static_cast<int>(categories_[file]);
     case Qt::DisplayRole:
     case FileNameRole:
       return album_util::PathToQString(path.filename());
@@ -60,7 +75,37 @@ auto FolderImportScanModel::data(const QModelIndex& index, int role) const -> QV
 }
 
 auto FolderImportScanModel::roleNames() const -> QHash<int, QByteArray> {
-  return {{FileNameRole, "fileName"}, {RelativeDirectoryRole, "relativeDirectory"}};
+  return {{FileNameRole, "fileName"},
+          {RelativeDirectoryRole, "relativeDirectory"},
+          {CategoryRole, "category"}};
+}
+
+void FolderImportScanModel::SetAllowedCategories(int mask) {
+  const auto allowed = static_cast<ImportCategoryMask>(mask & kAllImportCategories);
+  if (allowed == allowed_) {
+    return;
+  }
+  allowed_ = allowed;
+  beginResetModel();
+  rows_ = BuildAllowedRows(categories_, allowed_);
+  endResetModel();
+  emit AllowedCategoriesChanged();
+}
+
+void FolderImportScanModel::SetCategoryAllowed(int category, bool allowed) {
+  if (category < 0 || category >= static_cast<int>(ImportFileCategory::Other)) {
+    return;
+  }
+  const auto bit = ImportCategoryBit(static_cast<ImportFileCategory>(category));
+  SetAllowedCategories(allowed ? (allowed_ | bit) : (allowed_ & ~bit));
+}
+
+auto FolderImportScanModel::CategoryCounts() const -> QVariantList {
+  QVariantList counts;
+  for (const int count : counts_) {
+    counts.push_back(count);
+  }
+  return counts;
 }
 
 void FolderImportScanModel::Start(const QString& folderUrlOrPath) {
@@ -164,10 +209,18 @@ auto FolderImportScanModel::TakeFilePaths() -> std::vector<image_path_t> {
   if (!scan_finished_) {
     return {};
   }
+  std::vector<image_path_t> paths;
+  paths.reserve(rows_.size());
+  for (const auto file : rows_) {
+    paths.push_back(std::move(file_paths_[file]));
+  }
   beginResetModel();
-  auto paths = std::move(file_paths_);
   file_paths_.clear();
+  categories_.clear();
+  rows_.clear();
+  counts_.fill(0);
   endResetModel();
+  emit AllowedCategoriesChanged();
   scan_finished_ = false;
   folder_path_.clear();
   emit ScanStateChanged();
@@ -190,7 +243,11 @@ void FolderImportScanModel::ClearRows() {
   }
   beginResetModel();
   file_paths_.clear();
+  categories_.clear();
+  rows_.clear();
+  counts_.fill(0);
   endResetModel();
+  emit AllowedCategoriesChanged();
 }
 
 void FolderImportScanModel::AppendBatch(const std::shared_ptr<Scan>& scan,
@@ -200,11 +257,23 @@ void FolderImportScanModel::AppendBatch(const std::shared_ptr<Scan>& scan,
     return;
   }
   if (!batch.empty()) {
-    const auto first = static_cast<int>(file_paths_.size());
-    beginInsertRows(QModelIndex(), first, first + static_cast<int>(batch.size()) - 1);
-    file_paths_.insert(file_paths_.end(), std::make_move_iterator(batch.begin()),
-                       std::make_move_iterator(batch.end()));
-    endInsertRows();
+    std::vector<uint32_t> new_rows;
+    for (auto& path : batch) {
+      const auto category = CategoryForPath(path);
+      ++counts_[static_cast<std::size_t>(category)];
+      if (CategoryAllowed(allowed_, category)) {
+        new_rows.push_back(static_cast<uint32_t>(file_paths_.size()));
+      }
+      categories_.push_back(category);
+      file_paths_.push_back(std::move(path));
+    }
+    if (!new_rows.empty()) {
+      const auto first = static_cast<int>(rows_.size());
+      beginInsertRows(QModelIndex(), first, first + static_cast<int>(new_rows.size()) - 1);
+      rows_.insert(rows_.end(), new_rows.begin(), new_rows.end());
+      endInsertRows();
+      emit AllowedCategoriesChanged();
+    }
   }
   current_directory_ = current_directory;
   emit ScanStateChanged();
@@ -222,7 +291,17 @@ void FolderImportScanModel::FinishScan(const std::shared_ptr<Scan>& scan,
   }
   beginResetModel();
   file_paths_ = std::move(sorted_paths);
+  categories_.clear();
+  categories_.reserve(file_paths_.size());
+  counts_.fill(0);
+  for (const auto& path : file_paths_) {
+    const auto category = CategoryForPath(path);
+    categories_.push_back(category);
+    ++counts_[static_cast<std::size_t>(category)];
+  }
+  rows_ = BuildAllowedRows(categories_, allowed_);
   endResetModel();
+  emit AllowedCategoriesChanged();
   scanning_      = false;
   scan_finished_ = true;
   folder_valid_  = folder_valid;

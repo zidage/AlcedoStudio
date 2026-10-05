@@ -98,6 +98,19 @@ struct EditorPanelLensValue {
   std::string lens_model;
 };
 
+/// Develop `input` object of a raster document. `raster` is false for a RAW document, whose panel
+/// shows the RAW controls instead.
+struct EditorPanelInputProfileValue {
+  bool        raster           = false;
+  std::string profile_override = "auto";
+  /// ICC 'desc' text of the source profile; empty when no ICC profile was used.
+  std::string profile_description;
+  /// Serialized RasterColorOrigin, for example "icc_matrix_shaper" or "default_srgb".
+  std::string origin;
+  /// "display_referred" or "scene_linear".
+  std::string referral;
+};
+
 struct EditorPanelGeometryValue {
   NormalizedRect  crop_rect{};
   float           rotation_degrees = 0.0f;
@@ -109,8 +122,8 @@ using EditorPanelFieldValue =
     std::variant<EditorPanelScalarValue, EditorPanelNestedScalarValue, EditorPanelLutValue,
                  EditorPanelCurveValue, EditorPanelHlsValue, EditorPanelColorWheelValue,
                  EditorPanelColorTempValue, EditorPanelRawDecodeValue, EditorPanelOdtValue,
-                 EditorPanelLensValue, EditorPanelGeometryValue,
-                 EditorPanelGradeWhiteBalanceValue>;
+                 EditorPanelLensValue, EditorPanelGeometryValue, EditorPanelGradeWhiteBalanceValue,
+                 EditorPanelInputProfileValue>;
 
 /**
  * @brief One panel field copied from a Graph Node Model.
