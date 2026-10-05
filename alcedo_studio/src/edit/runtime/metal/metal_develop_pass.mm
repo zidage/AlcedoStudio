@@ -3,10 +3,13 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 #include "edit/runtime/metal/metal_develop_pass.hpp"
+
 #include "edit/runtime/metal/metal_diffusion_filter_pass.hpp"
+#include "edit/runtime/metal/metal_display_to_ap1_pass.hpp"
 #include "edit/runtime/metal/metal_drt_pass.hpp"
 #include "edit/runtime/metal/metal_mask_pass.hpp"
 #include "edit/runtime/metal/metal_primary_grade_pass.hpp"
+#include "edit/runtime/raster_develop_params.hpp"
 
 #include <array>
 #include <cmath>
@@ -424,8 +427,36 @@ void ExecuteMetalDevelop(MetalRenderDevice& device, const ExecutionPlan& plan,
                                          : sensor_id;
   auto&              decoded_lease = AcquireRgba(workspace, demosaic_id, out_w, out_h);
 
-  if (input.input_kind == RawInputKind::DebayeredRgb ||
-      plan.source.kind == DevelopInputKind::DirectRgb) {
+  if (input.input_kind == RawInputKind::RasterRgb) {
+    // Raster input: upload at native depth, LinearizeRaster to F32 RGBA, then crop and orient.
+    const auto raster = RequireRasterInput(document, "ExecuteMetalDevelop");
+    RequireRasterPixelsMatchDescription(input, raster.source_color_, "ExecuteMetalDevelop");
+    const auto params =
+        PackRasterLinearize(ResolveEffectiveRasterDescription(raster), input.pixels.format);
+    const auto width  = input.host_extent.width;
+    const auto height = input.host_extent.height;
+    if (input.pixels.stride_bytes != width * HostPixelFormatBytesPerPixel(input.pixels.format)) {
+      throw std::runtime_error("ExecuteMetalDevelop: expected tightly packed raster input");
+    }
+    auto& backend       = workspace.Device();
+    auto& source        = backend.AcquireRecordedWorkScratchBuffer(input.pixels.ByteCount());
+    auto& params_buffer = backend.AcquireRecordedWorkScratchBuffer(params.size() * sizeof(float));
+    {
+      diag::PreviewSubStageInterval upload(diag::PreviewSubStageKind::Upload);
+      backend.UploadBufferRange(source, 0, input.pixels.Span(), device.CommandContext());
+      backend.UploadBufferRange(params_buffer, 0, std::as_bytes(std::span(params)),
+                                device.CommandContext());
+    }
+    auto& linear = AcquireScratch(workspace, width, height, TextureFormat::Rgba32f);
+    EncodeMetalLinearizeRaster(backend, device.CommandContext(), source, input.pixels.format,
+                               params_buffer, linear);
+    auto*       command_buffer = CommandBuffer(device);
+    const float identity[4]    = {1.0f, 1.0f, 1.0f, 1.0f};
+    metal::EncodeCopyRgbaCropInverseOrient(
+        command_buffer, Native(linear), Native(decoded_lease.Texture()),
+        CropOrFull(input, width, height), identity, input.sensor.orientation_flip);
+  } else if (input.input_kind == RawInputKind::DebayeredRgb ||
+             plan.source.kind == DevelopInputKind::DirectRgb) {
     const auto width  = input.host_extent.width;
     const auto height = input.host_extent.height;
     if (input.pixels.format != HostPixelFormat::F32Rgba ||
@@ -582,6 +613,37 @@ void ExecuteMetalCameraColor(MetalRenderDevice& device, const ExecutionPlan& pla
       UploadDngProfileGpuData(workspace, develop->Id(), table_data, device.CommandContext());
   DispatchCameraColor(command_buffer, input->Texture(), output.Texture(), arena.DeviceBuffer(),
                       binding.offset, tables);
+}
+
+void ExecuteMetalDisplayToAp1(MetalRenderDevice& device, const ExecutionPlan& plan,
+                              const PreparedRawInput& input, const PipelineDocument& document) {
+  auto& workspace = device.Workspace();
+  if (!workspace.IsRendering()) {
+    throw std::runtime_error("ExecuteMetalDisplayToAp1: BeginRender has not been called");
+  }
+  const auto raster = RequireRasterInput(document, "ExecuteMetalDisplayToAp1");
+  RequireRasterPixelsMatchDescription(input, raster.source_color_, "ExecuteMetalDisplayToAp1");
+  const auto block = MakeDisplayToAp1ArenaBlock(
+      ResolveDisplayToAp1Block(ResolveEffectiveRasterDescription(raster)));
+  auto* source = workspace.Images().Find(plan.geometry_output);
+  if (source == nullptr || source->Empty()) {
+    throw std::runtime_error("ExecuteMetalDisplayToAp1: missing geometry.scene_source");
+  }
+  const auto width  = source->Texture().Width();
+  const auto height = source->Texture().Height();
+  auto&      output =
+      workspace.AcquireImageForWrite(plan.develop_output, {width, height, TextureFormat::Rgba32f});
+  source = workspace.Images().Find(plan.geometry_output);
+  if (source == nullptr) {
+    throw std::runtime_error("ExecuteMetalDisplayToAp1: geometry texture lost during acquire");
+  }
+  auto&                  arena = workspace.Parameters();
+  const ParameterSlotKey key{document.Develop()->Id(), kDevelopDisplayToAp1Slot};
+  arena.BindOrWritePackedSlot(key, DirtyFieldMask{DevelopDirty::Input}, block);
+  arena.UploadDirty(device.CommandContext());
+  EncodeMetalDisplayToAp1(workspace.Device(), device.CommandContext(), source->Texture(),
+                          output.Texture(), arena.DeviceBuffer(), DisplayToAp1Output::AcesccAp1,
+                          arena.Binding(key).offset);
 }
 
 }  // namespace alcedo

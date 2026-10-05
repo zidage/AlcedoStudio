@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <string>
 
 #include "decoders/dng_default_crop.hpp"
 #include "decoders/processor/raw_color_context.hpp"
@@ -19,8 +20,9 @@
 
 namespace alcedo {
 
-/// Bumped when LibRaw unpack, CFA/RGB downsample, or active-area mapping rules change.
-inline constexpr std::uint32_t kRawInputPreparationVersion = 6;
+/// Bumped when LibRaw unpack, CFA/RGB downsample, raster decode, or active-area mapping rules
+/// change. In-memory cache key only; never persisted.
+inline constexpr std::uint32_t kRawInputPreparationVersion = 7;
 
 /**
  * @brief FNV-1a 64-bit hash of opaque bytes. Used for encoded-source identity, not pixels.
@@ -37,7 +39,26 @@ inline constexpr std::uint32_t kRawInputPreparationVersion = 6;
 enum class HostPixelFormat : std::uint8_t {
   U16Cfa  = 0,
   F32Rgba = 1,
+  /// Raster input at its native 8-bit depth, RGBA, alpha set to the maximum code value.
+  U8Rgba  = 2,
+  /// Raster input at its native 16-bit depth, RGBA, alpha set to the maximum code value.
+  U16Rgba = 3,
 };
+
+/// Bytes per pixel of a host plane format.
+[[nodiscard]] inline auto HostPixelFormatBytesPerPixel(HostPixelFormat format) -> std::uint32_t {
+  switch (format) {
+    case HostPixelFormat::U16Cfa:
+      return 2;
+    case HostPixelFormat::F32Rgba:
+      return 16;
+    case HostPixelFormat::U8Rgba:
+      return 4;
+    case HostPixelFormat::U16Rgba:
+      return 8;
+  }
+  return 0;
+}
 
 enum class SceneWorkingSpace : std::uint8_t {
   CameraRgb = 0,
@@ -171,6 +192,11 @@ struct PreparedRawInput {
   SourceContentKey                         content_key{};
   PreparedSourceKey                        source_key{};
   SceneWorkingSpace                        working_space = SceneWorkingSpace::CameraRgb;
+  /// RasterRgb only: the pixels were converted by LittleCMS from a LUT-based ICC profile to
+  /// linear Rec.2020, and the SHA-256 of that profile. Develop checks the hash against the
+  /// document's `input.source_color.icc_sha256`.
+  bool                                     raster_lut_icc_converted = false;
+  std::string                              raster_icc_sha256;
 
   [[nodiscard]] auto                       CompileSource() const -> DevelopCompileSource;
 };

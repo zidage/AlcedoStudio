@@ -1020,6 +1020,82 @@ measured in R3 with the pass statistics.
   - The tests pass on CUDA, OpenCL and Metal.
   - The RAW develop suites show no regression against a clean `HEAD`.
 
+#### R3 completion record
+
+**Status:** complete on Windows (CUDA and OpenCL). The Metal code and the Metal test target are
+written but not compiled or run, because no macOS machine was available.
+
+**Implemented:**
+
+- `RasterInputLoader` (`edit/input/raster_input_loader.cpp`): TurboJPEG with DCT-scaled decode
+  for JPEG, OpenImageIO through an in-memory reader for PNG, TIFF and OpenEXR, gray to RGB copy,
+  alpha discarded, EXIF orientation applied (rotations through the existing flip, mirrors on the
+  host plane), LUT-based ICC profiles converted to linear Rec.2020 on the host with lcms2.
+  `LoadEncodedImage` sends RAW content to `RawInputLoader` and raster content to the new loader.
+- `ClassifyImageContent` (`image/image_content_class.cpp`): magic numbers, and for TIFF a DNG
+  version tag or LibRaw camera matrices decide RAW.
+- `HostPixelFormat::U8Rgba` and `U16Rgba`, `RawInputKind::RasterRgb`,
+  `DevelopInputKind::Raster`, and `kRawInputPreparationVersion` 7.
+- The compiler emits `UploadRgb` and `DisplayToAp1` for raster input and no `CameraToAp1`.
+  `LinearizeRaster` runs in the upload step (`raster_linearize_math.h`, one source for host,
+  CUDA, OpenCL and Metal). The Develop `input` object is part of the sensor validity key through
+  the new `DevelopDirty::Input` bit.
+- The Develop `input` object (`DevelopRasterInput`), the `input_profile` editor field (parse,
+  write, target, history keys and history text), and `CreateDefaultRasterPipelineDocument`.
+- `DrtEotf::SrgbPiecewise` ("srgb_piecewise") with its export ICC profile
+  `config/icc/srgb_piecewise.icc` and the two new options in the display transform panel.
+
+**Deviations from the plan:**
+
+- The test `InputProfileOverrideReRunsOnlyDisplayToAp1` is named
+  `InputProfileOverrideReRunsTheRasterDevelopChain`. An override changes the transfer function,
+  and `LinearizeRaster` runs in the upload step, so the sensor develop step also runs again. The
+  test checks that both run once more and that the output equals the host evaluation with the
+  override.
+- Section 6.4, the working-space camera profile hook: a scan of four existing projects (6,758
+  history roots in `PipelineRoot`) found no root without a RAW color context. Every root reaches
+  the RAW path. The hook is **kept for RAW documents only** and is skipped for raster documents
+  (`EnsureRenderableCameraProfile`, `EncodeImageRoot`), which the test
+  `RasterImageRootKeepsItsDocumentWithoutCameraProfile` checks. Reason: about 20 test harnesses
+  (in-memory editor leases and `InitializeImageRoot(..., nullptr)` in the history, editor and
+  pipeline service tests) create RAW documents without a RAW context and render through the
+  hook. Their removal needs a migration of those harnesses to explicit camera profiles and is a
+  separate change. The `FromDirectRgb` GPU tests do not use the hook and are unchanged.
+- Editor UI (section 6.6) moves to R4, together with the import of raster files, because before
+  R4 no project can contain a raster image.
+
+**Tests:**
+
+| Test | Target | Result |
+| --- | --- | --- |
+| `RasterJpegRendersThroughDisplayToAp1WithoutCameraToAp1Pass` | CUDA, OpenCL raster develop | PASS |
+| `RasterDocumentRejectsColorTemperatureWrite` | `GpuDagModelGraphTest` | PASS |
+| `InputProfileWriteUpdatesRasterOverrideAndRawFieldsAreRejected` | `EditorAdjustmentContextTest` | PASS |
+| `RasterDevelopOutputIsCachedAcrossColorGradeEdits` | CUDA, OpenCL raster develop | PASS |
+| `InputProfileOverrideReRunsTheRasterDevelopChain` | CUDA, OpenCL raster develop | PASS |
+| `Cat02WhiteBalanceShiftsRasterImageLikeRawImage` | `GpuDagCudaRasterDevelopTest` | PASS |
+| `TiffMagicWithoutCameraMakeClassifiesAsRaster`, `DngClassifiesAsRaw` | `GpuDagRawInputTest` | PASS |
+| `RgbaPngRendersColorAndIgnoresAlpha` | `GpuDagCudaRasterDevelopTest` | PASS |
+| `DevelopOutputMatchesHostEvaluationForEachRasterKind` | CUDA, OpenCL raster develop | PASS |
+| `ExistingRawRootDocumentsSerializeByteIdenticalAfterRasterChange` | `PipelineDocumentCheckpointTest` | PASS |
+| `RasterImageRootKeepsItsDocumentWithoutCameraProfile` | `PipelineMapperTest` | PASS |
+| Metal raster develop tests | `GpuDagMetalRasterDevelopTest` | NOT RUN (no macOS machine) |
+
+The byte-identical test compares against two expected files written by the code before this
+phase (`tests/edit/history/expected_serialized/raw_*_before_raster_input.json`). Three older
+expected-file tests in `PipelineDocumentCheckpointTest` fail on a clean `HEAD` too (the geometry
+keys `aspect_preset` and `expand_to_fit` are missing from those files); this phase does not change
+them.
+
+**Section 5.4 ratio (release, NVIDIA GeForce RTX 3080 Laptop GPU):** at 3840 x 2160 the
+`DisplayToAp1` pass takes 5.2 ms and the forward `Drt` pass 5.8 ms, a ratio of 0.90 (target at
+most 1.25). Both figures are pass times from the preview performance record of one full render,
+which are larger than the isolated kernel time of R2 (0.85 ms). The ratio is the figure that the
+target applies to.
+
+**RAW regression:** `GpuDagCudaDevelopTest` and `GpuDagOpenClDevelopTest` pass, 45 of 45 (one
+OpenCL test skips itself because its 100-megapixel fixtures are not present).
+
 ### Phase R4 — Import, metadata, thumbnails, export
 
 - Work:

@@ -30,6 +30,15 @@ void ExecuteOpenClCameraColor(OpenClRenderDevice& device, const ExecutionPlan& p
                               const PipelineDocument& document);
 
 /**
+ * @brief Raster input: write ACEScc AP1 `develop.image` from `geometry.scene_source` with the
+ * DisplayToAp1 kernel. The parameter block is bound through the workspace parameter arena.
+ * @throws std::runtime_error when the document has no raster input object or the pixels do not
+ *         match its description.
+ */
+void ExecuteOpenClDisplayToAp1(OpenClRenderDevice& device, const ExecutionPlan& plan,
+                               const PreparedRawInput& input, const PipelineDocument& document);
+
+/**
  * @brief Test hook: inject a model cache so Neural load failure can be asserted.
  *
  * Null restores the process-wide cache. Not thread-safe.

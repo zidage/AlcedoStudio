@@ -341,6 +341,7 @@ if(ALCEDO_METAL_ENABLED)
         "Compiling Metal DAG DisplayToAp1 shader"
         "Linking Metal DAG DisplayToAp1 library"
         DEPENDS "${ALCEDO_INCLUDE_ROOT}/edit/runtime/display_to_ap1_math.h"
+                "${ALCEDO_INCLUDE_ROOT}/edit/runtime/raster_linearize_math.h"
         COMPILE_FLAGS -fno-fast-math
     )
 

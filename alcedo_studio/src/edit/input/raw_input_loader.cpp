@@ -20,6 +20,7 @@
 #include "decoders/libraw_unpack_guard.hpp"
 #include "decoders/processor/raw_normalization.hpp"
 #include "decoders/processor/raw_rgb_normalization.hpp"
+#include "edit/input/detail/prepared_input_finish.hpp"
 #include "edit/input/neural_develop_crop.hpp"
 
 namespace alcedo {
@@ -185,7 +186,8 @@ void FillOutputGeometry(PreparedRawInput& input, DecodeRes decode_res_for_full_r
   const int          divisor = ScaleDivisor(passes);
   const Extent2D     host    = input.host_extent;
 
-  if (input.input_kind == RawInputKind::DebayeredRgb) {
+  if (input.input_kind == RawInputKind::DebayeredRgb ||
+      input.input_kind == RawInputKind::RasterRgb) {
     const RectI crop            = BuildDecodeCropRect(input.sensor, host, divisor);
     input.demosaic_output_crop  = crop;
     input.develop_output_extent = OrientedExtent(
@@ -568,10 +570,25 @@ void ThrowIfUnsupported(LibRaw& raw, RawInputKind kind, const RawCfaPattern& pat
 
 }  // namespace
 
+namespace input_detail {
+
+auto FinishRasterPrepared(PreparedRawInput input, std::uint64_t encoded_hash,
+                          std::uint64_t encoded_byte_count) -> PreparedRawInput {
+  input.input_kind = RawInputKind::RasterRgb;
+  FillOutputGeometry(input, DecodeRes::FULL);
+  FillSourceKey(input, encoded_hash, encoded_byte_count);
+  input.working_space = SceneWorkingSpace::CameraRgb;
+  return input;
+}
+
+}  // namespace input_detail
+
 auto PreparedRawInput::CompileSource() const -> DevelopCompileSource {
   DevelopCompileSource source;
   if (input_kind == RawInputKind::DebayeredRgb) {
     source.kind = DevelopInputKind::DirectRgb;
+  } else if (input_kind == RawInputKind::RasterRgb) {
+    source.kind = DevelopInputKind::Raster;
   } else if (cfa_pattern.kind == RawCfaKind::XTrans6x6) {
     source.kind = DevelopInputKind::XTransCfa;
   } else {

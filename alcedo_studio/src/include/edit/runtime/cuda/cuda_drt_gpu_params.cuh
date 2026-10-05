@@ -32,6 +32,8 @@ enum class CudaDrtEotf : int {
   BT1886    = 4,
   GAMMA_2_2 = 5,
   GAMMA_1_8 = 6,
+  /// Piecewise sRGB: the moncurve branch of eotf_inv.
+  SRGB_PIECEWISE = 7,
 };
 
 struct CudaDrtJmhParams {

@@ -165,6 +165,8 @@ auto DrtEotfText(DrtEotf eotf) -> const char* {
       return "bt1886";
     case DrtEotf::Gamma18:
       return "gamma_1_8";
+    case DrtEotf::SrgbPiecewise:
+      return "srgb_piecewise";
     case DrtEotf::Gamma22:
     default:
       return "gamma_2_2";

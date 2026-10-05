@@ -49,6 +49,14 @@ struct PassEncoder<MetalBackend, GpuPassKind::CameraToAp1> {
 };
 
 template <>
+struct PassEncoder<MetalBackend, GpuPassKind::DisplayToAp1> {
+  static void Encode(MetalRenderDevice& device, const ExecutionPlan& plan,
+                     const PreparedRawInput& input, const PipelineDocument& document) {
+    ExecuteMetalDisplayToAp1(device, plan, input, document);
+  }
+};
+
+template <>
 struct PassEncoder<MetalBackend, GpuPassKind::MaskEvaluate> {
   static void Encode(MetalRenderDevice& device, const ExecutionPlan& plan, const PreparedRawInput&,
                      const PipelineDocument& document, const CompiledGradeNode& compiled_grade,

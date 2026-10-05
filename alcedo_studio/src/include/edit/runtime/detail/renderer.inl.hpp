@@ -183,6 +183,7 @@ auto Renderer<Backend>::RenderImage(const PipelineGraphSnapshot&        snapshot
         develop.cfa = diag::PreviewCfaKind::XTrans;
         break;
       case DevelopInputKind::DirectRgb:
+      case DevelopInputKind::Raster:
         develop.cfa        = diag::PreviewCfaKind::DirectRgb;
         develop.upload_rgb = true;
         develop.layout     = diag::PreviewDevelopLayout::UploadRgb;

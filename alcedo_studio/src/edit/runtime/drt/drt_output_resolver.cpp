@@ -69,6 +69,9 @@ auto ToEotf(DrtEotf eotf, ColorUtils::EOTF* out) -> bool {
     case DrtEotf::Gamma18:
       *out = ColorUtils::EOTF::GAMMA_1_8;
       return true;
+    case DrtEotf::SrgbPiecewise:
+      *out = ColorUtils::EOTF::SRGB_PIECEWISE;
+      return true;
   }
   return false;
 }

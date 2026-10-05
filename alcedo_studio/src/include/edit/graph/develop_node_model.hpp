@@ -13,6 +13,7 @@
 #include <string_view>
 #include <vector>
 
+#include "edit/graph/develop_raster_input.hpp"
 #include "edit/graph/i_node_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
 #include "edit/operators/models/operator_model_base.hpp"
@@ -88,6 +89,9 @@ struct DevelopPayload {
   std::string          lens_profile_db_path = "src/config/lens_calib";
   std::string          lens_maker;
   std::string          lens_model;
+  /// Present only for a raster (JPEG, PNG, TIFF, OpenEXR) document; absent means RAW. A RAW
+  /// document never serializes the `input` key, so its JSON and root id stay as before.
+  std::optional<DevelopRasterInput> input;
 };
 
 inline auto operator==(const DevelopPayload& a, const DevelopPayload& b) -> bool {
@@ -103,7 +107,7 @@ inline auto operator==(const DevelopPayload& a, const DevelopPayload& b) -> bool
          a.user_scale == b.user_scale && a.projection_enabled == b.projection_enabled &&
          a.target_projection == b.target_projection &&
          a.lens_profile_db_path == b.lens_profile_db_path && a.lens_maker == b.lens_maker &&
-         a.lens_model == b.lens_model;
+         a.lens_model == b.lens_model && a.input == b.input;
 }
 
 inline auto operator!=(const DevelopPayload& a, const DevelopPayload& b) -> bool {
@@ -116,7 +120,10 @@ enum class DevelopDirty : std::uint32_t {
   Highlights   = 1U << 1,
   WhiteBalance = 1U << 2,
   Lens         = 1U << 3,
-  All          = Demosaic | Highlights | WhiteBalance | Lens,
+  /// Raster input description or profile override. Changes the raster linearize step, so it
+  /// invalidates from the sensor result.
+  Input        = 1U << 4,
+  All          = Demosaic | Highlights | WhiteBalance | Lens | Input,
 };
 
 /**
@@ -163,6 +170,13 @@ struct DevelopLensCalibrationUpdate {
 };
 
 /**
+ * @brief Raster input profile override (`input_profile` field, decision D5).
+ */
+struct DevelopInputProfileUpdate {
+  std::string profile_override;
+};
+
+/**
  * @brief Develop endpoint parameters. LibRaw unpack stays outside the graph.
  */
 class DevelopParamsModel final
@@ -198,15 +212,28 @@ class DevelopParamsModel final
   [[nodiscard]] auto LensMaker() const -> std::string;
   [[nodiscard]] auto LensModel() const -> std::string;
 
+  /// Raster input object, or std::nullopt for a RAW document.
+  [[nodiscard]] auto RasterInput() const -> std::optional<DevelopRasterInput>;
+
   /**
    * @brief Apply RAW decode fields atomically and mark only changed field groups dirty.
+   * @throws std::logic_error for a raster document, which has no RAW decode; the payload is
+   *         unchanged.
    */
   void               ApplyRawDecodeUpdate(DevelopRawDecodeUpdate update);
 
   /**
    * @brief Apply color-temperature fields atomically and mark only changed fields dirty.
+   * @throws std::logic_error for a raster document, which has no RAW white balance (use the
+   *         Color Grade CAT02 white balance); the payload is unchanged.
    */
   void               ApplyColorTemperatureUpdate(DevelopColorTemperatureUpdate update);
+
+  /**
+   * @brief Set the raster input profile override and mark Input dirty when it changes.
+   * @throws std::logic_error for a RAW document; std::invalid_argument for an unknown value.
+   */
+  void               ApplyInputProfileUpdate(DevelopInputProfileUpdate update);
 
   /**
    * @brief Apply lens/projection fields atomically and avoid dirtying equal values.

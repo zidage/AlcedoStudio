@@ -37,7 +37,7 @@ namespace alcedo {
 [[nodiscard]] inline auto ResolveDevelopDemosaicMethod(const DevelopPayload& params,
                                                        const DevelopCompileSource& source)
     -> RawDemosaicMethod {
-  if (source.kind == DevelopInputKind::DirectRgb) {
+  if (source.kind == DevelopInputKind::DirectRgb || source.kind == DevelopInputKind::Raster) {
     return RawDemosaicMethod::Legacy;
   }
   const auto cfa_kind = source.kind == DevelopInputKind::XTransCfa ? RawCfaKind::XTrans6x6

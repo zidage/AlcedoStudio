@@ -7,11 +7,13 @@
 #include <stdexcept>
 #include <utility>
 
+#include "edit/input/raster_input_loader.hpp"
+
 namespace alcedo {
 namespace {
 
 auto DefaultUnpack(std::span<const std::byte> encoded, DecodeRes decode_res) -> PreparedRawInput {
-  return RawInputLoader::LoadEncoded(encoded, decode_res);
+  return LoadEncodedImage(encoded, decode_res);
 }
 
 auto HostBytes(const PreparedRawInput& input) -> std::size_t { return input.pixels.ByteCount(); }

@@ -36,6 +36,7 @@
 #include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "edit/operators/models/sharpen_model.hpp"
+#include "image/raster_color_description.hpp"
 #include "sleeve/storage.hpp"
 #include "storage/store/edit_history/commit_graph_store.hpp"
 #include "support/editor_parameter_target_test.hpp"
@@ -1087,6 +1088,30 @@ TEST_F(PipelineMapperTests, NonRawImageRootBindsWorkingSpaceCameraProfile) {
   EXPECT_NEAR(reopened_payload.camera_profile.color_matrix_1[0], 3.2404542, 1e-6);
   ASSERT_TRUE(ResolveDevelopColorTransform(reopened_payload).ok);
   reopened.ReleaseEditorLease(711);
+}
+
+// A raster root converts its pixels with its own `input` description: no working-space camera
+// profile is bound at encode or at load.
+TEST_F(PipelineMapperTests, RasterImageRootKeepsItsDocumentWithoutCameraProfile) {
+  ProjectService         project(db_path_, meta_path_);
+  PipelineMgmtService    first(project.GetStorage());
+  RasterColorDescription source_color;
+  source_color.origin_ = RasterColorOrigin::DefaultSrgb;
+  const auto expected  = CreateDefaultRasterPipelineDocument(source_color);
+
+  first.InitializeImageRoot(712, CreateDefaultRasterPipelineDocument(source_color), nullptr);
+  const auto root = first.LoadHistorySnapshot(712).root_;
+  ASSERT_NE(root, nullptr);
+  ASSERT_NE(root->document.Develop(), nullptr);
+  EXPECT_TRUE(root->document.Develop()->Params().RasterInput().has_value());
+  EXPECT_FALSE(root->document.Develop()->Params().Params().camera_profile.color_matrices_valid);
+  EXPECT_EQ(root->document.ToJson(), expected.ToJson());
+
+  PipelineMgmtService reopened(project.GetStorage());
+  const auto          loaded = reopened.AcquireEditorLease(712);
+  ASSERT_NE(loaded.document_, nullptr);
+  EXPECT_EQ(loaded.document_->ToJson(), expected.ToJson());
+  reopened.ReleaseEditorLease(712);
 }
 
 // A non-RAW root stored without camera matrices (written before import bound the working-space

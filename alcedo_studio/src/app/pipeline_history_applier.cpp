@@ -96,6 +96,10 @@ auto DevelopFieldOwnedKeys(std::string_view field_key) -> const std::vector<std:
   if (field_key == "raw_decode") return &kRawDecode;
   if (field_key == "color_temp") return &kColorTemp;
   if (field_key == "lens_calib") return &kLensCalib;
+  // The raster `input` object: only its profile_override is edited; the description is carried
+  // unchanged.
+  static const std::vector<std::string_view> kInputProfile{"input"};
+  if (field_key == "input_profile") return &kInputProfile;
   return nullptr;
 }
 
@@ -108,7 +112,7 @@ auto FieldOwnedParameterJson(std::string_view field_key, const nlohmann::json& j
     return json;
   }
   const nlohmann::json* object = &json;
-  for (const char* wrapper : {"raw", "raw_decode", "color_temp", "lens_calib"}) {
+  for (const char* wrapper : {"raw", "raw_decode", "color_temp", "lens_calib", "input_profile"}) {
     if (json.contains(wrapper) && json.at(wrapper).is_object()) {
       object = &json.at(wrapper);
       break;

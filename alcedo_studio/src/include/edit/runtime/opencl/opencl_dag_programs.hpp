@@ -50,6 +50,7 @@ inline constexpr const char* kMaskUnionMaxKernelName              = "mask_union_
 inline constexpr const char* kDrtKernelName                       = "drt_display_rgba32f";
 inline constexpr const char* kDisplayToAp1KernelName              = "display_to_ap1_acescc";
 inline constexpr const char* kDisplayToAp0LinearKernelName        = "display_to_ap0_linear";
+inline constexpr const char* kLinearizeRasterKernelName           = "linearize_raster_rgba";
 inline constexpr const char* kDrtSceneKernelName                  = "drt_display_scene_rgba32f";
 inline constexpr const char* kDiffusionFilterDecodeSceneKernelName =
     "diffusion_filter_decode_scene_rgba32f";

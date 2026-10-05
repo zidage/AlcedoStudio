@@ -75,7 +75,7 @@ auto RunOnOpenCl(std::span<const float> packed, const std::vector<float>& rgb,
             CL_SUCCESS);
   cl_mem params = parameters.Upload(cl.Context(), cl.Queue(), packed);
   EnqueueOpenClDisplayToAp1(cl.Queue(), src, dst, static_cast<std::uint32_t>(width),
-                            static_cast<std::uint32_t>(height), params, output_kind, nullptr);
+                            static_cast<std::uint32_t>(height), params, 0, output_kind, nullptr);
   EXPECT_EQ(clEnqueueReadImage(cl.Queue(), dst, CL_TRUE, origin.data(), region.data(), 0, 0,
                                host.data(), 0, nullptr, nullptr),
             CL_SUCCESS);

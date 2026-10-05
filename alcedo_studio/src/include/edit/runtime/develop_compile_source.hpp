@@ -14,6 +14,8 @@ enum class DevelopInputKind : std::uint8_t {
   BayerCfa  = 0,
   XTransCfa = 1,
   DirectRgb = 2,
+  /// JPEG, PNG, TIFF or OpenEXR: UploadRgb with the raster linearize step, then DisplayToAp1.
+  Raster    = 3,
 };
 
 /**

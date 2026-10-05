@@ -67,6 +67,13 @@ if(ALCEDO_OPENCL_ENABLED)
     )
 endif()
 
+# Raster source color description values: transfer evaluation, usability check and JSON. No
+# file parsing, so the pipeline document can link it.
+def_library(RasterColorModel
+    SOURCES ${ALCEDO_SRC_ROOT}/image/raster_color_model.cpp
+    PUBLIC_DEPS JSON
+)
+
 # Image Base
 def_library(Image
     SOURCES ${ALCEDO_SRC_ROOT}/image/image.cpp 
@@ -76,7 +83,8 @@ def_library(Image
     ${ALCEDO_SRC_ROOT}/image/raster_color_description.cpp
     ${ALCEDO_SRC_ROOT}/image/raster_container_reader.cpp
     ${ALCEDO_SRC_ROOT}/image/icc_profile_reader.cpp
-    PUBLIC_DEPS ImageBuffer
+    ${ALCEDO_SRC_ROOT}/image/image_content_class.cpp
+    PUBLIC_DEPS ImageBuffer RasterColorModel
 )
 target_link_libraries(Image PRIVATE OpenImageIO::OpenImageIO lcms2::lcms2 ZLIB::ZLIB
     Sha256Digest)
