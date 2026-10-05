@@ -4,6 +4,7 @@
 
 #include "edit/graph/pipeline_document.hpp"
 
+#include <array>
 #include <cmath>
 #include <functional>
 #include <limits>
@@ -357,6 +358,108 @@ auto PipelineDocument::FromJson(const nlohmann::json& json) -> PipelineDocument 
   document.SetDefaultGradeId(json.at("default_grade_id").is_null()
                                  ? NodeId{}
                                  : NodeId{json.at("default_grade_id").get<std::string>()});
+  return document;
+}
+
+namespace {
+
+auto NearlyEqualPrimaries(const std::array<float, 8>& a, const std::array<float, 8>& b) -> bool {
+  for (std::size_t i = 0; i < a.size(); ++i) {
+    if (std::abs(a[i] - b[i]) > 0.005f) {
+      return false;
+    }
+  }
+  return true;
+}
+
+auto NearestDrtSpace(const std::array<float, 8>& primaries) -> DrtColorSpace {
+  if (NearlyEqualPrimaries(primaries, kRasterPrimariesRec709)) {
+    return DrtColorSpace::Rec709;
+  }
+  if (NearlyEqualPrimaries(primaries, kRasterPrimariesDisplayP3)) {
+    return DrtColorSpace::P3D65;
+  }
+  return DrtColorSpace::Rec2020;
+}
+
+/// DRT EOTF whose curve is nearest the source transfer at mid code values.
+auto NearestDrtEotf(const RasterTransfer& transfer) -> DrtEotf {
+  switch (transfer.kind_) {
+    case RasterTransferKind::SrgbPiecewise:
+      return DrtEotf::SrgbPiecewise;
+    case RasterTransferKind::Bt1886:
+      return DrtEotf::Bt1886;
+    case RasterTransferKind::St2084:
+      return DrtEotf::St2084;
+    case RasterTransferKind::Hlg:
+      return DrtEotf::Hlg;
+    default:
+      break;
+  }
+  struct Candidate {
+    DrtEotf eotf_;
+    float   gamma_;
+  };
+  constexpr std::array<Candidate, 4> kCandidates = {{{DrtEotf::Gamma18, 1.8f},
+                                                     {DrtEotf::Gamma22, 2.2f},
+                                                     {DrtEotf::Bt1886, 2.4f},
+                                                     {DrtEotf::Gamma26, 2.6f}}};
+  // Compare the curves at code values 0.25, 0.5 and 0.75.
+  DrtEotf                            best        = DrtEotf::Gamma22;
+  float                              best_error  = std::numeric_limits<float>::max();
+  for (const auto& candidate : kCandidates) {
+    float error = 0.0f;
+    for (const float x : {0.25f, 0.5f, 0.75f}) {
+      error += std::abs(EvaluateRasterTransfer(transfer, x) - std::pow(x, candidate.gamma_));
+    }
+    if (error < best_error) {
+      best_error = error;
+      best       = candidate.eotf_;
+    }
+  }
+  return best;
+}
+
+}  // namespace
+
+auto CreateDefaultRasterPipelineDocument(const RasterColorDescription& source_color)
+    -> PipelineDocument {
+  PipelineDocument document;
+  auto             develop         = std::make_unique<DevelopNodeModel>(NodeId{"develop"});
+  auto             develop_payload = develop->Params().Params();
+  develop_payload.input            = DevelopRasterInput{source_color, "auto"};
+  develop_payload.lens_enabled     = false;
+  develop->Params().ReplaceParams(std::move(develop_payload));
+  document.Graph().AddNode(std::move(develop));
+
+  auto grade = ColorGradeNodeModel::MakeDefault(NodeId{"grade.primary"});
+  grade->SetDisplayName(DefaultColorGradeDisplayName(1));
+  grade->SetDeletionProtected(true);
+  document.Graph().AddNode(std::move(grade));
+  document.SetDefaultGradeId(NodeId{"grade.primary"});
+
+  auto drt           = DrtNodeModel::MakeDefault(NodeId{"drt"});
+  auto drt_payload   = drt->Params().Params();
+  drt_payload.method = DrtMethod::Aces20;
+  if (source_color.referral_ == RasterReferral::SceneLinear) {
+    drt_payload.limiting_space = DrtColorSpace::Rec709;
+    drt_payload.encoding_space = DrtColorSpace::Rec709;
+    drt_payload.encoding_eotf  = DrtEotf::SrgbPiecewise;
+    drt_payload.peak_luminance = 100.0f;
+  } else {
+    drt_payload.limiting_space = NearestDrtSpace(source_color.primaries_xy_);
+    drt_payload.encoding_space = drt_payload.limiting_space;
+    drt_payload.encoding_eotf  = NearestDrtEotf(source_color.transfer_[0]);
+    drt_payload.peak_luminance = source_color.peak_luminance_nits_;
+  }
+  drt->Params().ReplaceParams(std::move(drt_payload));
+  document.Graph().AddNode(std::move(drt));
+
+  document.Graph().Connect(NodeId{"develop"}, PortId{"image"}, NodeId{"grade.primary"},
+                           PortId{"image"});
+  document.Graph().Connect(NodeId{"grade.primary"}, PortId{"image"}, NodeId{"drt"},
+                           PortId{"image"});
+  document.MarkTopologyChanged();
   return document;
 }
 

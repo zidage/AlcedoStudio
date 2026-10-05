@@ -581,6 +581,77 @@ TEST_F(ExportServiceTests, EnqueueRefusesTasksThatCannotResolveTheirCommittedSta
   EXPECT_TRUE(results->empty());
 }
 
+// A raster source carries its own ICC profile. The exported file embeds the export profile from
+// ExportIccProfileResolver, never the source profile (raster_image_input_plan.md, section 8).
+TEST_F(ExportServiceTests, ReexportedRasterUsesExportProfileNotSourceIcc) {
+  const auto source_dir = export_dir_ / "source";
+  std::filesystem::create_directories(source_dir);
+  const auto source_path = source_dir / "prophoto.tif";
+  std::filesystem::copy_file(
+      std::filesystem::path(ALCEDO_RASTER_FIXTURE_DIR) / "prophoto_icc_16bit.tif", source_path,
+      std::filesystem::copy_options::overwrite_existing);
+  auto read_icc = [](const std::filesystem::path& path) {
+    auto image = Exiv2::ImageFactory::open(path.string());
+    image->readMetadata();
+    if (!image->iccProfileDefined() || image->iccProfile().empty()) {
+      return std::vector<uint8_t>{};
+    }
+    const auto& profile = image->iccProfile();
+    return std::vector<uint8_t>(profile.c_data(), profile.c_data() + profile.size());
+  };
+  const auto source_icc = read_icc(source_path);
+  ASSERT_FALSE(source_icc.empty());
+
+  ProjectService    project(db_path_, meta_path_);
+  auto              sleeve_service   = project.GetSleeveService();
+  auto              image_pool       = project.GetImagePoolService();
+  auto              pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorage());
+  ImportServiceImpl import_service(sleeve_service, image_pool, pipeline_service);
+  auto              import_job = std::make_shared<ImportJob>();
+  std::promise<ImportResult> import_done;
+  auto                       import_done_fut = import_done.get_future();
+  import_job->on_finished_                   = [&import_done](const ImportResult& result) {
+    import_done.set_value(result);
+  };
+  import_job = import_service.ImportToFolder({source_path}, L"", {}, import_job);
+  ASSERT_EQ(import_done_fut.wait_for(120s), std::future_status::ready);
+  ASSERT_EQ(import_done_fut.get().imported_, 1u);
+  const auto snapshot = import_job->import_log_->Snapshot();
+  import_service.SyncImports(snapshot, L"");
+
+  const ExportColorProfileConfig rec709{ColorUtils::ColorSpace::REC709, ColorUtils::EOTF::GAMMA_2_2,
+                                        100.0f};
+  const auto                     export_path = export_dir_ / "raster-rec709.jpg";
+  {
+    ExportService export_service(sleeve_service, image_pool, pipeline_service);
+    ExportTask    task;
+    task.sleeve_id_                = snapshot.created_[0].element_id_;
+    task.image_id_                 = snapshot.created_[0].image_id_;
+    task.options_.format_          = ImageFormatType::JPEG;
+    task.options_.export_path_     = export_path;
+    task.options_.resize_enabled_  = true;
+    task.options_.max_length_side_ = 256;
+    task.recipe_                   = ExportRecipe::FromLegacyOptions(task.options_);
+    task.recipe_->output_color_    = rec709;
+    task.recipe_->icc_             = ExportIccPolicy::EMBED_OUTPUT_PROFILE;
+    export_service.EnqueueExportTask(task);
+    std::promise<std::shared_ptr<std::vector<ExportResult>>> done;
+    auto                                                     fut = done.get_future();
+    export_service.ExportAll(
+        [&done](std::shared_ptr<std::vector<ExportResult>> results) { done.set_value(results); });
+    ASSERT_EQ(fut.wait_for(180s), std::future_status::ready);
+    const auto results = fut.get();
+    ASSERT_NE(results, nullptr);
+    ASSERT_EQ(results->size(), 1u);
+    ASSERT_TRUE((*results)[0].success_) << (*results)[0].message_;
+  }
+
+  const auto exported_icc = read_icc(export_path);
+  EXPECT_EQ(exported_icc, ExportIccProfileResolver::ResolveIccProfileBytes(rec709));
+  EXPECT_NE(exported_icc, source_icc);
+  AssertReadableNonEmptyImageFile(export_path);
+}
+
 TEST_F(ExportServiceTests, ExportPixelsAndIccUseTheSameRecipeColorConfiguration) {
   if (!std::filesystem::exists(std::filesystem::path(TEST_IMG_PATH) / "raw" / "linear_dng" /
                                "mfzoty.dng")) {

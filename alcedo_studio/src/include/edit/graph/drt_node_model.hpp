@@ -34,13 +34,15 @@ enum class DrtColorSpace : int {
 };
 
 enum class DrtEotf : int {
-  Linear  = 0,
-  St2084  = 1,
-  Hlg     = 2,
-  Gamma26 = 3,
-  Bt1886  = 4,
-  Gamma22 = 5,
-  Gamma18 = 6,
+  Linear        = 0,
+  St2084        = 1,
+  Hlg           = 2,
+  Gamma26       = 3,
+  Bt1886        = 4,
+  Gamma22       = 5,
+  Gamma18       = 6,
+  /// IEC 61966-2-1 piecewise sRGB curve (not gamma 2.2).
+  SrgbPiecewise = 7,
 };
 
 struct OpenDrtDetailedParams {

@@ -804,9 +804,9 @@ TEST_F(AlbumQueryTest, ImportTimePersistsThroughImportAndProjectReopen) {
   }
   const auto raw_copy = scratch_dir_ / "imported.ARW";
   std::filesystem::copy_file(raw_fixture, raw_copy);
-  // A JPEG that import rejects by content: the failed file must not appear in the result.
-  const auto rejected = scratch_dir_ / "rejected.jpg";
-  test_support::WriteRgbRaster(rejected, ".jpg");
+  // A file that import rejects by content: the failed file must not appear in the result.
+  const auto rejected = scratch_dir_ / "rejected.dat";
+  test_support::WriteUnknownBinary(rejected);
 
   const auto before = std::chrono::system_clock::to_time_t(
       std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now()));

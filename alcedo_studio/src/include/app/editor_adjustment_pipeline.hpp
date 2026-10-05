@@ -37,6 +37,8 @@ enum class EditorAdjustmentField {
   LensCalibration,
   ColorTemperature,
   Diffusion,
+  /// Raster input profile override (Develop `input.profile_override`).
+  InputProfile,
 };
 
 /// Resolve a stable QML field key (or one of its aliases) to the adjustment it controls.

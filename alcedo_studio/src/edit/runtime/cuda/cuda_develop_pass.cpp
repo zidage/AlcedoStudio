@@ -16,11 +16,13 @@
 #include "decoders/processor/operators/gpu/cuda_dng_warp.hpp"
 #include "decoders/processor/operators/gpu/cuda_highlight_reconstruct.hpp"
 #include "decoders/processor/operators/gpu/cuda_white_balance.hpp"
+#include "edit/runtime/cuda/cuda_raster_linearize.hpp"
 #include "edit/runtime/cuda/cuda_sensor_demosaic.hpp"
 #include "edit/runtime/cuda/geometry_resample_pass.hpp"
 #include "edit/runtime/lens/cuda/cuda_geometry_ops.hpp"
 #include "edit/runtime/lens/cuda/cuda_lens_calib_ops.hpp"
 #include "edit/runtime/lens/lens_calibration_resolver.hpp"
+#include "edit/runtime/raster_develop_params.hpp"
 #include "edit/runtime/texture_format.hpp"
 #include "gpu/transient_allocation_policy.hpp"
 #include "gpu/transient_buffer_scope.hpp"
@@ -123,8 +125,45 @@ void ExecuteCudaDevelop(CudaRenderDevice& device, const ExecutionPlan& plan,
   auto&              decoded_lease = AcquireRgba(workspace, demosaic_id, out_w, out_h);
   auto&              out_tex       = decoded_lease.Texture();
 
-  if (input.input_kind == RawInputKind::DebayeredRgb ||
-      plan.source.kind == DevelopInputKind::DirectRgb) {
+  if (input.input_kind == RawInputKind::RasterRgb) {
+    // Raster input: upload at native depth, LinearizeRaster to F32 RGB, then crop and orient.
+    const auto raster = RequireRasterInput(document, "ExecuteCudaDevelop");
+    RequireRasterPixelsMatchDescription(input, raster.source_color_, "ExecuteCudaDevelop");
+    const auto params =
+        PackRasterLinearize(ResolveEffectiveRasterDescription(raster), input.pixels.format);
+    const auto width  = input.host_extent.width;
+    const auto height = input.host_extent.height;
+    if (input.pixels.stride_bytes != width * HostPixelFormatBytesPerPixel(input.pixels.format)) {
+      throw std::runtime_error("ExecuteCudaDevelop: expected tightly packed raster input");
+    }
+    void* uploaded      = AllocateTransient(workspace, input.pixels.ByteCount());
+    void* device_params = AllocateTransient(workspace, params.size() * sizeof(float));
+    void* linear = AllocateTransient(workspace, static_cast<std::size_t>(width) * height * 12);
+    {
+      diag::PreviewSubStageInterval upload(diag::PreviewSubStageKind::Upload);
+      workspace.Device().UploadDeviceMemory(uploaded, input.pixels.Span(), ctx);
+      workspace.Device().UploadDeviceMemory(device_params, std::as_bytes(std::span(params)), ctx);
+    }
+    {
+      diag::PreviewSubStageInterval linearize(diag::PreviewSubStageKind::Linearize);
+      LaunchCudaLinearizeRaster(uploaded, input.pixels.format, width, height,
+                                static_cast<const float*>(device_params),
+                                static_cast<float*>(linear), ctx.Stream());
+    }
+    ReleaseTransientSlabsAfterGpuLastUse(device, {uploaded, device_params});
+    auto packed =
+        WrapF32C4(out_tex.DevicePointer(), static_cast<int>(out_w), static_cast<int>(out_h));
+    {
+      diag::PreviewSubStageInterval pack(diag::PreviewSubStageKind::InverseCamMulPack);
+      ExecuteCudaPackLinearRgb(
+          device, input,
+          cv::cuda::GpuMat(static_cast<int>(height), static_cast<int>(width), CV_32FC3, linear,
+                           static_cast<std::size_t>(width) * 12),
+          packed, stream);
+    }
+    ReleaseTransientSlabsAfterGpuLastUse(device, {linear});
+  } else if (input.input_kind == RawInputKind::DebayeredRgb ||
+             plan.source.kind == DevelopInputKind::DirectRgb) {
     const auto width  = input.host_extent.width;
     const auto height = input.host_extent.height;
     if (input.pixels.format != HostPixelFormat::F32Rgba ||

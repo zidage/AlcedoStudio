@@ -24,6 +24,9 @@ enum class RawInputKind {
   BayerRaw,
   DebayeredRgb,
   Unsupported,
+  /// JPEG, PNG, TIFF or OpenEXR pixels decoded by RasterInputLoader. Display-referred or
+  /// scene-linear source RGB; the Develop `input` object describes its color.
+  RasterRgb,
 };
 
 enum class RawCfaKind {

@@ -32,9 +32,11 @@
 #include "edit/runtime/lens/lens_calibration_resolver.hpp"
 #include "edit/runtime/lens/opencl/opencl_lens_calib_ops.hpp"
 #include "edit/runtime/opencl/opencl_dag_programs.hpp"
+#include "edit/runtime/opencl/opencl_display_to_ap1_pass.hpp"
 #include "edit/runtime/opencl/opencl_neural_session_workspace.hpp"
 #include "edit/runtime/parameter_arena.hpp"
 #include "edit/runtime/parameter_binding.hpp"
+#include "edit/runtime/raster_develop_params.hpp"
 #include "edit/runtime/texture_format.hpp"
 #include "gpu/gpu_pool_trace.hpp"
 #include "gpu/transient_allocation_policy.hpp"
@@ -518,8 +520,49 @@ void ExecuteOpenClDevelop(OpenClRenderDevice& device, const ExecutionPlan& plan,
   const GraphValueId demosaic_id = input.dng_warp_rectilinear.has_value()
                                        ? GraphValueId{NodeId{"develop"}, PortId{"sensor_unwarped"}}
                                        : sensor_id;
-  if (input.input_kind == RawInputKind::DebayeredRgb ||
-      plan.source.kind == DevelopInputKind::DirectRgb) {
+  if (input.input_kind == RawInputKind::RasterRgb) {
+    // Raster input: upload at native depth, LinearizeRaster to F32 RGBA, then crop and orient.
+    const auto raster = RequireRasterInput(document, "ExecuteOpenClDevelop");
+    RequireRasterPixelsMatchDescription(input, raster.source_color_, "ExecuteOpenClDevelop");
+    const auto params =
+        PackRasterLinearize(ResolveEffectiveRasterDescription(raster), input.pixels.format);
+    const auto width  = input.host_extent.width;
+    const auto height = input.host_extent.height;
+    if (input.pixels.stride_bytes != width * HostPixelFormatBytesPerPixel(input.pixels.format)) {
+      throw std::runtime_error("ExecuteOpenClDevelop: expected tightly packed raster input");
+    }
+    auto&      backend      = workspace.Device();
+    const auto source_bytes = input.pixels.ByteCount();
+    const auto params_bytes = params.size() * sizeof(float);
+    const auto linear_bytes = static_cast<std::size_t>(width) * height * 4 * sizeof(float);
+    void*      uploaded     = workspace.TransientBuffers().Allocate(source_bytes);
+    void*      params_ptr   = workspace.TransientBuffers().Allocate(params_bytes);
+    void*      linear_ptr   = workspace.TransientBuffers().Allocate(linear_bytes);
+    const auto source_view  = ViewFromPtr(backend, uploaded, source_bytes);
+    const auto params_view  = ViewFromPtr(backend, params_ptr, params_bytes);
+    const auto linear_view  = ViewFromPtr(backend, linear_ptr, linear_bytes);
+    {
+      diag::PreviewSubStageInterval upload(diag::PreviewSubStageKind::Upload);
+      backend.UploadDeviceMemory(uploaded, input.pixels.Span(), device.CommandContext());
+      backend.UploadDeviceMemory(params_ptr, std::as_bytes(std::span(params)),
+                                 device.CommandContext());
+    }
+    auto stream = MakeEncodeQueue(device);
+    {
+      diag::PreviewSubStageInterval linearize(diag::PreviewSubStageKind::Linearize);
+      cl_event                      event = nullptr;
+      EnqueueOpenClLinearizeRaster(stream.queue, source_view.native, source_view.offset_bytes,
+                                   input.pixels.format, width, height, params_view.native,
+                                   params_view.offset_bytes / sizeof(float), linear_view.native,
+                                   linear_view.offset_bytes / sizeof(float), &event);
+      NoteOpenClEnqueueNdRange();
+      stream.retain_event(event, stream.retain_ctx);
+    }
+    auto& decoded = AcquireRgba(workspace, demosaic_id, out_w, out_h);
+    CopyRgbaToPacked(stream, linear_view, decoded.Texture().Native(), input, width, height, false);
+    ReleaseTransientSlabsAfterGpuLastUse(device, {uploaded, params_ptr, linear_ptr});
+  } else if (input.input_kind == RawInputKind::DebayeredRgb ||
+             plan.source.kind == DevelopInputKind::DirectRgb) {
     const auto width  = input.host_extent.width;
     const auto height = input.host_extent.height;
     if (input.pixels.format != HostPixelFormat::F32Rgba ||
@@ -735,6 +778,43 @@ void ExecuteOpenClCameraColor(OpenClRenderDevice& device, const ExecutionPlan& p
   cl_mem table_mem = tables.Native();
   CheckOpenCl(clSetKernelArg(kernel, 4, sizeof(cl_mem), &table_mem), "camera profile arg4");
   DispatchKernel(device, kernel, width, height);
+}
+
+void ExecuteOpenClDisplayToAp1(OpenClRenderDevice& device, const ExecutionPlan& plan,
+                               const PreparedRawInput& input, const PipelineDocument& document) {
+  auto& workspace = device.Workspace();
+  if (!workspace.IsRendering()) {
+    throw std::runtime_error("ExecuteOpenClDisplayToAp1: BeginRender has not been called");
+  }
+  const auto raster = RequireRasterInput(document, "ExecuteOpenClDisplayToAp1");
+  RequireRasterPixelsMatchDescription(input, raster.source_color_, "ExecuteOpenClDisplayToAp1");
+  const auto block = MakeDisplayToAp1ArenaBlock(
+      ResolveDisplayToAp1Block(ResolveEffectiveRasterDescription(raster)));
+  auto* source = workspace.Images().Find(plan.geometry_output);
+  if (source == nullptr || source->Empty()) {
+    throw std::runtime_error("ExecuteOpenClDisplayToAp1: missing geometry.scene_source");
+  }
+  const auto width  = source->Texture().Width();
+  const auto height = source->Texture().Height();
+  auto&      output =
+      workspace.AcquireImageForWrite(plan.develop_output, {width, height, TextureFormat::Rgba32f});
+  source = workspace.Images().Find(plan.geometry_output);
+  if (source == nullptr) {
+    throw std::runtime_error("ExecuteOpenClDisplayToAp1: geometry texture lost during acquire");
+  }
+  const auto*            develop = document.Develop();
+  auto&                  arena   = workspace.Parameters();
+  const ParameterSlotKey key{develop->Id(), kDevelopDisplayToAp1Slot};
+  arena.BindOrWritePackedSlot(key, DirtyFieldMask{DevelopDirty::Input}, block);
+  arena.UploadDirty(device.CommandContext());
+  const auto binding = arena.Binding(key);
+  cl_event   event   = nullptr;
+  EnqueueOpenClDisplayToAp1(workspace.Device().NativeQueue(), source->Texture().Native(),
+                            output.Texture().Native(), width, height, arena.DeviceBuffer().Native(),
+                            binding.offset / static_cast<std::uint32_t>(sizeof(float)),
+                            DisplayToAp1Output::AcesccAp1, &event);
+  NoteOpenClEnqueueNdRange();
+  workspace.Device().TrackKernelEvent(device.CommandContext(), event);
 }
 
 }  // namespace alcedo

@@ -26,6 +26,7 @@
 #include "app/pipeline_service.hpp"
 #include "app/thumbnail_disk_cache_service.hpp"
 #include "concurrency/thread_pool.hpp"
+#include "edit/input/raster_input_loader.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "io/image/image_loader.hpp"
 #include "renderer/pipeline_scheduler.hpp"
@@ -453,9 +454,11 @@ void ThumbnailService::State::DecodeRenditionSource(
           request->Fail(ThumbnailRequestStatus::kCanceled, "Request was canceled.");
           return;
         }
-        source = std::make_shared<const PreparedRawInput>(RawInputLoader::LoadEncoded(
-            std::as_bytes(std::span<const uint8_t>(encoded)),
-            ResolutionToDecodeRes(request->resolution)));
+        // RAW content goes to the RAW decoder and raster content to the raster decoder, which
+        // uses the scaled JPEG decode at reduced resolutions.
+        source = std::make_shared<const PreparedRawInput>(
+            LoadEncodedImage(std::as_bytes(std::span<const uint8_t>(encoded)),
+                             ResolutionToDecodeRes(request->resolution)));
       }
       ScheduleRenditionRender(st, request, std::move(snapshot), std::move(disk_key),
                               std::move(source), std::move(decode_slot));

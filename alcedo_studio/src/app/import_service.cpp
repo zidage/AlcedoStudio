@@ -34,10 +34,17 @@ auto IsRootImportDestination(const image_path_t& dest) -> bool {
 }
 
 /// Encode the immutable history root of a newly imported image on a private default document.
-/// No executor: nothing renders the document before its root exists.
+/// A raster image gets the raster default document, which holds its color description in the
+/// Develop `input` object and has no RAW color context. No executor: nothing renders the
+/// document before its root exists.
 auto EncodeImportedImageRoot(const PipelineMgmtService& pipeline_service,
                              sl_element_id_t element_id, const std::shared_ptr<Image>& image)
     -> EncodedImageRoot {
+  if (image && image->HasRasterColorDescription()) {
+    return pipeline_service.EncodeImageRoot(
+        element_id, CreateDefaultRasterPipelineDocument(image->GetRasterColorDescription()),
+        nullptr);
+  }
   const RawRuntimeColorContext* ctx_ptr =
       image && image->HasRawColorContext() ? &image->GetRawColorContext() : nullptr;
   return pipeline_service.EncodeImageRoot(element_id, CreateDefaultPipelineDocument(), ctx_ptr);
@@ -109,12 +116,13 @@ class ImportRootBatchWriter {
 }  // namespace
 
 static void SetImportResult(std::shared_ptr<ImportJob> job, uint32_t requested, uint32_t imported,
-                            uint32_t failed, uint32_t unsupported) {
+                            uint32_t failed, uint32_t unsupported, uint32_t excluded_type) {
   ImportResult result;
-  result.requested_   = requested;
-  result.imported_    = imported;
-  result.failed_      = failed;
-  result.unsupported_ = unsupported;
+  result.requested_     = requested;
+  result.imported_      = imported;
+  result.failed_        = failed;
+  result.unsupported_   = unsupported;
+  result.excluded_type_ = excluded_type;
   if (job && job->on_finished_ && !job->cancelation_acked_.exchange(true)) {
     job->on_finished_(result);
   }
@@ -128,8 +136,8 @@ static void TryFinishImportJob(const std::shared_ptr<ImportJob>&      job,
   if (job->metadata_tasks_finished_.load() != job->metadata_tasks_submitted_.load()) {
     return;
   }
-  SetImportResult(job, progress->total_, progress->metadata_done_.load(),
-                  progress->failed_.load(), progress->unsupported_.load());
+  SetImportResult(job, progress->total_, progress->metadata_done_.load(), progress->failed_.load(),
+                  progress->unsupported_.load(), progress->excluded_type_.load());
 }
 
 /// Commit one batch of encoded roots, then count each image as imported or failed.
@@ -187,7 +195,6 @@ auto ImportServiceImpl::ImportToFolder(const std::vector<image_path_t>& paths,
                                        const image_path_t& dest, const ImportOptions& options,
                                        std::shared_ptr<ImportJob> job)
     -> std::shared_ptr<ImportJob> {
-  (void)options;
   auto import_log = std::make_shared<ImportLog>();
   if (job) {
     job->import_log_ = import_log;
@@ -200,20 +207,21 @@ auto ImportServiceImpl::ImportToFolder(const std::vector<image_path_t>& paths,
 
   if (paths.empty()) {
     // Immediately finish
-    SetImportResult(job, 0, 0, 0, 0);
+    SetImportResult(job, 0, 0, 0, 0, 0);
     return job;
   }
 
-  submission_thread_.Submit([this, paths, dest, job, import_log, progress_ptr]() {
-    CreatePlaceholdersAndSubmit(paths, dest, job, import_log, progress_ptr);
-  });
+  submission_thread_.Submit(
+      [this, paths, dest, job, import_log, progress_ptr, allowed = options.allowed_categories_]() {
+        CreatePlaceholdersAndSubmit(paths, dest, job, import_log, progress_ptr, allowed);
+      });
   return job;
 }
 
 void ImportServiceImpl::CreatePlaceholdersAndSubmit(
     const std::vector<image_path_t>& paths, const image_path_t& dest,
     const std::shared_ptr<ImportJob>& job, const std::shared_ptr<ImportLog>& import_log,
-    const std::shared_ptr<ImportProgress>& progress_ptr) {
+    const std::shared_ptr<ImportProgress>& progress_ptr, ImportCategoryMask allowed_categories) {
   // TODO: Use sleeve service to interact with FS
   // The current implementation is a temporary solution
   auto       root_writer     = std::make_shared<ImportRootBatchWriter>();
@@ -228,7 +236,7 @@ void ImportServiceImpl::CreatePlaceholdersAndSubmit(
       break;
     }
     // Validate that the path is a regular file. File-type detection is deferred
-    // to metadata extraction, which accepts RAW content only; other files are
+    // to metadata extraction, which classifies the content; rejected files are
     // marked failed and SyncImports removes their element and Image.
     std::error_code file_ec;
     if (!std::filesystem::is_regular_file(image_path, file_ec) || file_ec) {
@@ -281,7 +289,7 @@ void ImportServiceImpl::CreatePlaceholdersAndSubmit(
     auto image_ptr = image_handler_ptr->Get();
     image_ptr->image_path_ = image_path;
     image_ptr->image_name_ = file_name;
-    // TODO: Parse image type for future use
+    // MetadataExtractor sets image_type_ from the file content.
 
     // Link the image to the SleeveFile
     sleeve_file->SetImage(image_ptr);
@@ -301,20 +309,23 @@ void ImportServiceImpl::CreatePlaceholdersAndSubmit(
 
     // Extract metadata and encode the history root on the pool; roots commit in batches.
     thread_pool_.Submit([image_handler_ptr, progress_ptr, job, import_log, element_id,
-                         pipeline_service, root_writer]() {
+                         pipeline_service, root_writer, allowed_categories]() {
       auto image_ptr = image_handler_ptr ? image_handler_ptr->Get() : nullptr;
       std::vector<ImportRootBatchWriter::PendingRoot> full_batch;
       bool                                            encoded     = false;
       bool                                            unsupported = false;
+      bool                                            excluded    = false;
       if (image_ptr) {
         try {
-          MetadataExtractor::ExtractEXIF_ToImage(image_ptr->image_path_, *image_ptr);
+          MetadataExtractor::ExtractEXIF_ToImage(image_ptr->image_path_, *image_ptr,
+                                                 allowed_categories);
           full_batch =
               root_writer->Add(image_ptr->image_id_,
                                EncodeImportedImageRoot(*pipeline_service, element_id, image_ptr));
           encoded = true;
         } catch (const MetadataExtractionError& e) {
           unsupported = e.code() == ImportErrorCode::UNSUPPORTED_FORMAT;
+          excluded    = e.code() == ImportErrorCode::EXCLUDED_TYPE;
           if (import_log) {
             import_log->MarkMetadataFailure(image_ptr->image_id_, e.code(), e.message());
           }
@@ -332,11 +343,14 @@ void ImportServiceImpl::CreatePlaceholdersAndSubmit(
       }
 
       if (!encoded) {
-        // failed_ first: unsupported_ is a subset, so a reader that loads unsupported_ before
-        // failed_ never sees more unsupported files than failed ones.
+        // failed_ first: unsupported_ and excluded_type_ are subsets, so a reader that loads
+        // them before failed_ never sees more of them than failed files.
         progress_ptr->failed_.fetch_add(1);
         if (unsupported) {
           progress_ptr->unsupported_.fetch_add(1);
+        }
+        if (excluded) {
+          progress_ptr->excluded_type_.fetch_add(1);
         }
         if (job && job->on_progress_) {
           job->on_progress_(*progress_ptr);

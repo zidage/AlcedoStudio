@@ -85,6 +85,8 @@ auto ResolveConfigProfileFileName(const ExportColorProfileConfig& config) -> std
           return "rec709_bt1886.icc";
         case EOTF::GAMMA_2_2:
           return "rec709_gamma22.icc";
+        case EOTF::SRGB_PIECEWISE:
+          return "srgb_piecewise.icc";
         default:
           return {};
       }
@@ -94,6 +96,8 @@ auto ResolveConfigProfileFileName(const ExportColorProfileConfig& config) -> std
           return "p3_d65_gamma22.icc";
         case EOTF::ST2084:
           return "p3_d65_pq.icc";
+        case EOTF::SRGB_PIECEWISE:
+          return "upstream_displayp3_compat_v4.icc";
         default:
           return {};
       }
@@ -178,6 +182,8 @@ auto ResolveAppleColorSpace(const ExportColorProfileConfig& config) -> CFStringR
         case ColorUtils::EOTF::BT1886:
         case ColorUtils::EOTF::GAMMA_2_2:
           return kCGColorSpaceITUR_709;
+        case ColorUtils::EOTF::SRGB_PIECEWISE:
+          return kCGColorSpaceSRGB;
         default:
           return nullptr;
       }
@@ -188,6 +194,7 @@ auto ResolveAppleColorSpace(const ExportColorProfileConfig& config) -> CFStringR
         case ColorUtils::EOTF::HLG:
           return kCGColorSpaceDisplayP3_HLG;
         case ColorUtils::EOTF::GAMMA_2_2:
+        case ColorUtils::EOTF::SRGB_PIECEWISE:
           return kCGColorSpaceDisplayP3;
         default:
           return nullptr;

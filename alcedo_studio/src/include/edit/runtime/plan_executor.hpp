@@ -164,17 +164,24 @@ class PlanExecutor {
       }
 
       {
-        diag::PreviewPassInterval camera_pass(plan.develop_output.producer.Value(),
-                                              diag::PreviewPassKind::CameraToAp1);
+        // CameraToAp1 for RAW input, DisplayToAp1 for raster input; both write develop_output.
+        const bool                raster = plan.Contains(GpuPassKind::DisplayToAp1);
+        diag::PreviewPassInterval camera_pass(
+            plan.develop_output.producer.Value(),
+            raster ? diag::PreviewPassKind::DisplayToAp1 : diag::PreviewPassKind::CameraToAp1);
         if (BindOrMiss(workspace, invalidation, plan.develop_output, geometry_extent, completed,
                        stats)) {
           camera_pass.SetState(diag::PreviewExecutionState::Skipped);
-          ++stats.camera_color_skip;
+          ++(raster ? stats.display_to_ap1_skip : stats.camera_color_skip);
         } else {
           GpuWorkSample<Device> gpu(device);
-          PassEncoder<Backend, GpuPassKind::CameraToAp1>::Encode(device, plan, input, document);
+          if (raster) {
+            PassEncoder<Backend, GpuPassKind::DisplayToAp1>::Encode(device, plan, input, document);
+          } else {
+            PassEncoder<Backend, GpuPassKind::CameraToAp1>::Encode(device, plan, input, document);
+          }
           Record(device, invalidation, plan.develop_output, geometry_extent);
-          ++stats.camera_color_execute;
+          ++(raster ? stats.display_to_ap1_execute : stats.camera_color_execute);
         }
       }
       if (exact_release) {

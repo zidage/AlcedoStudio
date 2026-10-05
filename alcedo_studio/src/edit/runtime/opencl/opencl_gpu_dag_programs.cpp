@@ -20,11 +20,10 @@ void RegisterOpenClGpuDagPrograms() {
         .programs =
             {
                 OpenClProgramDescriptor{
-                    .name                = OpenCL::GpuDag::kGeometryCameraProgramName,
-                    .source_paths        = {ALCEDO_OPENCL_DNG_PROFILE_MATH_H,
-                                            ALCEDO_OPENCL_ACES_RGC_H,
-                                            ALCEDO_OPENCL_DAG_GEOMETRY_CAMERA_CL},
-                    .build_options       = "-cl-std=CL1.2",
+                    .name          = OpenCL::GpuDag::kGeometryCameraProgramName,
+                    .source_paths  = {ALCEDO_OPENCL_DNG_PROFILE_MATH_H, ALCEDO_OPENCL_ACES_RGC_H,
+                                      ALCEDO_OPENCL_DAG_GEOMETRY_CAMERA_CL},
+                    .build_options = "-cl-std=CL1.2",
                     .required_at_startup = false,
                 },
                 OpenClProgramDescriptor{
@@ -47,12 +46,19 @@ void RegisterOpenClGpuDagPrograms() {
                     .required_at_startup = false,
                 },
                 OpenClProgramDescriptor{
-                    .name                = OpenCL::GpuDag::kDrtProgramName,
-                    .source_paths        = {ALCEDO_OPENCL_ACES_RGC_H,
-                                            ALCEDO_OPENCL_DAG_DRT_PARAMS_CL,
-                                            ALCEDO_OPENCL_DAG_COMMON_CL,
-                                            ALCEDO_OPENCL_DAG_CST_CL, ALCEDO_OPENCL_DAG_DRT_CL},
+                    .name                = OpenCL::GpuDag::kDisplayToAp1ProgramName,
+                    .source_paths        = {ALCEDO_OPENCL_RASTER_LINEARIZE_MATH_H,
+                                            ALCEDO_OPENCL_DISPLAY_TO_AP1_MATH_H,
+                                            ALCEDO_OPENCL_DAG_DISPLAY_TO_AP1_CL},
                     .build_options       = "-cl-std=CL1.2",
+                    .required_at_startup = false,
+                },
+                OpenClProgramDescriptor{
+                    .name          = OpenCL::GpuDag::kDrtProgramName,
+                    .source_paths  = {ALCEDO_OPENCL_ACES_RGC_H, ALCEDO_OPENCL_DAG_DRT_PARAMS_CL,
+                                      ALCEDO_OPENCL_DAG_COMMON_CL, ALCEDO_OPENCL_DAG_CST_CL,
+                                      ALCEDO_OPENCL_DAG_DRT_CL},
+                    .build_options = "-cl-std=CL1.2",
                     .required_at_startup = false,
                 },
             },

@@ -39,7 +39,8 @@ auto PlaneBytes(std::size_t pixels, std::size_t bytes_per_pixel) -> std::size_t 
 }
 
 auto EstimateDevelopTransientBytes(const DevelopCompileSource& source) -> std::size_t {
-  if (source.kind == DevelopInputKind::DirectRgb) {
+  if (source.kind == DevelopInputKind::DirectRgb || source.kind == DevelopInputKind::Raster) {
+    // Raster: uploaded RGBA (at most 16 bytes) + linearized RGB, then the packed copy.
     const auto pixels =
         static_cast<std::size_t>(source.host_extent.width) * source.host_extent.height;
     // Uploaded RGBA + linear RGB + HLR RGB and aligned reduction scalars.
@@ -418,7 +419,8 @@ void CompileDevelopPasses(ExecutionPlan& plan, const NodeId& develop_id,
   const CompiledPassInput  sensor_in{PortId{"sensor_linear"}, plan.sensor_linear_output,
                                     CompiledValueKind::SceneImage};
   const CompiledPassOutput sensor_out{plan.sensor_linear_output, CompiledValueKind::SceneImage};
-  if (source.kind == DevelopInputKind::DirectRgb) {
+  if (source.kind == DevelopInputKind::DirectRgb || source.kind == DevelopInputKind::Raster) {
+    // Raster input: UploadRgb runs LinearizeRaster, so lens and geometry see linear light.
     PushPass(plan, GpuPassKind::UploadRgb, develop_id, {}, {sensor_out});
   } else {
     PushPass(plan, GpuPassKind::UploadRaw, develop_id, {}, {sensor_out});
@@ -431,7 +433,11 @@ void CompileDevelopPasses(ExecutionPlan& plan, const NodeId& develop_id,
   PushPass(plan, GpuPassKind::Lens, develop_id, {sensor_in}, {sensor_out});
   PushPass(plan, GpuPassKind::GeometryResample, NodeId{"geometry"}, {sensor_in},
            {{plan.geometry_output, CompiledValueKind::SceneImage}});
-  PushPass(plan, GpuPassKind::CameraToAp1, develop_id,
+  // Raster input never uses the camera color transform; DisplayToAp1 writes develop_output.
+  PushPass(plan,
+           source.kind == DevelopInputKind::Raster ? GpuPassKind::DisplayToAp1
+                                                   : GpuPassKind::CameraToAp1,
+           develop_id,
            {{PortId{"scene_source"}, plan.geometry_output, CompiledValueKind::SceneImage}},
            {{plan.develop_output, CompiledValueKind::SceneImage}});
 }

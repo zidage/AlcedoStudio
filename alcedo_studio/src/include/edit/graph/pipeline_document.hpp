@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include <cstdint>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -18,6 +18,7 @@
 #include "edit/graph/pipeline_graph.hpp"
 #include "edit/history/pipeline_history_format.hpp"
 #include "edit/operators/models/parameter_revision.hpp"
+#include "image/raster_color_description.hpp"
 #include "json.hpp"
 
 namespace alcedo {
@@ -180,6 +181,18 @@ inline constexpr float kDefaultPipelineContrast   = 15.0f;
  * @return A document that satisfies graph Validate and ValidateImageBackbone.
  */
 [[nodiscard]] auto CreateDefaultPipelineDocument() -> PipelineDocument;
+
+/**
+ * @brief Default document of a raster (JPEG, PNG, TIFF, OpenEXR) image (decision D2).
+ *
+ * Develop carries the raster `input` object with @p source_color and override `auto`; lens
+ * correction is off. The primary Color Grade is neutral: the RAW default look is not applied.
+ * The DRT is ACES 2.0 with the limiting and encoding space nearest the source primaries (Rec.709,
+ * P3-D65, else Rec.2020), the source peak luminance, and the EOTF nearest the source transfer. A
+ * scene-linear source has no display transfer and uses Rec.709, sRGB piecewise, 100 nits.
+ */
+[[nodiscard]] auto CreateDefaultRasterPipelineDocument(const RasterColorDescription& source_color)
+    -> PipelineDocument;
 
 /**
  * @brief Hash of every change stamp in @p document.

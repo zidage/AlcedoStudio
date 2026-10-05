@@ -29,6 +29,15 @@ void ExecuteMetalGeometryResample(MetalRenderDevice& device, const ExecutionPlan
 void ExecuteMetalCameraColor(MetalRenderDevice& device, const ExecutionPlan& plan,
                              const PipelineDocument& document);
 
+/**
+ * @brief Raster input: write ACEScc AP1 `develop.image` from `geometry.scene_source` with the
+ * DisplayToAp1 kernel. The parameter block is bound through the workspace parameter arena.
+ * @throws std::runtime_error when the document has no raster input object or the pixels do not
+ *         match its description.
+ */
+void ExecuteMetalDisplayToAp1(MetalRenderDevice& device, const ExecutionPlan& plan,
+                              const PreparedRawInput& input, const PipelineDocument& document);
+
 void WarmUpMetalDagPlan(MetalBackend& backend, const ExecutionPlan& plan);
 
 void SetMetalDevelopNeuralModelCacheForTesting(MetalDemosaicNetModelCache* cache);
