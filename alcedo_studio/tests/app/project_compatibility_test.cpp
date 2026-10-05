@@ -8,7 +8,8 @@
 // tests/resources/compat/raw_project_abdb000c8.alcd was packed by build abdb000c8 (main before
 // raster input). It holds one CI RAW image with one exposure commit. The JSON beside it records
 // the committed document and the render hash of support/project_compat_render.hpp on that
-// build. The hash is for CUDA on the GPU that recorded it.
+// build. The hash is for CUDA on the GPU that recorded it, so only a CUDA build compares it;
+// every build checks that the project opens with the same document and renders.
 
 #include <duckdb.h>
 #include <gtest/gtest.h>
@@ -91,7 +92,11 @@ TEST(ProjectCompatibilityTest, ProjectWrittenByCurrentMainOpensAndRendersUnchang
 
     const auto hash = test::RenderCommittedElementHash(pipelines, *project.GetImagePoolService(),
                                                        element_id, image_id);
+    EXPECT_NE(hash, 0u);
+#ifdef HAVE_CUDA
+    // The recorded hash is a CUDA render; other backends round differently.
     EXPECT_EQ(std::to_string(hash), expected.at("render_hash").get<std::string>());
+#endif
   }
   std::filesystem::remove_all(workspace, ec);
 }
