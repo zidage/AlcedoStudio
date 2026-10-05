@@ -131,4 +131,8 @@ TEST_F(OpenClLutResourceFixture, ReturnedLutAtZeroStrengthRemainsVisuallyInactiv
   lut_resource_test::CheckReturnedLutAtZeroStrengthRemainsInactive(*harness_, "opencl");
 }
 
+TEST_F(OpenClLutResourceFixture, NonDefaultEncodingRendersHostCompositeTableWithin2PowMinus17) {
+  lut_resource_test::CheckNonDefaultEncodingSamplesHostCompositeTable(*harness_, "opencl");
+}
+
 }  // namespace alcedo

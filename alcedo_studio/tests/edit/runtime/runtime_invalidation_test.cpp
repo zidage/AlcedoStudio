@@ -19,6 +19,7 @@
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
+#include "edit/runtime/grade_lut.hpp"
 #include "edit/runtime/graph_compiler.hpp"
 #include "edit/runtime/local_tone_cache_ids.hpp"
 #include "edit/runtime/result_content_key.hpp"
@@ -613,6 +614,48 @@ TEST(RuntimeInvalidation, CanonicalIdentityIgnoresViewportAndFollowsCrop) {
   document.Geometry().SetCropRect({0.1f, 0.1f, 0.8f, 0.8f});
   GraphCompiler::BindFrameGeometry(plan, document, viewport);
   EXPECT_NE(HashCanonicalReferenceIdentity(plan, prepared), base_canonical);
+}
+
+TEST(RuntimeInvalidation, LmtEncodingChangeInvalidatesLikeReferenceChange) {
+  // An encoding change has no new resource identity; it reaches the repack through the LMT
+  // adjustment revision, the path of a Reference change (lut_color_encoding_plan.md, 6.3).
+  ValidityHarness harness;
+  const auto directory = lut_resource_test::FixtureDirectory("validity", "lmt_encoding_change");
+  const auto cube      = directory / "look.cube";
+  lut_resource_test::WriteConstantCube(cube, {0.1f, 0.2f, 0.3f});
+  auto* lmt = dynamic_cast<LmtModel*>(
+      harness.document.PrimaryGrade()->FindAdjustmentByType(type_ids::Lmt()));
+  ASSERT_NE(lmt, nullptr);
+  const auto resources = DefaultLutResourceResolver();
+  const auto source_id = LocalToneSourceId(harness.Primary().node_id);
+  const auto collect   = [&] {
+    harness.invalidation.CollectAndPropagate(harness.plan, harness.document, harness.prepared,
+                                               *resources);
+  };
+
+  lmt->SetCubePath(cube.string());
+  collect();
+  harness.Complete();
+  const auto identity = GradeLutResourceIdentity(*harness.document.PrimaryGrade(), *resources);
+
+  lmt->SetEncodings("sony_slog3_sgamut3cine", "rec709_bt1886");
+  collect();
+  EXPECT_EQ(GradeLutResourceIdentity(*harness.document.PrimaryGrade(), *resources), identity);
+  EXPECT_TRUE(harness.Current(harness.plan.develop_output));
+  EXPECT_GT(harness.Required(source_id), harness.Completed(source_id));
+  EXPECT_GT(harness.Required(harness.Primary().scene_output),
+            harness.Completed(harness.Primary().scene_output));
+  harness.Complete();
+
+  // The same reference change for comparison invalidates the same values.
+  lmt->SetCubePath((directory / "other.cube").string());
+  collect();
+  EXPECT_TRUE(harness.Current(harness.plan.develop_output));
+  EXPECT_GT(harness.Required(source_id), harness.Completed(source_id));
+  harness.Complete();
+
+  collect();
+  EXPECT_TRUE(harness.Current(harness.Primary().scene_output)) << "an unchanged LMT is reused";
 }
 
 TEST(RuntimeInvalidation, LutResourceChangeInvalidatesGradeWithoutModelRevision) {

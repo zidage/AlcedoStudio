@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "app/project_package_backend.hpp"
+#include "edit/graph/color_grade_node_model.hpp"
 #include "edit/graph/develop_node_model.hpp"
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_commands.hpp"
@@ -23,6 +24,7 @@
 #include "edit/history/pipeline_history_format.hpp"
 #include "edit/history/version_ref.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
+#include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "grade_owned_mask_support.hpp"
 #include "json.hpp"
@@ -147,6 +149,44 @@ TEST(PipelineDocumentCheckpointFormat,
   DevelopParamsModel develop;
   develop.LoadJson(develop_json);
   EXPECT_EQ(develop.ToJson().dump(), develop_json.dump());
+}
+
+TEST(PipelineDocumentCheckpointFormat,
+     ExistingLmtRootDocumentsSerializeByteIdenticalAfterEncodingChange) {
+  // lmt_root_before_lut_encoding.json and lmt_checkpoint_before_lut_encoding.json were written by
+  // the document code of 8f8e71220, before LMT input and output encodings existed: the default
+  // document with a bound camera profile, element 42, and a library LUT at strength 0.35. The
+  // same document must encode to the same bytes, keep its root id, read both encodings as
+  // ACEScc, and never gain the encoding keys (lut_color_encoding_plan.md, section 6.1).
+  auto document = CreateDefaultPipelineDocument();
+  gpu_dag_test::EnsureTestCameraProfile(document);
+  auto* lmt =
+      dynamic_cast<LmtModel*>(document.PrimaryGrade()->FindAdjustmentByType(type_ids::Lmt()));
+  ASSERT_NE(lmt, nullptr);
+  lmt->SetReference(LibraryLutReference{"user/films/look.cube"}, "Look");
+  lmt->SetStrength(0.35f);
+  const auto raw_json   = nlohmann::json{{"CameraModel", "RootStateCamera"}};
+  const auto root_bytes = LoadExpectedBytes("lmt_root_before_lut_encoding.json");
+  EXPECT_EQ(EncodePipelineRootState(42, document, raw_json).dump(), root_bytes);
+  const auto root = DecodePipelineRootState(nlohmann::json::parse(root_bytes));
+  EXPECT_EQ(EncodePipelineRootState(root.element_id, root.document, root.raw_color_context).dump(),
+            root_bytes);
+  const auto* restored = dynamic_cast<const LmtModel*>(
+      root.document.PrimaryGrade()->FindAdjustmentByType(type_ids::Lmt()));
+  ASSERT_NE(restored, nullptr);
+  EXPECT_EQ(restored->InputEncoding(), "acescc");
+  EXPECT_EQ(restored->OutputEncoding(), "acescc");
+  EXPECT_FALSE(restored->ToJson().contains("input_encoding"));
+  EXPECT_FALSE(restored->ToJson().contains("output_encoding"));
+
+  const auto checkpoint_bytes = LoadExpectedBytes("lmt_checkpoint_before_lut_encoding.json");
+  const auto checkpoint = DecodePipelineDocumentCheckpoint(nlohmann::json::parse(checkpoint_bytes));
+  EXPECT_EQ(ComputeRootId(42, document, raw_json), checkpoint.root_id);
+  EXPECT_EQ(ComputeRootId(42, root.document, root.raw_color_context), checkpoint.root_id);
+  EXPECT_EQ(EncodePipelineDocumentCheckpoint(checkpoint.root_id, checkpoint.head_commit_hash,
+                                             checkpoint.transaction_chain_hash, checkpoint.document)
+                .dump(),
+            checkpoint_bytes);
 }
 
 TEST(PipelineDocumentCheckpointFormat, RoundTripPreservesDefaultIdentityAndIndependentUnlocks) {

@@ -33,6 +33,8 @@
 #include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/lut_reference.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
+#include "edit/runtime/grade_lut.hpp"
+#include "edit/runtime/lut_bake.hpp"
 #include "edit/runtime/lut_resource_resolver.hpp"
 #include "multi_grade_runtime_test_support.hpp"
 
@@ -41,7 +43,11 @@ namespace alcedo::lut_resource_test {
 using multi_grade_test::AcesccRgb;
 
 /// Absolute channel tolerance of the independent pixel arithmetic (plan L4).
-inline constexpr float kPixelTolerance = 1.0e-5f;
+inline constexpr float kPixelTolerance          = 1.0e-5f;
+
+/// Tolerance of one backend against the host sampling of a composite table: 2^-17, so any two
+/// backends agree within 2^-16 (lut_color_encoding_plan.md, phase L3).
+inline constexpr float kCompositeTableTolerance = 1.0f / 131072.0f;
 
 /// Pixels of one execute: the Develop output and the output of the last Color Grade.
 /// Grades encode on every execute; the display result after them is the cached result that a
@@ -164,14 +170,15 @@ inline auto Exposure(PipelineDocument& document, const char* grade = "grade.prim
 
 /// Every output pixel equals @p expected(develop pixel) within the L4 tolerance.
 template <class Expected>
-auto PixelsMatch(const RenderedGrades& rendered, Expected expected) -> ::testing::AssertionResult {
+auto PixelsMatch(const RenderedGrades& rendered, Expected expected,
+                 float tolerance = kPixelTolerance) -> ::testing::AssertionResult {
   if (rendered.output.empty() || rendered.output.size() != rendered.develop.size()) {
     return ::testing::AssertionFailure() << "missing pixels";
   }
   for (std::size_t i = 0; i < rendered.output.size(); ++i) {
     const AcesccRgb want = expected(rendered.develop[i]);
     for (std::size_t c = 0; c < 3; ++c) {
-      if (!(std::fabs(rendered.output[i][c] - want[c]) <= kPixelTolerance)) {
+      if (!(std::fabs(rendered.output[i][c] - want[c]) <= tolerance)) {
         return ::testing::AssertionFailure() << "pixel " << i << " channel " << c << ": actual "
                                              << rendered.output[i][c] << ", expected " << want[c];
       }
@@ -396,6 +403,38 @@ void CheckReturnedLutAtZeroStrengthRemainsInactive(Harness& harness, const std::
   EXPECT_TRUE(PixelsMatch(harness.Render(document), input));
   EXPECT_FLOAT_EQ(Lmt(document).Strength(), 0.0f);
   EXPECT_EQ(Lmt(document).CubePath(), cube.string());
+}
+
+/// A non-default encoding pair renders the host-baked composite table: every pixel equals the
+/// host trilinear sampling of that table within 2^-17, and the encoding change invalidates the
+/// cached display like a LUT change. All backends sample the same table, so they agree within
+/// 2^-16 (lut_color_encoding_plan.md, phase L3).
+template <class Harness>
+void CheckNonDefaultEncodingSamplesHostCompositeTable(Harness&           harness,
+                                                      const std::string& backend) {
+  const auto cube = FixtureDirectory(backend, "encoding") / "affine.cube";
+  WriteAffineCube(cube);
+  auto document = multi_grade_test::MakeIdentityGradeDocument();
+  Lmt(document).SetCubePath(cube.string());
+  EXPECT_TRUE(PixelsMatch(harness.Render(document),
+                          [](const AcesccRgb& c) { return BlendAffineLut(c, 1.0f); }));
+  (void)harness.Render(document);
+
+  Lmt(document).SetEncodings("sony_slog3_sgamut3cine", "rec709_bt1886");
+  const auto composite = TryPackGradeLut(*document.PrimaryGrade(), *DefaultLutResourceResolver());
+  ASSERT_NE(composite, nullptr);
+  ASSERT_EQ(composite->edge, kLmtCompositeEdge);
+  const auto rendered = harness.Render(document);
+  EXPECT_EQ(rendered.display_execute, 1U) << "an encoding change must invalidate the display";
+  EXPECT_TRUE(PixelsMatch(
+      rendered,
+      [&composite](const AcesccRgb& c) {
+        const LutRgb sampled = SampleLutTable(*composite, {c[0], c[1], c[2]});
+        return AcesccRgb{sampled[0], sampled[1], sampled[2]};
+      },
+      kCompositeTableTolerance));
+  // The composite table is not the source LUT: the pixels changed.
+  EXPECT_FALSE(PixelsMatch(rendered, [](const AcesccRgb& c) { return BlendAffineLut(c, 1.0f); }));
 }
 
 }  // namespace alcedo::lut_resource_test

@@ -129,4 +129,8 @@ TEST_F(CudaLutResourceFixture, ReturnedLutAtZeroStrengthRemainsVisuallyInactive)
   lut_resource_test::CheckReturnedLutAtZeroStrengthRemainsInactive(*harness_, "cuda");
 }
 
+TEST_F(CudaLutResourceFixture, NonDefaultEncodingRendersHostCompositeTableWithin2PowMinus17) {
+  lut_resource_test::CheckNonDefaultEncodingSamplesHostCompositeTable(*harness_, "cuda");
+}
+
 }  // namespace alcedo

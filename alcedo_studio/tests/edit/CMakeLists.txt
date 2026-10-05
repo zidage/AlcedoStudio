@@ -98,6 +98,17 @@ gtest_discover_tests(Aces2ForwardTest TEST_PREFIX "Aces2ForwardTest."
   PROPERTIES LABELS "edit;runtime;color")
 alcedo_register_test_target(Aces2ForwardTest edit)
 
+# LMT composite table bake: identity LUTs, an OpenColorIO 2.5.1 conversion LUT, the R2 raster
+# conversion, DOMAIN_MIN/MAX, bake accuracy and time (LUT color encodings, phase L3). Only test
+# targets link OpenColorIO.
+add_executable(LutBakeTest ${ALCEDO_TEST_ROOT}/edit/runtime/lut_bake_test.cpp)
+target_include_directories(LutBakeTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(LutBakeTest PRIVATE GTest::gtest_main EditRuntime Image
+  OpenColorIO::OpenColorIO)
+gtest_discover_tests(LutBakeTest TEST_PREFIX "LutBakeTest."
+  PROPERTIES LABELS "edit;runtime;color")
+alcedo_register_test_target(LutBakeTest edit)
+
 add_executable(LocalToneMappingConstantsMatchRuntimeTest
     ${ALCEDO_TEST_ROOT}/edit/runtime/local_tone_mapping_constants_test.cpp)
 target_include_directories(LocalToneMappingConstantsMatchRuntimeTest PUBLIC ${ALCEDO_INCLUDE_DIR})
