@@ -305,6 +305,14 @@ def exif_adobe_rgb_r03() -> bytes:
     return b"Exif\0\0" + tiff
 
 
+def exif_orientation(orientation: int, prefix: bool = True) -> bytes:
+    """EXIF TIFF structure with only IFD0 Orientation."""
+    ifd0 = struct.pack("<H", 1) + struct.pack("<HHIHH", 0x0112, 3, 1, orientation, 0)
+    ifd0 += struct.pack("<I", 0)
+    tiff = b"II*\0" + struct.pack("<I", 8) + ifd0
+    return (b"Exif\0\0" + tiff) if prefix else tiff
+
+
 def write_jpeg(name: str, *, icc: bytes | None = None, exif: bytes | None = None) -> None:
     image = Image.fromarray(to_uint(gradient(), 8), "RGB")
     kwargs = {"quality": 95}
@@ -471,6 +479,7 @@ def main() -> None:
     write_jpeg("adobe_rgb_exif_r03_no_icc.jpg", exif=exif_adobe_rgb_r03())
     write_jpeg("untagged_8bit.jpg")
     write_cmyk_jpeg("cmyk_icc.jpg")
+    write_jpeg("srgb_orientation6_8bit.jpg", icc=srgb_icc(), exif=exif_orientation(6))
     degenerate = rgb_to_xyz_matrix(SRGB)
     degenerate[:, 1] = degenerate[:, 0]
     write_jpeg(
@@ -503,6 +512,10 @@ def main() -> None:
     write_png("gray_gamma22.png", gray, 0, chunks=[iccp_chunk("Gray", gray_gamma22_icc())])
     rgba = to_uint(np.concatenate([linear, gradient(2)[:, :, :1]], axis=-1), 8)
     write_png("rgba_with_alpha.png", rgba, 6, chunks=[(b"sRGB", b"\0")])
+    write_png("rgb_same_as_rgba_with_alpha.png", rgba[:, :, :3].copy(), 2,
+              chunks=[(b"sRGB", b"\0")])
+    write_png("srgb_mirrored_orientation2.png", rgb8, 2,
+              chunks=[(b"sRGB", b"\0"), (b"eXIf", exif_orientation(2, prefix=False))])
 
     # TIFF
     write_tiff(

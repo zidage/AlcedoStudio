@@ -40,6 +40,7 @@ enum class PreviewPassKind : std::uint8_t {
   Drt               = 13,
   MaskUnion         = 14,
   DiffusionFilter   = 15,
+  DisplayToAp1      = 16,
 };
 
 enum class PreviewSubStageKind : std::uint8_t {
@@ -271,6 +272,8 @@ struct PreviewGpuSampleTarget {
       return "MaskUnion";
     case PreviewPassKind::DiffusionFilter:
       return "DiffusionFilter";
+    case PreviewPassKind::DisplayToAp1:
+      return "DisplayToAp1";
   }
   return "Unknown";
 }

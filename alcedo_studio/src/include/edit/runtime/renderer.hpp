@@ -20,6 +20,7 @@
 #include "edit/graph/pipeline_document.hpp"
 #include "edit/graph/pipeline_graph_snapshot.hpp"
 #include "edit/input/prepared_source_cache.hpp"
+#include "edit/input/raster_input_loader.hpp"
 #include "edit/input/raw_input_loader.hpp"
 #include "edit/runtime/executor_role.hpp"
 #include "edit/runtime/gpu_node_pass_stats.hpp"
@@ -215,7 +216,7 @@ Renderer<Backend>::Renderer(ExecutorRole role, PreparedSourceCache::UnpackFn unp
       unpack_(unpack ? std::move(unpack)
                      : PreparedSourceCache::UnpackFn{[](std::span<const std::byte> encoded,
                                                         DecodeRes                  decode_res) {
-                         return RawInputLoader::LoadEncoded(encoded, decode_res);
+                         return LoadEncodedImage(encoded, decode_res);
                        }}),
       source_cache_(unpack_),
       plan_cache_(Backend::kCapabilityVersion),

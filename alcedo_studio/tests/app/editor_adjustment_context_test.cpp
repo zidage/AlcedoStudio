@@ -25,6 +25,7 @@
 #include "edit/operators/models/scalar_operator_model.hpp"
 #include "image/image.hpp"
 #include "image/metadata.hpp"
+#include "image/raster_color_description.hpp"
 
 namespace alcedo {
 namespace {
@@ -479,6 +480,40 @@ TEST(EditorAdjustmentContextTest, LensCatalogDefaultPathComesFromDevelopDefaults
   // The payload is a valid lens_calib write for the parameter parser.
   std::string error;
   EXPECT_TRUE(ParseEditorParameterWrite("lens_calib", json, &error).has_value()) << error;
+}
+
+TEST(EditorAdjustmentContextTest, InputProfileWriteUpdatesRasterOverrideAndRawFieldsAreRejected) {
+  RasterColorDescription source_color;
+  source_color.origin_ = RasterColorOrigin::DefaultSrgb;
+  auto document        = CreateDefaultRasterPipelineDocument(source_color);
+  ASSERT_NE(document.Develop(), nullptr);
+  const auto  owner = document.Develop()->Id();
+  std::string error;
+
+  const auto target = CompleteSelectedNodeParameterTarget(document, owner, "input_profile", &error);
+  ASSERT_TRUE(target.has_value()) << error;
+  const auto write = ParseEditorParameterWrite(
+      "input_profile", nlohmann::json{{"profile_override", "adobe_rgb"}}, &error);
+  ASSERT_TRUE(write.has_value()) << error;
+  ASSERT_TRUE(ApplyEditorParameterWrite(document, *target, *write, &error)) << error;
+  ASSERT_TRUE(document.Develop()->Params().RasterInput().has_value());
+  EXPECT_EQ(document.Develop()->Params().RasterInput()->profile_override_, "adobe_rgb");
+
+  EXPECT_FALSE(ParseEditorParameterWrite("input_profile",
+                                         nlohmann::json{{"profile_override", "cmyk"}}, &error)
+                   .has_value());
+
+  const auto temp_target =
+      CompleteSelectedNodeParameterTarget(document, owner, "color_temp", &error);
+  ASSERT_TRUE(temp_target.has_value()) << error;
+  const auto temp_write = ParseEditorParameterWrite(
+      "color_temp", nlohmann::json{{"mode", "custom"}, {"cct", 4300.0}}, &error);
+  ASSERT_TRUE(temp_write.has_value()) << error;
+  const auto before = document.Develop()->Params().ToJson();
+  error.clear();
+  EXPECT_FALSE(ApplyEditorParameterWrite(document, *temp_target, *temp_write, &error));
+  EXPECT_FALSE(error.empty());
+  EXPECT_EQ(document.Develop()->Params().ToJson(), before);
 }
 
 }  // namespace alcedo

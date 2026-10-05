@@ -85,11 +85,12 @@ using EditorLutWrite       = LmtUpdate;
  * name plus argument map. Queue entries hold this value; JSON exists only at
  * history, project, WAL, and remaining QML collection boundaries.
  */
-using EditorParameterWrite = std::variant<
-    EditorScalarWrite, EditorEnumWrite, EditorToggleWrite, EditorCurveWrite, EditorLutWrite,
-    HlsUpdate, ColorWheelUpdate, Cat02WhiteBalanceUpdate, SharpenUpdate, DevelopRawDecodeUpdate,
-    DevelopColorTemperatureUpdate, DevelopLensCalibrationUpdate, DrtParameterUpdate,
-    ImageGeometryUpdate>;
+using EditorParameterWrite =
+    std::variant<EditorScalarWrite, EditorEnumWrite, EditorToggleWrite, EditorCurveWrite,
+                 EditorLutWrite, HlsUpdate, ColorWheelUpdate, Cat02WhiteBalanceUpdate,
+                 SharpenUpdate, DevelopRawDecodeUpdate, DevelopColorTemperatureUpdate,
+                 DevelopLensCalibrationUpdate, DevelopInputProfileUpdate, DrtParameterUpdate,
+                 ImageGeometryUpdate>;
 
 /**
  * @brief Parse a field JSON object into the matching Model operation.

@@ -7,7 +7,11 @@
 #include <string>
 
 #include "edit/runtime/cuda/cuda_display_to_ap1_pass.hpp"
+#include "edit/runtime/cuda/cuda_develop_pass.hpp"
+#include "edit/runtime/cuda/cuda_render_device.hpp"
 #include "edit/runtime/display_to_ap1_math.h"
+#include "edit/runtime/raster_develop_params.hpp"
+#include "edit/runtime/texture_format.hpp"
 
 namespace alcedo {
 namespace {
@@ -90,6 +94,35 @@ void LaunchCudaDisplayToAp1(const float4* input, float4* output, std::uint32_t p
                                                           device_params);
   }
   CheckCuda(::cudaGetLastError(), "kernel launch");
+}
+
+void ExecuteCudaDisplayToAp1(CudaRenderDevice& device, const ExecutionPlan& plan,
+                             const PreparedRawInput& input, const PipelineDocument& document) {
+  auto& workspace = device.Workspace();
+  if (!workspace.IsRendering()) {
+    throw std::runtime_error("ExecuteCudaDisplayToAp1: BeginRender has not been called");
+  }
+  const auto raster = RequireRasterInput(document, "ExecuteCudaDisplayToAp1");
+  RequireRasterPixelsMatchDescription(input, raster.source_color_, "ExecuteCudaDisplayToAp1");
+  const auto block = ResolveDisplayToAp1Block(ResolveEffectiveRasterDescription(raster));
+
+  auto* source = workspace.Images().Find(plan.geometry_output);
+  if (source == nullptr || source->Empty()) {
+    throw std::runtime_error("ExecuteCudaDisplayToAp1: missing geometry.scene_source");
+  }
+  const auto width  = source->Texture().Width();
+  const auto height = source->Texture().Height();
+  auto&      output =
+      workspace.AcquireImageForWrite(plan.develop_output, {width, height, TextureFormat::Rgba32f});
+  source = workspace.Images().Find(plan.geometry_output);
+  if (source == nullptr) {
+    throw std::runtime_error("ExecuteCudaDisplayToAp1: geometry texture lost during acquire");
+  }
+  auto&        context = device.CommandContext();
+  const float* params  = device.DisplayToAp1Parameters().Upload(block.Packed(), context.Stream());
+  LaunchCudaDisplayToAp1(static_cast<const float4*>(source->Texture().DevicePointer()),
+                         static_cast<float4*>(output.Texture().DevicePointer()), width * height,
+                         params, DisplayToAp1Output::AcesccAp1, context.Stream());
 }
 
 }  // namespace alcedo

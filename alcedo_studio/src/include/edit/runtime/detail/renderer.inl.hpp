@@ -102,8 +102,13 @@ auto Renderer<Backend>::RenderImage(const PipelineGraphSnapshot&        snapshot
     if (interactive) {
       throw std::invalid_argument("Renderer: an interactive render takes encoded bytes only");
     }
-    if (request.prepared_input->downsample_passes !=
-        DecodeResToDownsamplePasses(request.decode_res)) {
+    // PNG, TIFF and OpenEXR decode at full size at every decode resolution, and
+    // GeometryResample scales them on the device; only scaled decodes must match the request.
+    const auto& prepared_input   = *request.prepared_input;
+    const bool  full_size_raster = prepared_input.input_kind == RawInputKind::RasterRgb &&
+                                  prepared_input.downsample_passes == 0;
+    if (!full_size_raster &&
+        prepared_input.downsample_passes != DecodeResToDownsamplePasses(request.decode_res)) {
       throw std::invalid_argument("Renderer: prepared input does not match the decode resolution");
     }
   } else if (!input || !input->buffer_valid_) {
@@ -183,6 +188,7 @@ auto Renderer<Backend>::RenderImage(const PipelineGraphSnapshot&        snapshot
         develop.cfa = diag::PreviewCfaKind::XTrans;
         break;
       case DevelopInputKind::DirectRgb:
+      case DevelopInputKind::Raster:
         develop.cfa        = diag::PreviewCfaKind::DirectRgb;
         develop.upload_rgb = true;
         develop.layout     = diag::PreviewDevelopLayout::UploadRgb;

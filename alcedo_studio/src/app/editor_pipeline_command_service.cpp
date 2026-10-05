@@ -526,6 +526,7 @@ auto ParseDrtEotf(std::string_view value) -> DrtEotf {
   if (value == "gamma_2_6") return DrtEotf::Gamma26;
   if (value == "bt1886") return DrtEotf::Bt1886;
   if (value == "gamma_1_8") return DrtEotf::Gamma18;
+  if (value == "srgb_piecewise") return DrtEotf::SrgbPiecewise;
   if (value == "gamma_2_2") return DrtEotf::Gamma22;
   throw std::invalid_argument("Unknown odt.encoding_eotf: " + std::string{value});
 }
@@ -941,7 +942,7 @@ auto CompleteCurrentPanelParameterTarget(const PipelineDocument& document, std::
     return target;
   }
   if (target.field_key == "raw_decode" || target.field_key == "lens_calib" ||
-      target.field_key == "color_temp") {
+      target.field_key == "color_temp" || target.field_key == "input_profile") {
     const auto* develop = document.Develop();
     if (develop == nullptr) {
       SetError(error, "Develop node is missing");

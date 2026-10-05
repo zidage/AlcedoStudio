@@ -12,6 +12,7 @@
 #include <span>
 #include <vector>
 
+#include "edit/input/prepared_raw_input.hpp"
 #include "edit/runtime/display_to_ap1_output.hpp"
 
 namespace alcedo {
@@ -47,8 +48,20 @@ class OpenClDisplayToAp1Parameters {
  * @throws std::runtime_error on an OpenCL error.
  */
 void EnqueueOpenClDisplayToAp1(cl_command_queue queue, cl_mem src, cl_mem dst, std::uint32_t width,
-                               std::uint32_t height, cl_mem params, DisplayToAp1Output output_kind,
+                               std::uint32_t height, cl_mem params,
+                               std::uint32_t params_offset_floats, DisplayToAp1Output output_kind,
                                cl_event* event);
+
+/**
+ * @brief Enqueue LinearizeRaster: tightly packed RGBA host-format pixels at @p src (byte offset
+ * @p src_offset_bytes) to F32 RGBA at @p dst (float offset @p dst_offset_floats).
+ * @throws std::runtime_error for a CFA format or an OpenCL error.
+ */
+void EnqueueOpenClLinearizeRaster(cl_command_queue queue, cl_mem src,
+                                  std::uint32_t src_offset_bytes, HostPixelFormat format,
+                                  std::uint32_t width, std::uint32_t height, cl_mem params,
+                                  std::uint32_t params_offset_floats, cl_mem dst,
+                                  std::uint32_t dst_offset_floats, cl_event* event);
 
 }  // namespace alcedo
 

@@ -431,6 +431,24 @@ auto ParseColorTemperatureUpdate(const nlohmann::json& params) -> DevelopColorTe
   return update;
 }
 
+/// `input_profile`: {"profile_override": "<value>"}, or the same object under "input_profile",
+/// or {"value": "<value>"}.
+auto ParseInputProfileUpdate(const nlohmann::json& params) -> DevelopInputProfileUpdate {
+  const auto&                object = UnwrapObject(params, {"input_profile"}, "input_profile");
+  std::optional<std::string> value;
+  if (object.contains("profile_override")) {
+    value = ReadOptionalString(object, {"profile_override"}, "input_profile");
+  } else {
+    value = ReadOptionalString(object, {"value"}, "input_profile");
+  }
+  if (!value.has_value() || !IsRasterInputProfileOverride(*value)) {
+    throw std::invalid_argument(
+        "input_profile: profile_override must be one of the input profile "
+        "values");
+  }
+  return DevelopInputProfileUpdate{std::move(*value)};
+}
+
 auto ParseLensCalibrationUpdate(const nlohmann::json& params) -> DevelopLensCalibrationUpdate {
   const auto& object = UnwrapObject(params, {"lens_calib"}, "lens_calib");
   RejectUnknownKeys(object,
@@ -611,6 +629,7 @@ auto ParseDrtEotf(std::string_view value) -> DrtEotf {
   if (value == "gamma_2_6") return DrtEotf::Gamma26;
   if (value == "bt1886") return DrtEotf::Bt1886;
   if (value == "gamma_1_8") return DrtEotf::Gamma18;
+  if (value == "srgb_piecewise") return DrtEotf::SrgbPiecewise;
   if (value == "gamma_2_2") return DrtEotf::Gamma22;
   throw std::invalid_argument("Unknown odt.encoding_eotf: " + std::string{value});
 }
@@ -798,6 +817,9 @@ auto ParseWriteOrThrow(std::string_view field, const nlohmann::json& params)
   }
   if (field == "lens_calib") {
     return ParseLensCalibrationUpdate(params);
+  }
+  if (field == "input_profile") {
+    return ParseInputProfileUpdate(params);
   }
   if (field == "odt") {
     return ParseDrtUpdate(params);

@@ -41,4 +41,16 @@ void ExecuteCudaGeometryResample(CudaRenderDevice& device, const ExecutionPlan& 
 void ExecuteCudaCameraColor(CudaRenderDevice& device, const ExecutionPlan& plan,
                             const PipelineDocument& document);
 
+/**
+ * @brief Raster input: write ACEScc AP1 `develop.image` from `geometry.scene_source`.
+ *
+ * Display-referred input goes through the cached OpenColorIO ACES 2.0 inverse for the effective
+ * source description; scene-linear input through the source-to-AP1 matrix. The parameter block
+ * is uploaded only when it changes.
+ * @throws std::runtime_error when the document has no raster input object or the pixels do not
+ *         match its description.
+ */
+void ExecuteCudaDisplayToAp1(CudaRenderDevice& device, const ExecutionPlan& plan,
+                             const PreparedRawInput& input, const PipelineDocument& document);
+
 }  // namespace alcedo

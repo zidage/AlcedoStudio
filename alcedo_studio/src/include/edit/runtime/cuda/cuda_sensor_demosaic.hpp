@@ -32,6 +32,15 @@ void ExecuteCudaRgbAndPack(CudaRenderDevice& device, const PreparedRawInput& inp
 void SetDevelopNeuralModelCacheForTesting(DemosaicNetModelCache* cache);
 
 /**
+ * @brief Raster input: crop and orient linearized F32 RGB (3 floats per pixel, rows of
+ * `width * 12` bytes) into the packed RGBA develop texture, without camera multipliers or
+ * highlight reconstruction.
+ */
+void ExecuteCudaPackLinearRgb(CudaRenderDevice& device, const PreparedRawInput& input,
+                              cv::cuda::GpuMat linear_rgb, cv::cuda::GpuMat packed,
+                              cv::cuda::Stream& stream);
+
+/**
  * @brief Demosaic linearized CFA and pack camera RGB into @p packed_rgba.
  *
  * Highlight reconstruction runs on RGB when enabled. Neural Engine failures throw

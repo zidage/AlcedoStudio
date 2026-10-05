@@ -220,6 +220,8 @@ auto DisplayName(std::optional<EditorAdjustmentField> field) -> QString {
       return QStringLiteral("Color Temp");
     case EditorAdjustmentField::Diffusion:
       return QStringLiteral("Diffusion");
+    case EditorAdjustmentField::InputProfile:
+      return QStringLiteral("Input Profile");
   }
   return QStringLiteral("Edit");
 }
@@ -271,6 +273,8 @@ auto IconResource(std::optional<EditorAdjustmentField> field) -> QString {
       return QStringLiteral(":/history_icons/aperture.svg");
     case EditorAdjustmentField::ColorTemperature:
       return QStringLiteral(":/history_icons/thermometer.svg");
+    case EditorAdjustmentField::InputProfile:
+      return QStringLiteral(":/history_icons/swatch-book.svg");
   }
   return QStringLiteral(":/history_icons/sliders-horizontal.svg");
 }
@@ -424,6 +428,18 @@ auto SummarizeColorTemp(const nlohmann::json& after, const nlohmann::json& befor
   }
   return {old_value.isEmpty() ? QString() : old_value, value,
           value.isEmpty() ? QStringLiteral("White balance updated") : value};
+}
+
+auto SummarizeInputProfile(const nlohmann::json& after, const nlohmann::json& before)
+    -> CommitSummary {
+  const QString value =
+      PrettyToken(JsonStringAtPath(after, {"input", "profile_override"}).value_or(QString()));
+  const QString old_value =
+      PrettyToken(JsonStringAtPath(before, {"input", "profile_override"}).value_or(QString()));
+  if (old_value.isEmpty()) {
+    return {QString(), value, value};
+  }
+  return {old_value, value, QStringLiteral("%1 → %2").arg(old_value, value)};
 }
 
 auto SummarizeHls(const nlohmann::json& after, const nlohmann::json& before) -> CommitSummary {
@@ -671,6 +687,8 @@ auto BuildSummary(std::optional<EditorAdjustmentField> field, const nlohmann::js
       return SummarizeLens(after, before);
     case EditorAdjustmentField::ColorTemperature:
       return SummarizeColorTemp(after, before);
+    case EditorAdjustmentField::InputProfile:
+      return SummarizeInputProfile(after, before);
     case EditorAdjustmentField::Hls:
       return SummarizeHls(after, before);
     case EditorAdjustmentField::ColorWheel:

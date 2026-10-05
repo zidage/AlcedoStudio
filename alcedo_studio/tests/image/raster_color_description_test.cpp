@@ -321,7 +321,7 @@ constexpr std::array<float, 8> kXyzExportProfile = {0.9642f, 0.0001f, 0.0001f, 0
                                                     0.0001f, 0.0001f, 0.314f,  0.351f};
 
 TEST(RasterColorDescriptionTest, ExportedIccProfilesReimportWithSamePrimariesAndTransfer) {
-  const std::array<ExportProfileExpectation, 11> expectations = {{
+  const std::array<ExportProfileExpectation, 12> expectations = {{
       {"p3_d60_gamma26", kP3D60, RasterTransferKind::Gamma, 2.6f, 100.0f},
       {"p3_d65_gamma22", kRasterPrimariesDisplayP3, RasterTransferKind::Gamma, 2.2f, 100.0f},
       {"p3_d65_pq", kRasterPrimariesDisplayP3, RasterTransferKind::St2084, 0.0f, 1000.0f},
@@ -330,6 +330,7 @@ TEST(RasterColorDescriptionTest, ExportedIccProfilesReimportWithSamePrimariesAnd
       {"rec2020_pq", kRasterPrimariesRec2020, RasterTransferKind::St2084, 0.0f, 1000.0f},
       {"rec709_bt1886", kRasterPrimariesRec709, RasterTransferKind::Gamma, 2.4f, 100.0f},
       {"rec709_gamma22", kRasterPrimariesRec709, RasterTransferKind::Gamma, 2.2f, 100.0f},
+      {"srgb_piecewise", kRasterPrimariesRec709, RasterTransferKind::SrgbPiecewise, 0.0f, 100.0f},
       {"upstream_displayp3_compat_v4", kRasterPrimariesDisplayP3, RasterTransferKind::SrgbPiecewise,
        0.0f, 100.0f},
       {"upstream_rec2020_v4", kRasterPrimariesRec2020, RasterTransferKind::IccParametric, 0.0f,

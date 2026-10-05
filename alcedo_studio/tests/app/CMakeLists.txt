@@ -229,14 +229,32 @@ target_link_libraries(ProjectOpenBenchmark
 alcedo_copy_duckdb_fts_extension(ProjectOpenBenchmark)
 alcedo_register_test_target(ProjectOpenBenchmark app)
 
-add_executable(ImportRawOnlyTest ${ALCEDO_TEST_ROOT}/app/import_raw_only_test.cpp)
-target_include_directories(ImportRawOnlyTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
-target_link_libraries(ImportRawOnlyTest
-  ImportService ProjectService OpenImageIO::OpenImageIO GTest::gtest_main)
-gtest_discover_tests(ImportRawOnlyTest TEST_PREFIX "ImportRawOnlyTest."
+# A project packed by an earlier build opens and renders unchanged (raster_image_input_plan.md,
+# section 7.4). The render hash is recorded for CUDA.
+add_executable(ProjectCompatibilityTest ${ALCEDO_TEST_ROOT}/app/project_compatibility_test.cpp)
+target_include_directories(ProjectCompatibilityTest
+  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(ProjectCompatibilityTest
+  ThumbnailService ProjectService PipelineMgmtService GTest::gtest_main)
+target_compile_definitions(ProjectCompatibilityTest PRIVATE
+  ALCEDO_COMPAT_FIXTURE_DIR="${ALCEDO_TEST_ROOT}/resources/compat")
+gtest_discover_tests(ProjectCompatibilityTest TEST_PREFIX "ProjectCompatibilityTest."
+  PROPERTIES LABELS "gpu;app")
+alcedo_copy_duckdb_fts_extension(ProjectCompatibilityTest)
+alcedo_register_test_target(ProjectCompatibilityTest app gpu)
+
+add_executable(ImportContentClassificationTest
+  ${ALCEDO_TEST_ROOT}/app/import_content_classification_test.cpp)
+target_include_directories(ImportContentClassificationTest
+  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(ImportContentClassificationTest
+  ImportService ProjectService PipelineMgmtService OpenImageIO::OpenImageIO GTest::gtest_main)
+target_compile_definitions(ImportContentClassificationTest PRIVATE
+  ALCEDO_RASTER_FIXTURE_DIR="${ALCEDO_TEST_ROOT}/resources/raster")
+gtest_discover_tests(ImportContentClassificationTest TEST_PREFIX "ImportContentClassificationTest."
   PROPERTIES LABELS "ci_core_flow")
-alcedo_copy_duckdb_fts_extension(ImportRawOnlyTest)
-alcedo_register_test_target(ImportRawOnlyTest app ci_core)
+alcedo_copy_duckdb_fts_extension(ImportContentClassificationTest)
+alcedo_register_test_target(ImportContentClassificationTest app ci_core)
 
 # DNG color profile is runtime-only: project tables hold the fingerprint, and the pipeline
 # service binds the profile from the source file on load.
@@ -759,7 +777,8 @@ alcedo_register_test_target(ImageAnalysisLiveProviderTest app ci_raw)
 
 add_executable(ThumbnailServiceTest ${ALCEDO_TEST_ROOT}/app/thumbnail_service_test.cpp)
 target_include_directories(ThumbnailServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(ThumbnailServiceTest ThumbnailService ProjectService ImportService GTest::gtest_main)
+target_link_libraries(ThumbnailServiceTest ThumbnailService ProjectService ImportService
+  OpenImageIO::OpenImageIO GTest::gtest_main)
 gtest_discover_tests(ThumbnailServiceTest TEST_PREFIX "ThumbnailServiceTest.")
 
 alcedo_register_test_target(ThumbnailServiceTest app)
@@ -824,6 +843,8 @@ alcedo_register_test_target(ThumbnailDiskCacheServiceTest app)
 add_executable(ExportServiceTest ${ALCEDO_TEST_ROOT}/app/export_service_test.cpp)
 target_include_directories(ExportServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(ExportServiceTest ExportService ProjectService ImportService GTest::gtest_main ImageWriter ${ALCEDO_TEST_OPENCV_MIN_DEPS})
+target_compile_definitions(ExportServiceTest PRIVATE
+  ALCEDO_RASTER_FIXTURE_DIR="${ALCEDO_TEST_ROOT}/resources/raster")
 gtest_discover_tests(ExportServiceTest TEST_PREFIX "ExportServiceTest.")
 
 alcedo_register_test_target(ExportServiceTest app)

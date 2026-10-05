@@ -83,6 +83,11 @@ void EnsureRenderableCameraProfile(PipelineDocument&                            
   if (develop == nullptr) {
     return;
   }
+  // A raster document converts its pixels with its own `input` description and has no camera
+  // profile.
+  if (develop->Params().RasterInput().has_value()) {
+    return;
+  }
   if (develop->Params().Params().camera_profile.color_matrices_valid) {
     return;
   }

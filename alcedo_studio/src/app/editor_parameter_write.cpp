@@ -223,6 +223,9 @@ auto ApplyEditorParameterWrite(PipelineDocument& document, const EditorParameter
         } else if (target.field_key == "lens_calib") {
           develop->Params().ApplyLensCalibrationUpdate(
               RequireWrite<DevelopLensCalibrationUpdate>(write, target.field_key));
+        } else if (target.field_key == "input_profile") {
+          develop->Params().ApplyInputProfileUpdate(
+              RequireWrite<DevelopInputProfileUpdate>(write, target.field_key));
         } else {
           return SetError(error, "Unsupported Develop parameter field: " + target.field_key);
         }

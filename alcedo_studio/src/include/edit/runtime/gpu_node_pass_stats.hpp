@@ -20,6 +20,8 @@ struct GpuNodePassStats {
   std::uint64_t geometry_skip          = 0;
   std::uint64_t camera_color_execute   = 0;
   std::uint64_t camera_color_skip      = 0;
+  std::uint64_t display_to_ap1_execute       = 0;
+  std::uint64_t display_to_ap1_skip          = 0;
   std::uint64_t mask_execute           = 0;
   std::uint64_t mask_skip              = 0;
   std::uint64_t mask_union_execute     = 0;

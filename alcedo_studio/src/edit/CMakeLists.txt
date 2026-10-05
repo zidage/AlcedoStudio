@@ -68,6 +68,7 @@ set(EDIT_GRAPH_SRCS
     ${ALCEDO_SRC_ROOT}/edit/graph/color_grade_node_model.cpp
     ${ALCEDO_SRC_ROOT}/edit/graph/develop_color_transform.cpp
     ${ALCEDO_SRC_ROOT}/edit/graph/develop_node_model.cpp
+    ${ALCEDO_SRC_ROOT}/edit/graph/develop_raster_input.cpp
     ${ALCEDO_SRC_ROOT}/edit/graph/drt_node_model.cpp
     ${ALCEDO_SRC_ROOT}/edit/graph/pipeline_document.cpp
     ${ALCEDO_SRC_ROOT}/edit/graph/pipeline_graph.cpp
@@ -78,7 +79,7 @@ set(EDIT_GRAPH_SRCS
 # xxHash: PipelineGraphSnapshot carries commit hashes (type/hash_type.hpp).
 def_library(EditGraph
     SOURCES ${EDIT_GRAPH_SRCS}
-    PUBLIC_DEPS JSON EditGeometry EditMaskCore xxHash
+    PUBLIC_DEPS JSON EditGeometry EditMaskCore xxHash RasterColorModel
     PRIVATE_DEPS ${ALCEDO_OPENCV_CORE_DEPS}
 )
 if(ALCEDO_ENABLE_BRUSH_MASK)
@@ -90,7 +91,9 @@ def_library(EditInput
     SOURCES
         ${ALCEDO_SRC_ROOT}/edit/input/raw_input_loader.cpp
         ${ALCEDO_SRC_ROOT}/edit/input/prepared_source_cache.cpp
-    PUBLIC_DEPS EditGeometry JSON libraw::raw_r opencv_core
+        ${ALCEDO_SRC_ROOT}/edit/input/raster_input_loader.cpp
+    PUBLIC_DEPS EditGeometry JSON libraw::raw_r opencv_core Image
+    PRIVATE_DEPS OpenImageIO::OpenImageIO libjpeg-turbo::turbojpeg lcms2::lcms2 Sha256Digest
 )
 
 # GPU-agnostic DAG runtime (parameter arena, texture LRU, KV cache). No CUDA headers.
@@ -104,6 +107,7 @@ set(EDIT_RUNTIME_SRCS
     ${ALCEDO_SRC_ROOT}/edit/runtime/dng_profile_gpu_data.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/execution_plan.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/graph_compiler.cpp
+    ${ALCEDO_SRC_ROOT}/edit/runtime/raster_develop_params.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/result_content_key.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/runtime_invalidation.cpp
     ${ALCEDO_SRC_ROOT}/edit/runtime/static_execution_plan_cache.cpp
@@ -293,6 +297,7 @@ if(ALCEDO_CUDA_ENABLED)
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_develop_pass.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_diffusion_filter_pass.cu
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_display_to_ap1_pass.cu
+            ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_raster_linearize.cu
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_render_device.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_sensor_demosaic.cpp
             ${ALCEDO_SRC_ROOT}/edit/runtime/cuda/cuda_drt_pass.cu

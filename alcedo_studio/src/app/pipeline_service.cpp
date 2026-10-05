@@ -190,7 +190,7 @@ auto PipelineMgmtService::EncodeImageRoot(sl_element_id_t id, PipelineDocument d
   if (raw_color_context != nullptr) {
     BindImportedCameraProfile(document, *raw_color_context);
     raw_json = RawColorContextToJson(*raw_color_context);
-  } else {
+  } else if (document.Develop() == nullptr || !document.Develop()->Params().RasterInput()) {
     BindWorkingSpaceDevelopData(document);
   }
   ValidateProductDocument(document, id);

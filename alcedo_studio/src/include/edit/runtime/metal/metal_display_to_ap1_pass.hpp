@@ -8,6 +8,7 @@
 #include <span>
 #include <vector>
 
+#include "edit/input/prepared_raw_input.hpp"
 #include "edit/runtime/display_to_ap1_output.hpp"
 #include "edit/runtime/metal/metal_backend.hpp"
 
@@ -40,6 +41,16 @@ class MetalDisplayToAp1Parameters {
  */
 void EncodeMetalDisplayToAp1(MetalBackend& backend, MetalCommandContext& command_context,
                              const MetalBackend::Texture2D& src, MetalBackend::Texture2D& dst,
-                             const MetalBackend::Buffer& params, DisplayToAp1Output output_kind);
+                             const MetalBackend::Buffer& params, DisplayToAp1Output output_kind,
+                             std::uint32_t params_offset_bytes = 0);
+
+/**
+ * @brief Encode LinearizeRaster: tightly packed RGBA host-format pixels in @p source to the F32
+ * RGBA texture @p dst, with the raster_linearize_math.h parameters in @p params.
+ * @throws std::runtime_error for a CFA format or a missing encoder or pipeline.
+ */
+void EncodeMetalLinearizeRaster(MetalBackend& backend, MetalCommandContext& command_context,
+                                const MetalBackend::Buffer& source, HostPixelFormat format,
+                                const MetalBackend::Buffer& params, MetalBackend::Texture2D& dst);
 
 }  // namespace alcedo

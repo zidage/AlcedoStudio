@@ -28,10 +28,12 @@ Item {
     // EOTF choices supported by the unified display-transform model.
     readonly property var eotfOptionsRec709: [
         { value: "bt1886", label: qsTr("BT.1886") },
-        { value: "gamma_2_2", label: qsTr("Gamma 2.2") }
+        { value: "gamma_2_2", label: qsTr("Gamma 2.2") },
+        { value: "srgb_piecewise", label: qsTr("sRGB") }
     ]
     readonly property var eotfOptionsP3D65: [
         { value: "gamma_2_2", label: qsTr("Gamma 2.2") },
+        { value: "srgb_piecewise", label: qsTr("sRGB") },
         { value: "st2084", label: qsTr("ST 2084 (PQ)") }
     ]
     readonly property var eotfOptionsP3Theater: [
