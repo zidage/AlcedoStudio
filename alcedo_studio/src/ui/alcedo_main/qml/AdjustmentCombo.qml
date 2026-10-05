@@ -20,6 +20,9 @@ Item {
     // Panels may expose a stable object name for behavior tests and
     // accessibility tooling without changing the shared wrapper name.
     property string controlObjectName: "adjustmentCombo"
+    // Entry key whose text heads each run of entries with the same value (for
+    // example Scene / Display). Empty: the popup lists entries without headings.
+    property string groupLabelRole: ""
 
     implicitHeight: comboRow.implicitHeight
     Layout.fillWidth: true
@@ -163,14 +166,44 @@ Item {
                     radius: 4
                 }
 
-                contentItem: Text {
+                // Heading of the group this entry starts; empty inside a group.
+                readonly property string groupHeading: {
+                    if (root.groupLabelRole.length === 0 || typeof modelData === "undefined"
+                            || modelData === null)
+                        return ""
+                    const heading = modelData[root.groupLabelRole]
+                    if (heading === undefined)
+                        return ""
+                    const entries = combo.model
+                    if (index > 0 && entries && entries[index - 1]
+                            && entries[index - 1][root.groupLabelRole] === heading)
+                        return ""
+                    return String(heading)
+                }
+
+                contentItem: Column {
                     id: delContent
-                    text: del.text
-                    color: del.highlighted ? root.colSelectedInk : root.colText
-                    font.pixelSize: appTheme.fontSizeBody
-                    wrapMode: Text.Wrap
-                    verticalAlignment: Text.AlignVCenter
-                    leftPadding: appTheme.spaceSm
+                    spacing: 0
+
+                    Text {
+                        visible: del.groupHeading.length > 0
+                        width: parent.width
+                        text: del.groupHeading
+                        color: root.colMuted
+                        font.pixelSize: appTheme.fontSizeCaption
+                        leftPadding: appTheme.spaceSm
+                        topPadding: appTheme.spaceXs
+                    }
+
+                    Text {
+                        width: parent.width
+                        text: del.text
+                        color: del.highlighted ? root.colSelectedInk : root.colText
+                        font.pixelSize: appTheme.fontSizeBody
+                        wrapMode: Text.Wrap
+                        verticalAlignment: Text.AlignVCenter
+                        leftPadding: appTheme.spaceSm
+                    }
                 }
             }
         }

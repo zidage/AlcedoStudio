@@ -464,4 +464,72 @@ TEST(EditorPanelProjectionTest, InputProfileProjectsRasterDescriptionAndRawDocum
   EXPECT_EQ(adapter->panel_id, "raw");
 }
 
+// L4: the `lut` field write carries the stored encodings, so replaying an LMT Model JSON (undo,
+// redo, adjustment transfer) restores them, and the panel projection reads them back.
+TEST(EditorPanelProjectionTest, LutWriteParsesEncodingKeysAndProjectionReadsThem) {
+  auto        document = CreateDefaultPipelineDocument();
+  std::string error;
+  const auto  lut_target = CompleteCurrentPanelParameterTarget(document, "lut", &error);
+  ASSERT_TRUE(lut_target.has_value()) << error;
+  const auto&          target = *lut_target;
+
+  const nlohmann::json stored = {{"cube_path", "D:/luts/slog3_to_709.cube"},
+                                 {"strength", 0.5},
+                                 {"input_encoding", "sony_slog3_sgamut3cine"},
+                                 {"output_encoding", "rec709_bt1886"}};
+  const auto           write  = ParseEditorParameterWrite("lut", stored, &error);
+  ASSERT_TRUE(write.has_value()) << error;
+  const auto* lut_write = std::get_if<EditorLutWrite>(&*write);
+  ASSERT_NE(lut_write, nullptr);
+  EXPECT_EQ(lut_write->input_encoding, std::optional<std::string>{"sony_slog3_sgamut3cine"});
+  EXPECT_EQ(lut_write->output_encoding, std::optional<std::string>{"rec709_bt1886"});
+  ASSERT_TRUE(ApplyEditorParameterWrite(document, target, *write, &error)) << error;
+
+  EditorPanelFieldPresentation field;
+  ASSERT_TRUE(ReadEditorPanelField(document, target, &field, &error)) << error;
+  const auto* value = std::get_if<EditorPanelLutValue>(&field.value);
+  ASSERT_NE(value, nullptr);
+  EXPECT_EQ(value->reference, LutReference{FileLutReference{"D:/luts/slog3_to_709.cube"}});
+  EXPECT_FLOAT_EQ(value->strength, 0.5f);
+  EXPECT_EQ(value->input_encoding, "sony_slog3_sgamut3cine");
+  EXPECT_EQ(value->output_encoding, "rec709_bt1886");
+
+  // The Model JSON the history stores for this state replays to the same state.
+  nlohmann::json model_json;
+  ASSERT_TRUE(ReadEditorParameterJson(document, target, &model_json, &error)) << error;
+  auto replayed = CreateDefaultPipelineDocument();
+  ASSERT_TRUE(ApplyEditorParameterPatch(replayed, target, model_json, &error)) << error;
+  nlohmann::json replayed_json;
+  ASSERT_TRUE(ReadEditorParameterJson(replayed, target, &replayed_json, &error)) << error;
+  EXPECT_EQ(replayed_json, model_json);
+
+  // A complete state without the keys is ACEScc to ACEScc.
+  ASSERT_TRUE(ApplyEditorParameterPatch(document, target, {{"cube_path", ""}}, &error)) << error;
+  ASSERT_TRUE(ReadEditorPanelField(document, target, &field, &error)) << error;
+  value = std::get_if<EditorPanelLutValue>(&field.value);
+  ASSERT_NE(value, nullptr);
+  EXPECT_EQ(value->input_encoding, "acescc");
+  EXPECT_EQ(value->output_encoding, "acescc");
+}
+
+TEST(EditorPanelProjectionTest, LutWriteWithUnknownEncodingIsRejectedWithoutChange) {
+  auto        document = CreateDefaultPipelineDocument();
+  std::string error;
+  const auto  lut_target = CompleteCurrentPanelParameterTarget(document, "lut", &error);
+  ASSERT_TRUE(lut_target.has_value()) << error;
+  const auto&    target = *lut_target;
+  nlohmann::json before;
+  ASSERT_TRUE(ReadEditorParameterJson(document, target, &before, &error)) << error;
+
+  EXPECT_FALSE(ParseEditorParameterWrite(
+                   "lut", {{"cube_path", ""}, {"output_encoding", "rec709_unknown"}}, &error)
+                   .has_value());
+  EXPECT_NE(error.find("rec709_unknown"), std::string::npos) << error;
+  EXPECT_FALSE(ApplyEditorParameterPatch(document, target,
+                                         {{"cube_path", ""}, {"input_encoding", "slog9"}}, &error));
+  nlohmann::json after;
+  ASSERT_TRUE(ReadEditorParameterJson(document, target, &after, &error)) << error;
+  EXPECT_EQ(after, before);
+}
+
 }  // namespace alcedo

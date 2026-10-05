@@ -236,6 +236,12 @@ class EditorAdjustmentEnumModel : public EditorAdjustmentModelBase {
   void currentIndexChanged();
   void defaultIndexChanged();
 
+ protected:
+  /// Typed Model operation for the selected entry @p value (used when paramsBuilder is unset).
+  /// The default writes an enum value; a field whose Model takes another operation overrides it.
+  [[nodiscard]] virtual auto selectionWrite(const QString& value) const
+      -> alcedo::EditorParameterWrite;
+
  private:
   bool clampIndex(int i) const;
 

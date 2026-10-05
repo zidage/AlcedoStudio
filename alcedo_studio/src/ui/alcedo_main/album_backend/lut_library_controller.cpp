@@ -13,6 +13,7 @@
 #include "edit/graph/color_grade_node_model.hpp"
 #include "edit/runtime/lut_resource_resolver.hpp"
 #include "ui/alcedo_main/album_backend/editor_mask_creation_adapter.hpp"
+#include "ui/alcedo_main/album_backend/lut_library_model.hpp"
 #include "ui/alcedo_main/i18n.hpp"
 
 namespace alcedo::ui {
@@ -251,9 +252,12 @@ void LutLibraryController::LoadAssociation(const TargetRead& read) {
       name = QString::fromStdU16String(LutPathFromUtf8(library->relative_path).stem().u16string());
     }
   }
+  const QString input_encoding  = ToQString(value.input_encoding);
+  const QString output_encoding = ToQString(value.output_encoding);
   if (value.reference == reference_ && entry_id == association_entry_id_ &&
       name == association_name_ && print_name == association_print_name_ &&
-      static_cast<double>(value.strength) == strength_ && missing == missing_) {
+      static_cast<double>(value.strength) == strength_ && missing == missing_ &&
+      input_encoding == input_encoding_ && output_encoding == output_encoding_) {
     return;
   }
   reference_              = std::move(value.reference);
@@ -262,6 +266,8 @@ void LutLibraryController::LoadAssociation(const TargetRead& read) {
   association_print_name_ = print_name;
   strength_             = static_cast<double>(value.strength);
   missing_              = missing;
+  input_encoding_         = input_encoding;
+  output_encoding_        = output_encoding;
   emit associationChanged();
 }
 
@@ -296,7 +302,7 @@ auto LutLibraryController::applyEntry(const QString& entry_id) -> bool {
     if (entry.header_error != LutHeaderError::kNone) {
       problem = Tr("The LUT file is invalid: %1").arg(ToQString(entry.header_message));
     } else if (!entry.header.SupportsGradeApplication()) {
-      problem = Tr("1D LUTs cannot be applied by the grade stage.");
+      problem = UnsupportedLutText(entry.header);
     } else {
       reference = LutLibraryPublication::ReferenceForEntry(entry);
       name      = entry.DisplayName();

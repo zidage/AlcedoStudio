@@ -168,7 +168,7 @@ target_include_directories(DocumentTransferTest
     PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR} ${ALCEDO_TEST_ROOT}/edit/graph)
 target_link_libraries(DocumentTransferTest
     PRIVATE GTest::gtest_main AdjustmentTransferService PipelineHistoryApplier
-            EditorPipelineCommandService EditGraph EditMaskCore)
+            EditorPipelineCommandService EditGraph EditMaskCore EditRuntime)
 gtest_discover_tests(DocumentTransferTest
     TEST_PREFIX "DocumentTransferTest."
     PROPERTIES LABELS "ci_core_flow;edit;history")
@@ -833,6 +833,15 @@ target_link_libraries(LibraryHistoryAndExportTest ExportService ProjectService I
   GTest::gtest_main ${ALCEDO_TEST_OPENCV_MIN_DEPS})
 gtest_discover_tests(LibraryHistoryAndExportTest TEST_PREFIX "LibraryHistoryAndExportTest.")
 alcedo_register_test_target(LibraryHistoryAndExportTest app)
+
+# LUT color encodings (lut_color_encoding_plan.md, L4): the stored non-default encodings reach the
+# editor preview, the thumbnail and the export alike.
+add_executable(LutEncodingRenderPathsTest ${ALCEDO_TEST_ROOT}/app/lut_encoding_render_paths_test.cpp)
+target_include_directories(LutEncodingRenderPathsTest PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(LutEncodingRenderPathsTest ExportService ThumbnailService ProjectService
+  ImportService EditorWorkingDocument GTest::gtest_main ${ALCEDO_TEST_OPENCV_MIN_DEPS})
+gtest_discover_tests(LutEncodingRenderPathsTest TEST_PREFIX "LutEncodingRenderPathsTest.")
+alcedo_register_test_target(LutEncodingRenderPathsTest app)
 
 add_executable(ThumbnailDiskCacheServiceTest ${ALCEDO_TEST_ROOT}/app/thumbnail_disk_cache_service_test.cpp)
 target_include_directories(ThumbnailDiskCacheServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})

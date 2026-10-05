@@ -237,7 +237,9 @@ auto ReadLut(const PipelineDocument& document, const EditorParameterTarget& targ
     return SetError(error, "Adjustment Model type does not match field lut");
   }
   return FinishField(
-      target, EditorPanelLutValue{typed->Reference(), typed->DisplayName(), typed->Strength()},
+      target,
+      EditorPanelLutValue{typed->Reference(), typed->DisplayName(), typed->Strength(),
+                          typed->InputEncoding(), typed->OutputEncoding()},
       out);
 }
 

@@ -13,6 +13,11 @@ import Alcedo.Main 1.0
 // submits. Strength writes go through EditorLutAdjustmentModel as strength-only
 // `lut` writes on the existing adjustment path (interactive previews and one
 // settled commit per drag).
+//
+// Encodings (lut_color_encoding_plan.md, L4): the input and output color
+// encodings of the LUT, grouped into Scene and Display. Each selection is one
+// settled `lut` write of that side only (EditorLutEncodingModel), so one
+// history entry. They stay editable without a LUT: removing a LUT keeps them.
 Item {
     id: root
     objectName: "editorAdjustmentPanel_lut"
@@ -44,6 +49,26 @@ Item {
         submitter: root.editorSession
         label: qsTr("Strength")
         enabled: root.controlsEnabled && root.canApply && root.hasAssociation
+    }
+
+    EditorLutEncodingModel {
+        id: inputEncodingModel
+        objectName: "editorLutInputEncodingModel"
+        target: root.target ? root.target : null
+        submitter: root.editorSession
+        side: "input"
+        label: qsTr("Input")
+        enabled: root.controlsEnabled && root.canApply
+    }
+
+    EditorLutEncodingModel {
+        id: outputEncodingModel
+        objectName: "editorLutOutputEncodingModel"
+        target: root.target ? root.target : null
+        submitter: root.editorSession
+        side: "output"
+        label: qsTr("Output")
+        enabled: root.controlsEnabled && root.canApply
     }
 
     ColumnLayout {
@@ -115,6 +140,44 @@ Item {
             Layout.fillWidth: true
             visible: root.hasAssociation
             model: strengthModel
+        }
+
+        AdjustmentCombo {
+            objectName: "editorLutInputEncoding"
+            controlObjectName: "editorLutInputEncodingCombo"
+            Layout.fillWidth: true
+            groupLabelRole: "groupLabel"
+            model: inputEncodingModel
+        }
+
+        AdjustmentCombo {
+            objectName: "editorLutOutputEncoding"
+            controlObjectName: "editorLutOutputEncodingCombo"
+            Layout.fillWidth: true
+            groupLabelRole: "groupLabel"
+            model: outputEncodingModel
+        }
+
+        Label {
+            objectName: "editorLutInputDisplayNote"
+            Layout.fillWidth: true
+            visible: inputEncodingModel.displayReferred
+            text: qsTr("Display input: the ACES 2.0 output transform renders the image for this display before the LUT.")
+            color: root.colMuted
+            wrapMode: Text.Wrap
+            font.family: appTheme.uiFontFamily
+            font.pixelSize: appTheme.fontSizeCaption
+        }
+
+        Label {
+            objectName: "editorLutOutputDisplayNote"
+            Layout.fillWidth: true
+            visible: outputEncodingModel.displayReferred
+            text: qsTr("Display output: the ACES 2.0 inverse output transform brings the LUT result back to the scene.")
+            color: root.colMuted
+            wrapMode: Text.Wrap
+            font.family: appTheme.uiFontFamily
+            font.pixelSize: appTheme.fontSizeCaption
         }
 
         RowLayout {

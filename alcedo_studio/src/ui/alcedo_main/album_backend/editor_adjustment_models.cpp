@@ -23,6 +23,7 @@
 #include "ui/alcedo_main/album_backend/editor_hls_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_lens_catalog_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_lut_adjustment_model.hpp"
+#include "ui/alcedo_main/album_backend/editor_lut_encoding_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_scope_item.hpp"
 #include "ui/alcedo_main/album_backend/editor_tone_curve_item.hpp"
 #include "ui/alcedo_main/album_backend/editor_tone_curve_model.hpp"
@@ -401,7 +402,12 @@ void EditorAdjustmentEnumModel::selectIndex(int i) {
         true);
     return;
   }
-  submitNow(alcedo::EditorEnumWrite{currentValue().toStdString()}, true);
+  submitNow(selectionWrite(currentValue()), true);
+}
+
+auto EditorAdjustmentEnumModel::selectionWrite(const QString& value) const
+    -> alcedo::EditorParameterWrite {
+  return alcedo::EditorEnumWrite{value.toStdString()};
 }
 
 void EditorAdjustmentEnumModel::reset() {
@@ -417,7 +423,7 @@ void EditorAdjustmentEnumModel::reset() {
         true);
     return;
   }
-  submitNow(alcedo::EditorEnumWrite{currentValue().toStdString()}, true);
+  submitNow(selectionWrite(currentValue()), true);
 }
 
 // ── EditorAdjustmentToggleModel ──────────────────────────────────────────────
@@ -473,6 +479,7 @@ void RegisterEditorAdjustmentQmlTypes() {
   qmlRegisterType<EditorCdlTrackballModel>("Alcedo.Main", 1, 0, "EditorCdlTrackballModel");
   qmlRegisterType<EditorCdlTrackballItem>("Alcedo.Main", 1, 0, "EditorCdlTrackballItem");
   qmlRegisterType<EditorLutAdjustmentModel>("Alcedo.Main", 1, 0, "EditorLutAdjustmentModel");
+  qmlRegisterType<EditorLutEncodingModel>("Alcedo.Main", 1, 0, "EditorLutEncodingModel");
   qmlRegisterType<LutLibraryModel>("Alcedo.Main", 1, 0, "LutLibraryModel");
   qmlRegisterType<LutLibraryController>("Alcedo.Main", 1, 0, "LutLibraryController");
   qmlRegisterType<EditorGeometryMath>("Alcedo.Main", 1, 0, "EditorGeometryMath");

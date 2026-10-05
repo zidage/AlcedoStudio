@@ -10,6 +10,9 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <memory>
+#include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -26,7 +29,10 @@
 #include "edit/history/pipeline_edit_batch.hpp"
 #include "edit/mask/mask_model.hpp"
 #include "edit/operators/models/builtin_type_ids.hpp"
+#include "edit/operators/models/lmt_model.hpp"
 #include "edit/operators/models/scalar_operator_model.hpp"
+#include "edit/runtime/grade_lut.hpp"
+#include "edit/runtime/lut_resource_resolver.hpp"
 #include "grade_owned_mask_support.hpp"
 #include "support/editor_history_port_test_reads.hpp"
 #include "support/editor_lease_test_support.hpp"
@@ -1104,6 +1110,86 @@ TEST_F(EditorDocumentHistoryTest, MoveToAncestorAndRedoChildUsesStoredDirections
   ASSERT_TRUE(history_.Undo(handle, &error)) << error;
   ASSERT_TRUE(history_.Undo(handle, &error)) << error;
   EXPECT_EQ(alcedo::CanonicalPipelineDocumentJson(Working()->Document()), root_hash);
+}
+
+// L4: one encoding selection is one commit. Undo restores the previous encoding and the LUT table
+// the render samples (the source cube again); redo applies the encoding and its 65^3 composite
+// table again. The stored LMT Model JSON replays through the `lut` field write.
+TEST_F(EditorDocumentHistoryTest, LutEncodingChangeIsOneCommitAndUndoRedoRestoreSampledTable) {
+  const auto cube = journal_path_.parent_path() / (journal_path_.stem().string() + "_look.cube");
+  {
+    std::ofstream out(cube, std::ios::trunc);
+    out << "LUT_3D_SIZE 2\n";
+    for (int b = 0; b <= 1; ++b) {
+      for (int g = 0; g <= 1; ++g) {
+        for (int r = 0; r <= 1; ++r) {
+          out << 0.1 + 0.8 * r << ' ' << 0.15 + 0.7 * g << ' ' << 0.2 + 0.6 * b << '\n';
+        }
+      }
+    }
+  }
+  auto root_document = CreateDefaultPipelineDocument();
+  dynamic_cast<LmtModel&>(*root_document.PrimaryGrade()->FindAdjustmentByType(type_ids::Lmt()))
+      .SetCubePath(cube.string());
+  lease_ = test::MakeInMemoryEditorLease(42, std::move(root_document));
+
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  const auto resources = DefaultLutResourceResolver();
+  const auto sampled_lmt =
+      [&]() -> std::pair<const LmtModel*, std::shared_ptr<const PackedGradeLut>> {
+    const auto* grade = WorkingGrade(NodeId{"grade.primary"});
+    if (grade == nullptr) return {nullptr, nullptr};
+    return {dynamic_cast<const LmtModel*>(grade->FindAdjustmentByType(type_ids::Lmt())),
+            TryPackGradeLut(*grade, *resources)};
+  };
+  const auto [lmt_before, table_before] = sampled_lmt();
+  ASSERT_NE(lmt_before, nullptr);
+  ASSERT_NE(table_before, nullptr);
+  EXPECT_EQ(table_before->edge, 2u) << "ACEScc to ACEScc samples the source cube";
+
+  const auto target = CompleteCurrentPanelParameterTarget(Working()->Document(), "lut", &error);
+  ASSERT_TRUE(target.has_value()) << error;
+  EditorLutWrite write;
+  write.output_encoding = "rec709_bt1886";
+  EditorAdjustmentPatch patch;
+  patch.field_key = "lut";
+  patch.write     = write;
+  patch.settled   = true;
+  patch.target    = *target;
+  ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, patch, &error)) << error;
+  ASSERT_TRUE(history_.CommitAdjustment(handle, patch, &error)) << error;
+  ASSERT_EQ(Graph()->CommitCount(), 1u);
+
+  const auto [lmt_changed, table_changed] = sampled_lmt();
+  ASSERT_NE(lmt_changed, nullptr);
+  ASSERT_NE(table_changed, nullptr);
+  EXPECT_EQ(lmt_changed->OutputEncoding(), "rec709_bt1886");
+  EXPECT_EQ(lmt_changed->InputEncoding(), "acescc");
+  EXPECT_EQ(lmt_changed->CubePath(), cube.string());
+  EXPECT_EQ(table_changed->edge, 65u) << "a display output is baked into the composite table";
+  EXPECT_NE(table_changed->key, table_before->key);
+
+  ASSERT_TRUE(history_.Undo(handle, &error)) << error;
+  const auto [lmt_undone, table_undone] = sampled_lmt();
+  ASSERT_NE(lmt_undone, nullptr);
+  EXPECT_EQ(lmt_undone->OutputEncoding(), "acescc");
+  EXPECT_EQ(lmt_undone->CubePath(), cube.string());
+  ASSERT_NE(table_undone, nullptr);
+  EXPECT_EQ(table_undone->key, table_before->key);
+  EXPECT_FALSE(Head().has_value());
+
+  ASSERT_TRUE(history_.Redo(handle, &error)) << error;
+  const auto [lmt_redone, table_redone] = sampled_lmt();
+  ASSERT_NE(lmt_redone, nullptr);
+  EXPECT_EQ(lmt_redone->OutputEncoding(), "rec709_bt1886");
+  ASSERT_NE(table_redone, nullptr);
+  EXPECT_EQ(table_redone->key, table_changed->key);
+  EXPECT_EQ(Graph()->CommitCount(), 1u);
+
+  std::error_code ec;
+  std::filesystem::remove(cube, ec);
 }
 
 }  // namespace

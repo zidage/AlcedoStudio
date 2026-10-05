@@ -220,6 +220,7 @@ target_link_libraries(EditorSessionHistoryPortTest
   ProjectService
   PipelineHistory
   EditPipeline
+  EditRuntime
   GTest::gtest_main)
 # Land next to the shared tests runtime DLLs (not the heavier ui/ shell DLL set).
 set_target_properties(EditorSessionHistoryPortTest PROPERTIES

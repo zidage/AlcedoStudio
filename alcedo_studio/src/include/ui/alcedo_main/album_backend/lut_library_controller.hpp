@@ -73,9 +73,9 @@ enum class LutTargetState : std::uint8_t {
  * The Geometry panel has no such target: a LUT apply stays rejected there.
  *
  * Reads: the target (node identity and name) and its current association (reference, last
- * known name, strength, and availability through the library) are read from the published
- * document and the library. Reading never submits an edit, so changing nodes or reopening
- * the workspace is load-only (plan 6.4).
+ * known name, strength, input and output encodings, and availability through the library) are read
+ * from the published document and the library. Reading never submits an edit, so changing nodes or
+ * reopening the workspace is load-only (plan 6.4).
  *
  * Writes: applyEntry and clearAssociation capture the complete target from the current
  * document, check it, and submit one settled LUT write for that target. A later selection
@@ -112,6 +112,10 @@ class LutLibraryController : public QObject {
   Q_PROPERTY(double associationStrength READ associationStrength NOTIFY associationChanged)
   /// True when the associated LUT file is missing; the reference and strength are kept.
   Q_PROPERTY(bool associationMissing READ associationMissing NOTIFY associationChanged)
+  /// Catalog encoding id of the LUT input (`acescc` by default). Kept when the LUT is removed.
+  Q_PROPERTY(QString inputEncoding READ inputEncoding NOTIFY associationChanged)
+  /// Catalog encoding id of the LUT output (`acescc` by default). Kept when the LUT is removed.
+  Q_PROPERTY(QString outputEncoding READ outputEncoding NOTIFY associationChanged)
   Q_PROPERTY(QString lastError READ lastError NOTIFY lastErrorChanged)
 
  public:
@@ -141,6 +145,8 @@ class LutLibraryController : public QObject {
   [[nodiscard]] auto associationPrintName() const -> QString { return association_print_name_; }
   [[nodiscard]] auto associationStrength() const -> double { return strength_; }
   [[nodiscard]] auto associationMissing() const -> bool { return missing_; }
+  [[nodiscard]] auto inputEncoding() const -> QString { return input_encoding_; }
+  [[nodiscard]] auto outputEncoding() const -> QString { return output_encoding_; }
   [[nodiscard]] auto lastError() const -> QString { return last_error_; }
 
   /// Read the target and its association again. Load-only: never submits.
@@ -191,6 +197,9 @@ class LutLibraryController : public QObject {
   QString                             association_print_name_;
   double                              strength_ = 1.0;
   bool                                missing_  = false;
+  /// Encoding ids; kDefaultLutEncodingId until a target is read.
+  QString                             input_encoding_{QStringLiteral("acescc")};
+  QString                             output_encoding_{QStringLiteral("acescc")};
   QString                             last_error_;
 };
 

@@ -60,6 +60,8 @@ auto FieldMap(const alcedo::EditorPanelFieldPresentation& field) -> QVariantMap 
           map.insert(QStringLiteral("path"), path);
           map.insert(QStringLiteral("lutName"), String(value.display_name));
           map.insert(QStringLiteral("strength"), value.strength);
+          map.insert(QStringLiteral("input_encoding"), String(value.input_encoding));
+          map.insert(QStringLiteral("output_encoding"), String(value.output_encoding));
         } else if constexpr (std::is_same_v<T, alcedo::EditorPanelCurveValue>) {
           QVariantList points;
           points.reserve(static_cast<int>(value.points.size()));

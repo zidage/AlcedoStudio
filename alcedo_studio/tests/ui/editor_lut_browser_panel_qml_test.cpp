@@ -27,6 +27,7 @@
 #include <utility>
 #include <vector>
 
+#include "app/editor_parameter_write.hpp"
 #include "lut_library_model_test_support.hpp"
 #include "lut_target_test_support.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
@@ -513,6 +514,92 @@ TEST(EditorLutBrowserPanelQmlTest, EmptyLibraryLinksToLutSettings) {
   // Nothing was applied to the target.
   EXPECT_EQ(h.source.submit_count, 0);
   EXPECT_TRUE(h.warnings.isEmpty()) << h.Warnings();
+}
+
+// L4: the LUT adjustment panel (EditorLutControlPanel.qml) shows the stored input and output
+// encodings in its two combos and the ACES 2.0 note for a display-referred side, and follows a
+// stored change without a submit. Pointer delivery is not used; the combo writes are covered by
+// LutLibraryControllerTest.EncodingSelectionSubmitsOneSettledWriteOfThatSideOnly.
+TEST(EditorLutBrowserPanelQmlTest, ControlPanelShowsStoredEncodingsAndDisplayNote) {
+  TemporaryLutLibrary  library(LibraryFiles());
+  DocumentTargetSource source;
+  LutLibraryModel      browser;
+  LutLibraryController target;
+  browser.setLibrary(library.Service());
+  target.setLibrary(library.Service());
+  target.SetTargetSource(&source);
+  const auto write_lut = [&](EditorLutWrite write) {
+    EditorParameterTarget field;
+    field.owner_kind             = EditorParameterOwnerKind::ColorGrade;
+    field.node_id                = kGradeB;
+    field.adjustment_instance_id = AdjustmentInstanceId{source.LmtInstance(kGradeB)};
+    field.field_key              = "lut";
+    std::string error;
+    EXPECT_TRUE(ApplyEditorParameterWrite(source.Mutable(), field, write, &error)) << error;
+    target.reload();
+  };
+  EditorLutWrite stored;
+  stored.reference       = LibraryLutReference{"general/teal.cube"};
+  stored.input_encoding  = "sony_slog3_sgamut3cine";
+  stored.output_encoding = "rec709_bt1886";
+  write_lut(stored);
+
+  LutAppModules         modules{&browser, &target, library.Service()};
+  QQmlApplicationEngine engine;
+  QStringList           warnings;
+  QObject::connect(&engine, &QQmlEngine::warnings, [&warnings](const QList<QQmlError>& list) {
+    for (const QQmlError& warning : list) warnings << warning.toString();
+  });
+  AppTheme::Instance().setReduceMotion(true);
+  QQuickStyle::setStyle(QStringLiteral("Basic"));
+  RegisterShortcutRegistryQmlType();
+  RegisterEditorAdjustmentQmlTypes();
+  engine.addImportPath(QStringLiteral("qrc:/"));
+  engine.addImportPath(SrcQmlDir());
+  engine.rootContext()->setContextProperty(QStringLiteral("appTheme"), &AppTheme::Instance());
+  engine.rootContext()->setContextProperty(QStringLiteral("appModules"), &modules);
+  engine.rootContext()->setContextProperty(
+      QStringLiteral("panelSourceUrl"),
+      QUrl::fromLocalFile(SrcQmlDir() + QStringLiteral("/EditorLutControlPanel.qml")));
+  engine.loadData(QByteArray{kHarnessQml}, QUrl(QStringLiteral("file:///LutControlHarness.qml")));
+  auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().value(0, nullptr));
+  ASSERT_NE(window, nullptr) << warnings.join(QLatin1Char('\n')).toStdString();
+  window->show();
+  (void)QTest::qWaitForWindowExposed(window);
+  const auto find = [window](const QString& name) {
+    return ChildNamed(window->contentItem(), name);
+  };
+  ASSERT_TRUE(WaitUntil([&] { return find(QStringLiteral("editorAdjustmentPanel_lut")); }, 3000))
+      << warnings.join(QLatin1Char('\n')).toStdString();
+
+  QQuickItem* input_combo  = find(QStringLiteral("editorLutInputEncodingCombo"));
+  QQuickItem* output_combo = find(QStringLiteral("editorLutOutputEncodingCombo"));
+  QQuickItem* output_note  = find(QStringLiteral("editorLutOutputDisplayNote"));
+  QQuickItem* input_note   = find(QStringLiteral("editorLutInputDisplayNote"));
+  ASSERT_NE(input_combo, nullptr);
+  ASSERT_NE(output_combo, nullptr);
+  ASSERT_NE(output_note, nullptr);
+  ASSERT_NE(input_note, nullptr);
+  EXPECT_EQ(input_combo->property("displayText").toString(),
+            QStringLiteral("Sony S-Log3 / S-Gamut3.Cine"));
+  EXPECT_EQ(output_combo->property("displayText").toString(), QStringLiteral("Rec.709 BT.1886"));
+  EXPECT_TRUE(input_combo->isEnabled());
+  EXPECT_TRUE(output_note->isVisible());
+  EXPECT_FALSE(input_note->isVisible());
+
+  EditorLutWrite scene_output;
+  scene_output.output_encoding = "acescc";
+  write_lut(scene_output);
+  ASSERT_TRUE(WaitUntil(
+      [&] {
+        return output_combo->property("displayText").toString() == QStringLiteral("ACEScc (AP1)");
+      },
+      2000));
+  EXPECT_FALSE(output_note->isVisible());
+  EXPECT_EQ(input_combo->property("displayText").toString(),
+            QStringLiteral("Sony S-Log3 / S-Gamut3.Cine"));
+  EXPECT_EQ(source.submit_count, 0) << "loading the encodings never submits";
+  EXPECT_TRUE(warnings.isEmpty()) << warnings.join(QLatin1Char('\n')).toStdString();
 }
 
 }  // namespace alcedo::ui::test

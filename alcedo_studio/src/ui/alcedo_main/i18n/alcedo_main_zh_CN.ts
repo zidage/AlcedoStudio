@@ -1318,6 +1318,21 @@ Alcedo 将改用 %1。</translation>
     </message>
     <message>
         <location line="+1"/>
+        <source>1D shaper LUTs are not supported.</source>
+        <translation>不支持带 1D 整形表（shaper）的 LUT。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Scene</source>
+        <translation>场景</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Display</source>
+        <translation>显示</translation>
+    </message>
+    <message>
+        <location line="+1"/>
         <source>A mask is selected. Select its Color Grade node to apply a LUT.</source>
         <translation>当前选中了蒙版。请选择它所属的调色节点来应用 LUT。</translation>
     </message>
@@ -2965,6 +2980,26 @@ Original source files on disk will be kept.</source>
         <location line="+1"/>
         <source>Remove</source>
         <translation>移除</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Input</source>
+        <translation>输入</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Output</source>
+        <translation>输出</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Display input: the ACES 2.0 output transform renders the image for this display before the LUT.</source>
+        <translation>显示输入：在应用 LUT 之前，ACES 2.0 输出变换会先为该显示设备渲染图像。</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Display output: the ACES 2.0 inverse output transform brings the LUT result back to the scene.</source>
+        <translation>显示输出：ACES 2.0 逆输出变换会将 LUT 结果还原为场景光。</translation>
     </message>
 </context>
 <context>

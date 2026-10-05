@@ -6,7 +6,9 @@ OCIO ACES 2.0 reference forward and the `aces2_reference_*` rename; Metal not bu
 on host, CUDA, OpenCL and Metal (2026-10-05): LMT encodings, the host bake of the 65³ composite
 table and shaper rejection; the identity criteria hold on stated domains (L3 record). The Metal
 DisplayToAp1, RasterDevelop and DRT suites of L1 and L2 also pass (L3 record, Metal verification).
-L4 not started.
+L4 complete on host and the default Windows GPU backend (2026-10-05): LUT panel encoding combos,
+`lut` write and projection keys, undo/redo, adjustment transfer, shaper text and translations;
+`alcedo_main` was not linked and the panel was not checked in the running app (L4 record).
 
 Depends on the raster image input stack (`raster_image_input_plan.md`, phases R1 to R5) being on
 `main`. This plan uses the OCIO ACES 2.0 port from Phase R2 (`display_to_ap1_math.h`,
@@ -765,6 +767,8 @@ CUDA, OpenCL and Metal.
 - The 65³ composite table can show up to about 1.3 ACEScc of trilinear error near the display
   peak of a display-output LUT, and up to about 0.5 next to clamps (risk table, measured above).
 
+### Phase L4 — Editor UI, history and adjustment transfer
+
 Work:
 
 - LUT panel: two combo boxes, input encoding and output encoding, grouped into Scene and Display.
@@ -784,6 +788,115 @@ Acceptance criteria:
   encodings, and the target renders like the source.
 - Export and thumbnails of an image with a non-default encoding match the editor render.
 - The panel shows the stored encodings after reopening the project.
+
+##### Phase L4 completion record (2026-10-05)
+
+**Status:** complete — the LUT panel has input and output encoding combos (Scene / Display groups,
+ACES 2.0 notes). The `lut` field write and the panel projection carry both keys. Undo, redo and
+adjustment transfer restore them. The transfer summary names them. Shaper LUTs have their own
+reason text. The zh_CN translations are added by hand.
+
+**Primary success call chain (edit):**
+
+```text
+EditorLutControlPanel.qml: AdjustmentCombo (onActivated) / reset button
+  -> EditorLutEncodingModel::selectIndex / reset            (EditorAdjustmentEnumModel)
+  -> selectionWrite: EditorLutWrite{input_encoding | output_encoding}   one side only
+  -> submitNow(settled = true) -> EditorSessionController::submitWrite   one history entry
+  -> session history: CaptureAdjustmentBeforePreview / CommitAdjustment
+       before/after = LMT Model JSON (ReadEditorParameterJson)
+  -> ApplyEditorParameterWrite -> LmtModel::ApplyUpdate -> LmtDirty::Encoding
+  -> render: TryPackGradeLut -> ResolveLmtSampledTable -> 65^3 composite table (L3)
+  -> published document -> LutLibraryController::LoadAssociation
+       (ReadEditorPanelField -> EditorPanelLutValue.input/output_encoding)
+  -> associationChanged -> EditorLutEncodingModel::loadFromTarget (no submit)
+```
+
+**Primary success call chain (undo, redo, transfer, reopen):**
+
+```text
+Undo / Redo / adjustment transfer paste / history replay on reopen
+  -> ApplyEditorParameterPatch(document, target, stored LMT Model JSON)
+  -> ParseEditorParameterWrite("lut") -> ParseLutWrite
+       accepts input_encoding / output_encoding (missing = ACEScc), LmtUpdateFromModelJson
+  -> LmtModel::ApplyUpdate -> same composite table key as before the change
+```
+
+**Primary failure call chain:**
+
+```text
+unknown encoding id in a `lut` write or stored JSON
+  -> LmtUpdateFromModelJson throws std::invalid_argument
+  -> ParseEditorParameterWrite returns nullopt with the error / ApplyEditorParameterPatch false
+  -> the LMT Model and its revision are unchanged
+shaper LUT in the library
+  -> LutHeader::SupportsGradeApplication() false -> UnsupportedLutText:
+       "1D shaper LUTs are not supported." (3D + 1D) or the 1D-only text
+  -> row Unsupported, not selectable; LutLibraryController::applyEntry rejects with that text
+```
+
+**Defect fixed:** before L4, `ParseLutWrite` rejected `input_encoding` and `output_encoding` as
+unknown keys. Undo, redo and adjustment transfer replay the stored LMT Model JSON through it, so
+an undo of an encoding change failed. The L3 record says "resets"; the actual behavior was a
+rejection. `LutEncodingChangeIsOneCommitAndUndoRedoRestoreSampledTable` and
+`LutTransferCopiesEncodingsAndTargetSamplesTheSourceTable` cover it.
+
+**Decisions taken during L4 (deviations from the Work list):**
+
+| Item | Plan text | Implemented | Reason |
+|---|---|---|---|
+| Panel write | "Changing either writes the complete LMT state through the `lut` field" | Each combo writes only its own encoding through the `lut` field, as one settled typed `EditorLutWrite`. The history stores the complete LMT Model JSON before and after. | The panel reads the encodings from the published document. Writing the complete state would copy the other side from that read. Two selections made before the first one is published would then reset the first selection. The one-side write keeps both (tested). |
+| Combo grouping | "grouped into Scene and Display" | One combo per side. Entries are in catalog order (scene first). `AdjustmentCombo.groupLabelRole` puts a "Scene" / "Display" heading above the first entry of each group. | Reuses the shared combo, with no second list control. The option is off for every other user. |
+| ACES 2.0 note | "A Display output shows that ACES 2.0 inverse is applied" | Output note as stated. A display input shows a note for the forward transform too. | The input side applies the forward transform, so it gets the matching note. |
+| Encoding names | — | Catalog display names, not translated. Group headings and notes are translated. | The names are product and standard names ("Rec.709 BT.1886", "Sony S-Log3 / S-Gamut3.Cine"). |
+| LUT library | "shaper LUTs are shown as unsupported and cannot be selected" | Done in L3. L4 adds the reason text `UnsupportedLutText`, used by the model detail and by `applyEntry`. | The L3 remaining gap. |
+
+**What was proven (executed tests):**
+
+| Criterion | Test | Result |
+|---|---|---|
+| `lut` write parses both keys; the projection reads them; the stored Model JSON replays to the same state; missing keys read as ACEScc | `EditorPanelProjectionTest.LutWriteParsesEncodingKeysAndProjectionReadsThem` | PASS |
+| Unknown id is rejected and the Model is unchanged | `EditorPanelProjectionTest.LutWriteWithUnknownEncodingIsRejectedWithoutChange` | PASS |
+| One change is one commit; undo restores the encoding and the sampled table (source cube, same key); redo restores the 65³ composite key | `EditorSessionHistoryPortTest.EditorDocumentHistoryTest.LutEncodingChangeIsOneCommitAndUndoRedoRestoreSampledTable` | PASS |
+| Combos list all catalog encodings, scene first, ACEScc default; each selection is one settled write of its side; two writes applied late keep both; reset writes its side only; removing the LUT keeps the encodings | `LutLibraryModelTest.LutLibraryControllerTest.EncodingSelectionSubmitsOneSettledWriteOfThatSideOnly` | PASS |
+| The panel shows the stored encodings after the document is written and read back in the project document format; loading never submits | `LutLibraryModelTest.LutLibraryControllerTest.StoredEncodingsAreShownAfterReopeningTheDocument` | PASS |
+| Shaper LUT: Unsupported, not selectable, shaper reason; 1D-only keeps its reason; apply rejected | `LutLibraryModelTest.LutLibraryControllerTest.ShaperLutIsUnsupportedWithShaperReasonAndIsNotApplied` | PASS |
+| Transfer copies reference, strength and both encodings through the exported package; the target samples the same composite table bytes and key | `DocumentTransferTest.LutTransferCopiesEncodingsAndTargetSamplesTheSourceTable` | PASS |
+| Transfer summary appends "input → output" names when either is not ACEScc, also without a LUT | `AdjustmentTransferCatalogTest.LutItemSummaryAppendsNonDefaultEncodings` | PASS |
+| Production `EditorLutControlPanel.qml` shows the stored encodings and the display note, follows a stored change, and has no QML warnings | `EditorLutBrowserPanelQmlTest.ControlPanelShowsStoredEncodingsAndDisplayNote` | PASS |
+| Stored through the editor history, project reopened: the stored LMT has the encodings; the editor preview, `ThumbnailService` thumbnail and `ExportService` JPEG agree; the encodings change the image | `LutEncodingRenderPathsTest.StoredNonDefaultEncodingRendersAlikeInEditorThumbnailAndExport` | PASS: 8-bit mean absolute difference at 256×171: thumbnail vs editor 0.30, export vs editor 0.78 (limit 3.0); default vs non-default encodings 22.2 (minimum 6.0) |
+
+Commands: `cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 6 --target
+EditorPanelProjectionTest LutLibraryModelTest EditorSessionHistoryPortTest DocumentTransferTest
+AdjustmentTransferCatalogTest EditorLutBrowserPanelQmlTest LutEncodingRenderPathsTest
+EditorPipelineCommandServiceTest PipelineHistoryApplierTest GpuDagModelGraphTest`;
+`ctest --test-dir build/debug -R "^(EditorPanelProjectionTest|LutLibraryModelTest|EditorSessionHistoryPortTest|DocumentTransferTest|AdjustmentTransferCatalogTest|EditorLutBrowserPanelQmlTest|EditorPipelineCommandServiceTest|PipelineHistoryApplierTest|GpuDagModelGraphTest)\." -j 4`;
+`ctest --test-dir build/debug -R "^LutEncodingRenderPathsTest\." -j 1` (vcpkg debug bin on `PATH`).
+Run again after `git clang-format`.
+
+Suite totals: 348/349 and 1/1. The one failure,
+`EditorHistoryCommitPresentationTest.FormatsNumericBooleanPathEnumAndCompoundAdjustments`
+(expects "+12°", gets "Crop"), fails the same way on a clean `HEAD` build of
+`EditorSessionHistoryPortTest` (b5fee3bf4). L4 does not touch history presentation.
+
+**Checklist / exit condition:** all four acceptance criteria are proven by the tests above. The
+render comparison ran on the default Windows backend of the debug build only. It was not repeated
+per backend: all backends sample the one host composite table, and L3 proved that per backend.
+
+**LOC note (grill-code-review):** new `editor_lut_encoding_model.{hpp,cpp}` 68 + 103,
+`lut_encoding_render_paths_test.cpp` 352. Changed production files stay below 1000 lines
+(`editor_parameter_write_parse.cpp` 860, `editor_adjustment_models.cpp` 490). Two test files are
+above 1000: `editor_document_history_test.cpp` 1196 (1110 before L4) and
+`document_transfer_test.cpp` 1010 (930 before). The added tests use only existing fixtures. No
+split was made in this phase.
+
+**Remaining gaps:**
+- `alcedo_main` was not built, and the panel was not checked in the running application. The
+  production QML was loaded from source by `EditorLutBrowserPanelQmlTest` with no warnings.
+- Pointer selection in the combo popup was not driven (offscreen input is unreliable, AGENTS.md).
+  The model's selection path is covered by `LutLibraryControllerTest`.
+- `alcedo_main_en.ts` has no entries for these contexts (source language); unchanged.
+- D-Log M (L1) is still not in the catalog, so the combos list 25 encodings.
 
 ## 9. Decisions
 
