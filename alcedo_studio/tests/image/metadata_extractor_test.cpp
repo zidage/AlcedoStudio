@@ -407,7 +407,14 @@ TEST(MetadataExtractorTest, RasterFilesImportByContentWhateverTheExtension) {
     EXPECT_EQ(image.image_type_, raster.type_) << raster.file_name_;
     EXPECT_FALSE(image.HasRawColorContext()) << raster.file_name_;
     ASSERT_TRUE(image.HasRasterColorDescription()) << raster.file_name_;
-    EXPECT_EQ(image.GetRasterColorDescription().origin_, RasterColorOrigin::DefaultSrgb)
+    // The writer carries no color tag, except that some PNG writers (libpng on macOS) add an
+    // sRGB chunk. Both resolve to sRGB.
+    const auto& description = image.GetRasterColorDescription();
+    EXPECT_TRUE(description.origin_ == RasterColorOrigin::DefaultSrgb ||
+                description.origin_ == RasterColorOrigin::PngSrgbChunk)
+        << raster.file_name_;
+    EXPECT_EQ(description.primaries_xy_, kRasterPrimariesRec709) << raster.file_name_;
+    EXPECT_EQ(description.transfer_[0].kind_, RasterTransferKind::SrgbPiecewise)
         << raster.file_name_;
     const auto display = image.ExifDisplayToJson();
     EXPECT_EQ(display.value("ImageWidth", 0u), 32u) << raster.file_name_;
