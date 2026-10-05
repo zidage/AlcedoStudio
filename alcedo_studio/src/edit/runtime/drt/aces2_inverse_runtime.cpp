@@ -19,6 +19,15 @@
 #include <mutex>
 #include <stdexcept>
 
+// The tables are compared with OpenColorIO within the tolerance of raster_image_input_plan.md,
+// section 5.7. Apple clang fuses a * b + c into one FMA by default; with that rounding the table
+// build moves the inverse outside the tolerance near a display channel of 0 (seen on Apple
+// silicon, on the host and on Metal, which uses these tables). The build keeps separate
+// multiplies and adds on every compiler.
+#if defined(__clang__)
+#pragma clang fp contract(off)
+#endif
+
 namespace alcedo {
 namespace {
 
